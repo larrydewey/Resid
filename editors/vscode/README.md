@@ -17,7 +17,9 @@ Syntax highlighting, snippets, language configuration, and a **language server**
   - Annotations `@requires(...)`, `@residual`, capability names
     (`filesystem(readonly)`, `network`, …)
   - Literals: hex/octal/binary ints, floats, decimal `m`-suffix literals, char,
-    string, raw `r"…"`, byte `b"…"`, interpolated `f"…{expr:.}"`
+    string, raw `r"…"`, byte `b"…"`, interpolated `f"…{expr}"` with its format
+    spec (`{n:group}`, `{f:precision 2}`, `{s:fill '.', center}`) and the
+    `{{` / `}}` brace escapes
   - Ranges `..` / `..=`, `#location`, discard `_ = …`
 - **Snippets**: functions, bindings, residual bindings, type definitions,
   match, if-let, for-in, `with` handles, `spawn` regions, sandboxes, imports.
@@ -34,10 +36,12 @@ editor's buffer, so unsaved edits are checked too. It provides:
 
 - diagnostics on open, change and save (the compiler's own errors, with
   their codes)
-- hover: the definition's signature, its `///` doc comment and the type
+- hover: the definition's signature, its `///` doc comment and the type, and
+  an f-string hole's format spec
 - go to definition, across imports
 - document symbols (functions, types, behaviors, tests)
-- completion of keywords and top-level names
+- completion of keywords and top-level names, and of the format flags when the
+  cursor is inside an f-string hole's spec
 
 The extension looks for `build/boot/stage2.bin` in the workspace (when the
 workspace is the Resid repository), then `residc` on `PATH`.

@@ -800,9 +800,19 @@ GXF gx_fst_scan(GXT ft, Int id, Int i, RdE env, GXF acc) {
     if (kn.kind == "fpart") { return gx_fst_scan(ft, id, i + 1, env, gx_fst_lit(kn.text, 0, str_len(kn.text), acc)); }
     GV v = gx_expr(ft, kid, env, acc.st);
     if (v.bad) { return gx_fst_bad(acc, v.st); }
-    // `{e:spec}` holes are not ones the text reducer parses.
-    if (i + 1 < n && gx_kind(acc.st, gx_kid(acc.st, id, i + 1)) == "fspec") { return gx_fst_bad(acc, v.st); }
+    // A spec'd hole (`{e:...}`, spec §14) is reduced here rather than left
+    // for the runtime: the value is known, so its text is known, and the
+    // spec is a static word. The same runtime primitives the lowered call
+    // would use are called in-process, so there is one implementation of
+    // what a spec means. A hole whose value is unknown still goes residual.
+    Bool specd = i + 1 < n && gx_kind(acc.st, gx_kid(acc.st, id, i + 1)) == "fspec";
     Str txt = if (v.k) { gx_fst_text(v) } else { "" };
+    if (specd) {
+        Str sp = gx_fst_spec(v, txt, acc.st.g.ns[gx_kid(acc.st, id, i + 1)].text);
+        if (sp == "") { return gx_fst_bad(acc, v.st); }
+        GXF ak = GXF {.allk = acc.allk && v.k, .ch = acc.ch || v.ch, .bad = false, .val = acc.val + sp, .pend = acc.pend + rd_fst_escape(sp), .parts = acc.parts, .st = v.st};
+        return gx_fst_scan(ft, id, i + 2, env, ak);
+    }
     Bool known = v.k && txt != "" && rd_fst_inlinable(txt);
     Bool hk = v.k && (txt != "" || rd_norm_ty(v.ty) == "Str");
     Bool ch2 = acc.ch || known || v.ch;
@@ -835,6 +845,35 @@ Str gx_fst_text(GV v) {
     Str t = rd_norm_ty(v.ty);
     if (t == "Str" || rd_is_int_ty(t)) { return v.v; }
     return "";
+}
+
+// The text a known value with a spec produces, or "" when the spec cannot
+// be applied to it here (a type the text reducer does not model, a flag
+// combination the checker would have rejected, or a result too large to be
+// worth building at compile time). The order of operations is the one the
+// lowering uses (spec §14): radix, then grouping, then case, then sign,
+// then width.
+Str gx_fst_spec(GV v, Str txt, Str spectext) {
+    Fsp fs = fs_parse_compat(spectext);
+    if (fs.err != "") { return ""; }
+    Str ty = rd_norm_ty(v.ty);
+    if (!v.k) { return ""; }
+    // A Float's own text depends on its value, not on its digits, so a
+    // style or a precision needs the value; the reducer carries Floats
+    // as a bit pattern and not as text, so those stay residual.
+    if (fs_wants_style(fs) || fs.hasprec) { return ""; }
+    if (ty != "Str" && !rd_is_int_ty(ty)) { return ""; }
+    if (fs_check(fs, ty) != "") { return ""; }
+    Str t0 = txt;
+    Str t1 = if (fs.base == 10) { t0 } else { resid_fmt_radix(t0, fs_pack(fs, ty)) };
+    Str t2 = if (fs.group) { resid_fmt_group(t1) } else { t1 };
+    Str t3 = if (fs.case == "") { t2 } else { resid_fmt_case(t2, fs_pack(fs, "Str")) };
+    Str t4 = if (fs.sign != 1 && fs.sign != 2) { t3 } else { resid_fmt_sign(t3, fs_pack(fs, "Str")) };
+    Str t5 = if (!fs.hasw && fs.align == "" && fs.fill == "") { t4 } else { resid_fmt_pad(t4, fs_pack(fs, ty)) };
+    // A padded or grouped result can be long; anything the reducer could
+    // not afford to hold stays residual rather than growing the compiler.
+    if (str_len(t5) > rd_max_fst()) { return ""; }
+    return t5;
 }
 
 GV gx_fstr(GXT ft, Int id, RdE env, GS st) {

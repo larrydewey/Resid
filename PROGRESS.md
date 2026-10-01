@@ -101,10 +101,10 @@ type checking and before code generation (`--no-reduce` skips it,
 the generator's exact width/overflow behavior, propagates known locals and
 elides dead known bindings, drops dead `if` arms (statements and
 expressions), evaluates pure runtime builtins by calling the runtime
-function itself, folds f-strings and merges adjacent string literals, and
-β-reduces user calls whose arguments are known (memoized; step, depth and
-global fuel budgets, with fallback to the residual call). Known values
-cover Int/Int(128..512) (64-bit range), Bool, Str, lists, structs and
+function itself, folds f-strings (a hole's format spec included, §0zs) and
+merges adjacent string literals, and β-reduces user calls whose arguments
+are known (memoized; step, depth and global fuel budgets, with fallback to
+the residual call). Known values cover Int/Int(128..512) (64-bit range), Bool, Str, lists, structs and
 Option, including `match`, `else`/`?` unwrapping and `for` loops during
 evaluation. `comptime_print(e)` reports the reduced value at compile time.
 Example: `println(IntToString(fact(10)))` compiles to `println("3628800")`.
@@ -292,6 +292,71 @@ the reducer's own: `budget` (fuel, steps or specs), `loop` (an identical
 re-entry) and `whistle` (a generalized specialization), recorded against
 the call and inherited along derive edges. Self-compile: 2,517 budget and
 605 whistle reasons; debug peak 690MB.
+
+### 0zs. A format spec for an f-string hole (2026-10-01)
+
+A hole's `:spec` used to be read as a boolean "there is a spec here" and
+nothing else, so every spec but `:.` compiled clean and silently printed
+the value unchanged — `f"{x:>10}"` was `42`, not a ten-wide field. Spec §14
+now defines one: a comma-separated list of flags, **in any order**, each
+naming exactly one thing (`compiler/fmt.resid`).
+
+    f"{n:8}"                 the width, as the only shorthand
+    f"{n:width 8, left}"     every flag also has a name
+    f"{n:zero, width 6}"     pad with '0', after any sign
+    f"{n:group, hex}"        1,234,567 in base 16
+    f"{f:precision 2}"       digits after the point
+    f"{s:fill '.', center}"  the pad character
+
+The choice is deliberate against the alternatives. Python's
+`[[fill]align][sign][#][0][width][,][.precision][type]`, C's
+`%-08.3lf` and Rust's `{:>width$}` are all positional mini-languages: they
+are powerful, and they make you remember a slot order, so a typo reads as
+"it just didn't apply". Here there is one rule — flags are keywords, order
+is free, and a bare integer is the width — and every flag says what it is.
+
+- **Checked, not ignored.** `fs_check` tests the flags against the hole's
+  own type, so a flag the type has no meaning for is E0413 rather than a
+  silent no-op: `hex` needs an integer, `precision` a Float, `trim` a
+  Dec, `group` and the sign flags a number, `upper`/`lower` an integer or
+  text. Combinations that cannot be one value are refused too (`group`
+  counts decimal digits, so not with `hex`; a Float(128) carries more
+  digits than a double can round to). An unknown flag, a repeated one and a
+  missing argument are parse errors whose diagnostic lists what is
+  accepted.
+- **Brace escapes.** `{{` and `}}` are a literal brace, so `f"{{}}"` is
+  `{}`; a single `}` is an error rather than text. The lexer's f-string
+  scan skips a brace pair, `kg_flit` decodes them into the node and
+  `kg_pr_flit` re-encodes them for the round-trip check.
+- **`runtime/rt/fmt.resid`** holds the operations, on text: `resid_fmt_pad`
+  (width, fill, alignment, sign-aware zero fill, in codepoints),
+  `resid_fmt_group`, `resid_fmt_case`, `resid_fmt_sign`,
+  `resid_fmt_radix` (long division over the decimal text, so one routine
+  serves every integer width) and `resid_fmt_style` (a Float in `decimal`,
+  `scientific` or `percent` form; `%.<P>e` added to `c_strfromd`).
+- **Compiles away when it can.** A spec never changes how a value is
+  computed, only how its text is written, so the reducer applies it at
+  compile time to a hole whose value is known, calling the same runtime
+  functions in-process (`gx_fst_spec`, `gx_fmt_internal` for E0220). Before
+  this, `gx_fst_scan` bailed on *any* `fspec` child, so a spec'd hole was
+  residual even when its value was a constant. `f"{n:group}"` with a known
+  `n` is now a literal; `tests/reduce/cases/fmt_spec` asserts the folds and
+  that no `resid_fmt_pad` survives.
+- `compiler/lower.resid` threads the parsed spec through `lw_fstr`,
+  `lw_fmt` and `lw_sacc_parts`; the spec travels as one packed i64, so a
+  hole with several flags costs one argument and a hole with none makes no
+  call.
+- **LSP**: completion inside a spec offers the flags and nothing else (a
+  spec is not an expression, so the language's names would not fit), hover
+  reads the spec back through the same parser, and `:` / `{` are trigger
+  characters.
+- `:.` still works and means `trim`; the diagnostic points at the new
+  spelling. Conformance cases `fmt_width`, `fmt_text`, `fmt_float`,
+  `err_fmt_unknown_flag`, `err_fmt_hex_on_str`, `err_fmt_prec_on_int`,
+  `err_fmt_trim_on_int`, `err_fmt_style_on_int`, `err_fmt_stray_brace`.
+- Self-compile needed a two-step bootstrap: the seed does not know the
+  `resid_fmt_*` names yet, so a stage that avoided them compiled the real
+  source and the seed was taken from that IR.
 
 ### 0v. Range facts discharge checks (G3, 2026-09-26)
 

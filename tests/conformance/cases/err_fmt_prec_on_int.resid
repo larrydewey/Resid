@@ -1,0 +1,5 @@
+Int main() {
+    Int n = 7;
+    println(f"{n:precision 2}");
+    return 0;
+}

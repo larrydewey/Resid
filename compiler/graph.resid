@@ -338,20 +338,43 @@ KP kg_brace_lit(Str s, Kg g, Int pos, Int sp) {
     return kg_add(rest.g, "set", "", "", rest.ids, sp, rest.pos);
 }
 
+// The literal text of an f-string segment with `{{` and `}}` decoded to
+// `{` and `}` (spec §14); a single `}` there is a mistake, not text.
+Str kg_flit(Str text, Int i, Int n, Str acc) {
+    if (i >= n) { return acc; }
+    Int c = str_char_at(text, i);
+    if (c == 125) {
+        Int nx = str_char_at(text, i + 1);
+        if (nx != 125) { return acc + "\x01"; }
+        return kg_flit(text, i + 2, n, acc + str_from_code(125));
+    }
+    if (c == 123) {
+        Int nx = str_char_at(text, i + 1);
+        if (nx != 123) { return acc + str_from_code(123); }
+        return kg_flit(text, i + 2, n, acc + str_from_code(123));
+    }
+    return kg_flit(text, i + 1, n, acc + str_from_code(c));
+}
+
 // Parts of an f-string token: literal segments (fpart) and hole
 // expressions, parsed in place from the enclosing source.
 KL kg_fparts(Str s, Kg g, Str text, Int base, Int i, Int n, Int seg, List(Int) acc) {
     if (i >= n) {
         List(Int) none = [];
-        KP last = kg_add(g, "fpart", str_slice(text, seg, n), "", none, base + seg, base + n);
+        Str lt = kg_flit(text, seg, n, "");
+        if (str_contains(lt, "\x01")) { return kl_fail(g, base + seg, "a single `}` in an f-string is not text; write `}}`"); }
+        KP last = kg_add(g, "fpart", lt, "", none, base + seg, base + n);
         return KL {.g = last.g, .ids = acc.concat([last.id]), .pos = base + n, .err = ""};
     }
     Int c = str_char_at(text, i);
+    if (c == 123 && str_char_at(text, i + 1) == 123) { return kg_fparts(s, g, text, base, i + 2, n, seg, acc); }
     if (c != 123) { return kg_fparts(s, g, text, base, i + 1, n, seg, acc); }
     Int e = fstring_hole_end(text, i + 1, n, 1);
     if (e < 0) { return kl_fail(g, base + i, "unterminated f-string hole"); }
     List(Int) none = [];
-    KP part = kg_add(g, "fpart", str_slice(text, seg, i), "", none, base + seg, base + i);
+    Str pre = kg_flit(text, seg, i, "");
+    if (str_contains(pre, "\x01")) { return kl_fail(g, base + seg, "a single `}` in an f-string is not text; write `}}`"); }
+    KP part = kg_add(g, "fpart", pre, "", none, base + seg, base + i);
     KP h = kg_expr(s, part.g, base + i + 1);
     if (h.err != "") { return kl_fail(h.g, h.pos, h.err); }
     Tok close = lex_tok(s, h.pos);
@@ -1167,10 +1190,19 @@ Bool kg_semi_kind(Str k) {
     return k == "bind" || k == "rbind" || k == "ret" || k == "brk" || k == "cont" || k == "discard" || k == "letpat" || k == "destr" || k == "estmt";
 }
 
+// A literal segment back to source: its braces are re-escaped, since the
+// node holds them decoded.
+Str kg_pr_flit(Str t, Int i, Int n, Str acc) {
+    if (i >= n) { return acc; }
+    Int c = str_char_at(t, i);
+    if (c == 123 || c == 125) { return kg_pr_flit(t, i + 1, n, acc + str_from_code(c) + str_from_code(c)); }
+    return kg_pr_flit(t, i + 1, n, acc + str_from_code(c));
+}
+
 Str kg_pr_fparts(Kg g, Int id, Int i, Str sb) {
     if (i >= g.ns[id].nk) { return sb; }
     Int c = kg_kid(g, id, i);
-    if (g.ns[c].kind == "fpart") { return kg_pr_fparts(g, id, i + 1, kg_ap(sb, g.ns[c].text)); }
+    if (g.ns[c].kind == "fpart") { return kg_pr_fparts(g, id, i + 1, kg_ap(sb, kg_pr_flit(g.ns[c].text, 0, str_len(g.ns[c].text), ""))); }
     Bool spec = i + 1 < g.ns[id].nk && g.ns[kg_kid(g, id, i + 1)].kind == "fspec";
     Str sb1 = kg_pr(g, c, kg_ap(sb, "{"));
     if (!spec) { return kg_pr_fparts(g, id, i + 1, kg_ap(sb1, "}")); }
@@ -1253,6 +1285,7 @@ pub Str kg_print(Kg g, Int root) {
 Str kg_fnorm_holes(Str text, Int i, Int n, Str acc) {
     if (i >= n) { return acc; }
     Int c = str_char_at(text, i);
+    if (c == 123 && str_char_at(text, i + 1) == 123) { return kg_fnorm_holes(text, i + 2, n, acc + "{{"); }
     if (c != 123) { return kg_fnorm_holes(text, i + 1, n, acc + str_from_code(c)); }
     Int e = fstring_hole_end(text, i + 1, n, 1);
     if (e < 0) { return acc + str_slice(text, i, n); }

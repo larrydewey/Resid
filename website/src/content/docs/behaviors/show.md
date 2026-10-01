@@ -14,8 +14,9 @@ type Point = { Int x; Int y; };
 type Shape = Circle(Int) | Rect(Point) | Empty;
 
 Int main() {
-    println(f"{42} {3.14} {true} {1.50m:.}");
-    println(f"{[1, 2]} {["a", "b"]} {{"k": 1}}");
+    Map(Str, Int) counts = {"k": 1};
+    println(f"{42} {3.14} {true} {1.50m:trim}");
+    println(f"{[1, 2]} {["a", "b"]} {counts}");
     println(f"{Point {.x = 1, .y = 2}}");
     println(f"{Circle(3)} {Rect(Point {.x = 0, .y = 0})} {Empty}");
     println(f"{Some("x")} {None}");
@@ -47,9 +48,7 @@ Some("x") None
 type Money = { Int cents; };
 
 Str dollars(Money m) {
-    Int c = m.cents % 100;
-    Str pad = if (c < 10) { "0" } else { "" };
-    return f"${m.cents / 100}.{pad}{c}";
+    return f"${m.cents / 100}.{m.cents % 100:zero, width 2}";
 }
 Show(Money) = dollars;
 

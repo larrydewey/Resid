@@ -1,0 +1,16 @@
+Int main() {
+    Int n = 1234567;
+    Int m = 255;
+    Int(128) big = 1000000;
+    Int(128) sq = big * big;
+    Str s = "hi";
+    println(f"{n:group}");
+    println(f"[{n:12}]");
+    println(f"[{n:12, left}]");
+    println(f"[{n:12, center}]");
+    println(f"[{n:hex, width 10, fill '.'}]");
+    println(f"[{m:oct}] [{m:bin}]");
+    println(f"[{sq:group}]");
+    println(f"[{s:6, fill '*'}]");
+    return 0;
+}

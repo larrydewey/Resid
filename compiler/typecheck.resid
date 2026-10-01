@@ -181,6 +181,11 @@ Int scan_fstring(Str s, Int i, Int n, Int depth) {
     if (i >= n) { return i; }
     Int c = str_char_at(s, i);
     if (c == 92) { Int k = i + 1; Int m = i + 2; return scan_fstring(s, m, n, depth); }
+    // `{{` and `}}` are literal braces (spec §14): neither opens or closes
+    // a hole, so the scan passes over the pair.
+    if (c == 123 || c == 125) {
+        if (str_char_at(s, i + 1) == c) { Int m = i + 2; return scan_fstring(s, m, n, depth); }
+    }
     if (c == 123) { Int k = i + 1; Int d = depth + 1; return scan_fstring(s, k, n, d); }
     if (c == 125) { Int k = i + 1; return scan_fstring(s, k, n, 0); }
     if (c == 34) {
@@ -2482,6 +2487,22 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
     if (name == "str_repeat") {
         if (builtin_args(argtys, "Str,Int")) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "str_repeat expects (Str,Int), got (" + argtys + ")"};
+    }
+    // The text-formatting primitives (spec §14). A hole's spec reaches
+    // them only through an f-string; a program may not name them, but the
+    // compiler calls them in-process to reduce a spec'd hole whose value
+    // is already known (E0220 keeps them out of reach of user code).
+    if (name == "resid_fmt_radix" || name == "resid_fmt_case" || name == "resid_fmt_sign" || name == "resid_fmt_pad") {
+        if (builtin_args(argtys, "Str,Int")) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (Str,Int), got (" + argtys + ")"};
+    }
+    if (name == "resid_fmt_group") {
+        if (builtin_args(argtys, "Str")) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_fmt_group expects (Str), got (" + argtys + ")"};
+    }
+    if (name == "resid_fmt_style") {
+        if (builtin_args(argtys, "Float,Int")) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_fmt_style expects (Float,Int), got (" + argtys + ")"};
     }
     if (name == "str_replace") {
         if (builtin_args(argtys, "Str,Str,Str")) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }

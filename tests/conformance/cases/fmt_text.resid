@@ -1,0 +1,15 @@
+Int main() {
+    Int n = 1234567;
+    Int m = 255;
+    Int z = 0 - 42;
+    Int q = 42;
+    Str up = "abZ";
+    println(f"[{m:oct}] [{m:bin}] [{m:hex, upper}]");
+    println(f"[{z:zero, width 6}]");
+    println(f"[{q:zero, width 6, plus}]");
+    println(f"[{q:plus}] [{q:space}]");
+    println(f"[{up:upper}] [{up:lower}]");
+    println(f"[{n:group}]");
+    println(f"{{literal}} and {{{n}}}");
+    return 0;
+}

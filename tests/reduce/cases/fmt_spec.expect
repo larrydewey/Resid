@@ -1,0 +1,6 @@
+has: println("1,234,567");
+has: println("FF");
+has: println("1,000,000,000,000");
+has: println("hi****");
+has: println("  1234567   ");
+lacks: resid_fmt_pad

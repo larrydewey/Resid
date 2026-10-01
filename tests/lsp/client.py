@@ -94,6 +94,18 @@ check("completion", "norm2" in labels and "Point" in labels and "match" in label
 check("completion builtins", "resid_read_byte" in labels and "resid_term_raw" in labels, r)
 check("completion verbs", "compare" in labels and "show" in labels and "resid_ord_int" not in labels, r)
 
+# Inside a format spec, completion offers the flags and nothing else
+# (spec §14.1), and hover reads the spec back.
+r = query("textDocument/completion", 5, 22)
+labels = [i["label"] for i in (r.get("result") or {}).get("items", [])]
+check("fspec completion", "group" in labels and "hex" in labels and "precision 2" in labels and "match" not in labels, r)
+r = query("textDocument/hover", 5, 20)
+v = (r.get("result") or {}).get("contents", {}).get("value", "")
+check("fspec hover", "group" in v and "minimum field width" not in v, r)
+r = query("textDocument/completion", 5, 12)
+labels = [i["label"] for i in (r.get("result") or {}).get("items", [])]
+check("completion outside a spec", "match" in labels and "group" not in labels, r)
+
 # Memory stays flat across edits (each message runs in its own arena).
 def rss():
     for l in open(f"/proc/{p.pid}/status"):

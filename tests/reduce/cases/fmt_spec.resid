@@ -1,0 +1,20 @@
+// A spec'd hole whose value is known folds at compile time (spec §14):
+// the reducer applies the same runtime primitives the lowered call would,
+// so nothing of the spec survives into the program.
+@requires(args) Int main() {
+    Int n = 1234567;
+    Int m = 255;
+    Int big = 1000000;
+    Int(128) sq = big * big;
+    Str s = "hi";
+    println(f"{n:group}");
+    println(f"{m:hex, upper}");
+    println(f"{sq:group}");
+    println(f"{s:6, fill '*'}");
+    println(f"{n:12, center}");
+    // A residual value keeps the spec and its call.
+    Int live = args.count();
+    println(f"{live:8, zero}");
+    println(f"{{literal}}");
+    return 0;
+}

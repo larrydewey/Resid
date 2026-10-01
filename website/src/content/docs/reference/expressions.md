@@ -67,8 +67,55 @@ unwraps, or evaluates the block.
 ## f-strings
 
 `f"text {expr} text"`: each hole takes any value (see
-[Show](/Resid/behaviors/show/)). `{expr:.}` trims a decimal's trailing
-zeros.
+[Show](/Resid/behaviors/show/)). `{{` and `}}` are a literal brace.
+
+A hole may carry a **format spec** after `:`. The spec is a list of flags
+in any order, and every flag names one thing:
+
+```resid
+Int main() {
+    Int n = 1234567;
+    Float pi = 3.14159265;
+    println(f"{n:group}");            // 1,234,567
+    println(f"{n:12}");               //    1234567
+    println(f"{n:12, left}");         // 1234567
+    println(f"{n:hex, width 8}");     // 12d687
+    println(f"{-42:zero, width 6}");  // -00042
+    println(f"{pi:precision 2}");     // 3.14
+    return 0;
+}
+```
+
+```text
+1,234,567
+     1234567
+1234567     
+  12d687
+-00042
+3.14
+```
+
+| Flag | Meaning |
+|---|---|
+| `8` / `width 8` | minimum field width, in characters |
+| `left` `right` `center` | alignment; `right` by default for numbers, `left` otherwise |
+| `fill '.'` / `zero` | the pad character; `zero` pads after any sign |
+| `plus` `space` `minus` | the sign of a non-negative value |
+| `hex` `oct` `bin` | the radix of an integer |
+| `upper` `lower` | the case of the letters |
+| `group` | a `,` every three digits (decimal only) |
+| `precision 2` / `.2` | digits after the point, for a Float |
+| `decimal` `scientific` `percent` `auto` | how a Float is written out |
+| `trim` | drop a Dec's trailing zeros |
+
+A flag a value's type cannot mean is a compile error, never a silent
+no-op: `f"{s:hex}"` on a `Str`, `f"{n:precision 2}"` on an `Int`, and
+`f"{n:trim}"` on an `Int` are all rejected. An unknown flag is rejected
+too, and the message lists the ones that are accepted.
+
+A spec only changes how text is written, never how a value is computed, so
+a spec'd hole whose value is known reduces at compile time:
+`f"{n:group}"` with a known `n` is a literal, with no runtime call.
 
 ## rt
 

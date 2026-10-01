@@ -1,0 +1,362 @@
+// fmt.resid — the runtime half of an f-string hole's format spec
+// (spec §14). The compiler lowers a hole to its value's own text and then
+// hands that text to these; a spec never changes how a value is computed,
+// only how its text is written out. So every flag is an operation on text
+// and the whole subsystem is one pass over a string.
+//
+//   resid_fmt_radix  an integer's decimal text as hex, octal or binary
+//   resid_fmt_style  a Float in decimal, scientific or percent style
+//   resid_fmt_group  1,234,567
+//   resid_fmt_case   upper / lower
+//   resid_fmt_sign   plus / blank for a non-negative value
+//   resid_fmt_pad    width, fill, alignment
+//
+// A spec travels as one packed i64 (`resid_fmt_pack`), so a hole with
+// several flags costs one argument, and a hole with no spec makes no call
+// at all. The order the compiler applies them in is the order that reads
+// right: radix or style, then grouping, then case, then sign, then width.
+
+// The flag layout of a packed spec. One word holds everything a hole's
+// spec can say: width, alignment, radix, the flag bits, a precision, and
+// the pad character as a codepoint.
+Int FM_W_SHIFT() { return 0; }
+Int FM_W_MASK() { return 255; }
+Int FM_ALIGN_SHIFT() { return 8; }
+Int FM_ALIGN_MASK() { return 15; }
+Int FM_BASE_SHIFT() { return 12; }
+Int FM_BASE_MASK() { return 31; }
+Int FM_FLAGS_SHIFT() { return 17; }
+Int FM_FLAGS_MASK() { return 262143; }
+Int FM_PREC_SHIFT() { return 35; }
+Int FM_PREC_MASK() { return 255; }
+Int FM_FILL_SHIFT() { return 43; }
+Int FM_FILL_MASK() { return 2097151; }
+
+// Bits of the flags word.
+Int FM_GROUP() { return 1; }
+Int FM_PLUS() { return 2; }
+Int FM_SPACE() { return 4; }
+Int FM_UPPER() { return 8; }
+Int FM_LOWER() { return 16; }
+Int FM_DECIMAL() { return 32; }
+Int FM_SCIENTIFIC() { return 64; }
+Int FM_PERCENT() { return 128; }
+Int FM_NARROW() { return 256; }
+
+// Alignments, as codes. `sign` puts a '0' fill after the sign, the way
+// printf's %05d does, so -42 pads to -0042 rather than 0-042.
+Int FM_LEFT() { return 0; }
+Int FM_RIGHT() { return 1; }
+Int FM_CENTER() { return 2; }
+Int FM_SIGN() { return 3; }
+
+pub Int resid_fmt_pack(Int width, Int align, Int fill, Int base, Int flags, Int prec) {
+    return (width & FM_W_MASK()) | ((align & FM_ALIGN_MASK()) << FM_ALIGN_SHIFT()) | ((base & FM_BASE_MASK()) << FM_BASE_SHIFT()) | ((flags & FM_FLAGS_MASK()) << FM_FLAGS_SHIFT()) | ((prec & FM_PREC_MASK()) << FM_PREC_SHIFT()) | ((fill & FM_FILL_MASK()) << FM_FILL_SHIFT());
+}
+
+Int fm_width(Int s) { return lshr(s, FM_W_SHIFT()) & FM_W_MASK(); }
+Int fm_align(Int s) { return lshr(s, FM_ALIGN_SHIFT()) & FM_ALIGN_MASK(); }
+Int fm_fill(Int s) { return lshr(s, FM_FILL_SHIFT()) & FM_FILL_MASK(); }
+Int fm_base(Int s) { return lshr(s, FM_BASE_SHIFT()) & FM_BASE_MASK(); }
+Int fm_flags(Int s) { return lshr(s, FM_FLAGS_SHIFT()) & FM_FLAGS_MASK(); }
+
+// The precision as written, or -1 when the spec gives none, which every
+// style reads as "the value's own text".
+Int fm_prec(Int s) {
+    Int p = lshr(s, FM_PREC_SHIFT()) & FM_PREC_MASK();
+    return if (p == 0) { 0 - 1 } else { p - 1 };
+}
+
+// ─── Digit grouping ────────────────────────────────────────────────
+// `1,234,567`: a separator every three digits of the integer part,
+// counted from the right. A sign or `inf`/`nan` name stays in front, and
+// the digits after the point are left alone.
+
+// Where the integer part starts: past a leading `-` or `+`. A value with
+// no digits at all (`inf`, `nan`, a word) starts at 0 and counts none.
+Int grp_int_start(Int s, Int n) {
+    if (n <= 0) { return 0; }
+    Int c = ld8(s);
+    if (c == 45 || c == 43) { return 1; }
+    return 0;
+}
+
+Int grp_int_digits(Int s, Int i, Int n, Int acc) {
+    if (i >= n) { return acc; }
+    Int c = ld8(s + i);
+    if (c < 48 || c > 57) { return acc; }
+    return grp_int_digits(s, i + 1, n, acc + 1);
+}
+
+@export("resid_fmt_group", "ptr(ptr)")
+pub Int rt_fmt_group(Int s) {
+    Int n = c_strlen(s);
+    Int st = grp_int_start(s, n);
+    Int nd = grp_int_digits(s, st, n, 0);
+    if (nd < 4) { return s; }
+    Int buf = xmalloc(n + nd / 3 + 2);
+    return grp_copy(s, st, n, nd, buf, buf);
+}
+
+// `left`: digits of the integer part still to write, this one included.
+// A separator follows this digit when some whole number of groups of
+// three would still be left, which is what makes the count right without
+// having measured the text twice.
+Int grp_copy(Int s, Int i, Int n, Int left, Int buf, Int out) {
+    if (i >= n) { return st8(out, 0) * 0 + buf; }
+    Int c = ld8(s + i);
+    Int d = c - 48;
+    Bool digit = (d >= 0 && d <= 9) && left > 0;
+    Int o1 = if (digit) { st8(out, c) * 0 + out + 1 } else { out };
+    Int l1 = if (digit) { left - 1 } else { left };
+    Bool more = digit && l1 > 0 && l1 % 3 == 0;
+    Int o2 = if (more) { st8(o1, 44) * 0 + o1 + 1 } else { o1 };
+    return grp_copy(s, i + 1, n, l1, buf, o2);
+}
+
+// ─── Case ──────────────────────────────────────────────────────────
+// Only the ASCII letters move; digits, signs and separators are already
+// final in either case. `upper` on a number is how hex digits get their
+// capitals, and on text it is just the case of the words; there is no
+// distinction, because there is nothing to distinguish.
+// up: 1 upper, -1 lower, 2 leave alone.
+Int case_byte(Int c, Int up) {
+    Bool lo = c >= 97 && c <= 122;
+    Bool hi = c >= 65 && c <= 90;
+    if (up > 0 && lo) { return c - 32; }
+    if (up < 0 && hi) { return c + 32; }
+    return c;
+}
+
+@export("resid_fmt_case", "ptr(ptr,i64)")
+pub Int rt_fmt_case(Int s, Int spec) {
+    Int flags = fm_flags(spec);
+    Int up = if ((flags & FM_UPPER()) != 0) { 1 } else { if ((flags & FM_LOWER()) != 0) { 0 - 1 } else { 2 } };
+    if (up == 2) { return s; }
+    Int n = c_strlen(s);
+    Int buf = xmalloc(n + 1);
+    return case_copy(s, 0, n, up, buf, buf);
+}
+
+Int case_copy(Int s, Int i, Int n, Int up, Int buf, Int out) {
+    if (i >= n) { return st8(out, 0) * 0 + buf; }
+    _ = st8(out, case_byte(ld8(s + i), up));
+    return case_copy(s, i + 1, n, up, buf, out + 1);
+}
+
+// ─── Sign ──────────────────────────────────────────────────────────
+// A value that already reads negative keeps its `-`; one that does not
+// gets the `+` or the blank the spec asked for. This runs before padding,
+// so the sign counts toward the width.
+@export("resid_fmt_sign", "ptr(ptr,i64)")
+pub Int rt_fmt_sign(Int s, Int spec) {
+    Int want = fm_flags(spec) & (FM_PLUS() | FM_SPACE());
+    if (want == 0) { return s; }
+    Int n = c_strlen(s);
+    if (n > 0 && ld8(s) == 45) { return s; }
+    Int buf = xmalloc(n + 2);
+    _ = st8(buf, if ((want & FM_PLUS()) != 0) { 43 } else { 32 });
+    _ = mcopy(buf + 1, s, n);
+    return st8(buf + n + 1, 0) * 0 + buf;
+}
+
+// ─── Padding ───────────────────────────────────────────────────────
+// Width in codepoints, so a CJK or accented character counts once. The
+// fill goes on both sides for `center`, and after any sign for the
+// sign-aware `zero` fill.
+
+// A string's codepoint count. `str_len` builds the per-string index,
+// which is wasted work for the mostly-ASCII text these specs see, so the
+// lead bytes are counted directly: a byte that is not a continuation
+// starts exactly one codepoint. `base` is the string and `i` the byte
+// offset; they are separate so the bound is the length, not the address.
+Int fmt_cps(Int base, Int i, Int n, Int acc) {
+    if (i >= n) { return acc; }
+    Int a = if ((ld8(base + i) & 192) != 128) { acc + 1 } else { acc };
+    return fmt_cps(base, i + 1, n, a);
+}
+Int pad_fill_at(Int buf, Int i, Int n, Int fill) {
+    if (i >= n) { return buf; }
+    _ = st8(buf + i, fill);
+    return pad_fill_at(buf, i + 1, n, fill);
+}
+
+// A run of `k` copies of the pad character, encoded.
+Int pad_fill_run(Int buf, Int at, Int fill, Int k) {
+    if (k <= 0) { return at; }
+    Int n = utf8_encode(fill, buf + at);
+    return pad_fill_run(buf, at + n, fill, k - 1);
+}
+
+// The text in `k` codepoints, so a width counts characters rather than
+// bytes: `f"{s:4}"` on a two-character CJK word pads by two, not six.
+Int pad_copy(Int buf, Int at, Int s, Int p, Int k) {
+    if (k <= 0 || ld8(s + p) == 0) { return at; }
+    Int n = utf8_len_at(s + p);
+    _ = mcopy(buf + at, s + p, n);
+    return pad_copy(buf, at + n, s, p + n, k - 1);
+}
+
+@export("resid_fmt_pad", "ptr(ptr,i64)")
+pub Int rt_fmt_pad(Int s, Int spec) {
+    Int w = fm_width(spec);
+    Int al = fm_align(spec);
+    Int fill0 = fm_fill(spec);
+    Int fill = if (fill0 == 0) { 32 } else { fill0 };
+    Int n = fmt_cps(s, 0, c_strlen(s), 0);
+    Int pad = w - n;
+    if (pad <= 0) { return s; }
+    Int lpad0 = if (al == FM_LEFT()) { 0 } else { pad };
+    Int rpad0 = if (al == FM_RIGHT() || al == FM_SIGN()) { 0 } else { pad };
+    Int lpad = if (al == FM_CENTER()) { pad / 2 } else { lpad0 };
+    Int rpad = if (al == FM_CENTER()) { pad - pad / 2 } else { rpad0 };
+    // A sign-aware fill goes after the sign, as in printf's `%05d`, so
+    // `-42` reads `-0042` and never `00-42`.
+    Bool keep = if (al == FM_SIGN() && n > 0 && (ld8(s) == 45 || ld8(s) == 43)) { true } else { false };
+    // The sign is already counted in `n`, so every fill character is still
+    // owed: writing the sign first and then all `lpad` of them fills the
+    // width exactly.
+    Int lz = lpad;
+    Int buf = xmalloc(n + lpad + rpad + 8);
+    Int a0 = if (keep) { st8(buf, ld8(s)) * 0 + 1 } else { 0 };
+    Int a1 = pad_fill_run(buf, a0, fill, lz);
+    // The sign is already written, so the digits start past it.
+    Int body = if (keep) { n - 1 } else { n };
+    Int from = if (keep) { 1 } else { 0 };
+    Int a3 = pad_copy(buf, a1, s + from, 0, body);
+    Int a4 = pad_fill_run(buf, a3, fill, rpad);
+    return st8(buf + a4, 0) * 0 + buf;
+}
+
+// ─── Radix ─────────────────────────────────────────────────────────
+// An integer's decimal text as hex, octal or binary. The division runs
+// over the decimal text because that is already exact at every integer
+// width, including the wide ones, so one routine serves them all.
+Int rad_div(Int m, Int n, Int base, Int q, Int rem0) {
+    if (n == 0) { return rem0; }
+    Int cur = rem0 * 10 + (ld8(m) - 48);
+    Int d = cur / base;
+    _ = st8(q, 48 + d);
+    return rad_div(m + 1, n - 1, base, q + 1, cur - d * base);
+}
+
+// Decimal text / base into `q` (leading zeros dropped, then NUL);
+// the remainder. `q` needs n + 1 bytes.
+Int rad_divmod(Int m, Int n, Int base, Int q) {
+    Int rem = rad_div(m, n, base, q, 0);
+    Int k = q_first(q, n);
+    _ = mcopy(q, q + k, n - k + 1);
+    _ = st8(q + n - k, 0);
+    return rem;
+}
+
+// How many leading `'0'` digits to drop: all but the last, so a zero
+// quotient stays the single digit `0`.
+Int q_first(Int q, Int n) {
+    if (n <= 1) { return 0; }
+    if (ld8(q) == 48) { return 1 + q_first(q + 1, n - 1); }
+    return 0;
+}
+
+Int rad_digit(Int r, Int base, Int flags) {
+    if (r < 10) { return 48 + r; }
+    Int c = 87 + r;
+    return if ((flags & FM_UPPER()) != 0) { c - 32 } else { c };
+}
+
+// One digit at a time, least significant first: divide the magnitude,
+// write the remainder's digit, and go on with the quotient until it is
+// `0`. The magnitude is the decimal text, which every integer width has
+// exactly, so one routine serves them all. `end` walks backwards from the
+// far end of the buffer the caller reserved.
+// One digit at a time: divide the magnitude, write the remainder's digit
+// (which is the least significant one) at `end - 1`, and go on with the
+// quotient. Digits therefore land backwards from `end`, and the address
+// this returns is where the most significant one ended up. The magnitude
+// is the decimal text, which every integer width has exactly, so one
+// routine serves them all.
+Int rad_step(Int m, Int n, Int base, Int flags, Int end) {
+    if (n == 0) { return end; }
+    Int q = xmalloc(n + 2);
+    Int rem = rad_divmod(m, n, base, q);
+    Int qn = c_strlen(q);
+    _ = st8(end - 1, rad_digit(rem, base, flags));
+    return rad_more(q, qn, base, flags, end - 1);
+}
+
+Int rad_more(Int q, Int qn, Int base, Int flags, Int end) {
+    if (qn == 1 && ld8(q) == 48) { return end; }
+    return rad_step(q, qn, base, flags, end);
+}
+
+@export("resid_fmt_radix", "ptr(ptr,i64)")
+pub Int rt_fmt_radix(Int s, Int spec) {
+    Int base = fm_base(spec);
+    if (base == 10) { return s; }
+    Int n = c_strlen(s);
+    Int st = if (ld8(s) == 45 || ld8(s) == 43) { 1 } else { 0 };
+    // A decimal digit is worth 4 in binary, the largest ratio there is, so
+    // the digits are written into a scratch area and then moved up behind
+    // the sign.
+    Int nd = (n - st) * 4 + 2;
+    Int scratch = xmalloc(nd);
+    Int p = rad_step(s + st, n - st, base, fm_flags(spec), scratch + nd - 1);
+    Int len = scratch + nd - 1 - p;
+    Int buf = xmalloc(st + len + 1);
+    _ = mcopy(buf, s, st);
+    _ = mcopy(buf + st, p, len);
+    return st8(buf + st + len, 0) * 0 + buf;
+}
+
+// ─── Float style ───────────────────────────────────────────────────
+// `decimal` fixes the point, `scientific` normalizes to one digit before
+// it, `percent` multiplies by 100 and writes a `%`. A precision is digits
+// after the point in the first two and significant digits in the third;
+// without one, the shortest text that reads back exactly is kept, which
+// is what a Float has always printed.
+Int fmt_conv_bytes(Int conv, Int prec, Int at) {
+    Int d = if (prec >= 0) { prec } else { 0 };
+    _ = st8(at, 37) + st8(at + 1, 46);
+    if (d >= 10) { _ = st8(at + 2, 48 + d / 10); }
+    Int p = if (d >= 10) { at + 3 } else { at + 2 };
+    _ = st8(p, 48 + d % 10);
+    Int k = p + 1;
+    _ = st8(k, conv) + st8(k + 1, 0);
+    return k + 2;
+}
+
+// A `plus`/`space` sign goes in after the digits are written, since
+// whether there is one depends on the value's own text.
+Int fmt_sign_prefix(Int buf, Int n, Int flags) {
+    Int want = flags & (FM_PLUS() | FM_SPACE());
+    if (want == 0) { return buf; }
+    if (n > 0 && ld8(buf) == 45) { return buf; }
+    Int out = xmalloc(n + 2);
+    _ = st8(out, if ((want & FM_PLUS()) != 0) { 43 } else { 32 });
+    _ = mcopy(out + 1, buf, n);
+    _ = st8(out + n + 1, 0);
+    _ = c_free(buf);
+    return out;
+}
+
+@export("resid_fmt_style", "ptr(double,i64)")
+pub Int rt_fmt_style(Float v, Int spec) {
+    Int flags = fm_flags(spec);
+    Bool sci = (flags & FM_SCIENTIFIC()) != 0;
+    Bool pct = (flags & FM_PERCENT()) != 0;
+    Bool fix = (flags & FM_DECIMAL()) != 0;
+    Int prec = fm_prec(spec);
+    Int buf = resid_raw_tls("fmt_style", 64);
+    if (prec < 0 && !fix && !sci) {
+        Int n = if (pct) { float_short(buf, v * 100.0) } else { float_short(buf, v) };
+        if (pct) { _ = st8(buf + n, 37); return fmt_sign_prefix(cstr_from(buf, n + 1, 1), n + 1, flags); }
+        return fmt_sign_prefix(cstr_from(buf, n, 1), n, flags);
+    }
+    Float w = if (pct) { v * 100.0 } else { v };
+    Int conv = if (sci) { 101 } else { 102 };
+    Int fmt = resid_raw_tls("fmt_conv", 8);
+    _ = fmt_conv_bytes(conv, prec, fmt);
+    Int n = c_strfromd(buf, 60, fmt, w);
+    if (pct) { _ = st8(buf + n, 37); return fmt_sign_prefix(cstr_from(buf, n + 1, 1), n + 1, flags); }
+    return fmt_sign_prefix(cstr_from(buf, n, 1), n, flags);
+}

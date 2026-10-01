@@ -3,6 +3,6 @@ import "sub/geo.resid";
 Int main() {
     Point q = Point {.x = 3, .y = 4};
     Int n = norm2(q);
-    println(f"{n}");
+    println(f"{n:group}");
     return 0;
 }

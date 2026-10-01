@@ -110,6 +110,39 @@ Int main() { for (Int i in 5) { println("x"); } return 0; }
 === fstr
 undefined variable nope
 Int main() { Str s = f"a {nope} b"; return 0; }
+=== fstrflag
+unknown format flag `zer0`
+Int main() { Int n = 1; Str s = f"{n:zer0}"; return 0; }
+=== fstrfill
+`fill` needs a pad character
+Int main() { Int n = 1; Str s = f"{n:fill}"; return 0; }
+=== fstrtwice
+is given twice
+Int main() { Int n = 1; Str s = f"{n:8, width 8}"; return 0; }
+=== fstrsign
+the sign is given twice
+Int main() { Int n = 1; Str s = f"{n:plus, space}"; return 0; }
+=== fstrhex
+`hex` needs an integer
+Int main() { Str t = "x"; Str s = f"{t:hex}"; return 0; }
+=== fstrgroup
+`group` needs a number
+Int main() { Str t = "x"; Str s = f"{t:group}"; return 0; }
+=== fstrprec
+`precision` needs a Float or a Dec
+Int main() { Int n = 1; Str s = f"{n:precision 2}"; return 0; }
+=== fstrtrim
+`trim` needs a Dec
+Int main() { Int n = 1; Str s = f"{n:trim}"; return 0; }
+=== fstrstyle
+`scientific` needs a Float
+Int main() { Int n = 1; Str s = f"{n:scientific}"; return 0; }
+=== fstrbraces
+a single `}` in an f-string is not text; write `}}`
+Int main() { Str s = f"a}b"; return 0; }
+=== fstrbraceok
+check: ok
+Int main() { Int n = 7; Str s = f"{{{n}}} {n:group} {{lit}}"; return 0; }
 === ifcond
 if condition must be Bool, got Int
 Int main() { if (5) { return 1; } return 0; }

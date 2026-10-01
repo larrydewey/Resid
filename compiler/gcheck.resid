@@ -1242,18 +1242,34 @@ GKT gk_lit(GK k, Int id, Str exp) {
     return gterr(k, "unknown literal " + t, id);
 }
 
-// f-string holes are checked like standalone expressions.
+// f-string holes are checked like standalone expressions, and a hole's
+// format spec is checked against the hole's own type (spec §14): a flag
+// the type has no meaning for is an error, never a silent no-op.
 GKT gk_fstr(GK k, Int id, Int i) {
     if (i >= k.g.ns[id].nk) { return gt(k, "Str", id); }
     Int c = gk_kid(k, id, i);
     Str ck = k.g.ns[c].kind;
-    if (ck == "fpart" || ck == "fspec") { return gk_fstr(k, id, i + 1); }
+    if (ck == "fpart") { return gk_fstr(k, id, i + 1); }
+    if (ck == "fspec") { return gterr(k, "E0413: a format spec must follow the hole it formats", c); }
     GKT h = gk_expr(k, c, "");
     if (h.err != "") { return h; }
     if (gv_is(h.ty)) { return gterr(h.k, "a vector is not shown directly; interpolate v.to_list() (spec §46)", c); }
+    Int fs = gk_fspec_at(k, id, i);
+    if (fs >= 0) {
+        Str fe = fs_check(fs_parse_compat(k.g.ns[fs].text), h.ty);
+        if (fe != "") { return gterr(h.k, fe, fs); }
+    }
     Str nd = gm_need_vars(h.k, "Show", str_split(gm_tvars(h.ty), ","), 0);
     if (nd != "") { return gterr(h.k, "E0226: showing a " + h.ty + " needs " + nd + ": add @needs(" + nd + ") to the function", c); }
-    return gk_fstr(gm_show_insts(h.k, h.ty, 0), id, i + 1);
+    return gk_fstr(gm_show_insts(h.k, h.ty, 0), id, if (fs >= 0) { i + 2 } else { i + 1 });
+}
+
+// The spec node after the hole at `i`, or -1 when there is none.
+Int gk_fspec_at(GK k, Int id, Int i) {
+    if (i + 1 >= k.g.ns[id].nk) { return 0 - 1; }
+    Int f = kg_kid(k.g, id, i + 1);
+    if (k.g.ns[f].kind != "fspec") { return 0 - 1; }
+    return f;
 }
 
 GKT gk_ref(GK k, Int id) {
@@ -3815,6 +3831,14 @@ Bool gk_internal(Str n) {
     return str_starts_with(n, "resid_raw_") || n == "resid_mem_limit_set" || n == "resid_arena_push" || n == "resid_arena_pop" || n == "resid_bulk_push" || n == "resid_bulk_pop" || n == "resid_list_str_persist_copy" || n == "resid_dec_persist" || n == "resid_internals_set" || n == "resid_rtmod_set";
 }
 
+// The text-formatting primitives of spec §14. A hole's spec reaches them
+// only through an f-string, so a program may not name them; the compiler
+// calls them in-process while reducing (reduce.resid), which is what lets
+// `f"{n:8}"` with a known `n` fold to a literal instead of a runtime call.
+Bool gk_fmt_internal(Str n) {
+    return n == "resid_fmt_radix" || n == "resid_fmt_group" || n == "resid_fmt_case" || n == "resid_fmt_sign" || n == "resid_fmt_pad" || n == "resid_fmt_style";
+}
+
 // The files that may use internals: the compiler's own sources and the
 // runtime (runtime/rt/), never the standard library or a program.
 Bool gk_internal_file(Str p) {
@@ -3844,7 +3868,7 @@ Int gk_line_of(List(Int) nls, Int pos, Int lo, Int hi) {
 // A use of an internal: a call, or a runtime @export / @import annotation.
 Str gk_internal_use(GK k, Int id) {
     Str kd = k.g.ns[id].kind;
-    if (kd == "call" && gk_internal(k.g.ns[id].text) && !gk_user_call(k, id)) { return "`" + k.g.ns[id].text + "`"; }
+    if (kd == "call" && (gk_internal(k.g.ns[id].text) || gk_fmt_internal(k.g.ns[id].text)) && !gk_user_call(k, id)) { return "`" + k.g.ns[id].text + "`"; }
     if (kd == "fn" && (str_contains(k.g.ns[id].aux, "@export(") || str_contains(k.g.ns[id].aux, "@import("))) { return "`@export` / `@import` on `" + k.g.ns[id].text + "`"; }
     if (kd == "fn" && (str_contains(k.g.ns[id].aux, "@inline") || str_contains(k.g.ns[id].aux, "@noinline"))) { return "`@inline` / `@noinline` on `" + k.g.ns[id].text + "`"; }
     return "";

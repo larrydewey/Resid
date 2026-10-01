@@ -433,7 +433,7 @@ Str ls_range(Int line, Int c0, Int c1) {
 }
 
 Str ls_capabilities() {
-    return "{\"capabilities\":{\"textDocumentSync\":{\"openClose\":true,\"change\":1,\"save\":{\"includeText\":false}},\"hoverProvider\":true,\"definitionProvider\":true,\"documentSymbolProvider\":true,\"completionProvider\":{\"triggerCharacters\":[]}},\"serverInfo\":{\"name\":\"residc lsp\",\"version\":\"1\"}}";
+    return "{\"capabilities\":{\"textDocumentSync\":{\"openClose\":true,\"change\":1,\"save\":{\"includeText\":false}},\"hoverProvider\":true,\"definitionProvider\":true,\"documentSymbolProvider\":true,\"completionProvider\":{\"triggerCharacters\":[\":\",\"{\"]}},\"serverInfo\":{\"name\":\"residc lsp\",\"version\":\"1\"}}";
 }
 
 // Diagnostics for every file the captured text names, and an empty set
@@ -476,6 +476,9 @@ List(Str) ls_diags(List(Str) ls, Int i, Str path, ListBuf(Str) acc) {
 Str ls_hover(LsA a, Int line, Int col) {
     Int off = ls_off_of(a, line, col);
     if (off < 0) { return "null"; }
+    // A spec has no type to show, so it explains itself instead.
+    Str spec = if (off >= 0) { ls_fspec_at(a.src, off) } else { "\x01" };
+    if (spec != "\x01") { return ls_fspec_hover(spec); }
     Int id = ls_node_at(a, off, 0, -1, 1000000000);
     if (id < 0) { return "null"; }
     Str ty = if (id < a.ty.len()) { a.ty[id] } else { "" };
@@ -487,6 +490,16 @@ Str ls_hover(LsA a, Int line, Int col) {
     Str s3 = if (doc != "") { s2 + "\n" + doc } else { s2 };
     if (s3 == "") { return "null"; }
     return "{\"contents\":{\"kind\":\"markdown\",\"value\":" + js_q(s3) + "}}";
+}
+
+// The spec's flags, as the list the parser would read, and what they say.
+Str ls_fspec_hover(Str text) {
+    Fsp fs = fs_parse_compat(text);
+    Str flags = fs_text(fs);
+    Str shown = if (flags == "") { "no flags" } else { flags };
+    Str note = if (fs.err != "") { "\n\n" + fs.err } else { "" };
+    Str body = "```resid\nf\"{value:" + flags + "}\"\n```\n\n" + shown + note;
+    return "{\"contents\":{\"kind\":\"markdown\",\"value\":" + js_q(body) + "}}";
 }
 
 // The declaration's first line up to its body.
@@ -547,6 +560,63 @@ Str ls_completion(LsA a) {
     List(Str) bs = ls_builtin_items(ls_builtins(), 0, ListBuf());
     List(Str) ds = if (a.parsed) { ls_decl_items(a, 0, a.g.ns[a.unit].nk, ListBuf()) } else { [] };
     return "{\"isIncomplete\":false,\"items\":[" + str_join(ks.concat(bs).concat(ds), ",") + "]}";
+}
+
+// Completion: the format flags when the cursor is in a spec, else the
+// language's names.
+Str ls_complete(LsA a, Int line, Int col) {
+    Str fs = ls_fspec_completion(a, line, col);
+    if (fs != "") { return fs; }
+    return ls_completion(a);
+}
+
+// Completion inside a format spec (spec §14.1) offers the flags and
+// nothing else: a spec is not an expression, so the language's names
+// would not fit. Returns "" when the offset is not in one.
+Str ls_fspec_completion(LsA a, Int line, Int col) {
+    Int off = ls_off_of(a, line, col);
+    if (off < 0) { return ""; }
+    Str spec = ls_fspec_at(a.src, off);
+    if (spec == "\x01") { return ""; }
+    List(Str) fs = ["width 8|the minimum field width, in characters", "8|the width, as a shorthand", "left|align to the left edge", "right|align to the right edge", "center|center the text", "fill 'x'|the pad character", "zero|pad with 0, after any sign", "plus|show + for a non-negative value", "space|show a blank for a non-negative value", "minus|show - only", "hex|write an integer in base 16", "oct|write an integer in base 8", "bin|write an integer in base 2", "upper|the case of the letters", "lower|the case of the letters", "group|a , every three digits", "precision 2|digits after the point, for a Float", ".2|the precision, as a shorthand", "auto|the value's own text", "decimal|fixed point", "scientific|one digit before the point", "percent|the value times 100, then %", "trim|drop a Dec's trailing zeros"];
+    return "{\"isIncomplete\":false,\"items\":[" + str_join(ls_flag_items(fs, 0, ListBuf()), ",") + "]}";
+}
+
+// The spec text ending at `off`, or "\x01" when `off` is not inside one.
+Str ls_fspec_at(Str src, Int off) {
+    Int open = ls_fspec_open(src, off - 1, 1);
+    if (open < 0) { return "\x01"; }
+    return str_slice(src, open, off);
+}
+
+// The `:` that opens the spec the offset sits in, or -1. The walk starts
+// one brace deep, inside a hole: a `}` closes it and a `{` opens another,
+// so only a `:` at that level is the spec's, and a quote is skipped so
+// `fill ':'` does not end the scan early.
+Int ls_fspec_open(Str src, Int i, Int depth) {
+    if (i < 0 || depth == 0) { return 0 - 1; }
+    Int c = str_char_at(src, i);
+    if (c == 34 || c == 39) { return ls_fspec_open(src, ls_fspec_quote(src, i - 1, c), depth); }
+    if (c == 125) { return ls_fspec_open(src, i - 1, depth - 1); }
+    if (c == 123) { return ls_fspec_open(src, i - 1, depth + 1); }
+    if (c == 58) { if (depth == 1) { return i + 1; } return ls_fspec_open(src, i - 1, depth); }
+    return ls_fspec_open(src, i - 1, depth);
+}
+
+// Just past the closing quote, skipping it.
+Int ls_fspec_quote(Str src, Int i, Int q) {
+    if (i < 0) { return 0 - 1; }
+    Int c = str_char_at(src, i);
+    if (c == 92) { return ls_fspec_quote(src, i - 1, q); }
+    if (c == q) { return i; }
+    return ls_fspec_quote(src, i - 1, q);
+}
+
+List(Str) ls_flag_items(List(Str) fs, Int i, ListBuf(Str) acc) {
+    if (i >= fs.len()) { return acc.finish(); }
+    List(Str) p = str_split(fs[i], "|");
+    Str detail = if (p.len() > 1) { p[1] } else { "" };
+    return ls_flag_items(fs, i + 1, acc.push("{\"label\":" + js_q(p[0]) + ",\"kind\":14,\"detail\":" + js_q(detail) + "}"));
 }
 
 // Input and terminal builtins as "name|signature".
@@ -669,7 +739,7 @@ LsOut ls_handle(LsSt st, Str body) {
         if (known < 0) { return ls_out_of([ls_result(id, "null")]); }
         Bool full = method == "textDocument/hover" || method == "textDocument/definition";
         LsA a = ls_analyze(ls_uri_path(uri), ls_doc_load(known), full);
-        Str r = if (method == "textDocument/hover") { ls_hover(a, line, col) } else { if (method == "textDocument/definition") { ls_definition(a, line, col) } else { if (method == "textDocument/documentSymbol") { ls_symbols(a) } else { ls_completion(a) } } };
+        Str r = if (method == "textDocument/hover") { ls_hover(a, line, col) } else { if (method == "textDocument/definition") { ls_definition(a, line, col) } else { if (method == "textDocument/documentSymbol") { ls_symbols(a) } else { ls_complete(a, line, col) } } };
         return ls_out_of([ls_result(id, r)]);
     }
     // Other requests are answered "method not found"; notifications ignored.

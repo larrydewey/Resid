@@ -293,8 +293,23 @@
               "end": "\\}",
               "patterns": [
                 {
-                  "name": "constant.other.format-spec.resid",
-                  "match": ":\\."
+                  "name": "meta.format-spec.resid",
+                  "begin": "(?<=:)",
+                  "end": "(?=\\})",
+                  "patterns": [
+                    {
+                      "name": "support.constant.format-spec.resid",
+                      "match": "\\b(width|left|right|center|fill|zero|plus|space|minus|hex|oct|bin|upper|lower|group|precision|auto|decimal|scientific|percent|trim)\\b"
+                    },
+                    {
+                      "name": "constant.numeric.format-spec.resid",
+                      "match": "\\b\\d+\\b"
+                    },
+                    {
+                      "name": "punctuation.definition.format-spec.resid",
+                      "match": "[,.]|'[^']*'|\"[^\"]*\""
+                    }
+                  ]
                 },
                 { "include": "#numbers" },
                 { "include": "#operators" },
@@ -308,6 +323,10 @@
             {
               "name": "constant.character.escape.resid",
               "match": "\\\\."
+            },
+            {
+              "name": "constant.character.escape.brace.resid",
+              "match": "\\{\\{|\\}\\}"
             }
           ]
         },

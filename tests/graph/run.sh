@@ -25,7 +25,7 @@ for f in compiler/*.resid lib/*.resid tools/*.resid examples/*.resid tests/confo
     # Cases that must fail to compile may be unparseable; the precedence
     # case mixes operators on purpose.
     case "$f" in
-        tests/conformance/cases/err_assignment.resid|tests/conformance/cases/err_list_missing_comma.resid) continue ;;
+        tests/conformance/cases/err_assignment.resid|tests/conformance/cases/err_list_missing_comma.resid|tests/conformance/cases/err_fmt_stray_brace.resid) continue ;;
         # These resolve imports only with their -depmap (or not at all).
         tests/conformance/cases/err_import_missing.resid|tests/conformance/cases/*manifest_ceiling*.resid|tests/conformance/cases/behavior_replace_library.resid|tests/conformance/cases/err_instance_orphan.resid) continue ;;
     esac

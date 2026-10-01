@@ -1,0 +1,5 @@
+Int main() {
+    Str s = "x";
+    println(f"{s:hex}");
+    return 0;
+}

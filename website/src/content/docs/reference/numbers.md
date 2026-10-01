@@ -80,7 +80,7 @@ adoption.
 - Converting a `Dec` to an integer requires an integral value.
 - Division by zero, exponent overflow and a fractional value converted to
   an integer are errors: at compile time when provable, else at run time.
-- A `Dec` prints all N digits; `f"{x:.}"` trims trailing zeros.
+- A `Dec` prints all N digits; `f"{x:trim}"` drops trailing zeros.
 
 ## Floats
 

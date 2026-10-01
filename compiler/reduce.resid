@@ -35,6 +35,11 @@ Int rd_max_lit() { return 4096; }
 // residual call, not exhaust memory. Normal programs use well under a
 // quarter of this (the compiler's own source: ~100MB).
 pub Int rd_max_mem() { return 536870912; }
+// The longest text a reduced format spec may build. A width is bounded
+// in practice, but `group` on a wide integer's decimal text and a large
+// fill are not, so the fold gives up above this rather than growing the
+// compiler to hold a literal nobody will read.
+pub Int rd_max_fst() { return 65536; }
 
 // ─── Small helpers ──────────────────────────────────────────────
 

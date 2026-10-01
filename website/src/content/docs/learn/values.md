@@ -112,9 +112,10 @@ rounding, no NaN, no infinity. Literals end in `m`:
 Int main() {
     Dec price = 19.99m;
     Dec total = price * 3m;
-    println(f"{total:.}");          // :. trims trailing zeros
+    println(f"{total:trim}");       // trim drops the trailing zeros
     Dec(4) x = d4(15) / d4(10);
     println(f"{x}");                // all 4 digits are printed
+    println(f"{price:trim}");      // trimming is on demand
     return 0;
 }
 ```
@@ -122,7 +123,9 @@ Int main() {
 ```text title="Output"
 59.97
 1.500
+19.99
 ```
+
 
 Mixing `Dec` with `Int` or `Float` is an error; convert explicitly.
 

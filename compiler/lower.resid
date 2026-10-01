@@ -495,11 +495,19 @@ GT lw_fstr(LW w, Int id, Int i, Str acc, List(Str) env, GT c) {
     GT cb0 = GT {.pos = 0, .val = "", .ty = "Str", .cnt = 0, .err = "", .glines = c.glines, .lines = c.lines, .tmp = c.tmp, .lbl = c.lbl, .tail = false};
     GT v = lw_expr(w, p, env, cb0);
     if (v.err != "") { return v; }
-    Bool trim = i + 1 < n && lw_kind(w, lw_kid(w, id, i + 1)) == "fspec";
-    GT sv = lw_show(w, v, trim, env);
+    Fsp fs = lw_fspec(w, id, i);
+    GT sv = lw_fmt(w, v, fs, env);
     if (sv.err != "") { return sv; }
     GT joined = fst_join(fst_carr(acc, sv), sv.val);
     return lw_fstr(w, id, i + 1, joined.val, env, joined);
+}
+
+// The spec that follows the hole at `i`, or an empty one.
+Fsp lw_fspec(LW w, Int id, Int i) {
+    if (i + 1 >= w.g.ns[id].nk) { return fs_new(); }
+    Int f = kg_kid(w.g, id, i + 1);
+    if (w.g.ns[f].kind != "fspec") { return fs_new(); }
+    return fs_parse_compat(w.g.ns[f].text);
 }
 
 // A map's text: each key and value by its kind (resid_map_format_t),
@@ -579,6 +587,71 @@ GT lw_show_fixed_list(LW w, GT v, Bool trim, List(Str) env) {
     List(Str) tail = [le + ":", r + " = call ptr @resid_str_concat(ptr " + acc + ", ptr " + cl.val + ")"];
     List(Str) all = no.lines.concat(head).concat(body).concat(tail);
     return GT {.pos = 0, .val = r, .ty = "Str", .cnt = 0, .err = "", .glines = es.glines, .lines = all, .tmp = t2 + 5, .lbl = es.lbl, .tail = false};
+}
+
+// A hole's text: the value's own text (Show), then its spec applied as
+// text operations (spec §14). The order is the one that reads right:
+// a Float's style and an integer's radix change the text first, then
+// grouping, then case, then the sign, then the width.
+GT lw_fmt(LW w, GT v, Fsp fs, List(Str) env) {
+    Str ty = strip_owned_cg(v.ty);
+    GT s0 = lw_fmt_text(w, v, fs, env);
+    if (s0.err != "") { return s0; }
+    // A Float's style has already written its sign as part of its digits
+    // (resid_fmt_style), so the sign step is skipped for it; applying both
+    // would put two signs on one value.
+    Bool styled = lw_fmt_styled(fs, ty);
+    GT s1 = lw_fmt_radix(w, s0, fs, ty);
+    if (s1.err != "") { return s1; }
+    GT s2 = lw_fmt_group(w, s1, fs);
+    if (s2.err != "") { return s2; }
+    GT s3 = lw_fmt_case(w, s2, fs);
+    if (s3.err != "") { return s3; }
+    GT s4 = if (styled) { s3 } else { lw_fmt_sign(w, s3, fs) };
+    if (s4.err != "") { return s4; }
+    return lw_fmt_pad(w, s4, fs, ty);
+}
+
+// Whether this hole's text came out of resid_fmt_style, which writes the
+// sign itself.
+Bool lw_fmt_styled(Fsp fs, Str ty) {
+    return is_float_cg(ty) && (fs_wants_style(fs) || fs.hasprec);
+}
+
+// The value's text. A Float asked for a style is written from the value
+// itself, since the style decides what digits it has; every other type
+// goes through Show, with `trim` for a Dec.
+GT lw_fmt_text(LW w, GT v, Fsp fs, List(Str) env) {
+    Str t = strip_owned_cg(v.ty);
+    Bool want = (fs_wants_style(fs) || fs.hasprec) && is_float_cg(t);
+    if (!want) { return lw_show(w, v, fs.trim, env); }
+    GT vt = widen_val(lw_step(v, v.val, t, v.lines, v.tmp), "Float(64)");
+    return lw_rt1(vt, "ptr", "@resid_fmt_style(double " + vt.val + ", i64 " + rd_itoa(fs_pack(fs, t)) + ")", "Str");
+}
+
+GT lw_fmt_radix(LW w, GT v, Fsp fs, Str ty) {
+    if (fs.base == 10) { return v; }
+    return lw_rt1(v, "ptr", "@resid_fmt_radix(ptr " + v.val + ", i64 " + rd_itoa(fs_pack(fs, ty)) + ")", "Str");
+}
+
+GT lw_fmt_group(LW w, GT v, Fsp fs) {
+    if (!fs.group) { return v; }
+    return lw_rt1(v, "ptr", "@resid_fmt_group(ptr " + v.val + ")", "Str");
+}
+
+GT lw_fmt_case(LW w, GT v, Fsp fs) {
+    if (fs.case == "") { return v; }
+    return lw_rt1(v, "ptr", "@resid_fmt_case(ptr " + v.val + ", i64 " + rd_itoa(fs_pack(fs, "Str")) + ")", "Str");
+}
+
+GT lw_fmt_sign(LW w, GT v, Fsp fs) {
+    if (fs.sign != 1 && fs.sign != 2) { return v; }
+    return lw_rt1(v, "ptr", "@resid_fmt_sign(ptr " + v.val + ", i64 " + rd_itoa(fs_pack(fs, "Str")) + ")", "Str");
+}
+
+GT lw_fmt_pad(LW w, GT v, Fsp fs, Str ty) {
+    if (!fs.hasw && fs.align == "" && fs.fill == "") { return v; }
+    return lw_rt1(v, "ptr", "@resid_fmt_pad(ptr " + v.val + ", i64 " + rd_itoa(fs_pack(fs, ty)) + ")", "Str");
 }
 
 // A value's text (Show): scalars and Dec by representation, lists and
@@ -758,16 +831,27 @@ GT lw_sacc_parts(LW w, Int f, Int i, GT a, List(Str) env) {
     GT v = lw_expr(w, p, env, cb);
     if (v.err != "") { return v; }
     Str t = strip_owned_cg(v.ty);
-    if (int_fam(t) && ll_width_of(num_norm_cg(t)) <= 64 && fam_head(t) != "UInt") {
+    Fsp fs = lw_sacc_fspec(w, f, i);
+    Bool bare = fs_is_plain(fs);
+    // A plain integer hole appends its digits straight into the buffer;
+    // a spec means the text has to be built first.
+    if (bare && int_fam(t) && ll_width_of(num_norm_cg(t)) <= 64 && fam_head(t) != "UInt") {
         GT v64 = widen_val(lw_step(v, v.val, t, v.lines, v.tmp), "Int(64)");
         GT r = lw_rt1(v64, "ptr", "@resid_sacc_append_int(ptr " + a.val + ", i64 " + v64.val + ")", "Str");
         return lw_sacc_parts(w, f, i + 1, r, env);
     }
-    Bool trim = i + 1 < n && lw_kind(w, lw_kid(w, f, i + 1)) == "fspec";
-    GT sv = lw_show(w, v, trim, env);
+    GT sv = lw_fmt(w, v, fs, env);
     if (sv.err != "") { return sv; }
     GT r = lw_rt1(sv, "ptr", "@resid_sacc_append(ptr " + a.val + ", ptr " + sv.val + ")", "Str");
     return lw_sacc_parts(w, f, i + 1, r, env);
+}
+
+// The spec that follows the hole at `i` of the parts list `f`.
+Fsp lw_sacc_fspec(LW w, Int f, Int i) {
+    if (i + 1 >= w.g.ns[f].nk) { return fs_new(); }
+    Int q = kg_kid(w.g, f, i + 1);
+    if (w.g.ns[q].kind != "fspec") { return fs_new(); }
+    return fs_parse_compat(w.g.ns[q].text);
 }
 
 // xs.reverse() / xs.sum() / xs.contains(v), by element representation.
@@ -2571,6 +2655,12 @@ GT lw_builtin(LW w, Int id, Str n, List(Str) env, GT c) {
     if (n == "resid_sacc_append") { return lw_extern(w, id, n, l2s("Str", "Str"), "Str", env, c); }
     if (n == "str_contains" || n == "str_starts_with" || n == "str_ends_with") { return lw_externb(w, id, n, l2s("Str", "Str"), env, c); }
     if (n == "str_repeat") { return lw_extern(w, id, n, l2s("Str", "Int"), "Str", env, c); }
+    // The text-formatting primitives (spec §14). A hole's spec lowers to
+    // these; the reducer calls them in-process, so they usually vanish
+    // entirely and only a hole with a residual value reaches codegen.
+    if (n == "resid_fmt_radix" || n == "resid_fmt_case" || n == "resid_fmt_sign" || n == "resid_fmt_pad") { return lw_extern(w, id, n, l2s("Str", "Int"), "Str", env, c); }
+    if (n == "resid_fmt_group") { return lw_extern(w, id, n, l1s("Str"), "Str", env, c); }
+    if (n == "resid_fmt_style") { return lw_extern(w, id, n, l2s("Float", "Int"), "Str", env, c); }
     if (n == "str_replace") { return lw_extern(w, id, n, l3s("Str", "Str", "Str"), "Str", env, c); }
     if (n == "str_split") { return lw_extern(w, id, "str_split", l2s("Str", "Str"), "List(Str)", env, c); }
     if (n == "str_join") { return lw_extern(w, id, "str_join", l2s("List(Str)", "Str"), "Str", env, c); }
@@ -2594,7 +2684,7 @@ GT lw_builtin(LW w, Int id, Str n, List(Str) env, GT c) {
 
 // Names the builtin table covers.
 Bool lw_is_builtin(Str n) {
-    return str_starts_with(n, "resid_raw_") || n == "str_sha256" || n == "str_char_at" || n == "str_from_code" || n == "str_len" || n == "str_slice" || n == "str_sb_finish" || n == "str_sb_append" || n == "str_sb_append_cp" || n == "resid_crypto_random_byte" || n == "resid_read_line" || n == "resid_read_byte" || str_starts_with(n, "resid_term_") || n == "resid_dbg_spawn" || n == "resid_dbg_wait" || n == "resid_dbg_cont" || n == "resid_dbg_step" || n == "resid_dbg_peek" || n == "resid_dbg_poke" || n == "resid_dbg_reg" || n == "resid_dbg_set_pc" || n == "resid_dbg_signal" || n == "resid_dbg_exit_code" || n == "resid_dbg_kill" || n == "resid_dbg_f64" || n == "str_sb_new" || n == "resid_arena_push" || n == "resid_arena_pop" || n == "resid_bulk_push" || n == "resid_bulk_pop" || n == "resid_mem_mark" || n == "resid_mem_since_mark" || n == "resid_list_str_persist_copy" || n == "resid_cpu_has_aesni" || n == "resid_test_plan" || n == "resid_test_summary" || n == "resid_quiet" || n == "resid_quiet_set" || n == "resid_mem_limit_set" || n == "resid_internals" || n == "resid_internals_set" || n == "resid_rtmod" || n == "resid_rtmod_set" || n == "str_trim" || n == "str_to_lower" || n == "str_to_upper" || n == "str_reverse" || n == "resid_sacc_from" || n == "resid_sacc_append_int" || n == "resid_sacc_append" || n == "str_contains" || n == "str_starts_with" || n == "str_ends_with" || n == "str_repeat" || n == "str_replace" || n == "str_split" || n == "str_join" || n == "str_is_int" || n == "str_is_float" || n == "str_parse_int" || n == "str_parse_float" || n == "sqrt" || n == "print_bytes" || n == "str_index_of" || n == "str_count";
+    return str_starts_with(n, "resid_raw_") || n == "str_sha256" || n == "str_char_at" || n == "str_from_code" || n == "str_len" || n == "str_slice" || n == "str_sb_finish" || n == "str_sb_append" || n == "str_sb_append_cp" || n == "resid_crypto_random_byte" || n == "resid_read_line" || n == "resid_read_byte" || str_starts_with(n, "resid_term_") || n == "resid_dbg_spawn" || n == "resid_dbg_wait" || n == "resid_dbg_cont" || n == "resid_dbg_step" || n == "resid_dbg_peek" || n == "resid_dbg_poke" || n == "resid_dbg_reg" || n == "resid_dbg_set_pc" || n == "resid_dbg_signal" || n == "resid_dbg_exit_code" || n == "resid_dbg_kill" || n == "resid_dbg_f64" || n == "str_sb_new" || n == "resid_arena_push" || n == "resid_arena_pop" || n == "resid_bulk_push" || n == "resid_bulk_pop" || n == "resid_mem_mark" || n == "resid_mem_since_mark" || n == "resid_list_str_persist_copy" || n == "resid_cpu_has_aesni" || n == "resid_test_plan" || n == "resid_test_summary" || n == "resid_quiet" || n == "resid_quiet_set" || n == "resid_mem_limit_set" || n == "resid_internals" || n == "resid_internals_set" || n == "resid_rtmod" || n == "resid_rtmod_set" || n == "str_trim" || n == "str_to_lower" || n == "str_to_upper" || n == "str_reverse" || n == "resid_sacc_from" || n == "resid_sacc_append_int" || n == "resid_sacc_append" || n == "str_contains" || n == "str_starts_with" || n == "str_ends_with" || n == "str_repeat" || n == "str_replace" || n == "str_split" || n == "str_join" || n == "str_is_int" || n == "str_is_float" || n == "str_parse_int" || n == "str_parse_float" || n == "sqrt" || n == "print_bytes" || n == "str_index_of" || n == "str_count" || n == "resid_fmt_radix" || n == "resid_fmt_group" || n == "resid_fmt_case" || n == "resid_fmt_sign" || n == "resid_fmt_pad" || n == "resid_fmt_style";
 }
 
 // cg_print: `print(str_sb_finish(b))` fuses into resid_sb_print.

@@ -46,7 +46,7 @@ Int main() {
     Dec price = 12.50m;
     println(f"{u.name} has {u.roles.len()} roles");
     println(f"{u}");
-    println(f"{price} {price:.} {1.0 / 3.0} {Some(2)}");
+    println(f"{price} {price:trim} {1.0 / 3.0} {Some(2)}");
     return 0;
 }
 ```
@@ -58,10 +58,48 @@ User { name: "ada", roles: ["admin", "dev"] }
 ```
 
 Numbers print in full (a `Float` prints the shortest text that reads back
-as the same value, a `Dec` all its digits; `:.` trims a `Dec`'s trailing
+as the same value, a `Dec` all its digits; `trim` drops a `Dec`'s trailing
 zeros). Lists, maps, records and variants print structurally, strings inside
 them quoted. A [`Show` behavior](/Resid/behaviors/show/) replaces the
 built-in text for a type.
+
+### Format specs
+
+A hole can carry a spec after `:`, and the spec is a list of flags in any
+order — one rule to remember, no positional mini-language:
+
+```resid
+Int main() {
+    Int n = 1234567;
+    Int m = 255;
+    Float pi = 3.14159265;
+    Float share = 0.125;
+    println(f"|{n:12}|{n:12, left}|{n:12, center}|");
+    println(f"|{n:group}|{n:hex}|{m:hex, upper}|");
+    println(f"|{pi:precision 2}|{share:percent}|");
+    println(f"|{m:zero, width 8, plus}|");
+    println(f"|{{not a hole}}|");
+    return 0;
+}
+```
+
+```text title="Output"
+|     1234567|1234567     |  1234567   |
+|1,234,567|12d687|FF|
+|3.14|12.5%|
+|+0000255|
+|{not a hole}|
+```
+
+`width`/`8`, `left`/`right`/`center`, `fill 'x'`/`zero`, `plus`/`space`/
+`minus`, `hex`/`oct`/`bin`, `upper`/`lower`, `group`, `precision 2`/`.2`,
+`decimal`/`scientific`/`percent`/`auto`, and `trim`. The
+[reference page](/Resid/reference/expressions/) has the full table.
+
+A flag a value's type cannot mean is an error rather than a silent no-op,
+so a typo never reads as "it just didn't apply". And a spec only changes
+how text is written, so when the value is known the whole thing reduces at
+compile time — `f"{n:group}"` with a known `n` is a literal.
 
 ## Building strings
 

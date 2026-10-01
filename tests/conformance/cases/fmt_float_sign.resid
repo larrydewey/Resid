@@ -1,0 +1,10 @@
+Int main() {
+    Float pos = 2.5;
+    Float neg = 0.0 - 2.5;
+    println(f"[{neg:plus, precision 1}] [{pos:plus, precision 1}]");
+    println(f"[{neg:space, precision 1}] [{pos:space, precision 1}]");
+    println(f"[{pos:percent, precision 2}]");
+    println(f"[{pos:scientific}]");
+    println(f"[{neg:group, plus, zero, width 12}]");
+    return 0;
+}

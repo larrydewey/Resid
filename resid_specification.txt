@@ -506,9 +506,12 @@ Display:
 
     Dec(4) 1.5   ->   "1.500"
 
-  The f-string specifier ":." trims trailing zeros:
+  The f-string flag `trim` drops them:
 
-    f"{x:.}"
+    f"{x:trim}"   ->   "1.5"
+
+  A Dec's precision is its type, so a `precision`
+  applies to Float only (§14.4).
 
 
 --------------------------------------------------
@@ -905,7 +908,8 @@ if-let / while-let:
   [1, 2, 3]   {"a": 1}   Point { x = 1, y = 2 }
 
   f"hello {name}"
-  f"price: {price:.}"
+  f"{price:trim}"
+  f"{total:12, group, left}"
   r"C:\path\file"
   b"bytes"
 
@@ -914,6 +918,90 @@ Bool as decimal text (Float round-trips), Str as is, Dec at
 its precision, lists and records structurally, or through a Show(T)
 instance (§11). `f"{x}"` is how a value becomes a Str; there
 are no per-type conversion functions.
+
+`{{` and `}}` are a literal brace. A single `}` in an
+f-string's text is a parse error: write `}}`.
+
+14.1  A hole's format spec
+
+A hole may carry a spec after `:`. The spec is a
+comma-separated list of flags, in any order:
+
+  f"a {n:8} b {s:width 8, left} c {f:precision 2}"
+
+Every flag names one thing. There is no positional
+mini-language to remember beyond one shorthand: a bare
+integer is the width. An empty spec is the value's own
+display, so `f"{x}"` and `f"{x:}"` agree.
+
+  width N        minimum field width, in codepoints
+  8              the same, as a shorthand
+  left           align to the left edge
+  right          align to the right edge
+  center         center the text
+  fill 'x'       the pad character; `fill 0` also works
+  zero           pad with '0', after any sign
+  plus           show + for a non-negative value
+  space          show a blank for a non-negative value
+  minus          show - only (the default)
+  hex oct bin    write an integer in that radix
+  upper lower    the case of the letters (hex digits,
+                 or text)
+  group          a ',' every three digits (decimal only)
+  precision N    digits after the point, for a Float
+  .N             the same, as a shorthand
+  auto           the value's own text (the default)
+  decimal        fixed point
+  scientific     one digit before the point, an exponent
+  percent        the value times 100, then `%`
+  trim           drop a Dec's trailing zeros
+
+14.2  What the defaults are
+
+Width pads to the width and never truncates. Alignment
+defaults to `right` for a number and `left` for
+everything else, so a spec says only what differs. The
+pad character defaults to a blank, except that `zero`
+means '0' after a sign: `f"{-42:zero, width 6}"` is
+`-00042`, never `0-042` or `00-042`.
+
+Without a style a Float prints the shortest text that
+reads back as the same value, and a Dec prints all N of
+its digits. `precision` changes the digits; the styles
+change the shape.
+
+14.3  The order the flags apply
+
+A style or a radix writes the value out; `group` then
+counts its decimal digits; `upper`/`lower` moves the
+letters; `plus`/`space` puts the sign in; the width pads
+last, so the sign counts toward it.
+
+14.4  A spec is checked against its type
+
+Every flag names something only some values have, so a
+flag a type cannot mean is E0413 rather than silently
+ignored. `hex` needs an integer, `precision` a Float,
+`trim` a Dec, `group` and the sign flags a number. A
+combination that cannot be one value is refused too:
+`group` counts decimal digits, so it does not go with
+`hex`; a Dec's precision is its type, so `trim` and
+`precision` do not go together; a Float(128) carries
+more digits than a double can round to, so no style and
+no precision apply to it.
+
+An unknown flag, a repeated one, and a missing argument
+are parse errors, and the diagnostic names the flags
+that are accepted.
+
+14.5  Reduction
+
+A spec never changes how a value is computed, only how
+its text is written, so it is applied as text operations
+after the value is known. When the hole's value reduces,
+the spec is applied at compile time too, by the same
+code the runtime would run, and the hole folds to its
+text. `f"{n:group}"` with a known `n` is a literal.
 
 Literals default to Int / Float / Dec (for m-suffix
 decimals); integer literals follow 6.1a. There is no null
@@ -1328,6 +1416,7 @@ written readable by their owner only
 
   // strings
   f"hello {name}"
+  f"{n:8, group}"   f"{f:precision 2}"   f"{{literal}}"
   r"raw"   b"bytes"
 
   // ranges & slices
@@ -1442,6 +1531,25 @@ Numeric operators obey the interoperability rules of §6.
             | "rt" expression | f-string | raw-string | byte-string
             | list-literal | map-literal | struct-literal
             | provider-call | spawn-expression | "#location"
+
+  // An f-string's holes are parsed as expressions in place; their format
+  // spec (spec §14.1) is a list of flags in any order, of which only the
+  // width may be written without its name.
+  f-string      ::= "f" '"' { f-string-text | f-hole } '"'
+  f-string-text ::= character | "{{" | "}}"
+  f-hole        ::= "{" expression [ ":" format-spec ] "}"
+
+  format-spec   ::= format-item { "," format-item }
+  format-item   ::= int                       // the width
+                 | "." int                    // the precision
+                 | flag [ format-argument ]
+  flag          ::= "width" | "left" | "right" | "center"
+                 | "fill" | "zero" | "plus" | "space" | "minus"
+                 | "hex" | "oct" | "bin" | "upper" | "lower"
+                 | "group" | "precision"
+                 | "auto" | "decimal" | "scientific" | "percent"
+                 | "trim"
+  format-argument ::= int | char | quoted-string
 
   range-expression ::= expression ".." expression
                      | expression "..=" expression

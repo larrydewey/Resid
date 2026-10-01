@@ -1,0 +1,383 @@
+// fmt.resid — format specs of f-string holes (spec §14, §31).
+//
+// A hole's spec is a comma-separated list of flags, in any order:
+//   {n:8}  {n:width 8, left}  {n:zero, width 4}  {f:precision 2}
+//   {x:hex} {x:hex, upper}    {s:fill '.', center, width 10}
+// Every flag names one thing; there is no positional mini-language to
+// memorize beyond a bare integer, which is the width. An empty spec is
+// the value's own display, as before.
+//
+// `fs_parse` is total: it returns the flags it understood plus a
+// diagnostic for the first it did not, and `fs_check` then says whether
+// those flags make sense for the hole's type. Both run at check time, so
+// a bad spec is a compile-time error (E0413), never a silent no-op.
+
+// One parsed spec. Defaults are "no opinion": a zero width, no fill, no
+// alignment override, decimal, lowercase digits, no sign, no grouping, no
+// precision, no presentation style.
+type Fsp = { Int width; Bool hasw; Str fill; Str align; Bool hassign; Int sign; Int base; Str case; Bool group; Bool hasprec; Int prec; Str style; Bool trim; Str err; };
+
+Str fs_sign_name(Int s) {
+    if (s == 1) { return "plus"; }
+    if (s == 2) { return "space"; }
+    return "minus";
+}
+
+pub Fsp fs_new() {
+    return Fsp {.width = 0, .hasw = false, .fill = "", .align = "", .hassign = false, .sign = 0, .base = 10, .case = "", .group = false, .hasprec = false, .prec = 0, .style = "", .trim = false, .err = ""};
+}
+
+// ─── Lexing one spec into items ──────────────────────────────────
+
+// The end of the item starting at `i`: a comma outside quotes, or `n`.
+Int fs_item_end(Str s, Int i, Int n) {
+    if (i >= n) { return n; }
+    Int c = str_char_at(s, i);
+    if (c == 44) { return i; }
+    if (c == 39 || c == 34) { Int q = c; Int e = fs_quoted_end(s, i + 1, n, q); return if (e < 0) { n } else { fs_item_end(s, e, n) }; }
+    return fs_item_end(s, i + 1, n);
+}
+
+// The index just past the closing quote, or -1 when it is missing.
+Int fs_quoted_end(Str s, Int i, Int n, Int q) {
+    if (i >= n) { return 0 - 1; }
+    Int c = str_char_at(s, i);
+    if (c == q) { return i + 1; }
+    if (c == 92) { return fs_quoted_end(s, i + 2, n, q); }
+    return fs_quoted_end(s, i + 1, n, q);
+}
+
+// fs_parse over a comma-separated item list.
+Fsp fs_items(Str s, Int i, Int n, Fsp a) {
+    if (a.err != "") { return a; }
+    Int e = fs_item_end(s, i, n);
+    Str it = str_trim(str_slice(s, i, e));
+    Fsp a1 = if (it == "") { a } else { fs_item(it, a) };
+    if (e >= n) { return a1; }
+    return fs_items(s, e + 1, n, a1);
+}
+
+// One item: a flag name, or the two-word / bare-number forms.
+Fsp fs_item(Str it, Fsp a) {
+    if (it == "") { return a; }
+    // A leading digit is the width: `8` is `{n:8}`.
+    Int d = fs_lead_digit(it);
+    if (d >= 0) {
+        if (a.hasw) { return fs_bad(a, it, "width is given twice"); }
+        Int v = fs_digits(it, d, str_len(it), 0);
+        if (v < 0) { return fs_bad(a, it, "`" + it + "` is not a width"); }
+        return Fsp {.width = v, .hasw = true, .fill = a.fill, .align = a.align, .hassign = a.hassign, .sign = a.sign, .base = a.base, .case = a.case, .group = a.group, .hasprec = a.hasprec, .prec = a.prec, .style = a.style, .trim = a.trim, .err = ""};
+    }
+    // `.5` is the precision: the one shorthand that reads as English.
+    if (str_char_at(it, 0) == 46) {
+        if (a.hasprec) { return fs_bad(a, it, "precision is given twice"); }
+        Int v = fs_digits(it, 1, str_len(it), 0);
+        if (v < 0) { return fs_bad(a, it, "`" + it + "` is not a precision"); }
+        return Fsp {.width = a.width, .hasw = a.hasw, .fill = a.fill, .align = a.align, .hassign = a.hassign, .sign = a.sign, .base = a.base, .case = a.case, .group = a.group, .hasprec = true, .prec = v, .style = a.style, .trim = a.trim, .err = ""};
+    }
+    // A flag is one word; `width 8` and `fill '.'` are that word and
+    // whatever follows it, so `arg` is the rest of the item. Only a flag
+    // that takes an argument reads it, so a bare word followed by
+    // something else is reported as the unknown flag it is.
+    Str w = fs_word(it, 0);
+    Str rest = str_trim(str_slice(it, str_len(w), str_len(it)));
+    Bool quoted = fs_quoted(rest);
+    Str arg = if (quoted) { rest } else { fs_word(rest, 0) };
+    // `fill '.', width 10` — the pad character, quoted when it is a letter
+    // and bare when it is a digit, so `fill 0` and `fill '0'` both work.
+    if (w == "fill") {
+        if (arg == "") { return fs_bad(a, it, "`fill` needs a pad character: fill '.', fill '*', fill 0"); }
+        Str ch = if (quoted) { fs_unquote(arg) } else { arg };
+        if (str_len(ch) != 1) { return fs_bad(a, it, "`fill` takes one character: fill '.', fill '*', fill 0"); }
+        return Fsp {.width = a.width, .hasw = a.hasw, .fill = ch, .align = a.align, .hassign = a.hassign, .sign = a.sign, .base = a.base, .case = a.case, .group = a.group, .hasprec = a.hasprec, .prec = a.prec, .style = a.style, .trim = a.trim, .err = ""};
+    }
+    // `width 10`, `precision 2` — the explicit spellings.
+    if (w == "width" || w == "precision") {
+        Bool pw = w == "width";
+        if (if (pw) { a.hasw } else { a.hasprec }) { return fs_bad(a, it, "`" + w + "` is given twice"); }
+        Int v = if (arg == "") { 0 - 1 } else { fs_digits(arg, 0, str_len(arg), 0) };
+        if (v < 0) { return fs_bad(a, it, "`" + w + "` needs a non-negative number: " + w + " 8"); }
+        return Fsp {.width = if (pw) { v } else { a.width }, .hasw = if (pw) { true } else { a.hasw }, .fill = a.fill, .align = a.align, .hassign = a.hassign, .sign = a.sign, .base = a.base, .case = a.case, .group = a.group, .hasprec = if (pw) { a.hasprec } else { true }, .prec = if (pw) { a.prec } else { v }, .style = a.style, .trim = a.trim, .err = ""};
+    }
+    if (arg != "") { return fs_bad(a, it, "`" + w + "` takes no argument: write `" + w + "` on its own"); }
+    if (rest != "" && !quoted) { return fs_bad(a, it, "unknown format flag `" + it + "`"); }
+    // Alignment. The default is right for numbers and left for text, so
+    // these only ever say "not the default".
+    if (w == "left" || w == "right" || w == "center") { return fs_align(a, w); }
+    // Padding with '0' is `fill '0'` said the obvious way; a zero that
+    // follows a sign, as in printf's %05d.
+    // `zero` only names the pad character; it leaves the alignment to
+    // `fs_align_code`, which reads a '0' fill as the sign-aware padding.
+    if (w == "zero") { return Fsp {.width = a.width, .hasw = a.hasw, .fill = if (a.fill == "") { "0" } else { a.fill }, .align = a.align, .hassign = a.hassign, .sign = a.sign, .base = a.base, .case = a.case, .group = a.group, .hasprec = a.hasprec, .prec = a.prec, .style = a.style, .trim = a.trim, .err = ""}; }
+    // Radix and digit case. `upper`/`lower` are the only spelling.
+    if (w == "hex" || w == "oct" || w == "bin") {
+        Int b = if (w == "hex") { 16 } else { if (w == "oct") { 8 } else { 2 } };
+        if (a.base != 10 && a.base != b) { return fs_bad(a, it, "the radix is given twice: write one of `hex`, `oct`, `bin`"); }
+        return Fsp {.width = a.width, .hasw = a.hasw, .fill = a.fill, .align = a.align, .hassign = a.hassign, .sign = a.sign, .base = b, .case = a.case, .group = a.group, .hasprec = a.hasprec, .prec = a.prec, .style = a.style, .trim = a.trim, .err = ""};
+    }
+    if (w == "upper" || w == "lower") {
+        if (a.case != "" && a.case != w) { return fs_bad(a, it, "the case is given twice: write one of `upper`, `lower`"); }
+        return Fsp {.width = a.width, .hasw = a.hasw, .fill = a.fill, .align = a.align, .hassign = a.hassign, .sign = a.sign, .base = a.base, .case = w, .group = a.group, .hasprec = a.hasprec, .prec = a.prec, .style = a.style, .trim = a.trim, .err = ""};
+    }
+    // Sign: `plus` shows + for a non-negative value, `space` a blank.
+    // The sign flags name one thing, so giving two is a mistake rather than
+    // a silent last-one-wins.
+    if (w == "plus" || w == "space" || w == "minus") {
+        Int s = if (w == "plus") { 1 } else { if (w == "space") { 2 } else { 3 } };
+        if (a.hassign) { return fs_bad(a, it, "the sign is given twice: write one of `plus`, `space`, `minus`"); }
+        return Fsp {.width = a.width, .hasw = a.hasw, .fill = a.fill, .align = a.align, .hassign = true, .sign = s, .base = a.base, .case = a.case, .group = a.group, .hasprec = a.hasprec, .prec = a.prec, .style = a.style, .trim = a.trim, .err = ""};
+    }
+    if (w == "group") {
+        return Fsp {.width = a.width, .hasw = a.hasw, .fill = a.fill, .align = a.align, .hassign = a.hassign, .sign = a.sign, .base = a.base, .case = a.case, .group = true, .hasprec = a.hasprec, .prec = a.prec, .style = a.style, .trim = a.trim, .err = ""};
+    }
+    // How a number is written out. `decimal`/`scientific`/`percent` are
+    // the readable spellings; `auto` (the default) is the value's own.
+    if (w == "auto" || w == "decimal" || w == "scientific" || w == "percent") {
+        return Fsp {.width = a.width, .hasw = a.hasw, .fill = a.fill, .align = a.align, .hassign = a.hassign, .sign = a.sign, .base = a.base, .case = a.case, .group = a.group, .hasprec = a.hasprec, .prec = a.prec, .style = w, .trim = a.trim, .err = ""};
+    }
+    // `trim` drops a Dec's trailing zeros, the old `:.`.
+    if (w == "trim") {
+        return Fsp {.width = a.width, .hasw = a.hasw, .fill = a.fill, .align = a.align, .hassign = a.hassign, .sign = a.sign, .base = a.base, .case = a.case, .group = a.group, .hasprec = a.hasprec, .prec = a.prec, .style = a.style, .trim = true, .err = ""};
+    }
+    return fs_bad(a, it, "unknown format flag `" + w + "`");
+}
+
+Fsp fs_align(Fsp a, Str w) {
+    if (a.align != "" && a.align != w) { return fs_bad(a, w, "alignment is given twice"); }
+    return Fsp {.width = a.width, .hasw = a.hasw, .fill = a.fill, .align = w, .hassign = a.hassign, .sign = a.sign, .base = a.base, .case = a.case, .group = a.group, .hasprec = a.hasprec, .prec = a.prec, .style = a.style, .trim = a.trim, .err = ""};
+}
+
+// The first error keeps the first position that produced one.
+Fsp fs_bad(Fsp a, Str it, Str msg) {
+    if (a.err != "") { return a; }
+    return Fsp {.width = a.width, .hasw = a.hasw, .fill = a.fill, .align = a.align, .hassign = a.hassign, .sign = a.sign, .base = a.base, .case = a.case, .group = a.group, .hasprec = a.hasprec, .prec = a.prec, .style = a.style, .trim = a.trim, .err = msg + "; a hole's spec is `8`, `width 8`, `left`, `right`, `center`, `fill '.'`, `zero`, `plus`, `space`, `minus`, `hex`, `oct`, `bin`, `upper`, `lower`, `group`, `precision 2` (or `.2`), `auto`, `decimal`, `scientific`, `percent`, `trim`"};
+}
+
+Int fs_lead_digit(Str it) {
+    Int c = str_char_at(it, 0);
+    if (c < 48 || c > 57) { return 0 - 1; }
+    return 0;
+}
+
+// A run of digits from `i` to `n`, or -1 when it is not all digits.
+Int fs_digits(Str s, Int i, Int n, Int acc) {
+    if (i >= n) { return acc; }
+    Int c = str_char_at(s, i);
+    if (c < 48 || c > 57) { return 0 - 1; }
+    return fs_digits(s, i + 1, n, acc * 10 + c - 48);
+}
+
+// The index just past the run of letters and digits at `i`.
+Int fs_word_end(Str s, Int j) {
+    if (j >= str_len(s)) { return j; }
+    Int d = str_char_at(s, j);
+    if (fs_is_alpha_num(d)) { return fs_word_end(s, j + 1); }
+    return j;
+}
+
+Bool fs_is_alpha_num(Int c) {
+    if (c >= 97 && c <= 122) { return true; }
+    if (c >= 65 && c <= 90) { return true; }
+    if (c >= 48 && c <= 57) { return true; }
+    return false;
+}
+
+// The word at `i`, and whatever follows it.
+Str fs_word(Str s, Int i) {
+    if (i >= str_len(s)) { return ""; }
+    Int c = str_char_at(s, i);
+    if (!fs_is_alpha_num(c)) { return ""; }
+    return str_slice(s, i, fs_word_end(s, i + 1));
+}
+
+// True when `s` starts with a quote, so its contents are taken verbatim.
+Bool fs_quoted(Str s) {
+    if (str_len(s) == 0) { return false; }
+    Int c = str_char_at(s, 0);
+    return c == 39 || c == 34;
+}
+
+Str fs_unquote(Str s) {
+    Int n = str_len(s);
+    if (n >= 2) {
+        Int q = str_char_at(s, 0);
+        Int e = str_char_at(s, n - 1);
+        if (q == 39 || q == 34) {
+            if (e == q) { return str_slice(s, 1, n - 1); }
+        }
+    }
+    return s;
+}
+
+// ─── Parsing a spec ──────────────────────────────────────────────
+
+// The spec text of a hole (everything after the `:`), or "" for none.
+pub Fsp fs_parse(Str text) {
+    Fsp a = fs_new();
+    Int n = str_len(text);
+    if (n == 0) { return a; }
+    return fs_items(text, 0, n, a);
+}
+
+// `:.` in an older source means `trim`; accept it so existing code and
+// its tests keep working, but the diagnostic points at the new spelling.
+pub Fsp fs_parse_compat(Str text) {
+    Str t = str_trim(text);
+    if (t == ".") { return fs_item("trim", fs_new()); }
+    return fs_parse(text);
+}
+
+// ─── Checking the flags against the hole's type ──────────────────
+
+// Every flag names something only some kinds of value have, so a spec is
+// checked against the type rather than accepted and ignored. `fs_check`
+// returns "" when the spec fits, else the diagnostic.
+pub Str fs_check(Fsp a, Str ty) {
+    if (a.err != "") { return a.err; }
+    Str t = ty;
+    Bool num = fs_is_int(t) || fs_is_float(t) || fs_is_dec(t);
+    Bool integral = fs_is_int(t) || fs_is_dec(t);
+    Bool txt = t == "Str" || fs_is_str_fixed(t) || t == "Bool";
+    if (a.base != 10 && !fs_is_int(t)) { return "E0413: `" + fs_base_name(a.base) + "` needs an integer; " + ty + " has no radix to change"; }
+    if (a.hasprec && !fs_is_float(t) && !fs_is_dec(t)) { return "E0413: `precision` needs a Float or a Dec; " + ty + " has no fractional digits"; }
+    if (a.trim && !fs_is_dec(t)) { return "E0413: `trim` needs a Dec; " + ty + " prints no trailing zeros to trim"; }
+    if (a.style != "" && a.style != "auto" && !fs_is_float(t)) { return "E0413: `" + a.style + "` needs a Float; " + ty + " has no presentation style"; }
+    if (a.group && !num) { return "E0413: `group` needs a number; " + ty + " has no digits to group"; }
+    if (a.hassign && !num) { return "E0413: `" + fs_sign_name(a.sign) + "` needs a number; " + ty + " has no sign"; }
+    if (a.case != "" && !(a.base != 10 || txt)) { return "E0413: `" + a.case + "` needs an integer or text; " + ty + " has no digits or letters to case"; }
+    if (a.base != 10 && a.hasprec) { return "E0413: `" + fs_base_name(a.base) + "` and `precision` do not go together"; }
+    if (a.trim && a.hasprec) { return "E0413: `trim` and `precision` do not go together: a Dec's precision is its type"; }
+    if (a.base != 10 && a.group) { return "E0413: `group` counts decimal digits, so it does not go with `" + fs_base_name(a.base) + "`"; }
+    if (a.base != 10 && a.case == "lower") { return "E0413: `" + fs_base_name(a.base) + "` digits are already lowercase; write `" + fs_base_name(a.base) + ", upper` or nothing"; }
+    // A Float(128) has more precision than a double can carry, so a style
+    // or a precision would silently round it; say so instead.
+    if (is_float_cg(t) && float_bits_cg(t) == 128 && (a.hasprec || (a.style != "" && a.style != "auto"))) { return "E0413: a presentation style or a precision does not apply to Float(128): its text is exact and cannot be rounded to a double's digits"; }
+    _ = integral;
+    return "";
+}
+
+// ─── Packing ───────────────────────────────────────────────────────
+// The runtime reads a spec as one i64 (resid_fmt_pack in runtime/rt/
+// fmt.resid). These are the same layout, spelled out here so the compiler
+// can build the word as a constant: a hole's spec is known when the hole
+// is compiled, so nothing about it survives into the program as data.
+Int fs_W_SHIFT() { return 0; }
+Int fs_W_MASK() { return 255; }
+Int fs_ALIGN_SHIFT() { return 8; }
+Int fs_ALIGN_MASK() { return 15; }
+Int fs_BASE_SHIFT() { return 12; }
+Int fs_BASE_MASK() { return 31; }
+Int fs_FLAGS_SHIFT() { return 17; }
+Int fs_FLAGS_MASK() { return 262143; }
+Int fs_PREC_SHIFT() { return 35; }
+Int fs_PREC_MASK() { return 255; }
+Int fs_FILL_SHIFT() { return 43; }
+Int fs_FILL_MASK() { return 2097151; }
+
+Int fs_F_GROUP() { return 1; }
+Int fs_F_PLUS() { return 2; }
+Int fs_F_SPACE() { return 4; }
+Int fs_F_UPPER() { return 8; }
+Int fs_F_LOWER() { return 16; }
+Int fs_F_DECIMAL() { return 32; }
+Int fs_F_SCIENTIFIC() { return 64; }
+Int fs_F_PERCENT() { return 128; }
+
+Int fs_A_LEFT() { return 0; }
+Int fs_A_RIGHT() { return 1; }
+Int fs_A_CENTER() { return 2; }
+Int fs_A_SIGN() { return 3; }
+
+// The alignment code a spec asks for. A '0' fill with no explicit
+// alignment is the sign-aware one, so `f"{-42:zero, width 5}"` is
+// `-0042`; any other fill, or an alignment the user wrote, is taken as
+// written. A `plus`/`space` sign counts as a sign too, so
+// `f"{42:zero, width 6, plus}"` is `+00042`.
+Int fs_align_code(Fsp a, Str ty) {
+    if (a.align == "left") { return fs_A_LEFT(); }
+    if (a.align == "right") { return fs_A_RIGHT(); }
+    if (a.align == "center") { return fs_A_CENTER(); }
+    // A '0' fill with no alignment written is the sign-aware one, as in
+    // printf's %05d, so -42 reads -0042. It applies whatever else the
+    // spec says about the sign, since a `plus` sign is a sign too.
+    if (a.fill == "0" && a.hasw) { return fs_A_SIGN(); }
+    if (fs_is_int(ty) || fs_is_float(ty) || fs_is_dec(ty)) { return fs_A_RIGHT(); }
+    return fs_A_LEFT();
+}
+
+Int fs_flags(Fsp a) {
+    Int f0 = if (a.group) { fs_F_GROUP() } else { 0 };
+    Int f1 = if (a.sign == 1) { fs_F_PLUS() } else { 0 };
+    Int f2 = if (a.sign == 2) { fs_F_SPACE() } else { 0 };
+    Int f3 = if (a.case == "upper") { fs_F_UPPER() } else { 0 };
+    Int f4 = if (a.case == "lower") { fs_F_LOWER() } else { 0 };
+    Int f5 = if (a.style == "decimal") { fs_F_DECIMAL() } else { 0 };
+    Int f6 = if (a.style == "scientific") { fs_F_SCIENTIFIC() } else { 0 };
+    Int f7 = if (a.style == "percent") { fs_F_PERCENT() } else { 0 };
+    return f0 | f1 | f2 | f3 | f4 | f5 | f6 | f7;
+}
+
+// The word the runtime reads: width, alignment, radix, flags, precision
+// (biased by one, so zero can mean "none") and the pad codepoint.
+pub Int fs_pack(Fsp a, Str ty) {
+    Int fill = if (a.fill == "") { 0 } else { str_char_at(a.fill, 0) };
+    Int prec = if (a.hasprec) { a.prec + 1 } else { 0 };
+    return (a.width & fs_W_MASK()) | ((fs_align_code(a, ty) & fs_ALIGN_MASK()) << fs_ALIGN_SHIFT()) | ((a.base & fs_BASE_MASK()) << fs_BASE_SHIFT()) | ((fs_flags(a) & fs_FLAGS_MASK()) << fs_FLAGS_SHIFT()) | ((prec & fs_PREC_MASK()) << fs_PREC_SHIFT()) | ((fill & fs_FILL_MASK()) << fs_FILL_SHIFT());
+}
+
+// Whether a Float hole asks for a presentation style at all; the
+// shortest round-tripping text is the default, so `auto` changes nothing.
+pub Bool fs_wants_style(Fsp a) { return a.style == "decimal" || a.style == "scientific" || a.style == "percent"; }
+
+Str fs_base_name(Int b) {
+    if (b == 16) { return "hex"; }
+    if (b == 8) { return "oct"; }
+    return "bin";
+}
+
+pub Bool fs_is_int(Str t) { return int_fam(t); }
+pub Bool fs_is_float(Str t) { return is_float_cg(t); }
+pub Bool fs_is_dec(Str t) { return is_dec_cg(t); }
+pub Bool fs_is_str_fixed(Str t) { return str_has_prefix_cg(t, "Str(") || t == "Bytes" || str_has_prefix_cg(t, "Bytes("); }
+
+// The alignment a spec asks for, resolving "auto" against the type.
+pub Str fs_align_of(Fsp a, Str ty) {
+    if (a.align != "") { return a.align; }
+    if (a.fill == "0" && a.hassign == false && a.hasw) { return "right"; }
+    if (fs_is_int(ty) || fs_is_float(ty) || fs_is_dec(ty)) { return "right"; }
+    return "left";
+}
+
+// Whether anything about the spec is more than a width: those holes
+// cannot fold to a literal at compile time unless the value is known.
+pub Bool fs_is_plain(Fsp a) {
+    return !a.hasw && a.fill == "" && a.align == "" && !a.hassign && a.base == 10 && a.case == "" && !a.group && !a.hasprec && a.style == "" && !a.trim;
+}
+
+// A non-negative number as text.
+Str fs_num(Int v) {
+    if (v < 10) { return str_from_code(48 + v); }
+    Int q = v / 10;
+    return fs_num(q) + str_from_code(48 + v - q * 10);
+}
+
+// The canonical text of a parsed spec, for a diagnostic or a printer.
+pub Str fs_text(Fsp a) {
+    return str_join(fs_parts(a, 0, []), ", ");
+}
+
+// The spec's flags in the order they read, each at most once.
+List(Str) fs_parts(Fsp a, Int i, List(Str) acc) {
+    if (i > 9) { return acc; }
+    List(Str) a1 = if (i == 0 && a.hasw) { acc.concat(["width " + fs_num(a.width)]) } else { acc };
+    List(Str) a2 = if (i == 1 && a.align != "") { a1.concat([a.align]) } else { a1 };
+    List(Str) a3 = if (i == 2 && a.fill == "0") { a2.concat(["zero"]) } else { if (i == 2 && a.fill != "") { a2.concat(["fill '" + a.fill + "'"]) } else { a2 } };
+    List(Str) a4 = if (i == 3 && a.hassign) { a3.concat([fs_sign_name(a.sign)]) } else { a3 };
+    List(Str) a5 = if (i == 4 && a.base != 10) { a4.concat([fs_base_name(a.base)]) } else { a4 };
+    List(Str) a6 = if (i == 5 && a.case != "") { a5.concat([a.case]) } else { a5 };
+    List(Str) a7 = if (i == 6 && a.group) { a6.concat(["group"]) } else { a6 };
+    List(Str) a8 = if (i == 7 && a.hasprec) { a7.concat(["precision " + fs_num(a.prec)]) } else { a7 };
+    List(Str) a9 = if (i == 8 && a.style != "") { a8.concat([a.style]) } else { a8 };
+    List(Str) a10 = if (i == 9 && a.trim) { a9.concat(["trim"]) } else { a9 };
+    return fs_parts(a, i + 1, a10);
+}

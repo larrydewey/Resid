@@ -621,16 +621,22 @@ Int trim_zeros(Int o, Int start, Int k) {
     return k;
 }
 
-// snprintf(buf, n, fmt, v) for fmt "%.<P>g" or "%.<P>f"; the length.
+// snprintf(buf, n, fmt, v) for fmt "%.<P>g", "%.<P>f" or "%.<P>e"; the
+// length.
 pub Int c_strfromd(Int buf, Int n, Int fmt, Float v) {
     Int pv = fmt_prec(fmt + 2, 0);
     Int conv = ld8(fmt + 2 + prec_len(fmt + 2));
     Int out = xmalloc(2048);
-    Int len = format_double(out, v, pv, conv == 102);
+    Int len = format_conv(out, v, pv, conv);
     Int k = min(len, n - 1);
     _ = mcopy(buf, out, k);
     _ = st8(buf + k, 0);
     return c_free(out) * 0 + len;
+}
+
+Int format_conv(Int o, Float v, Int prec, Int conv) {
+    if (conv == 101) { return format_exp(o, v, prec); }
+    return format_double(o, v, prec, conv == 102);
 }
 
 Int fmt_prec(Int p, Int acc) {
@@ -685,6 +691,44 @@ Int expand_x(Int m, Int e2) {
     Int d = xmalloc(4);
     _ = expand(m, e2, d, 1);
     return c_free(d) * 0 + ld64(fx());
+}
+
+// "%.<P>e": one digit before the point, always an exponent. The exponent
+// is written with at least two digits, as C's printf does.
+pub Int format_exp(Int o, Float v, Int prec) {
+    Int b = resid_raw_f64_bits(v);
+    Bool neg = b < 0;
+    Int ef = lshr(b, 52) & 2047;
+    Int f = b & 4503599627370495;
+    Int k0 = if (neg) { put(o, 0, 45) } else { 0 };
+    if (ef == 2047) {
+        Int s = if (f != 0) { resid_raw_addr("nan") } else { resid_raw_addr("inf") };
+        return mcopy(o + k0, s, 3) * 0 + k0 + 3;
+    }
+    Int m = if (ef == 0) { f } else { f | 4503599627370496 };
+    Int e2 = (if (ef == 0) { 1 } else { ef }) - 1075;
+    if (m == 0) {
+        Int k1 = put(o, k0, 48);
+        Int k2 = if (prec == 0) { k1 } else { put(o, k1, 46) };
+        Int k3 = if (prec == 0) { k2 } else { put_zeros(o, k2, prec) };
+        Int k4 = put(o, k3, 101);
+        Int k5 = put(o, k4, 43);
+        Int k6 = put(o, k5, 48);
+        return put(o, k6, 48);
+    }
+    Int dbuf = xmalloc(1200);
+    _ = expand(m, e2, dbuf, prec + 2);
+    _ = round_digits(dbuf, prec + 1);
+    Int e = ld64(fx()) - 1;
+    Int n = ld64(fx() + 8);
+    Int k1 = put(o, k0, 48 + ld8(dbuf));
+    Int k2 = if (prec == 0) { k1 } else { put(o, k1, 46) };
+    Int k3 = if (prec == 0) { k2 } else { put_digits_from(o, k2, dbuf, 1, prec + 1, n) };
+    Int k4 = put(o, k3, 101);
+    Int k5 = put(o, k4, if (e < 0) { 45 } else { 43 });
+    Int ae = if (e < 0) { 0 - e } else { e };
+    Int k6 = if (ae >= 10) { k5 } else { put(o, k5, 48) };
+    return c_free(dbuf) * 0 + k6 + itoa_into(o + k6, ae);
 }
 
 Int fmt_g(Int o, Int k0, Int m, Int e2, Int prec, Int dbuf) {

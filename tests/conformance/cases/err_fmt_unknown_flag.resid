@@ -1,0 +1,5 @@
+Int main() {
+    Int n = 7;
+    println(f"{n:zer0}");
+    return 0;
+}

@@ -1,0 +1,5 @@
+Int main() {
+    Int n = 7;
+    println(f"{n:trim}");
+    return 0;
+}

@@ -1,0 +1,13 @@
+Int main() {
+    Float pi = 3.14159265;
+    Float pct = 0.125;
+    Float sci = 31415.9;
+    println(f"[{pi:precision 2}]");
+    println(f"[{pi:precision 3, decimal}]");
+    println(f"[{sci:scientific}]");
+    println(f"[{pct:percent, precision 1}]");
+    println(f"[{pi}]");
+    Dec(4) d = 1.5m;
+    println(f"[{d}] [{d:trim}]");
+    return 0;
+}
