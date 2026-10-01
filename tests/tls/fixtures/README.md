@@ -17,3 +17,15 @@ verifies (`ecdsa_vx`, the same routine the CertificateVerify check uses).
 
 Nothing here is a secret and nothing here is used outside tests: the
 private keys were thrown away.
+
+| file | what it is |
+|---|---|
+| `certmsg.bin` | a real TLS 1.3 `Certificate` message body captured from a live handshake: one certificate, with a `certificate_list` two bytes longer than the entry in it |
+| `certmsg2.bin` | the same shape holding `leaf.der` and `inter.der` |
+| `certmsg3.bin` | `leaf.der`, `inter.der` and `root.der` |
+| `certmsg-ctx.bin` | `certmsg2` with a two-byte request context |
+| `certmsg-long.bin` | one certificate under an over-long `certificate_list` |
+| `certmsg-trunc.bin` | `certmsg2` cut short in the middle of the second entry |
+
+The `.bin` files are Certificate message *bodies*, byte-for-byte as they
+appear on the wire, which is what `tm_cert_list` reads.

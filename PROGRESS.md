@@ -13,7 +13,7 @@
   self-compile fixed point from the committed seed with no Rust. The
   pipeline is parse → resolve → check → reduce → lower on the knowledge
   graph (PLAN-graph-ir G0–G7 done, §0y). Self-hosted suites: conformance
-  338, reduce 19, provenance 21, graph 621, pkg 62, tls 29, runtime 12, lsp 18.
+  338, reduce 19, provenance 21, graph 621, pkg 62, tls 35, runtime 12, lsp 18.
   The Rust pipeline (`bootstrap/rust-stage0/`) and `tools/resid-lsp-full`, which
   was built on its crates, were deleted on 2026-09-26; both are in git
   history.
@@ -1477,7 +1477,7 @@ accepted. It now has a trust store.
   does not recognise turns a corrupted certificate into a *different*
   certificate. An unterminated PEM block yields nothing rather than half a
   certificate.
-- Tests: `tests/tls/run.sh` is new, 29 cases over committed fixtures, so
+- Tests: `tests/tls/run.sh` is new, 35 cases over committed fixtures, so
   it needs no openssl and no network.
 
 **Three real bugs found on the way, all of which had been hiding.**
@@ -1505,6 +1505,24 @@ accepted. It now has a trust store.
    `@requires` annotations while `main` read `args` and opened sockets.
    Repaired rather than deleted, since they now exercise a trust store end
    to end.
+
+4. **`tm_cert_list` walked off the end of a real Certificate message.**
+   The first version stopped only when the position passed the end of the
+   declared `certificate_list`, and a live server's list is two bytes
+   longer than the entry in it -- so the walk read the next entry's length
+   out of nothing, got zero, and appended a zero-length certificate.
+   That empty list went into the trust store's chain walk, where it is
+   exactly the thing that must never reach signature verification, and
+   aborted the handshake on an out-of-bounds read. It now requires a
+   length field and that many bytes to be present, and clamps the
+   declared end to the bytes actually received, so a server cannot walk
+   the walk off the end either. Both example clients now complete a
+   handshake against `tools/h2_server.py`: `tls_client` decrypts the
+   reply, and `h2_client` gets `:status 200` and the body, with the wrong
+   store and with no store both refusing.
+   Six `Certificate` message fixtures pin this, one of them captured from
+   a live handshake -- so the case that only real traffic produces is the
+   one in the suite.
 
 Also corrected in `lib/chain.resid`: the note claiming `ec_cert_verify`
 returns false for valid inputs, and suspected a codegen bug, is stale —

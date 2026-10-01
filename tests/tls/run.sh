@@ -92,6 +92,32 @@ probe "$W/pinstore" "$F/expired.der" localhost; want pinned-expired-leaf false
 # Expiry.
 probe "$F/root.pem" "$F/expired.der" localhost "$W/inters"; want expired-leaf false
 
+# ── Certificate message framing (tm_cert_list) ──────────────────────
+# A server's chain arrives as one message; the intermediates in it are
+# what the trust store walks. Getting the walk wrong here is not cosmetic:
+# a phantom trailing certificate is exactly what must never reach
+# signature verification.
+certs() { "$PROBE" x --certs "$@" 2>&1 | sed -n 's/^body=[0-9]* certs=\([0-9]*\) lens=\(.*\)$/\1 \2/p'; }
+
+[ "$(certs "$F/certmsg.bin")" = "1 414" ] && ok \
+  || bad "single-certificate message: $(certs "$F/certmsg.bin")"
+[ "$(certs "$F/certmsg2.bin")" = "2 459,415" ] && ok \
+  || bad "two-certificate message: $(certs "$F/certmsg2.bin")"
+[ "$(certs "$F/certmsg3.bin")" = "3 459,415,408" ] && ok \
+  || bad "three-certificate message: $(certs "$F/certmsg3.bin")"
+# A non-empty request context is length-prefixed and has to be stepped over.
+[ "$(certs "$F/certmsg-ctx.bin")" = "2 459,415" ] && ok \
+  || bad "message with a request context: $(certs "$F/certmsg-ctx.bin")"
+# A certificate_list longer than the entries it holds must not produce a
+# phantom certificate -- the bug that made an empty list reach chain
+# validation.
+[ "$(certs "$F/certmsg-long.bin")" = "1 459" ] && ok \
+  || bad "over-long certificate_list: $(certs "$F/certmsg-long.bin")"
+# Truncated mid-entry: the whole certificate that is there still comes
+# out, and the half one is dropped rather than turned into bytes.
+[ "$(certs "$F/certmsg-trunc.bin")" = "1 459" ] && ok \
+  || bad "truncated message: $(certs "$F/certmsg-trunc.bin")"
+
 # PEM reading, checked through what it produces.
 probe "$F/root.pem" "$F/root.der" localhost
 [ "$(field roots)" = 1 ] && ok || bad "PEM bundle did not parse to one root"

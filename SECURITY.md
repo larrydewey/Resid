@@ -148,6 +148,7 @@ provenance themselves; run `residc verify` before trusting their inputs.
 | A pinned leaf is accepted without a chain, but is still checked for host name and validity. | pinned-leaf, pinned-leaf-wrong-host, pinned-expired-leaf |
 | A store path that does not exist is an empty store, not a crash. | missing store path |
 | PEM reading is strict: text that is not a certificate, and an unterminated block, yield no root rather than a partial one. | junk PEM, unterminated PEM block |
+| The chain the server sends is read whole, and a `certificate_list` that claims more than it holds, or that is cut short mid-entry, yields only the certificates that are actually there. | single-certificate message, two-certificate message, three-certificate message, message with a request context, over-long certificate_list, truncated message |
 
 Certificates are compared as moments on the timeline, not as packed
 integers: `x509_valid_now` takes an `Instant` and converts the

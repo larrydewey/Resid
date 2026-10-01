@@ -13,6 +13,7 @@
 import "../../lib/chain.resid";
 import "../../lib/clock.resid";
 import "../../lib/instant.resid";
+import "../../lib/tlsmsg.resid";
 
 // A directory of DER certificates, read whole.
 @requires(filesystem(readonly))
@@ -30,6 +31,7 @@ TrustStore load_dir(Str dir) {
 
 @requires(args, filesystem(readonly), clock(readonly))
 Int main() {
+    if (str_starts_with(args.get(2), "--certs")) { return cert_main(); }
     Str store_path = args.get(1);
     Str leaf_path = args.get(2);
     Str host = args.get(3);
@@ -46,4 +48,32 @@ Int main() {
     println("pinned=" + f"{trust_store_has(st, leaf, 0)}");
     println("TRUSTED=" + f"{tls_server_trusted(leaf, ist.roots, hostb, now, st)}");
     return 0;
+}
+// How many certificates a TLS 1.3 Certificate message carries, and how
+// long each one is. A message whose certificate_list is longer than the
+// entries it actually holds must not yield a phantom trailing
+// certificate: that empty list is exactly the kind of thing that must
+// never reach signature verification.
+//
+//   tsprobe <store> --certs <certmsg-file> [<certmsg-file> ...]
+Str cert_lens(List(List(Int)) certs, Int i, Str acc) {
+    if (i >= certs.len()) { return acc; }
+    Str sep = if (acc == "") { "" } else { "," };
+    return cert_lens(certs, i + 1, acc + sep + f"{certs[i].len()}");
+}
+
+@requires(args, filesystem(readonly))
+Int report_certs(List(Str) files, Int i) {
+    if (i >= files.len()) { return 0; }
+    if (files[i] == "") { return 0; }
+    List(Int) body = filesystem.read_bytes(files[i]);
+    List(List(Int)) certs = tm_cert_list(body);
+    println("body=" + f"{body.len()}" + " certs=" + f"{certs.len()}" + " lens=" + cert_lens(certs, 0, ""));
+    return report_certs(files, i + 1);
+}
+
+@requires(args, filesystem(readonly))
+Int cert_main() {
+    List(Str) files = [args.get(3), args.get(4), args.get(5), args.get(6), args.get(7)];
+    return report_certs(files, 0);
 }

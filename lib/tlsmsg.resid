@@ -304,17 +304,36 @@ pub List(Int) tm_cert_der(List(Int) body) {
 // The request context is normally empty but is length-prefixed, so it is
 // stepped over by its own declared length rather than assumed zero.
 pub List(List(Int)) tm_cert_list(List(Int) body) {
+    if (body.len() == 0) {
+        List(List(Int)) none = [];
+        return none;
+    }
     Int ctx = body[0];
     Int list_len = tm_u24_at(body, ctx + 1);
     Int start = ctx + 4;
-    Int end = start + list_len - 1;
+    Int declared = start + list_len - 1;
+    // list_len is the peer's claim; the buffer is the fact. A server that
+    // declares more than it sent must not walk the walk off the end of the
+    // bytes we actually have.
+    Int last = body.len() - 1;
+    Int end = if (declared < last) { declared } else { last };
     return tm_cert_list_acc(body, start, end, []);
 }
 
+// Each entry must be a length field and then that many bytes, both of
+// which must be there. Real Certificate messages have carried a
+// certificate_list longer than the entries in it, so stopping only when
+// the position passed the end walks off the end and reads the next
+// entry's length out of nothing: the zero that comes back is not a
+// certificate of length zero, it is a phantom, and it is exactly the kind
+// of thing that must not reach signature verification. A truncated or
+// padded tail ends the walk instead.
 List(List(Int)) tm_cert_list_acc(List(Int) body, Int p, Int end, List(List(Int)) acc) {
-    if (p > end) { return acc; }
+    if (p + 2 > end) { return acc; }
     Int clen = tm_u24_at(body, p);
+    if (clen <= 0) { return acc; }
     Int start = p + 3;
+    if (start + clen - 1 > end) { return acc; }
     List(Int) der = slice_seed(body, start, clen, []);
     return tm_cert_list_acc(body, start + clen, end, acc.concat([der]));
 }
