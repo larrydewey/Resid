@@ -13,7 +13,7 @@
   self-compile fixed point from the committed seed with no Rust. The
   pipeline is parse → resolve → check → reduce → lower on the knowledge
   graph (PLAN-graph-ir G0–G7 done, §0y). Self-hosted suites: conformance
-  330, reduce 18, provenance 21, graph 607, pkg 30, runtime 12, lsp 18.
+  338, reduce 19, provenance 21, graph 621, pkg 62, tls 29, runtime 12, lsp 18.
   The Rust pipeline (`bootstrap/rust-stage0/`) and `tools/resid-lsp-full`, which
   was built on its crates, were deleted on 2026-09-26; both are in git
   history.
@@ -1403,6 +1403,113 @@ yield 0. Handle types: `with (Type h = expr) { … }` RAII.
   identically through both pipelines.
 
 ---
+
+## 0a. Registry transports, and a trust store that trusts something (2026-10-01)
+
+**Registries, end to end.** The registry system had a local directory and
+nothing else: `[registry] url` was parsed into the manifest and then
+ignored, and `resid-build serve` had been dropped from the C.7 port as "a
+dev convenience". Both are now real, and neither is allowed to widen what
+a build accepts.
+
+- **Remote fetch.** `tools/resid-manifest.resid` grew a `Registry` type
+  carrying whichever source the manifest configured, and every artifact
+  read — archive, `-sha256`, `-sig`, `index.resid-idx`, `index.resid-sig`
+  — goes through one `fetch_artifact`. The local and remote transports use
+  the same names, so a registry on disk and the same registry served are
+  the same bytes. A manifest naming both `path` and `url` is an error
+  rather than a precedence rule: which one a build read from should be
+  written down, not inferred.
+  - The archive is binary and is carried as `List(Int)`, never as a `Str`
+    — the same reason `filesystem.read_bytes` exists. A test publishes a
+    package whose sources are not valid UTF-8 and asserts the extracted
+    file is byte-identical, which is what a `Str` round trip would break.
+  - A response must declare `Content-Length`. Reading to close instead
+    would let a hostile registry stream unbounded bytes at a build, so
+    that is a rejection rather than a convenience, and artifacts are
+    capped.
+  - `https://` is refused, not downgraded. A TLS registry transport is not
+    wired, and falling back to plaintext for one would be worse than not
+    fetching at all.
+- **Serve.** `resid-pkg serve <registry> [--port N] [--port-file F]
+  [--requests N]` is the publish side of the same layout. It needed
+  listener syscalls, which the runtime did not have: `resid_tcp_listen`,
+  `resid_tcp_bound_port` and `resid_tcp_accept` are new in
+  `runtime/rt/net.resid`, with `rt.ll` re-lowered and the seed rebuilt.
+  Deliberately small — loopback only, GET and HEAD only, no listing, no
+  upload, and a request path that could name a file outside the registry
+  directory is refused, by the same rule `extract` enforces on an archive.
+- **`require_signatures` is enforced.** The flag was parsed and printed
+  and never consulted. It now means what the distinction it names means:
+  an entry in a signed index is a hash somebody wrote down, not a
+  signature over those bytes, so with `require_signatures` the index alone
+  no longer admits a package and a detached signature under a pinned or
+  keyring key is required.
+- **Index operations.** `resid-pkg index list|add|remove|verify`. Each
+  write re-signs the whole index, because the signature covers the text
+  and there is no per-row signature to keep in step. `add` refuses a hash
+  that contradicts an archive already published under that name and
+  version; `remove` of an entry that is not there is an error, so a
+  publisher who believes they removed something is told when they removed
+  nothing; both refuse to re-sign without the key.
+- Tests: `tests/pkg/run.sh` 30 → 62. Local, remote and served transports,
+  the four `require_signatures` cases, the index operations, and — when
+  curl is present, skipped otherwise — four raw HTTP cases the package
+  resolver would never make (POST, traversal).
+
+**TLS server authentication.** The client checked the validity window and
+the host name and nothing else, so any certificate for the host was
+accepted. It now has a trust store.
+
+- `lib/chain.resid` holds `TrustStore`: a PEM bundle (what
+  `/etc/ssl/certs/ca-certificates.crt` is) or a directory of DER
+  certificates, the same shape as the `[signing] keyring` a project
+  already keeps. `tls_server_trusted` requires that the leaf name the
+  connected host, be inside its validity window, and chain to a root in
+  the store through the intermediates in the server's Certificate
+  message — `lib/tlsmsg.resid`'s new `tm_cert_list`, alongside the
+  `tm_cert_der` that returns only the leaf. **Fail-closed**: no store
+  trusts nothing and there is no skip flag, so `tls_server_cert_ok`, which
+  could be mistaken for one, is gone.
+- `base64_decode` in `lib/crypto.resid`, which the PEM reading needed
+  (only encode existed). Strict: anything not the RFC 4648 alphabet is
+  refused rather than skipped, because a decoder that drops a character it
+  does not recognise turns a corrupted certificate into a *different*
+  certificate. An unterminated PEM block yields nothing rather than half a
+  certificate.
+- Tests: `tests/tls/run.sh` is new, 29 cases over committed fixtures, so
+  it needs no openssl and no network.
+
+**Three real bugs found on the way, all of which had been hiding.**
+
+1. **`x509_valid_now` compared seconds-since-epoch against a packed
+   `YYYYMMDDHHMMSS`.** The two numberings share no digits worth
+   comparing, so every certificate read as not-yet-valid — except that
+   the examples passed a matching packed value, which is why it had never
+   shown. `x509_valid_now` now takes an `Instant` and converts
+   UTCTime/GeneralizedTime through `lib/calendar.resid`, and
+   `chain_verify`/`tls_server_trusted` follow. A certificate's `notBefore`
+   cannot drift from what the rest of the language calls the same day. (I
+   first "fixed" this by hand-rolling a packed civil integer in
+   `lib/clock.resid`; the user asked why the language already had a date
+   and time system, and was right.)
+2. **A wildcard SAN missed one-character labels.** `*.wild.test` matched
+   `sub.wild.test` but not `x.wild.test`: the code required at least two
+   characters before the first dot. Two off-by-ones in the suffix length
+   and the pattern index cancel out, so the single-label semantics were
+   otherwise right and only that one bound was wrong.
+3. **`examples/tls_client.resid` and `examples/h2_client.resid` did not
+   compile.** They called `resid_utc_now_civil()`, which is defined
+   nowhere — the two files were Rust-pipeline e2e fixtures whose pipeline
+   was deleted, and nothing had built them since. Both also had zero
+   `@requires` annotations while `main` read `args` and opened sockets.
+   Repaired rather than deleted, since they now exercise a trust store end
+   to end.
+
+Also corrected in `lib/chain.resid`: the note claiming `ec_cert_verify`
+returns false for valid inputs, and suspected a codegen bug, is stale —
+it verifies correctly, through the same `ecdsa_vx` that
+`tm_ecdsa_verify_sha256` uses and that the live h2 e2e covers.
 
 ## 0b. Method syntax for behavior verbs, and `Bounded` (2026-09-29)
 

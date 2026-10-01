@@ -2282,6 +2282,9 @@ Str cg_extern_ret(Str name) {
     if (name == "resid_tcp_close") { return "Bool"; }
     if (name == "resid_tcp_send_bin") { return "Bool"; }
     if (name == "resid_tcp_recv_bin") { return "List(Int)"; }
+    if (name == "resid_tcp_listen") { return "Int"; }
+    if (name == "resid_tcp_bound_port") { return "Int"; }
+    if (name == "resid_tcp_accept") { return "Int"; }
     return "";
 }
 

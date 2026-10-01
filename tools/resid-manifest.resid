@@ -22,10 +22,12 @@
 ///
 /// `deps` resolves this manifest's `[dependencies.*]` transitively —
 /// both `path =` (local directory) and `version =` (fetched from the
-/// `[registry] path` local directory: `<reg>/pkg/<name>-<version>.
-/// resid-pkg`, falling back to `<reg>/<name>-<version>.resid-pkg`,
-/// extracted once into `target/resid/deps/<name>-<version>` and reused
-/// after) — checking: cycles (depth > 32), a name claimed by two
+/// registry: `[registry] path` for a local directory — `<reg>/pkg/<name>-
+/// <version>.resid-pkg`, falling back to `<reg>/<name>-<version>.resid-pkg`
+/// — or `[registry] url` for an `http://` base URL over the same
+/// artifact names under `/pkg/`; extracted once into
+/// `target/resid/deps/<name>-<version>` and reused after) — checking:
+/// cycles (depth > 32), a name claimed by two
 /// different directories, a dependency's declared `capabilities` all
 /// present under this manifest's `[capabilities] grant`, (when a
 /// dependency sets `pubkey = "<hex>"`) that its own `<name>.resid-pkg` +
@@ -46,16 +48,31 @@
 /// an argument rather than a hardcoded path since this tool has no
 /// privileged knowledge of where a driver binary lives.
 ///
-/// Still open (see PLAN-resid-only.md C.7): remote HTTP registry mode
-/// (`[registry] url`, not just `path`) — the self-hosted TCP/HTTP client
-/// this would ride on already exists and is e2e-tested, just not wired
-/// here yet; the global `[signing] require_signatures` keyring policy
-/// (needs directory-scan of a keyring, not just one pinned key); and
-/// capability-ceiling enforcement at compile time for dependency source
-/// (spec §21.1's `FileCeiling` — `build` checks a dependency's declared
-/// `capabilities` against the consumer's grants, same as `deps`, but
-/// does not yet seed the self-hosted checker with per-file ceilings the
-/// way `resid_type::check_program_with` does).
+/// Transport notes (spec §28, `registry.rs`'s two transports):
+///
+///   * Both transports verify the same bytes the same way. A remote
+///     registry is untrusted input exactly like a local one, so nothing
+///     about `[registry] url` widens what is accepted: the archive's
+///     SHA-256 must match resid.lock's pin and any `-sha256` sidecar, and
+///     trust still comes from a pinned key, a keyring key, or a signed
+///     index — never from the fact that a download succeeded.
+///   * A package archive is binary, so it never becomes a `Str`. The
+///     header block is ASCII and does; the body is read as `List(Int)`
+///     straight off the socket (`resid_tcp_recv_bin`). That is the same
+///     reason `filesystem.read_bytes`/`write_bytes` exist: a `Str`
+///     round trip mangles anything that is not valid UTF-8.
+///   * A response must carry `Content-Length`. Reading to close instead
+///     would let a hostile registry stream unbounded bytes at the build.
+///   * `https://` is refused, not silently downgraded: the TLS 1.3 client
+///     transport is not part of this tool, and falling back to plaintext
+///     for a registry would be worse than not fetching at all. Use
+///     `path =` for a registry on local disk.
+///
+/// Still open: the `[signing] require_signatures` policy is parsed and
+/// enforced (see `version_trust`), and dependency source is compiled
+/// inside its manifest ceiling — the driver wraps each dependency module
+/// in `sandbox (<caps>)` from the depmap's third field (spec §21.1) —
+/// so neither is outstanding any more.
 ///
 /// Known scope-trim vs. the Rust original: dependency-directory identity
 /// for cycle/collision detection is plain string equality of the
@@ -66,6 +83,7 @@
 
 import "../lib/crypto.resid";
 import "../lib/ed25519.resid";
+import "../lib/http.resid";
 
 // ─── quoted-string parsing (minimal escapes: \" \\ \n \t) ──────────
 
@@ -346,48 +364,347 @@ Str bytes_to_ascii(List(Int) b, Int i, Int end, Str acc) {
     return bytes_to_ascii(b, i + 1, end, acc + str_from_code(b[i]));
 }
 
-// ─── local-directory registry (`version = "…"` deps) + archive fetch ──
-// Transport is local-filesystem-only this increment (mirrors
-// registry.rs's Registry::Local candidates exactly: `<dir>/pkg/<name>-
-// <version>.resid<suffix>`, falling back to `<dir>/<name>-<version>.
-// resid<suffix>` without the `pkg/` subdirectory). Remote HTTP registry
-// mode is still open — see PLAN-resid-only.md C.7 — the self-hosted
-// TCP/HTTP client this would ride on already exists and is e2e-tested,
-// this just hasn't been wired here yet.
+// ─── registry transport (spec §28) ───────────────────────────────────
+// One `Registry` value carries whichever source the manifest configured,
+// so every fetch below asks the same question — "give me this artifact" —
+// and the transport is picked once, here. `dir` is a local directory,
+// `url` an `http://` base URL; exactly one is non-empty.
 //
-// Archive reading/extraction here duplicates resid-pkg.resid's (same
-// per-file-duplication convention as everywhere else this session) since
-// that file's own extract isn't importable without a name collision.
+// Bytes, not Str: a package archive is binary, and a Str round trip
+// corrupts anything that is not valid UTF-8 (the same reason
+// `filesystem.read_bytes` exists). Header blocks are ASCII and do become
+// Str; artifact bodies never do.
 
-Str pkg_path_pkg_subdir(Str reg_dir, Str name, Str version) {
-    return reg_dir + "/pkg/" + name + "-" + version + ".resid-pkg";
+type Registry = { Str dir; Str url; };
+
+Registry registry_none() {
+    return Registry { .dir = "", .url = "" };
 }
-Str pkg_path_flat(Str reg_dir, Str name, Str version) {
-    return reg_dir + "/" + name + "-" + version + ".resid-pkg";
+
+Bool registry_configured(Registry reg) {
+    return reg.dir != "" || reg.url != "";
 }
-@requires(filesystem(readonly))
-List(Int) fetch_pkg_local(Str reg_dir, Str name, Str version) {
-    Str c1 = pkg_path_pkg_subdir(reg_dir, name, version);
-    if (filesystem.exists(c1)) { return filesystem.read_bytes(c1); }
-    Str c2 = pkg_path_flat(reg_dir, name, version);
-    if (filesystem.exists(c2)) { return filesystem.read_bytes(c2); }
+
+// What to name in an error message when a fetch fails.
+Str registry_label(Registry reg) {
+    return if (reg.url != "") { reg.url } else { reg.dir };
+}
+
+// `<name>-<version><suffix>`: the one artifact name both transports use,
+// so a registry served over HTTP and the same registry on disk publish the
+// same bytes at the same names.
+Str artifact_name(Str name, Str version, Str suffix) {
+    return name + "-" + version + suffix;
+}
+
+// The two layouts a registry may publish under, as url path fragments —
+// `pkg/` first, then the flat one, matching `registry.rs`'s
+// `Registry::Local` candidates. For the local transport each fragment is
+// appended to the registry directory; for http it is appended to the base.
+List(Str) artifact_locations(Str name, Str version, Str suffix) {
+    Str flat = "/" + artifact_name(name, version, suffix);
+    return ["/pkg" + flat, flat];
+}
+
+// The index is one registry-wide artifact, not a per-package one, so it
+// carries no `<name>-<version>` prefix.
+Str index_artifact(Str suffix) {
+    return "/pkg/index.resid-" + suffix;
+}
+
+// A fetch result. `bytes` is the artifact itself (empty when `ok` is
+// false); `text` is those same bytes decoded, for the artifacts that are
+// text all the way through (`-sha256`, `-sig`, the index).
+type Fetch = { Bool ok; Str err; List(Int) bytes; Str text; };
+
+Fetch fetch_err(Str err) {
     List(Int) empty = [];
-    return empty;
+    return Fetch { .ok = false, .err = err, .bytes = empty, .text = "" };
 }
-Str sha_path_pkg_subdir(Str reg_dir, Str name, Str version) {
-    return reg_dir + "/pkg/" + name + "-" + version + ".resid-sha256";
+
+Fetch fetch_ok_bytes(List(Int) bytes) {
+    return Fetch { .ok = true, .err = "", .bytes = bytes, .text = bytes_to_ascii(bytes, 0, bytes.len(), "") };
 }
-Str sha_path_flat(Str reg_dir, Str name, Str version) {
-    return reg_dir + "/" + name + "-" + version + ".resid-sha256";
+
+Bool fetch_missing(Fetch f) {
+    return !f.ok && str_contains(f.err, "not found");
 }
+
+// ─── local-directory transport ──────────────────────────────────────
+
 @requires(filesystem(readonly))
-Str fetch_sha_local(Str reg_dir, Str name, Str version) {
-    Str c1 = sha_path_pkg_subdir(reg_dir, name, version);
-    if (filesystem.exists(c1)) { return str_trim(filesystem.read_all(c1)); }
-    Str c2 = sha_path_flat(reg_dir, name, version);
-    if (filesystem.exists(c2)) { return str_trim(filesystem.read_all(c2)); }
-    return "";
+Fetch fetch_local_at(Str dir, Str path) {
+    Str full = dir + path;
+    if (!filesystem.exists(full)) { return fetch_err("not found"); }
+    List(Int) bytes = filesystem.read_bytes(full);
+    if (bytes.len() == 0) { return fetch_err("not found"); }
+    return fetch_ok_bytes(bytes);
 }
+
+@requires(filesystem(readonly))
+Fetch fetch_local_locs(Str dir, List(Str) locs, Int i) {
+    if (i >= locs.len()) { return fetch_err("not found"); }
+    Fetch f = fetch_local_at(dir, locs[i]);
+    if (f.ok) { return f; }
+    return fetch_local_locs(dir, locs, i + 1);
+}
+
+@requires(filesystem(readonly))
+Fetch fetch_local(Str dir, Str name, Str version, Str suffix) {
+    return fetch_local_locs(dir, artifact_locations(name, version, suffix), 0);
+}
+
+@requires(filesystem(readonly))
+Fetch fetch_local_index(Str dir, Str suffix) {
+    List(Str) locs = [index_artifact(suffix)];
+    return fetch_local_locs(dir, locs, 0);
+}
+
+// ─── http:// transport ──────────────────────────────────────────────
+//
+// Built on lib/http.resid's request builder and header lookup, and on the
+// runtime's raw TCP externs, but reading the body as bytes instead of
+// through `http_call`'s Str body — Str is UTF-8 and an archive is not.
+
+Int reg_max_artifact_bytes() {
+    return 67108864;
+}
+
+// A base URL with any trailing slash removed, so joining never doubles it.
+Str url_base(Str url) {
+    Int n = str_len(url);
+    if (n > 0 && str_char_at(url, n - 1) == 47) { return str_slice(url, 0, n - 1); }
+    return url;
+}
+
+Bool url_is_http(Str url) {
+    return str_starts_with(url, "http://");
+}
+
+Str url_scheme_of(Str url, Int i, Int n) {
+    if (i >= n) { return ""; }
+    Int c = str_char_at(url, i);
+    if (c == 47 || c == 63 || c == 35) { return ""; }
+    if (c == 58) { return str_slice(url, 0, i); }
+    return url_scheme_of(url, i + 1, n);
+}
+
+Str url_unsupported_scheme(Str url, Str scheme) {
+    return "registry url '" + url + "' uses scheme '" + scheme + "', which is not wired; only http:// is (https:// needs the TLS 1.3 client transport, and downgrading a registry fetch to plaintext would be worse than not fetching at all). Serve the registry on local disk and use [registry] path, or terminate TLS in front of a plaintext registry you already trust.";
+}
+
+// Read one CRLF-terminated line as bytes, CRLF excluded. `depth` bounds
+// the scan so a peer that never sends CRLF cannot spin the build.
+@requires(network)
+List(Int) read_line_acc(Int fd, List(Int) acc, Int depth) {
+    if (depth <= 0) { return acc; }
+    List(Int) one = resid_tcp_recv_bin(fd, 1);
+    if (one.len() < 1) { return acc; }
+    if (one[0] == 13) {
+        List(Int) two = resid_tcp_recv_bin(fd, 1);
+        if (two.len() < 1) { return acc; }
+        if (two[0] == 10) { return acc; }
+        return read_line_acc(fd, acc.concat([13, two[0]]), depth - 1);
+    }
+    return read_line_acc(fd, acc.concat([one[0]]), depth - 1);
+}
+
+@requires(network)
+List(Int) read_line(Int fd) {
+    return read_line_acc(fd, [], 8192);
+}
+
+// Read exactly `want` bytes in 1 MB chunks (the runtime's per-call cap),
+// giving up past the artifact size cap.
+@requires(network)
+List(Int) read_body_acc(Int fd, Int want, Int got, List(Int) acc, Int cap) {
+    if (got >= want || got >= cap) { return acc; }
+    Int chunk_want = if (want - got > 1048576) { 1048576 } else { want - got };
+    List(Int) chunk = resid_tcp_recv_bin(fd, chunk_want);
+    if (chunk.len() <= 0) { return acc; }
+    return read_body_acc(fd, want, got + chunk.len(), acc.concat(chunk), cap);
+}
+
+@requires(network)
+List(Int) read_body(Int fd, Int want) {
+    return read_body_acc(fd, want, 0, [], reg_max_artifact_bytes());
+}
+
+Bool zero_len(List(Int) b, Int i) {
+    if (i >= b.len()) { return true; }
+    if (b[i] != 0) { return false; }
+    return zero_len(b, i + 1);
+}
+
+// Read response header lines until the blank line; returns them joined.
+type HeadLines = { List(Str) lines; Bool eof; };
+@requires(network)
+HeadLines read_head_lines_acc(Int fd, List(Str) acc, Int depth) {
+    if (depth <= 0) { return HeadLines { .lines = acc, .eof = false }; }
+    List(Int) raw = read_line(fd);
+    if (raw.len() == 0) { return HeadLines { .lines = acc, .eof = true }; }
+    Str line = bytes_to_ascii(raw, 0, raw.len(), "");
+    if (str_trim(line) == "") { return HeadLines { .lines = acc, .eof = false }; }
+    return read_head_lines_acc(fd, acc.concat([line]), depth - 1);
+}
+
+// The numeric status code of a status line, -1 when there is none.
+Int status_code_of(Str statusline) {
+    Int sp = http_find(statusline, " ");
+    if (sp < 0) { return 0 - 1; }
+    Str rest = str_slice(statusline, sp + 1, str_len(statusline));
+    Int sp2 = http_find(rest, " ");
+    Str code_s = if (sp2 >= 0) { str_slice(rest, 0, sp2) } else { rest };
+    if (code_s == "") { return 0 - 1; }
+    return str_parse_int(code_s);
+}
+
+// `Content-Length` as an Int, -1 when the header is absent or not a
+// number. Required: reading to close instead would let a hostile registry
+// stream unbounded bytes at the build.
+Bool all_digits_from(Str s, Int i, Int n) {
+    if (i >= n) { return true; }
+    Int c = str_char_at(s, i);
+    if (c < 48 || c > 57) { return false; }
+    return all_digits_from(s, i + 1, n);
+}
+
+// At least one digit, all of them digits. An empty Content-Length is not a
+// length of zero, it is a header this did not understand.
+Bool all_digits(Str s) {
+    Int n = str_len(s);
+    if (n == 0) { return false; }
+    return all_digits_from(s, 0, n);
+}
+
+Int content_length_of(Str head) {
+    Str v = http_header_value(head, "content-length");
+    if (!all_digits(v)) { return 0 - 1; }
+    return str_parse_int(v);
+}
+
+type HttpGet = { Int status; List(Int) bytes; Str err; Str head; };
+
+HttpGet http_get_failed(Str err) {
+    List(Int) empty = [];
+    return HttpGet { .status = 0, .bytes = empty, .err = err, .head = "" };
+}
+
+HttpGet http_get_headed(Int status, Str head, List(Int) bytes) {
+    return HttpGet { .status = status, .bytes = bytes, .err = "", .head = head };
+}
+
+// One GET, on one connection: request, headers, then Content-Length body
+// bytes, then close. The status line and Content-Length decide everything;
+// the body is never trusted before its SHA-256 has been checked, so a
+// truncated transfer cannot pass as a short archive.
+@requires(network)
+HttpGet http_get_bytes(Str url) {
+    Str scheme = url_scheme_of(url, 0, str_len(url));
+    if (scheme == "") { return http_get_failed("registry url '" + url + "' has no scheme (expected http://host[:port][/base])"); }
+    if (scheme != "http") { return http_get_failed(url_unsupported_scheme(url, scheme)); }
+    Url u = http_parse_url(url);
+    if (u.host == "" || u.port <= 0) { return http_get_failed("registry url '" + url + "' has no host"); }
+    Int fd = resid_tcp_connect(u.host, u.port);
+    if (fd < 0) { return http_get_failed("cannot connect to registry host '" + u.host + ":" + f"{u.port}" + "'"); }
+    Str hostport = if (u.port == 80) { u.host } else { u.host + ":" + f"{u.port}" };
+    Str req = http_build_request("GET", u.path, hostport, "", "close");
+    if (!resid_tcp_send(fd, req)) {
+        resid_tcp_close(fd);
+        return http_get_failed("cannot send request for '" + url + "'");
+    }
+    HeadLines hl = read_head_lines_acc(fd, [], 256);
+    if (hl.lines.len() == 0) {
+        resid_tcp_close(fd);
+        return http_get_failed("registry '" + url + "' closed the connection without sending a response");
+    }
+    Str head = str_join(hl.lines, "\r\n");
+    Int status = status_code_of(hl.lines[0]);
+    if (status == 0 - 1) {
+        resid_tcp_close(fd);
+        return http_get_failed("registry '" + url + "' sent an unparseable status line");
+    }
+    // The body is only read for a 200. An error response has no body to
+    // promise a length for -- 404 in particular, which is how "this
+    // registry does not carry that package" arrives -- so requiring
+    // Content-Length before the status is known would report a missing
+    // artifact as a malformed response.
+    if (status != 200) {
+        resid_tcp_close(fd);
+        return HttpGet { .status = status, .bytes = [], .err = "", .head = head };
+    }
+    Int clen = content_length_of(head);
+    if (clen == 0 - 1) {
+        resid_tcp_close(fd);
+        return HttpGet { .status = status, .bytes = [], .err = "registry response for '" + url + "' carries no Content-Length", .head = head };
+    }
+    Bool over = clen > reg_max_artifact_bytes();
+    List(Int) bytes = if (over) { [] } else { read_body(fd, clen) };
+    resid_tcp_close(fd);
+    if (over) {
+        return HttpGet { .status = status, .bytes = [], .err = "registry artifact '" + url + "' declares " + f"{clen}" + " bytes, over this tool's " + f"{reg_max_artifact_bytes()}" + "-byte cap", .head = head };
+    }
+    if (zero_len(bytes, 0)) {
+        return HttpGet { .status = status, .bytes = [], .err = "registry response for '" + url + "' arrived empty but declared " + f"{clen}" + " bytes", .head = head };
+    }
+    return http_get_headed(status, head, bytes);
+}
+
+@requires(network)
+Fetch http_fetch(Str base, Str path, Str label) {
+    HttpGet g = http_get_bytes(url_base(base) + path);
+    if (g.err != "") { return fetch_err(g.err); }
+    if (g.status == 404) { return fetch_err("not found"); }
+    if (g.status == 200) { return fetch_ok_bytes(g.bytes); }
+    return fetch_err("HTTP " + f"{g.status}" + " from registry " + label + " for " + path);
+}
+
+// Try each location, stopping at the first that yields bytes. A 404 falls
+// through to the next layout; any other failure is final, because a
+// transport error or a 500 must not be mistaken for "try the other name".
+@requires(network)
+Fetch fetch_remote_locs(Str base, List(Str) locs, Int i, Str label) {
+    if (i >= locs.len()) { return fetch_err("not found"); }
+    Fetch f = http_fetch(base, locs[i], label);
+    if (f.ok) { return f; }
+    if (!fetch_missing(f)) { return f; }
+    return fetch_remote_locs(base, locs, i + 1, label);
+}
+
+@requires(network)
+Fetch fetch_remote(Str base, Str name, Str version, Str suffix, Str label) {
+    return fetch_remote_locs(base, artifact_locations(name, version, suffix), 0, label);
+}
+
+@requires(network)
+Fetch fetch_remote_index(Str base, Str suffix, Str label) {
+    return fetch_remote_locs(base, [index_artifact(suffix)], 0, label);
+}
+
+// One artifact from whichever transport this registry names.
+@requires(filesystem(readonly), network)
+Fetch fetch_artifact(Registry reg, Str name, Str version, Str suffix) {
+    if (reg.url != "") {
+        return fetch_remote(reg.url, name, version, suffix, registry_label(reg));
+    }
+    return fetch_local(reg.dir, name, version, suffix);
+}
+
+// Where an artifact was looked for, spelled the way the caller named the
+// registry — a directory path or a URL, never the wrong one of the two.
+Str registry_artifact_path(Registry reg, Str path) {
+    return if (reg.url != "") { url_base(reg.url) + path } else { reg.dir + path };
+}
+
+// The registry-wide index artifact.
+@requires(filesystem(readonly), network)
+Fetch fetch_index_artifact(Registry reg, Str suffix) {
+    if (reg.url != "") {
+        return fetch_remote_index(reg.url, suffix, registry_label(reg));
+    }
+    return fetch_local_index(reg.dir, suffix);
+}
+
 
 // Little-endian archive body reads (RESIDPKG1 — see resid-pkg.resid's
 // own module doc comment for the full format).
@@ -470,7 +787,7 @@ Int extract_archive_bytes(List(Int) archive, Str out_dir) {
 // of the archive) verifies under the dependency's pinned key or a keyring
 // key. A pinned key must always verify. Anything else is rejected unless
 // the manifest opts into `[signing] allow_unsigned = true` (development).
-type TrustPolicy = { Str pinned_key; Bool idx_required; List(LockEntry) idx_entries; Str keyring; Bool allow_unsigned; };
+type TrustPolicy = { Str pinned_key; Bool idx_required; List(LockEntry) idx_entries; Str keyring; Bool allow_unsigned; Bool require_signatures; };
 
 Str index_sha(List(LockEntry) entries, Str name, Str version, Int i) {
     if (i >= entries.len()) { return ""; }
@@ -478,15 +795,13 @@ Str index_sha(List(LockEntry) entries, Str name, Str version, Int i) {
     return index_sha(entries, name, version, i + 1);
 }
 
-@requires(filesystem(readonly))
-List(Int) fetch_sig_local(Str reg_dir, Str name, Str version) {
-    Str c1 = reg_dir + "/pkg/" + name + "-" + version + ".resid-sig";
-    Str c2 = reg_dir + "/" + name + "-" + version + ".resid-sig";
-    Str c = if (filesystem.exists(c1)) { c1 } else { c2 };
-    List(Int) empty = [];
-    if (!filesystem.exists(c)) { return empty; }
-    List(Int) raw = filesystem.read_bytes(c);
-    return hex_decode(str_trim(bytes_to_ascii(raw, 0, raw.len(), "")));
+// The detached Ed25519 signature for a registry package. Hex on the wire,
+// so it decodes as text rather than being carried as raw bytes.
+@requires(filesystem(readonly), network)
+List(Int) fetch_sig(Registry reg, Str name, Str version) {
+    Fetch f = fetch_artifact(reg, name, version, ".resid-sig");
+    if (!f.ok) { return []; }
+    return hex_decode(str_trim(f.text));
 }
 
 @requires(filesystem(readonly))
@@ -498,21 +813,29 @@ Bool keyring_verifies(Str keyring, List(Str) names, Int i, Str hash_hex, List(In
     return keyring_verifies(keyring, names, i + 1, hash_hex, sig);
 }
 
-@requires(filesystem(readonly))
-Str version_trust(Str name, Str version, Str got, Str reg_dir, TrustPolicy tp) {
+@requires(filesystem(readonly), network)
+Str version_trust(Str name, Str version, Str got, Registry reg, TrustPolicy tp) {
     Str id = name + "-" + version;
     Str isha = if (tp.idx_required) { index_sha(tp.idx_entries, name, version, 0) } else { "" };
     if (tp.idx_required && isha != got) {
         return "dependency '" + id + "': archive hash " + got + " does not match the signed registry index (" + isha + ")";
     }
-    List(Int) sig = fetch_sig_local(reg_dir, name, version);
+    List(Int) sig = fetch_sig(reg, name, version);
     if (tp.pinned_key != "") {
         if (!verify_sig(got, sig, hex_decode(tp.pinned_key))) { return "dependency '" + id + "': signature INVALID or missing for its pinned key"; }
         return "";
     }
-    if (tp.idx_required) { return ""; }
+    // A signed index listing the hash is enough by default: the registry
+    // publisher vouched for it. `require_signatures` says a hash somebody
+    // wrote down is not the same as a signature over it, so the index is
+    // then only a starting point and a real Ed25519 signature under a
+    // pinned or keyring key is what actually admits the dependency.
+    if (tp.idx_required && !tp.require_signatures) { return ""; }
     Bool kr = tp.keyring != "" && filesystem.is_dir(tp.keyring) && keyring_verifies(tp.keyring, sort(filesystem.list_dir(tp.keyring)), 0, got, sig);
     if (kr) { return ""; }
+    if (tp.require_signatures) {
+        return "dependency '" + id + "' is listed in the signed registry index but [signing] require_signatures = true, and no pinned or keyring key signs its archive directly; an index entry is not a signature";
+    }
     if (tp.allow_unsigned) {
         eprintln("warning: dependency '" + id + "' is unsigned; accepted because [signing] allow_unsigned = true");
         return "";
@@ -525,28 +848,31 @@ Str version_trust(Str name, Str version, Str got, Str reg_dir, TrustPolicy tp) {
 // "" when unpinned) is checked in addition to the sidecar `.resid-sha256`
 // hash when present.
 type CacheResult = { Bool ok; Str err; Str cache_dir; Str sha256; };
-@requires(filesystem)
-CacheResult resolve_dep_dir_version(Str name, Str version, Str reg_dir, Str root_pkg_dir, Str pinned_sha, TrustPolicy tp) {
-    List(Int) archive = fetch_pkg_local(reg_dir, name, version);
-    if (archive.len() == 0) {
-        Str err = "dependency '" + name + "': cannot fetch '" + name + "-" + version + "' from registry '" + reg_dir + "'";
+@requires(filesystem, network)
+CacheResult resolve_dep_dir_version(Str name, Str version, Registry reg, Str root_pkg_dir, Str pinned_sha, TrustPolicy tp) {
+    Str id = name + "-" + version;
+    Fetch af = fetch_artifact(reg, name, version, ".resid-pkg");
+    if (!af.ok) {
+        Str err = "dependency '" + id + "': cannot fetch '" + id + "' from registry " + registry_label(reg) + ": " + af.err;
         return CacheResult {.ok = false, .err = err, .cache_dir = "", .sha256 = ""};
     }
+    List(Int) archive = af.bytes;
     Str got = hex_encode(sha256_bytes(archive));
     if (pinned_sha != "") {
         if (pinned_sha != got) {
-            Str err = "dependency '" + name + "-" + version + "': LOCKED content hash mismatch (locked " + pinned_sha + ", got " + got + ") - registry archive was modified; update resid.lock deliberately or restore the archive";
+            Str err = "dependency '" + id + "': LOCKED content hash mismatch (locked " + pinned_sha + ", got " + got + ") - registry archive was modified; update resid.lock deliberately or restore the archive";
             return CacheResult {.ok = false, .err = err, .cache_dir = "", .sha256 = ""};
         }
     }
-    Str expect_hex = fetch_sha_local(reg_dir, name, version);
+    Fetch sf = fetch_artifact(reg, name, version, ".resid-sha256");
+    Str expect_hex = if (sf.ok) { str_trim(sf.text) } else { "" };
     if (expect_hex != "") {
         if (got != expect_hex) {
             Str err = "dependency '" + name + "': archive hash mismatch (expected " + expect_hex + ", got " + got + ")";
             return CacheResult {.ok = false, .err = err, .cache_dir = "", .sha256 = ""};
         }
     }
-    Str terr = version_trust(name, version, got, reg_dir, tp);
+    Str terr = version_trust(name, version, got, reg, tp);
     if (terr != "") { return CacheResult {.ok = false, .err = terr, .cache_dir = "", .sha256 = ""}; }
     // Content-addressed: a cache directory only ever holds this archive.
     Str cache_dir = root_pkg_dir + "/target/resid/deps/" + name + "-" + version + "-" + str_slice(got, 0, 16);
@@ -619,18 +945,18 @@ IndexLoadResult index_load_err(Str err) {
     List(LockEntry) empty = [];
     return IndexLoadResult {.ok = false, .err = err, .entries = empty};
 }
-@requires(filesystem(readonly))
-IndexLoadResult load_verify_index(Str reg_dir, Str pubkey_hex) {
-    Str idx_path = reg_dir + "/pkg/index.resid-idx";
-    Str sig_path = reg_dir + "/pkg/index.resid-sig";
-    if (!filesystem.exists(idx_path)) {
-        return index_load_err("registry index required (pubkey configured) but unavailable: cannot read '" + idx_path + "'");
+@requires(filesystem(readonly), network)
+IndexLoadResult load_verify_index(Registry reg, Str pubkey_hex) {
+    Fetch idx = fetch_index_artifact(reg, "idx");
+    if (!idx.ok) {
+        return index_load_err("registry index required (pubkey configured) but unavailable: cannot read '" + registry_artifact_path(reg, index_artifact("idx")) + "': " + idx.err);
     }
-    if (!filesystem.exists(sig_path)) {
-        return index_load_err("registry index required (pubkey configured) but unavailable: cannot read '" + sig_path + "'");
+    Fetch sig = fetch_index_artifact(reg, "sig");
+    if (!sig.ok) {
+        return index_load_err("registry index required (pubkey configured) but unavailable: cannot read '" + registry_artifact_path(reg, index_artifact("sig")) + "': " + sig.err);
     }
-    Str text = filesystem.read_all(idx_path);
-    Str sig_hex = str_trim(filesystem.read_all(sig_path));
+    Str text = idx.text;
+    Str sig_hex = str_trim(sig.text);
     Str text_hash_hex = hex_encode(sha256_bytes(bytes_of(text)));
     Bool ok = verify_sig(text_hash_hex, hex_decode(sig_hex), hex_decode(pubkey_hex));
     if (!ok) {
@@ -655,8 +981,8 @@ DepResolveResult dep_error(DepResolveResult acc, Str err) {
     return DepResolveResult {.ok = false, .err = err, .deps = acc.deps, .seen = acc.seen};
 }
 
-@requires(filesystem)
-DepResolveResult collect_dep_path(Str name, Str dep_dir, List(Str) caps, Str pinned_key, Str reg_dir, TrustPolicy tp, DepResolveResult acc, Int depth) {
+@requires(filesystem, network)
+DepResolveResult collect_dep_path(Str name, Str dep_dir, List(Str) caps, Str pinned_key, Registry reg, TrustPolicy tp, DepResolveResult acc, Int depth) {
     if (!acc.ok) { return acc; }
     if (depth > 32) { return dep_error(acc, "dependency '" + name + "': dependency chain deeper than 32 (cycle?)"); }
     Str prev_dir = find_seen_dir(acc.seen, name, 0);
@@ -681,16 +1007,16 @@ DepResolveResult collect_dep_path(Str name, Str dep_dir, List(Str) caps, Str pin
         return dep_error(acc, "package '" + dm.name + "' provided by both '" + prev_pkg_dir + "' and '" + dep_dir + "' - conflicting dependency versions are not supported");
     }
     DepResolveResult acc2 = DepResolveResult {.ok = true, .err = "", .deps = acc.deps, .seen = acc.seen.concat([SeenEntry {.name = dm.name, .dir = dep_dir}])};
-    DepResolveResult acc3 = collect_sub_deps_at(dm.dependencies, 0, dep_dir, reg_dir, tp, acc2, depth + 1);
+    DepResolveResult acc3 = collect_sub_deps_at(dm.dependencies, 0, dep_dir, reg, tp, acc2, depth + 1);
     if (!acc3.ok) { return acc3; }
     ResolvedDep rd = ResolvedDep {.name = dm.name, .dir = dep_dir, .root = root, .capabilities = caps, .pinned_key = pinned_key};
     return DepResolveResult {.ok = true, .err = "", .deps = acc3.deps.concat([rd]), .seen = acc3.seen};
 }
 
-@requires(filesystem)
-DepResolveResult collect_dep_version(Str name, Str version, Str reg_dir, Str root_pkg_dir, List(Str) caps, Str pinned_key, TrustPolicy tp, DepResolveResult acc, Int depth) {
-    if (reg_dir == "") {
-        return dep_error(acc, "dependency '" + name + "': version '" + version + "' requested but no [registry] path is configured");
+@requires(filesystem, network)
+DepResolveResult collect_dep_version(Str name, Str version, Registry reg, Str root_pkg_dir, List(Str) caps, Str pinned_key, TrustPolicy tp, DepResolveResult acc, Int depth) {
+    if (!registry_configured(reg)) {
+        return dep_error(acc, "dependency '" + name + "': version '" + version + "' requested but no [registry] path or url is configured");
     }
     if (tp.idx_required) {
         if (!index_has(tp.idx_entries, name, version, 0)) {
@@ -705,8 +1031,8 @@ DepResolveResult collect_dep_version(Str name, Str version, Str reg_dir, Str roo
         }
     }
     Str pinned_sha = if (pin.name == "") { "" } else { pin.sha256 };
-    TrustPolicy dtp = TrustPolicy {.pinned_key = pinned_key, .idx_required = tp.idx_required, .idx_entries = tp.idx_entries, .keyring = tp.keyring, .allow_unsigned = tp.allow_unsigned};
-    CacheResult cr = resolve_dep_dir_version(name, version, reg_dir, root_pkg_dir, pinned_sha, dtp);
+    TrustPolicy dtp = TrustPolicy {.pinned_key = pinned_key, .idx_required = tp.idx_required, .idx_entries = tp.idx_entries, .keyring = tp.keyring, .allow_unsigned = tp.allow_unsigned, .require_signatures = tp.require_signatures};
+    CacheResult cr = resolve_dep_dir_version(name, version, reg, root_pkg_dir, pinned_sha, dtp);
     if (!cr.ok) { return dep_error(acc, cr.err); }
     // The archive must be the package that was asked for, not another
     // package the same key signed.
@@ -716,43 +1042,63 @@ DepResolveResult collect_dep_version(Str name, Str version, Str reg_dir, Str roo
     }
     Int _w = write_lock_entry(lock_path, LockEntry {.name = name, .version = version, .sha256 = cr.sha256});
     // Its key was checked against the registry signature above.
-    return collect_dep_path(name, cr.cache_dir, caps, "", reg_dir, tp, acc, depth);
+    return collect_dep_path(name, cr.cache_dir, caps, "", reg, tp, acc, depth);
 }
 
-@requires(filesystem)
-DepResolveResult collect_sub_deps_at(List(Dependency) subs, Int i, Str parent_dir, Str reg_dir, TrustPolicy tp, DepResolveResult acc, Int depth) {
+@requires(filesystem, network)
+DepResolveResult collect_sub_deps_at(List(Dependency) subs, Int i, Str parent_dir, Registry reg, TrustPolicy tp, DepResolveResult acc, Int depth) {
     if (!acc.ok) { return acc; }
     if (i >= subs.len()) { return acc; }
     Dependency sub = subs[i];
     DepResolveResult acc2 = if (sub.path != "") {
-        collect_dep_path(sub.name, parent_dir + "/" + sub.path, sub.capabilities, sub.pubkey, reg_dir, tp, acc, depth)
+        collect_dep_path(sub.name, parent_dir + "/" + sub.path, sub.capabilities, sub.pubkey, reg, tp, acc, depth)
     } else if (sub.version != "") {
-        collect_dep_version(sub.name, sub.version, reg_dir, parent_dir, sub.capabilities, sub.pubkey, tp, acc, depth)
+        collect_dep_version(sub.name, sub.version, reg, parent_dir, sub.capabilities, sub.pubkey, tp, acc, depth)
     } else {
         dep_error(acc, "dependency '" + sub.name + "': needs either 'path' or 'version'")
     };
-    return collect_sub_deps_at(subs, i + 1, parent_dir, reg_dir, tp, acc2, depth);
+    return collect_sub_deps_at(subs, i + 1, parent_dir, reg, tp, acc2, depth);
 }
 
-@requires(filesystem)
+// A manifest names its registry one of two ways — a directory or a URL —
+// and naming both is an error rather than a silent precedence rule: which
+// one a build would actually use is a security-relevant choice, so it is
+// spelled out in the manifest instead of guessed here.
+Str registry_config_error(Manifest m) {
+    if (m.registry_path != "" && m.registry_url != "") {
+        return "[registry] sets both path and url; name only one so it is clear which registry a build reads from";
+    }
+    if (m.registry_url != "" && !url_is_http(m.registry_url)) {
+        return url_unsupported_scheme(m.registry_url, url_scheme_of(m.registry_url, 0, str_len(m.registry_url)));
+    }
+    return "";
+}
+
+@requires(filesystem, network)
 DepResolveResult resolve_all_deps(Manifest m, Str pkg_dir) {
     List(ResolvedDep) empty_deps = [];
     List(SeenEntry) empty_seen = [];
-    Str reg_dir = if (m.registry_path == "") { "" } else { pkg_dir + "/" + m.registry_path };
+    Str cfg_err = registry_config_error(m);
+    if (cfg_err != "") { return dep_error(DepResolveResult {.ok = true, .err = "", .deps = empty_deps, .seen = empty_seen}, cfg_err); }
+    Registry reg = if (m.registry_path != "") {
+        Registry { .dir = pkg_dir + "/" + m.registry_path, .url = "" }
+    } else {
+        Registry { .dir = "", .url = url_base(m.registry_url) }
+    };
     List(LockEntry) no_idx = [];
     Str keyring = if (m.keyring == "") { "" } else { pkg_dir + "/" + m.keyring };
     if (m.registry_pubkey == "") {
         DepResolveResult start = DepResolveResult {.ok = true, .err = "", .deps = empty_deps, .seen = empty_seen};
-        TrustPolicy tp0 = TrustPolicy {.pinned_key = "", .idx_required = false, .idx_entries = no_idx, .keyring = keyring, .allow_unsigned = m.allow_unsigned};
-        return collect_sub_deps_at(m.dependencies, 0, pkg_dir, reg_dir, tp0, start, 0);
+        TrustPolicy tp0 = TrustPolicy {.pinned_key = "", .idx_required = false, .idx_entries = no_idx, .keyring = keyring, .allow_unsigned = m.allow_unsigned, .require_signatures = m.require_signatures};
+        return collect_sub_deps_at(m.dependencies, 0, pkg_dir, reg, tp0, start, 0);
     }
-    IndexLoadResult idx = load_verify_index(reg_dir, m.registry_pubkey);
+    IndexLoadResult idx = load_verify_index(reg, m.registry_pubkey);
     if (!idx.ok) {
         return DepResolveResult {.ok = false, .err = idx.err, .deps = empty_deps, .seen = empty_seen};
     }
     DepResolveResult start = DepResolveResult {.ok = true, .err = "", .deps = empty_deps, .seen = empty_seen};
-    TrustPolicy tp1 = TrustPolicy {.pinned_key = "", .idx_required = true, .idx_entries = idx.entries, .keyring = keyring, .allow_unsigned = m.allow_unsigned};
-    return collect_sub_deps_at(m.dependencies, 0, pkg_dir, reg_dir, tp1, start, 0);
+    TrustPolicy tp1 = TrustPolicy {.pinned_key = "", .idx_required = true, .idx_entries = idx.entries, .keyring = keyring, .allow_unsigned = m.allow_unsigned, .require_signatures = m.require_signatures};
+    return collect_sub_deps_at(m.dependencies, 0, pkg_dir, reg, tp1, start, 0);
 }
 
 Str first_missing_cap(List(Str) caps, List(Str) granted, Int i) {
@@ -1056,7 +1402,7 @@ Int print_resolved_deps(List(ResolvedDep) deps, Int i) {
     return print_resolved_deps(deps, i + 1);
 }
 
-@requires(filesystem)
+@requires(filesystem, network)
 Int cmd_deps(Str manifest_path) {
     Manifest m = load_manifest(filesystem.read_all(manifest_path));
     DepResolveResult r = resolve_all_deps(m, dirname_of(manifest_path));
@@ -1098,7 +1444,7 @@ Str depmap_text(List(ResolvedDep) deps) {
     return str_join(depmap_lines_acc(deps, 0, empty), "\n");
 }
 
-@requires(filesystem)
+@requires(filesystem, network)
 Int cmd_depmap(Str manifest_path, Str out_path) {
     Manifest m = load_manifest(filesystem.read_all(manifest_path));
     DepResolveResult r = resolve_all_deps(m, dirname_of(manifest_path));
@@ -1130,7 +1476,7 @@ Int cmd_depmap(Str manifest_path, Str out_path) {
 // implementation of them rather than one per tool; this command's job is
 // only to supply the resolved dependency map and the capability ceilings
 // that go with it. The driver's exit code is this command's.
-@requires(filesystem, process)
+@requires(filesystem, network, process)
 Int cmd_test(Str manifest_path, Str driver_bin, Str rtc) {
     Manifest m = load_manifest(filesystem.read_all(manifest_path));
     if (m.name == "") {
@@ -1180,7 +1526,7 @@ Int cmd_test(Str manifest_path, Str driver_bin, Str rtc) {
 // resolve. `driver_bin` is the caller's choice of compiler binary (a D1/D2/
 // D3 driver, or `residc <driver.resid> run --`) rather than a hardcoded
 // path, since this tool has no privileged knowledge of where one lives.
-@requires(filesystem, process)
+@requires(filesystem, network, process)
 Int cmd_build(Str manifest_path, Str driver_bin, Str rtc) {
     Manifest m = load_manifest(filesystem.read_all(manifest_path));
     if (m.name == "") {
@@ -1229,7 +1575,7 @@ Int cmd_build(Str manifest_path, Str driver_bin, Str rtc) {
     return 0;
 }
 
-@requires(args, filesystem, process)
+@requires(args, filesystem, network, process)
 Int main() {
     Int argc = args.count();
     if (argc < 2) {

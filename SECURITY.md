@@ -77,15 +77,46 @@ name, version, dependencies and capabilities, and `resid.lock`.
 | Guarantee | Tests (`tests/pkg/run.sh`) |
 |---|---|
 | A registry dependency is accepted only when the registry's signed index lists its exact hash, or its detached Ed25519 signature verifies under the dependency's pinned key or a `[signing] keyring` key. Unsigned packages need `[signing] allow_unsigned = true`. | unsigned, devprofile, noanchor, viaindex, wrongindex, pinned, pinwrong, viakeyring |
+| `[signing] require_signatures = true` refuses the index on its own: a detached signature under a pinned or keyring key is then required, because a hash somebody wrote down is not a signature over it. | reqsig_noanchor, reqsig_keyring, reqsig_wrongkey, reqsig_nopubkey |
 | A modified archive is rejected. | tamperidx, tamperpin |
 | The archive must hold the package that was requested (name and version), not another package signed by the same key. | subst |
 | A path dependency with a pinned key must match what `resid-pkg sign-dir` signed. | pathapp |
 | Extraction never writes outside the target directory. | extract path traversal |
 | Secret keys are written readable by their owner only (`filesystem.write_secret`). | keygen secret mode |
 
-Not guaranteed: path dependencies without a pinned key are trusted as
-local source; the package signature is not a COSE structure and does not
-name the publisher key; there is no remote registry client.
+### Remote registries
+
+A registry named by `[registry] url` is untrusted input exactly like a
+local directory, and the transport widens nothing: the archive's SHA-256
+is checked against `resid.lock` and any `-sha256` sidecar, trust still
+comes from a pinned key, a keyring key or a signed index, and the archive
+must be the package that was asked for. A fetch that succeeds is never
+itself a reason to trust anything.
+
+| Guarantee | Tests (`tests/pkg/run.sh`) |
+|---|---|
+| A dependency fetched over HTTP is verified exactly as one fetched from disk. | remote_signed, remote_wrongkey, remote_unsigned, remote_slash |
+| A version the registry does not publish is an error, not an empty build. | rem404 |
+| A package archive that is not valid UTF-8 survives the round trip byte for byte. | remote archive is byte-identical after extraction |
+| A manifest naming both `[registry] path` and `url` is refused, rather than one silently winning. | remboth |
+| `https://` is refused, never downgraded to plaintext. | remhttps |
+
+`resid-pkg serve` is the publish side of the same layout, and is
+deliberately small: loopback only, `GET` and `HEAD` only, no listing, no
+upload, and no request path may name a file outside the registry
+directory. Nothing it does can change what a client accepts.
+
+| Guarantee | Tests (`tests/pkg/run.sh`) |
+|---|---|
+| The server serves a registry, answers 404 for what it does not carry, rejects methods other than GET/HEAD, and refuses a path that could escape the registry directory. | serve GET, serve 404, serve rejects POST, serve refused a traversal path |
+| It binds loopback and nothing else. | serve is not bound to loopback only |
+
+Not guaranteed: `path` dependencies without a pinned key are trusted as
+local source (spec §28.3); the package signature is not a COSE structure
+and does not name the publisher key; `require_signatures` does not extend
+to path dependencies, which the spec exempts as local source; there is no
+TLS registry transport, so an `https://` registry must be fronted by a
+proxy that terminates TLS.
 
 ## Provenance (spec §33.1)
 
@@ -105,16 +136,40 @@ provenance themselves; run `residc verify` before trusting their inputs.
 | Randomness comes from `getrandom(2)`, falling back to `/dev/urandom`; failure aborts. | (runtime code) |
 | `ct_equal` and the AEAD tag checks accumulate every byte with no data-dependent exit in the source. | (library code) |
 
+## TLS server authentication
+
+| Guarantee | Tests (`tests/tls/run.sh`) |
+|---|---|
+| A server is trusted only when its leaf names the connected host, is inside its validity window, and chains to a root in the trust store. | pemstore-full-chain, wrong-host, expired-leaf |
+| The store may be a PEM bundle or a directory of DER certificates; both hold the same anchor. | derstore-full-chain |
+| Intermediates come from the chain the server sent, and a chain that needs one is rejected when it is not sent. | pemstore-no-chain |
+| A leaf is only as trusted as the anchor that issued it. | wrong-anchor, other-root-own-leaf, derstore-rejects-other-leaf |
+| **No store trusts nothing.** There is no "skip verification" flag: an empty or absent store refuses the handshake rather than falling back to "any certificate with the right host name". | no-store, empty-store |
+| A pinned leaf is accepted without a chain, but is still checked for host name and validity. | pinned-leaf, pinned-leaf-wrong-host, pinned-expired-leaf |
+| A store path that does not exist is an empty store, not a crash. | missing store path |
+| PEM reading is strict: text that is not a certificate, and an unterminated block, yield no root rather than a partial one. | junk PEM, unterminated PEM block |
+
+Certificates are compared as moments on the timeline, not as packed
+integers: `x509_valid_now` takes an `Instant` and converts the
+certificate's UTCTime/GeneralizedTime through `lib/calendar.resid`, so a
+certificate's `notBefore` cannot drift from what the rest of the language
+calls the same day. A time this cannot read rejects rather than comparing
+against a moment it did not read.
+
 Not guaranteed:
 
-- **The TLS 1.3 client does not authenticate servers.** It has no trust
-  store: `tls_server_cert_ok` checks only the validity window and the
-  host name, so any certificate for the host is accepted. Do not use
-  `lib/tls*.resid` or `lib/h2.resid` where an active attacker matters.
+- `require_signatures` does not extend to path dependencies, which spec
+  §28.3 exempts as local source.
 - Constant-time behavior of compiled code is not verified: the compiler
   (and LLVM) may introduce branches.
 - DER, X.509 and HPACK parsers abort on malformed input rather than
   returning an error.
+- Only ECDSA P-256 (`1.2.840.10045.4.3.2`) and RSA PKCS#1 v1.5
+  (`1.2.840.113549.1.1.11`) certificate signatures are verified.
+  `rsa_pss_verify_sha256` exists in `lib/chain.resid` but `chain_verify`
+  does not dispatch to it, so an RSA-PSS-issued certificate does not
+  validate. Intermediates are not checked for `CA:TRUE`, and revocation
+  (CRL/OCSP) is not implemented.
 
 ## Bootstrap
 

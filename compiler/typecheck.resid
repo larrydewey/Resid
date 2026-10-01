@@ -2700,6 +2700,18 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (builtin_args(argtys, "Int,Int")) { return ERes {.pos = pos, .ty = "List(Int)", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_tcp_recv_bin expects (Int, Int), got (" + argtys + ")"};
     }
+    if (name == "resid_tcp_listen") {
+        if (argtys == "Int") { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_tcp_listen expects (Int), got (" + argtys + ")"};
+    }
+    if (name == "resid_tcp_bound_port") {
+        if (argtys == "Int") { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_tcp_bound_port expects (Int), got (" + argtys + ")"};
+    }
+    if (name == "resid_tcp_accept") {
+        if (argtys == "Int") { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_tcp_accept expects (Int), got (" + argtys + ")"};
+    }
     if (name == "resid_tcp_close") {
         if (argtys == "Int") { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_tcp_close expects (Int), got (" + argtys + ")"};

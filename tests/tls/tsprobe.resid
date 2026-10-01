@@ -1,0 +1,49 @@
+// tsprobe.resid — the server-authentication check, as a runnable probe.
+//
+// tests/tls/run.sh drives this once per case. It is a separate program
+// rather than a `test "..." { }` block because each case needs different
+// command-line arguments (which certificate is the leaf, which is the
+// store, which host was "connected to").
+//
+//   tsprobe <store> <leaf> <host> [intermediates-dir]
+//
+// `<store>` is a PEM bundle or a directory of DER certificates; pass the
+// empty string to model a client that was given no trust anchor at all.
+
+import "../../lib/chain.resid";
+import "../../lib/clock.resid";
+import "../../lib/instant.resid";
+
+// A directory of DER certificates, read whole.
+@requires(filesystem(readonly))
+TrustStore add_dir(TrustStore st, Str dir, List(Str) names, Int i) {
+    if (i >= names.len()) { return st; }
+    return add_dir(trust_store_add(st, filesystem.read_bytes(dir + "/" + names[i])), dir, names, i + 1);
+}
+
+@requires(filesystem(readonly))
+TrustStore load_dir(Str dir) {
+    List(Str) none = [];
+    List(Str) names = if (filesystem.is_dir(dir)) { sort(filesystem.list_dir(dir)) } else { none };
+    return add_dir(trust_store_empty(), dir, names, 0);
+}
+
+@requires(args, filesystem(readonly), clock(readonly))
+Int main() {
+    Str store_path = args.get(1);
+    Str leaf_path = args.get(2);
+    Str host = args.get(3);
+    Str inter_dir = if (args.count() > 4) { args.get(4) } else { "" };
+    TrustStore st = if (store_path == "") { trust_store_empty() } else { trust_store_load(store_path) };
+    TrustStore ist = if (inter_dir == "") { trust_store_empty() } else { load_dir(inter_dir) };
+    List(Int) leaf = filesystem.read_bytes(leaf_path);
+    Instant now = clock_now();
+    List(Int) hostb = str_to_bytes(host);
+    println("roots=" + f"{st.roots.len()}");
+    println("inters=" + f"{ist.roots.len()}");
+    println("valid_now=" + f"{x509_valid_now(leaf, now)}");
+    println("san=" + f"{san_has_match(leaf, hostb)}");
+    println("pinned=" + f"{trust_store_has(st, leaf, 0)}");
+    println("TRUSTED=" + f"{tls_server_trusted(leaf, ist.roots, hostb, now, st)}");
+    return 0;
+}

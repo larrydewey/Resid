@@ -30,6 +30,28 @@ keyring = "keys/"
 require_signatures = true
 ```
 
+A `version =` dependency is fetched from the registry, named either as a
+directory (`[registry] path`) or as an `http://` base URL
+(`[registry] url`) — not both, since a build should not have to guess
+which one it read from:
+
+```text
+[registry]
+url = "http://127.0.0.1:8080"
+pubkey = "<the registry's signing key, hex>"
+```
+
+A remote registry is untrusted input exactly like a local one: the
+archive's hash is checked against `resid.lock` and the `-sha256` sidecar,
+and trust comes from a pinned key, a keyring key or the registry's signed
+index. `https://` is refused rather than downgraded to plaintext — put
+TLS in front of the registry, or serve it locally with `path`.
+
+`require_signatures = true` goes further than the index: an entry in the
+signed index is a hash somebody wrote down, not a signature over it, so
+this refuses the index on its own and demands a detached Ed25519
+signature under a pinned or keyring key.
+
 | Command | |
 |---|---|
 | `resid-manifest <resid.toml>` | print the parsed manifest |
@@ -81,6 +103,23 @@ searched.
 | `resid-pkg checksig <out> <pubkey-hex>` | verify a signature |
 | `resid-pkg extract <out> <dir>` | extract (never outside `dir`) |
 | `resid-pkg publish <dir> <registry> [keyfile]` | pack, sign and add to a local registry index |
+| `resid-pkg serve <registry> [--port N] [--port-file F] [--requests N]` | serve that registry over HTTP |
+| `resid-pkg index list <registry>` | print the index |
+| `resid-pkg index add <registry> <name> <version> <sha256-hex> <keyfile>` | vouch for an entry, re-signing the index |
+| `resid-pkg index remove <registry> <name> <version> <keyfile>` | withdraw an entry, re-signing the index |
+| `resid-pkg index verify <registry> <pubkey-hex>` | check the index signature, as a consumer will |
+
+`serve` is the publish side of the same artifact layout a `[registry] url`
+reads, and it is deliberately small: loopback only, `GET` and `HEAD` only,
+no directory listing, no upload, and no request path may name a file
+outside the registry directory. `--port 0` (the default) binds an
+ephemeral port and reports it, so `--port-file` is enough for a script to
+learn where to point a client.
+
+`index add` refuses a hash that contradicts an archive already published
+under that name and version, and both `index add` and `index remove`
+require the key that signs the registry's index, because the signature
+covers the whole file and there is no per-row signature to keep in step.
 
 A dependency is accepted only when its hash is listed by a trusted
 registry's signed index or its signature verifies under a pinned or

@@ -4,6 +4,7 @@ import "crypto.resid";
 import "aesgcm.resid";
 import "x25519.resid";
 import "chain.resid";
+import "clock.resid";
 import "h2.resid";
 
 // HTTP/2-over-TLS 1.3 client: negotiates ALPN h2, completes the
@@ -11,7 +12,14 @@ import "h2.resid";
 // request and prints ":status" plus the response body. Handles
 // response HEADERS split across CONTINUATION frames and restores
 // connection/stream flow-control credit with WINDOW_UPDATE frames.
-// args: host port cert-hex [seedhex] [method] [path] [body]
+//
+//   args: host port cert-hex [seedhex] [method] [path] [body] [ca]
+//
+// `ca` is the trust store (PEM bundle or directory of DER certificates).
+// The server is authenticated against it: the leaf must name the host, be
+// inside its validity window, and chain to a root in the store through the
+// intermediates the server sent. With no store nothing is trusted and the
+// handshake stops; there is no "skip verification" flag.
 
 List(Int) hb_acc(Str s, Int i, List(Int) acc) {
     if (i >= str_len(s)) { return acc; }
@@ -77,11 +85,13 @@ List(Int) repz(List(Int) acc, Int n) {
     return repz(acc2, nn);
 }
 
+@requires(network)
 List(Int) recv_exact(Int fd, Int n) {
     List(Int) out = repz([], n);
     return recv_loop(fd, out, n, 0);
 }
 
+@requires(network)
 List(Int) recv_loop(Int fd, List(Int) out, Int n, Int got) {
     if (got >= n) {
         return out;
@@ -192,6 +202,7 @@ Bool hdr_is_app(List(Int) hdr, Bool framed) {
 // CCS — some servers send TWO) are consumed and skipped; decryption is
 // attempted only for app-data outer records. Stops when the server
 // Finished message is in `acc`.
+@requires(network)
 List(Int) read_flight(Int fd, List(Int) acc, List(Int) key, List(Int) iv, Int seq, Int tries) {
     if (tries <= 0) {
         return acc;
@@ -242,6 +253,7 @@ List(Int) flight_append(Bool isapp, List(Int) key, List(Int) iv, Int seq, List(I
 // stripped) appended after `acc`'s seed; marks done via H2Rec marker.
 type H2Rec = { List(Int) data; Int(64) seq; Bool alert; Bool eof; Int(64) ctype; };
 
+@requires(network)
 H2Rec read_one_record(Int fd, List(Int) key, List(Int) iv, Int seq) {
     List(Int) hdr = recv_exact(fd, 5);
     Int hlen = hdr.len();
@@ -342,6 +354,7 @@ Int h2_count_at(List(Int) buf, Int p2) {
 
 // Recursive record reader: accumulate plaintext until a SETTINGS
 // frame appears or tries run out.
+@requires(network)
 H2Scan h2_scan(Int fd, List(Int) key, List(Int) iv, Int seq, List(Int) buf, Int tries) {
     if (tries <= 0) {
         return H2Scan {.found = false, .scount = 0, .eof = false, .seq = seq};
@@ -373,6 +386,7 @@ Int app_list_len(List(Int) xs) {
     return xs.len();
 }
 
+@requires(network)
 H2Result h2_collect(Int fd, List(Int) key, List(Int) iv, Int seq, List(Int) acc,
                     Int tries, List(Int) ckey, List(Int) civ, Int cseq) {
     if (tries <= 0) {
@@ -471,6 +485,17 @@ Str pick_str(Bool c, Str a, Str b) {
     return b;
 }
 
+// The leaf is index 0; everything after it is an intermediate the server
+// sent, which the trust store may need to walk up to a root.
+List(List(Int)) certs_tail(List(List(Int)) xs, Int i) {
+    if (i >= xs.len()) {
+        List(List(Int)) empty = [];
+        return empty;
+    }
+    return certs_tail(xs, i + 1).concat([xs[i]]);
+}
+
+@requires(args, filesystem(readonly), network, clock(readonly))
 Int main() {
     Str host = args.get(1);
     Int port = str_parse_int(args.get(2));
@@ -480,6 +505,14 @@ Int main() {
         return 1;
     }
     Int nargs = args.count();
+    // args.get(8) is the trust store: a PEM bundle, or a directory of
+    // DER certificates. It sits after the positional request arguments
+    // rather than among them, so adding it cannot change the meaning of an
+    // existing invocation. There is no default and no fallback -- with no
+    // store a client trusts nothing, which is the only safe reading of
+    // "I do not know who to trust".
+    Str ca_path = if (nargs > 8) { args.get(8) } else { "" };
+    TrustStore store = if (ca_path == "") { trust_store_empty() } else { trust_store_load(ca_path) };
     Str seedhex = "";
     Str seedhex2 = if (nargs > 4) { args.get(4) } else { seedhex };
     List(Int) seed = mk_seed(seedhex2);
@@ -530,9 +563,10 @@ Int main() {
     List(Int) finmsg = safe_msg(inner, pfin);
     List(Int) ctbody = tm_find(inner, 11, 0);
     List(Int) certder = tm_cert_der(ctbody);
-    Int now = resid_utc_now_civil();
+    Instant now = clock_now();
     List(Int) hostb = str_to_bytes(host);
-    Bool certok = tls_server_cert_ok(certder, hostb, now);
+    List(List(Int)) sent = tm_cert_list(ctbody);
+    Bool certok = tls_server_trusted(sent[0], certs_tail(sent, 1), hostb, now, store);
     if (!certok) {
         println("CERT-FAIL");
         return 1;

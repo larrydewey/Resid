@@ -1592,9 +1592,14 @@ mechanism, not two), retire `growable.rs` into it, per plan.
       dependencies are rejected with a clear message (registry client not
       ported yet, see below) rather than silently mishandled.
 
-      **Still open**: the global `[signing] require_signatures` keyring
-      policy (needs a directory-scan of a keyring — different from the
-      one-key `verify_pinned_key` case just done).
+      **Still open**: nothing here. The global `[signing]
+      require_signatures` policy is enforced (2026-10-01, PROGRESS §0a):
+      the keyring directory-scan it needed is `keyring_verifies`, and
+      `require_signatures` now uses it to insist on a signature over an
+      index entry. The same pass added the remote transport
+      (`[registry] url`), `resid-pkg serve`, and the publisher-side
+      `resid-pkg index` operations that were left as a further increment
+      at the top of `resid-pkg.resid`.
 
       **Registry client — DONE for local-directory mode.** Added to the
       same file: `fetch_pkg_local`/`fetch_sha_local` (mirror

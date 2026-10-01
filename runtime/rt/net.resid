@@ -68,6 +68,86 @@ Int set_timeout(Int fd, Int secs) {
     return resid_raw_syscall(54, fd, 1, 20, tv, 16, 0);   // SO_RCVTIMEO
 }
 
+// ─── TCP listener ──────────────────────────────────────────────────────
+// The serve side, for a registry published over HTTP (spec §28). Kept
+// deliberately small: bind, accept, and the one loopback restriction below.
+
+// Is this fd a listening stream socket? `sock_ok` is the connect-side
+// check (SOCK_STREAM, connected); a listener must be accepted first, so
+// accept checks the listen state instead.
+Bool listener_ok(Int fd) {
+    if (fd < 0) { return false; }
+    Int b = resid_raw_tls("sock_stat", 144);
+    return resid_raw_syscall(5, fd, b, 0, 0, 0, 0) == 0 && (ld32(b + 24) & 61440) == 49152;
+}
+
+// 127.0.0.1, the one address this file may bind a listener to. The value is
+// what `st32(sa + 4, ...)` wants — the network-order bytes 7F 00 00 01 read
+// as a u32 — which is the same shape `resolve4` returns, so `bind` and
+// `connect` write the same four bytes here.
+Int loopback_v4() { return 16777343; }
+
+// A listening socket bound to `port` on 127.0.0.1, or -1.
+//
+// Loopback only, and deliberately so: this exists so a local registry can
+// be served and fetched, not to expose one. Binding 0.0.0.0 would put a
+// package index on a network with no authentication beyond whatever the
+// publisher's signature scheme already gives, and there is no way to ask
+// for that from here. A host that wants a public registry terminates TLS
+// and authenticates in front of it.
+@export("resid_tcp_listen", "i64(i64)")
+pub Int rt_tcp_listen(Int port) {
+    // Port 0 means "any free port", which is what `serve --port 0` wants:
+    // the bound port is then read back with resid_tcp_bound_port.
+    if (port < 0 || port > 65535) { return 0 - 1; }
+    Int sa = resid_raw_tls("sa_in", 16);
+    _ = resid_raw_fill(sa, 0, 16);
+    _ = st8(sa, 2);                                   // AF_INET
+    _ = st8(sa + 2, port >> 8) + st8(sa + 3, port & 255);
+    _ = st32(sa + 4, loopback_v4());
+    Int fd = resid_raw_syscall(41, 2, 1, 0, 0, 0, 0); // socket
+    if (fd < 0) { return 0 - 1; }
+    Int one = resid_raw_tls("ai_one", 4);
+    _ = st32(one, 1);                                // SO_REUSEADDR, so a
+    // restart does not have to wait out TIME_WAIT.
+    if (resid_raw_syscall(54, fd, 1, 2, one, 4, 0) != 0) { return sys_close(fd) * 0 - 1; }
+    if (resid_raw_syscall(49, fd, sa, 16, 0, 0, 0) != 0) { return sys_close(fd) * 0 - 1; }  // bind
+    if (resid_raw_syscall(50, fd, 16, 0, 0, 0, 0) != 0) { return sys_close(fd) * 0 - 1; }    // listen
+    return fd;
+}
+
+// The port a listener actually bound, or -1. Lets `serve` report its own
+// port instead of the caller having to reserve a free one to pass in.
+@export("resid_tcp_bound_port", "i64(i64)")
+pub Int rt_tcp_bound_port(Int fd) {
+    if (!listener_ok(fd)) { return 0 - 1; }
+    Int sa = resid_raw_tls("sa_in", 16);
+    _ = resid_raw_fill(sa, 0, 16);
+    Int lenp = resid_raw_tls("ai_len", 4);
+    _ = st32(lenp, 16);
+    if (resid_raw_syscall(51, fd, sa, lenp, 0, 0, 0) != 0) { return 0 - 1; }  // getsockname
+    return ld8(sa + 2) * 256 + ld8(sa + 3);
+}
+
+// One accepted connection, or -1 on a failed accept.
+//
+// Unlike bind and listen, whose length and backlog arguments are plain
+// values, accept takes the address length *by pointer* and writes the
+// real length back through it. Passing the number 16 in that slot is not
+// a length at all: the kernel tries to store the result at address 16 and
+// fails with EFAULT, so every connection is refused.
+@export("resid_tcp_accept", "i64(i64)")
+pub Int rt_tcp_accept(Int fd) {
+    if (!listener_ok(fd)) { return 0 - 1; }
+    Int sa = resid_raw_tls("sa_in", 16);
+    Int alen = resid_raw_tls("ai_alen", 4);
+    _ = st32(alen, 16);
+    Int c = resid_raw_syscall(43, fd, sa, alen, 0, 0, 0);  // accept
+    if (c < 0) { return 0 - 1; }
+    _ = set_timeout(c, 30);
+    return c;
+}
+
 // ─── IPv4 name lookup: a literal, localhost, /etc/hosts, then DNS ──────
 // Addresses are the 4 bytes in network order, read as a u32; -1 when not
 // found.
@@ -75,7 +155,7 @@ Int set_timeout(Int fd, Int secs) {
 Int resolve4(Int host) {
     Int lit = parse_ip4(host);
     if (lit >= 0) { return lit; }
-    if (lower_eq(host, resid_raw_addr("localhost"))) { return 16777343; }   // 127.0.0.1
+    if (lower_eq(host, resid_raw_addr("localhost"))) { return loopback_v4(); }
     Int h = hosts_lookup(host);
     if (h >= 0) { return h; }
     return dns_lookup(host);

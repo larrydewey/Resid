@@ -4,11 +4,22 @@ import "crypto.resid";
 import "aesgcm.resid";
 import "x25519.resid";
 import "chain.resid";
+import "clock.resid";
 
-// TLS 1.3 client: args.get(1)=host, args.get(2)=port, args.get(3)=
-// server cert DER hex (ECDSA P-256). Verifies CertificateVerify and
-// server Finished, sends its own Finished + "GET / HTTP/1.0", prints
-// the decrypted reply head.
+// TLS 1.3 client:
+//   args.get(1) = host, args.get(2) = port, args.get(3) = server cert
+//   DER hex (ECDSA P-256), args.get(4) = optional client seed hex,
+//   args.get(5) = trust store (PEM bundle, or a directory of DER certs).
+//
+// The server is authenticated against that trust store: the leaf must name
+// the host, be inside its validity window, and chain to a root in the
+// store through whatever intermediates the server sent. With no store
+// nothing is trusted and the handshake stops -- there is no "skip
+// verification" flag, because an unchecked certificate is exactly the
+// thing a TLS client exists to prevent.
+//
+// Then verifies CertificateVerify and server Finished, sends its own
+// Finished + "GET / HTTP/1.0", prints the decrypted reply head.
 
 List(Int) hb_acc(Str s, Int i, List(Int) acc) {
     if (i >= str_len(s)) { return acc; }
@@ -41,11 +52,13 @@ List(Int) repz(List(Int) acc, Int n) {
 
 // Reads exactly n bytes; on EOF/short read returns the [0] seed-only
 // sentinel so callers can bail out instead of processing padding.
+@requires(network)
 List(Int) recv_exact(Int fd, Int n) {
     List(Int) out = repz([], n);
     return recv_loop(fd, out, n, 0);
 }
 
+@requires(network)
 List(Int) recv_loop(Int fd, List(Int) out, Int n, Int got) {
     if (got >= n) {
         return out;
@@ -137,6 +150,7 @@ List(Int) open_if_app(Bool isapp, List(Int) key, List(Int) iv, Int seq, List(Int
     return open_record(key, iv, seq, h5, body);
 }
 
+@requires(network)
 List(Int) read_flight(Int fd, List(Int) acc, List(Int) key, List(Int) iv, Int seq, Int tries) {
     if (tries <= 0) {
         return acc;
@@ -167,6 +181,7 @@ List(Int) read_flight(Int fd, List(Int) acc, List(Int) key, List(Int) iv, Int se
 
 // read post-handshake records; skip non-app-data (session tickets),
 // print the first line of the first app-data record
+@requires(network)
 Int read_app(Int fd, List(Int) key, List(Int) iv, Int seq, Int tries) {
     if (tries <= 0) {
         println("REPLY-NONE");
@@ -276,6 +291,17 @@ List(Int) mk_seed(Str s) {
     return random_bytes(32);
 }
 
+// The leaf is index 0; everything after it is an intermediate the server
+// sent, which the trust store may need to walk up to a root.
+List(List(Int)) certs_tail(List(List(Int)) xs, Int i) {
+    if (i >= xs.len()) {
+        List(List(Int)) empty = [];
+        return empty;
+    }
+    return certs_tail(xs, i + 1).concat([xs[i]]);
+}
+
+@requires(args, filesystem(readonly), network, clock(readonly))
 Int main() {
     Str host = args.get(1);
     Int port = str_parse_int(args.get(2));
@@ -285,6 +311,12 @@ Int main() {
         return 1;
     }
     Int nargs = args.count();
+    // args.get(5) is the trust store: a PEM bundle, or a directory of
+    // DER certificates. There is no default and no fallback -- with no
+    // store a client trusts nothing, which is the only safe reading of
+    // "I do not know who to trust".
+    Str ca_path = if (nargs > 5) { args.get(5) } else { "" };
+    TrustStore store = if (ca_path == "") { trust_store_empty() } else { trust_store_load(ca_path) };
     Str seedhex = "";
     Str seedhex2 = if (nargs > 4) { args.get(4) } else { seedhex };
     List(Int) seed = mk_seed(seedhex2);
@@ -337,9 +369,10 @@ Int main() {
     List(Int) ctbody = tm_find(inner, 11, 0);
     List(Int) certder = tm_cert_der(ctbody);
     // certificate validation: validity window + SAN match on the host
-    Int now = resid_utc_now_civil();
+    Instant now = clock_now();
     List(Int) hostb = str_to_bytes(host);
-    Bool certok = tls_server_cert_ok(certder, hostb, now);
+    List(List(Int)) sent = tm_cert_list(ctbody);
+    Bool certok = tls_server_trusted(sent[0], certs_tail(sent, 1), hostb, now, store);
     if (!certok) {
         println("CERT-FAIL");
         return 1;

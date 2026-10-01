@@ -18,6 +18,8 @@ import "crypto.resid";
 import "x509.resid";
 import "rsa.resid";
 import "ec256.resid";
+import "calendar.resid";
+import "instant.resid";
 
 // ─── Byte helpers ────────────────────────────────────────────────────
 
@@ -63,6 +65,7 @@ pub List(Int) cert_tbs(List(Int) cert) {
 
 // ─── Validity window ─────────────────────────────────────────────────
 
+// The digits of `s` from `i` to `last`, as a number.
 pub Int time_digits(Str s, Int i, Int last, Int acc) {
     if (i > last) { return acc; }
     Int c = str_char_at(s, i);
@@ -73,26 +76,55 @@ pub Int time_digits(Str s, Int i, Int last, Int acc) {
     return time_digits(s, ni, last, acc2);
 }
 
-// "YYMMDDHHMMSSZ" -> YYYYMMDDHHMMSS number; GeneralizedTime passes
-// through without the century offset.
-pub Int utctime_to_num(Str s) {
-    Int slen = str_len(s);
-    Int lastd = slen - 2;
-    Int n = time_digits(s, 0, lastd, 0);
-    if (slen == 13) {
-        Int r = n + 20000000000000;
-        return r;
-    }
-    return n;
+// "YYMMDDHHMMSSZ" (UTCTime) or "YYYYMMDDHHMMSSZ" (GeneralizedTime) as an
+// Instant, through the calendar: the same civil-to-timeline arithmetic
+// every other date in the language goes through, so a certificate's
+// notBefore cannot drift from what lib/calendar.resid calls the same day.
+//
+// A UTCTime's two-digit year is RFC 5280's sliding window: 00-49 means
+// 20xx, 50-99 means 19xx. Nothing else in the language guesses a century,
+// so this is where the convention lives, and it is stated rather than
+// inferred. A string that is neither shape, or carries a name other than Z,
+// has no Instant: zero is the epoch, so -1 says "unparseable" and the
+// caller rejects rather than comparing against a moment that is not the
+// one the certificate named.
+pub Int x509_time_to_unix(Str s) {
+    Int n = str_len(s);
+    // 13 = "YYMMDDHHMMSSZ", 15 = "YYYYMMDDHHMMSSZ", both Z-terminated.
+    if (n != 13 && n != 15) { return 0 - 1; }
+    if (str_char_at(s, n - 1) != 90) { return 0 - 1; }
+    Int utc = if (n == 13) { 1 } else { 0 };
+    // UTCTime's year is two digits, so the month starts one earlier.
+    Int p = if (utc == 1) { 2 } else { 4 };
+    Int yy = time_digits(s, 0, p - 1, 0);
+    Int year = if (utc == 1) {
+        if (yy < 50) { 2000 + yy } else { 1900 + yy }
+    } else {
+        yy
+    };
+    Int mo = time_digits(s, p, p + 1, 0);
+    Int d = time_digits(s, p + 2, p + 3, 0);
+    Int hh = time_digits(s, p + 4, p + 5, 0);
+    Int mi = time_digits(s, p + 6, p + 7, 0);
+    Int ss = time_digits(s, p + 8, p + 9, 0);
+    if (mo < 1 || mo > 12) { return 0 - 1; }
+    if (d < 1 || d > cal_days_in_month(year, mo)) { return 0 - 1; }
+    if (hh > 23 || mi > 59 || ss > 60) { return 0 - 1; }
+    Int days = cal_days_from_civil(year, mo, d);
+    return days * cal_sec_per_day() + hh * 3600 + mi * 60 + ss;
 }
 
-pub Bool x509_valid_now(List(Int) cert, Int now) {
-    Str nb = x509_not_before(cert);
-    Str na = x509_not_after(cert);
-    Int nv = utctime_to_num(nb);
-    Int nav = utctime_to_num(na);
-    if (now < nv) { return false; }
-    if (now > nav) { return false; }
+// Is `cert` inside its own validity window at `now`? An unparseable time
+// on either end rejects: a certificate whose dates this cannot read is not
+// one to trust on the strength of everything else.
+pub Bool x509_valid_now(List(Int) cert, Instant now) {
+    Int nb = x509_time_to_unix(x509_not_before(cert));
+    Int na = x509_time_to_unix(x509_not_after(cert));
+    if (nb == 0 - 1) { return false; }
+    if (na == 0 - 1) { return false; }
+    Int t = now.seconds;
+    if (t < nb) { return false; }
+    if (t > na) { return false; }
     return true;
 }
 
@@ -146,8 +178,13 @@ pub Bool dns_match(List(Int) host, List(Int) pat) {
         Int hlen = host.len();
         Int suflen = plen - 2;
         if (hlen < suflen + 2) { return false; }
+        // RFC 6125: the wildcard stands for exactly one label, and `dot` is
+        // the first one, so everything before it is that single label. It
+        // may be one character long -- "*.wild.test" has to match
+        // "x.wild.test" as much as "sub.wild.test" -- but not empty, so
+        // dot < 1 rejects rather than dot < 2.
         Int dot = dns_find_dot(host, 0, hlen - 1);
-        if (dot < 2) { return false; }
+        if (dot < 1) { return false; }
         Int rem = hlen - 1 - dot;
         if (rem != suflen) { return false; }
         Int dnext = dot + 1;
@@ -286,7 +323,7 @@ pub List(Int) cert_pubkey_bits(List(Int) cert) {
     Int kend = ksc + kv.val_len - 1;
     return der_slice_seeded(cert, ksc, kend);
 }
-pub Bool chain_verify(List(Int) child, List(Int) issuer, Int now) {
+pub Bool chain_verify(List(Int) child, List(Int) issuer, Instant now) {
     Int cip = x509_issuer_pos(child);
     Int cis = der_content_pos(child, cip);
     Int cie = x509_skip_tlv(child, cip);
@@ -325,12 +362,12 @@ pub Int san_gns_end(List(Int) cert, Int gseq) {
     return e;
 }
 
-// ─── Known open item ─────────────────────────────────────────────────
-// ec_cert_verify currently returns false for valid inputs even though
-// every input (digest, r, s, qx, qy) matches an independent Python
-// implementation exactly. Suspected stage-1 codegen issue with deep
-// recursion + Int(256)/Int(512) arithmetic patterns; investigation is
-// the first task of the next session.
+// (An earlier note here claimed ec_cert_verify returned false for valid
+// inputs and suspected a codegen bug. It does not: a self-signed
+// ECDSA P-256 certificate verifies through chain_verify, whose signature
+// path is ecdsa_vx -- the same routine tm_ecdsa_verify_sha256 uses for
+// CertificateVerify, and that one is covered by the live h2 e2e. The
+// suspicion was never reproduced.)
 
 // ─── RSA-PSS (RSASSA-PSS, SHA-256, MGF1-SHA256, sLen=32) verify ──────
 // TLS 1.3 rsa_pss_rsae_sha256 (0x0804) CertificateVerify support.
@@ -452,14 +489,183 @@ pub Bool rsa_pss_verify_sha256(List(Int) content, List(Int) keyb, List(Int) sigb
     return ct_equal(hdig, hval);
 }
 
+// ─── Trust store ─────────────────────────────────────────────────────
+//
+// The roots a TLS client will chain to. Loaded from a PEM bundle (what
+// /etc/ssl/certs/ca-certificates.crt is) or from a directory of DER
+// certificates, one per file -- the same shape as the [signing] keyring in
+// resid-manifest.resid, so a project already keeping publisher keys that
+// way needs no second convention.
+//
+// The store is the whole of a server's identity. A certificate that
+// chains to nothing in here is not trusted however well-formed it is,
+// which is why `tls_server_trusted` refuses rather than falling back when
+// the store is empty.
+
+type TrustStore = { List(List(Int)) roots; };
+
+pub TrustStore trust_store_empty() {
+    return TrustStore { .roots = [] };
+}
+
+// Roots are kept as decoded DER. A root that is not a certificate this
+// code can read is kept anyway: refusing to load a store because one entry
+// is unreadable would leave a caller with a *smaller* trust anchor set
+// than the operator wrote, which is the wrong way to fail.
+pub TrustStore trust_store_add(TrustStore st, List(Int) der) {
+    if (der.len() == 0) { return st; }
+    return TrustStore { .roots = st.roots.concat([der]) };
+}
+
+pub Bool trust_store_has(TrustStore st, List(Int) der, Int i) {
+    if (i >= st.roots.len()) { return false; }
+    if (eq_bytes(st.roots[i], der)) { return true; }
+    return trust_store_has(st, der, i + 1);
+}
+
+// ─── PEM ─────────────────────────────────────────────────────────────
+//
+// A bundle of "-----BEGIN CERTIFICATE-----" blocks. Only the marker lines
+// and base64 are interpreted; anything else on a line is ignored, which is
+// what a real bundle's human-readable preamble does.
+
+Str pem_body_line(Str line, Str body) {
+    // A base64 line: no dashes, and something on it.
+    if (line == "") { return body; }
+    Int c = str_char_at(line, 0);
+    if (c == 45) { return body; }
+    return body + line;
+}
+
+type PemScan = { List(List(Int)) certs; Bool in_cert; Str body; };
+
+PemScan pem_finish(Str text, PemScan st) {
+    // An unterminated block is dropped: half a certificate is not a
+    // certificate, and decoding it would produce bytes that merely look
+    // like one.
+    if (!st.in_cert) { return st; }
+    return PemScan { .certs = st.certs, .in_cert = false, .body = "" };
+}
+
+PemScan pem_scan_lines(List(Str) lines, Int i, PemScan st) {
+    if (i >= lines.len()) { return pem_finish("", st); }
+    Str line = str_trim(lines[i]);
+    Bool is_begin = str_contains(line, "-----BEGIN CERTIFICATE-----");
+    Bool is_end = str_contains(line, "-----END CERTIFICATE-----");
+    PemScan st2 = if (is_begin) {
+        PemScan { .certs = st.certs, .in_cert = true, .body = "" }
+    } else if (is_end) {
+        PemScan { .certs = st.certs.concat([base64_decode(st.body)]), .in_cert = false, .body = "" }
+    } else {
+        PemScan { .certs = st.certs, .in_cert = st.in_cert, .body = if (st.in_cert) { pem_body_line(line, st.body) } else { st.body } }
+    };
+    Int ni = i + 1;
+    return pem_scan_lines(lines, ni, st2);
+}
+
+pub List(List(Int)) pem_certificates(Str text) {
+    PemScan st = PemScan { .certs = [], .in_cert = false, .body = "" };
+    PemScan done = pem_scan_lines(str_split(text, "\n"), 0, st);
+    return done.certs;
+}
+
+pub TrustStore trust_store_add_pem(TrustStore st, Str text) {
+    return trust_store_add_all(st, pem_certificates(text), 0);
+}
+
+TrustStore trust_store_add_all(TrustStore st, List(List(Int)) certs, Int i) {
+    if (i >= certs.len()) { return st; }
+    return trust_store_add_all(trust_store_add(st, certs[i]), certs, i + 1);
+}
+
+// ─── Loading ─────────────────────────────────────────────────────────
+
+@requires(filesystem(readonly))
+TrustStore trust_store_add_der_dir(TrustStore st, Str dir, List(Str) names, Int i) {
+    if (i >= names.len()) { return st; }
+    Str n = names[i];
+    Bool skip = n == "." || n == "..";
+    TrustStore st2 = if (skip) { st } else { trust_store_add(st, filesystem.read_bytes(dir + "/" + n)) };
+    Int ni = i + 1;
+    return trust_store_add_der_dir(st2, dir, names, ni);
+}
+
+@requires(filesystem(readonly))
+pub TrustStore trust_store_from_der_dir(Str dir) {
+    List(Str) none = [];
+    List(Str) names = if (filesystem.is_dir(dir)) { sort(filesystem.list_dir(dir)) } else { none };
+    return trust_store_add_der_dir(trust_store_empty(), dir, names, 0);
+}
+
+@requires(filesystem(readonly))
+pub TrustStore trust_store_from_pem_file(Str path) {
+    if (!filesystem.exists(path)) { return trust_store_empty(); }
+    return trust_store_add_pem(trust_store_empty(), filesystem.read_all(path));
+}
+
+// A path is read as whatever it is: a directory of DER certificates, or a
+// PEM bundle. One argument, no mode to get wrong at the call site.
+@requires(filesystem(readonly))
+pub TrustStore trust_store_load(Str path) {
+    if (filesystem.is_dir(path)) { return trust_store_from_der_dir(path); }
+    return trust_store_from_pem_file(path);
+}
+
+// ─── Chaining to the store ───────────────────────────────────────────
+
+// How many issuer links to walk. A chain longer than this is not one a
+// real PKI builds, and an unbounded walk over attacker-supplied
+// certificates is a loop waiting to happen.
+Int trust_max_depth() {
+    return 8;
+}
+
+Bool any_root_verifies(List(List(Int)) roots, List(Int) cert, Instant now, Int i) {
+    if (i >= roots.len()) { return false; }
+    if (chain_verify(cert, roots[i], now)) { return true; }
+    return any_root_verifies(roots, cert, now, i + 1);
+}
+
+type IssuerHit = { Bool found; Int idx; };
+
+IssuerHit find_issuer_hit(List(List(Int)) pool, List(Int) cert, Instant now, Int i) {
+    if (i >= pool.len()) { return IssuerHit { .found = false, .idx = 0 }; }
+    if (chain_verify(cert, pool[i], now)) { return IssuerHit { .found = true, .idx = i }; }
+    return find_issuer_hit(pool, cert, now, i + 1);
+}
+
+List(List(Int)) pool_without(List(List(Int)) pool, Int idx, Int i, List(List(Int)) acc) {
+    if (i >= pool.len()) { return acc; }
+    List(List(Int)) acc2 = if (i == idx) { acc } else { acc.concat([pool[i]]) };
+    Int ni = i + 1;
+    return pool_without(pool, idx, ni, acc2);
+}
+
+// Leaf upwards: pinned directly, or issued by something in the store, or
+// issued by one of the intermediates the server sent -- recursively, since
+// a chain is however deep the server says it is.
+Bool chain_to_store(List(Int) cert, List(List(Int)) pool, TrustStore st, Instant now, Int depth) {
+    if (trust_store_has(st, cert, 0)) { return true; }
+    if (any_root_verifies(st.roots, cert, now, 0)) { return true; }
+    if (depth <= 0) { return false; }
+    IssuerHit hit = find_issuer_hit(pool, cert, now, 0);
+    if (!hit.found) { return false; }
+    List(List(Int)) rest = pool_without(pool, hit.idx, 0, []);
+    return chain_to_store(pool[hit.idx], rest, st, now, depth - 1);
+}
+
 // ─── TLS client-side server-certificate check ────────────────────────
-// One-sided (self-signed / single-link) validation suitable for the
-// bootstrap TLS client: validity window at `now` plus a dNSName SAN
-// match against the hostname actually connected to.
-pub Bool tls_server_cert_ok(List(Int) cert, List(Int) host, Int now) {
-    Bool valid = x509_valid_now(cert, now);
-    if (!valid) { return false; }
-    return san_has_match(cert, host);
+//
+// Full server authentication: the leaf must name the host we connected to,
+// be inside its validity window, and chain to a root in `st`. An empty
+// store trusts nothing -- a client that cannot say who it trusts does not
+// connect, rather than falling back to "any certificate with the right
+// hostname", which is a check an attacker with any certificate can pass.
+pub Bool tls_server_trusted(List(Int) leaf, List(List(Int)) inters, List(Int) host, Instant now, TrustStore st) {
+    if (st.roots.len() == 0) { return false; }
+    if (!x509_valid_now(leaf, now)) { return false; }
+    if (!san_has_match(leaf, host)) { return false; }
+    return chain_to_store(leaf, inters, st, now, trust_max_depth());
 }
 
 // String -> byte list (ASCII codepoints).

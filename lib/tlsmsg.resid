@@ -289,6 +289,36 @@ pub List(Int) tm_cert_der(List(Int) body) {
     return slice_seed(body, 7, clen, []);
 }
 
+// Every certificate in a Certificate message, leaf first (RFC 8446 §4.4.2):
+//
+//   opaque certificate_request_context<0..2^8-1>;
+//   CertificateEntry certificate_list<0..2^24-1>;
+//   struct { opaque cert_data<1..2^24-1>; } CertificateEntry;
+//
+// `tm_cert_der` above returns only the first, which is all a
+// self-signed-or-directly-issued server needs. A server issued by an
+// intermediate sends the whole chain here, and a client that trusts only
+// roots needs every link of it -- so the intermediates are read out too and
+// handed to the trust store's chain walk rather than being discarded.
+//
+// The request context is normally empty but is length-prefixed, so it is
+// stepped over by its own declared length rather than assumed zero.
+pub List(List(Int)) tm_cert_list(List(Int) body) {
+    Int ctx = body[0];
+    Int list_len = tm_u24_at(body, ctx + 1);
+    Int start = ctx + 4;
+    Int end = start + list_len - 1;
+    return tm_cert_list_acc(body, start, end, []);
+}
+
+List(List(Int)) tm_cert_list_acc(List(Int) body, Int p, Int end, List(List(Int)) acc) {
+    if (p > end) { return acc; }
+    Int clen = tm_u24_at(body, p);
+    Int start = p + 3;
+    List(Int) der = slice_seed(body, start, clen, []);
+    return tm_cert_list_acc(body, start + clen, end, acc.concat([der]));
+}
+
 pub Bool tm_is_ecdsa_cv(List(Int) cvbody) {
     Int alg = cvbody[0] * 256 + cvbody[1];
     return alg == 1027;

@@ -11,11 +11,10 @@
 /// RFC 8949 big-endian; this format predates that choice and this is a
 /// faithful port, not a redesign.)
 ///
-/// Scope: pack/hash/sign/checksig/extract/publish — NOT the `resid.toml`
-/// dependency-resolution/CLI machinery around it (see
-/// tools/resid-manifest.resid, and PLAN-resid-only.md C.7 for what's
-/// still open: remote HTTP registry, signed registry index, unified
-/// CLI).
+/// Scope: the package-archive core and the registry itself — pack,
+/// hash, sign, checksig, extract, publish, index, and serve. NOT the
+/// `resid.toml` dependency-resolution machinery around it (see
+/// tools/resid-manifest.resid).
 ///
 /// Usage:
 ///   residc tools/resid-pkg.resid run -- keygen <secret.hex> <pub.hex>
@@ -25,6 +24,11 @@
 ///   residc tools/resid-pkg.resid run -- checksig <out> <pubkey-hex>
 ///   residc tools/resid-pkg.resid run -- extract <out> <dir>
 ///   residc tools/resid-pkg.resid run -- publish <dir> <registry> [keyfile]
+///   residc tools/resid-pkg.resid run -- serve <registry> [--port N] [--port-file F] [--requests N]
+///   residc tools/resid-pkg.resid run -- index list <registry>
+///   residc tools/resid-pkg.resid run -- index add <registry> <name> <version> <sha256-hex> <keyfile>
+///   residc tools/resid-pkg.resid run -- index remove <registry> <name> <version> <keyfile>
+///   residc tools/resid-pkg.resid run -- index verify <registry> <pubkey-hex>
 ///
 /// `pack` writes `<out>.resid-pkg`. `sign` reads a hex signing key from
 /// `<keyfile>` (same trailing-newline-tolerant format `write_provenance`
@@ -43,8 +47,10 @@
 /// `<registry>/pkg/<name>-<version>.resid-pkg` + `-sha256` (+ `-sig`
 /// when `keyfile` is given) — the exact layout
 /// `resid-manifest.resid`'s `fetch_pkg_local`/`fetch_sha_local` read
-/// from. Registry signed-index maintenance (`index.resid-idx`/`-sig`)
-/// is not yet done here — a further increment, see PLAN-resid-only.md.
+/// from. `serve <registry>` publishes the same layout over HTTP on the
+/// loopback interface, and `index list|add|remove|verify` are the
+/// publisher's operations on the signed index (`index.resid-idx`/`-sig`),
+/// which `publish` also maintains as a side effect.
 
 import "../lib/crypto.resid";
 import "../lib/ed25519.resid";
@@ -323,7 +329,7 @@ Int extract_archive(Str archive_path, Str out_dir) {
 // ─── CLI ────────────────────────────────────────────────────────────
 
 Str usage_text() {
-    return "usage: resid-pkg keygen <secret.hex> <pub.hex> | pack <dir> <out> | sign <out> <keyfile> | sign-dir <dir> <keyfile> | checksig <out> <pubkey-hex> | extract <out> <dir> | publish <dir> <registry> [keyfile]";
+    return "usage: resid-pkg keygen <secret.hex> <pub.hex> | pack <dir> <out> | sign <out> <keyfile> | sign-dir <dir> <keyfile> | checksig <out> <pubkey-hex> | extract <out> <dir> | publish <dir> <registry> [keyfile] | serve <registry> [--port N] [--port-file F] [--requests N] | index list <registry> | index add <registry> <name> <version> <sha256-hex> <keyfile> | index remove <registry> <name> <version> <keyfile> | index verify <registry> <pubkey-hex>";
 }
 
 // Ed25519 keypair generation (mirrors `resid_build::archive::keygen`): a
@@ -611,7 +617,361 @@ Int cmd_publish(Str dir, Str reg, Str keyfile) {
     return 0;
 }
 
-@requires(args, filesystem)
+// ─── serve: the registry over HTTP (spec §28) ───────────────────────
+//
+// The publish side's mirror of resid-manifest.resid's fetch side: same
+// artifact names under `pkg/`, so a registry on disk and the same registry
+// served here are the same bytes at the same URLs. Deliberately small —
+// one connection at a time, GET and HEAD only, no directory listing, no
+// upload. Publishing is `publish` writing the directory; serving only reads
+// it.
+//
+// Three things this will not do, each of them a security decision rather
+// than a missing feature:
+//
+//   * It binds 127.0.0.1 only (see resid_tcp_listen in runtime/rt/net.resid).
+//     A registry that needs to be reachable from elsewhere belongs behind
+//     a proxy that terminates TLS and authenticates.
+//   * It serves only files under the registry directory. A request path is
+//     rejected outright if any segment is `..` or empty, so no request can
+//     name a file outside the root — the same rule `extract` enforces on
+//     an archive, for the same reason.
+//   * It never writes. A remote registry's trust comes from its signed
+//     index and the publisher's signature, not from the transport, so
+//     nothing here can change what a client accepts.
+
+Str serve_port_line(Int port) {
+    return "resid-pkg serve: listening on http://127.0.0.1:" + f"{port}" + "\n";
+}
+
+@requires(network)
+List(Int) srv_read_line_acc(Int fd, List(Int) acc, Int depth) {
+    if (depth <= 0) { return acc; }
+    List(Int) one = resid_tcp_recv_bin(fd, 1);
+    if (one.len() < 1) { return acc; }
+    if (one[0] == 13) {
+        List(Int) two = resid_tcp_recv_bin(fd, 1);
+        if (two.len() < 1) { return acc; }
+        if (two[0] == 10) { return acc; }
+        return srv_read_line_acc(fd, acc.concat([13, two[0]]), depth - 1);
+    }
+    return srv_read_line_acc(fd, acc.concat([one[0]]), depth - 1);
+}
+
+// Read the request head up to its blank line; "" when the peer sent
+// nothing. Bounded, so a client that opens a socket and says nothing
+// cannot hold the single-threaded server forever (the socket's own receive
+// timeout is the backstop behind this).
+@requires(network)
+Str srv_read_head(Int fd) {
+    List(Str) lines = srv_head_lines(fd, [], 64, 0);
+    List(Str) empty = [];
+    return if (lines.len() == 0) { "" } else { str_join(lines, "\r\n") };
+}
+
+@requires(network)
+List(Str) srv_head_lines(Int fd, List(Str) acc, Int max_lines, Int depth) {
+    if (depth >= max_lines) { return acc; }
+    List(Int) raw = srv_read_line_acc(fd, [], 8192);
+    if (raw.len() == 0) { return acc; }
+    Str line = bytes_to_ascii(raw, 0, raw.len(), "");
+    if (str_trim(line) == "") { return acc; }
+    return srv_head_lines(fd, acc.concat([line]), max_lines, depth + 1);
+}
+
+Int str_find(Str s, Str sub, Int i) {
+    Int n = str_len(s);
+    Int m = str_len(sub);
+    if (m == 0) { return i; }
+    if (i + m > n) { return 0 - 1; }
+    if (str_slice(s, i, i + m) == sub) { return i; }
+    return str_find(s, sub, i + 1);
+}
+
+// The path of a request line: "GET /pkg/x HTTP/1.1" -> "/pkg/x".
+Str request_path(Str line) {
+    Int sp = str_find(line, " ", 0);
+    if (sp < 0) { return ""; }
+    Str rest = str_slice(line, sp + 1, str_len(line));
+    Int sp2 = str_find(rest, " ", 0);
+    if (sp2 < 0) { return rest; }
+    return str_slice(rest, 0, sp2);
+}
+
+Str request_method(Str line) {
+    Int sp = str_find(line, " ", 0);
+    if (sp < 0) { return ""; }
+    return str_slice(line, 0, sp);
+}
+
+// Reject anything that could name a file outside the registry root, and
+// anything with a NUL in it (which would truncate the path the runtime
+// hands to open). A leading "/" is expected and dropped by the caller.
+Bool seg_unsafe(List(Str) segs, Int i) {
+    if (i >= segs.len()) { return false; }
+    Str s = segs[i];
+    // The leading "/" of an absolute request path splits into an empty
+    // first segment, and that one is expected. An empty segment anywhere
+    // else is a "//" that could be read as a different path, so it is not.
+    Bool is_leading = if (i == 0 && s == "") { true } else { false };
+    if (!is_leading && (s == "" || s == "." || s == "..")) { return true; }
+    return seg_unsafe(segs, i + 1);
+}
+
+Bool has_nul(Str s, Int i) {
+    if (i >= str_len(s)) { return false; }
+    if (str_char_at(s, i) == 0) { return true; }
+    return has_nul(s, i + 1);
+}
+
+Bool path_is_unsafe(Str path) {
+    if (has_nul(path, 0)) { return true; }
+    return seg_unsafe(str_split(path, "/"), 0);
+}
+
+// A registry-relative file for a request path, "" when the path is unsafe.
+Str resolve_request_file(Str root, Str path) {
+    Bool starts = str_starts_with(path, "/");
+    if (!starts) { return ""; }
+    if (path_is_unsafe(path)) { return ""; }
+    Int q = str_find(path, "?", 0);
+    Str clean = if (q >= 0) { str_slice(path, 0, q) } else { path };
+    Int hash = str_find(clean, "#", 0);
+    Str clean2 = if (hash >= 0) { str_slice(clean, 0, hash) } else { clean };
+    if (clean2 == "/" || clean2 == "") { return ""; }
+    return root + clean2;
+}
+
+@requires(network)
+Int srv_send(Int fd, Str s) {
+    return if (resid_tcp_send(fd, s)) { 1 } else { 0 };
+}
+
+@requires(network)
+Int srv_send_status(Int fd, Int code, Str reason, Str extra, Bool bodyless) {
+    Str h1 = "HTTP/1.1 " + f"{code}" + " " + reason + "\r\n";
+    Str h2 = "Server: resid-pkg\r\nConnection: close\r\n";
+    Str h3 = if (bodyless) { "" } else { extra + "\r\n" };
+    return srv_send(fd, h1 + h2 + h3 + "\r\n");
+}
+
+@requires(filesystem(readonly), network)
+Int srv_send_file(Int fd, Str file, Bool head_only) {
+    List(Int) body = filesystem.read_bytes(file);
+    Int len = body.len();
+    Str h1 = "HTTP/1.1 200 OK\r\n";
+    Str h2 = "Server: resid-pkg\r\nConnection: close\r\n";
+    Str h3 = "Content-Type: application/octet-stream\r\n";
+    Str h4 = "Content-Length: " + f"{len}" + "\r\n\r\n";
+    Int sent = srv_send(fd, h1 + h2 + h3 + h4);
+    if (head_only) { return sent; }
+    return if (sent == 1 && resid_tcp_send_bin(fd, body)) { 1 } else { 0 };
+}
+
+// Answer one connection.
+@requires(filesystem(readonly), network)
+Int serve_one(Int fd, Str root) {
+    Str head = srv_read_head(fd);
+    if (head == "") { return 0; }
+    List(Str) lines = str_split(head, "\r\n");
+    Str line = lines[0];
+    Str method = request_method(line);
+    Str path = request_path(line);
+    Bool head_only = method == "HEAD";
+    if (method != "GET" && !head_only) {
+        return srv_send_status(fd, 405, "Method Not Allowed", "Allow: GET, HEAD\r\n", false);
+    }
+    Str file = resolve_request_file(root, path);
+    if (file == "") {
+        Bool unsafe = !str_starts_with(path, "/") || path_is_unsafe(path);
+        if (unsafe) { return srv_send_status(fd, 400, "Bad Request", "", true); }
+        return srv_send_status(fd, 404, "Not Found", "", true);
+    }
+    if (!filesystem.exists(file) || filesystem.is_dir(file)) {
+        return srv_send_status(fd, 404, "Not Found", "", true);
+    }
+    return srv_send_file(fd, file, head_only);
+}
+
+// Accept `max_requests` connections (0 = until killed), answering each.
+@requires(filesystem(readonly), network)
+Int serve_loop(Int lfd, Str root, Int max_requests, Int served) {
+    if (max_requests > 0 && served >= max_requests) { return 0; }
+    Int c = resid_tcp_accept(lfd);
+    if (c < 0) { return 0 - 1; }
+    Int r = serve_one(c, root);
+    _ = resid_tcp_close(c);
+    return if (r < 0) { 0 - 1 } else { serve_loop(lfd, root, max_requests, served + 1) };
+}
+
+// `serve <registry> [--port N] [--port-file F] [--requests N]`. Port 0
+// (the default) binds an ephemeral port and reports it, so a caller never
+// has to reserve one; --port-file also writes it for a script to read.
+type ServeOpts = { Int port; Str port_file; Int requests; Bool ok; };
+
+@requires(args)
+ServeOpts parse_serve_opts(Int i, Int argc, ServeOpts o) {
+    if (i >= argc) { return o; }
+    Str flag = args.get(i);
+    Bool has_next = i + 1 < argc;
+    if (flag == "--port" && has_next) {
+        return parse_serve_opts(i + 2, argc, ServeOpts {.port = str_parse_int(args.get(i + 1)), .port_file = o.port_file, .requests = o.requests, .ok = o.ok});
+    }
+    if (flag == "--port-file" && has_next) {
+        return parse_serve_opts(i + 2, argc, ServeOpts {.port = o.port, .port_file = args.get(i + 1), .requests = o.requests, .ok = o.ok});
+    }
+    if (flag == "--requests" && has_next) {
+        return parse_serve_opts(i + 2, argc, ServeOpts {.port = o.port, .port_file = o.port_file, .requests = str_parse_int(args.get(i + 1)), .ok = o.ok});
+    }
+    return ServeOpts {.port = o.port, .port_file = o.port_file, .requests = o.requests, .ok = false};
+}
+
+@requires(args, filesystem, network)
+Int cmd_serve(Str root, Int port, Str port_file, Int max_requests) {
+    if (!filesystem.is_dir(root)) {
+        eprintln("resid-pkg serve: not a registry directory: '" + root + "'");
+        return 1;
+    }
+    Int lfd = resid_tcp_listen(port);
+    if (lfd < 0) {
+        eprintln("resid-pkg serve: cannot listen on port " + f"{port}");
+        return 1;
+    }
+    Int bound = resid_tcp_bound_port(lfd);
+    Str line = serve_port_line(bound);
+    if (port_file != "") { filesystem.write_all(port_file, f"{bound}"); }
+    println(str_trim(line));
+    Int rc = serve_loop(lfd, root, max_requests, 0);
+    _ = resid_tcp_close(lfd);
+    return if (rc == 0 - 1) { 1 } else { 0 };
+}
+
+// ─── index: the publisher's side of the registry index ───────────────
+//
+// `publish` maintains the index as a side effect of writing a package.
+// These are the operations that are not publishing: reading it, vouching
+// for an entry someone else built, withdrawing one, and checking it still
+// verifies. Each write re-signs the whole index, because the signature
+// covers the text and there is no per-row signature to keep in step.
+
+// A registry's index path.
+Str index_path_of(Str reg) {
+    return reg + "/pkg/index.resid-idx";
+}
+Str index_sig_path_of(Str reg) {
+    return reg + "/pkg/index.resid-sig";
+}
+
+// Write `entries` and a fresh signature over it.
+@requires(filesystem)
+Int write_signed_index(Str reg, List(IdxEntry) entries, List(Int) seed) {
+    Str new_text = index_text(entries);
+    filesystem.write_all(index_path_of(reg), new_text);
+    Str text_hash_hex = hex_encode(sha256_bytes(bytes_of(new_text)));
+    List(Int) sig = sign_msg(seed, text_hash_hex);
+    filesystem.write_bytes(index_sig_path_of(reg), bytes_of(hex_encode(sig)));
+    return 0;
+}
+
+Int print_idx_entries(List(IdxEntry) entries, Int i) {
+    if (i >= entries.len()) { return 0; }
+    println(entries[i].name + " " + entries[i].version + " " + entries[i].sha256);
+    return print_idx_entries(entries, i + 1);
+}
+
+@requires(filesystem)
+Int idx_cmd_list(Str reg) {
+    List(IdxEntry) entries = load_existing_index(index_path_of(reg));
+    if (entries.len() == 0) {
+        println("index: empty (" + index_path_of(reg) + ")");
+        return 0;
+    }
+    Int _p = print_idx_entries(entries, 0);
+    println(f"{entries.len()} entr" + (if (entries.len() == 1) { "y" } else { "ies" }));
+    return 0;
+}
+
+// add <reg> <name> <version> <sha256-hex> [keyfile]
+//
+// The hash is the one the consumer will recompute, so it is not taken on
+// trust: when the archive is already published, this reads it and refuses
+// a hash that does not match.
+@requires(filesystem)
+Int idx_cmd_add(Str reg, Str name, Str version, Str hash_hex, Str keyfile) {
+    Bool have_key = keyfile != "" && filesystem.exists(keyfile);
+    if (have_key) {
+        Str pkg_path = reg + "/pkg/" + name + "-" + version + ".resid-pkg";
+        if (filesystem.exists(pkg_path)) {
+            List(Int) archive = filesystem.read_bytes(pkg_path);
+            Str actual = hex_encode(content_hash(archive));
+            if (actual != hash_hex) {
+                eprintln("resid-pkg index add: " + name + "-" + version + " is already published with hash " + actual + ", not " + hash_hex);
+                return 1;
+            }
+        }
+    }
+    if (!have_key) {
+        eprintln("resid-pkg index add: needs a signing key to re-sign the index (index add <registry> <name> <version> <sha256-hex> <keyfile>)");
+        return 1;
+    }
+    Str keyhex = str_trim(filesystem.read_all(keyfile));
+    List(Int) seed = hex_decode(keyhex);
+    List(IdxEntry) existing = load_existing_index(index_path_of(reg));
+    List(IdxEntry) updated = idx_remove_acc(existing, name, version, 0, []).concat([IdxEntry {.name = name, .version = version, .sha256 = hash_hex}]);
+    Int _w = write_signed_index(reg, sort_idx_entries(updated), seed);
+    println("index: " + name + " " + version + " -> " + hash_hex + " (index re-signed)");
+    return 0;
+}
+
+// remove <reg> <name> <version> <keyfile>
+@requires(filesystem)
+Int idx_cmd_remove(Str reg, Str name, Str version, Str keyfile) {
+    if (keyfile == "" || !filesystem.exists(keyfile)) {
+        eprintln("resid-pkg index remove: needs the signing key that signs this registry's index");
+        return 1;
+    }
+    List(IdxEntry) existing = load_existing_index(index_path_of(reg));
+    List(IdxEntry) kept = idx_remove_acc(existing, name, version, 0, []);
+    if (kept.len() == existing.len()) {
+        eprintln("resid-pkg index remove: no entry for " + name + " " + version);
+        return 1;
+    }
+    Str keyhex = str_trim(filesystem.read_all(keyfile));
+    List(Int) seed = hex_decode(keyhex);
+    Int _w = write_signed_index(reg, kept, seed);
+    println("index: removed " + name + " " + version + " (index re-signed)");
+    return 0;
+}
+
+// verify <reg> <pubkey-hex>
+//
+// The same check resid-manifest.resid makes when `[registry] pubkey` is
+// set, so a publisher can confirm before shipping that a consumer will.
+@requires(filesystem(readonly))
+Int idx_cmd_verify(Str reg, Str pubkey_hex) {
+    Str idx_path = index_path_of(reg);
+    Str sig_path = index_sig_path_of(reg);
+    if (!filesystem.exists(idx_path)) {
+        eprintln("resid-pkg index verify: no index at '" + idx_path + "'");
+        return 1;
+    }
+    if (!filesystem.exists(sig_path)) {
+        eprintln("resid-pkg index verify: no signature at '" + sig_path + "'");
+        return 1;
+    }
+    Str text = filesystem.read_all(idx_path);
+    Str sig_hex = str_trim(filesystem.read_all(sig_path));
+    Str text_hash_hex = hex_encode(sha256_bytes(bytes_of(text)));
+    Bool ok = verify_sig(text_hash_hex, hex_decode(sig_hex), hex_decode(pubkey_hex));
+    if (!ok) {
+        eprintln("resid-pkg index verify: FAIL - the index signature does not verify under that key");
+        return 1;
+    }
+    println("index: OK - " + f"{load_existing_index(idx_path).len()}" + " entries, signature verifies");
+    return 0;
+}
+
+@requires(args, filesystem, network)
 Int main() {
     Int argc = args.count();
     if (argc < 2) {
@@ -647,6 +1007,43 @@ Int main() {
         if (argc < 4) { eprintln(usage_text()); return 2; }
         Str keyfile = if (argc >= 5) { args.get(4) } else { "" };
         return cmd_publish(args.get(2), args.get(3), keyfile);
+    }
+    if (sub == "index") {
+        // argv: <prog> index <sub> ...
+        if (argc < 4) {
+            eprintln("usage: resid-pkg index list <registry> | index add <registry> <name> <version> <sha256-hex> <keyfile> | index remove <registry> <name> <version> <keyfile> | index verify <registry> <pubkey-hex>");
+            return 2;
+        }
+        Str isub = args.get(2);
+        if (isub == "list") {
+            if (argc < 4) { eprintln("usage: resid-pkg index list <registry>"); return 2; }
+            return idx_cmd_list(args.get(3));
+        }
+        if (isub == "add") {
+            // argv: <prog> index add <registry> <name> <version> <sha256> <keyfile>
+            if (argc < 8) { eprintln("usage: resid-pkg index add <registry> <name> <version> <sha256-hex> <keyfile>"); return 2; }
+            return idx_cmd_add(args.get(3), args.get(4), args.get(5), args.get(6), args.get(7));
+        }
+        if (isub == "remove") {
+            // argv: <prog> index remove <registry> <name> <version> <keyfile>
+            if (argc < 7) { eprintln("usage: resid-pkg index remove <registry> <name> <version> <keyfile>"); return 2; }
+            return idx_cmd_remove(args.get(3), args.get(4), args.get(5), args.get(6));
+        }
+        if (isub == "verify") {
+            if (argc < 5) { eprintln("usage: resid-pkg index verify <registry> <pubkey-hex>"); return 2; }
+            return idx_cmd_verify(args.get(3), args.get(4));
+        }
+        eprintln("resid-pkg index: expected list, add, remove or verify");
+        return 2;
+    }
+    if (sub == "serve") {
+        if (argc < 3) { eprintln(usage_text()); return 2; }
+        ServeOpts o = parse_serve_opts(3, argc, ServeOpts {.port = 0, .port_file = "", .requests = 0, .ok = true});
+        if (!o.ok) {
+            eprintln("resid-pkg serve: expected --port N, --port-file F or --requests N");
+            return 2;
+        }
+        return cmd_serve(args.get(2), o.port, o.port_file, o.requests);
     }
     eprintln(usage_text());
     return 2;

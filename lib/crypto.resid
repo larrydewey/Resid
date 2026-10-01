@@ -690,6 +690,106 @@ pub Str b64_enc(List(Int) bytes, Int i, Int end, Str acc) {
     return acc2 + "==";
 }
 
+// ─── Base64 decoding (RFC 4648 standard alphabet) ────────────────────
+//
+// The mirror of base64_encode, and strict on purpose: this is how a PEM
+// file's body becomes bytes, so anything that is not the alphabet is
+// refused rather than skipped. A decoder that silently drops a character
+// it does not recognise turns a corrupted certificate into a *different*
+// certificate, and the caller cannot tell the difference.
+
+Int b64_val(Int c) {
+    if (c >= 65 && c <= 90) { return c - 65; }          // A-Z
+    if (c >= 97 && c <= 122) { return c - 71; }         // a-z
+    if (c >= 48 && c <= 57) { return c + 4; }           // 0-9
+    if (c == 43) { return 62; }                         // +
+    if (c == 47) { return 63; }                         // /
+    return 0 - 1;
+}
+
+Bool b64_is_space(Int c) {
+    if (c == 32 || c == 9 || c == 10 || c == 13) { return true; }
+    return false;
+}
+
+// Whitespace out (a wrapped PEM body is full of it), everything else kept.
+List(Int) b64_strip_acc(Str s, Int i, List(Int) acc) {
+    Int n = str_len(s);
+    if (i >= n) { return acc; }
+    Int c = str_char_at(s, i);
+    List(Int) acc2 = if (b64_is_space(c)) { acc } else { acc.concat([c]) };
+    Int ni = i + 1;
+    return b64_strip_acc(s, ni, acc2);
+}
+
+// One four-character group -> up to three bytes.
+//
+// The four 6-bit values reassemble into one 24-bit number and the bytes
+// are its top bytes: 4 chars -> 3, 3 chars -> 2, 2 chars -> 1. Padding is
+// only ever legal in the final group, so that is the rule rather than a
+// running count -- "Zg==" is a body, "Zg==Zg==" is not, and neither is a
+// group with '=' anywhere but last.
+//
+// Arithmetic is bound to temporaries first, which this file's convention
+// requires (see lib/chacha.resid) so a wide expression is never evaluated
+// in an argument position.
+List(Int) b64_group(List(Int) q, Int i, Bool last_group, List(Int) acc) {
+    Int c0 = b64_val(q[i]);
+    Int c1 = b64_val(q[i + 1]);
+    if (c0 == 0 - 1 || c1 == 0 - 1) { return acc; }
+    Int eq2 = if (q[i + 2] == 61) { 1 } else { 0 };
+    Int eq3 = if (q[i + 3] == 61) { 1 } else { 0 };
+    Int hi = c0 << 18;
+    Int mid = c1 << 12;
+    if (eq2 == 1) {
+        if (eq3 == 0) { return acc; }
+        if (!last_group) { return acc; }
+        Int n2 = hi | mid;
+        Int b1 = (n2 >> 16) & 255;
+        return acc.concat([b1]);
+    }
+    Int c2 = b64_val(q[i + 2]);
+    if (c2 == 0 - 1) { return acc; }
+    Int lo = c2 << 6;
+    Int n3 = hi | mid | lo;
+    if (eq3 == 1) {
+        if (!last_group) { return acc; }
+        Int b1 = (n3 >> 16) & 255;
+        Int b2 = (n3 >> 8) & 255;
+        return acc.concat([b1, b2]);
+    }
+    Int c3 = b64_val(q[i + 3]);
+    if (c3 == 0 - 1) { return acc; }
+    Int n = n3 | c3;
+    Int b1 = (n >> 16) & 255;
+    Int b2 = (n >> 8) & 255;
+    Int b3 = n & 255;
+    return acc.concat([b1, b2, b3]);
+}
+
+List(Int) b64_quads(List(Int) q, Int i, Int end, List(Int) acc) {
+    if (i >= end) { return acc; }
+    // The group spans i..i+3, so it is the last exactly when i+4 == end.
+    Bool last = if (i + 4 >= end) { true } else { false };
+    List(Int) out = b64_group(q, i, last, acc);
+    Int ni = i + 4;
+    return b64_quads(q, ni, end, out);
+}
+
+// Decode a base64 string. Returns [] for anything not well-formed base64,
+// because a partial decode of a certificate is never what the caller
+// wanted -- an empty result is a rejection the caller can act on, where a
+// short one is a different certificate nobody asked for.
+pub List(Int) base64_decode(Str s) {
+    List(Int) q = b64_strip_acc(s, 0, []);
+    Int n = q.len();
+    if (n == 0) { return []; }
+    if (n % 4 != 0) { return []; }
+    List(Int) out = b64_quads(q, 0, n, []);
+    if (out.len() == 0 && n != 0) { return []; }
+    return out;
+}
+
 // ─── PBKDF2-HMAC-SHA256 (RFC 2898 §5.2) ────────────────────────
 // Single output block per call: dklen implicitly 32 bytes.
 

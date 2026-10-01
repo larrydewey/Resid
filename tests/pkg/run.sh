@@ -14,13 +14,29 @@ while getopts "c:" opt; do
     esac
 done
 W="$(mktemp -d)"
-trap 'rm -rf "$W"' EXIT
+trap cleanup EXIT
 if [ -z "${RESID_SIGNING_KEY:-}" ] && [ ! -f "$ROOT/keys/resid-ed25519.key" ]; then
     "$COMPILER" keygen "$W/buildkey" >/dev/null && export RESID_SIGNING_KEY="$W/buildkey/resid-ed25519.key"
 fi
 pass=0; fail=0
 ok()  { pass=$((pass + 1)); }
 bad() { fail=$((fail + 1)); echo "FAIL $1"; }
+SRVS=""
+cleanup() { for p in $SRVS; do kill "$p" 2>/dev/null; done; rm -rf "$W"; }
+trap cleanup EXIT
+
+# Start `resid-pkg serve` on <dir>; echoes the port it bound to. The server
+# is the real one the registry system ships -- binding loopback only, and
+# refusing any request path that could name a file outside <dir> -- so the
+# remote cases exercise the same code a publisher would run.
+serve() {  # dir
+    local pf="$W/port.$RANDOM$RANDOM"
+    "$PKG" serve "$1" --port 0 --port-file "$pf" > "$pf.log" 2>&1 &
+    SRVS="$SRVS $!"
+    local i=0
+    while [ ! -s "$pf" ] && [ $i -lt 150 ]; do sleep 0.1; i=$((i + 1)); done
+    cat "$pf" 2>/dev/null
+}
 
 for t in resid-pkg resid-manifest; do
     (cd "$ROOT" && "$COMPILER" "tools/$t.resid" -o "$W/$t") > "$W/$t.log" 2>&1 || { echo "FAIL build $t"; cat "$W/$t.log" | grep -i error | head -3; exit 1; }
@@ -80,6 +96,24 @@ mkdir -p "$W/keyring"; cp "$W/pub.pub" "$W/keyring/publisher.pub"
 app viakeyring $'[signing]\nkeyring = "../keyring"'
 expect_ok viakeyring
 
+# [signing] require_signatures: an index entry is not a signature. With it
+# set, the signed index no longer admits a package by itself -- a detached
+# signature under a pinned or keyring key has to.
+# The registry here is signed and every artifact carries a detached
+# signature, so what changes is only which key is consulted.
+app reqsig_noanchor $'[signing]\nrequire_signatures = true'
+expect_fail reqsig_noanchor "an index entry is not a signature"
+app reqsig_keyring $'[signing]\nkeyring = "../keyring"\nrequire_signatures = true'
+expect_ok reqsig_keyring
+# A pinned key is still checked first, and a wrong one still fails.
+app reqsig_wrongkey ""
+printf 'pubkey = "%s"\n[signing]\nrequire_signatures = true\n' "$OTHER" >> "$W/reqsig_wrongkey/resid.toml"
+expect_fail reqsig_wrongkey "INVALID or missing for its pinned key"
+# With no [registry] pubkey there is no index to lean on at all, so this is
+# the same demand arriving by a different road.
+app reqsig_nopubkey $'[signing]\nrequire_signatures = true'
+expect_fail reqsig_nopubkey "an index entry is not a signature"
+
 # A modified archive fails the signed index and the pinned signature.
 cp -r "$W/reg" "$W/reg.good"
 printf 'x' >> "$W/reg/pkg/greet-1.0.0.resid-pkg"
@@ -99,6 +133,118 @@ rm -f "$W/reg/pkg/greet-1.0.0.resid-sha256"
 app subst ""
 printf 'pubkey = "%s"\n' "$PUB" >> "$W/subst/resid.toml"
 expect_fail subst "archive holds package 'greet-6.6.6'"
+
+# ── index: the publisher's side ──────────────────────────────────────
+# publish maintains the index as a side effect; these are the operations
+# that are not publishing, and each write re-signs the whole index.
+IDX="$W/idxreg"
+mkpkg "$W/idxpkg" greet 1.0.0 'pub Str greet() { return "hi"; }'
+"$PKG" publish "$W/idxpkg" "$IDX" "$W/pub.sec" > /dev/null
+HASH="$("$PKG" index list "$IDX" | sed -n 's/^greet 1\.0\.0 //p')"
+[ -n "$HASH" ] && ok || bad "index list did not report the published hash"
+"$PKG" index verify "$IDX" "$PUB" > /dev/null 2>&1 && ok || bad "index verify under the signing key"
+"$PKG" index verify "$IDX" "$OTHER" > /dev/null 2>&1
+[ $? -ne 0 ] && ok || bad "index verify accepted the wrong key"
+# add re-signs, and verify still holds afterwards
+"$PKG" index add "$IDX" other 2.0.0 aaaa1111 "$W/pub.sec" > /dev/null 2>&1 && ok || bad "index add"
+"$PKG" index verify "$IDX" "$PUB" > /dev/null 2>&1 && ok || bad "index verify after add"
+"$PKG" index list "$IDX" | grep -q '^other 2.0.0 aaaa1111$' && ok || bad "index list after add"
+# a hash that contradicts the archive already published is refused
+"$PKG" index add "$IDX" greet 1.0.0 deadbeefdeadbeef "$W/pub.sec" > /dev/null 2>&1
+[ $? -ne 0 ] && ok || bad "index add accepted a hash contradicting the published archive"
+# remove re-signs, and a name that is not there is an error not a no-op
+"$PKG" index remove "$IDX" other 2.0.0 "$W/pub.sec" > /dev/null 2>&1 && ok || bad "index remove"
+"$PKG" index verify "$IDX" "$PUB" > /dev/null 2>&1 && ok || bad "index verify after remove"
+"$PKG" index list "$IDX" | grep -q '^other' && bad "index remove did not remove" || ok
+"$PKG" index remove "$IDX" nope 1.0.0 "$W/pub.sec" > /dev/null 2>&1
+[ $? -ne 0 ] && ok || bad "index remove of an absent entry must fail"
+# both writers refuse to re-sign without the key
+"$PKG" index add "$IDX" z 1.0.0 abc > /dev/null 2>&1
+[ $? -ne 0 ] && ok || bad "index add without a key must fail"
+"$PKG" index remove "$IDX" greet 1.0.0 > /dev/null 2>&1
+[ $? -ne 0 ] && ok || bad "index remove without a key must fail"
+
+# ── serve: the transport the remote cases above use ──────────────────
+# Loopback only, GET/HEAD only, and no request path may name a file outside
+# the registry directory.
+"$PKG" serve "$IDX" --port 0 --port-file "$W/sp.port" > "$W/sp.log" 2>&1 &
+SRVS="$SRVS $!"
+i=0; while [ ! -s "$W/sp.port" ] && [ $i -lt 150 ]; do sleep 0.1; i=$((i + 1)); done
+SPORT="$(cat "$W/sp.port" 2>/dev/null)"
+code() { timeout 5 curl -sS -o /dev/null -w '%{http_code}' "$@" 2>/dev/null; }
+[ -n "$SPORT" ] && ok || bad "serve did not report a port"
+# The remote cases below already drive this server over real HTTP through
+# resid-manifest. These four need a client that will ask for things no
+# package resolver would, so they need curl and are skipped without it.
+if command -v curl > /dev/null 2>&1; then
+    [ "$(code "http://127.0.0.1:$SPORT/pkg/index.resid-idx")" = 200 ] && ok || bad "serve GET"
+    [ "$(code "http://127.0.0.1:$SPORT/pkg/no-such-thing")" = 404 ] && ok || bad "serve 404"
+    [ "$(code -X POST "http://127.0.0.1:$SPORT/pkg/index.resid-idx")" = 405 ] && ok || bad "serve rejects POST"
+    [ "$(code --path-as-is "http://127.0.0.1:$SPORT/../../../etc/passwd")" = 400 ] && ok || bad "serve refused a traversal path"
+else
+    echo "note: curl absent, skipping the four raw serve cases"
+fi
+# It is bound to loopback and nothing else.
+if command -v ss > /dev/null 2>&1; then
+    ss -ltn 2>/dev/null | grep -q "127.0.0.1:$SPORT" && ok || bad "serve is not bound to loopback only"
+fi
+
+# ── remote registry over HTTP ────────────────────────────────────────
+# A registry reached by URL is untrusted input exactly like a local one,
+# so the same checks must hold over it: the transport may not widen what
+# is accepted, and a fetch that succeeds is never itself a reason to
+# trust anything.
+# Its own registry: the local cases above deliberately corrupted $W/reg
+# (a substituted archive, a tampered one), and this block is about the
+# transport, not about that damage.
+"$PKG" publish "$W/greet" "$W/reghttp" "$W/pub.sec" > /dev/null
+PORT="$(serve "$W/reghttp")"
+rapp() {  # name extra-toml url
+    mkdir -p "$W/$1/src"
+    printf '[package]\nname = "%s"\nversion = "0.1.0"\n\n[registry]\nurl = "%s"\n%s\n[dependencies.greet]\nversion = "1.0.0"\n' "$1" "$3" "$2" > "$W/$1/resid.toml"
+    printf 'import "greet";\nInt main() { println(greet()); return 0; }\n' > "$W/$1/src/main.resid"
+}
+URL="http://127.0.0.1:$PORT"
+rapp remote_signed "pubkey = \"$PUB\"" "$URL"
+expect_ok remote_signed
+rapp remote_wrongkey "pubkey = \"$OTHER\"" "$URL"
+expect_fail remote_wrongkey "signature INVALID"
+rapp remote_unsigned "" "$URL"
+expect_fail remote_unsigned "is unsigned"
+# A trailing slash on the base URL must not double the path separator.
+rapp remote_slash "pubkey = \"$PUB\"" "$URL/"
+expect_ok remote_slash
+# A version the registry does not publish.
+mkdir -p "$W/rem404/src"
+printf '[package]\nname = "rem404"\nversion = "0.1.0"\n\n[registry]\nurl = "%s"\n\n[dependencies.greet]\nversion = "9.9.9"\n' "$URL" > "$W/rem404/resid.toml"
+printf 'Int main() { return 0; }\n' > "$W/rem404/src/main.resid"
+expect_fail rem404 "cannot fetch 'greet-9.9.9'"
+# Naming both transports is an error, not a silent precedence rule.
+mkdir -p "$W/remboth/src"
+printf '[package]\nname = "remboth"\nversion = "0.1.0"\n\n[registry]\npath = "../reg"\nurl = "%s"\n\n[dependencies.greet]\nversion = "1.0.0"\n' "$URL" > "$W/remboth/resid.toml"
+printf 'Int main() { return 0; }\n' > "$W/remboth/src/main.resid"
+expect_fail remboth "sets both path and url"
+# https:// is refused outright rather than downgraded to plaintext.
+rapp remhttps "pubkey = \"$PUB\"" "https://127.0.0.1:$PORT"
+expect_fail remhttps "not wired"
+# Nothing listening at all: a transport failure, not a fetch of nothing.
+rapp remdead "pubkey = \"$PUB\"" "http://127.0.0.1:1"
+expect_fail remdead "cannot connect to registry host"
+
+# A package whose sources are not valid UTF-8. The archive is binary, so a
+# Str round trip over the transport would corrupt it; the extracted sources
+# must come back byte-identical to what was published.
+mkdir -p "$W/binpkg/src"
+printf '[package]\nname = "binpkg"\nversion = "1.0.0"\n' > "$W/binpkg/resid.toml"
+printf '// raw byte \377\376\375\200 in a comment\npub Str b() { return "b"; }\n' > "$W/binpkg/src/main.resid"
+"$PKG" publish "$W/binpkg" "$W/regbin" "$W/pub.sec" > /dev/null
+BPORT="$(serve "$W/regbin")"
+BURL="http://127.0.0.1:$BPORT"
+mkdir -p "$W/rembin/src"
+printf '[package]\nname = "rembin"\nversion = "0.1.0"\n\n[registry]\nurl = "%s"\npubkey = "%s"\n\n[dependencies.binpkg]\nversion = "1.0.0"\n' "$BURL" "$PUB" > "$W/rembin/resid.toml"
+printf 'import "binpkg";\nInt main() { return 0; }\n' > "$W/rembin/src/main.resid"
+deps rembin
+if [ $? -eq 0 ] && cmp -s "$W/binpkg/src/main.resid" "$W/rembin/target/resid/deps/binpkg-1.0.0-"*/src/main.resid; then ok; else bad "remote archive is byte-identical after extraction"; fi
 
 # A path dependency pinned to a key: its sources must be what was signed.
 mkpkg "$W/local" local 1.0.0 'pub Str local_name() { return "local"; }'

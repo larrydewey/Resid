@@ -44,7 +44,16 @@ runtime, under a driver flag that is honored only for those entry files
 
 **Packages.** Content-hashed archives, Ed25519 signatures, registry index
 signatures, pinned keys and keyrings. The package must match the request,
-and extraction cannot escape its directory.
+and extraction cannot escape its directory. A registry reached over HTTP
+(`[registry] url`, served by `resid-pkg serve`) is held to exactly the
+same checks as one on disk: a successful download is never a reason to
+trust anything.
+
+**TLS.** The client authenticates the server against a trust store — a
+PEM bundle or a directory of DER certificates — requiring that the leaf
+names the connected host, is in date, and chains to a root in the store
+through the intermediates the server sent. With no store it trusts
+nothing; there is no way to turn the check off.
 
 **Provenance.** Every release binary carries a signed record binding
 source, code and sidecars; `residc verify` checks it.
@@ -54,8 +63,9 @@ through two rebuilds from source.
 
 ## Not guaranteed
 
-- The TLS 1.3 client does not authenticate servers (no trust store). Do
-  not use it where an active attacker matters.
+- TLS chain validation covers ECDSA P-256 and RSA PKCS#1 v1.5
+  certificate signatures only, does not require intermediates to be CAs,
+  and does no revocation checking.
 - Constant-time behavior of compiled code is not verified.
 - DER, X.509 and HPACK parsers abort on malformed input instead of
   returning an error.
