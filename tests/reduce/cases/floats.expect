@@ -1,0 +1,9 @@
+has: println(f"{0.30000000000000004}");
+has: println(f"{0.3333333333333333}");
+has: println(f"{0.020000000000000004}");
+has: println(f"{0.1}");
+has: println(f"{-0.1}");
+has: println(f"{1.1}");
+has: println(f"{true}");
+lacks: FloatToString
+lacks: f64_add

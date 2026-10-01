@@ -347,9 +347,106 @@ Str rd_render_int(Str v) {
 
 // Source text of a known value with exactly its code-generator type, or ""
 // when it has no literal form.
+
+// ─── Float values (spec §6.2, §36) ────────────────────────────────────
+//
+// A known Float(64) rides the value model as its IEEE-754 bit pattern,
+// written as a signed decimal. Carrying the pattern and folding on real
+// Float registers is what keeps a reduced Float and an unreduced one the
+// same double (spec §36): `0.1 + 0.2` reduces to the bits of
+// 0.30000000000000004, never to 0.3. Float(16), Float(32) and Float(128)
+// are not carried, so an operation on one stays residual.
+
+pub Bool rd_is_f64(Str t) { return t == "Float" || t == "Float(64)"; }
+
+// The double a pattern denotes, and the pattern a double denotes.
+pub Float rd_f64(Str bits) { return resid_raw_bits_f64(rd_atoi(bits)); }
+pub Str rd_f64_bits(Float f) { return rd_itoa(resid_raw_f64_bits(f)); }
+
+// The shortest text that reads back as `f` (spec §14.2).
+Str rd_f64_short(Float f) { return resid_fmt_style(f, 0); }
+
+// Text a Float may be written as: the digits of a value, never a name
+// (`nan`, `inf`) and never an exponent, which Resid has no literal for
+// (`1e+42` is text the parser would refuse).
+Bool rd_f64_writable(Str t) {
+    Int n = str_len(t);
+    if (n == 0) { return false; }
+    Int c = str_char_at(t, 0);
+    if (!((c >= 48 && c <= 57) || c == 45)) { return false; }
+    return !str_contains(t, "e") && !str_contains(t, "E");
+}
+
+// A float literal's pattern, or "" when the text is not a float. The
+// parse is the runtime's own c_strtod, so the pattern is the one the
+// same literal gets at run time.
+pub Str rd_f64_of_lit(Str lit) {
+    if (!str_is_float(lit) || !rd_f64_writable(lit)) { return ""; }
+    return rd_f64_bits(str_parse_float(lit));
+}
+
+// An integer operand of a Float operation becomes the Float of its own
+// text (spec §6.2). Past 2^53 the trip is not exact, so the fold stays
+// residual rather than quietly rounding (spec §36).
+Str rd_f64_of_int(Str digits) {
+    Str d = if (str_starts_with(digits, "-")) { str_slice(digits, 1, str_len(digits)) } else { digits };
+    if (str_len(d) > 15) { return ""; }
+    return rd_f64_bits(str_parse_float(digits));
+}
+
+// One operand's pattern: a Float is its own, an integer beside a Float
+// becomes one, anything else has no pattern here.
+Str rd_f64_operand(Str v, Str t) {
+    if (rd_is_f64(t)) { return v; }
+    if (rd_is_int_ty(t)) { return rd_f64_of_int(v); }
+    return "";
+}
+
+type F2 = { Bool ok; Float a; Float b; };
+
+F2 rd_f64_pair(RdV l, RdV r) {
+    Str a = rd_f64_operand(l.v, rd_norm_ty(l.ty));
+    Str b = rd_f64_operand(r.v, rd_norm_ty(r.ty));
+    return F2 {.ok = a != "" && b != "", .a = if (a == "") { 0.0 } else { rd_f64(a) }, .b = if (b == "") { 0.0 } else { rd_f64(b) }};
+}
+
+// A folded Float, written back as a literal that reads back as the same
+// double. A value whose shortest text is an exponent has no Resid
+// literal, so it stays residual rather than being written inexactly.
+RdV rd_f64_val(Float f, Str orig, Int pos, RdS st) {
+    Str sh = rd_f64_short(f);
+    if (!rd_f64_writable(sh)) { return rd_unk(orig, true, pos, st); }
+    Str lit = if (str_contains(sh, ".")) { sh } else { sh + ".0" };
+    return RdV {.k = true, .v = rd_f64_bits(f), .ty = "Float", .r = lit, .ch = true, .bad = false, .bd = false, .sx = "", .px = "", .pos = pos, .st = st};
+}
+
+// A Float operation or comparison over two known operands. The result is
+// the CPU's, so it is the double the run-time code would have produced.
+RdV rd_fold_f64(Str op, RdV l, RdV r, Str orig, Int pos, RdS st) {
+    F2 p = rd_f64_pair(l, r);
+    if (!p.ok) { return rd_unk(orig, true, pos, st); }
+    if (op == "<") { return rd_folded(rd_bool(p.a < p.b), "Bool", orig, true, pos, st); }
+    if (op == "<=") { return rd_folded(rd_bool(p.a <= p.b), "Bool", orig, true, pos, st); }
+    if (op == ">") { return rd_folded(rd_bool(p.a > p.b), "Bool", orig, true, pos, st); }
+    if (op == ">=") { return rd_folded(rd_bool(p.a >= p.b), "Bool", orig, true, pos, st); }
+    if (op == "==") { return rd_folded(rd_bool(p.a == p.b), "Bool", orig, true, pos, st); }
+    if (op == "!=") { return rd_folded(rd_bool(p.a != p.b), "Bool", orig, true, pos, st); }
+    // A division by zero is the run time's to do, not the reducer's.
+    if (op == "/") { if (p.b == 0.0) { return rd_unk(orig, true, pos, st); } return rd_f64_val(p.a / p.b, orig, pos, st); }
+    if (op == "+") { return rd_f64_val(p.a + p.b, orig, pos, st); }
+    if (op == "-") { return rd_f64_val(p.a - p.b, orig, pos, st); }
+    if (op == "*") { return rd_f64_val(p.a * p.b, orig, pos, st); }
+    return rd_unk(orig, true, pos, st);
+}
+
 pub Str rd_render(Str v, Str ty) {
     Str t = rd_norm_ty(ty);
     if (t == "Bool") { return v; }
+    if (rd_is_f64(t)) {
+        Str sh = rd_f64_short(rd_f64(v));
+        if (!rd_f64_writable(sh)) { return ""; }
+        return if (str_contains(sh, ".")) { sh } else { sh + ".0" };
+    }
     if (t == "Int") { return rd_render_int(v); }
     if (rd_is_int_ty(t)) { return "((" + t + ")" + rd_render_int(v) + ")"; }
     if (t == "Str") {
@@ -590,6 +687,7 @@ pub RdV rd_fold(Str op, RdV l, RdV r, Bool llit, Bool rlit, Str orig, Int pos, R
         Int wmax = if (nlt > nrt) { nlt } else { nrt };
         return rd_fold_int(op, rd_atoi(l.v), rd_atoi(r.v), rd_ity(rd_int_head(lt), wmax), nlt, nrt, orig, pos, st);
     }
+    if (rd_is_f64(lt) || rd_is_f64(rt)) { return rd_fold_f64(op, l, r, orig, pos, st); }
     return rd_unk(orig, true, pos, st);
 }
 

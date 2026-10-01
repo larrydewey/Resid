@@ -90,7 +90,7 @@ Int main() {
 A constraint type is a base type plus a predicate over `value`:
 
 ```resid
-type Percent = Float[value >= 0 && value <= 1];
+type Percent = Float[value >= 0.0 && value <= 1.0];
 type Even = Int where value % 2 == 0;
 
 @requires(args)
@@ -108,7 +108,10 @@ Int main() {
 
 A known value that breaks the constraint is a compile-time error (`E0301`);
 a runtime value that breaks it aborts at the binding with a message naming
-the constraint.
+the constraint. The predicate is reduced like any other expression, so a
+`Float` constraint is checked just as an `Int` one is — but only a `Float(64)`
+predicate reduces: another float width, a division by zero, or a value with no
+decimal literal to write it as stays a run-time check.
 
 ## Type aliases
 

@@ -1,0 +1,5 @@
+type Percent = Float[value >= 0.0 && value <= 1.0];
+Int main() {
+    Percent p = 1.5;
+    return 0;
+}

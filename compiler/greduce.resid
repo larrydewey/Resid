@@ -94,7 +94,7 @@ GXN gx_lit(GS st, Str lit, Int like, Str rule) {
     Int c0 = str_char_at(lit, 0);
     if (c0 == 34) { return gx_add_r(st, "lit", lit, "str", none, like, rule); }
     if (lit == "true" || lit == "false") { return gx_add_r(st, "lit", lit, "bool", none, like, rule); }
-    if (c0 >= 48 && c0 <= 57) { return gx_add_r(st, "lit", lit, "int", none, like, rule); }
+    if (c0 >= 48 && c0 <= 57) { return gx_add_r(st, "lit", lit, if (str_contains(lit, ".")) { "float" } else { "int" }, none, like, rule); }
     if (st.depth > 0) { return gx_n(st, like); }
     KP p = kg_expr(lit, kg_empty(), 0);
     Int n0 = kg_count(st.g);
@@ -283,6 +283,11 @@ GV gx_litv(GS st, Int id) {
         return gx_kv(d.v, "Str", id, false, st);
     }
     if (n.aux == "bool") { return gx_kv(n.text, "Bool", id, false, st); }
+    if (n.aux == "float") {
+        Str b = rd_f64_of_lit(n.text);
+        if (b == "") { return gx_unk(id, false, st); }
+        return gx_kv(b, "Float", id, false, st);
+    }
     // A Dec literal is not an operand the text reducer parses.
     if (n.aux == "dec") { return gx_badv(st); }
     return gx_unk(id, false, st);
@@ -331,6 +336,10 @@ GV gx_un(GXT ft, Int id, RdE env, GS st) {
     }
     // `+e` is e.
     if (op == "+") { return gx_with_r(gx_with_st(e, nr.st), nr.id, e.ch); }
+    // Negating a Float flips its sign bit, which the pattern carries.
+    if (op == "-" && e.k && rd_is_f64(e.ty)) {
+        return gx_folded_r(rd_f64_bits(0.0 - rd_f64(e.v)), "Float", nr.id, true, nr.st, "select");
+    }
     if (e.k && rd_is_int_ty(e.ty)) {
         Int iv = rd_atoi(e.v);
         if (op == "~") {

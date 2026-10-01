@@ -1,0 +1,25 @@
+// A Float folds to its bit pattern, so an operation over literals leaves
+// a literal behind rather than a call.
+Int main() {
+    Float a = 0.1;
+    Float b = 0.2;
+    Float s = a + b;
+    println(f"{s}");
+    Float q = 1.0 / 3.0;
+    println(f"{q}");
+    Float m = a * b;
+    println(f"{m}");
+    Float d = b - a;
+    println(f"{d}");
+    Float n = -a;
+    println(f"{n}");
+    Float w = a + 1;
+    println(f"{w}");
+    Bool c = a < b;
+    println(f"{c}");
+    // A division by zero is left to the run time, and a value with no
+    // Resid literal (an exponent) is left residual too.
+    Float z = 1.0 / 0.0;
+    println(f"{z}");
+    return 0;
+}

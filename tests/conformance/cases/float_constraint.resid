@@ -1,0 +1,13 @@
+// A constraint type over a Float discharges like one over an Int: the
+// predicate folds, and a known value that breaks it is E0301.
+type Percent = Float[value >= 0.0 && value <= 1.0];
+type Positive = Float[value > 0.0];
+type Small = Float[value < 10.0];
+
+Int main() {
+    Percent p = 0.42;
+    Positive q = 0.5;
+    Small s = 2.5;
+    println(f"{p} {q} {s} {p:percent}");
+    return 0;
+}
