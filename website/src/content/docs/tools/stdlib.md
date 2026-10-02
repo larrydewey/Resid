@@ -35,6 +35,7 @@ aGk=
 | `chain.resid` | X.509 chain validation and SAN matching |
 | `tlsmsg.resid`, `tls.resid` | TLS 1.3 message framing and the handshake key schedule (RFC 8446) |
 | `http.resid` | an HTTP/1.1 client (`http_get`) |
+| `httpserv.resid` | an HTTP/1.1 server: request parsing, keep-alive, chunked bodies, routing, `http_accept_loop` (see [HTTP server](/Resid/tools/http-server/)) |
 | `h2.resid` | HTTP/2 framing and HPACK |
 | `cose.resid` | CBOR (preferred serialization) and COSE Sign1 / Encrypt0 |
 | `dwarf.resid` | reading an ELF64 binary's symbols and DWARF 5 line table |

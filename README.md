@@ -100,8 +100,8 @@ The site at **https://larrydewey.github.io/Resid/** has four books:
   behavioralize your code.
 - **Reference**: the language, section by section.
 - **Stdlib & Tools**: the compiler, providers, the standard library, the
-  editor, the graph tools and debugger, the security model and the
-  benchmarks.
+  HTTP server, the editor, the graph tools and debugger, the security model
+  and the benchmarks.
 
 Every complete example in the documentation is compiled and run by
 `tools/check_doc_examples.py`. The normative specification is
@@ -114,10 +114,12 @@ guarantees and the tests behind each; `PROGRESS.md` is the build log.
 compiler/     the compiler, in Resid (driver.resid is the entry; lsp.resid the language server)
 runtime/rt/   the runtime, in Resid (lowered to build/boot/rt.ll)
 lib/          the standard library: crypto, Ed25519, X25519, P-256, RSA, AES-GCM,
-              ChaCha20-Poly1305, DER/X.509, TLS 1.3, HTTP/1.1 and /2, CBOR/COSE, DWARF,
+              ChaCha20-Poly1305, DER/X.509, TLS 1.3, an HTTP/1.1 client and server,
+              HTTP/2 framing, CBOR/COSE, DWARF,
               and date and time (calendar, spans, instants, IANA zones, strftime, clock)
 tools/        resid-why, resid-graph, resid-debug, resid-fmt, resid-pkg, resid-manifest
-tests/        conformance, reduction, provenance, runtime, graph, package and LSP suites
+tests/        conformance, reduction, provenance, runtime, graph, package, TLS, HTTP and LSP suites
+examples/     complete programs: an HTTP server, TLS and HTTP/2 clients, a lexer and parser
 bench/suite/  the cross-language benchmark suite
 website/      the documentation site (Astro Starlight)
 editors/      the VS Code extension

@@ -1,0 +1,16 @@
+// A read-only network grant is enough to listen on loopback, accept and
+// connect: only a public bind writes (see err_network_readonly_listen).
+@requires(network(readonly))
+Int main() {
+    Int lfd = resid_tcp_listen(0);
+    Int port = resid_tcp_bound_port(lfd);
+    Int c = resid_tcp_connect("127.0.0.1", port);
+    Int a = resid_tcp_accept(lfd);
+    _ = resid_tcp_send(c, "ping");
+    List(Int) got = resid_tcp_recv_some(a, 16);
+    println(f"{port > 0} {got.len()} {got}");
+    _ = resid_tcp_close(a);
+    _ = resid_tcp_close(c);
+    _ = resid_tcp_close(lfd);
+    return 0;
+}

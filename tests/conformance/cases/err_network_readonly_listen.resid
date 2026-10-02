@@ -1,0 +1,9 @@
+// network(readonly) covers connecting out and a loopback listener, not
+// binding an address other machines can reach: exposing a port is a write.
+import "httpserv.resid";
+
+@requires(network(readonly))
+Int main() {
+    Int lfd = http_listen_at("0.0.0.0", 0);
+    return if (lfd < 0) { 1 } else { 0 };
+}

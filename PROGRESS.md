@@ -13,7 +13,7 @@
   self-compile fixed point from the committed seed with no Rust. The
   pipeline is parse → resolve → check → reduce → lower on the knowledge
   graph (PLAN-graph-ir G0–G7 done, §0y). Self-hosted suites: conformance
-  338, reduce 19, provenance 21, graph 621, pkg 62, tls 63, runtime 12, lsp 18.
+  341, reduce 19, provenance 56, graph 627, pkg 62, tls 89, runtime 12, http 2, lsp 18.
   The Rust pipeline (`bootstrap/rust-stage0/`) and `tools/resid-lsp-full`, which
   was built on its crates, were deleted on 2026-09-26; both are in git
   history.
@@ -292,6 +292,62 @@ the reducer's own: `budget` (fuel, steps or specs), `loop` (an identical
 re-entry) and `whistle` (a generalized specialization), recorded against
 the call and inherited along derive edges. Self-compile: 2,517 budget and
 605 whistle reasons; debug peak 690MB.
+
+### 0zu. An HTTP/1.1 server, and `network(readonly)` (2026-10-02)
+
+`lib/httpserv.resid` is an HTTP/1.1 server in Resid over `List(Int)`
+buffers: request line and header parsing (lower-cased names, repeated
+fields joined), `Content-Length` and chunked bodies (extensions and
+trailers read and dropped), keep-alive and pipelining (bytes read past one
+request carry over to the next), `HEAD`, 204 and 304 without bodies, a
+router (`http_route`, `:name` and a final `*`), query and percent
+decoding, and an accept loop. Concurrency is `spawn`: worker regions run
+`http_accept_loop` on one listener. `examples/http_server.resid` is a full
+server (workers, static files under a root, `--public`).
+
+**Refused, not resolved:** `Transfer-Encoding` with `Content-Length`, any
+coding but a final `chunked` (501), a `Content-Length` that is not digits
+or whose repeats disagree, obsolete line folding, whitespace before a
+colon, no `Host` in 1.1, versions other than 1.0/1.1 (505). `HttpLimits`
+bounds head (431), body (413) and requests per connection.
+
+**Runtime:** `resid_tcp_listen_at(host, port)` binds an interface address
+(the loopback-only `resid_tcp_listen` now shares its bind with it, and the
+backlog went from 16 to 128); `resid_tcp_recv_some(fd, max)` returns what
+one receive yields, since a server cannot know a request's length before
+parsing it; `resid_tcp_shutdown(fd)` half-closes. Closing a socket with
+unread bytes makes the kernel reset it and the peer loses the reply, which
+is what the in-process test hit on its 431 case; `http_close` now
+half-closes, drains (bounded) and closes.
+
+**Capabilities:** `network` takes modes. `network(readonly)` covers
+connecting, loopback listening, accepting, sending and receiving;
+`resid_tcp_listen_at` is the one write (`gk_builtin_write`, `network!` in
+the force-time guard). So a server's workers spawn with
+`network(readonly)` and only the bind needs `network`.
+
+**Tests:** `tests/http/run.sh` (in-process roundtrip; `client.py` drives
+the example over real sockets: pipelining 20 requests, 77 KB echoed with
+both body framings, path safety, eleven refusals, twelve concurrent
+keep-alive clients), conformance `network_readonly_loopback` and
+`err_network_readonly_listen`. Docs: the site's HTTP server page, the
+providers table of TCP builtins, SECURITY.md's HTTP server section, and
+LSP completions for the TCP builtins.
+
+**Found on the way:** a top-level function named `get` is taken by method
+sugar for `m.get(k)` on a `Map`, also inside an imported library, so the
+library's call graph (and its authority) changes with the program's names.
+Not fixed here, and it errs on the safe side (a spurious E0219, never a
+missing one); the site example was renamed.
+
+**And a folding bug:** the reducer read a wrapping conversion's width from
+the name after dropping one character too many, so `wrapping_u16(70000)`
+folded as `UInt(6)` (48), `wrapping_u32(-1)` as 3 and `wrapping_u64(-1)`
+as 15, while the same calls on runtime values were right; `wrapping_u8`
+and every signed form never folded at all. Fixed in `rd_int_helper`, and
+a fold whose result the evaluator cannot carry (`2^64 - 1`) now stays
+residual instead of crashing the compiler. Conformance
+`wrapping_conv_fold` covers known and runtime arguments at every width.
 
 ### 0zt. `residc verify` tells evidence from attestation (2026-10-02)
 

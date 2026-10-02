@@ -3928,7 +3928,9 @@ Str gk_builtin_family(Str n) {
 }
 
 // Builtins that change state a read-only grant does not cover.
-Bool gk_builtin_write(Str n) { return n == "resid_term_raw" || n == "resid_term_restore" || n == "resid_clock_sleep_ns"; }
+// Writes under a moded family: raw mode, sleeping, and binding a listener
+// to an address other than loopback (exposing a port is a write).
+Bool gk_builtin_write(Str n) { return n == "resid_term_raw" || n == "resid_term_restore" || n == "resid_clock_sleep_ns" || n == "resid_tcp_listen_at"; }
 
 // Runtime internals that free or move memory the program may still see
 // (spec §5: storage is never exposed). Only the compiler's own source may
@@ -4211,7 +4213,7 @@ Str need_union(Str a, List(Str) b, Int i) {
 Str gk_direct(GKF f, Int i, Str acc) {
     if (i >= f.provs.len()) { return acc; }
     Str fam = f.provs[i];
-    Bool ro = ((is_prov_family(fam) || fam == "terminal") && !gk_writes_fam(f.writes, fam, 0)) && fam != "process";
+    Bool ro = ((is_prov_family(fam) || fam == "terminal" || fam == "network") && !gk_writes_fam(f.writes, fam, 0)) && fam != "process";
     return gk_direct(f, i + 1, need_add(acc, if (ro) { fam + ":ro" } else { fam }));
 }
 

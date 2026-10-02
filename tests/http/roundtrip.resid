@@ -1,0 +1,112 @@
+// A server region and a client in one process: keep-alive, HEAD, chunked
+// and Content-Length bodies, routing, query strings, and the rejections.
+import "httpserv.resid";
+import "http.resid";
+
+HttpReply handle(HttpRequest r) {
+    Map(Str, Str) none = {};
+    Map(Str, Str) hello = http_route("/hello/:name", r.path) else { none };
+    if (hello.len() > 0) {
+        return http_reply_text(200, "text/plain", "hello " + (hello.get("name") else { "?" }) + "\n");
+    }
+    if (r.path == "/echo") {
+        return http_reply_bytes(200, "application/octet-stream", r.body);
+    }
+    if (r.path == "/count") {
+        return http_reply_text(200, "text/plain", f"{r.body.len()} " + http_header(r, "X-Tag") + "\n");
+    }
+    if (r.path == "/q") {
+        return http_reply_text(200, "text/plain", http_query_param(r.query, "a") + "|" + http_query_param(r.query, "b") + "\n");
+    }
+    Map(Str, Str) files = http_route("/files/*", r.path) else { none };
+    if (files.len() > 0) {
+        return http_with_header(http_reply_text(200, "text/plain", (files.get("*") else { "" }) + "\n"), "X-Route", "files");
+    }
+    if (r.path == "/nothing") { return http_reply_empty(204); }
+    return http_reply_status(404);
+}
+
+// Send `req` on a fresh connection and return the raw reply.
+@requires(network)
+Str once(Int port, Str req) {
+    Int fd = resid_tcp_connect("127.0.0.1", port);
+    if (fd < 0) { return "connect failed"; }
+    _ = resid_tcp_send(fd, req);
+    Str out = resid_tcp_recv_all(fd);
+    _ = resid_tcp_close(fd);
+    return out;
+}
+
+// Several requests on one connection, reading each reply by its length.
+@requires(network)
+List(Str) pipelined(Int fd, List(Str) reqs, Int i, List(Str) acc) {
+    if (i >= reqs.len()) { return acc; }
+    _ = resid_tcp_send(fd, reqs[i]);
+    Str head = http_recv_head(fd);
+    Str cl = http_header_value(head, "content-length");
+    Int n = if (str_is_int(str_trim(cl))) { str_parse_int(str_trim(cl)) } else { 0 };
+    Bool has_body = n > 0 && !str_starts_with(reqs[i], "HEAD");
+    Str body = if (has_body) { http_recv_count(fd, n) } else { "" };
+    Str status = str_slice(head, 9, 12);
+    Str conn = http_header_value(head, "connection");
+    return pipelined(fd, reqs, i + 1, acc.concat([status + " " + conn + " " + str_replace(body, "\n", "")]));
+}
+
+Str status_of(Str raw) { return str_slice(raw, 9, 12); }
+
+Str body_of(Str raw) {
+    Int at = str_index_of(raw, "\r\n\r\n", 0);
+    return if (at < 0) { "" } else { str_replace(str_slice(raw, at + 4, str_len(raw)), "\n", "") };
+}
+
+@requires(network)
+Int main() {
+    Int lfd = http_listen(0);
+    if (lfd < 0) { println("listen failed"); return 1; }
+    Int port = http_bound_port(lfd);
+    HttpLimits lim = HttpLimits { .head_max = 2048, .body_max = 4096, .requests_max = 100 };
+    Result(Int, RegionError) worker = spawn (network(readonly)) {
+        return http_accept_loop(lfd, lambda(r) { handle(r) }, lim, 12);
+    };
+    Str host = "Host: x\r\n";
+    Str close = "Connection: close\r\n\r\n";
+    // 1: routing with a capture
+    Str r1 = once(port, "GET /hello/world HTTP/1.1\r\n" + host + close);
+    println(status_of(r1) + " " + body_of(r1));
+    // 2: Content-Length body echoed
+    Str r2 = once(port, "POST /echo HTTP/1.1\r\n" + host + "Content-Length: 5\r\n" + close + "abcde");
+    println(status_of(r2) + " " + body_of(r2));
+    // 3: chunked body with an extension and a trailer
+    Str r3 = once(port, "POST /count HTTP/1.1\r\n" + host + "X-Tag: t1\r\nX-Tag: t2\r\nTransfer-Encoding: chunked\r\n" + close + "4;ext=1\r\nWiki\r\n5\r\npedia\r\n0\r\nExpires: never\r\n\r\n");
+    println(status_of(r3) + " " + body_of(r3));
+    // 4: query string decoding
+    Str r4 = once(port, "GET /q?a=x%20y&b=1+2&c=3 HTTP/1.1\r\n" + host + close);
+    println(status_of(r4) + " " + body_of(r4));
+    // 5: trailing wildcard and an added header
+    Str r5 = once(port, "GET /files/a/b.txt HTTP/1.1\r\n" + host + close);
+    println(status_of(r5) + " " + body_of(r5) + " " + http_header_value(r5, "x-route"));
+    // 6: keep-alive: three requests on one connection, HEAD among them
+    Int fd = resid_tcp_connect("127.0.0.1", port);
+    List(Str) replies = pipelined(fd, [
+        "GET /hello/a HTTP/1.1\r\n" + host + "\r\n",
+        "HEAD /hello/b HTTP/1.1\r\n" + host + "\r\n",
+        "GET /nothing HTTP/1.1\r\n" + host + "\r\n",
+        "GET /missing HTTP/1.0\r\n" + host + "\r\n"
+    ], 0, []);
+    println(str_join(replies, ";"));
+    Str after = resid_tcp_recv_all(fd);
+    println(f"closed after 1.0: {str_len(after) == 0}");
+    _ = resid_tcp_close(fd);
+    // 7: rejections
+    Str e1 = once(port, "GET /x HTTP/1.1\r\n\r\n");                                  // no Host
+    Str e2 = once(port, "GET /x HTTP/2.0\r\n" + host + close);                        // version
+    Str e3 = once(port, "POST /echo HTTP/1.1\r\n" + host + "Content-Length: 5\r\nTransfer-Encoding: chunked\r\n" + close + "abcde");
+    Str e4 = once(port, "POST /echo HTTP/1.1\r\n" + host + "Content-Length: 9999\r\n" + close);
+    Str e5 = once(port, "POST /echo HTTP/1.1\r\n" + host + "Transfer-Encoding: gzip\r\n" + close);
+    Str e6 = once(port, "GET /x HTTP/1.1\r\n" + host + "X-Pad: " + str_repeat("a", 3000) + "\r\n" + close);
+    println(status_of(e1) + " " + status_of(e2) + " " + status_of(e3) + " " + status_of(e4) + " " + status_of(e5) + " " + status_of(e6));
+    Int served = worker else { -1 };
+    println(f"served {served}");
+    _ = resid_tcp_close(lfd);
+    return 0;
+}

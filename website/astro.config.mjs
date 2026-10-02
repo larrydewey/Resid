@@ -95,6 +95,7 @@ export default defineConfig({
 							'tools/residc',
 							'tools/stdlib',
 							'tools/providers',
+							'tools/http-server',
 							'tools/editor',
 							'tools/why-graph-debug',
 							'tools/fmt-pkg',

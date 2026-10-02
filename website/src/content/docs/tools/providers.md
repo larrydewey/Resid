@@ -54,9 +54,24 @@ inherited.
 
 ## network
 
-The TCP builtins (`resid_tcp_connect(host, port)`, `resid_tcp_send`,
-`resid_tcp_recv_all`, `resid_tcp_close` and their byte variants) need
-`network`. `lib/http.resid` and `lib/tls.resid` are built on them.
+| Builtin | Returns | Mode |
+|---|---|---|
+| `resid_tcp_connect(host, port)` | a connected socket, or -1 | read |
+| `resid_tcp_send(fd, s)`, `resid_tcp_send_bin(fd, bytes)` | `Bool`; at most 1 MB of bytes per call | read |
+| `resid_tcp_recv_all(fd)` | `Str`: everything until the peer closes, at most 4 MB | read |
+| `resid_tcp_recv_bin(fd, n)` | `List(Int)`: exactly `n` bytes, zero-filled past EOF | read |
+| `resid_tcp_recv_some(fd, max)` | `List(Int)`: what one receive returns, empty at EOF or timeout | read |
+| `resid_tcp_listen(port)` | a listener on 127.0.0.1 (`0` = any free port), or -1 | read |
+| `resid_tcp_listen_at(host, port)` | a listener on an interface address such as `"0.0.0.0"`, or -1 | write |
+| `resid_tcp_bound_port(lfd)` | the port a listener bound | read |
+| `resid_tcp_accept(lfd)` | an accepted connection, or -1 | read |
+| `resid_tcp_shutdown(fd)` | `Bool`: no more sends; receives time out after 2 s | read |
+| `resid_tcp_close(fd)` | `Bool` | read |
+
+Sockets have a 30 s receive timeout. `network(readonly)` grants every row
+marked read: exposing a port to other machines is the only write.
+`lib/http.resid`, `lib/httpserv.resid` and `lib/tls.resid` are built on
+these builtins.
 
 ## terminal
 

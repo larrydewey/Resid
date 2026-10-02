@@ -842,8 +842,10 @@ pub RdI rd_int_helper(Str name) {
     if (op == "div") { return RdI {.flavor = fl, .op = "/", .uns = uns, .conv = 0}; }
     // `wrapping_i8` and friends: a conversion to the width the name
     // carries, not arithmetic.
+    // The width follows the `u` or `i`: `wrapping_u64` is UInt(64).
     if (fl != "wrap") { return none; }
-    Str w = if (uns) { str_slice(op, 1, str_len(op)) } else { op };
+    if (!uns && !str_starts_with(rest, "i")) { return none; }
+    Str w = str_slice(rest, 1, str_len(rest));
     if (w == "" || !rd_all_digits(w, 0, str_len(w))) { return none; }
     return RdI {.flavor = fl, .op = "conv", .uns = uns, .conv = str_parse_int(w)};
 }
@@ -858,7 +860,10 @@ pub RdV rd_builtin_int(Str name, RdA a, Str orig, Int pos, RdS st) {
     if (h.op == "conv") {
         if (a.vs.len() != 1) { return none; }
         Str to = rd_ity(if (h.uns) { "UInt" } else { "Int" }, h.conv);
-        return rd_folded(rd_bits_ty(rd_atoi(a.vs[0]), to), to, orig, a.ch, pos, st);
+        // A result the evaluator cannot carry (2^64 - 1) stays residual.
+        Str bits = rd_bits_ty(rd_atoi(a.vs[0]), to);
+        if (bits == "") { return none; }
+        return rd_folded(bits, to, orig, a.ch, pos, st);
     }
     // Arithmetic: two operands of one integer type, and the form the
     // name gives them.

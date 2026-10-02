@@ -30,8 +30,13 @@ Printing, reading stdin and OS randomness need no capability.
 
 `@requires` entries take the same modes as sandboxes: `readonly` or
 `readwrite` (the default). A read-only grant does not cover a write
-(filesystem write verbs, `process.run`, terminal raw mode, `clock.sleep_ns`). An unknown family or mode is an
-error (`E0213`).
+(filesystem write verbs, `process.run`, terminal raw mode, `clock.sleep_ns`,
+and a listener bound to an address other than loopback). An unknown family
+or mode is an error (`E0213`).
+
+`network(readonly)` covers connecting out, listening on 127.0.0.1,
+accepting, sending and receiving. Binding a listener other machines can
+reach (`resid_tcp_listen_at`, `http_listen_at`) is the one network write.
 
 ## Sandboxes and attenuation
 

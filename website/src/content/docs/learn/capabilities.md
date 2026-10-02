@@ -60,7 +60,10 @@ A family can be narrowed with a mode: `filesystem(readonly)` covers the
 reading verbs only; a write needs `filesystem` or `filesystem(readwrite)`.
 `terminal(readonly)` covers the TTY and window-size queries but not raw
 mode. `clock(readonly)` covers reading the clock but not sleeping: reading
-time observes it, sleeping consumes it.
+time observes it, sleeping consumes it. `network(readonly)` covers
+connecting out and everything a server does on a loopback listener; only
+binding an address other machines can reach needs the full `network`, so a
+server's worker regions can run with `network(readonly)`.
 
 ## Sandboxes
 

@@ -1159,13 +1159,24 @@ only where `main` (or a `test` block) declares it:
 
 @requires entries take the same modes as sandboxes; a
 read-only grant does not cover a write (filesystem write
-verbs, process.run, clock.sleep_ns). Families:
+verbs, process.run, clock.sleep_ns, terminal raw mode,
+binding a listener to an address other than loopback).
+Families:
 
   filesystem, environment, args, process   (providers)
   clock                                   (provider)
   network      TCP builtins
   terminal     TTY and raw-mode builtins
   process      also the native debugger builtins
+
+network(readonly) covers connecting out, listening on
+127.0.0.1, accepting, sending and receiving: everything a
+program does over connections it opened or accepted.
+Exposing a port to other machines (resid_tcp_listen_at, a
+bind to any address but loopback) is the one network
+write, so it needs the full grant. A server's workers can
+then run under network(readonly) while only the code that
+binds the public listener holds network.
 
 Writing to stdout/stderr, reading stdin and OS randomness
 are not capabilities.
@@ -1783,7 +1794,10 @@ lib/tlsmsg.resid (handshake framing), lib/chain.resid
 (certificate parsing, chain validation and the server
 trust store), lib/x509.resid and lib/der.resid,
 lib/h2.resid (HTTP/2 framing and HPACK), lib/http.resid
-(an HTTP/1.1 client). The trust store is a PEM bundle or a
+(an HTTP/1.1 client), lib/httpserv.resid (an HTTP/1.1
+server: request parsing with Content-Length and chunked
+bodies, keep-alive and pipelining, a router, and an accept
+loop that spawn regions share on one listener). The trust store is a PEM bundle or a
 directory of DER certificates, and it is the whole of a
 server's identity: a client given no store trusts nothing
 and there is no way to ask it to trust anyway.

@@ -1,0 +1,567 @@
+// ─── lib/httpserv.resid — HTTP/1.1 server in pure Resid ─────────────────
+// Request parsing (Content-Length and chunked bodies, keep-alive), a
+// response writer, a path router and an accept loop. The runtime provides
+// only sockets: resid_tcp_listen / resid_tcp_listen_at, resid_tcp_accept,
+// resid_tcp_recv_some, resid_tcp_send_bin, resid_tcp_shutdown and
+// resid_tcp_close.
+//
+// Capabilities: everything here is `network(readonly)` — accepting and
+// answering connections on a listener you already hold is reading from the
+// network — except `http_listen_at`, which exposes a port on an address
+// other machines can reach and so needs the full `network` grant.
+//
+// Concurrency is the caller's: `http_accept_loop` serves one connection at
+// a time, so a server spawns as many regions running it on the same
+// listener as it wants workers (the kernel hands each connection to one
+// of them). The spawn lists the handler's capabilities, which this library
+// cannot know. See examples/http_server.resid.
+
+// A parsed request. `headers` keys are lower-cased; repeated fields are
+// joined with ", ". `ok` is false when the request was rejected, with
+// `status` the code the connection was answered with (400, 413, 431, 501, 505).
+type HttpRequest = {
+    Str method; Str target; Str path; Str query; Str version;
+    Map(Str, Str) headers; List(Int) body;
+    Bool keep_alive; Bool ok; Int status;
+};
+
+// What a handler returns. `headers` are complete "Name: value" lines without
+// CRLF; Content-Length and Connection are added by the writer.
+type HttpReply = { Int status; List(Str) headers; List(Int) body; };
+
+// Bounds a connection is held to.
+type HttpLimits = { Int head_max; Int body_max; Int requests_max; };
+
+// 64 KiB of head, 8 MiB of body, 1000 requests per connection.
+pub HttpLimits http_limits() {
+    return HttpLimits { .head_max = 65536, .body_max = 8388608, .requests_max = 1000 };
+}
+
+// ─── Listening ──────────────────────────────────────────────────────────
+
+// A loopback listener on `port` (0 = any free port), or -1.
+@requires(network(readonly))
+pub Int http_listen(Int port) { return resid_tcp_listen(port); }
+
+// A listener on `host`:`port` where `host` is an interface address such
+// as "0.0.0.0", or -1. Exposing a port is a network write.
+@requires(network)
+pub Int http_listen_at(Str host, Int port) { return resid_tcp_listen_at(host, port); }
+
+// The port a listener bound, or -1.
+@requires(network(readonly))
+pub Int http_bound_port(Int lfd) { return resid_tcp_bound_port(lfd); }
+
+// ─── Bytes and text ─────────────────────────────────────────────────────
+
+// UTF-8 bytes of a Str.
+pub List(Int) http_bytes(Str s) { return hs_enc_at(s, 0, str_len(s), ListBuf()); }
+
+List(Int) hs_enc_at(Str s, Int i, Int n, ListBuf(Int) acc) {
+    if (i >= n) { return acc.finish(); }
+    return hs_enc_at(s, i + 1, n, hs_enc_cp(acc, str_char_at(s, i)));
+}
+
+ListBuf(Int) hs_enc_cp(ListBuf(Int) b, Int c) {
+    if (c < 128) { return b.push(c); }
+    if (c < 2048) { return b.push(192 | (c >> 6)).push(128 | (c & 63)); }
+    if (c < 65536) { return b.push(224 | (c >> 12)).push(128 | ((c >> 6) & 63)).push(128 | (c & 63)); }
+    return b.push(240 | (c >> 18)).push(128 | ((c >> 12) & 63)).push(128 | ((c >> 6) & 63)).push(128 | (c & 63));
+}
+
+// Bytes [i, e) decoded as UTF-8; a malformed sequence decodes to U+FFFD.
+pub Str http_text(List(Int) b, Int i, Int e) { return hs_dec_at(b, i, e, StrBuf()); }
+
+Str hs_dec_at(List(Int) b, Int i, Int e, StrBuf acc) {
+    if (i >= e) { return acc.finish(); }
+    Int c = b[i];
+    if (c < 128) { return hs_dec_at(b, i + 1, e, acc.push_char(c)); }
+    Int k = if (c >= 240 && c < 248) { 3 } else { if (c >= 224) { 2 } else { if (c >= 192) { 1 } else { -1 } } };
+    if (k < 0 || i + k >= e) { return hs_dec_at(b, i + 1, e, acc.push_char(65533)); }
+    Int lead = if (k == 3) { c & 7 } else { if (k == 2) { c & 15 } else { c & 31 } };
+    Int cp = hs_dec_cont(b, i + 1, k, lead);
+    if (cp < 0) { return hs_dec_at(b, i + 1, e, acc.push_char(65533)); }
+    return hs_dec_at(b, i + 1 + k, e, acc.push_char(cp));
+}
+
+Int hs_dec_cont(List(Int) b, Int i, Int k, Int acc) {
+    if (k == 0) { return acc; }
+    Int c = b[i];
+    if ((c & 192) != 128) { return -1; }
+    return hs_dec_cont(b, i + 1, k - 1, acc * 64 + (c & 63));
+}
+
+// Bytes [i, e) as text, one Str char per byte (header fields are ASCII;
+// anything else arrives as U+0080..U+00FF and is never confused with it).
+Str hs_ascii(List(Int) b, Int i, Int e, StrBuf acc) {
+    if (i >= e) { return acc.finish(); }
+    return hs_ascii(b, i + 1, e, acc.push_char(b[i]));
+}
+
+// First index at or after `from` where `pat` occurs in `b`, or -1.
+Int hs_find(List(Int) b, List(Int) pat, Int from) {
+    Int n = b.len();
+    Int m = pat.len();
+    if (from + m > n) { return -1; }
+    if (hs_match_at(b, pat, from, 0, m)) { return from; }
+    return hs_find(b, pat, from + 1);
+}
+
+Bool hs_match_at(List(Int) b, List(Int) pat, Int at, Int j, Int m) {
+    if (j >= m) { return true; }
+    if (b[at + j] != pat[j]) { return false; }
+    return hs_match_at(b, pat, at, j + 1, m);
+}
+
+// ─── Reading from the socket ────────────────────────────────────────────
+
+// A buffer of bytes read ahead of what has been consumed. `eof` is set once
+// the peer closed or the receive timed out.
+type HsBuf = { List(Int) data; Bool eof; };
+
+// Read more into `b`, at most 16 KiB.
+@requires(network(readonly))
+HsBuf hs_fill(Int fd, HsBuf b) {
+    if (b.eof) { return b; }
+    List(Int) more = resid_tcp_recv_some(fd, 16384);
+    if (more.len() == 0) { return HsBuf { .data = b.data, .eof = true }; }
+    return HsBuf { .data = b.data.concat(more), .eof = false };
+}
+
+// Fill until `b` holds at least `n` bytes, EOF or `cap` exceeded.
+@requires(network(readonly))
+HsBuf hs_fill_to(Int fd, HsBuf b, Int n, Int cap) {
+    if (b.data.len() >= n || b.eof || b.data.len() > cap) { return b; }
+    return hs_fill_to(fd, hs_fill(fd, b), n, cap);
+}
+
+// Where the head ends (index of its CRLFCRLF), reading as needed. -1 at
+// EOF without one, -2 when the head would exceed `head_max`. `from` is
+// where the search resumes (nothing before it can hold the terminator).
+type HsHead = { HsBuf buf; Int end; };
+
+@requires(network(readonly))
+HsHead hs_read_head(Int fd, HsBuf b, Int from, Int head_max) {
+    Int at = hs_find(b.data, [13, 10, 13, 10], from);
+    if (at >= 0) {
+        return if (at + 4 > head_max) { HsHead { .buf = b, .end = -2 } } else { HsHead { .buf = b, .end = at } };
+    }
+    if (b.data.len() > head_max) { return HsHead { .buf = b, .end = -2 }; }
+    if (b.eof) { return HsHead { .buf = b, .end = -1 }; }
+    Int next_from = if (b.data.len() >= 3) { b.data.len() - 3 } else { 0 };
+    return hs_read_head(fd, hs_fill(fd, b), next_from, head_max);
+}
+
+// ─── Parsing ────────────────────────────────────────────────────────────
+
+// A request rejected before or while reading its body.
+HttpRequest hs_reject(Int status) {
+    Map(Str, Str) none = {};
+    return HttpRequest { .method = "", .target = "", .path = "", .query = "", .version = "", .headers = none, .body = [], .keep_alive = false, .ok = false, .status = status };
+}
+
+Bool hs_is_token(Str s, Int i) {
+    if (i >= str_len(s)) { return i > 0; }
+    Int c = str_char_at(s, i);
+    Bool sep = c <= 32 || c >= 127 || c == 40 || c == 41 || c == 44 || c == 47 || c == 58 || c == 59 || c == 60 || c == 61 || c == 62 || c == 63 || c == 64 || c == 91 || c == 92 || c == 93 || c == 123 || c == 125 || c == 34;
+    if (sep) { return false; }
+    return hs_is_token(s, i + 1);
+}
+
+// Header lines into the map; "" on success, else the rejecting status
+// as text ("400"). Obsolete line folding and whitespace before the colon
+// are refused (RFC 9112 §5.1-5.2).
+Str hs_headers(List(Str) lines, Int i, Map(Str, Str) acc, Int limit) {
+    if (i >= lines.len()) { return ""; }
+    if (i > limit) { return "431"; }
+    Str line = lines[i];
+    if (line == "") { return "400"; }
+    Int c0 = str_char_at(line, 0);
+    if (c0 == 32 || c0 == 9) { return "400"; }
+    Int colon = str_index_of(line, ":", 0);
+    if (colon <= 0) { return "400"; }
+    Str name = str_slice(line, 0, colon);
+    if (!hs_is_token(name, 0)) { return "400"; }
+    Str value = str_trim(str_slice(line, colon + 1, str_len(line)));
+    Str key = str_to_lower(name);
+    Option(Str) prior = acc.get(key);
+    Str merged = match prior { Some(old) => old + ", " + value, None => value };
+    return hs_headers(lines, i + 1, acc.insert(key, merged), limit);
+}
+
+// The map the lines make; built twice only on the error path.
+Map(Str, Str) hs_headers_map(List(Str) lines, Int i, Map(Str, Str) acc) {
+    if (i >= lines.len()) { return acc; }
+    Str line = lines[i];
+    Int colon = str_index_of(line, ":", 0);
+    Str key = str_to_lower(str_slice(line, 0, colon));
+    Str value = str_trim(str_slice(line, colon + 1, str_len(line)));
+    Option(Str) prior = acc.get(key);
+    Str merged = match prior { Some(old) => old + ", " + value, None => value };
+    return hs_headers_map(lines, i + 1, acc.insert(key, merged));
+}
+
+// Does a comma-separated header value list `want` (case-insensitive)?
+Bool hs_list_has(Str value, Str want) {
+    return hs_list_has_at(str_split(str_to_lower(value), ","), 0, want);
+}
+
+Bool hs_list_has_at(List(Str) parts, Int i, Str want) {
+    if (i >= parts.len()) { return false; }
+    if (str_trim(parts[i]) == want) { return true; }
+    return hs_list_has_at(parts, i + 1, want);
+}
+
+Bool hs_all_digits(Str s, Int i) {
+    if (i >= str_len(s)) { return i > 0; }
+    Int c = str_char_at(s, i);
+    if (c < 48 || c > 57) { return false; }
+    return hs_all_digits(s, i + 1);
+}
+
+// Parse the head (bytes [0, end) of `b`). The body is not read here.
+HttpRequest hs_parse_head(List(Int) b, Int end) {
+    Str head = hs_ascii(b, 0, end, StrBuf());
+    List(Str) lines = str_split(head, "\r\n");
+    List(Str) words = str_split(lines[0], " ");
+    if (words.len() != 3) { return hs_reject(400); }
+    Str method = words[0];
+    Str target = words[1];
+    Str version = words[2];
+    if (!hs_is_token(method, 0) || target == "") { return hs_reject(400); }
+    if (version != "HTTP/1.1" && version != "HTTP/1.0") {
+        return if (str_starts_with(version, "HTTP/")) { hs_reject(505) } else { hs_reject(400) };
+    }
+    Map(Str, Str) none = {};
+    Str herr = hs_headers(lines, 1, none, 256);
+    if (herr != "") { return hs_reject(str_parse_int(herr)); }
+    Map(Str, Str) headers = hs_headers_map(lines, 1, none);
+    if (version == "HTTP/1.1" && !headers.contains("host")) { return hs_reject(400); }
+    Int q = str_index_of(target, "?", 0);
+    Str path = if (q >= 0) { str_slice(target, 0, q) } else { target };
+    Str query = if (q >= 0) { str_slice(target, q + 1, str_len(target)) } else { "" };
+    Str conn = headers.get("connection") else { "" };
+    Bool keep = if (version == "HTTP/1.1") { !hs_list_has(conn, "close") } else { hs_list_has(conn, "keep-alive") };
+    return HttpRequest { .method = method, .target = target, .path = path, .query = query, .version = version, .headers = headers, .body = [], .keep_alive = keep, .ok = true, .status = 0 };
+}
+
+// How the body is delimited: -1 none, -2 chunked, -3 rejected (400),
+// -4 unsupported coding (501), else the Content-Length.
+Int hs_body_kind(HttpRequest r) {
+    Bool has_te = r.headers.contains("transfer-encoding");
+    Bool has_cl = r.headers.contains("content-length");
+    if (has_te && has_cl) { return -3; }
+    if (has_te) {
+        Str te = str_to_lower(r.headers.get("transfer-encoding") else { "" });
+        List(Str) codings = str_split(te, ",");
+        Str last = str_trim(codings[codings.len() - 1]);
+        if (last != "chunked") { return -4; }
+        return if (codings.len() == 1) { -2 } else { -4 };
+    }
+    if (!has_cl) { return -1; }
+    Str cl = r.headers.get("content-length") else { "" };
+    List(Str) cls = str_split(cl, ",");
+    Str first = str_trim(cls[0]);
+    if (!hs_all_digits(first, 0) || str_len(first) > 15) { return -3; }
+    if (!hs_cl_agree(cls, 1, first)) { return -3; }
+    return str_parse_int(first);
+}
+
+Bool hs_cl_agree(List(Str) cls, Int i, Str first) {
+    if (i >= cls.len()) { return true; }
+    if (str_trim(cls[i]) != first) { return false; }
+    return hs_cl_agree(cls, i + 1, first);
+}
+
+// A request with its body read, plus the bytes left over for the next one.
+type HsReq = { HttpRequest req; HsBuf rest; };
+
+HsReq hs_fail(Int status, HsBuf rest) {
+    return HsReq { .req = hs_reject(status), .rest = rest };
+}
+
+// The body after a parsed head; `b` starts at the body's first byte.
+@requires(network(readonly))
+HsReq hs_read_body(Int fd, HttpRequest r, HsBuf b, HttpLimits lim) {
+    Int kind = hs_body_kind(r);
+    if (kind == -3) { return hs_fail(400, b); }
+    if (kind == -4) { return hs_fail(501, b); }
+    if (kind == -1) { return HsReq { .req = r, .rest = b }; }
+    if (kind == -2) { return hs_read_chunked(fd, r, b, lim, []); }
+    if (kind > lim.body_max) { return hs_fail(413, b); }
+    HsBuf full = hs_fill_to(fd, b, kind, lim.body_max + 16384);
+    if (full.data.len() < kind) { return hs_fail(400, full); }
+    HttpRequest r2 = HttpRequest { .method = r.method, .target = r.target, .path = r.path, .query = r.query, .version = r.version, .headers = r.headers, .body = full.data[0..kind], .keep_alive = r.keep_alive, .ok = true, .status = 0 };
+    return HsReq { .req = r2, .rest = HsBuf { .data = full.data[kind..], .eof = full.eof } };
+}
+
+// Chunked coding: size-line, data, CRLF, ... , "0", trailers, CRLF.
+@requires(network(readonly))
+HsReq hs_read_chunked(Int fd, HttpRequest r, HsBuf b0, HttpLimits lim, List(Int) acc) {
+    HsHead ln = hs_read_line(fd, b0, 1024);
+    if (ln.end < 0) { return hs_fail(400, ln.buf); }
+    HsBuf b = ln.buf;
+    Str line = hs_ascii(b.data, 0, ln.end, StrBuf());
+    Int semi = str_index_of(line, ";", 0);
+    Str hexs = str_trim(if (semi >= 0) { str_slice(line, 0, semi) } else { line });
+    Int size = hs_hex(hexs, 0, 0);
+    if (size < 0) { return hs_fail(400, b); }
+    HsBuf after = HsBuf { .data = b.data[(ln.end + 2)..], .eof = b.eof };
+    if (size == 0) { return hs_chunk_trailers(fd, r, after, acc); }
+    if (acc.len() + size > lim.body_max) { return hs_fail(413, after); }
+    HsBuf full = hs_fill_to(fd, after, size + 2, lim.body_max + 16384);
+    if (full.data.len() < size + 2) { return hs_fail(400, full); }
+    if (full.data[size] != 13 || full.data[size + 1] != 10) { return hs_fail(400, full); }
+    return hs_read_chunked(fd, r, HsBuf { .data = full.data[(size + 2)..], .eof = full.eof }, lim, acc.concat(full.data[0..size]));
+}
+
+// Trailer fields up to the blank line are read and dropped.
+@requires(network(readonly))
+HsReq hs_chunk_trailers(Int fd, HttpRequest r, HsBuf b0, List(Int) acc) {
+    HsHead ln = hs_read_line(fd, b0, 8192);
+    if (ln.end < 0) { return hs_fail(400, ln.buf); }
+    HsBuf rest = HsBuf { .data = ln.buf.data[(ln.end + 2)..], .eof = ln.buf.eof };
+    if (ln.end > 0) { return hs_chunk_trailers(fd, r, rest, acc); }
+    HttpRequest r2 = HttpRequest { .method = r.method, .target = r.target, .path = r.path, .query = r.query, .version = r.version, .headers = r.headers, .body = acc, .keep_alive = r.keep_alive, .ok = true, .status = 0 };
+    return HsReq { .req = r2, .rest = rest };
+}
+
+// Index of the next CRLF (reading as needed); -1 at EOF, -2 past `max`.
+@requires(network(readonly))
+HsHead hs_read_line(Int fd, HsBuf b, Int max) {
+    Int at = hs_find(b.data, [13, 10], 0);
+    if (at >= 0) { return if (at > max) { HsHead { .buf = b, .end = -2 } } else { HsHead { .buf = b, .end = at } }; }
+    if (b.data.len() > max) { return HsHead { .buf = b, .end = -2 }; }
+    if (b.eof) { return HsHead { .buf = b, .end = -1 }; }
+    return hs_read_line(fd, hs_fill(fd, b), max);
+}
+
+// Hex digits to a value; -1 on a non-digit or an empty string.
+Int hs_hex(Str s, Int i, Int acc) {
+    if (i >= str_len(s)) { return if (i == 0) { -1 } else { acc }; }
+    if (i >= 8) { return -1; }
+    Int c = str_char_at(s, i);
+    Int d = if (c >= 48 && c <= 57) { c - 48 } else { if (c >= 97 && c <= 102) { c - 87 } else { if (c >= 65 && c <= 70) { c - 55 } else { -1 } } };
+    if (d < 0) { return -1; }
+    return hs_hex(s, i + 1, acc * 16 + d);
+}
+
+// One whole request off the connection: head, then body.
+@requires(network(readonly))
+HsReq hs_read_request(Int fd, HsBuf b0, HttpLimits lim) {
+    HsHead h = hs_read_head(fd, b0, 0, lim.head_max);
+    if (h.end == -2) { return hs_fail(431, h.buf); }
+    if (h.end < 0) { return hs_fail(0, h.buf); }
+    HttpRequest r = hs_parse_head(h.buf.data, h.end);
+    HsBuf body_start = HsBuf { .data = h.buf.data[(h.end + 4)..], .eof = h.buf.eof };
+    if (!r.ok) { return HsReq { .req = r, .rest = body_start }; }
+    return hs_read_body(fd, r, body_start, lim);
+}
+
+// ─── Replies ────────────────────────────────────────────────────────────
+
+pub Str http_reason(Int code) {
+    if (code == 200) { return "OK"; }
+    if (code == 201) { return "Created"; }
+    if (code == 204) { return "No Content"; }
+    if (code == 301) { return "Moved Permanently"; }
+    if (code == 302) { return "Found"; }
+    if (code == 304) { return "Not Modified"; }
+    if (code == 400) { return "Bad Request"; }
+    if (code == 401) { return "Unauthorized"; }
+    if (code == 403) { return "Forbidden"; }
+    if (code == 404) { return "Not Found"; }
+    if (code == 405) { return "Method Not Allowed"; }
+    if (code == 408) { return "Request Timeout"; }
+    if (code == 409) { return "Conflict"; }
+    if (code == 411) { return "Length Required"; }
+    if (code == 413) { return "Content Too Large"; }
+    if (code == 414) { return "URI Too Long"; }
+    if (code == 415) { return "Unsupported Media Type"; }
+    if (code == 431) { return "Request Header Fields Too Large"; }
+    if (code == 500) { return "Internal Server Error"; }
+    if (code == 501) { return "Not Implemented"; }
+    if (code == 503) { return "Service Unavailable"; }
+    if (code == 505) { return "HTTP Version Not Supported"; }
+    return "Unknown";
+}
+
+// A reply with a text body.
+pub HttpReply http_reply_text(Int status, Str content_type, Str body) {
+    return HttpReply { .status = status, .headers = ["Content-Type: " + content_type], .body = http_bytes(body) };
+}
+
+// A reply with a byte body.
+pub HttpReply http_reply_bytes(Int status, Str content_type, List(Int) body) {
+    return HttpReply { .status = status, .headers = ["Content-Type: " + content_type], .body = body };
+}
+
+// A bodyless reply.
+pub HttpReply http_reply_empty(Int status) {
+    return HttpReply { .status = status, .headers = [], .body = [] };
+}
+
+// `reply` with one more header line.
+pub HttpReply http_with_header(HttpReply reply, Str name, Str value) {
+    return HttpReply { .status = reply.status, .headers = reply.headers.concat([name + ": " + value]), .body = reply.body };
+}
+
+// The plain-text error page for a status.
+pub HttpReply http_reply_status(Int status) {
+    return http_reply_text(status, "text/plain; charset=utf-8", f"{status} " + http_reason(status) + "\n");
+}
+
+Str hs_header_lines(List(Str) hs, Int i, StrBuf acc) {
+    if (i >= hs.len()) { return acc.finish(); }
+    return hs_header_lines(hs, i + 1, acc.push(hs[i]).push("\r\n"));
+}
+
+// The wire bytes of a reply. A HEAD reply and a 204/304 carry no body;
+// Content-Length still names the body's length.
+pub List(Int) http_reply_wire(HttpReply reply, Bool keep_alive, Bool head_only) {
+    Int n = reply.body.len();
+    Str conn = if (keep_alive) { "keep-alive" } else { "close" };
+    Str head = f"HTTP/1.1 {reply.status} " + http_reason(reply.status) + "\r\n"
+        + hs_header_lines(reply.headers, 0, StrBuf())
+        + f"Content-Length: {n}\r\nConnection: " + conn + "\r\n\r\n";
+    Bool bodyless = head_only || reply.status == 204 || reply.status == 304 || (reply.status >= 100 && reply.status < 200);
+    return if (bodyless) { http_bytes(head) } else { http_bytes(head).concat(reply.body) };
+}
+
+// Send bytes, in pieces the runtime accepts (1 MiB).
+@requires(network(readonly))
+pub Bool http_send(Int fd, List(Int) b) {
+    Int n = b.len();
+    if (n <= 1048576) { return resid_tcp_send_bin(fd, b); }
+    if (!resid_tcp_send_bin(fd, b[0..1048576])) { return false; }
+    return http_send(fd, b[1048576..]);
+}
+
+// ─── Serving ────────────────────────────────────────────────────────────
+
+// Close a connection without losing the reply: half-close, drain what the
+// peer is still sending (bounded), then close. Closing with unread bytes
+// would reset the socket and discard the reply at the peer.
+@requires(network(readonly))
+pub Bool http_close(Int fd) {
+    _ = resid_tcp_shutdown(fd);
+    _ = hs_drain(fd, 32);
+    return resid_tcp_close(fd);
+}
+
+@requires(network(readonly))
+Int hs_drain(Int fd, Int rounds) {
+    if (rounds <= 0) { return 0; }
+    List(Int) got = resid_tcp_recv_some(fd, 16384);
+    if (got.len() == 0) { return 0; }
+    return hs_drain(fd, rounds - 1);
+}
+
+// Answer requests on `fd` until the connection closes or a bound is hit.
+// Returns the number answered.
+@requires(network(readonly))
+pub Int http_serve_conn(Int fd, HttpReply closure(HttpRequest) handler, HttpLimits lim) {
+    return hs_serve_at(fd, handler, lim, HsBuf { .data = [], .eof = false }, 0);
+}
+
+@requires(network(readonly))
+Int hs_serve_at(Int fd, HttpReply closure(HttpRequest) handler, HttpLimits lim, HsBuf b, Int served) {
+    if (served >= lim.requests_max) { return served; }
+    HsReq rq = hs_read_request(fd, b, lim);
+    HttpRequest r = rq.req;
+    if (!r.ok) {
+        if (r.status == 0) { return served; }
+        _ = http_send(fd, http_reply_wire(http_reply_status(r.status), false, false));
+        return served + 1;
+    }
+    HttpReply reply = handler(r);
+    Bool keep = r.keep_alive && served + 1 < lim.requests_max;
+    Bool sent = http_send(fd, http_reply_wire(reply, keep, r.method == "HEAD"));
+    if (!sent || !keep) { return served + 1; }
+    return hs_serve_at(fd, handler, lim, rq.rest, served + 1);
+}
+
+// Accept connections on `lfd` and serve each in turn; `max_conns` 0 means
+// until accept fails. Returns connections served, or -1 if accept failed.
+@requires(network(readonly))
+pub Int http_accept_loop(Int lfd, HttpReply closure(HttpRequest) handler, HttpLimits lim, Int max_conns) {
+    return hs_accept_at(lfd, handler, lim, max_conns, 0);
+}
+
+@requires(network(readonly))
+Int hs_accept_at(Int lfd, HttpReply closure(HttpRequest) handler, HttpLimits lim, Int max_conns, Int done) {
+    if (max_conns > 0 && done >= max_conns) { return done; }
+    Int c = resid_tcp_accept(lfd);
+    if (c < 0) { return if (max_conns > 0) { -1 } else { done }; }
+    _ = http_serve_conn(c, handler, lim);
+    _ = http_close(c);
+    return hs_accept_at(lfd, handler, lim, max_conns, done + 1);
+}
+
+// ─── Request helpers ────────────────────────────────────────────────────
+
+// A header's value ("" when absent); `name` in any case.
+pub Str http_header(HttpRequest r, Str name) {
+    return r.headers.get(str_to_lower(name)) else { "" };
+}
+
+// The request body as text.
+pub Str http_body_text(HttpRequest r) { return http_text(r.body, 0, r.body.len()); }
+
+// Percent-decoding; `+` becomes a space when `form` is set.
+pub Str http_url_decode(Str s, Bool form) { return hs_dec_url(s, 0, str_len(s), form, ListBuf()); }
+
+Str hs_dec_url(Str s, Int i, Int n, Bool form, ListBuf(Int) acc) {
+    if (i >= n) {
+        List(Int) bytes = acc.finish();
+        return http_text(bytes, 0, bytes.len());
+    }
+    Int c = str_char_at(s, i);
+    if (c == 43 && form) { return hs_dec_url(s, i + 1, n, form, acc.push(32)); }
+    if (c == 37 && i + 2 < n) {
+        Int v = hs_hex(str_slice(s, i + 1, i + 3), 0, 0);
+        if (v >= 0) { return hs_dec_url(s, i + 3, n, form, acc.push(v)); }
+    }
+    return hs_dec_url(s, i + 1, n, form, hs_enc_cp(acc, c));
+}
+
+// The first value of `name` in a query string ("" when absent).
+pub Str http_query_param(Str query, Str name) {
+    return hs_query_at(str_split(query, "&"), 0, name);
+}
+
+Str hs_query_at(List(Str) pairs, Int i, Str name) {
+    if (i >= pairs.len()) { return ""; }
+    Str p = pairs[i];
+    Int eq = str_index_of(p, "=", 0);
+    Str k = if (eq >= 0) { str_slice(p, 0, eq) } else { p };
+    if (http_url_decode(k, true) == name) {
+        return if (eq >= 0) { http_url_decode(str_slice(p, eq + 1, str_len(p)), true) } else { "" };
+    }
+    return hs_query_at(pairs, i + 1, name);
+}
+
+// ─── Routing ────────────────────────────────────────────────────────────
+
+// Match `path` against `pattern`, where a segment `:name` captures one
+// path segment and a trailing `*` the rest. The captures by name, or None.
+pub Option(Map(Str, Str)) http_route(Str pattern, Str path) {
+    Map(Str, Str) none = {};
+    return hs_route_at(str_split(pattern, "/"), str_split(path, "/"), 0, none);
+}
+
+Option(Map(Str, Str)) hs_route_at(List(Str) pat, List(Str) segs, Int i, Map(Str, Str) acc) {
+    if (i >= pat.len()) { return if (i >= segs.len()) { Some(acc) } else { None }; }
+    Str p = pat[i];
+    if (p == "*" && i == pat.len() - 1) {
+        Str rest = if (i < segs.len()) { str_join(segs[i..], "/") } else { "" };
+        return Some(acc.insert("*", rest));
+    }
+    if (i >= segs.len()) { return None; }
+    if (str_starts_with(p, ":") && str_len(p) > 1) {
+        if (segs[i] == "") { return None; }
+        return hs_route_at(pat, segs, i + 1, acc.insert(str_slice(p, 1, str_len(p)), http_url_decode(segs[i], false)));
+    }
+    if (p != segs[i]) { return None; }
+    return hs_route_at(pat, segs, i + 1, acc);
+}

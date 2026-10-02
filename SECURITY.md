@@ -10,6 +10,8 @@ them with:
     tests/runtime/run.sh           # runtime properties (C harnesses over rt.ll)
     tests/pkg/run.sh               # package signing, trust and ceilings
     tests/provenance/run.sh        # signed provenance trailers and residc verify
+    tests/tls/run.sh               # TLS server authentication over committed fixtures
+    tests/http/run.sh              # lib/httpserv.resid request parsing and limits
 
 ## Threat model
 
@@ -38,6 +40,7 @@ them with:
 | No ambient authority: every capability family a function uses, directly or through anything it calls, wraps in a closure, or runs as a `sort` behavior, is granted by its own `@requires` or its enclosing sandbox. Authority enters a program only where `main` (or a `test` block) declares it. | E0219, `gk_authority` in `compiler/gcheck.resid` | `err_authority_*` (provider, builtin, call, closure, lambda, method sugar, behavior, test block), `authority_granted` |
 | Effectful runtime builtins are capabilities too: TCP is `network`, the ptrace debugger is `process`, TTY queries and raw mode are `terminal`. | `gk_builtin_family` | `err_authority_ambient_builtin`, `term_requires_missing`, `readline_requires_terminal` |
 | `terminal(readonly)` covers the TTY and window-size queries only; raw mode and restoring it are writes, at compile time and in the force-time guard (`terminal!`). | `gk_builtin_write`, `provider_family_of_line` | `term_readonly_write`, `term_readonly_query` |
+| `network(readonly)` covers connecting out, listening on 127.0.0.1, accepting, sending, receiving and closing. Binding a listener to any other address (`resid_tcp_listen_at`, `http_listen_at`) exposes a port to other machines and is the one network write, at compile time and in the force-time guard (`network!`). A server's worker regions can therefore be spawned with `network(readonly)` while only the code that binds holds `network`. | `gk_builtin_write`, `gk_direct`, `provider_family_of_line` | `err_network_readonly_listen`, `network_readonly_loopback` |
 | Reading the clock is `clock`, an effect like any other: under Laws 8 and 9 the answer to "what time is it" is knowledge the program does not have, so it arrives only through an authorized provider and never ambiently. `clock(readonly)` covers `now_ns`, `now_sec` and `monotonic_ns`; `sleep_ns` consumes time rather than observing it and so needs the full grant, at compile time and in the force-time guard (`clock!`). `lib/clock.resid` is the standard library's only clock surface, and the rest of the date and time library needs no grant at all — converting, formatting and zone-resolving a timestamp you already hold is arithmetic. | `is_prov_family`, `is_write_verb`, `provider_family_of_line` | `err_authority_clock`, `err_clock_readonly_write`, `authority_clock_readonly`, `dt_clock`, `tests/runtime/cap_guard.c` |
 | A program never leaves the terminal in raw mode: the runtime restores the saved settings when `main` returns and on an uncaught abort. | `term_exit` in `runtime/rt/term.resid` | `tests/runtime` (readline on a pty) |
 | Generics and behaviors add no authority. A behavior's function runs where the behavior is used, so its capabilities flow to the caller. A generic function's own body is checked against its own `@requires`; each copy made for concrete types is granted exactly what it and the instances it calls need, and the concrete caller must hold that (E0219 names the copy, e.g. `label(Task)`). A copy of a generic declared inside a `sandbox` is placed inside the same sandbox, so the ceiling still bounds it (E0211, E0218). | `gk_auth_all` (copies), `gm_wrap` in `compiler/mono.resid` | `err_generic_authority`, `err_generic_sandbox`, `generic_authority_granted` |
@@ -121,6 +124,28 @@ and does not name the publisher key; `require_signatures` does not extend
 to path dependencies, which the spec exempts as local source; there is no
 TLS registry transport, so an `https://` registry must be fronted by a
 proxy that terminates TLS.
+
+## HTTP server (`lib/httpserv.resid`)
+
+The server parses requests from untrusted peers. It is plain Resid over
+`List(Int)` byte buffers, so the memory-safety rows above cover it; the
+rows here are about what it accepts.
+
+| Guarantee | Tests (`tests/http/run.sh`) |
+|---|---|
+| A request's head and body are bounded (`HttpLimits`: 64 KiB of head, 8 MiB of body, 1000 requests per connection by default). A longer head is answered 431 once the buffer passes the bound, at most one 16 KiB read later; a declared `Content-Length` over the bound is answered 413 before any of the body is read, and a chunked body as soon as its chunks would pass it. | roundtrip (431, 413), client.py too-big, huge-head |
+| Request smuggling shapes are refused rather than resolved one way: `Transfer-Encoding` with `Content-Length`, a coding other than a final `chunked`, a `Content-Length` that is not digits or whose repeated values differ, obsolete line folding, and whitespace before a header's colon. | roundtrip (400, 501), client.py te+cl, te-gzip, bad-cl, fold, space-colon |
+| An HTTP/1.1 request without `Host` is refused (400), and an unsupported version is 505. | roundtrip, client.py no-host, version |
+| A refused request closes the connection, so nothing after the point the parser stopped is read as another request. | roundtrip, client.py |
+| A connection is closed by half-closing and draining before the close, so a refused client still receives its error reply instead of a reset. | roundtrip (431 reply received), client.py huge-head |
+| `examples/http_server.resid` serves files only under its `--root`: a path with an empty, `.` or `..` segment is 404, and so is a directory. | client.py dotdot, dir |
+
+Not guaranteed: there is no TLS server side, so a public server must sit
+behind a proxy that terminates TLS; there are no per-connection read
+deadlines beyond the socket's 30 s receive timeout, so slow clients can
+occupy workers (denial of service is out of scope above); and workers
+are as many as the program spawns, with no queueing beyond the kernel's
+listen backlog.
 
 ## Provenance (spec §33.1)
 

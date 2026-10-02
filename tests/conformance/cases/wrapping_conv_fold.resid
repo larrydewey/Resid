@@ -1,0 +1,10 @@
+// Wrapping conversions keep the low bits of the width the name carries,
+// whether the argument is known at compile time or not.
+@requires(args)
+Int main() {
+    Int r = args.count() - 1;
+    println(f"{wrapping_u64(-1)} {wrapping_u32(-1)} {wrapping_u16(70000)} {wrapping_u8(-1)}");
+    println(f"{wrapping_i16(70000)} {wrapping_i8(200)} {wrapping_i32(4294967295)} {wrapping_u128(-1)}");
+    println(f"{wrapping_u64(r - 1)} {wrapping_u32(r - 1)} {wrapping_u16(r + 70000)} {wrapping_i16(r + 70000)}");
+    return 0;
+}

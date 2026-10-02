@@ -69,8 +69,8 @@ Int set_timeout(Int fd, Int secs) {
 }
 
 // ─── TCP listener ──────────────────────────────────────────────────────
-// The serve side, for a registry published over HTTP (spec §28). Kept
-// deliberately small: bind, accept, and the one loopback restriction below.
+// The serve side: bind, accept, and the one policy below — loopback is a
+// plain `network` read, any other address is a `network` write.
 
 // Is this fd a listening stream socket? `sock_ok` is the connect-side
 // check (SOCK_STREAM, connected); a listener must be accepted first, so
@@ -81,7 +81,7 @@ Bool listener_ok(Int fd) {
     return resid_raw_syscall(5, fd, b, 0, 0, 0, 0) == 0 && (ld32(b + 24) & 61440) == 49152;
 }
 
-// 127.0.0.1, the one address this file may bind a listener to. The value is
+// 127.0.0.1, the address `resid_tcp_listen` binds. The value is
 // what `st32(sa + 4, ...)` wants — the network-order bytes 7F 00 00 01 read
 // as a u32 — which is the same shape `resolve4` returns, so `bind` and
 // `connect` write the same four bytes here.
@@ -89,14 +89,29 @@ Int loopback_v4() { return 16777343; }
 
 // A listening socket bound to `port` on 127.0.0.1, or -1.
 //
-// Loopback only, and deliberately so: this exists so a local registry can
-// be served and fetched, not to expose one. Binding 0.0.0.0 would put a
-// package index on a network with no authentication beyond whatever the
-// publisher's signature scheme already gives, and there is no way to ask
-// for that from here. A host that wants a public registry terminates TLS
-// and authenticates in front of it.
+// Loopback only: this is what `resid-pkg serve` uses to publish a local
+// registry, and a plain `network` grant of either mode covers it. Binding
+// an address other people can reach is `resid_tcp_listen_at`, a write.
 @export("resid_tcp_listen", "i64(i64)")
-pub Int rt_tcp_listen(Int port) {
+pub Int rt_tcp_listen(Int port) { return listen_ip(loopback_v4(), port); }
+
+// A listening socket bound to `host`:`port`, or -1. `host` is an address
+// literal (`0.0.0.0` for every interface, or one interface's address) or
+// `localhost`; a name is not resolved, because a bind address names an
+// interface of this machine, not a peer. Exposing a port is a write under
+// `network`: `network(readonly)` covers connecting out and listening on
+// loopback, not this (SECURITY.md).
+@export("resid_tcp_listen_at", "i64(ptr,i64)")
+pub Int rt_tcp_listen_at(Int host, Int port) {
+    if (host == 0 || ld8(host) == 0 || !host_ok(host)) { return 0 - 1; }
+    Int ip = if (lower_eq(host, resid_raw_addr("localhost"))) { loopback_v4() } else { parse_ip4(host) };
+    if (ip < 0) { return 0 - 1; }
+    return listen_ip(ip, port);
+}
+
+// bind + listen on `ip` (network-order bytes as a u32), SO_REUSEADDR set so
+// a restart does not have to wait out TIME_WAIT.
+Int listen_ip(Int ip, Int port) {
     // Port 0 means "any free port", which is what `serve --port 0` wants:
     // the bound port is then read back with resid_tcp_bound_port.
     if (port < 0 || port > 65535) { return 0 - 1; }
@@ -104,15 +119,14 @@ pub Int rt_tcp_listen(Int port) {
     _ = resid_raw_fill(sa, 0, 16);
     _ = st8(sa, 2);                                   // AF_INET
     _ = st8(sa + 2, port >> 8) + st8(sa + 3, port & 255);
-    _ = st32(sa + 4, loopback_v4());
+    _ = st32(sa + 4, ip);
     Int fd = resid_raw_syscall(41, 2, 1, 0, 0, 0, 0); // socket
     if (fd < 0) { return 0 - 1; }
     Int one = resid_raw_tls("ai_one", 4);
-    _ = st32(one, 1);                                // SO_REUSEADDR, so a
-    // restart does not have to wait out TIME_WAIT.
+    _ = st32(one, 1);
     if (resid_raw_syscall(54, fd, 1, 2, one, 4, 0) != 0) { return sys_close(fd) * 0 - 1; }
     if (resid_raw_syscall(49, fd, sa, 16, 0, 0, 0) != 0) { return sys_close(fd) * 0 - 1; }  // bind
-    if (resid_raw_syscall(50, fd, 16, 0, 0, 0, 0) != 0) { return sys_close(fd) * 0 - 1; }    // listen
+    if (resid_raw_syscall(50, fd, 128, 0, 0, 0, 0) != 0) { return sys_close(fd) * 0 - 1; }   // listen
     return fd;
 }
 
@@ -359,6 +373,18 @@ Int recv_loop(Int fd, Int out, Int cap, Int len) {
 @export("resid_tcp_close", "i8(i64)")
 pub Int rt_tcp_close(Int fd) { return if (sock_ok(fd) && sys_close(fd) == 0) { 1 } else { 0 }; }
 
+// Half-close for a lingering close: no more will be sent, and the receive
+// timeout drops to 2 s so draining what the peer still sends is bounded.
+// Closing a socket with unread bytes makes the kernel reset it, and a reset
+// discards the reply the peer has not read yet; a server that has refused a
+// request shuts down, drains, then closes (lib/httpserv.resid).
+@export("resid_tcp_shutdown", "i8(i64)")
+pub Int rt_tcp_shutdown(Int fd) {
+    if (!sock_ok(fd)) { return 0; }
+    _ = set_timeout(fd, 2);
+    return if (resid_raw_syscall(48, fd, 1, 0, 0, 0, 0) == 0) { 1 } else { 0 };  // shutdown SHUT_WR
+}
+
 // A List(Int) of byte values (each truncated to 8 bits), at most 1 MB.
 @export("resid_tcp_send_bin", "i8(i64,ptr)")
 pub Int rt_tcp_send_bin(Int fd, Int l) {
@@ -399,6 +425,23 @@ Int recv_exact(Int fd, Int buf, Int got, Int n) {
     Int r = resid_raw_syscall(45, fd, buf + got, n - got, 0, 0, 0);
     if (r <= 0) { return got; }
     return recv_exact(fd, buf, got + r, n);
+}
+
+// Whatever one receive returns, at most `max` bytes (capped at 1 MB), as a
+// List(Int) of its real length: empty after EOF, an error or the socket's
+// receive timeout. A server reads a request with this, since it cannot know
+// how many bytes are coming before it has parsed them.
+@export("resid_tcp_recv_some", "ptr(i64,i64)")
+pub Int rt_tcp_recv_some(Int fd, Int max0) {
+    Int max = if (sock_ok(fd)) { clamp(max0, 0, 1048576) } else { 0 };
+    Int buf = xmalloc(if (max > 0) { max } else { 1 });
+    Int r = if (max > 0) { resid_raw_syscall(45, fd, buf, max, 0, 0, 0) } else { 0 };
+    Int n = if (r > 0) { r } else { 0 };
+    Int slots = xmalloc(if (n > 0) { n * 8 } else { 8 });
+    _ = byte_boxes(buf, slots, 0, n);
+    Int out = c_list_new(n, slots, resid_raw_addr("List"));
+    _ = c_free(buf) + c_free(slots);
+    return out;
 }
 
 // Small Ints are immediate boxes (value + IMM_OFF).
