@@ -1375,3 +1375,113 @@ pub List(Int) limb_bytes_acc(List(Int) st, Int i, List(Int) acc) {
 pub List(Int) limbs_to_hex_bytes(List(Int) st, Int seed_unused) {
     return limb_bytes_acc(st, 0, []);
 }
+
+// ─── SHA-1 (FIPS 180-4 §6.1) ───────────────────────────────────────
+//
+// SHA-1 is here for one reason, and it is not a hash choice: RFC 6960
+// defines an OCSP CertID's issuerNameHash and issuerKeyHash as SHA-1
+// digests, so a client checking whether a stapled OCSP response is about
+// the certificate it just validated has to compute them the way the
+// responder did.
+//
+// It is not used anywhere a collision would reach. Both values sit inside
+// the structure the responder signed, so pointing them at a different
+// issuer invalidates the signature rather than passing it, and nothing
+// else in this file calls it.
+//
+// Everything here indexes lists directly rather than walking them through
+// accessors. The first version of this did not, and every bug it had was
+// in the accessors rather than in the algorithm.
+
+Int u32mask(Int v) { return v & 4294967295; }
+
+// Rotate a 32-bit word left. Int is 64 bits, so n <= 31 cannot overflow.
+Int sha1_rol(Int v, Int n) {
+    Int lo = u32mask(v << n);
+    Int hi = u32mask(v) >> (32 - n);
+    return u32mask(lo | hi);
+}
+
+// Word i of the block at `base`, big-endian.
+Int sha1_word(List(Int) block, Int base, Int i) {
+    Int off = base + i * 4;
+    Int a0 = block[off];
+    Int a1 = a0 * 256 + block[off + 1];
+    Int a2 = a1 * 256 + block[off + 2];
+    return a2 * 256 + block[off + 3];
+}
+
+List(Int) sha1_words16(List(Int) block, Int base, Int i, List(Int) acc) {
+    if (i >= 16) { return acc; }
+    return sha1_words16(block, base, i + 1, acc.concat([sha1_word(block, base, i)]));
+}
+
+// w[16..79] = rol(w[i-3] ^ w[i-8] ^ w[i-14] ^ w[i-16], 1), where `acc`
+// already holds w[0..i-1].
+List(Int) sha1_expand(Int i, List(Int) acc) {
+    if (i >= 80) { return acc; }
+    Int v = u32mask(acc[i - 3] ^ acc[i - 8] ^ acc[i - 14] ^ acc[i - 16]);
+    return sha1_expand(i + 1, acc.concat([sha1_rol(v, 1)]));
+}
+
+Int sha1_f(Int r, Int b, Int c, Int d) {
+    Bool t1 = r < 20;
+    Bool t2 = r >= 20 && r < 40;
+    Bool t3 = r >= 40 && r < 60;
+    // ~b is (2^32 - 1) - b; b + (2^32 - 1) wraps round to b - 1 instead.
+    if (t1) { return u32mask((b & c) | (u32mask(4294967295 - b) & d)); }
+    if (t2) { return u32mask(b ^ c ^ d); }
+    if (t3) { return u32mask((b & c) | (b & d) | (c & d)); }
+    return u32mask(b ^ c ^ d);
+}
+
+Int sha1_k(Int r) {
+    Bool t1 = r < 20;
+    Bool t2 = r >= 20 && r < 40;
+    Bool t3 = r >= 40 && r < 60;
+    if (t1) { return 1518500249; }   // 5a827999
+    if (t2) { return 1859775393; }   // 6ed9eba1
+    if (t3) { return 2400959708; }   // 8f1bbcdc
+    return 3395469782;               // ca62c1d6
+}
+
+// 80 rounds. T = rol(a,5) + f(b,c,d) + e + k + W[r], then the words shift.
+List(Int) sha1_rounds(List(Int) w, Int r, Int a, Int b, Int c, Int d, Int e) {
+    if (r >= 80) { return [a, b, c, d, e]; }
+    Int t = u32mask(sha1_rol(a, 5) + sha1_f(r, b, c, d) + e + sha1_k(r) + w[r]);
+    Int nb = sha1_rol(b, 30);
+    return sha1_rounds(w, r + 1, t, a, nb, c, d);
+}
+
+// h = h + compress(h) over one 64-byte block.
+List(Int) sha1_step(List(Int) padded, Int base, List(Int) h) {
+    List(Int) w80 = sha1_expand(16, sha1_words16(padded, base, 0, []));
+    List(Int) st = sha1_rounds(w80, 0, h[0], h[1], h[2], h[3], h[4]);
+    return [u32mask(h[0] + st[0]), u32mask(h[1] + st[1]), u32mask(h[2] + st[2]), u32mask(h[3] + st[3]), u32mask(h[4] + st[4])];
+}
+
+List(Int) sha1_blocks(List(Int) padded, Int base, Int nblocks, List(Int) h, Int i) {
+    if (i >= nblocks) { return h; }
+    return sha1_blocks(padded, base + 64, nblocks, sha1_step(padded, base, h), i + 1);
+}
+
+List(Int) sha1_be_bytes(List(Int) words, Int i, List(Int) acc) {
+    if (i >= 5) { return acc; }
+    Int v = words[i];
+    Int b0 = u32mask(v >> 24);
+    Int b1 = u32mask(v >> 16) & 255;
+    Int b2 = u32mask(v >> 8) & 255;
+    Int b3 = v & 255;
+    return sha1_be_bytes(words, i + 1, acc.concat([b0, b1, b2, b3]));
+}
+
+// SHA-1 over a byte list; the 20-byte digest as a List(Int).
+//
+// The padding is pad_bytes': SHA-1 and SHA-256 share the 64-byte block and
+// the 64-bit length field, differing only in the compression function.
+pub List(Int) sha1_bytes(List(Int) msg) {
+    List(Int) h = [1732584193, 4023233417, 2562383102, 271733878, 3285377520];
+    List(Int) padded = pad_bytes(msg);
+    List(Int) hd = sha1_blocks(padded, 0, padded.len() / 64, h, 0);
+    return sha1_be_bytes(hd, 0, []);
+}
