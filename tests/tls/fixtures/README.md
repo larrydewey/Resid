@@ -36,6 +36,10 @@ appear on the wire, which is what `tm_cert_list` reads.
 | `crl.pem`, `crl.der` | that CA's CRL, listing serial `2001` |
 | `rsa_pkcs1.pem`, `rsa_pkcs1.der` | self-signed `CN=Test RSA Root`, signed with sha256WithRSAEncryption |
 | `rsa_pss.pem`, `rsa_pss.der` | self-signed `CN=Test RSA-PSS Root`, signed with rsassaPss (SHA-256, MGF1-SHA-256, salt 32) |
+| `dca.pem`, `dca.der` | `CN=OCSP Delegated CA`, the issuer for the delegated-responder cases |
+| `dgood.pem`, `dgood.der` | `CN=localhost` issued by that CA, serial `4000` |
+| `del.pem`, `del.der` | `CN=OCSP Responder` issued by `dca`, carrying the OCSPSigning EKU and explicitly not a CA |
+| `delnoeku.pem`, `delnoeku.der` | the same responder certificate with the EKU left off, so it is authorised for nothing |
 
 The CRL's `thisUpdate` is when it was generated, so the revocation cases
 pass an explicit `now` into the probe rather than reading the clock: a
@@ -78,20 +82,55 @@ computed, so the test pins the instant rather than restating the fixture.
 
 ### The delegated responder
 
-`del.pem` is not committed and nothing uses it yet: it is the responder
-certificate the delegated-responder path is to be tested against. It is
-generated with an OCSP-signing EKU and is deliberately not a CA:
+`ocsp-delegated.der` is signed by `del.der` rather than by the issuer, and
+carries that certificate in its `certs` field. `ocsp-delegated-noeku.der`
+is the same response signed by `delnoeku.der`, which is identical but for
+the missing EKU: openssl refuses that one (`ocsp_check_delegated: missing
+ocspsigning usage`), and so does `issuer_accepts`.
+
+These have a CA of their own rather than reusing `ca.pem`, because the CA
+keys were thrown away when the fixtures were first made (see above), so
+nothing can now be signed *by* the committed `ca.der` -- a new responder
+certificate under it would need a new `ca.der`, and with it a new
+`good.der`, `bad.der`, `crl.der` and both existing responses, since the
+CertID hashes the issuer's key. The delegated cases need none of that
+churn. `dca.der` is generated here, keys and all:
+
+    openssl ecparam -name prime256v1 -genkey -noout -out dca.key
+    openssl req -new -x509 -key dca.key -sha256 -days 7300 \
+        -subj "/CN=OCSP Delegated CA" -out dca.pem \
+        -addext "basicConstraints=critical,CA:TRUE" \
+        -addext "keyUsage=critical,keyCertSign,cRLSign"
+
+    openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+        -keyout dgood.key -subj "/CN=localhost" -out dgood.csr
+    printf 'basicConstraints=CA:FALSE\nkeyUsage=digitalSignature\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:localhost\n' > dgood.ext
+    openssl x509 -req -in dgood.csr -CA dca.pem -CAkey dca.key \
+        -set_serial 0x4000 -days 3650 -sha256 -extfile dgood.ext -out dgood.pem
 
     openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
         -keyout del.key -subj "/CN=OCSP Responder" -out del.csr
     printf 'basicConstraints=CA:FALSE\nkeyUsage=digitalSignature\nextendedKeyUsage=OCSPSigning\n' > del.ext
-    openssl x509 -req -in del.csr -CA ca.pem -CAkey ca.key -set_serial 0x3001 \
-        -days 3650 -extfile del.ext -out del.pem
-    openssl ocsp -index ocsp-index.txt -CA ca.pem -issuer ca.pem \
-        -rsigner del.pem -rkey del.key -reqin req-good.der \
-        -respout ocsp-delegated.der -no_nonce
+    printf 'basicConstraints=CA:FALSE\nkeyUsage=digitalSignature\n' > delnoeku.ext
+    openssl x509 -req -in del.csr -CA dca.pem -CAkey dca.key \
+        -set_serial 0x4001 -days 3650 -sha256 -extfile del.ext -out del.pem
+    openssl x509 -req -in del.csr -CA dca.pem -CAkey dca.key \
+        -set_serial 0x4002 -days 3650 -sha256 -extfile delnoeku.ext -out delnoeku.pem
 
-openssl accepts the result -- `openssl ocsp -respin ocsp-delegated.der
--CAfile ca.pem -VAfile ca.pem` reports `Response verify OK` -- so it is a
-valid fixture for the path that is still to be written. Committing it
-before there is a test for it would be a fixture with nothing checking it.
+    printf 'V\t290104004758Z\t\t4000\tunknown\t/CN=localhost\n' > dindex.txt
+    openssl ocsp -issuer dca.pem -cert dgood.pem -reqout req-dgood.der -no_nonce
+    openssl ocsp -index dindex.txt -CA dca.pem -issuer dca.pem \
+        -rsigner del.pem -rkey del.key -reqin req-dgood.der \
+        -respout ocsp-delegated.der -no_nonce
+    openssl ocsp -index dindex.txt -CA dca.pem -issuer dca.pem \
+        -rsigner delnoeku.pem -rkey del.key -reqin req-dgood.der \
+        -respout ocsp-delegated-noeku.der -no_nonce
+
+The serial in the index is hex, like the certificate's. Only the `V` entry
+is needed: a good answer is a status, not a date, and the revocation date
+column is irrelevant to it.
+
+`openssl ocsp -respin ocsp-delegated.der -CAfile dca.pem -VAfile dca.pem`
+reports `Response verify OK`, and the responder certificate really is in
+the response rather than assumed -- `-resp_text` lists serial `4001`
+under the certificate section.
