@@ -3,7 +3,9 @@
 // "now" is the response's own producedAt rather than the clock, so a
 // committed response stays decidable: the freshness rules are exercised
 // without the fixture expiring out from under the suite.
-import "../../lib/ocsp.resid";
+import "../../lib/certverify.resid";
+import "../../lib/chain.resid";
+import "../../lib/instant.resid";
 
 Int now_of(List(Int) d) {
     if (d.len() == 0) { return 0 - 1; }
@@ -26,5 +28,10 @@ Int main() {
     println("STATUS=" + f"{ocsp_status_for(issuer, cert, resp, produced)}");
     println("STALE=" + f"{ocsp_status_for(issuer, cert, resp, 0)}");
     println("REVOKED_AT=" + f"{ocsp_revoked_at(issuer, cert, resp)}");
+    // The same answer as the trust store sees it: a store that must be told
+    // about revocation, holding only this response, judging this pair.
+    TrustStore base = trust_store_add(trust_store_empty(), issuer);
+    TrustStore st = trust_store_requiring_revocation(trust_store_adding_ocsp(base, resp), true);
+    println("ACCEPT=" + f"{issuer_accepts(st, cert, issuer, instant_of_seconds(produced))}");
     return 0;
 }

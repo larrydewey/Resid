@@ -225,6 +225,17 @@ oprobe "$F/ocsp-good.der" "$F/other.der" "$F/good.der"
 owant "ocsp wrong signer" SIGNATURE false
 owant "ocsp wrong signer status" STATUS -1
 
+# The store consults the response: a good answer admits the certificate
+# with no CRL present, and a revoked one refuses it.
+oprobe "$F/ocsp-good.der" "$F/ca.der" "$F/good.der"
+owant "ocsp store admits good" ACCEPT true
+oprobe "$F/ocsp-revoked.der" "$F/ca.der" "$F/revoked.der"
+owant "ocsp store refuses revoked" ACCEPT false
+# A response about another certificate leaves the store with no answer,
+# and a store that requires revocation refuses what it cannot check.
+oprobe "$F/ocsp-revoked.der" "$F/ca.der" "$F/good.der"
+owant "ocsp store no answer" ACCEPT false
+
 # A truncated response yields no answer rather than a crash.
 head -c 40 "$F/ocsp-good.der" > "$W/ocsp-trunc.der"
 oprobe "$W/ocsp-trunc.der" "$F/ca.der" "$F/good.der"

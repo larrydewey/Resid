@@ -1,0 +1,752 @@
+// --- lib/certverify.resid - signature verification and byte equality --
+//
+// Everything needed to answer "did this party sign these bytes?", with no
+// dependency on the trust store, the chain walk, or revocation. It sits
+// below both lib/chain.resid and lib/ocsp.resid: an OCSP response is
+// checked with the same code that checks a certificate, so it cannot drift
+// from it, and neither module has to import the other.
+
+import "der.resid";
+import "x509.resid";
+import "rsa.resid";
+import "calendar.resid";
+import "crypto.resid";
+import "ec256.resid";
+
+
+// ─── Byte helpers ────────────────────────────────────────────────────
+
+pub Bool eq_bytes_at(List(Int) a, List(Int) b, Int i, Int last) {
+    if (i > last) { return true; }
+    Int xa = a[i];
+    Int xb = b[i];
+    if (xa != xb) { return false; }
+    Int ni = i + 1;
+    return eq_bytes_at(a, b, ni, last);
+}
+
+
+
+pub Bool eq_bytes(List(Int) a, List(Int) b) {
+    Int alen = a.len();
+    Int blen = b.len();
+    if (alen != blen) { return false; }
+    return eq_bytes_at(a, b, 0, alen - 1);
+}
+
+
+
+// Raw DER of a top-level certificate element by index
+// (0 = tbs, 1 = sigAlg, 2 = signature BIT STRING).
+pub List(Int) cert_elem_at(List(Int) cert, Int cur, Int j, Int idx) {
+    if (j == idx) {
+        DerTlv tv = der_next(cert, cur);
+        Int end = cur + tv.hdr_len;
+        Int stop = end + tv.val_len - 1;
+        return der_slice_seeded(cert, cur, stop);
+    }
+    Int nxt = x509_skip_tlv(cert, cur);
+    Int nj = j + 1;
+    return cert_elem_at(cert, nxt, nj, idx);
+}
+
+
+
+// ─── Validity window ─────────────────────────────────────────────────
+
+// The digits of `s` from `i` to `last`, as a number.
+pub Int time_digits(Str s, Int i, Int last, Int acc) {
+    if (i > last) { return acc; }
+    Int c = str_char_at(s, i);
+    Int d = c - 48;
+    Int acc10 = acc * 10;
+    Int acc2 = acc10 + d;
+    Int ni = i + 1;
+    return time_digits(s, ni, last, acc2);
+}
+
+
+
+// "YYMMDDHHMMSSZ" (UTCTime) or "YYYYMMDDHHMMSSZ" (GeneralizedTime) as an
+// Instant, through the calendar: the same civil-to-timeline arithmetic
+// every other date in the language goes through, so a certificate's
+// notBefore cannot drift from what lib/calendar.resid calls the same day.
+//
+// A UTCTime's two-digit year is RFC 5280's sliding window: 00-49 means
+// 20xx, 50-99 means 19xx. Nothing else in the language guesses a century,
+// so this is where the convention lives, and it is stated rather than
+// inferred. A string that is neither shape, or carries a name other than Z,
+// has no Instant: zero is the epoch, so -1 says "unparseable" and the
+// caller rejects rather than comparing against a moment that is not the
+// one the certificate named.
+pub Int x509_time_to_unix(Str s) {
+    Int n = str_len(s);
+    // 13 = "YYMMDDHHMMSSZ", 15 = "YYYYMMDDHHMMSSZ", both Z-terminated.
+    if (n != 13 && n != 15) { return 0 - 1; }
+    if (str_char_at(s, n - 1) != 90) { return 0 - 1; }
+    Int utc = if (n == 13) { 1 } else { 0 };
+    // UTCTime's year is two digits, so the month starts one earlier.
+    Int p = if (utc == 1) { 2 } else { 4 };
+    Int yy = time_digits(s, 0, p - 1, 0);
+    Int year = if (utc == 1) {
+        if (yy < 50) { 2000 + yy } else { 1900 + yy }
+    } else {
+        yy
+    };
+    Int mo = time_digits(s, p, p + 1, 0);
+    Int d = time_digits(s, p + 2, p + 3, 0);
+    Int hh = time_digits(s, p + 4, p + 5, 0);
+    Int mi = time_digits(s, p + 6, p + 7, 0);
+    Int ss = time_digits(s, p + 8, p + 9, 0);
+    if (mo < 1 || mo > 12) { return 0 - 1; }
+    if (d < 1 || d > cal_days_in_month(year, mo)) { return 0 - 1; }
+    if (hh > 23 || mi > 59 || ss > 60) { return 0 - 1; }
+    Int days = cal_days_from_civil(year, mo, d);
+    return days * cal_sec_per_day() + hh * 3600 + mi * 60 + ss;
+}
+
+
+
+// RSA PKCS#1v1.5 SHA-256: tbs = raw signed bytes; keyb = issuer SPKI
+// BIT STRING content minus unused-bits byte; sigb = the raw signature,
+// as x509_sig_bytes returns it. (It used to take the whole BIT STRING
+// TLV and sliced it at hdr_len + 2, which is one past the end of a
+// 256-byte signature and aborted on every real RSA certificate.)
+pub Bool rsa_cert_verify(List(Int) tbs, List(Int) keyb, List(Int) sigb) {
+    Int w = 128;
+    RsaKey k = rsa_key_from_spki(keyb, w);
+    if (!k.ok) { return false; }
+    List(Int) nl = k.n;
+    Int ev = k.e;
+    if (sigb.len() < w * 2) { return false; }
+    List(Int) sl = bn_from_be(sigb, w);
+    // The signature representative must be below the modulus (RFC 8017
+    // §5.2.2), or s + n would verify as s.
+    if (bn_cmp(sl, nl, w) >= 0) { return false; }
+    List(Int) rec = bn_montexp(sl, ev, nl, w);
+    List(Int) digest = sha256_bytes(tbs);
+    List(Int) em = pkcs1_em_sha256(digest, 256);
+    List(Int) eml = bn_from_be(em, w);
+    Int c = bn_cmp(rec, eml, w);
+    if (c == 0) { return true; }
+    return false;
+}
+
+
+
+// ECDSA P-256: keyb = 04 || X(32) || Y(32); sigb = DER SEQ { r, s }.
+pub Bool ec_cert_verify(List(Int) tbs, List(Int) keyb, List(Int) sigb) {
+    List(Int) digest = sha256_bytes(tbs);
+    Int(256) eint = ec_from_be(digest);
+    Int usbits = der_content_pos(sigb, 0);
+    Int seqc = usbits + 1;
+    Int rc = der_content_pos(sigb, seqc);
+    List(Int) rb = der_content(sigb, rc);
+    Int spos = x509_skip_tlv(sigb, rc);
+    List(Int) sbv = der_content(sigb, spos);
+    Int(256) rvv = ec_from_be(rb);
+    Int(256) svv = ec_from_be(sbv);
+    List(Int) xbv = der_slice_seeded(keyb, 2, 33);
+    List(Int) ybv = der_slice_seeded(keyb, 34, 65);
+    Int(256) qx = ec_from_be(xbv);
+    Int(256) qy = ec_from_be(ybv);
+    Int(256) vx = ecdsa_vx(eint, rvv, svv, qx, qy);
+    if (vx == rvv) { return true; }
+    return false;
+}
+
+
+
+// ─── Signature algorithm dispatch ────────────────────────────────────
+
+// RSASSA-PSS parameters, which this checks rather than assumes.
+// RFC 4055 gives hashAlgorithm, maskGenAlgorithm and saltLength defaults
+// of SHA-1, MGF1-SHA-1 and 20 -- none of which is verified here. So a
+// PSS signature that omits its parameters is refused, not treated as
+// SHA-256, and one that states different ones is refused too: the
+// parameters are what say which padding was used, and verifying as
+// SHA-256 while the certificate says otherwise is verifying a different
+// signature than the one that was made.
+pub Bool x509_pss_params_ok(List(Int) data, Int params) {
+    if (!der_is_seq(data, params, der_tag_sequence())) { return false; }
+    DerTlv t = der_next(data, params);
+    Str sha256 = "2.16.840.1.101.3.4.2.1";
+    // [0] EXPLICIT hashAlgorithm
+    Int p = params + t.hdr_len;
+    DerTlv h = der_next(data, p);
+    if (h.val_len < 0 || h.cls != 2 || (h.tag & 31) != 0) { return false; }
+    Int hs = der_content_pos(data, p);
+    Int ho = der_content_pos(data, hs);
+    if (der_oid_str(data, ho) != sha256) { return false; }
+    // [1] EXPLICIT maskGenAlgorithm: mgf1 with the same hash
+    Int p2 = x509_skip_tlv(data, p);
+    if (p2 < 0) { return false; }
+    DerTlv m = der_next(data, p2);
+    if (m.val_len < 0 || m.cls != 2 || (m.tag & 31) != 1) { return false; }
+    Int ms = der_content_pos(data, p2);
+    Int mo = der_content_pos(data, ms);
+    if (der_oid_str(data, mo) != "1.2.840.113549.1.1.8") { return false; }
+    // past the mgf1 OID element to the hash AlgorithmIdentifier inside it
+    Int mph = der_content_pos(data, x509_skip_tlv(data, mo));
+    if (der_oid_str(data, mph) != sha256) { return false; }
+    // [2] EXPLICIT saltLength
+    Int p3 = x509_skip_tlv(data, p2);
+    if (p3 < 0) { return false; }
+    DerTlv sl = der_next(data, p3);
+    if (sl.val_len < 0 || sl.cls != 2 || (sl.tag & 31) != 2) { return false; }
+    Int slv = der_content_pos(data, p3);
+    if (der_int_value(data, slv) != 32) { return false; }
+    return true;
+}
+
+
+
+// The position of the parameters field inside a TBS's AlgorithmIdentifier,
+// or -1 when it is absent.
+pub Int x509_sigalg_params_pos(List(Int) data, Int algpos) {
+    Int oidp = der_content_pos(data, algpos);
+    Int pp = x509_skip_tlv(data, oidp);
+    DerTlv t = der_next(data, pp);
+    if (t.val_len < 0) { return 0 - 1; }
+    return pp;
+}
+
+
+
+// Verify `signed` (the exact bytes that were signed) under the public key
+// bits `keyb`, for the algorithm named at `algpos`.
+//
+//   container = the whole certificate or CRL: the algorithm identifier and
+//               its parameters are read from here
+//   signed    = the TBS slice, which is a fresh list whose indices start
+//               over at zero, so `algpos` means nothing in it
+//   sigtlv    = the whole signatureValue BIT STRING TLV
+//   keyb      = the issuer's SPKI BIT STRING content, minus its unused octet
+pub Bool x509_sig_ok(List(Int) container, Int algpos, List(Int) signed, List(Int) keyb, List(Int) sigtlv) {
+    Int oidp = der_content_pos(container, algpos);
+    Str oid = der_oid_str(container, oidp);
+    if (oid == "1.2.840.113549.1.1.11") {
+        return rsa_cert_verify(signed, keyb, x509_sig_bytes(sigtlv, 256));
+    }
+    if (oid == "1.2.840.10045.4.3.2") {
+        return ec_cert_verify(signed, keyb, sigtlv);
+    }
+    if (oid == "1.2.840.113549.1.1.10") {
+        Int pp = x509_sigalg_params_pos(container, algpos);
+        if (pp < 0) { return false; }
+        if (!x509_pss_params_ok(container, pp)) { return false; }
+        return rsa_pss_verify_sha256(signed, keyb, x509_sig_bytes(sigtlv, 256));
+    }
+    return false;
+}
+
+
+
+// ─── One-link chain verification ─────────────────────────────────────
+
+// SPKI BIT STRING content minus the unused-bits octet.
+pub List(Int) cert_pubkey_bits(List(Int) cert) {
+    Int sp = x509_spki_pos(cert);
+    Int algp = der_content_pos(cert, sp);
+    Int bitp = x509_skip_tlv(cert, algp);
+    Int ksc = der_content_pos(cert, bitp);
+    DerTlv kv = der_next(cert, bitp);
+    Int kend = ksc + kv.val_len - 1;
+    return der_slice_seeded(cert, ksc, kend);
+}
+
+
+
+// RSASSA-PSS SHA-256 verification of `content` under an RSA SPKI
+// BIT-STRING body (DER SEQ { INT n, INT e }), signature raw k bytes.
+// Parameters fixed per TLS 1.3: sLen = hLen = 32, MGF1-SHA256.
+pub Bool rsa_pss_verify_sha256(List(Int) content, List(Int) keyb, List(Int) sigb) {
+    Int w = 128;
+    Int k = 256;
+    RsaKey key = rsa_key_from_spki(keyb, w);
+    if (!key.ok) { return false; }
+    Int ev = key.e;
+    List(Int) nl = key.n;
+    List(Int) sl = bn_from_be(sigb, w);
+    List(Int) rec = bn_montexp(sl, ev, nl, w);
+    List(Int) em = bn_to_be(rec, w);
+    // trailer byte
+    Int trailer = em[255];
+    Bool trok = trailer == 188;
+    if (!trok) { return false; }
+    // split: maskedDB = em[0..222], H = em[223..254]
+    Int dblen = k - 32 - 1;
+    List(Int) maskeddb = pss_take(em, 0, dblen - 1, []);
+    Int hstart = dblen;
+    Int hend = hstart + 31;
+    List(Int) hval = pss_take(em, hstart, hend, []);
+    // unmask
+    List(Int) dbmask = pss_mgf1(hval, dblen);
+    List(Int) db = xor_lists(maskeddb, dbmask, 0, []);
+    // leftmost bit of DB[0] must be zero (DB[0]==0 required anyway)
+    // PS zero run: real bytes 1..189 must be zero (byte 0 carries the
+    // emBits padding bit, which OpenSSL does not force to zero here)
+    Bool zok = pss_db_zeros(db, 1, 189);
+    if (!zok) { return false; }
+    Int sep = db[190];
+    Bool sepok = sep == 1;
+    if (!sepok) { return false; }
+    // salt = DB real bytes 191..222
+    List(Int) salt = pss_take(db, 191, 222, []);
+    // M' = 00^8 || Hash(content) || salt
+    // eight zero bytes
+    List(Int) m0 = [0, 0, 0, 0, 0, 0, 0, 0];
+    List(Int) hp = sha256_bytes(content);
+    List(Int) m1 = bn_cat(m0, hp);
+    List(Int) mprime = bn_cat(m1, salt);
+    List(Int) hdig = sha256_bytes(mprime);
+    return ct_equal(hdig, hval);
+}
+
+
+// ─── Signature verification glue ─────────────────────────────────────
+
+// ─── RSA public key decoding ─────────────────────────────────────────
+//
+// keyb is an SPKI BIT STRING content, so it opens with the unused-bits
+// octet and the RSAPublicKey SEQUENCE sits at index 1. Inside that,
+// keyb[1]'s content opens with the modulus INTEGER, whose first content
+// octet is a sign byte.
+//
+// Both RSA signature schemes need exactly this, and having each do it
+// separately is how they came to disagree: one of them sliced the
+// SEQUENCE's content and treated the INTEGER header as the high limb of
+// the modulus, which made every s look larger than n and rejected every
+// PKCS#1 signature. w limbs of 16 bits each; refuse a key of another
+// width rather than misread it.
+pub type RsaKey = { List(Int) n; Int e; Bool ok; };
+
+
+pub RsaKey rsa_key_from_spki(List(Int) keyb, Int w) {
+    Int nb = w + w;
+    List(Int) none = [];
+    RsaKey rsa_key_empty = RsaKey { .n = none, .e = 0, .ok = false };
+    List(Int) seqc = der_content(keyb, 1);
+    List(Int) nv = der_content(seqc, 0);
+    if (nv.len() < nb + 1) { return rsa_key_empty; }
+    List(Int) modulus = pss_take(nv, 1, nb, []);
+    Int epn = x509_skip_tlv(seqc, 0);
+    Int ev = der_int_value(seqc, epn);
+    return RsaKey { .n = bn_from_be(modulus, w), .e = ev, .ok = true };
+}
+
+
+pub List(Int) pss_take(List(Int) okm, Int i, Int len, List(Int) acc) {
+    if (i > len) { return acc; }
+    Int b = okm[i];
+    List(Int) acc2 = acc.concat([b]);
+    Int ni = i + 1;
+    return pss_take(okm, ni, len, acc2);
+}
+
+pub List(Int) pss_mgf1(List(Int) seed, Int need) {
+    return pss_mgf1_acc(seed, need, 0, []);
+}
+
+
+pub List(Int) bn_to_be(List(Int) l, Int w) {
+    Int total = w + w;
+    return bn_to_be_acc(l, total, 0, []);
+}
+
+
+// Check DB real bytes 1..190 are zero.
+pub Bool pss_db_zeros(List(Int) db, Int i, Int last) {
+    if (i > last) { return true; }
+    Int b = db[i];
+    if (b != 0) { return false; }
+    Int ni = i + 1;
+    return pss_db_zeros(db, ni, last);
+}
+
+// MGF1 with SHA-256: mask of `need` bytes from `seed`.
+pub List(Int) pss_mgf1_acc(List(Int) seed, Int need, Int c, List(Int) acc) {
+    if (need <= 0) { return acc; }
+    List(Int) ctr = pss_be32(c);
+    List(Int) inp = bn_cat(seed, ctr);
+    List(Int) d = sha256_bytes(inp);
+    Int take = if (need < 32) { need } else { 32 };
+    Int stop = take - 1;
+    List(Int) part = pss_take(d, 0, stop, []);
+    List(Int) acc2 = bn_cat(acc, part);
+    Int nneed = need - take;
+    Int nc = c + 1;
+    return pss_mgf1_acc(seed, nneed, nc, acc2);
+}
+
+
+// w-limb little-endian limbs -> 2w-byte big-endian byte list.
+pub List(Int) bn_to_be_acc(List(Int) l, Int total, Int k, List(Int) acc) {
+    if (k >= total) { return acc; }
+    Int d = total - 1 - k;
+    Int limbn = d / 2;
+    Int v = l[limbn];
+    Int hb = v / 256;
+    Int lb = v & 255;
+    // d odd -> this BE position holds the limb's HIGH byte
+    Int b = if (d == limbn * 2) { lb } else { hb };
+    List(Int) acc2 = acc.concat([b]);
+    Int nk = k + 1;
+    return bn_to_be_acc(l, total, nk, acc2);
+}
+
+// (An earlier note here claimed ec_cert_verify returned false for valid
+// inputs and suspected a codegen bug. It does not: a self-signed
+// ECDSA P-256 certificate verifies through chain_verify, whose signature
+// path is ecdsa_vx -- the same routine tm_ecdsa_verify_sha256 uses for
+// CertificateVerify, and that one is covered by the live h2 e2e. The
+// suspicion was never reproduced.)
+
+// ─── RSA-PSS (RSASSA-PSS, SHA-256, MGF1-SHA256, sLen=32) verify ──────
+// TLS 1.3 rsa_pss_rsae_sha256 (0x0804) CertificateVerify support.
+
+// Big-endian u32 as a 4-byte list.
+pub List(Int) pss_be32(Int v) {
+    Int b0 = (v / 16777216) & 255;
+    Int b1 = (v / 65536) & 255;
+    Int b2 = (v / 256) & 255;
+    Int b3 = v & 255;
+    return [b0, b1, b2, b3];
+}
+
+// ─── OCSP ────────────────────────────────────────────────────────────
+//
+// A responder's answer to "is this certificate revoked?", signed by the
+// issuer. Only the checking side: read a response, decide whether it is
+// about a particular certificate, and whether it says good or revoked.
+//
+// It lives here rather than in the trust store's module so that accepting a
+// certificate and reading its revocation answer cannot disagree: both go
+// through the same signature verification, and lib/chain.resid can consult
+// a response without importing anything that imports it back.
+
+// --- lib/ocsp.resid - OCSP response checking (RFC 6960) ---------------
+//
+// A responder's answer to "is this certificate revoked?", signed by the
+// issuer. Only the checking side: this reads a response, says whether it
+// is about a particular certificate, and whether it says good or revoked.
+//
+// Only what a client needs, and only the Basic response type:
+//
+//   OCSPResponse ::= SEQUENCE { responseStatus ENUMERATED,
+//                               responseBytes [0] EXPLICIT ResponseBytes }
+//   ResponseBytes ::= SEQUENCE { responseType OID, response OCTET STRING }
+//   BasicOCSPResponse ::= SEQUENCE { tbsResponseData, signatureAlgorithm,
+//                                    signature BIT STRING,
+//                                    certs [0] EXPLICIT SEQUENCE OF Cert
+//                                            OPTIONAL }
+//   ResponseData ::= SEQUENCE { version [0] EXPLICIT DEFAULT v1,
+//                               responderID ResponderID,
+//                               producedAt GeneralizedTime,
+//                               responses SEQUENCE OF SingleResponse,
+//                               responseExtensions [1] OPTIONAL }
+//   SingleResponse ::= SEQUENCE { certID CertID, certStatus CertStatus,
+//                                 thisUpdate GeneralizedTime,
+//                                 nextUpdate [0] EXPLICIT OPTIONAL,
+//                                 singleExtensions [1] OPTIONAL }
+//   CertID ::= SEQUENCE { hashAlgorithm AlgorithmIdentifier,
+//                         issuerNameHash OCTET STRING,
+//                         issuerKeyHash OCTET STRING,
+//                         serialNumber CertificateSerialNumber }
+//
+// CertID is pinned to SHA-1 (1.3.14.3.2.26): RFC 6960 defines it that
+// way and a responder that used anything else is not interoperable. Both
+// digests are inside the structure the responder signed, so substituting
+// an issuer's hashes invalidates the signature rather than passing it.
+//
+// A delegated responder (one the CA authorised for OCSP signing, named in
+// the `certs` field) is accepted only when its certificate chains to the
+// issuer and carries the id-kp-OCSPSigning extended key usage. A response
+// signed by anything else is not evidence.
+
+
+pub Str ocsp_oid_sha1_str() { return "1.3.14.3.2.26"; }
+pub Str ocsp_oid_basic() { return "1.3.6.1.5.5.7.48.1.1"; }
+pub Str ocsp_oid_ocsp_signing() { return "1.3.6.1.5.5.7.3.9"; }
+
+pub Int ocsp_status_good() { return 0; }
+pub Int ocsp_status_revoked() { return 1; }
+pub Int ocsp_status_unknown() { return 2; }
+// Not about this certificate, or no usable response.
+pub Int ocsp_status_no_answer() { return 0 - 1; }
+
+// ─── position helpers ────────────────────────────────────────────────
+//
+// Each of these *names* a field; the ones below step over what they name.
+
+pub Int ocsp_body_pos(List(Int) b) { return der_content_pos(b, 0); }
+
+pub Int ocsp_after_status(List(Int) b) {
+    Int p = ocsp_body_pos(b);
+    if (p < 0) { return 0 - 1; }
+    if (!ocsp_fits(b, p)) { return 0 - 1; }
+    return x509_skip_tlv(b, p);
+}
+
+// ResponseBytes, or -1 when there are none (which is legal and means the
+// responder declined to answer).
+pub Int ocsp_response_bytes_pos(List(Int) b) {
+    Int p = ocsp_after_status(b);
+    if (p < 0) { return 0 - 1; }
+    DerTlv t = der_next(b, p);
+    if (t.val_len < 0) { return 0 - 1; }
+    if (t.cls == 2 && (t.tag & 31) == 0) { return p; }
+    return 0 - 1;
+}
+
+pub Int ocsp_rb_body(List(Int) b, Int p) {
+    Int inside = der_content_pos(b, p);
+    return der_content_pos(b, inside);
+}
+
+// Whether the element at `pos` is wholly inside the buffer. A truncated
+// or lying length is not evidence, and must not be indexed past.
+pub Bool ocsp_fits(List(Int) d, Int pos) {
+    DerTlv t = der_next(d, pos);
+    if (t.val_len < 0) { return false; }
+    Int c = der_content_pos(d, pos);
+    if (c < 0) { return false; }
+    return (c + t.val_len) <= d.len();
+}
+
+// The BasicOCSPResponse bytes, or [] when the response is not one.
+pub List(Int) ocsp_basic(List(Int) b) {
+    Int rb = ocsp_response_bytes_pos(b);
+    if (rb < 0) { return []; }
+    Int body = ocsp_rb_body(b, rb);
+    Str oid = der_oid_str(b, body);
+    if (oid != ocsp_oid_basic()) { return []; }
+    Int oct = x509_skip_tlv(b, body);
+    if (!ocsp_fits(b, oct)) { return []; }
+    return der_content(b, oct);
+}
+
+// Field positions inside a BasicOCSPResponse.
+pub Int ocsp_tbs_pos(List(Int) b) { return der_content_pos(b, 0); }
+pub Int ocsp_basic_tbs_body(List(Int) b) { return der_content_pos(b, ocsp_tbs_pos(b)); }
+pub Int ocsp_basic_sigalg(List(Int) b) { return x509_skip_tlv(b, ocsp_tbs_pos(b)); }
+pub Int ocsp_basic_sig(List(Int) b) { return x509_skip_tlv(b, ocsp_basic_sigalg(b)); }
+pub Int ocsp_basic_after_sig(List(Int) b) { return x509_skip_tlv(b, ocsp_basic_sig(b)); }
+
+// The `certs` SEQUENCE (a delegated responder's certificate), or -1.
+pub Int ocsp_basic_certs_pos(List(Int) b) {
+    Int p = ocsp_basic_after_sig(b);
+    DerTlv t = der_next(b, p);
+    if (t.val_len < 0) { return 0 - 1; }
+    if (t.cls == 2 && (t.tag & 31) == 0) { return p; }
+    return 0 - 1;
+}
+
+pub Int ocsp_certs_first(List(Int) b, Int p) {
+    Int inner = der_content_pos(b, p);
+    Int seqc = der_content_pos(b, inner);
+    DerTlv t = der_next(b, seqc);
+    if (t.val_len < 0) { return 0 - 1; }
+    return x509_skip_tlv(b, seqc);
+}
+
+// ─── ResponseData ─────────────────────────────────────────────────────
+//
+// Every offset below is into the BasicOCSPResponse bytes, not the
+// response envelope.
+
+pub Int ocsp_rd_body(List(Int) d) {
+    return der_content_pos(d, ocsp_tbs_pos(d));
+}
+
+// responderID, skipping the optional version [0] ahead of it.
+pub Int ocsp_rd_responder_id(List(Int) d) {
+    Int p = ocsp_rd_body(d);
+    DerTlv t = der_next(d, p);
+    if (t.val_len < 0) { return 0 - 1; }
+    if (t.cls == 2 && (t.tag & 31) == 0) { return x509_skip_tlv(d, p); }
+    return p;
+}
+
+pub Int ocsp_rd_produced_at(List(Int) d) {
+    return x509_skip_tlv(d, ocsp_rd_responder_id(d));
+}
+
+pub Int ocsp_rd_responses(List(Int) d) {
+    return x509_skip_tlv(d, ocsp_rd_produced_at(d));
+}
+
+// One past the last SingleResponse.
+pub Int ocsp_rd_end(List(Int) d) {
+    return x509_skip_tlv(d, ocsp_rd_responses(d));
+}
+
+// ─── SingleResponse ──────────────────────────────────────────────────
+
+pub Int ocsp_sr_certid(List(Int) d, Int seq) {
+    return der_content_pos(d, der_content_pos(d, seq));
+}
+
+pub Int ocsp_sr_status(List(Int) d, Int seq) {
+    return x509_skip_tlv(d, ocsp_sr_certid(d, seq));
+}
+
+pub Int ocsp_sr_this_update(List(Int) d, Int seq) {
+    return x509_skip_tlv(d, ocsp_sr_status(d, seq));
+}
+
+// The revocation time inside a revoked status, or -1.
+pub Int ocsp_rev_time(List(Int) d, Int seq) {
+    Int p = ocsp_sr_status(d, seq);
+    DerTlv t = der_next(d, p);
+    if (t.val_len < 0 || t.cls != 2 || (t.tag & 31) != 1) { return 0 - 1; }
+    return der_content_pos(d, p);
+}
+
+// good is [0] primitive, revoked [1] constructed around a revocation
+// time, unknown [2] primitive. Anything else is not a status we know.
+pub Int ocsp_status_code(List(Int) d, Int seq) {
+    Int p = ocsp_sr_status(d, seq);
+    DerTlv t = der_next(d, p);
+    if (t.val_len < 0 || t.cls != 2) { return 0 - 1; }
+    Int tag = t.tag & 31;
+    if (tag == 0) { return ocsp_status_good(); }
+    if (tag == 1) { return ocsp_status_revoked(); }
+    if (tag == 2) { return ocsp_status_unknown(); }
+    return 0 - 1;
+}
+
+// The SingleResponse naming exactly this CertID, or -1.
+pub Int ocsp_find_sr(List(Int) d, List(Int) want, Int i, Int end) {
+    if (i >= end) { return 0 - 1; }
+    DerTlv t = der_next(d, i);
+    if (t.val_len < 0) { return 0 - 1; }
+    if (eq_bytes(der_content(d, ocsp_sr_certid(d, i)), want)) { return i; }
+    return ocsp_find_sr(d, want, x509_skip_tlv(d, i), end);
+}
+
+// ─── The signature ───────────────────────────────────────────────────
+//
+// tbsResponseData is signed exactly as it appears, so it is re-encoded as
+// the tag/length/content it was read from rather than rebuilt.
+
+pub Bool ocsp_sig_ok(List(Int) d, List(Int) signer) {
+    List(Int) signed = der_tlv_bytes(d, ocsp_tbs_pos(d));
+    Int algc = ocsp_basic_sigalg(d);
+    return x509_sig_ok(d, algc, signed, cert_pubkey_bits(signer), der_tlv_bytes(d, ocsp_basic_sig(d)));
+}
+
+// ─── Answering ───────────────────────────────────────────────────────
+
+// What `resp` says about `cert` under `issuer` at unix second `now`.
+// Returns good, revoked, unknown, or no_answer. A response that is not
+// signed by the issuer, is not about this certificate, or is outside its
+// validity window yields no_answer: no evidence is not a pass.
+pub Int ocsp_status_for(List(Int) issuer, List(Int) cert, List(Int) resp, Int now) {
+    List(Int) d = ocsp_basic(resp);
+    if (d.len() == 0) { return ocsp_status_no_answer(); }
+    if (!ocsp_sig_ok(d, issuer)) { return ocsp_status_no_answer(); }
+    List(Int) want = ocsp_certid_for(issuer, cert, []);
+    Int seq = ocsp_find_sr(d, want, ocsp_rd_responses(d), ocsp_rd_end(d));
+    if (seq < 0) { return ocsp_status_no_answer(); }
+    Int tu = x509_time_to_unix(der_str_value(d, ocsp_sr_this_update(d, seq)));
+    if (tu == 0 - 1) { return ocsp_status_no_answer(); }
+    if (now < tu) { return ocsp_status_no_answer(); }
+    Int nu = ocsp_sr_next_update(d, seq);
+    if (nu >= 0) {
+        Int ne = x509_time_to_unix(der_str_value(d, nu));
+        if (ne == 0 - 1) { return ocsp_status_no_answer(); }
+        if (now > ne) { return ocsp_status_no_answer(); }
+    }
+    Int st = ocsp_status_code(d, seq);
+    if (st == 0 - 1) { return ocsp_status_no_answer(); }
+    return st;
+}
+
+// When `cert` was revoked, as a unix second, or -1. Only meaningful once
+// ocsp_status_for has reported revoked.
+pub Int ocsp_revoked_at(List(Int) issuer, List(Int) cert, List(Int) resp) {
+    List(Int) d = ocsp_basic(resp);
+    if (d.len() == 0) { return 0 - 1; }
+    List(Int) want = ocsp_certid_for(issuer, cert, []);
+    Int seq = ocsp_find_sr(d, want, ocsp_rd_responses(d), ocsp_rd_end(d));
+    if (seq < 0) { return 0 - 1; }
+    Int rt = ocsp_rev_time(d, seq);
+    if (rt < 0) { return 0 - 1; }
+    return x509_time_to_unix(der_str_value(d, rt));
+}
+
+// ─── Rebuilding DER, to compare against a CertID ─────────────────────
+
+// One element as it appears in an encoding: tag, the length in the fewest
+// octets DER allows, then the content.
+pub List(Int) der_el(Int tag, List(Int) content) {
+    Int len = content.len();
+    List(Int) hdr = if (len < 128) { [len] } else { der_long_len(len) };
+    return [tag].concat(hdr).concat(content);
+}
+
+pub List(Int) der_long_len(Int len) {
+    Int n = der_len_width(len, 1, 0);
+    return [128 + n].concat(der_long_len_len(len, 0, n, []));
+}
+
+pub List(Int) der_long_len_len(Int len, Int i, Int n, List(Int) acc) {
+    if (i >= n) { return acc; }
+    return der_long_len_len(len, i + 1, n, acc.concat([(len >> (8 * (n - i - 1))) & 255]));
+}
+
+pub Int der_len_width(Int len, Int i, Int n) {
+    if ((len >> (8 * i)) == 0) { return n; }
+    return der_len_width(len, i + 1, n + 1);
+}
+
+// One element as bytes, tag and length included.
+pub List(Int) der_tlv_bytes(List(Int) data, Int pos) {
+    DerTlv t = der_next(data, pos);
+    Int c = der_content_pos(data, pos);
+    return take_range(data, pos, c - pos, 0, []).concat(take_range(data, c, t.val_len, 0, []));
+}
+
+pub List(Int) take_range(List(Int) data, Int start, Int n, Int i, List(Int) acc) {
+    if (i >= n) { return acc; }
+    return take_range(data, start, n, i + 1, acc.concat([data[start + i]]));
+}
+
+// 1.3.14.3.2.26, SHA-1: the only hash RFC 6960 defines for CertID. The
+// first two arcs share one octet, 40*1+3 = 43.
+pub List(Int) ocsp_sha1_oid_octets() { return [43, 14, 3, 2, 26]; }
+
+// The CertID this client expects for `cert` under `issuer`, as the
+// content of the CertID SEQUENCE.
+pub List(Int) ocsp_certid_for(List(Int) issuer, List(Int) cert, List(Int) seq) {
+    // The issuer's subject Name, hashed as the whole DER element.
+    List(Int) name_hash = sha1_bytes(der_tlv_bytes(issuer, x509_subject_pos(issuer)));
+    // RFC 6285: the key hash covers the subjectPublicKey BIT STRING
+    // contents with the unused-bits octet excluded. cert_pubkey_bits
+    // keeps that octet, so drop it here.
+    Int sp = x509_spki_pos(issuer);
+    Int bitp = x509_skip_tlv(issuer, der_content_pos(issuer, sp));
+    Int ksc = der_content_pos(issuer, bitp);
+    DerTlv kv = der_next(issuer, bitp);
+    List(Int) key_hash = sha1_bytes(der_slice_seeded(issuer, ksc + 1, ksc + kv.val_len - 1));
+    // DER INTEGER is signed, so a leading high bit needs a 0 octet.
+    List(Int) serial = x509_serial_bytes(cert);
+    Bool pad = serial.len() > 0 && ((serial[0] & 128) != 0);
+    List(Int) n = if (pad) { [0].concat(serial) } else { serial };
+    List(Int) algid = der_el(48, der_el(6, ocsp_sha1_oid_octets()).concat(der_el(5, [])));
+    return algid
+        .concat(der_el(4, name_hash))
+        .concat(der_el(4, key_hash))
+        .concat(der_el(2, n))
+        .concat(seq);
+}
+
+// The nextUpdate [0] element, or -1 when the responder left it out.
+pub Int ocsp_sr_next_update(List(Int) d, Int seq) {
+    Int p = ocsp_sr_this_update(d, seq);
+    DerTlv t = der_next(d, p);
+    if (t.val_len < 0) { return 0 - 1; }
+    if (t.cls == 2 && (t.tag & 31) == 0) { return p; }
+    return 0 - 1;
+}
