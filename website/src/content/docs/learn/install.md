@@ -61,8 +61,10 @@ directory, then the install's `~/.resid/keys`. For a per-project key:
 residc keygen          # writes keys/resid-ed25519.key and .pub
 ```
 
-`residc verify` trusts `keys/*.pub` and the install's `keys/*.pub`. Debug
-and check builds need no key.
+`residc verify` accepts a key from the install's `keys/*.pub` (reported
+as `anchored`), from `--pub` or `RESID_VERIFY_PUB` (`supplied`) or from
+`keys/*.pub` in the current directory (`local`, which is not an anchor;
+`--anchored` refuses it). Debug and check builds need no key.
 
 ## Editor support
 

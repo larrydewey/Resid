@@ -65,7 +65,8 @@ Int main() {
   itself in about a second; the runtime is Resid too, and binaries are
   static executables with no C library.
 - **Signed provenance.** Every release binary carries a COSE signature
-  binding its source, code and sidecars.
+  binding its source, code, sidecars, builder and grant; `residc verify`
+  reports what it re-derived apart from what the signer asserts.
 
 ## Quick start
 

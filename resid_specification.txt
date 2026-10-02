@@ -1916,8 +1916,26 @@ no trailer and the compiler reports it as a note.
 
 `resid verify <binary>` checks the signature against the
 keyring (§28.3), the code hash, and the hash of each
-sidecar present. (Implementation status: the graph tools
-do not verify on their own; run `residc verify` first.)
+sidecar present, and then reports the record in two
+parts. EVIDENCE is what the verifier re-derived itself:
+the code hash, each sidecar's hash, the detached copy
+(byte-equal to the trailer when present), whether the
+compiler running `verify` is the one recorded, the graph
+artifact's sources and the capabilities its nodes use
+(which must lie within the grant), and the source hashes
+when `--sources DIR` names a tree to hash. ATTESTATION is
+what only the signer says: toolchain, profile, output
+name, grant, and the sources without `--sources`. The
+two are never collapsed into one answer.
+
+The key that verified the signature is named by where it
+came from: `anchored` ($RESID_HOME/keys, the install's
+keyring), `supplied` (`--pub`, `RESID_VERIFY_PUB`) or
+`local` (keys/*.pub in the current directory, which is
+not an anchor: whoever wrote that directory could have
+put the key there). `--anchored` accepts only an anchored
+key. (Implementation status: the graph tools do not
+verify on their own; run `residc verify` first.)
 
 The implementation may employ any target ISA extensions
 (AVX-512, NEON, SVE, etc.) for code generation and for
@@ -1976,12 +1994,15 @@ Provenance (CDDL; the COSE_Sign1 payload, §33.1):
                  sources: [* file], code: bstr,
                  ? graph: bstr, ? notes: bstr,
                  ? cache: bstr, grant: [* tstr],
-                 output: tstr }
+                 output: tstr, ? compiler: bstr }
 
 Hashes are SHA-256. code is the hash of the binary before
 its trailer; graph, notes and cache are the hashes of
-those sidecars' bytes; grant is the capability set the
-build ran under.
+those sidecars' bytes; compiler is the hash of the
+compiler binary that produced the build; grant is main's
+declared authority (§19), one entry per capability as
+`family` or `family(readonly)` -- authority enters a
+program only at main, so this is the whole program's.
 
 ResidualNotes is a projection of the graph: one note for
 each residual node, reachable from the residual roots,

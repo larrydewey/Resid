@@ -7,7 +7,7 @@ description: The compiler's commands, options, profiles, outputs and environment
 residc <file.resid> [-o out] [--profile release|debug|check] [-O0|-O1|-O2|-O3|-Os|-Oz]
 residc test <file.resid> [--filter REGEX] [--format pretty|tap|json]
 residc keygen [dir]
-residc verify <binary> [--pub HEX]
+residc verify <binary> [--pub HEX] [--anchored] [--sources DIR]
 residc lsp
 ```
 
@@ -52,7 +52,10 @@ static binary with clang. The default output is `a.out`.
 - `residc keygen [dir]` writes an Ed25519 key pair (`resid-ed25519.key`,
   readable only by its owner, and `.pub`), by default in `keys/`.
 - `residc verify <binary>` checks the provenance signature, the code hash
-  and every sidecar present.
+  and every sidecar present, then reports evidence and attestation apart
+  and names the keyring the key came from; `--anchored` accepts only the
+  install's keyring and `--sources DIR` re-hashes the sources
+  ([Provenance](/Resid/reference/provenance/)).
 - `residc lsp` runs the language server on stdin/stdout
   ([Editor](/Resid/tools/editor/)).
 

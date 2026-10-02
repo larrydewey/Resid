@@ -8071,21 +8071,71 @@ Str graph_hash_esc(Str hex, Int i, StrBuf acc) {
 }
 
 // The Provenance map, keys in deterministic (length, then bytewise) order.
+// `grant` is main's declared authority ("filesystem(readonly),environment");
+// `comp` is the SHA-256 of the compiler binary itself, [] when unreadable.
 @requires(filesystem(readonly))
-List(Int) prov_payload(Str out, Str profile, Str done, List(Int) code, List(Int) notes, List(Int) graph) {
+List(Int) prov_payload(Str out, Str profile, Str done, List(Int) code, List(Int) notes, List(Int) graph, Str grant, List(Int) comp) {
     List(Str) paths = str_split(done, ";");
+    List(Str) gs = if (grant == "") { [] } else { str_split(grant, ",") };
     Int nopt = if (notes.len() > 0) { 1 } else { 0 };
     Int gopt = if (graph.len() > 0) { 1 } else { 0 };
-    List(Int) m0 = cbe_map(6 + nopt + gopt, []);
+    Int copt = if (comp.len() == 32) { 1 } else { 0 };
+    List(Int) m0 = cbe_map(6 + nopt + gopt + copt, []);
     List(Int) m1 = cbe_bytes(code, cbe_text("code", m0));
-    List(Int) m2 = cbe_array(0, cbe_text("grant", m1));
+    List(Int) m2 = prov_texts(gs, 0, cbe_array(gs.len(), cbe_text("grant", m1)));
     List(Int) m3 = if (gopt == 1) { cbe_bytes(graph, cbe_text("graph", m2)) } else { m2 };
     List(Int) m4 = if (nopt == 1) { cbe_bytes(notes, cbe_text("notes", m3)) } else { m3 };
     List(Int) m5 = cbe_text(out, cbe_text("output", m4));
     List(Int) m6 = cbe_text(profile, cbe_text("profile", m5));
     List(Int) m7 = cbe_array(prov_count_paths(paths, 0, 0), cbe_text("sources", m6));
     List(Int) m8 = prov_sources(paths, 0, m7);
-    return cbe_text("resid-stage2 3.5", cbe_text("toolchain", m8));
+    List(Int) m9 = if (copt == 1) { cbe_bytes(comp, cbe_text("compiler", m8)) } else { m8 };
+    return cbe_text(prov_toolchain(), cbe_text("toolchain", m9));
+}
+
+Str prov_toolchain() { return "resid-stage2 3.5"; }
+
+List(Int) prov_texts(List(Str) xs, Int i, List(Int) acc) {
+    if (i >= xs.len()) { return acc; }
+    return prov_texts(xs, i + 1, cbe_text(xs[i], acc));
+}
+
+// SHA-256 of the running compiler binary; [] when /proc/self/exe is unreadable.
+@requires(filesystem(readonly))
+List(Int) prov_self_hash() {
+    List(Int) empty = [];
+    if (!filesystem.exists("/proc/self/exe")) { return empty; }
+    return filesystem.sha256("/proc/self/exe");
+}
+
+// `main`'s declared authority, one `family` or `family(readonly)` per entry,
+// comma-joined; "" when there is no main or it declares nothing. Authority
+// enters a program only at main (E0219), so this is the program's whole grant.
+Str prov_grant(Kg g, Int root) { return prov_grant_at(g, root, 0, g.ns[root].nk); }
+
+Str prov_grant_at(Kg g, Int root, Int i, Int n) {
+    if (i >= n) { return ""; }
+    Int d = kg_kid(g, root, i);
+    if (g.ns[d].kind == "fn" && g.ns[d].text == "main") { return prov_grant_of(g.ns[d].aux); }
+    return prov_grant_at(g, root, i + 1, n);
+}
+
+Str prov_grant_of(Str pre) {
+    Int at = str_find(pre, "@requires");
+    if (at < 0) { return ""; }
+    Int lp = str_find_char(pre, 40, at);
+    if (lp < 0) { return ""; }
+    Str moded = cap_list_at(pre, lp + 1, true, "").ty;
+    if (moded == "") { return ""; }
+    return list_join(prov_grant_show(str_split(moded, ","), 0, ListBuf()), 0, ",", "");
+}
+
+// `filesystem:ro` -> `filesystem(readonly)`; a full grant is the bare family.
+List(Str) prov_grant_show(List(Str) cs, Int i, ListBuf(Str) acc) {
+    if (i >= cs.len()) { return acc.finish(); }
+    Str c = cs[i];
+    Str shown = if (str_ends_with(c, ":ro")) { str_slice(c, 0, str_len(c) - 3) + "(readonly)" } else { c };
+    return prov_grant_show(cs, i + 1, acc.push(shown));
 }
 
 List(Int) prov_u32(Int v) {
@@ -8094,7 +8144,7 @@ List(Int) prov_u32(Int v) {
 
 // Sign `out` in place. Returns 0, or 1 when signing is required but fails.
 @requires(filesystem, environment)
-Int write_provenance(Str out, Str profile, Str done) {
+Int write_provenance(Str out, Str profile, Str done, Str grant) {
     Str kpath = prov_key_path();
     if (kpath == "") {
         println("note: provenance: unsigned " + profile + " build (no signing key)");
@@ -8108,7 +8158,7 @@ Int write_provenance(Str out, Str profile, Str done) {
     List(Int) code = filesystem.sha256(out);
     List(Int) notes = prov_file_hash(out + ".resid-notes.cbor");
     List(Int) graph = prov_file_hash(out + ".resid-graph.cbor");
-    List(Int) map = prov_payload(out, profile, done, code, notes, graph);
+    List(Int) map = prov_payload(out, profile, done, code, notes, graph, grant, prov_self_hash());
     Str ekey = environment.get("RESID_PROV_KEY");
     Bool conceal = environment.get("RESID_PROV_ENCRYPT") == "1";
     if (conceal && ekey == "") {
@@ -8191,39 +8241,118 @@ List(Int) cbe_map_bytes_at(List(Int) b, Int pos, Int left, Str key) {
     return cbe_map_bytes_at(b, cbe_skip(b, k.pos), left - 1, key);
 }
 
-// Public keys to try: --pub, $RESID_VERIFY_PUB, keys/*.pub, then the
-// installed $RESID_HOME/keys/*.pub.
+// Value position under text key `key` in the map at `pos`, or -1.
+Int cbe_map_find_in(List(Int) b, Int pos, Str key) {
+    CbeHead m = cbe_read_head(b, pos);
+    if (!m.ok || m.major != 5) { return -1; }
+    return cbe_map_find_at(b, m.pos, m.val, key);
+}
+
+Int cbe_map_find_at(List(Int) b, Int pos, Int left, Str key) {
+    if (left <= 0 || pos >= b.len()) { return -1; }
+    CbeStr k = cbe_read_str(b, pos, 3);
+    if (!k.ok) { return -1; }
+    if (cbe_ascii(k.bytes, 0, "") == key) { return k.pos; }
+    return cbe_map_find_at(b, cbe_skip(b, k.pos), left - 1, key);
+}
+
+// Text value of `key` in the top-level map; "" when absent.
+Str cbe_map_text(List(Int) b, Str key) {
+    Int p = cbe_map_find_in(b, 0, key);
+    if (p < 0) { return ""; }
+    CbeStr v = cbe_read_str(b, p, 3);
+    return if (v.ok) { cbe_ascii(v.bytes, 0, "") } else { "" };
+}
+
+// The text items of the array under `key` in the map at `pos`; [] when absent.
+List(Str) cbe_map_texts_in(List(Int) b, Int pos, Str key) {
+    List(Str) empty = [];
+    Int p = cbe_map_find_in(b, pos, key);
+    if (p < 0) { return empty; }
+    CbeHead a = cbe_read_head(b, p);
+    if (!a.ok || a.major != 4) { return empty; }
+    return cbe_texts_at(b, a.pos, a.val, ListBuf());
+}
+
+List(Str) cbe_texts_at(List(Int) b, Int pos, Int left, ListBuf(Str) acc) {
+    if (left <= 0) { return acc.finish(); }
+    CbeStr v = cbe_read_str(b, pos, 3);
+    if (!v.ok) { return acc.finish(); }
+    return cbe_texts_at(b, v.pos, left - 1, acc.push(cbe_ascii(v.bytes, 0, "")));
+}
+
+// The {path, hash} entries of the array under `key`, each as "HEX PATH".
+List(Str) vf_sources_of(List(Int) b, Str key) {
+    List(Str) empty = [];
+    Int p = cbe_map_find_in(b, 0, key);
+    if (p < 0) { return empty; }
+    CbeHead a = cbe_read_head(b, p);
+    if (!a.ok || a.major != 4) { return empty; }
+    return vf_sources_at(b, a.pos, a.val, ListBuf());
+}
+
+List(Str) vf_sources_at(List(Int) b, Int pos, Int left, ListBuf(Str) acc) {
+    if (left <= 0 || pos >= b.len()) { return acc.finish(); }
+    Int pp = cbe_map_find_in(b, pos, "path");
+    Int hp = cbe_map_find_in(b, pos, "hash");
+    if (pp < 0 || hp < 0) { return acc.finish(); }
+    CbeStr path = cbe_read_str(b, pp, 3);
+    CbeStr hash = cbe_read_str(b, hp, 2);
+    Str entry = hex_encode(hash.bytes) + " " + cbe_ascii(path.bytes, 0, "");
+    return vf_sources_at(b, cbe_skip(b, pos), left - 1, acc.push(entry));
+}
+
+// Every string of `xs` is in `ys`.
+Bool vf_all_in(List(Str) xs, Int i, List(Str) ys) {
+    if (i >= xs.len()) { return true; }
+    if (!ys.contains(xs[i])) { return false; }
+    return vf_all_in(xs, i + 1, ys);
+}
+
+// Keys to try, each "mode:HEX", strongest first: anchored
+// ($RESID_HOME/keys/*.pub, the install's keyring), supplied (--pub,
+// $RESID_VERIFY_PUB) and local (keys/*.pub in the current directory, which
+// whoever wrote this directory could have put there).
 @requires(environment, filesystem(readonly))
 List(Str) vf_pubs(Str given) {
-    List(Str) a = if (given != "") { [given] } else { [] };
-    Str e = environment.get("RESID_VERIFY_PUB");
-    List(Str) b = if (e != "") { a.concat([e]) } else { a };
-    List(Str) c = vf_pub_dir("keys", b);
+    List(Str) none = [];
     Str home = environment.get("RESID_HOME");
-    return if (home == "") { c } else { vf_pub_dir(home + "/keys", c) };
+    List(Str) a = if (home == "") { none } else { vf_pub_dir(home + "/keys", "anchored", none) };
+    List(Str) b = if (given != "") { a.concat(["supplied:" + given]) } else { a };
+    Str e = environment.get("RESID_VERIFY_PUB");
+    List(Str) c = if (e != "") { b.concat(["supplied:" + e]) } else { b };
+    return vf_pub_dir("keys", "local", c);
 }
 
 @requires(filesystem(readonly))
-List(Str) vf_pub_dir(Str dir, List(Str) acc) {
+List(Str) vf_pub_dir(Str dir, Str mode, List(Str) acc) {
     if (!filesystem.is_dir(dir)) { return acc; }
-    return vf_pub_files(dir, filesystem.list_dir(dir), 0, acc);
+    return vf_pub_files(dir, mode, filesystem.list_dir(dir), 0, acc);
 }
 
 @requires(filesystem(readonly))
-List(Str) vf_pub_files(Str dir, List(Str) names, Int i, List(Str) acc) {
+List(Str) vf_pub_files(Str dir, Str mode, List(Str) names, Int i, List(Str) acc) {
     if (i >= names.len()) { return acc; }
     Str n = names[i];
-    if (!str_ends_with(n, ".pub")) { return vf_pub_files(dir, names, i + 1, acc); }
+    if (!str_ends_with(n, ".pub")) { return vf_pub_files(dir, mode, names, i + 1, acc); }
     Str k = str_trim(filesystem.read_all(dir + "/" + n));
-    return vf_pub_files(dir, names, i + 1, acc.concat([k]));
+    return vf_pub_files(dir, mode, names, i + 1, acc.concat([mode + ":" + k]));
 }
 
-// The key whose kid matches, or "".
+// The first "mode:HEX" whose key matches kid, or "".
 Str vf_pick(List(Str) pubs, Int i, Str kid) {
     if (i >= pubs.len()) { return ""; }
     Str p = pubs[i];
-    if (str_len(p) == 64 && str_slice(p, 0, 16) == kid) { return p; }
+    Int colon = str_find_char(p, 58, 0);
+    Str hex = str_slice(p, colon + 1, str_len(p));
+    if (str_len(hex) == 64 && str_slice(hex, 0, 16) == kid) { return p; }
     return vf_pick(pubs, i + 1, kid);
+}
+
+Str vf_mode_desc(Str mode) {
+    if (mode == "anchored") { return "the install's keyring, $RESID_HOME/keys"; }
+    if (mode == "supplied") { return "a key given for this run, --pub or RESID_VERIFY_PUB"; }
+    return "keys/*.pub in the current directory, not an anchor";
 }
 
 Int vf_fail(Str msg) {
@@ -8240,8 +8369,65 @@ Str vf_sidecar(Str path, List(Int) want) {
     return "";
 }
 
+Str vf_sidecar_note(Str path, List(Int) want) {
+    return if (want.len() == 0) { "evidence: " + path + " absent, and not signed" } else { "evidence: " + path + " matches its signed hash" };
+}
+
+// Each "HEX PATH" source against the file under `dir` (absolute paths as
+// they are): "" when all match, else the first failure.
+@requires(filesystem(readonly))
+Str vf_sources_check(List(Str) srcs, Int i, Str dir) {
+    if (i >= srcs.len()) { return ""; }
+    Str e = srcs[i];
+    Str want = str_slice(e, 0, 64);
+    Str path = str_slice(e, 65, str_len(e));
+    Str file = if (str_starts_with(path, "/")) { path } else { dir + "/" + path };
+    if (!filesystem.exists(file)) { return "source " + path + " is missing under " + dir; }
+    if (hex_encode(filesystem.sha256(file)) != want) { return "source " + file + " does not match its signed hash"; }
+    return vf_sources_check(srcs, i + 1, dir);
+}
+
+// The graph artifact against the record: its sources must be the record's
+// and every capability its nodes use must be within the grant. "" or the failure.
+Str vf_graph(List(Int) g, List(Str) grant, List(Str) recsrc) {
+    List(Str) gsrc = vf_sources_of(g, "source");
+    if (gsrc.len() != recsrc.len() || !vf_all_in(gsrc, 0, recsrc) || !vf_all_in(recsrc, 0, gsrc)) { return "the graph's sources differ from the signed record's"; }
+    Int np = cbe_map_find_in(g, 0, "nodes");
+    if (np < 0) { return "the graph has no nodes"; }
+    CbeHead a = cbe_read_head(g, np);
+    if (!a.ok || a.major != 4) { return "the graph's nodes are malformed"; }
+    return vf_graph_caps(g, a.pos, a.val, vf_families(grant, 0, ListBuf()), grant);
+}
+
+// `filesystem(readonly)` -> `filesystem`.
+List(Str) vf_families(List(Str) gs, Int i, ListBuf(Str) acc) {
+    if (i >= gs.len()) { return acc.finish(); }
+    Str c = gs[i];
+    Int lp = str_find_char(c, 40, 0);
+    return vf_families(gs, i + 1, acc.push(if (lp < 0) { c } else { str_slice(c, 0, lp) }));
+}
+
+Str vf_graph_caps(List(Int) g, Int pos, Int left, List(Str) fams, List(Str) grant) {
+    if (left <= 0 || pos >= g.len()) { return ""; }
+    Str bad = vf_first_outside(cbe_map_texts_in(g, pos, "capabilities"), 0, fams);
+    if (bad != "") { return "the graph uses capability `" + bad + "`, outside the recorded grant [" + list_join(grant, 0, ", ", "") + "]"; }
+    return vf_graph_caps(g, cbe_skip(g, pos), left - 1, fams, grant);
+}
+
+Str vf_first_outside(List(Str) caps, Int i, List(Str) fams) {
+    if (i >= caps.len()) { return ""; }
+    if (!fams.contains(caps[i])) { return caps[i]; }
+    return vf_first_outside(caps, i + 1, fams);
+}
+
+// `residc verify`: the trailer's signature under a trusted key, then what the
+// record says, split into EVIDENCE (re-derived here: code, sidecars, the
+// detached copy, the compiler, the graph's sources and capabilities, and the
+// sources when --sources names a tree) and ATTESTATION (only the signer says
+// so: toolchain, profile, output, grant, and sources without --sources).
+// --anchored accepts only a key from $RESID_HOME/keys.
 @requires(filesystem(readonly), environment)
-Int cmd_verify(Str bin_path, Str pub_given) {
+Int cmd_verify(Str bin_path, Str pub_given, Bool anchored, Str srcdir) {
     List(Int) b = filesystem.read_bytes(bin_path);
     Int n = b.len();
     Int ml = str_len(prov_magic());
@@ -8250,11 +8436,17 @@ Int cmd_verify(Str bin_path, Str pub_given) {
     Int clen = cbe_be_read(b, n - ml - 4, 4, 0);
     Int cstart = n - ml - 4 - clen;
     if (cstart < 0) { return vf_fail("malformed trailer"); }
-    CoseSign1 c = cose_sign1_parse(slice_bytes(b, cstart, cstart + clen - 1));
+    List(Int) cose = slice_bytes(b, cstart, cstart + clen - 1);
+    CoseSign1 c = cose_sign1_parse(cose);
     if (!c.ok) { return vf_fail(c.err); }
-    Str pub = vf_pick(vf_pubs(pub_given), 0, c.kid);
-    if (pub == "") { return vf_fail("no trusted key with kid " + c.kid + " (keyring: keys/*.pub, $RESID_HOME/keys/*.pub, --pub, RESID_VERIFY_PUB)"); }
+    Str key = vf_pick(vf_pubs(pub_given), 0, c.kid);
+    if (key == "") { return vf_fail("no trusted key with kid " + c.kid + " (anchored: $RESID_HOME/keys/*.pub; supplied: --pub, RESID_VERIFY_PUB; local: keys/*.pub)"); }
+    Int colon = str_find_char(key, 58, 0);
+    Str mode = str_slice(key, 0, colon);
+    Str pub = str_slice(key, colon + 1, str_len(key));
+    if (anchored && mode != "anchored") { return vf_fail("kid " + c.kid + " is a " + mode + " key; --anchored accepts only $RESID_HOME/keys/*.pub"); }
     if (!cose_sign1_check(c, cose_hex_decode(pub))) { return vf_fail("bad signature"); }
+    println("trust: " + mode + " (" + vf_mode_desc(mode) + "; kid " + c.kid + ")");
     Str ekey = environment.get("RESID_PROV_KEY");
     Bool concealed = cose_is_encrypt0(c.payload);
     if (concealed && ekey == "") { return vf_fail("payload is concealed; set RESID_PROV_KEY to check its hashes"); }
@@ -8263,11 +8455,47 @@ Int cmd_verify(Str bin_path, Str pub_given) {
     List(Int) map = op.plaintext;
     List(Int) code = prov_sha256_bytes(slice_bytes(b, 0, cstart - 1));
     if (hex_encode(code) != hex_encode(cbe_map_bytes(map, "code"))) { return vf_fail("code hash mismatch (binary modified after signing)"); }
-    Str e1 = vf_sidecar(bin_path + ".resid-notes.cbor", cbe_map_bytes(map, "notes"));
+    println("evidence: code hash matches (" + hex_encode(code) + ")");
+    List(Int) nh = cbe_map_bytes(map, "notes");
+    Str e1 = vf_sidecar(bin_path + ".resid-notes.cbor", nh);
     if (e1 != "") { return vf_fail(e1); }
-    Str e2 = vf_sidecar(bin_path + ".resid-graph.cbor", cbe_map_bytes(map, "graph"));
+    println(vf_sidecar_note(bin_path + ".resid-notes.cbor", nh));
+    List(Int) gh = cbe_map_bytes(map, "graph");
+    Str e2 = vf_sidecar(bin_path + ".resid-graph.cbor", gh);
     if (e2 != "") { return vf_fail(e2); }
-    println("verify: ok (kid " + c.kid + ", code " + hex_encode(code) + ")");
+    println(vf_sidecar_note(bin_path + ".resid-graph.cbor", gh));
+    // The detached copy, when present, must be the trailer byte for byte.
+    Str dp = bin_path + ".resid-prov.cbor";
+    if (filesystem.exists(dp)) {
+        if (hex_encode(filesystem.read_bytes(dp)) != hex_encode(cose)) { return vf_fail(dp + " differs from the trailer"); }
+        println("evidence: " + dp + " equals the trailer");
+    }
+    List(Int) comp = cbe_map_bytes(map, "compiler");
+    List(Int) self = prov_self_hash();
+    if (comp.len() == 32 && self.len() == 32 && hex_encode(comp) == hex_encode(self)) {
+        println("evidence: built by this residc (compiler " + hex_encode(comp) + ")");
+    } else if (comp.len() == 32) {
+        println("attestation: compiler " + hex_encode(comp) + " (not this residc)");
+    } else {
+        println("attestation: compiler not recorded");
+    }
+    List(Str) grant = cbe_map_texts_in(map, 0, "grant");
+    List(Str) srcs = vf_sources_of(map, "sources");
+    if (gh.len() > 0) {
+        Str ge = vf_graph(filesystem.read_bytes(bin_path + ".resid-graph.cbor"), grant, srcs);
+        if (ge != "") { return vf_fail(ge); }
+        println("evidence: the graph's sources are the record's, and its capabilities are within the grant");
+    }
+    if (srcdir != "") {
+        Str se = vf_sources_check(srcs, 0, srcdir);
+        if (se != "") { return vf_fail(se); }
+        println(f"evidence: {srcs.len()} source file(s) under " + srcdir + " match their signed hashes");
+    } else {
+        println(f"attestation: {srcs.len()} source file(s), hashes signed but not re-derived (--sources DIR checks a tree)");
+    }
+    println("attestation: toolchain " + cbe_map_text(map, "toolchain") + ", profile " + cbe_map_text(map, "profile") + ", output " + cbe_map_text(map, "output"));
+    println("attestation: grant [" + list_join(grant, 0, ", ", "") + "]");
+    println("verify: ok (kid " + c.kid + ", code " + hex_encode(code) + ", trust " + mode + ")");
     return 0;
 }
 
@@ -8552,7 +8780,7 @@ Int main() {
     Int argc  =  args.count();
     if (argc < 2) {
         println("usage: driver <source.res> [-o out] [-rt resid_rt.c] [-O0|-O1|-O2|-O3|-Os|-Oz]");
-        println("       driver keygen [dir] | driver verify <binary> [--pub HEX] | driver lsp");
+        println("       driver keygen [dir] | driver verify <binary> [--pub HEX] [--anchored] [--sources DIR] | driver lsp");
         println("       driver test [<file.resid>] [--root DIR] [--filter RE] [--format pretty|tap|json]");
         return 1;
     }
@@ -8564,10 +8792,10 @@ Int main() {
     }
     if (arg1 == "verify") {
         if (argc < 3) {
-            println("usage: driver verify <binary> [--pub HEX]");
+            println("usage: driver verify <binary> [--pub HEX] [--anchored] [--sources DIR]");
             return 2;
         }
-        return cmd_verify(args.get(2), pick_opt(argc, "--pub", ""));
+        return cmd_verify(args.get(2), pick_opt(argc, "--pub", ""), pick_flag(argc, "--anchored"), pick_opt(argc, "--sources", ""));
     }
     // `residc test <file>` (SPEC-testing.md §7.1): discover the file's
     // `test "..." { }` blocks, generate an entry point that runs them, then
@@ -8773,6 +9001,8 @@ Int main() {
         Bool dumped = filesystem.write_all(dump_path, kg_print(lkp.g, lkp.id));
     }
     Funcs fs = lw_sigs(lkp.g, lkp.id);
+    // main's declared authority, for the provenance record's `grant`.
+    List(Str) grk = resid_list_str_persist_copy([prov_grant(lkp.g, lkp.id)]);
     if (testmode && fn_index(fs, "main") >= 0) {
         println("test error: " + path + " defines main(); a test file's entry point is generated");
         return 2;
@@ -8857,7 +9087,7 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     Int _prov_in = resid_bulk_push();
     // Notes are a projection of the residual graph (gart.resid).
     Int nrc  =  write_graph_notes(out, ga_notes(gx_unpack(gpk[2]), gpk[4], rsrc, rr.map, path));
-    Int prc  =  write_provenance(out, profile, rr.done);
+    Int prc  =  write_provenance(out, profile, rr.done, grk[0]);
     Int _prov_out = resid_bulk_pop();
     return prc;
 }

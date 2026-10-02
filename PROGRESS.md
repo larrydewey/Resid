@@ -293,6 +293,33 @@ re-entry) and `whistle` (a generalized specialization), recorded against
 the call and inherited along derive edges. Self-compile: 2,517 budget and
 605 whistle reasons; debug peak 690MB.
 
+### 0zt. `residc verify` tells evidence from attestation (2026-10-02)
+
+A valid signature proves who wrote the record, not that the record is
+true, and `verify` used to collapse both into one `ok`. It now prints
+what it re-derived (`evidence:` the code hash, each sidecar, the detached
+copy byte-equal to the trailer, whether the running `residc` is the
+recorded builder, and for a signed graph artifact that its sources are
+the record's and every capability its nodes use lies within the grant)
+apart from what only the signer says (`attestation:` toolchain, profile,
+output, grant, and the sources unless `--sources DIR` re-hashes them).
+The verdict names the keyring the key came from -- `anchored`
+(`$RESID_HOME/keys`), `supplied` (`--pub`, `RESID_VERIFY_PUB`) or
+`local` (`keys/*.pub` in the current directory, which anything that
+wrote the directory could have planted) -- and `--anchored` refuses the
+last two. Two record fixes: `grant` was always `[]` and is now `main`'s
+declared `@requires` (`filesystem(readonly)` form), and the record gains
+`compiler`, the SHA-256 of the compiler binary (§34). The test suite grew
+from 21 to 56 cases: trust modes, each evidence line, a forged record
+under a valid signature (Python `cbor2` + `cryptography`, which also
+reads the genuine trailer independently), the two-byte CBOR length form
+from a two-source build and the four-byte form in `lib/cose.resid`'s
+reader. `SECURITY.md` gained a Provenance table and dropped the stale TLS
+"not guaranteed" items (OCSP, RSA-PSS dispatch, intermediate CA checks
+all exist). Prompted by the Zyl handoff on the same problem: a verifier
+whose tests only ask whether it rejects something passes when it rejects
+everything, so the positive cases come first.
+
 ### 0zs. A format spec for an f-string hole (2026-10-01)
 
 A hole's `:spec` used to be read as a boolean "there is a spec here" and

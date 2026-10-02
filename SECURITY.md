@@ -9,7 +9,7 @@ them with:
     tests/conformance/run.sh       # language cases, including err_* rejections
     tests/runtime/run.sh           # runtime properties (C harnesses over rt.ll)
     tests/pkg/run.sh               # package signing, trust and ceilings
-    tests/provenance/run.sh        # signed provenance trailers
+    tests/provenance/run.sh        # signed provenance trailers and residc verify
 
 ## Threat model
 
@@ -23,6 +23,10 @@ them with:
   package that was asked for.
 - **Untrusted input data** handled by a compiled program: it must not
   cause out-of-bounds memory access.
+- **A binary from elsewhere** that claims to be a Resid build: its
+  signature must be checked against a key the verifier already trusts,
+  and what the verifier re-derived must be told apart from what the
+  signer merely wrote down.
 - Out of scope: an attacker who can write the local build tree (`target/`,
   the key files, the compiler binary), timing and other side channels,
   and denial of service (a malformed input may abort the process).
@@ -120,11 +124,37 @@ proxy that terminates TLS.
 
 ## Provenance (spec §33.1)
 
-Release binaries carry a COSE_Sign1 (Ed25519) trailer binding the source,
-the binary and its sidecars. `residc verify` checks the signature against
-the keyring, the code hash and each sidecar (`tests/provenance/run.sh`).
-The graph tools (`resid-why`, `resid-graph`, `resid-debug`) do not verify
+Release binaries carry a COSE_Sign1 (Ed25519) trailer over a record that
+binds the source files, the binary and its sidecars by SHA-256. `residc
+verify` checks the signature and the hashes, then reports the record as
+**evidence** (what it re-derived) and **attestation** (what only the
+signer says), and names where the key it trusted came from. The graph
+tools (`resid-why`, `resid-graph`, `resid-debug`) do not verify
 provenance themselves; run `residc verify` before trusting their inputs.
+
+| Guarantee | Tests (`tests/provenance/run.sh`) |
+|---|---|
+| A release build without a signing key fails; a debug build without one is unsigned and says so. | release without key, debug without key |
+| The code hash covers every byte before the trailer: a modified binary, a modified signature and a modified sidecar are each refused, and a sidecar the signature covers may not be removed. | tampered code, tampered signature, tampered notes, tampered graph, missing signed sidecar |
+| The detached `.resid-prov.cbor`, when present, must be the trailer byte for byte. | detached copy that differs from the trailer |
+| The record's `grant` is `main`'s declared `@requires`, not an empty list; a program without authority records `[]`. | grant is main's @requires, empty grant for a main without @requires |
+| When the graph artifact is signed, its sources must be the record's and every capability its nodes use must lie within the grant. A record that lies about either, under a valid signature, is refused. | graph capability outside the signed grant, graph sources differ from the signed record |
+| The verdict says which keyring the key came from: `anchored` (`$RESID_HOME/keys`), `supplied` (`--pub`, `RESID_VERIFY_PUB`) or `local` (`keys/*.pub` in the current directory). A key found in both the install and the current directory is reported as anchored. `--anchored` refuses anything but the install's keyring. | supplied key is reported, cwd keys/ is local, RESID_HOME/keys is anchored, --anchored refuses a supplied key, --anchored refuses a local key |
+| Evidence and attestation are printed apart. The code hash, the sidecars, the detached copy, the builder (when the verifying `residc` is the one recorded) and the graph cross-checks are evidence; toolchain, profile, output and grant are attestation; sources are attestation unless `--sources DIR` re-hashes them, and then a changed or missing file is a failure. | code hash is evidence, builder compiler is evidence, another compiler: builder is attested, sources are attested without a tree, --sources re-derives, --sources catches a changed source |
+| The trailer is readable by an independent implementation (Python `cbor2` + `cryptography`), which also verifies the signature and the code hash. | independent reader accepts the genuine trailer |
+| CBOR one-, two- and four-byte length forms read back; a head whose length runs past the buffer is refused. | two sources use the two-byte length form, cbor one-, two- and four-byte lengths read back |
+| A concealed payload needs `RESID_PROV_KEY`, and a wrong key fails authentication. | concealed verify without key, concealed wrong key |
+| Rebuilding the same source with the same key gives the same bytes. | reproducible |
+
+Not guaranteed: `toolchain` and `profile` are attestation only, and
+`compiler` is evidence only when the `residc` running `verify` is the
+builder (otherwise it is a hash the reader may compare by hand); a
+`local` key verifies the signature exactly as an anchored one does, and
+is only *named* as local -- `--anchored` is the switch that refuses it;
+the graph cross-check applies only to builds that carry a signed graph
+artifact (debug and check profiles); `--sources` compares against the
+paths the record names, so a build from another directory needs its
+relative layout reproduced.
 
 ## Cryptography library
 
@@ -166,11 +196,11 @@ against a moment it did not read.
 
 Not guaranteed:
 
-- Revocation is CRL-based only. There is no OCSP, and no stapled OCSP
-  response in the handshake is read; a store with no CRL for an issuer
-  has no revocation information about that issuer's certificates, and
-  `revocation_required` is the switch that makes that a refusal rather
-  than an acceptance.
+- Revocation evidence comes from the store's CRLs and OCSP responses;
+  no stapled OCSP response in the handshake is read. A store with
+  neither for an issuer has no revocation information about that
+  issuer's certificates, and `revocation_required` is the switch that
+  makes that a refusal rather than an acceptance.
 - A pinned certificate (`trust_store_has`) is accepted without any chain,
   so it is not covered by a CRL: pinning is an explicit decision to trust
   those exact bytes, revocability included.
@@ -181,12 +211,8 @@ Not guaranteed:
   (and LLVM) may introduce branches.
 - DER, X.509 and HPACK parsers abort on malformed input rather than
   returning an error.
-- Only ECDSA P-256 (`1.2.840.10045.4.3.2`) and RSA PKCS#1 v1.5
-  (`1.2.840.113549.1.1.11`) certificate signatures are verified.
-  `rsa_pss_verify_sha256` exists in `lib/chain.resid` but `chain_verify`
-  does not dispatch to it, so an RSA-PSS-issued certificate does not
-  validate. Intermediates are not checked for `CA:TRUE`, and revocation
-  (CRL/OCSP) is not implemented.
+- Certificate signature algorithms other than ECDSA P-256, RSA PKCS#1
+  v1.5 and RSA-PSS with SHA-256 are not verified.
 
 ## Bootstrap
 

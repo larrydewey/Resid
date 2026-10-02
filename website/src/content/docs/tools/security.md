@@ -56,7 +56,9 @@ through the intermediates the server sent. With no store it trusts
 nothing; there is no way to turn the check off.
 
 **Provenance.** Every release binary carries a signed record binding
-source, code and sidecars; `residc verify` checks it.
+source, code, sidecars, the builder and `main`'s grant; `residc verify`
+checks it, reports what it re-derived apart from what the signer
+asserts, and names the keyring the key came from.
 
 **Bootstrap.** The committed seed must reproduce itself byte for byte
 through two rebuilds from source.
@@ -65,10 +67,13 @@ through two rebuilds from source.
 
 - TLS chain validation requires intermediates to be CAs, and covers
   ECDSA P-256, RSA PKCS#1 v1.5 and RSA-PSS certificate signatures.
-- Revocation is CRL-based. There is no OCSP, and a store with no CRL for
-  an issuer has no revocation information about that issuer's
-  certificates — ask for `revocation_required` to have that treated as a
-  refusal rather than an acceptance.
+- Revocation evidence comes from the store's CRLs and OCSP responses; a
+  store with neither for an issuer has no revocation information about
+  that issuer's certificates — ask for `revocation_required` to have that
+  treated as a refusal rather than an acceptance.
+- In a provenance record, toolchain, profile and grant are attestation:
+  `verify` cross-checks the grant against the graph artifact only when
+  one is signed (debug builds), and the sources only with `--sources`.
 - Constant-time behavior of compiled code is not verified.
 - DER, X.509 and HPACK parsers abort on malformed input instead of
   returning an error.
