@@ -262,22 +262,47 @@ pub Bool san_has_match(List(Int) cert, List(Int) host) {
 
 // ─── Signature verification glue ─────────────────────────────────────
 
+// ─── RSA public key decoding ─────────────────────────────────────────
+//
+// keyb is an SPKI BIT STRING content, so it opens with the unused-bits
+// octet and the RSAPublicKey SEQUENCE sits at index 1. Inside that,
+// keyb[1]'s content opens with the modulus INTEGER, whose first content
+// octet is a sign byte.
+//
+// Both RSA signature schemes need exactly this, and having each do it
+// separately is how they came to disagree: one of them sliced the
+// SEQUENCE's content and treated the INTEGER header as the high limb of
+// the modulus, which made every s look larger than n and rejected every
+// PKCS#1 signature. w limbs of 16 bits each; refuse a key of another
+// width rather than misread it.
+type RsaKey = { List(Int) n; Int e; Bool ok; };
+
+pub RsaKey rsa_key_from_spki(List(Int) keyb, Int w) {
+    Int nb = w + w;
+    List(Int) none = [];
+    RsaKey rsa_key_empty = RsaKey { .n = none, .e = 0, .ok = false };
+    List(Int) seqc = der_content(keyb, 1);
+    List(Int) nv = der_content(seqc, 0);
+    if (nv.len() < nb + 1) { return rsa_key_empty; }
+    List(Int) modulus = pss_take(nv, 1, nb, []);
+    Int epn = x509_skip_tlv(seqc, 0);
+    Int ev = der_int_value(seqc, epn);
+    return RsaKey { .n = bn_from_be(modulus, w), .e = ev, .ok = true };
+}
+
 // RSA PKCS#1v1.5 SHA-256: tbs = raw signed bytes; keyb = issuer SPKI
-// BIT STRING content minus unused-bits byte; sigb = DER signature.
+// BIT STRING content minus unused-bits byte; sigb = the raw signature,
+// as x509_sig_bytes returns it. (It used to take the whole BIT STRING
+// TLV and sliced it at hdr_len + 2, which is one past the end of a
+// 256-byte signature and aborted on every real RSA certificate.)
 pub Bool rsa_cert_verify(List(Int) tbs, List(Int) keyb, List(Int) sigb) {
     Int w = 128;
-    Int np = der_content_pos(keyb, 0);
-    Int ep = x509_skip_tlv(keyb, np);
-    List(Int) nc = der_content(keyb, np);
-    Int ncl = nc.len() - 1;
-    List(Int) nb2 = der_slice_seeded(nc, 0, ncl);
-    Int ev = der_int_value(keyb, ep);
-    List(Int) nl = bn_from_be(nb2, w);
-    DerTlv st = der_next(sigb, 0);
-    Int sc = st.hdr_len + 2;
-    Int sstop = sc + 255;
-    List(Int) sbytes = der_slice_seeded(sigb, sc, sstop);
-    List(Int) sl = bn_from_be(sbytes, w);
+    RsaKey k = rsa_key_from_spki(keyb, w);
+    if (!k.ok) { return false; }
+    List(Int) nl = k.n;
+    Int ev = k.e;
+    if (sigb.len() < w * 2) { return false; }
+    List(Int) sl = bn_from_be(sigb, w);
     // The signature representative must be below the modulus (RFC 8017
     // §5.2.2), or s + n would verify as s.
     if (bn_cmp(sl, nl, w) >= 0) { return false; }
@@ -311,6 +336,85 @@ pub Bool ec_cert_verify(List(Int) tbs, List(Int) keyb, List(Int) sigb) {
     return false;
 }
 
+// ─── Signature algorithm dispatch ────────────────────────────────────
+
+// RSASSA-PSS parameters, which this checks rather than assumes.
+// RFC 4055 gives hashAlgorithm, maskGenAlgorithm and saltLength defaults
+// of SHA-1, MGF1-SHA-1 and 20 -- none of which is verified here. So a
+// PSS signature that omits its parameters is refused, not treated as
+// SHA-256, and one that states different ones is refused too: the
+// parameters are what say which padding was used, and verifying as
+// SHA-256 while the certificate says otherwise is verifying a different
+// signature than the one that was made.
+pub Bool x509_pss_params_ok(List(Int) data, Int params) {
+    if (!der_is_seq(data, params, der_tag_sequence())) { return false; }
+    DerTlv t = der_next(data, params);
+    Str sha256 = "2.16.840.1.101.3.4.2.1";
+    // [0] EXPLICIT hashAlgorithm
+    Int p = params + t.hdr_len;
+    DerTlv h = der_next(data, p);
+    if (h.val_len < 0 || h.cls != 2 || (h.tag & 31) != 0) { return false; }
+    Int hs = der_content_pos(data, p);
+    Int ho = der_content_pos(data, hs);
+    if (der_oid_str(data, ho) != sha256) { return false; }
+    // [1] EXPLICIT maskGenAlgorithm: mgf1 with the same hash
+    Int p2 = x509_skip_tlv(data, p);
+    if (p2 < 0) { return false; }
+    DerTlv m = der_next(data, p2);
+    if (m.val_len < 0 || m.cls != 2 || (m.tag & 31) != 1) { return false; }
+    Int ms = der_content_pos(data, p2);
+    Int mo = der_content_pos(data, ms);
+    if (der_oid_str(data, mo) != "1.2.840.113549.1.1.8") { return false; }
+    // past the mgf1 OID element to the hash AlgorithmIdentifier inside it
+    Int mph = der_content_pos(data, x509_skip_tlv(data, mo));
+    if (der_oid_str(data, mph) != sha256) { return false; }
+    // [2] EXPLICIT saltLength
+    Int p3 = x509_skip_tlv(data, p2);
+    if (p3 < 0) { return false; }
+    DerTlv sl = der_next(data, p3);
+    if (sl.val_len < 0 || sl.cls != 2 || (sl.tag & 31) != 2) { return false; }
+    Int slv = der_content_pos(data, p3);
+    if (der_int_value(data, slv) != 32) { return false; }
+    return true;
+}
+
+// The position of the parameters field inside a TBS's AlgorithmIdentifier,
+// or -1 when it is absent.
+pub Int x509_sigalg_params_pos(List(Int) data, Int algpos) {
+    Int oidp = der_content_pos(data, algpos);
+    Int pp = x509_skip_tlv(data, oidp);
+    DerTlv t = der_next(data, pp);
+    if (t.val_len < 0) { return 0 - 1; }
+    return pp;
+}
+
+// Verify `signed` (the exact bytes that were signed) under the public key
+// bits `keyb`, for the algorithm named at `algpos`.
+//
+//   container = the whole certificate or CRL: the algorithm identifier and
+//               its parameters are read from here
+//   signed    = the TBS slice, which is a fresh list whose indices start
+//               over at zero, so `algpos` means nothing in it
+//   sigtlv    = the whole signatureValue BIT STRING TLV
+//   keyb      = the issuer's SPKI BIT STRING content, minus its unused octet
+pub Bool x509_sig_ok(List(Int) container, Int algpos, List(Int) signed, List(Int) keyb, List(Int) sigtlv) {
+    Int oidp = der_content_pos(container, algpos);
+    Str oid = der_oid_str(container, oidp);
+    if (oid == "1.2.840.113549.1.1.11") {
+        return rsa_cert_verify(signed, keyb, x509_sig_bytes(sigtlv, 256));
+    }
+    if (oid == "1.2.840.10045.4.3.2") {
+        return ec_cert_verify(signed, keyb, sigtlv);
+    }
+    if (oid == "1.2.840.113549.1.1.10") {
+        Int pp = x509_sigalg_params_pos(container, algpos);
+        if (pp < 0) { return false; }
+        if (!x509_pss_params_ok(container, pp)) { return false; }
+        return rsa_pss_verify_sha256(signed, keyb, x509_sig_bytes(sigtlv, 256));
+    }
+    return false;
+}
+
 // ─── One-link chain verification ─────────────────────────────────────
 
 // SPKI BIT STRING content minus the unused-bits octet.
@@ -339,21 +443,17 @@ pub Bool chain_verify(List(Int) child, List(Int) issuer, Instant now) {
     Bool iv = x509_valid_now(issuer, now);
     if (!cv) { return false; }
     if (!iv) { return false; }
-    Str alg = x509_sigalg_oid(child);
+    // A certificate may only sign for another certificate if it says it is
+    // a CA and is allowed to. Without this, any leaf that happened to be
+    // in the trust store -- or handed over as an intermediate -- could
+    // issue for anything, and the chain would still verify: the issuer
+    // check above is only a name comparison.
+    if (!x509_is_ca(issuer)) { return false; }
+    if (!x509_key_usage(issuer, 5)) { return false; }
     List(Int) tbsv = cert_tbs(child);
     List(Int) sigb = cert_elem(child, 2);
     List(Int) keyb = cert_pubkey_bits(issuer);
-    Str rsaalg = "1.2.840.113549.1.1.11";
-    Str ecalg2 = "1.2.840.10045.4.3.2";
-    Bool okr = alg == rsaalg;
-    Bool oke = alg == ecalg2;
-    if (okr) {
-        return rsa_cert_verify(tbsv, keyb, sigb);
-    }
-    if (oke) {
-        return ec_cert_verify(tbsv, keyb, sigb);
-    }
-    return false;
+    return x509_sig_ok(child, x509_sigalg_pos(child), tbsv, keyb, sigb);
 }
 
 pub Int san_gns_end(List(Int) cert, Int gseq) {
@@ -443,16 +543,10 @@ pub Bool pss_db_zeros(List(Int) db, Int i, Int last) {
 pub Bool rsa_pss_verify_sha256(List(Int) content, List(Int) keyb, List(Int) sigb) {
     Int w = 128;
     Int k = 256;
-    // keyb = BIT STRING content: 00 (unused bits) || DER SEQ { INTEGER n, // INTEGER e }. The SEQ tag therefore sits at index 1.
-    List(Int) seqc = der_content(keyb, 1);
-    List(Int) nv = der_content(seqc, 0);
-    Int epn = x509_skip_tlv(seqc, 0);
-    Int ev = der_int_value(seqc, epn);
-    // modulus value has a leading 00 sign byte: take the final 256 bytes
-    // (pss_take's last arg is the inclusive end index)
-    Int nb = w + w;
-    List(Int) nb2 = pss_take(nv, 1, nb, []);
-    List(Int) nl = bn_from_be(nb2, w);
+    RsaKey key = rsa_key_from_spki(keyb, w);
+    if (!key.ok) { return false; }
+    Int ev = key.e;
+    List(Int) nl = key.n;
     List(Int) sl = bn_from_be(sigb, w);
     List(Int) rec = bn_montexp(sl, ev, nl, w);
     List(Int) em = bn_to_be(rec, w);
@@ -502,10 +596,19 @@ pub Bool rsa_pss_verify_sha256(List(Int) content, List(Int) keyb, List(Int) sigb
 // which is why `tls_server_trusted` refuses rather than falling back when
 // the store is empty.
 
-type TrustStore = { List(List(Int)) roots; };
+type TrustStore = { List(List(Int)) roots; List(List(Int)) crls; Bool revocation_required; };
 
 pub TrustStore trust_store_empty() {
-    return TrustStore { .roots = [] };
+    List(List(Int)) none = [];
+    return TrustStore { .roots = none, .crls = none, .revocation_required = false };
+}
+
+// Require that every certificate in a chain be covered by a current CRL
+// from its issuer. Without it a store that has no CRLs for an issuer
+// treats "no revocation information" as "not revoked", which is the
+// answer a CRL-less client gives and the reason CRLs exist.
+pub TrustStore trust_store_requiring_revocation(TrustStore st, Bool required) {
+    return TrustStore { .roots = st.roots, .crls = st.crls, .revocation_required = required };
 }
 
 // Roots are kept as decoded DER. A root that is not a certificate this
@@ -514,7 +617,7 @@ pub TrustStore trust_store_empty() {
 // than the operator wrote, which is the wrong way to fail.
 pub TrustStore trust_store_add(TrustStore st, List(Int) der) {
     if (der.len() == 0) { return st; }
-    return TrustStore { .roots = st.roots.concat([der]) };
+    return TrustStore { .roots = st.roots.concat([der]), .crls = st.crls, .revocation_required = st.revocation_required };
 }
 
 pub Bool trust_store_has(TrustStore st, List(Int) der, Int i) {
@@ -578,6 +681,28 @@ TrustStore trust_store_add_all(TrustStore st, List(List(Int)) certs, Int i) {
     return trust_store_add_all(trust_store_add(st, certs[i]), certs, i + 1);
 }
 
+// A CRL is added whole, never as a trust anchor: it says what is revoked,
+// not who is.
+pub TrustStore trust_store_add_crl(TrustStore st, List(Int) der) {
+    if (der.len() == 0) { return st; }
+    return TrustStore { .roots = st.roots, .crls = st.crls.concat([der]), .revocation_required = st.revocation_required };
+}
+
+pub TrustStore trust_store_add_crls(TrustStore st, List(List(Int)) der, Int i) {
+    if (i >= der.len()) { return st; }
+    return trust_store_add_crls(trust_store_add_crl(st, der[i]), der, i + 1);
+}
+
+// Every CERTIFICATE and X509 CRL block in a PEM bundle. A CA bundle and a
+// CRL bundle are both PEM and both are lists of signed objects, so one
+// reader takes both and the caller says which is which by what it does
+// with them.
+pub List(List(Int)) pem_certs_and_crls(Str text) {
+    PemScan st = PemScan { .certs = [], .in_cert = false, .body = "" };
+    PemScan done = pem_scan_lines(str_split(text, "\n"), 0, st);
+    return done.certs;
+}
+
 // ─── Loading ─────────────────────────────────────────────────────────
 
 @requires(filesystem(readonly))
@@ -603,12 +728,229 @@ pub TrustStore trust_store_from_pem_file(Str path) {
     return trust_store_add_pem(trust_store_empty(), filesystem.read_all(path));
 }
 
+// CRLs from a PEM bundle or a directory of DER CRLs, the same two shapes
+// the roots take. Kept separate from the roots on purpose: a bundle of
+// CRLs is not a bundle of trust anchors, and adding one to the other by
+// accident would be a way to trust whatever a CRL file happens to contain.
+@requires(filesystem(readonly))
+pub TrustStore trust_store_crls_from_pem_file(TrustStore st, Str path) {
+    if (!filesystem.exists(path)) { return st; }
+    return trust_store_add_crls(st, pem_certs_and_crls(filesystem.read_all(path)), 0);
+}
+
+// A CRL file is either a PEM bundle or one DER CRL, and which one is
+// decided by looking rather than by asking: the common case is a single
+// DER file named after the CA, and making the caller say which would be a
+// mode flag on a path.
+@requires(filesystem(readonly))
+pub TrustStore trust_store_crls_from_file(TrustStore st, Str path) {
+    if (!filesystem.exists(path)) { return st; }
+    Str head = filesystem.read_all(path);
+    if (str_contains(head, "-----BEGIN")) { return trust_store_add_crls(st, pem_certs_and_crls(head), 0); }
+    return trust_store_add_crl(st, filesystem.read_bytes(path));
+}
+
+@requires(filesystem(readonly))
+TrustStore crls_from_der_dir(TrustStore st, Str dir, List(Str) names, Int i) {
+    if (i >= names.len()) { return st; }
+    Str n = names[i];
+    Bool skip = n == "." || n == "..";
+    TrustStore st2 = if (skip) { st } else { trust_store_add_crl(st, filesystem.read_bytes(dir + "/" + n)) };
+    return crls_from_der_dir(st2, dir, names, i + 1);
+}
+
+@requires(filesystem(readonly))
+pub TrustStore trust_store_crls_from_der_dir(TrustStore st, Str dir) {
+    List(Str) none = [];
+    List(Str) names = if (filesystem.is_dir(dir)) { sort(filesystem.list_dir(dir)) } else { none };
+    return crls_from_der_dir(st, dir, names, 0);
+}
+
+@requires(filesystem(readonly))
+pub TrustStore trust_store_crls_load(TrustStore st, Str path) {
+    if (filesystem.is_dir(path)) { return trust_store_crls_from_der_dir(st, path); }
+    return trust_store_crls_from_file(st, path);
+}
+
 // A path is read as whatever it is: a directory of DER certificates, or a
 // PEM bundle. One argument, no mode to get wrong at the call site.
 @requires(filesystem(readonly))
 pub TrustStore trust_store_load(Str path) {
     if (filesystem.is_dir(path)) { return trust_store_from_der_dir(path); }
     return trust_store_from_pem_file(path);
+}
+
+// ─── CRLs (RFC 5280 §5) ──────────────────────────────────────────────
+//
+// A CertificateList is shaped like a Certificate, which is why the walker
+// looks familiar, but the field order differs and there is a version to
+// step over:
+//
+//   CertificateList ::= SEQUENCE { tbsCertList, sigAlg, signature }
+//   TBSCertList ::= SEQUENCE {
+//     version       INTEGER OPTIONAL,
+//     signature     AlgorithmIdentifier,
+//     issuer        Name,
+//     thisUpdate    Time,
+//     nextUpdate    Time OPTIONAL,
+//     revoked       SEQUENCE OF SEQUENCE { serial INTEGER, date Time,
+//                                            entryExts OPTIONAL } OPTIONAL,
+//     crlExtensions [0] EXPLICIT OPTIONAL }
+
+pub Int crl_tbs_pos(List(Int) crl) {
+    return der_content_pos(crl, 0);
+}
+
+pub Int crl_body_pos(List(Int) crl) {
+    return der_content_pos(crl, crl_tbs_pos(crl));
+}
+
+pub Int crl_after_version(List(Int) crl) {
+    Int body = crl_body_pos(crl);
+    DerTlv t = der_next(crl, body);
+    if (t.val_len < 0) { return 0 - 1; }
+    if (t.cls == 0 && t.tag == der_tag_integer()) { return x509_skip_tlv(crl, body); }
+    return body;
+}
+
+// This one *names* the field; the ones after it step over what they name.
+pub Int crl_sigalg_pos(List(Int) crl) {
+    return crl_after_version(crl);
+}
+
+pub Int crl_issuer_pos(List(Int) crl) {
+    Int p = crl_sigalg_pos(crl);
+    if (p < 0) { return 0 - 1; }
+    return x509_skip_tlv(crl, p);
+}
+
+pub Int crl_this_update_pos(List(Int) crl) {
+    Int p = crl_issuer_pos(crl);
+    if (p < 0) { return 0 - 1; }
+    return x509_skip_tlv(crl, p);
+}
+
+pub Int crl_next_update_pos(List(Int) crl) {
+    Int p = crl_this_update_pos(crl);
+    if (p < 0) { return 0 - 1; }
+    return x509_skip_tlv(crl, p);
+}
+
+// The revokedCertificates SEQUENCE, or -1 when the CRL lists nothing.
+pub Int crl_revoked_pos(List(Int) crl) {
+    Int p = crl_next_update_pos(crl);
+    if (p < 0) { return 0 - 1; }
+    Int q = x509_skip_tlv(crl, p);
+    if (q < 0) { return 0 - 1; }
+    if (der_is_seq(crl, q, der_tag_sequence())) { return q; }
+    return 0 - 1;
+}
+
+// One entry is a SEQUENCE whose first element is the serial INTEGER, so
+// the serial is inside the entry: reading the entry's content instead
+// yields the serial's own DER header followed by its value, which matches
+// nothing and matches nothing else.
+List(List(Int)) crl_serials_acc(List(Int) crl, Int p, Int end, List(List(Int)) acc) {
+    if (p >= end) { return acc; }
+    DerTlv t = der_next(crl, p);
+    if (t.val_len < 0) { return acc; }
+    Int inner = p + t.hdr_len;
+    List(Int) serial = der_content(crl, inner);
+    Int nxt = x509_skip_tlv(crl, p);
+    if (nxt < 0) { return acc.concat([serial]); }
+    return crl_serials_acc(crl, nxt, end, acc.concat([serial]));
+}
+
+// Every serial this CRL lists as revoked, as DER content bytes.
+pub List(List(Int)) crl_revoked_serials(List(Int) crl) {
+    Int p = crl_revoked_pos(crl);
+    if (p < 0) { return []; }
+    DerTlv t = der_next(crl, p);
+    Int q = p + t.hdr_len;
+    return crl_serials_acc(crl, q, q + t.val_len, []);
+}
+
+List(List(Int)) crl_serials_has(List(List(Int)) serials, List(Int) want, Int i) {
+    if (i >= serials.len()) { return []; }
+    if (eq_bytes(serials[i], want)) { return serials; }
+    return crl_serials_has(serials, want, i + 1);
+}
+
+// Does this CRL list `cert`'s serial?
+pub Bool crl_revokes(List(Int) crl, List(Int) cert) {
+    List(List(Int)) found = crl_serials_has(crl_revoked_serials(crl), x509_serial_bytes(cert), 0);
+    return found.len() > 0;
+}
+
+// The Name DER of an element at `pos`, as a comparable byte string.
+List(Int) name_at(List(Int) data, Int pos) {
+    Int cs = der_content_pos(data, pos);
+    Int e = x509_skip_tlv(data, pos);
+    return der_slice_seeded(data, cs, e - 1);
+}
+
+// Is this CRL one `issuer` signed, and current at `now`?
+//
+// Issuer name, the thisUpdate..nextUpdate window, and the signature over
+// the tbsCertList. A CRL whose nextUpdate has passed is not used at all:
+// it says what was true when it was issued, and a stale CRL is exactly how
+// a revoked certificate keeps working.
+pub Bool crl_usable(List(Int) crl, List(Int) issuer, Instant now) {
+    Int ip = crl_issuer_pos(crl);
+    if (ip < 0) { return false; }
+    Int sp2 = x509_subject_pos(issuer);
+    if (!eq_bytes(name_at(crl, ip), name_at(issuer, x509_subject_pos(issuer)))) { return false; }
+    Int tu = crl_this_update_pos(crl);
+    if (tu < 0) { return false; }
+    Int thisn = x509_time_to_unix(der_str_value(crl, tu));
+    if (thisn == 0 - 1) { return false; }
+    Int t = now.seconds;
+    if (t < thisn) { return false; }
+    Int nu = crl_next_update_pos(crl);
+    if (nu < 0) { return false; }
+    Int nextn = x509_time_to_unix(der_str_value(crl, nu));
+    if (nextn == 0 - 1) { return false; }
+    if (t > nextn) { return false; }
+    Int ap = crl_sigalg_pos(crl);
+    if (ap < 0) { return false; }
+    Int sp = x509_tbs_pos(crl);
+    if (sp < 0) { return false; }
+    List(Int) keyb = cert_pubkey_bits(issuer);
+    if (keyb.len() == 0) { return false; }
+    return x509_sig_ok(crl, ap, cert_tbs(crl), keyb, cert_elem(crl, 2));
+}
+
+// Did any CRL in the store, signed by `issuer` and current at `now`, list
+// `cert`? `covered` says whether one was found at all, which is what
+// `revocation_required` asks about.
+type Rev = { Bool revoked; Bool covered; };
+
+Rev crl_check_at(TrustStore st, List(Int) cert, List(Int) issuer, Instant now, Int i) {
+    if (i >= st.crls.len()) { return Rev { .revoked = false, .covered = false }; }
+    List(Int) crl = st.crls[i];
+    Bool usable = crl_usable(crl, issuer, now);
+    if (usable && crl_revokes(crl, cert)) { return Rev { .revoked = true, .covered = true }; }
+    Rev rest = crl_check_at(st, cert, issuer, now, i + 1);
+    if (usable && !rest.covered) { return Rev { .revoked = rest.revoked, .covered = true }; }
+    return rest;
+}
+
+pub Rev crl_check(TrustStore st, List(Int) cert, List(Int) issuer, Instant now) {
+    return crl_check_at(st, cert, issuer, now, 0);
+}
+
+// Does `issuer` validly certify `cert` right now, revocation included?
+//
+// Revocation is part of accepting a certificate, not a separate mode: a
+// store carrying CRLs enforces them, and `revocation_required` additionally
+// refuses a certificate that no current CRL covers -- so a store that
+// cannot answer "is this revoked?" does not silently answer "no".
+Bool issuer_accepts(TrustStore st, List(Int) cert, List(Int) issuer, Instant now) {
+    if (!chain_verify(cert, issuer, now)) { return false; }
+    Rev r = crl_check(st, cert, issuer, now);
+    if (r.revoked) { return false; }
+    if (st.revocation_required && !r.covered) { return false; }
+    return true;
 }
 
 // ─── Chaining to the store ───────────────────────────────────────────
@@ -620,18 +962,18 @@ Int trust_max_depth() {
     return 8;
 }
 
-Bool any_root_verifies(List(List(Int)) roots, List(Int) cert, Instant now, Int i) {
-    if (i >= roots.len()) { return false; }
-    if (chain_verify(cert, roots[i], now)) { return true; }
-    return any_root_verifies(roots, cert, now, i + 1);
+Bool any_root_verifies(TrustStore st, List(Int) cert, Instant now, Int i) {
+    if (i >= st.roots.len()) { return false; }
+    if (issuer_accepts(st, cert, st.roots[i], now)) { return true; }
+    return any_root_verifies(st, cert, now, i + 1);
 }
 
 type IssuerHit = { Bool found; Int idx; };
 
-IssuerHit find_issuer_hit(List(List(Int)) pool, List(Int) cert, Instant now, Int i) {
+IssuerHit find_issuer_hit(TrustStore st, List(List(Int)) pool, List(Int) cert, Instant now, Int i) {
     if (i >= pool.len()) { return IssuerHit { .found = false, .idx = 0 }; }
-    if (chain_verify(cert, pool[i], now)) { return IssuerHit { .found = true, .idx = i }; }
-    return find_issuer_hit(pool, cert, now, i + 1);
+    if (issuer_accepts(st, cert, pool[i], now)) { return IssuerHit { .found = true, .idx = i }; }
+    return find_issuer_hit(st, pool, cert, now, i + 1);
 }
 
 List(List(Int)) pool_without(List(List(Int)) pool, Int idx, Int i, List(List(Int)) acc) {
@@ -646,9 +988,9 @@ List(List(Int)) pool_without(List(List(Int)) pool, Int idx, Int i, List(List(Int
 // a chain is however deep the server says it is.
 Bool chain_to_store(List(Int) cert, List(List(Int)) pool, TrustStore st, Instant now, Int depth) {
     if (trust_store_has(st, cert, 0)) { return true; }
-    if (any_root_verifies(st.roots, cert, now, 0)) { return true; }
+    if (any_root_verifies(st, cert, now, 0)) { return true; }
     if (depth <= 0) { return false; }
-    IssuerHit hit = find_issuer_hit(pool, cert, now, 0);
+    IssuerHit hit = find_issuer_hit(st, pool, cert, now, 0);
     if (!hit.found) { return false; }
     List(List(Int)) rest = pool_without(pool, hit.idx, 0, []);
     return chain_to_store(pool[hit.idx], rest, st, now, depth - 1);

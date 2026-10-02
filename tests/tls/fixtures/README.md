@@ -29,3 +29,18 @@ private keys were thrown away.
 
 The `.bin` files are Certificate message *bodies*, byte-for-byte as they
 appear on the wire, which is what `tm_cert_list` reads.
+
+| `ca.pem`, `ca.der` | `CN=CRL Test CA`, a second CA used only for revocation |
+| `good.pem`, `good.der` | `CN=localhost` issued by that CA, serial `2000` |
+| `bad.pem`, `bad.der` | `CN=localhost` issued by that CA, serial `2001`, revoked with `keyCompromise` |
+| `crl.pem`, `crl.der` | that CA's CRL, listing serial `2001` |
+| `rsa_pkcs1.pem`, `rsa_pkcs1.der` | self-signed `CN=Test RSA Root`, signed with sha256WithRSAEncryption |
+| `rsa_pss.pem`, `rsa_pss.der` | self-signed `CN=Test RSA-PSS Root`, signed with rsassaPss (SHA-256, MGF1-SHA-256, salt 32) |
+
+The CRL's `thisUpdate` is when it was generated, so the revocation cases
+pass an explicit `now` into the probe rather than reading the clock: a
+freshly generated CRL has a window in the future, and both sides of it
+have to be testable.
+
+The two RSA roots exist because RSA certificate signatures were verified
+by nothing at all. They now are, by all three of the cases above.

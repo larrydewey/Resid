@@ -118,6 +118,56 @@ certs() { "$PROBE" x --certs "$@" 2>&1 | sed -n 's/^body=[0-9]* certs=\([0-9]*\)
 [ "$(certs "$F/certmsg-trunc.bin")" = "1 459" ] && ok \
   || bad "truncated message: $(certs "$F/certmsg-trunc.bin")"
 
+# ── signature algorithms ─────────────────────────────────────────────
+# RSA certificate signatures were not exercised anywhere before, which is
+# how a read one byte past the end of the signature buffer survived: the
+# only "test" was the note "(library code)".
+sig() { "$PROBE" x --sig "$F/$1.der" 2>&1 | sed -n "s/^$2 *=[[:space:]]*//p"; }
+for c in root rsa_pkcs1 rsa_pss; do
+    [ "$(sig "$c" sig_ok)" = "true" ] && ok || bad "$c: signature does not verify"
+    [ "$(sig "$c" chain_verify)" = "true" ] && ok || bad "$c: chain_verify against itself"
+    [ "$(sig "$c" is_ca)" = "true" ] && ok || bad "$c: should be a CA"
+    [ "$(sig "$c" keycertsign)" = "true" ] && ok || bad "$c: should allow keyCertSign"
+done
+[ "$(sig rsa_pkcs1 sigalg)" = "1.2.840.113549.1.1.11" ] && ok || bad "pkcs1 OID"
+[ "$(sig rsa_pss sigalg)" = "1.2.840.113549.1.1.10" ] && ok || bad "pss OID"
+# A leaf may not act as an issuer, and that is checked, not assumed.
+[ "$(sig leaf is_ca)" = "false" ] && ok || bad "leaf must not be a CA"
+
+# ── revocation (CRL) ─────────────────────────────────────────────────
+# A store carrying CRLs enforces them; `revocation_required` additionally
+# refuses a certificate no current CRL covers, so "no revocation
+# information" never silently reads as "not revoked".
+IN_WINDOW="$(date -u -d '2026-10-15' +%s)"
+STALE="$(date -u -d '2026-12-01' +%s)"
+mkdir -p "$W/crlstore" && cp "$F/ca.der" "$W/crlstore/"
+rev() { "$PROBE" "$W/crlstore" --revoke "$F/crl.der" "$F/$1.der" localhost "" "$F/ca.der" "$2" 2>&1; }
+revfield() { printf "%s\n" "$REV" | sed -n "s/^$1 *=[[:space:]]*//p"; }
+
+REV="$(rev good "$IN_WINDOW")"
+[ "$(revfield crl_usable)" = true ] && ok || bad "CRL should be usable inside its window"
+[ "$(revfield crl_revokes)" = false ] && ok || bad "good.der must not be listed"
+[ "$(revfield covered)" = true ] && ok || bad "good.der should be covered by a CRL"
+[ "$(revfield TRUSTED)" = true ] && ok || bad "good.der should be trusted"
+[ "$(revfield TRUSTED-strict)" = true ] && ok || bad "good.der should be trusted under revocation_required"
+
+REV="$(rev bad "$IN_WINDOW")"
+[ "$(revfield crl_revokes)" = true ] && ok || bad "bad.der must be listed as revoked"
+[ "$(revfield revoked)" = true ] && ok || bad "bad.der revoked flag"
+[ "$(revfield TRUSTED)" = false ] && ok || bad "a revoked certificate must not be trusted"
+[ "$(revfield TRUSTED-strict)" = false ] && ok || bad "a revoked certificate must not be trusted under revocation_required"
+
+# A CRL past its nextUpdate says what was true when it was issued and is
+# not used: relying on it is how a revoked certificate keeps working.
+REV="$(rev bad "$STALE")"
+[ "$(revfield crl_usable)" = false ] && ok || bad "a stale CRL must not be usable"
+[ "$(revfield covered)" = false ] && ok || bad "a stale CRL covers nothing"
+[ "$(revfield TRUSTED-strict)" = false ] && ok || bad "revocation_required must refuse a stale CRL"
+# The serial the CRL lists, so the parse itself is pinned and not just the
+# verdict.
+REV="$(rev bad "$IN_WINDOW")"
+[ "$(revfield revoked_list)" = "2001" ] && ok || bad "CRL should list serial 2001, got $(revfield revoked_list)"
+
 # PEM reading, checked through what it produces.
 probe "$F/root.pem" "$F/root.der" localhost
 [ "$(field roots)" = 1 ] && ok || bad "PEM bundle did not parse to one root"

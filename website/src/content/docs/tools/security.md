@@ -63,9 +63,12 @@ through two rebuilds from source.
 
 ## Not guaranteed
 
-- TLS chain validation covers ECDSA P-256 and RSA PKCS#1 v1.5
-  certificate signatures only, does not require intermediates to be CAs,
-  and does no revocation checking.
+- TLS chain validation requires intermediates to be CAs, and covers
+  ECDSA P-256, RSA PKCS#1 v1.5 and RSA-PSS certificate signatures.
+- Revocation is CRL-based. There is no OCSP, and a store with no CRL for
+  an issuer has no revocation information about that issuer's
+  certificates — ask for `revocation_required` to have that treated as a
+  refusal rather than an acceptance.
 - Constant-time behavior of compiled code is not verified.
 - DER, X.509 and HPACK parsers abort on malformed input instead of
   returning an error.

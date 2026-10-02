@@ -13,7 +13,7 @@
   self-compile fixed point from the committed seed with no Rust. The
   pipeline is parse → resolve → check → reduce → lower on the knowledge
   graph (PLAN-graph-ir G0–G7 done, §0y). Self-hosted suites: conformance
-  338, reduce 19, provenance 21, graph 621, pkg 62, tls 35, runtime 12, lsp 18.
+  338, reduce 19, provenance 21, graph 621, pkg 62, tls 63, runtime 12, lsp 18.
   The Rust pipeline (`bootstrap/rust-stage0/`) and `tools/resid-lsp-full`, which
   was built on its crates, were deleted on 2026-09-26; both are in git
   history.
@@ -1477,7 +1477,7 @@ accepted. It now has a trust store.
   does not recognise turns a corrupted certificate into a *different*
   certificate. An unterminated PEM block yields nothing rather than half a
   certificate.
-- Tests: `tests/tls/run.sh` is new, 35 cases over committed fixtures, so
+- Tests: `tests/tls/run.sh` is new, 63 cases over committed fixtures, so
   it needs no openssl and no network.
 
 **Three real bugs found on the way, all of which had been hiding.**
@@ -1523,6 +1523,56 @@ accepted. It now has a trust store.
    Six `Certificate` message fixtures pin this, one of them captured from
    a live handshake -- so the case that only real traffic produces is the
    one in the suite.
+
+### 0a-ii. The three gaps the trust store was built on (2026-10-01)
+
+The store's own not-guaranteed list said chain validation did not dispatch
+RSA-PSS, did not require `CA:TRUE` on issuers, and did no revocation
+checking. All three are now implemented, and each turned out to be
+sitting on top of a bug that had never been reached.
+
+**Issuer rules and signature dispatch.** `chain_verify` now requires
+`basicConstraints cA TRUE` and `keyCertSign` on the issuer, and routes
+through one `x509_sig_ok` that handles ECDSA P-256, RSA PKCS#1 v1.5 and
+RSA-PSS. RSASSA-PSS's parameters are read, not assumed: RFC 4055 defaults
+them to SHA-1, which is not verified here, so absent or different
+parameters are refused rather than treated as SHA-256.
+
+**Revocation.** CRLs are parsed and verified (issuer DN, the
+`thisUpdate`..`nextUpdate` window, and the signature over the
+`tbsCertList`), and a store carrying them enforces them.
+`trust_store_requiring_revocation` additionally refuses a certificate no
+current CRL covers, so "no revocation information" is never read as "not
+revoked". Roots and CRLs load separately: a bundle of revocation lists is
+not a set of trust anchors.
+
+**Six more bugs, all latent, all found by making the above work.**
+
+1. `rsa_cert_verify` sliced the signature at `hdr_len + 2`, one past the
+   end of a 256-byte signature, and aborted on *every* real RSA
+   certificate. Its only listed test was "(library code)" -- it had never
+   been run. Both RSA paths now take raw signature bytes, and both share
+   one `rsa_key_from_spki`: the modulus was being read from the
+   RSAPublicKey *content*, so the INTEGER header counted as its high limb
+   and every `s` looked larger than `n`.
+2. `bn_inv16` (lib/rsa.resid) ran Newton's iteration without masking
+   between steps, so each step fed on an approximation up to 2^16 times
+   too large; by the third it reached ~2^27 and overflowed a 64-bit Int.
+   It now masks after each doubling.
+3. `der_oid_str` takes an *element* position. Three new call sites passed
+   the content position instead, which made an extension read as an
+   absurd dotted string rather than as absent -- so `x509_is_ca` said
+   `false` for a CA, and `x509_key_usage` "passed" only through its
+   absent-means-unrestricted default.
+4. `der_content_pos` on a constructed SEQUENCE gives the tag *number*
+   (16) while the identifier octet is 0x20|that (48); three comparisons
+   forgot the `& 31` that `der_is_seq` does.
+5. `x509_pss_params_ok` stepped to the mask-gen hash from the
+   AlgorithmIdentifier instead of from the mgf1 OID, reading the salt
+   length as the hash algorithm.
+6. The CRL walker had two off-by-one steps: `crl_sigalg_pos` skipped
+   *past* the signature instead of naming it, and `crl_revoked_pos` did
+   not step over `nextUpdate`. Either alone makes every CRL look empty.
 
 Also corrected in `lib/chain.resid`: the note claiming `ec_cert_verify`
 returns false for valid inputs, and suspected a codegen bug, is stale —

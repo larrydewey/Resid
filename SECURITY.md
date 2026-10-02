@@ -157,8 +157,24 @@ certificate's `notBefore` cannot drift from what the rest of the language
 calls the same day. A time this cannot read rejects rather than comparing
 against a moment it did not read.
 
+| Certificate signatures are verified for ECDSA P-256 (`1.2.840.10045.4.3.2`), RSA PKCS#1 v1.5 (`1.2.840.113549.1.1.11`) and RSA-PSS (`1.2.840.113549.1.1.10`). A PSS signature is only accepted when its parameters *say* SHA-256, MGF1-SHA-256 and salt 32 -- RFC 4055's defaults are SHA-1, which is not verified, so absent parameters are refused rather than assumed. | rsa_pkcs1, rsa_pss, pss parameter check |
+| A certificate may only sign for another if it says `CA:TRUE` and allows `keyCertSign`. A leaf handed over as an intermediate cannot issue. | leaf must not be a CA, issuer CA checks |
+| A store carrying CRLs enforces them: a certificate the issuer's current CRL lists is refused. | good.der, bad.der |
+| A CRL is used only if it is signed by the issuing CA and inside its `thisUpdate`..`nextUpdate` window, so a stale CRL cannot certify anything. | a stale CRL must not be usable |
+| `revocation_required` refuses a certificate that no current CRL covers, so "no revocation information" never reads as "not revoked". | good.der under revocation_required, revocation_required must refuse a stale CRL |
+| CRLs and roots are loaded separately, so a bundle of CRLs is never mistaken for a set of trust anchors. | (loading) |
+
 Not guaranteed:
 
+- Revocation is CRL-based only. There is no OCSP, and no stapled OCSP
+  response in the handshake is read; a store with no CRL for an issuer
+  has no revocation information about that issuer's certificates, and
+  `revocation_required` is the switch that makes that a refusal rather
+  than an acceptance.
+- A pinned certificate (`trust_store_has`) is accepted without any chain,
+  so it is not covered by a CRL: pinning is an explicit decision to trust
+  those exact bytes, revocability included.
+- A trust anchor is not itself checked for revocation.
 - `require_signatures` does not extend to path dependencies, which spec
   §28.3 exempts as local source.
 - Constant-time behavior of compiled code is not verified: the compiler

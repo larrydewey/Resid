@@ -14,6 +14,8 @@ import "../../lib/chain.resid";
 import "../../lib/clock.resid";
 import "../../lib/instant.resid";
 import "../../lib/tlsmsg.resid";
+import "../../lib/der.resid";
+import "../../lib/crypto.resid";
 
 // A directory of DER certificates, read whole.
 @requires(filesystem(readonly))
@@ -32,6 +34,8 @@ TrustStore load_dir(Str dir) {
 @requires(args, filesystem(readonly), clock(readonly))
 Int main() {
     if (str_starts_with(args.get(2), "--certs")) { return cert_main(); }
+    if (str_starts_with(args.get(2), "--revoke")) { return revoke_main(); }
+    if (str_starts_with(args.get(2), "--sig")) { return sig_main(); }
     Str store_path = args.get(1);
     Str leaf_path = args.get(2);
     Str host = args.get(3);
@@ -46,6 +50,17 @@ Int main() {
     println("valid_now=" + f"{x509_valid_now(leaf, now)}");
     println("san=" + f"{san_has_match(leaf, hostb)}");
     println("pinned=" + f"{trust_store_has(st, leaf, 0)}");
+    println("exts_pos=" + f"{x509_exts_pos(leaf)}" + " exts_end=" + f"{x509_exts_end(leaf)}" + " after_spki=" + f"{x509_after_spki(leaf)}" + " len=" + f"{leaf.len()}");
+    println("bc_vp=" + f"{x509_ext_value_pos(leaf, "2.5.29.19")}" + " ku_vp=" + f"{x509_ext_value_pos(leaf, "2.5.29.15")}");
+    Int tp = x509_exts_pos(leaf);
+    Int sp = der_content_pos(leaf, tp);
+    Int sc = der_content_pos(leaf, sp);
+    println("tp=" + f"{tp}" + " seqpos=" + f"{sp}" + " seqc=" + f"{sc}" + " end=" + f"{x509_exts_end(leaf)}");
+    DerTlv e0 = der_next(leaf, sc);
+    Int inner0 = sc + e0.hdr_len;
+    println("first ext tag=" + f"{e0.tag}" + " val_len=" + f"{e0.val_len}" + " inner=" + f"{inner0}" + " oid=[" + der_oid_str(leaf, der_content_pos(leaf, inner0)) + "]");
+    println("is_ca=" + f"{x509_is_ca(leaf)}");
+    println("keycertsign=" + f"{x509_key_usage(leaf, 5)}");
     println("TRUSTED=" + f"{tls_server_trusted(leaf, ist.roots, hostb, now, st)}");
     return 0;
 }
@@ -76,4 +91,74 @@ Int report_certs(List(Str) files, Int i) {
 Int cert_main() {
     List(Str) files = [args.get(3), args.get(4), args.get(5), args.get(6), args.get(7)];
     return report_certs(files, 0);
+}
+
+// ── revocation ──────────────────────────────────────────────────────
+//
+//   tsprobe <store> --revoke <crl-path> <leaf> <host> [intermediates-dir]
+//
+// Reports what the CRL says about the leaf, and whether the store still
+// accepts it.
+Str rev_serials(List(List(Int)) serials, Int i, Str acc) {
+    if (i >= serials.len()) { return acc; }
+    Str sep = if (acc == "") { "" } else { "," };
+    return rev_serials(serials, i + 1, acc + sep + hex_encode(serials[i]));
+}
+
+@requires(args, filesystem(readonly), clock(readonly))
+Int revoke_main() {
+    Str crl_path = args.get(3);
+    Str leaf_path = args.get(4);
+    Str host = args.get(5);
+    TrustStore base = trust_store_load(args.get(1));
+    TrustStore st = trust_store_crls_load(base, crl_path);
+    TrustStore strict = trust_store_requiring_revocation(st, true);
+    List(Int) leaf = filesystem.read_bytes(leaf_path);
+    List(List(Int)) none = [];
+    // An explicit `now` (epoch seconds as the last argument) so the cases
+    // do not depend on when the suite runs: a CRL's window has to be
+    // testable on both sides, and a freshly generated CRL's thisUpdate is
+    // in the future.
+    Int want_now = if (args.count() > 8) { str_parse_int(args.get(8)) } else { 0 };
+    Instant now = if (want_now > 0) { instant_of_seconds(want_now) } else { clock_now() };
+    List(Int) hostb = str_to_bytes(host);
+    List(Int) crl = filesystem.read_bytes(crl_path);
+    // The CRL's issuer is the CA beside it, named by the caller layout.
+    Str ca_path = if (args.count() > 7) { args.get(7) } else { "" };
+    List(Int) issuer = filesystem.read_bytes(ca_path);
+    println("crl_usable   = " + f"{crl_usable(crl, issuer, now)}");
+    println("crl_revokes  = " + f"{crl_revokes(crl, leaf)}");
+    println("revoked_list = " + rev_serials(crl_revoked_serials(crl), 0, ""));
+    Rev r = crl_check(st, leaf, issuer, now);
+    println("covered      = " + f"{r.covered}");
+    println("revoked      = " + f"{r.revoked}");
+    println("TRUSTED       = " + f"{tls_server_trusted(leaf, none, hostb, now, st)}");
+    println("TRUSTED-strict= " + f"{tls_server_trusted(leaf, none, hostb, now, strict)}");
+    return 0;
+}
+
+// ── signature algorithms ────────────────────────────────────────────
+//
+//   tsprobe <store> --sig <cert>
+//
+// Which algorithm a certificate is signed with, whether its key may sign
+// at all, and whether its own signature verifies. The RSA cases live here
+// because RSA certificate signatures were never exercised by anything else,
+// which is how a signature read one byte past the end of the buffer went
+// unnoticed.
+@requires(args, filesystem(readonly), clock(readonly))
+Int sig_main() {
+    List(Int) cert = filesystem.read_bytes(args.get(3));
+    Int now = clock_now().seconds;
+    Instant nowi = clock_now();
+    println("sigalg    = " + x509_sigalg_oid(cert));
+    println("is_ca     = " + f"{x509_is_ca(cert)}");
+    println("keycertsign = " + f"{x509_key_usage(cert, 5)}");
+    List(Int) tbsv = cert_tbs(cert);
+    List(Int) keyb = cert_pubkey_bits(cert);
+    List(Int) sigtlv = cert_elem(cert, 2);
+    println("sig_ok    = " + f"{x509_sig_ok(cert, x509_sigalg_pos(cert), tbsv, keyb, sigtlv)}");
+    println("chain_verify = " + f"{chain_verify(cert, cert, nowi)}");
+    _ = now;
+    return 0;
 }

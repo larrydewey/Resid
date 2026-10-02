@@ -1462,6 +1462,41 @@ source, and it does not weaken allow_unsigned -- it is
 the stronger of the two, and a project that set both
 gets the stronger one.
 
+--------------------------------------------------
+28.4  Chain Validation and Revocation
+--------------------------------------------------
+
+A certificate may sign for another only if it says so:
+basicConstraints must carry cA TRUE and keyUsage must
+allow keyCertSign. A certificate that does not is not
+an issuer, whatever its name says it issued. The
+check is on the issuer, not on the chain's shape, so a
+leaf offered as an intermediate cannot issue.
+
+Certificate signatures are verified for ECDSA P-256,
+RSA PKCS#1 v1.5 and RSA-PSS. RSASSA-PSS carries its
+own parameters, and they are read rather than assumed:
+the hash, the mask generation function's hash and the
+salt length must be the ones implemented, because
+RFC 4055's defaults are SHA-1 and a signature verified
+as SHA-256 that was made as SHA-1 is a different
+signature than the one that was made.
+
+Revocation is by certificate revocation list. A CRL is
+used only when the certificate's issuer signed it and
+it is inside its thisUpdate..nextUpdate window, so a
+list that has gone stale certifies nothing. A store
+carrying CRLs enforces them: a certificate an issuer's
+current CRL lists is refused. A store that also
+requires revocation refuses a certificate no current
+CRL covers, so that the absence of revocation
+information is never read as absence of revocation.
+
+Roots and CRLs are named separately. A bundle of
+revocation lists is not a set of trust anchors, and
+loading one must never be a way of trusting whatever
+the other contains.
+
 
 ==================================================
 29. SURFACE SYNTAX SUMMARY

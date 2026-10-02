@@ -175,3 +175,152 @@ pub Str x509_subject_str(List(Int) cert) {
     Int p = x509_subject_pos(cert);
     return x509_name_str(cert, p);
 }
+
+// ─── Extensions ──────────────────────────────────────────────────────
+//
+// The tail of a TBSCertificate is
+//
+//   [1] IMPLICIT issuerUniqueID   OPTIONAL
+//   [2] IMPLICIT subjectUniqueID  OPTIONAL
+//   [3] EXPLICIT Extensions       OPTIONAL
+//
+// so the extensions are found by looking for the class-2 tag 3 rather than
+// by counting elements: which of the two unique IDs is present varies,
+// and a certificate with neither is normal.
+
+pub Int x509_after_spki(List(Int) cert) {
+    Int p0 = x509_spki_pos(cert);
+    return x509_skip_tlv(cert, p0);
+}
+
+// Position of the [3] EXPLICIT Extensions element, or -1.
+pub Int x509_exts_pos(List(Int) cert) {
+    Int p = x509_after_spki(cert);
+    DerTlv t = der_next(cert, p);
+    if (t.val_len < 0) { return 0 - 1; }
+    // der_next keeps the whole identifier octet, so a constructed
+    // context-specific [3] arrives as 0xA3 and its tag number is the low
+    // five bits (the same masking der_is_seq does).
+    if (t.cls == 2 && (t.tag & 31) == 3) { return p; }
+    return 0 - 1;
+}
+
+pub Int x509_exts_end(List(Int) cert) {
+    Int p = x509_exts_pos(cert);
+    if (p < 0) { return 0 - 1; }
+    DerTlv t = der_next(cert, p);
+    return p + t.hdr_len + t.val_len;
+}
+
+// The first Extension element at or after `p` whose extnID is `oid`; -1
+// when there is none. Returns the element's position.
+pub Int x509_ext_find(List(Int) data, Int p, Int end, Str oid) {
+    if (p >= end) { return 0 - 1; }
+    DerTlv t = der_next(data, p);
+    if (t.val_len < 0) { return 0 - 1; }
+    // der_oid_str wants the element, not the content: stepping into the
+    // content first is the same off-by-a-header that makes an extension
+    // read as an absurd dotted string rather than as absent.
+    Int inner = p + t.hdr_len;
+    if (der_oid_str(data, inner) == oid) { return p; }
+    Int nxt = x509_skip_tlv(data, p);
+    if (nxt < 0) { return 0 - 1; }
+    return x509_ext_find(data, nxt, end, oid);
+}
+
+// Content position of the named extension's extnValue OCTET STRING, or -1.
+pub Int x509_ext_value_pos(List(Int) cert, Str oid) {
+    Int end = x509_exts_end(cert);
+    if (end < 0) { return 0 - 1; }
+    Int tp = x509_exts_pos(cert);
+    // [3] EXPLICIT wraps a SEQUENCE OF Extension, so this is two steps:
+    // into the [3], then into the SEQUENCE inside it.
+    Int seqpos = der_content_pos(cert, tp);
+    Int seqc = der_content_pos(cert, seqpos);
+    Int ep = x509_ext_find(cert, seqc, end, oid);
+    if (ep < 0) { return 0 - 1; }
+    // The next field is measured from the extnID *element*, not from its
+    // content: der_oid_str wants the content, x509_skip_tlv wants the
+    // element, and using the content for both makes every extension look
+    // absent.
+    Int inner = ep + der_next(cert, ep).hdr_len;
+    Int vp = x509_skip_tlv(cert, inner);
+    DerTlv nx = der_next(cert, vp);
+    Bool is_crit = nx.cls == 0 && nx.tag == 1;
+    Int vp2 = if (is_crit) { x509_skip_tlv(cert, vp) } else { vp };
+    return der_content_pos(cert, vp2);
+}
+
+// basicConstraints (2.5.29.19): is this certificate a CA?
+//
+//   BasicConstraints ::= SEQUENCE { cA BOOLEAN DEFAULT FALSE,
+//                                   pathLenConstraint INTEGER OPTIONAL }
+//
+// Absent means false, not "unknown": RFC 5280 gives cA a DEFAULT of FALSE,
+// so a certificate with no basicConstraints is not a CA, and treating the
+// absence as permission would let any leaf sign for anything.
+pub Bool x509_is_ca(List(Int) cert) {
+    Int vp = x509_ext_value_pos(cert, "2.5.29.19");
+    if (vp < 0) { return false; }
+    // der_tag_sequence() is the tag *number*; the identifier octet on the
+    // wire is 0x20 | that, so the comparison masks the way der_is_seq does.
+    if (!der_is_seq(cert, vp, der_tag_sequence())) { return false; }
+    DerTlv t = der_next(cert, vp);
+    Int first = vp + t.hdr_len;
+    DerTlv b = der_next(cert, first);
+    if (b.cls == 0 && b.tag == 1) {
+        List(Int) c = der_content(cert, first);
+        if (c.len() < 1) { return false; }
+        return c[0] != 0;
+    }
+    return false;
+}
+
+// The mask for bit `bit` of a DER BIT STRING: bit 0 is the *most*
+// significant bit of the first octet, so bit 5 is 0x04 and not 0x20.
+Int x509_bit_mask(Int bit) {
+    if (bit < 0 || bit > 7) { return 0; }
+    return x509_bit_mask_at(7 - bit);
+}
+Int x509_bit_mask_at(Int shift) {
+    if (shift <= 0) { return 1; }
+    return 2 * x509_bit_mask_at(shift - 1);
+}
+
+// keyUsage (2.5.29.15): does the BIT STRING have `bit` set? Bit 0 of the
+// first content byte is keyCertSign. Absent means "unrestricted", which
+// RFC 5280 permits, so this reports true when the extension is missing and
+// is only useful to a caller that also asked for the extension.
+pub Bool x509_key_usage(List(Int) cert, Int bit) {
+    Int vp = x509_ext_value_pos(cert, "2.5.29.15");
+    if (vp < 0) { return true; }
+    // The first content octet of a BIT STRING is the count of unused bits
+    // in the last one, not data: keyUsage 0x06 encodes as 03 02 01 06, and
+    // reading the 0x01 as a bit pattern finds nothing.
+    Int byte = 1 + bit / 8;
+    List(Int) c = der_content(cert, vp);
+    if (c.len() <= byte) { return false; }
+    return (c[byte] & x509_bit_mask(bit)) != 0;
+}
+
+// The signature bytes of a signatureValue BIT STRING, given the whole
+// TLV as it appears in a certificate or CRL. The content starts with the
+// unused-bits octet, which is not part of the signature, and a signature
+// of a size this code does not handle is refused rather than sliced.
+pub List(Int) x509_sig_bytes(List(Int) tlv, Int want) {
+    DerTlv t = der_next(tlv, 0);
+    if (t.val_len < 0) { return []; }
+    if (t.cls != 0 || (t.tag & 31) != der_tag_bit_string()) { return []; }
+    Int start = t.hdr_len + 1;
+    Int stop = start + want - 1;
+    if (stop > tlv.len() - 1) { return []; }
+    return der_slice_seeded(tlv, start, stop);
+}
+
+// The serial number's DER content bytes. Serials are compared as these
+// rather than as numbers: a 20-byte serial does not fit an Int, and DER
+// requires the minimal encoding, so equal values are equal bytes.
+pub List(Int) x509_serial_bytes(List(Int) cert) {
+    Int p = x509_serial_pos(cert);
+    return der_content(cert, p);
+}

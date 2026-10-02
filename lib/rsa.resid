@@ -253,13 +253,20 @@ pub List(Int) bn_pow2_mod(Int bits, List(Int) n, Int w) {
 }
 
 // Inverse of odd n0 modulo 2^16 via four Newton rounds.
+// n0's inverse mod 2^16 by Newton doubling: one correct bit to start, and
+// each step doubles the count, so four steps cover all sixteen.
+//
+// The mask belongs *between* the steps, not only at the end. Newton feeds
+// each approximation into the next, and an unmasked one is up to 2^16
+// times too large, so the products run away -- x3 alone reaches ~2^27 and
+// overflows a 64-bit Int on any real modulus.
 pub Int bn_inv16(Int n0) {
     Int x = 1;
-    Int x1 = x * (2 - n0 * x);
-    Int x2 = x1 * (2 - n0 * x1);
-    Int x3 = x2 * (2 - n0 * x2);
-    Int x4 = x3 * (2 - n0 * x3);
-    return x4 & bn_mask();
+    Int x1 = (x * (2 - n0 * x)) & bn_mask();
+    Int x2 = (x1 * (2 - n0 * x1)) & bn_mask();
+    Int x3 = (x2 * (2 - n0 * x2)) & bn_mask();
+    Int x4 = (x3 * (2 - n0 * x3)) & bn_mask();
+    return x4;
 }
 
 // -n^{-1} mod 2^16 for the low limb of n.
