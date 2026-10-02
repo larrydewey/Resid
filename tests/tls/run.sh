@@ -28,6 +28,9 @@ bad() { fail=$((fail + 1)); echo "FAIL $1"; }
 (cd "$ROOT" && "$COMPILER" tests/tls/tsprobe.resid -o "$W/tsprobe") > "$W/build.log" 2>&1 || {
     echo "FAIL build tsprobe"; grep -i error "$W/build.log" | head -3; exit 1; }
 PROBE="$W/tsprobe"
+(cd "$ROOT" && "$COMPILER" tests/tls/ocspprobe.resid -o "$W/ocspprobe") > "$W/build.log" 2>&1 || {
+    echo "FAIL build ocspprobe"; grep -i error "$W/build.log" | head -3; exit 1; }
+OPROBE="$W/ocspprobe"
 F="$ROOT/tests/tls/fixtures"
 
 # Stores derived from the fixtures, built here so the fixture directory
@@ -191,6 +194,41 @@ probe "$F/root.pem" "$L" localhost "$F/inter.der"; want inter-not-a-dir false
 probe "$W/no-such-path" "$L" localhost
 [ "$(field roots)" = 0 ] && ok || bad "missing store path produced $(field roots) roots"
 [ "$(field TRUSTED)" = false ] && ok || bad "missing store path must not trust"
+
+oprobe() { LAST="$("$OPROBE" "$1" "$2" "$3" 2>&1)"; }
+owant() {
+    if [ "$(field "$2")" = "$3" ]; then ok; else bad "$1: $2=$(field "$2") want=$3 [$(printf '%s' "$LAST" | tr '\n' ' ')]"; fi
+}
+
+# An OCSP response is evidence only when the issuer signed it, it names
+# this certificate, and it is inside its own validity window.
+oprobe "$F/ocsp-good.der" "$F/ca.der" "$F/good.der"
+owant "ocsp good signature" SIGNATURE true
+owant "ocsp good status" STATUS 0
+owant "ocsp good before thisUpdate" STALE -1
+owant "ocsp good no revocation" REVOKED_AT -1
+
+# A revoked certificate is reported revoked, with the time it happened.
+oprobe "$F/ocsp-revoked.der" "$F/ca.der" "$F/revoked.der"
+owant "ocsp revoked signature" SIGNATURE true
+owant "ocsp revoked status" STATUS 1
+owant "ocsp revoked time" REVOKED_AT 1735689600
+
+# A response naming another certificate says nothing about this one, even
+# though it is genuine and signed by the same issuer.
+oprobe "$F/ocsp-good.der" "$F/ca.der" "$F/leaf.der"
+owant "ocsp other cert" STATUS -1
+
+# A signature that is not the issuer's is not evidence, so the good answer
+# inside it does not survive.
+oprobe "$F/ocsp-good.der" "$F/other.der" "$F/good.der"
+owant "ocsp wrong signer" SIGNATURE false
+owant "ocsp wrong signer status" STATUS -1
+
+# A truncated response yields no answer rather than a crash.
+head -c 40 "$F/ocsp-good.der" > "$W/ocsp-trunc.der"
+oprobe "$W/ocsp-trunc.der" "$F/ca.der" "$F/good.der"
+owant "ocsp truncated" STATUS -1
 
 echo "tls: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

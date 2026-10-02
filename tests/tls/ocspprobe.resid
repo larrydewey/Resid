@@ -1,0 +1,30 @@
+// Every case prints one KEY=value per line, judged by tests/tls/run.sh.
+//
+// "now" is the response's own producedAt rather than the clock, so a
+// committed response stays decidable: the freshness rules are exercised
+// without the fixture expiring out from under the suite.
+import "../../lib/ocsp.resid";
+
+Int now_of(List(Int) d) {
+    if (d.len() == 0) { return 0 - 1; }
+    return x509_time_to_unix(der_str_value(d, ocsp_rd_produced_at(d)));
+}
+
+Bool sig_of(List(Int) d, List(Int) issuer) {
+    if (d.len() == 0) { return false; }
+    return ocsp_sig_ok(d, issuer);
+}
+
+@requires(args, filesystem)
+Int main() {
+    List(Int) resp = filesystem.read_bytes(args.get(1));
+    List(Int) issuer = filesystem.read_bytes(args.get(2));
+    List(Int) cert = filesystem.read_bytes(args.get(3));
+    List(Int) d = ocsp_basic(resp);
+    Int produced = now_of(d);
+    println("SIGNATURE=" + f"{sig_of(d, issuer)}");
+    println("STATUS=" + f"{ocsp_status_for(issuer, cert, resp, produced)}");
+    println("STALE=" + f"{ocsp_status_for(issuer, cert, resp, 0)}");
+    println("REVOKED_AT=" + f"{ocsp_revoked_at(issuer, cert, resp)}");
+    return 0;
+}
