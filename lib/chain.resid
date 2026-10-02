@@ -601,9 +601,42 @@ Int ocsp_any_status(List(List(Int)) pool, List(Int) cert, List(Int) issuer, Inst
 
 Int ocsp_any_status_at(List(List(Int)) pool, List(Int) cert, List(Int) issuer, Instant now, Int want, Int i) {
     if (i >= pool.len()) { return ocsp_status_no_answer(); }
-    Int got = ocsp_status_for(issuer, cert, pool[i], now.seconds);
+    Int got = ocsp_status_with_delegate(issuer, cert, pool[i], now);
     if (got == want) { return got; }
     return ocsp_any_status_at(pool, cert, issuer, now, want, i + 1);
+}
+
+// ─── Delegated responders ────────────────────────────────────────────
+//
+// RFC 6960 §4.2.2.2: a CA may authorise another certificate to sign its
+// responses, and the responder then puts its own certificate in the
+// response. That certificate is the whole authority for the answer, so it
+// is checked like one: it must say it is for signing OCSP responses, and
+// it must chain to the issuer being asked about -- to *this* issuer, not
+// to some CA the response happens to name.
+//
+// chain_verify covers the rest, and is worth reading as the gate it is: the
+// issuer name comparison in it is a name comparison, so the CA and
+// keyCertSign checks after it are what stop any old certificate in the
+// response from passing as an authority.
+
+// May `delegate` sign OCSP responses on behalf of `issuer`?
+pub Bool ocsp_delegate_ok(List(Int) delegate, List(Int) issuer, Instant now) {
+    if (delegate.len() == 0) { return false; }
+    if (!x509_eku_has(delegate, ocsp_oid_ocsp_signing())) { return false; }
+    return chain_verify(delegate, issuer, now);
+}
+
+// What `resp` says about `cert` under `issuer`, from either the issuer
+// itself or a responder it authorised. The issuer's own signature is tried
+// first, so a delegated response never weakens the direct one.
+pub Int ocsp_status_with_delegate(List(Int) issuer, List(Int) cert, List(Int) resp, Instant now) {
+    List(Int) d = ocsp_basic(resp);
+    if (d.len() == 0) { return ocsp_status_no_answer(); }
+    if (ocsp_sig_ok(d, issuer)) { return ocsp_answered(d, issuer, cert, issuer, now.seconds); }
+    List(Int) delegate = ocsp_delegate_cert(d);
+    if (!ocsp_delegate_ok(delegate, issuer, now)) { return ocsp_status_no_answer(); }
+    return ocsp_answered(d, issuer, cert, delegate, now.seconds);
 }
 
 // ─── Chaining to the store ───────────────────────────────────────────

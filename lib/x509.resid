@@ -303,6 +303,33 @@ pub Bool x509_key_usage(List(Int) cert, Int bit) {
     return (c[byte] & x509_bit_mask(bit)) != 0;
 }
 
+// extendedKeyUsage (2.5.29.37): is `oid` one of the purposes listed?
+//
+//   ExtKeyUsageSyntax ::= SEQUENCE SIZE (1..MAX) OF KeyPurposeId
+//
+// Absent reports false rather than true, the opposite of keyUsage above
+// and for a different reason. An absent keyUsage leaves a certificate
+// unrestricted, but a caller asking whether a certificate may do one
+// particular thing wants to see that thing written down: read as "any
+// purpose", an unmarked certificate would be authorised for everything,
+// and a certificate issued for one job would answer for another.
+pub Bool x509_eku_has(List(Int) cert, Str oid) {
+    Int vp = x509_ext_value_pos(cert, "2.5.29.37");
+    if (vp < 0) { return false; }
+    if (!der_is_seq(cert, vp, der_tag_sequence())) { return false; }
+    DerTlv s = der_next(cert, vp);
+    Int first = vp + s.hdr_len;
+    return eku_scan(cert, first, first + s.val_len, oid);
+}
+
+Bool eku_scan(List(Int) cert, Int pos, Int end, Str oid) {
+    if (pos >= end) { return false; }
+    if (der_oid_str(cert, pos) == oid) { return true; }
+    Int nxt = x509_skip_tlv(cert, pos);
+    if (nxt <= pos) { return false; }
+    return eku_scan(cert, nxt, end, oid);
+}
+
 // The signature bytes of a signatureValue BIT STRING, given the whole
 // TLV as it appears in a certificate or CRL. The content starts with the
 // unused-bits octet, which is not part of the signature, and a signature

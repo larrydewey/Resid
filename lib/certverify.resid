@@ -550,6 +550,27 @@ pub Int ocsp_certs_first(List(Int) b, Int p) {
     return x509_skip_tlv(b, seqc);
 }
 
+// The delegated responder's own certificate out of `certs`, whole and
+// encoded as it appears in the response, so the chain walk can read it as
+// any other certificate. [] when the response names no responder, or the
+// one it names is not there in full.
+//
+// `certs [0] EXPLICIT SEQUENCE OF Certificate`, and the explicit tag wraps
+// the SEQUENCE OF rather than a certificate, so getting to the certificate
+// takes two steps in and ocsp_certs_first takes the other: it reports one
+// past the end of the first certificate.
+pub List(Int) ocsp_delegate_cert(List(Int) d) {
+    Int cp = ocsp_basic_certs_pos(d);
+    if (cp < 0) { return []; }
+    if (!ocsp_fits(d, cp)) { return []; }
+    Int start = der_content_pos(d, der_content_pos(d, cp));
+    Int end = ocsp_certs_first(d, cp);
+    if (end < 0) { return []; }
+    if (start >= end) { return []; }
+    if (end > d.len()) { return []; }
+    return der_slice_seeded(d, start, end - 1);
+}
+
 // ─── ResponseData ─────────────────────────────────────────────────────
 //
 // Every offset below is into the BasicOCSPResponse bytes, not the
@@ -638,14 +659,16 @@ pub Bool ocsp_sig_ok(List(Int) d, List(Int) signer) {
 
 // ─── Answering ───────────────────────────────────────────────────────
 
-// What `resp` says about `cert` under `issuer` at unix second `now`.
-// Returns good, revoked, unknown, or no_answer. A response that is not
-// signed by the issuer, is not about this certificate, or is outside its
-// validity window yields no_answer: no evidence is not a pass.
-pub Int ocsp_status_for(List(Int) issuer, List(Int) cert, List(Int) resp, Int now) {
-    List(Int) d = ocsp_basic(resp);
-    if (d.len() == 0) { return ocsp_status_no_answer(); }
-    if (!ocsp_sig_ok(d, issuer)) { return ocsp_status_no_answer(); }
+// What the BasicOCSPResponse `d` says about `cert` under `issuer`, given
+// that its signature was made by `signer`.
+//
+// `signer` is the issuer for a response the CA signed itself, and the
+// responder's certificate for a delegated one. Nothing else differs: what
+// the response *claims* is about `issuer` either way, because that is the
+// certificate whose key the CertID hashes, and only the key that made the
+// signature changes.
+pub Int ocsp_answered(List(Int) d, List(Int) issuer, List(Int) cert, List(Int) signer, Int now) {
+    if (!ocsp_sig_ok(d, signer)) { return ocsp_status_no_answer(); }
     List(Int) want = ocsp_certid_for(issuer, cert, []);
     Int seq = ocsp_find_sr(d, want, ocsp_rd_responses(d), ocsp_rd_end(d));
     if (seq < 0) { return ocsp_status_no_answer(); }
@@ -661,6 +684,17 @@ pub Int ocsp_status_for(List(Int) issuer, List(Int) cert, List(Int) resp, Int no
     Int st = ocsp_status_code(d, seq);
     if (st == 0 - 1) { return ocsp_status_no_answer(); }
     return st;
+}
+
+// What `resp` says about `cert` under `issuer` at unix second `now`,
+// counting only a response the issuer itself signed. Returns good,
+// revoked, unknown, or no_answer. A response that is not signed by the
+// issuer, is not about this certificate, or is outside its validity window
+// yields no_answer: no evidence is not a pass.
+pub Int ocsp_status_for(List(Int) issuer, List(Int) cert, List(Int) resp, Int now) {
+    List(Int) d = ocsp_basic(resp);
+    if (d.len() == 0) { return ocsp_status_no_answer(); }
+    return ocsp_answered(d, issuer, cert, issuer, now);
 }
 
 // When `cert` was revoked, as a unix second, or -1. Only meaningful once

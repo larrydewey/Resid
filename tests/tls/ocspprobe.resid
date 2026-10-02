@@ -17,6 +17,14 @@ Bool sig_of(List(Int) d, List(Int) issuer) {
     return ocsp_sig_ok(d, issuer);
 }
 
+// Whether the response names a responder this issuer authorised, which is
+// asked separately from the answer so a refused responder and a response
+// about another certificate stay distinguishable.
+Bool delegate_of(List(Int) d, List(Int) issuer, Int now) {
+    if (d.len() == 0) { return false; }
+    return ocsp_delegate_ok(ocsp_delegate_cert(d), issuer, instant_of_seconds(now));
+}
+
 @requires(args, filesystem)
 Int main() {
     List(Int) resp = filesystem.read_bytes(args.get(1));
@@ -28,6 +36,9 @@ Int main() {
     println("STATUS=" + f"{ocsp_status_for(issuer, cert, resp, produced)}");
     println("STALE=" + f"{ocsp_status_for(issuer, cert, resp, 0)}");
     println("REVOKED_AT=" + f"{ocsp_revoked_at(issuer, cert, resp)}");
+    println("DELEGATE=" + f"{delegate_of(d, issuer, produced)}");
+    println("DELEGATED_STATUS=" + f"{ocsp_status_with_delegate(issuer, cert, resp, instant_of_seconds(produced))}");
+    println("DELEGATED_STALE=" + f"{ocsp_status_with_delegate(issuer, cert, resp, instant_of_seconds(0))}");
     // The same answer as the trust store sees it: a store that must be told
     // about revocation, holding only this response, judging this pair.
     TrustStore base = trust_store_add(trust_store_empty(), issuer);

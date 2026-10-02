@@ -207,6 +207,10 @@ owant "ocsp good signature" SIGNATURE true
 owant "ocsp good status" STATUS 0
 owant "ocsp good before thisUpdate" STALE -1
 owant "ocsp good no revocation" REVOKED_AT -1
+# An issuer-signed response still carries a certificate in its `certs`
+# field, and that certificate is not a delegate: the CA names no EKU for
+# it, so there is no responder to have authorised.
+owant "ocsp issuer signs, no delegate" DELEGATE false
 
 # A revoked certificate is reported revoked, with the time it happened.
 oprobe "$F/ocsp-revoked.der" "$F/ca.der" "$F/revoked.der"
@@ -240,6 +244,36 @@ owant "ocsp store no answer" ACCEPT false
 head -c 40 "$F/ocsp-good.der" > "$W/ocsp-trunc.der"
 oprobe "$W/ocsp-trunc.der" "$F/ca.der" "$F/good.der"
 owant "ocsp truncated" STATUS -1
+
+# A response signed by a responder the CA authorised is evidence when that
+# responder is authorised for it: the certificate in the response has to
+# chain to this issuer and carry the OCSPSigning EKU. The response is
+# genuine and its answer is good, so nothing here turns on the issuer
+# having signed it -- SIGNATURE=false is exactly the point.
+oprobe "$F/ocsp-delegated.der" "$F/dca.der" "$F/dgood.der"
+owant "ocsp delegated not issuer signed" SIGNATURE false
+owant "ocsp delegated responder" DELEGATE true
+owant "ocsp delegated status" DELEGATED_STATUS 0
+owant "ocsp delegated before thisUpdate" DELEGATED_STALE -1
+owant "ocsp delegated store admits good" ACCEPT true
+
+# Naming another certificate says nothing about this one, whoever signed
+# the response.
+oprobe "$F/ocsp-delegated.der" "$F/dca.der" "$F/good.der"
+owant "ocsp delegated other cert" DELEGATED_STATUS -1
+
+# A responder the issuer does not vouch for authorises nothing: the
+# certificate in the response chains to dca, not to other.
+oprobe "$F/ocsp-delegated.der" "$F/other.der" "$F/dgood.der"
+owant "ocsp delegated wrong signer" DELEGATE false
+owant "ocsp delegated wrong signer status" DELEGATED_STATUS -1
+
+# A responder with no EKU is authorised for nothing, which is what openssl
+# says as well -- "ocsp_check_delegated: missing ocspsigning usage".
+oprobe "$F/ocsp-delegated-noeku.der" "$F/dca.der" "$F/dgood.der"
+owant "ocsp responder without eku" DELEGATE false
+owant "ocsp responder without eku status" DELEGATED_STATUS -1
+owant "ocsp responder without eku store" ACCEPT false
 
 echo "tls: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
