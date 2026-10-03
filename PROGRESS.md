@@ -1520,11 +1520,39 @@ trust store and provenance work were already here; this is the other end.
   `tests/http/run.sh` still passes.
 - **`examples/https_server.resid`**: the HTTP example's routes and static
   files over TLS, with `--cert`/`--key` and the same worker regions.
-- **Tests**: `tests/tls/run.sh` 89 -> 124. Key loading, certificate/key
+- **Tests**: `tests/tls/run.sh` 89 -> 128. Key loading, certificate/key
   match, pinned signatures (openssl-verified), ClientHello parsing against
   a captured real openssl 3.6 hello, and live handshakes -- this
   repository's client against this repository's server, plus
   `openssl s_client` including a TLS 1.2 refusal.
+
+### The client half, and the one thing it could not reach
+
+- **`lib/tlsclient.resid`**: the client handshake, `Wire(TlsClient)`, and
+  `tls_https_get`. Server authentication is not optional -- the leaf has to
+  name the host, be in date, chain to a root in the store, and carry a
+  CertificateVerify that verifies under its own key.
+- **`tools/resid-fetch.resid`**: one registry artifact over https, with its
+  SHA-256 printed. `resid build` reaches a TLS registry through it and
+  keeps verifying every signature and hash it always did.
+- **`lib/chain.resid`**: an iPAddress SAN is matched as bytes, exactly. It
+  was not matched at all before, so `https://127.0.0.1:...` was refused by a
+  certificate that names 127.0.0.1.
+
+Three things cost time here and are worth writing down:
+
+- **TLS 1.3 traffic secrets are directional.** A client that uses its own
+  application secret for both directions completes the handshake and then
+  opens no application record at all. The client *reads* with the server's
+  application traffic secret and writes with its own.
+- **A handshake header is a type byte and a three-byte length.** Reading
+  the length at the type byte makes a message of type 8 claim a quarter of a
+  megabyte, so a completeness check over a perfectly good flight never
+  succeeds and looks like a peer that dropped the bytes.
+- **`resid-manifest.resid` cannot compile with the client imported.** Past
+  20 GB in reduce, where the same import in a small program fits in 4 GB.
+  Not fixed by raising `RESID_MEM_LIMIT`: that puts the cost on everyone
+  resolving a dependency.
 
 Four things that cost time and are worth writing down:
 

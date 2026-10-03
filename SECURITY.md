@@ -173,6 +173,23 @@ is no stat verb, so a mode check is not expressible here. Keeping a key
 file owner-only is the operator's job, and a deployment that cannot do that
 should not be running this.
 
+## TLS client (`lib/tlsclient.resid`, `tools/resid-fetch.resid`)
+
+| Guarantee | Tests (`tests/tls/run.sh`) |
+|---|---|
+| The server is authenticated before anything is sent: the leaf has to name the host, be inside its validity window, chain to a root in the trust store, and carry a CertificateVerify that verifies under its own key. | client against our own server |
+| No trust store means nothing is trusted. There is no flag to skip verification and no fallback to plaintext: an https url with no store is a refusal. | (fail-closed in `tls_server_trusted`; `resid-fetch` refuses with no store) |
+| A name that does not verify is refused by name -- `not trusted for 'otherhost'` -- rather than by a timeout or a silent close. | untrusted name refused |
+| An address SAN is matched as bytes, exactly. `127.0.0.1` in a certificate is not a wildcard for the loopback. | iPAddress SAN, wrong iPAddress SAN refused |
+| A response is only accepted with a Content-Length, and over a 64 MB cap. A body is never read to close, because a registry that keeps streaming is a registry that can stream forever. | (cap and `Content-Length` required in `tls_https_get`) |
+| What arrives is not trusted for it: `resid-fetch` prints the SHA-256 and `resid build` still verifies the index against `[registry] pubkey` and every archive against its hash. The indirection adds transport authentication, not trust. | (unchanged in `tests/pkg/run.sh`) |
+
+The direction of the TLS 1.3 traffic secrets is the one mistake that a
+test cannot be built around: a client that uses its own application secret
+for both directions completes the handshake and then opens no application
+record at all. The client reads with the server's application traffic
+secret and writes with its own.
+
 Not guaranteed:
 
 - Only `ecdsa_secp256r1_sha256` and `ed25519` are produced. RSA signing,

@@ -1,6 +1,6 @@
 # Web and Registry Plan
 
-> **STATUS: step 2 mostly done (2026-10-03); the registry over https is the rest.** Agreed order of work
+> **STATUS: step 2 done (2026-10-03) except `resid build` fetching https itself, which is a compiler memory problem; `tools/resid-fetch.resid` reaches a TLS registry today.** Agreed order of work
 > after the TLS client, trust store and provenance verification. Each step
 > is a forcing function for the next: the server needs byte I/O and
 > listening, the registry needs the server, TLS and serialization.
@@ -71,12 +71,28 @@ Open questions, answered while doing it:
 - **`resid_tcp_recv_bin` is for known lengths.** Nothing in the record
   layer may use it to "read what is there".
 
-Still open in this step:
+### The client half — done, with one compiler-sized exception
 
-- The registry transport still refuses `https://`, because fetching one
-  needs a TLS *client* plus an HTTP client in `lib/`, which is the same
-  shape of work as the server side and belongs with step 3
-  (`resid-serial`/`resid-json` fetched through the registry).
+`lib/tlsclient.resid` is the client: the handshake, `Wire(TlsClient)`, and
+`tls_https_get` (one GET, Content-Length required, 64 MB cap). Verified
+against `openssl s_server` and against this repository's own server, in
+one process (`tests/tls/client.resid`).
+
+Fetching over https into `resid build` is where this stops:
+
+- Importing `lib/tlsclient.resid` into `tools/resid-manifest.resid` sends
+  the compiler past 20 GB in reduce. The same import in a small program
+  is unremarkable inside 4 GB, so it is the module graph against the
+  manifest's size, not the client. Raising `RESID_MEM_LIMIT` would move
+  the cost onto every machine that resolves a dependency, so it is not a
+  fix.
+- So `tools/resid-fetch.resid` is the bridge: one artifact over https,
+  authenticated, SHA-256 printed, and `[registry] path` pointed at the
+  directory. Every signature and hash check stays where it was -- an
+  `https://` registry is reached, not trusted.
+- `url = "https://..."` in a manifest stays refused until the reduce
+  memory profile can carry the client inside the manifest's own compile.
+  That is step 5 work with the compiler, not a transport gap.
 
 ## 3. Serialization into the ecosystem
 
