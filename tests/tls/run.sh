@@ -446,6 +446,20 @@ if grep -q "^DIAL-OK" "$W/client.out" && grep -q "^REPLY HTTP/1.1 200" "$W/clien
     && grep -q "^REPLY-BODY hello from the tls client" "$W/client.out"; then ok
 else bad "client against our own server: $(tail -3 "$W/client.out" | tr '\n' ' ')"; fi
 
+# The same certificate also carries an iPAddress SAN, and a client that
+# asks for 127.0.0.1 has to verify against that rather than being refused
+# for a name match it never tried: an address SAN is raw bytes and matches
+# exactly, with no wildcard to fall back on.
+timeout 180 "$W/tlsclient2" 127.0.0.1 > "$W/client_ip.out" 2>&1
+grep -q "^DIAL-OK" "$W/client_ip.out" && ok \
+    || bad "iPAddress SAN: $(tail -2 "$W/client_ip.out" | tr '\n' ' ')"
+
+# And an address the certificate does not carry is refused: 127.0.0.1 in a
+# certificate is not a wildcard for the whole loopback.
+timeout 180 "$W/tlsclient2" 127.0.0.2 > "$W/client_ip2.out" 2>&1
+grep -q "not trusted for '127.0.0.2'" "$W/client_ip2.out" && ok \
+    || bad "wrong iPAddress SAN refused: $(tail -2 "$W/client_ip2.out" | tr '\n' ' ')"
+
 # A trust store that does not contain the issuer is refused, and the
 # handshake says which name it could not verify rather than hanging up
 # silently: no store means nothing is trusted.

@@ -34,6 +34,21 @@ Int main() {
     };
     TrustStore store = trust_store_load("tests/tls/fixtures/srvca.pem");
     Str asked = if (args.count() > 1) { args.get(1) } else { "localhost" };
+    if (args.count() > 1 && args.get(1) == "parse") {
+        println(ip_check("127.0.0.1", 4));
+        println(ip_check("127.0.0.10", 4));
+        println(ip_check("0.0.0.0", 4));
+        println(ip_check("256.1.1.1", 0));
+        println(ip_check("1.2.3", 0));
+        println(ip_check("cafe", 0));
+        println(ip_check("::1", 16));
+        println(ip_check("::", 16));
+        println(ip_check("2001:db8::1", 16));
+        println(ip_check("1:2:3:4:5:6:7:8", 16));
+        println(ip_check("1:2:3:4:5:6:7", 0));
+        println(ip_check("localhost", 0));
+        return 0;
+    }
     TlsDial d = tls_client_connect("localhost", port, tls_client_cfg(asked, store, ["http/1.1"]));
     if (d.err != "") {
         println("DIAL-FAIL " + d.err);
@@ -67,4 +82,12 @@ Str after_head_at(Str s, Int i, Int n) {
         if (j + 1 < n && str_char_at(s, j) == 13 && str_char_at(s, j + 1) == 10) { return str_slice(s, j + 2, n); }
     }
     return after_head_at(s, i + 1, n);
+}
+
+// The bytes an address literal names, if they are the count asked for.
+Str ip_check(Str host, Int n) {
+    List(Int) b = ip_addr_bytes(str_to_bytes(host));
+    Str hexed = hex_encode(b);
+    if (b.len() == n) { return host + " -> " + f"{b.len()}" + " bytes " + hexed; }
+    return host + " -> " + f"{b.len()}" + " bytes (wanted " + f"{n}" + ")";
 }

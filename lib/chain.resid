@@ -159,11 +159,139 @@ pub Bool san_scan(List(Int) cert, Int gns, List(Int) host, Int end) {
         Bool hit = dns_match(host, nameb);
         if (hit) { return true; }
     }
+    if (g.cls == 2 && (g.tag & 31) == 7) {
+        Int nstart = gns + g.hdr_len;
+        Int nend = nstart + g.val_len - 1;
+        List(Int) addr = der_slice_seeded(cert, nstart, nend);
+        Bool hit = ip_san_hit(addr, host);
+        if (hit) { return true; }
+    }
     Int nxt = gns + g.hdr_len + g.val_len;
     return san_scan(cert, nxt, host, end);
 }
 
-// True when the certificate carries a dNSName SAN matching `host`.
+// An iPAddress SAN is the address in bytes -- four of them, or sixteen --
+// and matches only exactly: there is no wildcard in an address, so
+// `127.0.0.1` against a certificate for `127.0.0.10` is a mismatch, not a
+// near miss. A host that is not an address literal names bytes that no
+// address can produce, so a dNSName never satisfies this.
+pub Bool ip_san_hit(List(Int) addr, List(Int) host) {
+    if (addr.len() != 4 && addr.len() != 16) { return false; }
+    List(Int) want = ip_addr_bytes(host);
+    if (want.len() != addr.len()) { return false; }
+    return eq_bytes(want, addr);
+}
+
+// The bytes an address literal names, or nothing at all when `host` is a
+// name: an empty list is the only value that never equals an address.
+pub List(Int) ip_addr_bytes(List(Int) host) {
+    if (ip_has_colon(host, 0)) { return ip_v6_bytes(host); }
+    return ip_v4_bytes(host, 0, host.len());
+}
+
+pub Bool ip_has_colon(List(Int) h, Int i) {
+    if (i >= h.len()) { return false; }
+    if (h[i] == 58) { return true; }
+    return ip_has_colon(h, i + 1);
+}
+
+// a.b.c.d, four octets in 0..255, or nothing. Leading zeros are read as
+// decimal, the way every resolver that is not guessing octal reads them.
+pub List(Int) ip_v4_bytes(List(Int) h, Int i, Int n) {
+    List(Int) b = ip_v4_at(h, i, n, 0, 0, []);
+    if (b.len() == 4) { return b; }
+    return [];
+}
+
+pub List(Int) ip_v4_at(List(Int) h, Int i, Int n, Int val, Int digits, List(Int) acc) {
+    if (i >= n) {
+        if (digits == 0 || val > 255) { return []; }
+        return acc.concat([val]);
+    }
+    Int c = h[i];
+    if (c == 46) {
+        if (digits == 0 || val > 255) { return []; }
+        return ip_v4_at(h, i + 1, n, 0, 0, acc.concat([val]));
+    }
+    if (c < 48 || c > 57) { return []; }
+    if (digits >= 3) { return []; }
+    return ip_v4_at(h, i + 1, n, val * 10 + (c - 48), digits + 1, acc);
+}
+
+type IpScan = { List(Int) left; List(Int) right; Bool gap; Bool bad; Int val; Int digits; };
+
+pub List(Int) ip_v6_bytes(List(Int) host) {
+    IpScan s = ip_v6_scan(host, 0, host.len(), IpScan { .left = [], .right = [], .gap = false, .bad = false, .val = 0, .digits = 0 });
+    if (s.bad) { return []; }
+    List(Int) l = ip_v6_end(s.left, s.val, s.digits);
+    List(Int) r = s.right;
+    if (s.gap) {
+        if (l.len() + r.len() > 14) { return []; }
+        return l.concat(ip_zero_bytes(16 - l.len() - r.len())).concat(r);
+    }
+    if (l.len() + r.len() != 16) { return []; }
+    return l.concat(r);
+}
+
+pub List(Int) ip_v6_end(List(Int) acc, Int val, Int digits) {
+    if (digits == 0) { return acc; }
+    if (digits > 4) { return []; }
+    return acc.concat([(val >> 8) & 255, val & 255]);
+}
+
+pub IpScan ip_v6_scan(List(Int) h, Int i, Int n, IpScan s) {
+    if (i >= n) { return s; }
+    Int c = h[i];
+    if (c == 58) {
+        Bool twice = i + 1 < n && h[i + 1] == 58;
+        if (twice) {
+            if (s.gap) { return ip_bad(s); }
+            // The group in hand closes on the left of the `::`, whatever
+            // is read after it belongs on the right.
+            IpScan closed = if (s.digits > 0) { ip_v6_push(s) } else { s };
+            return ip_v6_scan(h, i + 2, n, ip_v6_gap(closed));
+        }
+        if (i == 0) { return ip_bad(s); }
+        if (s.digits == 0) { return ip_bad(s); }
+        return ip_v6_scan(h, i + 1, n, ip_v6_push(s));
+    }
+    Int d = ip_hex_digit(c);
+    if (d < 0) { return ip_bad(s); }
+    if (s.digits >= 4) { return ip_bad(s); }
+    Int v = s.val * 16 + d;
+    Int dg = s.digits + 1;
+    return ip_v6_scan(h, i + 1, n, IpScan { .left = s.left, .right = s.right, .gap = s.gap, .bad = false, .val = v, .digits = dg });
+}
+
+// Close the group being read, on whichever side of a `::` we are.
+pub IpScan ip_v6_push(IpScan s) {
+    List(Int) done = s.left.concat([(s.val >> 8) & 255, s.val & 255]);
+    if (s.gap) { return IpScan { .left = s.left, .right = s.right.concat([(s.val >> 8) & 255, s.val & 255]), .gap = true, .bad = false, .val = 0, .digits = 0 }; }
+    return IpScan { .left = done, .right = s.right, .gap = s.gap, .bad = false, .val = 0, .digits = 0 };
+}
+
+pub IpScan ip_v6_gap(IpScan s) {
+    return IpScan { .left = s.left, .right = s.right, .gap = true, .bad = false, .val = 0, .digits = 0 };
+}
+
+pub IpScan ip_bad(IpScan s) {
+    return IpScan { .left = s.left, .right = s.right, .gap = s.gap, .bad = true, .val = s.val, .digits = s.digits };
+}
+
+pub Int ip_hex_digit(Int c) {
+    if (c >= 48 && c <= 57) { return c - 48; }
+    if (c >= 97 && c <= 102) { return c - 87; }
+    if (c >= 65 && c <= 70) { return c - 55; }
+    return -1;
+}
+
+pub List(Int) ip_zero_bytes(Int n) {
+    if (n <= 0) { return []; }
+    return [0].concat(ip_zero_bytes(n - 1));
+}
+
+// True when the certificate names `host`: a dNSName SAN under the usual
+// wildcard rules, or an iPAddress SAN equal to the literal.
 pub Bool san_has_match(List(Int) cert, List(Int) host) {
     Int e3 = cert_ext3_pos(cert);
     if (e3 < 0) { return false; }
