@@ -1553,6 +1553,13 @@ Three things cost time here and are worth writing down:
   20 GB in reduce, where the same import in a small program fits in 4 GB.
   Not fixed by raising `RESID_MEM_LIMIT`: that puts the cost on everyone
   resolving a dependency.
+- **Fixed point re-verified after the client work.** `./boot.sh`: stage1
+  links the committed seed, `runtime/rt/` lowers to the committed
+  `rt.ll` byte-for-byte, stage2 reproduces the seed exactly (sha256
+  `4e65d672be557de8`), stage3 equals stage2, and the smoke binary's
+  provenance verifies. None of this work touches the compiler's imports, so
+  the seed was never in question -- but "not in question" is not the same
+  as checked, and the check is two minutes.
 
 Four things that cost time and are worth writing down:
 
