@@ -1,0 +1,87 @@
+// resid-fetch — pull one registry artifact over https, verified.
+//
+// `resid build` reads a registry over http or from a directory, and wiring
+// the TLS client into the manifest itself does not compile: importing
+// lib/tlsclient.resid into tools/resid-manifest.resid sends the compiler
+// past 20 GB of memory in reduce, where the same import in a small program
+// is unremarkable. That is a compiler problem to fix in the compiler, not
+// one to hide by raising RESID_MEM_LIMIT on every user's machine.
+//
+// So the TLS client lives here instead, and this tool is the bridge: it
+// fetches one artifact over TLS 1.3 into a file, prints the SHA-256 it
+// hashed, and the caller points `[registry] path` at the directory. The
+// signature check is not weakened by the indirection -- resid build still
+// verifies the index against `[registry] pubkey` and every archive against
+// its hash, so what this tool adds is transport authentication, not trust.
+//
+//   resid-fetch <base-url> <trust-store> <artifact-path> <out-file>
+//
+// <trust-store> is a PEM bundle or a directory of DER certificates, and
+// there is no default: with no store a TLS client trusts nothing, and this
+// tool refuses to run rather than fetching a registry it cannot name.
+
+import "../lib/chain.resid";
+import "../lib/tlsclient.resid";
+
+@requires(args, filesystem, network, clock(readonly))
+Int run() {
+    if (args.count() != 5) {
+        eprintln("usage: resid-fetch <base-url> <trust-store> <artifact-path> <out-file>");
+        return 2;
+    }
+    Str base = args.get(1);
+    Str ca = args.get(2);
+    Str artifact = args.get(3);
+    Str out = args.get(4);
+    if (ca == "") {
+        eprintln("resid-fetch: no trust store given; with no store a TLS client trusts nothing");
+        return 2;
+    }
+    Str url = rf_join(base, artifact);
+    TrustStore store = trust_store_load(ca);
+    List(Str) none = [];
+    HttpsGet h = tls_https_get(url, "", store, none);
+    if (h.err != "") {
+        eprintln("resid-fetch: " + h.err);
+        return 1;
+    }
+    if (h.status != 200) {
+        eprintln("resid-fetch: HTTP " + f"{h.status}" + " from " + url);
+        return 1;
+    }
+    if (h.bytes.len() == 0) {
+        eprintln("resid-fetch: " + url + " arrived empty");
+        return 1;
+    }
+    Str hex = rf_sha256_hex(h.bytes);
+    if (!rf_write(out, h.bytes)) {
+        eprintln("resid-fetch: cannot write " + out);
+        return 1;
+    }
+    println(hex + "  " + out + "  " + f"{h.bytes.len()}");
+    return 0;
+}
+
+// The base URL names the registry, the artifact is relative to it.
+Str rf_join(Str base, Str artifact) {
+    Str trimmed = if (str_ends_with(base, "/")) { str_slice(base, 0, str_len(base) - 1) } else { base };
+    Str rel = if (str_starts_with(artifact, "/")) { str_slice(artifact, 1, str_len(artifact)) } else { artifact };
+    return trimmed + "/" + rel;
+}
+
+@requires(filesystem(readonly))
+Str rf_sha256_hex(List(Int) b) {
+    return hex_encode(sha256_bytes(b));
+}
+
+@requires(filesystem)
+Bool rf_write(Str path, List(Int) b) {
+    filesystem.write_bytes(path, b);
+    return true;
+}
+
+@requires(args, filesystem, network, clock(readonly))
+Int main() {
+    Int rc = run();
+    return rc;
+}
