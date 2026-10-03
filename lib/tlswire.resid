@@ -1,0 +1,152 @@
+// ─── lib/tlswire.resid — the TLS transport for lib/httpserv.resid ─────
+//
+// lib/httpserv.resid's `Wire(T)` and `Accept(T, C)` behaviours over TLS
+// 1.3: what a fill is (decrypt records until there is application data),
+// what a send is (protect the bytes and put them in records), and what
+// accepting a socket means (run a handshake, or decline the socket).
+//
+// Everything here is `network(readonly)`, like the plain transport: this
+// reads and writes on a socket the caller already holds. The key and the
+// chain were read by the caller through lib/tlskey.resid
+// (`filesystem(readonly)`), so serving does not carry the authority to
+// read a private key. The two are separated by the call, not by a
+// comment.
+
+import "httpserv.resid";
+import "tls.resid";
+import "tlsserver.resid";
+import "tlskey.resid";
+
+// A TLS connection: the socket, the keys and record counters the
+// handshake left behind, and the record bytes read past its Finished.
+type TlsConn = { Int fd; TlsKeys keys; Bool eof; List(Int) buf; };
+
+// What a TLS server is started with: the key it signs with, the chain it
+// presents (leaf first), and the protocols it speaks, most preferred
+// first. No capability lives in here: loading the files did.
+type TlsCfg = { ServerKey key; List(List(Int)) chain; List(Str) alpn; };
+
+pub TlsCfg tls_cfg(ServerKey key, List(List(Int)) chain, List(Str) alpn) {
+    return TlsCfg { .key = key, .chain = chain, .alpn = alpn };
+}
+
+// ─── Reading ──────────────────────────────────────────────────────────
+
+// Decrypt records until `have` holds `want` bytes of application data,
+// the peer is done, or eight records have gone by without any. Records
+// that are not application data are consumed and dropped: a
+// NewSessionTicket after the flight, an alert, a change_cipher_spec that
+// arrived without being asked for. A record that fails its tag ends the
+// connection -- it is not a request, and it is not an empty one either.
+@requires(network(readonly))
+WireIn(TlsConn) tls_fill(TlsConn c, List(Int) have, Int want, Int cap) {
+    return tls_fill_at(c, have, want, cap, 8);
+}
+
+@requires(network(readonly))
+WireIn(TlsConn) tls_fill_at(TlsConn c, List(Int) have, Int want, Int cap, Int rounds) {
+    Int n = have.len();
+    if (n >= want || c.eof || rounds <= 0 || n > cap) {
+        return WireIn { .conn = c, .data = have, .eof = c.eof };
+    }
+    TsIn in = TsIn { .fd = c.fd, .buf = c.buf, .eof = c.eof };
+    TsRec r = ts_read_record(in);
+    if (!r.ok) {
+        TlsConn dead = TlsConn { .fd = c.fd, .keys = c.keys, .eof = true, .buf = r.in.buf };
+        return WireIn { .conn = dead, .data = have, .eof = true };
+    }
+    return tls_fill_rec(c, r, have, want, cap, rounds);
+}
+
+@requires(network(readonly))
+WireIn(TlsConn) tls_fill_rec(TlsConn c, TsRec r, List(Int) have, Int want, Int cap, Int rounds) {
+    TlsKeys k2 = tls_keys_rseq(c.keys, c.keys.rseq + 1);
+    if (r.ctype != 23) {
+        TlsConn next = TlsConn { .fd = c.fd, .keys = c.keys, .eof = c.eof, .buf = r.in.buf };
+        return tls_fill_at(next, have, want, cap, rounds - 1);
+    }
+    List(Int) pt = tls_open(c.keys.rseq, c.keys.rkey, c.keys.riv, r.hdr, r.body);
+    TlsConn stepped = TlsConn { .fd = c.fd, .keys = k2, .eof = c.eof, .buf = r.in.buf };
+    if (pt.len() == 0) {
+        TlsConn dead = TlsConn { .fd = c.fd, .keys = k2, .eof = true, .buf = r.in.buf };
+        return WireIn { .conn = dead, .data = have, .eof = true };
+    }
+    Int inner = tls_inner_type(pt);
+    Int clen = pt.len() - 1;
+    List(Int) content = slice_seed(pt, 0, clen, []);
+    if (inner == 23) {
+        List(Int) both = have.concat(content);
+        return WireIn { .conn = stepped, .data = both, .eof = false };
+    }
+    if (inner == 21) {
+        TlsConn bye = TlsConn { .fd = c.fd, .keys = k2, .eof = true, .buf = r.in.buf };
+        return WireIn { .conn = bye, .data = have, .eof = true };
+    }
+    return tls_fill_at(stepped, have, want, cap, rounds - 1);
+}
+
+// ─── Writing ──────────────────────────────────────────────────────────
+
+// Protect and send. One record per 2^14 bytes of plaintext, each with
+// its own sequence number (RFC 8446 §5.1): a reply larger than a record
+// is ordinary -- a static file is -- so this splits rather than refusing.
+@requires(network(readonly))
+WireOut(TlsConn) tls_send(TlsConn c, List(Int) b) {
+    return tls_send_at(c, b, 0, true);
+}
+
+@requires(network(readonly))
+WireOut(TlsConn) tls_send_at(TlsConn c, List(Int) b, Int at, Bool ok) {
+    Int n = b.len();
+    if (at >= n) {
+        return WireOut { .conn = c, .ok = ok };
+    }
+    Int left = n - at;
+    Int take = if (left > 16384) { 16384 } else { left };
+    List(Int) chunk = slice_seed(b, at, take, []);
+    List(Int) rec = tls_protect(c.keys.wseq, c.keys.wkey, c.keys.wiv, chunk, 23);
+    Bool wrote = resid_tcp_send_bin(c.fd, rec);
+    TlsKeys k2 = tls_keys_wseq(c.keys, c.keys.wseq + 1);
+    TlsConn next = TlsConn { .fd = c.fd, .keys = k2, .eof = c.eof, .buf = c.buf };
+    Int next_at = at + take;
+    return tls_send_at(next, b, next_at, ok && wrote);
+}
+
+// A close_notify before the socket goes, so the peer reads a clean end
+// rather than a truncated connection. No draining here: the plain
+// transport drains because unread *plaintext* would reset the socket and
+// lose the reply, and a TLS peer reads records, not bytes.
+@requires(network(readonly))
+Bool tls_close(TlsConn c) {
+    List(Int) notice = [1, 0];
+    List(Int) rec = tls_protect(c.keys.wseq, c.keys.wkey, c.keys.wiv, notice, 21);
+    _ = resid_tcp_send_bin(c.fd, rec);
+    _ = resid_tcp_shutdown(c.fd);
+    return resid_tcp_close(c.fd);
+}
+
+// ─── Accepting ────────────────────────────────────────────────────────
+
+// A handshake on `fd`, and a connection to read on if it worked. The
+// handshake refuses with an alert rather than a silent close, so a client
+// that asked for something this server will not do is told which of the
+// refusals it was.
+@requires(network(readonly))
+Accepted(TlsConn) tls_accept(TlsCfg conf, Int fd) {
+    TlsResult r = tls_server_handshake(fd, conf.key, conf.chain, conf.alpn);
+    Bool ok = r.err == 0;
+    TlsConn c = TlsConn { .fd = fd, .keys = r.keys, .eof = false, .buf = r.keys.pending };
+    return Accepted { .conn = c, .ok = ok };
+}
+
+Wire(TlsConn) = { .wire_fill = tls_fill, .wire_send = tls_send, .wire_close = tls_close };
+Accept(TlsConn, TlsCfg) = tls_accept;
+
+// Accept TLS connections on `lfd` and serve each in turn: the same loop
+// the plain server runs, over a transport that has to shake hands before
+// there is anything to read. `max_conns` 0 means until accept fails.
+@needs(Wire(TlsConn))
+@requires(network(readonly))
+pub Int tls_accept_loop(Int lfd, TlsCfg conf, HttpReply closure(HttpRequest) handler, HttpLimits lim, Int max_conns) {
+    return http_accept_loop_where(lfd, conf, handler, lim, max_conns);
+}

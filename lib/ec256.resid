@@ -1,7 +1,13 @@
-// ─── lib/ec256.resid — NIST P-256 ECDSA verify (pure Resid) ─────────
+// ─── lib/ec256.resid — NIST P-256 ECDSA verify and sign (pure Resid) ─
 // Field elements are Int(256) scalars; products widen to Int(512) and
 // reduce with native % (LLVM urem). Points pass through recursion as
 // separate X/Y/Z arguments; scalar-mult returns affine (x<<256)|y.
+//
+// Signing takes the per-signature nonce `k` as a parameter rather than
+// drawing it here: the caller owns randomness (and a test can pin the
+// bytes a given key and nonce produce), and this module stays pure. A
+// nonce outside [1, N-1] yields an empty signature rather than a DER
+// encoding of a degenerate one.
 
 import "rsa.resid";
 import "crypto.resid";
@@ -414,4 +420,141 @@ pub Int(256) ecdsa_vx(Int(256) digest, Int(256) r, Int(256) s, Int(256) qx, Int(
     Int(256) l2 = ec_mul(lam, lam);
     Int(256) x3v = ec_sub(l2, ec_add(x1, x2v));
     return ec_subn(x3v, n);
+}
+
+// ─── Scalars to bytes ────────────────────────────────────────────────
+
+// Int(256) as 32 big-endian bytes. Bit patterns, not signed values: every
+// scalar here is non-negative even when its top bit is set. Byte i is
+// (v >> 8i) & 255, walking from the top so the list reads big-endian --
+// the mirror of `ec_from_be`, which the DER side depends on.
+pub List(Int) ec_to_be32(Int(256) v) {
+    return ec_to_be32_at(v, 31, []);
+}
+
+List(Int) ec_to_be32_at(Int(256) v, Int i, List(Int) acc) {
+    if (i < 0) { return acc; }
+    Int sh = i * 8;
+    Int(256) shifted = v >> sh;
+    Int(256) low = shifted & 255;
+    Int byte = wrapping_i64(low);
+    Int ni = i - 1;
+    return ec_to_be32_at(v, ni, acc.concat([byte]));
+}
+
+// The fewest big-endian bytes that hold v, at least one: DER's minimal
+// INTEGER form, which is also what a padded encoding must be trimmed to.
+pub List(Int) ec_to_be_min(Int(256) v) {
+    List(Int) full = ec_to_be32(v);
+    Int n = full.len();
+    return ec_to_be_min_at(full, 0, n);
+}
+
+List(Int) ec_to_be_min_at(List(Int) b, Int i, Int n) {
+    Int cnt = n - i;
+    if (cnt <= 1) {
+        return slice_seed(b, i, 1, []);
+    }
+    Int byte = b[i];
+    if (byte == 0) { return ec_to_be_min_at(b, i + 1, n); }
+    return slice_seed(b, i, cnt, []);
+}
+
+// ─── Scalars mod N ───────────────────────────────────────────────────
+
+// v mod N. N is 2^256 - 2^224 + ..., so every scalar below N needs at
+// most one subtraction -- and comparing needs ec_ge, since these are
+// unsigned values.
+pub Int(256) ec_modn(Int(256) v) {
+    Int(256) n = ec_n();
+    if (ec_ge(v, n)) {
+        return v - n;
+    }
+    return v;
+}
+
+// (a + b) mod N, widened: two scalars below N sum above 2^255 often
+// enough that the 256-bit add would be the one that traps.
+pub Int(256) ec_addn(Int(256) a, Int(256) b) {
+    Int(512) aa = ec_zext(a);
+    Int(512) bb = ec_zext(b);
+    Int(512) pp = ec_n_wide();
+    Int(512) tv = wrapping_add(aa, bb);
+    Int(512) rv = ec_mod_bits(tv, pp, 511, 0);
+    return wrapping_i256(rv);
+}
+
+// s in the low half of [1, N-1]: the canonical form openssl and every
+// other verifier emits, so a signature is byte-identical whichever side
+// produced it. `2*s mod N` wraps exactly when s was in the upper half,
+// and the wrap shows up as t < s -- which is also why this does not
+// compute N/2 to compare against: `>>` on Int(256) sign-fills (see
+// ec_ge), and these scalars are unsigned bit patterns.
+pub Int(256) ec_low_s(Int(256) s) {
+    Int(256) t = ec_addn(s, s);
+    if (ec_ge(s, t)) {
+        return ec_n() - s;
+    }
+    return s;
+}
+
+// ─── ECDSA sign ──────────────────────────────────────────────────────
+
+// DER INTEGER for a positive scalar: minimal big-endian bytes, with a
+// zero octet in front when the top bit would otherwise read as negative.
+pub List(Int) ec_der_int(Int(256) v) {
+    List(Int) m = ec_to_be_min(v);
+    Int first = m[0];
+    List(Int) padded = if (first > 127) { [0].concat(m) } else { m };
+    Int len = padded.len();
+    List(Int) hdr = [2, len];
+    return hdr.concat(padded);
+}
+
+// DER SEQUENCE { INTEGER r, INTEGER s } -- the ECDSA-Sig-Value that both
+// X.509 and a TLS 1.3 CertificateVerify carry.
+pub List(Int) ec_der_sig(Int(256) r, Int(256) s) {
+    List(Int) body = ec_der_int(r).concat(ec_der_int(s));
+    Int len = body.len();
+    List(Int) hdr = [48, len];
+    return hdr.concat(body);
+}
+
+// Sign SHA-256(content) with the private scalar `d` and the per-signature
+// nonce `k` (both big-endian, 32 bytes, or with DER's leading zero).
+// Returns DER SEQUENCE { r, s } with s in the low half, or an empty list
+// when the nonce is outside [1, N-1] -- such a signature has r or s
+// equal to zero and no verifier may accept it, so it is never encoded.
+pub List(Int) ecdsa_sign_k(List(Int) content, List(Int) d_bytes, List(Int) k_bytes) {
+    Int(256) n = ec_n();
+    Int(256) k = ec_from_be(k_bytes);
+    Bool bad_k = k == 0 || ec_ge(k, n);
+    if (bad_k) {
+        List(Int) none = [];
+        return none;
+    }
+    Int(256) d = ec_from_be(d_bytes);
+    List(Int) digest = sha256_bytes(content);
+    Int(256) e = ec_from_be(digest);
+    Int(512) point = ec_mul_packed(k, ec_gx(), ec_gy());
+    Int(256) rx = ec_unpack_x(point);
+    Int(256) r = ec_modn(rx);
+    Int(256) kinv = ec_inv_n(k);
+    Int(256) rd = ec_muln(r, d);
+    Int(256) sum = ec_addn(e, rd);
+    Int(256) s = ec_muln(kinv, sum);
+    Int(256) sn = ec_low_s(s);
+    return ec_der_sig(r, sn);
+}
+
+// A nonce in [1, N-1] from `bytes`, or an empty list when the draw falls
+// outside it. Rejection sampling: reducing mod N instead would bias the
+// low end of the range, and a server that draws k from the same bytes
+// twice leaks the key.
+pub List(Int) ec_nonce_ok(List(Int) bytes) {
+    Int(256) k = ec_from_be(bytes);
+    Bool ok = k != 0 && !ec_ge(k, ec_n());
+    if (ok) { return bytes; }
+    List(Int) none = [];
+    return none;
 }

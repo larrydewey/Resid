@@ -31,6 +31,9 @@ PROBE="$W/tsprobe"
 (cd "$ROOT" && "$COMPILER" tests/tls/ocspprobe.resid -o "$W/ocspprobe") > "$W/build.log" 2>&1 || {
     echo "FAIL build ocspprobe"; grep -i error "$W/build.log" | head -3; exit 1; }
 OPROBE="$W/ocspprobe"
+(cd "$ROOT" && "$COMPILER" tests/tls/srvprobe.resid -o "$W/srvprobe") > "$W/build.log" 2>&1 || {
+    echo "FAIL build srvprobe"; grep -i error "$W/build.log" | head -3; exit 1; }
+SRVPROBE="$W/srvprobe"
 F="$ROOT/tests/tls/fixtures"
 
 # Stores derived from the fixtures, built here so the fixture directory
@@ -274,6 +277,160 @@ oprobe "$F/ocsp-delegated-noeku.der" "$F/dca.der" "$F/dgood.der"
 owant "ocsp responder without eku" DELEGATE false
 owant "ocsp responder without eku status" DELEGATED_STATUS -1
 owant "ocsp responder without eku store" ACCEPT false
+
+# ── the server side ──────────────────────────────────────────────────
+# A server has to get three things right that a client never has to: read
+# a private key, produce a signature, and read a ClientHello. These are
+# the facts behind that, driven through tests/tls/srvprobe.resid.
+sprobe() { LAST="$("$SRVPROBE" "$@" 2>&1)"; }
+swant() {
+    if [ "$(field "$2")" = "$3" ]; then ok; else bad "$1: $2=$(field "$2") want=$3"; fi
+}
+EC_PUB="0421c6245699b8808669f8f7754ca9259cb09a056fef1b81eecdaae0ae301cb85597916427da78cec04200cd722174ceaf506ec2780c5c01bd881f47e6456e9e54"
+ED_PUB="a7662b063b00809c8856d465e67f92cad9a496a42899a411ab5e82f9e9b4013b"
+for k in srv.key srv.key.der; do
+    sprobe --keys "$F/$k"
+    swant "$k" alg 1027
+    swant "$k" pub "$EC_PUB"
+done
+for k in srved.key srved.key.der; do
+    sprobe --keys "$F/$k"
+    swant "$k" alg 2055
+    swant "$k" pub "$ED_PUB"
+done
+# A CA key is still a key and still loads: refusing it would be refusing a
+# key because of what it is *for*, which is not the loader's business.
+sprobe --keys "$F/srvca.key"; swant "a CA key still loads" alg 1027
+# A certificate is not one -- its public key is in the certificate, not in
+# a file the signer reads -- and neither is a file that is not there.
+sprobe --keys "$F/srv.der"; swant "a certificate is not a key" alg -1
+sprobe --keys "$F/leaf.pem"; swant "a PEM certificate is not a key" alg -1
+sprobe --keys "$F/no-such.key"; swant "a missing file is not a key" alg -1
+
+# The certificate has to carry the key the server signs with, or every
+# handshake fails on the client's side instead of at startup.
+sprobe --match "$F/srv.key" "$F/srv.pem"; swant "key matches its certificate" match 1
+sprobe --match "$F/srved.key" "$F/srved.pem"; swant "ed25519 key matches" match 1
+sprobe --match "$F/srv.key" "$F/srved.pem"; swant "a key and another key's certificate" match 0
+
+# Signatures, pinned: the ECDSA nonce is a parameter here, so the bytes are
+# a function of the content and the key alone. openssl verifies both of
+# these values (fixtures/README.md has the commands).
+sprobe --sign "$F/srv.key"
+swant "ecdsa pinned signature" pinned "30440220515c3d6eb9e396b904d3feca7f54fdcd0cc1e997bf375dca515ad0a6c3b4035f022047d96836b7476378955489c90629cd5b778a32c0b9cd67f98e5f0f3164e95daf"
+sprobe --sign "$F/srved.key"
+swant "ed25519 pinned signature" pinned "5b2861c334037b6c9df91c71ba0a45287a6bee1655bcd85624c163a090aaf4b71d76f8f13ea116acb97b22549d6d0adfac4160d1ebe9b8a9ed0c7116f202e000"
+swant "ed25519 signature length" len 64
+
+# A real openssl 3.6 ClientHello: TLS 1.3, a 32-byte session id, an x25519
+# share behind a post-quantum hybrid one, both signature algorithms, and an
+# ALPN list this server would pick http/1.1 out of.
+sprobe --hello "$F/ch-ossl.bin"
+swant "ossl hello parses" err 0
+swant "ossl hello is tls13" tls13 true
+swant "ossl session id length" session_id 32
+swant "ossl x25519 share found" share 32
+swant "ossl offers ecdsa" ecdsa true
+swant "ossl offers ed25519" ed25519 true
+swant "ossl alpn pick" alpn_pick http/1.1
+# Truncated: refused, not read past the end.
+sprobe --trunc "$F/ch-ossl.bin"
+swant "whole hello" full 0
+swant "half a hello" half 1
+swant "eight bytes of a hello" tiny 1
+
+# ── live handshakes ──────────────────────────────────────────────────
+# The server is examples/https_server.resid. The clients are this
+# repository's own (examples/tls_client.resid) and, when it is installed,
+# openssl. Both check the certificate against a trust store, so a case
+# that passes has proved the chain and the signature, not just the keys.
+(cd "$ROOT" && "$COMPILER" examples/https_server.resid -o "$W/https") > "$W/build.log" 2>&1 || {
+    echo "FAIL build https_server"; grep -i error "$W/build.log" | head -3; exit 1; }
+(cd "$ROOT" && "$COMPILER" examples/tls_client.resid -o "$W/tlsclient") > "$W/build.log" 2>&1 || {
+    echo "FAIL build tls_client"; grep -i error "$W/build.log" | head -3; exit 1; }
+
+hex_of() { python3 -c 'import sys; sys.stdout.write(open(sys.argv[1],"rb").read().hex())' "$1"; }
+EC_CERT="$(hex_of "$F/srv.der")"
+
+# A certificate that does not carry the key is refused at startup, saying
+# which of the two files is wrong, rather than failing every handshake.
+"$W/https" --cert "$F/srv.pem" --key "$F/srved.key" --port 0 > "$W/mismatch.out" 2>&1
+if [ "$?" = 2 ] && grep -q "does not carry the key" "$W/mismatch.out"; then ok
+else bad "mismatched key and certificate: exit $? $(cat "$W/mismatch.out")"; fi
+"$W/https" --cert "$F/srv.pem" --key "$F/no-such.key" --port 0 > "$W/nokey.out" 2>&1
+if [ "$?" = 2 ] && grep -q "cannot read a usable key" "$W/nokey.out"; then ok
+else bad "unreadable key: exit $? $(cat "$W/nokey.out")"; fi
+
+# serve <conns> <logfile> <cert> <key>: a server that exits after `conns`.
+serve() {
+    rm -f "$W/port"
+    "$W/https" --cert "$3" --key "$4" --port 0 --workers 2 --conns "$1" \
+        --root "$W/root" --port-file "$W/port" --alpn http/1.1 > "$2" 2>&1 &
+    SRVPID=$!
+    for _ in $(seq 1 400); do [ -s "$W/port" ] && break; sleep 0.05; done
+    SRVPORT="$(cat "$W/port" 2>/dev/null)"
+}
+unserve() { kill "$SRVPID" 2>/dev/null; wait "$SRVPID" 2>/dev/null; }
+mkdir -p "$W/root"
+printf 'served over tls\n' > "$W/root/note.txt"
+
+# This repository's client, trusting the fixture CA. It prints the first
+# line of the decrypted reply, so a 200 is the whole handshake answered:
+# the chain verified, the CertificateVerify verified, and both Finisheds
+# verified, or nothing would have been decrypted.
+serve 1 "$W/srv.log" "$F/srv.pem" "$F/srv.key"
+if [ -n "$SRVPORT" ]; then
+    LAST="$("$W/tlsclient" localhost "$SRVPORT" "$EC_CERT" "" "$F/srvca.pem" 2>&1)"
+    printf '%s\n' "$LAST" | grep -q "^REPLY: HTTP/1.1 200 OK" && ok \
+        || bad "resid client against the resid server: $(printf '%s' "$LAST" | tr '\n' ' ')"
+else bad "https server did not report a port"; fi
+unserve
+
+# A client that does not trust the server's CA gets nothing: refused, not
+# downgraded and not served.
+serve 1 "$W/srv.log" "$F/srv.pem" "$F/srv.key"
+if [ -n "$SRVPORT" ]; then
+    LAST="$("$W/tlsclient" localhost "$SRVPORT" "$EC_CERT" "" "$F/other.pem" 2>&1)"
+    printf '%s\n' "$LAST" | grep -q "^CERT-FAIL" && ok \
+        || bad "an untrusted chain must fail: $(printf '%s' "$LAST" | tr '\n' ' ')"
+    printf '%s\n' "$LAST" | grep -q "^REPLY" && bad "an untrusted chain got a reply: $(printf '%s' "$LAST" | tr '\n' ' ')"
+else bad "https server did not report a port (2)"; fi
+unserve
+
+# openssl, when it is installed: the reference client against the ECDSA
+# server, then the Ed25519 one (this repository's own client verifies only
+# ECDSA-P256 and RSA-PSS CertificateVerifies, so openssl is what covers
+# the other algorithm end to end), and a version this server does not
+# speak.
+if command -v openssl > /dev/null; then
+    serve 2 "$W/ossl_srv.log" "$F/srv.pem" "$F/srv.key"
+    if [ -n "$SRVPORT" ]; then
+        printf 'GET /files/note.txt HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' \
+            | timeout 180 openssl s_client -connect 127.0.0.1:"$SRVPORT" -CAfile "$F/srvca.pem" \
+                -servername localhost -quiet > "$W/ossl.out" 2>"$W/ossl.err"
+        grep -q "served over tls" "$W/ossl.out" && ok \
+            || bad "openssl s_client: $(tail -2 "$W/ossl.out" | tr '\n' ' ') $(tail -1 "$W/ossl.err")"
+        # TLS 1.2 only: refused with protocol_version, so the client never
+        # gets a reply at all.
+        timeout 60 openssl s_client -connect 127.0.0.1:"$SRVPORT" -CAfile "$F/srvca.pem" \
+            -servername localhost -tls1_2 </dev/null > "$W/ossl12.out" 2>&1
+        grep -qiE "alert|protocol version|error|no protocols" "$W/ossl12.out" && ok \
+            || bad "TLS 1.2 should be refused: $(tail -2 "$W/ossl12.out" | tr '\n' ' ')"
+    else bad "https server did not report a port (3)"; fi
+    unserve
+
+    serve 1 "$W/ossl_ed.log" "$F/srved.pem" "$F/srved.key"
+    if [ -n "$SRVPORT" ]; then
+        printf 'GET /files/note.txt HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' \
+            | timeout 180 openssl s_client -connect 127.0.0.1:"$SRVPORT" -CAfile "$F/srvedca.pem" \
+                -servername localhost -quiet > "$W/ossled.out" 2>"$W/ossled.err"
+        grep -q "served over tls" "$W/ossled.out" && ok \
+            || bad "openssl against the ed25519 server: $(tail -2 "$W/ossled.out" | tr '\n' ' ') $(tail -1 "$W/ossled.err")"
+    else bad "https server did not report a port (4)"; fi
+    unserve
+else
+    echo "note: openssl not installed, skipping the s_client cases"
+fi
 
 echo "tls: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

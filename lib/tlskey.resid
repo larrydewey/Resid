@@ -1,0 +1,362 @@
+// ─── lib/tlskey.resid — what a TLS server signs with ─────────────────
+//
+// A private key (an Ed25519 seed or an ECDSA P-256 scalar) and the chain
+// it presents, loaded from the files a deployment actually has: PKCS#8
+// ("PRIVATE KEY") or SEC1 ("EC PRIVATE KEY"), PEM or DER.
+//
+// Byte lists here are 0-based. The TLV reader below is hand-rolled for
+// that rather than lib/der.resid, which is still the old seeded
+// convention — the same choice lib/chain.resid makes.
+//
+// Loading a key is `filesystem(readonly)`, and nothing in this module
+// writes a key out, prints one, or keeps it past the call. The mode of
+// the key file is the operator's business: the language has no stat verb,
+// so a permission check is not expressible here (SECURITY.md).
+
+import "crypto.resid";
+import "ec256.resid";
+import "ed25519.resid";
+import "chain.resid";
+import "certverify.resid";
+
+// EcKey's payload is the 32-byte big-endian scalar, EdKey's the 32-byte
+// seed. A key this language cannot sign with parses into neither.
+type ServerKey = EcKey(List(Int)) | EdKey(List(Int));
+
+// The TLS SignatureAlgorithm code point (RFC 8446 §4.2.3) this key signs
+// with: 0x0403 ecdsa_secp256r1_sha256, 0x0807 ed25519.
+pub Int tls_key_sigalg(ServerKey key) {
+    return match key {
+        EcKey(scalar) => 1027,
+        EdKey(seed) => 2055
+    };
+}
+
+// The public key bytes, in the shape a certificate carries them: 32 raw
+// bytes for Ed25519, the uncompressed point 04||X||Y for ECDSA.
+pub List(Int) tls_key_pubkey(ServerKey key) {
+    return match key {
+        EdKey(seed) => pub_key(seed),
+        EcKey(scalar) => tk_ec_point(scalar)
+    };
+}
+
+List(Int) tk_ec_point(List(Int) scalar) {
+    Int(256) d = ec_from_be(scalar);
+    Int(512) packed = ec_mul_packed(d, ec_gx(), ec_gy());
+    Int(256) x = ec_unpack_x(packed);
+    Int(256) y = ec_unpack_y(packed);
+    List(Int) empty = [];
+    return [4].concat(ec_to_be32(x)).concat(ec_to_be32(y));
+}
+
+// True when the leaf certificate carries this key's public key. A server
+// whose certificate and key disagree would sign a transcript with a key
+// the certificate does not name, and every client would refuse it — so it
+// is refused at load time, where the operator can see which of the two
+// files is wrong.
+pub Bool tls_key_cert_matches(ServerKey key, List(Int) leaf_der) {
+    List(Int) bits = cert_pubkey_bits(leaf_der);
+    // The SubjectPublicKeyInfo BIT STRING opens with its unused-bits
+    // octet, which is 0 for a key (there is no partial key) and not part
+    // of the key. One byte, not a length test: an Ed25519 key may itself
+    // begin with a zero byte.
+    Bool has_pad = bits.len() > 0;
+    Bool pad_zero = if (has_pad) { bits[0] == 0 } else { false };
+    List(Int) pk = if (pad_zero) { slice_seed(bits, 1, bits.len() - 1, []) } else { bits };
+    return ct_equal(pk, tls_key_pubkey(key));
+}
+
+// ─── Signing ──────────────────────────────────────────────────────────
+
+// Sign the bytes to be hashed (a CertificateVerify signs a transcript
+// hash, not the transcript): DER SEQUENCE { r, s } for ECDSA, the 64 raw
+// bytes Ed25519 produces. An empty list means the key refused — an ECDSA
+// nonce that never landed in [1, N-1] — and the caller must fail the
+// handshake rather than put an empty signature on the wire.
+pub List(Int) tls_key_sign(ServerKey key, List(Int) content) {
+    return match key {
+        EcKey(scalar) => tk_ec_sign_at(content, scalar, 0),
+        EdKey(seed) => sign_msg_bytes(seed, content)
+    };
+}
+
+// A fresh nonce per signature: reusing k under two different messages
+// leaks the key (PS3 A.2.5), so the draw is never cached. The bound on
+// tries only exists so a broken entropy source ends the handshake
+// instead of spinning in it.
+List(Int) tk_ec_sign_at(List(Int) content, List(Int) scalar, Int tries) {
+    List(Int) nonce = ec_nonce_ok(random_bytes(32));
+    if (nonce.len() == 32) {
+        return ecdsa_sign_k(content, scalar, nonce);
+    }
+    Int nt = tries + 1;
+    if (nt >= 8) {
+        List(Int) none = [];
+        return none;
+    }
+    return tk_ec_sign_at(content, scalar, nt);
+}
+
+// ─── DER, 0-based ─────────────────────────────────────────────────────
+
+// One TLV read from `b` at `pos`: `start` is the first content byte,
+// `end` the byte after it. `ok` is false for a truncated element, an
+// indefinite length, or a length field with more than four octets — a
+// key never needs one, and a five-octet length is an attack rather than
+// a big number.
+type Tlv = { Int tag; Int start; Int len; Int end; Bool ok; };
+
+Tlv tk_bad(Int pos) {
+    return Tlv { .tag = 0, .start = pos, .len = 0, .end = pos, .ok = false };
+}
+
+// The tag number, with the class and constructed bits masked off: the
+// constants below are tag numbers, and an identifier octet is 0x30 for a
+// SEQUENCE rather than 16.
+pub Int tk_tag_num(Tlv t) {
+    return t.tag & 31;
+}
+
+pub Int tk_tag_int() { return 2; }
+pub Int tk_tag_octet() { return 4; }
+pub Int tk_tag_oid() { return 6; }
+pub Int tk_tag_seq() { return 16; }
+
+pub Tlv tk_tlv(List(Int) b, Int pos) {
+    Int n = b.len();
+    if (pos < 0 || pos + 1 >= n) { return tk_bad(pos); }
+    Int tag = b[pos];
+    Int l0 = b[pos + 1];
+    if (l0 < 128) {
+        return tk_tlv_at(b, pos, tag, 2, l0);
+    }
+    return tk_tlv_long(b, pos, tag, l0);
+}
+
+Tlv tk_tlv_long(List(Int) b, Int pos, Int tag, Int l0) {
+    if (l0 == 128) { return tk_bad(pos); }
+    Int n = b.len();
+    Int cnt = l0 - 128;
+    if (cnt > 4 || pos + 2 + cnt > n) { return tk_bad(pos); }
+    Int len = tk_len_acc(b, pos + 2, pos + 2 + cnt, 0);
+    Int hdr = 2 + cnt;
+    return tk_tlv_at(b, pos, tag, hdr, len);
+}
+
+Tlv tk_tlv_at(List(Int) b, Int pos, Int tag, Int hdr, Int len) {
+    Int start = pos + hdr;
+    Int end = start + len;
+    if (end > b.len()) { return tk_bad(pos); }
+    return Tlv { .tag = tag, .start = start, .len = len, .end = end, .ok = true };
+}
+
+Int tk_len_acc(List(Int) b, Int i, Int end, Int acc) {
+    if (i >= end) { return acc; }
+    Int byte = b[i];
+    Int step = acc * 256 + byte;
+    return tk_len_acc(b, i + 1, end, step);
+}
+
+pub List(Int) tk_value(List(Int) b, Tlv t) {
+    return slice_seed(b, t.start, t.len, []);
+}
+
+// An OBJECT IDENTIFIER as dotted decimal (RFC 4514 §2.3). The first octet
+// carries arcs 1 and 2 packed together.
+pub Str tk_oid_str(List(Int) b, Tlv t) {
+    if (tk_tag_num(t) != tk_tag_oid()) { return ""; }
+    List(Int) c = tk_value(b, t);
+    Int n = c.len();
+    if (n == 0) { return ""; }
+    Int b0 = c[0];
+    Int first = b0 / 40;
+    Int arc2 = if (first > 2) { b0 - 80 } else { b0 - first * 40 };
+    Str head = f"{first}.{arc2}";
+    return tk_oid_rest(c, 1, n, head, 0);
+}
+
+// The arcs after the first: 7-bit groups carrying the value being read.
+// A group with the continuation bit set is part of a larger arc, so it is
+// accumulated and not emitted; only the group that ends one is.
+Str tk_oid_rest(List(Int) c, Int i, Int n, Str acc, Int v) {
+    if (i >= n) { return acc; }
+    Int byte = c[i];
+    Int cont = byte & 128;
+    Int step = v * 128 + (byte - cont);
+    Int ni = i + 1;
+    if (cont > 0) { return tk_oid_rest(c, ni, n, acc, step); }
+    Str arc = f"{step}";
+    return tk_oid_rest(c, ni, n, acc + "." + arc, 0);
+}
+
+// The OIDs of an AlgorithmIdentifier, first and second; "" when the
+// element there is not an OID. Ed25519 names one, EC names two (the key
+// type and the curve), and a second one that is not a curve OID is a
+// curve this module does not implement.
+pub Str tk_alg_oid1(List(Int) der, Tlv alg) {
+    Tlv first = tk_tlv(der, alg.start);
+    if (!first.ok) { return ""; }
+    return tk_oid_str(der, first);
+}
+
+pub Str tk_alg_oid2(List(Int) der, Tlv alg) {
+    Tlv first = tk_tlv(der, alg.start);
+    if (!first.ok) { return ""; }
+    Tlv second = tk_tlv(der, first.end);
+    if (!second.ok) { return ""; }
+    return tk_oid_str(der, second);
+}
+
+// ─── PEM ──────────────────────────────────────────────────────────────
+
+type PemFound = { List(Int) der; Bool found; };
+
+PemFound tk_pem_none() {
+    List(Int) none = [];
+    return PemFound { .der = none, .found = false };
+}
+
+// The DER of the first block in `text` carrying one of `labels`. A key
+// file holds exactly one block, and the first is the key: a certificate
+// after it is the chain, which comes from the file the operator named as
+// the chain rather than out of the key file. A block with no END is
+// dropped, because half a key is not a key.
+pub List(Int) tk_pem_block(Str text, List(Str) labels) {
+    PemFound f = tk_pem_scan(str_split(text, "\n"), 0, labels, "", false, tk_pem_none());
+    return f.der;
+}
+
+PemFound tk_pem_scan(List(Str) lines, Int i, List(Str) labels, Str body, Bool in_block, PemFound acc) {
+    if (acc.found || i >= lines.len()) { return acc; }
+    Str line = str_trim(lines[i]);
+    if (!in_block) {
+        Bool starts = tk_label_is(lines, i, "BEGIN", labels);
+        Int ni = i + 1;
+        return tk_pem_scan(lines, ni, labels, "", starts, acc);
+    }
+    if (tk_label_is(lines, i, "END", labels)) {
+        List(Int) none = [];
+        return PemFound { .der = base64_decode(body), .found = true };
+    }
+    Int ni2 = i + 1;
+    return tk_pem_scan(lines, ni2, labels, body + line, true, acc);
+}
+
+// "-----BEGIN PRIVATE KEY-----" with `label` among the words after
+// BEGIN. The trailing dashes are part of the line, not of the label.
+Bool tk_label_is(List(Str) lines, Int i, Str kind, List(Str) labels) {
+    Str line = str_trim(lines[i]);
+    Str head = "-----" + kind + " ";
+    if (!str_starts_with(line, head)) { return false; }
+    Str rest = str_slice(line, str_len(head), str_len(line));
+    Str name = tk_strip_dashes(rest, str_len(rest));
+    return tk_in_labels(name, labels, 0);
+}
+
+Str tk_strip_dashes(Str s, Int n) {
+    if (n <= 0) { return ""; }
+    Int c = str_char_at(s, n - 1);
+    if (c == 45) { return tk_strip_dashes(s, n - 1); }
+    return str_slice(s, 0, n);
+}
+
+Bool tk_in_labels(Str s, List(Str) labels, Int i) {
+    if (i >= labels.len()) { return false; }
+    if (labels[i] == s) { return true; }
+    return tk_in_labels(s, labels, i + 1);
+}
+
+// ─── Keys on disk ─────────────────────────────────────────────────────
+
+// A key read from `path`: PEM or DER, PKCS#8 or SEC1. None when the file
+// is missing, is not a key, or is a key for something this language
+// cannot sign with — an unsupported curve included, because signing
+// P-384 through a P-256 implementation is not a fallback, it is a wrong
+// answer wearing a valid key's clothes.
+@requires(filesystem(readonly))
+pub Option(ServerKey) tls_key_load(Str path) {
+    if (!filesystem.exists(path)) { return None; }
+    Str text = filesystem.read_all(path);
+    Bool pem = str_contains(text, "-----BEGIN");
+    List(Int) der = if (pem) { tk_pem_block(text, ["PRIVATE KEY", "EC PRIVATE KEY"]) } else { filesystem.read_bytes(path) };
+    if (der.len() == 0) { return None; }
+    Option(ServerKey) as_pkcs8 = tk_pkcs8(der);
+    Option(ServerKey) as_sec1 = tk_sec1(der);
+    return match as_pkcs8 { Some(key) => Some(key), None => as_sec1 };
+}
+
+// The chain to present, leaf first: a PEM bundle in the order it lists
+// them, or one DER certificate. A missing file is an empty chain, which
+// the handshake refuses: a server with no certificate is not a server
+// that answers with an empty one.
+@requires(filesystem(readonly))
+pub List(List(Int)) tls_chain_load(Str path) {
+    List(List(Int)) none = [];
+    if (!filesystem.exists(path)) { return none; }
+    Str head = filesystem.read_all(path);
+    if (str_contains(head, "-----BEGIN")) { return pem_certificates(head); }
+    return [filesystem.read_bytes(path)];
+}
+
+// ─── PKCS#8 (RFC 5208), SEC1 (RFC 5915), CurvePrivateKey (RFC 8410) ───
+
+// PrivateKeyInfo ::= SEQUENCE { version INTEGER, algorithm
+// AlgorithmIdentifier, privateKey OCTET STRING, attributes [0] OPTIONAL }.
+// Ed25519 arrives as RFC 8410's one-OID algorithm with the seed wrapped
+// in an OCTET STRING; EC as id-ecPublicKey with a named curve, whose
+// privateKey OCTET STRING holds a SEC1 ECPrivateKey.
+pub Option(ServerKey) tk_pkcs8(List(Int) der) {
+    Tlv seq = tk_tlv(der, 0);
+    if (!seq.ok || tk_tag_num(seq) != tk_tag_seq()) { return None; }
+    Tlv ver = tk_tlv(der, seq.start);
+    if (!ver.ok || tk_tag_num(ver) != tk_tag_int()) { return None; }
+    Tlv alg = tk_tlv(der, ver.end);
+    if (!alg.ok || tk_tag_num(alg) != tk_tag_seq()) { return None; }
+    Tlv key = tk_tlv(der, alg.end);
+    if (!key.ok || tk_tag_num(key) != tk_tag_octet()) { return None; }
+    Str a1 = tk_alg_oid1(der, alg);
+    if (a1 == "1.3.101.112") {
+        return tk_curve_private(tk_value(der, key));
+    }
+    Bool is_ec = a1 == "1.2.840.10045.2.1";
+    if (!is_ec) { return None; }
+    Str curve = tk_alg_oid2(der, alg);
+    Bool is_p256 = curve == "1.2.840.10045.3.1.7";
+    if (!is_p256) { return None; }
+    return tk_curve_private(tk_value(der, key));
+}
+
+// RFC 8410 CurvePrivateKey is an OCTET STRING holding the key; RFC 5915
+// ECPrivateKey is a SEQUENCE. The two are told apart by that first tag
+// rather than by which algorithm was named above, so a file that says
+// Ed25519 and carries a SEC1 structure is refused instead of half-read.
+pub Option(ServerKey) tk_curve_private(List(Int) b) {
+    Tlv t = tk_tlv(b, 0);
+    if (!t.ok) { return None; }
+    if (tk_tag_num(t) == tk_tag_octet()) {
+        List(Int) seed = tk_value(b, t);
+        if (seed.len() != 32) { return None; }
+        return Some(EdKey(seed));
+    }
+    if (tk_tag_num(t) == tk_tag_seq()) { return tk_sec1(b); }
+    return None;
+}
+
+// ECPrivateKey ::= SEQUENCE { version INTEGER (1), privateKey
+// OCTET STRING, [0] parameters OPTIONAL, [1] publicKey OPTIONAL }. The
+// curve comes from the file name in the SEC1 form and from the
+// AlgorithmIdentifier in the PKCS#8 form, so the optional [0] is not
+// consulted: a P-384 scalar is not a P-256 one whatever it is filed
+// under.
+pub Option(ServerKey) tk_sec1(List(Int) der) {
+    Tlv seq = tk_tlv(der, 0);
+    if (!seq.ok || tk_tag_num(seq) != tk_tag_seq()) { return None; }
+    Tlv ver = tk_tlv(der, seq.start);
+    if (!ver.ok || tk_tag_num(ver) != tk_tag_int()) { return None; }
+    Tlv key = tk_tlv(der, ver.end);
+    if (!key.ok || tk_tag_num(key) != tk_tag_octet()) { return None; }
+    List(Int) scalar = tk_value(der, key);
+    if (scalar.len() != 32) { return None; }
+    return Some(EcKey(scalar));
+}

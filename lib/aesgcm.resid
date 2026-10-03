@@ -433,8 +433,21 @@ pub List(Int) aes128_gcm_seal(List(Int) key, List(Int) iv, List(Int) plaintext, 
 }
 
 pub Bool aes128_gcm_open(List(Int) key, List(Int) iv, List(Int) ct_and_tag, List(Int) aad) {
+    List(Int) pt = aes128_gcm_open_bytes(key, iv, ct_and_tag, aad);
+    return pt.len() > 0;
+}
+
+// The decrypted plaintext, or an empty list when the tag does not
+// verify. Split out from `aes128_gcm_open` because a record layer needs
+// the bytes, not only the verdict: recomputing the plaintext after a
+// successful check is how the two answers drift apart.
+pub List(Int) aes128_gcm_open_bytes(List(Int) key, List(Int) iv, List(Int) ct_and_tag, List(Int) aad) {
     Int total = ct_and_tag.len();
     Int clen = total - 16;
+    if (clen < 0) {
+        List(Int) none = [];
+        return none;
+    }
     List(Int) ct = slice_seed(ct_and_tag, 0, clen, []);
     Int tstart = clen;
     List(Int) tag = slice_seed(ct_and_tag, tstart, 16, []);
@@ -449,5 +462,10 @@ pub Bool aes128_gcm_open(List(Int) key, List(Int) iv, List(Int) ct_and_tag, List
     List(Int) s_ = ghash_blocks(hblk, y0, mi, 0, milen);
     List(Int) tagraw = xor16(s_, ej0);
     List(Int) expect = slice_seed(tagraw, 0, 16, []);
-    return ct_equal(expect, tag);
+    if (!ct_equal(expect, tag)) {
+        List(Int) none = [];
+        return none;
+    }
+    List(Int) ctr1 = inc32(j0);
+    return ctr_xor(rk, ctr1, ct, 0, []);
 }

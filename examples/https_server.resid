@@ -1,0 +1,149 @@
+// The HTTP server of examples/http_server.resid, over TLS 1.3: the same
+// routes, static files and worker regions, with every connection
+// encrypted and the server authenticated by a certificate the client can
+// check.
+//
+//   residc examples/https_server.resid run -- --cert FILE --key FILE
+//       [--port N] [--public] [--workers N] [--root DIR] [--conns N]
+//       [--port-file F] [--alpn LIST]
+//
+// The certificate file is a PEM bundle (leaf first) or one DER
+// certificate; the key file is PKCS#8 or SEC1, PEM or DER, for Ed25519 or
+// ECDSA P-256. The two must be the same key: a certificate that does not
+// carry the key the server signs with is refused at startup rather than
+// at every handshake.
+//
+// Capabilities: reading the key and the chain is `filesystem(readonly)`
+// and nothing more; serving is `network(readonly)`; only `--public`, which
+// binds an address other machines can reach, needs the full `network`.
+import "tlswire.resid";
+import "tlskey.resid";
+import "httpserv.resid";
+
+type Opts = {
+    Str cert; Str key; Str alpn;
+    Int port; Bool public; Int workers; Str root; Int conns; Str port_file; Bool ok;
+};
+
+@requires(args)
+Opts parse(Int i, Int argc, Opts o) {
+    if (i >= argc) { return o; }
+    Str flag = args.get(i);
+    Bool has_next = i + 1 < argc;
+    if (flag == "--public") { return parse(i + 1, argc, Opts { .cert = o.cert, .key = o.key, .alpn = o.alpn, .port = o.port, .public = true, .workers = o.workers, .root = o.root, .conns = o.conns, .port_file = o.port_file, .ok = o.ok }); }
+    if (!has_next) { return Opts { .cert = o.cert, .key = o.key, .alpn = o.alpn, .port = o.port, .public = o.public, .workers = o.workers, .root = o.root, .conns = o.conns, .port_file = o.port_file, .ok = false }; }
+    Str v = args.get(i + 1);
+    if (flag == "--cert") { return parse(i + 2, argc, Opts { .cert = v, .key = o.key, .alpn = o.alpn, .port = o.port, .public = o.public, .workers = o.workers, .root = o.root, .conns = o.conns, .port_file = o.port_file, .ok = o.ok }); }
+    if (flag == "--key") { return parse(i + 2, argc, Opts { .cert = o.cert, .key = v, .alpn = o.alpn, .port = o.port, .public = o.public, .workers = o.workers, .root = o.root, .conns = o.conns, .port_file = o.port_file, .ok = o.ok }); }
+    if (flag == "--alpn") { return parse(i + 2, argc, Opts { .cert = o.cert, .key = o.key, .alpn = v, .port = o.port, .public = o.public, .workers = o.workers, .root = o.root, .conns = o.conns, .port_file = o.port_file, .ok = o.ok }); }
+    if (flag == "--port") { return parse(i + 2, argc, Opts { .cert = o.cert, .key = o.key, .alpn = o.alpn, .port = str_parse_int(v), .public = o.public, .workers = o.workers, .root = o.root, .conns = o.conns, .port_file = o.port_file, .ok = o.ok }); }
+    if (flag == "--workers") { return parse(i + 2, argc, Opts { .cert = o.cert, .key = o.key, .alpn = o.alpn, .port = o.port, .public = o.public, .workers = str_parse_int(v), .root = o.root, .conns = o.conns, .port_file = o.port_file, .ok = o.ok }); }
+    if (flag == "--root") { return parse(i + 2, argc, Opts { .cert = o.cert, .key = o.key, .alpn = o.alpn, .port = o.port, .public = o.public, .workers = o.workers, .root = v, .conns = o.conns, .port_file = o.port_file, .ok = o.ok }); }
+    if (flag == "--conns") { return parse(i + 2, argc, Opts { .cert = o.cert, .key = o.key, .alpn = o.alpn, .port = o.port, .public = o.public, .workers = o.workers, .root = o.root, .conns = str_parse_int(v), .port_file = o.port_file, .ok = o.ok }); }
+    if (flag == "--port-file") { return parse(i + 2, argc, Opts { .cert = o.cert, .key = o.key, .alpn = o.alpn, .port = o.port, .public = o.public, .workers = o.workers, .root = o.root, .conns = o.conns, .port_file = v, .ok = o.ok }); }
+    return Opts { .cert = o.cert, .key = o.key, .alpn = o.alpn, .port = o.port, .public = o.public, .workers = o.workers, .root = o.root, .conns = o.conns, .port_file = o.port_file, .ok = false };
+}
+
+// Only names under `root`: no empty, `.` or `..` segment.
+Bool safe_path(List(Str) segs, Int i) {
+    if (i >= segs.len()) { return true; }
+    if (segs[i] == "" || segs[i] == "." || segs[i] == "..") { return false; }
+    return safe_path(segs, i + 1);
+}
+
+Str content_type(Str name) {
+    if (str_ends_with(name, ".html")) { return "text/html; charset=utf-8"; }
+    if (str_ends_with(name, ".txt") || str_ends_with(name, ".resid") || str_ends_with(name, ".md")) { return "text/plain; charset=utf-8"; }
+    if (str_ends_with(name, ".json")) { return "application/json"; }
+    return "application/octet-stream";
+}
+
+@requires(filesystem(readonly))
+HttpReply serve_file(Str root, Str rel) {
+    if (rel == "" || !safe_path(str_split(rel, "/"), 0)) { return http_reply_status(404); }
+    Str file = root + "/" + rel;
+    if (!filesystem.exists(file) || filesystem.is_dir(file)) { return http_reply_status(404); }
+    return http_reply_bytes(200, content_type(file), filesystem.read_bytes(file));
+}
+
+@requires(filesystem(readonly))
+HttpReply handle(Str root, HttpRequest r) {
+    Map(Str, Str) none = {};
+    if (r.method != "GET" && r.method != "HEAD" && r.method != "POST") {
+        return http_with_header(http_reply_status(405), "Allow", "GET, HEAD, POST");
+    }
+    if (r.path == "/") {
+        return http_reply_text(200, "text/plain; charset=utf-8", "resid https_server\n");
+    }
+    Map(Str, Str) hello = http_route("/hello/:name", r.path) else { none };
+    if (hello.len() > 0) {
+        Str name = hello.get("name") else { "" };
+        return http_reply_text(200, "text/plain; charset=utf-8", "hello, " + name + "\n");
+    }
+    if (r.path == "/echo" && r.method == "POST") {
+        Str ct = http_header(r, "Content-Type");
+        return http_reply_bytes(200, if (ct == "") { "application/octet-stream" } else { ct }, r.body);
+    }
+    Map(Str, Str) files = http_route("/files/*", r.path) else { none };
+    if (files.len() > 0 && root != "") {
+        return serve_file(root, files.get("*") else { "" });
+    }
+    return http_reply_status(404);
+}
+
+// The protocols to offer, most preferred first: `--alpn http/1.1,h2`.
+List(Str) alpn_list(Str s) {
+    List(Str) none = [];
+    return alpn_at(str_split(s, ","), 0, none);
+}
+
+List(Str) alpn_at(List(Str) parts, Int i, List(Str) acc) {
+    if (i >= parts.len()) { return acc; }
+    Str p = str_trim(parts[i]);
+    if (p == "") { return alpn_at(parts, i + 1, acc); }
+    return alpn_at(parts, i + 1, acc.concat([p]));
+}
+
+// `n` regions accepting on the same listener; the count they served.
+@requires(network(readonly), filesystem(readonly))
+Int workers(Int lfd, Int n, Str root, Int conns, TlsCfg conf) {
+    if (n <= 0) { return 0; }
+    Result(Int, RegionError) r = spawn (network(readonly), filesystem(readonly)) {
+        return tls_accept_loop(lfd, conf, lambda(q) { handle(root, q) }, http_limits(), conns);
+    };
+    Int rest = workers(lfd, n - 1, root, conns, conf);
+    Int mine = r else { 0 };
+    return rest + (if (mine < 0) { 0 } else { mine });
+}
+
+@requires(args, network, filesystem)
+Int main() {
+    Opts o = parse(1, args.count(), Opts { .cert = "", .key = "", .alpn = "http/1.1", .port = 8443, .public = false, .workers = 4, .root = "", .conns = 0, .port_file = "", .ok = true });
+    if (!o.ok || o.cert == "" || o.key == "") {
+        eprintln("usage: https_server --cert FILE --key FILE [--alpn LIST] [--port N] [--public] [--workers N] [--root DIR] [--conns N] [--port-file F]");
+        return 2;
+    }
+    Option(ServerKey) maybe_key = tls_key_load(o.key);
+    Str key_err = match maybe_key { Some(k) => "", None => f"cannot read a usable key from {o.key} (PKCS#8 or SEC1, PEM or DER, Ed25519 or ECDSA P-256)" };
+    if (key_err != "") { eprintln(key_err); return 2; }
+    ServerKey k = maybe_key else { EdKey([]) };
+    List(List(Int)) chain = tls_chain_load(o.cert);
+    if (chain.len() == 0) {
+        eprintln(f"no certificate in {o.cert}");
+        return 2;
+    }
+    if (!tls_key_cert_matches(k, chain[0])) {
+        eprintln(f"the certificate in {o.cert} does not carry the key in {o.key}");
+        return 2;
+    }
+    Int lfd = if (o.public) { http_listen_at("0.0.0.0", o.port) } else { http_listen(o.port) };
+    if (lfd < 0) { eprintln(f"cannot listen on port {o.port}"); return 1; }
+    Int port = http_bound_port(lfd);
+    Str where = if (o.public) { "0.0.0.0" } else { "127.0.0.1" };
+    if (o.port_file != "") { filesystem.write_all(o.port_file, f"{port}"); }
+    println(f"listening on https://" + where + f":{port} with {o.workers} workers");
+    Int served = workers(lfd, o.workers, o.root, o.conns, tls_cfg(k, chain, alpn_list(o.alpn)));
+    _ = resid_tcp_close(lfd);
+    println(f"served {served} connections");
+    return 0;
+}

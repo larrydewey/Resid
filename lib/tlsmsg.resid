@@ -451,3 +451,375 @@ pub Int tm_ff_back(List(Int) payload, Int pos) {
     Int np = pos - 1;
     return tm_ff_back(payload, np);
 }
+// ═══ Server side ════════════════════════════════════════════════════
+//
+// A server reads the client's ClientHello and builds the four messages
+// of its flight. Nothing here touches a socket: these are bytes in and
+// bytes out, so they can be pinned against a capture (and against
+// openssl) without a network.
+//
+// The transcript is anchored on the *received* ClientHello bytes, never
+// on a re-serialization of what was parsed: RFC 8446 §4.4.1 hashes the
+// handshake messages as they went on the wire, and a field this parser
+// skips would then be missing from the hash.
+
+// What the server needs out of a ClientHello. `raw` is the message as
+// received, header included, for the transcript; `err` is 0 when the
+// hello is usable and one of the ts_err_* codes when it is not.
+type ClientHello = {
+    List(Int) raw;
+    List(Int) random32;
+    List(Int) session_id;
+    List(Int) suites;
+    List(Int) sigalgs;
+    List(Str) alpn;
+    List(Int) share;      // the client's x25519 key share, 32 bytes
+    Bool tls13;
+    Int err;
+};
+
+// TLS_AES_128_GCM_SHA256 (0x1301): the one cipher suite this language
+// can protect a record with, so the one a server offers.
+pub Int ts_suite_aes128gcm() { return 4865; }
+
+pub Int ts_err_ok() { return 0; }
+pub Int ts_err_short() { return 1; }
+pub Int ts_err_legacy_version() { return 2; }
+pub Int ts_err_no_suite() { return 3; }
+pub Int ts_err_no_share() { return 4; }
+pub Int ts_err_not_tls13() { return 5; }
+pub Int ts_err_no_sigalg() { return 6; }
+
+pub Str ts_err_text(Int e) {
+    if (e == ts_err_ok()) { return "ok"; }
+    if (e == ts_err_short()) { return "client hello truncated"; }
+    if (e == ts_err_legacy_version()) { return "unsupported legacy_version"; }
+    if (e == ts_err_no_suite()) { return "no cipher suite in common"; }
+    if (e == ts_err_no_share()) { return "no x25519 key share"; }
+    if (e == ts_err_not_tls13()) { return "client does not offer TLS 1.3"; }
+    if (e == ts_err_no_sigalg()) { return "no signature algorithm in common"; }
+    return "unknown handshake error";
+}
+
+// Two bytes as one value.
+Int ts_u16_at(List(Int) b, Int i) {
+    return b[i] * 256 + b[i + 1];
+}
+
+// Three bytes as a length, at `i`.
+Int ts_u24_len(List(Int) b, Int i) {
+    Int a = b[i] * 65536;
+    Int c = b[i + 1] * 256;
+    return a + c + b[i + 2];
+}
+
+// ─── ClientHello ──────────────────────────────────────────────────────
+
+// The extensions block as (type, start, len) triples walked one at a
+// time. `at` is the offset of the next extension.
+pub type Ext = { Int type; Int start; Int len; };
+
+// The extension of that type in `b[at..end)`, or a zero one when absent.
+pub Ext ts_ext_find(List(Int) b, Int at, Int end, Int want) {
+    return ts_ext_find_at(b, at, end, want, ts_ext_none());
+}
+
+Ext ts_ext_none() {
+    return Ext { .type = -1, .start = 0, .len = 0 };
+}
+
+Ext ts_ext_find_at(List(Int) b, Int at, Int end, Int want, Ext acc) {
+    if (acc.type >= 0 || at + 4 > end) { return acc; }
+    Int etype = ts_u16_at(b, at);
+    Int elen = ts_u16_at(b, at + 2);
+    Int start = at + 4;
+    if (start + elen > end) { return acc; }
+    if (etype == want) { return Ext { .type = etype, .start = start, .len = elen }; }
+    return ts_ext_find_at(b, start + elen, end, want, acc);
+}
+
+// Parse a ClientHello handshake message (header included). Every field
+// is length-checked against what actually arrived: a hello that claims a
+// longer cipher-suite list than it sent must not be read past its end.
+pub ClientHello ts_client_hello(List(Int) msg) {
+    Int n = msg.len();
+    // header(4) + legacy_version(2) + random(32) + session_id_len(1)
+    if (n < 4 + 2 + 32 + 1) { return ts_ch_bad(msg, ts_err_short()); }
+    if (msg[0] != 1) { return ts_ch_bad(msg, ts_err_short()); }
+    Int version = ts_u16_at(msg, 4);
+    if (version != 771) { return ts_ch_bad(msg, ts_err_legacy_version()); }
+    Int sid_len = msg[38];
+    Int at = 39 + sid_len;
+    if (at + 2 > n) { return ts_ch_bad(msg, ts_err_short()); }
+    List(Int) sid = slice_seed(msg, 39, sid_len, []);
+    Int suites_len = ts_u16_at(msg, at);
+    Int suites_at = at + 2;
+    if (suites_len == 0 || suites_len % 2 != 0) { return ts_ch_bad(msg, ts_err_short()); }
+    if (suites_at + suites_len + 1 > n) { return ts_ch_bad(msg, ts_err_short()); }
+    List(Int) suites = slice_seed(msg, suites_at, suites_len, []);
+    Int comp_len = msg[suites_at + suites_len];
+    Int comps_at = suites_at + suites_len + 1;
+    if (comp_len < 1 || comps_at + comp_len > n) { return ts_ch_bad(msg, ts_err_short()); }
+    // Every method offered must be "null" (0) or this server cannot read
+    // the connection back (RFC 8446 §4.1.2).
+    Bool comps_ok = ts_comps_null(msg, comps_at, comp_len);
+    if (!comps_ok) { return ts_ch_bad(msg, ts_err_short()); }
+    Int exts_at = comps_at + comp_len;
+    Int declared_end = exts_at + 2 + ts_u16_at(msg, exts_at);
+    if (exts_at + 2 > n) { return ts_ch_bad(msg, ts_err_short()); }
+    if (declared_end > n) { return ts_ch_bad(msg, ts_err_short()); }
+    Int exts_end = declared_end;
+    // The extensions are length-prefixed, so the first one starts after
+    // that length, not at it.
+    Int first_ext = exts_at + 2;
+    List(Int) share = ts_hello_share(msg, first_ext, exts_end);
+    Bool tls13 = ts_hello_tls13(msg, first_ext, exts_end);
+    List(Int) sigalgs = ts_hello_sigalgs(msg, first_ext, exts_end);
+    List(Str) alpn = ts_hello_alpn(msg, first_ext, exts_end);
+    Int err = ts_hello_err(tls13, share, sigalgs);
+    return ClientHello { .raw = msg, .random32 = slice_seed(msg, 6, 32, []), .session_id = sid, .suites = suites, .sigalgs = sigalgs, .alpn = alpn, .share = share, .tls13 = tls13, .err = err };
+}
+
+// The first thing wrong with a hello, in the order a client would fix
+// it: a version it cannot speak, then a share this server cannot use,
+// then a signature this server cannot produce.
+Int ts_hello_err(Bool tls13, List(Int) share, List(Int) sigalgs) {
+    if (!tls13) { return ts_err_not_tls13(); }
+    if (share.len() != 32) { return ts_err_no_share(); }
+    if (sigalgs.len() == 0) { return ts_err_no_sigalg(); }
+    return ts_err_ok();
+}
+
+ClientHello ts_ch_bad(List(Int) msg, Int err) {
+    List(Int) none = [];
+    List(Str) none_str = [];
+    return ClientHello { .raw = msg, .random32 = none, .session_id = none, .suites = none, .sigalgs = none, .alpn = none_str, .share = none, .tls13 = false, .err = err };
+}
+
+Bool ts_comps_null(List(Int) b, Int at, Int len) {
+    if (len == 0) { return true; }
+    if (len < 0) { return false; }
+    Int c = b[at];
+    if (c != 0) { return false; }
+    Int na = at + 1;
+    return ts_comps_null(b, na, len - 1);
+}
+
+// supported_versions (0x002b) naming 0x0304. The list is length-prefixed
+// with one byte, and every entry is scanned: a client may offer TLS 1.2
+// first and 1.3 second.
+Bool ts_hello_tls13(List(Int) b, Int at, Int end) {
+    Ext e = ts_ext_find(b, at, end, 43);
+    if (e.type < 0 || e.len < 3) { return false; }
+    Int list_len = b[e.start];
+    if (list_len < 2 || 1 + list_len > e.len) { return false; }
+    List(Int) v = slice_seed(b, e.start + 1, list_len, []);
+    return ts_u16_in(v, 0, 772);
+}
+
+Bool ts_u16_in(List(Int) v, Int i, Int want) {
+    if (i + 2 > v.len()) { return false; }
+    Int code = v[i] * 256 + v[i + 1];
+    if (code == want) { return true; }
+    Int ni = i + 2;
+    return ts_u16_in(v, ni, want);
+}
+
+// key_share (0x0033): the x25519 (0x001d) entry of exactly 32 bytes.
+// The first entry this server can use is taken, so a client offering
+// several groups is not refused for having offered one it could not read
+// -- openssl leads with an X25519MLKEM768 hybrid, which a server without
+// ML-KEM skips rather than fails on. The entries are behind their own
+// vector length, and that length is the client's claim: the walk is
+// bounded by both it and the extension.
+List(Int) ts_hello_share(List(Int) b, Int at, Int end) {
+    Ext e = ts_ext_find(b, at, end, 51);
+    if (e.type < 0 || e.len < 2) {
+        List(Int) none = [];
+        return none;
+    }
+    Int list_len = ts_u16_at(b, e.start);
+    Int stop = e.start + e.len;
+    if (list_len < 1 || e.start + 2 + list_len > stop) {
+        List(Int) none = [];
+        return none;
+    }
+    List(Int) empty = [];
+    return ts_share_scan(b, e.start + 2, e.start + 2 + list_len, empty);
+}
+
+List(Int) ts_share_scan(List(Int) b, Int at, Int end, List(Int) acc) {
+    if (at + 4 > end) { return acc; }
+    Int group = ts_u16_at(b, at);
+    Int klen = ts_u16_at(b, at + 2);
+    Int start = at + 4;
+    if (start + klen > end) { return acc; }
+    Bool is_x25519 = group == 29;
+    List(Int) next = if (is_x25519 && acc.len() == 0 && klen == 32) { slice_seed(b, start, klen, []) } else { acc };
+    return ts_share_scan(b, start + klen, end, next);
+}
+
+// signature_algorithms (0x000d) as one list of 2-byte codes.
+List(Int) ts_hello_sigalgs(List(Int) b, Int at, Int end) {
+    Ext e = ts_ext_find(b, at, end, 13);
+    if (e.type < 0 || e.len < 2) {
+        List(Int) none = [];
+        return none;
+    }
+    Int list_len = ts_u16_at(b, e.start);
+    if (list_len % 2 != 0 || e.start + 2 + list_len > e.start + e.len) {
+        List(Int) none = [];
+        return none;
+    }
+    return slice_seed(b, e.start + 2, list_len, []);
+}
+
+// ALPN (0x0010) as the protocol names the client offered, in order.
+List(Str) ts_hello_alpn(List(Int) b, Int at, Int end) {
+    Ext e = ts_ext_find(b, at, end, 16);
+    List(Str) none = [];
+    if (e.type < 0 || e.len < 3) { return none; }
+    Int list_len = ts_u16_at(b, e.start);
+    Int stop = e.start + 2 + list_len;
+    if (list_len < 1 || stop > e.start + e.len) { return none; }
+    return ts_alpn_scan(b, e.start + 2, stop, none);
+}
+
+List(Str) ts_alpn_scan(List(Int) b, Int at, Int stop, List(Str) acc) {
+    if (at >= stop) { return acc; }
+    Int nlen = b[at];
+    Int start = at + 1;
+    if (nlen == 0 || start + nlen > stop) { return acc; }
+    Str name = hs_ascii_str(b, start, nlen);
+    Int next = start + nlen;
+    return ts_alpn_scan(b, next, stop, acc.concat([name]));
+}
+
+Str hs_ascii_str(List(Int) b, Int start, Int len) {
+    return ts_ascii(b, start, start + len, StrBuf());
+}
+
+Str ts_ascii(List(Int) b, Int i, Int end, StrBuf acc) {
+    if (i >= end) { return acc.finish(); }
+    return ts_ascii(b, i + 1, end, acc.push_char(b[i]));
+}
+
+// Does the client offer `code` among its cipher suites?
+pub Bool ts_offers_suite(ClientHello ch, Int code) {
+    return ts_u16_in(ch.suites, 0, code);
+}
+
+// Does the client offer `code` among its signature algorithms?
+pub Bool ts_offers_sigalg(ClientHello ch, Int code) {
+    return ts_u16_in(ch.sigalgs, 0, code);
+}
+
+// The first protocol in `want` the client also offered, or "" when it
+// offered none of them. The server's order wins: this is a list of what
+// the server speaks, most preferred first (RFC 7301 §3.2).
+pub Str ts_pick_alpn(List(Str) offered, List(Str) want) {
+    return ts_pick_at(want, 0, offered);
+}
+
+Str ts_pick_at(List(Str) want, Int i, List(Str) offered) {
+    if (i >= want.len()) { return ""; }
+    Bool has = ts_str_in(offered, 0, want[i]);
+    if (has) { return want[i]; }
+    return ts_pick_at(want, i + 1, offered);
+}
+
+Bool ts_str_in(List(Str) xs, Int i, Str s) {
+    if (i >= xs.len()) { return false; }
+    if (xs[i] == s) { return true; }
+    return ts_str_in(xs, i + 1, s);
+}
+
+// ─── Server flight ────────────────────────────────────────────────────
+
+// A u24 length prefix.
+List(Int) ts_u24(Int v) {
+    Int hi = v / 65536;
+    Int mid = (v / 256) % 256;
+    Int lo = v % 256;
+    List(Int) empty = [];
+    return empty.concat([hi, mid, lo]);
+}
+
+// A u16 as two bytes.
+List(Int) ts_u16(Int v) {
+    Int hi = v / 256;
+    Int lo = v % 256;
+    List(Int) empty = [];
+    return empty.concat([hi, lo]);
+}
+
+// Handshake message: type || u24 length || body.
+List(Int) ts_message(Int mtype, List(Int) body) {
+    return [mtype].concat(ts_u24(body.len())).concat(body);
+}
+
+// ServerHello with the client's session id echoed back and `share` as
+// this server's x25519 public key. The extensions are supported_versions
+// (TLS 1.3) and key_share; anything else the client offered that this
+// server does not implement is simply absent, which is how a peer learns
+// it was not negotiated.
+pub List(Int) ts_server_hello(List(Int) session_id, List(Int) random32, List(Int) share) {
+    List(Int) versions = ts_ext_bytes([], 43, ts_u16(772));
+    List(Int) share_value = ts_u16(29).concat(ts_u16(32)).concat(share);
+    List(Int) key_share = ts_ext_bytes([], 51, share_value);
+    List(Int) all = versions.concat(key_share);
+    List(Int) sid = [session_id.len()].concat(session_id);
+    List(Int) body = [3, 3].concat(random32).concat(sid).concat(ts_u16(ts_suite_aes128gcm())).concat([0]);
+    return ts_message(2, body.concat(ts_u16(all.len())).concat(all));
+}
+
+// One extension as it appears on the wire: type || u16 length || value.
+List(Int) ts_ext_bytes(List(Int) acc, Int etype, List(Int) value) {
+    return acc.concat(ts_u16(etype)).concat(ts_u16(value.len())).concat(value);
+}
+
+// EncryptedExtensions: no extensions this server needs to say.
+pub List(Int) ts_encrypted_extensions() {
+    return ts_message(8, ts_u16(0));
+}
+
+// Certificate: an empty request context, then the chain leaf first.
+pub List(Int) ts_certificate(List(List(Int)) chain) {
+    List(Int) entries = ts_cert_entries(chain, 0, []);
+    List(Int) body = [0].concat(ts_u24(entries.len())).concat(entries);
+    return ts_message(11, body);
+}
+
+// One entry per certificate: the DER, then its extensions vector. That
+// vector is not optional on the wire (RFC 8446 §4.4.2) even when it is
+// empty, so an entry without the two zero bytes is a decode error to
+// every peer -- openssl rejects it as a bad length.
+List(Int) ts_cert_entries(List(List(Int)) chain, Int i, List(Int) acc) {
+    if (i >= chain.len()) { return acc; }
+    List(Int) der = chain[i];
+    List(Int) entry = ts_u24(der.len()).concat(der).concat(ts_u16(0));
+    return ts_cert_entries(chain, i + 1, acc.concat(entry));
+}
+
+// CertificateVerify: the signature algorithm, the signature, and the
+// content it covers (which the caller has already hashed).
+pub List(Int) ts_certificate_verify(Int sigalg, List(Int) signature) {
+    List(Int) body = ts_u16(sigalg).concat(ts_u16(signature.len())).concat(signature);
+    return ts_message(15, body);
+}
+
+// The bytes a server CertificateVerify signs (RFC 8446 §4.4.3): 64
+// spaces, the context string, a zero byte, the transcript hash.
+pub List(Int) ts_cv_server_content(List(Int) transcript_hash) {
+    List(Int) zeros = tm_zeros([], 64);
+    List(Int) ctx = bytes_of("TLS 1.3, server CertificateVerify");
+    List(Int) p1 = sconcat(zeros, ctx);
+    List(Int) p2 = p1.concat([0]);
+    return sconcat(p2, transcript_hash);
+}
+
+// Finished: the verify_data over `transcript_hash` with the handshake
+// traffic key.
+pub List(Int) ts_finished(List(Int) handshake_key, List(Int) transcript_hash) {
+    return ts_message(20, tls_finished(handshake_key, transcript_hash));
+}

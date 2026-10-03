@@ -147,6 +147,50 @@ occupy workers (denial of service is out of scope above); and workers
 are as many as the program spawns, with no queueing beyond the kernel's
 listen backlog.
 
+## TLS server (`lib/tlsserver.resid`, `lib/tlswire.resid`)
+
+| Guarantee | Tests (`tests/tls/run.sh`) |
+|---|---|
+| A server presents the chain it was configured with, leaf first, and refuses to start when the certificate does not carry the key it signs with -- checked at startup, not at every handshake. | key matches its certificate, a key and another key's certificate |
+| Only TLS 1.3 is spoken. A client that offers TLS 1.2 is refused with `protocol_version` rather than answered under a version the server does not implement. | ossl hello is tls13, TLS 1.2 should be refused |
+| The only cipher suite is `TLS_AES_128_GCM_SHA256`, because that is the only one this language can protect a record with. A client offering neither it nor a share this server can use gets `insufficient_security` or `illegal_parameter`, not a downgrade. | (offered-suite and share checks in `lib/tlsserver.resid`) |
+| The key share is x25519, drawn fresh per handshake, so a session key is never reused across connections (forward secrecy). | (per-handshake `random_bytes`) |
+| A handshake is refused with an alert, never a silent close: `protocol_version`, `illegal_parameter`, `handshake_failure`, `insufficient_security`, `decrypt_error` or `internal_error`. | (alert mapping in `ts_alert_for`) |
+| A record that fails its tag ends the connection; it never becomes request bytes. | (record layer: `tls_open` returns nothing) |
+| Records carry at most 2^14 bytes of plaintext each, so a reply larger than a record is split rather than truncated. | (large static files over TLS) |
+| The client's Finished is verified before the connection serves anything; a wrong one is `decrypt_error`. | resid client against the resid server |
+| ALPN picks the first protocol this server speaks that the client also offered, so a client offering only `h2` gets no ALPN extension rather than one it cannot use. | ossl alpn pick |
+| The transcript hash is taken over the bytes that went on the wire, anchored on the ClientHello as received: a field this server does not read is still in the hash. | (openssl interoperability) |
+
+Capabilities: reading the key and the chain is `filesystem(readonly)` and
+happens in the caller (`lib/tlskey.resid`); serving is `network(readonly)`
+and binds nothing. A server that exposes a port other machines can reach
+needs the full `network` grant, as before.
+
+The private key is read, never written, never printed, and not kept past
+the call. What this language cannot do is check the key *file's* mode: there
+is no stat verb, so a mode check is not expressible here. Keeping a key
+file owner-only is the operator's job, and a deployment that cannot do that
+should not be running this.
+
+Not guaranteed:
+
+- Only `ecdsa_secp256r1_sha256` and `ed25519` are produced. RSA signing,
+  P-384, session resumption (PSK or tickets), client certificates,
+  encrypted ClientHello, record compression and 0-RTT are not implemented.
+  A client offering none of the two signature algorithms is refused rather
+  than served with a signature the certificate does not cover.
+- No session ticket is ever sent, so every connection pays a full
+  handshake. That is the safe direction to be wrong in.
+- This repository's own client (`examples/tls_client.resid`) verifies only
+  ECDSA-P256 and RSA-PSS CertificateVerifies, so an Ed25519 server is
+  checked end to end with an external client. The server side signs with
+  either.
+- The key file's permissions are not checked (see above).
+- Constant-time behavior of compiled code is not verified: the compiler
+  (and LLVM) may introduce branches, so the ECDSA and AES implementations
+  are not claimed to be constant-time.
+
 ## Provenance (spec §33.1)
 
 Release binaries carry a COSE_Sign1 (Ed25519) trailer over a record that

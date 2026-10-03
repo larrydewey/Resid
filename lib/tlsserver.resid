@@ -1,0 +1,381 @@
+// ─── lib/tlsserver.resid — the server side of a TLS 1.3 handshake ────
+//
+// One handshake on one accepted socket: read the ClientHello, pick what
+// both sides can do, send ServerHello and the encrypted flight, and check
+// the client's Finished. What comes back is the connection's keys, which
+// lib/tlswire.resid then uses for application data — the handshake never
+// touches that.
+//
+// Everything here is `network(readonly)`: answering on a socket the
+// caller already holds is reading from the network, and this binds
+// nothing. The key and the chain were loaded by the caller
+// (lib/tlskey.resid, `filesystem(readonly)`), so authority to read a
+// private key is not authority to serve.
+//
+// A refusal is an alert, never a silent close: a client that asked for
+// something this server cannot do is told which of the refusals it was
+// (RFC 8446 §6.2). Only TLS_AES_128_GCM_SHA256 is implemented, because
+// that is the only cipher suite lib/aesgcm.resid can protect a record
+// with — a server that answered with anything else would be claiming a
+// guarantee it cannot keep.
+
+import "crypto.resid";
+import "tls.resid";
+import "tlsmsg.resid";
+import "tlskey.resid";
+import "x25519.resid";
+
+// ─── Outcomes ─────────────────────────────────────────────────────────
+
+pub Int tsr_no_suite() { return 20; }
+pub Int tsr_no_chain() { return 21; }
+pub Int tsr_key_mismatch() { return 22; }
+pub Int tsr_sign_failed() { return 23; }
+pub Int tsr_io() { return 24; }
+pub Int tsr_alert() { return 25; }
+pub Int tsr_bad_finished() { return 26; }
+
+// The keys, or the reason there are none.
+type TlsResult = { TlsKeys keys; Int err; };
+
+TlsResult tsr_fail(Int err) {
+    return TlsResult { .keys = tls_keys_none(), .err = err };
+}
+
+// ─── Reading the connection ───────────────────────────────────────────
+
+// Bytes read from the socket that the handshake has not consumed yet.
+type TsIn = { Int fd; List(Int) buf; Bool eof; };
+
+pub TsIn ts_in(Int fd) {
+    return TsIn { .fd = fd, .buf = [], .eof = false };
+}
+
+// `resid_tcp_recv_some`, not `resid_tcp_recv_bin`: the latter reads
+// *exactly* n bytes and zero-pads the rest, which is right when the
+// length is already known (a handshake header) and wrong here, where the
+// bytes arriving are whatever the peer chose to send.
+@requires(network(readonly))
+TsIn ts_fill(TsIn s) {
+    if (s.eof) { return s; }
+    List(Int) more = resid_tcp_recv_some(s.fd, 16384);
+    if (more.len() == 0) { return TsIn { .fd = s.fd, .buf = s.buf, .eof = true }; }
+    return TsIn { .fd = s.fd, .buf = s.buf.concat(more), .eof = false };
+}
+
+// The next `n` bytes and what is left of the connection.
+type TsTake = { TsIn in; List(Int) bytes; Bool ok; };
+
+@requires(network(readonly))
+TsTake ts_take(TsIn s, Int n) {
+    if (s.buf.len() >= n || s.eof) {
+        List(Int) want = slice_seed(s.buf, 0, n, []);
+        List(Int) rest = slice_seed(s.buf, n, s.buf.len() - n, []);
+        Bool ok = s.buf.len() >= n;
+        return TsTake { .in = TsIn { .fd = s.fd, .buf = rest, .eof = s.eof }, .bytes = want, .ok = ok };
+    }
+    return ts_take(ts_fill(s), n);
+}
+
+// One record: its type, its legacy version and its body.
+pub type TsRec = { TsIn in; Int ctype; Int version; List(Int) hdr; List(Int) body; Bool ok; };
+
+// 2^14 + 256: the RFC 8446 §5.1 limit on a plaintext fragment, plus the
+// expansion the AEAD adds. A record that claims more is refused rather
+// than waited for.
+pub Int tsr_max_record() { return 16640; }
+
+@requires(network(readonly))
+pub TsRec ts_read_record(TsIn s) {
+    TsTake hdr = ts_take(s, 5);
+    if (!hdr.ok) { return TsRec { .in = hdr.in, .ctype = 0, .version = 0, .hdr = [], .body = [], .ok = false }; }
+    Int blen = hdr.bytes[3] * 256 + hdr.bytes[4];
+    if (blen < 0 || blen > tsr_max_record()) {
+        return TsRec { .in = hdr.in, .ctype = 0, .version = 0, .hdr = hdr.bytes, .body = [], .ok = false };
+    }
+    TsTake body = ts_take(hdr.in, blen);
+    if (!body.ok) { return TsRec { .in = body.in, .ctype = 0, .version = 0, .hdr = hdr.bytes, .body = [], .ok = false }; }
+    Int ctype = hdr.bytes[0];
+    Int version = hdr.bytes[1] * 256 + hdr.bytes[2];
+    return TsRec { .in = body.in, .ctype = ctype, .version = version, .hdr = hdr.bytes, .body = body.bytes, .ok = true };
+}
+
+// A handshake message is complete once its declared length is buffered.
+pub Bool ts_msg_complete(List(Int) acc) {
+    Int n = acc.len();
+    if (n < 4) { return false; }
+    Int mlen = tm_u24_at(acc, 1);
+    return 4 + mlen <= n;
+}
+
+// What the plaintext phase has assembled: the message, or the alert the
+// client sent instead of it.
+// `alert` is -1 when the client did not send one.
+type TsPlain = { TsIn in; List(Int) msg; Int alert; Bool ok; };
+
+// Read plaintext records until a complete handshake message of type
+// `want` is in hand. A change_cipher_spec record in the middle is
+// skipped without disturbing anything (RFC 8446 §5, middlebox
+// compatibility); an alert is the client's decision to stop and is
+// reported rather than retried past.
+@requires(network(readonly))
+TsPlain ts_read_plain(TsIn s, List(Int) acc, Int want, Int rounds) {
+    if (ts_msg_complete(acc) && acc[0] == want) {
+        return TsPlain { .in = s, .msg = acc, .alert = -1, .ok = true };
+    }
+    if (rounds <= 0 || ts_msg_complete(acc)) {
+        // A complete message of another type is not one this server can
+        // use: post-handshake messages cannot arrive before the hello.
+        return TsPlain { .in = s, .msg = [], .alert = -1, .ok = false };
+    }
+    TsRec r = ts_read_record(s);
+    if (!r.ok) { return TsPlain { .in = r.in, .msg = [], .alert = -1, .ok = false }; }
+    if (r.ctype == 20) { return ts_read_plain(r.in, acc, want, rounds - 1); }
+    if (r.ctype == 21) { return TsPlain { .in = r.in, .msg = [], .alert = ts_alert_desc(r.body), .ok = false }; }
+    if (r.ctype != 22) { return TsPlain { .in = r.in, .msg = [], .alert = -1, .ok = false }; }
+    return ts_read_plain(r.in, acc.concat(r.body), want, rounds - 1);
+}
+
+// The alert code in an alert record body, or 0.
+pub Int ts_alert_desc(List(Int) body) {
+    if (body.len() < 2) { return 0; }
+    return body[1];
+}
+
+// The protected phase: records are opened with the handshake keys as
+// they arrive, so the same assembly works with the sequence number
+// carried alongside.
+type TsProt = { TsIn in; List(Int) msg; Int seq; Int alert; Bool ok; };
+
+@requires(network(readonly))
+TsProt ts_read_prot(TsIn s, List(Int) key, List(Int) iv, Int seq, List(Int) acc, Int rounds) {
+    if (ts_msg_complete(acc) && acc[0] == 20) {
+        return TsProt { .in = s, .msg = acc, .seq = seq, .alert = -1, .ok = true };
+    }
+    if (rounds <= 0 || ts_msg_complete(acc)) {
+        return TsProt { .in = s, .msg = [], .seq = seq, .alert = -1, .ok = false };
+    }
+    TsRec r = ts_read_record(s);
+    if (!r.ok) { return TsProt { .in = r.in, .msg = [], .seq = seq, .alert = -1, .ok = false }; }
+    if (r.ctype == 20) { return ts_read_prot(r.in, key, iv, seq, acc, rounds - 1); }
+    if (r.ctype == 21) { return TsProt { .in = r.in, .msg = [], .seq = seq, .alert = ts_alert_desc(r.body), .ok = false }; }
+    if (r.ctype != 23) { return TsProt { .in = r.in, .msg = [], .seq = seq, .alert = -1, .ok = false }; }
+    // The header as it arrived is the AAD: a rebuilt one is a different
+    // AAD, and the tag then fails for a reason that has nothing to do
+    // with the keys.
+    List(Int) pt = tls_open(seq, key, iv, r.hdr, r.body);
+    Int seq2 = seq + 1;
+    if (pt.len() == 0) { return TsProt { .in = r.in, .msg = [], .seq = seq2, .alert = -1, .ok = false }; }
+    Int ctype = tls_inner_type(pt);
+    Int clen = pt.len() - 1;
+    List(Int) content = slice_seed(pt, 0, clen, []);
+    if (ctype == 21) {
+        Int desc = if (content.len() > 0) { content[0] } else { 0 };
+        return TsProt { .in = r.in, .msg = [], .seq = seq2, .alert = desc, .ok = false };
+    }
+    if (ctype != 22) { return TsProt { .in = r.in, .msg = [], .seq = seq2, .alert = -1, .ok = false }; }
+    return ts_read_prot(r.in, key, iv, seq2, acc.concat(content), rounds - 1);
+}
+
+// ─── Writing ──────────────────────────────────────────────────────────
+
+// A plaintext handshake record. The legacy version on ServerHello is
+// 0x0301, which is what every other server sends there; protected
+// records carry 0x0303.
+@requires(network(readonly))
+Bool ts_send_plain(Int fd, List(Int) msg, Int version) {
+    Int blen = msg.len();
+    List(Int) hdr = [22, version / 256, version % 256, blen / 256, blen % 256];
+    return resid_tcp_send_bin(fd, hdr.concat(msg));
+}
+
+// The middlebox-compatibility record: one byte, 0x01, unprotected and
+// outside every sequence number (RFC 8446 §5).
+@requires(network(readonly))
+Bool ts_send_ccs(Int fd) {
+    List(Int) rec = [20, 3, 3, 0, 1, 1];
+    return resid_tcp_send_bin(fd, rec);
+}
+
+// `flight` protected under the handshake keys, split so that no record
+// carries more than 2^14 bytes of handshake payload. A handshake message
+// may span records (RFC 8446 §5.1), so the split is at the size limit
+// and not at a message boundary.
+@requires(network(readonly))
+Int ts_send_flight(Int fd, List(Int) key, List(Int) iv, Int seq, List(Int) flight, Int at) {
+    if (at >= flight.len()) { return seq; }
+    Int room = 16384;
+    Int left = flight.len() - at;
+    Int take = if (left > room) { room } else { left };
+    List(Int) chunk = slice_seed(flight, at, take, []);
+    List(Int) rec = tls_protect(seq, key, iv, chunk, 22);
+    if (!resid_tcp_send_bin(fd, rec)) { return seq; }
+    Int seq2 = seq + 1;
+    Int next = at + take;
+    return ts_send_flight(fd, key, iv, seq2, flight, next);
+}
+
+// An alert under the handshake keys: after ServerHello every alert this
+// server sends is protected (RFC 8446 §5.2).
+@requires(network(readonly))
+Bool ts_send_alert(Int fd, List(Int) key, List(Int) iv, Int seq, Int level, Int desc) {
+    List(Int) body = [level, desc];
+    List(Int) rec = tls_protect(seq, key, iv, body, 21);
+    return resid_tcp_send_bin(fd, rec);
+}
+
+// An alert before the keys exist, which can only be plaintext.
+@requires(network(readonly))
+Bool ts_send_plain_alert(Int fd, Int level, Int desc) {
+    List(Int) hdr = [21, 3, 3, 0, 2];
+    List(Int) body = [level, desc];
+    return resid_tcp_send_bin(fd, hdr.concat(body));
+}
+
+pub Int ts_alert_fatal() { return 2; }
+pub Int ts_alert_handshake_failure() { return 40; }
+pub Int ts_alert_illegal_parameter() { return 47; }
+pub Int ts_alert_decrypt_error() { return 51; }
+pub Int ts_alert_protocol_version() { return 70; }
+pub Int ts_alert_insufficient_security() { return 71; }
+pub Int ts_alert_internal_error() { return 80; }
+
+// The alert to send for a refusal. A hello this server cannot speak to
+// is a protocol version or an illegal parameter; a hello it could speak
+// to but will not (no cipher suite, no signature algorithm) is
+// insufficient security.
+pub Int ts_alert_for(Int err) {
+    if (err == ts_err_not_tls13()) { return ts_alert_protocol_version(); }
+    if (err == ts_err_short()) { return ts_alert_illegal_parameter(); }
+    if (err == ts_err_legacy_version()) { return ts_alert_protocol_version(); }
+    if (err == ts_err_no_share()) { return ts_alert_illegal_parameter(); }
+    if (err == tsr_no_suite()) { return ts_alert_insufficient_security(); }
+    if (err == ts_err_no_sigalg()) { return ts_alert_handshake_failure(); }
+    return ts_alert_internal_error();
+}
+
+pub Str tsr_err_text(Int err) {
+    if (err == 0) { return "ok"; }
+    if (err == tsr_no_suite()) { return "no cipher suite in common"; }
+    if (err == tsr_no_chain()) { return "no certificate to present"; }
+    if (err == tsr_key_mismatch()) { return "certificate does not carry this key"; }
+    if (err == tsr_sign_failed()) { return "signature failed"; }
+    if (err == tsr_io()) { return "connection ended mid-handshake"; }
+    if (err == tsr_alert()) { return "client sent an alert"; }
+    if (err == tsr_bad_finished()) { return "client Finished did not verify"; }
+    return ts_err_text(err);
+}
+
+// ─── The handshake ────────────────────────────────────────────────────
+
+// The x25519 base point (u = 9), little-endian as RFC 7748 encodes it.
+List(Int) tsr_base() {
+    return [9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+}
+
+List(Int) ts_hash(List(Int) transcript) {
+    List(Int) raw = sha256_bytes(transcript);
+    return slice_seed(raw, 0, 32, []);
+}
+
+// The full handshake on `fd`. `alpn_want` is what this server speaks, most
+// preferred first; the result's `alpn` is what the two agreed on, or ""
+// when the client offered nothing in that list.
+@requires(network(readonly))
+pub TlsResult tls_server_handshake(Int fd, ServerKey key, List(List(Int)) chain, List(Str) alpn_want) {
+    TsIn in = ts_in(fd);
+    TsPlain hello = ts_read_plain(in, [], 1, 8);
+    if (!hello.ok) {
+        Int err = if (hello.alert >= 0) { tsr_alert() } else { tsr_io() };
+        Int desc = if (err == tsr_alert()) { hello.alert } else { ts_alert_internal_error() };
+        _ = ts_send_plain_alert(fd, ts_alert_fatal(), desc);
+        return tsr_fail(err);
+    }
+    ClientHello ch = ts_client_hello(hello.msg);
+    if (ch.err != ts_err_ok()) {
+        _ = ts_send_plain_alert(fd, ts_alert_fatal(), ts_alert_for(ch.err));
+        return tsr_fail(ch.err);
+    }
+    Bool suite_ok = ts_offers_suite(ch, ts_suite_aes128gcm());
+    if (!suite_ok) {
+        _ = ts_send_plain_alert(fd, ts_alert_fatal(), ts_alert_for(tsr_no_suite()));
+        return tsr_fail(tsr_no_suite());
+    }
+    Bool sigalg_ok = ts_offers_sigalg(ch, tls_key_sigalg(key));
+    if (!sigalg_ok) {
+        _ = ts_send_plain_alert(fd, ts_alert_fatal(), ts_alert_for(ts_err_no_sigalg()));
+        return tsr_fail(ts_err_no_sigalg());
+    }
+    if (chain.len() == 0) {
+        _ = ts_send_plain_alert(fd, ts_alert_fatal(), ts_alert_internal_error());
+        return tsr_fail(tsr_no_chain());
+    }
+    Bool same_key = tls_key_cert_matches(key, chain[0]);
+    if (!same_key) {
+        _ = ts_send_plain_alert(fd, ts_alert_fatal(), ts_alert_internal_error());
+        return tsr_fail(tsr_key_mismatch());
+    }
+    Int sigalg = tls_key_sigalg(key);
+    Str alpn = ts_pick_alpn(ch.alpn, alpn_want);
+    // This server's own key share, and the shared secret from the
+    // client's. Nothing here is reused across connections: a fresh
+    // ephemeral key per handshake is what makes forward secrecy.
+    List(Int) priv = random_bytes(32);
+    List(Int) pub = x25519(priv, tsr_base());
+    List(Int) share = slice_seed(pub, 0, 32, []);
+    List(Int) shared = x25519(priv, ch.share);
+    List(Int) sh = ts_server_hello(ch.session_id, random_bytes(32), share);
+    List(Int) tr1 = ch.raw.concat(sh);
+    List(Int) th1 = ts_hash(tr1);
+    List(Int) hs = tls_handshake_secret(shared);
+    List(Int) c_hs = tls_c_hs_traffic(hs, th1);
+    List(Int) s_hs = tls_s_hs_traffic(hs, th1);
+    List(Int) ee = ts_encrypted_extensions();
+    List(Int) cert = ts_certificate(chain);
+    List(Int) tr2 = sconcat(tr1, ee.concat(cert));
+    List(Int) th2 = ts_hash(tr2);
+    List(Int) signature = tls_key_sign(key, ts_cv_server_content(th2));
+    if (signature.len() == 0) {
+        _ = ts_send_plain_alert(fd, ts_alert_fatal(), ts_alert_internal_error());
+        return tsr_fail(tsr_sign_failed());
+    }
+    List(Int) cv = ts_certificate_verify(sigalg, signature);
+    List(Int) tr3 = sconcat(tr2, cv);
+    List(Int) th3 = ts_hash(tr3);
+    List(Int) fin = ts_finished(s_hs, th3);
+    List(Int) flight = sconcat(ee, cert.concat(cv)).concat(fin);
+    List(Int) s_key = tls_traffic_key(s_hs);
+    List(Int) s_iv = tls_traffic_iv(s_hs);
+    Bool sent = ts_send_plain(fd, sh, 769);
+    if (!sent) { return tsr_fail(tsr_io()); }
+    _ = ts_send_ccs(fd);
+    Int sent_seq = ts_send_flight(fd, s_key, s_iv, 0, flight, 0);
+    List(Int) c_key = tls_traffic_key(c_hs);
+    List(Int) c_iv = tls_traffic_iv(c_hs);
+    TsProt done = ts_read_prot(hello.in, c_key, c_iv, 0, [], 8);
+    if (!done.ok) {
+        Int derr = if (done.alert >= 0) { tsr_alert() } else { tsr_io() };
+        Int desc = if (derr == tsr_alert()) { done.alert } else { ts_alert_decrypt_error() };
+        _ = ts_send_alert(fd, s_key, s_iv, sent_seq, ts_alert_fatal(), desc);
+        return tsr_fail(derr);
+    }
+    // The client's Finished covers the transcript through the *server's*
+    // Finished, which is also the transcript the application traffic
+    // secrets are derived from (RFC 8446 §7.1) -- not one that includes
+    // the client's own Finished.
+    Int body_len = done.msg.len() - 4;
+    List(Int) verify_data = slice_seed(done.msg, 4, body_len, []);
+    List(Int) tr4 = sconcat(tr3, fin);
+    List(Int) th4 = ts_hash(tr4);
+    List(Int) expect = tls_finished(c_hs, th4);
+    Bool fin_ok = ct_equal(expect, verify_data);
+    if (!fin_ok) {
+        _ = ts_send_alert(fd, s_key, s_iv, sent_seq, ts_alert_fatal(), ts_alert_decrypt_error());
+        return tsr_fail(tsr_bad_finished());
+    }
+    List(Int) master = tls_master_secret(hs);
+    List(Int) c_ap = tls_c_ap_traffic(master, th4);
+    List(Int) s_ap = tls_s_ap_traffic(master, th4);
+    TlsKeys keys = tls_keys_pending(tls_traffic_key(c_ap), tls_traffic_iv(c_ap), tls_traffic_key(s_ap), tls_traffic_iv(s_ap), alpn, done.in.buf);
+    return TlsResult { .keys = keys, .err = 0 };
+}

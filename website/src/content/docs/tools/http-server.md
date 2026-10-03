@@ -1,6 +1,6 @@
 ---
 title: HTTP server
-description: Serving HTTP/1.1 from Resid with lib/httpserv.resid.
+description: Serving HTTP/1.1 from Resid with lib/httpserv.resid, over TLS or not.
 ---
 
 `lib/httpserv.resid` is an HTTP/1.1 server written in Resid over the TCP
@@ -145,8 +145,63 @@ refused request is answered and its connection closed:
 Connections are closed by half-closing and draining first, so a client
 that is still sending receives its error reply rather than a reset.
 
+## Serving over TLS
+
+The same handler serves an encrypted connection. `lib/tlswire.resid` is
+the TLS transport: it implements the `Wire(T)` and `Accept(T, C)`
+behaviours `lib/httpserv.resid` declares, so nothing above this layer
+changes.
+
+```resid
+import "tlswire.resid";
+import "tlskey.resid";
+import "httpserv.resid";
+
+HttpReply handle(HttpRequest r) {
+    return http_reply_text(200, "text/plain; charset=utf-8", "hello over tls\n");
+}
+
+@requires(args, filesystem(readonly), network(readonly))
+Int main() {
+    Option(ServerKey) maybe_key = tls_key_load("server.key");
+    Str err = match maybe_key { Some(k) => "", None => "cannot read the key" };
+    if (err != "") { eprintln(err); return 2; }
+    ServerKey key = maybe_key else { EdKey([]) };
+    List(List(Int)) chain = tls_chain_load("server.pem");
+    Int lfd = http_listen(8443);
+    return tls_accept_loop(lfd, tls_cfg(key, chain, ["http/1.1"]), lambda(r) { handle(r) }, http_limits(), 0);
+}
+```
+
+`examples/https_server.resid` is this with the HTTP example's routes,
+static files and worker regions:
+
+```
+residc examples/https_server.resid run -- --cert server.pem --key server.key \
+    [--alpn http/1.1] [--port N] [--public] [--workers N] [--root DIR] [--conns N]
+```
+
+| Function | What it does |
+|---|---|
+| `tls_key_load(path)` | PKCS#8 or SEC1, PEM or DER, Ed25519 or ECDSA P-256; `None` for anything else, including an unsupported curve |
+| `tls_chain_load(path)` | the chain to present, leaf first: a PEM bundle or one DER certificate |
+| `tls_key_cert_matches(key, leaf)` | whether the certificate carries the key, checked at startup |
+| `tls_key_sign(key, content)` | a DER `ECDSA-Sig-Value` or 64 Ed25519 bytes |
+| `tls_server_handshake(fd, key, chain, alpn)` | one handshake, returning the connection's keys |
+| `tls_accept_loop(lfd, cfg, handler, lim, max_conns)` | accept, handshake, serve |
+
+TLS 1.3 only, and `TLS_AES_128_GCM_SHA256` only: those are the versions
+and suites this language can protect a record with. A client that does not
+offer them is refused with an alert rather than served under something
+else. The key share is x25519, drawn per handshake. No session ticket is
+ever sent, so every connection pays a full handshake.
+
+Reading the key is `filesystem(readonly)` and serving is
+`network(readonly)`; the two are separate calls, so a server does not carry
+the authority to read a private key just because it serves.
+
 ## Not included
 
-There is no TLS server side yet: put a public server behind a proxy that
-terminates TLS. There is no HTTP/2 server, no compression, and no read
-deadline beyond each socket's 30 s receive timeout.
+There is no HTTP/2 server, no compression, and no read deadline beyond each
+socket's 30 s receive timeout. TLS covers only what is above: no session
+resumption, no client certificates, no RSA signing, no 0-RTT.

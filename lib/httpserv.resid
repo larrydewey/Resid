@@ -5,6 +5,14 @@
 // resid_tcp_recv_some, resid_tcp_send_bin, resid_tcp_shutdown and
 // resid_tcp_close.
 //
+// The connection is a transport, not a file descriptor. `Wire(T)` is what
+// the request loop asks of one -- fill, send, close -- and `Accept(T, C)`
+// is what the accept loop asks of one to turn an accepted socket into a
+// connection, which for TLS means running a handshake and so needs a
+// configuration. Both live here because this is the layer that needs
+// them; the TLS instance of them is lib/tlswire.resid, and the same
+// handler serves both.
+//
 // Capabilities: everything here is `network(readonly)` — accepting and
 // answering connections on a listener you already hold is reading from the
 // network — except `http_listen_at`, which exposes a port on an address
@@ -51,6 +59,97 @@ pub Int http_listen_at(Str host, Int port) { return resid_tcp_listen_at(host, po
 // The port a listener bound, or -1.
 @requires(network(readonly))
 pub Int http_bound_port(Int lfd) { return resid_tcp_bound_port(lfd); }
+
+// ─── Transports ─────────────────────────────────────────────────────────
+
+// What a fill produced: the plaintext now available, and the transport
+// advanced past whatever it consumed to get it. A read is not a read on
+// every transport: a TLS connection answers with decrypted application
+// data and consumes records to produce it.
+type WireIn(T) = { T conn; List(Int) data; Bool eof; };
+
+// What a send produced: the transport with its write side advanced, and
+// whether every byte went out.
+type WireOut(T) = { T conn; Bool ok; };
+
+behavior Wire(T) {
+    // Add plaintext until `have` holds at least `want` bytes, the peer
+    // is done, or the total would pass `cap`.
+    WireIn(T) wire_fill(T w, List(Int) have, Int want, Int cap);
+    // Write every byte of `b`, in whatever pieces the transport needs.
+    WireOut(T) wire_send(T w, List(Int) b);
+    // End the connection, leaving nothing unsent.
+    Bool wire_close(T w);
+}
+
+// What an accepted socket became. `ok` is false when the transport could
+// not serve it -- a handshake that failed, say -- and `conn` is then
+// meaningless. A record rather than an `Option(T)`: narrowing an option
+// to its payload needs a value of `T` to fall back on, and a generic
+// function has none to offer.
+type Accepted(T) = { T conn; Bool ok; };
+
+behavior Accept(T, C) {
+    Accepted(T) wire_accept(C conf, Int fd);
+}
+
+// The plain transport needs no configuration; the parameter is there so
+// both transports share one accept behaviour.
+type PlainCfg = { Bool none; };
+
+pub PlainCfg plain_cfg() {
+    return PlainCfg { .none = true };
+}
+
+// Plain is what this file has always done: read what the socket has,
+// write what it was given.
+@requires(network(readonly))
+WireIn(Int) plain_fill(Int fd, List(Int) have, Int want, Int cap) {
+    Int room = if (cap > have.len()) { cap - have.len() } else { 0 };
+    Int ask = if (room > 16384) { 16384 } else { room };
+    if (ask <= 0) {
+        WireIn(Int) none = WireIn { .conn = fd, .data = have, .eof = false };
+    return none;
+    }
+    List(Int) more = resid_tcp_recv_some(fd, ask);
+    List(Int) both = have.concat(more);
+    Bool done = more.len() == 0;
+    WireIn(Int) out = WireIn { .conn = fd, .data = both, .eof = done };
+    return out;
+}
+
+@requires(network(readonly))
+WireOut(Int) plain_send(Int fd, List(Int) b) {
+    Bool ok = http_send_chunks(fd, b, 0);
+    WireOut(Int) out = WireOut { .conn = fd, .ok = ok };
+    return out;
+}
+
+// Close without losing the reply: half-close, drain what the peer is
+// still sending (bounded), then close. Closing with unread bytes would
+// reset the socket and discard the reply at the peer.
+@requires(network(readonly))
+Bool plain_close(Int fd) {
+    _ = resid_tcp_shutdown(fd);
+    _ = plain_drain(fd, 32);
+    return resid_tcp_close(fd);
+}
+
+@requires(network(readonly))
+Int plain_drain(Int fd, Int rounds) {
+    if (rounds <= 0) { return 0; }
+    List(Int) got = resid_tcp_recv_some(fd, 16384);
+    if (got.len() == 0) { return 0; }
+    Int nr = rounds - 1;
+    return plain_drain(fd, nr);
+}
+
+Accepted(Int) plain_accept(PlainCfg conf, Int fd) {
+    return Accepted { .conn = fd, .ok = true };
+}
+
+Wire(Int) = { .wire_fill = plain_fill, .wire_send = plain_send, .wire_close = plain_close };
+Accept(Int, PlainCfg) = plain_accept;
 
 // ─── Bytes and text ─────────────────────────────────────────────────────
 
@@ -115,41 +214,57 @@ Bool hs_match_at(List(Int) b, List(Int) pat, Int at, Int j, Int m) {
 
 // ─── Reading from the socket ────────────────────────────────────────────
 
-// A buffer of bytes read ahead of what has been consumed. `eof` is set once
-// the peer closed or the receive timed out.
-type HsBuf = { List(Int) data; Bool eof; };
+// A buffer of bytes read ahead of what has been consumed, and the
+// transport they came from: a TLS connection advances a record counter
+// and leaves record bytes buffered on the way, so the buffer has to carry
+// it or those bytes are lost. `eof` is set once the peer closed, the
+// receive timed out, or the transport could not make sense of what came
+// next -- a record that fails its tag ends the connection rather than
+// becoming request bytes.
+type HsBuf(T) = { T conn; List(Int) data; Bool eof; };
 
-// Read more into `b`, at most 16 KiB.
+// Read until `b` holds at least `want` bytes, the peer is done, or the
+// total would pass `cap`. One read is not one read's worth of a request,
+// so this keeps reading: a caller that wants to see whether more is
+// coming asks for one more byte than it has, and a caller that wants `n`
+// bytes of body gets them or the connection ends.
 @requires(network(readonly))
-HsBuf hs_fill(Int fd, HsBuf b) {
-    if (b.eof) { return b; }
-    List(Int) more = resid_tcp_recv_some(fd, 16384);
-    if (more.len() == 0) { return HsBuf { .data = b.data, .eof = true }; }
-    return HsBuf { .data = b.data.concat(more), .eof = false };
-}
-
-// Fill until `b` holds at least `n` bytes, EOF or `cap` exceeded.
-@requires(network(readonly))
-HsBuf hs_fill_to(Int fd, HsBuf b, Int n, Int cap) {
-    if (b.data.len() >= n || b.eof || b.data.len() > cap) { return b; }
-    return hs_fill_to(fd, hs_fill(fd, b), n, cap);
+@needs(Wire(T))
+HsBuf(T) hs_fill(HsBuf(T) b, Int want, Int cap) {
+    if (b.eof || b.data.len() >= want || b.data.len() > cap) { return b; }
+    WireIn(T) in = wire_fill(b.conn, b.data, want, cap);
+    HsBuf(T) out = HsBuf { .conn = in.conn, .data = in.data, .eof = in.eof };
+    if (out.eof || out.data.len() >= want || out.data.len() > cap) { return out; }
+    return hs_fill(out, want, cap);
 }
 
 // Where the head ends (index of its CRLFCRLF), reading as needed. -1 at
 // EOF without one, -2 when the head would exceed `head_max`. `from` is
 // where the search resumes (nothing before it can hold the terminator).
-type HsHead = { HsBuf buf; Int end; };
+type HsHead(T) = { HsBuf(T) buf; Int end; };
 
 @requires(network(readonly))
-HsHead hs_read_head(Int fd, HsBuf b, Int from, Int head_max) {
+@needs(Wire(T))
+HsHead(T) hs_read_head(HsBuf(T) b, Int from, Int head_max) {
     Int at = hs_find(b.data, [13, 10, 13, 10], from);
     if (at >= 0) {
-        return if (at + 4 > head_max) { HsHead { .buf = b, .end = -2 } } else { HsHead { .buf = b, .end = at } };
+        Int end = if (at + 4 > head_max) { -2 } else { at };
+        HsHead(T) h = HsHead { .buf = b, .end = end };
+        return h;
     }
-    if (b.data.len() > head_max) { return HsHead { .buf = b, .end = -2 }; }
-    if (b.eof) { return HsHead { .buf = b, .end = -1 }; }
+    Bool too_big = b.data.len() > head_max;
+    if (too_big) {
+        Int e = -2;
+        HsHead(T) h = HsHead { .buf = b, .end = e };
+        return h;
+    }
+    if (b.eof) {
+        Int e = -1;
+        HsHead(T) h = HsHead { .buf = b, .end = e };
+        return h;
+    }
     Int next_from = if (b.data.len() >= 3) { b.data.len() - 3 } else { 0 };
-    return hs_read_head(fd, hs_fill(fd, b), next_from, head_max);
+    return hs_read_head(hs_fill(b, b.data.len() + 1, head_max + 16384), next_from, head_max);
 }
 
 // ─── Parsing ────────────────────────────────────────────────────────────
@@ -274,66 +389,94 @@ Bool hs_cl_agree(List(Str) cls, Int i, Str first) {
 }
 
 // A request with its body read, plus the bytes left over for the next one.
-type HsReq = { HttpRequest req; HsBuf rest; };
+type HsReq(T) = { HttpRequest req; HsBuf(T) rest; };
 
-HsReq hs_fail(Int status, HsBuf rest) {
-    return HsReq { .req = hs_reject(status), .rest = rest };
+@needs(Wire(T))
+HsReq(T) hs_fail(Int status, HsBuf(T) rest) {
+    HttpRequest r = hs_reject(status);
+    HsReq(T) out = HsReq { .req = r, .rest = rest };
+    return out;
 }
 
 // The body after a parsed head; `b` starts at the body's first byte.
 @requires(network(readonly))
-HsReq hs_read_body(Int fd, HttpRequest r, HsBuf b, HttpLimits lim) {
+@needs(Wire(T))
+HsReq(T) hs_read_body(HttpRequest r, HsBuf(T) b, HttpLimits lim) {
     Int kind = hs_body_kind(r);
     if (kind == -3) { return hs_fail(400, b); }
     if (kind == -4) { return hs_fail(501, b); }
-    if (kind == -1) { return HsReq { .req = r, .rest = b }; }
-    if (kind == -2) { return hs_read_chunked(fd, r, b, lim, []); }
+    if (kind == -1) {
+        HsReq(T) out = HsReq { .req = r, .rest = b };
+        return out;
+    }
+    if (kind == -2) { return hs_read_chunked(r, b, lim, []); }
     if (kind > lim.body_max) { return hs_fail(413, b); }
-    HsBuf full = hs_fill_to(fd, b, kind, lim.body_max + 16384);
+    HsBuf(T) full = hs_fill(b, kind, lim.body_max + 16384);
     if (full.data.len() < kind) { return hs_fail(400, full); }
     HttpRequest r2 = HttpRequest { .method = r.method, .target = r.target, .path = r.path, .query = r.query, .version = r.version, .headers = r.headers, .body = full.data[0..kind], .keep_alive = r.keep_alive, .ok = true, .status = 0 };
-    return HsReq { .req = r2, .rest = HsBuf { .data = full.data[kind..], .eof = full.eof } };
+    HsBuf(T) left = HsBuf { .conn = full.conn, .data = full.data[kind..], .eof = full.eof };
+    HsReq(T) out = HsReq { .req = r2, .rest = left };
+    return out;
 }
 
 // Chunked coding: size-line, data, CRLF, ... , "0", trailers, CRLF.
 @requires(network(readonly))
-HsReq hs_read_chunked(Int fd, HttpRequest r, HsBuf b0, HttpLimits lim, List(Int) acc) {
-    HsHead ln = hs_read_line(fd, b0, 1024);
+@needs(Wire(T))
+HsReq(T) hs_read_chunked(HttpRequest r, HsBuf(T) b0, HttpLimits lim, List(Int) acc) {
+    HsHead(T) ln = hs_read_line(b0, 1024);
     if (ln.end < 0) { return hs_fail(400, ln.buf); }
-    HsBuf b = ln.buf;
+    HsBuf(T) b = ln.buf;
     Str line = hs_ascii(b.data, 0, ln.end, StrBuf());
     Int semi = str_index_of(line, ";", 0);
     Str hexs = str_trim(if (semi >= 0) { str_slice(line, 0, semi) } else { line });
     Int size = hs_hex(hexs, 0, 0);
     if (size < 0) { return hs_fail(400, b); }
-    HsBuf after = HsBuf { .data = b.data[(ln.end + 2)..], .eof = b.eof };
-    if (size == 0) { return hs_chunk_trailers(fd, r, after, acc); }
+    HsBuf(T) after = HsBuf { .conn = b.conn, .data = b.data[(ln.end + 2)..], .eof = b.eof };
+    if (size == 0) { return hs_chunk_trailers(r, after, acc); }
     if (acc.len() + size > lim.body_max) { return hs_fail(413, after); }
-    HsBuf full = hs_fill_to(fd, after, size + 2, lim.body_max + 16384);
+    HsBuf(T) full = hs_fill(after, size + 2, lim.body_max + 16384);
     if (full.data.len() < size + 2) { return hs_fail(400, full); }
     if (full.data[size] != 13 || full.data[size + 1] != 10) { return hs_fail(400, full); }
-    return hs_read_chunked(fd, r, HsBuf { .data = full.data[(size + 2)..], .eof = full.eof }, lim, acc.concat(full.data[0..size]));
+    HsBuf(T) next = HsBuf { .conn = full.conn, .data = full.data[(size + 2)..], .eof = full.eof };
+    return hs_read_chunked(r, next, lim, acc.concat(full.data[0..size]));
 }
 
 // Trailer fields up to the blank line are read and dropped.
 @requires(network(readonly))
-HsReq hs_chunk_trailers(Int fd, HttpRequest r, HsBuf b0, List(Int) acc) {
-    HsHead ln = hs_read_line(fd, b0, 8192);
+@needs(Wire(T))
+HsReq(T) hs_chunk_trailers(HttpRequest r, HsBuf(T) b0, List(Int) acc) {
+    HsHead(T) ln = hs_read_line(b0, 8192);
     if (ln.end < 0) { return hs_fail(400, ln.buf); }
-    HsBuf rest = HsBuf { .data = ln.buf.data[(ln.end + 2)..], .eof = ln.buf.eof };
-    if (ln.end > 0) { return hs_chunk_trailers(fd, r, rest, acc); }
+    HsBuf(T) lb = ln.buf;
+    HsBuf(T) rest = HsBuf { .conn = lb.conn, .data = lb.data[(ln.end + 2)..], .eof = lb.eof };
+    if (ln.end > 0) { return hs_chunk_trailers(r, rest, acc); }
     HttpRequest r2 = HttpRequest { .method = r.method, .target = r.target, .path = r.path, .query = r.query, .version = r.version, .headers = r.headers, .body = acc, .keep_alive = r.keep_alive, .ok = true, .status = 0 };
-    return HsReq { .req = r2, .rest = rest };
+    HsReq(T) out = HsReq { .req = r2, .rest = rest };
+    return out;
 }
 
 // Index of the next CRLF (reading as needed); -1 at EOF, -2 past `max`.
 @requires(network(readonly))
-HsHead hs_read_line(Int fd, HsBuf b, Int max) {
+@needs(Wire(T))
+HsHead(T) hs_read_line(HsBuf(T) b, Int max) {
     Int at = hs_find(b.data, [13, 10], 0);
-    if (at >= 0) { return if (at > max) { HsHead { .buf = b, .end = -2 } } else { HsHead { .buf = b, .end = at } }; }
-    if (b.data.len() > max) { return HsHead { .buf = b, .end = -2 }; }
-    if (b.eof) { return HsHead { .buf = b, .end = -1 }; }
-    return hs_read_line(fd, hs_fill(fd, b), max);
+    if (at >= 0) {
+        Int end = if (at > max) { -2 } else { at };
+        HsHead(T) h = HsHead { .buf = b, .end = end };
+        return h;
+    }
+    Bool too_big = b.data.len() > max;
+    if (too_big) {
+        Int e = -2;
+        HsHead(T) h = HsHead { .buf = b, .end = e };
+        return h;
+    }
+    if (b.eof) {
+        Int e = -1;
+        HsHead(T) h = HsHead { .buf = b, .end = e };
+        return h;
+    }
+    return hs_read_line(hs_fill(b, b.data.len() + 1, max + 16384), max);
 }
 
 // Hex digits to a value; -1 on a non-digit or an empty string.
@@ -348,14 +491,19 @@ Int hs_hex(Str s, Int i, Int acc) {
 
 // One whole request off the connection: head, then body.
 @requires(network(readonly))
-HsReq hs_read_request(Int fd, HsBuf b0, HttpLimits lim) {
-    HsHead h = hs_read_head(fd, b0, 0, lim.head_max);
+@needs(Wire(T))
+HsReq(T) hs_read_request(HsBuf(T) b0, HttpLimits lim) {
+    HsHead(T) h = hs_read_head(b0, 0, lim.head_max);
     if (h.end == -2) { return hs_fail(431, h.buf); }
     if (h.end < 0) { return hs_fail(0, h.buf); }
     HttpRequest r = hs_parse_head(h.buf.data, h.end);
-    HsBuf body_start = HsBuf { .data = h.buf.data[(h.end + 4)..], .eof = h.buf.eof };
-    if (!r.ok) { return HsReq { .req = r, .rest = body_start }; }
-    return hs_read_body(fd, r, body_start, lim);
+    HsBuf(T) hb = h.buf;
+    HsBuf(T) body_start = HsBuf { .conn = hb.conn, .data = hb.data[(h.end + 4)..], .eof = hb.eof };
+    if (!r.ok) {
+        HsReq(T) out = HsReq { .req = r, .rest = body_start };
+        return out;
+    }
+    return hs_read_body(r, body_start, lim);
 }
 
 // ─── Replies ────────────────────────────────────────────────────────────
@@ -428,74 +576,98 @@ pub List(Int) http_reply_wire(HttpReply reply, Bool keep_alive, Bool head_only) 
     return if (bodyless) { http_bytes(head) } else { http_bytes(head).concat(reply.body) };
 }
 
-// Send bytes, in pieces the runtime accepts (1 MiB).
+// Send bytes on a socket, in pieces the runtime accepts (1 MiB). The
+// transport decides what a send is; this is the plain one, and what
+// `wire_send` calls.
 @requires(network(readonly))
-pub Bool http_send(Int fd, List(Int) b) {
-    Int n = b.len();
-    if (n <= 1048576) { return resid_tcp_send_bin(fd, b); }
-    if (!resid_tcp_send_bin(fd, b[0..1048576])) { return false; }
-    return http_send(fd, b[1048576..]);
+pub Bool http_send_chunks(Int fd, List(Int) b, Int at) {
+    Int n = b.len() - at;
+    if (n <= 0) { return true; }
+    Int take = if (n > 1048576) { 1048576 } else { n };
+    Bool ok = resid_tcp_send_bin(fd, b[at..(at + take)]);
+    if (!ok) { return false; }
+    Int next = at + take;
+    return http_send_chunks(fd, b, next);
+}
+
+// Write every byte of `b` through the connection's transport.
+@requires(network(readonly))
+@needs(Wire(T))
+pub WireOut(T) http_send(T conn, List(Int) b) {
+    return wire_send(conn, b);
 }
 
 // ─── Serving ────────────────────────────────────────────────────────────
 
-// Close a connection without losing the reply: half-close, drain what the
-// peer is still sending (bounded), then close. Closing with unread bytes
-// would reset the socket and discard the reply at the peer.
+// End a connection through its transport: the reply is already out, so
+// what is left is to say goodbye without resetting the socket under it.
 @requires(network(readonly))
-pub Bool http_close(Int fd) {
-    _ = resid_tcp_shutdown(fd);
-    _ = hs_drain(fd, 32);
-    return resid_tcp_close(fd);
+@needs(Wire(T))
+pub Bool http_close(T conn) {
+    return wire_close(conn);
 }
 
-@requires(network(readonly))
-Int hs_drain(Int fd, Int rounds) {
-    if (rounds <= 0) { return 0; }
-    List(Int) got = resid_tcp_recv_some(fd, 16384);
-    if (got.len() == 0) { return 0; }
-    return hs_drain(fd, rounds - 1);
-}
-
-// Answer requests on `fd` until the connection closes or a bound is hit.
+// Answer requests on one connection until it closes or a bound is hit.
 // Returns the number answered.
 @requires(network(readonly))
-pub Int http_serve_conn(Int fd, HttpReply closure(HttpRequest) handler, HttpLimits lim) {
-    return hs_serve_at(fd, handler, lim, HsBuf { .data = [], .eof = false }, 0);
+@needs(Wire(T))
+pub Int http_serve_conn(T conn, HttpReply closure(HttpRequest) handler, HttpLimits lim) {
+    HsBuf(T) start = HsBuf { .conn = conn, .data = [], .eof = false };
+    return hs_serve_at(conn, handler, lim, start, 0);
 }
 
 @requires(network(readonly))
-Int hs_serve_at(Int fd, HttpReply closure(HttpRequest) handler, HttpLimits lim, HsBuf b, Int served) {
+@needs(Wire(T))
+Int hs_serve_at(T conn, HttpReply closure(HttpRequest) handler, HttpLimits lim, HsBuf(T) b, Int served) {
     if (served >= lim.requests_max) { return served; }
-    HsReq rq = hs_read_request(fd, b, lim);
+    HsReq(T) rq = hs_read_request(b, lim);
     HttpRequest r = rq.req;
     if (!r.ok) {
         if (r.status == 0) { return served; }
-        _ = http_send(fd, http_reply_wire(http_reply_status(r.status), false, false));
+        List(Int) body = http_reply_wire(http_reply_status(r.status), false, false);
+        _ = wire_send(rq.rest.conn, body);
         return served + 1;
     }
     HttpReply reply = handler(r);
     Bool keep = r.keep_alive && served + 1 < lim.requests_max;
-    Bool sent = http_send(fd, http_reply_wire(reply, keep, r.method == "HEAD"));
-    if (!sent || !keep) { return served + 1; }
-    return hs_serve_at(fd, handler, lim, rq.rest, served + 1);
+    List(Int) wire = http_reply_wire(reply, keep, r.method == "HEAD");
+    WireOut(T) sent = wire_send(rq.rest.conn, wire);
+    if (!sent.ok || !keep) { return served + 1; }
+    return hs_serve_at(sent.conn, handler, lim, rq.rest, served + 1);
 }
 
-// Accept connections on `lfd` and serve each in turn; `max_conns` 0 means
-// until accept fails. Returns connections served, or -1 if accept failed.
+// Accept connections on the socket `lfd`, turn each into a connection of
+// this transport's, and serve it; `max_conns` 0 means until accept
+// fails. The listener is always a plain socket: only what comes out of
+// `accept` is a transport. A socket the transport declines is closed and
+// counted as served -- it was accepted, and the caller asked for a count
+// of accepts.
+// Returns connections served, or -1 if accept failed.
+@needs(Wire(T), Accept(T, C))
 @requires(network(readonly))
-pub Int http_accept_loop(Int lfd, HttpReply closure(HttpRequest) handler, HttpLimits lim, Int max_conns) {
-    return hs_accept_at(lfd, handler, lim, max_conns, 0);
+pub Int http_accept_loop_where(Int lfd, C conf, HttpReply closure(HttpRequest) handler, HttpLimits lim, Int max_conns) {
+    return hs_accept_at(lfd, conf, handler, lim, max_conns, 0);
 }
 
+@needs(Wire(T), Accept(T, C))
 @requires(network(readonly))
-Int hs_accept_at(Int lfd, HttpReply closure(HttpRequest) handler, HttpLimits lim, Int max_conns, Int done) {
+Int hs_accept_at(Int lfd, C conf, HttpReply closure(HttpRequest) handler, HttpLimits lim, Int max_conns, Int done) {
     if (max_conns > 0 && done >= max_conns) { return done; }
     Int c = resid_tcp_accept(lfd);
     if (c < 0) { return if (max_conns > 0) { -1 } else { done }; }
-    _ = http_serve_conn(c, handler, lim);
-    _ = http_close(c);
-    return hs_accept_at(lfd, handler, lim, max_conns, done + 1);
+    Accepted(T) got = wire_accept(conf, c);
+    if (got.ok) {
+        _ = http_serve_conn(got.conn, handler, lim);
+        _ = http_close(got.conn);
+    }
+    _ = resid_tcp_close(c);
+    return hs_accept_at(lfd, conf, handler, lim, max_conns, done + 1);
+}
+
+// Accept plain connections and serve each in turn.
+@requires(network(readonly))
+pub Int http_accept_loop(Int lfd, HttpReply closure(HttpRequest) handler, HttpLimits lim, Int max_conns) {
+    return http_accept_loop_where(lfd, plain_cfg(), handler, lim, max_conns);
 }
 
 // ─── Request helpers ────────────────────────────────────────────────────

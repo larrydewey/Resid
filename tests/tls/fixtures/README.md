@@ -49,6 +49,68 @@ have to be testable.
 The two RSA roots exist because RSA certificate signatures were verified
 by nothing at all. They now are, by all three of the cases above.
 
+## The server fixtures
+
+A *server* cannot be tested with keys that were thrown away: it has to
+sign with one. So unlike the fixtures above, these private keys are
+committed, and that is the whole point of them — they are test keys for a
+handshake that has to sign something, and nothing else uses them.
+
+| file | what it is |
+|---|---|
+| `srvca.pem`, `srvca.der`, `srvca.key` | `CN=TLS Server Test CA`, ECDSA P-256, self-signed |
+| `srv.pem`, `srv.der`, `srv.key`, `srv.key.der` | `CN=localhost`, SAN `DNS:localhost,IP:127.0.0.1`, EKU serverAuth, signed by that CA, serial `0x5000`. The key is PKCS#8 PEM and, in `srv.key.der`, PKCS#8 DER |
+| `srvedca.pem`, `srvedca.der`, `srvedca.key` | `CN=TLS Server Ed25519 CA` |
+| `srved.pem`, `srved.der`, `srved.key`, `srved.key.der` | the same leaf under the Ed25519 CA, serial `0x5001` |
+
+Both leaves are served with their CA in the chain, so the client walks
+intermediates rather than being handed a single certificate.
+
+Made with:
+
+    openssl ecparam -name prime256v1 -genkey -noout -out srvca.key
+    openssl req -new -x509 -key srvca.key -sha256 -days 7300 -subj "/CN=TLS Server Test CA" \
+        -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" \
+        -out srvca.pem
+    openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+        -keyout srv.key -subj "/CN=localhost" -out srv.csr
+    printf 'basicConstraints=CA:FALSE\nkeyUsage=digitalSignature\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:localhost,IP:127.0.0.1\n' > srv.ext
+    openssl x509 -req -in srv.csr -CA srvca.pem -CAkey srvca.key -set_serial 0x5000 \
+        -days 3650 -sha256 -extfile srv.ext -out srv.pem
+    openssl pkey -in srv.key -outform der -out srv.key.der
+
+and the same three steps with `openssl genpkey -algorithm ed25519` for the
+Ed25519 pair. `ch-ossl.bin` is a whole TLS 1.3 record: a real openssl 3.6
+`ClientHello`, captured on a loopback socket, headers included.
+
+Two things about that capture are worth keeping in mind. It leads with an
+X25519MLKEM768 hybrid share (group `0x11ec`, 1216 bytes), so a server that
+only speaks x25519 has to skip the entry it cannot use and take the one
+after it — the server path is exercised on every run against this file.
+And it advertises `compress_certificate`, an extension this server does
+not implement and never echoes back, which is how a peer learns it was not
+negotiated.
+
+### The pinned signatures
+
+`srvprobe --sign` prints two signatures over
+`TLS 1.3, server CertificateVerify fixture`: one drawn (ECDSA nonce from
+the system) and one with a fixed nonce, which makes the bytes a function
+of the content and the key alone. Only the fixed one is asserted, and
+openssl verifies both:
+
+    printf 'TLS 1.3, server CertificateVerify fixture' > fixture.bin
+    openssl x509 -in srv.pem -noout -pubkey > pub.pem
+    openssl dgst -sha256 -verify pub.pem -signature pinned.der fixture.bin
+
+    openssl x509 -in srved.pem -noout -pubkey > pubed.pem
+    openssl pkeyutl -verify -pubin -inkey pubed.pem -rawin \
+        -in fixture.bin -sigfile pinneded.der
+
+The drawn ECDSA signature is 70 or 71 DER bytes depending on whether `r`
+and `s` need a leading zero octet, so its length is not a fact to pin;
+Ed25519 is always 64.
+
 ## The OCSP fixtures
 
 `ocsp-good.der` and `ocsp-revoked.der` are `BasicOCSPResponse` bodies in a

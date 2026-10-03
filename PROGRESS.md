@@ -1487,6 +1487,66 @@ yield 0. Handle types: `with (Type h = expr) { … }` RAII.
 
 ---
 
+## 0d. A TLS server, in Resid (2026-10-03)
+
+**The server side of TLS 1.3**, so a registry can be served over HTTPS by
+a Resid program rather than by something else bolted on. The client,
+trust store and provenance work were already here; this is the other end.
+
+- **`lib/ec256.resid` signs.** `ecdsa_sign_k` (content, key, nonce) returns
+  a DER `ECDSA-Sig-Value` with `s` in the low half; the nonce is a
+  parameter, so a test can pin the bytes a key produces. Checked against
+  `openssl dgst -verify` and against this repository's own verifier.
+  `ec_to_be32` walks bytes from the top because a byte-at-a-time `>>` loop
+  reads little-endian -- which the round trip against `ec_from_be` caught.
+- **`lib/tlskey.resid`** reads what a server signs with: PKCS#8 or SEC1,
+  PEM or DER, Ed25519 or ECDSA P-256, refusing a curve it cannot sign
+  with, and `tls_key_cert_matches` so a certificate and a key that
+  disagree are refused at startup instead of at every handshake. The TLV
+  reader is hand-rolled for 0-based lists, like `lib/chain.resid`, because
+  `lib/der.resid` is still the seeded convention.
+- **`lib/tlsserver.resid`** runs the handshake: ClientHello parsing
+  (`lib/tlsmsg.resid`, strict about every length), the four flight
+  messages, the transcript anchored on the bytes received, an alert for
+  every refusal, and the client's Finished verified before anything is
+  served.
+- **The transport seam.** `lib/httpserv.resid` declares `Wire(T)` (fill,
+  send, close) and `Accept(T, C)` (an accepted socket to a connection, with
+  the configuration TLS needs) and runs its connection path over them;
+  `lib/tlswire.resid` is the TLS instance. Authority still flows through
+  the dispatch, so a caller granted only `network(readonly)` provably
+  cannot get a transport that binds a port or writes a file. Plain
+  `http_accept_loop` is unchanged for existing callers, and
+  `tests/http/run.sh` still passes.
+- **`examples/https_server.resid`**: the HTTP example's routes and static
+  files over TLS, with `--cert`/`--key` and the same worker regions.
+- **Tests**: `tests/tls/run.sh` 89 -> 124. Key loading, certificate/key
+  match, pinned signatures (openssl-verified), ClientHello parsing against
+  a captured real openssl 3.6 hello, and live handshakes -- this
+  repository's client against this repository's server, plus
+  `openssl s_client` including a TLS 1.2 refusal.
+
+Four things that cost time and are worth writing down:
+
+- **`resid_tcp_recv_bin` reads exactly n bytes and zero-pads the rest.**
+  A server that uses it to "read what is there" gets a record header of
+  zeros. The handshake reads with `resid_tcp_recv_some`, whose comment
+  says exactly that it is the verb for this.
+- **A rebuilt record header is a different AAD.** Opening a record with a
+  header reconstructed from its length decrypts nothing, because the tag
+  covers the five bytes that actually went on the wire.
+- **`Int(N)` is signed, so `>>` sign-fills**, while the EC code treats
+  `Int(256)` as an unsigned bit pattern. `ec_low_s` therefore decides the
+  low-s question by watching whether `2*s` wraps.
+- **openssl leads its ClientHello with X25519MLKEM768** (group `0x11ec`,
+  1216 bytes). A server that only speaks x25519 must skip the entry it
+  cannot use; the committed capture in `tests/tls/fixtures/ch-ossl.bin`
+  exercises that on every run.
+
+Still open: the registry transport refuses `https://`, because fetching
+one needs a TLS *client* and an HTTP client in `lib/` (see
+`PLAN-web-and-registry.md`, step 2).
+
 ## 0a. Registry transports, and a trust store that trusts something (2026-10-01)
 
 **Registries, end to end.** The registry system had a local directory and

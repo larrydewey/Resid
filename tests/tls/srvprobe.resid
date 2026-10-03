@@ -1,0 +1,158 @@
+// srvprobe.resid — the server side of TLS 1.3, as a runnable probe.
+//
+// tests/tls/run.sh drives this once per case. It is a separate program
+// because each case needs different arguments, and because these are the
+// facts a *server* has to get right: what a key file yields, what a
+// signature over a fixed content looks like, and what the server makes of
+// a ClientHello. The live handshakes (this repository's own client, and
+// openssl when it is installed) are driven from run.sh.
+//
+//   srvprobe <mode> [args]
+//
+// One `KEY=value` per line, the way tsprobe prints, so run.sh reads them
+// all the same way. A value of `-1` is a refusal, which is what several
+// of these cases are about.
+
+import "../../lib/tlskey.resid";
+import "../../lib/tlsserver.resid";
+import "../../lib/tlsmsg.resid";
+import "../../lib/tls.resid";
+import "../../lib/ec256.resid";
+import "../../lib/ed25519.resid";
+import "../../lib/crypto.resid";
+
+List(Int) hb(Str s) {
+    return hb_at(s, 0, []);
+}
+
+List(Int) hb_at(Str s, Int i, List(Int) acc) {
+    if (i >= str_len(s)) { return acc; }
+    Int c = str_char_at(s, i);
+    Int hi = if (c > 96) { c - 87 } else { c - 48 };
+    Int j = i + 1;
+    Int c2 = str_char_at(s, j);
+    Int lo = if (c2 > 96) { c2 - 87 } else { c2 - 48 };
+    Int byt = hi * 16 + lo;
+    return hb_at(s, i + 2, acc.concat([byt]));
+}
+
+// ── keys ──────────────────────────────────────────────────────────────
+
+// What each key file yields: the signature algorithm it implies and the
+// public key it produces. A file that is not a usable key, or one that is
+// not there, is `-1` — which is what a refusal looks like from outside.
+@requires(args, filesystem(readonly))
+Int keys_main(List(Str) paths, Int i) {
+    if (i >= paths.len()) { return 0; }
+    Str p = paths[i];
+    Option(ServerKey) k = tls_key_load(p);
+    Str alg = match k { Some(key) => f"{tls_key_sigalg(key)}", None => "-1" };
+    Str pub = match k { Some(key) => hex_encode(tls_key_pubkey(key)), None => "-" };
+    println(f"file={p}");
+    println(f"alg={alg}");
+    println(f"pub={pub}");
+    Int ni = i + 1;
+    return keys_main(paths, ni);
+}
+
+// Does the certificate carry the key's public key? The check a server
+// makes before it starts, so a mismatched pair is an error message rather
+// than a handshake that fails every time.
+@requires(args, filesystem(readonly))
+Int match_main() {
+    Str key_path = args.get(2);
+    Str cert_path = args.get(3);
+    Option(ServerKey) k = tls_key_load(key_path);
+    List(List(Int)) chain = tls_chain_load(cert_path);
+    Int same = match k { Some(key) => if (chain.len() > 0) { if (tls_key_cert_matches(key, chain[0])) { 1 } else { 0 } } else { -1 }, None => -1 };
+    println(f"match={same}");
+    println(f"chain={chain.len()}");
+    return 0;
+}
+
+// ── signatures ────────────────────────────────────────────────────────
+
+// A signature over a fixed content. ECDSA takes a fixed nonce here
+// instead of drawing one, so the bytes are a function of the content and
+// the key alone: a test can pin them, and a change in the DER encoding or
+// in the low-s normalisation shows up as different bytes rather than as a
+// signature that still verifies.
+@requires(args, filesystem(readonly))
+Int sign_main() {
+    Option(ServerKey) k = tls_key_load(args.get(2));
+    List(Int) content = bytes_of("TLS 1.3, server CertificateVerify fixture");
+    Int alg = match k { Some(key) => tls_key_sigalg(key), None => -1 };
+    List(Int) sig = match k { Some(key) => tls_key_sign(key, content), None => [] };
+    List(Int) pinned = match k { Some(key) => pinned_at(key, content), None => [] };
+    println(f"alg={alg}");
+    println(f"len={sig.len()}");
+    println(f"pinned={hex_encode(pinned)}");
+    return 0;
+}
+
+List(Int) pinned_at(ServerKey key, List(Int) content) {
+    return match key {
+        // A nonce of 0x0101..02: inside [1, N-1], and fixed.
+        EcKey(scalar) => ecdsa_sign_k(content, scalar, hb("0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20")),
+        EdKey(seed) => sign_msg_bytes(seed, content)
+    };
+}
+
+// ── ClientHello ───────────────────────────────────────────────────────
+
+// What the server makes of a ClientHello: the fields a handshake needs,
+// and the refusal when one of them is not there. `ch-ossl.bin` is a real
+// openssl 3.6 hello, captured; it leads with a post-quantum hybrid share,
+// which the x25519-only server skips rather than fails on.
+@requires(args, filesystem(readonly))
+Int hello_main() {
+    List(Int) rec = filesystem.read_bytes(args.get(2));
+    List(Int) msg = slice_seed(rec, 5, rec.len() - 5, []);
+    ClientHello ch = ts_client_hello(msg);
+    println(f"len={msg.len()}");
+    println(f"err={ch.err}");
+    println(f"tls13={ch.tls13}");
+    println(f"session_id={ch.session_id.len()}");
+    println(f"share={ch.share.len()}");
+    println(f"sigalgs={ch.sigalgs.len()}");
+    println(f"alpn={ch.alpn.len()}");
+    Bool p256 = ts_offers_sigalg(ch, 1027);
+    Bool ed = ts_offers_sigalg(ch, 2055);
+    Str pick = ts_pick_alpn(ch.alpn, ["http/1.1", "h2"]);
+    println(f"ecdsa={p256}");
+    println(f"ed25519={ed}");
+    println(f"alpn_pick={pick}");
+    return 0;
+}
+
+// A truncated hello must be refused rather than read past its end: the
+// first N bytes of a real one, at every length that matters.
+@requires(args, filesystem(readonly))
+Int trunc_main() {
+    List(Int) rec = filesystem.read_bytes(args.get(2));
+    List(Int) msg = slice_seed(rec, 5, rec.len() - 5, []);
+    println(f"full={ts_client_hello(msg).err}");
+    Int n = msg.len();
+    Int half = n / 2;
+    List(Int) short = slice_seed(msg, 0, half, []);
+    ClientHello cut = ts_client_hello(short);
+    println(f"half={cut.err}");
+    List(Int) tiny = slice_seed(msg, 0, 8, []);
+    println(f"tiny={ts_client_hello(tiny).err}");
+    return 0;
+}
+
+@requires(args, filesystem(readonly))
+Int main() {
+    Str mode = args.get(1);
+    if (mode == "--keys") {
+        List(Str) one = if (args.count() > 2) { [args.get(2)] } else { [] };
+        return keys_main(one, 0);
+    }
+    if (mode == "--match") { return match_main(); }
+    if (mode == "--sign") { return sign_main(); }
+    if (mode == "--hello") { return hello_main(); }
+    if (mode == "--trunc") { return trunc_main(); }
+    eprintln("usage: srvprobe --keys | --match KEY CERT | --sign KEY | --hello FILE | --trunc FILE");
+    return 2;
+}

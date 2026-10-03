@@ -114,6 +114,95 @@ pub List(Int) tls_finished(List(Int) traffic_secret, List(Int) thash) {
     return hmac_sha256_bytes(fk, thash);
 }
 
+// ─── protected records (RFC 8446 §5.2) ──────────────────────
+
+// A connection's record keys and its two sequence counters. The record
+// layer is the only thing that advances a counter, and it is immutable,
+// so a read and a write each carry the new value back to the caller
+// rather than storing it somewhere both can see.
+type TlsKeys = {
+    List(Int) rkey; List(Int) riv; Int rseq;   // client -> server
+    List(Int) wkey; List(Int) wiv; Int wseq;   // server -> client
+    Str alpn;
+    List(Int) pending;   // record bytes read past the client's Finished
+};
+
+// The keys of a connection that never got one: empty keys, so a caller
+// that forgets to look at the error decrypts nothing rather than
+// something.
+pub TlsKeys tls_keys_none() {
+    List(Int) none = [];
+    return TlsKeys { .rkey = none, .riv = none, .rseq = 0, .wkey = none, .wiv = none, .wseq = 0, .alpn = "", .pending = none };
+}
+
+// Both counters start at 0, and `alpn` is the protocol the handshake
+// settled on ("" when the client offered none this server speaks).
+pub TlsKeys tls_keys(List(Int) rkey, List(Int) riv, List(Int) wkey, List(Int) wiv, Str alpn) {
+    return tls_keys_pending(rkey, riv, wkey, wiv, alpn, []);
+}
+
+// The same, with the record bytes a handshake read past the client's
+// Finished. A client that pipelines its first request straight after the
+// handshake has those bytes in the socket before the server is ready for
+// them, and re-reading the socket instead would lose them.
+pub TlsKeys tls_keys_pending(List(Int) rkey, List(Int) riv, List(Int) wkey, List(Int) wiv, Str alpn, List(Int) pending) {
+    return TlsKeys { .rkey = rkey, .riv = riv, .rseq = 0, .wkey = wkey, .wiv = wiv, .wseq = 0, .alpn = alpn, .pending = pending };
+}
+
+// The same keys with the read counter moved on, and with the write
+// counter moved on. Immutable values, so a record layer that has just
+// consumed a sequence number carries the new pair back to its caller.
+pub TlsKeys tls_keys_rseq(TlsKeys k, Int seq) {
+    return TlsKeys { .rkey = k.rkey, .riv = k.riv, .rseq = seq, .wkey = k.wkey, .wiv = k.wiv, .wseq = k.wseq, .alpn = k.alpn, .pending = k.pending };
+}
+
+pub TlsKeys tls_keys_wseq(TlsKeys k, Int seq) {
+    return TlsKeys { .rkey = k.rkey, .riv = k.riv, .rseq = k.rseq, .wkey = k.wkey, .wiv = k.wiv, .wseq = seq, .alpn = k.alpn, .pending = k.pending };
+}
+
+// The bytes of one protected record: the 5-byte header, then ciphertext
+// and tag. The inner plaintext is `content` followed by the content-type
+// byte (TLSInnerPlaintext), the AAD is the header exactly as it goes on
+// the wire, and the outer content type is 23 for every protected record.
+pub List(Int) tls_protect(Int seq, List(Int) key, List(Int) iv, List(Int) content, Int inner_type) {
+    List(Int) pt = content.concat([inner_type]);
+    Int clen = pt.len() + 16;
+    List(Int) hdr = tls_record_header2(23, clen);
+    List(Int) nonce = tls_record_nonce(iv, seq);
+    List(Int) ct = aes128_gcm_seal(key, nonce, pt, hdr);
+    return hdr.concat(ct);
+}
+
+// The inner plaintext of one protected record, content-type byte still
+// attached, or an empty list when the tag does not verify. A record that
+// fails its tag has no contents, so nothing downstream may act on one
+// that decrypted "mostly". `hdr` must be the five bytes that went on the
+// wire: they are the AAD, and a rebuilt header is a different AAD.
+pub List(Int) tls_open(Int seq, List(Int) key, List(Int) iv, List(Int) hdr, List(Int) body) {
+    List(Int) nonce = tls_record_nonce(iv, seq);
+    return aes128_gcm_open_bytes(key, nonce, body, hdr);
+}
+
+// As `tls_open`, with the content-type byte taken off: what the layer
+// above wants to see.
+pub List(Int) tls_unprotect(Int seq, List(Int) key, List(Int) iv, List(Int) hdr, List(Int) body) {
+    List(Int) pt = tls_open(seq, key, iv, hdr, body);
+    if (pt.len() == 0) {
+        List(Int) none = [];
+        return none;
+    }
+    Int clen = pt.len() - 1;
+    return slice_seed(pt, 0, clen, []);
+}
+
+// The inner content type of a decrypted record: the last byte of the
+// inner plaintext, or -1 when there is no plaintext at all.
+pub Int tls_inner_type(List(Int) pt) {
+    Int n = pt.len();
+    if (n == 0) { return -1; }
+    return pt[n - 1];
+}
+
 // ── record layer (RFC 8446 §5.2) ─────────────────────────────────────
 
 // nonce = static IV xor 64-bit big-endian sequence number in 12 bytes
