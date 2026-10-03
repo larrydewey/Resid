@@ -432,5 +432,26 @@ else
     echo "note: openssl not installed, skipping the s_client cases"
 fi
 
+# ── the client against our own server, in one process ──────────────────
+# The other direction of the same code: a handshake both ends implement,
+# one request, and the reply decrypted. `tests/tls/client.resid` starts a
+# server on a loopback port and dials it, so a case that passes has proved
+# the chain, the name, the CertificateVerify and the application records in
+# one go -- the client reads with the server's traffic secret, which is the
+# mistake that completes a handshake and then fails every record.
+(cd "$ROOT" && "$COMPILER" tests/tls/client.resid -o "$W/tlsclient2") > "$W/build.log" 2>&1 || {
+    echo "FAIL build tests/tls/client.resid"; grep -i error "$W/build.log" | head -3; exit 1; }
+timeout 180 "$W/tlsclient2" > "$W/client.out" 2>&1
+if grep -q "^DIAL-OK" "$W/client.out" && grep -q "^REPLY HTTP/1.1 200" "$W/client.out" \
+    && grep -q "^REPLY-BODY hello from the tls client" "$W/client.out"; then ok
+else bad "client against our own server: $(tail -3 "$W/client.out" | tr '\n' ' ')"; fi
+
+# A trust store that does not contain the issuer is refused, and the
+# handshake says which name it could not verify rather than hanging up
+# silently: no store means nothing is trusted.
+timeout 180 "$W/tlsclient2" otherhost > "$W/client_bad.out" 2>&1
+grep -q "not trusted for 'otherhost'" "$W/client_bad.out" && ok \
+    || bad "untrusted name refused: $(tail -2 "$W/client_bad.out" | tr '\n' ' ')"
+
 echo "tls: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

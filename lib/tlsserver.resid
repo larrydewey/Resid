@@ -100,7 +100,6 @@ TsProt ts_read_prot(TsIn s, List(Int) key, List(Int) iv, Int seq, List(Int) acc,
     // AAD, and the tag then fails for a reason that has nothing to do
     // with the keys.
     List(Int) pt = tls_open(seq, key, iv, r.hdr, r.body);
-    eprintln(f"SRV-R type={r.ctype} opened={pt.len()} seq={seq}");
     Int seq2 = seq + 1;
     if (pt.len() == 0) { return TsProt { .in = r.in, .msg = [], .seq = seq2, .alert = -1, .ok = false }; }
     Int ctype = tls_inner_type(pt);
@@ -233,7 +232,6 @@ pub TlsResult tls_server_handshake(Int fd, ServerKey key, List(List(Int)) chain,
         _ = ts_send_plain_alert(fd, ts_alert_fatal(), ts_alert_for(ch.err));
         return tsr_fail(ch.err);
     }
-    eprintln(f"SRV hello err={ch.err} suite_ok={ts_offers_suite(ch, ts_suite_aes128gcm())}");
     Bool suite_ok = ts_offers_suite(ch, ts_suite_aes128gcm());
     if (!suite_ok) {
         _ = ts_send_plain_alert(fd, ts_alert_fatal(), ts_alert_for(tsr_no_suite()));
@@ -262,7 +260,6 @@ pub TlsResult tls_server_handshake(Int fd, ServerKey key, List(List(Int)) chain,
     List(Int) pub = x25519(priv, tsr_base());
     List(Int) share = slice_seed(pub, 0, 32, []);
     List(Int) shared = x25519(priv, ch.share);
-    eprintln("SRV share ok");
     List(Int) sh = ts_server_hello(ch.session_id, random_bytes(32), share);
     List(Int) tr1 = ch.raw.concat(sh);
     List(Int) th1 = ts_hash(tr1);
@@ -273,7 +270,6 @@ pub TlsResult tls_server_handshake(Int fd, ServerKey key, List(List(Int)) chain,
     List(Int) cert = ts_certificate(chain);
     List(Int) tr2 = sconcat(tr1, ee.concat(cert));
     List(Int) th2 = ts_hash(tr2);
-    eprintln("SRV before sign");
     List(Int) signature = tls_key_sign(key, ts_cv_server_content(th2));
     if (signature.len() == 0) {
         _ = ts_send_plain_alert(fd, ts_alert_fatal(), ts_alert_internal_error());
@@ -292,7 +288,6 @@ pub TlsResult tls_server_handshake(Int fd, ServerKey key, List(List(Int)) chain,
     Int sent_seq = ts_send_flight(fd, s_key, s_iv, 0, flight, 0);
     List(Int) c_key = tls_traffic_key(c_hs);
     List(Int) c_iv = tls_traffic_iv(c_hs);
-    eprintln("SRV flight sent");
     TsProt done = ts_read_prot(hello.in, c_key, c_iv, 0, [], 8);
     if (!done.ok) {
         Int derr = if (done.alert >= 0) { tsr_alert() } else { tsr_io() };
@@ -305,7 +300,6 @@ pub TlsResult tls_server_handshake(Int fd, ServerKey key, List(List(Int)) chain,
     // secrets are derived from (RFC 8446 §7.1) -- not one that includes
     // the client's own Finished.
     Int body_len = done.msg.len() - 4;
-    eprintln(f"SRV done ok={done.ok} len={done.msg.len()}");
     List(Int) verify_data = slice_seed(done.msg, 4, body_len, []);
     List(Int) tr4 = sconcat(tr3, fin);
     List(Int) th4 = ts_hash(tr4);

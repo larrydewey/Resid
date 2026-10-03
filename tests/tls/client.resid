@@ -1,0 +1,70 @@
+// A TLS client against our own server, in one process.
+//
+//   client.resid            handshake, one request, the decrypted reply
+//   client.resid otherhost  the same handshake asking for a name the
+//                           certificate does not carry, which has to be
+//                           refused by name
+//
+// The point of the first mode is the last two lines: a TLS 1.3 client
+// reads with the server's application traffic secret and writes with its
+// own, and getting that backwards still completes the handshake.
+import "tlsclient.resid";
+import "tlswire.resid";
+import "tlskey.resid";
+import "chain.resid";
+import "wire.resid";
+import "httpserv.resid";
+import "clock.resid";
+
+HttpReply handle(HttpRequest r) {
+    return http_reply_text(200, "text/plain; charset=utf-8", "hello from the tls client\n");
+}
+
+@requires(args, filesystem(readonly), network(readonly), clock(readonly))
+Int main() {
+    Option(ServerKey) mk = tls_key_load("tests/tls/fixtures/srv.key");
+    Str e1 = match mk { Some(k) => "", None => "no key" };
+    if (e1 != "") { println(e1); return 1; }
+    ServerKey key = mk else { EdKey([]) };
+    List(List(Int)) chain = tls_chain_load("tests/tls/fixtures/srv.pem");
+    Int lfd = http_listen(0);
+    Int port = http_bound_port(lfd);
+    Result(Int, RegionError) worker = spawn (network(readonly), filesystem(readonly)) {
+        return tls_accept_loop(lfd, tls_cfg(key, chain, ["http/1.1"]), lambda(r) { handle(r) }, http_limits(), 1);
+    };
+    TrustStore store = trust_store_load("tests/tls/fixtures/srvca.pem");
+    Str asked = if (args.count() > 1) { args.get(1) } else { "localhost" };
+    TlsDial d = tls_client_connect("localhost", port, tls_client_cfg(asked, store, ["http/1.1"]));
+    if (d.err != "") {
+        println("DIAL-FAIL " + d.err);
+        Int n = worker else { -1 };
+        return 1;
+    }
+    println("DIAL-OK alpn=" + d.conn.keys.alpn);
+    List(Int) req = http_bytes("GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    WireOut(TlsClient) sent = wire_send(d.conn, req);
+    if (!sent.ok) { println("SEND-FAIL"); return 1; }
+    WireIn(TlsClient) in = wire_fill(sent.conn, [], 64, 65536);
+    if (in.eof && in.data.len() == 0) { println("READ-FAIL"); return 1; }
+    Str body = http_text(in.data, 0, in.data.len());
+    println(f"reply_len={in.data.len()} text_len={str_len(body)}");
+    println("REPLY " + str_slice(body, 0, 15));
+    println("REPLY-BODY " + str_trim(after_head(body)));
+    _ = wire_close(sent.conn);
+    Int n = worker else { -1 };
+    return 0;
+}
+
+// What came after the blank line that ends the head.
+Str after_head(Str s) {
+    return after_head_at(s, 0, str_len(s));
+}
+
+Str after_head_at(Str s, Int i, Int n) {
+    if (i + 1 >= n) { return ""; }
+    if (str_char_at(s, i) == 13 && str_char_at(s, i + 1) == 10) {
+        Int j = i + 2;
+        if (j + 1 < n && str_char_at(s, j) == 13 && str_char_at(s, j + 1) == 10) { return str_slice(s, j + 2, n); }
+    }
+    return after_head_at(s, i + 1, n);
+}

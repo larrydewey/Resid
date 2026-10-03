@@ -16,7 +16,8 @@ When caveman mode is active, apply wenyan-style compression: omit subjects, use 
   hash that contradicts an archive already published under that name/version.
   `https://` is refused, never downgraded: serving one is now possible
   (`lib/tlsserver.resid`, `lib/tlswire.resid`, `examples/https_server.resid`),
-  but fetching one needs a TLS client in `lib/`, which does not exist yet. `[signing] require_signatures` is
+  but a client cannot fetch one: `resid build` refuses `https://` and
+  `tools/resid-fetch.resid` is the way in. `[signing] require_signatures` is
   enforced: the signed index no longer admits a package by itself.
 - **TLS server**: `lib/tlsserver.resid` (the handshake, `TLS_AES_128_GCM_SHA256` and x25519 only, an alert for every refusal) with keys from `lib/tlskey.resid` (PKCS#8 or SEC1, PEM or DER, Ed25519 or ECDSA P-256) and the transport in `lib/tlswire.resid`. `lib/httpserv.resid` declares `Wire(T)` and `Accept(T, C)` and runs its connection path over them, so one handler serves both. The key file's mode is not checked: there is no stat verb.
 - **TLS client**: `lib/chain.resid` holds the trust store (`TrustStore`, a PEM
@@ -26,7 +27,16 @@ When caveman mode is active, apply wenyan-style compression: omit subjects, use 
   (`lib/tlsmsg.resid`'s `tm_cert_list`). Certificate times convert through
   `lib/calendar.resid` into an `Instant`; never reintroduce a packed civil
   integer. Fixtures for `tests/tls` are committed, so the suite needs no
-  openssl and no network.
+  openssl and no network. `lib/tlsclient.resid` is the client half: the
+  handshake, `Wire(TlsClient)`, and `tls_https_get` (one GET, Content-Length
+  required, 64 MB cap). Traffic secrets are directional and getting them
+  backwards still completes a handshake -- the client *reads* with `s_ap`
+  and writes with `c_ap`. `tools/resid-fetch.resid` pulls one registry
+  artifact over https and prints its SHA-256; `resid build` reaches a TLS
+  registry through it (`[registry] path`), because importing
+  `lib/tlsclient.resid` into `tools/resid-manifest.resid` sends the
+  compiler past 20 GB in reduce (the same import in a small program is
+  fine), so `url = "https://..."` stays refused there until that is fixed.
 - **Capabilities**: every function that uses a provider or effectful builtin, directly or through a callee, needs `@requires(...)` (E0219; `SECURITY.md`). Families are `filesystem`, `environment`, `args`, `process`, `network`, `terminal` and `clock`; `network`, `terminal` and `clock` carry modes like `filesystem`, so `clock(readonly)` reads the clock and `clock` also sleeps, and `network(readonly)` covers everything but `resid_tcp_listen_at` (binding a non-loopback address is the one network write, `gk_builtin_write`). A new provider verb used by the compiler's own source needs a two-step bootstrap: build a stage from source that avoids the verb, compile the real source with it, then seed from that IR (compile with the absolute source path, as `boot.sh` does).
 - **HTTP server**: `lib/httpserv.resid` (HTTP/1.1 over `List(Int)` buffers: Content-Length and chunked bodies, keep-alive, pipelining, `http_route`, `HttpLimits`, smuggling shapes refused) and `examples/http_server.resid` (worker regions sharing one listener). Runtime sockets in `runtime/rt/net.resid`: `resid_tcp_listen` (loopback), `resid_tcp_listen_at` (any interface, a `network` write), `resid_tcp_recv_some`, `resid_tcp_shutdown`. A new TCP builtin needs four places: the `@export` in `net.resid`, the type in `typecheck.resid` and `codegen.resid`, and the `declare` in the driver tail's `hdr_core` (plus `ls_builtins` in `compiler/lsp.resid`); then reseed. Gotcha: a top-level function named like a built-in method (`get`) is picked by method sugar (`m.get(k)`), even inside library code.
 - **Date and time**: `lib/calendar.resid` (proleptic Gregorian), `lib/duration.resid` (fixed-length spans), `lib/instant.resid` (timeline points, UTC leap seconds), `lib/zone.resid` (TZif v1/v2/v3 and POSIX TZ strings, `filesystem(readonly)` only to read the zone files), `lib/datetime.resid` (Zoned, strftime, ISO 8601 / RFC 3339) and `lib/clock.resid` (the only `@requires(clock)` surface, backed by `resid_clock_*` in `runtime/rt/time.resid`). Everything except the last needs no capability: only reading *now* is an effect.
