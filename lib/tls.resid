@@ -231,10 +231,14 @@ type TsTake = { TsIn in; List(Int) bytes; Bool ok; };
 
 @requires(network(readonly))
 TsTake ts_take(TsIn s, Int n) {
-    if (s.buf.len() >= n || s.eof) {
-        List(Int) want = slice_seed(s.buf, 0, n, []);
-        List(Int) rest = slice_seed(s.buf, n, s.buf.len() - n, []);
-        Bool ok = s.buf.len() >= n;
+    Int have = s.buf.len();
+    // Clamped: a peer that closes with less than n bytes still in hand is
+    // the end of the connection, not an index past the end of the buffer.
+    Int take = if (have > n) { n } else { have };
+    if (have >= n || s.eof) {
+        List(Int) want = slice_seed(s.buf, 0, take, []);
+        List(Int) rest = slice_seed(s.buf, take, have - take, []);
+        Bool ok = have >= n;
         return TsTake { .in = TsIn { .fd = s.fd, .buf = rest, .eof = s.eof }, .bytes = want, .ok = ok };
     }
     return ts_take(ts_fill(s), n);
