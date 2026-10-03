@@ -84,14 +84,13 @@ pub TlsDial tls_client_connect(Str host, Int port, TlsClientCfg cfg) {
     List(Int) priv = random_bytes(32);
     List(Int) pub = x25519(priv, tc_base());
     List(Int) share = slice_seed(pub, 0, 32, []);
-    List(Int) ch = tlsmsg_client_hello(cfg.name, random_bytes(32), share);
+    List(Int) ch = tlsmsg_client_hello(cfg.name, cfg.alpn, random_bytes(32), share);
     if (!tc_send_plain(fd, ch)) {
         _ = resid_tcp_close(fd);
         return tls_dial_err("cannot send the client hello");
     }
     TsRec sh_rec = ts_read_record(ts_in(fd));
     if (!sh_rec.ok || sh_rec.ctype != 22) {
-        eprintln(f"DBG first_record ok={sh_rec.ok} type={sh_rec.ctype} body={hex_encode(sh_rec.body)}");
         _ = resid_tcp_close(fd);
         return tls_dial_err("the server did not answer with a handshake");
     }
@@ -167,16 +166,16 @@ pub TlsDial tls_client_connect(Str host, Int port, TlsClientCfg cfg) {
     List(Int) master = tls_master_secret(hs);
     List(Int) c_ap = tls_c_ap_traffic(master, th4);
     List(Int) s_ap = tls_s_ap_traffic(master, th4);
-    // Both directions are the client's traffic secret: c_ap is what the
-    // client reads with and what it writes with. (The server side gets
-    // s_ap for its write and c_ap for its read -- the same secret seen from
-    // two ends, and swapping them produces a handshake that completes and
-    // then an application record nobody can open.)
     // Directional (RFC 8446 §7.1): the client *reads* with the server's
     // application traffic secret and *writes* with its own. Using one
     // secret for both is a handshake that completes and then an
     // application record neither end can open.
-    TlsKeys keys = tls_keys_pending(tls_traffic_key(s_ap), tls_traffic_iv(s_ap), tls_traffic_key(c_ap), tls_traffic_iv(c_ap), tc_pick_alpn(cfg.alpn), fl.in.buf);
+    Str alpn = tc_chosen_alpn(fl.msgs, cfg.alpn);
+    if (alpn == "!refused") {
+        _ = resid_tcp_close(fd);
+        return tls_dial_err("the server selected a protocol this client did not offer");
+    }
+    TlsKeys keys = tls_keys_pending(tls_traffic_key(s_ap), tls_traffic_iv(s_ap), tls_traffic_key(c_ap), tls_traffic_iv(c_ap), alpn, fl.in.buf);
     TlsClient c = TlsClient { .fd = fd, .keys = keys, .eof = false, .buf = fl.in.buf };
     return TlsDial { .conn = c, .err = "" };
 }
@@ -189,9 +188,21 @@ Str ts_suite_name() {
 // computed it: the first this client offers that the server also offered,
 // which the client cannot know from ServerHello alone -- so the transport
 // records what was asked for and the caller checks it.
-Str tc_pick_alpn(List(Str) want) {
-    if (want.len() == 0) { return ""; }
-    return want[0];
+// The protocol both ends are speaking: the one the server selected, and
+// only if this client offered it. An empty list means the server declined
+// ALPN. A selection this client never offered is a refusal, not something
+// to fall back from -- the alternative is speaking a protocol the server
+// refused, which is how an http/1.1 request ends up in an h2 connection.
+Str tc_chosen_alpn(List(Int) msgs, List(Str) offered) {
+    List(Str) picked = ts_ee_alpn(tc_body(tc_msg_at(msgs, 8, 0)));
+    if (picked.len() == 0) { return ""; }
+    return if (tc_offers_str(offered, 0, picked[0])) { picked[0] } else { "!refused" };
+}
+
+Bool tc_offers_str(List(Str) xs, Int i, Str s) {
+    if (i >= xs.len()) { return false; }
+    if (xs[i] == s) { return true; }
+    return tc_offers_str(xs, i + 1, s);
 }
 
 // The certificates after the leaf, which the trust store may need to walk
@@ -435,7 +446,7 @@ WireIn(TlsClient) tls_fill_at(TlsClient c, List(Int) have, Int want, Int cap, In
     }
     TsIn in = TsIn { .fd = c.fd, .buf = c.buf, .eof = c.eof };
     TsRec r = ts_read_record(in);
-    if (!r.ok) { eprintln("CLI-REC-FAIL");
+    if (!r.ok) {
         TlsClient dead = TlsClient { .fd = c.fd, .keys = c.keys, .eof = true, .buf = r.in.buf };
         WireIn(TlsClient) out = WireIn { .conn = dead, .data = have, .eof = true };
         return out;

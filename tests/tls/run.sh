@@ -460,6 +460,20 @@ timeout 180 "$W/tlsclient2" 127.0.0.2 > "$W/client_ip2.out" 2>&1
 grep -q "not trusted for '127.0.0.2'" "$W/client_ip2.out" && ok \
     || bad "wrong iPAddress SAN refused: $(tail -2 "$W/client_ip2.out" | tr '\n' ' ')"
 
+# ALPN is negotiated or it is nothing: offering h2 first and http/1.1
+# second still ends in http/1.1, because the server chooses out of the
+# intersection and the client reports what came back over the wire. A client
+# that reported its own first choice would pass the first case while
+# speaking a protocol the server never agreed to. Offering only h2 to a
+# server that speaks http/1.1 gets no ALPN at all, which RFC 7301 allows --
+# and "no ALPN" has to survive as no ALPN, not as an invented one.
+timeout 180 "$W/tlsclient2" alpn-h2first > "$W/client_alpn.out" 2>&1
+grep -q "^DIAL-OK alpn=http/1.1$" "$W/client_alpn.out" && ok \
+    || bad "the server's choice wins over the client's order: $(grep -E '^DIAL' "$W/client_alpn.out" | tr '\n' ' ')"
+timeout 180 "$W/tlsclient2" alpn-h2only > "$W/client_noalpn.out" 2>&1
+grep -q "^DIAL-OK alpn=$" "$W/client_noalpn.out" && ok \
+    || bad "declined ALPN is not an invented one: $(grep -E '^DIAL' "$W/client_noalpn.out" | tr '\n' ' ')"
+
 # A trust store that does not contain the issuer is refused, and the
 # handshake says which name it could not verify rather than hanging up
 # silently: no store means nothing is trusted.

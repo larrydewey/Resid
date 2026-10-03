@@ -182,6 +182,7 @@ should not be running this.
 | A name that does not verify is refused by name -- `not trusted for 'otherhost'` -- rather than by a timeout or a silent close. | untrusted name refused |
 | An address SAN is matched as bytes, exactly. `127.0.0.1` in a certificate is not a wildcard for the loopback. | iPAddress SAN, wrong iPAddress SAN refused |
 | A response is only accepted with a Content-Length, and over a 64 MB cap. A body is never read to close, because a registry that keeps streaming is a registry that can stream forever. | (cap and `Content-Length` required in `tls_https_get`) |
+| ALPN is negotiated, not assumed. The client's offers go on the wire in its ClientHello, the server's choice comes back in EncryptedExtensions, and a client offered a protocol the server did not name fails rather than picking for itself. | server choice wins over the client's order, declined ALPN is not an invented one |
 | What arrives is not trusted for it: `resid-fetch` prints the SHA-256 and `resid build` still verifies the index against `[registry] pubkey` and every archive against its hash. The indirection adds transport authentication, not trust. | (unchanged in `tests/pkg/run.sh`) |
 
 The direction of the TLS 1.3 traffic secrets is the one mistake that a

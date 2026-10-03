@@ -266,7 +266,7 @@ pub TlsResult tls_server_handshake(Int fd, ServerKey key, List(List(Int)) chain,
     List(Int) hs = tls_handshake_secret(shared);
     List(Int) c_hs = tls_c_hs_traffic(hs, th1);
     List(Int) s_hs = tls_s_hs_traffic(hs, th1);
-    List(Int) ee = ts_encrypted_extensions();
+    List(Int) ee = ts_encrypted_extensions(alpn);
     List(Int) cert = ts_certificate(chain);
     List(Int) tr2 = sconcat(tr1, ee.concat(cert));
     List(Int) th2 = ts_hash(tr2);

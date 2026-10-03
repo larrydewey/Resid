@@ -33,7 +33,14 @@ Int main() {
         return tls_accept_loop(lfd, tls_cfg(key, chain, ["http/1.1"]), lambda(r) { handle(r) }, http_limits(), 1);
     };
     TrustStore store = trust_store_load("tests/tls/fixtures/srvca.pem");
-    Str asked = if (args.count() > 1) { args.get(1) } else { "localhost" };
+    Str mode = if (args.count() > 1) { args.get(1) } else { "" };
+    Str asked = if (mode == "otherhost" || mode == "127.0.0.1" || mode == "127.0.0.2") { mode } else { "localhost" };
+    // ALPN modes: what the client offers is not what the connection ends up
+    // speaking. The server chooses out of the intersection, so offering h2
+    // first and http/1.1 second still ends in http/1.1, and offering only
+    // h2 to a server that speaks http/1.1 ends in no ALPN at all.
+    List(Str) offered = if (args.count() > 1 && args.get(1) == "alpn-h2first") { ["h2", "http/1.1"] }
+        else { if (args.count() > 1 && args.get(1) == "alpn-h2only") { ["h2"] } else { ["http/1.1"] } };
     if (args.count() > 1 && args.get(1) == "parse") {
         println(ip_check("127.0.0.1", 4));
         println(ip_check("127.0.0.10", 4));
@@ -49,7 +56,7 @@ Int main() {
         println(ip_check("localhost", 0));
         return 0;
     }
-    TlsDial d = tls_client_connect("localhost", port, tls_client_cfg(asked, store, ["http/1.1"]));
+    TlsDial d = tls_client_connect("localhost", port, tls_client_cfg(asked, store, offered));
     if (d.err != "") {
         println("DIAL-FAIL " + d.err);
         Int n = worker else { -1 };

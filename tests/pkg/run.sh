@@ -41,7 +41,16 @@ serve() {  # dir
 for t in resid-pkg resid-manifest; do
     (cd "$ROOT" && "$COMPILER" "tools/$t.resid" -o "$W/$t") > "$W/$t.log" 2>&1 || { echo "FAIL build $t"; cat "$W/$t.log" | grep -i error | head -3; exit 1; }
 done
-PKG="$W/resid-pkg"; MAN="$W/resid-manifest"
+# The https path into a registry: the fetch tool and the server that
+# publishes one. `resid build` cannot import the TLS client itself (the
+# compiler goes past its memory budget in reduce), so these two are how an
+# https registry is reached, and they are built here because the cases
+# below drive them for real.
+(cd "$ROOT" && "$COMPILER" tools/resid-fetch.resid -o "$W/resid-fetch") > "$W/resid-fetch.log" 2>&1 || {
+    echo "FAIL build resid-fetch"; grep -i error "$W/resid-fetch.log" | head -3; exit 1; }
+(cd "$ROOT" && "$COMPILER" examples/https_server.resid -o "$W/https") > "$W/https.log" 2>&1 || {
+    echo "FAIL build https_server"; grep -i error "$W/https.log" | head -3; exit 1; }
+PKG="$W/resid-pkg"; MAN="$W/resid-manifest"; FETCH="$W/resid-fetch"; HTTPS="$W/https"
 # The driver finds the standard library and the runtime IR under RESID_HOME;
 # without it they resolve relative to the current directory.
 export RESID_HOME="${RESID_HOME:-$ROOT/build/boot}"
@@ -224,9 +233,58 @@ mkdir -p "$W/remboth/src"
 printf '[package]\nname = "remboth"\nversion = "0.1.0"\n\n[registry]\npath = "../reg"\nurl = "%s"\n\n[dependencies.greet]\nversion = "1.0.0"\n' "$URL" > "$W/remboth/resid.toml"
 printf 'Int main() { return 0; }\n' > "$W/remboth/src/main.resid"
 expect_fail remboth "sets both path and url"
-# https:// is refused outright rather than downgraded to plaintext.
+# https:// is refused outright rather than downgraded to plaintext -- and the
+# refusal says what to do instead, because the client exists.
 rapp remhttps "pubkey = \"$PUB\"" "https://127.0.0.1:$PORT"
-expect_fail remhttps "not wired"
+expect_fail remhttps "resid-fetch"
+
+# ── the same registry over https, fetched and then built ──────────────
+# A registry published to disk, served over TLS by examples/https_server.resid,
+# pulled one artifact at a time by tools/resid-fetch.resid, and then resolved
+# by resid-manifest from the fetched directory. The signatures and hashes are
+# checked exactly where they always were: what the fetch adds is transport
+# authentication, nothing more.
+"$HTTPS" --cert "$ROOT/tests/tls/fixtures/srv.pem" --key "$ROOT/tests/tls/fixtures/srv.key" \
+    --port 0 --port-file "$W/tlsport" --alpn http/1.1 --root "$W/reghttp" > "$W/https.out" 2>&1 &
+SRVS="$SRVS $!"
+TLSI=0
+while [ ! -s "$W/tlsport" ] && [ $TLSI -lt 150 ]; do sleep 0.1; TLSI=$((TLSI + 1)); done
+TLSPORT="$(cat "$W/tlsport" 2>/dev/null)"
+if [ -n "$TLSPORT" ]; then
+    mkdir -p "$W/regtls/pkg"
+    ok_tls=1
+    for a in index.resid-idx index.resid-sig greet-1.0.0.resid-pkg greet-1.0.0.resid-sha256 greet-1.0.0.resid-sig; do
+        timeout 120 "$FETCH" "https://localhost:$TLSPORT" "$ROOT/tests/tls/fixtures/srvca.pem" \
+            "/files/pkg/$a" "$W/regtls/pkg/$a" > "$W/fetch-$a.out" 2>&1 || { ok_tls=0; break; }
+    done
+    if [ "$ok_tls" = 1 ] && cmp -s "$W/reghttp/pkg/index.resid-idx" "$W/regtls/pkg/index.resid-idx" \
+        && cmp -s "$W/reghttp/pkg/greet-1.0.0.resid-pkg" "$W/regtls/pkg/greet-1.0.0.resid-pkg" \
+        && cmp -s "$W/reghttp/pkg/greet-1.0.0.resid-sig" "$W/regtls/pkg/greet-1.0.0.resid-sig"; then ok
+    else bad "resid-fetch over https: $(cat "$W"/fetch-*.out 2>/dev/null | tr '\n' ' ' | tail -c 200)"; fi
+
+    # And the fetched directory is a working registry: the same app, the same
+    # pubkey, resolved from bytes that arrived over TLS.
+    mkdir -p "$W/tlsdep/src"
+    printf '[package]\nname = "tlsdep"\nversion = "0.1.0"\n\n[registry]\npath = "../regtls"\npubkey = "%s"\n\n[dependencies.greet]\nversion = "1.0.0"\n' "$PUB" > "$W/tlsdep/resid.toml"
+    printf 'import "greet";\nInt main() { println(greet()); return 0; }\n' > "$W/tlsdep/src/main.resid"
+    deps tlsdep
+    [ $? -eq 0 ] && ok || bad "resolve from a registry fetched over https: $(tail -1 "$W/tlsdep.out")"
+
+    # A name the certificate does not carry: refused before any byte is
+    # trusted, and the tool says which name failed.
+    timeout 120 "$FETCH" "https://localhost:$TLSPORT" "$ROOT/tests/tls/fixtures/srvca.pem" \
+        "/files/pkg/index.resid-idx" "$W/regtls/pkg/index.resid-idx" > "$W/fetch_ok.out" 2>&1
+    timeout 120 "$FETCH" "https://localhost:$TLSPORT" "$ROOT/tests/tls/fixtures/other.pem" \
+        "/files/pkg/index.resid-idx" "$W/regtls/pkg/index.resid-idx" > "$W/fetch_badca.out" 2>&1
+    if grep -q "not trusted" "$W/fetch_badca.out"; then ok
+    else bad "a trust store without the issuer: $(tail -1 "$W/fetch_badca.out")"; fi
+
+    # No store at all is a refusal, never a downgrade to plaintext.
+    timeout 120 "$FETCH" "https://localhost:$TLSPORT" "" "/files/pkg/index.resid-idx" \
+        "$W/regtls/pkg/index.resid-idx" > "$W/fetch_nostore.out" 2>&1
+    grep -q "trusts nothing" "$W/fetch_nostore.out" && ok \
+        || bad "no trust store: $(tail -1 "$W/fetch_nostore.out")"
+else bad "the https registry server did not report a port: $(tail -2 "$W/https.out")"; fi
 # Nothing listening at all: a transport failure, not a fetch of nothing.
 rapp remdead "pubkey = \"$PUB\"" "http://127.0.0.1:1"
 expect_fail remdead "cannot connect to registry host"

@@ -183,8 +183,8 @@ pub List(Int) sh_scan(List(Int) sh, Int pos, Int stop) {
 // fixture and wrong for anything else. `tlsmsg_client_hello` keeps the
 // old two-argument shape and sends no server name at all.
 
-pub List(Int) tlsmsg_client_hello(Str sni, List(Int) random32, List(Int) share32) {
-    List(Int) exts = tls_client_exts(sni, share32);
+pub List(Int) tlsmsg_client_hello(Str sni, List(Str) alpn, List(Int) random32, List(Int) share32) {
+    List(Int) exts = tls_client_exts(sni, alpn, share32);
     List(Int) sid = [0];
     List(Int) body = [3, 3].concat(random32).concat(sid).concat(ts_u16(2)).concat(ts_u16(ts_suite_aes128gcm())).concat([1, 0]).concat(ts_u16(exts.len()));
     return ts_message(1, body.concat(exts));
@@ -202,23 +202,44 @@ pub List(Int) tlsmsg_client_hello(Str sni, List(Int) random32, List(Int) share32
 //   supported_groups      x25519, which is the only group below signs
 //   session_ticket        empty: this client resumes nothing
 //   key_share             the x25519 share, the one thing that must be here
+//   alpn                  the protocols this client offers, or nothing
 //   supported_versions    TLS 1.3, or the server answers TLS 1.2 at most
 //   signature_algorithms  what a server may sign with
 //   psk_key_exchange_modes  psk_dhe_ke, so a resumption would be possible
-List(Int) tls_client_exts(Str sni, List(Int) share32) {
+List(Int) tls_client_exts(Str sni, List(Str) alpn, List(Int) share32) {
     List(Int) e = tls_ext_server_name(sni);
     List(Int) e2 = ts_ext_bytes(e, 21, [1, 0]);
     List(Int) e3 = ts_ext_bytes(e2, 10, ts_u16(8).concat(ts_u16(29)).concat(ts_u16(23)).concat(ts_u16(24)).concat(ts_u16(25)));
     List(Int) e4 = ts_ext_bytes(e3, 35, [0]);
     List(Int) share = ts_u16(36).concat(ts_u16(29)).concat(ts_u16(32)).concat(share32);
     List(Int) e5 = ts_ext_bytes(e4, 51, share);
-    List(Int) e6 = ts_ext_bytes(e5, 43, [2, 3, 4]);
-    List(Int) e7 = ts_ext_bytes(e6, 13, ts_u16(8).concat(tls_client_sigalgs()));
-    List(Int) e8 = ts_ext_bytes(e7, 45, [1, 1]);
-    return e8;
+    // ALPN is what this client offers, in preference order, and it cannot
+    // be a constant: an offer that never reaches the wire leaves the server
+    // with nothing to choose from, and a client that then reports its own
+    // wish as the negotiated protocol has proved nothing at all.
+    List(Int) e6 = if (alpn.len() == 0) { e5 } else { ts_ext_bytes(e5, 16, tls_alpn_ext_data(alpn)) };
+    List(Int) e7 = ts_ext_bytes(e6, 43, [2, 3, 4]);
+    List(Int) e8 = ts_ext_bytes(e7, 13, ts_u16(8).concat(tls_client_sigalgs()));
+    List(Int) e9 = ts_ext_bytes(e8, 45, [1, 1]);
+    return e9;
 }
 
 // server_name with one name of type host_name (0).
+// ProtocolNameList: a u16 length, then each name as a length byte and
+// bytes. An empty name is skipped rather than sent, since a zero-length
+// name is not a protocol.
+List(Int) tls_alpn_ext_data(List(Str) names) {
+    List(Int) body = ts_alpn_names(names, 0, []);
+    return ts_u16(body.len()).concat(body);
+}
+
+List(Int) ts_alpn_names(List(Str) names, Int i, List(Int) acc) {
+    if (i >= names.len()) { return acc; }
+    List(Int) n = str_to_bytes(names[i]);
+    if (n.len() < 1 || n.len() > 255) { return ts_alpn_names(names, i + 1, acc); }
+    return ts_alpn_names(names, i + 1, acc.concat([n.len()]).concat(n));
+}
+
 List(Int) tls_ext_server_name(Str sni) {
     List(Int) name = str_to_bytes(sni);
     Int n = name.len();
@@ -673,6 +694,25 @@ pub Bool ts_offers_sigalg(ClientHello ch, Int code) {
     return ts_u16_in(ch.sigalgs, 0, code);
 }
 
+// The protocol the server selected, out of EncryptedExtensions. This is
+// the server's choice of one of the client's offers, not a list to pick
+// from: a client that offered h2 and http/1.1 and is answered with h2 has
+// been told to speak h2, and one that picks for itself here is a client
+// that will send h2 to a server that never agreed to it. Empty means the
+// server declined ALPN, which RFC 7301 allows.
+pub List(Str) ts_ee_alpn(List(Int) ee) {
+    List(Str) none = [];
+    if (ee.len() < 2) { return none; }
+    Int exts_len = ts_u16_at(ee, 0);
+    if (exts_len > ee.len() - 2) { return none; }
+    Ext e = ts_ext_find(ee, 2, 2 + exts_len, 16);
+    if (e.type < 0 || e.len < 3) { return none; }
+    Int list_len = ts_u16_at(ee, e.start);
+    Int stop = e.start + 2 + list_len;
+    if (list_len < 1 || stop > e.start + e.len) { return none; }
+    return ts_alpn_scan(ee, e.start + 2, stop, none);
+}
+
 // The first protocol in `want` the client also offered, or "" when it
 // offered none of them. The server's order wins: this is a list of what
 // the server speaks, most preferred first (RFC 7301 §3.2).
@@ -737,9 +777,17 @@ List(Int) ts_ext_bytes(List(Int) acc, Int etype, List(Int) value) {
     return acc.concat(ts_u16(etype)).concat(ts_u16(value.len())).concat(value);
 }
 
-// EncryptedExtensions: no extensions this server needs to say.
-pub List(Int) ts_encrypted_extensions() {
-    return ts_message(8, ts_u16(0));
+// EncryptedExtensions carrying the protocol the server selected, or an
+// empty extension list when it declined ALPN (RFC 7301 §3.2 lets it).
+// Sending nothing while still recording a choice locally is worse than not
+// speaking ALPN at all: the client then has nothing to read and falls back
+// to what it hoped for.
+pub List(Int) ts_encrypted_extensions(Str alpn) {
+    if (alpn == "") { return ts_message(8, ts_u16(0)); }
+    List(Int) name = str_to_bytes(alpn);
+    if (name.len() < 1 || name.len() > 255) { return ts_message(8, ts_u16(0)); }
+    List(Int) data = ts_u16(1 + name.len()).concat([name.len()]).concat(name);
+    return ts_message(8, ts_u16(4 + data.len()).concat(ts_ext_bytes([], 16, data)));
 }
 
 // Certificate: an empty request context, then the chain leaf first.
