@@ -1,0 +1,138 @@
+// ─── lib/wire.resid — what a connection is ─────────────────────────────
+//
+// The vocabulary for reading and writing a connection, and the one
+// transport that needs no library: TCP.
+//
+// lib/httpserv.resid declares what its request loop asks of a connection
+// and runs on any answer; lib/tlswire.resid answers it with TLS on the
+// server side, lib/tlsclient.resid on the client side, and the plain
+// transport here. Keeping the declaration in its own module is what lets a
+// TLS *client* depend on it without dragging in the HTTP *server*.
+//
+// Everything is `network(readonly)`: reading and writing on a socket the
+// caller already holds is reading from the network. Binding an address
+// other machines can reach is the one write, and it is not here.
+//
+// A transport is immutable, and that is what shapes the interface: a read
+// and a send each carry the connection's new state back to the caller
+// rather than storing it somewhere both can see. A TLS connection advances
+// a record counter on every read and every write, and there is no interior
+// mutability to put it in.
+
+import "crypto.resid";
+
+// What a fill produced: the plaintext now available, and the transport
+// advanced past whatever it consumed to get it. A read is not a read on
+// every transport: a TLS connection answers with decrypted application
+// data and consumes records to produce it.
+type WireIn(T) = { T conn; List(Int) data; Bool eof; };
+
+// What a send produced: the transport with its write side advanced, and
+// whether every byte went out.
+type WireOut(T) = { T conn; Bool ok; };
+
+behavior Wire(T) {
+    // Add plaintext until `have` holds at least `want` bytes, the peer
+    // is done, or the total would pass `cap`.
+    WireIn(T) wire_fill(T w, List(Int) have, Int want, Int cap);
+    // Write every byte of `b`, in whatever pieces the transport needs.
+    WireOut(T) wire_send(T w, List(Int) b);
+    // End the connection, leaving nothing unsent.
+    Bool wire_close(T w);
+}
+
+// What an accepted socket became. `ok` is false when the transport could
+// not serve it -- a handshake that failed, say -- and `conn` is then
+// meaningless. A record rather than an `Option(T)`: narrowing an option
+// to its payload needs a value of `T` to fall back on, and a generic
+// function has none to offer.
+type Accepted(T) = { T conn; Bool ok; };
+
+behavior Accept(T, C) {
+    Accepted(T) wire_accept(C conf, Int fd);
+}
+
+// ─── Plain: a socket ───────────────────────────────────────────────────
+//
+// The transport everything else is measured against, and the one a
+// plaintext HTTP server has always used.
+
+// The plain transport needs no configuration; the parameter is there so
+// every transport can share one accept behaviour.
+type PlainCfg = { Bool none; };
+
+pub PlainCfg plain_cfg() {
+    return PlainCfg { .none = true };
+}
+
+@requires(network(readonly))
+WireIn(Int) plain_fill(Int fd, List(Int) have, Int want, Int cap) {
+    Int room = if (cap > have.len()) { cap - have.len() } else { 0 };
+    Int ask = if (room > 16384) { 16384 } else { room };
+    if (ask <= 0) {
+        WireIn(Int) none = WireIn { .conn = fd, .data = have, .eof = false };
+        return none;
+    }
+    // `resid_tcp_recv_some`, never `resid_tcp_recv_bin`: the latter reads
+    // *exactly* n bytes and zero-pads the rest, which is right when the
+    // length is already known and wrong here, where the bytes arriving are
+    // whatever the peer chose to send.
+    List(Int) more = resid_tcp_recv_some(fd, ask);
+    List(Int) both = have.concat(more);
+    Bool done = more.len() == 0;
+    WireIn(Int) out = WireIn { .conn = fd, .data = both, .eof = done };
+    return out;
+}
+
+@requires(network(readonly))
+WireOut(Int) plain_send(Int fd, List(Int) b) {
+    Bool ok = plain_send_at(fd, b, 0);
+    WireOut(Int) out = WireOut { .conn = fd, .ok = ok };
+    return out;
+}
+
+// Write in pieces the runtime accepts (1 MiB), so a large artifact is not
+// one call the socket will refuse.
+@requires(network(readonly))
+Bool plain_send_at(Int fd, List(Int) b, Int at) {
+    Int n = b.len() - at;
+    if (n <= 0) { return true; }
+    Int take = if (n > 1048576) { 1048576 } else { n };
+    Bool ok = resid_tcp_send_bin(fd, b[at..(at + take)]);
+    if (!ok) { return false; }
+    Int next = at + take;
+    return plain_send_at(fd, b, next);
+}
+
+// Close without losing the reply: half-close, drain what the peer is still
+// sending (bounded), then close. Closing with unread bytes would reset the
+// socket and discard the reply at the peer.
+@requires(network(readonly))
+Bool plain_close(Int fd) {
+    _ = resid_tcp_shutdown(fd);
+    _ = plain_drain(fd, 32);
+    return resid_tcp_close(fd);
+}
+
+@requires(network(readonly))
+Int plain_drain(Int fd, Int rounds) {
+    if (rounds <= 0) { return 0; }
+    List(Int) got = resid_tcp_recv_some(fd, 16384);
+    if (got.len() == 0) { return 0; }
+    Int nr = rounds - 1;
+    return plain_drain(fd, nr);
+}
+
+Accepted(Int) plain_accept(PlainCfg conf, Int fd) {
+    return Accepted { .conn = fd, .ok = true };
+}
+
+Wire(Int) = { .wire_fill = plain_fill, .wire_send = plain_send, .wire_close = plain_close };
+Accept(Int, PlainCfg) = plain_accept;
+
+// Connect to `host:port`, or -1. Loopback and anywhere else alike: the
+// caller decides what authority it needs to reach, not this verb.
+@requires(network(readonly))
+pub Int wire_connect(Str host, Int port) {
+    return resid_tcp_connect(host, port);
+}

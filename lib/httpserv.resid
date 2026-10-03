@@ -5,13 +5,10 @@
 // resid_tcp_recv_some, resid_tcp_send_bin, resid_tcp_shutdown and
 // resid_tcp_close.
 //
-// The connection is a transport, not a file descriptor. `Wire(T)` is what
-// the request loop asks of one -- fill, send, close -- and `Accept(T, C)`
-// is what the accept loop asks of one to turn an accepted socket into a
-// connection, which for TLS means running a handshake and so needs a
-// configuration. Both live here because this is the layer that needs
-// them; the TLS instance of them is lib/tlswire.resid, and the same
-// handler serves both.
+// The connection is a transport, not a file descriptor: `Wire(T)` and
+// `Accept(T, C)` from lib/wire.resid, with the TLS instance of them in
+// lib/tlswire.resid. The same handler serves both, and the plain
+// plain transport in lib/wire.resid is what this file has always done.
 //
 // Capabilities: everything here is `network(readonly)` — accepting and
 // answering connections on a listener you already hold is reading from the
@@ -23,6 +20,8 @@
 // listener as it wants workers (the kernel hands each connection to one
 // of them). The spawn lists the handler's capabilities, which this library
 // cannot know. See examples/http_server.resid.
+
+import "wire.resid";
 
 // A parsed request. `headers` keys are lower-cased; repeated fields are
 // joined with ", ". `ok` is false when the request was rejected, with
@@ -59,97 +58,6 @@ pub Int http_listen_at(Str host, Int port) { return resid_tcp_listen_at(host, po
 // The port a listener bound, or -1.
 @requires(network(readonly))
 pub Int http_bound_port(Int lfd) { return resid_tcp_bound_port(lfd); }
-
-// ─── Transports ─────────────────────────────────────────────────────────
-
-// What a fill produced: the plaintext now available, and the transport
-// advanced past whatever it consumed to get it. A read is not a read on
-// every transport: a TLS connection answers with decrypted application
-// data and consumes records to produce it.
-type WireIn(T) = { T conn; List(Int) data; Bool eof; };
-
-// What a send produced: the transport with its write side advanced, and
-// whether every byte went out.
-type WireOut(T) = { T conn; Bool ok; };
-
-behavior Wire(T) {
-    // Add plaintext until `have` holds at least `want` bytes, the peer
-    // is done, or the total would pass `cap`.
-    WireIn(T) wire_fill(T w, List(Int) have, Int want, Int cap);
-    // Write every byte of `b`, in whatever pieces the transport needs.
-    WireOut(T) wire_send(T w, List(Int) b);
-    // End the connection, leaving nothing unsent.
-    Bool wire_close(T w);
-}
-
-// What an accepted socket became. `ok` is false when the transport could
-// not serve it -- a handshake that failed, say -- and `conn` is then
-// meaningless. A record rather than an `Option(T)`: narrowing an option
-// to its payload needs a value of `T` to fall back on, and a generic
-// function has none to offer.
-type Accepted(T) = { T conn; Bool ok; };
-
-behavior Accept(T, C) {
-    Accepted(T) wire_accept(C conf, Int fd);
-}
-
-// The plain transport needs no configuration; the parameter is there so
-// both transports share one accept behaviour.
-type PlainCfg = { Bool none; };
-
-pub PlainCfg plain_cfg() {
-    return PlainCfg { .none = true };
-}
-
-// Plain is what this file has always done: read what the socket has,
-// write what it was given.
-@requires(network(readonly))
-WireIn(Int) plain_fill(Int fd, List(Int) have, Int want, Int cap) {
-    Int room = if (cap > have.len()) { cap - have.len() } else { 0 };
-    Int ask = if (room > 16384) { 16384 } else { room };
-    if (ask <= 0) {
-        WireIn(Int) none = WireIn { .conn = fd, .data = have, .eof = false };
-    return none;
-    }
-    List(Int) more = resid_tcp_recv_some(fd, ask);
-    List(Int) both = have.concat(more);
-    Bool done = more.len() == 0;
-    WireIn(Int) out = WireIn { .conn = fd, .data = both, .eof = done };
-    return out;
-}
-
-@requires(network(readonly))
-WireOut(Int) plain_send(Int fd, List(Int) b) {
-    Bool ok = http_send_chunks(fd, b, 0);
-    WireOut(Int) out = WireOut { .conn = fd, .ok = ok };
-    return out;
-}
-
-// Close without losing the reply: half-close, drain what the peer is
-// still sending (bounded), then close. Closing with unread bytes would
-// reset the socket and discard the reply at the peer.
-@requires(network(readonly))
-Bool plain_close(Int fd) {
-    _ = resid_tcp_shutdown(fd);
-    _ = plain_drain(fd, 32);
-    return resid_tcp_close(fd);
-}
-
-@requires(network(readonly))
-Int plain_drain(Int fd, Int rounds) {
-    if (rounds <= 0) { return 0; }
-    List(Int) got = resid_tcp_recv_some(fd, 16384);
-    if (got.len() == 0) { return 0; }
-    Int nr = rounds - 1;
-    return plain_drain(fd, nr);
-}
-
-Accepted(Int) plain_accept(PlainCfg conf, Int fd) {
-    return Accepted { .conn = fd, .ok = true };
-}
-
-Wire(Int) = { .wire_fill = plain_fill, .wire_send = plain_send, .wire_close = plain_close };
-Accept(Int, PlainCfg) = plain_accept;
 
 // ─── Bytes and text ─────────────────────────────────────────────────────
 
@@ -574,20 +482,6 @@ pub List(Int) http_reply_wire(HttpReply reply, Bool keep_alive, Bool head_only) 
         + f"Content-Length: {n}\r\nConnection: " + conn + "\r\n\r\n";
     Bool bodyless = head_only || reply.status == 204 || reply.status == 304 || (reply.status >= 100 && reply.status < 200);
     return if (bodyless) { http_bytes(head) } else { http_bytes(head).concat(reply.body) };
-}
-
-// Send bytes on a socket, in pieces the runtime accepts (1 MiB). The
-// transport decides what a send is; this is the plain one, and what
-// `wire_send` calls.
-@requires(network(readonly))
-pub Bool http_send_chunks(Int fd, List(Int) b, Int at) {
-    Int n = b.len() - at;
-    if (n <= 0) { return true; }
-    Int take = if (n > 1048576) { 1048576 } else { n };
-    Bool ok = resid_tcp_send_bin(fd, b[at..(at + take)]);
-    if (!ok) { return false; }
-    Int next = at + take;
-    return http_send_chunks(fd, b, next);
 }
 
 // Write every byte of `b` through the connection's transport.

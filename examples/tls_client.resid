@@ -326,7 +326,7 @@ Int main() {
     List(Int) cpub = x25519(cpriv, basel);
     List(Int) cpb = slice_seed(cpub, 0, 32, []);
     List(Int) rnd = random_bytes(32);
-    List(Int) chbody = tlsmsg_client_hello(rnd, cpb);
+    List(Int) chbody = tlsmsg_client_hello(host, rnd, cpb);
     List(Int) chmsg = mk_record(22, chbody);
     Bool s1 = resid_tcp_send_bin(fd, chmsg);
     if (!s1) { println("SEND-FAIL"); return 1; }

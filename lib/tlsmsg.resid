@@ -176,109 +176,68 @@ pub List(Int) sh_scan(List(Int) sh, Int pos, Int stop) {
     return sh_scan(sh, np, stop);
 }
 
-// -- ClientHello construction -------------------------------------------
-// Byte-exact RFC 8448 section 3 ClientHello for this fixed extension
-// set: server_name("server"), renegotiation_info, supported_groups,
-// session_ticket, key_share(x25519), supported_versions(TLS1.3),
-// signature_algorithms, psk_key_exchange_modes, signature_algorithms... 
-// (the exact RFC trace extension block), parametrized by random+share.
+// -- ClientHello -------------------------------------------------------
+//
+// One builder, built from its parts: the fixed hex blocks that used to
+// live here had the server name baked in ("server"), which is fine for a
+// fixture and wrong for anything else. `tlsmsg_client_hello` keeps the
+// old two-argument shape and sends no server name at all.
 
-pub Str tm_c1() {
-    return "010000bc0303";
+pub List(Int) tlsmsg_client_hello(Str sni, List(Int) random32, List(Int) share32) {
+    List(Int) exts = tls_client_exts(sni, share32);
+    List(Int) sid = [0];
+    List(Int) body = [3, 3].concat(random32).concat(sid).concat(ts_u16(2)).concat(ts_u16(ts_suite_aes128gcm())).concat([1, 0]).concat(ts_u16(exts.len()));
+    return ts_message(1, body.concat(exts));
 }
 
-// RFC 8448 trace variant: three cipher suites, msg len 0xc0
-pub Str tm_c1_rfc() {
-    return "010000c00303";
+// The extension set a client sends, built rather than fixed: only the
+// server name changes between connections, and a hex block with a name
+// baked into it cannot be that. Everything here is required by TLS 1.3 or
+// useless without it:
+//
+//   server_name           the name the client is asking for; without it a
+//                         virtual-hosted server answers with the wrong
+//                         certificate or none at all
+//   renegotiation_info    a middlebox may insist (RFC 8446 §D.4)
+//   supported_groups      x25519, which is the only group below signs
+//   session_ticket        empty: this client resumes nothing
+//   key_share             the x25519 share, the one thing that must be here
+//   supported_versions    TLS 1.3, or the server answers TLS 1.2 at most
+//   signature_algorithms  what a server may sign with
+//   psk_key_exchange_modes  psk_dhe_ke, so a resumption would be possible
+List(Int) tls_client_exts(Str sni, List(Int) share32) {
+    List(Int) e = tls_ext_server_name(sni);
+    List(Int) e2 = ts_ext_bytes(e, 21, [1, 0]);
+    List(Int) e3 = ts_ext_bytes(e2, 10, ts_u16(8).concat(ts_u16(29)).concat(ts_u16(23)).concat(ts_u16(24)).concat(ts_u16(25)));
+    List(Int) e4 = ts_ext_bytes(e3, 35, [0]);
+    List(Int) share = ts_u16(36).concat(ts_u16(29)).concat(ts_u16(32)).concat(share32);
+    List(Int) e5 = ts_ext_bytes(e4, 51, share);
+    List(Int) e6 = ts_ext_bytes(e5, 43, [2, 3, 4]);
+    List(Int) e7 = ts_ext_bytes(e6, 13, ts_u16(8).concat(tls_client_sigalgs()));
+    List(Int) e8 = ts_ext_bytes(e7, 45, [1, 1]);
+    return e8;
 }
 
-pub Str tm_c2_rfc() {
-    return "00000613011303130201000091" + "0000000b0009000006736572766572ff01000100" + "000a00140012001d00170018001901000101010201030104" + "00230000003300260024001d0020";
+// server_name with one name of type host_name (0).
+List(Int) tls_ext_server_name(Str sni) {
+    List(Int) name = str_to_bytes(sni);
+    Int n = name.len();
+    if (n < 1 || n > 255) { return tls_ext_server_name("localhost"); }
+    List(Int) entry = [0].concat(ts_u16(n)).concat(name);
+    return ts_ext_bytes([], 0, ts_u16(entry.len()).concat(entry));
 }
 
-pub Str tm_c2() {
-    return "000002130101000091" + "0000000b0009000006736572766572ff01000100" + "000a00140012001d00170018001901000101010201030104" + "00230000003300260024001d0020";
+// What a server may sign with, best first: ECDSA P-256 (what this
+// repository's own server uses), Ed25519, then RSA-PSS and PKCS#1 for a
+// server that has no EC key.
+List(Int) tls_client_sigalgs() {
+    List(Int) empty = [];
+    List(Int) a = empty.concat(ts_u16(1027));
+    List(Int) b = a.concat(ts_u16(2055));
+    List(Int) c = b.concat(ts_u16(2052));
+    List(Int) d = c.concat(ts_u16(1025));
+    return d;
 }
-
-pub Str tm_c3() {
-    return "002b000302030400" + "0d0020001e" + "04030503060302030804080508060401050106010201040205020602" + "0202002d00020101001c00024001";
-}
-
-pub List(Int) tm_hb_acc(Str s, Int i, List(Int) acc) {
-    if (i >= str_len(s)) {
-        return acc;
-    }
-    Int c = str_char_at(s, i);
-    Int dhi = c - 87;
-    Int dlo = c - 48;
-    Int hi = if (c > 96) { dhi } else { dlo };
-    Int j = i + 1;
-    Int c2 = str_char_at(s, j);
-    Int ehi = c2 - 87;
-    Int elo = c2 - 48;
-    Int lo = if (c2 > 96) { ehi } else { elo };
-    Int h16 = hi * 16;
-    Int byt = h16 + lo;
-    List(Int) acc2 = acc.concat([byt]);
-    Int ni = i + 2;
-    return tm_hb_acc(s, ni, acc2);
-}
-
-pub List(Int) tm_hb(Str s) {
-    return tm_hb_acc(s, 0, []);
-}
-
-// ClientHello with the RFC 8448 extension set, parametrized by
-// legacy_random(32) and the x25519 key share (32 bytes).
-// RFC 8448 section 3 byte-exact ClientHello (three suites); for fixtures
-pub List(Int) tlsmsg_client_hello_rfc(List(Int) random32, List(Int) share32) {
-    List(Int) p1 = tm_hb(tm_c1_rfc());
-    List(Int) p2 = sconcat(p1, random32);
-    List(Int) p3 = tm_hb(tm_c2_rfc());
-    List(Int) body1 = sconcat(p2, p3);
-    List(Int) body2 = sconcat(body1, share32);
-    List(Int) p4 = tm_hb(tm_c3());
-    return sconcat(body2, p4);
-}
-
-// ALPN extension offering exactly "h2" (0x0010 0005 0003 02 68 32).
-// Extensions length 0x91 -> 0x9a; handshake length 0xbc -> 0xc5.
-// ALPN variant: identical to tlsmsg_client_hello but with an extra
-// "h2"-offering ALPN extension (9 bytes) appended AFTER the last
-// extension block, and lengths bumped by 9 (ext 0x91->0x9a,
-// handshake 0xbc->0xc5).
-pub Str tm_c1_alpn() {
-    return "010000c50303";
-}
-
-pub Str tm_c2_alpn() {
-    return "00000213010100009a" + "0000000b0009000006736572766572ff01000100" + "000a00140012001d00170018001901000101010201030104" + "00230000003300260024001d0020";
-}
-
-pub Str tm_c3_alpn() {
-    return tm_c3() + "001000050003026832";
-}
-
-pub List(Int) tlsmsg_client_hello_alpn(List(Int) random32, List(Int) share32) {
-    List(Int) p1 = tm_hb(tm_c1_alpn());
-    List(Int) p2 = sconcat(p1, random32);
-    List(Int) p3 = tm_hb(tm_c2_alpn());
-    List(Int) body1 = sconcat(p2, p3);
-    List(Int) body2 = sconcat(body1, share32);
-    List(Int) p4 = tm_hb(tm_c3_alpn());
-    return sconcat(body2, p4);
-}
-
-pub List(Int) tlsmsg_client_hello(List(Int) random32, List(Int) share32) {
-    List(Int) p1 = tm_hb(tm_c1());
-    List(Int) p2 = sconcat(p1, random32);
-    List(Int) p3 = tm_hb(tm_c2());
-    List(Int) body1 = sconcat(p2, p3);
-    List(Int) body2 = sconcat(body1, share32);
-    List(Int) p4 = tm_hb(tm_c3());
-    return sconcat(body2, p4);
-}
-
 // -- Certificate / CertificateVerify / Finished --------------------------
 
 // Certificate message body: u24 request-context len || u24 total len ||

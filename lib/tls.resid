@@ -203,6 +203,74 @@ pub Int tls_inner_type(List(Int) pt) {
     return pt[n - 1];
 }
 
+// ─── Reading records ─────────────────────────────────────────────────────
+
+// ─── Reading the connection ───────────────────────────────────────────
+
+// Bytes read from the socket that the handshake has not consumed yet.
+type TsIn = { Int fd; List(Int) buf; Bool eof; };
+
+pub TsIn ts_in(Int fd) {
+    return TsIn { .fd = fd, .buf = [], .eof = false };
+}
+
+// `resid_tcp_recv_some`, not `resid_tcp_recv_bin`: the latter reads
+// *exactly* n bytes and zero-pads the rest, which is right when the
+// length is already known (a handshake header) and wrong here, where the
+// bytes arriving are whatever the peer chose to send.
+@requires(network(readonly))
+TsIn ts_fill(TsIn s) {
+    if (s.eof) { return s; }
+    List(Int) more = resid_tcp_recv_some(s.fd, 16384);
+    if (more.len() == 0) { return TsIn { .fd = s.fd, .buf = s.buf, .eof = true }; }
+    return TsIn { .fd = s.fd, .buf = s.buf.concat(more), .eof = false };
+}
+
+// The next `n` bytes and what is left of the connection.
+type TsTake = { TsIn in; List(Int) bytes; Bool ok; };
+
+@requires(network(readonly))
+TsTake ts_take(TsIn s, Int n) {
+    if (s.buf.len() >= n || s.eof) {
+        List(Int) want = slice_seed(s.buf, 0, n, []);
+        List(Int) rest = slice_seed(s.buf, n, s.buf.len() - n, []);
+        Bool ok = s.buf.len() >= n;
+        return TsTake { .in = TsIn { .fd = s.fd, .buf = rest, .eof = s.eof }, .bytes = want, .ok = ok };
+    }
+    return ts_take(ts_fill(s), n);
+}
+
+// One record: its type, its legacy version and its body.
+pub type TsRec = { TsIn in; Int ctype; Int version; List(Int) hdr; List(Int) body; Bool ok; };
+
+// 2^14 + 256: the RFC 8446 §5.1 limit on a plaintext fragment, plus the
+// expansion the AEAD adds. A record that claims more is refused rather
+// than waited for.
+pub Int tsr_max_record() { return 16640; }
+
+@requires(network(readonly))
+pub TsRec ts_read_record(TsIn s) {
+    TsTake hdr = ts_take(s, 5);
+    if (!hdr.ok) { return TsRec { .in = hdr.in, .ctype = 0, .version = 0, .hdr = [], .body = [], .ok = false }; }
+    Int blen = hdr.bytes[3] * 256 + hdr.bytes[4];
+    if (blen < 0 || blen > tsr_max_record()) {
+        return TsRec { .in = hdr.in, .ctype = 0, .version = 0, .hdr = hdr.bytes, .body = [], .ok = false };
+    }
+    TsTake body = ts_take(hdr.in, blen);
+    if (!body.ok) { return TsRec { .in = body.in, .ctype = 0, .version = 0, .hdr = hdr.bytes, .body = [], .ok = false }; }
+    Int ctype = hdr.bytes[0];
+    Int version = hdr.bytes[1] * 256 + hdr.bytes[2];
+    return TsRec { .in = body.in, .ctype = ctype, .version = version, .hdr = hdr.bytes, .body = body.bytes, .ok = true };
+}
+
+// A handshake message is complete once its declared length is buffered.
+pub Bool ts_msg_complete(List(Int) acc) {
+    Int n = acc.len();
+    if (n < 4) { return false; }
+    Int mlen = tm_u24_at(acc, 1);
+    return 4 + mlen <= n;
+}
+
 // ── record layer (RFC 8446 §5.2) ─────────────────────────────────────
 
 // nonce = static IV xor 64-bit big-endian sequence number in 12 bytes
