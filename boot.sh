@@ -72,7 +72,19 @@ link_clang() { # link_clang <ll> <out-bin>
 }
 
 build_rt() { # build_rt <compiler> <out-base>: runtime IR to <out-base>.ll
-    timeout 600 "$1" "$RT_SRC" --runtime-module -o "$2" > /dev/null || die "runtime module failed to compile"
+    # Diagnostics and aborts go to STDOUT, so a progress stream cannot be
+    # piped to /dev/null without also swallowing the reason a build failed.
+    # Log it, and on failure show the tail and the exit status (124 = the
+    # timeout, not the compiler).
+    local rc=0
+    local log="${2}.log"
+    timeout 600 "$1" "$RT_SRC" --runtime-module -o "$2" > "$log" 2>&1 || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        [ "$rc" -eq 124 ] && echo "  (no exit after 600s — raise the timeout in build_rt)" >&2
+        tail -40 "$log" >&2
+        die "runtime module failed to compile (exit ${rc}, full log: ${log})"
+    fi
+    rm -f "$log"
 }
 
 # Release builds must be signed (spec §33.1). Without a configured key,
