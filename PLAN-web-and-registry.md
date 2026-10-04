@@ -124,6 +124,6 @@ Fetching over https into `resid build` is where this stops:
   imported libraries (`gk_user_ref` in `compiler/gcheck.resid` matches
   method names without the receiver type). Codegen is correct; the effect
   is a spurious E0219 only.
-- Done 2026-10-04: a per-request read deadline (`HttpLimits.request_ms`,
-  `resid_tcp_deadline` in the runtime). Still open: no write deadline, so a
-  client that never reads its reply can hold a worker in a send.
+- Done 2026-10-04: per-request read and reply deadlines
+  (`HttpLimits.request_ms`, `reply_ms`; `resid_tcp_deadline` in the
+  runtime), and a 30 s bound on any one blocked send on every socket.

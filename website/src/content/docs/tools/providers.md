@@ -65,11 +65,11 @@ inherited.
 | `resid_tcp_listen_at(host, port)` | a listener on an interface address such as `"0.0.0.0"`, or -1 | write |
 | `resid_tcp_bound_port(lfd)` | the port a listener bound | read |
 | `resid_tcp_accept(lfd)` | an accepted connection, or -1 | read |
-| `resid_tcp_shutdown(fd)` | `Bool`: no more sends; receives time out after 2 s | read |
-| `resid_tcp_deadline(fd, ms)` | `Bool`: receives end `ms` from now, however the bytes are paced; 0 clears | read |
+| `resid_tcp_shutdown(fd)` | `Bool`: no more sends; receives end 2 s from now | read |
+| `resid_tcp_deadline(fd, ms)` | `Bool`: receives and sends end `ms` from now, however the bytes are paced; 0 clears | read |
 | `resid_tcp_close(fd)` | `Bool` | read |
 
-Sockets have a 30 s receive timeout. `network(readonly)` grants every row
+Sockets have a 30 s timeout on any one receive or blocked send. `network(readonly)` grants every row
 marked read: exposing a port to other machines is the only write.
 `lib/http.resid`, `lib/httpserv.resid` and `lib/tls.resid` are built on
 these builtins.

@@ -189050,7 +189050,7 @@ ret ptr %t112497
 @.s107605 = private unnamed_addr constant [85 x i8] c"resid_tcp_bound_port|Int resid_tcp_bound_port(Int lfd)  @requires(network(readonly))\00"
 @.s107606 = private unnamed_addr constant [95 x i8] c"resid_tcp_accept|Int resid_tcp_accept(Int lfd)  connection or -1; @requires(network(readonly))\00"
 @.s107607 = private unnamed_addr constant [95 x i8] c"resid_tcp_shutdown|Bool resid_tcp_shutdown(Int fd)  stop sending; @requires(network(readonly))\00"
-@.s107608 = private unnamed_addr constant [125 x i8] c"resid_tcp_deadline|Bool resid_tcp_deadline(Int fd, Int ms)  receives end ms from now, 0 clears; @requires(network(readonly))\00"
+@.s107608 = private unnamed_addr constant [135 x i8] c"resid_tcp_deadline|Bool resid_tcp_deadline(Int fd, Int ms)  receives and sends end ms from now, 0 clears; @requires(network(readonly))\00"
 @.s107609 = private unnamed_addr constant [75 x i8] c"resid_tcp_close|Bool resid_tcp_close(Int fd)  @requires(network(readonly))\00"
 @.lty107610 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
 @.lc107610 = private global ptr null
@@ -189120,7 +189120,7 @@ ret ptr %t112497
 @.s107792 = private unnamed_addr constant [85 x i8] c"resid_tcp_bound_port|Int resid_tcp_bound_port(Int lfd)  @requires(network(readonly))\00"
 @.s107793 = private unnamed_addr constant [95 x i8] c"resid_tcp_accept|Int resid_tcp_accept(Int lfd)  connection or -1; @requires(network(readonly))\00"
 @.s107794 = private unnamed_addr constant [95 x i8] c"resid_tcp_shutdown|Bool resid_tcp_shutdown(Int fd)  stop sending; @requires(network(readonly))\00"
-@.s107795 = private unnamed_addr constant [125 x i8] c"resid_tcp_deadline|Bool resid_tcp_deadline(Int fd, Int ms)  receives end ms from now, 0 clears; @requires(network(readonly))\00"
+@.s107795 = private unnamed_addr constant [135 x i8] c"resid_tcp_deadline|Bool resid_tcp_deadline(Int fd, Int ms)  receives and sends end ms from now, 0 clears; @requires(network(readonly))\00"
 @.s107796 = private unnamed_addr constant [75 x i8] c"resid_tcp_close|Bool resid_tcp_close(Int fd)  @requires(network(readonly))\00"
 @.lty107797 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
 @.lc107797 = private global ptr null

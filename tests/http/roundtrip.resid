@@ -24,6 +24,8 @@ HttpReply handle(HttpRequest r) {
         return http_with_header(http_reply_text(200, "text/plain", (files.get("*") else { "" }) + "\n"), "X-Route", "files");
     }
     if (r.path == "/nothing") { return http_reply_empty(204); }
+    // More than the kernel buffers between a server and a client that never reads.
+    if (r.path == "/big") { return http_reply_text(200, "text/plain", str_repeat("b", 12582912)); }
     return http_reply_status(404);
 }
 
@@ -96,6 +98,20 @@ Bool trickle_cut_off(Int port) {
     return str_len(got) == 0 && waited_ms < 1000;
 }
 
+// A client that asks for a large reply and never reads it. The server is
+// blocked in a send until the reply deadline; then the one worker is free
+// and a second client is answered. Without the deadline that second
+// client waits out its own 30 s receive timeout and reads nothing.
+@requires(network, clock)
+Bool stalled_reader_dropped(Int port) {
+    Int fd = resid_tcp_connect("127.0.0.1", port);
+    _ = resid_tcp_send(fd, "GET /big HTTP/1.1\r\nHost: x\r\n\r\n");
+    _ = clock_sleep_ms(1500);
+    Str next = once(port, "GET /hello/next HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    _ = resid_tcp_close(fd);
+    return status_of(next) == "200";
+}
+
 @requires(network, clock)
 Int trickle(Int fd, Int left) {
     if (left <= 0) { return 0; }
@@ -109,9 +125,9 @@ Int main() {
     Int lfd = http_listen(0);
     if (lfd < 0) { println("listen failed"); return 1; }
     Int port = http_bound_port(lfd);
-    HttpLimits lim = HttpLimits { .head_max = 2048, .body_max = 4096, .requests_max = 100, .request_ms = 600 };
+    HttpLimits lim = HttpLimits { .head_max = 2048, .body_max = 4096, .requests_max = 100, .request_ms = 600, .reply_ms = 600 };
     Result(Int, RegionError) worker = spawn (network(readonly)) {
-        return http_accept_loop(lfd, lambda(r) { handle(r) }, lim, 13);
+        return http_accept_loop(lfd, lambda(r) { handle(r) }, lim, 15);
     };
     Str host = "Host: x\r\n";
     Str close = "Connection: close\r\n\r\n";
@@ -158,6 +174,8 @@ Int main() {
     rejection_sizes(e1, e2, e3, e4, e5, e6);
     // 8: a slow client is cut off at the request deadline
     println(f"slow client cut off: {trickle_cut_off(port)}");
+    // 9: so is one that never reads its reply
+    println(f"stalled reader dropped: {stalled_reader_dropped(port)}");
     Int served = worker else { -1 };
     println(f"served {served}");
     _ = resid_tcp_close(lfd);

@@ -131,9 +131,10 @@ captures the rest of the path:
 ## Limits and refusals
 
 `http_limits()` allows 64 KiB of request head, 8 MiB of body, 1000
-requests per connection and 30 s (`request_ms`) for a client to deliver
-each whole request, so a slow or idle client is disconnected rather than
-holding a worker; pass your own `HttpLimits` to change them. A
+requests per connection, 30 s (`request_ms`) for a client to deliver
+each whole request and 60 s (`reply_ms`) for it to take each reply, so a
+slow, idle or non-reading client is disconnected rather than holding a
+worker; pass your own `HttpLimits` to change them. A
 refused request is answered and its connection closed:
 
 | Status | When |
@@ -155,6 +156,7 @@ behaviours `lib/httpserv.resid` declares, so nothing above this layer
 changes.
 
 ```resid
+// check-only: a server that needs server.key and server.pem and never exits
 import "tlswire.resid";
 import "tlskey.resid";
 import "httpserv.resid";
@@ -204,6 +206,5 @@ the authority to read a private key just because it serves.
 
 ## Not included
 
-There is no HTTP/2 server, no compression, and no write deadline: a client
-that never reads its reply can hold a worker in a send. TLS covers only what is above: no session
+There is no HTTP/2 server and no compression. TLS covers only what is above: no session
 resumption, no client certificates, no RSA signing, no 0-RTT.

@@ -38,14 +38,16 @@ type HttpReply = { Int status; List(Str) headers; List(Int) body; };
 
 // Bounds a connection is held to. `request_ms` is how long a client has
 // to deliver each whole request, head and body, from when the server
-// starts waiting for it (0: no bound but the socket's 30 s per read), so
-// one that trickles bytes, or idles between keep-alive requests, cannot
-// hold a worker. The handler's own time is not counted.
-type HttpLimits = { Int head_max; Int body_max; Int requests_max; Int request_ms; };
+// starts waiting for it, and `reply_ms` how long it has to take each
+// reply; 0 leaves only the socket's 30 s per read or blocked send. So a
+// client that trickles bytes, idles between keep-alive requests, or never
+// reads cannot hold a worker. The handler's own time is not counted.
+type HttpLimits = { Int head_max; Int body_max; Int requests_max; Int request_ms; Int reply_ms; };
 
-// 64 KiB of head, 8 MiB of body, 1000 requests per connection, 30 s each.
+// 64 KiB of head, 8 MiB of body, 1000 requests per connection, 30 s to
+// send each request and 60 s to take each reply.
 pub HttpLimits http_limits() {
-    return HttpLimits { .head_max = 65536, .body_max = 8388608, .requests_max = 1000, .request_ms = 30000 };
+    return HttpLimits { .head_max = 65536, .body_max = 8388608, .requests_max = 1000, .request_ms = 30000, .reply_ms = 60000 };
 }
 
 // ─── Listening ──────────────────────────────────────────────────────────
@@ -525,12 +527,14 @@ Int hs_serve_at(T conn, HttpReply closure(HttpRequest) handler, HttpLimits lim, 
     if (!r.ok) {
         if (r.status == 0) { return served; }
         List(Int) body = http_reply_wire(http_reply_status(r.status), false, false);
+        _ = wire_deadline(rq.rest.conn, lim.reply_ms);
         _ = wire_send(rq.rest.conn, body);
         return served + 1;
     }
     HttpReply reply = handler(r);
     Bool keep = r.keep_alive && served + 1 < lim.requests_max;
     List(Int) wire = http_reply_wire(reply, keep, r.method == "HEAD");
+    _ = wire_deadline(rq.rest.conn, lim.reply_ms);
     WireOut(T) sent = wire_send(rq.rest.conn, wire);
     if (!sent.ok || !keep) { return served + 1; }
     return hs_serve_at(sent.conn, handler, lim, rq.rest, served + 1);

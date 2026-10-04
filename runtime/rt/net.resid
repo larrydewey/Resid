@@ -57,7 +57,7 @@ pub Int rt_tcp_connect(Int host, Int port) {
     if (fd < 0) { return 0 - 1; }
     Int cr = resid_raw_syscall(42, fd, sa, 16, 0, 0, 0);
     if (cr != 0) { return sys_close(fd) * 0 - 1; }
-    _ = set_timeout(fd, 30);
+    _ = base_timeouts(fd);
     _ = dl_set(fd, 0);
     return fd;
 }
@@ -69,30 +69,35 @@ Int set_timeout(Int fd, Int secs) {
     return resid_raw_syscall(54, fd, 1, 20, tv, 16, 0);   // SO_RCVTIMEO
 }
 
-// The same, in nanoseconds; never 0, which the kernel reads as "block forever".
-Int set_timeout_ns(Int fd, Int ns) {
+// Both directions, in nanoseconds; never 0, which the kernel reads as
+// "block forever".
+Int set_timeouts_ns(Int fd, Int ns) {
     Int tv = resid_raw_tls("ai_tv", 16);
     Int us = (ns % 1000000000) / 1000;
     _ = st64(tv, ns / 1000000000);
     _ = st64(tv + 8, if (ns < 1000) { 1 } else { us });
-    return resid_raw_syscall(54, fd, 1, 20, tv, 16, 0);
+    _ = resid_raw_syscall(54, fd, 1, 20, tv, 16, 0);       // SO_RCVTIMEO
+    return resid_raw_syscall(54, fd, 1, 21, tv, 16, 0);    // SO_SNDTIMEO
 }
 
-// Receive deadlines per descriptor (resid_tcp_deadline): absolute
+// A fresh socket: 30 s for any one receive or blocked send.
+Int base_timeouts(Int fd) { return set_timeouts_ns(fd, 30000000000); }
+
+// I/O deadlines per descriptor (resid_tcp_deadline): absolute
 // monotonic ns, 0 for none. Descriptors past the table get none.
 Int dl_table() { return resid_raw_global("rt_tcp_deadline", 32768); }
 Bool dl_has_slot(Int fd) { return fd >= 0 && fd < 4096; }
 Int dl_get(Int fd) { return if (dl_has_slot(fd)) { ld64(dl_table() + fd * 8) } else { 0 }; }
 Int dl_set(Int fd, Int at) { return if (dl_has_slot(fd)) { st64(dl_table() + fd * 8, at) } else { 0 }; }
 
-// Before each receive: false once the deadline has passed, else the
-// receive timeout shrinks to what is left of it (at most 30 s).
+// Before each receive or send: false once the deadline has passed, else
+// both timeouts shrink to what is left of it (at most 30 s).
 Bool dl_arm(Int fd) {
     Int at = dl_get(fd);
     if (at == 0) { return true; }
     Int left = at - rt_clock_monotonic_ns();
     if (left <= 0) { return false; }
-    _ = set_timeout_ns(fd, if (left < 30000000000) { left } else { 30000000000 });
+    _ = set_timeouts_ns(fd, if (left < 30000000000) { left } else { 30000000000 });
     return true;
 }
 
@@ -186,7 +191,7 @@ pub Int rt_tcp_accept(Int fd) {
     _ = st32(alen, 16);
     Int c = resid_raw_syscall(43, fd, sa, alen, 0, 0, 0);  // accept
     if (c < 0) { return 0 - 1; }
-    _ = set_timeout(c, 30);
+    _ = base_timeouts(c);
     _ = dl_set(c, 0);
     return c;
 }
@@ -366,6 +371,7 @@ Int answers(Int r, Int n, Int p, Int k) {
 // Write all n bytes at p (MSG_NOSIGNAL); false on error.
 Bool send_all(Int fd, Int p, Int n) {
     if (n <= 0) { return true; }
+    if (!dl_arm(fd)) { return false; }
     Int w = resid_raw_syscall(44, fd, p, n, 16384, 0, 0);
     if (w <= 0) { return false; }
     return send_all(fd, p + w, n - w);
@@ -406,16 +412,16 @@ pub Int rt_tcp_close(Int fd) {
     return if (sys_close(fd) == 0) { 1 } else { 0 };
 }
 
-// Receives on `fd` end `ms` from now, however the peer paces its bytes:
-// each one is bounded by what is left, and once nothing is left they
-// return what they have. `ms` <= 0 clears it. False for a descriptor
+// Receives and sends on `fd` end `ms` from now, however the peer paces
+// its bytes: each is bounded by what is left, and once nothing is left a
+// receive returns what it has and a send fails. `ms` <= 0 clears it. False for a descriptor
 // that is not a socket or is past the table.
 @export("resid_tcp_deadline", "i8(i64,i64)")
 pub Int rt_tcp_deadline(Int fd, Int ms0) {
     if (!sock_ok(fd) || !dl_has_slot(fd)) { return 0; }
     if (ms0 <= 0) {
         _ = dl_set(fd, 0);
-        _ = set_timeout(fd, 30);
+        _ = base_timeouts(fd);
         return 1;
     }
     Int ms = if (ms0 > 1000000000) { 1000000000 } else { ms0 };
@@ -423,15 +429,16 @@ pub Int rt_tcp_deadline(Int fd, Int ms0) {
     return 1;
 }
 
-// Half-close for a lingering close: no more will be sent, and the receive
-// timeout drops to 2 s so draining what the peer still sends is bounded.
+// Half-close for a lingering close: no more will be sent, and receives
+// end 2 s from now in total, so a peer trickling bytes cannot stretch the
+// drain.
 // Closing a socket with unread bytes makes the kernel reset it, and a reset
 // discards the reply the peer has not read yet; a server that has refused a
 // request shuts down, drains, then closes (lib/httpserv.resid).
 @export("resid_tcp_shutdown", "i8(i64)")
 pub Int rt_tcp_shutdown(Int fd) {
     if (!sock_ok(fd)) { return 0; }
-    _ = dl_set(fd, 0);
+    _ = dl_set(fd, rt_clock_monotonic_ns() + 2000000000);
     _ = set_timeout(fd, 2);
     return if (resid_raw_syscall(48, fd, 1, 0, 0, 0, 0) == 0) { 1 } else { 0 };  // shutdown SHUT_WR
 }

@@ -138,13 +138,14 @@ rows here are about what it accepts.
 | An HTTP/1.1 request without `Host` is refused (400), and an unsupported version is 505. | roundtrip, client.py no-host, version |
 | A refused request closes the connection, so nothing after the point the parser stopped is read as another request. | roundtrip, client.py |
 | A connection is closed by half-closing and draining before the close, so a refused client still receives its error reply instead of a reset. | roundtrip (431 reply received), client.py huge-head |
-| Each request has a whole-request deadline (`HttpLimits.request_ms`, 30 s by default), from when the server starts waiting for it until its body is read, and the TLS handshake has the same bound; a client that trickles bytes or idles between keep-alive requests is disconnected when it passes. Enforced by the runtime (`resid_tcp_deadline`), so the server needs no `clock` grant. | roundtrip (slow client cut off) |
+| Each request has a whole-request deadline (`HttpLimits.request_ms`, 30 s by default), from when the server starts waiting for it until its body is read, and the TLS handshake has the same bound; each reply likewise has `reply_ms` (60 s) to be taken, so a client that never reads it frees the worker when that passes; a client that trickles bytes or idles between keep-alive requests is disconnected when it passes. Enforced by the runtime (`resid_tcp_deadline`), so the server needs no `clock` grant. | roundtrip (slow client cut off, stalled reader dropped) |
 | The accept loop closes each connection exactly once, so a worker never closes a descriptor number another worker has just been handed. | roundtrip (refusals, repeated runs) |
 | `examples/http_server.resid` serves files only under its `--root`: a path with an empty, `.` or `..` segment is 404, and so is a directory. | client.py dotdot, dir |
 
-Not guaranteed: there is no write deadline, so a client that never reads
-its reply can hold a worker in a send (denial of service is out of scope
-above); a handler's own time is unbounded; and workers
+Not guaranteed: a handler's own time is unbounded; each worker serves one
+connection at a time, so as many stalled clients as there are workers
+delay everyone else until the deadlines pass (denial of service is out of
+scope above); and workers
 are as many as the program spawns, with no queueing beyond the kernel's
 listen backlog.
 
