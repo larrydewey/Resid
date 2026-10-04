@@ -22,6 +22,24 @@ HttpReply handle(HttpRequest r) {
 
 @requires(args, filesystem(readonly), network(readonly), clock(readonly))
 Int main() {
+    if (args.count() > 1 && args.get(1) == "parse") {
+        // The address parser on its own: what a literal names in bytes, and
+        // the answer for anything that is not a literal at all.
+        println(ip_check("127.0.0.1", 4));
+        println(ip_check("127.0.0.10", 4));
+        println(ip_check("0.0.0.0", 4));
+        println(ip_check("256.1.1.1", 0));
+        println(ip_check("1.2.3", 0));
+        println(ip_check("cafe", 0));
+        println(ip_check("::1", 16));
+        println(ip_check("::", 16));
+        println(ip_check("2001:db8::1", 16));
+        println(ip_check("1:2:3:4:5:6:7:8", 16));
+        println(ip_check("1:2:3:4:5:6:7", 0));
+        println(ip_check("localhost", 0));
+        return 0;
+    }
+
     Option(ServerKey) mk = tls_key_load("tests/tls/fixtures/srv.key");
     Str e1 = match mk { Some(k) => "", None => "no key" };
     if (e1 != "") { println(e1); return 1; }
@@ -41,21 +59,6 @@ Int main() {
     // h2 to a server that speaks http/1.1 ends in no ALPN at all.
     List(Str) offered = if (args.count() > 1 && args.get(1) == "alpn-h2first") { ["h2", "http/1.1"] }
         else { if (args.count() > 1 && args.get(1) == "alpn-h2only") { ["h2"] } else { ["http/1.1"] } };
-    if (args.count() > 1 && args.get(1) == "parse") {
-        println(ip_check("127.0.0.1", 4));
-        println(ip_check("127.0.0.10", 4));
-        println(ip_check("0.0.0.0", 4));
-        println(ip_check("256.1.1.1", 0));
-        println(ip_check("1.2.3", 0));
-        println(ip_check("cafe", 0));
-        println(ip_check("::1", 16));
-        println(ip_check("::", 16));
-        println(ip_check("2001:db8::1", 16));
-        println(ip_check("1:2:3:4:5:6:7:8", 16));
-        println(ip_check("1:2:3:4:5:6:7", 0));
-        println(ip_check("localhost", 0));
-        return 0;
-    }
     TlsDial d = tls_client_connect("localhost", port, tls_client_cfg(asked, store, offered));
     if (d.err != "") {
         println("DIAL-FAIL " + d.err);
@@ -92,6 +95,8 @@ Str after_head_at(Str s, Int i, Int n) {
 }
 
 // The bytes an address literal names, if they are the count asked for.
+// An empty list is the only answer that never equals an address, which is
+// why a name cannot satisfy an iPAddress SAN by accident.
 Str ip_check(Str host, Int n) {
     List(Int) b = ip_addr_bytes(str_to_bytes(host));
     Str hexed = hex_encode(b);

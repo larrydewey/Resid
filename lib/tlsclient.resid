@@ -170,11 +170,13 @@ pub TlsDial tls_client_connect(Str host, Int port, TlsClientCfg cfg) {
     // application traffic secret and *writes* with its own. Using one
     // secret for both is a handshake that completes and then an
     // application record neither end can open.
-    Str alpn = tc_chosen_alpn(fl.msgs, cfg.alpn);
-    if (alpn == "!refused") {
+    List(Str) chosen = tc_ee_selected(fl.msgs);
+    Bool offered_it = if (chosen.len() == 0) { true } else { tc_offers_str(cfg.alpn, 0, chosen[0]) };
+    if (!offered_it) {
         _ = resid_tcp_close(fd);
-        return tls_dial_err("the server selected a protocol this client did not offer");
+        return tls_dial_err("the server selected '" + chosen[0] + "', which this client did not offer");
     }
+    Str alpn = if (chosen.len() == 0) { "" } else { chosen[0] };
     TlsKeys keys = tls_keys_pending(tls_traffic_key(s_ap), tls_traffic_iv(s_ap), tls_traffic_key(c_ap), tls_traffic_iv(c_ap), alpn, fl.in.buf);
     TlsClient c = TlsClient { .fd = fd, .keys = keys, .eof = false, .buf = fl.in.buf };
     return TlsDial { .conn = c, .err = "" };
@@ -184,19 +186,14 @@ Str ts_suite_name() {
     return "TLS_AES_128_GCM_SHA256";
 }
 
-// The protocol the two sides agreed on, computed the same way the server
-// computed it: the first this client offers that the server also offered,
-// which the client cannot know from ServerHello alone -- so the transport
-// records what was asked for and the caller checks it.
-// The protocol both ends are speaking: the one the server selected, and
-// only if this client offered it. An empty list means the server declined
-// ALPN. A selection this client never offered is a refusal, not something
-// to fall back from -- the alternative is speaking a protocol the server
-// refused, which is how an http/1.1 request ends up in an h2 connection.
-Str tc_chosen_alpn(List(Int) msgs, List(Str) offered) {
-    List(Str) picked = ts_ee_alpn(tc_body(tc_msg_at(msgs, 8, 0)));
-    if (picked.len() == 0) { return ""; }
-    return if (tc_offers_str(offered, 0, picked[0])) { picked[0] } else { "!refused" };
+// What the server chose out of the offers, as a list: empty when it
+// declined ALPN (RFC 7301 §3.2 lets it), one name when it chose. The
+// caller has to check that the name is one this client offered -- a
+// selection it never made is a refusal, not something to fall back from,
+// and speaking a protocol the server did not name is how an http/1.1
+// request ends up in an h2 connection.
+List(Str) tc_ee_selected(List(Int) msgs) {
+    return ts_ee_alpn(tc_body(tc_msg_at(msgs, 8, 0)));
 }
 
 Bool tc_offers_str(List(Str) xs, Int i, Str s) {

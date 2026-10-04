@@ -474,6 +474,18 @@ timeout 180 "$W/tlsclient2" alpn-h2only > "$W/client_noalpn.out" 2>&1
 grep -q "^DIAL-OK alpn=$" "$W/client_noalpn.out" && ok \
     || bad "declined ALPN is not an invented one: $(grep -E '^DIAL' "$W/client_noalpn.out" | tr '\n' ' ')"
 
+# The address parser itself: four dotted octets, `::` in its several
+# forms, and a hard no for anything that is not a literal. A name must not
+# be able to produce address bytes, or "checked the address" is not a check.
+"$W/tlsclient2" parse > "$W/ip.out" 2>&1
+grep -q "^127.0.0.1 -> 4 bytes 7f000001$" "$W/ip.out" \
+&& grep -q "^127.0.0.10 -> 4 bytes 7f00000a$" "$W/ip.out" \
+&& grep -q "^:: -> 16 bytes 00000000000000000000000000000000$" "$W/ip.out" \
+&& grep -q "^2001:db8::1 -> 16 bytes 20010db8000100000000000000000000$" "$W/ip.out" \
+&& grep -q "^1:2:3:4:5:6:7:8 -> 16 bytes 00010002000300040005000600070008$" "$W/ip.out" \
+&& [ "$(grep -cE '^(256\.1\.1\.1|1\.2\.3|cafe|1:2:3:4:5:6:7|localhost) -> 0 bytes $' "$W/ip.out")" = 5 ] && ok \
+    || bad "address literals: $(tr '\n' ' ' < "$W/ip.out")"
+
 # A trust store that does not contain the issuer is refused, and the
 # handshake says which name it could not verify rather than hanging up
 # silently: no store means nothing is trusted.
