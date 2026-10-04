@@ -125,20 +125,11 @@ Int main() {
     Str e5 = once(port, "POST /echo HTTP/1.1\r\n" + host + "Transfer-Encoding: gzip\r\n" + close);
     Str e6 = once(port, "GET /x HTTP/1.1\r\n" + host + "X-Pad: " + str_repeat("a", 3000) + "\r\n" + close);
     println(status_of(e1) + " " + status_of(e2) + " " + status_of(e3) + " " + status_of(e4) + " " + status_of(e5) + " " + status_of(e6));
-    // A refusal whose status came back empty is the one failure this file
-    // has ever shown. Report the raw length each refusal actually read, so
-    // the next occurrence says which one and how much: a status field cannot
-    // tell "the server sent nothing" from "the client read nothing", and
-    // those have different fixes. Only printed when one is missing, so a
-    // clean run stays byte-identical to roundtrip.out.
-    //
-    // What it says so far, four runs in about twenty: one refusal reads
-    // zero bytes and the rest read their whole 124-164 byte replies, but
-    // *which* one changes -- too-big Content-Length twice, then the
-    // version refusal. So it is the refusal path losing a reply now and
-    // then, not one case with one cause, and no case can be called the
-    // culprit from the client's side. Two samples of the same case once
-    // said otherwise, which is what this comment used to say.
+    // A refusal whose status came back empty was this file's one flake:
+    // the accept loop closed each descriptor twice, and the second close
+    // could land on this client's next socket after the kernel reused the
+    // number. Report each raw length if one is ever empty again; a clean
+    // run stays byte-identical to roundtrip.out.
     rejection_sizes(e1, e2, e3, e4, e5, e6);
     Int served = worker else { -1 };
     println(f"served {served}");

@@ -550,11 +550,14 @@ Int hs_accept_at(Int lfd, C conf, HttpReply closure(HttpRequest) handler, HttpLi
     Int c = resid_tcp_accept(lfd);
     if (c < 0) { return if (max_conns > 0) { -1 } else { done }; }
     Accepted(T) got = wire_accept(conf, c);
+    // Close `c` exactly once: the transport's close already does it, and a
+    // second close can hit a descriptor another worker has just reused.
     if (got.ok) {
         _ = http_serve_conn(got.conn, handler, lim);
         _ = http_close(got.conn);
+    } else {
+        _ = resid_tcp_close(c);
     }
-    _ = resid_tcp_close(c);
     return hs_accept_at(lfd, conf, handler, lim, max_conns, done + 1);
 }
 
