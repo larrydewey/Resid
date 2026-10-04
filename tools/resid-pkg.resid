@@ -54,6 +54,7 @@
 
 import "../lib/crypto.resid";
 import "../lib/ed25519.resid";
+import "../lib/httpserv.resid";
 
 // ─── little-endian integer encoding (this format's own choice — see
 // module doc comment) ───────────────────────────────────────────────
@@ -621,17 +622,21 @@ Int cmd_publish(Str dir, Str reg, Str keyfile) {
 //
 // The publish side's mirror of resid-manifest.resid's fetch side: same
 // artifact names under `pkg/`, so a registry on disk and the same registry
-// served here are the same bytes at the same URLs. Deliberately small —
-// one connection at a time, GET and HEAD only, no directory listing, no
-// upload. Publishing is `publish` writing the directory; serving only reads
-// it.
+// served here are the same bytes at the same URLs. GET and HEAD only, no
+// directory listing, no upload. Publishing is `publish` writing the
+// directory; serving only reads it.
+//
+// The HTTP is lib/httpserv.resid's: its request limits, smuggling refusals,
+// per-request read and reply deadlines, and lingering close all apply, and
+// four worker regions share the listener, so one slow client cannot stall
+// the registry.
 //
 // Three things this will not do, each of them a security decision rather
 // than a missing feature:
 //
 //   * It binds 127.0.0.1 only (see resid_tcp_listen in runtime/rt/net.resid).
-//     A registry that needs to be reachable from elsewhere belongs behind
-//     a proxy that terminates TLS and authenticates.
+//     A registry that needs to be reachable from elsewhere is served over
+//     TLS by examples/https_server.resid, or sits behind a proxy.
 //   * It serves only files under the registry directory. A request path is
 //     rejected outright if any segment is `..` or empty, so no request can
 //     name a file outside the root — the same rule `extract` enforces on
@@ -642,66 +647,6 @@ Int cmd_publish(Str dir, Str reg, Str keyfile) {
 
 Str serve_port_line(Int port) {
     return "resid-pkg serve: listening on http://127.0.0.1:" + f"{port}" + "\n";
-}
-
-@requires(network)
-List(Int) srv_read_line_acc(Int fd, List(Int) acc, Int depth) {
-    if (depth <= 0) { return acc; }
-    List(Int) one = resid_tcp_recv_bin(fd, 1);
-    if (one.len() < 1) { return acc; }
-    if (one[0] == 13) {
-        List(Int) two = resid_tcp_recv_bin(fd, 1);
-        if (two.len() < 1) { return acc; }
-        if (two[0] == 10) { return acc; }
-        return srv_read_line_acc(fd, acc.concat([13, two[0]]), depth - 1);
-    }
-    return srv_read_line_acc(fd, acc.concat([one[0]]), depth - 1);
-}
-
-// Read the request head up to its blank line; "" when the peer sent
-// nothing. Bounded, so a client that opens a socket and says nothing
-// cannot hold the single-threaded server forever (the socket's own receive
-// timeout is the backstop behind this).
-@requires(network)
-Str srv_read_head(Int fd) {
-    List(Str) lines = srv_head_lines(fd, [], 64, 0);
-    List(Str) empty = [];
-    return if (lines.len() == 0) { "" } else { str_join(lines, "\r\n") };
-}
-
-@requires(network)
-List(Str) srv_head_lines(Int fd, List(Str) acc, Int max_lines, Int depth) {
-    if (depth >= max_lines) { return acc; }
-    List(Int) raw = srv_read_line_acc(fd, [], 8192);
-    if (raw.len() == 0) { return acc; }
-    Str line = bytes_to_ascii(raw, 0, raw.len(), "");
-    if (str_trim(line) == "") { return acc; }
-    return srv_head_lines(fd, acc.concat([line]), max_lines, depth + 1);
-}
-
-Int str_find(Str s, Str sub, Int i) {
-    Int n = str_len(s);
-    Int m = str_len(sub);
-    if (m == 0) { return i; }
-    if (i + m > n) { return 0 - 1; }
-    if (str_slice(s, i, i + m) == sub) { return i; }
-    return str_find(s, sub, i + 1);
-}
-
-// The path of a request line: "GET /pkg/x HTTP/1.1" -> "/pkg/x".
-Str request_path(Str line) {
-    Int sp = str_find(line, " ", 0);
-    if (sp < 0) { return ""; }
-    Str rest = str_slice(line, sp + 1, str_len(line));
-    Int sp2 = str_find(rest, " ", 0);
-    if (sp2 < 0) { return rest; }
-    return str_slice(rest, 0, sp2);
-}
-
-Str request_method(Str line) {
-    Int sp = str_find(line, " ", 0);
-    if (sp < 0) { return ""; }
-    return str_slice(line, 0, sp);
 }
 
 // Reject anything that could name a file outside the registry root, and
@@ -729,79 +674,42 @@ Bool path_is_unsafe(Str path) {
     return seg_unsafe(str_split(path, "/"), 0);
 }
 
-// A registry-relative file for a request path, "" when the path is unsafe.
+// The file a request path names under `root`; "" when the path is unsafe
+// or names the root itself. The query is already split off by httpserv.
 Str resolve_request_file(Str root, Str path) {
-    Bool starts = str_starts_with(path, "/");
-    if (!starts) { return ""; }
-    if (path_is_unsafe(path)) { return ""; }
-    Int q = str_find(path, "?", 0);
-    Str clean = if (q >= 0) { str_slice(path, 0, q) } else { path };
-    Int hash = str_find(clean, "#", 0);
-    Str clean2 = if (hash >= 0) { str_slice(clean, 0, hash) } else { clean };
-    if (clean2 == "/" || clean2 == "") { return ""; }
-    return root + clean2;
+    if (!str_starts_with(path, "/") || path_is_unsafe(path)) { return ""; }
+    if (path == "/") { return ""; }
+    return root + path;
 }
 
-@requires(network)
-Int srv_send(Int fd, Str s) {
-    return if (resid_tcp_send(fd, s)) { 1 } else { 0 };
+HttpReply registry_status(Int code) {
+    return http_with_header(http_reply_status(code), "Server", "resid-pkg");
 }
 
-@requires(network)
-Int srv_send_status(Int fd, Int code, Str reason, Str extra, Bool bodyless) {
-    Str h1 = "HTTP/1.1 " + f"{code}" + " " + reason + "\r\n";
-    Str h2 = "Server: resid-pkg\r\nConnection: close\r\n";
-    Str h3 = if (bodyless) { "" } else { extra + "\r\n" };
-    return srv_send(fd, h1 + h2 + h3 + "\r\n");
-}
-
-@requires(filesystem(readonly), network)
-Int srv_send_file(Int fd, Str file, Bool head_only) {
-    List(Int) body = filesystem.read_bytes(file);
-    Int len = body.len();
-    Str h1 = "HTTP/1.1 200 OK\r\n";
-    Str h2 = "Server: resid-pkg\r\nConnection: close\r\n";
-    Str h3 = "Content-Type: application/octet-stream\r\n";
-    Str h4 = "Content-Length: " + f"{len}" + "\r\n\r\n";
-    Int sent = srv_send(fd, h1 + h2 + h3 + h4);
-    if (head_only) { return sent; }
-    return if (sent == 1 && resid_tcp_send_bin(fd, body)) { 1 } else { 0 };
-}
-
-// Answer one connection.
-@requires(filesystem(readonly), network)
-Int serve_one(Int fd, Str root) {
-    Str head = srv_read_head(fd);
-    if (head == "") { return 0; }
-    List(Str) lines = str_split(head, "\r\n");
-    Str line = lines[0];
-    Str method = request_method(line);
-    Str path = request_path(line);
-    Bool head_only = method == "HEAD";
-    if (method != "GET" && !head_only) {
-        return srv_send_status(fd, 405, "Method Not Allowed", "Allow: GET, HEAD\r\n", false);
+// One request against the registry directory.
+@requires(filesystem(readonly))
+HttpReply registry_reply(Str root, HttpRequest r) {
+    if (r.method != "GET" && r.method != "HEAD") {
+        return http_with_header(registry_status(405), "Allow", "GET, HEAD");
     }
-    Str file = resolve_request_file(root, path);
-    if (file == "") {
-        Bool unsafe = !str_starts_with(path, "/") || path_is_unsafe(path);
-        if (unsafe) { return srv_send_status(fd, 400, "Bad Request", "", true); }
-        return srv_send_status(fd, 404, "Not Found", "", true);
-    }
-    if (!filesystem.exists(file) || filesystem.is_dir(file)) {
-        return srv_send_status(fd, 404, "Not Found", "", true);
-    }
-    return srv_send_file(fd, file, head_only);
+    if (!str_starts_with(r.path, "/") || path_is_unsafe(r.path)) { return registry_status(400); }
+    Str file = resolve_request_file(root, r.path);
+    if (file == "" || !filesystem.exists(file) || filesystem.is_dir(file)) { return registry_status(404); }
+    HttpReply ok = http_reply_bytes(200, "application/octet-stream", filesystem.read_bytes(file));
+    return http_with_header(ok, "Server", "resid-pkg");
 }
 
-// Accept `max_requests` connections (0 = until killed), answering each.
-@requires(filesystem(readonly), network)
-Int serve_loop(Int lfd, Str root, Int max_requests, Int served) {
-    if (max_requests > 0 && served >= max_requests) { return 0; }
-    Int c = resid_tcp_accept(lfd);
-    if (c < 0) { return 0 - 1; }
-    Int r = serve_one(c, root);
-    _ = resid_tcp_close(c);
-    return if (r < 0) { 0 - 1 } else { serve_loop(lfd, root, max_requests, served + 1) };
+// `n` regions accepting on the same listener, each up to `conns`
+// connections (0: until the listener fails); the total they served.
+@requires(network(readonly), filesystem(readonly))
+Int serve_workers(Int lfd, Int n, Str root, Int conns) {
+    if (n <= 0) { return 0; }
+    Result(Int, RegionError) r = spawn (network(readonly), filesystem(readonly)) {
+        return http_accept_loop(lfd, lambda(q) { registry_reply(root, q) }, http_limits(), conns);
+    };
+    Int rest = serve_workers(lfd, n - 1, root, conns);
+    Int mine = r else { -1 };
+    return if (mine < 0 || rest < 0) { -1 } else { rest + mine };
 }
 
 // `serve <registry> [--port N] [--port-file F] [--requests N]`. Port 0
@@ -841,9 +749,12 @@ Int cmd_serve(Str root, Int port, Str port_file, Int max_requests) {
     Str line = serve_port_line(bound);
     if (port_file != "") { filesystem.write_all(port_file, f"{bound}"); }
     println(str_trim(line));
-    Int rc = serve_loop(lfd, root, max_requests, 0);
+    // --requests N is for scripts that want the server to stop after N
+    // connections: one worker, so the count is exact.
+    Int workers = if (max_requests > 0) { 1 } else { 4 };
+    Int rc = serve_workers(lfd, workers, root, max_requests);
     _ = resid_tcp_close(lfd);
-    return if (rc == 0 - 1) { 1 } else { 0 };
+    return if (rc < 0) { 1 } else { 0 };
 }
 
 // ─── index: the publisher's side of the registry index ───────────────

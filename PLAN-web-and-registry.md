@@ -108,8 +108,10 @@ Fetching over https into `resid build` is where this stops:
 - Authenticated publish: an upload is a signed archive, checked against
   the publisher keyring before it is written; `index add` rules apply
   (no hash that contradicts an archive already published).
-- Served over TLS by `lib/httpserv.resid`; `resid-pkg serve` becomes a thin
-  wrapper over it.
+- Served over TLS by `lib/httpserv.resid`. Done 2026-10-04: `resid-pkg
+  serve` is a thin wrapper over `lib/httpserv.resid` (four workers,
+  deadlines, no 1 MiB artifact cap); TLS for it is still
+  `examples/https_server.resid`.
 - Storage behind a behavior, so a directory and other backends are
   interchangeable.
 

@@ -10,7 +10,8 @@ When caveman mode is active, apply wenyan-style compression: omit subjects, use 
   named by `[registry] path` (a directory) or `[registry] url` (an `http://`
   base) -- not both. `resid-pkg serve <registry> [--port N] [--port-file F]`
   is the publish side: loopback only, GET/HEAD only, no upload, and a request
-  path that could name a file outside the registry directory is refused.
+  path that could name a file outside the registry directory is refused. It
+  runs on `lib/httpserv.resid` with four worker regions (`--requests N`: one).
   `resid-pkg index list|add|remove|verify` are the publisher's non-publish
   operations; every write re-signs the whole index, and `index add` refuses a
   hash that contradicts an archive already published under that name/version.

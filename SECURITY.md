@@ -111,12 +111,16 @@ itself a reason to trust anything.
 `resid-pkg serve` is the publish side of the same layout, and is
 deliberately small: loopback only, `GET` and `HEAD` only, no listing, no
 upload, and no request path may name a file outside the registry
-directory. Nothing it does can change what a client accepts.
+directory. Nothing it does can change what a client accepts. Its HTTP is
+`lib/httpserv.resid`'s, so the HTTP server guarantees below apply to it,
+and four worker regions share the listener.
 
 | Guarantee | Tests (`tests/pkg/run.sh`) |
 |---|---|
 | The server serves a registry, answers 404 for what it does not carry, rejects methods other than GET/HEAD, and refuses a path that could escape the registry directory. | serve GET, serve 404, serve rejects POST, serve refused a traversal path |
 | It binds loopback and nothing else. | serve is not bound to loopback only |
+| An artifact of any size up to what the client accepts is sent whole, not refused at the runtime's 1 MiB single-send cap. | serve a 3 MB artifact byte-identical |
+| A client stalled mid-request holds one worker until the request deadline, not the registry. | serve answers while other clients stall |
 
 Not guaranteed: `path` dependencies without a pinned key are trusted as
 local source (spec §28.3); the package signature is not a COSE structure

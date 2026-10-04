@@ -190,8 +190,30 @@ if command -v curl > /dev/null 2>&1; then
     [ "$(code "http://127.0.0.1:$SPORT/pkg/no-such-thing")" = 404 ] && ok || bad "serve 404"
     [ "$(code -X POST "http://127.0.0.1:$SPORT/pkg/index.resid-idx")" = 405 ] && ok || bad "serve rejects POST"
     [ "$(code --path-as-is "http://127.0.0.1:$SPORT/../../../etc/passwd")" = 400 ] && ok || bad "serve refused a traversal path"
+    # An artifact past the runtime's 1 MiB single-send cap comes back whole.
+    head -c 3000000 /dev/urandom > "$IDX/big.bin"
+    timeout 10 curl -sS -o "$W/big.got" "http://127.0.0.1:$SPORT/big.bin" 2>/dev/null
+    cmp -s "$IDX/big.bin" "$W/big.got" && ok || bad "serve a 3 MB artifact byte-identical"
+    rm -f "$IDX/big.bin"
 else
-    echo "note: curl absent, skipping the four raw serve cases"
+    echo "note: curl absent, skipping the raw serve cases"
+fi
+# Clients that open a connection and stall mid-request hold a worker each
+# until the request deadline, not the registry: another client is answered.
+if command -v python3 > /dev/null 2>&1; then
+    python3 - "$SPORT" <<'PY' && ok || bad "serve answers while other clients stall"
+import socket, sys
+port = int(sys.argv[1])
+stalled = []
+for _ in range(3):
+    s = socket.create_connection(("127.0.0.1", port))
+    s.sendall(b"GET /pkg/index.resid-idx HTTP/1.1\r\nHost: x\r\n")
+    stalled.append(s)
+c = socket.create_connection(("127.0.0.1", port), timeout=5)
+c.sendall(b"GET /pkg/index.resid-idx HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+got = c.recv(64)
+sys.exit(0 if got.startswith(b"HTTP/1.1 200") else 1)
+PY
 fi
 # It is bound to loopback and nothing else.
 if command -v ss > /dev/null 2>&1; then
