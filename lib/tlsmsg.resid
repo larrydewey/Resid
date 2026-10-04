@@ -180,8 +180,8 @@ pub List(Int) sh_scan(List(Int) sh, Int pos, Int stop) {
 //
 // One builder, built from its parts: the fixed hex blocks that used to
 // live here had the server name baked in ("server"), which is fine for a
-// fixture and wrong for anything else. `tlsmsg_client_hello` keeps the
-// old two-argument shape and sends no server name at all.
+// fixture and wrong for anything else. The RFC 8448 trace is now a test
+// fixture (tests/conformance/cases/tls13_framing_in_resid.resid).
 
 pub List(Int) tlsmsg_client_hello(Str sni, List(Str) alpn, List(Int) random32, List(Int) share32) {
     List(Int) exts = tls_client_exts(sni, alpn, share32);

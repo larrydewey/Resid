@@ -36,8 +36,16 @@ Str ck(Str name, Str got, Str want) {
 Int main() {
     List(Int) rnd = hb("cb34ecb1e78163ba1c38c6dacb196a6dffa21a8d9912ec18a2ef6283024dece7");
     List(Int) cshare = hb("99381de560e4bd43d23d8e435a7dbafeb3c06e51c13cae4d5413691e529aaf2c");
-    List(Int) mych = tlsmsg_client_hello_rfc(rnd, cshare);
-    ck("client-hello", hex_encode(mych), "010000c00303cb34ecb1e78163ba1c38c6dacb196a6dffa21a8d9912ec18a2ef6283024dece7000006130113031302010000910000000b0009000006736572766572ff01000100000a00140012001d0017001800190100010101020103010400230000003300260024001d002099381de560e4bd43d23d8e435a7dbafeb3c06e51c13cae4d5413691e529aaf2c002b0003020304000d0020001e040305030603020308040805080604010501060102010402050206020202002d00020101001c00024001");
+    // RFC 8448 §3's ClientHello is a fixture, not something this library
+    // sends (three suites, nine groups, the name "server"), so the trace
+    // uses its bytes as given; the transcript hashes below depend on them.
+    List(Int) mych = hb("010000c00303cb34ecb1e78163ba1c38c6dacb196a6dffa21a8d9912ec18a2ef6283024dece7000006130113031302010000910000000b0009000006736572766572ff01000100000a00140012001d0017001800190100010101020103010400230000003300260024001d002099381de560e4bd43d23d8e435a7dbafeb3c06e51c13cae4d5413691e529aaf2c002b0003020304000d0020001e040305030603020308040805080604010501060102010402050206020202002d00020101001c00024001");
+    // What the library builds from the same random and share has to parse
+    // back to them under the server's own strict parser.
+    List(Int) built = tlsmsg_client_hello("server", ["http/1.1"], rnd, cshare);
+    ClientHello back = ts_client_hello(built);
+    Bool same = back.err == 0 && back.tls13 && hex_encode(back.random32) == hex_encode(rnd) && hex_encode(back.share) == hex_encode(cshare) && back.alpn.len() == 1;
+    if (same) { println("client-hello OK"); } else { println("client-hello BAD"); println(ts_err_text(back.err)); }
     List(Int) shmsg = hb("020000560303a6af06a4121860dc5e6e60249cd34c95930c8ac5cb1434dac155772ed3e2692800130100002e00330024001d0020c9828876112095fe66762bdbf7c672e156d6cc253b833df1dd69b1b04e751f0f002b00020304");
     List(Int) shr = sh_random(shmsg);
     ck("sh-random", hex_encode(shr), "a6af06a4121860dc5e6e60249cd34c95930c8ac5cb1434dac155772ed3e26928");
