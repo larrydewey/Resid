@@ -39,6 +39,8 @@ behavior Wire(T) {
     WireOut(T) wire_send(T w, List(Int) b);
     // End the connection, leaving nothing unsent.
     Bool wire_close(T w);
+    // Make every read end `ms` from now (0 clears); see resid_tcp_deadline.
+    Bool wire_deadline(T w, Int ms);
 }
 
 // What an accepted socket became. `ok` is false when the transport could
@@ -123,11 +125,14 @@ Int plain_drain(Int fd, Int rounds) {
     return plain_drain(fd, nr);
 }
 
+@requires(network(readonly))
+Bool plain_deadline(Int fd, Int ms) { return resid_tcp_deadline(fd, ms); }
+
 Accepted(Int) plain_accept(PlainCfg conf, Int fd) {
     return Accepted { .conn = fd, .ok = true };
 }
 
-Wire(Int) = { .wire_fill = plain_fill, .wire_send = plain_send, .wire_close = plain_close };
+Wire(Int) = { .wire_fill = plain_fill, .wire_send = plain_send, .wire_close = plain_close, .wire_deadline = plain_deadline };
 Accept(Int, PlainCfg) = plain_accept;
 
 // Connect to `host:port`, or -1. Loopback and anywhere else alike: the

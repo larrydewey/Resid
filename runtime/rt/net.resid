@@ -58,6 +58,7 @@ pub Int rt_tcp_connect(Int host, Int port) {
     Int cr = resid_raw_syscall(42, fd, sa, 16, 0, 0, 0);
     if (cr != 0) { return sys_close(fd) * 0 - 1; }
     _ = set_timeout(fd, 30);
+    _ = dl_set(fd, 0);
     return fd;
 }
 
@@ -66,6 +67,33 @@ Int set_timeout(Int fd, Int secs) {
     _ = st64(tv, secs);
     _ = st64(tv + 8, 0);
     return resid_raw_syscall(54, fd, 1, 20, tv, 16, 0);   // SO_RCVTIMEO
+}
+
+// The same, in nanoseconds; never 0, which the kernel reads as "block forever".
+Int set_timeout_ns(Int fd, Int ns) {
+    Int tv = resid_raw_tls("ai_tv", 16);
+    Int us = (ns % 1000000000) / 1000;
+    _ = st64(tv, ns / 1000000000);
+    _ = st64(tv + 8, if (ns < 1000) { 1 } else { us });
+    return resid_raw_syscall(54, fd, 1, 20, tv, 16, 0);
+}
+
+// Receive deadlines per descriptor (resid_tcp_deadline): absolute
+// monotonic ns, 0 for none. Descriptors past the table get none.
+Int dl_table() { return resid_raw_global("rt_tcp_deadline", 32768); }
+Bool dl_has_slot(Int fd) { return fd >= 0 && fd < 4096; }
+Int dl_get(Int fd) { return if (dl_has_slot(fd)) { ld64(dl_table() + fd * 8) } else { 0 }; }
+Int dl_set(Int fd, Int at) { return if (dl_has_slot(fd)) { st64(dl_table() + fd * 8, at) } else { 0 }; }
+
+// Before each receive: false once the deadline has passed, else the
+// receive timeout shrinks to what is left of it (at most 30 s).
+Bool dl_arm(Int fd) {
+    Int at = dl_get(fd);
+    if (at == 0) { return true; }
+    Int left = at - rt_clock_monotonic_ns();
+    if (left <= 0) { return false; }
+    _ = set_timeout_ns(fd, if (left < 30000000000) { left } else { 30000000000 });
+    return true;
 }
 
 // ─── TCP listener ──────────────────────────────────────────────────────
@@ -159,6 +187,7 @@ pub Int rt_tcp_accept(Int fd) {
     Int c = resid_raw_syscall(43, fd, sa, alen, 0, 0, 0);  // accept
     if (c < 0) { return 0 - 1; }
     _ = set_timeout(c, 30);
+    _ = dl_set(c, 0);
     return c;
 }
 
@@ -365,13 +394,34 @@ Int recv_loop(Int fd, Int out, Int cap, Int len) {
         if (cap >= 4194304) { return st8(out + len, 0) * 0 + out; }
         return recv_loop(fd, xrealloc(out, cap * 2), cap * 2, len);
     }
-    Int n = resid_raw_syscall(45, fd, out + len, cap - len - 1, 0, 0, 0);
+    Int n = if (dl_arm(fd)) { resid_raw_syscall(45, fd, out + len, cap - len - 1, 0, 0, 0) } else { 0 };
     if (n <= 0) { return st8(out + len, 0) * 0 + out; }
     return recv_loop(fd, out, cap, len + n);
 }
 
 @export("resid_tcp_close", "i8(i64)")
-pub Int rt_tcp_close(Int fd) { return if (sock_ok(fd) && sys_close(fd) == 0) { 1 } else { 0 }; }
+pub Int rt_tcp_close(Int fd) {
+    if (!sock_ok(fd)) { return 0; }
+    _ = dl_set(fd, 0);
+    return if (sys_close(fd) == 0) { 1 } else { 0 };
+}
+
+// Receives on `fd` end `ms` from now, however the peer paces its bytes:
+// each one is bounded by what is left, and once nothing is left they
+// return what they have. `ms` <= 0 clears it. False for a descriptor
+// that is not a socket or is past the table.
+@export("resid_tcp_deadline", "i8(i64,i64)")
+pub Int rt_tcp_deadline(Int fd, Int ms0) {
+    if (!sock_ok(fd) || !dl_has_slot(fd)) { return 0; }
+    if (ms0 <= 0) {
+        _ = dl_set(fd, 0);
+        _ = set_timeout(fd, 30);
+        return 1;
+    }
+    Int ms = if (ms0 > 1000000000) { 1000000000 } else { ms0 };
+    _ = dl_set(fd, rt_clock_monotonic_ns() + ms * 1000000);
+    return 1;
+}
 
 // Half-close for a lingering close: no more will be sent, and the receive
 // timeout drops to 2 s so draining what the peer still sends is bounded.
@@ -381,6 +431,7 @@ pub Int rt_tcp_close(Int fd) { return if (sock_ok(fd) && sys_close(fd) == 0) { 1
 @export("resid_tcp_shutdown", "i8(i64)")
 pub Int rt_tcp_shutdown(Int fd) {
     if (!sock_ok(fd)) { return 0; }
+    _ = dl_set(fd, 0);
     _ = set_timeout(fd, 2);
     return if (resid_raw_syscall(48, fd, 1, 0, 0, 0, 0) == 0) { 1 } else { 0 };  // shutdown SHUT_WR
 }
@@ -421,7 +472,7 @@ pub Int rt_tcp_recv_bin(Int fd, Int n0) {
 }
 
 Int recv_exact(Int fd, Int buf, Int got, Int n) {
-    if (got >= n) { return got; }
+    if (got >= n || !dl_arm(fd)) { return got; }
     Int r = resid_raw_syscall(45, fd, buf + got, n - got, 0, 0, 0);
     if (r <= 0) { return got; }
     return recv_exact(fd, buf, got + r, n);
@@ -435,7 +486,7 @@ Int recv_exact(Int fd, Int buf, Int got, Int n) {
 pub Int rt_tcp_recv_some(Int fd, Int max0) {
     Int max = if (sock_ok(fd)) { clamp(max0, 0, 1048576) } else { 0 };
     Int buf = xmalloc(if (max > 0) { max } else { 1 });
-    Int r = if (max > 0) { resid_raw_syscall(45, fd, buf, max, 0, 0, 0) } else { 0 };
+    Int r = if (max > 0 && dl_arm(fd)) { resid_raw_syscall(45, fd, buf, max, 0, 0, 0) } else { 0 };
     Int n = if (r > 0) { r } else { 0 };
     Int slots = xmalloc(if (n > 0) { n * 8 } else { 8 });
     _ = byte_boxes(buf, slots, 0, n);

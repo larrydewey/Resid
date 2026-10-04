@@ -2,6 +2,7 @@
 // and Content-Length bodies, routing, query strings, and the rejections.
 import "httpserv.resid";
 import "http.resid";
+import "clock.resid";
 
 HttpReply handle(HttpRequest r) {
     Map(Str, Str) none = {};
@@ -79,14 +80,38 @@ Str body_of(Str raw) {
     return if (at < 0) { "" } else { str_replace(str_slice(raw, at + 4, str_len(raw)), "\n", "") };
 }
 
-@requires(network)
+// A client that trickles a header line every 100 ms and never ends its
+// head. Every read arrives well inside the socket's 30 s timeout, so only
+// a whole-request deadline stops it. True when the server has hung up by
+// the time the trickle ends: the read after it returns at once.
+@requires(network, clock)
+Bool trickle_cut_off(Int port) {
+    Int fd = resid_tcp_connect("127.0.0.1", port);
+    _ = resid_tcp_send(fd, "GET /hello/slow HTTP/1.1\r\nHost: x\r\n");
+    _ = trickle(fd, 15);
+    Int t0 = clock_monotonic_ns();
+    Str got = resid_tcp_recv_all(fd);
+    Int waited_ms = (clock_monotonic_ns() - t0) / 1000000;
+    _ = resid_tcp_close(fd);
+    return str_len(got) == 0 && waited_ms < 1000;
+}
+
+@requires(network, clock)
+Int trickle(Int fd, Int left) {
+    if (left <= 0) { return 0; }
+    _ = clock_sleep_ms(100);
+    _ = resid_tcp_send(fd, "X-Slow: 1\r\n");
+    return trickle(fd, left - 1);
+}
+
+@requires(network, clock)
 Int main() {
     Int lfd = http_listen(0);
     if (lfd < 0) { println("listen failed"); return 1; }
     Int port = http_bound_port(lfd);
-    HttpLimits lim = HttpLimits { .head_max = 2048, .body_max = 4096, .requests_max = 100 };
+    HttpLimits lim = HttpLimits { .head_max = 2048, .body_max = 4096, .requests_max = 100, .request_ms = 600 };
     Result(Int, RegionError) worker = spawn (network(readonly)) {
-        return http_accept_loop(lfd, lambda(r) { handle(r) }, lim, 12);
+        return http_accept_loop(lfd, lambda(r) { handle(r) }, lim, 13);
     };
     Str host = "Host: x\r\n";
     Str close = "Connection: close\r\n\r\n";
@@ -131,6 +156,8 @@ Int main() {
     // number. Report each raw length if one is ever empty again; a clean
     // run stays byte-identical to roundtrip.out.
     rejection_sizes(e1, e2, e3, e4, e5, e6);
+    // 8: a slow client is cut off at the request deadline
+    println(f"slow client cut off: {trickle_cut_off(port)}");
     Int served = worker else { -1 };
     println(f"served {served}");
     _ = resid_tcp_close(lfd);

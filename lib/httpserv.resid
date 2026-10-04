@@ -36,12 +36,16 @@ type HttpRequest = {
 // CRLF; Content-Length and Connection are added by the writer.
 type HttpReply = { Int status; List(Str) headers; List(Int) body; };
 
-// Bounds a connection is held to.
-type HttpLimits = { Int head_max; Int body_max; Int requests_max; };
+// Bounds a connection is held to. `request_ms` is how long a client has
+// to deliver each whole request, head and body, from when the server
+// starts waiting for it (0: no bound but the socket's 30 s per read), so
+// one that trickles bytes, or idles between keep-alive requests, cannot
+// hold a worker. The handler's own time is not counted.
+type HttpLimits = { Int head_max; Int body_max; Int requests_max; Int request_ms; };
 
-// 64 KiB of head, 8 MiB of body, 1000 requests per connection.
+// 64 KiB of head, 8 MiB of body, 1000 requests per connection, 30 s each.
 pub HttpLimits http_limits() {
-    return HttpLimits { .head_max = 65536, .body_max = 8388608, .requests_max = 1000 };
+    return HttpLimits { .head_max = 65536, .body_max = 8388608, .requests_max = 1000, .request_ms = 30000 };
 }
 
 // ─── Listening ──────────────────────────────────────────────────────────
@@ -514,7 +518,9 @@ pub Int http_serve_conn(T conn, HttpReply closure(HttpRequest) handler, HttpLimi
 @needs(Wire(T))
 Int hs_serve_at(T conn, HttpReply closure(HttpRequest) handler, HttpLimits lim, HsBuf(T) b, Int served) {
     if (served >= lim.requests_max) { return served; }
+    _ = wire_deadline(b.conn, lim.request_ms);
     HsReq(T) rq = hs_read_request(b, lim);
+    _ = wire_deadline(rq.rest.conn, 0);
     HttpRequest r = rq.req;
     if (!r.ok) {
         if (r.status == 0) { return served; }
@@ -549,6 +555,8 @@ Int hs_accept_at(Int lfd, C conf, HttpReply closure(HttpRequest) handler, HttpLi
     if (max_conns > 0 && done >= max_conns) { return done; }
     Int c = resid_tcp_accept(lfd);
     if (c < 0) { return if (max_conns > 0) { -1 } else { done }; }
+    // The handshake gets the same bound as a request.
+    _ = resid_tcp_deadline(c, lim.request_ms);
     Accepted(T) got = wire_accept(conf, c);
     // Close `c` exactly once: the transport's close already does it, and a
     // second close can hit a descriptor another worker has just reused.

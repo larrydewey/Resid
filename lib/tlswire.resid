@@ -139,7 +139,10 @@ Accepted(TlsConn) tls_accept(TlsCfg conf, Int fd) {
     return Accepted { .conn = c, .ok = ok };
 }
 
-Wire(TlsConn) = { .wire_fill = tls_fill, .wire_send = tls_send, .wire_close = tls_close };
+@requires(network(readonly))
+Bool tls_deadline(TlsConn c, Int ms) { return resid_tcp_deadline(c.fd, ms); }
+
+Wire(TlsConn) = { .wire_fill = tls_fill, .wire_send = tls_send, .wire_close = tls_close, .wire_deadline = tls_deadline };
 Accept(TlsConn, TlsCfg) = tls_accept;
 
 // Accept TLS connections on `lfd` and serve each in turn: the same loop

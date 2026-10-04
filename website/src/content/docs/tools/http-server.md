@@ -130,8 +130,10 @@ captures the rest of the path:
 
 ## Limits and refusals
 
-`http_limits()` allows 64 KiB of request head, 8 MiB of body and 1000
-requests per connection; pass your own `HttpLimits` to change them. A
+`http_limits()` allows 64 KiB of request head, 8 MiB of body, 1000
+requests per connection and 30 s (`request_ms`) for a client to deliver
+each whole request, so a slow or idle client is disconnected rather than
+holding a worker; pass your own `HttpLimits` to change them. A
 refused request is answered and its connection closed:
 
 | Status | When |
@@ -202,6 +204,6 @@ the authority to read a private key just because it serves.
 
 ## Not included
 
-There is no HTTP/2 server, no compression, and no read deadline beyond each
-socket's 30 s receive timeout. TLS covers only what is above: no session
+There is no HTTP/2 server, no compression, and no write deadline: a client
+that never reads its reply can hold a worker in a send. TLS covers only what is above: no session
 resumption, no client certificates, no RSA signing, no 0-RTT.

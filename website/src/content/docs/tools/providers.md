@@ -66,6 +66,7 @@ inherited.
 | `resid_tcp_bound_port(lfd)` | the port a listener bound | read |
 | `resid_tcp_accept(lfd)` | an accepted connection, or -1 | read |
 | `resid_tcp_shutdown(fd)` | `Bool`: no more sends; receives time out after 2 s | read |
+| `resid_tcp_deadline(fd, ms)` | `Bool`: receives end `ms` from now, however the bytes are paced; 0 clears | read |
 | `resid_tcp_close(fd)` | `Bool` | read |
 
 Sockets have a 30 s receive timeout. `network(readonly)` grants every row

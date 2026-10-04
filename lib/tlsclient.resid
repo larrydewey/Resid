@@ -516,7 +516,10 @@ Bool tls_c_close(TlsClient c) {
     return resid_tcp_close(c.fd);
 }
 
-Wire(TlsClient) = { .wire_fill = tls_fill, .wire_send = tls_c_send, .wire_close = tls_c_close };
+@requires(network(readonly))
+Bool tls_c_deadline(TlsClient c, Int ms) { return resid_tcp_deadline(c.fd, ms); }
+
+Wire(TlsClient) = { .wire_fill = tls_fill, .wire_send = tls_c_send, .wire_close = tls_c_close, .wire_deadline = tls_c_deadline };
 
 // ─── One HTTPS GET ────────────────────────────────────────────────────
 //
