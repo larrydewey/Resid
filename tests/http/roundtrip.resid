@@ -54,6 +54,26 @@ List(Str) pipelined(Int fd, List(Str) reqs, Int i, List(Str) acc) {
 
 Str status_of(Str raw) { return str_slice(raw, 9, 12); }
 
+// How many of the six refusals came back with no status in them.
+Int count_empty(Str e1, Str e2, Str e3, Str e4, Str e5, Str e6) {
+    Int one = if (status_of(e1) == "") { 1 } else { 0 };
+    Int two = if (status_of(e2) == "") { 1 } else { 0 };
+    Int three = if (status_of(e3) == "") { 1 } else { 0 };
+    Int four = if (status_of(e4) == "") { 1 } else { 0 };
+    Int five = if (status_of(e5) == "") { 1 } else { 0 };
+    Int six = if (status_of(e6) == "") { 1 } else { 0 };
+    return one + two + three + four + five + six;
+}
+
+// Print nothing unless one of the refusals came back without a status.
+@requires(network)
+Int rejection_sizes(Str e1, Str e2, Str e3, Str e4, Str e5, Str e6) {
+    Int missing = count_empty(e1, e2, e3, e4, e5, e6);
+    if (missing == 0) { return 0; }
+    eprintln(f"REJECT-EMPTY {missing} of 6 lengths e1={str_len(e1)} e2={str_len(e2)} e3={str_len(e3)} e4={str_len(e4)} e5={str_len(e5)} e6={str_len(e6)}");
+    return missing;
+}
+
 Str body_of(Str raw) {
     Int at = str_index_of(raw, "\r\n\r\n", 0);
     return if (at < 0) { "" } else { str_replace(str_slice(raw, at + 4, str_len(raw)), "\n", "") };
@@ -105,6 +125,20 @@ Int main() {
     Str e5 = once(port, "POST /echo HTTP/1.1\r\n" + host + "Transfer-Encoding: gzip\r\n" + close);
     Str e6 = once(port, "GET /x HTTP/1.1\r\n" + host + "X-Pad: " + str_repeat("a", 3000) + "\r\n" + close);
     println(status_of(e1) + " " + status_of(e2) + " " + status_of(e3) + " " + status_of(e4) + " " + status_of(e5) + " " + status_of(e6));
+    // A refusal whose status came back empty is the one failure this file
+    // has ever shown. Report the raw length each refusal actually read, so
+    // the next occurrence says which one and how much: a status field cannot
+    // tell "the server sent nothing" from "the client read nothing", and
+    // those have different fixes. Only printed when one is missing, so a
+    // clean run stays byte-identical to roundtrip.out.
+    //
+    // What it says so far, twice: exactly one of the six, the too-big
+    // Content-Length, reads zero bytes while every other refusal reads its
+    // whole 124-164 byte reply. So the 413 is refused before the body is
+    // read and the reply is then lost, rather than every refusal being
+    // affected at random -- which is what a load-dependent server looked
+    // like from the outside.
+    rejection_sizes(e1, e2, e3, e4, e5, e6);
     Int served = worker else { -1 };
     println(f"served {served}");
     _ = resid_tcp_close(lfd);
