@@ -132,12 +132,13 @@ Int main() {
     // those have different fixes. Only printed when one is missing, so a
     // clean run stays byte-identical to roundtrip.out.
     //
-    // What it says so far, twice: exactly one of the six, the too-big
-    // Content-Length, reads zero bytes while every other refusal reads its
-    // whole 124-164 byte reply. So the 413 is refused before the body is
-    // read and the reply is then lost, rather than every refusal being
-    // affected at random -- which is what a load-dependent server looked
-    // like from the outside.
+    // What it says so far, four runs in about twenty: one refusal reads
+    // zero bytes and the rest read their whole 124-164 byte replies, but
+    // *which* one changes -- too-big Content-Length twice, then the
+    // version refusal. So it is the refusal path losing a reply now and
+    // then, not one case with one cause, and no case can be called the
+    // culprit from the client's side. Two samples of the same case once
+    // said otherwise, which is what this comment used to say.
     rejection_sizes(e1, e2, e3, e4, e5, e6);
     Int served = worker else { -1 };
     println(f"served {served}");
