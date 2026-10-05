@@ -101,11 +101,30 @@ GT lw_list(LW w, Int id, List(Str) env, GT c) {
         Str reg = f"%t{outt}";
         return GT {.pos = 0, .val = reg, .ty = "List(Unknown)", .cnt = 0, .err = "", .glines = gl2, .lines = c.lines.concat([reg + " = call ptr @resid_list_new(i64 0, ptr null, ptr " + tsym + ")"]), .tmp = outt, .lbl = c.lbl, .tail = false};
     }
-    GT e0 = lw_part(w, lw_kid(w, id, 0), lw_want_arg(w.want, "List", 0), env, c);
-    if (e0.err != "") { return e0; }
+    Str we = lw_want_arg(w.want, "List", 0);
+    GT e00 = lw_part(w, lw_kid(w, id, 0), we, env, c);
+    if (e00.err != "") { return e00; }
+    GT e0 = lw_adopt(e00, we);
     List(Str) v0 = [e0.val];
     return lw_list_at(w, id, 1, e0.ty, v0, env, e0);
 }
+
+// Each of vals (all of type from) widened to type to; the new registers are
+// the result's lines' tail, recorded one per line in .val as "r1,r2,...".
+GT lw_widen_vals(List(Str) vals, Int i, Str from, Str to, ListBuf(Str) regs, GT c) {
+    if (i >= vals.len()) {
+        List(Str) rs = regs.finish();
+        return GT {.pos = c.pos, .val = str_join(rs, ","), .ty = c.ty, .cnt = c.cnt, .err = "", .glines = c.glines, .lines = c.lines, .tmp = c.tmp, .lbl = c.lbl, .tail = false};
+    }
+    GT one = widen_val(GT {.pos = c.pos, .val = vals[i], .ty = from, .cnt = 0, .err = "", .glines = c.glines, .lines = c.lines, .tmp = c.tmp, .lbl = c.lbl, .tail = false}, num_norm_cg(to));
+    if (one.err != "") {
+        List(Str) dropped = regs.finish();
+        return GT {.pos = one.pos, .val = one.val, .ty = one.ty, .cnt = dropped.len() * 0, .err = one.err, .glines = one.glines, .lines = one.lines, .tmp = one.tmp, .lbl = one.lbl, .tail = false};
+    }
+    return lw_widen_vals(vals, i + 1, from, to, regs.push(one.val), GT {.pos = c.pos, .val = c.val, .ty = c.ty, .cnt = c.cnt, .err = "", .glines = one.glines, .lines = one.lines, .tmp = one.tmp, .lbl = one.lbl, .tail = false});
+}
+
+List(Str) lw_vals_of(GT g) { return if (g.val == "") { [] } else { str_split(g.val, ",") }; }
 
 // Two element types that name one type: equal up to holes, or a generic
 // sum written bare by a variant constructor (`Tree`) and with its
@@ -122,9 +141,16 @@ Str lw_elem_unify(Str a, Str b) {
 
 GT lw_list_at(LW w, Int id, Int i, Str ety, List(Str) vals, List(Str) env, GT c) {
     if (i >= w.g.ns[id].nk) { return lst_emit(ety, vals.len(), vals, 0, c); }
-    GT v = lw_part(w, lw_kid(w, id, i), lw_want_arg(w.want, "List", 0), env, c);
-    if (v.err != "") { return v; }
+    GT v0 = lw_part(w, lw_kid(w, id, i), lw_want_arg(w.want, "List", 0), env, c);
+    if (v0.err != "") { return v0; }
+    GT v = lw_adopt_wider(v0, ety);
     if (num_norm_cg(v.ty) == num_norm_cg(ety)) { return lw_list_at(w, id, i + 1, ety, vals.concat([v.val]), env, v); }
+    // A wider integer after narrower ones (`[0, 1, big]`): the ones before
+    // widen to it.
+    if (lw_widens(v.ty, ety)) {
+        GT up = lw_widen_vals(vals, 0, ety, v.ty, ListBuf(), v);
+        return lw_list_at(w, id, i + 1, v.ty, lw_vals_of(up).concat([v.val]), env, up);
+    }
     // Elements that differ only by holes (`[Some(1), None]`) share one
     // representation; the list takes the more specific type.
     Str u = lw_elem_unify(ety, v.ty);
@@ -172,10 +198,31 @@ LSF lw_finits(LW w, Int id, Int i, Str fields, Str reg, List(Str) env, LSF acc) 
     return lw_finits(w, id, i + 1, fields, reg, env, LSF {.g = stored, .st = acc.st});
 }
 
+// v at type ty, a declared or expected type of the same number family;
+// else v.
+GT lw_adopt(GT v, Str ty) {
+    if (ty == "" || !lw_field_adopts(ty, v.ty)) { return v; }
+    GT vw = pick_widen(true, v, num_norm_cg(ty));
+    return if (vw.err == "") { vw } else { v };
+}
+
+// v widened to ty, a type inferred from other elements; else v.
+GT lw_adopt_wider(GT v, Str ty) {
+    if (!lw_widens(ty, v.ty)) { return v; }
+    GT vw = pick_widen(true, v, num_norm_cg(ty));
+    return if (vw.err == "") { vw } else { v };
+}
+
 Bool lw_field_adopts(Str fty, Str vty) {
     Str fn = num_norm_cg(fty);
     if (fn == num_norm_cg(vty)) { return false; }
     return (int_fam(fty) && int_fam(vty)) || (is_float_cg(fty) && is_float_cg(vty)) || (is_dec_cg(fty) && is_dec_cg(vty));
+}
+
+// The same, only toward a wider integer: for a type inferred from other
+// elements, where narrowing would lose a value.
+Bool lw_widens(Str to, Str from) {
+    return int_fam(to) && int_fam(from) && ll_width_of(to) > ll_width_of(from);
 }
 
 List(Str) lw_fstores(Str reg, List(Str) st, Int i, List(Str) acc) {
@@ -217,11 +264,15 @@ GT lw_struct(LW w, Int id, List(Str) env, GT c) {
 // cg_map_or_set_lit (map form) and cg_map_lit_rest.
 GT lw_map_lit(LW w, Int id, List(Str) env, GT c) {
     Int e0 = lw_kid(w, id, 0);
-    GT first = lw_part(w, lw_kid(w, e0, 0), lw_want_arg(w.want, "Map", 0), env, c);
-    if (first.err != "") { return first; }
+    Str wk = lw_want_arg(w.want, "Map", 0);
+    Str wv = lw_want_arg(w.want, "Map", 1);
+    GT first0 = lw_part(w, lw_kid(w, e0, 0), wk, env, c);
+    if (first0.err != "") { return first0; }
+    GT first = lw_adopt(first0, wk);
     GT kw = lin_word("", first, lin_key_kind(first.ty), env, w.fs);
-    GT val = lw_part(w, lw_kid(w, e0, 1), lw_want_arg(w.want, "Map", 1), env, kw);
-    if (val.err != "") { return val; }
+    GT val0 = lw_part(w, lw_kid(w, e0, 1), wv, env, kw);
+    if (val0.err != "") { return val0; }
+    GT val = lw_adopt(val0, wv);
     Str kt = first.ty;
     Str vt = val.ty;
     Int t0 = val.tmp + 1;
@@ -242,18 +293,22 @@ GT lw_map_lit_put(LW w, Str m, Str kw, GT v, Str kt, Str vt, List(Str) env) {
 GT lw_map_rest(LW w, Int id, Int i, Str kt, Str vt, List(Str) env, GT m) {
     if (i >= w.g.ns[id].nk) { return m; }
     Int en = lw_kid(w, id, i);
-    GT k = lw_part(w, lw_kid(w, en, 0), lw_want_arg(w.want, "Map", 0), env, m);
-    if (k.err != "") { return k; }
+    GT k0 = lw_part(w, lw_kid(w, en, 0), lw_want_arg(w.want, "Map", 0), env, m);
+    if (k0.err != "") { return k0; }
+    GT k = lw_adopt_wider(k0, kt);
     GT kw = lin_word("", k, lin_key_kind(kt), env, w.fs);
-    GT v = lw_part(w, lw_kid(w, en, 1), lw_want_arg(w.want, "Map", 1), env, kw);
-    if (v.err != "") { return v; }
+    GT v0 = lw_part(w, lw_kid(w, en, 1), lw_want_arg(w.want, "Map", 1), env, kw);
+    if (v0.err != "") { return v0; }
+    GT v = lw_adopt_wider(v0, vt);
     return lw_map_rest(w, id, i + 1, kt, vt, env, lw_map_lit_put(w, m.val, kw.val, v, kt, vt, env));
 }
 
 // cg_map_or_set_lit (set forms) and cg_set_lit_rest.
 GT lw_set_lit(LW w, Int id, List(Str) env, GT c) {
-    GT first = lw_part(w, lw_kid(w, id, 0), lw_want_arg(w.want, "Set", 0), env, c);
-    if (first.err != "") { return first; }
+    Str we = lw_want_arg(w.want, "Set", 0);
+    GT first0 = lw_part(w, lw_kid(w, id, 0), we, env, c);
+    if (first0.err != "") { return first0; }
+    GT first = lw_adopt(first0, we);
     Int t1 = first.tmp + 1;
     Str s0 = f"%t{t1}";
     GT e = lw_step(first, first.val, first.ty, first.lines.concat([s0 + " = call ptr @resid_set_new()"]), t1);
@@ -270,8 +325,9 @@ GT lw_set_lit_put(LW w, Str s, GT e, Str et, List(Str) env) {
 
 GT lw_set_rest(LW w, Int id, Int i, Str et, List(Str) env, GT sv) {
     if (i >= w.g.ns[id].nk) { return sv; }
-    GT e = lw_part(w, lw_kid(w, id, i), lw_want_arg(w.want, "Set", 0), env, sv);
-    if (e.err != "") { return e; }
+    GT e0 = lw_part(w, lw_kid(w, id, i), lw_want_arg(w.want, "Set", 0), env, sv);
+    if (e0.err != "") { return e0; }
+    GT e = lw_adopt_wider(e0, et);
     if (e.ty != et) { return gt_err("set element type mismatch: " + et + " vs " + e.ty, e); }
     return lw_set_rest(w, id, i + 1, et, env, lw_set_lit_put(w, sv.val, e, et, env));
 }
@@ -3805,6 +3861,10 @@ Bool lw_ord_impl(Funcs fs, Str f, Int i) {
     return lw_ord_impl(fs, f, i + 1);
 }
 
+// An integer wider than a word: its list sorts by limbs.
+Bool lw_wide_int(Str t) { return int_fam(t) && ll_width_of(t) > 64; }
+Str lw_signed_arg(Str t) { return if (str_has_prefix_cg(num_norm_cg(t), "UInt")) { "0" } else { "1" }; }
+
 // cg_sort.
 GT lw_sort(LW w, Int id, List(Str) env, GT c) {
     Int nk = w.g.ns[id].nk;
@@ -3818,6 +3878,7 @@ GT lw_sort(LW w, Int id, List(Str) env, GT c) {
         Bool builtin = int_fam(et) || is_float_cg(et) || num_norm_cg(et) == "Str";
         if (ui >= 0 && !builtin) { return lw_rt1(v, "ptr", "@list_sort_by(ptr " + v.val + ", ptr @__cmp_" + bfns_verb(w.fs.bfns[ui], "compare") + ")", v.ty); }
         Str sf = if (is_float_cg(et)) { "list_sort_floats" } else { if (num_norm_cg(et) == "Str") { "list_sort_strs" } else { "list_sort_ints" } };
+        if (lw_wide_int(et)) { return lw_rt1(v, "ptr", "@list_sort_wide(ptr " + v.val + ", i64 " + lw_signed_arg(et) + ")", v.ty); }
         return lw_rt1(v, "ptr", "@" + sf + "(ptr " + v.val + ")", v.ty);
     }
     Int u = lw_kid(w, id, 1);
@@ -3849,7 +3910,8 @@ GT lw_sort(LW w, Int id, List(Str) env, GT c) {
         Int n1 = v.tmp + 1;
         Str r1 = f"%t{n1}";
         Str r2 = f"%t{n1 + 1}";
-        List(Str) sl1 = v.lines.concat([r1 + " = call ptr @" + sfn + "(ptr " + v.val + ")"]);
+        Str sortcall = if (lw_wide_int(param)) { "@list_sort_wide(ptr " + v.val + ", i64 " + lw_signed_arg(param) + ")" } else { "@" + sfn + "(ptr " + v.val + ")" };
+        List(Str) sl1 = v.lines.concat([r1 + " = call ptr " + sortcall]);
         List(Str) sl2 = if (frev) { sl1.concat([r2 + " = call ptr @" + rfn + "(ptr " + r1 + ")"]) } else { sl1 };
         return lw_step(v, if (frev) { r2 } else { r1 }, v.ty, sl2, n1 + 1);
     }

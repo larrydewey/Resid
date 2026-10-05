@@ -2317,6 +2317,12 @@ Bool cg_arith_family(Str name) {
     return false;
 }
 
+// Integers of 128 bits and wider box through resid_box_{i,u}<width> and
+// unbox through resid_unbox_{i,u}<width>.
+Bool is_wide_box(Str t) { return int_fam(t) && ll_width_of(t) >= 128; }
+Str wide_box_fn(Str t) { return "@resid_box_" + (if (str_has_prefix_cg(num_norm_cg(t), "UInt")) { "u" } else { "i" }) + f"{ll_width_of(t)}"; }
+Str wide_unbox_fn(Str t) { return "@resid_unbox_" + (if (str_has_prefix_cg(num_norm_cg(t), "UInt")) { "u" } else { "i" }) + f"{ll_width_of(t)}"; }
+
 // Heap-box a value for use as a sum-variant payload slot (spec §10).
 // Scalars become resid_box_i64/f64/bool; Str and composites pass through
 // (they are already pointers). Mirrors stage-1 codegen's box_scalar.
@@ -2357,9 +2363,8 @@ GT box_heap_(Str s, GT v, List(Str) env, Funcs fs) {
         GT wv = box_heap_(s, GT {.pos = v.pos, .val = wreg, .ty = wide, .cnt = v.cnt, .err = "", .glines = v.glines, .lines = wl, .tmp = tw, .lbl = v.lbl, .tail = false}, env, fs);
         return GT {.pos = wv.pos, .val = wv.val, .ty = v.ty, .cnt = wv.cnt, .err = "", .glines = wv.glines, .lines = wv.lines, .tmp = wv.tmp, .lbl = wv.lbl, .tail = false};
     }
-    Bool is128 = str_has_prefix_cg(v.ty, "Int(128)") || str_has_prefix_cg(v.ty, "UInt(128)");
-    Bool isu128 = str_has_prefix_cg(v.ty, "UInt(128)");
-    Str bfn = if (isu128) { "@resid_box_u128" } else { "@resid_box_i128" };
+    Bool is128 = is_wide_box(v.ty);
+    Str bfn = if (is128) { wide_box_fn(v.ty) } else { "" };
     Int t1 = v.tmp + 1;
     Str reg = f"%t{t1}";
     Str line = if (flt) {
@@ -2488,22 +2493,22 @@ GT cg_expect_assert(Str s, GT self, GT y, Str et, Str method, Int pos, List(Str)
     Bool bl = et == "Bool";
     Bool ist = et == "Int" || et == "UInt" || str_has_prefix_cg(et, "Int(") || str_has_prefix_cg(et, "UInt(");
     Bool isstr = et == "Str";
-    Bool is128 = str_has_prefix_cg(et, "Int(128)") || str_has_prefix_cg(et, "UInt(128)");
+    Bool is128 = is_wide_box(et);
     Int t1 = y.tmp + 1;
     if (ist && is128) {
         Str u = f"%t{t1}";
-        Str tag = if (str_has_prefix_cg(et, "UInt(")) { "@resid_unbox_u128" } else { "@resid_unbox_i128" };
+        Str wl = ll_ty(et);
         List(Str) m0 = y.lines;
-        List(Str) m1 = m0.concat([u + " = call i128 " + tag + "(ptr " + self.val + ")"]);
+        List(Str) m1 = m0.concat([u + " = call " + wl + " " + wide_unbox_fn(et) + "(ptr " + self.val + ")"]);
         Int t2 = t1 + 1;
         Str ok = f"%t{t2}";
-        List(Str) m2 = m1.concat([ok + " = icmp " + ieq + " i128 " + u + ", " + y.val]);
-        Str boxer = if (str_has_prefix_cg(et, "UInt(")) { "@resid_box_u128" } else { "@resid_box_i128" };
+        List(Str) m2 = m1.concat([ok + " = icmp " + ieq + " " + wl + " " + u + ", " + y.val]);
+        Str boxer = wide_box_fn(et);
         Str fa = f"%t{t2 + 1}";
         Str fb = f"%t{t2 + 2}";
         Str fe = f"%t{t2 + 3}";
         List(Str) fl = [fa + " = call ptr @ToString(ptr " + self.val + ")",
-                        fb + " = call ptr " + boxer + "(i128 " + y.val + ")",
+                        fb + " = call ptr " + boxer + "(" + wl + " " + y.val + ")",
                         fe + " = call ptr @ToString(ptr " + fb + ")"];
         GT z = GT {.pos = pos, .val = ok, .ty = "Bool", .cnt = 0, .err = "", .glines = y.glines, .lines = m2, .tmp = t2 + 3, .lbl = y.lbl, .tail = false};
         return cg_expect_guard2(s, ok, method, fl, fa, fe, pos, z);
@@ -3491,11 +3496,7 @@ List(Str) lst_box_lines(Str ety, Str ev, Int tb) {
     }
     if (int_fam(ety)) {
         Int w = ll_width_of(ety);
-        if (w == 128) {
-            Bool u = str_has_prefix_cg(ety, "UInt");
-            Str fn = if (u) { "@resid_box_u128" } else { "@resid_box_i128" };
-            return [r + " = call ptr " + fn + "(i128 " + ev + ")"];
-        }
+        if (w >= 128) { return [r + " = call ptr " + wide_box_fn(ety) + "(" + ll_ty(ety) + " " + ev + ")"]; }
         if (w == 64) { return [r + " = call ptr @resid_box_i64(i64 " + ev + ")"]; }
         Str sx = f"%t{tb + 1}";
         Str op = if (ll_is_signed(ety)) { "sext" } else { "zext" };
@@ -3528,11 +3529,7 @@ List(Str) lst_read_lines(Str ety, Str slot, Int tr, List(Str) acc) {
     }
     if (int_fam(ety)) {
         Int w = ll_width_of(ety);
-        if (w == 128) {
-            Bool u = str_has_prefix_cg(ety, "UInt");
-            Str fn = if (u) { "@resid_unbox_u128" } else { "@resid_unbox_i128" };
-            return acc.concat([r + " = call i128 " + fn + "(ptr " + slot + ")"]);
-        }
+        if (w >= 128) { return acc.concat([r + " = call " + ll_ty(ety) + " " + wide_unbox_fn(ety) + "(ptr " + slot + ")"]); }
         if (w == 64) { return acc.concat([r + " = call i64 @resid_unbox_i64(ptr " + slot + ")"]); }
         Str raw = f"%t{tr + 1}";
         return acc.concat([raw + " = call i64 @resid_unbox_i64(ptr " + slot + ")", r + " = trunc i64 " + raw + " to " + ll_ty(ety)]);
@@ -3963,11 +3960,10 @@ GT cg_match_payload(GT sc, Str ety, Int slot, GT c) {
         List(Str) z5 = z4.concat([p5 + " = call i64 @resid_unbox_i64(ptr " + p4 + ")"]);
         return GT {.pos = sc.pos, .val = p5, .ty = ety, .cnt = 0, .err = "", .glines = c.glines, .lines = z5, .tmp = t5, .lbl = c.lbl, .tail = false};
     }
-    if (str_has_prefix_cg(typ, "Int(128)") || str_has_prefix_cg(typ, "UInt(128)")) {
+    if (is_wide_box(typ)) {
         Int t5 = c.tmp + 5;
         Str p5 = f"%t{t5}";
-        Str fn = if (str_has_prefix_cg(typ, "UInt")) { "@resid_unbox_u128" } else { "@resid_unbox_i128" };
-        List(Str) z5 = z4.concat([p5 + " = call " + ll_ty(typ) + " " + fn + "(ptr " + p4 + ")"]);
+        List(Str) z5 = z4.concat([p5 + " = call " + ll_ty(typ) + " " + wide_unbox_fn(typ) + "(ptr " + p4 + ")"]);
         return GT {.pos = sc.pos, .val = p5, .ty = ety, .cnt = 0, .err = "", .glines = c.glines, .lines = z5, .tmp = t5, .lbl = c.lbl, .tail = false};
     }
     // A narrower integer or float was widened into its slot (box_heap_):
@@ -4775,11 +4771,7 @@ Str cmp_read(Str src, Str dst, Str pty) {
     }
     if (int_fam(pty)) {
         Int w = ll_width_of(pty);
-        if (w == 128) {
-            Bool u = str_has_prefix_cg(pty, "UInt");
-            Str fn = if (u) { "@resid_unbox_u128" } else { "@resid_unbox_i128" };
-            return "  " + d + " = call i128 " + fn + "(ptr " + s + ")\n";
-        }
+        if (w >= 128) { return "  " + d + " = call " + ll_ty(pty) + " " + wide_unbox_fn(pty) + "(ptr " + s + ")\n"; }
         if (w == 64) { return "  " + d + " = call i64 @resid_unbox_i64(ptr " + s + ")\n"; }
         Str raw = "%" + dst + "w";
         return "  " + raw + " = call i64 @resid_unbox_i64(ptr " + s + ")\n  " + d + " = trunc i64 " + raw + " to " + ll_ty(pty) + "\n";

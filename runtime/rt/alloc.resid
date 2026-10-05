@@ -539,6 +539,76 @@ pub Int rt_box_u128(Int(128) v) {
 @export("resid_unbox_u128", "i128(ptr)")
 pub Int(128) rt_unbox_u128(Int p) { return rt_unbox_i128(p); }
 
+// Integers wider than 128 bits: little-endian limbs from offset 24.
+@export("resid_box_i256", "ptr(i256)")
+pub Int rt_box_i256(Int(256) v) {
+    Int b = scalar_box(resid_raw_addr("i256"), 32);
+    _ = st64(b + 24, (Int)(v >> (Int(256))(0)));
+    _ = st64(b + 32, (Int)(v >> (Int(256))(64)));
+    _ = st64(b + 40, (Int)(v >> (Int(256))(128)));
+    _ = st64(b + 48, (Int)(v >> (Int(256))(192)));
+    return b;
+}
+
+@export("resid_box_u256", "ptr(i256)")
+pub Int rt_box_u256(Int(256) v) {
+    Int b = scalar_box(resid_raw_addr("u256"), 32);
+    _ = st64(b + 24, (Int)(v >> (Int(256))(0)));
+    _ = st64(b + 32, (Int)(v >> (Int(256))(64)));
+    _ = st64(b + 40, (Int)(v >> (Int(256))(128)));
+    _ = st64(b + 48, (Int)(v >> (Int(256))(192)));
+    return b;
+}
+
+// Both signednesses unbox the same 256 bits.
+@export("resid_unbox_i256", "i256(ptr)")
+pub Int(256) rt_unbox_i256(Int p) {
+    Int(256) m = (Int(256))18446744073709551615;
+    return ((Int(256))ld64(p + 48) << (Int(256))192) | (((Int(256))ld64(p + 24) & m) << (Int(256))0) | (((Int(256))ld64(p + 32) & m) << (Int(256))64) | (((Int(256))ld64(p + 40) & m) << (Int(256))128);
+}
+
+@export("resid_unbox_u256", "i256(ptr)")
+pub Int(256) rt_unbox_u256(Int p) { return rt_unbox_i256(p); }
+
+@export("resid_box_i512", "ptr(i512)")
+pub Int rt_box_i512(Int(512) v) {
+    Int b = scalar_box(resid_raw_addr("i512"), 64);
+    _ = st64(b + 24, (Int)(v >> (Int(512))(0)));
+    _ = st64(b + 32, (Int)(v >> (Int(512))(64)));
+    _ = st64(b + 40, (Int)(v >> (Int(512))(128)));
+    _ = st64(b + 48, (Int)(v >> (Int(512))(192)));
+    _ = st64(b + 56, (Int)(v >> (Int(512))(256)));
+    _ = st64(b + 64, (Int)(v >> (Int(512))(320)));
+    _ = st64(b + 72, (Int)(v >> (Int(512))(384)));
+    _ = st64(b + 80, (Int)(v >> (Int(512))(448)));
+    return b;
+}
+
+@export("resid_box_u512", "ptr(i512)")
+pub Int rt_box_u512(Int(512) v) {
+    Int b = scalar_box(resid_raw_addr("u512"), 64);
+    _ = st64(b + 24, (Int)(v >> (Int(512))(0)));
+    _ = st64(b + 32, (Int)(v >> (Int(512))(64)));
+    _ = st64(b + 40, (Int)(v >> (Int(512))(128)));
+    _ = st64(b + 48, (Int)(v >> (Int(512))(192)));
+    _ = st64(b + 56, (Int)(v >> (Int(512))(256)));
+    _ = st64(b + 64, (Int)(v >> (Int(512))(320)));
+    _ = st64(b + 72, (Int)(v >> (Int(512))(384)));
+    _ = st64(b + 80, (Int)(v >> (Int(512))(448)));
+    return b;
+}
+
+// Both signednesses unbox the same 512 bits.
+@export("resid_unbox_i512", "i512(ptr)")
+pub Int(512) rt_unbox_i512(Int p) {
+    Int(512) m = (Int(512))18446744073709551615;
+    return ((Int(512))ld64(p + 80) << (Int(512))448) | (((Int(512))ld64(p + 24) & m) << (Int(512))0) | (((Int(512))ld64(p + 32) & m) << (Int(512))64) | (((Int(512))ld64(p + 40) & m) << (Int(512))128) | (((Int(512))ld64(p + 48) & m) << (Int(512))192) | (((Int(512))ld64(p + 56) & m) << (Int(512))256) | (((Int(512))ld64(p + 64) & m) << (Int(512))320) | (((Int(512))ld64(p + 72) & m) << (Int(512))384);
+}
+
+@export("resid_unbox_u512", "i512(ptr)")
+pub Int(512) rt_unbox_u512(Int p) { return rt_unbox_i512(p); }
+
+
 // Immediate boxes need every pointer below 2^48: abort at startup on a
 // system that maps the stack, heap or program above it.
 pub Int check_address_space() {

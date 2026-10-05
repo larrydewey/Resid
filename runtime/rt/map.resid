@@ -124,6 +124,7 @@ Int stype(Int p) {
     if (type_is(t, resid_raw_addr("bool"))) { return 3; }
     if (type_is(t, resid_raw_addr("i128"))) { return 4; }
     if (type_is(t, resid_raw_addr("u128"))) { return 5; }
+    if (wide_limbs(t) > 0) { return 7; }
     return 6;
 }
 
@@ -137,7 +138,7 @@ Int value_hash(Int v) {
     Int raw = ld64(v + 16);
     if (box_tag(v) == 0 - 1) {
         Int st = stype(v);
-        if (st == 1 || st == 4) { return fnv_i64(ld64(raw)); }
+        if (st == 1 || st == 4 || st == 7) { return fnv_i64(ld64(raw)); }
         if (st == 2) { return fnv_f64(resid_raw_bits_f64(ld64(raw))); }
         if (st == 3) { return fnv_str(if (ld8(raw) != 0) { resid_raw_addr("t") } else { resid_raw_addr("f") }); }
         if (st == 5) {
@@ -168,6 +169,11 @@ Bool value_eq(Int a, Int b) {
     return false;
 }
 
+Bool limbs_same(Int a, Int b, Int n) {
+    if (n <= 0) { return true; }
+    return ld64(a) == ld64(b) && limbs_same(a + 8, b + 8, n - 1);
+}
+
 Bool boxed_eq(Int a, Int b) {
     Int ta = box_type(a);
     Int tb = box_type(b);
@@ -181,6 +187,7 @@ Bool boxed_eq(Int a, Int b) {
         if (st == 2) { return resid_raw_bits_f64(ld64(ra)) == resid_raw_bits_f64(ld64(rb)); }
         if (st == 3) { return ld8(ra) == ld8(rb); }
         if (st == 4 || st == 5) { return ld64(ra) == ld64(rb) && ld64(ra + 8) == ld64(rb + 8); }
+        if (st == 7) { return limbs_same(ra, rb, wide_limbs(ta)); }
         return false;
     }
     if (type_is(ta, resid_raw_addr("Str")) && type_is(tb, resid_raw_addr("Str"))) {

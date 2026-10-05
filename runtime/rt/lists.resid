@@ -59,12 +59,14 @@ Float sum_floats(Int l, Int i, Int n, Float acc) {
 
 // ─── Stable merge sort over a slot array ───────────────────────────────
 // cmp kinds: 0 word, 1 Float, 2 Str, 3 a comparator thunk
-// `i32 (ptr slot_a, ptr slot_b)` at `f` (sort by a behavior instance).
+// `i32 (ptr slot_a, ptr slot_b)` at `f` (sort by a behavior instance),
+// 4 a signed and 5 an unsigned integer wider than 64 bits.
 
 Int slot_cmp(Int k, Int f, Int pa, Int pb) {
     if (k == 3) { return sx32(resid_raw_call2(f, pa, pb)); }
     Int a = ld64(pa);
     Int b = ld64(pb);
+    if (k == 4 || k == 5) { return wide_cmp(a, b, box_limbs(a) - 1, k == 4); }
     if (k == 2) { return c_strcmp(a, b); }
     if (k == 1) {
         Float x = unbox_float(a);
@@ -114,6 +116,26 @@ Int sorted_copy(Int l, Int k, Int f) {
     _ = c_free(items) + c_free(scratch);
     return out;
 }
+
+// Limbs in a box of 128 bits or more.
+Int box_limbs(Int p) {
+    Int ty = box_type(p);
+    if (ty != 0 && (c_strcmp(ty, resid_raw_addr("i128")) == 0 || c_strcmp(ty, resid_raw_addr("u128")) == 0)) { return 2; }
+    return wide_limbs(ty);
+}
+
+// Compare from the top limb down: the top one signed when `signed`.
+Int wide_cmp(Int a, Int b, Int i, Bool signed) {
+    if (i < 0) { return 0; }
+    Int x = ld64(a + 24 + i * 8);
+    Int y = ld64(b + 24 + i * 8);
+    if (x == y) { return wide_cmp(a, b, i - 1, signed); }
+    Bool less = if (signed) { x < y } else { ult(x, y) };
+    return if (less) { 0 - 1 } else { 1 };
+}
+
+@export("list_sort_wide", "ptr(ptr,i64)")
+pub Int rt_list_sort_wide(Int l, Int signed) { return sorted_copy(l, if (signed != 0) { 4 } else { 5 }, 0); }
 
 @export("list_sort_ints", "ptr(ptr)")
 pub Int rt_list_sort_ints(Int l) { return sorted_copy(l, 0, 0); }

@@ -1,0 +1,37 @@
+// Integers wider than 64 bits inside Option, List, Map and Set keys and
+// values, sum payloads, sort and expect: boxed at their own width.
+type Big = Huge(Int(256)) | Neg(Int(512)) | Small;
+
+Str desc(Big b) { return match b { Huge(x) => f"huge {x}", Neg(y) => f"neg {y}", Small => "small" }; }
+
+Int main() {
+    Int(256) big = rt 57896044618658097711785492504343953926634992332820282019728792003956564819948;
+    Int(256) neg = rt -12345678901234567890123456789012345678901234567890;
+    Option(Int(256)) o = Some(big);
+    Int(256) ov = o else { 0 };
+    Option(Int(256)) nn = None;
+    Int(256) nv = nn else { 7 };
+    List(Int(256)) xs = [0, 1, big, neg];
+    List(Int(256)) ys = xs.concat([2]);
+    Map(Int, Int(256)) m = {1: big, 2: neg};
+    Int(256) mv = m.get(2) else { 0 };
+    Map(Int(256), Str) mk = {big: "big", neg: "neg"};
+    Str kv = mk.get(rt 57896044618658097711785492504343953926634992332820282019728792003956564819948) else { "missing" };
+    Set(Int(256)) st = {big, neg, 3};
+    Bool has = st.contains(neg);
+    UInt(256) u = rt 115792089237316195423570985008687907853269984665640564039457584007913129639935;
+    List(UInt(256)) us = [u, 5];
+    Int(512) w = rt -170141183460469231731687303715884105728000;
+    List(Int(512)) ws = [w];
+    println(f"{ov == big} {nv} {xs[2] == big} {ys[3] == neg} {ys.len()} {mv == neg} {kv} {has}");
+    println(f"{xs}");
+    println(f"{us}");
+    println(f"{ws[0]}");
+    println(desc(Huge(big)));
+    println(desc(Neg(w)));
+    println(f"{o}");
+    expect(o).toEqual(Some(big));
+    List(Int(256)) sorted = sort(xs);
+    println(f"{sorted}");
+    return 0;
+}

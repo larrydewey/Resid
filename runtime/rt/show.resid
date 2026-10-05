@@ -37,8 +37,28 @@ pub Int sb_float(Int sb, Float v) {
 }
 
 // A scalar of kind k: Float, Bool, or else a word.
+// Limbs of a wide integer box's type ("i256", "u512", ...), else 0.
+pub Int wide_limbs(Int ty) {
+    if (ty == 0) { return 0; }
+    if (c_strcmp(ty, resid_raw_addr("i256")) == 0 || c_strcmp(ty, resid_raw_addr("u256")) == 0) { return 4; }
+    if (c_strcmp(ty, resid_raw_addr("i512")) == 0 || c_strcmp(ty, resid_raw_addr("u512")) == 0) { return 8; }
+    return 0;
+}
+
+// n limbs at src into the scratch limbs (limbs_to_str negates in place).
+Int limbs_copy(Int src, Int n) {
+    Int w = resid_raw_tls("limbs", 64);
+    _ = mcopy(w, src, n * 8);
+    return w;
+}
+
 Int sb_scalar(Int sb, Int p, Int k) {
     if (k == 102) { return sb_float(sb, unbox_float(p)); }
+    // 128 bits and wider: more than one word.
+    if (!box_imm(p) && box_type(p) != 0 && c_strcmp(box_type(p), resid_raw_addr("i64")) != 0 && (k == 105 || k == 117)) {
+        Int t = rt_to_string(p);
+        return sb_lit(sb, t);
+    }
     if (k == 98) { return sb_lit(sb, if (ld8(p + 24) != 0) { resid_raw_addr("true") } else { resid_raw_addr("false") }); }
     return sb_word(sb, unbox_word(p));
 }
@@ -75,6 +95,8 @@ pub Int rt_to_string(Int p) {
     if (tag == 0 - 1) {
         if (ty != 0 && c_strcmp(ty, resid_raw_addr("i128")) == 0) { return limbs_to_str(limbs2(p), 2, ld64(p + 32) < 0); }
         if (ty != 0 && c_strcmp(ty, resid_raw_addr("u128")) == 0) { return limbs_to_str(limbs2(p), 2, false); }
+        Int wn = wide_limbs(ty);
+        if (wn > 0) { return limbs_to_str(limbs_copy(p + 24, wn), wn, ld8(ty) == 105 && ld64(p + 24 + (wn - 1) * 8) < 0); }
         Int k = if (ty == 0) { 0 } else { ld8(ty) };
         Int sb = rt_sb_new();
         _ = sb_scalar(sb, p, if (k == 102 || k == 98) { k } else { 105 });

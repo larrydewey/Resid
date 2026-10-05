@@ -1,0 +1,20 @@
+// Int(128) lists show and sort by every limb; UInt(256) sorts unsigned;
+// a reversed order, Int(512) maps, and a list of Int(256) in an Option.
+Int main() {
+    Int(128) a = rt 170141183460469231731687303715884105727;
+    Int(128) b = rt -170141183460469231731687303715884105728;
+    List(Int(128)) xs = [a, 3, b];
+    println(f"{xs} {sort(xs)}");
+    UInt(256) u = rt 115792089237316195423570985008687907853269984665640564039457584007913129639935;
+    List(UInt(256)) us = [u, 7, 0];
+    println(f"{sort(us)}");
+    List(Int(256)) ds = sort([(Int(256)) 5, (Int(256)) -9, (Int(256)) 2], using = Reverse(Ord(Int(256))));
+    println(f"{ds}");
+    Map(Int(512), Int(512)) m = {(Int(512)) 1: (Int(512)) -2};
+    Int(512) mv = m.get((Int(512)) 1) else { 0 };
+    println(f"{mv} {m}");
+    Option(List(Int(256))) ol = Some([(Int(256)) 1, (Int(256)) 2]);
+    List(Int(256)) l2 = ol else { [] };
+    println(f"{l2.len()} {l2[1]}");
+    return 0;
+}
