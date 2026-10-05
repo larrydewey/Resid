@@ -138,9 +138,21 @@ Int str_cmp(Str a, Str b) {
 
 // ─── source-file discovery (mirrors archive.rs's walk_sources: only
 // .resid/.toml files, recurse into subdirectories, skip a directory
-// literally named "target") ──────────────────────────────────────────
+// literally named "target"; plus the package's documents at its root) ─
 
 type FileRef = { Str abs; Str rel; };
+
+// A package's documents at its root: README, LICENSE (or LICENCE),
+// CHANGELOG, NOTICE and COPYING, bare or as .md, .markdown or .txt.
+// resid-manifest packs the same set, so a dependency's hash agrees.
+Bool is_doc_name(Str name) {
+    Str up = str_to_upper(name);
+    Int dot = str_index_of(up, ".", 0);
+    Str stem = if (dot >= 0) { str_slice(up, 0, dot) } else { up };
+    Str ext = if (dot >= 0) { str_slice(up, dot, str_len(up)) } else { "" };
+    Bool known = stem == "README" || stem == "LICENSE" || stem == "LICENCE" || stem == "CHANGELOG" || stem == "NOTICE" || stem == "COPYING";
+    return known && (ext == "" || ext == ".MD" || ext == ".MARKDOWN" || ext == ".TXT");
+}
 
 Bool is_source_name(Str name) {
     if (str_ends_with(name, ".resid")) { return true; }
@@ -196,7 +208,7 @@ List(FileRef) entries_for_child(Str name, Str child_abs, Str child_rel, List(Fil
         if (name == "target") { return acc; }
         return acc.concat(walk_dir(child_abs, child_rel));
     }
-    if (is_source_name(name)) {
+    if (is_source_name(name) || (child_rel == name && is_doc_name(name))) {
         return acc.concat([FileRef {.abs = child_abs, .rel = child_rel}]);
     }
     return acc;

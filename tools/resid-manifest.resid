@@ -1129,6 +1129,18 @@ Str check_dep_capabilities(List(ResolvedDep) deps, List(Str) granted_families) {
 // .resid/.toml file, sorted by path, skipping directories named "target".
 type PkFile = { Str abs; Str rel; };
 
+// A package's documents at its root: README, LICENSE (or LICENCE),
+// CHANGELOG, NOTICE and COPYING, bare or as .md, .markdown or .txt.
+// resid-pkg packs the same set, so a dependency's hash agrees.
+Bool is_doc_name(Str name) {
+    Str up = str_to_upper(name);
+    Int dot = str_index_of(up, ".", 0);
+    Str stem = if (dot >= 0) { str_slice(up, 0, dot) } else { up };
+    Str ext = if (dot >= 0) { str_slice(up, dot, str_len(up)) } else { "" };
+    Bool known = stem == "README" || stem == "LICENSE" || stem == "LICENCE" || stem == "CHANGELOG" || stem == "NOTICE" || stem == "COPYING";
+    return known && (ext == "" || ext == ".MD" || ext == ".MARKDOWN" || ext == ".TXT");
+}
+
 List(Int) pk_le(Int n, Int k, List(Int) acc) {
     if (k == 0) { return acc; }
     return pk_le(n >> 8, k - 1, acc.concat([n & 255]));
@@ -1141,7 +1153,7 @@ List(PkFile) pk_walk(Str dir_abs, Str dir_rel, List(Str) names, Int i, List(PkFi
     Str abs = dir_abs + "/" + name;
     Str rel = if (dir_rel == "") { name } else { dir_rel + "/" + name };
     Bool dir = filesystem.is_dir(abs);
-    Bool src = str_ends_with(name, ".resid") || str_ends_with(name, ".toml");
+    Bool src = str_ends_with(name, ".resid") || str_ends_with(name, ".toml") || (dir_rel == "" && is_doc_name(name));
     List(PkFile) acc2 = if (dir && name != "target") { pk_walk(abs, rel, sort(filesystem.list_dir(abs)), 0, acc) } else { if (!dir && src) { acc.concat([PkFile {.abs = abs, .rel = rel}]) } else { acc } };
     return pk_walk(dir_abs, dir_rel, names, i + 1, acc2);
 }

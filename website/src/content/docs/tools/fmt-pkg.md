@@ -119,7 +119,7 @@ searched.
 | Command | |
 |---|---|
 | `resid-pkg keygen <secret.hex> <pub.hex>` | an Ed25519 key pair |
-| `resid-pkg pack <dir> <out>` | a content-addressed archive of the package's `.resid` and `.toml` files |
+| `resid-pkg pack <dir> <out>` | a content-addressed archive of the package's `.resid` and `.toml` files, and its README, LICENSE (or LICENCE), CHANGELOG, NOTICE and COPYING at the root (bare, `.md`, `.markdown` or `.txt`) |
 | `resid-pkg sign <out> <keyfile>` | sign an archive's content hash |
 | `resid-pkg sign-dir <dir> <keyfile>` | sign a path dependency in place |
 | `resid-pkg checksig <out> <pubkey-hex>` | verify a signature |

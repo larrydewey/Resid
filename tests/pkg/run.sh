@@ -368,6 +368,22 @@ expect_ok pathapp
 printf '// changed\n' >> "$W/local/src/main.resid"
 expect_fail pathapp "sources differ from what was signed"
 
+# A package's root documents are packed and signed with its sources;
+# other Markdown, and documents below the root, are not.
+mkpkg "$W/docd" docd 1.0.0 'pub Str docd_name() { return "docd"; }'
+printf '# docd\n' > "$W/docd/README.md"; printf 'MIT\n' > "$W/docd/LICENSE"
+printf 'n\n' > "$W/docd/NOTES.md"; mkdir -p "$W/docd/src/more"; printf 'n\n' > "$W/docd/src/more/README.md"
+"$PKG" pack "$W/docd" "$W/docd_arch" > /dev/null
+mkdir -p "$W/docd_x"; "$PKG" extract "$W/docd_arch" "$W/docd_x" > /dev/null
+if [ -f "$W/docd_x/README.md" ] && [ -f "$W/docd_x/LICENSE" ] && [ ! -e "$W/docd_x/NOTES.md" ] && [ ! -e "$W/docd_x/src/more/README.md" ]; then ok; else bad "root documents packed: $(cd "$W/docd_x" && find . -type f | sort | tr '\n' ' ')"; fi
+"$PKG" sign-dir "$W/docd" "$W/pub.sec" > /dev/null
+mkdir -p "$W/docapp/src"
+printf '[package]\nname = "docapp"\nversion = "0.1.0"\n\n[dependencies.docd]\npath = "../docd"\npubkey = "%s"\n' "$PUB" > "$W/docapp/resid.toml"
+printf 'import "docd";\nInt main() { return 0; }\n' > "$W/docapp/src/main.resid"
+expect_ok docapp
+printf 'changed\n' >> "$W/docd/README.md"
+expect_fail docapp "sources differ from what was signed"
+
 # Extraction never writes outside the target directory.
 python3 - "$W/trav.resid-pkg" <<'PY'
 import struct, sys
