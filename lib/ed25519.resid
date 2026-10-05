@@ -286,6 +286,62 @@ pub List(Int) smul_y_acc(Int(256) k, Int(256) qx, Int(256) qy, Int(256) qz, Int(
     }
     return smul_y_acc(k, qx, qy, qz, dxv, dyv, dzv, ni);
 }
+
+// ── extended coordinates carried whole (X, Y, Z, T with T = XY/Z) ──
+// One call per doubling or addition, and no inversion until the end:
+// dbl-2008-hwcd and add-2008-hwcd-3 for a = -1.
+type Ept = { Int(256) x; Int(256) y; Int(256) z; Int(256) t; };
+
+pub Ept ept(Int(256) x, Int(256) y) { return Ept {.x = x, .y = y, .z = 1, .t = fe_mul(x, y)}; }
+
+pub Ept ept_id() { return Ept {.x = 0, .y = 1, .z = 1, .t = 0}; }
+
+pub Ept ept_dbl(Ept p) {
+    Int(256) a = fe_sq(p.x);
+    Int(256) b = fe_sq(p.y);
+    Int(256) zsq = fe_sq(p.z);
+    Int(256) c = fe_add(zsq, zsq);
+    Int(256) e = fe_sub(fe_sub(fe_sq(fe_add(p.x, p.y)), a), b);
+    Int(256) g = fe_sub(b, a);
+    Int(256) f = fe_sub(g, c);
+    Int(256) h = fe_sub(fe_sub(0, a), b);
+    return Ept {.x = fe_mul(e, f), .y = fe_mul(g, h), .z = fe_mul(f, g), .t = fe_mul(e, h)};
+}
+
+pub Ept ept_add(Ept p, Ept q) {
+    Int(256) a = fe_mul(fe_sub(p.y, p.x), fe_sub(q.y, q.x));
+    Int(256) b = fe_mul(fe_add(p.y, p.x), fe_add(q.y, q.x));
+    Int(256) c = fe_mul(fe_mul(fe_add(p.t, p.t), fe_d()), q.t);
+    Int(256) dd = fe_mul(fe_add(p.z, p.z), q.z);
+    Int(256) e = fe_sub(b, a);
+    Int(256) f = fe_sub(dd, c);
+    Int(256) g = fe_add(dd, c);
+    Int(256) h = fe_add(b, a);
+    return Ept {.x = fe_mul(e, f), .y = fe_mul(g, h), .z = fe_mul(f, g), .t = fe_mul(e, h)};
+}
+
+// [k]q, most significant bit first from bit i.
+pub Ept ept_mul(Int(256) k, Ept q, Ept r, Int i) {
+    if (i < 0) { return r; }
+    Ept d = ept_dbl(r);
+    Int bit = i64((k >> ((Int(256)) i)) & 1);
+    if (bit == 1) { return ept_mul(k, q, ept_add(d, q), i - 1); }
+    return ept_mul(k, q, d, i - 1);
+}
+
+// The encoding of a point: y with the sign of x in the top bit.
+pub List(Int) ept_encode(Ept p) {
+    Int(256) zi = fe_inv(p.z);
+    return encode_pt_bytes(fe_mul(p.x, zi), int_to_bytes(fe_mul(p.y, zi)));
+}
+
+pub Ept ept_base_mul(Int(256) k) { return ept_mul(k, ept(fe_bx(), fe_by()), ept_id(), 255); }
+
+// Two points are the same when X1 Z2 = X2 Z1 and Y1 Z2 = Y2 Z1.
+pub Bool ept_eq(Ept p, Ept q) {
+    return fe_mul(p.x, q.z) == fe_mul(q.x, p.z) && fe_mul(p.y, q.z) == fe_mul(q.y, p.z);
+}
+
 // base point
 pub Int(256) fe_bx() {
     return 15112221349535400772501151409588531511454012693041857206046113283949847762202;
@@ -458,36 +514,11 @@ pub Bool verify_sig_bytes(List(Int) mb, List(Int) sig, List(Int) pubk) {
         return false;
     }
     if (!dec_ok(pubk) || !dec_ok(rb)) { return false; }
-    Int(256) ax = dec_x(pubk);
-    Int(256) ay = dec_y(pubk);
-    Int(256) az = 1;
-    Int(256) at = fe_mul(ax, ay);
-    Int(256) rx = dec_x(rb);
-    Int(256) ry = dec_y(rb);
-    Int(256) rz = 1;
-    Int(256) rw = fe_mul(rx, ry);
-    List(Int) rp = concat_bytes(rb, pubk);
-    List(Int) rap = concat_bytes(rp, mb);
-    List(Int) dig = sha512_bytes(rap);
-    Int(256) hv = mod_l(dig);
-    Int(256) bxv = fe_bx();
-    Int(256) byv = fe_by();
-    Int(256) bz = 1;
-    Int(256) btv = fe_bt();
-    Int(256) iz = 1;
-    Int(256) ix = 0;
-    Int(256) oy = 1;
-    Int(256) sx = bytes_to_int(smul_x_acc(sv, bxv, byv, bz, ix, oy, iz, 255));
-    Int(256) sy = bytes_to_int(smul_y_acc(sv, bxv, byv, bz, ix, oy, iz, 255));
-    Int(256) wx = bytes_to_int(wmul_wx(hv, ax, ay, az, rx, ry, rz, ix, oy, iz, 255));
-    Int(256) wy = bytes_to_int(wmul_wy(hv, ax, ay, az, rx, ry, rz, ix, oy, iz, 255));
-    if (sx != wx) {
-        return false;
-    }
-    if (sy != wy) {
-        return false;
-    }
-    return true;
+    Ept a = ept(dec_x(pubk), dec_y(pubk));
+    Ept r = ept(dec_x(rb), dec_y(rb));
+    Int(256) hv = mod_l(sha512_bytes(concat_bytes(concat_bytes(rb, pubk), mb)));
+    // [S]B == R + [h]A
+    return ept_eq(ept_base_mul(sv), ept_add(ept_mul(hv, a, ept_id(), 255), r));
 }
 pub Bool verify_sig(Str msg, List(Int) sig, List(Int) pubk) {
     return verify_sig_bytes(bytes_of(msg), sig, pubk);
@@ -540,11 +571,7 @@ pub Int(256) clamp_of_seed(List(Int) seed) {
     return clamp_scalar(bytes_to_int(hlo));
 }
 pub List(Int) pub_key(List(Int) seed) {
-    Int(256) av2 = clamp_of_seed(seed);
-    List(Int) axb = smul_x_acc(av2, fe_bx(), fe_by(), 1, 0, 1, 1, 255);
-    List(Int) ayb = smul_y_acc(av2, fe_bx(), fe_by(), 1, 0, 1, 1, 255);
-    Int(256) axi = bytes_to_int(axb);
-    return encode_pt_bytes(axi, ayb);
+    return ept_encode(ept_base_mul(clamp_of_seed(seed)));
 }
 // `sign_msg_bytes` signs the message as raw bytes directly — see
 // `verify_sig_bytes`'s doc comment for why this needs to exist
@@ -554,18 +581,12 @@ pub List(Int) sign_msg_bytes(List(Int) seed, List(Int) mb) {
     List(Int) hhi = slice_bytes(h, 32, 63);
     Int(256) av2 = clamp_of_seed(seed);
     // A = [a]B
-    List(Int) axb = smul_x_acc(av2, fe_bx(), fe_by(), 1, 0, 1, 1, 255);
-    List(Int) ayb = smul_y_acc(av2, fe_bx(), fe_by(), 1, 0, 1, 1, 255);
-    Int(256) axi = bytes_to_int(axb);
-    List(Int) a_enc = encode_pt_bytes(axi, ayb);
+    List(Int) a_enc = ept_encode(ept_base_mul(av2));
     // r = SHA-512(prefix || M) mod L
     List(Int) rmac = concat_bytes(hhi, mb);
     Int(256) rv = mod_l(sha512_bytes(rmac));
     // R = [r]B
-    List(Int) rxb = smul_x_acc(rv, fe_bx(), fe_by(), 1, 0, 1, 1, 255);
-    List(Int) ryb = smul_y_acc(rv, fe_bx(), fe_by(), 1, 0, 1, 1, 255);
-    Int(256) rxi = bytes_to_int(rxb);
-    List(Int) r_enc = encode_pt_bytes(rxi, ryb);
+    List(Int) r_enc = ept_encode(ept_base_mul(rv));
     // k = SHA-512(R || A || M) mod L
     List(Int) ra = concat_bytes(r_enc, a_enc);
     List(Int) ram = concat_bytes(ra, mb);

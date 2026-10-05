@@ -160,12 +160,22 @@ LSF lw_finits(LW w, Int id, Int i, Str fields, Str reg, List(Str) env, LSF acc) 
     Int slot = field_slot(fields, f);
     if (slot < 0) { return LSF {.g = gt_err("unknown field " + f, acc.g), .st = acc.st}; }
     Str fty = field_ty(fields, f);
-    GT v = lw_field_value(w, lw_kid(w, fi, 0), fty, env, acc.g);
-    if (v.err != "") { return LSF {.g = v, .st = acc.st}; }
+    GT v0 = lw_field_value(w, lw_kid(w, fi, 0), fty, env, acc.g);
+    if (v0.err != "") { return LSF {.g = v0, .st = acc.st}; }
+    // A narrower number takes the field's width (`Int(256) z` from `1`):
+    // a store of the narrow value would leave the field's high bytes unset.
+    GT vw = pick_widen(lw_field_adopts(fty, v0.ty), v0, num_norm_cg(fty));
+    GT v = if (vw.err == "") { vw } else { v0 };
     Str e = f"{slot}|" + ll_ty(v.ty) + "|" + v.val;
     if (reg == "") { return lw_finits(w, id, i + 1, fields, reg, env, LSF {.g = v, .st = acc.st.concat([e])}); }
     GT stored = lw_step(v, v.val, v.ty, lw_fstores(reg, [e], 0, v.lines), v.tmp);
     return lw_finits(w, id, i + 1, fields, reg, env, LSF {.g = stored, .st = acc.st});
+}
+
+Bool lw_field_adopts(Str fty, Str vty) {
+    Str fn = num_norm_cg(fty);
+    if (fn == num_norm_cg(vty)) { return false; }
+    return (int_fam(fty) && int_fam(vty)) || (is_float_cg(fty) && is_float_cg(vty)) || (is_dec_cg(fty) && is_dec_cg(vty));
 }
 
 List(Str) lw_fstores(Str reg, List(Str) st, Int i, List(Str) acc) {

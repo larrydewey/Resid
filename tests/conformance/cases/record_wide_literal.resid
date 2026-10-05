@@ -1,0 +1,16 @@
+// A literal stored into a wide record field (Ept's Int(256) z = 1, and
+// ept_id's 0 and 1) takes the field's width. Stored as 64 bits, the high
+// bytes were whatever the allocator handed back, and after the old
+// scalar multiply had churned the heap, [S]B came out wrong.
+import "crypto.resid";
+import "ed25519.resid";
+
+Int(256) ax(Ept p) { return fe_mul(p.x, fe_inv(p.z)); }
+
+Int main() {
+    Int(256) sv = rt 546550427207301685903956798680833844099864705467621073186633092008304355389;
+    Int(256) sx_old = bytes_to_int(smul_x_acc(sv, fe_bx(), fe_by(), 1, 0, 1, 1, 255));
+    Int(256) sx_new = ax(ept_base_mul(sv));
+    println(f"{sx_old == sx_new}");
+    return 0;
+}

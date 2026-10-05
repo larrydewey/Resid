@@ -1,5 +1,6 @@
 // ─── lib/chacha.resid — ChaCha20-Poly1305 AEAD (RFC 8439) ───────────
-// Pure Resid. ChaCha state words are Int(64) masked to 32 bits (the
+// Pure Resid. The block function runs on the 16 state words as scalar
+// parameters (cc_core). ChaCha state words are Int(64) masked to 32 bits (the
 // wrapping_* builtins are Int(64)-only; a+b of two <2^32 values never
 // overflows Int(64) checked arithmetic). Poly1305 runs on Int(256)
 // values with clamped r < 2^126 so products stay < 2^257 inside
@@ -145,12 +146,102 @@ pub List(Int) cc_add_states(List(Int) a, List(Int) b, Int i) {
     return cc_add_states(a, nb, ni);
 }
 
+
+// ── Fast path: the 16 state words in scalar parameters ──────────────
+// n double rounds from x0..x15; then the initial state (st, with ctr as
+// word 12) added back. No list is built per quarter round.
+pub List(Int) cc_core(List(Int) st, Int ctr, Int n, Int x0, Int x1, Int x2, Int x3, Int x4, Int x5, Int x6, Int x7, Int x8, Int x9, Int x10, Int x11, Int x12, Int x13, Int x14, Int x15) {
+    if (n == 0) { return [(x0 + st[0]) & 4294967295, (x1 + st[1]) & 4294967295, (x2 + st[2]) & 4294967295, (x3 + st[3]) & 4294967295, (x4 + st[4]) & 4294967295, (x5 + st[5]) & 4294967295, (x6 + st[6]) & 4294967295, (x7 + st[7]) & 4294967295, (x8 + st[8]) & 4294967295, (x9 + st[9]) & 4294967295, (x10 + st[10]) & 4294967295, (x11 + st[11]) & 4294967295, (x12 + ctr) & 4294967295, (x13 + st[13]) & 4294967295, (x14 + st[14]) & 4294967295, (x15 + st[15]) & 4294967295]; }
+    Int x0c1 = (x0 + x4) & 4294967295;
+    Int x12c1 = rotl32(x12 ^ x0c1, 16);
+    Int x8c1 = (x8 + x12c1) & 4294967295;
+    Int x4c1 = rotl32(x4 ^ x8c1, 12);
+    Int x0c = (x0c1 + x4c1) & 4294967295;
+    Int x12c = rotl32(x12c1 ^ x0c, 8);
+    Int x8c = (x8c1 + x12c) & 4294967295;
+    Int x4c = rotl32(x4c1 ^ x8c, 7);
+    Int x1c1 = (x1 + x5) & 4294967295;
+    Int x13c1 = rotl32(x13 ^ x1c1, 16);
+    Int x9c1 = (x9 + x13c1) & 4294967295;
+    Int x5c1 = rotl32(x5 ^ x9c1, 12);
+    Int x1c = (x1c1 + x5c1) & 4294967295;
+    Int x13c = rotl32(x13c1 ^ x1c, 8);
+    Int x9c = (x9c1 + x13c) & 4294967295;
+    Int x5c = rotl32(x5c1 ^ x9c, 7);
+    Int x2c1 = (x2 + x6) & 4294967295;
+    Int x14c1 = rotl32(x14 ^ x2c1, 16);
+    Int x10c1 = (x10 + x14c1) & 4294967295;
+    Int x6c1 = rotl32(x6 ^ x10c1, 12);
+    Int x2c = (x2c1 + x6c1) & 4294967295;
+    Int x14c = rotl32(x14c1 ^ x2c, 8);
+    Int x10c = (x10c1 + x14c) & 4294967295;
+    Int x6c = rotl32(x6c1 ^ x10c, 7);
+    Int x3c1 = (x3 + x7) & 4294967295;
+    Int x15c1 = rotl32(x15 ^ x3c1, 16);
+    Int x11c1 = (x11 + x15c1) & 4294967295;
+    Int x7c1 = rotl32(x7 ^ x11c1, 12);
+    Int x3c = (x3c1 + x7c1) & 4294967295;
+    Int x15c = rotl32(x15c1 ^ x3c, 8);
+    Int x11c = (x11c1 + x15c) & 4294967295;
+    Int x7c = rotl32(x7c1 ^ x11c, 7);
+    Int x0cd1 = (x0c + x5c) & 4294967295;
+    Int x15cd1 = rotl32(x15c ^ x0cd1, 16);
+    Int x10cd1 = (x10c + x15cd1) & 4294967295;
+    Int x5cd1 = rotl32(x5c ^ x10cd1, 12);
+    Int x0cd = (x0cd1 + x5cd1) & 4294967295;
+    Int x15cd = rotl32(x15cd1 ^ x0cd, 8);
+    Int x10cd = (x10cd1 + x15cd) & 4294967295;
+    Int x5cd = rotl32(x5cd1 ^ x10cd, 7);
+    Int x1cd1 = (x1c + x6c) & 4294967295;
+    Int x12cd1 = rotl32(x12c ^ x1cd1, 16);
+    Int x11cd1 = (x11c + x12cd1) & 4294967295;
+    Int x6cd1 = rotl32(x6c ^ x11cd1, 12);
+    Int x1cd = (x1cd1 + x6cd1) & 4294967295;
+    Int x12cd = rotl32(x12cd1 ^ x1cd, 8);
+    Int x11cd = (x11cd1 + x12cd) & 4294967295;
+    Int x6cd = rotl32(x6cd1 ^ x11cd, 7);
+    Int x2cd1 = (x2c + x7c) & 4294967295;
+    Int x13cd1 = rotl32(x13c ^ x2cd1, 16);
+    Int x8cd1 = (x8c + x13cd1) & 4294967295;
+    Int x7cd1 = rotl32(x7c ^ x8cd1, 12);
+    Int x2cd = (x2cd1 + x7cd1) & 4294967295;
+    Int x13cd = rotl32(x13cd1 ^ x2cd, 8);
+    Int x8cd = (x8cd1 + x13cd) & 4294967295;
+    Int x7cd = rotl32(x7cd1 ^ x8cd, 7);
+    Int x3cd1 = (x3c + x4c) & 4294967295;
+    Int x14cd1 = rotl32(x14c ^ x3cd1, 16);
+    Int x9cd1 = (x9c + x14cd1) & 4294967295;
+    Int x4cd1 = rotl32(x4c ^ x9cd1, 12);
+    Int x3cd = (x3cd1 + x4cd1) & 4294967295;
+    Int x14cd = rotl32(x14cd1 ^ x3cd, 8);
+    Int x9cd = (x9cd1 + x14cd) & 4294967295;
+    Int x4cd = rotl32(x4cd1 ^ x9cd, 7);
+    return cc_core(st, ctr, n - 1, x0cd, x1cd, x2cd, x3cd, x4cd, x5cd, x6cd, x7cd, x8cd, x9cd, x10cd, x11cd, x12cd, x13cd, x14cd, x15cd);
+}
+
+pub List(Int) cc_words(List(Int) st, Int ctr) {
+    return cc_core(st, ctr, 10, st[0], st[1], st[2], st[3], st[4], st[5], st[6], st[7], st[8], st[9], st[10], st[11], ctr, st[13], st[14], st[15]);
+}
+
+// Keystream byte k (0..63) of a block of words.
+pub Int cc_byte(List(Int) w, Int k) { return (w[k / 4] >> ((k % 4) * 8)) & 255; }
+
+pub ListBuf(Int) cc_xor_run(List(Int) st, Int ctr, List(Int) data, Int pos, ListBuf(Int) out) {
+    if (pos >= data.len()) { return out; }
+    List(Int) w = cc_words(st, ctr);
+    Int left = data.len() - pos;
+    Int take = if (left < 64) { left } else { 64 };
+    return cc_xor_run(st, (ctr + 1) & 4294967295, data, pos + take, cc_xor_bytes(w, data, pos, 0, take, out));
+}
+
+pub ListBuf(Int) cc_xor_bytes(List(Int) w, List(Int) data, Int pos, Int k, Int take, ListBuf(Int) out) {
+    if (k >= take) { return out; }
+    return cc_xor_bytes(w, data, pos, k + 1, take, out.push(data[pos + k] ^ cc_byte(w, k)));
+}
+
 // 64-byte keystream block for (key, counter, nonce)
 pub List(Int) chacha_block(List(Int) key, Int counter, List(Int) nonce) {
-    List(Int) st = cc_state(key, counter, nonce);
-    List(Int) w = cc_rounds(st, 10);
-    List(Int) mixed = cc_add_states(st, w, 0);
-    return ser_acc(mixed, 0, 16, []);
+    return ser_acc(cc_words(cc_state(key, counter, nonce), counter), 0, 16, []);
 }
 
 // ChaCha20 XOR (encrypt = decrypt)
@@ -170,7 +261,7 @@ pub List(Int) cc_xor_acc(List(Int) key, Int counter, List(Int) nonce, List(Int) 
 }
 
 pub List(Int) chacha20_xor(List(Int) key, Int counter, List(Int) nonce, List(Int) data) {
-    return cc_xor_acc(key, counter, nonce, data, 0, 0, [], []);
+    return cc_xor_run(cc_state(key, counter, nonce), counter, data, 0, ListBuf()).finish();
 }
 
 // ── wide-int byte helpers (Int(256) domain) ─────────────────────────
