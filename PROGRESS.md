@@ -2129,6 +2129,13 @@ Strategic work items:
 
 ## 6. Spec-conformance roadmap (v3.3)
 
+> **Historical (2026-10-05).** This section dates from the two-pipeline
+> period. The Rust pipeline (`crates/`, `bootstrap/rust-stage0/`) has since
+> been deleted and lives only in git history; the self-hosted compiler is
+> the only one, and the bootstrap root is the committed IR seed
+> `build/boot/seed.ll` (see AGENTS.md and `boot.sh`). Mentions below of
+> "both pipelines", stage-1 and `crates/` describe that period.
+
 Audit result: the language is self-hosted and broadly functional, but
 NOT yet 100% spec-complete. This section is the curated work list; an
 item is DONE only when it ships in **both** pipelines (see policy).
@@ -2155,16 +2162,14 @@ The replacement model:
   developed compiler going forward.** New features are implemented
   directly there; there is no requirement to also implement them in
   `crates/resid-type`/`crates/resid-codegen` first or in parallel.
-- **`crates/` (the Rust pipeline) is archived, not maintained.** It is
-  kept only so a stage-0 seed binary can be rebuilt for a new host
-  architecture the frozen seed binary doesn't already cover (see Phase D
-  below) — not as a reference implementation new features must also
-  satisfy.
-- **A frozen, versioned, checksummed stage-0 seed binary** (built once
-  from the last Rust pipeline commit, before archival) is the actual
-  bootstrap root: `stage0 → D1 → D2 → D3 → ...`, each generation built by
-  compiling `driver.resid` with the previous one. No generation after the
-  frozen seed ever depends on Rust again.
+- **`crates/` (the Rust pipeline) is deleted** (it is in git history).
+  It was kept for a while to rebuild a seed for a new host; the seed is
+  now the committed LLVM IR `build/boot/seed.ll`, which clang links on any
+  host it targets.
+- **The committed seed is the bootstrap root**: `seed.ll → stage1 →
+  stage2 → stage3`, each generation built by compiling `driver.resid`
+  with the previous one, and `./boot.sh` requires stage2 and stage3 to be
+  byte-identical. Nothing in the build path depends on Rust.
 - **clang/LLVM remains a permanent, accepted external dependency** (see
   Phase D.4) — "resid-only" means no Rust in the toolchain, not zero
   external tools. Both the historical Rust pipeline and every self-hosted
@@ -2847,3 +2852,31 @@ historical record of the phased design; marked complete at the top).
   wide-EC crypto property tests, and bootstrap-driver/parity e2e tests that
   each run the full self-hosted lex→parse→typecheck→codegen→clang-link→execute
   pipeline).
+
+## Specialization budget measured (2026-10-05)
+
+`rd_max_specs` (400 attempts per program) and `rd_max_specs_per_fn` (8)
+were suspected of holding the reducer back: the self-compile reports the
+400 limit, with only 52 of the attempts kept. Variants of the compiler
+built each limit, and each compiled the same driver source (which keeps
+the limit at 400, so the output is byte-identical and only the code
+quality of the compiler differs). Compiler CPU with clang stubbed out,
+median of 5:
+
+| Limit (program:function) | kept | build CPU / peak | resulting compiler |
+|---|---|---|---|
+| 0:8 | 0 | 1.99 s / 332 MB | 2.09 s |
+| 400:8 (shipped) | 52 | 2.02 s / 370 MB | 2.04 s |
+| 1000:8 | 249 | 2.11 s / 424 MB | 2.03 s |
+| 4000:8 | 485 (no limit hit) | 2.41 s / 620 MB | 2.02 s |
+| none:32 | 892 | 2.54 s / 768 MB | 2.03 s |
+| none:1000 | 1805 | 3.45 s / 1297 MB | 2.05 s |
+
+The differences past 400 are noise, while the cost of reducing grows
+to 3.5x the memory; clang's -O2 and LTO already propagate the constants
+the extra specializations would. A crypto-heavy program that hits the
+limit (SHA-256, AES-GCM, Ed25519, X25519) ran 17.0 s at 400 and 17.2 s
+with no limit, its binary 11% larger. No benchmark program reaches the
+limit. The residual notes name what really bounds reduction in the
+compiler: inputs unknown until run time (`provider`, 123) and the
+termination whistle on recursion (78). The limits stay.

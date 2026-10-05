@@ -49,6 +49,16 @@ budget is reported as `note: reduce: ...`. Reduced and unreduced programs
 behave identically, including their failures: an overflowing operation is
 never folded; it stays residual and traps at run time.
 
+Specialization has two budgets: 400 attempts per program and 8 per
+function. An attempt counts even when it is then dropped for not
+shrinking the callee, so a large program reports `note: reduce:
+specialization attempt limit (400) reached`. The calls past it stay
+general and clang still optimizes them. Measured on the compiler itself
+(2026-10-05), removing the limit keeps 485 specializations instead of 52
+(1,805 with no per-function limit) and costs up to 3.5x the compile
+memory, but the compiler it builds is no faster; with no specialization
+at all it is about 2.5% slower. The budgets sit where the gain stops.
+
 ## rt and known
 
 `rt e` and `@residual` make a value residual on purpose. `known(x)`
