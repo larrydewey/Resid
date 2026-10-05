@@ -1635,7 +1635,11 @@ GKT gk_variant_call(GK k, Int id, Str n, VOwn vo, Str exp) {
     if (v.err != "") { return gterr(v.k, v.err, id); }
     if (gparam) { return gt(v.k, vo.sumty + "(" + sum_fill(ps, 0, vo.payload, v.first, "") + ")", id); }
     if (gpat) { return gt(v.k, vo.sumty + "(" + gk_sum_args(ps, v.u, 0, "") + ")", id); }
-    return gt(v.k, vo.sumty, id);
+    if (ps.len() == 0) { return gt(v.k, vo.sumty, id); }
+    // A payload that names no parameter (`Whole(Reply)` in `Out(K)`) takes
+    // the sum's arguments from the expected type, else leaves them holes.
+    Bool fits = ty_head(exp) == ty_head(vo.sumty) && !gm_has_var(exp) && !str_contains(exp, "_");
+    return gt(v.k, if (fits) { exp } else { vo.sumty + "(" + gk_sum_args(ps, gu_new(), 0, "") + ")" }, id);
 }
 
 // A variant call checked against its payload positions: the unifier
@@ -2355,8 +2359,10 @@ GKT gk_lambda(GK k, Int id, Str exp) {
     if (open) { return gt(kb, body.ty + " closure(" + fn_inner(exp) + ")", id); }
     Str ret = fn_ret(exp);
     Bool num_adopt = is_num(body.ty) && is_num(ret) && int_adopt_ok(body.ty, ret, "");
+    // A body with holes (`Whole(r)` of an `Out(K)`) fits a result it unifies with.
+    Bool holes = str_contains(body.ty, "_") && gk_unify(ret, body.ty) != "";
     // A Void closure runs its body for effect and discards its value.
-    if (!ty_same(body.ty, ret) && !num_adopt && ret != "Void") { return gterr(kb, "closure body returns " + body.ty + ", expected " + ret, id); }
+    if (!ty_same(body.ty, ret) && !num_adopt && !holes && ret != "Void") { return gterr(kb, "closure body returns " + body.ty + ", expected " + ret, id); }
     if (np != pl.len()) { return gterr(kb, f"closure has {np} parameter(s), expected {pl.len()}", id); }
     return gt(kb, exp, id);
 }

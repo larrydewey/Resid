@@ -3696,7 +3696,6 @@ GT lw_lambda(LW w, Int id, Str fnty, List(Str) env, GT c) {
     List(Str) penv = lw_lam_env(w, id, 0, np, pl, nil_list());
     LamC cap0 = lam_captured_at(env, 0, LamC {.ids = nil_list(), .tys = nil_list(), .vals = nil_list(), .n = 0});
     Int ncap = cap0.n;
-    Str clo = f"@clo{w.g.ns[id].sp + 6 - w.base}";
     CapPrel pr0 = cap_prelude(cap0.ids, cap0.tys, ncap, 0, CapPrel {.lines = ["%envbase = inttoptr i64 %env to ptr"], .benv = nil_list(), .idx = 0});
     List(Str) benv = pr0.benv.concat(penv);
     // Temporaries continue the enclosing count: global names (@.lty, @.s)
@@ -3707,8 +3706,11 @@ GT lw_lambda(LW w, Int id, Str fnty, List(Str) env, GT c) {
     GT bodyw = if (ret != "Void" && body.ty != ret) { widen_val(body, ret) } else { body };
     Str rv0 = if (bodyw.val == "") { "0" } else { bodyw.val };
     Str retline = if (ret == "Void") { "ret i1 " + rv0 } else { "ret " + rlt + " " + bodyw.val };
-    List(Str) clo_lines = [("define " + rlt + " " + clo + "(" + sig + ") {"), "entry:"];
-    Str clo_text = str_join(clo_lines.concat(pr0.lines).concat(bodyw.lines).concat([retline, "}"]), "\n");
+    Str clo_body = str_join(pr0.lines.concat(bodyw.lines).concat([retline, "}"]), "\n");
+    // Instances of one generic function share the lambda's position, so
+    // the name also carries a digest of what it lowered to.
+    Str clo = f"@clo{w.g.ns[id].sp + 6 - w.base}_" + str_slice(str_sha256(rlt + sig + clo_body), 0, 10);
+    Str clo_text = "define " + rlt + " " + clo + "(" + sig + ") {\nentry:\n" + clo_body;
     // A closure may be called after its captures' owner changes: they are
     // shared from here.
     LSC sc0 = lw_share_caps(w, cap0.vals, cap0.tys, 0, LSC {.g = lw_step(c, "", "", c.lines, imax(c.tmp, bodyw.tmp)), .vals = nil_list()});

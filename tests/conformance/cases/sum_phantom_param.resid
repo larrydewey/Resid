@@ -1,0 +1,14 @@
+// A variant whose payload names none of its sum's parameters takes them
+// from the expected type: a binding, a return, a closure body.
+type Out(K) = Plain(Int) | Fancy(K);
+
+Int size(Out(Str) o) { return match o { Plain(x) => x, Fancy(s) => str_len(s) }; }
+
+Out(Str) plain(Int n) { return Plain(n); }
+
+Int main() {
+    Out(Str) a = Plain(3);
+    Out(Str) closure(Int) f = lambda(n) { Plain(n * 2) };
+    println(f"{size(a)} {size(plain(4))} {size(f(5))} {size(Fancy("abcdef"))}");
+    return 0;
+}
