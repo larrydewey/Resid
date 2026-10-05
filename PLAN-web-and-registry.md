@@ -1,6 +1,6 @@
 # Web and Registry Plan
 
-> **STATUS: step 2 done (2026-10-03) except `resid build` fetching https itself, which is a compiler memory problem; `tools/resid-fetch.resid` reaches a TLS registry today.** Agreed order of work
+> **STATUS: done (2026-10-05). Steps 1-4 shipped; the JSON index was dropped by decision.** Agreed order of work
 > after the TLS client, trust store and provenance verification. Each step
 > is a forcing function for the next: the server needs byte I/O and
 > listening, the registry needs the server, TLS and serialization.
@@ -78,42 +78,34 @@ Open questions, answered while doing it:
 against `openssl s_server` and against this repository's own server, in
 one process (`tests/tls/client.resid`).
 
-Fetching over https into `resid build` is where this stops:
+Done 2026-10-05: `resid-manifest` fetches an `https://` registry itself,
+with `[registry] ca` naming the trust store (required; no store is a
+refusal). The reduce blowup that kept the client out of the manifest tool
+is gone: the tool now builds in about 2 s at about 400 MB.
 
-- Importing `lib/tlsclient.resid` into `tools/resid-manifest.resid` sends
-  the compiler past 20 GB in reduce. The same import in a small program
-  is unremarkable inside 4 GB, so it is the module graph against the
-  manifest's size, not the client. Raising `RESID_MEM_LIMIT` would move
-  the cost onto every machine that resolves a dependency, so it is not a
-  fix.
-- So `tools/resid-fetch.resid` is the bridge: one artifact over https,
-  authenticated, SHA-256 printed, and `[registry] path` pointed at the
-  directory. Every signature and hash check stays where it was -- an
-  `https://` registry is reached, not trusted.
-- `url = "https://..."` in a manifest stays refused until the reduce
-  memory profile can carry the client inside the manifest's own compile.
-  That is step 5 work with the compiler, not a transport gap.
+## 3. Serialization into the ecosystem — done (2026-10-05), index format kept
 
-## 3. Serialization into the ecosystem
+- Done: `resid-serial`, `resid-json` and the other format packages import
+  each other by package name (`import "resid-serial/serial.resid";`,
+  resolved beside the dependency's root through the depmap and compiled
+  inside its ceiling), so they build the same from a checkout or from a
+  registry. Their test runners use `resid-manifest depmap`, which
+  `./install.sh` now installs beside `residc` (with `resid-pkg` and
+  `resid-fetch`).
+- Decided against (2026-10-05): moving the index to JSON. The core tools
+  would depend on packages that are themselves fetched from a registry;
+  the signed line format stays.
 
-- `resid-serial` and `resid-json` become the first real packages
-  published to and fetched from a registry, instead of sibling checkouts.
-- The registry index moves from its line format to JSON through
-  `Encode`/`Decode`, signed as today (the signature covers the bytes).
-- `resid-skill` and the site document the package workflow with these as
-  the worked example.
+## 4. Registry v2 — done (2026-10-05)
 
-## 4. Registry v2
-
-- Authenticated publish: an upload is a signed archive, checked against
-  the publisher keyring before it is written; `index add` rules apply
-  (no hash that contradicts an archive already published).
-- Served over TLS by `lib/httpserv.resid`. Done 2026-10-04: `resid-pkg
-  serve` is a thin wrapper over `lib/httpserv.resid` (four workers,
-  deadlines, no 1 MiB artifact cap), and `--cert F --key F` serves it over
-  TLS 1.3 itself.
-- Storage behind a behavior, so a directory and other backends are
-  interchangeable.
+- Authenticated publish: `serve --upload <keyring> --index-key <key>` and
+  `resid-pkg upload`; the signature is checked against the publisher
+  keyring before the archive is read, a version is never replaced, and
+  the index is re-signed by the registry's key.
+- Served over TLS by `lib/httpserv.resid` (`--cert F --key F`), uploads
+  included.
+- Storage behind `RegStore(T)` (`store_get`, `store_has`, `store_put`),
+  `DirStore` shipped.
 
 ## Known issues found along the way
 
@@ -121,11 +113,10 @@ Fetching over https into `resid build` is where this stops:
   treats `Int(256)` as an unsigned bit pattern (which is why it has its own
   `ec_ge`); anything that shifts a scalar has to avoid `>>`, which is why
   `ec_low_s` decides the low-s question by watching `2*s` wrap instead.
-- Authority analysis: a top-level function named like a built-in method
-  (`get`) gets an authority edge from every `m.get(k)`, including inside
-  imported libraries (`gk_user_ref` in `compiler/gcheck.resid` matches
-  method names without the receiver type). Codegen is correct; the effect
-  is a spurious E0219 only.
+- Done 2026-10-05: a top-level function named like a built-in method
+  (`get`) no longer gets an authority edge from `m.get(k)` on a Map: the
+  checker records the method calls a built-in method took (`TL.bm`) and
+  `gk_user_ref` skips them.
 - Done 2026-10-04: per-request read and reply deadlines
   (`HttpLimits.request_ms`, `reply_ms`; `resid_tcp_deadline` in the
   runtime), and a 30 s bound on any one blocked send on every socket.

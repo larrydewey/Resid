@@ -76,7 +76,7 @@ if [ "$PURGE" -eq 1 ]; then
 fi
 
 echo "Removing the Resid installation from $TARGET"
-for f in bin/residc bin/stage2.bin rt.ll env env.fish; do
+for f in bin/residc bin/stage2.bin bin/resid-manifest bin/resid-pkg bin/resid-fetch rt.ll env env.fish; do
     if [ -e "$TARGET/$f" ]; then
         rm -f "$TARGET/$f"
         echo "  removed $f"

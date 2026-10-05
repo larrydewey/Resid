@@ -564,6 +564,15 @@ pub HttpsGet tls_https_get(Str url, Str name, TrustStore store, List(Str) alpn) 
 // by `ms` instead of the default.
 @requires(network, clock(readonly))
 pub HttpsGet tls_https_get_within(Str url, Str name, TrustStore store, List(Str) alpn, Int ms) {
+    List(Int) none = [];
+    return tls_https_request(url, name, store, alpn, ms, "GET", "", none);
+}
+
+// One request with a method, extra header lines (each ending "\r\n") and a
+// body. A reply that is not 200 carries its body too when it says how long
+// it is (an upload's refusal explains itself); a GET's does not.
+@requires(network, clock(readonly))
+pub HttpsGet tls_https_request(Str url, Str name, TrustStore store, List(Str) alpn, Int ms, Str method, Str headers, List(Int) body) {
     Str rest = https_after_scheme(url);
     if (rest == "") { return https_failed("not an https url: " + url); }
     Int slash = str_index_of(rest, "/", 0);
@@ -577,7 +586,8 @@ pub HttpsGet tls_https_get_within(Str url, Str name, TrustStore store, List(Str)
     Str asked = if (name == "") { host } else { name };
     TlsDial d = tls_client_connect(host, port, tls_client_cfg_within(tls_client_cfg(asked, store, alpn), ms));
     if (d.err != "") { return https_failed(url + ": " + d.err); }
-    List(Int) req = str_to_bytes("GET " + path + " HTTP/1.1\r\nHost: " + hostport + "\r\nUser-Agent: resid\r\nAccept: */*\r\nConnection: close\r\n\r\n");
+    Str clen = if (method == "GET" && body.len() == 0) { "" } else { f"Content-Length: {body.len()}\r\n" };
+    List(Int) req = str_to_bytes(method + " " + path + " HTTP/1.1\r\nHost: " + hostport + "\r\nUser-Agent: resid\r\nAccept: */*\r\n" + headers + clen + "Connection: close\r\n\r\n").concat(body);
     WireOut(TlsClient) sent = wire_send(d.conn, req);
     if (!sent.ok) {
         _ = wire_close(sent.conn);
@@ -594,11 +604,15 @@ pub HttpsGet tls_https_get_within(Str url, Str name, TrustStore store, List(Str)
         _ = wire_close(sent.conn);
         return https_failed(url + " sent an unparseable status line");
     }
-    if (status != 200) {
+    if (status != 200 && method == "GET") {
         _ = wire_close(sent.conn);
         return HttpsGet { .status = status, .bytes = [], .err = "", .head = head };
     }
     Str cl = https_header(sc.lines, "content-length");
+    if (!https_digits(cl) && method != "GET") {
+        _ = wire_close(sent.conn);
+        return HttpsGet { .status = status, .bytes = [], .err = "", .head = head };
+    }
     if (!https_digits(cl)) {
         _ = wire_close(sent.conn);
         return https_failed(url + " carries no Content-Length");
@@ -613,7 +627,7 @@ pub HttpsGet tls_https_get_within(Str url, Str name, TrustStore store, List(Str)
     if (!hb.ok) {
         return https_failed(url + " declared " + f"{want}" + " bytes and sent " + f"{hb.body.len()}" + f" (the connection closed, or passed its {ms} ms deadline)");
     }
-    return HttpsGet { .status = 200, .bytes = hb.body, .err = "", .head = head };
+    return HttpsGet { .status = status, .bytes = hb.body, .err = "", .head = head };
 }
 
 Str https_after_scheme(Str url) {

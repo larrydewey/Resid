@@ -106,12 +106,14 @@ itself a reason to trust anything.
 | A version the registry does not publish is an error, not an empty build. | rem404 |
 | A package archive that is not valid UTF-8 survives the round trip byte for byte. | remote archive is byte-identical after extraction |
 | A manifest naming both `[registry] path` and `url` is refused, rather than one silently winning. | remboth |
-| `https://` is refused, never downgraded to plaintext. | remhttps |
+| An `https://` registry without `[registry] ca` is refused; with one, the server's certificate must chain to it and name the host, or the fetch is refused. Nothing is downgraded to plaintext. | remhttps, tlsdirect, tlsbadca |
 
 `resid-pkg serve` is the publish side of the same layout, and is
-deliberately small: loopback only, `GET` and `HEAD` only, no listing, no
-upload, and no request path may name a file outside the registry
-directory. Nothing it does can change what a client accepts. Its HTTP is
+deliberately small: loopback only, `GET` and `HEAD`, no listing, and no
+request path may name a file outside the registry directory. Uploads are
+opt-in (`--upload <keyring> --index-key <key>`) and take only an archive
+signed by a keyring key; a client still trusts the index signature and
+the archive hash, never the server. Its HTTP is
 `lib/httpserv.resid`'s, so the HTTP server guarantees below apply to it,
 and four worker regions share the listener. With `--cert` and `--key` it
 serves over TLS 1.3 through `lib/tlswire.resid`, so the TLS server
@@ -124,6 +126,9 @@ guarantees apply too.
 | Over TLS it is the same registry: `resid-fetch` pulls the index and an archive byte-identical, and a key and certificate that are half given or do not belong together are refused at startup. | resid-fetch over https, serve --cert without --key, serve with a key the certificate does not carry |
 | An artifact of any size up to what the client accepts is sent whole, not refused at the runtime's 1 MiB single-send cap. | serve a 3 MB artifact byte-identical |
 | A client stalled mid-request costs the registry a socket until the request deadline, not a worker. | serve answers while other clients stall |
+| An upload is written only when its signature verifies under the publisher keyring; a published version is never replaced; the index is re-signed by the registry key a client pins. | upload by a keyring key, upload by a key outside the keyring, a published version replaced, index after upload, upapp |
+| Uploads are opt-in, and their two flags go together. | PUT to a read-only server, serve --upload without --index-key |
+| Over TLS an upload checks the server against a trust store, and refuses without one. | upload over TLS, upload over TLS without a trust store |
 
 Not guaranteed: `path` dependencies without a pinned key are trusted as
 local source (spec §28.3); the package signature is not a COSE structure

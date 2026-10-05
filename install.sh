@@ -4,7 +4,8 @@
 # directory without setting RESID_HOME or sitting in this checkout.
 #
 # Layout: bin/residc (the command; sets RESID_HOME to the install),
-# bin/stage2.bin (the compiler), rt.ll (the runtime), lib/ (the standard
+# bin/stage2.bin (the compiler), bin/resid-manifest, bin/resid-pkg and
+# bin/resid-fetch (the package tools), rt.ll (the runtime), lib/ (the standard
 # library), keys/ (a signing key for release builds, created once and never
 # replaced), env and env.fish (PATH snippets to source).
 #
@@ -22,7 +23,7 @@ TARGET="${RESID_INSTALL:-$HOME/.resid}"
 while [ $# -gt 0 ]; do
     case "$1" in
         -h|--help)
-            sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         *)
@@ -80,6 +81,21 @@ if [ ! -f "$TARGET/keys/resid-ed25519.key" ]; then
     (cd "$TARGET" && "$TARGET/bin/residc" keygen keys > /dev/null)
 fi
 
+# The package tools, built by the installed compiler: resid-manifest
+# (resolve, depmap, build, test), resid-pkg (pack, sign, publish, serve)
+# and resid-fetch (one artifact over https).
+echo "Building the package tools..."
+TOOLS="$(mktemp -d)"
+for t in resid-manifest resid-pkg resid-fetch; do
+    if (cd "$TOOLS" && env -u RESID_HOME "$TARGET/bin/residc" "$SCRIPT_DIR/tools/$t.resid" -o "$TOOLS/$t" > "$TOOLS/$t.log" 2>&1); then
+        cp "$TOOLS/$t" "$TARGET/bin/.$t.new" && mv -f "$TARGET/bin/.$t.new" "$TARGET/bin/$t"
+    else
+        echo "  WARNING: $t did not build:" >&2
+        grep -m3 -i "error" "$TOOLS/$t.log" >&2 || tail -3 "$TOOLS/$t.log" >&2
+    fi
+done
+rm -rf "$TOOLS"
+
 cat > "$TARGET/env" <<ENVFILE
 # source this file (or add the line below to your shell rc) to use residc
 export PATH="$TARGET/bin:\$PATH"
@@ -118,6 +134,7 @@ fi
 echo
 echo "Installed:"
 echo "  $TARGET/bin/residc   compiler (residc lsp: language server)"
+echo "  $TARGET/bin/resid-manifest, resid-pkg, resid-fetch   package tools"
 echo "  $TARGET/lib/         standard library"
 echo "  $TARGET/keys/        release signing key"
 echo

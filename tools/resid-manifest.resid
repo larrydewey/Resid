@@ -63,11 +63,9 @@
 ///     round trip mangles anything that is not valid UTF-8.
 ///   * A response must carry `Content-Length`. Reading to close instead
 ///     would let a hostile registry stream unbounded bytes at the build.
-///   * `https://` is refused, not silently downgraded: importing the TLS 1.3
-///     client (lib/tlsclient.resid) into this tool sends the compiler past
-///     its memory budget in reduce, and falling back to plaintext would be
-///     worse than not fetching at all. tools/resid-fetch.resid pulls the
-///     artifacts over TLS into a directory that `path =` then names.
+///   * `https://` goes over TLS 1.3 (lib/tlsclient.resid) and needs
+///     `[registry] ca`, the trust store the certificate must chain to;
+///     without it the manifest is refused, never downgraded to plaintext.
 ///
 /// Still open: the `[signing] require_signatures` policy is parsed and
 /// enforced (see `version_trust`), and dependency source is compiled
@@ -76,15 +74,17 @@
 /// so neither is outstanding any more.
 ///
 /// Known scope-trim vs. the Rust original: dependency-directory identity
-/// for cycle/collision detection is plain string equality of the
-/// (non-canonicalized) path, not `Path::canonicalize()` — this language
-/// has no path-canonicalization primitive. Only matters for the same
-/// directory spelled two different ways (symlinks, `./`, `..`); doesn't
-/// affect signature/capability correctness.
+/// for cycle/collision detection compares paths with `.` and `name/..`
+/// folded away (`path_fold`), not `Path::canonicalize()` -- this language
+/// has no path-canonicalization primitive, so a directory reached through
+/// a symlink and directly still counts twice. That doesn't affect
+/// signature/capability correctness.
 
 import "../lib/crypto.resid";
 import "../lib/ed25519.resid";
 import "../lib/http.resid";
+import "../lib/chain.resid";
+import "../lib/tlsclient.resid";
 
 // ─── quoted-string parsing (minimal escapes: \" \\ \n \t) ──────────
 
@@ -249,13 +249,31 @@ List(Str) dep_names(List(TomlEntry) entries) {
     return dep_names_acc(entries, 0, empty);
 }
 
+// A path with its `.` and `name/..` segments folded away; leading `..`
+// segments of a relative path stay.
+Str path_fold(Str p) {
+    Bool abs = str_starts_with(p, "/");
+    List(Str) kept = path_fold_at(str_split(p, "/"), 0, []);
+    Str body = str_join(kept, "/");
+    return if (abs) { "/" + body } else { if (body == "") { "." } else { body } };
+}
+
+List(Str) path_fold_at(List(Str) segs, Int i, List(Str) acc) {
+    if (i >= segs.len()) { return acc; }
+    Str s = segs[i];
+    if (s == "" || s == ".") { return path_fold_at(segs, i + 1, acc); }
+    Bool up = s == ".." && acc.len() > 0 && acc[acc.len() - 1] != "..";
+    List(Str) acc2 = if (up) { acc[..acc.len() - 1] } else { acc.concat([s]) };
+    return path_fold_at(segs, i + 1, acc2);
+}
+
 // ─── Manifest assembly ──────────────────────────────────────────────
 
 type Dependency = { Str name; Str path; Str version; List(Str) capabilities; Str pubkey; };
 type Manifest = {
     Str name; Str version; Str root; List(Str) grant;
     List(Dependency) dependencies; Bool require_signatures; Bool allow_unsigned; Str keyring;
-    Str registry_path; Str registry_url; Str registry_pubkey;
+    Str registry_path; Str registry_url; Str registry_pubkey; Str registry_ca;
 };
 
 Dependency build_dep(List(TomlEntry) entries, Str name) {
@@ -290,7 +308,8 @@ Manifest load_manifest(Str text) {
         .keyring = toml_str(entries, "signing", "keyring", ""),
         .registry_path = toml_str(entries, "registry", "path", ""),
         .registry_url = toml_str(entries, "registry", "url", ""),
-        .registry_pubkey = toml_str(entries, "registry", "pubkey", "")
+        .registry_pubkey = toml_str(entries, "registry", "pubkey", ""),
+        .registry_ca = toml_str(entries, "registry", "ca", "")
     };
 }
 
@@ -376,10 +395,12 @@ Str bytes_to_ascii(List(Int) b, Int i, Int end, Str acc) {
 // `filesystem.read_bytes` exists). Header blocks are ASCII and do become
 // Str; artifact bodies never do.
 
-type Registry = { Str dir; Str url; };
+// ca: the trust store an https:// registry's certificate must chain to;
+// home: the root package, whose resid.lock and cache every fetch uses.
+type Registry = { Str dir; Str url; Str ca; Str home; };
 
 Registry registry_none() {
-    return Registry { .dir = "", .url = "" };
+    return Registry { .dir = "", .url = "", .ca = "", .home = "" };
 }
 
 Bool registry_configured(Registry reg) {
@@ -482,6 +503,10 @@ Bool url_is_http(Str url) {
     return str_starts_with(url, "http://");
 }
 
+Bool url_is_https(Str url) {
+    return str_starts_with(url, "https://");
+}
+
 Str url_scheme_of(Str url, Int i, Int n) {
     if (i >= n) { return ""; }
     Int c = str_char_at(url, i);
@@ -491,7 +516,7 @@ Str url_scheme_of(Str url, Int i, Int n) {
 }
 
 Str url_unsupported_scheme(Str url, Str scheme) {
-    return "registry url '" + url + "' uses scheme '" + scheme + "', which is not wired. https:// is refused rather than downgraded: the TLS 1.3 client exists (lib/tlsclient.resid) and tools/resid-fetch.resid will fetch an artifact from such a registry, but this tool cannot import it without the compiler going past its memory budget in reduce, and a registry fetch that falls back to plaintext is worse than one that does not happen. Fetch what you need with resid-fetch (tools/resid-fetch.resid <base-url> <trust-store> pkg/<artifact> <out-file>, from a registry served by `resid-pkg serve <registry> --cert F --key F`), then point [registry] path at the directory.";
+    return "registry url '" + url + "' uses scheme '" + scheme + "'; a registry url is http:// or https://";
 }
 
 // Read one CRLF-terminated line as bytes, CRLF excluded. `depth` bounds
@@ -654,9 +679,25 @@ HttpGet http_get_bytes(Str url) {
     return http_get_headed(status, head, bytes);
 }
 
-@requires(network)
-Fetch http_fetch(Str base, Str path, Str label) {
-    HttpGet g = http_get_bytes(url_base(base) + path);
+// One GET over TLS 1.3: the certificate must chain to the trust store at ca
+// and name the url's host. Same caps and deadline as the plain GET.
+@requires(filesystem(readonly), network, clock(readonly))
+HttpGet https_get_bytes(Str url, Str ca) {
+    if (ca == "") { return http_get_failed("registry url '" + url + "' is https:// but no trust store is configured"); }
+    List(Str) no_alpn = [];
+    HttpsGet h = tls_https_get_within(url, "", trust_store_load(ca), no_alpn, 300000);
+    if (h.err != "") { return http_get_failed("registry " + h.err); }
+    if (h.status != 200) { return HttpGet { .status = h.status, .bytes = [], .err = "", .head = h.head }; }
+    if (h.bytes.len() > reg_max_artifact_bytes()) {
+        return http_get_failed("registry artifact '" + url + "' is over this tool's " + f"{reg_max_artifact_bytes()}" + "-byte cap");
+    }
+    return http_get_headed(h.status, h.head, h.bytes);
+}
+
+@requires(filesystem(readonly), network, clock(readonly))
+Fetch http_fetch(Str base, Str path, Str label, Str ca) {
+    Str url = url_base(base) + path;
+    HttpGet g = if (url_is_https(url)) { https_get_bytes(url, ca) } else { http_get_bytes(url) };
     if (g.err != "") { return fetch_err(g.err); }
     if (g.status == 404) { return fetch_err("not found"); }
     if (g.status == 200) { return fetch_ok_bytes(g.bytes); }
@@ -666,30 +707,30 @@ Fetch http_fetch(Str base, Str path, Str label) {
 // Try each location, stopping at the first that yields bytes. A 404 falls
 // through to the next layout; any other failure is final, because a
 // transport error or a 500 must not be mistaken for "try the other name".
-@requires(network)
-Fetch fetch_remote_locs(Str base, List(Str) locs, Int i, Str label) {
+@requires(filesystem(readonly), network, clock(readonly))
+Fetch fetch_remote_locs(Str base, List(Str) locs, Int i, Str label, Str ca) {
     if (i >= locs.len()) { return fetch_err("not found"); }
-    Fetch f = http_fetch(base, locs[i], label);
+    Fetch f = http_fetch(base, locs[i], label, ca);
     if (f.ok) { return f; }
     if (!fetch_missing(f)) { return f; }
-    return fetch_remote_locs(base, locs, i + 1, label);
+    return fetch_remote_locs(base, locs, i + 1, label, ca);
 }
 
-@requires(network)
-Fetch fetch_remote(Str base, Str name, Str version, Str suffix, Str label) {
-    return fetch_remote_locs(base, artifact_locations(name, version, suffix), 0, label);
+@requires(filesystem(readonly), network, clock(readonly))
+Fetch fetch_remote(Str base, Str name, Str version, Str suffix, Str label, Str ca) {
+    return fetch_remote_locs(base, artifact_locations(name, version, suffix), 0, label, ca);
 }
 
-@requires(network)
-Fetch fetch_remote_index(Str base, Str suffix, Str label) {
-    return fetch_remote_locs(base, [index_artifact(suffix)], 0, label);
+@requires(filesystem(readonly), network, clock(readonly))
+Fetch fetch_remote_index(Str base, Str suffix, Str label, Str ca) {
+    return fetch_remote_locs(base, [index_artifact(suffix)], 0, label, ca);
 }
 
 // One artifact from whichever transport this registry names.
-@requires(filesystem(readonly), network)
+@requires(filesystem(readonly), network, clock(readonly))
 Fetch fetch_artifact(Registry reg, Str name, Str version, Str suffix) {
     if (reg.url != "") {
-        return fetch_remote(reg.url, name, version, suffix, registry_label(reg));
+        return fetch_remote(reg.url, name, version, suffix, registry_label(reg), reg.ca);
     }
     return fetch_local(reg.dir, name, version, suffix);
 }
@@ -701,10 +742,10 @@ Str registry_artifact_path(Registry reg, Str path) {
 }
 
 // The registry-wide index artifact.
-@requires(filesystem(readonly), network)
+@requires(filesystem(readonly), network, clock(readonly))
 Fetch fetch_index_artifact(Registry reg, Str suffix) {
     if (reg.url != "") {
-        return fetch_remote_index(reg.url, suffix, registry_label(reg));
+        return fetch_remote_index(reg.url, suffix, registry_label(reg), reg.ca);
     }
     return fetch_local_index(reg.dir, suffix);
 }
@@ -801,7 +842,7 @@ Str index_sha(List(LockEntry) entries, Str name, Str version, Int i) {
 
 // The detached Ed25519 signature for a registry package. Hex on the wire,
 // so it decodes as text rather than being carried as raw bytes.
-@requires(filesystem(readonly), network)
+@requires(filesystem(readonly), network, clock(readonly))
 List(Int) fetch_sig(Registry reg, Str name, Str version) {
     Fetch f = fetch_artifact(reg, name, version, ".resid-sig");
     if (!f.ok) { return []; }
@@ -817,7 +858,7 @@ Bool keyring_verifies(Str keyring, List(Str) names, Int i, Str hash_hex, List(In
     return keyring_verifies(keyring, names, i + 1, hash_hex, sig);
 }
 
-@requires(filesystem(readonly), network)
+@requires(filesystem(readonly), network, clock(readonly))
 Str version_trust(Str name, Str version, Str got, Registry reg, TrustPolicy tp) {
     Str id = name + "-" + version;
     Str isha = if (tp.idx_required) { index_sha(tp.idx_entries, name, version, 0) } else { "" };
@@ -852,7 +893,7 @@ Str version_trust(Str name, Str version, Str got, Registry reg, TrustPolicy tp) 
 // "" when unpinned) is checked in addition to the sidecar `.resid-sha256`
 // hash when present.
 type CacheResult = { Bool ok; Str err; Str cache_dir; Str sha256; };
-@requires(filesystem, network)
+@requires(filesystem, network, clock(readonly))
 CacheResult resolve_dep_dir_version(Str name, Str version, Registry reg, Str root_pkg_dir, Str pinned_sha, TrustPolicy tp) {
     Str id = name + "-" + version;
     Fetch af = fetch_artifact(reg, name, version, ".resid-pkg");
@@ -949,7 +990,7 @@ IndexLoadResult index_load_err(Str err) {
     List(LockEntry) empty = [];
     return IndexLoadResult {.ok = false, .err = err, .entries = empty};
 }
-@requires(filesystem(readonly), network)
+@requires(filesystem(readonly), network, clock(readonly))
 IndexLoadResult load_verify_index(Registry reg, Str pubkey_hex) {
     Fetch idx = fetch_index_artifact(reg, "idx");
     if (!idx.ok) {
@@ -985,8 +1026,10 @@ DepResolveResult dep_error(DepResolveResult acc, Str err) {
     return DepResolveResult {.ok = false, .err = err, .deps = acc.deps, .seen = acc.seen};
 }
 
-@requires(filesystem, network)
-DepResolveResult collect_dep_path(Str name, Str dep_dir, List(Str) caps, Str pinned_key, Registry reg, TrustPolicy tp, DepResolveResult acc, Int depth) {
+@requires(filesystem, network, clock(readonly))
+DepResolveResult collect_dep_path(Str name, Str dep_dir0, List(Str) caps, Str pinned_key, Registry reg, TrustPolicy tp, DepResolveResult acc, Int depth) {
+    // One directory reached along two relative paths is one dependency.
+    Str dep_dir = path_fold(dep_dir0);
     if (!acc.ok) { return acc; }
     if (depth > 32) { return dep_error(acc, "dependency '" + name + "': dependency chain deeper than 32 (cycle?)"); }
     Str prev_dir = find_seen_dir(acc.seen, name, 0);
@@ -1017,7 +1060,7 @@ DepResolveResult collect_dep_path(Str name, Str dep_dir, List(Str) caps, Str pin
     return DepResolveResult {.ok = true, .err = "", .deps = acc3.deps.concat([rd]), .seen = acc3.seen};
 }
 
-@requires(filesystem, network)
+@requires(filesystem, network, clock(readonly))
 DepResolveResult collect_dep_version(Str name, Str version, Registry reg, Str root_pkg_dir, List(Str) caps, Str pinned_key, TrustPolicy tp, DepResolveResult acc, Int depth) {
     if (!registry_configured(reg)) {
         return dep_error(acc, "dependency '" + name + "': version '" + version + "' requested but no [registry] path or url is configured");
@@ -1049,15 +1092,19 @@ DepResolveResult collect_dep_version(Str name, Str version, Registry reg, Str ro
     return collect_dep_path(name, cr.cache_dir, caps, "", reg, tp, acc, depth);
 }
 
-@requires(filesystem, network)
+@requires(filesystem, network, clock(readonly))
 DepResolveResult collect_sub_deps_at(List(Dependency) subs, Int i, Str parent_dir, Registry reg, TrustPolicy tp, DepResolveResult acc, Int depth) {
     if (!acc.ok) { return acc; }
     if (i >= subs.len()) { return acc; }
     Dependency sub = subs[i];
-    DepResolveResult acc2 = if (sub.path != "") {
+    // With both, `path` is the working copy when it is there (development)
+    // and `version` comes from the registry when it is not (a published
+    // package, extracted where its sibling checkouts are not).
+    Bool use_path = sub.path != "" && (sub.version == "" || filesystem.is_dir(parent_dir + "/" + sub.path));
+    DepResolveResult acc2 = if (use_path) {
         collect_dep_path(sub.name, parent_dir + "/" + sub.path, sub.capabilities, sub.pubkey, reg, tp, acc, depth)
     } else if (sub.version != "") {
-        collect_dep_version(sub.name, sub.version, reg, parent_dir, sub.capabilities, sub.pubkey, tp, acc, depth)
+        collect_dep_version(sub.name, sub.version, reg, if (reg.home != "") { reg.home } else { parent_dir }, sub.capabilities, sub.pubkey, tp, acc, depth)
     } else {
         dep_error(acc, "dependency '" + sub.name + "': needs either 'path' or 'version'")
     };
@@ -1072,22 +1119,25 @@ Str registry_config_error(Manifest m) {
     if (m.registry_path != "" && m.registry_url != "") {
         return "[registry] sets both path and url; name only one so it is clear which registry a build reads from";
     }
-    if (m.registry_url != "" && !url_is_http(m.registry_url)) {
+    if (m.registry_url != "" && !url_is_http(m.registry_url) && !url_is_https(m.registry_url)) {
         return url_unsupported_scheme(m.registry_url, url_scheme_of(m.registry_url, 0, str_len(m.registry_url)));
+    }
+    if (url_is_https(m.registry_url) && m.registry_ca == "") {
+        return "registry url '" + m.registry_url + "' is https:// but [registry] names no ca: set ca = \"<PEM bundle or directory of DER certificates>\" for the certificates its chain must reach. With no trust store nothing is trusted, so there is no default.";
     }
     return "";
 }
 
-@requires(filesystem, network)
+@requires(filesystem, network, clock(readonly))
 DepResolveResult resolve_all_deps(Manifest m, Str pkg_dir) {
     List(ResolvedDep) empty_deps = [];
     List(SeenEntry) empty_seen = [];
     Str cfg_err = registry_config_error(m);
     if (cfg_err != "") { return dep_error(DepResolveResult {.ok = true, .err = "", .deps = empty_deps, .seen = empty_seen}, cfg_err); }
     Registry reg = if (m.registry_path != "") {
-        Registry { .dir = pkg_dir + "/" + m.registry_path, .url = "" }
+        Registry { .dir = pkg_dir + "/" + m.registry_path, .url = "", .ca = "", .home = pkg_dir }
     } else {
-        Registry { .dir = "", .url = url_base(m.registry_url) }
+        Registry { .dir = "", .url = url_base(m.registry_url), .ca = if (m.registry_ca == "" || str_starts_with(m.registry_ca, "/")) { m.registry_ca } else { pkg_dir + "/" + m.registry_ca }, .home = pkg_dir }
     };
     List(LockEntry) no_idx = [];
     Str keyring = if (m.keyring == "") { "" } else { pkg_dir + "/" + m.keyring };
@@ -1418,7 +1468,7 @@ Int print_resolved_deps(List(ResolvedDep) deps, Int i) {
     return print_resolved_deps(deps, i + 1);
 }
 
-@requires(filesystem, network)
+@requires(filesystem, network, clock(readonly))
 Int cmd_deps(Str manifest_path) {
     Manifest m = load_manifest(filesystem.read_all(manifest_path));
     DepResolveResult r = resolve_all_deps(m, dirname_of(manifest_path));
@@ -1460,7 +1510,7 @@ Str depmap_text(List(ResolvedDep) deps) {
     return str_join(depmap_lines_acc(deps, 0, empty), "\n");
 }
 
-@requires(filesystem, network)
+@requires(filesystem, network, clock(readonly))
 Int cmd_depmap(Str manifest_path, Str out_path) {
     Manifest m = load_manifest(filesystem.read_all(manifest_path));
     DepResolveResult r = resolve_all_deps(m, dirname_of(manifest_path));
@@ -1492,7 +1542,7 @@ Int cmd_depmap(Str manifest_path, Str out_path) {
 // implementation of them rather than one per tool; this command's job is
 // only to supply the resolved dependency map and the capability ceilings
 // that go with it. The driver's exit code is this command's.
-@requires(filesystem, network, process)
+@requires(filesystem, network, process, clock(readonly))
 Int cmd_test(Str manifest_path, Str driver_bin, Str rtc) {
     Manifest m = load_manifest(filesystem.read_all(manifest_path));
     if (m.name == "") {
@@ -1542,7 +1592,7 @@ Int cmd_test(Str manifest_path, Str driver_bin, Str rtc) {
 // resolve. `driver_bin` is the caller's choice of compiler binary (a D1/D2/
 // D3 driver, or `residc <driver.resid> run --`) rather than a hardcoded
 // path, since this tool has no privileged knowledge of where one lives.
-@requires(filesystem, network, process)
+@requires(filesystem, network, process, clock(readonly))
 Int cmd_build(Str manifest_path, Str driver_bin, Str rtc) {
     Manifest m = load_manifest(filesystem.read_all(manifest_path));
     if (m.name == "") {
@@ -1591,7 +1641,7 @@ Int cmd_build(Str manifest_path, Str driver_bin, Str rtc) {
     return 0;
 }
 
-@requires(args, filesystem, network, process)
+@requires(args, filesystem, network, process, clock(readonly))
 Int main() {
     Int argc = args.count();
     if (argc < 2) {

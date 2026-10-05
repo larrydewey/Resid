@@ -42,10 +42,8 @@ for t in resid-pkg resid-manifest; do
     (cd "$ROOT" && "$COMPILER" "tools/$t.resid" -o "$W/$t") > "$W/$t.log" 2>&1 || { echo "FAIL build $t"; cat "$W/$t.log" | grep -i error | head -3; exit 1; }
 done
 # The https path into a registry: `resid-pkg serve --cert --key` publishes
-# one and the fetch tool reads it. `resid build` cannot import the TLS
-# client itself (the compiler goes past its memory budget in reduce), so
-# resid-fetch is how an https registry is reached, built here because the
-# cases below drive it for real.
+# one; resid-manifest fetches from it directly and resid-fetch mirrors one
+# artifact, built here because the cases below drive it for real.
 (cd "$ROOT" && "$COMPILER" tools/resid-fetch.resid -o "$W/resid-fetch") > "$W/resid-fetch.log" 2>&1 || {
     echo "FAIL build resid-fetch"; grep -i error "$W/resid-fetch.log" | head -3; exit 1; }
 PKG="$W/resid-pkg"; MAN="$W/resid-manifest"; FETCH="$W/resid-fetch"
@@ -253,10 +251,10 @@ mkdir -p "$W/remboth/src"
 printf '[package]\nname = "remboth"\nversion = "0.1.0"\n\n[registry]\npath = "../reg"\nurl = "%s"\n\n[dependencies.greet]\nversion = "1.0.0"\n' "$URL" > "$W/remboth/resid.toml"
 printf 'Int main() { return 0; }\n' > "$W/remboth/src/main.resid"
 expect_fail remboth "sets both path and url"
-# https:// is refused outright rather than downgraded to plaintext -- and the
-# refusal says what to do instead, because the client exists.
+# An https:// registry needs a trust store: with none, nothing is trusted,
+# so the manifest is refused before any connection -- never downgraded.
 rapp remhttps "pubkey = \"$PUB\"" "https://127.0.0.1:$PORT"
-expect_fail remhttps "resid-fetch"
+expect_fail remhttps "names no ca"
 
 # ── the same registry over https, fetched and then built ──────────────
 # A registry published to disk, served over TLS by `resid-pkg serve --cert
@@ -304,6 +302,13 @@ if [ -n "$TLSPORT" ]; then
         "$W/regtls/pkg/index.resid-idx" > "$W/fetch_nostore.out" 2>&1
     grep -q "trusts nothing" "$W/fetch_nostore.out" && ok \
         || bad "no trust store: $(tail -1 "$W/fetch_nostore.out")"
+
+    # resid-manifest reaches the TLS registry itself: url, ca, the same pubkey.
+    rapp tlsdirect $'pubkey = "'"$PUB"$'"\nca = "'"$ROOT/tests/tls/fixtures/srvca.pem"'"' "https://localhost:$TLSPORT"
+    expect_ok tlsdirect
+    # A trust store without the issuer: refused, and it says so.
+    rapp tlsbadca $'pubkey = "'"$PUB"$'"\nca = "'"$ROOT/tests/tls/fixtures/other.pem"'"' "https://localhost:$TLSPORT"
+    expect_fail tlsbadca "not trusted"
 else bad "the https registry server did not report a port: $(tail -2 "$W/https.out")"; fi
 # A server that trickles a byte every half second never trips the 30 s
 # per-read timeout; the fetch's own deadline (--timeout) ends it.
@@ -487,6 +492,49 @@ if [ $rc -eq 2 ] && grep -q "contains a space" "$W/sp2.out"; then ok; else bad "
 (cd "$ROOT" && "$COMPILER" "$W/sp ace/src/a_test.resid" -o "$W/sp ace/out") > "$W/sp3.out" 2>&1
 rc=$?
 if [ $rc -eq 2 ] && grep -q "contains a space" "$W/sp3.out"; then ok; else bad "space in -o not refused (rc $rc)"; fi
+
+# ── registry v2: authenticated upload ─────────────────────────────────
+# `serve --upload <keyring> --index-key <key>` takes a PUT of a signed
+# archive. A publisher key in the keyring may publish; any other is
+# refused; a version is never replaced; the index is re-signed by the
+# registry's own key, which is what a client pins.
+mkdir -p "$W/upkr" "$W/upreg"
+"$PKG" keygen "$W/idx.sec" "$W/idx.pub" > /dev/null
+cp "$W/pub.pub" "$W/upkr/alice.pub"
+"$PKG" serve "$W/upreg" --port 0 --port-file "$W/upport" --upload "$W/upkr" --index-key "$W/idx.sec" > "$W/upserve.out" 2>&1 &
+SRVS="$SRVS $!"
+for _ in $(seq 1 150); do [ -s "$W/upport" ] && break; sleep 0.1; done
+UPURL="http://127.0.0.1:$(cat "$W/upport" 2>/dev/null)"
+"$PKG" upload "$W/greet" "$UPURL" "$W/pub.sec" > "$W/up1.out" 2>&1
+[ $? = 0 ] && grep -q "published greet 1.0.0" "$W/up1.out" && ok || bad "upload by a keyring key: $(tail -1 "$W/up1.out")"
+"$PKG" upload "$W/greet" "$UPURL" "$W/pub.sec" > "$W/up2.out" 2>&1
+[ $? = 0 ] && grep -q "already published" "$W/up2.out" && ok || bad "the same archive again: $(tail -1 "$W/up2.out")"
+"$PKG" upload "$W/greet" "$UPURL" "$W/other.sec" > "$W/up3.out" 2>&1
+[ $? != 0 ] && grep -q "403" "$W/up3.out" && ok || bad "upload by a key outside the keyring: $(tail -1 "$W/up3.out")"
+mkpkg "$W/greet2" greet 1.0.0 'pub Str greet() { return "changed"; }'
+"$PKG" upload "$W/greet2" "$UPURL" "$W/pub.sec" > "$W/up4.out" 2>&1
+[ $? != 0 ] && grep -q "409" "$W/up4.out" && ok || bad "a published version replaced: $(tail -1 "$W/up4.out")"
+"$PKG" index verify "$W/upreg" "$(cat "$W/idx.pub")" > "$W/upidx.out" 2>&1
+[ $? = 0 ] && grep -q "1 entries" "$W/upidx.out" && ok || bad "index after upload: $(tail -1 "$W/upidx.out")"
+# A client pinning the registry's index key builds from what was uploaded.
+rapp upapp "pubkey = \"$(cat "$W/idx.pub")\"" "$UPURL"
+expect_ok upapp
+# Uploads are opt-in: a plain server refuses PUT.
+"$PKG" upload "$W/greet" "http://127.0.0.1:$PORT" "$W/pub.sec" > "$W/up5.out" 2>&1
+[ $? != 0 ] && grep -q "405" "$W/up5.out" && ok || bad "PUT to a read-only server: $(tail -1 "$W/up5.out")"
+# The flags go together.
+"$PKG" serve "$W/upreg" --port 0 --upload "$W/upkr" > "$W/uphalf.out" 2>&1
+[ $? = 2 ] && grep -q "go together" "$W/uphalf.out" && ok || bad "serve --upload without --index-key: $(tail -1 "$W/uphalf.out")"
+# Over TLS too: the upload checks the server against --ca.
+"$PKG" serve "$W/upreg" --port 0 --port-file "$W/uptlsport" --upload "$W/upkr" --index-key "$W/idx.sec" \
+    --cert "$ROOT/tests/tls/fixtures/srv.pem" --key "$ROOT/tests/tls/fixtures/srv.key" > "$W/uptls.out" 2>&1 &
+SRVS="$SRVS $!"
+for _ in $(seq 1 150); do [ -s "$W/uptlsport" ] && break; sleep 0.1; done
+mkpkg "$W/greet3" greet 1.1.0 'pub Str greet() { return "hi again"; }'
+"$PKG" upload "$W/greet3" "https://localhost:$(cat "$W/uptlsport" 2>/dev/null)" "$W/pub.sec" --ca "$ROOT/tests/tls/fixtures/srvca.pem" > "$W/up6.out" 2>&1
+[ $? = 0 ] && grep -q "published greet 1.1.0" "$W/up6.out" && ok || bad "upload over TLS: $(tail -1 "$W/up6.out")"
+"$PKG" upload "$W/greet3" "https://localhost:$(cat "$W/uptlsport" 2>/dev/null)" "$W/pub.sec" > "$W/up7.out" 2>&1
+[ $? != 0 ] && grep -q "needs --ca" "$W/up7.out" && ok || bad "upload over TLS without a trust store: $(tail -1 "$W/up7.out")"
 
 echo "pkg: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

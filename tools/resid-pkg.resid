@@ -57,6 +57,9 @@ import "../lib/ed25519.resid";
 import "../lib/httpserv.resid";
 import "../lib/tlswire.resid";
 import "../lib/tlskey.resid";
+import "../lib/http.resid";
+import "../lib/chain.resid";
+import "../lib/tlsclient.resid";
 
 // ─── little-endian integer encoding (this format's own choice — see
 // module doc comment) ───────────────────────────────────────────────
@@ -344,7 +347,7 @@ Int extract_archive(Str archive_path, Str out_dir) {
 // ─── CLI ────────────────────────────────────────────────────────────
 
 Str usage_text() {
-    return "usage: resid-pkg keygen <secret.hex> <pub.hex> | pack <dir> <out> | sign <out> <keyfile> | sign-dir <dir> <keyfile> | checksig <out> <pubkey-hex> | extract <out> <dir> | publish <dir> <registry> [keyfile] | serve <registry> [--port N] [--port-file F] [--requests N] [--cert F --key F] | index list <registry> | index add <registry> <name> <version> <sha256-hex> <keyfile> | index remove <registry> <name> <version> <keyfile> | index verify <registry> <pubkey-hex>";
+    return "usage: resid-pkg keygen <secret.hex> <pub.hex> | pack <dir> <out> | sign <out> <keyfile> | sign-dir <dir> <keyfile> | checksig <out> <pubkey-hex> | extract <out> <dir> | publish <dir> <registry> [keyfile] | serve <registry> [--port N] [--port-file F] [--requests N] [--cert F --key F] [--upload KEYRING --index-key F] | upload <dir> <registry-url> <keyfile> [--ca F] | index list <registry> | index add <registry> <name> <version> <sha256-hex> <keyfile> | index remove <registry> <name> <version> <keyfile> | index verify <registry> <pubkey-hex>";
 }
 
 // Ed25519 keypair generation (mirrors `resid_build::archive::keygen`): a
@@ -587,16 +590,21 @@ List(IdxEntry) load_existing_index(Str idx_path) {
 // write the new index + a fresh signature over its hash.
 @requires(filesystem)
 Int maintain_index(Str reg, Str name, Str version, Str hash_hex, List(Int) seed) {
-    Str idx_path = reg + "/pkg/index.resid-idx";
-    Str sig_path = reg + "/pkg/index.resid-sig";
-    List(IdxEntry) existing = load_existing_index(idx_path);
+    DirStore d = index_maintain(DirStore {.root = reg}, name, version, hash_hex, seed);
+    return 0;
+}
+
+// Replace this package's index entry and re-sign the whole index.
+@needs(RegStore(T))
+@requires(filesystem)
+T index_maintain(T st, Str name, Str version, Str hash_hex, List(Int) seed) {
+    List(Int) old = store_get(st, "pkg/index.resid-idx");
+    List(IdxEntry) existing = parse_index_text(bytes_to_ascii(old, 0, old.len(), ""));
     List(IdxEntry) updated = idx_remove_acc(existing, name, version, 0, []).concat([IdxEntry {.name = name, .version = version, .sha256 = hash_hex}]);
     Str new_text = index_text(updated);
-    filesystem.write_all(idx_path, new_text);
-    Str text_hash_hex = hex_encode(sha256_bytes(bytes_of(new_text)));
-    List(Int) sig = sign_msg(seed, text_hash_hex);
-    filesystem.write_bytes(sig_path, bytes_of(hex_encode(sig)));
-    return 0;
+    T s1 = store_put(st, "pkg/index.resid-idx", bytes_of(new_text));
+    List(Int) sig = sign_msg(seed, hex_encode(sha256_bytes(bytes_of(new_text))));
+    return store_put(s1, "pkg/index.resid-sig", bytes_of(hex_encode(sig)));
 }
 
 @requires(filesystem)
@@ -636,14 +644,13 @@ Int cmd_publish(Str dir, Str reg, Str keyfile) {
 //
 // The publish side's mirror of resid-manifest.resid's fetch side: same
 // artifact names under `pkg/`, so a registry on disk and the same registry
-// served here are the same bytes at the same URLs. GET and HEAD only, no
-// directory listing, no upload. Publishing is `publish` writing the
-// directory; serving only reads it.
+// served here are the same bytes at the same URLs. GET and HEAD, no
+// directory listing; PUT only with --upload (see `upload` below).
 //
 // The HTTP is lib/httpserv.resid's: its request limits, smuggling refusals,
 // per-request read and reply deadlines, and lingering close all apply, and
 // four worker regions share the listener, so one slow client cannot stall
-// the registry.
+// the registry (one, with --upload, so index writes never interleave).
 //
 // Three things this will not do, each of them a security decision rather
 // than a missing feature:
@@ -656,9 +663,10 @@ Int cmd_publish(Str dir, Str reg, Str keyfile) {
 //     rejected outright if any segment is `..` or empty, so no request can
 //     name a file outside the root — the same rule `extract` enforces on
 //     an archive, for the same reason.
-//   * It never writes. A remote registry's trust comes from its signed
-//     index and the publisher's signature, not from the transport, so
-//     nothing here can change what a client accepts.
+//   * It never writes what a keyring key did not sign. Without --upload it
+//     never writes at all; with it, an archive is written only after its
+//     signature verifies under the publisher keyring, a published version
+//     is never replaced, and the index is re-signed by the registry's key.
 
 Str serve_port_line(Str scheme, Int port) {
     return "resid-pkg serve: listening on " + scheme + "://127.0.0.1:" + f"{port}" + "\n";
@@ -689,17 +697,47 @@ Bool path_is_unsafe(Str path) {
     return seg_unsafe(str_split(path, "/"), 0);
 }
 
-// The file a request path names under `root`; "" when the path is unsafe
-// or names the root itself. The query is already split off by httpserv.
-Str resolve_request_file(Str root, Str path) {
-    if (!str_starts_with(path, "/") || path_is_unsafe(path)) { return ""; }
-    if (path == "/") { return ""; }
-    return root + path;
-}
-
 HttpReply registry_status(Int code) {
     return http_with_header(http_reply_status(code), "Server", "resid-pkg");
 }
+
+// ─── storage: where a registry's files live ──────────────────────────
+// Serving, uploading and the index go through RegStore, so a directory
+// and any other backend are interchangeable. Paths are relative to the
+// registry root ("pkg/<file>"). `store_put` returns the store, so a pure
+// one (a map, for tests) can implement it as well as the directory does.
+
+behavior RegStore(T) {
+    List(Int) store_get(T s, Str path);
+    Bool store_has(T s, Str path);
+    T store_put(T s, Str path, List(Int) bytes);
+}
+
+// The registry as a directory on disk.
+type DirStore = { Str root; };
+
+@requires(filesystem(readonly))
+List(Int) dir_get(DirStore d, Str path) {
+    Str f = d.root + "/" + path;
+    if (!filesystem.exists(f) || filesystem.is_dir(f)) { return []; }
+    return filesystem.read_bytes(f);
+}
+
+@requires(filesystem(readonly))
+Bool dir_has(DirStore d, Str path) {
+    Str f = d.root + "/" + path;
+    return filesystem.exists(f) && !filesystem.is_dir(f);
+}
+
+@requires(filesystem)
+DirStore dir_put(DirStore d, Str path, List(Int) bytes) {
+    Int sl = str_index_of(path, "/", 0);
+    if (sl > 0) { filesystem.create_dir(d.root + "/" + str_slice(path, 0, sl)); }
+    filesystem.write_bytes(d.root + "/" + path, bytes);
+    return d;
+}
+
+RegStore(DirStore) = { .store_get = dir_get, .store_has = dir_has, .store_put = dir_put };
 
 // One request against the registry directory.
 @requires(filesystem(readonly))
@@ -707,10 +745,27 @@ HttpReply registry_reply(Str root, HttpRequest r) {
     if (r.method != "GET" && r.method != "HEAD") {
         return http_with_header(registry_status(405), "Allow", "GET, HEAD");
     }
+    return registry_read(DirStore {.root = root}, r);
+}
+
+// The same, with uploads: PUT goes to registry_upload.
+@requires(filesystem)
+HttpReply registry_reply_up(Str root, UploadCfg u, HttpRequest r) {
+    if (r.method == "PUT") { return registry_upload(DirStore {.root = root}, u, r).reply; }
+    if (r.method != "GET" && r.method != "HEAD") {
+        return http_with_header(registry_status(405), "Allow", "GET, HEAD, PUT");
+    }
+    return registry_read(DirStore {.root = root}, r);
+}
+
+@needs(RegStore(T))
+@requires(filesystem(readonly))
+HttpReply registry_read(T st, HttpRequest r) {
     if (!str_starts_with(r.path, "/") || path_is_unsafe(r.path)) { return registry_status(400); }
-    Str file = resolve_request_file(root, r.path);
-    if (file == "" || !filesystem.exists(file) || filesystem.is_dir(file)) { return registry_status(404); }
-    HttpReply ok = http_reply_bytes(200, "application/octet-stream", filesystem.read_bytes(file));
+    if (r.path == "/") { return registry_status(404); }
+    Str rel = str_slice(r.path, 1, str_len(r.path));
+    if (!store_has(st, rel)) { return registry_status(404); }
+    HttpReply ok = http_reply_bytes(200, "application/octet-stream", store_get(st, rel));
     return http_with_header(ok, "Server", "resid-pkg");
 }
 
@@ -740,6 +795,28 @@ Int serve_workers_tls(Int lfd, Int n, Str root, Int conns, TlsCfg conf) {
     return if (mine < 0 || rest < 0) { -1 } else { rest + mine };
 }
 
+// Upload-enabled workers: filesystem writes, and room for an archive.
+HttpLimits upload_limits() {
+    HttpLimits l = http_limits();
+    return HttpLimits {.head_max = l.head_max, .body_max = 67108864, .requests_max = l.requests_max, .request_ms = 300000, .reply_ms = l.reply_ms, .open_max = l.open_max};
+}
+
+@requires(network(readonly), filesystem)
+Int serve_worker_up(Int lfd, Str root, Int conns, UploadCfg u) {
+    Result(Int, RegionError) r = spawn (network(readonly), filesystem) {
+        return http_accept_loop(lfd, lambda(q) { registry_reply_up(root, u, q) }, upload_limits(), conns);
+    };
+    return r else { -1 };
+}
+
+@requires(network(readonly), filesystem)
+Int serve_worker_up_tls(Int lfd, Str root, Int conns, TlsCfg conf, UploadCfg u) {
+    Result(Int, RegionError) r = spawn (network(readonly), filesystem) {
+        return tls_accept_loop(lfd, conf, lambda(q) { registry_reply_up(root, u, q) }, upload_limits(), conns);
+    };
+    return r else { -1 };
+}
+
 // The key and chain for --cert/--key, refused at startup -- not on every
 // handshake -- when either is unreadable or they do not belong together.
 type ServeTls = { TlsCfg conf; Str err; };
@@ -764,10 +841,14 @@ ServeTls load_serve_tls(Str cert, Str key) {
 // reports it, so a caller never has to reserve one; --port-file also
 // writes it for a script to read. --cert and --key together serve over
 // TLS 1.3 instead of plain HTTP.
-type ServeOpts = { Int port; Str port_file; Int requests; Str cert; Str key; Bool ok; };
+type ServeOpts = { Int port; Str port_file; Int requests; Str cert; Str key; Bool ok; Str upload; Str index_key; };
 
 ServeOpts serve_opts(Int port, Str port_file, Int requests, Str cert, Str key, Bool ok) {
-    return ServeOpts {.port = port, .port_file = port_file, .requests = requests, .cert = cert, .key = key, .ok = ok};
+    return ServeOpts {.port = port, .port_file = port_file, .requests = requests, .cert = cert, .key = key, .ok = ok, .upload = "", .index_key = ""};
+}
+
+ServeOpts serve_up(ServeOpts o, Str upload, Str index_key) {
+    return ServeOpts {.port = o.port, .port_file = o.port_file, .requests = o.requests, .cert = o.cert, .key = o.key, .ok = o.ok, .upload = upload, .index_key = index_key};
 }
 
 @requires(args)
@@ -775,14 +856,16 @@ ServeOpts parse_serve_opts(Int i, Int argc, ServeOpts o) {
     if (i >= argc) { return o; }
     Str flag = args.get(i);
     Bool has_next = i + 1 < argc;
-    if (!has_next) { return serve_opts(o.port, o.port_file, o.requests, o.cert, o.key, false); }
+    if (!has_next) { return serve_up(serve_opts(o.port, o.port_file, o.requests, o.cert, o.key, false), o.upload, o.index_key); }
     Str v = args.get(i + 1);
-    if (flag == "--port") { return parse_serve_opts(i + 2, argc, serve_opts(str_parse_int(v), o.port_file, o.requests, o.cert, o.key, o.ok)); }
-    if (flag == "--port-file") { return parse_serve_opts(i + 2, argc, serve_opts(o.port, v, o.requests, o.cert, o.key, o.ok)); }
-    if (flag == "--requests") { return parse_serve_opts(i + 2, argc, serve_opts(o.port, o.port_file, str_parse_int(v), o.cert, o.key, o.ok)); }
-    if (flag == "--cert") { return parse_serve_opts(i + 2, argc, serve_opts(o.port, o.port_file, o.requests, v, o.key, o.ok)); }
-    if (flag == "--key") { return parse_serve_opts(i + 2, argc, serve_opts(o.port, o.port_file, o.requests, o.cert, v, o.ok)); }
-    return serve_opts(o.port, o.port_file, o.requests, o.cert, o.key, false);
+    if (flag == "--port") { return parse_serve_opts(i + 2, argc, serve_up(serve_opts(str_parse_int(v), o.port_file, o.requests, o.cert, o.key, o.ok), o.upload, o.index_key)); }
+    if (flag == "--port-file") { return parse_serve_opts(i + 2, argc, serve_up(serve_opts(o.port, v, o.requests, o.cert, o.key, o.ok), o.upload, o.index_key)); }
+    if (flag == "--requests") { return parse_serve_opts(i + 2, argc, serve_up(serve_opts(o.port, o.port_file, str_parse_int(v), o.cert, o.key, o.ok), o.upload, o.index_key)); }
+    if (flag == "--cert") { return parse_serve_opts(i + 2, argc, serve_up(serve_opts(o.port, o.port_file, o.requests, v, o.key, o.ok), o.upload, o.index_key)); }
+    if (flag == "--key") { return parse_serve_opts(i + 2, argc, serve_up(serve_opts(o.port, o.port_file, o.requests, o.cert, v, o.ok), o.upload, o.index_key)); }
+    if (flag == "--upload") { return parse_serve_opts(i + 2, argc, serve_up(o, v, o.index_key)); }
+    if (flag == "--index-key") { return parse_serve_opts(i + 2, argc, serve_up(o, o.upload, v)); }
+    return serve_up(serve_opts(o.port, o.port_file, o.requests, o.cert, o.key, false), o.upload, o.index_key);
 }
 
 @requires(args, filesystem, network)
@@ -799,6 +882,16 @@ Int cmd_serve(Str root, ServeOpts o) {
         eprintln("resid-pkg serve: --cert and --key go together");
         return 2;
     }
+    Bool up = o.upload != "" || o.index_key != "";
+    if (up && (o.upload == "" || o.index_key == "")) {
+        eprintln("resid-pkg serve: --upload <keyring> and --index-key <keyfile> go together");
+        return 2;
+    }
+    if (up && (!filesystem.is_dir(o.upload) || !filesystem.exists(o.index_key))) {
+        eprintln("resid-pkg serve: --upload needs a keyring directory and --index-key a key file");
+        return 2;
+    }
+    UploadCfg ucfg = if (up) { UploadCfg {.on = true, .keyring = o.upload, .seed = hex_decode(str_trim(filesystem.read_all(o.index_key)))} } else { upload_off() };
     ServeTls st = if (tls) { load_serve_tls(o.cert, o.key) } else { ServeTls { .conf = tls_cfg(EdKey([]), [], []), .err = "" } };
     if (st.err != "") {
         eprintln("resid-pkg serve: " + st.err);
@@ -816,9 +909,174 @@ Int cmd_serve(Str root, ServeOpts o) {
     // --requests N is for scripts that want the server to stop after N
     // connections: one worker, so the count is exact.
     Int workers = if (max_requests > 0) { 1 } else { 4 };
-    Int rc = if (tls) { serve_workers_tls(lfd, workers, root, max_requests, st.conf) } else { serve_workers(lfd, workers, root, max_requests) };
+    // Uploads write the index: one worker, so two never interleave.
+    Int rc = if (up) {
+        if (tls) { serve_worker_up_tls(lfd, root, max_requests, st.conf, ucfg) } else { serve_worker_up(lfd, root, max_requests, ucfg) }
+    } else {
+        if (tls) { serve_workers_tls(lfd, workers, root, max_requests, st.conf) } else { serve_workers(lfd, workers, root, max_requests) }
+    };
     _ = resid_tcp_close(lfd);
     return if (rc < 0) { 1 } else { 0 };
+}
+
+// ─── upload: authenticated publish (registry v2) ────────────────────
+//
+// `serve --upload <keyring> --index-key <keyfile>` takes
+// `PUT /pkg/<name>-<version>.resid-pkg` with the archive as the body and
+// `X-Resid-Signature: <hex>` over its SHA-256, the same signature
+// `publish` writes. The signature must verify under a key in the keyring
+// (a directory of `.pub` files, as `[signing] keyring` reads) before any
+// byte of the archive is parsed; the archive's own manifest must name the
+// path's package and version; a version already published under another
+// hash is refused (409). The server then writes the archive, its -sha256
+// and -sig, and re-signs the index with the index key. Uploads run on one
+// worker, so two cannot interleave their index writes.
+
+type UploadCfg = { Bool on; Str keyring; List(Int) seed; };
+
+UploadCfg upload_off() {
+    List(Int) none = [];
+    return UploadCfg {.on = false, .keyring = "", .seed = none};
+}
+
+HttpReply upload_text(Int code, Str msg) {
+    return http_with_header(http_reply_text(code, "text/plain; charset=utf-8", msg + "\n"), "Server", "resid-pkg");
+}
+
+// The resid.toml inside an archive, read with every length checked: ""
+// when there is none or the archive is malformed.
+Str archive_manifest(List(Int) a) {
+    ArchiveHdr h = read_archive_header(a);
+    if (!h.ok) { return ""; }
+    return archive_manifest_at(a, 13, 0, h.count);
+}
+
+Str archive_manifest_at(List(Int) a, Int pos, Int i, Int n) {
+    if (i >= n || pos + 2 > a.len()) { return ""; }
+    Int plen = read_le_u16(a, pos);
+    Int p3 = pos + 2 + plen;
+    if (p3 + 8 > a.len()) { return ""; }
+    Int clen = read_le_u64(a, p3);
+    Int p4 = p3 + 8;
+    if (clen < 0 || clen > a.len() - p4) { return ""; }
+    Str rel = bytes_to_ascii(a, pos + 2, p3, "");
+    if (rel == "resid.toml") { return bytes_to_ascii(a, p4, p4 + clen, ""); }
+    return archive_manifest_at(a, p4 + clen, i + 1, n);
+}
+
+type Uploaded(T) = { T store; HttpReply reply; };
+
+@needs(RegStore(T))
+Uploaded(T) uploaded(T st, Int code, Str msg) { return Uploaded {.store = st, .reply = upload_text(code, msg)}; }
+
+@needs(RegStore(T))
+@requires(filesystem)
+Uploaded(T) registry_upload(T st, UploadCfg u, HttpRequest r) {
+    Str base0 = if (str_starts_with(r.path, "/pkg/")) { str_slice(r.path, 5, str_len(r.path)) } else { "" };
+    Bool shaped = str_ends_with(base0, ".resid-pkg") && !str_contains(base0, "/") && !path_is_unsafe(r.path);
+    if (!shaped) { return uploaded(st, 400, "upload to /pkg/<name>-<version>.resid-pkg"); }
+    Str base = str_slice(base0, 0, str_len(base0) - 10);
+    Str sig_hex = str_trim(http_header(r, "x-resid-signature"));
+    if (sig_hex == "") { return uploaded(st, 401, "an upload needs X-Resid-Signature: the hex signature over the archive's SHA-256"); }
+    Str hash_hex = hex_encode(content_hash(r.body));
+    List(Int) sig = hex_decode(sig_hex);
+    Bool known = filesystem.is_dir(u.keyring) && upload_signed(u.keyring, sort(filesystem.list_dir(u.keyring)), 0, hash_hex, sig);
+    if (!known) { return uploaded(st, 403, "no key in this registry's publisher keyring signs that archive"); }
+    Str toml = archive_manifest(r.body);
+    Str name = manifest_field(toml, "name");
+    Str version = manifest_field(toml, "version");
+    if (name == "" || version == "") { return uploaded(st, 400, "the archive has no resid.toml naming [package] name and version"); }
+    if (name + "-" + version != base) { return uploaded(st, 400, "the archive is " + name + "-" + version + ", not " + base); }
+    Str sha_path = "pkg/" + base + ".resid-sha256";
+    List(Int) had = store_get(st, sha_path);
+    Str have = str_trim(bytes_to_ascii(had, 0, had.len(), ""));
+    if (have == hash_hex) { return uploaded(st, 200, "already published: " + name + " " + version + " sha256 " + hash_hex); }
+    if (have != "") { return uploaded(st, 409, name + " " + version + " is already published with sha256 " + have + "; publish a new version"); }
+    T s1 = store_put(st, "pkg/" + base + ".resid-pkg", r.body);
+    T s2 = store_put(s1, sha_path, bytes_of(hash_hex + "\n"));
+    T s3 = store_put(s2, "pkg/" + base + ".resid-sig", bytes_of(hex_encode(sig)));
+    return uploaded(index_maintain(s3, name, version, hash_hex, u.seed), 201, "published " + name + " " + version + " sha256 " + hash_hex);
+}
+
+@requires(filesystem(readonly))
+Bool upload_signed(Str keyring, List(Str) names, Int i, Str hash_hex, List(Int) sig) {
+    if (i >= names.len()) { return false; }
+    Str f = keyring + "/" + names[i];
+    Bool pubf = str_ends_with(names[i], ".pub") && !filesystem.is_dir(f);
+    if (pubf && verify_sig(hash_hex, sig, hex_decode(str_trim(filesystem.read_all(f))))) { return true; }
+    return upload_signed(keyring, names, i + 1, hash_hex, sig);
+}
+
+// `upload <dir> <url> <keyfile> [--ca F]`: pack, sign and PUT one package.
+@requires(filesystem, network, clock(readonly))
+Int cmd_upload(Str dir, Str url, Str keyfile, Str ca) {
+    Str manifest_text = filesystem.read_all(dir + "/resid.toml");
+    Str name = manifest_field(manifest_text, "name");
+    Str version = manifest_field(manifest_text, "version");
+    if (name == "" || version == "") {
+        eprintln("resid-pkg upload: cannot read [package] name/version from '" + dir + "/resid.toml'");
+        return 1;
+    }
+    if (!filesystem.exists(keyfile)) {
+        eprintln("resid-pkg upload: no signing key at '" + keyfile + "'");
+        return 2;
+    }
+    List(Int) archive = build_archive(dir);
+    Str hash_hex = hex_encode(content_hash(archive));
+    List(Int) sig = sign_msg(hex_decode(str_trim(filesystem.read_all(keyfile))), hash_hex);
+    Str base = if (str_ends_with(url, "/")) { str_slice(url, 0, str_len(url) - 1) } else { url };
+    Str target = base + "/pkg/" + name + "-" + version + ".resid-pkg";
+    Str headers = "X-Resid-Signature: " + hex_encode(sig) + "\r\nContent-Type: application/octet-stream\r\n";
+    UpReply rp = if (str_starts_with(url, "https://")) { upload_https(target, ca, headers, archive) } else { upload_http(target, headers, archive) };
+    if (rp.err != "") {
+        eprintln("resid-pkg upload: " + rp.err);
+        return 1;
+    }
+    Str said = str_trim(rp.text);
+    if (rp.status == 200 || rp.status == 201) {
+        println(said);
+        return 0;
+    }
+    eprintln("resid-pkg upload: HTTP " + f"{rp.status}" + ": " + said);
+    return 1;
+}
+
+type UpReply = { Int status; Str text; Str err; };
+
+@requires(filesystem(readonly), network, clock(readonly))
+UpReply upload_https(Str url, Str ca, Str headers, List(Int) body) {
+    if (ca == "") { return UpReply {.status = 0, .text = "", .err = "an https:// registry needs --ca <trust store>; with none nothing is trusted"}; }
+    List(Str) no_alpn = [];
+    HttpsGet h = tls_https_request(url, "", trust_store_load(ca), no_alpn, tls_client_deadline_ms(), "PUT", headers, body);
+    if (h.err != "") { return UpReply {.status = 0, .text = "", .err = h.err}; }
+    return UpReply {.status = h.status, .text = bytes_to_ascii(h.bytes, 0, h.bytes.len(), ""), .err = ""};
+}
+
+@requires(network)
+UpReply upload_http(Str url, Str headers, List(Int) body) {
+    if (!str_starts_with(url, "http://")) { return UpReply {.status = 0, .text = "", .err = "a registry url is http:// or https://: " + url}; }
+    Url u = http_parse_url(url);
+    if (u.host == "" || u.port <= 0) { return UpReply {.status = 0, .text = "", .err = "no host in " + url}; }
+    Int fd = resid_tcp_connect(u.host, u.port);
+    if (fd < 0) { return UpReply {.status = 0, .text = "", .err = "cannot connect to " + u.host + ":" + f"{u.port}"}; }
+    _ = resid_tcp_deadline(fd, http_client_deadline_ms());
+    Str head = "PUT " + u.path + " HTTP/1.1\r\nHost: " + u.host + ":" + f"{u.port}" + "\r\nUser-Agent: resid-pkg\r\n" + headers + f"Content-Length: {body.len()}\r\n" + "Connection: close\r\n\r\n";
+    if (!resid_tcp_send(fd, head) || !resid_tcp_send_bin(fd, body)) {
+        resid_tcp_close(fd);
+        return UpReply {.status = 0, .text = "", .err = "cannot send the upload to " + url};
+    }
+    Str rhead = http_recv_head(fd);
+    Int sp = str_index_of(rhead, " ", 0);
+    Str code = if (sp > 0 && str_len(rhead) >= sp + 4) { str_slice(rhead, sp + 1, sp + 4) } else { "" };
+    if (!str_is_int(code)) {
+        resid_tcp_close(fd);
+        return UpReply {.status = 0, .text = "", .err = url + " sent no status line"};
+    }
+    Str cl = http_header_value(rhead, "Content-Length");
+    Int n = if (str_is_int(cl)) { str_parse_int(cl) } else { 0 };
+    Str text = if (n > 0 && n <= 65536) { http_recv_count(fd, n) } else { "" };
+    resid_tcp_close(fd);
+    return UpReply {.status = str_parse_int(code), .text = text, .err = ""};
 }
 
 // ─── index: the publisher's side of the registry index ───────────────
@@ -946,7 +1204,7 @@ Int idx_cmd_verify(Str reg, Str pubkey_hex) {
     return 0;
 }
 
-@requires(args, filesystem, network)
+@requires(args, filesystem, network, clock(readonly))
 Int main() {
     Int argc = args.count();
     if (argc < 2) {
@@ -982,6 +1240,11 @@ Int main() {
         if (argc < 4) { eprintln(usage_text()); return 2; }
         Str keyfile = if (argc >= 5) { args.get(4) } else { "" };
         return cmd_publish(args.get(2), args.get(3), keyfile);
+    }
+    if (sub == "upload") {
+        // argv: <prog> upload <dir> <url> <keyfile> [--ca F]
+        if (argc != 5 && !(argc == 7 && args.get(5) == "--ca")) { eprintln("usage: resid-pkg upload <dir> <registry-url> <keyfile> [--ca <trust store>]"); return 2; }
+        return cmd_upload(args.get(2), args.get(3), args.get(4), if (argc == 7) { args.get(6) } else { "" });
     }
     if (sub == "index") {
         // argv: <prog> index <sub> ...
