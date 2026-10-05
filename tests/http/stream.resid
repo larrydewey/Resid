@@ -1,0 +1,117 @@
+// Streamed replies from the event loop: a stream that ticks and ends
+// (chunked, then the connection kept), the same over HTTP/1.0 (no chunks,
+// closed at the end), HEAD of a stream, and a client that leaves an
+// endless stream while others are served.
+import "httpserv.resid";
+import "http.resid";
+import "clock.resid";
+
+// `n` events, one every 20 ms; the state counts what is left.
+HttpStep(Int) tick(Int left) {
+    if (left <= 1) { return http_step_end(0, http_bytes("data: last\n\n")); }
+    return http_step(left - 1, http_bytes(f"data: {left}\n\n"), 20);
+}
+
+// An endless stream that only ever waits.
+HttpStep(Int) forever(Int n) { return http_step(n + 1, http_bytes(": ping\n\n"), 10); }
+
+HttpOut(Int) handle(HttpRequest r) {
+    List(Str) sse = ["Content-Type: text/event-stream", "Cache-Control: no-cache"];
+    if (r.path == "/sse") {
+        HttpStream(Int) s = HttpStream { .status = 200, .headers = sse, .first = http_step(3, http_bytes("data: first\n\n"), 20), .next = lambda(k) { tick(k) } };
+        return Stream(s);
+    }
+    if (r.path == "/forever") {
+        HttpStream(Int) s = HttpStream { .status = 200, .headers = sse, .first = http_step(0, [], 10), .next = lambda(k) { forever(k) } };
+        return Stream(s);
+    }
+    if (r.path == "/once") {
+        HttpStream(Int) s = HttpStream { .status = 200, .headers = sse, .first = http_step_end(0, http_bytes("data: only\n\n")), .next = lambda(k) { forever(k) } };
+        return Stream(s);
+    }
+    return Whole(http_reply_text(200, "text/plain", "whole\n"));
+}
+
+// Read a chunked body to its last chunk; the decoded bytes.
+@requires(network)
+Str chunked(Int fd, StrBuf acc) {
+    Str line = str_trim(http_recv_line(fd));
+    Int n = hex(line, 0, 0);
+    if (n <= 0) {
+        _ = http_recv_line(fd);
+        return acc.finish();
+    }
+    Str part = http_recv_count(fd, n);
+    _ = http_recv_line(fd);
+    return chunked(fd, acc.push(part));
+}
+
+Int hex(Str s, Int i, Int acc) {
+    if (i >= str_len(s)) { return if (i == 0) { -1 } else { acc }; }
+    Int c = str_char_at(s, i);
+    Int d = if (c >= 48 && c <= 57) { c - 48 } else { if (c >= 97 && c <= 102) { c - 87 } else { -1 } };
+    if (d < 0) { return -1; }
+    return hex(s, i + 1, acc * 16 + d);
+}
+
+Str flat(Str s) { return str_replace(str_replace(s, "\n\n", "|"), "\n", "/"); }
+
+@requires(network, clock)
+Int main() {
+    Int lfd = http_listen(0);
+    if (lfd < 0) { println("listen failed"); return 1; }
+    Int port = http_bound_port(lfd);
+    HttpLimits lim = HttpLimits { .head_max = 2048, .body_max = 4096, .requests_max = 100, .request_ms = 2000, .reply_ms = 2000, .open_max = 64 };
+    HttpOut(Int) closure(HttpRequest) h = lambda(r) { handle(r) };
+    Result(Int, RegionError) worker = spawn (network(readonly)) {
+        return http_stream_loop(lfd, h, lim, 5);
+    };
+    Str host = "Host: x\r\n";
+    // 1: a stream that ends, then a second request on the same connection
+    Int fd = resid_tcp_connect("127.0.0.1", port);
+    Int t0 = clock_monotonic_ns();
+    _ = resid_tcp_send(fd, "GET /sse HTTP/1.1\r\n" + host + "\r\n");
+    Str head = http_recv_head(fd);
+    println(str_slice(head, 9, 12) + " " + http_header_value(head, "transfer-encoding") + " " + http_header_value(head, "content-type"));
+    println(flat(chunked(fd, StrBuf())));
+    Int ms = (clock_monotonic_ns() - t0) / 1000000;
+    println(f"paced: {ms >= 50}");
+    _ = resid_tcp_send(fd, "GET /whole HTTP/1.1\r\n" + host + "Connection: close\r\n\r\n");
+    Str again = resid_tcp_recv_all(fd);
+    _ = resid_tcp_close(fd);
+    println("kept: " + str_slice(again, 9, 12) + " " + str_trim(str_slice(again, str_index_of(again, "\r\n\r\n", 0) + 4, str_len(again))));
+    // 2: HTTP/1.0: no chunks, closed at the end
+    Int fd2 = resid_tcp_connect("127.0.0.1", port);
+    _ = resid_tcp_send(fd2, "GET /sse HTTP/1.0\r\n\r\n");
+    Str raw = resid_tcp_recv_all(fd2);
+    _ = resid_tcp_close(fd2);
+    Int at = str_index_of(raw, "\r\n\r\n", 0);
+    println("1.0: " + http_header_value(raw, "connection") + " " + flat(str_slice(raw, at + 4, str_len(raw))));
+    // 3: HEAD of a stream is its head alone
+    Int fd3 = resid_tcp_connect("127.0.0.1", port);
+    _ = resid_tcp_send(fd3, "HEAD /sse HTTP/1.1\r\n" + host + "Connection: close\r\n\r\n");
+    Str hraw = resid_tcp_recv_all(fd3);
+    _ = resid_tcp_close(fd3);
+    println("head: " + str_slice(hraw, 9, 12) + " " + http_header_value(hraw, "content-length") + f" {str_ends_with(hraw, "\r\n\r\n")}");
+    // 4: a client leaves an endless stream; the loop goes on serving
+    Int fd4 = resid_tcp_connect("127.0.0.1", port);
+    _ = resid_tcp_send(fd4, "GET /forever HTTP/1.1\r\n" + host + "\r\n");
+    Str fhead = http_recv_head(fd4);
+    _ = http_recv_line(fd4);
+    Str ping = http_recv_line(fd4);
+    _ = resid_tcp_close(fd4);
+    println("forever: " + str_slice(fhead, 9, 12) + " " + str_trim(ping));
+    _ = clock_sleep_ms(50);
+    // 5: a stream done at once
+    Int fd5 = resid_tcp_connect("127.0.0.1", port);
+    _ = resid_tcp_send(fd5, "GET /once HTTP/1.1\r\n" + host + "Connection: close\r\n\r\n");
+    Str ohead = http_recv_head(fd5);
+    Str obody = chunked(fd5, StrBuf());
+    Str otail = resid_tcp_recv_all(fd5);
+    _ = resid_tcp_close(fd5);
+    println("once: " + http_header_value(ohead, "connection") + " " + flat(obody) + f" {str_len(otail)}");
+    Result(Int, RegionError) done = worker;
+    Int served = done else { -1 };
+    println(f"accepted: {served}");
+    return 0;
+}

@@ -1,0 +1,9 @@
+200 chunked text/event-stream
+data: first|data: 3|data: 2|data: last|
+paced: true
+kept: 200 whole
+1.0: close data: first|data: 3|data: 2|data: last|
+head: 200 0 true
+forever: 200 : ping
+once: close data: only| 0
+accepted: 5

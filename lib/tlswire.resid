@@ -300,3 +300,9 @@ Session(TlsSess, TlsCfg) = { .sess_open = tls_sess_open, .sess_input = tls_sess_
 pub Int tls_accept_loop(Int lfd, TlsCfg conf, HttpReply closure(HttpRequest) handler, HttpLimits lim, Int max_conns) {
     return http_accept_loop_where(lfd, conf, handler, lim, max_conns);
 }
+
+// The same with a handler that may stream (lib/httpserv.resid `HttpOut`).
+@requires(network(readonly))
+pub Int tls_stream_loop(Int lfd, TlsCfg conf, HttpOut(K) closure(HttpRequest) handler, HttpLimits lim, Int max_conns) {
+    return http_stream_loop_where(lfd, conf, handler, lim, max_conns);
+}

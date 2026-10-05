@@ -9,7 +9,8 @@ keeps connections alive, answers pipelined requests in order, routes paths,
 and refuses malformed or oversized requests. The accept loop is an event
 loop: it holds every connection at once and spends time only on those
 with bytes to read or room to write, so a client that connects and stalls
-costs a socket, not a worker. Parallelism comes from `spawn`: each region
+costs a socket, not a worker. A handler may also stream its reply
+(server-sent events). Parallelism comes from `spawn`: each region
 runs the same loop on one listener, and the kernel hands every connection
 to one of them.
 
@@ -153,6 +154,78 @@ refused request is answered and its connection closed:
 Connections are closed by half-closing and draining first, so a client
 that is still sending receives its error reply rather than a reset.
 
+## Streamed replies
+
+A handler can also answer with a stream: a head, then bytes as they are
+made, which is what server-sent events need. Such a handler returns
+`HttpOut(K)`, either `Whole(reply)` or `Stream(s)`, and is served by
+`http_stream_loop` (`tls_stream_loop` over TLS). A stream is its first
+step and a function from the stream's state `K` to the next step:
+
+```resid
+import "httpserv.resid";
+
+// Three events, 10 ms apart; the state counts down.
+HttpStep(Int) next(Int left) {
+    if (left == 1) { return http_step_end(0, http_bytes("data: last\n\n")); }
+    return http_step(left - 1, http_bytes(f"data: {left}\n\n"), 10);
+}
+
+HttpOut(Int) handle(HttpRequest r) {
+    if (r.path != "/events") { return Whole(http_reply_status(404)); }
+    HttpStream(Int) s = HttpStream { .status = 200, .headers = ["Content-Type: text/event-stream"],
+        .first = http_step(3, http_bytes("data: first\n\n"), 10), .next = lambda(k) { next(k) } };
+    return Stream(s);
+}
+
+@requires(network(readonly))
+Int main() {
+    Int lfd = http_listen(0);
+    Int port = http_bound_port(lfd);
+    HttpOut(Int) closure(HttpRequest) h = lambda(r) { handle(r) };
+    Result(Int, RegionError) worker = spawn (network(readonly)) {
+        return http_stream_loop(lfd, h, http_limits(), 1);
+    };
+    Int fd = resid_tcp_connect("127.0.0.1", port);
+    _ = resid_tcp_send(fd, "GET /events HTTP/1.0\r\n\r\n");
+    Str raw = resid_tcp_recv_all(fd);
+    _ = resid_tcp_close(fd);
+    print(str_slice(raw, str_index_of(raw, "\r\n\r\n", 0) + 4, str_len(raw)));
+    Int served = worker else { -1 };
+    println(f"served {served}");
+    return 0;
+}
+```
+
+```text
+data: first
+
+data: 3
+
+data: 2
+
+data: last
+
+served 1
+```
+
+`http_step(state, bytes, wait_ms)` sends `bytes` and asks for the next step
+after `wait_ms`; `http_step_end(state, bytes)` sends them and ends the
+stream. The wait is the connection's deadline in the event loop, so a
+stream costs a socket and no worker, and the loop still reads no clock. A
+client that goes away ends its stream; one that stops reading is cut off
+after `reply_ms`, as for any reply. Over HTTP/1.1 the body is chunked and
+the connection stays open for the next request; over HTTP/1.0 the stream
+ends with the connection. `HEAD` gets the head alone.
+
+Bind the handler to a typed closure (`HttpOut(Int) closure(HttpRequest) h
+= ...`) before passing it: the loop is generic in `K`, so a bare lambda
+argument has no type to take. A whole-reply handler still goes to
+`http_accept_loop`, which is this loop with every answer `Whole`.
+
+[resid-datastar](https://github.com/larrydewey/resid-datastar) builds a
+Datastar SDK on these streams.
+
 ## Serving over TLS
 
 The same handler serves an encrypted connection. `lib/tlswire.resid` is
@@ -198,6 +271,7 @@ residc examples/https_server.resid run -- --cert server.pem --key server.key \
 | `tls_key_sign(key, content)` | a DER `ECDSA-Sig-Value` or 64 Ed25519 bytes |
 | `tls_server_handshake(fd, key, chain, alpn)` | one handshake, returning the connection's keys |
 | `tls_accept_loop(lfd, cfg, handler, lim, max_conns)` | accept, handshake, serve |
+| `tls_stream_loop(lfd, cfg, handler, lim, max_conns)` | the same with a handler that may stream |
 
 TLS 1.3 only, and `TLS_AES_128_GCM_SHA256` only: those are the versions
 and suites this language can protect a record with. A client that does not

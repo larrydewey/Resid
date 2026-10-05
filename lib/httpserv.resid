@@ -23,6 +23,10 @@
 // each connection to one of them). The spawn lists the handler's
 // capabilities, which this library cannot know. See
 // examples/http_server.resid.
+//
+// A handler may stream instead (`HttpOut`, `http_stream_loop`): a head,
+// then steps that each send bytes and wait on the connection's deadline
+// for the next, which is how server-sent events are served.
 
 import "wire.resid";
 
@@ -658,28 +662,78 @@ Bool hs_mem_deadline(HsMem m, Int ms) { return true; }
 
 Wire(HsMem) = { .wire_fill = hs_mem_fill, .wire_send = hs_mem_send, .wire_close = hs_mem_close, .wire_deadline = hs_mem_deadline };
 
+// ─── Streamed replies ───────────────────────────────────────────────────
+//
+// A handler may answer with a stream instead of a whole reply: a head,
+// then bytes as they are made (server-sent events). Each step says what
+// to send now, the state to resume from and how long to wait before the
+// next step. The wait is the connection's runtime deadline, so the loop
+// still needs no clock. A stream ends when a step is `done` or the
+// client goes away.
+
+// One step of a stream. `wait_ms` <= 0 waits for nothing but the client.
+type HttpStep(K) = { K state; List(Int) out; Int wait_ms; Bool done; };
+
+// A streamed reply: its head, the first step and the function that makes
+// each step after it. No Content-Length: over HTTP/1.1 the body is
+// chunked, so the connection can be kept; over HTTP/1.0 it ends at close.
+type HttpStream(K) = { Int status; List(Str) headers; HttpStep(K) first; HttpStep(K) closure(K) next; };
+
+// What a streaming handler returns.
+type HttpOut(K) = Whole(HttpReply) | Stream(HttpStream(K));
+
+// A step that leaves the stream open, and one that ends it.
+pub HttpStep(K) http_step(K state, List(Int) out, Int wait_ms) {
+    return HttpStep { .state = state, .out = out, .wait_ms = wait_ms, .done = false };
+}
+
+pub HttpStep(K) http_step_end(K state, List(Int) out) {
+    return HttpStep { .state = state, .out = out, .wait_ms = 0, .done = true };
+}
+
+// One chunk of a chunked body; an empty one is skipped (it would end it).
+List(Int) hs_chunk(List(Int) b, Bool chunked) {
+    if (!chunked || b.len() == 0) { return b; }
+    return http_bytes(f"{b.len():hex}\r\n").concat(b).concat([13, 10]);
+}
+
+List(Int) hs_stream_head(HttpStream(K) s, Bool chunked, Bool keep) {
+    Str te = if (chunked) { "Transfer-Encoding: chunked\r\n" } else { "" };
+    Str conn = if (keep) { "" } else { "Connection: close\r\n" };
+    return http_bytes(f"HTTP/1.1 {s.status} " + http_reason(s.status) + "\r\n" + hs_header_lines(s.headers, 0, StrBuf()) + te + conn + "\r\n");
+}
+
+// A stream in progress on a connection.
+type HsLive(K) = { K state; HttpStep(K) closure(K) next; Int wait_ms; Bool chunked; Bool keep; };
+
 // One connection in the loop. `phase` 0 reads a request, 1 writes a
 // reply and then reads again, 2 writes the last reply, 3 drains after
-// a half-close, 4 is to be closed. `outb[out_at..]` is still to send.
-type HsConn(S) = {
+// a half-close, 4 is to be closed, 5 streams (`live`). `outb[out_at..]`
+// is still to send.
+type HsConn(S, K) = {
     Int fd; Int seq; S sess;
     List(Int) inb; HsFrame frame;
     List(Int) outb; Int out_at;
     Int phase; Int served; Bool peer_done;
+    Option(HsLive(K)) live;
 };
 
-HsConn(S) hs_conn_set(HsConn(S) c, S sess, List(Int) inb, HsFrame frame, List(Int) outb, Int out_at, Int phase, Int served, Bool peer_done) {
-    return HsConn { .fd = c.fd, .seq = c.seq, .sess = sess, .inb = inb, .frame = frame, .outb = outb, .out_at = out_at, .phase = phase, .served = served, .peer_done = peer_done };
+HsConn(S, K) hs_conn_set(HsConn(S, K) c, S sess, List(Int) inb, HsFrame frame, List(Int) outb, Int out_at, Int phase, Int served, Bool peer_done) {
+    return HsConn { .fd = c.fd, .seq = c.seq, .sess = sess, .inb = inb, .frame = frame, .outb = outb, .out_at = out_at, .phase = phase, .served = served, .peer_done = peer_done, .live = c.live };
 }
 
-HsConn(S) hs_conn_phase(HsConn(S) c, Int phase) {
+HsConn(S, K) hs_conn_live(HsConn(S, K) c, S sess, List(Int) inb, List(Int) outb, Int phase, Int served, Option(HsLive(K)) live) {
+    return HsConn { .fd = c.fd, .seq = c.seq, .sess = sess, .inb = inb, .frame = hs_frame_new(), .outb = outb, .out_at = 0, .phase = phase, .served = served, .peer_done = c.peer_done, .live = live };
+}
+
+HsConn(S, K) hs_conn_phase(HsConn(S, K) c, Int phase) {
     return hs_conn_set(c, c.sess, c.inb, c.frame, c.outb, c.out_at, phase, c.served, c.peer_done);
 }
 
 // Answer the request at the front of `inb` if it is whole.
 @needs(Session(S, C))
 @requires(network(readonly))
-HsConn(S) hs_ev_answer(HsConn(S) c, HttpReply closure(HttpRequest) handler, HttpLimits lim) {
+HsConn(S, K) hs_ev_answer(HsConn(S, K) c, HttpOut(K) closure(HttpRequest) handler, HttpLimits lim) {
     if (c.phase != 0) { return c; }
     HsFrame f = hs_frame(c.inb, c.frame, lim);
     if (!f.ready) {
@@ -691,41 +745,101 @@ HsConn(S) hs_ev_answer(HsConn(S) c, HttpReply closure(HttpRequest) handler, Http
     HttpRequest r0 = rq.req;
     HttpRequest r = if (rq.rest.conn.starved && r0.ok) { hs_reject(400) } else { r0 };
     if (!r.ok && r.status == 0) { return hs_conn_phase(c, 4); }
-    HttpReply reply = if (r.ok) { handler(r) } else { http_reply_status(r.status) };
-    Bool keep = r.ok && r.keep_alive && !c.peer_done && c.served + 1 < lim.requests_max;
-    List(Int) wire = http_reply_wire(reply, keep, r.method == "HEAD");
+    if (!r.ok) { return hs_ev_reply(c, rq.rest.data, http_reply_wire(http_reply_status(r.status), false, false), false, lim); }
+    HttpOut(K) out = handler(r);
+    Bool keep = r.keep_alive && !c.peer_done && c.served + 1 < lim.requests_max;
+    Bool head = r.method == "HEAD";
+    return match out {
+        Whole(reply) => hs_ev_reply(c, rq.rest.data, http_reply_wire(reply, keep, head), keep, lim),
+        Stream(s) => if (head) { hs_ev_reply(c, rq.rest.data, http_reply_wire(HttpReply { .status = s.status, .headers = s.headers, .body = [] }, keep, true), keep, lim) } else { hs_ev_stream(c, rq.rest.data, s, keep, r.version == "HTTP/1.1", lim) }
+    };
+}
+
+// Queue a whole reply's bytes.
+@needs(Session(S, C))
+@requires(network(readonly))
+HsConn(S, K) hs_ev_reply(HsConn(S, K) c, List(Int) rest, List(Int) wire, Bool keep, HttpLimits lim) {
     SessOut(S) so = sess_output(c.sess, wire);
     List(Int) bye = if (keep) { [] } else { sess_goodbye(so.sess) };
     List(Int) pending = c.outb[c.out_at..c.outb.len()];
     _ = resid_tcp_deadline(c.fd, lim.reply_ms);
     Int ph = if (keep) { 1 } else { 2 };
-    return hs_conn_set(c, so.sess, rq.rest.data, hs_frame_new(), pending.concat(so.out).concat(bye), 0, ph, c.served + 1, c.peer_done);
+    return hs_conn_live(c, so.sess, rest, pending.concat(so.out).concat(bye), ph, c.served + 1, None);
+}
+
+// Start a stream: its head and first step.
+@needs(Session(S, C))
+@requires(network(readonly))
+HsConn(S, K) hs_ev_stream(HsConn(S, K) c, List(Int) rest, HttpStream(K) s, Bool keep0, Bool chunked, HttpLimits lim) {
+    Bool keep = keep0 && chunked;
+    HsLive(K) lv = HsLive { .state = s.first.state, .next = s.next, .wait_ms = s.first.wait_ms, .chunked = chunked, .keep = keep };
+    HsConn(S, K) counted = hs_conn_live(c, c.sess, rest, c.outb[c.out_at..c.outb.len()], 5, c.served + 1, None);
+    return hs_ev_emit(counted, lv, s.first, hs_stream_head(s, chunked, keep), lim);
+}
+
+// Queue a step's bytes; the stream ends with it when it is `done`.
+@needs(Session(S, C))
+@requires(network(readonly))
+HsConn(S, K) hs_ev_emit(HsConn(S, K) c, HsLive(K) lv, HttpStep(K) st, List(Int) lead, HttpLimits lim) {
+    List(Int) last = if (st.done && lv.chunked) { [48, 13, 10, 13, 10] } else { [] };
+    List(Int) fresh = lead.concat(hs_chunk(st.out, lv.chunked)).concat(last);
+    SessOut(S) so = if (fresh.len() > 0) { sess_output(c.sess, fresh) } else { SessOut { .sess = c.sess, .out = [] } };
+    List(Int) pending = c.outb[c.out_at..c.outb.len()];
+    if (st.done) {
+        List(Int) bye = if (lv.keep) { [] } else { sess_goodbye(so.sess) };
+        _ = resid_tcp_deadline(c.fd, lim.reply_ms);
+        Int ph = if (lv.keep) { 1 } else { 2 };
+        return hs_conn_live(c, so.sess, c.inb, pending.concat(so.out).concat(bye), ph, c.served, None);
+    }
+    HsLive(K) next = HsLive { .state = st.state, .next = lv.next, .wait_ms = st.wait_ms, .chunked = lv.chunked, .keep = lv.keep };
+    List(Int) outb = pending.concat(so.out);
+    Int ms = if (outb.len() > 0) { lim.reply_ms } else { st.wait_ms };
+    _ = resid_tcp_deadline(c.fd, ms);
+    return hs_conn_live(c, so.sess, c.inb, outb, 5, c.served, Some(next));
+}
+
+// A stream's wait is over: make its next step.
+@needs(Session(S, C))
+@requires(network(readonly))
+HsConn(S, K) hs_ev_tick(HsConn(S, K) c, HttpLimits lim) {
+    Option(HsLive(K)) live = c.live;
+    return match live {
+        Some(lv) => hs_ev_tick_with(c, lv, lim),
+        None => hs_conn_phase(c, 4)
+    };
+}
+
+@needs(Session(S, C))
+@requires(network(readonly))
+HsConn(S, K) hs_ev_tick_with(HsConn(S, K) c, HsLive(K) lv, HttpLimits lim) {
+    HttpStep(K) closure(K) step = lv.next;
+    return hs_ev_emit(c, lv, step(lv.state), [], lim);
 }
 
 // Bytes have arrived (or the peer has gone).
 @needs(Session(S, C))
 @requires(network(readonly))
-HsConn(S) hs_ev_read(C conf, HsConn(S) c, HttpReply closure(HttpRequest) handler, HttpLimits lim) {
+HsConn(S, K) hs_ev_read(C conf, HsConn(S, K) c, HttpOut(K) closure(HttpRequest) handler, HttpLimits lim) {
     List(Int) got = resid_tcp_recv_some(c.fd, 65536);
     if (got.len() == 0) { return hs_conn_phase(c, 4); }
     if (c.phase == 3) { return c; }
     SessIn(S) si = sess_input(conf, c.sess, got);
     List(Int) outb = c.outb.concat(si.out);
     if (si.status == 2) {
-        Int ph = if (outb.len() > c.out_at) { 2 } else { 4 };
+        Int ph = if (outb.len() > c.out_at && c.phase != 5) { 2 } else { 4 };
         _ = resid_tcp_deadline(c.fd, lim.reply_ms);
         return hs_conn_set(c, si.sess, [], c.frame, outb, c.out_at, ph, c.served, true);
     }
     List(Int) inb = c.inb.concat(si.plain);
     if (inb.len() > lim.head_max + lim.body_max + 65536) { return hs_conn_phase(c, 4); }
-    HsConn(S) fed = hs_conn_set(c, si.sess, inb, c.frame, outb, c.out_at, c.phase, c.served, c.peer_done || si.status == 1);
+    HsConn(S, K) fed = hs_conn_set(c, si.sess, inb, c.frame, outb, c.out_at, c.phase, c.served, c.peer_done || si.status == 1);
     return hs_ev_answer(fed, handler, lim);
 }
 
 // The socket has room: send what is pending, and move on once it is all out.
 @needs(Session(S, C))
 @requires(network(readonly))
-HsConn(S) hs_ev_write(HsConn(S) c, HttpReply closure(HttpRequest) handler, HttpLimits lim) {
+HsConn(S, K) hs_ev_write(HsConn(S, K) c, HttpOut(K) closure(HttpRequest) handler, HttpLimits lim) {
     Int left = c.outb.len() - c.out_at;
     Int take = if (left > 262144) { 262144 } else { left };
     Int w = resid_tcp_send_some(c.fd, c.outb[c.out_at..(c.out_at + take)]);
@@ -740,37 +854,47 @@ HsConn(S) hs_ev_write(HsConn(S) c, HttpReply closure(HttpRequest) handler, HttpL
     }
     if (c.phase == 1) {
         _ = resid_tcp_deadline(c.fd, lim.request_ms);
-        HsConn(S) again = hs_conn_set(c, c.sess, c.inb, c.frame, [], 0, 0, c.served, c.peer_done);
+        HsConn(S, K) again = hs_conn_set(c, c.sess, c.inb, c.frame, [], 0, 0, c.served, c.peer_done);
         return hs_ev_answer(again, handler, lim);
+    }
+    if (c.phase == 5) {
+        Option(HsLive(K)) live = c.live;
+        Int wait = match live { Some(lv) => lv.wait_ms, None => 0 };
+        _ = resid_tcp_deadline(c.fd, wait);
     }
     return hs_conn_set(c, c.sess, c.inb, c.frame, [], 0, c.phase, c.served, c.peer_done);
 }
 
-// One connection against what the poll said of it.
+// One connection against what the poll said of it. A passed deadline
+// ends a connection, except a stream with nothing left to send, whose
+// deadline is its next step.
 @needs(Session(S, C))
 @requires(network(readonly))
-HsConn(S) hs_ev_one(C conf, HsConn(S) c, Int ready, HttpReply closure(HttpRequest) handler, HttpLimits lim) {
-    if ((ready & 12) != 0) { return hs_conn_phase(c, 4); }
-    Bool can_write = (ready & 2) != 0 && c.outb.len() > c.out_at;
-    HsConn(S) c1 = if (can_write) { hs_ev_write(c, handler, lim) } else { c };
-    Bool can_read = (ready & 1) != 0 && (c1.phase == 0 || c1.phase == 3);
+HsConn(S, K) hs_ev_one(C conf, HsConn(S, K) c, Int ready, HttpOut(K) closure(HttpRequest) handler, HttpLimits lim) {
+    if ((ready & 8) != 0) { return hs_conn_phase(c, 4); }
+    Bool tick = c.phase == 5 && c.outb.len() <= c.out_at;
+    if ((ready & 4) != 0 && !tick) { return hs_conn_phase(c, 4); }
+    HsConn(S, K) c0 = if ((ready & 4) != 0) { hs_ev_tick(c, lim) } else { c };
+    Bool can_write = (ready & 2) != 0 && c0.outb.len() > c0.out_at;
+    HsConn(S, K) c1 = if (can_write) { hs_ev_write(c0, handler, lim) } else { c0 };
+    Bool can_read = (ready & 1) != 0 && (c1.phase == 0 || c1.phase == 3 || c1.phase == 5);
     return if (can_read) { hs_ev_read(conf, c1, handler, lim) } else { c1 };
 }
 
 // What to wait for on a connection: 1 read, 2 write.
-Int hs_ev_want(HsConn(S) c) {
+Int hs_ev_want(HsConn(S, K) c) {
     Bool pending = c.outb.len() > c.out_at;
     if (c.phase == 1 || c.phase == 2) { return 2; }
     if (c.phase == 3) { return 1; }
     return if (pending) { 3 } else { 1 };
 }
 
-List(Int) hs_ev_fds(List(HsConn(S)) cs, Int i, ListBuf(Int) acc) {
+List(Int) hs_ev_fds(List(HsConn(S, K)) cs, Int i, ListBuf(Int) acc) {
     if (i >= cs.len()) { return acc.finish(); }
     return hs_ev_fds(cs, i + 1, acc.push(cs[i].fd));
 }
 
-List(Int) hs_ev_wants(List(HsConn(S)) cs, Int i, ListBuf(Int) acc) {
+List(Int) hs_ev_wants(List(HsConn(S, K)) cs, Int i, ListBuf(Int) acc) {
     if (i >= cs.len()) { return acc.finish(); }
     return hs_ev_wants(cs, i + 1, acc.push(hs_ev_want(cs[i])));
 }
@@ -778,10 +902,10 @@ List(Int) hs_ev_wants(List(HsConn(S)) cs, Int i, ListBuf(Int) acc) {
 // Step every connection; the ones still open.
 @needs(Session(S, C))
 @requires(network(readonly))
-List(HsConn(S)) hs_ev_each(C conf, List(HsConn(S)) cs, List(Int) ready, Int off, Int i, ListBuf(HsConn(S)) acc, HttpReply closure(HttpRequest) handler, HttpLimits lim) {
+List(HsConn(S, K)) hs_ev_each(C conf, List(HsConn(S, K)) cs, List(Int) ready, Int off, Int i, ListBuf(HsConn(S, K)) acc, HttpOut(K) closure(HttpRequest) handler, HttpLimits lim) {
     if (i >= cs.len()) { return acc.finish(); }
     Int r = if (off + i < ready.len()) { ready[off + i] } else { 0 };
-    HsConn(S) c = if (r != 0) { hs_ev_one(conf, cs[i], r, handler, lim) } else { cs[i] };
+    HsConn(S, K) c = if (r != 0) { hs_ev_one(conf, cs[i], r, handler, lim) } else { cs[i] };
     if (c.phase == 4) {
         _ = resid_tcp_close(c.fd);
         return hs_ev_each(conf, cs, ready, off, i + 1, acc, handler, lim);
@@ -790,23 +914,23 @@ List(HsConn(S)) hs_ev_each(C conf, List(HsConn(S)) cs, List(Int) ready, Int off,
 }
 
 // The connection that has waited longest for a request, or -1.
-Int hs_ev_oldest(List(HsConn(S)) cs, Int i, Int best, Int best_seq) {
+Int hs_ev_oldest(List(HsConn(S, K)) cs, Int i, Int best, Int best_seq) {
     if (i >= cs.len()) { return best; }
     Bool waiting = cs[i].phase == 0 && cs[i].outb.len() <= cs[i].out_at;
     Bool older = waiting && (best < 0 || cs[i].seq < best_seq);
     return if (older) { hs_ev_oldest(cs, i + 1, i, cs[i].seq) } else { hs_ev_oldest(cs, i + 1, best, best_seq) };
 }
 
-List(HsConn(S)) hs_ev_without(List(HsConn(S)) cs, Int skip, Int i, ListBuf(HsConn(S)) acc) {
+List(HsConn(S, K)) hs_ev_without(List(HsConn(S, K)) cs, Int skip, Int i, ListBuf(HsConn(S, K)) acc) {
     if (i >= cs.len()) { return acc.finish(); }
-    ListBuf(HsConn(S)) next = if (i == skip) { acc } else { acc.push(cs[i]) };
+    ListBuf(HsConn(S, K)) next = if (i == skip) { acc } else { acc.push(cs[i]) };
     return hs_ev_without(cs, skip, i + 1, next);
 }
 
 // The loop's connections with `c` added, dropping the longest waiter at
 // the limit; when nothing is only waiting, `c` is the one turned away.
 @requires(network(readonly))
-List(HsConn(S)) hs_ev_admit(List(HsConn(S)) cs, HsConn(S) c, HttpLimits lim) {
+List(HsConn(S, K)) hs_ev_admit(List(HsConn(S, K)) cs, HsConn(S, K) c, HttpLimits lim) {
     if (cs.len() < lim.open_max) { return cs.concat([c]); }
     Int old = hs_ev_oldest(cs, 0, -1, 0);
     if (old < 0) {
@@ -814,16 +938,16 @@ List(HsConn(S)) hs_ev_admit(List(HsConn(S)) cs, HsConn(S) c, HttpLimits lim) {
         return cs;
     }
     _ = resid_tcp_close(cs[old].fd);
-    ListBuf(HsConn(S)) start = ListBuf();
+    ListBuf(HsConn(S, K)) start = ListBuf();
     return hs_ev_without(cs, old, 0, start).concat([c]);
 }
 
-type HsAccepted(S) = { List(HsConn(S)) conns; Int accepted; Bool open; };
+type HsAccepted(S, K) = { List(HsConn(S, K)) conns; Int accepted; Bool open; };
 
 // Take what is waiting on the listener, up to `budget` at a time.
 @needs(Session(S, C))
 @requires(network(readonly))
-HsAccepted(S) hs_ev_accept(Int lfd, C conf, HttpLimits lim, List(HsConn(S)) cs, Int accepted, Int max_conns, Int budget) {
+HsAccepted(S, K) hs_ev_accept(Int lfd, C conf, HttpLimits lim, List(HsConn(S, K)) cs, Int accepted, Int max_conns, Int budget) {
     if (budget <= 0 || (max_conns > 0 && accepted >= max_conns)) {
         return HsAccepted { .conns = cs, .accepted = accepted, .open = true };
     }
@@ -833,13 +957,13 @@ HsAccepted(S) hs_ev_accept(Int lfd, C conf, HttpLimits lim, List(HsConn(S)) cs, 
     }
     _ = resid_tcp_deadline(fd, lim.request_ms);
     S sess = sess_open(conf);
-    HsConn(S) c = HsConn { .fd = fd, .seq = accepted, .sess = sess, .inb = [], .frame = hs_frame_new(), .outb = [], .out_at = 0, .phase = 0, .served = 0, .peer_done = false };
+    HsConn(S, K) c = HsConn { .fd = fd, .seq = accepted, .sess = sess, .inb = [], .frame = hs_frame_new(), .outb = [], .out_at = 0, .phase = 0, .served = 0, .peer_done = false, .live = None };
     return hs_ev_accept(lfd, conf, lim, hs_ev_admit(cs, c, lim), accepted + 1, max_conns, budget - 1);
 }
 
 @needs(Session(S, C))
 @requires(network(readonly))
-Int hs_ev_loop(Int lfd, C conf, HttpReply closure(HttpRequest) handler, HttpLimits lim, Int max_conns, List(HsConn(S)) cs, Int accepted, Bool open) {
+Int hs_ev_loop(Int lfd, C conf, HttpOut(K) closure(HttpRequest) handler, HttpLimits lim, Int max_conns, List(HsConn(S, K)) cs, Int accepted, Bool open) {
     Bool accepting = open && (max_conns <= 0 || accepted < max_conns);
     if (!accepting && cs.len() == 0) { return accepted; }
     List(Int) lead = if (accepting) { [lfd] } else { [] };
@@ -848,27 +972,42 @@ Int hs_ev_loop(Int lfd, C conf, HttpReply closure(HttpRequest) handler, HttpLimi
     List(Int) wants = lead_want.concat(hs_ev_wants(cs, 0, ListBuf()));
     List(Int) ready = resid_tcp_poll(fds, wants, -1);
     Int off = lead.len();
-    ListBuf(HsConn(S)) start = ListBuf();
-    List(HsConn(S)) kept = hs_ev_each(conf, cs, ready, off, 0, start, handler, lim);
+    ListBuf(HsConn(S, K)) start = ListBuf();
+    List(HsConn(S, K)) kept = hs_ev_each(conf, cs, ready, off, 0, start, handler, lim);
     Bool listen_ready = accepting && ready.len() > 0 && (ready[0] & 1) != 0;
     if (!listen_ready) {
         Bool still = open && !(accepting && ready.len() > 0 && (ready[0] & 8) != 0);
         return hs_ev_loop(lfd, conf, handler, lim, max_conns, kept, accepted, still);
     }
-    HsAccepted(S) got = hs_ev_accept(lfd, conf, lim, kept, accepted, max_conns, 64);
+    HsAccepted(S, K) got = hs_ev_accept(lfd, conf, lim, kept, accepted, max_conns, 64);
     return hs_ev_loop(lfd, conf, handler, lim, max_conns, got.conns, got.accepted, got.open);
 }
 
 // Accept connections on the socket `lfd` and serve them all at once from
-// one event loop, through the session `C` configures; `max_conns` 0
-// means until the listener fails. Several loops may share one listener,
-// each in its own region: the kernel hands each connection to one of
-// them, and none of them blocks in accept. Returns connections accepted.
+// one event loop, through the session `C` configures, with a handler that
+// may stream; `max_conns` 0 means until the listener fails. Several loops
+// may share one listener, each in its own region: the kernel hands each
+// connection to one of them, and none of them blocks in accept. Returns
+// connections accepted.
+@needs(Session(S, C))
+@requires(network(readonly))
+pub Int http_stream_loop_where(Int lfd, C conf, HttpOut(K) closure(HttpRequest) handler, HttpLimits lim, Int max_conns) {
+    List(HsConn(S, K)) none = [];
+    return hs_ev_loop(lfd, conf, handler, lim, max_conns, none, 0, true);
+}
+
+// The same over plain connections.
+@requires(network(readonly))
+pub Int http_stream_loop(Int lfd, HttpOut(K) closure(HttpRequest) handler, HttpLimits lim, Int max_conns) {
+    return http_stream_loop_where(lfd, plain_cfg(), handler, lim, max_conns);
+}
+
+// The event loop with a handler that always answers whole.
 @needs(Session(S, C))
 @requires(network(readonly))
 pub Int http_accept_loop_where(Int lfd, C conf, HttpReply closure(HttpRequest) handler, HttpLimits lim, Int max_conns) {
-    List(HsConn(S)) none = [];
-    return hs_ev_loop(lfd, conf, handler, lim, max_conns, none, 0, true);
+    HttpOut(Int) closure(HttpRequest) whole = lambda(q) { Whole(handler(q)) };
+    return http_stream_loop_where(lfd, conf, whole, lim, max_conns);
 }
 
 // Accept plain connections and serve them.
