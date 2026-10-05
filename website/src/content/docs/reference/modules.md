@@ -27,7 +27,10 @@ A displayed type or variant keeps its plain name.
 ## Resolution
 
 1. The path relative to the importing file.
-2. A dependency listed in the project's dependency map (`resid-manifest`).
+2. A dependency listed in the project's dependency map (`resid-manifest`):
+   `import "pkg";` is its root module, and `import "pkg/m.resid";` is the
+   module `m.resid` beside that root. Either compiles inside the
+   dependency's capability ceiling.
 3. The standard library directory (`$RESID_HOME/../../lib`, or `lib/`
    under the current directory).
 

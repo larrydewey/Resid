@@ -1,0 +1,9 @@
+// `\xHH` spells one byte: ASCII in text, any byte in a Bytes(N).
+Int main() {
+    Str s = "A\x42\x63|\x7e";
+    println(s);
+    println(f"{str_len(s)} \x44{1 + 1}");
+    Bytes(4) b = b"a\x00\xFF";
+    println(f"{b} {b[2]} {b[1]}");
+    return 0;
+}

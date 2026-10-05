@@ -25,7 +25,8 @@ pub Kg kg_empty() {
 
 pub Int kg_count(Kg g) { return g.ns.len(); }
 
-// Field separators inside node text (Resid strings have no \x escape).
+// Field separators inside node text (literal text keeps its escapes
+// undecoded, so a `\x1f` in a string never splits a field).
 pub Str kg_us() { return str_from_code(31); }
 pub Str gm_rs() { return str_from_code(30); }
 pub Str gm_gs() { return str_from_code(29); }
@@ -387,6 +388,34 @@ KL kg_fparts(Str s, Kg g, Str text, Int base, Int i, Int n, Int seg, List(Int) a
     return kg_fparts(s, fs.g, text, base, e + 1, n, e + 1, acc2.concat([fs.id]));
 }
 
+// The first bad escape in a literal's text, or "": an escape is one of
+// \n \t \r \0 \\ \" \' or \xHH (ASCII in text, any byte in a Bytes).
+// A Str ends at NUL, so text refuses \0 and \x00 (a char may be 0).
+Str kg_esc_err(Str t, Int i, Str kind) {
+    Bool bytes = kind == "bytes";
+    Int n = str_len(t);
+    if (i >= n) { return ""; }
+    if (str_char_at(t, i) != 92) { return kg_esc_err(t, i + 1, kind); }
+    Int e = str_char_at(t, i + 1);
+    Bool simple = e == 110 || e == 116 || e == 114 || e == 48 || e == 92 || e == 34 || e == 39;
+    Bool nul = e == 48 || (e == 120 && kg_hex(str_char_at(t, i + 2)) == 0 && kg_hex(str_char_at(t, i + 3)) == 0);
+    if (nul && (kind == "str" || kind == "fstring")) { return "a Str cannot hold NUL (`" + str_slice(t, i, if (e == 120) { i + 4 } else { i + 2 }) + "`): it ends the text; use a Bytes literal `b\"...\"`"; }
+    if (simple) { return kg_esc_err(t, i + 2, kind); }
+    if (e != 120) { return "unknown escape `" + str_slice(t, i, i + 2) + "`: an escape is one of \\n \\t \\r \\0 \\\\ \\\" \\' or \\xHH"; }
+    Int h = kg_hex(str_char_at(t, i + 2));
+    Int l = kg_hex(str_char_at(t, i + 3));
+    if (h < 0 || l < 0) { return "`\\x` takes two hex digits, as in `\\x1f`"; }
+    if (!bytes && h > 7) { return "`" + str_slice(t, i, i + 4) + "` is not ASCII: text escapes stop at `\\x7f`; a byte above that belongs in a Bytes literal `b\"...\"`"; }
+    return kg_esc_err(t, i + 4, kind);
+}
+
+Int kg_hex(Int c) {
+    if (c >= 48 && c <= 57) { return c - 48; }
+    if (c >= 97 && c <= 102) { return c - 87; }
+    if (c >= 65 && c <= 70) { return c - 55; }
+    return -1;
+}
+
 KP kg_fstring(Str s, Kg g, Tok t) {
     Int base = kg_tstart(t);
     Int n = str_len(t.text) - 1;
@@ -510,6 +539,8 @@ KP kg_primary(Str s, Kg g, Int pos) {
     Tok t = lex_tok(s, pos);
     Int sp = kg_tstart(t);
     List(Int) none = [];
+    Str ee = if (t.kind == "str" || t.kind == "char" || t.kind == "bytes" || t.kind == "fstring") { kg_esc_err(t.text, 0, t.kind) } else { "" };
+    if (ee != "") { return kg_fail(g, sp, ee); }
     if (kg_lit_kind(t.kind)) { return kg_add(g, "lit", t.text, t.kind, none, sp, t.pos); }
     if (t.kind == "fstring") { return kg_fstring(s, g, t); }
     if (t.text == "true" || t.text == "false") { return kg_add(g, "lit", t.text, "bool", none, sp, t.pos); }

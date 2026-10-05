@@ -10,25 +10,51 @@ Int cap_max_set() { return 64; }
 Int cap_stack() { return resid_raw_tls("cap_stack", 16384); }
 Int cap_ns() { return resid_raw_tls("cap_ns", 256); }
 Int cap_depth_at() { return resid_raw_tls("cap_depth", 8); }
+// Per frame, how many times the same set was entered again on top of it.
+Int cap_reps() { return resid_raw_tls("cap_reps", 256); }
 
 pub Int cap_depth_get() { return ld64(cap_depth_at()); }
 pub Int cap_depth_set(Int d) { return st64(cap_depth_at(), d); }
+// The top frame's re-entry count (0 outside any sandbox).
+pub Int cap_top_reps_get() { Int d = cap_depth_get(); return if (d > 0) { ld64(cap_reps() + (d - 1) * 8) } else { 0 }; }
+pub Int cap_top_reps_set(Int r) { Int d = cap_depth_get(); return if (d > 0) { st64(cap_reps() + (d - 1) * 8, r) } else { 0 }; }
 
 @export("resid_cap_enter", "void(ptr,i64)")
 pub Int rt_cap_enter(Int caps, Int n) {
     Int d = ld64(cap_depth_at());
-    if (d >= cap_max_depth()) { return rt_abort("capability: sandbox nesting exceeds RESID_CAP_MAX_DEPTH"); }
     Int m0 = if (caps != 0 && n > 0) { n } else { 0 };
     Int m = if (m0 > cap_max_set()) { cap_max_set() } else { m0 };
+    // Re-entering the set already on top (recursion inside one sandbox)
+    // changes nothing it allows, so it costs a count, not a frame.
+    if (d > 0 && cap_same_set(d - 1, caps, m)) { return st64(cap_reps() + (d - 1) * 8, ld64(cap_reps() + (d - 1) * 8) + 1); }
+    if (d >= cap_max_depth()) { return rt_abort("capability: sandbox nesting exceeds RESID_CAP_MAX_DEPTH"); }
     _ = mcopy(cap_stack() + d * 512, caps, m * 8);
     _ = st64(cap_ns() + d * 8, m);
+    _ = st64(cap_reps() + d * 8, 0);
     return st64(cap_depth_at(), d + 1);
+}
+
+// Frame d holds exactly the m entries at caps (same text, same order).
+Bool cap_same_set(Int d, Int caps, Int m) {
+    if (ld64(cap_ns() + d * 8) != m) { return false; }
+    return cap_same_entries(cap_stack() + d * 512, caps, 0, m);
+}
+
+Bool cap_same_entries(Int a, Int b, Int i, Int m) {
+    if (i >= m) { return true; }
+    Int x = ld64(a + i * 8);
+    Int y = ld64(b + i * 8);
+    if (x != y && (x == 0 || y == 0 || c_strcmp(x, y) != 0)) { return false; }
+    return cap_same_entries(a, b, i + 1, m);
 }
 
 @export("resid_cap_leave", "void()")
 pub Int rt_cap_leave() {
     Int d = ld64(cap_depth_at());
-    return if (d > 0) { st64(cap_depth_at(), d - 1) } else { 0 };
+    if (d <= 0) { return 0; }
+    Int r = ld64(cap_reps() + (d - 1) * 8);
+    if (r > 0) { return st64(cap_reps() + (d - 1) * 8, r - 1); }
+    return st64(cap_depth_at(), d - 1);
 }
 
 Bool cap_term(Int c) { return c == 0 || c == 40 || c == 58 || c == 33; }

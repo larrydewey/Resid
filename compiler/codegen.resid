@@ -2207,6 +2207,12 @@ GT bin_apply(Str op, GT l, GT r) {
     return gt_err("unsupported operator " + op, r);
 }
 
+// A hex digit, upper case (the form LLVM's \XY escape takes).
+Int hex_up(Int c) { return if (c >= 97 && c <= 102) { c - 32 } else { c }; }
+
+// `\xHH` at s[k] (k at the x): the LLVM escape for that byte.
+Str esc_hex_ll(Str s, Int k) { return str_from_code(92) + str_from_code(hex_up(str_char_at(s, k + 1))) + str_from_code(hex_up(str_char_at(s, k + 2))); }
+
 Int dec_esc(Int c) {
     if (c == 110) { return 10; }
     if (c == 116) { return 9; }
@@ -2216,6 +2222,7 @@ Int dec_esc(Int c) {
 }
 
 Str ir_esc(Int ch) {
+    if (ch == 0) { return str_from_code(92) + "00"; }
     if (ch == 34) { return str_from_code(92) + "22"; }
     if (ch == 92) { return str_from_code(92) + "5C"; }
     if (ch == 10) { return str_from_code(92) + "0A"; }
@@ -2265,6 +2272,7 @@ Str esc_ll(Str s, Int i, Str acc) {
     Int k = i + 1;
     if (c == 92) {
         Int n = str_char_at(s, k);
+        if (n == 120) { return esc_ll(s, k + 3, acc + esc_hex_ll(s, k)); }
         Int k2 = k + 1;
         return esc_ll(s, k2, acc + ir_esc(dec_esc(n)));
     }
@@ -4064,6 +4072,7 @@ GT fst_literal(Str s, Int i, Int end, Str bodyacc, GT c) {
     Int k = i + 1;
     if (ch == 92) {
         Int n = str_char_at(s, k);
+        if (n == 120) { return fst_literal(s, k + 3, end, bodyacc + esc_hex_ll(s, k), c); }
         Int k2 = k + 1;
         return fst_literal(s, k2, end, bodyacc + ir_esc(dec_esc(n)), c);
     }

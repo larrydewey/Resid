@@ -12,10 +12,12 @@ Int catch_msg() { return resid_raw_tls("rt_catch_msg", 8); }
 // (nothing the aborted code made is reachable any more).
 pub Bool under_catch(Int fn, Int arg) {
     Int cd = cap_depth_get();
+    Int cr = cap_top_reps_get();
     Int sd = ag_scope_depth();
     Int mh = ld64(map_heap_w());
     if (resid_raw_catch(catch_slot(), fn, arg) == 0) { return false; }
     _ = cap_depth_set(cd);
+    _ = cap_top_reps_set(cr);
     _ = if (ag_scope_depth() > sd) { rt_scope_pop(sd) } else { 0 };
     return st64(map_heap_w(), mh) * 0 == 0;
 }

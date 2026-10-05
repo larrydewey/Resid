@@ -290,6 +290,9 @@ RdSd rd_str_dec_at(Str t, Int i, Int n, Str sb) {
         Int e = str_char_at(t, k);
         Int k2 = i + 2;
         if (e == 48) { return RdSd {.ok = false, .v = ""}; }
+        Int x = rd_hex_esc(t, i);
+        if (x == 0) { return RdSd {.ok = false, .v = ""}; }
+        if (x > 0) { return rd_str_dec_at(t, i + 4, n, str_sb_append_cp(sb, x)); }
         Int d = if (e == 110) { 10 } else if (e == 116) { 9 } else if (e == 114) { 13 } else { e };
         Str sb2 = str_sb_append_cp(sb, d);
         return rd_str_dec_at(t, k2, n, sb2);
@@ -297,6 +300,21 @@ RdSd rd_str_dec_at(Str t, Int i, Int n, Str sb) {
     Str sb3 = str_sb_append_cp(sb, c);
     Int k3 = i + 1;
     return rd_str_dec_at(t, k3, n, sb3);
+}
+
+// The value of a `\xHH` escape at t[i] (the backslash), or -1.
+pub Int rd_hex_esc(Str t, Int i) {
+    if (str_char_at(t, i + 1) != 120) { return -1; }
+    Int h = rd_hex_digit(str_char_at(t, i + 2));
+    Int l = rd_hex_digit(str_char_at(t, i + 3));
+    return if (h < 0 || l < 0) { -1 } else { h * 16 + l };
+}
+
+pub Int rd_hex_digit(Int c) {
+    if (c >= 48 && c <= 57) { return c - 48; }
+    if (c >= 97 && c <= 102) { return c - 87; }
+    if (c >= 65 && c <= 70) { return c - 55; }
+    return -1;
 }
 
 pub RdSd rd_str_dec(Str tok) {

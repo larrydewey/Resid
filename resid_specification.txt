@@ -959,6 +959,13 @@ are no per-type conversion functions.
 `{{` and `}}` are a literal brace. A single `}` in an
 f-string's text is a parse error: write `}}`.
 
+Escapes in "...", f"...", b"..." and '.' are \n \t \r \0
+\\ \" \' and \xHH (two hex digits). Any other escape is a
+parse error. Text is ASCII through \x7f; a byte above that
+belongs in a byte string. A Str ends at NUL, so \0 and \x00
+are refused in text (a byte string and a character take
+them). r"..." has no escapes.
+
 14.1  A hole's format spec
 
 A hole may carry a spec after `:`. The spec is a

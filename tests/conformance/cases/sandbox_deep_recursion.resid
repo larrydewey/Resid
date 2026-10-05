@@ -1,0 +1,26 @@
+// Code inside a sandbox loops and recurses like any other: a self tail
+// call stays one frame, and recursion re-entering the same sandbox costs a
+// count, not a capability frame (there are only 32).
+sandbox (filesystem(readonly)) {
+    Int count_up(Int i, Int n, Int acc) {
+        if (i >= n) { return acc; }
+        return count_up(i + 1, n, acc + i % 7);
+    }
+
+    Int depth(Int n) {
+        if (n == 0) { return 0; }
+        return 1 + depth(n - 1);
+    }
+
+    @requires(filesystem(readonly))
+    Bool root_here(Int n) {
+        if (n > 0) { return root_here(n - 1); }
+        return filesystem.is_dir("/");
+    }
+}
+
+@requires(filesystem(readonly))
+Int main() {
+    println(f"{count_up(0, 1000000, 0)} {depth(2000)} {root_here(100)}");
+    return 0;
+}

@@ -544,6 +544,19 @@ Str depmap_lookup_lines(List(Str) lines, Int i, Int n, Str name) {
     return depmap_lookup_lines(lines, i + 1, n, name);
 }
 
+// The dependency an import names: itself, or pkg for `pkg/rest`.
+Str depmap_dep_name(Str depmap, Str name) {
+    Str pkg = depmap_pkg_of(name);
+    return if (pkg != "" && depmap_lookup(depmap, name) == "") { pkg } else { name };
+}
+
+// The package an import `pkg/rest` names, or "" (no slash, or a path).
+Str depmap_pkg_of(Str name) {
+    Int sl = str_find(name, "/");
+    if (sl <= 0 || ck_str_starts_with(name, ".")) { return ""; }
+    return str_slice(name, 0, sl);
+}
+
 Str depmap_lookup(Str depmap, Str name) {
     if (depmap == "") { return ""; }
     List(Str) lines = str_split(depmap, "\n");
@@ -558,6 +571,10 @@ Str imp_resolve_target(Str dir, Str name, Str depmap) {
     if (filesystem.exists(full)) { return full; }
     Str dep = depmap_lookup(depmap, name);
     if (dep != "") { return dep; }
+    // `pkg/sub/m.resid`: a module of dependency pkg, beside its root.
+    Str pkg = depmap_pkg_of(name);
+    Str proot = if (pkg == "") { "" } else { depmap_lookup(depmap, pkg) };
+    if (proot != "") { return imp_normalize(imp_dir_of(proot, str_len(proot) - 1) + "/" + str_slice(name, str_len(pkg) + 1, str_len(name))); }
     // Not beside the importer: the standard library (an `@stdlib::dir`
     // line the driver adds to the dependency map).
     Str sd = depmap_stdlib(str_split(depmap, "\n"), 0);
@@ -653,7 +670,7 @@ RRes imp_resolve_lines_a(List(Str) lines, Int i, Int n, Str dir, Str sb, Str don
         } };
         RRes sub1 = if (att && !clash) { RRes {.text = "sandbox (" + imp_att_caps(clause, ra + 10, 1, ra + 10) + ") { " + sub0.text + "}\n", .done = sub0.done, .map = sub0.map, .nl = sub0.nl + 1} } else { sub0 };
         // A manifest dependency compiles inside its declared ceiling.
-        Str dcaps = if (depmap == "" || sub1.text == "" || full == dir + "/" + name || full == name) { "\x01" } else { depmap_caps_lines(str_split(depmap, "\n"), 0, name) };
+        Str dcaps = if (depmap == "" || sub1.text == "" || full == dir + "/" + name || full == name) { "\x01" } else { depmap_caps_lines(str_split(depmap, "\n"), 0, depmap_dep_name(depmap, name)) };
         RRes sub = if (dcaps != "\x01") { RRes {.text = "sandbox (" + dcaps + ") { " + sub1.text + "}\n", .done = sub1.done, .map = sub1.map, .nl = sub1.nl + 1} } else { sub1 };
         Int ni2 = i + 1;
         // Keep the importing file's line numbering: the module text goes
@@ -2912,7 +2929,7 @@ Int _count_utf8(Str inner, Int i, Int count) {
     Int n = str_len(inner);
     if (i >= n) { return count; }
     Int c = str_char_at(inner, i);
-    if (c == 92) { return _count_utf8(inner, i + 2, count + 1); }
+    if (c == 92) { return _count_utf8(inner, if (str_char_at(inner, i + 1) == 120) { i + 4 } else { i + 2 }, count + 1); }
     Int w = if (c < 128) { 1 } else if (c < 2048) { 2 } else if (c < 65536) { 3 } else { 4 };
     return _count_utf8(inner, i + 1, count + w);
 }
@@ -2936,7 +2953,7 @@ Int _count_bytes(Str inner, Int i, Int count) {
     Int n = str_len(inner);
     if (i >= n) { return count; }
     Int c = str_char_at(inner, i);
-    if (c == 92) { return _count_bytes(inner, i + 2, count + 1); }
+    if (c == 92) { return _count_bytes(inner, if (str_char_at(inner, i + 1) == 120) { i + 4 } else { i + 2 }, count + 1); }
     return _count_bytes(inner, i + 1, count + 1);
 }
 

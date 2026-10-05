@@ -12,7 +12,9 @@
 // Type log: `keys` holds id * 2^32 + index into `tys`; `mem` holds member
 // def edges as use * 2^32 + def + 2.
 // Logging is off (`on` false) for a plain check.
-type TL = { Bool on; List(Int) keys; List(Str) tys; List(Int) mem; };
+// bm: method calls `x.m(..)` resolved to a built-in method, never a user
+// function m (always kept, for the authority edges).
+type TL = { Bool on; List(Int) keys; List(Str) tys; List(Int) mem; List(Int) bm; };
 // Checker state: graph, def edges, signatures, binder id -> type, the log,
 // struct declaration ids by name, and fn declaration ids by signature index.
 type GK = { Kg g; RS rs; Sigs fs; Map(Int, Str) tys; TL tl; Map(Str, Int) sd; List(Int) fnode; GX gx; };
@@ -32,7 +34,7 @@ type GKS = { GK k; Str err; Int at; };
 
 TL tl_add(TL t, Int id, Str ty) {
     if (!t.on) { return t; }
-    return TL {.on = true, .keys = t.keys.concat([id * 4294967296 + t.tys.len()]), .tys = t.tys.concat([ty]), .mem = t.mem};
+    return TL {.on = true, .keys = t.keys.concat([id * 4294967296 + t.tys.len()]), .tys = t.tys.concat([ty]), .mem = t.mem, .bm = t.bm};
 }
 
 GK gk_tl(GK k, TL tl) { return GK {.g = k.g, .rs = k.rs, .fs = k.fs, .tys = k.tys, .tl = tl, .sd = k.sd, .fnode = k.fnode, .gx = k.gx}; }
@@ -78,7 +80,14 @@ Str gm_uses_of(Str aux) {
 GK gk_mem(GK k, Int use, Int def) {
     if (def < 0 || !k.tl.on) { return k; }
     TL t = k.tl;
-    return gk_tl(k, TL {.on = true, .keys = t.keys, .tys = t.tys, .mem = t.mem.concat([use * 4294967296 + def + 2])});
+    return gk_tl(k, TL {.on = true, .keys = t.keys, .tys = t.tys, .mem = t.mem.concat([use * 4294967296 + def + 2]), .bm = t.bm});
+}
+
+// Method call `id` resolved to a built-in method.
+GKT gk_bm(GKT t, Int id) {
+    if (t.err != "") { return t; }
+    TL l = t.k.tl;
+    return GKT {.ty = t.ty, .err = "", .at = t.at, .k = gk_tl(t.k, TL {.on = l.on, .keys = l.keys, .tys = l.tys, .mem = l.mem, .bm = l.bm.concat([id])})};
 }
 
 GKT gt(GK k, Str ty, Int at) {
@@ -2496,47 +2505,56 @@ GKT gk_provider(GK kp, Int id, Str fam, Str m) {
 }
 
 GKT gk_mcall(GK k0, Int id, Str exp) {
+    GKM t = gk_mcall_r(k0, id, exp);
+    return if (t.bm) { gk_bm(t.t, id) } else { t.t };
+}
+
+// The method call's type, and whether a built-in method took it.
+type GKM = { GKT t; Bool bm; };
+GKM gkm(GKT t, Bool bm) { return GKM {.t = t, .bm = bm}; }
+
+GKM gk_mcall_r(GK k0, Int id, Str exp) {
     Int recv = gk_kid(k0, id, 0);
     Str m = k0.g.ns[id].text;
     Int na = k0.g.ns[id].nk - 1;
-    if (gk_is_provider(k0, recv)) { return gk_provider(k0, id, k0.g.ns[recv].text, m); }
+    if (gk_is_provider(k0, recv)) { return gkm(gk_provider(k0, id, k0.g.ns[recv].text, m), false); }
     GKT b = gk_expr(k0, recv, "");
-    if (b.err != "") { return b; }
+    if (b.err != "") { return gkm(b, false); }
     GK k = b.k;
     Str bt = b.ty;
-    if (gk_is_builder(bt)) { return gk_builder_method(k, id, bt, m, na); }
-    if (gv_is(bt)) { return gv_method(k, id, bt, m, na); }
+    if (gk_is_builder(bt)) { return gkm(gk_builder_method(k, id, bt, m, na), true); }
+    if (gv_is(bt)) { return gkm(gv_method(k, id, bt, m, na), true); }
     if (m == "len") {
-        if (na != 0) { return gterr(k, ".len() takes no arguments", id); }
-        return gt(k, "Int", id);
+        if (na != 0) { return gkm(gterr(k, ".len() takes no arguments", id), false); }
+        return gkm(gt(k, "Int", id), true);
     }
     // The static capacity N of a fixed-capacity value (spec §44.3).
     if (m == "capacity" && mfidx_none(k, m) && gk_fixed_like(bt)) {
-        if (na != 0) { return gterr(k, ".capacity() takes no arguments", id); }
-        return gt(k, "Int", id);
+        if (na != 0) { return gkm(gterr(k, ".capacity() takes no arguments", id), false); }
+        return gkm(gt(k, "Int", id), true);
     }
     if (m == "concat") {
         GKT a = gk_marg_as(k, id, 0, bt);
-        if (a.err != "") { return a; }
-        return gt(a.k, bt, id);
+        if (a.err != "") { return gkm(a, false); }
+        return gkm(gt(a.k, bt, id), true);
     }
-    if (is_map_type(bt)) { return gk_map_method(k, id, bt, m, na); }
-    if (is_set_type(bt)) { return gk_set_method(k, id, bt, m, na); }
-    if (is_expect_type(bt)) { return gk_expect_method(k, id, bt, m, na); }
+    if (is_map_type(bt)) { return gkm(gk_map_method(k, id, bt, m, na), true); }
+    if (is_set_type(bt)) { return gkm(gk_set_method(k, id, bt, m, na), true); }
+    if (is_expect_type(bt)) { return gkm(gk_expect_method(k, id, bt, m, na), true); }
     // Behavior verbs take precedence over free functions (spec §11).
-    if (k.gx.verbs.contains(m)) { return gk_vcall_r(k, id, m, exp, bt); }
+    if (k.gx.verbs.contains(m)) { return gkm(gk_vcall_r(k, id, m, exp, bt), false); }
     Int mfidx = ck_fn_index(k.fs, m);
-    if (mfidx < 0 && gk_list_verb(m) && str_has_prefix(bt, "List(") && !is_list_fixed(bt)) { return gk_list_method(k, id, bt, m, na); }
+    if (mfidx < 0 && gk_list_verb(m) && str_has_prefix(bt, "List(") && !is_list_fixed(bt)) { return gkm(gk_list_method(k, id, bt, m, na), true); }
     if (mfidx >= 0) {
-        if (na == 0) { return gk_finish_call(k, id, m, bt, 1, true, ""); }
+        if (na == 0) { return gkm(gk_finish_call(k, id, m, bt, 1, true, ""), false); }
         List(Str) mpl = if (gm_generic_fn_k(k, mfidx)) { gk_nopts() } else { split_type_list(k.fs.pts[mfidx], 0, 0, 0, "", gk_nopts()) };
         GKA a = gk_args(k, id, 1, mpl, 1, "", 1);
-        if (a.err != "") { return gterr(a.k, a.err, a.at); }
-        return gk_finish_call(a.k, id, m, bt + "," + a.tys, a.count, true, "");
+        if (a.err != "") { return gkm(gterr(a.k, a.err, a.at), false); }
+        return gkm(gk_finish_call(a.k, id, m, bt + "," + a.tys, a.count, true, ""), false);
     }
     Str cfty = gk_field_type(k, bt, m);
-    if (cfty != "" && is_fn_type(cfty)) { return gk_fn_call(gk_mem(k, id, gk_sfield(k, bt, m)), id, 1, cfty); }
-    return gterr(k, "unsupported method " + m, id);
+    if (cfty != "" && is_fn_type(cfty)) { return gkm(gk_fn_call(gk_mem(k, id, gk_sfield(k, bt, m)), id, 1, cfty), true); }
+    return gkm(gterr(k, "unsupported method " + m, id), false);
 }
 
 // List verbs, by element representation: a word (integers up to 64 bits),
@@ -4015,7 +4033,15 @@ Bool gk_user_ref(GK k, Int id) {
         return d >= 0 && k.g.ns[d].kind == "fn";
     }
     if (kd != "mcall" || gk_is_provider(k, kg_kid(k.g, id, 0))) { return false; }
-    return ck_fn_index(k.fs, k.g.ns[id].text) >= 0;
+    return ck_fn_index(k.fs, k.g.ns[id].text) >= 0 && !gk_sorted_has(k.tl.bm, id, 0, k.tl.bm.len());
+}
+
+// Whether sorted xs[lo..hi] holds v.
+Bool gk_sorted_has(List(Int) xs, Int v, Int lo, Int hi) {
+    if (lo >= hi) { return false; }
+    Int mid = (lo + hi) / 2;
+    if (xs[mid] == v) { return true; }
+    return if (xs[mid] < v) { gk_sorted_has(xs, v, mid + 1, hi) } else { gk_sorted_has(xs, v, lo, mid) };
 }
 
 // The user function a `sort(xs, using = B(T))` calls, or "".
@@ -4366,7 +4392,9 @@ Bool gk_authority(GK k, List(Int) fnode, GKFs facts) {
     return fns || tests || spawns;
 }
 
-Int gk_finish(GK k, List(Int) fnode, Str src, Str smap) {
+Int gk_finish(GK k0, List(Int) fnode, Str src, Str smap) {
+    TL l = k0.tl;
+    GK k = gk_tl(k0, TL {.on = l.on, .keys = l.keys, .tys = l.tys, .mem = l.mem, .bm = sort(l.bm)});
     Sigs fs = k.fs;
     List(Str) e = [];
     List(GKF) ef = [];
@@ -4560,7 +4588,7 @@ pub GKR gk_analyze_m(Kg g, Int unit, Str src, Str smap0, Bool log, Bool fin) {
 
     List(Int) e = [];
     List(Str) es = [];
-    TL tl = TL {.on = log, .keys = e, .tys = es, .mem = e};
+    TL tl = TL {.on = log, .keys = e, .tys = es, .mem = e, .bm = e};
     Map(Str, Int) m0 = {};
     if (gm_unknown_types(g, 0, gm_known_types(sg, m0), src, smap, false)) { return GKR {.status = 1, .ty = es, .def = e, .rs = rs, .fs = sg.fs, .log = es}; }
     GX gx = gm_gx_init(g, unit, sg, src, smap0);

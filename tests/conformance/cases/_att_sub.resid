@@ -1,0 +1,3 @@
+// A second module of the package whose root is _att_fs.resid.
+@requires(filesystem(readonly))
+pub Bool att_sub_has_etc() { return filesystem.exists("/etc"); }

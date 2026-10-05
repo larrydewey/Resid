@@ -1,0 +1,9 @@
+// `import "pkg/m.resid"` reaches a module beside the dependency's root,
+// and it compiles inside the same ceiling as the root (spec §21.1).
+import "subpkg/_att_sub.resid";
+
+@requires(filesystem)
+Int main() {
+    if (att_sub_has_etc()) { println("etc"); }
+    return 0;
+}

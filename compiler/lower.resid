@@ -4097,20 +4097,27 @@ PG lw_fn_body(LW w0, Int d, PG g) {
     Str retty = if (is_main) { "i32" } else { ll_ty(rbase) };
     List(Str) lns1 = if (!body.dead) { body.lines.concat(["ret " + retty + " " + default_zero_for(retty)]) } else { body.lines };
     List(Str) new_body_lines = list_from_idx(lns1, body_start);
-    CapPP pp2 = cap_maybe_inject(sandboxed, new_body_lines, body.glines, pp1.n);
     List(Str) ptys_ll = ll_ty_list(tyl, 0, nil_list());
     Bool growbuf_params = eb.lines.len() != pp1.lines.len();
-    Bool tco_ok = !is_main && !sandboxed && !growbuf_params;
-    Str defpre = "define " + link + ll_ty(rbase) + " @" + name + "(";
+    // A sandboxed function is a wrapper (enter, call, leave) around its body
+    // as `<name>.sb`, so the body's self tail calls loop inside one frame.
+    Bool split = sandboxed && !is_main && !growbuf_params;
+    CapPP pp2 = cap_maybe_inject(sandboxed && !split, new_body_lines, body.glines, pp1.n);
+    Bool tco_ok = !is_main && (!sandboxed || split) && !growbuf_params;
+    Str bname = if (split) { name + ".sb" } else { name };
+    Str defpre = "define " + link + ll_ty(rbase) + " @" + bname + "(";
     Str defpost = ")" + fattr + " \"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\" {";
-    List(Str) fn_lines00 = if (tco_ok) { tco_function(pp1.lines, pp2.lines, name, ll_ty(rbase), ptys_ll, defpre, defpost, "") } else { pp1.lines.concat(pp2.lines) };
+    List(Str) bhead = if (split) { [defpre + pd + defpost, "entry:"] } else { pp1.lines };
+    List(Str) fn_lines00 = if (tco_ok) { tco_function(bhead, pp2.lines, name, ll_ty(rbase), ptys_ll, defpre, defpost, "") } else { bhead.concat(pp2.lines) };
     List(Str) fn_lines0 = if (tco_ok && !resid_rtmod()) { sv_apply(fn_lines00, tyl) } else { fn_lines00 };
     // A loop whose iterations carry nothing they allocate frees each
     // iteration's allocations when the next one starts (lr_region).
     Bool region = tco_ok && lw_find_line(fn_lines0, "tco.head:", 1) >= 0 && lr_region_ok(w, d, fn_lines0, tyl);
     List(Str) fn_lines = if (region) { lr_region(fn_lines0, tyl) } else { fn_lines0 };
     List(Str) own0 = fn_lines.concat(["}"]);
-    LDG dg = if (w.dbg) { lw_dbg_fn(w, d, name, own0, g.pos, tyl) } else { LDG {.lines = own0, .meta = nil_list(), .next = g.pos} };
+    LDG dg0 = if (w.dbg) { lw_dbg_fn(w, d, name, own0, g.pos, tyl) } else { LDG {.lines = own0, .meta = nil_list(), .next = g.pos} };
+    List(Str) wrap = if (split) { pp1.lines.concat(["%sb.r = call " + ll_ty(rbase) + " @" + bname + "(" + pd + ")", "call void @resid_cap_leave()", "ret " + ll_ty(rbase) + " %sb.r", "}"]) } else { nil_list() };
+    LDG dg = LDG {.lines = dg0.lines.concat(wrap), .meta = dg0.meta, .next = dg0.next};
     Int final_tmp = body.tmp;
     Int final_lbl = body.lbl;
     // Capability strings are named per function (`@resid.cap.<fn>.N`).

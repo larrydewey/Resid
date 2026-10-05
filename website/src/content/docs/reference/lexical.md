@@ -53,6 +53,9 @@ So a value never collides with a type, and `(T)x` is always a cast.
 | record | `Point {.x = 1, .y = 2}`, `Point { x = 1, y = 2 }` | the record type |
 | location | `#location` | `SourceLoc` |
 
-String escapes are `\n`, `\t`, `\r`, `\\` and `\"`; write any other
-character directly (source files are UTF-8). A string cannot contain a
-NUL character. There is no `null` literal.
+String escapes are `\n`, `\t`, `\r`, `\\`, `\"`, `\'` and `\xHH` (two
+hex digits, ASCII through `\x7f`); any other escape is a compile error.
+Write any other character directly (source files are UTF-8). A string
+cannot contain a NUL character, so `\0` and `\x00` are refused there. A
+byte string `b"..."` takes `\xHH` for any byte, and `\0`. There is no
+`null` literal.

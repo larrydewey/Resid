@@ -1,0 +1,13 @@
+// A user function named like a built-in method: `m.get(k)` on a Map is the
+// Map's own method, not an authority edge to the user `get`.
+@requires(environment(readonly))
+Str get(Str k) { return environment.get(k); }
+
+Int main() {
+    Map(Str, Int) m = {"a": 1};
+    Set(Int) s = {3};
+    List(Int) xs = [1, 2];
+    Int v = m.get("a") else { 0 };
+    println(f"{v} {s.len()} {xs.len()}");
+    return 0;
+}

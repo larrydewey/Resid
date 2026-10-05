@@ -853,9 +853,11 @@ GXF gx_fst_lit(Str t, Int i, Int n, GXF a) {
     Int c = str_char_at(t, i);
     if (c == 92) {
         Int e = str_char_at(t, i + 1);
-        Int d = if (e == 110) { 10 } else if (e == 116) { 9 } else if (e == 114) { 13 } else { e };
-        GXF a2 = GXF {.allk = a.allk && e != 48, .ch = a.ch, .bad = false, .val = a.val + str_from_code(d), .pend = a.pend + str_slice(t, i, i + 2), .parts = a.parts, .st = a.st};
-        return gx_fst_lit(t, i + 2, n, a2);
+        Int x = rd_hex_esc(t, i);
+        Int w = if (x >= 0) { 4 } else { 2 };
+        Int d = if (x >= 0) { x } else if (e == 110) { 10 } else if (e == 116) { 9 } else if (e == 114) { 13 } else { e };
+        GXF a2 = GXF {.allk = a.allk && e != 48 && x != 0, .ch = a.ch, .bad = false, .val = a.val + str_from_code(d), .pend = a.pend + str_slice(t, i, i + w), .parts = a.parts, .st = a.st};
+        return gx_fst_lit(t, i + w, n, a2);
     }
     GXF a3 = GXF {.allk = a.allk, .ch = a.ch, .bad = false, .val = a.val + str_from_code(c), .pend = a.pend + str_from_code(c), .parts = a.parts, .st = a.st};
     return gx_fst_lit(t, i + 1, n, a3);
