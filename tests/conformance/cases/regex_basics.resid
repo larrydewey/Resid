@@ -1,0 +1,60 @@
+// lib/regex.resid: spans, groups, flags, replacement, splitting and errors.
+import "regex.resid";
+
+Str desc(Regex re, Str s) {
+    return match regex_captures(re, s) {
+        Some(m) => f"[{m.start},{m.end}) '{regex_text(m, s)}' {m.groups}",
+        None => "none",
+    };
+}
+
+Str why(Str p) { return match regex_compile(p) { Ok(r) => "ok " + r.pattern, Err(e) => e }; }
+
+Str texts(List(RegexMatch) ms, Str s, Int i, Str acc) {
+    if (i >= ms.len()) { return acc; }
+    return texts(ms, s, i + 1, acc + "<" + regex_text(ms[i], s) + ">");
+}
+
+Int main() {
+    println(desc(regex("a(b+)c|x"), "zzabbbcq"));
+    println(desc(regex("(?i)hello\\s+(\\w+)"), "say HeLLo   World!"));
+    println(desc(regex("(?m)^b.*$"), "a1\nb22\nc"));
+    println(desc(regex("(?P<y>\\d{4})-(?<m>\\d\\d)"), "on 2026-10-05"));
+    println(desc(regex("a.*?b"), "aXbYb"));
+    println(desc(regex("[^a-c]+"), "abcdefabc"));
+    println(desc(regex("é+(\\w)"), "caféééx"));
+    println(desc(regex("\\bcat\\b"), "concat cat"));
+    Regex date = regex("(?P<y>\\d{4})-(?P<m>\\d\\d)");
+    RegexMatch dm = regex_captures(date, "on 2026-10-05") else { RegexMatch {.start = 0, .end = 0, .groups = []} };
+    Str month = regex_named(date, dm, "on 2026-10-05", "m") else { "?" };
+    Int yi = regex_group_index(date, "y");
+    println(f"month {month} group {yi}");
+    Int cnt = regex_count(regex("agggtaaa|tttaccct"), "agggtaaacctttacccttagggtaaa");
+    println(f"count {cnt}");
+    println(regex_replace_all(regex("(\\d+)-(\\d+)"), "1-2 and 30-40", "$2:$1 ${1}$$"));
+    println(regex_replace(regex("o"), "foo", "0"));
+    println(regex_replace_all(regex("x*"), "abxd", "-"));
+    println(regex_replace_all(regex("<[^>]*>"), "a<x>b<yy>c", "|"));
+    List(Str) parts = regex_split(regex(",\\s*"), "a, b,c,,d");
+    println(f"{parts}");
+    Bool f1 = regex_full_match(regex("a|ab"), "ab");
+    Bool f2 = regex_full_match(regex("a+"), "aab");
+    Bool m1 = regex_is_match(regex("^\\d+$"), "12345");
+    println(f"{f1} {f2} {m1}");
+    // More than the whole-DFA limit of states: the lazy DFA takes over.
+    Regex big = regex("(a|b)*a(a|b){10}");
+    Str s = "bbbbabababababbbbbbbbabb";
+    println(texts(regex_find_all(big, s), s, 0, ""));
+    println(regex_escape("a.b*c"));
+    println(why("a(b"));
+    println(why("a)"));
+    println(why("x**"));
+    println(why("(a)\\1"));
+    println(why("(?=a)"));
+    println(why("[z-a]"));
+    println(why("a{3,2}"));
+    println(why("\\q"));
+    println(why("[[:alpah:]]"));
+    println(why("a{2}"));
+    return 0;
+}

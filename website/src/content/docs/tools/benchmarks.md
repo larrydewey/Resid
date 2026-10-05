@@ -32,8 +32,9 @@ level with C++ and behind Rust (0.62×).
 - **Machine.** AMD Ryzen AI 7 PRO 350 (8 cores, 16 threads, mixed core
   types), 54.6 GiB, Linux 7.2, performance governor. gcc 16.2,
   clang 22.1, rustc 1.98, Go 1.27, .NET 10.
-- `regex-redux` is not applicable to Resid: it has no regular-expression
-  library, and writing one for the benchmark would measure that engine.
+- `regex-redux` was not applicable to Resid in this run: it had no
+  regular-expression library then. `lib/regex.resid` now exists and the
+  suite has a Resid cell for it, which the next official run will measure.
   The means below are over the other nine programs.
 
 ## Overall

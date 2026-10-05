@@ -1,0 +1,35 @@
+// The Computer Language Benchmarks Game: regex-redux.
+// https://benchmarksgame-team.pages.debian.net/benchmarksgame/description/regexredux.html
+//
+// Single-threaded, on lib/regex.resid: strip headers and newlines, count
+// the nine variants, then apply the five IUB substitutions in order.
+
+import "regex.resid";
+
+List(Str) variants() {
+    return ["agggtaaa|tttaccct", "[cgt]gggtaaa|tttaccc[acg]", "a[act]ggtaaa|tttacc[agt]t", "ag[act]gtaaa|tttac[agt]ct", "agg[act]taaa|ttta[agt]cct", "aggg[acg]aaa|ttt[cgt]ccct", "agggt[cgt]aa|tt[acg]accct", "agggta[cgt]a|t[acg]taccct", "agggtaa[cgt]|[acg]ttaccct"];
+}
+
+Str counts(Str seq, List(Str) vs, Int i, StrBuf out) {
+    if (i >= vs.len()) { return out.finish(); }
+    Int c = regex_count(regex(vs[i]), seq);
+    return counts(seq, vs, i + 1, out.push(f"{vs[i]} {c}\n"));
+}
+
+Str substitute(Str seq) {
+    Str s1 = regex_replace_all(regex("tHa[Nt]"), seq, "<4>");
+    Str s2 = regex_replace_all(regex("aND|caN|Ha[DS]|WaS"), s1, "<3>");
+    Str s3 = regex_replace_all(regex("a[NSt]|BY"), s2, "<2>");
+    Str s4 = regex_replace_all(regex("<[^>]*>"), s3, "|");
+    return regex_replace_all(regex("\\|[^|][^|]*\\|"), s4, "-");
+}
+
+@requires(filesystem(readonly))
+Int main() {
+    Str input = filesystem.read_all("/dev/stdin");
+    Str seq = regex_replace_all(regex(">.*\n|\n"), input, "");
+    Str found = counts(seq, variants(), 0, StrBuf());
+    Str done = substitute(seq);
+    print(found + f"\n{str_len(input)}\n{str_len(seq)}\n{str_len(done)}\n");
+    return 0;
+}

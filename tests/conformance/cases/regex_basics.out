@@ -1,0 +1,28 @@
+[2,7) 'abbbc' [2, 7, 3, 6]
+[4,17) 'HeLLo   World' [4, 17, 12, 17]
+[3,6) 'b22' [3, 6]
+[3,10) '2026-10' [3, 10, 3, 7, 8, 10]
+[0,3) 'aXb' [0, 3]
+[3,6) 'def' [3, 6]
+[3,7) 'éééx' [3, 7, 6, 7]
+[7,10) 'cat' [7, 10]
+month 10 group 1
+count 3
+2:1 1$ and 40:30 30$
+f0o
+-a-b-d-
+a|b|c
+["a", "b", "c", "", "d"]
+true false true
+<bbbbabababababbbbbbbbab>
+a\.b\*c
+a missing `)` at offset 1
+an unbalanced `)` at offset 1
+a quantifier cannot follow another quantifier at offset 2
+backreferences are not supported (matching stays linear) at offset 3
+lookaround is not supported (matching stays linear) at offset 0
+a range out of order at offset 2
+a repetition's maximum is below its minimum at offset 1
+unknown escape `\q` at offset 0
+unknown class [:alpah:] at offset 1
+ok a{2}

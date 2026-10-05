@@ -41,7 +41,44 @@ aGk=
 | `dwarf.resid` | reading an ELF64 binary's symbols and DWARF 5 line table |
 | `kgart.resid` | reading the knowledge-graph artifact |
 | `readline.resid` | interactive line editing with history and completion (`readline`, `readline_with`, `history_new`, `history_add`) |
+| `regex.resid` | regular expressions in linear time (RE2 syntax and semantics, no backtracking): `regex_compile`, `regex_find`, `regex_captures`, `regex_find_all`, `regex_count`, `regex_replace_all`, `regex_split`, named groups (see below) |
 | `testing.resid` | explicit test registration and property tests |
+
+## Regular expressions
+
+`regex.resid` compiles a pattern once and matches in time linear in the
+text: there are no backreferences or lookaround, so no pattern can make it
+backtrack. Offsets are codepoint indices, as for `str_slice`. Matching is
+leftmost-first, as in Perl, Python and RE2. A pattern without assertions
+runs on a DFA built when it is compiled. Captures, and patterns with `^`,
+`$` or `\b`, run on a Pike VM.
+
+```resid
+import "regex.resid";
+
+Int main() {
+    Regex date = regex("(?P<y>\\d{4})-(?P<m>\\d\\d)");
+    Str s = "due 2026-10-05";
+    RegexMatch m = regex_captures(date, s) else { RegexMatch {.start = 0, .end = 0, .groups = []} };
+    Str month = regex_named(date, m, s, "m") else { "?" };
+    println(f"{regex_text(m, s)} month {month}");
+    println(regex_replace_all(regex("(\\w+)@(\\w+)"), "a@b c@d", "$2 at $1"));
+    return 0;
+}
+```
+
+```text title="Output"
+2026-10 month 10
+b at a d at c
+```
+
+`regex(p)` aborts on a bad pattern; `regex_compile(p)` returns
+`Result(Regex, Str)` with the reason. Syntax: `.`, classes (`[a-z]`,
+`[^...]`, `[[:alpha:]]`, `\d \w \s` and their negations, ASCII), anchors
+`^ $ \A \z \b \B`, groups `( )`, `(?: )`, `(?P<name> )`, `(?<name> )`,
+quantifiers `* + ? {n} {n,} {n,m}` and their lazy forms, `|`, and the flags
+`i m s x` as `(?i)` or `(?i: ...)`. In a replacement, `$1`, `${1}` and
+`${name}` insert a group and `$$` a dollar sign.
 
 Everything above is plain Resid: the cryptography uses the language's wide
 integers (`Int(256)`, `Int(512)`) and is tested against the published test

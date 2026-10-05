@@ -1,0 +1,1182 @@
+// --- lib/regex.resid - regular expressions -----------------------------
+// Patterns compile to a Thompson NFA. Spans are found by a lazy DFA (a
+// forward pass for the end, a reverse pass for the start) when the pattern
+// has no assertions, else by a Pike VM, which also fills capture groups.
+// Matching time is linear in the text: there are no backreferences and no
+// lookaround, so no pattern can backtrack exponentially.
+//
+// Offsets are codepoint indices, as for str_slice and str_index_of.
+// Semantics are leftmost-first (Perl, Python, RE2): alternatives in order,
+// greedy quantifiers take the most they can, lazy ones (`*?`) the least.
+//
+// Syntax: literals; `.`; `[a-z]`, `[^...]`, `[[:alpha:]]`; `\d \w \s` and
+// their negations (ASCII); `^ $ \A \z \b \B`; `( )`, `(?: )`, `(?P<n> )` and
+// `(?<n> )`; `* + ? {n} {n,} {n,m} {,m}`, each with a lazy `?` form; `|`;
+// flags `(?imsx)`, `(?-i)` and `(?i: ...)`. Escapes: `\n \t \r \f \v \a
+// \e \0 \xHH \x{H...} \uHHHH`, and `\` before any punctuation.
+// `^`/`$` are text ends unless `m`; `.` skips `\n` unless `s`.
+
+// A compiled pattern. Instructions are packed: op | a << 4 | b << 33.
+pub type Regex = {
+    Str pattern;
+    List(Int) prog;
+    List(Int) fprog;
+    List(Int) rprog;
+    List(List(Int)) cls;
+    List(Int) mask;
+    Int ngroups;
+    List(Str) names;
+    Bool dfa;
+    List(Int) bounds;
+    List(Int) ascii;
+    Tab ftab;
+    Tab rtab;
+};
+
+// A whole DFA, built when small: next[state * classes + class], and per
+// state bit 0 matching, bit 2 the scan stops here. ok false: use the lazy one.
+type Tab = { Bool ok; List(Int) next; List(Int) flags; Int start; };
+
+// A match: [start, end) and the groups as 2 * ngroups offsets (-1 unset;
+// group 0 is the match). `groups` is empty from the span-only searches.
+pub type RegexMatch = { Int start; Int end; List(Int) groups; };
+
+// --- Parser ----------------------------------------------------------------
+
+type ReNode = { Int kind; Int a; Int b; Int c; List(Int) kids; };
+
+// Node kinds.
+Int k_lit() { return 0; }
+Int k_any() { return 1; }
+Int k_cls() { return 2; }
+Int k_cat() { return 3; }
+Int k_alt() { return 4; }
+Int k_rep() { return 5; }
+Int k_grp() { return 6; }
+Int k_asr() { return 7; }
+Int k_emp() { return 8; }
+
+// Assertion kinds.
+Int a_bol() { return 0; }
+Int a_eol() { return 1; }
+Int a_bot() { return 2; }
+Int a_eot() { return 3; }
+Int a_word() { return 4; }
+Int a_nword() { return 5; }
+
+// Flags.
+Int f_i() { return 1; }
+Int f_m() { return 2; }
+Int f_s() { return 4; }
+Int f_x() { return 8; }
+
+Int re_max_cp() { return 1114111; }
+
+type ReP = { Str src; Int n; Int pos; List(ReNode) ns; List(List(Int)) cls; Int ng; List(Str) names; Int fl; Str err; Int id; };
+
+ReP rp_with(ReP p, Int pos, List(ReNode) ns, List(List(Int)) cls, Int ng, List(Str) names, Int fl, Str err, Int id) {
+    return ReP {.src = p.src, .n = p.n, .pos = pos, .ns = ns, .cls = cls, .ng = ng, .names = names, .fl = fl, .err = err, .id = id};
+}
+
+ReP rp_pos(ReP p, Int pos) { return rp_with(p, pos, p.ns, p.cls, p.ng, p.names, p.fl, p.err, p.id); }
+ReP rp_id(ReP p, Int id) { return rp_with(p, p.pos, p.ns, p.cls, p.ng, p.names, p.fl, p.err, id); }
+ReP rp_fl(ReP p, Int pos, Int fl) { return rp_with(p, pos, p.ns, p.cls, p.ng, p.names, fl, p.err, -1); }
+ReP rp_fail(ReP p, Int at, Str msg) { return rp_with(p, at, p.ns, p.cls, p.ng, p.names, p.fl, f"{msg} at offset {at}", -1); }
+
+ReP rp_add(ReP p, Int pos, Int kind, Int a, Int b, Int c, List(Int) kids) {
+    ReNode nd = ReNode {.kind = kind, .a = a, .b = b, .c = c, .kids = kids};
+    return rp_with(p, pos, p.ns.concat([nd]), p.cls, p.ng, p.names, p.fl, p.err, p.ns.len());
+}
+
+// A class node over normalized ranges.
+ReP rp_class(ReP p, Int pos, List(Int) rs) {
+    ReP q = rp_with(p, pos, p.ns, p.cls.concat([rs]), p.ng, p.names, p.fl, p.err, p.id);
+    List(Int) none = [];
+    return rp_add(q, pos, k_cls(), p.cls.len(), 0, 0, none);
+}
+
+// Where t occurs in s at or after from, counted from from; or -1.
+Int re_find_rel(Str s, Str t, Int from) {
+    Int at = str_index_of(s, t, from);
+    return if (at < 0) { -1 } else { at - from };
+}
+
+Int rp_ch(ReP p, Int i) { return if (i >= 0 && i < p.n) { str_char_at(p.src, i) } else { -1 }; }
+
+// alt := cat ('|' cat)*
+ReP re_alt_p(ReP p, List(Int) acc) {
+    List(Int) none = [];
+    ReP c = re_cat_p(p, none);
+    if (c.err != "") { return c; }
+    List(Int) acc2 = acc.concat([c.id]);
+    if (rp_ch(c, c.pos) == 124) { return re_alt_p(rp_pos(c, c.pos + 1), acc2); }
+    return if (acc2.len() == 1) { c } else { rp_add(c, c.pos, k_alt(), 0, 0, 0, acc2) };
+}
+
+// cat := repeat*, up to `|`, `)` or the end.
+ReP re_cat_p(ReP p, List(Int) acc) {
+    Int c = rp_ch(p, p.pos);
+    if (c < 0 || c == 124 || c == 41) {
+        List(Int) none = [];
+        if (acc.len() == 0) { return rp_add(p, p.pos, k_emp(), 0, 0, 0, none); }
+        return if (acc.len() == 1) { rp_id(p, acc[0]) } else { rp_add(p, p.pos, k_cat(), 0, 0, 0, acc) };
+    }
+    if ((p.fl & f_x()) != 0 && (c == 32 || c == 9 || c == 10 || c == 13)) { return re_cat_p(rp_pos(p, p.pos + 1), acc); }
+    if ((p.fl & f_x()) != 0 && c == 35) { return re_cat_p(rp_pos(p, re_line_end(p, p.pos)), acc); }
+    ReP r = re_repeat_p(p);
+    if (r.err != "") { return r; }
+    return re_cat_p(r, if (r.id >= 0) { acc.concat([r.id]) } else { acc });
+}
+
+Int re_line_end(ReP p, Int i) {
+    Int c = rp_ch(p, i);
+    if (c < 0 || c == 10) { return i; }
+    return re_line_end(p, i + 1);
+}
+
+ReP re_repeat_p(ReP p) {
+    ReP a = re_atom_p(p);
+    if (a.err != "" || a.id < 0) { return a; }
+    return re_quant_p(a, false);
+}
+
+// A counted repetition `{n}`, `{n,}`, `{n,m}` or `{,m}` at i: its bounds
+// and end, or end -1 when the text there is not one (then `{` is literal).
+type ReCount = { Int lo; Int hi; Int next; };
+
+ReCount re_count_at(ReP p, Int i) {
+    ReCount no = ReCount {.lo = 0, .hi = 0, .next = -1};
+    if (rp_ch(p, i) != 123) { return no; }
+    Int e1 = re_digits_end(p, i + 1);
+    Int lo = if (e1 > i + 1) { str_parse_int(str_slice(p.src, i + 1, e1)) } else { 0 };
+    Int c = rp_ch(p, e1);
+    if (c == 125) { return if (e1 > i + 1) { ReCount {.lo = lo, .hi = lo, .next = e1 + 1} } else { no }; }
+    if (c != 44) { return no; }
+    Int e2 = re_digits_end(p, e1 + 1);
+    if (rp_ch(p, e2) != 125) { return no; }
+    if (e1 == i + 1 && e2 == e1 + 1) { return no; }
+    Int hi = if (e2 > e1 + 1) { str_parse_int(str_slice(p.src, e1 + 1, e2)) } else { -1 };
+    return ReCount {.lo = lo, .hi = hi, .next = e2 + 1};
+}
+
+Int re_digits_end(ReP p, Int i) {
+    Int c = rp_ch(p, i);
+    if (c >= 48 && c <= 57 && i - p.pos < 12) { return re_digits_end(p, i + 1); }
+    return i;
+}
+
+ReP re_quant_p(ReP p, Bool after) {
+    Int c = rp_ch(p, p.pos);
+    ReCount rc = re_count_at(p, p.pos);
+    Bool q = c == 42 || c == 43 || c == 63 || rc.next >= 0;
+    if (!q) { return p; }
+    if (after) { return rp_fail(p, p.pos, "a quantifier cannot follow another quantifier"); }
+    Int lo = if (c == 43) { 1 } else if (rc.next >= 0) { rc.lo } else { 0 };
+    Int hi = if (c == 63) { 1 } else if (rc.next >= 0) { rc.hi } else { -1 };
+    Int e = if (rc.next >= 0) { rc.next } else { p.pos + 1 };
+    if (lo > 1000 || hi > 1000) { return rp_fail(p, p.pos, "a counted repetition is limited to 1000"); }
+    if (hi >= 0 && hi < lo) { return rp_fail(p, p.pos, "a repetition's maximum is below its minimum"); }
+    Bool lazy = rp_ch(p, e) == 63;
+    Int e2 = if (lazy) { e + 1 } else { e };
+    ReP r = rp_add(p, e2, k_rep(), lo, hi, if (lazy) { 0 } else { 1 }, [p.id]);
+    return re_quant_p(r, true);
+}
+
+ReP re_atom_p(ReP p) {
+    Int i = p.pos;
+    Int c = rp_ch(p, i);
+    List(Int) none = [];
+    if (c == 40) { return re_group_p(p); }
+    if (c == 91) { return re_class_p(p); }
+    if (c == 46) { return rp_add(p, i + 1, k_any(), if ((p.fl & f_s()) != 0) { 1 } else { 0 }, 0, 0, none); }
+    if (c == 94) { return rp_add(p, i + 1, k_asr(), if ((p.fl & f_m()) != 0) { a_bol() } else { a_bot() }, 0, 0, none); }
+    if (c == 36) { return rp_add(p, i + 1, k_asr(), if ((p.fl & f_m()) != 0) { a_eol() } else { a_eot() }, 0, 0, none); }
+    if (c == 92) { return re_escape_p(p); }
+    if (c == 42 || c == 43 || c == 63 || re_count_at(p, i).next >= 0) { return rp_fail(p, i, "nothing to repeat"); }
+    return re_lit_p(p, i + 1, c);
+}
+
+// A literal, folded into a two-member class under `i`.
+ReP re_lit_p(ReP p, Int pos, Int c) {
+    Int o = if ((p.fl & f_i()) != 0) { re_fold(c) } else { c };
+    List(Int) none = [];
+    if (o == c) { return rp_add(p, pos, k_lit(), c, 0, 0, none); }
+    return rp_class(p, pos, re_norm([c, c, o, o]));
+}
+
+// The other case of c, or c.
+Int re_fold(Int c) {
+    if (c >= 97 && c <= 122) { return c - 32; }
+    if (c >= 65 && c <= 90) { return c + 32; }
+    if (c < 128) { return c; }
+    Str t = str_from_code(c);
+    Str lo = str_to_lower(t);
+    Str up = str_to_upper(t);
+    if (str_len(lo) == 1 && str_char_at(lo, 0) != c) { return str_char_at(lo, 0); }
+    if (str_len(up) == 1 && str_char_at(up, 0) != c) { return str_char_at(up, 0); }
+    return c;
+}
+
+// An escape: a codepoint (kind 0), class ranges (1) or an assertion (2).
+type ReEsc = { Int kind; Int cp; List(Int) rs; Int next; Str err; };
+
+ReEsc esc_cp(Int cp, Int next) { List(Int) none = []; return ReEsc {.kind = 0, .cp = cp, .rs = none, .next = next, .err = ""}; }
+ReEsc esc_rs(List(Int) rs, Int next) { return ReEsc {.kind = 1, .cp = 0, .rs = rs, .next = next, .err = ""}; }
+ReEsc esc_asr(Int a, Int next) { List(Int) none = []; return ReEsc {.kind = 2, .cp = a, .rs = none, .next = next, .err = ""}; }
+ReEsc esc_err(Str msg, Int at) { List(Int) none = []; return ReEsc {.kind = 0, .cp = 0, .rs = none, .next = at, .err = msg}; }
+
+List(Int) rs_digit() { return [48, 57]; }
+List(Int) rs_word() { return [48, 57, 65, 90, 95, 95, 97, 122]; }
+List(Int) rs_space() { return [9, 13, 32, 32]; }
+
+// The escape at i (the backslash); in a class `\b` is a backspace.
+ReEsc re_esc(ReP p, Int i, Bool in_class) {
+    Int c = rp_ch(p, i + 1);
+    Int nx = i + 2;
+    if (c < 0) { return esc_err("a pattern cannot end in `\\`", i); }
+    if (c == 100) { return esc_rs(rs_digit(), nx); }
+    if (c == 68) { return esc_rs(re_negate(rs_digit()), nx); }
+    if (c == 119) { return esc_rs(rs_word(), nx); }
+    if (c == 87) { return esc_rs(re_negate(rs_word()), nx); }
+    if (c == 115) { return esc_rs(rs_space(), nx); }
+    if (c == 83) { return esc_rs(re_negate(rs_space()), nx); }
+    if (c == 98) { return if (in_class) { esc_cp(8, nx) } else { esc_asr(a_word(), nx) }; }
+    if (c == 66 && !in_class) { return esc_asr(a_nword(), nx); }
+    if (c == 65 && !in_class) { return esc_asr(a_bot(), nx); }
+    if ((c == 122 || c == 90) && !in_class) { return esc_asr(a_eot(), nx); }
+    if (c == 110) { return esc_cp(10, nx); }
+    if (c == 116) { return esc_cp(9, nx); }
+    if (c == 114) { return esc_cp(13, nx); }
+    if (c == 102) { return esc_cp(12, nx); }
+    if (c == 118) { return esc_cp(11, nx); }
+    if (c == 97) { return esc_cp(7, nx); }
+    if (c == 101) { return esc_cp(27, nx); }
+    if (c == 48) { return esc_cp(0, nx); }
+    if (c == 120 && rp_ch(p, i + 2) == 123) { return re_hex_esc(p, i + 3, 0, 0, true); }
+    if (c == 120) { return re_hex_esc(p, i + 2, 0, 2, false); }
+    if (c == 117) { return re_hex_esc(p, i + 2, 0, 4, false); }
+    if (c >= 49 && c <= 57) { return esc_err("backreferences are not supported (matching stays linear)", i); }
+    Bool alnum = (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122);
+    if (alnum) { return esc_err(f"unknown escape `\\{str_from_code(c)}`", i); }
+    return esc_cp(c, nx);
+}
+
+// `want` hex digits at i (or, braced, up to `}`).
+ReEsc re_hex_esc(ReP p, Int i, Int acc, Int want, Bool braced) {
+    Int c = rp_ch(p, i);
+    if (braced && c == 125) {
+        if (acc > re_max_cp()) { return esc_err("a codepoint above 10FFFF", i); }
+        return esc_cp(acc, i + 1);
+    }
+    if (!braced && want == 0) { return esc_cp(acc, i); }
+    Int d = re_hex(c);
+    if (d < 0) { return esc_err("a hex escape needs hex digits", i); }
+    if (acc > re_max_cp()) { return esc_err("a codepoint above 10FFFF", i); }
+    return re_hex_esc(p, i + 1, acc * 16 + d, want - 1, braced);
+}
+
+Int re_hex(Int c) {
+    if (c >= 48 && c <= 57) { return c - 48; }
+    if (c >= 97 && c <= 102) { return c - 87; }
+    if (c >= 65 && c <= 70) { return c - 55; }
+    return -1;
+}
+
+ReP re_escape_p(ReP p) {
+    ReEsc e = re_esc(p, p.pos, false);
+    List(Int) none = [];
+    if (e.err != "") { return rp_fail(p, e.next, e.err); }
+    if (e.kind == 2) { return rp_add(p, e.next, k_asr(), e.cp, 0, 0, none); }
+    if (e.kind == 1) { return rp_class(p, e.next, re_norm(re_fold_rs(p.fl, e.rs))); }
+    return re_lit_p(p, e.next, e.cp);
+}
+
+// --- Classes ------------------------------------------------------------------
+
+type ReCls = { List(Int) rs; Int next; Str err; };
+
+ReP re_class_p(ReP p) {
+    Int i0 = p.pos + 1;
+    Bool neg = rp_ch(p, i0) == 94;
+    List(Int) none = [];
+    ReCls r = re_class_items(p, if (neg) { i0 + 1 } else { i0 }, true, none);
+    if (r.err != "") { return rp_fail(p, r.next, r.err); }
+    List(Int) rs = re_norm(re_fold_rs(p.fl, r.rs));
+    return rp_class(p, r.next, if (neg) { re_negate(rs) } else { rs });
+}
+
+ReCls re_class_items(ReP p, Int j, Bool first, List(Int) acc) {
+    Int c = rp_ch(p, j);
+    if (c < 0) { return ReCls {.rs = acc, .next = p.pos, .err = "an unterminated character class"}; }
+    if (c == 93 && !first) { return ReCls {.rs = acc, .next = j + 1, .err = ""}; }
+    if (c == 91 && rp_ch(p, j + 1) == 58) {
+        Int close = re_find_rel(p.src, ":]", j + 2);
+        if (close >= 0) {
+            Str name = str_slice(p.src, j + 2, j + 2 + close);
+            List(Int) pr = re_posix(name);
+            if (pr.len() == 0) { return ReCls {.rs = acc, .next = j, .err = f"unknown class [:{name}:]"}; }
+            return re_class_items(p, j + 4 + close, false, acc.concat(pr));
+        }
+    }
+    ReEsc lo = if (c == 92) { re_esc(p, j, true) } else { esc_cp(c, j + 1) };
+    if (lo.err != "") { return ReCls {.rs = acc, .next = lo.next, .err = lo.err}; }
+    if (lo.kind == 1) { return re_class_items(p, lo.next, false, acc.concat(lo.rs)); }
+    Int d = rp_ch(p, lo.next);
+    Int d2 = rp_ch(p, lo.next + 1);
+    if (d == 45 && d2 >= 0 && d2 != 93) {
+        ReEsc hi = if (d2 == 92) { re_esc(p, lo.next + 1, true) } else { esc_cp(d2, lo.next + 2) };
+        if (hi.err != "") { return ReCls {.rs = acc, .next = hi.next, .err = hi.err}; }
+        if (hi.kind != 0) { return ReCls {.rs = acc, .next = lo.next, .err = "a class shorthand cannot end a range"}; }
+        if (hi.cp < lo.cp) { return ReCls {.rs = acc, .next = lo.next, .err = "a range out of order"}; }
+        return re_class_items(p, hi.next, false, acc.concat([lo.cp, hi.cp]));
+    }
+    return re_class_items(p, lo.next, false, acc.concat([lo.cp, lo.cp]));
+}
+
+List(Int) re_posix(Str name) {
+    if (name == "alpha") { return [65, 90, 97, 122]; }
+    if (name == "digit") { return [48, 57]; }
+    if (name == "alnum") { return [48, 57, 65, 90, 97, 122]; }
+    if (name == "upper") { return [65, 90]; }
+    if (name == "lower") { return [97, 122]; }
+    if (name == "space") { return [9, 13, 32, 32]; }
+    if (name == "blank") { return [9, 9, 32, 32]; }
+    if (name == "punct") { return [33, 47, 58, 64, 91, 96, 123, 126]; }
+    if (name == "xdigit") { return [48, 57, 65, 70, 97, 102]; }
+    if (name == "word") { return rs_word(); }
+    if (name == "cntrl") { return [0, 31, 127, 127]; }
+    if (name == "print") { return [32, 126]; }
+    if (name == "graph") { return [33, 126]; }
+    List(Int) none = [];
+    return none;
+}
+
+// Ranges plus their other-case ranges under `i`.
+List(Int) re_fold_rs(Int fl, List(Int) rs) {
+    if ((fl & f_i()) == 0) { return rs; }
+    return re_fold_at(rs, 0, rs);
+}
+
+List(Int) re_fold_at(List(Int) rs, Int k, List(Int) acc) {
+    if (k >= rs.len()) { return acc; }
+    Int lo = rs[k];
+    Int hi = rs[k + 1];
+    List(Int) a1 = re_fold_span(lo, hi, 97, 122, -32, acc);
+    List(Int) a2 = re_fold_span(lo, hi, 65, 90, 32, a1);
+    List(Int) a3 = if (hi >= 128 && hi - lo <= 1024) { re_fold_each(if (lo < 128) { 128 } else { lo }, hi, a2) } else { a2 };
+    return re_fold_at(rs, k + 2, a3);
+}
+
+// [lo, hi] meets [a, b]: the overlap shifted by d.
+List(Int) re_fold_span(Int lo, Int hi, Int a, Int b, Int d, List(Int) acc) {
+    Int s = if (lo > a) { lo } else { a };
+    Int e = if (hi < b) { hi } else { b };
+    return if (s <= e) { acc.concat([s + d, e + d]) } else { acc };
+}
+
+List(Int) re_fold_each(Int c, Int hi, List(Int) acc) {
+    if (c > hi) { return acc; }
+    Int o = re_fold(c);
+    return re_fold_each(c + 1, hi, if (o != c) { acc.concat([o, o]) } else { acc });
+}
+
+// Sorted, merged ranges.
+List(Int) re_norm(List(Int) rs) {
+    List(Int) packed = sort(re_pack(rs, 0, ListBuf()).finish());
+    List(Int) none = [];
+    return re_merge(packed, 0, -1, -1, none);
+}
+
+ListBuf(Int) re_pack(List(Int) rs, Int k, ListBuf(Int) acc) {
+    if (k >= rs.len()) { return acc; }
+    return re_pack(rs, k + 2, acc.push(rs[k] * 4194304 + rs[k + 1]));
+}
+
+List(Int) re_merge(List(Int) ps, Int k, Int lo, Int hi, List(Int) acc) {
+    if (k >= ps.len()) { return if (lo >= 0) { acc.concat([lo, hi]) } else { acc }; }
+    Int a = ps[k] / 4194304;
+    Int b = ps[k] % 4194304;
+    if (lo >= 0 && a <= hi + 1) { return re_merge(ps, k + 1, lo, if (b > hi) { b } else { hi }, acc); }
+    return re_merge(ps, k + 1, a, b, if (lo >= 0) { acc.concat([lo, hi]) } else { acc });
+}
+
+// The complement of normalized ranges over all codepoints.
+List(Int) re_negate(List(Int) rs0) {
+    List(Int) rs = re_norm(rs0);
+    List(Int) none = [];
+    return re_neg_at(rs, 0, 0, none);
+}
+
+List(Int) re_neg_at(List(Int) rs, Int k, Int from, List(Int) acc) {
+    if (k >= rs.len()) { return if (from <= re_max_cp()) { acc.concat([from, re_max_cp()]) } else { acc }; }
+    List(Int) a2 = if (rs[k] > from) { acc.concat([from, rs[k] - 1]) } else { acc };
+    return re_neg_at(rs, k + 2, rs[k + 1] + 1, a2);
+}
+
+// --- Groups -------------------------------------------------------------------
+
+ReP re_group_p(ReP p) {
+    Int i = p.pos + 1;
+    if (rp_ch(p, i) != 63) { return re_group_body(p, i, p.fl, true, ""); }
+    Int c = rp_ch(p, i + 1);
+    if (c == 58) { return re_group_body(p, i + 2, p.fl, false, ""); }
+    if (c == 35) {
+        Int close = re_find_rel(p.src, ")", i);
+        if (close < 0) { return rp_fail(p, p.pos, "an unterminated comment"); }
+        return rp_fl(p, i + close + 1, p.fl);
+    }
+    if (c == 61 || c == 33 || (c == 60 && (rp_ch(p, i + 2) == 61 || rp_ch(p, i + 2) == 33))) {
+        return rp_fail(p, p.pos, "lookaround is not supported (matching stays linear)");
+    }
+    if (c == 80 && rp_ch(p, i + 2) == 61) { return rp_fail(p, p.pos, "backreferences are not supported (matching stays linear)"); }
+    if (c == 60 || (c == 80 && rp_ch(p, i + 2) == 60)) {
+        Int ns = if (c == 60) { i + 2 } else { i + 3 };
+        Int close = re_find_rel(p.src, ">", ns);
+        if (close < 0) { return rp_fail(p, p.pos, "an unterminated group name"); }
+        Str name = str_slice(p.src, ns, ns + close);
+        if (!re_ident(name, 0)) { return rp_fail(p, ns, f"a bad group name `{name}`"); }
+        if (p.names.contains(name)) { return rp_fail(p, ns, f"a duplicate group name `{name}`"); }
+        return re_group_body(p, ns + close + 1, p.fl, true, name);
+    }
+    return re_flags_p(p, i + 1, p.fl, true);
+}
+
+Bool re_ident(Str s, Int i) {
+    if (i >= str_len(s)) { return i > 0; }
+    Int c = str_char_at(s, i);
+    Bool ok = c == 95 || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (i > 0 && c >= 48 && c <= 57);
+    return ok && re_ident(s, i + 1);
+}
+
+// `(?imsx-imsx)` sets flags for the rest of the group; `(?i:...)` scopes them.
+ReP re_flags_p(ReP p, Int j, Int fl, Bool on) {
+    Int c = rp_ch(p, j);
+    if (c == 41) { return rp_fl(p, j + 1, fl); }
+    if (c == 58) { return re_group_body(p, j + 1, fl, false, ""); }
+    if (c == 45 && on) { return re_flags_p(p, j + 1, fl, false); }
+    Int bit = if (c == 105) { f_i() } else if (c == 109) { f_m() } else if (c == 115) { f_s() } else if (c == 120) { f_x() } else { 0 };
+    if (bit == 0) { return rp_fail(p, j, "an unknown group or flag"); }
+    return re_flags_p(p, j + 1, if (on) { fl | bit } else { fl & ~bit }, on);
+}
+
+ReP re_group_body(ReP p, Int start, Int fl, Bool capture, Str name) {
+    Int idx = if (capture) { p.ng } else { -1 };
+    ReP q = rp_with(p, start, p.ns, p.cls, if (capture) { p.ng + 1 } else { p.ng }, if (capture) { p.names.concat([name]) } else { p.names }, fl, "", -1);
+    List(Int) none = [];
+    ReP b = re_alt_p(q, none);
+    if (b.err != "") { return b; }
+    if (rp_ch(b, b.pos) != 41) { return rp_fail(b, p.pos, "a missing `)`"); }
+    ReP r = rp_with(b, b.pos + 1, b.ns, b.cls, b.ng, b.names, p.fl, "", b.id);
+    return if (capture) { rp_add(r, r.pos, k_grp(), idx, 0, 0, [b.id]) } else { r };
+}
+
+// --- Compiler -------------------------------------------------------------------
+
+// Instruction ops.
+Int o_char() { return 0; }
+Int o_any() { return 1; }
+Int o_cls() { return 2; }
+Int o_split() { return 3; }
+Int o_jmp() { return 4; }
+Int o_save() { return 5; }
+Int o_match() { return 6; }
+Int o_asr() { return 7; }
+
+Int ins(Int op, Int a, Int b) { return op + a * 16 + b * 8589934592; }
+Int ins_op(Int x) { return x & 15; }
+Int ins_a(Int x) { return (x >> 4) & 536870911; }
+Int ins_b(Int x) { return x >> 33; }
+
+// Instructions for node id; rev: the reversed language, no saves.
+Int re_size(List(ReNode) ns, Int id, Bool rev) {
+    ReNode nd = ns[id];
+    Int k = nd.kind;
+    if (k == k_emp()) { return 0; }
+    if (k == k_cat()) { return re_size_sum(ns, nd.kids, 0, rev, 0); }
+    if (k == k_alt()) { return re_size_sum(ns, nd.kids, 0, rev, 0) + 2 * (nd.kids.len() - 1); }
+    if (k == k_grp()) { return re_size(ns, nd.kids[0], rev) + if (rev) { 0 } else { 2 }; }
+    if (k == k_rep()) {
+        Int s = re_size(ns, nd.kids[0], rev);
+        if (nd.b < 0) { return if (nd.a == 0) { s + 2 } else { nd.a * s + 1 }; }
+        return nd.a * s + (nd.b - nd.a) * (s + 1);
+    }
+    return 1;
+}
+
+Int re_size_sum(List(ReNode) ns, List(Int) ks, Int i, Bool rev, Int acc) {
+    if (i >= ks.len()) { return acc; }
+    return re_size_sum(ns, ks, i + 1, rev, acc + re_size(ns, ks[i], rev));
+}
+
+ListBuf(Int) re_emit(List(ReNode) ns, Int id, Int pc, Bool rev, ListBuf(Int) out) {
+    ReNode nd = ns[id];
+    Int k = nd.kind;
+    if (k == k_lit()) { return out.push(ins(o_char(), nd.a, 0)); }
+    if (k == k_any()) { return out.push(ins(o_any(), nd.a, 0)); }
+    if (k == k_cls()) { return out.push(ins(o_cls(), nd.a, 0)); }
+    if (k == k_asr()) { return out.push(ins(o_asr(), if (rev) { re_flip(nd.a) } else { nd.a }, 0)); }
+    if (k == k_emp()) { return out; }
+    if (k == k_cat()) { return re_emit_seq(ns, nd.kids, if (rev) { nd.kids.len() - 1 } else { 0 }, pc, rev, out); }
+    if (k == k_alt()) { return re_emit_alt(ns, nd.kids, 0, pc, pc + re_size(ns, id, rev), rev, out); }
+    if (k == k_grp()) {
+        Int s = re_size(ns, nd.kids[0], rev);
+        if (rev) { return re_emit(ns, nd.kids[0], pc, rev, out); }
+        ListBuf(Int) o1 = re_emit(ns, nd.kids[0], pc + 1, rev, out.push(ins(o_save(), 2 * nd.a, 0)));
+        return o1.push(ins(o_save(), 2 * nd.a + 1, 0));
+    }
+    return re_emit_rep(ns, nd, pc, rev, out);
+}
+
+// An assertion read right to left.
+Int re_flip(Int a) {
+    if (a == a_bol()) { return a_eol(); }
+    if (a == a_eol()) { return a_bol(); }
+    if (a == a_bot()) { return a_eot(); }
+    if (a == a_eot()) { return a_bot(); }
+    return a;
+}
+
+ListBuf(Int) re_emit_seq(List(ReNode) ns, List(Int) ks, Int i, Int pc, Bool rev, ListBuf(Int) out) {
+    if (i < 0 || i >= ks.len()) { return out; }
+    Int s = re_size(ns, ks[i], rev);
+    return re_emit_seq(ns, ks, if (rev) { i - 1 } else { i + 1 }, pc + s, rev, re_emit(ns, ks[i], pc, rev, out));
+}
+
+// SPLIT next, rest; kid; JMP end -- the last alternative falls through.
+ListBuf(Int) re_emit_alt(List(ReNode) ns, List(Int) ks, Int i, Int pc, Int end, Bool rev, ListBuf(Int) out) {
+    if (i == ks.len() - 1) { return re_emit(ns, ks[i], pc, rev, out); }
+    Int s = re_size(ns, ks[i], rev);
+    ListBuf(Int) o1 = re_emit(ns, ks[i], pc + 1, rev, out.push(ins(o_split(), pc + 1, pc + s + 2)));
+    return re_emit_alt(ns, ks, i + 1, pc + s + 2, end, rev, o1.push(ins(o_jmp(), end, 0)));
+}
+
+ListBuf(Int) re_emit_rep(List(ReNode) ns, ReNode nd, Int pc, Bool rev, ListBuf(Int) out) {
+    Int kid = nd.kids[0];
+    Int s = re_size(ns, kid, rev);
+    Bool greedy = nd.c == 1;
+    if (nd.b < 0 && nd.a == 0) {
+        Int out_pc = pc + s + 2;
+        Int sp = if (greedy) { ins(o_split(), pc + 1, out_pc) } else { ins(o_split(), out_pc, pc + 1) };
+        // x* as (x+)?: an empty pass through x leaves the loop, not the thread.
+        ListBuf(Int) o1 = re_emit(ns, kid, pc + 1, rev, out.push(sp));
+        return o1.push(if (greedy) { ins(o_split(), pc + 1, out_pc) } else { ins(o_split(), out_pc, pc + 1) });
+    }
+    if (nd.b < 0) {
+        ListBuf(Int) o1 = re_emit_copies(ns, kid, nd.a - 1, s, pc, rev, out);
+        Int lp = pc + (nd.a - 1) * s;
+        ListBuf(Int) o2 = re_emit(ns, kid, lp, rev, o1);
+        return o2.push(if (greedy) { ins(o_split(), lp, lp + s + 1) } else { ins(o_split(), lp + s + 1, lp) });
+    }
+    ListBuf(Int) o3 = re_emit_copies(ns, kid, nd.a, s, pc, rev, out);
+    return re_emit_opts(ns, kid, nd.b - nd.a, s, pc + nd.a * s, greedy, rev, o3);
+}
+
+ListBuf(Int) re_emit_copies(List(ReNode) ns, Int kid, Int n, Int s, Int pc, Bool rev, ListBuf(Int) out) {
+    if (n <= 0) { return out; }
+    return re_emit_copies(ns, kid, n - 1, s, pc + s, rev, re_emit(ns, kid, pc, rev, out));
+}
+
+ListBuf(Int) re_emit_opts(List(ReNode) ns, Int kid, Int n, Int s, Int pc, Bool greedy, Bool rev, ListBuf(Int) out) {
+    if (n <= 0) { return out; }
+    Int sp = if (greedy) { ins(o_split(), pc + 1, pc + s + 1) } else { ins(o_split(), pc + s + 1, pc + 1) };
+    return re_emit_opts(ns, kid, n - 1, s, pc + s + 1, greedy, rev, re_emit(ns, kid, pc + 1, rev, out.push(sp)));
+}
+
+Bool re_has_asr(List(ReNode) ns, Int i) {
+    if (i >= ns.len()) { return false; }
+    return ns[i].kind == k_asr() || re_has_asr(ns, i + 1);
+}
+
+// 4 x 32-bit ASCII membership words per class.
+ListBuf(Int) re_masks(List(List(Int)) cls, Int k, ListBuf(Int) acc) {
+    if (k >= cls.len()) { return acc; }
+    List(Int) rs = cls[k];
+    ListBuf(Int) a1 = acc.push(re_mask_word(rs, 0)).push(re_mask_word(rs, 32)).push(re_mask_word(rs, 64));
+    return re_masks(cls, k + 1, a1.push(re_mask_word(rs, 96)));
+}
+
+Int re_mask_word(List(Int) rs, Int base) { return re_mask_bits(rs, base, 0, 0); }
+
+Int re_mask_bits(List(Int) rs, Int base, Int b, Int acc) {
+    if (b >= 32) { return acc; }
+    return re_mask_bits(rs, base, b + 1, if (re_in_ranges(rs, base + b, 0)) { acc | (1 << b) } else { acc });
+}
+
+Bool re_in_ranges(List(Int) rs, Int c, Int k) {
+    if (k >= rs.len()) { return false; }
+    if (c < rs[k]) { return false; }
+    if (c <= rs[k + 1]) { return true; }
+    return re_in_ranges(rs, c, k + 2);
+}
+
+// DFA input classes: every point where some instruction's answer can change.
+ListBuf(Int) re_cuts(List(Int) prog, List(List(Int)) cls, Int pc, ListBuf(Int) acc) {
+    if (pc >= prog.len()) { return acc; }
+    Int x = prog[pc];
+    Int op = ins_op(x);
+    if (op == o_char()) { return re_cuts(prog, cls, pc + 1, acc.push(ins_a(x)).push(ins_a(x) + 1)); }
+    if (op == o_any()) { return re_cuts(prog, cls, pc + 1, acc.push(10).push(11)); }
+    if (op == o_cls()) { return re_cuts(prog, cls, pc + 1, re_cut_rs(cls[ins_a(x)], 0, acc)); }
+    return re_cuts(prog, cls, pc + 1, acc);
+}
+
+ListBuf(Int) re_cut_rs(List(Int) rs, Int k, ListBuf(Int) acc) {
+    if (k >= rs.len()) { return acc; }
+    return re_cut_rs(rs, k + 2, acc.push(rs[k]).push(rs[k + 1] + 1));
+}
+
+List(Int) re_uniq(List(Int) xs, Int i, ListBuf(Int) acc, Int last) {
+    if (i >= xs.len()) { return acc.finish(); }
+    Bool keep = xs[i] != last && xs[i] <= re_max_cp();
+    return re_uniq(xs, i + 1, if (keep) { acc.push(xs[i]) } else { acc }, if (keep) { xs[i] } else { last });
+}
+
+ListBuf(Int) re_ascii(List(Int) bounds, Int c, ListBuf(Int) acc) {
+    if (c >= 128) { return acc; }
+    return re_ascii(bounds, c + 1, acc.push(re_bclass(bounds, c, 0, bounds.len())));
+}
+
+// The class of codepoint c: the last bound at or below it.
+Int re_bclass(List(Int) bounds, Int c, Int lo, Int hi) {
+    if (hi - lo <= 1) { return lo; }
+    Int mid = (lo + hi) / 2;
+    return if (bounds[mid] <= c) { re_bclass(bounds, c, mid, hi) } else { re_bclass(bounds, c, lo, mid) };
+}
+
+// Compile a pattern, or say why it is not one.
+pub Result(Regex, Str) regex_compile(Str pattern) {
+    List(ReNode) ns0 = [];
+    List(List(Int)) cl0 = [];
+    List(Int) none = [];
+    ReP p0 = ReP {.src = pattern, .n = str_len(pattern), .pos = 0, .ns = ns0, .cls = cl0, .ng = 1, .names = [""], .fl = 0, .err = "", .id = -1};
+    ReP r = re_alt_p(p0, none);
+    if (r.err != "") { return Err(r.err); }
+    if (r.pos < r.n) { return Err(f"an unbalanced `)` at offset {r.pos}"); }
+    Int size = re_size(r.ns, r.id, false);
+    if (size > 200000) { return Err("the pattern compiles too large (over 200000 instructions)"); }
+    ListBuf(Int) b0 = ListBuf();
+    ListBuf(Int) b1 = re_emit(r.ns, r.id, 1, false, b0.push(ins(o_save(), 0, 0)));
+    ListBuf(Int) b2 = b1.push(ins(o_save(), 1, 0));
+    List(Int) body = b2.finish();
+    List(Int) prog = body.concat([ins(o_match(), 0, 0)]);
+    List(Int) fprog = body.concat([ins(o_asr(), a_eot(), 0), ins(o_match(), 0, 0)]);
+    ListBuf(Int) rb = ListBuf();
+    List(Int) rbody = re_emit(r.ns, r.id, 0, true, rb).finish();
+    List(Int) rprog = rbody.concat([ins(o_match(), 0, 0)]);
+    ListBuf(Int) mb = ListBuf();
+    List(Int) mask = re_masks(r.cls, 0, mb).finish();
+    ListBuf(Int) cb = ListBuf();
+    List(Int) cuts = sort(re_cuts(prog, r.cls, 0, cb.push(0)).finish());
+    ListBuf(Int) ub = ListBuf();
+    List(Int) bounds = re_uniq(cuts, 0, ub, -1);
+    ListBuf(Int) ab = ListBuf();
+    List(Int) ascii = re_ascii(bounds, 0, ab).finish();
+    Bool dfa = !re_has_asr(r.ns, 0);
+    Regex re0 = Regex {.pattern = pattern, .prog = prog, .fprog = fprog, .rprog = rprog, .cls = r.cls, .mask = mask, .ngroups = r.ng, .names = r.names, .dfa = dfa, .bounds = bounds, .ascii = ascii, .ftab = tab_none(), .rtab = tab_none()};
+    if (!dfa) { return Ok(re0); }
+    Tab ft = tab_build(re0, prog, true);
+    Tab rt = if (ft.ok) { tab_build(re0, rprog, false) } else { tab_none() };
+    return Ok(Regex {.pattern = pattern, .prog = prog, .fprog = fprog, .rprog = rprog, .cls = r.cls, .mask = mask, .ngroups = r.ng, .names = r.names, .dfa = dfa, .bounds = bounds, .ascii = ascii, .ftab = ft, .rtab = if (rt.ok) { rt } else { tab_none() }});
+}
+
+// A pattern known to be valid; aborts with the reason when it is not.
+pub Regex regex(Str pattern) {
+    Result(Regex, Str) r = regex_compile(pattern);
+    return match r { Ok(re) => re, Err(e) => re_bad(pattern, e) };
+}
+
+Regex re_bad(Str pattern, Str e) {
+    assert(false, f"regex `{pattern}`: {e}");
+    return regex_empty();
+}
+
+Regex regex_empty() {
+    List(Int) none = [];
+    List(List(Int)) cl0 = [];
+    return Regex {.pattern = "", .prog = none, .fprog = none, .rprog = none, .cls = cl0, .mask = none, .ngroups = 0, .names = [""], .dfa = false, .bounds = none, .ascii = none, .ftab = tab_none(), .rtab = tab_none()};
+}
+
+// --- Matching one codepoint ------------------------------------------------------
+
+Bool re_cls_has(Regex re, Int k, Int c) {
+    if (c < 128) { return ((re.mask[k * 4 + c / 32] >> (c % 32)) & 1) == 1; }
+    return re_in_ranges(re.cls[k], c, 0);
+}
+
+// Does consuming instruction x take codepoint c (c < 0: no codepoint)?
+Bool re_takes(Regex re, Int x, Int c) {
+    if (c < 0) { return false; }
+    Int op = ins_op(x);
+    if (op == o_char()) { return ins_a(x) == c; }
+    if (op == o_any()) { return c != 10 || ins_a(x) == 1; }
+    if (op == o_cls()) { return re_cls_has(re, ins_a(x), c); }
+    return false;
+}
+
+Bool re_word(Int c) { return c == 95 || (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122); }
+
+// Assertion a between prev and cur (-1 at a text end).
+Bool re_holds(Int a, Int prev, Int cur) {
+    if (a == a_bot()) { return prev < 0; }
+    if (a == a_eot()) { return cur < 0; }
+    if (a == a_bol()) { return prev < 0 || prev == 10; }
+    if (a == a_eol()) { return cur < 0 || cur == 10; }
+    Bool w = re_word(prev) != re_word(cur);
+    return if (a == a_word()) { w } else { !w };
+}
+
+Int re_at(Str s, Int n, Int i) { return if (i >= 0 && i < n) { str_char_at(s, i) } else { -1 }; }
+
+// --- Pike VM ------------------------------------------------------------------------
+
+type ReT = { List(Int) pcs; List(List(Int)) caps; Set(Int) seen; };
+type ReS = { ReT nx; List(Int) best; Bool found; };
+
+ReT re_threads() {
+    List(Int) p0 = [];
+    List(List(Int)) c0 = [];
+    Set(Int) s0 = {};
+    return ReT {.pcs = p0, .caps = c0, .seen = s0};
+}
+
+List(Int) re_set(List(Int) caps, Int k, Int v) {
+    if (k >= caps.len()) { return caps; }
+    return caps[..k].concat([v]).concat(caps[k + 1..]);
+}
+
+// Add the thread at pc and everything it reaches without consuming.
+ReT re_add(Regex re, List(Int) prog, ReT t, Int pc, List(Int) caps, Int prev, Int cur, Int i) {
+    if (t.seen.contains(pc)) { return t; }
+    ReT t1 = ReT {.pcs = t.pcs, .caps = t.caps, .seen = t.seen.insert(pc)};
+    Int x = prog[pc];
+    Int op = ins_op(x);
+    if (op == o_jmp()) { return re_add(re, prog, t1, ins_a(x), caps, prev, cur, i); }
+    if (op == o_split()) {
+        ReT t2 = re_add(re, prog, t1, ins_a(x), caps, prev, cur, i);
+        return re_add(re, prog, t2, ins_b(x), caps, prev, cur, i);
+    }
+    if (op == o_save()) { return re_add(re, prog, t1, pc + 1, re_set(caps, ins_a(x), i), prev, cur, i); }
+    if (op == o_asr()) {
+        return if (re_holds(ins_a(x), prev, cur)) { re_add(re, prog, t1, pc + 1, caps, prev, cur, i) } else { t1 };
+    }
+    return ReT {.pcs = t1.pcs.concat([pc]), .caps = t1.caps.concat([caps]), .seen = t1.seen};
+}
+
+ReS re_step(Regex re, List(Int) prog, ReT cur, Int j, Int c, Int c2, Int i, ReS acc) {
+    if (j >= cur.pcs.len()) { return acc; }
+    Int pc = cur.pcs[j];
+    Int x = prog[pc];
+    if (ins_op(x) == o_match()) { return ReS {.nx = acc.nx, .best = cur.caps[j], .found = true}; }
+    if (!re_takes(re, x, c)) { return re_step(re, prog, cur, j + 1, c, c2, i, acc); }
+    ReT nx = re_add(re, prog, acc.nx, pc + 1, cur.caps[j], c, c2, i + 1);
+    return re_step(re, prog, cur, j + 1, c, c2, i, ReS {.nx = nx, .best = acc.best, .found = acc.found});
+}
+
+// Leftmost-first match from `from` (only there when anchored): group
+// offsets, or empty.
+List(Int) re_vm(Regex re, List(Int) prog, Str s, Int n, Int from, Bool anchored, Int i, ReT cur, List(Int) best, Bool found, List(Int) init) {
+    Int prev = re_at(s, n, i - 1);
+    Int c = re_at(s, n, i);
+    ReT c1 = if (!found && (!anchored || i == from)) { re_add(re, prog, cur, 0, init, prev, c, i) } else { cur };
+    if (c1.pcs.len() == 0) {
+        if (found || anchored || i >= n) { return best; }
+        return re_vm(re, prog, s, n, from, anchored, i + 1, re_threads(), best, found, init);
+    }
+    ReS r = re_step(re, prog, c1, 0, c, re_at(s, n, i + 1), i, ReS {.nx = re_threads(), .best = best, .found = found});
+    if (i >= n) { return r.best; }
+    return re_vm(re, prog, s, n, from, anchored, i + 1, r.nx, r.best, r.found, init);
+}
+
+List(Int) re_unset(Int k, ListBuf(Int) acc) {
+    if (k <= 0) { return acc.finish(); }
+    return re_unset(k - 1, acc.push(-1));
+}
+
+// --- Lazy DFA ----------------------------------------------------------------------
+
+// States are ordered NFA pc lists; bit 0 of a flag: a match ends here,
+// bit 1: new starts are still allowed (no match seen yet).
+type Dfa = { List(List(Int)) states; List(Int) flags; Map(Str, Int) index; Map(Int, Int) trans; };
+
+Dfa dfa_new() {
+    List(List(Int)) s0 = [];
+    List(Int) f0 = [];
+    Map(Str, Int) i0 = {};
+    Map(Int, Int) t0 = {};
+    return Dfa {.states = s0, .flags = f0, .index = i0, .trans = t0};
+}
+
+type DfaS = { Int st; Dfa d; };
+
+// Closure of pc into an ordered pc list (no assertions in a DFA program).
+type ReCl = { List(Int) pcs; Set(Int) seen; };
+
+ReCl re_close(List(Int) prog, Int pc, ReCl a) {
+    if (a.seen.contains(pc)) { return a; }
+    ReCl a1 = ReCl {.pcs = a.pcs, .seen = a.seen.insert(pc)};
+    Int x = prog[pc];
+    Int op = ins_op(x);
+    if (op == o_jmp()) { return re_close(prog, ins_a(x), a1); }
+    if (op == o_split()) { return re_close(prog, ins_b(x), re_close(prog, ins_a(x), a1)); }
+    if (op == o_save()) { return re_close(prog, pc + 1, a1); }
+    return ReCl {.pcs = a1.pcs.concat([pc]), .seen = a1.seen};
+}
+
+// Intern a state: cut after a match when leftmost-first (`cut`).
+DfaS dfa_intern(List(Int) prog, List(Int) pcs0, Bool restart, Bool cut, Dfa d0) {
+    Int mi = re_match_at(prog, pcs0, 0);
+    List(Int) pcs = if (cut && mi >= 0) { pcs0[..mi + 1] } else { pcs0 };
+    Int fl = (if (mi >= 0) { 1 } else { 0 }) + (if (restart) { 2 } else { 0 });
+    Str key = re_key(pcs, 0, str_sb_append(str_sb_new(), f"{fl}:"));
+    Int found = d0.index.get(key) else { -1 };
+    if (found >= 0) { return DfaS {.st = found, .d = d0}; }
+    Dfa d = d0;
+    Int id = d.states.len();
+    return DfaS {.st = id, .d = Dfa {.states = d.states.concat([pcs]), .flags = d.flags.concat([fl]), .index = d.index.insert(key, id), .trans = d.trans}};
+}
+
+Int re_match_at(List(Int) prog, List(Int) pcs, Int i) {
+    if (i >= pcs.len()) { return -1; }
+    if (ins_op(prog[pcs[i]]) == o_match()) { return i; }
+    return re_match_at(prog, pcs, i + 1);
+}
+
+Str re_key(List(Int) pcs, Int i, Str sb) {
+    if (i >= pcs.len()) { return str_sb_finish(sb); }
+    return re_key(pcs, i + 1, str_sb_append(str_sb_append(sb, f"{pcs[i]}"), ","));
+}
+
+ReCl re_cl_new() {
+    List(Int) p0 = [];
+    Set(Int) s0 = {};
+    return ReCl {.pcs = p0, .seen = s0};
+}
+
+// The state after reading a codepoint of input class k (uncached).
+DfaS dfa_step(Regex re, List(Int) prog, Dfa d, Int st, Int k, Bool cut) {
+    Int c = re.bounds[k];
+    List(Int) pcs = d.states[st];
+    Int fl = d.flags[st];
+    Bool restart = (fl & 2) != 0 && (fl & 1) == 0;
+    ReCl moved = re_move(re, prog, pcs, 0, c, re_cl_new());
+    ReCl all = if (restart) { re_close(prog, 0, moved) } else { moved };
+    return dfa_intern(prog, all.pcs, restart, cut, d);
+}
+
+// The state after reading a codepoint of input class k.
+DfaS dfa_next(Regex re, List(Int) prog, Dfa d, Int st, Int k, Bool cut) {
+    Int key = st * re.bounds.len() + k;
+    Int hit = d.trans.get(key) else { -1 };
+    if (hit >= 0) { return DfaS {.st = hit, .d = d}; }
+    DfaS ns = dfa_step(re, prog, d, st, k, cut);
+    // A full cache starts over; the old ids die with it.
+    if (ns.d.states.len() > 2000) {
+        Int f = ns.d.flags[ns.st];
+        return dfa_intern(prog, ns.d.states[ns.st], (f & 2) != 0, cut, dfa_new());
+    }
+    return DfaS {.st = ns.st, .d = Dfa {.states = ns.d.states, .flags = ns.d.flags, .index = ns.d.index, .trans = ns.d.trans.insert(key, ns.st)}};
+}
+
+ReCl re_move(Regex re, List(Int) prog, List(Int) pcs, Int i, Int c, ReCl acc) {
+    if (i >= pcs.len()) { return acc; }
+    Int x = prog[pcs[i]];
+    ReCl a2 = if (re_takes(re, x, c)) { re_close(prog, pcs[i] + 1, acc) } else { acc };
+    return re_move(re, prog, pcs, i + 1, c, a2);
+}
+
+Int re_class_of(Regex re, Int c) {
+    return if (c < 128) { re.ascii[c] } else { re_bclass(re.bounds, c, 0, re.bounds.len()) };
+}
+
+type DfaR = { Int at; Dfa d; };
+
+// Forward: the end of the leftmost-first match from `from`, or -1.
+DfaR dfa_fwd(Regex re, Str s, Int n, Int i, Int st, Int last, Dfa d) {
+    Int fl = d.flags[st];
+    Int last2 = if ((fl & 1) != 0) { i } else { last };
+    if (i >= n || (d.states[st].len() == 0 && (fl & 2) == 0)) { return DfaR {.at = last2, .d = d}; }
+    if ((fl & 1) != 0 && d.states[st].len() == 1) { return DfaR {.at = last2, .d = d}; }
+    DfaS nx = dfa_next(re, re.prog, d, st, re_class_of(re, str_char_at(s, i)), true);
+    return dfa_fwd(re, s, n, i + 1, nx.st, last2, nx.d);
+}
+
+// Reverse from an end: the earliest start at or after `from`.
+DfaR dfa_rev(Regex re, Str s, Int from, Int i, Int st, Int first, Dfa d) {
+    Int fl = d.flags[st];
+    Int first2 = if ((fl & 1) != 0) { i } else { first };
+    if (i <= from || d.states[st].len() == 0) { return DfaR {.at = first2, .d = d}; }
+    DfaS nx = dfa_next(re, re.rprog, d, st, re_class_of(re, str_char_at(s, i - 1)), false);
+    return dfa_rev(re, s, from, i - 1, nx.st, first2, nx.d);
+}
+
+// --- Whole DFA ---------------------------------------------------------------------
+
+Tab tab_none() {
+    List(Int) none = [];
+    return Tab {.ok = false, .next = none, .flags = none, .start = 0};
+}
+
+Int tab_limit() { return 512; }
+
+Tab tab_build(Regex re, List(Int) prog, Bool fwd) {
+    DfaS s0 = dfa_intern(prog, re_close(prog, 0, re_cl_new()).pcs, fwd, fwd, dfa_new());
+    return tab_fill(re, prog, fwd, s0.d, 0, 0, ListBuf());
+}
+
+// States in discovery order, classes in order: the table fills front to back.
+Tab tab_fill(Regex re, List(Int) prog, Bool fwd, Dfa d, Int st, Int k, ListBuf(Int) next) {
+    if (d.states.len() > tab_limit()) {
+        List(Int) dropped = next.finish();
+        return Tab {.ok = false, .next = dropped, .flags = d.flags, .start = 0};
+    }
+    if (st >= d.states.len()) { return Tab {.ok = true, .next = next.finish(), .flags = tab_flags(d, fwd, 0, ListBuf()), .start = 0}; }
+    if (k >= re.bounds.len()) { return tab_fill(re, prog, fwd, d, st + 1, 0, next); }
+    DfaS nx = dfa_step(re, prog, d, st, k, fwd);
+    return tab_fill(re, prog, fwd, nx.d, st, k + 1, next.push(nx.st));
+}
+
+// bit 0 matching; bit 2 stop: dead, or only the match is left (forward).
+List(Int) tab_flags(Dfa d, Bool fwd, Int st, ListBuf(Int) acc) {
+    if (st >= d.states.len()) { return acc.finish(); }
+    Int fl = d.flags[st];
+    Int len = d.states[st].len();
+    Bool stop = if (fwd) { (len == 0 && (fl & 2) == 0) || ((fl & 1) != 0 && len == 1) } else { len == 0 };
+    return tab_flags(d, fwd, st + 1, acc.push((fl & 1) + (if (stop) { 4 } else { 0 })));
+}
+
+// Forward over a whole table: the last match end, or -1.
+Int tab_fwd(Str s, Int n, Int i, Int st, Int last, List(Int) next, List(Int) flags, Int nc, List(Int) ascii, List(Int) bounds) {
+    Int fl = flags[st];
+    Int last2 = if ((fl & 1) != 0) { i } else { last };
+    if (i >= n || (fl & 4) != 0) { return last2; }
+    Int c = str_char_at(s, i);
+    Int k = if (c < 128) { ascii[c] } else { re_bclass(bounds, c, 0, nc) };
+    return tab_fwd(s, n, i + 1, next[st * nc + k], last2, next, flags, nc, ascii, bounds);
+}
+
+// Reverse over a whole table: the earliest start, or -1.
+Int tab_rev(Str s, Int from, Int i, Int st, Int first, List(Int) next, List(Int) flags, Int nc, List(Int) ascii, List(Int) bounds) {
+    Int fl = flags[st];
+    Int first2 = if ((fl & 1) != 0) { i } else { first };
+    if (i <= from || (fl & 4) != 0) { return first2; }
+    Int c = str_char_at(s, i - 1);
+    Int k = if (c < 128) { ascii[c] } else { re_bclass(bounds, c, 0, nc) };
+    return tab_rev(s, from, i - 1, next[st * nc + k], first2, next, flags, nc, ascii, bounds);
+}
+
+// --- Searching -----------------------------------------------------------------------
+
+// A search's result with the caches to reuse: start -1 when none.
+type ReF = { Int start; Int end; List(Int) groups; Dfa f; Dfa r; };
+
+ReF re_search(Regex re, Str s, Int n, Int from, Bool caps, Dfa f0, Dfa r0) {
+    List(Int) none = [];
+    if (from > n) { return ReF {.start = -1, .end = -1, .groups = none, .f = f0, .r = r0}; }
+    if (!re.dfa) {
+        List(Int) g = re_vm(re, re.prog, s, n, from, false, from, re_threads(), none, false, re_unset(2 * re.ngroups, ListBuf()));
+        if (g.len() == 0) { return ReF {.start = -1, .end = -1, .groups = none, .f = f0, .r = r0}; }
+        return ReF {.start = g[0], .end = g[1], .groups = if (caps) { g } else { none }, .f = f0, .r = r0};
+    }
+    if (re.rtab.ok) {
+        Int nc = re.bounds.len();
+        Int te = tab_fwd(s, n, from, 0, -1, re.ftab.next, re.ftab.flags, nc, re.ascii, re.bounds);
+        if (te < 0) { return ReF {.start = -1, .end = -1, .groups = none, .f = f0, .r = r0}; }
+        Int tb = tab_rev(s, from, te, 0, -1, re.rtab.next, re.rtab.flags, nc, re.ascii, re.bounds);
+        if (!caps || re.ngroups == 1) { return ReF {.start = tb, .end = te, .groups = if (caps) { [tb, te] } else { none }, .f = f0, .r = r0}; }
+        List(Int) tg = re_vm(re, re.prog, s, n, tb, true, tb, re_threads(), none, false, re_unset(2 * re.ngroups, ListBuf()));
+        return ReF {.start = tb, .end = te, .groups = tg, .f = f0, .r = r0};
+    }
+    DfaS s0 = dfa_intern(re.prog, re_close(re.prog, 0, re_cl_new()).pcs, true, true, f0);
+    DfaR e = dfa_fwd(re, s, n, from, s0.st, -1, s0.d);
+    if (e.at < 0) { return ReF {.start = -1, .end = -1, .groups = none, .f = e.d, .r = r0}; }
+    DfaS r1 = dfa_intern(re.rprog, re_close(re.rprog, 0, re_cl_new()).pcs, false, false, r0);
+    DfaR b = dfa_rev(re, s, from, e.at, r1.st, -1, r1.d);
+    if (!caps || re.ngroups == 1) {
+        return ReF {.start = b.at, .end = e.at, .groups = if (caps) { [b.at, e.at] } else { none }, .f = e.d, .r = b.d};
+    }
+    List(Int) g = re_vm(re, re.prog, s, n, b.at, true, b.at, re_threads(), none, false, re_unset(2 * re.ngroups, ListBuf()));
+    return ReF {.start = b.at, .end = e.at, .groups = g, .f = e.d, .r = b.d};
+}
+
+RegexMatch re_m(ReF r) { return RegexMatch {.start = r.start, .end = r.end, .groups = r.groups}; }
+
+// Does the pattern match anywhere in s?
+pub Bool regex_is_match(Regex re, Str s) {
+    return match regex_find(re, s) { Some(m) => m.end >= 0, None => false };
+}
+
+// Does the pattern match all of s?
+pub Bool regex_full_match(Regex re, Str s) {
+    List(Int) none = [];
+    Int n = str_len(s);
+    return re_vm(re, re.fprog, s, n, 0, true, 0, re_threads(), none, false, re_unset(2 * re.ngroups, ListBuf())).len() > 0;
+}
+
+// The leftmost match (its span; no groups).
+pub Option(RegexMatch) regex_find(Regex re, Str s) { return regex_find_from(re, s, 0); }
+
+pub Option(RegexMatch) regex_find_from(Regex re, Str s, Int from) {
+    ReF r = re_search(re, s, str_len(s), from, false, dfa_new(), dfa_new());
+    return if (r.start < 0) { None } else { Some(re_m(r)) };
+}
+
+// The leftmost match with its groups.
+pub Option(RegexMatch) regex_captures(Regex re, Str s) { return regex_captures_from(re, s, 0); }
+
+pub Option(RegexMatch) regex_captures_from(Regex re, Str s, Int from) {
+    ReF r = re_search(re, s, str_len(s), from, true, dfa_new(), dfa_new());
+    return if (r.start < 0) { None } else { Some(re_m(r)) };
+}
+
+// Every non-overlapping match, left to right; an empty match right after
+// the previous match is skipped.
+pub List(RegexMatch) regex_find_all(Regex re, Str s) { return re_all(re, s, str_len(s), 0, -1, false, dfa_new(), dfa_new(), ListBuf()); }
+
+pub List(RegexMatch) regex_captures_all(Regex re, Str s) { return re_all(re, s, str_len(s), 0, -1, true, dfa_new(), dfa_new(), ListBuf()); }
+
+List(RegexMatch) re_all(Regex re, Str s, Int n, Int from, Int last, Bool caps, Dfa f, Dfa r, ListBuf(RegexMatch) acc) {
+    ReF m = re_search(re, s, n, from, caps, f, r);
+    if (m.start < 0) { return acc.finish(); }
+    if (m.start == m.end && m.end == last) {
+        if (from >= n) { return acc.finish(); }
+        return re_all(re, s, n, from + 1, last, caps, m.f, m.r, acc);
+    }
+    return re_all(re, s, n, m.end, m.end, caps, m.f, m.r, acc.push(re_m(m)));
+}
+
+pub Int regex_count(Regex re, Str s) { return re_count(re, s, str_len(s), 0, -1, dfa_new(), dfa_new(), 0); }
+
+Int re_count(Regex re, Str s, Int n, Int from, Int last, Dfa f, Dfa r, Int acc) {
+    ReF m = re_search(re, s, n, from, false, f, r);
+    if (m.start < 0) { return acc; }
+    if (m.start == m.end && m.end == last) {
+        if (from >= n) { return acc; }
+        return re_count(re, s, n, from + 1, last, m.f, m.r, acc);
+    }
+    return re_count(re, s, n, m.end, m.end, m.f, m.r, acc + 1);
+}
+
+// --- Groups and text ------------------------------------------------------------------
+
+// The matched text.
+pub Str regex_text(RegexMatch m, Str s) { return str_slice(s, m.start, m.end); }
+
+// Group i's text, or None when it took no part (or the match has no groups).
+pub Option(Str) regex_group(RegexMatch m, Str s, Int i) {
+    if (2 * i + 1 >= m.groups.len() || i < 0) { return None; }
+    Int a = m.groups[2 * i];
+    Int b = m.groups[2 * i + 1];
+    return if (a < 0 || b < 0) { None } else { Some(str_slice(s, a, b)) };
+}
+
+// The index of a named group, or -1.
+pub Int regex_group_index(Regex re, Str name) { return re_name_at(re.names, name, 1); }
+
+Int re_name_at(List(Str) names, Str name, Int i) {
+    if (i >= names.len()) { return -1; }
+    if (names[i] == name) { return i; }
+    return re_name_at(names, name, i + 1);
+}
+
+pub Option(Str) regex_named(Regex re, RegexMatch m, Str s, Str name) {
+    Int i = regex_group_index(re, name);
+    return if (i < 0) { None } else { regex_group(m, s, i) };
+}
+
+// Capture groups, group 0 included.
+pub Int regex_groups(Regex re) { return re.ngroups; }
+
+// --- Replacing and splitting -------------------------------------------------------------
+
+// Replace the first match. In rep, `$n` and `${n}` / `${name}` are groups,
+// `$$` is a dollar.
+pub Str regex_replace(Regex re, Str s, Str rep) {
+    Bool caps = str_contains(rep, "$");
+    Int n = str_len(s);
+    ReF m = re_search(re, s, n, 0, caps, dfa_new(), dfa_new());
+    if (m.start < 0) { return s; }
+    Str mid = if (caps) { re_expand(re, re_m(m), s, rep, 0, str_len(rep), str_sb_new()) } else { rep };
+    return str_slice(s, 0, m.start) + mid + str_slice(s, m.end, n);
+}
+
+pub Str regex_replace_all(Regex re, Str s, Str rep) {
+    Bool caps = str_contains(rep, "$");
+    return re_repl(re, s, str_len(s), rep, caps, 0, 0, -1, dfa_new(), dfa_new(), str_sb_new());
+}
+
+Str re_repl(Regex re, Str s, Int n, Str rep, Bool caps, Int from, Int copied, Int last, Dfa f, Dfa r, Str sb) {
+    ReF m = re_search(re, s, n, from, caps, f, r);
+    if (m.start < 0) { return str_sb_finish(str_sb_append(sb, str_slice(s, copied, n))); }
+    if (m.start == m.end && m.end == last) {
+        if (from >= n) { return str_sb_finish(str_sb_append(sb, str_slice(s, copied, n))); }
+        return re_repl(re, s, n, rep, caps, from + 1, copied, last, m.f, m.r, sb);
+    }
+    Str sb1 = str_sb_append(sb, str_slice(s, copied, m.start));
+    Str sb2 = if (caps) { str_sb_append(sb1, re_expand(re, re_m(m), s, rep, 0, str_len(rep), str_sb_new())) } else { str_sb_append(sb1, rep) };
+    return re_repl(re, s, n, rep, caps, m.end, m.end, m.end, m.f, m.r, sb2);
+}
+
+// Replace every match with what f makes of it (groups filled).
+pub Str regex_replace_with(Regex re, Str s, Str closure(RegexMatch) f) {
+    List(RegexMatch) ms = regex_captures_all(re, s);
+    return re_repl_f(s, ms, 0, 0, f, str_sb_new());
+}
+
+Str re_repl_f(Str s, List(RegexMatch) ms, Int i, Int copied, Str closure(RegexMatch) f, Str sb) {
+    if (i >= ms.len()) { return str_sb_finish(str_sb_append(sb, str_slice(s, copied, str_len(s)))); }
+    Str sb1 = str_sb_append(str_sb_append(sb, str_slice(s, copied, ms[i].start)), f(ms[i]));
+    return re_repl_f(s, ms, i + 1, ms[i].end, f, sb1);
+}
+
+// rep with its group references filled from m.
+pub Str regex_expand(Regex re, RegexMatch m, Str s, Str rep) { return re_expand(re, m, s, rep, 0, str_len(rep), str_sb_new()); }
+
+Str re_expand(Regex re, RegexMatch m, Str s, Str rep, Int i, Int n, Str sb) {
+    if (i >= n) { return str_sb_finish(sb); }
+    Int c = str_char_at(rep, i);
+    if (c != 36 || i + 1 >= n) { return re_expand(re, m, s, rep, i + 1, n, str_sb_append_cp(sb, c)); }
+    Int d = str_char_at(rep, i + 1);
+    if (d == 36) { return re_expand(re, m, s, rep, i + 2, n, str_sb_append_cp(sb, 36)); }
+    if (d == 123) {
+        Int close = re_find_rel(rep, "}", i + 2);
+        if (close < 0) { return re_expand(re, m, s, rep, i + 1, n, str_sb_append_cp(sb, c)); }
+        Str name = str_slice(rep, i + 2, i + 2 + close);
+        Int gi = if (str_is_int(name)) { str_parse_int(name) } else { regex_group_index(re, name) };
+        Str t = regex_group(m, s, gi) else { "" };
+        return re_expand(re, m, s, rep, i + 3 + close, n, str_sb_append(sb, t));
+    }
+    Int e = re_dig_end(rep, i + 1, n);
+    if (e == i + 1) { return re_expand(re, m, s, rep, i + 1, n, str_sb_append_cp(sb, c)); }
+    Str t2 = regex_group(m, s, str_parse_int(str_slice(rep, i + 1, e))) else { "" };
+    return re_expand(re, m, s, rep, e, n, str_sb_append(sb, t2));
+}
+
+Int re_dig_end(Str t, Int i, Int n) {
+    if (i < n) {
+        Int c = str_char_at(t, i);
+        if (c >= 48 && c <= 57) { return re_dig_end(t, i + 1, n); }
+    }
+    return i;
+}
+
+// The text between matches.
+pub List(Str) regex_split(Regex re, Str s) {
+    List(RegexMatch) ms = regex_find_all(re, s);
+    return re_split_at(s, ms, 0, 0, ListBuf());
+}
+
+List(Str) re_split_at(Str s, List(RegexMatch) ms, Int i, Int from, ListBuf(Str) acc) {
+    if (i >= ms.len()) { return acc.push(str_slice(s, from, str_len(s))).finish(); }
+    return re_split_at(s, ms, i + 1, ms[i].end, acc.push(str_slice(s, from, ms[i].start)));
+}
+
+// s with every metacharacter escaped, so it matches itself.
+pub Str regex_escape(Str s) { return re_esc_at(s, 0, str_len(s), str_sb_new()); }
+
+Str re_esc_at(Str s, Int i, Int n, Str sb) {
+    if (i >= n) { return str_sb_finish(sb); }
+    Int c = str_char_at(s, i);
+    Bool meta = str_contains("\\.+*?()|[]{}^$#&-~", str_from_code(c));
+    Str sb1 = if (meta) { str_sb_append_cp(sb, 92) } else { sb };
+    return re_esc_at(s, i + 1, n, str_sb_append_cp(sb1, c));
+}

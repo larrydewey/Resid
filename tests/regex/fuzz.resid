@@ -1,0 +1,31 @@
+import "regex.resid";
+
+Str chomp(Str s) { return if (str_ends_with(s, "\n")) { str_slice(s, 0, str_len(s) - 1) } else { s }; }
+
+Str spans(List(RegexMatch) ms, Int i, Str acc) {
+    if (i >= ms.len()) { return acc; }
+    return spans(ms, i + 1, acc + f"{ms[i].groups}");
+}
+
+Str spans0(List(RegexMatch) ms, Int i, Str acc) {
+    if (i >= ms.len()) { return acc; }
+    return spans0(ms, i + 1, acc + f"[{ms[i].start}, {ms[i].end}]");
+}
+
+Int run(Int k) {
+    Str raw = resid_read_line();
+    if (raw == "") { return k; }
+    List(Str) f = str_split(chomp(raw), "\t");
+    Str txt = str_replace(f[1], "~", "\n");
+    Str out = match regex_compile(f[0]) {
+        Ok(re) => spans(regex_captures_all(re, txt), 0, "") + " " + spans0(regex_find_all(re, txt), 0, "") + " " + str_replace(regex_replace_all(re, txt, "<$1>"), "\n", "~"),
+        Err(e) => "ERR",
+    };
+    println(out);
+    return run(k + 1);
+}
+
+Int main() {
+    Int n = run(0);
+    return 0;
+}
