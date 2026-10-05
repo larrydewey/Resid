@@ -162,7 +162,7 @@ negated with `!`. A test states what must hold, not what it holds.
 | `toBeNull()` | an `Option` is `None` | 0 |
 | `toContain(x)` | a list holds `x` | 1 |
 | `toHaveLength(n)` | a list or string length | 1 |
-| `toMatch(re)` | a string matches a regular expression | 1 |
+| `toMatch(re)` | a string matches a regular expression (lib/regex.resid's syntax, anywhere in the string) | 1 |
 | `toBeCloseTo(x, tol)` | a `Float` within `tol` | 2 |
 | `toThrow()` | the given closure aborts | 0 |
 | `toSatisfy(pred)` | the predicate holds | 1 |

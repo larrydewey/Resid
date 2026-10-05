@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Differential fuzz of lib/regex.resid against Go's regexp (RE2 semantics).
 
-Usage: tests/regex/fuzz.py BIN GOREF [SEED] [CASES]
+Usage: tests/regex/fuzz.py BIN GOREF [SEED] [CASES] [match]
+With `match`, both programs print only whether each pattern matches (the
+runtime's matcher behind toMatch and --filter); a pattern Go refuses
+("E") is skipped.
 Random patterns and texts go to both programs, one `pattern<TAB>text` per
 line (`~` stands for a newline in the text); every line of output must match.
 """
@@ -47,13 +50,16 @@ def main():
     inp = "".join(f"{p}\t{s}\n" for p, s in cases).encode()
     got = subprocess.run([binary], input=inp, capture_output=True).stdout.decode().split("\n")
     want = subprocess.run([goref], input=inp, capture_output=True).stdout.decode().split("\n")
+    only = len(sys.argv) > 5 and sys.argv[5] == "match"
     bad = 0
     for i, (p, s) in enumerate(cases):
+        if only and want[i] == "E":
+            continue
         if got[i] != want[i]:
             bad += 1
             if bad <= 8:
                 print(f"MISMATCH {p!r} {s!r}\n  got  {got[i]!r}\n  want {want[i]!r}")
-    print(f"regex fuzz: {count} cases, {bad} mismatches")
+    print(f"regex {'match ' if only else ''}fuzz: {count} cases, {bad} mismatches")
     sys.exit(1 if bad else 0)
 
 

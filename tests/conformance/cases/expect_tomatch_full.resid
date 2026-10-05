@@ -1,0 +1,22 @@
+// toMatch takes the regex syntax lib/regex.resid does: groups,
+// alternation, counted repetition, classes, flags and word boundaries.
+Bool matches(Str s, Str p) {
+    Result(Int, RegionError) r = spawn () {
+        expect(s).toMatch(p);
+        return 1;
+    };
+    Int v = r else { 0 };
+    return v == 1;
+}
+
+Int main() {
+    expect("release-2026-10").toMatch("^(release|beta)-\\d{4}-\\d\\d$");
+    expect("say Hello").toMatch("(?i)hello");
+    expect("concat cat").toMatch("\\bcat\\b");
+    expect("x=1;y=22").toMatch("[[:alpha:]]=\\d+;[a-z]=\\d{2}");
+    Bool a = matches("concat", "\\bcat\\b");
+    Bool b = matches("ac", "^a(b|c)+$");
+    Bool c = matches("a(b", "a(b");
+    println(f"{a} {b} {c}");
+    return 0;
+}

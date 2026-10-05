@@ -2461,6 +2461,10 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (builtin_args(argtys, "Str,Str")) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "str_sb_append expects (Str, Str), got (" + argtys + ")"};
     }
+    if (name == "str_sb_append_slice") {
+        if (builtin_args(argtys, "Str,Str,Int,Int")) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "str_sb_append_slice expects (Str, Str, Int, Int), got (" + argtys + ")"};
+    }
     if (name == "str_sb_append_cp") {
         if (builtin_args(argtys, "Str,Int")) { return ERes {.pos = pos, .ty = "Str", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "str_sb_append_cp expects (Str, Int), got (" + argtys + ")"};

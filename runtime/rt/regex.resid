@@ -1,90 +1,551 @@
-// A tiny regex subset for `toMatch` and `--filter`: ^ $ . * + ? and
-// [...] classes (negation, a-z ranges). No alternation or groups.
+// Regular expressions for `toMatch` and `--filter`: does the pattern match
+// anywhere in the text. The syntax is lib/regex.resid's (RE2): classes and
+// POSIX classes, \d \w \s and their negations, ^ $ \A \z \b \B, groups of
+// every kind (only grouping matters here), * + ? {n} {n,} {n,m} {,m} and
+// their lazy forms, |, and the flags i m s x. ASCII case folding. The
+// pattern compiles to a Thompson NFA run in time linear in the text; a
+// pattern that does not compile matches nothing.
 
-// Does class `p` (at its '[') match byte c?
-Bool rx_class(Int p, Int c) {
-    Bool neg = ld8(p + 1) == 94;
-    return rx_class_at(if (neg) { p + 2 } else { p + 1 }, c, false) != neg;
+// Program: [code, len, cap, err]; instruction i is 3 words at code + 24 i.
+// Jumps are relative, so a block of code can move or be copied whole.
+Int rx_code(Int p) { return ld64(p); }
+Int rx_len(Int p) { return ld64(p + 8); }
+Int rx_ins(Int p, Int i) { return rx_code(p) + i * 24; }
+Int rx_op(Int p, Int i) { return ld64(rx_ins(p, i)); }
+Int rx_a(Int p, Int i) { return ld64(rx_ins(p, i) + 8); }
+Int rx_b(Int p, Int i) { return ld64(rx_ins(p, i) + 16); }
+Int rx_fail(Int p) { return st64(p + 24, 1); }
+Bool rx_bad(Int p) { return ld64(p + 24) != 0; }
+
+// Ops.
+Int o_char() { return 1; }
+Int o_any() { return 2; }
+Int o_cls() { return 3; }
+Int o_split() { return 4; }
+Int o_jmp() { return 5; }
+Int o_match() { return 6; }
+Int o_asr() { return 7; }
+
+// Flags: 1 i, 2 m, 4 s, 8 x.
+Int rx_max() { return 100000; }
+
+Int rx_new() {
+    Int p = xmalloc(32);
+    _ = st64(p, xmalloc(24 * 64));
+    _ = st64(p + 8, 0);
+    _ = st64(p + 16, 64);
+    return st64(p + 24, 0) * 0 + p;
 }
 
-Bool rx_class_at(Int q, Int c, Bool hit) {
-    Int b = ld8(q);
-    if (b == 0 || b == 93) { return hit; }
-    Int b1 = ld8(q + 1);
-    Int b2 = if (b1 == 0) { 0 } else { ld8(q + 2) };
-    if (b1 == 45 && b2 != 0 && b2 != 93) { return rx_class_at(q + 3, c, hit || (c >= b && c <= b2)); }
-    return rx_class_at(q + 1, c, hit || b == c);
+Int rx_grow(Int p, Int n) {
+    Int cap = ld64(p + 16);
+    if (rx_len(p) + n <= cap) { return 0; }
+    Int c2 = (cap + n) * 2;
+    _ = st64(p, xrealloc(rx_code(p), 24 * c2));
+    return st64(p + 16, c2);
 }
 
-// Length of the single-character matcher at p.
-Int rx_atom_len(Int p) {
-    Int b = ld8(p);
-    if (b == 91) {
-        Int q0 = p + 1;
-        Int q1 = if (ld8(q0) == 94) { q0 + 1 } else { q0 };
-        Int q2 = if (ld8(q1) == 93) { q1 + 1 } else { q1 };
-        Int e = rx_to_close(q2);
-        return if (ld8(e) == 93) { e + 1 - p } else { e - p };
-    }
-    if (b == 92 && ld8(p + 1) != 0) { return 2; }
-    return 1;
+Int rx_set(Int p, Int i, Int op, Int a, Int b) {
+    Int at = rx_ins(p, i);
+    _ = st64(at, op);
+    _ = st64(at + 8, a);
+    return st64(at + 16, b);
 }
 
-Int rx_to_close(Int q) {
-    Int b = ld8(q);
-    if (b == 0 || b == 93) { return q; }
-    return rx_to_close(q + 1);
+Int rx_emit(Int p, Int op, Int a, Int b) {
+    if (rx_len(p) >= rx_max()) { return rx_fail(p); }
+    _ = rx_grow(p, 1);
+    Int i = rx_len(p);
+    _ = rx_set(p, i, op, a, b);
+    return st64(p + 8, i + 1);
 }
 
-Bool rx_one(Int p, Int c) {
-    Int b = ld8(p);
-    if (b == 91) { return rx_class(p, c); }
-    if (b == 92 && ld8(p + 1) != 0) { return ld8(p + 1) == c; }
-    if (b == 46) { return c != 0; }
-    return b == c;
+// Move instructions [at, len) up one, from the end, and write at `at`.
+Int rx_insert(Int p, Int at, Int op, Int a, Int b) {
+    if (rx_len(p) >= rx_max()) { return rx_fail(p); }
+    _ = rx_grow(p, 1);
+    _ = rx_shift(p, rx_len(p) - 1, at);
+    _ = rx_set(p, at, op, a, b);
+    return st64(p + 8, rx_len(p) + 1);
 }
 
-Bool rx_star(Int atom, Int rest, Int s) {
-    if (rx_here(rest, s)) { return true; }
+Int rx_shift(Int p, Int i, Int at) {
+    if (i < at) { return 0; }
+    _ = rx_set(p, i + 1, rx_op(p, i), rx_a(p, i), rx_b(p, i));
+    return rx_shift(p, i - 1, at);
+}
+
+// Append a copy of [s, e) (its jumps are relative and stay inside it).
+Int rx_dup(Int p, Int s, Int e) {
+    if (s >= e) { return 0; }
+    _ = rx_emit(p, rx_op(p, s), rx_a(p, s), rx_b(p, s));
+    return rx_dup(p, s + 1, e);
+}
+
+// The codepoint at t (0 at the end) and its length.
+Int rx_cp(Int t) { Int b = ld8(t); return if (b < 128) { b } else { utf8_decode(t, utf8_len_at(t)) }; }
+Int rx_cl(Int t) { Int b = ld8(t); return if (b < 128) { 1 } else { utf8_len_at(t) }; }
+
+Int rx_fold(Int c) {
+    if (c >= 97 && c <= 122) { return c - 32; }
+    if (c >= 65 && c <= 90) { return c + 32; }
+    return c;
+}
+
+// ─── Parsing (each returns where it stopped) ───────────────────────────
+
+Int rx_alt(Int p, Int s, Int fl) {
+    Int start = rx_len(p);
+    Int e = rx_cat(p, s, fl);
+    if (ld8(e) != 124 || rx_bad(p)) { return e; }
+    _ = rx_insert(p, start, o_split(), 1, 0);
+    Int j = rx_len(p);
+    _ = rx_emit(p, o_jmp(), 0, 0);
+    _ = rx_set(p, start, o_split(), 1, j + 1 - start);
+    Int e2 = rx_alt(p, e + 1, fl);
+    return rx_set(p, j, o_jmp(), rx_len(p) - j, 0) * 0 + e2;
+}
+
+Int rx_cat(Int p, Int s, Int fl0) {
     Int c = ld8(s);
-    if (c == 0 || !rx_one(atom, c)) { return false; }
-    return rx_star(atom, rest, s + 1);
-}
-
-Bool rx_rep(Int atom, Int op, Int rest, Int s) {
-    Int c = ld8(s);
-    if (op == 63) {
-        if (rx_here(rest, s)) { return true; }
-        return c != 0 && rx_one(atom, c) && rx_here(rest, s + 1);
+    if (c == 0 || c == 124 || c == 41 || rx_bad(p)) { return s; }
+    if ((fl0 & 8) != 0 && (c == 32 || c == 9 || c == 10 || c == 13)) { return rx_cat(p, s + 1, fl0); }
+    if ((fl0 & 8) != 0 && c == 35) { return rx_cat(p, rx_eol(s), fl0); }
+    // `(?flags)` changes the flags for the rest of the group.
+    if (c == 40 && ld8(s + 1) == 63 && rx_flag_end(s + 2) != 0 && ld8(rx_flag_end(s + 2)) == 41) {
+        return rx_cat(p, rx_flag_end(s + 2) + 1, rx_flags(s + 2, fl0, true));
     }
-    if (op == 43) {
-        if (c == 0 || !rx_one(atom, c)) { return false; }
-        return rx_star(atom, rest, s + 1);
-    }
-    return rx_star(atom, rest, s);
+    Int at = rx_len(p);
+    Int e = rx_atom(p, s, fl0);
+    return rx_cat(p, rx_quant(p, at, e, false), fl0);
 }
 
-Bool rx_here(Int p, Int s) {
-    Int b = ld8(p);
-    if (b == 0) { return true; }
-    if (b == 36 && ld8(p + 1) == 0) { return ld8(s) == 0; }
-    Int alen = rx_atom_len(p);
-    Int op = ld8(p + alen);
-    if (op == 42 || op == 43 || op == 63) { return rx_rep(p, op, p + alen + 1, s); }
+Int rx_eol(Int s) { Int c = ld8(s); return if (c == 0 || c == 10) { s } else { rx_eol(s + 1) }; }
+
+// The end of a flag run `imsx-imsx` at s, or 0.
+Int rx_flag_end(Int s) {
     Int c = ld8(s);
-    return c != 0 && rx_one(p, c) && rx_here(p + alen, s + 1);
+    if (c == 105 || c == 109 || c == 115 || c == 120 || c == 45) { return rx_flag_end(s + 1); }
+    return if (c == 41 || c == 58) { s } else { 0 };
 }
 
-Bool rx_search(Int p, Int s) {
-    if (rx_here(p, s)) { return true; }
-    if (ld8(s) == 0) { return false; }
-    return rx_search(p, s + 1);
+Int rx_flags(Int s, Int fl, Bool on) {
+    Int c = ld8(s);
+    if (c == 45) { return rx_flags(s + 1, fl, false); }
+    Int bit = if (c == 105) { 1 } else if (c == 109) { 2 } else if (c == 115) { 4 } else if (c == 120) { 8 } else { 0 };
+    if (bit == 0) { return fl; }
+    return rx_flags(s + 1, if (on) { fl | bit } else { fl & ~bit }, on);
 }
 
-// Unanchored search unless the pattern starts with '^'.
+// Apply any quantifier at e to the atom in [at, len).
+Int rx_quant(Int p, Int at, Int e, Bool after) {
+    Int c = ld8(e);
+    Int ce = rx_count_end(e);
+    if (c != 42 && c != 43 && c != 63 && ce == 0) { return e; }
+    if (after || rx_len(p) == at) { return rx_fail(p) * 0 + e; }
+    Int n = rx_len(p) - at;
+    Int lo = if (c == 43) { 1 } else if (ce != 0) { rx_num(e + 1, 0, -1) } else { 0 };
+    Int hi = if (c == 63) { 1 } else if (ce != 0) { rx_count_hi(e) } else { -1 };
+    Int lo2 = if (lo < 0) { 0 } else { lo };
+    if (lo2 > 1000 || hi > 1000 || (hi >= 0 && hi < lo2)) { return rx_fail(p) * 0 + e; }
+    Int next = if (ce != 0) { ce } else { e + 1 };
+    _ = rx_repeat(p, at, n, lo2, hi);
+    Int after_lazy = if (ld8(next) == 63) { next + 1 } else { next };
+    return rx_quant(p, at, after_lazy, true);
+}
+
+// The end of `{n}`, `{n,}`, `{n,m}` or `{,m}` at s, or 0.
+Int rx_count_end(Int s) {
+    if (ld8(s) != 123) { return 0; }
+    Int d1 = rx_digits(s + 1);
+    Int c = ld8(d1);
+    if (c == 125) { return if (d1 > s + 1) { d1 + 1 } else { 0 }; }
+    if (c != 44) { return 0; }
+    Int d2 = rx_digits(d1 + 1);
+    if (ld8(d2) != 125 || (d1 == s + 1 && d2 == d1 + 1)) { return 0; }
+    return d2 + 1;
+}
+
+Int rx_digits(Int s) { Int c = ld8(s); return if (c >= 48 && c <= 57) { rx_digits(s + 1) } else { s }; }
+
+Int rx_num(Int s, Int acc, Int none) {
+    Int c = ld8(s);
+    if (c >= 48 && c <= 57 && acc < 100000) { return rx_num(s + 1, acc * 10 + c - 48, acc * 10 + c - 48); }
+    return none;
+}
+
+Int rx_count_hi(Int s) {
+    Int d1 = rx_digits(s + 1);
+    if (ld8(d1) == 125) { return rx_num(s + 1, 0, -1); }
+    return rx_num(d1 + 1, 0, -1);
+}
+
+// The atom of n instructions at `at`, repeated lo..hi times (hi -1: no
+// bound): lo copies, then a loop or hi - lo optional copies.
+Int rx_repeat(Int p, Int at, Int n, Int lo, Int hi) {
+    if (hi == 0) { return st64(p + 8, at); }
+    if (lo == 0 && hi < 0) {
+        _ = rx_insert(p, at, o_split(), 1, n + 2);
+        return rx_emit(p, o_jmp(), at - rx_len(p), 0);
+    }
+    if (lo == 0) {
+        _ = rx_insert(p, at, o_split(), 1, n + 1);
+        return rx_optional(p, at + 1, n, hi - 1);
+    }
+    _ = rx_copies(p, at, n, lo - 1);
+    if (hi < 0) {
+        Int last = rx_len(p) - n;
+        return rx_emit(p, o_split(), last - rx_len(p), 1);
+    }
+    return rx_optional(p, at, n, hi - lo);
+}
+
+Int rx_copies(Int p, Int at, Int n, Int k) {
+    if (k <= 0) { return 0; }
+    _ = rx_dup(p, at, at + n);
+    return rx_copies(p, at, n, k - 1);
+}
+
+// k more optional copies of the n instructions at `from`.
+Int rx_optional(Int p, Int from, Int n, Int k) {
+    if (k <= 0) { return 0; }
+    _ = rx_emit(p, o_split(), 1, n + 1);
+    _ = rx_dup(p, from, from + n);
+    return rx_optional(p, from, n, k - 1);
+}
+
+Int rx_atom(Int p, Int s, Int fl) {
+    Int c = ld8(s);
+    if (c == 40) { return rx_group(p, s, fl); }
+    if (c == 91) { return rx_class(p, s, fl); }
+    if (c == 46) { return rx_emit(p, o_any(), if ((fl & 4) != 0) { 1 } else { 0 }, 0) * 0 + s + 1; }
+    if (c == 94) { return rx_emit(p, o_asr(), if ((fl & 2) != 0) { 0 } else { 2 }, 0) * 0 + s + 1; }
+    if (c == 36) { return rx_emit(p, o_asr(), if ((fl & 2) != 0) { 1 } else { 3 }, 0) * 0 + s + 1; }
+    if (c == 92) { return rx_escape(p, s, fl); }
+    if (c == 42 || c == 43 || c == 63 || rx_count_end(s) != 0) { return rx_fail(p) * 0 + s; }
+    return rx_lit(p, rx_cp(s), fl) * 0 + s + rx_cl(s);
+}
+
+Int rx_lit(Int p, Int c, Int fl) {
+    if ((fl & 1) != 0 && rx_fold(c) != c) {
+        Int r = rx_ranges(2);
+        _ = rx_range_add(r, c, c);
+        _ = rx_range_add(r, rx_fold(c), rx_fold(c));
+        return rx_emit(p, o_cls(), r, 0);
+    }
+    return rx_emit(p, o_char(), c, 0);
+}
+
+Int rx_group(Int p, Int s, Int fl) {
+    Int body = if (ld8(s + 1) != 63) { s + 1 } else { rx_group_body(p, s + 2) };
+    if (body == 0) { return rx_fail(p) * 0 + s; }
+    Int ffl = if (ld8(s + 1) == 63 && rx_flag_end(s + 2) != 0 && ld8(rx_flag_end(s + 2)) == 58) { rx_flags(s + 2, fl, true) } else { fl };
+    Int e = rx_alt(p, body, ffl);
+    if (ld8(e) != 41) { return rx_fail(p) * 0 + e; }
+    return e + 1;
+}
+
+// After `(?`: where the group's body starts, or 0 (lookaround is refused).
+Int rx_group_body(Int p, Int s) {
+    Int c = ld8(s);
+    if (c == 58) { return s + 1; }
+    if (c == 80 && ld8(s + 1) == 60) { return rx_name_end(s + 2); }
+    if (c == 60 && ld8(s + 1) != 61 && ld8(s + 1) != 33) { return rx_name_end(s + 1); }
+    Int fe = rx_flag_end(s);
+    if (fe != 0 && ld8(fe) == 58) { return fe + 1; }
+    return 0;
+}
+
+Int rx_name_end(Int s) {
+    Int c = ld8(s);
+    if (c == 62) { return s + 1; }
+    if (c == 0) { return 0; }
+    return rx_name_end(s + 1);
+}
+
+// ─── Classes: [n, cap, lo0, hi0, ...] ──────────────────────────────────
+
+Int rx_ranges(Int cap) {
+    Int r = xmalloc(16 + cap * 16);
+    _ = st64(r, 0);
+    return st64(r + 8, cap) * 0 + r;
+}
+
+Int rx_range_add(Int r, Int lo, Int hi) {
+    Int n = ld64(r);
+    if (n >= ld64(r + 8)) { return 0; }
+    _ = st64(r + 16 + n * 16, lo);
+    _ = st64(r + 24 + n * 16, hi);
+    return st64(r, n + 1);
+}
+
+// Shorthand k (d w s, upper case for the negation) into r.
+Int rx_short(Int r, Int k) {
+    if (k == 100) { return rx_range_add(r, 48, 57); }
+    if (k == 68) { return rx_range_add(r, 0, 47) + rx_range_add(r, 58, 1114111); }
+    if (k == 119) { return rx_range_add(r, 48, 57) + rx_range_add(r, 65, 90) + rx_range_add(r, 95, 95) + rx_range_add(r, 97, 122); }
+    if (k == 87) { return rx_range_add(r, 0, 47) + rx_range_add(r, 58, 64) + rx_range_add(r, 91, 94) + rx_range_add(r, 96, 96) + rx_range_add(r, 123, 1114111); }
+    if (k == 115) { return rx_range_add(r, 9, 13) + rx_range_add(r, 32, 32); }
+    return rx_range_add(r, 0, 8) + rx_range_add(r, 14, 31) + rx_range_add(r, 33, 1114111);
+}
+
+Bool rx_is_short(Int k) { return k == 100 || k == 68 || k == 119 || k == 87 || k == 115 || k == 83; }
+
+// A class: flags in b are 1 negated, 2 case-insensitive.
+Int rx_class(Int p, Int s, Int fl) {
+    Bool neg = ld8(s + 1) == 94;
+    Int body = if (neg) { s + 2 } else { s + 1 };
+    Int r = rx_ranges(3 * (rx_close_at(body, true) - body) + 8);
+    Int e = rx_class_items(p, r, body, true);
+    if (rx_bad(p)) { return e; }
+    Int f = (if (neg) { 1 } else { 0 }) + (if ((fl & 1) != 0) { 2 } else { 0 });
+    return rx_emit(p, o_cls(), r, f) * 0 + e;
+}
+
+// The `]` that ends a class body (a leading one is a member).
+Int rx_close_at(Int s, Bool first) {
+    Int c = ld8(s);
+    if (c == 0) { return s; }
+    if (c == 93 && !first) { return s; }
+    if (c == 92 && ld8(s + 1) != 0) { return rx_close_at(s + 2, false); }
+    return rx_close_at(s + 1, false);
+}
+
+Int rx_class_items(Int p, Int r, Int s, Bool first) {
+    Int c = ld8(s);
+    if (c == 0) { return rx_fail(p) * 0 + s; }
+    if (c == 93 && !first) { return s + 1; }
+    if (c == 91 && ld8(s + 1) == 58) {
+        Int ne = rx_posix(r, s + 2);
+        if (ne == 0) { return rx_fail(p) * 0 + s; }
+        return rx_class_items(p, r, ne, false);
+    }
+    if (c == 92 && rx_is_short(ld8(s + 1))) {
+        _ = rx_short(r, ld8(s + 1));
+        return rx_class_items(p, r, s + 2, false);
+    }
+    Int lo = rx_member(s);
+    Int after = rx_member_end(s);
+    if (lo < 0) { return rx_fail(p) * 0 + s; }
+    if (ld8(after) == 45 && ld8(after + 1) != 93 && ld8(after + 1) != 0) {
+        Int hi = rx_member(after + 1);
+        if (hi < lo) { return rx_fail(p) * 0 + s; }
+        _ = rx_range_add(r, lo, hi);
+        return rx_class_items(p, r, rx_member_end(after + 1), false);
+    }
+    _ = rx_range_add(r, lo, lo);
+    return rx_class_items(p, r, after, false);
+}
+
+// One class member's codepoint (an escape included), or -1.
+Int rx_member(Int s) {
+    if (ld8(s) != 92) { return rx_cp(s); }
+    Int e = ld8(s + 1);
+    if (e == 98) { return 8; }
+    return rx_esc_cp(s);
+}
+
+Int rx_member_end(Int s) {
+    if (ld8(s) != 92) { return s + rx_cl(s); }
+    return rx_esc_end(s);
+}
+
+// `[:name:]` at s (after `[:`): the end of it, or 0.
+Int rx_posix(Int r, Int s) {
+    Int e = rx_posix_end(s);
+    if (e == 0) { return 0; }
+    Int n = e - s;
+    Bool ok = if (rx_word_is(s, n, resid_raw_addr("alpha"))) { rx_range_add(r, 65, 90) + rx_range_add(r, 97, 122) >= 0 }
+        else if (rx_word_is(s, n, resid_raw_addr("digit"))) { rx_range_add(r, 48, 57) >= 0 }
+        else if (rx_word_is(s, n, resid_raw_addr("alnum"))) { rx_range_add(r, 48, 57) + rx_range_add(r, 65, 90) + rx_range_add(r, 97, 122) >= 0 }
+        else if (rx_word_is(s, n, resid_raw_addr("upper"))) { rx_range_add(r, 65, 90) >= 0 }
+        else if (rx_word_is(s, n, resid_raw_addr("lower"))) { rx_range_add(r, 97, 122) >= 0 }
+        else if (rx_word_is(s, n, resid_raw_addr("space"))) { rx_short(r, 115) >= 0 }
+        else if (rx_word_is(s, n, resid_raw_addr("blank"))) { rx_range_add(r, 9, 9) + rx_range_add(r, 32, 32) >= 0 }
+        else if (rx_word_is(s, n, resid_raw_addr("punct"))) { rx_range_add(r, 33, 47) + rx_range_add(r, 58, 64) + rx_range_add(r, 91, 96) + rx_range_add(r, 123, 126) >= 0 }
+        else if (rx_word_is(s, n, resid_raw_addr("xdigit"))) { rx_range_add(r, 48, 57) + rx_range_add(r, 65, 70) + rx_range_add(r, 97, 102) >= 0 }
+        else if (rx_word_is(s, n, resid_raw_addr("word"))) { rx_short(r, 119) >= 0 }
+        else if (rx_word_is(s, n, resid_raw_addr("cntrl"))) { rx_range_add(r, 0, 31) + rx_range_add(r, 127, 127) >= 0 }
+        else if (rx_word_is(s, n, resid_raw_addr("print"))) { rx_range_add(r, 32, 126) >= 0 }
+        else if (rx_word_is(s, n, resid_raw_addr("graph"))) { rx_range_add(r, 33, 126) >= 0 }
+        else { false };
+    return if (ok) { e + 2 } else { 0 };
+}
+
+Int rx_posix_end(Int s) {
+    Int c = ld8(s);
+    if (c == 0) { return 0; }
+    if (c == 58 && ld8(s + 1) == 93) { return s; }
+    return rx_posix_end(s + 1);
+}
+
+Bool rx_word_is(Int s, Int n, Int w) { return c_strlen(w) == n && rx_same(s, w, n); }
+
+Bool rx_same(Int a, Int b, Int n) {
+    if (n <= 0) { return true; }
+    return ld8(a) == ld8(b) && rx_same(a + 1, b + 1, n - 1);
+}
+
+// ─── Escapes ───────────────────────────────────────────────────────────
+
+Int rx_escape(Int p, Int s, Int fl) {
+    Int e = ld8(s + 1);
+    if (rx_is_short(e)) {
+        Int r = rx_ranges(8);
+        _ = rx_short(r, e);
+        return rx_emit(p, o_cls(), r, 0) * 0 + s + 2;
+    }
+    Int k = if (e == 98) { 4 } else if (e == 66) { 5 } else if (e == 65) { 2 } else if (e == 122 || e == 90) { 3 } else { -1 };
+    if (k >= 0) { return rx_emit(p, o_asr(), k, 0) * 0 + s + 2; }
+    Int c = rx_esc_cp(s);
+    if (c < 0) { return rx_fail(p) * 0 + s; }
+    return rx_lit(p, c, fl) * 0 + rx_esc_end(s);
+}
+
+// The codepoint an escape at s names, or -1.
+Int rx_esc_cp(Int s) {
+    Int e = ld8(s + 1);
+    if (e == 0) { return -1; }
+    if (e == 110) { return 10; }
+    if (e == 116) { return 9; }
+    if (e == 114) { return 13; }
+    if (e == 102) { return 12; }
+    if (e == 118) { return 11; }
+    if (e == 97) { return 7; }
+    if (e == 101) { return 27; }
+    if (e == 48) { return 0; }
+    if (e == 120 && ld8(s + 2) == 123) { return rx_hex(s + 3, 0, 8, 125); }
+    if (e == 120) { return rx_hex(s + 2, 0, 2, 0); }
+    if (e == 117) { return rx_hex(s + 2, 0, 4, 0); }
+    Bool alnum = (e >= 48 && e <= 57) || (e >= 65 && e <= 90) || (e >= 97 && e <= 122);
+    return if (alnum) { -1 } else { rx_cp(s + 1) };
+}
+
+Int rx_esc_end(Int s) {
+    Int e = ld8(s + 1);
+    if (e == 120 && ld8(s + 2) == 123) { return rx_brace_end(s + 3); }
+    if (e == 120) { return s + 4; }
+    if (e == 117) { return s + 6; }
+    return s + 1 + rx_cl(s + 1);
+}
+
+Int rx_brace_end(Int s) { Int c = ld8(s); return if (c == 125) { s + 1 } else if (c == 0) { s } else { rx_brace_end(s + 1) }; }
+
+// `want` hex digits (or up to the closing byte `stop`), or -1.
+Int rx_hex(Int s, Int acc, Int want, Int stop) {
+    Int c = ld8(s);
+    if (stop != 0 && c == stop) { return acc; }
+    if (stop == 0 && want == 0) { return acc; }
+    if (want == 0) { return -1; }
+    Int d = if (c >= 48 && c <= 57) { c - 48 } else if (c >= 97 && c <= 102) { c - 87 } else if (c >= 65 && c <= 70) { c - 55 } else { -1 };
+    if (d < 0) { return -1; }
+    return rx_hex(s + 1, acc * 16 + d, want - 1, stop);
+}
+
+// ─── Running ───────────────────────────────────────────────────────────
+
+Bool rx_in(Int r, Int c, Int i) {
+    if (i >= ld64(r)) { return false; }
+    if (c >= ld64(r + 16 + i * 16) && c <= ld64(r + 24 + i * 16)) { return true; }
+    return rx_in(r, c, i + 1);
+}
+
+Bool rx_takes(Int p, Int pc, Int c) {
+    if (c < 0) { return false; }
+    Int op = rx_op(p, pc);
+    if (op == o_char()) { return rx_a(p, pc) == c; }
+    if (op == o_any()) { return c != 10 || rx_a(p, pc) == 1; }
+    if (op != o_cls()) { return false; }
+    Int f = rx_b(p, pc);
+    Bool hit = rx_in(rx_a(p, pc), c, 0) || ((f & 2) != 0 && rx_in(rx_a(p, pc), rx_fold(c), 0));
+    return hit != ((f & 1) != 0);
+}
+
+Bool rx_wordc(Int c) { return c == 95 || (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122); }
+
+// Assertion k between prev and cur (-1 at a text end).
+Bool rx_holds(Int k, Int prev, Int cur) {
+    if (k == 0) { return prev < 0 || prev == 10; }
+    if (k == 1) { return cur < 0 || cur == 10; }
+    if (k == 2) { return prev < 0; }
+    if (k == 3) { return cur < 0; }
+    Bool w = rx_wordc(prev) != rx_wordc(cur);
+    return if (k == 4) { w } else { !w };
+}
+
+// Thread lists: [n, pc0, pc1, ...]; marks[pc] holds the generation that
+// last added pc, so each pc enters a list once.
+Int rx_add(Int p, Int list, Int marks, Int gen, Int pc, Int prev, Int cur) {
+    if (ld64(marks + pc * 8) == gen) { return 0; }
+    _ = st64(marks + pc * 8, gen);
+    Int op = rx_op(p, pc);
+    if (op == o_jmp()) { return rx_add(p, list, marks, gen, pc + rx_a(p, pc), prev, cur); }
+    if (op == o_split()) {
+        _ = rx_add(p, list, marks, gen, pc + rx_a(p, pc), prev, cur);
+        return rx_add(p, list, marks, gen, pc + rx_b(p, pc), prev, cur);
+    }
+    if (op == o_asr()) { return if (rx_holds(rx_a(p, pc), prev, cur)) { rx_add(p, list, marks, gen, pc + 1, prev, cur) } else { 0 }; }
+    Int n = ld64(list);
+    _ = st64(list + 8 + n * 8, pc);
+    return st64(list, n + 1);
+}
+
+Bool rx_has_match(Int p, Int list, Int i) {
+    if (i >= ld64(list)) { return false; }
+    if (rx_op(p, ld64(list + 8 + i * 8)) == o_match()) { return true; }
+    return rx_has_match(p, list, i + 1);
+}
+
+Int rx_step(Int p, Int cl, Int nl, Int marks, Int gen, Int i, Int c, Int c2) {
+    if (i >= ld64(cl)) { return 0; }
+    Int pc = ld64(cl + 8 + i * 8);
+    _ = if (rx_takes(p, pc, c)) { rx_add(p, nl, marks, gen, pc + 1, c, c2) } else { 0 };
+    return rx_step(p, cl, nl, marks, gen, i + 1, c, c2);
+}
+
+// Text position t (prev: the codepoint before it); cl holds its threads.
+Bool rx_run(Int p, Int cl, Int nl, Int marks, Int gen, Int t, Int prev) {
+    Int c0 = ld8(t);
+    Int cur = if (c0 == 0) { -1 } else { rx_cp(t) };
+    _ = rx_add(p, cl, marks, gen, 0, prev, cur);
+    if (rx_has_match(p, cl, 0)) { return true; }
+    if (c0 == 0) { return false; }
+    Int nt = t + rx_cl(t);
+    Int c1 = ld8(nt);
+    Int nxt = if (c1 == 0) { -1 } else { rx_cp(nt) };
+    _ = st64(nl, 0);
+    _ = rx_step(p, cl, nl, marks, gen + 1, 0, cur, nxt);
+    _ = st64(cl, 0);
+    return rx_run(p, nl, cl, marks, gen + 1, nt, cur);
+}
+
+Int rx_free(Int p) {
+    _ = c_free(rx_code(p));
+    return c_free(p);
+}
+
+// Does `pattern` match anywhere in `text`? (Class range blocks are left to
+// the process; a test run compiles few patterns.)
 @export("resid_regex_match", "i8(ptr,ptr)")
 pub Int rt_regex_match(Int pattern, Int text) {
     if (pattern == 0 || text == 0) { return 0; }
-    Bool m = if (ld8(pattern) == 94) { rx_here(pattern + 1, text) } else { rx_search(pattern, text) };
+    Int p = rx_new();
+    Int e = rx_alt(p, pattern, 0);
+    if (rx_bad(p) || ld8(e) != 0) { return rx_free(p) * 0; }
+    _ = rx_emit(p, o_match(), 0, 0);
+    Int n = rx_len(p);
+    Int cl = xmalloc(8 + n * 8);
+    Int nl = xmalloc(8 + n * 8);
+    Int marks = xmalloc(n * 8);
+    _ = rx_zero(marks, n);
+    _ = st64(cl, 0);
+    Bool m = rx_run(p, cl, nl, marks, 1, text, -1);
+    _ = c_free(cl) + c_free(nl) + c_free(marks) + rx_free(p);
     return if (m) { 1 } else { 0 };
+}
+
+Int rx_zero(Int a, Int n) {
+    if (n <= 0) { return 0; }
+    _ = st64(a + (n - 1) * 8, 0);
+    return rx_zero(a, n - 1);
 }

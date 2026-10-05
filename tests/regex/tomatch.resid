@@ -1,0 +1,25 @@
+// toMatch through spawn: a failed expectation is an Err, so it reads as 0.
+Str chomp(Str s) { return if (str_ends_with(s, "\n")) { str_slice(s, 0, str_len(s) - 1) } else { s }; }
+
+Bool matches(Str p, Str s) {
+    Result(Int, RegionError) r = spawn () {
+        expect(s).toMatch(p);
+        return 1;
+    };
+    Int v = r else { 0 };
+    return v == 1;
+}
+
+Int run(Int k) {
+    Str raw = resid_read_line();
+    if (raw == "") { return k; }
+    List(Str) f = str_split(chomp(raw), "\t");
+    Str txt = str_replace(f[1], "~", "\n");
+    println(if (matches(f[0], txt)) { "1" } else { "0" });
+    return run(k + 1);
+}
+
+Int main() {
+    Int n = run(0);
+    return 0;
+}

@@ -750,6 +750,20 @@ pub Int rt_sb_new() {
 @export("str_sb_append", "ptr(ptr,ptr)")
 pub Int rt_sb_append(Int r, Int s) { return sb_bytes(r, s, c_strlen(s)) * 0 + r; }
 
+// Codepoints [a, b) of s, clamped as str_slice clamps, appended without
+// making the slice first.
+@export("str_sb_append_slice", "ptr(ptr,ptr,i64,i64)")
+pub Int rt_sb_append_slice(Int r, Int s, Int a0, Int b0) {
+    Int sl = idx_slot(s);
+    Int len = sl_len(sl);
+    Int a1 = if (a0 < 0) { 0 } else { a0 };
+    Int b1 = if (b0 < a1) { a1 } else { b0 };
+    Int a = if (a1 > len) { len } else { a1 };
+    Int b = if (b1 > len) { len } else { b1 };
+    Int ba = slot_off(sl, a);
+    return sb_bytes(r, s + ba, slot_off(sl, b) - ba) * 0 + r;
+}
+
 @export("str_sb_append_cp", "ptr(ptr,i64)")
 pub Int rt_sb_append_cp(Int r, Int cp) {
     Int len = ld64(r + 8);

@@ -16,8 +16,8 @@ How it is written:
   whole text; replacements build the result with a string builder.
 - The input is read whole with `filesystem.read_all("/dev/stdin")`.
 
-Measured on this host at the official size (fasta 5000000): 3.0 s and
-1.8 GB peak RSS (C with PCRE2 JIT: 1.7 s). Most of the memory is the gap
-copies that each substitution's `str_slice` makes before appending them to
-the builder; a builder method that appends a range of a string would remove
-that. Output byte-identical to the C program.
+Measured on this host at the official size (fasta 5000000): 2.4 s and
+320 MB peak RSS (C with PCRE2 JIT: 1.7 s, 152 MB). Replacing and counting
+over a whole-DFA pattern is a loop that carries only integers and the
+builder, and gaps go into the builder with `str_sb_append_slice`, so a
+match costs no allocation. Output byte-identical to the C program.

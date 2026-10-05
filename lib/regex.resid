@@ -964,6 +964,18 @@ Int tab_rev(Str s, Int from, Int i, Int st, Int first, List(Int) next, List(Int)
     return tab_rev(s, from, i - 1, next[st * nc + k], first2, next, flags, nc, ascii, bounds);
 }
 
+// The leftmost match from `from` over the whole tables, packed as
+// start * 2^32 + end; -1 when there is none. No allocation, so a loop of
+// searches carries only integers.
+Int tab_find(Regex re, Str s, Int n, Int from) {
+    if (from > n) { return -1; }
+    Int nc = re.bounds.len();
+    Int e = tab_fwd(s, n, from, 0, -1, re.ftab.next, re.ftab.flags, nc, re.ascii, re.bounds);
+    if (e < 0) { return -1; }
+    Int b = tab_rev(s, from, e, 0, -1, re.rtab.next, re.rtab.flags, nc, re.ascii, re.bounds);
+    return b * 4294967296 + e;
+}
+
 // --- Searching -----------------------------------------------------------------------
 
 // A search's result with the caches to reuse: start -1 when none.
@@ -1044,7 +1056,22 @@ List(RegexMatch) re_all(Regex re, Str s, Int n, Int from, Int last, Bool caps, D
     return re_all(re, s, n, m.end, m.end, caps, m.f, m.r, acc.push(re_m(m)));
 }
 
-pub Int regex_count(Regex re, Str s) { return re_count(re, s, str_len(s), 0, -1, dfa_new(), dfa_new(), 0); }
+pub Int regex_count(Regex re, Str s) {
+    if (re.rtab.ok) { return tab_count(re, s, str_len(s), 0, -1, 0); }
+    return re_count(re, s, str_len(s), 0, -1, dfa_new(), dfa_new(), 0);
+}
+
+Int tab_count(Regex re, Str s, Int n, Int from, Int last, Int acc) {
+    Int m = tab_find(re, s, n, from);
+    if (m < 0) { return acc; }
+    Int st = m / 4294967296;
+    Int en = m % 4294967296;
+    if (st == en && en == last) {
+        if (from >= n) { return acc; }
+        return tab_count(re, s, n, from + 1, last, acc);
+    }
+    return tab_count(re, s, n, en, en, acc + 1);
+}
 
 Int re_count(Regex re, Str s, Int n, Int from, Int last, Dfa f, Dfa r, Int acc) {
     ReF m = re_search(re, s, n, from, false, f, r);
@@ -1101,19 +1128,32 @@ pub Str regex_replace(Regex re, Str s, Str rep) {
 
 pub Str regex_replace_all(Regex re, Str s, Str rep) {
     Bool caps = str_contains(rep, "$");
+    if (re.rtab.ok && !caps) { return tab_repl(re, s, str_len(s), rep, 0, 0, -1, str_sb_new()); }
     return re_repl(re, s, str_len(s), rep, caps, 0, 0, -1, dfa_new(), dfa_new(), str_sb_new());
 }
 
 Str re_repl(Regex re, Str s, Int n, Str rep, Bool caps, Int from, Int copied, Int last, Dfa f, Dfa r, Str sb) {
     ReF m = re_search(re, s, n, from, caps, f, r);
-    if (m.start < 0) { return str_sb_finish(str_sb_append(sb, str_slice(s, copied, n))); }
+    if (m.start < 0) { return str_sb_finish(str_sb_append_slice(sb, s, copied, n)); }
     if (m.start == m.end && m.end == last) {
-        if (from >= n) { return str_sb_finish(str_sb_append(sb, str_slice(s, copied, n))); }
+        if (from >= n) { return str_sb_finish(str_sb_append_slice(sb, s, copied, n)); }
         return re_repl(re, s, n, rep, caps, from + 1, copied, last, m.f, m.r, sb);
     }
-    Str sb1 = str_sb_append(sb, str_slice(s, copied, m.start));
+    Str sb1 = str_sb_append_slice(sb, s, copied, m.start);
     Str sb2 = if (caps) { str_sb_append(sb1, re_expand(re, re_m(m), s, rep, 0, str_len(rep), str_sb_new())) } else { str_sb_append(sb1, rep) };
     return re_repl(re, s, n, rep, caps, m.end, m.end, m.end, m.f, m.r, sb2);
+}
+
+Str tab_repl(Regex re, Str s, Int n, Str rep, Int from, Int copied, Int last, Str sb) {
+    Int m = tab_find(re, s, n, from);
+    if (m < 0) { return str_sb_finish(str_sb_append_slice(sb, s, copied, n)); }
+    Int st = m / 4294967296;
+    Int en = m % 4294967296;
+    if (st == en && en == last) {
+        if (from >= n) { return str_sb_finish(str_sb_append_slice(sb, s, copied, n)); }
+        return tab_repl(re, s, n, rep, from + 1, copied, last, sb);
+    }
+    return tab_repl(re, s, n, rep, en, en, en, str_sb_append(str_sb_append_slice(sb, s, copied, st), rep));
 }
 
 // Replace every match with what f makes of it (groups filled).
@@ -1123,8 +1163,8 @@ pub Str regex_replace_with(Regex re, Str s, Str closure(RegexMatch) f) {
 }
 
 Str re_repl_f(Str s, List(RegexMatch) ms, Int i, Int copied, Str closure(RegexMatch) f, Str sb) {
-    if (i >= ms.len()) { return str_sb_finish(str_sb_append(sb, str_slice(s, copied, str_len(s)))); }
-    Str sb1 = str_sb_append(str_sb_append(sb, str_slice(s, copied, ms[i].start)), f(ms[i]));
+    if (i >= ms.len()) { return str_sb_finish(str_sb_append_slice(sb, s, copied, str_len(s))); }
+    Str sb1 = str_sb_append(str_sb_append_slice(sb, s, copied, ms[i].start), f(ms[i]));
     return re_repl_f(s, ms, i + 1, ms[i].end, f, sb1);
 }
 

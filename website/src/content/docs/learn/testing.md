@@ -32,7 +32,7 @@ math_test
 Failures: 0 | Passed: 2 | Duration: 0ms
 ```
 
-`--filter REGEX` runs matching tests; `--format pretty|tap|json` chooses the
+`--filter REGEX` runs matching tests (the regex syntax is `lib/regex.resid`'s, as for `toMatch`); `--format pretty|tap|json` chooses the
 report.
 
 The exit status says what happened:
@@ -131,7 +131,7 @@ error[E0001]: type error: call toEqual expects (Int), got (Str)
 | `toBeNull()` | an `Option` is `None` |
 | `toContain(x)` | a list holds `x` |
 | `toHaveLength(n)` | a list or string length |
-| `toMatch(re)` | a string matches a regular expression |
+| `toMatch(re)` | a string matches a regular expression (the syntax of [`regex.resid`](/Resid/tools/stdlib/#regular-expressions), matched anywhere; `^...$` for the whole string) |
 | `toBeCloseTo(x, tol)` | a `Float` within `tol` |
 | `toThrow()` | the given closure aborts |
 | `toSatisfy(pred)` | the predicate holds |
