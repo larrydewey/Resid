@@ -14,7 +14,10 @@
 // verifies the index against `[registry] pubkey` and every archive against
 // its hash, so what this tool adds is transport authentication, not trust.
 //
-//   resid-fetch <base-url> <trust-store> <artifact-path> <out-file>
+//   resid-fetch [--timeout SECONDS] <base-url> <trust-store> <artifact-path> <out-file>
+//
+// The whole fetch, connect to last byte, is bounded: five minutes unless
+// --timeout says otherwise, so a server that trickles cannot hold it.
 //
 // <trust-store> is a PEM bundle or a directory of DER certificates, and
 // there is no default: with no store a TLS client trusts nothing, and this
@@ -25,14 +28,18 @@ import "../lib/tlsclient.resid";
 
 @requires(args, filesystem, network, clock(readonly))
 Int run() {
-    if (args.count() != 5) {
-        eprintln("usage: resid-fetch <base-url> <trust-store> <artifact-path> <out-file>");
+    Bool timed = args.count() == 7 && args.get(1) == "--timeout";
+    Int at = if (timed) { 3 } else { 1 };
+    Str secs = if (timed) { args.get(2) } else { "" };
+    if (args.count() != at + 4 || (timed && (!str_is_int(secs) || str_parse_int(secs) <= 0))) {
+        eprintln("usage: resid-fetch [--timeout SECONDS] <base-url> <trust-store> <artifact-path> <out-file>");
         return 2;
     }
-    Str base = args.get(1);
-    Str ca = args.get(2);
-    Str artifact = args.get(3);
-    Str out = args.get(4);
+    Int ms = if (timed) { str_parse_int(secs) * 1000 } else { tls_client_deadline_ms() };
+    Str base = args.get(at);
+    Str ca = args.get(at + 1);
+    Str artifact = args.get(at + 2);
+    Str out = args.get(at + 3);
     if (ca == "") {
         eprintln("resid-fetch: no trust store given; with no store a TLS client trusts nothing");
         return 2;
@@ -40,7 +47,7 @@ Int run() {
     Str url = rf_join(base, artifact);
     TrustStore store = trust_store_load(ca);
     List(Str) none = [];
-    HttpsGet h = tls_https_get(url, "", store, none);
+    HttpsGet h = tls_https_get_within(url, "", store, none, ms);
     if (h.err != "") {
         eprintln("resid-fetch: " + h.err);
         return 1;

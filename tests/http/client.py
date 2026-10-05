@@ -102,6 +102,20 @@ def client(k):
 ts = [threading.Thread(target=client, args=(k,)) for k in range(12)]
 [t.start() for t in ts]; [t.join() for t in ts]
 
+# Clients that connect and stall -- silent, or mid-head -- outnumber the
+# server's workers many times over; each costs the event loop a socket,
+# so everyone else is still answered at once.
+import time
+stalled = []
+for k in range(60):
+    s = socket.create_connection(("127.0.0.1", PORT))
+    if k % 2: s.sendall(b"GET /hello/x HTTP/1.1\r\nHost: t\r\n")
+    stalled.append(s)
+t0 = time.time()
+code, _, body = one(b"GET /hello/after HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n")
+check("answered past 60 stalled clients", (code, body, time.time() - t0 < 2), (200, b"hello, after\n", True))
+[s.close() for s in stalled]
+
 if fails:
     print("\n".join(fails)); sys.exit(1)
 print("client.py: all checks passed")

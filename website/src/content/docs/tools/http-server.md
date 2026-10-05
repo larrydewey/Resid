@@ -6,9 +6,12 @@ description: Serving HTTP/1.1 from Resid with lib/httpserv.resid, over TLS or no
 `lib/httpserv.resid` is an HTTP/1.1 server written in Resid over the TCP
 builtins. It reads requests (with `Content-Length` or chunked bodies),
 keeps connections alive, answers pipelined requests in order, routes paths,
-and refuses malformed or oversized requests. Concurrency comes from
-`spawn`: each worker region runs the same accept loop on one listener, and
-the kernel hands every connection to one of them.
+and refuses malformed or oversized requests. The accept loop is an event
+loop: it holds every connection at once and spends time only on those
+with bytes to read or room to write, so a client that connects and stalls
+costs a socket, not a worker. Parallelism comes from `spawn`: each region
+runs the same loop on one listener, and the kernel hands every connection
+to one of them.
 
 ## A server in one screen
 
@@ -133,8 +136,10 @@ captures the rest of the path:
 `http_limits()` allows 64 KiB of request head, 8 MiB of body, 1000
 requests per connection, 30 s (`request_ms`) for a client to deliver
 each whole request and 60 s (`reply_ms`) for it to take each reply, so a
-slow, idle or non-reading client is disconnected rather than holding a
-worker; pass your own `HttpLimits` to change them. A
+slow, idle or non-reading client is disconnected, and 1024 open
+connections per loop (`open_max`), past which the connection that has
+waited longest for its request makes room for the newcomer; pass your own
+`HttpLimits` to change them. A
 refused request is answered and its connection closed:
 
 | Status | When |

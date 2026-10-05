@@ -55,11 +55,28 @@ pub Int rt_tcp_connect(Int host, Int port) {
     _ = st32(sa + 4, ip);                             // network order
     Int fd = resid_raw_syscall(41, 2, 1, 0, 0, 0, 0);      // SOCK_STREAM
     if (fd < 0) { return 0 - 1; }
-    Int cr = resid_raw_syscall(42, fd, sa, 16, 0, 0, 0);
-    if (cr != 0) { return sys_close(fd) * 0 - 1; }
+    if (!connect_within(fd, sa, 30000)) { return sys_close(fd) * 0 - 1; }
     _ = base_timeouts(fd);
     _ = dl_set(fd, 0);
     return fd;
+}
+
+// connect(2) that gives up after `ms`: a host that never answers would
+// otherwise hold the caller through every SYN retry, about two minutes.
+Bool connect_within(Int fd, Int sa, Int ms) {
+    Int fl = resid_raw_syscall(72, fd, 3, 0, 0, 0, 0);                      // F_GETFL
+    if (fl < 0) { return false; }
+    _ = resid_raw_syscall(72, fd, 4, fl | 2048, 0, 0, 0);                   // O_NONBLOCK
+    Int cr = resid_raw_syscall(42, fd, sa, 16, 0, 0, 0);
+    Bool now = cr == 0;
+    Bool waiting = cr == 0 - 115;                                           // EINPROGRESS
+    Bool ready = now || (waiting && (poll_one(fd, 4, ms) & 4) != 0);
+    Int errp = resid_raw_tls("so_err", 8);
+    Int lenp = resid_raw_tls("so_err_len", 4);
+    _ = st32(errp, 1) + st32(lenp, 4);
+    Bool clean = ready && resid_raw_syscall(55, fd, 1, 4, errp, lenp, 0) == 0 && ld32(errp) == 0;  // SO_ERROR
+    _ = resid_raw_syscall(72, fd, 4, fl, 0, 0, 0);
+    return now || clean;
 }
 
 Int set_timeout(Int fd, Int secs) {
@@ -85,8 +102,8 @@ Int base_timeouts(Int fd) { return set_timeouts_ns(fd, 30000000000); }
 
 // I/O deadlines per descriptor (resid_tcp_deadline): absolute
 // monotonic ns, 0 for none. Descriptors past the table get none.
-Int dl_table() { return resid_raw_global("rt_tcp_deadline", 32768); }
-Bool dl_has_slot(Int fd) { return fd >= 0 && fd < 4096; }
+Int dl_table() { return resid_raw_global("rt_tcp_deadline", 524288); }
+Bool dl_has_slot(Int fd) { return fd >= 0 && fd < 65536; }
 Int dl_get(Int fd) { return if (dl_has_slot(fd)) { ld64(dl_table() + fd * 8) } else { 0 }; }
 Int dl_set(Int fd, Int at) { return if (dl_has_slot(fd)) { st64(dl_table() + fd * 8, at) } else { 0 }; }
 
@@ -190,10 +207,111 @@ pub Int rt_tcp_accept(Int fd) {
     Int alen = resid_raw_tls("ai_alen", 4);
     _ = st32(alen, 16);
     Int c = resid_raw_syscall(43, fd, sa, alen, 0, 0, 0);  // accept
+    // EAGAIN: an event loop made the listener non-blocking; wait for it.
+    if (c == 0 - 11) { return poll_one(fd, 1, 0 - 1) * 0 + rt_tcp_accept(fd); }
     if (c < 0) { return 0 - 1; }
     _ = base_timeouts(c);
     _ = dl_set(c, 0);
     return c;
+}
+
+// One accepted connection if one is waiting, -2 if none is, -1 on a
+// failed accept. The listener becomes non-blocking, so event loops that
+// share it race for a connection without one of them blocking in accept.
+@export("resid_tcp_accept_now", "i64(i64)")
+pub Int rt_tcp_accept_now(Int fd) {
+    if (!listener_ok(fd)) { return 0 - 1; }
+    Int fl = resid_raw_syscall(72, fd, 3, 0, 0, 0, 0);                  // F_GETFL
+    _ = if (fl >= 0 && (fl & 2048) == 0) { resid_raw_syscall(72, fd, 4, fl | 2048, 0, 0, 0) } else { 0 };
+    Int sa = resid_raw_tls("sa_in", 16);
+    Int alen = resid_raw_tls("ai_alen", 4);
+    _ = st32(alen, 16);
+    Int c = resid_raw_syscall(43, fd, sa, alen, 0, 0, 0);
+    if (c == 0 - 11 || c == 0 - 4 || c == 0 - 103) { return 0 - 2; }   // EAGAIN, EINTR, ECONNABORTED
+    if (c < 0) { return 0 - 1; }
+    _ = base_timeouts(c);
+    _ = dl_set(c, 0);
+    return c;
+}
+
+// poll(2) on one descriptor; its revents, 0 on timeout.
+Int poll_one(Int fd, Int events, Int ms) {
+    Int p = resid_raw_tls("poll_one", 8);
+    _ = st32(p, fd);
+    _ = st32(p + 4, events);
+    Int r = resid_raw_syscall(7, p, 1, ms, 0, 0, 0);
+    return if (r > 0) { (ld32(p + 4) >> 16) & 65535 } else { 0 };
+}
+
+// Readiness for many sockets at once: `wants[i]` is 1 (read), 2 (write)
+// or 3 for `fds[i]`, and the answer is a list of the same length of
+// 1 (readable, or at EOF or in error: a receive will say which),
+// 2 (writable), 4 (its resid_tcp_deadline has passed) and 8 (not a
+// socket), or-ed. Waits at most `ms` (-1: no bound) and never past the
+// nearest deadline, so an event loop sees expiries without reading the
+// clock itself.
+@export("resid_tcp_poll", "ptr(ptr,ptr,i64)")
+pub Int rt_tcp_poll(Int fl, Int wl, Int ms) {
+    Int n0 = c_list_len(fl);
+    Int n = if (n0 > 65536) { 65536 } else { n0 };
+    Int pf = xmalloc(if (n > 0) { n * 8 } else { 8 });
+    _ = poll_fill(fl, wl, pf, 0, n);
+    Int now = rt_clock_monotonic_ns();
+    Int near = poll_nearest(fl, 0, n, 0);
+    Int to_dl = if (near == 0) { 0 - 1 } else { if (near <= now) { 0 } else { (near - now + 999999) / 1000000 } };
+    Int wait = if (ms < 0) { to_dl } else { if (to_dl < 0 || ms < to_dl) { ms } else { to_dl } };
+    _ = resid_raw_syscall(7, pf, n, wait, 0, 0, 0);
+    Int after = rt_clock_monotonic_ns();
+    Int slots = xmalloc(if (n > 0) { n * 8 } else { 8 });
+    _ = poll_read(fl, pf, slots, 0, n, after);
+    Int out = c_list_new(n, slots, resid_raw_addr("List"));
+    _ = c_free(pf) + c_free(slots);
+    return out;
+}
+
+Int poll_fill(Int fl, Int wl, Int pf, Int i, Int n) {
+    if (i >= n) { return 0; }
+    Int fd = unbox_word(c_list_get(fl, i));
+    Int w = if (i < c_list_len(wl)) { unbox_word(c_list_get(wl, i)) } else { 1 };
+    Int ev = (if ((w & 1) != 0) { 1 } else { 0 }) | (if ((w & 2) != 0) { 4 } else { 0 });  // POLLIN, POLLOUT
+    _ = st32(pf + i * 8, fd);
+    _ = st32(pf + i * 8 + 4, ev);
+    return poll_fill(fl, wl, pf, i + 1, n);
+}
+
+// The earliest deadline among the descriptors, 0 when none has one.
+Int poll_nearest(Int fl, Int i, Int n, Int best) {
+    if (i >= n) { return best; }
+    Int d = dl_get(unbox_word(c_list_get(fl, i)));
+    Int b2 = if (d != 0 && (best == 0 || d < best)) { d } else { best };
+    return poll_nearest(fl, i + 1, n, b2);
+}
+
+Int poll_read(Int fl, Int pf, Int slots, Int i, Int n, Int now) {
+    if (i >= n) { return 0; }
+    Int rev = (ld32(pf + i * 8 + 4) >> 16) & 65535;
+    Int d = dl_get(unbox_word(c_list_get(fl, i)));
+    Int r = (if ((rev & 25) != 0) { 1 } else { 0 })        // POLLIN, POLLERR, POLLHUP
+        | (if ((rev & 12) != 0) { 2 } else { 0 })           // POLLOUT, POLLERR
+        | (if (d != 0 && d <= now) { 4 } else { 0 })
+        | (if ((rev & 32) != 0) { 8 } else { 0 });          // POLLNVAL
+    _ = st64(slots + i * 8, r + 18295873486192640);
+    return poll_read(fl, pf, slots, i + 1, n, now);
+}
+
+// As much of `l` (at most 1 MB) as the socket takes without waiting:
+// the count sent, 0 when its buffer is full, -1 on an error.
+@export("resid_tcp_send_some", "i64(i64,ptr)")
+pub Int rt_tcp_send_some(Int fd, Int l) {
+    Int n0 = c_list_len(l);
+    if (!sock_ok(fd)) { return 0 - 1; }
+    Int n = if (n0 > 1048576) { 1048576 } else { n0 };
+    if (n <= 0) { return 0; }
+    Int buf = xmalloc(n);
+    _ = bytes_of(l, buf, 0, n);
+    Int w = resid_raw_syscall(44, fd, buf, n, 16448, 0, 0);   // MSG_DONTWAIT | MSG_NOSIGNAL
+    _ = c_free(buf);
+    return if (w >= 0) { w } else { if (w == 0 - 11 || w == 0 - 4) { 0 } else { 0 - 1 } };
 }
 
 // ─── IPv4 name lookup: a literal, localhost, /etc/hosts, then DNS ──────

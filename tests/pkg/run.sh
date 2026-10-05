@@ -307,6 +307,34 @@ if [ -n "$TLSPORT" ]; then
     grep -q "trusts nothing" "$W/fetch_nostore.out" && ok \
         || bad "no trust store: $(tail -1 "$W/fetch_nostore.out")"
 else bad "the https registry server did not report a port: $(tail -2 "$W/https.out")"; fi
+# A server that trickles a byte every half second never trips the 30 s
+# per-read timeout; the fetch's own deadline (--timeout) ends it.
+if command -v python3 > /dev/null 2>&1; then
+    rm -f "$W/trickle.port"
+    python3 - "$W/trickle.port" <<'PY' &
+import socket, sys, time, threading
+l = socket.socket(); l.bind(("127.0.0.1", 0)); l.listen(4)
+open(sys.argv[1], "w").write(str(l.getsockname()[1]))
+def drip(c):
+    try:
+        for _ in range(60):
+            c.sendall(b"\x16"); time.sleep(0.5)
+    except OSError:
+        pass
+while True:
+    c, _ = l.accept()
+    threading.Thread(target=drip, args=(c,), daemon=True).start()
+PY
+    DRIP=$!
+    for _ in $(seq 1 100); do [ -s "$W/trickle.port" ] && break; sleep 0.05; done
+    T0=$(date +%s)
+    timeout 60 "$FETCH" --timeout 2 "https://localhost:$(cat "$W/trickle.port")" "$ROOT/tests/tls/fixtures/srvca.pem" \
+        "/x" "$W/trickle.out" > "$W/fetch_trickle.out" 2>&1
+    RC=$?; T1=$(date +%s)
+    [ "$RC" = 1 ] && [ $((T1 - T0)) -le 6 ] && ok \
+        || bad "a trickling server is cut off by the fetch deadline: rc $RC after $((T1 - T0)) s: $(tail -1 "$W/fetch_trickle.out")"
+    kill "$DRIP" 2>/dev/null; wait "$DRIP" 2>/dev/null
+fi
 # Nothing listening at all: a transport failure, not a fetch of nothing.
 rapp remdead "pubkey = \"$PUB\"" "http://127.0.0.1:1"
 expect_fail remdead "cannot connect to registry host"

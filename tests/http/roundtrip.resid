@@ -82,6 +82,36 @@ Str body_of(Str raw) {
     return if (at < 0) { "" } else { str_replace(str_slice(raw, at + 4, str_len(raw)), "\n", "") };
 }
 
+// More clients than the loop holds (open_max 64), each stalled mid-head.
+// The loop drops the one that has waited longest for each newcomer, so a
+// client arriving after them is answered, and the first of the crowd has
+// been closed rather than left to its deadline.
+@requires(network, clock)
+Bool crowd_evicted(Int port) {
+    List(Int) crowd = open_stalled(port, 70, []);
+    Str after = once(port, "GET /hello/after HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    Int t0 = clock_monotonic_ns();
+    List(Int) first = resid_tcp_recv_some(crowd[0], 16);
+    Int waited_ms = (clock_monotonic_ns() - t0) / 1000000;
+    _ = close_all(crowd, 0);
+    return status_of(after) == "200" && first.len() == 0 && waited_ms < 300;
+}
+
+@requires(network)
+List(Int) open_stalled(Int port, Int n, List(Int) acc) {
+    if (n <= 0) { return acc; }
+    Int fd = resid_tcp_connect("127.0.0.1", port);
+    _ = resid_tcp_send(fd, "GET /hello/stalled HTTP/1.1\r\n");
+    return open_stalled(port, n - 1, acc.concat([fd]));
+}
+
+@requires(network)
+Int close_all(List(Int) fds, Int i) {
+    if (i >= fds.len()) { return 0; }
+    _ = resid_tcp_close(fds[i]);
+    return close_all(fds, i + 1);
+}
+
 // A client that trickles a header line every 100 ms and never ends its
 // head. Every read arrives well inside the socket's 30 s timeout, so only
 // a whole-request deadline stops it. True when the server has hung up by
@@ -125,9 +155,9 @@ Int main() {
     Int lfd = http_listen(0);
     if (lfd < 0) { println("listen failed"); return 1; }
     Int port = http_bound_port(lfd);
-    HttpLimits lim = HttpLimits { .head_max = 2048, .body_max = 4096, .requests_max = 100, .request_ms = 600, .reply_ms = 600 };
+    HttpLimits lim = HttpLimits { .head_max = 2048, .body_max = 4096, .requests_max = 100, .request_ms = 600, .reply_ms = 600, .open_max = 64 };
     Result(Int, RegionError) worker = spawn (network(readonly)) {
-        return http_accept_loop(lfd, lambda(r) { handle(r) }, lim, 15);
+        return http_accept_loop(lfd, lambda(r) { handle(r) }, lim, 86);
     };
     Str host = "Host: x\r\n";
     Str close = "Connection: close\r\n\r\n";
@@ -176,6 +206,8 @@ Int main() {
     println(f"slow client cut off: {trickle_cut_off(port)}");
     // 9: so is one that never reads its reply
     println(f"stalled reader dropped: {stalled_reader_dropped(port)}");
+    // 10: a crowd larger than the loop holds does not keep anyone out
+    println(f"crowd evicted: {crowd_evicted(port)}");
     Int served = worker else { -1 };
     println(f"served {served}");
     _ = resid_tcp_close(lfd);

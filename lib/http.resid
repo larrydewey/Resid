@@ -57,6 +57,10 @@ pub Url http_parse_url(Str url) {
     return Url { .host = host, .port = port, .path = path };
 }
 
+// How long one exchange may take, connect to last byte, so a server that
+// trickles its reply cannot hold the caller indefinitely.
+pub Int http_client_deadline_ms() { return 300000; }
+
 // Perform a GET; returns the full raw response. Empty string on any
 // transport failure (connect refused, send failed, ...).
 @requires(network)
@@ -65,6 +69,7 @@ pub Str http_get_raw(Str url) {
     if (u.port <= 0) { return ""; }
     Int fd = resid_tcp_connect(u.host, u.port);
     if (fd < 0) { return ""; }
+    _ = resid_tcp_deadline(fd, http_client_deadline_ms());
     Str head1 = "GET " + u.path + " HTTP/1.1\r\n";
     Str head2 = "Host: " + u.host + "\r\n";
     Str head3 = "User-Agent: resid-http/1\r\nAccept: */*\r\nConnection: close\r\n\r\n";
@@ -300,6 +305,7 @@ pub HttpResponse http_call(Int fd, Str method, Str path, Str hostport, Str extra
 pub HttpResponse http_get(Str hostport_url_parts_host, Int port, Str path) {
     Int fd = resid_tcp_connect(hostport_url_parts_host, port);
     if (fd < 0) { return HttpResponse { .status = 0, .headers = "", .body = "" }; }
+    _ = resid_tcp_deadline(fd, http_client_deadline_ms());
     HttpResponse r = http_call(fd, "GET", path, hostport_url_parts_host, "");
     resid_tcp_close(fd);
     return r;

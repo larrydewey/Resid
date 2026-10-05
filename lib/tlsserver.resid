@@ -55,7 +55,7 @@ type TsPlain = { TsIn in; List(Int) msg; Int alert; Bool ok; };
 // compatibility); an alert is the client's decision to stop and is
 // reported rather than retried past.
 @requires(network(readonly))
-TsPlain ts_read_plain(TsIn s, List(Int) acc, Int want, Int rounds) {
+pub TsPlain ts_read_plain(TsIn s, List(Int) acc, Int want, Int rounds) {
     if (ts_msg_complete(acc) && acc[0] == want) {
         return TsPlain { .in = s, .msg = acc, .alert = -1, .ok = true };
     }
@@ -84,7 +84,7 @@ pub Int ts_alert_desc(List(Int) body) {
 type TsProt = { TsIn in; List(Int) msg; Int seq; Int alert; Bool ok; };
 
 @requires(network(readonly))
-TsProt ts_read_prot(TsIn s, List(Int) key, List(Int) iv, Int seq, List(Int) acc, Int rounds) {
+pub TsProt ts_read_prot(TsIn s, List(Int) key, List(Int) iv, Int seq, List(Int) acc, Int rounds) {
     if (ts_msg_complete(acc) && acc[0] == 20) {
         return TsProt { .in = s, .msg = acc, .seq = seq, .alert = -1, .ok = true };
     }
@@ -113,60 +113,7 @@ TsProt ts_read_prot(TsIn s, List(Int) key, List(Int) iv, Int seq, List(Int) acc,
     return ts_read_prot(r.in, key, iv, seq2, acc.concat(content), rounds - 1);
 }
 
-// ─── Writing ──────────────────────────────────────────────────────────
-
-// A plaintext handshake record. The legacy version on ServerHello is
-// 0x0301, which is what every other server sends there; protected
-// records carry 0x0303.
-@requires(network(readonly))
-Bool ts_send_plain(Int fd, List(Int) msg, Int version) {
-    Int blen = msg.len();
-    List(Int) hdr = [22, version / 256, version % 256, blen / 256, blen % 256];
-    return resid_tcp_send_bin(fd, hdr.concat(msg));
-}
-
-// The middlebox-compatibility record: one byte, 0x01, unprotected and
-// outside every sequence number (RFC 8446 §5).
-@requires(network(readonly))
-Bool ts_send_ccs(Int fd) {
-    List(Int) rec = [20, 3, 3, 0, 1, 1];
-    return resid_tcp_send_bin(fd, rec);
-}
-
-// `flight` protected under the handshake keys, split so that no record
-// carries more than 2^14 bytes of handshake payload. A handshake message
-// may span records (RFC 8446 §5.1), so the split is at the size limit
-// and not at a message boundary.
-@requires(network(readonly))
-Int ts_send_flight(Int fd, List(Int) key, List(Int) iv, Int seq, List(Int) flight, Int at) {
-    if (at >= flight.len()) { return seq; }
-    Int room = 16384;
-    Int left = flight.len() - at;
-    Int take = if (left > room) { room } else { left };
-    List(Int) chunk = slice_seed(flight, at, take, []);
-    List(Int) rec = tls_protect(seq, key, iv, chunk, 22);
-    if (!resid_tcp_send_bin(fd, rec)) { return seq; }
-    Int seq2 = seq + 1;
-    Int next = at + take;
-    return ts_send_flight(fd, key, iv, seq2, flight, next);
-}
-
-// An alert under the handshake keys: after ServerHello every alert this
-// server sends is protected (RFC 8446 §5.2).
-@requires(network(readonly))
-Bool ts_send_alert(Int fd, List(Int) key, List(Int) iv, Int seq, Int level, Int desc) {
-    List(Int) body = [level, desc];
-    List(Int) rec = tls_protect(seq, key, iv, body, 21);
-    return resid_tcp_send_bin(fd, rec);
-}
-
-// An alert before the keys exist, which can only be plaintext.
-@requires(network(readonly))
-Bool ts_send_plain_alert(Int fd, Int level, Int desc) {
-    List(Int) hdr = [21, 3, 3, 0, 2];
-    List(Int) body = [level, desc];
-    return resid_tcp_send_bin(fd, hdr.concat(body));
-}
+// ─── Alerts ───────────────────────────────────────────────────────────
 
 pub Int ts_alert_fatal() { return 2; }
 pub Int ts_alert_handshake_failure() { return 40; }
@@ -214,43 +161,80 @@ List(Int) ts_hash(List(Int) transcript) {
     return slice_seed(raw, 0, 32, []);
 }
 
-// The full handshake on `fd`. `alpn_want` is what this server speaks, most
-// preferred first; the result's `alpn` is what the two agreed on, or ""
-// when the client offered nothing in that list.
-@requires(network(readonly))
-pub TlsResult tls_server_handshake(Int fd, ServerKey key, List(List(Int)) chain, List(Str) alpn_want) {
-    TsIn in = ts_in(fd);
-    TsPlain hello = ts_read_plain(in, [], 1, 8);
-    if (!hello.ok) {
-        Int err = if (hello.alert >= 0) { tsr_alert() } else { tsr_io() };
-        Int desc = if (err == tsr_alert()) { hello.alert } else { ts_alert_internal_error() };
-        _ = ts_send_plain_alert(fd, ts_alert_fatal(), desc);
-        return tsr_fail(err);
-    }
-    ClientHello ch = ts_client_hello(hello.msg);
-    if (ch.err != ts_err_ok()) {
-        _ = ts_send_plain_alert(fd, ts_alert_fatal(), ts_alert_for(ch.err));
-        return tsr_fail(ch.err);
-    }
-    Bool suite_ok = ts_offers_suite(ch, ts_suite_aes128gcm());
-    if (!suite_ok) {
-        _ = ts_send_plain_alert(fd, ts_alert_fatal(), ts_alert_for(tsr_no_suite()));
-        return tsr_fail(tsr_no_suite());
-    }
-    Bool sigalg_ok = ts_offers_sigalg(ch, tls_key_sigalg(key));
-    if (!sigalg_ok) {
-        _ = ts_send_plain_alert(fd, ts_alert_fatal(), ts_alert_for(ts_err_no_sigalg()));
-        return tsr_fail(ts_err_no_sigalg());
-    }
-    if (chain.len() == 0) {
-        _ = ts_send_plain_alert(fd, ts_alert_fatal(), ts_alert_internal_error());
-        return tsr_fail(tsr_no_chain());
-    }
-    Bool same_key = tls_key_cert_matches(key, chain[0]);
-    if (!same_key) {
-        _ = ts_send_plain_alert(fd, ts_alert_fatal(), ts_alert_internal_error());
-        return tsr_fail(tsr_key_mismatch());
-    }
+// ─── The handshake as steps ───────────────────────────────────────────
+//
+// The handshake is two steps that never touch a socket: `ts_server_start`
+// turns a ClientHello into everything the server sends back, and
+// `ts_server_finish` checks the client's Finished. The blocking handshake
+// below and lib/tlswire.resid's event-loop session both run these, so
+// there is one handshake, whatever does the reading.
+
+// What the server needs between its flight and the client's Finished.
+type TsPending = {
+    List(Int) c_key; List(Int) c_iv; List(Int) s_key; List(Int) s_iv;
+    List(Int) c_hs; List(Int) hs; List(Int) tr3; List(Int) fin;
+    Int sent_seq; Str alpn;
+};
+
+// The bytes to send (the flight, or the alert refusing the hello), the
+// state to finish with, and 0 or the reason for the refusal.
+type TsStart = { List(Int) out; TsPending pend; Int err; };
+
+// The bytes to send (an alert, or nothing), the connection's keys, and 0
+// or the reason there are none.
+type TsDone = { List(Int) out; TlsKeys keys; Int err; };
+
+pub TsPending ts_pending_none() {
+    return TsPending { .c_key = [], .c_iv = [], .s_key = [], .s_iv = [], .c_hs = [], .hs = [], .tr3 = [], .fin = [], .sent_seq = 0, .alpn = "" };
+}
+
+// A plaintext record; ServerHello carries legacy version 0x0301.
+List(Int) ts_plain_record(Int ctype, List(Int) msg, Int version) {
+    Int blen = msg.len();
+    List(Int) hdr = [ctype, version / 256, version % 256, blen / 256, blen % 256];
+    return hdr.concat(msg);
+}
+
+// An alert before the keys exist, which can only be plaintext.
+pub List(Int) ts_plain_alert_record(Int desc) {
+    return [21, 3, 3, 0, 2, ts_alert_fatal(), desc];
+}
+
+// A fatal alert under the handshake keys: after ServerHello every alert
+// this server sends is protected (RFC 8446 §5.2).
+pub List(Int) ts_alert_record(List(Int) key, List(Int) iv, Int seq, Int desc) {
+    return tls_protect(seq, key, iv, [ts_alert_fatal(), desc], 21);
+}
+
+// `flight` protected under the handshake keys, split so that no record
+// carries more than 2^14 bytes of handshake payload. A handshake message
+// may span records (RFC 8446 §5.1), so the split is at the size limit
+// and not at a message boundary.
+type TsRecs = { List(Int) bytes; Int seq; };
+
+TsRecs ts_flight_records(List(Int) key, List(Int) iv, Int seq, List(Int) flight, Int at, List(Int) acc) {
+    if (at >= flight.len()) { return TsRecs { .bytes = acc, .seq = seq }; }
+    Int left = flight.len() - at;
+    Int take = if (left > 16384) { 16384 } else { left };
+    List(Int) chunk = slice_seed(flight, at, take, []);
+    List(Int) rec = tls_protect(seq, key, iv, chunk, 22);
+    return ts_flight_records(key, iv, seq + 1, flight, at + take, acc.concat(rec));
+}
+
+TsStart ts_refuse(Int err, Int desc) {
+    return TsStart { .out = ts_plain_alert_record(desc), .pend = ts_pending_none(), .err = err };
+}
+
+// Everything the server answers a ClientHello with: ServerHello, the
+// middlebox change_cipher_spec, and the protected flight. `alpn_want` is
+// what this server speaks, most preferred first.
+pub TsStart ts_server_start(List(Int) hello, ServerKey key, List(List(Int)) chain, List(Str) alpn_want) {
+    ClientHello ch = ts_client_hello(hello);
+    if (ch.err != ts_err_ok()) { return ts_refuse(ch.err, ts_alert_for(ch.err)); }
+    if (!ts_offers_suite(ch, ts_suite_aes128gcm())) { return ts_refuse(tsr_no_suite(), ts_alert_for(tsr_no_suite())); }
+    if (!ts_offers_sigalg(ch, tls_key_sigalg(key))) { return ts_refuse(ts_err_no_sigalg(), ts_alert_for(ts_err_no_sigalg())); }
+    if (chain.len() == 0) { return ts_refuse(tsr_no_chain(), ts_alert_internal_error()); }
+    if (!tls_key_cert_matches(key, chain[0])) { return ts_refuse(tsr_key_mismatch(), ts_alert_internal_error()); }
     Int sigalg = tls_key_sigalg(key);
     Str alpn = ts_pick_alpn(ch.alpn, alpn_want);
     // This server's own key share, and the shared secret from the
@@ -271,10 +255,7 @@ pub TlsResult tls_server_handshake(Int fd, ServerKey key, List(List(Int)) chain,
     List(Int) tr2 = sconcat(tr1, ee.concat(cert));
     List(Int) th2 = ts_hash(tr2);
     List(Int) signature = tls_key_sign(key, ts_cv_server_content(th2));
-    if (signature.len() == 0) {
-        _ = ts_send_plain_alert(fd, ts_alert_fatal(), ts_alert_internal_error());
-        return tsr_fail(tsr_sign_failed());
-    }
+    if (signature.len() == 0) { return ts_refuse(tsr_sign_failed(), ts_alert_internal_error()); }
     List(Int) cv = ts_certificate_verify(sigalg, signature);
     List(Int) tr3 = sconcat(tr2, cv);
     List(Int) th3 = ts_hash(tr3);
@@ -282,36 +263,70 @@ pub TlsResult tls_server_handshake(Int fd, ServerKey key, List(List(Int)) chain,
     List(Int) flight = sconcat(ee, cert.concat(cv)).concat(fin);
     List(Int) s_key = tls_traffic_key(s_hs);
     List(Int) s_iv = tls_traffic_iv(s_hs);
-    Bool sent = ts_send_plain(fd, sh, 769);
-    if (!sent) { return tsr_fail(tsr_io()); }
-    _ = ts_send_ccs(fd);
-    Int sent_seq = ts_send_flight(fd, s_key, s_iv, 0, flight, 0);
-    List(Int) c_key = tls_traffic_key(c_hs);
-    List(Int) c_iv = tls_traffic_iv(c_hs);
-    TsProt done = ts_read_prot(hello.in, c_key, c_iv, 0, [], 8);
-    if (!done.ok) {
-        Int derr = if (done.alert >= 0) { tsr_alert() } else { tsr_io() };
-        Int desc = if (derr == tsr_alert()) { done.alert } else { ts_alert_decrypt_error() };
-        _ = ts_send_alert(fd, s_key, s_iv, sent_seq, ts_alert_fatal(), desc);
-        return tsr_fail(derr);
-    }
-    // The client's Finished covers the transcript through the *server's*
-    // Finished, which is also the transcript the application traffic
-    // secrets are derived from (RFC 8446 §7.1) -- not one that includes
-    // the client's own Finished.
-    Int body_len = done.msg.len() - 4;
-    List(Int) verify_data = slice_seed(done.msg, 4, body_len, []);
-    List(Int) tr4 = sconcat(tr3, fin);
+    TsRecs recs = ts_flight_records(s_key, s_iv, 0, flight, 0, []);
+    List(Int) out = ts_plain_record(22, sh, 769).concat([20, 3, 3, 0, 1, 1]).concat(recs.bytes);
+    TsPending p = TsPending { .c_key = tls_traffic_key(c_hs), .c_iv = tls_traffic_iv(c_hs), .s_key = s_key, .s_iv = s_iv, .c_hs = c_hs, .hs = hs, .tr3 = tr3, .fin = fin, .sent_seq = recs.seq, .alpn = alpn };
+    return TsStart { .out = out, .pend = p, .err = 0 };
+}
+
+// Check the client's Finished message (header included) and derive the
+// application keys. `rest` is what arrived after it, kept for the
+// record layer. The client's Finished covers the transcript through the
+// *server's* Finished, which is also the transcript the application
+// traffic secrets are derived from (RFC 8446 §7.1) -- not one that
+// includes the client's own Finished.
+pub TsDone ts_server_finish(TsPending p, List(Int) msg, List(Int) rest) {
+    Int body_len = msg.len() - 4;
+    List(Int) verify_data = slice_seed(msg, 4, body_len, []);
+    List(Int) tr4 = sconcat(p.tr3, p.fin);
     List(Int) th4 = ts_hash(tr4);
-    List(Int) expect = tls_finished(c_hs, th4);
-    Bool fin_ok = ct_equal(expect, verify_data);
-    if (!fin_ok) {
-        _ = ts_send_alert(fd, s_key, s_iv, sent_seq, ts_alert_fatal(), ts_alert_decrypt_error());
-        return tsr_fail(tsr_bad_finished());
+    List(Int) expect = tls_finished(p.c_hs, th4);
+    if (!ct_equal(expect, verify_data)) {
+        return TsDone { .out = ts_alert_record(p.s_key, p.s_iv, p.sent_seq, ts_alert_decrypt_error()), .keys = tls_keys_none(), .err = tsr_bad_finished() };
     }
-    List(Int) master = tls_master_secret(hs);
+    List(Int) master = tls_master_secret(p.hs);
     List(Int) c_ap = tls_c_ap_traffic(master, th4);
     List(Int) s_ap = tls_s_ap_traffic(master, th4);
-    TlsKeys keys = tls_keys_pending(tls_traffic_key(c_ap), tls_traffic_iv(c_ap), tls_traffic_key(s_ap), tls_traffic_iv(s_ap), alpn, done.in.buf);
-    return TlsResult { .keys = keys, .err = 0 };
+    TlsKeys keys = tls_keys_pending(tls_traffic_key(c_ap), tls_traffic_iv(c_ap), tls_traffic_key(s_ap), tls_traffic_iv(s_ap), p.alpn, rest);
+    return TsDone { .out = [], .keys = keys, .err = 0 };
+}
+
+// The alert that refuses a failed Finished read: the client's own alert
+// is not answered, anything else is a decrypt_error.
+pub TsDone ts_finish_failed(TsPending p, TsProt done) {
+    Int err = if (done.alert >= 0) { tsr_alert() } else { tsr_io() };
+    List(Int) out = if (done.alert >= 0) { [] } else { ts_alert_record(p.s_key, p.s_iv, p.sent_seq, ts_alert_decrypt_error()) };
+    return TsDone { .out = out, .keys = tls_keys_none(), .err = err };
+}
+
+// ─── The handshake on a socket ────────────────────────────────────────
+
+// Everything in `b`, in sends the runtime accepts.
+@requires(network(readonly))
+Bool ts_send_all(Int fd, List(Int) b, Int at) {
+    if (at >= b.len()) { return true; }
+    Int take = if (b.len() - at > 1048576) { 1048576 } else { b.len() - at };
+    if (!resid_tcp_send_bin(fd, b[at..(at + take)])) { return false; }
+    return ts_send_all(fd, b, at + take);
+}
+
+// The full handshake on `fd`. The result's `alpn` is what the two agreed
+// on, or "" when the client offered nothing in `alpn_want`.
+@requires(network(readonly))
+pub TlsResult tls_server_handshake(Int fd, ServerKey key, List(List(Int)) chain, List(Str) alpn_want) {
+    TsIn in = ts_in(fd);
+    TsPlain hello = ts_read_plain(in, [], 1, 8);
+    if (!hello.ok) {
+        Int err = if (hello.alert >= 0) { tsr_alert() } else { tsr_io() };
+        _ = if (hello.alert >= 0) { true } else { ts_send_all(fd, ts_plain_alert_record(ts_alert_internal_error()), 0) };
+        return tsr_fail(err);
+    }
+    TsStart st = ts_server_start(hello.msg, key, chain, alpn_want);
+    Bool sent = ts_send_all(fd, st.out, 0);
+    if (st.err != 0) { return tsr_fail(st.err); }
+    if (!sent) { return tsr_fail(tsr_io()); }
+    TsProt done = ts_read_prot(hello.in, st.pend.c_key, st.pend.c_iv, 0, [], 8);
+    TsDone d = if (done.ok) { ts_server_finish(st.pend, done.msg, done.in.buf) } else { ts_finish_failed(st.pend, done) };
+    _ = ts_send_all(fd, d.out, 0);
+    return TlsResult { .keys = d.keys, .err = d.err };
 }

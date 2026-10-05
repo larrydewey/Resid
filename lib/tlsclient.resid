@@ -32,10 +32,21 @@ type TlsClient = { Int fd; TlsKeys keys; Bool eof; List(Int) buf; };
 // What a client is told before it connects: the name to ask for (sent as
 // the server name and checked against the certificate), what to check it
 // against, and the protocols to offer.
-type TlsClientCfg = { Str name; TrustStore store; List(Str) alpn; };
+// `deadline_ms` bounds the whole connection from the handshake on, so a
+// server that trickles its reply cannot hold the client indefinitely.
+type TlsClientCfg = { Str name; TrustStore store; List(Str) alpn; Int deadline_ms; };
+
+// Five minutes: a 64 MB artifact at about 250 KB/s.
+pub Int tls_client_deadline_ms() { return 300000; }
 
 pub TlsClientCfg tls_client_cfg(Str name, TrustStore store, List(Str) alpn) {
-    return TlsClientCfg { .name = name, .store = store, .alpn = alpn };
+    return TlsClientCfg { .name = name, .store = store, .alpn = alpn, .deadline_ms = tls_client_deadline_ms() };
+}
+
+// The same configuration with another deadline; 0 leaves only the
+// socket's 30 s per read or blocked send.
+pub TlsClientCfg tls_client_cfg_within(TlsClientCfg c, Int ms) {
+    return TlsClientCfg { .name = c.name, .store = c.store, .alpn = c.alpn, .deadline_ms = ms };
 }
 
 // The connection, or why there is none.
@@ -81,6 +92,7 @@ Bool tc_send_prot(Int fd, List(Int) key, List(Int) iv, Int seq, List(Int) msg, I
 pub TlsDial tls_client_connect(Str host, Int port, TlsClientCfg cfg) {
     Int fd = resid_tcp_connect(host, port);
     if (fd < 0) { return tls_dial_err("cannot connect to " + host + ":" + f"{port}"); }
+    _ = resid_tcp_deadline(fd, cfg.deadline_ms);
     List(Int) priv = random_bytes(32);
     List(Int) pub = x25519(priv, tc_base());
     List(Int) share = slice_seed(pub, 0, 32, []);
@@ -545,6 +557,13 @@ HttpsGet https_failed(Str err) {
 // that was asked for.
 @requires(network, clock(readonly))
 pub HttpsGet tls_https_get(Str url, Str name, TrustStore store, List(Str) alpn) {
+    return tls_https_get_within(url, name, store, alpn, tls_client_deadline_ms());
+}
+
+// The same, with the whole exchange -- connect to last byte -- bounded
+// by `ms` instead of the default.
+@requires(network, clock(readonly))
+pub HttpsGet tls_https_get_within(Str url, Str name, TrustStore store, List(Str) alpn, Int ms) {
     Str rest = https_after_scheme(url);
     if (rest == "") { return https_failed("not an https url: " + url); }
     Int slash = str_index_of(rest, "/", 0);
@@ -556,7 +575,7 @@ pub HttpsGet tls_https_get(Str url, Str name, TrustStore store, List(Str) alpn) 
     Int port = if (colon < 0) { 443 } else { if (https_digits(ps)) { str_parse_int(ps) } else { 0 } };
     if (host == "" || port <= 0) { return https_failed("no host in " + url); }
     Str asked = if (name == "") { host } else { name };
-    TlsDial d = tls_client_connect(host, port, tls_client_cfg(asked, store, alpn));
+    TlsDial d = tls_client_connect(host, port, tls_client_cfg_within(tls_client_cfg(asked, store, alpn), ms));
     if (d.err != "") { return https_failed(url + ": " + d.err); }
     List(Int) req = str_to_bytes("GET " + path + " HTTP/1.1\r\nHost: " + hostport + "\r\nUser-Agent: resid\r\nAccept: */*\r\nConnection: close\r\n\r\n");
     WireOut(TlsClient) sent = wire_send(d.conn, req);
@@ -592,7 +611,7 @@ pub HttpsGet tls_https_get(Str url, Str name, TrustStore store, List(Str) alpn) 
     HeadBytes hb = https_body(sent.conn, sc.rest, want);
     _ = wire_close(sent.conn);
     if (!hb.ok) {
-        return https_failed(url + " declared " + f"{want}" + " bytes and sent " + f"{hb.body.len()}");
+        return https_failed(url + " declared " + f"{want}" + " bytes and sent " + f"{hb.body.len()}" + f" (the connection closed, or passed its {ms} ms deadline)");
     }
     return HttpsGet { .status = 200, .bytes = hb.body, .err = "", .head = head };
 }

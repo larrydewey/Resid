@@ -67,9 +67,13 @@ inherited.
 | `resid_tcp_accept(lfd)` | an accepted connection, or -1 | read |
 | `resid_tcp_shutdown(fd)` | `Bool`: no more sends; receives end 2 s from now | read |
 | `resid_tcp_deadline(fd, ms)` | `Bool`: receives and sends end `ms` from now, however the bytes are paced; 0 clears | read |
+| `resid_tcp_accept_now(lfd)` | a waiting connection, -2 when none is, -1 on failure; makes the listener non-blocking | read |
+| `resid_tcp_poll(fds, wants, ms)` | `List(Int)`: per socket 1 readable, 2 writable, 4 deadline passed, 8 not a socket; waits at most `ms` (-1 no bound) and never past the nearest deadline | read |
+| `resid_tcp_send_some(fd, bytes)` | `Int`: bytes sent without waiting, 0 when the buffer is full, -1 on error | read |
 | `resid_tcp_close(fd)` | `Bool` | read |
 
-Sockets have a 30 s timeout on any one receive or blocked send. `network(readonly)` grants every row
+Sockets have a 30 s timeout on any one receive or blocked send, and a
+connect gives up after 30 s. `network(readonly)` grants every row
 marked read: exposing a port to other machines is the only write.
 `lib/http.resid`, `lib/httpserv.resid` and `lib/tls.resid` are built on
 these builtins.

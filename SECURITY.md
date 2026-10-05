@@ -146,12 +146,14 @@ rows here are about what it accepts.
 | The accept loop closes each connection exactly once, so a worker never closes a descriptor number another worker has just been handed. | roundtrip (refusals, repeated runs) |
 | `examples/http_server.resid` serves files only under its `--root`: a path with an empty, `.` or `..` segment is 404, and so is a directory. | client.py dotdot, dir |
 
-Not guaranteed: a handler's own time is unbounded; each worker serves one
-connection at a time, so as many stalled clients as there are workers
-delay everyone else until the deadlines pass (denial of service is out of
-scope above); and workers
-are as many as the program spawns, with no queueing beyond the kernel's
-listen backlog.
+| A client that connects and stalls -- silent, mid-head, or mid-handshake -- costs the server a descriptor, not a worker: `http_accept_loop` and `tls_accept_loop` are event loops over every connection they hold, so other clients are answered at once however many stall. | client.py (answered past 60 stalled clients), tls (served past 30 stalled handshakes) |
+| Each loop holds at most `HttpLimits.open_max` connections (1024); past it, the one that has waited longest for its request is dropped for the newcomer, so stalled connections cannot keep new ones out. | roundtrip (crowd evicted) |
+| A request is parsed once it is whole; how far it has been checked is remembered, so one sent a byte at a time costs linear work. A TLS handshake step is attempted only when a new record is complete, and a handshake past 64 KiB or 16 records is refused. | roundtrip (slow client cut off) |
+
+Not guaranteed: a handler's own time is unbounded and runs on its loop,
+so a slow handler delays that loop's other connections (spawn more loops
+for more cores); and a flood of new connections can still crowd out
+waiting ones through eviction (denial of service is out of scope above).
 
 ## TLS server (`lib/tlsserver.resid`, `lib/tlswire.resid`)
 
@@ -189,6 +191,7 @@ should not be running this.
 | An address SAN is matched as bytes, exactly. `127.0.0.1` in a certificate is not a wildcard for the loopback. | iPAddress SAN, wrong iPAddress SAN refused |
 | A response is only accepted with a Content-Length, and over a 64 MB cap. A body is never read to close, because a registry that keeps streaming is a registry that can stream forever. | (cap and `Content-Length` required in `tls_https_get`) |
 | ALPN is negotiated, not assumed. The client's offers go on the wire in its ClientHello, the server's choice comes back in EncryptedExtensions, and a client offered a protocol the server did not name fails rather than picking for itself. | server choice wins over the client's order, declined ALPN is not an invented one |
+| A server cannot hold a client: the whole exchange, handshake to last byte, has a deadline (five minutes; `tls_client_cfg_within`, `tls_https_get_within`, `resid-fetch --timeout`), and a connect gives up after 30 s. The same deadline bounds `lib/http.resid` and the `http://` registry fetch in `resid build`. | a trickling server is cut off by the fetch deadline (`tests/pkg/run.sh`) |
 | What arrives is not trusted for it: `resid-fetch` prints the SHA-256 and `resid build` still verifies the index against `[registry] pubkey` and every archive against its hash. The indirection adds transport authentication, not trust. | (unchanged in `tests/pkg/run.sh`) |
 
 The direction of the TLS 1.3 traffic secrets is the one mistake that a

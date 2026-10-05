@@ -145,10 +145,157 @@ Bool tls_deadline(TlsConn c, Int ms) { return resid_tcp_deadline(c.fd, ms); }
 Wire(TlsConn) = { .wire_fill = tls_fill, .wire_send = tls_send, .wire_close = tls_close, .wire_deadline = tls_deadline };
 Accept(TlsConn, TlsCfg) = tls_accept;
 
-// Accept TLS connections on `lfd` and serve each in turn: the same loop
-// the plain server runs, over a transport that has to shake hands before
+// ─── The session: TLS for an event loop ───────────────────────────────
+//
+// The same handshake and record layer as above, with the reading done by
+// the caller: bytes go in as they arrive, and nothing here waits. A step
+// is only attempted when a complete record has arrived since the last
+// one, so a client that sends its hello a byte at a time costs a header
+// walk per byte, not a parse.
+
+// `phase` 0 waits for the ClientHello, 1 for the client's Finished, 2
+// carries application data, 3 is over. `raw` is what arrived and is not
+// consumed yet; `seen` the complete records in it at the last attempt.
+type TlsSess = { Int phase; List(Int) raw; Int seen; TsPending pend; TlsKeys keys; };
+
+TlsSess tls_sess_open(TlsCfg conf) {
+    return TlsSess { .phase = 0, .raw = [], .seen = 0, .pend = ts_pending_none(), .keys = tls_keys_none() };
+}
+
+// Complete records at the front of `b`.
+Int tls_records_in(List(Int) b, Int at, Int n) {
+    if (at + 5 > b.len()) { return n; }
+    Int len = b[at + 3] * 256 + b[at + 4];
+    if (at + 5 + len > b.len()) { return n; }
+    return tls_records_in(b, at + 5 + len, n + 1);
+}
+
+TlsSess tls_sess_with(TlsSess s, Int phase, List(Int) raw, Int seen) {
+    return TlsSess { .phase = phase, .raw = raw, .seen = seen, .pend = s.pend, .keys = s.keys };
+}
+
+SessIn(TlsSess) tls_sess_end(TlsSess s, List(Int) out) {
+    return SessIn { .sess = tls_sess_with(s, 3, [], 0), .plain = [], .out = out, .status = 2 };
+}
+
+// A handshake that reads more than this, or this many records, without
+// finishing is not one.
+Int tls_hs_max_bytes() { return 65536; }
+Int tls_hs_max_records() { return 16; }
+
+@requires(network(readonly))
+SessIn(TlsSess) tls_sess_input(TlsCfg conf, TlsSess s, List(Int) raw) {
+    if (s.phase == 3) { return tls_sess_end(s, []); }
+    return tls_sess_step(conf, tls_sess_with(s, s.phase, s.raw.concat(raw), s.seen), [], []);
+}
+
+// Advance as far as the bytes in hand allow, collecting what to send.
+@requires(network(readonly))
+SessIn(TlsSess) tls_sess_step(TlsCfg conf, TlsSess s, List(Int) plain, List(Int) out) {
+    if (s.phase == 2) {
+        TlsOpened o = tls_open_ready(s.keys, s.raw, 0, plain);
+        TlsSess next = TlsSess { .phase = if (o.status == 0) { 2 } else { 3 }, .raw = o.raw, .seen = 0, .pend = s.pend, .keys = o.keys };
+        return SessIn { .sess = next, .plain = o.plain, .out = out, .status = o.status };
+    }
+    Int count = tls_records_in(s.raw, 0, 0);
+    if (s.raw.len() > tls_hs_max_bytes() || count > tls_hs_max_records()) {
+        List(Int) refuse = if (s.phase == 0) { ts_plain_alert_record(ts_alert_internal_error()) } else { ts_alert_record(s.pend.s_key, s.pend.s_iv, s.pend.sent_seq, ts_alert_internal_error()) };
+        return tls_sess_end(s, out.concat(refuse));
+    }
+    if (count <= s.seen) {
+        return SessIn { .sess = s, .plain = plain, .out = out, .status = 0 };
+    }
+    // fd -1 is no socket: a read past what is buffered is an end of input,
+    // which here means "not yet", never a refusal.
+    TsIn in = TsIn { .fd = -1, .buf = s.raw, .eof = false };
+    if (s.phase == 0) {
+        TsPlain hello = ts_read_plain(in, [], 1, 8);
+        if (!hello.ok && hello.alert < 0 && hello.in.eof) {
+            return SessIn { .sess = tls_sess_with(s, 0, s.raw, count), .plain = plain, .out = out, .status = 0 };
+        }
+        if (!hello.ok) {
+            List(Int) refuse = if (hello.alert >= 0) { [] } else { ts_plain_alert_record(ts_alert_internal_error()) };
+            return tls_sess_end(s, out.concat(refuse));
+        }
+        TsStart st = ts_server_start(hello.msg, conf.key, conf.chain, conf.alpn);
+        if (st.err != 0) { return tls_sess_end(s, out.concat(st.out)); }
+        TlsSess next = TlsSess { .phase = 1, .raw = hello.in.buf, .seen = 0, .pend = st.pend, .keys = s.keys };
+        return tls_sess_step(conf, next, plain, out.concat(st.out));
+    }
+    TsProt done = ts_read_prot(in, s.pend.c_key, s.pend.c_iv, 0, [], 8);
+    if (!done.ok && done.alert < 0 && done.in.eof) {
+        return SessIn { .sess = tls_sess_with(s, 1, s.raw, count), .plain = plain, .out = out, .status = 0 };
+    }
+    TsDone d = if (done.ok) { ts_server_finish(s.pend, done.msg, done.in.buf) } else { ts_finish_failed(s.pend, done) };
+    if (d.err != 0) { return tls_sess_end(s, out.concat(d.out)); }
+    TlsSess app = TlsSess { .phase = 2, .raw = d.keys.pending, .seen = 0, .pend = ts_pending_none(), .keys = d.keys };
+    return tls_sess_step(conf, app, plain, out);
+}
+
+// Application records opened as far as they are complete. `status` as in
+// SessIn: 1 after the client's close_notify or alert, 2 for a record that
+// fails its tag or has no business arriving.
+type TlsOpened = { TlsKeys keys; List(Int) raw; List(Int) plain; Int status; };
+
+TlsOpened tls_open_ready(TlsKeys k, List(Int) raw, Int at, List(Int) plain) {
+    Int n = raw.len();
+    Bool whole = at + 5 <= n && at + 5 + raw[at + 3] * 256 + raw[at + 4] <= n;
+    if (!whole) {
+        List(Int) left = raw[at..n];
+        return TlsOpened { .keys = k, .raw = left, .plain = plain, .status = 0 };
+    }
+    Int blen = raw[at + 3] * 256 + raw[at + 4];
+    Int ctype = raw[at];
+    Int next = at + 5 + blen;
+    if (blen > tsr_max_record()) { return TlsOpened { .keys = k, .raw = [], .plain = plain, .status = 2 }; }
+    if (ctype == 20) { return tls_open_ready(k, raw, next, plain); }
+    if (ctype != 23) { return TlsOpened { .keys = k, .raw = [], .plain = plain, .status = 2 }; }
+    List(Int) hdr = raw[at..(at + 5)];
+    List(Int) body = raw[(at + 5)..next];
+    List(Int) pt = tls_open(k.rseq, k.rkey, k.riv, hdr, body);
+    TlsKeys k2 = tls_keys_rseq(k, k.rseq + 1);
+    if (pt.len() == 0) { return TlsOpened { .keys = k2, .raw = [], .plain = plain, .status = 2 }; }
+    Int inner = tls_inner_type(pt);
+    Int clen = pt.len() - 1;
+    List(Int) content = slice_seed(pt, 0, clen, []);
+    if (inner == 23) { return tls_open_ready(k2, raw, next, plain.concat(content)); }
+    if (inner == 21) { return TlsOpened { .keys = k2, .raw = [], .plain = plain, .status = 1 }; }
+    // A post-handshake message (a client KeyUpdate, say) is not acted on.
+    if (inner == 22) { return tls_open_ready(k2, raw, next, plain); }
+    return TlsOpened { .keys = k2, .raw = [], .plain = plain, .status = 2 };
+}
+
+// Plaintext into records of at most 2^14 bytes, each its own sequence
+// number (RFC 8446 §5.1).
+type TlsSealed = { TlsKeys keys; List(Int) bytes; };
+
+TlsSealed tls_seal_all(TlsKeys k, List(Int) b, Int at, List(Int) acc) {
+    if (at >= b.len()) { return TlsSealed { .keys = k, .bytes = acc }; }
+    Int take = if (b.len() - at > 16384) { 16384 } else { b.len() - at };
+    List(Int) chunk = slice_seed(b, at, take, []);
+    List(Int) rec = tls_protect(k.wseq, k.wkey, k.wiv, chunk, 23);
+    return tls_seal_all(tls_keys_wseq(k, k.wseq + 1), b, at + take, acc.concat(rec));
+}
+
+SessOut(TlsSess) tls_sess_output(TlsSess s, List(Int) plain) {
+    if (s.phase != 2) { return SessOut { .sess = s, .out = [] }; }
+    TlsSealed sealed = tls_seal_all(s.keys, plain, 0, []);
+    TlsSess next = TlsSess { .phase = 2, .raw = s.raw, .seen = 0, .pend = s.pend, .keys = sealed.keys };
+    return SessOut { .sess = next, .out = sealed.bytes };
+}
+
+// A close_notify, so the client reads a clean end rather than a
+// truncated reply.
+List(Int) tls_sess_goodbye(TlsSess s) {
+    if (s.phase != 2) { return []; }
+    return tls_protect(s.keys.wseq, s.keys.wkey, s.keys.wiv, [1, 0], 21);
+}
+
+Session(TlsSess, TlsCfg) = { .sess_open = tls_sess_open, .sess_input = tls_sess_input, .sess_output = tls_sess_output, .sess_goodbye = tls_sess_goodbye };
+
+// Accept TLS connections on `lfd` and serve them: the same event loop
+// the plain server runs, over a session that has to shake hands before
 // there is anything to read. `max_conns` 0 means until accept fails.
-@needs(Wire(TlsConn))
 @requires(network(readonly))
 pub Int tls_accept_loop(Int lfd, TlsCfg conf, HttpReply closure(HttpRequest) handler, HttpLimits lim, Int max_conns) {
     return http_accept_loop_where(lfd, conf, handler, lim, max_conns);

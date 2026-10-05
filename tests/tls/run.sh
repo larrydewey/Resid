@@ -386,6 +386,30 @@ if [ -n "$SRVPORT" ]; then
 else bad "https server did not report a port"; fi
 unserve
 
+# Clients that stall mid-handshake -- silent, or with half a ClientHello --
+# outnumber the server's two workers; the handshake is a step in each
+# worker's event loop, so this repository's client is still served.
+serve 0 "$W/srv.log" "$F/srv.pem" "$F/srv.key"
+if [ -n "$SRVPORT" ]; then
+    python3 - "$SRVPORT" > "$W/stall.pids" <<'PY' &
+import socket, sys, time
+socks = []
+for k in range(30):
+    s = socket.create_connection(("127.0.0.1", int(sys.argv[1])))
+    if k % 2: s.sendall(bytes.fromhex("160301020001"))
+    socks.append(s)
+print("ready", flush=True)
+time.sleep(20)
+PY
+    STALL=$!
+    for _ in $(seq 1 100); do grep -q ready "$W/stall.pids" 2>/dev/null && break; sleep 0.05; done
+    LAST="$(timeout 10 "$W/tlsclient" localhost "$SRVPORT" "$EC_CERT" "" "$F/srvca.pem" 2>&1)"
+    printf '%s\n' "$LAST" | grep -q "^REPLY: HTTP/1.1 200 OK" && ok \
+        || bad "served past 30 stalled handshakes: $(printf '%s' "$LAST" | tr '\n' ' ')"
+    kill "$STALL" 2>/dev/null; wait "$STALL" 2>/dev/null
+else bad "https server did not report a port (stall)"; fi
+unserve
+
 # A client that does not trust the server's CA gets nothing: refused, not
 # downgraded and not served.
 serve 1 "$W/srv.log" "$F/srv.pem" "$F/srv.key"

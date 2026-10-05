@@ -607,6 +607,9 @@ HttpGet http_get_bytes(Str url) {
     if (u.host == "" || u.port <= 0) { return http_get_failed("registry url '" + url + "' has no host"); }
     Int fd = resid_tcp_connect(u.host, u.port);
     if (fd < 0) { return http_get_failed("cannot connect to registry host '" + u.host + ":" + f"{u.port}" + "'"); }
+    // Connect to last byte in five minutes: a registry that trickles an
+    // artifact cannot hold a build indefinitely.
+    _ = resid_tcp_deadline(fd, 300000);
     Str hostport = if (u.port == 80) { u.host } else { u.host + ":" + f"{u.port}" };
     Str req = http_build_request("GET", u.path, hostport, "", "close");
     if (!resid_tcp_send(fd, req)) {

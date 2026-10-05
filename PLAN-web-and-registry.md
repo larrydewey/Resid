@@ -129,3 +129,8 @@ Fetching over https into `resid build` is where this stops:
 - Done 2026-10-04: per-request read and reply deadlines
   (`HttpLimits.request_ms`, `reply_ms`; `resid_tcp_deadline` in the
   runtime), and a 30 s bound on any one blocked send on every socket.
+- Done 2026-10-04: the accept loop is an event loop (`resid_tcp_poll`,
+  `Session(S, C)`, `open_max` eviction), so stalled clients no longer hold
+  workers; clients (`tls_https_get`, `resid-fetch --timeout`,
+  `lib/http.resid`, the `http://` registry fetch) have a whole-exchange
+  deadline, and connect gives up after 30 s.

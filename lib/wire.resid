@@ -54,6 +54,29 @@ behavior Accept(T, C) {
     Accepted(T) wire_accept(C conf, Int fd);
 }
 
+// A transport as a state machine over bytes, for a server's event loop:
+// the loop does every read and write, and a session only turns what
+// arrived into plaintext and what is to be sent into bytes. Nothing in
+// one ever waits, so a connection that is waiting for its peer costs the
+// loop a descriptor, not a worker.
+//
+// `status` is 0 to go on (including "not enough yet"), 1 when the peer
+// has ended the connection cleanly, and 2 when it must end now; `out` is
+// sent either way -- a handshake flight, or the alert that refuses one.
+type SessIn(S) = { S sess; List(Int) plain; List(Int) out; Int status; };
+type SessOut(S) = { S sess; List(Int) out; };
+
+behavior Session(S, C) {
+    // The state of a freshly accepted connection.
+    S sess_open(C conf);
+    // Bytes that arrived; the plaintext they complete.
+    SessIn(S) sess_input(C conf, S s, List(Int) raw);
+    // Plaintext to send; the bytes that carry it.
+    SessOut(S) sess_output(S s, List(Int) plain);
+    // What to send before closing: nothing, or a close_notify.
+    List(Int) sess_goodbye(S s);
+}
+
 // ─── Plain: a socket ───────────────────────────────────────────────────
 //
 // The transport everything else is measured against, and the one a
@@ -134,6 +157,24 @@ Accepted(Int) plain_accept(PlainCfg conf, Int fd) {
 
 Wire(Int) = { .wire_fill = plain_fill, .wire_send = plain_send, .wire_close = plain_close, .wire_deadline = plain_deadline };
 Accept(Int, PlainCfg) = plain_accept;
+
+// The plain session: bytes are plaintext.
+type PlainSess = { Bool none; };
+
+PlainSess plain_sess_open(PlainCfg conf) { return PlainSess { .none = true }; }
+
+@requires(network(readonly))
+SessIn(PlainSess) plain_sess_input(PlainCfg conf, PlainSess s, List(Int) raw) {
+    return SessIn { .sess = s, .plain = raw, .out = [], .status = 0 };
+}
+
+SessOut(PlainSess) plain_sess_output(PlainSess s, List(Int) plain) {
+    return SessOut { .sess = s, .out = plain };
+}
+
+List(Int) plain_sess_goodbye(PlainSess s) { return []; }
+
+Session(PlainSess, PlainCfg) = { .sess_open = plain_sess_open, .sess_input = plain_sess_input, .sess_output = plain_sess_output, .sess_goodbye = plain_sess_goodbye };
 
 // Connect to `host:port`, or -1. Loopback and anywhere else alike: the
 // caller decides what authority it needs to reach, not this verb.
