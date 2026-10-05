@@ -224,6 +224,19 @@ class Cell:
             with open(os.path.join(self.dir, rel), "rb") as f:
                 h.update(f.read())
             h.update(b"\0")
+        if self.lang == "resid":
+            # A Resid cell is also its toolchain: the compiler, the runtime
+            # and the standard library are in this repository and change
+            # between runs, so a new compiler invalidates builds and runs.
+            boot = os.path.join(ROOT, "build", "boot")
+            lib = os.path.join(ROOT, "lib")
+            deps = [os.path.join(boot, "stage2.bin"), os.path.join(boot, "rt.ll")]
+            deps += sorted(os.path.join(lib, n) for n in os.listdir(lib) if n.endswith(".resid"))
+            for path in deps:
+                h.update(os.path.relpath(path, ROOT).encode() + b"\0")
+                with open(path, "rb") as f:
+                    h.update(f.read())
+                h.update(b"\0")
         return h.hexdigest()
 
     def source_stats(self):
