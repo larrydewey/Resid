@@ -24,7 +24,7 @@
 ///   residc tools/resid-pkg.resid run -- checksig <out> <pubkey-hex>
 ///   residc tools/resid-pkg.resid run -- extract <out> <dir>
 ///   residc tools/resid-pkg.resid run -- publish <dir> <registry> [keyfile]
-///   residc tools/resid-pkg.resid run -- serve <registry> [--port N] [--port-file F] [--requests N]
+///   residc tools/resid-pkg.resid run -- serve <registry> [--port N] [--port-file F] [--requests N] [--cert F --key F]
 ///   residc tools/resid-pkg.resid run -- index list <registry>
 ///   residc tools/resid-pkg.resid run -- index add <registry> <name> <version> <sha256-hex> <keyfile>
 ///   residc tools/resid-pkg.resid run -- index remove <registry> <name> <version> <keyfile>
@@ -55,6 +55,8 @@
 import "../lib/crypto.resid";
 import "../lib/ed25519.resid";
 import "../lib/httpserv.resid";
+import "../lib/tlswire.resid";
+import "../lib/tlskey.resid";
 
 // ─── little-endian integer encoding (this format's own choice — see
 // module doc comment) ───────────────────────────────────────────────
@@ -330,7 +332,7 @@ Int extract_archive(Str archive_path, Str out_dir) {
 // ─── CLI ────────────────────────────────────────────────────────────
 
 Str usage_text() {
-    return "usage: resid-pkg keygen <secret.hex> <pub.hex> | pack <dir> <out> | sign <out> <keyfile> | sign-dir <dir> <keyfile> | checksig <out> <pubkey-hex> | extract <out> <dir> | publish <dir> <registry> [keyfile] | serve <registry> [--port N] [--port-file F] [--requests N] | index list <registry> | index add <registry> <name> <version> <sha256-hex> <keyfile> | index remove <registry> <name> <version> <keyfile> | index verify <registry> <pubkey-hex>";
+    return "usage: resid-pkg keygen <secret.hex> <pub.hex> | pack <dir> <out> | sign <out> <keyfile> | sign-dir <dir> <keyfile> | checksig <out> <pubkey-hex> | extract <out> <dir> | publish <dir> <registry> [keyfile] | serve <registry> [--port N] [--port-file F] [--requests N] [--cert F --key F] | index list <registry> | index add <registry> <name> <version> <sha256-hex> <keyfile> | index remove <registry> <name> <version> <keyfile> | index verify <registry> <pubkey-hex>";
 }
 
 // Ed25519 keypair generation (mirrors `resid_build::archive::keygen`): a
@@ -635,8 +637,9 @@ Int cmd_publish(Str dir, Str reg, Str keyfile) {
 // than a missing feature:
 //
 //   * It binds 127.0.0.1 only (see resid_tcp_listen in runtime/rt/net.resid).
-//     A registry that needs to be reachable from elsewhere is served over
-//     TLS by examples/https_server.resid, or sits behind a proxy.
+//     With --cert and --key it speaks TLS 1.3 itself; a registry that needs
+//     to be reachable from elsewhere still sits behind a proxy that forwards
+//     to that loopback port.
 //   * It serves only files under the registry directory. A request path is
 //     rejected outright if any segment is `..` or empty, so no request can
 //     name a file outside the root — the same rule `extract` enforces on
@@ -645,8 +648,8 @@ Int cmd_publish(Str dir, Str reg, Str keyfile) {
 //     index and the publisher's signature, not from the transport, so
 //     nothing here can change what a client accepts.
 
-Str serve_port_line(Int port) {
-    return "resid-pkg serve: listening on http://127.0.0.1:" + f"{port}" + "\n";
+Str serve_port_line(Str scheme, Int port) {
+    return "resid-pkg serve: listening on " + scheme + "://127.0.0.1:" + f"{port}" + "\n";
 }
 
 // Reject anything that could name a file outside the registry root, and
@@ -712,33 +715,82 @@ Int serve_workers(Int lfd, Int n, Str root, Int conns) {
     return if (mine < 0 || rest < 0) { -1 } else { rest + mine };
 }
 
-// `serve <registry> [--port N] [--port-file F] [--requests N]`. Port 0
-// (the default) binds an ephemeral port and reports it, so a caller never
-// has to reserve one; --port-file also writes it for a script to read.
-type ServeOpts = { Int port; Str port_file; Int requests; Bool ok; };
+// The same over TLS 1.3: the handshake is a step in each worker's event
+// loop, and the registry is served under the same rules.
+@requires(network(readonly), filesystem(readonly))
+Int serve_workers_tls(Int lfd, Int n, Str root, Int conns, TlsCfg conf) {
+    if (n <= 0) { return 0; }
+    Result(Int, RegionError) r = spawn (network(readonly), filesystem(readonly)) {
+        return tls_accept_loop(lfd, conf, lambda(q) { registry_reply(root, q) }, http_limits(), conns);
+    };
+    Int rest = serve_workers_tls(lfd, n - 1, root, conns, conf);
+    Int mine = r else { -1 };
+    return if (mine < 0 || rest < 0) { -1 } else { rest + mine };
+}
+
+// The key and chain for --cert/--key, refused at startup -- not on every
+// handshake -- when either is unreadable or they do not belong together.
+type ServeTls = { TlsCfg conf; Str err; };
+
+@requires(filesystem(readonly))
+ServeTls load_serve_tls(Str cert, Str key) {
+    List(List(Int)) none = [];
+    Option(ServerKey) maybe_key = tls_key_load(key);
+    ServerKey k = maybe_key else { EdKey([]) };
+    Str key_err = match maybe_key { Some(x) => "", None => "cannot read a usable key from '" + key + "' (PKCS#8 or SEC1, PEM or DER, Ed25519 or ECDSA P-256)" };
+    if (key_err != "") { return ServeTls { .conf = tls_cfg(k, none, ["http/1.1"]), .err = key_err }; }
+    List(List(Int)) chain = tls_chain_load(cert);
+    if (chain.len() == 0) { return ServeTls { .conf = tls_cfg(k, none, ["http/1.1"]), .err = "no certificate in '" + cert + "'" }; }
+    if (!tls_key_cert_matches(k, chain[0])) {
+        return ServeTls { .conf = tls_cfg(k, none, ["http/1.1"]), .err = "the certificate in '" + cert + "' does not carry the key in '" + key + "'" };
+    }
+    return ServeTls { .conf = tls_cfg(k, chain, ["http/1.1"]), .err = "" };
+}
+
+// `serve <registry> [--port N] [--port-file F] [--requests N]
+// [--cert F --key F]`. Port 0 (the default) binds an ephemeral port and
+// reports it, so a caller never has to reserve one; --port-file also
+// writes it for a script to read. --cert and --key together serve over
+// TLS 1.3 instead of plain HTTP.
+type ServeOpts = { Int port; Str port_file; Int requests; Str cert; Str key; Bool ok; };
+
+ServeOpts serve_opts(Int port, Str port_file, Int requests, Str cert, Str key, Bool ok) {
+    return ServeOpts {.port = port, .port_file = port_file, .requests = requests, .cert = cert, .key = key, .ok = ok};
+}
 
 @requires(args)
 ServeOpts parse_serve_opts(Int i, Int argc, ServeOpts o) {
     if (i >= argc) { return o; }
     Str flag = args.get(i);
     Bool has_next = i + 1 < argc;
-    if (flag == "--port" && has_next) {
-        return parse_serve_opts(i + 2, argc, ServeOpts {.port = str_parse_int(args.get(i + 1)), .port_file = o.port_file, .requests = o.requests, .ok = o.ok});
-    }
-    if (flag == "--port-file" && has_next) {
-        return parse_serve_opts(i + 2, argc, ServeOpts {.port = o.port, .port_file = args.get(i + 1), .requests = o.requests, .ok = o.ok});
-    }
-    if (flag == "--requests" && has_next) {
-        return parse_serve_opts(i + 2, argc, ServeOpts {.port = o.port, .port_file = o.port_file, .requests = str_parse_int(args.get(i + 1)), .ok = o.ok});
-    }
-    return ServeOpts {.port = o.port, .port_file = o.port_file, .requests = o.requests, .ok = false};
+    if (!has_next) { return serve_opts(o.port, o.port_file, o.requests, o.cert, o.key, false); }
+    Str v = args.get(i + 1);
+    if (flag == "--port") { return parse_serve_opts(i + 2, argc, serve_opts(str_parse_int(v), o.port_file, o.requests, o.cert, o.key, o.ok)); }
+    if (flag == "--port-file") { return parse_serve_opts(i + 2, argc, serve_opts(o.port, v, o.requests, o.cert, o.key, o.ok)); }
+    if (flag == "--requests") { return parse_serve_opts(i + 2, argc, serve_opts(o.port, o.port_file, str_parse_int(v), o.cert, o.key, o.ok)); }
+    if (flag == "--cert") { return parse_serve_opts(i + 2, argc, serve_opts(o.port, o.port_file, o.requests, v, o.key, o.ok)); }
+    if (flag == "--key") { return parse_serve_opts(i + 2, argc, serve_opts(o.port, o.port_file, o.requests, o.cert, v, o.ok)); }
+    return serve_opts(o.port, o.port_file, o.requests, o.cert, o.key, false);
 }
 
 @requires(args, filesystem, network)
-Int cmd_serve(Str root, Int port, Str port_file, Int max_requests) {
+Int cmd_serve(Str root, ServeOpts o) {
+    Int port = o.port;
+    Str port_file = o.port_file;
+    Int max_requests = o.requests;
     if (!filesystem.is_dir(root)) {
         eprintln("resid-pkg serve: not a registry directory: '" + root + "'");
         return 1;
+    }
+    Bool tls = o.cert != "" || o.key != "";
+    if (tls && (o.cert == "" || o.key == "")) {
+        eprintln("resid-pkg serve: --cert and --key go together");
+        return 2;
+    }
+    ServeTls st = if (tls) { load_serve_tls(o.cert, o.key) } else { ServeTls { .conf = tls_cfg(EdKey([]), [], []), .err = "" } };
+    if (st.err != "") {
+        eprintln("resid-pkg serve: " + st.err);
+        return 2;
     }
     Int lfd = resid_tcp_listen(port);
     if (lfd < 0) {
@@ -746,13 +798,13 @@ Int cmd_serve(Str root, Int port, Str port_file, Int max_requests) {
         return 1;
     }
     Int bound = resid_tcp_bound_port(lfd);
-    Str line = serve_port_line(bound);
+    Str line = serve_port_line(if (tls) { "https" } else { "http" }, bound);
     if (port_file != "") { filesystem.write_all(port_file, f"{bound}"); }
     println(str_trim(line));
     // --requests N is for scripts that want the server to stop after N
     // connections: one worker, so the count is exact.
     Int workers = if (max_requests > 0) { 1 } else { 4 };
-    Int rc = serve_workers(lfd, workers, root, max_requests);
+    Int rc = if (tls) { serve_workers_tls(lfd, workers, root, max_requests, st.conf) } else { serve_workers(lfd, workers, root, max_requests) };
     _ = resid_tcp_close(lfd);
     return if (rc < 0) { 1 } else { 0 };
 }
@@ -949,12 +1001,12 @@ Int main() {
     }
     if (sub == "serve") {
         if (argc < 3) { eprintln(usage_text()); return 2; }
-        ServeOpts o = parse_serve_opts(3, argc, ServeOpts {.port = 0, .port_file = "", .requests = 0, .ok = true});
+        ServeOpts o = parse_serve_opts(3, argc, serve_opts(0, "", 0, "", "", true));
         if (!o.ok) {
-            eprintln("resid-pkg serve: expected --port N, --port-file F or --requests N");
+            eprintln("resid-pkg serve: expected --port N, --port-file F, --requests N, --cert F or --key F");
             return 2;
         }
-        return cmd_serve(args.get(2), o.port, o.port_file, o.requests);
+        return cmd_serve(args.get(2), o);
     }
     eprintln(usage_text());
     return 2;

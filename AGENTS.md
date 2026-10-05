@@ -8,8 +8,9 @@ When caveman mode is active, apply wenyan-style compression: omit subjects, use 
 - **Registries**: `tools/resid-pkg.resid` packs, signs, publishes, serves and
   indexes; `tools/resid-manifest.resid` resolves and verifies. A registry is
   named by `[registry] path` (a directory) or `[registry] url` (an `http://`
-  base) -- not both. `resid-pkg serve <registry> [--port N] [--port-file F]`
-  is the publish side: loopback only, GET/HEAD only, no upload, and a request
+  base) -- not both. `resid-pkg serve <registry> [--port N] [--port-file F]
+  [--cert F --key F]` is the publish side (TLS 1.3 with the cert and key,
+  both refused at startup if they disagree): loopback only, GET/HEAD only, no upload, and a request
   path that could name a file outside the registry directory is refused. It
   runs on `lib/httpserv.resid` with four worker regions (`--requests N`: one).
   `resid-pkg index list|add|remove|verify` are the publisher's non-publish

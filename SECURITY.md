@@ -113,21 +113,24 @@ deliberately small: loopback only, `GET` and `HEAD` only, no listing, no
 upload, and no request path may name a file outside the registry
 directory. Nothing it does can change what a client accepts. Its HTTP is
 `lib/httpserv.resid`'s, so the HTTP server guarantees below apply to it,
-and four worker regions share the listener.
+and four worker regions share the listener. With `--cert` and `--key` it
+serves over TLS 1.3 through `lib/tlswire.resid`, so the TLS server
+guarantees apply too.
 
 | Guarantee | Tests (`tests/pkg/run.sh`) |
 |---|---|
 | The server serves a registry, answers 404 for what it does not carry, rejects methods other than GET/HEAD, and refuses a path that could escape the registry directory. | serve GET, serve 404, serve rejects POST, serve refused a traversal path |
 | It binds loopback and nothing else. | serve is not bound to loopback only |
+| Over TLS it is the same registry: `resid-fetch` pulls the index and an archive byte-identical, and a key and certificate that are half given or do not belong together are refused at startup. | resid-fetch over https, serve --cert without --key, serve with a key the certificate does not carry |
 | An artifact of any size up to what the client accepts is sent whole, not refused at the runtime's 1 MiB single-send cap. | serve a 3 MB artifact byte-identical |
-| A client stalled mid-request holds one worker until the request deadline, not the registry. | serve answers while other clients stall |
+| A client stalled mid-request costs the registry a socket until the request deadline, not a worker. | serve answers while other clients stall |
 
 Not guaranteed: `path` dependencies without a pinned key are trusted as
 local source (spec §28.3); the package signature is not a COSE structure
 and does not name the publisher key; `require_signatures` does not extend
-to path dependencies, which the spec exempts as local source; there is no
-TLS registry transport, so an `https://` registry must be fronted by a
-proxy that terminates TLS.
+to path dependencies, which the spec exempts as local source; and `resid
+build` does not fetch `https://` itself, so a TLS registry is pulled with
+`resid-fetch` into a directory that `[registry] path` names.
 
 ## HTTP server (`lib/httpserv.resid`)
 

@@ -110,8 +110,8 @@ Fetching over https into `resid build` is where this stops:
   (no hash that contradicts an archive already published).
 - Served over TLS by `lib/httpserv.resid`. Done 2026-10-04: `resid-pkg
   serve` is a thin wrapper over `lib/httpserv.resid` (four workers,
-  deadlines, no 1 MiB artifact cap); TLS for it is still
-  `examples/https_server.resid`.
+  deadlines, no 1 MiB artifact cap), and `--cert F --key F` serves it over
+  TLS 1.3 itself.
 - Storage behind a behavior, so a directory and other backends are
   interchangeable.
 

@@ -103,7 +103,7 @@ searched.
 | `resid-pkg checksig <out> <pubkey-hex>` | verify a signature |
 | `resid-pkg extract <out> <dir>` | extract (never outside `dir`) |
 | `resid-pkg publish <dir> <registry> [keyfile]` | pack, sign and add to a local registry index |
-| `resid-pkg serve <registry> [--port N] [--port-file F] [--requests N]` | serve that registry over HTTP |
+| `resid-pkg serve <registry> [--port N] [--port-file F] [--requests N] [--cert F --key F]` | serve that registry over HTTP, or over TLS 1.3 with a certificate and key |
 | `resid-pkg index list <registry>` | print the index |
 | `resid-pkg index add <registry> <name> <version> <sha256-hex> <keyfile>` | vouch for an entry, re-signing the index |
 | `resid-pkg index remove <registry> <name> <version> <keyfile>` | withdraw an entry, re-signing the index |
