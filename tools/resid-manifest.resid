@@ -63,10 +63,11 @@
 ///     round trip mangles anything that is not valid UTF-8.
 ///   * A response must carry `Content-Length`. Reading to close instead
 ///     would let a hostile registry stream unbounded bytes at the build.
-///   * `https://` is refused, not silently downgraded: the TLS 1.3 client
-///     transport is not part of this tool, and falling back to plaintext
-///     for a registry would be worse than not fetching at all. Use
-///     `path =` for a registry on local disk.
+///   * `https://` is refused, not silently downgraded: importing the TLS 1.3
+///     client (lib/tlsclient.resid) into this tool sends the compiler past
+///     its memory budget in reduce, and falling back to plaintext would be
+///     worse than not fetching at all. tools/resid-fetch.resid pulls the
+///     artifacts over TLS into a directory that `path =` then names.
 ///
 /// Still open: the `[signing] require_signatures` policy is parsed and
 /// enforced (see `version_trust`), and dependency source is compiled
@@ -490,7 +491,7 @@ Str url_scheme_of(Str url, Int i, Int n) {
 }
 
 Str url_unsupported_scheme(Str url, Str scheme) {
-    return "registry url '" + url + "' uses scheme '" + scheme + "', which is not wired. https:// is refused rather than downgraded: the TLS 1.3 client exists (lib/tlsclient.resid) and tools/resid-fetch.resid will fetch an artifact from such a registry, but this tool cannot import it without the compiler going past its memory budget in reduce, and a registry fetch that falls back to plaintext is worse than one that does not happen. Serve the registry with examples/https_server.resid, fetch what you need with resid-fetch, and point [registry] path at the directory.";
+    return "registry url '" + url + "' uses scheme '" + scheme + "', which is not wired. https:// is refused rather than downgraded: the TLS 1.3 client exists (lib/tlsclient.resid) and tools/resid-fetch.resid will fetch an artifact from such a registry, but this tool cannot import it without the compiler going past its memory budget in reduce, and a registry fetch that falls back to plaintext is worse than one that does not happen. Fetch what you need with resid-fetch (tools/resid-fetch.resid <base-url> <trust-store> pkg/<artifact> <out-file>, from a registry served by `resid-pkg serve <registry> --cert F --key F`), then point [registry] path at the directory.";
 }
 
 // Read one CRLF-terminated line as bytes, CRLF excluded. `depth` bounds

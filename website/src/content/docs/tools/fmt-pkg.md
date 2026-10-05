@@ -44,8 +44,30 @@ pubkey = "<the registry's signing key, hex>"
 A remote registry is untrusted input exactly like a local one: the
 archive's hash is checked against `resid.lock` and the `-sha256` sidecar,
 and trust comes from a pinned key, a keyring key or the registry's signed
-index. `https://` is refused rather than downgraded to plaintext — put
-TLS in front of the registry, or serve it locally with `path`.
+index.
+
+### A registry over HTTPS
+
+`resid-pkg serve <registry> --cert server.pem --key server.key` serves a
+registry over TLS 1.3, at the same paths as over plain HTTP. `resid build`
+cannot fetch it directly yet: `url = "https://..."` is refused, never
+downgraded to plaintext. The TLS client exists, but importing it into the
+dependency resolver pushes the compiler past its memory budget, so HTTPS
+goes through `resid-fetch` for now. It pulls one artifact over TLS 1.3,
+checks the server against a trust store you give it, and prints the
+artifact's SHA-256:
+
+```
+residc tools/resid-fetch.resid run -- [--timeout SECONDS] \
+    https://registry.example:8443 ca.pem pkg/index.resid-idx reg/pkg/index.resid-idx
+```
+
+Fetch the index, its `-sig`, and each archive with its `-sha256` and
+`-sig` into one directory, then name that directory with
+`[registry] path`. Nothing is trusted because it came over TLS:
+`resid build` still checks the index against `pubkey` and every archive
+against its hash, exactly as for a registry on disk. TLS only proves which
+server the bytes came from.
 
 `require_signatures = true` goes further than the index: an entry in the
 signed index is a hash somebody wrote down, not a signature over it, so
