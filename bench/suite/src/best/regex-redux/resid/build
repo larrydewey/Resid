@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+HERE="$(pwd)"
+ROOT="${RESID_ROOT:-$(git rev-parse --show-toplevel)}"
+mkdir -p out
+# The parallel program (ten spawn regions), -O3 -march=native.
+(cd "$ROOT" && build/boot/stage2.bin "$HERE/regexredux.resid" -o "$HERE/out/regexredux" -O3 -march=native >/dev/null)

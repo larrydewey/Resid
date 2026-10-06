@@ -2,13 +2,13 @@
   "best/binary-trees/c": {
     "artifact_bytes": 24736,
     "bench": "binary-trees",
-    "build_s": 0.112,
+    "build_s": 0.1108,
     "cmd": [
       "./out/binary-trees"
     ],
     "exe_bytes": 24736,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/binary-trees/c",
     "lang": "c",
     "log": "logs/build-best-binary-trees-c.log",
@@ -20,19 +20,19 @@
     "source_gzip_bytes": 1055,
     "source_lines": 147,
     "source_sha256": "e74d0ba6f3413b6d95888b887dacad33355974b397c52e6a49c01c86a5b18401",
-    "timestamp": "2026-09-27T16:47:22Z",
+    "timestamp": "2026-10-05T23:58:52Z",
     "track": "best"
   },
   "best/binary-trees/cpp": {
     "artifact_bytes": 27912,
     "bench": "binary-trees",
-    "build_s": 0.3349,
+    "build_s": 0.3237,
     "cmd": [
       "./out/binary-trees"
     ],
     "exe_bytes": 27912,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/binary-trees/cpp",
     "lang": "cpp",
     "log": "logs/build-best-binary-trees-cpp.log",
@@ -44,19 +44,19 @@
     "source_gzip_bytes": 1115,
     "source_lines": 114,
     "source_sha256": "b48a9fa25d1cb1e51d7377c15a3909aac9327b72f7af893e64323f687234fdb3",
-    "timestamp": "2026-09-27T16:47:22Z",
+    "timestamp": "2026-10-05T23:58:53Z",
     "track": "best"
   },
   "best/binary-trees/csharp": {
     "artifact_bytes": 255120,
     "bench": "binary-trees",
-    "build_s": 0.9087,
+    "build_s": 0.8831,
     "cmd": [
       "./out/binarytrees"
     ],
     "exe_bytes": 78256,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/binary-trees/csharp",
     "lang": "csharp",
     "log": "logs/build-best-binary-trees-csharp.log",
@@ -68,19 +68,19 @@
     "source_gzip_bytes": 869,
     "source_lines": 83,
     "source_sha256": "4aa7f2c77c91e21f040e49099aab3cad27c880a07e14e91d0f03f5df59ce2a30",
-    "timestamp": "2026-09-27T16:47:25Z",
+    "timestamp": "2026-10-05T23:58:56Z",
     "track": "best"
   },
   "best/binary-trees/fortran": {
     "artifact_bytes": 44386,
     "bench": "binary-trees",
-    "build_s": 0.2399,
+    "build_s": 0.2402,
     "cmd": [
       "./out/binarytrees"
     ],
     "exe_bytes": 34944,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/binary-trees/fortran",
     "lang": "fortran",
     "log": "logs/build-best-binary-trees-fortran.log",
@@ -93,19 +93,19 @@
     "source_gzip_bytes": 2023,
     "source_lines": 265,
     "source_sha256": "8936c5e78b638753644a0901f1255efd716419673a9ddf5bae0275f3c8512161",
-    "timestamp": "2026-09-27T16:47:26Z",
+    "timestamp": "2026-10-05T23:58:56Z",
     "track": "best"
   },
   "best/binary-trees/go": {
     "artifact_bytes": 2541483,
     "bench": "binary-trees",
-    "build_s": 0.0876,
+    "build_s": 0.0906,
     "cmd": [
       "./out/binary-trees"
     ],
     "exe_bytes": 2541483,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/binary-trees/go",
     "lang": "go",
     "log": "logs/build-best-binary-trees-go.log",
@@ -117,13 +117,13 @@
     "source_gzip_bytes": 1885,
     "source_lines": 157,
     "source_sha256": "e9f53db8f43b57ca867198f961bce5b97bc37b814a1c5e0a3e64e9780d246ed1",
-    "timestamp": "2026-09-27T16:47:24Z",
+    "timestamp": "2026-10-05T23:58:55Z",
     "track": "best"
   },
   "best/binary-trees/java": {
     "artifact_bytes": 3645,
     "bench": "binary-trees",
-    "build_s": 0.248,
+    "build_s": 0.2463,
     "cmd": [
       "java",
       "-cp",
@@ -132,7 +132,7 @@
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/binary-trees/java",
     "lang": "java",
     "log": "logs/build-best-binary-trees-java.log",
@@ -144,20 +144,20 @@
     "source_gzip_bytes": 1007,
     "source_lines": 95,
     "source_sha256": "4e5b637be9af5a01e4562584d9b7850ae4c231447e0d91bc018b90503c521ebc",
-    "timestamp": "2026-09-27T16:47:25Z",
+    "timestamp": "2026-10-05T23:58:55Z",
     "track": "best"
   },
   "best/binary-trees/javascript": {
     "artifact_bytes": 0,
     "bench": "binary-trees",
-    "build_s": 0.0022,
+    "build_s": 0.0023,
     "cmd": [
       "node",
       "binary-trees.js"
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/binary-trees/javascript",
     "lang": "javascript",
     "log": "logs/build-best-binary-trees-javascript.log",
@@ -169,19 +169,19 @@
     "source_gzip_bytes": 868,
     "source_lines": 88,
     "source_sha256": "2eee22b7afd9bf6fa01bba410e0ddc40ea450607932099ffd303bb14be3505e8",
-    "timestamp": "2026-09-27T16:47:25Z",
+    "timestamp": "2026-10-05T23:58:56Z",
     "track": "best"
   },
   "best/binary-trees/pascal": {
     "artifact_bytes": 323974,
     "bench": "binary-trees",
-    "build_s": 0.0684,
+    "build_s": 0.0678,
     "cmd": [
       "./out/binarytrees"
     ],
     "exe_bytes": 265264,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/binary-trees/pascal",
     "lang": "pascal",
     "log": "logs/build-best-binary-trees-pascal.log",
@@ -195,13 +195,13 @@
     "source_gzip_bytes": 2910,
     "source_lines": 320,
     "source_sha256": "3dc0b1ae370c8aa7b7a144934600ce9c5f9aeae21ea9aca7ba6fe9b5578c2bf0",
-    "timestamp": "2026-09-27T16:47:26Z",
+    "timestamp": "2026-10-05T23:58:56Z",
     "track": "best"
   },
   "best/binary-trees/python": {
     "artifact_bytes": 0,
     "bench": "binary-trees",
-    "build_s": 0.0022,
+    "build_s": 0.0019,
     "cmd": [
       "python3",
       "-OO",
@@ -209,7 +209,7 @@
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/binary-trees/python",
     "lang": "python",
     "log": "logs/build-best-binary-trees-python.log",
@@ -221,19 +221,19 @@
     "source_gzip_bytes": 699,
     "source_lines": 60,
     "source_sha256": "05fe540661bdefe4219284e84ab2e4f9827d68e1d852eea0f49223bbfe385165",
-    "timestamp": "2026-09-27T16:47:25Z",
+    "timestamp": "2026-10-05T23:58:56Z",
     "track": "best"
   },
   "best/binary-trees/resid": {
-    "artifact_bytes": 57754,
+    "artifact_bytes": 61387,
     "bench": "binary-trees",
-    "build_s": 1.9378,
+    "build_s": 2.3233,
     "cmd": [
       "./out/binarytrees"
     ],
-    "exe_bytes": 32335,
+    "exe_bytes": 33495,
     "exit": 0,
-    "git_commit": "ba93c7e81085c04a0ca1d1d9225abaec39b2fc33-dirty",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/binary-trees/resid",
     "lang": "resid",
     "log": "logs/build-best-binary-trees-resid.log",
@@ -244,20 +244,20 @@
     ],
     "source_gzip_bytes": 945,
     "source_lines": 58,
-    "source_sha256": "5d3fe7d34602f136abe337d1d41b5439e9e39a5362c0741f82dfb0e00a2f9a1c",
-    "timestamp": "2026-09-27T23:48:23Z",
+    "source_sha256": "2892402adaf3b9b3a879a9885ecde22aefce6af3c7bce77fc885f2e6b307b3fb",
+    "timestamp": "2026-10-05T23:58:52Z",
     "track": "best"
   },
   "best/binary-trees/rust": {
     "artifact_bytes": 20145294,
     "bench": "binary-trees",
-    "build_s": 1.9668,
+    "build_s": 1.9545,
     "cmd": [
       "./out/binary-trees"
     ],
     "exe_bytes": 622696,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/binary-trees/rust",
     "lang": "rust",
     "log": "logs/build-best-binary-trees-rust.log",
@@ -269,19 +269,19 @@
     "source_gzip_bytes": 958,
     "source_lines": 93,
     "source_sha256": "b26b5ca00913871f2b44c425bd1e6efda5536798bf7d0e2d2d8d3533ba298aed",
-    "timestamp": "2026-09-27T16:47:24Z",
+    "timestamp": "2026-10-05T23:58:55Z",
     "track": "best"
   },
   "best/fannkuch-redux/c": {
     "artifact_bytes": 16368,
     "bench": "fannkuch-redux",
-    "build_s": 0.0761,
+    "build_s": 0.0746,
     "cmd": [
       "./out/fannkuch-redux"
     ],
     "exe_bytes": 16368,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/fannkuch-redux/c",
     "lang": "c",
     "log": "logs/build-best-fannkuch-redux-c.log",
@@ -293,19 +293,19 @@
     "source_gzip_bytes": 1905,
     "source_lines": 156,
     "source_sha256": "5262a221259ece1334d76fc8f64706db93534ac2758d9a7612878b1c1cab16e7",
-    "timestamp": "2026-09-27T16:46:55Z",
+    "timestamp": "2026-10-05T23:58:23Z",
     "track": "best"
   },
   "best/fannkuch-redux/cpp": {
     "artifact_bytes": 21120,
     "bench": "fannkuch-redux",
-    "build_s": 0.453,
+    "build_s": 0.4542,
     "cmd": [
       "./out/fannkuch-redux"
     ],
     "exe_bytes": 21120,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/fannkuch-redux/cpp",
     "lang": "cpp",
     "log": "logs/build-best-fannkuch-redux-cpp.log",
@@ -317,19 +317,19 @@
     "source_gzip_bytes": 1947,
     "source_lines": 198,
     "source_sha256": "b33d0deb79337f252e712f2dc08df47a0466d84b3b29d4a170f1221ad937b21a",
-    "timestamp": "2026-09-27T16:46:56Z",
+    "timestamp": "2026-10-05T23:58:24Z",
     "track": "best"
   },
   "best/fannkuch-redux/csharp": {
     "artifact_bytes": 256888,
     "bench": "fannkuch-redux",
-    "build_s": 0.9092,
+    "build_s": 0.9013,
     "cmd": [
       "./out/fannkuchredux"
     ],
     "exe_bytes": 78256,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/fannkuch-redux/csharp",
     "lang": "csharp",
     "log": "logs/build-best-fannkuch-redux-csharp.log",
@@ -341,19 +341,19 @@
     "source_gzip_bytes": 1851,
     "source_lines": 174,
     "source_sha256": "3ae10feed19b1ec1776bb2b494d9cdc74aa21f326fa74a5d339314386c959a12",
-    "timestamp": "2026-09-27T16:46:59Z",
+    "timestamp": "2026-10-05T23:58:27Z",
     "track": "best"
   },
   "best/fannkuch-redux/fortran": {
     "artifact_bytes": 21896,
     "bench": "fannkuch-redux",
-    "build_s": 0.1225,
+    "build_s": 0.1269,
     "cmd": [
       "./out/fannkuchredux"
     ],
     "exe_bytes": 21896,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/fannkuch-redux/fortran",
     "lang": "fortran",
     "log": "logs/build-best-fannkuch-redux-fortran.log",
@@ -365,19 +365,19 @@
     "source_gzip_bytes": 1524,
     "source_lines": 164,
     "source_sha256": "4e02176bf8a97fa130723c9bc5108c139f817332b78764cafcacf3269094f9a8",
-    "timestamp": "2026-09-27T16:46:59Z",
+    "timestamp": "2026-10-05T23:58:27Z",
     "track": "best"
   },
   "best/fannkuch-redux/go": {
     "artifact_bytes": 2619238,
     "bench": "fannkuch-redux",
-    "build_s": 0.0846,
+    "build_s": 0.0888,
     "cmd": [
       "./out/fannkuch-redux"
     ],
     "exe_bytes": 2619238,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/fannkuch-redux/go",
     "lang": "go",
     "log": "logs/build-best-fannkuch-redux-go.log",
@@ -389,13 +389,13 @@
     "source_gzip_bytes": 1447,
     "source_lines": 172,
     "source_sha256": "719e6960f7e1a0b5c99885572af1735bad6749f4faf15ac338d9da0d15be5bdf",
-    "timestamp": "2026-09-27T16:46:58Z",
+    "timestamp": "2026-10-05T23:58:26Z",
     "track": "best"
   },
   "best/fannkuch-redux/java": {
     "artifact_bytes": 3946,
     "bench": "fannkuch-redux",
-    "build_s": 0.2486,
+    "build_s": 0.2419,
     "cmd": [
       "java",
       "-cp",
@@ -404,7 +404,7 @@
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/fannkuch-redux/java",
     "lang": "java",
     "log": "logs/build-best-fannkuch-redux-java.log",
@@ -416,20 +416,20 @@
     "source_gzip_bytes": 1473,
     "source_lines": 184,
     "source_sha256": "f5032e89045670466714bb280c3f8ba6a1663e0081a68a659393ec5c550440c3",
-    "timestamp": "2026-09-27T16:46:58Z",
+    "timestamp": "2026-10-05T23:58:26Z",
     "track": "best"
   },
   "best/fannkuch-redux/javascript": {
     "artifact_bytes": 0,
     "bench": "fannkuch-redux",
-    "build_s": 0.0018,
+    "build_s": 0.0024,
     "cmd": [
       "node",
       "fannkuch-redux.js"
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/fannkuch-redux/javascript",
     "lang": "javascript",
     "log": "logs/build-best-fannkuch-redux-javascript.log",
@@ -441,19 +441,19 @@
     "source_gzip_bytes": 1533,
     "source_lines": 219,
     "source_sha256": "eccc4d04ece1b6bbeef8e162582b3795ed32126946667f4519aacce3c772984c",
-    "timestamp": "2026-09-27T16:46:59Z",
+    "timestamp": "2026-10-05T23:58:27Z",
     "track": "best"
   },
   "best/fannkuch-redux/pascal": {
     "artifact_bytes": 125504,
     "bench": "fannkuch-redux",
-    "build_s": 0.0514,
+    "build_s": 0.05,
     "cmd": [
       "./out/fannkuchredux"
     ],
     "exe_bytes": 113696,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/fannkuch-redux/pascal",
     "lang": "pascal",
     "log": "logs/build-best-fannkuch-redux-pascal.log",
@@ -465,13 +465,13 @@
     "source_gzip_bytes": 1412,
     "source_lines": 202,
     "source_sha256": "4923197b51e65d167d8bd680c28c36f1502ca5a0926a32871eb9f5cd3ae9e543",
-    "timestamp": "2026-09-27T16:46:59Z",
+    "timestamp": "2026-10-05T23:58:27Z",
     "track": "best"
   },
   "best/fannkuch-redux/python": {
     "artifact_bytes": 0,
     "bench": "fannkuch-redux",
-    "build_s": 0.0018,
+    "build_s": 0.0016,
     "cmd": [
       "python3",
       "-OO",
@@ -479,7 +479,7 @@
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/fannkuch-redux/python",
     "lang": "python",
     "log": "logs/build-best-fannkuch-redux-python.log",
@@ -491,19 +491,19 @@
     "source_gzip_bytes": 1197,
     "source_lines": 109,
     "source_sha256": "55f4c9fa7ddd2fb06805aa1f91cb870e25c9eed264a8dc28f9081238a789ff00",
-    "timestamp": "2026-09-27T16:46:59Z",
+    "timestamp": "2026-10-05T23:58:27Z",
     "track": "best"
   },
   "best/fannkuch-redux/resid": {
-    "artifact_bytes": 72873,
+    "artifact_bytes": 76472,
     "bench": "fannkuch-redux",
-    "build_s": 1.9735,
+    "build_s": 2.4035,
     "cmd": [
       "./out/fannkuchredux"
     ],
-    "exe_bytes": 32983,
+    "exe_bytes": 33815,
     "exit": 0,
-    "git_commit": "cc7e649e5e123b68ceb3e3c7982cf1b5cec2ea16-dirty",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/fannkuch-redux/resid",
     "lang": "resid",
     "log": "logs/build-best-fannkuch-redux-resid.log",
@@ -514,20 +514,20 @@
     ],
     "source_gzip_bytes": 2418,
     "source_lines": 174,
-    "source_sha256": "b63c79abb0fbf5268f04452ad1c34c527a95ec110eea03dd5dc07deeef75519e",
-    "timestamp": "2026-09-28T02:06:14Z",
+    "source_sha256": "e8fc06a0f5bb29adcad56341e17e49760810e9f285cbd8bc59d8c607fb5332d2",
+    "timestamp": "2026-10-05T23:58:23Z",
     "track": "best"
   },
   "best/fannkuch-redux/rust": {
     "artifact_bytes": 19394819,
     "bench": "fannkuch-redux",
-    "build_s": 1.83,
+    "build_s": 1.8467,
     "cmd": [
       "./out/fannkuch-redux"
     ],
     "exe_bytes": 601408,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/fannkuch-redux/rust",
     "lang": "rust",
     "log": "logs/build-best-fannkuch-redux-rust.log",
@@ -539,19 +539,19 @@
     "source_gzip_bytes": 1555,
     "source_lines": 161,
     "source_sha256": "c40f07613a19e30560a071d6a21583ff77bc5c21e8d7e3310c61ce28fb8a7caa",
-    "timestamp": "2026-09-27T16:46:58Z",
+    "timestamp": "2026-10-05T23:58:25Z",
     "track": "best"
   },
   "best/fasta/c": {
     "artifact_bytes": 16456,
     "bench": "fasta",
-    "build_s": 0.0593,
+    "build_s": 0.0606,
     "cmd": [
       "./out/fasta"
     ],
     "exe_bytes": 16456,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/fasta/c",
     "lang": "c",
     "log": "logs/build-best-fasta-c.log",
@@ -563,19 +563,19 @@
     "source_gzip_bytes": 2717,
     "source_lines": 225,
     "source_sha256": "bf64909fac77cdaa89ec36424f2d4000c7e174c2855bc69529196c28c0705b39",
-    "timestamp": "2026-09-27T16:47:31Z",
+    "timestamp": "2026-10-05T23:59:02Z",
     "track": "best"
   },
   "best/fasta/cpp": {
     "artifact_bytes": 42072,
     "bench": "fasta",
-    "build_s": 0.4521,
+    "build_s": 0.4368,
     "cmd": [
       "./out/fasta"
     ],
     "exe_bytes": 42072,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/fasta/cpp",
     "lang": "cpp",
     "log": "logs/build-best-fasta-cpp.log",
@@ -587,19 +587,19 @@
     "source_gzip_bytes": 3016,
     "source_lines": 292,
     "source_sha256": "6576d915f7c2098db48d1d16a225938beae9d8491f82c43f062b5bbadd0ced9f",
-    "timestamp": "2026-09-27T16:47:32Z",
+    "timestamp": "2026-10-05T23:59:03Z",
     "track": "best"
   },
   "best/fasta/csharp": {
     "artifact_bytes": 261071,
     "bench": "fasta",
-    "build_s": 0.8928,
+    "build_s": 0.8675,
     "cmd": [
       "./out/fasta"
     ],
     "exe_bytes": 78256,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/fasta/csharp",
     "lang": "csharp",
     "log": "logs/build-best-fasta-csharp.log",
@@ -611,19 +611,19 @@
     "source_gzip_bytes": 1633,
     "source_lines": 177,
     "source_sha256": "a11f36e5808f39a79636e4377b25cd7ff7dddddfc696dc6430a8eb30e4636785",
-    "timestamp": "2026-09-27T16:47:34Z",
+    "timestamp": "2026-10-05T23:59:05Z",
     "track": "best"
   },
   "best/fasta/fortran": {
     "artifact_bytes": 17653,
     "bench": "fasta",
-    "build_s": 0.0703,
+    "build_s": 0.0738,
     "cmd": [
       "./out/fasta"
     ],
     "exe_bytes": 17280,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/fasta/fortran",
     "lang": "fortran",
     "log": "logs/build-best-fasta-fortran.log",
@@ -635,19 +635,19 @@
     "source_gzip_bytes": 1672,
     "source_lines": 176,
     "source_sha256": "cb99a4c2b993cd1bfda55d87f36eb90a2224a23d9ff955ed0bda6d8b9e7f1983",
-    "timestamp": "2026-09-27T16:47:34Z",
+    "timestamp": "2026-10-05T23:59:05Z",
     "track": "best"
   },
   "best/fasta/go": {
     "artifact_bytes": 2544035,
     "bench": "fasta",
-    "build_s": 0.087,
+    "build_s": 0.0925,
     "cmd": [
       "./out/fasta"
     ],
     "exe_bytes": 2544035,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/fasta/go",
     "lang": "go",
     "log": "logs/build-best-fasta-go.log",
@@ -659,13 +659,13 @@
     "source_gzip_bytes": 2038,
     "source_lines": 214,
     "source_sha256": "a84280561105e7481a935f55a828a000af8b99ec47979b99eec166748ef59594",
-    "timestamp": "2026-09-27T16:47:33Z",
+    "timestamp": "2026-10-05T23:59:04Z",
     "track": "best"
   },
   "best/fasta/java": {
     "artifact_bytes": 11086,
     "bench": "fasta",
-    "build_s": 0.2735,
+    "build_s": 0.2796,
     "cmd": [
       "java",
       "-cp",
@@ -674,7 +674,7 @@
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/fasta/java",
     "lang": "java",
     "log": "logs/build-best-fasta-java.log",
@@ -686,20 +686,20 @@
     "source_gzip_bytes": 3125,
     "source_lines": 394,
     "source_sha256": "e8c5aaa4337ab3fb61dd3c9a3bedbc9ce37b7e1eef88e572605878e85cb4685f",
-    "timestamp": "2026-09-27T16:47:33Z",
+    "timestamp": "2026-10-05T23:59:04Z",
     "track": "best"
   },
   "best/fasta/javascript": {
     "artifact_bytes": 0,
     "bench": "fasta",
-    "build_s": 0.0018,
+    "build_s": 0.0023,
     "cmd": [
       "node",
       "fasta.js"
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/fasta/javascript",
     "lang": "javascript",
     "log": "logs/build-best-fasta-javascript.log",
@@ -711,19 +711,19 @@
     "source_gzip_bytes": 2254,
     "source_lines": 248,
     "source_sha256": "d5ac5f32baed73304db5145f0252f19a3932d58d23767fa4b9292ed3b177c629",
-    "timestamp": "2026-09-27T16:47:34Z",
+    "timestamp": "2026-10-05T23:59:05Z",
     "track": "best"
   },
   "best/fasta/pascal": {
     "artifact_bytes": 48280,
     "bench": "fasta",
-    "build_s": 0.0248,
+    "build_s": 0.0256,
     "cmd": [
       "./out/fasta"
     ],
     "exe_bytes": 36368,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/fasta/pascal",
     "lang": "pascal",
     "log": "logs/build-best-fasta-pascal.log",
@@ -735,13 +735,13 @@
     "source_gzip_bytes": 1303,
     "source_lines": 136,
     "source_sha256": "d25f527785067a096544417a0b4b14e3d8c54a1d2fbc3081876d09b42209e939",
-    "timestamp": "2026-09-27T16:47:34Z",
+    "timestamp": "2026-10-05T23:59:05Z",
     "track": "best"
   },
   "best/fasta/python": {
     "artifact_bytes": 0,
     "bench": "fasta",
-    "build_s": 0.0018,
+    "build_s": 0.0017,
     "cmd": [
       "python3",
       "-OO",
@@ -749,7 +749,7 @@
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/fasta/python",
     "lang": "python",
     "log": "logs/build-best-fasta-python.log",
@@ -761,19 +761,19 @@
     "source_gzip_bytes": 2122,
     "source_lines": 213,
     "source_sha256": "076fba92b7365ece61bce7b26810f2bd994ea9570ca3d1e1b09d068cec0f63cf",
-    "timestamp": "2026-09-27T16:47:34Z",
+    "timestamp": "2026-10-05T23:59:05Z",
     "track": "best"
   },
   "best/fasta/resid": {
-    "artifact_bytes": 84612,
+    "artifact_bytes": 89144,
     "bench": "fasta",
-    "build_s": 2.023,
+    "build_s": 2.4052,
     "cmd": [
       "./out/fasta"
     ],
-    "exe_bytes": 42869,
+    "exe_bytes": 44181,
     "exit": 0,
-    "git_commit": "ba93c7e81085c04a0ca1d1d9225abaec39b2fc33-dirty",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/fasta/resid",
     "lang": "resid",
     "log": "logs/build-best-fasta-resid.log",
@@ -784,20 +784,20 @@
     ],
     "source_gzip_bytes": 2410,
     "source_lines": 175,
-    "source_sha256": "5db819f5cc75be29880004b1adc191a17059509693ec3f1487c3ab6618995b71",
-    "timestamp": "2026-09-27T23:13:12Z",
+    "source_sha256": "e94e0bf45010a888f511d561fb44956511cf245a48ecf606f63072d3cd65b1f8",
+    "timestamp": "2026-10-05T23:59:02Z",
     "track": "best"
   },
   "best/fasta/rust": {
     "artifact_bytes": 12905820,
     "bench": "fasta",
-    "build_s": 1.028,
+    "build_s": 1.0285,
     "cmd": [
       "./out/fasta"
     ],
     "exe_bytes": 525768,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/fasta/rust",
     "lang": "rust",
     "log": "logs/build-best-fasta-rust.log",
@@ -809,19 +809,19 @@
     "source_gzip_bytes": 2741,
     "source_lines": 319,
     "source_sha256": "faa627005b41883a6df7c3c194bcd438c1c329a94fff80a8354534ebc60e0467",
-    "timestamp": "2026-09-27T16:47:33Z",
+    "timestamp": "2026-10-05T23:59:04Z",
     "track": "best"
   },
   "best/k-nucleotide/c": {
     "artifact_bytes": 25096,
     "bench": "k-nucleotide",
-    "build_s": 0.2103,
+    "build_s": 0.2073,
     "cmd": [
       "./out/k-nucleotide"
     ],
     "exe_bytes": 25096,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/k-nucleotide/c",
     "lang": "c",
     "log": "logs/build-best-k-nucleotide-c.log",
@@ -833,19 +833,19 @@
     "source_gzip_bytes": 2619,
     "source_lines": 248,
     "source_sha256": "582afbe19e20672b47b215aea32b8ca3404fdb706749ceb4f49f810446bd47de",
-    "timestamp": "2026-09-27T16:47:41Z",
+    "timestamp": "2026-10-05T23:59:13Z",
     "track": "best"
   },
   "best/k-nucleotide/cpp": {
     "artifact_bytes": 192672,
     "bench": "k-nucleotide",
-    "build_s": 1.9665,
+    "build_s": 1.9215,
     "cmd": [
       "./out/k-nucleotide"
     ],
     "exe_bytes": 192672,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/k-nucleotide/cpp",
     "lang": "cpp",
     "log": "logs/build-best-k-nucleotide-cpp.log",
@@ -857,19 +857,19 @@
     "source_gzip_bytes": 2564,
     "source_lines": 221,
     "source_sha256": "e039e7e9f4e57e1b8a21fef17a5baa851a70655cabe2e34d994e41d46760cbd3",
-    "timestamp": "2026-09-27T16:47:43Z",
+    "timestamp": "2026-10-05T23:59:15Z",
     "track": "best"
   },
   "best/k-nucleotide/csharp": {
     "artifact_bytes": 321908,
     "bench": "k-nucleotide",
-    "build_s": 0.9384,
+    "build_s": 0.9432,
     "cmd": [
       "./out/knucleotide"
     ],
     "exe_bytes": 78256,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/k-nucleotide/csharp",
     "lang": "csharp",
     "log": "logs/build-best-k-nucleotide-csharp.log",
@@ -881,19 +881,19 @@
     "source_gzip_bytes": 2199,
     "source_lines": 214,
     "source_sha256": "ee78df0fb52fe41e2b7a566003b87f555ad5e1fc1000cecfe8976add1af48e48",
-    "timestamp": "2026-09-27T16:47:48Z",
+    "timestamp": "2026-10-05T23:59:22Z",
     "track": "best"
   },
   "best/k-nucleotide/fortran": {
     "artifact_bytes": 28236,
     "bench": "k-nucleotide",
-    "build_s": 0.2343,
+    "build_s": 0.2287,
     "cmd": [
       "./out/knucleotide"
     ],
     "exe_bytes": 26520,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/k-nucleotide/fortran",
     "lang": "fortran",
     "log": "logs/build-best-k-nucleotide-fortran.log",
@@ -905,19 +905,19 @@
     "source_gzip_bytes": 2391,
     "source_lines": 268,
     "source_sha256": "47dfe699db102ea3c19395140bea9bd17860d694a08a564f6e37e6198ada7608",
-    "timestamp": "2026-09-27T16:47:49Z",
+    "timestamp": "2026-10-05T23:59:22Z",
     "track": "best"
   },
   "best/k-nucleotide/go": {
     "artifact_bytes": 2519258,
     "bench": "k-nucleotide",
-    "build_s": 0.0909,
+    "build_s": 0.0928,
     "cmd": [
       "./out/k-nucleotide"
     ],
     "exe_bytes": 2519258,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/k-nucleotide/go",
     "lang": "go",
     "log": "logs/build-best-k-nucleotide-go.log",
@@ -929,13 +929,13 @@
     "source_gzip_bytes": 2290,
     "source_lines": 335,
     "source_sha256": "fb092460d189664fcacfe0bf66ae1f8e51bc0b393672509761008571f6757ecf",
-    "timestamp": "2026-09-27T16:47:46Z",
+    "timestamp": "2026-10-05T23:59:18Z",
     "track": "best"
   },
   "best/k-nucleotide/java": {
     "artifact_bytes": 19019669,
     "bench": "k-nucleotide",
-    "build_s": 1.3948,
+    "build_s": 2.9757,
     "cmd": [
       "java",
       "-cp",
@@ -944,7 +944,7 @@
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/k-nucleotide/java",
     "lang": "java",
     "log": "logs/build-best-k-nucleotide-java.log",
@@ -956,7 +956,7 @@
     "source_gzip_bytes": 2034,
     "source_lines": 183,
     "source_sha256": "2a795eca68be477a2a29d03900ff23c6524ced260b6916d0d17f620ea7fcc6e6",
-    "timestamp": "2026-09-27T16:47:47Z",
+    "timestamp": "2026-10-05T23:59:21Z",
     "track": "best"
   },
   "best/k-nucleotide/javascript": {
@@ -969,7 +969,7 @@
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/k-nucleotide/javascript",
     "lang": "javascript",
     "log": "logs/build-best-k-nucleotide-javascript.log",
@@ -981,19 +981,19 @@
     "source_gzip_bytes": 1900,
     "source_lines": 233,
     "source_sha256": "deffe9bf3859d5b8aefe9026397ef05549546b13f078fd611161837e82bc798d",
-    "timestamp": "2026-09-27T16:47:48Z",
+    "timestamp": "2026-10-05T23:59:22Z",
     "track": "best"
   },
   "best/k-nucleotide/pascal": {
     "artifact_bytes": 939384,
     "bench": "k-nucleotide",
-    "build_s": 0.4476,
+    "build_s": 0.4488,
     "cmd": [
       "./out/knucleotide"
     ],
     "exe_bytes": 456384,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/k-nucleotide/pascal",
     "lang": "pascal",
     "log": "logs/build-best-k-nucleotide-pascal.log",
@@ -1005,13 +1005,13 @@
     "source_gzip_bytes": 2130,
     "source_lines": 236,
     "source_sha256": "32af152c4e8900655edffc6a9dc373f45609ca794303a311d9a94eba159f6443",
-    "timestamp": "2026-09-27T16:47:49Z",
+    "timestamp": "2026-10-05T23:59:23Z",
     "track": "best"
   },
   "best/k-nucleotide/python": {
     "artifact_bytes": 0,
     "bench": "k-nucleotide",
-    "build_s": 0.0021,
+    "build_s": 0.002,
     "cmd": [
       "python3",
       "-OO",
@@ -1019,7 +1019,7 @@
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/k-nucleotide/python",
     "lang": "python",
     "log": "logs/build-best-k-nucleotide-python.log",
@@ -1031,19 +1031,19 @@
     "source_gzip_bytes": 2088,
     "source_lines": 189,
     "source_sha256": "45d631f78324e4f6e91ad0acc7b0744cad65ec3890d11f63b1574405ad79e81e",
-    "timestamp": "2026-09-27T16:47:48Z",
+    "timestamp": "2026-10-05T23:59:22Z",
     "track": "best"
   },
   "best/k-nucleotide/resid": {
-    "artifact_bytes": 136758,
+    "artifact_bytes": 145380,
     "bench": "k-nucleotide",
-    "build_s": 2.2887,
+    "build_s": 2.6964,
     "cmd": [
       "./out/knucleotide"
     ],
-    "exe_bytes": 87367,
+    "exe_bytes": 92741,
     "exit": 0,
-    "git_commit": "ba93c7e81085c04a0ca1d1d9225abaec39b2fc33-dirty",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/k-nucleotide/resid",
     "lang": "resid",
     "log": "logs/build-best-k-nucleotide-resid.log",
@@ -1054,20 +1054,20 @@
     ],
     "source_gzip_bytes": 2065,
     "source_lines": 147,
-    "source_sha256": "cd985dc3b92f45937ece32cd2ab50fab7bd0cc3716a57edb18ba6b548da39187",
-    "timestamp": "2026-09-27T23:14:05Z",
+    "source_sha256": "2503515bcbb4b91ac571d85e97a2293adb0ffd9130c153e2b6d4ef028d9f349e",
+    "timestamp": "2026-10-05T23:59:13Z",
     "track": "best"
   },
   "best/k-nucleotide/rust": {
     "artifact_bytes": 54751245,
     "bench": "k-nucleotide",
-    "build_s": 3.2777,
+    "build_s": 3.2314,
     "cmd": [
       "./out/k-nucleotide"
     ],
     "exe_bytes": 757464,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/k-nucleotide/rust",
     "lang": "rust",
     "log": "logs/build-best-k-nucleotide-rust.log",
@@ -1079,19 +1079,19 @@
     "source_gzip_bytes": 1660,
     "source_lines": 190,
     "source_sha256": "3c960f3ac2d80704919bd1e00986ce6220e74d10aea8dc9fef5aee81d12de7a2",
-    "timestamp": "2026-09-27T16:47:46Z",
+    "timestamp": "2026-10-05T23:59:18Z",
     "track": "best"
   },
   "best/mandelbrot/c": {
     "artifact_bytes": 20752,
     "bench": "mandelbrot",
-    "build_s": 0.1253,
+    "build_s": 0.1206,
     "cmd": [
       "./out/mandelbrot"
     ],
     "exe_bytes": 20752,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/mandelbrot/c",
     "lang": "c",
     "log": "logs/build-best-mandelbrot-c.log",
@@ -1103,19 +1103,19 @@
     "source_gzip_bytes": 1659,
     "source_lines": 203,
     "source_sha256": "f990aaf30c680d5db0bd3f24b40305ec51903772856e6f54c6ff1ef5861d064c",
-    "timestamp": "2026-09-27T16:47:13Z",
+    "timestamp": "2026-10-05T23:58:43Z",
     "track": "best"
   },
   "best/mandelbrot/cpp": {
     "artifact_bytes": 16656,
     "bench": "mandelbrot",
-    "build_s": 0.271,
+    "build_s": 0.2597,
     "cmd": [
       "./out/mandelbrot"
     ],
     "exe_bytes": 16656,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/mandelbrot/cpp",
     "lang": "cpp",
     "log": "logs/build-best-mandelbrot-cpp.log",
@@ -1127,19 +1127,19 @@
     "source_gzip_bytes": 2565,
     "source_lines": 208,
     "source_sha256": "73d2f072be32306f7c0cba3f08b785760f67eb3b7297da6634ae900e91dcb2df",
-    "timestamp": "2026-09-27T16:47:13Z",
+    "timestamp": "2026-10-05T23:58:43Z",
     "track": "best"
   },
   "best/mandelbrot/csharp": {
     "artifact_bytes": 255687,
     "bench": "mandelbrot",
-    "build_s": 0.9104,
+    "build_s": 0.9094,
     "cmd": [
       "./out/mandelbrot"
     ],
     "exe_bytes": 78256,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/mandelbrot/csharp",
     "lang": "csharp",
     "log": "logs/build-best-mandelbrot-csharp.log",
@@ -1151,19 +1151,19 @@
     "source_gzip_bytes": 1155,
     "source_lines": 93,
     "source_sha256": "9687dab476d5d2042f52a5def4fe7c4d98a25b57508a8362f7e5c7fdb1fabf2b",
-    "timestamp": "2026-09-27T16:47:17Z",
+    "timestamp": "2026-10-05T23:58:46Z",
     "track": "best"
   },
   "best/mandelbrot/fortran": {
     "artifact_bytes": 17280,
     "bench": "mandelbrot",
-    "build_s": 0.0779,
+    "build_s": 0.0803,
     "cmd": [
       "./out/mandelbrot"
     ],
     "exe_bytes": 17280,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/mandelbrot/fortran",
     "lang": "fortran",
     "log": "logs/build-best-mandelbrot-fortran.log",
@@ -1175,19 +1175,19 @@
     "source_gzip_bytes": 1045,
     "source_lines": 101,
     "source_sha256": "7d645b7a0d4a74338fd6daed81619ab274dc5a45eb02b1c484356c253666f6fa",
-    "timestamp": "2026-09-27T16:47:17Z",
+    "timestamp": "2026-10-05T23:58:46Z",
     "track": "best"
   },
   "best/mandelbrot/go": {
     "artifact_bytes": 2547270,
     "bench": "mandelbrot",
-    "build_s": 0.0889,
+    "build_s": 0.0918,
     "cmd": [
       "./out/mandelbrot"
     ],
     "exe_bytes": 2547270,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/mandelbrot/go",
     "lang": "go",
     "log": "logs/build-best-mandelbrot-go.log",
@@ -1199,13 +1199,13 @@
     "source_gzip_bytes": 1571,
     "source_lines": 160,
     "source_sha256": "5e80d3cb4945dc5801b1f23686d42304d5c0d811b75e3432c67cc934a4d3d6db",
-    "timestamp": "2026-09-27T16:47:15Z",
+    "timestamp": "2026-10-05T23:58:45Z",
     "track": "best"
   },
   "best/mandelbrot/java": {
     "artifact_bytes": 3170,
     "bench": "mandelbrot",
-    "build_s": 0.2427,
+    "build_s": 0.2319,
     "cmd": [
       "java",
       "-cp",
@@ -1214,7 +1214,7 @@
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/mandelbrot/java",
     "lang": "java",
     "log": "logs/build-best-mandelbrot-java.log",
@@ -1226,20 +1226,20 @@
     "source_gzip_bytes": 1049,
     "source_lines": 80,
     "source_sha256": "0bf99345b41e61909cbc12466ac72a578e8ef1b9a7cac22b4d527534f36d43b4",
-    "timestamp": "2026-09-27T16:47:16Z",
+    "timestamp": "2026-10-05T23:58:45Z",
     "track": "best"
   },
   "best/mandelbrot/javascript": {
     "artifact_bytes": 0,
     "bench": "mandelbrot",
-    "build_s": 0.0019,
+    "build_s": 0.0023,
     "cmd": [
       "node",
       "mandelbrot.js"
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/mandelbrot/javascript",
     "lang": "javascript",
     "log": "logs/build-best-mandelbrot-javascript.log",
@@ -1251,19 +1251,19 @@
     "source_gzip_bytes": 1286,
     "source_lines": 143,
     "source_sha256": "efeff7ec9ac7fdaa45ba67ec670e34a47804d3719be44b02bfdbff2fc30a0715",
-    "timestamp": "2026-09-27T16:47:17Z",
+    "timestamp": "2026-10-05T23:58:46Z",
     "track": "best"
   },
   "best/mandelbrot/pascal": {
     "artifact_bytes": 303484,
     "bench": "mandelbrot",
-    "build_s": 0.065,
+    "build_s": 0.0674,
     "cmd": [
       "./out/mandelbrot"
     ],
     "exe_bytes": 261136,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/mandelbrot/pascal",
     "lang": "pascal",
     "log": "logs/build-best-mandelbrot-pascal.log",
@@ -1276,7 +1276,7 @@
     "source_gzip_bytes": 2452,
     "source_lines": 283,
     "source_sha256": "de137b3a487017410890b9ad0804b923abdbb7ad9acf4c44d43aefb566859960",
-    "timestamp": "2026-09-27T16:47:17Z",
+    "timestamp": "2026-10-05T23:58:46Z",
     "track": "best"
   },
   "best/mandelbrot/python": {
@@ -1290,7 +1290,7 @@
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/mandelbrot/python",
     "lang": "python",
     "log": "logs/build-best-mandelbrot-python.log",
@@ -1302,19 +1302,19 @@
     "source_gzip_bytes": 1034,
     "source_lines": 79,
     "source_sha256": "b778ef7922c39fa097bd8a773ac951c329e902fcf1afd698cb4cb2c01e4c8768",
-    "timestamp": "2026-09-27T16:47:17Z",
+    "timestamp": "2026-10-05T23:58:46Z",
     "track": "best"
   },
   "best/mandelbrot/resid": {
-    "artifact_bytes": 84650,
+    "artifact_bytes": 88831,
     "bench": "mandelbrot",
-    "build_s": 1.9935,
+    "build_s": 2.3965,
     "cmd": [
       "./out/mandelbrot"
     ],
-    "exe_bytes": 42505,
+    "exe_bytes": 43809,
     "exit": 0,
-    "git_commit": "cc7e649e5e123b68ceb3e3c7982cf1b5cec2ea16-dirty",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/mandelbrot/resid",
     "lang": "resid",
     "log": "logs/build-best-mandelbrot-resid.log",
@@ -1325,20 +1325,20 @@
     ],
     "source_gzip_bytes": 2180,
     "source_lines": 131,
-    "source_sha256": "2820f40584c68ae1e34cff791bbe75c57d86f0357a169668a8d19fb6d14c886d",
-    "timestamp": "2026-09-28T02:07:25Z",
+    "source_sha256": "f842aec474d4789d3c301d1434be1ad3598c4604c48ced4b68a2009576b12474",
+    "timestamp": "2026-10-05T23:58:43Z",
     "track": "best"
   },
   "best/mandelbrot/rust": {
     "artifact_bytes": 19366047,
     "bench": "mandelbrot",
-    "build_s": 1.8042,
+    "build_s": 1.8001,
     "cmd": [
       "./out/mandelbrot"
     ],
     "exe_bytes": 592760,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/mandelbrot/rust",
     "lang": "rust",
     "log": "logs/build-best-mandelbrot-rust.log",
@@ -1350,19 +1350,19 @@
     "source_gzip_bytes": 1441,
     "source_lines": 182,
     "source_sha256": "fc5e600209c6a2be843d6cc1093442219f9fd929fdb6335475896e91831ee05c",
-    "timestamp": "2026-09-27T16:47:15Z",
+    "timestamp": "2026-10-05T23:58:45Z",
     "track": "best"
   },
   "best/nbody/c": {
     "artifact_bytes": 16128,
     "bench": "nbody",
-    "build_s": 0.1737,
+    "build_s": 0.1682,
     "cmd": [
       "./out/nbody"
     ],
     "exe_bytes": 16128,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/nbody/c",
     "lang": "c",
     "log": "logs/build-best-nbody-c.log",
@@ -1374,19 +1374,19 @@
     "source_gzip_bytes": 1889,
     "source_lines": 209,
     "source_sha256": "e1a276c3c0bb4b86138e57e7d227a2be7399f700e50f0dbb0d6425ef69540a96",
-    "timestamp": "2026-09-27T16:46:48Z",
+    "timestamp": "2026-10-05T23:58:15Z",
     "track": "best"
   },
   "best/nbody/cpp": {
     "artifact_bytes": 16088,
     "bench": "nbody",
-    "build_s": 0.291,
+    "build_s": 0.2915,
     "cmd": [
       "./out/nbody"
     ],
     "exe_bytes": 16088,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/nbody/cpp",
     "lang": "cpp",
     "log": "logs/build-best-nbody-cpp.log",
@@ -1398,19 +1398,19 @@
     "source_gzip_bytes": 2220,
     "source_lines": 236,
     "source_sha256": "3dc46bbd1f6ee24adf64d914a9347abd54c89afc63acda55dbab24f41a0a6d29",
-    "timestamp": "2026-09-27T16:46:49Z",
+    "timestamp": "2026-10-05T23:58:15Z",
     "track": "best"
   },
   "best/nbody/csharp": {
     "artifact_bytes": 260207,
     "bench": "nbody",
-    "build_s": 1.0459,
+    "build_s": 1.0449,
     "cmd": [
       "./out/nbody"
     ],
     "exe_bytes": 78256,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/nbody/csharp",
     "lang": "csharp",
     "log": "logs/build-best-nbody-csharp.log",
@@ -1422,19 +1422,19 @@
     "source_gzip_bytes": 2652,
     "source_lines": 217,
     "source_sha256": "81567e8b609b4a134f4297b2af970e798919be9e9cddb552be82231f2ee9ca7e",
-    "timestamp": "2026-09-27T16:46:50Z",
+    "timestamp": "2026-10-05T23:58:17Z",
     "track": "best"
   },
   "best/nbody/fortran": {
     "artifact_bytes": 16688,
     "bench": "nbody",
-    "build_s": 0.0663,
+    "build_s": 0.0698,
     "cmd": [
       "./out/nbody"
     ],
     "exe_bytes": 16688,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/nbody/fortran",
     "lang": "fortran",
     "log": "logs/build-best-nbody-fortran.log",
@@ -1446,19 +1446,19 @@
     "source_gzip_bytes": 1538,
     "source_lines": 151,
     "source_sha256": "c4f83ffdf8e14f424dd0f39b2396f74a78d70cda928725ba604d9e4cb6ae2009",
-    "timestamp": "2026-09-27T16:46:50Z",
+    "timestamp": "2026-10-05T23:58:17Z",
     "track": "best"
   },
   "best/nbody/go": {
     "artifact_bytes": 2526722,
     "bench": "nbody",
-    "build_s": 0.0868,
+    "build_s": 0.0838,
     "cmd": [
       "./out/nbody"
     ],
     "exe_bytes": 2526722,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/nbody/go",
     "lang": "go",
     "log": "logs/build-best-nbody-go.log",
@@ -1470,13 +1470,13 @@
     "source_gzip_bytes": 1389,
     "source_lines": 163,
     "source_sha256": "d2136cb465921aa5c9da7719bc31baa3b32fe6559323c9bf8f20552edcaad2dc",
-    "timestamp": "2026-09-27T16:46:49Z",
+    "timestamp": "2026-10-05T23:58:16Z",
     "track": "best"
   },
   "best/nbody/java": {
     "artifact_bytes": 4019,
     "bench": "nbody",
-    "build_s": 0.2337,
+    "build_s": 0.2354,
     "cmd": [
       "java",
       "-cp",
@@ -1485,7 +1485,7 @@
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/nbody/java",
     "lang": "java",
     "log": "logs/build-best-nbody-java.log",
@@ -1497,20 +1497,20 @@
     "source_gzip_bytes": 1630,
     "source_lines": 181,
     "source_sha256": "894835757ed762291e9117940eccdb456d94242df6fbf6574cb5a6c953f59c21",
-    "timestamp": "2026-09-27T16:46:49Z",
+    "timestamp": "2026-10-05T23:58:16Z",
     "track": "best"
   },
   "best/nbody/javascript": {
     "artifact_bytes": 0,
     "bench": "nbody",
-    "build_s": 0.0026,
+    "build_s": 0.002,
     "cmd": [
       "node",
       "nbody.js"
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/nbody/javascript",
     "lang": "javascript",
     "log": "logs/build-best-nbody-javascript.log",
@@ -1522,19 +1522,19 @@
     "source_gzip_bytes": 1358,
     "source_lines": 166,
     "source_sha256": "6a90dbbd2dbf2250c78ec49e96b42a4b070a97a97d15b16d6a841906d02617d0",
-    "timestamp": "2026-09-27T16:46:50Z",
+    "timestamp": "2026-10-05T23:58:17Z",
     "track": "best"
   },
   "best/nbody/pascal": {
     "artifact_bytes": 109864,
     "bench": "nbody",
-    "build_s": 0.0375,
+    "build_s": 0.0402,
     "cmd": [
       "./out/nbody"
     ],
     "exe_bytes": 100304,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/nbody/pascal",
     "lang": "pascal",
     "log": "logs/build-best-nbody-pascal.log",
@@ -1546,13 +1546,13 @@
     "source_gzip_bytes": 1525,
     "source_lines": 154,
     "source_sha256": "953eb5442474ad47323ab7f12205c04ffa3dcdee7bde993ad86c89ed13e40198",
-    "timestamp": "2026-09-27T16:46:50Z",
+    "timestamp": "2026-10-05T23:58:17Z",
     "track": "best"
   },
   "best/nbody/python": {
     "artifact_bytes": 0,
     "bench": "nbody",
-    "build_s": 0.0021,
+    "build_s": 0.0014,
     "cmd": [
       "python3",
       "-OO",
@@ -1560,7 +1560,7 @@
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/nbody/python",
     "lang": "python",
     "log": "logs/build-best-nbody-python.log",
@@ -1572,19 +1572,19 @@
     "source_gzip_bytes": 1403,
     "source_lines": 117,
     "source_sha256": "3475a549ae4ab0bb12058b6a17ad64f64444f07de136e5d0102932c08ecffc15",
-    "timestamp": "2026-09-27T16:46:50Z",
+    "timestamp": "2026-10-05T23:58:17Z",
     "track": "best"
   },
   "best/nbody/resid": {
-    "artifact_bytes": 88773,
+    "artifact_bytes": 93695,
     "bench": "nbody",
-    "build_s": 1.9614,
+    "build_s": 2.3038,
     "cmd": [
       "./out/nbody"
     ],
-    "exe_bytes": 43541,
+    "exe_bytes": 43877,
     "exit": 0,
-    "git_commit": "cc7e649e5e123b68ceb3e3c7982cf1b5cec2ea16-dirty",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/nbody/resid",
     "lang": "resid",
     "log": "logs/build-best-nbody-resid.log",
@@ -1595,20 +1595,20 @@
     ],
     "source_gzip_bytes": 3619,
     "source_lines": 324,
-    "source_sha256": "59bfcb2ee6ef23e9e04433c907541b13d21b7d32b5695ad9869081865b0a52af",
-    "timestamp": "2026-09-28T02:04:50Z",
+    "source_sha256": "70c8ec16f35328c89146612002a4682a0c9f949345d54b27c94c2b365c7a683f",
+    "timestamp": "2026-10-05T23:58:15Z",
     "track": "best"
   },
   "best/nbody/rust": {
     "artifact_bytes": 4539400,
     "bench": "nbody",
-    "build_s": 0.1089,
+    "build_s": 0.1073,
     "cmd": [
       "./out/nbody"
     ],
     "exe_bytes": 4539400,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/nbody/rust",
     "lang": "rust",
     "log": "logs/build-best-nbody-rust.log",
@@ -1620,19 +1620,19 @@
     "source_gzip_bytes": 2161,
     "source_lines": 242,
     "source_sha256": "a788948bcc99f985752ad2331303f67d4dabd37d66259c0dddab72350791ad91",
-    "timestamp": "2026-09-27T16:46:49Z",
+    "timestamp": "2026-10-05T23:58:16Z",
     "track": "best"
   },
   "best/pidigits/c": {
     "artifact_bytes": 16632,
     "bench": "pidigits",
-    "build_s": 0.0352,
+    "build_s": 0.038,
     "cmd": [
       "./out/pidigits"
     ],
     "exe_bytes": 16632,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/pidigits/c",
     "lang": "c",
     "log": "logs/build-best-pidigits-c.log",
@@ -1644,19 +1644,19 @@
     "source_gzip_bytes": 675,
     "source_lines": 73,
     "source_sha256": "038c5895621792ff799a71b9d4b3b2206059f3236ef15a4fb171e5374eaebdc0",
-    "timestamp": "2026-09-27T16:48:05Z",
+    "timestamp": "2026-10-05T23:59:41Z",
     "track": "best"
   },
   "best/pidigits/cpp": {
     "artifact_bytes": 157800,
     "bench": "pidigits",
-    "build_s": 0.2595,
+    "build_s": 0.2591,
     "cmd": [
       "./out/pidigits"
     ],
     "exe_bytes": 157800,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/pidigits/cpp",
     "lang": "cpp",
     "log": "logs/build-best-pidigits-cpp.log",
@@ -1668,19 +1668,19 @@
     "source_gzip_bytes": 671,
     "source_lines": 69,
     "source_sha256": "86cc70b044fa11677496ef8161ee46952cad38322cf48a93a3479f65944978a6",
-    "timestamp": "2026-09-27T16:48:05Z",
+    "timestamp": "2026-10-05T23:59:41Z",
     "track": "best"
   },
   "best/pidigits/csharp": {
     "artifact_bytes": 252943,
     "bench": "pidigits",
-    "build_s": 0.8618,
+    "build_s": 0.8574,
     "cmd": [
       "./out/pidigits"
     ],
     "exe_bytes": 78256,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/pidigits/csharp",
     "lang": "csharp",
     "log": "logs/build-best-pidigits-csharp.log",
@@ -1692,19 +1692,19 @@
     "source_gzip_bytes": 1997,
     "source_lines": 178,
     "source_sha256": "a8d491160aec99c2e776de9f6d0731185054016489cf26383e9a9eb4d3c6bf55",
-    "timestamp": "2026-09-27T16:48:09Z",
+    "timestamp": "2026-10-05T23:59:44Z",
     "track": "best"
   },
   "best/pidigits/fortran": {
     "artifact_bytes": 21311,
     "bench": "pidigits",
-    "build_s": 0.0501,
+    "build_s": 0.0477,
     "cmd": [
       "./out/pidigits"
     ],
     "exe_bytes": 17896,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/pidigits/fortran",
     "lang": "fortran",
     "log": "logs/build-best-pidigits-fortran.log",
@@ -1716,19 +1716,19 @@
     "source_gzip_bytes": 1263,
     "source_lines": 169,
     "source_sha256": "1ccba54186a062838101328f6e6f731b6528593803c2423094a43a246c6171d7",
-    "timestamp": "2026-09-27T16:48:09Z",
+    "timestamp": "2026-10-05T23:59:44Z",
     "track": "best"
   },
   "best/pidigits/go": {
     "artifact_bytes": 2485392,
     "bench": "pidigits",
-    "build_s": 0.3723,
+    "build_s": 0.3706,
     "cmd": [
       "./out/pidigits"
     ],
     "exe_bytes": 2485392,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/pidigits/go",
     "lang": "go",
     "log": "logs/build-best-pidigits-go.log",
@@ -1740,13 +1740,13 @@
     "source_gzip_bytes": 898,
     "source_lines": 110,
     "source_sha256": "b1bedb960695a9103023a534fe7816aae7694da4a0d8fe3f23a7da46d306d99b",
-    "timestamp": "2026-09-27T16:48:07Z",
+    "timestamp": "2026-10-05T23:59:43Z",
     "track": "best"
   },
   "best/pidigits/java": {
     "artifact_bytes": 18603,
     "bench": "pidigits",
-    "build_s": 0.2468,
+    "build_s": 0.2553,
     "cmd": [
       "java",
       "--enable-native-access=ALL-UNNAMED",
@@ -1757,7 +1757,7 @@
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/pidigits/java",
     "lang": "java",
     "log": "logs/build-best-pidigits-java.log",
@@ -1770,20 +1770,20 @@
     "source_gzip_bytes": 2257,
     "source_lines": 164,
     "source_sha256": "f21b045290c13fb7de358641778992e3cae9f815c2447996c6c81f10bfe1b6e9",
-    "timestamp": "2026-09-27T16:48:08Z",
+    "timestamp": "2026-10-05T23:59:43Z",
     "track": "best"
   },
   "best/pidigits/javascript": {
     "artifact_bytes": 0,
     "bench": "pidigits",
-    "build_s": 0.0021,
+    "build_s": 0.0023,
     "cmd": [
       "node",
       "pidigits.js"
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/pidigits/javascript",
     "lang": "javascript",
     "log": "logs/build-best-pidigits-javascript.log",
@@ -1795,19 +1795,19 @@
     "source_gzip_bytes": 550,
     "source_lines": 66,
     "source_sha256": "de2affe82cf881e8d6b52e7f2e7f7116169888a722b0d9e12ce7200829ff3959",
-    "timestamp": "2026-09-27T16:48:09Z",
+    "timestamp": "2026-10-05T23:59:44Z",
     "track": "best"
   },
   "best/pidigits/pascal": {
     "artifact_bytes": 115688,
     "bench": "pidigits",
-    "build_s": 0.0483,
+    "build_s": 0.0491,
     "cmd": [
       "./out/pidigits"
     ],
     "exe_bytes": 104712,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/pidigits/pascal",
     "lang": "pascal",
     "log": "logs/build-best-pidigits-pascal.log",
@@ -1819,13 +1819,13 @@
     "source_gzip_bytes": 705,
     "source_lines": 75,
     "source_sha256": "a1aadc60d868938d9419f58c2ac77c85b5bf9ee727e6ac42bfc1030c4557022c",
-    "timestamp": "2026-09-27T16:48:09Z",
+    "timestamp": "2026-10-05T23:59:44Z",
     "track": "best"
   },
   "best/pidigits/python": {
     "artifact_bytes": 0,
     "bench": "pidigits",
-    "build_s": 0.0015,
+    "build_s": 0.0017,
     "cmd": [
       "python3",
       "-OO",
@@ -1833,7 +1833,7 @@
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/pidigits/python",
     "lang": "python",
     "log": "logs/build-best-pidigits-python.log",
@@ -1845,19 +1845,19 @@
     "source_gzip_bytes": 1012,
     "source_lines": 94,
     "source_sha256": "83751d3a49a390aeceee9954d5d45050a387f7c85aa22a9f895fdd1460f65ff1",
-    "timestamp": "2026-09-27T16:48:09Z",
+    "timestamp": "2026-10-05T23:59:44Z",
     "track": "best"
   },
   "best/pidigits/resid": {
-    "artifact_bytes": 101385,
+    "artifact_bytes": 100725,
     "bench": "pidigits",
-    "build_s": 2.1889,
+    "build_s": 2.5856,
     "cmd": [
       "./out/pidigits"
     ],
-    "exe_bytes": 68364,
+    "exe_bytes": 65204,
     "exit": 0,
-    "git_commit": "ba93c7e81085c04a0ca1d1d9225abaec39b2fc33-dirty",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/pidigits/resid",
     "lang": "resid",
     "log": "logs/build-best-pidigits-resid.log",
@@ -1866,20 +1866,20 @@
     "source_files": [],
     "source_gzip_bytes": 0,
     "source_lines": 0,
-    "source_sha256": "3b860fd1f24b413cc9d8af9bb149e4a1c278f421755bec258640d94eed66faa1",
-    "timestamp": "2026-09-27T23:14:29Z",
+    "source_sha256": "2ce2ad0a58a9f86bef308df28d2323536342054487cb12c5ecf555765eee4feb",
+    "timestamp": "2026-10-05T23:59:41Z",
     "track": "best"
   },
   "best/pidigits/rust": {
     "artifact_bytes": 41565984,
     "bench": "pidigits",
-    "build_s": 1.7309,
+    "build_s": 1.7602,
     "cmd": [
       "./out/pidigits"
     ],
     "exe_bytes": 463920,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/pidigits/rust",
     "lang": "rust",
     "log": "logs/build-best-pidigits-rust.log",
@@ -1891,19 +1891,19 @@
     "source_gzip_bytes": 1032,
     "source_lines": 122,
     "source_sha256": "d6e1e72e5c6836493822a17d99f3823ef4df22296c801db424d4918568f2c595",
-    "timestamp": "2026-09-27T16:48:07Z",
+    "timestamp": "2026-10-05T23:59:43Z",
     "track": "best"
   },
   "best/regex-redux/c": {
     "artifact_bytes": 17824,
     "bench": "regex-redux",
-    "build_s": 0.0627,
+    "build_s": 0.0586,
     "cmd": [
       "./out/regex-redux"
     ],
     "exe_bytes": 17824,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/regex-redux/c",
     "lang": "c",
     "log": "logs/build-best-regex-redux-c.log",
@@ -1915,19 +1915,19 @@
     "source_gzip_bytes": 2488,
     "source_lines": 219,
     "source_sha256": "23943e92ebcc2eca27cff7de7597e8bbe4f57af47560b4ba2ce8d6331ef3cf3a",
-    "timestamp": "2026-09-27T16:48:16Z",
+    "timestamp": "2026-10-05T23:59:54Z",
     "track": "best"
   },
   "best/regex-redux/cpp": {
     "artifact_bytes": 91936,
     "bench": "regex-redux",
-    "build_s": 0.7573,
+    "build_s": 0.7406,
     "cmd": [
       "./out/regex-redux"
     ],
     "exe_bytes": 91936,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/regex-redux/cpp",
     "lang": "cpp",
     "log": "logs/build-best-regex-redux-cpp.log",
@@ -1940,19 +1940,19 @@
     "source_gzip_bytes": 4240,
     "source_lines": 417,
     "source_sha256": "0b3bc844a04360eafeb902be5d9915bf47640ed138bd43f73ed82b24efe9bed5",
-    "timestamp": "2026-09-27T16:48:16Z",
+    "timestamp": "2026-10-05T23:59:55Z",
     "track": "best"
   },
   "best/regex-redux/csharp": {
     "artifact_bytes": 268088,
     "bench": "regex-redux",
-    "build_s": 0.9013,
+    "build_s": 0.9028,
     "cmd": [
       "./out/regexredux"
     ],
     "exe_bytes": 78256,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/regex-redux/csharp",
     "lang": "csharp",
     "log": "logs/build-best-regex-redux-csharp.log",
@@ -1964,19 +1964,19 @@
     "source_gzip_bytes": 1994,
     "source_lines": 169,
     "source_sha256": "53c87015d67fcec56809284854b587b6fe5988f86c898228d3233c3891e4a1c3",
-    "timestamp": "2026-09-27T16:48:20Z",
+    "timestamp": "2026-10-05T23:59:59Z",
     "track": "best"
   },
   "best/regex-redux/fortran": {
     "artifact_bytes": 36256,
     "bench": "regex-redux",
-    "build_s": 0.1535,
+    "build_s": 0.1525,
     "cmd": [
       "./out/regexredux"
     ],
     "exe_bytes": 31872,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/regex-redux/fortran",
     "lang": "fortran",
     "log": "logs/build-best-regex-redux-fortran.log",
@@ -1988,19 +1988,19 @@
     "source_gzip_bytes": 3228,
     "source_lines": 373,
     "source_sha256": "33870bcf6ad96e7b182c0a979a1794c8485c8c1e07ed000404789d2a4f03b139",
-    "timestamp": "2026-09-27T16:48:21Z",
+    "timestamp": "2026-10-05T23:59:59Z",
     "track": "best"
   },
   "best/regex-redux/go": {
     "artifact_bytes": 2437048,
     "bench": "regex-redux",
-    "build_s": 0.2405,
+    "build_s": 0.2538,
     "cmd": [
       "./out/regex-redux"
     ],
     "exe_bytes": 2437048,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/regex-redux/go",
     "lang": "go",
     "log": "logs/build-best-regex-redux-go.log",
@@ -2012,13 +2012,13 @@
     "source_gzip_bytes": 1056,
     "source_lines": 104,
     "source_sha256": "a7378e853ed720686517246090a0f7153ab26e72f5d24c3b415d878bd6e0b379",
-    "timestamp": "2026-09-27T16:48:19Z",
+    "timestamp": "2026-10-05T23:59:58Z",
     "track": "best"
   },
   "best/regex-redux/java": {
     "artifact_bytes": 17030,
     "bench": "regex-redux",
-    "build_s": 0.3458,
+    "build_s": 0.3358,
     "cmd": [
       "java",
       "--enable-native-access=ALL-UNNAMED",
@@ -2028,7 +2028,7 @@
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/regex-redux/java",
     "lang": "java",
     "log": "logs/build-best-regex-redux-java.log",
@@ -2041,20 +2041,20 @@
     "source_gzip_bytes": 3236,
     "source_lines": 306,
     "source_sha256": "60884e0926e27359cae0500ff491e59a410dbe697655892f92359ea2c8c40aa5",
-    "timestamp": "2026-09-27T16:48:19Z",
+    "timestamp": "2026-10-05T23:59:58Z",
     "track": "best"
   },
   "best/regex-redux/javascript": {
     "artifact_bytes": 0,
     "bench": "regex-redux",
-    "build_s": 0.0022,
+    "build_s": 0.0019,
     "cmd": [
       "node",
       "regex-redux.js"
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/regex-redux/javascript",
     "lang": "javascript",
     "log": "logs/build-best-regex-redux-javascript.log",
@@ -2066,19 +2066,19 @@
     "source_gzip_bytes": 892,
     "source_lines": 72,
     "source_sha256": "725a605aecefe11956ca9d0d94340bd68f19ea36604ec4c2507f47b3d0d2ac0f",
-    "timestamp": "2026-09-27T16:48:20Z",
+    "timestamp": "2026-10-05T23:59:59Z",
     "track": "best"
   },
   "best/regex-redux/pascal": {
     "artifact_bytes": 118992,
     "bench": "regex-redux",
-    "build_s": 0.044,
+    "build_s": 0.0439,
     "cmd": [
       "./out/regexredux"
     ],
     "exe_bytes": 104824,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/regex-redux/pascal",
     "lang": "pascal",
     "log": "logs/build-best-regex-redux-pascal.log",
@@ -2090,13 +2090,13 @@
     "source_gzip_bytes": 1659,
     "source_lines": 213,
     "source_sha256": "722996051459ba488dd2cc01f759c2c10f9171baf57e93df2b42ea4a3ade9d3b",
-    "timestamp": "2026-09-27T16:48:21Z",
+    "timestamp": "2026-10-05T23:59:59Z",
     "track": "best"
   },
   "best/regex-redux/python": {
     "artifact_bytes": 0,
     "bench": "regex-redux",
-    "build_s": 0.0021,
+    "build_s": 0.0015,
     "cmd": [
       "python3",
       "-OO",
@@ -2104,7 +2104,7 @@
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/regex-redux/python",
     "lang": "python",
     "log": "logs/build-best-regex-redux-python.log",
@@ -2116,19 +2116,43 @@
     "source_gzip_bytes": 3595,
     "source_lines": 272,
     "source_sha256": "e93cf6ddff933b70842dd711646e20fa3fdd42758d46d354412c526aed824026",
-    "timestamp": "2026-09-27T16:48:20Z",
+    "timestamp": "2026-10-05T23:59:59Z",
+    "track": "best"
+  },
+  "best/regex-redux/resid": {
+    "artifact_bytes": 630221,
+    "bench": "regex-redux",
+    "build_s": 3.6948,
+    "cmd": [
+      "./out/regexredux"
+    ],
+    "exe_bytes": 256048,
+    "exit": 0,
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
+    "key": "best/regex-redux/resid",
+    "lang": "resid",
+    "log": "logs/build-best-regex-redux-resid.log",
+    "ok": true,
+    "source_bytes": 2358,
+    "source_files": [
+      "regexredux.resid"
+    ],
+    "source_gzip_bytes": 835,
+    "source_lines": 41,
+    "source_sha256": "0bc2e03cff56895f0b9e30074818ee992143ed29384ef116b43a70d0e39d510c",
+    "timestamp": "2026-10-06T02:48:52Z",
     "track": "best"
   },
   "best/regex-redux/rust": {
     "artifact_bytes": 49768766,
     "bench": "regex-redux",
-    "build_s": 2.3671,
+    "build_s": 2.3444,
     "cmd": [
       "./out/regex-redux"
     ],
     "exe_bytes": 671232,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/regex-redux/rust",
     "lang": "rust",
     "log": "logs/build-best-regex-redux-rust.log",
@@ -2140,19 +2164,19 @@
     "source_gzip_bytes": 2887,
     "source_lines": 358,
     "source_sha256": "ac173b0afface21ade01eb907b7f26f54ef6a926be0f9e3c6ec186f3889ea184",
-    "timestamp": "2026-09-27T16:48:19Z",
+    "timestamp": "2026-10-05T23:59:58Z",
     "track": "best"
   },
   "best/reverse-complement/c": {
     "artifact_bytes": 17368,
     "bench": "reverse-complement",
-    "build_s": 0.1922,
+    "build_s": 0.1955,
     "cmd": [
       "./out/reverse-complement"
     ],
     "exe_bytes": 17368,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/reverse-complement/c",
     "lang": "c",
     "log": "logs/build-best-reverse-complement-c.log",
@@ -2164,19 +2188,19 @@
     "source_gzip_bytes": 7321,
     "source_lines": 520,
     "source_sha256": "2040ef11bd80aeeb3ace4fd15582379bddd2e922a4ef21648cb0c21819c923ce",
-    "timestamp": "2026-09-27T16:47:54Z",
+    "timestamp": "2026-10-05T23:59:29Z",
     "track": "best"
   },
   "best/reverse-complement/cpp": {
     "artifact_bytes": 22752,
     "bench": "reverse-complement",
-    "build_s": 0.364,
+    "build_s": 0.3618,
     "cmd": [
       "./out/reverse-complement"
     ],
     "exe_bytes": 22752,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/reverse-complement/cpp",
     "lang": "cpp",
     "log": "logs/build-best-reverse-complement-cpp.log",
@@ -2188,19 +2212,19 @@
     "source_gzip_bytes": 4777,
     "source_lines": 404,
     "source_sha256": "da63f47c7e8cb60837308685b8302a9148f4555a67104b79f24a88b3a6a6d654",
-    "timestamp": "2026-09-27T16:47:55Z",
+    "timestamp": "2026-10-05T23:59:29Z",
     "track": "best"
   },
   "best/reverse-complement/csharp": {
     "artifact_bytes": 264498,
     "bench": "reverse-complement",
-    "build_s": 0.885,
+    "build_s": 0.8949,
     "cmd": [
       "./out/revcomp"
     ],
     "exe_bytes": 78256,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/reverse-complement/csharp",
     "lang": "csharp",
     "log": "logs/build-best-reverse-complement-csharp.log",
@@ -2212,19 +2236,19 @@
     "source_gzip_bytes": 3565,
     "source_lines": 351,
     "source_sha256": "55dcbe6ffd4b04275fc497ae0936f331ab4a5d6c92e4e0637fb73601e9979885",
-    "timestamp": "2026-09-27T16:47:58Z",
+    "timestamp": "2026-10-05T23:59:32Z",
     "track": "best"
   },
   "best/reverse-complement/fortran": {
     "artifact_bytes": 17552,
     "bench": "reverse-complement",
-    "build_s": 0.0752,
+    "build_s": 0.0769,
     "cmd": [
       "./out/revcomp"
     ],
     "exe_bytes": 17552,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/reverse-complement/fortran",
     "lang": "fortran",
     "log": "logs/build-best-reverse-complement-fortran.log",
@@ -2236,19 +2260,19 @@
     "source_gzip_bytes": 1351,
     "source_lines": 129,
     "source_sha256": "7d485d91897a435cdb0dd0bb695f09514a541ea19145200eba47adf3d48e19b9",
-    "timestamp": "2026-09-27T16:47:58Z",
+    "timestamp": "2026-10-05T23:59:33Z",
     "track": "best"
   },
   "best/reverse-complement/go": {
     "artifact_bytes": 2131267,
     "bench": "reverse-complement",
-    "build_s": 0.0865,
+    "build_s": 0.0807,
     "cmd": [
       "./out/reverse-complement"
     ],
     "exe_bytes": 2131267,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/reverse-complement/go",
     "lang": "go",
     "log": "logs/build-best-reverse-complement-go.log",
@@ -2260,13 +2284,13 @@
     "source_gzip_bytes": 1397,
     "source_lines": 173,
     "source_sha256": "35b22bbd26951b2072abfb91ca6657963366aa4c2f824bf3d5fcf2aa572c5c7b",
-    "timestamp": "2026-09-27T16:47:57Z",
+    "timestamp": "2026-10-05T23:59:31Z",
     "track": "best"
   },
   "best/reverse-complement/java": {
     "artifact_bytes": 2385,
     "bench": "reverse-complement",
-    "build_s": 0.2232,
+    "build_s": 0.2421,
     "cmd": [
       "java",
       "-Xmx3072m",
@@ -2276,7 +2300,7 @@
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/reverse-complement/java",
     "lang": "java",
     "log": "logs/build-best-reverse-complement-java.log",
@@ -2288,20 +2312,20 @@
     "source_gzip_bytes": 924,
     "source_lines": 85,
     "source_sha256": "77a6e29211dfa89833885e233d4dd566968f8635697d12602d2380baba5a0702",
-    "timestamp": "2026-09-27T16:47:57Z",
+    "timestamp": "2026-10-05T23:59:32Z",
     "track": "best"
   },
   "best/reverse-complement/javascript": {
     "artifact_bytes": 0,
     "bench": "reverse-complement",
-    "build_s": 0.002,
+    "build_s": 0.0023,
     "cmd": [
       "node",
       "reverse-complement.js"
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/reverse-complement/javascript",
     "lang": "javascript",
     "log": "logs/build-best-reverse-complement-javascript.log",
@@ -2313,19 +2337,19 @@
     "source_gzip_bytes": 1578,
     "source_lines": 223,
     "source_sha256": "e491f06396c5f99915b66b8d3b11086e6abc886b4b0d6befc4b896b1622ae209",
-    "timestamp": "2026-09-27T16:47:58Z",
+    "timestamp": "2026-10-05T23:59:32Z",
     "track": "best"
   },
   "best/reverse-complement/pascal": {
     "artifact_bytes": 42464,
     "bench": "reverse-complement",
-    "build_s": 0.0256,
+    "build_s": 0.0251,
     "cmd": [
       "./out/revcomp"
     ],
     "exe_bytes": 35536,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/reverse-complement/pascal",
     "lang": "pascal",
     "log": "logs/build-best-reverse-complement-pascal.log",
@@ -2337,7 +2361,7 @@
     "source_gzip_bytes": 917,
     "source_lines": 116,
     "source_sha256": "5517f02133f5e6bd2e326313d045bf4109e62b79a4eb3ca73e6a1cc7892b7ffa",
-    "timestamp": "2026-09-27T16:47:58Z",
+    "timestamp": "2026-10-05T23:59:33Z",
     "track": "best"
   },
   "best/reverse-complement/python": {
@@ -2351,7 +2375,7 @@
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/reverse-complement/python",
     "lang": "python",
     "log": "logs/build-best-reverse-complement-python.log",
@@ -2363,19 +2387,19 @@
     "source_gzip_bytes": 4705,
     "source_lines": 301,
     "source_sha256": "8ac42eaeb1672af58348c5334f129b3f3bddf7527d175a94c2187e63039ccc31",
-    "timestamp": "2026-09-27T16:47:58Z",
+    "timestamp": "2026-10-05T23:59:32Z",
     "track": "best"
   },
   "best/reverse-complement/resid": {
-    "artifact_bytes": 92805,
+    "artifact_bytes": 96890,
     "bench": "reverse-complement",
-    "build_s": 2.0828,
+    "build_s": 2.4614,
     "cmd": [
       "./out/revcomp"
     ],
-    "exe_bytes": 50819,
+    "exe_bytes": 52329,
     "exit": 0,
-    "git_commit": "da2a9ec43215936e476316eaebff08caabc850fd-dirty",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/reverse-complement/resid",
     "lang": "resid",
     "log": "logs/build-best-reverse-complement-resid.log",
@@ -2386,20 +2410,20 @@
     ],
     "source_gzip_bytes": 1888,
     "source_lines": 135,
-    "source_sha256": "56103dee713f996678a985e984b34967a8cfbbadea98d2cb72e780d670c2fa10",
-    "timestamp": "2026-09-28T00:38:51Z",
+    "source_sha256": "dfb8b2cb184ffa8679c6f11d9eb21489157b7431f23f46cae115ac374d61dc54",
+    "timestamp": "2026-10-05T23:59:29Z",
     "track": "best"
   },
   "best/reverse-complement/rust": {
     "artifact_bytes": 22163310,
     "bench": "reverse-complement",
-    "build_s": 1.8439,
+    "build_s": 1.7972,
     "cmd": [
       "./out/reverse-complement"
     ],
     "exe_bytes": 583336,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/reverse-complement/rust",
     "lang": "rust",
     "log": "logs/build-best-reverse-complement-rust.log",
@@ -2411,19 +2435,19 @@
     "source_gzip_bytes": 3250,
     "source_lines": 331,
     "source_sha256": "e0ee4d10602e0092a8b80db155f377690cec5d537732f57fbeab8bac6f1df183",
-    "timestamp": "2026-09-27T16:47:57Z",
+    "timestamp": "2026-10-05T23:59:31Z",
     "track": "best"
   },
   "best/spectral-norm/c": {
     "artifact_bytes": 16368,
     "bench": "spectral-norm",
-    "build_s": 0.1879,
+    "build_s": 0.1845,
     "cmd": [
       "./out/spectral-norm"
     ],
     "exe_bytes": 16368,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/spectral-norm/c",
     "lang": "c",
     "log": "logs/build-best-spectral-norm-c.log",
@@ -2435,19 +2459,19 @@
     "source_gzip_bytes": 1689,
     "source_lines": 197,
     "source_sha256": "19029b948f2f090579c1503eaf15547d2b9d5cfd4cb8008af2ae09b0396f4e69",
-    "timestamp": "2026-09-27T16:47:05Z",
+    "timestamp": "2026-10-05T23:58:33Z",
     "track": "best"
   },
   "best/spectral-norm/cpp": {
     "artifact_bytes": 21040,
     "bench": "spectral-norm",
-    "build_s": 0.2008,
+    "build_s": 0.2003,
     "cmd": [
       "./out/spectral-norm"
     ],
     "exe_bytes": 21040,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/spectral-norm/cpp",
     "lang": "cpp",
     "log": "logs/build-best-spectral-norm-cpp.log",
@@ -2459,19 +2483,19 @@
     "source_gzip_bytes": 1417,
     "source_lines": 137,
     "source_sha256": "558cf495f800e0fb747c2e3c3f231605fade96a96bc3cb9e163e84b45c4c43e1",
-    "timestamp": "2026-09-27T16:47:05Z",
+    "timestamp": "2026-10-05T23:58:33Z",
     "track": "best"
   },
   "best/spectral-norm/csharp": {
     "artifact_bytes": 252760,
     "bench": "spectral-norm",
-    "build_s": 0.865,
+    "build_s": 0.8595,
     "cmd": [
       "./out/spectralnorm"
     ],
     "exe_bytes": 78256,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/spectral-norm/csharp",
     "lang": "csharp",
     "log": "logs/build-best-spectral-norm-csharp.log",
@@ -2483,19 +2507,19 @@
     "source_gzip_bytes": 876,
     "source_lines": 100,
     "source_sha256": "e8ed4fe64cedec82facfa5b71aa8f8188a359aafc6db748f7772a61df38dfd68",
-    "timestamp": "2026-09-27T16:47:08Z",
+    "timestamp": "2026-10-05T23:58:36Z",
     "track": "best"
   },
   "best/spectral-norm/fortran": {
     "artifact_bytes": 25592,
     "bench": "spectral-norm",
-    "build_s": 0.1448,
+    "build_s": 0.1402,
     "cmd": [
       "./out/spectralnorm"
     ],
     "exe_bytes": 25592,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/spectral-norm/fortran",
     "lang": "fortran",
     "log": "logs/build-best-spectral-norm-fortran.log",
@@ -2507,19 +2531,19 @@
     "source_gzip_bytes": 949,
     "source_lines": 125,
     "source_sha256": "8d92a900417dd2f1cfda85c9f049ca075a069111f867721c100dbc597b69c670",
-    "timestamp": "2026-09-27T16:47:08Z",
+    "timestamp": "2026-10-05T23:58:37Z",
     "track": "best"
   },
   "best/spectral-norm/go": {
     "artifact_bytes": 2531022,
     "bench": "spectral-norm",
-    "build_s": 0.0842,
+    "build_s": 0.0874,
     "cmd": [
       "./out/spectral-norm"
     ],
     "exe_bytes": 2531022,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/spectral-norm/go",
     "lang": "go",
     "log": "logs/build-best-spectral-norm-go.log",
@@ -2531,13 +2555,13 @@
     "source_gzip_bytes": 716,
     "source_lines": 94,
     "source_sha256": "c3093fefa8ed96f787ec45df9837c7844215ad3f23e8c4424094f5b3ff5df248",
-    "timestamp": "2026-09-27T16:47:07Z",
+    "timestamp": "2026-10-05T23:58:35Z",
     "track": "best"
   },
   "best/spectral-norm/java": {
     "artifact_bytes": 2542,
     "bench": "spectral-norm",
-    "build_s": 0.2425,
+    "build_s": 0.2372,
     "cmd": [
       "java",
       "-cp",
@@ -2546,7 +2570,7 @@
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/spectral-norm/java",
     "lang": "java",
     "log": "logs/build-best-spectral-norm-java.log",
@@ -2558,20 +2582,20 @@
     "source_gzip_bytes": 875,
     "source_lines": 87,
     "source_sha256": "50e43301c2c11241aefce63daa93649ea9392d456f1a29268e04f360d365f2ca",
-    "timestamp": "2026-09-27T16:47:07Z",
+    "timestamp": "2026-10-05T23:58:36Z",
     "track": "best"
   },
   "best/spectral-norm/javascript": {
     "artifact_bytes": 0,
     "bench": "spectral-norm",
-    "build_s": 0.0017,
+    "build_s": 0.0019,
     "cmd": [
       "node",
       "spectral-norm.js"
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/spectral-norm/javascript",
     "lang": "javascript",
     "log": "logs/build-best-spectral-norm-javascript.log",
@@ -2583,19 +2607,19 @@
     "source_gzip_bytes": 1163,
     "source_lines": 139,
     "source_sha256": "bdc7eb25d87ccb10d6eeba83eb9f2a7d159657c91e862de7114a196fe4584514",
-    "timestamp": "2026-09-27T16:47:08Z",
+    "timestamp": "2026-10-05T23:58:36Z",
     "track": "best"
   },
   "best/spectral-norm/pascal": {
     "artifact_bytes": 312308,
     "bench": "spectral-norm",
-    "build_s": 0.0649,
+    "build_s": 0.0667,
     "cmd": [
       "./out/spectralnorm"
     ],
     "exe_bytes": 265296,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/spectral-norm/pascal",
     "lang": "pascal",
     "log": "logs/build-best-spectral-norm-pascal.log",
@@ -2608,13 +2632,13 @@
     "source_gzip_bytes": 2019,
     "source_lines": 265,
     "source_sha256": "620b4da2c8a31f70bb38ef844034e91e0a46c236645bc4d0dcf87651ca7495d7",
-    "timestamp": "2026-09-27T16:47:08Z",
+    "timestamp": "2026-10-05T23:58:37Z",
     "track": "best"
   },
   "best/spectral-norm/python": {
     "artifact_bytes": 0,
     "bench": "spectral-norm",
-    "build_s": 0.0019,
+    "build_s": 0.0018,
     "cmd": [
       "python3",
       "-OO",
@@ -2622,7 +2646,7 @@
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/spectral-norm/python",
     "lang": "python",
     "log": "logs/build-best-spectral-norm-python.log",
@@ -2634,19 +2658,19 @@
     "source_gzip_bytes": 723,
     "source_lines": 69,
     "source_sha256": "64a8cd362cc3cc0456af9dc4c341963afe2e640bfb4b4ac88dafce3252cba965",
-    "timestamp": "2026-09-27T16:47:08Z",
+    "timestamp": "2026-10-05T23:58:36Z",
     "track": "best"
   },
   "best/spectral-norm/resid": {
-    "artifact_bytes": 106024,
+    "artifact_bytes": 110077,
     "bench": "spectral-norm",
-    "build_s": 2.0263,
+    "build_s": 2.4293,
     "cmd": [
       "./out/spectralnorm"
     ],
-    "exe_bytes": 62723,
+    "exe_bytes": 64035,
     "exit": 0,
-    "git_commit": "ba93c7e81085c04a0ca1d1d9225abaec39b2fc33-dirty",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/spectral-norm/resid",
     "lang": "resid",
     "log": "logs/build-best-spectral-norm-resid.log",
@@ -2657,20 +2681,20 @@
     ],
     "source_gzip_bytes": 2275,
     "source_lines": 177,
-    "source_sha256": "81cb80fd337da775459bfad8de043c92eef4bded190db546c933ebeaf4463ffa",
-    "timestamp": "2026-09-27T23:47:13Z",
+    "source_sha256": "8ade14d66acbd41b5d0075120868aabc34eb496b0ce805465d47afe7019d4f01",
+    "timestamp": "2026-10-05T23:58:33Z",
     "track": "best"
   },
   "best/spectral-norm/rust": {
     "artifact_bytes": 19469268,
     "bench": "spectral-norm",
-    "build_s": 1.8237,
+    "build_s": 1.8209,
     "cmd": [
       "./out/spectral-norm"
     ],
     "exe_bytes": 627128,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "best/spectral-norm/rust",
     "lang": "rust",
     "log": "logs/build-best-spectral-norm-rust.log",
@@ -2682,19 +2706,19 @@
     "source_gzip_bytes": 1634,
     "source_lines": 139,
     "source_sha256": "35212f046992004d131a4164b7679a8e0faf3592bde33040132d81ea1b4d4d5c",
-    "timestamp": "2026-09-27T16:47:07Z",
+    "timestamp": "2026-10-05T23:58:35Z",
     "track": "best"
   },
   "st/binary-trees/c": {
     "artifact_bytes": 20344,
     "bench": "binary-trees",
-    "build_s": 0.101,
+    "build_s": 0.098,
     "cmd": [
       "./out/binary-trees"
     ],
     "exe_bytes": 20344,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/binary-trees/c",
     "lang": "c",
     "log": "logs/build-st-binary-trees-c.log",
@@ -2706,19 +2730,19 @@
     "source_gzip_bytes": 691,
     "source_lines": 62,
     "source_sha256": "d3baf81107ef2c3b5660d785e93924c8bc6aa540107a33864d83cdcc3231d47a",
-    "timestamp": "2026-09-27T16:47:18Z",
+    "timestamp": "2026-10-05T23:58:48Z",
     "track": "st"
   },
   "st/binary-trees/cpp": {
     "artifact_bytes": 20776,
     "bench": "binary-trees",
-    "build_s": 0.114,
+    "build_s": 0.1106,
     "cmd": [
       "./out/binary-trees"
     ],
     "exe_bytes": 20776,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/binary-trees/cpp",
     "lang": "cpp",
     "log": "logs/build-st-binary-trees-cpp.log",
@@ -2730,19 +2754,19 @@
     "source_gzip_bytes": 681,
     "source_lines": 58,
     "source_sha256": "2eb154449429e36bd47d9da7c0dac41e7350c3ecbb2f7e8bde5f4eec3d0b7be6",
-    "timestamp": "2026-09-27T16:47:19Z",
+    "timestamp": "2026-10-05T23:58:48Z",
     "track": "st"
   },
   "st/binary-trees/csharp": {
-    "artifact_bytes": 290939,
+    "artifact_bytes": 290931,
     "bench": "binary-trees",
-    "build_s": 0.8428,
+    "build_s": 0.8379,
     "cmd": [
       "./out/binarytrees"
     ],
     "exe_bytes": 98312,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/binary-trees/csharp",
     "lang": "csharp",
     "log": "logs/build-st-binary-trees-csharp.log",
@@ -2754,19 +2778,19 @@
     "source_gzip_bytes": 607,
     "source_lines": 38,
     "source_sha256": "6b73c6b0d001f919eb1181ab4252c97d41ef003e59c49d60324c27291c2c5ab2",
-    "timestamp": "2026-09-27T16:47:20Z",
+    "timestamp": "2026-10-05T23:58:50Z",
     "track": "st"
   },
   "st/binary-trees/fortran": {
     "artifact_bytes": 22732,
     "bench": "binary-trees",
-    "build_s": 0.1022,
+    "build_s": 0.1024,
     "cmd": [
       "./out/binarytrees"
     ],
     "exe_bytes": 21600,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/binary-trees/fortran",
     "lang": "fortran",
     "log": "logs/build-st-binary-trees-fortran.log",
@@ -2778,19 +2802,19 @@
     "source_gzip_bytes": 730,
     "source_lines": 75,
     "source_sha256": "7913e43fefddfbda6e726052cb89fae073937918f3227923ffbd400b4b5ff1e1",
-    "timestamp": "2026-09-27T16:47:20Z",
+    "timestamp": "2026-10-05T23:58:50Z",
     "track": "st"
   },
   "st/binary-trees/go": {
     "artifact_bytes": 2434656,
     "bench": "binary-trees",
-    "build_s": 0.0828,
+    "build_s": 0.0835,
     "cmd": [
       "./out/binary-trees"
     ],
     "exe_bytes": 2434656,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/binary-trees/go",
     "lang": "go",
     "log": "logs/build-st-binary-trees-go.log",
@@ -2802,13 +2826,13 @@
     "source_gzip_bytes": 578,
     "source_lines": 54,
     "source_sha256": "f9d1db66aaf4092184fa3695940b360c8732de346dc847d67f9d143afcd315f0",
-    "timestamp": "2026-09-27T16:47:19Z",
+    "timestamp": "2026-10-05T23:58:49Z",
     "track": "st"
   },
   "st/binary-trees/java": {
     "artifact_bytes": 1946,
     "bench": "binary-trees",
-    "build_s": 0.2256,
+    "build_s": 0.2242,
     "cmd": [
       "java",
       "-cp",
@@ -2817,7 +2841,7 @@
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/binary-trees/java",
     "lang": "java",
     "log": "logs/build-st-binary-trees-java.log",
@@ -2829,20 +2853,20 @@
     "source_gzip_bytes": 573,
     "source_lines": 32,
     "source_sha256": "e6646226d7378e5497f9c19ad1263ba6a275a164205aa9fb52c10c2327600258",
-    "timestamp": "2026-09-27T16:47:19Z",
+    "timestamp": "2026-10-05T23:58:49Z",
     "track": "st"
   },
   "st/binary-trees/javascript": {
     "artifact_bytes": 0,
     "bench": "binary-trees",
-    "build_s": 0.0025,
+    "build_s": 0.0018,
     "cmd": [
       "node",
       "binary-trees.js"
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/binary-trees/javascript",
     "lang": "javascript",
     "log": "logs/build-st-binary-trees-javascript.log",
@@ -2854,7 +2878,7 @@
     "source_gzip_bytes": 512,
     "source_lines": 22,
     "source_sha256": "32210592250c4154dea3c73772069e0540019df656195a7f54cefa3a4838ecde",
-    "timestamp": "2026-09-27T16:47:20Z",
+    "timestamp": "2026-10-05T23:58:50Z",
     "track": "st"
   },
   "st/binary-trees/pascal": {
@@ -2866,7 +2890,7 @@
     ],
     "exe_bytes": 195664,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/binary-trees/pascal",
     "lang": "pascal",
     "log": "logs/build-st-binary-trees-pascal.log",
@@ -2878,7 +2902,7 @@
     "source_gzip_bytes": 691,
     "source_lines": 79,
     "source_sha256": "8bf93df82e252e50b93256446eb67d0cb354d9eecd5b7be5355cdebf1335a83c",
-    "timestamp": "2026-09-27T16:47:20Z",
+    "timestamp": "2026-10-05T23:58:50Z",
     "track": "st"
   },
   "st/binary-trees/python": {
@@ -2891,7 +2915,7 @@
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/binary-trees/python",
     "lang": "python",
     "log": "logs/build-st-binary-trees-python.log",
@@ -2903,19 +2927,19 @@
     "source_gzip_bytes": 532,
     "source_lines": 41,
     "source_sha256": "31952640eb7627670e04c43d27e8da69e1bbe7e7d4cc4db958002a43577770b5",
-    "timestamp": "2026-09-27T16:47:20Z",
+    "timestamp": "2026-10-05T23:58:50Z",
     "track": "st"
   },
   "st/binary-trees/resid": {
-    "artifact_bytes": 49826,
+    "artifact_bytes": 53764,
     "bench": "binary-trees",
-    "build_s": 1.6844,
+    "build_s": 2.0172,
     "cmd": [
       "./out/binarytrees"
     ],
-    "exe_bytes": 23627,
+    "exe_bytes": 24619,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/binary-trees/resid",
     "lang": "resid",
     "log": "logs/build-st-binary-trees-resid.log",
@@ -2926,20 +2950,20 @@
     ],
     "source_gzip_bytes": 1044,
     "source_lines": 59,
-    "source_sha256": "74efc01603c206f7c432648598fffafe84aaaf3027eb92e2394daf680f91ded4",
-    "timestamp": "2026-09-27T16:47:18Z",
+    "source_sha256": "54706ee08482ea85f69e8648dec00249a47f972972c378c89bb16feb27bccc1b",
+    "timestamp": "2026-10-05T23:58:48Z",
     "track": "st"
   },
   "st/binary-trees/rust": {
     "artifact_bytes": 4513320,
     "bench": "binary-trees",
-    "build_s": 0.0801,
+    "build_s": 0.0768,
     "cmd": [
       "./out/binary-trees"
     ],
     "exe_bytes": 4513320,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/binary-trees/rust",
     "lang": "rust",
     "log": "logs/build-st-binary-trees-rust.log",
@@ -2951,19 +2975,19 @@
     "source_gzip_bytes": 649,
     "source_lines": 51,
     "source_sha256": "f6515e61bb6b28d5ffdc83e6b7ac3eda14343521b0b49565881d10cefdd62510",
-    "timestamp": "2026-09-27T16:47:19Z",
+    "timestamp": "2026-10-05T23:58:49Z",
     "track": "st"
   },
   "st/fannkuch-redux/c": {
     "artifact_bytes": 16096,
     "bench": "fannkuch-redux",
-    "build_s": 0.0414,
+    "build_s": 0.0446,
     "cmd": [
       "./out/fannkuch-redux"
     ],
     "exe_bytes": 16096,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/fannkuch-redux/c",
     "lang": "c",
     "log": "logs/build-st-fannkuch-redux-c.log",
@@ -2975,19 +2999,19 @@
     "source_gzip_bytes": 577,
     "source_lines": 55,
     "source_sha256": "dbd1158835c1d75ea6530cb2e97ee8f72056c14f889f90267e225f446a96c423",
-    "timestamp": "2026-09-27T16:46:52Z",
+    "timestamp": "2026-10-05T23:58:19Z",
     "track": "st"
   },
   "st/fannkuch-redux/cpp": {
     "artifact_bytes": 16824,
     "bench": "fannkuch-redux",
-    "build_s": 0.1457,
+    "build_s": 0.1485,
     "cmd": [
       "./out/fannkuch-redux"
     ],
     "exe_bytes": 16824,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/fannkuch-redux/cpp",
     "lang": "cpp",
     "log": "logs/build-st-fannkuch-redux-cpp.log",
@@ -2999,19 +3023,19 @@
     "source_gzip_bytes": 563,
     "source_lines": 41,
     "source_sha256": "c7e569cfade1a19dad8fc61245846a30da20bea2d397ad5b223917a12cc083e4",
-    "timestamp": "2026-09-27T16:46:52Z",
+    "timestamp": "2026-10-05T23:58:19Z",
     "track": "st"
   },
   "st/fannkuch-redux/csharp": {
     "artifact_bytes": 289235,
     "bench": "fannkuch-redux",
-    "build_s": 0.8465,
+    "build_s": 0.8706,
     "cmd": [
       "./out/fannkuchredux"
     ],
     "exe_bytes": 98312,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/fannkuch-redux/csharp",
     "lang": "csharp",
     "log": "logs/build-st-fannkuch-redux-csharp.log",
@@ -3023,19 +3047,19 @@
     "source_gzip_bytes": 548,
     "source_lines": 40,
     "source_sha256": "b04f0b1653e0ed153bf4ab218a879344629b0edc447e0275e2056d0a122d51d5",
-    "timestamp": "2026-09-27T16:46:53Z",
+    "timestamp": "2026-10-05T23:58:21Z",
     "track": "st"
   },
   "st/fannkuch-redux/fortran": {
     "artifact_bytes": 17016,
     "bench": "fannkuch-redux",
-    "build_s": 0.0542,
+    "build_s": 0.0549,
     "cmd": [
       "./out/fannkuchredux"
     ],
     "exe_bytes": 17016,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/fannkuch-redux/fortran",
     "lang": "fortran",
     "log": "logs/build-st-fannkuch-redux-fortran.log",
@@ -3047,19 +3071,19 @@
     "source_gzip_bytes": 612,
     "source_lines": 67,
     "source_sha256": "41578e07d7ece65b3ad48a88cab3c6490d7627658d525e29e18e0b77f05eb7e9",
-    "timestamp": "2026-09-27T16:46:54Z",
+    "timestamp": "2026-10-05T23:58:21Z",
     "track": "st"
   },
   "st/fannkuch-redux/go": {
     "artifact_bytes": 2430837,
     "bench": "fannkuch-redux",
-    "build_s": 0.0877,
+    "build_s": 0.0819,
     "cmd": [
       "./out/fannkuch-redux"
     ],
     "exe_bytes": 2430837,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/fannkuch-redux/go",
     "lang": "go",
     "log": "logs/build-st-fannkuch-redux-go.log",
@@ -3071,13 +3095,13 @@
     "source_gzip_bytes": 596,
     "source_lines": 67,
     "source_sha256": "1bbd73b3c2cc74e85efb384a594f10a7dcb2c534848704f7debbf3a70f815b8a",
-    "timestamp": "2026-09-27T16:46:52Z",
+    "timestamp": "2026-10-05T23:58:19Z",
     "track": "st"
   },
   "st/fannkuch-redux/java": {
     "artifact_bytes": 1488,
     "bench": "fannkuch-redux",
-    "build_s": 0.2199,
+    "build_s": 0.2061,
     "cmd": [
       "java",
       "-cp",
@@ -3086,7 +3110,7 @@
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/fannkuch-redux/java",
     "lang": "java",
     "log": "logs/build-st-fannkuch-redux-java.log",
@@ -3098,20 +3122,20 @@
     "source_gzip_bytes": 533,
     "source_lines": 31,
     "source_sha256": "de8c3577f1ad5b21bc482ab4fa36dfd6ab7618bd7795138d32974bd253b3be42",
-    "timestamp": "2026-09-27T16:46:53Z",
+    "timestamp": "2026-10-05T23:58:20Z",
     "track": "st"
   },
   "st/fannkuch-redux/javascript": {
     "artifact_bytes": 0,
     "bench": "fannkuch-redux",
-    "build_s": 0.0017,
+    "build_s": 0.0021,
     "cmd": [
       "node",
       "fannkuch-redux.js"
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/fannkuch-redux/javascript",
     "lang": "javascript",
     "log": "logs/build-st-fannkuch-redux-javascript.log",
@@ -3123,19 +3147,19 @@
     "source_gzip_bytes": 549,
     "source_lines": 34,
     "source_sha256": "5afd68cb4c450c069de78065035feb83e22299d99cb130fe62431f371f74fb18",
-    "timestamp": "2026-09-27T16:46:53Z",
+    "timestamp": "2026-10-05T23:58:21Z",
     "track": "st"
   },
   "st/fannkuch-redux/pascal": {
     "artifact_bytes": 205600,
     "bench": "fannkuch-redux",
-    "build_s": 0.0244,
+    "build_s": 0.0255,
     "cmd": [
       "./out/fannkuchredux"
     ],
     "exe_bytes": 192912,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/fannkuch-redux/pascal",
     "lang": "pascal",
     "log": "logs/build-st-fannkuch-redux-pascal.log",
@@ -3147,20 +3171,20 @@
     "source_gzip_bytes": 614,
     "source_lines": 68,
     "source_sha256": "99945e132a24979a05d1cb781c7d239e105c7f45ff6a136da5676a9519401fb0",
-    "timestamp": "2026-09-27T16:46:54Z",
+    "timestamp": "2026-10-05T23:58:21Z",
     "track": "st"
   },
   "st/fannkuch-redux/python": {
     "artifact_bytes": 0,
     "bench": "fannkuch-redux",
-    "build_s": 0.0016,
+    "build_s": 0.0013,
     "cmd": [
       "python3",
       "fannkuch-redux.py"
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/fannkuch-redux/python",
     "lang": "python",
     "log": "logs/build-st-fannkuch-redux-python.log",
@@ -3172,19 +3196,19 @@
     "source_gzip_bytes": 487,
     "source_lines": 46,
     "source_sha256": "8331d4fc5ccf4ecb4ecc804307a13e139c91f8d46a3a4ee422a7146861c02e63",
-    "timestamp": "2026-09-27T16:46:53Z",
+    "timestamp": "2026-10-05T23:58:21Z",
     "track": "st"
   },
   "st/fannkuch-redux/resid": {
-    "artifact_bytes": 46776,
+    "artifact_bytes": 49994,
     "bench": "fannkuch-redux",
-    "build_s": 1.7218,
+    "build_s": 2.0119,
     "cmd": [
       "./out/fannkuchredux"
     ],
-    "exe_bytes": 20507,
+    "exe_bytes": 20955,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/fannkuch-redux/resid",
     "lang": "resid",
     "log": "logs/build-st-fannkuch-redux-resid.log",
@@ -3195,20 +3219,20 @@
     ],
     "source_gzip_bytes": 1577,
     "source_lines": 99,
-    "source_sha256": "e4216da750b191fb90e9df8bd4861502263f2bde1d5e9cc9fcfeccf662105036",
-    "timestamp": "2026-09-27T16:46:52Z",
+    "source_sha256": "93afc4048f3b9bad07b35600a669e83afbddfd166db07e54123e093ed8e536bd",
+    "timestamp": "2026-10-05T23:58:19Z",
     "track": "st"
   },
   "st/fannkuch-redux/rust": {
     "artifact_bytes": 4512992,
     "bench": "fannkuch-redux",
-    "build_s": 0.1054,
+    "build_s": 0.0977,
     "cmd": [
       "./out/fannkuch-redux"
     ],
     "exe_bytes": 4512992,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/fannkuch-redux/rust",
     "lang": "rust",
     "log": "logs/build-st-fannkuch-redux-rust.log",
@@ -3220,19 +3244,19 @@
     "source_gzip_bytes": 634,
     "source_lines": 53,
     "source_sha256": "e388543f6adb7ea7f52826e4e6244f07397e02639c565482287cea2378216935",
-    "timestamp": "2026-09-27T16:46:52Z",
+    "timestamp": "2026-10-05T23:58:19Z",
     "track": "st"
   },
   "st/fasta/c": {
     "artifact_bytes": 16656,
     "bench": "fasta",
-    "build_s": 0.0502,
+    "build_s": 0.0459,
     "cmd": [
       "./out/fasta"
     ],
     "exe_bytes": 16656,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/fasta/c",
     "lang": "c",
     "log": "logs/build-st-fasta-c.log",
@@ -3244,19 +3268,19 @@
     "source_gzip_bytes": 1132,
     "source_lines": 100,
     "source_sha256": "42498795f97df3694b2de230112c1cb0de22149a4398cd76b7b2410e2a1cdeba",
-    "timestamp": "2026-09-27T16:47:28Z",
+    "timestamp": "2026-10-05T23:58:58Z",
     "track": "st"
   },
   "st/fasta/cpp": {
     "artifact_bytes": 17648,
     "bench": "fasta",
-    "build_s": 0.1754,
+    "build_s": 0.1734,
     "cmd": [
       "./out/fasta"
     ],
     "exe_bytes": 17648,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/fasta/cpp",
     "lang": "cpp",
     "log": "logs/build-st-fasta-cpp.log",
@@ -3268,19 +3292,19 @@
     "source_gzip_bytes": 1179,
     "source_lines": 101,
     "source_sha256": "1d80b2b7cd5ff9ad2f31de69ae99167d957de6d89d85c9c4cc116d2d3cddca46",
-    "timestamp": "2026-09-27T16:47:28Z",
+    "timestamp": "2026-10-05T23:58:58Z",
     "track": "st"
   },
   "st/fasta/csharp": {
     "artifact_bytes": 295274,
     "bench": "fasta",
-    "build_s": 0.8599,
+    "build_s": 0.8466,
     "cmd": [
       "./out/fasta"
     ],
     "exe_bytes": 98312,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/fasta/csharp",
     "lang": "csharp",
     "log": "logs/build-st-fasta-csharp.log",
@@ -3292,19 +3316,19 @@
     "source_gzip_bytes": 1127,
     "source_lines": 92,
     "source_sha256": "ab6ea0e8b830ab736a1868496ecfe564b44b48be92b2f0b88a84861f4c622621",
-    "timestamp": "2026-09-27T16:47:29Z",
+    "timestamp": "2026-10-05T23:59:00Z",
     "track": "st"
   },
   "st/fasta/fortran": {
     "artifact_bytes": 20213,
     "bench": "fasta",
-    "build_s": 0.0629,
+    "build_s": 0.0622,
     "cmd": [
       "./out/fasta"
     ],
     "exe_bytes": 17264,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/fasta/fortran",
     "lang": "fortran",
     "log": "logs/build-st-fasta-fortran.log",
@@ -3316,19 +3340,19 @@
     "source_gzip_bytes": 1349,
     "source_lines": 127,
     "source_sha256": "489d09ac5f1dcf906bc41ac98a2c59ae2a9f312d1e3c20bdd74b5f6fb833abbe",
-    "timestamp": "2026-09-27T16:47:29Z",
+    "timestamp": "2026-10-05T23:59:00Z",
     "track": "st"
   },
   "st/fasta/go": {
     "artifact_bytes": 2155453,
     "bench": "fasta",
-    "build_s": 0.0828,
+    "build_s": 0.0811,
     "cmd": [
       "./out/fasta"
     ],
     "exe_bytes": 2155453,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/fasta/go",
     "lang": "go",
     "log": "logs/build-st-fasta-go.log",
@@ -3340,13 +3364,13 @@
     "source_gzip_bytes": 1141,
     "source_lines": 111,
     "source_sha256": "f1d49d1011be2df92cc6f7746e3e2002337b65cd8d7db9bd529165fb4723c07b",
-    "timestamp": "2026-09-27T16:47:28Z",
+    "timestamp": "2026-10-05T23:58:59Z",
     "track": "st"
   },
   "st/fasta/java": {
     "artifact_bytes": 2620,
     "bench": "fasta",
-    "build_s": 0.2188,
+    "build_s": 0.216,
     "cmd": [
       "java",
       "-cp",
@@ -3355,7 +3379,7 @@
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/fasta/java",
     "lang": "java",
     "log": "logs/build-st-fasta-java.log",
@@ -3367,20 +3391,20 @@
     "source_gzip_bytes": 1066,
     "source_lines": 76,
     "source_sha256": "2cf3c7c157c3d10a093da3ea489428a07802f6ef63f49ac007d47a2f74eff303",
-    "timestamp": "2026-09-27T16:47:28Z",
+    "timestamp": "2026-10-05T23:58:59Z",
     "track": "st"
   },
   "st/fasta/javascript": {
     "artifact_bytes": 0,
     "bench": "fasta",
-    "build_s": 0.0026,
+    "build_s": 0.0019,
     "cmd": [
       "node",
       "fasta.js"
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/fasta/javascript",
     "lang": "javascript",
     "log": "logs/build-st-fasta-javascript.log",
@@ -3392,19 +3416,19 @@
     "source_gzip_bytes": 1107,
     "source_lines": 79,
     "source_sha256": "71410af3b500e29d134806032dd385fb901423be5846a38cadddd88299a1d0d8",
-    "timestamp": "2026-09-27T16:47:29Z",
+    "timestamp": "2026-10-05T23:59:00Z",
     "track": "st"
   },
   "st/fasta/pascal": {
     "artifact_bytes": 530528,
     "bench": "fasta",
-    "build_s": 0.0427,
+    "build_s": 0.045,
     "cmd": [
       "./out/fasta"
     ],
     "exe_bytes": 513488,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/fasta/pascal",
     "lang": "pascal",
     "log": "logs/build-st-fasta-pascal.log",
@@ -3416,20 +3440,20 @@
     "source_gzip_bytes": 1146,
     "source_lines": 119,
     "source_sha256": "47139906be0a8b81d7857cab637071844021161f51a104828cbfed63040932b7",
-    "timestamp": "2026-09-27T16:47:29Z",
+    "timestamp": "2026-10-05T23:59:00Z",
     "track": "st"
   },
   "st/fasta/python": {
     "artifact_bytes": 0,
     "bench": "fasta",
-    "build_s": 0.0018,
+    "build_s": 0.0016,
     "cmd": [
       "python3",
       "fasta.py"
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/fasta/python",
     "lang": "python",
     "log": "logs/build-st-fasta-python.log",
@@ -3441,19 +3465,19 @@
     "source_gzip_bytes": 1041,
     "source_lines": 93,
     "source_sha256": "7f9e9f0fabce626f628088895c1e43c5cb8966a8f51705e1cc4e63fe218365c5",
-    "timestamp": "2026-09-27T16:47:29Z",
+    "timestamp": "2026-10-05T23:59:00Z",
     "track": "st"
   },
   "st/fasta/resid": {
-    "artifact_bytes": 90179,
+    "artifact_bytes": 91266,
     "bench": "fasta",
-    "build_s": 1.7482,
+    "build_s": 2.0408,
     "cmd": [
       "./out/fasta"
     ],
-    "exe_bytes": 29273,
+    "exe_bytes": 28761,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/fasta/resid",
     "lang": "resid",
     "log": "logs/build-st-fasta-resid.log",
@@ -3464,20 +3488,20 @@
     ],
     "source_gzip_bytes": 1898,
     "source_lines": 153,
-    "source_sha256": "0026fb19fcf675dfdbc7c50ffe42311dc18f492c11ff119ab81f72436908d848",
-    "timestamp": "2026-09-27T16:47:28Z",
+    "source_sha256": "2ff4d742bd5b81df9167e68a96d556c4e2ed821a254a6755851bb488eaff4b20",
+    "timestamp": "2026-10-05T23:58:58Z",
     "track": "st"
   },
   "st/fasta/rust": {
     "artifact_bytes": 4525872,
     "bench": "fasta",
-    "build_s": 0.1204,
+    "build_s": 0.1215,
     "cmd": [
       "./out/fasta"
     ],
     "exe_bytes": 4525872,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/fasta/rust",
     "lang": "rust",
     "log": "logs/build-st-fasta-rust.log",
@@ -3489,19 +3513,19 @@
     "source_gzip_bytes": 1405,
     "source_lines": 106,
     "source_sha256": "7f62d5a2d356b17fa27660f2b730fac1cb07e90708ee9cf08552dfd57d769310",
-    "timestamp": "2026-09-27T16:47:28Z",
+    "timestamp": "2026-10-05T23:58:59Z",
     "track": "st"
   },
   "st/k-nucleotide/c": {
     "artifact_bytes": 16728,
     "bench": "k-nucleotide",
-    "build_s": 0.0766,
+    "build_s": 0.0742,
     "cmd": [
       "./out/k-nucleotide"
     ],
     "exe_bytes": 16728,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/k-nucleotide/c",
     "lang": "c",
     "log": "logs/build-st-k-nucleotide-c.log",
@@ -3513,19 +3537,19 @@
     "source_gzip_bytes": 1663,
     "source_lines": 188,
     "source_sha256": "e360c7bdfa08c44b979786ad31cd2c74645c98e47b8e7bf04a922e74e1f7fb1e",
-    "timestamp": "2026-09-27T16:47:36Z",
+    "timestamp": "2026-10-05T23:59:08Z",
     "track": "st"
   },
   "st/k-nucleotide/cpp": {
     "artifact_bytes": 28296,
     "bench": "k-nucleotide",
-    "build_s": 0.3481,
+    "build_s": 0.3444,
     "cmd": [
       "./out/k-nucleotide"
     ],
     "exe_bytes": 28296,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/k-nucleotide/cpp",
     "lang": "cpp",
     "log": "logs/build-st-k-nucleotide-cpp.log",
@@ -3537,19 +3561,19 @@
     "source_gzip_bytes": 1163,
     "source_lines": 96,
     "source_sha256": "146f8b0849905a13a963ac58d567568f0bceb3d936effabd44c9bfb0344124ff",
-    "timestamp": "2026-09-27T16:47:36Z",
+    "timestamp": "2026-10-05T23:59:08Z",
     "track": "st"
   },
   "st/k-nucleotide/csharp": {
     "artifact_bytes": 294499,
     "bench": "k-nucleotide",
-    "build_s": 0.86,
+    "build_s": 0.8534,
     "cmd": [
       "./out/knucleotide"
     ],
     "exe_bytes": 98312,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/k-nucleotide/csharp",
     "lang": "csharp",
     "log": "logs/build-st-k-nucleotide-csharp.log",
@@ -3561,19 +3585,19 @@
     "source_gzip_bytes": 879,
     "source_lines": 56,
     "source_sha256": "547dc10847c30fd3fafa4af64019a33af206151924ada2e73746598d696a907b",
-    "timestamp": "2026-09-27T16:47:38Z",
+    "timestamp": "2026-10-05T23:59:09Z",
     "track": "st"
   },
   "st/k-nucleotide/fortran": {
     "artifact_bytes": 23354,
     "bench": "k-nucleotide",
-    "build_s": 0.174,
+    "build_s": 0.1732,
     "cmd": [
       "./out/knucleotide"
     ],
     "exe_bytes": 21920,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/k-nucleotide/fortran",
     "lang": "fortran",
     "log": "logs/build-st-k-nucleotide-fortran.log",
@@ -3585,19 +3609,19 @@
     "source_gzip_bytes": 2080,
     "source_lines": 254,
     "source_sha256": "51ba0c8655ad281f78939a431d80df2ee46c37298ca177eab644bbaac7105fdd",
-    "timestamp": "2026-09-27T16:47:38Z",
+    "timestamp": "2026-10-05T23:59:09Z",
     "track": "st"
   },
   "st/k-nucleotide/go": {
     "artifact_bytes": 2473232,
     "bench": "k-nucleotide",
-    "build_s": 0.1017,
+    "build_s": 0.0882,
     "cmd": [
       "./out/k-nucleotide"
     ],
     "exe_bytes": 2473232,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/k-nucleotide/go",
     "lang": "go",
     "log": "logs/build-st-k-nucleotide-go.log",
@@ -3609,13 +3633,13 @@
     "source_gzip_bytes": 922,
     "source_lines": 93,
     "source_sha256": "5a6be316aa05da98524352daa77a17e246c208c58cda165809cebd681688723a",
-    "timestamp": "2026-09-27T16:47:37Z",
+    "timestamp": "2026-10-05T23:59:08Z",
     "track": "st"
   },
   "st/k-nucleotide/java": {
     "artifact_bytes": 4451,
     "bench": "k-nucleotide",
-    "build_s": 0.2566,
+    "build_s": 0.2612,
     "cmd": [
       "java",
       "-cp",
@@ -3624,7 +3648,7 @@
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/k-nucleotide/java",
     "lang": "java",
     "log": "logs/build-st-k-nucleotide-java.log",
@@ -3636,20 +3660,20 @@
     "source_gzip_bytes": 944,
     "source_lines": 57,
     "source_sha256": "dd6e77ecfb1002a7470edcabd9c2aefef29cf813435d119596d7077ee7f73fce",
-    "timestamp": "2026-09-27T16:47:37Z",
+    "timestamp": "2026-10-05T23:59:08Z",
     "track": "st"
   },
   "st/k-nucleotide/javascript": {
     "artifact_bytes": 0,
     "bench": "k-nucleotide",
-    "build_s": 0.0021,
+    "build_s": 0.0026,
     "cmd": [
       "node",
       "k-nucleotide.js"
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/k-nucleotide/javascript",
     "lang": "javascript",
     "log": "logs/build-st-k-nucleotide-javascript.log",
@@ -3661,19 +3685,19 @@
     "source_gzip_bytes": 736,
     "source_lines": 46,
     "source_sha256": "850dc861c33d2d933eaf909090dc488d6f34e6838b6954b2a63b8f0761d24682",
-    "timestamp": "2026-09-27T16:47:38Z",
+    "timestamp": "2026-10-05T23:59:09Z",
     "track": "st"
   },
   "st/k-nucleotide/pascal": {
     "artifact_bytes": 1647896,
     "bench": "k-nucleotide",
-    "build_s": 0.4374,
+    "build_s": 0.4401,
     "cmd": [
       "./out/knucleotide"
     ],
     "exe_bytes": 1179680,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/k-nucleotide/pascal",
     "lang": "pascal",
     "log": "logs/build-st-k-nucleotide-pascal.log",
@@ -3685,20 +3709,20 @@
     "source_gzip_bytes": 1372,
     "source_lines": 164,
     "source_sha256": "64d8bd71281f2551a72fdfe9abf79d1ce636132824aa06444ece1a98c321ee3f",
-    "timestamp": "2026-09-27T16:47:38Z",
+    "timestamp": "2026-10-05T23:59:10Z",
     "track": "st"
   },
   "st/k-nucleotide/python": {
     "artifact_bytes": 0,
     "bench": "k-nucleotide",
-    "build_s": 0.0015,
+    "build_s": 0.002,
     "cmd": [
       "python3",
       "k-nucleotide.py"
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/k-nucleotide/python",
     "lang": "python",
     "log": "logs/build-st-k-nucleotide-python.log",
@@ -3710,19 +3734,19 @@
     "source_gzip_bytes": 631,
     "source_lines": 41,
     "source_sha256": "7ffc032b2662d0201dc2c94bf8a883946d8f26e220115f88d4a6f44ff283634e",
-    "timestamp": "2026-09-27T16:47:38Z",
+    "timestamp": "2026-10-05T23:59:09Z",
     "track": "st"
   },
   "st/k-nucleotide/resid": {
-    "artifact_bytes": 110283,
+    "artifact_bytes": 112002,
     "bench": "k-nucleotide",
-    "build_s": 1.9388,
+    "build_s": 2.2654,
     "cmd": [
       "./out/knucleotide"
     ],
-    "exe_bytes": 59259,
+    "exe_bytes": 62673,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/k-nucleotide/resid",
     "lang": "resid",
     "log": "logs/build-st-k-nucleotide-resid.log",
@@ -3733,20 +3757,20 @@
     ],
     "source_gzip_bytes": 1910,
     "source_lines": 138,
-    "source_sha256": "ee7703f97fdc3580e95fdcc3a7622691f631d1d711b52b09db8ddd910be9595d",
-    "timestamp": "2026-09-27T16:47:36Z",
+    "source_sha256": "bb3664446b2a2d565ce763035e499d3be3441e1c48283ee2b824f0dd2dbbd4d2",
+    "timestamp": "2026-10-05T23:59:07Z",
     "track": "st"
   },
   "st/k-nucleotide/rust": {
     "artifact_bytes": 4590728,
     "bench": "k-nucleotide",
-    "build_s": 0.1771,
+    "build_s": 0.1719,
     "cmd": [
       "./out/k-nucleotide"
     ],
     "exe_bytes": 4590728,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/k-nucleotide/rust",
     "lang": "rust",
     "log": "logs/build-st-k-nucleotide-rust.log",
@@ -3758,19 +3782,19 @@
     "source_gzip_bytes": 953,
     "source_lines": 71,
     "source_sha256": "ba42d83f9afc04758826cbc3439028a6ce4707e0e1d1bbbe1b060bd26b5b0430",
-    "timestamp": "2026-09-27T16:47:36Z",
+    "timestamp": "2026-10-05T23:59:08Z",
     "track": "st"
   },
   "st/mandelbrot/c": {
     "artifact_bytes": 16224,
     "bench": "mandelbrot",
-    "build_s": 0.0367,
+    "build_s": 0.0398,
     "cmd": [
       "./out/mandelbrot"
     ],
     "exe_bytes": 16224,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/mandelbrot/c",
     "lang": "c",
     "log": "logs/build-st-mandelbrot-c.log",
@@ -3782,19 +3806,19 @@
     "source_gzip_bytes": 641,
     "source_lines": 48,
     "source_sha256": "9fc0f236eabe8e76f32fbc9ff2670193fa2b0244772cda6a49633adafddc4b4d",
-    "timestamp": "2026-09-27T16:47:10Z",
+    "timestamp": "2026-10-05T23:58:39Z",
     "track": "st"
   },
   "st/mandelbrot/cpp": {
     "artifact_bytes": 16648,
     "bench": "mandelbrot",
-    "build_s": 0.1056,
+    "build_s": 0.109,
     "cmd": [
       "./out/mandelbrot"
     ],
     "exe_bytes": 16648,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/mandelbrot/cpp",
     "lang": "cpp",
     "log": "logs/build-st-mandelbrot-cpp.log",
@@ -3806,7 +3830,7 @@
     "source_gzip_bytes": 607,
     "source_lines": 34,
     "source_sha256": "8f54598a4b3e8750ee33cfe3a21bf640b3f53dc7da5d56abe36220a444267ab8",
-    "timestamp": "2026-09-27T16:47:10Z",
+    "timestamp": "2026-10-05T23:58:39Z",
     "track": "st"
   },
   "st/mandelbrot/csharp": {
@@ -3818,7 +3842,7 @@
     ],
     "exe_bytes": 98312,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/mandelbrot/csharp",
     "lang": "csharp",
     "log": "logs/build-st-mandelbrot-csharp.log",
@@ -3830,19 +3854,19 @@
     "source_gzip_bytes": 626,
     "source_lines": 50,
     "source_sha256": "e471b50c707a889cfaffabb0a91a98a8d47bf9a5ffd262f81517150592ec7f7b",
-    "timestamp": "2026-09-27T16:47:11Z",
+    "timestamp": "2026-10-05T23:58:40Z",
     "track": "st"
   },
   "st/mandelbrot/fortran": {
     "artifact_bytes": 17200,
     "bench": "mandelbrot",
-    "build_s": 0.0463,
+    "build_s": 0.0474,
     "cmd": [
       "./out/mandelbrot"
     ],
     "exe_bytes": 17200,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/mandelbrot/fortran",
     "lang": "fortran",
     "log": "logs/build-st-mandelbrot-fortran.log",
@@ -3854,19 +3878,19 @@
     "source_gzip_bytes": 879,
     "source_lines": 70,
     "source_sha256": "59897f5b7b5544bc325ecfe62a79093fc0e30153a713a60e79ab8330942dab5c",
-    "timestamp": "2026-09-27T16:47:11Z",
+    "timestamp": "2026-10-05T23:58:40Z",
     "track": "st"
   },
   "st/mandelbrot/go": {
     "artifact_bytes": 2436016,
     "bench": "mandelbrot",
-    "build_s": 0.082,
+    "build_s": 0.0858,
     "cmd": [
       "./out/mandelbrot"
     ],
     "exe_bytes": 2436016,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/mandelbrot/go",
     "lang": "go",
     "log": "logs/build-st-mandelbrot-go.log",
@@ -3878,13 +3902,13 @@
     "source_gzip_bytes": 576,
     "source_lines": 51,
     "source_sha256": "69ebb840efdde0682a549de4300dfb824e7e64ddcfe08d268002303315d8d815",
-    "timestamp": "2026-09-27T16:47:10Z",
+    "timestamp": "2026-10-05T23:58:39Z",
     "track": "st"
   },
   "st/mandelbrot/java": {
     "artifact_bytes": 1710,
     "bench": "mandelbrot",
-    "build_s": 0.2157,
+    "build_s": 0.2201,
     "cmd": [
       "java",
       "-cp",
@@ -3893,7 +3917,7 @@
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/mandelbrot/java",
     "lang": "java",
     "log": "logs/build-st-mandelbrot-java.log",
@@ -3905,20 +3929,20 @@
     "source_gzip_bytes": 587,
     "source_lines": 42,
     "source_sha256": "7eef2e334f55d978a9a19285facb390dd672d90a60e67c8cacb2c1fa11482e1f",
-    "timestamp": "2026-09-27T16:47:10Z",
+    "timestamp": "2026-10-05T23:58:39Z",
     "track": "st"
   },
   "st/mandelbrot/javascript": {
     "artifact_bytes": 0,
     "bench": "mandelbrot",
-    "build_s": 0.0023,
+    "build_s": 0.0025,
     "cmd": [
       "node",
       "mandelbrot.js"
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/mandelbrot/javascript",
     "lang": "javascript",
     "log": "logs/build-st-mandelbrot-javascript.log",
@@ -3930,19 +3954,19 @@
     "source_gzip_bytes": 538,
     "source_lines": 34,
     "source_sha256": "95f7c6fff5b6a0ccf98caf918ed3ff83c75388775b3ea37a225c5350c8278801",
-    "timestamp": "2026-09-27T16:47:11Z",
+    "timestamp": "2026-10-05T23:58:40Z",
     "track": "st"
   },
   "st/mandelbrot/pascal": {
     "artifact_bytes": 526712,
     "bench": "mandelbrot",
-    "build_s": 0.0398,
+    "build_s": 0.0431,
     "cmd": [
       "./out/mandelbrot"
     ],
     "exe_bytes": 512880,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/mandelbrot/pascal",
     "lang": "pascal",
     "log": "logs/build-st-mandelbrot-pascal.log",
@@ -3954,20 +3978,20 @@
     "source_gzip_bytes": 654,
     "source_lines": 61,
     "source_sha256": "757ae79c3c6be52559149016a709c61f40882f44b0e51e1fb6ebb011e6b4a381",
-    "timestamp": "2026-09-27T16:47:11Z",
+    "timestamp": "2026-10-05T23:58:40Z",
     "track": "st"
   },
   "st/mandelbrot/python": {
     "artifact_bytes": 0,
     "bench": "mandelbrot",
-    "build_s": 0.0014,
+    "build_s": 0.0017,
     "cmd": [
       "python3",
       "mandelbrot.py"
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/mandelbrot/python",
     "lang": "python",
     "log": "logs/build-st-mandelbrot-python.log",
@@ -3979,19 +4003,19 @@
     "source_gzip_bytes": 469,
     "source_lines": 34,
     "source_sha256": "44a28ba38ba97ede50bf86727e968ee0f6f70d75f6274d2f3a0b82e79a4e36c7",
-    "timestamp": "2026-09-27T16:47:11Z",
+    "timestamp": "2026-10-05T23:58:40Z",
     "track": "st"
   },
   "st/mandelbrot/resid": {
-    "artifact_bytes": 49923,
+    "artifact_bytes": 53969,
     "bench": "mandelbrot",
-    "build_s": 1.7267,
+    "build_s": 2.047,
     "cmd": [
       "./out/mandelbrot"
     ],
-    "exe_bytes": 25197,
+    "exe_bytes": 26093,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/mandelbrot/resid",
     "lang": "resid",
     "log": "logs/build-st-mandelbrot-resid.log",
@@ -4002,20 +4026,20 @@
     ],
     "source_gzip_bytes": 973,
     "source_lines": 58,
-    "source_sha256": "1808dd7a5fa7c2cdc4e45ae1ae8bc87d7f373747a6321e5a8f4f881ad16d9cb5",
-    "timestamp": "2026-09-27T16:47:10Z",
+    "source_sha256": "505cadddf512af24e6c386f0d7af1ea78dd7669f851b20ad2dea328a9606e39b",
+    "timestamp": "2026-10-05T23:58:39Z",
     "track": "st"
   },
   "st/mandelbrot/rust": {
     "artifact_bytes": 4518120,
     "bench": "mandelbrot",
-    "build_s": 0.0961,
+    "build_s": 0.098,
     "cmd": [
       "./out/mandelbrot"
     ],
     "exe_bytes": 4518120,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/mandelbrot/rust",
     "lang": "rust",
     "log": "logs/build-st-mandelbrot-rust.log",
@@ -4027,19 +4051,19 @@
     "source_gzip_bytes": 612,
     "source_lines": 46,
     "source_sha256": "eedb5836bd5a52fee793a22a03d5e341745747d4dbb54be4c2719105a8efd145",
-    "timestamp": "2026-09-27T16:47:10Z",
+    "timestamp": "2026-10-05T23:58:39Z",
     "track": "st"
   },
   "st/nbody/c": {
     "artifact_bytes": 16416,
     "bench": "nbody",
-    "build_s": 0.0627,
+    "build_s": 0.0593,
     "cmd": [
       "./out/nbody"
     ],
     "exe_bytes": 16416,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/nbody/c",
     "lang": "c",
     "log": "logs/build-st-nbody-c.log",
@@ -4051,19 +4075,19 @@
     "source_gzip_bytes": 1291,
     "source_lines": 98,
     "source_sha256": "d0d2a8a46e03db2c8c2b3801e0d06735bcb1b05f38616555349919203501ba5f",
-    "timestamp": "2026-09-27T16:46:43Z",
+    "timestamp": "2026-10-05T23:58:09Z",
     "track": "st"
   },
   "st/nbody/cpp": {
     "artifact_bytes": 16216,
     "bench": "nbody",
-    "build_s": 0.1325,
+    "build_s": 0.1321,
     "cmd": [
       "./out/nbody"
     ],
     "exe_bytes": 16216,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/nbody/cpp",
     "lang": "cpp",
     "log": "logs/build-st-nbody-cpp.log",
@@ -4075,19 +4099,19 @@
     "source_gzip_bytes": 1323,
     "source_lines": 97,
     "source_sha256": "8f4447e7c8b754289d3d5d41da55e5458b1a0e661cd4b53143686135b1ed023f",
-    "timestamp": "2026-09-27T16:46:43Z",
+    "timestamp": "2026-10-05T23:58:10Z",
     "track": "st"
   },
   "st/nbody/csharp": {
     "artifact_bytes": 293626,
     "bench": "nbody",
-    "build_s": 2.9664,
+    "build_s": 2.4575,
     "cmd": [
       "./out/nbody"
     ],
     "exe_bytes": 98312,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/nbody/csharp",
     "lang": "csharp",
     "log": "logs/build-st-nbody-csharp.log",
@@ -4099,19 +4123,19 @@
     "source_gzip_bytes": 1340,
     "source_lines": 91,
     "source_sha256": "f60803a12b013b636ad127122825ccc49091b57b4abf4585a31e3f6aa5c5a3ca",
-    "timestamp": "2026-09-27T16:46:46Z",
+    "timestamp": "2026-10-05T23:58:13Z",
     "track": "st"
   },
   "st/nbody/fortran": {
     "artifact_bytes": 17024,
     "bench": "nbody",
-    "build_s": 0.0661,
+    "build_s": 0.0666,
     "cmd": [
       "./out/nbody"
     ],
     "exe_bytes": 17024,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/nbody/fortran",
     "lang": "fortran",
     "log": "logs/build-st-nbody-fortran.log",
@@ -4123,19 +4147,19 @@
     "source_gzip_bytes": 1293,
     "source_lines": 102,
     "source_sha256": "ca11bb99f10acb579dcaebcf8ded6aabc0726b42f2467d0801a670c476670988",
-    "timestamp": "2026-09-27T16:46:46Z",
+    "timestamp": "2026-10-05T23:58:13Z",
     "track": "st"
   },
   "st/nbody/go": {
     "artifact_bytes": 2430390,
     "bench": "nbody",
-    "build_s": 0.0866,
+    "build_s": 0.0856,
     "cmd": [
       "./out/nbody"
     ],
     "exe_bytes": 2430390,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/nbody/go",
     "lang": "go",
     "log": "logs/build-st-nbody-go.log",
@@ -4147,13 +4171,13 @@
     "source_gzip_bytes": 1189,
     "source_lines": 114,
     "source_sha256": "cb1e82377ff66736fa45ae392a662261018254cec727b5333f36823a4b886a21",
-    "timestamp": "2026-09-27T16:46:43Z",
+    "timestamp": "2026-10-05T23:58:10Z",
     "track": "st"
   },
   "st/nbody/java": {
     "artifact_bytes": 3172,
     "bench": "nbody",
-    "build_s": 0.2349,
+    "build_s": 0.2399,
     "cmd": [
       "java",
       "-cp",
@@ -4162,7 +4186,7 @@
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/nbody/java",
     "lang": "java",
     "log": "logs/build-st-nbody-java.log",
@@ -4174,20 +4198,20 @@
     "source_gzip_bytes": 1276,
     "source_lines": 78,
     "source_sha256": "82951944c38d13dbabe492f7ec13fd05a2fbe2644ab6129f941764e5d292d443",
-    "timestamp": "2026-09-27T16:46:43Z",
+    "timestamp": "2026-10-05T23:58:10Z",
     "track": "st"
   },
   "st/nbody/javascript": {
     "artifact_bytes": 0,
     "bench": "nbody",
-    "build_s": 0.0019,
+    "build_s": 0.0026,
     "cmd": [
       "node",
       "nbody.js"
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/nbody/javascript",
     "lang": "javascript",
     "log": "logs/build-st-nbody-javascript.log",
@@ -4199,19 +4223,19 @@
     "source_gzip_bytes": 1137,
     "source_lines": 78,
     "source_sha256": "74a57c8993734fd628a7082246d85f4c3d5596a7e596d962a97b77cdc01a2966",
-    "timestamp": "2026-09-27T16:46:46Z",
+    "timestamp": "2026-10-05T23:58:13Z",
     "track": "st"
   },
   "st/nbody/pascal": {
     "artifact_bytes": 209880,
     "bench": "nbody",
-    "build_s": 0.0264,
+    "build_s": 0.0281,
     "cmd": [
       "./out/nbody"
     ],
     "exe_bytes": 193120,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/nbody/pascal",
     "lang": "pascal",
     "log": "logs/build-st-nbody-pascal.log",
@@ -4223,20 +4247,20 @@
     "source_gzip_bytes": 1285,
     "source_lines": 108,
     "source_sha256": "c9774891c6535de133368ffe2d420dc3a1b458fbe4f57dc4ccdddaed298182f5",
-    "timestamp": "2026-09-27T16:46:46Z",
+    "timestamp": "2026-10-05T23:58:13Z",
     "track": "st"
   },
   "st/nbody/python": {
     "artifact_bytes": 0,
     "bench": "nbody",
-    "build_s": 0.0022,
+    "build_s": 0.0014,
     "cmd": [
       "python3",
       "nbody.py"
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/nbody/python",
     "lang": "python",
     "log": "logs/build-st-nbody-python.log",
@@ -4248,19 +4272,19 @@
     "source_gzip_bytes": 1148,
     "source_lines": 94,
     "source_sha256": "a8f7a4e12993556acc92ab9bb85b28a70e037e6c167481bf8ea483c13f06fcc0",
-    "timestamp": "2026-09-27T16:46:46Z",
+    "timestamp": "2026-10-05T23:58:13Z",
     "track": "st"
   },
   "st/nbody/resid": {
-    "artifact_bytes": 83030,
+    "artifact_bytes": 88401,
     "bench": "nbody",
-    "build_s": 1.7455,
+    "build_s": 2.044,
     "cmd": [
       "./out/nbody"
     ],
-    "exe_bytes": 40753,
+    "exe_bytes": 41257,
     "exit": 0,
-    "git_commit": "ba93c7e81085c04a0ca1d1d9225abaec39b2fc33-dirty",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/nbody/resid",
     "lang": "resid",
     "log": "logs/build-st-nbody-resid.log",
@@ -4271,20 +4295,20 @@
     ],
     "source_gzip_bytes": 3534,
     "source_lines": 336,
-    "source_sha256": "2b7503dda9526d1ebbcef43f95172f53d0c075efd9fead5725e694c1fab5bf57",
-    "timestamp": "2026-09-27T23:05:56Z",
+    "source_sha256": "e5ce7ee4698a5b5b62b27316f65c06bc4cc66388c63a3e4180a85001fcd52f99",
+    "timestamp": "2026-10-05T23:58:09Z",
     "track": "st"
   },
   "st/nbody/rust": {
     "artifact_bytes": 4541456,
     "bench": "nbody",
-    "build_s": 0.0966,
+    "build_s": 0.0951,
     "cmd": [
       "./out/nbody"
     ],
     "exe_bytes": 4541456,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/nbody/rust",
     "lang": "rust",
     "log": "logs/build-st-nbody-rust.log",
@@ -4296,19 +4320,19 @@
     "source_gzip_bytes": 1380,
     "source_lines": 128,
     "source_sha256": "5fb32ab194fc7a7f1b63583249ad366b7d5c75de79911f53e664286fe634f333",
-    "timestamp": "2026-09-27T16:46:43Z",
+    "timestamp": "2026-10-05T23:58:10Z",
     "track": "st"
   },
   "st/pidigits/c": {
     "artifact_bytes": 16640,
     "bench": "pidigits",
-    "build_s": 0.0395,
+    "build_s": 0.041,
     "cmd": [
       "./out/pidigits"
     ],
     "exe_bytes": 16640,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/pidigits/c",
     "lang": "c",
     "log": "logs/build-st-pidigits-c.log",
@@ -4320,7 +4344,7 @@
     "source_gzip_bytes": 727,
     "source_lines": 71,
     "source_sha256": "83c4668954b1bcdc141abc3ed5fb21c6f0b75af1c74a2e6a5caa4cb965eaf91f",
-    "timestamp": "2026-09-27T16:48:00Z",
+    "timestamp": "2026-10-05T23:59:35Z",
     "track": "st"
   },
   "st/pidigits/cpp": {
@@ -4332,7 +4356,7 @@
     ],
     "exe_bytes": 17184,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/pidigits/cpp",
     "lang": "cpp",
     "log": "logs/build-st-pidigits-cpp.log",
@@ -4344,19 +4368,19 @@
     "source_gzip_bytes": 869,
     "source_lines": 86,
     "source_sha256": "ac5a30fa136ec2859b403ee65df3776db32515a662a60e307d3daad573070af7",
-    "timestamp": "2026-09-27T16:48:00Z",
+    "timestamp": "2026-10-05T23:59:35Z",
     "track": "st"
   },
   "st/pidigits/csharp": {
     "artifact_bytes": 289682,
     "bench": "pidigits",
-    "build_s": 0.8307,
+    "build_s": 0.8488,
     "cmd": [
       "./out/pidigits"
     ],
     "exe_bytes": 98312,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/pidigits/csharp",
     "lang": "csharp",
     "log": "logs/build-st-pidigits-csharp.log",
@@ -4368,19 +4392,19 @@
     "source_gzip_bytes": 592,
     "source_lines": 57,
     "source_sha256": "de2b2da70300a6138ceb493da500054fc7575568bc278eed4a36c0ead26b37f9",
-    "timestamp": "2026-09-27T16:48:03Z",
+    "timestamp": "2026-10-05T23:59:38Z",
     "track": "st"
   },
   "st/pidigits/fortran": {
     "artifact_bytes": 21219,
     "bench": "pidigits",
-    "build_s": 0.0489,
+    "build_s": 0.0483,
     "cmd": [
       "./out/pidigits"
     ],
     "exe_bytes": 17720,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/pidigits/fortran",
     "lang": "fortran",
     "log": "logs/build-st-pidigits-fortran.log",
@@ -4392,19 +4416,19 @@
     "source_gzip_bytes": 977,
     "source_lines": 129,
     "source_sha256": "577239eb1233bb41074b17821297b0c16363c789c9ca864c8eef22d76cc062a7",
-    "timestamp": "2026-09-27T16:48:03Z",
+    "timestamp": "2026-10-05T23:59:38Z",
     "track": "st"
   },
   "st/pidigits/go": {
     "artifact_bytes": 2618405,
     "bench": "pidigits",
-    "build_s": 0.0907,
+    "build_s": 0.0929,
     "cmd": [
       "./out/pidigits"
     ],
     "exe_bytes": 2618405,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/pidigits/go",
     "lang": "go",
     "log": "logs/build-st-pidigits-go.log",
@@ -4416,13 +4440,13 @@
     "source_gzip_bytes": 707,
     "source_lines": 76,
     "source_sha256": "734a49cc4412fda507f552dd773ae804aa87fb70de0b6e14f36ad89de455a800",
-    "timestamp": "2026-09-27T16:48:02Z",
+    "timestamp": "2026-10-05T23:59:37Z",
     "track": "st"
   },
   "st/pidigits/java": {
     "artifact_bytes": 2091,
     "bench": "pidigits",
-    "build_s": 0.2273,
+    "build_s": 0.2296,
     "cmd": [
       "java",
       "-cp",
@@ -4431,7 +4455,7 @@
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/pidigits/java",
     "lang": "java",
     "log": "logs/build-st-pidigits-java.log",
@@ -4443,20 +4467,20 @@
     "source_gzip_bytes": 657,
     "source_lines": 51,
     "source_sha256": "0bcbc6ba6c25abc93a1d14150a93d0e8a237dedc09a93713767433a610928859",
-    "timestamp": "2026-09-27T16:48:02Z",
+    "timestamp": "2026-10-05T23:59:37Z",
     "track": "st"
   },
   "st/pidigits/javascript": {
     "artifact_bytes": 0,
     "bench": "pidigits",
-    "build_s": 0.0025,
+    "build_s": 0.0026,
     "cmd": [
       "node",
       "pidigits.js"
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/pidigits/javascript",
     "lang": "javascript",
     "log": "logs/build-st-pidigits-javascript.log",
@@ -4468,19 +4492,19 @@
     "source_gzip_bytes": 466,
     "source_lines": 26,
     "source_sha256": "5087e7bbc3a8ee6338b1a635a5c9c6a8d545e3765904097df669c1eb64105945",
-    "timestamp": "2026-09-27T16:48:03Z",
+    "timestamp": "2026-10-05T23:59:38Z",
     "track": "st"
   },
   "st/pidigits/pascal": {
     "artifact_bytes": 603328,
     "bench": "pidigits",
-    "build_s": 0.057,
+    "build_s": 0.0528,
     "cmd": [
       "./out/pidigits"
     ],
     "exe_bytes": 590904,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/pidigits/pascal",
     "lang": "pascal",
     "log": "logs/build-st-pidigits-pascal.log",
@@ -4492,20 +4516,20 @@
     "source_gzip_bytes": 676,
     "source_lines": 74,
     "source_sha256": "44defbcc0f99584b4200baae63005f93953a6c8ef15bfc46e41180d30746b040",
-    "timestamp": "2026-09-27T16:48:03Z",
+    "timestamp": "2026-10-05T23:59:38Z",
     "track": "st"
   },
   "st/pidigits/python": {
     "artifact_bytes": 0,
     "bench": "pidigits",
-    "build_s": 0.0017,
+    "build_s": 0.002,
     "cmd": [
       "python3",
       "pidigits.py"
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/pidigits/python",
     "lang": "python",
     "log": "logs/build-st-pidigits-python.log",
@@ -4517,19 +4541,19 @@
     "source_gzip_bytes": 436,
     "source_lines": 35,
     "source_sha256": "d6a2b66aa4c2264c3d6ddccb87385101cc396dc40442a1dde6ecd3c6a7965f3a",
-    "timestamp": "2026-09-27T16:48:03Z",
+    "timestamp": "2026-10-05T23:59:38Z",
     "track": "st"
   },
   "st/pidigits/resid": {
-    "artifact_bytes": 81185,
+    "artifact_bytes": 85067,
     "bench": "pidigits",
-    "build_s": 1.9048,
+    "build_s": 2.1835,
     "cmd": [
       "./out/pidigits"
     ],
-    "exe_bytes": 48349,
+    "exe_bytes": 49693,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/pidigits/resid",
     "lang": "resid",
     "log": "logs/build-st-pidigits-resid.log",
@@ -4540,20 +4564,20 @@
     ],
     "source_gzip_bytes": 1775,
     "source_lines": 117,
-    "source_sha256": "a1586ee741d94111518258ed610218e5421691be732a84deaa33e6c1f60f512c",
-    "timestamp": "2026-09-27T16:48:00Z",
+    "source_sha256": "c0123728a2aede681dd0d03902ffb0a72a868b0876fe7ac4a6e06c39f845e464",
+    "timestamp": "2026-10-05T23:59:35Z",
     "track": "st"
   },
   "st/pidigits/rust": {
     "artifact_bytes": 41647746,
     "bench": "pidigits",
-    "build_s": 1.7834,
+    "build_s": 1.7767,
     "cmd": [
       "./out/pidigits"
     ],
     "exe_bytes": 477712,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/pidigits/rust",
     "lang": "rust",
     "log": "logs/build-st-pidigits-rust.log",
@@ -4565,19 +4589,19 @@
     "source_gzip_bytes": 824,
     "source_lines": 81,
     "source_sha256": "9eb578e4edcf17c1978934480270ceaa4657fe0160ac963bd015541b7a99ff66",
-    "timestamp": "2026-09-27T16:48:02Z",
+    "timestamp": "2026-10-05T23:59:37Z",
     "track": "st"
   },
   "st/regex-redux/c": {
     "artifact_bytes": 17192,
     "bench": "regex-redux",
-    "build_s": 0.0548,
+    "build_s": 0.0528,
     "cmd": [
       "./out/regex-redux"
     ],
     "exe_bytes": 17192,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/regex-redux/c",
     "lang": "c",
     "log": "logs/build-st-regex-redux-c.log",
@@ -4589,19 +4613,19 @@
     "source_gzip_bytes": 1402,
     "source_lines": 128,
     "source_sha256": "7f801e7b422dfe8c1049a8c5a29590d32c7087df31b376650a81d29b8f96a541",
-    "timestamp": "2026-09-27T16:48:09Z",
+    "timestamp": "2026-10-05T23:59:48Z",
     "track": "st"
   },
   "st/regex-redux/cpp": {
     "artifact_bytes": 173352,
     "bench": "regex-redux",
-    "build_s": 2.2044,
+    "build_s": 2.188,
     "cmd": [
       "./out/regex-redux"
     ],
     "exe_bytes": 173352,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/regex-redux/cpp",
     "lang": "cpp",
     "log": "logs/build-st-regex-redux-cpp.log",
@@ -4613,19 +4637,19 @@
     "source_gzip_bytes": 717,
     "source_lines": 48,
     "source_sha256": "142f937cc493e598ae302168d3c50c1beb3c27d28e9db9b1947e513d9d8d44e7",
-    "timestamp": "2026-09-27T16:48:11Z",
+    "timestamp": "2026-10-05T23:59:50Z",
     "track": "st"
   },
   "st/regex-redux/csharp": {
     "artifact_bytes": 290947,
     "bench": "regex-redux",
-    "build_s": 0.8619,
+    "build_s": 0.8424,
     "cmd": [
       "./out/regexredux"
     ],
     "exe_bytes": 98312,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/regex-redux/csharp",
     "lang": "csharp",
     "log": "logs/build-st-regex-redux-csharp.log",
@@ -4637,19 +4661,19 @@
     "source_gzip_bytes": 784,
     "source_lines": 55,
     "source_sha256": "19236e72b42613e44ee9849d1ed4f1b91e6d509f86debe1e022f28e69558b99a",
-    "timestamp": "2026-09-27T16:48:16Z",
+    "timestamp": "2026-10-05T23:59:54Z",
     "track": "st"
   },
   "st/regex-redux/fortran": {
     "artifact_bytes": 21622,
     "bench": "regex-redux",
-    "build_s": 0.0752,
+    "build_s": 0.0715,
     "cmd": [
       "./out/regexredux"
     ],
     "exe_bytes": 17856,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/regex-redux/fortran",
     "lang": "fortran",
     "log": "logs/build-st-regex-redux-fortran.log",
@@ -4661,19 +4685,19 @@
     "source_gzip_bytes": 1822,
     "source_lines": 179,
     "source_sha256": "e4300ec2cd50abb1821da65fa89d1175c6f516da4f3a9c036dbd124adacddd80",
-    "timestamp": "2026-09-27T16:48:16Z",
+    "timestamp": "2026-10-05T23:59:54Z",
     "track": "st"
   },
   "st/regex-redux/go": {
     "artifact_bytes": 2877573,
     "bench": "regex-redux",
-    "build_s": 0.0988,
+    "build_s": 0.094,
     "cmd": [
       "./out/regex-redux"
     ],
     "exe_bytes": 2877573,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/regex-redux/go",
     "lang": "go",
     "log": "logs/build-st-regex-redux-go.log",
@@ -4685,13 +4709,13 @@
     "source_gzip_bytes": 635,
     "source_lines": 52,
     "source_sha256": "698f99fd98aebf23c0fcb49c9dcfad393a06d675e638bd550c10782ab9a6ea48",
-    "timestamp": "2026-09-27T16:48:14Z",
+    "timestamp": "2026-10-05T23:59:53Z",
     "track": "st"
   },
   "st/regex-redux/java": {
     "artifact_bytes": 2238,
     "bench": "regex-redux",
-    "build_s": 0.2243,
+    "build_s": 0.2401,
     "cmd": [
       "java",
       "-cp",
@@ -4700,7 +4724,7 @@
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/regex-redux/java",
     "lang": "java",
     "log": "logs/build-st-regex-redux-java.log",
@@ -4712,20 +4736,20 @@
     "source_gzip_bytes": 702,
     "source_lines": 48,
     "source_sha256": "5588160a1f367c257b0a25df3d979bb7a7c681b66d3f01184340068039e1a03a",
-    "timestamp": "2026-09-27T16:48:15Z",
+    "timestamp": "2026-10-05T23:59:53Z",
     "track": "st"
   },
   "st/regex-redux/javascript": {
     "artifact_bytes": 0,
     "bench": "regex-redux",
-    "build_s": 0.003,
+    "build_s": 0.0032,
     "cmd": [
       "node",
       "regex-redux.js"
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/regex-redux/javascript",
     "lang": "javascript",
     "log": "logs/build-st-regex-redux-javascript.log",
@@ -4737,19 +4761,19 @@
     "source_gzip_bytes": 537,
     "source_lines": 38,
     "source_sha256": "fd4920d8ca2add022769a0ab354b7c1e66a53aa1bd96fe887d9b3866da3883be",
-    "timestamp": "2026-09-27T16:48:16Z",
+    "timestamp": "2026-10-05T23:59:54Z",
     "track": "st"
   },
   "st/regex-redux/pascal": {
     "artifact_bytes": 923848,
     "bench": "regex-redux",
-    "build_s": 0.0601,
+    "build_s": 0.0605,
     "cmd": [
       "./out/regexredux"
     ],
     "exe_bytes": 905936,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/regex-redux/pascal",
     "lang": "pascal",
     "log": "logs/build-st-regex-redux-pascal.log",
@@ -4761,7 +4785,7 @@
     "source_gzip_bytes": 863,
     "source_lines": 78,
     "source_sha256": "fa5cde37718f0e5255f3b5e3a4e82a1d73bb4598861d0430b2c9f6b46ab204fc",
-    "timestamp": "2026-09-27T16:48:16Z",
+    "timestamp": "2026-10-05T23:59:54Z",
     "track": "st"
   },
   "st/regex-redux/python": {
@@ -4774,7 +4798,7 @@
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/regex-redux/python",
     "lang": "python",
     "log": "logs/build-st-regex-redux-python.log",
@@ -4786,19 +4810,43 @@
     "source_gzip_bytes": 521,
     "source_lines": 42,
     "source_sha256": "d32e6763d5e77dd03d9d4fe8a901de9f91854b110ad0de44bd9d2936db3121b1",
-    "timestamp": "2026-09-27T16:48:16Z",
+    "timestamp": "2026-10-05T23:59:54Z",
+    "track": "st"
+  },
+  "st/regex-redux/resid": {
+    "artifact_bytes": 575111,
+    "bench": "regex-redux",
+    "build_s": 3.2029,
+    "cmd": [
+      "./out/regexredux"
+    ],
+    "exe_bytes": 216668,
+    "exit": 0,
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
+    "key": "st/regex-redux/resid",
+    "lang": "resid",
+    "log": "logs/build-st-regex-redux-resid.log",
+    "ok": true,
+    "source_bytes": 1510,
+    "source_files": [
+      "regexredux.resid"
+    ],
+    "source_gzip_bytes": 710,
+    "source_lines": 35,
+    "source_sha256": "025553574705049ad4b669cb4a5b597c270e6073b1c8ed2e94523cd1631aea36",
+    "timestamp": "2026-10-05T23:59:47Z",
     "track": "st"
   },
   "st/regex-redux/rust": {
     "artifact_bytes": 40247353,
     "bench": "regex-redux",
-    "build_s": 3.3565,
+    "build_s": 3.3258,
     "cmd": [
       "./out/regex-redux"
     ],
     "exe_bytes": 2832816,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/regex-redux/rust",
     "lang": "rust",
     "log": "logs/build-st-regex-redux-rust.log",
@@ -4810,19 +4858,19 @@
     "source_gzip_bytes": 660,
     "source_lines": 45,
     "source_sha256": "cb8286ab0ae8e52bbd95574108d205e94aedcb7e5c53f88f6fbc5571015d8eb8",
-    "timestamp": "2026-09-27T16:48:14Z",
+    "timestamp": "2026-10-05T23:59:53Z",
     "track": "st"
   },
   "st/reverse-complement/c": {
     "artifact_bytes": 16552,
     "bench": "reverse-complement",
-    "build_s": 0.0509,
+    "build_s": 0.0478,
     "cmd": [
       "./out/reverse-complement"
     ],
     "exe_bytes": 16552,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/reverse-complement/c",
     "lang": "c",
     "log": "logs/build-st-reverse-complement-c.log",
@@ -4834,19 +4882,19 @@
     "source_gzip_bytes": 933,
     "source_lines": 92,
     "source_sha256": "4760a37fd281b234cfe996e71e205e54b53a3b51444458647e57723d959cffef",
-    "timestamp": "2026-09-27T16:47:51Z",
+    "timestamp": "2026-10-05T23:59:25Z",
     "track": "st"
   },
   "st/reverse-complement/cpp": {
     "artifact_bytes": 17824,
     "bench": "reverse-complement",
-    "build_s": 0.1999,
+    "build_s": 0.2069,
     "cmd": [
       "./out/reverse-complement"
     ],
     "exe_bytes": 17824,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/reverse-complement/cpp",
     "lang": "cpp",
     "log": "logs/build-st-reverse-complement-cpp.log",
@@ -4858,19 +4906,19 @@
     "source_gzip_bytes": 895,
     "source_lines": 71,
     "source_sha256": "5612018f155e0bbab4ddb9c66ca43d58414da52c9a1a25f54f888fbd5d636541",
-    "timestamp": "2026-09-27T16:47:51Z",
+    "timestamp": "2026-10-05T23:59:25Z",
     "track": "st"
   },
   "st/reverse-complement/csharp": {
     "artifact_bytes": 290709,
     "bench": "reverse-complement",
-    "build_s": 0.8426,
+    "build_s": 0.8297,
     "cmd": [
       "./out/revcomp"
     ],
     "exe_bytes": 98312,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/reverse-complement/csharp",
     "lang": "csharp",
     "log": "logs/build-st-reverse-complement-csharp.log",
@@ -4882,19 +4930,19 @@
     "source_gzip_bytes": 821,
     "source_lines": 71,
     "source_sha256": "7e49831a0260966abc8427f94c451707ec04a5379ba6dd0f1f0a339b987b5eb2",
-    "timestamp": "2026-09-27T16:47:52Z",
+    "timestamp": "2026-10-05T23:59:26Z",
     "track": "st"
   },
   "st/reverse-complement/fortran": {
     "artifact_bytes": 16488,
     "bench": "reverse-complement",
-    "build_s": 0.0608,
+    "build_s": 0.0594,
     "cmd": [
       "./out/revcomp"
     ],
     "exe_bytes": 16488,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/reverse-complement/fortran",
     "lang": "fortran",
     "log": "logs/build-st-reverse-complement-fortran.log",
@@ -4906,19 +4954,19 @@
     "source_gzip_bytes": 1133,
     "source_lines": 118,
     "source_sha256": "42f12dce36eb87eb2806b8ac737daa29393e76fb8cd8a5074d4be773964de8cc",
-    "timestamp": "2026-09-27T16:47:52Z",
+    "timestamp": "2026-10-05T23:59:26Z",
     "track": "st"
   },
   "st/reverse-complement/go": {
     "artifact_bytes": 2137465,
     "bench": "reverse-complement",
-    "build_s": 0.0776,
+    "build_s": 0.0785,
     "cmd": [
       "./out/reverse-complement"
     ],
     "exe_bytes": 2137465,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/reverse-complement/go",
     "lang": "go",
     "log": "logs/build-st-reverse-complement-go.log",
@@ -4930,13 +4978,13 @@
     "source_gzip_bytes": 773,
     "source_lines": 80,
     "source_sha256": "89e84393fa0ef58ac357f03c91767ddd15adec2c5fa0a7c20dced0e45eeab670",
-    "timestamp": "2026-09-27T16:47:51Z",
+    "timestamp": "2026-10-05T23:59:25Z",
     "track": "st"
   },
   "st/reverse-complement/java": {
     "artifact_bytes": 1791,
     "bench": "reverse-complement",
-    "build_s": 0.223,
+    "build_s": 0.2129,
     "cmd": [
       "java",
       "-cp",
@@ -4945,7 +4993,7 @@
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/reverse-complement/java",
     "lang": "java",
     "log": "logs/build-st-reverse-complement-java.log",
@@ -4957,20 +5005,20 @@
     "source_gzip_bytes": 792,
     "source_lines": 56,
     "source_sha256": "6fddc46b0d5720c37c9cd254a483d6daa39622a7512306b55a9d8e8608b9f6f2",
-    "timestamp": "2026-09-27T16:47:51Z",
+    "timestamp": "2026-10-05T23:59:25Z",
     "track": "st"
   },
   "st/reverse-complement/javascript": {
     "artifact_bytes": 0,
     "bench": "reverse-complement",
-    "build_s": 0.0021,
+    "build_s": 0.0023,
     "cmd": [
       "node",
       "reverse-complement.js"
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/reverse-complement/javascript",
     "lang": "javascript",
     "log": "logs/build-st-reverse-complement-javascript.log",
@@ -4982,19 +5030,19 @@
     "source_gzip_bytes": 669,
     "source_lines": 44,
     "source_sha256": "4a1e366b68b042d707a833b449378aeeed9fdc4e1dc5ffc97c19afab87f8ba55",
-    "timestamp": "2026-09-27T16:47:52Z",
+    "timestamp": "2026-10-05T23:59:26Z",
     "track": "st"
   },
   "st/reverse-complement/pascal": {
     "artifact_bytes": 525384,
     "bench": "reverse-complement",
-    "build_s": 0.0416,
+    "build_s": 0.0451,
     "cmd": [
       "./out/revcomp"
     ],
     "exe_bytes": 512880,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/reverse-complement/pascal",
     "lang": "pascal",
     "log": "logs/build-st-reverse-complement-pascal.log",
@@ -5006,20 +5054,20 @@
     "source_gzip_bytes": 822,
     "source_lines": 84,
     "source_sha256": "777be0ce00dbea96729156f449d7ea0e9ed1dabbb6f4c62071dc76454603864c",
-    "timestamp": "2026-09-27T16:47:52Z",
+    "timestamp": "2026-10-05T23:59:26Z",
     "track": "st"
   },
   "st/reverse-complement/python": {
     "artifact_bytes": 0,
     "bench": "reverse-complement",
-    "build_s": 0.0015,
+    "build_s": 0.0019,
     "cmd": [
       "python3",
       "reverse-complement.py"
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/reverse-complement/python",
     "lang": "python",
     "log": "logs/build-st-reverse-complement-python.log",
@@ -5031,19 +5079,19 @@
     "source_gzip_bytes": 497,
     "source_lines": 35,
     "source_sha256": "d4b73877629b02eb68b75d29871c7c300462fe2520f45cfec819520571aa53c9",
-    "timestamp": "2026-09-27T16:47:52Z",
+    "timestamp": "2026-10-05T23:59:26Z",
     "track": "st"
   },
   "st/reverse-complement/resid": {
-    "artifact_bytes": 59283,
+    "artifact_bytes": 61803,
     "bench": "reverse-complement",
-    "build_s": 1.7807,
+    "build_s": 2.0377,
     "cmd": [
       "./out/revcomp"
     ],
-    "exe_bytes": 26663,
+    "exe_bytes": 27013,
     "exit": 0,
-    "git_commit": "da2a9ec43215936e476316eaebff08caabc850fd-dirty",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/reverse-complement/resid",
     "lang": "resid",
     "log": "logs/build-st-reverse-complement-resid.log",
@@ -5054,20 +5102,20 @@
     ],
     "source_gzip_bytes": 1518,
     "source_lines": 82,
-    "source_sha256": "a6bdf20bd1291c89e27be8d6855b97dba2e12250e57484b2c607bb32e46b92b0",
-    "timestamp": "2026-09-28T00:38:46Z",
+    "source_sha256": "507a162101a6166b34e4cfdb3bb661421d1ca7c12a8a9c853a0c546abaa1756f",
+    "timestamp": "2026-10-05T23:59:25Z",
     "track": "st"
   },
   "st/reverse-complement/rust": {
     "artifact_bytes": 4527464,
     "bench": "reverse-complement",
-    "build_s": 0.1134,
+    "build_s": 0.1098,
     "cmd": [
       "./out/reverse-complement"
     ],
     "exe_bytes": 4527464,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/reverse-complement/rust",
     "lang": "rust",
     "log": "logs/build-st-reverse-complement-rust.log",
@@ -5079,19 +5127,19 @@
     "source_gzip_bytes": 870,
     "source_lines": 65,
     "source_sha256": "06c07965dba17a2ceea845a66692e26dfe0a5b5e64300e74a79b6f43424d9222",
-    "timestamp": "2026-09-27T16:47:51Z",
+    "timestamp": "2026-10-05T23:59:25Z",
     "track": "st"
   },
   "st/spectral-norm/c": {
     "artifact_bytes": 16248,
     "bench": "spectral-norm",
-    "build_s": 0.0594,
+    "build_s": 0.0607,
     "cmd": [
       "./out/spectral-norm"
     ],
     "exe_bytes": 16248,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/spectral-norm/c",
     "lang": "c",
     "log": "logs/build-st-spectral-norm-c.log",
@@ -5103,19 +5151,19 @@
     "source_gzip_bytes": 544,
     "source_lines": 55,
     "source_sha256": "44af1ec8738b6a8c1e9378b28c120a542cff91ac491d8fad72795258f7d04a7b",
-    "timestamp": "2026-09-27T16:47:01Z",
+    "timestamp": "2026-10-05T23:58:29Z",
     "track": "st"
   },
   "st/spectral-norm/cpp": {
     "artifact_bytes": 16936,
     "bench": "spectral-norm",
-    "build_s": 0.1727,
+    "build_s": 0.1746,
     "cmd": [
       "./out/spectral-norm"
     ],
     "exe_bytes": 16936,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/spectral-norm/cpp",
     "lang": "cpp",
     "log": "logs/build-st-spectral-norm-cpp.log",
@@ -5127,19 +5175,19 @@
     "source_gzip_bytes": 553,
     "source_lines": 52,
     "source_sha256": "58229625028c36baf29248a22fd08ad5b29ef848d35c26d4b0d133614c4a8a4e",
-    "timestamp": "2026-09-27T16:47:01Z",
+    "timestamp": "2026-10-05T23:58:29Z",
     "track": "st"
   },
   "st/spectral-norm/csharp": {
-    "artifact_bytes": 290371,
+    "artifact_bytes": 290363,
     "bench": "spectral-norm",
-    "build_s": 0.8428,
+    "build_s": 0.8396,
     "cmd": [
       "./out/spectralnorm"
     ],
     "exe_bytes": 98312,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/spectral-norm/csharp",
     "lang": "csharp",
     "log": "logs/build-st-spectral-norm-csharp.log",
@@ -5151,19 +5199,19 @@
     "source_gzip_bytes": 530,
     "source_lines": 49,
     "source_sha256": "16f1968cfc684ae8dd4fdfac0a3fd9456d0f107c59031b44815bbc0dc015a1ec",
-    "timestamp": "2026-09-27T16:47:02Z",
+    "timestamp": "2026-10-05T23:58:30Z",
     "track": "st"
   },
   "st/spectral-norm/fortran": {
     "artifact_bytes": 17264,
     "bench": "spectral-norm",
-    "build_s": 0.0681,
+    "build_s": 0.0738,
     "cmd": [
       "./out/spectralnorm"
     ],
     "exe_bytes": 17264,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/spectral-norm/fortran",
     "lang": "fortran",
     "log": "logs/build-st-spectral-norm-fortran.log",
@@ -5175,19 +5223,19 @@
     "source_gzip_bytes": 600,
     "source_lines": 73,
     "source_sha256": "d07ac7c0a0e3bd1e166a5073d70e1419935a5db7bc9b4a5a9fe80e72a25583b9",
-    "timestamp": "2026-09-27T16:47:02Z",
+    "timestamp": "2026-10-05T23:58:31Z",
     "track": "st"
   },
   "st/spectral-norm/go": {
     "artifact_bytes": 2432212,
     "bench": "spectral-norm",
-    "build_s": 0.0822,
+    "build_s": 0.0859,
     "cmd": [
       "./out/spectral-norm"
     ],
     "exe_bytes": 2432212,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/spectral-norm/go",
     "lang": "go",
     "log": "logs/build-st-spectral-norm-go.log",
@@ -5199,13 +5247,13 @@
     "source_gzip_bytes": 463,
     "source_lines": 61,
     "source_sha256": "bb41121fbea1a62038a010b5156afea24e263fdb2063790f8238070cfec0311d",
-    "timestamp": "2026-09-27T16:47:01Z",
+    "timestamp": "2026-10-05T23:58:29Z",
     "track": "st"
   },
   "st/spectral-norm/java": {
     "artifact_bytes": 1426,
     "bench": "spectral-norm",
-    "build_s": 0.2313,
+    "build_s": 0.227,
     "cmd": [
       "java",
       "-cp",
@@ -5214,7 +5262,7 @@
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/spectral-norm/java",
     "lang": "java",
     "log": "logs/build-st-spectral-norm-java.log",
@@ -5226,20 +5274,20 @@
     "source_gzip_bytes": 491,
     "source_lines": 38,
     "source_sha256": "b35d92bec7327fc5883108d6fb5d8cf4563fcb259eabf98d222e7bebb151118c",
-    "timestamp": "2026-09-27T16:47:02Z",
+    "timestamp": "2026-10-05T23:58:30Z",
     "track": "st"
   },
   "st/spectral-norm/javascript": {
     "artifact_bytes": 0,
     "bench": "spectral-norm",
-    "build_s": 0.0022,
+    "build_s": 0.0023,
     "cmd": [
       "node",
       "spectral-norm.js"
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/spectral-norm/javascript",
     "lang": "javascript",
     "log": "logs/build-st-spectral-norm-javascript.log",
@@ -5251,19 +5299,19 @@
     "source_gzip_bytes": 397,
     "source_lines": 24,
     "source_sha256": "db83eb45022e23948c24dc4981c2663f4b6306f60d1255b3ba14e2ceea70dcbe",
-    "timestamp": "2026-09-27T16:47:02Z",
+    "timestamp": "2026-10-05T23:58:30Z",
     "track": "st"
   },
   "st/spectral-norm/pascal": {
     "artifact_bytes": 207288,
     "bench": "spectral-norm",
-    "build_s": 0.0267,
+    "build_s": 0.0297,
     "cmd": [
       "./out/spectralnorm"
     ],
     "exe_bytes": 195744,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/spectral-norm/pascal",
     "lang": "pascal",
     "log": "logs/build-st-spectral-norm-pascal.log",
@@ -5275,20 +5323,20 @@
     "source_gzip_bytes": 523,
     "source_lines": 73,
     "source_sha256": "cb0d8d4eaf32045a05f25572db4a8e7186a64f20bfa51d02a5efc3bc3ba68132",
-    "timestamp": "2026-09-27T16:47:03Z",
+    "timestamp": "2026-10-05T23:58:31Z",
     "track": "st"
   },
   "st/spectral-norm/python": {
     "artifact_bytes": 0,
     "bench": "spectral-norm",
-    "build_s": 0.0023,
+    "build_s": 0.0017,
     "cmd": [
       "python3",
       "spectral-norm.py"
     ],
     "exe_bytes": null,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/spectral-norm/python",
     "lang": "python",
     "log": "logs/build-st-spectral-norm-python.log",
@@ -5300,19 +5348,19 @@
     "source_gzip_bytes": 437,
     "source_lines": 45,
     "source_sha256": "dec5c90fc52caae78b8ddef0e02757789fa224008afdec657cfb196a32b98b85",
-    "timestamp": "2026-09-27T16:47:02Z",
+    "timestamp": "2026-10-05T23:58:30Z",
     "track": "st"
   },
   "st/spectral-norm/resid": {
-    "artifact_bytes": 73488,
+    "artifact_bytes": 76163,
     "bench": "spectral-norm",
-    "build_s": 1.7832,
+    "build_s": 2.0911,
     "cmd": [
       "./out/spectralnorm"
     ],
-    "exe_bytes": 45527,
+    "exe_bytes": 45903,
     "exit": 0,
-    "git_commit": "cc7e649e5e123b68ceb3e3c7982cf1b5cec2ea16-dirty",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/spectral-norm/resid",
     "lang": "resid",
     "log": "logs/build-st-spectral-norm-resid.log",
@@ -5323,20 +5371,20 @@
     ],
     "source_gzip_bytes": 1300,
     "source_lines": 103,
-    "source_sha256": "dc386c5a6fafaa4bf28e4622f31de04b4f896f883011861f939ad0e505ad0ef8",
-    "timestamp": "2026-09-28T02:06:21Z",
+    "source_sha256": "0bdb98d69f4078b0269de67c736cb7bf6f9e40812d093da97c54bd8f83c210a4",
+    "timestamp": "2026-10-05T23:58:29Z",
     "track": "st"
   },
   "st/spectral-norm/rust": {
     "artifact_bytes": 4539512,
     "bench": "spectral-norm",
-    "build_s": 0.0979,
+    "build_s": 0.1047,
     "cmd": [
       "./out/spectral-norm"
     ],
     "exe_bytes": 4539512,
     "exit": 0,
-    "git_commit": "19e19925921f112b6d318368df76697f39f4428c",
+    "git_commit": "426d4450c5d070b132beb68b930331845035e680-dirty",
     "key": "st/spectral-norm/rust",
     "lang": "rust",
     "log": "logs/build-st-spectral-norm-rust.log",
@@ -5348,7 +5396,7 @@
     "source_gzip_bytes": 495,
     "source_lines": 49,
     "source_sha256": "1b3a52ef5ab29a7ecd49ec20a0666c620eaf418c87abeeb6e52295a87afea1ec",
-    "timestamp": "2026-09-27T16:47:01Z",
+    "timestamp": "2026-10-05T23:58:29Z",
     "track": "st"
   }
 }

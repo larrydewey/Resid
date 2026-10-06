@@ -1,0 +1,41 @@
+// The Computer Language Benchmarks Game: regex-redux, fastest version.
+// https://benchmarksgame-team.pages.debian.net/benchmarksgame/description/regexredux.html
+//
+// On lib/regex.resid, like the st cell, but parallel as the C and Rust
+// programs are: once headers and line breaks are stripped, nine spawn
+// regions count the variants and a tenth runs the five IUB substitutions
+// alongside them, all over the shared, immutable sequence.
+
+import "regex.resid";
+
+Str count_line(Str seq, Str v) {
+    Int c = regex_count(regex(v), seq);
+    return f"{v} {c}\n";
+}
+
+Str substitute(Str seq) {
+    Str s1 = regex_replace_all(regex("tHa[Nt]"), seq, "<4>");
+    Str s2 = regex_replace_all(regex("aND|caN|Ha[DS]|WaS"), s1, "<3>");
+    Str s3 = regex_replace_all(regex("a[NSt]|BY"), s2, "<2>");
+    Str s4 = regex_replace_all(regex("<[^>]*>"), s3, "|");
+    return regex_replace_all(regex("\\|[^|][^|]*\\|"), s4, "-");
+}
+
+@requires(filesystem(readonly))
+Int main() {
+    Str input = filesystem.read_all("/dev/stdin");
+    Str seq = regex_replace_all(regex(">.*\n|\n"), input, "");
+    Result(Str, RegionError) done = spawn () { return f"{str_len(substitute(seq))}"; };
+    Result(Str, RegionError) v1 = spawn () { return count_line(seq, "agggtaaa|tttaccct"); };
+    Result(Str, RegionError) v2 = spawn () { return count_line(seq, "[cgt]gggtaaa|tttaccc[acg]"); };
+    Result(Str, RegionError) v3 = spawn () { return count_line(seq, "a[act]ggtaaa|tttacc[agt]t"); };
+    Result(Str, RegionError) v4 = spawn () { return count_line(seq, "ag[act]gtaaa|tttac[agt]ct"); };
+    Result(Str, RegionError) v5 = spawn () { return count_line(seq, "agg[act]taaa|ttta[agt]cct"); };
+    Result(Str, RegionError) v6 = spawn () { return count_line(seq, "aggg[acg]aaa|ttt[cgt]ccct"); };
+    Result(Str, RegionError) v7 = spawn () { return count_line(seq, "agggt[cgt]aa|tt[acg]accct"); };
+    Result(Str, RegionError) v8 = spawn () { return count_line(seq, "agggta[cgt]a|t[acg]taccct"); };
+    Result(Str, RegionError) v9 = spawn () { return count_line(seq, "agggtaa[cgt]|[acg]ttaccct"); };
+    Str counts = (v1 else { "" }) + (v2 else { "" }) + (v3 else { "" }) + (v4 else { "" }) + (v5 else { "" }) + (v6 else { "" }) + (v7 else { "" }) + (v8 else { "" }) + (v9 else { "" });
+    print(counts + f"\n{str_len(input)}\n{str_len(seq)}\n" + (done else { "" }) + "\n");
+    return 0;
+}

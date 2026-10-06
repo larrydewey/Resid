@@ -17,37 +17,38 @@
 <line x1="670.0" y1="54" x2="670.0" y2="322" stroke="#d1d5db" stroke-width="1"/>
 <text x="670.0" y="338" text-anchor="middle" fill="#6b7280" font-size="11">100×</text>
 <text x="112" y="74.0" text-anchor="end" fill="#1f2937">Resid</text>
-<text x="308.3" y="74.0" fill="#6b7280" font-size="11">N/A</text>
+<rect x="303.3" y="62" width="31.2" height="16" fill="#d97706"/>
+<text x="339.6" y="74.0" fill="#1f2937" font-size="11">1.48×  (2.372 s)</text>
 <text x="112" y="98.0" text-anchor="end" fill="#1f2937">C</text>
 <rect x="303.3" y="86" width="1.5" height="16" fill="#2563eb"/>
-<text x="308.3" y="98.0" fill="#1f2937" font-size="11">1.00×  (1.599 s)</text>
+<text x="308.3" y="98.0" fill="#1f2937" font-size="11">1.00×  (1.602 s)</text>
 <text x="112" y="122.0" text-anchor="end" fill="#1f2937">C++</text>
-<rect x="303.3" y="110" width="200.9" height="16" fill="#94a3b8"/>
-<text x="509.2" y="122.0" fill="#1f2937" font-size="11">12.5×  (19.94 s)</text>
+<rect x="303.3" y="110" width="201.3" height="16" fill="#94a3b8"/>
+<text x="509.6" y="122.0" fill="#1f2937" font-size="11">12.5×  (20.07 s)</text>
 <text x="112" y="146.0" text-anchor="end" fill="#1f2937">Rust</text>
-<rect x="222.2" y="134" width="81.2" height="16" fill="#94a3b8"/>
+<rect x="222.0" y="134" width="81.4" height="16" fill="#94a3b8"/>
 <text x="308.3" y="146.0" fill="#1f2937" font-size="11">0.36×  (0.577 s)</text>
 <text x="112" y="170.0" text-anchor="end" fill="#1f2937">Go</text>
-<rect x="303.3" y="158" width="187.4" height="16" fill="#94a3b8"/>
-<text x="495.7" y="170.0" fill="#1f2937" font-size="11">10.5×  (16.82 s)</text>
+<rect x="303.3" y="158" width="187.0" height="16" fill="#94a3b8"/>
+<text x="495.3" y="170.0" fill="#1f2937" font-size="11">10.5×  (16.77 s)</text>
 <text x="112" y="194.0" text-anchor="end" fill="#1f2937">Java</text>
-<rect x="303.3" y="182" width="112.2" height="16" fill="#94a3b8"/>
-<text x="420.6" y="194.0" fill="#1f2937" font-size="11">4.09×  (6.548 s)</text>
+<rect x="303.3" y="182" width="111.4" height="16" fill="#94a3b8"/>
+<text x="419.8" y="194.0" fill="#1f2937" font-size="11">4.05×  (6.494 s)</text>
 <text x="112" y="218.0" text-anchor="end" fill="#1f2937">C#</text>
 <rect x="303.3" y="206" width="20.6" height="16" fill="#94a3b8"/>
-<text x="328.9" y="218.0" fill="#1f2937" font-size="11">1.29×  (2.071 s)</text>
+<text x="328.9" y="218.0" fill="#1f2937" font-size="11">1.29×  (2.074 s)</text>
 <text x="112" y="242.0" text-anchor="end" fill="#1f2937">JavaScript</text>
-<rect x="303.3" y="230" width="6.7" height="16" fill="#94a3b8"/>
-<text x="315.0" y="242.0" fill="#1f2937" font-size="11">1.09×  (1.740 s)</text>
+<rect x="303.3" y="230" width="7.1" height="16" fill="#94a3b8"/>
+<text x="315.5" y="242.0" fill="#1f2937" font-size="11">1.09×  (1.752 s)</text>
 <text x="112" y="266.0" text-anchor="end" fill="#1f2937">Python</text>
-<rect x="303.3" y="254" width="106.7" height="16" fill="#94a3b8"/>
-<text x="415.0" y="266.0" fill="#1f2937" font-size="11">3.82×  (6.108 s)</text>
+<rect x="303.3" y="254" width="107.5" height="16" fill="#94a3b8"/>
+<text x="415.9" y="266.0" fill="#1f2937" font-size="11">3.86×  (6.184 s)</text>
 <text x="112" y="290.0" text-anchor="end" fill="#1f2937">Fortran</text>
-<rect x="303.3" y="278" width="2.8" height="16" fill="#94a3b8"/>
-<text x="311.1" y="290.0" fill="#1f2937" font-size="11">1.04×  (1.656 s)</text>
+<rect x="303.3" y="278" width="2.6" height="16" fill="#94a3b8"/>
+<text x="311.0" y="290.0" fill="#1f2937" font-size="11">1.03×  (1.656 s)</text>
 <text x="112" y="314.0" text-anchor="end" fill="#1f2937">Pascal</text>
-<rect x="303.3" y="302" width="194.2" height="16" fill="#94a3b8"/>
-<text x="502.6" y="314.0" fill="#1f2937" font-size="11">11.5×  (18.34 s)</text>
+<rect x="303.3" y="302" width="192.9" height="16" fill="#94a3b8"/>
+<text x="501.2" y="314.0" fill="#1f2937" font-size="11">11.3×  (18.07 s)</text>
 <line x1="303.3" y1="52" x2="303.3" y2="324" stroke="#1f2937" stroke-width="1.5"/>
 <text x="395.0" y="356" text-anchor="middle" fill="#6b7280">ratio to C (C = 1)</text>
 </svg>
