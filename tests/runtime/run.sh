@@ -6,7 +6,7 @@
 # must not use any compiler internal.
 set -uo pipefail
 cd "$(dirname "$0")"
-W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT
+W="$(mktemp -d)"; trap 'echo "Preserving $W" >trap 'rm -rf "$W"' EXIT2; ls -la $W' EXIT
 pass=0; fail=0
 ROOT="$(cd ../.. && pwd)"
 for t in *.c; do
@@ -56,6 +56,46 @@ cp "$W/nat/tools/t.resid" "$W/nat/runtime/rt/x.resid"
 (cd "$ROOT" && "$COMPILER" "$W/nat/runtime/rt/x.resid" --runtime-module -o "$W/nat/r") > "$W/nat3.log" 2>&1; grep -q "E0232" "$W/nat3.log" || nat_ok=0
 grep -nE '@link\(|@requires\([^)]*native_' "$ROOT"/lib/*.resid "$ROOT"/tools/*.resid > "$W/natlint.out" && nat_ok=0
 if [ "$nat_ok" = 1 ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL @link outside a program was not refused (E0232): $(grep -h -m1 -i error "$W"/nat*.log | head -1) $(head -1 "$W/natlint.out")"; fi
+
+# The display transport (runtime/rt/unix.resid): a Unix socket pair, bytes
+# and descriptors over it, a shared mapping through its handle, and the
+# same descriptors pollable under `display` alone.
+echo "DEBUG: starting display transport test, cwd=$(pwd)" >&2
+if (cd "$ROOT" && "$COMPILER" tests/runtime/display.resid -o "$W/display") > "$W/display.log" 2>&1; then
+    echo "DEBUG: compile ok, W=$W" >&2
+    "$W/display" > "$W/display.out" 2>&1
+    run_rc=$?
+    echo "DEBUG: run rc=$run_rc, display.out size=$(wc -c < $W/display.out)" >&2
+    echo "DEBUG: locale stdout=" >&2
+    locale 2>&1; echo "locale rc=$?" >&2
+    echo "DEBUG: ls stdout=" >&2
+    ls -la "$W/display.out" 2>&1; echo "ls rc=$?" >&2
+    echo "DEBUG: file stdout=" >&2
+    file "$W/display.out" 2>&1; echo "file rc=$?" >&2
+    echo "DEBUG: xxd stdout=" >&2
+    xxd "$W/display.out" | head -3 2>&1; echo "xxd rc=$?" >&2
+    echo "DEBUG: expected output (hex):" >&2
+    xxd tests/runtime/display.out | head -3 >&2; echo "xxd expected rc=$?" >&2
+    if [ $run_rc -eq 0 ] && cmp -s "$W/display.out" display.out; then
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1)); echo "FAIL display transport: $(grep -m1 -i error "$W/display.log") $(diff "$W/display.out" tests/runtime/display.out 2>/dev/null | head -3 | tr '
+' ' ')"
+    fi
+else
+    fail=$((fail + 1)); echo "FAIL display transport: $(grep -m1 -i error "$W/display.log") $(diff "$W/display.out" tests/runtime/display.out 2>/dev/null | head -3 | tr '
+' ' ')"
+fi
+# With no display named in the environment, connecting is refused rather
+# than guessed at.
+printf '@requires(display)
+Int main() { return if (resid_disp_connect() < 0) { 0 } else { 1 }; }
+' > "$W/nodisplay.resid"
+if (cd "$ROOT" && "$COMPILER" "$W/nodisplay.resid" -o "$W/nodisplay") > "$W/nodisplay.log" 2>&1     && env -u DISPLAY -u WAYLAND_DISPLAY -u WAYLAND_SOCKET -u XDG_RUNTIME_DIR "$W/nodisplay"; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL display connect with no display: $(grep -m1 -i error "$W/nodisplay.log")"
+fi
 # `residc test`: the generated test entry point is a complete process.
 if (cd "$ROOT" && "$COMPILER" test examples/math_test.resid) > "$W/tm.log" 2>&1 && grep -q "Failures: 0 | Passed: 6" "$W/tm.log"; then
     pass=$((pass + 1))

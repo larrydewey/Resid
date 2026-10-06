@@ -1192,6 +1192,10 @@ Families:
   network      TCP builtins
   terminal     TTY and raw-mode builtins
   process      also the native debugger builtins
+  display      the display builtins (resid_disp_*): the
+               connection to a window server, the bytes and
+               descriptors on it, a shared mapping, and
+               waiting on it; with no modes
   native_<m>   a call into native module m (§47); one
                family per module, with no modes
 
@@ -1203,6 +1207,16 @@ bind to any address but loopback) is the one network
 write, so it needs the full grant. A server's workers can
 then run under network(readonly) while only the code that
 binds the public listener holds network.
+
+display has no modes: connecting to a window server, opening
+a window, drawing into it and reading from it all act on
+what the program itself put on screen, so a program is in it
+or out of it (display(readonly) is refused, E0213). A display
+descriptor is a socket, so resid_disp_poll waits on one under
+display alone; a program that waits on display and TCP
+descriptors together needs both families. Nothing outside
+this machine's own session is reachable through it: a DISPLAY
+naming another host is refused.
 
 Writing to stdout/stderr, reading stdin and OS randomness
 are not capabilities.

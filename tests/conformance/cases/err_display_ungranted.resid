@@ -1,0 +1,7 @@
+// Nothing reaches a window server without saying so: the display builtins
+// need the display family (E0219, spec §20).
+Int main() {
+    Int fd = resid_disp_connect();
+    println(f"{fd}");
+    return 0;
+}

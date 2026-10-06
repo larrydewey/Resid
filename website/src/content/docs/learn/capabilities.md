@@ -55,6 +55,7 @@ capabilities.
 | `network` | the TCP builtins |
 | `terminal` | the terminal builtins (`resid_term_*`) and `lib/readline.resid` |
 | `clock` | `clock.now_ns()`, `clock.now_sec()`, `clock.monotonic_ns()`, `clock.sleep_ns(n)` and `lib/clock.resid` |
+| `display` | the display builtins (`resid_disp_*`): connecting to a window server, bytes and descriptors on it, shared memory, waiting |
 
 A family can be narrowed with a mode: `filesystem(readonly)` covers the
 reading verbs only; a write needs `filesystem` or `filesystem(readwrite)`.
@@ -64,6 +65,11 @@ time observes it, sleeping consumes it. `network(readonly)` covers
 connecting out and everything a server does on a loopback listener; only
 binding an address other machines can reach needs the full `network`, so a
 server's worker regions can run with `network(readonly)`.
+
+`display` takes no mode: a program that draws a window and reads from it is
+either given the display or given nothing. It reaches only this machine's own
+session — a `DISPLAY` naming another host is refused — and a shared memory
+buffer is a handle, never a pointer into the program.
 
 ## Sandboxes
 

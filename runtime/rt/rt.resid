@@ -33,3 +33,4 @@ import "map.resid";
 import "alloc.resid";
 import "region.resid";
 import "native.resid";
+import "unix.resid";

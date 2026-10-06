@@ -1,0 +1,24 @@
+pair 2
+sockets yes
+send true
+recv 4 [1, 2, 0, 255]
+back true
+again [7, 8]
+shm yes
+put true
+send fd true
+with fd [1] false
+none left true
+past end false
+negative false
+null handle true
+free true
+free twice false
+poll idle [0]
+poll ready [1]
+bad send false
+bad recv 0
+close true
+close again false
+shm too big true
+no room 0

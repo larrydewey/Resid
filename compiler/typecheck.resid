@@ -2765,6 +2765,38 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (argtys == "Int") { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_tcp_close expects (Int), got (" + argtys + ")"};
     }
+    if (name == "resid_disp_connect" || name == "resid_disp_recv_fd") {
+        if (argtys == "") { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (), got (" + argtys + ")"};
+    }
+    if (name == "resid_disp_pair") {
+        if (argtys == "") { return ERes {.pos = pos, .ty = "List(Int)", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_disp_pair expects (), got (" + argtys + ")"};
+    }
+    if (name == "resid_disp_send") {
+        if (builtin_args(argtys, "Int,List(Int),Int")) { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_disp_send expects (Int, List(Int), Int), got (" + argtys + ")"};
+    }
+    if (name == "resid_disp_poll") {
+        if (builtin_args(argtys, "List(Int),List(Int),Int")) { return ERes {.pos = pos, .ty = "List(Int)", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_disp_poll expects (List(Int), List(Int), Int), got (" + argtys + ")"};
+    }
+    if (name == "resid_disp_recv") {
+        if (builtin_args(argtys, "Int,Int")) { return ERes {.pos = pos, .ty = "List(Int)", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_disp_recv expects (Int, Int), got (" + argtys + ")"};
+    }
+    if (name == "resid_disp_close" || name == "resid_disp_shm_new" || name == "resid_disp_shm_fd") {
+        if (argtys == "Int") { return ERes {.pos = pos, .ty = if (name == "resid_disp_close") { "Bool" } else { "Int" }, .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (Int), got (" + argtys + ")"};
+    }
+    if (name == "resid_disp_shm_put") {
+        if (builtin_args(argtys, "Int,Int,List(Int),Int")) { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_disp_shm_put expects (Int, Int, List(Int), Int), got (" + argtys + ")"};
+    }
+    if (name == "resid_disp_shm_free") {
+        if (argtys == "Int") { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_disp_shm_free expects (Int), got (" + argtys + ")"};
+    }
     if (arith_family(name)) {
         // Per-width variants (spec §6.5 "for every width"): two integers of
         // the variant's signedness (`*_u*` = unsigned); the result is the

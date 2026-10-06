@@ -3811,6 +3811,7 @@ Str gk_requires_err(Str prefix) {
     if (r.err != "") { return r.err; }
     Str nm = gk_native_moded(str_split(r.ty, ","), 0);
     if (nm != "") { return "`" + nm + "` has no modes: a native module is reached in full or not at all (spec §47)"; }
+    if (gk_display_moded(str_split(r.ty, ","), 0)) { return "`display` has no modes: a program reaches the window server in full or not at all (spec §20)"; }
     return gk_unknown_family(caps_families(str_split(r.ty, ","), 0, ListBuf()), 0);
 }
 
@@ -3819,6 +3820,17 @@ Str gk_native_moded(List(Str) cs, Int i) {
     if (i >= cs.len()) { return ""; }
     if (str_starts_with(cs[i], "native_") && str_ends_with(cs[i], ":ro")) { return str_slice(cs[i], 0, str_len(cs[i]) - 3); }
     return gk_native_moded(cs, i + 1);
+}
+
+// The display family given a mode (`display:ro` or `display(readonly)`)
+// as the family name, or "" (spec §20: mode-less in v1, since connecting
+// to a window server, opening a window and reading input all draw on what
+// the program already put on screen).
+Bool gk_display_moded(List(Str) cs, Int i) {
+    if (i >= cs.len()) { return false; }
+    Str c = cs[i];
+    Bool m = str_starts_with(c, "display:") || str_starts_with(c, "display(");
+    return if (m) { true } else { gk_display_moded(cs, i + 1) };
 }
 
 // ─── Native modules (spec §47) ──────────────────────────────────────
@@ -3927,8 +3939,8 @@ Str gk_unknown_family(List(Str) fs, Int i) {
     if (i >= fs.len()) { return ""; }
     Str f = fs[i];
     Bool native = str_starts_with(f, "native_") && gk_module_name_ok(str_slice(f, 7, str_len(f)), 0);
-    Bool ok = f == "" || f == "filesystem" || f == "environment" || f == "args" || f == "process" || f == "network" || f == "terminal" || f == "clock" || native;
-    if (!ok) { return "unknown capability family `" + f + "` (filesystem, environment, args, process, network, terminal, clock, native_<module>)"; }
+    Bool ok = f == "" || f == "filesystem" || f == "environment" || f == "args" || f == "process" || f == "network" || f == "terminal" || f == "clock" || f == "display" || native;
+    if (!ok) { return "unknown capability family `" + f + "` (filesystem, environment, args, process, network, terminal, clock, display, native_<module>)"; }
     return gk_unknown_family(fs, i + 1);
 }
 
@@ -4076,6 +4088,7 @@ Str gk_prov_family(GK k, Int id) {
 
 // Capability family of an effectful runtime builtin, or "".
 Str gk_builtin_family(Str n) {
+    if (str_starts_with(n, "resid_disp_")) { return "display"; }
     if (str_starts_with(n, "resid_tcp_")) { return "network"; }
     if (str_starts_with(n, "resid_dbg_")) { return "process"; }
     if (str_starts_with(n, "resid_term_")) { return "terminal"; }

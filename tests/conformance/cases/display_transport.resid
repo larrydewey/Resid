@@ -1,0 +1,21 @@
+// The display family covers the whole transport: a connection, the bytes
+// and descriptors on it, a shared mapping, and waiting on it. A GUI
+// library needs `display` and nothing else.
+@requires(display)
+Int main() {
+    List(Int) p = resid_disp_pair();
+    if (p.len() != 2) { return 1; }
+    Int a = p[0];
+    Int b = p[1];
+    Int h = resid_disp_shm_new(4096);
+    Int sfd = resid_disp_shm_fd(h);
+    if (!resid_disp_send(a, [1, 2, 3], sfd)) { return 1; }
+    List(Int) got = resid_disp_recv(b, 64);
+    Int rfd = resid_disp_recv_fd();
+    println(f"{got} {rfd >= 0}");
+    println(f"{resid_disp_shm_put(h, 0, [9], 1)} {resid_disp_poll([b], [1], 20)}");
+    _ = resid_disp_shm_free(h);
+    _ = resid_disp_close(a);
+    _ = resid_disp_close(b);
+    return 0;
+}

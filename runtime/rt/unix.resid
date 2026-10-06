@@ -1,0 +1,391 @@
+// The display connection (spec §20, family `display`): Unix sockets with
+// descriptor passing, and shared-memory buffers for frames.
+//
+// Everything here talks to the window server on this machine: a Wayland
+// compositor, or an X11 server (Xlibre, Xorg, Xwayland). A Resid program
+// links no client library, so the wire protocols are spoken above this
+// file; what lives here is only the transport under them: connect to the
+// socket the environment names, send and receive bytes with a descriptor
+// attached, and hold a shared mapping a frame is written into.
+//
+// Two rules shape it:
+//
+//   - Nothing is inferred that is not a display. WAYLAND_SOCKET is a
+//     descriptor the session already connected and passed on;
+//     WAYLAND_DISPLAY names a socket under XDG_RUNTIME_DIR; DISPLAY names
+//     an X11 socket under /tmp/.X11-unix or the abstract namespace. A
+//     DISPLAY with a host in it is refused: reaching another machine is
+//     not this family's job.
+//
+//   - A mapping is a handle, never a pointer. The program gets an opaque
+//     Int, the descriptor to pass to the server, and `shm_put` to copy
+//     bytes in; it never gets an address it could walk.
+
+// ─── Descriptors received with the bytes ─────────────────────────────
+// A window server sends descriptors beside its messages (a keymap, a shm
+// pool), and the caller's next `resid_disp_recv_fd` takes one. The queue
+// is a fixed ring in the process's global data, so an event loop reads a
+// message and then drains the descriptors that came with it.
+
+Int disp_fds() { return resid_raw_global("rt_disp_fds", 256); }
+Int fdq_cap() { return 30; }
+
+Int fdq_push(Int fd) {
+    Int q = disp_fds();
+    if (ld64(q + 8) >= fdq_cap()) { _ = fdq_take_all(q); }
+    Int n = ld64(q + 8);
+    return st64(q + 16 + n * 8, fd) * 0 + ld64(q + 8);
+}
+
+// The oldest queued descriptor, or -1 when none is waiting.
+Int fdq_pop() {
+    Int q = disp_fds();
+    Int head = ld64(q);
+    Int n = ld64(q + 8);
+    if (n <= 0) { return 0 - 1; }
+    Int fd = ld64(q + 16 + head * 8);
+    _ = st64(q, if (head + 1 >= fdq_cap()) { 0 } else { head + 1 });
+    _ = st64(q + 8, n - 1);
+    return fd;
+}
+
+// Close and forget everything queued: a message the caller never read
+// must not leak its descriptors. The count is returned for the tests.
+Int fdq_drop() { return fdq_take_all(disp_fds()); }
+
+Int fdq_take_all(Int q) {
+    Int n = ld64(q + 8);
+    _ = fdq_close_at(q, 0, n);
+    _ = st64(q, 0);
+    _ = st64(q + 8, 0);
+    return n;
+}
+
+Int fdq_close_at(Int q, Int i, Int n) {
+    if (i >= n) { return 0; }
+    _ = sys_close(ld64(q + 16 + i * 8));
+    return fdq_close_at(q, i + 1, n);
+}
+
+// ─── Connecting ───────────────────────────────────────────────────────
+
+// Is this fd a connected socket? The same test the TCP builtins make, and
+// it holds for a Unix one too (S_IFSOCK), which is what lets a display
+// fd be polled with resid_tcp_poll.
+Bool disp_sock_ok(Int fd) {
+    if (fd < 0) { return false; }
+    Int b = resid_raw_tls("disp_sock_stat", 144);
+    return resid_raw_syscall(5, fd, b, 0, 0, 0, 0) == 0 && (ld32(b + 24) & 61440) == 49152;
+}
+
+Int sa_buf() { return resid_raw_tls("disp_sa", 112); }
+Int path_buf() { return resid_raw_tls("disp_path", 256); }
+
+// A sockaddr_un naming `path` (n bytes), or -1 when it does not fit.
+Int sa_path(Int p, Int n) {
+    if (n <= 0 || n > 107) { return 0 - 1; }
+    Int sa = sa_buf();
+    _ = resid_raw_fill(sa, 0, 112);
+    _ = st32(sa, 1);                                        // AF_UNIX, a u16 at 0
+    _ = mcopy(sa + 2, p, n);
+    _ = st8(sa + 2 + n, 0);
+    return sa;
+}
+
+// The same, in the abstract namespace: a leading NUL and no terminator.
+Int sa_abstract(Int p, Int n) {
+    if (n <= 0 || n > 107) { return 0 - 1; }
+    Int sa = sa_buf();
+    _ = resid_raw_fill(sa, 0, 112);
+    _ = st32(sa, 1);
+    _ = mcopy(sa + 3, p, n);
+    return sa;
+}
+
+// A sockaddr_un for `name` under the directory `dir` (or for `name` alone
+// when it is already absolute), or -1 when the pair is too long for
+// sun_path.
+Int sa_under(Int dir, Int name) {
+    if (ld8(name) == 47) { return sa_path(name, c_strlen(name)); }
+    Int n = c_strlen(name);
+    Int dn = c_strlen(dir);
+    if (dn <= 0 || dn + 1 + n > 107) { return 0 - 1; }
+    Int buf = path_buf();
+    _ = mcopy(buf, dir, dn);
+    _ = st8(buf + dn, 47);
+    _ = mcopy(buf + dn + 1, name, n);
+    return sa_path(buf, dn + 1 + n);
+}
+
+Int unix_connect(Int sa) {
+    Int fd = resid_raw_syscall(41, 1, 1 | 524288, 0, 0, 0, 0);   // AF_UNIX, SOCK_STREAM | O_CLOEXEC
+    if (fd < 0) { return 0 - 1; }
+    if (resid_raw_syscall(42, fd, sa, 110, 0, 0, 0) != 0) { return sys_close(fd) * 0 - 1; }
+    return fd;
+}
+
+// A connected display socket, or -1.
+//
+// XDG_RUNTIME_DIR has no default: a Wayland socket outside it would be a
+// guess, and a guess here is how a program ends up talking to whatever
+// else created that file.
+@export("resid_disp_connect", "i64()")
+pub Int rt_disp_connect() {
+    Int inh = c_getenv(resid_raw_addr("WAYLAND_SOCKET"));
+    if (inh != 0) { return disp_inherited(inh); }
+    Int wd0 = c_getenv(resid_raw_addr("WAYLAND_DISPLAY"));
+    Int wd = if (wd0 == 0) { resid_raw_addr("wayland-0") } else { wd0 };
+    Int rt = c_getenv(resid_raw_addr("XDG_RUNTIME_DIR"));
+    if (rt != 0 && ld8(rt) != 0) {
+        Int sa = sa_under(rt, wd);
+        if (sa >= 0) { return unix_connect(sa); }
+    }
+    Int dpy = c_getenv(resid_raw_addr("DISPLAY"));
+    if (dpy == 0 || ld8(dpy) == 0) { return 0 - 1; }
+    return x11_connect(dpy);
+}
+
+// The descriptor number in an environment value, or -1. Nothing is opened
+// here, so nothing can tell yet whether it is a socket; the first send or
+// receive can.
+Int disp_inherited(Int v) {
+    Int n = disp_dec(v);
+    return if (n >= 0) { n } else { 0 - 1 };
+}
+
+Int disp_dec(Int p) {
+    Int e = disp_digits(p);
+    if (e == p) { return 0 - 1; }
+    return disp_value(p, e, 0);
+}
+
+Int disp_digits(Int p) { return if (ld8(p) >= 48 && ld8(p) <= 57) { disp_digits(p + 1) } else { p }; }
+Int disp_value(Int p, Int e, Int acc) { return if (p >= e) { acc } else { disp_value(p + 1, e, acc * 10 + ld8(p) - 48) }; }
+
+// The X11 socket for a DISPLAY value: `:0`, `:0.0`, `unix:0` or `@name`
+// (Linux's abstract namespace, which has no screen number). A DISPLAY
+// naming another machine, over a socket path or over TCP, is refused.
+Int x11_connect(Int dpy) {
+    Int p0 = dpy;
+    Int p = if (c_strncmp(p0, resid_raw_addr("unix:"), 5) == 0) { p0 + 5 } else { p0 };
+    if (ld8(p) == 64) { return unix_connect(sa_abstract(p + 1, c_strlen(p + 1))); }
+    Int colon = c_strchr(p, 58);
+    if (colon == 0 || colon != p) { return 0 - 1; }
+    Int num = p + 1;
+    Int e = disp_digits(num);
+    Int dn = e - num;
+    if (dn <= 0 || dn > 3 || !disp_screen_ok(e)) { return 0 - 1; }
+    Int buf = path_buf();
+    _ = mcopy(buf, resid_raw_addr("/tmp/.X11-unix/X"), 15);
+    _ = mcopy(buf + 15, num, dn);
+    return unix_connect(sa_path(buf, 15 + dn));
+}
+
+// What may follow the display number: nothing, or `.` and a screen number.
+Bool disp_screen_ok(Int e) {
+    if (ld8(e) == 0) { return true; }
+    if (ld8(e) != 46) { return false; }
+    Int s = disp_digits(e + 1);
+    return s > e + 1 && ld8(s) == 0;
+}
+
+// A connected pair of Unix stream sockets, `[a, b]`, or an empty list.
+// Local and anonymous: it reaches nothing, and it is what the display
+// transport is tested over without a window server in the room.
+@export("resid_disp_pair", "ptr()")
+pub Int rt_disp_pair() {
+    Int fds = resid_raw_tls("disp_pair", 8);
+    _ = st32(fds, 0) + st32(fds + 4, 0);
+    if (resid_raw_syscall(53, 1, 1 | 524288, 0, fds, 0, 0) != 0) { return xempty(); }
+    Int slots = xmalloc(16);
+    _ = st64(slots, ld32(fds) + 18295873486192640) + st64(slots + 8, ld32(fds + 4) + 18295873486192640);
+    Int out = c_list_new(2, slots, resid_raw_addr("List"));
+    _ = c_free(slots);
+    return out;
+}
+
+// ─── Sending and receiving ────────────────────────────────────────────
+
+// One iovec, one msghdr and one descriptor's worth of control in a single
+// block: iovec at 0, msghdr at 16 (56 bytes), cmsghdr at 72.
+// msghdr layout (from m+16): msg_name(8) msg_namelen(8) msg_iov(8) msg_iovlen(8)
+// msg_control(8) msg_controllen(8) msg_flags(4) pad(4) = 56 bytes.
+Int msg_buf() { return resid_raw_tls("disp_msg", 96); }
+
+// The msghdr for one buffer of `iov_len` bytes at `base`, with a
+// descriptor to pass when `ctl` is set.
+Int disp_msg_head(Int base, Int iov_len, Bool ctl) {
+    Int m = msg_buf();
+    _ = resid_raw_fill(m, 0, 96);
+    _ = st64(m, base) + st64(m + 8, iov_len);                 // iovec at m+0
+    _ = st64(m + 32, m) + st64(m + 40, 1);                    // msg_iov, msg_iovlen at m+16+16, m+16+24
+    _ = st64(m + 64, 0);                                       // msg_flags at m+16+48
+    if (ctl) {
+        _ = st64(m + 48, m + 72) + st64(m + 56, 24);           // msg_control, msg_controllen at m+16+32, m+16+40
+        _ = st64(m + 72, 20) + st32(m + 80, 1) + st32(m + 84, 1);   // cmsg_len, SOL_SOCKET, SCM_RIGHTS
+    }
+    return m + 16;
+}
+
+Int disp_set_ctl_fd(Int fd) { return st32(msg_buf() + 88, fd); }
+
+// All of `data`, with the descriptor in pass_fd (or none when it is
+// negative) sent beside it. False on any error, and a partial send counts
+// as a failure: a caller that wanted the descriptor has it only when the
+// message went whole.
+@export("resid_disp_send", "i8(i64,ptr,i64)")
+pub Int rt_disp_send(Int fd, Int l, Int pass_fd) {
+    if (!disp_sock_ok(fd)) { return 0; }
+    Int n = c_list_len(l);
+    if (n < 0 || n > 1048576) { return 0; }
+    if (n <= 0) { return 1; }
+    Int buf = xmalloc(n);
+    _ = disp_bytes_of(l, buf, 0, n);
+    Bool ctl = pass_fd >= 0;
+    Int m = disp_msg_head(buf, n, ctl);
+    if (ctl) { _ = disp_set_ctl_fd(pass_fd); }
+    Int w = resid_raw_syscall(46, fd, m, 0, 0, 0, 0);
+    _ = c_free(buf);
+    return if (w == n) { 1 } else { 0 };
+}
+
+
+Int disp_bytes_of(Int l, Int buf, Int i, Int n) {
+    if (i >= n) { return 0; }
+    _ = st8(buf + i, unbox_word(c_list_get(l, i)) & 255);
+    return disp_bytes_of(l, buf, i + 1, n);
+}
+
+// Whatever one receive returns, at most `max` bytes (capped at 1 MB), as a
+// List(Int) of its real length: empty at EOF, on an error, or on a
+// timeout. Descriptors that arrived with it are queued, in order, for
+// `resid_disp_recv_fd`.
+@export("resid_disp_recv", "ptr(i64,i64)")
+pub Int rt_disp_recv(Int fd, Int max0) {
+    if (!disp_sock_ok(fd)) { return xempty(); }
+    // A receive of no room is answered without a system call: a zero-length
+    // recvmsg on a blocking socket waits for a peer that may never come.
+    Int max = clamp(max0, 0, 1048576);
+    if (max <= 0) { return xempty(); }
+    Int buf = xmalloc(max);
+    Int ctl = xmalloc(64);
+    _ = resid_raw_fill(ctl, 0, 64);
+    Int m = disp_msg_head(buf, max, false);
+    _ = st64(msg_buf() + 48, ctl) + st64(msg_buf() + 56, 64);
+    Int r = resid_raw_syscall(47, fd, m, 0, 0, 0, 0);           // recvmsg
+    Int n = if (r > 0) { r } else { 0 };
+    Int cl0 = ld64(msg_buf() + 56);
+    Int cl = if (cl0 > 64) { 64 } else { cl0 };
+    _ = disp_take_fds(ctl, cl, 0);
+    Int slots = xmalloc(if (n > 0) { n * 8 } else { 8 });
+    _ = disp_byte_boxes(buf, slots, 0, n);
+    Int out = c_list_new(n, slots, resid_raw_addr("List"));
+    _ = c_free(buf) + c_free(ctl) + c_free(slots);
+    return out;
+}
+
+// The descriptors in a control message, queued.
+Int disp_take_fds(Int ctl, Int cl, Int at) {
+    if (at + 16 > cl) { return 0; }
+    Int len = ld64(ctl + at);
+    if (len < 16 || at + len > cl) { return 0; }
+    Bool rights = ld32(ctl + at + 8) == 1 && ld32(ctl + at + 12) == 1;
+    Int k = if (rights) { disp_take_each(ctl + at + 16, (len - 16) / 4, 0) } else { 0 };
+    return disp_take_fds(ctl, cl, at + ((len + 7) & 0 - 8)) + k;
+}
+
+Int disp_take_each(Int p, Int n, Int i) {
+    if (i >= n) { return 0; }
+    _ = fdq_push(ld32(p + i * 4));
+    return disp_take_each(p, n, i + 1);
+}
+
+// Small Ints are immediate boxes (value + IMM_OFF).
+Int disp_byte_boxes(Int buf, Int slots, Int i, Int n) {
+    if (i >= n) { return 0; }
+    _ = st64(slots + i * 8, ld8(buf + i) + 18295873486192640);
+    return disp_byte_boxes(buf, slots, i + 1, n);
+}
+
+// Readiness for display sockets, or for any mix of display and TCP
+// descriptors: the same answer `resid_tcp_poll` gives -- 1 readable, 2
+// writable, 4 its deadline passed, 8 not a socket -- waited on at most
+// `ms` and never past the nearest deadline. A GUI program waits on its
+// own window under `display`, without also needing `network`.
+@export("resid_disp_poll", "ptr(ptr,ptr,i64)")
+pub Int rt_disp_poll(Int fl, Int wl, Int ms) { return rt_tcp_poll(fl, wl, ms); }
+
+// The next descriptor a receive queued, or -1 when none is waiting.
+@export("resid_disp_recv_fd", "i64()")
+pub Int rt_disp_recv_fd() { return fdq_pop(); }
+
+@export("resid_disp_close", "i8(i64)")
+pub Int rt_disp_close(Int fd) { return if (fd >= 0 && disp_sock_ok(fd)) { if (sys_close(fd) == 0) { 1 } else { 0 } } else { 0 }; }
+
+// ─── Shared memory ────────────────────────────────────────────────────
+// A memfd, sized, mapped MAP_SHARED: the descriptor goes to the window
+// server (a Wayland shm pool, an X11 MIT-SHM segment), the bytes go in
+// through `shm_put`. The handle is all the state the program holds.
+
+Int shm_magic() { return 1296386893; }                     // "shm1"
+Bool shm_ok(Int h) { return h != 0 && ld32(h) == shm_magic(); }
+
+// A shared mapping of `bytes` (at most 256 MB), or 0. Nothing else maps
+// memory for a program: the address stays inside this handle.
+@export("resid_disp_shm_new", "i64(i64)")
+pub Int rt_disp_shm_new(Int bytes) {
+    if (bytes <= 0 || bytes > 268435456) { return 0; }
+    Int fd = resid_raw_syscall(319, resid_raw_addr("resid-shm"), 1 | 2, 0, 0, 0, 0);   // memfd_create, CLOEXEC | ALLOW_SEALING
+    if (fd < 0) { return 0; }
+    if (resid_raw_syscall(77, fd, bytes, 0, 0, 0, 0) != 0) { return sys_close(fd) * 0; }   // ftruncate
+    Int a = resid_raw_syscall(9, 0, bytes, 3, 1, fd, 0);                              // mmap, PROT_READ|WRITE, MAP_SHARED
+    if (a < 0) { return sys_close(fd) * 0; }
+    Int h = xmalloc(32);
+    _ = st32(h, shm_magic());
+    _ = st64(h + 8, fd) + st64(h + 16, bytes) + st64(h + 24, a);
+    return h;
+}
+
+// The descriptor to pass to the window server, or -1.
+@export("resid_disp_shm_fd", "i64(i64)")
+pub Int rt_disp_shm_fd(Int h) { return if (shm_ok(h)) { ld64(h + 8) } else { 0 - 1 }; }
+
+// `len` bytes of `px` at `off` inside the mapping. False when the handle
+// is not one of ours, or the range runs past its end: a frame is written
+// into the mapping, never outside it.
+@export("resid_disp_shm_put", "i8(i64,i64,ptr,i64)")
+pub Int rt_disp_shm_put(Int h, Int off, Int l, Int len0) {
+    if (!shm_ok(h) || off < 0) { return 0; }
+    Int len = clamp(len0, 0, c_list_len(l));
+    if (off + len > ld64(h + 16)) { return 0; }
+    if (len <= 0) { return 1; }
+    Int buf = xmalloc(len);
+    _ = disp_bytes_of(l, buf, 0, len);
+    _ = mcopy(ld64(h + 24) + off, buf, len);
+    _ = c_free(buf);
+    return 1;
+}
+
+// Unmap and close. The handle is dead afterwards; using it again is
+// refused, not undefined.
+@export("resid_disp_shm_free", "i8(i64)")
+pub Int rt_disp_shm_free(Int h) {
+    if (!shm_ok(h)) { return 0; }
+    _ = resid_raw_syscall(11, ld64(h + 24), ld64(h + 16), 0, 0, 0, 0);   // munmap
+    Int fd = ld64(h + 8);
+    _ = st32(h, 0);
+    _ = sys_close(fd);
+    return 1;
+}
+
+
+
+Int dbg_hex(Int sb, Int p, Int i, Int n) {
+    if (i >= n) { return 0; }
+    Int c = ld8(p + i) & 255;
+    _ = sb_lit(sb, if (c < 16) { resid_raw_addr(" 0") } else { resid_raw_addr(" ") });
+    _ = rt_sb_append_cp(sb, hex_digit(c >> 4)) + rt_sb_append_cp(sb, hex_digit(c & 15));
+    return dbg_hex(sb, p, i + 1, n);
+}
+
+Int hex_digit(Int d) { return if (d < 10) { 48 + d } else { 87 + d }; }

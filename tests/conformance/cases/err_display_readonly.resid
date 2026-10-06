@@ -1,0 +1,7 @@
+// `display` has no modes: a program reaches the window server in full or
+// not at all, so `display(readonly)` is refused (spec §20).
+@requires(display(readonly))
+Int main() {
+    Int h = resid_disp_shm_new(4096);
+    return if (h != 0) { 0 } else { 1 };
+}

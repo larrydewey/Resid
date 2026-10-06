@@ -1,0 +1,54 @@
+// The display transport (runtime/rt/unix.resid): a Unix socket pair, bytes
+// and descriptors over it, a shared mapping written through its handle,
+// and the same descriptors pollable with resid_tcp_poll.
+//
+// The pair is local and anonymous, so this needs no window server.
+@requires(display)
+Int main() {
+    List(Int) p = resid_disp_pair();
+    println(f"pair {p.len()}");
+    Int a = p[0];
+    Int b = p[1];
+    println(f"sockets {if (a >= 0 && b >= 0) { "yes" } else { "no" }}");
+
+    // Bytes, one way and back.
+    println(f"send {resid_disp_send(a, [1, 2, 0, 255], 0 - 1)}");
+    List(Int) got = resid_disp_recv(b, 64);
+    println(f"recv {got.len()} {got}");
+    println(f"back {resid_disp_send(b, [7, 8], 0 - 1)}");
+    println(f"again {resid_disp_recv(a, 64)}");
+
+    // A descriptor sent beside the bytes, taken off the queue after.
+    Int h = resid_disp_shm_new(4096);
+    Int sfd = resid_disp_shm_fd(h);
+    println(f"shm {if (h != 0 && sfd >= 0) { "yes" } else { "no" }}");
+    println(f"put {resid_disp_shm_put(h, 0, [9, 8, 7], 3)}");
+    println(f"send fd {resid_disp_send(a, [1], sfd)}");
+    List(Int) two = resid_disp_recv(b, 64);
+    Int rfd = resid_disp_recv_fd();
+    println(f"with fd {two} {rfd == sfd}");
+    println(f"none left {resid_disp_recv_fd() == 0 - 1}");
+
+    // Ranges outside the mapping are refused, not written.
+    println(f"past end {resid_disp_shm_put(h, 4090, [1, 2, 3, 4, 5, 6, 7, 8, 9], 9)}");
+    println(f"negative {resid_disp_shm_put(h, 0 - 1, [1], 1)}");
+    println(f"null handle {resid_disp_shm_fd(0) == 0 - 1}");
+    println(f"free {resid_disp_shm_free(h)}");
+    println(f"free twice {resid_disp_shm_free(h)}");
+
+    // A display socket is a socket: it polls like one, under `display`
+    // alone (resid_tcp_poll would need `network` as well).
+    println(f"poll idle {resid_disp_poll([b], [1], 20)}");
+    _ = resid_disp_send(a, [1], 0 - 1);
+    println(f"poll ready {resid_disp_poll([b], [1], 500)}");
+    _ = resid_disp_recv(b, 16);
+
+    // A bad descriptor is refused, not trusted.
+    println(f"bad send {resid_disp_send(9999, [1], 0 - 1)}");
+    println(f"bad recv {resid_disp_recv(9999, 16).len()}");
+    println(f"close {resid_disp_close(a)}");
+    println(f"close again {resid_disp_close(a)}");
+    println(f"shm too big {resid_disp_shm_new(268435457) == 0}");
+    println(f"no room {resid_disp_recv(a, 0 - 1).len()}");
+    return 0;
+}
