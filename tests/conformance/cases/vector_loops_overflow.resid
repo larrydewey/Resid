@@ -1,0 +1,18 @@
+// A vector loop whose parameter is past the guard's bound runs the checked
+// loop, so an overflow still traps.
+Float term(Int i, Int j) {
+    Int s = i + j;
+    return 1.0 / (Float)(s * (s + 1) / 2 + i + 1);
+}
+
+Float row(Int i, Int j, Int n, List(Float) v, Float acc) {
+    if (j >= n) { return acc; }
+    return row(i, j + 1, n, v, acc + term(i, j) * v[j]);
+}
+
+Int main() {
+    List(Float) v = [rt 1.0, 2.0, 3.0];
+    println(f"{row(1, 0, 3, v, 0.0)}");
+    println(f"{row(rt 3037000500, 0, 3, v, 0.0)}");
+    return 0;
+}

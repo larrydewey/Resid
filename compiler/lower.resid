@@ -5453,7 +5453,9 @@ PG lw_decls(LW w, Int id, Int i, PG acc) {
 pub PG lw_program(Kg g, Int unit, Funcs fs, PG g0, Bool dbg, GAF df, Bool facts) {
     LOP lo = lo_program(g, unit, fs);
     LW w = LW {.g = g, .fs = fs, .base = 0, .rg = true, .dbg = dbg, .df = df, .rf = lr_nof(), .facts = facts, .lo = lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = ""};
-    return lw_decls(w, unit, 0, g0);
+    PG r = lw_decls(w, unit, 0, g0);
+    if (r.err != "" || dbg || resid_rtmod()) { return r; }
+    return PG {.pos = r.pos, .err = r.err, .glines = r.glines, .hlines = r.hlines, .lines = vl_module(r.lines), .tmp = r.tmp, .lbl = r.lbl};
 }
 
 // ─── Signatures from the graph ──────────────────────────────────────
@@ -6292,4 +6294,538 @@ pub Map(Int, Str) lr_facts(Kg g, Int d) {
     Map(Str, Str) e = {};
     Map(Int, Str) f = {};
     return lr_stmt(g, kg_kid(g, d, g.ns[d].nk - 1), LRS {.env = e, .facts = f}).facts;
+}
+
+// ─── Vector loops ───────────────────────────────────────────────────
+// A counted tail-call loop (one induction `i` stepping by 1 to an
+// invariant `n`, a straight-line body of integer and float arithmetic on
+// invariant parameters, `i` and elements xs[i] of invariant lists, and
+// float accumulators) gets a second copy, entered when a guard at entry
+// holds: every integer parameter in [0, bound] and each list's flat view
+// covering [i, n). Under the guard, interval arithmetic proves each
+// integer operation fits in 32 bits, so the copy has no overflow checks,
+// no bounds checks and no boxed loads, and LLVM can vectorize it (strict
+// float order kept). Elements are read as immediates; the copy has no
+// effects, so it also ORs together whether any was not one, and then its
+// result is dropped. When the guard fails or an element was boxed, the
+// original loop runs from the start, with every check as before.
+
+// Guard bounds tried, largest first: the largest under which every
+// integer operation provably fits in 32 bits is used.
+List(Int) vl_bounds() { return [32767, 16383, 8191, 4095, 1023]; }
+Int vl_i32_max() { return 2147483647; }
+
+// The scalar facts of the loop being rewritten.
+type VL = { Bool ok; Str why; Map(Str, Str) sub; Map(Str, Str) kind; Map(Str, Int) lo; Map(Str, Int) hi; List(Str) out; List(Str) lists; List(Str) ints; Int n; Int bound; Str bad; };
+
+VL vl_fail(VL v, Str why) { return VL {.ok = false, .why = why, .sub = v.sub, .kind = v.kind, .lo = v.lo, .hi = v.hi, .out = v.out, .lists = v.lists, .ints = v.ints, .n = v.n, .bound = v.bound, .bad = v.bad}; }
+
+pub List(Str) vl_module(List(Str) ls) {
+    Map(Str, Int) none = {};
+    Map(Str, Int) leafs = vl_leafs(ls, 0, none);
+    return vl_walk(ls, leafs, 0, ListBuf()).finish();
+}
+
+// Single-block functions (callees to inline): name -> index of `define`.
+Map(Str, Int) vl_leafs(List(Str) ls, Int i, Map(Str, Int) acc) {
+    if (i >= ls.len()) { return acc; }
+    Str l = ls[i];
+    // A whole definition in one element (a header helper) is not split.
+    if (!str_starts_with(l, "define ") || str_contains(l, "\n")) { return vl_leafs(ls, i + 1, acc); }
+    Int e = vl_fn_end(ls, i + 1);
+    Bool small = e - i < 80 && e > i + 2 && ls[i + 1] == "entry:" && vl_one_block(ls, i + 2, e);
+    Str nm = vl_fn_name(l);
+    return vl_leafs(ls, e + 1, if (small && nm != "") { acc.insert(nm, i) } else { acc });
+}
+
+Int vl_fn_end(List(Str) ls, Int i) {
+    if (i >= ls.len() || ls[i] == "}") { return i; }
+    return vl_fn_end(ls, i + 1);
+}
+
+// No labels and no branches before the last line, which returns.
+Bool vl_one_block(List(Str) ls, Int i, Int e) {
+    if (i >= e) { return false; }
+    Str l = ls[i];
+    if (i == e - 1) { return str_starts_with(l, "ret "); }
+    if (str_ends_with(l, ":") || str_starts_with(l, "br ") || str_starts_with(l, "ret ") || str_starts_with(l, "switch ")) { return false; }
+    return vl_one_block(ls, i + 1, e);
+}
+
+Str vl_fn_name(Str l) {
+    Int a = str_index_of(l, "@", 0);
+    Int b = str_index_of(l, "(", a);
+    return if (a >= 0 && b > a) { str_slice(l, a + 1, b) } else { "" };
+}
+
+ListBuf(Str) vl_walk(List(Str) ls, Map(Str, Int) leafs, Int i, ListBuf(Str) acc) {
+    if (i >= ls.len()) { return acc; }
+    Str l = ls[i];
+    if (!str_starts_with(l, "define ") || str_contains(l, "\n")) { return vl_walk(ls, leafs, i + 1, acc.push(l)); }
+    Int e = vl_fn_end(ls, i + 1);
+    List(Str) f = ls[i..e];
+    List(Str) g = if (lw_find_line(f, "tco.head:", 1) >= 0) { vl_fn(f, ls, leafs) } else { f };
+    return vl_walk(ls, leafs, e, vl_push_all(g, 0, acc));
+}
+
+ListBuf(Str) vl_push_all(List(Str) xs, Int i, ListBuf(Str) acc) {
+    if (i >= xs.len()) { return acc; }
+    return vl_push_all(xs, i + 1, acc.push(xs[i]));
+}
+
+// One phi: `%pK = phi T [ %pK.in, %entry ], [ V, %tco.s0 ]`.
+type VP = { Str reg; Str ty; Str back; };
+
+List(VP) vl_phis(List(Str) f, Int i, List(VP) acc) {
+    List(VP) none = [];
+    if (i >= f.len() || !str_contains(f[i], " = phi ")) { return acc; }
+    Str l = f[i];
+    Str reg = str_slice(l, 0, str_index_of(l, " ", 0));
+    Str rest = str_slice(l, str_index_of(l, " = phi ", 0) + 7, str_len(l));
+    Str ty = str_slice(rest, 0, str_index_of(rest, " [", 0));
+    List(Str) parts = str_split(rest, "], [");
+    if (parts.len() != 2 || !str_contains(parts[0], reg + ".in, %entry") || !str_ends_with(parts[1], ", %tco.s0 ]")) { return none; }
+    Str back = str_slice(parts[1], 1, str_index_of(parts[1], ",", 0));
+    return vl_phis(f, i + 1, acc.concat([VP {.reg = reg, .ty = ty, .back = str_trim(back)}]));
+}
+
+Int vl_label_at(List(Str) f, Str lab, Int i) {
+    if (i >= f.len()) { return -1; }
+    if (f[i] == lab + ":") { return i; }
+    return vl_label_at(f, lab, i + 1);
+}
+
+// The function rewritten, or f when it is not such a loop.
+List(Str) vl_fn(List(Str) f, List(Str) all, Map(Str, Int) leafs) {
+    Int h = lw_find_line(f, "tco.head:", 1);
+    List(VP) e0 = [];
+    List(VP) ps = vl_phis(f, h + 1, e0);
+    Int c = h + 1 + ps.len();
+    if (ps.len() == 0 || c + 1 >= f.len()) { return f; }
+    // `%c = icmp sge i64 %pI, %pN` / `br i1 %c, label %X, label %B`.
+    Str cl = f[c];
+    Str bl = f[c + 1];
+    if (!str_contains(cl, " = icmp sge i64 %p") || !str_starts_with(bl, "br i1 ")) { return f; }
+    List(Str) cw = str_split(str_replace(str_slice(cl, str_index_of(cl, "i64 ", 0) + 4, str_len(cl)), ",", ""), " ");
+    List(Str) bw = str_split(str_replace(bl, ",", ""), " ");
+    if (cw.len() != 2 || bw.len() != 7) { return f; }
+    Str ireg = cw[0];
+    Str nreg = cw[1];
+    Str xlab = str_slice(bw[4], 1, str_len(bw[4]));
+    Str blab = str_slice(bw[6], 1, str_len(bw[6]));
+    Int xi = vl_label_at(f, xlab, c + 2);
+    Int bi = vl_label_at(f, blab, c + 2);
+    if (xi < 0 || bi < 0 || xi + 1 >= f.len() || !str_starts_with(f[xi + 1], "ret ")) { return f; }
+    Int si = vl_label_at(f, "tco.s0", bi);
+    if (si < 0 || si + 2 != f.len() || f[si + 1] != "br label %tco.head" || f[si - 1] != "br label %tco.s0") { return f; }
+    // Every label: entry, tco.head, the exit, the body chain, tco.s0.
+    if (vl_labels(f, 0, 0) != 5 + vl_labels(f, bi + 1, si) || f[h - 1] != "br label %tco.head") { return f; }
+    VP ip = vl_phi_of(ps, ireg, 0);
+    VP np = vl_phi_of(ps, nreg, 0);
+    if (ip.reg == "" || np.reg == "" || np.back != np.reg || ip.ty != "i64") { return f; }
+    VL v1 = vl_try(f, bi, si, all, leafs, ps, ireg, ip.back, vl_bounds(), 0);
+    if (!v1.ok) { return f; }
+    // The induction must step by one in the body.
+    if ((v1.kind.get(ip.back) else { "" }) != "next") { return f; }
+    if (!vl_backs_ok(ps, ireg, v1, 0)) { return f; }
+    Str xret = vl_ret(f[xi + 1], v1);
+    if (xret == "") { return f; }
+    return vl_emit(f, h, ps, ireg, nreg, xret, v1);
+}
+
+// The body analyzed under each bound in turn until one proves it.
+VL vl_try(List(Str) f, Int bi, Int si, List(Str) all, Map(Str, Int) leafs, List(VP) ps, Str ireg, Str inext, List(Int) bs, Int k) {
+    VL v0 = vl_init(ps, ireg, 0, VL {.ok = true, .why = "", .sub = {"%none": ""}, .kind = {"%none": ""}, .lo = {"%none": 0}, .hi = {"%none": 0}, .out = [], .lists = [], .ints = [], .n = 0, .bound = bs[k], .bad = "%vl.bad"});
+    VL v1 = vl_body(f, bi + 1, si - 1, all, leafs, ireg, inext, v0);
+    if (v1.ok || k + 1 >= bs.len() || (v1.why != "result range" && v1.why != "operand range")) { return v1; }
+    return vl_try(f, bi, si, all, leafs, ps, ireg, inext, bs, k + 1);
+}
+
+Int vl_labels(List(Str) f, Int i, Int e) {
+    Int stop = if (e > 0) { e } else { f.len() };
+    if (i >= stop) { return 0; }
+    Str l = f[i];
+    Int one = if (str_ends_with(l, ":") && !str_starts_with(l, " ") && !str_contains(l, " ")) { 1 } else { 0 };
+    return one + vl_labels(f, i + 1, e);
+}
+
+VP vl_phi_of(List(VP) ps, Str reg, Int i) {
+    if (i >= ps.len()) { return VP {.reg = "", .ty = "", .back = ""}; }
+    if (ps[i].reg == reg) { return ps[i]; }
+    return vl_phi_of(ps, reg, i + 1);
+}
+
+// Phis become: the induction (`ind`), invariants (their entry value) and
+// float accumulators (`acc`).
+VL vl_init(List(VP) ps, Str ireg, Int i, VL v) {
+    if (i >= ps.len() || !v.ok) { return v; }
+    VP p = ps[i];
+    Bool inv = p.back == p.reg;
+    if (p.reg == ireg) {
+        Map(Str, Str) s = v.sub.insert(p.reg, p.reg + ".v");
+        return vl_init(ps, ireg, i + 1, vl_set(v, s, v.kind.insert(p.reg, "ind"), v.lo.insert(p.reg, 0), v.hi.insert(p.reg, v.bound - 1)));
+    }
+    if (inv && p.ty == "i64") {
+        return vl_init(ps, ireg, i + 1, vl_set(v, v.sub.insert(p.reg, p.reg + ".in"), v.kind.insert(p.reg, "pint"), v.lo.insert(p.reg, 0), v.hi.insert(p.reg, v.bound)));
+    }
+    if (inv && (p.ty == "double" || p.ty == "ptr")) {
+        return vl_init(ps, ireg, i + 1, vl_set(v, v.sub.insert(p.reg, p.reg + ".in"), v.kind.insert(p.reg, if (p.ty == "ptr") { "list" } else { "d" }), v.lo, v.hi));
+    }
+    if (!inv && p.ty == "double") {
+        return vl_init(ps, ireg, i + 1, vl_set(v, v.sub.insert(p.reg, p.reg + ".v"), v.kind.insert(p.reg, "d"), v.lo, v.hi));
+    }
+    return vl_fail(v, "phi " + p.reg);
+}
+
+VL vl_set(VL v, Map(Str, Str) s, Map(Str, Str) k, Map(Str, Int) lo, Map(Str, Int) hi) {
+    return VL {.ok = v.ok, .why = v.why, .sub = s, .kind = k, .lo = lo, .hi = hi, .out = v.out, .lists = v.lists, .ints = v.ints, .n = v.n, .bound = v.bound, .bad = v.bad};
+}
+
+VL vl_line(VL v, Str l) {
+    return VL {.ok = v.ok, .why = v.why, .sub = v.sub, .kind = v.kind, .lo = v.lo, .hi = v.hi, .out = v.out.concat([l]), .lists = v.lists, .ints = v.ints, .n = v.n, .bound = v.bound, .bad = v.bad};
+}
+
+VL vl_def(VL v, Str dst, Str val, Str kind, Int lo, Int hi, List(Str) lines) {
+    return VL {.ok = v.ok, .why = v.why, .sub = v.sub.insert(dst, val), .kind = v.kind.insert(dst, kind), .lo = v.lo.insert(dst, lo), .hi = v.hi.insert(dst, hi), .out = v.out.concat(lines), .lists = v.lists, .ints = v.ints, .n = v.n + 1, .bound = v.bound, .bad = v.bad};
+}
+
+// Each accumulator's back value is a float computed in the body.
+Bool vl_backs_ok(List(VP) ps, Str ireg, VL v, Int i) {
+    if (i >= ps.len()) { return true; }
+    VP p = ps[i];
+    Bool ok = p.reg == ireg || p.back == p.reg || (v.kind.get(p.back) else { "" }) == "d";
+    if (!ok) { return false; }
+    return vl_backs_ok(ps, ireg, v, i + 1);
+}
+
+// `ret T V` of the exit block, V mapped; "" when V is not known.
+Str vl_ret(Str l, VL v) {
+    List(Str) w = str_split(l, " ");
+    if (w.len() != 3) { return ""; }
+    Str s = vl_val(v, w[2]);
+    Str k = vl_kind(v, w[2]);
+    return if (s != "" && (k == "d" || k == "pint")) { "ret " + w[1] + " " + s } else { "" };
+}
+
+Str vl_kind(VL v, Str x) {
+    if (vl_is_int_lit(x)) { return "lit"; }
+    if (vl_is_float_lit(x)) { return "flit"; }
+    return v.kind.get(x) else { "" };
+}
+
+Bool vl_is_int_lit(Str x) {
+    if (str_len(x) == 0) { return false; }
+    Int c = str_char_at(x, 0);
+    return (c == 45 && str_len(x) > 1 && str_is_int(x)) || (c >= 48 && c <= 57 && str_is_int(x));
+}
+
+Bool vl_is_float_lit(Str x) { return str_len(x) > 0 && !str_starts_with(x, "%") && !vl_is_int_lit(x) && (str_contains(x, ".") || str_starts_with(x, "0x")); }
+
+// The operand in the fast copy: a register, or the literal itself.
+Str vl_val(VL v, Str x) {
+    if (vl_is_int_lit(x) || vl_is_float_lit(x)) { return x; }
+    return v.sub.get(x) else { "" };
+}
+
+Int vl_lo(VL v, Str x) { return if (vl_is_int_lit(x)) { str_parse_int(x) } else { v.lo.get(x) else { 0 } }; }
+Int vl_hi(VL v, Str x) { return if (vl_is_int_lit(x)) { str_parse_int(x) } else { v.hi.get(x) else { 0 } }; }
+
+// An integer operand as an i32 register (parameters are truncated once).
+Str vl_i32(VL v, Str x) {
+    Str k = vl_kind(v, x);
+    if (k == "lit") { return x; }
+    if (k == "pint") { return vl_val(v, x) + ".t"; }
+    if (k == "ind") { return vl_val(v, x) + ".t"; }
+    return vl_val(v, x);
+}
+
+Bool vl_intk(Str k) { return k == "lit" || k == "pint" || k == "ind" || k == "i"; }
+
+VL vl_use_int(VL v, Str x) {
+    Str k = vl_kind(v, x);
+    if (k != "pint" || v.ints.contains(x)) { return v; }
+    return VL {.ok = v.ok, .why = v.why, .sub = v.sub, .kind = v.kind, .lo = v.lo, .hi = v.hi, .out = v.out, .lists = v.lists, .ints = v.ints.concat([x]), .n = v.n, .bound = v.bound, .bad = v.bad};
+}
+
+// The body, line by line.
+VL vl_body(List(Str) f, Int i, Int e, List(Str) all, Map(Str, Int) leafs, Str ireg, Str inext, VL v) {
+    if (!v.ok || i >= e) { return v; }
+    Str l = f[i];
+    // Straight line: a label only right after the branch to it.
+    if (str_ends_with(l, ":")) {
+        Bool chained = i > 0 && f[i - 1] == "br label %" + str_slice(l, 0, str_len(l) - 1);
+        return vl_body(f, i + 1, e, all, leafs, ireg, inext, if (chained) { v } else { vl_fail(v, "label") });
+    }
+    if (str_starts_with(l, "br label %")) {
+        Bool chained = i + 1 < f.len() && f[i + 1] == str_slice(l, 10, str_len(l)) + ":";
+        return vl_body(f, i + 1, e, all, leafs, ireg, inext, if (chained) { v } else { vl_fail(v, "branch") });
+    }
+    Str call = vl_inline_name(l, leafs);
+    if (call != "") {
+        List(Str) body = vl_inlined(l, all, leafs.get(call) else { 0 }, f"{i}");
+        VL vi = vl_lines(body, 0, ireg, inext, v);
+        return vl_body(f, i + 1, e, all, leafs, ireg, inext, vi);
+    }
+    return vl_body(f, i + 1, e, all, leafs, ireg, inext, vl_op(l, ireg, inext, v));
+}
+
+VL vl_lines(List(Str) ls, Int i, Str ireg, Str inext, VL v) {
+    if (!v.ok || i >= ls.len()) { return v; }
+    return vl_lines(ls, i + 1, ireg, inext, vl_op(ls[i], ireg, inext, v));
+}
+
+// `%d = call double @F(args)` of a single-block F: its name, else "".
+Str vl_inline_name(Str l, Map(Str, Int) leafs) {
+    Int c = str_index_of(l, " = call double @", 0);
+    if (c < 0) { return ""; }
+    Int b = str_index_of(l, "(", c);
+    Str nm = str_slice(l, c + 16, b);
+    return if ((leafs.get(nm) else { -1 }) >= 0) { nm } else { "" };
+}
+
+// F's body with its registers renamed apart and its parameters replaced
+// by the arguments; the return becomes `%d = vlalias V`.
+List(Str) vl_inlined(Str l, List(Str) all, Int at, Str site) {
+    Str dst = str_slice(l, 0, str_index_of(l, " ", 0));
+    Str args = str_slice(l, str_index_of(l, "(", 0) + 1, str_len(l) - 1);
+    Str def = all[at];
+    Str pl = str_slice(def, str_index_of(def, "(", 0) + 1, str_index_of(def, ")", 0));
+    List(Str) pn = vl_arg_regs(str_split(pl, ", "), 0, []);
+    List(Str) av = vl_arg_regs(str_split(args, ", "), 0, []);
+    if (pn.len() != av.len()) { return ["vlbad"]; }
+    Int e = vl_fn_end(all, at + 1);
+    return vl_ren_lines(all, at + 2, e, pn, av, ".c" + site, dst, ListBuf()).finish();
+}
+
+List(Str) vl_arg_regs(List(Str) xs, Int i, List(Str) acc) {
+    if (i >= xs.len()) { return acc; }
+    List(Str) w = str_split(str_trim(xs[i]), " ");
+    return vl_arg_regs(xs, i + 1, acc.concat([w[w.len() - 1]]));
+}
+
+ListBuf(Str) vl_ren_lines(List(Str) all, Int i, Int e, List(Str) pn, List(Str) av, Str sfx, Str dst, ListBuf(Str) acc) {
+    if (i >= e) { return acc; }
+    Str l = vl_rename(all[i], pn, av, sfx);
+    Str l2 = if (str_starts_with(l, "ret ")) { dst + " = vlalias " + str_split(l, " ")[2] } else { l };
+    return vl_ren_lines(all, i + 1, e, pn, av, sfx, dst, acc.push(l2));
+}
+
+// Registers of l: a parameter becomes its argument, any other gets sfx.
+Str vl_rename(Str l, List(Str) pn, List(Str) av, Str sfx) { return vl_ren_at(l, 0, str_len(l), pn, av, sfx, str_sb_new()); }
+
+Str vl_ren_at(Str l, Int i, Int n, List(Str) pn, List(Str) av, Str sfx, Str sb) {
+    if (i >= n) { return str_sb_finish(sb); }
+    Int c = str_char_at(l, i);
+    if (c != 37) { return vl_ren_at(l, i + 1, n, pn, av, sfx, str_sb_append_cp(sb, c)); }
+    Int j = vl_reg_end(l, i + 1, n);
+    Str r = str_slice(l, i, j);
+    Int k = vl_index(pn, r, 0);
+    Str to = if (k >= 0) { av[k] } else { r + sfx };
+    return vl_ren_at(l, j, n, pn, av, sfx, str_sb_append(sb, to));
+}
+
+Int vl_reg_end(Str l, Int i, Int n) {
+    if (i >= n) { return i; }
+    Int c = str_char_at(l, i);
+    Bool id = (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 46 || c == 95;
+    return if (id) { vl_reg_end(l, i + 1, n) } else { i };
+}
+
+Int vl_index(List(Str) xs, Str x, Int i) {
+    if (i >= xs.len()) { return -1; }
+    if (xs[i] == x) { return i; }
+    return vl_index(xs, x, i + 1);
+}
+
+// Two operands after `<op> <ty> `: "a, b".
+List(Str) vl_two(Str s) {
+    List(Str) p = str_split(s, ", ");
+    return if (p.len() == 2) { [str_trim(p[0]), str_trim(p[1])] } else { [] };
+}
+
+Str vl_after(Str l, Str pre) { return str_slice(l, str_index_of(l, pre, 0) + str_len(pre), str_len(l)); }
+
+// An integer result: in 32 bits when the operands' ranges allow it.
+VL vl_int_op(VL v, Str dst, Str op, Str a, Str b) {
+    if (!vl_intk(vl_kind(v, a)) || !vl_intk(vl_kind(v, b))) { return vl_fail(v, "int operand"); }
+    Int al = vl_lo(v, a);
+    Int ah = vl_hi(v, a);
+    Int bl = vl_lo(v, b);
+    Int bh = vl_hi(v, b);
+    Int m = vl_i32_max();
+    if (al < 0 - m || ah > m || bl < 0 - m || bh > m) { return vl_fail(v, "operand range"); }
+    Int lo = if (op == "add") { al + bl } else if (op == "sub") { al - bh } else { min(min(al * bl, al * bh), min(ah * bl, ah * bh)) };
+    Int hi = if (op == "add") { ah + bh } else if (op == "sub") { ah - bl } else { max(max(al * bl, al * bh), max(ah * bl, ah * bh)) };
+    if (lo < 0 - m || hi > m) { return vl_fail(v, "result range"); }
+    Str r = dst + ".v";
+    VL v2 = vl_use_int(vl_use_int(v, a), b);
+    return vl_def(v2, dst, r, "i", lo, hi, [r + " = " + op + " nsw i32 " + vl_i32(v2, a) + ", " + vl_i32(v2, b)]);
+}
+
+VL vl_op(Str l, Str ireg, Str inext, VL v) {
+    if (l == "vlbad") { return vl_fail(v, "inline"); }
+    if (str_starts_with(l, "call void @resid_overflow_check(")) { return v; }
+    Str dst = if (str_starts_with(l, "%") && str_contains(l, " = ")) { str_slice(l, 0, str_index_of(l, " = ", 0)) } else { "" };
+    if (dst == "") { return vl_fail(v, "statement"); }
+    Str rhs = vl_after(l, " = ");
+    // The induction's step: i + 1, checked or not.
+    if (dst == inext || (str_contains(rhs, "with.overflow") && str_contains(rhs, "(i64 " + ireg + ", i64 1)") && str_contains(rhs, "sadd"))) {
+        Bool step = rhs == "add nsw i64 " + ireg + ", 1" || rhs == "add i64 " + ireg + ", 1" || str_starts_with(rhs, "call {i64, i1} @llvm.sadd.with.overflow.i64(i64 " + ireg + ", i64 1)");
+        if (!step) { return vl_fail(v, "step"); }
+        Str k = if (str_starts_with(rhs, "call")) { "stepx" } else { "next" };
+        return vl_def(v, dst, ireg + ".n", k, 0, 0, if (k == "next") { [ireg + ".n = add nsw i64 " + ireg + ".v, 1"] } else { [] });
+    }
+    if (str_starts_with(rhs, "call {i64, i1} @llvm.s")) {
+        Str op = if (str_contains(rhs, "sadd")) { "add" } else if (str_contains(rhs, "ssub")) { "sub" } else if (str_contains(rhs, "smul")) { "mul" } else { "" };
+        List(Str) ab = vl_two(str_replace(str_slice(rhs, str_index_of(rhs, "(", 0) + 1, str_len(rhs) - 1), "i64 ", ""));
+        if (op == "" || ab.len() != 2) { return vl_fail(v, "intrinsic"); }
+        return vl_int_op(v, dst, op, ab[0], ab[1]);
+    }
+    if (str_starts_with(rhs, "extractvalue {i64, i1} ")) {
+        List(Str) w = vl_two(vl_after(rhs, "extractvalue {i64, i1} "));
+        if (w.len() != 2) { return vl_fail(v, "extract"); }
+        Str k = vl_kind(v, w[0]);
+        if (w[1] == "1") { return vl_def(v, dst, "", "flag", 0, 0, []); }
+        if (k == "stepx") { return vl_def(v, dst, ireg + ".n", "next", 0, 0, [ireg + ".n = add nsw i64 " + ireg + ".v, 1"]); }
+        return vl_def(v, dst, vl_val(v, w[0]), k, vl_lo(v, w[0]), vl_hi(v, w[0]), []);
+    }
+    if (str_starts_with(rhs, "zext i1 ")) { return vl_def(v, dst, "", "flag", 0, 0, []); }
+    List(Str) ops = ["add nsw i64 ", "sub nsw i64 ", "mul nsw i64 "];
+    Int oi = vl_prefix_of(rhs, ops, 0);
+    if (oi >= 0) {
+        List(Str) ab = vl_two(vl_after(rhs, ops[oi]));
+        if (ab.len() != 2) { return vl_fail(v, "binop"); }
+        return vl_int_op(v, dst, str_slice(ops[oi], 0, 3), ab[0], ab[1]);
+    }
+    if (str_starts_with(rhs, "sdiv i64 ")) {
+        List(Str) ab = vl_two(vl_after(rhs, "sdiv i64 "));
+        if (ab.len() != 2 || !vl_is_int_lit(ab[1]) || str_parse_int(ab[1]) <= 0 || !vl_intk(vl_kind(v, ab[0]))) { return vl_fail(v, "sdiv"); }
+        Int d = str_parse_int(ab[1]);
+        Str r = dst + ".v";
+        VL v2 = vl_use_int(v, ab[0]);
+        return vl_def(v2, dst, r, "i", vl_lo(v, ab[0]) / d, vl_hi(v, ab[0]) / d, [r + " = sdiv i32 " + vl_i32(v2, ab[0]) + ", " + ab[1]]);
+    }
+    if (str_starts_with(rhs, "sitofp i64 ") && str_ends_with(rhs, " to double")) {
+        Str a = str_slice(rhs, 11, str_len(rhs) - 10);
+        if (!vl_intk(vl_kind(v, a))) { return vl_fail(v, "sitofp"); }
+        Str r = dst + ".v";
+        VL v2 = vl_use_int(v, a);
+        return vl_def(v2, dst, r, "d", 0, 0, [r + " = sitofp i32 " + vl_i32(v2, a) + " to double"]);
+    }
+    List(Str) fops = ["fadd double ", "fsub double ", "fmul double ", "fdiv double "];
+    Int fi = vl_prefix_of(rhs, fops, 0);
+    if (fi >= 0) {
+        List(Str) ab = vl_two(vl_after(rhs, fops[fi]));
+        if (ab.len() != 2) { return vl_fail(v, "fop"); }
+        Str ka = vl_kind(v, ab[0]);
+        Str kb = vl_kind(v, ab[1]);
+        if ((ka != "d" && ka != "flit") || (kb != "d" && kb != "flit")) { return vl_fail(v, "float operand"); }
+        Str r = dst + ".v";
+        return vl_def(v, dst, r, "d", 0, 0, [r + " = " + str_slice(fops[fi], 0, 4) + " double " + vl_val(v, ab[0]) + ", " + vl_val(v, ab[1])]);
+    }
+    if (str_starts_with(rhs, "call ptr @resid_list_get_v(ptr ")) {
+        List(Str) w = str_split(str_replace(vl_after(rhs, "(ptr "), ",", ""), " ");
+        // [%pL, i64, IX, ptr, %pL.ld, i64, %pL.ln)]
+        if (w.len() != 7 || w[2] != ireg || vl_kind(v, w[0]) != "list") { return vl_fail(v, "list read"); }
+        Str lst = w[0];
+        Str r = dst + ".v";
+        Str pp = dst + ".p";
+        // Not an immediate (top byte zero): the copy's result is dropped.
+        Str bo = dst + ".bo";
+        List(Str) ls = [pp + " = getelementptr i64, ptr " + lst + ".ld, i64 " + ireg + ".v", r + " = load i64, ptr " + pp, dst + ".bt = lshr i64 " + r + ", 56", dst + ".bz = icmp eq i64 " + dst + ".bt, 0", dst + ".bq = zext i1 " + dst + ".bz to i64", bo + " = or i64 " + v.bad + ", " + dst + ".bq"];
+        VL v2 = VL {.ok = v.ok, .why = v.why, .sub = v.sub, .kind = v.kind, .lo = v.lo, .hi = v.hi, .out = v.out, .lists = if (v.lists.contains(lst)) { v.lists } else { v.lists.concat([lst]) }, .ints = v.ints, .n = v.n, .bound = v.bound, .bad = bo};
+        return vl_def(v2, dst, r, "slot", 0, 0, ls);
+    }
+    if (str_starts_with(rhs, "call double @resid_unbox_f64(ptr ")) {
+        Str s0 = vl_after(rhs, "(ptr ");
+        Str s = str_slice(s0, 0, str_len(s0) - 1);
+        if (vl_kind(v, s) != "slot") { return vl_fail(v, "unbox"); }
+        Str r = dst + ".v";
+        return vl_def(v, dst, r, "d", 0, 0, [r + " = bitcast i64 " + vl_val(v, s) + " to double"]);
+    }
+    if (str_starts_with(rhs, "vlalias ")) {
+        Str a = vl_after(rhs, "vlalias ");
+        Str k = vl_kind(v, a);
+        if (k != "d") { return vl_fail(v, "alias"); }
+        return vl_def(v, dst, vl_val(v, a), k, 0, 0, []);
+    }
+    return vl_fail(v, "op: " + rhs);
+}
+
+Int vl_prefix_of(Str s, List(Str) ps, Int i) {
+    if (i >= ps.len()) { return -1; }
+    if (str_starts_with(s, ps[i])) { return i; }
+    return vl_prefix_of(s, ps, i + 1);
+}
+
+// The rewritten function: guard and scans after entry, the fast loop at
+// the end, and the head phis taking their entry values from the miss path.
+List(Str) vl_emit(List(Str) f, Int h, List(VP) ps, Str ireg, Str nreg, Str xret, VL v) {
+    Str b = f"{v.bound + 1}";
+    // Guards: induction start, bound, each integer parameter, each list.
+    List(Str) gs0 = [ireg + ".in", nreg + ".in"];
+    List(Str) gs = gs0.concat(vl_ins(v.ints, 0, []));
+    List(Str) g1 = vl_guard_ints(gs, b, 0, []);
+    List(Str) g2 = vl_guard_lists(v.lists, nreg, g1.len(), 0, []);
+    List(Str) conds = vl_cond_names(g1.len() + g2.len(), 0, []);
+    List(Str) gl = g1.concat(g2).concat(vl_and_chain(conds, 1, conds[0]));
+    List(Str) head = f[0..h - 1].concat(gl).concat(["br i1 %vl.ok, label %vl.go, label %vl.miss", "vl.miss:", "br label %tco.head"]);
+    List(Str) mid = vl_add_miss(f, h, h + 1 + ps.len(), ListBuf()).finish();
+    List(Str) go = ["vl.go:"].concat(vl_truncs(v.ints, ireg, 0, [])).concat(["br label %vl.h", "vl.h:"]);
+    List(Str) phis = vl_fast_phis(ps, ireg, v, 0, []).concat(["%vl.bad = phi i64 [ 0, %vl.go ], [ " + v.bad + ", %vl.b ]"]);
+    List(Str) loop = [ireg + ".v.t = trunc i64 " + ireg + ".v to i32", "%vl.c = icmp sge i64 " + ireg + ".v, " + nreg + ".in", "br i1 %vl.c, label %vl.x, label %vl.b", "vl.x:", "%vl.clean = icmp eq i64 %vl.bad, 0", "br i1 %vl.clean, label %vl.r, label %vl.miss", "vl.r:", xret, "vl.b:"];
+    List(Str) tail = v.out.concat(["br label %vl.h"]);
+    return head.concat(mid).concat(go).concat(phis).concat(loop).concat(tail);
+}
+
+List(Str) vl_ins(List(Str) xs, Int i, List(Str) acc) {
+    if (i >= xs.len()) { return acc; }
+    return vl_ins(xs, i + 1, acc.concat([xs[i] + ".in"]));
+}
+
+List(Str) vl_guard_ints(List(Str) xs, Str b, Int i, List(Str) acc) {
+    if (i >= xs.len()) { return acc; }
+    return vl_guard_ints(xs, b, i + 1, acc.concat([f"%vl.g{acc.len()} = icmp ult i64 " + xs[i] + ", " + b]));
+}
+
+// Lists continue the numbering after the integer guards.
+List(Str) vl_guard_lists(List(Str) ls, Str nreg, Int off, Int i, List(Str) acc) {
+    if (i >= ls.len()) { return acc; }
+    return vl_guard_lists(ls, nreg, off, i + 1, acc.concat([f"%vl.g{off + i} = icmp sle i64 " + nreg + ".in, " + ls[i] + ".ln"]));
+}
+
+List(Str) vl_cond_names(Int n, Int i, List(Str) acc) {
+    if (i >= n) { return acc; }
+    return vl_cond_names(n, i + 1, acc.concat([f"%vl.g{i}"]));
+}
+
+// `%vl.ok`: the conjunction of the guards.
+List(Str) vl_and_chain(List(Str) cs, Int i, Str prev) {
+    if (i >= cs.len()) { return ["%vl.ok = and i1 " + prev + ", true"]; }
+    Str nx = f"%vl.a{i}";
+    List(Str) one = [nx + " = and i1 " + prev + ", " + cs[i]];
+    return one.concat(vl_and_chain(cs, i + 1, nx));
+}
+
+ListBuf(Str) vl_add_miss(List(Str) f, Int i, Int e, ListBuf(Str) acc) {
+    if (i >= f.len()) { return acc; }
+    Str l = f[i];
+    Bool phi = i < e && str_contains(l, " = phi ");
+    Str reg = if (phi) { str_slice(l, 0, str_index_of(l, " ", 0)) } else { "" };
+    // The entry block now branches to the guard; the head is entered from the miss path.
+    Str l2 = if (phi) { str_replace(l, reg + ".in, %entry ]", reg + ".in, %vl.miss ]") } else { l };
+    return vl_add_miss(f, i + 1, e, acc.push(l2));
+}
+
+List(Str) vl_truncs(List(Str) xs, Str ireg, Int i, List(Str) acc) {
+    if (i >= xs.len()) { return acc; }
+    return vl_truncs(xs, ireg, i + 1, acc.concat([xs[i] + ".in.t = trunc i64 " + xs[i] + ".in to i32"]));
+}
+
+List(Str) vl_fast_phis(List(VP) ps, Str ireg, VL v, Int i, List(Str) acc) {
+    if (i >= ps.len()) { return acc; }
+    VP p = ps[i];
+    Bool inv = p.back == p.reg;
+    List(Str) one = if (p.reg == ireg) { [ireg + ".v = phi i64 [ " + ireg + ".in, %vl.go ], [ " + ireg + ".n, %vl.b ]"] } else if (inv) { [] } else { [p.reg + ".v = phi double [ " + p.reg + ".in, %vl.go ], [ " + vl_val(v, p.back) + ", %vl.b ]"] };
+    return vl_fast_phis(ps, ireg, v, i + 1, acc.concat(one));
 }

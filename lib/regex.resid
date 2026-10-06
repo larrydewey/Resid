@@ -38,8 +38,9 @@ pub type Regex = {
 
 // A whole DFA, built when small: next[state * classes + class], and per
 // state bit 0 matching, bit 2 the scan stops here. ok false: use the lazy one.
-// dense[state * 128 + c] for ASCII c is the target coded as tab_code.
-type Tab = { Bool ok; List(Int) next; List(Int) flags; Int start; List(Int) dense; };
+// dense[state * 128 + c] for ASCII c is the target coded as tab_code;
+// skip[c] is 1 when c keeps a non-matching start state where it is.
+type Tab = { Bool ok; List(Int) next; List(Int) flags; Int start; List(Int) dense; List(Int) skip; };
 
 // A match: [start, end) and the groups as 2 * ngroups offsets (-1 unset;
 // group 0 is the match). `groups` is empty from the span-only searches.
@@ -917,7 +918,7 @@ DfaR dfa_rev(Regex re, Str s, Int from, Int i, Int st, Int first, Dfa d) {
 
 Tab tab_none() {
     List(Int) none = [];
-    return Tab {.ok = false, .next = none, .flags = none, .start = 0, .dense = none};
+    return Tab {.ok = false, .next = none, .flags = none, .start = 0, .dense = none, .skip = none};
 }
 
 Int tab_limit() { return 512; }
@@ -931,11 +932,11 @@ Tab tab_build(Regex re, List(Int) prog, Bool fwd) {
 Tab tab_fill(Regex re, List(Int) prog, Bool fwd, Dfa d, Int st, Int k, ListBuf(Int) next) {
     if (d.states.len() > tab_limit()) {
         List(Int) dropped = next.finish();
-        return Tab {.ok = false, .next = dropped, .flags = d.flags, .start = 0, .dense = dropped};
+        return Tab {.ok = false, .next = dropped, .flags = d.flags, .start = 0, .dense = dropped, .skip = dropped};
     }
     if (st >= d.states.len()) {
         List(Int) none = [];
-        return Tab {.ok = true, .next = next.finish(), .flags = tab_flags(d, fwd, 0, ListBuf()), .start = 0, .dense = none};
+        return Tab {.ok = true, .next = next.finish(), .flags = tab_flags(d, fwd, 0, ListBuf()), .start = 0, .dense = none, .skip = none};
     }
     if (k >= re.bounds.len()) { return tab_fill(re, prog, fwd, d, st + 1, 0, next); }
     DfaS nx = dfa_step(re, prog, d, st, k, fwd);
@@ -961,7 +962,26 @@ Int tab_code(List(Int) flags, Int st) {
 // The ASCII rows of a whole table, each entry a tab_code.
 Tab tab_dense(Tab t, List(Int) ascii, Int nc) {
     if (!t.ok) { return t; }
-    return Tab {.ok = true, .next = t.next, .flags = t.flags, .start = t.start, .dense = tab_rows(t, ascii, nc, 0, t.flags.len() * 128, ListBuf())};
+    List(Int) dense = tab_rows(t, ascii, nc, 0, t.flags.len() * 128, ListBuf());
+    List(Int) none = [];
+    Int c0 = tab_code(t.flags, 0);
+    List(Int) skip = if ((c0 & 5) == 0) { tab_skip(dense, c0, 0, ListBuf()) } else { none };
+    return Tab {.ok = true, .next = t.next, .flags = t.flags, .start = t.start, .dense = dense, .skip = skip};
+}
+
+List(Int) tab_skip(List(Int) dense, Int c0, Int c, ListBuf(Int) acc) {
+    if (c >= 128) { return acc.finish(); }
+    return tab_skip(dense, c0, c + 1, acc.push(if (dense[c] == c0) { 1 } else { 0 }));
+}
+
+// The first index from i whose codepoint can leave the start state.
+Int dense_skip(Str s, Int n, Int i, List(Int) skip) {
+    if (i >= n) { return i; }
+    Int c = str_char_at(s, i);
+    if (c >= 128) { return i; }
+    Int k = skip[c];
+    if (k == 0) { return i; }
+    return dense_skip(s, n, i + 1, skip);
 }
 
 List(Int) tab_rows(Tab t, List(Int) ascii, Int nc, Int i, Int n, ListBuf(Int) acc) {
@@ -1001,7 +1021,9 @@ Int tab_find(Regex re, Str s, Int n, Int from) {
     if (re.bits.len() > 0 && re.pre != "") { return bit_pre(re, s, n, at); }
     if (re.bits.len() > 0) { return bit_find(s, n, at, 0, re.bits, re.bits[128], re.bits[129], re.fix); }
     Int nc = re.bounds.len();
-    Int e = dense_fwd(s, n, at, tab_code(re.ftab.flags, 0), -1, re.ftab.dense, re.ftab.next, re.ftab.flags, nc, re.bounds);
+    // Bytes that keep the start state where it is need no table walk.
+    Int at2 = if (re.ftab.skip.len() > 0) { dense_skip(s, n, at, re.ftab.skip) } else { at };
+    Int e = dense_fwd(s, n, at2, tab_code(re.ftab.flags, 0), -1, re.ftab.dense, re.ftab.next, re.ftab.flags, nc, re.bounds);
     if (e < 0) { return -1; }
     // Every match of a fixed-length pattern starts that far back.
     Int b = if (re.fix >= 0) { e - re.fix } else { dense_rev(s, at, e, tab_code(re.rtab.flags, 0), -1, re.rtab.dense, re.rtab.next, re.rtab.flags, nc, re.bounds) };

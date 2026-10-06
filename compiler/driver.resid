@@ -9112,7 +9112,8 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     // so hot runtime helpers (list indexing, unboxing) inline into user loops.
     // Loops start on 64-byte boundaries: hot loops ran up to 15% apart with
     // the placement alone (32 was not enough for the regex scan loops).
-    Str lto  =  if (olevel == "-O0") { "" } else { " -flto -fuse-ld=lld -Wl,-mllvm,-align-loops=64" };
+    // Float reductions may vectorize only in source order (strict IEEE).
+    Str lto  =  if (olevel == "-O0") { "" } else { " -flto -fuse-ld=lld -Wl,-mllvm,-align-loops=64 -Wl,-mllvm,-force-ordered-reductions" };
     // The Resid runtime's IR (runtime/rt/, lowered by boot.sh).
     Str rhome  =  environment.get("RESID_HOME");
     Str rtr  =  pick_opt(argc, "-rtr", if (rhome == "") { "build/boot/rt.ll" } else { rhome + "/rt.ll" });

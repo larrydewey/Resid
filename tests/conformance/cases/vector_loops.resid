@@ -1,0 +1,37 @@
+// Counted float loops over lists (lower.resid vector loops): the fast copy
+// under its guard, lists holding boxed floats (0.0, a subnormal) that send
+// it back to the checked loop, and parameters past the guard's bound.
+Float term(Int i, Int j) {
+    Int s = i + j;
+    return 1.0 / (Float)(s * (s + 1) / 2 + i + 1);
+}
+
+Float row(Int i, Int j, Int n, List(Float) v, Float acc) {
+    if (j >= n) { return acc; }
+    return row(i, j + 1, n, v, acc + term(i, j) * v[j]);
+}
+
+// The transposed term: the same loop shape with the arguments swapped.
+Float col(Int i, Int j, Int n, List(Float) v, Float acc) {
+    if (j >= n) { return acc; }
+    return col(i, j + 1, n, v, acc - term(j, i) * v[j] / 3.0);
+}
+
+List(Float) build(Int k, Int n, Float x, List(Float) acc) {
+    if (k >= n) { return acc; }
+    return build(k + 1, n, x, acc.concat([x + (Float)k * 0.5]));
+}
+
+Int main() {
+    List(Float) e = [];
+    List(Float) v = build(0, rt 100, 1.0, e);
+    List(Float) z = build(0, rt 100, 0.0, e);
+    List(Float) tiny = [rt 0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001, 2.0, 3.0];
+    List(Float) big = build(0, rt 40000, 1.0, e);
+    println(f"{row(3, 0, 100, v, 0.0)} {col(3, 0, 100, v, 0.0)}");
+    println(f"{row(3, 0, 100, z, 0.0)} {col(7, 5, 60, z, 1.5)}");
+    println(f"{row(0, 0, 3, tiny, 0.0)} {row(0, 2, 3, tiny, 0.0)}");
+    println(f"{row(2, 0, 40000, big, 0.0)} {row(100000, 0, 100, v, 0.0)}");
+    println(f"{row(5, 50, 100, v, 0.25)} {row(5, 100, 100, v, 0.25)} {row(5, 120, 100, v, 0.25)}");
+    return 0;
+}
