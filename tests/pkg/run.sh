@@ -22,7 +22,8 @@ pass=0; fail=0
 ok()  { pass=$((pass + 1)); }
 bad() { fail=$((fail + 1)); echo "FAIL $1"; }
 SRVS=""
-cleanup() { for p in $SRVS; do kill "$p" 2>/dev/null; done; rm -rf "$W"; }
+# serve() runs in $(...) subshells, so its servers' pids go to a file too.
+cleanup() { for p in $SRVS $(cat "$W/srv.pids" 2>/dev/null); do kill "$p" 2>/dev/null; done; rm -rf "$W"; }
 trap cleanup EXIT
 
 # Start `resid-pkg serve` on <dir>; echoes the port it bound to. The server
@@ -32,7 +33,7 @@ trap cleanup EXIT
 serve() {  # dir
     local pf="$W/port.$RANDOM$RANDOM"
     "$PKG" serve "$1" --port 0 --port-file "$pf" > "$pf.log" 2>&1 &
-    SRVS="$SRVS $!"
+    echo "$!" >> "$W/srv.pids"
     local i=0
     while [ ! -s "$pf" ] && [ $i -lt 150 ]; do sleep 0.1; i=$((i + 1)); done
     cat "$pf" 2>/dev/null
