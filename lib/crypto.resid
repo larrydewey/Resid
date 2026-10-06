@@ -661,57 +661,29 @@ pub Str b64_char(Int v) {
 
 // Hex-encode helper for byte lists is hex_encode; base64 here:
 pub Str base64_encode(List(Int) bytes) {
-    Int end = bytes.len();
-    return b64_enc(bytes, 0, end, "");
+    return b64_enc(bytes, 0, bytes.len(), StrBuf()).finish();
 }
 
-pub Str b64_enc(List(Int) bytes, Int i, Int end, Str acc) {
+// The alphabet's code point for v (0..63).
+Int b64_code(Int v) {
+    if (v < 26) { return v + 65; }
+    if (v < 52) { return v + 71; }
+    if (v < 62) { return v - 4; }
+    return if (v == 62) { 43 } else { 47 };
+}
+
+// Three bytes (fewer at the end, padded with `=`) per four characters,
+// appended in place.
+pub StrBuf b64_enc(List(Int) bytes, Int i, Int end, StrBuf acc) {
     if (i >= end) { return acc; }
     Int rem = end - i;
-    if (rem >= 3) {
-        Int b0 = bytes[i];
-        Int o1 = i + 1;
-        Int b1 = bytes[o1];
-        Int o2 = i + 2;
-        Int b2 = bytes[o2];
-        Int s16 = b1 << 8;
-        Int nraw = (b0 << 16) | s16;
-        Int n = nraw | b2;
-        Int q6 = (n >> 18) & 63;
-        Str c0 = b64_char(q6);
-        Int m12 = (n >> 12) & 63;
-        Str c1 = b64_char(m12);
-        Int m6 = (n >> 6) & 63;
-        Str c2 = b64_char(m6);
-        Str c3 = b64_char(n & 63);
-        Str acc2 = ((acc + c0) + c1) + c2;
-        Str acc3 = acc2 + c3;
-        Int ni = i + 3;
-        return b64_enc(bytes, ni, end, acc3);
-    }
-    if (rem == 2) {
-        Int b0 = bytes[i];
-        Int o1 = i + 1;
-        Int b1 = bytes[o1];
-        Int s8 = b1 << 8;
-        Int n = (b0 << 16) | s8;
-        Int q6 = (n >> 18) & 63;
-        Str c0 = b64_char(q6);
-        Int m12 = (n >> 12) & 63;
-        Str c1 = b64_char(m12);
-        Int m6 = (n >> 6) & 63;
-        Str c2 = b64_char(m6);
-        Str acc2 = ((acc + c0) + c1) + c2;
-        return acc2 + "=";
-    }
-    Int b0 = bytes[i];
-    Int n = b0 << 16;
-    Int q6 = (n >> 18) & 63;
-    Str c0 = b64_char(q6);
-    Int m12 = (n >> 12) & 63;
-    Str c1 = b64_char(m12);
-    Str acc2 = (acc + c0) + c1;
-    return acc2 + "==";
+    Int b1 = if (rem > 1) { bytes[i + 1] } else { 0 };
+    Int b2 = if (rem > 2) { bytes[i + 2] } else { 0 };
+    Int n = (bytes[i] << 16) | (b1 << 8) | b2;
+    StrBuf a = acc.push_char(b64_code((n >> 18) & 63)).push_char(b64_code((n >> 12) & 63));
+    StrBuf b = a.push_char(if (rem > 1) { b64_code((n >> 6) & 63) } else { 61 });
+    StrBuf c = b.push_char(if (rem > 2) { b64_code(n & 63) } else { 61 });
+    return b64_enc(bytes, i + 3, end, c);
 }
 
 // ─── Base64 decoding (RFC 4648 standard alphabet) ────────────────────

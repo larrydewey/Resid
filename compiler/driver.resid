@@ -846,9 +846,12 @@ Str fixed_arr_ty(Str ty) {
     if (is_bytes_fixed(ty)) {
         return f"[{fixed_cap(ty)} x i8]";
     }
-    Str inner = ll_ty(fixed_elem(ty));
-    return f"[{fixed_cap(ty)} x " + inner + "]";
+    return f"[{fixed_cap(ty)} x " + fixed_slot_ty(fixed_elem(ty)) + "]";
 }
+
+// How an element of a List(T, N) is stored: a fixed-capacity element
+// inline (its own array), anything else as its LLVM type.
+Str fixed_slot_ty(Str ety) { return if (is_fixed_type(ety)) { fixed_arr_ty(ety) } else { ll_ty(ety) }; }
 
 // Bytes of one LLVM scalar of type t.
 Int ll_size(Str t) {
@@ -864,14 +867,40 @@ Int ll_size(Str t) {
 Int fixed_bytes(Str ty) {
     if (is_str_fixed(ty)) { return fixed_cap(ty) + 1; }
     if (is_bytes_fixed(ty)) { return fixed_cap(ty); }
-    return fixed_cap(ty) * ll_size(ll_ty(fixed_elem(ty)));
+    Str ety = fixed_elem(ty);
+    Int each = if (is_fixed_type(ety)) { fixed_bytes(ety) } else { ll_size(ll_ty(ety)) };
+    return fixed_cap(ty) * each;
 }
 
-// Zeroed storage for a fixed value: region memory like any value, so it may be returned or stored.
+// Zeroed storage for a fixed value, in the frame (spec §5, §44): an
+// alloca the function's entry block takes (tagged so the hoisting and
+// tail-call passes know it), zeroed where the value is made. A value that
+// outlives the frame is copied: a result through resid_fixed_ret, a loop
+// parameter into its own slot at the back edge, a record field inline,
+// a container element into the container's storage.
 List(Str) fixed_alloc(Str reg, Str ty) {
     Int n = fixed_bytes(ty);
-    return [reg + f" = call ptr @resid_gmalloc(i64 {n})", "call void @llvm.memset.p0.i64(ptr " + reg + f", i8 0, i64 {n}, i1 false)"];
+    List(Str) z = [fixed_alloca(reg, n), "call void @llvm.memset.p0.i64(ptr " + reg + f", i8 0, i64 {n}, i1 false)"];
+    return if (fx_text(ty)) { z.concat([fx_drop(reg, n)]) } else { z };
 }
+
+// Whether fixed storage of type t holds text. The runtime caches string
+// indexes by address, and frame memory is reused with other contents, so
+// each write of such storage drops what was cached for its range.
+Bool fx_text(Str t) {
+    if (is_str_fixed(t)) { return true; }
+    return is_list_fixed(t) && fx_text(fixed_elem(t));
+}
+
+Str fx_drop(Str p, Int n) { return "call void @resid_str_index_drop(ptr " + p + f", i64 {n})"; }
+
+// n bytes of fixed storage copied from src into dst (a no-op when equal).
+Str fx_copy(Str dst, Str src, Int n, Bool text) { return "call ptr @resid_fx_move(ptr " + dst + ", ptr " + src + f", i64 {n}, i8 " + (if (text) { "1" } else { "0" }) + ")"; }
+
+Str fixed_alloca(Str reg, Int n) { return reg + f" = alloca [{fx_n(n)} x i8], align 16 ; fixed"; }
+
+// An alloca of zero bytes is still a distinct address.
+Int fx_n(Int n) { return if (n < 1) { 1 } else { n }; }
 
 // The LLVM zero literal for an `ll_ty`-produced type string — used to
 // build a type-correct implicit `ret` when a function's body falls
@@ -922,7 +951,7 @@ Str fam_head(Str ty) {
 // precision, 34 for a bare `Dec` or an `m` literal) is static.
 // Typed and linear-accumulator map/set entry points (see lin_* below).
 List(Str) hdr_map_typed() {
-    return ["declare ptr @resid_map_transient(ptr)", "declare ptr @resid_map_freeze(ptr)", "declare ptr @resid_map_put(ptr, i8, i8, i64, i8, i64)", "declare ptr @resid_map_del(ptr, i8, i8, i64)", "declare ptr @resid_set_put(ptr, i8, i8, i64)", "declare i128 @resid_map_find(ptr, i8, i64, i8)", "declare i8 @resid_map_has(ptr, i8, i64)", "declare ptr @resid_rec_new(i64, i8)", "declare ptr @resid_rec_reuse(ptr, i64)", "declare void @resid_rec_share(ptr)", "declare ptr @resid_str_keep(ptr)", "declare ptr @resid_map_evac(ptr, i8, i8)", "declare ptr @resid_list_evac(ptr)", "declare ptr @resid_dec_evac(ptr)", "declare void @resid_carry_free(i8, ptr)", "declare ptr @resid_map_list_push(ptr, i8, i8, i64, ptr, ptr)", "declare ptr @resid_map_format_k(ptr, i8, i8)"];
+    return ["declare ptr @resid_map_transient(ptr)", "declare ptr @resid_map_freeze(ptr)", "declare ptr @resid_map_put(ptr, i8, i8, i64, i8, i64)", "declare ptr @resid_map_del(ptr, i8, i8, i64)", "declare ptr @resid_set_put(ptr, i8, i8, i64)", "declare i128 @resid_map_find(ptr, i8, i64, i8)", "declare i8 @resid_map_has(ptr, i8, i64)", "declare ptr @resid_rec_new(i64, i8)", "declare ptr @resid_rec_reuse(ptr, i64)", "declare void @resid_rec_share(ptr)", "declare ptr @resid_str_keep(ptr)", "declare ptr @resid_map_evac(ptr, i8, i8)", "declare ptr @resid_list_evac(ptr)", "declare ptr @resid_dec_evac(ptr)", "declare i64 @resid_loop_enter()", "declare i1 @resid_loop_due(i64)", "declare ptr @resid_loop_move(i64, i64)", "declare ptr @resid_loop_exit(i64, i64)", "declare ptr @resid_mv_str(ptr, ptr)", "declare ptr @resid_mv_list(ptr, ptr)", "declare ptr @resid_mv_list_f(ptr, ptr, ptr)", "declare ptr @resid_mv_map(ptr, i8, i8, ptr)", "declare ptr @resid_mv_rec(ptr, i64, i8, ptr)", "declare ptr @resid_mv_dec(ptr, ptr)", "declare ptr @resid_map_list_push(ptr, i8, i8, i64, ptr, ptr)", "declare ptr @resid_map_format_k(ptr, i8, i8)"];
 }
 
 // Runtime declarations added after the long hdr_core lists; both mains
@@ -1470,6 +1499,8 @@ Bool env_has_growbuf(List(Str) env, Str val) {
 
 // ─── Expression codegen: threaded register/label state ─────────
 
+// tail: the value is a call returned as it is, which wrote the function's
+// own result slot (a fixed-capacity result, lw_fx_arg in lower.resid).
 type GT = { Int pos; Str val; Str ty; Int cnt; Str err; List(Str) glines; List(Str) lines; Int tmp; Int lbl; Bool tail; };
 
 Int fn_index_at(Funcs f, Str name, Int i) {
@@ -1562,6 +1593,8 @@ Int field_slot_at(Str fields, Str fname, Int i, Int slot) {
 // 128-bit number, four for 256, eight for 512, else one (pointers and
 // narrower scalars).
 Int field_words(Str ty) {
+    // A fixed-capacity field is stored inline (spec §44).
+    if (is_fixed_type(str_trim(ty))) { return (fixed_bytes(str_trim(ty)) + 7) / 8; }
     Str lt = ll_ty(str_trim(ty));
     if (lt == "i128" || lt == "fp128") { return 2; }
     if (lt == "i256") { return 4; }
@@ -2326,7 +2359,35 @@ Str wide_unbox_fn(Str t) { return "@resid_unbox_" + (if (str_has_prefix_cg(num_n
 // Heap-box a value for use as a sum-variant payload slot (spec §10).
 // Scalars become resid_box_i64/f64/bool; Str and composites pass through
 // (they are already pointers). Mirrors stage-1 codegen's box_scalar.
+// A fixed-capacity value going into a container (a list, map, option,
+// closure, ...) is copied into storage of its own that lives with the
+// container: the value itself is in a frame the container may outlive.
+List(Str) fx_copy_lines(Str dst, Str src, Str ty) {
+    Int n = fx_n(fixed_bytes(ty));
+    return [dst + f" = call ptr @resid_gmalloc(i64 {n})", fx_copy(dst, src, n, fx_text(ty))];
+}
+
+// Reading the element of type ety at `slot` of a List(T, N): a fixed
+// element is stored inline, so the value is the slot's address.
+Str fx_elem_read(Str dst, Str ety, Str slot) {
+    if (is_fixed_type(ety)) { return dst + " = getelementptr i8, ptr " + slot + ", i64 0"; }
+    return dst + " = load " + ll_ty(ety) + ", ptr " + slot;
+}
+
+// Storing value v of type ety into `slot`: a fixed element by copy.
+Str fx_elem_store(Str ety, Str v, Str slot) {
+    if (is_fixed_type(ety)) { return fx_copy(slot, v, fixed_bytes(ety), fx_text(ety)); }
+    return "store " + ll_ty(ety) + " " + v + ", ptr " + slot;
+}
+
+GT fx_box(GT v) {
+    Int t1 = v.tmp + 1;
+    Str r = f"%t{t1}";
+    return GT {.pos = v.pos, .val = r, .ty = v.ty, .cnt = v.cnt, .err = "", .glines = v.glines, .lines = v.lines.concat(fx_copy_lines(r, v.val, v.ty)), .tmp = t1, .lbl = v.lbl, .tail = false};
+}
+
 GT box_heap_(Str s, GT v, List(Str) env, Funcs fs) {
+    if (is_fixed_type(v.ty)) { return fx_box(v); }
     // A closure value is already a pointer (its environment array), so it
     // passes through like Str and the other composites. Without this it fell
     // through to the scalar path and got wrapped in resid_box_i64, which
@@ -3039,7 +3100,10 @@ List(Str) clos_store_lines(List(Str) vals, List(Str) tys, Int n, Int idx, Str sl
     Str ty = tys[idx];
     Str g1 = f"%t{tbase}";
     Str storeval = if (cap_is_i64_int(ty)) { val } else { g1 };
-    List(Str) conv = if (cap_is_i64_int(ty)) { nil_list() } else if (ty == "Bool") { [g1 + " = zext i1 " + val + " to i64"] } else if (ty == "Float" || ty == "Float(64)") { [g1 + " = bitcast double " + val + " to i64"] } else { [g1 + " = ptrtoint ptr " + val + " to i64"] };
+    // A captured fixed value is copied for the closure (it may outlive
+    // this frame).
+    Str fxc = g1 + ".fx";
+    List(Str) conv = if (is_fixed_type(ty)) { fx_copy_lines(fxc, val, ty).concat([g1 + " = ptrtoint ptr " + fxc + " to i64"]) } else if (cap_is_i64_int(ty)) { nil_list() } else if (ty == "Bool") { [g1 + " = zext i1 " + val + " to i64"] } else if (ty == "Float" || ty == "Float(64)") { [g1 + " = bitcast double " + val + " to i64"] } else { [g1 + " = ptrtoint ptr " + val + " to i64"] };
     Str g2 = f"%t{tbase + 1}";
     Str offl = g2 + " = getelementptr i64, ptr " + sla + f", i64 {idx + 1}";
     Str stl = "store i64 " + storeval + ", ptr " + g2;
@@ -3383,11 +3447,13 @@ GT arith_saturating(Str op, Bool uvar, Str ty, GT a, GT b) {
 // fall back to the ordinary numeric-conversion cast path.
 GT cg_cast_fixed(GT inner, Str toty, GT c) {
     Bool src_str_like = inner.ty == "Str" || is_str_fixed(inner.ty) || inner.ty == "Bytes" || is_bytes_fixed(inner.ty);
-    if (toty == "Str" && (is_str_fixed(inner.ty) || is_bytes_fixed(inner.ty))) {
-        return GT {.pos = inner.pos, .val = inner.val, .ty = "Str", .cnt = 0, .err = "", .glines = inner.glines, .lines = inner.lines, .tmp = inner.tmp, .lbl = inner.lbl, .tail = false};
-    }
-    if (toty == "Bytes" && is_bytes_fixed(inner.ty)) {
-        return GT {.pos = inner.pos, .val = inner.val, .ty = "Bytes", .cnt = 0, .err = "", .glines = inner.glines, .lines = inner.lines, .tmp = inner.tmp, .lbl = inner.lbl, .tail = false};
+    // The heap form is a copy of the text: the fixed value's storage is in
+    // a frame, and the result may outlive it.
+    Bool to_text = (toty == "Str" && (is_str_fixed(inner.ty) || is_bytes_fixed(inner.ty))) || (toty == "Bytes" && is_bytes_fixed(inner.ty));
+    if (to_text) {
+        Str r = f"%t{inner.tmp + 1}";
+        List(Str) l1 = inner.lines.concat([r + " = call ptr @resid_fixed_text(ptr " + inner.val + f", i64 {fixed_bytes(inner.ty)})"]);
+        return GT {.pos = inner.pos, .val = r, .ty = toty, .cnt = 0, .err = "", .glines = inner.glines, .lines = l1, .tmp = inner.tmp + 1, .lbl = inner.lbl, .tail = false};
     }
     if (is_str_fixed(toty) && src_str_like) {
         Int cap = fixed_cap(toty) + 1;
@@ -3432,7 +3498,7 @@ List(Str) fxbox_stores(Str arrty, Str base, Str ety, Str sla, Int i, Int n, Int 
     Str slot = f"%t{tbase}";
     Str elemv = f"%t{tbase + 1}";
     List(Str) a0 = acc.concat([slot + " = getelementptr inbounds " + arrty + ", ptr " + base + f", i64 0, i64 {i}"]);
-    List(Str) a1 = a0.concat([elemv + " = load " + ll_ty(ety) + ", ptr " + slot]);
+    List(Str) a1 = a0.concat([fx_elem_read(elemv, ety, slot)]);
     Str bx = lst_box_reg(ety, elemv, tbase + 2);
     List(Str) a2 = a1.concat(lst_box_lines(ety, elemv, tbase + 2));
     Str dstslot = f"%t{tbase + 4}";
@@ -3473,7 +3539,7 @@ GT cg_box_fixed_list(GT inner, Str ety, Int n, GT c) {
 // Register holding the boxed (heap) form of a literal element value. Scalars
 // go through a resid_box_* call into %t{tb}; pointers pass through as-is.
 Str lst_box_reg(Str ety, Str ev, Int tb) {
-    if (int_fam(ety) || ety == "Bool" || ety == "Float" || str_has_prefix_cg(ety, "Float(")) {
+    if (is_fixed_type(ety) || int_fam(ety) || ety == "Bool" || ety == "Float" || str_has_prefix_cg(ety, "Float(")) {
         return f"%t{tb}";
     }
     return ev;
@@ -3482,6 +3548,7 @@ Str lst_box_reg(Str ety, Str ev, Int tb) {
 // IR lines computing the boxed form of a literal element into %t{tb}.
 List(Str) lst_box_lines(Str ety, Str ev, Int tb) {
     Str r = f"%t{tb}";
+    if (is_fixed_type(ety)) { return fx_copy_lines(r, ev, ety); }
     if (ety == "Bool") {
         Str z = f"%t{tb + 1}";
         Str cnv = z + " = zext i1 " + ev + " to i8";
@@ -4447,12 +4514,15 @@ CapPP cap_maybe_inject(Bool sandboxed, List(Str) lines, List(Str) glines, Int n)
 //   - a tail call to any other function with the identical LLVM signature
 //     becomes `musttail`, which LLVM guarantees to lower as a jump.
 // Allocas are hoisted into the entry block (their sizes are static), so a
-// loop iteration does not grow the frame. Functions that allocate
-// fixed-size stack values are left alone: a pointer into this frame may be
-// an argument, and reusing (or discarding) the frame would change it.
+// loop iteration does not grow the frame. A fixed-capacity value (spec
+// §44) lives in the frame: a self call copies each fixed parameter into
+// that parameter's own slot (staged first when there are several, as one
+// may be read from another's slot), and a function holding any makes no
+// musttail call, which would free the frame its arguments may be in.
 
 type TcoSite = { Bool ok; Str callee; Str reg; Str call; List(Str) vals; };
 type TcoAcc = { List(Str) lines; List(Str) allocas; List(Str) inc; Int n; Int nmust; };
+type TcoFx = { List(Int) sizes; List(Bool) texts; Bool frame; Bool sret; };
 
 // "%t5 = tail call ptr @f(ptr %p0, i64 %t4)" -> reg, callee, typed args.
 TcoSite tco_parse_call(Str line, Str rty) {
@@ -4483,7 +4553,9 @@ TcoSite tco_parse_call(Str line, Str rty) {
 // Each argument is `<param type> <single value token>`, and never a
 // pointer into this frame (an alloca), which the jump would overwrite and
 // musttail would free.
-Bool tco_args_match(List(Str) vals, List(Str) ptys, List(Str) frame, Int j) {
+// A fixed parameter of a self call (fxs[j] > 0) may be in the frame: it
+// is copied into its slot.
+Bool tco_args_match(List(Str) vals, List(Str) ptys, List(Str) frame, List(Int) fxs, Int j) {
     if (j == 0 && vals.len() != ptys.len()) { return false; }
     if (j >= ptys.len()) { return true; }
     Str pre = ptys[j] + " ";
@@ -4491,8 +4563,55 @@ Bool tco_args_match(List(Str) vals, List(Str) ptys, List(Str) frame, Int j) {
     if (!str_starts_with(v, pre)) { return false; }
     Str val = str_slice(v, str_len(pre), str_len(v));
     if (val == "" || str_find_char(val, 32, 0) >= 0) { return false; }
-    if (frame.contains(val)) { return false; }
-    return tco_args_match(vals, ptys, frame, j + 1);
+    Bool fx = j < fxs.len() && fxs[j] > 0;
+    if (!fx && frame.contains(val)) { return false; }
+    return tco_args_match(vals, ptys, frame, fxs, j + 1);
+}
+
+// The copies of a self call's fixed arguments into their slots (site k),
+// and the values the loop's phis then take.
+type TcoCp = { List(Str) lines; List(Str) vals; };
+
+TcoCp tco_fx_copies(List(Str) vals, List(Str) ptys, TcoFx fx, Int k) {
+    Bool staged = tco_fx_count(fx.sizes, 0, 0) > 1;
+    List(Str) st = tco_fx_stage(vals, ptys, fx, k, staged, 0, []);
+    return tco_fx_commit(vals, ptys, fx, k, staged, 0, TcoCp {.lines = st, .vals = []});
+}
+
+Str tco_text(TcoFx fx, Int j) { return if (j < fx.texts.len() && fx.texts[j]) { "1" } else { "0" }; }
+
+Int tco_fx_count(List(Int) fxs, Int j, Int n) {
+    if (j >= fxs.len()) { return n; }
+    return tco_fx_count(fxs, j + 1, if (fxs[j] > 0) { n + 1 } else { n });
+}
+
+Str tco_val(List(Str) vals, List(Str) ptys, Int j) { return str_slice(vals[j], str_len(ptys[j]) + 1, str_len(vals[j])); }
+
+List(Str) tco_fx_stage(List(Str) vals, List(Str) ptys, TcoFx fx, Int k, Bool staged, Int j, List(Str) acc) {
+    if (!staged || j >= ptys.len()) { return acc; }
+    if (j >= fx.sizes.len() || fx.sizes[j] == 0) { return tco_fx_stage(vals, ptys, fx, k, staged, j + 1, acc); }
+    Str p = f"%p{j}";
+    Str line = p + f".g{k} = call ptr @resid_fx_stage(ptr " + p + ".ft, ptr " + tco_val(vals, ptys, j) + ", ptr " + p + f".fs, i64 {fx.sizes[j]}, i8 " + tco_text(fx, j) + ")";
+    return tco_fx_stage(vals, ptys, fx, k, staged, j + 1, acc.concat([line]));
+}
+
+TcoCp tco_fx_commit(List(Str) vals, List(Str) ptys, TcoFx fx, Int k, Bool staged, Int j, TcoCp acc) {
+    if (j >= ptys.len()) { return acc; }
+    if (j >= fx.sizes.len() || fx.sizes[j] == 0) { return tco_fx_commit(vals, ptys, fx, k, staged, j + 1, TcoCp {.lines = acc.lines, .vals = acc.vals.concat([vals[j]])}); }
+    Str p = f"%p{j}";
+    Str src = if (staged) { p + f".g{k}" } else { tco_val(vals, ptys, j) };
+    Str c = p + f".c{k}";
+    Str line = c + " = call ptr @resid_fx_move(ptr " + p + ".fs, ptr " + src + f", i64 {fx.sizes[j]}, i8 " + tco_text(fx, j) + ")";
+    return tco_fx_commit(vals, ptys, fx, k, staged, j + 1, TcoCp {.lines = acc.lines.concat([line]), .vals = acc.vals.concat([ptys[j] + " " + c])});
+}
+
+// Each fixed parameter's slot (and staging when several are copied).
+List(Str) tco_fx_slots(List(Int) fxs, Int j, List(Str) acc) {
+    if (j >= fxs.len()) { return acc; }
+    if (fxs[j] == 0) { return tco_fx_slots(fxs, j + 1, acc); }
+    Str p = f"%p{j}";
+    List(Str) st = if (tco_fx_count(fxs, 0, 0) > 1) { [fixed_alloca(p + ".ft", fxs[j])] } else { [] };
+    return tco_fx_slots(fxs, j + 1, acc.concat([fixed_alloca(p + ".fs", fxs[j])]).concat(st));
 }
 
 Bool tco_is_alloca(Str line) {
@@ -4502,8 +4621,16 @@ Bool tco_is_alloca(Str line) {
 // Argument arrays handed to the runtime (copied out before any call
 // returns) and for-loop counters (re-initialized on every loop entry).
 Bool tco_alloca_ok(Str line) {
-    if (str_starts_with(line, "%lia.") || str_starts_with(line, "%k.a")) { return true; }
+    if (str_starts_with(line, "%lia.") || str_starts_with(line, "%k.a") || tco_is_fixed(line)) { return true; }
     return str_contains(line, " = alloca [") && str_ends_with(line, " x ptr]");
+}
+
+Bool tco_is_fixed(Str line) { return str_ends_with(line, "; fixed"); }
+
+Bool tco_has_fixed(List(Str) ls, Int i) {
+    if (i >= ls.len()) { return false; }
+    if (tco_is_fixed(ls[i])) { return true; }
+    return tco_has_fixed(ls, i + 1);
 }
 
 Bool tco_frame_ok(List(Str) ls, Int i) {
@@ -4554,33 +4681,38 @@ List(Str) tco_add_inc(List(Str) inc, List(Str) vals, List(Str) ptys, Str lb, Int
     return tco_add_inc(inc, vals, ptys, lb, j + 1, out.concat([prev + ", [ " + val + ", %" + lb + " ]"]));
 }
 
-TcoAcc tco_scan(List(Str) ls, Int i, Str fname, Str rty, List(Str) ptys, List(Str) frame, TcoAcc acc) {
+TcoAcc tco_scan(List(Str) ls, Int i, Str fname, Str rty, List(Str) ptys, List(Str) frame, TcoFx fx, TcoAcc acc) {
     if (i >= ls.len()) { return acc; }
     Str line = ls[i];
     if (tco_is_alloca(line)) {
         TcoAcc a1 = TcoAcc {.lines = acc.lines, .allocas = acc.allocas.concat([line]), .inc = acc.inc, .n = acc.n, .nmust = acc.nmust};
-        return tco_scan(ls, i + 1, fname, rty, ptys, frame, a1);
+        return tco_scan(ls, i + 1, fname, rty, ptys, frame, fx, a1);
     }
     Str nxt = if (i + 1 < ls.len()) { ls[i + 1] } else { "" };
-    TcoSite st = tco_parse_call(line, rty);
+    TcoSite st0 = tco_parse_call(line, rty);
+    // A function returning through its caller's slot passes it on to itself.
+    Bool own = !fx.sret || (st0.vals.len() > 0 && st0.vals[0] == "ptr %fx.ret");
+    TcoSite st = if (fx.sret && own && st0.callee == fname) { TcoSite {.ok = st0.ok, .callee = st0.callee, .reg = st0.reg, .call = st0.call, .vals = st0.vals[1..st0.vals.len()]} } else { st0 };
     Bool is_tail = st.ok && nxt == "ret " + rty + " " + st.reg;
-    Bool args_ok = is_tail && tco_args_match(st.vals, ptys, frame, 0);
-    if (args_ok && st.callee == fname) {
+    Bool self = st.callee == fname && own;
+    Bool args_ok = is_tail && tco_args_match(st.vals, ptys, frame, if (self) { fx.sizes } else { [] }, 0);
+    if (args_ok && self) {
         Str lb = f"tco.s{acc.n}";
-        List(Str) l2 = acc.lines.concat(["br label %" + lb, lb + ":", "br label %tco.head"]);
-        List(Str) inc2 = tco_add_inc(acc.inc, st.vals, ptys, lb, 0, nil_list());
+        TcoCp cp = tco_fx_copies(st.vals, ptys, fx, acc.n);
+        List(Str) l2 = acc.lines.concat(cp.lines).concat(["br label %" + lb, lb + ":", "br label %tco.head"]);
+        List(Str) inc2 = tco_add_inc(acc.inc, cp.vals, ptys, lb, 0, nil_list());
         TcoAcc a2 = TcoAcc {.lines = l2, .allocas = acc.allocas, .inc = inc2, .n = acc.n + 1, .nmust = acc.nmust};
-        return tco_scan(ls, i + 2, fname, rty, ptys, frame, a2);
+        return tco_scan(ls, i + 2, fname, rty, ptys, frame, fx, a2);
     }
-    if (args_ok && tco_reg_ty(rty) && tco_reg_tys(ptys, 0)) {
+    if (args_ok && !fx.frame && tco_reg_ty(rty) && tco_reg_tys(ptys, 0)) {
         // The runtime uses plain tail calls: a musttail keeps its
         // function from inlining into callers.
         List(Str) l3 = acc.lines.concat([st.reg + (if (resid_rtmod()) { " = tail " } else { " = musttail " }) + st.call]);
         TcoAcc a3 = TcoAcc {.lines = l3, .allocas = acc.allocas, .inc = acc.inc, .n = acc.n, .nmust = acc.nmust + 1};
-        return tco_scan(ls, i + 1, fname, rty, ptys, frame, a3);
+        return tco_scan(ls, i + 1, fname, rty, ptys, frame, fx, a3);
     }
     TcoAcc a4 = TcoAcc {.lines = acc.lines.concat([line]), .allocas = acc.allocas, .inc = acc.inc, .n = acc.n, .nmust = acc.nmust};
-    return tco_scan(ls, i + 1, fname, rty, ptys, frame, a4);
+    return tco_scan(ls, i + 1, fname, rty, ptys, frame, fx, a4);
 }
 
 List(Str) tco_phis(List(Str) ptys, List(Str) inc, Str mask, Int j, List(Str) out) {
@@ -4686,10 +4818,15 @@ List(Str) lin_entry(Str mask, Int i, List(Str) acc) {
 
 // Whole-function rewrite: header + entry + body -> own lines (without "}").
 // `head` is [defline, "entry:"]; `body` is everything after it.
-List(Str) tco_function(List(Str) head, List(Str) body, Str fname, Str rty, List(Str) ptys, Str defpre, Str defpost, Str mask) {
+// fxs: each parameter's fixed-capacity size (0 for none).
+// fxt: whether each fixed parameter holds text; sret: it returns through
+// `%fx.ret`, the caller's slot.
+List(Str) tco_function(List(Str) head, List(Str) body, Str fname, Str rty, List(Str) ptys, List(Int) fxs, List(Bool) fxt, Bool sret, Str defpre, Str defpost, Str mask) {
     if (!tco_frame_ok(body, 0)) { return head.concat(body); }
     List(Str) frame = tco_alloca_regs(body, 0, nil_list());
-    TcoAcc a = tco_scan(body, 0, fname, rty, ptys, frame, TcoAcc {.lines = nil_list(), .allocas = nil_list(), .inc = nil_list(), .n = 0, .nmust = 0});
+    TcoFx fx = TcoFx {.sizes = fxs, .texts = fxt, .frame = sret || tco_has_fixed(body, 0) || tco_fx_count(fxs, 0, 0) > 0, .sret = sret};
+    TcoAcc a0 = tco_scan(body, 0, fname, rty, ptys, frame, fx, TcoAcc {.lines = nil_list(), .allocas = nil_list(), .inc = nil_list(), .n = 0, .nmust = 0});
+    TcoAcc a = if (a0.n > 0) { TcoAcc {.lines = a0.lines, .allocas = a0.allocas.concat(tco_fx_slots(fxs, 0, [])), .inc = a0.inc, .n = a0.n, .nmust = a0.nmust} } else { a0 };
     if (a.n == 0) {
         if (a.nmust == 0) { return head.concat(body); }
         return head.concat(a.allocas).concat(a.lines);
@@ -9069,7 +9206,7 @@ Int main() {
         println("test error: no `test \"...\" { ... }` blocks found in " + path);
         return 2;
     }
-List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "declare i1 @eprintln(ptr)", "declare void @resid_cap_check(ptr)", "declare void @resid_cap_enter(ptr, i64)", "declare void @resid_cap_leave()", "declare ptr @malloc(i64)", "declare void @free(ptr)", "declare ptr @resid_str_concat(ptr, ptr)", "declare i8 @resid_str_eq(ptr, ptr)", "declare ptr @resid_fs_read_all(ptr)", "declare i8 @resid_fs_write_all(ptr, ptr)", "declare ptr @resid_fs_read_bytes(ptr)", "declare i8 @resid_fs_write_bytes(ptr, ptr)", "declare i8 @resid_fs_write_secret(ptr, ptr)", "declare ptr @resid_fs_sha256(ptr)", "declare i8 @resid_fs_append_bytes(ptr, ptr)", "declare ptr @resid_fs_open(ptr)", "declare ptr @resid_fs_read_handle(ptr)", "declare i8 @resid_fs_close(ptr)", "declare i8 @resid_fs_exists(ptr)", "declare i8 @resid_fs_is_dir(ptr)", "declare i8 @resid_fs_create_dir_all(ptr)", "declare ptr @resid_fs_list_dir(ptr)", "declare i64 @resid_args_count()", "declare ptr @resid_args_get(i64)", "declare i64 @resid_process_run(ptr)", "declare ptr @resid_env_get(ptr)", "declare i64 @str_char_at(ptr, i64)", "declare ptr @str_from_code(i64)", "declare i64 @str_len(ptr)", "declare ptr @str_slice(ptr, i64, i64)", "declare ptr @str_sb_new()", "declare ptr @str_sb_append(ptr, ptr)", "declare ptr @str_sb_append_cp(ptr, i64)", "declare ptr @str_sb_append_slice(ptr, ptr, i64, i64)", "declare ptr @str_sb_finish(ptr)", "declare i64 @resid_arena_push()", "declare i64 @resid_arena_pop()", "declare ptr @resid_list_str_persist_copy(ptr)", "declare i32 @resid_run_main(ptr)", "declare ptr @resid_list_const_i64(ptr, i64, ptr, ptr)", "declare ptr @resid_list_const_ptr(ptr, i64, ptr, ptr)", "declare ptr @resid_list_const_bool(ptr, i64, ptr, ptr)", "declare i64 @resid_crypto_random_byte()", "declare ptr @resid_read_line()", "declare i64 @resid_read_byte()", "declare i8 @resid_term_is_tty(i64)", "declare i64 @resid_term_cols()", "declare i64 @resid_term_rows()", "declare i8 @resid_term_raw()", "declare i8 @resid_term_restore()", "declare i64 @resid_clock_now_ns()", "declare i64 @resid_clock_now_sec()", "declare i64 @resid_clock_monotonic_ns()", "declare i64 @resid_clock_sleep_ns(i64)", "declare i64 @resid_dbg_spawn(ptr)", "declare i64 @resid_dbg_wait()", "declare i8 @resid_dbg_cont(i64, i64)", "declare i8 @resid_dbg_step(i64)", "declare i64 @resid_dbg_peek(i64, i64)", "declare i8 @resid_dbg_poke(i64, i64, i64)", "declare i64 @resid_dbg_reg(i64, i64)", "declare i8 @resid_dbg_set_pc(i64, i64)", "declare i64 @resid_dbg_signal()", "declare i64 @resid_dbg_exit_code()", "declare i8 @resid_dbg_kill()", "declare ptr @resid_dbg_f64(i64)", "declare i8 @resid_cpu_has_aesni()", "declare <2 x i64> @llvm.x86.aesni.aesenc(<2 x i64>, <2 x i64>)", "declare <2 x i64> @llvm.x86.aesni.aesenclast(<2 x i64>, <2 x i64>)", "declare i64 @resid_tcp_connect(ptr, i64)", "declare i8 @resid_tcp_send(i64, ptr)", "declare ptr @resid_tcp_recv_all(i64)", "declare i8 @resid_tcp_close(i64)", "declare i8 @resid_tcp_send_bin(i64, ptr)", "declare ptr @resid_tcp_recv_bin(i64, i64)", "declare i64 @resid_tcp_listen(i64)", "declare i64 @resid_tcp_bound_port(i64)", "declare i64 @resid_tcp_accept(i64)", "declare i64 @resid_tcp_listen_at(ptr, i64)", "declare ptr @resid_tcp_recv_some(i64, i64)", "declare i8 @resid_tcp_shutdown(i64)", "declare i8 @resid_tcp_deadline(i64, i64)", "declare ptr @resid_tcp_poll(ptr, ptr, i64)", "declare i64 @resid_tcp_send_some(i64, ptr)", "declare i64 @resid_tcp_accept_now(i64)", "declare ptr @str_trim(ptr)", "declare ptr @str_to_lower(ptr)", "declare ptr @str_to_upper(ptr)", "declare ptr @str_reverse(ptr)", "declare i8 @str_contains(ptr, ptr)", "declare i8 @str_starts_with(ptr, ptr)", "declare i8 @str_ends_with(ptr, ptr)", "declare ptr @str_repeat(ptr, i64)", "declare ptr @str_replace(ptr, ptr, ptr)", "declare ptr @str_split(ptr, ptr)", "declare ptr @str_join(ptr, ptr)", "declare i8 @str_is_int(ptr)", "declare i64 @str_parse_int(ptr)", "declare i8 @str_is_float(ptr)", "declare double @str_parse_float(ptr)", "declare i64 @str_count(ptr, ptr)", "declare i64 @abs_i64(i64)", "declare i64 @min_i64(i64, i64)", "declare i64 @max_i64(i64, i64)", "declare i64 @clamp_i64(i64, i64, i64)", "declare ptr @resid_list_new(i64, ptr, ptr)", "declare i64 @resid_list_len(ptr)", "declare ptr @resid_list_get(ptr, i64)", "declare ptr @resid_list_get_nc(ptr, i64)", "declare ptr @resid_list_vdata(ptr)", "declare i64 @resid_list_vlen(ptr)", "declare ptr @resid_list_get_v(ptr, i64, ptr, i64)", "declare ptr @resid_list_concat(ptr, ptr)", "declare ptr @resid_list_push(ptr, ptr)", "declare ptr @resid_listbuf_new()", "declare ptr @resid_listbuf_push(ptr, ptr)", "declare ptr @resid_listbuf_finish(ptr, ptr)", "declare ptr @resid_list_slice(ptr, i64, i64)", "declare ptr @resid_range_list(i64, i64)", "declare ptr @resid_range_list_incl(i64, i64)", "declare ptr @list_sort_ints(ptr)", "declare ptr @list_sort_wide(ptr, i64)", "declare ptr @list_sort_floats(ptr)", "declare ptr @list_sort_strs(ptr)", "declare ptr @list_reverse_ints(ptr)", "declare i8 @list_contains_int(ptr, i64)", "declare i8 @list_contains_str(ptr, ptr)", "declare i8 @list_contains_float(ptr, double)", "declare i64 @list_sum(ptr)", "declare double @list_sumf(ptr)", "declare ptr @list_sort_by(ptr, ptr)", "declare i64 @checked_add(i64, i64)", "declare i64 @checked_sub(i64, i64)", "declare i64 @checked_mul(i64, i64)", "declare i64 @checked_div(i64, i64)", "declare i64 @checked_uadd(i64, i64)", "declare i64 @checked_usub(i64, i64)", "declare i64 @checked_umul(i64, i64)", "declare i64 @checked_udiv(i64, i64)", "declare i64 @wrapping_add(i64, i64)", "declare i64 @wrapping_sub(i64, i64)", "declare i64 @wrapping_mul(i64, i64)", "declare i64 @wrapping_div(i64, i64)", "declare i64 @wrapping_uadd(i64, i64)", "declare i64 @wrapping_usub(i64, i64)", "declare i64 @wrapping_umul(i64, i64)", "declare i64 @wrapping_udiv(i64, i64)", "declare i64 @saturating_add(i64, i64)", "declare i64 @saturating_sub(i64, i64)", "declare i64 @saturating_mul(i64, i64)", "declare i64 @saturating_uadd(i64, i64)", "declare i64 @saturating_usub(i64, i64)", "declare i64 @saturating_umul(i64, i64)", "declare ptr @resid_set_new()", "declare ptr @resid_map_get(ptr, ptr)", "declare ptr @resid_map_insert(ptr, ptr, ptr)", "declare ptr @resid_map_remove(ptr, ptr)", "declare i8 @resid_map_contains(ptr, ptr)", "declare i64 @resid_map_len(ptr)", "declare ptr @resid_map_keys(ptr)", "declare ptr @resid_map_values(ptr)", "declare ptr @resid_map_format(ptr)", "declare ptr @resid_set_insert(ptr, ptr)", "declare ptr @resid_set_remove(ptr, ptr)", "declare i8 @resid_set_contains(ptr, ptr)", "declare i64 @resid_set_len(ptr)", "declare ptr @resid_set_union(ptr, ptr)", "declare ptr @resid_set_difference(ptr, ptr)", "declare ptr @resid_set_intersection(ptr, ptr)", "declare ptr @resid_set_to_list(ptr)", "declare ptr @resid_set_format(ptr)", "declare ptr @ToString(ptr)", "declare ptr @resid_list_to_string(ptr)", "declare ptr @resid_list_show(ptr, i64)", "declare void @resid_assert(i8, ptr)", "declare void @resid_todo(i8, ptr)", "declare ptr @resid_box_new(i64, i64, ptr, ptr)",         "declare ptr @resid_box_i64(i64)", "declare ptr @resid_box_f64(double)", "declare ptr @resid_box_bool(i8)", "declare ptr @resid_box_i128(i128)", "declare ptr @resid_box_u128(i128)", "declare i64 @resid_unbox_i64(ptr)", "declare double @resid_unbox_f64(ptr)", "declare i8 @resid_unbox_bool(ptr)", "declare i128 @resid_unbox_i128(ptr)", "declare i128 @resid_unbox_u128(ptr)", "declare ptr @resid_box_i256(i256)", "declare i256 @resid_unbox_i256(ptr)", "declare ptr @resid_box_u256(i256)", "declare i256 @resid_unbox_u256(ptr)", "declare ptr @resid_box_i512(i512)", "declare i512 @resid_unbox_i512(ptr)", "declare ptr @resid_box_u512(i512)", "declare i512 @resid_unbox_u512(ptr)", "declare ptr @Int128ToString(i128)", "declare ptr @UIntToString(i64)", "declare ptr @Int256ToString(i64, i64, i64, i64)", "declare ptr @UInt256ToString(i64, i64, i64, i64)", "declare ptr @Int512ToString(i64, i64, i64, i64, i64, i64, i64, i64)", "declare ptr @UInt512ToString(i64, i64, i64, i64, i64, i64, i64, i64)", "declare ptr @FloatToString(double)", "declare ptr @Float128ToString(fp128)", "declare ptr @BoolToString(i8)", "declare void @resid_overflow_check(i8)", "declare void @resid_div_check(i8)", "declare void @resid_conv_check(i8)", "declare {i8, i1} @llvm.sadd.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.sadd.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.sadd.with.overflow.i32(i32, i32)", "declare {i64, i1} @llvm.sadd.with.overflow.i64(i64, i64)", "declare {i128, i1} @llvm.sadd.with.overflow.i128(i128, i128)", "declare {i256, i1} @llvm.sadd.with.overflow.i256(i256, i256)", "declare {i512, i1} @llvm.sadd.with.overflow.i512(i512, i512)", "declare {i8, i1} @llvm.ssub.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.ssub.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.ssub.with.overflow.i32(i32, i32)", "declare {i64, i1} @llvm.ssub.with.overflow.i64(i64, i64)", "declare {i128, i1} @llvm.ssub.with.overflow.i128(i128, i128)", "declare {i256, i1} @llvm.ssub.with.overflow.i256(i256, i256)", "declare {i512, i1} @llvm.ssub.with.overflow.i512(i512, i512)", "declare {i8, i1} @llvm.smul.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.smul.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.smul.with.overflow.i32(i32, i32)", "declare {i64, i1} @llvm.smul.with.overflow.i64(i64, i64)", "declare {i128, i1} @llvm.smul.with.overflow.i128(i128, i128)", "declare {i256, i1} @llvm.smul.with.overflow.i256(i256, i256)", "declare {i512, i1} @llvm.smul.with.overflow.i512(i512, i512)", "declare {i8, i1} @llvm.uadd.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.uadd.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.uadd.with.overflow.i32(i32, i32)", "declare {i64, i1} @llvm.uadd.with.overflow.i64(i64, i64)", "declare {i128, i1} @llvm.uadd.with.overflow.i128(i128, i128)", "declare {i256, i1} @llvm.uadd.with.overflow.i256(i256, i256)", "declare {i512, i1} @llvm.uadd.with.overflow.i512(i512, i512)", "declare {i8, i1} @llvm.usub.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.usub.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.usub.with.overflow.i32(i32, i32)", "declare {i64, i1} @llvm.usub.with.overflow.i64(i64, i64)", "declare {i128, i1} @llvm.usub.with.overflow.i128(i128, i128)", "declare {i256, i1} @llvm.usub.with.overflow.i256(i256, i256)", "declare {i512, i1} @llvm.usub.with.overflow.i512(i512, i512)", "declare {i8, i1} @llvm.umul.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.umul.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.umul.with.overflow.i32(i32, i32)", "declare {i64, i1} @llvm.umul.with.overflow.i64(i64, i64)", "declare {i128, i1} @llvm.umul.with.overflow.i128(i128, i128)", "declare {i256, i1} @llvm.umul.with.overflow.i256(i256, i256)", "declare {i512, i1} @llvm.umul.with.overflow.i512(i512, i512)", "declare ptr @resid_str_from_codepoints(ptr)", "declare i64 @resid_str_to_fixed(ptr, ptr, i64)", "declare i64 @resid_bytes_to_fixed(ptr, ptr, i64)", "declare void @resid_index_abort(i64, i64, ptr) noreturn", "declare void @resid_abort(ptr) noreturn", "declare void @resid_expect_fail(ptr, ptr, ptr) noreturn", "declare i8 @resid_regex_match(ptr, ptr)", "declare i8 @resid_quiet()", "declare i8 @resid_quiet_set(i1)", "declare i64 @resid_mem_limit_set(i64)", "declare i64 @resid_bytes_len(ptr)", "declare ptr @Float32ToString(double)", "declare double @resid_close_tol(i64)", "declare ptr @resid_str_quote(ptr)", "declare ptr @resid_list_show_clo(ptr, ptr)", "declare i8 @resid_internals()", "declare i8 @resid_internals_set(i1)", "declare i8 @resid_rtmod()", "declare i8 @resid_rtmod_set(i1)", "declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)", "declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)", "declare ptr @llvm.threadlocal.address.p0(ptr)", "declare i8 @resid_expect_throws(ptr)", "declare i64 @resid_box_tag(ptr)", "declare i8 @resid_test_plan(i64, ptr)", "declare i64 @resid_test_run_closure(ptr, ptr)", "declare i64 @resid_test_run(ptr, ptr)", "declare i64 @resid_test_summary()", "@.fixedidx = private unnamed_addr constant [12 x i8] c\"fixed index\\00\"", "declare ptr @UInt128ToString(i128)", rt_itoa_def(), "declare i32 @resid_setjmp(ptr) returns_twice", rt_catch_def()];
+List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "declare i1 @eprintln(ptr)", "declare void @resid_cap_check(ptr)", "declare void @resid_cap_enter(ptr, i64)", "declare void @resid_cap_leave()", "declare ptr @malloc(i64)", "declare void @free(ptr)", "declare ptr @resid_str_concat(ptr, ptr)", "declare i8 @resid_str_eq(ptr, ptr)", "declare ptr @resid_fs_read_all(ptr)", "declare i8 @resid_fs_write_all(ptr, ptr)", "declare ptr @resid_fs_read_bytes(ptr)", "declare i8 @resid_fs_write_bytes(ptr, ptr)", "declare i8 @resid_fs_write_secret(ptr, ptr)", "declare ptr @resid_fs_sha256(ptr)", "declare i8 @resid_fs_append_bytes(ptr, ptr)", "declare ptr @resid_fs_open(ptr)", "declare ptr @resid_fs_read_handle(ptr)", "declare i8 @resid_fs_close(ptr)", "declare i8 @resid_fs_exists(ptr)", "declare i8 @resid_fs_is_dir(ptr)", "declare i8 @resid_fs_create_dir_all(ptr)", "declare ptr @resid_fs_list_dir(ptr)", "declare i64 @resid_args_count()", "declare ptr @resid_args_get(i64)", "declare i64 @resid_process_run(ptr)", "declare ptr @resid_env_get(ptr)", "declare i64 @str_char_at(ptr, i64)", "declare ptr @str_from_code(i64)", "declare i64 @str_len(ptr)", "declare ptr @str_slice(ptr, i64, i64)", "declare ptr @str_sb_new()", "declare ptr @str_sb_append(ptr, ptr)", "declare ptr @str_sb_append_cp(ptr, i64)", "declare ptr @str_sb_append_slice(ptr, ptr, i64, i64)", "declare ptr @str_sb_finish(ptr)", "declare i64 @resid_arena_push()", "declare i64 @resid_arena_pop()", "declare ptr @resid_list_str_persist_copy(ptr)", "declare i32 @resid_run_main(ptr)", "declare ptr @resid_list_const_i64(ptr, i64, ptr, ptr)", "declare ptr @resid_list_const_ptr(ptr, i64, ptr, ptr)", "declare ptr @resid_list_const_bool(ptr, i64, ptr, ptr)", "declare i64 @resid_crypto_random_byte()", "declare ptr @resid_read_line()", "declare i64 @resid_read_byte()", "declare i8 @resid_term_is_tty(i64)", "declare i64 @resid_term_cols()", "declare i64 @resid_term_rows()", "declare i8 @resid_term_raw()", "declare i8 @resid_term_restore()", "declare i64 @resid_clock_now_ns()", "declare i64 @resid_clock_now_sec()", "declare i64 @resid_clock_monotonic_ns()", "declare i64 @resid_clock_sleep_ns(i64)", "declare i64 @resid_dbg_spawn(ptr)", "declare i64 @resid_dbg_wait()", "declare i8 @resid_dbg_cont(i64, i64)", "declare i8 @resid_dbg_step(i64)", "declare i64 @resid_dbg_peek(i64, i64)", "declare i8 @resid_dbg_poke(i64, i64, i64)", "declare i64 @resid_dbg_reg(i64, i64)", "declare i8 @resid_dbg_set_pc(i64, i64)", "declare i64 @resid_dbg_signal()", "declare i64 @resid_dbg_exit_code()", "declare i8 @resid_dbg_kill()", "declare ptr @resid_dbg_f64(i64)", "declare i8 @resid_cpu_has_aesni()", "declare <2 x i64> @llvm.x86.aesni.aesenc(<2 x i64>, <2 x i64>)", "declare <2 x i64> @llvm.x86.aesni.aesenclast(<2 x i64>, <2 x i64>)", "declare i64 @resid_tcp_connect(ptr, i64)", "declare i8 @resid_tcp_send(i64, ptr)", "declare ptr @resid_tcp_recv_all(i64)", "declare i8 @resid_tcp_close(i64)", "declare i8 @resid_tcp_send_bin(i64, ptr)", "declare ptr @resid_tcp_recv_bin(i64, i64)", "declare i64 @resid_tcp_listen(i64)", "declare i64 @resid_tcp_bound_port(i64)", "declare i64 @resid_tcp_accept(i64)", "declare i64 @resid_tcp_listen_at(ptr, i64)", "declare ptr @resid_tcp_recv_some(i64, i64)", "declare i8 @resid_tcp_shutdown(i64)", "declare i8 @resid_tcp_deadline(i64, i64)", "declare ptr @resid_tcp_poll(ptr, ptr, i64)", "declare i64 @resid_tcp_send_some(i64, ptr)", "declare i64 @resid_tcp_accept_now(i64)", "declare ptr @str_trim(ptr)", "declare ptr @str_to_lower(ptr)", "declare ptr @str_to_upper(ptr)", "declare ptr @str_reverse(ptr)", "declare i8 @str_contains(ptr, ptr)", "declare i8 @str_starts_with(ptr, ptr)", "declare i8 @str_ends_with(ptr, ptr)", "declare ptr @str_repeat(ptr, i64)", "declare ptr @str_replace(ptr, ptr, ptr)", "declare ptr @str_split(ptr, ptr)", "declare ptr @str_join(ptr, ptr)", "declare i8 @str_is_int(ptr)", "declare i64 @str_parse_int(ptr)", "declare i8 @str_is_float(ptr)", "declare double @str_parse_float(ptr)", "declare i64 @str_count(ptr, ptr)", "declare i64 @abs_i64(i64)", "declare i64 @min_i64(i64, i64)", "declare i64 @max_i64(i64, i64)", "declare i64 @clamp_i64(i64, i64, i64)", "declare ptr @resid_list_new(i64, ptr, ptr)", "declare i64 @resid_list_len(ptr)", "declare ptr @resid_list_get(ptr, i64)", "declare ptr @resid_list_get_nc(ptr, i64)", "declare ptr @resid_list_vdata(ptr)", "declare i64 @resid_list_vlen(ptr)", "declare ptr @resid_list_get_v(ptr, i64, ptr, i64)", "declare ptr @resid_list_with(ptr, i8, i64, ptr)", "declare ptr @resid_list_concat_own(ptr, i8, ptr)", "declare ptr @resid_list_freeze(ptr)", "declare ptr @resid_rec_evac(ptr, i64, i8)", "declare ptr @resid_list_evac_f(ptr, ptr)", "declare ptr @resid_fx_move(ptr, ptr, i64, i8)", "declare ptr @resid_fx_stage(ptr, ptr, ptr, i64, i8)", "declare void @resid_str_index_drop(ptr, i64)", "declare ptr @resid_fixed_text(ptr, i64)", "declare ptr @resid_list_concat(ptr, ptr)", "declare ptr @resid_list_push(ptr, ptr)", "declare ptr @resid_listbuf_new()", "declare ptr @resid_listbuf_push(ptr, ptr)", "declare ptr @resid_listbuf_finish(ptr, ptr)", "declare ptr @resid_list_slice(ptr, i64, i64)", "declare ptr @resid_range_list(i64, i64)", "declare ptr @resid_range_list_incl(i64, i64)", "declare ptr @list_sort_ints(ptr)", "declare ptr @list_sort_wide(ptr, i64)", "declare ptr @list_sort_floats(ptr)", "declare ptr @list_sort_strs(ptr)", "declare ptr @list_reverse_ints(ptr)", "declare i8 @list_contains_int(ptr, i64)", "declare i8 @list_contains_str(ptr, ptr)", "declare i8 @list_contains_float(ptr, double)", "declare i64 @list_sum(ptr)", "declare double @list_sumf(ptr)", "declare ptr @list_sort_by(ptr, ptr)", "declare i64 @checked_add(i64, i64)", "declare i64 @checked_sub(i64, i64)", "declare i64 @checked_mul(i64, i64)", "declare i64 @checked_div(i64, i64)", "declare i64 @checked_uadd(i64, i64)", "declare i64 @checked_usub(i64, i64)", "declare i64 @checked_umul(i64, i64)", "declare i64 @checked_udiv(i64, i64)", "declare i64 @wrapping_add(i64, i64)", "declare i64 @wrapping_sub(i64, i64)", "declare i64 @wrapping_mul(i64, i64)", "declare i64 @wrapping_div(i64, i64)", "declare i64 @wrapping_uadd(i64, i64)", "declare i64 @wrapping_usub(i64, i64)", "declare i64 @wrapping_umul(i64, i64)", "declare i64 @wrapping_udiv(i64, i64)", "declare i64 @saturating_add(i64, i64)", "declare i64 @saturating_sub(i64, i64)", "declare i64 @saturating_mul(i64, i64)", "declare i64 @saturating_uadd(i64, i64)", "declare i64 @saturating_usub(i64, i64)", "declare i64 @saturating_umul(i64, i64)", "declare ptr @resid_set_new()", "declare ptr @resid_map_get(ptr, ptr)", "declare ptr @resid_map_insert(ptr, ptr, ptr)", "declare ptr @resid_map_remove(ptr, ptr)", "declare i8 @resid_map_contains(ptr, ptr)", "declare i64 @resid_map_len(ptr)", "declare ptr @resid_map_keys(ptr)", "declare ptr @resid_map_values(ptr)", "declare ptr @resid_map_format(ptr)", "declare ptr @resid_set_insert(ptr, ptr)", "declare ptr @resid_set_remove(ptr, ptr)", "declare i8 @resid_set_contains(ptr, ptr)", "declare i64 @resid_set_len(ptr)", "declare ptr @resid_set_union(ptr, ptr)", "declare ptr @resid_set_difference(ptr, ptr)", "declare ptr @resid_set_intersection(ptr, ptr)", "declare ptr @resid_set_to_list(ptr)", "declare ptr @resid_set_format(ptr)", "declare ptr @ToString(ptr)", "declare ptr @resid_list_to_string(ptr)", "declare ptr @resid_list_show(ptr, i64)", "declare void @resid_assert(i8, ptr)", "declare void @resid_todo(i8, ptr)", "declare ptr @resid_box_new(i64, i64, ptr, ptr)",         "declare ptr @resid_box_i64(i64)", "declare ptr @resid_box_f64(double)", "declare ptr @resid_box_bool(i8)", "declare ptr @resid_box_i128(i128)", "declare ptr @resid_box_u128(i128)", "declare i64 @resid_unbox_i64(ptr)", "declare double @resid_unbox_f64(ptr)", "declare i8 @resid_unbox_bool(ptr)", "declare i128 @resid_unbox_i128(ptr)", "declare i128 @resid_unbox_u128(ptr)", "declare ptr @resid_box_i256(i256)", "declare i256 @resid_unbox_i256(ptr)", "declare ptr @resid_box_u256(i256)", "declare i256 @resid_unbox_u256(ptr)", "declare ptr @resid_box_i512(i512)", "declare i512 @resid_unbox_i512(ptr)", "declare ptr @resid_box_u512(i512)", "declare i512 @resid_unbox_u512(ptr)", "declare ptr @Int128ToString(i128)", "declare ptr @UIntToString(i64)", "declare ptr @Int256ToString(i64, i64, i64, i64)", "declare ptr @UInt256ToString(i64, i64, i64, i64)", "declare ptr @Int512ToString(i64, i64, i64, i64, i64, i64, i64, i64)", "declare ptr @UInt512ToString(i64, i64, i64, i64, i64, i64, i64, i64)", "declare ptr @FloatToString(double)", "declare ptr @Float128ToString(fp128)", "declare ptr @BoolToString(i8)", "declare void @resid_overflow_check(i8)", "declare void @resid_div_check(i8)", "declare void @resid_conv_check(i8)", "declare {i8, i1} @llvm.sadd.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.sadd.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.sadd.with.overflow.i32(i32, i32)", "declare {i64, i1} @llvm.sadd.with.overflow.i64(i64, i64)", "declare {i128, i1} @llvm.sadd.with.overflow.i128(i128, i128)", "declare {i256, i1} @llvm.sadd.with.overflow.i256(i256, i256)", "declare {i512, i1} @llvm.sadd.with.overflow.i512(i512, i512)", "declare {i8, i1} @llvm.ssub.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.ssub.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.ssub.with.overflow.i32(i32, i32)", "declare {i64, i1} @llvm.ssub.with.overflow.i64(i64, i64)", "declare {i128, i1} @llvm.ssub.with.overflow.i128(i128, i128)", "declare {i256, i1} @llvm.ssub.with.overflow.i256(i256, i256)", "declare {i512, i1} @llvm.ssub.with.overflow.i512(i512, i512)", "declare {i8, i1} @llvm.smul.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.smul.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.smul.with.overflow.i32(i32, i32)", "declare {i64, i1} @llvm.smul.with.overflow.i64(i64, i64)", "declare {i128, i1} @llvm.smul.with.overflow.i128(i128, i128)", "declare {i256, i1} @llvm.smul.with.overflow.i256(i256, i256)", "declare {i512, i1} @llvm.smul.with.overflow.i512(i512, i512)", "declare {i8, i1} @llvm.uadd.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.uadd.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.uadd.with.overflow.i32(i32, i32)", "declare {i64, i1} @llvm.uadd.with.overflow.i64(i64, i64)", "declare {i128, i1} @llvm.uadd.with.overflow.i128(i128, i128)", "declare {i256, i1} @llvm.uadd.with.overflow.i256(i256, i256)", "declare {i512, i1} @llvm.uadd.with.overflow.i512(i512, i512)", "declare {i8, i1} @llvm.usub.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.usub.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.usub.with.overflow.i32(i32, i32)", "declare {i64, i1} @llvm.usub.with.overflow.i64(i64, i64)", "declare {i128, i1} @llvm.usub.with.overflow.i128(i128, i128)", "declare {i256, i1} @llvm.usub.with.overflow.i256(i256, i256)", "declare {i512, i1} @llvm.usub.with.overflow.i512(i512, i512)", "declare {i8, i1} @llvm.umul.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.umul.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.umul.with.overflow.i32(i32, i32)", "declare {i64, i1} @llvm.umul.with.overflow.i64(i64, i64)", "declare {i128, i1} @llvm.umul.with.overflow.i128(i128, i128)", "declare {i256, i1} @llvm.umul.with.overflow.i256(i256, i256)", "declare {i512, i1} @llvm.umul.with.overflow.i512(i512, i512)", "declare ptr @resid_str_from_codepoints(ptr)", "declare i64 @resid_str_to_fixed(ptr, ptr, i64)", "declare i64 @resid_bytes_to_fixed(ptr, ptr, i64)", "declare void @resid_index_abort(i64, i64, ptr) noreturn", "declare void @resid_abort(ptr) noreturn", "declare void @resid_expect_fail(ptr, ptr, ptr) noreturn", "declare i8 @resid_regex_match(ptr, ptr)", "declare i8 @resid_quiet()", "declare i8 @resid_quiet_set(i1)", "declare i64 @resid_mem_limit_set(i64)", "declare i64 @resid_bytes_len(ptr)", "declare ptr @Float32ToString(double)", "declare double @resid_close_tol(i64)", "declare ptr @resid_str_quote(ptr)", "declare ptr @resid_list_show_clo(ptr, ptr)", "declare i8 @resid_internals()", "declare i8 @resid_internals_set(i1)", "declare i8 @resid_rtmod()", "declare i8 @resid_rtmod_set(i1)", "declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)", "declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)", "declare ptr @llvm.threadlocal.address.p0(ptr)", "declare i8 @resid_expect_throws(ptr)", "declare i64 @resid_box_tag(ptr)", "declare i8 @resid_test_plan(i64, ptr)", "declare i64 @resid_test_run_closure(ptr, ptr)", "declare i64 @resid_test_run(ptr, ptr)", "declare i64 @resid_test_summary()", "@.fixedidx = private unnamed_addr constant [12 x i8] c\"fixed index\\00\"", "declare ptr @UInt128ToString(i128)", rt_itoa_def(), "declare i32 @resid_setjmp(ptr) returns_twice", rt_catch_def()];
     List(Str) header = header_with_cmps(hdr_core.concat(hdr_extra()).concat(hdr_map_typed()), fs);
     // Debug builds carry DWARF (lower.resid); metadata ids from 1000 are
     // the functions', below are the unit and files.

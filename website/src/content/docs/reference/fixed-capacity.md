@@ -4,8 +4,10 @@ description: Str(N), Bytes(N) and List(T, N), their literals, casts and access r
 ---
 
 `Str(N)`, `Bytes(N)` and `List(T, N)` have a statically known extent, so
-the compiler may keep them inline in the activation frame; they never need
-a heap allocation. Every `N` is a distinct nominal type.
+they are stored inline: in the activation frame, or inside the record or
+list that holds them. They never need a heap allocation of their own; a
+result or a value carried to a loop's next step is copied when its frame
+ends. Every `N` is a distinct nominal type.
 
 | Type | Holds | Storage |
 |---|---|---|
@@ -33,7 +35,8 @@ ever silently truncated except by an explicit cast.
 
 ## Casts
 
-- `Str(N)` → `Str` and `Bytes(N)` → `Bytes`: a view, no copy.
+- `Str(N)` → `Str` and `Bytes(N)` → `Bytes`: a heap copy of the text, since the
+  result may outlive the frame the fixed value lives in.
 - `Str` → `Str(N)`, `Str(N)` → `Str(M)`, and the `Bytes` equivalents: a
   bounded copy that keeps the longest prefix of whole code points that fits.
 - `List(T, N)` → `List(T)`: copies all N elements.
@@ -41,7 +44,7 @@ ever silently truncated except by an explicit cast.
 ## Access
 
 Indexing is bounds-checked against the capacity (`Str(N)` against its
-content) and aborts when out of range. `.len()` of a `List(T, N)` is N.
+content) and aborts when out of range. `.len()` of a `List(T, N)` is N. `xs.with(i, x)` is a `List(T, N)` equal to `xs` but for element `i`, with `i` checked against N.
 Fixed strings and byte arrays can be passed to the built-in functions that
 take `Str` or `Bytes`; a user function needs the exact type, so convert
 with a cast. `Eq`, `Ord` and `Hash` do not extend to fixed-capacity types.

@@ -18,11 +18,12 @@ pub Int rt_str_eq(Int a, Int b) { return if (c_strcmp(a, b) == 0) { 1 } else { 0
 // ─── In-place string accumulators (resid_sacc_*) ──────────────────────
 // A NUL-terminated buffer preceded by an {arena, len, cap} header; the
 // compiler proves it has no other reader while it grows. Made inside an
-// arena, it grows by copying within that arena and goes with it.
+// arena, it grows by copying within that arena and goes with it; made in
+// a scope region (arena word -1), it grows by copying within its region.
 
 Int sacc_alloc(Int cap) {
-    Int a = cur_arena();
-    Int h = if (a != 0) { arena_alloc(a, 24 + cap + 1) } else { xmalloc(24 + cap + 1) };
+    Int a = if (ag_scope_depth() != 0) { 0 - 1 } else { cur_arena() };
+    Int h = if (a == 0 - 1) { rt_alloc(24 + cap + 1) } else { if (a != 0) { arena_alloc(a, 24 + cap + 1) } else { xmalloc(24 + cap + 1) } };
     _ = st64(h, a);
     _ = st64(h + 8, 0);
     _ = st64(h + 16, cap);
@@ -45,7 +46,7 @@ Int sacc_reserve(Int d, Int n) {
     Int c2 = if (cap * 2 < len + n) { len + n } else { cap * 2 };
     _ = str_index_forget(d);
     Int a = ld64(d - 24);
-    Int h = if (a != 0) { arena_alloc(a, 24 + c2 + 1) } else { xrealloc(d - 24, 24 + c2 + 1) };
+    Int h = if (a == 0 - 1) { alloc_near(d - 24, 24 + c2 + 1) } else { if (a != 0) { arena_alloc(a, 24 + c2 + 1) } else { xrealloc(d - 24, 24 + c2 + 1) } };
     _ = if (a != 0) { mcopy(h, d - 24, 24 + len + 1) } else { 0 };
     _ = st64(h + 16, c2);
     return h + 24;
@@ -126,6 +127,42 @@ Int fixed_back(Int src, Int n) {
 pub Int rt_bytes_to_fixed(Int dst, Int src, Int cap) {
     if (cap == 0) { return 0; }
     return fixed_copy(dst, src, 0, cap);
+}
+
+// ─── Fixed-capacity values in frames (spec §44) ───────────────────────
+// A value is copied when it would outlive its storage: into the thread's
+// result buffer at a return, from there into the caller's frame, into a
+// loop parameter's slot at the back edge. A null (an unused builder) stays
+// null; a value already in place is not copied.
+
+// `text`: the storage holds a Str(N), whose cached string indexes for the
+// range are dropped (the address now holds other text).
+@export("resid_fx_move", "ptr(ptr,ptr,i64,i8)")
+@inline
+pub Int rt_fx_move(Int d, Int s, Int n, Int text) {
+    if (s == 0 || s == d) { return s; }
+    _ = resid_raw_copy(d, s, n);
+    return (if (text != 0) { rt_str_index_drop(d, n) } else { 0 }) * 0 + d;
+}
+
+// The first phase of a loop's parameter copies: v staged in t unless it is
+// already the parameter's slot.
+@export("resid_fx_stage", "ptr(ptr,ptr,ptr,i64,i8)")
+@inline
+pub Int rt_fx_stage(Int t, Int v, Int slot, Int n, Int text) {
+    if (v == 0 || v == slot) { return v; }
+    _ = resid_raw_copy(t, v, n);
+    return (if (text != 0) { rt_str_index_drop(t, n) } else { 0 }) * 0 + t;
+}
+
+// Str(N) / Bytes(N) -> Str / Bytes: the text up to its NUL (at most cap
+// bytes) as a new string, so it may outlive the frame.
+@export("resid_fixed_text", "ptr(ptr,i64)")
+pub Int rt_fixed_text(Int p, Int cap) { return cstr_from(p, nul_at(p, 0, cap), 1); }
+
+Int nul_at(Int p, Int i, Int cap) {
+    if (i >= cap || ld8(p + i) == 0) { return i; }
+    return nul_at(p, i + 1, cap);
 }
 
 // ─── UTF-8 ─────────────────────────────────────────────────────────────
@@ -424,13 +461,24 @@ pub Int rt_str_index_popped() {
     return idx_clear_region(0, 1);
 }
 
-// A scalar scope is being freed: only strings in scopes can go.
+// Region pages were freed: the indexes of strings on them go; a string in
+// a region still live keeps its index.
 pub Int str_index_scope_popped() {
-    _ = st64(idx_state() + 24, 0);
-    _ = st64(idx_state() + 40, 0);
-    _ = st64(idx_small(), 0);
+    Int st = idx_state();
+    _ = if (region_freed(ld64(st + 24))) { st64(st + 24, 0) } else { 0 };
+    _ = if (region_freed(ld64(st + 40))) { st64(st + 40, 0) } else { 0 };
+    _ = if (region_freed(sl_s(idx_small()))) { st64(idx_small(), 0) } else { 0 };
     if (ld64(idx_region() + 128) == 0) { return 0; }
-    return idx_clear_region(0, 2);
+    return idx_drop_freed(0);
+}
+
+Int idx_drop_freed(Int k) {
+    if (k >= 16) { return 0; }
+    Int f = idx_region() + k * 8;
+    Int n = idx_region() + 128;
+    Int sl = idx_slots() + k * 40;
+    _ = if (ld64(f) >= 2 && region_freed(sl_s(sl))) { st64(f, 0) + st64(sl, 0) + st64(n, ld64(n) - 1) } else { 0 };
+    return idx_drop_freed(k + 1);
 }
 
 // Clear the slots marked at least `kind`.
@@ -440,6 +488,35 @@ Int idx_clear_region(Int k, Int kind) {
     Int n = idx_region() + 128;
     _ = if (ld64(f) >= kind) { st64(f, 0) + st64(idx_slots() + k * 40, 0) + st64(n, ld64(n) - 1) } else { 0 };
     return idx_clear_region(k + 1, kind);
+}
+
+// Drop every cached index of a string in [p, p + n): storage that now
+// holds other text (a fixed-capacity value's frame slot, spec §44).
+@export("resid_str_index_drop", "void(ptr,i64)")
+@noinline
+pub Int rt_str_index_drop(Int p, Int n) {
+    Int st = idx_state();
+    _ = if (in_range(ld64(st + 24), p, n)) { st64(st + 24, 0) } else { 0 };
+    _ = if (in_range(ld64(st + 40), p, n)) { st64(st + 40, 0) } else { 0 };
+    _ = if (ld64(idx_inh() + 304) != 0) { inh_drop(p, n, 0) } else { 0 };
+    _ = if (in_range(sl_s(idx_small()), p, n)) { st64(idx_small(), 0) } else { 0 };
+    if (ld64(st + 8) == 0) { return 0; }
+    return idx_drop_at(p, n, 0);
+}
+
+Bool in_range(Int s, Int p, Int n) { return s != 0 && ult(s - p, n); }
+
+Int inh_drop(Int p, Int n, Int k) {
+    if (k >= 19) { return 0; }
+    _ = if (in_range(ld64(idx_inh() + k * 16), p, n)) { st64(idx_inh() + k * 16, 0) } else { 0 };
+    return inh_drop(p, n, k + 1);
+}
+
+Int idx_drop_at(Int p, Int n, Int k) {
+    if (k >= 16) { return 0; }
+    Int sl = idx_slots() + k * 40;
+    _ = if (in_range(sl_s(sl), p, n)) { st64(sl, 0) + st64(sl + 24, 0) } else { 0 };
+    return idx_drop_at(p, n, k + 1);
 }
 
 // Drop every cached index of `s` (about to be freed or moved).
@@ -675,6 +752,12 @@ pub Int rt_sbv_finish(Int cur, Int lim) {
         _ = if (b != 0) { mcopy(out, b, len) + c_free(b) } else { 0 };
         return st8(out + len, 0) * 0 + out;
     }
+    // In a scope region the text is the region's, like any new value.
+    if (ag_scope_depth() != 0) {
+        Int out = rt_alloc(len + 1);
+        _ = if (b != 0) { mcopy(out, b, len) + c_free(b) } else { 0 };
+        return st8(out + len, 0) * 0 + out;
+    }
     Int out0 = if (b == 0) { xmalloc(1) } else { b };
     Int out1 = if (b != 0 && cap > len + len / 8 + 64) { sb_shrink(out0, len) } else { out0 };
     return st8(out1 + len, 0) * 0 + out1;
@@ -791,6 +874,12 @@ pub Int rt_sb_finish(Int r) {
     Int a = cur_arena();
     if (a != 0 && ag_scope_depth() == 0) {
         Int out = arena_alloc(a, len + 1);
+        _ = if (b != 0) { mcopy(out, b, len) + c_free(b) } else { 0 };
+        return st8(out + len, 0) * 0 + out;
+    }
+    // In a scope region the text is the region's, like any new value.
+    if (ag_scope_depth() != 0) {
+        Int out = rt_alloc(len + 1);
         _ = if (b != 0) { mcopy(out, b, len) + c_free(b) } else { 0 };
         return st8(out + len, 0) * 0 + out;
     }

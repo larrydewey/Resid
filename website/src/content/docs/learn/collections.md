@@ -31,6 +31,31 @@ Indexing is bounds-checked; an out-of-range index aborts with the index and
 the length. An empty list needs its type from the binding:
 `List(Int) none = [];`.
 
+`xs.with(i, x)` is the list with element `i` replaced; `xs` itself is
+unchanged. Thread a list through a loop and each update happens in place:
+
+```resid
+List(Int) squares(List(Int) xs, Int i) {
+    if (i >= xs.len()) { return xs; }
+    return squares(xs.with(i, i * i), i + 1);
+}
+
+Int main() {
+    List(Int) zs = [0, 0, 0, 0, 0];
+    List(Int) sq = squares(zs, 0);
+    println(f"{zs} {sq} {sq.with(0, 9)}");
+    return 0;
+}
+```
+
+```text title="Output"
+[0, 0, 0, 0, 0] [0, 1, 4, 9, 16] [9, 1, 4, 9, 16]
+```
+
+The index is checked like `xs[i]`. When the old list is never read again
+(here `zs` is, so the first update copies it), the compiler replaces the
+element where it is, as it does for a map's `insert`.
+
 ## Maps
 
 ```resid

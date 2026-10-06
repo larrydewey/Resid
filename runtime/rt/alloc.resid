@@ -7,25 +7,23 @@
 //     not compiler-generated values;
 //   - a bulk arena (resid_bulk_push/pop): both kinds, for whole compiler
 //     phases whose results are copied out (resid_list_str_persist_copy);
-//   - a scalar scope (resid_scope_push/pop): everything allocated while an
-//     expression with a scalar result is evaluated; one thread-local bump
-//     region that pop rewinds (chunks of 1 MB, a few kept for reuse).
-// Runtime writes that attach new memory to an older object allocate on the
-// plain heap (suspend / resume).
+//   - a scope region (resid_scope_push/pop): everything allocated while an
+//     expression with a scalar result is evaluated, or while a loop runs;
+//     its own pages, freed when it is popped (region.resid).
 //
 // Thread-local state words: 0 arena, 1 bulk arena, 2 bytes requested,
-// 3 mark, 4 scope depth, 5 scope chunk, 6 scope bump pointer, 7 scope end,
-// 8 marks, 9 marks capacity, 10 chunk pool, 11 pool size. A thread's
-// exit runs scope_thread_exit (resid_start's thread_main).
+// 3 mark, 4 scope depth, 5 the innermost region's top page, 6 its bump
+// pointer, 7 its end, 8 region records, 9 their capacity, 10 the current
+// region's record (the innermost, or the one region_use made current),
+// 11 the region_use save stack. A thread's exit runs scope_thread_exit
+// (resid_start's thread_main).
 // An arena is {head, current, prev}; its chunks {cap, used, next, data}.
-// A scope chunk is {prev, cap, data}; a mark {chunk, ptr}.
 
 Int ast() { return resid_raw_tls("rt_alloc", 104); }
 Int ag(Int i) { return ld64(ast() + i * 8); }
 Int as_(Int i, Int v) { return st64(ast() + i * 8, v); }
 
 Int arena_chunk_size() { return 4194264; }   // 4 MB with the chunk and malloc headers
-Int scope_chunk_size() { return 1048576; }
 
 // ─── Arenas ────────────────────────────────────────────────────────────
 
@@ -74,10 +72,20 @@ Int arena_bump(Int a, Int size0) {
 pub Int cur_arena() { return ag(0); }
 pub Int arena_alloc(Int a, Int size) { return arena_bump(a, size); }
 pub Int ag_scope_depth() { return ag(4); }
+pub Int cur_region() { return ag(10); }
+
+// The current region's top page, bump and end, emptied.
+pub Int top_clear() { return as_(5, 0) + as_(6, 0) + as_(7, 0); }
 
 // A heap string of n bytes (plus NUL) made inside an arena goes with the
 // arena: copied into it, the heap block freed.
 pub Int arena_adopt(Int p, Int n) {
+    // In a scope region the text is the region's, like any new value.
+    if (ag(4) != 0 && p != 0) {
+        Int r = scope_alloc(n + 1);
+        _ = mcopy(r, p, n + 1);
+        return c_free(p) * 0 + r;
+    }
     Int a = ag(0);
     if (a == 0 || ag(4) != 0 || p == 0) { return p; }
     Int out = arena_bump(a, n + 1);
@@ -117,13 +125,7 @@ Bool chunks_contain(Int c, Int p) {
     return chunks_contain(ld64(c + 16), p);
 }
 
-Bool scope_contains(Int p) { return scope_chunks_contain(ag(5), p); }
-
-Bool scope_chunks_contain(Int c, Int p) {
-    if (c == 0) { return false; }
-    if (!ult(p, c + 16) && ult(p, c + 16 + ld64(c + 8))) { return true; }
-    return scope_chunks_contain(ld64(c), p);
-}
+Bool scope_contains(Int p) { return region_of(p) != 0; }
 
 // Any active arena, bulk arena or scope region (a string there must not
 // enter a pointer-keyed cache).
@@ -157,90 +159,54 @@ pub Int rt_bulk_pop() {
 
 // ─── Scalar scopes ─────────────────────────────────────────────────────
 
-// Thread exit: hand the reuse pool back (chunks in use stay: an unpopped
-// region may hold a value the thread returned).
+// Thread exit: the page cache stays with the process (regions in use stay:
+// an unpopped region may hold a value the thread returned).
 pub Int scope_thread_exit(Int unused) {
-    _ = free_pool(ag(10));
-    _ = as_(10, 0) + as_(11, 0);
     _ = c_free(ag(8));
     return as_(8, 0) + as_(9, 0);
-}
-
-Int free_pool(Int c) {
-    if (c == 0) { return 0; }
-    Int prev = ld64(c);
-    _ = c_free(c);
-    return free_pool(prev);
 }
 
 @cold
 Int marks_grow() {
     Int cap = if (ag(9) != 0) { ag(9) * 2 } else { 64 };
-    _ = as_(8, xrealloc(ag(8), cap * 16));
+    _ = as_(8, xrealloc(ag(8), cap * 64));
     return as_(9, cap);
 }
+
+// The record of the region at depth index d (region.resid).
+pub Int rec_at(Int d) { return ag(8) + d * 64; }
+
+// The innermost region's page, bump and end: into its record, or back.
+pub Int rec_save(Int r) { return st64(r + 8, ag(5)) + st64(r + 16, ag(6)) + st64(r + 24, ag(7)); }
+pub Int rec_load(Int r) { return as_(5, ld64(r + 8)) + as_(6, ld64(r + 16)) + as_(7, ld64(r + 24)); }
 
 @export("resid_scope_push", "i64()")
 pub Int rt_scope_push() {
     Int d = ag(4);
     _ = if (d == ag(9)) { marks_grow() } else { 0 };
-    Int m = ag(8) + d * 16;
-    _ = st64(m, ag(5)) + st64(m + 8, ag(6));
+    _ = if (d > 0) { rec_save(rec_at(d - 1)) } else { 0 };
+    _ = rec_init(rec_at(d), new_region_id());
+    _ = as_(5, 0) + as_(6, 0) + as_(7, 0) + as_(10, rec_at(d));
     return as_(4, d + 1) * 0 + d;
-}
-
-Int chunk_release(Int c) {
-    if (ld64(c + 8) == scope_chunk_size() && ag(11) < 16) {
-        _ = st64(c, ag(10));
-        return as_(10, c) + as_(11, ag(11) + 1);
-    }
-    return c_free(c);
-}
-
-Int release_to(Int target) {
-    if (ag(5) == target) { return 0; }
-    Int c = ag(5);
-    _ = as_(5, ld64(c));
-    _ = chunk_release(c);
-    return release_to(target);
 }
 
 @export("resid_scope_pop", "void(i64)")
 pub Int rt_scope_pop(Int d) {
     if (d < 0 || d >= ag(4)) { return 0; }
-    Int m = ag(8) + d * 16;
-    Int mchunk = ld64(m);
-    Int mptr = ld64(m + 8);
+    _ = rec_save(rec_at(ag(4) - 1));
+    Int freed = pop_regions(ag(4) - 1, d, 0);
     _ = as_(4, d);
-    if (ag(6) == mptr) { return 0; }
-    _ = release_to(mchunk);
-    _ = as_(6, mptr);
-    _ = as_(7, if (mchunk != 0) { mchunk + 16 + ld64(mchunk + 8) } else { 0 });
+    _ = if (d > 0) { rec_load(rec_at(d - 1)) + as_(10, rec_at(d - 1)) } else { as_(5, 0) + as_(6, 0) + as_(7, 0) + as_(10, 0) };
     // A pointer-keyed string cache entry may name freed region memory.
-    return str_index_scope_popped();
+    return if (freed > 0) { str_index_scope_popped() } else { 0 };
 }
 
-@cold
-Int scope_alloc_slow(Int size) {
-    Int c = if (size > scope_chunk_size() / 4) { own_chunk(size) } else { if (ag(10) != 0) { pool_chunk() } else { own_chunk(scope_chunk_size()) } };
-    _ = st64(c, ag(5));
-    _ = as_(5, c);
-    _ = as_(6, c + 16 + size);
-    _ = as_(7, c + 16 + ld64(c + 8));
-    return c + 16;
+Int pop_regions(Int i, Int d, Int n) {
+    if (i < d) { return n; }
+    return pop_regions(i - 1, d, pages_free(ld64(rec_at(i) + 8), n));
 }
 
-Int own_chunk(Int cap) {
-    Int c = xmalloc(16 + cap);
-    return st64(c + 8, cap) * 0 + c;
-}
-
-Int pool_chunk() {
-    Int c = ag(10);
-    _ = as_(10, ld64(c));
-    return as_(11, ag(11) - 1) * 0 + c;
-}
-
+// The innermost region's bump: the fast path, inlined at each call.
 // Blocks whose size is an odd multiple of 8 sit on an 8-byte boundary;
 // every other block is 16-byte aligned, as malloc gives.
 pub Int scope_alloc(Int size0) {
@@ -254,14 +220,69 @@ pub Int scope_alloc(Int size0) {
     return scope_alloc_slow((size + 15) & (0 - 16));
 }
 
-// Heap allocation for a write into an older object: no arena, no scope.
-// The three saved words go to `save`.
-pub Int suspend(Int save) {
-    _ = st64(save, ag(0)) + st64(save + 8, ag(1)) + st64(save + 16, ag(4));
-    return as_(0, 0) + as_(1, 0) + as_(4, 0);
+@cold
+Int scope_alloc_slow(Int size) {
+    Int r = ag(10);
+    _ = rec_save(r);
+    Int p = region_grow(r, size);
+    return rec_load(r) * 0 + p;
 }
 
-pub Int resume(Int save) { return as_(0, ld64(save)) + as_(1, ld64(save + 8)) + as_(4, ld64(save + 16)); }
+// ─── Allocating where an older object lives ────────────────────────────
+// An update in place of an object older than the innermost region (an
+// owned list or map, a string accumulator) allocates in that object's
+// region: region_use makes it current until region_done. An object
+// outside every region gets plain heap memory (no arena, no scope).
+// Uses nest; each saves arena, bulk arena, depth and current record.
+
+Int use_stack() { return resid_raw_tls("rg_use", 520); }   // count, then 16 x 4 words
+
+pub Int region_use(Int obj) {
+    _ = use_push();
+    if (ag(4) == 0 || young(obj)) { return 0; }
+    Int r = rec_of(region_of(obj));
+    if (r == 0) { return as_(0, 0) + as_(1, 0) + as_(4, 0); }
+    _ = rec_save(ag(10));
+    return as_(10, r) + rec_load(r);
+}
+
+// No change until region_done (a use that needs none, kept paired).
+pub Int region_same() { return use_push(); }
+
+// Plain heap memory until region_done: what is made lives as long as the
+// program (a constant's cache).
+pub Int heap_use() { return use_push() + as_(0, 0) + as_(1, 0) + as_(4, 0); }
+
+Int use_push() {
+    Int u = use_stack();
+    Int k = ld64(u);
+    if (k >= 16) { return rt_abort("region_use: nested too deeply"); }
+    Int e = u + 8 + k * 32;
+    _ = st64(e, ag(0)) + st64(e + 8, ag(1)) + st64(e + 16, ag(4)) + st64(e + 24, ag(10));
+    return st64(u, k + 1);
+}
+
+// The region_use depth, and back to it (an abort that unwound past uses).
+pub Int region_uses() { return ld64(use_stack()); }
+
+pub Int region_unwind(Int k) {
+    if (ld64(use_stack()) <= k) { return 0; }
+    _ = region_done();
+    return region_unwind(k);
+}
+
+pub Int region_done() {
+    Int u = use_stack();
+    Int k = ld64(u) - 1;
+    Int e = u + 8 + k * 32;
+    _ = st64(u, k);
+    Int cur = ld64(e + 24);
+    // Only a switch to another region moved the bump words.
+    Bool switched = ag(10) != cur;
+    _ = if (switched) { rec_save(ag(10)) } else { 0 };
+    _ = as_(0, ld64(e)) + as_(1, ld64(e + 8)) + as_(4, ld64(e + 16)) + as_(10, cur);
+    return if (switched) { rec_load(cur) } else { 0 };
+}
 
 // ─── The allocators ────────────────────────────────────────────────────
 
@@ -324,17 +345,11 @@ pub Int rt_sc_depth_x() { return ag(4); }
 @export("resid_rt_sc_depth_set", "void(i64)")
 pub Int rt_sc_depth_set_x(Int d) { return as_(4, d); }
 
-@export("resid_rt_in_scope", "i8(ptr)")
-pub Int rt_in_scope_x(Int p) { return if (scope_contains(p)) { 1 } else { 0 }; }
+// Made in the innermost scope region.
+pub Bool young(Int p) { return ag(4) != 0 && region_of(p) == ld64(rec_at(ag(4) - 1)); }
 
 @export("resid_rt_scope_alloc", "ptr(i64)")
 pub Int rt_scope_alloc_x(Int n) { return scope_alloc(n); }
-
-@export("resid_rt_suspend", "void(ptr)")
-pub Int rt_suspend_x(Int s) { return suspend(s); }
-
-@export("resid_rt_resume", "void(ptr)")
-pub Int rt_resume_x(Int s) { return resume(s); }
 
 @export("resid_rt_in_arenas", "i8(ptr)")
 pub Int rt_in_arenas_x(Int p) { return rt_arena_contains_x(p); }
@@ -353,9 +368,11 @@ pub Int rt_rec_new(Int size, Int unique) {
     return h + 8;
 }
 
+// Only a record of the current region is rewritten: an older one would
+// then hold values a region pop frees.
 @export("resid_rec_reuse", "ptr(ptr,i64)")
 pub Int rt_rec_reuse(Int old, Int size) {
-    if (ld64(old - 8) == (rec_tag() | (size << 1) | 1)) { return old; }
+    if (ld64(old - 8) == (rec_tag() | (size << 1) | 1) && (ag(4) == 0 || young(old))) { return old; }
     return rt_rec_new(size, 1);
 }
 
@@ -410,14 +427,12 @@ pub Int rt_decp_persist(Int v) {
 Int const_list(Int cache, Int n, Int data, Int ty, Int kind) {
     Int hit = ld64(cache);
     if (hit != 0) { return hit; }
-    Int saved = xmalloc(24);
-    _ = suspend(saved);
+    _ = heap_use();
     Int boxes = if (kind == 2) { data } else { xmalloc(max(n, 1) * 8) };
     _ = if (kind == 2) { 0 } else { const_boxes(boxes, data, 0, n, kind) };
     Int list = rt_list_new(n, boxes, ty);
     _ = if (kind == 2) { 0 } else { c_free(boxes) };
-    _ = resume(saved);
-    _ = c_free(saved);
+    _ = region_done();
     return st64(cache, list) * 0 + list;
 }
 

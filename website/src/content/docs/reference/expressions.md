@@ -54,7 +54,7 @@ aborts with the index and length), `m[k]` a map entry as an `Option`.
 
 ## Calls and methods
 
-`f(a, b)`; `f(a, name = v)` with named arguments; `xs.len()`,
+`f(a, b)`; `f(a, name = v)` with named arguments; `xs.len()`, `xs.with(i, x)`,
 `m.insert(k, v)` and the other built-in methods of lists, maps, sets and
 builders. For handles only, `h.m(args)` means `m(h, args)`.
 

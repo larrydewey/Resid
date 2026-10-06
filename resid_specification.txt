@@ -1089,6 +1089,23 @@ Indexing is bounds-checked: an out-of-range index aborts the
 program with the offending index and length (resid_index_abort);
 it never reads out of bounds silently.
 
+  xs.with(i, x)
+
+`xs.with(i, x)` is the list xs with element i replaced by x.
+xs itself is unchanged: values are immutable (§4), so every
+other name for xs still sees the old elements. The index is
+checked as for `xs[i]`: an index outside 0..xs.len() aborts
+with the index and the length (resid_index_abort). x has the
+element type of xs; the result has the type of xs. The same
+verb replaces an element of a List(T, N) (§44.3) and a lane
+of a vector (§46.1).
+
+How the result is stored is the compiler's choice (§5): when
+xs is never read again (its one consuming use is this update,
+as for a Map's `insert`), the element may be replaced where
+it is; otherwise the result is a new list sharing what it can
+with xs. Neither is observable.
+
 Access to a fixed-capacity value is bounds-checked against its
 declared capacity and aborts identically on an out-of-range
 index (§44.3).
@@ -2424,6 +2441,20 @@ it as a value.
     N, fixed lists and byte strings display as values, and
     `[]` adopts an expected List(T, N) (§44.3).
 
+v3.9: `xs.with(i, x)` on List(T) and List(T, N) (§17, §44.3):
+the list with element i replaced, checked like `xs[i]`. It is
+the verb vectors already use for a lane (§46.1), so one name
+means "this value with one element different" across the
+three sequence types. The update is in place when the old
+list is dead, decided by the same linear analysis as Map
+updates; it is never observable.
+
+v3.10: Fixed-capacity values (§44) are stored inline, in a
+frame or inside the value holding them, never in heap
+storage of their own. A result or a loop's carried value is
+copied when its frame ends; the casts to Str and Bytes copy
+the text, since the heap value may outlive the frame.
+
 
 ==================================================
 42. NUMERIC INTEROPERABILITY SUMMARY
@@ -2484,8 +2515,12 @@ it as a value.
 
 Fixed-capacity value types carry a statically known
 bound on their extent. Storage is fixed and known at
-compile time, so the compiler may place values inline in
-the activation frame; they never require heap allocation.
+compile time, so a value is stored inline: in the
+activation frame of the function that holds it, or inside
+the record, list or other value that contains it. A
+value never requires heap allocation of its own; one
+that outlives its frame (a result, a value carried to a
+loop's next step) is copied, which is not observable.
 
   Str(N)         a UTF-8 string of at most N bytes;
                  storage N + 1 bytes, NUL-terminated
@@ -2536,9 +2571,10 @@ by the binding literal are zero-initialized.
 Capacity is changed only by an explicit cast. Casts are
 the only operators that may change a fixed capacity.
 
-  Str(N)   -> Str           identity retype over the
-                            NUL-terminated buffer
-  Bytes(N) -> Bytes         identity retype
+  Str(N)   -> Str           a heap Str holding the
+                            text up to the NUL
+  Bytes(N) -> Bytes         a heap Bytes holding the
+                            bytes up to the first zero
   Str      -> Str(N)        explicit bounded copy;
                             keeps the longest prefix of
                             whole codepoints that fits
@@ -2571,6 +2607,9 @@ identically to heap lists (§17):
   b[i]    // Bytes(N): Int — the byte at i, checked
           // against the capacity N
   xs[i]   // List(T, N): T, checked against N
+  xs.with(i, x)
+          // List(T, N): equal to xs but for element i,
+          // which is x; i checked against N
 
 `.len()` on a List(T, N) or a Bytes(N) is the statically
 known capacity N; they carry no dynamic length.

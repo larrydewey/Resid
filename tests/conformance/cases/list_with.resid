@@ -1,0 +1,67 @@
+// xs.with(i, x) (spec §17, §44.3): the old list is unchanged, a chain
+// through a loop updates in place, element types that are words, floats,
+// strings and records, fixed lists, large lists (persistent path copies),
+// a concat chain growing in place, and slices taken before an update.
+List(Int) fill(List(Int) xs, Int i, Int n) {
+    if (i >= n) { return xs; }
+    return fill(xs.with(i, i * i), i + 1, n);
+}
+
+List(Str) names(List(Str) xs, Int i) {
+    if (i >= xs.len()) { return xs; }
+    return names(xs.with(i, f"n{i}" + "!"), i + 1);
+}
+
+ListBuf(Int) iota(Int i, Int n, ListBuf(Int) acc) {
+    if (i >= n) { return acc; }
+    return iota(i + 1, n, acc.push(i));
+}
+
+Int sum(List(Int) xs, Int i, Int acc) {
+    if (i >= xs.len()) { return acc; }
+    return sum(xs, i + 1, acc + xs[i]);
+}
+
+// Counts per slot, the list threaded through the loop.
+List(Int) tally(List(Int) xs, Int i, Int n) {
+    if (i >= n) { return xs; }
+    Int k = (i * 7) % xs.len();
+    return tally(xs.with(k, xs[k] + 1), i + 1, n);
+}
+
+List(Int) grow(List(Int) xs, Int k) {
+    if (k <= 0) { return xs; }
+    return grow(xs.concat([k]), k - 1);
+}
+
+type Pt = { Int x; Str tag; };
+
+Int main() {
+    List(Int) a = [1, 2, 3, 4];
+    List(Int) b = a.with(1, 20);
+    List(Int) c = b.with(3, 40).with(0, 10);
+    println(f"{a} {b} {c}");
+    List(Int) zs = [0, 0, 0, 0, 0, 0];
+    println(f"{fill(zs, 0, 6)} {zs}");
+    println(f"{names(["a", "b", "c"], 0)}");
+    List(Float) fl = [1.5, 2.5];
+    println(f"{fl.with(1, 0.25)} {fl}");
+    List(Pt) ps = [Pt {.x = 1, .tag = "a"}, Pt {.x = 2, .tag = "b"}];
+    List(Pt) ps2 = ps.with(0, Pt {.x = 9, .tag = "z"});
+    println(f"{ps[0].x}{ps[0].tag} {ps2[0].x}{ps2[0].tag} {ps2[1].x}{ps2[1].tag}");
+    List(Int, 4) fx = [1, 2, 3, 4];
+    List(Int, 4) fy = fx.with(2, 9);
+    println(f"{fx} {fy}");
+    List(Int) big = iota(0, rt 1000, ListBuf()).finish();
+    List(Int) big2 = big.with(500, 0).with(999, 1);
+    List(Int) big3 = big2.with(0, 7);
+    println(f"{sum(big, 0, 0)} {sum(big2, 0, 0)} {sum(big3, 0, 0)} {big[500]} {big2[500]} {big3[0]} {big2[0]}");
+    List(Int) t = tally(iota(0, rt 10, ListBuf()).finish(), 0, 1000);
+    println(f"{t} {sum(t, 0, 0)}");
+    List(Int) g = grow(rt [0], 5);
+    println(f"{g}");
+    List(Int) s1 = c[1..3];
+    List(Int) c2 = c.with(1, 99);
+    println(f"{s1} {c} {c2}");
+    return 0;
+}

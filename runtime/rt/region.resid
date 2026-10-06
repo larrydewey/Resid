@@ -1,0 +1,310 @@
+// Region memory: the scopes the compiler opens (resid_scope_push/pop, a
+// loop's region) and the moves between them.
+//
+// A region is a list of 1 MB pages (a larger object gets a run of 2^k
+// pages) taken from one reserved range of address space; a page table
+// maps each page to the id of the region that owns it, so the region
+// holding an address is a single lookup. Region ids grow with every
+// push: of two live regions on one thread, the larger id is the younger.
+// Any live region can take an allocation, not only the innermost one,
+// which keeps one invariant cheap: no object points into a region
+// younger than its own. A value stored into an older object is moved
+// into that object's region first (bar_keep in map.resid), and a value
+// that must outlive its region is moved into the one it goes to before
+// the pop (resid_loop_move, resid_loop_exit), in one copy. The heap is
+// only what lies outside every region (depth 0).
+//
+// Region records live in the thread's scope stack (alloc.resid's marks
+// array): id, top page, bump, end, page count, the page count right after
+// the last compaction, bytes taken through alloc_in, and a spare word. The
+// innermost region's top page, bump and end are kept in the allocator
+// words 5-7 for the inline fast path.
+
+Int rg_page() { return 1048576; }
+Int rg_pages() { return 262144; }      // 256 GB of address space
+
+// Process-wide words: 0 the range's base, 1 the next untouched page, 2 the
+// page table, 3 a lock, 4-22 the free runs of 2^k pages, 23 the last id.
+Int rg_g() { return resid_raw_global("rt_regions", 192); }
+
+Int rg_lock() {
+    if (resid_raw_cas(rg_g() + 24, 0, 1)) { return 0; }
+    return rg_lock();
+}
+
+Int rg_unlock() { return st64(rg_g() + 24, 0); }
+
+Int rg_base() {
+    Int b = ld64(rg_g());
+    return if (b != 0) { b } else { rg_init() };
+}
+
+// The range and its page table, mapped without reserving memory: a page
+// costs memory only once it is touched.
+@cold
+Int rg_init() {
+    _ = rg_lock();
+    _ = if (ld64(rg_g()) == 0) { rg_map() } else { 0 };
+    _ = rg_unlock();
+    return ld64(rg_g());
+}
+
+Int rg_map() {
+    Int tab = rg_reserve(rg_pages() * 8);
+    Int base = rg_reserve(rg_pages() * rg_page());
+    _ = st64(rg_g() + 16, tab) + st64(rg_g() + 8, 0);
+    return st64(rg_g(), base);
+}
+
+// Left out of core dumps until a region owns it (rg_dump).
+Int rg_reserve(Int n) {
+    Int p = resid_raw_syscall(9, 0, n, 3, 16418, 0 - 1, 0);   // RW, PRIVATE|ANON|NORESERVE
+    if (p < 0 && p > 0 - 4096) { return rt_abort("cannot reserve region address space"); }
+    _ = resid_raw_syscall(28, p, n, 16, 0, 0, 0);              // MADV_DONTDUMP
+    return p;
+}
+
+// A run in use is in a core dump; a free one is not.
+Int rg_dump(Int p, Int k, Bool on) { return resid_raw_syscall(28, p, (1 << k) * rg_page(), if (on) { 17 } else { 16 }, 0, 0, 0); }
+
+// The id of the live region holding p, or 0 (the heap, a frame, static
+// data, or a freed page).
+pub Int region_of(Int p) {
+    Int base = ld64(rg_g());
+    Int off = p - base;
+    if (base == 0 || !ult(off, rg_pages() * rg_page())) { return 0; }
+    return ld64(ld64(rg_g() + 16) + (off >> 20) * 8);
+}
+
+// p lies on a region page no region owns any more (freed by a pop).
+pub Bool region_freed(Int p) {
+    Int base = ld64(rg_g());
+    Int off = p - base;
+    if (p == 0 || base == 0 || !ult(off, rg_pages() * rg_page())) { return false; }
+    return ld64(ld64(rg_g() + 16) + (off >> 20) * 8) == 0;
+}
+
+Int own_set(Int p, Int n, Int id) {
+    if (n <= 0) { return 0; }
+    _ = st64(ld64(rg_g() + 16) + ((p - rg_base()) >> 20) * 8, id);
+    return own_set(p + rg_page(), n - 1, id);
+}
+
+// ─── Pages ─────────────────────────────────────────────────────────────
+// Single pages are cached per thread (64 at most); other runs go back to
+// the kernel (MADV_DONTNEED) and onto the free list of their order.
+
+Int rg_cache() { return resid_raw_tls("rg_cache", 16); }   // head, count
+
+Int order_of(Int n) { return if (n <= rg_page()) { 0 } else { bitlen((n - 1) >> 20) }; }
+
+Int pages_take(Int k, Int id) {
+    Int c = rg_cache();
+    Int p = if (k == 0 && ld64(c) != 0) { ld64(c) } else { 0 };
+    _ = if (p != 0) { st64(c, ld64(p)) + st64(c + 8, ld64(c + 8) - 1) } else { 0 };
+    Int q = if (p != 0) { p } else { run_take(k) };
+    _ = own_set(q, 1 << k, id);
+    _ = if (p == 0) { rg_dump(q, k, true) } else { 0 };
+    return q;
+}
+
+Int run_take(Int k) {
+    Int base = rg_base();
+    Int head = rg_g() + 32 + k * 8;
+    _ = rg_lock();
+    Int p = ld64(head);
+    _ = if (p != 0) { st64(head, ld64(p)) } else { 0 };
+    Int at = ld64(rg_g() + 8);
+    Bool fresh = p == 0 && at + (1 << k) <= rg_pages();
+    _ = if (fresh) { st64(rg_g() + 8, at + (1 << k)) } else { 0 };
+    _ = rg_unlock();
+    if (p == 0 && !fresh) { return rt_abort("region address space exhausted"); }
+    _ = mem_take((1 << k) * rg_page());
+    return if (p != 0) { p } else { base + at * rg_page() };
+}
+
+Int pages_give(Int p, Int k) {
+    _ = own_set(p, 1 << k, 0);
+    Int c = rg_cache();
+    if (k == 0 && ld64(c + 8) < 64) { return st64(p, ld64(c)) + st64(c, p) + st64(c + 8, ld64(c + 8) + 1); }
+    _ = resid_raw_syscall(28, p, (1 << k) * rg_page(), 4, 0, 0, 0);   // MADV_DONTNEED
+    _ = rg_dump(p, k, false);
+    _ = mem_give((1 << k) * rg_page());
+    Int head = rg_g() + 32 + k * 8;
+    _ = rg_lock();
+    _ = st64(p, ld64(head)) + st64(head, p);
+    return rg_unlock();
+}
+
+// A region's pages, newest first: each starts with {previous, order}.
+pub Int pages_free(Int p, Int n) {
+    if (p == 0) { return n; }
+    Int prev = ld64(p);
+    _ = pages_give(p, ld64(p + 8));
+    return pages_free(prev, n + 1);
+}
+
+// ─── Region records ────────────────────────────────────────────────────
+
+pub Int new_region_id() { return resid_raw_fetch_add(rg_g() + 184, 1) + 1; }
+
+pub Int rec_init(Int r, Int id) {
+    _ = st64(r, id) + st64(r + 8, 0) + st64(r + 16, 0) + st64(r + 24, 0);
+    return st64(r + 32, 0) + st64(r + 40, 0) + st64(r + 48, 0) + st64(r + 56, 0);
+}
+
+// The record of live region `id` on this thread's stack, or 0.
+pub Int rec_of(Int id) { return if (id == 0) { 0 } else { rec_find(ag_scope_depth() - 1, id) }; }
+
+Int rec_find(Int d, Int id) {
+    if (d < 0) { return 0; }
+    Int r = rec_at(d);
+    if (ld64(r) == id) { return r; }
+    return rec_find(d - 1, id);
+}
+
+// n bytes in region r (any live one, or a detached record): the innermost
+// through its fast path, another by its own bump.
+pub Int alloc_in(Int r, Int n0) {
+    if (ag_scope_depth() > 0 && r == cur_region()) { return scope_alloc(n0); }
+    Int n = (n0 + 7) & (0 - 8);
+    _ = st64(r + 48, ld64(r + 48) + n);
+    Int p = ld64(r + 16);
+    Int pad = if ((n & 8) != 0) { 0 } else { p & 8 };
+    if (p != 0 && ld64(r + 24) - p >= n + pad) { return st64(r + 16, p + pad + n) * 0 + p + pad; }
+    return region_grow(r, (n + 15) & (0 - 16));
+}
+
+// A new page (or run) for region r, holding the n bytes asked for.
+pub Int region_grow(Int r, Int n) {
+    Int k = order_of(n + 16);
+    Int pg = pages_take(k, ld64(r));
+    _ = st64(pg, ld64(r + 8)) + st64(pg + 8, k);
+    _ = st64(r + 8, pg) + st64(r + 32, ld64(r + 32) + (1 << k));
+    _ = st64(r + 16, pg + 16 + n) + st64(r + 24, pg + (1 << k) * rg_page());
+    return pg + 16;
+}
+
+// ─── Moves ─────────────────────────────────────────────────────────────
+// A move context names what moves and where to: the values in a region
+// whose id lies in [lo, hi] move into region `dst` (a record; 0, the
+// heap). The map runtime's moves (map.resid, Moving values) take one.
+
+pub Bool mv_src(Int ctx, Int p) {
+    Int id = region_of(p);
+    return id != 0 && id >= ld64(ctx) && id <= ld64(ctx + 8);
+}
+
+pub Int mv_alloc(Int ctx, Int n) {
+    Int dst = ld64(ctx + 16);
+    if (dst != 0) { return alloc_in(dst, n); }
+    return rt_outer_alloc(n);
+}
+
+pub Int mv_ctx(Int c, Int lo, Int hi, Int dst) {
+    _ = st64(c, lo) + st64(c + 8, hi) + st64(c + 16, dst);
+    return c;
+}
+
+// Every region, out to the heap: the moves of code compiled before
+// loop regions had their own (the resid_*_keep / *_evac entry points).
+pub Int mv_legacy() { return mv_ctx(resid_raw_tls("rg_mv_legacy", 24), 1, 9223372036854775807, 0); }
+
+// A value stored into an object of region `ro` (0: outside every
+// region): what is younger moves into that region, or to the heap. Such
+// moves nest (settling a buffer inside another move), so each takes a
+// context of its own from a stack, given back by mv_done.
+pub Int mv_into(Int ro) {
+    Int st = resid_raw_tls("rg_mv_stack", 1544);
+    Int k = ld64(st);
+    if (k >= 64) { return rt_abort("moves nested too deeply"); }
+    _ = st64(st, k + 1);
+    Int dst = rec_of(ro);
+    Int lo = if (dst == 0) { 1 } else { ro + 1 };
+    return mv_ctx(st + 8 + k * 24, lo, 9223372036854775807, dst);
+}
+
+// The value v, after the move that used the innermost mv_into context.
+pub Int mv_done(Int v) {
+    Int st = resid_raw_tls("rg_mv_stack", 1544);
+    return st64(st, ld64(st) - 1) * 0 + v;
+}
+
+// ─── Loop regions ──────────────────────────────────────────────────────
+// A loop the compiler gives a region (lr_region in lower.resid) pushes
+// one, L, when it starts; every step allocates there. At a back edge,
+// once L holds more than twice the pages it held after its last
+// compaction (and two more), the values the loop carries move into a fresh region
+// that then takes L's place: one copy of what is live, none of the
+// garbage. At an exit the result is moved: a region holding more than a
+// quarter page hands its pages to the caller's region (their garbage is
+// bounded by the same compaction), so a loop returning much costs nothing
+// per byte; a smaller one copies its result over, rather than hand the
+// caller a mostly empty page. An exit to depth 0, where no region can
+// take pages, copies the result out. Values older than L never move:
+// they cannot point into L.
+
+@export("resid_loop_enter", "i64()")
+pub Int rt_loop_enter() { return rt_scope_push(); }
+
+@export("resid_loop_due", "i1(i64)")
+@inline
+pub Bool rt_loop_due(Int l) {
+    Int r = rec_at(l);
+    return ld64(r + 32) > 2 * ld64(r + 40) + 2;
+}
+
+// Step 1: the context moving L's values into a new detached region;
+// step 2: L's pages freed and the new region in its place.
+@export("resid_loop_move", "ptr(i64,i64)")
+pub Int rt_loop_move(Int l, Int step) {
+    Int nr = resid_raw_tls("rg_next", 64);
+    Int r = rec_at(l);
+    if (step == 1) {
+        _ = rec_save(r);
+        _ = rec_init(nr, new_region_id());
+        return mv_ctx(resid_raw_tls("rg_mv_loop", 24), ld64(r), ld64(r), nr);
+    }
+    _ = pages_free(ld64(r + 8), 0);
+    _ = mcopy(r, nr, 64);
+    _ = st64(r + 40, ld64(nr + 32)) + st64(r + 48, 0);
+    _ = rec_load(r);
+    return str_index_scope_popped() * 0;
+}
+
+// Step 1: L's pages handed to the caller's region, with an empty move
+// context (nothing left to copy); for a small L, or at depth 0, the
+// context copying the result over. Step 2: L popped.
+@export("resid_loop_exit", "ptr(i64,i64)")
+pub Int rt_loop_exit(Int l, Int step) {
+    Int r = rec_at(l);
+    if (step == 2) { return rt_scope_pop(l) * 0; }
+    _ = rec_save(r);
+    Int c = resid_raw_tls("rg_mv_loop", 24);
+    if (l == 0) { return mv_ctx(c, ld64(r), ld64(r), 0); }
+    // L is the current region: its use is the bump past its top page.
+    Bool small = ld64(r + 32) <= 1 && ld64(r + 16) - ld64(r + 8) < rg_page() / 4;
+    if (small) { return mv_ctx(c, ld64(r), ld64(r), rec_at(l - 1)); }
+    _ = region_merge(r, rec_at(l - 1));
+    // L is the current region: its live bump words go too, or the pop
+    // would save them back and free the pages it handed over.
+    _ = top_clear();
+    return mv_ctx(c, 1, 0, 0);
+}
+
+// Region r's pages become region p's (r is left empty): its values move
+// without a copy. p is the region below r, so nothing older points in.
+pub Int region_merge(Int r, Int p) {
+    Int top = ld64(r + 8);
+    if (top == 0) { return 0; }
+    Int oldest = retag(top, ld64(p));
+    _ = st64(oldest, ld64(p + 8)) + st64(p + 8, top) + st64(p + 32, ld64(p + 32) + ld64(r + 32));
+    return st64(r + 8, 0) + st64(r + 16, 0) + st64(r + 24, 0) + st64(r + 32, 0);
+}
+
+// Each page run from pg back owned by id; the oldest run.
+Int retag(Int pg, Int id) {
+    _ = own_set(pg, 1 << ld64(pg + 8), id);
+    Int prev = ld64(pg);
+    return if (prev == 0) { pg } else { retag(prev, id) };
+}

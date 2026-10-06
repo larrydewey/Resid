@@ -1,0 +1,29 @@
+// Values a loop iteration allocates (strings, integers beyond the
+// immediate range, tiny floats) and stores into a list it updates in
+// place outlive the iteration's region.
+List(Str) tags(List(Str) xs, Int i, Int n) {
+    if (i >= n) { return xs; }
+    Str s = f"v{i}-" + str_repeat("x", i % 5);
+    return tags(xs.with(i % xs.len(), s), i + 1, n);
+}
+
+List(Int) bigs(List(Int) xs, Int i, Int n) {
+    if (i >= n) { return xs; }
+    return bigs(xs.with(i % xs.len(), (i % 50) * 100000000000000000 + 7), i + 1, n);
+}
+
+List(Float) tinies(List(Float) xs, Int i, Int n) {
+    if (i >= n) { return xs; }
+    Float f = (Float)(i + 1) * 0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001;
+    return tinies(xs.with(i % xs.len(), f), i + 1, n);
+}
+
+Int main() {
+    List(Str) t = tags(rt ["", "", ""], 0, 20000);
+    println(f"{t}");
+    List(Int) b = bigs(rt [0, 0], 0, 20001);
+    println(f"{b}");
+    List(Float) f = tinies(rt [1.0, 1.0], 0, 1001);
+    println(f"{f[0] > 0.0} {f[1] > 0.0} {f[0] == f[0]}");
+    return 0;
+}

@@ -192,7 +192,11 @@ LSF lw_finits(LW w, Int id, Int i, Str fields, Str reg, List(Str) env, LSF acc) 
     // a store of the narrow value would leave the field's high bytes unset.
     GT vw = pick_widen(lw_field_adopts(fty, v0.ty), v0, num_norm_cg(fty));
     GT v = if (vw.err == "") { vw } else { v0 };
-    Str e = f"{slot}|" + ll_ty(v.ty) + "|" + v.val;
+    // A fixed-capacity field is stored inline: copied in (lw_fstores).
+    Int fxn = lw_fx_size(fty);
+    // "fxt<n>" / "fxb<n>": n inline bytes, with or without text.
+    Str fxk = if (lw_fx_text(fty)) { "fxt" } else { "fxb" };
+    Str e = f"{slot}|" + (if (fxn > 0) { fxk + f"{fxn}" } else { ll_ty(v.ty) }) + "|" + v.val;
     if (reg == "") { return lw_finits(w, id, i + 1, fields, reg, env, LSF {.g = v, .st = acc.st.concat([e])}); }
     GT stored = lw_step(v, v.val, v.ty, lw_fstores(reg, [e], 0, v.lines), v.tmp);
     return lw_finits(w, id, i + 1, fields, reg, env, LSF {.g = stored, .st = acc.st});
@@ -229,7 +233,8 @@ List(Str) lw_fstores(Str reg, List(Str) st, Int i, List(Str) acc) {
     if (i >= st.len()) { return acc; }
     List(Str) p = str_split(st[i], "|");
     Str sr = reg + ".f" + p[0];
-    return lw_fstores(reg, st, i + 1, acc.concat([sr + " = getelementptr i8, ptr " + reg + f", i64 {str_parse_int(p[0]) * 8}", "store " + p[1] + " " + p[2] + ", ptr " + sr + ", align 8"]));
+    Str put = if (str_starts_with(p[1], "fx")) { fx_copy(sr, p[2], str_parse_int(str_slice(p[1], 3, str_len(p[1]))), str_char_at(p[1], 2) == 116) } else { "store " + p[1] + " " + p[2] + ", ptr " + sr + ", align 8" };
+    return lw_fstores(reg, st, i + 1, acc.concat([sr + " = getelementptr i8, ptr " + reg + f", i64 {str_parse_int(p[0]) * 8}", put]));
 }
 
 // cg_struct_lit. A record of a type some literal may reuse carries a
@@ -632,7 +637,7 @@ GT lw_show_fixed_list(LW w, GT v, Bool trim, List(Str) env) {
     Str gp = f"%t{t1 + 3}";
     Str ev = f"%t{t1 + 4}";
     List(Str) none = [];
-    List(Str) b0 = [lb + ":", gp + " = getelementptr inbounds " + fixed_arr_ty(t) + ", ptr " + v.val + ", i64 0, i64 " + ix, ev + " = load " + ll_ty(ety) + ", ptr " + gp];
+    List(Str) b0 = [lb + ":", gp + " = getelementptr inbounds " + fixed_arr_ty(t) + ", ptr " + v.val + ", i64 0, i64 " + ix, fx_elem_read(ev, ety, gp)];
     GT elem = GT {.pos = 0, .val = ev, .ty = ety, .cnt = 0, .err = "", .glines = no.glines, .lines = b0, .tmp = t1 + 4, .lbl = no.lbl + 3, .tail = false};
     GT es = lw_show_nested(w, elem, env);
     if (es.err != "") { return es; }
@@ -1217,6 +1222,8 @@ GT lw_field_of(LW w, GT base, Str f) {
     Int t2 = base.tmp + 2;
     Str gp = f"%t{t1}";
     Str ld = f"%t{t2}";
+    // A fixed-capacity field is inline: its value is its address.
+    if (lw_fx_size(fty) > 0) { return lw_step(base, gp, fty, base.lines.concat([gp + " = getelementptr i8, ptr " + base.val + f", i64 {slot * 8}"]), t1); }
     // Slots are 8-aligned: a 16-byte field (i128, fp128) needs the explicit
     // alignment, or LLVM assumes 16 and emits aligned vector moves.
     return lw_step(base, ld, fty, base.lines.concat([gp + " = getelementptr i8, ptr " + base.val + f", i64 {slot * 8}", ld + " = load " + ll_ty(fty) + ", ptr " + gp + ", align 8"]), t2);
@@ -1271,6 +1278,15 @@ GT lw_mcall(LW w, Int id, List(Str) env, GT c) {
     if (is_set_type_cg(base.ty)) { return lw_set_method(w, id, base, m, env); }
     if (m == "len" && base.ty == "Bytes") { return lw_rt1(base, "i64", "@resid_bytes_len(ptr " + base.val + ")", "Int"); }
     if (m == "len") { return lw_rt1(base, "i64", "@resid_list_len(ptr " + base.val + ")", "Int"); }
+    if (m == "with" && is_list_fixed(base.ty)) { return lw_fixed_with(w, id, base, env); }
+    if (m == "with" && str_has_prefix_cg(strip_owned_cg(base.ty), "List(")) { return lw_list_with(w, id, base, env); }
+    if (m == "concat" && lo_is(w, id, 1) && lw_list_keepable(elem_type(strip_owned_cg(base.ty)))) {
+        GT oarg = lw_marg_as(w, id, 0, base.ty, env, base);
+        if (oarg.err != "") { return oarg; }
+        Int ot = oarg.tmp + 1;
+        Str oreg = f"%t{ot}";
+        return lw_step(oarg, oreg, base.ty, oarg.lines.concat([oreg + " = call ptr @resid_list_concat_own(ptr " + base.val + ", i8 1, ptr " + oarg.val + ")"]), ot);
+    }
     if (m == "concat") {
         GT arg = lw_marg_as(w, id, 0, base.ty, env, base);
         if (arg.err != "") { return arg; }
@@ -1296,9 +1312,10 @@ GT lw_mcall(LW w, Int id, List(Str) env, GT c) {
         GT margs = lw_args(w, id, 1, ll_ty(mpl[0]) + " " + basew.val, 1, env, basew, mpl);
         if (margs.err != "") { return margs; }
         Str mraw = fs.rets[midx];
-        Int mt1 = margs.tmp + 1;
+        FxA mfa = lw_fx_arg(id, mraw, env, margs.tmp);
+        Int mt1 = mfa.tmp + 1;
         Str mreg = f"%t{mt1}";
-        return GT {.pos = 0, .val = mreg, .ty = mraw, .cnt = 0, .err = "", .glines = margs.glines, .lines = margs.lines.concat([mreg + " = call " + ll_ty(mraw) + " @" + m + "(" + margs.val + ")"]), .tmp = mt1, .lbl = margs.lbl, .tail = false};
+        return GT {.pos = 0, .val = mreg, .ty = mraw, .cnt = 0, .err = "", .glines = margs.glines, .lines = margs.lines.concat(mfa.lines).concat([mreg + " = call " + ll_ty(mraw) + " @" + m + "(" + fx_args(mfa.arg, margs.val) + ")"]), .tmp = mt1, .lbl = margs.lbl, .tail = mfa.tail};
     }
     Int cbi = struct_index(fs, strip_owned_cg(base.ty));
     if (cbi >= 0) {
@@ -1445,11 +1462,11 @@ List(Str) lv_decl(List(Str) gl, Str name, Str decl) { return gl.concat(["@rtg.cm
 // The value of `id` for a slot of type `want`: vector literals, splat(x)
 // and lanes() take their vector type from it.
 GT lw_expr_as(LW w, Int id, Str want, List(Str) env, GT c) {
-    // A branching expression passes a fixed-capacity type on to its
-    // branches (a literal there gets its own storage).
+    // A branching expression passes a type holding a fixed-capacity one on
+    // to its branches (a literal there gets its own storage).
     Str bk = lw_kind(w, id);
     Bool branches = bk == "ifx" || bk == "match" || bk == "tern" || bk == "bexpr" || bk == "paren";
-    if (branches && (is_fixed_type(want) || lw_fixed_bkind(want))) { return lw_expr(lw_wanting(w, want), id, env, c); }
+    if (branches && (lw_mentions_fixed(want) || lw_fixed_bkind(want))) { return lw_expr(lw_wanting(w, want), id, env, c); }
     // A fresh builder where a fixed-capacity one is expected: no storage
     // yet (fb_block allocates it on first use).
     if (lw_fixed_bkind(want) && lw_kind(w, id) == "call" && w.g.ns[id].nk == 0 && fn_index(w.fs, lw_text(w, id)) < 0) {
@@ -1907,11 +1924,11 @@ GT fb_block(GT v) {
     Str lh = f"L{v.lbl + 2}";
     Str lj = f"L{v.lbl + 3}";
     Str from = last_label_line_cg(v.lines, "entry");
+    List(Str) drop = if (fx_text(res)) { [fx_drop(mk, n)] } else { [] };
     List(Str) ls = v.lines.concat([
         isn + " = icmp eq ptr " + v.val + ", null", "br i1 " + isn + ", label %" + la + ", label %" + lj,
-        la + ":", mk + f" = call ptr @resid_gmalloc(i64 {n})", "call void @llvm.memset.p0.i64(ptr " + mk + f", i8 0, i64 {n}, i1 false)", "br label %" + lj,
-        lj + ":", blk + " = phi ptr [ " + mk + ", %" + la + " ], [ " + v.val + ", %" + from + " ]"
-    ]);
+        la + ":", fixed_alloca(mk, n), "call void @llvm.memset.p0.i64(ptr " + mk + f", i8 0, i64 {n}, i1 false)"
+    ]).concat(drop).concat(["br label %" + lj, lj + ":", blk + " = phi ptr [ " + mk + ", %" + la + " ], [ " + v.val + ", %" + from + " ]"]);
     return GT {.pos = 0, .val = blk, .ty = v.ty, .cnt = 0, .err = "", .glines = v.glines, .lines = ls, .tmp = t1 + 2, .lbl = v.lbl + 3, .tail = false};
 }
 
@@ -1935,7 +1952,7 @@ GT fb_push_elem(GT b, GT a) {
         wp + " = getelementptr i8, ptr " + b.val + ", i64 8", w0 + " = load i64, ptr " + wp, w1 + " = add i64 " + w0 + ", 1", "store i64 " + w1 + ", ptr " + wp,
         fits + " = icmp sle i64 " + w1 + f", {cap}", "br i1 " + fits + ", label %" + ls + ", label %" + lj,
         ls + ":", ln + " = load i64, ptr " + b.val, arr + " = getelementptr i8, ptr " + b.val + ", i64 16",
-        sl + " = getelementptr inbounds " + fixed_arr_ty(res) + ", ptr " + arr + ", i64 0, i64 " + ln, "store " + ll_ty(ety) + " " + a.val + ", ptr " + sl,
+        sl + " = getelementptr inbounds " + fixed_arr_ty(res) + ", ptr " + arr + ", i64 0, i64 " + ln, fx_elem_store(ety, a.val, sl),
         l1 + " = add i64 " + ln + ", 1", "store i64 " + l1 + ", ptr " + b.val, "br label %" + lj, lj + ":"
     ]);
     return GT {.pos = 0, .val = b.val, .ty = b.ty, .cnt = 0, .err = "", .glines = a.glines, .lines = out, .tmp = t1 + 7, .lbl = a.lbl + 2, .tail = false};
@@ -1946,7 +1963,7 @@ GT fb_push_elem(GT b, GT a) {
 GT fb_finish_zero(LW w, GT b, Bool as_result) {
     Str res = fb_result(b.ty);
     Str ety = fixed_elem(res);
-    Bool ptr_list = lw_bkind(b.ty) == "flb" && ll_ty(ety) == "ptr";
+    Bool ptr_list = lw_bkind(b.ty) == "flb" && ll_ty(ety) == "ptr" && !is_fixed_type(ety);
     if (!ptr_list) { return fb_finish(b, as_result, w.fs); }
     // Slots [len, N) get the element's zero value; with none, a builder
     // must be filled: finish aborts, try_finish gives Err(len).
@@ -2134,8 +2151,8 @@ GT lw_map_method(LW w, Int id, GT base, Str m, List(Str) env) {
     if (m == "insert") {
         GT va0 = lw_marg_as(w, id, 1, vt, env, arg);
         if (va0.err != "") { return va0; }
-        GT ka = lo_keep(lw_step(va0, arg.val, arg.ty, va0.lines, va0.tmp), kt);
-        GT va = lo_keep(lw_step(ka, va0.val, va0.ty, ka.lines, ka.tmp), vt);
+        GT ka = lw_step(va0, arg.val, arg.ty, va0.lines, va0.tmp);
+        GT va = lw_step(ka, va0.val, va0.ty, ka.lines, ka.tmp);
         GT kb = box_heap_(src, lw_step(va, ka.val, arg.ty, va.lines, va.tmp), env, fs);
         GT vb = box_heap_(src, lw_step(kb, va.val, va0.ty, kb.lines, kb.tmp), env, fs);
         Int t1 = vb.tmp + 1;
@@ -2190,7 +2207,7 @@ GT lw_set_method(LW w, Int id, GT base, Str m, List(Str) env) {
         return GT {.pos = 0, .val = r.val, .ty = r.ty, .cnt = 0, .err = "", .glines = arg.glines, .lines = r.lines, .tmp = r.tmp, .lbl = arg.lbl, .tail = false};
     }
     if (m == "insert" || m == "remove") {
-        GT eb = box_heap_(src, if (m == "insert") { lo_keep(arg, et) } else { arg }, env, fs);
+        GT eb = box_heap_(src, arg, env, fs);
         Str fnm = if (m == "insert") { "@resid_set_insert" } else { "@resid_set_remove" };
         GT r = lw_rt1(eb, "ptr", fnm + "(ptr " + base.val + ", ptr " + eb.val + ")", base.ty);
         return GT {.pos = 0, .val = r.val, .ty = r.ty, .cnt = 0, .err = "", .glines = arg.glines, .lines = r.lines, .tmp = r.tmp, .lbl = arg.lbl, .tail = false};
@@ -2317,7 +2334,7 @@ GT lw_index_fixed(LW w, Int ixn, GT base, List(Str) env) {
     Str ety = fixed_elem(base.ty);
     Str gp = f"%t{tn}";
     Str lda = f"%t{tn + 1}";
-    return GT {.pos = 0, .val = lda, .ty = ety, .cnt = 0, .err = "", .glines = ixx.glines, .lines = lf.concat([gp + " = getelementptr inbounds " + fixed_arr_ty(base.ty) + ", ptr " + base.val + ", i64 0, i64 " + ixx.val, lda + " = load " + ll_ty(ety) + ", ptr " + gp]), .tmp = tn + 1, .lbl = l2, .tail = false};
+    return GT {.pos = 0, .val = lda, .ty = ety, .cnt = 0, .err = "", .glines = ixx.glines, .lines = lf.concat([gp + " = getelementptr inbounds " + fixed_arr_ty(base.ty) + ", ptr " + base.val + ", i64 0, i64 " + ixx.val, fx_elem_read(lda, ety, gp)]), .tmp = tn + 1, .lbl = l2, .tail = false};
 }
 
 // cg_primary literal cases.
@@ -2930,18 +2947,20 @@ GT lw_call(LW w, Int id, List(Str) env, GT c) {
     Int idx = fn_index(fs, n);
     if (na == 0) {
         Str rraw0 = fs.rets[idx];
-        Int t1 = c.tmp + 1;
+        FxA fa0 = lw_fx_arg(id, rraw0, env, c.tmp);
+        Int t1 = fa0.tmp + 1;
         Str reg = f"%t{t1}";
-        return lo_freeze(w, id, GT {.pos = 0, .val = reg, .ty = rraw0, .cnt = 0, .err = "", .glines = c.glines, .lines = c.lines.concat([reg + " = call " + ll_ty(rraw0) + " @" + n + "()"]), .tmp = t1, .lbl = c.lbl, .tail = false});
+        return lo_freeze(w, id, GT {.pos = 0, .val = reg, .ty = rraw0, .cnt = 0, .err = "", .glines = c.glines, .lines = c.lines.concat(fa0.lines).concat([reg + " = call " + ll_ty(rraw0) + " @" + n + "(" + fa0.arg + ")"]), .tmp = t1, .lbl = c.lbl, .tail = fa0.tail});
     }
     Str ptstr = fs.pts[idx];
     List(Str) ptys = if (ptstr == "") { nil_list() } else { split_rest_depth(ptstr, ", ") };
     GT a = lw_args(w, id, 0, "", 0, env, c, ptys);
     if (a.err != "") { return a; }
     Str rraw = fs.rets[idx];
-    Int t1 = a.tmp + 1;
+    FxA fa = lw_fx_arg(id, rraw, env, a.tmp);
+    Int t1 = fa.tmp + 1;
     Str reg = f"%t{t1}";
-    return lo_freeze(w, id, GT {.pos = 0, .val = reg, .ty = rraw, .cnt = a.cnt, .err = "", .glines = a.glines, .lines = a.lines.concat([reg + " = call " + ll_ty(rraw) + " @" + n + "(" + a.val + ")"]), .tmp = t1, .lbl = a.lbl, .tail = false});
+    return lo_freeze(w, id, GT {.pos = 0, .val = reg, .ty = rraw, .cnt = a.cnt, .err = "", .glines = a.glines, .lines = a.lines.concat(fa.lines).concat([reg + " = call " + ll_ty(rraw) + " @" + n + "(" + fx_args(fa.arg, a.val) + ")"]), .tmp = t1, .lbl = a.lbl, .tail = fa.tail});
 }
 
 // cg_debug_builtin: known / rt_known / rt_assert / assert / todo / unimplemented.
@@ -3018,37 +3037,30 @@ GT lw_fn_call(LW w, Int id, Int from, Str cval, Str fnty, List(Str) env, GT c) {
     Str ret = fn_ret(fnty);
     GT a = lw_args(w, id, from, "", 0, env, c, pl);
     if (a.err != "") { return a; }
-    Str fp0 = f"%t{a.tmp + 1}";
-    Str fp = f"%t{a.tmp + 2}";
-    Str envr = f"%t{a.tmp + 3}";
-    Str cr = f"%t{a.tmp + 4}";
-    Str cal = "i64 " + envr;
+    FxA fa = lw_fx_arg(id, ret, env, a.tmp);
+    Str fp0 = f"%t{fa.tmp + 1}";
+    Str fp = f"%t{fa.tmp + 2}";
+    Str envr = f"%t{fa.tmp + 3}";
+    Str cr = f"%t{fa.tmp + 4}";
+    Str cal = fx_args(fa.arg, "i64 " + envr);
     Str cal2 = if (a.val == "") { cal } else { cal + ", " + a.val };
-    return lo_freeze(w, -1, lw_step(a, cr, ret, a.lines.concat([fp0 + " = load i64, ptr " + cval, fp + " = inttoptr i64 " + fp0 + " to ptr", envr + " = ptrtoint ptr " + cval + " to i64", cr + " = call " + ll_ty(ret) + " " + fp + "(" + cal2 + ")"]), a.tmp + 4));
+    GT r = lw_step(a, cr, ret, a.lines.concat(fa.lines).concat([fp0 + " = load i64, ptr " + cval, fp + " = inttoptr i64 " + fp0 + " to ptr", envr + " = ptrtoint ptr " + cval + " to i64", cr + " = call " + ll_ty(ret) + " " + fp + "(" + cal2 + ")"]), fa.tmp + 4);
+    return lo_freeze(w, -1, GT {.pos = r.pos, .val = r.val, .ty = r.ty, .cnt = r.cnt, .err = r.err, .glines = r.glines, .lines = r.lines, .tmp = r.tmp, .lbl = r.lbl, .tail = fa.tail});
 }
 
 // The runtime kind of a word stored by a typed insert: 4 for a Str, 5
-// for a list of Int, Float, Bool or Str (moved out of a scope region when
-// stored).
+// for a list of Int, Float, Bool or Str (moved into an older map's region
+// when stored in place, and when the map moves).
 Int lo_put_kind(Int k, Str ty) { return if (ty == "Str") { 4 } else { if (lr_list_word(ty)) { 5 } else { k } }; }
-
-// A Str about to be stored in a map or set: copied out of a scope region,
-// whose map outlives it (loop regions, lr_region).
-GT lo_keep(GT g, Str ty) {
-    if (ty != "Str") { return g; }
-    Int t = g.tmp + 1;
-    Str r = f"%t{t}";
-    return GT {.pos = 0, .val = r, .ty = g.ty, .cnt = g.cnt, .err = "", .glines = g.glines, .lines = g.lines.concat([r + " = call ptr @resid_str_keep(ptr " + g.val + ")"]), .tmp = t, .lbl = g.lbl, .tail = false};
-}
 
 // A Map/Set or struct call result outside a consuming chain is frozen: a
 // transient table or unique record must stay reachable from one place.
 GT lo_freeze(LW w, Int id, GT v) {
     if (id >= 0 && lo_is(w, id, 1)) { return v; }
-    if (lin_is_mapset(v.ty)) {
+    if (lo_whole(w.lo, v.ty)) {
         Int t = v.tmp + 1;
         Str r = f"%t{t}";
-        return GT {.pos = 0, .val = r, .ty = v.ty, .cnt = v.cnt, .err = "", .glines = v.glines, .lines = v.lines.concat([r + " = call ptr @resid_map_freeze(ptr " + v.val + ")"]), .tmp = t, .lbl = v.lbl, .tail = false};
+        return GT {.pos = 0, .val = r, .ty = v.ty, .cnt = v.cnt, .err = "", .glines = v.glines, .lines = v.lines.concat([r + " = call ptr " + lo_freeze_fn(v.ty) + "(ptr " + v.val + ")"]), .tmp = t, .lbl = v.lbl, .tail = false};
     }
     Str sty = strip_owned_cg(v.ty);
     if (!w.lo.sm.contains(sty)) { return v; }
@@ -3065,7 +3077,79 @@ GT lo_freeze_fields(LW w, GT v, List(Str) mfs, Int i, GT c) {
     if (f.err != "") { return f; }
     Int t = f.tmp + 1;
     Str r = f"%t{t}";
-    return lo_freeze_fields(w, v, mfs, i + 1, lw_step(f, r, "", f.lines.concat([r + " = call ptr @resid_map_freeze(ptr " + f.val + ")"]), t));
+    return lo_freeze_fields(w, v, mfs, i + 1, lw_step(f, r, "", f.lines.concat([r + " = call ptr " + lo_freeze_fn(f.ty) + "(ptr " + f.val + ")"]), t));
+}
+
+Str lo_freeze_fn(Str ty) { return if (lo_is_list(strip_owned_cg(ty))) { "@resid_list_freeze" } else { "@resid_map_freeze" }; }
+
+// ─── Fixed-capacity values in frames (spec §5, §44) ─────────────────
+// A Str(N), Bytes(N), List(T, N) or fixed builder lives in the frame of
+// the function that holds it (an alloca the entry block takes). A
+// function returning one takes its caller's slot as a hidden first
+// argument, `%fx.ret`, and its result is written there (lw_ret); a call
+// that is itself returned passes `%fx.ret` on, so the value is built in
+// place where it ends up.
+
+List(Int) lw_fx_sizes(List(Str) tys, Int i, ListBuf(Int) acc) {
+    if (i >= tys.len()) { return acc.finish(); }
+    return lw_fx_sizes(tys, i + 1, acc.push(lw_fx_size(tys[i])));
+}
+
+List(Bool) lw_fx_texts(List(Str) tys, Int i, ListBuf(Bool) acc) {
+    if (i >= tys.len()) { return acc.finish(); }
+    return lw_fx_texts(tys, i + 1, acc.push(lw_fx_text(tys[i])));
+}
+
+// Whether inline storage of type t holds text (fx_text).
+Bool lw_fx_text(Str t) {
+    Str b = strip_owned_cg(t);
+    return fx_text(if (lw_fixed_bkind(b)) { fb_result(b) } else { b });
+}
+
+// The bytes of a value of type t stored inline, or 0.
+Int lw_fx_size(Str t) {
+    Str b = strip_owned_cg(t);
+    if (is_fixed_type(b)) { return fixed_bytes(b); }
+    if (lw_fixed_bkind(b)) { return 16 + fixed_bytes(fb_result(b)); }
+    return 0;
+}
+
+// The hidden argument of call `id` with result type ty: a new slot in
+// this frame, the slot a return passes down (env `#fxdst<id>`), or none.
+type FxA = { Str arg; List(Str) lines; Int tmp; Bool tail; };
+
+FxA lw_fx_arg(Int id, Str ty, List(Str) env, Int tmp) {
+    Int n = lw_fx_size(ty);
+    if (n == 0) { return FxA {.arg = "", .lines = [], .tmp = tmp, .tail = false}; }
+    Str dst = cg_env_val(env_lookup(env, f"#fxdst{id}"));
+    if (dst != "") { return FxA {.arg = "ptr " + dst, .lines = [], .tmp = tmp, .tail = true}; }
+    Str slot = f"%t{tmp + 1}";
+    return FxA {.arg = "ptr " + slot, .lines = [fixed_alloca(slot, n)], .tmp = tmp + 1, .tail = false};
+}
+
+Str fx_args(Str a, Str rest) { return if (a == "") { rest } else { if (rest == "") { a } else { a + ", " + rest } }; }
+
+// The value v (type t) written to the caller's slot, as returned.
+List(Str) lw_fx_ret(Str v, Str t, Str r) {
+    return [r + " = " + fx_copy("%fx.ret", v, lw_fx_size(t), lw_fx_text(t)), "ret ptr " + r];
+}
+
+// Fixed allocas moved to the front of `ls` (the entry block): a loop
+// then reuses one slot instead of growing the frame.
+List(Str) lw_fx_hoist(List(Str) ls, Int at) {
+    List(Str) fx = lw_fx_allocas(ls, 0, ListBuf());
+    if (fx.len() == 0) { return ls; }
+    return ls[0..at].concat(fx).concat(lw_fx_rest(ls, at, ListBuf()));
+}
+
+List(Str) lw_fx_allocas(List(Str) ls, Int i, ListBuf(Str) acc) {
+    if (i >= ls.len()) { return acc.finish(); }
+    return lw_fx_allocas(ls, i + 1, if (tco_is_fixed(ls[i])) { acc.push(ls[i]) } else { acc });
+}
+
+List(Str) lw_fx_rest(List(Str) ls, Int i, ListBuf(Str) acc) {
+    if (i >= ls.len()) { return acc.finish(); }
+    return lw_fx_rest(ls, i + 1, if (tco_is_fixed(ls[i])) { acc } else { acc.push(ls[i]) });
 }
 
 // cg_some_con / cg_ok_con / cg_err_con: a one-slot tagged box.
@@ -3317,8 +3401,12 @@ ST lw_ret(LW w, Int id, List(Str) env, Bool in_main, ST g) {
         return st_err("return without a value", g);
     }
     Int rv = lw_kid(w, id, 0);
+    // A returned fixed-capacity value is written to the caller's slot; a
+    // call returned as it is writes it there itself (lw_fx_arg).
+    Int rfx = lw_fx_size(g.rety);
+    List(Str) renv = if (rfx > 0) { env.concat([f"#fxdst{rv}:%fx.ret:Marker"]) } else { env };
     // A returned lambda takes the function's closure return type.
-    GT v = if (lw_kind(w, rv) == "lambda" && is_fn_type(g.rety)) { lw_lambda(w, rv, g.rety, env, gt_of_st(g)) } else { lw_expr_as(w, rv, g.rety, env, gt_of_st(g)) };
+    GT v = if (lw_kind(w, rv) == "lambda" && is_fn_type(g.rety)) { lw_lambda(w, rv, g.rety, renv, gt_of_st(g)) } else { lw_expr_as(w, rv, g.rety, renv, gt_of_st(g)) };
     if (v.err != "") { return st_err(v.err, g); }
     if (g.rety == "__spawn") {
         GT hb = box_heap_("", v, env, w.fs);
@@ -3346,8 +3434,10 @@ ST lw_ret(LW w, Int id, List(Str) env, Bool in_main, ST g) {
     List(Str) lv0 = v2.lines.concat(wrel).concat(lw_fut_waits(env, env.len() - 1, 0, nil_list()));
     List(Str) base = if (im) { lv0.concat([reg + " = trunc i64 " + v2.val + " to i32"]) } else { lv0 };
     Str rn_main = if (in_main) { "ret i32 0" } else { "ret " + ll_ty(vty) + " " + v2.val };
-    List(Str) lns = if (im) { base.concat(["ret i32 " + reg]) } else { base.concat([rn_main]) };
-    Int ut = if (im) { t1 } else { v2.tmp };
+    // A call that wrote the result slot itself is returned as it is.
+    List(Str) rlines = if (rfx > 0 && !in_main && !v2.tail) { lw_fx_ret(v2.val, g.rety, reg) } else { [rn_main] };
+    List(Str) lns = if (im) { base.concat(["ret i32 " + reg]) } else { base.concat(rlines) };
+    Int ut = if (im || rfx > 0) { t1 } else { v2.tmp };
     return ST {.pos = 0, .dead = true, .err = "", .env = env, .glines = v.glines, .hlines = g.hlines, .lines = lns, .tmp = ut, .lbl = v.lbl, .rety = g.rety};
 }
 
@@ -3697,7 +3787,8 @@ GT lw_zero_value(LW w, Str t, GT c) {
 GT lw_zero_fill(LW w, Str reg, Str fty, Str from, GT c) {
     Str ety = fixed_elem(fty);
     Int cap = fixed_cap(fty);
-    if (ll_ty(ety) != "ptr" || from == f"{cap}") { return c; }
+    // A fixed element is inline, zeroed with its container.
+    if (ll_ty(ety) != "ptr" || is_fixed_type(ety) || from == f"{cap}") { return c; }
     GT z = lw_zero_value(w, ety, c);
     if (z.err != "") { return z; }
     Str zv = z.val;
@@ -3745,8 +3836,65 @@ GT lw_fixed_elems(LW w, Int ln, Int i, Str arrty, Str ety, Str base, Int cap, Li
     GT vw = pick_widen(int_fam(ety) && int_fam(v.ty), v, num_norm_cg(ety));
     Int t1 = vw.tmp + 1;
     Str slot = f"%t{t1}";
-    GT c2 = lw_step(vw, "", "", vw.lines.concat([slot + " = getelementptr inbounds " + arrty + ", ptr " + base + f", i64 0, i64 {i}", "store " + ll_ty(ety) + " " + vw.val + ", ptr " + slot]), t1);
+    GT c2 = lw_step(vw, "", "", vw.lines.concat([slot + " = getelementptr inbounds " + arrty + ", ptr " + base + f", i64 0, i64 {i}", fx_elem_store(ety, vw.val, slot)]), t1);
     return lw_fixed_elems(w, ln, i + 1, arrty, ety, base, cap, env, GT {.pos = 0, .val = "", .ty = "", .cnt = 0, .err = "", .glines = vw.glines, .lines = c2.lines, .tmp = t1, .lbl = vw.lbl, .tail = false});
+}
+
+// ─── Replacing an element: xs.with(i, x) (spec §17, §44.3) ──────────
+
+// Element types whose values an owned update may store into an older
+// buffer: the runtime can move them out of a region (scalars up to 64
+// bits, Float, Bool, Str).
+Bool lw_list_keepable(Str ety) {
+    Str t = num_norm_cg(ety);
+    if (t == "Str" || ety == "Bool" || is_float_cg(t)) { return true; }
+    return int_fam(t) && ll_width_of(t) <= 64;
+}
+
+GT lw_with_index(LW w, Int id, List(Str) env, GT c) {
+    GT ix = lw_expr(w, lw_kid(w, id, 1), env, c);
+    if (ix.err != "") { return ix; }
+    return pick_widen(num_norm_cg(ix.ty) != "Int(64)", ix, "Int(64)");
+}
+
+// A heap list: resid_list_with, in place when the update is owned.
+GT lw_list_with(LW w, Int id, GT base, List(Str) env) {
+    Str ety = elem_type(strip_owned_cg(base.ty));
+    GT ix = lw_with_index(w, id, env, base);
+    if (ix.err != "") { return ix; }
+    GT xv = lw_expr_as(w, lw_kid(w, id, 2), ety, env, ix);
+    if (xv.err != "") { return xv; }
+    Int tb = xv.tmp + 1;
+    List(Str) bl = lst_box_lines(ety, xv.val, tb);
+    Str boxed = if (bl.len() > 0) { f"%t{tb}" } else { xv.val };
+    Int t2 = tb + 3;
+    Str reg = f"%t{t2}";
+    Str own = if (lo_is(w, id, 1) && lw_list_keepable(ety)) { "1" } else { "0" };
+    List(Str) ls = xv.lines.concat(bl).concat([reg + " = call ptr @resid_list_with(ptr " + base.val + ", i8 " + own + ", i64 " + ix.val + ", ptr " + boxed + ")"]);
+    return GT {.pos = 0, .val = reg, .ty = base.ty, .cnt = 0, .err = "", .glines = xv.glines, .lines = ls, .tmp = t2, .lbl = xv.lbl, .tail = false};
+}
+
+// A List(T, N): a copy of its storage with slot i replaced, the index
+// checked against N.
+GT lw_fixed_with(LW w, Int id, GT base, List(Str) env) {
+    Int cap = fixed_cap(base.ty);
+    Str ety = fixed_elem(base.ty);
+    GT ix = lw_with_index(w, id, env, base);
+    if (ix.err != "") { return ix; }
+    GT xv0 = lw_expr_as(w, lw_kid(w, id, 2), ety, env, ix);
+    if (xv0.err != "") { return xv0; }
+    GT xv = pick_widen(int_fam(ety) && int_fam(xv0.ty), xv0, num_norm_cg(ety));
+    Int l1 = xv.lbl + 1;
+    Int l2 = xv.lbl + 2;
+    Str okl = f"L{l1}";
+    Str oobl = f"L{l2}";
+    Int t1 = xv.tmp + 1;
+    Str cmp = f"%t{t1}";
+    Str copy = f"%t{t1 + 1}";
+    Str slot = f"%t{t1 + 2}";
+    Int nb = fixed_bytes(base.ty);
+    List(Str) ls = xv.lines.concat([cmp + " = icmp ult i64 " + ix.val + f", {cap}", "br i1 " + cmp + ", label %" + okl + ", label %" + oobl, oobl + ":", "call void @resid_index_abort(i64 " + ix.val + f", i64 {cap}, ptr @.fixedidx)", "unreachable", okl + ":", fixed_alloca(copy, nb), fx_copy(copy, base.val, nb, fx_text(base.ty)), slot + " = getelementptr inbounds " + fixed_arr_ty(base.ty) + ", ptr " + copy + ", i64 0, i64 " + ix.val, fx_elem_store(ety, xv.val, slot)]);
+    return GT {.pos = 0, .val = copy, .ty = base.ty, .cnt = 0, .err = "", .glines = xv.glines, .lines = ls, .tmp = t1 + 2, .lbl = l2, .tail = false};
 }
 
 // ─── Closures, spawn, sort, expect ──────────────────────────────────
@@ -3759,7 +3907,8 @@ GT lw_lambda(LW w, Int id, Str fnty, List(Str) env, GT c) {
     Str rlt = ll_ty(ret);
     Int np = w.g.ns[id].nk - 1;
     if (np > pl.len()) { return gt_err("too many lambda parameters", c); }
-    Str sig = lw_lam_sig(w, id, 0, np, pl, "i64 %env");
+    Int rfx = lw_fx_size(ret);
+    Str sig = lw_lam_sig(w, id, 0, np, pl, if (rfx > 0) { "ptr %fx.ret, i64 %env" } else { "i64 %env" });
     List(Str) penv = lw_lam_env(w, id, 0, np, pl, nil_list());
     LamC cap0 = lam_captured_at(env, 0, LamC {.ids = nil_list(), .tys = nil_list(), .vals = nil_list(), .n = 0});
     Int ncap = cap0.n;
@@ -3773,7 +3922,9 @@ GT lw_lambda(LW w, Int id, Str fnty, List(Str) env, GT c) {
     GT bodyw = if (ret != "Void" && body.ty != ret) { widen_val(body, ret) } else { body };
     Str rv0 = if (bodyw.val == "") { "0" } else { bodyw.val };
     Str retline = if (ret == "Void") { "ret i1 " + rv0 } else { "ret " + rlt + " " + bodyw.val };
-    Str clo_body = str_join(pr0.lines.concat(bodyw.lines).concat([retline, "}"]), "\n");
+    List(Str) rets = if (rfx > 0) { lw_fx_ret(bodyw.val, ret, "%fx.r") } else { [retline] };
+    List(Str) lam = lw_fx_hoist(pr0.lines.concat(bodyw.lines).concat(rets), 0);
+    Str clo_body = str_join(lam.concat(["}"]), "\n");
     // Instances of one generic function share the lambda's position, so
     // the name also carries a digest of what it lowered to.
     Str clo = f"@clo{w.g.ns[id].sp + 6 - w.base}_" + str_slice(str_sha256(rlt + sig + clo_body), 0, 10);
@@ -4139,7 +4290,9 @@ PG lw_fn_body(LW w0, Int d, PG g) {
     Bool is_main = name == "main";
     List(Str) tyl0 = lw_param_tys(w1, d, 1, n - 1, ListBuf());
     List(Str) tyl = ct_erase_list(fs, tyl0, 0, nil_list());
-    Str pd = param_decl_at(tyl, 0, "");
+    // A fixed-capacity result is written to the caller's slot (lw_fx_arg).
+    Bool sret = !is_main && lw_fx_size(rbase) > 0;
+    Str pd = fx_args(if (sret) { "ptr %fx.ret" } else { "" }, param_decl_at(tyl, 0, ""));
     // Runtime functions are internal: only @export entries are visible.
     Str link = if (resid_rtmod()) { "internal " } else { "" };
     // A runtime slow path (@noinline) keeps its callers small; a fast path
@@ -4180,15 +4333,17 @@ PG lw_fn_body(LW w0, Int d, PG g) {
     CapPP pp2 = cap_maybe_inject(sandboxed && !split, new_body_lines, body.glines, pp1.n);
     Bool tco_ok = !is_main && (!sandboxed || split) && !growbuf_params;
     Str bname = if (split) { name + ".sb" } else { name };
-    Str defpre = "define " + link + ll_ty(rbase) + " @" + bname + "(";
+    Str defpre = "define " + link + ll_ty(rbase) + " @" + bname + "(" + (if (sret) { if (tyl.len() > 0) { "ptr %fx.ret, " } else { "ptr %fx.ret" } } else { "" });
     Str defpost = ")" + fattr + " \"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\" {";
     List(Str) bhead = if (split) { [defpre + pd + defpost, "entry:"] } else { pp1.lines };
-    List(Str) fn_lines00 = if (tco_ok) { tco_function(bhead, pp2.lines, name, ll_ty(rbase), ptys_ll, defpre, defpost, "") } else { bhead.concat(pp2.lines) };
-    List(Str) fn_lines0 = if (tco_ok && !resid_rtmod()) { lsv_apply(sv_apply(fn_lines00, tyl), tyl) } else { fn_lines00 };
+    List(Str) fn_lines00 = if (tco_ok) { tco_function(bhead, pp2.lines, name, ll_ty(rbase), ptys_ll, lw_fx_sizes(tyl, 0, ListBuf()), lw_fx_texts(tyl, 0, ListBuf()), sret, defpre, defpost, "") } else { bhead.concat(pp2.lines) };
+    List(Str) fn_lines01 = if (tco_ok && !resid_rtmod()) { lsv_apply(sv_apply(fn_lines00, tyl), tyl) } else { fn_lines00 };
+    List(Str) fn_lines0 = lw_fx_hoist(fn_lines01, lw_find_line(fn_lines01, "entry:", 0) + 1);
     // A loop whose iterations carry nothing they allocate frees each
     // iteration's allocations when the next one starts (lr_region).
-    Bool region = tco_ok && lw_find_line(fn_lines0, "tco.head:", 1) >= 0 && lr_region_ok(w, d, fn_lines0, tyl);
-    List(Str) fn_lines = if (region) { lr_region(fn_lines0, tyl) } else { fn_lines0 };
+    Str rev = lr_ret_evac(w.fs, rbase);
+    Bool region = tco_ok && lw_find_line(fn_lines0, "tco.head:", 1) >= 0 && lr_region_ok(w, d, fn_lines0, tyl, rev);
+    List(Str) fn_lines = if (region) { lr_region(fn_lines0, lr_evac_tys(w.fs, tyl, 0, []), rev) } else { fn_lines0 };
     List(Str) own0 = fn_lines.concat(["}"]);
     LDG dg0 = if (w.dbg) { lw_dbg_fn(w, d, name, own0, g.pos, tyl) } else { LDG {.lines = own0, .meta = nil_list(), .next = g.pos} };
     List(Str) wrap = if (split) { pp1.lines.concat(["%sb.r = call " + ll_ty(rbase) + " @" + bname + "(" + pd + ")", "call void @resid_cap_leave()", "ret " + ll_ty(rbase) + " %sb.r", "}"]) } else { nil_list() };
@@ -4216,24 +4371,24 @@ List(Str) cap_rename_to(List(Str) ls, Str to, Int i, ListBuf(Str) acc) {
 }
 
 // ─── Loop regions ───────────────────────────────────────────────────
-// A tail-call loop runs each iteration in a scope region (like a scalar
-// scope) popped when the next iteration starts, when every parameter
-// that changes between iterations is a scalar, a Map/Set of Int, Float,
-// Bool or Str keys and such values or lists of them, or such a list. At
-// each back edge those are moved to the heap (resid_map_evac,
-// resid_list_evac copy only their parts made in a region), and strings
-// and lists stored into maps are moved when stored (kinds 4 and 5).
-// Unchanged parameters are older values. Every exit must return a scalar
-// or a loop parameter, so the region pops there too.
+// A tail-call loop runs in a region of its own (runtime region.resid,
+// Loop regions) when every parameter that changes between iterations is
+// a scalar or a value the runtime can move: a Str, a record of such
+// fields, a Map/Set of Int, Float, Bool or Str keys and such values or
+// lists of them, such a list, or a list of such records. When the region
+// has grown past twice what it held live, a back edge moves the carried
+// values into a fresh one (resid_loop_move); an exit moves its result
+// into the caller's region (resid_loop_exit). Unchanged parameters are
+// older values, which cannot point into the loop's region.
 
-Bool lr_region_ok(LW w, Int d, List(Str) ls, List(Str) tyl) {
+Bool lr_region_ok(LW w, Int d, List(Str) ls, List(Str) tyl, Str rev) {
     // The runtime manages its own memory: no regions inside it.
     if (resid_rtmod()) { return false; }
     // A builder carried by value holds a heap buffer the region must not free.
     if (tyl.contains("StrBuf")) { return false; }
     if (lg_closure(w.g, lw_kid(w, d, w.g.ns[d].nk - 1))) { return false; }
     Int h = lw_find_line(ls, "tco.head:", 1);
-    return lr_phis_ok(ls, h + 1, tyl) && lr_exits_ok(ls, h + 1) && lr_allocates(w, ls, h + 1);
+    return lr_phis_ok(ls, h + 1, lr_evac_tys(w.fs, tyl, 0, [])) && lr_exits_ok(ls, h + 1, rev != "") && lr_allocates(w, ls, h + 1);
 }
 
 // Whether the loop calls anything that may allocate (else a region only
@@ -4247,6 +4402,8 @@ Bool lr_allocates(LW w, List(Str) ls, Int i) {
         Int c = str_find_char(l, 64, at);
         Int e = str_find_char(l, 40, c);
         Str f = if (c > 0 && e > c) { str_slice(l, c + 1, e) } else { "" };
+        // A call through a pointer (a closure) may allocate anything.
+        if (c < 0 && !str_contains(l, "asm ")) { return true; }
         if (f != "" && lr_call_allocs(w, f, l)) { return true; }
     }
     return lr_allocates(w, ls, i + 1);
@@ -4265,34 +4422,41 @@ Bool lr_call_allocs(LW w, Str f, Str l) {
         return o < 0 || str_char_at(l, o + 5) != 49;
     }
     if (str_starts_with(f, "resid_unbox_") || f == "resid_map_contains" || f == "resid_set_contains" || f == "resid_box_tag") { return false; }
+    // An owned list update writes in place (its first copy is moved out of
+    // the region at the back edge like any carried list); a freeze writes
+    // nothing.
+    if (f == "resid_list_with" || f == "resid_list_concat_own") { return !str_contains(l, ", i8 1,"); }
+    if (f == "resid_list_freeze") { return false; }
     // Appending a scalar to a list builds what the loop carries on (moved
     // out at the back edge anyway), not garbage.
     if (f == "resid_list_push" || f == "resid_box_i64" || f == "resid_box_f64" || f == "resid_box_bool") { return false; }
     return !lo_has_str(["llvm.sqrt.f64", "resid_char_at_n", "resid_overflow_check", "resid_div_check", "resid_conv_check", "str_char_at", "str_len", "resid_str_eq", "resid_list_len", "resid_list_get", "resid_list_get_nc", "resid_list_get_v", "resid_list_vdata", "resid_list_vlen", "resid_map_find", "resid_map_has", "resid_map_len", "resid_set_len", "resid_map_freeze", "resid_rec_share", "resid_scope_push", "resid_scope_pop", "str_starts_with", "str_ends_with", "str_contains", "str_index_of", "resid_index_abort", "resid_abort", "abs_i64", "min_i64", "max_i64", "clamp_i64", "print", "println", "eprintln"], f, 0);
 }
 
-// Every exit returns a scalar or a loop parameter (an older value, or a
-// carried map on the heap): nothing it returns can live in the region.
-Bool lr_exits_ok(List(Str) ls, Int i) {
+// Every exit returns a scalar, a loop parameter (an older value, or a
+// carried map on the heap), or a value of a type that is moved out of the
+// region before it is popped (movable).
+Bool lr_exits_ok(List(Str) ls, Int i, Bool movable) {
     if (i >= ls.len()) { return true; }
     Str l = ls[i];
     if (str_contains(l, " = musttail call ")) { return false; }
-    Bool bad = str_starts_with(l, "ret ptr ") && !lr_ret_param(l);
+    Bool bad = str_starts_with(l, "ret ptr ") && !lr_ret_param(l) && !movable;
     if (bad) { return false; }
-    return lr_exits_ok(ls, i + 1);
+    return lr_exits_ok(ls, i + 1, movable);
 }
 
 Bool lr_ret_param(Str l) { return str_starts_with(l, "ret ptr %p") && !str_contains(l, "."); }
 
-// The loop head's phis: each parameter is a scalar, a word-valued
-// Map/Set, or comes back unchanged on every back edge.
+// The loop head's phis: each parameter is a scalar, has a move (tyl here
+// holds each parameter's move, "" for none), or comes back unchanged on
+// every back edge.
 Bool lr_phis_ok(List(Str) ls, Int i, List(Str) tyl) {
     if (i >= ls.len() || !str_contains(ls[i], " = phi ")) { return true; }
     Str l = ls[i];
     Str reg = str_slice(l, 0, str_find_char(l, 32, 0));
     Int j = str_parse_int(str_slice(reg, 2, str_len(reg)));
     Str ty = if (j >= 0 && j < tyl.len()) { tyl[j] } else { "" };
-    Bool ok = !str_contains(l, " = phi ptr ") || lr_evac_fn(ty) != "" || lr_same_in(str_split(l, "[ "), 2, reg);
+    Bool ok = !str_contains(l, " = phi ptr ") || ty != "" || lr_same_in(str_split(l, "[ "), 2, reg);
     if (!ok) { return false; }
     return lr_phis_ok(ls, i + 1, tyl);
 }
@@ -4403,24 +4567,130 @@ Int lr_kind(Str t) { return if (t == "Str") { 4 } else { if (lr_list_word(t)) { 
 
 // The call that moves a carried value of type `ty` to the heap, or "".
 Str lr_evac_fn(Str ty) {
-    if (str_has_prefix(ty, "Set(") && lr_word_ty(set_elem_type_cg(ty))) { return f"@resid_map_evac(ptr %V, i8 {lr_kind(set_elem_type_cg(ty))}, i8 0)"; }
+    if (str_has_prefix(ty, "Set(") && lr_word_ty(set_elem_type_cg(ty))) { return f"@resid_mv_map(ptr %V, i8 {lr_kind(set_elem_type_cg(ty))}, i8 0, ptr %C)"; }
     if (str_has_prefix(ty, "Map(") && lr_word_ty(map_key_type_cg(ty)) && (lr_word_ty(map_val_type_cg(ty)) || lr_list_word(map_val_type_cg(ty)))) {
-        return f"@resid_map_evac(ptr %V, i8 {lr_kind(map_key_type_cg(ty))}, i8 {lr_kind(map_val_type_cg(ty))})";
+        return f"@resid_mv_map(ptr %V, i8 {lr_kind(map_key_type_cg(ty))}, i8 {lr_kind(map_val_type_cg(ty))}, ptr %C)";
     }
-    if (lr_list_word(ty)) { return "@resid_list_evac(ptr %V)"; }
-    if (is_dec_cg(ty) && ll_ty(ty) == "ptr") { return "@resid_dec_evac(ptr %V)"; }
+    if (lr_list_word(ty)) { return "@resid_mv_list(ptr %V, ptr %C)"; }
+    if (is_dec_cg(ty) && ll_ty(ty) == "ptr") { return "@resid_mv_dec(ptr %V, ptr %C)"; }
     return "";
 }
 
-// The loop's lines with its region: pushed after the head's phis, popped
-// on each back edge (after moving the carried values that changed) and
-// before each ret.
-List(Str) lr_region(List(Str) ls, List(Str) tyl) {
+// ─── Moving records out of a region ─────────────────────────────────
+// A record a loop carries or returns is copied out (resid_rec_evac) when
+// it was made in the iteration's region, and then each field that points
+// to something is moved by its own type's move. A record type whose
+// fields all have one gets a compiled `resid.rec.evac.T` (lw_program).
+
+// Each parameter's move ("" for none, or a carried Str: an in-place string
+// accumulator keeps its own buffer).
+List(Str) lr_evac_tys(Funcs fs, List(Str) tyl, Int i, List(Str) acc) {
+    if (i >= tyl.len()) { return acc; }
+    Str t = ct_base_of(fs.ctn, fs.ctb, strip_owned_cg(tyl[i]));
+    Str e = if (t == "Str") { "" } else { lr_move(fs, t, []) };
+    return lr_evac_tys(fs, tyl, i + 1, acc.concat([if (e == "-") { "" } else { e }]));
+}
+
+// A returned value's move, or "" (a scalar, or a type with none).
+Str lr_ret_evac(Funcs fs, Str rty) {
+    Str t = ct_base_of(fs.ctn, fs.ctb, strip_owned_cg(rty));
+    if (ll_ty(t) != "ptr") { return ""; }
+    if (t == "Str") { return "@resid_mv_str(ptr %V, ptr %C)"; }
+    Str e = lr_move(fs, t, []);
+    return if (e == "-") { "" } else { e };
+}
+
+// How a value of type t leaves a region: "-" nothing to do (no pointer),
+// a call template on %V, or "" when it cannot.
+Str lr_move(Funcs fs, Str t, List(Str) seen) {
+    // A fixed-capacity value is in a frame (a loop parameter's own slot):
+    // nothing to move unless it holds pointers.
+    if (lw_fx_size(t) > 0) { return if (lr_fx_flat(t)) { "-" } else { "" }; }
+    if (ll_ty(t) != "ptr") { return "-"; }
+    if (t == "Str") { return "@resid_mv_str(ptr %V, ptr %C)"; }
+    Str base = lr_evac_fn(t);
+    if (base != "") { return base; }
+    if (struct_index(fs, t) >= 0 && lr_rec_ok(fs, t, seen)) { return "@" + lr_rec_fn(t) + "(ptr %V, ptr %C)"; }
+    if (str_has_prefix(t, "List(") && !is_list_fixed(t)) {
+        Str et = ct_base_of(fs.ctn, fs.ctb, elem_type(t));
+        if (struct_index(fs, et) >= 0 && lr_rec_ok(fs, et, seen)) { return "@resid_mv_list_f(ptr %V, ptr @" + lr_rec_fn(et) + ", ptr %C)"; }
+    }
+    return "";
+}
+
+Bool lr_fx_flat(Str t) {
+    if (lw_fixed_bkind(t)) { return lr_fx_flat(fb_result(t)); }
+    if (!is_list_fixed(t)) { return true; }
+    Str e = fixed_elem(t);
+    return if (is_fixed_type(e)) { lr_fx_flat(e) } else { ll_ty(e) != "ptr" };
+}
+
+Str lr_rec_fn(Str t) { return "\"resid.rec.evac." + t + "\""; }
+
+// Every field of record t has a move (a type already being checked counts:
+// its function is the one being made).
+Bool lr_rec_ok(Funcs fs, Str t, List(Str) seen) {
+    if (seen.contains(t)) { return true; }
+    Int si = struct_index(fs, t);
+    if (si < 0) { return false; }
+    return lr_fields_ok(fs, fs.stf[si], 0, seen.concat([t]));
+}
+
+Bool lr_fields_ok(Funcs fs, Str fields, Int i, List(Str) seen) {
+    Int fl = str_len(fields);
+    if (i >= fl) { return true; }
+    Int ce = _find_comma_at_depth_cg(fields, i, 0, 0);
+    Int end = if (ce >= 0) { ce } else { fl };
+    Str ent = str_slice(fields, i, end);
+    Int co = str_find_char(ent, 58, 0);
+    Str ty = ct_base_of(fs.ctn, fs.ctb, str_trim(str_slice(ent, co + 1, str_len(ent))));
+    if (co < 0 || lr_move(fs, ty, seen) == "") { return false; }
+    return lr_fields_ok(fs, fields, end + 1, seen);
+}
+
+// The `resid.rec.evac.T` functions of every record type that has one.
+// One per name: a type declared twice alike (a merged source) is one type,
+// as struct_index resolves it.
+List(Str) lr_rec_fns(Funcs fs, Map(Str, Str) hdr, Int i, List(Str) acc) {
+    if (i >= fs.stn.len()) { return acc; }
+    Str t = fs.stn[i];
+    Bool ok = !str_contains(t, "_") && struct_index(fs, t) == i && lr_rec_ok(fs, t, []);
+    return lr_rec_fns(fs, hdr, i + 1, if (ok) { acc.concat(lr_rec_def(fs, t, fs.stf[i], hdr.contains(t))) } else { acc });
+}
+
+List(Str) lr_rec_def(Funcs fs, Str t, Str fields, Bool hdr) {
+    Int size = struct_nfields(fields) * 8;
+    List(Str) head = ["define internal ptr @" + lr_rec_fn(t) + "(ptr %v, ptr %u) {", "entry:", f"%c = call ptr @resid_mv_rec(ptr %v, i64 {size}, i8 " + (if (hdr) { "1" } else { "0" }) + ", ptr %u)", "%m = icmp ne ptr %c, %v", "br i1 %m, label %fix, label %done", "fix:"];
+    List(Str) body = lr_rec_fields(fs, fields, 0, 0, []);
+    return head.concat(body).concat(["br label %done", "done:", "ret ptr %c", "}"]);
+}
+
+// Each pointer field of the copy, loaded, moved and stored back.
+List(Str) lr_rec_fields(Funcs fs, Str fields, Int i, Int k, List(Str) acc) {
+    Int fl = str_len(fields);
+    if (i >= fl) { return acc; }
+    Int ce = _find_comma_at_depth_cg(fields, i, 0, 0);
+    Int end = if (ce >= 0) { ce } else { fl };
+    Str ent = str_slice(fields, i, end);
+    Int co = str_find_char(ent, 58, 0);
+    Str nm = str_slice(ent, 0, co);
+    Str ty = ct_base_of(fs.ctn, fs.ctb, str_trim(str_slice(ent, co + 1, str_len(ent))));
+    Str mv = lr_move(fs, ty, []);
+    Int off = field_slot(fields, nm) * 8;
+    List(Str) one = if (mv == "-" || mv == "") { [] } else { [f"%g{k} = getelementptr i8, ptr %c, i64 {off}", f"%f{k} = load ptr, ptr %g{k}", f"%e{k} = call ptr " + lr_call(mv, f"%f{k}", "%u"), f"store ptr %e{k}, ptr %g{k}"] };
+    return lr_rec_fields(fs, fields, end + 1, k + 1, acc.concat(one));
+}
+
+// The loop's lines with its region (runtime alloc.resid, Loop regions):
+// L pushed on entry; a back edge compacts it when it is due, moving every
+// carried value; each ret moves its result to the caller's region and
+// pops L.
+List(Str) lr_region(List(Str) ls, List(Str) evs, Str rev) {
     Int h = lw_find_line(ls, "tco.head:", 1);
     Int b = lw_after_phis(ls, h + 1);
     // Per back-edge label, its moves: "label|param|value|call".
-    List(Str) mv = lr_moves(ls, h + 1, b, tyl, []);
-    return lr_region_at(ls, 0, h, b, mv, ListBuf());
+    List(Str) mv = lr_moves(ls, h + 1, b, evs, []);
+    return lr_region_at(ls, 0, h, b, mv, rev, ListBuf());
 }
 
 List(Str) lr_moves(List(Str) ls, Int i, Int b, List(Str) tyl, List(Str) acc) {
@@ -4428,7 +4698,7 @@ List(Str) lr_moves(List(Str) ls, Int i, Int b, List(Str) tyl, List(Str) acc) {
     Str l = ls[i];
     Str reg = str_slice(l, 0, str_find_char(l, 32, 0));
     Int j = str_parse_int(str_slice(reg, 2, str_len(reg)));
-    Str fnc = if (str_contains(l, " = phi ptr ") && j >= 0 && j < tyl.len()) { lr_evac_fn(tyl[j]) } else { "" };
+    Str fnc = if (str_contains(l, " = phi ptr ") && j >= 0 && j < tyl.len()) { tyl[j] } else { "" };
     List(Str) a2 = if (fnc == "") { acc } else { lr_moves_in(str_split(l, "[ "), 2, reg, fnc, acc) };
     return lr_moves(ls, i + 1, b, tyl, a2);
 }
@@ -4439,8 +4709,8 @@ List(Str) lr_moves_in(List(Str) parts, Int k, Str reg, Str fnc, List(Str) acc) {
     Int c = str_find_char(p, 44, 0);
     Str v = str_slice(p, 0, c);
     Str lab = str_slice(p, c + 3, str_find_char(p, 32, c + 2));
-    List(Str) a2 = if (v == reg) { acc } else { acc.concat([lab + "|" + reg + "|" + v + "|" + fnc]) };
-    return lr_moves_in(parts, k + 1, reg, fnc, a2);
+    // An unchanged value moves too: a compaction may relocate it.
+    return lr_moves_in(parts, k + 1, reg, fnc, acc.concat([lab + "|" + reg + "|" + v + "|" + fnc]));
 }
 
 // The moved register of param `reg` on the back edge from `lab`.
@@ -4459,8 +4729,11 @@ Str lr_phi_at(List(Str) parts, Int k, Str reg, List(Str) mv, Str acc) {
     Int c = str_find_char(p, 44, 0);
     Str lab = str_slice(p, c + 3, str_find_char(p, 32, c + 2));
     Bool moved = k >= 2 && lr_has_move(mv, lab, reg, 0);
-    Str p2 = if (moved) { lr_moved(reg, lab) + str_slice(p, c, str_len(p)) } else { p };
-    return lr_phi_at(parts, k + 1, reg, mv, acc + "[ " + p2);
+    Str val = if (moved) { lr_moved(reg, lab) } else { str_slice(p, 0, c) };
+    // A back edge now arrives from its join block (lr_back).
+    Str from = if (k >= 2) { lab + ".k" } else { lab };
+    Str rest = str_slice(p, str_find_char(p, 93, c) + 1, str_len(p));
+    return lr_phi_at(parts, k + 1, reg, mv, acc + "[ " + val + ", %" + from + " ]" + rest);
 }
 
 Bool lr_has_move(List(Str) mv, Str lab, Str reg, Int i) {
@@ -4470,91 +4743,58 @@ Bool lr_has_move(List(Str) mv, Str lab, Str reg, Int i) {
     return lr_has_move(mv, lab, reg, i + 1);
 }
 
-// The moves of back edge `lab`, as calls.
+// A move template applied to value v with move context ctx.
+Str lr_call(Str tpl, Str v, Str ctx) { return str_replace(str_replace(tpl, "%V", v), "%C", ctx); }
+
+// A compaction's moves on back edge `lab`, each into `%pJ.e.lab`.
 ListBuf(Str) lr_move_lines(List(Str) mv, Str lab, Int i, ListBuf(Str) acc) {
     if (i >= mv.len()) { return acc; }
     List(Str) q = str_split(mv[i], "|");
-    ListBuf(Str) a2 = if (q[0] == lab) { acc.push(lr_moved(q[1], lab) + " = call ptr " + str_replace(q[3], "%V", q[2])) } else { acc };
-    return lr_move_lines(mv, lab, i + 1, a2);
+    Str line = q[1] + ".e." + lab + " = call ptr " + lr_call(q[3], q[2], "%lr.cx." + lab);
+    return lr_move_lines(mv, lab, i + 1, if (q[0] == lab) { acc.push(line) } else { acc });
 }
 
-List(Str) lr_region_at(List(Str) ls, Int i, Int h, Int b, List(Str) mv, ListBuf(Str) acc) {
+// Each carried value after back edge `lab`: moved, or as it was.
+ListBuf(Str) lr_joins(List(Str) mv, Str lab, Int i, ListBuf(Str) acc) {
+    if (i >= mv.len()) { return acc; }
+    List(Str) q = str_split(mv[i], "|");
+    Str j = lr_moved(q[1], lab) + " = phi ptr [ " + q[1] + ".e." + lab + ", %" + lab + ".c ], [ " + q[2] + ", %" + lab + " ]";
+    return lr_joins(mv, lab, i + 1, if (q[0] == lab) { acc.push(j) } else { acc });
+}
+
+// A back edge: when L is due, a compaction moves what the loop carries
+// into a fresh region that takes L's place.
+ListBuf(Str) lr_back(List(Str) mv, Str lab, ListBuf(Str) acc) {
+    Str due = "%lr.due." + lab;
+    ListBuf(Str) a0 = acc.push(due + " = call i1 @resid_loop_due(i64 %lml)").push("br i1 " + due + ", label %" + lab + ".c, label %" + lab + ".k").push(lab + ".c:");
+    ListBuf(Str) a1 = lr_move_lines(mv, lab, 0, a0.push("%lr.cx." + lab + " = call ptr @resid_loop_move(i64 %lml, i64 1)"));
+    ListBuf(Str) a2 = a1.push("call ptr @resid_loop_move(i64 %lml, i64 2)").push("br label %" + lab + ".k").push(lab + ".k:");
+    return lr_joins(mv, lab, 0, a2);
+}
+
+// An exit: a returned pointer moves out of L into the caller's region,
+// and L is popped.
+ListBuf(Str) lr_exit(Str l, Int i, Str rev, ListBuf(Str) acc) {
+    if (rev == "" || !str_starts_with(l, "ret ptr ")) { return acc.push("call void @resid_scope_pop(i64 %lml)").push(l); }
+    Str cx = f"%lr.cx{i}";
+    Str rv = f"%lr.ret{i}";
+    ListBuf(Str) a1 = acc.push(cx + " = call ptr @resid_loop_exit(i64 %lml, i64 1)").push(rv + " = call ptr " + lr_call(rev, str_slice(l, 8, str_len(l)), cx));
+    return a1.push("call ptr @resid_loop_exit(i64 %lml, i64 2)").push("ret ptr " + rv);
+}
+
+List(Str) lr_region_at(List(Str) ls, Int i, Int h, Int b, List(Str) mv, Str rev, ListBuf(Str) acc) {
     if (i >= ls.len()) { return acc.finish(); }
     Str l = ls[i];
-    ListBuf(Str) a0 = if (i == b) { acc.push("%lsc = call i64 @resid_scope_push()") } else { acc };
+    // L is pushed once, in the entry block.
+    ListBuf(Str) a0 = if (i == h - 1) { acc.push("%lml = call i64 @resid_loop_enter()") } else { acc };
     Bool phi = i > h && i < b;
     Bool back = i > b && l == "br label %tco.head";
     Bool ret = i > b && str_starts_with(l, "ret ");
     // A back edge's block starts with its label; its moves go after it.
     Str lab = if (back && i > 0 && str_ends_with(ls[i - 1], ":")) { str_slice(ls[i - 1], 0, str_len(ls[i - 1]) - 1) } else { "" };
-    List(Str) fl = lr_flat(mv, 0, []);
-    ListBuf(Str) a1 = if (back) { lr_frees(fl, 0, mv, lab, lr_move_lines(mv, lab, 0, a0).push("call void @resid_scope_pop(i64 %lsc)")) } else { if (ret) { a0.push("call void @resid_scope_pop(i64 %lsc)") } else { a0 } };
-    Str preg = if (phi) { str_slice(l, 0, str_find_char(l, 32, 0)) } else { "" };
-    ListBuf(Str) a2 = a1.push(if (phi) { lr_phi(l, mv) } else { l });
-    ListBuf(Str) a3 = if (phi && fl.contains(preg)) { a2.push(lr_own_phi(l, preg, mv)) } else { a2 };
-    return lr_region_at(ls, i + 1, h, b, mv, a3);
-}
-
-// ─── Flat carried values (Dec) ──────────────────────────────────────
-// A carried Dec is copied out of the region at each back edge. Its copy
-// from the previous edge is then dead, unless another carried value is
-// that same pointer: `%pJ.own` says the loop made the current value (it
-// is not an argument or a value passed through), and the old copy is
-// freed when it is replaced and no new carried value equals it. Nothing
-// else can hold it: the region is gone, and a loop carrying a Dec carries
-// nothing that could contain one.
-List(Str) lr_flat(List(Str) mv, Int i, List(Str) acc) {
-    if (i >= mv.len()) { return acc; }
-    List(Str) q = str_split(mv[i], "|");
-    Bool f = str_contains(q[3], "resid_dec_evac") && !acc.contains(q[1]);
-    return lr_flat(mv, i + 1, if (f) { acc.concat([q[1]]) } else { acc });
-}
-
-// `%pJ.own`: false on entry, on a move whether it copied, else unchanged.
-Str lr_own_phi(Str l, Str reg, List(Str) mv) {
-    List(Str) parts = str_split(l, "[ ");
-    return lr_own_at(parts, 1, reg, mv, reg + ".own = phi i1 ");
-}
-
-Str lr_own_at(List(Str) parts, Int k, Str reg, List(Str) mv, Str acc) {
-    if (k >= parts.len()) { return acc; }
-    Str p = parts[k];
-    Int c = str_find_char(p, 44, 0);
-    Str lab = str_slice(p, c + 3, str_find_char(p, 32, c + 2));
-    Str v = if (k == 1) { "false" } else { if (lr_has_move(mv, lab, reg, 0)) { reg + ".own." + lab } else { reg + ".own" } };
-    Str sep = if (k == 1) { "" } else { ", " };
-    return lr_own_at(parts, k + 1, reg, mv, acc + sep + "[ " + v + ", %" + lab + " ]");
-}
-
-// The new value of flat param `r` on back edge `lab`.
-Str lr_new(List(Str) mv, Str r, Str lab) { return if (lr_has_move(mv, lab, r, 0)) { lr_moved(r, lab) } else { r }; }
-
-ListBuf(Str) lr_frees(List(Str) fl, Int i, List(Str) mv, Str lab, ListBuf(Str) acc) {
-    if (i >= fl.len()) { return acc; }
-    Str r = fl[i];
-    if (!lr_has_move(mv, lab, r, 0)) { return lr_frees(fl, i + 1, mv, lab, acc); }
-    Str own = r + ".own." + lab;
-    Str src = lr_move_src(mv, lab, r, 0);
-    ListBuf(Str) a1 = acc.push(own + " = icmp ne ptr " + lr_moved(r, lab) + ", " + src);
-    ListBuf(Str) a2 = lr_free_cond(fl, 0, mv, lab, r, r + ".own", a1);
-    Str fz = r + ".fz." + lab;
-    return lr_frees(fl, i + 1, mv, lab, a2.push(fz + " = zext i1 " + r + ".fc." + lab + " to i8").push("call void @resid_carry_free(i8 " + fz + ", ptr " + r + ")"));
-}
-
-Str lr_move_src(List(Str) mv, Str lab, Str reg, Int i) {
-    List(Str) q = str_split(mv[i], "|");
-    if (q[0] == lab && q[1] == reg) { return q[2]; }
-    return lr_move_src(mv, lab, reg, i + 1);
-}
-
-// `%r.fc.lab`: r's value is the loop's and no new carried value is it.
-ListBuf(Str) lr_free_cond(List(Str) fl, Int j, List(Str) mv, Str lab, Str r, Str c, ListBuf(Str) acc) {
-    Str out = r + ".fc." + lab;
-    if (j >= fl.len()) { return acc.push(out + " = and i1 " + c + ", true"); }
-    Str ne = r + f".ne{j}." + lab;
-    Str cj = r + f".c{j}." + lab;
-    ListBuf(Str) a1 = acc.push(ne + " = icmp ne ptr " + r + ", " + lr_new(mv, fl[j], lab)).push(cj + " = and i1 " + c + ", " + ne);
-    return lr_free_cond(fl, j + 1, mv, lab, r, cj, a1);
+    if (ret) { return lr_region_at(ls, i + 1, h, b, mv, rev, lr_exit(l, i, rev, a0)); }
+    ListBuf(Str) a1 = if (back) { lr_back(mv, lab, a0) } else { a0 };
+    return lr_region_at(ls, i + 1, h, b, mv, rev, a1.push(if (phi) { lr_phi(l, mv) } else { l }));
 }
 
 // ─── Debug info ─────────────────────────────────────────────────────
@@ -4702,6 +4942,9 @@ Str lw_fields_src(Str v, Str fields, Int i, Str acc) {
 }
 
 // ─── Linear ownership of Map/Set values ────────────────────────────
+// (and of List values, in a program that uses `xs.with`: `with` and
+// `concat` are their consuming updates, `xs[i]`, `len` and `contains`
+// their reads; a list field of a struct is tracked like a Map field.)
 // A Map/Set variable is linear when each mention is a read, or, on each
 // path, its one consuming use: a return, the binding of a linear local, or
 // the receiver or argument of the next consuming step (`insert`,
@@ -4728,7 +4971,7 @@ Str lw_fields_src(Str v, Str fields, Int i, Str acc) {
 // sm: each struct type with Map/Set fields, to those fields' names.
 // hdr: the struct types some returned literal may reuse a record of,
 // whose records carry a header (resid_rec_new).
-type LOP = { Map(Str, Str) lin; Map(Str, Str) mut; Map(Str, Str) ret; Map(Str, Str) sm; Map(Str, Str) hdr; };
+type LOP = { Map(Str, Str) lin; Map(Str, Str) mut; Map(Str, Str) ret; Map(Str, Str) sm; Map(Str, Str) hdr; Bool lists; };
 // A tracked item: Map/Set variable `v` (f == "", !whole), its struct's
 // Map/Set field `v.f` (a path), or struct variable `v` whole. mfs: the
 // struct's Map/Set fields.
@@ -4788,7 +5031,11 @@ Bool lo_has_str(List(Str) xs, Str s, Int i) {
 }
 
 // A Map/Set type, or a struct type.
-Bool lo_tracked(LOP lop, Str ty) { return lin_is_mapset(ty) || lop.sm.contains(strip_owned_cg(ty)); }
+Bool lo_tracked(LOP lop, Str ty) { return lo_whole(lop, ty) || lop.sm.contains(strip_owned_cg(ty)); }
+// A heap List (not a List(T, N)).
+Bool lo_is_list(Str ty) { return str_has_prefix(ty, "List(") && !is_list_fixed(ty); }
+// A tracked value updated as a whole: a Map/Set, or a List when tracked.
+Bool lo_whole(LOP lop, Str ty) { return lin_is_mapset(ty) || (lop.lists && lo_is_list(strip_owned_cg(ty))); }
 Bool lo_tracked_ret(LOP lop, Str f) { return lo_tracked(lop, lop.ret.get(f) else { "" }); }
 List(Str) lo_mfs(LOP lop, Str ty) {
     Str s = lop.sm.get(strip_owned_cg(ty)) else { "" };
@@ -4897,7 +5144,8 @@ Bool lo_rd(Kg g, Int id, LV lov, LOP lop) {
     if (g.ns[id].nk > 0) {
         Bool on_v = lo_readable(g, kg_kid(g, id, 0), lov);
         if (on_v && (k == "mcall" || k == "field") && lo_read(t)) { return lo_rd_kids(g, id, 1, lov, lop); }
-        if (on_v && (k == "index" || k == "slice")) { return lo_rd_kids(g, id, 1, lov, lop); }
+        // An index reads; a slice is a new list, not a read of V's storage.
+        if (on_v && k == "index") { return lo_rd_kids(g, id, 1, lov, lop); }
     }
     if (k == "call" && lop.lin.contains(t)) { return lo_rd_call(g, id, 0, lov, lop); }
     if (lo_here(g, id, lov.v)) { return false; }
@@ -4924,7 +5172,7 @@ LOC lo_ce(Kg g, Int id, LV lov, LOP lop) {
     Str k = g.ns[u].kind;
     Str t = g.ns[u].text;
     if (lo_cls(g, u, lov) == 1) { return LOC {.ok = true, .mut = false, .ce = [], .bare = true}; }
-    if (k == "mcall" && (t == "insert" || t == "remove") && g.ns[u].nk > 0 && !lov.whole) {
+    if (k == "mcall" && lo_step(t) && g.ns[u].nk > 0 && !lov.whole) {
         LOC b = lo_ce(g, kg_kid(g, u, 0), lov, lop);
         if (!b.ok) { return b; }
         // Arguments run after the receiver: they may read V only while
@@ -4936,6 +5184,9 @@ LOC lo_ce(Kg g, Int id, LV lov, LOP lop) {
     if (k == "struct" && !lov.whole) { return lo_ce_fields(g, u, 0, lov, lop, false, lo_cfail()); }
     return lo_cfail();
 }
+
+// A consuming update: Map/Set insert and remove, List with and concat.
+Bool lo_step(Str m) { return m == "insert" || m == "remove" || m == "with" || m == "concat"; }
 
 Bool lo_args_after(Kg g, Int c, Int i, LV lov, Bool bare, LOP lop) {
     if (i >= g.ns[c].nk) { return true; }
@@ -4997,7 +5248,7 @@ LOC lo_anon(Kg g, Int id, LOP lop) {
     Int u = lo_unparen(g, id);
     Str k = g.ns[u].kind;
     Str t = g.ns[u].text;
-    if (k == "mcall" && (t == "insert" || t == "remove") && g.ns[u].nk > 0) {
+    if (k == "mcall" && lo_step(t) && g.ns[u].nk > 0) {
         LOC b = lo_anon(g, kg_kid(g, u, 0), lop);
         if (!b.ok) { return b; }
         return LOC {.ok = true, .mut = true, .ce = b.ce.concat([u]), .bare = false};
@@ -5116,7 +5367,7 @@ LOS lo_if(Kg g, Int s, LV lov, LOP lop, Funcs fs, LOS acc) {
 // the struct types the function returns as literals (",T,"), one of
 // which may reuse a field-wise linear variable's record: an update.
 LOS lo_item(Kg g, Int blk, Int i, Str v, Str ty, Str rl, LOP lop, Funcs fs) {
-    if (lin_is_mapset(ty)) { return lo_stmts(g, blk, i, lo_var(v, rl), true, lop, fs, lo_empty()); }
+    if (lo_whole(lop, ty)) { return lo_stmts(g, blk, i, lo_var(v, rl), true, lop, fs, lo_empty()); }
     List(Str) mfs = lo_mfs(lop, ty);
     // Field-wise: each Map/Set field, and the struct itself only borrowed
     // (a path that names no field sees just the whole mentions).
@@ -5154,12 +5405,12 @@ Str lo_rl_kids(Kg g, Int id, Int i, Str acc) {
 // ─── The program's linear parameters ───────────────────────────────
 
 // Struct types, to their Map/Set fields.
-Map(Str, Str) lo_structs(Funcs fs, Int i, Map(Str, Str) acc) {
+Map(Str, Str) lo_structs(Funcs fs, Int i, Map(Str, Str) acc, Bool lists) {
     if (i >= fs.stn.len()) { return acc; }
-    return lo_structs(fs, i + 1, acc.insert(fs.stn[i], lo_struct_mfs(fs, fs.stf[i], 0, "")));
+    return lo_structs(fs, i + 1, acc.insert(fs.stn[i], lo_struct_mfs(fs, fs.stf[i], 0, "", lists)), lists);
 }
 
-Str lo_struct_mfs(Funcs fs, Str fields, Int i, Str acc) {
+Str lo_struct_mfs(Funcs fs, Str fields, Int i, Str acc, Bool lists) {
     Int fl = str_len(fields);
     if (i >= fl) { return acc; }
     Int ce = _find_comma_at_depth_cg(fields, i, 0, 0);
@@ -5168,8 +5419,8 @@ Str lo_struct_mfs(Funcs fs, Str fields, Int i, Str acc) {
     Int co = str_find_char(ent, 58, 0);
     Str nm = str_slice(ent, 0, co);
     Str ty = ct_base_of(fs.ctn, fs.ctb, str_slice(ent, co + 1, str_len(ent)));
-    Str acc2 = if (co > 0 && lin_is_mapset(ty)) { if (acc == "") { nm } else { acc + "," + nm } } else { acc };
-    return lo_struct_mfs(fs, fields, end + 1, acc2);
+    Str acc2 = if (co > 0 && (lin_is_mapset(ty) || (lists && lo_is_list(ty)))) { if (acc == "") { nm } else { acc + "," + nm } } else { acc };
+    return lo_struct_mfs(fs, fields, end + 1, acc2, lists);
 }
 
 // Functions with a tracked parameter or result.
@@ -5211,7 +5462,7 @@ LOP lo_init(Kg g, List(Int) ds, Int i, Funcs fs, LOP lop) {
     Str f = g.ns[d].text;
     Int np = g.ns[d].nk - 2;
     Bool cl = lg_closure(g, kg_kid(g, d, np + 1));
-    LOP lop2 = LOP {.lin = lop.lin.insert(f, lo_init_mask(g, d, 0, np, cl, false, lop, fs, "")), .mut = lop.mut.insert(f, lo_init_mask(g, d, 0, np, cl, true, lop, fs, "")), .ret = lop.ret.insert(f, ct_base_of(fs.ctn, fs.ctb, g.ns[kg_kid(g, d, 0)].text)), .sm = lop.sm, .hdr = lop.hdr};
+    LOP lop2 = LOP {.lin = lop.lin.insert(f, lo_init_mask(g, d, 0, np, cl, false, lop, fs, "")), .mut = lop.mut.insert(f, lo_init_mask(g, d, 0, np, cl, true, lop, fs, "")), .ret = lop.ret.insert(f, ct_base_of(fs.ctn, fs.ctb, g.ns[kg_kid(g, d, 0)].text)), .sm = lop.sm, .hdr = lop.hdr, .lists = lop.lists};
     return lo_init(g, ds, i + 1, fs, lop2);
 }
 
@@ -5244,7 +5495,7 @@ LOR lo_round(Kg g, List(Int) ds, Int i, Funcs fs, LOR acc) {
     Int np = g.ns[d].nk - 2;
     LOM m = lo_masks(g, d, 0, np, lo_rl(g, kg_kid(g, d, np + 1), ","), acc.p, fs, LOM {.lin = "", .mut = ""});
     if (m.lin == l0 && m.mut == m0) { return lo_round(g, ds, i + 1, fs, acc); }
-    LOP p2 = LOP {.lin = acc.p.lin.insert(f, m.lin), .mut = acc.p.mut.insert(f, m.mut), .ret = acc.p.ret, .sm = acc.p.sm, .hdr = acc.p.hdr};
+    LOP p2 = LOP {.lin = acc.p.lin.insert(f, m.lin), .mut = acc.p.mut.insert(f, m.mut), .ret = acc.p.ret, .sm = acc.p.sm, .hdr = acc.p.hdr, .lists = acc.p.lists};
     return lo_round(g, ds, i + 1, fs, LOR {.p = p2, .changed = true});
 }
 
@@ -5255,10 +5506,19 @@ LOP lo_fix(Kg g, List(Int) ds, Funcs fs, LOP lop, Int n) {
 }
 
 pub LOP lo_program(Kg g, Int unit, Funcs fs) {
-    LOP p0 = LOP {.lin = lo_nomap(), .mut = lo_nomap(), .ret = lo_nomap(), .sm = lo_structs(fs, 0, lo_nomap()), .hdr = lo_nomap()};
+    // Lists are tracked only in a program that replaces list elements.
+    Bool lists = lo_uses_with(g, 0);
+    LOP p0 = LOP {.lin = lo_nomap(), .mut = lo_nomap(), .ret = lo_nomap(), .sm = lo_structs(fs, 0, lo_nomap(), lists), .hdr = lo_nomap(), .lists = lists};
     List(Int) ds = lo_fns(g, unit, 0, p0, fs, ListBuf()).finish();
     LOP p1 = lo_fix(g, ds, fs, lo_init(g, ds, 0, fs, p0), 0);
-    return LOP {.lin = p1.lin, .mut = p1.mut, .ret = p1.ret, .sm = p1.sm, .hdr = lo_hdrs(g, lo_all_fns(g, unit, 0, ListBuf()).finish(), 0, p1, fs, lo_nomap())};
+    return LOP {.lin = p1.lin, .mut = p1.mut, .ret = p1.ret, .sm = p1.sm, .hdr = lo_hdrs(g, lo_all_fns(g, unit, 0, ListBuf()).finish(), 0, p1, fs, lo_nomap()), .lists = lists};
+}
+
+// Whether any node is a `.with` call.
+Bool lo_uses_with(Kg g, Int i) {
+    if (i >= g.ns.len()) { return false; }
+    if (g.ns[i].kind == "mcall" && g.ns[i].text == "with") { return true; }
+    return lo_uses_with(g, i + 1);
 }
 
 ListBuf(Int) lo_all_fns(Kg g, Int id, Int i, ListBuf(Int) acc) {
@@ -5352,7 +5612,7 @@ Str lo_cand(List(Str) cs, Str ty, Int i) {
 // still a reuse candidate when field-wise linear.
 LOW lo_chained_cand(Kg g, Int blk, Int i, Int s, Str rl, LOP lop, Funcs fs, LOW acc) {
     Str ty = lo_bind_ty(g, s, fs);
-    if (lin_is_mapset(ty)) { return acc; }
+    if (lo_whole(lop, ty)) { return acc; }
     LOS r = lo_item(g, blk, i + 1, g.ns[s].text, ty, rl, lop, fs);
     if (!r.ok || !r.fw) { return acc; }
     return LOW {.fl = acc.fl, .chained = acc.chained, .reuse = acc.reuse.concat([g.ns[s].text + ":" + strip_owned_cg(ty)]), .ro = acc.ro};
@@ -5453,9 +5713,12 @@ PG lw_decls(LW w, Int id, Int i, PG acc) {
 pub PG lw_program(Kg g, Int unit, Funcs fs, PG g0, Bool dbg, GAF df, Bool facts) {
     LOP lo = lo_program(g, unit, fs);
     LW w = LW {.g = g, .fs = fs, .base = 0, .rg = true, .dbg = dbg, .df = df, .rf = lr_nof(), .facts = facts, .lo = lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = ""};
-    PG r = lw_decls(w, unit, 0, g0);
-    if (r.err != "" || dbg || resid_rtmod()) { return r; }
-    return PG {.pos = r.pos, .err = r.err, .glines = r.glines, .hlines = r.hlines, .lines = vl_module(r.lines), .tmp = r.tmp, .lbl = r.lbl};
+    PG r0 = lw_decls(w, unit, 0, g0);
+    // Record moves for loop regions (lr_move): only where none are inside.
+    PG r = if (r0.err != "" || resid_rtmod()) { r0 } else { PG {.pos = r0.pos, .err = r0.err, .glines = r0.glines, .hlines = r0.hlines, .lines = r0.lines.concat(lr_rec_fns(fs, lo.hdr, 0, [])), .tmp = r0.tmp, .lbl = r0.lbl} };
+    PG r1 = r;
+    if (r1.err != "" || dbg || resid_rtmod()) { return r1; }
+    return PG {.pos = r1.pos, .err = r1.err, .glines = r1.glines, .hlines = r1.hlines, .lines = vl_module(r1.lines), .tmp = r1.tmp, .lbl = r1.lbl};
 }
 
 // ─── Signatures from the graph ──────────────────────────────────────

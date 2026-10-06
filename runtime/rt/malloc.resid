@@ -75,21 +75,28 @@ pub Int rt_mem_limit_set(Int mb) {
     return st64(mem_lim(), if (mb > 0) { mb * 1048576 } else { 0 - 1 }) * 0;
 }
 
-// Count n more heap bytes; past the budget, abort.
-Int mem_take(Int n) {
+// Count n more heap bytes (or region pages); past the budget, abort.
+pub Int mem_take(Int n) {
     Int now = resid_raw_fetch_add(mem_used(), n) + n;
     Int lim = limit_bytes();
     if (lim > 0 && now > lim) { return over_budget(lim); }
     return 0;
 }
 
+pub Int mem_give(Int n) { return resid_raw_fetch_add(mem_used(), 0 - n) * 0; }
+
+// The message is built in a fixed buffer: allocating here would go past
+// the budget again.
 @cold
 Int over_budget(Int lim) {
-    Int sb = rt_sb_new();
-    _ = sb_lit(sb, resid_raw_addr("memory budget exceeded ("));
-    _ = sb_word(sb, lim / 1048576);
-    _ = sb_lit(sb, resid_raw_addr(" MB); set RESID_MEM_LIMIT (MB) to raise it"));
-    return rt_abort_msg(rt_sb_finish(sb));
+    Int b = resid_raw_tls("budget_msg", 128);
+    Int a = resid_raw_addr("memory budget exceeded (");
+    Int z = resid_raw_addr(" MB); set RESID_MEM_LIMIT (MB) to raise it");
+    Int n0 = c_strlen(a);
+    _ = mcopy(b, a, n0);
+    Int n1 = n0 + itoa_into(b + n0, lim / 1048576);
+    _ = mcopy(b + n1, z, c_strlen(z) + 1);
+    return rt_abort_msg(b);
 }
 
 Int huge() { return 2097152; }

@@ -2533,6 +2533,8 @@ GKM gk_mcall_r(GK k0, Int id, Str exp) {
         if (na != 0) { return gkm(gterr(k, ".capacity() takes no arguments", id), false); }
         return gkm(gt(k, "Int", id), true);
     }
+    // xs.with(i, x): xs with element i replaced (spec §17, §44.3).
+    if (m == "with" && str_has_prefix(bt, "List(")) { return gkm(gk_list_with(k, id, bt, na), true); }
     if (m == "concat") {
         GKT a = gk_marg_as(k, id, 0, bt);
         if (a.err != "") { return gkm(a, false); }
@@ -2555,6 +2557,19 @@ GKM gk_mcall_r(GK k0, Int id, Str exp) {
     Str cfty = gk_field_type(k, bt, m);
     if (cfty != "" && is_fn_type(cfty)) { return gkm(gk_fn_call(gk_mem(k, id, gk_sfield(k, bt, m)), id, 1, cfty), true); }
     return gkm(gterr(k, "unsupported method " + m, id), false);
+}
+
+GKT gk_list_with(GK k, Int id, Str bt, Int na) {
+    if (na != 2) { return gterr(k, ".with(i, x) takes 2 arguments", id); }
+    Bool fixed = is_list_fixed(bt);
+    Str et = if (fixed) { fixed_elem(bt) } else { str_slice(bt, 5, str_len(bt) - 1) };
+    GKT i = gk_expr(k, gk_kid(k, id, 1), "Int");
+    if (i.err != "") { return i; }
+    if (!is_int_ty(i.ty)) { return gterr(i.k, ".with index must be an integer, got " + i.ty, id); }
+    GKT x = gk_marg_as(i.k, id, 1, et);
+    if (x.err != "") { return x; }
+    if (!ty_same(x.ty, et)) { return gterr(x.k, ".with value mismatch: list has element " + et + ", found " + x.ty, id); }
+    return gt(x.k, bt, id);
 }
 
 // List verbs, by element representation: a word (integers up to 64 bits),

@@ -11,6 +11,11 @@
 // (small lists) or moves to a trie (large branches). Old headers always
 // see exactly their own prefix. The stamp belongs to the map code
 // (resid_map_list_push).
+//
+// A transient list (map.resid, xs.with) is flat with a buffer no other
+// header shares; its shift word is -2, which lshift reads as -1. Only an
+// owned update (the compiler proved the old list dead) writes into one,
+// and appends never share its buffer as a tip.
 
 // ─── Composite boxes ───────────────────────────────────────────────────
 
@@ -51,11 +56,15 @@ pub Int rt_malloc(Int n) { return c_malloc(n); }
 // ─── List headers, nodes, flat buffers ─────────────────────────────────
 
 pub Int lcount(Int l) { return ld64(l); }
-pub Int lshift(Int l) { return sx32(ld32(l + 8)); }
+pub Int lshift(Int l) {
+    Int s = sx32(ld32(l + 8));
+    return if (s == 0 - 2) { 0 - 1 } else { s };
+}
+pub Bool ltransient(Int l) { return sx32(ld32(l + 8)) == 0 - 2; }
 pub Int lroot(Int l) { return ld64(l + 16); }
 pub Int ltype(Int l) { return ld64(l + 24); }
 
-Int set_list(Int l, Int count, Int shift, Int root, Int ty) {
+pub Int set_list(Int l, Int count, Int shift, Int root, Int ty) {
     _ = st64(l, count);
     _ = st32(l + 8, shift);
     _ = st64(l + 16, root);
@@ -93,7 +102,7 @@ pub Int list_at(Int l, Int i) {
 }
 
 // A copy of node (may be 0) with slot set to val, grown to cover it.
-Int node_with(Int node, Int slot, Int val) {
+pub Int node_with(Int node, Int slot, Int val) {
     Int old = if (node != 0) { ld64(node) } else { 0 };
     Int out = node_new(max(slot + 1, old));
     _ = if (old > 0) { mcopy(out + 8, node + 8, old * 8) } else { 0 };
@@ -101,7 +110,7 @@ Int node_with(Int node, Int slot, Int val) {
 }
 
 // node (at level) with leaf number leaf_idx replaced by leaf.
-Int set_leaf(Int node, Int level, Int leaf_idx, Int leaf) {
+pub Int set_leaf(Int node, Int level, Int leaf_idx, Int leaf) {
     if (level == 0) { return leaf; }
     Int slot = (leaf_idx >> (level - 5)) & 31;
     Int child = if (node != 0 && slot < ld64(node)) { ld64(node + 8 + slot * 8) } else { 0 };
@@ -109,13 +118,27 @@ Int set_leaf(Int node, Int level, Int leaf_idx, Int leaf) {
 }
 
 // v with m elements appended, written into `into` (v itself for an
-// in-place append, or 0 for a new header).
+// in-place append, or 0 for a new header). An in-place append to a header
+// older than the innermost region grows in the header's region; its
+// elements are no younger than that (map_list_push moves them first, and a
+// builder is never pushed to from a region younger than its own, §45.1).
 @export("resid_rt_pvec_append_into", "ptr(ptr,ptr,ptr,i64)")
 pub Int pvec_append_into(Int into, Int v, Int elems, Int m) {
+    if (into == 0 || ag_scope_depth() == 0 || young(into)) { return append_core(into, v, elems, m); }
+    _ = region_use(into);
+    Int r = append_core(into, v, elems, m);
+    return region_done() * 0 + r;
+}
+
+Int append_core(Int into, Int v, Int elems, Int m) {
     if (lshift(v) == 0 - 1 || lroot(v) == 0) {
         Int f = lroot(v);
         Int n = lcount(v);
-        Bool tip = f != 0 && n + m <= ld64(f + 8) && resid_raw_cas(f, n, n + m);
+        // The shared tip takes the elements in place. Slots past its last
+        // move (`kept`) may hold younger values: only lists made after the
+        // append see them, and a move of any of those settles them into
+        // the buffer's region (flat_move in map.resid).
+        Bool tip = f != 0 && !ltransient(v) && n + m <= ld64(f + 8) && resid_raw_cas(f, n, n + m);
         if (tip) { return flat_fill(into, v, f, f, n, elems, m); }
         if (f == 0 || ld64(f) == n || n <= 64) {
             // Empty, full tip, or a small branch: copy, doubling so a run of
@@ -160,7 +183,7 @@ Int trie_fill(Int out, Int elems, Int m, Int done) {
     return trie_fill(out, elems, m, done + take);
 }
 
-Int leaf_of(Int node, Int level, Int idx) {
+pub Int leaf_of(Int node, Int level, Int idx) {
     if (level <= 0) { return node; }
     return leaf_of(ld64(node + 8 + ((idx >> level) & 31) * 8), level - 5, idx);
 }
@@ -189,7 +212,7 @@ pub Int pvec_push(Int v, Int elem) {
 }
 
 // A trie-backed list of items[0..n) (a large flat list being branched).
-Int trie_from_items(Int items, Int n, Int ty) {
+pub Int trie_from_items(Int items, Int n, Int ty) {
     Int first = min(n, 32);
     Int leaf = node_new(first);
     _ = mcopy(leaf + 8, items, first * 8);

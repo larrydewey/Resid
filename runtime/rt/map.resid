@@ -48,7 +48,7 @@ Bool map_heap() { return ld64(map_heap_w()) != 0; }
 Int map_born_w() { return resid_raw_tls("map_born", 8); }
 
 Int sc_depth() { return c_sc_depth(); }
-Bool in_region(Int p) { return c_sc_depth() != 0 && c_in_scope(p) != 0; }
+Bool in_region(Int p) { return region_of(p) != 0; }
 
 // Map memory lives where its map does: a new map inside a scope region
 // lives in the region, one in a bulk arena in that arena (a handle keeps
@@ -63,12 +63,19 @@ Int map_obj(Int n) {
     return xmalloc(n);
 }
 
-// The target for an in-place update of m.
-Int map_home(Int m) {
-    if (in_region(m)) { return 0; }
+// An in-place update of m allocates where m lives: its region (made
+// current by region_use), or, outside every region, the heap or the bulk
+// arena it was made in. map_leave puts back what map_enter changed.
+Int map_enter(Int m) {
+    Int prev = ld64(map_heap_w());
     Int d = ld8(m + 46);
-    return if (d > 0) { d + 2 } else { 1 };
+    Bool reg = in_region(m);
+    _ = if (reg) { region_use(m) } else { region_same() };
+    _ = st64(map_heap_w(), if (reg) { 0 } else { if (d > 0) { d + 2 } else { 1 } });
+    return prev;
 }
+
+Int map_leave(Int prev) { return st64(map_heap_w(), prev) + region_done(); }
 
 Int map_obj_free(Int p) { return if (p != 0 && !in_region(p) && ld64(p - 16) != 63) { c_free(p) } else { 0 }; }
 
@@ -230,9 +237,9 @@ Int box_any(Int k, Int w) {
     return w;
 }
 
-// A box stored into an older map lives on the heap as the map does.
+// A box stored into a map lives where the map does (map_enter).
 Int mbox(Int k, Int w) {
-    if (k < 1 || k > 3 || !map_heap() || sc_depth() == 0) { return box_any(k, w); }
+    if (k < 1 || k > 3 || !map_heap()) { return box_any(k, w); }
     Int d = sc_depth();
     _ = c_sc_depth_set(0);
     Int r = box_any(k, w);
@@ -260,22 +267,6 @@ Int word_of_box(Int p, Bool for_key) {
     return ret_word(p) * 0;
 }
 
-// A string about to be stored in a map, copied out of a scope region.
-@export("resid_str_keep", "ptr(ptr)")
-pub Int rt_str_keep(Int p) {
-    if (sc_depth() == 0 || c_in_scope(p) == 0) { return p; }
-    Int n = c_strlen(p) + 1;
-    Int q = c_outer_alloc(n);
-    return mcopy(q, p, n) * 0 + q;
-}
-
-// Kinds 4 and 5 (from the compiler): a string / a list of scalars or
-// strings, stored as kind 0 but moved out of any scope region.
-Int word_keep(Int k, Int w) {
-    if (k == 4) { return rt_str_keep(w); }
-    if (k == 5) { return rt_list_keep(w); }
-    return w;
-}
 
 // ─── Trie nodes ────────────────────────────────────────────────────────
 
@@ -778,9 +769,9 @@ Int t_put_s(Int t, Int kk, Int kb, Int vk, Int vb, Int ks, Int vs) {
     Int v0 = t_val_in(t, vk, vb);
     _ = if (tnov(t) && v0 != 1) { t_vals_make(t) } else { 0 };
     Int at = t_vref(t, tkk(t), k);
-    Int v = if (vs != 0) { word_keep(vs, v0) } else { v0 };
+    Int v = if (vs != 0) { bar_word(t, vs, v0) } else { v0 };
     if (at != 0) { return if (!tnov(t)) { st64(at, v) } else { 0 }; }
-    return t_insert_new(t, if (ks != 0) { word_keep(4, k) } else { k }, v);
+    return t_insert_new(t, if (ks != 0) { bar_word(t, 4, k) } else { k }, v);
 }
 
 Int t_put(Int t, Int kk, Int kb, Int vk, Int vb) { return t_put_s(t, kk, kb, vk, vb, 0, 0); }
@@ -891,22 +882,15 @@ Int map_root(Int m) {
     }
     Int t = mtab(m);
     Int n = tlive(t);
-    // A trie cached on the map lives where the map does (the heap for a
-    // map in a scope region).
+    // A trie cached on the map lives where the map does.
     Bool cache = !mtrans(m);
-    Bool susp = cache && in_region(m);
-    Int saved = xmalloc(24);
-    Int prev = ld64(map_heap_w());
-    _ = if (susp) { c_suspend(saved) } else { 0 };
-    _ = if (cache && !susp) { st64(map_heap_w(), map_home(m)) } else { 0 };
+    Int prev = if (cache) { map_enter(m) } else { ld64(map_heap_w()) };
     Int ks = words_of(n);
     Int vs = words_of(n);
     _ = table_words(t, ks, vs, 0, 0);
     Int root = trie_build(ks, vs, n, tkk(t));
     _ = c_free(ks) + c_free(vs);
-    _ = if (susp) { c_resume(saved) } else { 0 };
-    _ = st64(map_heap_w(), prev);
-    _ = c_free(saved);
+    _ = if (cache) { map_leave(prev) } else { 0 };
     if (mtrans(m)) { return root; }
     // Another thread may have cached an identical trie first.
     if (resid_raw_cas(m + 8, 0, root)) { return root; }
@@ -1127,14 +1111,14 @@ Int map_put_slow(Int m0, Int owned, Int kk0, Int kb, Int vk0, Int vb) {
     Int vk = if (vk0 == 4 || vk0 == 5) { 0 } else { vk0 };
     // The first owned update of a shared map takes a private copy.
     Int m = if (owned != 0 && !mtrans(m0)) { rt_map_transient(m0) } else { m0 };
-    if (owned != 0 && mtrans(m)) {
-        // In place: allocate where the map lives.
-        Int saved = ld64(map_heap_w());
-        _ = st64(map_heap_w(), map_home(m));
-        _ = if (mtab(m) != 0) { tab_put_owned(m, kk, kb, vk, vb, ks, vs) } else { trie_put_owned(m, kk, word_keep(if (ks != 0) { 4 } else { 0 }, kb), vk, word_keep(vs, vb)) };
-        return st64(map_heap_w(), saved) * 0 + m;
+    // In place, allocating where the map lives, unless a key or value is a
+    // younger object the runtime cannot move there (kind 0, not a scalar).
+    if (owned != 0 && mtrans(m) && word_fits(m, kk, kb) && word_fits(m, vk, vb)) {
+        Int saved = map_enter(m);
+        _ = if (mtab(m) != 0) { tab_put_owned(m, kk, kb, vk, vb, ks, vs) } else { trie_put_owned(m, kk, bar_word(m, if (ks != 0) { 4 } else { kk }, kb), vk, bar_word(m, if (vs != 0) { vs } else { vk }, vb)) };
+        return map_leave(saved) * 0 + m;
     }
-    return map_insert_p(m, kk, word_keep(if (ks != 0) { 4 } else { 0 }, kb), vk, word_keep(vs, vb));
+    return map_insert_p(m, kk, kb, vk, vb);
 }
 
 Int tab_put_owned(Int m, Int kk, Int kb, Int vk, Int vb, Int ks, Int vs) {
@@ -1150,7 +1134,7 @@ Int tab_put_owned(Int m, Int kk, Int kb, Int vk, Int vb, Int ks, Int vs) {
 @inline
 pub Int rt_map_put(Int m, Int owned, Int kk, Int kb, Int vk, Int vb) {
     Int t = mtab(m);
-    Bool fast = owned != 0 && mtrans(m) && t != 0 && kk == 1 && tkk(t) == 1 && tvk(t) == vk && (tvals(t) != 0 || vb == 1) && lshr(kb, 1) != lshr(raw_empty(), 1);
+    Bool fast = owned != 0 && mtrans(m) && t != 0 && kk == 1 && tkk(t) == 1 && tvk(t) == vk && (tvals(t) != 0 || vb == 1) && lshr(kb, 1) != lshr(raw_empty(), 1) && (vk != 0 || word_fits(m, 0, vb));
     if (fast) {
         Int r = probe_raw_cached(t, kb);
         if (r >= 0) { return if (tvals(t) != 0) { st64(tvals(t) + r * 16, vb) } else { 0 } * 0 + m; }
@@ -1166,43 +1150,34 @@ pub Int rt_map_put(Int m, Int owned, Int kk, Int kb, Int vk, Int vb) {
     return map_put_slow(m, owned, kk, kb, vk, vb);
 }
 
-// A list element (a scalar box or a string) on the heap.
-Int elem_keep(Int p) {
-    if (p == 0 || ult(p, 4096) || !in_region(p)) { return p; }
-    if (!is_boxed(p)) { return rt_str_keep(p); }
-    Int k = word_of_box(p, false);
-    if (k == 0) { return p; }
-    Int raw = ld64(mret());
-    Int d = sc_depth();
-    _ = c_sc_depth_set(0);
-    Int r = box_any(k, raw);
-    return c_sc_depth_set(d) * 0 + r;
+// Whether a word of kind k (0 a pointer) may be stored into m in place:
+// anything but a kind 0 object younger than m.
+Bool word_fits(Int m, Int k, Int w) {
+    if (k != 0 || ult(w, 4096) || box_imm(w) || box_fimm(w)) { return true; }
+    Int rw = region_of(w);
+    Int rm = region_of(m);
+    return rw == 0 || (rm != 0 && rw <= rm) || is_boxed(w);
 }
 
 // m.insert(k, (m.get(k) else { d }).concat([e])) on a map of lists, fused:
 // on an owned transient whose slot holds a header stamped with the map's
-// own, the element is appended in place.
+// own, the element is appended in place (where the header lives).
 @export("resid_map_list_push", "ptr(ptr,i8,i8,i64,ptr,ptr)")
 pub Int rt_map_list_push(Int m, Int owned, Int kk, Int kb, Int elem, Int dflt) {
-    Bool heap = !in_region(m);
     if (owned != 0 && mtrans(m) && mown(m) != 0) {
         Int at = map_vref_raw(m, kk, kb);
         Int h = if (at != 0) { ld64(at) } else { 0 };
         if (h != 0 && ld32(h + 12) == mown(m)) {
-            // Allocate and keep as the map does: outside the region.
-            Int d = sc_depth();
-            Int e = if (heap) { elem_keep(elem) } else { elem };
-            _ = if (heap) { c_sc_depth_set(0) } else { 0 };
             Int one = resid_raw_tls("map_one_elem", 8);
-            _ = st64(one, e);
+            _ = st64(one, bar_keep(h, elem));
             _ = pvec_append_into(h, h, one, 1);
-            return c_sc_depth_set(d) * 0 + m;
+            return m;
         }
     }
     // The looked-up header only seeds the new one: it does not leave.
     Int at = map_vref_raw(m, kk, kb);
     Int base = if (at != 0) { word_out(map_vk(m), 0, ld64(at)) } else { dflt };
-    Int nv = if (lcount(base) == 0) { fresh_list(base, elem, heap, owned != 0) } else { pvec_push(base, elem) };
+    Int nv = if (lcount(base) == 0) { fresh_list(base, elem) } else { pvec_push(base, elem) };
     Int r = rt_map_put(m, owned, kk, kb, 5, nv);
     if (owned != 0 && mtrans(r) && mown(r) != 0) {
         Int slot = map_vref_raw(r, kk, kb);
@@ -1213,25 +1188,22 @@ pub Int rt_map_list_push(Int m, Int owned, Int kk, Int kb, Int elem, Int dflt) {
 }
 
 // A new one-element list with room for a few appends.
-Int fresh_list(Int base, Int elem, Bool heap, Bool owned) {
-    Int d = sc_depth();
-    _ = if (heap && owned) { c_sc_depth_set(0) } else { 0 };
+Int fresh_list(Int base, Int elem) {
     Int f = flat_new(4);
-    _ = st64(f + 24, if (heap) { elem_keep(elem) } else { elem });
+    _ = st64(f + 24, elem);
     _ = st64(f, 1);
     Int nv = list_hdr();
     _ = st64(nv, 1) + st32(nv + 8, 0 - 1) + st64(nv + 16, f) + st64(nv + 24, ltype(base));
-    return c_sc_depth_set(d) * 0 + nv;
+    return nv;
 }
 
 @export("resid_map_del", "ptr(ptr,i8,i8,i64)")
 pub Int rt_map_del(Int m0, Int owned, Int kk, Int kb) {
     Int m = if (owned != 0 && !mtrans(m0) && mcount(m0) > 0) { rt_map_transient(m0) } else { m0 };
     if (owned != 0 && mtrans(m) && mtab(m) == 0) {
-        Int saved = ld64(map_heap_w());
-        _ = st64(map_heap_w(), map_home(m));
+        Int saved = map_enter(m);
         _ = if (mcount(m) > 0 && key_lookup_word(mkk(m), kk, kb)) { trie_del_at(m, ld64(mret())) } else { 0 };
-        return st64(map_heap_w(), saved) * 0 + m;
+        return map_leave(saved) * 0 + m;
     }
     if (owned != 0 && mtrans(m)) {
         _ = t_del(mtab(m), kk, kb);
@@ -1600,153 +1572,348 @@ Int sb_elems_t(Int sb, Int ks, Int i, Int n, Int k, Int clo) {
     return sb_elems_t(sb, ks, i + 1, n, k, clo);
 }
 
-// ─── Moving loop-region values to the heap ─────────────────────────────
-// A loop region frees an iteration's memory at its back edge; values the
-// loop carries, and values stored into maps that outlive it, are first
-// moved out. Only parts in a region are copied (older parts are shared).
+// ─── Moving values out of a region ─────────────────────────────────────
+// A value that must outlive its region is moved first: the parts of it in
+// the regions a move context names are copied into the region it names
+// (region.resid, Moves); older parts are shared, and cannot point into the
+// region being left. The resid_*_keep / *_evac entry points move out of
+// every region to the heap, for code compiled before loops had regions of
+// their own.
 
-Int pvec_keep(Int n, Int level) {
-    if (n == 0 || !in_region(n)) { return n; }
-    Int cap = ld64(n);
-    Int c = c_outer_alloc(8 + cap * 8);
-    _ = st64(c, cap);
-    return keep_items(n, c, 0, cap, level) * 0 + c;
+// ek: the element mover, 0 for elem_move (words and strings), else a
+// compiled function that moves one element (a record) with the context.
+Int keep_elem(Int it, Int ek, Int ctx) { return if (ek == 0) { elem_move(it, ctx) } else { resid_raw_call2(ek, it, ctx) }; }
+
+// A list element (a scalar box or a string).
+Int elem_move(Int p, Int ctx) {
+    if (p == 0 || ult(p, 4096) || box_imm(p) || box_fimm(p) || !mv_src(ctx, p)) { return p; }
+    if (!is_boxed(p)) { return str_move(p, ctx); }
+    // A scalar box: header and payload (at most 16 bytes) copied whole.
+    Int st = stype(p);
+    if (st < 1 || st > 5) { return p; }
+    Int n = if (st >= 4) { 40 } else { 32 };
+    Int q = mv_alloc(ctx, n);
+    return mcopy(q, p, n) * 0 + q;
 }
 
-Int keep_items(Int n, Int c, Int i, Int cap, Int level) {
+Int str_move(Int p, Int ctx) {
+    if (p == 0 || !mv_src(ctx, p)) { return p; }
+    Int n = c_strlen(p) + 1;
+    Int q = mv_alloc(ctx, n);
+    return mcopy(q, p, n) * 0 + q;
+}
+
+// Kinds 4 and 5 (from the compiler): a string / a list of scalars or
+// strings, stored as kind 0.
+Int word_move(Int k, Int w, Int ctx) {
+    if (k == 4) { return str_move(w, ctx); }
+    if (k == 5) { return list_move(w, 0, ctx); }
+    return w;
+}
+
+Int pvec_move(Int n, Int level, Int ek, Int ctx) {
+    if (n == 0 || !mv_src(ctx, n)) { return n; }
+    Int cap = ld64(n);
+    Int c = mv_alloc(ctx, 8 + cap * 8);
+    _ = st64(c, cap);
+    return move_items(n, c, 0, cap, level, ek, ctx) * 0 + c;
+}
+
+Int move_items(Int n, Int c, Int i, Int cap, Int level, Int ek, Int ctx) {
     if (i >= cap) { return 0; }
     Int it = ld64(n + 8 + i * 8);
-    _ = st64(c + 8 + i * 8, if (level > 0) { pvec_keep(it, level - 5) } else { elem_keep(it) });
-    return keep_items(n, c, i + 1, cap, level);
+    _ = st64(c + 8 + i * 8, if (level > 0) { pvec_move(it, level - 5, ek, ctx) } else { keep_elem(it, ek, ctx) });
+    return move_items(n, c, i + 1, cap, level, ek, ctx);
 }
 
-// A list with no part in a scope region.
-@export("resid_list_keep", "ptr(ptr)")
-pub Int rt_list_keep(Int l) {
-    if (l == 0 || sc_depth() == 0) { return l; }
+Int list_move(Int l, Int ek, Int ctx) {
+    if (l == 0) { return l; }
     Int root = lroot(l);
     Int n = lcount(l);
-    Int nroot = if (lshift(l) == 0 - 1 && root != 0) { flat_keep(root, n) } else { if (root != 0) { pvec_keep(root, lshift(l)) } else { root } };
-    if (nroot == root && !in_region(l)) { return l; }
-    Int out = c_outer_alloc(32);
+    Int nroot = if (lshift(l) == 0 - 1 && root != 0) { flat_move(root, n, ek, ctx) } else { if (root != 0) { pvec_move(root, lshift(l), ek, ctx) } else { root } };
+    if (nroot == root && !mv_src(ctx, l)) { return l; }
+    Int out = mv_alloc(ctx, 32);
     _ = mcopy(out, l, 32);
     return st64(out + 16, nroot) * 0 + out;
 }
 
-Int flat_keep(Int f, Int n) {
-    if (in_region(f)) {
-        // Same capacity: the next appends still fit in place.
-        Int cap = if (ld64(f + 8) > n) { ld64(f + 8) } else { max(n, 1) };
-        Int g = c_outer_alloc(24 + cap * 8);
-        _ = st64(g, n) + st64(g + 8, cap) + st64(g + 16, n);
-        return keep_elems(f, g, 0, n) * 0 + g;
+// A flat buffer outside the moving regions keeps its place; the slots
+// appended since its last move (from `kept`, word 2) may hold younger
+// values, which move into the buffer's own region and are then settled.
+Int flat_move(Int f, Int n, Int ek, Int ctx) {
+    if (!mv_src(ctx, f)) {
+        Int kept = ld64(f + 16);
+        if (kept >= n) { return f; }
+        _ = mv_done(move_elems(f, f, kept, n, ek, mv_into(region_of(f))));
+        return st64(f + 16, n) * 0 + f;
     }
-    // An older buffer: only slots appended since its last move can hold
-    // region elements, and no older list sees them.
-    Int kept = ld64(f + 16);
-    _ = if (kept < n) { keep_elems(f, f, kept, n) + st64(f + 16, n) } else { 0 };
-    return f;
+    // Same capacity: the next appends still fit in place.
+    Int cap = if (ld64(f + 8) > n) { ld64(f + 8) } else { max(n, 1) };
+    Int g = mv_alloc(ctx, 24 + cap * 8);
+    _ = st64(g, n) + st64(g + 8, cap) + st64(g + 16, n);
+    return move_elems(f, g, 0, n, ek, ctx) * 0 + g;
 }
 
-Int keep_elems(Int f, Int g, Int i, Int n) {
+Int move_elems(Int f, Int g, Int i, Int n, Int ek, Int ctx) {
     if (i >= n) { return 0; }
-    _ = st64(g + 24 + i * 8, elem_keep(ld64(f + 24 + i * 8)));
-    return keep_elems(f, g, i + 1, n);
+    _ = st64(g + 24 + i * 8, keep_elem(ld64(f + 24 + i * 8), ek, ctx));
+    return move_elems(f, g, i + 1, n, ek, ctx);
 }
 
-@export("resid_list_evac", "ptr(ptr)")
-pub Int rt_list_evac(Int l) { return rt_list_keep(l); }
-
-// A loop-carried copy the loop replaced and nothing else holds; region
-// and arena memory is left alone.
-@export("resid_carry_free", "void(i8,ptr)")
-pub Int rt_carry_free(Int dead, Int p) {
-    if (dead == 0 || p == 0 || c_in_arenas(p) != 0) { return 0; }
-    return c_free(p);
+// A record, copied (with its header when it has one); its fields are
+// moved by the compiled resid.rec.evac.T that calls this.
+Int rec_move(Int v, Int size, Int hdr, Int ctx) {
+    if (v == 0 || !mv_src(ctx, v)) { return v; }
+    if (hdr != 0) {
+        Int h = mv_alloc(ctx, size + 8);
+        _ = mcopy(h, v - 8, size + 8);
+        return h + 8;
+    }
+    Int c = mv_alloc(ctx, size);
+    return mcopy(c, v, size) * 0 + c;
 }
 
-// A pointer-form Dec a loop carries, copied out of its region.
-@export("resid_dec_evac", "ptr(ptr)")
-pub Int rt_dec_evac(Int v) {
-    if (v == 0 || !in_region(v)) { return v; }
+// A pointer-form Dec.
+Int dec_move(Int v, Int ctx) {
+    if (v == 0 || !mv_src(ctx, v)) { return v; }
     Int sz = 24 + dn(v) * 8;
-    Int d = sc_depth();
-    _ = c_sc_depth_set(0);
-    Int r = c_gmalloc(sz);
-    _ = c_sc_depth_set(d);
+    Int r = mv_alloc(ctx, sz);
     return mcopy(r, v, sz) * 0 + r;
 }
 
-Int hnode_evac(Int n, Int kf, Int vf) {
-    if (n == 0 || !in_region(n)) { return n; }
+Int hnode_move(Int n, Int kf, Int vf, Int ctx) {
+    if (n == 0 || !mv_src(ctx, n)) { return n; }
     Int nd = node_nd(n);
     Int nn = node_nn(n);
-    Int c = evac_obj(24 + ncap(n) * 8);
+    Int c = map_mv_alloc(ctx, 24 + ncap(n) * 8);
     _ = mcopy(c, n, 24 + (2 * nd + nn) * 8);
-    _ = evac_pairs(c, 0, nd, kf, vf);
-    return evac_subs(c, nd, 0, nn, kf, vf) * 0 + c;
+    _ = move_pairs(c, 0, nd, kf, vf, ctx);
+    return move_subs(c, nd, 0, nn, kf, vf, ctx) * 0 + c;
 }
 
-Int evac_pairs(Int c, Int i, Int nd, Int kf, Int vf) {
+Int move_pairs(Int c, Int i, Int nd, Int kf, Int vf, Int ctx) {
     if (i >= nd) { return 0; }
-    _ = wset(c, 2 * i, word_keep(kf, wd(c, 2 * i)));
-    _ = wset(c, 2 * i + 1, word_keep(vf, wd(c, 2 * i + 1)));
-    return evac_pairs(c, i + 1, nd, kf, vf);
+    _ = wset(c, 2 * i, word_move(kf, wd(c, 2 * i), ctx));
+    _ = wset(c, 2 * i + 1, word_move(vf, wd(c, 2 * i + 1), ctx));
+    return move_pairs(c, i + 1, nd, kf, vf, ctx);
 }
 
-Int evac_subs(Int c, Int nd, Int i, Int nn, Int kf, Int vf) {
+Int move_subs(Int c, Int nd, Int i, Int nn, Int kf, Int vf, Int ctx) {
     if (i >= nn) { return 0; }
-    _ = wset(c, 2 * nd + i, hnode_evac(wd(c, 2 * nd + i), kf, vf));
-    return evac_subs(c, nd, i + 1, nn, kf, vf);
+    _ = wset(c, 2 * nd + i, hnode_move(wd(c, 2 * nd + i), kf, vf, ctx));
+    return move_subs(c, nd, i + 1, nn, kf, vf, ctx);
 }
 
-// A map a loop carries across its back edge, with no part in a region.
-// kf / vf: the kinds of its keys / values (4 strings, 5 lists).
-@export("resid_map_evac", "ptr(ptr,i8,i8)")
-pub Int rt_map_evac(Int m, Int kf, Int vf) {
-    if (m == 0 || sc_depth() == 0) { return m; }
+// A map. kf / vf: the kinds of its keys / values (4 strings, 5 lists).
+Int map_move(Int m, Int kf, Int vf, Int ctx) {
+    if (m == 0) { return m; }
     Int t = mtab(m);
-    Int nt = if (t != 0) { tab_evac(t, kf, vf) } else { 0 };
-    Int nr = if (t != 0) { mroot(m) } else { hnode_evac(mroot(m), kf, vf) };
-    if (nt == t && nr == mroot(m) && !in_region(m)) { return m; }
-    Int out = evac_obj(48);
-    _ = mcopy(out, m, 48) + st8(out + 46, bulk_depth());
+    Int nt = if (t != 0) { tab_move(t, kf, vf, ctx) } else { 0 };
+    Int nr = if (t != 0) { mroot(m) } else { hnode_move(mroot(m), kf, vf, ctx) };
+    if (nt == t && nr == mroot(m) && !mv_src(ctx, m)) { return m; }
+    Int out = map_mv_alloc(ctx, 48);
+    _ = mcopy(out, m, 48) + st8(out + 46, if (ld64(ctx + 16) == 0) { bulk_depth() } else { 0 });
     _ = st64(out + 16, nt);
     return st64(out + 8, nr) * 0 + out;
 }
 
-Int tab_evac(Int t, Int kf, Int vf) {
-    Bool tt = in_region(t);
-    Bool kt = tkeys(t) != 0 && in_region(tkeys(t));
+Int tab_move(Int t, Int kf, Int vf, Int ctx) {
+    Bool tt = mv_src(ctx, t);
+    Bool kt = tkeys(t) != 0 && mv_src(ctx, tkeys(t));
     Bool vt = kt && tvals(t) != 0;
     if (!tt && !kt) { return t; }
-    Int nt = evac_obj(96);
+    Int nt = map_mv_alloc(ctx, 96);
     _ = mcopy(nt, t, 96);
-    _ = if (kt) { st64(nt + 32, dup_words(tkeys(t), tcap(t) * 2)) } else { 0 };
+    _ = if (kt) { st64(nt + 32, dup_words(tkeys(t), tcap(t) * 2, ctx)) } else { 0 };
     _ = if (vt) { st64(nt + 40, tkeys(nt) + 8) } else { 0 };
     // A table made in the region may hold region words.
     Bool fix = tkeys(nt) != 0 && (kf == 4 || (vf >= 4 && tvals(nt) != 0));
-    _ = if (fix) { keep_slots(nt, 0, tcap(nt), kt && kf == 4, vt && vf >= 4, vf) } else { 0 };
+    _ = if (fix) { move_slots(nt, 0, tcap(nt), kt && kf == 4, vt && vf >= 4, vf, ctx) } else { 0 };
     return nt;
 }
 
-// Evacuated map memory goes where the scopes' owner lives: the current
-// bulk arena, else the heap.
-Int evac_obj(Int n) {
+// Map memory moved to the heap goes where the scopes' owner lives: the
+// current bulk arena, else the heap.
+Int map_mv_alloc(Int ctx, Int n) {
+    if (ld64(ctx + 16) != 0) { return mv_alloc(ctx, n); }
     Int d = bulk_depth();
     return if (d > 0) { bulk_block(d, n) } else { xmalloc(n) };
 }
 
-Int dup_words(Int p, Int n) {
-    Int q = evac_obj(n * 8);
+Int dup_words(Int p, Int n, Int ctx) {
+    Int q = map_mv_alloc(ctx, n * 8);
     return mcopy(q, p, n * 8) * 0 + q;
 }
 
-Int keep_slots(Int t, Int i, Int n, Bool fk, Bool fv, Int vf) {
+Int move_slots(Int t, Int i, Int n, Bool fk, Bool fv, Int vf, Int ctx) {
     if (i >= n) { return 0; }
     Int k = ld64(tkeys(t) + i * 16);
     Bool live = k != t_empty(t) && k != t_tomb(t);
-    _ = if (live && fk) { st64(tkeys(t) + i * 16, word_keep(4, k)) } else { 0 };
-    _ = if (live && fv) { st64(tvals(t) + i * 16, word_keep(vf, ld64(tvals(t) + i * 16))) } else { 0 };
-    return keep_slots(t, i + 1, n, fk, fv, vf);
+    _ = if (live && fk) { st64(tkeys(t) + i * 16, word_move(4, k, ctx)) } else { 0 };
+    _ = if (live && fv) { st64(tvals(t) + i * 16, word_move(vf, ld64(tvals(t) + i * 16), ctx)) } else { 0 };
+    return move_slots(t, i + 1, n, fk, fv, vf, ctx);
+}
+
+// The moves the compiler emits, with a loop's context (lr_region).
+@export("resid_mv_str", "ptr(ptr,ptr)")
+pub Int rt_mv_str(Int p, Int ctx) { return str_move(p, ctx); }
+
+@export("resid_mv_list", "ptr(ptr,ptr)")
+pub Int rt_mv_list(Int l, Int ctx) { return list_move(l, 0, ctx); }
+
+// A list of records, each element moved by ek (resid.rec.evac.T).
+@export("resid_mv_list_f", "ptr(ptr,ptr,ptr)")
+pub Int rt_mv_list_f(Int l, Int ek, Int ctx) { return list_move(l, ek, ctx); }
+
+@export("resid_mv_map", "ptr(ptr,i8,i8,ptr)")
+pub Int rt_mv_map(Int m, Int kf, Int vf, Int ctx) { return map_move(m, kf, vf, ctx); }
+
+@export("resid_mv_rec", "ptr(ptr,i64,i8,ptr)")
+pub Int rt_mv_rec(Int v, Int size, Int hdr, Int ctx) { return rec_move(v, size, hdr, ctx); }
+
+@export("resid_mv_dec", "ptr(ptr,ptr)")
+pub Int rt_mv_dec(Int v, Int ctx) { return dec_move(v, ctx); }
+
+// Out of every region to the heap (code compiled before loop regions).
+@export("resid_str_keep", "ptr(ptr)")
+pub Int rt_str_keep(Int p) { return str_move(p, mv_legacy()); }
+
+@export("resid_list_keep", "ptr(ptr)")
+pub Int rt_list_keep(Int l) { return list_move(l, 0, mv_legacy()); }
+
+@export("resid_list_evac", "ptr(ptr)")
+pub Int rt_list_evac(Int l) { return list_move(l, 0, mv_legacy()); }
+
+@export("resid_list_evac_f", "ptr(ptr,ptr)")
+pub Int rt_list_evac_f(Int l, Int ek) { return list_move(l, ek, mv_legacy()); }
+
+@export("resid_rec_evac", "ptr(ptr,i64,i8)")
+pub Int rt_rec_evac(Int v, Int size, Int hdr) { return rec_move(v, size, hdr, mv_legacy()); }
+
+@export("resid_dec_evac", "ptr(ptr)")
+pub Int rt_dec_evac(Int v) { return dec_move(v, mv_legacy()); }
+
+@export("resid_map_evac", "ptr(ptr,i8,i8)")
+pub Int rt_map_evac(Int m, Int kf, Int vf) { return map_move(m, kf, vf, mv_legacy()); }
+
+// ─── Writes into older objects ─────────────────────────────────────────
+// No object points into a region younger than its own: a value written
+// into one (an owned update in place, an append into a shared buffer) is
+// first moved into the object's region when it is younger.
+
+pub Int bar_keep(Int obj, Int v) {
+    if (v == 0 || ult(v, 4096) || box_imm(v) || box_fimm(v)) { return v; }
+    Int rv = region_of(v);
+    Int ro = region_of(obj);
+    if (rv == 0 || (ro != 0 && rv <= ro)) { return v; }
+    return mv_done(elem_move(v, mv_into(ro)));
+}
+
+// A word of runtime kind k written into a map: a string (4), a list (5),
+// a scalar box (kind 0; a younger kind 0 object of any other sort is
+// never stored in place, word_fits), or a raw scalar (1-3).
+Int bar_word(Int obj, Int k, Int w) {
+    if (k == 0 && !ult(w, 4096) && !box_imm(w) && !box_fimm(w) && region_of(w) != 0 && is_boxed(w)) { return bar_keep(obj, w); }
+    if (k != 4 && k != 5) { return w; }
+    Int rv = region_of(w);
+    Int ro = region_of(obj);
+    if (rv == 0 || (ro != 0 && rv <= ro)) { return w; }
+    return mv_done(word_move(k, w, mv_into(ro)));
+}
+
+// n bytes that will hang off obj: in obj's region (or the heap, for an
+// object outside every region); the innermost one's when obj is there.
+pub Int alloc_near(Int obj, Int n) {
+    _ = region_use(obj);
+    Int p = rt_gmalloc(n);
+    return region_done() * 0 + p;
+}
+
+// ─── Replacing list elements (xs.with, spec §17) ─────────────────────
+// Owned updates (the compiler proved the old list dead) go into a
+// transient list in place; the first one copies into a fresh transient.
+// Any other update copies the changed path. An element stored into an
+// older transient moves into its region first (bar_keep); the compiler
+// makes updates owned only for elements the runtime can move (strings
+// and scalars, lw_list_keepable).
+
+// A fresh transient copy of l with room for `extra` more elements.
+Int with_fresh(Int l, Int extra) {
+    Int n = lcount(l);
+    Int f = flat_new(n + extra);
+    _ = if (n > 0 && lshift(l) == 0 - 1) { mcopy(f + 24, lroot(l) + 24, n * 8) } else { with_fill(l, f, 0, n) };
+    _ = st64(f, n) + st64(f + 16, n);
+    return set_list(list_hdr(), n, 0 - 2, f, ltype(l));
+}
+
+Int with_fill(Int l, Int f, Int i, Int n) {
+    if (i >= n) { return 0; }
+    _ = st64(f + 24 + i * 8, list_at(l, i));
+    return with_fill(l, f, i + 1, n);
+}
+
+// l with element i replaced on a persistent copy: a small flat list is
+// copied whole, a larger one becomes a trie and copies one path.
+Int with_shared(Int l, Int i, Int v) {
+    Int n = lcount(l);
+    if (lshift(l) == 0 - 1 && n <= 64) {
+        Int f = flat_new(n);
+        _ = mcopy(f + 24, lroot(l) + 24, n * 8);
+        _ = st64(f, n) + st64(f + 24 + i * 8, v);
+        return set_list(list_hdr(), n, 0 - 1, f, ltype(l));
+    }
+    Int t = if (lshift(l) == 0 - 1) { trie_from_items(lroot(l) + 24, n, ltype(l)) } else { l };
+    Int sh = lshift(t);
+    Int leaf = node_with(leaf_of(lroot(t), sh, i), i & 31, v);
+    Int root = if (sh == 0) { leaf } else { set_leaf(lroot(t), sh, i >> 5, leaf) };
+    return set_list(list_hdr(), n, sh, root, ltype(t));
+}
+
+@export("resid_list_with", "ptr(ptr,i8,i64,ptr)")
+pub Int rt_list_with(Int l, Int owned, Int i, Int v) {
+    Int n = lcount(l);
+    if (!ult(i, n)) { return rt_index_abort(i, n, 0); }
+    Int t = if (owned == 0 || ltransient(l)) { l } else { with_fresh(l, 0) };
+    if (owned == 0) { return with_shared(l, i, v); }
+    Int f = lroot(t);
+    return st64(f + 24 + i * 8, bar_keep(f, v)) * 0 + t;
+}
+
+// xs.concat(ys) on an owned list: appended in place to a transient,
+// doubling its buffer when full.
+@export("resid_list_concat_own", "ptr(ptr,i8,ptr)")
+pub Int rt_list_concat_own(Int a, Int owned, Int b) {
+    Int m = lcount(b);
+    if (owned == 0) { return rt_list_concat(a, b); }
+    if (m == 0) { return a; }
+    Int n = lcount(a);
+    Int t = if (ltransient(a)) { a } else { with_fresh(a, max(m, n)) };
+    Int f0 = lroot(t);
+    Int f = if (n + m <= ld64(f0 + 8)) { f0 } else { with_grow(t, f0, n, n + m) };
+    _ = cat_fill(f, b, n, 0, m);
+    _ = st64(f, n + m) + st64(f + 16, n + m);
+    return st64(t, n + m) * 0 + t;
+}
+
+// A larger buffer for transient t, in t's region.
+Int with_grow(Int t, Int f0, Int n, Int need) {
+    _ = region_use(t);
+    Int f = flat_new(max(need, n * 2));
+    _ = region_done();
+    _ = mcopy(f + 24, f0 + 24, n * 8);
+    return st64(t + 16, f) * 0 + f;
+}
+
+Int cat_fill(Int f, Int b, Int n, Int j, Int m) {
+    if (j >= m) { return 0; }
+    _ = st64(f + 24 + (n + j) * 8, bar_keep(f, list_at(b, j)));
+    return cat_fill(f, b, n, j + 1, m);
+}
+
+// A list leaving its owner's chain: from now on it is an ordinary value.
+@export("resid_list_freeze", "ptr(ptr)")
+@inline
+pub Int rt_list_freeze(Int l) {
+    _ = if (l != 0 && ltransient(l)) { st32(l + 8, 0 - 1) } else { 0 };
+    return l;
 }

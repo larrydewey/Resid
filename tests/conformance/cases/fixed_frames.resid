@@ -1,0 +1,64 @@
+// Fixed-capacity values live in frames (spec §5, §44): carried through
+// loops, swapped between loop parameters, returned through nested calls,
+// held by records, closures and containers, and nested in each other.
+type Pair = { List(Int, 3) a; Str(6) s; Int n; };
+
+// A loop carrying a List(Int, 4) it replaces every step.
+List(Int, 4) fill(List(Int, 4) xs, Int i, Int n) {
+    if (i >= n) { return xs; }
+    return fill(xs.with(i % 4, xs[i % 4] + i), i + 1, n);
+}
+
+// Two fixed parameters exchanged on every step.
+Str swap(List(Int, 2) a, List(Int, 2) b, Int n) {
+    if (n == 0) { return f"{a} {b}"; }
+    return swap(b, a.with(0, a[0] + 1), n - 1);
+}
+
+// A Str(N) parameter that changes while the loop reads its characters.
+Int scan(Str(8) s, Int i, Int acc) {
+    if (i >= 6) { return acc; }
+    Str(8) next = if (i % 2 == 0) { "abcdef" } else { "zz" };
+    return scan(next, i + 1, acc * 31 + str_len((Str)s) + s[0]);
+}
+
+List(Int, 3) triple(Int x) { return [x, x * 2, x * 3]; }
+
+Int sum3(List(Int, 3) a, List(Int, 3) b) { return a[0] + a[2] + b[1]; }
+
+Pair mk(Int n) { return Pair {.a = triple(n), .s = "pair", .n = n}; }
+
+Option(List(Int, 2)) maybe(Int n) { return if (n > 0) { Some([n, -n]) } else { None }; }
+
+StrBuf(12) words(StrBuf(12) b, Int i) {
+    if (i == 0) { return b; }
+    return words(b.push_char(96 + i), i - 1);
+}
+
+List(List(Int, 2), 3) grid(Int k) {
+    List(List(Int, 2), 3) g = [[1, 2], [3, 4]];
+    return g.with(2, [k, k + 1]);
+}
+
+Int main() {
+    println(f"{fill([0, 0, 0, 0], 0, rt 10)}");
+    println(swap([1, 2], [3, 4], rt 5));
+    println(f"{scan("start", 0, 0)}");
+    println(f"{sum3(triple(rt 1), triple(rt 2))}");
+    Pair p = mk(rt 5);
+    Pair q = mk(rt 7);
+    println(f"{p.a} {(Str)p.s} {q.a[1]} {p.n + q.n}");
+    List(Int, 3) t = triple(rt 4);
+    Int closure(Int) f = lambda(i) { t[i] * 10 };
+    List(Int, 3) closure(Int) g = lambda(i) { triple(i + t[0]) };
+    println(f"{f(2)} {g(1)}");
+    println(f"{maybe(rt 3)} {maybe(rt 0)}");
+    List(List(Int, 3)) ls = [triple(rt 1), triple(rt 2)];
+    println(f"{ls} {ls[1][2]}");
+    println(f"{(Str)words(StrBuf(), rt 5).finish()}");
+    List(List(Int, 2), 3) gr = grid(rt 9);
+    println(f"{gr} {gr[2][1]} {gr.with(0, gr[2])}");
+    Bytes(4) b = (Bytes(4))(rt "wxyz");
+    println(f"{(Bytes)b} {(Str)b}");
+    return 0;
+}

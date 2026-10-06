@@ -1,0 +1,8 @@
+// xs.with checks its index like xs[i]: out of range aborts.
+Int main() {
+    List(Int) xs = [1, 2, 3];
+    println(f"{xs.with(2, 7)}");
+    List(Int) ys = xs.with(rt 3, 0);
+    println(f"{ys}");
+    return 0;
+}

@@ -31,3 +31,4 @@ import "dec.resid";
 import "list.resid";
 import "map.resid";
 import "alloc.resid";
+import "region.resid";
