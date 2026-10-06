@@ -161,6 +161,9 @@ RdA gx_rda(GXA a, RdS rs) {
     return RdA {.vs = a.vs, .ts = a.ts, .rs = nr, .allk = a.allk, .ch = a.ch, .named = a.named, .bad = a.bad, .pos = 0, .st = rs};
 }
 
+// The memo entry naming the top-level function being reduced.
+Str gx_cur_key() { return str_from_code(2) + "cur"; }
+
 GS gx_st_memo(GS st, Str key, Str val) {
     return GS {.steps = st.steps, .depth = st.depth, .fuel = st.fuel, .memo = st.memo.insert(key, val), .specs = st.specs, .nspec = st.nspec, .hist = st.hist, .notes = st.notes, .g = st.g, .dn = st.dn, .df = st.df, .dr = st.dr, .rs = st.rs};
 }
@@ -1040,7 +1043,10 @@ GV gx_spec_with(GXT ft, Int fi, Str name, GXP p, GXA a, Int cr, Int co, GS st) {
     Bool gain = new_n * 4 <= orig_n * 3;
     List(Int) newer = bl.st.specs[nsp0..bl.st.specs.len()];
     Bool needed = gx_uses_all(bl.st.g, newer, sname, 0);
-    if ((!parsed || !gain) && !needed) { return gx_unk(cr, a.ch, gx_st_memo(bl.st, key, "!")); }
+    // A self call in the general body whose copy calls the general function
+    // again would leave the loop for one iteration and come back.
+    Bool detour = hist.len() == 0 && (st.memo.get(gx_cur_key()) else { "" }) == name && gx_uses_all(bl.st.g, stmts, name, 0);
+    if ((!parsed || !gain || detour) && !needed) { return gx_unk(cr, a.ch, gx_st_memo(bl.st, key, "!")); }
     GXN decl = gx_sp_decl(bl.st, ft, fi, sname, p, bl.ids.concat(stmts), bk);
     GS st4 = gx_st_spec(decl.st, decl.st.specs.concat([decl.id]), decl.st.nspec, hist);
     return gx_sp_call(sname, p, co, st4);
@@ -1514,7 +1520,7 @@ GXG gx_prog(GXT ft, Int unit, Int i, GXG acc) {
     Int nk = gx_nk(st, d);
     RdE env = gx_param_env(st.g, d, 1, nk - 1, rd_env_empty());
     Int bk = gx_kid(st, d, nk - 1);
-    GXR body = gx_stmts(ft, bk, 0, env, st);
+    GXR body = gx_stmts(ft, bk, 0, env, gx_st_memo(st, gx_cur_key(), st.g.ns[d].text));
     if (body.bad) { return gx_prog(ft, unit, i + 1, GXG {.st = body.st, .decls = acc.decls.concat([d]), .nred = acc.nred}); }
     GXN b = gx_re(body.st, bk, body.out);
     List(Int) ks = gx_kids(b.st.g, d);

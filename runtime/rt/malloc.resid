@@ -2,8 +2,8 @@
 //
 // Blocks up to 128 KB come from 48 size classes (16..128 by 16, then four
 // classes per power of two); each thread keeps a free list per class and
-// carves new blocks from its own slabs (1 MB mappings, or eight blocks of
-// a big class). A block is preceded by a 16-byte header whose first word
+// carves new blocks from its own slabs (1 MB, doubling per slab up to 8 MB,
+// or eight blocks of a big class). A block is preceded by a 16-byte header whose first word
 // is its class. A free pushes onto the freeing thread's list. Larger blocks
 // are their own mappings (header: the mapping size) and go back to the
 // kernel on free; realloc grows them with mremap.
@@ -12,9 +12,9 @@ Int nclasses() { return 48; }
 Int big_max() { return 70368744177664; }   // 2^46: past any real mapping
 Int small_max() { return 131072; }
 
-// Per thread: 48 list heads, the slab bump pointer and end, then the big
-// block cache: its list, count and bytes.
-Int heap_tls() { return resid_raw_tls("rt_heap", 424); }
+// Per thread: 48 list heads, the slab bump pointer and end, the big block
+// cache (its list, count and bytes), then the number of slabs mapped.
+Int heap_tls() { return resid_raw_tls("rt_heap", 432); }
 
 // Class sizes: 16..128 by 16, then (4 + i) * 2^k / 4 for k = 7...
 pub Int class_size(Int c) {
@@ -83,7 +83,7 @@ Int mem_take(Int n) {
     return 0;
 }
 
-@noinline
+@cold
 Int over_budget(Int lim) {
     Int sb = rt_sb_new();
     _ = sb_lit(sb, resid_raw_addr("memory budget exceeded ("));
@@ -92,9 +92,20 @@ Int over_budget(Int lim) {
     return rt_abort_msg(rt_sb_finish(sb));
 }
 
+Int huge() { return 2097152; }
+
+// Mappings of whole 2 MB pages start on a 2 MB boundary and ask for
+// transparent huge pages: one fault per 2 MB instead of 512.
 Int heap_map(Int n) {
     _ = mem_take(n);
-    return sys_mmap(n);
+    if (n < huge() || (n & (huge() - 1)) != 0) { return sys_mmap(n); }
+    Int p = sys_mmap(n + huge());
+    if (p == 0) { return 0; }
+    Int a = (p + huge() - 1) & (0 - huge());
+    _ = if (a > p) { sys_munmap(p, a - p) } else { 0 };
+    _ = if (p + huge() > a) { sys_munmap(a + n, p + huge() - a) } else { 0 };
+    _ = resid_raw_syscall(28, a, n, 14, 0, 0, 0);   // madvise MADV_HUGEPAGE
+    return a;
 }
 
 // Bumped whenever big-block memory goes back to the kernel or moves: an
@@ -133,7 +144,9 @@ Int carve(Int c) {
 // A new slab: a cached big block when there is one (memory a popped
 // region gave back), else a fresh mapping.
 Int new_slab(Int t, Int need) {
-    Int want = max(1048576, need * 8);
+    Int k = ld64(t + 424);
+    _ = st64(t + 424, k + 1);
+    Int want = max(1048576 << min(k, 3), need * 8);
     Int c = cache_take(t, want);
     Int sz = if (c != 0) { ld64(c) } else { want };
     Int s = if (c != 0) { c } else { heap_map(sz) };
@@ -142,13 +155,19 @@ Int new_slab(Int t, Int need) {
     return s;
 }
 
+// Page-rounded; from 2 MB, rounded to whole huge pages.
+Int big_round(Int n) {
+    if (n >= huge()) { return (n + huge() - 1) & (0 - huge()); }
+    return (n + 4095) & (0 - 4096);
+}
+
 // Freed big blocks are kept (up to 256 blocks / 64 MB per thread) and
 // reused by a request of at most their size and at least half of it:
 // region chunks come and go constantly, and a fresh mapping costs page
 // faults.
 Int big_alloc(Int n) {
     if (n > big_max()) { return 0; }   // the page rounding below must not wrap
-    Int sz = (n + 16 + 4095) & (0 - 4096);
+    Int sz = big_round(n + 16);
     Int t = heap_tls();
     Int hit = cache_take(t, sz);
     if (hit != 0) { return hit + 16; }
@@ -219,7 +238,7 @@ pub Int c_realloc(Int p, Int n) {
     if (h >= 64) {
         // A big block moves with its mapping.
         if (n > big_max()) { return 0; }
-        Int sz = (n + 16 + 4095) & (0 - 4096);
+        Int sz = big_round(n + 16);
         _ = mem_take(sz - h);
         _ = resid_raw_fetch_add(unmap_epoch(), 1);
         Int q = resid_raw_syscall(25, p - 16, h, sz, 1, 0, 0);   // mremap MAYMOVE
@@ -257,7 +276,7 @@ Int orphan_unlock() { return st64(orphans(), 0); }
 pub Int heap_retire() {
     Int node = sys_mmap(4096);
     if (node == 0) { return 0; }
-    _ = mcopy(node + 8, heap_tls(), 424);
+    _ = mcopy(node + 8, heap_tls(), 432);
     _ = orphan_lock();
     _ = st64(node, ld64(orphans() + 8));
     _ = st64(orphans() + 8, node);
@@ -271,7 +290,7 @@ pub Int heap_adopt() {
     _ = if (node != 0) { st64(orphans() + 8, ld64(node)) } else { 0 };
     _ = orphan_unlock();
     if (node == 0) { return 0; }
-    _ = mcopy(heap_tls(), node + 8, 424);
+    _ = mcopy(heap_tls(), node + 8, 432);
     return sys_munmap(node, 4096);
 }
 

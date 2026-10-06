@@ -4002,7 +4002,7 @@ Str gk_internal_use(GK k, Int id) {
     Str kd = k.g.ns[id].kind;
     if (kd == "call" && (gk_internal(k.g.ns[id].text) || gk_fmt_internal(k.g.ns[id].text)) && !gk_user_call(k, id)) { return "`" + k.g.ns[id].text + "`"; }
     if (kd == "fn" && (str_contains(k.g.ns[id].aux, "@export(") || str_contains(k.g.ns[id].aux, "@import("))) { return "`@export` / `@import` on `" + k.g.ns[id].text + "`"; }
-    if (kd == "fn" && (str_contains(k.g.ns[id].aux, "@inline") || str_contains(k.g.ns[id].aux, "@noinline"))) { return "`@inline` / `@noinline` on `" + k.g.ns[id].text + "`"; }
+    if (kd == "fn" && (str_contains(k.g.ns[id].aux, "@inline") || str_contains(k.g.ns[id].aux, "@noinline") || str_contains(k.g.ns[id].aux, "@cold"))) { return "`@inline` / `@noinline` / `@cold` on `" + k.g.ns[id].text + "`"; }
     return "";
 }
 

@@ -24,7 +24,7 @@ Int ast() { return resid_raw_tls("rt_alloc", 104); }
 Int ag(Int i) { return ld64(ast() + i * 8); }
 Int as_(Int i, Int v) { return st64(ast() + i * 8, v); }
 
-Int arena_chunk_size() { return 4194304; }
+Int arena_chunk_size() { return 4194264; }   // 4 MB with the chunk and malloc headers
 Int scope_chunk_size() { return 1048576; }
 
 // ─── Arenas ────────────────────────────────────────────────────────────
@@ -173,7 +173,7 @@ Int free_pool(Int c) {
     return free_pool(prev);
 }
 
-@noinline
+@cold
 Int marks_grow() {
     Int cap = if (ag(9) != 0) { ag(9) * 2 } else { 64 };
     _ = as_(8, xrealloc(ag(8), cap * 16));
@@ -220,7 +220,7 @@ pub Int rt_scope_pop(Int d) {
     return str_index_scope_popped();
 }
 
-@noinline
+@cold
 Int scope_alloc_slow(Int size) {
     Int c = if (size > scope_chunk_size() / 4) { own_chunk(size) } else { if (ag(10) != 0) { pool_chunk() } else { own_chunk(scope_chunk_size()) } };
     _ = st64(c, ag(5));
@@ -274,7 +274,7 @@ pub Int rt_gmalloc(Int size) {
     return gmalloc_slow(size);
 }
 
-@noinline
+@cold
 Int gmalloc_slow(Int size) {
     if (ag(1) != 0) { return arena_bump(ag(1), size); }
     return xmalloc(size);
@@ -296,7 +296,7 @@ pub Int rt_alloc_x(Int size) {
     return alloc_slow(size);
 }
 
-@noinline
+@cold
 Int alloc_slow(Int size) {
     if (ag(0) != 0) { return arena_bump(ag(0), size); }
     return xmalloc(size);

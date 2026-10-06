@@ -600,7 +600,7 @@ Int cp_walk(Int p, Int target, Int idx) {
 // A handle {buf, len, cap} at a fixed address; the buffer grows by
 // doubling and str_sb_finish hands it back, shrunk to fit.
 
-@noinline
+@cold
 Int sb_grow(Int r, Int n) {
     Int len = ld64(r + 8);
     Int cap = ld64(r + 16);
@@ -651,11 +651,11 @@ Int sbv_bytes(Int cur, Int lim, Int s, Int n) {
 }
 
 @export("resid_sb2_push", "ptr(ptr,ptr,ptr)")
-@noinline
+@cold
 pub Int rt_sbv_push(Int cur, Int lim, Int s) { return sbv_bytes(cur, lim, s, c_strlen(s)); }
 
 @export("resid_sb2_push_cp", "ptr(ptr,ptr,i64)")
-@noinline
+@cold
 pub Int rt_sbv_push_cp(Int cur, Int lim, Int cp) {
     Int tmp = resid_raw_tls("sbv_cp", 8);
     Int n = utf8_encode(cp, tmp);
@@ -774,7 +774,7 @@ pub Int rt_sb_append_cp(Int r, Int cp) {
     return sb_cp_slow(r, cp);
 }
 
-@noinline
+@cold
 Int sb_cp_slow(Int r, Int cp) {
     Int buf = resid_raw_tls("sb_cp", 8);
     Int n = utf8_encode(cp, buf);

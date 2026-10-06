@@ -4144,7 +4144,9 @@ PG lw_fn_body(LW w0, Int d, PG g) {
     Str link = if (resid_rtmod()) { "internal " } else { "" };
     // A runtime slow path (@noinline) keeps its callers small; a fast path
     // (@inline) goes into its callers, across the LTO link.
-    Str fattr0 = if (resid_rtmod() && str_contains(w0.g.ns[d].aux, "@noinline")) { " noinline" } else { "" };
+    // @cold: a rare path (growth, refill, abort), so callers keep their
+    // registers for the common one.
+    Str fattr0 = if (resid_rtmod() && str_contains(w0.g.ns[d].aux, "@cold")) { " noinline cold" } else if (resid_rtmod() && str_contains(w0.g.ns[d].aux, "@noinline")) { " noinline" } else { "" };
     Str fattr = if (resid_rtmod() && fattr0 == "" && str_contains(w0.g.ns[d].aux, "@inline")) { " alwaysinline" } else { fattr0 };
     Str defline = if (is_main) { "define i32 @resid_user_main() \"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\" {" } else { "define " + link + ll_ty(rbase) + " @" + name + "(" + pd + ")" + fattr + " \"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\" {" };
     List(Str) nl = lw_param_names(w1, d, 1, n - 1, ListBuf());
@@ -4182,7 +4184,7 @@ PG lw_fn_body(LW w0, Int d, PG g) {
     Str defpost = ")" + fattr + " \"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\" {";
     List(Str) bhead = if (split) { [defpre + pd + defpost, "entry:"] } else { pp1.lines };
     List(Str) fn_lines00 = if (tco_ok) { tco_function(bhead, pp2.lines, name, ll_ty(rbase), ptys_ll, defpre, defpost, "") } else { bhead.concat(pp2.lines) };
-    List(Str) fn_lines0 = if (tco_ok && !resid_rtmod()) { sv_apply(fn_lines00, tyl) } else { fn_lines00 };
+    List(Str) fn_lines0 = if (tco_ok && !resid_rtmod()) { lsv_apply(sv_apply(fn_lines00, tyl), tyl) } else { fn_lines00 };
     // A loop whose iterations carry nothing they allocate frees each
     // iteration's allocations when the next one starts (lr_region).
     Bool region = tco_ok && lw_find_line(fn_lines0, "tco.head:", 1) >= 0 && lr_region_ok(w, d, fn_lines0, tyl);
@@ -4266,7 +4268,7 @@ Bool lr_call_allocs(LW w, Str f, Str l) {
     // Appending a scalar to a list builds what the loop carries on (moved
     // out at the back edge anyway), not garbage.
     if (f == "resid_list_push" || f == "resid_box_i64" || f == "resid_box_f64" || f == "resid_box_bool") { return false; }
-    return !lo_has_str(["llvm.sqrt.f64", "resid_char_at_n", "resid_overflow_check", "resid_div_check", "resid_conv_check", "str_char_at", "str_len", "resid_str_eq", "resid_list_len", "resid_list_get", "resid_list_get_nc", "resid_map_find", "resid_map_has", "resid_map_len", "resid_set_len", "resid_map_freeze", "resid_rec_share", "resid_scope_push", "resid_scope_pop", "str_starts_with", "str_ends_with", "str_contains", "str_index_of", "resid_index_abort", "resid_abort", "abs_i64", "min_i64", "max_i64", "clamp_i64", "print", "println", "eprintln"], f, 0);
+    return !lo_has_str(["llvm.sqrt.f64", "resid_char_at_n", "resid_overflow_check", "resid_div_check", "resid_conv_check", "str_char_at", "str_len", "resid_str_eq", "resid_list_len", "resid_list_get", "resid_list_get_nc", "resid_list_get_v", "resid_list_vdata", "resid_list_vlen", "resid_map_find", "resid_map_has", "resid_map_len", "resid_set_len", "resid_map_freeze", "resid_rec_share", "resid_scope_push", "resid_scope_pop", "str_starts_with", "str_ends_with", "str_contains", "str_index_of", "resid_index_abort", "resid_abort", "abs_i64", "min_i64", "max_i64", "clamp_i64", "print", "println", "eprintln"], f, 0);
 }
 
 // Every exit returns a scalar or a loop parameter (an older value, or a
@@ -4339,6 +4341,49 @@ ListBuf(Str) sv_lines(List(Str) ls, Int i, Str reg, Str key, ListBuf(Str) acc) {
     Bool hit = str_contains(l, key) && str_ends_with(l, ")");
     Str l2 = if (hit) { str_replace(str_slice(l, 0, str_len(l) - 1), key, "@resid_char_at_n(ptr " + reg + ", ") + ", i64 " + reg + ".alen)" } else { l };
     return sv_lines(ls, i + 1, reg, key, acc.push(l2));
+}
+
+// ─── List views in loops ───────────────────────────────────────────────
+// A List parameter a tail-recursive loop passes back unchanged has its flat
+// slots and count read once, at entry (count 0 for a trie); each element
+// read in the loop is then an unsigned bounds test and a load
+// (resid_list_get_v), with the checked general path only when that fails.
+List(Str) lsv_apply(List(Str) ls, List(Str) tyl) {
+    Int h = lw_find_line(ls, "tco.head:", 1);
+    if (h < 0) { return ls; }
+    return lsv_params(ls, h + 1, tyl);
+}
+
+List(Str) lsv_params(List(Str) ls, Int i, List(Str) tyl) {
+    if (i >= ls.len() || !str_contains(ls[i], " = phi ")) { return ls; }
+    Str l = ls[i];
+    Str reg = str_slice(l, 0, str_find_char(l, 32, 0));
+    Int j = str_parse_int(str_slice(reg, 2, str_len(reg)));
+    Bool lst = j >= 0 && j < tyl.len() && str_has_prefix(tyl[j], "List(") && str_starts_with(l, reg + " = phi ptr ");
+    Str k1 = "@resid_list_get(ptr " + reg + ", ";
+    Str k2 = "@resid_list_get_nc(ptr " + reg + ", ";
+    Bool used = lst && lr_same_in(str_split(l, "[ "), 2, reg) && (sv_uses(ls, i + 1, k1) || sv_uses(ls, i + 1, k2));
+    List(Str) ls2 = if (used) { lsv_rewrite(ls, reg, k1, k2) } else { ls };
+    // The two entry lines (if added) sit before the phis.
+    return lsv_params(ls2, i + (if (used) { 3 } else { 1 }), tyl);
+}
+
+List(Str) lsv_rewrite(List(Str) ls, Str reg, Str k1, Str k2) {
+    Int b = lw_find_line(ls, "br label %tco.head", 1);
+    List(Str) out = lsv_lines(ls, 0, reg, k1, k2, ListBuf()).finish();
+    List(Str) pre = out[0..b];
+    List(Str) post = out[b..out.len()];
+    return pre.concat([reg + ".ld = call ptr @resid_list_vdata(ptr " + reg + ".in)", reg + ".ln = call i64 @resid_list_vlen(ptr " + reg + ".in)"]).concat(post);
+}
+
+ListBuf(Str) lsv_lines(List(Str) ls, Int i, Str reg, Str k1, Str k2, ListBuf(Str) acc) {
+    if (i >= ls.len()) { return acc; }
+    Str l = ls[i];
+    // A musttail call must keep its callee's signature.
+    Bool hit = (str_contains(l, k1) || str_contains(l, k2)) && str_ends_with(l, ")") && !str_contains(l, "musttail");
+    Str via = "@resid_list_get_v(ptr " + reg + ", ";
+    Str l2 = if (hit) { str_replace(str_replace(str_slice(l, 0, str_len(l) - 1), k1, via), k2, via) + ", ptr " + reg + ".ld, i64 " + reg + ".ln)" } else { l };
+    return lsv_lines(ls, i + 1, reg, k1, k2, acc.push(l2));
 }
 
 // Every incoming value after the entry's is the phi itself.
@@ -6149,7 +6194,12 @@ LRS lr_stmt(Kg g, Int id, LRS st) {
         Map(Str, Str) e2 = if (vkind == "list") { e1.insert("#len:" + n.text, nl + "," + nl) } else { e1 };
         Str fl = if (vkind == "struct") { lr_fields(g, vk, 0, "") } else { "" };
         Map(Str, Str) e3 = if (fl != "") { e2.insert("#fields:" + n.text, fl) } else { e2 };
-        return LRS {.env = e3, .facts = v.facts};
+        // `T c = str_char_at(s, i)` aborts unless 0 <= i < len(s), so past
+        // it i is a valid index.
+        Str ixn = lr_indexed(g, vk);
+        LR ixr = lr_meet(lr_parse(e3.get(ixn) else { "" }), LR {.lo = 0, .hi = 140737488355327, .nz = false});
+        Map(Str, Str) e4 = if (ixn != "" && ixn != n.text) { e3.insert(ixn, lr_str(ixr)) } else { e3 };
+        return LRS {.env = e4, .facts = v.facts};
     }
     if (k == "if") {
         Int c = kg_kid(g, id, 0);
@@ -6198,6 +6248,16 @@ LRS lr_stmt(Kg g, Int id, LRS st) {
     }
     LRE v = lr_kids(g, id, 0, st.env, st.facts);
     return LRS {.env = st.env, .facts = v.facts};
+}
+
+// The name indexing a string (`str_char_at(s, i)`), or "". (Not `xs[i]`:
+// on a map that is a key, not an index.)
+Str lr_indexed(Kg g, Int vk) {
+    KN n = g.ns[vk];
+    Bool ix = n.kind == "call" && n.text == "str_char_at" && n.nk == 2;
+    if (!ix) { return ""; }
+    Int k = kg_kid(g, vk, 1);
+    return if (g.ns[k].kind == "ref") { g.ns[k].text } else { "" };
 }
 
 // The walk's intermediate values are compiler-generated allocations, so it

@@ -5,7 +5,7 @@
 pub Int c_abort(Int msg) { return 0; }
 
 // Abort with a message: `msg` is a string literal.
-@noinline
+@cold
 pub Int rt_abort(Str msg) { return c_abort(resid_raw_addr(msg)); }
 
 // Abort with a message at a runtime address.

@@ -219,6 +219,23 @@ pub Int rt_list_get(Int l, Int i) {
 @export("resid_list_get_nc", "ptr(ptr,i64)")
 pub Int rt_list_get_nc(Int l, Int i) { return list_at(l, i); }
 
+// List views: a loop reads a flat list's slots and count once at entry
+// (count 0 when it is a trie), then an element is a compare and a load.
+@export("resid_list_vdata", "ptr(ptr)")
+@inline
+pub Int rt_list_vdata(Int l) { return if (lshift(l) == 0 - 1) { lroot(l) + 24 } else { 0 }; }
+
+@export("resid_list_vlen", "i64(ptr)")
+@inline
+pub Int rt_list_vlen(Int l) { return if (lshift(l) == 0 - 1) { lcount(l) } else { 0 }; }
+
+@export("resid_list_get_v", "ptr(ptr,i64,ptr,i64)")
+@inline
+pub Int rt_list_get_v(Int l, Int i, Int d, Int n) {
+    if (ult(i, n)) { return ld64(d + i * 8); }
+    return rt_list_get(l, i);
+}
+
 @export("resid_list_type", "ptr(ptr)")
 pub Int rt_list_type(Int l) { return ltype(l); }
 
@@ -270,7 +287,7 @@ pub Int rt_listbuf_push(Int l, Int elem) {
     return st64(f, n + 1) * 0 + l;
 }
 
-@noinline
+@cold
 Int lb_grow(Int l, Int f, Int n) {
     Int nf = flat_new(if (n < 4) { 8 } else { n * 2 });
     _ = if (n > 0) { mcopy(nf + 24, f + 24, n * 8) } else { 0 };
