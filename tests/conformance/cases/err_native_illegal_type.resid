@@ -1,0 +1,4 @@
+// Only fixed-width scalars and fixed-capacity text and bytes cross (E0233).
+@link("tiny") Int tiny_add(Str a, Int b) {}
+@requires(native_tiny)
+Int main() { return 0; }

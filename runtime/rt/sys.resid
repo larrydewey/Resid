@@ -330,21 +330,41 @@ pub Int rt_env_get(Int name) {
 @export("resid_env_has", "i8(ptr)")
 pub Int rt_env_has(Int name) { return b8(c_getenv(name) != 0); }
 
-// argv from /proc/self/cmdline, read once: count at 0, then the buffer,
-// then the index of string starts.
+// argv as resid_start recorded it; under another process entry (a C main)
+// from /proc/self/cmdline. State: count at 0, a nonzero marker at 8, then
+// the array of string starts.
 Int args_state() { return resid_raw_global("rt_args", 24); }
 
 pub Int args_load() {
     Int st = args_state();
     if (ld64(st + 8) != 0) { return 0; }
-    Int buf = rt_fs_read_all(resid_raw_addr("/proc/self/cmdline"));
+    Int av = ld64(argv_w() + 8);
+    if (av != 0) {
+        _ = st64(st, ld64(argv_w()));
+        _ = st64(st + 16, av);
+        return st64(st + 8, 1);
+    }
+    // The file's length first, then one read of exactly that many bytes:
+    // a NUL-separated buffer must not go through a string read, which stops
+    // at the first NUL.
     Int len = cmdline_len(resid_raw_addr("/proc/self/cmdline"));
-    Int n = count_nuls(buf, 0, len, 0);
+    Int buf = xmalloc(len + 1);
+    Int fd = sys_open(resid_raw_addr("/proc/self/cmdline"), o_rdonly(), 0);
+    Int got = if (fd < 0) { 0 } else { args_read(fd, buf, 0, len) };
+    _ = if (fd < 0) { 0 } else { sys_close(fd) };
+    Int n = count_nuls(buf, 0, got, 0);
     Int idx = xmalloc((n + 1) * 8);
-    _ = index_nuls(buf, idx, 0, len, 0, 0);
+    _ = index_nuls(buf, idx, 0, got, 0, 0);
     _ = st64(st, n);
     _ = st64(st + 16, idx);
     return st64(st + 8, buf);
+}
+
+Int args_read(Int fd, Int buf, Int n, Int cap) {
+    if (n >= cap) { return n; }
+    Int r = sc(0, fd, buf + n, cap - n);
+    if (r <= 0) { return n; }
+    return args_read(fd, buf, n + r, cap);
 }
 
 // /proc files report size 0: read through to find the byte count.

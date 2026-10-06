@@ -1,0 +1,4 @@
+// The bound function must be visible outside its artifact (E0236).
+@link("bad") Int bad_fn() {}
+@requires(native_bad)
+Int main() { println(f"{bad_fn()}"); return 0; }

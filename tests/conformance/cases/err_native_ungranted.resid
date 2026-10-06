@@ -1,0 +1,3 @@
+// Calling a native function needs its family (E0219).
+@link("tiny") Int tiny_add(Int a, Int b) {}
+Int main() { println(f"{tiny_add(1, 2)}"); return 0; }

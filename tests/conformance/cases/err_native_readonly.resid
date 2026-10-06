@@ -1,0 +1,4 @@
+// A native family has no modes.
+@link("tiny") Int tiny_add(Int a, Int b) {}
+@requires(native_tiny(readonly))
+Int main() { println(f"{tiny_add(1, 2)}"); return 0; }

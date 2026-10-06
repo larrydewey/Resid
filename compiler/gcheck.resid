@@ -907,7 +907,7 @@ Bool gm_verb_clash(GK k, Int i, Str src, Str sm, Bool acc) {
     Int fd = k.fs.fns.get(nm) else { -1 };
     Int bd = k.gx.verbs.get(nm) else { -1 };
     if (bd >= 0 && fd >= 0) {
-        gk_diag("E0231", "`" + nm + "` is a verb of behavior " + k.g.ns[bd].text + "; a name is either a verb or a function, not both — call `" + nm + "(x)` with an instance of " + k.g.ns[bd].text + ", or rename the function", k.g, fd, src, sm);
+        gk_diag("E0231", "`" + nm + "` is a verb of behavior " + k.g.ns[bd].text + "; a name is either a verb or a function, not both — call `" + nm + "(x)` with an instance of " + k.g.ns[bd].text + ", or rename the function", k.g, if (fd < k.fnode.len()) { k.fnode[fd] } else { bd }, src, sm);
         return gm_verb_clash(k, i + 1, src, sm, true);
     }
     return gm_verb_clash(k, i + 1, src, sm, acc);
@@ -3512,6 +3512,11 @@ GKS gk_decls(GK k, Int id, Int i, Str src, Str smap) {
             eprintln("error[E0213]: " + k.g.ns[d].text + ": " + rq);
             return gs_err(k, "reported", d);
         }
+        if (str_contains(k.g.ns[d].aux, "@link")) {
+            GKS lk = gk_link_decl(k, d, src, smap);
+            if (lk.err != "") { return lk; }
+            return gk_decls(lk.k, id, i + 1, src, smap);
+        }
         GKS f = gk_fn(k, d);
         if (f.err != "") {
             gk_diag("E0001", "type error: " + f.err, k.g, f.at, src, smap);
@@ -3804,14 +3809,126 @@ Str gk_requires_err(Str prefix) {
     if (lp < 0) { return ""; }
     PRes r = cap_list_at(prefix, lp + 1, true, "");
     if (r.err != "") { return r.err; }
+    Str nm = gk_native_moded(str_split(r.ty, ","), 0);
+    if (nm != "") { return "`" + nm + "` has no modes: a native module is reached in full or not at all (spec §47)"; }
     return gk_unknown_family(caps_families(str_split(r.ty, ","), 0, ListBuf()), 0);
+}
+
+// A native family given a mode (`native_m:ro`), or "".
+Str gk_native_moded(List(Str) cs, Int i) {
+    if (i >= cs.len()) { return ""; }
+    if (str_starts_with(cs[i], "native_") && str_ends_with(cs[i], ":ro")) { return str_slice(cs[i], 0, str_len(cs[i]) - 3); }
+    return gk_native_moded(cs, i + 1);
+}
+
+// ─── Native modules (spec §47) ──────────────────────────────────────
+// `@link("m") Ret f(params) {}` binds f to a native module's function. The
+// call runs in a sandboxed process (runtime/rt/native.resid) and is an
+// effect authorized by the family native_m.
+
+// The module of an `@link("m")` prefix: "" without one, "\x01" when it is
+// malformed (not exactly one string literal naming a valid module).
+pub Str gk_link_module(Str aux) {
+    Int at = str_find(aux, "@link");
+    if (at < 0) { return ""; }
+    Str rest = str_slice(aux, at + 5, str_len(aux));
+    if (str_find(rest, "@link") >= 0 || !str_starts_with(rest, "(\"")) { return "\x01"; }
+    Int q = str_find_char(rest, 34, 2);
+    if (q < 0 || !str_starts_with(str_trim(str_slice(rest, q + 1, str_len(rest))), ")")) { return "\x01"; }
+    Str m = str_slice(rest, 2, q);
+    return if (gk_module_name_ok(m, 0)) { m } else { "\x01" };
+}
+
+// [a-z][a-z0-9_]*, at most 32 bytes: it becomes part of a family name.
+pub Bool gk_module_name_ok(Str m, Int i) {
+    Int n = str_len(m);
+    if (n == 0 || n > 32) { return false; }
+    if (i >= n) { return true; }
+    Int c = str_char_at(m, i);
+    Bool ok = (c >= 97 && c <= 122) || (i > 0 && ((c >= 48 && c <= 57) || c == 95));
+    return ok && gk_module_name_ok(m, i + 1);
+}
+
+// The native family a function declaration binds, or "".
+pub Str gk_link_family(Str aux) {
+    Str m = gk_link_module(aux);
+    return if (m == "" || m == "\x01") { "" } else { "native_" + m };
+}
+
+// Types a native call carries by value (spec §47): fixed-width scalars and
+// fixed-capacity text and bytes.
+Bool gk_link_type_ok(Str t0, Bool ret) {
+    Str t = str_replace(t0, " ", "");
+    if (t == "Bool" || t == "Int" || t == "UInt" || t == "Float") { return true; }
+    if (t == "Int(8)" || t == "Int(16)" || t == "Int(32)" || t == "Int(64)") { return true; }
+    if (t == "UInt(8)" || t == "UInt(16)" || t == "UInt(32)" || t == "UInt(64)") { return true; }
+    if (t == "Float(32)" || t == "Float(64)") { return true; }
+    if (ret && t == "Void") { return true; }
+    Bool fx = (str_starts_with(t, "Str(") || str_starts_with(t, "Bytes(")) && str_ends_with(t, ")");
+    if (!fx) { return false; }
+    Str n = str_slice(t, str_find_char(t, 40, 0) + 1, str_len(t) - 1);
+    return str_is_int(n) && str_parse_int(n) >= 0 && str_parse_int(n) <= 16777216;
+}
+
+// The first parameter of fn d whose type cannot cross, as "name: Type", or "".
+Str gk_link_bad_param(Kg g, Int d, Int i, Int n) {
+    if (i >= n) { return ""; }
+    Int p = kg_kid(g, d, i);
+    Str t = g.ns[kg_kid(g, p, 0)].text;
+    if (!gk_link_type_ok(t, false)) { return "parameter `" + g.ns[p].text + "` has type `" + t + "`"; }
+    return gk_link_bad_param(g, d, i + 1, n);
+}
+
+Str gk_link_types() { return "Bool, Int, Int(8|16|32|64), UInt, UInt(8|16|32|64), Float, Float(32|64), Str(N), Bytes(N) with N <= 16777216, and Void as a result"; }
+
+// An `@link` declaration: its prefix, signature and empty body. Its body is
+// never checked or run: the lowering replaces it.
+GKS gk_link_decl(GK k, Int d, Str src, Str smap) {
+    Str aux = k.g.ns[d].aux;
+    Str name = k.g.ns[d].text;
+    Str m = gk_link_module(aux);
+    if (m == "\x01") {
+        gk_diag("E0234", "`@link` on `" + name + "` must name its module with one string literal: lowercase letters, digits and `_`, starting with a letter, at most 32 bytes (spec §47)", k.g, d, src, smap);
+        return gs_err(k, "reported", d);
+    }
+    Bool other = str_contains(aux, "@requires") || str_contains(aux, "@needs(") || str_contains(aux, "@inst(") || str_contains(aux, "@import(") || str_contains(aux, "@export(");
+    if (other) {
+        gk_diag("E0234", "`@link` on `" + name + "` cannot be combined with @requires, @needs, @import or @export: its capability is native_" + m + " (spec §47)", k.g, d, src, smap);
+        return gs_err(k, "reported", d);
+    }
+    Int fi = ck_fn_index(k.fs, name);
+    if (fi >= 0 && gm_generic_fn(k.fs, fi)) {
+        gk_diag("E0234", "`@link` function `" + name + "` cannot be generic: a native function has one fixed signature (spec §47)", k.g, d, src, smap);
+        return gs_err(k, "reported", d);
+    }
+    Int n = k.g.ns[d].nk;
+    Int body = kg_kid(k.g, d, n - 1);
+    if (k.g.ns[body].nk != 0) {
+        gk_diag("E0234", "`@link` function `" + name + "` must have an empty body `{}`: the native module supplies it (spec §47)", k.g, d, src, smap);
+        return gs_err(k, "reported", d);
+    }
+    GKS nb = gk_nested_kids(k, d, 0, n - 1, false);
+    if (nb.err != "") {
+        gk_diag("E0001", "type error: " + nb.err, k.g, nb.at, src, smap);
+        return gs_err(k, "reported", d);
+    }
+    Str bad = gk_link_bad_param(k.g, d, 1, n - 1);
+    Str rty = k.g.ns[kg_kid(k.g, d, 0)].text;
+    Str bad2 = if (bad != "") { bad } else if (!gk_link_type_ok(rty, true)) { "result has type `" + rty + "`" } else { "" };
+    if (bad2 != "") {
+        gk_diag("E0233", "native function `" + name + "`: " + bad2 + ", which cannot cross to a native module (allowed: " + gk_link_types() + "; spec §47)", k.g, d, src, smap);
+        return gs_err(k, "reported", d);
+    }
+    if (!resid_quiet()) { println("OK native func " + name + " (module " + m + ")"); }
+    return gs_ok(k);
 }
 
 Str gk_unknown_family(List(Str) fs, Int i) {
     if (i >= fs.len()) { return ""; }
     Str f = fs[i];
-    Bool ok = f == "" || f == "filesystem" || f == "environment" || f == "args" || f == "process" || f == "network" || f == "terminal" || f == "clock";
-    if (!ok) { return "unknown capability family `" + f + "` (filesystem, environment, args, process, network, terminal, clock)"; }
+    Bool native = str_starts_with(f, "native_") && gk_module_name_ok(str_slice(f, 7, str_len(f)), 0);
+    Bool ok = f == "" || f == "filesystem" || f == "environment" || f == "args" || f == "process" || f == "network" || f == "terminal" || f == "clock" || native;
+    if (!ok) { return "unknown capability family `" + f + "` (filesystem, environment, args, process, network, terminal, clock, native_<module>)"; }
     return gk_unknown_family(fs, i + 1);
 }
 
@@ -4028,7 +4145,28 @@ Bool gk_internals_at(GK k, Int id, List(Int) nls, Str smap, Bool acc) {
     Bool bad = if (ok) { false } else {
         eprintln("error[E0220]: " + u + " is a runtime internal of the compiler, not part of the language (spec §5); only the compiler's own sources and runtime/rt/, built with --runtime-internals, may use it (never the standard library)")
     };
-    return gk_internals_at(k, id + 1, nls, smap, acc || bad);
+    Bool lbad = gk_link_place(k, id, nls, smap);
+    return gk_internals_at(k, id + 1, nls, smap, acc || bad || lbad);
+}
+
+// `@link` belongs on a function of a program or package: never in the
+// standard library, the tools or the runtime (E0232), and only on a
+// function (E0234).
+Bool gk_link_place(GK k, Int id, List(Int) nls, Str smap) {
+    KN n = k.g.ns[id];
+    Str kd = n.kind;
+    Bool decl = kd == "fn" || kd == "test" || kd == "struct_t" || kd == "sum_t" || kd == "alias_t" || kd == "ctype_t" || kd == "cwhere_t" || kd == "bdecl" || kd == "behavior" || kd == "proto";
+    if (!decl || !str_contains(n.aux, "@link")) { return false; }
+    if (kd != "fn") {
+        Str what = if (kd == "test") { "test block" } else if (kd == "bdecl" || kd == "behavior" || kd == "proto") { "behavior" } else { "type declaration" };
+        return eprintln("error[E0234]: `@link` may only bind a function, not a " + what + " (spec §47)");
+    }
+    Str p = gk_src_path(k, id, nls, smap);
+    Bool std = str_starts_with(p, "lib/") || str_contains(p, "/lib/") || str_starts_with(p, "tools/") || str_contains(p, "/tools/") || str_contains(p, "runtime/rt/");
+    if (std || resid_rtmod()) {
+        return eprintln("error[E0232]: `@link` on `" + n.text + "` in " + p + ": the standard library, the tools and the runtime stay Resid; a native module is bound by a program or package (spec §47)");
+    }
+    return false;
 }
 
 // Family of a builtin call node (not a user function of that name), or "".
@@ -4108,7 +4246,10 @@ type GKFs = { List(Str) edges; List(Str) pcsv; List(GKF) facts; };
 GKFs gk_all_facts(GK k, List(Int) fnode, Int i, GKFs a) {
     if (i >= fnode.len()) { return a; }
     List(Str) e = [];
-    GKF f = gk_facts(k, fnode[i], GKF {.calls = e, .provs = e, .writes = e});
+    GKF f0 = gk_facts(k, fnode[i], GKF {.calls = e, .provs = e, .writes = e});
+    // An @link function uses its module: the need starts there.
+    Str nf = gk_link_family(k.g.ns[fnode[i]].aux);
+    GKF f = if (nf == "") { f0 } else { gf_add(f0, "p", nf) };
     GKFs a2 = GKFs {.edges = a.edges.concat([list_join(f.calls, 0, ",", "")]), .pcsv = a.pcsv.concat([list_join(f.provs, 0, ",", "")]), .facts = a.facts.concat([f])};
     return gk_all_facts(k, fnode, i + 1, a2);
 }
@@ -4352,7 +4493,10 @@ Bool gk_auth_all(GK k, List(Int) fnode, List(Str) need, List(Str) decl, List(Str
     // generic itself) plus what its instances need, which the concrete
     // caller must hold (through the copy's call edges).
     Bool copy = str_contains(k.g.ns[fnode[i]].aux, "@inst(");
-    Str auth = if (copy) { need[i] } else { gk_auth(decl[i], k.fs.ceils[i]) };
+    // An @link function is where its family enters, like a provider verb:
+    // bounded only by an enclosing sandbox (a dependency's ceiling).
+    Bool link = gk_link_family(k.g.ns[fnode[i]].aux) != "";
+    Str auth = if (copy || (link && k.fs.ceils[i] == "")) { need[i] } else { gk_auth(decl[i], k.fs.ceils[i]) };
     Str miss = gk_uncovered(csv_split_or_empty(need[i]), 0, auth);
     Str all = if (miss == "") { "" } else { gk_uncovered_all(csv_split_or_empty(need[i]), 0, auth, "") };
     Bool own = miss != "" && gk_uncovered([miss], 0, direct[i]) == "";

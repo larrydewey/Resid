@@ -1,0 +1,3 @@
+// The family comes from @link; writing @requires as well is refused (E0234).
+@link("tiny") @requires(native_tiny) Int tiny_add(Int a, Int b) {}
+Int main() { return 0; }

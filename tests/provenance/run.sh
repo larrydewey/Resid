@@ -137,6 +137,19 @@ check "signed debug build carries the graph" 0 "provenance: signed" "$COMPILER" 
 check "graph sidecar is evidence" 0 "evidence: qd.resid-graph.cbor matches" "$COMPILER" verify qd
 check "graph sources and capabilities are evidence" 0 "evidence: the graph's sources are the record's, and its capabilities are within the grant" "$COMPILER" verify qd
 
+# ── Native modules (spec §47) ───────────────────────────────────────────
+# The record names each linked artifact by its SHA-256 (attestation), and
+# the graph records a native call as an effect of its family.
+printf '@link("tiny") Int tiny_add(Int a, Int b) {}\n@requires(native_tiny)\nInt main() {\n    println(f"{tiny_add(rt 1, 2)}");\n    return 0;\n}\n' > n.resid
+NAT="tiny=$ROOT/tests/conformance/native/tiny.ll"
+NHASH="$(sha256sum "$ROOT/tests/conformance/native/tiny.ll" | cut -d' ' -f1)"
+check "native build" 0 "provenance: signed" "$COMPILER" n.resid -o n -native "$NAT"
+check "native artifact in the record" 0 "attestation: native module tiny from an artifact with SHA-256 $NHASH" "$COMPILER" verify n
+check "native grant" 0 "attestation: grant \[native_tiny\]" "$COMPILER" verify n
+check "native debug build" 0 "provenance: signed" "$COMPILER" n.resid -o nd --profile debug -native "$NAT"
+check "native capability within the grant" 0 "its capabilities are within the grant" "$COMPILER" verify nd
+if grep -qa "native_tiny.tiny_add" nd.resid-graph.cbor; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL the graph records the native call as an effect"; fi
+
 # ── Tampering ───────────────────────────────────────────────────────────
 cp s s_code; flip s_code 100
 check "tampered code" 1 "code hash mismatch" "$COMPILER" verify s_code

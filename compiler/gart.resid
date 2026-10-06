@@ -130,6 +130,10 @@ Str ga_effect(Kg g, Int id, GAX x) {
     if (n.kind == "call") {
         if (n.text == "print" || n.text == "println" || n.text == "print_bytes") { return "stdout"; }
         if (n.text == "eprintln") { return "stderr"; }
+        // A call of an @link function asks its native module (spec §47).
+        Int d = ga_def(x, id);
+        Str nf = if (d >= 0 && g.ns[d].kind == "fn") { gk_link_family(g.ns[d].aux) } else { "" };
+        if (nf != "") { return nf + "." + nt_csym(g.ns[d].text); }
     }
     if (n.kind == "mcall") {
         Int bi = kg_kid(g, id, 0);

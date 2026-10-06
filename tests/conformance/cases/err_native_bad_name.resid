@@ -1,0 +1,3 @@
+// A module name is lowercase letters, digits and `_` (E0234).
+@link("Tiny") Int tiny_add(Int a, Int b) {}
+Int main() { return 0; }

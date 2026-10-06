@@ -6,4 +6,6 @@ set -uo pipefail
 cd "$(dirname "$0")"
 ROOT="$(cd ../.. && pwd)"
 COMPILER="${COMPILER:-$ROOT/build/boot/stage2.bin}"
+# As in the other suites: the standard library of this checkout.
+export RESID_HOME="${RESID_HOME:-$ROOT/build/boot}"
 exec python3 client.py "$COMPILER" proj

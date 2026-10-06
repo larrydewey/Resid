@@ -1,0 +1,3 @@
+// @link binds functions only (E0234).
+@link("tiny") type Pt = { Int x; };
+Int main() { return 0; }

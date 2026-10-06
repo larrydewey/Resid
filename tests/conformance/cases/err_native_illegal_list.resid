@@ -1,0 +1,4 @@
+// A list has no fixed byte form (E0233).
+@link("tiny") Int tiny_add(List(Int) a, Int b) {}
+@requires(native_tiny)
+Int main() { return 0; }

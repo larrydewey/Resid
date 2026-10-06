@@ -1,0 +1,4 @@
+// A bound module needs its artifact (E0235).
+@link("tiny") Int tiny_add(Int a, Int b) {}
+@requires(native_tiny)
+Int main() { println(f"{tiny_add(1, 2)}"); return 0; }

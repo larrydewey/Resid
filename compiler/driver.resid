@@ -8108,6 +8108,7 @@ import "greduce.resid";
 import "gart.resid";
 import "desugar.resid";
 import "lsp.resid";
+import "native.resid";
 
 // ─── `<out>.resid-notes.cbor` sidecar (spec §27/§34) ───────────────
 // Byte-exact with the Rust pipeline's `resid_notes`/`resid_cache::cbor`
@@ -8269,23 +8270,57 @@ Str graph_hash_esc(Str hex, Int i, StrBuf acc) {
 // `grant` is main's declared authority ("filesystem(readonly),environment");
 // `comp` is the SHA-256 of the compiler binary itself, [] when unreadable.
 @requires(filesystem(readonly))
-List(Int) prov_payload(Str out, Str profile, Str done, List(Int) code, List(Int) notes, List(Int) graph, Str grant, List(Int) comp) {
+List(Int) prov_payload(Str out, Str profile, Str done, List(Int) code, List(Int) notes, List(Int) graph, Str grant, List(Int) comp, Str native) {
     List(Str) paths = str_split(done, ";");
     List(Str) gs = if (grant == "") { [] } else { str_split(grant, ",") };
+    // `native`: "module=sha256hex;..." for each linked native module (§47).
+    List(Str) ns = if (native == "") { [] } else { prov_sort_keys(str_split(native, ";")) };
     Int nopt = if (notes.len() > 0) { 1 } else { 0 };
     Int gopt = if (graph.len() > 0) { 1 } else { 0 };
     Int copt = if (comp.len() == 32) { 1 } else { 0 };
-    List(Int) m0 = cbe_map(6 + nopt + gopt + copt, []);
+    Int vopt = if (ns.len() > 0) { 1 } else { 0 };
+    List(Int) m0 = cbe_map(6 + nopt + gopt + copt + vopt, []);
     List(Int) m1 = cbe_bytes(code, cbe_text("code", m0));
     List(Int) m2 = prov_texts(gs, 0, cbe_array(gs.len(), cbe_text("grant", m1)));
     List(Int) m3 = if (gopt == 1) { cbe_bytes(graph, cbe_text("graph", m2)) } else { m2 };
-    List(Int) m4 = if (nopt == 1) { cbe_bytes(notes, cbe_text("notes", m3)) } else { m3 };
+    List(Int) m4a = if (nopt == 1) { cbe_bytes(notes, cbe_text("notes", m3)) } else { m3 };
+    List(Int) m4 = if (vopt == 1) { prov_native(ns, 0, cbe_map(ns.len(), cbe_text("native", m4a))) } else { m4a };
     List(Int) m5 = cbe_text(out, cbe_text("output", m4));
     List(Int) m6 = cbe_text(profile, cbe_text("profile", m5));
     List(Int) m7 = cbe_array(prov_count_paths(paths, 0, 0), cbe_text("sources", m6));
     List(Int) m8 = prov_sources(paths, 0, m7);
     List(Int) m9 = if (copt == 1) { cbe_bytes(comp, cbe_text("compiler", m8)) } else { m8 };
     return cbe_text(prov_toolchain(), cbe_text("toolchain", m9));
+}
+
+// `module=hex` entries as a map from module name to the artifact's SHA-256.
+List(Int) prov_native(List(Str) ns, Int i, List(Int) acc) {
+    if (i >= ns.len()) { return acc; }
+    Int eq = str_find_char(ns[i], 61, 0);
+    return prov_native(ns, i + 1, cbe_bytes(cose_hex_decode(str_slice(ns[i], eq + 1, str_len(ns[i]))), cbe_text(str_slice(ns[i], 0, eq), acc)));
+}
+
+// Canonical CBOR key order: shorter first, then bytewise.
+List(Str) prov_sort_keys(List(Str) xs) { return prov_ins_all(xs, 0, []); }
+
+List(Str) prov_ins_all(List(Str) xs, Int i, List(Str) acc) {
+    if (i >= xs.len()) { return acc; }
+    return prov_ins_all(xs, i + 1, prov_ins(acc, xs[i], 0));
+}
+
+List(Str) prov_ins(List(Str) ys, Str x, Int i) {
+    if (i >= ys.len()) { return ys.concat([x]); }
+    if (prov_key_lt(prov_key(x), prov_key(ys[i]))) { return ys[0..i].concat([x]).concat(ys[i..ys.len()]); }
+    return prov_ins(ys, x, i + 1);
+}
+
+Str prov_key(Str e) { return str_slice(e, 0, str_find_char(e, 61, 0)); }
+Bool prov_key_lt(Str a, Str b) { return if (str_len(a) != str_len(b)) { str_len(a) < str_len(b) } else { prov_bytes_lt(a, b, 0) }; }
+
+Bool prov_bytes_lt(Str a, Str b, Int i) {
+    if (i >= str_len(a)) { return false; }
+    if (str_char_at(a, i) != str_char_at(b, i)) { return str_char_at(a, i) < str_char_at(b, i); }
+    return prov_bytes_lt(a, b, i + 1);
 }
 
 Str prov_toolchain() { return "resid-stage2 3.5"; }
@@ -8339,7 +8374,7 @@ List(Int) prov_u32(Int v) {
 
 // Sign `out` in place. Returns 0, or 1 when signing is required but fails.
 @requires(filesystem, environment)
-Int write_provenance(Str out, Str profile, Str done, Str grant) {
+Int write_provenance(Str out, Str profile, Str done, Str grant, Str native) {
     Str kpath = prov_key_path();
     if (kpath == "") {
         println("note: provenance: unsigned " + profile + " build (no signing key)");
@@ -8353,7 +8388,7 @@ Int write_provenance(Str out, Str profile, Str done, Str grant) {
     List(Int) code = filesystem.sha256(out);
     List(Int) notes = prov_file_hash(out + ".resid-notes.cbor");
     List(Int) graph = prov_file_hash(out + ".resid-graph.cbor");
-    List(Int) map = prov_payload(out, profile, done, code, notes, graph, grant, prov_self_hash());
+    List(Int) map = prov_payload(out, profile, done, code, notes, graph, grant, prov_self_hash(), native);
     Str ekey = environment.get("RESID_PROV_KEY");
     Bool conceal = environment.get("RESID_PROV_ENCRYPT") == "1";
     if (conceal && ekey == "") {
@@ -8474,6 +8509,32 @@ List(Str) cbe_texts_at(List(Int) b, Int pos, Int left, ListBuf(Str) acc) {
     CbeStr v = cbe_read_str(b, pos, 3);
     if (!v.ok) { return acc.finish(); }
     return cbe_texts_at(b, v.pos, left - 1, acc.push(cbe_ascii(v.bytes, 0, "")));
+}
+
+// The `native` map (spec §47) as "module HEX" entries; [] when absent.
+List(Str) vf_native_of(List(Int) b) {
+    List(Str) empty = [];
+    Int p = cbe_map_find_in(b, 0, "native");
+    if (p < 0) { return empty; }
+    CbeHead m = cbe_read_head(b, p);
+    if (!m.ok || m.major != 5) { return empty; }
+    return vf_native_at(b, m.pos, m.val, ListBuf());
+}
+
+List(Str) vf_native_at(List(Int) b, Int pos, Int left, ListBuf(Str) acc) {
+    if (left <= 0) { return acc.finish(); }
+    CbeStr k = cbe_read_str(b, pos, 3);
+    CbeStr v = cbe_read_str(b, k.pos, 2);
+    if (!k.ok || !v.ok) { return acc.finish(); }
+    return vf_native_at(b, v.pos, left - 1, acc.push(cbe_ascii(k.bytes, 0, "") + " " + hex_encode(v.bytes)));
+}
+
+// The signer's word for which artifact each native module was built from.
+Bool vf_print_native(List(Str) ns, Int i) {
+    if (i >= ns.len()) { return true; }
+    List(Str) p = str_split(ns[i], " ");
+    println("attestation: native module " + p[0] + " from an artifact with SHA-256 " + p[1]);
+    return vf_print_native(ns, i + 1);
 }
 
 // The {path, hash} entries of the array under `key`, each as "HEX PATH".
@@ -8690,6 +8751,8 @@ Int cmd_verify(Str bin_path, Str pub_given, Bool anchored, Str srcdir) {
     }
     println("attestation: toolchain " + cbe_map_text(map, "toolchain") + ", profile " + cbe_map_text(map, "profile") + ", output " + cbe_map_text(map, "output"));
     println("attestation: grant [" + list_join(grant, 0, ", ", "") + "]");
+    List(Str) natv = vf_native_of(map);
+    Bool _nv = vf_print_native(natv, 0);
     println("verify: ok (kid " + c.kid + ", code " + hex_encode(code) + ", trust " + mode + ")");
     return 0;
 }
@@ -8912,26 +8975,26 @@ type TestFiles = { Int pass; Int fail; Int broken; };
 // Compile and run one test file, forwarding this run's depmap, runtime IR,
 // filter and format so the child resolves imports and reports the same way.
 @requires(process)
-Int run_one_test(Str self, Str file, Str root, Str bindir, Str depmap, Str rtr, Str rtc, Str fmt, Str flt) {
+Int run_one_test(Str self, Str file, Str root, Str bindir, Str depmap, Str rtr, Str rtc, Str fmt, Str flt, Str nat) {
     Str rel = rel_under(file, root);
     Str stem = str_slice(rel, 0, str_len(rel) - 6);
     Str out = bindir + "/test_" + flat_name(stem) + ".testbin";
     Str cmd = exec_path(self) + " test " + file + " --profile debug -o " + out + " -rtr " + rtr
         + opt_arg("-rt", rtc) + opt_arg("-depmap", depmap)
-        + opt_arg("--format", fmt) + opt_arg("--filter", flt);
+        + opt_arg("--format", fmt) + opt_arg("--filter", flt) + nat;
     return process.run(cmd);
 }
 
 @requires(process)
-TestFiles run_tests_at(Str self, List(Str) files, Str root, Str bindir, Str depmap, Str rtr, Str rtc, Str fmt, Str flt, Int i, TestFiles acc) {
+TestFiles run_tests_at(Str self, List(Str) files, Str root, Str bindir, Str depmap, Str rtr, Str rtc, Str fmt, Str flt, Str nat, Int i, TestFiles acc) {
     if (i >= files.len()) { return acc; }
     Str rel = rel_under(files[i], root);
     println(rel);
-    Int rc = run_one_test(self, files[i], root, bindir, depmap, rtr, rtc, fmt, flt);
+    Int rc = run_one_test(self, files[i], root, bindir, depmap, rtr, rtc, fmt, flt, nat);
     TestFiles nx = if (rc == 0) { TestFiles {.pass = acc.pass + 1, .fail = acc.fail, .broken = acc.broken} }
         else { if (rc == 2) { TestFiles {.pass = acc.pass, .fail = acc.fail, .broken = acc.broken + 1} }
         else { TestFiles {.pass = acc.pass, .fail = acc.fail + 1, .broken = acc.broken} } };
-    return run_tests_at(self, files, root, bindir, depmap, rtr, rtc, fmt, flt, i + 1, nx);
+    return run_tests_at(self, files, root, bindir, depmap, rtr, rtc, fmt, flt, nat, i + 1, nx);
 }
 
 // `residc test` with no source file: discover and run every test under --root.
@@ -8946,7 +9009,10 @@ Int test_all(Int argc) {
     Str bindir  =  pick_opt(argc, "--testbin-dir", "target/resid");
     Str rhome  =  environment.get("RESID_HOME");
     Str rtr  =  pick_opt(argc, "-rtr", if (rhome == "") { "build/boot/rt.ll" } else { rhome + "/rt.ll" });
-    Int g  =  guard_no_space([self, root, bindir, depmap, rtr, rtc, fmt, flt]);
+    // Each test file links the same native modules (spec §47).
+    List(Str) nats  =  nt_flag_values();
+    Str nat  =  str_join(nt_prefix_all(nats, 0, ListBuf()), "");
+    Int g  =  guard_no_space([self, root, bindir, depmap, rtr, rtc, fmt, flt].concat(nats));
     if (g != 0) { return g; }
     if (!filesystem.is_dir(root)) {
         println("error: not a directory: " + root);
@@ -8960,7 +9026,7 @@ Int test_all(Int argc) {
     }
     filesystem.create_dir(bindir);
     TestFiles acc0  =  TestFiles {.pass = 0, .fail = 0, .broken = 0};
-    TestFiles r  =  run_tests_at(self, files, root, bindir, depmap, rtr, rtc, fmt, flt, 0, acc0);
+    TestFiles r  =  run_tests_at(self, files, root, bindir, depmap, rtr, rtc, fmt, flt, nat, 0, acc0);
     println("---");
     println(f"{r.pass} file/s passed, {r.fail} failed, {r.broken} did not compile");
     // §7.2: a compile error outranks a test failure - the run is not complete.
@@ -9223,7 +9289,14 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     List(Str) all0 = mid.concat(rtg_dedupe(res.glines, 0, [], ListBuf()));
     List(Str) all1 = if (fn_index(fs, "main") >= 0) { all0.concat(main_entry_ir()) } else { all0 };
     List(Str) all2 = if (testmode) { all1.concat(td_main_ir(td.names, td.syms, td_module_name(path))).concat(start_entry_ir()) } else { all1 };
-    List(Str) all = if (gdbg) { all2.concat(dbg_unit_ir(gdf.paths)) } else { all2 };
+    List(Str) all3 = if (gdbg) { all2.concat(dbg_unit_ir(gdf.paths)) } else { all2 };
+    // Native modules (spec §47): stubs, thunks and the host table, and each
+    // checked, rewritten artifact for the link.
+    List(NFn) nfs = if (rtmod) { [] } else { nt_fns(lkp.g, lkp.id) };
+    NB nb = nt_build(nfs, out);
+    if (!nb.ok) { return 1; }
+    List(Str) all = if (nfs.len() > 0) { nt_hook_main(all3.concat(nt_decls()).concat(nt_ir(nfs)), nfs.len()) } else { all3 };
+    List(Str) nkeep = resid_list_str_persist_copy([str_join(nb.links, " "), str_join(nb.prov, ";")]);
     Str doc  =  probe_stack(str_join(if (rtmod) { rt_clean(all.concat(rt_asm_defs())) } else { all }, "\n") + "\n");
     // Debug builds record each runtime check for the artifact's facts.
     List(Str) chk = resid_list_str_persist_copy([if (gdbg) { ga_check_lines(all, 0, StrBuf()) } else { "" }]);
@@ -9261,7 +9334,7 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     // The link command interpolates these, and process.run splits on byte 32.
     Int _gsp  =  guard_no_space([ll, out, rtc, rtr]);
     if (_gsp != 0) { return _gsp; }
-    Str cmd  =  "clang " + olevel + march + lto + " " + ll + " " + rtc + " " + rtr + " -static-pie -nostdlib -lgcc -Wno-override-module -o " + out;
+    Str cmd  =  "clang " + olevel + march + lto + " " + ll + " " + nkeep[0] + " " + rtc + " " + rtr + " -static-pie -nostdlib -lgcc -Wno-override-module -o " + out;
     Int rc  =  process.run(cmd);
     if (rc != 0) {
         println("clang failed");
@@ -9283,7 +9356,7 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     Int _prov_in = resid_bulk_push();
     // Notes are a projection of the residual graph (gart.resid).
     Int nrc  =  write_graph_notes(out, ga_notes(gx_unpack(gpk[2]), gpk[4], rsrc, rr.map, path));
-    Int prc  =  write_provenance(out, profile, rr.done, grk[0]);
+    Int prc  =  write_provenance(out, profile, rr.done, grk[0], nkeep[1]);
     Int _prov_out = resid_bulk_pop();
     return prc;
 }

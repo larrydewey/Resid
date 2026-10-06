@@ -1500,9 +1500,11 @@ GXT gx_collect(Kg g, Int unit, Int i, GXT ft) {
         return gx_collect(g, unit, i + 1, f2);
     }
     if (n.kind == "fn") {
+        // An @link function's answer comes from its native module at run
+        // time (an effect, spec §47): it has no body to reduce.
         Int nk = n.nk;
         List(Str) fa = if (str_contains(n.aux, "@")) { ft.fann.concat([n.text]) } else { ft.fann };
-        GXT f3 = GXT {.fnames = ft.fnames.concat([n.text]), .fpns = ft.fpns.concat([gx_param_list(g, d, 1, nk - 1, false, ",", "")]), .fpts = ft.fpts.concat([gx_param_list(g, d, 1, nk - 1, true, "|", "")]), .frets = ft.frets.concat([g.ns[kg_kid(g, d, 0)].text]), .fbody = ft.fbody.concat([kg_kid(g, d, nk - 1)]), .sts = ft.sts, .sfs = ft.sfs, .fidx = ft.fidx.insert(n.text, ft.fnames.len()), .cts = ft.cts, .cpred = ft.cpred, .fann = fa, .src = ft.src, .rds = ft.rds};
+        GXT f3 = GXT {.fnames = ft.fnames.concat([n.text]), .fpns = ft.fpns.concat([gx_param_list(g, d, 1, nk - 1, false, ",", "")]), .fpts = ft.fpts.concat([gx_param_list(g, d, 1, nk - 1, true, "|", "")]), .frets = ft.frets.concat([g.ns[kg_kid(g, d, 0)].text]), .fbody = ft.fbody.concat([if (str_contains(n.aux, "@link")) { -1 } else { kg_kid(g, d, nk - 1) }]), .sts = ft.sts, .sfs = ft.sfs, .fidx = ft.fidx.insert(n.text, ft.fnames.len()), .cts = ft.cts, .cpred = ft.cpred, .fann = fa, .src = ft.src, .rds = ft.rds};
         return gx_collect(g, unit, i + 1, f3);
     }
     return gx_collect(g, unit, i + 1, ft);

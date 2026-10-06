@@ -1,0 +1,4 @@
+// The artifact's C types must be the ones the Resid types map to (E0236).
+@link("tiny") Int tiny_half(Int x) {}
+@requires(native_tiny)
+Int main() { println(f"{tiny_half(4)}"); return 0; }

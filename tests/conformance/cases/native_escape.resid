@@ -1,0 +1,41 @@
+// Native code holds no authority (spec §47): each attempt to reach the OS
+// is killed by the kernel's filter (tests/conformance/native/esc.c), while
+// ordinary memory allocation works.
+@link("esc") Int esc_open() {}
+@link("esc") Int esc_getpid() {}
+@link("esc") Int esc_stdout() {}
+@link("esc") Int esc_socket() {}
+@link("esc") Int esc_fork() {}
+@link("esc") Int esc_execve() {}
+@link("esc") Int esc_clock() {}
+@link("esc") Int esc_rdtsc() {}
+@link("esc") Int esc_mmap_exec() {}
+@link("esc") Int esc_x32() {}
+@link("esc") Int esc_getrandom() {}
+@link("esc") Int esc_vdso_time() {}
+@link("esc") Int ok_mmap() {}
+
+@requires(native_esc)
+Int tried(Str what, Result(Int, RegionError) r) {
+    Int v = r else { -1 };
+    println(f"{what} {v}");
+    return 0;
+}
+
+@requires(native_esc)
+Int main() {
+    _ = tried("open", spawn (native_esc) { return esc_open(); });
+    _ = tried("getpid", spawn (native_esc) { return esc_getpid(); });
+    _ = tried("stdout", spawn (native_esc) { return esc_stdout(); });
+    _ = tried("socket", spawn (native_esc) { return esc_socket(); });
+    _ = tried("fork", spawn (native_esc) { return esc_fork(); });
+    _ = tried("execve", spawn (native_esc) { return esc_execve(); });
+    _ = tried("clock", spawn (native_esc) { return esc_clock(); });
+    _ = tried("rdtsc", spawn (native_esc) { return esc_rdtsc(); });
+    _ = tried("mmap_exec", spawn (native_esc) { return esc_mmap_exec(); });
+    _ = tried("x32", spawn (native_esc) { return esc_x32(); });
+    _ = tried("getrandom", spawn (native_esc) { return esc_getrandom(); });
+    _ = tried("vdso_time", spawn (native_esc) { return esc_vdso_time(); });
+    _ = tried("ok_mmap", spawn (native_esc) { return ok_mmap(); });
+    return 0;
+}

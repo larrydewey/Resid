@@ -4148,6 +4148,8 @@ PG pg_with_err(PG g, Str err) {
 // void (a result only). Pointers travel as Int addresses.
 PG lw_fn(LW w0, Int d, PG g) {
     Str aux = w0.g.ns[d].aux;
+    // An @link function is generated whole by the driver (compiler/native.resid).
+    if (str_contains(aux, "@link")) { return g; }
     Str imp = lw_annot(aux, "@import(");
     if (imp != "") { return lw_import(w0, d, g, imp); }
     PG r = lw_fn_body(w0, d, g);
@@ -5740,7 +5742,7 @@ Str lsg_req(Str pre, Int pos) {
     if (t.text == "@") {
         Tok an = lex_tok(pre, t.pos);
         Tok lp = lex_tok(pre, an.pos);
-        if (an.text == "requires" && lp.text == "(") { return cap_list_at(pre, lp.pos, false, "").ty; }
+        if (an.text == "requires" && lp.text == "(") { return cap_list_at(pre, lp.pos, true, "").ty; }
     }
     return lsg_req(pre, t.pos);
 }
@@ -5997,6 +5999,8 @@ Tok lf_last_tok(Str s, Int pos, Str last) {
 List(Str) lf_summary(Kg g, Funcs fs, Int i) {
     Int d = fs.fpos[i];
     if (d < 0) { return lf_no(); }
+    // An @link body is replaced by the call to its native module.
+    if (str_contains(g.ns[d].aux, "@link")) { return lf_no(); }
     if (!scal_ll(ll_ty(ct_base_of(fs.ctn, fs.ctb, fs.rets[i])))) { return lf_no(); }
     Str pts = fs.pts[i];
     Str pns = fs.pns[i];

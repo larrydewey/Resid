@@ -24,7 +24,9 @@ tests that fail if it breaks. This page summarizes it.
   through calls, closures and behaviors, is granted by its `@requires` or
   its sandbox (`E0219`).
 - *Only narrowing:* sandboxes and attenuated imports only narrow authority,
-  and manifest ceilings bound dependencies.
+  and manifest ceilings bound dependencies: modes included, down the
+  whole dependency tree, and with the narrowest ceiling winning when two
+  packages declare the same dependency.
 - *Regions:* a `spawn` region gets only its listed capabilities.
 - *Checked twice:* every provider call is checked again before it runs,
   against the thread's sandbox frames, and a read-only grant never covers
@@ -39,8 +41,17 @@ runtime, under a driver flag that is honored only for those entry files
 - Indexing is bounds-checked unless the compiler proves the index in range.
 - Arithmetic and conversions are checked unless provably safe.
 - String functions never read past the end of a string.
-- There is no FFI and no `extern`: a program reaches the operating system
-  only through providers and builtins.
+- There is no `extern` and no in-process FFI: a program reaches the
+  operating system only through providers and builtins.
+
+**Native modules.** Code from another language runs only as a
+[native module](/Resid/reference/native-modules/), each call in a fresh
+process the kernel confines to computation (a seccomp filter: its own
+socket, non-executable memory, exit). It gets no descriptors, no
+environment, no clock and none of the program's memory. Its reply is
+checked as untrusted input. The artifact is checked before linking so it
+cannot run code in the program itself. Calling it needs the family
+`native_<module>`, checked like any other.
 
 **Packages.** Content-hashed archives, Ed25519 signatures, registry index
 signatures, pinned keys and keyrings. The package must match the request,
@@ -75,6 +86,9 @@ through two rebuilds from source.
   `verify` cross-checks the grant against the graph artifact only when
   one is signed (debug builds), and the sources only with `--sources`.
 - Constant-time behavior of compiled code is not verified.
+- A native module's answers are checked for their type, never their
+  meaning; the sandbox is as strong as the kernel's seccomp; and its
+  60 s of CPU and its memory are not denial-of-service guarantees.
 - DER, X.509 and HPACK parsers abort on malformed input instead of
   returning an error.
 - The runtime and the compiler's in-place updates are tested, not proven.

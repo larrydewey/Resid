@@ -414,6 +414,61 @@ sed -i 's/capabilities = \[\]/capabilities = ["filesystem(readonly)"]/' "$W/ceil
 (cd "$ROOT" && "$MAN" build "$W/ceil/resid.toml" "$COMPILER") > "$W/ceil2.out" 2>&1
 if [ $? -eq 0 ] && [ "$("$W/ceil/target/resid/ceil")" = yes ]; then ok; else bad "ceiling grant: $(grep -m1 -i error "$W/ceil2.out")"; fi
 
+# Grantable includes the mode (spec §28.2): a read-only root grant does not
+# cover a dependency entry that asks for the full family.
+sed -i 's/grant = \["filesystem"\]/grant = ["filesystem(readonly)"]/; s/capabilities = \["filesystem(readonly)"\]/capabilities = ["filesystem"]/' "$W/ceil/resid.toml"
+(cd "$ROOT" && "$MAN" build "$W/ceil/resid.toml" "$COMPILER") > "$W/ceil3.out" 2>&1
+if [ $? -ne 0 ] && grep -q "requires capability 'filesystem'" "$W/ceil3.out"; then ok; else bad "read-only grant covered a full entry: $(cat "$W/ceil3.out" | head -3)"; fi
+sed -i 's/capabilities = \["filesystem"\]/capabilities = ["filesystem(readonly)"]/' "$W/ceil/resid.toml"
+(cd "$ROOT" && "$MAN" build "$W/ceil/resid.toml" "$COMPILER") > "$W/ceil4.out" 2>&1
+if [ $? -eq 0 ] && [ "$("$W/ceil/target/resid/ceil")" = yes ]; then ok; else bad "read-only grant, read-only entry: $(grep -m1 -i error "$W/ceil4.out")"; fi
+
+# A dependency's own dependencies get at most its ceiling (spec §21.3).
+mkpkg "$W/mid" mid 1.0.0 $'import "reader";\npub Int mid_n() { return 1; }'
+printf '\n[dependencies.reader]\npath = "../reader"\ncapabilities = ["filesystem(readonly)"]\n' >> "$W/mid/resid.toml"
+mkdir -p "$W/tr/src"
+printf '[package]\nname = "tr"\nversion = "0.1.0"\n\n[capabilities]\ngrant = ["filesystem"]\n\n[dependencies.mid]\npath = "../mid"\ncapabilities = []\n' > "$W/tr/resid.toml"
+printf 'import "mid";\nInt main() { println(f"{mid_n()}"); return 0; }\n' > "$W/tr/src/main.resid"
+(cd "$ROOT" && "$MAN" build "$W/tr/resid.toml" "$COMPILER") > "$W/tr.out" 2>&1
+if [ $? -ne 0 ] && grep -q "outside the capabilities granted to 'mid'" "$W/tr.out"; then ok; else bad "transitive ceiling not bounded by its parent: $(head -3 "$W/tr.out")"; fi
+# A dependency declared twice takes the narrowest ceiling, whichever
+# declaration the walk reaches first: the root's `reader = []` binds even
+# though `mid` (visited first) grants it filesystem(readonly).
+printf '[package]\nname = "tr"\nversion = "0.1.0"\n\n[capabilities]\ngrant = ["filesystem"]\n\n[dependencies.mid]\npath = "../mid"\ncapabilities = ["filesystem(readonly)"]\n\n[dependencies.reader]\npath = "../reader"\ncapabilities = []\n' > "$W/tr/resid.toml"
+printf 'import "mid";\nimport "reader";\n@requires(filesystem(readonly))\nInt main() { if (etc_exists()) { println("yes"); } return mid_n(); }\n' > "$W/tr/src/main.resid"
+(cd "$ROOT" && "$MAN" build "$W/tr/resid.toml" "$COMPILER") > "$W/tr2.out" 2>&1
+if [ $? -ne 0 ] && grep -q "E0212" "$W/tr2.out"; then ok; else bad "a second, narrower ceiling was ignored: $(grep -m1 -i error "$W/tr2.out")"; fi
+(cd "$ROOT" && "$MAN" depmap "$W/tr/resid.toml" "$W/tr.depmap") > /dev/null 2>&1
+if grep -q '^reader::.*::$' "$W/tr.depmap" && [ "$(grep -c '^reader::' "$W/tr.depmap")" = 1 ]; then ok; else bad "depmap meet: $(cat "$W/tr.depmap")"; fi
+
+# Every declaration's pinned key is checked, not only the first one reached.
+sed -i 's/capabilities = \[\]$/capabilities = []\npubkey = "'"$OTHER"'"/' "$W/tr/resid.toml"
+(cd "$ROOT" && "$MAN" deps "$W/tr/resid.toml") > "$W/tr3.out" 2>&1
+if [ $? -ne 0 ] && grep -q "dependency 'reader': pinned key configured" "$W/tr3.out"; then ok; else bad "a second declaration's pinned key was ignored: $(head -3 "$W/tr3.out")"; fi
+
+# Native modules (spec §47): a package binds one with `[native.<m>]`; the
+# consumer must grant the dependency its family, the artifact must match
+# its pinned SHA-256, and the archive's hash covers the artifact.
+mkpkg "$W/ntiny" ntiny 1.0.0 $'@link("tiny")\npub Int tiny_add(Int a, Int b) {}'
+mkdir -p "$W/ntiny/native"; cp "$ROOT/tests/conformance/native/tiny.ll" "$W/ntiny/native/tiny.ll"
+NSHA="$(sha256sum "$W/ntiny/native/tiny.ll" | cut -d' ' -f1)"
+printf '\n[native.tiny]\npath = "native/tiny.ll"\nsha256 = "%s"\n' "$NSHA" >> "$W/ntiny/resid.toml"
+mkdir -p "$W/napp/src"
+printf '[package]\nname = "napp"\nversion = "0.1.0"\n\n[capabilities]\ngrant = ["native_tiny"]\n\n[dependencies.ntiny]\npath = "../ntiny"\ncapabilities = ["native_tiny"]\n' > "$W/napp/resid.toml"
+printf 'import "ntiny";\n@requires(native_tiny)\nInt main() { println(f"{tiny_add(rt 2, 3)}"); return 0; }\n' > "$W/napp/src/main.resid"
+(cd "$ROOT" && "$MAN" build "$W/napp/resid.toml" "$COMPILER") > "$W/napp.out" 2>&1
+if [ $? -eq 0 ] && [ "$("$W/napp/target/resid/napp")" = 6 ]; then ok; else bad "native dependency build: $(grep -m2 -i error "$W/napp.out")"; fi
+sed -i 's/capabilities = \["native_tiny"\]/capabilities = []/' "$W/napp/resid.toml"
+(cd "$ROOT" && "$MAN" build "$W/napp/resid.toml" "$COMPILER") > "$W/napp2.out" 2>&1
+if [ $? -ne 0 ] && grep -q "native_tiny" "$W/napp2.out"; then ok; else bad "a dependency used a native module its ceiling lacks: $(head -3 "$W/napp2.out")"; fi
+sed -i 's/capabilities = \[\]/capabilities = ["native_tiny"]/' "$W/napp/resid.toml"
+cp "$W/ntiny/native/tiny.ll" "$W/tiny.ll.keep"; printf '; changed\n' >> "$W/ntiny/native/tiny.ll"
+(cd "$ROOT" && "$MAN" build "$W/napp/resid.toml" "$COMPILER") > "$W/napp3.out" 2>&1
+if [ $? -ne 0 ] && grep -q "but the manifest pins" "$W/napp3.out"; then ok; else bad "a changed artifact was linked: $(head -3 "$W/napp3.out")"; fi
+"$PKG" pack "$W/ntiny" "$W/ntiny_a2" > /dev/null; cp "$W/tiny.ll.keep" "$W/ntiny/native/tiny.ll"; "$PKG" pack "$W/ntiny" "$W/ntiny_a1" > /dev/null
+mkdir -p "$W/ntiny_x"; "$PKG" extract "$W/ntiny_a1" "$W/ntiny_x" > /dev/null
+if ! cmp -s "$W/ntiny_a1" "$W/ntiny_a2" && cmp -s "$W/ntiny_x/native/tiny.ll" "$W/ntiny/native/tiny.ll"; then ok; else bad "the archive does not cover the native artifact"; fi
+
 # `resid-manifest test` resolves dependencies, writes the depmap, then hands
 # discovery to the driver's own `test` mode (SPEC-testing.md §7.1).
 mkpkg "$W/mathlib" mathlib 1.0.0 'pub Int triple(Int a) { return a * 3; }'

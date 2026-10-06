@@ -1,0 +1,6 @@
+// Each call runs in a fresh process, so no state survives a call (no hidden
+// identity, §4): the module's counter is 1 every time.
+@link("tiny") Int tiny_count() {}
+
+@requires(native_tiny)
+Int main() { println(f"{tiny_count()} {tiny_count()} {tiny_count()}"); return 0; }

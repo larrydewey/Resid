@@ -1,0 +1,4 @@
+// A result type that cannot cross (E0233).
+@link("tiny") Dec(2) tiny_add(Int a, Int b) {}
+@requires(native_tiny)
+Int main() { return 0; }

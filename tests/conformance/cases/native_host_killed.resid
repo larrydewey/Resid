@@ -1,0 +1,5 @@
+// Outside a spawn region a failed native call aborts the process (§9).
+@link("tiny") Int tiny_crash(Int x) {}
+
+@requires(native_tiny)
+Int main() { println(f"{tiny_crash(rt 1)}"); return 0; }

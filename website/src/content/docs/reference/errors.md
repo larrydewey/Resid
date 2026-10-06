@@ -26,6 +26,13 @@ own), with the offending source line.
 | `E0226` | a generic function uses a behavior it does not list in `@needs`, or a call's needs have no instance |
 | `E0227` | a type parameter cannot be inferred from the arguments, the expected type or one fitting instance |
 | `E0228` | a generic function calls itself at ever larger types (instantiation does not terminate) |
+| `E0231` | a function has the name of a behavior's verb |
+| `E0232` | `@link` in the standard library, the tools or the runtime ([native modules](/Resid/reference/native-modules/)) |
+| `E0233` | a native function's parameter or result type cannot cross to a native module |
+| `E0234` | a malformed `@link`: module name, non-empty body, generic, another annotation, or not on a function |
+| `E0235` | no artifact for a native module, or it does not define the bound function |
+| `E0236` | a native artifact defines the function with other C types, or not visibly |
+| `E0237` | a native artifact is refused (it reaches outside itself, runs at load time, …), or a malformed `-native` |
 | `E0301` | a known value violates its constraint type |
 | `E0401` | a builder is not consumed on some path |
 | `E0402` | a builder is used twice |

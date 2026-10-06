@@ -1,0 +1,357 @@
+// Native modules (spec §47): each call to an @link function runs the native
+// code in a fresh process with no authority.
+//
+// Parent (resid_native_call): fork, and in the child re-execute this very
+// program (/proc/self/exe) with argv ["resid-native-host", module], an empty
+// environment and the call's socket as fd 3. Then send the request, read
+// the reply, and wait. Anything but a clean exit with a reply of exactly
+// the expected length aborts the calling thread.
+//
+// Child (resid_native_host, called before main): drop everything but fd 3,
+// unmap the vDSO, disable the time-stamp counter, and install a seccomp
+// filter that allows reading and writing fd 3, non-executable memory and
+// exit; then run the one requested function (a generated thunk) and exit.
+//
+// The request is [i64 index][arguments], the reply [result], both fixed
+// sizes the compiler computed: a scalar is 8 bytes, a Str(N) N + 1 bytes and
+// a Bytes(N) N bytes, each rounded up to 8.
+
+Int ntab_ent() { return 40; }   // module, function, reqlen, resplen, thunk
+
+// ─── Parent ─────────────────────────────────────────────────────────
+
+@export("resid_native_call", "void(ptr,ptr,ptr,i64,ptr,i64)")
+pub Int rt_native_call(Int m, Int f, Int req, Int reqlen, Int resp, Int resplen) {
+    // Everything the child needs exists before the fork: between fork and
+    // execve it makes system calls only (other threads may hold locks).
+    Int sv = xmalloc(8);
+    Int r = resid_raw_syscall(53, 1, 1 | 524288, 0, sv, 0, 0);   // socketpair(AF_UNIX, SOCK_STREAM|SOCK_CLOEXEC)
+    if (r < 0) { return c_free(sv) + native_fail(m, f, resid_raw_addr("no socket pair")); }
+    Int a = ld32(sv);
+    Int b = ld32(sv + 4);
+    _ = c_free(sv);
+    Int argv = xmalloc(24);
+    _ = st64(argv, resid_raw_addr("resid-native-host")) + st64(argv + 8, m) + st64(argv + 16, 0);
+    Int envp = xmalloc(8);
+    _ = st64(envp, 0);
+    Int lim = xmalloc(32);
+    _ = st64(lim, native_cpu_seconds()) + st64(lim + 8, native_cpu_seconds() + 1) + st64(lim + 16, 0) + st64(lim + 24, 0);
+    Int pid = c_fork();
+    if (pid == 0) { return native_child(b, argv, envp, lim); }
+    _ = sys_close(b);
+    _ = c_free(argv) + c_free(envp) + c_free(lim);
+    if (pid < 0) { return sys_close(a) + native_fail(m, f, resid_raw_addr("cannot start the module's process")); }
+    Bool sent = native_send(a, req, 0, reqlen);
+    _ = resid_raw_syscall(48, a, 1, 0, 0, 0, 0);   // shutdown(SHUT_WR): the child reads to EOF
+    Int got = native_recv(a, resp, 0, resplen);
+    // One byte more than the reply means a malformed one.
+    Int extra = xmalloc(8);
+    Int more = if (got == resplen) { sc(0, a, extra, 1) } else { 0 };
+    _ = c_free(extra) + sys_close(a);
+    Int st = wait_pid(pid, 0);
+    if (st < 0) { return native_fail(m, f, resid_raw_addr("lost the module's process")); }
+    if ((st & 127) != 0) { return native_fail_n(m, f, resid_raw_addr("killed by signal "), st & 127); }
+    Int code = (st >> 8) & 255;
+    if (code == 126) { return native_fail(m, f, resid_raw_addr("the sandbox could not be installed")); }
+    if (code != 0) { return native_fail_n(m, f, resid_raw_addr("exited with status "), code); }
+    if (!sent || got != resplen || more > 0) { return native_fail(m, f, resid_raw_addr("malformed reply")); }
+    return 0;
+}
+
+// CPU seconds a call may use (soft limit; the hard limit is one more).
+Int native_cpu_seconds() { return 60; }
+
+// The child between fork and execve: system calls only.
+Int native_child(Int b, Int argv, Int envp, Int lim) {
+    Int d = if (b == 3) { resid_raw_syscall(72, 3, 2, 0, 0, 0, 0) } else { resid_raw_syscall(33, b, 3, 0, 0, 0, 0) };   // fcntl(F_SETFD, 0) / dup2
+    if (d < 0) { return native_child_exit(127); }
+    // Only fd 3 crosses execve: close_range(0, 2) and (4, ~0).
+    if (resid_raw_syscall(436, 0, 2, 0, 0, 0, 0) < 0) { return native_child_exit(127); }
+    if (resid_raw_syscall(436, 4, 4294967295, 0, 0, 0, 0) < 0) { return native_child_exit(127); }
+    if (resid_raw_syscall(160, 0, lim, 0, 0, 0, 0) < 0) { return native_child_exit(127); }   // setrlimit(RLIMIT_CPU)
+    if (resid_raw_syscall(160, 4, lim + 16, 0, 0, 0, 0) < 0) { return native_child_exit(127); }   // RLIMIT_CORE = 0
+    _ = resid_raw_syscall(157, 1, 9, 0, 0, 0, 0);   // PR_SET_PDEATHSIG, SIGKILL
+    _ = resid_raw_syscall(59, resid_raw_addr("/proc/self/exe"), argv, envp, 0, 0, 0);
+    return native_child_exit(127);
+}
+
+Int native_child_exit(Int code) { return resid_raw_syscall(231, code, 0, 0, 0, 0, 0); }
+
+Bool native_send(Int fd, Int p, Int i, Int n) {
+    if (i >= n) { return true; }
+    Int r = resid_raw_syscall(44, fd, p + i, n - i, 16384, 0, 0);   // sendto, MSG_NOSIGNAL
+    if (r == 0 - 4) { return native_send(fd, p, i, n); }
+    if (r <= 0) { return false; }
+    return native_send(fd, p, i + r, n);
+}
+
+Int native_recv(Int fd, Int p, Int i, Int n) {
+    if (i >= n) { return i; }
+    Int r = sc(0, fd, p + i, n - i);
+    if (r <= 0) { return i; }
+    return native_recv(fd, p, i + r, n);
+}
+
+// "native module `m`: `f` failed: why"
+Int native_fail(Int m, Int f, Int why) { return rt_abort_at(native_msg(m, f, why, resid_raw_addr(""))); }
+
+Int native_fail_n(Int m, Int f, Int why, Int n) {
+    Int num = xmalloc(24);
+    _ = native_utoa(num, n);
+    return rt_abort_at(native_msg(m, f, why, num));
+}
+
+Int native_msg(Int m, Int f, Int why, Int tail) {
+    Int buf = xmalloc(c_strlen(m) + c_strlen(f) + c_strlen(why) + c_strlen(tail) + 64);
+    Int a1 = native_put(buf, resid_raw_addr("native module `"));
+    Int a2 = native_put(native_put(native_put(a1, m), resid_raw_addr("`: `")), f);
+    Int a3 = native_put(native_put(native_put(a2, resid_raw_addr("` failed: ")), why), tail);
+    return st8(a3, 0) * 0 + buf;
+}
+
+// Copy C string s to at; the end of the copy.
+Int native_put(Int at, Int s) {
+    Int k = c_strlen(s);
+    _ = mcopy(at, s, k);
+    return at + k;
+}
+
+// Decimal text of n >= 0 into buf (at least 21 bytes).
+Int native_utoa(Int buf, Int n) {
+    Int k = native_digits(n, 1);
+    _ = st8(buf + k, 0);
+    return native_utoa_at(buf, n, k - 1);
+}
+
+Int native_digits(Int n, Int k) { return if (n < 10) { k } else { native_digits(n / 10, k + 1) }; }
+
+Int native_utoa_at(Int buf, Int n, Int i) {
+    _ = st8(buf + i, 48 + n % 10);
+    return if (i == 0) { 0 } else { native_utoa_at(buf, n / 10, i - 1) };
+}
+
+// ─── Checking a reply (it is untrusted input) ───────────────────────
+
+// An integer result of `bits` bits (1 for Bool), sign- or zero-extended to
+// 64 by the module: it must be in range, or the call fails.
+@export("resid_native_int_ok", "i64(i64,i64,i8,ptr,ptr)")
+pub Int rt_native_int_ok(Int v, Int bits, Int signed, Int m, Int f) {
+    if (bits >= 64) { return v; }
+    Int half = 1 << (bits - 1);
+    Bool ok = if (signed != 0) { v >= 0 - half && v < half } else { v >= 0 && v < half * 2 };
+    if (!ok) { return native_fail(m, f, resid_raw_addr("result out of range for its type")); }
+    return v;
+}
+
+// A Str(N) result in [p, p + n + 1): valid UTF-8 up to a NUL within it;
+// the bytes after that NUL are zeroed, so equal texts are equal values.
+@export("resid_native_str_ok", "void(ptr,i64,ptr,ptr)")
+pub Int rt_native_str_ok(Int p, Int n, Int m, Int f) {
+    Int z = native_nul(p, 0, n + 1);
+    if (z < 0) { return native_fail(m, f, resid_raw_addr("text result not NUL-terminated within its capacity")); }
+    if (!native_utf8(p, 0, z)) { return native_fail(m, f, resid_raw_addr("text result is not valid UTF-8")); }
+    return resid_raw_fill(p + z, 0, n + 1 - z);
+}
+
+Int native_nul(Int p, Int i, Int n) {
+    if (i >= n) { return 0 - 1; }
+    if (ld8(p + i) == 0) { return i; }
+    return native_nul(p, i + 1, n);
+}
+
+// Well-formed UTF-8 (RFC 3629): no overlongs, no surrogates, at most U+10FFFF.
+Bool native_utf8(Int p, Int i, Int n) {
+    if (i >= n) { return true; }
+    Int c = ld8(p + i);
+    if (c < 128) { return native_utf8(p, i + 1, n); }
+    Int k = if (c >= 194 && c <= 223) { 1 } else if (c >= 224 && c <= 239) { 2 } else if (c >= 240 && c <= 244) { 3 } else { 0 };
+    if (k == 0 || i + k >= n) { return false; }
+    Int c1 = ld8(p + i + 1);
+    Int lo = if (c == 224) { 160 } else if (c == 240) { 144 } else { 128 };
+    Int hi = if (c == 237) { 159 } else if (c == 244) { 143 } else { 191 };
+    if (c1 < lo || c1 > hi) { return false; }
+    if (!native_cont(p, i + 2, i + 1 + k)) { return false; }
+    return native_utf8(p, i + 1 + k, n);
+}
+
+Bool native_cont(Int p, Int i, Int end) {
+    if (i >= end) { return true; }
+    Int c = ld8(p + i);
+    return c >= 128 && c <= 191 && native_cont(p, i + 1, end);
+}
+
+// ─── Child: the host ────────────────────────────────────────────────
+
+// tab: n entries of ntab_ent() bytes. Returns at once unless this process
+// was started as a module's host; a host never returns.
+@export("resid_native_host", "void(ptr,i64)")
+pub Int rt_native_host(Int tab, Int n) {
+    Int argc = ld64(argv_w());
+    Int argv = ld64(argv_w() + 8);
+    if (argc != 2 || argv == 0) { return 0; }
+    if (c_strcmp(ld64(argv), resid_raw_addr("resid-native-host")) != 0) { return 0; }
+    if (ld64(argv + 24) != 0) { return 0; }   // the environment is empty
+    if (!native_fd3_socket()) { return 0; }
+    Int m = ld64(argv + 8);
+    Int need = native_sizes(tab, n, m, 0, 0);
+    if (need == 0) { return native_child_exit(125); }
+    Int buf = xmalloc(need * 2 + 16);
+    if (!native_lockdown()) { return native_child_exit(126); }
+    return native_serve(tab, n, m, buf, buf + need + 8);
+}
+
+// fd 3 is a socket (S_IFSOCK): set by the parent, never by accident.
+Bool native_fd3_socket() {
+    Int sb = xmalloc(144);
+    Int r = resid_raw_syscall(5, 3, sb, 0, 0, 0, 0);   // fstat
+    Bool ok = r == 0 && (ld32(sb + 24) & 61440) == 49152;
+    return c_free(sb) * 0 == 0 && ok;
+}
+
+// The largest request or reply among module m's functions (0: none).
+Int native_sizes(Int tab, Int n, Int m, Int i, Int acc) {
+    if (i >= n) { return acc; }
+    Int e = tab + i * ntab_ent();
+    Bool mine = c_strcmp(ld64(e), m) == 0;
+    Int a2 = if (mine) { max(acc, max(ld64(e + 16), ld64(e + 24))) } else { acc };
+    return native_sizes(tab, n, m, i + 1, a2);
+}
+
+// Read one request, run its thunk, write the reply, exit.
+Int native_serve(Int tab, Int n, Int m, Int req, Int resp) {
+    if (native_recv(3, req, 0, 8) != 8) { return native_child_exit(125); }
+    Int idx = ld64(req);
+    if (idx < 0 || idx >= n) { return native_child_exit(125); }
+    Int e = tab + idx * ntab_ent();
+    if (c_strcmp(ld64(e), m) != 0) { return native_child_exit(125); }
+    Int reqlen = ld64(e + 16);
+    Int resplen = ld64(e + 24);
+    if (native_recv(3, req + 8, 0, reqlen - 8) != reqlen - 8) { return native_child_exit(125); }
+    _ = resid_raw_fill(resp, 0, resplen + 8);
+    _ = resid_raw_call2(ld64(e + 32), req, resp);
+    if (!native_write(resp, 0, resplen)) { return native_child_exit(125); }
+    return native_child_exit(0);
+}
+
+Bool native_write(Int p, Int i, Int n) {
+    if (i >= n) { return true; }
+    Int r = sc(1, 3, p + i, n - i);
+    if (r <= 0) { return false; }
+    return native_write(p, i + r, n);
+}
+
+// No clock, no counter, no dump, no new privileges, then the filter.
+Bool native_lockdown() {
+    if (resid_raw_syscall(157, 4, 0, 0, 0, 0, 0) < 0) { return false; }    // PR_SET_DUMPABLE 0
+    if (resid_raw_syscall(157, 26, 2, 0, 0, 0, 0) < 0) { return false; }   // PR_SET_TSC, PR_TSC_SIGSEGV
+    _ = native_oom_first();
+    if (!native_unmap_clocks()) { return false; }
+    if (resid_raw_syscall(157, 38, 1, 0, 0, 0, 0) < 0) { return false; }   // PR_SET_NO_NEW_PRIVS
+    Int prog = native_filter();
+    Int fprog = xmalloc(16);
+    _ = st64(fprog, native_filter_len()) + st64(fprog + 8, prog);
+    return resid_raw_syscall(317, 1, 0, fprog, 0, 0, 0) == 0;   // seccomp(SECCOMP_SET_MODE_FILTER)
+}
+
+// Under memory pressure the kernel kills the host, not the program.
+Int native_oom_first() {
+    Int fd = sys_open(resid_raw_addr("/proc/self/oom_score_adj"), 524288 | 1, 0);
+    if (fd < 0) { return 0; }
+    _ = sc(1, fd, resid_raw_addr("1000"), 4);
+    return sys_close(fd);
+}
+
+// Unmap [vdso], [vvar] and [vvar_vclock]: the clock pages a process reads
+// without a system call.
+Bool native_unmap_clocks() {
+    Int maps = read_file_all(resid_raw_addr("/proc/self/maps"));
+    if (maps == 0) { return false; }
+    return native_maps_line(maps, 0);
+}
+
+Bool native_maps_line(Int p, Int i) {
+    if (ld8(p + i) == 0) { return true; }
+    Int e = native_eol(p, i);
+    Bool clock = native_ends(p, i, e, resid_raw_addr("[vdso]")) || native_ends(p, i, e, resid_raw_addr("[vvar]")) || native_ends(p, i, e, resid_raw_addr("[vvar_vclock]"));
+    if (clock) {
+        Int lo = native_hex(p, i, 0);
+        Int dash = native_skip_hex(p, i);
+        Int hi = native_hex(p, dash + 1, 0);
+        if (resid_raw_syscall(11, lo, hi - lo, 0, 0, 0, 0) != 0) { return false; }
+    }
+    if (ld8(p + e) == 0) { return true; }
+    return native_maps_line(p, e + 1);
+}
+
+Int native_eol(Int p, Int i) { return if (ld8(p + i) == 0 || ld8(p + i) == 10) { i } else { native_eol(p, i + 1) }; }
+
+Bool native_ends(Int p, Int i, Int e, Int suf) {
+    Int k = c_strlen(suf);
+    if (e - i < k) { return false; }
+    return native_same(p + e - k, suf, k);
+}
+
+Bool native_same(Int a, Int b, Int k) {
+    if (k == 0) { return true; }
+    return ld8(a) == ld8(b) && native_same(a + 1, b + 1, k - 1);
+}
+
+Int native_hexd(Int c) { return if (c >= 48 && c <= 57) { c - 48 } else if (c >= 97 && c <= 102) { c - 87 } else { 0 - 1 }; }
+
+Int native_hex(Int p, Int i, Int acc) {
+    Int d = native_hexd(ld8(p + i));
+    if (d < 0) { return acc; }
+    return native_hex(p, i + 1, acc * 16 + d);
+}
+
+Int native_skip_hex(Int p, Int i) { return if (native_hexd(ld8(p + i)) < 0) { i } else { native_skip_hex(p, i + 1) }; }
+
+// The seccomp program (classic BPF over struct seccomp_data: nr at 0, arch
+// at 4, args from 16). Allowed: read/write on fd 3; mmap/mprotect without
+// PROT_EXEC; munmap, brk, mremap, madvise, exit, exit_group. Anything else
+// kills the process.
+Int native_filter_len() { return 24; }
+
+Int native_filter() {
+    Int p = xmalloc(native_filter_len() * 8);
+    Int ld = 32;      // BPF_LD|BPF_W|BPF_ABS
+    Int jeq = 21;     // BPF_JMP|BPF_JEQ|BPF_K
+    Int jge = 53;     // BPF_JMP|BPF_JGE|BPF_K
+    Int jset = 69;    // BPF_JMP|BPF_JSET|BPF_K
+    Int ret = 6;      // BPF_RET|BPF_K
+    Int kill = 2147483648;    // SECCOMP_RET_KILL_PROCESS
+    Int allow = 2147418112;   // SECCOMP_RET_ALLOW
+    _ = bpf(p, 0, ld, 0, 0, 4)                    // arch
+      + bpf(p, 1, jeq, 1, 0, 3221225534)          // AUDIT_ARCH_X86_64
+      + bpf(p, 2, ret, 0, 0, kill)
+      + bpf(p, 3, ld, 0, 0, 0)                    // nr
+      + bpf(p, 4, jge, 18, 0, 1073741824)         // x32 -> 23 kill
+      + bpf(p, 5, jeq, 10, 0, 0)                  // read -> 16
+      + bpf(p, 6, jeq, 9, 0, 1)                   // write -> 16
+      + bpf(p, 7, jeq, 12, 0, 9)                  // mmap -> 20
+      + bpf(p, 8, jeq, 11, 0, 10)                 // mprotect -> 20
+      + bpf(p, 9, jeq, 12, 0, 11)                 // munmap -> 22
+      + bpf(p, 10, jeq, 11, 0, 12)                // brk
+      + bpf(p, 11, jeq, 10, 0, 25)                // mremap
+      + bpf(p, 12, jeq, 9, 0, 28)                 // madvise
+      + bpf(p, 13, jeq, 8, 0, 60)                 // exit
+      + bpf(p, 14, jeq, 7, 0, 231)                // exit_group
+      + bpf(p, 15, ret, 0, 0, kill)
+      + bpf(p, 16, ld, 0, 0, 16)                  // fd, low word
+      + bpf(p, 17, jeq, 0, 5, 3)                  // != 3 -> 23 kill
+      + bpf(p, 18, ld, 0, 0, 20)                  // fd, high word
+      + bpf(p, 19, jeq, 2, 3, 0)                  // 0 -> 22 allow, else 23 kill
+      + bpf(p, 20, ld, 0, 0, 32)                  // prot (third argument), low word
+      + bpf(p, 21, jset, 1, 0, 4)                 // PROT_EXEC -> 23 kill
+      + bpf(p, 22, ret, 0, 0, allow)
+      + bpf(p, 23, ret, 0, 0, kill);
+    return p;
+}
+
+// Instruction i: u16 code, u8 jt, u8 jf, u32 k.
+Int bpf(Int p, Int i, Int code, Int jt, Int jf, Int k) {
+    Int at = p + i * 8;
+    _ = st32(at, code | (jt << 16) | (jf << 24));
+    _ = st32(at + 4, k);
+    return 0;
+}

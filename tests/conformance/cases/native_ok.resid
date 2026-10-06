@@ -1,0 +1,28 @@
+// A native module (spec §47): every type that crosses, both ways. The
+// module answers in its own sandboxed process (tests/conformance/native/tiny.c).
+@link("tiny") Int tiny_add(Int a, Int b) {}
+@link("tiny") Float tiny_half(Float x) {}
+@link("tiny") Bool tiny_neg(Bool b) {}
+@link("tiny") Int(8) tiny_i8(Int(8) x) {}
+@link("tiny") UInt(16) tiny_u16(UInt(16) x) {}
+@link("tiny") Float(32) tiny_f32(Float(32) x) {}
+@link("tiny") Str(8) tiny_upper(Str(8) s) {}
+@link("tiny") Bytes(3) tiny_rev(Bytes(3) b) {}
+
+@requires(native_tiny)
+Int main() {
+    println(f"{tiny_add(rt 40, rt 1)}");
+    println(f"{tiny_half(rt 5.0)}");
+    println(f"{tiny_neg(rt true)}");
+    Int(8) a = 21;
+    println(f"{tiny_i8(a)}");
+    UInt(16) u = 9;
+    println(f"{tiny_u16(u)}");
+    Float(32) h = 1.5;
+    println(f"{tiny_f32(h)}");
+    Str(8) s = "hello";
+    println(f"{tiny_upper(s)}");
+    Bytes(3) b = b"abc";
+    println(f"{tiny_rev(b)}");
+    return 0;
+}

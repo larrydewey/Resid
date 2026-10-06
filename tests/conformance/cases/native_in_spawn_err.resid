@@ -1,0 +1,11 @@
+// A native function that crashes fails its call; inside a spawn region the
+// failure is the region's Err (§9, §19), and the program goes on.
+@link("tiny") Int tiny_crash(Int x) {}
+
+@requires(native_tiny)
+Int main() {
+    Result(Int, RegionError) r = spawn (native_tiny) { return tiny_crash(rt 1); };
+    Int v = r else { -1 };
+    println(f"{v}");
+    return 0;
+}

@@ -1,0 +1,3 @@
+// A native function has one fixed signature (E0234).
+@link("tiny") T tiny_add(T a, T b) {}
+Int main() { return 0; }

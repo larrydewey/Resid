@@ -1,0 +1,14 @@
+// The reply is untrusted input: a Bool of 2 and a text that is not UTF-8,
+// written by the native code itself, are refused.
+@link("tiny") Bool tiny_forged_bool() {}
+@link("tiny") Str(4) tiny_bad_text() {}
+
+@requires(native_tiny)
+Int main() {
+    Result(Bool, RegionError) a = spawn (native_tiny) { return tiny_forged_bool(); };
+    Bool av = a else { true };
+    Result(Int, RegionError) b = spawn (native_tiny) { Str(4) t = tiny_bad_text(); return str_len(t); };
+    Int bv = b else { -1 };
+    println(f"{av} {bv}");
+    return 0;
+}

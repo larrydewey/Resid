@@ -43,7 +43,7 @@ export default defineConfig({
 									'learn/testing',
 								],
 							},
-							{ label: 'Going further', items: ['learn/reduction', 'learn/performance', 'learn/next'] },
+							{ label: 'Going further', items: ['learn/reduction', 'learn/performance', 'learn/native', 'learn/next'] },
 						],
 					},
 					{
@@ -80,6 +80,7 @@ export default defineConfig({
 							'reference/fixed-capacity',
 							'reference/builders',
 							'reference/vectors',
+							'reference/native-modules',
 							'reference/reduction',
 							'reference/knowledge-graph',
 							'reference/provenance',

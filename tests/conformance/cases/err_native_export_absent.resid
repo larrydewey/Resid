@@ -1,0 +1,4 @@
+// The artifact must define the function (E0235).
+@link("tiny") Int tiny_missing(Int a) {}
+@requires(native_tiny)
+Int main() { println(f"{tiny_missing(1)}"); return 0; }

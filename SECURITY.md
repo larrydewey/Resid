@@ -49,15 +49,56 @@ them with:
 | Sandboxes only narrow: nested sandboxes meet, and `sandbox ()` grants nothing. | `ceil_enter`, `meet_caps` in `compiler/typecheck.resid` | `err_sandbox_empty`, `err_sandbox_nested_meet` |
 | `import "m" @requires(caps)` compiles `m` and its imports inside `sandbox (caps)`; re-importing an unattenuated module attenuated is an error. | `imp_resolve_lines_a` | `err_import_attenuated`, `import_attenuated_ok` |
 | A manifest dependency compiles inside the `capabilities` its consumer's manifest lists for it. | depmap `name::root::caps` + `imp_resolve_lines_a` | `err_manifest_ceiling`, `manifest_ceiling_ok`, `tests/pkg` (ceiling) |
+| A ceiling must be grantable under the manifest's `[capabilities] grant` with its mode: a read-only grant does not cover a full entry. | `cap_grantable` in `tools/resid-manifest.resid` | `tests/pkg` (read-only grant covered a full entry) |
+| Authority only narrows down the dependency tree: a dependency's ceiling for its own dependency must be grantable under the ceiling it was given. | `collect_sub_deps_at` | `tests/pkg` (transitive ceiling) |
+| A dependency declared by two packages gets the meet of every ceiling given to it, whichever declaration is reached first, and every pinned key any declaration names is verified. (Before this, the first declaration reached won, so a dependency could widen a sibling's ceiling or drop its pin.) | `merge_deps`, `meet_caps`, `verify_all_pinned_keys` over every declaration | `tests/pkg` (narrower ceiling ignored, second pin ignored) |
 | A `spawn`'s child, and everything it calls, gets only the spawn's listed capabilities. | E0214 in `gk_auth_spawns`; the worker runs in its own runtime frame | `err_spawn_body_provider`, `err_spawn_*` |
 | A running `spawn` region shares nothing mutable with its parent: captured maps are frozen and captured records marked shared at capture, a captured handle is moved (the parent may not use it again), and every region is joined before the scope that started it ends. | `lw_share_caps`, `gk_moved_use`, `lw_fut_waits` | `spawn_concurrent`, `err_spawn_handle_moved` |
 | Force-time guard (defense in depth): every provider call is checked *before* it runs against the thread's sandbox frames; writes need a grant that is not read-only. | `resid_cap_check`, `capinject_at` | `tests/runtime/cap_guard.c`, `sandbox_force_time_guard_present` |
 
 Effects that are **not** capabilities (ambient by design): writing to
 stdout/stderr, reading stdin (`resid_read_line`, `resid_read_byte`), OS randomness, and the runtime's own
-allocation and aborts. There is no FFI or
-`extern`: a program can reach the OS only through providers and the
-builtins above.
+allocation and aborts. There is no `extern` and no in-process FFI: a
+program reaches the OS only through providers and the builtins above.
+Code in another language runs only as a native module (below), in a
+process that cannot reach the OS at all.
+
+## Native modules (spec §47)
+
+A native module is code from another language (LLVM IR text) bound with
+`@link("m")`. The guarantees below hold for any artifact, hostile ones
+included. The test fixtures are in `tests/conformance/native/`.
+
+| Guarantee | Enforcement | Tests |
+|---|---|---|
+| Calling a native function needs the family `native_<m>`, checked transitively like any capability, and bounded by spawn lists, sandboxes and manifest ceilings. `native_<m>(readonly)` and a bare `native` grant nothing. | `gk_link_decl`, `gk_all_facts` seed, `gk_requires_err`; force time: the stub's `resid_cap_check("native_<m>!")` | `err_native_ungranted`, `err_native_bare_native`, `err_native_readonly`, `err_native_spawn_ungranted`, `err_native_sandbox`, `tests/pkg` (native ceiling), `cap_guard.c` |
+| Native code runs only in a separate process: the program re-executed from `/proc/self/exe` with an empty environment and only the call's socket open, so none of the program's memory, arguments, environment or descriptors are there. | `rt_native_call`, `native_child` in `runtime/rt/native.resid` | `native_escape` (stdout), `native_stateless` |
+| That process has no authority: before native code runs it disables the TSC, unmaps the vDSO clock pages and installs a seccomp filter allowing only read/write on its socket, non-executable memory and exit. Any other system call, x32 or 32-bit entry kills it. | `native_lockdown`, `native_filter` | `native_escape` (open, getpid, stdout, socket, fork, execve, clock, rdtsc, PROT_EXEC mmap, x32, getrandom, vsyscall) |
+| No state survives a call, and a call's CPU time is bounded (60 s). | process per call; `RLIMIT_CPU` in `native_child` | `native_stateless` |
+| The reply is untrusted input: its length must be exact, a `Bool` 0 or 1, a narrow integer in range, a `Str(N)` valid UTF-8 within its capacity. A crash or a malformed reply fails the call (an `Err` inside `spawn`). | `resid_native_int_ok`, `resid_native_str_ok`, `rt_native_call` | `native_forged_reply`, `native_in_spawn_err`, `native_host_killed` |
+| A native call is never evaluated at compile time. | `fbody = -1` in `gx_collect`; no leaf summary | `native_never_folded` |
+| An artifact cannot run code in the program itself: it may reference only its own symbols, LLVM intrinsics and memcpy/memmove/memset; module asm, aliases, ifuncs, comdats, sections, constructors, external and thread-local globals and quoted names are refused; every symbol it defines is renamed `native.<m>.*`. | `nt_ingest` in `compiler/native.resid` (E0237) | `err_native_artifact_*` |
+| A binding's C types are checked against the artifact's definition. | `nt_abi_err` (E0235, E0236) | `err_native_export_absent`, `err_native_abi_mismatch`, `err_native_artifact_internal`, `err_native_no_artifact` |
+| The standard library, the tools and the runtime bind no native module. | `gk_link_place` (E0232), lint | `tests/runtime` (E0232) |
+| A package's artifact must match the SHA-256 its manifest pins, and the archive hash (and a pinned-key signature) covers `.ll` files. | `native_flags_of`, `is_source_name`, `pk_walk` | `tests/pkg` (native artifact pinned, in the archive) |
+| The signed provenance record names each linked artifact's SHA-256 (attestation), and the graph records each native call as an effect `native_<m>.<fn>`. | `prov_payload` `native`, `ga_effect` | `tests/provenance` (native) |
+
+Not guaranteed:
+
+- **Correctness of native code.** The process boundary contains it; it
+  does not make it right. A reply is checked for its type, never its
+  meaning.
+- **Kernel enforcement.** The sandbox is only as strong as the kernel's
+  seccomp. A kernel without seccomp, or one with a hole in an allowed
+  system call, is outside this model, like other kernel bugs.
+- **Denial of service.** Native code can spend its 60 s of CPU or exhaust
+  memory (the host is first in line for the OOM killer). Both are out of
+  scope here, as elsewhere.
+- **Timing and other side channels**, as elsewhere. `rdrand` is not
+  blocked: OS randomness is not a capability.
+- **The build tree.** `-rt` still links an arbitrary extra C file without
+  checks. It is a builder's flag, and an attacker who can write the build
+  tree is out of scope.
 
 ## Memory safety
 
@@ -77,7 +118,7 @@ not by a proof.
 
 ## Packages (spec §28)
 
-A package archive (`RESIDPKG1`) holds every `.resid` and `.toml` file of
+A package archive (`RESIDPKG1`) holds every `.resid`, `.toml` and `.ll` (native module) file of
 the package, sorted, so its SHA-256 covers the sources, the manifest's
 name, version, dependencies and capabilities, and `resid.lock`.
 

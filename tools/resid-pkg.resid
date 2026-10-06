@@ -157,8 +157,10 @@ Bool is_doc_name(Str name) {
     return known && (ext == "" || ext == ".MD" || ext == ".MARKDOWN" || ext == ".TXT");
 }
 
+// Sources: Resid, manifests, and native module artifacts (LLVM IR text,
+// spec §47), so a package's hash covers the code it links.
 Bool is_source_name(Str name) {
-    if (str_ends_with(name, ".resid")) { return true; }
+    if (str_ends_with(name, ".resid") || str_ends_with(name, ".ll")) { return true; }
     return str_ends_with(name, ".toml");
 }
 

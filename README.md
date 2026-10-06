@@ -64,6 +64,10 @@ Int main() {
 - **Self-hosted, no C.** The compiler is written in Resid and compiles
   itself in about a second; the runtime is Resid too, and binaries are
   static executables with no C library.
+- **Native modules without native risk.** `@link("m")` calls code
+  compiled from C or any other LLVM language. Each call runs in a fresh
+  process the kernel confines to computation, so native code holds no
+  authority, sees only its arguments, and keeps nothing between calls.
 - **Signed provenance.** Every release binary carries a COSE signature
   binding its source, code, sidecars, builder and grant; `residc verify`
   reports what it re-derived apart from what the signer asserts.

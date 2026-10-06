@@ -1,0 +1,7 @@
+// A sandbox without the family bounds the code inside it.
+sandbox () {
+    @link("tiny") Int tiny_add(Int a, Int b) {}
+    pub Int add3(Int a) { return tiny_add(a, 3); }
+}
+@requires(native_tiny)
+Int main() { println(f"{add3(rt 1)}"); return 0; }

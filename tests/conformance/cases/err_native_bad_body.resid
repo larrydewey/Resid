@@ -1,0 +1,4 @@
+// The body must be empty: the module supplies it (E0234).
+@link("tiny") Int tiny_add(Int a, Int b) { return 42; }
+@requires(native_tiny)
+Int main() { return 0; }

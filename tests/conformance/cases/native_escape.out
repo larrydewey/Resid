@@ -1,0 +1,13 @@
+open -1
+getpid -1
+stdout -1
+socket -1
+fork -1
+execve -1
+clock -1
+rdtsc -1
+mmap_exec -1
+x32 -1
+getrandom -1
+vdso_time -1
+ok_mmap 1

@@ -293,6 +293,62 @@ re-entry) and `whistle` (a generalized specialization), recorded against
 the call and inherited along derive edges. Self-compile: 2,517 budget and
 605 whistle reasons; debug peak 690MB.
 
+### 0zv. Native modules, and manifest ceilings that hold (2026-10-06)
+
+**Native modules (spec §47, `PLAN-native-modules.md` rev 2).**
+`@link("m") Ret f(params) {}` binds f to code in another language, given
+as LLVM IR text with `-native m=<path.ll>` (or `[native.m]` in
+`resid.toml`, pinned by SHA-256). Revision 1 of the plan was rejected in
+review. Its separate host binary contained crashes but not authority (native
+code in a process with the user's rights is the user), and its own example
+failed the manifest check. The design that shipped:
+
+- A native call is a provider read and an effect of the family `native_m`
+  (mode-less; E0219/E0214/E0218 like any family). The reducer gives an
+  @link function no body (`fbody = -1`), so a call is never folded
+  (`native_never_folded`: `tiny_add(2, 3)` is 6, the module's answer).
+- Every call runs in a **fresh process**: the program re-executed from
+  `/proc/self/exe` with an empty environment and only the call's socket.
+  Before any native instruction runs, `runtime/rt/native.resid` disables
+  the TSC, unmaps the vDSO clock pages, and installs a seccomp filter
+  (read/write on fd 3, non-executable memory, exit). Escape attempts
+  (open, socket, fork, execve, clock, rdtsc, PROT_EXEC, x32, vsyscall) are
+  each killed (`native_escape`). No state survives a call (no hidden
+  identity, §4). The reply is checked as untrusted input. A failure aborts
+  the calling thread, which is `Err` inside `spawn`. Cost: about 2 ms per
+  call.
+- The artifact is checked and rewritten before linking
+  (`compiler/native.resid`, E0237): only its own symbols, intrinsics and
+  memcpy/memmove/memset; no module asm, aliases, ifuncs, comdats,
+  sections, constructors, external or TLS globals; every symbol renamed
+  `native.<m>.*`. Binding types are checked against the definition (E0235,
+  E0236). The driver generates the caller stubs, the host thunks and the
+  table; `main` calls `resid_native_host` first.
+- Placement: E0232 in `lib/`, `tools/`, `runtime/rt/`. Types: E0233
+  (scalars, `Str(N)`, `Bytes(N)`). Malformed: E0234.
+- Provenance records `native: {module: sha256}`; the graph records each
+  call as the effect `native_m.fn`. Package archives include `.ll` files.
+
+**Manifest ceilings (found while reviewing the plan).**
+`resid-manifest` compared a dependency's capabilities to the root grant by
+family only, so a `filesystem(readonly)` grant admitted `filesystem`. A
+dependency's own dependencies were checked only against the root, never
+against their parent's ceiling. And a dependency declared twice took the
+**first** declaration the walk reached, so another package could widen a
+sibling's ceiling or drop its pinned key. All three are fixed (modes
+compared; ceilings bounded by the parent; the meet of all declarations;
+every pin verified), with `tests/pkg` cases that fail on the old tool.
+
+**Also fixed.** `args` read `/proc/self/cmdline` through a string read
+that stops at the first NUL, so a large program saw garbage arguments
+(`resid-fetch` reported 9 arguments for 4; five pkg cases had been
+failing). It now uses the argv `resid_start` records. A grant set over 64
+entries aborts instead of being truncated. E0231 pointed at the wrong
+line (a function index used as a node id). `lsg_req` now parses modes,
+like the checker.
+
+Suites: conformance 395, pkg 97, provenance 62, runtime 13, graph 688, tls 132, lsp 18 (its run.sh now sets RESID_HOME like the others; with it unset the server grows about 3 MB over 40 edits, which predates this work).
+
 ### 0zu. An HTTP/1.1 server, and `network(readonly)` (2026-10-02)
 
 `lib/httpserv.resid` is an HTTP/1.1 server in Resid over `List(Int)`

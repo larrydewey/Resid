@@ -29,7 +29,8 @@
 /// `target/resid/deps/<name>-<version>` and reused after) — checking:
 /// cycles (depth > 32), a name claimed by two
 /// different directories, a dependency's declared `capabilities` all
-/// present under this manifest's `[capabilities] grant`, (when a
+/// grantable under this manifest's `[capabilities] grant` (modes
+/// included: a read-only grant covers only a read-only entry), (when a
 /// dependency sets `pubkey = "<hex>"`) that its own `<name>.resid-pkg` +
 /// `<name>.resid-sig` verify against exactly that key, `resid.lock`
 /// pins (a version dependency already pinned there must match the
@@ -270,8 +271,10 @@ List(Str) path_fold_at(List(Str) segs, Int i, List(Str) acc) {
 // ─── Manifest assembly ──────────────────────────────────────────────
 
 type Dependency = { Str name; Str path; Str version; List(Str) capabilities; Str pubkey; };
+// `[native.<module>] path, sha256`: a native module's artifact (spec §47).
+type NativeEntry = { Str module; Str path; Str sha256; };
 type Manifest = {
-    Str name; Str version; Str root; List(Str) grant;
+    Str name; Str version; Str root; List(Str) grant; List(NativeEntry) natives;
     List(Dependency) dependencies; Bool require_signatures; Bool allow_unsigned; Str keyring;
     Str registry_path; Str registry_url; Str registry_pubkey; Str registry_ca;
 };
@@ -302,6 +305,7 @@ Manifest load_manifest(Str text) {
         .version = toml_str(entries, "package", "version", ""),
         .root = toml_str(entries, "package", "root", "src/main.resid"),
         .grant = toml_list(entries, "capabilities", "grant"),
+        .natives = build_natives(entries, native_names(entries, 0, []), 0, []),
         .dependencies = build_deps(entries),
         .require_signatures = toml_bool(entries, "signing", "require_signatures", false),
         .allow_unsigned = toml_bool(entries, "signing", "allow_unsigned", false),
@@ -311,6 +315,53 @@ Manifest load_manifest(Str text) {
         .registry_pubkey = toml_str(entries, "registry", "pubkey", ""),
         .registry_ca = toml_str(entries, "registry", "ca", "")
     };
+}
+
+List(Str) native_names(List(TomlEntry) entries, Int i, List(Str) acc) {
+    if (i >= entries.len()) { return acc; }
+    Str sec = entries[i].section;
+    List(Str) acc2 = if (str_starts_with(sec, "native.")) { dep_name_seen_or_add(acc, str_slice(sec, 7, str_len(sec))) } else { acc };
+    return native_names(entries, i + 1, acc2);
+}
+
+List(NativeEntry) build_natives(List(TomlEntry) entries, List(Str) names, Int i, List(NativeEntry) acc) {
+    if (i >= names.len()) { return acc; }
+    Str sec = "native." + names[i];
+    NativeEntry e = NativeEntry {.module = names[i], .path = toml_str(entries, sec, "path", ""), .sha256 = toml_str(entries, sec, "sha256", "")};
+    return build_natives(entries, names, i + 1, acc.concat([e]));
+}
+
+// The `-native <module>=<path>` flags for a build: the root package's
+// [native] entries and every dependency's, each artifact checked against
+// its pinned SHA-256; or an error. A module may be claimed by one package.
+type NativeFlags = { Str err; Str flags; List(Str) seen; };
+
+@requires(filesystem(readonly))
+NativeFlags native_flags_of(List(NativeEntry) ns, Str pkg_dir, Str pkg, Int i, NativeFlags acc) {
+    if (acc.err != "" || i >= ns.len()) { return acc; }
+    NativeEntry e = ns[i];
+    Str where = "package '" + pkg + "': [native." + e.module + "]";
+    if (acc.seen.contains(e.module)) { return NativeFlags {.err = where + ": native module '" + e.module + "' is claimed by two packages", .flags = "", .seen = acc.seen}; }
+    if (e.path == "" || e.sha256 == "") { return NativeFlags {.err = where + " needs both path and sha256", .flags = "", .seen = acc.seen}; }
+    if (!str_ends_with(e.path, ".ll") || str_contains(e.path, " ")) { return NativeFlags {.err = where + ": path must name LLVM IR text (.ll) with no space", .flags = "", .seen = acc.seen}; }
+    Str abs = if (str_starts_with(e.path, "/")) { e.path } else { pkg_dir + "/" + e.path };
+    if (!filesystem.exists(abs)) { return NativeFlags {.err = where + ": cannot read " + abs, .flags = "", .seen = acc.seen}; }
+    Str got = hex_encode(filesystem.sha256(abs));
+    if (got != str_to_lower(e.sha256)) { return NativeFlags {.err = where + ": " + abs + " has SHA-256 " + got + ", but the manifest pins " + e.sha256, .flags = "", .seen = acc.seen}; }
+    return native_flags_of(ns, pkg_dir, pkg, i + 1, NativeFlags {.err = "", .flags = acc.flags + " -native " + e.module + "=" + abs, .seen = acc.seen.concat([e.module])});
+}
+
+@requires(filesystem(readonly))
+NativeFlags native_flags_deps(List(ResolvedDep) ds, Int i, NativeFlags acc) {
+    if (acc.err != "" || i >= ds.len()) { return acc; }
+    Manifest dm = load_manifest(filesystem.read_all(ds[i].dir + "/resid.toml"));
+    return native_flags_deps(ds, i + 1, native_flags_of(dm.natives, ds[i].dir, ds[i].name, 0, acc));
+}
+
+@requires(filesystem(readonly))
+NativeFlags native_flags(Manifest m, Str pkg_dir, List(ResolvedDep) deps) {
+    NativeFlags own = native_flags_of(m.natives, pkg_dir, m.name, 0, NativeFlags {.err = "", .flags = "", .seen = []});
+    return native_flags_deps(merge_deps(deps, 0, []), 0, own);
 }
 
 // ─── dependency resolution (path dependencies only) ─────────────────
@@ -328,14 +379,6 @@ Str cap_family(Str cap) {
     Int idx = find_char(cap, 40, 0);
     if (idx < 0) { return str_trim(cap); }
     return str_trim(str_slice(cap, 0, idx));
-}
-List(Str) grant_families_acc(List(Str) grants, Int i, List(Str) acc) {
-    if (i >= grants.len()) { return acc; }
-    return grant_families_acc(grants, i + 1, acc.concat([cap_family(grants[i])]));
-}
-List(Str) grant_families(List(Str) grants) {
-    List(Str) empty = [];
-    return grant_families_acc(grants, 0, empty);
 }
 
 Int last_slash_idx(Str s, Int i, Int n, Int last) {
@@ -1034,7 +1077,9 @@ DepResolveResult collect_dep_path(Str name, Str dep_dir0, List(Str) caps, Str pi
     if (depth > 32) { return dep_error(acc, "dependency '" + name + "': dependency chain deeper than 32 (cycle?)"); }
     Str prev_dir = find_seen_dir(acc.seen, name, 0);
     if (prev_dir != "") {
-        if (prev_dir == dep_dir) { return acc; }
+        // Reached again: keep this declaration's ceiling and pinned key too,
+        // so the narrowest ceiling binds and every pin is checked.
+        if (prev_dir == dep_dir) { return DepResolveResult {.ok = true, .err = "", .deps = acc.deps.concat([ResolvedDep {.name = name, .dir = dep_dir, .root = "", .capabilities = caps, .pinned_key = pinned_key}]), .seen = acc.seen}; }
         return dep_error(acc, "dependency name '" + name + "' claimed by both '" + prev_dir + "' and '" + dep_dir + "'");
     }
     Str manifest_path = dep_dir + "/resid.toml";
@@ -1054,7 +1099,7 @@ DepResolveResult collect_dep_path(Str name, Str dep_dir0, List(Str) caps, Str pi
         return dep_error(acc, "package '" + dm.name + "' provided by both '" + prev_pkg_dir + "' and '" + dep_dir + "' - conflicting dependency versions are not supported");
     }
     DepResolveResult acc2 = DepResolveResult {.ok = true, .err = "", .deps = acc.deps, .seen = acc.seen.concat([SeenEntry {.name = dm.name, .dir = dep_dir}])};
-    DepResolveResult acc3 = collect_sub_deps_at(dm.dependencies, 0, dep_dir, reg, tp, acc2, depth + 1);
+    DepResolveResult acc3 = collect_sub_deps_at(dm.dependencies, 0, dep_dir, dm.name, caps, reg, tp, acc2, depth + 1);
     if (!acc3.ok) { return acc3; }
     ResolvedDep rd = ResolvedDep {.name = dm.name, .dir = dep_dir, .root = root, .capabilities = caps, .pinned_key = pinned_key};
     return DepResolveResult {.ok = true, .err = "", .deps = acc3.deps.concat([rd]), .seen = acc3.seen};
@@ -1093,10 +1138,15 @@ DepResolveResult collect_dep_version(Str name, Str version, Registry reg, Str ro
 }
 
 @requires(filesystem, network, clock(readonly))
-DepResolveResult collect_sub_deps_at(List(Dependency) subs, Int i, Str parent_dir, Registry reg, TrustPolicy tp, DepResolveResult acc, Int depth) {
+DepResolveResult collect_sub_deps_at(List(Dependency) subs, Int i, Str parent_dir, Str parent, List(Str) parent_caps, Registry reg, TrustPolicy tp, DepResolveResult acc, Int depth) {
     if (!acc.ok) { return acc; }
     if (i >= subs.len()) { return acc; }
     Dependency sub = subs[i];
+    // A dependency's own dependencies get at most its ceiling (spec §21.3:
+    // the transitive closure is attenuated). The root's are checked against
+    // [capabilities] grant by check_dep_capabilities.
+    Str over = if (parent == "") { "" } else { first_missing_cap(sub.capabilities, parent_caps, 0) };
+    if (over != "") { return dep_error(acc, "dependency '" + sub.name + "' (required by '" + parent + "') requires capability '" + over + "', which is outside the capabilities granted to '" + parent + "'"); }
     // With both, `path` is the working copy when it is there (development)
     // and `version` comes from the registry when it is not (a published
     // package, extracted where its sibling checkouts are not).
@@ -1108,7 +1158,7 @@ DepResolveResult collect_sub_deps_at(List(Dependency) subs, Int i, Str parent_di
     } else {
         dep_error(acc, "dependency '" + sub.name + "': needs either 'path' or 'version'")
     };
-    return collect_sub_deps_at(subs, i + 1, parent_dir, reg, tp, acc2, depth);
+    return collect_sub_deps_at(subs, i + 1, parent_dir, parent, parent_caps, reg, tp, acc2, depth);
 }
 
 // A manifest names its registry one of two ways — a directory or a URL —
@@ -1144,7 +1194,7 @@ DepResolveResult resolve_all_deps(Manifest m, Str pkg_dir) {
     if (m.registry_pubkey == "") {
         DepResolveResult start = DepResolveResult {.ok = true, .err = "", .deps = empty_deps, .seen = empty_seen};
         TrustPolicy tp0 = TrustPolicy {.pinned_key = "", .idx_required = false, .idx_entries = no_idx, .keyring = keyring, .allow_unsigned = m.allow_unsigned, .require_signatures = m.require_signatures};
-        return collect_sub_deps_at(m.dependencies, 0, pkg_dir, reg, tp0, start, 0);
+        return collect_sub_deps_at(m.dependencies, 0, pkg_dir, "", m.grant, reg, tp0, start, 0);
     }
     IndexLoadResult idx = load_verify_index(reg, m.registry_pubkey);
     if (!idx.ok) {
@@ -1152,14 +1202,54 @@ DepResolveResult resolve_all_deps(Manifest m, Str pkg_dir) {
     }
     DepResolveResult start = DepResolveResult {.ok = true, .err = "", .deps = empty_deps, .seen = empty_seen};
     TrustPolicy tp1 = TrustPolicy {.pinned_key = "", .idx_required = true, .idx_entries = idx.entries, .keyring = keyring, .allow_unsigned = m.allow_unsigned, .require_signatures = m.require_signatures};
-    return collect_sub_deps_at(m.dependencies, 0, pkg_dir, reg, tp1, start, 0);
+    return collect_sub_deps_at(m.dependencies, 0, pkg_dir, "", m.grant, reg, tp1, start, 0);
 }
 
-Str first_missing_cap(List(Str) caps, List(Str) granted, Int i) {
+// One record per dependency, from the records of every declaration of it:
+// the resolved one (root set) with the meet of all their ceilings.
+List(ResolvedDep) merge_deps(List(ResolvedDep) ds, Int i, List(ResolvedDep) acc) {
+    if (i >= ds.len()) { return acc; }
+    ResolvedDep d = ds[i];
+    if (d.root == "") { return merge_deps(ds, i + 1, acc); }
+    ResolvedDep m = ResolvedDep {.name = d.name, .dir = d.dir, .root = d.root, .capabilities = meet_all(ds, d.name, 0, d.capabilities), .pinned_key = d.pinned_key};
+    return merge_deps(ds, i + 1, acc.concat([m]));
+}
+
+List(Str) meet_all(List(ResolvedDep) ds, Str name, Int i, List(Str) caps) {
+    if (i >= ds.len()) { return caps; }
+    List(Str) c2 = if (ds[i].name == name) { meet_caps(caps, ds[i].capabilities, 0, []) } else { caps };
+    return meet_all(ds, name, i + 1, c2);
+}
+
+// Per family, what both grant: read-only when either is.
+List(Str) meet_caps(List(Str) a, List(Str) b, Int i, List(Str) acc) {
+    if (i >= a.len()) { return acc; }
+    Str other = cap_of_family(b, cap_family(a[i]), 0);
+    Str m = if (other == "") { "" } else if (cap_readonly(a[i])) { a[i] } else if (cap_readonly(other)) { other } else { a[i] };
+    return meet_caps(a, b, i + 1, if (m == "") { acc } else { acc.concat([m]) });
+}
+
+Str cap_of_family(List(Str) cs, Str fam, Int i) {
+    if (i >= cs.len()) { return ""; }
+    if (cap_family(cs[i]) == fam) { return cs[i]; }
+    return cap_of_family(cs, fam, i + 1);
+}
+
+// A read-only entry (`family(readonly)`) grants reads only.
+Bool cap_readonly(Str cap) { return str_ends_with(str_trim(cap), "(readonly)"); }
+
+// Some grant entry of cap's family covers it: any entry for a read-only
+// cap, a full one otherwise (spec §21.1, §28.2: grantable, modes included).
+Bool cap_grantable(Str cap, List(Str) grants, Int i) {
+    if (i >= grants.len()) { return false; }
+    if (cap_family(grants[i]) == cap_family(cap) && (cap_readonly(cap) || !cap_readonly(grants[i]))) { return true; }
+    return cap_grantable(cap, grants, i + 1);
+}
+
+Str first_missing_cap(List(Str) caps, List(Str) grants, Int i) {
     if (i >= caps.len()) { return ""; }
-    Str fam = cap_family(caps[i]);
-    if (!granted.contains(fam)) { return caps[i]; }
-    return first_missing_cap(caps, granted, i + 1);
+    if (!cap_grantable(caps[i], grants, 0)) { return caps[i]; }
+    return first_missing_cap(caps, grants, i + 1);
 }
 Str check_dep_capabilities_at(List(ResolvedDep) deps, List(Str) granted, Int i) {
     if (i >= deps.len()) { return ""; }
@@ -1170,8 +1260,8 @@ Str check_dep_capabilities_at(List(ResolvedDep) deps, List(Str) granted, Int i) 
     }
     return check_dep_capabilities_at(deps, granted, i + 1);
 }
-Str check_dep_capabilities(List(ResolvedDep) deps, List(Str) granted_families) {
-    return check_dep_capabilities_at(deps, granted_families, 0);
+Str check_dep_capabilities(List(ResolvedDep) deps, List(Str) grants) {
+    return check_dep_capabilities_at(deps, grants, 0);
 }
 
 // ─── deterministic pack of a source directory (resid-pkg's `pack`) ──
@@ -1203,7 +1293,7 @@ List(PkFile) pk_walk(Str dir_abs, Str dir_rel, List(Str) names, Int i, List(PkFi
     Str abs = dir_abs + "/" + name;
     Str rel = if (dir_rel == "") { name } else { dir_rel + "/" + name };
     Bool dir = filesystem.is_dir(abs);
-    Bool src = str_ends_with(name, ".resid") || str_ends_with(name, ".toml") || (dir_rel == "" && is_doc_name(name));
+    Bool src = str_ends_with(name, ".resid") || str_ends_with(name, ".toml") || str_ends_with(name, ".ll") || (dir_rel == "" && is_doc_name(name));
     List(PkFile) acc2 = if (dir && name != "target") { pk_walk(abs, rel, sort(filesystem.list_dir(abs)), 0, acc) } else { if (!dir && src) { acc.concat([PkFile {.abs = abs, .rel = rel}]) } else { acc } };
     return pk_walk(dir_abs, dir_rel, names, i + 1, acc2);
 }
@@ -1476,7 +1566,7 @@ Int cmd_deps(Str manifest_path) {
         eprintln(r.err);
         return 1;
     }
-    Str cap_err = check_dep_capabilities(r.deps, grant_families(m.grant));
+    Str cap_err = check_dep_capabilities(r.deps, m.grant);
     if (cap_err != "") {
         eprintln(cap_err);
         return 1;
@@ -1486,8 +1576,9 @@ Int cmd_deps(Str manifest_path) {
         eprintln(key_err);
         return 1;
     }
-    Int _p = print_resolved_deps(r.deps, 0);
-    println(f"ok: {r.deps.len()} dependency/ies resolved");
+    List(ResolvedDep) md = merge_deps(r.deps, 0, []);
+    Int _p = print_resolved_deps(md, 0);
+    println(f"ok: {md.len()} dependency/ies resolved");
     return 0;
 }
 
@@ -1507,7 +1598,7 @@ List(Str) depmap_lines_acc(List(ResolvedDep) deps, Int i, List(Str) acc) {
 }
 Str depmap_text(List(ResolvedDep) deps) {
     List(Str) empty = [];
-    return str_join(depmap_lines_acc(deps, 0, empty), "\n");
+    return str_join(depmap_lines_acc(merge_deps(deps, 0, []), 0, empty), "\n");
 }
 
 @requires(filesystem, network, clock(readonly))
@@ -1518,7 +1609,7 @@ Int cmd_depmap(Str manifest_path, Str out_path) {
         eprintln(r.err);
         return 1;
     }
-    Str cap_err = check_dep_capabilities(r.deps, grant_families(m.grant));
+    Str cap_err = check_dep_capabilities(r.deps, m.grant);
     if (cap_err != "") {
         eprintln(cap_err);
         return 1;
@@ -1530,7 +1621,7 @@ Int cmd_depmap(Str manifest_path, Str out_path) {
     }
     Str text = depmap_text(r.deps);
     Bool _w = filesystem.write_all(out_path, text);
-    println("wrote " + out_path + f" ({r.deps.len()} dependency/ies)");
+    println("wrote " + out_path + f" ({merge_deps(r.deps, 0, []).len()} dependency/ies)");
     return 0;
 }
 
@@ -1555,7 +1646,7 @@ Int cmd_test(Str manifest_path, Str driver_bin, Str rtc) {
         eprintln(r.err);
         return 1;
     }
-    Str cap_err = check_dep_capabilities(r.deps, grant_families(m.grant));
+    Str cap_err = check_dep_capabilities(r.deps, m.grant);
     if (cap_err != "") {
         eprintln(cap_err);
         return 1;
@@ -1573,7 +1664,12 @@ Int cmd_test(Str manifest_path, Str driver_bin, Str rtc) {
     // `target` holds build output.
     Str src_dir = dirname_of(pkg_dir + "/" + m.root);
     Str rtx = if (rtc == "") { "" } else { " -rt " + rtc };
-    Str cmd = driver_bin + " test --root " + src_dir + " --testbin-dir " + out_dir + " -depmap " + depmap_path + rtx;
+    NativeFlags nf = native_flags(m, pkg_dir, r.deps);
+    if (nf.err != "") {
+        eprintln("error: " + nf.err);
+        return 1;
+    }
+    Str cmd = driver_bin + " test --root " + src_dir + " --testbin-dir " + out_dir + " -depmap " + depmap_path + rtx + nf.flags;
     Str sp = first_space_path([driver_bin, src_dir, out_dir, depmap_path, rtc], 0);
     if (sp != "") {
         eprintln("error: this path contains a space, which process.run cannot pass as one argument:");
@@ -1605,7 +1701,7 @@ Int cmd_build(Str manifest_path, Str driver_bin, Str rtc) {
         eprintln(r.err);
         return 1;
     }
-    Str cap_err = check_dep_capabilities(r.deps, grant_families(m.grant));
+    Str cap_err = check_dep_capabilities(r.deps, m.grant);
     if (cap_err != "") {
         eprintln(cap_err);
         return 1;
@@ -1631,7 +1727,12 @@ Int cmd_build(Str manifest_path, Str driver_bin, Str rtc) {
         return 2;
     }
     Str rtx = if (rtc == "") { "" } else { " -rt " + rtc };
-    Str cmd = driver_bin + " " + root + " -o " + out + rtx + " -depmap " + depmap_path;
+    NativeFlags nf = native_flags(m, pkg_dir, r.deps);
+    if (nf.err != "") {
+        eprintln("error: " + nf.err);
+        return 1;
+    }
+    Str cmd = driver_bin + " " + root + " -o " + out + rtx + " -depmap " + depmap_path + nf.flags;
     Int rc = process.run(cmd);
     if (rc != 0) {
         eprintln("error: build failed");

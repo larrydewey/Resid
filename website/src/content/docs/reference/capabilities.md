@@ -23,6 +23,7 @@ therefore enters a program only at `main` or a `test` block.
 | `network` | the TCP builtins |
 | `terminal` | the terminal builtins (`resid_term_*`) and `lib/readline.resid` |
 | `clock` | the `clock` provider and `lib/clock.resid` |
+| `native_<m>` | calls into [native module](/Resid/reference/native-modules/) `m` (no modes) |
 
 Printing, reading stdin and OS randomness need no capability.
 
@@ -62,7 +63,18 @@ path = "vendor/http"
 capabilities = ["filesystem(readonly)", "network"]
 ```
 
-Source code may only narrow this ceiling, never widen it.
+Source code may only narrow this ceiling, never widen it. The rules that
+keep a ceiling a ceiling:
+
+- Each entry must be **grantable** under the manifest's
+  `[capabilities] grant`, modes included: under
+  `grant = ["filesystem(readonly)"]` a dependency may receive
+  `filesystem(readonly)`, never `filesystem`.
+- A dependency's ceiling for **its own** dependencies must fit inside the
+  ceiling it was given, so authority only narrows down the tree.
+- A dependency **declared twice** (by your manifest and by another
+  dependency's) gets the meet of the ceilings, the narrowest per family,
+  and every pinned key either declaration names must verify.
 
 ## Diagnostics
 

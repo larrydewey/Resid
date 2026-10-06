@@ -44,6 +44,7 @@ static binary with clang. The default output is `a.out`.
 | `--dump-reduced PATH` | write the residual program as source text |
 | `--dump-graph PATH` | write the parsed graph |
 | `-depmap PATH` | a dependency map from `resid-manifest` |
+| `-native M=PATH.ll` | the artifact of [native module](/Resid/reference/native-modules/) `M` (repeatable) |
 
 ## Commands
 

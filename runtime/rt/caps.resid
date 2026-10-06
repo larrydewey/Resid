@@ -22,8 +22,10 @@ pub Int cap_top_reps_set(Int r) { Int d = cap_depth_get(); return if (d > 0) { s
 @export("resid_cap_enter", "void(ptr,i64)")
 pub Int rt_cap_enter(Int caps, Int n) {
     Int d = ld64(cap_depth_at());
-    Int m0 = if (caps != 0 && n > 0) { n } else { 0 };
-    Int m = if (m0 > cap_max_set()) { cap_max_set() } else { m0 };
+    Int m = if (caps != 0 && n > 0) { n } else { 0 };
+    // A frame holds at most cap_max_set() entries; dropping the rest would
+    // refuse calls the program was granted, so a longer set is an error.
+    if (m > cap_max_set()) { return rt_abort("capability: a sandbox grants more than RESID_CAP_MAX_SET (64) capabilities"); }
     // Re-entering the set already on top (recursion inside one sandbox)
     // changes nothing it allows, so it costs a count, not a frame.
     if (d > 0 && cap_same_set(d - 1, caps, m)) { return st64(cap_reps() + (d - 1) * 8, ld64(cap_reps() + (d - 1) * 8) + 1); }

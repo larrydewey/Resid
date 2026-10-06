@@ -1192,6 +1192,8 @@ Families:
   network      TCP builtins
   terminal     TTY and raw-mode builtins
   process      also the native debugger builtins
+  native_<m>   a call into native module m (§47); one
+               family per module, with no modes
 
 network(readonly) covers connecting out, listening on
 127.0.0.1, accepting, sending and receiving: everything a
@@ -1226,6 +1228,18 @@ capabilities any dependency may receive:
 
 This is a ceiling. Source code may only further restrict;
 it may never enlarge the set.
+
+Every entry must be grantable under the manifest's
+[capabilities] grant, modes included: a read-only grant
+covers only a read-only entry, so `filesystem` is refused
+under `filesystem(readonly)`. The ceiling a dependency
+writes for one of its own dependencies must be grantable
+under the ceiling it was itself given, so authority only
+narrows down the dependency tree. A dependency that two
+packages declare receives the meet of every ceiling given
+to it (per family; read-only when either is), whichever
+declaration resolution reaches first, and every pinned key
+any declaration names must verify.
 
 --------------------------------------------------
 21.2  Source-Level Attenuation
@@ -1391,11 +1405,12 @@ Distribution units are content-addressed archives.
 28.1  Package Signature
 --------------------------------------------------
 
-A package archive holds every .resid and .toml file of
-the package, sorted by path, so its SHA-256 content hash
-covers the source tree and the manifest (name, version,
-dependencies, declared capabilities) and resid.lock
-(dependency hashes).
+A package archive holds every .resid, .toml and .ll file of
+the package (the last are native module artifacts, §47),
+sorted by path, so its SHA-256 content hash covers the
+source tree, the code it links, and the manifest (name,
+version, dependencies, declared capabilities) and
+resid.lock (dependency hashes).
 
 A published package carries an Ed25519 signature over the
 hex content hash (<name>-<version>.resid-sig beside the
@@ -1464,7 +1479,9 @@ Before a package is accepted into a build:
   4. All dependency hashes must match the resolved
      artifacts.
   5. Required capabilities must be grantable under the
-     current manifest policy.
+     current manifest policy, modes included (§21.1).
+  6. Each native module artifact must have the SHA-256
+     its manifest pins (§35, §47).
 
 Failure of any check rejects the package.
 
@@ -2032,6 +2049,7 @@ Provenance (CDDL; the COSE_Sign1 payload, §33.1):
                  sources: [* file], code: bstr,
                  ? graph: bstr, ? notes: bstr,
                  ? cache: bstr, grant: [* tstr],
+                 ? native: { * tstr => bstr },
                  output: tstr, ? compiler: bstr }
 
 Hashes are SHA-256. code is the hash of the binary before
@@ -2041,6 +2059,11 @@ compiler binary that produced the build; grant is main's
 declared authority (§19), one entry per capability as
 `family` or `family(readonly)` -- authority enters a
 program only at main, so this is the whole program's.
+native maps each native module the binary links (§47) to
+the SHA-256 of its artifact as given, before the compiler
+rewrote it; like grant it is ATTESTATION: the code hash
+covers the linked result, and the signer names the
+artifact it came from.
 
 ResidualNotes is a projection of the graph: one note for
 each residual node, reachable from the residual roots,
@@ -2078,6 +2101,10 @@ resid.toml:
   path = "vendor/http"
   capabilities = ["filesystem(readonly)"]
 
+  [native.zlib]
+  path   = "native/zlib.ll"
+  sha256 = "<64 lowercase hex digits>"
+
   [reduction]
   residual_notes        = true
   residual_notes_format = "cbor"
@@ -2092,6 +2119,15 @@ resid.toml:
   require_signatures = true
 
 Profiles: debug, release, check.
+
+[native.<m>] names the artifact of native module m (§47)
+for the package's own @link functions: path (relative to
+the package, ending in .ll) and sha256 are both required,
+and the build refuses an artifact whose hash differs. A
+module name may be claimed by one package of a build. The
+consumer grants a dependency the module's family through
+its ceiling like any other (`capabilities =
+["native_<m>"]`).
 
 
 ==================================================
@@ -2455,6 +2491,15 @@ storage of their own. A result or a loop's carried value is
 copied when its frame ends; the casts to Str and Bytes copy
 the text, since the heap value may outlive the frame.
 
+v3.11: native modules (§47). `@link("m")` binds a function
+to code compiled from another language. Its calls are
+effects of the family native_m and run in a process that
+holds no authority at all. Manifest ceilings (§21.1) now
+compare modes, bound a dependency's own dependencies by
+its ceiling, and take the meet when a dependency is
+declared twice; package archives carry .ll artifacts
+(§28.1) and the provenance record names them (§34).
+
 
 ==================================================
 42. NUMERIC INTEROPERABILITY SUMMARY
@@ -2507,6 +2552,10 @@ the text, since the heap value may outlive the frame.
     to entries whose capabilities fit the sandbox.
   - Every function's uses are granted by its @requires
     or its sandbox; authority starts at main (§20).
+  - A native module is a family of its own (native_<m>);
+    its code runs in a process the kernel confines to
+    computation (§47), so the family grants no other
+    authority.
 
 
 ==================================================
@@ -2830,6 +2879,146 @@ type, written or inferred ([v, v], Some(v)) (E0411), and a
 lambda or spawn region cannot capture one (E0411); pass it
 as an argument instead. An f-string does not show one
 directly; interpolate v.to_list().
+
+==================================================
+47. NATIVE MODULES
+==================================================
+
+A native module is code written in another language and
+compiled to LLVM IR text: a library Resid does not have,
+or an algorithm already written. A program binds it with
+@link and calls it like any function. It changes none of
+the laws: a native call is a provider read (Law 8), an
+effect (Laws 9, 10) that is never reduced, authorized by a
+capability (Law 14), and the native code itself holds no
+authority whatever.
+
+--------------------------------------------------
+47.1  Binding
+--------------------------------------------------
+
+  @link("zlib")
+  Int adler32(Bytes(4096) data, Int len) {}
+
+  @requires(native_zlib)
+  Int main() { ... adler32(block, n) ... }
+
+  - The argument is one string literal: lowercase
+    letters, digits and `_`, starting with a letter, at
+    most 32 bytes. It names the module and its family,
+    native_zlib.
+  - Only on a top-level function that is not generic and
+    carries no @requires, @needs, @import or @export
+    (E0234). The body is empty, `{}` (E0234): the module
+    supplies it. The C symbol is the function's declared
+    name.
+  - Not in the standard library, the tools or the
+    runtime (E0232): they stay Resid.
+  - The function's own use is native_<m>, carried to every
+    caller by E0219, to spawn lists by E0214 and bounded by
+    sandboxes and manifest ceilings (E0211, E0212, E0218)
+    exactly like any family. The family has no modes
+    (`native_m(readonly)` is refused) and a bare `native`
+    is not a family.
+
+--------------------------------------------------
+47.2  Types
+--------------------------------------------------
+
+Only values with a fixed byte form cross (E0233
+otherwise):
+
+  Resid                C parameter       C result
+  Bool                 bool              bool
+  Int, Int(64)         int64_t           int64_t
+  Int(8|16|32)         int8_t ...        int8_t ...
+  UInt, UInt(64)       uint64_t          uint64_t
+  UInt(8|16|32)        uint8_t ...       uint8_t ...
+  Float, Float(64)     double            double
+  Float(32)            float             float
+  Str(N)               const char *s,    void, with
+                       int64_t cap       char *out,
+                       (N + 1 bytes,     int64_t cap
+                       NUL-terminated)   appended
+  Bytes(N)             const uint8_t *b, void, with
+                       int64_t cap       uint8_t *out,
+                       (exactly N bytes) int64_t cap
+                                         appended
+  Void                 -                 void
+
+N is at most 16777216. A pointer the native code receives
+points into its own copy of the value, never into the
+program.
+
+--------------------------------------------------
+47.3  Artifacts
+--------------------------------------------------
+
+`-native m=<path.ll>` (from [native.m], §35) gives module
+m's artifact: LLVM IR text for x86-64 Linux, freestanding
+(no C library). Before it is linked it is checked and
+rewritten:
+
+  - Every global it references must be its own, an LLVM
+    intrinsic, or memcpy, memmove or memset. It may not
+    declare or reach anything else, the runtime included.
+  - It may not contain module asm, aliases, ifuncs,
+    comdats, thread-local or external globals, section or
+    partition placement, personality functions, quoted
+    names, or definitions of llvm.* globals (constructors
+    and used lists): nothing that could run at load time
+    or be placed outside its functions.
+  - Every symbol it defines is renamed native.<m>.<name>,
+    so it can neither replace nor reach a symbol of the
+    program, the runtime or another module.
+
+A refusal is E0237. Each @link function must be defined by
+its artifact, externally visible (E0235), with exactly the
+C types of 47.2 (E0236).
+
+--------------------------------------------------
+47.4  Execution
+--------------------------------------------------
+
+Each call runs the native function in a fresh process:
+the program's own executable, started again with an empty
+environment and no descriptor but the call's socket.
+Before any native instruction runs, that process disables
+the time-stamp counter, unmaps the vDSO clock pages, and
+installs a seccomp filter: it may read and write its
+socket, map memory that is not executable, and exit.
+Anything else (a file, a socket, a clock, a process, a
+signal, executable memory) kills it. Its CPU time is
+limited to 60 seconds.
+
+The caller sends the arguments, reads the result, and
+checks it as untrusted input: a Bool must be 0 or 1, a
+narrow integer within its type, a Str(N) valid UTF-8 up
+to a NUL within N + 1 bytes. A host that dies, exits
+otherwise, or answers malformed fails the call: the
+calling thread aborts, which inside a spawn region is the
+region's Err(RegionError) (§9, §19).
+
+So a native call:
+
+  - holds no authority beyond native_m itself, and
+    native_m grants nothing but computation;
+  - sees nothing of the program but its arguments;
+  - keeps no state from one call to the next: there is no
+    hidden identity (§4), and equal arguments meet the
+    same code each time;
+  - is never evaluated at compile time.
+
+A call costs a process start (about 2 ms for a small
+program).
+Native code that needs the OS - a display, a device, a
+file - is not a native module; the program does that work
+through its providers.
+
+The process boundary contains native code; it does not
+make native code correct. The answer is checked for type,
+never for meaning.
+
 
 ==================================================
 END OF DOCUMENT

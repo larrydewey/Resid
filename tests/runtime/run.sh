@@ -42,6 +42,20 @@ if grep -nE 'resid_raw_|resid_(arena|bulk)_(push|pop)|resid_list_str_persist_cop
 else
     pass=$((pass + 1))
 fi
+# A native module (spec §47) is bound by a program or package, never by
+# the standard library, the tools or the runtime (E0232); and lib/ and
+# tools/ name no native family.
+mkdir -p "$W/nat/lib" "$W/nat/tools" "$W/nat/runtime/rt"
+printf '@link("tiny")\npub Int tiny_add(Int a, Int b) {}\n' > "$W/nat/lib/bind.resid"
+printf 'import "lib/bind.resid";\n@requires(native_tiny)\nInt main() { return tiny_add(1, 2); }\n' > "$W/nat/main.resid"
+printf '@link("tiny")\nInt tiny_add(Int a, Int b) {}\nInt main() { return 0; }\n' > "$W/nat/tools/t.resid"
+nat_ok=1
+(cd "$ROOT" && "$COMPILER" "$W/nat/main.resid" -o "$W/nat/m") > "$W/nat1.log" 2>&1; grep -q "E0232" "$W/nat1.log" || nat_ok=0
+(cd "$ROOT" && "$COMPILER" "$W/nat/tools/t.resid" -o "$W/nat/t") > "$W/nat2.log" 2>&1; grep -q "E0232" "$W/nat2.log" || nat_ok=0
+cp "$W/nat/tools/t.resid" "$W/nat/runtime/rt/x.resid"
+(cd "$ROOT" && "$COMPILER" "$W/nat/runtime/rt/x.resid" --runtime-module -o "$W/nat/r") > "$W/nat3.log" 2>&1; grep -q "E0232" "$W/nat3.log" || nat_ok=0
+grep -nE '@link\(|@requires\([^)]*native_' "$ROOT"/lib/*.resid "$ROOT"/tools/*.resid > "$W/natlint.out" && nat_ok=0
+if [ "$nat_ok" = 1 ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL @link outside a program was not refused (E0232): $(grep -h -m1 -i error "$W"/nat*.log | head -1) $(head -1 "$W/natlint.out")"; fi
 # `residc test`: the generated test entry point is a complete process.
 if (cd "$ROOT" && "$COMPILER" test examples/math_test.resid) > "$W/tm.log" 2>&1 && grep -q "Failures: 0 | Passed: 6" "$W/tm.log"; then
     pass=$((pass + 1))

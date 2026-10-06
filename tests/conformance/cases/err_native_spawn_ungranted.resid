@@ -1,0 +1,8 @@
+// A spawn region grants only its list (E0214).
+@link("tiny") Int tiny_add(Int a, Int b) {}
+@requires(native_tiny)
+Int main() {
+    Result(Int, RegionError) r = spawn () { return tiny_add(rt 1, 2); };
+    Int v = r else { 0 };
+    return v;
+}

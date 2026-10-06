@@ -1,0 +1,6 @@
+// A native call is an effect (Laws 9, 10): with literal arguments it still
+// runs the module, which answers a + b + 1, never the empty body.
+@link("tiny") Int tiny_add(Int a, Int b) {}
+
+@requires(native_tiny)
+Int main() { println(f"{tiny_add(2, 3)}"); return 0; }

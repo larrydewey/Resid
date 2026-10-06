@@ -28,7 +28,17 @@ capabilities = ["network"]
 [signing]
 keyring = "keys/"
 require_signatures = true
+
+[native.zlib]
+path   = "native/zlib.ll"
+sha256 = "<64 lowercase hex digits>"
 ```
+
+Each dependency's `capabilities` must be grantable under `grant`, modes
+included, and a dependency's own dependencies get at most its ceiling
+([capabilities](/Resid/reference/capabilities/#manifests)). `[native.<m>]`
+pins a [native module](/Resid/reference/native-modules/)'s artifact by
+SHA-256; the build refuses a changed one and passes `-native` for it.
 
 A `version =` dependency is fetched from the registry, named either as a
 directory (`[registry] path`) or as an `http://` or `https://` base URL
@@ -131,7 +141,7 @@ searched.
 | Command | |
 |---|---|
 | `resid-pkg keygen <secret.hex> <pub.hex>` | an Ed25519 key pair |
-| `resid-pkg pack <dir> <out>` | a content-addressed archive of the package's `.resid` and `.toml` files, and its README, LICENSE (or LICENCE), CHANGELOG, NOTICE and COPYING at the root (bare, `.md`, `.markdown` or `.txt`) |
+| `resid-pkg pack <dir> <out>` | a content-addressed archive of the package's `.resid`, `.toml` and `.ll` (native module) files, and its README, LICENSE (or LICENCE), CHANGELOG, NOTICE and COPYING at the root (bare, `.md`, `.markdown` or `.txt`) |
 | `resid-pkg sign <out> <keyfile>` | sign an archive's content hash |
 | `resid-pkg sign-dir <dir> <keyfile>` | sign a path dependency in place |
 | `resid-pkg checksig <out> <pubkey-hex>` | verify a signature |

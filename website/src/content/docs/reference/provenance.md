@@ -15,7 +15,9 @@ notes). It is appended to the binary:
 The payload records the toolchain, the profile, the sources, the code
 hash, the sidecar hashes, the hash of the compiler that built it, the
 grant (`main`'s declared `@requires`, which is the whole program's
-authority) and the output name. A detached copy is written as
+authority), the SHA-256 of each linked
+[native module](/Resid/reference/native-modules/) artifact, and the output
+name. A detached copy is written as
 `<artifact>.resid-prov.cbor`.
 The payload may be encrypted (COSE_Encrypt0, ChaCha20-Poly1305) with
 deterministic nonces, so builds stay reproducible.
@@ -75,7 +77,7 @@ anchored.
 
 ## Packages
 
-Package archives hold every `.resid` and `.toml` file sorted by path. A
+Package archives hold every `.resid`, `.toml` and `.ll` file sorted by path. A
 published package carries an Ed25519 signature over its content hash;
 before a package is accepted into a build, its hash is recomputed, its
 signature verified against the project keyring or a pinned key, its
