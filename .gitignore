@@ -16,9 +16,15 @@ crates/residc/.resid-cache.cbor
 build/boot/*
 !build/boot/seed.ll
 
-# Compiler/test artifacts dropped next to sources by residc and boot.sh
+# Compiler/test artifacts dropped next to sources by residc and boot.sh.
+# LLVM IR is NOT ignored wholesale: the native-module fixtures under
+# tests/conformance/native/ are hand-written inputs to the E0235-E0237
+# cases (only tiny.ll and esc.ll are generated, by build.sh), so they have
+# to be tracked or a fresh checkout cannot run them.
+a.out*.ll
+*.testbin.ll
+*.native.*.ll
 /residc
-*.ll
 *.testbin
 __pycache__/
 
@@ -32,3 +38,4 @@ bench/suite/src/**/out/
 bench/suite/src/**/target/
 bench/suite/src/**/obj/
 bench/suite/src/**/bin/
+bench/**/*.ll
