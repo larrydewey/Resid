@@ -293,6 +293,32 @@ re-entry) and `whistle` (a generalized specialization), recorded against
 the call and inherited along derive edges. Self-compile: 2,517 budget and
 605 whistle reasons; debug peak 690MB.
 
+### 0zw. The depmap says whether a dependency has a ceiling (2026-10-08)
+
+Found while making `resid-book` import the Datastar SDK by package name.
+`resid-manifest depmap` wrote `name::root::caps` for *every* dependency, so
+a dependency that declares no `capabilities` was indistinguishable from one
+bounded by nothing. The compiler read the empty field as a ceiling and
+compiled the module inside `sandbox () { ... }` — an empty grant, so the
+package-name import of an unbounded dependency did not compile at all
+(default arguments inside the module stopped parsing). Two consumers hit it:
+`resid-book` and `resid-datastar`'s own UI.
+
+`depmap_line` now writes the third field only when the manifest declared a
+ceiling, and carries `has_caps` from the TOML (`toml_has`). Nothing enforced
+before is enforced less:
+
+| manifest | depmap line | meaning |
+|---|---|---|
+| no `capabilities` | `name::root` | no ceiling |
+| `capabilities = []` | `name::root::` | the empty grant — enforced (E0212) |
+| `capabilities = ["filesystem(readonly)"]` | `name::root::filesystem(readonly)` | that ceiling |
+
+`tests/pkg/run.sh` is 97/0, and the three ceiling checks
+(`ceiling not enforced`, `a second, narrower ceiling was ignored`,
+`a dependency used a native module its ceiling lacks`) are what pin the
+empty-ceiling case down.
+
 ### 0zv. Native modules, and manifest ceilings that hold (2026-10-06)
 
 **Native modules (spec §47, `PLAN-native-modules.md` rev 2).**

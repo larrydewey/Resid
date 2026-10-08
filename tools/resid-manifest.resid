@@ -222,6 +222,20 @@ Bool toml_bool(List(TomlEntry) entries, Str section, Str key, Bool default_val) 
     if (v.kind == "bool") { return v.bool_val; }
     return default_val;
 }
+// Does the section declare the key at all? `capabilities = []` and no
+// `capabilities` are both an empty list, but they mean opposite things: an
+// empty ceiling, and no ceiling.
+Bool toml_has(List(TomlEntry) entries, Str section, Str key) {
+    return toml_has_at(entries, 0, section, key);
+}
+
+Bool toml_has_at(List(TomlEntry) entries, Int i, Str section, Str key) {
+    if (i >= entries.len()) { return false; }
+    TomlEntry e = entries[i];
+    if (e.section == section && e.key == key) { return true; }
+    return toml_has_at(entries, i + 1, section, key);
+}
+
 List(Str) toml_list(List(TomlEntry) entries, Str section, Str key) {
     List(Str) e = [];
     TomlVal fb = TomlVal {.kind = "list", .str_val = "", .bool_val = false, .list_val = e};
@@ -270,7 +284,7 @@ List(Str) path_fold_at(List(Str) segs, Int i, List(Str) acc) {
 
 // ─── Manifest assembly ──────────────────────────────────────────────
 
-type Dependency = { Str name; Str path; Str version; List(Str) capabilities; Str pubkey; };
+type Dependency = { Str name; Str path; Str version; List(Str) capabilities; Bool has_caps; Str pubkey; };
 // `[native.<module>] path, sha256`: a native module's artifact (spec §47).
 type NativeEntry = { Str module; Str path; Str sha256; };
 type Manifest = {
@@ -286,6 +300,7 @@ Dependency build_dep(List(TomlEntry) entries, Str name) {
         .path = toml_str(entries, sec, "path", ""),
         .version = toml_str(entries, sec, "version", ""),
         .capabilities = toml_list(entries, sec, "capabilities"),
+        .has_caps = toml_has(entries, sec, "capabilities"),
         .pubkey = toml_str(entries, sec, "pubkey", "")
     };
 }
@@ -1056,7 +1071,7 @@ IndexLoadResult load_verify_index(Registry reg, Str pubkey_hex) {
 // A resolved path dependency (post-walk — the Rust equivalent's
 // `Dependency`; that name is already this file's raw manifest-declared
 // entry, so this one is `ResolvedDep`).
-type ResolvedDep = { Str name; Str dir; Str root; List(Str) capabilities; Str pinned_key; };
+type ResolvedDep = { Str name; Str dir; Str root; List(Str) capabilities; Bool has_caps; Str pinned_key; };
 type SeenEntry = { Str name; Str dir; };
 type DepResolveResult = { Bool ok; Str err; List(ResolvedDep) deps; List(SeenEntry) seen; };
 
@@ -1070,7 +1085,7 @@ DepResolveResult dep_error(DepResolveResult acc, Str err) {
 }
 
 @requires(filesystem, network, clock(readonly))
-DepResolveResult collect_dep_path(Str name, Str dep_dir0, List(Str) caps, Str pinned_key, Registry reg, TrustPolicy tp, DepResolveResult acc, Int depth) {
+DepResolveResult collect_dep_path(Str name, Str dep_dir0, List(Str) caps, Bool has_caps, Str pinned_key, Registry reg, TrustPolicy tp, DepResolveResult acc, Int depth) {
     // One directory reached along two relative paths is one dependency.
     Str dep_dir = path_fold(dep_dir0);
     if (!acc.ok) { return acc; }
@@ -1079,7 +1094,7 @@ DepResolveResult collect_dep_path(Str name, Str dep_dir0, List(Str) caps, Str pi
     if (prev_dir != "") {
         // Reached again: keep this declaration's ceiling and pinned key too,
         // so the narrowest ceiling binds and every pin is checked.
-        if (prev_dir == dep_dir) { return DepResolveResult {.ok = true, .err = "", .deps = acc.deps.concat([ResolvedDep {.name = name, .dir = dep_dir, .root = "", .capabilities = caps, .pinned_key = pinned_key}]), .seen = acc.seen}; }
+        if (prev_dir == dep_dir) { return DepResolveResult {.ok = true, .err = "", .deps = acc.deps.concat([ResolvedDep {.name = name, .dir = dep_dir, .root = "", .capabilities = caps, .has_caps = has_caps, .pinned_key = pinned_key}]), .seen = acc.seen}; }
         return dep_error(acc, "dependency name '" + name + "' claimed by both '" + prev_dir + "' and '" + dep_dir + "'");
     }
     Str manifest_path = dep_dir + "/resid.toml";
@@ -1101,12 +1116,12 @@ DepResolveResult collect_dep_path(Str name, Str dep_dir0, List(Str) caps, Str pi
     DepResolveResult acc2 = DepResolveResult {.ok = true, .err = "", .deps = acc.deps, .seen = acc.seen.concat([SeenEntry {.name = dm.name, .dir = dep_dir}])};
     DepResolveResult acc3 = collect_sub_deps_at(dm.dependencies, 0, dep_dir, dm.name, caps, reg, tp, acc2, depth + 1);
     if (!acc3.ok) { return acc3; }
-    ResolvedDep rd = ResolvedDep {.name = dm.name, .dir = dep_dir, .root = root, .capabilities = caps, .pinned_key = pinned_key};
+    ResolvedDep rd = ResolvedDep {.name = dm.name, .dir = dep_dir, .root = root, .capabilities = caps, .has_caps = has_caps, .pinned_key = pinned_key};
     return DepResolveResult {.ok = true, .err = "", .deps = acc3.deps.concat([rd]), .seen = acc3.seen};
 }
 
 @requires(filesystem, network, clock(readonly))
-DepResolveResult collect_dep_version(Str name, Str version, Registry reg, Str root_pkg_dir, List(Str) caps, Str pinned_key, TrustPolicy tp, DepResolveResult acc, Int depth) {
+DepResolveResult collect_dep_version(Str name, Str version, Registry reg, Str root_pkg_dir, List(Str) caps, Bool has_caps, Str pinned_key, TrustPolicy tp, DepResolveResult acc, Int depth) {
     if (!registry_configured(reg)) {
         return dep_error(acc, "dependency '" + name + "': version '" + version + "' requested but no [registry] path or url is configured");
     }
@@ -1134,7 +1149,7 @@ DepResolveResult collect_dep_version(Str name, Str version, Registry reg, Str ro
     }
     Int _w = write_lock_entry(lock_path, LockEntry {.name = name, .version = version, .sha256 = cr.sha256});
     // Its key was checked against the registry signature above.
-    return collect_dep_path(name, cr.cache_dir, caps, "", reg, tp, acc, depth);
+    return collect_dep_path(name, cr.cache_dir, caps, has_caps, "", reg, tp, acc, depth);
 }
 
 @requires(filesystem, network, clock(readonly))
@@ -1152,9 +1167,9 @@ DepResolveResult collect_sub_deps_at(List(Dependency) subs, Int i, Str parent_di
     // package, extracted where its sibling checkouts are not).
     Bool use_path = sub.path != "" && (sub.version == "" || filesystem.is_dir(parent_dir + "/" + sub.path));
     DepResolveResult acc2 = if (use_path) {
-        collect_dep_path(sub.name, parent_dir + "/" + sub.path, sub.capabilities, sub.pubkey, reg, tp, acc, depth)
+        collect_dep_path(sub.name, parent_dir + "/" + sub.path, sub.capabilities, sub.has_caps, sub.pubkey, reg, tp, acc, depth)
     } else if (sub.version != "") {
-        collect_dep_version(sub.name, sub.version, reg, if (reg.home != "") { reg.home } else { parent_dir }, sub.capabilities, sub.pubkey, tp, acc, depth)
+        collect_dep_version(sub.name, sub.version, reg, if (reg.home != "") { reg.home } else { parent_dir }, sub.capabilities, sub.has_caps, sub.pubkey, tp, acc, depth)
     } else {
         dep_error(acc, "dependency '" + sub.name + "': needs either 'path' or 'version'")
     };
@@ -1211,7 +1226,7 @@ List(ResolvedDep) merge_deps(List(ResolvedDep) ds, Int i, List(ResolvedDep) acc)
     if (i >= ds.len()) { return acc; }
     ResolvedDep d = ds[i];
     if (d.root == "") { return merge_deps(ds, i + 1, acc); }
-    ResolvedDep m = ResolvedDep {.name = d.name, .dir = d.dir, .root = d.root, .capabilities = meet_all(ds, d.name, 0, d.capabilities), .pinned_key = d.pinned_key};
+    ResolvedDep m = ResolvedDep {.name = d.name, .dir = d.dir, .root = d.root, .capabilities = meet_all(ds, d.name, 0, d.capabilities), .has_caps = d.has_caps, .pinned_key = d.pinned_key};
     return merge_deps(ds, i + 1, acc.concat([m]));
 }
 
@@ -1589,7 +1604,14 @@ Int cmd_deps(Str manifest_path) {
 // resolves to the same file the Rust pipeline would pick.
 // "name::root::caps": the driver compiles the dependency inside
 // `sandbox (caps)`, its manifest ceiling (spec §21.1).
+// A line is "name::root", or "name::root::caps" when the manifest bounds
+// the dependency. The field is present exactly when the manifest declared
+// one: `capabilities = []` is an empty ceiling (the dependency may do
+// nothing), and no `capabilities` at all is no ceiling (unbounded). The
+// compiler tells them apart by the field's presence, so it must not be
+// written when there is nothing to say.
 Str depmap_line(ResolvedDep d) {
+    if (!d.has_caps) { return d.name + "::" + d.root; }
     return d.name + "::" + d.root + "::" + str_join(d.capabilities, ", ");
 }
 List(Str) depmap_lines_acc(List(ResolvedDep) deps, Int i, List(Str) acc) {
