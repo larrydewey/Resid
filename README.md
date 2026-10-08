@@ -79,9 +79,7 @@ Requirements: Linux on x86-64, LLVM 22+ (`clang`, `lld`), `git`, `bash`.
 ```sh
 git clone https://github.com/larrydewey/Resid.git
 cd Resid
-./boot.sh                                   # builds build/boot/stage2.bin (residc)
-export RESID_HOME="$PWD/build/boot"
-ln -s "$PWD/build/boot/stage2.bin" ~/.local/bin/residc
+./setup.sh                                  # checks prereqs, builds, installs, wires PATH
 
 residc hello.resid -o hello --profile debug # or: residc keygen, then release builds
 ./hello

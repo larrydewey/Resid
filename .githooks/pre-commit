@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Pre-commit: a commit that changes the compiler or runtime must also
+# carry its regenerated bootstrap artifacts (seed.ll, rt.ll, stage2.bin),
+# so the committed seed can never silently drift from the source.
+#
+# Bypass for a legitimately source-only change (wording, comments):
+#   RESID_SEED_UNCHANGED=1 git commit ...
+set -euo pipefail
+
+CORE='^(compiler/|runtime/rt/|boot\.sh)'
+ARTIFACTS=(build/boot/seed.ll build/boot/rt.ll build/boot/stage2.bin)
+
+staged="$(git diff --cached --name-only)"
+[ -z "$staged" ] && exit 0
+
+if echo "$staged" | grep -qE "$CORE"; then
+    missing=0
+    for a in "${ARTIFACTS[@]}"; do
+        if ! echo "$staged" | grep -qx "$a"; then
+            echo "pre-commit: $a is not staged" >&2
+            missing=1
+        fi
+    done
+    if [ "$missing" -eq 1 ]; then
+        if [ "${RESID_SEED_UNCHANGED:-0}" = "1" ]; then
+            echo "pre-commit: RESID_SEED_UNCHANGED=1 set, allowing source-only commit" >&2
+            exit 0
+        fi
+        cat >&2 <<'EOF'
+error: core-system files are staged but the bootstrap artifacts are not.
+
+  If the compiler or runtime source changed, reseed and stage them:
+      ./boot.sh --bootstrap-from-self
+      git add -f build/boot/seed.ll build/boot/rt.ll build/boot/stage2.bin
+
+  If this commit truly does not change the compiled output (docs, comments):
+      RESID_SEED_UNCHANGED=1 git commit ...
+EOF
+        exit 1
+    fi
+fi
+exit 0
