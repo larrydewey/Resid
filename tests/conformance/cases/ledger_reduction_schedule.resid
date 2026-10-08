@@ -1,0 +1,14 @@
+// A fee schedule written as an if-chain (not a match) is compile-time
+// knowledge: the reducer folds every call to a literal, and `known` proves
+// it without running the program (spec §36).
+Int schedule_bps(Int klass) {
+    return if (klass <= 0) { 25 } else { if (klass == 1) { 50 } else { 100 } };
+}
+
+Int main() {
+    comptime_print(schedule_bps(2));
+    comptime_print(schedule_bps(0) + schedule_bps(1));
+    known(schedule_bps(1));
+    println(f"{schedule_bps(2)}");
+    return 0;
+}

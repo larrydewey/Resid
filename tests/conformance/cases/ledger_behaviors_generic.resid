@@ -1,0 +1,42 @@
+// The ledger names how an account is shown and ordered (behaviors, not
+// interfaces) and totals any type whose Amount behavior exists.
+type Account = Cash | Checking | Savings | Fees;
+
+Str acct_name(Account a) {
+    return match a {
+        Cash => "cash", Checking => "checking", Savings => "savings", Fees => "fees"
+    };
+}
+Show(Account) = acct_name;
+
+Int acct_rank(Account a) {
+    return match a { Cash => 0, Checking => 1, Savings => 2, Fees => 3 };
+}
+Int acct_cmp(Account a, Account b) { return acct_rank(a) - acct_rank(b); }
+Account acct_least(Account a, Account b) { return if (acct_rank(a) <= acct_rank(b)) { a } else { b }; }
+Account acct_greatest(Account a, Account b) { return if (acct_rank(a) >= acct_rank(b)) { a } else { b }; }
+Ord(Account) = { .compare = acct_cmp, .least = acct_least, .greatest = acct_greatest };
+
+behavior Amount(T) { Dec(4) amount(T e); }
+type Entry = { Account debit; Account credit; Dec(4) amount; };
+Dec(4) entry_amount(Entry e) { return e.amount; }
+Amount(Entry) = entry_amount;
+
+@needs(Amount(T))
+Dec(4) total(List(T) xs) { return total_at(xs, 0, d4(0)); }
+@needs(Amount(T))
+Dec(4) total_at(List(T) xs, Int i, Dec(4) acc) {
+    if (i >= xs.len()) { return acc; }
+    return total_at(xs, i + 1, acc + amount(xs[i]));
+}
+
+Int main() {
+    List(Entry) es = [
+        Entry {.debit = Cash, .credit = Checking, .amount = 12.34m},
+        Entry {.debit = Savings, .credit = Checking, .amount = 5.000m}
+    ];
+    println(f"{sort([Fees, Cash, Savings])}");
+    println(f"{total(es)}");
+    println(f"{acct_name(acct_least(Fees, Cash))}");
+    return 0;
+}

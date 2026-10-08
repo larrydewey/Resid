@@ -1,11 +1,23 @@
-# Builds the documentation site (website/, Astro Starlight) and publishes it
-# to GitHub Pages at https://larrydewey.github.io/Resid/.
+# Builds the documentation site and publishes it to GitHub Pages at
+# https://larrydewey.github.io/Resid/.
+#
+# The site is exported by resid-book (the book/docs server, in Resid, on
+# resid-datastar): a self-hosted compiler exports every page to static HTML
+# plus the assets, which is what Pages serves. There is no Node here.
+#
+# resid-book lives beside the repository; this workflow checks it out next
+# to it, along with resid-datastar and the two libraries that SDK imports.
 name: docs
 
 on:
   push:
     branches: [master]
-    paths: ["website/**", "editors/vscode/syntaxes/**", ".github/workflows/docs.yml"]
+    paths:
+      - "website/**"
+      - "compiler/driver.resid"
+      - "runtime/rt/rt.resid"
+      - "lib/**"
+      - ".github/workflows/docs.yml"
   workflow_dispatch:
 
 permissions:
@@ -22,18 +34,54 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
         with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: website/package-lock.json
-      - run: npm ci
-        working-directory: website
-      - run: npx astro build
-        working-directory: website
+          path: resid
+
+      # The book server and the Datastar SDK it renders with, side by side.
+      - uses: actions/checkout@v4
+        with:
+          repository: larrydewey/resid-book
+          path: resid-book
+      - uses: actions/checkout@v4
+        with:
+          repository: larrydewey/resid-datastar
+          path: resid-datastar
+      - uses: actions/checkout@v4
+        with:
+          repository: larrydewey/resid-json
+          path: resid-json
+      - uses: actions/checkout@v4
+        with:
+          repository: larrydewey/resid-serial
+          path: resid-serial
+      - uses: actions/checkout@v4
+        with:
+          repository: larrydewey/resid-toml
+          path: resid-toml
+
+      # The self-hosted compiler: link the committed seed, then compile the
+      # driver with it (boot.sh's own self-hosting check runs there too).
+      - name: Build the compiler
+        working-directory: resid
+        run: ./boot.sh
+
+      # The dependency map resid-book's imports resolve through.
+      - name: Dependency map
+        run: |
+          cd resid
+          build/boot/stage2.bin tools/resid-manifest.resid -o target/resid-manifest --profile debug
+          cd ../resid-book
+          ../resid/target/resid-manifest depmap resid.toml deps.txt
+
+      - name: Export the site
+        working-directory: resid-book
+        run: |
+          ../resid/build/boot/stage2.bin src/site.resid -o resid-book --profile release -depmap deps.txt
+          ./resid-book export ../resid/website/book.toml ../resid/website/dist
+
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: website/dist
+          path: resid/website/dist
 
   deploy:
     needs: build

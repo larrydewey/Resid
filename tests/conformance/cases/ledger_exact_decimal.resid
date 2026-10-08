@@ -1,0 +1,10 @@
+// The ledger's money is an exact Dec(4) (spec §6.6a): four significant
+// decimal digits, rounded half away from zero, never a binary float.
+Int main() {
+    Dec(4) a = 12.34m;
+    Dec(4) b = 0.3000m;
+    println(f"{a + b}");
+    println(f"{d4(1) / d4(3)}");
+    println(f"{a == 12.34m}");
+    return 0;
+}

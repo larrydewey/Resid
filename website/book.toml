@@ -1,0 +1,91 @@
+# book.toml — the Resid documentation, served by resid-book.
+#
+#   ../resid-book/resid-book book.toml          # from this directory
+#
+# `base = "/Resid"` because the published site lives under that path on
+# GitHub Pages and every link in the content is written for it. The server
+# strips the prefix when routing, so a page's own links work unchanged.
+[book]
+title = "Resid"
+tagline = "What Remains is What Matters"
+base = "/Resid"
+content = "src/content/docs"
+assets = "src/assets,public"
+repository = "https://github.com/larrydewey/Resid"
+edit_base = "https://github.com/larrydewey/Resid/edit/master/website/"
+
+# "topic|Label|link" starts a topic, "group|Label" a group inside it, and
+# "page|slug" a page, labelled by its own frontmatter title. An empty slug
+# is the book's home page.
+nav = [
+    "topic|Learn Resid|learn",
+    "group|Start",
+    "page|",
+    "page|learn/install",
+    "page|learn/hello",
+    "group|The language",
+    "page|learn",
+    "page|learn/values",
+    "page|learn/functions",
+    "page|learn/control-flow",
+    "page|learn/collections",
+    "page|learn/types",
+    "page|learn/errors",
+    "page|learn/strings",
+    "page|learn/modules",
+    "page|learn/capabilities",
+    "page|learn/concurrency",
+    "page|learn/testing",
+    "group|Going further",
+    "page|learn/reduction",
+    "page|learn/performance",
+    "page|learn/native",
+    "page|learn/ledger",
+    "page|learn/next",
+
+    "topic|Behaviors|behaviors",
+    "group|Behaviors",
+    "page|behaviors",
+    "page|behaviors/ord",
+    "page|behaviors/show",
+    "page|behaviors/defining",
+    "page|behaviors/generics",
+    "page|behaviors/generic-verbs",
+    "page|behaviors/behavioralizing",
+    "page|behaviors/reference",
+
+    "topic|Reference|reference",
+    "group|Reference",
+    "page|reference",
+    "page|reference/lexical",
+    "page|reference/numbers",
+    "page|reference/types",
+    "page|reference/expressions",
+    "page|reference/statements",
+    "page|reference/functions",
+    "page|reference/patterns",
+    "page|reference/modules",
+    "page|reference/capabilities",
+    "page|reference/concurrency",
+    "page|reference/fixed-capacity",
+    "page|reference/builders",
+    "page|reference/vectors",
+    "page|reference/native-modules",
+    "page|reference/reduction",
+    "page|reference/knowledge-graph",
+    "page|reference/provenance",
+    "page|reference/errors",
+
+    "topic|Stdlib & Tools|tools",
+    "group|Stdlib & Tools",
+    "page|tools",
+    "page|tools/residc",
+    "page|tools/stdlib",
+    "page|tools/providers",
+    "page|tools/http-server",
+    "page|tools/editor",
+    "page|tools/why-graph-debug",
+    "page|tools/fmt-pkg",
+    "page|tools/security",
+    "page|tools/benchmarks"
+]

@@ -121,7 +121,8 @@ lib/          the standard library: crypto, Ed25519, X25519, P-256, RSA, AES-GCM
               and date and time (calendar, spans, instants, IANA zones, strftime, clock)
 tools/        resid-why, resid-graph, resid-debug, resid-fmt, resid-pkg, resid-manifest
 tests/        conformance, reduction, provenance, runtime, graph, package, TLS, HTTP and LSP suites
-examples/     complete programs: an HTTP server, TLS and HTTP/2 clients, a lexer and parser
+examples/     complete programs: a settlement ledger (the crown example), an
+              HTTP server, TLS and HTTP/2 clients, a lexer and parser
 bench/suite/  the cross-language benchmark suite
 website/      the documentation site (Astro Starlight)
 editors/      the VS Code extension

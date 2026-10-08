@@ -43,7 +43,7 @@ export default defineConfig({
 									'learn/testing',
 								],
 							},
-							{ label: 'Going further', items: ['learn/reduction', 'learn/performance', 'learn/native', 'learn/next'] },
+							{ label: 'Going further', items: ['learn/reduction', 'learn/performance', 'learn/native', 'learn/ledger', 'learn/next'] },
 						],
 					},
 					{

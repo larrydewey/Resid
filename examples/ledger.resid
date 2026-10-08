@@ -1,0 +1,161 @@
+// ledger.resid — an attested settlement ledger, in one command.
+//
+//   residc examples/ledger.resid -o ledger \
+//       -native fees=examples/ledger/fees.ll
+//   ./ledger              # demo: post a journal, show net, prove balance
+//   ./ledger report
+//   ./ledger balance
+//   ./ledger post <memo> <debit> <credit> <amount> [escrow-class]
+//   ./ledger explain      # what remained residual, and why
+//
+// Every claim in the header comment above is a feature of the language:
+//
+//   * money is Dec(4) — exact, never a binary float                    (core)
+//   * account display and order are named behaviors                    (core)
+//   * `total` is a generic over any type whose Amount behavior exists  (core)
+//   * posting rules are compile-time knowledge, folded by the reducer  (cmd_demo)
+//   * the fee schedule is untrusted native C, confined to computation  (native_fees)
+//   * the release binary is signed, and `residc verify` re-derives it  (tests)
+//
+// The definitions and their inline tests are in examples/ledger_core.resid
+// (a file with `main` cannot be run through `residc test`).
+
+import "./ledger_core.resid";
+
+// The reductions the compiler performs, written where the reducer reaches
+// them. `schedule_bps` is an if-chain, so each call folds to a literal and
+// the binary carries no schedule code at all; `known` proves it.
+@requires(args, filesystem(readonly), native_fees)
+Int cmd_demo() {
+    comptime_print(schedule_bps(2));
+    comptime_print(schedule_bps(0) + schedule_bps(1));
+    known(schedule_bps(1));
+
+    List(Entry) es = demo_journal();
+    println("=== settlement ledger ===");
+    println("postings:");
+    print_entries(es, 0);
+    println("net by account (credit - debit):");
+    print_net(es);
+    println(f"total posted: {total(es)}");
+    println(f"balanced: {balanced(es)}");
+    return if (balanced(es)) { 0 } else { 1 };
+}
+
+Int print_entries(List(Entry) es, Int i) {
+    if (i >= es.len()) { return 0; }
+    Entry e = es[i];
+    println(f"  {e.memo}  {e.credit} <- {e.debit}  {e.amount}");
+    return print_entries(es, i + 1);
+}
+
+Int print_net(List(Entry) es) {
+    Map(Str, Dec(4)) n = net(es);
+    List(Str) ks = sort(n.keys());
+    return print_net_at(n, ks, 0);
+}
+
+Int print_net_at(Map(Str, Dec(4)) n, List(Str) ks, Int i) {
+    if (i >= ks.len()) { return 0; }
+    Str k = ks[i];
+    println(f"  {k}  {n.get(k) else { d4(0) }}");
+    return print_net_at(n, ks, i + 1);
+}
+
+@requires(args, filesystem(readonly), native_fees)
+Int cmd_report() {
+    return cmd_demo();
+}
+
+@requires(args, filesystem(readonly), native_fees)
+Int cmd_balance() {
+    List(Entry) es = demo_journal();
+    println(f"total posted: {total(es)}");
+    println(f"balanced: {balanced(es)}");
+    return if (balanced(es)) { 0 } else { 1 };
+}
+
+// `post` builds one entry from runtime arguments: the accounts and the
+// amount are residual, and with an escrow class the fee schedule — native,
+// untrusted input — decides the fee. This is the part the compiler could
+// not reduce.
+@requires(args, native_fees)
+Int cmd_post() {
+    if (args.count() < 6) {
+        println("usage: ledger post <memo> <debit> <credit> <amount> [escrow-class]");
+        return 2;
+    }
+    Str memo = args.get(2);
+    Str ds = args.get(3);
+    Str cs = args.get(4);
+    Option(Account) d = acct_parse(ds);
+    Option(Account) c = acct_parse(cs);
+    if (Some(deb) = d) {
+        if (Some(cred) = c) {
+            Dec(4) amt = d4(args.get(5));
+            Entry e = Entry {.memo = memo, .debit = deb, .credit = cred, .amount = amt};
+            println(f"{e.memo}: {e.credit} <- {e.debit} {e.amount}");
+            if (args.count() > 6) {
+                Int klass = str_parse_int(args.get(6));
+                println(f"escrow fee (class {klass}): {escrow_fee(amt, klass)}");
+            }
+            println(f"balances: {balanced([e])}");
+            return 0;
+        } else {
+            println("unknown account: " + cs);
+            return 2;
+        }
+    } else {
+        println("unknown account: " + ds);
+        return 2;
+    }
+}
+
+// The residual notes sidecar is a CBOR array, one tuple per residual fact
+// (compiler/driver.resid's write_notes_cbor). Read the top-level array
+// header for the count; `resid-why` decodes the rest.
+Int cbor_array_len(List(Int) b) {
+    if (b.len() < 1) { return -1; }
+    Int x = b[0];
+    if (x >= 128) {
+        if (x <= 151) { return x - 128; }
+    }
+    if (x == 152) { return if (b.len() > 1) { b[1] } else { -1 }; }
+    if (x == 153) { return if (b.len() > 2) { b[1] * 256 + b[2] } else { -1 }; }
+    if (x == 154) { return if (b.len() > 4) { b[1] * 16777216 + b[2] * 65536 + b[3] * 256 + b[4] } else { -1 }; }
+    return -1;
+}
+
+@requires(args, filesystem(readonly), native_fees)
+Int cmd_explain() {
+    Str self = args.get(0);
+    Str side = self + ".resid-notes.cbor";
+    if (!filesystem.exists(side)) {
+        println("no residual notes at " + side);
+        println("build with --profile debug to record them, then run:");
+        println("  resid-why " + self + " --summary");
+        return 0;
+    }
+    Int n = cbor_array_len(filesystem.read_bytes(side));
+    println(f"{n} residual note(s) remain in {self}");
+    println("the journal's rule schedule folded away; what stayed residual");
+    println("is the amount (and fee class) that only exist at run time:");
+    println("  resid-why " + self + " --summary");
+    return 0;
+}
+
+@requires(args, filesystem(readonly), native_fees)
+Int main() {
+    Str cmd = if (args.count() > 1) { args.get(1) } else { "demo" };
+    if (cmd == "demo") { return cmd_demo(); }
+    if (cmd == "report") { return cmd_report(); }
+    if (cmd == "balance") { return cmd_balance(); }
+    if (cmd == "post") { return cmd_post(); }
+    if (cmd == "explain") { return cmd_explain(); }
+    if (cmd == "help") {
+        println("usage: ledger [demo|report|balance|explain|post <memo> <debit> <credit> <amount> [escrow-class]]");
+        return 0;
+    }
+    println("usage: ledger [demo|report|balance|explain|post <memo> <debit> <credit> <amount> [escrow-class]]");
+    return 2;
+}
