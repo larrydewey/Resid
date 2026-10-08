@@ -59,24 +59,25 @@ jobs:
           repository: larrydewey/resid-toml
           path: resid-toml
 
-      # The self-hosted compiler: link the committed seed, then compile the
-      # driver with it (boot.sh's own self-hosting check runs there too).
-      - name: Build the compiler
-        working-directory: resid
-        run: ./boot.sh
-
-      # The dependency map resid-book's imports resolve through.
+      # The compiler is the committed artifact, not a build: stage2.bin and
+      # rt.ll ship in the repository. Building it here would need a signing
+      # key (release builds are signed), and the docs workflow has no reason
+      # to re-derive the fixed point.
       - name: Dependency map
+        working-directory: resid
+        env:
+          RESID_HOME: ${{ github.workspace }}/resid/build/boot
         run: |
-          cd resid
           build/boot/stage2.bin tools/resid-manifest.resid -o target/resid-manifest --profile debug
           cd ../resid-book
           ../resid/target/resid-manifest depmap resid.toml deps.txt
 
       - name: Export the site
         working-directory: resid-book
+        env:
+          RESID_HOME: ${{ github.workspace }}/resid/build/boot
         run: |
-          ../resid/build/boot/stage2.bin src/site.resid -o resid-book --profile release -depmap deps.txt
+          ../resid/build/boot/stage2.bin src/site.resid -o resid-book --profile debug -depmap deps.txt
           ./resid-book export ../resid/website/book.toml ../resid/website/dist
 
       - uses: actions/upload-pages-artifact@v3
