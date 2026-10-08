@@ -68,6 +68,7 @@ jobs:
         env:
           RESID_HOME: ${{ github.workspace }}/resid/build/boot
         run: |
+          mkdir -p target
           build/boot/stage2.bin tools/resid-manifest.resid -o target/resid-manifest --profile debug
           cd ../resid-book
           ../resid/target/resid-manifest depmap resid.toml deps.txt
