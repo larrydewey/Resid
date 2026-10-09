@@ -111,8 +111,11 @@ def rss():
     for l in open(f"/proc/{p.pid}/status"):
         if l.startswith("VmRSS"):
             return int(l.split()[1])
-for i in range(5):
-    change(text + "\n" * i)
+# Warm up with the same messages first: the arenas reach their working
+# size within some twenty edits, and only growth after that is a leak.
+for i in range(30):
+    change(text + "\n" * (i % 3))
+    query("textDocument/hover", 4, 13)
 before = rss()
 for i in range(40):
     change(text + "\n" * (i % 3))

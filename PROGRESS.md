@@ -293,6 +293,31 @@ re-entry) and `whistle` (a generalized specialization), recorded against
 the call and inherited along derive edges. Self-compile: 2,517 budget and
 605 whistle reasons; debug peak 690MB.
 
+### 0zy. Closing the reducer's gaps (2026-10-09, PLAN-reducer-gaps.md)
+
+Measured with the instrumented reducer over 443 programs (the compiler,
+tools, examples, benches, conformance cases); "folds" are top-level calls
+evaluated to a value, "not reducible" the ones that ran into a construct
+the evaluator could not run.
+
+- **Step 1: slices, builtins, wide integers.** `xs[a..b]`, `xs[a..=b]`,
+  `xs[a..]`, `xs[..b]` of known lists (clamped, as `resid_list_slice` does;
+  they were a `bad` result that failed the whole call). abs/min/max/clamp
+  as the expressions lowering expands them to (an integer literal takes
+  the first other integer argument's type), the checked conversions
+  (`i8(x)`, `u64(x)`, `f64(x)`, and casts between Float and integers, a
+  conversion that would trap left residual), `sort` of known integer, Float
+  and Str lists by the runtime's own sort, `str_index_of`, `str_split`,
+  `str_join`, `str_is_float`, `str_parse_float`, `str_sha256`, and the list
+  verbs `with`, `reverse`, `contains`, `sum`. Integers past 64 bits are
+  carried (decimal text, computed in Int(512), magnitude below 2^255): wide
+  literals, UInt(64) values above 2^63, and the wrapping, saturating and
+  checked helpers at every width, so an FNV-1a hash or an Int(128)
+  computation folds. A known Bool is inlined into an f-string.
+  Folds 2,532 -> 3,042; not reducible 1,449 -> 998; `bad` results 124 -> 0.
+  The LSP memory test now warms up with hovers too: the folded prelude
+  text moved the arenas' working size (flat after ~20 edits either way).
+
 ### 0zx. Reduction budgets that count work, and tail calls that loop (2026-10-09)
 
 Goal: reduce as much as possible with no arbitrary cutoff, while staying

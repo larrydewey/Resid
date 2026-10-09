@@ -1,6 +1,7 @@
 # PLAN: closing the reducer's gaps
 
-Status: open (written 2026-10-09, after the budgets rework in PROGRESS §0zx).
+Status: in progress (written 2026-10-09, after the budgets rework in
+PROGRESS §0zx). Step 1 done (PROGRESS §0zy).
 Goal: make compile-time reduction (`compiler/greduce.resid`, helpers in
 `compiler/reduce.resid`) fold everything provable. Budgets are no longer the
 main limit. The limit is now the constructs the evaluator cannot run: one
@@ -42,7 +43,10 @@ Effects (`println`, clock, `read_bytes`, `resid_crypto_random_byte`,
 
 ## Order of work (agreed with the user)
 
-1. **Slices and missing builtins.** Small, and they unblock 13+ programs.
+1. **Slices and missing builtins.** Done: slices, abs/min/max/clamp,
+   conversions, sort, the missing `str_*`, list verbs, and integers past
+   64 bits (carried as text, computed in Int(512)). Float(16/32/128) and
+   Dec stay residual: the evaluator does not carry them.
    - Slices of known lists and strings in `gx_index`: `rangefrom` and
      `a..b`, clamped as the runtime does. Out of range stays residual (it
      traps at run time).

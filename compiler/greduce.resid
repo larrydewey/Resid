@@ -36,7 +36,9 @@ type GV = { Bool k; Str v; Str ty; Int r; Bool ch; Bool bad; List(Int) bs; Str s
 // tfi >= 0 while β-reducing: the result is the call tfi(tvs: tts), a
 // tail call gx_call_user runs in its loop rather than on the stack.
 type GXR = { List(Int) out; Bool dead; Bool ok; Bool ret; Str rv; Str rty; Bool bad; GS st; Int tfi; List(Str) tvs; List(Str) tts; };
-type GXA = { List(Str) vs; List(Str) ts; List(Int) rs; Bool allk; Bool ch; Bool named; Bool bad; GS st; };
+// lits: per argument, 1 for an integer literal (or a negated one) as
+// written, 2 for other arithmetic over literals, 0 otherwise.
+type GXA = { List(Str) vs; List(Str) ts; List(Int) rs; Bool allk; Bool ch; Bool named; Bool bad; GS st; List(Int) lits; };
 type GXN = { GS st; Int id; };
 // dv: derive edges as `id,from,rule;` entries.
 type GXO = { Kg g; Int root; Int nred; Str err; Str notes; Str dv; Str rs; };
@@ -276,6 +278,7 @@ GV gx_expr(GXT ft, Int id, RdE env, GS st) {
     if (k == "field") { return gx_field(ft, id, env, st); }
     if (k == "mcall") { return gx_mcall(ft, id, env, st); }
     if (k == "index") { return gx_index(ft, id, env, st); }
+    if (k == "slice") { return gx_slice(ft, id, env, st); }
     if (k == "list") { return gx_list(ft, id, env, st); }
     if (k == "struct") { return gx_struct(ft, id, env, st); }
     if (k == "map" || k == "set" || k == "emptyb" || k == "lambda") { return gx_unk(id, false, st); }
@@ -313,10 +316,14 @@ GV gx_litv(GS st, Int id) {
 
 GV gx_int_lit(Str text, Int id, GS st) {
     Int n = str_len(text);
-    if (!rd_all_digits(text, 0, n) || n == 0 || n > 19) { return gx_unk(id, false, st); }
-    Str ty = if (n > 18) { "Int(128)" } else { "Int" };
-    if (n == 19 && !rd_digits_le(text, "9223372036854775807", 0, 19)) { return gx_unk(id, false, st); }
-    return gx_kv(rd_itoa(rd_atoi(text)), ty, id, false, st);
+    if (!rd_all_digits(text, 0, n) || n == 0 || n > 78) { return gx_unk(id, false, st); }
+    if (n <= 18) { return gx_kv(rd_itoa(rd_atoi(text)), "Int", id, false, st); }
+    // Past 18 digits a literal is carried wide; it takes the type of the
+    // operand it is written beside (rd_fold) or the slot it flows into.
+    Int(512) x = rd_w(text);
+    if (!rd_carried(x)) { return gx_unk(id, false, st); }
+    Str ty = if (rd_wfits(x, "Int(128)")) { "Int(128)" } else { "Int(256)" };
+    return gx_kv(rd_wtoa(x), ty, id, false, st);
 }
 
 GV gx_ref(Int id, RdE env, GS st) {
@@ -358,6 +365,12 @@ GV gx_un(GXT ft, Int id, RdE env, GS st) {
     if (op == "-" && e.k && rd_is_f64(e.ty)) {
         return gx_folded_r(rd_f64_bits(0.0 - rd_f64(e.v)), "Float", nr.id, true, nr.st, "select");
     }
+    if (e.k && rd_is_int_ty(e.ty) && (!rd_small(e.v) || rd_iw(e.ty) > 64)) {
+        Int(512) wv = rd_w(e.v);
+        Str wt = if (op == "~") { rd_wbits(0 - wv - 1, e.ty) } else { rd_wtoa(0 - wv) };
+        if (wt == "" || !rd_int_fits(wt, e.ty)) { return gx_unk(nr.id, e.ch, nr.st); }
+        return gx_folded(wt, e.ty, nr.id, true, nr.st);
+    }
     if (e.k && rd_is_int_ty(e.ty)) {
         Int iv = rd_atoi(e.v);
         if (op == "~") {
@@ -396,10 +409,10 @@ GV gx_cast(GXT ft, Int id, RdE env, GS st) {
     GV e = gx_expr(ft, gx_kid(st, id, 1), env, st);
     if (e.bad) { return e; }
     GXN o = if (e.ch) { gx_re(e.st, id, [tk, e.r]) } else { gx_n(e.st, id) };
-    Str want = rd_norm_ty(ty);
-    // A conversion of a known integer folds only when the value fits the
-    // target width: one that would trap stays residual, as it would run.
-    if (e.k && rd_is_int_ty(rd_norm_ty(e.ty)) && rd_is_int_ty(want) && rd_int_fits(e.v, want)) { return gx_folded(e.v, want, o.id, true, o.st); }
+    Str want = if (rd_is_f64(ty)) { "Float" } else { rd_norm_ty(ty) };
+    // A conversion that would trap stays residual, as it would run.
+    Str cv = if (e.k) { rd_convert(e.v, e.ty, want) } else { "" };
+    if (cv != "") { return gx_folded(cv, want, o.id, true, o.st); }
     return gx_unk(o.id, e.ch, o.st);
 }
 
@@ -549,16 +562,23 @@ GXA gx_args(GXT ft, Int id, Int i, RdE env, GXA acc) {
     Bool nm = gx_kind(acc.st, kid) == "named";
     Int vk = if (nm) { gx_kid(acc.st, kid, 0) } else { kid };
     GV v = gx_expr(ft, vk, env, acc.st);
-    if (v.bad) { return GXA {.vs = acc.vs, .ts = acc.ts, .rs = acc.rs, .allk = false, .ch = acc.ch, .named = acc.named, .bad = true, .st = v.st}; }
+    if (v.bad) { return GXA {.vs = acc.vs, .ts = acc.ts, .rs = acc.rs, .allk = false, .ch = acc.ch, .named = acc.named, .bad = true, .st = v.st, .lits = acc.lits}; }
     GXN piece = if (nm && v.ch) { gx_re(v.st, kid, [v.r]) } else { gx_n(v.st, if (nm) { kid } else { v.r }) };
-    GXA a2 = GXA {.vs = acc.vs.concat([v.v]), .ts = acc.ts.concat([v.ty]), .rs = acc.rs.concat([piece.id]), .allk = acc.allk && v.k, .ch = acc.ch || v.ch, .named = acc.named || nm, .bad = false, .st = piece.st};
+    GXA a2 = GXA {.vs = acc.vs.concat([v.v]), .ts = acc.ts.concat([v.ty]), .rs = acc.rs.concat([piece.id]), .allk = acc.allk && v.k, .ch = acc.ch || v.ch, .named = acc.named || nm, .bad = false, .st = piece.st, .lits = acc.lits.concat([gx_lit_kind(acc.st, vk)])};
     return gx_args(ft, id, i + 1, env, a2);
+}
+
+Int gx_lit_kind(GS st, Int id) {
+    KN n = st.g.ns[id];
+    if (n.kind == "lit") { return if (n.aux == "int") { 1 } else { 0 }; }
+    if (n.kind == "un" && n.text == "-" && gx_kind(st, gx_kid(st, id, 0)) == "lit" && st.g.ns[gx_kid(st, id, 0)].aux == "int") { return 1; }
+    return if (gx_lit_expr(st, id)) { 2 } else { 0 };
 }
 
 GXA gx_args0(GS st) {
     List(Str) e = [];
     List(Int) ei = [];
-    return GXA {.vs = e, .ts = e, .rs = ei, .allk = true, .ch = false, .named = false, .bad = false, .st = st};
+    return GXA {.vs = e, .ts = e, .rs = ei, .allk = true, .ch = false, .named = false, .bad = false, .st = st, .lits = ei};
 }
 
 GV gx_call(GXT ft, Int id, RdE env, GS st) {
@@ -581,10 +601,107 @@ GV gx_call(GXT ft, Int id, RdE env, GS st) {
     }
     RdV bv = rd_builtin(name, gx_rda(a, ft.rds), "", 0, ft.rds);
     if (bv.k) { return gx_folded_r(bv.v, bv.ty, cr.id, a.ch, s1, "eval"); }
+    RdV xv = gx_builtin(ft, name, ufi, a);
+    if (xv.k) { return gx_folded_r(xv.v, xv.ty, cr.id, a.ch, gx_scan(s1, gx_lens(a.vs, 0, 0)), "eval"); }
     if (ufi < 0) { return gx_unk(cr.id, a.ch, s1); }
     GV uv = gx_call_user(ft, ufi, a, cr.id, s1);
     if (uv.k || s1.depth > 0 || !ft.ffold[ufi] || gx_in_fold(ft, s1)) { return uv; }
     return gx_with_st(uv, gx_fold_err(ft, id, name, "", uv.st));
+}
+
+// Builtins the lowering expands in place (lower.resid lw_call): sort, and,
+// unless a user function takes the name, abs/min/max/clamp and the
+// checked conversions (`i64(x)`, `f64(x)`, ...).
+RdV gx_builtin(GXT ft, Str name, Int ufi, GXA a) {
+    RdV none = rd_unk("", false, 0, ft.rds);
+    Int n = a.vs.len();
+    if (name == "sort") {
+        Str et = rd_inner(rd_norm_ty(if (n == 1) { a.ts[0] } else { "" }), "List(");
+        if (et == "") { return none; }
+        if (et == "?") { return gx_rv(a.vs[0], a.ts[0], ft); }
+        Str sv = rd_sort(a.vs[0], et);
+        if (sv == str_from_code(1)) { return none; }
+        return gx_rv(sv, a.ts[0], ft);
+    }
+    if (ufi >= 0) { return none; }
+    if (name == "abs" || name == "min" || name == "max" || name == "clamp") { return gx_minmax(ft, name, a); }
+    Str to = conv_helper_type_cg(name);
+    if (to == "" || n != 1 || str_starts_with(name, "wrapping_")) { return none; }
+    Str want = if (rd_is_f64(to)) { "Float" } else { rd_norm_ty(to) };
+    Str cv = rd_convert(a.vs[0], a.ts[0], want);
+    if (cv == "") { return none; }
+    return gx_rv(cv, want, ft);
+}
+
+RdV gx_rv(Str v, Str ty, GXT ft) {
+    return RdV {.k = true, .v = v, .ty = rd_norm_ty(ty), .r = "", .ch = true, .bad = false, .bd = false, .sx = "", .px = "", .pos = 0, .st = ft.rds};
+}
+
+// abs / min / max / clamp as the expressions they stand for (lw_minmax):
+// an integer literal argument takes the type of the first other integer
+// argument, and the comparisons and arithmetic fold as written.
+RdV gx_minmax(GXT ft, Str name, GXA a) {
+    RdV none = rd_unk("", false, 0, ft.rds);
+    Int n = a.vs.len();
+    Int want = if (name == "abs") { 1 } else if (name == "clamp") { 3 } else { 2 };
+    if (n != want) { return none; }
+    Str target = gx_mm_target(a, 0);
+    List(RdV) xs = gx_mm_vals(ft, a, target, 0, ListBuf());
+    if (xs.len() != n) { return none; }
+    return gx_mm_same(ft, name, xs, xs[0].ty);
+}
+
+Str gx_mm_target(GXA a, Int i) {
+    if (i >= a.vs.len()) { return ""; }
+    Str t = rd_norm_ty(a.ts[i]);
+    if (!gx_mm_lit(a, i) && rd_is_int_ty(t)) { return t; }
+    return gx_mm_target(a, i + 1);
+}
+
+// An integer literal argument: its residual node is a literal (or a
+// negated one).
+Bool gx_mm_lit(GXA a, Int i) { return a.lits.len() > i && a.lits[i] == 1; }
+
+List(RdV) gx_mm_vals(GXT ft, GXA a, Str target, Int i, ListBuf(RdV) acc) {
+    if (i >= a.vs.len()) { return acc.finish(); }
+    Str t = rd_norm_ty(a.ts[i]);
+    Bool retype = target != "" && gx_mm_lit(a, i);
+    Str ty = if (retype) { target } else { t };
+    // Literal arithmetic is retyped only once reduced to one literal.
+    if (a.lits.len() > i && a.lits[i] == 2 && t != target && target != "") { return acc.finish(); }
+    // A literal that does not fit the target is a conversion that traps.
+    if (retype && !rd_int_fits(a.vs[i], target)) { return acc.finish(); }
+    return gx_mm_vals(ft, a, target, i + 1, acc.push(gx_rv(a.vs[i], ty, ft)));
+}
+
+RdV gx_mm_same(GXT ft, Str name, List(RdV) xs, Str t0) {
+    RdV none = rd_unk("", false, 0, ft.rds);
+    if (!rd_is_int_ty(t0) && !rd_is_f64(t0)) { return none; }
+    if (!gx_mm_all(xs, t0, 0)) { return none; }
+    RdS rs = ft.rds;
+    if (name == "abs") {
+        RdV z = rd_fold("-", xs[0], xs[0], false, false, "", 0, rs);
+        RdV c = rd_fold("<", xs[0], z, false, false, "", 0, rs);
+        if (!z.k || !c.k) { return none; }
+        if (c.v == "false") { return xs[0]; }
+        return rd_fold("-", z, xs[0], false, false, "", 0, rs);
+    }
+    if (name == "min" || name == "max") {
+        RdV c = rd_fold(if (name == "min") { "<" } else { ">" }, xs[0], xs[1], false, false, "", 0, rs);
+        if (!c.k) { return none; }
+        return if (c.v == "true") { xs[0] } else { xs[1] };
+    }
+    RdV c1 = rd_fold("<", xs[0], xs[1], false, false, "", 0, rs);
+    if (!c1.k) { return none; }
+    if (c1.v == "true") { return xs[1]; }
+    RdV c2 = rd_fold(">", xs[0], xs[2], false, false, "", 0, rs);
+    if (!c2.k) { return none; }
+    return if (c2.v == "true") { xs[2] } else { xs[0] };
+}
+
+Bool gx_mm_all(List(RdV) xs, Str t0, Int i) {
+    if (i >= xs.len()) { return true; }
+    return xs[i].ty == t0 && gx_mm_all(xs, t0, i + 1);
 }
 
 GV gx_field(GXT ft, Int id, RdE env, GS st) {
@@ -641,7 +758,58 @@ GV gx_mcall(GXT ft, Int id, RdE env, GS st) {
         // Encoded lists concatenate as text.
         return gx_folded(b.v + a.vs[0], rty, mr.id, mch, ms);
     }
+    if (et == "?") { return none; }
+    if (name == "with") {
+        // An index out of range aborts at run time.
+        if (a.ts.len() != 2 || !rd_is_int_ty(rd_norm_ty(a.ts[0])) || !rd_small(a.vs[0])) { return none; }
+        List(Str) items = rd_dec(b.v);
+        Int wi = rd_atoi(a.vs[0]);
+        if (wi < 0 || wi >= items.len() || rd_coerce_v(a.ts[1], et, a.vs[1]) == "") { return none; }
+        return gx_folded(rd_enc(items[0..wi].concat([a.vs[1]]).concat(items[wi + 1..items.len()])), b.ty, mr.id, mch, ms);
+    }
+    // A user function of the name is called instead (lw_mcall).
+    if (ft.fidx.get(name) else { -1 } >= 0) { return none; }
+    if (name == "reverse" && a.ts.len() == 0) { return gx_folded(rd_enc(gx_rev(rd_dec(b.v), rd_count(b.v) - 1, ListBuf())), b.ty, mr.id, mch, ms); }
+    if (name == "contains" && a.ts.len() == 1) {
+        Str cv = rd_coerce_v(a.ts[0], et, a.vs[0]);
+        if (cv == "") { return none; }
+        Bool has = if (rd_is_f64(et)) { gx_has_f64(rd_dec(b.v), rd_f64(a.vs[0]), 0) } else { rd_list_has(rd_dec(b.v), a.vs[0], 0) };
+        return gx_folded(if (has) { "true" } else { "false" }, "Bool", mr.id, mch, ms);
+    }
+    if (name == "sum" && a.ts.len() == 0) {
+        List(Str) items = rd_dec(b.v);
+        if (rd_is_f64(et)) { return gx_folded(rd_f64_bits(gx_sumf(items, 0, 0.0)), "Float", mr.id, mch, ms); }
+        // An Int sum that would overflow is left to run.
+        if (et != "Int" || !rd_all_small(items, 0)) { return none; }
+        Int(512) tot = gx_sumw(items, 0, (Int(512))0);
+        if (!rd_wfits(tot, "Int")) { return none; }
+        return gx_folded(rd_wtoa(tot), "Int", mr.id, mch, ms);
+    }
     return none;
+}
+
+List(Str) gx_rev(List(Str) xs, Int i, ListBuf(Str) acc) {
+    if (i < 0) { return acc.finish(); }
+    return gx_rev(xs, i - 1, acc.push(xs[i]));
+}
+
+Bool gx_has_f64(List(Str) xs, Float x, Int i) {
+    if (i >= xs.len()) { return false; }
+    return rd_f64(xs[i]) == x || gx_has_f64(xs, x, i + 1);
+}
+
+Float gx_sumf(List(Str) xs, Int i, Float acc) {
+    if (i >= xs.len()) { return acc; }
+    return gx_sumf(xs, i + 1, acc + rd_f64(xs[i]));
+}
+
+// The sum in order; the first prefix out of the Int range ends it (the
+// caller leaves that sum to run).
+Int(512) gx_sumw(List(Str) xs, Int i, Int(512) acc) {
+    if (i >= xs.len()) { return acc; }
+    Int(512) n = acc + rd_w(xs[i]);
+    if (!rd_wfits(n, "Int")) { return n; }
+    return gx_sumw(xs, i + 1, n);
 }
 
 GV gx_index(GXT ft, Int id, RdE env, GS st) {
@@ -649,16 +817,18 @@ GV gx_index(GXT ft, Int id, RdE env, GS st) {
     if (b.bad) { return b; }
     Int xk = gx_kid(st, id, 1);
     KN xn = st.g.ns[xk];
-    if (xn.kind == "bin" && (xn.text == ".." || xn.text == "..=")) {
+    Bool rng = xn.kind == "bin" && (xn.text == ".." || xn.text == "..=");
+    if (rng || xn.kind == "rangefrom") {
         GV lo = gx_expr(ft, gx_kid(st, xk, 0), env, b.st);
         if (lo.bad) { return lo; }
-        GV hi = gx_expr(ft, gx_kid(st, xk, 1), env, lo.st);
+        GV hi = if (rng) { gx_expr(ft, gx_kid(st, xk, 1), env, lo.st) } else { lo };
         if (hi.bad) { return hi; }
-        Bool sch = b.ch || lo.ch || hi.ch;
-        if (!sch) { return gx_unk(id, false, hi.st); }
-        GXN rn = gx_re(hi.st, xk, [lo.r, hi.r]);
-        GXN sn = gx_re(rn.st, id, [b.r, rn.id]);
-        return gx_unk(sn.id, true, sn.st);
+        Bool sch = b.ch || lo.ch || (rng && hi.ch);
+        GXN rn = if (!sch) { gx_n(hi.st, xk) } else { gx_re(hi.st, xk, if (rng) { [lo.r, hi.r] } else { [lo.r] }) };
+        GXN sn = if (!sch) { gx_n(rn.st, id) } else { gx_re(rn.st, id, [b.r, rn.id]) };
+        // `a..=b` is `a..b + 1`, wrapping as the lowering's add does.
+        Str hv = if (!rng) { rd_itoa(rd_i64_max()) } else if (xn.text == "..=" && hi.k && rd_small(hi.v)) { rd_itoa(wrapping_add(rd_atoi(hi.v), 1)) } else { hi.v };
+        return gx_slicev(b, lo, rng && !hi.k, hv, sn, sch);
     }
     GV ix = gx_expr(ft, xk, env, b.st);
     if (ix.bad) { return ix; }
@@ -669,12 +839,35 @@ GV gx_index(GXT ft, Int id, RdE env, GS st) {
     if (!b.k || !ix.k) { return none; }
     Str et = rd_inner(b.ty, "List(");
     if (et == "" || et == "?") { return none; }
-    if (!rd_is_int_ty(rd_norm_ty(ix.ty))) { return none; }
+    if (!rd_is_int_ty(rd_norm_ty(ix.ty)) || !rd_small(ix.v)) { return none; }
     Int i = rd_atoi(ix.v);
     if (i < 0) { return none; }
     Str item = rd_nth(b.v, i);
     if (item == str_from_code(1)) { return none; }
     return gx_folded(item, et, ir.id, ich, gx_scan(ir.st, str_len(b.v)));
+}
+
+// `xs[lo..hi]` of a known list: the runtime clamps both bounds, so it
+// never traps. A rangefrom slice (`xs[lo..]`) is given hi = Int max.
+GV gx_slicev(GV b, GV lo, Bool hunk, Str hv, GXN sn, Bool sch) {
+    GV none = gx_unk(sn.id, sch, sn.st);
+    if (!b.k || !lo.k || hunk || rd_inner(b.ty, "List(") == "") { return none; }
+    if (!rd_small(lo.v) || !rd_small(hv)) { return none; }
+    return gx_folded(rd_slice(b.v, rd_atoi(lo.v), rd_atoi(hv)), b.ty, sn.id, sch, gx_scan(sn.st, str_len(b.v)));
+}
+
+// `xs[..]` / `xs[..hi]`.
+GV gx_slice(GXT ft, Int id, RdE env, GS st) {
+    GV b = gx_expr(ft, gx_kid(st, id, 0), env, st);
+    if (b.bad) { return b; }
+    Bool hashi = gx_nk(st, id) > 1;
+    GV hi = if (hashi) { gx_expr(ft, gx_kid(st, id, 1), env, b.st) } else { b };
+    if (hi.bad) { return hi; }
+    Bool sch = b.ch || (hashi && hi.ch);
+    GXN sn = if (!sch) { gx_n(hi.st, id) } else { gx_re(hi.st, id, if (hashi) { [b.r, hi.r] } else { [b.r] }) };
+    GV zero = gx_kv("0", "Int", id, false, sn.st);
+    Str hv = if (hashi) { hi.v } else { rd_itoa(rd_i64_max()) };
+    return gx_slicev(b, zero, hashi && !hi.k, hv, sn, sch);
 }
 
 GV gx_list(GXT ft, Int id, RdE env, GS st) {
@@ -717,10 +910,10 @@ GXA gx_finits(GXT ft, Int id, Int i, RdE env, GXA acc) {
     if (i >= gx_nk(acc.st, id)) { return acc; }
     Int fi = gx_kid(acc.st, id, i);
     GV v = gx_expr(ft, gx_kid(acc.st, fi, 0), env, acc.st);
-    if (v.bad) { return GXA {.vs = acc.vs, .ts = acc.ts, .rs = acc.rs, .allk = false, .ch = acc.ch, .named = false, .bad = true, .st = v.st}; }
+    if (v.bad) { return GXA {.vs = acc.vs, .ts = acc.ts, .rs = acc.rs, .allk = false, .ch = acc.ch, .named = false, .bad = true, .st = v.st, .lits = acc.lits}; }
     GXN piece = if (v.ch) { gx_re(v.st, fi, [v.r]) } else { gx_n(v.st, fi) };
     Str fname = acc.st.g.ns[fi].text;
-    GXA a2 = GXA {.vs = acc.vs.concat([fname + str_from_code(30) + v.v]), .ts = acc.ts.concat([v.ty]), .rs = acc.rs.concat([piece.id]), .allk = acc.allk && v.k, .ch = acc.ch || v.ch, .named = false, .bad = false, .st = piece.st};
+    GXA a2 = GXA {.vs = acc.vs.concat([fname + str_from_code(30) + v.v]), .ts = acc.ts.concat([v.ty]), .rs = acc.rs.concat([piece.id]), .allk = acc.allk && v.k, .ch = acc.ch || v.ch, .named = false, .bad = false, .st = piece.st, .lits = acc.lits};
     return gx_finits(ft, id, i + 1, env, a2);
 }
 
@@ -925,7 +1118,7 @@ GXF gx_fst_lit(Str t, Int i, Int n, GXF a) {
 
 Str gx_fst_text(GV v) {
     Str t = rd_norm_ty(v.ty);
-    if (t == "Str" || rd_is_int_ty(t)) { return v.v; }
+    if (t == "Str" || rd_is_int_ty(t) || t == "Bool") { return v.v; }
     return "";
 }
 
@@ -1719,9 +1912,9 @@ GXR gx_for_eval(GXT ft, Int id, RdE env, GS st) {
     KN itn = st.g.ns[it];
     if (itn.kind == "bin" && (itn.text == ".." || itn.text == "..=")) {
         GV a = gx_expr(ft, gx_kid(st, it, 0), env, st);
-        if (a.bad || !a.k) { return fail; }
+        if (a.bad || !a.k || !rd_small(a.v)) { return fail; }
         GV b = gx_expr(ft, gx_kid(st, it, 1), env, a.st);
-        if (b.bad || !b.k) { return fail; }
+        if (b.bad || !b.k || !rd_small(b.v)) { return fail; }
         if (!rd_is_int_ty(rd_norm_ty(a.ty)) || !rd_is_int_ty(rd_norm_ty(b.ty)) || !rd_is_int_ty(vty)) { return fail; }
         Int lo = rd_atoi(a.v);
         Int hi0 = rd_atoi(b.v);

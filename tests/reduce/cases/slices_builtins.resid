@@ -1,0 +1,47 @@
+// Slices, builtins the lowering expands, list verbs and integers past
+// 64 bits, folded at compile time.
+List(Int) tail_of(List(Int) xs) { return xs[1..]; }
+List(Int) mid(List(Int) xs, Int a, Int b) { return xs[a..b]; }
+List(Int) upto(List(Int) xs, Int b) { return xs[..b]; }
+List(Int) incl(List(Int) xs) { return xs[1..=2]; }
+Int lo3(Int a, Int b, Int c) { return min(a, min(b, c)); }
+Int spread(List(Int) xs) { return max(xs[0], xs[1]) - min(xs[0], xs[1]) + abs(xs[2]) + clamp(xs[3], 0, 10); }
+List(Int) sorted(List(Int) xs) { return sort(xs); }
+List(Str) sorteds(List(Str) xs) { return sort(xs); }
+Int conv(Int x) { return (Int)i8(x) + (Int)u16(x * 100); }
+Float half(Int x) { return f64(x) / 2.0; }
+Int trunc(Float f) { return (Int)f; }
+UInt fnv(Str s, Int i, UInt h) {
+    if (i >= str_len(s)) { return h; }
+    UInt x = h ^ (UInt)str_char_at(s, i);
+    return fnv(s, i + 1, wrapping_umul(x, (UInt)1099511628211));
+}
+UInt(128) big(UInt(128) x) { return x * x + (UInt(128))7; }
+Int(128) neg(Int(128) x) { return 0 - x; }
+UInt notz() { return ~(UInt)0; }
+Int words(Str s) { return str_split(s, " ").len(); }
+Str joined(List(Str) xs) { return str_join(xs, "-"); }
+Int at(Str s, Str t) { return str_index_of(s, t, 0); }
+Bool has(List(Int) xs, Int x) { return xs.contains(x); }
+List(Int) rev(List(Int) xs) { return xs.reverse(); }
+Int total(List(Int) xs) { return xs.sum(); }
+List(Int) set1(List(Int) xs) { return xs.with(1, 99); }
+UInt sat(UInt a) { return saturating_usub(a, (UInt)5); }
+Int main() {
+    List(Int) xs = [5, 3, 9, 1];
+    println(f"{tail_of(xs)} {mid(xs, 1, 3)} {mid(xs, -5, 99)} {mid(xs, 3, 1).len()} {upto(xs, 2)} {incl(xs)}");
+    println(f"{lo3(4, 2, 8)} {spread([3, 7, -4, 42])}");
+    List(Str) bac = ["b", "a", "c"];
+    println(f"{sorted(xs)} {sorteds(bac)}");
+    println(f"{conv(5)} {half(7)} {trunc(-3.75)}");
+    UInt h = fnv("resid", 0, (UInt)14695981039346656037);
+    println(f"{h}");
+    println(f"{big((UInt(128))10000000000000000000)} {neg((Int(128))170141183460469231731687303715884105727)} {notz()}");
+    Int nw = words("a b c");
+    Str jx = joined(["x", "y"]);
+    Int ll = at("hello", "ll");
+    println(f"{nw} {jx} {ll}");
+    println(f"{has(xs, 9)} {has(xs, 4)} {rev(xs)} {total(xs)} {set1(xs)}");
+    println(f"{sat((UInt)3)} {sat((UInt)30)}");
+    return 0;
+}
