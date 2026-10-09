@@ -66,6 +66,7 @@ Int main() {
         else if (c == "chacha") { reveal(chacha20poly1305_seal(k32, bytes_n(12, 1), secret(msg), [])) }
         else if (c == "hmac") { reveal(hmac_bytes(Sha384, k48, msg)) }
         else if (c == "hkdf") { reveal(hkdf_with(Sha256, [], k32, msg, 64)) }
+        else if (c == "sha256-sw") { reveal(words_to_bytes(digest_block(k32.concat(k32), 0, [1779033703, -1150833019, 1013904242, -1521486534, 1359893119, -1694144372, 528734635, 1541459225]))) }
         else if (c == "sha512") { reveal(sha512_bytes(k48)) }
         else if (c == "ct-equal") { if (ct_public(if (ct_equal(k32, bytes_n(32, 7))) { 1 } else { 0 }) == 1) { "equal" } else { "differ" } }
         else if (c == "hpke-open") {

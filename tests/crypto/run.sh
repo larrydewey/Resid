@@ -9,6 +9,7 @@
 # "acceptable" passes either way, as Wycheproof intends.
 #
 # Usage: tests/crypto/run.sh [-c COMPILER]
+# RESID_TARGET=aarch64 cross-compiles the probes (run through qemu-user).
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 COMPILER="$ROOT/build/boot/stage2.bin"
@@ -22,7 +23,7 @@ W="$(mktemp -d)"
 trap 'rm -rf "$W"' EXIT
 export RESID_HOME="${RESID_HOME:-$ROOT/build/boot}"
 
-(cd "$ROOT" && "$COMPILER" tests/crypto/probe.resid -o "$W/probe") > "$W/build.log" 2>&1 || {
+(cd "$ROOT" && "$COMPILER" tests/crypto/probe.resid ${RESID_TARGET:+--target $RESID_TARGET} -o "$W/probe") > "$W/build.log" 2>&1 || {
     echo "FAIL build probe"; grep -i -A3 error "$W/build.log" | head -8; exit 1; }
 
 pass=0; fail=0; files=0
@@ -47,7 +48,7 @@ done
 # One issuer link per case: the strict parse, the algorithm it names, and
 # chain_verify (signature, names, CA bits, validity at 2030-01-01). The
 # AMD and AWS certificates are the vendors' own; make.sh builds the rest.
-(cd "$ROOT" && "$COMPILER" tests/crypto/x509probe.resid -o "$W/x509probe") > "$W/build.log" 2>&1 || {
+(cd "$ROOT" && "$COMPILER" tests/crypto/x509probe.resid ${RESID_TARGET:+--target $RESID_TARGET} -o "$W/x509probe") > "$W/build.log" 2>&1 || {
     echo "FAIL build x509probe"; grep -i -A3 error "$W/build.log" | head -8; exit 1; }
 X="$ROOT/tests/crypto/x509"
 # link <child> <issuer> <want alg> <want chain> [flip]
@@ -93,7 +94,7 @@ link ed-leaf ed-ca ed25519/SHA-512 false 1
 link sha1-leaf p384-ca none false
 
 # ── round trips ──────────────────────────────────────────────────────
-(cd "$ROOT" && "$COMPILER" tests/crypto/roundtrip.resid -o "$W/roundtrip") > "$W/build.log" 2>&1 || {
+(cd "$ROOT" && "$COMPILER" tests/crypto/roundtrip.resid ${RESID_TARGET:+--target $RESID_TARGET} -o "$W/roundtrip") > "$W/build.log" 2>&1 || {
     echo "FAIL build roundtrip"; grep -i -A3 error "$W/build.log" | head -8; exit 1; }
 rt="$("$W/roundtrip" 2>&1)"
 pass=$((pass + $(printf '%s\n' "$rt" | grep -c '^ok ')))
@@ -108,7 +109,7 @@ printf '%s\n' "$rt" | grep -q '^roundtrip: 0 failed' || { [ "$nf" != 0 ] || { ec
 # frames with HPACK blocks: an abort
 # (caught per input by fuzz.resid) or a hang (the timeout) is a failure.
 # The rng seeds are fixed, so a failure reproduces.
-(cd "$ROOT" && "$COMPILER" tests/crypto/fuzz.resid -o "$W/fuzz") > "$W/build.log" 2>&1 || {
+(cd "$ROOT" && "$COMPILER" tests/crypto/fuzz.resid ${RESID_TARGET:+--target $RESID_TARGET} -o "$W/fuzz") > "$W/build.log" 2>&1 || {
     echo "FAIL build fuzz"; grep -i -A3 error "$W/build.log" | head -8; exit 1; }
 F="$ROOT/tests/tls/fixtures"
 SD="$ROOT/tests/crypto/seeds"

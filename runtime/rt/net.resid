@@ -24,6 +24,25 @@ pub Int rt_cpu_has_clmul() {
     return ld64(g) - 1;
 }
 
+// SHA-256 instructions: CPUID leaf 7 EBX bit 29 (SHA-NI); AT_HWCAP bit 6
+// (SHA2) on AArch64. Asked once, like clmul.
+@export("resid_cpu_has_sha256", "i8()")
+pub Int rt_cpu_has_sha256() {
+    Int g = resid_raw_global("rt_has_sha256", 8);
+    if (ld64(g) == 0) { _ = st64(g, 1 + if (resid_raw_arch() == 1) { (ld64(hwcap_w()) >> 6) & 1 } else { cpu_leaf7_b(29) }); }
+    return ld64(g) - 1;
+}
+
+// SHA-512 instructions: AT_HWCAP bit 21 (SHA512, ARMv8.2); none on x86-64.
+@export("resid_cpu_has_sha512", "i8()")
+pub Int rt_cpu_has_sha512() { return if (resid_raw_arch() == 1) { (ld64(hwcap_w()) >> 21) & 1 } else { 0 }; }
+
+// Bit `b` of CPUID leaf 7's EBX, 0 where the CPU has no leaf 7.
+Int cpu_leaf7_b(Int b) {
+    if ((resid_raw_cpuid_ab(0, 0) >> 32) < 7) { return 0; }
+    return (resid_raw_cpuid_ab(7, 0) >> b) & 1;
+}
+
 // CPUID leaf 1, ECX bit 25.
 @export("resid_cpu_has_aesni", "i8()")
 pub Int rt_cpu_has_aesni() { return if (resid_raw_arch() == 1) { (ld64(hwcap_w()) >> 3) & 1 } else { (resid_raw_cpuid(1, 0) >> 57) & 1 }; }   // HWCAP_AES / CPUID.1:ECX.AESNI

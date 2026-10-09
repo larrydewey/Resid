@@ -272,9 +272,43 @@ pub List(Int) sha_blk_l(List(Int) m, Int base, Int i, List(Int) h0, Int a, Int b
 
 pub List(Int) digest_blocks(List(Int) m, Int pos, Int total, List(Int) h) {
     if (pos >= total) { return h; }
+    if (resid_cpu_has_sha256()) { return sha_hw_blocks(m, pos, total, sha_hw_state(h, 0, (UInt(256)) 0)); }
     List(Int) h2 = digest_block(m, pos, h);
     Int npos = pos + 64;
     return digest_blocks(m, npos, total, h2);
+}
+
+// ─── SHA-256 on the CPU's SHA instructions (SHA-NI, ARMv8 SHA2) ──
+// The state and block as wide integers, word i at bits [32i, 32i + 32).
+
+pub UInt(256) sha_hw_state(List(Int) h, Int i, UInt(256) acc) {
+    if (i >= 8) { return acc; }
+    return sha_hw_state(h, i + 1, acc | (((UInt(256)) (h[i] & 4294967295)) << ((UInt(256)) (32 * i))));
+}
+
+pub List(Int) sha_hw_words(UInt(256) s, Int i, ListBuf(Int) acc) {
+    if (i >= 8) { return acc.finish(); }
+    return sha_hw_words(s, i + 1, acc.push(wrapping_i64((s >> ((UInt(256)) (32 * i))) & ((UInt(256)) 4294967295))));
+}
+
+pub UInt(512) sha_hw_block(List(Int) m, Int base, Int i, UInt(512) acc) {
+    if (i >= 16) { return acc; }
+    return sha_hw_block(m, base, i + 1, acc | (((UInt(512)) word_at_list(m, base, i)) << ((UInt(512)) (32 * i))));
+}
+
+pub UInt(512) sha_hw_block_str(Str m, Int base, Int i, UInt(512) acc) {
+    if (i >= 16) { return acc; }
+    return sha_hw_block_str(m, base, i + 1, acc | (((UInt(512)) word_at_str(m, base, i)) << ((UInt(512)) (32 * i))));
+}
+
+pub List(Int) sha_hw_blocks(List(Int) m, Int pos, Int total, UInt(256) s) {
+    if (pos >= total) { return sha_hw_words(s, 0, ListBuf()); }
+    return sha_hw_blocks(m, pos + 64, total, sha256_compress_hw(s, sha_hw_block(m, pos, 0, (UInt(512)) 0)));
+}
+
+pub List(Int) sha_hw_blocks_str(Str m, Int pos, Int total, UInt(256) s) {
+    if (pos >= total) { return sha_hw_words(s, 0, ListBuf()); }
+    return sha_hw_blocks_str(m, pos + 64, total, sha256_compress_hw(s, sha_hw_block_str(m, pos, 0, (UInt(512)) 0)));
 }
 
 // ─── Hex output ─────────────────────────────────────────────────
@@ -445,6 +479,7 @@ pub List(Int) digest_block_str(Str msg, Int base, List(Int) h) {
 // Digest the whole 64-byte blocks of `msg` in [0, total).
 pub List(Int) digest_blocks_str(Str msg, Int pos, Int total, List(Int) h) {
     if (pos >= total) { return h; }
+    if (resid_cpu_has_sha256()) { return sha_hw_blocks_str(msg, pos, total, sha_hw_state(h, 0, (UInt(256)) 0)); }
     List(Int) h2 = digest_block_str(msg, pos, h);
     Int npos = pos + 64;
     return digest_blocks_str(msg, npos, total, h2);
@@ -1390,8 +1425,28 @@ pub W512 sha512_blk(List(Int) m, Int base, Int i, W512 h0, UInt(64) a, UInt(64) 
 
 pub W512 sha512_blocks(List(Int) m, Int pos, Int total, W512 h) {
     if (pos >= total) { return h; }
+    if (resid_cpu_has_sha512()) { return sha512_hw_blocks(m, pos, total, sha512_hw_state(h)); }
     UInt(64) z = 0;
     return sha512_blocks(m, pos + 128, total, sha512_blk(m, pos, 0, h, h.a, h.b, h.c, h.d, h.e, h.f, h.g, h.h, z, z, z, z, z, z, z, z, z, z, z, z, z, z, z, z));
+}
+
+// SHA-512 on ARMv8.2's SHA512 instructions: word i at bits [64i, 64i + 64).
+pub UInt(512) sha512_hw_state(W512 h) {
+    UInt(512) lo = ((UInt(512)) h.a) | (((UInt(512)) h.b) << ((UInt(512)) 64)) | (((UInt(512)) h.c) << ((UInt(512)) 128)) | (((UInt(512)) h.d) << ((UInt(512)) 192));
+    return lo | (((UInt(512)) h.e) << ((UInt(512)) 256)) | (((UInt(512)) h.f) << ((UInt(512)) 320)) | (((UInt(512)) h.g) << ((UInt(512)) 384)) | (((UInt(512)) h.h) << ((UInt(512)) 448));
+}
+
+pub UInt(64) sha512_hw_word(UInt(512) s, Int i) { return (UInt(64)) ((s >> ((UInt(512)) (64 * i))) & ((UInt(512)) 18446744073709551615)); }
+
+pub UInt(512) sha512_hw_block(List(Int) m, Int base, Int i, UInt(512) acc) {
+    if (i >= 8) { return acc; }
+    UInt(64) w = (((UInt(64)) word_at_list(m, base, 2 * i)) << ((UInt(64)) 32)) | ((UInt(64)) word_at_list(m, base, 2 * i + 1));
+    return sha512_hw_block(m, base, i + 1, acc | (((UInt(512)) w) << ((UInt(512)) (64 * i))));
+}
+
+pub W512 sha512_hw_blocks(List(Int) m, Int pos, Int total, UInt(512) s) {
+    if (pos >= total) { return W512 {.a = sha512_hw_word(s, 0), .b = sha512_hw_word(s, 1), .c = sha512_hw_word(s, 2), .d = sha512_hw_word(s, 3), .e = sha512_hw_word(s, 4), .f = sha512_hw_word(s, 5), .g = sha512_hw_word(s, 6), .h = sha512_hw_word(s, 7)}; }
+    return sha512_hw_blocks(m, pos + 128, total, sha512_compress_hw(s, sha512_hw_block(m, pos, 0, (UInt(512)) 0), sha512_hw_block(m, pos + 64, 0, (UInt(512)) 0)));
 }
 
 pub W512 sha512_iv() {
