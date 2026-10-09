@@ -1228,6 +1228,8 @@ Families:
                waiting on it; with no modes
   native_<m>   a call into native module m (§47); one
                family per module, with no modes
+  declassify   publishing a secret: declassify(s, "reason")
+               (§48); with no modes
 
 network(readonly) covers connecting out, listening on
 127.0.0.1, accepting, sending and receiving: everything a
@@ -3120,3 +3122,52 @@ never for meaning.
 ==================================================
 END OF DOCUMENT
 ==================================================
+
+
+==================================================
+48. SECRET VALUES
+==================================================
+
+Secret(T) is a value the program holds but may not observe
+through control flow, a memory address or an output. Secrecy
+is knowledge (Law 13) carried in the type: every expression
+computed from a secret is secret, and the places a value
+could leave that knowledge are checked.
+
+  secret(x)               Secret(T) from a T
+  declassify(s, "why")    the T back; needs the declassify
+                          family (Law 14), a non-empty string
+                          literal reason (E0251), and is an
+                          effect in the graph artifact
+                          (declassify.<reason>)
+
+A secret may: take part in & | ^ with integers; be shifted by
+a public amount; go through wrapping_add, wrapping_sub and
+wrapping_mul; be read at a public index when it is a list;
+be stored in a record field or a list element. The result is
+secret.
+
+A secret may not: decide an if, while, match or ternary, or
+an && / || operand; be compared, divided or taken a remainder
+of; be an index, a range bound or a shift amount (E0255); go
+through checked + - *, whose overflow abort is a branch on the
+value (E0254); wrap Option, Result, a sum type, Map, Set, a
+handle, a function or another secret (E0253).
+
+No observation behavior reaches a secret. The structural Show
+and Serialize refuse a type that holds one at any depth and
+name the field path (E0256). Show, Serialize, Hash, Eq and Ord
+are never given for a type whose arguments contain a secret,
+whether declared, asked for by a verb, or needed by a generic
+function's copy (E0257); a generic function is checked per
+concrete copy. A type that holds a secret may declare its own
+Show; its body is checked like any function, so it reaches the
+secret only through declassify.
+
+After checking and reduction Secret(T) is erased: it lowers
+exactly as T, and secret(x) and declassify(x, r) as x.
+
+Planned (PLAN-secret-type.md): refusing secrets known at
+compile time (E0250), ct_eq and ct_select, zeroing storage
+that held a secret, and the cryptography library on
+Secret(T).

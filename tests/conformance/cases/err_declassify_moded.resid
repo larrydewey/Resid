@@ -1,0 +1,2 @@
+@requires(declassify(readonly))
+Int main() { return 0; }

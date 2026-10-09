@@ -7074,6 +7074,18 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (argc == 1 && is_int_ty(ch) && ty_bits(ch) <= 64) { return ERes {.pos = pos, .ty = ch, .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "ct_hide expects one integer of at most 64 bits, got (" + rawtys + ")"};
     }
+    // secret / declassify (PLAN-secret-type.md): the checker types them
+    // in gcheck (sec_call); this is the payload view used after erasure.
+    if (name == "secret") {
+        if (argc == 1) { return ERes {.pos = pos, .ty = "Secret(" + str_trim(rawtys) + ")", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "secret(x) takes 1 argument"};
+    }
+    if (name == "declassify") {
+        Str d0 = str_trim(ty_list_at(rawtys, 0));
+        Bool dok = argc == 2 && ck_str_starts_with(d0, "Secret(") && str_trim(ty_list_at(rawtys, 1)) == "Str";
+        if (dok) { return ERes {.pos = pos, .ty = str_trim(str_slice(d0, 7, str_len(d0) - 1)), .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "declassify expects (Secret(T), Str), got (" + rawtys + ")"};
+    }
     if (name == "ct_secret" || name == "ct_public") {
         Str ca = str_trim(rawtys);
         if (argc == 1 && is_int_ty(ca)) { return ERes {.pos = pos, .ty = ca, .err = ""}; }
@@ -9421,7 +9433,7 @@ Int main() {
     // start from a small heap. `--dump-reduced <path>` writes the residual
     // program printed.
     Int _cg_in = resid_bulk_push();
-    KP lkp = gx_unpack(gpk[2]);
+    KP lkp = sec_erase(gx_unpack(gpk[2]));
     Str dump_path  =  pick_opt(argc, "--dump-reduced", "");
     if (dump_path != "") {
         Bool dumped = filesystem.write_all(dump_path, kg_print(lkp.g, lkp.id));

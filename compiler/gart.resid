@@ -130,6 +130,12 @@ Str ga_effect(Kg g, Int id, GAX x) {
     if (n.kind == "call") {
         if (n.text == "print" || n.text == "println" || n.text == "print_bytes") { return "stdout"; }
         if (n.text == "eprintln") { return "stderr"; }
+        // Publishing a secret (PLAN-secret-type.md): the declassify family,
+        // with the reason the source gave.
+        if (n.text == "declassify" && n.nk == 2 && ga_def(x, id) < 0) {
+            Str r = g.ns[kg_kid(g, id, 1)].text;
+            return "declassify." + (if (str_len(r) >= 2) { str_slice(r, 1, str_len(r) - 1) } else { r });
+        }
         // A call of an @link function asks its native module (spec §47).
         Int d = ga_def(x, id);
         Str nf = if (d >= 0 && g.ns[d].kind == "fn") { gk_link_family(g.ns[d].aux) } else { "" };

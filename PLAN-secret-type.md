@@ -2,6 +2,16 @@
 
 **Status: ACCEPTED (2026-10-09).** Open questions 1, 3 and 4 settled (§8); question 2 is decided during implementation.
 
+**Progress.** Step 1 of §7 is in (2026-10-09): the `Secret(T)` type,
+`secret` and `declassify`, the `declassify` family with its graph record,
+E0251 and E0253–E0257, per-copy checking of generic code, and erasure before
+lowering (spec §48, `SECURITY.md`, 26 conformance cases). Still to do: E0250
+(secrets known at compile time), `ct_eq` and `ct_select`, the force-time
+`resid_cap_check("declassify")`, secrets as `Map` keys and `Set` elements in
+declarations, refusing secret arguments to native modules, spawn results and
+provider writes explicitly (they are refused today only by type mismatch),
+runtime zeroing (§6), and steps 2–3 of §7.
+
 **Goal**: make "this value is a secret" knowledge the compiler holds and
 enforces, so that code which branches on, indexes with, prints, compares
 early on, or leaks a secret is a compile error rather than a finding from

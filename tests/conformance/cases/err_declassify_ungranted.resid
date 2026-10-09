@@ -1,0 +1,6 @@
+// Publishing a secret is authority (the declassify family).
+Int main() {
+    Secret(Int) a = secret(rt 3);
+    Int x = declassify(a, "result");
+    return x;
+}

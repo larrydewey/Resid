@@ -71,6 +71,7 @@ nav = [
     "page|reference/builders",
     "page|reference/vectors",
     "page|reference/native-modules",
+    "page|reference/secrets",
     "page|reference/reduction",
     "page|reference/knowledge-graph",
     "page|reference/provenance",

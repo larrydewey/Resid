@@ -33,6 +33,12 @@ own), with the offending source line.
 | `E0235` | no artifact for a native module, or it does not define the bound function |
 | `E0236` | a native artifact defines the function with other C types, or not visibly |
 | `E0237` | a native artifact is refused (it reaches outside itself, runs at load time, …), or a malformed `-native` |
+| `E0251` | `declassify` without a non-empty string-literal reason ([secret values](/Resid/reference/secrets/)) |
+| `E0253` | `Secret(T)` wrapping a type whose shape is control or identity: `Option`, `Result`, a sum type, `Map`, `Set`, a handle, a function, or another secret |
+| `E0254` | checked `+`, `-` or `*` on a secret (its overflow abort is a branch on the value); use `wrapping_add` / `wrapping_sub` / `wrapping_mul` |
+| `E0255` | a secret decides control, an address or a public result: a condition, a `match`, `&&`/`\|\|`, a comparison, `/` or `%`, an index, a range bound or a shift amount |
+| `E0256` | showing a secret, or a value holding one through the structural `Show` (the error names the field path) |
+| `E0257` | `Show`, `Serialize`, `Hash`, `Eq` or `Ord` given for, or asked of, a secret |
 | `E0301` | a known value violates its constraint type |
 | `E0401` | a builder is not consumed on some path |
 | `E0402` | a builder is used twice |
