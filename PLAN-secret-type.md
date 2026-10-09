@@ -1,6 +1,6 @@
 # Secret Values — Implementation Plan (revision 1)
 
-**Status: PROPOSED (2026-10-09).** Under review; three open questions settled (§8).
+**Status: ACCEPTED (2026-10-09).** Open questions 1, 3 and 4 settled (§8); question 2 is decided during implementation.
 
 **Goal**: make "this value is a secret" knowledge the compiler holds and
 enforces, so that code which branches on, indexes with, prints, compares
