@@ -1,0 +1,28 @@
+// Integers far past 64 bits at compile time: a field multiplication mod
+// 2^255 - 19 and 2^383-scale arithmetic, carried exactly.
+UInt(576) fe_p() { return ((UInt(576))1 << 255) - (UInt(576))19; }
+
+UInt(576) fe_mul(UInt(576) a, UInt(576) b) { return (a * b) % fe_p(); }
+
+UInt(576) fe_pow(UInt(576) b, Int e, UInt(576) acc) {
+    if (e == 0) { return acc; }
+    UInt(576) acc2 = if (e % 2 == 1) { fe_mul(acc, b) } else { acc };
+    return fe_pow(fe_mul(b, b), e / 2, acc2);
+}
+
+UInt(832) big(Int k) { return ((UInt(832))1 << k) - (UInt(832))1; }
+
+Int(1024) neg_cube(Int(1024) x) { return 0 - x * x * x; }
+
+@requires(args) Int main() {
+    UInt(576) inv2 = fe_pow((UInt(576))2, 1000, (UInt(576))1);
+    println(f"{inv2}");
+    println(f"{big(700) % (UInt(832))1000000007} {big(831) >> 800}");
+    println(f"{neg_cube((Int(1024))12345678901234567890123456789)}");
+    // Known wide values rendered back into residual code.
+    Int(1024) c = neg_cube((Int(1024))12345678901234567890123456789);
+    UInt(832) m = big(831);
+    Int k = args.count();
+    println(f"{c + (Int(1024))k} {(m >> (800 + k)) + (UInt(832))k}");
+    return 0;
+}

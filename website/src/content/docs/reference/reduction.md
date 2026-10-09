@@ -17,7 +17,7 @@ check discharge from facts.
 
 - **Evaluation.** A call whose arguments are all known is evaluated. A pure
   call that re-enters itself with identical arguments is left residual.
-  Known values are integers of every width (carried exactly up to 2^255),
+  Known values are integers of every width (carried exactly up to 2^1023),
   `Float`, `Str`, `Bool`, lists, records, `Option`, `Result`, declared sum
   types, maps and sets with `Int` or `Str` keys (in the runtime's own
   iteration order), `StrBuf`/`ListBuf` builders, and closures (a lambda

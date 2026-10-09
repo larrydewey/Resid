@@ -3137,18 +3137,20 @@ Int lit_digit_val_cg(Int c) {
     return 0;
 }
 
-Str dec_muladd_at_cg(Str d, Int i, Int m, Int carry, Str acc) {
+// The digits come out least significant first into a buffer, reversed
+// once at the end: prepending each digit made 2^4095 take minutes.
+Str dec_muladd_at_cg(Str d, Int i, Int m, Int carry, StrBuf acc) {
     if (i < 0) {
-        if (carry == 0) { return acc; }
-        return dec_muladd_at_cg(d, i, m, carry / 10, str_from_code(48 + carry % 10) + acc);
+        if (carry == 0) { return str_reverse(acc.finish()); }
+        return dec_muladd_at_cg(d, i, m, carry / 10, acc.push_char(48 + carry % 10));
     }
     Int v = (str_char_at(d, i) - 48) * m + carry;
-    return dec_muladd_at_cg(d, i - 1, m, v / 10, str_from_code(48 + v % 10) + acc);
+    return dec_muladd_at_cg(d, i - 1, m, v / 10, acc.push_char(48 + v % 10));
 }
 
 // d * m + add over a decimal digit string (arbitrary width).
 Str dec_muladd_cg(Str d, Int m, Int add) {
-    return dec_muladd_at_cg(d, str_len(d) - 1, m, add, "");
+    return dec_muladd_at_cg(d, str_len(d) - 1, m, add, StrBuf());
 }
 
 Str dec_from_base_cg(Str t, Int i, Int n, Int base, Str acc) {
@@ -7402,18 +7404,19 @@ Int lit_digit_val(Int c) {
     return 0;
 }
 
-Str dec_muladd_at(Str d, Int i, Int m, Int carry, Str acc) {
+// Digits least significant first into a buffer, reversed once at the end.
+Str dec_muladd_at(Str d, Int i, Int m, Int carry, StrBuf acc) {
     if (i < 0) {
-        if (carry == 0) { return acc; }
-        return dec_muladd_at(d, i, m, carry / 10, str_from_code(48 + carry % 10) + acc);
+        if (carry == 0) { return str_reverse(acc.finish()); }
+        return dec_muladd_at(d, i, m, carry / 10, acc.push_char(48 + carry % 10));
     }
     Int v = (str_char_at(d, i) - 48) * m + carry;
-    return dec_muladd_at(d, i - 1, m, v / 10, str_from_code(48 + v % 10) + acc);
+    return dec_muladd_at(d, i - 1, m, v / 10, acc.push_char(48 + v % 10));
 }
 
 // d * m + add, for a decimal digit string d.
 Str dec_muladd(Str d, Int m, Int add) {
-    return dec_muladd_at(d, str_len(d) - 1, m, add, "");
+    return dec_muladd_at(d, str_len(d) - 1, m, add, StrBuf());
 }
 
 Str dec_from_base(Str t, Int i, Int n, Int base, Str acc) {

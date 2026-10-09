@@ -399,9 +399,17 @@ the evaluator could not run.
   passed and stored closures fold (`tests/reduce/cases/closures`). Folds
   3,851 -> 3,867.
 
+- **Integers to 2^1023.** The carry limit went from 2^255 (Int(512)
+  arithmetic) to 2^1023 (Int(2048)), past the widest type the repository
+  uses (UInt(832)), so 384-bit and wider field arithmetic folds. Found on
+  the way: the compiler's decimal 2^k (`dec_pow2_cg`, used for the bounds
+  of saturating arithmetic and conversions) prepended one digit at a time,
+  so compiling one Int(4096) operation needed over 4 GB; it now builds the
+  digits in a buffer.
+
 What stays residual, by design: effects; the legacy `str_sb_*`
 accumulators (not linear, so an older version may be read again);
-integers past 2^255 and Float(16/32/128) and Dec values (not carried);
+integers past 2^1023 and Float(16/32/128) and Dec values (not carried);
 sum types with generic parameters; a `while` whose body runs to its end
 (it would run forever).
 

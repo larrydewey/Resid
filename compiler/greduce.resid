@@ -317,11 +317,11 @@ SV sem_lit(KN n) {
         Int k = str_len(text);
         // A literal without leading zeros is its own canonical text.
         if (k > 0 && k <= 18 && (k == 1 || str_char_at(text, 0) != 48)) { return sv_of(text, "Int"); }
-        if (!rd_all_digits(text, 0, k) || k == 0 || k > 78) { return sv_no(); }
+        if (!rd_all_digits(text, 0, k) || k == 0 || k > 309) { return sv_no(); }
         if (k <= 18) { return sv_of(rd_itoa(rd_atoi(text)), "Int"); }
-        Int(512) x = rd_w(text);
+        Int(2048) x = rd_w(text);
         if (!rd_carried(x)) { return sv_no(); }
-        return sv_of(rd_wtoa(x), if (rd_wfits(x, "Int(128)")) { "Int(128)" } else { "Int(256)" });
+        return sv_of(rd_wtoa(x), if (rd_wfits(x, "Int(128)")) { "Int(128)" } else { "Int(1024)" });
     }
     if (n.aux == "str") {
         RdSd d = rd_str_dec(n.text);
@@ -386,7 +386,7 @@ SV sem_un(Str op, Str v, Str ty) {
     if (op == "-" && rd_is_f64(ty)) { return sv_of(rd_f64_bits(0.0 - rd_f64(v)), "Float"); }
     if (!rd_is_int_ty(ty) || (op != "-" && op != "~")) { return sv_no(); }
     if (!rd_small(v) || rd_iw(ty) > 64) {
-        Int(512) wv = rd_w(v);
+        Int(2048) wv = rd_w(v);
         Str wt = if (op == "~") { rd_wbits(0 - wv - 1, ty) } else { rd_wtoa(0 - wv) };
         return if (wt == "" || !rd_int_fits(wt, ty)) { sv_no() } else { sv_of(wt, ty) };
     }
@@ -898,7 +898,7 @@ SV sem_mcall(GXT ft, Str name, Str bv, Str bty, List(Str) vs, List(Str) ts) {
         if (rd_is_f64(et)) { return sv_scan(rd_f64_bits(gx_sumf(items, 0, 0.0)), "Float", sc); }
         // An Int sum that would overflow is left to run.
         if (et != "Int" || !rd_all_small(items, 0)) { return sv_no(); }
-        Int(512) tot = gx_sumw(items, 0, (Int(512))0);
+        Int(2048) tot = gx_sumw(items, 0, (Int(2048))0);
         return if (rd_wfits(tot, "Int")) { sv_scan(rd_wtoa(tot), "Int", sc) } else { sv_no() };
     }
     return sv_no();
@@ -1069,9 +1069,9 @@ Float gx_sumf(List(Str) xs, Int i, Float acc) {
 
 // The sum in order; the first prefix out of the Int range ends it (the
 // caller leaves that sum to run).
-Int(512) gx_sumw(List(Str) xs, Int i, Int(512) acc) {
+Int(2048) gx_sumw(List(Str) xs, Int i, Int(2048) acc) {
     if (i >= xs.len()) { return acc; }
-    Int(512) n = acc + rd_w(xs[i]);
+    Int(2048) n = acc + rd_w(xs[i]);
     if (!rd_wfits(n, "Int")) { return n; }
     return gx_sumw(xs, i + 1, n);
 }
