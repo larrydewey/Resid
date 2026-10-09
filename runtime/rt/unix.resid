@@ -75,7 +75,7 @@ Int fdq_close_at(Int q, Int i, Int n) {
 Bool disp_sock_ok(Int fd) {
     if (fd < 0) { return false; }
     Int b = resid_raw_tls("disp_sock_stat", 144);
-    return resid_raw_syscall(5, fd, b, 0, 0, 0, 0) == 0 && (ld32(b + 24) & 61440) == 49152;
+    return resid_raw_syscall(5, fd, b, 0, 0, 0, 0) == 0 && (ld32(b + st_mode_at()) & 61440) == 49152;
 }
 
 Int sa_buf() { return resid_raw_tls("disp_sa", 112); }

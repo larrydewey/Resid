@@ -2337,7 +2337,7 @@ pub Bool num_all_same(List(Str) ts, Int i, Str t) {
 
 // Runtime primitives (compiler-only): argument and result types.
 ERes raw_sig(Str name, Str op, Str argtys, Int argc, Int pos) {
-    Str want = if (op == "sp") { "" } else if (op == "cpuid") { "Int,Int" } else { if (op == "catch") { "Int,Int,Int" } else { if (op == "popcount") { "Int" } else { want0(op) } } };
+    Str want = if (op == "sp" || op == "arch") { "" } else if (op == "nr" || op == "tp_set") { "Int" } else if (op == "cpuid") { "Int,Int" } else { if (op == "catch") { "Int,Int,Int" } else { if (op == "popcount") { "Int" } else { want0(op) } } };
     Str rty = if (op == "cas") { "Bool" } else { if (op == "str") { "Str" } else { if (op == "bits_f64") { "Float" } else { if (op == "f128_bits") { "Int(128)" } else { if (op == "bits_f128") { "Float(128)" } else { "Int" } } } } };
     if (want == "?") { return ERes {.pos = pos, .ty = "", .err = "unknown runtime primitive " + name}; }
     Bool scalar = argtys == "Int" || argtys == "Float" || argtys == "Bool";
@@ -2651,6 +2651,10 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (argtys == "Int") { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_term_is_tty expects (Int), got (" + argtys + ")"};
     }
+    if (name == "resid_cpu_has_clmul") {
+        if (argtys == "") { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_cpu_has_clmul expects no arguments"};
+    }
     if (name == "resid_cpu_has_aesni") {
         if (argtys == "") { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_cpu_has_aesni expects no arguments"};
@@ -2710,6 +2714,10 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         Str ca = str_trim(rawtys);
         if (argc == 1 && is_int_ty(ca)) { return ERes {.pos = pos, .ty = ca, .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = name + " expects one integer, got (" + rawtys + ")"};
+    }
+    if (name == "gf128_mul_hw") {
+        if (argtys == "UInt(128),UInt(128)") { return ERes {.pos = pos, .ty = "UInt(128)", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (UInt(128), UInt(128)), got (" + argtys + ")"};
     }
     if (name == "aesni_enc_round" || name == "aesni_enc_last_round") {
         if (argtys == "UInt(128),UInt(128)") { return ERes {.pos = pos, .ty = "UInt(128)", .err = ""}; }

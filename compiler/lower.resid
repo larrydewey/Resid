@@ -1788,8 +1788,10 @@ GT lv_shuffle(GT v, GT ix) {
     if (byte16) {
         Str i8 = if (lv_ell(ix.ty) == "i8") { reg + "m" } else { reg + "t" };
         List(Str) cv = if (lv_ell(ix.ty) == "i8") { nil_list() } else { [reg + "t = trunc " + it + " " + reg + "m to <16 x i8>"] };
-        List(Str) gl = lv_decl(ix.glines, "llvm.x86.ssse3.pshuf.b.128", "declare <16 x i8> @llvm.x86.ssse3.pshuf.b.128(<16 x i8>, <16 x i8>)");
-        List(Str) ls = pre.concat(cv).concat([reg + " = call <16 x i8> @llvm.x86.ssse3.pshuf.b.128(<16 x i8> " + v.val + ", <16 x i8> " + i8 + ")"]);
+        // AArch64: one TBL (the indices are already below 16).
+        Str shuf = if (tgt_a64()) { "llvm.aarch64.neon.tbl1.v16i8" } else { "llvm.x86.ssse3.pshuf.b.128" };
+        List(Str) gl = lv_decl(ix.glines, shuf, "declare <16 x i8> @" + shuf + "(<16 x i8>, <16 x i8>)");
+        List(Str) ls = pre.concat(cv).concat([reg + " = call <16 x i8> @" + shuf + "(<16 x i8> " + v.val + ", <16 x i8> " + i8 + ")"]);
         return GT {.pos = 0, .val = reg, .ty = vt, .cnt = 0, .err = "", .glines = gl, .lines = ls, .tmp = t, .lbl = ix.lbl, .tail = false};
     }
     List(Str) body = lv_shuffle_at(reg, vt, v.val, ix.ty, reg + "m", 0, "poison", nil_list());
@@ -2679,6 +2681,44 @@ Int lw_raw_width(Str n) {
     return 64;
 }
 
+// The code generation target: 0 is x86-64 Linux (the default), 1 AArch64
+// Linux (Android included). Set once by the driver's --target.
+pub Int tgt_word() { return resid_raw_global("resid_target", 8); }
+pub Bool tgt_a64() { return resid_raw_load64(tgt_word()) == 1; }
+
+// System call numbers: the runtime names a call by its x86-64 number; on
+// AArch64 it is renumbered here (-1 where the call does not exist there).
+List(Int) a64_nr_table() { return [63, 64, -1, 57, -1, 80, -1, -1, 62, 222, 226, 215, 214, 134, 135, 139, 29, 67, 68, 65, 66, -1, -1, -1, 124, 216, 227, 232, 233, 194, 196, 195, 23, -1, -1, 101, 102, -1, 103, 172, 71, 198, 203, 202, 206, 207, 211, 212, 210, 200, 201, 204, 205, 199, 208, 209, 220, -1, -1, 221, 93, 260, 129, 160, 190, 193, 191, 197, 186, 189, 188, 187, 25, 32, 82, 83, 45, 46, -1, 17, 49, 50, -1, -1, -1, -1, -1, -1, -1, -1, -1, 52, -1, 55, -1, 166, 169, 163, 165, 179, 153, 117, 174, 116, 176, 146, 144, 175, 177, 154, 173, -1, 157, 145, 143, 158, 159, 147, 148, 149, 150, 155, 151, 152, 156, 90, 91, 136, 137, 138, 133, 132, -1, -1, -1, 92, -1, 43, 44, -1, 141, 140, 118, 121, 119, 120, 125, 126, 127, 228, 229, 230, 231, 58, -1, 41, -1, 167, -1, 171, 164, 51, 81, 89, 170, 40, 39, 224, 225, 142, 161, 162, -1, -1, -1, 105, 106, -1, -1, 60, 42, -1, -1, -1, -1, -1, 178, 213, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 130, -1, 98, 122, 123, -1, 0, 1, 4, 2, 3, -1, 18, -1, -1, -1, 234, 61, 96, 128, 192, 223, 107, 110, 108, 109, 111, 112, 113, 114, 115, 94, -1, 21, 131, -1, -1, 235, 237, 236, 180, 181, 182, 183, 184, 185, 104, 95, 217, 218, 219, 30, 31, -1, 27, 28, 238, 56, 34, 33, 54, -1, 79, 35, 38, 37, 36, 78, 53, 48, 72, 73, 97, 99, 100, 76, 77, 84, 75, 239, 88, 22, -1, 85, -1, 47, 86, 87, 242, 74, 19, 20, 24, 59, 26, 69, 70, 240, 241, 243, 262, 263, 261, 264, 265, 266, 267, 269, 268, 168, 270, 271, 272, 273, 274, 275, 276, 277, 278, 279, 294, 280, 281, 282, 283, 284, 285, 286, 287, 288, 289, 290, 291, 292, 293, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 424, 425, 426, 427, 428, 429, 430, 431, 432, 433, 434, 435, 436, 437, 438, 439, 440, 441, 442, 443, 444, 445, 446, 447, 448, 449, 450, 451, 452, 453, 454, 455, 456, 457, 458, 459, 460, 461, 462, 463, 464, 465, 466, 467, 468, 469, 470, 471];
+}
+
+pub Int a64_nr(Int n) {
+    List(Int) t = a64_nr_table();
+    return if (n >= 0 && n < t.len()) { t[n] } else { 0 - 1 };
+}
+
+// The renumbering as IR, for a call number known only at run time.
+Str a64_nr_items(List(Int) t, Int i, StrBuf acc) {
+    if (i >= t.len()) { return acc.finish(); }
+    StrBuf a1 = if (i > 0) { acc.push(", ") } else { acc };
+    return a64_nr_items(t, i + 1, a1.push(f"i16 {t[i]}"));
+}
+
+Str a64_nr_global() {
+    List(Int) t = a64_nr_table();
+    return f"@resid.a64nr = linkonce_odr hidden unnamed_addr constant [{t.len()} x i16] [" + a64_nr_items(t, 0, StrBuf()) + "], align 2";
+}
+
+type NR = { GT g; Str val; };
+
+// The AArch64 number of call `v` (a literal or a register), into `r`'s names.
+NR lw_a64_nr(GT g, Str v, Str r) {
+    if (str_is_int(v)) { return NR {.g = g, .val = f"{a64_nr(str_parse_int(v))}"}; }
+    Int n = a64_nr_table().len();
+    List(Str) ls = [r + f"nk = icmp ult i64 " + v + f", {n}", r + "ni = select i1 " + r + "nk, i64 " + v + ", i64 0", r + f"np = getelementptr [{n} x i16], ptr @resid.a64nr, i64 0, i64 " + r + "ni", r + "nw = load i16, ptr " + r + "np", r + "nx = sext i16 " + r + "nw to i64", r + "n = select i1 " + r + "nk, i64 " + r + "nx, i64 -1"];
+    GT g1 = GT {.pos = g.pos, .val = g.val, .ty = g.ty, .cnt = g.cnt, .err = g.err, .glines = lv_decl(g.glines, "resid.a64nr", a64_nr_global()), .lines = g.lines.concat(ls), .tmp = g.tmp, .lbl = g.lbl, .tail = g.tail};
+    return NR {.g = g1, .val = r + "n"};
+}
+
 GT lw_raw(LW w, Int id, Str n, List(Str) env, GT c) {
     Str op = str_slice(n, 10, str_len(n));
     // A constant table: the address of `[i64 ...]` read-only data.
@@ -2735,15 +2775,39 @@ GT lw_raw(LW w, Int id, Str n, List(Str) env, GT c) {
     if (op == "fetch_add") {
         return lw_step(g, r, "Int", g.lines.concat([p + " = inttoptr i64 " + v[0] + " to ptr", r + " = atomicrmw add ptr " + p + ", i64 " + v[1] + " seq_cst"]), t);
     }
+    if (op == "syscall" && tgt_a64()) {
+        NR nr = lw_a64_nr(g, v[0], r);
+        Str args = "i64 " + nr.val + ", i64 " + v[1] + ", i64 " + v[2] + ", i64 " + v[3] + ", i64 " + v[4] + ", i64 " + v[5] + ", i64 " + v[6];
+        return lw_step(nr.g, r, "Int", nr.g.lines.concat([r + " = call i64 asm sideeffect \"svc #0\", \"={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}\"(" + args + ")"]), t);
+    }
     if (op == "syscall") {
         Str args = "i64 " + v[0] + ", i64 " + v[1] + ", i64 " + v[2] + ", i64 " + v[3] + ", i64 " + v[4] + ", i64 " + v[5] + ", i64 " + v[6];
         return lw_step(g, r, "Int", g.lines.concat([r + " = call i64 asm sideeffect \"syscall\", \"={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}\"(" + args + ")"]), t);
     }
+    // arch(): 0 on x86-64, 1 on AArch64; nr(n): the target's number for
+    // the x86-64 call n; tp_set(tp): install the thread pointer.
+    if (op == "arch") { return lw_step(g, r, "Int", g.lines.concat([r + " = add i64 0, " + (if (tgt_a64()) { "1" } else { "0" })]), t); }
+    if (op == "nr") {
+        if (!tgt_a64()) { return lw_step(g, r, "Int", g.lines.concat([r + " = add i64 0, " + v[0]]), t); }
+        NR nr = lw_a64_nr(g, v[0], r);
+        return lw_step(nr.g, r, "Int", nr.g.lines.concat([r + " = add i64 0, " + nr.val]), t);
+    }
+    if (op == "tp_set" && tgt_a64()) {
+        return lw_step(g, r, "Int", g.lines.concat(["call void asm sideeffect \"msr tpidr_el0, $0\", \"r,~{memory}\"(i64 " + v[0] + ")", r + " = add i64 0, 0"]), t);
+    }
+    if (op == "tp_set") {
+        Str args = "i64 158, i64 4098, i64 " + v[0] + ", i64 0, i64 0, i64 0, i64 0";
+        return lw_step(g, r, "Int", g.lines.concat([r + " = call i64 asm sideeffect \"syscall\", \"={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}\"(" + args + ")"]), t);
+    }
     if (op == "addr") { return lw_step(g, r, "Int", g.lines.concat([r + " = ptrtoint ptr " + v[0] + " to i64"]), t); }
-    if (op == "sp") { return lw_step(g, r, "Int", g.lines.concat([r + " = call i64 asm sideeffect \"mov %rsp, $0\", \"=r\"()"]), t); }
+    if (op == "sp") {
+        Str mv = if (tgt_a64()) { "mov $0, sp" } else { "mov %rsp, $0" };
+        return lw_step(g, r, "Int", g.lines.concat([r + " = call i64 asm sideeffect \"" + mv + "\", \"=r\"()"]), t);
+    }
     if (op == "popcount") { return lw_step(g, r, "Int", g.lines.concat([r + " = call i64 @llvm.ctpop.i64(i64 " + v[0] + ")"]), t); }
     if (op == "catch") { return lw_step(g, r, "Int", g.lines.concat([r + " = call i64 @e.catch(i64 " + v[0] + ", i64 " + v[1] + ", i64 " + v[2] + ")"]), t); }
     // cpuid(leaf, subleaf): ecx in the high 32 bits, edx in the low.
+    if (op == "cpuid" && tgt_a64()) { return lw_step(g, r, "Int", g.lines.concat([r + " = add i64 0, 0"]), t); }
     if (op == "cpuid") {
         List(Str) cl = [r + "a = trunc i64 " + v[0] + " to i32", r + "b = trunc i64 " + v[1] + " to i32", r + "s = call { i32, i32, i32, i32 } asm \"cpuid\", \"={ax},={bx},={cx},={dx},{ax},{cx}\"(i32 " + r + "a, i32 " + r + "b)", r + "c = extractvalue { i32, i32, i32, i32 } " + r + "s, 2", r + "d = extractvalue { i32, i32, i32, i32 } " + r + "s, 3", r + "h = zext i32 " + r + "c to i64", r + "l = zext i32 " + r + "d to i64", r + "k = shl i64 " + r + "h, 32", r + " = or i64 " + r + "k, " + r + "l"];
         return lw_step(g, r, "Int", g.lines.concat(cl), t);
@@ -2791,6 +2855,7 @@ GT lw_builtin(LW w, Int id, Str n, List(Str) env, GT c) {
     if (n == "resid_arena_push" || n == "resid_arena_pop" || n == "resid_bulk_push" || n == "resid_bulk_pop" || n == "resid_mem_mark" || n == "resid_mem_since_mark" || n == "resid_stack_left") { return lw_extern0(w, id, n, "i64", "Int", c); }
     if (n == "resid_list_str_persist_copy") { return lw_extern(w, id, n, l1s("List(Str)"), "List(Str)", env, c); }
     if (n == "resid_cpu_has_aesni") { return lw_extern0b(w, id, n, c); }
+    if (n == "resid_cpu_has_clmul") { return lw_extern0b(w, id, n, c); }
     if (n == "resid_test_plan") { return lw_externb(w, id, n, l2s("Int", "Str"), env, c); }
     if (n == "resid_test_summary") { return lw_extern0(w, id, n, "i64", "Int", c); }
     if (n == "resid_quiet") { return lw_extern0b(w, id, n, c); }
@@ -2835,7 +2900,7 @@ GT lw_builtin(LW w, Int id, Str n, List(Str) env, GT c) {
 
 // Names the builtin table covers.
 Bool lw_is_builtin(Str n) {
-    return str_starts_with(n, "resid_raw_") || n == "str_sha256" || n == "str_char_at" || n == "str_from_code" || n == "str_len" || n == "str_slice" || n == "str_sb_finish" || n == "str_sb_append" || n == "str_sb_append_cp" || n == "str_sb_append_slice" || n == "resid_crypto_random_byte" || n == "resid_read_line" || n == "resid_read_byte" || str_starts_with(n, "resid_term_") || n == "resid_dbg_spawn" || n == "resid_dbg_wait" || n == "resid_dbg_cont" || n == "resid_dbg_step" || n == "resid_dbg_peek" || n == "resid_dbg_poke" || n == "resid_dbg_reg" || n == "resid_dbg_set_pc" || n == "resid_dbg_signal" || n == "resid_dbg_exit_code" || n == "resid_dbg_kill" || n == "resid_dbg_f64" || n == "str_sb_new" || n == "resid_arena_push" || n == "resid_arena_pop" || n == "resid_bulk_push" || n == "resid_bulk_pop" || n == "resid_mem_mark" || n == "resid_mem_since_mark" || n == "resid_stack_left" || n == "resid_list_str_persist_copy" || n == "resid_cpu_has_aesni" || n == "resid_test_plan" || n == "resid_test_summary" || n == "resid_quiet" || n == "resid_quiet_set" || n == "resid_mem_limit_set" || n == "resid_internals" || n == "resid_internals_set" || n == "resid_rtmod" || n == "resid_rtmod_set" || n == "str_trim" || n == "str_to_lower" || n == "str_to_upper" || n == "str_reverse" || n == "resid_sacc_from" || n == "resid_sacc_append_int" || n == "resid_sacc_append" || n == "str_contains" || n == "str_starts_with" || n == "str_ends_with" || n == "str_repeat" || n == "str_replace" || n == "str_split" || n == "str_join" || n == "str_is_int" || n == "str_is_float" || n == "str_parse_int" || n == "str_parse_float" || n == "sqrt" || n == "print_bytes" || n == "str_index_of" || n == "str_count" || n == "resid_fmt_radix" || n == "resid_fmt_group" || n == "resid_fmt_case" || n == "resid_fmt_sign" || n == "resid_fmt_pad" || n == "resid_fmt_style";
+    return str_starts_with(n, "resid_raw_") || n == "str_sha256" || n == "str_char_at" || n == "str_from_code" || n == "str_len" || n == "str_slice" || n == "str_sb_finish" || n == "str_sb_append" || n == "str_sb_append_cp" || n == "str_sb_append_slice" || n == "resid_crypto_random_byte" || n == "resid_read_line" || n == "resid_read_byte" || str_starts_with(n, "resid_term_") || n == "resid_dbg_spawn" || n == "resid_dbg_wait" || n == "resid_dbg_cont" || n == "resid_dbg_step" || n == "resid_dbg_peek" || n == "resid_dbg_poke" || n == "resid_dbg_reg" || n == "resid_dbg_set_pc" || n == "resid_dbg_signal" || n == "resid_dbg_exit_code" || n == "resid_dbg_kill" || n == "resid_dbg_f64" || n == "str_sb_new" || n == "resid_arena_push" || n == "resid_arena_pop" || n == "resid_bulk_push" || n == "resid_bulk_pop" || n == "resid_mem_mark" || n == "resid_mem_since_mark" || n == "resid_stack_left" || n == "resid_list_str_persist_copy" || n == "resid_cpu_has_aesni" || n == "resid_cpu_has_clmul" || n == "resid_test_plan" || n == "resid_test_summary" || n == "resid_quiet" || n == "resid_quiet_set" || n == "resid_mem_limit_set" || n == "resid_internals" || n == "resid_internals_set" || n == "resid_rtmod" || n == "resid_rtmod_set" || n == "str_trim" || n == "str_to_lower" || n == "str_to_upper" || n == "str_reverse" || n == "resid_sacc_from" || n == "resid_sacc_append_int" || n == "resid_sacc_append" || n == "str_contains" || n == "str_starts_with" || n == "str_ends_with" || n == "str_repeat" || n == "str_replace" || n == "str_split" || n == "str_join" || n == "str_is_int" || n == "str_is_float" || n == "str_parse_int" || n == "str_parse_float" || n == "sqrt" || n == "print_bytes" || n == "str_index_of" || n == "str_count" || n == "resid_fmt_radix" || n == "resid_fmt_group" || n == "resid_fmt_case" || n == "resid_fmt_sign" || n == "resid_fmt_pad" || n == "resid_fmt_style";
 }
 
 // cg_print: `print(str_sb_finish(b))` fuses into resid_sb_print.
@@ -2910,6 +2975,7 @@ GT lw_call(LW w, Int id, List(Str) env, GT c) {
         return GT {.pos = 0, .val = pr.val, .ty = pr.ty, .cnt = 0, .err = "", .glines = pr.glines, .lines = pr.lines, .tmp = pr.tmp, .lbl = pr.lbl, .tail = false};
     }
     if ((n == "aesni_enc_round" || n == "aesni_enc_last_round") && !user_fn) { return lw_aesni(w, id, n, env, c); }
+    if (n == "gf128_mul_hw" && !user_fn) { return lw_gf128(w, id, env, c); }
     if ((n == "ct_secret" || n == "ct_public") && !user_fn) { return lw_ct(w, id, n, env, c); }
     if (n == "ct_hide" && !user_fn) { return lw_ct_hide(w, id, env, c); }
     if (n == "resid_test_run_closure" && !user_fn) { return lw_extern(w, id, n, l2s("Void closure()", "Str"), "Int", env, c); }
@@ -3023,7 +3089,10 @@ GT lw_ct(LW w, Int id, Str n, List(Str) env, GT c) {
     Str g5 = f"%t{t + 8}";
     Str r = f"%t{t + 9}";
     Str v = f"%t{t + 10}";
-    Str asm = "rolq $$3, %rdi ; rolq $$13, %rdi ; rolq $$61, %rdi ; rolq $$51, %rdi ; xchgq %rbx, %rbx";
+    // The client request's magic preamble (valgrind.h): x86-64 takes the
+    // argument block in rax and the default in rdx; AArch64 in x4 and x3.
+    Str asm = if (tgt_a64()) { "ror x12, x12, #3 ; ror x12, x12, #13 ; ror x12, x12, #51 ; ror x12, x12, #61 ; orr x10, x10, x10" } else { "rolq $$3, %rdi ; rolq $$13, %rdi ; rolq $$61, %rdi ; rolq $$51, %rdi ; xchgq %rbx, %rbx" };
+    Str cons = if (tgt_a64()) { "={x3},{x4},0,~{cc},~{memory}" } else { "={dx},{ax},0,~{cc},~{memory},~{dirflag},~{fpsr},~{flags}" };
     List(Str) ls = [fixed_alloca(slot, nb + 16), fixed_alloca(args, 48), "store " + lt + " " + a.val + ", ptr " + slot, addr + " = ptrtoint ptr " + slot + " to i64",
         f"store i64 {req}, ptr " + args,
         g1 + " = getelementptr i64, ptr " + args + ", i64 1", "store i64 " + addr + ", ptr " + g1,
@@ -3031,15 +3100,61 @@ GT lw_ct(LW w, Int id, Str n, List(Str) env, GT c) {
         g3 + " = getelementptr i64, ptr " + args + ", i64 3", "store i64 0, ptr " + g3,
         g4 + " = getelementptr i64, ptr " + args + ", i64 4", "store i64 0, ptr " + g4,
         g5 + " = getelementptr i64, ptr " + args + ", i64 5", "store i64 0, ptr " + g5,
-        r + " = call i64 asm sideeffect \"" + asm + "\", \"={dx},{ax},0,~{cc},~{memory},~{dirflag},~{fpsr},~{flags}\"(ptr " + args + ", i64 0)",
+        r + " = call i64 asm sideeffect \"" + asm + "\", \"" + cons + "\"(ptr " + args + ", i64 0)",
         v + " = load " + lt + ", ptr " + slot];
     return lw_step(a, v, a.ty, a.lines.concat(ls), t + 10);
+}
+
+// gf128_mul_hw(x, y): GCM's multiply in GF(2^128) (blocks as big-endian
+// integers) with carry-less multiplication, PCLMULQDQ or PMULL. The caller
+// checks resid_cpu_has_clmul first.
+GT lw_gf128(LW w, Int id, List(Str) env, GT c) {
+    if (w.g.ns[id].nk != 2) { return lw_gerr("gf128_mul_hw arity", c); }
+    GT a0 = lw_expr(w, lw_kid(w, id, 0), env, c);
+    if (a0.err != "") { return a0; }
+    GT a = widen_val(a0, "UInt(128)");
+    GT b0 = lw_expr(w, lw_kid(w, id, 1), env, a);
+    if (b0.err != "") { return b0; }
+    GT b = widen_val(b0, "UInt(128)");
+    Str r = f"%t{b.tmp + 1}";
+    List(Str) gl = lv_decl(b.glines, "e.gf128", gf128_def());
+    GT b1 = GT {.pos = b.pos, .val = b.val, .ty = b.ty, .cnt = b.cnt, .err = b.err, .glines = gl, .lines = b.lines, .tmp = b.tmp, .lbl = b.lbl, .tail = b.tail};
+    return lw_step(b1, r, "UInt(128)", b.lines.concat([r + " = call i128 @e.gf128(i128 " + a.val + ", i128 " + b.val + ")"]), b.tmp + 1);
+}
+
+// The four 64x64 carry-less products a0b0, a1b1, a1b0, a0b1 of the target.
+List(Str) gf128_products() {
+    if (tgt_a64()) {
+        return ["  %a0 = trunc i128 %a to i64", "  %ah = lshr i128 %a, 64", "  %a1 = trunc i128 %ah to i64", "  %b0 = trunc i128 %b to i64", "  %bh = lshr i128 %b, 64", "  %b1 = trunc i128 %bh to i64",
+            "  %v00 = call <16 x i8> @llvm.aarch64.neon.pmull64(i64 %a0, i64 %b0)", "  %v11 = call <16 x i8> @llvm.aarch64.neon.pmull64(i64 %a1, i64 %b1)", "  %v10 = call <16 x i8> @llvm.aarch64.neon.pmull64(i64 %a1, i64 %b0)", "  %v01 = call <16 x i8> @llvm.aarch64.neon.pmull64(i64 %a0, i64 %b1)",
+            "  %p00 = bitcast <16 x i8> %v00 to i128", "  %p11 = bitcast <16 x i8> %v11 to i128", "  %p10 = bitcast <16 x i8> %v10 to i128", "  %p01 = bitcast <16 x i8> %v01 to i128"];
+    }
+    return ["  %av = bitcast i128 %a to <2 x i64>", "  %bv = bitcast i128 %b to <2 x i64>",
+        "  %v00 = call <2 x i64> @llvm.x86.pclmulqdq(<2 x i64> %av, <2 x i64> %bv, i8 0)", "  %v11 = call <2 x i64> @llvm.x86.pclmulqdq(<2 x i64> %av, <2 x i64> %bv, i8 17)", "  %v10 = call <2 x i64> @llvm.x86.pclmulqdq(<2 x i64> %av, <2 x i64> %bv, i8 1)", "  %v01 = call <2 x i64> @llvm.x86.pclmulqdq(<2 x i64> %av, <2 x i64> %bv, i8 16)",
+        "  %p00 = bitcast <2 x i64> %v00 to i128", "  %p11 = bitcast <2 x i64> %v11 to i128", "  %p10 = bitcast <2 x i64> %v10 to i128", "  %p01 = bitcast <2 x i64> %v01 to i128"];
+}
+
+// The 256-bit product, shifted left one bit (the operands are bit-reflected),
+// reduced modulo x^128 + x^7 + x^2 + x + 1 (Gueron and Kounavis, algorithm 5).
+Str gf128_def() {
+    Str decl = if (tgt_a64()) { "declare <16 x i8> @llvm.aarch64.neon.pmull64(i64, i64)" } else { "declare <2 x i64> @llvm.x86.pclmulqdq(<2 x i64>, <2 x i64>, i8)" };
+    Str feats = if (tgt_a64()) { "+aes,+neon" } else { "+pclmul,+sse2" };
+    List(Str) head = [decl, "define linkonce_odr i128 @e.gf128(i128 %a, i128 %b) \"target-features\"=\"" + feats + "\" {", "entry:"];
+    List(Str) tail = ["  %mid = xor i128 %p10, %p01", "  %ml = shl i128 %mid, 64", "  %mh = lshr i128 %mid, 64", "  %lo = xor i128 %p00, %ml", "  %hi = xor i128 %p11, %mh",
+        "  %hs = shl i128 %hi, 1", "  %lc = lshr i128 %lo, 127", "  %h2 = or i128 %hs, %lc", "  %l2 = shl i128 %lo, 1",
+        "  %x0 = trunc i128 %l2 to i64", "  %l2h = lshr i128 %l2, 64", "  %x1 = trunc i128 %l2h to i64",
+        "  %ca = shl i64 %x0, 63", "  %cb = shl i64 %x0, 62", "  %cc = shl i64 %x0, 57", "  %d1 = xor i64 %x1, %ca", "  %d2 = xor i64 %d1, %cb", "  %d = xor i64 %d2, %cc",
+        "  %dz = zext i64 %d to i128", "  %dh = shl i128 %dz, 64", "  %x0z = zext i64 %x0 to i128", "  %dx = or i128 %dh, %x0z",
+        "  %e = lshr i128 %dx, 1", "  %f = lshr i128 %dx, 2", "  %g = lshr i128 %dx, 7", "  %h1 = xor i128 %dx, %e", "  %h3 = xor i128 %h1, %f", "  %hh = xor i128 %h3, %g",
+        "  %r = xor i128 %h2, %hh", "  ret i128 %r", "}"];
+    return str_join(head.concat(gf128_products()).concat(tail), "\n");
 }
 
 // cg_primary's aesni_enc_round / aesni_enc_last_round.
 GT lw_aesni(LW w, Int id, Str n, List(Str) env, GT c) {
     if (w.g.ns[id].nk != 2) { return lw_gerr("aesni arity", c); }
-    Str intrin = if (n == "aesni_enc_last_round") { "@llvm.x86.aesni.aesenclast" } else { "@llvm.x86.aesni.aesenc" };
+    Bool last = n == "aesni_enc_last_round";
+    Str intrin = if (last) { "@llvm.x86.aesni.aesenclast" } else { "@llvm.x86.aesni.aesenc" };
     GT a0 = lw_expr(w, lw_kid(w, id, 0), env, c);
     if (a0.err != "") { return a0; }
     GT a = widen_val(a0, "UInt(128)");
@@ -3050,6 +3165,15 @@ GT lw_aesni(LW w, Int id, Str n, List(Str) env, GT c) {
     Str bvec = f"%t{b.tmp + 2}";
     Str rvec = f"%t{b.tmp + 3}";
     Str rreg = f"%t{b.tmp + 4}";
+    // AArch64: AESE is AddRoundKey, SubBytes and ShiftRows; AESMC is
+    // MixColumns. AESENC(s, k) is AESMC(AESE(s, 0)) ^ k.
+    if (tgt_a64()) {
+        List(Str) gl = lv_decl(lv_decl(b.glines, "llvm.aarch64.crypto.aese", "declare <16 x i8> @llvm.aarch64.crypto.aese(<16 x i8>, <16 x i8>)"), "llvm.aarch64.crypto.aesmc", "declare <16 x i8> @llvm.aarch64.crypto.aesmc(<16 x i8>)");
+        List(Str) mc = if (last) { [rvec + "m = add <16 x i8> " + rvec + "e, zeroinitializer"] } else { [rvec + "m = call <16 x i8> @llvm.aarch64.crypto.aesmc(<16 x i8> " + rvec + "e)"] };
+        List(Str) ls = [avec + " = bitcast i128 " + a.val + " to <16 x i8>", rvec + "e = call <16 x i8> @llvm.aarch64.crypto.aese(<16 x i8> " + avec + ", <16 x i8> zeroinitializer)"].concat(mc).concat([rvec + " = bitcast <16 x i8> " + rvec + "m to i128", rreg + " = xor i128 " + rvec + ", " + b.val]);
+        GT b1 = GT {.pos = b.pos, .val = b.val, .ty = b.ty, .cnt = b.cnt, .err = b.err, .glines = gl, .lines = b.lines, .tmp = b.tmp, .lbl = b.lbl, .tail = b.tail};
+        return lw_step(b1, rreg, "UInt(128)", b.lines.concat(ls), b.tmp + 4);
+    }
     return lw_step(b, rreg, "UInt(128)", b.lines.concat([avec + " = bitcast i128 " + a.val + " to <2 x i64>", bvec + " = bitcast i128 " + b.val + " to <2 x i64>", rvec + " = call <2 x i64> " + intrin + "(<2 x i64> " + avec + ", <2 x i64> " + bvec + ")", rreg + " = bitcast <2 x i64> " + rvec + " to i128"]), b.tmp + 4);
 }
 
@@ -4240,7 +4364,7 @@ List(Str) abi_trim_all(List(Str) xs, Int i, ListBuf(Str) acc) {
 }
 
 // A wrapper's attributes match the functions it calls, so it inlines.
-Str abi_attrs() { return "\"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\""; }
+Str abi_attrs() { return if (tgt_a64()) { "\"target-features\"=\"+aes,+neon\"" } else { "\"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\"" }; }
 
 Str abi_strip_nr(Str sig) { return if (str_ends_with(sig, " noreturn")) { str_slice(sig, 0, str_len(sig) - 9) } else { sig }; }
 
@@ -4357,7 +4481,7 @@ PG lw_fn_body(LW w0, Int d, PG g) {
     // registers for the common one.
     Str fattr0 = if (resid_rtmod() && str_contains(w0.g.ns[d].aux, "@cold")) { " noinline cold" } else if (resid_rtmod() && str_contains(w0.g.ns[d].aux, "@noinline")) { " noinline" } else { "" };
     Str fattr = if (resid_rtmod() && fattr0 == "" && str_contains(w0.g.ns[d].aux, "@inline")) { " alwaysinline" } else { fattr0 };
-    Str defline = if (is_main) { "define i32 @resid_user_main() \"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\" {" } else { "define " + link + ll_ty(rbase) + " @" + name + "(" + pd + ")" + fattr + " \"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\" {" };
+    Str defline = if (is_main) { "define i32 @resid_user_main() " + abi_attrs() + " {" } else { "define " + link + ll_ty(rbase) + " @" + name + "(" + pd + ")" + fattr + " " + abi_attrs() + " {" };
     List(Str) nl = lw_param_names(w1, d, 1, n - 1, ListBuf());
     // Ownership: the node flags and record reuses the body's lowering reads.
     LOF lf = lo_fn_flags(w1.g, d, w1.lo, fs);
@@ -4390,7 +4514,7 @@ PG lw_fn_body(LW w0, Int d, PG g) {
     Bool tco_ok = !is_main && (!sandboxed || split) && !growbuf_params;
     Str bname = if (split) { name + ".sb" } else { name };
     Str defpre = "define " + link + ll_ty(rbase) + " @" + bname + "(" + (if (sret) { if (tyl.len() > 0) { "ptr %fx.ret, " } else { "ptr %fx.ret" } } else { "" });
-    Str defpost = ")" + fattr + " \"target-features\"=\"+aes,+sse2,+ssse3,+sse4.1\" {";
+    Str defpost = ")" + fattr + " " + abi_attrs() + " {";
     List(Str) bhead = if (split) { [defpre + pd + defpost, "entry:"] } else { pp1.lines };
     List(Str) fn_lines00 = if (tco_ok) { tco_function(bhead, pp2.lines, name, ll_ty(rbase), ptys_ll, lw_fx_sizes(tyl, 0, ListBuf()), lw_fx_texts(tyl, 0, ListBuf()), sret, defpre, defpost, "") } else { bhead.concat(pp2.lines) };
     List(Str) fn_lines01 = if (tco_ok && !resid_rtmod()) { lsv_apply(sv_apply(fn_lines00, tyl), tyl) } else { fn_lines00 };

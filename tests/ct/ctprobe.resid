@@ -61,6 +61,7 @@ Int main() {
         else if (c == "aes-sw") { reveal(aes_encrypt_block_sw(aes_key_expand(k32), secret(bytes_n(16, 2)))) }
         else if (c == "aes-dec") { reveal(aes_decrypt_block(aes_key_expand(k32), secret(bytes_n(16, 2)))) }
         else if (c == "aes-kw") { reveal(aes_key_unwrap(k32, aes_key_wrap(bytes_n(32, 7), bytes_n(32, 1))) else { [] }) }
+        else if (c == "ghash-sw") { reveal(be_bytes(gf128_mul_sw(be_pack(k32, 0, 16, 0, (UInt(128)) 0), be_pack(msg, 0, 16, 0, (UInt(128)) 0)), 0, ListBuf())) }
         else if (c == "ghash") { reveal(be_bytes(gf128_mul(be_pack(k32, 0, 16, 0, (UInt(128)) 0), be_pack(msg, 0, 16, 0, (UInt(128)) 0)), 0, ListBuf())) }
         else if (c == "chacha") { reveal(chacha20poly1305_seal(k32, bytes_n(12, 1), secret(msg), [])) }
         else if (c == "hmac") { reveal(hmac_bytes(Sha384, k48, msg)) }

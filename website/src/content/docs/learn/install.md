@@ -6,7 +6,9 @@ description: Build the Resid compiler from source.
 Resid is self-hosted: the compiler is written in Resid and builds itself
 from a committed seed. You need:
 
-- **Linux on x86-64** (the runtime makes Linux system calls directly).
+- **Linux on x86-64 or AArch64** (the runtime makes Linux system calls
+  directly). The compiler also builds AArch64 binaries from x86-64 and
+  back, for Android too ([targets](/Resid/tools/residc/#targets)).
 - **LLVM 22 or newer**: `clang` and `lld` compile the LLVM IR the Resid
   compiler emits and link it. `libgcc` provides 128-bit division and
   `Float(128)` arithmetic.

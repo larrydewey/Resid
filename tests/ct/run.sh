@@ -31,7 +31,7 @@ export RESID_HOME="${RESID_HOME:-$ROOT/build/boot}"
 (cd "$ROOT" && "$COMPILER" tests/ct/ctprobe.resid -o "$W/ctprobe") > "$W/build.log" 2>&1 || {
     echo "FAIL build ctprobe"; grep -i -A3 error "$W/build.log" | head -8; exit 1; }
 
-CASES="ct-equal sha512 hmac hkdf ghash aes-sw aes-dec aes-gcm aes-kw chacha x25519 ed25519-sign
+CASES="ct-equal sha512 hmac hkdf ghash ghash-sw aes-sw aes-dec aes-gcm aes-kw chacha x25519 ed25519-sign
        p256-sign p384-sign p256-ecdh p384-ecdh p384-public hpke-open"
 pass=0; fail=0
 for c in $CASES; do

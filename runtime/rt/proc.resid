@@ -67,7 +67,7 @@ Int env_find(Int e, Int name, Int nl) {
     return env_find(e + 8, name, nl);
 }
 
-pub Int c_fork() { return resid_raw_syscall(57, 0, 0, 0, 0, 0, 0); }
+pub Int c_fork() { return resid_raw_syscall(56, 17, 0, 0, 0, 0, 0); }   // clone(SIGCHLD): fork
 
 pub Int c_execv(Int path, Int argv) { return resid_raw_syscall(59, path, argv, envp(), 0, 0, 0); }
 
@@ -111,7 +111,7 @@ pub Int shell_line(Int cmd) {
     Int pid = c_fork();
     if (pid == 0) {
         // Child: the pipe as standard output, then the shell.
-        _ = resid_raw_syscall(33, wr, 1, 0, 0, 0, 0);
+        _ = resid_raw_syscall(292, wr, 1, 0, 0, 0, 0);
         _ = c_execv(resid_raw_addr("/bin/sh"), argv);
         return resid_raw_syscall(231, 127, 0, 0, 0, 0, 0);
     }

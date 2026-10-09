@@ -255,7 +255,11 @@ pub UInt(128) le_to_be(UInt(128) v, Int i, UInt(128) acc) {
 
 // X * Y in GF(2^128), both big-endian packed (SP 800-38D, algorithm 1).
 // Each bit selects with a mask: H is secret, so no branch may see it.
-pub UInt(128) gf128_mul(UInt(128) x, UInt(128) y) { return gf128_at(x, y, (UInt(128)) 0, 0); }
+// Carry-less multiplication (PCLMULQDQ, PMULL) where the CPU has it, else
+// 128 masked shift-and-add steps; both are constant time.
+pub UInt(128) gf128_mul(UInt(128) x, UInt(128) y) { return if (resid_cpu_has_clmul()) { gf128_mul_hw(x, y) } else { gf128_mul_sw(x, y) }; }
+
+pub UInt(128) gf128_mul_sw(UInt(128) x, UInt(128) y) { return gf128_at(x, y, (UInt(128)) 0, 0); }
 
 UInt(128) gf128_at(UInt(128) x, UInt(128) v, UInt(128) z, Int i) {
     if (i >= 128) { return z; }

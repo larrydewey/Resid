@@ -4887,7 +4887,9 @@ List(Str) main_entry_ir() {
 // test binary's is generated).
 List(Str) start_entry_ir() {
     Str nl = "\\0A";
-    Str st = "xor %ebp, %ebp" + nl + "mov %rsp, %rdi" + nl + "lea _DYNAMIC(%rip), %rsi" + nl + "and $$-16, %rsp" + nl + "call resid_start" + nl + "call main" + nl + "mov %eax, %edi" + nl + "mov $$231, %eax" + nl + "syscall" + nl + "hlt";
+    Str x86 = "xor %ebp, %ebp" + nl + "mov %rsp, %rdi" + nl + "lea _DYNAMIC(%rip), %rsi" + nl + "and $$-16, %rsp" + nl + "call resid_start" + nl + "call main" + nl + "mov %eax, %edi" + nl + "mov $$231, %eax" + nl + "syscall" + nl + "hlt";
+    Str a64 = "mov x29, #0" + nl + "mov x30, #0" + nl + "mov x0, sp" + nl + "adrp x1, _DYNAMIC" + nl + "add x1, x1, :lo12:_DYNAMIC" + nl + "and sp, x0, #-16" + nl + "bl resid_start" + nl + "bl main" + nl + "mov x8, #94" + nl + "svc #0" + nl + "udf #0";
+    Str st = if (tgt_a64()) { a64 } else { x86 };
     return ["declare void @resid_start(ptr, ptr)", "define void @_start() naked noinline nounwind {", "  call void asm sideeffect \"" + st + "\", \"~{memory}\"()", "  unreachable", "}", "@llvm.compiler.used = appending global [2 x ptr] [ptr @main, ptr @resid_start], section \"llvm.metadata\""];
 }
 
@@ -4915,6 +4917,20 @@ List(Str) rt_asm_defs() {
     Str sj = "mov %rbx, (%rdi)" + nl + "mov %rbp, 8(%rdi)" + nl + "mov %r12, 16(%rdi)" + nl + "mov %r13, 24(%rdi)" + nl + "mov %r14, 32(%rdi)" + nl + "mov %r15, 40(%rdi)" + nl + "lea 8(%rsp), %rdx" + nl + "mov %rdx, 48(%rdi)" + nl + "mov (%rsp), %rdx" + nl + "mov %rdx, 56(%rdi)" + nl + "xor %eax, %eax" + nl + "ret";
     Str lj = "mov %esi, %eax" + nl + "test %eax, %eax" + nl + "jnz 1f" + nl + "inc %eax" + nl + "1:" + nl + "mov (%rdi), %rbx" + nl + "mov 8(%rdi), %rbp" + nl + "mov 16(%rdi), %r12" + nl + "mov 24(%rdi), %r13" + nl + "mov 32(%rdi), %r14" + nl + "mov 40(%rdi), %r15" + nl + "mov 48(%rdi), %rsp" + nl + "jmp *56(%rdi)";
     Str cl = "mov %rcx, %r10" + nl + "mov $$56, %eax" + nl + "syscall" + nl + "test %rax, %rax" + nl + "jnz 1f" + nl + "xor %ebp, %ebp" + nl + "pop %rax" + nl + "pop %rdi" + nl + "call *%rax" + nl + "mov $$60, %eax" + nl + "xor %edi, %edi" + nl + "syscall" + nl + "hlt" + nl + "1:" + nl + "ret";
+    if (tgt_a64()) { return rt_asm_a64(); }
+    return [asm_fn("memcpy", "ptr", "ptr, ptr, i64", cpy), asm_fn("memmove", "ptr", "ptr, ptr, i64", mov), asm_fn("memset", "ptr", "ptr, i32, i64", set), asm_fn("resid_setjmp", "i32", "ptr", sj), asm_fn("resid_longjmp", "void", "ptr, i32", lj), asm_fn("resid_clone", "i64", "i64, ptr, ptr, ptr, ptr", cl), "@llvm.compiler.used = appending global [3 x ptr] [ptr @memcpy, ptr @memmove, ptr @memset], section \"llvm.metadata\""];
+}
+
+// The same helpers for AArch64 Linux. The jump buffer holds x19-x30, sp
+// and d8-d15; clone(2) takes the TLS before the child tid there.
+List(Str) rt_asm_a64() {
+    Str nl = "\\0A";
+    Str cpy = "mov x3, x0" + nl + "1:" + nl + "cmp x2, #16" + nl + "b.lo 2f" + nl + "ldp x4, x5, [x1], #16" + nl + "stp x4, x5, [x3], #16" + nl + "sub x2, x2, #16" + nl + "b 1b" + nl + "2:" + nl + "cbz x2, 3f" + nl + "ldrb w4, [x1], #1" + nl + "strb w4, [x3], #1" + nl + "sub x2, x2, #1" + nl + "b 2b" + nl + "3:" + nl + "ret";
+    Str mov = "cmp x0, x1" + nl + "b.ls 4f" + nl + "add x4, x1, x2" + nl + "cmp x0, x4" + nl + "b.hs 4f" + nl + "add x1, x1, x2" + nl + "add x3, x0, x2" + nl + "1:" + nl + "cmp x2, #16" + nl + "b.lo 2f" + nl + "ldp x4, x5, [x1, #-16]!" + nl + "stp x4, x5, [x3, #-16]!" + nl + "sub x2, x2, #16" + nl + "b 1b" + nl + "2:" + nl + "cbz x2, 3f" + nl + "ldrb w4, [x1, #-1]!" + nl + "strb w4, [x3, #-1]!" + nl + "sub x2, x2, #1" + nl + "b 2b" + nl + "3:" + nl + "ret" + nl + "4:" + nl + "b memcpy";
+    Str set = "mov x3, x0" + nl + "and x1, x1, #255" + nl + "orr x1, x1, x1, lsl #8" + nl + "orr x1, x1, x1, lsl #16" + nl + "orr x1, x1, x1, lsl #32" + nl + "1:" + nl + "cmp x2, #16" + nl + "b.lo 2f" + nl + "stp x1, x1, [x3], #16" + nl + "sub x2, x2, #16" + nl + "b 1b" + nl + "2:" + nl + "cbz x2, 3f" + nl + "strb w1, [x3], #1" + nl + "sub x2, x2, #1" + nl + "b 2b" + nl + "3:" + nl + "ret";
+    Str sj = "stp x19, x20, [x0, #0]" + nl + "stp x21, x22, [x0, #16]" + nl + "stp x23, x24, [x0, #32]" + nl + "stp x25, x26, [x0, #48]" + nl + "stp x27, x28, [x0, #64]" + nl + "stp x29, x30, [x0, #80]" + nl + "mov x2, sp" + nl + "str x2, [x0, #96]" + nl + "stp d8, d9, [x0, #104]" + nl + "stp d10, d11, [x0, #120]" + nl + "stp d12, d13, [x0, #136]" + nl + "stp d14, d15, [x0, #152]" + nl + "mov w0, #0" + nl + "ret";
+    Str lj = "ldp x19, x20, [x0, #0]" + nl + "ldp x21, x22, [x0, #16]" + nl + "ldp x23, x24, [x0, #32]" + nl + "ldp x25, x26, [x0, #48]" + nl + "ldp x27, x28, [x0, #64]" + nl + "ldp x29, x30, [x0, #80]" + nl + "ldr x2, [x0, #96]" + nl + "mov sp, x2" + nl + "ldp d8, d9, [x0, #104]" + nl + "ldp d10, d11, [x0, #120]" + nl + "ldp d12, d13, [x0, #136]" + nl + "ldp d14, d15, [x0, #152]" + nl + "cmp w1, #0" + nl + "csinc w0, w1, wzr, ne" + nl + "br x30";
+    Str cl = "mov x5, x3" + nl + "mov x3, x4" + nl + "mov x4, x5" + nl + "mov x8, #220" + nl + "svc #0" + nl + "cbnz x0, 1f" + nl + "mov x29, #0" + nl + "mov x30, #0" + nl + "ldp x9, x0, [sp], #16" + nl + "blr x9" + nl + "mov x0, #0" + nl + "mov x8, #93" + nl + "svc #0" + nl + "udf #0" + nl + "1:" + nl + "ret";
     return [asm_fn("memcpy", "ptr", "ptr, ptr, i64", cpy), asm_fn("memmove", "ptr", "ptr, ptr, i64", mov), asm_fn("memset", "ptr", "ptr, i32, i64", set), asm_fn("resid_setjmp", "i32", "ptr", sj), asm_fn("resid_longjmp", "void", "ptr, i32", lj), asm_fn("resid_clone", "i64", "i64, ptr, ptr, ptr, ptr", cl), "@llvm.compiler.used = appending global [3 x ptr] [ptr @memcpy, ptr @memmove, ptr @memset], section \"llvm.metadata\""];
 }
 

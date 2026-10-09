@@ -22,10 +22,18 @@ pub Int o_rdonly() { return 524288; }                 // O_CLOEXEC
 Int o_write() { return 524288 | 1 | 64 | 512; }  // O_WRONLY | O_CREAT | O_TRUNC
 Int o_append() { return 524288 | 1 | 64 | 1024; }
 
-pub Int sys_open(Int path, Int flags, Int mode) { return sc(2, path, flags, mode); }
+// System calls are named by their x86-64 numbers (the compiler renumbers
+// them for AArch64), and only calls both targets have: openat, not open.
+pub Bool on_a64() { return resid_raw_arch() == 1; }
+
+pub Int sys_open(Int path, Int flags, Int mode) { return sc4(257, 0 - 100, path, flags, mode); }   // openat(AT_FDCWD)
+pub Int sys_stat(Int path, Int b) { return sc4(262, 0 - 100, path, b, 0); }                        // newfstatat(AT_FDCWD)
+pub Int sys_dup2(Int a, Int b) { return if (a == b) { b } else { resid_raw_syscall(292, a, b, 0, 0, 0, 0) }; }   // dup3
 pub Int sys_close(Int fd) { return resid_raw_syscall(3, fd, 0, 0, 0, 0, 0); }
 
-// A stat buffer: st_mode at 24 (u32), st_size at 48.
+// A stat buffer: st_mode (u32) at 24 on x86-64 and 16 on AArch64,
+// st_size at 48 on both.
+pub Int st_mode_at() { return if (on_a64()) { 16 } else { 24 }; }
 Int stat_buf() { return resid_raw_tls("stat_buf", 144); }
 Bool mode_dir(Int mode) { return (mode & 61440) == 16384; }
 Bool mode_reg(Int mode) { return (mode & 61440) == 32768; }
@@ -34,8 +42,8 @@ Bool mode_reg(Int mode) { return (mode & 61440) == 32768; }
 pub Int rt_fs_is_dir(Int path) {
     if (!path_ok(path)) { return 0; }
     Int b = stat_buf();
-    if (sc(4, path, b, 0) != 0) { return 0; }
-    return if (mode_dir(ld32(b + 24))) { 1 } else { 0 };
+    if (sys_stat(path, b) != 0) { return 0; }
+    return if (mode_dir(ld32(b + st_mode_at()))) { 1 } else { 0 };
 }
 
 // mkdir -p.
@@ -47,13 +55,13 @@ pub Int rt_fs_create_dir_all(Int path) {
     Int buf = cstr_dup(path);
     Bool ok = mkdir_parents(buf, 1, len) && mkdir_ok(buf);
     Int b = stat_buf();
-    Bool dir = ok && sc(4, buf, b, 0) == 0 && mode_dir(ld32(b + 24));
+    Bool dir = ok && sys_stat(buf, b) == 0 && mode_dir(ld32(b + st_mode_at()));
     _ = c_free(buf);
     return if (dir) { 1 } else { 0 };
 }
 
 Bool mkdir_ok(Int p) {
-    Int r = sc(83, p, 511, 0);
+    Int r = sc4(258, 0 - 100, p, 511, 0);   // mkdirat(AT_FDCWD)
     return r == 0 || r == 0 - 17;
 }
 
@@ -69,13 +77,13 @@ Bool mkdir_parents(Int buf, Int i, Int len) {
 @export("resid_fs_exists", "i8(ptr)")
 pub Int rt_fs_exists(Int path) {
     if (!path_ok(path)) { return 0; }
-    return b8(sc(4, path, stat_buf(), 0) == 0);   // stat: opening a FIFO would block
+    return b8(sys_stat(path, stat_buf()) == 0);   // stat: opening a FIFO would block
 }
 
 // All of fd from its offset, NUL-terminated ("" when unreadable).
 Int read_fd_all(Int fd) {
     Int b = stat_buf();
-    Int sz = if (sc(5, fd, b, 0) == 0 && mode_reg(ld32(b + 24))) { ld64(b + 48) } else { 0 };
+    Int sz = if (sc(5, fd, b, 0) == 0 && mode_reg(ld32(b + st_mode_at()))) { ld64(b + 48) } else { 0 };
     Int pos = sc(8, fd, 0, 1);
     Int rest = if (sz > 0 && pos > 0 && pos < sz) { sz - pos } else { sz };
     Int cap = if (rest > 0) { rest } else { 65536 };
@@ -798,9 +806,23 @@ Int reg_off(Int n) {
     return if (n >= 0 && n <= 16) { ld64(t + n * 8) } else { 0 - 1 };
 }
 
+// AArch64: user_pt_regs through PTRACE_GETREGSET (NT_PRSTATUS): x0..x30,
+// then sp and pc (DWARF 0..31; pc answers as 32).
+Int a64_regs(Int tid, Int r) {
+    Int iov = resid_raw_tls("dbg_iov", 16);
+    _ = st64(iov, r) + st64(iov + 8, 272);
+    return ptrace(16900, tid, 1, iov);
+}
+
+Int a64_reg_off(Int n) { return if (n >= 0 && n <= 32) { n * 8 } else { 0 - 1 }; }
+
 @export("resid_dbg_reg", "i64(i64,i64)")
 pub Int rt_dbg_reg(Int tid, Int n) {
-    Int r = resid_raw_tls("dbg_regs", 256);
+    Int r = resid_raw_tls("dbg_regs", 288);
+    if (on_a64()) {
+        Int o = a64_reg_off(n);
+        return if (a64_regs(tid, r) != 0 || o < 0) { 0 } else { ld64(r + o) };
+    }
     if (ptrace(12, tid, 0, r) != 0) { return 0; }
     Int off = reg_off(n);
     return if (off < 0) { 0 } else { ld64(r + off) };
@@ -808,7 +830,13 @@ pub Int rt_dbg_reg(Int tid, Int n) {
 
 @export("resid_dbg_set_pc", "i8(i64,i64)")
 pub Int rt_dbg_set_pc(Int tid, Int pc) {
-    Int r = resid_raw_tls("dbg_regs", 256);
+    Int r = resid_raw_tls("dbg_regs", 288);
+    if (on_a64()) {
+        if (a64_regs(tid, r) != 0) { return 0; }
+        _ = st64(r + 256, pc);
+        Int iov = resid_raw_tls("dbg_iov", 16);
+        return b8(ptrace(16901, tid, 1, iov) == 0);
+    }
     if (ptrace(12, tid, 0, r) != 0) { return 0; }
     _ = st64(r + 128, pc);
     return b8(ptrace(13, tid, 0, r) == 0);

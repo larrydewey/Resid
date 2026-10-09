@@ -4,7 +4,7 @@ description: The compiler's commands, options, profiles, outputs and environment
 ---
 
 ```text
-residc <file.resid> [-o out] [--profile release|debug|check] [-O0|-O1|-O2|-O3|-Os|-Oz]
+residc <file.resid> [-o out] [--profile release|debug|check] [-O0|-O1|-O2|-O3|-Os|-Oz] [--target x86_64|aarch64]
 residc test <file.resid> [--filter REGEX] [--format pretty|tap|json]
 residc keygen [dir]
 residc verify <binary> [--pub HEX] [--anchored] [--sources DIR]
@@ -23,6 +23,35 @@ static binary with clang. The default output is `a.out`.
 | `check` | no binary | | yes | |
 
 `-O0` … `-Oz` override the optimization level.
+
+## Targets
+
+`--target` picks the machine the binary is for: `x86_64` (the default) or
+`aarch64` (also spelled `arm64`, `aarch64-linux`, `aarch64-linux-android`),
+64-bit ARM Linux, Android included. Both are static PIEs with no C library;
+the compiler may run on either and builds the same IR for a given target.
+
+A cross build links the AArch64 runtime (`rt-aarch64.ll`) with `lld` and
+compiler-rt's AArch64 builtins in place of `libgcc`.
+`tools/aarch64-builtins.sh` copies them from clang's resource directory or
+an Android NDK into `build/boot/aarch64/`, where `install.sh` picks them
+up; `RESID_AARCH64_BUILTINS` names an archive directly.
+
+```sh
+residc app.resid --target aarch64 -o app
+adb push app /data/local/tmp/ && adb shell /data/local/tmp/app
+```
+
+On an x86-64 host with qemu-user registered in binfmt_misc the binary runs
+directly. What differs on AArch64:
+
+- A [native module](/Resid/reference/native-modules/)'s artifact must be
+  AArch64 IR. Its sandbox works the same, except that the CPU's generic
+  timer (`CNTVCT_EL0`) stays readable: Linux cannot deny it to a process
+  the way `PR_SET_TSC` denies the x86-64 time stamp counter. qemu-user has
+  no seccomp, so native calls fail there ("the sandbox could not be
+  installed"); they need AArch64 hardware.
+- `resid-debug` is x86-64 only.
 
 ## Outputs
 
@@ -65,7 +94,8 @@ static binary with clang. The default output is `a.out`.
 
 | Variable | |
 |---|---|
-| `RESID_HOME` | the directory holding `rt.ll` (the runtime); the standard library is at `$RESID_HOME/../../lib` |
+| `RESID_HOME` | the directory holding `rt.ll` and `rt-aarch64.ll` (the runtime); the standard library is at `$RESID_HOME/../../lib` |
+| `RESID_AARCH64_BUILTINS` | compiler-rt's AArch64 builtins archive, for `--target aarch64` (else `$RESID_HOME/aarch64/libclang_rt.builtins.a`) |
 | `RESID_SIGNING_KEY` | the signing key for release builds (else `keys/resid-ed25519.key`) |
 | `RESID_MEM_LIMIT` | the compiler's memory budget in MB (default 4096); one compile-time evaluation may meter a quarter of it |
 | `RESID_STACK_MB` | the stack of a program's main thread in MB (default 1024); for the compiler, how deep compile-time evaluation may nest before E0902 |

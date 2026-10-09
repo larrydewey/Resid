@@ -96,7 +96,7 @@ Int resident_bytes() {
     _ = sys_close(fd);
     if (n <= 0) { return 4611686018427387904; }
     Int sp = statm_skip(b, 0, n);
-    return statm_num(b, sp + 1, n, 0) * 4096;
+    return statm_num(b, sp + 1, n, 0) * page_size();
 }
 
 Int statm_skip(Int b, Int i, Int n) { return if (i >= n || ld8(b + i) == 32) { i } else { statm_skip(b, i + 1, n) }; }

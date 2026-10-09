@@ -114,37 +114,37 @@ caught:
 }
 declare double @llvm.sqrt.f64(double)
 declare ptr @resid_dbg_dump(i64, i64)
-define internal i64 @c_abort(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_abort(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0 = inttoptr i64 %a0 to ptr
 call void @resid_abort(ptr %x0)
 unreachable
 }
-define internal i64 @rt_abort(ptr %p0) noinline cold "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_abort(ptr %p0) noinline cold "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t1 = ptrtoint ptr %p0 to i64
 %t2 = call i64 @c_abort(i64 %t1)
 ret i64 %t2
 }
-define internal i64 @rt_abort_at(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_abort_at(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t3 = tail call i64 @c_abort(i64 %p0)
 ret i64 %t3
 }
-define internal i64 @rt_alloc(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_alloc(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call ptr @resid_rt_alloc(i64 %a0)
 %rvi = ptrtoint ptr %r to i64
 ret i64 %rvi
 }
-define internal i64 @rt_arena_contains(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_arena_contains(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0 = inttoptr i64 %a0 to ptr
 %r = call i8 @resid_rt_arena_contains(ptr %x0)
 %rv = zext i8 %r to i64
 ret i64 %rv
 }
-define internal i64 @c_list_new(i64 %a0, i64 %a1, i64 %a2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_list_new(i64 %a0, i64 %a1, i64 %a2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x1 = inttoptr i64 %a1 to ptr
 %x2 = inttoptr i64 %a2 to ptr
@@ -152,59 +152,59 @@ entry:
 %rvi = ptrtoint ptr %r to i64
 ret i64 %rvi
 }
-define internal i64 @c_list_len(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_list_len(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0 = inttoptr i64 %a0 to ptr
 %r = call i64 @resid_list_len(ptr %x0)
 ret i64 %r
 }
-define internal i64 @c_list_to_array(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_list_to_array(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0 = inttoptr i64 %a0 to ptr
 %r = call ptr @resid_list_to_array(ptr %x0)
 %rvi = ptrtoint ptr %r to i64
 ret i64 %rvi
 }
-define internal i64 @c_list_get(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_list_get(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0 = inttoptr i64 %a0 to ptr
 %r = call ptr @resid_list_get(ptr %x0, i64 %a1)
 %rvi = ptrtoint ptr %r to i64
 ret i64 %rvi
 }
-define internal i64 @c_box_i64(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_box_i64(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call ptr @resid_box_i64(i64 %a0)
 %rvi = ptrtoint ptr %r to i64
 ret i64 %rvi
 }
-define internal i64 @c_unbox_i64(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_unbox_i64(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0 = inttoptr i64 %a0 to ptr
 %r = call i64 @resid_unbox_i64(ptr %x0)
 ret i64 %r
 }
-define internal i64 @c_float_to_string(double %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_float_to_string(double %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call ptr @FloatToString(double %a0)
 %rvi = ptrtoint ptr %r to i64
 ret i64 %rvi
 }
-define internal i64 @c_list_type(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_list_type(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0 = inttoptr i64 %a0 to ptr
 %r = call ptr @resid_list_type(ptr %x0)
 %rvi = ptrtoint ptr %r to i64
 ret i64 %rvi
 }
-define internal i64 @c_longjmp(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_longjmp(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0 = inttoptr i64 %a0 to ptr
 %x1 = trunc i64 %a1 to i32
 call void @resid_longjmp(ptr %x0, i32 %x1)
 unreachable
 }
-define internal i64 @c_box_new(i64 %a0, i64 %a1, i64 %a2, i64 %a3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_box_new(i64 %a0, i64 %a1, i64 %a2, i64 %a3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x2 = inttoptr i64 %a2 to ptr
 %x3 = inttoptr i64 %a3 to ptr
@@ -212,62 +212,62 @@ entry:
 %rvi = ptrtoint ptr %r to i64
 ret i64 %rvi
 }
-define internal i64 @c_gmalloc(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_gmalloc(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call ptr @resid_gmalloc(i64 %a0)
 %rvi = ptrtoint ptr %r to i64
 ret i64 %rvi
 }
-define internal i64 @c_box_interned(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_box_interned(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0 = inttoptr i64 %a0 to ptr
 %r = call i8 @resid_rt_box_interned(ptr %x0)
 %rv = zext i8 %r to i64
 ret i64 %rv
 }
-define internal i64 @c_box_f64(double %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_box_f64(double %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call ptr @resid_box_f64(double %a0)
 %rvi = ptrtoint ptr %r to i64
 ret i64 %rvi
 }
-define internal i64 @c_box_bool(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_box_bool(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0 = trunc i64 %a0 to i8
 %r = call ptr @resid_box_bool(i8 %x0)
 %rvi = ptrtoint ptr %r to i64
 ret i64 %rvi
 }
-define internal i64 @c_sc_depth() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_sc_depth() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @resid_rt_sc_depth()
 ret i64 %r
 }
-define internal i64 @c_sc_depth_set(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_sc_depth_set(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 call void @resid_rt_sc_depth_set(i64 %a0)
 ret i64 0
 }
-define internal i64 @c_scope_alloc(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_scope_alloc(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call ptr @resid_rt_scope_alloc(i64 %a0)
 %rvi = ptrtoint ptr %r to i64
 ret i64 %rvi
 }
-define internal i64 @c_outer_alloc(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_outer_alloc(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call ptr @resid_rt_outer_alloc(i64 %a0)
 %rvi = ptrtoint ptr %r to i64
 ret i64 %rvi
 }
-define internal i64 @c_in_arenas(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_in_arenas(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0 = inttoptr i64 %a0 to ptr
 %r = call i8 @resid_rt_in_arenas(ptr %x0)
 %rv = zext i8 %r to i64
 ret i64 %rv
 }
-define internal i64 @c_clone(i64 %a0, i64 %a1, i64 %a2, i64 %a3, i64 %a4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_clone(i64 %a0, i64 %a1, i64 %a2, i64 %a3, i64 %a4) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x1 = inttoptr i64 %a1 to ptr
 %x2 = inttoptr i64 %a2 to ptr
@@ -276,18 +276,18 @@ entry:
 %r = call i64 @resid_clone(i64 %a0, ptr %x1, ptr %x2, ptr %x3, ptr %x4)
 ret i64 %r
 }
-define internal i64 @__mruntime_rt_libc_resid__ones8() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_libc_resid__ones8() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 72340172838076673
 }
-define internal i64 @__mruntime_rt_libc_resid__highs8() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_libc_resid__highs8() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4 = sext i64 0 to i128
 %t5 = sub i128 %t4, 9187201950435737472
 %t6 = trunc i128 %t5 to i64
 ret i64 %t6
 }
-define internal i64 @__mruntime_rt_libc_resid__zero_bytes(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_libc_resid__zero_bytes(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7 = call i64 @__mruntime_rt_libc_resid__ones8()
 %t8 = sub i64 %p0, %t7
@@ -297,7 +297,7 @@ entry:
 %t12 = and i64 %t10, %t11
 ret i64 %t12
 }
-define internal i64 @__mruntime_rt_libc_resid__ctz(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_libc_resid__ctz(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13 = sub i64 0, %p0
 %t14 = and i64 %p0, %t13
@@ -305,7 +305,7 @@ entry:
 %t16 = tail call i64 @llvm.ctpop.i64(i64 %t15)
 ret i64 %t16
 }
-define internal i64 @c_strlen(i64 %p0) noinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_strlen(i64 %p0) noinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17 = sub nsw i64 0, 8
 %t18 = and i64 %p0, %t17
@@ -340,7 +340,7 @@ L6:
 %t37 = call i64 @__mruntime_rt_libc_resid__strlen_words(i64 %t36, i64 %p0)
 ret i64 %t37
 }
-define internal i64 @__mruntime_rt_libc_resid__strlen_words(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_libc_resid__strlen_words(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -369,7 +369,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_libc_resid__strlen_blocks(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_libc_resid__strlen_blocks(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -400,7 +400,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_libc_resid__strlen_words_end(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_libc_resid__strlen_words_end(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -422,7 +422,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @c_strcmp(i64 %p0.in, i64 %p1.in) noinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_strcmp(i64 %p0.in, i64 %p1.in) noinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -447,7 +447,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @c_strncmp(i64 %p0.in, i64 %p1.in, i64 %p2.in) noinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_strncmp(i64 %p0.in, i64 %p1.in, i64 %p2.in) noinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -479,7 +479,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @c_strchr(i64 %p0.in, i64 %p1.in) noinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_strchr(i64 %p0.in, i64 %p1.in) noinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -502,7 +502,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @c_memchr(i64 %p0, i64 %p1, i64 %p2) noinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_memchr(i64 %p0, i64 %p1, i64 %p2) noinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t101 = icmp sge i64 %p2, 8
 br i1 %t101, label %L40, label %L42
@@ -517,7 +517,7 @@ L42:
 %t107 = tail call i64 @__mruntime_rt_libc_resid__memchr_bytes(i64 %p0, i64 %p1, i64 %p2)
 ret i64 %t107
 }
-define internal i64 @__mruntime_rt_libc_resid__memchr_bytes(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_libc_resid__memchr_bytes(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -542,7 +542,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_libc_resid__memchr_words(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_libc_resid__memchr_words(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -605,7 +605,7 @@ L57:
 %t149 = call i64 @__mruntime_rt_libc_resid__memchr_bytes(i64 %p0, i64 %p1, i64 %p3)
 ret i64 %t149
 }
-define internal i64 @c_memcmp(i64 %p0.in, i64 %p1.in, i64 %p2.in) noinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_memcmp(i64 %p0.in, i64 %p1.in, i64 %p2.in) noinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -635,7 +635,7 @@ L63:
 %t160 = tail call i64 @__mruntime_rt_libc_resid__memcmp_bytes(i64 %p0, i64 %p1, i64 %p2)
 ret i64 %t160
 }
-define internal i64 @__mruntime_rt_libc_resid__memcmp_bytes(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_libc_resid__memcmp_bytes(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -662,7 +662,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @c_memmem(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) noinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_memmem(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) noinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -706,7 +706,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @c_strstr(i64 %p0, i64 %p1) noinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_strstr(i64 %p0, i64 %p1) noinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t187 = call i64 @c_strlen(i64 %p1)
 %t188 = icmp eq i64 %t187, 0
@@ -717,7 +717,7 @@ L84:
 %t189 = call i64 @__mruntime_rt_libc_resid__strstr_from(i64 %p0, i64 %p1, i64 %t187)
 ret i64 %t189
 }
-define internal i64 @__mruntime_rt_libc_resid__strstr_from(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_libc_resid__strstr_from(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -742,25 +742,25 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_malloc_resid__nclasses() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_malloc_resid__nclasses() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 48
 }
-define internal i64 @__mruntime_rt_malloc_resid__big_max() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_malloc_resid__big_max() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 70368744177664
 }
-define internal i64 @__mruntime_rt_malloc_resid__small_max() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_malloc_resid__small_max() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 131072
 }
-define internal i64 @__mruntime_rt_malloc_resid__heap_tls() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_malloc_resid__heap_tls() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t197p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.rt_heap)
 %t197 = ptrtoint ptr %t197p to i64
 ret i64 %t197
 }
-define internal i64 @class_size(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @class_size(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t198 = icmp slt i64 %p0, 8
 br i1 %t198, label %L91, label %L93
@@ -783,7 +783,7 @@ L93:
 %t212 = sdiv i64 %t211, 4
 ret i64 %t212
 }
-define internal i64 @bitlen(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @bitlen(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t213 = ashr i64 %p0, 1
 %t214 = or i64 %p0, %t213
@@ -800,7 +800,7 @@ entry:
 %t225 = tail call i64 @llvm.ctpop.i64(i64 %t224)
 ret i64 %t225
 }
-define internal i64 @class_of(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @class_of(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t226 = icmp sle i64 %p0, 128
 br i1 %t226, label %L94, label %L96
@@ -840,10 +840,10 @@ call void @resid_overflow_check(i8 %t251)
 %t255 = add i64 %t254, %t250
 ret i64 %t255
 }
-define internal i64 @sys_mmap(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @sys_mmap(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t256 = sub nsw i64 0, 1
-%t257 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 9, i64 0, i64 %p0, i64 3, i64 34, i64 %t256, i64 0)
+%t257 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 222, i64 0, i64 %p0, i64 3, i64 34, i64 %t256, i64 0)
 %t258 = icmp slt i64 %t257, 0
 br label %LSL259
 LSL259:
@@ -860,24 +860,24 @@ ret i64 0
 L99:
 ret i64 %t257
 }
-define internal i64 @sys_munmap(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @sys_munmap(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t263 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 11, i64 %p0, i64 %p1, i64 0, i64 0, i64 0, i64 0)
+%t263 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 215, i64 %p0, i64 %p1, i64 0, i64 0, i64 0, i64 0)
 ret i64 %t263
 }
-define internal i64 @__mruntime_rt_malloc_resid__mem_used() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_malloc_resid__mem_used() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t264p = getelementptr i8, ptr @rtg.rt_mem_used, i64 0
 %t264 = ptrtoint ptr %t264p to i64
 ret i64 %t264
 }
-define internal i64 @__mruntime_rt_malloc_resid__mem_lim() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_malloc_resid__mem_lim() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t265p = getelementptr i8, ptr @rtg.rt_mem_limit, i64 0
 %t265 = ptrtoint ptr %t265p to i64
 ret i64 %t265
 }
-define internal i64 @__mruntime_rt_malloc_resid__limit_bytes() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_malloc_resid__limit_bytes() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t266 = call i64 @__mruntime_rt_malloc_resid__mem_lim()
 %t267 = call i64 @ld64(i64 %t266)
@@ -926,7 +926,7 @@ L108:
 %t290 = add nsw i64 %t287, %t289
 ret i64 %t290
 }
-define internal i64 @rt_mem_limit_set(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_mem_limit_set(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t292 = ptrtoint ptr @.s291 to i64
 %t293 = call i64 @c_getenv(i64 %t292)
@@ -958,12 +958,12 @@ L114:
 %t304 = mul nsw i64 %t303, 0
 ret i64 %t304
 }
-define i64 @resid_mem_limit_set(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_mem_limit_set(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_mem_limit_set(i64 %a0)
 ret i64 %r
 }
-define internal i64 @mem_take(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @mem_take(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t305 = call i64 @__mruntime_rt_malloc_resid__mem_used()
 %t306p = inttoptr i64 %t305 to ptr
@@ -995,7 +995,7 @@ ret i64 %t317
 L117:
 ret i64 0
 }
-define internal i64 @__mruntime_rt_malloc_resid__resident_bytes() noinline cold "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_malloc_resid__resident_bytes() noinline cold "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t318p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.statm_buf)
 %t318 = ptrtoint ptr %t318p to i64
@@ -1008,7 +1008,7 @@ L118:
 %t324 = trunc i128 4611686018427387904 to i64
 ret i64 %t324
 L120:
-%t325 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 0, i64 %t322, i64 %t318, i64 127, i64 0, i64 0, i64 0)
+%t325 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 63, i64 %t322, i64 %t318, i64 127, i64 0, i64 0, i64 0)
 %t326 = call i64 @sys_close(i64 %t322)
 %t327 = icmp sle i64 %t325, 0
 br i1 %t327, label %L121, label %L123
@@ -1023,7 +1023,7 @@ L123:
 %t333 = mul i64 %t331, %t332
 ret i64 %t333
 }
-define internal i64 @__mruntime_rt_malloc_resid__statm_skip(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_malloc_resid__statm_skip(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t334 = icmp sge i64 %p1, %p2
 br label %LSL335
@@ -1047,7 +1047,7 @@ L126:
 %t342 = phi i64 [ %p1, %L124 ], [ %t341, %L125 ]
 ret i64 %t342
 }
-define internal i64 @__mruntime_rt_malloc_resid__statm_num(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_malloc_resid__statm_num(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t343 = icmp slt i64 %p1, %p2
 br i1 %t343, label %L127, label %L128
@@ -1082,7 +1082,7 @@ L132:
 %t356 = phi i64 [ %t355, %L130 ], [ %p3, %L131 ]
 ret i64 %t356
 }
-define internal i64 @mem_give(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @mem_give(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t357 = call i64 @__mruntime_rt_malloc_resid__mem_used()
 %t358 = sub i64 0, %p0
@@ -1091,7 +1091,7 @@ entry:
 %t360 = mul nsw i64 %t359, 0
 ret i64 %t360
 }
-define internal i64 @__mruntime_rt_malloc_resid__over_budget(i64 %p0) noinline cold "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_malloc_resid__over_budget(i64 %p0) noinline cold "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t361p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.budget_msg)
 %t361 = ptrtoint ptr %t361p to i64
@@ -1110,11 +1110,11 @@ entry:
 %t376 = tail call i64 @rt_abort_msg(i64 %t361)
 ret i64 %t376
 }
-define internal i64 @__mruntime_rt_malloc_resid__huge() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_malloc_resid__huge() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 2097152
 }
-define internal i64 @__mruntime_rt_malloc_resid__heap_map(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_malloc_resid__heap_map(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t377 = call i64 @mem_take(i64 %p0)
 %t378 = call i64 @__mruntime_rt_malloc_resid__huge()
@@ -1174,16 +1174,16 @@ L143:
 br label %L144
 L144:
 %t409 = phi i64 [ %t408, %L142 ], [ 0, %L143 ]
-%t410 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 28, i64 %t396, i64 %p0, i64 14, i64 0, i64 0, i64 0)
+%t410 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 233, i64 %t396, i64 %p0, i64 14, i64 0, i64 0, i64 0)
 ret i64 %t396
 }
-define internal i64 @unmap_epoch() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @unmap_epoch() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t411p = getelementptr i8, ptr @rtg.rt_unmap_epoch, i64 0
 %t411 = ptrtoint ptr %t411p to i64
 ret i64 %t411
 }
-define internal i64 @__mruntime_rt_malloc_resid__heap_unmap(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_malloc_resid__heap_unmap(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t412 = call i64 @unmap_epoch()
 %t413p = inttoptr i64 %t412 to ptr
@@ -1195,7 +1195,7 @@ entry:
 %t417 = tail call i64 @sys_munmap(i64 %p0, i64 %p1)
 ret i64 %t417
 }
-define internal i64 @c_malloc(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_malloc(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t418 = icmp sle i64 %p0, 0
 br i1 %t418, label %L145, label %L146
@@ -1229,7 +1229,7 @@ L153:
 %t433 = tail call i64 @__mruntime_rt_malloc_resid__carve(i64 %t423)
 ret i64 %t433
 }
-define internal i64 @__mruntime_rt_malloc_resid__carve(i64 %p0) noinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_malloc_resid__carve(i64 %p0) noinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t434 = call i64 @__mruntime_rt_malloc_resid__heap_tls()
 %t435 = call i64 @class_size(i64 %p0)
@@ -1268,7 +1268,7 @@ L159:
 %t453 = add i64 %t447, 16
 ret i64 %t453
 }
-define internal i64 @__mruntime_rt_malloc_resid__new_slab(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_malloc_resid__new_slab(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t454 = add i64 %p0, 424
 %t455 = call i64 @ld64(i64 %t454)
@@ -1325,7 +1325,7 @@ L174:
 %t478 = call i64 @st64(i64 %t476, i64 %t477)
 ret i64 %t474
 }
-define internal i64 @__mruntime_rt_malloc_resid__big_round(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_malloc_resid__big_round(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t479 = call i64 @__mruntime_rt_malloc_resid__huge()
 %t480 = icmp sge i64 %p0, %t479
@@ -1344,7 +1344,7 @@ L177:
 %t489 = and i64 %t487, %t488
 ret i64 %t489
 }
-define internal i64 @__mruntime_rt_malloc_resid__big_alloc(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_malloc_resid__big_alloc(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t490 = call i64 @__mruntime_rt_malloc_resid__big_max()
 %t491 = icmp sgt i64 %p0, %t490
@@ -1375,7 +1375,7 @@ L186:
 %t504 = add i64 %t503, 16
 ret i64 %t504
 }
-define internal i64 @c_free(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_free(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t505 = icmp eq i64 %p0, 0
 br i1 %t505, label %L187, label %L189
@@ -1404,7 +1404,7 @@ L195:
 %t517 = call i64 @__mruntime_rt_malloc_resid__big_free(i64 %t516, i64 %t507)
 ret i64 %t517
 }
-define internal i64 @__mruntime_rt_malloc_resid__big_free(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_malloc_resid__big_free(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t518 = call i64 @__mruntime_rt_malloc_resid__heap_tls()
 %t519 = add i64 %t518, 408
@@ -1444,7 +1444,7 @@ L198:
 %t544 = tail call i64 @st64(i64 %t540, i64 %t543)
 ret i64 %t544
 }
-define internal i64 @__mruntime_rt_malloc_resid__cache_flush(i64 %p0.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_malloc_resid__cache_flush(i64 %p0.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -1477,13 +1477,13 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_malloc_resid__cache_take(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_malloc_resid__cache_take(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t566 = add i64 %p0, 400
 %t567 = call i64 @__mruntime_rt_malloc_resid__cache_scan(i64 %p0, i64 %t566, i64 %p1)
 ret i64 %t567
 }
-define internal i64 @__mruntime_rt_malloc_resid__cache_scan(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_malloc_resid__cache_scan(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -1529,7 +1529,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_malloc_resid__block_room(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_malloc_resid__block_room(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t591 = sub i64 %p0, 16
 %t592 = call i64 @ld64(i64 %t591)
@@ -1545,7 +1545,7 @@ L210:
 %t596 = phi i64 [ %t594, %L208 ], [ %t595, %L209 ]
 ret i64 %t596
 }
-define internal i64 @c_realloc(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_realloc(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t597 = icmp eq i64 %p0, 0
 br i1 %t597, label %L211, label %L213
@@ -1578,7 +1578,7 @@ L222:
 %t611p = inttoptr i64 %t610 to ptr
 %t611 = atomicrmw add ptr %t611p, i64 1 seq_cst
 %t612 = sub i64 %p0, 16
-%t613 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 25, i64 %t612, i64 %t602, i64 %t607, i64 1, i64 0, i64 0)
+%t613 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 216, i64 %t612, i64 %t602, i64 %t607, i64 1, i64 0, i64 0)
 %t614 = icmp slt i64 %t613, 0
 br label %LSL615
 LSL615:
@@ -1612,7 +1612,7 @@ L228:
 %t629 = add nsw i64 %t628, %t623
 ret i64 %t629
 }
-define internal i64 @c_calloc(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_calloc(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t630 = icmp slt i64 %p0, 0
 br label %LSL631
@@ -1664,13 +1664,13 @@ L234:
 %t649 = phi i64 [ %t648, %L232 ], [ 0, %L233 ]
 ret i64 %t649
 }
-define internal i64 @__mruntime_rt_malloc_resid__orphans() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_malloc_resid__orphans() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t650p = getelementptr i8, ptr @rtg.rt_heap_orphans, i64 0
 %t650 = ptrtoint ptr %t650p to i64
 ret i64 %t650
 }
-define internal i64 @__mruntime_rt_malloc_resid__orphan_lock() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_malloc_resid__orphan_lock() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -1686,13 +1686,13 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_malloc_resid__orphan_unlock() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_malloc_resid__orphan_unlock() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t654 = call i64 @__mruntime_rt_malloc_resid__orphans()
 %t655 = call i64 @st64(i64 %t654, i64 0)
 ret i64 %t655
 }
-define internal i64 @heap_retire() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @heap_retire() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t656 = call i64 @sys_mmap(i64 4096)
 %t657 = icmp eq i64 %t656, 0
@@ -1714,7 +1714,7 @@ L240:
 %t669 = tail call i64 @__mruntime_rt_malloc_resid__orphan_unlock()
 ret i64 %t669
 }
-define internal i64 @heap_adopt() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @heap_adopt() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t670 = call i64 @__mruntime_rt_malloc_resid__orphan_lock()
 %t671 = call i64 @__mruntime_rt_malloc_resid__orphans()
@@ -1744,26 +1744,26 @@ L246:
 %t685 = call i64 @sys_munmap(i64 %t673, i64 4096)
 ret i64 %t685
 }
-define internal i64 @c_malloc_trim(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_malloc_trim(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 0
 }
-define internal i64 @rt_free_x(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_free_x(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t686 = tail call i64 @c_free(i64 %p0)
 ret i64 %t686
 }
-define void @resid_free(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define void @resid_free(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_free_x(i64 %x0i)
 ret void
 }
-define internal i64 @__mruntime_rt_floattext_resid__bn_cap() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__bn_cap() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 1020
 }
-define internal i64 @bn_new() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @bn_new() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t687 = mul nsw i64 1024, 8
 %t688 = add nsw i64 8, %t687
@@ -1773,12 +1773,12 @@ entry:
 %t692 = add nsw i64 %t691, %t689
 ret i64 %t692
 }
-define internal i64 @__mruntime_rt_floattext_resid__bn_len(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__bn_len(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t693 = tail call i64 @ld64(i64 %p0)
 ret i64 %t693
 }
-define internal i64 @__mruntime_rt_floattext_resid__bn_l(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__bn_l(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t694 = add i64 %p0, 8
 %t695 = mul i64 %p1, 8
@@ -1786,7 +1786,7 @@ entry:
 %t697 = call i64 @ld64(i64 %t696)
 ret i64 %t697
 }
-define internal i64 @__mruntime_rt_floattext_resid__bn_w(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__bn_w(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t698 = call i64 @__mruntime_rt_floattext_resid__bn_len(i64 %p0)
 %t699 = icmp slt i64 %p1, %t698
@@ -1800,7 +1800,7 @@ L249:
 %t701 = phi i64 [ %t700, %L247 ], [ 0, %L248 ]
 ret i64 %t701
 }
-define internal i64 @__mruntime_rt_floattext_resid__bn_set(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__bn_set(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t702 = add i64 %p0, 8
 %t703 = mul i64 %p1, 8
@@ -1808,7 +1808,7 @@ entry:
 %t705 = call i64 @st64(i64 %t704, i64 %p2)
 ret i64 %t705
 }
-define internal i64 @__mruntime_rt_floattext_resid__bn_trim(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__bn_trim(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t706 = call i64 @ld64(i64 %p0)
 %t707 = icmp sgt i64 %t706, 0
@@ -1833,17 +1833,17 @@ ret i64 %t717
 L252:
 ret i64 0
 }
-define internal i1 @__mruntime_rt_floattext_resid__bn_zero(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_floattext_resid__bn_zero(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t718 = call i64 @__mruntime_rt_floattext_resid__bn_len(i64 %p0)
 %t719 = icmp eq i64 %t718, 0
 ret i1 %t719
 }
-define internal i64 @__mruntime_rt_floattext_resid__mask32() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__mask32() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 4294967295
 }
-define internal i64 @__mruntime_rt_floattext_resid__bn_from(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__bn_from(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t720 = call i64 @__mruntime_rt_floattext_resid__mask32()
 %t721 = and i64 %p1, %t720
@@ -1854,7 +1854,7 @@ entry:
 %t726 = call i64 @__mruntime_rt_floattext_resid__bn_trim(i64 %p0)
 ret i64 %t726
 }
-define internal i64 @__mruntime_rt_floattext_resid__bn_copy(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__bn_copy(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t727 = call i64 @__mruntime_rt_floattext_resid__bn_len(i64 %p1)
 %t728 = mul i64 %t727, 8
@@ -1862,7 +1862,7 @@ entry:
 %t730 = call i64 @mcopy(i64 %p0, i64 %p1, i64 %t729)
 ret i64 %t730
 }
-define internal i64 @bn_muladd(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @bn_muladd(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t731 = call i64 @__mruntime_rt_floattext_resid__bn_len(i64 %p0)
 %t732 = call i64 @__mruntime_rt_floattext_resid__muladd_at(i64 %p0, i64 %p1, i64 0, i64 %t731, i64 %p2)
@@ -1877,7 +1877,7 @@ L255:
 %t737 = call i64 @st64(i64 %p0, i64 %t736)
 ret i64 %t737
 }
-define internal i64 @__mruntime_rt_floattext_resid__muladd_at(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__muladd_at(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -1903,7 +1903,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @bn_divsmall(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @bn_divsmall(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t748 = call i64 @__mruntime_rt_floattext_resid__bn_len(i64 %p0)
 %t749 = sub i64 %t748, 1
@@ -1913,7 +1913,7 @@ entry:
 %t753 = add nsw i64 %t752, %t750
 ret i64 %t753
 }
-define internal i64 @__mruntime_rt_floattext_resid__divsmall_at(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__divsmall_at(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -1947,7 +1947,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_floattext_resid__bn_bitlen(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__bn_bitlen(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t791 = call i64 @__mruntime_rt_floattext_resid__bn_len(i64 %p0)
 %t792 = icmp eq i64 %t791, 0
@@ -1963,7 +1963,7 @@ L264:
 %t798 = add i64 %t794, %t797
 ret i64 %t798
 }
-define internal i64 @__mruntime_rt_floattext_resid__bn_shl(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__bn_shl(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t799 = call i1 @__mruntime_rt_floattext_resid__bn_zero(i64 %p0)
 br i1 %t799, label %L265, label %L267
@@ -1984,7 +1984,7 @@ L267:
 %t811 = call i64 @__mruntime_rt_floattext_resid__bn_trim(i64 %p0)
 ret i64 %t811
 }
-define internal i64 @__mruntime_rt_floattext_resid__shl_limbs(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__shl_limbs(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -2028,7 +2028,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_floattext_resid__zero_limbs(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__zero_limbs(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -2046,7 +2046,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_floattext_resid__bn_shr(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__bn_shr(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t839 = sdiv i64 %p1, 32
 %t840 = srem i64 %p1, 32
@@ -2064,7 +2064,7 @@ L279:
 %t848 = call i64 @__mruntime_rt_floattext_resid__bn_trim(i64 %p0)
 ret i64 %t848
 }
-define internal i64 @__mruntime_rt_floattext_resid__shr_limbs(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__shr_limbs(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -2117,7 +2117,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_floattext_resid__bn_lowbits(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__bn_lowbits(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t874 = sdiv i64 %p1, 32
 %t875 = srem i64 %p1, 32
@@ -2140,7 +2140,7 @@ L288:
 %t888 = call i64 @__mruntime_rt_floattext_resid__bn_trim(i64 %p0)
 ret i64 %t888
 }
-define internal i64 @__mruntime_rt_floattext_resid__bn_cmp(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__bn_cmp(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t889 = call i64 @__mruntime_rt_floattext_resid__bn_len(i64 %p0)
 %t890 = call i64 @__mruntime_rt_floattext_resid__bn_len(i64 %p1)
@@ -2162,7 +2162,7 @@ L291:
 %t896 = call i64 @__mruntime_rt_floattext_resid__cmp_limbs(i64 %p0, i64 %p1, i64 %t895)
 ret i64 %t896
 }
-define internal i64 @__mruntime_rt_floattext_resid__cmp_limbs(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__cmp_limbs(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -2195,7 +2195,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_floattext_resid__bn_sub(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__bn_sub(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t906 = call i64 @__mruntime_rt_floattext_resid__bn_len(i64 %p0)
 %t907 = call i64 @__mruntime_rt_floattext_resid__bn_len(i64 %p1)
@@ -2203,7 +2203,7 @@ entry:
 %t909 = call i64 @__mruntime_rt_floattext_resid__bn_trim(i64 %p0)
 ret i64 %t909
 }
-define internal i64 @__mruntime_rt_floattext_resid__sub_limbs(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__sub_limbs(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -2246,13 +2246,13 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_floattext_resid__bn_pow10(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__bn_pow10(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t924 = call i64 @__mruntime_rt_floattext_resid__bn_from(i64 %p0, i64 1)
 %t925 = tail call i64 @__mruntime_rt_floattext_resid__pow10_at(i64 %p0, i64 %p1)
 ret i64 %t925
 }
-define internal i64 @__mruntime_rt_floattext_resid__pow10_at(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__pow10_at(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t926 = icmp sle i64 %p1, 0
 br i1 %t926, label %L313, label %L315
@@ -2279,7 +2279,7 @@ L318:
 %t940 = add nsw i64 %t938, %t939
 ret i64 %t940
 }
-define internal i1 @is_space(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @is_space(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t941 = icmp eq i64 %p0, 32
 br label %LSL942
@@ -2300,7 +2300,7 @@ LSJ942:
 %t947 = phi i1 [ true, %LSL942 ], [ %t946, %LSJ944 ]
 ret i1 %t947
 }
-define internal i64 @lower(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @lower(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t948 = icmp sge i64 %p0, 65
 br label %LSL949
@@ -2321,7 +2321,7 @@ L321:
 %t953 = phi i64 [ %t952, %L319 ], [ %p0, %L320 ]
 ret i64 %t953
 }
-define internal i64 @__mruntime_rt_floattext_resid__word_at(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__word_at(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t954 = call i64 @ld8(i64 %p1)
 %t955 = icmp eq i64 %t954, 0
@@ -2343,7 +2343,7 @@ L327:
 %t963 = add i64 1, %t962
 ret i64 %t963
 }
-define internal i64 @__mruntime_rt_floattext_resid__hexval(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__hexval(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t964 = icmp sge i64 %p0, 48
 br label %LSL965
@@ -2377,12 +2377,12 @@ L333:
 %t975 = sub nsw i64 0, 1
 ret i64 %t975
 }
-define internal double @__mruntime_rt_floattext_resid__bits_f(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal double @__mruntime_rt_floattext_resid__bits_f(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t976 = bitcast i64 %p0 to double
 ret double %t976
 }
-define internal double @__mruntime_rt_floattext_resid__signed_f(i1 %p0, double %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal double @__mruntime_rt_floattext_resid__signed_f(i1 %p0, double %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br i1 %p0, label %L334, label %L335
 L334:
@@ -2397,7 +2397,7 @@ L336:
 %t981 = phi double [ %t980, %L334 ], [ %p1, %L335 ]
 ret double %t981
 }
-define internal double @c_strtod(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal double @c_strtod(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t982 = call i64 @__mruntime_rt_floattext_resid__skip_space(i64 %p0)
 %t983 = call i64 @ld8(i64 %t982)
@@ -2545,7 +2545,7 @@ L363:
 %t1055 = phi double [ 0.0, %L361 ], [ %t1054, %L362 ]
 ret double %t1055
 }
-define internal i64 @__mruntime_rt_floattext_resid__skip_space(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__skip_space(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t1056 = call i64 @ld8(i64 %p0)
 %t1057 = call i1 @is_space(i64 %t1056)
@@ -2560,7 +2560,7 @@ L366:
 %t1060 = phi i64 [ %t1059, %L364 ], [ %p0, %L365 ]
 ret i64 %t1060
 }
-define internal i64 @__mruntime_rt_floattext_resid__set_end(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__set_end(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t1061 = icmp ne i64 %p0, 0
 br i1 %t1061, label %L367, label %L368
@@ -2573,7 +2573,7 @@ L369:
 %t1063 = phi i64 [ %t1062, %L367 ], [ 0, %L368 ]
 ret i64 %t1063
 }
-define internal i64 @__mruntime_rt_floattext_resid__nan_close(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__nan_close(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -2631,13 +2631,13 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_floattext_resid__ds() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__ds() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t1085p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.strtod_st)
 %t1085 = ptrtoint ptr %t1085p to i64
 ret i64 %t1085
 }
-define internal i64 @__mruntime_rt_floattext_resid__dg(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__dg(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t1086 = call i64 @__mruntime_rt_floattext_resid__ds()
 %t1087 = mul i64 %p0, 8
@@ -2645,7 +2645,7 @@ entry:
 %t1089 = tail call i64 @ld64(i64 %t1088)
 ret i64 %t1089
 }
-define internal i64 @__mruntime_rt_floattext_resid__dset(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__dset(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t1090 = call i64 @__mruntime_rt_floattext_resid__ds()
 %t1091 = mul i64 %p0, 8
@@ -2653,7 +2653,7 @@ entry:
 %t1093 = tail call i64 @st64(i64 %t1092, i64 %p1)
 ret i64 %t1093
 }
-define internal i64 @__mruntime_rt_floattext_resid__take_digit(i64 %p0, i1 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__take_digit(i64 %p0, i1 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t1094 = call i64 @__mruntime_rt_floattext_resid__dg(i64 4)
 %t1095 = add i64 %t1094, 1
@@ -2724,7 +2724,7 @@ L393:
 %t1123 = phi i64 [ 0, %L391 ], [ %t1122, %L392 ]
 ret i64 %t1123
 }
-define internal i64 @__mruntime_rt_floattext_resid__scan_digits(i64 %p0.in, i1 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__scan_digits(i64 %p0.in, i1 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -2751,7 +2751,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal double @__mruntime_rt_floattext_resid__dec_float(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal double @__mruntime_rt_floattext_resid__dec_float(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t1133 = call i64 @bn_new()
 %t1134 = call i64 @__mruntime_rt_floattext_resid__dset(i64 0, i64 %t1133)
@@ -2868,7 +2868,7 @@ L414:
 %t1191 = call i64 @c_free(i64 %t1133)
 ret double %t1190
 }
-define internal i64 @__mruntime_rt_floattext_resid__exp_digits(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__exp_digits(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -2907,7 +2907,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal double @decimal_to_double(i64 %p0, i64 %p1, i1 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal double @decimal_to_double(i64 %p0, i64 %p1, i1 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t1207 = call i1 @__mruntime_rt_floattext_resid__bn_zero(i64 %p0)
 br i1 %t1207, label %L421, label %L423
@@ -3031,7 +3031,7 @@ LSJ1263:
 %t1268 = add i64 %t1266, %t1267
 ret double %t1265
 }
-define internal double @__mruntime_rt_floattext_resid__pow10_f(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal double @__mruntime_rt_floattext_resid__pow10_f(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t1269 = icmp eq i64 %p0, 0
 br i1 %t1269, label %L445, label %L447
@@ -3043,7 +3043,7 @@ L447:
 %t1272 = fmul double 10.0, %t1271
 ret double %t1272
 }
-define internal i64 @__mruntime_rt_floattext_resid__mul_pow10(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__mul_pow10(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -3072,7 +3072,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i1 @__mruntime_rt_floattext_resid__bn_divmod(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_floattext_resid__bn_divmod(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t1283 = call i64 @__mruntime_rt_floattext_resid__bn_len(i64 %p1)
 %t1284 = icmp eq i64 %t1283, 1
@@ -3137,7 +3137,7 @@ LSJ1324:
 %t1325 = phi i1 [ false, %LSL1324 ], [ %t1321, %LSR1324 ]
 ret i1 %t1325
 }
-define internal i64 @__mruntime_rt_floattext_resid__knuth_steps(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__knuth_steps(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -3217,7 +3217,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_floattext_resid__qhat_adjust(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__qhat_adjust(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -3257,7 +3257,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_floattext_resid__mulsub(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in, i64 %p7.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__mulsub(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in, i64 %p7.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -3302,7 +3302,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_floattext_resid__addback(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__addback(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -3339,7 +3339,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal double @__mruntime_rt_floattext_resid__big_to_double(i64 %p0, i64 %p1, i1 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal double @__mruntime_rt_floattext_resid__big_to_double(i64 %p0, i64 %p1, i1 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t1473 = call i64 @__mruntime_rt_floattext_resid__bn_bitlen(i64 %p0)
 %t1474 = sub i64 %t1473, 1
@@ -3406,7 +3406,7 @@ L501:
 %t1501 = call double @__mruntime_rt_floattext_resid__bits_f(i64 %t1500)
 ret double %t1501
 }
-define internal i64 @__mruntime_rt_floattext_resid__round_shift(i64 %p0, i64 %p1, i1 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__round_shift(i64 %p0, i64 %p1, i1 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t1502 = call i64 @__mruntime_rt_floattext_resid__top_bits(i64 %p0, i64 %p1)
 %t1503 = icmp sle i64 %p1, 0
@@ -3460,7 +3460,7 @@ L507:
 %t1521 = phi i64 [ %t1520, %L505 ], [ %t1502, %L506 ]
 ret i64 %t1521
 }
-define internal i64 @__mruntime_rt_floattext_resid__bit_at(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__bit_at(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t1522 = sdiv i64 %p1, 32
 %t1523 = call i64 @__mruntime_rt_floattext_resid__bn_len(i64 %p0)
@@ -3482,7 +3482,7 @@ L510:
 %t1533 = phi i64 [ %t1532, %L508 ], [ 0, %L509 ]
 ret i64 %t1533
 }
-define internal i1 @__mruntime_rt_floattext_resid__low_nonzero(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_floattext_resid__low_nonzero(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t1534 = sdiv i64 %p1, 32
 %t1535 = srem i64 %p1, 32
@@ -3519,7 +3519,7 @@ LSJ1542:
 %t1551 = phi i1 [ false, %LSL1542 ], [ %t1550, %LSR1542 ]
 ret i1 %t1551
 }
-define internal i1 @__mruntime_rt_floattext_resid__limbs_nz(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_floattext_resid__limbs_nz(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t1552 = icmp sge i64 %p1, %p2
 br i1 %t1552, label %L517, label %L519
@@ -3539,7 +3539,7 @@ LSJ1555:
 %t1558 = phi i1 [ true, %LSL1555 ], [ %t1557, %LSR1555 ]
 ret i1 %t1558
 }
-define internal i64 @__mruntime_rt_floattext_resid__top_bits(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__top_bits(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t1559 = call i64 @bn_new()
 %t1560 = call i64 @__mruntime_rt_floattext_resid__bn_copy(i64 %t1559, i64 %p0)
@@ -3563,7 +3563,7 @@ L522:
 %t1572 = add nsw i64 %t1571, %t1569
 ret i64 %t1572
 }
-define internal double @__mruntime_rt_floattext_resid__hex_float(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal double @__mruntime_rt_floattext_resid__hex_float(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t1573 = call i64 @bn_new()
 %t1574 = call i64 @__mruntime_rt_floattext_resid__dset(i64 0, i64 0)
@@ -3677,7 +3677,7 @@ L540:
 %t1626 = call i64 @c_free(i64 %t1573)
 ret double %t1625
 }
-define internal i64 @__mruntime_rt_floattext_resid__hex_digits(i64 %p0.in, i64 %p1.in, i1 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__hex_digits(i64 %p0.in, i64 %p1.in, i1 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -3751,13 +3751,13 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_floattext_resid__fx() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__fx() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t1653p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.ffmt_st)
 %t1653 = ptrtoint ptr %t1653p to i64
 ret i64 %t1653
 }
-define internal i64 @__mruntime_rt_floattext_resid__expand(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__expand(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t1654 = call i64 @bn_new()
 %t1655 = call i64 @bn_new()
@@ -3851,7 +3851,7 @@ L573:
 %t1707 = add i64 %t1705, %t1706
 ret i64 %t1707
 }
-define internal i64 @__mruntime_rt_floattext_resid__int_digits(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__int_digits(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t1708 = call i1 @__mruntime_rt_floattext_resid__bn_zero(i64 %p0)
 br i1 %t1708, label %L574, label %L576
@@ -3867,12 +3867,12 @@ L576:
 %t1715 = add nsw i64 %t1712, %t1714
 ret i64 %t1715
 }
-define internal i64 @__mruntime_rt_floattext_resid__rev_into(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__rev_into(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t1716 = call i64 @__mruntime_rt_floattext_resid__rev_at(i64 %p0, i64 %p1, i64 %p2, i64 0, i64 %p3)
 ret i64 %t1716
 }
-define internal i64 @__mruntime_rt_floattext_resid__rev_at(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__rev_at(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -3897,7 +3897,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i1 @__mruntime_rt_floattext_resid__digits_nz(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_floattext_resid__digits_nz(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t1726 = icmp sge i64 %p1, %p2
 br i1 %t1726, label %L580, label %L582
@@ -3918,7 +3918,7 @@ LSJ1730:
 %t1733 = phi i1 [ true, %LSL1730 ], [ %t1732, %LSR1730 ]
 ret i1 %t1733
 }
-define internal i64 @__mruntime_rt_floattext_resid__lead_zeros(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__lead_zeros(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -3950,7 +3950,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_floattext_resid__frac_digits(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__frac_digits(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -3982,7 +3982,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_floattext_resid__digit_above(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__digit_above(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t1760 = sdiv i64 %p1, 32
 %t1761 = srem i64 %p1, 32
@@ -4028,7 +4028,7 @@ L597:
 %t1784 = and i64 %t1783, 15
 ret i64 %t1784
 }
-define internal i64 @__mruntime_rt_floattext_resid__round_digits(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__round_digits(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t1785 = call i64 @__mruntime_rt_floattext_resid__fx()
 %t1786 = add i64 %t1785, 8
@@ -4143,7 +4143,7 @@ L612:
 %t1843 = call i64 @__mruntime_rt_floattext_resid__carry_up(i64 %p0, i64 %t1842, i64 %p1)
 ret i64 %t1843
 }
-define internal i64 @__mruntime_rt_floattext_resid__carry_up(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__carry_up(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -4184,7 +4184,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_floattext_resid__put(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__put(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t1864 = add i64 %p0, %p1
 %t1865 = call i64 @st8(i64 %t1864, i64 %p2)
@@ -4193,7 +4193,7 @@ entry:
 %t1868 = add i64 %t1867, 1
 ret i64 %t1868
 }
-define internal i64 @__mruntime_rt_floattext_resid__put_digits_from(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__put_digits_from(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -4225,7 +4225,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_floattext_resid__put_zeros(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__put_zeros(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -4243,7 +4243,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_floattext_resid__strip_frac(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__strip_frac(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t1882 = call i1 @__mruntime_rt_floattext_resid__has_dot(i64 %p0, i64 %p1, i64 %p2)
 %t1883 = xor i1 %t1882, true
@@ -4266,7 +4266,7 @@ L633:
 %t1890 = phi i64 [ %t1889, %L631 ], [ %t1884, %L632 ]
 ret i64 %t1890
 }
-define internal i1 @__mruntime_rt_floattext_resid__has_dot(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_floattext_resid__has_dot(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t1891 = icmp sge i64 %p1, %p2
 br i1 %t1891, label %L634, label %L636
@@ -4287,7 +4287,7 @@ LSJ1895:
 %t1898 = phi i1 [ true, %LSL1895 ], [ %t1897, %LSR1895 ]
 ret i1 %t1898
 }
-define internal i64 @__mruntime_rt_floattext_resid__trim_zeros(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__trim_zeros(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -4315,7 +4315,7 @@ br label %tco.head
 L639:
 ret i64 %p2
 }
-define internal i64 @c_strfromd(i64 %p0, i64 %p1, i64 %p2, double %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_strfromd(i64 %p0, i64 %p1, i64 %p2, double %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t1908 = add i64 %p2, 2
 %t1909 = call i64 @__mruntime_rt_floattext_resid__fmt_prec(i64 %t1908, i64 0)
@@ -4343,7 +4343,7 @@ L642:
 %t1925 = add nsw i64 %t1924, %t1916
 ret i64 %t1925
 }
-define internal i64 @__mruntime_rt_floattext_resid__format_conv(i64 %p0, double %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__format_conv(i64 %p0, double %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t1926 = icmp eq i64 %p3, 101
 br i1 %t1926, label %L643, label %L645
@@ -4355,7 +4355,7 @@ L645:
 %t1929 = call i64 @format_double(i64 %p0, double %p1, i64 %p2, i1 %t1928)
 ret i64 %t1929
 }
-define internal i64 @__mruntime_rt_floattext_resid__fmt_prec(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__fmt_prec(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -4383,7 +4383,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_floattext_resid__prec_len(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__prec_len(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t1940 = call i64 @ld8(i64 %p0)
 %t1941 = icmp slt i64 %t1940, 48
@@ -4404,7 +4404,7 @@ L651:
 %t1947 = add i64 1, %t1946
 ret i64 %t1947
 }
-define internal i64 @format_double(i64 %p0, double %p1, i64 %p2, i1 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @format_double(i64 %p0, double %p1, i64 %p2, i1 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t1948 = bitcast double %p1 to i64
 %t1949 = icmp slt i64 %t1948, 0
@@ -4480,7 +4480,7 @@ L669:
 %t1981 = add nsw i64 %t1980, %t1978
 ret i64 %t1981
 }
-define internal i64 @__mruntime_rt_floattext_resid__fmt_f(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__fmt_f(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t1982 = icmp eq i64 %p2, 0
 br i1 %t1982, label %L673, label %L674
@@ -4584,7 +4584,7 @@ L699:
 %t2029 = tail call i64 @__mruntime_rt_floattext_resid__put_digits_from(i64 %p0, i64 %t2022, i64 %p5, i64 %t2024, i64 %t2028, i64 %t2010)
 ret i64 %t2029
 }
-define internal i64 @__mruntime_rt_floattext_resid__expand_x(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__expand_x(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2030 = call i64 @xmalloc(i64 4)
 %t2031 = call i64 @__mruntime_rt_floattext_resid__expand(i64 %p0, i64 %p1, i64 %t2030, i64 1)
@@ -4595,7 +4595,7 @@ entry:
 %t2036 = add nsw i64 %t2033, %t2035
 ret i64 %t2036
 }
-define internal i64 @format_exp(i64 %p0, double %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @format_exp(i64 %p0, double %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2037 = bitcast double %p1 to i64
 %t2038 = icmp slt i64 %t2037, 0
@@ -4745,7 +4745,7 @@ L738:
 %t2110 = add i64 %t2107, %t2109
 ret i64 %t2110
 }
-define internal i64 @__mruntime_rt_floattext_resid__fmt_g(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_floattext_resid__fmt_g(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2111 = icmp eq i64 %p2, 0
 br i1 %t2111, label %L739, label %L741
@@ -4849,24 +4849,24 @@ L762:
 %t2161 = add i64 %t2158, %t2160
 ret i64 %t2161
 }
-define internal double @rt_ft_strtod(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal double @rt_ft_strtod(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2162 = tail call double @c_strtod(i64 %p0, i64 %p1)
 ret double %t2162
 }
-define double @resid_ft_strtod(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define double @resid_ft_strtod(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
 %r = call double @rt_ft_strtod(i64 %x0i, i64 %x1i)
 ret double %r
 }
-define internal i64 @rt_ft_strfromd(i64 %p0, i64 %p1, i64 %p2, double %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_ft_strfromd(i64 %p0, i64 %p1, i64 %p2, double %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2163 = tail call i64 @c_strfromd(i64 %p0, i64 %p1, i64 %p2, double %p3)
 ret i64 %t2163
 }
-define i32 @resid_ft_strfromd(ptr %a0, i64 %a1, ptr %a2, double %a3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i32 @resid_ft_strfromd(ptr %a0, i64 %a1, ptr %a2, double %a3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x2i = ptrtoint ptr %a2 to i64
@@ -4874,19 +4874,19 @@ entry:
 %rv = trunc i64 %r to i32
 ret i32 %rv
 }
-define internal i64 @__mruntime_rt_proc_resid__env_w() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_proc_resid__env_w() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2164p = getelementptr i8, ptr @rtg.rt_envp, i64 0
 %t2164 = ptrtoint ptr %t2164p to i64
 ret i64 %t2164
 }
-define internal i64 @set_envp(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @set_envp(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2165 = call i64 @__mruntime_rt_proc_resid__env_w()
 %t2166 = call i64 @st64(i64 %t2165, i64 %p0)
 ret i64 %t2166
 }
-define internal i64 @envp() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @envp() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2167 = call i64 @__mruntime_rt_proc_resid__env_w()
 %t2168 = call i64 @ld64(i64 %t2167)
@@ -4904,7 +4904,7 @@ L765:
 %t2176 = add nsw i64 %t2173, %t2175
 ret i64 %t2176
 }
-define internal i64 @__mruntime_rt_proc_resid__load_environ() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_proc_resid__load_environ() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2178 = ptrtoint ptr @.s2177 to i64
 %t2179 = call i64 @read_file_all(i64 %t2178)
@@ -4931,7 +4931,7 @@ L768:
 %t2193 = add nsw i64 %t2192, %t2187
 ret i64 %t2193
 }
-define internal i64 @read_file_all(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @read_file_all(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2194 = call i64 @o_rdonly()
 %t2195 = call i64 @sys_open(i64 %p0, i64 %t2194, i64 0)
@@ -4952,7 +4952,7 @@ L771:
 %t2205 = add nsw i64 %t2204, %t2197
 ret i64 %t2205
 }
-define internal i64 @__mruntime_rt_proc_resid__read_to(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_proc_resid__read_to(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -4980,7 +4980,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_proc_resid__count_nuls(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_proc_resid__count_nuls(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -5009,7 +5009,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_proc_resid__fill_env(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_proc_resid__fill_env(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -5045,14 +5045,14 @@ br label %tco.s1
 tco.s1:
 br label %tco.head
 }
-define internal i64 @c_getenv(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_getenv(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2237 = call i64 @c_strlen(i64 %p0)
 %t2238 = call i64 @envp()
 %t2239 = call i64 @__mruntime_rt_proc_resid__env_find(i64 %t2238, i64 %p0, i64 %t2237)
 ret i64 %t2239
 }
-define internal i64 @__mruntime_rt_proc_resid__env_find(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_proc_resid__env_find(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -5088,18 +5088,18 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @c_fork() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_fork() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t2253 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 56, i64 17, i64 0, i64 0, i64 0, i64 0, i64 0)
+%t2253 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 220, i64 17, i64 0, i64 0, i64 0, i64 0, i64 0)
 ret i64 %t2253
 }
-define internal i64 @c_execv(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_execv(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2254 = call i64 @envp()
-%t2255 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 59, i64 %p0, i64 %p1, i64 %t2254, i64 0, i64 0, i64 0)
+%t2255 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 221, i64 %p0, i64 %p1, i64 %t2254, i64 0, i64 0, i64 0)
 ret i64 %t2255
 }
-define internal i64 @c_execvp(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_execvp(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2256 = call i64 @c_strchr(i64 %p0, i64 47)
 %t2257 = icmp ne i64 %t2256, 0
@@ -5135,7 +5135,7 @@ L801:
 %t2274 = sub nsw i64 %t2273, 1
 ret i64 %t2274
 }
-define internal i64 @__mruntime_rt_proc_resid__try_dirs(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_proc_resid__try_dirs(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2275 = call i64 @ld8(i64 %p0)
 %t2276 = icmp eq i64 %t2275, 0
@@ -5178,7 +5178,7 @@ L810:
 %t2292 = phi i64 [ %t2291, %L808 ], [ 0, %L809 ]
 ret i64 %t2292
 }
-define internal i64 @__mruntime_rt_proc_resid__dir_end(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_proc_resid__dir_end(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2293 = call i64 @ld8(i64 %p0)
 %t2294 = icmp eq i64 %t2293, 0
@@ -5202,7 +5202,7 @@ L813:
 %t2301 = phi i64 [ %p0, %L811 ], [ %t2300, %L812 ]
 ret i64 %t2301
 }
-define internal i64 @__mruntime_rt_proc_resid__exec_in(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_proc_resid__exec_in(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2302 = call i64 @mcopy(i64 %p5, i64 %p0, i64 %p1)
 %t2303 = add i64 %p5, %p1
@@ -5214,11 +5214,11 @@ entry:
 %t2309 = call i64 @c_execv(i64 %p5, i64 %p4)
 ret i64 %t2309
 }
-define internal i64 @shell_line(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @shell_line(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2310p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.pipe_fds)
 %t2310 = ptrtoint ptr %t2310p to i64
-%t2311 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 293, i64 %t2310, i64 524288, i64 0, i64 0, i64 0, i64 0)
+%t2311 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 59, i64 %t2310, i64 524288, i64 0, i64 0, i64 0, i64 0)
 %t2312 = icmp ne i64 %t2311, 0
 br i1 %t2312, label %L814, label %L816
 L814:
@@ -5245,10 +5245,10 @@ L816:
 %t2333 = icmp eq i64 %t2332, 0
 br i1 %t2333, label %L817, label %L819
 L817:
-%t2334 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 292, i64 %t2316, i64 1, i64 0, i64 0, i64 0, i64 0)
+%t2334 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 24, i64 %t2316, i64 1, i64 0, i64 0, i64 0, i64 0)
 %t2336 = ptrtoint ptr @.s2335 to i64
 %t2337 = call i64 @c_execv(i64 %t2336, i64 %t2317)
-%t2338 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 231, i64 127, i64 0, i64 0, i64 0, i64 0, i64 0)
+%t2338 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 94, i64 127, i64 0, i64 0, i64 0, i64 0, i64 0)
 ret i64 %t2338
 L819:
 %t2339 = call i64 @sys_close(i64 %t2316)
@@ -5279,7 +5279,7 @@ L825:
 %t2352 = add nsw i64 %t2351, %t2340
 ret i64 %t2352
 }
-define internal i64 @__mruntime_rt_proc_resid__read_line_fd(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_proc_resid__read_line_fd(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -5310,19 +5310,19 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_start_resid__tls_img() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_start_resid__tls_img() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2362p = getelementptr i8, ptr @rtg.rt_tls_img, i64 0
 %t2362 = ptrtoint ptr %t2362p to i64
 ret i64 %t2362
 }
-define internal i64 @argv_w() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @argv_w() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2363p = getelementptr i8, ptr @rtg.rt_argv, i64 0
 %t2363 = ptrtoint ptr %t2363p to i64
 ret i64 %t2363
 }
-define internal i64 @rt_start(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_start(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2364 = call i64 @ld64(i64 %p0)
 %t2365 = add i64 %p0, 8
@@ -5351,23 +5351,24 @@ entry:
 %t2388 = call i64 @__mruntime_rt_start_resid__auxv_get(i64 %t2369, i64 6)
 %t2389 = call i64 @st64(i64 %t2387, i64 %t2388)
 %t2390 = call i64 @tls_block()
-%t2391 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 158, i64 4098, i64 %t2390, i64 0, i64 0, i64 0, i64 0)
+call void asm sideeffect "msr tpidr_el0, $0", "r,~{memory}"(i64 %t2390)
+%t2391 = add i64 0, 0
 ret i64 %t2391
 }
-define void @resid_start(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define void @resid_start(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
 %r = call i64 @rt_start(i64 %x0i, i64 %x1i)
 ret void
 }
-define internal i64 @__mruntime_rt_start_resid__pagesz_w() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_start_resid__pagesz_w() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2392p = getelementptr i8, ptr @rtg.rt_pagesz, i64 0
 %t2392 = ptrtoint ptr %t2392p to i64
 ret i64 %t2392
 }
-define internal i64 @page_size() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @page_size() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2393 = call i64 @__mruntime_rt_start_resid__pagesz_w()
 %t2394 = call i64 @ld64(i64 %t2393)
@@ -5383,19 +5384,19 @@ L837:
 %t2398 = phi i64 [ %t2397, %L835 ], [ 4096, %L836 ]
 ret i64 %t2398
 }
-define internal i64 @hwcap_w() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @hwcap_w() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2399p = getelementptr i8, ptr @rtg.rt_hwcap, i64 0
 %t2399 = ptrtoint ptr %t2399p to i64
 ret i64 %t2399
 }
-define internal i64 @__mruntime_rt_start_resid__bias_w() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_start_resid__bias_w() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2400p = getelementptr i8, ptr @rtg.rt_load_bias, i64 0
 %t2400 = ptrtoint ptr %t2400p to i64
 ret i64 %t2400
 }
-define internal i64 @__mruntime_rt_start_resid__load_bias(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_start_resid__load_bias(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2401 = call i64 @__mruntime_rt_start_resid__auxv_get(i64 %p0, i64 3)
 %t2402 = call i64 @__mruntime_rt_start_resid__auxv_get(i64 %p0, i64 5)
@@ -5417,7 +5418,7 @@ L840:
 %t2409 = sub i64 %p1, %t2408
 ret i64 %t2409
 }
-define internal i64 @__mruntime_rt_start_resid__ph_vaddr(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_start_resid__ph_vaddr(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -5445,7 +5446,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_start_resid__self_relocate(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_start_resid__self_relocate(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2419 = icmp eq i64 %p1, 0
 br i1 %t2419, label %L847, label %L849
@@ -5473,7 +5474,7 @@ L852:
 %t2429 = call i64 @__mruntime_rt_start_resid__apply_rela(i64 %p0, i64 %t2426, i64 %t2428)
 ret i64 %t2429
 }
-define internal i64 @__mruntime_rt_start_resid__dyn_get(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_start_resid__dyn_get(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -5497,7 +5498,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_start_resid__apply_rela(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_start_resid__apply_rela(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -5509,7 +5510,7 @@ br i1 %t2437, label %L859, label %L861
 L859:
 ret i64 0
 L861:
-%t2438 = add i64 0, 0
+%t2438 = add i64 0, 1
 %t2439 = icmp eq i64 %t2438, 1
 br i1 %t2439, label %L862, label %L863
 L862:
@@ -5540,7 +5541,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_start_resid__skip_env(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_start_resid__skip_env(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2454 = call i64 @ld64(i64 %p0)
 %t2455 = icmp eq i64 %t2454, 0
@@ -5556,7 +5557,7 @@ L870:
 %t2459 = phi i64 [ %t2456, %L868 ], [ %t2458, %L869 ]
 ret i64 %t2459
 }
-define internal i64 @__mruntime_rt_start_resid__auxv_get(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_start_resid__auxv_get(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -5580,7 +5581,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_start_resid__find_tls(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_start_resid__find_tls(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2467 = call i64 @__mruntime_rt_start_resid__auxv_get(i64 %p0, i64 3)
 %t2468 = call i64 @__mruntime_rt_start_resid__auxv_get(i64 %p0, i64 5)
@@ -5600,7 +5601,7 @@ L879:
 %t2476 = call i64 @__mruntime_rt_start_resid__tls_scan(i64 %t2467, i64 0, i64 %t2468, i64 %t2475)
 ret i64 %t2476
 }
-define internal i64 @__mruntime_rt_start_resid__phdr_bias(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_start_resid__phdr_bias(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -5629,7 +5630,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_start_resid__tls_scan(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_start_resid__tls_scan(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -5682,7 +5683,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_start_resid__ensure_tls() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_start_resid__ensure_tls() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2515 = call i64 @__mruntime_rt_start_resid__tls_img()
 %t2516 = add i64 %t2515, 24
@@ -5703,7 +5704,7 @@ L900:
 %t2524 = call i64 @c_free(i64 %t2521)
 ret i64 %t2524
 }
-define internal i64 @__mruntime_rt_start_resid__tls_size() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_start_resid__tls_size() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2525 = call i64 @__mruntime_rt_start_resid__tls_img()
 %t2526 = add i64 %t2525, 24
@@ -5716,9 +5717,9 @@ entry:
 %t2533 = and i64 %t2531, %t2532
 ret i64 %t2533
 }
-define internal i64 @tls_block() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @tls_block() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t2534 = add i64 0, 0
+%t2534 = add i64 0, 1
 %t2535 = icmp eq i64 %t2534, 1
 br i1 %t2535, label %L901, label %L902
 L901:
@@ -5731,7 +5732,7 @@ L903:
 %t2538 = phi i64 [ %t2536, %L901 ], [ %t2537, %L902 ]
 ret i64 %t2538
 }
-define internal i64 @__mruntime_rt_start_resid__tls_block_a64() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_start_resid__tls_block_a64() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2539 = call i64 @__mruntime_rt_start_resid__tls_img()
 %t2540 = add i64 %t2539, 24
@@ -5774,7 +5775,7 @@ L909:
 %t2565 = phi i64 [ %t2564, %L907 ], [ 0, %L908 ]
 ret i64 %t2556
 }
-define internal i64 @__mruntime_rt_start_resid__tls_block_x86() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_start_resid__tls_block_x86() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2566 = call i64 @__mruntime_rt_start_resid__tls_img()
 %t2567 = add i64 %t2566, 24
@@ -5814,11 +5815,11 @@ L915:
 %t2589 = call i64 @st64(i64 %t2579, i64 %t2579)
 ret i64 %t2579
 }
-define internal i64 @__mruntime_rt_start_resid__clone_flags() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_start_resid__clone_flags() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 4001536
 }
-define internal i64 @thread_spawn(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @thread_spawn(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2590 = call i64 @xmalloc(i64 48)
 %t2591 = call i64 @st64(i64 %t2590, i64 %p0)
@@ -5840,7 +5841,7 @@ L916:
 %t2605 = mul nsw i64 %t2604, 0
 ret i64 %t2605
 L918:
-%t2606 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 10, i64 %t2602, i64 65536, i64 0, i64 0, i64 0, i64 0)
+%t2606 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 226, i64 %t2602, i64 65536, i64 0, i64 0, i64 0, i64 0)
 %t2607 = add i64 %t2590, 32
 %t2608 = call i64 @st64(i64 %t2607, i64 %t2602)
 %t2609 = add i64 %t2590, 40
@@ -5876,7 +5877,7 @@ ret i64 %t2635
 L921:
 ret i64 %t2590
 }
-define internal i64 @thread_main(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @thread_main(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2636 = call i64 @heap_adopt()
 %t2637 = call i64 @__mruntime_rt_start_resid__stack_floor()
@@ -5895,13 +5896,13 @@ entry:
 %t2649 = call i64 @heap_retire()
 ret i64 %t2649
 }
-define internal i64 @__mruntime_rt_start_resid__stack_floor() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_start_resid__stack_floor() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2650p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.stk_floor)
 %t2650 = ptrtoint ptr %t2650p to i64
 ret i64 %t2650
 }
-define internal i64 @rt_stack_left() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_stack_left() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2651 = call i64 @__mruntime_rt_start_resid__stack_floor()
 %t2652 = call i64 @ld64(i64 %t2651)
@@ -5911,19 +5912,19 @@ L922:
 %t2654 = sub nsw i64 0, 1
 br label %L924
 L923:
-%t2655 = call i64 asm sideeffect "mov %rsp, $0", "=r"()
+%t2655 = call i64 asm sideeffect "mov $0, sp", "=r"()
 %t2656 = sub i64 %t2655, %t2652
 br label %L924
 L924:
 %t2657 = phi i64 [ %t2654, %L922 ], [ %t2656, %L923 ]
 ret i64 %t2657
 }
-define i64 @resid_stack_left() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_stack_left() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_stack_left()
 ret i64 %r
 }
-define internal i64 @thread_join(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @thread_join(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2658 = add i64 %p0, 24
 %t2659 = call i64 @__mruntime_rt_start_resid__futex_wait_zero(i64 %t2658)
@@ -5939,7 +5940,7 @@ entry:
 %t2669 = add nsw i64 %t2668, %t2661
 ret i64 %t2669
 }
-define internal i64 @__mruntime_rt_start_resid__futex_wait_zero(i64 %p0.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_start_resid__futex_wait_zero(i64 %p0.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -5950,45 +5951,45 @@ br i1 %t2671, label %L925, label %L927
 L925:
 ret i64 0
 L927:
-%t2672 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 202, i64 %p0, i64 0, i64 %t2670, i64 0, i64 0, i64 0)
+%t2672 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 98, i64 %p0, i64 0, i64 %t2670, i64 0, i64 0, i64 0)
 br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @c_libc_abort() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @c_libc_abort() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2674p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.abort_set)
 %t2674 = ptrtoint ptr %t2674p to i64
 %t2675 = call i64 @st64(i64 %t2674, i64 32)
-%t2676 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 14, i64 1, i64 %t2674, i64 0, i64 8, i64 0, i64 0)
-%t2677 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 39, i64 0, i64 0, i64 0, i64 0, i64 0, i64 0)
-%t2678 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 186, i64 0, i64 0, i64 0, i64 0, i64 0, i64 0)
-%t2679 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 234, i64 %t2677, i64 %t2678, i64 6, i64 0, i64 0, i64 0)
-%t2680 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 231, i64 134, i64 0, i64 0, i64 0, i64 0, i64 0)
+%t2676 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 135, i64 1, i64 %t2674, i64 0, i64 8, i64 0, i64 0)
+%t2677 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 172, i64 0, i64 0, i64 0, i64 0, i64 0, i64 0)
+%t2678 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 178, i64 0, i64 0, i64 0, i64 0, i64 0, i64 0)
+%t2679 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 131, i64 %t2677, i64 %t2678, i64 6, i64 0, i64 0, i64 0)
+%t2680 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 94, i64 134, i64 0, i64 0, i64 0, i64 0, i64 0)
 ret i64 %t2680
 }
-define internal i64 @ld8(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @ld8(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2681p = inttoptr i64 %p0 to ptr
 %t2681w = load i8, ptr %t2681p, align 1
 %t2681 = zext i8 %t2681w to i64
 ret i64 %t2681
 }
-define internal i64 @ld32(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @ld32(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2682p = inttoptr i64 %p0 to ptr
 %t2682w = load i32, ptr %t2682p, align 1
 %t2682 = zext i32 %t2682w to i64
 ret i64 %t2682
 }
-define internal i64 @ld64(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @ld64(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2683p = inttoptr i64 %p0 to ptr
 %t2683w = load i64, ptr %t2683p, align 1
 %t2683 = add i64 %t2683w, 0
 ret i64 %t2683
 }
-define internal i64 @st8(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @st8(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2684p = inttoptr i64 %p0 to ptr
 %t2684w = trunc i64 %p1 to i8
@@ -5996,7 +5997,7 @@ store i8 %t2684w, ptr %t2684p, align 1
 %t2684 = add i64 0, 0
 ret i64 %t2684
 }
-define internal i64 @st32(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @st32(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2685p = inttoptr i64 %p0 to ptr
 %t2685w = trunc i64 %p1 to i32
@@ -6004,7 +6005,7 @@ store i32 %t2685w, ptr %t2685p, align 1
 %t2685 = add i64 0, 0
 ret i64 %t2685
 }
-define internal i64 @st64(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @st64(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2686p = inttoptr i64 %p0 to ptr
 %t2686w = add i64 %p1, 0
@@ -6012,7 +6013,7 @@ store i64 %t2686w, ptr %t2686p, align 1
 %t2686 = add i64 0, 0
 ret i64 %t2686
 }
-define internal i64 @mcopy(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @mcopy(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2687p = inttoptr i64 %p0 to ptr
 %t2687q = inttoptr i64 %p1 to ptr
@@ -6020,7 +6021,7 @@ call void @llvm.memmove.p0.p0.i64(ptr %t2687p, ptr %t2687q, i64 %p2, i1 false)
 %t2687 = add i64 0, 0
 ret i64 %t2687
 }
-define internal i64 @xmalloc(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @xmalloc(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2688 = icmp slt i64 %p0, 0
 br i1 %t2688, label %L928, label %L930
@@ -6045,7 +6046,7 @@ ret i64 %t2696
 L936:
 ret i64 %t2693
 }
-define internal i64 @xrealloc(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @xrealloc(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2697 = icmp slt i64 %p1, 0
 br i1 %t2697, label %L937, label %L939
@@ -6070,12 +6071,12 @@ ret i64 %t2705
 L945:
 ret i64 %t2702
 }
-define internal i64 @ralloc(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @ralloc(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2706 = tail call i64 @rt_alloc(i64 %p0)
 ret i64 %t2706
 }
-define internal i64 @cstr_dup(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @cstr_dup(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2707 = call i64 @c_strlen(i64 %p0)
 %t2708 = add i64 %t2707, 1
@@ -6084,13 +6085,13 @@ entry:
 %t2711 = call i64 @mcopy(i64 %t2709, i64 %p0, i64 %t2710)
 ret i64 %t2709
 }
-define internal i64 @rdup(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rdup(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2712 = call i64 @c_strlen(i64 %p0)
 %t2713 = call i64 @cstr_from(i64 %p0, i64 %t2712, i64 1)
 ret i64 %t2713
 }
-define internal i64 @cstr_from(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @cstr_from(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2714 = icmp eq i64 %p2, 0
 br i1 %t2714, label %L946, label %L947
@@ -6109,7 +6110,7 @@ L948:
 %t2722 = call i64 @st8(i64 %t2721, i64 0)
 ret i64 %t2719
 }
-define internal i64 @udiv(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @udiv(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2723 = icmp slt i64 %p1, 0
 br i1 %t2723, label %L949, label %L951
@@ -6165,14 +6166,14 @@ L960:
 %t2750 = phi i64 [ %t2745, %L958 ], [ %t2749, %L959 ]
 ret i64 %t2750
 }
-define internal i64 @urem(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @urem(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2751 = call i64 @udiv(i64 %p0, i64 %p1)
 %t2752 = mul i64 %t2751, %p1
 %t2753 = sub i64 %p0, %t2752
 ret i64 %t2753
 }
-define internal i64 @lshr(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @lshr(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2754 = icmp eq i64 %p1, 0
 br i1 %t2754, label %L961, label %L963
@@ -6194,7 +6195,7 @@ L963:
 %t2767 = trunc i128 %t2766 to i64
 ret i64 %t2767
 }
-define internal i1 @ult(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @ult(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2768 = sext i64 0 to i128
 %t2769 = sub i128 %t2768, 9223372036854775807
@@ -6206,7 +6207,7 @@ entry:
 %t2775 = icmp slt i64 %t2773, %t2774
 ret i1 %t2775
 }
-define internal i1 @write_all(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @write_all(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -6218,7 +6219,7 @@ br i1 %t2776, label %L964, label %L966
 L964:
 ret i1 true
 L966:
-%t2777 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 1, i64 %p0, i64 %p1, i64 %p2, i64 0, i64 0, i64 0)
+%t2777 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 64, i64 %p0, i64 %p1, i64 %p2, i64 0, i64 0, i64 0)
 %t2778 = sub nsw i64 0, 4
 %t2779 = icmp eq i64 %t2777, %t2778
 br i1 %t2779, label %L967, label %L969
@@ -6238,30 +6239,30 @@ br label %tco.s1
 tco.s1:
 br label %tco.head
 }
-define internal i1 @write_cstr(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @write_cstr(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2785 = call i64 @c_strlen(i64 %p1)
 %t2786 = call i1 @write_all(i64 %p0, i64 %p1, i64 %t2785)
 ret i1 %t2786
 }
-define internal i1 @write_nl(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @write_nl(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2788 = ptrtoint ptr @.s2787 to i64
 %t2789 = call i1 @write_all(i64 %p0, i64 %t2788, i64 1)
 ret i1 %t2789
 }
-define internal i1 @rt_print(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @rt_print(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2790 = call i1 @write_cstr(i64 1, i64 %p0)
 ret i1 %t2790
 }
-define i1 @print(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i1 @print(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i1 @rt_print(i64 %x0i)
 ret i1 %r
 }
-define internal i1 @write_line(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @write_line(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2791p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.iov)
 %t2791 = ptrtoint ptr %t2791p to i64
@@ -6273,7 +6274,7 @@ entry:
 %t2798 = call i64 @st64(i64 %t2795, i64 %t2797)
 %t2799 = add i64 %t2791, 24
 %t2800 = call i64 @st64(i64 %t2799, i64 1)
-%t2801 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 20, i64 %p0, i64 %t2791, i64 2, i64 0, i64 0, i64 0)
+%t2801 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 66, i64 %p0, i64 %t2791, i64 2, i64 0, i64 0, i64 0)
 %t2802 = add i64 %p2, 1
 %t2803 = icmp eq i64 %t2801, %t2802
 br i1 %t2803, label %L973, label %L975
@@ -6321,63 +6322,63 @@ LSJ2816:
 %t2818 = phi i1 [ false, %LSL2816 ], [ %t2817, %LSR2816 ]
 ret i1 %t2818
 }
-define internal i1 @rt_println(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @rt_println(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2819 = call i64 @c_strlen(i64 %p0)
 %t2820 = call i1 @write_line(i64 1, i64 %p0, i64 %t2819)
 ret i1 %t2820
 }
-define i1 @println(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i1 @println(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i1 @rt_println(i64 %x0i)
 ret i1 %r
 }
-define internal i1 @rt_eprintln(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @rt_eprintln(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2821 = call i64 @c_strlen(i64 %p0)
 %t2822 = call i1 @write_line(i64 2, i64 %p0, i64 %t2821)
 ret i1 %t2822
 }
-define i1 @eprintln(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i1 @eprintln(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i1 @rt_eprintln(i64 %x0i)
 ret i1 %r
 }
-define internal i64 @__mruntime_rt_io_resid__flags() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_io_resid__flags() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2823p = getelementptr i8, ptr @rtg.rt_flags, i64 0
 %t2823 = ptrtoint ptr %t2823p to i64
 ret i64 %t2823
 }
-define internal i64 @rt_quiet_set(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_quiet_set(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2824 = call i64 @__mruntime_rt_io_resid__flags()
 %t2825 = call i64 @st64(i64 %t2824, i64 %p0)
 %t2826 = add i64 %t2825, 1
 ret i64 %t2826
 }
-define i8 @resid_quiet_set(i1 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_quiet_set(i1 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0 = zext i1 %a0 to i64
 %r = call i64 @rt_quiet_set(i64 %x0)
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @rt_quiet() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_quiet() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2827 = call i64 @__mruntime_rt_io_resid__flags()
 %t2828 = call i64 @ld64(i64 %t2827)
 ret i64 %t2828
 }
-define i8 @resid_quiet() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_quiet() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_quiet()
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @rt_internals_set(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_internals_set(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2829 = call i64 @__mruntime_rt_io_resid__flags()
 %t2830 = add i64 %t2829, 8
@@ -6385,27 +6386,27 @@ entry:
 %t2832 = add i64 %t2831, 1
 ret i64 %t2832
 }
-define i8 @resid_internals_set(i1 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_internals_set(i1 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0 = zext i1 %a0 to i64
 %r = call i64 @rt_internals_set(i64 %x0)
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @rt_internals() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_internals() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2833 = call i64 @__mruntime_rt_io_resid__flags()
 %t2834 = add i64 %t2833, 8
 %t2835 = call i64 @ld64(i64 %t2834)
 ret i64 %t2835
 }
-define i8 @resid_internals() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_internals() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_internals()
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @rt_rtmod_set(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_rtmod_set(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2836 = call i64 @__mruntime_rt_io_resid__flags()
 %t2837 = add i64 %t2836, 16
@@ -6413,27 +6414,27 @@ entry:
 %t2839 = add i64 %t2838, 1
 ret i64 %t2839
 }
-define i8 @resid_rtmod_set(i1 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_rtmod_set(i1 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0 = zext i1 %a0 to i64
 %r = call i64 @rt_rtmod_set(i64 %x0)
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @rt_rtmod() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_rtmod() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2840 = call i64 @__mruntime_rt_io_resid__flags()
 %t2841 = add i64 %t2840, 16
 %t2842 = call i64 @ld64(i64 %t2841)
 ret i64 %t2842
 }
-define i8 @resid_rtmod() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_rtmod() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_rtmod()
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @rt_overflow_check(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_overflow_check(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2843 = icmp ne i64 %p0, 0
 br i1 %t2843, label %L985, label %L987
@@ -6443,13 +6444,13 @@ ret i64 %t2845
 L987:
 ret i64 0
 }
-define void @resid_overflow_check(i8 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define void @resid_overflow_check(i8 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0 = zext i8 %a0 to i64
 %r = call i64 @rt_overflow_check(i64 %x0)
 ret void
 }
-define internal i64 @rt_div_check(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_div_check(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2846 = icmp ne i64 %p0, 0
 br i1 %t2846, label %L988, label %L990
@@ -6459,13 +6460,13 @@ ret i64 %t2848
 L990:
 ret i64 0
 }
-define void @resid_div_check(i8 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define void @resid_div_check(i8 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0 = zext i8 %a0 to i64
 %r = call i64 @rt_div_check(i64 %x0)
 ret void
 }
-define internal i64 @rt_conv_check(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_conv_check(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2849 = icmp ne i64 %p0, 0
 br i1 %t2849, label %L991, label %L993
@@ -6475,18 +6476,18 @@ ret i64 %t2851
 L993:
 ret i64 0
 }
-define void @resid_conv_check(i8 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define void @resid_conv_check(i8 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0 = zext i8 %a0 to i64
 %r = call i64 @rt_conv_check(i64 %x0)
 ret void
 }
-define internal i64 @__mruntime_rt_arith_resid__imax() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_arith_resid__imax() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2852 = trunc i128 9223372036854775807 to i64
 ret i64 %t2852
 }
-define internal i64 @__mruntime_rt_arith_resid__imin() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_arith_resid__imin() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2853 = sext i64 0 to i128
 %t2854 = sub i128 %t2853, 9223372036854775807
@@ -6495,37 +6496,37 @@ entry:
 %t2857 = trunc i128 %t2856 to i64
 ret i64 %t2857
 }
-define internal i64 @rt_wrapping_add(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_wrapping_add(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2858 = add i64 %p0, %p1
 ret i64 %t2858
 }
-define i64 @wrapping_add(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @wrapping_add(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_wrapping_add(i64 %a0, i64 %a1)
 ret i64 %r
 }
-define internal i64 @rt_wrapping_sub(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_wrapping_sub(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2859 = sub i64 %p0, %p1
 ret i64 %t2859
 }
-define i64 @wrapping_sub(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @wrapping_sub(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_wrapping_sub(i64 %a0, i64 %a1)
 ret i64 %r
 }
-define internal i64 @rt_wrapping_mul(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_wrapping_mul(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2860 = mul i64 %p0, %p1
 ret i64 %t2860
 }
-define i64 @wrapping_mul(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @wrapping_mul(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_wrapping_mul(i64 %a0, i64 %a1)
 ret i64 %r
 }
-define internal i64 @rt_wrapping_div(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_wrapping_div(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2861 = icmp eq i64 %p1, 0
 br i1 %t2861, label %L994, label %L996
@@ -6552,42 +6553,42 @@ call void @resid_overflow_check(i8 %t2874)
 %t2873 = sdiv i64 %p0, %t2872
 ret i64 %t2873
 }
-define i64 @wrapping_div(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @wrapping_div(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_wrapping_div(i64 %a0, i64 %a1)
 ret i64 %r
 }
-define internal i64 @rt_wrapping_uadd(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_wrapping_uadd(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2875 = add i64 %p0, %p1
 ret i64 %t2875
 }
-define i64 @wrapping_uadd(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @wrapping_uadd(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_wrapping_uadd(i64 %a0, i64 %a1)
 ret i64 %r
 }
-define internal i64 @rt_wrapping_usub(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_wrapping_usub(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2876 = sub i64 %p0, %p1
 ret i64 %t2876
 }
-define i64 @wrapping_usub(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @wrapping_usub(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_wrapping_usub(i64 %a0, i64 %a1)
 ret i64 %r
 }
-define internal i64 @rt_wrapping_umul(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_wrapping_umul(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2877 = mul i64 %p0, %p1
 ret i64 %t2877
 }
-define i64 @wrapping_umul(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @wrapping_umul(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_wrapping_umul(i64 %a0, i64 %a1)
 ret i64 %r
 }
-define internal i64 @rt_wrapping_udiv(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_wrapping_udiv(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2878 = icmp eq i64 %p1, 0
 br i1 %t2878, label %L1000, label %L1002
@@ -6598,22 +6599,22 @@ L1002:
 %t2881 = tail call i64 @__mruntime_rt_arith_resid__rt_udiv(i64 %p0, i64 %p1)
 ret i64 %t2881
 }
-define i64 @wrapping_udiv(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @wrapping_udiv(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_wrapping_udiv(i64 %a0, i64 %a1)
 ret i64 %r
 }
-define internal i64 @__mruntime_rt_arith_resid__rt_udiv(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_arith_resid__rt_udiv(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2882 = tail call i64 @udiv(i64 %p0, i64 %p1)
 ret i64 %t2882
 }
-define internal i1 @__mruntime_rt_arith_resid__rt_ult(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_arith_resid__rt_ult(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2883 = tail call i1 @ult(i64 %p0, i64 %p1)
 ret i1 %t2883
 }
-define internal i64 @rt_saturating_add(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_saturating_add(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2884 = icmp sgt i64 %p1, 0
 br label %LSL2885
@@ -6650,12 +6651,12 @@ L1008:
 %t2898 = add i64 %p0, %p1
 ret i64 %t2898
 }
-define i64 @saturating_add(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @saturating_add(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_saturating_add(i64 %a0, i64 %a1)
 ret i64 %r
 }
-define internal i64 @rt_saturating_sub(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_saturating_sub(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2899 = icmp slt i64 %p1, 0
 br label %LSL2900
@@ -6692,12 +6693,12 @@ L1014:
 %t2913 = sub i64 %p0, %p1
 ret i64 %t2913
 }
-define i64 @saturating_sub(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @saturating_sub(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_saturating_sub(i64 %a0, i64 %a1)
 ret i64 %r
 }
-define internal i64 @rt_saturating_mul(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_saturating_mul(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2914 = mul i64 %p0, %p1
 %t2915 = icmp ne i64 %p0, 0
@@ -6774,12 +6775,12 @@ L1020:
 %t2949 = phi i64 [ %t2947, %L1018 ], [ %t2948, %L1019 ]
 ret i64 %t2949
 }
-define i64 @saturating_mul(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @saturating_mul(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_saturating_mul(i64 %a0, i64 %a1)
 ret i64 %r
 }
-define internal i64 @rt_saturating_uadd(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_saturating_uadd(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2950 = add i64 %p0, %p1
 %t2951 = call i1 @__mruntime_rt_arith_resid__rt_ult(i64 %t2950, i64 %p0)
@@ -6793,12 +6794,12 @@ L1023:
 %t2953 = phi i64 [ %t2952, %L1021 ], [ %t2950, %L1022 ]
 ret i64 %t2953
 }
-define i64 @saturating_uadd(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @saturating_uadd(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_saturating_uadd(i64 %a0, i64 %a1)
 ret i64 %r
 }
-define internal i64 @rt_saturating_usub(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_saturating_usub(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2954 = call i1 @__mruntime_rt_arith_resid__rt_ult(i64 %p0, i64 %p1)
 br i1 %t2954, label %L1024, label %L1025
@@ -6811,12 +6812,12 @@ L1026:
 %t2956 = phi i64 [ 0, %L1024 ], [ %t2955, %L1025 ]
 ret i64 %t2956
 }
-define i64 @saturating_usub(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @saturating_usub(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_saturating_usub(i64 %a0, i64 %a1)
 ret i64 %r
 }
-define internal i64 @rt_saturating_umul(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_saturating_umul(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2957 = icmp eq i64 %p0, 0
 br label %LSL2958
@@ -6844,42 +6845,42 @@ L1032:
 %t2965 = phi i64 [ %t2964, %L1030 ], [ %t2961, %L1031 ]
 ret i64 %t2965
 }
-define i64 @saturating_umul(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @saturating_umul(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_saturating_umul(i64 %a0, i64 %a1)
 ret i64 %r
 }
-define internal i64 @rt_checked_add(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_checked_add(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2966 = add i64 %p0, %p1
 ret i64 %t2966
 }
-define i64 @checked_add(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @checked_add(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_checked_add(i64 %a0, i64 %a1)
 ret i64 %r
 }
-define internal i64 @rt_checked_sub(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_checked_sub(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2967 = sub i64 %p0, %p1
 ret i64 %t2967
 }
-define i64 @checked_sub(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @checked_sub(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_checked_sub(i64 %a0, i64 %a1)
 ret i64 %r
 }
-define internal i64 @rt_checked_mul(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_checked_mul(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2968 = mul i64 %p0, %p1
 ret i64 %t2968
 }
-define i64 @checked_mul(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @checked_mul(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_checked_mul(i64 %a0, i64 %a1)
 ret i64 %r
 }
-define internal i64 @rt_checked_div(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_checked_div(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2969 = icmp eq i64 %p1, 0
 br i1 %t2969, label %L1033, label %L1035
@@ -6899,42 +6900,42 @@ call void @resid_overflow_check(i8 %t2979)
 %t2978 = sdiv i64 %p0, %t2977
 ret i64 %t2978
 }
-define i64 @checked_div(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @checked_div(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_checked_div(i64 %a0, i64 %a1)
 ret i64 %r
 }
-define internal i64 @rt_checked_uadd(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_checked_uadd(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2980 = add i64 %p0, %p1
 ret i64 %t2980
 }
-define i64 @checked_uadd(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @checked_uadd(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_checked_uadd(i64 %a0, i64 %a1)
 ret i64 %r
 }
-define internal i64 @rt_checked_usub(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_checked_usub(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2981 = sub i64 %p0, %p1
 ret i64 %t2981
 }
-define i64 @checked_usub(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @checked_usub(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_checked_usub(i64 %a0, i64 %a1)
 ret i64 %r
 }
-define internal i64 @rt_checked_umul(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_checked_umul(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2982 = mul i64 %p0, %p1
 ret i64 %t2982
 }
-define i64 @checked_umul(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @checked_umul(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_checked_umul(i64 %a0, i64 %a1)
 ret i64 %r
 }
-define internal i64 @rt_checked_udiv(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_checked_udiv(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2983 = icmp eq i64 %p1, 0
 br i1 %t2983, label %L1036, label %L1038
@@ -6945,12 +6946,12 @@ L1038:
 %t2986 = tail call i64 @__mruntime_rt_arith_resid__rt_udiv(i64 %p0, i64 %p1)
 ret i64 %t2986
 }
-define i64 @checked_udiv(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @checked_udiv(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_checked_udiv(i64 %a0, i64 %a1)
 ret i64 %r
 }
-define internal i64 @rt_abs_i64(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_abs_i64(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2987 = icmp slt i64 %p0, 0
 br i1 %t2987, label %L1039, label %L1040
@@ -6963,12 +6964,12 @@ L1041:
 %t2989 = phi i64 [ %t2988, %L1039 ], [ %p0, %L1040 ]
 ret i64 %t2989
 }
-define i64 @abs_i64(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @abs_i64(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_abs_i64(i64 %a0)
 ret i64 %r
 }
-define internal i64 @rt_min_i64(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_min_i64(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2990 = icmp slt i64 %p0, %p1
 br i1 %t2990, label %L1042, label %L1043
@@ -6980,12 +6981,12 @@ L1044:
 %t2991 = phi i64 [ %p0, %L1042 ], [ %p1, %L1043 ]
 ret i64 %t2991
 }
-define i64 @min_i64(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @min_i64(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_min_i64(i64 %a0, i64 %a1)
 ret i64 %r
 }
-define internal i64 @rt_max_i64(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_max_i64(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2992 = icmp sgt i64 %p0, %p1
 br i1 %t2992, label %L1045, label %L1046
@@ -6997,12 +6998,12 @@ L1047:
 %t2993 = phi i64 [ %p0, %L1045 ], [ %p1, %L1046 ]
 ret i64 %t2993
 }
-define i64 @max_i64(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @max_i64(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_max_i64(i64 %a0, i64 %a1)
 ret i64 %r
 }
-define internal i64 @rt_clamp_i64(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_clamp_i64(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2994 = icmp slt i64 %p0, %p1
 br i1 %t2994, label %L1048, label %L1050
@@ -7016,95 +7017,95 @@ ret i64 %p2
 L1053:
 ret i64 %p0
 }
-define i64 @clamp_i64(i64 %a0, i64 %a1, i64 %a2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @clamp_i64(i64 %a0, i64 %a1, i64 %a2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_clamp_i64(i64 %a0, i64 %a1, i64 %a2)
 ret i64 %r
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_code(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_code(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2996 = tail call i64 @ld64(i64 %p0)
 ret i64 %t2996
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_len(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_len(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2997 = add i64 %p0, 8
 %t2998 = tail call i64 @ld64(i64 %t2997)
 ret i64 %t2998
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_ins(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_ins(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t2999 = call i64 @__mruntime_rt_regex_resid__rx_code(i64 %p0)
 %t3000 = mul i64 %p1, 24
 %t3001 = add i64 %t2999, %t3000
 ret i64 %t3001
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_op(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_op(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t3002 = call i64 @__mruntime_rt_regex_resid__rx_ins(i64 %p0, i64 %p1)
 %t3003 = call i64 @ld64(i64 %t3002)
 ret i64 %t3003
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_a(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_a(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t3004 = call i64 @__mruntime_rt_regex_resid__rx_ins(i64 %p0, i64 %p1)
 %t3005 = add i64 %t3004, 8
 %t3006 = call i64 @ld64(i64 %t3005)
 ret i64 %t3006
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_b(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_b(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t3007 = call i64 @__mruntime_rt_regex_resid__rx_ins(i64 %p0, i64 %p1)
 %t3008 = add i64 %t3007, 16
 %t3009 = call i64 @ld64(i64 %t3008)
 ret i64 %t3009
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_fail(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_fail(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t3010 = add i64 %p0, 24
 %t3011 = call i64 @st64(i64 %t3010, i64 1)
 ret i64 %t3011
 }
-define internal i1 @__mruntime_rt_regex_resid__rx_bad(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_regex_resid__rx_bad(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t3012 = add i64 %p0, 24
 %t3013 = call i64 @ld64(i64 %t3012)
 %t3014 = icmp ne i64 %t3013, 0
 ret i1 %t3014
 }
-define internal i64 @__mruntime_rt_regex_resid__o_char() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__o_char() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 1
 }
-define internal i64 @__mruntime_rt_regex_resid__o_any() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__o_any() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 2
 }
-define internal i64 @__mruntime_rt_regex_resid__o_cls() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__o_cls() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 3
 }
-define internal i64 @__mruntime_rt_regex_resid__o_split() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__o_split() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 4
 }
-define internal i64 @__mruntime_rt_regex_resid__o_jmp() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__o_jmp() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 5
 }
-define internal i64 @__mruntime_rt_regex_resid__o_match() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__o_match() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 6
 }
-define internal i64 @__mruntime_rt_regex_resid__o_asr() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__o_asr() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 7
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_max() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_max() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 100000
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_new() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_new() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t3015 = call i64 @xmalloc(i64 32)
 %t3016 = mul nsw i64 24, 64
@@ -7120,7 +7121,7 @@ entry:
 %t3026 = add nsw i64 %t3025, %t3015
 ret i64 %t3026
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_grow(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_grow(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t3027 = add i64 %p0, 16
 %t3028 = call i64 @ld64(i64 %t3027)
@@ -7141,7 +7142,7 @@ L1056:
 %t3039 = tail call i64 @st64(i64 %t3038, i64 %t3033)
 ret i64 %t3039
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_set(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_set(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t3040 = call i64 @__mruntime_rt_regex_resid__rx_ins(i64 %p0, i64 %p1)
 %t3041 = call i64 @st64(i64 %t3040, i64 %p2)
@@ -7151,7 +7152,7 @@ entry:
 %t3045 = call i64 @st64(i64 %t3044, i64 %p4)
 ret i64 %t3045
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_emit(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_emit(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t3046 = call i64 @__mruntime_rt_regex_resid__rx_len(i64 %p0)
 %t3047 = call i64 @__mruntime_rt_regex_resid__rx_max()
@@ -7169,7 +7170,7 @@ L1059:
 %t3055 = call i64 @st64(i64 %t3053, i64 %t3054)
 ret i64 %t3055
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_insert(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_insert(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t3056 = call i64 @__mruntime_rt_regex_resid__rx_len(i64 %p0)
 %t3057 = call i64 @__mruntime_rt_regex_resid__rx_max()
@@ -7190,7 +7191,7 @@ L1062:
 %t3068 = call i64 @st64(i64 %t3065, i64 %t3067)
 ret i64 %t3068
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_shift(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_shift(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -7212,7 +7213,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_dup(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_dup(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -7233,7 +7234,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_cp(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_cp(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t3084 = call i64 @ld8(i64 %p0)
 %t3085 = icmp slt i64 %t3084, 128
@@ -7248,7 +7249,7 @@ L1071:
 %t3088 = phi i64 [ %t3084, %L1069 ], [ %t3087, %L1070 ]
 ret i64 %t3088
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_cl(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_cl(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t3089 = call i64 @ld8(i64 %p0)
 %t3090 = icmp slt i64 %t3089, 128
@@ -7262,7 +7263,7 @@ L1074:
 %t3092 = phi i64 [ 1, %L1072 ], [ %t3091, %L1073 ]
 ret i64 %t3092
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_fold(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_fold(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t3093 = icmp sge i64 %p0, 97
 br label %LSL3094
@@ -7294,7 +7295,7 @@ ret i64 %t3102
 L1080:
 ret i64 %p0
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_alt(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_alt(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t3103 = call i64 @__mruntime_rt_regex_resid__rx_len(i64 %p0)
 %t3104 = call i64 @__mruntime_rt_regex_resid__rx_cat(i64 %p0, i64 %p1, i64 %p2)
@@ -7331,7 +7332,7 @@ L1083:
 %t3126 = add nsw i64 %t3125, %t3120
 ret i64 %t3126
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_cat(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_cat(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -7476,7 +7477,7 @@ br label %tco.s3
 tco.s3:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_eol(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_eol(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t3188 = call i64 @ld8(i64 %p0)
 %t3189 = icmp eq i64 %t3188, 0
@@ -7499,7 +7500,7 @@ L1098:
 %t3195 = phi i64 [ %p0, %L1096 ], [ %t3194, %L1097 ]
 ret i64 %t3195
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_flag_end(i64 %p0.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_flag_end(i64 %p0.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -7563,7 +7564,7 @@ L1104:
 %t3216 = phi i64 [ %p0, %L1102 ], [ 0, %L1103 ]
 ret i64 %t3216
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_flags(i64 %p0.in, i64 %p1.in, i1 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_flags(i64 %p0.in, i64 %p1.in, i1 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -7631,7 +7632,7 @@ br label %tco.s1
 tco.s1:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_quant(i64 %p0.in, i64 %p1.in, i64 %p2.in, i1 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_quant(i64 %p0.in, i64 %p1.in, i64 %p2.in, i1 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -7787,7 +7788,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_count_end(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_count_end(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t3292 = call i64 @ld8(i64 %p0)
 %t3293 = icmp ne i64 %t3292, 123
@@ -7847,7 +7848,7 @@ L1170:
 %t3315 = add i64 %t3304, 1
 ret i64 %t3315
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_digits(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_digits(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t3316 = call i64 @ld8(i64 %p0)
 %t3317 = icmp sge i64 %t3316, 48
@@ -7870,7 +7871,7 @@ L1173:
 %t3323 = phi i64 [ %t3322, %L1171 ], [ %p0, %L1172 ]
 ret i64 %t3323
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_num(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_num(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -7910,7 +7911,7 @@ br label %tco.head
 L1176:
 ret i64 %p2
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_count_hi(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_count_hi(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t3340 = add i64 %p0, 1
 %t3341 = call i64 @__mruntime_rt_regex_resid__rx_digits(i64 %t3340)
@@ -7926,7 +7927,7 @@ L1179:
 %t3347 = call i64 @__mruntime_rt_regex_resid__rx_num(i64 %t3346, i64 0, i64 -1)
 ret i64 %t3347
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_repeat(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_repeat(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t3348 = icmp eq i64 %p4, 0
 br i1 %t3348, label %L1180, label %L1182
@@ -7983,7 +7984,7 @@ L1191:
 %t3379 = call i64 @__mruntime_rt_regex_resid__rx_optional(i64 %p0, i64 %p1, i64 %p2, i64 %t3378)
 ret i64 %t3379
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_copies(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_copies(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -8003,7 +8004,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_optional(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_optional(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -8026,7 +8027,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_atom(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_atom(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t3393 = call i64 @ld8(i64 %p1)
 %t3394 = icmp eq i64 %t3393, 40
@@ -8145,7 +8146,7 @@ L1227:
 %t3446 = add i64 %t3444, %t3445
 ret i64 %t3446
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_lit(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_lit(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t3447 = and i64 %p2, 1
 %t3448 = icmp ne i64 %t3447, 0
@@ -8173,7 +8174,7 @@ L1230:
 %t3461 = call i64 @__mruntime_rt_regex_resid__rx_emit(i64 %p0, i64 %t3460, i64 %p1, i64 0)
 ret i64 %t3461
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_group(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_group(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t3462 = add i64 %p1, 1
 %t3463 = call i64 @ld8(i64 %t3462)
@@ -8242,7 +8243,7 @@ L1242:
 %t3496 = add i64 %t3490, 1
 ret i64 %t3496
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_group_body(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_group_body(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t3497 = call i64 @ld8(i64 %p1)
 %t3498 = icmp eq i64 %t3497, 58
@@ -8313,7 +8314,7 @@ ret i64 %t3527
 L1254:
 ret i64 0
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_name_end(i64 %p0.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_name_end(i64 %p0.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -8335,7 +8336,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_ranges(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_ranges(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t3534 = mul i64 %p0, 16
 %t3535 = add i64 16, %t3534
@@ -8347,7 +8348,7 @@ entry:
 %t3541 = add nsw i64 %t3540, %t3536
 ret i64 %t3541
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_range_add(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_range_add(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t3542 = call i64 @ld64(i64 %p0)
 %t3543 = add i64 %p0, 8
@@ -8369,7 +8370,7 @@ L1263:
 %t3555 = call i64 @st64(i64 %p0, i64 %t3554)
 ret i64 %t3555
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_short(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_short(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t3556 = icmp eq i64 %p1, 100
 br i1 %t3556, label %L1264, label %L1266
@@ -8426,7 +8427,7 @@ L1278:
 %t3588 = add i64 %t3586, %t3587
 ret i64 %t3588
 }
-define internal i1 @__mruntime_rt_regex_resid__rx_is_short(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_regex_resid__rx_is_short(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t3589 = icmp eq i64 %p0, 100
 br label %LSL3590
@@ -8471,7 +8472,7 @@ LSJ3602:
 %t3604 = phi i1 [ true, %LSL3602 ], [ %t3603, %LSR3602 ]
 ret i1 %t3604
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_class(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_class(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t3605 = add i64 %p1, 1
 %t3606 = call i64 @ld8(i64 %t3605)
@@ -8519,7 +8520,7 @@ L1290:
 %t3626 = add nsw i64 %t3625, %t3616
 ret i64 %t3626
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_close_at(i64 %p0.in, i1 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_close_at(i64 %p0.in, i1 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -8567,7 +8568,7 @@ br label %tco.s1
 tco.s1:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_class_items(i64 %p0.in, i64 %p1.in, i64 %p2.in, i1 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_class_items(i64 %p0.in, i64 %p1.in, i64 %p2.in, i1 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -8702,7 +8703,7 @@ br label %tco.s3
 tco.s3:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_member(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_member(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t3707 = call i64 @ld8(i64 %p0)
 %t3708 = icmp ne i64 %t3707, 92
@@ -8721,7 +8722,7 @@ L1329:
 %t3713 = tail call i64 @__mruntime_rt_regex_resid__rx_esc_cp(i64 %p0)
 ret i64 %t3713
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_member_end(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_member_end(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t3714 = call i64 @ld8(i64 %p0)
 %t3715 = icmp ne i64 %t3714, 92
@@ -8734,7 +8735,7 @@ L1332:
 %t3718 = tail call i64 @__mruntime_rt_regex_resid__rx_esc_end(i64 %p0)
 ret i64 %t3718
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_posix(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_posix(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t3719 = call i64 @__mruntime_rt_regex_resid__rx_posix_end(i64 %p1)
 %t3720 = icmp eq i64 %t3719, 0
@@ -8916,7 +8917,7 @@ L1377:
 %t3821 = phi i64 [ %t3820, %L1375 ], [ 0, %L1376 ]
 ret i64 %t3821
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_posix_end(i64 %p0.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_posix_end(i64 %p0.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -8947,7 +8948,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i1 @__mruntime_rt_regex_resid__rx_word_is(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_regex_resid__rx_word_is(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t3832 = call i64 @c_strlen(i64 %p2)
 %t3833 = icmp eq i64 %t3832, %p1
@@ -8961,7 +8962,7 @@ LSJ3834:
 %t3836 = phi i1 [ false, %LSL3834 ], [ %t3835, %LSR3834 ]
 ret i1 %t3836
 }
-define internal i1 @__mruntime_rt_regex_resid__rx_same(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_regex_resid__rx_same(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t3837 = icmp sle i64 %p2, 0
 br i1 %t3837, label %L1384, label %L1386
@@ -8984,7 +8985,7 @@ LSJ3841:
 %t3846 = phi i1 [ false, %LSL3841 ], [ %t3845, %LSR3841 ]
 ret i1 %t3846
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_escape(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_escape(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t3847 = add i64 %p1, 1
 %t3848 = call i64 @ld8(i64 %t3847)
@@ -9065,7 +9066,7 @@ L1407:
 %t3882 = add nsw i64 %t3880, %t3881
 ret i64 %t3882
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_esc_cp(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_esc_cp(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t3883 = add i64 %p0, 1
 %t3884 = call i64 @ld8(i64 %t3883)
@@ -9197,7 +9198,7 @@ L1446:
 %t3926 = phi i64 [ -1, %L1444 ], [ %t3925, %L1445 ]
 ret i64 %t3926
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_esc_end(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_esc_end(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t3927 = add i64 %p0, 1
 %t3928 = call i64 @ld8(i64 %t3927)
@@ -9236,7 +9237,7 @@ L1455:
 %t3944 = add i64 %t3941, %t3943
 ret i64 %t3944
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_brace_end(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_brace_end(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t3945 = call i64 @ld8(i64 %p0)
 %t3946 = icmp eq i64 %t3945, 125
@@ -9260,7 +9261,7 @@ L1458:
 %t3952 = phi i64 [ %t3947, %L1456 ], [ %t3951, %L1461 ]
 ret i64 %t3952
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_hex(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_hex(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -9364,7 +9365,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i1 @__mruntime_rt_regex_resid__rx_in(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_regex_resid__rx_in(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -9403,7 +9404,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i1 @__mruntime_rt_regex_resid__rx_takes(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_regex_resid__rx_takes(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4003 = icmp slt i64 %p2, 0
 br i1 %t4003, label %L1489, label %L1491
@@ -9468,7 +9469,7 @@ LSJ4021:
 %t4032 = icmp ne i1 %t4029, %t4031
 ret i1 %t4032
 }
-define internal i1 @__mruntime_rt_regex_resid__rx_wordc(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_regex_resid__rx_wordc(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4033 = icmp eq i64 %p0, 95
 br label %LSL4034
@@ -9521,7 +9522,7 @@ LSJ4046:
 %t4051 = phi i1 [ true, %LSL4046 ], [ %t4050, %LSJ4048 ]
 ret i1 %t4051
 }
-define internal i1 @__mruntime_rt_regex_resid__rx_holds(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_regex_resid__rx_holds(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4052 = icmp eq i64 %p0, 0
 br i1 %t4052, label %L1501, label %L1503
@@ -9577,7 +9578,7 @@ L1515:
 %t4071 = phi i1 [ %t4068, %L1513 ], [ %t4070, %L1514 ]
 ret i1 %t4071
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_add(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_add(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -9649,7 +9650,7 @@ L1527:
 %t4106 = call i64 @st64(i64 %p1, i64 %t4105)
 ret i64 %t4106
 }
-define internal i1 @__mruntime_rt_regex_resid__rx_has_match(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_regex_resid__rx_has_match(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -9678,7 +9679,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_step(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in, i64 %p7.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_step(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in, i64 %p7.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -9715,7 +9716,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i1 @__mruntime_rt_regex_resid__rx_run(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_regex_resid__rx_run(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -9768,14 +9769,14 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_free(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_free(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4149 = call i64 @__mruntime_rt_regex_resid__rx_code(i64 %p0)
 %t4150 = call i64 @c_free(i64 %t4149)
 %t4151 = tail call i64 @c_free(i64 %p0)
 ret i64 %t4151
 }
-define internal i64 @rt_regex_match(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_regex_match(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4152 = icmp eq i64 %p0, 0
 br label %LSL4153
@@ -9838,7 +9839,7 @@ L1563:
 %t4186 = phi i64 [ 1, %L1561 ], [ 0, %L1562 ]
 ret i64 %t4186
 }
-define i8 @resid_regex_match(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_regex_match(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -9846,7 +9847,7 @@ entry:
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @__mruntime_rt_regex_resid__rx_zero(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_regex_resid__rx_zero(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -9866,51 +9867,51 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_caps_resid__cap_max_depth() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_caps_resid__cap_max_depth() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 32
 }
-define internal i64 @__mruntime_rt_caps_resid__cap_max_set() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_caps_resid__cap_max_set() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 64
 }
-define internal i64 @__mruntime_rt_caps_resid__cap_stack() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_caps_resid__cap_stack() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4194p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.cap_stack)
 %t4194 = ptrtoint ptr %t4194p to i64
 ret i64 %t4194
 }
-define internal i64 @__mruntime_rt_caps_resid__cap_ns() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_caps_resid__cap_ns() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4195p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.cap_ns)
 %t4195 = ptrtoint ptr %t4195p to i64
 ret i64 %t4195
 }
-define internal i64 @__mruntime_rt_caps_resid__cap_depth_at() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_caps_resid__cap_depth_at() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4196p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.cap_depth)
 %t4196 = ptrtoint ptr %t4196p to i64
 ret i64 %t4196
 }
-define internal i64 @__mruntime_rt_caps_resid__cap_reps() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_caps_resid__cap_reps() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4197p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.cap_reps)
 %t4197 = ptrtoint ptr %t4197p to i64
 ret i64 %t4197
 }
-define internal i64 @cap_depth_get() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @cap_depth_get() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4198 = call i64 @__mruntime_rt_caps_resid__cap_depth_at()
 %t4199 = call i64 @ld64(i64 %t4198)
 ret i64 %t4199
 }
-define internal i64 @cap_depth_set(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @cap_depth_set(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4200 = call i64 @__mruntime_rt_caps_resid__cap_depth_at()
 %t4201 = call i64 @st64(i64 %t4200, i64 %p0)
 ret i64 %t4201
 }
-define internal i64 @cap_top_reps_get() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @cap_top_reps_get() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4202 = call i64 @cap_depth_get()
 %t4203 = icmp sgt i64 %t4202, 0
@@ -9928,7 +9929,7 @@ L1569:
 %t4209 = phi i64 [ %t4208, %L1567 ], [ 0, %L1568 ]
 ret i64 %t4209
 }
-define internal i64 @cap_top_reps_set(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @cap_top_reps_set(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4210 = call i64 @cap_depth_get()
 %t4211 = icmp sgt i64 %t4210, 0
@@ -9946,7 +9947,7 @@ L1572:
 %t4217 = phi i64 [ %t4216, %L1570 ], [ 0, %L1571 ]
 ret i64 %t4217
 }
-define internal i64 @rt_cap_enter(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_cap_enter(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4218 = call i64 @__mruntime_rt_caps_resid__cap_depth_at()
 %t4219 = call i64 @ld64(i64 %t4218)
@@ -10023,13 +10024,13 @@ L1584:
 %t4264 = tail call i64 @st64(i64 %t4262, i64 %t4263)
 ret i64 %t4264
 }
-define void @resid_cap_enter(ptr %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define void @resid_cap_enter(ptr %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_cap_enter(i64 %x0i, i64 %a1)
 ret void
 }
-define internal i1 @__mruntime_rt_caps_resid__cap_same_set(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_caps_resid__cap_same_set(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4265 = call i64 @__mruntime_rt_caps_resid__cap_ns()
 %t4266 = mul i64 %p0, 8
@@ -10046,7 +10047,7 @@ L1587:
 %t4273 = call i1 @__mruntime_rt_caps_resid__cap_same_entries(i64 %t4272, i64 %p1, i64 0, i64 %p2)
 ret i1 %t4273
 }
-define internal i1 @__mruntime_rt_caps_resid__cap_same_entries(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_caps_resid__cap_same_entries(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -10100,7 +10101,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_cap_leave() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_cap_leave() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4294 = call i64 @__mruntime_rt_caps_resid__cap_depth_at()
 %t4295 = call i64 @ld64(i64 %t4294)
@@ -10130,12 +10131,12 @@ L1599:
 %t4311 = call i64 @st64(i64 %t4309, i64 %t4310)
 ret i64 %t4311
 }
-define void @resid_cap_leave() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define void @resid_cap_leave() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_cap_leave()
 ret void
 }
-define internal i1 @__mruntime_rt_caps_resid__cap_term(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_caps_resid__cap_term(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4312 = icmp eq i64 %p0, 0
 br label %LSL4313
@@ -10164,7 +10165,7 @@ LSJ4319:
 %t4321 = phi i1 [ true, %LSL4319 ], [ %t4320, %LSR4319 ]
 ret i1 %t4321
 }
-define internal i1 @__mruntime_rt_caps_resid__cap_ro(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_caps_resid__cap_ro(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4322 = call i64 @__mruntime_rt_caps_resid__cap_find(i64 %p0, i64 58)
 %t4323 = icmp ne i64 %t4322, 0
@@ -10200,7 +10201,7 @@ LSJ4334:
 %t4338 = phi i1 [ false, %LSL4334 ], [ %t4337, %LSR4334 ]
 ret i1 %t4338
 }
-define internal i64 @__mruntime_rt_caps_resid__cap_find(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_caps_resid__cap_find(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -10222,7 +10223,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i1 @__mruntime_rt_caps_resid__cap_same_family(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_caps_resid__cap_same_family(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -10297,7 +10298,7 @@ LSJ4369:
 %t4371 = phi i1 [ false, %LSL4369 ], [ %t4370, %LSR4369 ]
 ret i1 %t4371
 }
-define internal i1 @__mruntime_rt_caps_resid__cap_in_frame(i64 %p0.in, i64 %p1.in, i64 %p2.in, i1 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_caps_resid__cap_in_frame(i64 %p0.in, i64 %p1.in, i64 %p2.in, i1 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -10346,7 +10347,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i1 @__mruntime_rt_caps_resid__cap_all_frames(i64 %p0.in, i64 %p1.in, i64 %p2.in, i1 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_caps_resid__cap_all_frames(i64 %p0.in, i64 %p1.in, i64 %p2.in, i1 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -10370,7 +10371,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i1 @__mruntime_rt_caps_resid__cap_granted(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_caps_resid__cap_granted(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4397 = call i64 @__mruntime_rt_caps_resid__cap_depth_at()
 %t4398 = call i64 @ld64(i64 %t4397)
@@ -10395,7 +10396,7 @@ LSJ4402:
 %t4408 = call i1 @__mruntime_rt_caps_resid__cap_all_frames(i64 0, i64 %t4398, i64 %p0, i1 %t4407)
 ret i1 %t4408
 }
-define internal i64 @rt_cap_granted(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_cap_granted(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4409 = call i1 @__mruntime_rt_caps_resid__cap_granted(i64 %p0)
 br i1 %t4409, label %L1627, label %L1628
@@ -10407,14 +10408,14 @@ L1629:
 %t4410 = phi i64 [ 1, %L1627 ], [ 0, %L1628 ]
 ret i64 %t4410
 }
-define i8 @resid_cap_granted(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_cap_granted(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_cap_granted(i64 %x0i)
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @rt_cap_check(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_cap_check(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4411 = call i1 @__mruntime_rt_caps_resid__cap_granted(i64 %p0)
 br i1 %t4411, label %L1630, label %L1632
@@ -10468,13 +10469,13 @@ L1638:
 %t4442 = tail call i64 @rt_abort_at(i64 %t4434)
 ret i64 %t4442
 }
-define void @resid_cap_check(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define void @resid_cap_check(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_cap_check(i64 %x0i)
 ret void
 }
-define internal i64 @rt_str_concat(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_str_concat(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4443 = call i64 @c_strlen(i64 %p0)
 %t4444 = call i64 @c_strlen(i64 %p1)
@@ -10487,7 +10488,7 @@ entry:
 %t4451 = call i64 @mcopy(i64 %t4449, i64 %p1, i64 %t4450)
 ret i64 %t4447
 }
-define ptr @resid_str_concat(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_str_concat(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -10495,7 +10496,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_str_eq(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_str_eq(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4452 = call i64 @c_strcmp(i64 %p0, i64 %p1)
 %t4453 = icmp eq i64 %t4452, 0
@@ -10508,7 +10509,7 @@ L1641:
 %t4454 = phi i64 [ 1, %L1639 ], [ 0, %L1640 ]
 ret i64 %t4454
 }
-define i8 @resid_str_eq(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_str_eq(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -10516,7 +10517,7 @@ entry:
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @__mruntime_rt_text_resid__sacc_alloc(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__sacc_alloc(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4455 = call i64 @ag_scope_depth()
 %t4456 = icmp ne i64 %t4455, 0
@@ -10563,7 +10564,7 @@ L1647:
 %t4479 = add i64 %t4473, 24
 ret i64 %t4479
 }
-define internal i64 @rt_sacc_from(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_sacc_from(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4480 = call i64 @c_strlen(i64 %p0)
 %t4481 = icmp slt i64 %t4480, 32
@@ -10582,14 +10583,14 @@ L1653:
 %t4488 = call i64 @st64(i64 %t4487, i64 %t4480)
 ret i64 %t4484
 }
-define ptr @resid_sacc_from(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_sacc_from(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_sacc_from(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_text_resid__sacc_reserve(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__sacc_reserve(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4489 = sub i64 %p0, 16
 %t4490 = call i64 @ld64(i64 %t4489)
@@ -10661,7 +10662,7 @@ L1668:
 %t4528 = add i64 %t4519, 24
 ret i64 %t4528
 }
-define internal i64 @rt_sacc_append(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_sacc_append(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4529 = call i64 @c_strlen(i64 %p1)
 %t4530 = call i64 @__mruntime_rt_text_resid__sacc_reserve(i64 %p0, i64 %t4529)
@@ -10676,7 +10677,7 @@ entry:
 %t4539 = add i64 %t4538, %t4530
 ret i64 %t4539
 }
-define ptr @resid_sacc_append(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_sacc_append(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -10684,7 +10685,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_sacc_append_int(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_sacc_append_int(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4540p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.sacc_itoa)
 %t4540 = ptrtoint ptr %t4540p to i64
@@ -10703,14 +10704,14 @@ entry:
 %t4553 = add i64 %t4552, %t4542
 ret i64 %t4553
 }
-define ptr @resid_sacc_append_int(ptr %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_sacc_append_int(ptr %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_sacc_append_int(i64 %x0i, i64 %a1)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @itoa_into(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @itoa_into(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4554 = icmp slt i64 %p1, 0
 br i1 %t4554, label %L1669, label %L1670
@@ -10738,7 +10739,7 @@ L1674:
 %t4565 = add i64 %t4560, %t4557
 ret i64 %t4565
 }
-define internal i64 @udigits(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @udigits(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -10755,12 +10756,12 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_text_resid__udiv10(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__udiv10(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4570 = call i64 @udiv(i64 %p0, i64 10)
 ret i64 %t4570
 }
-define internal i64 @uput(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @uput(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -10781,7 +10782,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_str_to_fixed(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_str_to_fixed(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4579 = icmp eq i64 %p2, 0
 br i1 %t4579, label %L1681, label %L1683
@@ -10816,14 +10817,14 @@ L1686:
 %t4594 = call i64 @st8(i64 %t4593, i64 0)
 ret i64 %t4592
 }
-define i64 @resid_str_to_fixed(ptr %a0, ptr %a1, i64 %a2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_str_to_fixed(ptr %a0, ptr %a1, i64 %a2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
 %r = call i64 @rt_str_to_fixed(i64 %x0i, i64 %x1i, i64 %a2)
 ret i64 %r
 }
-define internal i64 @__mruntime_rt_text_resid__fixed_copy(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__fixed_copy(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -10850,7 +10851,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_text_resid__fixed_back(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__fixed_back(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -10877,7 +10878,7 @@ br label %tco.head
 L1695:
 ret i64 %p1
 }
-define internal i64 @rt_bytes_to_fixed(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_bytes_to_fixed(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4612 = icmp eq i64 %p2, 0
 br i1 %t4612, label %L1696, label %L1698
@@ -10887,14 +10888,14 @@ L1698:
 %t4613 = call i64 @__mruntime_rt_text_resid__fixed_copy(i64 %p0, i64 %p1, i64 0, i64 %p2)
 ret i64 %t4613
 }
-define i64 @resid_bytes_to_fixed(ptr %a0, ptr %a1, i64 %a2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_bytes_to_fixed(ptr %a0, ptr %a1, i64 %a2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
 %r = call i64 @rt_bytes_to_fixed(i64 %x0i, i64 %x1i, i64 %a2)
 ret i64 %r
 }
-define internal i64 @rt_fx_move(i64 %p0, i64 %p1, i64 %p2, i64 %p3) alwaysinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_fx_move(i64 %p0, i64 %p1, i64 %p2, i64 %p3) alwaysinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4614 = icmp eq i64 %p1, 0
 br label %LSL4615
@@ -10926,7 +10927,7 @@ L1704:
 %t4623 = add nsw i64 %t4622, %p0
 ret i64 %t4623
 }
-define ptr @resid_fx_move(ptr %a0, ptr %a1, i64 %a2, i8 %a3) alwaysinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_fx_move(ptr %a0, ptr %a1, i64 %a2, i8 %a3) alwaysinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -10935,7 +10936,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_fx_stage(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) alwaysinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_fx_stage(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) alwaysinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4624 = icmp eq i64 %p1, 0
 br label %LSL4625
@@ -10967,7 +10968,7 @@ L1710:
 %t4633 = add nsw i64 %t4632, %p0
 ret i64 %t4633
 }
-define ptr @resid_fx_stage(ptr %a0, ptr %a1, ptr %a2, i64 %a3, i8 %a4) alwaysinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_fx_stage(ptr %a0, ptr %a1, ptr %a2, i64 %a3, i8 %a4) alwaysinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -10977,20 +10978,20 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_fixed_text(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_fixed_text(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4634 = call i64 @__mruntime_rt_text_resid__nul_at(i64 %p0, i64 0, i64 %p1)
 %t4635 = call i64 @cstr_from(i64 %p0, i64 %t4634, i64 1)
 ret i64 %t4635
 }
-define ptr @resid_fixed_text(ptr %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_fixed_text(ptr %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_fixed_text(i64 %x0i, i64 %a1)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_text_resid__nul_at(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__nul_at(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -11017,7 +11018,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @utf8_seq_len(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @utf8_seq_len(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4644 = icmp slt i64 %p0, 128
 br i1 %t4644, label %L1714, label %L1716
@@ -11044,14 +11045,14 @@ ret i64 4
 L1725:
 ret i64 1
 }
-define internal i64 @utf8_len_at(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @utf8_len_at(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4651 = call i64 @ld8(i64 %p0)
 %t4652 = call i64 @utf8_seq_len(i64 %t4651)
 %t4653 = call i64 @__mruntime_rt_text_resid__utf8_cont(i64 %p0, i64 1, i64 %t4652)
 ret i64 %t4653
 }
-define internal i64 @__mruntime_rt_text_resid__utf8_cont(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__utf8_cont(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -11076,7 +11077,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @utf8_decode(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @utf8_decode(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4661 = call i64 @ld8(i64 %p0)
 %t4662 = icmp eq i64 %p1, 1
@@ -11129,7 +11130,7 @@ L1740:
 %t4697 = or i64 %t4693, %t4696
 ret i64 %t4697
 }
-define internal i64 @utf8_encode(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @utf8_encode(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4698 = icmp slt i64 %p0, 128
 br i1 %t4698, label %L1741, label %L1743
@@ -11189,7 +11190,7 @@ L1749:
 %t4741 = add i64 %t4740, 4
 ret i64 %t4741
 }
-define internal i64 @rt_str_from_code(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_str_from_code(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4742 = icmp sge i64 %p0, 0
 br label %LSL4743
@@ -11213,13 +11214,13 @@ L1752:
 %t4751 = call i64 @cstr_from(i64 %t4749, i64 %t4750, i64 1)
 ret i64 %t4751
 }
-define ptr @str_from_code(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @str_from_code(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_str_from_code(i64 %a0)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_text_resid__ascii_strs() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__ascii_strs() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4752p = getelementptr i8, ptr @rtg.rt_ascii_strs, i64 0
 %t4752 = ptrtoint ptr %t4752p to i64
@@ -11233,7 +11234,7 @@ ret i64 %t4756
 L1755:
 ret i64 %t4752
 }
-define internal i64 @__mruntime_rt_text_resid__fill_ascii(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__fill_ascii(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -11257,54 +11258,54 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_text_resid__idx_slots() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__idx_slots() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4768p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.str_slots)
 %t4768 = ptrtoint ptr %t4768p to i64
 ret i64 %t4768
 }
-define internal i64 @__mruntime_rt_text_resid__idx_small() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__idx_small() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4769 = call i64 @__mruntime_rt_text_resid__idx_slots()
 %t4770 = add i64 %t4769, 640
 ret i64 %t4770
 }
-define internal i64 @__mruntime_rt_text_resid__idx_region() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__idx_region() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4771p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.str_region)
 %t4771 = ptrtoint ptr %t4771p to i64
 ret i64 %t4771
 }
-define internal i64 @__mruntime_rt_text_resid__idx_state() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__idx_state() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4772p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.str_state)
 %t4772 = ptrtoint ptr %t4772p to i64
 ret i64 %t4772
 }
-define internal i64 @__mruntime_rt_text_resid__sl_s(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__sl_s(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4773 = tail call i64 @ld64(i64 %p0)
 ret i64 %t4773
 }
-define internal i64 @__mruntime_rt_text_resid__sl_len(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__sl_len(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4774 = add i64 %p0, 8
 %t4775 = tail call i64 @ld64(i64 %t4774)
 ret i64 %t4775
 }
-define internal i64 @__mruntime_rt_text_resid__sl_off(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__sl_off(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4776 = add i64 %p0, 16
 %t4777 = tail call i64 @ld64(i64 %t4776)
 ret i64 %t4777
 }
-define internal i64 @__mruntime_rt_text_resid__sl_blen(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__sl_blen(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4778 = add i64 %p0, 32
 %t4779 = tail call i64 @ld64(i64 %t4778)
 ret i64 %t4779
 }
-define internal i64 @slot_off(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @slot_off(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4780 = call i64 @__mruntime_rt_text_resid__sl_off(i64 %p0)
 %t4781 = icmp eq i64 %t4780, 0
@@ -11323,7 +11324,7 @@ L1761:
 %t4790 = sub i64 %t4789, %t4782
 ret i64 %t4790
 }
-define internal i64 @__mruntime_rt_text_resid__slot_walk(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__slot_walk(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -11341,7 +11342,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i1 @__mruntime_rt_text_resid__any_high(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_text_resid__any_high(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -11391,7 +11392,7 @@ L1770:
 %t4825 = icmp ne i128 %t4824, 0
 ret i1 %t4825
 }
-define internal i64 @__mruntime_rt_text_resid__cp_count(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__cp_count(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -11410,7 +11411,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_text_resid__fill_off(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__fill_off(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -11456,7 +11457,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_text_resid__fast_len_of(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__fast_len_of(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4852 = call i64 @__mruntime_rt_text_resid__idx_state()
 %t4853 = icmp ne i64 %p0, 0
@@ -11524,7 +11525,7 @@ L1794:
 %t4884 = call i64 @__mruntime_rt_text_resid__inh_find(i64 %p0, i64 0)
 ret i64 %t4884
 }
-define internal i64 @__mruntime_rt_text_resid__idx_build(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__idx_build(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4885 = call i64 @__mruntime_rt_text_resid__sl_off(i64 %p1)
 %t4886 = icmp ne i64 %t4885, 0
@@ -11576,7 +11577,7 @@ L1803:
 %t4918 = tail call i64 @st64(i64 %t4917, i64 %t4915)
 ret i64 %t4918
 }
-define internal i64 @__mruntime_rt_text_resid__idx_ready() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__idx_ready() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4919 = call i64 @__mruntime_rt_text_resid__idx_state()
 %t4920 = add i64 %t4919, 8
@@ -11592,7 +11593,7 @@ L1806:
 %t4926 = call i64 @st64(i64 %t4925, i64 1)
 ret i64 %t4926
 }
-define internal i64 @__mruntime_rt_text_resid__idx_clear_all(i64 %p0.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__idx_clear_all(i64 %p0.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -11618,7 +11619,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i1 @__mruntime_rt_text_resid__str_short(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_text_resid__str_short(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -11641,7 +11642,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_text_resid__idx_find(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__idx_find(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -11666,7 +11667,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_text_resid__idx_victim(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__idx_victim(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -11697,7 +11698,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_text_resid__idx_slot_slow(i64 %p0) noinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__idx_slot_slow(i64 %p0) noinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t4967 = call i64 @__mruntime_rt_text_resid__idx_ready()
 %t4968 = call i64 @__mruntime_rt_text_resid__idx_small()
@@ -11786,7 +11787,7 @@ L1845:
 %t5021 = add nsw i64 %t5020, %t4995
 ret i64 %t5021
 }
-define internal i64 @idx_slot(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @idx_slot(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5022 = call i64 @__mruntime_rt_text_resid__idx_state()
 %t5023 = add i64 %t5022, 16
@@ -11808,7 +11809,7 @@ L1848:
 %t5030 = call i64 @__mruntime_rt_text_resid__idx_slot_miss(i64 %p0, i64 %t5022)
 ret i64 %t5030
 }
-define internal i64 @__mruntime_rt_text_resid__idx_slot_miss(i64 %p0, i64 %p1) noinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__idx_slot_miss(i64 %p0, i64 %p1) noinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5031 = call i64 @__mruntime_rt_text_resid__idx_slot_slow(i64 %p0)
 %t5032 = add i64 %p1, 16
@@ -11850,13 +11851,13 @@ L1851:
 %t5057 = phi i64 [ %t5056, %L1849 ], [ 0, %L1850 ]
 ret i64 %t5031
 }
-define internal i64 @__mruntime_rt_text_resid__idx_inh() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__idx_inh() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5058p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.str_inh)
 %t5058 = ptrtoint ptr %t5058p to i64
 ret i64 %t5058
 }
-define internal i64 @str_fast_save(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @str_fast_save(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5059 = call i64 @__mruntime_rt_text_resid__idx_state()
 %t5060 = add i64 %p0, 304
@@ -11872,7 +11873,7 @@ entry:
 %t5070 = call i64 @__mruntime_rt_text_resid__inh_slots(i64 %t5069, i64 0)
 ret i64 %t5070
 }
-define internal i64 @__mruntime_rt_text_resid__inh_slots(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__inh_slots(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -11894,7 +11895,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_text_resid__inh_pair(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__inh_pair(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5080 = call i64 @__mruntime_rt_text_resid__idx_state()
 %t5081 = add i64 %t5080, 8
@@ -11949,7 +11950,7 @@ L1860:
 %t5103 = add i64 %t5098, %t5102
 ret i64 %t5103
 }
-define internal i64 @str_fast_load(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @str_fast_load(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5104 = call i64 @__mruntime_rt_text_resid__idx_state()
 %t5105 = add i64 %t5104, 24
@@ -11966,7 +11967,7 @@ entry:
 %t5116 = call i64 @st64(i64 %t5115, i64 1)
 ret i64 %t5116
 }
-define internal i64 @__mruntime_rt_text_resid__inh_find(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__inh_find(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -11997,7 +11998,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @str_index_reset() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @str_index_reset() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5131 = call i64 @__mruntime_rt_text_resid__idx_state()
 %t5132 = add i64 %t5131, 16
@@ -12030,7 +12031,7 @@ call void @llvm.memset.p0.i64(ptr %t5152p, i8 %t5152q, i64 136, i1 false)
 %t5152 = add i64 0, 0
 ret i64 %t5152
 }
-define internal i64 @__mruntime_rt_text_resid__idx_free_offs(i64 %p0.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__idx_free_offs(i64 %p0.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -12062,7 +12063,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_str_index_popped() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_str_index_popped() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5167 = call i64 @__mruntime_rt_text_resid__idx_state()
 %t5168 = add i64 %t5167, 24
@@ -12083,12 +12084,12 @@ L1878:
 %t5179 = call i64 @__mruntime_rt_text_resid__idx_clear_region(i64 0, i64 1)
 ret i64 %t5179
 }
-define void @resid_str_index_popped() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define void @resid_str_index_popped() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_str_index_popped()
 ret void
 }
-define internal i64 @str_index_scope_popped() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @str_index_scope_popped() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5180 = call i64 @__mruntime_rt_text_resid__idx_state()
 %t5181 = add i64 %t5180, 24
@@ -12138,7 +12139,7 @@ L1890:
 %t5203 = call i64 @__mruntime_rt_text_resid__idx_drop_freed(i64 0)
 ret i64 %t5203
 }
-define internal i64 @__mruntime_rt_text_resid__idx_drop_freed(i64 %p0.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__idx_drop_freed(i64 %p0.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -12186,7 +12187,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_text_resid__idx_clear_region(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__idx_clear_region(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -12226,7 +12227,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_str_index_drop(i64 %p0, i64 %p1) noinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_str_index_drop(i64 %p0, i64 %p1) noinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5250 = call i64 @__mruntime_rt_text_resid__idx_state()
 %t5251 = add i64 %t5250, 24
@@ -12287,13 +12288,13 @@ L1917:
 %t5278 = call i64 @__mruntime_rt_text_resid__idx_drop_at(i64 %p0, i64 %p1, i64 0)
 ret i64 %t5278
 }
-define void @resid_str_index_drop(ptr %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define void @resid_str_index_drop(ptr %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_str_index_drop(i64 %x0i, i64 %a1)
 ret void
 }
-define internal i1 @__mruntime_rt_text_resid__in_range(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_text_resid__in_range(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5279 = icmp ne i64 %p0, 0
 br label %LSL5280
@@ -12307,7 +12308,7 @@ LSJ5280:
 %t5283 = phi i1 [ false, %LSL5280 ], [ %t5282, %LSR5280 ]
 ret i1 %t5283
 }
-define internal i64 @__mruntime_rt_text_resid__inh_drop(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__inh_drop(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -12340,7 +12341,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_text_resid__idx_drop_at(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__idx_drop_at(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -12373,7 +12374,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @str_index_forget(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @str_index_forget(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5310 = call i64 @__mruntime_rt_text_resid__idx_state()
 %t5311 = add i64 %t5310, 24
@@ -12434,7 +12435,7 @@ L1944:
 %t5338 = call i64 @__mruntime_rt_text_resid__idx_forget_at(i64 %p0, i64 0)
 ret i64 %t5338
 }
-define internal i64 @__mruntime_rt_text_resid__inh_forget(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__inh_forget(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -12466,7 +12467,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_text_resid__idx_forget_at(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__idx_forget_at(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -12498,7 +12499,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_str_len(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_str_len(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5365 = call i64 @__mruntime_rt_text_resid__idx_state()
 %t5366 = add i64 %t5365, 24
@@ -12523,13 +12524,13 @@ L1962:
 %t5377 = tail call i64 @__mruntime_rt_text_resid__sl_len(i64 %t5376)
 ret i64 %t5377
 }
-define i64 @str_len(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @str_len(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_str_len(i64 %x0i)
 ret i64 %r
 }
-define internal i64 @__mruntime_rt_text_resid__char_at_slow(i64 %p0, i64 %p1) noinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__char_at_slow(i64 %p0, i64 %p1) noinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5378 = call i64 @idx_slot(i64 %p0)
 %t5379 = call i64 @__mruntime_rt_text_resid__sl_len(i64 %t5378)
@@ -12554,7 +12555,7 @@ L1968:
 %t5390 = tail call i64 @utf8_decode(i64 %t5388, i64 %t5389)
 ret i64 %t5390
 }
-define internal i64 @rt_str_char_at(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_str_char_at(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5391 = call i64 @__mruntime_rt_text_resid__idx_state()
 %t5392 = add i64 %t5391, 24
@@ -12600,13 +12601,13 @@ L1977:
 %t5412 = tail call i64 @__mruntime_rt_text_resid__char_at_slow(i64 %p0, i64 %p1)
 ret i64 %t5412
 }
-define i64 @str_char_at(ptr %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @str_char_at(ptr %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_str_char_at(i64 %x0i, i64 %a1)
 ret i64 %r
 }
-define internal i64 @rt_str_ascii_len(i64 %p0) alwaysinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_str_ascii_len(i64 %p0) alwaysinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5413 = call i64 @__mruntime_rt_text_resid__idx_state()
 %t5414 = add i64 %t5413, 24
@@ -12630,13 +12631,13 @@ L1986:
 %t5424 = tail call i64 @__mruntime_rt_text_resid__ascii_len_slow(i64 %p0)
 ret i64 %t5424
 }
-define i64 @resid_str_ascii_len(ptr %a0) alwaysinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_str_ascii_len(ptr %a0) alwaysinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_str_ascii_len(i64 %x0i)
 ret i64 %r
 }
-define internal i64 @__mruntime_rt_text_resid__ascii_len_slow(i64 %p0) noinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__ascii_len_slow(i64 %p0) noinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5425 = call i64 @idx_slot(i64 %p0)
 %t5426 = call i64 @__mruntime_rt_text_resid__sl_off(i64 %t5425)
@@ -12651,7 +12652,7 @@ L1989:
 %t5429 = phi i64 [ %t5428, %L1987 ], [ 0, %L1988 ]
 ret i64 %t5429
 }
-define internal i64 @rt_char_at_n(i64 %p0, i64 %p1, i64 %p2) alwaysinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_char_at_n(i64 %p0, i64 %p1, i64 %p2) alwaysinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5430 = call i1 @ult(i64 %p1, i64 %p2)
 br i1 %t5430, label %L1990, label %L1992
@@ -12663,13 +12664,13 @@ L1992:
 %t5433 = call i64 @__mruntime_rt_text_resid__char_at_slow(i64 %p0, i64 %p1)
 ret i64 %t5433
 }
-define i64 @resid_char_at_n(ptr %a0, i64 %a1, i64 %a2) alwaysinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_char_at_n(ptr %a0, i64 %a1, i64 %a2) alwaysinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_char_at_n(i64 %x0i, i64 %a1, i64 %a2)
 ret i64 %r
 }
-define internal i64 @rt_str_slice(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_str_slice(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5434 = call i64 @idx_slot(i64 %p0)
 %t5435 = call i64 @__mruntime_rt_text_resid__sl_len(i64 %t5434)
@@ -12712,14 +12713,14 @@ L2004:
 %t5448 = tail call i64 @cstr_from(i64 %t5446, i64 %t5447, i64 1)
 ret i64 %t5448
 }
-define ptr @str_slice(ptr %a0, i64 %a1, i64 %a2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @str_slice(ptr %a0, i64 %a1, i64 %a2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_str_slice(i64 %x0i, i64 %a1, i64 %a2)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_text_resid__byte_common(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__byte_common(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5449 = icmp sge i64 %p0, 97
 br label %LSL5450
@@ -12781,7 +12782,7 @@ ret i64 2
 L2010:
 ret i64 1
 }
-define internal i64 @__mruntime_rt_text_resid__rarest(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__rarest(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -12813,7 +12814,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @find_bytes(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @find_bytes(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5480 = icmp eq i64 %p3, 0
 br i1 %t5480, label %L2017, label %L2019
@@ -12831,7 +12832,7 @@ L2022:
 %t5485 = call i64 @__mruntime_rt_text_resid__find_from(i64 %p0, i64 %t5483, i64 %p2, i64 %p3, i64 %t5482, i64 %t5484, i64 0)
 ret i64 %t5485
 }
-define internal i64 @__mruntime_rt_text_resid__find_from(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__find_from(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -12891,7 +12892,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_str_index_of(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_str_index_of(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5511 = call i64 @idx_slot(i64 %p0)
 %t5512 = call i64 @__mruntime_rt_text_resid__sl_len(i64 %t5511)
@@ -12939,14 +12940,14 @@ L2046:
 %t5536 = tail call i64 @__mruntime_rt_text_resid__cp_walk(i64 %t5533, i64 %t5534, i64 %t5535)
 ret i64 %t5536
 }
-define i64 @str_index_of(ptr %a0, ptr %a1, i64 %a2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @str_index_of(ptr %a0, ptr %a1, i64 %a2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
 %r = call i64 @rt_str_index_of(i64 %x0i, i64 %x1i, i64 %a2)
 ret i64 %r
 }
-define internal i64 @__mruntime_rt_text_resid__ck_search(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__ck_search(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -12977,7 +12978,7 @@ br label %tco.s1
 tco.s1:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_text_resid__cp_walk(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__cp_walk(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -12996,7 +12997,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_text_resid__sb_grow(i64 %p0, i64 %p1) noinline cold "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__sb_grow(i64 %p0, i64 %p1) noinline cold "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5553 = add i64 %p0, 8
 %t5554 = call i64 @ld64(i64 %t5553)
@@ -13029,7 +13030,7 @@ L2061:
 %t5569 = tail call i64 @st64(i64 %t5568, i64 %t5563)
 ret i64 %t5569
 }
-define internal i64 @sb_bytes(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @sb_bytes(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5570 = add i64 %p0, 16
 %t5571 = call i64 @ld64(i64 %t5570)
@@ -13055,25 +13056,25 @@ L2064:
 %t5585 = call i64 @st64(i64 %t5583, i64 %t5584)
 ret i64 %t5585
 }
-define internal i64 @__mruntime_rt_text_resid__sbv_out() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__sbv_out() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5586p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.sbv_out)
 %t5586 = ptrtoint ptr %t5586p to i64
 ret i64 %t5586
 }
-define internal i64 @rt_sbv_lim() alwaysinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_sbv_lim() alwaysinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5587 = call i64 @__mruntime_rt_text_resid__sbv_out()
 %t5588 = call i64 @ld64(i64 %t5587)
 ret i64 %t5588
 }
-define ptr @resid_sb2_lim() alwaysinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_sb2_lim() alwaysinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_sbv_lim()
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_text_resid__sbv_base(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__sbv_base(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5589 = icmp eq i64 %p0, 0
 br i1 %t5589, label %L2065, label %L2066
@@ -13087,7 +13088,7 @@ L2067:
 %t5592 = phi i64 [ 0, %L2065 ], [ %t5591, %L2066 ]
 ret i64 %t5592
 }
-define internal i64 @__mruntime_rt_text_resid__sbv_room(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__sbv_room(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5593 = call i64 @__mruntime_rt_text_resid__sbv_base(i64 %p1)
 %t5594 = sub i64 %p0, %t5593
@@ -13132,7 +13133,7 @@ L2076:
 %t5617 = add i64 %t5610, %t5594
 ret i64 %t5617
 }
-define internal i64 @__mruntime_rt_text_resid__sbv_bytes(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__sbv_bytes(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5618 = call i64 @__mruntime_rt_text_resid__sbv_room(i64 %p0, i64 %p1, i64 %p3)
 %t5619 = call i64 @mcopy(i64 %t5618, i64 %p2, i64 %p3)
@@ -13141,13 +13142,13 @@ entry:
 %t5622 = add i64 %t5621, %p3
 ret i64 %t5622
 }
-define internal i64 @rt_sbv_push(i64 %p0, i64 %p1, i64 %p2) noinline cold "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_sbv_push(i64 %p0, i64 %p1, i64 %p2) noinline cold "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5623 = call i64 @c_strlen(i64 %p2)
 %t5624 = call i64 @__mruntime_rt_text_resid__sbv_bytes(i64 %p0, i64 %p1, i64 %p2, i64 %t5623)
 ret i64 %t5624
 }
-define ptr @resid_sb2_push(ptr %a0, ptr %a1, ptr %a2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_sb2_push(ptr %a0, ptr %a1, ptr %a2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -13156,7 +13157,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_sbv_push_cp(i64 %p0, i64 %p1, i64 %p2) noinline cold "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_sbv_push_cp(i64 %p0, i64 %p1, i64 %p2) noinline cold "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5625p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.sbv_cp)
 %t5625 = ptrtoint ptr %t5625p to i64
@@ -13164,7 +13165,7 @@ entry:
 %t5627 = call i64 @__mruntime_rt_text_resid__sbv_bytes(i64 %p0, i64 %p1, i64 %t5625, i64 %t5626)
 ret i64 %t5627
 }
-define ptr @resid_sb2_push_cp(ptr %a0, ptr %a1, i64 %a2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_sb2_push_cp(ptr %a0, ptr %a1, i64 %a2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -13172,7 +13173,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_sbv_finish(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_sbv_finish(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5628 = call i64 @__mruntime_rt_text_resid__sbv_base(i64 %p1)
 %t5629 = sub i64 %p0, %t5628
@@ -13267,7 +13268,7 @@ L2094:
 %t5676 = add nsw i64 %t5675, %t5672
 ret i64 %t5676
 }
-define ptr @resid_sb2_finish(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_sb2_finish(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -13275,7 +13276,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_sbv_discard(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_sbv_discard(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5677 = call i64 @__mruntime_rt_text_resid__sbv_base(i64 %p1)
 %t5678 = icmp ne i64 %t5677, 0
@@ -13289,14 +13290,14 @@ L2097:
 %t5680 = phi i64 [ %t5679, %L2095 ], [ 0, %L2096 ]
 ret i64 %t5680
 }
-define void @resid_sb2_discard(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define void @resid_sb2_discard(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
 %r = call i64 @rt_sbv_discard(i64 %x0i, i64 %x1i)
 ret void
 }
-define internal i64 @__mruntime_rt_text_resid__fb_bytes(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__fb_bytes(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5681 = add i64 %p0, 8
 %t5682 = call i64 @ld64(i64 %t5681)
@@ -13318,13 +13319,13 @@ L2100:
 %t5694 = add nsw i64 %t5693, %p0
 ret i64 %t5694
 }
-define internal i64 @rt_fsb_push(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_fsb_push(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5695 = call i64 @c_strlen(i64 %p2)
 %t5696 = call i64 @__mruntime_rt_text_resid__fb_bytes(i64 %p0, i64 %p1, i64 %p2, i64 %t5695)
 ret i64 %t5696
 }
-define ptr @resid_fsb_push(ptr %a0, i64 %a1, ptr %a2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_fsb_push(ptr %a0, i64 %a1, ptr %a2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x2i = ptrtoint ptr %a2 to i64
@@ -13332,7 +13333,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_fsb_push_cp(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_fsb_push_cp(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5697p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.fsb_cp)
 %t5697 = ptrtoint ptr %t5697p to i64
@@ -13340,14 +13341,14 @@ entry:
 %t5699 = call i64 @__mruntime_rt_text_resid__fb_bytes(i64 %p0, i64 %p1, i64 %t5697, i64 %t5698)
 ret i64 %t5699
 }
-define ptr @resid_fsb_push_cp(ptr %a0, i64 %a1, i64 %a2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_fsb_push_cp(ptr %a0, i64 %a1, i64 %a2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_fsb_push_cp(i64 %x0i, i64 %a1, i64 %a2)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_fbb_push(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_fbb_push(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5700 = icmp slt i64 %p2, 0
 br label %LSL5701
@@ -13369,14 +13370,14 @@ L2103:
 %t5708 = call i64 @__mruntime_rt_text_resid__fb_bytes(i64 %p0, i64 %p1, i64 %t5706, i64 1)
 ret i64 %t5708
 }
-define ptr @resid_fbb_push(ptr %a0, i64 %a1, i64 %a2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_fbb_push(ptr %a0, i64 %a1, i64 %a2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_fbb_push(i64 %x0i, i64 %a1, i64 %a2)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_fb_overflow(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_fb_overflow(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5709 = call i64 @rt_sb_new()
 %t5711 = ptrtoint ptr @.s5710 to i64
@@ -13391,12 +13392,12 @@ entry:
 %t5721 = call i64 @rt_abort_at(i64 %t5720)
 ret i64 %t5721
 }
-define void @resid_fb_overflow(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define void @resid_fb_overflow(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_fb_overflow(i64 %a0, i64 %a1)
 ret void
 }
-define internal i64 @rt_fb_underfill(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_fb_underfill(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5722 = call i64 @rt_sb_new()
 %t5724 = ptrtoint ptr @.s5723 to i64
@@ -13413,12 +13414,12 @@ entry:
 %t5737 = call i64 @rt_abort_at(i64 %t5736)
 ret i64 %t5737
 }
-define void @resid_fb_underfill(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define void @resid_fb_underfill(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_fb_underfill(i64 %a0, i64 %a1)
 ret void
 }
-define internal i64 @rt_sb_new() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_sb_new() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5738 = call i64 @xmalloc(i64 24)
 %t5739 = call i64 @st64(i64 %t5738, i64 0)
@@ -13428,13 +13429,13 @@ entry:
 %t5743 = call i64 @st64(i64 %t5742, i64 0)
 ret i64 %t5738
 }
-define ptr @str_sb_new() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @str_sb_new() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_sb_new()
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_sb_append(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_sb_append(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5744 = call i64 @c_strlen(i64 %p1)
 %t5745 = call i64 @sb_bytes(i64 %p0, i64 %p1, i64 %t5744)
@@ -13442,7 +13443,7 @@ entry:
 %t5747 = add nsw i64 %t5746, %p0
 ret i64 %t5747
 }
-define ptr @str_sb_append(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @str_sb_append(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -13450,7 +13451,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_sb_append_slice(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_sb_append_slice(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5748 = call i64 @idx_slot(i64 %p1)
 %t5749 = call i64 @__mruntime_rt_text_resid__sl_len(i64 %t5748)
@@ -13495,7 +13496,7 @@ L2115:
 %t5764 = add nsw i64 %t5763, %p0
 ret i64 %t5764
 }
-define ptr @str_sb_append_slice(ptr %a0, ptr %a1, i64 %a2, i64 %a3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @str_sb_append_slice(ptr %a0, ptr %a1, i64 %a2, i64 %a3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -13503,7 +13504,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_sb_append_cp(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_sb_append_cp(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5765 = add i64 %p0, 8
 %t5766 = call i64 @ld64(i64 %t5765)
@@ -13533,14 +13534,14 @@ L2118:
 %t5781 = tail call i64 @__mruntime_rt_text_resid__sb_cp_slow(i64 %p0, i64 %p1)
 ret i64 %t5781
 }
-define ptr @str_sb_append_cp(ptr %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @str_sb_append_cp(ptr %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_sb_append_cp(i64 %x0i, i64 %a1)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_text_resid__sb_cp_slow(i64 %p0, i64 %p1) noinline cold "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__sb_cp_slow(i64 %p0, i64 %p1) noinline cold "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5782p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.sb_cp)
 %t5782 = ptrtoint ptr %t5782p to i64
@@ -13550,7 +13551,7 @@ entry:
 %t5786 = add nsw i64 %t5785, %p0
 ret i64 %t5786
 }
-define internal i64 @rt_sb_finish(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_sb_finish(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5787 = call i64 @ld64(i64 %p0)
 %t5788 = add i64 %p0, 8
@@ -13648,14 +13649,14 @@ L2136:
 %t5838 = add nsw i64 %t5837, %t5834
 ret i64 %t5838
 }
-define ptr @str_sb_finish(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @str_sb_finish(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_sb_finish(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_text_resid__sb_shrink(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__sb_shrink(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5839 = add i64 %p1, 1
 %t5840 = call i64 @c_realloc(i64 %p0, i64 %t5839)
@@ -13669,7 +13670,7 @@ L2139:
 %t5842 = phi i64 [ %p0, %L2137 ], [ %t5840, %L2138 ]
 ret i64 %t5842
 }
-define internal i1 @rt_sb_print(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @rt_sb_print(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5843 = call i64 @ld64(i64 %p0)
 %t5844 = add i64 %p0, 8
@@ -13705,14 +13706,14 @@ L2142:
 %t5858 = call i64 @c_free(i64 %p0)
 ret i1 %t5856
 }
-define i1 @resid_sb_print(ptr %a0, i8 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i1 @resid_sb_print(ptr %a0, i8 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1 = zext i8 %a1 to i64
 %r = call i1 @rt_sb_print(i64 %x0i, i64 %x1)
 ret i1 %r
 }
-define internal i1 @rt_sbv_print(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @rt_sbv_print(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5859 = call i64 @__mruntime_rt_text_resid__sbv_base(i64 %p1)
 %t5860 = sub i64 %p0, %t5859
@@ -13746,7 +13747,7 @@ L2148:
 %t5872 = call i64 @c_free(i64 %t5859)
 ret i1 %t5871
 }
-define i1 @resid_sb2_print(ptr %a0, ptr %a1, i8 %a2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i1 @resid_sb2_print(ptr %a0, ptr %a1, i8 %a2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -13754,7 +13755,7 @@ entry:
 %r = call i1 @rt_sbv_print(i64 %x0i, i64 %x1i, i64 %x2)
 ret i1 %r
 }
-define internal i64 @rt_bytes_show(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_bytes_show(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5873 = icmp sge i64 %p1, 0
 br i1 %t5873, label %L2152, label %L2153
@@ -13782,14 +13783,14 @@ L2154:
 %t5886 = call i64 @rt_sb_finish(i64 %t5878)
 ret i64 %t5886
 }
-define ptr @resid_bytes_show(ptr %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_bytes_show(ptr %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_bytes_show(i64 %x0i, i64 %a1)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_text_resid__bytes_show_at(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__bytes_show_at(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -13857,7 +13858,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_text_resid__hex_digit(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__hex_digit(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5920 = icmp slt i64 %p0, 10
 br i1 %t5920, label %L2167, label %L2168
@@ -13871,7 +13872,7 @@ L2169:
 %t5923 = phi i64 [ %t5921, %L2167 ], [ %t5922, %L2168 ]
 ret i64 %t5923
 }
-define internal i64 @rt_bytes_len(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_bytes_len(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5924 = icmp eq i64 %p0, 0
 br i1 %t5924, label %L2170, label %L2171
@@ -13884,13 +13885,13 @@ L2172:
 %t5926 = phi i64 [ 0, %L2170 ], [ %t5925, %L2171 ]
 ret i64 %t5926
 }
-define i64 @resid_bytes_len(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_bytes_len(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_bytes_len(i64 %x0i)
 ret i64 %r
 }
-define internal i64 @rt_str_from_codepoints(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_str_from_codepoints(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5927 = call i64 @lcount(i64 %p0)
 %t5928 = icmp sle i64 %t5927, 0
@@ -13909,14 +13910,14 @@ L2175:
 %t5938 = call i64 @arena_adopt(i64 %t5934, i64 %t5935)
 ret i64 %t5938
 }
-define ptr @resid_str_from_codepoints(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_str_from_codepoints(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_str_from_codepoints(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_text_resid__cps_out(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_text_resid__cps_out(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -13940,40 +13941,40 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @case_lower_tab() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @case_lower_tab() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5947 = ptrtoint ptr @rtt.23349 to i64
 ret i64 %t5947
 }
-define internal i64 @case_lower_n() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @case_lower_n() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 1459
 }
-define internal i64 @case_upper_tab() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @case_upper_tab() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5948 = ptrtoint ptr @rtt.26260 to i64
 ret i64 %t5948
 }
-define internal i64 @case_upper_n() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @case_upper_n() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 1450
 }
-define internal i64 @case_special_tab() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @case_special_tab() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5949 = ptrtoint ptr @rtt.27393 to i64
 ret i64 %t5949
 }
-define internal i64 @case_special_n() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @case_special_n() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 102
 }
-define internal i64 @__mruntime_rt_case_resid__case_lookup(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_case_resid__case_lookup(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5950 = sub i64 %p1, 1
 %t5951 = call i64 @__mruntime_rt_case_resid__case_bs(i64 %p0, i64 %p2, i64 0, i64 %t5950)
 ret i64 %t5951
 }
-define internal i64 @__mruntime_rt_case_resid__case_bs(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_case_resid__case_bs(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -14014,7 +14015,7 @@ br label %tco.s1
 tco.s1:
 br label %tco.head
 }
-define internal i64 @case_simple(i64 %p0, i1 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @case_simple(i64 %p0, i1 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br i1 %p1, label %L2188, label %L2189
 L2188:
@@ -14039,7 +14040,7 @@ L2193:
 %t5977 = phi i64 [ %t5975, %L2191 ], [ %p0, %L2192 ]
 ret i64 %t5977
 }
-define internal i64 @__mruntime_rt_case_resid__special_upper(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_case_resid__special_upper(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5978 = call i64 @case_special_tab()
 %t5979 = call i64 @case_special_n()
@@ -14047,7 +14048,7 @@ entry:
 %t5981 = call i64 @__mruntime_rt_case_resid__special_bs(i64 %t5978, i64 %p0, i64 0, i64 %t5980)
 ret i64 %t5981
 }
-define internal i64 @__mruntime_rt_case_resid__special_bs(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_case_resid__special_bs(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -14084,7 +14085,7 @@ br label %tco.s1
 tco.s1:
 br label %tco.head
 }
-define internal i1 @__mruntime_rt_case_resid__is_cased(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_case_resid__is_cased(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t5995 = call i64 @case_lower_tab()
 %t5996 = call i64 @case_lower_n()
@@ -14103,7 +14104,7 @@ LSJ5999:
 %t6004 = phi i1 [ true, %LSL5999 ], [ %t6003, %LSR5999 ]
 ret i1 %t6004
 }
-define internal i1 @__mruntime_rt_case_resid__is_ignorable(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_case_resid__is_ignorable(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6005 = call i1 @__mruntime_rt_case_resid__is_cased(i64 %p0)
 br i1 %t6005, label %L2203, label %L2205
@@ -14233,7 +14234,7 @@ LSJ6046:
 %t6051 = phi i1 [ true, %LSL6046 ], [ %t6050, %LSJ6048 ]
 ret i1 %t6051
 }
-define internal i1 @__mruntime_rt_case_resid__prev_cased(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_case_resid__prev_cased(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -14259,7 +14260,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_case_resid__back_lead(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_case_resid__back_lead(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -14312,7 +14313,7 @@ L2220:
 %t6080 = phi i64 [ %t6079, %L2218 ], [ %p1, %L2219 ]
 ret i64 %t6080
 }
-define internal i1 @__mruntime_rt_case_resid__next_cased(i64 %p0.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_case_resid__next_cased(i64 %p0.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -14337,7 +14338,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_case_resid__lower_at(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_case_resid__lower_at(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -14386,7 +14387,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_str_to_lower(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_str_to_lower(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6108 = call i64 @rt_str_len(i64 %p0)
 %t6109 = mul i64 %t6108, 4
@@ -14396,14 +14397,14 @@ entry:
 %t6113 = call i64 @st8(i64 %t6112, i64 0)
 ret i64 %t6111
 }
-define ptr @str_to_lower(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @str_to_lower(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_str_to_lower(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_case_resid__upper_at(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_case_resid__upper_at(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -14438,12 +14439,12 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_case_resid__copy_words(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_case_resid__copy_words(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6130 = call i64 @__mruntime_rt_case_resid__copy_words_at(i64 %p0, i64 %p1, i64 0, i64 %p2)
 ret i64 %p2
 }
-define internal i64 @__mruntime_rt_case_resid__copy_words_at(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_case_resid__copy_words_at(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -14466,7 +14467,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_str_to_upper(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_str_to_upper(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6139 = call i64 @rt_str_len(i64 %p0)
 %t6140 = mul i64 %t6139, 9
@@ -14476,20 +14477,20 @@ entry:
 %t6144 = call i64 @st8(i64 %t6143, i64 0)
 ret i64 %t6142
 }
-define ptr @str_to_upper(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @str_to_upper(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_str_to_upper(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_case_simple(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_case_simple(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6145 = icmp ne i64 %p1, 0
 %t6146 = call i64 @case_simple(i64 %p0, i1 %t6145)
 ret i64 %t6146
 }
-define i32 @resid_case_simple(i32 %a0, i32 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i32 @resid_case_simple(i32 %a0, i32 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0 = sext i32 %a0 to i64
 %x1 = sext i32 %a1 to i64
@@ -14497,7 +14498,7 @@ entry:
 %rv = trunc i64 %r to i32
 ret i32 %rv
 }
-define internal i1 @__mruntime_rt_strutil_resid__is_space(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_strutil_resid__is_space(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6147 = icmp eq i64 %p0, 32
 br label %LSL6148
@@ -14542,7 +14543,7 @@ LSJ6160:
 %t6162 = phi i1 [ true, %LSL6160 ], [ %t6161, %LSR6160 ]
 ret i1 %t6162
 }
-define internal i64 @__mruntime_rt_strutil_resid__skip_space(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_strutil_resid__skip_space(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -14567,7 +14568,7 @@ br label %tco.head
 L2247:
 ret i64 %p0
 }
-define internal i64 @__mruntime_rt_strutil_resid__back_space(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_strutil_resid__back_space(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -14593,7 +14594,7 @@ br label %tco.head
 L2250:
 ret i64 %p1
 }
-define internal i64 @rt_str_trim(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_str_trim(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6178 = call i64 @c_strlen(i64 %p0)
 %t6179 = add i64 %p0, %t6178
@@ -14605,14 +14606,14 @@ entry:
 %t6185 = call i64 @cstr_from(i64 %t6180, i64 %t6184, i64 1)
 ret i64 %t6185
 }
-define ptr @str_trim(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @str_trim(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_str_trim(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_str_contains(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_str_contains(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6186 = call i64 @c_strstr(i64 %p0, i64 %p1)
 %t6187 = icmp ne i64 %t6186, 0
@@ -14625,7 +14626,7 @@ L2253:
 %t6188 = phi i64 [ 1, %L2251 ], [ 0, %L2252 ]
 ret i64 %t6188
 }
-define i8 @str_contains(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @str_contains(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -14633,7 +14634,7 @@ entry:
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @rt_str_starts_with(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_str_starts_with(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6189 = call i64 @c_strlen(i64 %p1)
 %t6190 = call i64 @c_strncmp(i64 %p0, i64 %p1, i64 %t6189)
@@ -14647,7 +14648,7 @@ L2256:
 %t6192 = phi i64 [ 1, %L2254 ], [ 0, %L2255 ]
 ret i64 %t6192
 }
-define i8 @str_starts_with(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @str_starts_with(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -14655,7 +14656,7 @@ entry:
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @rt_str_ends_with(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_str_ends_with(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6193 = call i64 @c_strlen(i64 %p0)
 %t6194 = call i64 @c_strlen(i64 %p1)
@@ -14677,7 +14678,7 @@ L2262:
 %t6200 = phi i64 [ 1, %L2260 ], [ 0, %L2261 ]
 ret i64 %t6200
 }
-define i8 @str_ends_with(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @str_ends_with(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -14685,7 +14686,7 @@ entry:
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @rt_str_repeat(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_str_repeat(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6201 = icmp slt i64 %p1, 0
 br i1 %t6201, label %L2263, label %L2264
@@ -14724,14 +14725,14 @@ L2271:
 %t6216 = call i64 @st8(i64 %t6215, i64 0)
 ret i64 %t6212
 }
-define ptr @str_repeat(ptr %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @str_repeat(ptr %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_str_repeat(i64 %x0i, i64 %a1)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_strutil_resid__repeat_at(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_strutil_resid__repeat_at(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -14751,7 +14752,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_strutil_resid__count_hits(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_strutil_resid__count_hits(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -14771,7 +14772,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_str_replace(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_str_replace(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6227 = call i64 @c_strlen(i64 %p1)
 %t6228 = call i64 @c_strlen(i64 %p2)
@@ -14800,7 +14801,7 @@ L2283:
 %t6241 = call i64 @__mruntime_rt_strutil_resid__replace_at(i64 %t6240, i64 %p0, i64 %p1, i64 %t6227, i64 %p2, i64 %t6228)
 ret i64 %t6240
 }
-define ptr @str_replace(ptr %a0, ptr %a1, ptr %a2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @str_replace(ptr %a0, ptr %a1, ptr %a2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -14809,7 +14810,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_strutil_resid__replace_at(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_strutil_resid__replace_at(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -14843,7 +14844,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_str_split(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_str_split(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6260 = ptrtoint ptr @.s6259 to i64
 %t6261 = call i64 @c_strlen(i64 %p1)
@@ -14865,7 +14866,7 @@ L2289:
 %t6272 = call i64 @c_free(i64 %t6269)
 ret i64 %t6271
 }
-define ptr @str_split(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @str_split(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -14873,7 +14874,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_strutil_resid__split_at(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_strutil_resid__split_at(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -14903,7 +14904,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_str_join(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_str_join(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6287 = call i64 @c_list_len(i64 %p0)
 %t6288 = call i64 @c_list_to_array(i64 %p0)
@@ -14927,7 +14928,7 @@ L2295:
 %t6300 = call i64 @c_free(i64 %t6288)
 ret i64 %t6297
 }
-define ptr @str_join(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @str_join(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -14935,7 +14936,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_strutil_resid__join_len(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_strutil_resid__join_len(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -14958,7 +14959,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_strutil_resid__join_at(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_strutil_resid__join_at(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -14995,7 +14996,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i1 @__mruntime_rt_strutil_resid__all_digits(i64 %p0.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_strutil_resid__all_digits(i64 %p0.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -15024,7 +15025,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i1 @is_int(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @is_int(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6331 = call i64 @ld8(i64 %p0)
 %t6332 = icmp eq i64 %t6331, 0
@@ -15061,7 +15062,7 @@ LSJ6341:
 %t6343 = phi i1 [ false, %LSL6341 ], [ %t6342, %LSR6341 ]
 ret i1 %t6343
 }
-define internal i64 @rt_str_is_int(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_str_is_int(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6344 = call i1 @is_int(i64 %p0)
 br i1 %t6344, label %L2317, label %L2318
@@ -15073,14 +15074,14 @@ L2319:
 %t6345 = phi i64 [ 1, %L2317 ], [ 0, %L2318 ]
 ret i64 %t6345
 }
-define i8 @str_is_int(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @str_is_int(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_str_is_int(i64 %x0i)
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @rt_str_parse_int(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_str_parse_int(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6346 = call i1 @is_int(i64 %p0)
 %t6347 = xor i1 %t6346, true
@@ -15145,13 +15146,13 @@ L2337:
 %t6373 = sub i64 0, %t6358
 ret i64 %t6373
 }
-define i64 @str_parse_int(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @str_parse_int(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_str_parse_int(i64 %x0i)
 ret i64 %r
 }
-define internal i64 @__mruntime_rt_strutil_resid__neg_digits(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_strutil_resid__neg_digits(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -15193,7 +15194,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i1 @__mruntime_rt_strutil_resid__is_float(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_strutil_resid__is_float(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6389 = call i64 @ld8(i64 %p0)
 %t6390 = icmp eq i64 %t6389, 0
@@ -15218,7 +15219,7 @@ LSJ6397:
 %t6399 = phi i1 [ false, %LSL6397 ], [ %t6398, %LSR6397 ]
 ret i1 %t6399
 }
-define internal i64 @__mruntime_rt_strutil_resid__skip_tabs(i64 %p0.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_strutil_resid__skip_tabs(i64 %p0.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -15242,7 +15243,7 @@ br label %tco.head
 L2349:
 ret i64 %p0
 }
-define internal i64 @rt_str_is_float(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_str_is_float(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6407 = call i1 @__mruntime_rt_strutil_resid__is_float(i64 %p0)
 br i1 %t6407, label %L2350, label %L2351
@@ -15254,14 +15255,14 @@ L2352:
 %t6408 = phi i64 [ 1, %L2350 ], [ 0, %L2351 ]
 ret i64 %t6408
 }
-define i8 @str_is_float(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @str_is_float(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_str_is_float(i64 %x0i)
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal double @rt_str_parse_float(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal double @rt_str_parse_float(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6409 = call i1 @__mruntime_rt_strutil_resid__is_float(i64 %p0)
 %t6410 = xor i1 %t6409, true
@@ -15272,13 +15273,13 @@ L2355:
 %t6411 = call double @c_strtod(i64 %p0, i64 0)
 ret double %t6411
 }
-define double @str_parse_float(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define double @str_parse_float(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call double @rt_str_parse_float(i64 %x0i)
 ret double %r
 }
-define internal i64 @rt_str_count(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_str_count(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6412 = call i64 @c_strlen(i64 %p1)
 %t6413 = icmp eq i64 %t6412, 0
@@ -15289,14 +15290,14 @@ L2358:
 %t6414 = call i64 @__mruntime_rt_strutil_resid__count_hits(i64 %p0, i64 %p1, i64 %t6412, i64 0)
 ret i64 %t6414
 }
-define i64 @str_count(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @str_count(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
 %r = call i64 @rt_str_count(i64 %x0i, i64 %x1i)
 ret i64 %r
 }
-define internal i64 @rt_str_reverse(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_str_reverse(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6415 = call i64 @c_strlen(i64 %p0)
 %t6416 = add i64 %t6415, 1
@@ -15307,14 +15308,14 @@ entry:
 %t6421 = call i64 @st8(i64 %t6420, i64 0)
 ret i64 %t6417
 }
-define ptr @str_reverse(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @str_reverse(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_str_reverse(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_strutil_resid__rev_at(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_strutil_resid__rev_at(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -15335,7 +15336,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @sc(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @sc(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -15343,7 +15344,13 @@ tco.head:
 %p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
 %p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
 %p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ]
-%t6430 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 0, i64 0, i64 0)
+%t6430nk = icmp ult i64 %p0, 472
+%t6430ni = select i1 %t6430nk, i64 %p0, i64 0
+%t6430np = getelementptr [472 x i16], ptr @resid.a64nr, i64 0, i64 %t6430ni
+%t6430nw = load i16, ptr %t6430np
+%t6430nx = sext i16 %t6430nw to i64
+%t6430n = select i1 %t6430nk, i64 %t6430nx, i64 -1
+%t6430 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 %t6430n, i64 %p1, i64 %p2, i64 %p3, i64 0, i64 0, i64 0)
 %t6431 = sub nsw i64 0, 4
 %t6432 = icmp eq i64 %t6430, %t6431
 br i1 %t6432, label %L2362, label %L2364
@@ -15354,7 +15361,7 @@ br label %tco.head
 L2364:
 ret i64 %t6430
 }
-define internal i64 @__mruntime_rt_sys_resid__sc4(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__sc4(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -15363,7 +15370,13 @@ tco.head:
 %p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
 %p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ]
 %p4 = phi i64 [ %p4.in, %entry ], [ %p4, %tco.s0 ]
-%t6434 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 0, i64 0)
+%t6434nk = icmp ult i64 %p0, 472
+%t6434ni = select i1 %t6434nk, i64 %p0, i64 0
+%t6434np = getelementptr [472 x i16], ptr @resid.a64nr, i64 0, i64 %t6434ni
+%t6434nw = load i16, ptr %t6434np
+%t6434nx = sext i16 %t6434nw to i64
+%t6434n = select i1 %t6434nk, i64 %t6434nx, i64 -1
+%t6434 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 %t6434n, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 0, i64 0)
 %t6435 = sub nsw i64 0, 4
 %t6436 = icmp eq i64 %t6434, %t6435
 br i1 %t6436, label %L2365, label %L2367
@@ -15374,7 +15387,7 @@ br label %tco.head
 L2367:
 ret i64 %t6434
 }
-define internal i1 @__mruntime_rt_sys_resid__path_ok(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_sys_resid__path_ok(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6438 = icmp ne i64 %p0, 0
 br label %LSL6439
@@ -15388,61 +15401,61 @@ LSJ6439:
 %t6442 = phi i1 [ false, %LSL6439 ], [ %t6441, %LSR6439 ]
 ret i1 %t6442
 }
-define internal i64 @o_rdonly() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @o_rdonly() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 524288
 }
-define internal i64 @__mruntime_rt_sys_resid__o_write() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__o_write() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6443 = or i64 524288, 1
 %t6444 = or i64 %t6443, 64
 %t6445 = or i64 %t6444, 512
 ret i64 %t6445
 }
-define internal i64 @__mruntime_rt_sys_resid__o_append() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__o_append() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6446 = or i64 524288, 1
 %t6447 = or i64 %t6446, 64
 %t6448 = or i64 %t6447, 1024
 ret i64 %t6448
 }
-define internal i1 @on_a64() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @on_a64() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t6449 = add i64 0, 0
+%t6449 = add i64 0, 1
 %t6450 = icmp eq i64 %t6449, 1
 ret i1 %t6450
 }
-define internal i64 @sys_open(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @sys_open(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6451 = sub nsw i64 0, 100
 %t6452 = call i64 @__mruntime_rt_sys_resid__sc4(i64 257, i64 %t6451, i64 %p0, i64 %p1, i64 %p2)
 ret i64 %t6452
 }
-define internal i64 @sys_stat(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @sys_stat(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6453 = sub nsw i64 0, 100
 %t6454 = call i64 @__mruntime_rt_sys_resid__sc4(i64 262, i64 %t6453, i64 %p0, i64 %p1, i64 0)
 ret i64 %t6454
 }
-define internal i64 @sys_dup2(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @sys_dup2(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6455 = icmp eq i64 %p0, %p1
 br i1 %t6455, label %L2368, label %L2369
 L2368:
 br label %L2370
 L2369:
-%t6456 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 292, i64 %p0, i64 %p1, i64 0, i64 0, i64 0, i64 0)
+%t6456 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 24, i64 %p0, i64 %p1, i64 0, i64 0, i64 0, i64 0)
 br label %L2370
 L2370:
 %t6457 = phi i64 [ %p1, %L2368 ], [ %t6456, %L2369 ]
 ret i64 %t6457
 }
-define internal i64 @sys_close(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @sys_close(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t6458 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 3, i64 %p0, i64 0, i64 0, i64 0, i64 0, i64 0)
+%t6458 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 57, i64 %p0, i64 0, i64 0, i64 0, i64 0, i64 0)
 ret i64 %t6458
 }
-define internal i64 @st_mode_at() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @st_mode_at() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6459 = call i1 @on_a64()
 br i1 %t6459, label %L2371, label %L2372
@@ -15454,25 +15467,25 @@ L2373:
 %t6460 = phi i64 [ 16, %L2371 ], [ 24, %L2372 ]
 ret i64 %t6460
 }
-define internal i64 @__mruntime_rt_sys_resid__stat_buf() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__stat_buf() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6461p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.stat_buf)
 %t6461 = ptrtoint ptr %t6461p to i64
 ret i64 %t6461
 }
-define internal i1 @__mruntime_rt_sys_resid__mode_dir(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_sys_resid__mode_dir(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6462 = and i64 %p0, 61440
 %t6463 = icmp eq i64 %t6462, 16384
 ret i1 %t6463
 }
-define internal i1 @__mruntime_rt_sys_resid__mode_reg(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_sys_resid__mode_reg(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6464 = and i64 %p0, 61440
 %t6465 = icmp eq i64 %t6464, 32768
 ret i1 %t6465
 }
-define internal i64 @rt_fs_is_dir(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_fs_is_dir(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6466 = call i1 @__mruntime_rt_sys_resid__path_ok(i64 %p0)
 %t6467 = xor i1 %t6466, true
@@ -15500,14 +15513,14 @@ L2382:
 %t6475 = phi i64 [ 1, %L2380 ], [ 0, %L2381 ]
 ret i64 %t6475
 }
-define i8 @resid_fs_is_dir(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_fs_is_dir(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_fs_is_dir(i64 %x0i)
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @rt_fs_create_dir_all(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_fs_create_dir_all(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6476 = call i1 @__mruntime_rt_sys_resid__path_ok(i64 %p0)
 %t6477 = xor i1 %t6476, true
@@ -15562,14 +15575,14 @@ L2391:
 %t6497 = phi i64 [ 1, %L2389 ], [ 0, %L2390 ]
 ret i64 %t6497
 }
-define i8 @resid_fs_create_dir_all(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_fs_create_dir_all(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_fs_create_dir_all(i64 %x0i)
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i1 @__mruntime_rt_sys_resid__mkdir_ok(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_sys_resid__mkdir_ok(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6498 = sub nsw i64 0, 100
 %t6499 = call i64 @__mruntime_rt_sys_resid__sc4(i64 258, i64 %t6498, i64 %p0, i64 511, i64 0)
@@ -15585,7 +15598,7 @@ LSJ6501:
 %t6504 = phi i1 [ true, %LSL6501 ], [ %t6503, %LSR6501 ]
 ret i1 %t6504
 }
-define internal i1 @__mruntime_rt_sys_resid__mkdir_parents(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_sys_resid__mkdir_parents(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -15632,7 +15645,7 @@ LSJ6520:
 %t6523 = phi i1 [ false, %LSL6520 ], [ %t6522, %LSR6520 ]
 ret i1 %t6523
 }
-define internal i64 @rt_fs_exists(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_fs_exists(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6524 = call i1 @__mruntime_rt_sys_resid__path_ok(i64 %p0)
 %t6525 = xor i1 %t6524, true
@@ -15646,14 +15659,14 @@ L2400:
 %t6529 = call i64 @__mruntime_rt_sys_resid__b8(i1 %t6528)
 ret i64 %t6529
 }
-define i8 @resid_fs_exists(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_fs_exists(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_fs_exists(i64 %x0i)
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @__mruntime_rt_sys_resid__read_fd_all(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__read_fd_all(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6530 = call i64 @__mruntime_rt_sys_resid__stat_buf()
 %t6531 = call i64 @sc(i64 5, i64 %p0, i64 %t6530, i64 0)
@@ -15717,7 +15730,7 @@ L2409:
 %t6556 = call i64 @__mruntime_rt_sys_resid__read_fd_at(i64 %p0, i64 %t6555, i64 0, i64 %t6553)
 ret i64 %t6556
 }
-define internal i64 @__mruntime_rt_sys_resid__read_fd_at(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__read_fd_at(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -15761,7 +15774,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_fs_read_all(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_fs_read_all(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6574 = call i1 @__mruntime_rt_sys_resid__path_ok(i64 %p0)
 %t6575 = xor i1 %t6574, true
@@ -15784,21 +15797,21 @@ L2424:
 %t6584 = call i64 @arena_adopt(i64 %t6581, i64 %t6583)
 ret i64 %t6584
 }
-define ptr @resid_fs_read_all(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_fs_read_all(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_fs_read_all(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @xempty() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @xempty() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6585 = call i64 @ralloc(i64 1)
 %t6586 = call i64 @st8(i64 %t6585, i64 0)
 %t6587 = add i64 %t6586, %t6585
 ret i64 %t6587
 }
-define internal i1 @__mruntime_rt_sys_resid__put_file(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_sys_resid__put_file(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6588 = call i1 @__mruntime_rt_sys_resid__path_ok(i64 %p0)
 %t6589 = xor i1 %t6588, true
@@ -15824,7 +15837,7 @@ LSJ6595:
 %t6596 = phi i1 [ false, %LSL6595 ], [ %t6592, %LSR6595 ]
 ret i1 %t6596
 }
-define internal i64 @__mruntime_rt_sys_resid__b8(i1 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__b8(i1 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br i1 %p0, label %L2431, label %L2432
 L2431:
@@ -15835,7 +15848,7 @@ L2433:
 %t6597 = phi i64 [ 1, %L2431 ], [ 0, %L2432 ]
 ret i64 %t6597
 }
-define internal i64 @rt_fs_write_all(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_fs_write_all(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6598 = call i64 @__mruntime_rt_sys_resid__o_write()
 %t6599 = call i64 @c_strlen(i64 %p1)
@@ -15843,7 +15856,7 @@ entry:
 %t6601 = call i64 @__mruntime_rt_sys_resid__b8(i1 %t6600)
 ret i64 %t6601
 }
-define i8 @resid_fs_write_all(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_fs_write_all(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -15851,14 +15864,14 @@ entry:
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @__mruntime_rt_sys_resid__list_bytes(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__list_bytes(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6602 = call i64 @c_list_len(i64 %p0)
 %t6603 = call i64 @xmalloc(i64 %t6602)
 %t6604 = call i64 @__mruntime_rt_sys_resid__list_bytes_at(i64 %p0, i64 %t6603, i64 0, i64 %t6602)
 ret i64 %t6603
 }
-define internal i64 @__mruntime_rt_sys_resid__list_bytes_at(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__list_bytes_at(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -15880,7 +15893,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i1 @__mruntime_rt_sys_resid__put_list(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_sys_resid__put_list(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6612 = call i64 @__mruntime_rt_sys_resid__list_bytes(i64 %p3)
 %t6613 = call i64 @c_list_len(i64 %p3)
@@ -15888,14 +15901,14 @@ entry:
 %t6615 = call i64 @c_free(i64 %t6612)
 ret i1 %t6614
 }
-define internal i64 @rt_fs_write_bytes(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_fs_write_bytes(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6616 = call i64 @__mruntime_rt_sys_resid__o_write()
 %t6617 = call i1 @__mruntime_rt_sys_resid__put_list(i64 %p0, i64 %t6616, i64 438, i64 %p1)
 %t6618 = call i64 @__mruntime_rt_sys_resid__b8(i1 %t6617)
 ret i64 %t6618
 }
-define i8 @resid_fs_write_bytes(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_fs_write_bytes(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -15903,14 +15916,14 @@ entry:
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @rt_fs_append_bytes(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_fs_append_bytes(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6619 = call i64 @__mruntime_rt_sys_resid__o_append()
 %t6620 = call i1 @__mruntime_rt_sys_resid__put_list(i64 %p0, i64 %t6619, i64 438, i64 %p1)
 %t6621 = call i64 @__mruntime_rt_sys_resid__b8(i1 %t6620)
 ret i64 %t6621
 }
-define i8 @resid_fs_append_bytes(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_fs_append_bytes(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -15918,7 +15931,7 @@ entry:
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @rt_fs_write_secret(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_fs_write_secret(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6622 = call i1 @__mruntime_rt_sys_resid__path_ok(i64 %p0)
 %t6623 = xor i1 %t6622, true
@@ -15959,7 +15972,7 @@ LSJ6638:
 %t6640 = call i64 @__mruntime_rt_sys_resid__b8(i1 %t6639)
 ret i64 %t6640
 }
-define i8 @resid_fs_write_secret(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_fs_write_secret(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -15967,7 +15980,7 @@ entry:
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @__mruntime_rt_sys_resid__hex_val(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__hex_val(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6641 = icmp sge i64 %p0, 48
 br label %LSL6642
@@ -16014,7 +16027,7 @@ L2451:
 %t6656 = sub nsw i64 0, 1
 ret i64 %t6656
 }
-define internal i1 @__mruntime_rt_sys_resid__unhex(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_sys_resid__unhex(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -16058,7 +16071,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_sys_resid__put_hex(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__put_hex(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6677 = call i1 @__mruntime_rt_sys_resid__path_ok(i64 %p0)
 %t6678 = xor i1 %t6677, true
@@ -16091,13 +16104,13 @@ LSJ6687:
 %t6692 = call i64 @__mruntime_rt_sys_resid__b8(i1 %t6690)
 ret i64 %t6692
 }
-define internal i64 @rt_fs_write_hex(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_fs_write_hex(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6693 = call i64 @__mruntime_rt_sys_resid__o_write()
 %t6694 = call i64 @__mruntime_rt_sys_resid__put_hex(i64 %p0, i64 %p1, i64 %t6693)
 ret i64 %t6694
 }
-define i8 @resid_fs_write_hex(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_fs_write_hex(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -16105,13 +16118,13 @@ entry:
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @rt_fs_append_hex(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_fs_append_hex(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6695 = call i64 @__mruntime_rt_sys_resid__o_append()
 %t6696 = call i64 @__mruntime_rt_sys_resid__put_hex(i64 %p0, i64 %p1, i64 %t6695)
 ret i64 %t6696
 }
-define i8 @resid_fs_append_hex(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_fs_append_hex(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -16119,7 +16132,7 @@ entry:
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @__mruntime_rt_sys_resid__bytes_list(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__bytes_list(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6697 = mul i64 %p1, 8
 %t6698 = call i64 @xmalloc(i64 %t6697)
@@ -16131,7 +16144,7 @@ entry:
 %t6705 = add nsw i64 %t6704, %t6702
 ret i64 %t6705
 }
-define internal i64 @__mruntime_rt_sys_resid__box_bytes(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__box_bytes(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -16155,13 +16168,13 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_sys_resid__empty_bytes() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__empty_bytes() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6716 = ptrtoint ptr @.s6715 to i64
 %t6717 = call i64 @c_list_new(i64 0, i64 0, i64 %t6716)
 ret i64 %t6717
 }
-define internal i64 @rt_fs_read_bytes(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_fs_read_bytes(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6718 = call i1 @__mruntime_rt_sys_resid__path_ok(i64 %p0)
 %t6719 = xor i1 %t6718, true
@@ -16207,14 +16220,14 @@ L2478:
 %t6739 = add nsw i64 %t6738, %t6736
 ret i64 %t6739
 }
-define ptr @resid_fs_read_bytes(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_fs_read_bytes(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_fs_read_bytes(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_sys_resid__read_n(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__read_n(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -16240,7 +16253,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_print_bytes(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_print_bytes(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6747 = call i64 @__mruntime_rt_sys_resid__list_bytes(i64 %p0)
 %t6748 = call i64 @c_list_len(i64 %p0)
@@ -16249,14 +16262,14 @@ entry:
 %t6751 = call i64 @__mruntime_rt_sys_resid__b8(i1 %t6749)
 ret i64 %t6751
 }
-define i8 @resid_print_bytes(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_print_bytes(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_print_bytes(i64 %x0i)
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @rt_fs_list_dir(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_fs_list_dir(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6753 = ptrtoint ptr @.s6752 to i64
 %t6754 = call i1 @__mruntime_rt_sys_resid__path_ok(i64 %p0)
@@ -16288,14 +16301,14 @@ L2490:
 %t6772 = add nsw i64 %t6771, %t6767
 ret i64 %t6772
 }
-define ptr @resid_fs_list_dir(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_fs_list_dir(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_fs_list_dir(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_sys_resid__dir_entries(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__dir_entries(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6773 = call i64 @sc(i64 217, i64 %p0, i64 %p1, i64 32768)
 %t6774 = icmp sle i64 %t6773, 0
@@ -16310,7 +16323,7 @@ L2493:
 %t6779 = call i64 @__mruntime_rt_sys_resid__dir_chunk(i64 %p0, i64 %p1, i64 %p1, i64 %t6778, i64 %p2, i64 %p3, i64 %p4)
 ret i64 %t6779
 }
-define internal i64 @__mruntime_rt_sys_resid__dir_chunk(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__dir_chunk(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -16402,11 +16415,11 @@ br label %tco.s1
 tco.s1:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_sys_resid__file_tag() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__file_tag() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 12
 }
-define internal i64 @rt_fs_open(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_fs_open(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6822 = call i1 @__mruntime_rt_sys_resid__path_ok(i64 %p0)
 br i1 %t6822, label %L2506, label %L2507
@@ -16442,14 +16455,14 @@ L2511:
 %t6842 = add nsw i64 %t6841, %t6827
 ret i64 %t6842
 }
-define ptr @resid_fs_open(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_fs_open(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_fs_open(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_sys_resid__handle_fd(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__handle_fd(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6843 = icmp eq i64 %p0, 0
 br label %LSL6844
@@ -16481,7 +16494,7 @@ L2514:
 %t6856 = tail call i64 @ld64(i64 %t6855)
 ret i64 %t6856
 }
-define internal i64 @rt_fs_read_handle(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_fs_read_handle(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6857 = call i64 @__mruntime_rt_sys_resid__handle_fd(i64 %p0)
 %t6858 = icmp slt i64 %t6857, 0
@@ -16514,14 +16527,14 @@ L2520:
 %t6872 = call i64 @arena_adopt(i64 %t6868, i64 %t6869)
 ret i64 %t6872
 }
-define ptr @resid_fs_read_handle(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_fs_read_handle(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_fs_read_handle(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_fs_close(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_fs_close(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6873 = call i64 @__mruntime_rt_sys_resid__handle_fd(i64 %p0)
 %t6874 = icmp slt i64 %t6873, 0
@@ -16543,25 +16556,25 @@ L2526:
 %t6880 = phi i64 [ 1, %L2524 ], [ 0, %L2525 ]
 ret i64 %t6880
 }
-define i8 @resid_fs_close(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_fs_close(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_fs_close(i64 %x0i)
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @rt_handle_release(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_handle_release(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6881 = tail call i64 @rt_fs_close(i64 %p0)
 ret i64 %t6881
 }
-define void @resid_handle_release(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define void @resid_handle_release(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_handle_release(i64 %x0i)
 ret void
 }
-define internal i64 @rt_env_get(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_env_get(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6882 = call i64 @c_getenv(i64 %p0)
 %t6883 = icmp eq i64 %t6882, 0
@@ -16576,34 +16589,34 @@ L2529:
 %t6886 = phi i64 [ %t6884, %L2527 ], [ %t6885, %L2528 ]
 ret i64 %t6886
 }
-define ptr @resid_env_get(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_env_get(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_env_get(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_env_has(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_env_has(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6887 = call i64 @c_getenv(i64 %p0)
 %t6888 = icmp ne i64 %t6887, 0
 %t6889 = call i64 @__mruntime_rt_sys_resid__b8(i1 %t6888)
 ret i64 %t6889
 }
-define i8 @resid_env_has(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_env_has(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_env_has(i64 %x0i)
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @__mruntime_rt_sys_resid__args_state() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__args_state() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6890p = getelementptr i8, ptr @rtg.rt_args, i64 0
 %t6890 = ptrtoint ptr %t6890p to i64
 ret i64 %t6890
 }
-define internal i64 @args_load() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @args_load() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6891 = call i64 @__mruntime_rt_sys_resid__args_state()
 %t6892 = add i64 %t6891, 8
@@ -16665,7 +16678,7 @@ L2541:
 %t6930 = call i64 @st64(i64 %t6929, i64 %t6910)
 ret i64 %t6930
 }
-define internal i64 @__mruntime_rt_sys_resid__args_read(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__args_read(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -16691,7 +16704,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_sys_resid__cmdline_len(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__cmdline_len(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6938 = call i64 @o_rdonly()
 %t6939 = call i64 @sys_open(i64 %p0, i64 %t6938, i64 0)
@@ -16708,7 +16721,7 @@ L2550:
 %t6946 = add nsw i64 %t6945, %t6942
 ret i64 %t6946
 }
-define internal i64 @__mruntime_rt_sys_resid__count_read(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__count_read(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -16726,7 +16739,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_sys_resid__count_nuls(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__count_nuls(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -16755,7 +16768,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_sys_resid__index_nuls(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__index_nuls(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -16791,7 +16804,7 @@ br label %tco.s1
 tco.s1:
 br label %tco.head
 }
-define internal i64 @rt_args_count() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_args_count() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6973 = call i64 @args_load()
 %t6974 = mul nsw i64 %t6973, 0
@@ -16800,12 +16813,12 @@ entry:
 %t6977 = add nsw i64 %t6974, %t6976
 ret i64 %t6977
 }
-define i64 @resid_args_count() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_args_count() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_args_count()
 ret i64 %r
 }
-define internal i64 @rt_args_get(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_args_get(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6978 = call i64 @args_load()
 %t6979 = call i64 @__mruntime_rt_sys_resid__args_state()
@@ -16832,13 +16845,13 @@ L2568:
 %t6991 = tail call i64 @rdup(i64 %t6990)
 ret i64 %t6991
 }
-define ptr @resid_args_get(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_args_get(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_args_get(i64 %a0)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_sys_resid__split_argv(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__split_argv(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t6992 = call i64 @cstr_dup(i64 %p0)
 %t6993 = mul nsw i64 65, 8
@@ -16857,7 +16870,7 @@ ret i64 %t7002
 L2571:
 ret i64 %t6994
 }
-define internal i64 @__mruntime_rt_sys_resid__skip_sp(i64 %p0.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__skip_sp(i64 %p0.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -16873,7 +16886,7 @@ br label %tco.head
 L2574:
 ret i64 %p0
 }
-define internal i64 @__mruntime_rt_sys_resid__word_end(i64 %p0.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__word_end(i64 %p0.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -16897,7 +16910,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_sys_resid__argv_at(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__argv_at(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -16934,7 +16947,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_sys_resid__free_argv(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__free_argv(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7029 = call i64 @ld64(i64 %p0)
 %t7030 = call i64 @c_free(i64 %t7029)
@@ -16942,7 +16955,7 @@ entry:
 %t7032 = add i64 %t7030, %t7031
 ret i64 %t7032
 }
-define internal i64 @wait_pid(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @wait_pid(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7033p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.wait_status)
 %t7033 = ptrtoint ptr %t7033p to i64
@@ -16957,7 +16970,7 @@ L2589:
 %t7038 = call i64 @ld32(i64 %t7033)
 ret i64 %t7038
 }
-define internal i64 @__mruntime_rt_sys_resid__exit_code(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__exit_code(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7039 = and i64 %p0, 127
 %t7040 = icmp eq i64 %t7039, 0
@@ -16973,7 +16986,7 @@ L2592:
 %t7044 = phi i64 [ %t7042, %L2590 ], [ %t7043, %L2591 ]
 ret i64 %t7044
 }
-define internal i64 @rt_process_run(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_process_run(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7045 = icmp eq i64 %p0, 0
 br i1 %t7045, label %L2593, label %L2595
@@ -17001,7 +17014,7 @@ br i1 %t7054, label %L2602, label %L2604
 L2602:
 %t7055 = call i64 @ld64(i64 %t7047)
 %t7056 = call i64 @c_execvp(i64 %t7055, i64 %t7047)
-%t7057 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 231, i64 127, i64 0, i64 0, i64 0, i64 0, i64 0)
+%t7057 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 94, i64 127, i64 0, i64 0, i64 0, i64 0, i64 0)
 ret i64 %t7057
 L2604:
 %t7058 = call i64 @wait_pid(i64 %t7050, i64 0)
@@ -17015,13 +17028,13 @@ L2607:
 %t7062 = tail call i64 @__mruntime_rt_sys_resid__exit_code(i64 %t7058)
 ret i64 %t7062
 }
-define i64 @resid_process_run(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_process_run(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_process_run(i64 %x0i)
 ret i64 %r
 }
-define internal i1 @__mruntime_rt_sys_resid__ref_ok(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_sys_resid__ref_ok(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7063 = call i64 @ld8(i64 %p0)
 %t7064 = icmp eq i64 %t7063, 0
@@ -17113,7 +17126,7 @@ LSJ7093:
 %t7096 = phi i1 [ false, %LSL7093 ], [ %t7095, %LSR7093 ]
 ret i1 %t7096
 }
-define internal i64 @rt_git_rev(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_git_rev(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7097 = icmp eq i64 %p0, 0
 br label %LSL7098
@@ -17164,27 +17177,27 @@ L2613:
 %t7121 = tail call i64 @shell_line(i64 %t7120)
 ret i64 %t7121
 }
-define ptr @resid_git_rev(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_git_rev(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_git_rev(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_git_branch() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_git_branch() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7123 = ptrtoint ptr @.s7122 to i64
 %t7124 = call i64 @shell_line(i64 %t7123)
 %t7125 = call i64 @__mruntime_rt_sys_resid__sanitize_ref(i64 %t7124)
 ret i64 %t7124
 }
-define ptr @resid_git_branch() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_git_branch() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_git_branch()
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_sys_resid__sanitize_ref(i64 %p0.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__sanitize_ref(i64 %p0.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -17281,17 +17294,17 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_sys_resid__sha_k() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__sha_k() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7160 = ptrtoint ptr @rtt.31973 to i64
 ret i64 %t7160
 }
-define internal i64 @__mruntime_rt_sys_resid__m32(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__m32(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7161 = and i64 %p0, 4294967295
 ret i64 %t7161
 }
-define internal i64 @__mruntime_rt_sys_resid__ror32(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__ror32(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7162 = icmp uge i64 %p1, 64
 %t7163 = add i64 %p1, 0
@@ -17306,7 +17319,7 @@ entry:
 %t7172 = call i64 @__mruntime_rt_sys_resid__m32(i64 %t7171)
 ret i64 %t7172
 }
-define internal i64 @__mruntime_rt_sys_resid__sha_block(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__sha_block(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7173 = call i64 @__mruntime_rt_sys_resid__sha_load(i64 %p2, i64 %p1, i64 0)
 %t7174 = call i64 @__mruntime_rt_sys_resid__sha_expand(i64 %p2, i64 16)
@@ -17328,7 +17341,7 @@ entry:
 %t7190 = call i64 @__mruntime_rt_sys_resid__sha_rounds(i64 %p0, i64 %p2, i64 0, i64 %t7175, i64 %t7177, i64 %t7179, i64 %t7181, i64 %t7183, i64 %t7185, i64 %t7187, i64 %t7189)
 ret i64 0
 }
-define internal i64 @__mruntime_rt_sys_resid__sha_load(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__sha_load(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -17369,7 +17382,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_sys_resid__sha_expand(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__sha_expand(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -17418,7 +17431,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_sys_resid__sha_rounds(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in, i64 %p7.in, i64 %p8.in, i64 %p9.in, i64 %p10.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__sha_rounds(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in, i64 %p7.in, i64 %p8.in, i64 %p9.in, i64 %p10.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -17527,7 +17540,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_sys_resid__sha_new() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__sha_new() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7341 = add nsw i64 64, 512
 %t7342 = add nsw i64 %t7341, 128
@@ -17537,14 +17550,14 @@ entry:
 %t7346 = add i64 %t7345, %t7343
 ret i64 %t7346
 }
-define internal i64 @__mruntime_rt_sys_resid__sha_bytes(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__sha_bytes(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7347 = sub nsw i64 0, 64
 %t7348 = and i64 %p2, %t7347
 %t7349 = call i64 @__mruntime_rt_sys_resid__sha_blocks(i64 %p0, i64 %p1, i64 0, i64 %t7348)
 ret i64 %t7348
 }
-define internal i64 @__mruntime_rt_sys_resid__sha_blocks(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__sha_blocks(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -17565,7 +17578,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_sys_resid__sha_finish(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__sha_finish(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7356 = add i64 %p0, 576
 %t7357 = call i64 @mcopy(i64 %t7356, i64 %p1, i64 %p2)
@@ -17595,7 +17608,7 @@ call void @llvm.memset.p0.i64(ptr %t7367p, i8 %t7367q, i64 %t7366, i1 false)
 %t7372 = tail call i64 @__mruntime_rt_sys_resid__sha_blocks(i64 %p0, i64 %t7356, i64 0, i64 %t7362)
 ret i64 %t7372
 }
-define internal i64 @__mruntime_rt_sys_resid__sha_len(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__sha_len(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -17617,7 +17630,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_sys_resid__sha_byte(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__sha_byte(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7381 = sdiv i64 %p1, 4
 %t7382 = mul i64 %t7381, 8
@@ -17633,7 +17646,7 @@ entry:
 %t7392 = and i64 %t7391, 255
 ret i64 %t7392
 }
-define internal i64 @rt_fs_sha256(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_fs_sha256(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7393 = call i1 @__mruntime_rt_sys_resid__path_ok(i64 %p0)
 %t7394 = xor i1 %t7393, true
@@ -17667,14 +17680,14 @@ L2643:
 %t7414 = add i64 %t7413, %t7408
 ret i64 %t7414
 }
-define ptr @resid_fs_sha256(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_fs_sha256(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_fs_sha256(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_sys_resid__sha_file(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__sha_file(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -17701,7 +17714,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_sys_resid__sha_out(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__sha_out(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -17721,7 +17734,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_str_sha256(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_str_sha256(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7432 = call i64 @c_strlen(i64 %p0)
 %t7433 = call i64 @__mruntime_rt_sys_resid__sha_new()
@@ -17737,14 +17750,14 @@ entry:
 %t7443 = add i64 %t7442, %t7438
 ret i64 %t7443
 }
-define ptr @str_sha256(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @str_sha256(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_str_sha256(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_sys_resid__sha_hex(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__sha_hex(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -17776,18 +17789,18 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_sys_resid__dbg() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__dbg() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7463p = getelementptr i8, ptr @rtg.rt_dbg, i64 0
 %t7463 = ptrtoint ptr %t7463p to i64
 ret i64 %t7463
 }
-define internal i64 @__mruntime_rt_sys_resid__ptrace(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__ptrace(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t7464 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 101, i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 0, i64 0)
+%t7464 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 117, i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 0, i64 0)
 ret i64 %t7464
 }
-define internal i1 @__mruntime_rt_sys_resid__dbg_known(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_sys_resid__dbg_known(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -17816,7 +17829,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_sys_resid__dbg_add(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__dbg_add(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7477 = call i64 @__mruntime_rt_sys_resid__dbg()
 %t7478 = add i64 %t7477, 8
@@ -17845,12 +17858,12 @@ L2661:
 %t7492 = call i64 @st64(i64 %t7490, i64 %t7491)
 ret i64 %t7492
 }
-define internal i64 @__mruntime_rt_sys_resid__dbg_remove(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__dbg_remove(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7493 = call i64 @__mruntime_rt_sys_resid__dbg_remove_at(i64 %p0, i64 0)
 ret i64 %t7493
 }
-define internal i64 @__mruntime_rt_sys_resid__dbg_remove_at(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__dbg_remove_at(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -17894,7 +17907,7 @@ L2667:
 %t7520 = tail call i64 @st64(i64 %t7518, i64 %t7519)
 ret i64 %t7520
 }
-define internal i64 @rt_dbg_spawn(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_dbg_spawn(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7521 = icmp eq i64 %p0, 0
 br i1 %t7521, label %L2668, label %L2670
@@ -17921,10 +17934,10 @@ L2676:
 br i1 %t7530, label %L2677, label %L2679
 L2677:
 %t7531 = call i64 @__mruntime_rt_sys_resid__ptrace(i64 0, i64 0, i64 0, i64 0)
-%t7532 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 135, i64 262144, i64 0, i64 0, i64 0, i64 0, i64 0)
+%t7532 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 92, i64 262144, i64 0, i64 0, i64 0, i64 0, i64 0)
 %t7533 = call i64 @ld64(i64 %t7523)
 %t7534 = call i64 @c_execv(i64 %t7533, i64 %t7523)
-%t7535 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 231, i64 127, i64 0, i64 0, i64 0, i64 0, i64 0)
+%t7535 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 94, i64 127, i64 0, i64 0, i64 0, i64 0, i64 0)
 ret i64 %t7535
 L2679:
 %t7536 = call i64 @__mruntime_rt_sys_resid__free_argv(i64 %t7523)
@@ -17956,32 +17969,32 @@ L2682:
 %t7553 = add nsw i64 %t7552, %t7526
 ret i64 %t7553
 }
-define i64 @resid_dbg_spawn(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_dbg_spawn(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_dbg_spawn(i64 %x0i)
 ret i64 %r
 }
-define internal i64 @rt_dbg_cont(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_dbg_cont(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7554 = call i64 @__mruntime_rt_sys_resid__ptrace(i64 7, i64 %p0, i64 0, i64 %p1)
 %t7555 = icmp eq i64 %t7554, 0
 %t7556 = call i64 @__mruntime_rt_sys_resid__b8(i1 %t7555)
 ret i64 %t7556
 }
-define i8 @resid_dbg_cont(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_dbg_cont(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_dbg_cont(i64 %a0, i64 %a1)
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i1 @__mruntime_rt_sys_resid__st_exited(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_sys_resid__st_exited(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7557 = and i64 %p0, 127
 %t7558 = icmp eq i64 %t7557, 0
 ret i1 %t7558
 }
-define internal i1 @__mruntime_rt_sys_resid__st_signaled(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_sys_resid__st_signaled(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7559 = and i64 %p0, 127
 %t7560 = icmp ne i64 %t7559, 0
@@ -17996,13 +18009,13 @@ LSJ7561:
 %t7564 = phi i1 [ false, %LSL7561 ], [ %t7563, %LSR7561 ]
 ret i1 %t7564
 }
-define internal i1 @__mruntime_rt_sys_resid__st_stopped(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_sys_resid__st_stopped(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7565 = and i64 %p0, 255
 %t7566 = icmp eq i64 %t7565, 127
 ret i1 %t7566
 }
-define internal i64 @__mruntime_rt_sys_resid__dbg_status(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__dbg_status(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7567 = call i1 @__mruntime_rt_sys_resid__st_exited(i64 %p0)
 br i1 %t7567, label %L2683, label %L2684
@@ -18018,7 +18031,7 @@ L2685:
 %t7572 = phi i64 [ %t7569, %L2683 ], [ %t7571, %L2684 ]
 ret i64 %t7572
 }
-define internal i64 @rt_dbg_wait() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_dbg_wait() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -18154,36 +18167,36 @@ L2709:
 %t7636 = call i64 @st64(i64 %t7633, i64 %t7635)
 ret i64 %t7576
 }
-define i64 @resid_dbg_wait() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_dbg_wait() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_dbg_wait()
 ret i64 %r
 }
-define internal i64 @rt_dbg_signal() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_dbg_signal() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7637 = call i64 @__mruntime_rt_sys_resid__dbg()
 %t7638 = add i64 %t7637, 16
 %t7639 = call i64 @ld64(i64 %t7638)
 ret i64 %t7639
 }
-define i64 @resid_dbg_signal() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_dbg_signal() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_dbg_signal()
 ret i64 %r
 }
-define internal i64 @rt_dbg_exit_code() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_dbg_exit_code() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7640 = call i64 @__mruntime_rt_sys_resid__dbg()
 %t7641 = add i64 %t7640, 24
 %t7642 = call i64 @ld64(i64 %t7641)
 ret i64 %t7642
 }
-define i64 @resid_dbg_exit_code() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_dbg_exit_code() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_dbg_exit_code()
 ret i64 %r
 }
-define internal i64 @rt_dbg_step(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_dbg_step(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7643 = call i64 @__mruntime_rt_sys_resid__ptrace(i64 9, i64 %p0, i64 0, i64 0)
 %t7644 = icmp ne i64 %t7643, 0
@@ -18231,13 +18244,13 @@ ret i64 0
 L2718:
 ret i64 1
 }
-define i8 @resid_dbg_step(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_dbg_step(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_dbg_step(i64 %a0)
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @rt_dbg_peek(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_dbg_peek(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7664p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.dbg_peek)
 %t7664 = ptrtoint ptr %t7664p to i64
@@ -18246,25 +18259,25 @@ entry:
 %t7667 = call i64 @ld64(i64 %t7664)
 ret i64 %t7667
 }
-define i64 @resid_dbg_peek(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_dbg_peek(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_dbg_peek(i64 %a0, i64 %a1)
 ret i64 %r
 }
-define internal i64 @rt_dbg_poke(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_dbg_poke(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7668 = call i64 @__mruntime_rt_sys_resid__ptrace(i64 5, i64 %p0, i64 %p1, i64 %p2)
 %t7669 = icmp eq i64 %t7668, 0
 %t7670 = call i64 @__mruntime_rt_sys_resid__b8(i1 %t7669)
 ret i64 %t7670
 }
-define i8 @resid_dbg_poke(i64 %a0, i64 %a1, i64 %a2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_dbg_poke(i64 %a0, i64 %a1, i64 %a2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_dbg_poke(i64 %a0, i64 %a1, i64 %a2)
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @__mruntime_rt_sys_resid__reg_off(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__reg_off(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7671 = ptrtoint ptr @rtt.33672 to i64
 %t7672 = icmp sge i64 %p0, 0
@@ -18289,7 +18302,7 @@ L2724:
 %t7680 = phi i64 [ %t7678, %L2722 ], [ %t7679, %L2723 ]
 ret i64 %t7680
 }
-define internal i64 @__mruntime_rt_sys_resid__a64_regs(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__a64_regs(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7681p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.dbg_iov)
 %t7681 = ptrtoint ptr %t7681p to i64
@@ -18300,7 +18313,7 @@ entry:
 %t7686 = call i64 @__mruntime_rt_sys_resid__ptrace(i64 16900, i64 %p0, i64 1, i64 %t7681)
 ret i64 %t7686
 }
-define internal i64 @__mruntime_rt_sys_resid__a64_reg_off(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__a64_reg_off(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7687 = icmp sge i64 %p0, 0
 br label %LSL7688
@@ -18322,7 +18335,7 @@ L2727:
 %t7693 = phi i64 [ %t7691, %L2725 ], [ %t7692, %L2726 ]
 ret i64 %t7693
 }
-define internal i64 @rt_dbg_reg(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_dbg_reg(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7694p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.dbg_regs)
 %t7694 = ptrtoint ptr %t7694p to i64
@@ -18370,12 +18383,12 @@ L2739:
 %t7711 = phi i64 [ 0, %L2737 ], [ %t7710, %L2738 ]
 ret i64 %t7711
 }
-define i64 @resid_dbg_reg(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_dbg_reg(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_dbg_reg(i64 %a0, i64 %a1)
 ret i64 %r
 }
-define internal i64 @rt_dbg_set_pc(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_dbg_set_pc(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7712p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.dbg_regs)
 %t7712 = ptrtoint ptr %t7712p to i64
@@ -18410,13 +18423,13 @@ L2748:
 %t7728 = call i64 @__mruntime_rt_sys_resid__b8(i1 %t7727)
 ret i64 %t7728
 }
-define i8 @resid_dbg_set_pc(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_dbg_set_pc(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_dbg_set_pc(i64 %a0, i64 %a1)
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @rt_dbg_kill() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_dbg_kill() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7729 = call i64 @__mruntime_rt_sys_resid__dbg()
 %t7730 = call i64 @ld64(i64 %t7729)
@@ -18425,7 +18438,7 @@ br i1 %t7731, label %L2749, label %L2751
 L2749:
 ret i64 0
 L2751:
-%t7732 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 62, i64 %t7730, i64 9, i64 0, i64 0, i64 0, i64 0)
+%t7732 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 129, i64 %t7730, i64 9, i64 0, i64 0, i64 0, i64 0)
 %t7733 = call i64 @__mruntime_rt_sys_resid__reap_all()
 %t7734 = call i64 @__mruntime_rt_sys_resid__dbg()
 %t7735 = sub nsw i64 0, 1
@@ -18436,13 +18449,13 @@ L2751:
 %t7740 = add i64 %t7739, 1
 ret i64 %t7740
 }
-define i8 @resid_dbg_kill() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_dbg_kill() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_dbg_kill()
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @__mruntime_rt_sys_resid__reap_all() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__reap_all() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -18459,19 +18472,19 @@ br label %tco.head
 L2754:
 ret i64 0
 }
-define internal i64 @rt_dbg_f64(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_dbg_f64(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7746 = bitcast i64 %p0 to double
 %t7747 = call i64 @c_float_to_string(double %t7746)
 ret i64 %t7747
 }
-define ptr @resid_dbg_f64(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_dbg_f64(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_dbg_f64(i64 %a0)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @main_thread(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @main_thread(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7748 = call i64 @ld64(i64 %p0)
 %t7749p = inttoptr i64 %t7748 to ptr
@@ -18479,7 +18492,7 @@ entry:
 %t7750 = and i64 %t7749, 4294967295
 ret i64 %t7750
 }
-define internal i64 @__mruntime_rt_sys_resid__stack_mb() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_sys_resid__stack_mb() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7752 = ptrtoint ptr @.s7751 to i64
 %t7753 = call i64 @c_getenv(i64 %t7752)
@@ -18525,7 +18538,7 @@ L2760:
 %t7768 = phi i64 [ %t7763, %L2758 ], [ 1024, %L2759 ]
 ret i64 %t7768
 }
-define internal i64 @rt_run_main(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_run_main(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7769 = call i64 @check_address_space()
 %t7770 = call i64 @xmalloc(i64 16)
@@ -18551,30 +18564,30 @@ L2763:
 %t7783 = add nsw i64 %t7782, %t7780
 ret i64 %t7783
 }
-define i32 @resid_run_main(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i32 @resid_run_main(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_run_main(i64 %x0i)
 %rv = trunc i64 %r to i32
 ret i32 %rv
 }
-define internal i64 @__mruntime_rt_term_resid__in_st() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_term_resid__in_st() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7784p = getelementptr i8, ptr @rtg.rt_stdin, i64 0
 %t7784 = ptrtoint ptr %t7784p to i64
 ret i64 %t7784
 }
-define internal i64 @__mruntime_rt_term_resid__in_buf() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_term_resid__in_buf() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7785p = getelementptr i8, ptr @rtg.rt_stdin_buf, i64 0
 %t7785 = ptrtoint ptr %t7785p to i64
 ret i64 %t7785
 }
-define internal i64 @__mruntime_rt_term_resid__in_cap() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_term_resid__in_cap() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 65536
 }
-define internal i64 @__mruntime_rt_term_resid__in_len() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_term_resid__in_len() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7786 = call i64 @__mruntime_rt_term_resid__in_st()
 %t7787 = add i64 %t7786, 8
@@ -18599,7 +18612,7 @@ L2766:
 %t7794 = phi i64 [ 0, %L2764 ], [ %t7793, %L2769 ]
 ret i64 %t7794
 }
-define internal i64 @__mruntime_rt_term_resid__in_pos() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_term_resid__in_pos() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7795 = call i64 @__mruntime_rt_term_resid__in_st()
 %t7796 = call i64 @ld64(i64 %t7795)
@@ -18622,7 +18635,7 @@ L2772:
 %t7801 = phi i64 [ 0, %L2770 ], [ %t7800, %L2775 ]
 ret i64 %t7801
 }
-define internal i1 @__mruntime_rt_term_resid__in_fill() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_term_resid__in_fill() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -18635,7 +18648,7 @@ ret i1 true
 L2778:
 %t7805 = call i64 @__mruntime_rt_term_resid__in_buf()
 %t7806 = call i64 @__mruntime_rt_term_resid__in_cap()
-%t7807 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 0, i64 0, i64 %t7805, i64 %t7806, i64 0, i64 0, i64 0)
+%t7807 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 63, i64 0, i64 %t7805, i64 %t7806, i64 0, i64 0, i64 0)
 %t7808 = sub nsw i64 0, 4
 %t7809 = icmp eq i64 %t7807, %t7808
 br i1 %t7809, label %L2779, label %L2781
@@ -18661,7 +18674,7 @@ L2784:
 %t7819 = icmp sgt i64 %t7812, 0
 ret i1 %t7819
 }
-define internal i64 @rt_read_byte() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_read_byte() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7820 = call i1 @__mruntime_rt_term_resid__in_fill()
 %t7821 = xor i1 %t7820, true
@@ -18679,24 +18692,24 @@ L2787:
 %t7829 = call i64 @ld8(i64 %t7828)
 ret i64 %t7829
 }
-define i64 @resid_read_byte() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_read_byte() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_read_byte()
 ret i64 %r
 }
-define internal i64 @rt_read_line() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_read_line() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7830 = call i64 @xmalloc(i64 256)
 %t7831 = call i64 @__mruntime_rt_term_resid__in_line(i64 %t7830, i64 0, i64 256)
 ret i64 %t7831
 }
-define ptr @resid_read_line() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_read_line() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_read_line()
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_term_resid__in_line(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_term_resid__in_line(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -18753,7 +18766,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_term_resid__in_scan_nl(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_term_resid__in_scan_nl(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -18778,7 +18791,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_term_resid__in_grow(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_term_resid__in_grow(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7872 = icmp sle i64 %p1, %p0
 br i1 %t7872, label %L2803, label %L2804
@@ -18792,19 +18805,19 @@ L2805:
 %t7875 = phi i64 [ %p0, %L2803 ], [ %t7874, %L2804 ]
 ret i64 %t7875
 }
-define internal i64 @__mruntime_rt_term_resid__tm() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_term_resid__tm() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7876p = getelementptr i8, ptr @rtg.rt_term, i64 0
 %t7876 = ptrtoint ptr %t7876p to i64
 ret i64 %t7876
 }
-define internal i64 @__mruntime_rt_term_resid__tm_tmp() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_term_resid__tm_tmp() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7877p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.term_tmp)
 %t7877 = ptrtoint ptr %t7877p to i64
 ret i64 %t7877
 }
-define internal i64 @__mruntime_rt_term_resid__tm_b8(i1 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_term_resid__tm_b8(i1 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br i1 %p0, label %L2806, label %L2807
 L2806:
@@ -18815,7 +18828,7 @@ L2808:
 %t7878 = phi i64 [ 1, %L2806 ], [ 0, %L2807 ]
 ret i64 %t7878
 }
-define internal i1 @__mruntime_rt_term_resid__tm_tty(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_term_resid__tm_tty(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7879 = icmp sge i64 %p0, 0
 br label %LSL7880
@@ -18831,35 +18844,35 @@ LSL7883:
 br i1 %t7882, label %LSR7883, label %LSJ7883
 LSR7883:
 %t7884 = call i64 @__mruntime_rt_term_resid__tm_tmp()
-%t7885 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 16, i64 %p0, i64 21505, i64 %t7884, i64 0, i64 0, i64 0)
+%t7885 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 29, i64 %p0, i64 21505, i64 %t7884, i64 0, i64 0, i64 0)
 %t7886 = icmp eq i64 %t7885, 0
 br label %LSJ7883
 LSJ7883:
 %t7887 = phi i1 [ false, %LSL7883 ], [ %t7886, %LSR7883 ]
 ret i1 %t7887
 }
-define internal i64 @rt_term_is_tty(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_term_is_tty(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7888 = call i1 @__mruntime_rt_term_resid__tm_tty(i64 %p0)
 %t7889 = call i64 @__mruntime_rt_term_resid__tm_b8(i1 %t7888)
 ret i64 %t7889
 }
-define i8 @resid_term_is_tty(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_term_is_tty(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_term_is_tty(i64 %a0)
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @__mruntime_rt_term_resid__tm_size(i1 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_term_resid__tm_size(i1 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7890 = call i64 @__mruntime_rt_term_resid__tm_tmp()
-%t7891 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 16, i64 1, i64 21523, i64 %t7890, i64 0, i64 0, i64 0)
+%t7891 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 29, i64 1, i64 21523, i64 %t7890, i64 0, i64 0, i64 0)
 %t7892 = icmp eq i64 %t7891, 0
 br label %LSL7893
 LSL7893:
 br i1 %t7892, label %LSJ7893, label %LSR7893
 LSR7893:
-%t7894 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 16, i64 0, i64 21523, i64 %t7890, i64 0, i64 0, i64 0)
+%t7894 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 29, i64 0, i64 21523, i64 %t7890, i64 0, i64 0, i64 0)
 %t7895 = icmp eq i64 %t7894, 0
 br label %LSJ7893
 LSJ7893:
@@ -18894,27 +18907,27 @@ L2817:
 %t7906 = phi i64 [ %t7904, %L2815 ], [ %p1, %L2816 ]
 ret i64 %t7906
 }
-define internal i64 @rt_term_cols() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_term_cols() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7907 = call i64 @__mruntime_rt_term_resid__tm_size(i1 false, i64 80)
 ret i64 %t7907
 }
-define i64 @resid_term_cols() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_term_cols() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_term_cols()
 ret i64 %r
 }
-define internal i64 @rt_term_rows() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_term_rows() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7908 = call i64 @__mruntime_rt_term_resid__tm_size(i1 true, i64 24)
 ret i64 %t7908
 }
-define i64 @resid_term_rows() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_term_rows() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_term_rows()
 ret i64 %r
 }
-define internal i64 @rt_term_raw() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_term_raw() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7909 = call i64 @__mruntime_rt_term_resid__tm()
 %t7910 = call i64 @ld64(i64 %t7909)
@@ -18924,7 +18937,7 @@ L2818:
 ret i64 1
 L2820:
 %t7912 = add i64 %t7909, 8
-%t7913 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 16, i64 0, i64 21505, i64 %t7912, i64 0, i64 0, i64 0)
+%t7913 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 29, i64 0, i64 21505, i64 %t7912, i64 0, i64 0, i64 0)
 %t7914 = icmp ne i64 %t7913, 0
 br i1 %t7914, label %L2821, label %L2823
 L2821:
@@ -18959,7 +18972,7 @@ L2823:
 %t7941 = add i64 %t7915, 23
 %t7942 = call i64 @st8(i64 %t7941, i64 1)
 %t7943 = add i64 %t7940, %t7942
-%t7944 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 16, i64 0, i64 21507, i64 %t7915, i64 0, i64 0, i64 0)
+%t7944 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 29, i64 0, i64 21507, i64 %t7915, i64 0, i64 0, i64 0)
 %t7945 = icmp ne i64 %t7944, 0
 br i1 %t7945, label %L2824, label %L2826
 L2824:
@@ -18969,13 +18982,13 @@ L2826:
 %t7947 = add i64 %t7946, 1
 ret i64 %t7947
 }
-define i8 @resid_term_raw() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_term_raw() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_term_raw()
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @rt_term_restore() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_term_restore() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7948 = call i64 @__mruntime_rt_term_resid__tm()
 %t7949 = call i64 @ld64(i64 %t7948)
@@ -18985,7 +18998,7 @@ L2827:
 ret i64 1
 L2829:
 %t7951 = add i64 %t7948, 8
-%t7952 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 16, i64 0, i64 21507, i64 %t7951, i64 0, i64 0, i64 0)
+%t7952 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 29, i64 0, i64 21507, i64 %t7951, i64 0, i64 0, i64 0)
 %t7953 = icmp ne i64 %t7952, 0
 br i1 %t7953, label %L2830, label %L2832
 L2830:
@@ -18995,30 +19008,30 @@ L2832:
 %t7955 = add i64 %t7954, 1
 ret i64 %t7955
 }
-define i8 @resid_term_restore() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_term_restore() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_term_restore()
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @term_exit() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @term_exit() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7956 = tail call i64 @rt_term_restore()
 ret i64 %t7956
 }
-define internal i64 @__mruntime_rt_time_resid__clk_ts() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_time_resid__clk_ts() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7957p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.clock_ts)
 %t7957 = ptrtoint ptr %t7957p to i64
 ret i64 %t7957
 }
-define internal i64 @__mruntime_rt_time_resid__clk_gettime(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_time_resid__clk_gettime(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7958 = call i64 @__mruntime_rt_time_resid__clk_ts()
-%t7959 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 228, i64 %p0, i64 %t7958, i64 0, i64 0, i64 0, i64 0)
+%t7959 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 113, i64 %p0, i64 %t7958, i64 0, i64 0, i64 0, i64 0)
 ret i64 %t7959
 }
-define internal i64 @rt_clock_now_ns() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_clock_now_ns() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7960 = call i64 @__mruntime_rt_time_resid__clk_gettime(i64 0)
 %t7961 = icmp ne i64 %t7960, 0
@@ -19035,12 +19048,12 @@ L2835:
 %t7968 = add i64 %t7967, %t7966
 ret i64 %t7968
 }
-define i64 @resid_clock_now_ns() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_clock_now_ns() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_clock_now_ns()
 ret i64 %r
 }
-define internal i64 @rt_clock_now_sec() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_clock_now_sec() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7969 = call i64 @__mruntime_rt_time_resid__clk_gettime(i64 0)
 %t7970 = icmp ne i64 %t7969, 0
@@ -19053,12 +19066,12 @@ L2838:
 %t7973 = call i64 @ld64(i64 %t7972)
 ret i64 %t7973
 }
-define i64 @resid_clock_now_sec() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_clock_now_sec() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_clock_now_sec()
 ret i64 %r
 }
-define internal i64 @rt_clock_monotonic_ns() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_clock_monotonic_ns() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7974 = call i64 @__mruntime_rt_time_resid__clk_gettime(i64 1)
 %t7975 = icmp ne i64 %t7974, 0
@@ -19075,12 +19088,12 @@ L2841:
 %t7982 = add i64 %t7981, %t7980
 ret i64 %t7982
 }
-define i64 @resid_clock_monotonic_ns() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_clock_monotonic_ns() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_clock_monotonic_ns()
 ret i64 %r
 }
-define internal i64 @rt_clock_sleep_ns(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_clock_sleep_ns(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t7983 = icmp slt i64 %p0, 0
 br i1 %t7983, label %L2842, label %L2844
@@ -19096,7 +19109,7 @@ L2844:
 %t7990 = call i64 @st64(i64 %t7989, i64 %t7987)
 %t7991 = add i64 %t7988, %t7990
 %t7992 = add i64 %t7985, 16
-%t7993 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 35, i64 %t7985, i64 %t7992, i64 0, i64 0, i64 0, i64 0)
+%t7993 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 101, i64 %t7985, i64 %t7992, i64 0, i64 0, i64 0, i64 0)
 %t7994 = icmp eq i64 %t7993, 0
 br i1 %t7994, label %L2845, label %L2847
 L2845:
@@ -19125,12 +19138,12 @@ L2850:
 %t8005 = sub nsw i64 0, 1
 ret i64 %t8005
 }
-define i64 @resid_clock_sleep_ns(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_clock_sleep_ns(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_clock_sleep_ns(i64 %a0)
 ret i64 %r
 }
-define internal i64 @rt_int_to_string(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_int_to_string(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8006p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.numfmt_buf)
 %t8006 = ptrtoint ptr %t8006p to i64
@@ -19138,13 +19151,13 @@ entry:
 %t8008 = call i64 @cstr_from(i64 %t8006, i64 %t8007, i64 1)
 ret i64 %t8008
 }
-define ptr @IntToString(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @IntToString(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_int_to_string(i64 %a0)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @utoa_into(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @utoa_into(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8009 = call i64 @udigits(i64 %p1, i64 1)
 %t8010 = add i64 %p0, %t8009
@@ -19152,7 +19165,7 @@ entry:
 %t8012 = call i64 @uput(i64 %t8011, i64 %p1)
 ret i64 %t8009
 }
-define internal i64 @rt_uint_to_string(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_uint_to_string(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8013p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.numfmt_buf)
 %t8013 = ptrtoint ptr %t8013p to i64
@@ -19160,38 +19173,38 @@ entry:
 %t8015 = call i64 @cstr_from(i64 %t8013, i64 %t8014, i64 1)
 ret i64 %t8015
 }
-define ptr @UIntToString(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @UIntToString(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_uint_to_string(i64 %a0)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_int128_to_string(i128 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_int128_to_string(i128 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8016 = call i64 @__mruntime_rt_numfmt_resid__limbs_i128(i128 %p0)
 %t8017 = icmp slt i128 %p0, 0
 %t8018 = call i64 @limbs_to_str(i64 %t8016, i64 2, i1 %t8017)
 ret i64 %t8018
 }
-define ptr @Int128ToString(i128 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @Int128ToString(i128 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_int128_to_string(i128 %a0)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_uint128_to_string(i128 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_uint128_to_string(i128 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8019 = call i64 @__mruntime_rt_numfmt_resid__limbs_i128(i128 %p0)
 %t8020 = call i64 @limbs_to_str(i64 %t8019, i64 2, i1 false)
 ret i64 %t8020
 }
-define ptr @UInt128ToString(i128 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @UInt128ToString(i128 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_uint128_to_string(i128 %a0)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_numfmt_resid__limbs_negate(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_numfmt_resid__limbs_negate(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -19234,7 +19247,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i1 @__mruntime_rt_numfmt_resid__limbs_zero(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_numfmt_resid__limbs_zero(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -19259,7 +19272,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_numfmt_resid__limbs_div10(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_numfmt_resid__limbs_div10(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -19301,7 +19314,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_numfmt_resid__limbs_digits(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_numfmt_resid__limbs_digits(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -19324,7 +19337,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @limbs_to_str(i64 %p0, i64 %p1, i1 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @limbs_to_str(i64 %p0, i64 %p1, i1 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br i1 %p2, label %L2872, label %L2873
 L2872:
@@ -19354,7 +19367,7 @@ L2877:
 %t8122 = call i64 @cstr_from(i64 %t8119, i64 %t8121, i64 1)
 ret i64 %t8122
 }
-define internal i64 @__mruntime_rt_numfmt_resid__limbs_i128(i128 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_numfmt_resid__limbs_i128(i128 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8123p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.limbs)
 %t8123 = ptrtoint ptr %t8123p to i64
@@ -19370,7 +19383,7 @@ entry:
 %t8143 = add nsw i64 %t8142, %t8123
 ret i64 %t8143
 }
-define internal i64 @limbs2(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @limbs2(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8144p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.limbs)
 %t8144 = ptrtoint ptr %t8144p to i64
@@ -19385,7 +19398,7 @@ entry:
 %t8153 = add nsw i64 %t8152, %t8144
 ret i64 %t8153
 }
-define internal i64 @__mruntime_rt_numfmt_resid__limbs4(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_numfmt_resid__limbs4(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8154p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.limbs)
 %t8154 = ptrtoint ptr %t8154p to i64
@@ -19400,7 +19413,7 @@ entry:
 %t8163 = add nsw i64 %t8162, %t8154
 ret i64 %t8163
 }
-define internal i64 @__mruntime_rt_numfmt_resid__limbs8(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5, i64 %p6, i64 %p7) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_numfmt_resid__limbs8(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5, i64 %p6, i64 %p7) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8164 = call i64 @__mruntime_rt_numfmt_resid__limbs4(i64 %p0, i64 %p1, i64 %p2, i64 %p3)
 %t8165 = add i64 %t8164, 32
@@ -19415,57 +19428,57 @@ entry:
 %t8174 = add nsw i64 %t8173, %t8164
 ret i64 %t8174
 }
-define internal i64 @rt_int256_to_string(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_int256_to_string(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8175 = call i64 @__mruntime_rt_numfmt_resid__limbs4(i64 %p0, i64 %p1, i64 %p2, i64 %p3)
 %t8176 = icmp slt i64 %p3, 0
 %t8177 = call i64 @limbs_to_str(i64 %t8175, i64 4, i1 %t8176)
 ret i64 %t8177
 }
-define ptr @Int256ToString(i64 %a0, i64 %a1, i64 %a2, i64 %a3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @Int256ToString(i64 %a0, i64 %a1, i64 %a2, i64 %a3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_int256_to_string(i64 %a0, i64 %a1, i64 %a2, i64 %a3)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_uint256_to_string(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_uint256_to_string(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8178 = call i64 @__mruntime_rt_numfmt_resid__limbs4(i64 %p0, i64 %p1, i64 %p2, i64 %p3)
 %t8179 = call i64 @limbs_to_str(i64 %t8178, i64 4, i1 false)
 ret i64 %t8179
 }
-define ptr @UInt256ToString(i64 %a0, i64 %a1, i64 %a2, i64 %a3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @UInt256ToString(i64 %a0, i64 %a1, i64 %a2, i64 %a3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_uint256_to_string(i64 %a0, i64 %a1, i64 %a2, i64 %a3)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_int512_to_string(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5, i64 %p6, i64 %p7) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_int512_to_string(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5, i64 %p6, i64 %p7) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8180 = call i64 @__mruntime_rt_numfmt_resid__limbs8(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5, i64 %p6, i64 %p7)
 %t8181 = icmp slt i64 %p7, 0
 %t8182 = call i64 @limbs_to_str(i64 %t8180, i64 8, i1 %t8181)
 ret i64 %t8182
 }
-define ptr @Int512ToString(i64 %a0, i64 %a1, i64 %a2, i64 %a3, i64 %a4, i64 %a5, i64 %a6, i64 %a7) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @Int512ToString(i64 %a0, i64 %a1, i64 %a2, i64 %a3, i64 %a4, i64 %a5, i64 %a6, i64 %a7) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_int512_to_string(i64 %a0, i64 %a1, i64 %a2, i64 %a3, i64 %a4, i64 %a5, i64 %a6, i64 %a7)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_uint512_to_string(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5, i64 %p6, i64 %p7) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_uint512_to_string(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5, i64 %p6, i64 %p7) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8183 = call i64 @__mruntime_rt_numfmt_resid__limbs8(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5, i64 %p6, i64 %p7)
 %t8184 = call i64 @limbs_to_str(i64 %t8183, i64 8, i1 false)
 ret i64 %t8184
 }
-define ptr @UInt512ToString(i64 %a0, i64 %a1, i64 %a2, i64 %a3, i64 %a4, i64 %a5, i64 %a6, i64 %a7) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @UInt512ToString(i64 %a0, i64 %a1, i64 %a2, i64 %a3, i64 %a4, i64 %a5, i64 %a6, i64 %a7) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_uint512_to_string(i64 %a0, i64 %a1, i64 %a2, i64 %a3, i64 %a4, i64 %a5, i64 %a6, i64 %a7)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_wide_to_string(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_wide_to_string(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8185 = icmp sgt i64 %p1, 128
 br i1 %t8185, label %L2878, label %L2879
@@ -19520,7 +19533,7 @@ L2886:
 %t8210 = tail call i64 @cstr_from(i64 %t8207, i64 %t8209, i64 1)
 ret i64 %t8210
 }
-define ptr @WideToString(ptr %a0, i64 %a1, i8 %a2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @WideToString(ptr %a0, i64 %a1, i8 %a2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x2 = zext i8 %a2 to i64
@@ -19528,7 +19541,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_float_to_string(double %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_float_to_string(double %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8211p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.ftoa_buf)
 %t8211 = ptrtoint ptr %t8211p to i64
@@ -19536,23 +19549,23 @@ entry:
 %t8213 = call i64 @cstr_from(i64 %t8211, i64 %t8212, i64 1)
 ret i64 %t8213
 }
-define ptr @FloatToString(double %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @FloatToString(double %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_float_to_string(double %a0)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal double @rt_close_tol(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal double @rt_close_tol(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8214 = call double @__mruntime_rt_numfmt_resid__close_tol_at(double 0.5, i64 %p0)
 ret double %t8214
 }
-define double @resid_close_tol(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define double @resid_close_tol(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call double @rt_close_tol(i64 %a0)
 ret double %r
 }
-define internal double @__mruntime_rt_numfmt_resid__close_tol_at(double %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal double @__mruntime_rt_numfmt_resid__close_tol_at(double %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8215 = icmp sle i64 %p1, 0
 br i1 %t8215, label %L2887, label %L2888
@@ -19567,7 +19580,7 @@ L2889:
 %t8219 = phi double [ %p0, %L2887 ], [ %t8218, %L2888 ]
 ret double %t8219
 }
-define internal i64 @rt_float32_to_string(double %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_float32_to_string(double %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8220p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.ftoa_buf)
 %t8220 = ptrtoint ptr %t8220p to i64
@@ -19585,13 +19598,13 @@ L2892:
 %t8227 = call i64 @cstr_from(i64 %t8220, i64 %t8226, i64 1)
 ret i64 %t8227
 }
-define ptr @Float32ToString(double %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @Float32ToString(double %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_float32_to_string(double %a0)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_numfmt_resid__float32_short_at(i64 %p0.in, double %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_numfmt_resid__float32_short_at(i64 %p0.in, double %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -19622,7 +19635,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_numfmt_resid__float32_positional(i64 %p0, double %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_numfmt_resid__float32_positional(i64 %p0, double %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8240 = call i64 @__mruntime_rt_numfmt_resid__g_exponent(i64 %p0, i64 0, i64 %p2)
 %t8241 = icmp slt i64 %t8240, 1
@@ -19643,7 +19656,7 @@ L2898:
 %t8247 = call i64 @c_strfromd(i64 %p0, i64 64, i64 %t8246, double %p1)
 ret i64 %t8247
 }
-define internal i64 @__mruntime_rt_numfmt_resid__fmt_g(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_numfmt_resid__fmt_g(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8248p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.ftoa_fmt)
 %t8248 = ptrtoint ptr %t8248p to i64
@@ -19683,7 +19696,7 @@ L2904:
 %t8270 = call i64 @st8(i64 %t8269, i64 0)
 ret i64 %t8248
 }
-define internal i64 @float_short(i64 %p0, double %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @float_short(i64 %p0, double %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8271 = fcmp une double %p1, %p1
 br i1 %t8271, label %L2905, label %L2907
@@ -19714,7 +19727,7 @@ L2910:
 %t8285 = call i64 @c_strfromd(i64 %p0, i64 64, i64 %t8284, double %p1)
 ret i64 %t8285
 }
-define internal i64 @__mruntime_rt_numfmt_resid__g_exponent(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_numfmt_resid__g_exponent(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -19760,7 +19773,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_numfmt_resid__g_digits(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_numfmt_resid__g_digits(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -19783,7 +19796,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_numfmt_resid__float_short_at(i64 %p0.in, double %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_numfmt_resid__float_short_at(i64 %p0.in, double %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -19811,7 +19824,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_bool_to_string(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_bool_to_string(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8321 = icmp ne i64 %p0, 0
 br i1 %t8321, label %L2923, label %L2924
@@ -19826,14 +19839,14 @@ L2925:
 %t8327 = tail call i64 @rdup(i64 %t8326)
 ret i64 %t8327
 }
-define ptr @BoolToString(i8 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @BoolToString(i8 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0 = zext i8 %a0 to i64
 %r = call i64 @rt_bool_to_string(i64 %x0)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_numfmt_resid__f128_zero(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_numfmt_resid__f128_zero(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8328p = inttoptr i64 %p0 to ptr
 %t8328q = trunc i64 0 to i8
@@ -19841,12 +19854,12 @@ call void @llvm.memset.p0.i64(ptr %t8328p, i8 %t8328q, i64 2080, i1 false)
 %t8328 = add i64 0, 0
 ret i64 %t8328
 }
-define internal i1 @__mruntime_rt_numfmt_resid__f128_is_zero(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_numfmt_resid__f128_is_zero(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8329 = call i1 @__mruntime_rt_numfmt_resid__limbs_zero(i64 %p0, i64 0, i64 260)
 ret i1 %t8329
 }
-define internal i64 @__mruntime_rt_numfmt_resid__f128_load(i64 %p0, i128 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_numfmt_resid__f128_load(i64 %p0, i128 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8330 = call i64 @__mruntime_rt_numfmt_resid__f128_zero(i64 %p0)
 %t8331 = add i128 %p1, 0
@@ -19859,7 +19872,7 @@ entry:
 %t8348 = call i64 @st64(i64 %t8339, i64 %t8342)
 ret i64 %t8348
 }
-define internal i64 @__mruntime_rt_numfmt_resid__f128_shl(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_numfmt_resid__f128_shl(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8349 = sdiv i64 %p1, 64
 %t8350 = srem i64 %p1, 64
@@ -19871,7 +19884,7 @@ call void @llvm.memset.p0.i64(ptr %t8353p, i8 %t8353q, i64 %t8352, i1 false)
 %t8353 = add i64 0, 0
 ret i64 %t8353
 }
-define internal i64 @__mruntime_rt_numfmt_resid__shl_words(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_numfmt_resid__shl_words(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -19934,7 +19947,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_numfmt_resid__f128_shr(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_numfmt_resid__f128_shr(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8385 = sdiv i64 %p1, 64
 %t8386 = srem i64 %p1, 64
@@ -19959,7 +19972,7 @@ call void @llvm.memset.p0.i64(ptr %t8396p, i8 %t8396q, i64 %t8395, i1 false)
 %t8396 = add i64 0, 0
 ret i64 %t8396
 }
-define internal i64 @__mruntime_rt_numfmt_resid__shr_words(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_numfmt_resid__shr_words(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -20023,7 +20036,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_numfmt_resid__f128_mul10(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_numfmt_resid__f128_mul10(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -20060,12 +20073,12 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_numfmt_resid__f128_div10(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_numfmt_resid__f128_div10(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8477 = call i64 @__mruntime_rt_numfmt_resid__limbs_div10(i64 %p0, i64 259, i64 0)
 ret i64 %t8477
 }
-define internal i64 @__mruntime_rt_numfmt_resid__f128_mask(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_numfmt_resid__f128_mask(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8478 = sdiv i64 %p1, 64
 %t8479 = srem i64 %p1, 64
@@ -20117,7 +20130,7 @@ L2955:
 %t8505 = phi i64 [ %t8504, %L2953 ], [ 0, %L2954 ]
 ret i64 %t8505
 }
-define internal i64 @__mruntime_rt_numfmt_resid__int_digits(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_numfmt_resid__int_digits(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -20146,7 +20159,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_numfmt_resid__frac_digits(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i1 %p4.in, i64 %p5.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_numfmt_resid__frac_digits(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i1 %p4.in, i64 %p5.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -20232,7 +20245,7 @@ br label %tco.s1
 tco.s1:
 br label %tco.head
 }
-define internal i64 @rt_float128_to_string(fp128 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_float128_to_string(fp128 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8559 = bitcast fp128 %p0 to i128
 %t8560 = add i128 %t8559, 0
@@ -20304,13 +20317,13 @@ L2982:
 %t8607 = call i64 @__mruntime_rt_numfmt_resid__f128_text(i64 %t8602, i64 %t8603, i64 %t8604, i64 %t8605, i128 %t8595, i64 %t8601, i1 %t8568)
 ret i64 %t8607
 }
-define ptr @Float128ToString(fp128 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @Float128ToString(fp128 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_float128_to_string(fp128 %a0)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_numfmt_resid__f128_text(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i128 %p4, i64 %p5, i1 %p6) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_numfmt_resid__f128_text(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i128 %p4, i64 %p5, i1 %p6) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8608 = icmp sge i64 %p5, 0
 br i1 %t8608, label %L2983, label %L2985
@@ -20367,7 +20380,7 @@ L2994:
 %t8640 = call i64 @__mruntime_rt_numfmt_resid__f128_assemble(i64 %p2, i64 0, i64 %p3, i64 %t8626, i64 %t8639, i1 %p6)
 ret i64 %t8640
 }
-define internal i64 @__mruntime_rt_numfmt_resid__f128_assemble(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i1 %p5) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_numfmt_resid__f128_assemble(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i1 %p5) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8641p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.f128_digits)
 %t8641 = ptrtoint ptr %t8641p to i64
@@ -20456,7 +20469,7 @@ L3012:
 %t8675 = call i64 @cstr_from(i64 %t8663, i64 %t8674, i64 1)
 ret i64 %t8675
 }
-define internal i64 @__mruntime_rt_numfmt_resid__copy_rev(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_numfmt_resid__copy_rev(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -20489,7 +20502,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_numfmt_resid__copy_fwd(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_numfmt_resid__copy_fwd(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -20522,7 +20535,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i1 @__mruntime_rt_numfmt_resid__round_up(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_numfmt_resid__round_up(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -20552,7 +20565,7 @@ L3024:
 %t8711 = call i64 @st8(i64 %t8707, i64 %t8710)
 ret i1 false
 }
-define internal i64 @__mruntime_rt_numfmt_resid__strip_zeros(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_numfmt_resid__strip_zeros(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -20579,7 +20592,7 @@ br label %tco.head
 L3027:
 ret i64 %p1
 }
-define internal i64 @__mruntime_rt_numfmt_resid__put_byte(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_numfmt_resid__put_byte(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8721 = add i64 %p0, %p1
 %t8722 = call i64 @st8(i64 %t8721, i64 %p2)
@@ -20587,7 +20600,7 @@ entry:
 %t8724 = add i64 %t8723, 1
 ret i64 %t8724
 }
-define internal i64 @__mruntime_rt_numfmt_resid__fixed_text(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_numfmt_resid__fixed_text(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8725 = icmp slt i64 %p4, 0
 br i1 %t8725, label %L3028, label %L3030
@@ -20612,7 +20625,7 @@ ret i64 %t8737
 L3033:
 ret i64 %t8732
 }
-define internal i64 @__mruntime_rt_numfmt_resid__zeros(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_numfmt_resid__zeros(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -20630,7 +20643,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_numfmt_resid__digits_out(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_numfmt_resid__digits_out(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -20652,7 +20665,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_numfmt_resid__int_part(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_numfmt_resid__int_part(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -20683,7 +20696,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_numfmt_resid__sci_text(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_numfmt_resid__sci_text(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8756 = call i64 @ld8(i64 %p2)
 %t8757 = call i64 @__mruntime_rt_numfmt_resid__put_byte(i64 %p0, i64 %p1, i64 %t8756)
@@ -20730,107 +20743,107 @@ L3057:
 %t8774 = add i64 %t8771, %t8773
 ret i64 %t8774
 }
-define internal i64 @__mruntime_rt_fmt_resid__FM_W_SHIFT() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__FM_W_SHIFT() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 0
 }
-define internal i64 @__mruntime_rt_fmt_resid__FM_W_MASK() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__FM_W_MASK() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 255
 }
-define internal i64 @__mruntime_rt_fmt_resid__FM_ALIGN_SHIFT() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__FM_ALIGN_SHIFT() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 8
 }
-define internal i64 @__mruntime_rt_fmt_resid__FM_ALIGN_MASK() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__FM_ALIGN_MASK() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 15
 }
-define internal i64 @__mruntime_rt_fmt_resid__FM_BASE_SHIFT() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__FM_BASE_SHIFT() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 12
 }
-define internal i64 @__mruntime_rt_fmt_resid__FM_BASE_MASK() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__FM_BASE_MASK() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 31
 }
-define internal i64 @__mruntime_rt_fmt_resid__FM_FLAGS_SHIFT() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__FM_FLAGS_SHIFT() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 17
 }
-define internal i64 @__mruntime_rt_fmt_resid__FM_FLAGS_MASK() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__FM_FLAGS_MASK() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 262143
 }
-define internal i64 @__mruntime_rt_fmt_resid__FM_PREC_SHIFT() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__FM_PREC_SHIFT() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 35
 }
-define internal i64 @__mruntime_rt_fmt_resid__FM_PREC_MASK() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__FM_PREC_MASK() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 255
 }
-define internal i64 @__mruntime_rt_fmt_resid__FM_FILL_SHIFT() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__FM_FILL_SHIFT() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 43
 }
-define internal i64 @__mruntime_rt_fmt_resid__FM_FILL_MASK() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__FM_FILL_MASK() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 2097151
 }
-define internal i64 @__mruntime_rt_fmt_resid__FM_GROUP() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__FM_GROUP() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 1
 }
-define internal i64 @__mruntime_rt_fmt_resid__FM_PLUS() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__FM_PLUS() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 2
 }
-define internal i64 @__mruntime_rt_fmt_resid__FM_SPACE() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__FM_SPACE() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 4
 }
-define internal i64 @__mruntime_rt_fmt_resid__FM_UPPER() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__FM_UPPER() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 8
 }
-define internal i64 @__mruntime_rt_fmt_resid__FM_LOWER() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__FM_LOWER() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 16
 }
-define internal i64 @__mruntime_rt_fmt_resid__FM_DECIMAL() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__FM_DECIMAL() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 32
 }
-define internal i64 @__mruntime_rt_fmt_resid__FM_SCIENTIFIC() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__FM_SCIENTIFIC() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 64
 }
-define internal i64 @__mruntime_rt_fmt_resid__FM_PERCENT() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__FM_PERCENT() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 128
 }
-define internal i64 @__mruntime_rt_fmt_resid__FM_NARROW() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__FM_NARROW() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 256
 }
-define internal i64 @__mruntime_rt_fmt_resid__FM_LEFT() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__FM_LEFT() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 0
 }
-define internal i64 @__mruntime_rt_fmt_resid__FM_RIGHT() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__FM_RIGHT() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 1
 }
-define internal i64 @__mruntime_rt_fmt_resid__FM_CENTER() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__FM_CENTER() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 2
 }
-define internal i64 @__mruntime_rt_fmt_resid__FM_SIGN() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__FM_SIGN() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 3
 }
-define internal i64 @resid_fmt_pack(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @resid_fmt_pack(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8775 = call i64 @__mruntime_rt_fmt_resid__FM_W_MASK()
 %t8776 = and i64 %p0, %t8775
@@ -20876,7 +20889,7 @@ entry:
 %t8816 = or i64 %t8808, %t8815
 ret i64 %t8816
 }
-define internal i64 @__mruntime_rt_fmt_resid__fm_width(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__fm_width(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8817 = call i64 @__mruntime_rt_fmt_resid__FM_W_SHIFT()
 %t8818 = call i64 @lshr(i64 %p0, i64 %t8817)
@@ -20884,7 +20897,7 @@ entry:
 %t8820 = and i64 %t8818, %t8819
 ret i64 %t8820
 }
-define internal i64 @__mruntime_rt_fmt_resid__fm_align(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__fm_align(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8821 = call i64 @__mruntime_rt_fmt_resid__FM_ALIGN_SHIFT()
 %t8822 = call i64 @lshr(i64 %p0, i64 %t8821)
@@ -20892,7 +20905,7 @@ entry:
 %t8824 = and i64 %t8822, %t8823
 ret i64 %t8824
 }
-define internal i64 @__mruntime_rt_fmt_resid__fm_fill(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__fm_fill(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8825 = call i64 @__mruntime_rt_fmt_resid__FM_FILL_SHIFT()
 %t8826 = call i64 @lshr(i64 %p0, i64 %t8825)
@@ -20900,7 +20913,7 @@ entry:
 %t8828 = and i64 %t8826, %t8827
 ret i64 %t8828
 }
-define internal i64 @__mruntime_rt_fmt_resid__fm_base(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__fm_base(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8829 = call i64 @__mruntime_rt_fmt_resid__FM_BASE_SHIFT()
 %t8830 = call i64 @lshr(i64 %p0, i64 %t8829)
@@ -20908,7 +20921,7 @@ entry:
 %t8832 = and i64 %t8830, %t8831
 ret i64 %t8832
 }
-define internal i64 @__mruntime_rt_fmt_resid__fm_flags(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__fm_flags(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8833 = call i64 @__mruntime_rt_fmt_resid__FM_FLAGS_SHIFT()
 %t8834 = call i64 @lshr(i64 %p0, i64 %t8833)
@@ -20916,7 +20929,7 @@ entry:
 %t8836 = and i64 %t8834, %t8835
 ret i64 %t8836
 }
-define internal i64 @__mruntime_rt_fmt_resid__fm_prec(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__fm_prec(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8837 = call i64 @__mruntime_rt_fmt_resid__FM_PREC_SHIFT()
 %t8838 = call i64 @lshr(i64 %p0, i64 %t8837)
@@ -20934,7 +20947,7 @@ L3060:
 %t8844 = phi i64 [ %t8842, %L3058 ], [ %t8843, %L3059 ]
 ret i64 %t8844
 }
-define internal i64 @__mruntime_rt_fmt_resid__grp_int_start(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__grp_int_start(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8845 = icmp sle i64 %p1, 0
 br i1 %t8845, label %L3061, label %L3063
@@ -20957,7 +20970,7 @@ ret i64 1
 L3066:
 ret i64 0
 }
-define internal i64 @__mruntime_rt_fmt_resid__grp_int_digits(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__grp_int_digits(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -20991,7 +21004,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_fmt_group(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_fmt_group(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8861 = call i64 @c_strlen(i64 %p0)
 %t8862 = call i64 @__mruntime_rt_fmt_resid__grp_int_start(i64 %p0, i64 %t8861)
@@ -21008,14 +21021,14 @@ L3075:
 %t8869 = call i64 @__mruntime_rt_fmt_resid__grp_copy(i64 %p0, i64 %t8862, i64 %t8861, i64 %t8863, i64 %t8868, i64 %t8868)
 ret i64 %t8869
 }
-define ptr @resid_fmt_group(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_fmt_group(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_fmt_group(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_fmt_resid__grp_copy(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__grp_copy(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -21105,7 +21118,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_fmt_resid__case_byte(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__case_byte(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8905 = icmp sge i64 %p0, 97
 br label %LSL8906
@@ -21153,7 +21166,7 @@ ret i64 %t8920
 L3093:
 ret i64 %p0
 }
-define internal i64 @rt_fmt_case(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_fmt_case(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8921 = call i64 @__mruntime_rt_fmt_resid__fm_flags(i64 %p1)
 %t8922 = call i64 @__mruntime_rt_fmt_resid__FM_UPPER()
@@ -21188,14 +21201,14 @@ L3102:
 %t8935 = call i64 @__mruntime_rt_fmt_resid__case_copy(i64 %p0, i64 0, i64 %t8932, i64 %t8930, i64 %t8934, i64 %t8934)
 ret i64 %t8935
 }
-define ptr @resid_fmt_case(ptr %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_fmt_case(ptr %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_fmt_case(i64 %x0i, i64 %a1)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_fmt_resid__case_copy(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__case_copy(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -21223,7 +21236,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_fmt_sign(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_fmt_sign(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t8947 = call i64 @__mruntime_rt_fmt_resid__fm_flags(i64 %p1)
 %t8948 = call i64 @__mruntime_rt_fmt_resid__FM_PLUS()
@@ -21272,14 +21285,14 @@ L3114:
 %t8972 = add nsw i64 %t8971, %t8960
 ret i64 %t8972
 }
-define ptr @resid_fmt_sign(ptr %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_fmt_sign(ptr %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_fmt_sign(i64 %x0i, i64 %a1)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_fmt_resid__fmt_cps(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__fmt_cps(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -21309,7 +21322,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_fmt_resid__pad_fill_at(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__pad_fill_at(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -21329,7 +21342,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_fmt_resid__pad_fill_run(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__pad_fill_run(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -21350,7 +21363,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_fmt_resid__pad_copy(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__pad_copy(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -21386,7 +21399,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_fmt_pad(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_fmt_pad(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9008 = call i64 @__mruntime_rt_fmt_resid__fm_width(i64 %p1)
 %t9009 = call i64 @__mruntime_rt_fmt_resid__fm_align(i64 %p1)
@@ -21530,14 +21543,14 @@ L3159:
 %t9069 = add nsw i64 %t9068, %t9053
 ret i64 %t9069
 }
-define ptr @resid_fmt_pad(ptr %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_fmt_pad(ptr %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_fmt_pad(i64 %x0i, i64 %a1)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_fmt_resid__rad_div(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__rad_div(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -21576,7 +21589,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_fmt_resid__rad_divmod(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__rad_divmod(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9091 = call i64 @__mruntime_rt_fmt_resid__rad_div(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 0)
 %t9092 = call i64 @__mruntime_rt_fmt_resid__q_first(i64 %p3, i64 %p1)
@@ -21589,7 +21602,7 @@ entry:
 %t9099 = call i64 @st8(i64 %t9098, i64 0)
 ret i64 %t9091
 }
-define internal i64 @__mruntime_rt_fmt_resid__q_first(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__q_first(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9100 = icmp sle i64 %p1, 1
 br i1 %t9100, label %L3163, label %L3165
@@ -21608,7 +21621,7 @@ ret i64 %t9106
 L3168:
 ret i64 0
 }
-define internal i64 @__mruntime_rt_fmt_resid__rad_digit(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__rad_digit(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9107 = icmp slt i64 %p0, 10
 br i1 %t9107, label %L3169, label %L3171
@@ -21630,7 +21643,7 @@ L3174:
 %t9114 = phi i64 [ %t9113, %L3172 ], [ %t9109, %L3173 ]
 ret i64 %t9114
 }
-define internal i64 @__mruntime_rt_fmt_resid__rad_step(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__rad_step(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9115 = icmp eq i64 %p1, 0
 br i1 %t9115, label %L3175, label %L3177
@@ -21648,7 +21661,7 @@ L3177:
 %t9124 = tail call i64 @__mruntime_rt_fmt_resid__rad_more(i64 %t9117, i64 %t9119, i64 %p2, i64 %p3, i64 %t9123)
 ret i64 %t9124
 }
-define internal i64 @__mruntime_rt_fmt_resid__rad_more(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__rad_more(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9125 = icmp eq i64 %p1, 1
 br label %LSL9126
@@ -21667,7 +21680,7 @@ L3180:
 %t9130 = tail call i64 @__mruntime_rt_fmt_resid__rad_step(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4)
 ret i64 %t9130
 }
-define internal i64 @rt_fmt_radix(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_fmt_radix(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9131 = call i64 @__mruntime_rt_fmt_resid__fm_base(i64 %p1)
 %t9132 = icmp eq i64 %t9131, 10
@@ -21720,14 +21733,14 @@ L3186:
 %t9164 = add nsw i64 %t9163, %t9156
 ret i64 %t9164
 }
-define ptr @resid_fmt_radix(ptr %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_fmt_radix(ptr %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_fmt_radix(i64 %x0i, i64 %a1)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_fmt_resid__fmt_conv_bytes(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__fmt_conv_bytes(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9165 = icmp sge i64 %p1, 0
 br i1 %t9165, label %L3187, label %L3188
@@ -21771,7 +21784,7 @@ L3195:
 %t9188 = add i64 %t9183, 2
 ret i64 %t9188
 }
-define internal i64 @__mruntime_rt_fmt_resid__fmt_sign_prefix(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_fmt_resid__fmt_sign_prefix(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9189 = call i64 @__mruntime_rt_fmt_resid__FM_PLUS()
 %t9190 = call i64 @__mruntime_rt_fmt_resid__FM_SPACE()
@@ -21817,7 +21830,7 @@ L3204:
 %t9211 = call i64 @c_free(i64 %p0)
 ret i64 %t9200
 }
-define internal i64 @rt_fmt_style(double %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_fmt_style(double %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9212 = call i64 @__mruntime_rt_fmt_resid__fm_flags(i64 %p1)
 %t9213 = call i64 @__mruntime_rt_fmt_resid__FM_SCIENTIFIC()
@@ -21908,13 +21921,13 @@ L3222:
 %t9256 = call i64 @__mruntime_rt_fmt_resid__fmt_sign_prefix(i64 %t9255, i64 %t9248, i64 %t9212)
 ret i64 %t9256
 }
-define ptr @resid_fmt_style(double %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_fmt_style(double %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_fmt_style(double %a0, i64 %a1)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i1 @box_imm(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @box_imm(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9257 = ashr i64 %p0, 48
 %t9258 = call i64 asm "", "=r,0"(i64 %t9257)
@@ -21922,7 +21935,7 @@ entry:
 %t9260 = call i1 @ult(i64 %t9259, i64 128)
 ret i1 %t9260
 }
-define internal i1 @box_fimm(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @box_fimm(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9261 = ashr i64 %p0, 48
 %t9262 = call i64 asm "", "=r,0"(i64 %t9261)
@@ -21931,37 +21944,37 @@ entry:
 %t9265 = icmp ne i64 %t9264, 0
 ret i1 %t9265
 }
-define internal i64 @imm_val(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @imm_val(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9266 = sub i64 %p0, 18295873486192640
 ret i64 %t9266
 }
-define internal i64 @sx32(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @sx32(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9267 = shl i64 %p0, 32
 %t9268 = ashr i64 %t9267, 32
 ret i64 %t9268
 }
-define internal i64 @box_tag(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @box_tag(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9269 = call i64 @ld32(i64 %p0)
 %t9270 = tail call i64 @sx32(i64 %t9269)
 ret i64 %t9270
 }
-define internal i64 @box_count(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @box_count(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9271 = add i64 %p0, 4
 %t9272 = call i64 @ld32(i64 %t9271)
 %t9273 = tail call i64 @sx32(i64 %t9272)
 ret i64 %t9273
 }
-define internal i64 @box_type(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @box_type(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9274 = add i64 %p0, 8
 %t9275 = tail call i64 @ld64(i64 %t9274)
 ret i64 %t9275
 }
-define internal i64 @box_slot(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @box_slot(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9276 = add i64 %p0, 16
 %t9277 = mul i64 %p1, 8
@@ -21969,7 +21982,7 @@ entry:
 %t9279 = call i64 @ld64(i64 %t9278)
 ret i64 %t9279
 }
-define internal i64 @unbox_word(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @unbox_word(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9280 = call i1 @box_imm(i64 %p0)
 br i1 %t9280, label %L3223, label %L3224
@@ -21984,7 +21997,7 @@ L3225:
 %t9284 = phi i64 [ %t9281, %L3223 ], [ %t9283, %L3224 ]
 ret i64 %t9284
 }
-define internal double @unbox_float(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal double @unbox_float(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9285 = call i1 @box_fimm(i64 %p0)
 br i1 %t9285, label %L3226, label %L3227
@@ -21999,7 +22012,7 @@ L3228:
 %t9289 = bitcast i64 %t9288 to double
 ret double %t9289
 }
-define internal i64 @__mruntime_rt_show_resid__scalar_kind(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_show_resid__scalar_kind(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9290 = call i1 @box_imm(i64 %p0)
 br i1 %t9290, label %L3229, label %L3231
@@ -22031,13 +22044,13 @@ L3237:
 %t9300 = tail call i64 @ld8(i64 %t9299)
 ret i64 %t9300
 }
-define internal i64 @sb_lit(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @sb_lit(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9301 = call i64 @c_strlen(i64 %p1)
 %t9302 = call i64 @sb_bytes(i64 %p0, i64 %p1, i64 %t9301)
 ret i64 %t9302
 }
-define internal i64 @sb_word(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @sb_word(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9303p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.show_buf)
 %t9303 = ptrtoint ptr %t9303p to i64
@@ -22045,7 +22058,7 @@ entry:
 %t9305 = call i64 @sb_bytes(i64 %p0, i64 %t9303, i64 %t9304)
 ret i64 %t9305
 }
-define internal i64 @sb_float(i64 %p0, double %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @sb_float(i64 %p0, double %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9306p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.show_buf)
 %t9306 = ptrtoint ptr %t9306p to i64
@@ -22053,7 +22066,7 @@ entry:
 %t9308 = call i64 @sb_bytes(i64 %p0, i64 %t9306, i64 %t9307)
 ret i64 %t9308
 }
-define internal i64 @wide_limbs(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @wide_limbs(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9309 = icmp eq i64 %p0, 0
 br i1 %t9309, label %L3238, label %L3240
@@ -22096,7 +22109,7 @@ ret i64 8
 L3246:
 ret i64 0
 }
-define internal i64 @__mruntime_rt_show_resid__limbs_copy(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_show_resid__limbs_copy(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9330p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.limbs)
 %t9330 = ptrtoint ptr %t9330p to i64
@@ -22104,7 +22117,7 @@ entry:
 %t9332 = call i64 @mcopy(i64 %t9330, i64 %p0, i64 %t9331)
 ret i64 %t9330
 }
-define internal i64 @__mruntime_rt_show_resid__sb_scalar(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_show_resid__sb_scalar(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9333 = icmp eq i64 %p2, 102
 br i1 %t9333, label %L3247, label %L3249
@@ -22179,7 +22192,7 @@ L3255:
 %t9368 = call i64 @sb_word(i64 %p0, i64 %t9367)
 ret i64 %t9368
 }
-define internal i64 @__mruntime_rt_show_resid__sb_elem(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_show_resid__sb_elem(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9369 = icmp eq i64 %p1, 0
 br i1 %t9369, label %L3259, label %L3261
@@ -22199,7 +22212,7 @@ L3264:
 %t9378 = call i64 @__mruntime_rt_show_resid__sb_scalar(i64 %p0, i64 %p1, i64 %t9373)
 ret i64 %t9378
 }
-define internal i64 @__mruntime_rt_show_resid__sb_slots(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_show_resid__sb_slots(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -22229,7 +22242,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_show_resid__sb_items(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_show_resid__sb_items(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -22259,7 +22272,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_to_string(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_to_string(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9399 = call i1 @box_imm(i64 %p0)
 br i1 %t9399, label %L3277, label %L3279
@@ -22465,14 +22478,14 @@ L3318:
 %t9509 = tail call i64 @rt_sb_finish(i64 %t9499)
 ret i64 %t9509
 }
-define ptr @ToString(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @ToString(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_to_string(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_list_show(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_list_show(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9510 = icmp eq i64 %p0, 0
 br i1 %t9510, label %L3319, label %L3321
@@ -22501,14 +22514,14 @@ L3324:
 %t9527 = call i64 @rt_sb_finish(i64 %t9514)
 ret i64 %t9527
 }
-define ptr @resid_list_show(ptr %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_list_show(ptr %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_list_show(i64 %x0i, i64 %a1)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_show_resid__sb_strs(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_show_resid__sb_strs(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -22538,7 +22551,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_list_show_clo(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_list_show_clo(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9538 = call i64 @rt_sb_new()
 %t9540 = ptrtoint ptr @.s9539 to i64
@@ -22558,7 +22571,7 @@ L3333:
 %t9549 = call i64 @rt_sb_finish(i64 %t9538)
 ret i64 %t9549
 }
-define ptr @resid_list_show_clo(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_list_show_clo(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -22566,7 +22579,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_show_resid__sb_clo(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_show_resid__sb_clo(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -22600,7 +22613,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @sb_quoted(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @sb_quoted(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9563 = ptrtoint ptr @.s9562 to i64
 %t9564 = call i64 @sb_lit(i64 %p0, i64 %t9563)
@@ -22609,7 +22622,7 @@ entry:
 %t9568 = tail call i64 @sb_lit(i64 %p0, i64 %t9567)
 ret i64 %t9568
 }
-define internal i64 @__mruntime_rt_show_resid__sb_esc(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_show_resid__sb_esc(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -22681,7 +22694,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_str_quote(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_str_quote(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9597 = call i64 @rt_sb_new()
 %t9598 = icmp eq i64 %p0, 0
@@ -22697,26 +22710,26 @@ L3363:
 %t9603 = tail call i64 @rt_sb_finish(i64 %t9597)
 ret i64 %t9603
 }
-define ptr @resid_str_quote(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_str_quote(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_str_quote(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_list_to_string(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_list_to_string(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9604 = call i64 @rt_list_show(i64 %p0, i64 0)
 ret i64 %t9604
 }
-define ptr @resid_list_to_string(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_list_to_string(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_list_to_string(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i1 @__mruntime_rt_lists_resid__elem_eq(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_lists_resid__elem_eq(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9605 = icmp eq i64 %p0, 2
 br i1 %t9605, label %L3364, label %L3366
@@ -22737,7 +22750,7 @@ L3369:
 %t9613 = icmp eq i64 %t9612, %p2
 ret i1 %t9613
 }
-define internal i1 @__mruntime_rt_lists_resid__list_has(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_lists_resid__list_has(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -22762,7 +22775,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_list_contains_int(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_list_contains_int(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9619 = call i64 @c_list_len(i64 %p0)
 %t9620 = call i1 @__mruntime_rt_lists_resid__list_has(i64 %p0, i64 0, i64 %p1, i64 0, i64 %t9619)
@@ -22775,14 +22788,14 @@ L3378:
 %t9621 = phi i64 [ 1, %L3376 ], [ 0, %L3377 ]
 ret i64 %t9621
 }
-define i8 @list_contains_int(ptr %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @list_contains_int(ptr %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_list_contains_int(i64 %x0i, i64 %a1)
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @rt_list_contains_float(i64 %p0, double %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_list_contains_float(i64 %p0, double %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9622 = bitcast double %p1 to i64
 %t9623 = call i64 @c_list_len(i64 %p0)
@@ -22796,14 +22809,14 @@ L3381:
 %t9625 = phi i64 [ 1, %L3379 ], [ 0, %L3380 ]
 ret i64 %t9625
 }
-define i8 @list_contains_float(ptr %a0, double %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @list_contains_float(ptr %a0, double %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_list_contains_float(i64 %x0i, double %a1)
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @rt_list_contains_str(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_list_contains_str(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9626 = call i64 @c_list_len(i64 %p0)
 %t9627 = call i1 @__mruntime_rt_lists_resid__list_has(i64 %p0, i64 2, i64 %p1, i64 0, i64 %t9626)
@@ -22816,7 +22829,7 @@ L3384:
 %t9628 = phi i64 [ 1, %L3382 ], [ 0, %L3383 ]
 ret i64 %t9628
 }
-define i8 @list_contains_str(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @list_contains_str(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -22824,7 +22837,7 @@ entry:
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @rt_list_reverse(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_list_reverse(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9629 = call i64 @c_list_len(i64 %p0)
 %t9630 = call i64 @c_list_to_array(i64 %p0)
@@ -22837,14 +22850,14 @@ entry:
 %t9637 = add nsw i64 %t9636, %t9634
 ret i64 %t9637
 }
-define ptr @list_reverse_ints(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @list_reverse_ints(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_list_reverse(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_lists_resid__rev_at(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_lists_resid__rev_at(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -22874,19 +22887,19 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_list_sum(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_list_sum(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9654 = call i64 @c_list_len(i64 %p0)
 %t9655 = call i64 @__mruntime_rt_lists_resid__sum_words(i64 %p0, i64 0, i64 %t9654, i64 0)
 ret i64 %t9655
 }
-define i64 @list_sum(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @list_sum(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_list_sum(i64 %x0i)
 ret i64 %r
 }
-define internal i64 @__mruntime_rt_lists_resid__sum_words(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_lists_resid__sum_words(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -22907,19 +22920,19 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal double @rt_list_sumf(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal double @rt_list_sumf(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9662 = call i64 @c_list_len(i64 %p0)
 %t9663 = call double @__mruntime_rt_lists_resid__sum_floats(i64 %p0, i64 0, i64 %t9662, double 0.0)
 ret double %t9663
 }
-define double @list_sumf(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define double @list_sumf(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call double @rt_list_sumf(i64 %x0i)
 ret double %r
 }
-define internal double @__mruntime_rt_lists_resid__sum_floats(i64 %p0.in, i64 %p1.in, i64 %p2.in, double %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal double @__mruntime_rt_lists_resid__sum_floats(i64 %p0.in, i64 %p1.in, i64 %p2.in, double %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -22940,7 +22953,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_lists_resid__slot_cmp(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_lists_resid__slot_cmp(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9670 = icmp eq i64 %p0, 3
 br i1 %t9670, label %L3394, label %L3396
@@ -23020,7 +23033,7 @@ L3414:
 %t9699 = phi i64 [ %t9696, %L3412 ], [ %t9698, %L3417 ]
 ret i64 %t9699
 }
-define internal i64 @__mruntime_rt_lists_resid__merge_run(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in, i64 %p7.in, i64 %p8.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_lists_resid__merge_run(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in, i64 %p7.in, i64 %p8.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -23110,7 +23123,7 @@ L3429:
 %t9747 = phi i64 [ %t9746, %L3427 ], [ 0, %L3428 ]
 ret i64 %t9747
 }
-define internal i64 @__mruntime_rt_lists_resid__merge_pass(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_lists_resid__merge_pass(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -23152,7 +23165,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_lists_resid__merge_sort(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_lists_resid__merge_sort(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -23173,7 +23186,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_lists_resid__sorted_copy(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_lists_resid__sorted_copy(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9764 = call i64 @c_list_len(i64 %p0)
 %t9765 = call i64 @c_list_to_array(i64 %p0)
@@ -23187,7 +23200,7 @@ entry:
 %t9773 = add i64 %t9771, %t9772
 ret i64 %t9770
 }
-define internal i64 @__mruntime_rt_lists_resid__box_limbs(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_lists_resid__box_limbs(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9774 = call i64 @box_type(i64 %p0)
 %t9775 = icmp ne i64 %t9774, 0
@@ -23218,7 +23231,7 @@ L3444:
 %t9788 = tail call i64 @wide_limbs(i64 %t9774)
 ret i64 %t9788
 }
-define internal i64 @__mruntime_rt_lists_resid__wide_cmp(i64 %p0.in, i64 %p1.in, i64 %p2.in, i1 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_lists_resid__wide_cmp(i64 %p0.in, i64 %p1.in, i64 %p2.in, i1 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -23266,7 +23279,7 @@ L3456:
 %t9805 = phi i64 [ %t9804, %L3454 ], [ 1, %L3455 ]
 ret i64 %t9805
 }
-define internal i64 @rt_list_sort_wide(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_list_sort_wide(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9806 = icmp ne i64 %p1, 0
 br i1 %t9806, label %L3457, label %L3458
@@ -23279,55 +23292,55 @@ L3459:
 %t9808 = call i64 @__mruntime_rt_lists_resid__sorted_copy(i64 %p0, i64 %t9807, i64 0)
 ret i64 %t9808
 }
-define ptr @list_sort_wide(ptr %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @list_sort_wide(ptr %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_list_sort_wide(i64 %x0i, i64 %a1)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_list_sort_ints(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_list_sort_ints(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9809 = call i64 @__mruntime_rt_lists_resid__sorted_copy(i64 %p0, i64 0, i64 0)
 ret i64 %t9809
 }
-define ptr @list_sort_ints(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @list_sort_ints(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_list_sort_ints(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_list_sort_floats(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_list_sort_floats(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9810 = call i64 @__mruntime_rt_lists_resid__sorted_copy(i64 %p0, i64 1, i64 0)
 ret i64 %t9810
 }
-define ptr @list_sort_floats(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @list_sort_floats(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_list_sort_floats(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_list_sort_strs(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_list_sort_strs(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9811 = call i64 @__mruntime_rt_lists_resid__sorted_copy(i64 %p0, i64 2, i64 0)
 ret i64 %t9811
 }
-define ptr @list_sort_strs(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @list_sort_strs(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_list_sort_strs(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_list_sort_by(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_list_sort_by(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9812 = call i64 @__mruntime_rt_lists_resid__sorted_copy(i64 %p0, i64 3, i64 %p1)
 ret i64 %t9812
 }
-define ptr @list_sort_by(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @list_sort_by(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -23335,7 +23348,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_crypto_random_byte() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_crypto_random_byte() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9813p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.rand_byte)
 %t9813 = ptrtoint ptr %t9813p to i64
@@ -23367,12 +23380,12 @@ L3468:
 %t9830 = call i64 @ld8(i64 %t9813)
 ret i64 %t9830
 }
-define i64 @resid_crypto_random_byte() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_crypto_random_byte() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_crypto_random_byte()
 ret i64 %r
 }
-define internal i64 @rt_cpu_has_clmul() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_cpu_has_clmul() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9831p = getelementptr i8, ptr @rtg.rt_has_clmul, i64 0
 %t9831 = ptrtoint ptr %t9831p to i64
@@ -23380,7 +23393,7 @@ entry:
 %t9833 = icmp eq i64 %t9832, 0
 br i1 %t9833, label %L3469, label %L3471
 L3469:
-%t9834 = add i64 0, 0
+%t9834 = add i64 0, 1
 %t9835 = icmp eq i64 %t9834, 1
 br i1 %t9835, label %L3472, label %L3473
 L3472:
@@ -23390,15 +23403,7 @@ L3472:
 %t9839 = and i64 %t9838, 1
 br label %L3474
 L3473:
-%t9840a = trunc i64 1 to i32
-%t9840b = trunc i64 0 to i32
-%t9840s = call { i32, i32, i32, i32 } asm "cpuid", "={ax},={bx},={cx},={dx},{ax},{cx}"(i32 %t9840a, i32 %t9840b)
-%t9840c = extractvalue { i32, i32, i32, i32 } %t9840s, 2
-%t9840d = extractvalue { i32, i32, i32, i32 } %t9840s, 3
-%t9840h = zext i32 %t9840c to i64
-%t9840l = zext i32 %t9840d to i64
-%t9840k = shl i64 %t9840h, 32
-%t9840 = or i64 %t9840k, %t9840l
+%t9840 = add i64 0, 0
 %t9841 = ashr i64 %t9840, 33
 %t9842 = and i64 %t9841, 1
 br label %L3474
@@ -23412,15 +23417,15 @@ L3471:
 %t9847 = sub i64 %t9846, 1
 ret i64 %t9847
 }
-define i8 @resid_cpu_has_clmul() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_cpu_has_clmul() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_cpu_has_clmul()
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @rt_cpu_has_aesni() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_cpu_has_aesni() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t9848 = add i64 0, 0
+%t9848 = add i64 0, 1
 %t9849 = icmp eq i64 %t9848, 1
 br i1 %t9849, label %L3475, label %L3476
 L3475:
@@ -23430,15 +23435,7 @@ L3475:
 %t9853 = and i64 %t9852, 1
 br label %L3477
 L3476:
-%t9854a = trunc i64 1 to i32
-%t9854b = trunc i64 0 to i32
-%t9854s = call { i32, i32, i32, i32 } asm "cpuid", "={ax},={bx},={cx},={dx},{ax},{cx}"(i32 %t9854a, i32 %t9854b)
-%t9854c = extractvalue { i32, i32, i32, i32 } %t9854s, 2
-%t9854d = extractvalue { i32, i32, i32, i32 } %t9854s, 3
-%t9854h = zext i32 %t9854c to i64
-%t9854l = zext i32 %t9854d to i64
-%t9854k = shl i64 %t9854h, 32
-%t9854 = or i64 %t9854k, %t9854l
+%t9854 = add i64 0, 0
 %t9855 = ashr i64 %t9854, 57
 %t9856 = and i64 %t9855, 1
 br label %L3477
@@ -23446,13 +23443,13 @@ L3477:
 %t9857 = phi i64 [ %t9853, %L3475 ], [ %t9856, %L3476 ]
 ret i64 %t9857
 }
-define i8 @resid_cpu_has_aesni() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_cpu_has_aesni() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_cpu_has_aesni()
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @rt_index_abort(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_index_abort(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9858 = call i64 @rt_sb_new()
 %t9860 = ptrtoint ptr @.s9859 to i64
@@ -23489,13 +23486,13 @@ L3480:
 %t9883 = call i64 @rt_abort_at(i64 %t9882)
 ret i64 %t9883
 }
-define void @resid_index_abort(i64 %a0, i64 %a1, ptr %a2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define void @resid_index_abort(i64 %a0, i64 %a1, ptr %a2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x2i = ptrtoint ptr %a2 to i64
 %r = call i64 @rt_index_abort(i64 %a0, i64 %a1, i64 %x2i)
 ret void
 }
-define internal i1 @__mruntime_rt_net_resid__host_ok(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_net_resid__host_ok(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9884 = call i64 @ld8(i64 %p0)
 %t9885 = icmp eq i64 %t9884, 0
@@ -23579,7 +23576,7 @@ LSJ9911:
 %t9914 = phi i1 [ false, %LSL9911 ], [ %t9913, %LSR9911 ]
 ret i1 %t9914
 }
-define internal i64 @rt_tcp_connect(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_tcp_connect(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9915 = icmp eq i64 %p0, 0
 br label %LSL9916
@@ -23642,7 +23639,7 @@ call void @llvm.memset.p0.i64(ptr %t9934p, i8 %t9934q, i64 16, i1 false)
 %t9942 = add i64 %t9938, %t9941
 %t9943 = add i64 %t9933, 4
 %t9944 = call i64 @st32(i64 %t9943, i64 %t9930)
-%t9945 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 41, i64 2, i64 1, i64 0, i64 0, i64 0, i64 0)
+%t9945 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 198, i64 2, i64 1, i64 0, i64 0, i64 0, i64 0)
 %t9946 = icmp slt i64 %t9945, 0
 br i1 %t9946, label %L3493, label %L3495
 L3493:
@@ -23662,23 +23659,23 @@ L3498:
 %t9954 = call i64 @__mruntime_rt_net_resid__dl_set(i64 %t9945, i64 0)
 ret i64 %t9945
 }
-define i64 @resid_tcp_connect(ptr %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_tcp_connect(ptr %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_tcp_connect(i64 %x0i, i64 %a1)
 ret i64 %r
 }
-define internal i1 @__mruntime_rt_net_resid__connect_within(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_net_resid__connect_within(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t9955 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 72, i64 %p0, i64 3, i64 0, i64 0, i64 0, i64 0)
+%t9955 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 25, i64 %p0, i64 3, i64 0, i64 0, i64 0, i64 0)
 %t9956 = icmp slt i64 %t9955, 0
 br i1 %t9956, label %L3499, label %L3501
 L3499:
 ret i1 false
 L3501:
 %t9957 = or i64 %t9955, 2048
-%t9958 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 72, i64 %p0, i64 4, i64 %t9957, i64 0, i64 0, i64 0)
-%t9959 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 42, i64 %p0, i64 %p1, i64 16, i64 0, i64 0, i64 0)
+%t9958 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 25, i64 %p0, i64 4, i64 %t9957, i64 0, i64 0, i64 0)
+%t9959 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 203, i64 %p0, i64 %p1, i64 16, i64 0, i64 0, i64 0)
 %t9960 = icmp eq i64 %t9959, 0
 %t9961 = sub nsw i64 0, 115
 %t9962 = icmp eq i64 %t9959, %t9961
@@ -23710,7 +23707,7 @@ br label %LSL9975
 LSL9975:
 br i1 %t9969, label %LSR9975, label %LSJ9975
 LSR9975:
-%t9976 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 55, i64 %p0, i64 1, i64 4, i64 %t9970, i64 %t9971, i64 0)
+%t9976 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 209, i64 %p0, i64 1, i64 4, i64 %t9970, i64 %t9971, i64 0)
 %t9977 = icmp eq i64 %t9976, 0
 br label %LSJ9975
 LSJ9975:
@@ -23724,7 +23721,7 @@ LSR9979:
 br label %LSJ9979
 LSJ9979:
 %t9982 = phi i1 [ false, %LSL9979 ], [ %t9981, %LSR9979 ]
-%t9983 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 72, i64 %p0, i64 4, i64 %t9955, i64 0, i64 0, i64 0)
+%t9983 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 25, i64 %p0, i64 4, i64 %t9955, i64 0, i64 0, i64 0)
 br label %LSL9984
 LSL9984:
 br i1 %t9960, label %LSJ9984, label %LSR9984
@@ -23734,17 +23731,17 @@ LSJ9984:
 %t9985 = phi i1 [ true, %LSL9984 ], [ %t9982, %LSR9984 ]
 ret i1 %t9985
 }
-define internal i64 @__mruntime_rt_net_resid__set_timeout(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_net_resid__set_timeout(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9986p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.ai_tv)
 %t9986 = ptrtoint ptr %t9986p to i64
 %t9987 = call i64 @st64(i64 %t9986, i64 %p1)
 %t9988 = add i64 %t9986, 8
 %t9989 = call i64 @st64(i64 %t9988, i64 0)
-%t9990 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 54, i64 %p0, i64 1, i64 20, i64 %t9986, i64 16, i64 0)
+%t9990 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 208, i64 %p0, i64 1, i64 20, i64 %t9986, i64 16, i64 0)
 ret i64 %t9990
 }
-define internal i64 @__mruntime_rt_net_resid__set_timeouts_ns(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_net_resid__set_timeouts_ns(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t9991p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.ai_tv)
 %t9991 = ptrtoint ptr %t9991p to i64
@@ -23762,22 +23759,22 @@ br label %L3504
 L3504:
 %t9998 = phi i64 [ 1, %L3502 ], [ %t9993, %L3503 ]
 %t9999 = call i64 @st64(i64 %t9996, i64 %t9998)
-%t10000 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 54, i64 %p0, i64 1, i64 20, i64 %t9991, i64 16, i64 0)
-%t10001 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 54, i64 %p0, i64 1, i64 21, i64 %t9991, i64 16, i64 0)
+%t10000 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 208, i64 %p0, i64 1, i64 20, i64 %t9991, i64 16, i64 0)
+%t10001 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 208, i64 %p0, i64 1, i64 21, i64 %t9991, i64 16, i64 0)
 ret i64 %t10001
 }
-define internal i64 @__mruntime_rt_net_resid__base_timeouts(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_net_resid__base_timeouts(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10002 = call i64 @__mruntime_rt_net_resid__set_timeouts_ns(i64 %p0, i64 30000000000)
 ret i64 %t10002
 }
-define internal i64 @__mruntime_rt_net_resid__dl_table() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_net_resid__dl_table() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10003p = getelementptr i8, ptr @rtg.rt_tcp_deadline, i64 0
 %t10003 = ptrtoint ptr %t10003p to i64
 ret i64 %t10003
 }
-define internal i1 @__mruntime_rt_net_resid__dl_has_slot(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_net_resid__dl_has_slot(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10004 = icmp sge i64 %p0, 0
 br label %LSL10005
@@ -23790,7 +23787,7 @@ LSJ10005:
 %t10007 = phi i1 [ false, %LSL10005 ], [ %t10006, %LSR10005 ]
 ret i1 %t10007
 }
-define internal i64 @__mruntime_rt_net_resid__dl_get(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_net_resid__dl_get(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10008 = call i1 @__mruntime_rt_net_resid__dl_has_slot(i64 %p0)
 br i1 %t10008, label %L3505, label %L3506
@@ -23806,7 +23803,7 @@ L3507:
 %t10013 = phi i64 [ %t10012, %L3505 ], [ 0, %L3506 ]
 ret i64 %t10013
 }
-define internal i64 @__mruntime_rt_net_resid__dl_set(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_net_resid__dl_set(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10014 = call i1 @__mruntime_rt_net_resid__dl_has_slot(i64 %p0)
 br i1 %t10014, label %L3508, label %L3509
@@ -23822,7 +23819,7 @@ L3510:
 %t10019 = phi i64 [ %t10018, %L3508 ], [ 0, %L3509 ]
 ret i64 %t10019
 }
-define internal i1 @__mruntime_rt_net_resid__dl_arm(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_net_resid__dl_arm(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10020 = call i64 @__mruntime_rt_net_resid__dl_get(i64 %p0)
 %t10021 = icmp eq i64 %t10020, 0
@@ -23848,7 +23845,7 @@ L3519:
 %t10027 = call i64 @__mruntime_rt_net_resid__set_timeouts_ns(i64 %p0, i64 %t10026)
 ret i1 true
 }
-define internal i1 @__mruntime_rt_net_resid__listener_ok(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_net_resid__listener_ok(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10028 = icmp slt i64 %p0, 0
 br i1 %t10028, label %L3520, label %L3522
@@ -23857,7 +23854,7 @@ ret i1 false
 L3522:
 %t10029p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.sock_stat)
 %t10029 = ptrtoint ptr %t10029p to i64
-%t10030 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 5, i64 %p0, i64 %t10029, i64 0, i64 0, i64 0, i64 0)
+%t10030 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 80, i64 %p0, i64 %t10029, i64 0, i64 0, i64 0, i64 0)
 %t10031 = icmp eq i64 %t10030, 0
 br label %LSL10032
 LSL10032:
@@ -23873,22 +23870,22 @@ LSJ10032:
 %t10038 = phi i1 [ false, %LSL10032 ], [ %t10037, %LSR10032 ]
 ret i1 %t10038
 }
-define internal i64 @__mruntime_rt_net_resid__loopback_v4() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_net_resid__loopback_v4() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 16777343
 }
-define internal i64 @rt_tcp_listen(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_tcp_listen(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10039 = call i64 @__mruntime_rt_net_resid__loopback_v4()
 %t10040 = call i64 @__mruntime_rt_net_resid__listen_ip(i64 %t10039, i64 %p0)
 ret i64 %t10040
 }
-define i64 @resid_tcp_listen(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_tcp_listen(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_tcp_listen(i64 %a0)
 ret i64 %r
 }
-define internal i64 @rt_tcp_listen_at(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_tcp_listen_at(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10041 = icmp eq i64 %p0, 0
 br label %LSL10042
@@ -23934,13 +23931,13 @@ L3531:
 %t10059 = tail call i64 @__mruntime_rt_net_resid__listen_ip(i64 %t10056, i64 %p1)
 ret i64 %t10059
 }
-define i64 @resid_tcp_listen_at(ptr %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_tcp_listen_at(ptr %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_tcp_listen_at(i64 %x0i, i64 %a1)
 ret i64 %r
 }
-define internal i64 @__mruntime_rt_net_resid__listen_ip(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_net_resid__listen_ip(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10060 = icmp slt i64 %p1, 0
 br label %LSL10061
@@ -23972,7 +23969,7 @@ call void @llvm.memset.p0.i64(ptr %t10066p, i8 %t10066q, i64 16, i1 false)
 %t10074 = add i64 %t10070, %t10073
 %t10075 = add i64 %t10065, 4
 %t10076 = call i64 @st32(i64 %t10075, i64 %p0)
-%t10077 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 41, i64 2, i64 1, i64 0, i64 0, i64 0, i64 0)
+%t10077 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 198, i64 2, i64 1, i64 0, i64 0, i64 0, i64 0)
 %t10078 = icmp slt i64 %t10077, 0
 br i1 %t10078, label %L3535, label %L3537
 L3535:
@@ -23982,7 +23979,7 @@ L3537:
 %t10080p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.ai_one)
 %t10080 = ptrtoint ptr %t10080p to i64
 %t10081 = call i64 @st32(i64 %t10080, i64 1)
-%t10082 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 54, i64 %t10077, i64 1, i64 2, i64 %t10080, i64 4, i64 0)
+%t10082 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 208, i64 %t10077, i64 1, i64 2, i64 %t10080, i64 4, i64 0)
 %t10083 = icmp ne i64 %t10082, 0
 br i1 %t10083, label %L3538, label %L3540
 L3538:
@@ -23991,7 +23988,7 @@ L3538:
 %t10086 = sub nsw i64 %t10085, 1
 ret i64 %t10086
 L3540:
-%t10087 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 49, i64 %t10077, i64 %t10065, i64 16, i64 0, i64 0, i64 0)
+%t10087 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 200, i64 %t10077, i64 %t10065, i64 16, i64 0, i64 0, i64 0)
 %t10088 = icmp ne i64 %t10087, 0
 br i1 %t10088, label %L3541, label %L3543
 L3541:
@@ -24000,7 +23997,7 @@ L3541:
 %t10091 = sub nsw i64 %t10090, 1
 ret i64 %t10091
 L3543:
-%t10092 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 50, i64 %t10077, i64 128, i64 0, i64 0, i64 0, i64 0)
+%t10092 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 201, i64 %t10077, i64 128, i64 0, i64 0, i64 0, i64 0)
 %t10093 = icmp ne i64 %t10092, 0
 br i1 %t10093, label %L3544, label %L3546
 L3544:
@@ -24011,7 +24008,7 @@ ret i64 %t10096
 L3546:
 ret i64 %t10077
 }
-define internal i64 @rt_tcp_bound_port(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_tcp_bound_port(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10097 = call i1 @__mruntime_rt_net_resid__listener_ok(i64 %p0)
 %t10098 = xor i1 %t10097, true
@@ -24029,7 +24026,7 @@ call void @llvm.memset.p0.i64(ptr %t10101p, i8 %t10101q, i64 16, i1 false)
 %t10102p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.ai_len)
 %t10102 = ptrtoint ptr %t10102p to i64
 %t10103 = call i64 @st32(i64 %t10102, i64 16)
-%t10104 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 51, i64 %p0, i64 %t10100, i64 %t10102, i64 0, i64 0, i64 0)
+%t10104 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 204, i64 %p0, i64 %t10100, i64 %t10102, i64 0, i64 0, i64 0)
 %t10105 = icmp ne i64 %t10104, 0
 br i1 %t10105, label %L3550, label %L3552
 L3550:
@@ -24044,12 +24041,12 @@ L3552:
 %t10112 = add i64 %t10109, %t10111
 ret i64 %t10112
 }
-define i64 @resid_tcp_bound_port(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_tcp_bound_port(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_tcp_bound_port(i64 %a0)
 ret i64 %r
 }
-define internal i64 @rt_tcp_accept(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_tcp_accept(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10113 = call i1 @__mruntime_rt_net_resid__listener_ok(i64 %p0)
 %t10114 = xor i1 %t10113, true
@@ -24063,7 +24060,7 @@ L3555:
 %t10117p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.ai_alen)
 %t10117 = ptrtoint ptr %t10117p to i64
 %t10118 = call i64 @st32(i64 %t10117, i64 16)
-%t10119 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 43, i64 %p0, i64 %t10116, i64 %t10117, i64 0, i64 0, i64 0)
+%t10119 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 202, i64 %p0, i64 %t10116, i64 %t10117, i64 0, i64 0, i64 0)
 %t10120 = sub nsw i64 0, 11
 %t10121 = icmp eq i64 %t10119, %t10120
 br i1 %t10121, label %L3556, label %L3558
@@ -24085,12 +24082,12 @@ L3561:
 %t10130 = call i64 @__mruntime_rt_net_resid__dl_set(i64 %t10119, i64 0)
 ret i64 %t10119
 }
-define i64 @resid_tcp_accept(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_tcp_accept(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_tcp_accept(i64 %a0)
 ret i64 %r
 }
-define internal i64 @rt_tcp_accept_now(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_tcp_accept_now(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10131 = call i1 @__mruntime_rt_net_resid__listener_ok(i64 %p0)
 %t10132 = xor i1 %t10131, true
@@ -24099,7 +24096,7 @@ L3562:
 %t10133 = sub nsw i64 0, 1
 ret i64 %t10133
 L3564:
-%t10134 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 72, i64 %p0, i64 3, i64 0, i64 0, i64 0, i64 0)
+%t10134 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 25, i64 %p0, i64 3, i64 0, i64 0, i64 0, i64 0)
 %t10135 = icmp sge i64 %t10134, 0
 br label %LSL10136
 LSL10136:
@@ -24113,7 +24110,7 @@ LSJ10136:
 br i1 %t10139, label %L3565, label %L3566
 L3565:
 %t10140 = or i64 %t10134, 2048
-%t10141 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 72, i64 %p0, i64 4, i64 %t10140, i64 0, i64 0, i64 0)
+%t10141 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 25, i64 %p0, i64 4, i64 %t10140, i64 0, i64 0, i64 0)
 br label %L3567
 L3566:
 br label %L3567
@@ -24124,7 +24121,7 @@ L3567:
 %t10144p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.ai_alen)
 %t10144 = ptrtoint ptr %t10144p to i64
 %t10145 = call i64 @st32(i64 %t10144, i64 16)
-%t10146 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 43, i64 %p0, i64 %t10143, i64 %t10144, i64 0, i64 0, i64 0)
+%t10146 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 202, i64 %p0, i64 %t10143, i64 %t10144, i64 0, i64 0, i64 0)
 %t10147 = sub nsw i64 0, 11
 %t10148 = icmp eq i64 %t10146, %t10147
 br label %LSL10149
@@ -24160,12 +24157,12 @@ L3573:
 %t10161 = call i64 @__mruntime_rt_net_resid__dl_set(i64 %t10146, i64 0)
 ret i64 %t10146
 }
-define i64 @resid_tcp_accept_now(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_tcp_accept_now(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_tcp_accept_now(i64 %a0)
 ret i64 %r
 }
-define internal i64 @__mruntime_rt_net_resid__sys_poll(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_net_resid__sys_poll(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10162p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.poll_ts)
 %t10162 = ptrtoint ptr %t10162p to i64
@@ -24184,10 +24181,10 @@ L3575:
 br label %L3576
 L3576:
 %t10171 = phi i64 [ 0, %L3574 ], [ %t10162, %L3575 ]
-%t10172 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 271, i64 %p0, i64 %p1, i64 %t10171, i64 0, i64 8, i64 0)
+%t10172 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 73, i64 %p0, i64 %p1, i64 %t10171, i64 0, i64 8, i64 0)
 ret i64 %t10172
 }
-define internal i64 @__mruntime_rt_net_resid__poll_one(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_net_resid__poll_one(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10173p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.poll_one)
 %t10173 = ptrtoint ptr %t10173p to i64
@@ -24209,7 +24206,7 @@ L3579:
 %t10183 = phi i64 [ %t10182, %L3577 ], [ 0, %L3578 ]
 ret i64 %t10183
 }
-define internal i64 @rt_tcp_poll(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_tcp_poll(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10184 = call i64 @c_list_len(i64 %p0)
 %t10185 = icmp sgt i64 %t10184, 65536
@@ -24297,7 +24294,7 @@ L3600:
 %t10221 = add i64 %t10219, %t10220
 ret i64 %t10218
 }
-define ptr @resid_tcp_poll(ptr %a0, ptr %a1, i64 %a2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_tcp_poll(ptr %a0, ptr %a1, i64 %a2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -24305,7 +24302,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_net_resid__poll_fill(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_net_resid__poll_fill(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -24363,7 +24360,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_net_resid__poll_nearest(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_net_resid__poll_nearest(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -24408,7 +24405,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_net_resid__poll_read(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_net_resid__poll_read(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -24487,7 +24484,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_tcp_send_some(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_tcp_send_some(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10293 = call i64 @c_list_len(i64 %p1)
 %t10294 = call i1 @__mruntime_rt_net_resid__sock_ok(i64 %p0)
@@ -24512,7 +24509,7 @@ ret i64 0
 L3642:
 %t10300 = call i64 @xmalloc(i64 %t10298)
 %t10301 = call i64 @__mruntime_rt_net_resid__bytes_of(i64 %p1, i64 %t10300, i64 0, i64 %t10298)
-%t10302 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 44, i64 %p0, i64 %t10300, i64 %t10298, i64 16448, i64 0, i64 0)
+%t10302 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 206, i64 %p0, i64 %t10300, i64 %t10298, i64 16448, i64 0, i64 0)
 %t10303 = call i64 @c_free(i64 %t10300)
 %t10304 = icmp sge i64 %t10302, 0
 br i1 %t10304, label %L3643, label %L3644
@@ -24543,13 +24540,13 @@ L3645:
 %t10313 = phi i64 [ %t10302, %L3643 ], [ %t10312, %L3648 ]
 ret i64 %t10313
 }
-define i64 @resid_tcp_send_some(i64 %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_tcp_send_some(i64 %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x1i = ptrtoint ptr %a1 to i64
 %r = call i64 @rt_tcp_send_some(i64 %a0, i64 %x1i)
 ret i64 %r
 }
-define internal i64 @__mruntime_rt_net_resid__resolve4(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_net_resid__resolve4(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10314 = call i64 @parse_ip4(i64 %p0)
 %t10315 = icmp sge i64 %t10314, 0
@@ -24573,12 +24570,12 @@ L3657:
 %t10322 = tail call i64 @__mruntime_rt_net_resid__dns_lookup(i64 %p0)
 ret i64 %t10322
 }
-define internal i64 @parse_ip4(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @parse_ip4(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10323 = call i64 @__mruntime_rt_net_resid__ip4_part(i64 %p0, i64 0, i64 0, i64 0)
 ret i64 %t10323
 }
-define internal i64 @__mruntime_rt_net_resid__ip4_part(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_net_resid__ip4_part(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -24650,7 +24647,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_net_resid__digits_end(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_net_resid__digits_end(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10353 = call i64 @ld8(i64 %p0)
 %t10354 = icmp sge i64 %t10353, 48
@@ -24674,7 +24671,7 @@ L3675:
 %t10361 = phi i64 [ %t10360, %L3673 ], [ %p0, %L3674 ]
 ret i64 %t10361
 }
-define internal i64 @__mruntime_rt_net_resid__dec_value(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_net_resid__dec_value(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10362 = icmp sge i64 %p0, %p1
 br i1 %t10362, label %L3676, label %L3677
@@ -24692,7 +24689,7 @@ L3678:
 %t10369 = phi i64 [ %p2, %L3676 ], [ %t10368, %L3677 ]
 ret i64 %t10369
 }
-define internal i1 @__mruntime_rt_net_resid__lower_eq(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_net_resid__lower_eq(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -24718,7 +24715,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_net_resid__hosts_lookup(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_net_resid__hosts_lookup(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10380 = ptrtoint ptr @.s10379 to i64
 %t10381 = call i64 @read_file_all(i64 %t10380)
@@ -24734,7 +24731,7 @@ L3687:
 %t10387 = add nsw i64 %t10386, %t10384
 ret i64 %t10387
 }
-define internal i64 @__mruntime_rt_net_resid__hosts_lines(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_net_resid__hosts_lines(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -24787,7 +24784,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_net_resid__line_end(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_net_resid__line_end(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10407 = call i64 @ld8(i64 %p0)
 %t10408 = icmp eq i64 %t10407, 0
@@ -24811,7 +24808,7 @@ L3702:
 %t10415 = phi i64 [ %p0, %L3700 ], [ %t10414, %L3701 ]
 ret i64 %t10415
 }
-define internal i64 @__mruntime_rt_net_resid__skip_word(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_net_resid__skip_word(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10416 = icmp slt i64 %p0, %p1
 br label %LSL10417
@@ -24835,7 +24832,7 @@ L3705:
 %t10424 = phi i64 [ %t10423, %L3703 ], [ %p0, %L3704 ]
 ret i64 %t10424
 }
-define internal i64 @__mruntime_rt_net_resid__skip_blank(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_net_resid__skip_blank(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10425 = icmp slt i64 %p0, %p1
 br label %LSL10426
@@ -24858,7 +24855,7 @@ L3708:
 %t10432 = phi i64 [ %t10431, %L3706 ], [ %p0, %L3707 ]
 ret i64 %t10432
 }
-define internal i1 @__mruntime_rt_net_resid__line_has_name(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_net_resid__line_has_name(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -24901,7 +24898,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i1 @__mruntime_rt_net_resid__prefix_ci(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_net_resid__prefix_ci(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10448 = icmp eq i64 %p2, 0
 br i1 %t10448, label %L3715, label %L3717
@@ -24926,7 +24923,7 @@ LSJ10454:
 %t10459 = phi i1 [ false, %LSL10454 ], [ %t10458, %LSR10454 ]
 ret i1 %t10459
 }
-define internal i64 @__mruntime_rt_net_resid__dns_lookup(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_net_resid__dns_lookup(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10461 = ptrtoint ptr @.s10460 to i64
 %t10462 = call i64 @read_file_all(i64 %t10461)
@@ -24942,7 +24939,7 @@ L3720:
 %t10468 = add nsw i64 %t10467, %t10465
 ret i64 %t10468
 }
-define internal i64 @__mruntime_rt_net_resid__ns_lines(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_net_resid__ns_lines(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -25008,7 +25005,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_net_resid__dns_ask(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_net_resid__dns_ask(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10496 = call i64 @xmalloc(i64 600)
 %t10497 = call i64 @__mruntime_rt_net_resid__dns_query(i64 %t10496, i64 %p1)
@@ -25020,7 +25017,7 @@ L3736:
 %t10501 = sub nsw i64 %t10500, 1
 ret i64 %t10501
 L3738:
-%t10502 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 41, i64 2, i64 2, i64 0, i64 0, i64 0, i64 0)
+%t10502 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 198, i64 2, i64 2, i64 0, i64 0, i64 0, i64 0)
 %t10503 = icmp slt i64 %t10502, 0
 br i1 %t10503, label %L3739, label %L3741
 L3739:
@@ -25046,11 +25043,11 @@ call void @llvm.memset.p0.i64(ptr %t10509p, i8 %t10509q, i64 16, i1 false)
 %t10517 = add i64 %t10508, 4
 %t10518 = call i64 @st32(i64 %t10517, i64 %p0)
 %t10519 = add i64 %t10516, %t10518
-%t10520 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 42, i64 %t10502, i64 %t10508, i64 16, i64 0, i64 0, i64 0)
+%t10520 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 203, i64 %t10502, i64 %t10508, i64 16, i64 0, i64 0, i64 0)
 %t10521 = icmp eq i64 %t10520, 0
 br i1 %t10521, label %L3742, label %L3743
 L3742:
-%t10522 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 44, i64 %t10502, i64 %t10496, i64 %t10497, i64 16384, i64 0, i64 0)
+%t10522 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 206, i64 %t10502, i64 %t10496, i64 %t10497, i64 16384, i64 0, i64 0)
 br label %L3744
 L3743:
 %t10523 = sub nsw i64 0, 1
@@ -25061,7 +25058,7 @@ L3744:
 %t10526 = icmp eq i64 %t10524, %t10497
 br i1 %t10526, label %L3745, label %L3746
 L3745:
-%t10527 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 45, i64 %t10502, i64 %t10525, i64 1500, i64 0, i64 0, i64 0)
+%t10527 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 207, i64 %t10502, i64 %t10525, i64 1500, i64 0, i64 0, i64 0)
 br label %L3747
 L3746:
 %t10528 = sub nsw i64 0, 1
@@ -25109,7 +25106,7 @@ L3750:
 %t10552 = add nsw i64 %t10551, %t10546
 ret i64 %t10552
 }
-define internal i64 @__mruntime_rt_net_resid__dns_query(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_net_resid__dns_query(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10553 = call i64 @rt_crypto_random_byte()
 %t10554 = mul i64 %t10553, 256
@@ -25162,7 +25159,7 @@ L3753:
 %t10594 = add i64 %t10577, 4
 ret i64 %t10594
 }
-define internal i64 @__mruntime_rt_net_resid__dns_name(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_net_resid__dns_name(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -25248,7 +25245,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_net_resid__label_end(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_net_resid__label_end(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10637 = call i64 @ld8(i64 %p0)
 %t10638 = icmp eq i64 %t10637, 0
@@ -25272,7 +25269,7 @@ L3768:
 %t10645 = phi i64 [ %p0, %L3766 ], [ %t10644, %L3767 ]
 ret i64 %t10645
 }
-define internal i64 @__mruntime_rt_net_resid__be16(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_net_resid__be16(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10646 = call i64 @ld8(i64 %p0)
 %t10647 = shl i64 %t10646, 8
@@ -25281,7 +25278,7 @@ entry:
 %t10650 = or i64 %t10647, %t10649
 ret i64 %t10650
 }
-define internal i64 @__mruntime_rt_net_resid__dns_answer(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_net_resid__dns_answer(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10651 = add i64 %p0, 3
 %t10652 = call i64 @ld8(i64 %t10651)
@@ -25300,7 +25297,7 @@ L3771:
 %t10661 = call i64 @__mruntime_rt_net_resid__answers(i64 %p0, i64 %p1, i64 %t10660, i64 %t10659)
 ret i64 %t10661
 }
-define internal i64 @__mruntime_rt_net_resid__skip_questions(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_net_resid__skip_questions(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -25336,7 +25333,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_net_resid__skip_name(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_net_resid__skip_name(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -25370,7 +25367,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_net_resid__answers(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_net_resid__answers(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -25445,7 +25442,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i1 @__mruntime_rt_net_resid__send_all(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_net_resid__send_all(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -25463,7 +25460,7 @@ br i1 %t10718, label %L3799, label %L3801
 L3799:
 ret i1 false
 L3801:
-%t10719 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 44, i64 %p0, i64 %p1, i64 %p2, i64 16384, i64 0, i64 0)
+%t10719 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 206, i64 %p0, i64 %p1, i64 %p2, i64 16384, i64 0, i64 0)
 %t10720 = icmp sle i64 %t10719, 0
 br i1 %t10720, label %L3802, label %L3804
 L3802:
@@ -25475,7 +25472,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i1 @__mruntime_rt_net_resid__sock_ok(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_net_resid__sock_ok(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10724 = icmp slt i64 %p0, 0
 br i1 %t10724, label %L3805, label %L3807
@@ -25484,7 +25481,7 @@ ret i1 false
 L3807:
 %t10725p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.sock_stat)
 %t10725 = ptrtoint ptr %t10725p to i64
-%t10726 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 5, i64 %p0, i64 %t10725, i64 0, i64 0, i64 0, i64 0)
+%t10726 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 80, i64 %p0, i64 %t10725, i64 0, i64 0, i64 0, i64 0)
 %t10727 = icmp eq i64 %t10726, 0
 br label %LSL10728
 LSL10728:
@@ -25500,7 +25497,7 @@ LSJ10728:
 %t10734 = phi i1 [ false, %LSL10728 ], [ %t10733, %LSR10728 ]
 ret i1 %t10734
 }
-define internal i64 @rt_tcp_send(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_tcp_send(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10735 = call i1 @__mruntime_rt_net_resid__sock_ok(i64 %p0)
 br label %LSL10736
@@ -25521,14 +25518,14 @@ L3810:
 %t10740 = phi i64 [ 1, %L3808 ], [ 0, %L3809 ]
 ret i64 %t10740
 }
-define i8 @resid_tcp_send(i64 %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_tcp_send(i64 %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x1i = ptrtoint ptr %a1 to i64
 %r = call i64 @rt_tcp_send(i64 %a0, i64 %x1i)
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @rt_tcp_recv_all(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_tcp_recv_all(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10741 = call i1 @__mruntime_rt_net_resid__sock_ok(i64 %p0)
 %t10742 = xor i1 %t10741, true
@@ -25541,13 +25538,13 @@ L3813:
 %t10745 = call i64 @__mruntime_rt_net_resid__recv_loop(i64 %p0, i64 %t10744, i64 65536, i64 0)
 ret i64 %t10745
 }
-define ptr @resid_tcp_recv_all(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_tcp_recv_all(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_tcp_recv_all(i64 %a0)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_net_resid__recv_loop(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_net_resid__recv_loop(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -25581,7 +25578,7 @@ L3820:
 %t10758 = add i64 %p1, %p3
 %t10759 = sub i64 %p2, %p3
 %t10760 = sub i64 %t10759, 1
-%t10761 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 45, i64 %p0, i64 %t10758, i64 %t10760, i64 0, i64 0, i64 0)
+%t10761 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 207, i64 %p0, i64 %t10758, i64 %t10760, i64 0, i64 0, i64 0)
 br label %L3822
 L3821:
 br label %L3822
@@ -25601,7 +25598,7 @@ br label %tco.s1
 tco.s1:
 br label %tco.head
 }
-define internal i64 @rt_tcp_close(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_tcp_close(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10770 = call i1 @__mruntime_rt_net_resid__sock_ok(i64 %p0)
 %t10771 = xor i1 %t10770, true
@@ -25621,13 +25618,13 @@ L3831:
 %t10775 = phi i64 [ 1, %L3829 ], [ 0, %L3830 ]
 ret i64 %t10775
 }
-define i8 @resid_tcp_close(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_tcp_close(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_tcp_close(i64 %a0)
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @rt_tcp_deadline(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_tcp_deadline(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10776 = call i1 @__mruntime_rt_net_resid__sock_ok(i64 %p0)
 %t10777 = xor i1 %t10776, true
@@ -25665,13 +25662,13 @@ L3840:
 %t10790 = call i64 @__mruntime_rt_net_resid__dl_set(i64 %p0, i64 %t10789)
 ret i64 1
 }
-define i8 @resid_tcp_deadline(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_tcp_deadline(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_tcp_deadline(i64 %a0, i64 %a1)
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @rt_tcp_shutdown(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_tcp_shutdown(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10791 = call i1 @__mruntime_rt_net_resid__sock_ok(i64 %p0)
 %t10792 = xor i1 %t10791, true
@@ -25683,7 +25680,7 @@ L3843:
 %t10794 = add i64 %t10793, 2000000000
 %t10795 = call i64 @__mruntime_rt_net_resid__dl_set(i64 %p0, i64 %t10794)
 %t10796 = call i64 @__mruntime_rt_net_resid__set_timeout(i64 %p0, i64 2)
-%t10797 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 48, i64 %p0, i64 1, i64 0, i64 0, i64 0, i64 0)
+%t10797 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 210, i64 %p0, i64 1, i64 0, i64 0, i64 0, i64 0)
 %t10798 = icmp eq i64 %t10797, 0
 br i1 %t10798, label %L3844, label %L3845
 L3844:
@@ -25694,13 +25691,13 @@ L3846:
 %t10799 = phi i64 [ 1, %L3844 ], [ 0, %L3845 ]
 ret i64 %t10799
 }
-define i8 @resid_tcp_shutdown(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_tcp_shutdown(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_tcp_shutdown(i64 %a0)
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @rt_tcp_send_bin(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_tcp_send_bin(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10800 = call i64 @c_list_len(i64 %p1)
 %t10801 = call i1 @__mruntime_rt_net_resid__sock_ok(i64 %p0)
@@ -25732,14 +25729,14 @@ L3858:
 %t10809 = phi i64 [ 1, %L3856 ], [ 0, %L3857 ]
 ret i64 %t10809
 }
-define i8 @resid_tcp_send_bin(i64 %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_tcp_send_bin(i64 %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x1i = ptrtoint ptr %a1 to i64
 %r = call i64 @rt_tcp_send_bin(i64 %a0, i64 %x1i)
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @__mruntime_rt_net_resid__bytes_of(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_net_resid__bytes_of(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -25762,7 +25759,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_tcp_recv_bin(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_tcp_recv_bin(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10818 = call i1 @__mruntime_rt_net_resid__sock_ok(i64 %p0)
 br i1 %t10818, label %L3862, label %L3863
@@ -25804,13 +25801,13 @@ call void @llvm.memset.p0.i64(ptr %t10825p, i8 %t10825q, i64 %t10823, i1 false)
 %t10835 = add i64 %t10833, %t10834
 ret i64 %t10832
 }
-define ptr @resid_tcp_recv_bin(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_tcp_recv_bin(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_tcp_recv_bin(i64 %a0, i64 %a1)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_net_resid__recv_exact(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_net_resid__recv_exact(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -25834,7 +25831,7 @@ ret i64 %p2
 L3873:
 %t10841 = add i64 %p1, %p2
 %t10842 = sub i64 %p3, %p2
-%t10843 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 45, i64 %p0, i64 %t10841, i64 %t10842, i64 0, i64 0, i64 0)
+%t10843 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 207, i64 %p0, i64 %t10841, i64 %t10842, i64 0, i64 0, i64 0)
 %t10844 = icmp sle i64 %t10843, 0
 br i1 %t10844, label %L3874, label %L3876
 L3874:
@@ -25845,7 +25842,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_tcp_recv_some(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_tcp_recv_some(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10847 = call i1 @__mruntime_rt_net_resid__sock_ok(i64 %p0)
 br i1 %t10847, label %L3877, label %L3878
@@ -25891,7 +25888,7 @@ LSJ10857:
 %t10859 = phi i1 [ false, %LSL10857 ], [ %t10858, %LSR10857 ]
 br i1 %t10859, label %L3889, label %L3890
 L3889:
-%t10860 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 45, i64 %p0, i64 %t10855, i64 %t10852, i64 0, i64 0, i64 0)
+%t10860 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 207, i64 %p0, i64 %t10855, i64 %t10852, i64 0, i64 0, i64 0)
 br label %L3891
 L3890:
 br label %L3891
@@ -25923,13 +25920,13 @@ L3897:
 %t10874 = add i64 %t10872, %t10873
 ret i64 %t10871
 }
-define ptr @resid_tcp_recv_some(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_tcp_recv_some(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_tcp_recv_some(i64 %a0, i64 %a1)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_net_resid__byte_boxes(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_net_resid__byte_boxes(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -25953,19 +25950,19 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_ctl_resid__catch_slot() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_ctl_resid__catch_slot() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10884p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.rt_catch)
 %t10884 = ptrtoint ptr %t10884p to i64
 ret i64 %t10884
 }
-define internal i64 @__mruntime_rt_ctl_resid__catch_msg() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_ctl_resid__catch_msg() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10885p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.rt_catch_msg)
 %t10885 = ptrtoint ptr %t10885p to i64
 ret i64 %t10885
 }
-define internal i1 @under_catch(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @under_catch(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10886 = call i64 @cap_depth_get()
 %t10887 = call i64 @cap_top_reps_get()
@@ -25999,7 +25996,7 @@ L3906:
 %t10905 = icmp eq i64 %t10904, 0
 ret i1 %t10905
 }
-define internal i64 @__mruntime_rt_ctl_resid__rt_fail(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_ctl_resid__rt_fail(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10906 = call i64 @__mruntime_rt_ctl_resid__catch_slot()
 %t10907 = call i64 @ld64(i64 %t10906)
@@ -26106,7 +26103,7 @@ L3924:
 %t10966 = call i64 @c_libc_abort()
 ret i64 %t10966
 }
-define internal i64 @__mruntime_rt_ctl_resid__fail_put(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_ctl_resid__fail_put(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10967 = call i64 @c_strlen(i64 %p0)
 %t10968 = call i1 @write_all(i64 2, i64 %p0, i64 %t10967)
@@ -26119,30 +26116,30 @@ L3927:
 %t10969 = phi i64 [ 1, %L3925 ], [ 0, %L3926 ]
 ret i64 %t10969
 }
-define internal i64 @rt_abort_msg(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_abort_msg(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10970 = call i64 @__mruntime_rt_ctl_resid__rt_fail(i64 %p0, i64 0)
 ret i64 %t10970
 }
-define void @resid_abort(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define void @resid_abort(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_abort_msg(i64 %x0i)
 ret void
 }
-define internal i64 @rt_abort_msg_at(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_abort_msg_at(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10971 = tail call i64 @__mruntime_rt_ctl_resid__rt_fail(i64 %p0, i64 %p1)
 ret i64 %t10971
 }
-define void @resid_abort_at(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define void @resid_abort_at(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
 %r = call i64 @rt_abort_msg_at(i64 %x0i, i64 %x1i)
 ret void
 }
-define internal i64 @spawn_run(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @spawn_run(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10972 = add i64 %p0, 16
 %t10973 = call i64 @ld64(i64 %p0)
@@ -26153,7 +26150,7 @@ entry:
 %t10977 = call i64 @st64(i64 %t10972, i64 %t10976)
 ret i64 %t10977
 }
-define internal i64 @spawn_entry(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @spawn_entry(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10978 = ptrtoint ptr @spawn_run to i64
 %t10979 = call i1 @under_catch(i64 %t10978, i64 %p0)
@@ -26185,13 +26182,13 @@ L3933:
 %t10996 = call i64 @c_box_new(i64 2, i64 1, i64 %t10992, i64 %t10995)
 ret i64 %t10996
 }
-define internal i64 @rt_spawn(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_spawn(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10997 = call i64 @rt_spawn_start(i64 %p0, i64 %p1)
 %t10998 = call i64 @rt_spawn_wait(i64 %t10997)
 ret i64 %t10998
 }
-define ptr @resid_spawn(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_spawn(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -26199,13 +26196,13 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_ctl_resid__pool() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_ctl_resid__pool() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t10999p = getelementptr i8, ptr @rtg.rt_pool, i64 0
 %t10999 = ptrtoint ptr %t10999p to i64
 ret i64 %t10999
 }
-define internal i64 @__mruntime_rt_ctl_resid__pool_lock() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_ctl_resid__pool_lock() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -26217,12 +26214,12 @@ br i1 %t11001, label %L3934, label %L3936
 L3934:
 ret i64 0
 L3936:
-%t11002 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 24, i64 0, i64 0, i64 0, i64 0, i64 0, i64 0)
+%t11002 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 124, i64 0, i64 0, i64 0, i64 0, i64 0, i64 0)
 br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_ctl_resid__pool_pop() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_ctl_resid__pool_pop() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11004 = call i64 @__mruntime_rt_ctl_resid__pool_lock()
 %t11005 = call i64 @__mruntime_rt_ctl_resid__pool()
@@ -26246,7 +26243,7 @@ L3939:
 %t11017 = add nsw i64 %t11016, %t11007
 ret i64 %t11017
 }
-define internal i64 @__mruntime_rt_ctl_resid__pool_push(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_ctl_resid__pool_push(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11018 = call i64 @__mruntime_rt_ctl_resid__pool_lock()
 %t11019 = call i64 @__mruntime_rt_ctl_resid__pool()
@@ -26260,12 +26257,12 @@ entry:
 %t11027 = call i64 @st64(i64 %t11026, i64 0)
 ret i64 %t11027
 }
-define internal i64 @__mruntime_rt_ctl_resid__futex_wake(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_ctl_resid__futex_wake(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t11028 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 202, i64 %p0, i64 129, i64 2147483647, i64 0, i64 0, i64 0)
+%t11028 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 98, i64 %p0, i64 129, i64 2147483647, i64 0, i64 0, i64 0)
 ret i64 %t11028
 }
-define internal i64 @__mruntime_rt_ctl_resid__futex_wait0(i64 %p0.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_ctl_resid__futex_wait0(i64 %p0.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -26276,12 +26273,12 @@ br i1 %t11030, label %L3940, label %L3942
 L3940:
 ret i64 0
 L3942:
-%t11031 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 202, i64 %p0, i64 128, i64 0, i64 0, i64 0, i64 0)
+%t11031 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 98, i64 %p0, i64 128, i64 0, i64 0, i64 0, i64 0)
 br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_ctl_resid__run_job(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_ctl_resid__run_job(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11033 = add i64 %p0, 40
 %t11034 = call i64 @str_fast_load(i64 %t11033)
@@ -26296,7 +26293,7 @@ entry:
 %t11042 = tail call i64 @__mruntime_rt_ctl_resid__futex_wake(i64 %t11041)
 ret i64 %t11042
 }
-define internal i64 @pool_main(i64 %p0.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @pool_main(i64 %p0.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -26316,7 +26313,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_spawn_start(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_spawn_start(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11055 = call i64 @args_load()
 %t11056 = call i64 @xmalloc(i64 352)
@@ -26372,7 +26369,7 @@ L3948:
 %t11095 = phi i64 [ %t11094, %L3946 ], [ 0, %L3947 ]
 ret i64 %t11056
 }
-define ptr @resid_spawn_start(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_spawn_start(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -26380,7 +26377,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_spawn_wait(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_spawn_wait(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11096 = add i64 %p0, 32
 %t11097 = call i64 @__mruntime_rt_ctl_resid__futex_wait0(i64 %t11096)
@@ -26388,14 +26385,14 @@ entry:
 %t11099 = tail call i64 @ld64(i64 %t11098)
 ret i64 %t11099
 }
-define ptr @resid_spawn_wait(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_spawn_wait(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_spawn_wait(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_ok_box(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_ok_box(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11100p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.spawn_slot)
 %t11100 = ptrtoint ptr %t11100p to i64
@@ -26404,20 +26401,20 @@ entry:
 %t11104 = call i64 @c_box_new(i64 1, i64 1, i64 %t11100, i64 %t11103)
 ret i64 %t11104
 }
-define ptr @resid_ok_box(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_ok_box(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_ok_box(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_ctl_resid__ts() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_ctl_resid__ts() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11105p = getelementptr i8, ptr @rtg.rt_test, i64 0
 %t11105 = ptrtoint ptr %t11105p to i64
 ret i64 %t11105
 }
-define internal i64 @__mruntime_rt_ctl_resid__tget(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_ctl_resid__tget(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11106 = call i64 @__mruntime_rt_ctl_resid__ts()
 %t11107 = mul i64 %p0, 8
@@ -26425,7 +26422,7 @@ entry:
 %t11109 = tail call i64 @ld64(i64 %t11108)
 ret i64 %t11109
 }
-define internal i64 @__mruntime_rt_ctl_resid__tset(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_ctl_resid__tset(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11110 = call i64 @__mruntime_rt_ctl_resid__ts()
 %t11111 = mul i64 %p0, 8
@@ -26433,13 +26430,13 @@ entry:
 %t11113 = tail call i64 @st64(i64 %t11112, i64 %p1)
 ret i64 %t11113
 }
-define internal i64 @__mruntime_rt_ctl_resid__fail_buf() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_ctl_resid__fail_buf() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11114p = getelementptr i8, ptr @rtg.rt_test_fail, i64 0
 %t11114 = ptrtoint ptr %t11114p to i64
 ret i64 %t11114
 }
-define internal i64 @__mruntime_rt_ctl_resid__cstr_copy_cap(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_ctl_resid__cstr_copy_cap(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11115 = call i64 @c_strlen(i64 %p1)
 %t11116 = sub i64 %p2, 1
@@ -26456,7 +26453,7 @@ L3951:
 %t11121 = call i64 @st8(i64 %t11120, i64 0)
 ret i64 %t11121
 }
-define internal i1 @__mruntime_rt_ctl_resid__fmt_read() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_ctl_resid__fmt_read() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11122p = getelementptr i8, ptr @rtg.rt_test_fmt_read, i64 0
 %t11122 = ptrtoint ptr %t11122p to i64
@@ -26464,7 +26461,7 @@ entry:
 %t11124 = icmp ne i64 %t11123, 0
 ret i1 %t11124
 }
-define internal i64 @__mruntime_rt_ctl_resid__fmt_init() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_ctl_resid__fmt_init() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11125 = call i1 @__mruntime_rt_ctl_resid__fmt_read()
 br i1 %t11125, label %L3952, label %L3954
@@ -26519,7 +26516,7 @@ L3957:
 %t11151 = add nsw i64 %t11150, %t11145
 ret i64 %t11151
 }
-define internal i64 @__mruntime_rt_ctl_resid__out_sb(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_ctl_resid__out_sb(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11152 = call i64 @rt_sb_finish(i64 %p0)
 %t11153 = call i64 @c_strlen(i64 %t11152)
@@ -26527,7 +26524,7 @@ entry:
 %t11155 = tail call i64 @c_free(i64 %t11152)
 ret i64 %t11155
 }
-define internal i64 @__mruntime_rt_ctl_resid__sb_ms(i64 %p0, double %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_ctl_resid__sb_ms(i64 %p0, double %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11156p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.test_ms)
 %t11156 = ptrtoint ptr %t11156p to i64
@@ -26535,7 +26532,7 @@ entry:
 %t11158 = call i64 @sb_bytes(i64 %p0, i64 %t11156, i64 %t11157)
 ret i64 %t11158
 }
-define internal i64 @__mruntime_rt_ctl_resid__module_name() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_ctl_resid__module_name() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11159 = call i64 @__mruntime_rt_ctl_resid__tget(i64 8)
 %t11160 = icmp eq i64 %t11159, 0
@@ -26550,7 +26547,7 @@ L3963:
 %t11164 = phi i64 [ %t11162, %L3961 ], [ %t11163, %L3962 ]
 ret i64 %t11164
 }
-define internal i64 @rt_expect_fail(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_expect_fail(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11165 = call i64 @rt_sb_new()
 %t11167 = ptrtoint ptr @.s11166 to i64
@@ -26615,7 +26612,7 @@ L3975:
 %t11199 = call i64 @__mruntime_rt_ctl_resid__rt_fail(i64 %t11192, i64 0)
 ret i64 %t11199
 }
-define void @resid_expect_fail(ptr %a0, ptr %a1, ptr %a2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define void @resid_expect_fail(ptr %a0, ptr %a1, ptr %a2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -26623,7 +26620,7 @@ entry:
 %r = call i64 @rt_expect_fail(i64 %x0i, i64 %x1i, i64 %x2i)
 ret void
 }
-define internal i64 @rt_expect_throws(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_expect_throws(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11200 = icmp eq i64 %p0, 0
 br label %LSL11201
@@ -26663,14 +26660,14 @@ L3981:
 %t11220 = phi i64 [ 1, %L3979 ], [ 0, %L3980 ]
 ret i64 %t11220
 }
-define i8 @resid_expect_throws(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_expect_throws(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_expect_throws(i64 %x0i)
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @rt_test_selected(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_test_selected(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11222 = ptrtoint ptr @.s11221 to i64
 %t11223 = call i64 @c_getenv(i64 %t11222)
@@ -26700,14 +26697,14 @@ L3987:
 %t11233 = call i64 @rt_regex_match(i64 %t11223, i64 %t11232)
 ret i64 %t11233
 }
-define i8 @resid_test_selected(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_test_selected(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_test_selected(i64 %x0i)
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @rt_test_plan(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_test_plan(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11234 = icmp ne i64 %p1, 0
 br i1 %t11234, label %L3988, label %L3989
@@ -26771,14 +26768,14 @@ L3999:
 %t11276 = call i64 @__mruntime_rt_ctl_resid__out_sb(i64 %t11240)
 ret i64 1
 }
-define i8 @resid_test_plan(i64 %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_test_plan(i64 %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x1i = ptrtoint ptr %a1 to i64
 %r = call i64 @rt_test_plan(i64 %a0, i64 %x1i)
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @__mruntime_rt_ctl_resid__sb_lines(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_ctl_resid__sb_lines(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -26816,7 +26813,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_ctl_resid__test_report(i64 %p0, i1 %p1, i1 %p2, double %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_ctl_resid__test_report(i64 %p0, i1 %p1, i1 %p2, double %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11292 = call i64 @__mruntime_rt_ctl_resid__fmt_init()
 %t11293 = call i64 @rt_sb_new()
@@ -26842,7 +26839,7 @@ L4011:
 %t11301 = call i64 @__mruntime_rt_ctl_resid__out_sb(i64 %t11293)
 ret i64 %t11301
 }
-define internal i64 @__mruntime_rt_ctl_resid__report_tap(i64 %p0, i64 %p1, i1 %p2, i1 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_ctl_resid__report_tap(i64 %p0, i64 %p1, i1 %p2, i1 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %LSL11302
 LSL11302:
@@ -26897,7 +26894,7 @@ L4023:
 %t11342 = call i64 @sb_lit(i64 %p0, i64 %t11341)
 ret i64 %t11342
 }
-define internal i64 @__mruntime_rt_ctl_resid__report_json(i64 %p0, i64 %p1, i1 %p2, i1 %p3, double %p4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_ctl_resid__report_json(i64 %p0, i64 %p1, i1 %p2, i1 %p3, double %p4) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11343 = call i64 @__mruntime_rt_ctl_resid__tget(i64 7)
 %t11344 = icmp ne i64 %t11343, 0
@@ -26946,7 +26943,7 @@ L4029:
 %t11378 = call i64 @__mruntime_rt_ctl_resid__tset(i64 7, i64 0)
 ret i64 %t11378
 }
-define internal i64 @__mruntime_rt_ctl_resid__report_pretty(i64 %p0, i64 %p1, i1 %p2, i1 %p3, double %p4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_ctl_resid__report_pretty(i64 %p0, i64 %p1, i1 %p2, i1 %p3, double %p4) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br i1 %p3, label %L4033, label %L4035
 L4033:
@@ -26991,11 +26988,11 @@ L4041:
 %t11411 = phi i64 [ %t11410, %L4039 ], [ 0, %L4040 ]
 ret i64 %t11411
 }
-define internal double @__mruntime_rt_ctl_resid__now_ms() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal double @__mruntime_rt_ctl_resid__now_ms() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11412p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.test_clock)
 %t11412 = ptrtoint ptr %t11412p to i64
-%t11413 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 228, i64 1, i64 %t11412, i64 0, i64 0, i64 0, i64 0)
+%t11413 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 113, i64 1, i64 %t11412, i64 0, i64 0, i64 0, i64 0)
 %t11414 = call i64 @ld64(i64 %t11412)
 %t11415 = sitofp i64 %t11414 to double
 %t11416 = fmul double %t11415, 1000.0
@@ -27006,7 +27003,7 @@ entry:
 %t11421 = fadd double %t11416, %t11420
 ret double %t11421
 }
-define internal i64 @rt_test_run(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_test_run(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11422 = icmp ne i64 %p1, 0
 br i1 %t11422, label %L4042, label %L4043
@@ -27129,14 +27126,14 @@ L4065:
 %t11486 = phi i64 [ 1, %L4063 ], [ 0, %L4064 ]
 ret i64 %t11486
 }
-define i64 @resid_test_run(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_test_run(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
 %r = call i64 @rt_test_run(i64 %x0i, i64 %x1i)
 ret i64 %r
 }
-define internal i64 @rt_test_run_closure(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_test_run_closure(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11487 = icmp eq i64 %p0, 0
 br label %LSL11488
@@ -27158,14 +27155,14 @@ L4068:
 %t11495 = tail call i64 @rt_test_run(i64 0, i64 %p1)
 ret i64 %t11495
 }
-define i64 @resid_test_run_closure(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_test_run_closure(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
 %r = call i64 @rt_test_run_closure(i64 %x0i, i64 %x1i)
 ret i64 %r
 }
-define internal i64 @rt_test_summary() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_test_summary() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11496 = call i64 @__mruntime_rt_ctl_resid__fmt_init()
 %t11497 = call i64 @__mruntime_rt_ctl_resid__tget(i64 5)
@@ -27226,12 +27223,12 @@ L4077:
 %t11540 = phi i64 [ 1, %L4075 ], [ 0, %L4076 ]
 ret i64 %t11540
 }
-define i64 @resid_test_summary() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_test_summary() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_test_summary()
 ret i64 %r
 }
-define internal i64 @__mruntime_rt_ctl_resid__summary_pretty(i64 %p0, double %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_ctl_resid__summary_pretty(i64 %p0, double %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11542 = ptrtoint ptr @.s11541 to i64
 %t11543 = call i64 @sb_lit(i64 %p0, i64 %t11542)
@@ -27268,25 +27265,25 @@ L4080:
 %t11573 = add i64 %t11569, %t11572
 ret i64 %t11573
 }
-define internal i64 @__mruntime_rt_dec_resid__bb() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__bb() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11574 = trunc i128 10000000000000000000 to i64
 ret i64 %t11574
 }
-define internal i64 @__mruntime_rt_dec_resid__binv() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__binv() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11575 = trunc i128 15581492618384294730 to i64
 ret i64 %t11575
 }
-define internal i64 @__mruntime_rt_dec_resid__ld_() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__ld_() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 19
 }
-define internal i64 @__mruntime_rt_dec_resid__max_exp() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__max_exp() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 1000000
 }
-define internal i64 @__mruntime_rt_dec_resid__p10(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__p10(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11576 = icmp eq i64 %p0, 19
 br i1 %t11576, label %L4081, label %L4083
@@ -27302,75 +27299,75 @@ L4083:
 %t11583 = add i64 %t11582, 0
 ret i64 %t11583
 }
-define internal i64 @__mruntime_rt_dec_resid__lu(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__lu(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11589 = call i64 @ld64(i64 %p0)
 %t11590 = add i64 %t11589, 0
 %t11591 = add i64 %t11590, 0
 ret i64 %t11591
 }
-define internal i64 @__mruntime_rt_dec_resid__su(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__su(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11597 = add i64 %p1, 0
 %t11598 = add i64 %t11597, 0
 %t11604 = tail call i64 @st64(i64 %p0, i64 %t11598)
 ret i64 %t11604
 }
-define internal i64 @__mruntime_rt_dec_resid__li(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__li(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11605 = mul i64 %p1, 8
 %t11606 = add i64 %p0, %t11605
 ret i64 %t11606
 }
-define internal i64 @sx8(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @sx8(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11607 = shl i64 %p0, 56
 %t11608 = ashr i64 %t11607, 56
 ret i64 %t11608
 }
-define internal i64 @__mruntime_rt_dec_resid__dsign(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__dsign(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11609 = call i64 @ld8(i64 %p0)
 %t11610 = tail call i64 @sx8(i64 %t11609)
 ret i64 %t11610
 }
-define internal i64 @__mruntime_rt_dec_resid__dprec(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__dprec(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11611 = add i64 %p0, 4
 %t11612 = tail call i64 @ld32(i64 %t11611)
 ret i64 %t11612
 }
-define internal i64 @__mruntime_rt_dec_resid__dexp(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__dexp(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11613 = add i64 %p0, 8
 %t11614 = call i64 @ld32(i64 %t11613)
 %t11615 = tail call i64 @sx32(i64 %t11614)
 ret i64 %t11615
 }
-define internal i64 @dn(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @dn(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11616 = add i64 %p0, 12
 %t11617 = tail call i64 @ld32(i64 %t11616)
 ret i64 %t11617
 }
-define internal i64 @__mruntime_rt_dec_resid__dnd(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__dnd(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11618 = add i64 %p0, 16
 %t11619 = tail call i64 @ld32(i64 %t11618)
 ret i64 %t11619
 }
-define internal i64 @__mruntime_rt_dec_resid__dl(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__dl(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11620 = add i64 %p0, 24
 ret i64 %t11620
 }
-define internal i64 @__mruntime_rt_dec_resid__r2() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__r2() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11621p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.dec_r2)
 %t11621 = ptrtoint ptr %t11621p to i64
 ret i64 %t11621
 }
-define internal i64 @__mruntime_rt_dec_resid__div_b(i128 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__div_b(i128 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11622 = lshr i128 %p0, 64
 %t11623 = add i128 %t11622, 0
@@ -27421,12 +27418,12 @@ L4092:
 %t11670 = phi i64 [ %t11669, %L4090 ], [ %t11663, %L4091 ]
 ret i64 %t11670
 }
-define internal i64 @__mruntime_rt_dec_resid__ndig64(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__ndig64(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11671 = call i64 @__mruntime_rt_dec_resid__ndig64_at(i64 %p0, i64 1)
 ret i64 %t11671
 }
-define internal i64 @__mruntime_rt_dec_resid__ndig64_at(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__ndig64_at(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -27451,7 +27448,7 @@ br label %tco.head
 L4095:
 ret i64 %p1
 }
-define internal i64 @__mruntime_rt_dec_resid__ndig(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__ndig(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11679 = icmp eq i64 %p1, 0
 br i1 %t11679, label %L4096, label %L4098
@@ -27468,7 +27465,7 @@ L4098:
 %t11687 = add i64 %t11682, %t11686
 ret i64 %t11687
 }
-define internal i64 @__mruntime_rt_dec_resid__tmp_limbs(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__tmp_limbs(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11688 = icmp sgt i64 %p0, 0
 br i1 %t11688, label %L4099, label %L4100
@@ -27482,7 +27479,7 @@ L4101:
 %t11691 = tail call i64 @xmalloc(i64 %t11690)
 ret i64 %t11691
 }
-define internal i64 @__mruntime_rt_dec_resid__dalloc(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__dalloc(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11692 = icmp slt i64 %p0, 0
 br label %LSL11693
@@ -27503,7 +27500,7 @@ L4104:
 %t11700 = tail call i64 @c_gmalloc(i64 %t11699)
 ret i64 %t11700
 }
-define internal i64 @__mruntime_rt_dec_resid__dzero(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__dzero(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11701 = call i64 @__mruntime_rt_dec_resid__dalloc(i64 0)
 %t11702 = call i64 @st8(i64 %t11701, i64 0)
@@ -27519,7 +27516,7 @@ entry:
 %t11712 = add nsw i64 %t11711, %t11701
 ret i64 %t11712
 }
-define internal i64 @__mruntime_rt_dec_resid__top(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__top(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -27546,7 +27543,7 @@ br label %tco.head
 L4107:
 ret i64 %p1
 }
-define internal i64 @__mruntime_rt_dec_resid__set_hdr(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__set_hdr(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11722 = call i64 @st8(i64 %p0, i64 %p1)
 %t11723 = add i64 %p0, 4
@@ -27561,7 +27558,7 @@ entry:
 %t11732 = add nsw i64 %t11731, %p0
 ret i64 %t11732
 }
-define internal i64 @__mruntime_rt_dec_resid__finish(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__finish(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11733 = icmp slt i64 %p4, 1
 br label %LSL11734
@@ -27693,7 +27690,7 @@ L4125:
 %t11825 = call i64 @__mruntime_rt_dec_resid__finish_hdr(i64 %p0, i64 %p1, i64 %t11819, i64 %t11817, i64 %t11820, i64 %p4)
 ret i64 %t11825
 }
-define internal i64 @__mruntime_rt_dec_resid__finish_hdr(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__finish_hdr(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11826 = sub i64 %p5, %p4
 %t11827 = sub i64 %p3, %t11826
@@ -27726,7 +27723,7 @@ L4131:
 %t11840 = tail call i64 @__mruntime_rt_dec_resid__set_hdr(i64 %p0, i64 %t11839, i64 %p5, i64 %p3, i64 %p2, i64 %p4)
 ret i64 %t11840
 }
-define internal i64 @__mruntime_rt_dec_resid__shift_down(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__shift_down(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -27776,7 +27773,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_dec_resid__round_up(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__round_up(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -27814,7 +27811,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_dec_resid__from_limbs(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__from_limbs(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11893 = call i64 @__mruntime_rt_dec_resid__top(i64 %p1, i64 %p2)
 %t11894 = icmp eq i64 %t11893, 0
@@ -27839,7 +27836,7 @@ L4146:
 %t11904 = tail call i64 @__mruntime_rt_dec_resid__finish(i64 %t11900, i64 %p0, i64 %t11893, i64 %p3, i64 %p4)
 ret i64 %t11904
 }
-define internal i64 @__mruntime_rt_dec_resid__mul1(i64 %p0, i64 %p1, i64 %p2, i64 %p3) noinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__mul1(i64 %p0, i64 %p1, i64 %p2, i64 %p3) noinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11905 = icmp ult i64 %p3, 4294967296
 br i1 %t11905, label %L4147, label %L4149
@@ -27867,7 +27864,7 @@ L4149:
 %t11929 = add i64 %t11928, 1
 ret i64 %t11929
 }
-define internal i64 @__mruntime_rt_dec_resid__mul1_small(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, double %p4.in, i64 %p5.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__mul1_small(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, double %p4.in, i64 %p5.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -27911,7 +27908,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_dec_resid__mul1_fix(i64 %p0, i64 %p1, i64 %p2, i64 %p3, double %p4, i64 %p5, i64 %p6) noinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__mul1_fix(i64 %p0, i64 %p1, i64 %p2, i64 %p3, double %p4, i64 %p5, i64 %p6) noinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t11968 = call i64 @__mruntime_rt_dec_resid__bb()
 %t11969 = sub i64 %p5, %t11968
@@ -27922,7 +27919,7 @@ entry:
 %t11974 = call i64 @__mruntime_rt_dec_resid__mul1_small(i64 %t11971, i64 %t11972, i64 %p2, i64 %p3, double %p4, i64 %t11973)
 ret i64 %t11974
 }
-define internal i64 @__mruntime_rt_dec_resid__mul1_big(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__mul1_big(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -27975,7 +27972,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_dec_resid__scale(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__scale(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t12004 = call i64 @__mruntime_rt_dec_resid__ld_()
 %t12005 = icmp eq i64 %t12004, 0
@@ -28030,7 +28027,7 @@ L4167:
 %t12043 = call i64 @st64(i64 %t12039, i64 %t12042)
 ret i64 %t12024
 }
-define internal i64 @__mruntime_rt_dec_resid__cmp_n(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__cmp_n(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t12044 = call i64 @__mruntime_rt_dec_resid__top(i64 %p0, i64 %p1)
 %t12045 = call i64 @__mruntime_rt_dec_resid__top(i64 %p2, i64 %p3)
@@ -28052,7 +28049,7 @@ L4170:
 %t12051 = call i64 @__mruntime_rt_dec_resid__cmp_from(i64 %p0, i64 %p2, i64 %t12050)
 ret i64 %t12051
 }
-define internal i64 @__mruntime_rt_dec_resid__cmp_from(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__cmp_from(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -28087,7 +28084,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_dec_resid__cmp_mag(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5, i64 %p6, i64 %p7) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__cmp_mag(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5, i64 %p6, i64 %p7) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t12063 = add i64 %p3, %p2
 %t12064 = add i64 %p7, %p6
@@ -28134,7 +28131,7 @@ L4194:
 %t12087 = add nsw i64 %t12086, %t12084
 ret i64 %t12087
 }
-define internal i64 @__mruntime_rt_dec_resid__add_n(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__add_n(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t12088 = mul i64 %p4, 8
 %t12089 = add i64 %p3, %t12088
@@ -28147,7 +28144,7 @@ entry:
 %t12096 = add i64 %t12095, 1
 ret i64 %t12096
 }
-define internal i64 @__mruntime_rt_dec_resid__add_lo(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__add_lo(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -28246,7 +28243,7 @@ L4218:
 %t12139 = phi i64 [ 1, %L4216 ], [ 0, %L4217 ]
 ret i64 %t12139
 }
-define internal i64 @__mruntime_rt_dec_resid__add_carry(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__add_carry(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -28304,7 +28301,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_dec_resid__sub_n(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__sub_n(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t12160 = mul i64 %p4, 8
 %t12161 = add i64 %p3, %t12160
@@ -28312,7 +28309,7 @@ entry:
 %t12163 = call i64 @__mruntime_rt_dec_resid__sub_borrow(i64 %p0, i64 %p1, i64 %p4, i64 %p2, i64 %t12162)
 ret i64 %p2
 }
-define internal i64 @__mruntime_rt_dec_resid__sub_lo(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__sub_lo(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -28411,7 +28408,7 @@ L4257:
 %t12206 = phi i64 [ 1, %L4255 ], [ 0, %L4256 ]
 ret i64 %t12206
 }
-define internal i64 @__mruntime_rt_dec_resid__sub_borrow(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__sub_borrow(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -28470,7 +28467,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_dec_resid__round_v(i64 %p0, i64 %p1, i1 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__round_v(i64 %p0, i64 %p1, i1 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br i1 %p2, label %L4273, label %L4274
 L4273:
@@ -28530,7 +28527,7 @@ call void @resid_overflow_check(i8 %t12258)
 %t12267 = call i64 @__mruntime_rt_dec_resid__from_limbs(i64 %t12231, i64 %t12260, i64 %t12262, i64 %t12266, i64 %p1)
 ret i64 %t12267
 }
-define internal i64 @__mruntime_rt_dec_resid__addsub(i64 %p0, i64 %p1, i1 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__addsub(i64 %p0, i64 %p1, i1 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br i1 %p2, label %L4282, label %L4283
 L4282:
@@ -28659,7 +28656,7 @@ L4317:
 %t12328 = add i64 %t12326, %t12327
 ret i64 %t12325
 }
-define internal i64 @__mruntime_rt_dec_resid__addsub_n(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5, i64 %p6, i64 %p7) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__addsub_n(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5, i64 %p6, i64 %p7) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t12329 = icmp sgt i64 %p3, %p5
 br i1 %t12329, label %L4318, label %L4319
@@ -28710,7 +28707,7 @@ L4332:
 %t12351 = call i64 @__mruntime_rt_dec_resid__finish(i64 %t12344, i64 %p1, i64 %t12350, i64 %p6, i64 %p7)
 ret i64 %t12351
 }
-define internal i64 @__mruntime_rt_dec_resid__mul_v(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__mul_v(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t12352 = call i64 @__mruntime_rt_dec_resid__dsign(i64 %p0)
 %t12353 = icmp eq i64 %t12352, 0
@@ -28784,7 +28781,7 @@ call void @llvm.memset.p0.i64(ptr %t12389p, i8 %t12389q, i64 %t12388, i1 false)
 %t12395 = call i64 @__mruntime_rt_dec_resid__finish(i64 %t12371, i64 %t12363, i64 %t12394, i64 %t12366, i64 %p2)
 ret i64 %t12395
 }
-define internal i64 @__mruntime_rt_dec_resid__mul_rows(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__mul_rows(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -28816,12 +28813,12 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_dec_resid__mul_row(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__mul_row(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t12405 = call i64 @__mruntime_rt_dec_resid__mul_row_at(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 0, i64 0, i64 0)
 ret i64 %t12405
 }
-define internal i64 @__mruntime_rt_dec_resid__mul_row_at(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__mul_row_at(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -28882,7 +28879,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_dec_resid__divmod_n(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__divmod_n(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t12442 = call i64 @__mruntime_rt_dec_resid__bb()
 %t12443 = sub i64 %p3, 1
@@ -28916,7 +28913,7 @@ L4362:
 %t12468 = call i64 @__mruntime_rt_dec_resid__div_steps(i64 %p0, i64 %p2, i64 %p3, i64 %p4, i64 %t12461, i64 %t12464, i64 %t12467)
 ret i64 %t12468
 }
-define internal i64 @__mruntime_rt_dec_resid__norm_v(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__norm_v(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t12469 = add i64 %p1, 1
 %t12470 = call i64 @__mruntime_rt_dec_resid__tmp_limbs(i64 %t12469)
@@ -28926,7 +28923,7 @@ entry:
 %t12474 = call i64 @c_free(i64 %t12470)
 ret i64 %t12474
 }
-define internal i64 @__mruntime_rt_dec_resid__div_steps(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__div_steps(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -29017,7 +29014,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i128 @__mruntime_rt_dec_resid__qhat_fix(i128 %p0.in, i128 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i128 @__mruntime_rt_dec_resid__qhat_fix(i128 %p0.in, i128 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -29064,7 +29061,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_dec_resid__sub_mul(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in, i64 %p7.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__sub_mul(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in, i64 %p7.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -29129,7 +29126,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_dec_resid__add_back(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__add_back(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t12609 = call i64 @__mruntime_rt_dec_resid__add_back_at(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 0, i64 0)
 %t12610 = add i64 %p3, %p2
@@ -29146,7 +29143,7 @@ call void @resid_div_check(i8 %t12618)
 %t12624 = call i64 @__mruntime_rt_dec_resid__su(i64 %t12611, i64 %t12623)
 ret i64 %t12624
 }
-define internal i64 @__mruntime_rt_dec_resid__add_back_at(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__add_back_at(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -29194,7 +29191,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_dec_resid__div_v(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__div_v(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t12644 = call i64 @__mruntime_rt_dec_resid__dsign(i64 %p1)
 %t12645 = icmp eq i64 %t12644, 0
@@ -29346,7 +29343,7 @@ L4431:
 %t12730 = call i64 @__mruntime_rt_dec_resid__finish(i64 %t12701, i64 %t12724, i64 %t12725, i64 %t12729, i64 %p2)
 ret i64 %t12730
 }
-define internal i64 @__mruntime_rt_dec_resid__copy_limbs(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__copy_limbs(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t12731 = call i64 @__mruntime_rt_dec_resid__tmp_limbs(i64 %p2)
 %t12732 = mul i64 %p1, 8
@@ -29355,7 +29352,7 @@ entry:
 %t12735 = add nsw i64 %t12734, %t12731
 ret i64 %t12735
 }
-define internal i64 @__mruntime_rt_dec_resid__div_small(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i128 %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__div_small(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i128 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -29393,7 +29390,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_dec_resid__div_big(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__div_big(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t12766 = add i64 %p1, 1
 %t12767 = call i64 @__mruntime_rt_dec_resid__tmp_limbs(i64 %t12766)
@@ -29405,7 +29402,7 @@ entry:
 %t12773 = call i64 @c_free(i64 %t12767)
 ret i64 %t12773
 }
-define internal i64 @__mruntime_rt_dec_resid__coef_digits(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__coef_digits(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t12774 = call i64 @__mruntime_rt_dec_resid__dnd(i64 %p0)
 %t12775 = add i64 %t12774, 1
@@ -29415,7 +29412,7 @@ entry:
 %t12779 = call i64 @__mruntime_rt_dec_resid__digits_limbs(i64 %p0, i64 %t12776, i64 0, i64 %t12774)
 ret i64 %t12776
 }
-define internal i64 @__mruntime_rt_dec_resid__digits_limbs(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__digits_limbs(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -29450,7 +29447,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_dec_resid__digits_one(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__digits_one(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -29483,7 +29480,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_dec_resid__parse_digits(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__parse_digits(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t12823 = call i64 @__mruntime_rt_dec_resid__ld_()
 %t12824 = add i64 %p1, %t12823
@@ -29507,7 +29504,7 @@ call void @resid_overflow_check(i8 %t12834)
 %t12840 = call i64 @st64(i64 %t12838, i64 %t12839)
 ret i64 %t12836
 }
-define internal i64 @__mruntime_rt_dec_resid__parse_limbs(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__parse_limbs(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -29539,7 +29536,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_dec_resid__digits_value(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__digits_value(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -29564,7 +29561,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i1 @__mruntime_rt_dec_resid__is_dig(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_dec_resid__is_dig(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t12866 = icmp sge i64 %p0, 48
 br label %LSL12867
@@ -29577,7 +29574,7 @@ LSJ12867:
 %t12869 = phi i1 [ false, %LSL12867 ], [ %t12868, %LSR12867 ]
 ret i1 %t12869
 }
-define internal i64 @__mruntime_rt_dec_resid__take_digits(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__take_digits(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -29604,7 +29601,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_dec_resid__exp_value(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__exp_value(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -29638,7 +29635,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_dec_resid__from_str(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__from_str(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t12901 = call i64 @ld8(i64 %p0)
 %t12902 = icmp eq i64 %t12901, 45
@@ -29793,7 +29790,7 @@ L4488:
 %t12970 = add nsw i64 %t12969, %t12967
 ret i64 %t12970
 }
-define internal i64 @__mruntime_rt_dec_resid__from_i64(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__from_i64(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t12971 = icmp eq i64 %p0, 0
 br i1 %t12971, label %L4489, label %L4491
@@ -29825,7 +29822,7 @@ L4497:
 %t12981 = call i64 @__mruntime_rt_dec_resid__from_limbs(i64 %t12980, i64 %t12973, i64 1, i64 0, i64 %p1)
 ret i64 %t12981
 }
-define internal i64 @__mruntime_rt_dec_resid__cmp_v(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__cmp_v(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t12982 = call i64 @__mruntime_rt_dec_resid__dsign(i64 %p0)
 %t12983 = call i64 @__mruntime_rt_dec_resid__dsign(i64 %p1)
@@ -29872,7 +29869,7 @@ L4509:
 %t13004 = phi i64 [ %t13003, %L4507 ], [ %t13000, %L4508 ]
 ret i64 %t13004
 }
-define internal i64 @__mruntime_rt_dec_resid__format(i64 %p0, i1 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__format(i64 %p0, i1 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13005 = call i64 @__mruntime_rt_dec_resid__dprec(i64 %p0)
 %t13006 = call i64 @__mruntime_rt_dec_resid__dsign(i64 %p0)
@@ -29999,7 +29996,7 @@ L4539:
 %t13064 = call i64 @arena_adopt(i64 %t13051, i64 %t13060)
 ret i64 %t13064
 }
-define internal i64 @__mruntime_rt_dec_resid__trail_zeros(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__trail_zeros(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -30026,7 +30023,7 @@ br label %tco.head
 L4542:
 ret i64 %p1
 }
-define internal i64 @__mruntime_rt_dec_resid__dig_at(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__dig_at(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13074 = icmp slt i64 %p2, %p1
 br i1 %t13074, label %L4543, label %L4544
@@ -30040,7 +30037,7 @@ L4545:
 %t13077 = phi i64 [ %t13076, %L4543 ], [ 48, %L4544 ]
 ret i64 %t13077
 }
-define internal i64 @__mruntime_rt_dec_resid__put_digits(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__put_digits(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -30064,7 +30061,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_dec_resid__fmt_int(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__fmt_int(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13085 = call i64 @__mruntime_rt_dec_resid__put_digits(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 0, i64 %p4)
 %t13086 = icmp sge i64 %p4, %p5
@@ -30078,7 +30075,7 @@ L4551:
 %t13090 = tail call i64 @__mruntime_rt_dec_resid__put_digits(i64 %p0, i64 %t13089, i64 %p2, i64 %p3, i64 %p4, i64 %p5)
 ret i64 %t13090
 }
-define internal i64 @__mruntime_rt_dec_resid__fmt_frac(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__fmt_frac(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13091 = add i64 %p0, %p1
 %t13092 = call i64 @st8(i64 %t13091, i64 48)
@@ -30099,7 +30096,7 @@ call void @llvm.memset.p0.i64(ptr %t13100p, i8 %t13100q, i64 %t13099, i1 false)
 %t13104 = tail call i64 @__mruntime_rt_dec_resid__put_digits(i64 %p0, i64 %t13103, i64 %p2, i64 %p3, i64 0, i64 %p5)
 ret i64 %t13104
 }
-define internal i64 @__mruntime_rt_dec_resid__to_int(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__to_int(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13105 = call i64 @__mruntime_rt_dec_resid__dsign(i64 %p0)
 %t13106 = icmp eq i64 %t13105, 0
@@ -30235,7 +30232,7 @@ L4572:
 %t13194 = phi i64 [ %t13193, %L4570 ], [ %t13185, %L4571 ]
 ret i64 %t13194
 }
-define internal i1 @__mruntime_rt_dec_resid__limbs_zero_to(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_dec_resid__limbs_zero_to(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13195 = icmp sge i64 %p1, %p2
 br i1 %t13195, label %L4573, label %L4575
@@ -30256,7 +30253,7 @@ LSJ13199:
 %t13202 = phi i1 [ false, %LSL13199 ], [ %t13201, %LSR13199 ]
 ret i1 %t13202
 }
-define internal i128 @__mruntime_rt_dec_resid__digits128(i64 %p0.in, i64 %p1.in, i64 %p2.in, i128 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i128 @__mruntime_rt_dec_resid__digits128(i64 %p0.in, i64 %p1.in, i64 %p2.in, i128 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -30281,7 +30278,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i128 @__mruntime_rt_dec_resid__times10(i128 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i128 @__mruntime_rt_dec_resid__times10(i128 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -30298,7 +30295,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal double @__mruntime_rt_dec_resid__to_f64(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal double @__mruntime_rt_dec_resid__to_f64(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13222 = call i64 @__mruntime_rt_dec_resid__dsign(i64 %p0)
 %t13223 = icmp eq i64 %t13222, 0
@@ -30354,7 +30351,7 @@ L4593:
 %t13251 = phi double [ %t13250, %L4591 ], [ %t13246, %L4592 ]
 ret double %t13251
 }
-define internal i64 @__mruntime_rt_dec_resid__limbs_to_bn(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__limbs_to_bn(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -30391,7 +30388,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_dec_resid__drop_digits(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__drop_digits(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -30420,7 +30417,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_dec_resid__opprec(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__opprec(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13300 = call i64 @__mruntime_rt_dec_resid__dprec(i64 %p0)
 %t13301 = call i64 @__mruntime_rt_dec_resid__dprec(i64 %p1)
@@ -30434,7 +30431,7 @@ L4605:
 %t13303 = phi i64 [ %t13300, %L4603 ], [ %t13301, %L4604 ]
 ret i64 %t13303
 }
-define internal i64 @__mruntime_rt_dec_resid__fit(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_dec_resid__fit(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13304 = call i64 @__mruntime_rt_dec_resid__dprec(i64 %p0)
 %t13305 = icmp eq i64 %t13304, %p1
@@ -30448,49 +30445,49 @@ L4608:
 %t13307 = phi i64 [ %p0, %L4606 ], [ %t13306, %L4607 ]
 ret i64 %t13307
 }
-define internal i64 @rt_decp_from_str(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_decp_from_str(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13308 = tail call i64 @__mruntime_rt_dec_resid__from_str(i64 %p0, i64 %p1)
 ret i64 %t13308
 }
-define ptr @resid_decp_from_str(ptr %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_decp_from_str(ptr %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_decp_from_str(i64 %x0i, i64 %a1)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_decp_from_i64(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_decp_from_i64(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13309 = tail call i64 @__mruntime_rt_dec_resid__from_i64(i64 %p0, i64 %p1)
 ret i64 %t13309
 }
-define ptr @resid_decp_from_i64(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_decp_from_i64(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_decp_from_i64(i64 %a0, i64 %a1)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_decp_round(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_decp_round(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13310 = call i64 @__mruntime_rt_dec_resid__round_v(i64 %p0, i64 %p1, i1 false)
 ret i64 %t13310
 }
-define ptr @resid_decp_round(ptr %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_decp_round(ptr %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_decp_round(i64 %x0i, i64 %a1)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_decp_add(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_decp_add(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13311 = call i64 @__mruntime_rt_dec_resid__opprec(i64 %p0, i64 %p1)
 %t13312 = call i64 @__mruntime_rt_dec_resid__addsub(i64 %p0, i64 %p1, i1 false, i64 %t13311)
 %t13313 = call i64 @__mruntime_rt_dec_resid__fit(i64 %t13312, i64 %p2)
 ret i64 %t13313
 }
-define ptr @resid_decp_add(ptr %a0, ptr %a1, i64 %a2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_decp_add(ptr %a0, ptr %a1, i64 %a2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -30498,14 +30495,14 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_decp_sub(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_decp_sub(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13314 = call i64 @__mruntime_rt_dec_resid__opprec(i64 %p0, i64 %p1)
 %t13315 = call i64 @__mruntime_rt_dec_resid__addsub(i64 %p0, i64 %p1, i1 true, i64 %t13314)
 %t13316 = call i64 @__mruntime_rt_dec_resid__fit(i64 %t13315, i64 %p2)
 ret i64 %t13316
 }
-define ptr @resid_decp_sub(ptr %a0, ptr %a1, i64 %a2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_decp_sub(ptr %a0, ptr %a1, i64 %a2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -30513,14 +30510,14 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_decp_mul(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_decp_mul(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13317 = call i64 @__mruntime_rt_dec_resid__opprec(i64 %p0, i64 %p1)
 %t13318 = call i64 @__mruntime_rt_dec_resid__mul_v(i64 %p0, i64 %p1, i64 %t13317)
 %t13319 = call i64 @__mruntime_rt_dec_resid__fit(i64 %t13318, i64 %p2)
 ret i64 %t13319
 }
-define ptr @resid_decp_mul(ptr %a0, ptr %a1, i64 %a2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_decp_mul(ptr %a0, ptr %a1, i64 %a2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -30528,14 +30525,14 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_decp_div(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_decp_div(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13320 = call i64 @__mruntime_rt_dec_resid__opprec(i64 %p0, i64 %p1)
 %t13321 = call i64 @__mruntime_rt_dec_resid__div_v(i64 %p0, i64 %p1, i64 %t13320)
 %t13322 = call i64 @__mruntime_rt_dec_resid__fit(i64 %t13321, i64 %p2)
 ret i64 %t13322
 }
-define ptr @resid_decp_div(ptr %a0, ptr %a1, i64 %a2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_decp_div(ptr %a0, ptr %a1, i64 %a2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -30543,7 +30540,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_decp_neg(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_decp_neg(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13323 = call i64 @dn(i64 %p0)
 %t13324 = call i64 @__mruntime_rt_dec_resid__dalloc(i64 %t13323)
@@ -30558,32 +30555,32 @@ entry:
 %t13333 = add nsw i64 %t13332, %t13324
 ret i64 %t13333
 }
-define ptr @resid_decp_neg(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_decp_neg(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_decp_neg(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_decp_cmp(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_decp_cmp(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13334 = tail call i64 @__mruntime_rt_dec_resid__cmp_v(i64 %p0, i64 %p1)
 ret i64 %t13334
 }
-define i64 @resid_decp_cmp(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_decp_cmp(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
 %r = call i64 @rt_decp_cmp(i64 %x0i, i64 %x1i)
 ret i64 %r
 }
-define internal i64 @rt_decp_to_str(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_decp_to_str(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13335 = icmp ne i64 %p1, 0
 %t13336 = call i64 @__mruntime_rt_dec_resid__format(i64 %p0, i1 %t13335)
 ret i64 %t13336
 }
-define ptr @resid_decp_to_str(ptr %a0, i8 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_decp_to_str(ptr %a0, i8 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1 = zext i8 %a1 to i64
@@ -30591,29 +30588,29 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_decp_to_i64(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_decp_to_i64(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13337 = tail call i64 @__mruntime_rt_dec_resid__to_int(i64 %p0)
 ret i64 %t13337
 }
-define i64 @resid_decp_to_i64(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_decp_to_i64(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_decp_to_i64(i64 %x0i)
 ret i64 %r
 }
-define internal double @rt_decp_to_f64(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal double @rt_decp_to_f64(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13338 = tail call double @__mruntime_rt_dec_resid__to_f64(i64 %p0)
 ret double %t13338
 }
-define double @resid_decp_to_f64(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define double @resid_decp_to_f64(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call double @rt_decp_to_f64(i64 %x0i)
 ret double %r
 }
-define internal i64 @__mruntime_rt_list_resid__box_hdr(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_list_resid__box_hdr(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13339 = icmp sgt i64 %p1, 0
 br i1 %t13339, label %L4609, label %L4610
@@ -30635,7 +30632,7 @@ L4611:
 %t13350 = add nsw i64 %t13349, %t13343
 ret i64 %t13350
 }
-define internal i64 @rt_box_new(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_box_new(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13351 = call i64 @__mruntime_rt_list_resid__box_hdr(i64 %p0, i64 %p1, i64 %p3)
 %t13352 = icmp sgt i64 %p1, 0
@@ -30651,7 +30648,7 @@ L4614:
 %t13356 = phi i64 [ %t13355, %L4612 ], [ 0, %L4613 ]
 ret i64 %t13351
 }
-define ptr @resid_box_new(i64 %a0, i64 %a1, ptr %a2, ptr %a3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_box_new(i64 %a0, i64 %a1, ptr %a2, ptr %a3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x2i = ptrtoint ptr %a2 to i64
 %x3i = ptrtoint ptr %a3 to i64
@@ -30659,19 +30656,19 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_box_alloc(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_box_alloc(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13357 = tail call i64 @__mruntime_rt_list_resid__box_hdr(i64 %p0, i64 %p1, i64 %p2)
 ret i64 %t13357
 }
-define ptr @resid_box_alloc(i64 %a0, i64 %a1, ptr %a2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_box_alloc(i64 %a0, i64 %a1, ptr %a2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x2i = ptrtoint ptr %a2 to i64
 %r = call i64 @rt_box_alloc(i64 %a0, i64 %a1, i64 %x2i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_box_tag(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_box_tag(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13358 = call i1 @box_imm(i64 %p0)
 br label %LSL13359
@@ -30693,13 +30690,13 @@ L4617:
 %t13364 = phi i64 [ %t13362, %L4615 ], [ %t13363, %L4616 ]
 ret i64 %t13364
 }
-define i64 @resid_box_tag(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_box_tag(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_box_tag(i64 %x0i)
 ret i64 %r
 }
-define internal i64 @rt_box_count(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_box_count(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13365 = call i1 @box_imm(i64 %p0)
 br label %LSL13366
@@ -30720,25 +30717,25 @@ L4620:
 %t13370 = phi i64 [ 1, %L4618 ], [ %t13369, %L4619 ]
 ret i64 %t13370
 }
-define i64 @resid_box_count(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_box_count(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_box_count(i64 %x0i)
 ret i64 %r
 }
-define internal i64 @rt_box_slots(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_box_slots(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13371 = add i64 %p0, 16
 ret i64 %t13371
 }
-define ptr @resid_box_slots(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_box_slots(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_box_slots(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_box_slot(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_box_slot(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13372 = add i64 %p0, 16
 %t13373 = mul i64 %p1, 8
@@ -30746,30 +30743,30 @@ entry:
 %t13375 = call i64 @ld64(i64 %t13374)
 ret i64 %t13375
 }
-define ptr @resid_box_slot(ptr %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_box_slot(ptr %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_box_slot(i64 %x0i, i64 %a1)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_malloc(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_malloc(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13376 = tail call i64 @c_malloc(i64 %p0)
 ret i64 %t13376
 }
-define ptr @resid_malloc(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_malloc(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_malloc(i64 %a0)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @lcount(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @lcount(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13377 = tail call i64 @ld64(i64 %p0)
 ret i64 %t13377
 }
-define internal i64 @lshift(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @lshift(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13378 = add i64 %p0, 8
 %t13379 = call i64 @ld32(i64 %t13378)
@@ -30786,7 +30783,7 @@ L4623:
 %t13384 = phi i64 [ %t13383, %L4621 ], [ %t13380, %L4622 ]
 ret i64 %t13384
 }
-define internal i1 @ltransient(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @ltransient(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13385 = add i64 %p0, 8
 %t13386 = call i64 @ld32(i64 %t13385)
@@ -30795,19 +30792,19 @@ entry:
 %t13389 = icmp eq i64 %t13387, %t13388
 ret i1 %t13389
 }
-define internal i64 @lroot(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @lroot(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13390 = add i64 %p0, 16
 %t13391 = tail call i64 @ld64(i64 %t13390)
 ret i64 %t13391
 }
-define internal i64 @ltype(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @ltype(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13392 = add i64 %p0, 24
 %t13393 = tail call i64 @ld64(i64 %t13392)
 ret i64 %t13393
 }
-define internal i64 @set_list(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @set_list(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13394 = call i64 @st64(i64 %p0, i64 %p1)
 %t13395 = add i64 %p0, 8
@@ -30820,7 +30817,7 @@ entry:
 %t13402 = add nsw i64 %t13401, %p0
 ret i64 %t13402
 }
-define internal i64 @list_hdr() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @list_hdr() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13403 = call i64 @ralloc(i64 32)
 %t13404 = add i64 %t13403, 12
@@ -30829,13 +30826,13 @@ entry:
 %t13407 = add nsw i64 %t13406, %t13403
 ret i64 %t13407
 }
-define ptr @resid_rt_list_hdr() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_rt_list_hdr() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @list_hdr()
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_list_resid__node_new(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_list_resid__node_new(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13408 = mul i64 %p0, 8
 %t13409 = add i64 8, %t13408
@@ -30851,7 +30848,7 @@ call void @llvm.memset.p0.i64(ptr %t13414p, i8 %t13414q, i64 %t13413, i1 false)
 %t13416 = add nsw i64 %t13415, %t13410
 ret i64 %t13416
 }
-define internal i64 @flat_new(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @flat_new(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13417 = mul i64 %p0, 8
 %t13418 = add i64 24, %t13417
@@ -30865,13 +30862,13 @@ entry:
 %t13426 = add nsw i64 %t13425, %t13419
 ret i64 %t13426
 }
-define ptr @resid_rt_flatbuf_new(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_rt_flatbuf_new(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @flat_new(i64 %a0)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_list_resid__pvec_get(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_list_resid__pvec_get(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -30902,7 +30899,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @list_at(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @list_at(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13444 = call i64 @lshift(i64 %p0)
 %t13445 = sub nsw i64 0, 1
@@ -30921,7 +30918,7 @@ L4629:
 %t13454 = call i64 @__mruntime_rt_list_resid__pvec_get(i64 %t13452, i64 %t13453, i64 %p1)
 ret i64 %t13454
 }
-define internal i64 @node_with(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @node_with(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13455 = icmp ne i64 %p0, 0
 br i1 %t13455, label %L4630, label %L4631
@@ -30962,7 +30959,7 @@ L4638:
 %t13473 = add nsw i64 %t13472, %t13461
 ret i64 %t13473
 }
-define internal i64 @set_leaf(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @set_leaf(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13474 = icmp eq i64 %p1, 0
 br i1 %t13474, label %L4639, label %L4641
@@ -31001,7 +30998,7 @@ L4644:
 %t13493 = call i64 @node_with(i64 %p0, i64 %t13480, i64 %t13492)
 ret i64 %t13493
 }
-define internal i64 @pvec_append_into(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @pvec_append_into(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13494 = icmp eq i64 %p0, 0
 br label %LSL13495
@@ -31033,7 +31030,7 @@ L4647:
 %t13507 = add nsw i64 %t13506, %t13504
 ret i64 %t13507
 }
-define ptr @resid_rt_pvec_append_into(ptr %a0, ptr %a1, ptr %a2, i64 %a3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_rt_pvec_append_into(ptr %a0, ptr %a1, ptr %a2, i64 %a3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -31042,7 +31039,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_list_resid__append_core(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_list_resid__append_core(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13508 = call i64 @lshift(i64 %p1)
 %t13509 = sub nsw i64 0, 1
@@ -31154,7 +31151,7 @@ L4650:
 %t13559 = tail call i64 @__mruntime_rt_list_resid__trie_append(i64 %p0, i64 %p1, i64 %p2, i64 %p3)
 ret i64 %t13559
 }
-define internal i64 @__mruntime_rt_list_resid__flat_fill(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5, i64 %p6) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_list_resid__flat_fill(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5, i64 %p6) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13560 = add i64 %p3, 24
 %t13561 = mul i64 %p4, 8
@@ -31186,7 +31183,7 @@ L4668:
 %t13575 = call i64 @set_list(i64 %t13571, i64 %t13572, i64 %t13573, i64 %p3, i64 %t13574)
 ret i64 %t13575
 }
-define internal i64 @__mruntime_rt_list_resid__trie_append(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_list_resid__trie_append(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13576 = icmp ne i64 %p0, 0
 br i1 %t13576, label %L4669, label %L4670
@@ -31213,7 +31210,7 @@ L4674:
 %t13586 = tail call i64 @__mruntime_rt_list_resid__trie_fill(i64 %t13578, i64 %p2, i64 %p3, i64 0)
 ret i64 %t13586
 }
-define internal i64 @__mruntime_rt_list_resid__trie_fill(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_list_resid__trie_fill(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -31285,7 +31282,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @leaf_of(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @leaf_of(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -31311,7 +31308,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_list_resid__place_leaf(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_list_resid__place_leaf(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13638 = call i64 @lshift(i64 %p0)
 %t13639 = add i64 %t13638, 5
@@ -31343,7 +31340,7 @@ L4695:
 %t13653 = call i64 @st64(i64 %t13648, i64 %t13652)
 ret i64 %t13653
 }
-define internal i64 @__mruntime_rt_list_resid__grow_root(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_list_resid__grow_root(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13654 = call i64 @__mruntime_rt_list_resid__node_new(i64 1)
 %t13655 = add i64 %t13654, 8
@@ -31357,7 +31354,7 @@ entry:
 %t13663 = call i64 @st32(i64 %t13660, i64 %t13662)
 ret i64 %t13663
 }
-define internal i64 @pvec_push(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @pvec_push(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13664p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.pvec_one)
 %t13664 = ptrtoint ptr %t13664p to i64
@@ -31365,7 +31362,7 @@ entry:
 %t13666 = call i64 @pvec_append_into(i64 0, i64 %p0, i64 %t13664, i64 1)
 ret i64 %t13666
 }
-define ptr @resid_rt_pvec_push(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_rt_pvec_push(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -31373,7 +31370,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @trie_from_items(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @trie_from_items(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13667 = icmp slt i64 %p1, 32
 br i1 %t13667, label %L4696, label %L4697
@@ -31400,7 +31397,7 @@ ret i64 %t13679
 L4701:
 ret i64 %t13674
 }
-define internal i64 @rt_list_new(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_list_new(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13680p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.list_seed)
 %t13680 = ptrtoint ptr %t13680p to i64
@@ -31415,7 +31412,7 @@ L4704:
 %t13685 = call i64 @pvec_append_into(i64 0, i64 %t13681, i64 %p1, i64 %p0)
 ret i64 %t13685
 }
-define ptr @resid_list_new(i64 %a0, ptr %a1, ptr %a2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_list_new(i64 %a0, ptr %a1, ptr %a2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x1i = ptrtoint ptr %a1 to i64
 %x2i = ptrtoint ptr %a2 to i64
@@ -31423,18 +31420,18 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_list_len(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_list_len(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13686 = tail call i64 @lcount(i64 %p0)
 ret i64 %t13686
 }
-define i64 @resid_list_len(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_list_len(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_list_len(i64 %x0i)
 ret i64 %r
 }
-define internal i64 @rt_list_get(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_list_get(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13687 = call i64 @lcount(i64 %p0)
 %t13688 = call i1 @ult(i64 %p1, i64 %t13687)
@@ -31448,26 +31445,26 @@ L4707:
 %t13692 = tail call i64 @list_at(i64 %p0, i64 %p1)
 ret i64 %t13692
 }
-define ptr @resid_list_get(ptr %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_list_get(ptr %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_list_get(i64 %x0i, i64 %a1)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_list_get_nc(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_list_get_nc(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13693 = tail call i64 @list_at(i64 %p0, i64 %p1)
 ret i64 %t13693
 }
-define ptr @resid_list_get_nc(ptr %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_list_get_nc(ptr %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_list_get_nc(i64 %x0i, i64 %a1)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_list_vdata(i64 %p0) alwaysinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_list_vdata(i64 %p0) alwaysinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13694 = call i64 @lshift(i64 %p0)
 %t13695 = sub nsw i64 0, 1
@@ -31483,14 +31480,14 @@ L4710:
 %t13699 = phi i64 [ %t13698, %L4708 ], [ 0, %L4709 ]
 ret i64 %t13699
 }
-define ptr @resid_list_vdata(ptr %a0) alwaysinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_list_vdata(ptr %a0) alwaysinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_list_vdata(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_list_vlen(i64 %p0) alwaysinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_list_vlen(i64 %p0) alwaysinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13700 = call i64 @lshift(i64 %p0)
 %t13701 = sub nsw i64 0, 1
@@ -31505,13 +31502,13 @@ L4713:
 %t13704 = phi i64 [ %t13703, %L4711 ], [ 0, %L4712 ]
 ret i64 %t13704
 }
-define i64 @resid_list_vlen(ptr %a0) alwaysinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_list_vlen(ptr %a0) alwaysinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_list_vlen(i64 %x0i)
 ret i64 %r
 }
-define internal i64 @rt_list_get_v(i64 %p0, i64 %p1, i64 %p2, i64 %p3) alwaysinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_list_get_v(i64 %p0, i64 %p1, i64 %p2, i64 %p3) alwaysinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13705 = call i1 @ult(i64 %p1, i64 %p3)
 br i1 %t13705, label %L4714, label %L4716
@@ -31524,7 +31521,7 @@ L4716:
 %t13709 = call i64 @rt_list_get(i64 %p0, i64 %p1)
 ret i64 %t13709
 }
-define ptr @resid_list_get_v(ptr %a0, i64 %a1, ptr %a2, i64 %a3) alwaysinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_list_get_v(ptr %a0, i64 %a1, ptr %a2, i64 %a3) alwaysinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x2i = ptrtoint ptr %a2 to i64
@@ -31532,19 +31529,19 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_list_type(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_list_type(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13710 = tail call i64 @ltype(i64 %p0)
 ret i64 %t13710
 }
-define ptr @resid_list_type(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_list_type(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_list_type(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_list_to_array(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_list_to_array(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13711 = call i64 @lcount(i64 %p0)
 %t13712 = icmp eq i64 %t13711, 0
@@ -31571,14 +31568,14 @@ L4722:
 %t13723 = phi i64 [ %t13721, %L4720 ], [ %t13722, %L4721 ]
 ret i64 %t13714
 }
-define ptr @resid_list_to_array(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_list_to_array(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_list_to_array(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_list_resid__array_from_trie(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_list_resid__array_from_trie(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -31600,7 +31597,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_list_concat(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_list_concat(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13731 = call i64 @lcount(i64 %p1)
 %t13732 = icmp eq i64 %t13731, 0
@@ -31632,7 +31629,7 @@ L4734:
 %t13746 = add nsw i64 %t13745, %t13743
 ret i64 %t13746
 }
-define ptr @resid_list_concat(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_list_concat(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -31640,12 +31637,12 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_list_push(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_list_push(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13747 = tail call i64 @pvec_push(i64 %p0, i64 %p1)
 ret i64 %t13747
 }
-define ptr @resid_list_push(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_list_push(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -31653,20 +31650,20 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_listbuf_new() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_listbuf_new() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13748 = call i64 @list_hdr()
 %t13749 = sub nsw i64 0, 1
 %t13750 = call i64 @set_list(i64 %t13748, i64 0, i64 %t13749, i64 0, i64 0)
 ret i64 %t13750
 }
-define ptr @resid_listbuf_new() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_listbuf_new() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_listbuf_new()
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_listbuf_push(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_listbuf_push(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13751 = call i64 @lcount(i64 %p0)
 %t13752 = call i64 @lroot(i64 %p0)
@@ -31701,7 +31698,7 @@ L4737:
 %t13770 = add nsw i64 %t13769, %p0
 ret i64 %t13770
 }
-define ptr @resid_listbuf_push(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_listbuf_push(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -31709,7 +31706,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_list_resid__lb_grow(i64 %p0, i64 %p1, i64 %p2) noinline cold "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_list_resid__lb_grow(i64 %p0, i64 %p1, i64 %p2) noinline cold "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13771 = icmp slt i64 %p2, 4
 br i1 %t13771, label %L4738, label %L4739
@@ -31739,7 +31736,7 @@ L4743:
 %t13784 = add nsw i64 %t13783, %t13774
 ret i64 %t13784
 }
-define internal i64 @rt_listbuf_finish(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_listbuf_finish(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13785 = add i64 %p0, 24
 %t13786 = call i64 @st64(i64 %t13785, i64 %p1)
@@ -31756,7 +31753,7 @@ L4746:
 %t13791 = phi i64 [ %t13790, %L4744 ], [ 0, %L4745 ]
 ret i64 %p0
 }
-define ptr @resid_listbuf_finish(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_listbuf_finish(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -31764,7 +31761,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_list_slice(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_list_slice(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13792 = icmp sgt i64 %p1, 0
 br i1 %t13792, label %L4747, label %L4748
@@ -31831,14 +31828,14 @@ L4761:
 %t13821 = add nsw i64 %t13820, %t13818
 ret i64 %t13821
 }
-define ptr @resid_list_slice(ptr %a0, i64 %a1, i64 %a2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_list_slice(ptr %a0, i64 %a1, i64 %a2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_list_slice(i64 %x0i, i64 %a1, i64 %a2)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_list_resid__slice_fill(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_list_resid__slice_fill(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -31862,7 +31859,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_range_list(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_range_list(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13830 = icmp sgt i64 %p1, %p0
 br i1 %t13830, label %L4765, label %L4766
@@ -31905,13 +31902,13 @@ L4773:
 %t13849 = add nsw i64 %t13848, %t13846
 ret i64 %t13849
 }
-define ptr @resid_range_list(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_range_list(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_range_list(i64 %a0, i64 %a1)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_list_resid__range_fill(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_list_resid__range_fill(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -31934,7 +31931,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_range_list_incl(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_range_list_incl(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13858 = icmp eq i64 %p1, 9223372036854775807
 br i1 %t13858, label %L4777, label %L4779
@@ -31946,13 +31943,13 @@ L4779:
 %t13862 = tail call i64 @rt_range_list(i64 %p0, i64 %t13861)
 ret i64 %t13862
 }
-define ptr @resid_range_list_incl(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_range_list_incl(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_range_list_incl(i64 %a0, i64 %a1)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_assert(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_assert(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13863 = icmp ne i64 %p0, 0
 br i1 %t13863, label %L4780, label %L4782
@@ -31978,14 +31975,14 @@ L4785:
 %t13876 = call i64 @rt_abort_msg(i64 %t13875)
 ret i64 %t13876
 }
-define void @resid_assert(i8 %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define void @resid_assert(i8 %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0 = zext i8 %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
 %r = call i64 @rt_assert(i64 %x0, i64 %x1i)
 ret void
 }
-define internal i64 @rt_todo(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_todo(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13877 = call i64 @rt_sb_new()
 %t13878 = icmp ne i64 %p0, 0
@@ -32015,14 +32012,14 @@ L4791:
 %t13893 = call i64 @rt_abort_msg(i64 %t13892)
 ret i64 %t13893
 }
-define void @resid_todo(i8 %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define void @resid_todo(i8 %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0 = zext i8 %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
 %r = call i64 @rt_todo(i64 %x0, i64 %x1i)
 ret void
 }
-define internal i64 @rt_growbuf_from_list(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_growbuf_from_list(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13894 = call i64 @lcount(i64 %p0)
 %t13895 = call i64 @xmalloc(i64 24)
@@ -32058,14 +32055,14 @@ L4797:
 %t13913 = add nsw i64 %t13912, %t13895
 ret i64 %t13913
 }
-define ptr @resid_growbuf_from_list(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_growbuf_from_list(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_growbuf_from_list(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_growbuf_push_list(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_growbuf_push_list(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13914 = call i64 @lcount(i64 %p1)
 %t13915 = call i64 @ld64(i64 %p0)
@@ -32103,7 +32100,7 @@ L4803:
 %t13935 = add nsw i64 %t13934, %p0
 ret i64 %t13935
 }
-define ptr @resid_growbuf_push_list(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_growbuf_push_list(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -32111,7 +32108,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_list_resid__gb_grow(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_list_resid__gb_grow(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13936 = add i64 %p0, 8
 %t13937 = call i64 @ld64(i64 %t13936)
@@ -32134,7 +32131,7 @@ L4806:
 %t13948 = tail call i64 @st64(i64 %t13947, i64 %t13940)
 ret i64 %t13948
 }
-define internal i64 @rt_growbuf_finish(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_growbuf_finish(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13949 = call i64 @ld64(i64 %p0)
 %t13950 = add i64 %p0, 16
@@ -32147,7 +32144,7 @@ entry:
 %t13957 = add i64 %t13955, %t13956
 ret i64 %t13952
 }
-define ptr @resid_growbuf_finish(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_growbuf_finish(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -32155,7 +32152,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_list_resid__box_free_shallow(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_list_resid__box_free_shallow(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13958 = call i64 @c_box_interned(i64 %p0)
 %t13959 = icmp ne i64 %t13958, 0
@@ -32169,7 +32166,7 @@ L4809:
 %t13961 = phi i64 [ 0, %L4807 ], [ %t13960, %L4808 ]
 ret i64 %t13961
 }
-define internal i64 @__mruntime_rt_list_resid__free_node(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_list_resid__free_node(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13962 = icmp eq i64 %p0, 0
 br i1 %t13962, label %L4810, label %L4812
@@ -32181,7 +32178,7 @@ L4812:
 %t13965 = call i64 @c_free(i64 %p0)
 ret i64 %t13965
 }
-define internal i64 @__mruntime_rt_list_resid__free_kids(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_list_resid__free_kids(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -32222,7 +32219,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_list_free(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_list_free(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t13980 = icmp eq i64 %p0, 0
 br i1 %t13980, label %L4822, label %L4824
@@ -32254,13 +32251,13 @@ L4827:
 %t13992 = tail call i64 @c_free(i64 %p0)
 ret i64 %t13992
 }
-define void @resid_list_free(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define void @resid_list_free(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_list_free(i64 %x0i)
 ret void
 }
-define internal i64 @__mruntime_rt_list_resid__free_slots(i64 %p0.in, i64 %p1.in, i64 %p2.in, i1 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_list_resid__free_slots(i64 %p0.in, i64 %p1.in, i64 %p2.in, i1 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -32300,7 +32297,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_struct_free(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_struct_free(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14007 = icmp eq i64 %p0, 0
 br i1 %t14007, label %L4834, label %L4836
@@ -32312,13 +32309,13 @@ L4836:
 %t14010 = tail call i64 @c_free(i64 %p0)
 ret i64 %t14010
 }
-define void @resid_struct_free(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define void @resid_struct_free(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_struct_free(i64 %x0i)
 ret void
 }
-define internal i64 @rt_box_free(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_box_free(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14011 = icmp eq i64 %p0, 0
 br label %LSL14012
@@ -32349,36 +32346,36 @@ L4842:
 %t14022 = tail call i64 @c_free(i64 %p0)
 ret i64 %t14022
 }
-define void @resid_box_free(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define void @resid_box_free(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_box_free(i64 %x0i)
 ret void
 }
-define internal i64 @__mruntime_rt_map_resid__ld_i8(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__ld_i8(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14023 = call i64 @ld8(i64 %p0)
 %t14024 = tail call i64 @sx8(i64 %t14023)
 ret i64 %t14024
 }
-define internal i64 @__mruntime_rt_map_resid__popc(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__popc(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14025 = tail call i64 @llvm.ctpop.i64(i64 %p0)
 ret i64 %t14025
 }
-define internal i64 @__mruntime_rt_map_resid__mret() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__mret() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14026p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.map_ret)
 %t14026 = ptrtoint ptr %t14026p to i64
 ret i64 %t14026
 }
-define internal i64 @__mruntime_rt_map_resid__mflag() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__mflag() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14027p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.map_flag)
 %t14027 = ptrtoint ptr %t14027p to i64
 ret i64 %t14027
 }
-define internal i64 @__mruntime_rt_map_resid__ret_word(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__ret_word(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14028 = call i64 @__mruntime_rt_map_resid__mret()
 %t14029 = call i64 @st64(i64 %t14028, i64 %p0)
@@ -32386,37 +32383,37 @@ entry:
 %t14031 = add nsw i64 %t14030, 1
 ret i64 %t14031
 }
-define internal i64 @map_heap_w() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @map_heap_w() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14032p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.map_heap)
 %t14032 = ptrtoint ptr %t14032p to i64
 ret i64 %t14032
 }
-define internal i1 @__mruntime_rt_map_resid__map_heap() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_map_resid__map_heap() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14033 = call i64 @map_heap_w()
 %t14034 = call i64 @ld64(i64 %t14033)
 %t14035 = icmp ne i64 %t14034, 0
 ret i1 %t14035
 }
-define internal i64 @__mruntime_rt_map_resid__map_born_w() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__map_born_w() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14036p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.map_born)
 %t14036 = ptrtoint ptr %t14036p to i64
 ret i64 %t14036
 }
-define internal i64 @__mruntime_rt_map_resid__sc_depth() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__sc_depth() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14037 = tail call i64 @c_sc_depth()
 ret i64 %t14037
 }
-define internal i1 @__mruntime_rt_map_resid__in_region(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_map_resid__in_region(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14038 = call i64 @region_of(i64 %p0)
 %t14039 = icmp ne i64 %t14038, 0
 ret i1 %t14039
 }
-define internal i64 @__mruntime_rt_map_resid__map_obj(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__map_obj(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14040 = call i64 @map_heap_w()
 %t14041 = call i64 @ld64(i64 %t14040)
@@ -32468,7 +32465,7 @@ L4854:
 %t14062 = tail call i64 @xmalloc(i64 %p0)
 ret i64 %t14062
 }
-define internal i64 @__mruntime_rt_map_resid__map_enter(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__map_enter(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14063 = call i64 @map_heap_w()
 %t14064 = call i64 @ld64(i64 %t14063)
@@ -32504,7 +32501,7 @@ L4860:
 %t14076 = call i64 @st64(i64 %t14071, i64 %t14075)
 ret i64 %t14064
 }
-define internal i64 @__mruntime_rt_map_resid__map_leave(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__map_leave(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14077 = call i64 @map_heap_w()
 %t14078 = call i64 @st64(i64 %t14077, i64 %p0)
@@ -32512,7 +32509,7 @@ entry:
 %t14080 = add i64 %t14078, %t14079
 ret i64 %t14080
 }
-define internal i64 @__mruntime_rt_map_resid__map_obj_free(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__map_obj_free(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14081 = icmp ne i64 %p0, 0
 br label %LSL14082
@@ -32544,7 +32541,7 @@ L4866:
 %t14092 = phi i64 [ %t14091, %L4864 ], [ 0, %L4865 ]
 ret i64 %t14092
 }
-define internal i64 @__mruntime_rt_map_resid__raw_empty() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__raw_empty() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14093 = sext i64 0 to i128
 %t14094 = sub i128 %t14093, 9223372036854775807
@@ -32553,31 +32550,31 @@ entry:
 %t14097 = trunc i128 %t14096 to i64
 ret i64 %t14097
 }
-define internal i64 @__mruntime_rt_map_resid__raw_tomb() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__raw_tomb() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14098 = sext i64 0 to i128
 %t14099 = sub i128 %t14098, 9223372036854775807
 %t14100 = trunc i128 %t14099 to i64
 ret i64 %t14100
 }
-define internal i64 @__mruntime_rt_map_resid__fnv_off() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__fnv_off() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14101 = sext i64 0 to i128
 %t14102 = sub i128 %t14101, 3750763034362895579
 %t14103 = trunc i128 %t14102 to i64
 ret i64 %t14103
 }
-define internal i64 @__mruntime_rt_map_resid__fnv_p() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__fnv_p() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 1099511628211
 }
-define internal i64 @__mruntime_rt_map_resid__fnv_str(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__fnv_str(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14104 = call i64 @__mruntime_rt_map_resid__fnv_off()
 %t14105 = call i64 @__mruntime_rt_map_resid__fnv_from(i64 %t14104, i64 %p0)
 ret i64 %t14105
 }
-define internal i64 @__mruntime_rt_map_resid__fnv_from(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__fnv_from(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -32597,7 +32594,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_map_resid__fnv_dec(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__fnv_dec(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14113 = sdiv i64 %p1, 10
 %t14114 = icmp sgt i64 %t14113, 0
@@ -32617,7 +32614,7 @@ L4872:
 %t14122 = mul i64 %t14120, %t14121
 ret i64 %t14122
 }
-define internal i64 @__mruntime_rt_map_resid__fnv_i64(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__fnv_i64(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14123 = icmp slt i64 %p0, 0
 br i1 %t14123, label %L4873, label %L4874
@@ -32654,7 +32651,7 @@ L4881:
 %t14139 = call i64 @__mruntime_rt_map_resid__fnv_dec(i64 %t14129, i64 %t14138)
 ret i64 %t14139
 }
-define internal i64 @__mruntime_rt_map_resid__fnv_f64(double %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__fnv_f64(double %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14140p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.map_fbuf)
 %t14140 = ptrtoint ptr %t14140p to i64
@@ -32663,7 +32660,7 @@ entry:
 %t14144 = call i64 @__mruntime_rt_map_resid__fnv_str(i64 %t14140)
 ret i64 %t14144
 }
-define internal i1 @__mruntime_rt_map_resid__is_boxed(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_map_resid__is_boxed(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14145 = call i1 @box_imm(i64 %p0)
 br label %LSL14146
@@ -32685,7 +32682,7 @@ LSJ14149:
 %t14152 = phi i1 [ true, %LSL14149 ], [ %t14151, %LSR14149 ]
 ret i1 %t14152
 }
-define internal i1 @__mruntime_rt_map_resid__type_is(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_map_resid__type_is(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14153 = icmp ne i64 %p0, 0
 br label %LSL14154
@@ -32699,7 +32696,7 @@ LSJ14154:
 %t14157 = phi i1 [ false, %LSL14154 ], [ %t14156, %LSR14154 ]
 ret i1 %t14157
 }
-define internal i64 @__mruntime_rt_map_resid__stype(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__stype(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14158 = call i1 @box_imm(i64 %p0)
 br i1 %t14158, label %L4882, label %L4884
@@ -32757,7 +32754,7 @@ ret i64 7
 L4908:
 ret i64 6
 }
-define internal i64 @__mruntime_rt_map_resid__value_hash(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__value_hash(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14181 = call i1 @__mruntime_rt_map_resid__is_boxed(i64 %p0)
 %t14182 = xor i1 %t14181, true
@@ -32891,7 +32888,7 @@ L4947:
 %t14245 = tail call i64 @__mruntime_rt_map_resid__fnv_str(i64 %t14244)
 ret i64 %t14245
 }
-define internal i1 @__mruntime_rt_map_resid__value_eq(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_map_resid__value_eq(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14246 = call i1 @box_imm(i64 %p0)
 br label %LSL14247
@@ -33008,7 +33005,7 @@ ret i1 %t14287
 L4971:
 ret i1 false
 }
-define internal i1 @__mruntime_rt_map_resid__limbs_same(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_map_resid__limbs_same(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14288 = icmp sle i64 %p2, 0
 br i1 %t14288, label %L4972, label %L4974
@@ -33031,7 +33028,7 @@ LSJ14292:
 %t14297 = phi i1 [ false, %LSL14292 ], [ %t14296, %LSR14292 ]
 ret i1 %t14297
 }
-define internal i1 @__mruntime_rt_map_resid__boxed_eq(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_map_resid__boxed_eq(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14298 = call i64 @box_type(i64 %p0)
 %t14299 = call i64 @box_type(i64 %p1)
@@ -33183,7 +33180,7 @@ L5001:
 %t14372 = icmp eq i64 %p0, %p1
 ret i1 %t14372
 }
-define internal i64 @__mruntime_rt_map_resid__key_hash(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__key_hash(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14373 = icmp eq i64 %p0, 1
 br i1 %t14373, label %L5005, label %L5006
@@ -33206,7 +33203,7 @@ L5007:
 %t14379 = phi i64 [ %t14374, %L5005 ], [ %t14378, %L5010 ]
 ret i64 %t14379
 }
-define internal i1 @__mruntime_rt_map_resid__key_eq(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_map_resid__key_eq(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14380 = icmp eq i64 %p0, 1
 br i1 %t14380, label %L5011, label %L5012
@@ -33229,7 +33226,7 @@ L5013:
 %t14386 = phi i1 [ %t14381, %L5011 ], [ %t14385, %L5016 ]
 ret i1 %t14386
 }
-define internal i1 @__mruntime_rt_map_resid__str_key_eq(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_map_resid__str_key_eq(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14387 = icmp eq i64 %p0, %p1
 br i1 %t14387, label %L5017, label %L5019
@@ -33253,7 +33250,7 @@ L5022:
 %t14393 = icmp eq i64 %t14392, 0
 ret i1 %t14393
 }
-define internal i64 @__mruntime_rt_map_resid__canon_rank(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__canon_rank(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14394 = call i64 @__mruntime_rt_map_resid__rank_at(i64 %p0, i64 0, i64 0)
 %t14395 = shl i64 %t14394, 4
@@ -33261,7 +33258,7 @@ entry:
 %t14397 = or i64 %t14395, %t14396
 ret i64 %t14397
 }
-define internal i64 @__mruntime_rt_map_resid__rank_at(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__rank_at(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -33286,13 +33283,13 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_map_resid__edit_seq() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__edit_seq() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14409p = getelementptr i8, ptr @rtg.map_edit_seq, i64 0
 %t14409 = ptrtoint ptr %t14409p to i64
 ret i64 %t14409
 }
-define internal i64 @__mruntime_rt_map_resid__new_edit() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__new_edit() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14410 = call i64 @__mruntime_rt_map_resid__edit_seq()
 %t14411p = inttoptr i64 %t14410 to ptr
@@ -33300,7 +33297,7 @@ entry:
 %t14412 = add i64 %t14411, 1
 ret i64 %t14412
 }
-define internal i64 @__mruntime_rt_map_resid__box_any(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__box_any(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14413 = icmp eq i64 %p0, 1
 br i1 %t14413, label %L5026, label %L5028
@@ -33331,7 +33328,7 @@ ret i64 %t14421
 L5034:
 ret i64 %p1
 }
-define internal i64 @__mruntime_rt_map_resid__mbox(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__mbox(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14422 = icmp slt i64 %p0, 1
 br label %LSL14423
@@ -33364,7 +33361,7 @@ L5040:
 %t14436 = add nsw i64 %t14435, %t14433
 ret i64 %t14436
 }
-define internal i1 @__mruntime_rt_map_resid__unbox_k(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_map_resid__unbox_k(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14437 = icmp eq i64 %p0, 4
 br i1 %t14437, label %L5041, label %L5043
@@ -33440,7 +33437,7 @@ ret i1 %t14468
 L5055:
 ret i1 false
 }
-define internal i64 @__mruntime_rt_map_resid__word_of_box(i64 %p0, i1 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__word_of_box(i64 %p0, i1 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14469 = call i1 @ult(i64 %p0, i64 4096)
 %t14470 = xor i1 %t14469, true
@@ -33505,41 +33502,41 @@ L5067:
 %t14496 = mul nsw i64 %t14495, 0
 ret i64 %t14496
 }
-define internal i64 @__mruntime_rt_map_resid__ndmap(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__ndmap(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14497 = tail call i64 @ld32(i64 %p0)
 ret i64 %t14497
 }
-define internal i64 @__mruntime_rt_map_resid__nnmap(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__nnmap(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14498 = add i64 %p0, 4
 %t14499 = tail call i64 @ld32(i64 %t14498)
 ret i64 %t14499
 }
-define internal i64 @__mruntime_rt_map_resid__nncoll(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__nncoll(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14500 = add i64 %p0, 8
 %t14501 = tail call i64 @ld32(i64 %t14500)
 ret i64 %t14501
 }
-define internal i64 @__mruntime_rt_map_resid__ncap(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__ncap(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14502 = add i64 %p0, 12
 %t14503 = tail call i64 @ld32(i64 %t14502)
 ret i64 %t14503
 }
-define internal i64 @__mruntime_rt_map_resid__nedit(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__nedit(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14504 = add i64 %p0, 16
 %t14505 = tail call i64 @ld64(i64 %t14504)
 ret i64 %t14505
 }
-define internal i64 @__mruntime_rt_map_resid__nw(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__nw(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14506 = add i64 %p0, 24
 ret i64 %t14506
 }
-define internal i64 @__mruntime_rt_map_resid__wd(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__wd(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14507 = add i64 %p0, 24
 %t14508 = mul i64 %p1, 8
@@ -33547,7 +33544,7 @@ entry:
 %t14510 = call i64 @ld64(i64 %t14509)
 ret i64 %t14510
 }
-define internal i64 @__mruntime_rt_map_resid__wset(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__wset(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14511 = add i64 %p0, 24
 %t14512 = mul i64 %p1, 8
@@ -33555,7 +33552,7 @@ entry:
 %t14514 = call i64 @st64(i64 %t14513, i64 %p2)
 ret i64 %t14514
 }
-define internal i64 @__mruntime_rt_map_resid__node_nd(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__node_nd(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14515 = call i64 @__mruntime_rt_map_resid__nncoll(i64 %p0)
 %t14516 = icmp ne i64 %t14515, 0
@@ -33571,7 +33568,7 @@ L5070:
 %t14520 = phi i64 [ %t14517, %L5068 ], [ %t14519, %L5069 ]
 ret i64 %t14520
 }
-define internal i64 @__mruntime_rt_map_resid__node_nn(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__node_nn(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14521 = call i64 @__mruntime_rt_map_resid__nncoll(i64 %p0)
 %t14522 = icmp ne i64 %t14521, 0
@@ -33586,7 +33583,7 @@ L5073:
 %t14525 = phi i64 [ 0, %L5071 ], [ %t14524, %L5072 ]
 ret i64 %t14525
 }
-define internal i64 @__mruntime_rt_map_resid__node_words(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__node_words(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14526 = call i64 @__mruntime_rt_map_resid__node_nd(i64 %p0)
 %t14527 = mul i64 2, %t14526
@@ -33594,7 +33591,7 @@ entry:
 %t14529 = add i64 %t14527, %t14528
 ret i64 %t14529
 }
-define internal i64 @__mruntime_rt_map_resid__slot_bit(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__slot_bit(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14530 = mul i64 %p1, 5
 %t14531 = call i64 @lshr(i64 %p0, i64 %t14530)
@@ -33605,7 +33602,7 @@ entry:
 %t14536 = select i1 %t14533, i64 0, i64 %t14535
 ret i64 %t14536
 }
-define internal i64 @__mruntime_rt_map_resid__node_new(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__node_new(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14537 = mul i64 %p0, 8
 %t14538 = add i64 24, %t14537
@@ -33625,7 +33622,7 @@ entry:
 %t14552 = add nsw i64 %t14551, %t14539
 ret i64 %t14552
 }
-define internal i64 @__mruntime_rt_map_resid__node_room(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__node_room(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14553 = call i64 @__mruntime_rt_map_resid__node_words(i64 %p0)
 %t14554 = icmp ne i64 %p2, 0
@@ -33689,7 +33686,7 @@ L5082:
 %t14586 = add nsw i64 %t14585, %t14570
 ret i64 %t14586
 }
-define internal i64 @__mruntime_rt_map_resid__node_leaf(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__node_leaf(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14587 = icmp ne i64 %p4, 0
 br i1 %t14587, label %L5083, label %L5084
@@ -33708,7 +33705,7 @@ L5085:
 %t14595 = add nsw i64 %t14594, %t14589
 ret i64 %t14595
 }
-define internal i64 @__mruntime_rt_map_resid__node_coll2(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__node_coll2(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14596 = icmp ne i64 %p4, 0
 br i1 %t14596, label %L5086, label %L5087
@@ -33730,7 +33727,7 @@ L5088:
 %t14607 = add i64 %t14605, %t14606
 ret i64 %t14598
 }
-define internal i64 @__mruntime_rt_map_resid__node_pair(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5, i64 %p6, i64 %p7) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__node_pair(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5, i64 %p6, i64 %p7) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14608 = icmp sgt i64 %p0, 12
 br i1 %t14608, label %L5089, label %L5091
@@ -33810,7 +33807,7 @@ L5112:
 %t14639 = add i64 %t14636, %t14638
 ret i64 %t14625
 }
-define internal i64 @__mruntime_rt_map_resid__node_ins_data(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__node_ins_data(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14640 = call i64 @__mruntime_rt_map_resid__ndmap(i64 %p0)
 %t14641 = sub i64 %p1, 1
@@ -33844,7 +33841,7 @@ entry:
 %t14669 = add nsw i64 %t14668, %t14645
 ret i64 %t14669
 }
-define internal i64 @__mruntime_rt_map_resid__node_data_to_sub(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__node_data_to_sub(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14670 = call i64 @__mruntime_rt_map_resid__ndmap(i64 %p0)
 %t14671 = sub i64 %p1, 1
@@ -33912,7 +33909,7 @@ entry:
 %t14733 = add nsw i64 %t14732, %t14682
 ret i64 %t14733
 }
-define internal i64 @__mruntime_rt_map_resid__node_sub_to_data(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__node_sub_to_data(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14734 = call i64 @__mruntime_rt_map_resid__ndmap(i64 %p0)
 %t14735 = sub i64 %p1, 1
@@ -33984,7 +33981,7 @@ entry:
 %t14801 = add nsw i64 %t14800, %t14746
 ret i64 %t14801
 }
-define internal i64 @__mruntime_rt_map_resid__hn_insert(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5, i64 %p6) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__hn_insert(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5, i64 %p6) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14802 = icmp eq i64 %p0, 0
 br i1 %t14802, label %L5113, label %L5115
@@ -34098,7 +34095,7 @@ L5127:
 %t14872 = call i64 @__mruntime_rt_map_resid__node_ins_data(i64 %p0, i64 %t14812, i64 %p4, i64 %p5, i64 %p6)
 ret i64 %t14872
 }
-define internal i64 @__mruntime_rt_map_resid__coll_insert(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__coll_insert(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -34170,7 +34167,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_map_resid__hn_find(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__hn_find(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -34240,7 +34237,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_map_resid__coll_find(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__coll_find(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -34271,7 +34268,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i1 @__mruntime_rt_map_resid__node_single(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_map_resid__node_single(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14961 = call i64 @__mruntime_rt_map_resid__nncoll(i64 %p0)
 %t14962 = icmp eq i64 %t14961, 1
@@ -34305,7 +34302,7 @@ LSJ14963:
 %t14975 = phi i1 [ true, %LSL14963 ], [ %t14974, %LSJ14970 ]
 ret i1 %t14975
 }
-define internal i64 @__mruntime_rt_map_resid__hn_remove(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__hn_remove(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t14976 = call i64 @__mruntime_rt_map_resid__mflag()
 %t14977 = call i64 @st64(i64 %t14976, i64 0)
@@ -34470,7 +34467,7 @@ ret i64 %t15082
 L5193:
 ret i64 %p0
 }
-define internal i64 @__mruntime_rt_map_resid__coll_remove(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__coll_remove(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -34525,7 +34522,7 @@ L5208:
 %t15112 = add nsw i64 %t15111, %t15093
 ret i64 %t15112
 }
-define internal i64 @__mruntime_rt_map_resid__hn_collect(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__hn_collect(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15113 = icmp eq i64 %p0, 0
 br i1 %t15113, label %L5209, label %L5211
@@ -34548,7 +34545,7 @@ L5214:
 %t15123 = call i64 @__mruntime_rt_map_resid__slots_collect(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %t15120, i64 %t15122)
 ret i64 %t15123
 }
-define internal i64 @__mruntime_rt_map_resid__coll_collect(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__coll_collect(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -34596,7 +34593,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_map_resid__slots_collect(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__slots_collect(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -34670,55 +34667,55 @@ br label %tco.s1
 tco.s1:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_map_resid__mcount(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__mcount(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15183 = tail call i64 @ld64(i64 %p0)
 ret i64 %t15183
 }
-define internal i64 @__mruntime_rt_map_resid__mroot(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__mroot(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15184 = add i64 %p0, 8
 %t15185 = tail call i64 @ld64(i64 %t15184)
 ret i64 %t15185
 }
-define internal i64 @__mruntime_rt_map_resid__mtab(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__mtab(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15186 = add i64 %p0, 16
 %t15187 = tail call i64 @ld64(i64 %t15186)
 ret i64 %t15187
 }
-define internal i1 @__mruntime_rt_map_resid__mtrans(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_map_resid__mtrans(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15188 = add i64 %p0, 24
 %t15189 = call i64 @ld64(i64 %t15188)
 %t15190 = icmp ne i64 %t15189, 0
 ret i1 %t15190
 }
-define internal i64 @__mruntime_rt_map_resid__medit(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__medit(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15191 = add i64 %p0, 32
 %t15192 = tail call i64 @ld64(i64 %t15191)
 ret i64 %t15192
 }
-define internal i64 @__mruntime_rt_map_resid__mown(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__mown(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15193 = add i64 %p0, 40
 %t15194 = tail call i64 @ld32(i64 %t15193)
 ret i64 %t15194
 }
-define internal i64 @__mruntime_rt_map_resid__mkk(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__mkk(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15195 = add i64 %p0, 44
 %t15196 = tail call i64 @__mruntime_rt_map_resid__ld_i8(i64 %t15195)
 ret i64 %t15196
 }
-define internal i64 @__mruntime_rt_map_resid__mvk(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__mvk(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15197 = add i64 %p0, 45
 %t15198 = tail call i64 @__mruntime_rt_map_resid__ld_i8(i64 %t15197)
 ret i64 %t15198
 }
-define internal i64 @__mruntime_rt_map_resid__trie_new(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__trie_new(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15199 = call i64 @__mruntime_rt_map_resid__map_obj(i64 48)
 %t15200 = call i64 @st64(i64 %t15199, i64 %p0)
@@ -34752,55 +34749,55 @@ entry:
 %t15228 = add i64 %t15225, %t15227
 ret i64 %t15199
 }
-define internal i64 @__mruntime_rt_map_resid__tcap(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__tcap(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15229 = tail call i64 @ld64(i64 %p0)
 ret i64 %t15229
 }
-define internal i64 @__mruntime_rt_map_resid__tlive(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__tlive(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15230 = add i64 %p0, 8
 %t15231 = tail call i64 @ld64(i64 %t15230)
 ret i64 %t15231
 }
-define internal i64 @__mruntime_rt_map_resid__ttombs(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__ttombs(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15232 = add i64 %p0, 16
 %t15233 = tail call i64 @ld64(i64 %t15232)
 ret i64 %t15233
 }
-define internal i64 @__mruntime_rt_map_resid__tkk(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__tkk(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15234 = add i64 %p0, 24
 %t15235 = tail call i64 @__mruntime_rt_map_resid__ld_i8(i64 %t15234)
 ret i64 %t15235
 }
-define internal i64 @__mruntime_rt_map_resid__tvk(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__tvk(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15236 = add i64 %p0, 25
 %t15237 = tail call i64 @__mruntime_rt_map_resid__ld_i8(i64 %t15236)
 ret i64 %t15237
 }
-define internal i1 @__mruntime_rt_map_resid__tnov(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_map_resid__tnov(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15238 = add i64 %p0, 26
 %t15239 = call i64 @ld8(i64 %t15238)
 %t15240 = icmp ne i64 %t15239, 0
 ret i1 %t15240
 }
-define internal i64 @__mruntime_rt_map_resid__tkeys(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__tkeys(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15241 = add i64 %p0, 32
 %t15242 = tail call i64 @ld64(i64 %t15241)
 ret i64 %t15242
 }
-define internal i64 @__mruntime_rt_map_resid__tvals(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__tvals(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15243 = add i64 %p0, 40
 %t15244 = tail call i64 @ld64(i64 %t15243)
 ret i64 %t15244
 }
-define internal i1 @__mruntime_rt_map_resid__toob_has(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_map_resid__toob_has(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15245 = add i64 %p0, 48
 %t15246 = add i64 %t15245, %p1
@@ -34808,7 +34805,7 @@ entry:
 %t15248 = icmp ne i64 %t15247, 0
 ret i1 %t15248
 }
-define internal i64 @__mruntime_rt_map_resid__toob_val(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__toob_val(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15249 = add i64 %p0, 56
 %t15250 = mul i64 %p1, 8
@@ -34816,7 +34813,7 @@ entry:
 %t15252 = call i64 @ld64(i64 %t15251)
 ret i64 %t15252
 }
-define internal i64 @__mruntime_rt_map_resid__t_empty(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__t_empty(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15253 = call i64 @__mruntime_rt_map_resid__tkk(i64 %p0)
 %t15254 = icmp eq i64 %t15253, 1
@@ -34830,7 +34827,7 @@ L5238:
 %t15256 = phi i64 [ %t15255, %L5236 ], [ 0, %L5237 ]
 ret i64 %t15256
 }
-define internal i64 @__mruntime_rt_map_resid__t_tomb(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__t_tomb(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15257 = call i64 @__mruntime_rt_map_resid__tkk(i64 %p0)
 %t15258 = icmp eq i64 %t15257, 1
@@ -34844,7 +34841,7 @@ L5241:
 %t15260 = phi i64 [ %t15259, %L5239 ], [ 1, %L5240 ]
 ret i64 %t15260
 }
-define internal i64 @__mruntime_rt_map_resid__mix(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__mix(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15261 = call i64 @lshr(i64 %p0, i64 33)
 %t15262 = xor i64 %p0, %t15261
@@ -34854,7 +34851,7 @@ entry:
 %t15266 = xor i64 %t15264, %t15265
 ret i64 %t15266
 }
-define internal i64 @__mruntime_rt_map_resid__t_hash(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__t_hash(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15267 = call i64 @__mruntime_rt_map_resid__tkk(i64 %p0)
 %t15268 = icmp eq i64 %t15267, 1
@@ -34870,13 +34867,13 @@ L5244:
 %t15272 = phi i64 [ %t15269, %L5242 ], [ %t15271, %L5243 ]
 ret i64 %t15272
 }
-define internal i1 @__mruntime_rt_map_resid__t_keq(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_map_resid__t_keq(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15273 = call i64 @__mruntime_rt_map_resid__tkk(i64 %p0)
 %t15274 = tail call i1 @__mruntime_rt_map_resid__key_eq(i64 %t15273, i64 %p1, i64 %p2)
 ret i1 %t15274
 }
-define internal i64 @__mruntime_rt_map_resid__t_oob(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__t_oob(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15275 = call i64 @__mruntime_rt_map_resid__tkk(i64 %p0)
 %t15276 = icmp ne i64 %t15275, 1
@@ -34900,7 +34897,7 @@ L5253:
 %t15282 = sub nsw i64 0, 1
 ret i64 %t15282
 }
-define internal i64 @__mruntime_rt_map_resid__t_alloc(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__t_alloc(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15283 = call i64 @st64(i64 %p0, i64 %p1)
 %t15284 = mul i64 %p1, 16
@@ -34922,7 +34919,7 @@ L5256:
 %t15294 = call i64 @__mruntime_rt_map_resid__fill_words(i64 %t15285, i64 %t15293, i64 0, i64 %p1)
 ret i64 %t15294
 }
-define internal i64 @__mruntime_rt_map_resid__fill_words(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__fill_words(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -34943,7 +34940,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_map_resid__tab_new(i64 %p0, i64 %p1, i64 %p2, i1 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__tab_new(i64 %p0, i64 %p1, i64 %p2, i1 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15301 = call i64 @__mruntime_rt_map_resid__map_obj(i64 96)
 %t15302p = inttoptr i64 %t15301 to ptr
@@ -34978,18 +34975,18 @@ L5265:
 %t15316 = phi i64 [ %t15315, %L5263 ], [ 0, %L5264 ]
 ret i64 %t15301
 }
-define internal i1 @__mruntime_rt_map_resid__t_over(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_map_resid__t_over(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15317 = mul i64 %p0, 2
 %t15318 = icmp sgt i64 %t15317, %p1
 ret i1 %t15318
 }
-define internal i64 @__mruntime_rt_map_resid__cap_for(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__cap_for(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15319 = call i64 @__mruntime_rt_map_resid__cap_for_at(i64 %p0, i64 16)
 ret i64 %t15319
 }
-define internal i64 @__mruntime_rt_map_resid__cap_for_at(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__cap_for_at(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15320 = add i64 %p0, 1
 %t15321 = call i1 @__mruntime_rt_map_resid__t_over(i64 %t15320, i64 %p1)
@@ -35004,7 +35001,7 @@ L5268:
 %t15324 = phi i64 [ %t15323, %L5266 ], [ %p1, %L5267 ]
 ret i64 %t15324
 }
-define internal i64 @__mruntime_rt_map_resid__t_probe(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__t_probe(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15325 = call i64 @__mruntime_rt_map_resid__tcap(i64 %p0)
 %t15326 = sub i64 %t15325, 1
@@ -35016,7 +35013,7 @@ entry:
 %t15332 = call i64 @__mruntime_rt_map_resid__probe_at(i64 %p0, i64 %p1, i64 %t15328, i64 %t15326, i64 %t15329, i64 %t15330, i64 %t15331)
 ret i64 %t15332
 }
-define internal i64 @__mruntime_rt_map_resid__probe_at(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__probe_at(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -35056,7 +35053,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_map_resid__probe_raw_cached(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__probe_raw_cached(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15346 = add i64 %p0, 72
 %t15347 = call i64 @ld8(i64 %t15346)
@@ -35093,7 +35090,7 @@ L5277:
 %t15369 = add nsw i64 %t15368, %t15361
 ret i64 %t15369
 }
-define internal i64 @__mruntime_rt_map_resid__probe_raw(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__probe_raw(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -35123,7 +35120,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_map_resid__t_next(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__t_next(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -35218,7 +35215,7 @@ L5298:
 %t15427 = sub nsw i64 0, 1
 ret i64 %t15427
 }
-define internal i64 @__mruntime_rt_map_resid__t_rebuild(i64 %p0, i64 %p1, i64 %p2, i1 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__t_rebuild(i64 %p0, i64 %p1, i64 %p2, i1 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15428 = call i64 @xmalloc(i64 96)
 %t15429 = call i64 @mcopy(i64 %t15428, i64 %p0, i64 96)
@@ -35245,7 +35242,7 @@ entry:
 %t15450 = call i64 @c_free(i64 %t15428)
 ret i64 %t15450
 }
-define internal i64 @__mruntime_rt_map_resid__rebuild_from(i64 %p0.in, i64 %p1.in, i64 %p2.in, i1 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__rebuild_from(i64 %p0.in, i64 %p1.in, i64 %p2.in, i1 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -35277,7 +35274,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_map_resid__t_insert_new(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__t_insert_new(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15462 = call i64 @__mruntime_rt_map_resid__t_oob(i64 %p0, i64 %p1)
 %t15463 = icmp sge i64 %t15462, 0
@@ -35357,7 +35354,7 @@ L5322:
 %t15515 = call i64 @st8(i64 %t15514, i64 0)
 ret i64 %t15515
 }
-define internal i64 @__mruntime_rt_map_resid__t_decide(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__t_decide(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15516 = call i64 @__mruntime_rt_map_resid__tvk(i64 %p0)
 %t15517 = sub nsw i64 0, 1
@@ -35402,7 +35399,7 @@ L5331:
 %t15535 = call i64 @__mruntime_rt_map_resid__t_alloc(i64 %p0, i64 %t15534)
 ret i64 %t15535
 }
-define internal i64 @__mruntime_rt_map_resid__t_vals_make(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__t_vals_make(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15536 = call i64 @__mruntime_rt_map_resid__tkeys(i64 %p0)
 %t15537 = add i64 %t15536, 8
@@ -35414,7 +35411,7 @@ entry:
 %t15543 = call i64 @st8(i64 %t15542, i64 0)
 ret i64 %t15543
 }
-define internal i64 @__mruntime_rt_map_resid__t_vals_boxed(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__t_vals_boxed(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15544 = call i64 @__mruntime_rt_map_resid__tcap(i64 %p0)
 %t15545 = call i64 @__mruntime_rt_map_resid__vals_box_at(i64 %p0, i64 0, i64 %t15544)
@@ -35448,7 +35445,7 @@ L5337:
 %t15561 = call i64 @st8(i64 %t15560, i64 0)
 ret i64 %t15561
 }
-define internal i64 @__mruntime_rt_map_resid__vals_box_at(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__vals_box_at(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -35497,7 +35494,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_map_resid__t_key_in(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__t_key_in(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15586 = call i64 @__mruntime_rt_map_resid__tkk(i64 %p0)
 %t15587 = icmp eq i64 %t15586, %p1
@@ -35524,7 +35521,7 @@ L5352:
 %t15596 = call i64 @__mruntime_rt_map_resid__t_rebuild(i64 %p0, i64 %t15595, i64 0, i1 true)
 ret i64 %p2
 }
-define internal i64 @__mruntime_rt_map_resid__t_val_in(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__t_val_in(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15597 = call i64 @__mruntime_rt_map_resid__tvk(i64 %p0)
 %t15598 = icmp eq i64 %t15597, %p1
@@ -35559,7 +35556,7 @@ L5361:
 %t15610 = call i64 @__mruntime_rt_map_resid__mbox(i64 %p1, i64 %p2)
 ret i64 %t15610
 }
-define internal i64 @__mruntime_rt_map_resid__word_out(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__word_out(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15611 = icmp eq i64 %p0, %p1
 br label %LSL15612
@@ -35598,13 +35595,13 @@ ret i64 %t15623
 L5370:
 ret i64 %p2
 }
-define internal i64 @__mruntime_rt_map_resid__map_one() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__map_one() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15624p = getelementptr i8, ptr @rtg.map_one, i64 0
 %t15624 = ptrtoint ptr %t15624p to i64
 ret i64 %t15624
 }
-define internal i64 @__mruntime_rt_map_resid__t_vref(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__t_vref(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15625 = call i64 @__mruntime_rt_map_resid__tlive(i64 %p0)
 %t15626 = icmp eq i64 %t15625, 0
@@ -35729,7 +35726,7 @@ L5394:
 %t15677 = add nsw i64 %t15675, %t15676
 ret i64 %t15677
 }
-define internal i64 @__mruntime_rt_map_resid__t_put_s(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5, i64 %p6) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__t_put_s(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5, i64 %p6) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15678 = call i64 @__mruntime_rt_map_resid__t_decide(i64 %p0, i64 %p1, i64 %p3, i64 %p4)
 %t15679 = call i64 @__mruntime_rt_map_resid__t_key_in(i64 %p0, i64 %p1, i64 %p2)
@@ -35789,12 +35786,12 @@ L5409:
 %t15700 = call i64 @__mruntime_rt_map_resid__t_insert_new(i64 %p0, i64 %t15699, i64 %t15691)
 ret i64 %t15700
 }
-define internal i64 @__mruntime_rt_map_resid__t_put(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__t_put(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15701 = call i64 @__mruntime_rt_map_resid__t_put_s(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 0, i64 0)
 ret i64 %t15701
 }
-define internal i1 @__mruntime_rt_map_resid__t_del(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_map_resid__t_del(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15702 = call i64 @__mruntime_rt_map_resid__tlive(i64 %p0)
 %t15703 = icmp eq i64 %t15702, 0
@@ -35899,7 +35896,7 @@ L5430:
 %t15755 = icmp eq i64 %t15754, 0
 ret i1 %t15755
 }
-define internal i64 @__mruntime_rt_map_resid__map_kk(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__map_kk(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15756 = call i64 @__mruntime_rt_map_resid__mtab(i64 %p0)
 %t15757 = icmp ne i64 %t15756, 0
@@ -35915,7 +35912,7 @@ L5433:
 %t15761 = phi i64 [ %t15759, %L5431 ], [ %t15760, %L5432 ]
 ret i64 %t15761
 }
-define internal i64 @__mruntime_rt_map_resid__map_vk(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__map_vk(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15762 = call i64 @__mruntime_rt_map_resid__mtab(i64 %p0)
 %t15763 = icmp ne i64 %t15762, 0
@@ -35931,13 +35928,13 @@ L5436:
 %t15767 = phi i64 [ %t15765, %L5434 ], [ %t15766, %L5435 ]
 ret i64 %t15767
 }
-define internal i64 @__mruntime_rt_map_resid__trie_build(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__trie_build(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15768 = call i64 @__mruntime_rt_map_resid__new_edit()
 %t15769 = call i64 @__mruntime_rt_map_resid__build_at(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %t15768, i64 0, i64 0)
 ret i64 %t15769
 }
-define internal i64 @__mruntime_rt_map_resid__build_at(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__build_at(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -35974,7 +35971,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_map_resid__t_entries(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__t_entries(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15783 = call i64 @__mruntime_rt_map_resid__tlive(i64 %p0)
 %t15784 = icmp eq i64 %t15783, 0
@@ -35994,7 +35991,7 @@ L5445:
 %t15794 = add i64 %t15792, %t15793
 ret i64 %t15794
 }
-define internal i64 @__mruntime_rt_map_resid__ents_fill(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__ents_fill(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -36029,7 +36026,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_map_resid__ent_merge(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5, i64 %p6) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__ent_merge(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5, i64 %p6) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15815 = icmp slt i64 %p2, %p3
 br label %LSL15816
@@ -36111,7 +36108,7 @@ L5463:
 %t15859 = phi i64 [ %t15858, %L5461 ], [ 0, %L5462 ]
 ret i64 %t15859
 }
-define internal i64 @__mruntime_rt_map_resid__ent_pass(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__ent_pass(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -36160,7 +36157,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_map_resid__ent_sort(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__ent_sort(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -36179,7 +36176,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_map_resid__ents_out(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__ents_out(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -36228,7 +36225,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_map_resid__map_entries(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__map_entries(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15900 = call i64 @__mruntime_rt_map_resid__mtab(i64 %p0)
 %t15901 = icmp ne i64 %t15900, 0
@@ -36242,7 +36239,7 @@ L5490:
 %t15905 = call i64 @__mruntime_rt_map_resid__hn_collect(i64 %t15904, i64 %p1, i64 %p2, i64 0)
 ret i64 %t15905
 }
-define internal i64 @__mruntime_rt_map_resid__words_of(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__words_of(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15906 = icmp sgt i64 %p0, 1
 br i1 %t15906, label %L5491, label %L5492
@@ -36256,7 +36253,7 @@ L5493:
 %t15909 = tail call i64 @xmalloc(i64 %t15908)
 ret i64 %t15909
 }
-define internal i64 @__mruntime_rt_map_resid__map_root(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__map_root(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15910 = call i64 @__mruntime_rt_map_resid__mtab(i64 %p0)
 %t15911 = icmp eq i64 %t15910, 0
@@ -36332,7 +36329,7 @@ L5514:
 %t15942 = tail call i64 @__mruntime_rt_map_resid__mroot(i64 %p0)
 ret i64 %t15942
 }
-define internal i64 @__mruntime_rt_map_resid__table_words(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__table_words(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -36362,7 +36359,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_map_resid__map_exit(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__map_exit(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15957 = call i1 @__mruntime_rt_map_resid__mtrans(i64 %p0)
 br label %LSL15958
@@ -36383,13 +36380,13 @@ ret i64 %t15964
 L5520:
 ret i64 0
 }
-define internal i64 @__mruntime_rt_map_resid__base_w() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__base_w() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15965p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.map_base)
 %t15965 = ptrtoint ptr %t15965p to i64
 ret i64 %t15965
 }
-define internal i64 @__mruntime_rt_map_resid__base_set(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__base_set(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15966 = call i64 @__mruntime_rt_map_resid__base_w()
 %t15967 = call i64 @st64(i64 %t15966, i64 %p0)
@@ -36403,27 +36400,27 @@ entry:
 %t15975 = add i64 %t15971, %t15974
 ret i64 %t15975
 }
-define internal i64 @__mruntime_rt_map_resid__b_root() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__b_root() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15976 = call i64 @__mruntime_rt_map_resid__base_w()
 %t15977 = call i64 @ld64(i64 %t15976)
 ret i64 %t15977
 }
-define internal i64 @__mruntime_rt_map_resid__b_kk() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__b_kk() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15978 = call i64 @__mruntime_rt_map_resid__base_w()
 %t15979 = add i64 %t15978, 8
 %t15980 = call i64 @ld64(i64 %t15979)
 ret i64 %t15980
 }
-define internal i64 @__mruntime_rt_map_resid__b_vk() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__b_vk() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15981 = call i64 @__mruntime_rt_map_resid__base_w()
 %t15982 = add i64 %t15981, 16
 %t15983 = call i64 @ld64(i64 %t15982)
 ret i64 %t15983
 }
-define internal i64 @__mruntime_rt_map_resid__map_base(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__map_base(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t15984 = call i64 @__mruntime_rt_map_resid__map_exit(i64 %p0)
 %t15985 = call i64 @__mruntime_rt_map_resid__mtab(i64 %p0)
@@ -36459,7 +36456,7 @@ L5523:
 %t16006 = call i64 @__mruntime_rt_map_resid__base_set(i64 %t16000, i64 %t16004, i64 %t16005)
 ret i64 %t16006
 }
-define internal i64 @__mruntime_rt_map_resid__base_boxed(i64 %p0, i1 %p1, i1 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__base_boxed(i64 %p0, i1 %p1, i1 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16007 = call i64 @__mruntime_rt_map_resid__words_of(i64 %p0)
 %t16008 = call i64 @__mruntime_rt_map_resid__words_of(i64 %p0)
@@ -36491,7 +36488,7 @@ L5529:
 %t16022 = call i64 @__mruntime_rt_map_resid__base_set(i64 %t16018, i64 %t16012, i64 %t16014)
 ret i64 %t16022
 }
-define internal i64 @__mruntime_rt_map_resid__box_words(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i1 %p4.in, i1 %p5.in, i64 %p6.in, i64 %p7.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__box_words(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i1 %p4.in, i1 %p5.in, i64 %p6.in, i64 %p7.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -36541,7 +36538,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i1 @__mruntime_rt_map_resid__word_in(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_map_resid__word_in(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16042 = icmp eq i64 %p0, %p1
 br i1 %t16042, label %L5539, label %L5541
@@ -36566,7 +36563,7 @@ ret i1 %t16050
 L5547:
 ret i1 false
 }
-define internal i64 @__mruntime_rt_map_resid__map_insert_p(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__map_insert_p(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16051 = call i64 @__mruntime_rt_map_resid__map_base(i64 %p0)
 %t16052 = call i64 @__mruntime_rt_map_resid__mcount(i64 %p0)
@@ -36649,7 +36646,7 @@ L5562:
 %t16099 = call i64 @__mruntime_rt_map_resid__trie_new(i64 %t16098, i64 %t16094, i64 %t16090, i64 %t16091)
 ret i64 %t16099
 }
-define internal i1 @__mruntime_rt_map_resid__key_lookup_word(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_map_resid__key_lookup_word(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16100 = icmp eq i64 %p0, %p1
 br i1 %t16100, label %L5563, label %L5565
@@ -36669,7 +36666,7 @@ L5568:
 %t16107 = call i1 @__mruntime_rt_map_resid__unbox_k(i64 %p0, i64 %p2)
 ret i1 %t16107
 }
-define internal i64 @__mruntime_rt_map_resid__map_remove_p(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__map_remove_p(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16108 = call i64 @__mruntime_rt_map_resid__mcount(i64 %p0)
 %t16109 = icmp eq i64 %t16108, 0
@@ -36729,13 +36726,13 @@ L5577:
 %t16140 = call i64 @__mruntime_rt_map_resid__trie_new(i64 %t16139, i64 %t16130, i64 %t16126, i64 %t16127)
 ret i64 %t16140
 }
-define internal i64 @__mruntime_rt_map_resid__own_w() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__own_w() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16141p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.map_own)
 %t16141 = ptrtoint ptr %t16141p to i64
 ret i64 %t16141
 }
-define internal i64 @__mruntime_rt_map_resid__new_own() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__new_own() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16142 = call i64 @__mruntime_rt_map_resid__own_w()
 %t16143 = call i64 @ld64(i64 %t16142)
@@ -36762,7 +36759,7 @@ L5586:
 %t16154 = add nsw i64 %t16153, %t16149
 ret i64 %t16154
 }
-define internal i64 @__mruntime_rt_map_resid__own_block(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__own_block(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16155p = getelementptr i8, ptr @rtg.map_own_seq, i64 0
 %t16155 = ptrtoint ptr %t16155p to i64
@@ -36775,13 +36772,13 @@ entry:
 %t16161 = call i64 @st64(i64 %t16159, i64 %t16160)
 ret i64 %t16161
 }
-define internal i64 @__mruntime_rt_map_resid__map_vref(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__map_vref(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16162 = call i64 @__mruntime_rt_map_resid__map_exit(i64 %p0)
 %t16163 = tail call i64 @__mruntime_rt_map_resid__map_vref_raw(i64 %p0, i64 %p1, i64 %p2)
 ret i64 %t16163
 }
-define internal i64 @__mruntime_rt_map_resid__map_vref_raw(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__map_vref_raw(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16164 = call i64 @__mruntime_rt_map_resid__mcount(i64 %p0)
 %t16165 = icmp eq i64 %t16164, 0
@@ -36813,7 +36810,7 @@ L5595:
 %t16179 = call i64 @__mruntime_rt_map_resid__hn_find(i64 %t16175, i64 %t16177, i64 %t16178, i64 %t16174, i64 0)
 ret i64 %t16179
 }
-define internal i64 @rt_map_transient(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_map_transient(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16180 = call i64 @__mruntime_rt_map_resid__mcount(i64 %p0)
 %t16181 = icmp sgt i64 %t16180, 64
@@ -36889,14 +36886,14 @@ L5604:
 %t16234 = add i64 %t16232, %t16233
 ret i64 %t16204
 }
-define ptr @resid_map_transient(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_map_transient(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_map_transient(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_map_resid__copy_tab(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__copy_tab(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16235 = call i64 @__mruntime_rt_map_resid__map_obj(i64 96)
 %t16236 = call i64 @mcopy(i64 %t16235, i64 %p0, i64 96)
@@ -36933,7 +36930,7 @@ L5610:
 %t16257 = add nsw i64 %t16256, %t16235
 ret i64 %t16257
 }
-define internal i64 @__mruntime_rt_map_resid__put_all(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__put_all(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -36961,7 +36958,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_map_freeze(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_map_freeze(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16268 = add i64 %p0, 24
 %t16269 = call i64 @st64(i64 %t16268, i64 0)
@@ -36969,14 +36966,14 @@ entry:
 %t16271 = add nsw i64 %t16270, %p0
 ret i64 %t16271
 }
-define ptr @resid_map_freeze(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_map_freeze(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_map_freeze(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_map_resid__trie_put_owned(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__trie_put_owned(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16272 = call i64 @__mruntime_rt_map_resid__mcount(i64 %p0)
 %t16273 = icmp eq i64 %t16272, 0
@@ -37045,7 +37042,7 @@ L5619:
 %t16316 = call i64 @__mruntime_rt_map_resid__trie_put_at(i64 %p0, i64 %t16283, i64 %t16289)
 ret i64 %t16316
 }
-define internal i64 @__mruntime_rt_map_resid__trie_put_at(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__trie_put_at(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16317 = call i64 @__mruntime_rt_map_resid__mroot(i64 %p0)
 %t16318 = call i64 @__mruntime_rt_map_resid__mkk(i64 %p0)
@@ -37064,7 +37061,7 @@ entry:
 %t16331 = add nsw i64 %t16330, %p0
 ret i64 %t16331
 }
-define internal i64 @__mruntime_rt_map_resid__map_put_slow(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5) noinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__map_put_slow(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5) noinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16332 = icmp eq i64 %p2, 4
 br i1 %t16332, label %L5620, label %L5621
@@ -37189,7 +37186,7 @@ L5634:
 %t16376 = call i64 @__mruntime_rt_map_resid__map_insert_p(i64 %t16350, i64 %p2, i64 %p3, i64 %t16343, i64 %p5)
 ret i64 %t16376
 }
-define internal i64 @__mruntime_rt_map_resid__tab_put_owned(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5, i64 %p6) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__tab_put_owned(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5, i64 %p6) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16377 = call i64 @__mruntime_rt_map_resid__mtab(i64 %p0)
 %t16378 = add i64 %t16377, 72
@@ -37199,7 +37196,7 @@ entry:
 %t16382 = call i64 @st64(i64 %p0, i64 %t16381)
 ret i64 %t16382
 }
-define internal i64 @rt_map_put(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5) alwaysinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_map_put(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5) alwaysinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16383 = call i64 @__mruntime_rt_map_resid__mtab(i64 %p0)
 %t16384 = icmp ne i64 %p1, 0
@@ -37357,7 +37354,7 @@ L5646:
 %t16462 = tail call i64 @__mruntime_rt_map_resid__map_put_slow(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5)
 ret i64 %t16462
 }
-define ptr @resid_map_put(ptr %a0, i8 %a1, i8 %a2, i64 %a3, i8 %a4, i64 %a5) alwaysinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_map_put(ptr %a0, i8 %a1, i8 %a2, i64 %a3, i8 %a4, i64 %a5) alwaysinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1 = zext i8 %a1 to i64
@@ -37367,7 +37364,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i1 @__mruntime_rt_map_resid__word_fits(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_map_resid__word_fits(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16463 = icmp ne i64 %p1, 0
 br label %LSL16464
@@ -37427,7 +37424,7 @@ LSJ16482:
 %t16484 = phi i1 [ true, %LSL16482 ], [ %t16483, %LSR16482 ]
 ret i1 %t16484
 }
-define internal i64 @rt_map_list_push(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_map_list_push(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16485 = icmp ne i64 %p1, 0
 br label %LSL16486
@@ -37543,7 +37540,7 @@ ret i64 %t16519
 L5679:
 ret i64 %t16519
 }
-define ptr @resid_map_list_push(ptr %a0, i8 %a1, i8 %a2, i64 %a3, ptr %a4, ptr %a5) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_map_list_push(ptr %a0, i8 %a1, i8 %a2, i64 %a3, ptr %a4, ptr %a5) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1 = zext i8 %a1 to i64
@@ -37554,7 +37551,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_map_resid__fresh_list(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__fresh_list(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16535 = call i64 @flat_new(i64 4)
 %t16536 = add i64 %t16535, 24
@@ -37575,7 +37572,7 @@ entry:
 %t16551 = add i64 %t16547, %t16550
 ret i64 %t16539
 }
-define internal i64 @rt_map_del(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_map_del(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16552 = icmp ne i64 %p1, 0
 br label %LSL16553
@@ -37674,7 +37671,7 @@ L5694:
 %t16596 = call i64 @__mruntime_rt_map_resid__map_remove_p(i64 %t16562, i64 %p2, i64 %p3)
 ret i64 %t16596
 }
-define ptr @resid_map_del(ptr %a0, i8 %a1, i8 %a2, i64 %a3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_map_del(ptr %a0, i8 %a1, i8 %a2, i64 %a3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1 = zext i8 %a1 to i64
@@ -37683,7 +37680,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_map_resid__trie_del_at(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__trie_del_at(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16597 = call i64 @__mruntime_rt_map_resid__mroot(i64 %p0)
 %t16598 = call i64 @__mruntime_rt_map_resid__mkk(i64 %p0)
@@ -37700,12 +37697,12 @@ entry:
 %t16609 = tail call i64 @st64(i64 %p0, i64 %t16608)
 ret i64 %t16609
 }
-define internal i64 @rt_set_put(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_set_put(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16610 = call i64 @rt_map_put(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 0, i64 1)
 ret i64 %t16610
 }
-define ptr @resid_set_put(ptr %a0, i8 %a1, i8 %a2, i64 %a3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_set_put(ptr %a0, i8 %a1, i8 %a2, i64 %a3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1 = zext i8 %a1 to i64
@@ -37714,7 +37711,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i128 @__mruntime_rt_map_resid__map_find_slow(i64 %p0, i64 %p1, i64 %p2, i64 %p3) noinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i128 @__mruntime_rt_map_resid__map_find_slow(i64 %p0, i64 %p1, i64 %p2, i64 %p3) noinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16611 = call i64 @__mruntime_rt_map_resid__map_vref(i64 %p0, i64 %p1, i64 %p2)
 %t16612 = icmp eq i64 %t16611, 0
@@ -37771,7 +37768,7 @@ L5703:
 %t16634 = call i128 @__mruntime_rt_map_resid__found_word(i64 %t16633)
 ret i128 %t16634
 }
-define internal i128 @__mruntime_rt_map_resid__found_word(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i128 @__mruntime_rt_map_resid__found_word(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16635 = shl i128 1, 64
 %t16636 = sext i64 %p0 to i128
@@ -37779,7 +37776,7 @@ entry:
 %t16638 = or i128 %t16635, %t16637
 ret i128 %t16638
 }
-define internal i128 @rt_map_find(i64 %p0, i64 %p1, i64 %p2, i64 %p3) alwaysinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i128 @rt_map_find(i64 %p0, i64 %p1, i64 %p2, i64 %p3) alwaysinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16639 = icmp eq i64 %p3, 4
 br i1 %t16639, label %L5704, label %L5705
@@ -37864,7 +37861,7 @@ L5709:
 %t16674 = call i128 @__mruntime_rt_map_resid__map_find_slow(i64 %p0, i64 %p1, i64 %p2, i64 %t16640)
 ret i128 %t16674
 }
-define i128 @resid_map_find(ptr %a0, i8 %a1, i64 %a2, i8 %a3) alwaysinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i128 @resid_map_find(ptr %a0, i8 %a1, i64 %a2, i8 %a3) alwaysinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1 = zext i8 %a1 to i64
@@ -37872,7 +37869,7 @@ entry:
 %r = call i128 @rt_map_find(i64 %x0i, i64 %x1, i64 %a2, i64 %x3)
 ret i128 %r
 }
-define internal i64 @rt_map_has(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_map_has(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16675 = call i64 @__mruntime_rt_map_resid__map_vref(i64 %p0, i64 %p1, i64 %p2)
 %t16676 = icmp ne i64 %t16675, 0
@@ -37885,7 +37882,7 @@ L5718:
 %t16677 = phi i64 [ 1, %L5716 ], [ 0, %L5717 ]
 ret i64 %t16677
 }
-define i8 @resid_map_has(ptr %a0, i8 %a1, i64 %a2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_map_has(ptr %a0, i8 %a1, i64 %a2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1 = zext i8 %a1 to i64
@@ -37893,7 +37890,7 @@ entry:
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @rt_map_get(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_map_get(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16678 = call i64 @__mruntime_rt_map_resid__word_of_box(i64 %p1, i1 true)
 %t16679 = call i64 @__mruntime_rt_map_resid__mret()
@@ -37912,7 +37909,7 @@ L5721:
 %t16686 = phi i64 [ %t16685, %L5719 ], [ 0, %L5720 ]
 ret i64 %t16686
 }
-define ptr @resid_map_get(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_map_get(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -37920,7 +37917,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_map_insert(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_map_insert(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16687 = call i64 @__mruntime_rt_map_resid__word_of_box(i64 %p1, i1 true)
 %t16688 = call i64 @__mruntime_rt_map_resid__mret()
@@ -37931,7 +37928,7 @@ entry:
 %t16693 = call i64 @__mruntime_rt_map_resid__map_insert_p(i64 %p0, i64 %t16687, i64 %t16689, i64 %t16690, i64 %t16692)
 ret i64 %t16693
 }
-define ptr @resid_map_insert(ptr %a0, ptr %a1, ptr %a2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_map_insert(ptr %a0, ptr %a1, ptr %a2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -37940,7 +37937,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_map_remove(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_map_remove(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16694 = call i64 @__mruntime_rt_map_resid__word_of_box(i64 %p1, i1 true)
 %t16695 = call i64 @__mruntime_rt_map_resid__mret()
@@ -37948,7 +37945,7 @@ entry:
 %t16697 = call i64 @__mruntime_rt_map_resid__map_remove_p(i64 %p0, i64 %t16694, i64 %t16696)
 ret i64 %t16697
 }
-define ptr @resid_map_remove(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_map_remove(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -37956,7 +37953,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_map_contains(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_map_contains(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16698 = call i64 @__mruntime_rt_map_resid__word_of_box(i64 %p1, i1 true)
 %t16699 = call i64 @__mruntime_rt_map_resid__mret()
@@ -37972,7 +37969,7 @@ L5724:
 %t16703 = phi i64 [ 1, %L5722 ], [ 0, %L5723 ]
 ret i64 %t16703
 }
-define i8 @resid_map_contains(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_map_contains(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -37980,38 +37977,38 @@ entry:
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @rt_map_len(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_map_len(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16704 = tail call i64 @__mruntime_rt_map_resid__mcount(i64 %p0)
 ret i64 %t16704
 }
-define i64 @resid_map_len(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_map_len(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_map_len(i64 %x0i)
 ret i64 %r
 }
-define internal i64 @rt_map_free(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_map_free(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 0
 }
-define void @resid_map_free(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define void @resid_map_free(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_map_free(i64 %x0i)
 ret void
 }
-define internal i64 @rt_set_free(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_set_free(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 0
 }
-define void @resid_set_free(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define void @resid_set_free(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_set_free(i64 %x0i)
 ret void
 }
-define internal i64 @__mruntime_rt_map_resid__boxed_entries(i64 %p0, i1 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__boxed_entries(i64 %p0, i1 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16705 = call i64 @__mruntime_rt_map_resid__mcount(i64 %p0)
 %t16706 = call i64 @__mruntime_rt_map_resid__words_of(i64 %t16705)
@@ -38034,7 +38031,7 @@ L5727:
 %t16719 = add nsw i64 %t16718, %t16707
 ret i64 %t16719
 }
-define internal i64 @rt_map_keys(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_map_keys(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16720 = call i64 @__mruntime_rt_map_resid__boxed_entries(i64 %p0, i1 true)
 %t16721 = call i64 @__mruntime_rt_map_resid__mcount(i64 %p0)
@@ -38045,14 +38042,14 @@ entry:
 %t16727 = add nsw i64 %t16726, %t16724
 ret i64 %t16727
 }
-define ptr @resid_map_keys(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_map_keys(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_map_keys(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_map_values(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_map_values(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16728 = call i64 @__mruntime_rt_map_resid__boxed_entries(i64 %p0, i1 false)
 %t16729 = call i64 @__mruntime_rt_map_resid__mcount(i64 %p0)
@@ -38063,14 +38060,14 @@ entry:
 %t16735 = add nsw i64 %t16734, %t16732
 ret i64 %t16735
 }
-define ptr @resid_map_values(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_map_values(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_map_values(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_map_resid__sb_entry(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__sb_entry(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16736 = call i1 @__mruntime_rt_map_resid__is_boxed(i64 %p1)
 br i1 %t16736, label %L5728, label %L5729
@@ -38116,7 +38113,7 @@ L5739:
 %t16755 = tail call i64 @sb_word(i64 %p0, i64 %t16754)
 ret i64 %t16755
 }
-define internal i64 @__mruntime_rt_map_resid__sb_pairs(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i1 %p5.in, i1 %p6.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__sb_pairs(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i1 %p5.in, i1 %p6.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -38166,7 +38163,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_map_resid__sb_str_entry(i64 %p0, i64 %p1, i1 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__sb_str_entry(i64 %p0, i64 %p1, i1 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br i1 %p2, label %L5752, label %L5753
 L5752:
@@ -38179,19 +38176,19 @@ L5754:
 %t16780 = phi i64 [ %t16778, %L5752 ], [ %t16779, %L5753 ]
 ret i64 %t16780
 }
-define internal i64 @rt_map_format(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_map_format(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16781 = call i64 @rt_map_format_k(i64 %p0, i64 0, i64 0)
 ret i64 %t16781
 }
-define ptr @resid_map_format(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_map_format(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_map_format(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_map_format_k(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_map_format_k(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16782 = call i64 @rt_sb_new()
 %t16783 = call i64 @__mruntime_rt_map_resid__mcount(i64 %p0)
@@ -38235,7 +38232,7 @@ LSJ16794:
 %t16806 = call i64 @rt_sb_finish(i64 %t16782)
 ret i64 %t16806
 }
-define ptr @resid_map_format_k(ptr %a0, i8 %a1, i8 %a2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_map_format_k(ptr %a0, i8 %a1, i8 %a2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1 = zext i8 %a1 to i64
@@ -38244,7 +38241,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_map_format_t(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_map_format_t(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16807 = call i64 @rt_sb_new()
 %t16808 = call i64 @__mruntime_rt_map_resid__mcount(i64 %p0)
@@ -38277,7 +38274,7 @@ L5766:
 %t16825 = call i64 @rt_sb_finish(i64 %t16807)
 ret i64 %t16825
 }
-define ptr @resid_map_format_t(ptr %a0, i8 %a1, i8 %a2, ptr %a3, ptr %a4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_map_format_t(ptr %a0, i8 %a1, i8 %a2, ptr %a3, ptr %a4) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1 = zext i8 %a1 to i64
@@ -38288,7 +38285,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_map_resid__sb_pairs_t(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in, i64 %p7.in, i64 %p8.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__sb_pairs_t(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in, i64 %p7.in, i64 %p8.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -38332,7 +38329,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_map_resid__sb_kind_entry(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__sb_kind_entry(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16846 = icmp eq i64 %p2, 1
 br i1 %t16846, label %L5773, label %L5775
@@ -38376,25 +38373,25 @@ L5787:
 %t16864 = call i64 @__mruntime_rt_map_resid__sb_entry(i64 %p0, i64 %p1)
 ret i64 %t16864
 }
-define internal i64 @rt_set_new() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_set_new() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16865 = sub nsw i64 0, 1
 %t16866 = sub nsw i64 0, 1
 %t16867 = call i64 @__mruntime_rt_map_resid__trie_new(i64 0, i64 0, i64 %t16865, i64 %t16866)
 ret i64 %t16867
 }
-define ptr @resid_set_new() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_set_new() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_set_new()
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_set_insert(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_set_insert(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16868 = call i64 @rt_map_insert(i64 %p0, i64 %p1, i64 1)
 ret i64 %t16868
 }
-define ptr @resid_set_insert(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_set_insert(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -38402,12 +38399,12 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_set_remove(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_set_remove(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16869 = tail call i64 @rt_map_remove(i64 %p0, i64 %p1)
 ret i64 %t16869
 }
-define ptr @resid_set_remove(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_set_remove(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -38415,12 +38412,12 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_set_contains(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_set_contains(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16870 = tail call i64 @rt_map_contains(i64 %p0, i64 %p1)
 ret i64 %t16870
 }
-define i8 @resid_set_contains(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_set_contains(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -38428,18 +38425,18 @@ entry:
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @rt_set_len(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_set_len(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16871 = tail call i64 @__mruntime_rt_map_resid__mcount(i64 %p0)
 ret i64 %t16871
 }
-define i64 @resid_set_len(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_set_len(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_set_len(i64 %x0i)
 ret i64 %r
 }
-define internal i64 @__mruntime_rt_map_resid__set_words(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__set_words(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16872 = call i64 @__mruntime_rt_map_resid__mcount(i64 %p0)
 %t16873 = call i64 @__mruntime_rt_map_resid__words_of(i64 %t16872)
@@ -38459,7 +38456,7 @@ L5790:
 %t16883 = add nsw i64 %t16882, %t16873
 ret i64 %t16883
 }
-define internal i64 @__mruntime_rt_map_resid__table_keys(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__table_keys(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -38483,7 +38480,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_map_resid__set_of_words(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__set_of_words(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16893 = sub nsw i64 0, 1
 %t16894 = sub nsw i64 0, 1
@@ -38504,7 +38501,7 @@ L5796:
 %t16905 = add nsw i64 %t16904, %t16895
 ret i64 %t16905
 }
-define internal i64 @__mruntime_rt_map_resid__insert_words(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__insert_words(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -38526,7 +38523,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_map_resid__put_words(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__put_words(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -38549,7 +38546,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_map_resid__set_put_all(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__set_put_all(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16920 = call i64 @__mruntime_rt_map_resid__set_words(i64 %p1)
 %t16921 = call i64 @__mruntime_rt_map_resid__map_kk(i64 %p1)
@@ -38560,7 +38557,7 @@ entry:
 %t16926 = add nsw i64 %t16925, %t16923
 ret i64 %t16926
 }
-define internal i64 @__mruntime_rt_map_resid__put_owned_words(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__put_owned_words(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -38583,7 +38580,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_set_union(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_set_union(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16934 = call i64 @__mruntime_rt_map_resid__mcount(i64 %p1)
 %t16935 = icmp eq i64 %t16934, 0
@@ -38662,7 +38659,7 @@ L5820:
 %t16979 = add nsw i64 %t16978, %t16957
 ret i64 %t16979
 }
-define ptr @resid_set_union(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_set_union(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -38670,7 +38667,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_set_difference(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_set_difference(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t16980 = call i64 @__mruntime_rt_map_resid__mcount(i64 %p0)
 %t16981 = icmp eq i64 %t16980, 0
@@ -38724,7 +38721,7 @@ L5829:
 %t17010 = add nsw i64 %t17009, %t17007
 ret i64 %t17010
 }
-define ptr @resid_set_difference(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_set_difference(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -38732,7 +38729,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_map_resid__del_words(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__del_words(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -38755,7 +38752,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_map_resid__keep_words(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i1 %p6.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__keep_words(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i1 %p6.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -38795,7 +38792,7 @@ br label %tco.s1
 tco.s1:
 br label %tco.head
 }
-define internal i64 @rt_set_intersection(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_set_intersection(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17035 = call i64 @__mruntime_rt_map_resid__mcount(i64 %p0)
 %t17036 = call i64 @__mruntime_rt_map_resid__mcount(i64 %p1)
@@ -38843,7 +38840,7 @@ L5850:
 %t17056 = add nsw i64 %t17055, %t17053
 ret i64 %t17056
 }
-define ptr @resid_set_intersection(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_set_intersection(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -38851,19 +38848,19 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_set_to_list(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_set_to_list(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17057 = tail call i64 @rt_map_keys(i64 %p0)
 ret i64 %t17057
 }
-define ptr @resid_set_to_list(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_set_to_list(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_set_to_list(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_set_format(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_set_format(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17058 = call i64 @rt_sb_new()
 %t17059 = call i64 @__mruntime_rt_map_resid__mcount(i64 %p0)
@@ -38887,14 +38884,14 @@ L5853:
 %t17073 = tail call i64 @rt_sb_finish(i64 %t17058)
 ret i64 %t17073
 }
-define ptr @resid_set_format(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_set_format(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_set_format(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_list_show_t(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_list_show_t(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17074 = call i64 @rt_sb_new()
 %t17076 = ptrtoint ptr @.s17075 to i64
@@ -38914,7 +38911,7 @@ L5856:
 %t17085 = call i64 @rt_sb_finish(i64 %t17074)
 ret i64 %t17085
 }
-define ptr @resid_list_show_t(ptr %a0, i8 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_list_show_t(ptr %a0, i8 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1 = zext i8 %a1 to i64
@@ -38922,7 +38919,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_map_resid__sb_list_t(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__sb_list_t(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -38953,7 +38950,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_set_format_t(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_set_format_t(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17096 = call i64 @rt_sb_new()
 %t17097 = call i64 @__mruntime_rt_map_resid__mcount(i64 %p0)
@@ -38975,7 +38972,7 @@ L5865:
 %t17109 = call i64 @rt_sb_finish(i64 %t17096)
 ret i64 %t17109
 }
-define ptr @resid_set_format_t(ptr %a0, i8 %a1, ptr %a2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_set_format_t(ptr %a0, i8 %a1, ptr %a2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1 = zext i8 %a1 to i64
@@ -38984,7 +38981,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_map_resid__sb_elems_t(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__sb_elems_t(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -39018,7 +39015,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_map_resid__keep_elem(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__keep_elem(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17122 = icmp eq i64 %p1, 0
 br i1 %t17122, label %L5872, label %L5873
@@ -39033,7 +39030,7 @@ L5874:
 %t17125 = phi i64 [ %t17123, %L5872 ], [ %t17124, %L5873 ]
 ret i64 %t17125
 }
-define internal i64 @__mruntime_rt_map_resid__elem_move(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__elem_move(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17126 = call i1 @box_imm(i64 %p0)
 br label %LSL17127
@@ -39051,7 +39048,7 @@ L5877:
 %t17130 = tail call i64 @__mruntime_rt_map_resid__elem_move_ptr(i64 %p0, i64 %p1)
 ret i64 %t17130
 }
-define internal i64 @__mruntime_rt_map_resid__elem_move_ptr(i64 %p0, i64 %p1) noinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__elem_move_ptr(i64 %p0, i64 %p1) noinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17131 = icmp eq i64 %p0, 0
 br label %LSL17132
@@ -39110,7 +39107,7 @@ L5889:
 %t17152 = add nsw i64 %t17151, %t17149
 ret i64 %t17152
 }
-define internal i64 @__mruntime_rt_map_resid__str_move(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__str_move(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17153 = icmp eq i64 %p0, 0
 br label %LSL17154
@@ -39134,7 +39131,7 @@ L5892:
 %t17163 = add nsw i64 %t17162, %t17160
 ret i64 %t17163
 }
-define internal i64 @__mruntime_rt_map_resid__word_move(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__word_move(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17164 = icmp eq i64 %p0, 4
 br i1 %t17164, label %L5893, label %L5895
@@ -39150,7 +39147,7 @@ ret i64 %t17167
 L5898:
 ret i64 %p1
 }
-define internal i64 @__mruntime_rt_map_resid__pvec_move(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__pvec_move(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17168 = icmp eq i64 %p0, 0
 br label %LSL17169
@@ -39176,7 +39173,7 @@ L5901:
 %t17180 = add nsw i64 %t17179, %t17176
 ret i64 %t17180
 }
-define internal i64 @__mruntime_rt_map_resid__move_items(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__move_items(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -39216,7 +39213,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_map_resid__list_move(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__list_move(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17197 = icmp eq i64 %p0, 0
 br i1 %t17197, label %L5908, label %L5910
@@ -39276,7 +39273,7 @@ L5919:
 %t17222 = add nsw i64 %t17221, %t17217
 ret i64 %t17222
 }
-define internal i64 @__mruntime_rt_map_resid__flat_move(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__flat_move(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17223 = call i1 @mv_src(i64 %p3, i64 %p0)
 %t17224 = xor i1 %t17223, true
@@ -39334,7 +39331,7 @@ L5928:
 %t17256 = add nsw i64 %t17255, %t17246
 ret i64 %t17256
 }
-define internal i64 @__mruntime_rt_map_resid__move_elems(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__move_elems(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -39363,7 +39360,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_map_resid__rec_move(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__rec_move(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17269 = icmp eq i64 %p0, 0
 br label %LSL17270
@@ -39396,7 +39393,7 @@ L5940:
 %t17284 = add nsw i64 %t17283, %t17281
 ret i64 %t17284
 }
-define internal i64 @__mruntime_rt_map_resid__dec_move(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__dec_move(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17285 = icmp eq i64 %p0, 0
 br label %LSL17286
@@ -39421,7 +39418,7 @@ L5943:
 %t17296 = add nsw i64 %t17295, %t17293
 ret i64 %t17296
 }
-define internal i64 @__mruntime_rt_map_resid__hnode_move(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__hnode_move(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17297 = icmp eq i64 %p0, 0
 br label %LSL17298
@@ -39454,7 +39451,7 @@ L5946:
 %t17316 = add nsw i64 %t17315, %t17307
 ret i64 %t17316
 }
-define internal i64 @__mruntime_rt_map_resid__move_pairs(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__move_pairs(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -39486,7 +39483,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_map_resid__move_subs(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__move_subs(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -39514,7 +39511,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_map_resid__map_move(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__map_move(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17342 = icmp eq i64 %p0, 0
 br i1 %t17342, label %L5953, label %L5955
@@ -39589,7 +39586,7 @@ L5967:
 %t17376 = add nsw i64 %t17375, %t17361
 ret i64 %t17376
 }
-define internal i64 @__mruntime_rt_map_resid__tab_move(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__tab_move(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17377 = call i1 @mv_src(i64 %p3, i64 %p0)
 %t17378 = call i64 @__mruntime_rt_map_resid__tkeys(i64 %p0)
@@ -39705,7 +39702,7 @@ L5979:
 %t17426 = phi i64 [ %t17425, %LSJ17422 ], [ 0, %L5978 ]
 ret i64 %t17392
 }
-define internal i64 @__mruntime_rt_map_resid__map_mv_alloc(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__map_mv_alloc(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17427 = add i64 %p0, 16
 %t17428 = call i64 @ld64(i64 %t17427)
@@ -39728,7 +39725,7 @@ L5985:
 %t17435 = phi i64 [ %t17433, %L5983 ], [ %t17434, %L5984 ]
 ret i64 %t17435
 }
-define internal i64 @__mruntime_rt_map_resid__dup_words(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__dup_words(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17436 = mul i64 %p1, 8
 %t17437 = call i64 @__mruntime_rt_map_resid__map_mv_alloc(i64 %p2, i64 %t17436)
@@ -39738,7 +39735,7 @@ entry:
 %t17441 = add nsw i64 %t17440, %t17437
 ret i64 %t17441
 }
-define internal i64 @__mruntime_rt_map_resid__move_slots(i64 %p0.in, i64 %p1.in, i64 %p2.in, i1 %p3.in, i1 %p4.in, i64 %p5.in, i64 %p6.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__move_slots(i64 %p0.in, i64 %p1.in, i64 %p2.in, i1 %p3.in, i1 %p4.in, i64 %p5.in, i64 %p6.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -39816,12 +39813,12 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_mv_str(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_mv_str(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17475 = tail call i64 @__mruntime_rt_map_resid__str_move(i64 %p0, i64 %p1)
 ret i64 %t17475
 }
-define ptr @resid_mv_str(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_mv_str(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -39829,12 +39826,12 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_mv_list(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_mv_list(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17476 = call i64 @__mruntime_rt_map_resid__list_move(i64 %p0, i64 0, i64 %p1)
 ret i64 %t17476
 }
-define ptr @resid_mv_list(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_mv_list(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -39842,12 +39839,12 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_mv_list_f(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_mv_list_f(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17477 = tail call i64 @__mruntime_rt_map_resid__list_move(i64 %p0, i64 %p1, i64 %p2)
 ret i64 %t17477
 }
-define ptr @resid_mv_list_f(ptr %a0, ptr %a1, ptr %a2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_mv_list_f(ptr %a0, ptr %a1, ptr %a2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -39856,12 +39853,12 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_mv_map(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_mv_map(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17478 = tail call i64 @__mruntime_rt_map_resid__map_move(i64 %p0, i64 %p1, i64 %p2, i64 %p3)
 ret i64 %t17478
 }
-define ptr @resid_mv_map(ptr %a0, i8 %a1, i8 %a2, ptr %a3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_mv_map(ptr %a0, i8 %a1, i8 %a2, ptr %a3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1 = zext i8 %a1 to i64
@@ -39871,12 +39868,12 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_mv_rec(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_mv_rec(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17479 = tail call i64 @__mruntime_rt_map_resid__rec_move(i64 %p0, i64 %p1, i64 %p2, i64 %p3)
 ret i64 %t17479
 }
-define ptr @resid_mv_rec(ptr %a0, i64 %a1, i8 %a2, ptr %a3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_mv_rec(ptr %a0, i64 %a1, i8 %a2, ptr %a3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x2 = zext i8 %a2 to i64
@@ -39885,12 +39882,12 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_mv_dec(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_mv_dec(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17480 = tail call i64 @__mruntime_rt_map_resid__dec_move(i64 %p0, i64 %p1)
 ret i64 %t17480
 }
-define ptr @resid_mv_dec(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_mv_dec(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -39898,52 +39895,52 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_str_keep(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_str_keep(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17481 = call i64 @mv_legacy()
 %t17482 = call i64 @__mruntime_rt_map_resid__str_move(i64 %p0, i64 %t17481)
 ret i64 %t17482
 }
-define ptr @resid_str_keep(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_str_keep(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_str_keep(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_list_keep(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_list_keep(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17483 = call i64 @mv_legacy()
 %t17484 = call i64 @__mruntime_rt_map_resid__list_move(i64 %p0, i64 0, i64 %t17483)
 ret i64 %t17484
 }
-define ptr @resid_list_keep(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_list_keep(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_list_keep(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_list_evac(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_list_evac(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17485 = call i64 @mv_legacy()
 %t17486 = call i64 @__mruntime_rt_map_resid__list_move(i64 %p0, i64 0, i64 %t17485)
 ret i64 %t17486
 }
-define ptr @resid_list_evac(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_list_evac(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_list_evac(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_list_evac_f(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_list_evac_f(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17487 = call i64 @mv_legacy()
 %t17488 = call i64 @__mruntime_rt_map_resid__list_move(i64 %p0, i64 %p1, i64 %t17487)
 ret i64 %t17488
 }
-define ptr @resid_list_evac_f(ptr %a0, ptr %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_list_evac_f(ptr %a0, ptr %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -39951,13 +39948,13 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_rec_evac(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_rec_evac(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17489 = call i64 @mv_legacy()
 %t17490 = call i64 @__mruntime_rt_map_resid__rec_move(i64 %p0, i64 %p1, i64 %p2, i64 %t17489)
 ret i64 %t17490
 }
-define ptr @resid_rec_evac(ptr %a0, i64 %a1, i8 %a2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_rec_evac(ptr %a0, i64 %a1, i8 %a2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x2 = zext i8 %a2 to i64
@@ -39965,26 +39962,26 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_dec_evac(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_dec_evac(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17491 = call i64 @mv_legacy()
 %t17492 = call i64 @__mruntime_rt_map_resid__dec_move(i64 %p0, i64 %t17491)
 ret i64 %t17492
 }
-define ptr @resid_dec_evac(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_dec_evac(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_dec_evac(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_map_evac(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_map_evac(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17493 = call i64 @mv_legacy()
 %t17494 = call i64 @__mruntime_rt_map_resid__map_move(i64 %p0, i64 %p1, i64 %p2, i64 %t17493)
 ret i64 %t17494
 }
-define ptr @resid_map_evac(ptr %a0, i8 %a1, i8 %a2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_map_evac(ptr %a0, i8 %a1, i8 %a2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1 = zext i8 %a1 to i64
@@ -39993,7 +39990,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @bar_keep(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @bar_keep(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17495 = icmp eq i64 %p1, 0
 br label %LSL17496
@@ -40052,7 +40049,7 @@ L6000:
 %t17516 = call i64 @mv_done(i64 %t17515)
 ret i64 %t17516
 }
-define internal i64 @__mruntime_rt_map_resid__bar_word(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__bar_word(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17517 = icmp eq i64 %p1, 0
 br label %LSL17518
@@ -40145,7 +40142,7 @@ L6009:
 %t17553 = call i64 @mv_done(i64 %t17552)
 ret i64 %t17553
 }
-define internal i64 @alloc_near(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @alloc_near(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17554 = call i64 @region_use(i64 %p0)
 %t17555 = call i64 @rt_gmalloc(i64 %p1)
@@ -40154,7 +40151,7 @@ entry:
 %t17558 = add nsw i64 %t17557, %t17555
 ret i64 %t17558
 }
-define internal i64 @__mruntime_rt_map_resid__with_fresh(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__with_fresh(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17559 = call i64 @lcount(i64 %p0)
 %t17560 = add i64 %t17559, %p1
@@ -40193,7 +40190,7 @@ L6012:
 %t17582 = call i64 @set_list(i64 %t17579, i64 %t17559, i64 %t17580, i64 %t17561, i64 %t17581)
 ret i64 %t17582
 }
-define internal i64 @__mruntime_rt_map_resid__with_fill(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__with_fill(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -40216,7 +40213,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_map_resid__with_shared(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__with_shared(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17591 = call i64 @lcount(i64 %p0)
 %t17592 = call i64 @lshift(i64 %p0)
@@ -40285,7 +40282,7 @@ L6024:
 %t17634 = call i64 @set_list(i64 %t17632, i64 %t17591, i64 %t17622, i64 %t17631, i64 %t17633)
 ret i64 %t17634
 }
-define internal i64 @rt_list_with(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_list_with(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17635 = call i64 @lcount(i64 %p0)
 %t17636 = call i1 @ult(i64 %p2, i64 %t17635)
@@ -40328,7 +40325,7 @@ L6033:
 %t17654 = add nsw i64 %t17653, %t17644
 ret i64 %t17654
 }
-define ptr @resid_list_with(ptr %a0, i8 %a1, i64 %a2, ptr %a3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_list_with(ptr %a0, i8 %a1, i64 %a2, ptr %a3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1 = zext i8 %a1 to i64
@@ -40337,7 +40334,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_list_concat_own(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_list_concat_own(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17655 = call i64 @lcount(i64 %p2)
 %t17656 = icmp eq i64 %p1, 0
@@ -40396,7 +40393,7 @@ L6048:
 %t17683 = add nsw i64 %t17682, %t17664
 ret i64 %t17683
 }
-define ptr @resid_list_concat_own(ptr %a0, i8 %a1, ptr %a2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_list_concat_own(ptr %a0, i8 %a1, ptr %a2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1 = zext i8 %a1 to i64
@@ -40405,7 +40402,7 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_map_resid__with_grow(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__with_grow(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17684 = call i64 @region_use(i64 %p0)
 %t17685 = mul i64 %p2, 2
@@ -40429,7 +40426,7 @@ L6051:
 %t17697 = add nsw i64 %t17696, %t17688
 ret i64 %t17697
 }
-define internal i64 @__mruntime_rt_map_resid__cat_fill(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_map_resid__cat_fill(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -40455,7 +40452,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_list_freeze(i64 %p0) alwaysinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_list_freeze(i64 %p0) alwaysinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17708 = icmp ne i64 %p0, 0
 br label %LSL17709
@@ -40478,20 +40475,20 @@ L6057:
 %t17715 = phi i64 [ %t17714, %L6055 ], [ 0, %L6056 ]
 ret i64 %p0
 }
-define ptr @resid_list_freeze(ptr %a0) alwaysinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_list_freeze(ptr %a0) alwaysinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_list_freeze(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_alloc_resid__ast() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_alloc_resid__ast() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17716p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.rt_alloc)
 %t17716 = ptrtoint ptr %t17716p to i64
 ret i64 %t17716
 }
-define internal i64 @__mruntime_rt_alloc_resid__ag(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_alloc_resid__ag(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17717 = call i64 @__mruntime_rt_alloc_resid__ast()
 %t17718 = mul i64 %p0, 8
@@ -40499,7 +40496,7 @@ entry:
 %t17720 = tail call i64 @ld64(i64 %t17719)
 ret i64 %t17720
 }
-define internal i64 @__mruntime_rt_alloc_resid__as_(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_alloc_resid__as_(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17721 = call i64 @__mruntime_rt_alloc_resid__ast()
 %t17722 = mul i64 %p0, 8
@@ -40507,11 +40504,11 @@ entry:
 %t17724 = tail call i64 @st64(i64 %t17723, i64 %p1)
 ret i64 %t17724
 }
-define internal i64 @__mruntime_rt_alloc_resid__arena_chunk_size() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_alloc_resid__arena_chunk_size() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 4194264
 }
-define internal i64 @__mruntime_rt_alloc_resid__arena_new(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_alloc_resid__arena_new(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17725 = call i64 @xmalloc(i64 24)
 %t17726 = call i64 @st64(i64 %t17725, i64 0)
@@ -40524,7 +40521,7 @@ entry:
 %t17733 = add nsw i64 %t17732, %t17725
 ret i64 %t17733
 }
-define internal i64 @__mruntime_rt_alloc_resid__free_chunks(i64 %p0.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_alloc_resid__free_chunks(i64 %p0.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -40541,7 +40538,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_arena_push() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_arena_push() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17739 = call i64 @__mruntime_rt_alloc_resid__ag(i64 0)
 %t17740 = call i64 @__mruntime_rt_alloc_resid__arena_new(i64 %t17739)
@@ -40549,12 +40546,12 @@ entry:
 %t17742 = mul nsw i64 %t17741, 0
 ret i64 %t17742
 }
-define i64 @resid_arena_push() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_arena_push() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_arena_push()
 ret i64 %r
 }
-define internal i64 @rt_arena_pop() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_arena_pop() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17743 = call i64 @__mruntime_rt_alloc_resid__ag(i64 0)
 %t17744 = icmp eq i64 %t17743, 0
@@ -40573,12 +40570,12 @@ L6063:
 %t17754 = mul nsw i64 %t17753, 0
 ret i64 %t17754
 }
-define i64 @resid_arena_pop() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_arena_pop() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_arena_pop()
 ret i64 %r
 }
-define internal i64 @__mruntime_rt_alloc_resid__arena_bump(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_alloc_resid__arena_bump(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17755 = add i64 %p1, 15
 %t17756 = sub nsw i64 0, 16
@@ -40629,27 +40626,27 @@ L6066:
 %t17786 = tail call i64 @__mruntime_rt_alloc_resid__bump_in(i64 %t17759, i64 %t17757)
 ret i64 %t17786
 }
-define internal i64 @cur_arena() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @cur_arena() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17787 = call i64 @__mruntime_rt_alloc_resid__ag(i64 0)
 ret i64 %t17787
 }
-define internal i64 @arena_alloc(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @arena_alloc(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17788 = tail call i64 @__mruntime_rt_alloc_resid__arena_bump(i64 %p0, i64 %p1)
 ret i64 %t17788
 }
-define internal i64 @ag_scope_depth() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @ag_scope_depth() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17789 = call i64 @__mruntime_rt_alloc_resid__ag(i64 4)
 ret i64 %t17789
 }
-define internal i64 @cur_region() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @cur_region() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17790 = call i64 @__mruntime_rt_alloc_resid__ag(i64 10)
 ret i64 %t17790
 }
-define internal i64 @top_clear() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @top_clear() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17791 = call i64 @__mruntime_rt_alloc_resid__as_(i64 5, i64 0)
 %t17792 = call i64 @__mruntime_rt_alloc_resid__as_(i64 6, i64 0)
@@ -40658,7 +40655,7 @@ entry:
 %t17795 = add i64 %t17793, %t17794
 ret i64 %t17795
 }
-define internal i64 @arena_adopt(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @arena_adopt(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17796 = call i64 @__mruntime_rt_alloc_resid__ag(i64 4)
 %t17797 = icmp ne i64 %t17796, 0
@@ -40713,13 +40710,13 @@ L6075:
 %t17823 = add nsw i64 %t17822, %t17818
 ret i64 %t17823
 }
-define internal i64 @bulk_depth() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @bulk_depth() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17824 = call i64 @__mruntime_rt_alloc_resid__ag(i64 1)
 %t17825 = call i64 @__mruntime_rt_alloc_resid__chain_len(i64 %t17824, i64 0)
 ret i64 %t17825
 }
-define internal i64 @__mruntime_rt_alloc_resid__chain_len(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_alloc_resid__chain_len(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17826 = icmp eq i64 %p0, 0
 br i1 %t17826, label %L6076, label %L6077
@@ -40735,7 +40732,7 @@ L6078:
 %t17831 = phi i64 [ %p1, %L6076 ], [ %t17830, %L6077 ]
 ret i64 %t17831
 }
-define internal i64 @__mruntime_rt_alloc_resid__chain_up(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_alloc_resid__chain_up(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17832 = icmp sle i64 %p1, 0
 br i1 %t17832, label %L6079, label %L6080
@@ -40751,7 +40748,7 @@ L6081:
 %t17837 = phi i64 [ %p0, %L6079 ], [ %t17836, %L6080 ]
 ret i64 %t17837
 }
-define internal i64 @bulk_block(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @bulk_block(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17838 = call i64 @__mruntime_rt_alloc_resid__ag(i64 1)
 %t17839 = call i64 @bulk_depth()
@@ -40765,7 +40762,7 @@ entry:
 %t17847 = add i64 %t17846, 16
 ret i64 %t17847
 }
-define internal i64 @__mruntime_rt_alloc_resid__bump_in(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_alloc_resid__bump_in(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17848 = add i64 %p0, 8
 %t17849 = call i64 @ld64(i64 %t17848)
@@ -40776,7 +40773,7 @@ entry:
 %t17854 = add i64 %t17853, %t17849
 ret i64 %t17854
 }
-define internal i1 @__mruntime_rt_alloc_resid__chain_contains(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_alloc_resid__chain_contains(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17855 = icmp eq i64 %p0, 0
 br i1 %t17855, label %L6082, label %L6084
@@ -40797,7 +40794,7 @@ LSJ17858:
 %t17862 = phi i1 [ true, %LSL17858 ], [ %t17861, %LSR17858 ]
 ret i1 %t17862
 }
-define internal i1 @__mruntime_rt_alloc_resid__chunks_contain(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_alloc_resid__chunks_contain(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -40832,13 +40829,13 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i1 @__mruntime_rt_alloc_resid__scope_contains(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_alloc_resid__scope_contains(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17876 = call i64 @region_of(i64 %p0)
 %t17877 = icmp ne i64 %t17876, 0
 ret i1 %t17877
 }
-define internal i64 @rt_arena_contains_x(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_arena_contains_x(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17878 = call i64 @__mruntime_rt_alloc_resid__ag(i64 0)
 %t17879 = call i1 @__mruntime_rt_alloc_resid__chain_contains(i64 %t17878, i64 %p0)
@@ -40868,14 +40865,14 @@ L6093:
 %t17887 = phi i64 [ 1, %L6091 ], [ 0, %L6092 ]
 ret i64 %t17887
 }
-define i8 @resid_rt_arena_contains(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_rt_arena_contains(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_arena_contains_x(i64 %x0i)
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @region_kind(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @region_kind(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17888 = call i1 @__mruntime_rt_alloc_resid__scope_contains(i64 %p0)
 br i1 %t17888, label %L6094, label %L6096
@@ -40902,7 +40899,7 @@ L6099:
 %t17895 = phi i64 [ 1, %L6097 ], [ 0, %L6098 ]
 ret i64 %t17895
 }
-define internal i64 @rt_bulk_push() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_bulk_push() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17896 = call i64 @__mruntime_rt_alloc_resid__ag(i64 1)
 %t17897 = call i64 @__mruntime_rt_alloc_resid__arena_new(i64 %t17896)
@@ -40910,12 +40907,12 @@ entry:
 %t17899 = tail call i64 @rt_arena_push()
 ret i64 %t17899
 }
-define i64 @resid_bulk_push() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_bulk_push() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_bulk_push()
 ret i64 %r
 }
-define internal i64 @rt_bulk_pop() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_bulk_pop() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17900 = call i64 @rt_arena_pop()
 %t17901 = call i64 @__mruntime_rt_alloc_resid__ag(i64 1)
@@ -40945,12 +40942,12 @@ L6105:
 %t17916 = phi i64 [ %t17915, %L6103 ], [ 0, %L6104 ]
 ret i64 %t17916
 }
-define i64 @resid_bulk_pop() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_bulk_pop() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_bulk_pop()
 ret i64 %r
 }
-define internal i64 @scope_thread_exit(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @scope_thread_exit(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17917 = call i64 @__mruntime_rt_alloc_resid__ag(i64 8)
 %t17918 = call i64 @c_free(i64 %t17917)
@@ -40959,7 +40956,7 @@ entry:
 %t17921 = add i64 %t17919, %t17920
 ret i64 %t17921
 }
-define internal i64 @__mruntime_rt_alloc_resid__marks_grow() noinline cold "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_alloc_resid__marks_grow() noinline cold "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17922 = call i64 @__mruntime_rt_alloc_resid__ag(i64 9)
 %t17923 = icmp ne i64 %t17922, 0
@@ -40979,14 +40976,14 @@ L6108:
 %t17931 = call i64 @__mruntime_rt_alloc_resid__as_(i64 9, i64 %t17926)
 ret i64 %t17931
 }
-define internal i64 @rec_at(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rec_at(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17932 = call i64 @__mruntime_rt_alloc_resid__ag(i64 8)
 %t17933 = mul i64 %p0, 64
 %t17934 = add i64 %t17932, %t17933
 ret i64 %t17934
 }
-define internal i64 @rec_save(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rec_save(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17935 = add i64 %p0, 8
 %t17936 = call i64 @__mruntime_rt_alloc_resid__ag(i64 5)
@@ -41001,7 +40998,7 @@ entry:
 %t17945 = add i64 %t17941, %t17944
 ret i64 %t17945
 }
-define internal i64 @rec_load(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rec_load(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17946 = add i64 %p0, 8
 %t17947 = call i64 @ld64(i64 %t17946)
@@ -41016,7 +41013,7 @@ entry:
 %t17956 = add i64 %t17952, %t17955
 ret i64 %t17956
 }
-define internal i64 @rt_scope_push() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_scope_push() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17957 = call i64 @__mruntime_rt_alloc_resid__ag(i64 4)
 %t17958 = call i64 @__mruntime_rt_alloc_resid__ag(i64 9)
@@ -41057,12 +41054,12 @@ L6114:
 %t17981 = add nsw i64 %t17980, %t17957
 ret i64 %t17981
 }
-define i64 @resid_scope_push() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_scope_push() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_scope_push()
 ret i64 %r
 }
-define internal i64 @rt_scope_pop(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_scope_pop(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t17982 = icmp slt i64 %p0, 0
 br label %LSL17983
@@ -41119,12 +41116,12 @@ L6123:
 %t18013 = phi i64 [ %t18012, %L6121 ], [ 0, %L6122 ]
 ret i64 %t18013
 }
-define void @resid_scope_pop(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define void @resid_scope_pop(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_scope_pop(i64 %a0)
 ret void
 }
-define internal i64 @__mruntime_rt_alloc_resid__pop_regions(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_alloc_resid__pop_regions(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -41145,7 +41142,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @scope_alloc(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @scope_alloc(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18021 = add i64 %p0, 7
 %t18022 = sub nsw i64 0, 8
@@ -41187,7 +41184,7 @@ L6132:
 %t18043 = tail call i64 @__mruntime_rt_alloc_resid__scope_alloc_slow(i64 %t18042)
 ret i64 %t18043
 }
-define internal i64 @__mruntime_rt_alloc_resid__scope_alloc_slow(i64 %p0) noinline cold "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_alloc_resid__scope_alloc_slow(i64 %p0) noinline cold "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18044 = call i64 @__mruntime_rt_alloc_resid__ag(i64 10)
 %t18045 = call i64 @rec_save(i64 %t18044)
@@ -41197,13 +41194,13 @@ entry:
 %t18049 = add nsw i64 %t18048, %t18046
 ret i64 %t18049
 }
-define internal i64 @__mruntime_rt_alloc_resid__use_stack() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_alloc_resid__use_stack() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18050p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.rg_use)
 %t18050 = ptrtoint ptr %t18050p to i64
 ret i64 %t18050
 }
-define internal i64 @region_use(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @region_use(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18051 = call i64 @__mruntime_rt_alloc_resid__use_push()
 %t18052 = call i64 @__mruntime_rt_alloc_resid__ag(i64 4)
@@ -41239,12 +41236,12 @@ L6138:
 %t18069 = add i64 %t18067, %t18068
 ret i64 %t18069
 }
-define internal i64 @region_same() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @region_same() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18070 = tail call i64 @__mruntime_rt_alloc_resid__use_push()
 ret i64 %t18070
 }
-define internal i64 @heap_use() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @heap_use() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18071 = call i64 @__mruntime_rt_alloc_resid__use_push()
 %t18072 = call i64 @__mruntime_rt_alloc_resid__as_(i64 0, i64 0)
@@ -41255,7 +41252,7 @@ entry:
 %t18077 = add i64 %t18075, %t18076
 ret i64 %t18077
 }
-define internal i64 @__mruntime_rt_alloc_resid__use_push() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_alloc_resid__use_push() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18078 = call i64 @__mruntime_rt_alloc_resid__use_stack()
 %t18079 = call i64 @ld64(i64 %t18078)
@@ -41286,13 +41283,13 @@ L6141:
 %t18101 = call i64 @st64(i64 %t18078, i64 %t18100)
 ret i64 %t18101
 }
-define internal i64 @region_uses() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @region_uses() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18102 = call i64 @__mruntime_rt_alloc_resid__use_stack()
 %t18103 = call i64 @ld64(i64 %t18102)
 ret i64 %t18103
 }
-define internal i64 @region_unwind(i64 %p0.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @region_unwind(i64 %p0.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -41309,7 +41306,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @region_done() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @region_done() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18109 = call i64 @__mruntime_rt_alloc_resid__use_stack()
 %t18110 = call i64 @ld64(i64 %t18109)
@@ -41353,7 +41350,7 @@ L6150:
 %t18136 = phi i64 [ %t18135, %L6148 ], [ 0, %L6149 ]
 ret i64 %t18136
 }
-define internal i64 @rt_gmalloc(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_gmalloc(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18137 = call i64 @__mruntime_rt_alloc_resid__ag(i64 2)
 %t18138 = add i64 %t18137, %p0
@@ -41368,13 +41365,13 @@ L6153:
 %t18143 = tail call i64 @__mruntime_rt_alloc_resid__gmalloc_slow(i64 %p0)
 ret i64 %t18143
 }
-define ptr @resid_gmalloc(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_gmalloc(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_gmalloc(i64 %a0)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_alloc_resid__gmalloc_slow(i64 %p0) noinline cold "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_alloc_resid__gmalloc_slow(i64 %p0) noinline cold "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18144 = call i64 @__mruntime_rt_alloc_resid__ag(i64 1)
 %t18145 = icmp ne i64 %t18144, 0
@@ -41387,7 +41384,7 @@ L6156:
 %t18148 = tail call i64 @xmalloc(i64 %p0)
 ret i64 %t18148
 }
-define internal i64 @rt_gfree(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_gfree(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18149 = call i64 @__mruntime_rt_alloc_resid__ag(i64 4)
 %t18150 = icmp ne i64 %t18149, 0
@@ -41407,13 +41404,13 @@ L6159:
 %t18155 = tail call i64 @c_free(i64 %p0)
 ret i64 %t18155
 }
-define void @resid_gfree(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define void @resid_gfree(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_gfree(i64 %x0i)
 ret void
 }
-define internal i64 @rt_alloc_x(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_alloc_x(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18156 = call i64 @__mruntime_rt_alloc_resid__ag(i64 2)
 %t18157 = add i64 %t18156, %p0
@@ -41428,13 +41425,13 @@ L6162:
 %t18162 = tail call i64 @__mruntime_rt_alloc_resid__alloc_slow(i64 %p0)
 ret i64 %t18162
 }
-define ptr @resid_rt_alloc(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_rt_alloc(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_alloc_x(i64 %a0)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_alloc_resid__alloc_slow(i64 %p0) noinline cold "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_alloc_resid__alloc_slow(i64 %p0) noinline cold "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18163 = call i64 @__mruntime_rt_alloc_resid__ag(i64 0)
 %t18164 = icmp ne i64 %t18163, 0
@@ -41447,7 +41444,7 @@ L6165:
 %t18167 = tail call i64 @xmalloc(i64 %p0)
 ret i64 %t18167
 }
-define internal i64 @rt_outer_alloc(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_outer_alloc(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18168 = call i64 @__mruntime_rt_alloc_resid__ag(i64 4)
 %t18169 = call i64 @__mruntime_rt_alloc_resid__as_(i64 4, i64 0)
@@ -41457,57 +41454,57 @@ entry:
 %t18173 = add nsw i64 %t18172, %t18170
 ret i64 %t18173
 }
-define ptr @resid_rt_outer_alloc(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_rt_outer_alloc(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_outer_alloc(i64 %a0)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_mem_mark() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_mem_mark() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18174 = call i64 @__mruntime_rt_alloc_resid__ag(i64 2)
 %t18175 = call i64 @__mruntime_rt_alloc_resid__as_(i64 3, i64 %t18174)
 %t18176 = mul nsw i64 %t18175, 0
 ret i64 %t18176
 }
-define i64 @resid_mem_mark() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_mem_mark() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_mem_mark()
 ret i64 %r
 }
-define internal i64 @rt_mem_since_mark() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_mem_since_mark() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18177 = call i64 @__mruntime_rt_alloc_resid__ag(i64 2)
 %t18178 = call i64 @__mruntime_rt_alloc_resid__ag(i64 3)
 %t18179 = sub i64 %t18177, %t18178
 ret i64 %t18179
 }
-define i64 @resid_mem_since_mark() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_mem_since_mark() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_mem_since_mark()
 ret i64 %r
 }
-define internal i64 @rt_sc_depth_x() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_sc_depth_x() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18180 = call i64 @__mruntime_rt_alloc_resid__ag(i64 4)
 ret i64 %t18180
 }
-define i64 @resid_rt_sc_depth() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_rt_sc_depth() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_sc_depth_x()
 ret i64 %r
 }
-define internal i64 @rt_sc_depth_set_x(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_sc_depth_set_x(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18181 = call i64 @__mruntime_rt_alloc_resid__as_(i64 4, i64 %p0)
 ret i64 %t18181
 }
-define void @resid_rt_sc_depth_set(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define void @resid_rt_sc_depth_set(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_sc_depth_set_x(i64 %a0)
 ret void
 }
-define internal i1 @young(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @young(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18182 = call i64 @__mruntime_rt_alloc_resid__ag(i64 4)
 %t18183 = icmp ne i64 %t18182, 0
@@ -41526,35 +41523,35 @@ LSJ18184:
 %t18191 = phi i1 [ false, %LSL18184 ], [ %t18190, %LSR18184 ]
 ret i1 %t18191
 }
-define internal i64 @rt_scope_alloc_x(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_scope_alloc_x(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18192 = tail call i64 @scope_alloc(i64 %p0)
 ret i64 %t18192
 }
-define ptr @resid_rt_scope_alloc(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_rt_scope_alloc(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_scope_alloc_x(i64 %a0)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_in_arenas_x(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_in_arenas_x(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18193 = tail call i64 @rt_arena_contains_x(i64 %p0)
 ret i64 %t18193
 }
-define i8 @resid_rt_in_arenas(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_rt_in_arenas(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_in_arenas_x(i64 %x0i)
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @__mruntime_rt_alloc_resid__rec_tag() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_alloc_resid__rec_tag() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18194 = shl i64 1380303070, 32
 ret i64 %t18194
 }
-define internal i64 @rt_rec_new(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_rec_new(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18195 = add i64 %p0, 8
 %t18196 = call i64 @rt_gmalloc(i64 %t18195)
@@ -41574,14 +41571,14 @@ L6168:
 %t18204 = add i64 %t18196, 8
 ret i64 %t18204
 }
-define ptr @resid_rec_new(i64 %a0, i8 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_rec_new(i64 %a0, i8 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x1 = zext i8 %a1 to i64
 %r = call i64 @rt_rec_new(i64 %a0, i64 %x1)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_rec_reuse(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_rec_reuse(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18205 = sub i64 %p0, 8
 %t18206 = call i64 @ld64(i64 %t18205)
@@ -41614,14 +41611,14 @@ L6171:
 %t18219 = tail call i64 @rt_rec_new(i64 %p1, i64 1)
 ret i64 %t18219
 }
-define ptr @resid_rec_reuse(ptr %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_rec_reuse(ptr %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_rec_reuse(i64 %x0i, i64 %a1)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_rec_share(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_rec_share(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18220 = sub i64 %p0, 8
 %t18221 = call i64 @ld64(i64 %t18220)
@@ -41646,13 +41643,13 @@ ret i64 %t18231
 L6174:
 ret i64 0
 }
-define void @resid_rec_share(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define void @resid_rec_share(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_rec_share(i64 %x0i)
 ret void
 }
-define internal i64 @rt_list_str_persist_copy(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_list_str_persist_copy(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18232 = call i64 @lcount(i64 %p0)
 %t18233 = call i64 @rt_list_to_array(i64 %p0)
@@ -41689,14 +41686,14 @@ L6180:
 %t18252 = add nsw i64 %t18251, %t18246
 ret i64 %t18252
 }
-define ptr @resid_list_str_persist_copy(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_list_str_persist_copy(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_list_str_persist_copy(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_alloc_resid__copy_strs(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_alloc_resid__copy_strs(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -41725,7 +41722,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_decp_persist(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_decp_persist(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18267 = call i64 @__mruntime_rt_alloc_resid__ag(i64 1)
 %t18268 = icmp eq i64 %t18267, 0
@@ -41758,14 +41755,14 @@ L6189:
 %t18285 = add nsw i64 %t18284, %t18282
 ret i64 %t18285
 }
-define ptr @resid_decp_persist(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_decp_persist(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_decp_persist(i64 %x0i)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_alloc_resid__const_list(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_alloc_resid__const_list(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18286 = call i64 @ld64(i64 %p0)
 %t18287 = icmp ne i64 %t18286, 0
@@ -41817,7 +41814,7 @@ L6204:
 %t18305 = add nsw i64 %t18304, %t18298
 ret i64 %t18305
 }
-define internal i64 @__mruntime_rt_alloc_resid__const_boxes(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_alloc_resid__const_boxes(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -41862,12 +41859,12 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_list_const_i64(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_list_const_i64(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18323 = call i64 @__mruntime_rt_alloc_resid__const_list(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 0)
 ret i64 %t18323
 }
-define ptr @resid_list_const_i64(ptr %a0, i64 %a1, ptr %a2, ptr %a3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_list_const_i64(ptr %a0, i64 %a1, ptr %a2, ptr %a3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x2i = ptrtoint ptr %a2 to i64
@@ -41876,12 +41873,12 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_list_const_bool(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_list_const_bool(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18324 = call i64 @__mruntime_rt_alloc_resid__const_list(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 1)
 ret i64 %t18324
 }
-define ptr @resid_list_const_bool(ptr %a0, i64 %a1, ptr %a2, ptr %a3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_list_const_bool(ptr %a0, i64 %a1, ptr %a2, ptr %a3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x2i = ptrtoint ptr %a2 to i64
@@ -41890,12 +41887,12 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_list_const_ptr(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_list_const_ptr(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18325 = call i64 @__mruntime_rt_alloc_resid__const_list(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 2)
 ret i64 %t18325
 }
-define ptr @resid_list_const_ptr(ptr %a0, i64 %a1, ptr %a2, ptr %a3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_list_const_ptr(ptr %a0, i64 %a1, ptr %a2, ptr %a3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x2i = ptrtoint ptr %a2 to i64
@@ -41904,26 +41901,26 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_alloc_resid__imm_off() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_alloc_resid__imm_off() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 18295873486192640
 }
-define internal i64 @__mruntime_rt_alloc_resid__imm_min() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_alloc_resid__imm_min() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18326 = sub nsw i64 0, 18014398509481984
 ret i64 %t18326
 }
-define internal i64 @__mruntime_rt_alloc_resid__imm_max() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_alloc_resid__imm_max() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 18014398509481983
 }
-define internal i64 @__mruntime_rt_alloc_resid__interned() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_alloc_resid__interned() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18327p = getelementptr i8, ptr @rtg.box_interned, i64 0
 %t18327 = ptrtoint ptr %t18327p to i64
 ret i64 %t18327
 }
-define internal i64 @__mruntime_rt_alloc_resid__intern_init() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_alloc_resid__intern_init() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18328 = call i64 @__mruntime_rt_alloc_resid__interned()
 %t18330 = ptrtoint ptr @.s18329 to i64
@@ -41936,7 +41933,7 @@ entry:
 %t18339 = call i64 @__mruntime_rt_alloc_resid__intern_one(i64 %t18336, i64 %t18338, i64 0)
 ret i64 %t18328
 }
-define internal i64 @__mruntime_rt_alloc_resid__intern_one(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_alloc_resid__intern_one(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18340 = sub nsw i64 0, 1
 %t18341 = call i64 @st32(i64 %p0, i64 %t18340)
@@ -41954,7 +41951,7 @@ entry:
 %t18353 = call i64 @st64(i64 %t18352, i64 %p1)
 ret i64 %t18353
 }
-define internal i64 @__mruntime_rt_alloc_resid__interned_ready() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_alloc_resid__interned_ready() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18354 = call i64 @__mruntime_rt_alloc_resid__interned()
 %t18355 = add i64 %t18354, 72
@@ -41970,7 +41967,7 @@ L6216:
 %t18359 = phi i64 [ %t18358, %L6214 ], [ %t18354, %L6215 ]
 ret i64 %t18359
 }
-define internal i1 @box_interned(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @box_interned(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18360 = call i64 @__mruntime_rt_alloc_resid__interned()
 %t18361 = call i1 @box_imm(i64 %p0)
@@ -42011,7 +42008,7 @@ LSJ18373:
 %t18376 = phi i1 [ true, %LSL18373 ], [ %t18375, %LSR18373 ]
 ret i1 %t18376
 }
-define internal i64 @rt_box_interned_x(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_box_interned_x(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18377 = call i1 @box_interned(i64 %p0)
 br i1 %t18377, label %L6217, label %L6218
@@ -42023,14 +42020,14 @@ L6219:
 %t18378 = phi i64 [ 1, %L6217 ], [ 0, %L6218 ]
 ret i64 %t18378
 }
-define i8 @resid_rt_box_interned(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_rt_box_interned(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_box_interned_x(i64 %x0i)
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @__mruntime_rt_alloc_resid__scalar_box(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_alloc_resid__scalar_box(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18379 = add i64 %p1, 7
 %t18380 = sub nsw i64 0, 8
@@ -42052,7 +42049,7 @@ entry:
 %t18396 = add nsw i64 %t18395, %t18383
 ret i64 %t18396
 }
-define internal i64 @rt_box_i64(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_box_i64(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18397 = ashr i64 %p0, 54
 %t18398 = call i64 asm "", "=r,0"(i64 %t18397)
@@ -42072,24 +42069,24 @@ L6222:
 %t18409 = add nsw i64 %t18408, %t18405
 ret i64 %t18409
 }
-define ptr @resid_box_i64(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_box_i64(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_box_i64(i64 %a0)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_unbox_i64(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_unbox_i64(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18410 = tail call i64 @unbox_word(i64 %p0)
 ret i64 %t18410
 }
-define i64 @resid_unbox_i64(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_unbox_i64(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_unbox_i64(i64 %x0i)
 ret i64 %r
 }
-define internal i64 @rt_box_f64(double %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_box_f64(double %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18411 = bitcast double %p0 to i64
 %t18412 = call i1 @ult(i64 %t18411, i64 72057594037927936)
@@ -42113,24 +42110,24 @@ L6228:
 %t18423 = add nsw i64 %t18422, %t18419
 ret i64 %t18423
 }
-define ptr @resid_box_f64(double %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_box_f64(double %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_box_f64(double %a0)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal double @rt_unbox_f64(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal double @rt_unbox_f64(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18424 = tail call double @unbox_float(i64 %p0)
 ret double %t18424
 }
-define double @resid_unbox_f64(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define double @resid_unbox_f64(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call double @rt_unbox_f64(i64 %x0i)
 ret double %r
 }
-define internal i64 @rt_box_bool(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_box_bool(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18425 = call i64 @sx8(i64 %p0)
 %t18426 = icmp eq i64 %t18425, 0
@@ -42157,27 +42154,27 @@ L6231:
 %t18439 = add nsw i64 %t18438, %t18435
 ret i64 %t18439
 }
-define ptr @resid_box_bool(i8 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_box_bool(i8 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0 = zext i8 %a0 to i64
 %r = call i64 @rt_box_bool(i64 %x0)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_unbox_bool(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_unbox_bool(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18440 = add i64 %p0, 24
 %t18441 = tail call i64 @ld8(i64 %t18440)
 ret i64 %t18441
 }
-define i8 @resid_unbox_bool(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_unbox_bool(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_unbox_bool(i64 %x0i)
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @rt_box_i128(i128 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_box_i128(i128 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18443 = ptrtoint ptr @.s18442 to i64
 %t18444 = call i64 @__mruntime_rt_alloc_resid__scalar_box(i64 %t18443, i64 16)
@@ -42194,13 +42191,13 @@ entry:
 %t18465 = add nsw i64 %t18464, %t18444
 ret i64 %t18465
 }
-define ptr @resid_box_i128(i128 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_box_i128(i128 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_box_i128(i128 %a0)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i128 @rt_unbox_i128(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i128 @rt_unbox_i128(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18466 = call i1 @box_imm(i64 %p0)
 br i1 %t18466, label %L6232, label %L6234
@@ -42220,13 +42217,13 @@ L6234:
 %t18477 = or i128 %t18472, %t18476
 ret i128 %t18477
 }
-define i128 @resid_unbox_i128(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i128 @resid_unbox_i128(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i128 @rt_unbox_i128(i64 %x0i)
 ret i128 %r
 }
-define internal i64 @rt_box_u128(i128 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_box_u128(i128 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18479 = ptrtoint ptr @.s18478 to i64
 %t18480 = call i64 @__mruntime_rt_alloc_resid__scalar_box(i64 %t18479, i64 16)
@@ -42243,24 +42240,24 @@ entry:
 %t18501 = add nsw i64 %t18500, %t18480
 ret i64 %t18501
 }
-define ptr @resid_box_u128(i128 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_box_u128(i128 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_box_u128(i128 %a0)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i128 @rt_unbox_u128(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i128 @rt_unbox_u128(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18502 = call i128 @rt_unbox_i128(i64 %p0)
 ret i128 %t18502
 }
-define i128 @resid_unbox_u128(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i128 @resid_unbox_u128(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i128 @rt_unbox_u128(i64 %x0i)
 ret i128 %r
 }
-define internal i64 @rt_box_i256(i256 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_box_i256(i256 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18504 = ptrtoint ptr @.s18503 to i64
 %t18505 = call i64 @__mruntime_rt_alloc_resid__scalar_box(i64 %t18504, i64 32)
@@ -42302,13 +42299,13 @@ entry:
 %t18561 = call i64 @st64(i64 %t18548, i64 %t18555)
 ret i64 %t18505
 }
-define ptr @resid_box_i256(i256 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_box_i256(i256 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_box_i256(i256 %a0)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_box_u256(i256 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_box_u256(i256 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18563 = ptrtoint ptr @.s18562 to i64
 %t18564 = call i64 @__mruntime_rt_alloc_resid__scalar_box(i64 %t18563, i64 32)
@@ -42350,13 +42347,13 @@ entry:
 %t18620 = call i64 @st64(i64 %t18607, i64 %t18614)
 ret i64 %t18564
 }
-define ptr @resid_box_u256(i256 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_box_u256(i256 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_box_u256(i256 %a0)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i256 @rt_unbox_i256(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i256 @rt_unbox_i256(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18621 = sext i128 18446744073709551615 to i256
 %t18622 = add i64 %p0, 48
@@ -42383,24 +42380,24 @@ entry:
 %t18643 = or i256 %t18637, %t18642
 ret i256 %t18643
 }
-define i256 @resid_unbox_i256(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i256 @resid_unbox_i256(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i256 @rt_unbox_i256(i64 %x0i)
 ret i256 %r
 }
-define internal i256 @rt_unbox_u256(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i256 @rt_unbox_u256(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18644 = call i256 @rt_unbox_i256(i64 %p0)
 ret i256 %t18644
 }
-define i256 @resid_unbox_u256(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i256 @resid_unbox_u256(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i256 @rt_unbox_u256(i64 %x0i)
 ret i256 %r
 }
-define internal i64 @rt_box_i512(i512 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_box_i512(i512 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18646 = ptrtoint ptr @.s18645 to i64
 %t18647 = call i64 @__mruntime_rt_alloc_resid__scalar_box(i64 %t18646, i64 64)
@@ -42478,13 +42475,13 @@ entry:
 %t18759 = call i64 @st64(i64 %t18746, i64 %t18753)
 ret i64 %t18647
 }
-define ptr @resid_box_i512(i512 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_box_i512(i512 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_box_i512(i512 %a0)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_box_u512(i512 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_box_u512(i512 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18761 = ptrtoint ptr @.s18760 to i64
 %t18762 = call i64 @__mruntime_rt_alloc_resid__scalar_box(i64 %t18761, i64 64)
@@ -42562,13 +42559,13 @@ entry:
 %t18874 = call i64 @st64(i64 %t18861, i64 %t18868)
 ret i64 %t18762
 }
-define ptr @resid_box_u512(i512 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_box_u512(i512 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_box_u512(i512 %a0)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i512 @rt_unbox_i512(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i512 @rt_unbox_i512(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18875 = sext i128 18446744073709551615 to i512
 %t18876 = add i64 %p0, 80
@@ -42619,24 +42616,24 @@ entry:
 %t18921 = or i512 %t18915, %t18920
 ret i512 %t18921
 }
-define i512 @resid_unbox_i512(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i512 @resid_unbox_i512(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i512 @rt_unbox_i512(i64 %x0i)
 ret i512 %r
 }
-define internal i512 @rt_unbox_u512(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i512 @rt_unbox_u512(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18922 = call i512 @rt_unbox_i512(i64 %p0)
 ret i512 %t18922
 }
-define i512 @resid_unbox_u512(ptr %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i512 @resid_unbox_u512(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i512 @rt_unbox_u512(i64 %x0i)
 ret i512 %r
 }
-define internal i64 @check_address_space() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @check_address_space() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18923p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.addr_probe)
 %t18923 = ptrtoint ptr %t18923p to i64
@@ -42662,24 +42659,24 @@ ret i64 %t18941
 L6237:
 ret i64 0
 }
-define internal i64 @__mruntime_rt_region_resid__rg_page() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_region_resid__rg_page() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 1048576
 }
-define internal i64 @__mruntime_rt_region_resid__rg_pages() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_region_resid__rg_pages() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18942 = call i64 @__mruntime_rt_region_resid__rg_g()
 %t18943 = add i64 %t18942, 192
 %t18944 = call i64 @ld64(i64 %t18943)
 ret i64 %t18944
 }
-define internal i64 @__mruntime_rt_region_resid__rg_g() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_region_resid__rg_g() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18945p = getelementptr i8, ptr @rtg.rt_regions, i64 0
 %t18945 = ptrtoint ptr %t18945p to i64
 ret i64 %t18945
 }
-define internal i64 @__mruntime_rt_region_resid__rg_lock() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_region_resid__rg_lock() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -42696,14 +42693,14 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_region_resid__rg_unlock() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_region_resid__rg_unlock() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18950 = call i64 @__mruntime_rt_region_resid__rg_g()
 %t18951 = add i64 %t18950, 24
 %t18952 = call i64 @st64(i64 %t18951, i64 0)
 ret i64 %t18952
 }
-define internal i64 @__mruntime_rt_region_resid__rg_base() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_region_resid__rg_base() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18953 = call i64 @__mruntime_rt_region_resid__rg_g()
 %t18954 = call i64 @ld64(i64 %t18953)
@@ -42718,7 +42715,7 @@ L6243:
 %t18957 = phi i64 [ %t18954, %L6241 ], [ %t18956, %L6242 ]
 ret i64 %t18957
 }
-define internal i64 @__mruntime_rt_region_resid__rg_init() noinline cold "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_region_resid__rg_init() noinline cold "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t18958 = call i64 @__mruntime_rt_region_resid__rg_lock()
 %t18959 = call i64 @__mruntime_rt_region_resid__rg_g()
@@ -42746,7 +42743,7 @@ L6249:
 %t18970 = call i64 @ld64(i64 %t18969)
 ret i64 %t18970
 }
-define internal i64 @__mruntime_rt_region_resid__rg_map(i64 %p0.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_region_resid__rg_map(i64 %p0.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -42774,7 +42771,7 @@ br i1 %t18980, label %L6256, label %L6258
 L6256:
 %t18981 = call i64 @__mruntime_rt_region_resid__rg_page()
 %t18982 = mul i64 %p0, %t18981
-%t18983 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 11, i64 %t18974, i64 %t18982, i64 0, i64 0, i64 0, i64 0)
+%t18983 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 215, i64 %t18974, i64 %t18982, i64 0, i64 0, i64 0, i64 0)
 %t18984 = sdiv i64 %p0, 4
 br label %tco.s1
 tco.s1:
@@ -42797,10 +42794,10 @@ L6258:
 %t19000 = add nsw i64 %t18999, 1
 ret i64 %t19000
 }
-define internal i64 @__mruntime_rt_region_resid__rg_reserve(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_region_resid__rg_reserve(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19001 = sub nsw i64 0, 1
-%t19002 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 9, i64 0, i64 %p0, i64 3, i64 16418, i64 %t19001, i64 0)
+%t19002 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 222, i64 0, i64 %p0, i64 3, i64 16418, i64 %t19001, i64 0)
 %t19003 = icmp slt i64 %t19002, 0
 br label %LSL19004
 LSL19004:
@@ -42815,10 +42812,10 @@ br i1 %t19007, label %L6259, label %L6261
 L6259:
 ret i64 0
 L6261:
-%t19008 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 28, i64 %t19002, i64 %p0, i64 16, i64 0, i64 0, i64 0)
+%t19008 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 233, i64 %t19002, i64 %p0, i64 16, i64 0, i64 0, i64 0)
 ret i64 %t19002
 }
-define internal i64 @__mruntime_rt_region_resid__rg_dump(i64 %p0, i64 %p1, i1 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_region_resid__rg_dump(i64 %p0, i64 %p1, i1 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19009 = icmp uge i64 %p1, 64
 %t19010 = add i64 %p1, 0
@@ -42833,10 +42830,10 @@ L6263:
 br label %L6264
 L6264:
 %t19015 = phi i64 [ 17, %L6262 ], [ 16, %L6263 ]
-%t19016 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 28, i64 %p0, i64 %t19014, i64 %t19015, i64 0, i64 0, i64 0)
+%t19016 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 233, i64 %p0, i64 %t19014, i64 %t19015, i64 0, i64 0, i64 0)
 ret i64 %t19016
 }
-define internal i64 @region_of(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @region_of(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19017 = call i64 @__mruntime_rt_region_resid__rg_g()
 %t19018 = call i64 @ld64(i64 %t19017)
@@ -42867,7 +42864,7 @@ L6267:
 %t19034 = tail call i64 @ld64(i64 %t19033)
 ret i64 %t19034
 }
-define internal i1 @region_freed(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @region_freed(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19035 = call i64 @__mruntime_rt_region_resid__rg_g()
 %t19036 = call i64 @ld64(i64 %t19035)
@@ -42907,7 +42904,7 @@ L6270:
 %t19056 = icmp eq i64 %t19055, 0
 ret i1 %t19056
 }
-define internal i64 @__mruntime_rt_region_resid__own_set(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_region_resid__own_set(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -42935,13 +42932,13 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_region_resid__rg_cache() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_region_resid__rg_cache() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19071p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.rg_cache)
 %t19071 = ptrtoint ptr %t19071p to i64
 ret i64 %t19071
 }
-define internal i64 @__mruntime_rt_region_resid__order_of(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_region_resid__order_of(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19072 = call i64 @__mruntime_rt_region_resid__rg_page()
 %t19073 = icmp sle i64 %p0, %t19072
@@ -42957,7 +42954,7 @@ L6276:
 %t19077 = phi i64 [ 0, %L6274 ], [ %t19076, %L6275 ]
 ret i64 %t19077
 }
-define internal i64 @__mruntime_rt_region_resid__pages_take(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_region_resid__pages_take(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19078 = call i64 @__mruntime_rt_region_resid__rg_cache()
 %t19079 = icmp eq i64 %p0, 0
@@ -43019,7 +43016,7 @@ L6288:
 %t19106 = phi i64 [ %t19105, %L6286 ], [ 0, %L6287 ]
 ret i64 %t19098
 }
-define internal i64 @__mruntime_rt_region_resid__run_take(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_region_resid__run_take(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19107 = call i64 @__mruntime_rt_region_resid__rg_base()
 %t19108 = call i64 @__mruntime_rt_region_resid__rg_g()
@@ -43106,7 +43103,7 @@ L6300:
 %t19158 = phi i64 [ %t19113, %L6298 ], [ %t19157, %L6299 ]
 ret i64 %t19158
 }
-define internal i64 @__mruntime_rt_region_resid__pages_give(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_region_resid__pages_give(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19159 = icmp uge i64 %p1, 64
 %t19160 = add i64 %p1, 0
@@ -43145,7 +43142,7 @@ L6303:
 %t19184 = select i1 %t19181, i64 0, i64 %t19183
 %t19185 = call i64 @__mruntime_rt_region_resid__rg_page()
 %t19186 = mul i64 %t19184, %t19185
-%t19187 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 28, i64 %p0, i64 %t19186, i64 4, i64 0, i64 0, i64 0)
+%t19187 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 233, i64 %p0, i64 %t19186, i64 4, i64 0, i64 0, i64 0)
 %t19188 = call i64 @__mruntime_rt_region_resid__rg_dump(i64 %p0, i64 %p1, i1 false)
 %t19189 = icmp uge i64 %p1, 64
 %t19190 = add i64 %p1, 0
@@ -43166,7 +43163,7 @@ L6303:
 %t19205 = call i64 @__mruntime_rt_region_resid__rg_unlock()
 ret i64 %t19205
 }
-define internal i64 @pages_free(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @pages_free(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -43186,7 +43183,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @new_region_id() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @new_region_id() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19213 = call i64 @__mruntime_rt_region_resid__rg_g()
 %t19214 = add i64 %t19213, 184
@@ -43195,7 +43192,7 @@ entry:
 %t19216 = add i64 %t19215, 1
 ret i64 %t19216
 }
-define internal i64 @rec_init(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rec_init(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19217 = call i64 @st64(i64 %p0, i64 %p1)
 %t19218 = add i64 %p0, 8
@@ -43220,7 +43217,7 @@ entry:
 %t19237 = add i64 %t19234, %t19236
 ret i64 %t19237
 }
-define internal i64 @rec_of(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rec_of(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19238 = icmp eq i64 %p0, 0
 br i1 %t19238, label %L6307, label %L6308
@@ -43235,7 +43232,7 @@ L6309:
 %t19242 = phi i64 [ 0, %L6307 ], [ %t19241, %L6308 ]
 ret i64 %t19242
 }
-define internal i64 @__mruntime_rt_region_resid__rec_find(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_region_resid__rec_find(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -43258,7 +43255,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @alloc_in(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @alloc_in(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19249 = call i64 @ag_scope_depth()
 %t19250 = icmp sgt i64 %t19249, 0
@@ -43326,7 +43323,7 @@ L6324:
 %t19288 = tail call i64 @region_grow(i64 %p0, i64 %t19287)
 ret i64 %t19288
 }
-define internal i64 @region_grow(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @region_grow(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19289 = add i64 %p1, 16
 %t19290 = call i64 @__mruntime_rt_region_resid__order_of(i64 %t19289)
@@ -43367,7 +43364,7 @@ entry:
 %t19325 = add i64 %t19292, 16
 ret i64 %t19325
 }
-define internal i1 @mv_src(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @mv_src(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19326 = call i64 @region_of(i64 %p1)
 %t19327 = icmp ne i64 %t19326, 0
@@ -43392,7 +43389,7 @@ LSJ19332:
 %t19336 = phi i1 [ false, %LSL19332 ], [ %t19335, %LSR19332 ]
 ret i1 %t19336
 }
-define internal i64 @mv_alloc(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @mv_alloc(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19337 = add i64 %p0, 16
 %t19338 = call i64 @ld64(i64 %t19337)
@@ -43405,7 +43402,7 @@ L6327:
 %t19341 = call i64 @rt_outer_alloc(i64 %p1)
 ret i64 %t19341
 }
-define internal i64 @mv_ctx(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @mv_ctx(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19342 = call i64 @st64(i64 %p0, i64 %p1)
 %t19343 = add i64 %p0, 8
@@ -43416,7 +43413,7 @@ entry:
 %t19348 = add i64 %t19345, %t19347
 ret i64 %p0
 }
-define internal i64 @mv_legacy() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @mv_legacy() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19349p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.rg_mv_legacy)
 %t19349 = ptrtoint ptr %t19349p to i64
@@ -43424,7 +43421,7 @@ entry:
 %t19351 = call i64 @mv_ctx(i64 %t19349, i64 1, i64 %t19350, i64 0)
 ret i64 %t19351
 }
-define internal i64 @mv_into(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @mv_into(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19352p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.rg_mv_stack)
 %t19352 = ptrtoint ptr %t19352p to i64
@@ -43454,7 +43451,7 @@ L6333:
 %t19367 = call i64 @mv_ctx(i64 %t19365, i64 %t19362, i64 %t19366, i64 %t19359)
 ret i64 %t19367
 }
-define internal i64 @mv_done(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @mv_done(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19368p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.rg_mv_stack)
 %t19368 = ptrtoint ptr %t19368p to i64
@@ -43465,17 +43462,17 @@ entry:
 %t19373 = add nsw i64 %t19372, %p0
 ret i64 %t19373
 }
-define internal i64 @rt_loop_enter() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_loop_enter() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19374 = tail call i64 @rt_scope_push()
 ret i64 %t19374
 }
-define i64 @resid_loop_enter() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_loop_enter() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_loop_enter()
 ret i64 %r
 }
-define internal i1 @rt_loop_due(i64 %p0) alwaysinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @rt_loop_due(i64 %p0) alwaysinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19375 = call i64 @rec_at(i64 %p0)
 %t19376 = add i64 %t19375, 32
@@ -43487,12 +43484,12 @@ entry:
 %t19382 = icmp sgt i64 %t19377, %t19381
 ret i1 %t19382
 }
-define i1 @resid_loop_due(i64 %a0) alwaysinline "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i1 @resid_loop_due(i64 %a0) alwaysinline "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i1 @rt_loop_due(i64 %a0)
 ret i1 %r
 }
-define internal i64 @rt_loop_move(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_loop_move(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19383p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.rg_next)
 %t19383 = ptrtoint ptr %t19383p to i64
@@ -43526,13 +43523,13 @@ L6336:
 %t19406 = mul nsw i64 %t19405, 0
 ret i64 %t19406
 }
-define ptr @resid_loop_move(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_loop_move(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_loop_move(i64 %a0, i64 %a1)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_loop_exit(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_loop_exit(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19407 = call i64 @rec_at(i64 %p0)
 %t19408 = icmp eq i64 %p1, 2
@@ -43587,13 +43584,13 @@ L6345:
 %t19439 = call i64 @mv_ctx(i64 %t19412, i64 1, i64 0, i64 0)
 ret i64 %t19439
 }
-define ptr @resid_loop_exit(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_loop_exit(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_loop_exit(i64 %a0, i64 %a1)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @region_merge(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @region_merge(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19440 = add i64 %p0, 8
 %t19441 = call i64 @ld64(i64 %t19440)
@@ -43631,7 +43628,7 @@ L6348:
 %t19469 = add i64 %t19466, %t19468
 ret i64 %t19469
 }
-define internal i64 @__mruntime_rt_region_resid__retag(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_region_resid__retag(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19470 = add i64 %p0, 8
 %t19471 = call i64 @ld64(i64 %t19470)
@@ -43652,15 +43649,15 @@ L6351:
 %t19480 = phi i64 [ %p0, %L6349 ], [ %t19479, %L6350 ]
 ret i64 %t19480
 }
-define internal i64 @__mruntime_rt_native_resid__ntab_ent() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_native_resid__ntab_ent() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 40
 }
-define internal i64 @rt_native_call(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_native_call(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19481 = call i64 @xmalloc(i64 8)
 %t19482 = or i64 1, 524288
-%t19483 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 53, i64 1, i64 %t19482, i64 0, i64 %t19481, i64 0, i64 0)
+%t19483 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 199, i64 1, i64 %t19482, i64 0, i64 %t19481, i64 0, i64 0)
 %t19484 = icmp slt i64 %t19483, 0
 br i1 %t19484, label %L6352, label %L6354
 L6352:
@@ -43722,7 +43719,7 @@ L6358:
 ret i64 %t19534
 L6360:
 %t19535 = call i1 @__mruntime_rt_native_resid__native_send(i64 %t19490, i64 %p2, i64 0, i64 %p3)
-%t19536 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 48, i64 %t19490, i64 1, i64 0, i64 0, i64 0, i64 0)
+%t19536 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 210, i64 %t19490, i64 1, i64 0, i64 0, i64 0, i64 0)
 %t19537 = call i64 @__mruntime_rt_native_resid__native_recv(i64 %t19490, i64 %p4, i64 0, i64 %p5)
 %t19538 = call i64 @xmalloc(i64 8)
 %t19539 = icmp eq i64 %t19537, %p5
@@ -43795,7 +43792,7 @@ ret i64 %t19575
 L6378:
 ret i64 0
 }
-define void @resid_native_call(ptr %a0, ptr %a1, ptr %a2, i64 %a3, ptr %a4, i64 %a5) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define void @resid_native_call(ptr %a0, ptr %a1, ptr %a2, i64 %a3, ptr %a4, i64 %a5) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -43804,19 +43801,19 @@ entry:
 %r = call i64 @rt_native_call(i64 %x0i, i64 %x1i, i64 %x2i, i64 %a3, i64 %x4i, i64 %a5)
 ret void
 }
-define internal i64 @__mruntime_rt_native_resid__native_cpu_seconds() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_native_resid__native_cpu_seconds() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 60
 }
-define internal i64 @__mruntime_rt_native_resid__native_child(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_native_resid__native_child(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19576 = icmp eq i64 %p0, 3
 br i1 %t19576, label %L6379, label %L6380
 L6379:
-%t19577 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 72, i64 3, i64 2, i64 0, i64 0, i64 0, i64 0)
+%t19577 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 25, i64 3, i64 2, i64 0, i64 0, i64 0, i64 0)
 br label %L6381
 L6380:
-%t19578 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 292, i64 %p0, i64 3, i64 0, i64 0, i64 0, i64 0)
+%t19578 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 24, i64 %p0, i64 3, i64 0, i64 0, i64 0, i64 0)
 br label %L6381
 L6381:
 %t19579 = phi i64 [ %t19577, %L6379 ], [ %t19578, %L6380 ]
@@ -43826,21 +43823,21 @@ L6382:
 %t19581 = call i64 @__mruntime_rt_native_resid__native_child_exit(i64 127)
 ret i64 %t19581
 L6384:
-%t19582 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 436, i64 0, i64 2, i64 0, i64 0, i64 0, i64 0)
+%t19582 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 436, i64 0, i64 2, i64 0, i64 0, i64 0, i64 0)
 %t19583 = icmp slt i64 %t19582, 0
 br i1 %t19583, label %L6385, label %L6387
 L6385:
 %t19584 = call i64 @__mruntime_rt_native_resid__native_child_exit(i64 127)
 ret i64 %t19584
 L6387:
-%t19585 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 436, i64 4, i64 4294967295, i64 0, i64 0, i64 0, i64 0)
+%t19585 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 436, i64 4, i64 4294967295, i64 0, i64 0, i64 0, i64 0)
 %t19586 = icmp slt i64 %t19585, 0
 br i1 %t19586, label %L6388, label %L6390
 L6388:
 %t19587 = call i64 @__mruntime_rt_native_resid__native_child_exit(i64 127)
 ret i64 %t19587
 L6390:
-%t19588 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 160, i64 0, i64 %p3, i64 0, i64 0, i64 0, i64 0)
+%t19588 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 164, i64 0, i64 %p3, i64 0, i64 0, i64 0, i64 0)
 %t19589 = icmp slt i64 %t19588, 0
 br i1 %t19589, label %L6391, label %L6393
 L6391:
@@ -43848,25 +43845,25 @@ L6391:
 ret i64 %t19590
 L6393:
 %t19591 = add i64 %p3, 16
-%t19592 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 160, i64 4, i64 %t19591, i64 0, i64 0, i64 0, i64 0)
+%t19592 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 164, i64 4, i64 %t19591, i64 0, i64 0, i64 0, i64 0)
 %t19593 = icmp slt i64 %t19592, 0
 br i1 %t19593, label %L6394, label %L6396
 L6394:
 %t19594 = call i64 @__mruntime_rt_native_resid__native_child_exit(i64 127)
 ret i64 %t19594
 L6396:
-%t19595 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 157, i64 1, i64 9, i64 0, i64 0, i64 0, i64 0)
+%t19595 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 167, i64 1, i64 9, i64 0, i64 0, i64 0, i64 0)
 %t19597 = ptrtoint ptr @.s19596 to i64
-%t19598 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 59, i64 %t19597, i64 %p1, i64 %p2, i64 0, i64 0, i64 0)
+%t19598 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 221, i64 %t19597, i64 %p1, i64 %p2, i64 0, i64 0, i64 0)
 %t19599 = call i64 @__mruntime_rt_native_resid__native_child_exit(i64 127)
 ret i64 %t19599
 }
-define internal i64 @__mruntime_rt_native_resid__native_child_exit(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_native_resid__native_child_exit(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t19600 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 231, i64 %p0, i64 0, i64 0, i64 0, i64 0, i64 0)
+%t19600 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 94, i64 %p0, i64 0, i64 0, i64 0, i64 0, i64 0)
 ret i64 %t19600
 }
-define internal i1 @__mruntime_rt_native_resid__native_send(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_native_resid__native_send(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -43881,7 +43878,7 @@ ret i1 true
 L6399:
 %t19602 = add i64 %p1, %p2
 %t19603 = sub i64 %p3, %p2
-%t19604 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 44, i64 %p0, i64 %t19602, i64 %t19603, i64 16384, i64 0, i64 0)
+%t19604 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 206, i64 %p0, i64 %t19602, i64 %t19603, i64 16384, i64 0, i64 0)
 %t19605 = sub nsw i64 0, 4
 %t19606 = icmp eq i64 %t19604, %t19605
 br i1 %t19606, label %L6400, label %L6402
@@ -43900,7 +43897,7 @@ br label %tco.s1
 tco.s1:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_native_resid__native_recv(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_native_resid__native_recv(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -43926,14 +43923,14 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_native_resid__native_fail(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_native_resid__native_fail(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19619 = ptrtoint ptr @.s19618 to i64
 %t19620 = call i64 @__mruntime_rt_native_resid__native_msg(i64 %p0, i64 %p1, i64 %p2, i64 %t19619)
 %t19621 = call i64 @rt_abort_at(i64 %t19620)
 ret i64 %t19621
 }
-define internal i64 @__mruntime_rt_native_resid__native_fail_n(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_native_resid__native_fail_n(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19622 = call i64 @xmalloc(i64 24)
 %t19623 = call i64 @__mruntime_rt_native_resid__native_utoa(i64 %t19622, i64 %p3)
@@ -43941,7 +43938,7 @@ entry:
 %t19625 = call i64 @rt_abort_at(i64 %t19624)
 ret i64 %t19625
 }
-define internal i64 @__mruntime_rt_native_resid__native_msg(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_native_resid__native_msg(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19626 = call i64 @c_strlen(i64 %p0)
 %t19627 = call i64 @c_strlen(i64 %p1)
@@ -43967,14 +43964,14 @@ entry:
 %t19650 = add nsw i64 %t19649, %t19634
 ret i64 %t19650
 }
-define internal i64 @__mruntime_rt_native_resid__native_put(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_native_resid__native_put(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19651 = call i64 @c_strlen(i64 %p1)
 %t19652 = call i64 @mcopy(i64 %p0, i64 %p1, i64 %t19651)
 %t19653 = add i64 %p0, %t19651
 ret i64 %t19653
 }
-define internal i64 @__mruntime_rt_native_resid__native_utoa(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_native_resid__native_utoa(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19654 = call i64 @__mruntime_rt_native_resid__native_digits(i64 %p1, i64 1)
 %t19655 = add i64 %p0, %t19654
@@ -43983,7 +43980,7 @@ entry:
 %t19658 = call i64 @__mruntime_rt_native_resid__native_utoa_at(i64 %p0, i64 %p1, i64 %t19657)
 ret i64 %t19658
 }
-define internal i64 @__mruntime_rt_native_resid__native_digits(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_native_resid__native_digits(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19659 = icmp slt i64 %p0, 10
 br i1 %t19659, label %L6412, label %L6413
@@ -43998,7 +43995,7 @@ L6414:
 %t19663 = phi i64 [ %p1, %L6412 ], [ %t19662, %L6413 ]
 ret i64 %t19663
 }
-define internal i64 @__mruntime_rt_native_resid__native_utoa_at(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_native_resid__native_utoa_at(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19664 = add i64 %p0, %p2
 %t19665 = srem i64 %p1, 10
@@ -44017,7 +44014,7 @@ L6417:
 %t19672 = phi i64 [ 0, %L6415 ], [ %t19671, %L6416 ]
 ret i64 %t19672
 }
-define internal i64 @rt_native_int_ok(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_native_int_ok(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19673 = icmp sge i64 %p1, 64
 br i1 %t19673, label %L6418, label %L6420
@@ -44066,7 +44063,7 @@ ret i64 %t19694
 L6426:
 ret i64 %p0
 }
-define i64 @resid_native_int_ok(i64 %a0, i64 %a1, i8 %a2, ptr %a3, ptr %a4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_native_int_ok(i64 %a0, i64 %a1, i8 %a2, ptr %a3, ptr %a4) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x2 = zext i8 %a2 to i64
 %x3i = ptrtoint ptr %a3 to i64
@@ -44074,7 +44071,7 @@ entry:
 %r = call i64 @rt_native_int_ok(i64 %a0, i64 %a1, i64 %x2, i64 %x3i, i64 %x4i)
 ret i64 %r
 }
-define internal i64 @rt_native_str_ok(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_native_str_ok(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19695 = add i64 %p1, 1
 %t19696 = call i64 @__mruntime_rt_native_resid__native_nul(i64 %p0, i64 0, i64 %t19695)
@@ -44102,7 +44099,7 @@ call void @llvm.memset.p0.i64(ptr %t19709p, i8 %t19709q, i64 %t19708, i1 false)
 %t19709 = add i64 0, 0
 ret i64 %t19709
 }
-define void @resid_native_str_ok(ptr %a0, i64 %a1, ptr %a2, ptr %a3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define void @resid_native_str_ok(ptr %a0, i64 %a1, ptr %a2, ptr %a3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x2i = ptrtoint ptr %a2 to i64
@@ -44110,7 +44107,7 @@ entry:
 %r = call i64 @rt_native_str_ok(i64 %x0i, i64 %a1, i64 %x2i, i64 %x3i)
 ret void
 }
-define internal i64 @__mruntime_rt_native_resid__native_nul(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_native_resid__native_nul(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -44135,7 +44132,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i1 @__mruntime_rt_native_resid__native_utf8(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_native_resid__native_utf8(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -44282,7 +44279,7 @@ br label %tco.s1
 tco.s1:
 br label %tco.head
 }
-define internal i1 @__mruntime_rt_native_resid__native_cont(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_native_resid__native_cont(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19766 = icmp sge i64 %p1, %p2
 br i1 %t19766, label %L6475, label %L6477
@@ -44311,7 +44308,7 @@ LSJ19773:
 %t19776 = phi i1 [ false, %LSL19773 ], [ %t19775, %LSR19773 ]
 ret i1 %t19776
 }
-define internal i64 @rt_native_host(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_native_host(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19777 = call i64 @argv_w()
 %t19778 = call i64 @ld64(i64 %t19777)
@@ -44376,16 +44373,16 @@ L6495:
 %t19809 = call i64 @__mruntime_rt_native_resid__native_serve(i64 %p0, i64 %p1, i64 %t19797, i64 %t19803, i64 %t19808)
 ret i64 %t19809
 }
-define void @resid_native_host(ptr %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define void @resid_native_host(ptr %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %r = call i64 @rt_native_host(i64 %x0i, i64 %a1)
 ret void
 }
-define internal i1 @__mruntime_rt_native_resid__native_fd3_socket() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_native_resid__native_fd3_socket() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19810 = call i64 @xmalloc(i64 144)
-%t19811 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 5, i64 3, i64 %t19810, i64 0, i64 0, i64 0, i64 0)
+%t19811 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 80, i64 3, i64 %t19810, i64 0, i64 0, i64 0, i64 0)
 %t19812 = icmp eq i64 %t19811, 0
 br label %LSL19813
 LSL19813:
@@ -44411,7 +44408,7 @@ LSJ19823:
 %t19824 = phi i1 [ false, %LSL19823 ], [ %t19819, %LSR19823 ]
 ret i1 %t19824
 }
-define internal i64 @__mruntime_rt_native_resid__native_sizes(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_native_resid__native_sizes(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -44463,7 +44460,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_native_resid__native_serve(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_native_resid__native_serve(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19843 = call i64 @__mruntime_rt_native_resid__native_recv(i64 3, i64 %p3, i64 0, i64 8)
 %t19844 = icmp ne i64 %t19843, 8
@@ -44531,7 +44528,7 @@ L6522:
 %t19877 = call i64 @__mruntime_rt_native_resid__native_child_exit(i64 0)
 ret i64 %t19877
 }
-define internal i1 @__mruntime_rt_native_resid__native_write(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_native_resid__native_write(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -44556,9 +44553,9 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i1 @__mruntime_rt_native_resid__native_lockdown() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_native_resid__native_lockdown() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t19885 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 157, i64 4, i64 0, i64 0, i64 0, i64 0, i64 0)
+%t19885 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 167, i64 4, i64 0, i64 0, i64 0, i64 0, i64 0)
 %t19886 = icmp slt i64 %t19885, 0
 br i1 %t19886, label %L6529, label %L6531
 L6529:
@@ -44570,7 +44567,7 @@ br label %LSL19889
 LSL19889:
 br i1 %t19888, label %LSR19889, label %LSJ19889
 LSR19889:
-%t19890 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 157, i64 26, i64 2, i64 0, i64 0, i64 0, i64 0)
+%t19890 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 167, i64 26, i64 2, i64 0, i64 0, i64 0, i64 0)
 %t19891 = icmp slt i64 %t19890, 0
 br label %LSJ19889
 LSJ19889:
@@ -44586,7 +44583,7 @@ br i1 %t19895, label %L6535, label %L6537
 L6535:
 ret i1 false
 L6537:
-%t19896 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 157, i64 38, i64 1, i64 0, i64 0, i64 0, i64 0)
+%t19896 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 167, i64 38, i64 1, i64 0, i64 0, i64 0, i64 0)
 %t19897 = icmp slt i64 %t19896, 0
 br i1 %t19897, label %L6538, label %L6540
 L6538:
@@ -44599,11 +44596,11 @@ L6540:
 %t19902 = add i64 %t19899, 8
 %t19903 = call i64 @st64(i64 %t19902, i64 %t19898)
 %t19904 = add i64 %t19901, %t19903
-%t19905 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 317, i64 1, i64 0, i64 %t19899, i64 0, i64 0, i64 0)
+%t19905 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 277, i64 1, i64 0, i64 %t19899, i64 0, i64 0, i64 0)
 %t19906 = icmp eq i64 %t19905, 0
 ret i1 %t19906
 }
-define internal i64 @__mruntime_rt_native_resid__native_oom_first() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_native_resid__native_oom_first() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19908 = ptrtoint ptr @.s19907 to i64
 %t19909 = or i64 524288, 1
@@ -44618,7 +44615,7 @@ L6543:
 %t19915 = call i64 @sys_close(i64 %t19910)
 ret i64 %t19915
 }
-define internal i1 @__mruntime_rt_native_resid__native_unmap_clocks() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_native_resid__native_unmap_clocks() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19917 = ptrtoint ptr @.s19916 to i64
 %t19918 = call i64 @read_file_all(i64 %t19917)
@@ -44630,7 +44627,7 @@ L6546:
 %t19920 = call i1 @__mruntime_rt_native_resid__native_maps_line(i64 %t19918, i64 0)
 ret i1 %t19920
 }
-define internal i1 @__mruntime_rt_native_resid__native_maps_line(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_native_resid__native_maps_line(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -44671,7 +44668,7 @@ L6550:
 %t19940 = add i64 %t19939, 1
 %t19941 = call i64 @__mruntime_rt_native_resid__native_hex(i64 %p0, i64 %t19940, i64 0)
 %t19942 = sub i64 %t19941, %t19938
-%t19943 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 11, i64 %t19938, i64 %t19942, i64 0, i64 0, i64 0, i64 0)
+%t19943 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 215, i64 %t19938, i64 %t19942, i64 0, i64 0, i64 0, i64 0)
 %t19944 = icmp ne i64 %t19943, 0
 br i1 %t19944, label %L6553, label %L6555
 L6553:
@@ -44691,7 +44688,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_native_resid__native_eol(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_native_resid__native_eol(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19950 = add i64 %p0, %p1
 %t19951 = call i64 @ld8(i64 %t19950)
@@ -44717,7 +44714,7 @@ L6561:
 %t19960 = phi i64 [ %p1, %L6559 ], [ %t19959, %L6560 ]
 ret i64 %t19960
 }
-define internal i1 @__mruntime_rt_native_resid__native_ends(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_native_resid__native_ends(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19961 = call i64 @c_strlen(i64 %p3)
 %t19962 = sub i64 %p2, %p1
@@ -44731,7 +44728,7 @@ L6564:
 %t19966 = call i1 @__mruntime_rt_native_resid__native_same(i64 %t19965, i64 %p3, i64 %t19961)
 ret i1 %t19966
 }
-define internal i1 @__mruntime_rt_native_resid__native_same(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_native_resid__native_same(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19967 = icmp eq i64 %p2, 0
 br i1 %t19967, label %L6565, label %L6567
@@ -44754,7 +44751,7 @@ LSJ19971:
 %t19976 = phi i1 [ false, %LSL19971 ], [ %t19975, %LSR19971 ]
 ret i1 %t19976
 }
-define internal i64 @__mruntime_rt_native_resid__native_hexd(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_native_resid__native_hexd(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19977 = icmp sge i64 %p0, 48
 br label %LSL19978
@@ -44793,7 +44790,7 @@ L6570:
 %t19989 = phi i64 [ %t19981, %L6568 ], [ %t19988, %L6573 ]
 ret i64 %t19989
 }
-define internal i64 @__mruntime_rt_native_resid__native_hex(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_native_resid__native_hex(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -44815,7 +44812,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_native_resid__native_skip_hex(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_native_resid__native_skip_hex(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t19998 = add i64 %p0, %p1
 %t19999 = call i64 @ld8(i64 %t19998)
@@ -44832,11 +44829,11 @@ L6579:
 %t20004 = phi i64 [ %p1, %L6577 ], [ %t20003, %L6578 ]
 ret i64 %t20004
 }
-define internal i64 @__mruntime_rt_native_resid__native_filter_len() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_native_resid__native_filter_len() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 24
 }
-define internal i64 @__mruntime_rt_native_resid__native_filter() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_native_resid__native_filter() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t20005 = call i64 @__mruntime_rt_native_resid__native_filter_len()
 %t20006 = mul i64 %t20005, 8
@@ -44858,34 +44855,34 @@ L6582:
 %t20016 = add i64 %t20014, %t20015
 %t20017 = call i64 @__mruntime_rt_native_resid__bpf(i64 %t20007, i64 4, i64 53, i64 18, i64 0, i64 1073741824)
 %t20018 = add i64 %t20016, %t20017
-%t20019 = add i64 0, 0
+%t20019 = add i64 0, 63
 %t20020 = call i64 @__mruntime_rt_native_resid__bpf(i64 %t20007, i64 5, i64 21, i64 10, i64 0, i64 %t20019)
 %t20021 = add i64 %t20018, %t20020
-%t20022 = add i64 0, 1
+%t20022 = add i64 0, 64
 %t20023 = call i64 @__mruntime_rt_native_resid__bpf(i64 %t20007, i64 6, i64 21, i64 9, i64 0, i64 %t20022)
 %t20024 = add i64 %t20021, %t20023
-%t20025 = add i64 0, 9
+%t20025 = add i64 0, 222
 %t20026 = call i64 @__mruntime_rt_native_resid__bpf(i64 %t20007, i64 7, i64 21, i64 12, i64 0, i64 %t20025)
 %t20027 = add i64 %t20024, %t20026
-%t20028 = add i64 0, 10
+%t20028 = add i64 0, 226
 %t20029 = call i64 @__mruntime_rt_native_resid__bpf(i64 %t20007, i64 8, i64 21, i64 11, i64 0, i64 %t20028)
 %t20030 = add i64 %t20027, %t20029
-%t20031 = add i64 0, 11
+%t20031 = add i64 0, 215
 %t20032 = call i64 @__mruntime_rt_native_resid__bpf(i64 %t20007, i64 9, i64 21, i64 12, i64 0, i64 %t20031)
 %t20033 = add i64 %t20030, %t20032
-%t20034 = add i64 0, 12
+%t20034 = add i64 0, 214
 %t20035 = call i64 @__mruntime_rt_native_resid__bpf(i64 %t20007, i64 10, i64 21, i64 11, i64 0, i64 %t20034)
 %t20036 = add i64 %t20033, %t20035
-%t20037 = add i64 0, 25
+%t20037 = add i64 0, 216
 %t20038 = call i64 @__mruntime_rt_native_resid__bpf(i64 %t20007, i64 11, i64 21, i64 10, i64 0, i64 %t20037)
 %t20039 = add i64 %t20036, %t20038
-%t20040 = add i64 0, 28
+%t20040 = add i64 0, 233
 %t20041 = call i64 @__mruntime_rt_native_resid__bpf(i64 %t20007, i64 12, i64 21, i64 9, i64 0, i64 %t20040)
 %t20042 = add i64 %t20039, %t20041
-%t20043 = add i64 0, 60
+%t20043 = add i64 0, 93
 %t20044 = call i64 @__mruntime_rt_native_resid__bpf(i64 %t20007, i64 13, i64 21, i64 8, i64 0, i64 %t20043)
 %t20045 = add i64 %t20042, %t20044
-%t20046 = add i64 0, 231
+%t20046 = add i64 0, 94
 %t20047 = call i64 @__mruntime_rt_native_resid__bpf(i64 %t20007, i64 14, i64 21, i64 7, i64 0, i64 %t20046)
 %t20048 = add i64 %t20045, %t20047
 %t20049 = call i64 @__mruntime_rt_native_resid__bpf(i64 %t20007, i64 15, i64 6, i64 0, i64 0, i64 2147483648)
@@ -44908,7 +44905,7 @@ L6582:
 %t20066 = add i64 %t20064, %t20065
 ret i64 %t20007
 }
-define internal i64 @__mruntime_rt_native_resid__bpf(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_native_resid__bpf(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t20067 = mul i64 %p1, 8
 %t20068 = add i64 %p0, %t20067
@@ -44921,17 +44918,17 @@ entry:
 %t20075 = call i64 @st32(i64 %t20074, i64 %p5)
 ret i64 0
 }
-define internal i64 @__mruntime_rt_unix_resid__disp_fds() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_unix_resid__disp_fds() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t20076p = getelementptr i8, ptr @rtg.rt_disp_fds, i64 0
 %t20076 = ptrtoint ptr %t20076p to i64
 ret i64 %t20076
 }
-define internal i64 @__mruntime_rt_unix_resid__fdq_cap() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_unix_resid__fdq_cap() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 30
 }
-define internal i64 @__mruntime_rt_unix_resid__fdq_push(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_unix_resid__fdq_push(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t20077 = call i64 @__mruntime_rt_unix_resid__disp_fds()
 %t20078 = add i64 %t20077, 8
@@ -44955,7 +44952,7 @@ L6585:
 %t20092 = add nsw i64 %t20089, %t20091
 ret i64 %t20092
 }
-define internal i64 @__mruntime_rt_unix_resid__fdq_pop() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_unix_resid__fdq_pop() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t20093 = call i64 @__mruntime_rt_unix_resid__disp_fds()
 %t20094 = call i64 @ld64(i64 %t20093)
@@ -44988,13 +44985,13 @@ L6591:
 %t20111 = call i64 @st64(i64 %t20109, i64 %t20110)
 ret i64 %t20102
 }
-define internal i64 @__mruntime_rt_unix_resid__fdq_drop() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_unix_resid__fdq_drop() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t20112 = call i64 @__mruntime_rt_unix_resid__disp_fds()
 %t20113 = call i64 @__mruntime_rt_unix_resid__fdq_take_all(i64 %t20112)
 ret i64 %t20113
 }
-define internal i64 @__mruntime_rt_unix_resid__fdq_take_all(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_unix_resid__fdq_take_all(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t20114 = add i64 %p0, 8
 %t20115 = call i64 @ld64(i64 %t20114)
@@ -45004,7 +45001,7 @@ entry:
 %t20119 = call i64 @st64(i64 %t20118, i64 0)
 ret i64 %t20115
 }
-define internal i64 @__mruntime_rt_unix_resid__fdq_close_at(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_unix_resid__fdq_close_at(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -45026,7 +45023,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i1 @__mruntime_rt_unix_resid__disp_sock_ok(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_unix_resid__disp_sock_ok(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t20128 = icmp slt i64 %p0, 0
 br i1 %t20128, label %L6595, label %L6597
@@ -45035,7 +45032,7 @@ ret i1 false
 L6597:
 %t20129p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.disp_sock_stat)
 %t20129 = ptrtoint ptr %t20129p to i64
-%t20130 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 5, i64 %p0, i64 %t20129, i64 0, i64 0, i64 0, i64 0)
+%t20130 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 80, i64 %p0, i64 %t20129, i64 0, i64 0, i64 0, i64 0)
 %t20131 = icmp eq i64 %t20130, 0
 br label %LSL20132
 LSL20132:
@@ -45051,19 +45048,19 @@ LSJ20132:
 %t20138 = phi i1 [ false, %LSL20132 ], [ %t20137, %LSR20132 ]
 ret i1 %t20138
 }
-define internal i64 @__mruntime_rt_unix_resid__sa_buf() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_unix_resid__sa_buf() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t20139p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.disp_sa)
 %t20139 = ptrtoint ptr %t20139p to i64
 ret i64 %t20139
 }
-define internal i64 @__mruntime_rt_unix_resid__path_buf() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_unix_resid__path_buf() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t20140p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.disp_path)
 %t20140 = ptrtoint ptr %t20140p to i64
 ret i64 %t20140
 }
-define internal i64 @__mruntime_rt_unix_resid__sa_path(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_unix_resid__sa_path(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t20141 = icmp sle i64 %p1, 0
 br label %LSL20142
@@ -45092,7 +45089,7 @@ call void @llvm.memset.p0.i64(ptr %t20147p, i8 %t20147q, i64 112, i1 false)
 %t20153 = call i64 @st8(i64 %t20152, i64 0)
 ret i64 %t20146
 }
-define internal i64 @__mruntime_rt_unix_resid__sa_abstract(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_unix_resid__sa_abstract(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t20154 = icmp sle i64 %p1, 0
 br label %LSL20155
@@ -45118,7 +45115,7 @@ call void @llvm.memset.p0.i64(ptr %t20160p, i8 %t20160q, i64 112, i1 false)
 %t20163 = call i64 @mcopy(i64 %t20162, i64 %p0, i64 %p1)
 ret i64 %t20159
 }
-define internal i64 @__mruntime_rt_unix_resid__sa_under(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_unix_resid__sa_under(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t20164 = call i64 @ld8(i64 %p1)
 %t20165 = icmp eq i64 %t20164, 47
@@ -45158,17 +45155,17 @@ L6609:
 %t20186 = tail call i64 @__mruntime_rt_unix_resid__sa_path(i64 %t20177, i64 %t20185)
 ret i64 %t20186
 }
-define internal i64 @__mruntime_rt_unix_resid__unix_connect(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_unix_resid__unix_connect(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t20187 = or i64 1, 524288
-%t20188 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 41, i64 1, i64 %t20187, i64 0, i64 0, i64 0, i64 0)
+%t20188 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 198, i64 1, i64 %t20187, i64 0, i64 0, i64 0, i64 0)
 %t20189 = icmp slt i64 %t20188, 0
 br i1 %t20189, label %L6610, label %L6612
 L6610:
 %t20190 = sub nsw i64 0, 1
 ret i64 %t20190
 L6612:
-%t20191 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 42, i64 %t20188, i64 %p0, i64 110, i64 0, i64 0, i64 0)
+%t20191 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 203, i64 %t20188, i64 %p0, i64 110, i64 0, i64 0, i64 0)
 %t20192 = icmp ne i64 %t20191, 0
 br i1 %t20192, label %L6613, label %L6615
 L6613:
@@ -45179,7 +45176,7 @@ ret i64 %t20195
 L6615:
 ret i64 %t20188
 }
-define internal i64 @rt_disp_connect() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_disp_connect() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t20197 = ptrtoint ptr @.s20196 to i64
 %t20198 = call i64 @c_getenv(i64 %t20197)
@@ -45243,12 +45240,12 @@ L6630:
 %t20228 = call i64 @__mruntime_rt_unix_resid__x11_connect(i64 %t20221)
 ret i64 %t20228
 }
-define i64 @resid_disp_connect() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_disp_connect() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_disp_connect()
 ret i64 %r
 }
-define internal i64 @__mruntime_rt_unix_resid__disp_inherited(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_unix_resid__disp_inherited(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t20229 = call i64 @__mruntime_rt_unix_resid__disp_dec(i64 %p0)
 %t20230 = icmp sge i64 %t20229, 0
@@ -45262,7 +45259,7 @@ L6633:
 %t20232 = phi i64 [ %t20229, %L6631 ], [ %t20231, %L6632 ]
 ret i64 %t20232
 }
-define internal i64 @__mruntime_rt_unix_resid__disp_dec(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_unix_resid__disp_dec(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t20233 = call i64 @__mruntime_rt_unix_resid__disp_digits(i64 %p0)
 %t20234 = icmp eq i64 %t20233, %p0
@@ -45274,7 +45271,7 @@ L6636:
 %t20236 = call i64 @__mruntime_rt_unix_resid__disp_value(i64 %p0, i64 %t20233, i64 0)
 ret i64 %t20236
 }
-define internal i64 @__mruntime_rt_unix_resid__disp_digits(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_unix_resid__disp_digits(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t20237 = call i64 @ld8(i64 %p0)
 %t20238 = icmp sge i64 %t20237, 48
@@ -45298,7 +45295,7 @@ L6639:
 %t20245 = phi i64 [ %t20244, %L6637 ], [ %p0, %L6638 ]
 ret i64 %t20245
 }
-define internal i64 @__mruntime_rt_unix_resid__disp_value(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_unix_resid__disp_value(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t20246 = icmp sge i64 %p0, %p1
 br i1 %t20246, label %L6640, label %L6641
@@ -45316,7 +45313,7 @@ L6642:
 %t20253 = phi i64 [ %p2, %L6640 ], [ %t20252, %L6641 ]
 ret i64 %t20253
 }
-define internal i64 @__mruntime_rt_unix_resid__x11_connect(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_unix_resid__x11_connect(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t20255 = ptrtoint ptr @.s20254 to i64
 %t20256 = call i64 @c_strncmp(i64 %p0, i64 %t20255, i64 5)
@@ -45391,7 +45388,7 @@ L6654:
 %t20293 = tail call i64 @__mruntime_rt_unix_resid__unix_connect(i64 %t20292)
 ret i64 %t20293
 }
-define internal i1 @__mruntime_rt_unix_resid__disp_screen_ok(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_unix_resid__disp_screen_ok(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t20294 = call i64 @ld8(i64 %p0)
 %t20295 = icmp eq i64 %t20294, 0
@@ -45420,7 +45417,7 @@ LSJ20302:
 %t20305 = phi i1 [ false, %LSL20302 ], [ %t20304, %LSR20302 ]
 ret i1 %t20305
 }
-define internal i64 @rt_disp_pair() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_disp_pair() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t20306p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.disp_pair)
 %t20306 = ptrtoint ptr %t20306p to i64
@@ -45429,7 +45426,7 @@ entry:
 %t20309 = call i64 @st32(i64 %t20308, i64 0)
 %t20310 = add i64 %t20307, %t20309
 %t20311 = or i64 1, 524288
-%t20312 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 53, i64 1, i64 %t20311, i64 0, i64 %t20306, i64 0, i64 0)
+%t20312 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 199, i64 1, i64 %t20311, i64 0, i64 %t20306, i64 0, i64 0)
 %t20313 = icmp ne i64 %t20312, 0
 br i1 %t20313, label %L6661, label %L6663
 L6661:
@@ -45451,19 +45448,19 @@ L6663:
 %t20328 = call i64 @c_free(i64 %t20315)
 ret i64 %t20327
 }
-define ptr @resid_disp_pair() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_disp_pair() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_disp_pair()
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_unix_resid__msg_buf() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_unix_resid__msg_buf() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t20329p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.disp_msg)
 %t20329 = ptrtoint ptr %t20329p to i64
 ret i64 %t20329
 }
-define internal i64 @__mruntime_rt_unix_resid__disp_msg_head(i64 %p0, i64 %p1, i1 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_unix_resid__disp_msg_head(i64 %p0, i64 %p1, i1 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t20330 = call i64 @__mruntime_rt_unix_resid__msg_buf()
 %t20331p = inttoptr i64 %t20330 to ptr
@@ -45502,14 +45499,14 @@ L6666:
 %t20357 = add i64 %t20330, 16
 ret i64 %t20357
 }
-define internal i64 @__mruntime_rt_unix_resid__disp_set_ctl_fd(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_unix_resid__disp_set_ctl_fd(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t20358 = call i64 @__mruntime_rt_unix_resid__msg_buf()
 %t20359 = add i64 %t20358, 88
 %t20360 = call i64 @st32(i64 %t20359, i64 %p0)
 ret i64 %t20360
 }
-define internal i64 @rt_disp_send(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_disp_send(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t20361 = call i1 @__mruntime_rt_unix_resid__disp_sock_ok(i64 %p0)
 %t20362 = xor i1 %t20361, true
@@ -45545,7 +45542,7 @@ L6676:
 %t20373 = call i64 @__mruntime_rt_unix_resid__disp_set_ctl_fd(i64 %p2)
 br label %L6678
 L6678:
-%t20374 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 46, i64 %p0, i64 %t20372, i64 0, i64 0, i64 0, i64 0)
+%t20374 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 211, i64 %p0, i64 %t20372, i64 0, i64 0, i64 0, i64 0)
 %t20375 = call i64 @c_free(i64 %t20369)
 %t20376 = icmp eq i64 %t20374, %t20363
 br i1 %t20376, label %L6679, label %L6680
@@ -45557,14 +45554,14 @@ L6681:
 %t20377 = phi i64 [ 1, %L6679 ], [ 0, %L6680 ]
 ret i64 %t20377
 }
-define i8 @resid_disp_send(i64 %a0, ptr %a1, i64 %a2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_disp_send(i64 %a0, ptr %a1, i64 %a2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x1i = ptrtoint ptr %a1 to i64
 %r = call i64 @rt_disp_send(i64 %a0, i64 %x1i, i64 %a2)
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @__mruntime_rt_unix_resid__disp_bytes_of(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_unix_resid__disp_bytes_of(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -45587,7 +45584,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_disp_recv(i64 %p0, i64 %p1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_disp_recv(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t20386 = call i1 @__mruntime_rt_unix_resid__disp_sock_ok(i64 %p0)
 %t20387 = xor i1 %t20386, true
@@ -45632,7 +45629,7 @@ call void @llvm.memset.p0.i64(ptr %t20397p, i8 %t20397q, i64 64, i1 false)
 %t20403 = add i64 %t20402, 56
 %t20404 = call i64 @st64(i64 %t20403, i64 64)
 %t20405 = add i64 %t20401, %t20404
-%t20406 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 47, i64 %p0, i64 %t20398, i64 0, i64 0, i64 0, i64 0)
+%t20406 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 212, i64 %p0, i64 %t20398, i64 0, i64 0, i64 0, i64 0)
 %t20407 = icmp sgt i64 %t20406, 0
 br i1 %t20407, label %L6697, label %L6698
 L6697:
@@ -45673,13 +45670,13 @@ L6705:
 %t20427 = add i64 %t20425, %t20426
 ret i64 %t20422
 }
-define ptr @resid_disp_recv(i64 %a0, i64 %a1) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_disp_recv(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_disp_recv(i64 %a0, i64 %a1)
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @__mruntime_rt_unix_resid__disp_take_fds(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_unix_resid__disp_take_fds(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t20428 = add i64 %p2, 16
 %t20429 = icmp sgt i64 %t20428, %p1
@@ -45738,7 +45735,7 @@ L6714:
 %t20458 = add i64 %t20457, %t20452
 ret i64 %t20458
 }
-define internal i64 @__mruntime_rt_unix_resid__disp_take_each(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_unix_resid__disp_take_each(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -45759,7 +45756,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_unix_resid__disp_byte_boxes(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_unix_resid__disp_byte_boxes(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -45783,12 +45780,12 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @rt_disp_poll(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_disp_poll(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t20475 = tail call i64 @rt_tcp_poll(i64 %p0, i64 %p1, i64 %p2)
 ret i64 %t20475
 }
-define ptr @resid_disp_poll(ptr %a0, ptr %a1, i64 %a2) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define ptr @resid_disp_poll(ptr %a0, ptr %a1, i64 %a2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x0i = ptrtoint ptr %a0 to i64
 %x1i = ptrtoint ptr %a1 to i64
@@ -45796,17 +45793,17 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
-define internal i64 @rt_disp_recv_fd() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_disp_recv_fd() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t20476 = tail call i64 @__mruntime_rt_unix_resid__fdq_pop()
 ret i64 %t20476
 }
-define i64 @resid_disp_recv_fd() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_disp_recv_fd() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_disp_recv_fd()
 ret i64 %r
 }
-define internal i64 @rt_disp_close(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_disp_close(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t20477 = icmp sge i64 %p0, 0
 br label %LSL20478
@@ -45835,17 +45832,17 @@ L6723:
 %t20484 = phi i64 [ %t20483, %L6726 ], [ 0, %L6722 ]
 ret i64 %t20484
 }
-define i8 @resid_disp_close(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_disp_close(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_disp_close(i64 %a0)
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @__mruntime_rt_unix_resid__shm_magic() "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_unix_resid__shm_magic() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 ret i64 1296386893
 }
-define internal i1 @__mruntime_rt_unix_resid__shm_ok(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i1 @__mruntime_rt_unix_resid__shm_ok(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t20485 = icmp ne i64 %p0, 0
 br label %LSL20486
@@ -45860,7 +45857,7 @@ LSJ20486:
 %t20490 = phi i1 [ false, %LSL20486 ], [ %t20489, %LSR20486 ]
 ret i1 %t20490
 }
-define internal i64 @rt_disp_shm_new(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_disp_shm_new(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t20491 = icmp sle i64 %p0, 0
 br label %LSL20492
@@ -45877,13 +45874,13 @@ ret i64 0
 L6729:
 %t20496 = ptrtoint ptr @.s20495 to i64
 %t20497 = or i64 1, 2
-%t20498 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 319, i64 %t20496, i64 %t20497, i64 0, i64 0, i64 0, i64 0)
+%t20498 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 279, i64 %t20496, i64 %t20497, i64 0, i64 0, i64 0, i64 0)
 %t20499 = icmp slt i64 %t20498, 0
 br i1 %t20499, label %L6730, label %L6732
 L6730:
 ret i64 0
 L6732:
-%t20500 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 77, i64 %t20498, i64 %p0, i64 0, i64 0, i64 0, i64 0)
+%t20500 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 46, i64 %t20498, i64 %p0, i64 0, i64 0, i64 0, i64 0)
 %t20501 = icmp ne i64 %t20500, 0
 br i1 %t20501, label %L6733, label %L6735
 L6733:
@@ -45891,7 +45888,7 @@ L6733:
 %t20503 = mul nsw i64 %t20502, 0
 ret i64 %t20503
 L6735:
-%t20504 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 9, i64 0, i64 %p0, i64 3, i64 1, i64 %t20498, i64 0)
+%t20504 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 222, i64 0, i64 %p0, i64 3, i64 1, i64 %t20498, i64 0)
 %t20505 = icmp slt i64 %t20504, 0
 br i1 %t20505, label %L6736, label %L6738
 L6736:
@@ -45912,12 +45909,12 @@ L6738:
 %t20518 = add i64 %t20515, %t20517
 ret i64 %t20508
 }
-define i64 @resid_disp_shm_new(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_disp_shm_new(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_disp_shm_new(i64 %a0)
 ret i64 %r
 }
-define internal i64 @rt_disp_shm_fd(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_disp_shm_fd(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t20519 = call i1 @__mruntime_rt_unix_resid__shm_ok(i64 %p0)
 br i1 %t20519, label %L6739, label %L6740
@@ -45932,12 +45929,12 @@ L6741:
 %t20523 = phi i64 [ %t20521, %L6739 ], [ %t20522, %L6740 ]
 ret i64 %t20523
 }
-define i64 @resid_disp_shm_fd(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i64 @resid_disp_shm_fd(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_disp_shm_fd(i64 %a0)
 ret i64 %r
 }
-define internal i64 @rt_disp_shm_put(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_disp_shm_put(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t20524 = call i1 @__mruntime_rt_unix_resid__shm_ok(i64 %p0)
 %t20525 = xor i1 %t20524, true
@@ -45992,14 +45989,14 @@ L6756:
 %t20545 = call i64 @c_free(i64 %t20539)
 ret i64 1
 }
-define i8 @resid_disp_shm_put(i64 %a0, i64 %a1, ptr %a2, i64 %a3) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_disp_shm_put(i64 %a0, i64 %a1, ptr %a2, i64 %a3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %x2i = ptrtoint ptr %a2 to i64
 %r = call i64 @rt_disp_shm_put(i64 %a0, i64 %a1, i64 %x2i, i64 %a3)
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @rt_disp_shm_free(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @rt_disp_shm_free(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t20546 = call i1 @__mruntime_rt_unix_resid__shm_ok(i64 %p0)
 %t20547 = xor i1 %t20546, true
@@ -46011,20 +46008,20 @@ L6759:
 %t20549 = call i64 @ld64(i64 %t20548)
 %t20550 = add i64 %p0, 16
 %t20551 = call i64 @ld64(i64 %t20550)
-%t20552 = call i64 asm sideeffect "syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}"(i64 11, i64 %t20549, i64 %t20551, i64 0, i64 0, i64 0, i64 0)
+%t20552 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 215, i64 %t20549, i64 %t20551, i64 0, i64 0, i64 0, i64 0)
 %t20553 = add i64 %p0, 8
 %t20554 = call i64 @ld64(i64 %t20553)
 %t20555 = call i64 @st32(i64 %p0, i64 0)
 %t20556 = call i64 @sys_close(i64 %t20554)
 ret i64 1
 }
-define i8 @resid_disp_shm_free(i64 %a0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define i8 @resid_disp_shm_free(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %r = call i64 @rt_disp_shm_free(i64 %a0)
 %rv = trunc i64 %r to i8
 ret i8 %rv
 }
-define internal i64 @__mruntime_rt_unix_resid__dbg_hex(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_unix_resid__dbg_hex(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
@@ -46063,7 +46060,7 @@ br label %tco.s0
 tco.s0:
 br label %tco.head
 }
-define internal i64 @__mruntime_rt_unix_resid__hex_digit(i64 %p0) "target-features"="+aes,+sse2,+ssse3,+sse4.1" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_unix_resid__hex_digit(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 %t20577 = icmp slt i64 %p0, 10
 br i1 %t20577, label %L6766, label %L6767
@@ -46185,6 +46182,7 @@ ret i64 %t20580
 @.s6259 = private unnamed_addr constant [10 x i8] c"List(Str)\00"
 @rtg.split_one = internal thread_local global [8 x i8] zeroinitializer, align 16
 @rtg.strtod_end = internal thread_local global [8 x i8] zeroinitializer, align 16
+@resid.a64nr = linkonce_odr hidden unnamed_addr constant [472 x i16] [i16 63, i16 64, i16 -1, i16 57, i16 -1, i16 80, i16 -1, i16 -1, i16 62, i16 222, i16 226, i16 215, i16 214, i16 134, i16 135, i16 139, i16 29, i16 67, i16 68, i16 65, i16 66, i16 -1, i16 -1, i16 -1, i16 124, i16 216, i16 227, i16 232, i16 233, i16 194, i16 196, i16 195, i16 23, i16 -1, i16 -1, i16 101, i16 102, i16 -1, i16 103, i16 172, i16 71, i16 198, i16 203, i16 202, i16 206, i16 207, i16 211, i16 212, i16 210, i16 200, i16 201, i16 204, i16 205, i16 199, i16 208, i16 209, i16 220, i16 -1, i16 -1, i16 221, i16 93, i16 260, i16 129, i16 160, i16 190, i16 193, i16 191, i16 197, i16 186, i16 189, i16 188, i16 187, i16 25, i16 32, i16 82, i16 83, i16 45, i16 46, i16 -1, i16 17, i16 49, i16 50, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 52, i16 -1, i16 55, i16 -1, i16 166, i16 169, i16 163, i16 165, i16 179, i16 153, i16 117, i16 174, i16 116, i16 176, i16 146, i16 144, i16 175, i16 177, i16 154, i16 173, i16 -1, i16 157, i16 145, i16 143, i16 158, i16 159, i16 147, i16 148, i16 149, i16 150, i16 155, i16 151, i16 152, i16 156, i16 90, i16 91, i16 136, i16 137, i16 138, i16 133, i16 132, i16 -1, i16 -1, i16 -1, i16 92, i16 -1, i16 43, i16 44, i16 -1, i16 141, i16 140, i16 118, i16 121, i16 119, i16 120, i16 125, i16 126, i16 127, i16 228, i16 229, i16 230, i16 231, i16 58, i16 -1, i16 41, i16 -1, i16 167, i16 -1, i16 171, i16 164, i16 51, i16 81, i16 89, i16 170, i16 40, i16 39, i16 224, i16 225, i16 142, i16 161, i16 162, i16 -1, i16 -1, i16 -1, i16 105, i16 106, i16 -1, i16 -1, i16 60, i16 42, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 178, i16 213, i16 5, i16 6, i16 7, i16 8, i16 9, i16 10, i16 11, i16 12, i16 13, i16 14, i16 15, i16 16, i16 130, i16 -1, i16 98, i16 122, i16 123, i16 -1, i16 0, i16 1, i16 4, i16 2, i16 3, i16 -1, i16 18, i16 -1, i16 -1, i16 -1, i16 234, i16 61, i16 96, i16 128, i16 192, i16 223, i16 107, i16 110, i16 108, i16 109, i16 111, i16 112, i16 113, i16 114, i16 115, i16 94, i16 -1, i16 21, i16 131, i16 -1, i16 -1, i16 235, i16 237, i16 236, i16 180, i16 181, i16 182, i16 183, i16 184, i16 185, i16 104, i16 95, i16 217, i16 218, i16 219, i16 30, i16 31, i16 -1, i16 27, i16 28, i16 238, i16 56, i16 34, i16 33, i16 54, i16 -1, i16 79, i16 35, i16 38, i16 37, i16 36, i16 78, i16 53, i16 48, i16 72, i16 73, i16 97, i16 99, i16 100, i16 76, i16 77, i16 84, i16 75, i16 239, i16 88, i16 22, i16 -1, i16 85, i16 -1, i16 47, i16 86, i16 87, i16 242, i16 74, i16 19, i16 20, i16 24, i16 59, i16 26, i16 69, i16 70, i16 240, i16 241, i16 243, i16 262, i16 263, i16 261, i16 264, i16 265, i16 266, i16 267, i16 269, i16 268, i16 168, i16 270, i16 271, i16 272, i16 273, i16 274, i16 275, i16 276, i16 277, i16 278, i16 279, i16 294, i16 280, i16 281, i16 282, i16 283, i16 284, i16 285, i16 286, i16 287, i16 288, i16 289, i16 290, i16 291, i16 292, i16 293, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 -1, i16 424, i16 425, i16 426, i16 427, i16 428, i16 429, i16 430, i16 431, i16 432, i16 433, i16 434, i16 435, i16 436, i16 437, i16 438, i16 439, i16 440, i16 441, i16 442, i16 443, i16 444, i16 445, i16 446, i16 447, i16 448, i16 449, i16 450, i16 451, i16 452, i16 453, i16 454, i16 455, i16 456, i16 457, i16 458, i16 459, i16 460, i16 461, i16 462, i16 463, i16 464, i16 465, i16 466, i16 467, i16 468, i16 469, i16 470, i16 471], align 2
 @rtg.stat_buf = internal thread_local global [144 x i8] zeroinitializer, align 16
 @.s6700 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
 @.s6715 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
@@ -46530,27 +46528,27 @@ ret i64 %t20580
 @.s20562 = private unnamed_addr constant [3 x i8] c" 0\00"
 @.s20564 = private unnamed_addr constant [2 x i8] c" \00"
 define ptr @memcpy(ptr, ptr, i64) naked noinline nounwind {
-  call void asm sideeffect "mov %rdi, %rax\0Acmp $$32, %rdx\0Aja 2f\0Atest %rdx, %rdx\0Ajz 3f\0A1:\0Amovzbl (%rsi), %ecx\0Amov %cl, (%rdi)\0Ainc %rsi\0Ainc %rdi\0Adec %rdx\0Ajnz 1b\0A3:\0Aret\0A2:\0Amov %rdx, %rcx\0Arep movsb\0Aret", "~{memory}"()
+  call void asm sideeffect "mov x3, x0\0A1:\0Acmp x2, #16\0Ab.lo 2f\0Aldp x4, x5, [x1], #16\0Astp x4, x5, [x3], #16\0Asub x2, x2, #16\0Ab 1b\0A2:\0Acbz x2, 3f\0Aldrb w4, [x1], #1\0Astrb w4, [x3], #1\0Asub x2, x2, #1\0Ab 2b\0A3:\0Aret", "~{memory}"()
   unreachable
 }
 define ptr @memmove(ptr, ptr, i64) naked noinline nounwind {
-  call void asm sideeffect "mov %rdi, %rax\0Acmp %rsi, %rdi\0Ajbe 1f\0Alea (%rsi,%rdx), %r8\0Acmp %r8, %rdi\0Ajae 1f\0Alea -1(%rdi,%rdx), %rdi\0Alea -1(%rsi,%rdx), %rsi\0Amov %rdx, %rcx\0Astd\0Arep movsb\0Acld\0Aret\0A1:\0Amov %rdx, %rcx\0Arep movsb\0Aret", "~{memory}"()
+  call void asm sideeffect "cmp x0, x1\0Ab.ls 4f\0Aadd x4, x1, x2\0Acmp x0, x4\0Ab.hs 4f\0Aadd x1, x1, x2\0Aadd x3, x0, x2\0A1:\0Acmp x2, #16\0Ab.lo 2f\0Aldp x4, x5, [x1, #-16]!\0Astp x4, x5, [x3, #-16]!\0Asub x2, x2, #16\0Ab 1b\0A2:\0Acbz x2, 3f\0Aldrb w4, [x1, #-1]!\0Astrb w4, [x3, #-1]!\0Asub x2, x2, #1\0Ab 2b\0A3:\0Aret\0A4:\0Ab memcpy", "~{memory}"()
   unreachable
 }
 define ptr @memset(ptr, i32, i64) naked noinline nounwind {
-  call void asm sideeffect "mov %rdi, %r9\0Amov %esi, %eax\0Amov %rdx, %rcx\0Arep stosb\0Amov %r9, %rax\0Aret", "~{memory}"()
+  call void asm sideeffect "mov x3, x0\0Aand x1, x1, #255\0Aorr x1, x1, x1, lsl #8\0Aorr x1, x1, x1, lsl #16\0Aorr x1, x1, x1, lsl #32\0A1:\0Acmp x2, #16\0Ab.lo 2f\0Astp x1, x1, [x3], #16\0Asub x2, x2, #16\0Ab 1b\0A2:\0Acbz x2, 3f\0Astrb w1, [x3], #1\0Asub x2, x2, #1\0Ab 2b\0A3:\0Aret", "~{memory}"()
   unreachable
 }
 define i32 @resid_setjmp(ptr) naked noinline nounwind {
-  call void asm sideeffect "mov %rbx, (%rdi)\0Amov %rbp, 8(%rdi)\0Amov %r12, 16(%rdi)\0Amov %r13, 24(%rdi)\0Amov %r14, 32(%rdi)\0Amov %r15, 40(%rdi)\0Alea 8(%rsp), %rdx\0Amov %rdx, 48(%rdi)\0Amov (%rsp), %rdx\0Amov %rdx, 56(%rdi)\0Axor %eax, %eax\0Aret", "~{memory}"()
+  call void asm sideeffect "stp x19, x20, [x0, #0]\0Astp x21, x22, [x0, #16]\0Astp x23, x24, [x0, #32]\0Astp x25, x26, [x0, #48]\0Astp x27, x28, [x0, #64]\0Astp x29, x30, [x0, #80]\0Amov x2, sp\0Astr x2, [x0, #96]\0Astp d8, d9, [x0, #104]\0Astp d10, d11, [x0, #120]\0Astp d12, d13, [x0, #136]\0Astp d14, d15, [x0, #152]\0Amov w0, #0\0Aret", "~{memory}"()
   unreachable
 }
 define void @resid_longjmp(ptr, i32) naked noinline nounwind {
-  call void asm sideeffect "mov %esi, %eax\0Atest %eax, %eax\0Ajnz 1f\0Ainc %eax\0A1:\0Amov (%rdi), %rbx\0Amov 8(%rdi), %rbp\0Amov 16(%rdi), %r12\0Amov 24(%rdi), %r13\0Amov 32(%rdi), %r14\0Amov 40(%rdi), %r15\0Amov 48(%rdi), %rsp\0Ajmp *56(%rdi)", "~{memory}"()
+  call void asm sideeffect "ldp x19, x20, [x0, #0]\0Aldp x21, x22, [x0, #16]\0Aldp x23, x24, [x0, #32]\0Aldp x25, x26, [x0, #48]\0Aldp x27, x28, [x0, #64]\0Aldp x29, x30, [x0, #80]\0Aldr x2, [x0, #96]\0Amov sp, x2\0Aldp d8, d9, [x0, #104]\0Aldp d10, d11, [x0, #120]\0Aldp d12, d13, [x0, #136]\0Aldp d14, d15, [x0, #152]\0Acmp w1, #0\0Acsinc w0, w1, wzr, ne\0Abr x30", "~{memory}"()
   unreachable
 }
 define i64 @resid_clone(i64, ptr, ptr, ptr, ptr) naked noinline nounwind {
-  call void asm sideeffect "mov %rcx, %r10\0Amov $$56, %eax\0Asyscall\0Atest %rax, %rax\0Ajnz 1f\0Axor %ebp, %ebp\0Apop %rax\0Apop %rdi\0Acall *%rax\0Amov $$60, %eax\0Axor %edi, %edi\0Asyscall\0Ahlt\0A1:\0Aret", "~{memory}"()
+  call void asm sideeffect "mov x5, x3\0Amov x3, x4\0Amov x4, x5\0Amov x8, #220\0Asvc #0\0Acbnz x0, 1f\0Amov x29, #0\0Amov x30, #0\0Aldp x9, x0, [sp], #16\0Ablr x9\0Amov x0, #0\0Amov x8, #93\0Asvc #0\0Audf #0\0A1:\0Aret", "~{memory}"()
   unreachable
 }
 @llvm.compiler.used = appending global [3 x ptr] [ptr @memcpy, ptr @memmove, ptr @memset], section "llvm.metadata"

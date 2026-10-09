@@ -15,9 +15,18 @@ pub Int rt_crypto_random_byte() {
     return ld8(b);
 }
 
+// CPUID leaf 1, ECX bit 1 (PCLMULQDQ); AT_HWCAP bit 4 (PMULL) on AArch64.
+@export("resid_cpu_has_clmul", "i8()")
+// Asked once (CPUID can trap to a hypervisor): 0 unknown, 1 no, 2 yes.
+pub Int rt_cpu_has_clmul() {
+    Int g = resid_raw_global("rt_has_clmul", 8);
+    if (ld64(g) == 0) { _ = st64(g, 1 + if (resid_raw_arch() == 1) { (ld64(hwcap_w()) >> 4) & 1 } else { (resid_raw_cpuid(1, 0) >> 33) & 1 }); }
+    return ld64(g) - 1;
+}
+
 // CPUID leaf 1, ECX bit 25.
 @export("resid_cpu_has_aesni", "i8()")
-pub Int rt_cpu_has_aesni() { return (resid_raw_cpuid(1, 0) >> 57) & 1; }
+pub Int rt_cpu_has_aesni() { return if (resid_raw_arch() == 1) { (ld64(hwcap_w()) >> 3) & 1 } else { (resid_raw_cpuid(1, 0) >> 57) & 1 }; }   // HWCAP_AES / CPUID.1:ECX.AESNI
 
 // An out-of-range list index; `at` is "file:line:col" or empty.
 @export("resid_index_abort", "void(i64,i64,ptr)")
@@ -128,7 +137,7 @@ Bool dl_arm(Int fd) {
 Bool listener_ok(Int fd) {
     if (fd < 0) { return false; }
     Int b = resid_raw_tls("sock_stat", 144);
-    return resid_raw_syscall(5, fd, b, 0, 0, 0, 0) == 0 && (ld32(b + 24) & 61440) == 49152;
+    return resid_raw_syscall(5, fd, b, 0, 0, 0, 0) == 0 && (ld32(b + st_mode_at()) & 61440) == 49152;
 }
 
 // 127.0.0.1, the address `resid_tcp_listen` binds. The value is
@@ -234,12 +243,19 @@ pub Int rt_tcp_accept_now(Int fd) {
     return c;
 }
 
+// poll(2) as ppoll (AArch64 has no poll): ms < 0 waits without bound.
+Int sys_poll(Int fds, Int n, Int ms) {
+    Int ts = resid_raw_tls("poll_ts", 16);
+    _ = st64(ts, ms / 1000) + st64(ts + 8, (ms % 1000) * 1000000);
+    return resid_raw_syscall(271, fds, n, if (ms < 0) { 0 } else { ts }, 0, 8, 0);
+}
+
 // poll(2) on one descriptor; its revents, 0 on timeout.
 Int poll_one(Int fd, Int events, Int ms) {
     Int p = resid_raw_tls("poll_one", 8);
     _ = st32(p, fd);
     _ = st32(p + 4, events);
-    Int r = resid_raw_syscall(7, p, 1, ms, 0, 0, 0);
+    Int r = sys_poll(p, 1, ms);
     return if (r > 0) { (ld32(p + 4) >> 16) & 65535 } else { 0 };
 }
 
@@ -260,7 +276,7 @@ pub Int rt_tcp_poll(Int fl, Int wl, Int ms) {
     Int near = poll_nearest(fl, 0, n, 0);
     Int to_dl = if (near == 0) { 0 - 1 } else { if (near <= now) { 0 } else { (near - now + 999999) / 1000000 } };
     Int wait = if (ms < 0) { to_dl } else { if (to_dl < 0 || ms < to_dl) { ms } else { to_dl } };
-    _ = resid_raw_syscall(7, pf, n, wait, 0, 0, 0);
+    _ = sys_poll(pf, n, wait);
     Int after = rt_clock_monotonic_ns();
     Int slots = xmalloc(if (n > 0) { n * 8 } else { 8 });
     _ = poll_read(fl, pf, slots, 0, n, after);
@@ -499,7 +515,7 @@ Bool send_all(Int fd, Int p, Int n) {
 Bool sock_ok(Int fd) {
     if (fd < 0) { return false; }
     Int b = resid_raw_tls("sock_stat", 144);
-    return resid_raw_syscall(5, fd, b, 0, 0, 0, 0) == 0 && (ld32(b + 24) & 61440) == 49152;
+    return resid_raw_syscall(5, fd, b, 0, 0, 0, 0) == 0 && (ld32(b + st_mode_at()) & 61440) == 49152;
 }
 
 @export("resid_tcp_send", "i8(i64,ptr)")

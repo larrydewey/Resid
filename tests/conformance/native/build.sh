@@ -5,4 +5,6 @@ set -euo pipefail
 cd "$(dirname "$0")"
 for c in tiny esc; do
     clang -S -emit-llvm -O1 -ffreestanding -fno-builtin -fno-stack-protector -o "$c.ll" "$c.c"
+    # The AArch64 build of the same sources (RESID_TARGET=aarch64 runs).
+    clang --target=aarch64-linux-gnu -S -emit-llvm -O1 -ffreestanding -fno-builtin -fno-stack-protector -o "aarch64/$c.ll" "$c.c"
 done

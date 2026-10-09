@@ -31,6 +31,8 @@ SEED_LL="${OUT}/seed.ll"
 # committed like the seed and linked into every binary.
 RT_SRC="runtime/rt/rt.resid" # relative: symbol names follow the import path
 RT_LL="${OUT}/rt.ll"
+# The same runtime lowered for AArch64 (--target aarch64), also committed.
+RT_A64_LL="${OUT}/rt-aarch64.ll"
 
 # Force stdlib resolution to this checkout's freshly-synced build/boot/
 export RESID_HOME="${OUT}"
@@ -71,14 +73,14 @@ link_clang() { # link_clang <ll> <out-bin>
     fi
 }
 
-build_rt() { # build_rt <compiler> <out-base>: runtime IR to <out-base>.ll
+build_rt() { # build_rt <compiler> <out-base> [target]: runtime IR to <out-base>.ll
     # Diagnostics and aborts go to STDOUT, so a progress stream cannot be
     # piped to /dev/null without also swallowing the reason a build failed.
     # Log it, and on failure show the tail and the exit status (124 = the
     # timeout, not the compiler).
     local rc=0
     local log="${2}.log"
-    timeout 600 "$1" "$RT_SRC" --runtime-module -o "$2" > "$log" 2>&1 || rc=$?
+    timeout 600 "$1" "$RT_SRC" --runtime-module ${3:+--target "$3"} -o "$2" > "$log" 2>&1 || rc=$?
     if [ "$rc" -ne 0 ]; then
         [ "$rc" -eq 124 ] && echo "  (no exit after 600s — raise the timeout in build_rt)" >&2
         tail -40 "$log" >&2
@@ -119,21 +121,23 @@ if [ "$BOOTSTRAP_SELF" -eq 1 ]; then
         # The runtime first: the round's binary links the runtime its
         # compiler lowers.
         build_rt "$PREV_BIN" "${OUT}/reseed_rt${i}"
+        build_rt "$PREV_BIN" "${OUT}/reseed_rta${i}" aarch64
         RT_SAME=0
-        cmp -s "${OUT}/reseed_rt${i}.ll" "$RT_LL" && RT_SAME=1
+        cmp -s "${OUT}/reseed_rt${i}.ll" "$RT_LL" && cmp -s "${OUT}/reseed_rta${i}.ll" "$RT_A64_LL" && RT_SAME=1
         cp "${OUT}/reseed_rt${i}.ll" "$RT_LL"
+        cp "${OUT}/reseed_rta${i}.ll" "$RT_A64_LL"
         timeout 600 "$PREV_BIN" "$SRC" -o "$NEXT_BIN" --runtime-internals
         [ -f "$NEXT_LL" ] || die "round $i produced no output"
         if cmp -s "$PREV_LL" "$NEXT_LL" && [ "$RT_SAME" -eq 1 ]; then
             ok "converged after $i round$([ "$i" -eq 1 ] && echo "" || echo "s")"
             cp "$NEXT_LL" "$SEED_LL"
             link_clang "$SEED_LL" "${OUT}/stage2.bin"
-            rm -f "${OUT}"/reseed_round*.ll "${OUT}"/reseed_round*.bin "${OUT}"/reseed_rt*.ll
+            rm -f "${OUT}"/reseed_round*.ll "${OUT}"/reseed_round*.bin "${OUT}"/reseed_rt*.ll "${OUT}"/reseed_rta*.ll
             ok "stage2 seeded from the self-hosted compiler"
             refresh_install
             echo ""
             echo "Verify with a clean ./boot.sh (no args) and commit the new seed:"
-            echo "  git add -f build/boot/seed.ll build/boot/rt.ll build/boot/stage2.bin && git commit"
+            echo "  git add -f build/boot/seed.ll build/boot/rt.ll build/boot/rt-aarch64.ll build/boot/stage2.bin && git commit"
             exit 0
         fi
         PREV_LL="$NEXT_LL"
@@ -153,7 +157,9 @@ ok "stage1 linked"
 step "runtime: stage1 lowers runtime/rt/ (must byte-match build/boot/rt.ll)"
 build_rt "${OUT}/stage1.bin" "${OUT}/rt_check"
 cmp -s "${OUT}/rt_check.ll" "$RT_LL" || die "runtime IR differs from build/boot/rt.ll — runtime or compiler source changed; re-seed with --bootstrap-from-self"
-ok "runtime IR reproduced"
+build_rt "${OUT}/stage1.bin" "${OUT}/rta_check" aarch64
+cmp -s "${OUT}/rta_check.ll" "$RT_A64_LL" || die "AArch64 runtime IR differs from build/boot/rt-aarch64.ll — re-seed with --bootstrap-from-self"
+ok "runtime IR reproduced (x86-64 and AArch64)"
 
 # ── 2. stage1 -> stage2 (must reproduce the committed seed) ──────────────
 # The compiler links to -o itself and writes its IR to <out>.ll, so each
@@ -205,6 +211,20 @@ echo "$RESULT" | grep -q "smoke test passed" || die "smoke output was '$RESULT'"
 ok "smoke output correct"
 "${OUT}/stage2.bin" verify "${OUT}/smoke.bin" >/dev/null || die "smoke binary failed provenance verification"
 ok "smoke binary provenance verified"
+
+# AArch64: cross-compiled when compiler-rt's builtins are at hand
+# (tools/aarch64-builtins.sh), and run when the host can execute it.
+if [ -f "${OUT}/aarch64/libclang_rt.builtins.a" ] || [ -n "${RESID_AARCH64_BUILTINS:-}" ]; then
+    step "Smoke: stage2 cross-compiles for AArch64"
+    timeout 300 "${OUT}/stage2.bin" /tmp/resid_smoke.resid --target aarch64 -o "${OUT}/smoke-a64.bin" >/dev/null
+    [ -x "${OUT}/smoke-a64.bin" ] || die "AArch64 smoke did not produce a linked binary"
+    if RESULT="$("${OUT}/smoke-a64.bin" 2>/dev/null)"; then
+        echo "$RESULT" | grep -q "smoke test passed" || die "AArch64 smoke output was '$RESULT'"
+        ok "AArch64 smoke output correct"
+    else
+        ok "AArch64 smoke linked (this host cannot run it: no qemu-user binfmt)"
+    fi
+fi
 
 step "Generating build/boot/residc wrapper"
 cat > "${OUT}/residc" <<'WRAPPER_EOF'

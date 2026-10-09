@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Removes what install.sh put under ~/.resid (or $RESID_INSTALL if set):
-# bin/residc, bin/stage2.bin, rt.ll, lib/ and the env snippets. The signing
+# bin/residc, bin/stage2.bin, rt.ll, rt-aarch64.ll, aarch64/, lib/ and the env snippets. The signing
 # key (keys/, which cannot be recreated) and anything else you put there
 # are kept, and listed.
 #
@@ -76,13 +76,14 @@ if [ "$PURGE" -eq 1 ]; then
 fi
 
 echo "Removing the Resid installation from $TARGET"
-for f in bin/residc bin/stage2.bin bin/resid-manifest bin/resid-pkg bin/resid-fetch rt.ll env env.fish; do
+for f in bin/residc bin/stage2.bin bin/resid-manifest bin/resid-pkg bin/resid-fetch rt.ll rt-aarch64.ll aarch64/libclang_rt.builtins.a env env.fish; do
     if [ -e "$TARGET/$f" ]; then
         rm -f "$TARGET/$f"
         echo "  removed $f"
     fi
 done
 rmdir "$TARGET/bin" 2> /dev/null && echo "  removed bin/" || true
+rmdir "$TARGET/aarch64" 2> /dev/null && echo "  removed aarch64/" || true
 if [ -d "$TARGET/lib" ]; then
     rm -rf "$TARGET/lib"
     echo "  removed lib/"

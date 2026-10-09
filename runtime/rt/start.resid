@@ -6,9 +6,10 @@
 // its result. Threads are clone(2) threads with their own stack and TLS
 // block, joined through the kernel's CLONE_CHILD_CLEARTID futex.
 //
-// TLS (x86-64 variant II): the thread pointer %fs points at a small TCB
-// whose first word is the pointer itself; the block (the PT_TLS image,
-// then zeros) sits right below it.
+// TLS on x86-64 (variant II): the thread pointer %fs points at a small
+// TCB whose first word is the pointer itself; the block (the PT_TLS image,
+// then zeros) sits right below it. On AArch64 (variant I) tpidr_el0
+// points at a 16-byte TCB and the block follows it, aligned.
 
 // The PT_TLS image: address, file size, memory size, alignment (words).
 Int tls_img() { return resid_raw_global("rt_tls_img", 32); }
@@ -29,9 +30,18 @@ pub Int rt_start(Int sp, Int dyn) {
     _ = st64(argv_w(), argc) + st64(argv_w() + 8, argv);
     _ = set_envp(envp);
     _ = find_tls(auxv);
+    _ = st64(hwcap_w(), auxv_get(auxv, 16));   // AT_HWCAP
+    _ = st64(pagesz_w(), auxv_get(auxv, 6));   // AT_PAGESZ
     Int tp = tls_block();
-    return arch_set_fs(tp);
+    return resid_raw_tp_set(tp);
 }
+
+// The kernel's page size: 4 KB on x86-64; 4, 16 or 64 KB on AArch64.
+Int pagesz_w() { return resid_raw_global("rt_pagesz", 8); }
+pub Int page_size() { return if (ld64(pagesz_w()) > 0) { ld64(pagesz_w()) } else { 4096 }; }
+
+// The CPU's AT_HWCAP bits (AArch64: bit 3 is AES).
+pub Int hwcap_w() { return resid_raw_global("rt_hwcap", 8); }
 
 // The load bias: from PT_PHDR (6), else from where _DYNAMIC (PT_DYNAMIC,
 // 2) actually is (a static PIE has no PT_PHDR).
@@ -52,8 +62,8 @@ Int ph_vaddr(Int ph, Int i, Int n, Int ty) {
     return ph_vaddr(ph, i + 1, n, ty);
 }
 
-// R_X86_64_RELATIVE entries of DT_RELA (7) / DT_RELASZ (8): *(base + off)
-// = base + addend.
+// R_X86_64_RELATIVE (8) or R_AARCH64_RELATIVE (1027) entries of DT_RELA
+// (7) / DT_RELASZ (8): *(base + off) = base + addend.
 Int self_relocate(Int base, Int dyn) {
     if (dyn == 0) { return 0; }
     Int rela = dyn_get(dyn, 7);
@@ -71,7 +81,8 @@ Int dyn_get(Int d, Int tag) {
 
 Int apply_rela(Int base, Int r, Int end) {
     if (r >= end) { return 0; }
-    _ = if ((ld64(r + 8) & 4294967295) == 8) { st64(base + ld64(r), base + ld64(r + 16)) } else { 0 };
+    Int rel = if (resid_raw_arch() == 1) { 1027 } else { 8 };
+    _ = if ((ld64(r + 8) & 4294967295) == rel) { st64(base + ld64(r), base + ld64(r + 16)) } else { 0 };
     return apply_rela(base, r + 24, end);
 }
 
@@ -128,7 +139,20 @@ Int tls_size() {
 }
 
 // A fresh TLS block with its TCB; the thread pointer.
-pub Int tls_block() {
+pub Int tls_block() { return if (resid_raw_arch() == 1) { tls_block_a64() } else { tls_block_x86() }; }
+
+// Variant I: the block starts at tp + 16 rounded up to its alignment.
+Int tls_block_a64() {
+    Int g = tls_img();
+    Int al = max(ld64(g + 24), 16);
+    Int off = (16 + al - 1) & (0 - al);
+    Int base = sys_mmap(off + tls_size() + al + 256);
+    Int tp = (base + al - 1) & (0 - al);
+    _ = if (ld64(g + 8) > 0) { mcopy(tp + off, ld64(g), ld64(g + 8)) } else { 0 };
+    return tp;
+}
+
+Int tls_block_x86() {
     Int g = tls_img();
     Int al = max(ld64(g + 24), 16);
     Int ts = tls_size();
@@ -140,8 +164,6 @@ pub Int tls_block() {
     _ = st64(tp, tp);
     return tp;
 }
-
-Int arch_set_fs(Int tp) { return resid_raw_syscall(158, 4098, tp, 0, 0, 0, 0); }   // ARCH_SET_FS
 
 // ─── Threads ───────────────────────────────────────────────────────────
 // A thread record {fn, arg, result, tid (futex), stack, stack size}.

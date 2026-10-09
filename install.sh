@@ -60,6 +60,16 @@ cp "$BOOT/stage2.bin" "$TARGET/bin/.stage2.bin.new"
 mv -f "$TARGET/bin/.stage2.bin.new" "$TARGET/bin/stage2.bin"
 cp "$BOOT/rt.ll" "$TARGET/.rt.ll.new"
 mv -f "$TARGET/.rt.ll.new" "$TARGET/rt.ll"
+# The AArch64 runtime, and compiler-rt's builtins when present, for
+# `residc --target aarch64`.
+if [ -f "$BOOT/rt-aarch64.ll" ]; then
+    cp "$BOOT/rt-aarch64.ll" "$TARGET/.rt-aarch64.ll.new"
+    mv -f "$TARGET/.rt-aarch64.ll.new" "$TARGET/rt-aarch64.ll"
+fi
+if [ -f "$BOOT/aarch64/libclang_rt.builtins.a" ]; then
+    mkdir -p "$TARGET/aarch64"
+    cp "$BOOT/aarch64/libclang_rt.builtins.a" "$TARGET/aarch64/libclang_rt.builtins.a"
+fi
 rm -rf "$TARGET/lib"
 mkdir -p "$TARGET/lib"
 cp "$SCRIPT_DIR"/lib/*.resid "$TARGET/lib/"

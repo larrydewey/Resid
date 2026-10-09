@@ -63,7 +63,7 @@ Int native_cpu_seconds() { return 60; }
 
 // The child between fork and execve: system calls only.
 Int native_child(Int b, Int argv, Int envp, Int lim) {
-    Int d = if (b == 3) { resid_raw_syscall(72, 3, 2, 0, 0, 0, 0) } else { resid_raw_syscall(33, b, 3, 0, 0, 0, 0) };   // fcntl(F_SETFD, 0) / dup2
+    Int d = if (b == 3) { resid_raw_syscall(72, 3, 2, 0, 0, 0, 0) } else { resid_raw_syscall(292, b, 3, 0, 0, 0, 0) };   // fcntl(F_SETFD, 0) / dup3
     if (d < 0) { return native_child_exit(127); }
     // Only fd 3 crosses execve: close_range(0, 2) and (4, ~0).
     if (resid_raw_syscall(436, 0, 2, 0, 0, 0, 0) < 0) { return native_child_exit(127); }
@@ -204,7 +204,7 @@ pub Int rt_native_host(Int tab, Int n) {
 Bool native_fd3_socket() {
     Int sb = xmalloc(144);
     Int r = resid_raw_syscall(5, 3, sb, 0, 0, 0, 0);   // fstat
-    Bool ok = r == 0 && (ld32(sb + 24) & 61440) == 49152;
+    Bool ok = r == 0 && (ld32(sb + st_mode_at()) & 61440) == 49152;
     return c_free(sb) * 0 == 0 && ok;
 }
 
@@ -243,7 +243,8 @@ Bool native_write(Int p, Int i, Int n) {
 // No clock, no counter, no dump, no new privileges, then the filter.
 Bool native_lockdown() {
     if (resid_raw_syscall(157, 4, 0, 0, 0, 0, 0) < 0) { return false; }    // PR_SET_DUMPABLE 0
-    if (resid_raw_syscall(157, 26, 2, 0, 0, 0, 0) < 0) { return false; }   // PR_SET_TSC, PR_TSC_SIGSEGV
+    // PR_SET_TSC, PR_TSC_SIGSEGV (x86-64 only: AArch64's CNTVCT_EL0 stays readable).
+    if (!on_a64() && resid_raw_syscall(157, 26, 2, 0, 0, 0, 0) < 0) { return false; }
     _ = native_oom_first();
     if (!native_unmap_clocks()) { return false; }
     if (resid_raw_syscall(157, 38, 1, 0, 0, 0, 0) < 0) { return false; }   // PR_SET_NO_NEW_PRIVS
@@ -322,20 +323,20 @@ Int native_filter() {
     Int kill = 2147483648;    // SECCOMP_RET_KILL_PROCESS
     Int allow = 2147418112;   // SECCOMP_RET_ALLOW
     _ = bpf(p, 0, ld, 0, 0, 4)                    // arch
-      + bpf(p, 1, jeq, 1, 0, 3221225534)          // AUDIT_ARCH_X86_64
+      + bpf(p, 1, jeq, 1, 0, if (on_a64()) { 3221225655 } else { 3221225534 })   // AUDIT_ARCH_AARCH64 / X86_64
       + bpf(p, 2, ret, 0, 0, kill)
       + bpf(p, 3, ld, 0, 0, 0)                    // nr
       + bpf(p, 4, jge, 18, 0, 1073741824)         // x32 -> 23 kill
-      + bpf(p, 5, jeq, 10, 0, 0)                  // read -> 16
-      + bpf(p, 6, jeq, 9, 0, 1)                   // write -> 16
-      + bpf(p, 7, jeq, 12, 0, 9)                  // mmap -> 20
-      + bpf(p, 8, jeq, 11, 0, 10)                 // mprotect -> 20
-      + bpf(p, 9, jeq, 12, 0, 11)                 // munmap -> 22
-      + bpf(p, 10, jeq, 11, 0, 12)                // brk
-      + bpf(p, 11, jeq, 10, 0, 25)                // mremap
-      + bpf(p, 12, jeq, 9, 0, 28)                 // madvise
-      + bpf(p, 13, jeq, 8, 0, 60)                 // exit
-      + bpf(p, 14, jeq, 7, 0, 231)                // exit_group
+      + bpf(p, 5, jeq, 10, 0, resid_raw_nr(0))    // read -> 16
+      + bpf(p, 6, jeq, 9, 0, resid_raw_nr(1))     // write -> 16
+      + bpf(p, 7, jeq, 12, 0, resid_raw_nr(9))    // mmap -> 20
+      + bpf(p, 8, jeq, 11, 0, resid_raw_nr(10))   // mprotect -> 20
+      + bpf(p, 9, jeq, 12, 0, resid_raw_nr(11))   // munmap -> 22
+      + bpf(p, 10, jeq, 11, 0, resid_raw_nr(12))  // brk
+      + bpf(p, 11, jeq, 10, 0, resid_raw_nr(25))  // mremap
+      + bpf(p, 12, jeq, 9, 0, resid_raw_nr(28))   // madvise
+      + bpf(p, 13, jeq, 8, 0, resid_raw_nr(60))   // exit
+      + bpf(p, 14, jeq, 7, 0, resid_raw_nr(231))  // exit_group
       + bpf(p, 15, ret, 0, 0, kill)
       + bpf(p, 16, ld, 0, 0, 16)                  // fd, low word
       + bpf(p, 17, jeq, 0, 5, 3)                  // != 3 -> 23 kill

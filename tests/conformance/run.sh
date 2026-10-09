@@ -45,6 +45,16 @@ if [ -z "${RESID_SIGNING_KEY:-}" ] && [ ! -f "$ROOT/keys/resid-ed25519.key" ]; t
 fi
 [ -x "$COMPILER" ] || { echo "compiler not found: $COMPILER (run ./boot.sh)"; exit 2; }
 export RESID_HOME="${RESID_HOME:-$ROOT/build/boot}"
+# RESID_TARGET=aarch64 cross-compiles every case (the binaries run through
+# binfmt_misc, e.g. qemu-user).
+TARGET_ARGS=""
+RESID_TARGET="${RESID_TARGET:-}"
+[ -n "$RESID_TARGET" ] && TARGET_ARGS="--target $RESID_TARGET"
+# A cross target's binaries run under qemu-user, which has no seccomp: the
+# native-module sandbox cannot be installed, so those cases are skipped
+# (they compile; they run on real hardware of the target).
+EMULATED=0
+[ -n "$RESID_TARGET" ] && [ "$(uname -m)" != "$RESID_TARGET" ] && EMULATED=1
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -59,8 +69,10 @@ run_case() {
     sed "s#@TMP@#$dir#g" "$CASES/$name.resid" > "$dir/$name.resid"
     local args=""
     [ -f "$CASES/$name.args" ] && args="$(sed "s#@TMP@#$dir#g" "$CASES/$name.args")"
+    # A cross build links the native fixtures built for its target.
+    [ -n "$RESID_TARGET" ] && args="$(sed "s#native/\([a-z_]*\)\.ll#native/$RESID_TARGET/\1.ll#g" <<< "$args")"
     # Run from the repo root, as a user of the checkout would.
-    (cd "$ROOT" && timeout 600 "$COMPILER" "$dir/$name.resid" ${COMPILER_SUBCMD:-} -o "$dir/bin" $args) \
+    (cd "$ROOT" && timeout 600 "$COMPILER" "$dir/$name.resid" ${COMPILER_SUBCMD:-} -o "$dir/bin" $args $TARGET_ARGS) \
         > "$dir/compile.log" 2>&1
     local crc=$?
     local why=""
@@ -74,6 +86,10 @@ run_case() {
         [ "$crc" -ne 0 ] || why="expected compile failure, got success"
     elif [ "$crc" -ne 0 ]; then
         why="compile failed: $(grep -m1 -i error "$dir/compile.log" | cut -c1-160)"
+    elif [ "$EMULATED" -eq 1 ] && grep -q -- "-native " <<< "$args"; then
+        echo "SKIP $name (native module under emulation: no seccomp)"
+        rm -rf "$dir"
+        return
     elif [ -f "$CASES/$name.nobin" ]; then
         [ -e "$dir/bin" ] && why="expected no binary"
     else
@@ -84,19 +100,24 @@ run_case() {
         if [ "$rrc" -ne "$want_rc" ]; then
             why="${why:+$why; }exit $rrc, want $want_rc"
         fi
-        [ -f "$CASES/$name.out" ] && sed "s#@TMP@#$dir#g" "$CASES/$name.out" > "$dir/want"
-        if [ -f "$CASES/$name.out" ] && ! cmp -s "$dir/stdout" "$dir/want"; then
+        # NAME.<target>.out overrides NAME.out where the target differs.
+        local out="$CASES/$name.out"
+        [ -n "$RESID_TARGET" ] && [ -f "$CASES/$name.$RESID_TARGET.out" ] && out="$CASES/$name.$RESID_TARGET.out"
+        [ -f "$out" ] && sed "s#@TMP@#$dir#g" "$out" > "$dir/want"
+        if [ -f "$out" ] && ! cmp -s "$dir/stdout" "$dir/want"; then
             why="${why:+$why; }stdout differs: got '$(head -c 120 "$dir/stdout" | tr '\n' '|')'"
         fi
     fi
     if [ -z "$why" ]; then
         echo "PASS $name"
+        # A passing case's directory goes now: all of them at once fill /tmp.
+        rm -rf "$dir"
     else
         echo "FAIL $name: $why"
     fi
 }
 export -f run_case
-export ROOT CASES COMPILER WORK COMPILER_SUBCMD
+export ROOT CASES COMPILER WORK COMPILER_SUBCMD TARGET_ARGS RESID_TARGET EMULATED
 
 names=()
 for f in "$CASES"/*.resid; do
@@ -114,6 +135,7 @@ results="$(printf '%s\n' "${names[@]}" | xargs -P "$JOBS" -I{} bash -c 'run_case
 echo "$results"
 pass=$(grep -c '^PASS' <<< "$results")
 fail=$(grep -c '^FAIL' <<< "$results")
+skip=$(grep -c '^SKIP' <<< "$results")
 echo "---"
-echo "$pass passed, $fail failed"
+echo "$pass passed, $fail failed$([ "$skip" -gt 0 ] && echo ", $skip skipped")"
 [ "$fail" -eq 0 ]

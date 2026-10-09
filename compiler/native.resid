@@ -147,7 +147,8 @@ NArt nt_scan(List(Str) ls, Int i, Bool body, NArt a) {
         return nt_scan(ls, i + 1, false, a);
     }
     if (str_starts_with(t, "target triple")) {
-        if (!str_contains(t, "\"x86_64-") || !str_contains(t, "linux")) { return nt_fail(a, i, "the target must be x86_64 Linux"); }
+        Str arch = if (tgt_a64()) { "aarch64" } else { "x86_64" };
+        if (!str_contains(t, "\"" + arch + "-") || !str_contains(t, "linux")) { return nt_fail(a, i, "the target must be " + arch + " Linux"); }
         return nt_scan(ls, i + 1, false, a);
     }
     Str bad = nt_bad_word(t);

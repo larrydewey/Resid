@@ -35,7 +35,7 @@ Int ls_setup() {
     _ = resid_raw_store64(ls_fds() + 8, ls_sys(32, 2, 0, 0));    // dup(2)
     Int mfd = ls_sys(319, resid_raw_addr("resid-lsp"), 0, 0);    // memfd_create
     _ = resid_raw_store64(ls_fds() + 16, mfd);
-    return ls_sys(33, mfd, 1, 0);                                // fd 1 -> capture
+    return ls_sys(292, mfd, 1, 0);                                // fd 1 -> capture
 }
 
 // Read exactly n bytes of fd into buf; the count read.
@@ -106,11 +106,11 @@ Bool ls_pending() {
 Int ls_cap_begin() {
     _ = ls_sys(77, ls_cap(), 0, 0);          // ftruncate
     _ = ls_sys(8, ls_cap(), 0, 0);           // lseek 0
-    return ls_sys(33, ls_cap(), 2, 0);       // fd 2 -> capture
+    return ls_sys(292, ls_cap(), 2, 0);       // fd 2 -> capture
 }
 
 Str ls_cap_end() {
-    _ = ls_sys(33, ls_err(), 2, 0);
+    _ = ls_sys(292, ls_err(), 2, 0);
     Int size = min(ls_sys(8, ls_cap(), 0, 1), 1048576);   // lseek CUR
     _ = ls_sys(8, ls_cap(), 0, 0);
     Int got = ls_read_exact(ls_cap(), ls_buf(), 0, max(size, 0));
