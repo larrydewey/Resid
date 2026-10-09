@@ -1,6 +1,6 @@
 # Device Access — Implementation Plan (revision 1)
 
-**Status: PROPOSED (2026-10-09).** Under review; two open questions settled (§7). Depends on
+**Status: PROPOSED (2026-10-09).** Under review; three open questions settled (§7). Depends on
 PLAN-secret-type.md for descriptors that return key material.
 
 **Goal**: let a Resid program talk to kernel devices (ioctls on character
@@ -138,6 +138,7 @@ Result(Bytes, DeviceError) get_report(Bytes(64) report_data) {
 | Law 12: runtime uncertainty is explicit | Every failure is `Err(DeviceError)`; a malformed child reply aborts like a native host failure | engine, parent validation | `device_absent_is_err`, `device_host_killed` |
 | Law 14: no ambient authority; only attenuated | `device` family, checked transitively (E0219), in spawn lists, sandboxes, manifest ceilings, and `devices = [...]` bounds | `gk_all_facts`, `resid_cap_check("device")` / `("device!")`, manifest | `err_device_ungranted`, `err_device_readonly_write`, `err_device_sandbox`, `pkg_device_ceiling` |
 | §5, §38: no exposed storage | No pointer, fd, request number or path reaches the program; buffers cross as copies | engine | `err_device_raw_verb`, `device_no_address_leak` |
+| Kernel ABI drift cannot corrupt the program or pass as a correct result | Request numbers encode size and direction; descriptors generated from uapi headers and checked against a kernel matrix; guard pages and canaries in the host; replies validated (§6.2) | checker, `resid-devgen --check`, engine | `devgen_matches_uapi_*`, `device_overrun_guard_page`, `device_resized_struct_unsupported` |
 | §4: no hidden identity | Fresh child per call; no fd survives a call | engine | `device_stateless` |
 | Secrecy (PLAN-secret-type.md) | A `Buffer` marked secret returns `Secret(Bytes)`; the child zeroes its copy before exit | engine, checker | `device_secret_out` |
 
@@ -206,6 +207,31 @@ releases from becoming code changes:
    does. It never guesses a layout.
 
 
+### 6.2 Kernel ABI changes
+
+The kernel is part of the trusted computing base, so no design can make a
+wrong kernel produce right answers. What the design guarantees is narrower and
+enforceable: **a kernel ABI change can never corrupt the program's memory, and
+can never be silently accepted as a correct result.** Most of that comes from
+how Linux versions its interfaces; the rest is cheap to add.
+
+| What can change | Why it can't hurt the program | Enforced by (to build) | Test (to write) |
+|---|---|---|---|
+| A struct's size or direction | `_IOC` request numbers encode both. A resized struct is a different request number, so an old descriptor gets `ENOTTY`, not a mismatched layout. The compiler already checks each descriptor's `size` and directions against its request number (E0263) | checker; engine maps `ENOTTY`/`EINVAL` to `Err(DeviceError::Unsupported)` | `device_resized_struct_unsupported` |
+| A layout change behind the same request number | Linux's userspace-ABI rule forbids it for `include/uapi` interfaces. Descriptors are **generated from the uapi headers**, not written by hand (`tools/resid-devgen`, the same generator as §6.1), and a conformance job compiles the headers of every supported kernel and compares `sizeof`/`offsetof` with each descriptor. Drift fails the build before release | `resid-devgen --check`, CI kernel matrix | `devgen_matches_uapi_*` |
+| An interface's version field (for example `msg_version` on `sev-guest`) | Descriptors declare the version they speak and the engine sets it; a reply carrying another version is `Err(DeviceError::Version)` | engine | `device_version_mismatch` |
+| The kernel writing past a buffer (a kernel bug, or a wrong length field) | The call runs in the isolated host (§5), never in the program. Inside the host, every buffer ends at a `PROT_NONE` guard page and its slack is filled with a canary checked after the call. An overrun kills the host or fails the canary, and the program gets `Err(DeviceError::Overrun)` | engine | `device_overrun_guard_page`, `device_overrun_canary` |
+| A reply's lengths or fields out of range | The parent validates every length and length field against the descriptor's maxima, and treats contents as untrusted input | parent validation | `device_reply_length_checked` |
+| configfs and sysfs attributes (files renamed, added, removed) | The engine reads the attributes the descriptor names and fails closed on a missing one; `ConfigfsReport` checks `provider` against the descriptor's expected providers and `generation` for races | engine | `configfs_missing_attr_err`, `configfs_unknown_provider_err` |
+| Interfaces outside the kernel's stability rule (out-of-tree drivers; sysfs ABI still marked "testing", such as PCI TSM) | Version-keyed, generated descriptors selected at run time, failing closed (§6.1). Each descriptor records its stability class (`uapi`, `abi-testing`, `out-of-tree`) and `residc verify` lists the classes a binary depends on | checker, provenance | `device_stability_in_provenance` |
+| Wrong data that is well-formed | For attestation, evidence is signed by hardware and verified downstream, so a corrupted report fails verification rather than passing. Descriptors that return unsigned data say so in their documentation | library design | — |
+
+The remaining risk is a kernel that changes a layout in violation of its own
+ABI rule, or a driver that does so between releases. Generated descriptors and
+the conformance matrix catch that before release; when one slips through, the
+fix is a regenerated descriptor, and the guard pages and validation above keep
+it from corrupting anything in the meantime.
+
 ## 7. Open questions
 
 1. Settled (2026-10-09): `ConfigfsReport` uses Landlock as well as seccomp.
@@ -218,3 +244,8 @@ releases from becoming code changes:
    the `Sequence` kind.
 3. Should the whole descriptor list appear in `residc --version` output, so an
    auditor can see the device surface of a given compiler?
+4. Settled (2026-10-09): kernel ABI changes are contained rather than trusted
+   away: descriptors are generated from uapi headers and checked against a
+   kernel matrix, request numbers encode size and direction, buffers carry
+   guard pages and canaries in the isolated host, and every reply is validated
+   (§6.2). A descriptor that breaks anyway is patched by regenerating it.
