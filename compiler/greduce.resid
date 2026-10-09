@@ -10,6 +10,11 @@
 // Imported by compiler/driver.resid; known values, budgets and the
 // whistle are reduce.resid's (rd_render, rd_coerce, rd_fold, rd_builtin,
 // rd_env_*).
+//
+// Two evaluators share the value semantics (sem_*): gx_* reduces a
+// function's body to its residual, at depth 0; a call whose arguments are
+// all known is evaluated by gy_* on values alone (β-reduction), which
+// builds no residual and gives up at the first unknown value.
 
 // Reduction state: RdS plus the graph being built; specs are the
 // specialized functions' fn nodes in emission order; dn/df/dr are derive
@@ -25,7 +30,7 @@ type GS = { Int steps; Int depth; Int fuel; Map(Str, Str) memo; List(Int) specs;
 // `@fold`), 0 for none; ffold: `@fold`.
 // vsum / vtys: each variant's sum type (declared, not generic) and its
 // payload types ("T1, T2"; "" for none), by vidx.
-type GXT = { List(Str) fnames; List(Str) fpns; List(Str) fpts; List(Str) frets; List(Int) fbody; List(Str) sts; List(Str) sfs; Map(Str, Int) fidx; List(Str) cts; List(Int) cpred; List(Str) fann; Str src; RdS rds; RB rb; List(Int) fcap; List(Bool) ffold; List(Str) vsum; List(Str) vtys; Map(Str, Int) vidx; };
+type GXT = { List(Str) fnames; List(Str) fpns; List(Str) fpts; List(Str) frets; List(Int) fbody; List(Str) sts; List(Str) sfs; Map(Str, Int) fidx; List(Str) cts; List(Int) cpred; List(Str) fann; Str src; RdS rds; RB rb; List(Int) fcap; List(Bool) ffold; List(Str) vsum; List(Str) vtys; Map(Str, Int) vidx; Map(Str, Int) sidx; List(Int) snf; Map(Str, Int) sfx; Map(Str, Str) sft; List(List(Str)) fpnl; List(List(Str)) fptl; Map(Str, Str) fone; };
 // Reduction budgets (spec §27): fuel, the steps of the whole program; step0,
 // a top-level call's first attempt (each retry doubles it); depth, non-tail
 // nesting; mem, one attempt's meter in abstract bytes; specs, the
@@ -35,9 +40,7 @@ pub type RB = { Int fuel; Int step0; Int depth; Int mem; Int specs; Int specs_fn
 // !ch); bs are an expression block's kept bindings, before r.
 type GV = { Bool k; Str v; Str ty; Int r; Bool ch; Bool bad; List(Int) bs; Str sx; Int px; GS st; };
 // Reduced statements (RdR): out are the residual statement nodes.
-// tfi >= 0 while β-reducing: the result is the call tfi(tvs: tts), a
-// tail call gx_call_user runs in its loop rather than on the stack.
-type GXR = { List(Int) out; Bool dead; Bool ok; Bool ret; Str rv; Str rty; Bool bad; GS st; Int tfi; List(Str) tvs; List(Str) tts; };
+type GXR = { List(Int) out; Bool dead; Bool ok; Bool ret; Str rv; Str rty; Bool bad; GS st; };
 // lits: per argument, 1 for an integer literal (or a negated one) as
 // written, 2 for other arithmetic over literals, 0 otherwise.
 type GXA = { List(Str) vs; List(Str) ts; List(Int) rs; Bool allk; Bool ch; Bool named; Bool bad; GS st; List(Int) lits; };
@@ -62,10 +65,8 @@ GS gx_with_g(GS s, Kg g) {
 
 GXN gx_n(GS st, Int id) { return GXN {.st = st, .id = id}; }
 
-// A new node spanning `like`'s source, derived from it by `rule`. While
-// β-reducing (depth > 0) the residual is never used, so no node is made.
+// A new node spanning `like`'s source, derived from it by `rule`.
 GXN gx_add_r(GS st, Str kind, Str text, Str aux, List(Int) ks, Int like, Str rule) {
-    if (st.depth > 0) { return gx_n(st, like); }
     KP p = kg_add(st.g, kind, text, aux, ks, st.g.ns[like].sp, st.g.ns[like].ep);
     return GXN {.st = gx_derive(gx_with_g(st, p.g), p.id, like, rule), .id = p.id};
 }
@@ -111,7 +112,6 @@ GXN gx_lit(GS st, Str lit, Int like, Str rule) {
     if (c0 == 34) { return gx_add_r(st, "lit", lit, "str", none, like, rule); }
     if (lit == "true" || lit == "false") { return gx_add_r(st, "lit", lit, "bool", none, like, rule); }
     if (c0 >= 48 && c0 <= 57) { return gx_add_r(st, "lit", lit, if (str_contains(lit, ".")) { "float" } else { "int" }, none, like, rule); }
-    if (st.depth > 0) { return gx_n(st, like); }
     KP p = kg_expr(lit, kg_empty(), 0);
     Int n0 = kg_count(st.g);
     KP q = gx_graft(st.g, p.g, p.id, st.g.ns[like].sp, st.g.ns[like].ep);
@@ -148,8 +148,6 @@ GV gx_kv(Str v, Str ty, Int r, Bool ch, GS st) {
 GV gx_folded(Str v, Str ty, Int orig, Bool och, GS st) { return gx_folded_r(v, ty, orig, och, st, "fold"); }
 
 GV gx_folded_r(Str v, Str ty, Int orig, Bool och, GS st0, Str rule) {
-    // While β-reducing no literal is made: only the value is used.
-    if (st0.depth > 0) { return gx_kv(v, rd_norm_ty(ty), orig, true, gx_charge(st0, str_len(v))); }
     GS st = st0;
     Str lit = rd_render(v, ty);
     if (lit == "") { return gx_kv(v, rd_norm_ty(ty), orig, och, st); }
@@ -189,7 +187,6 @@ GS gx_st_memo(GS st, Str key, Str val) {
 
 // Why a call at depth 0 stays residual (spec §3.4 reasons), as "id,why;".
 GS gx_reason(GS st, Int id, Str why) {
-    if (st.depth > 0) { return st; }
     return GS {.steps = st.steps, .depth = st.depth, .fuel = st.fuel, .memo = st.memo, .specs = st.specs, .nspec = st.nspec, .hist = st.hist, .notes = st.notes, .g = st.g, .dn = st.dn, .df = st.df, .dr = st.dr, .rs = st.rs.concat([f"{id}," + why + ";"]), .lim = st.lim, .mem = st.mem, .bx = st.bx};
 }
 
@@ -302,33 +299,38 @@ GV gx_expr(GXT ft, Int id, RdE env, GS st) {
 
 GV gx_litv(GS st, Int id) {
     KN n = st.g.ns[id];
-    if (n.aux == "int") { return gx_int_lit(n.text, id, st); }
-    if (n.aux == "str") {
-        RdSd d = rd_str_dec(n.text);
-        if (!d.ok) { return gx_unk(id, false, st); }
-        return gx_kv(d.v, "Str", id, false, st);
-    }
-    if (n.aux == "bool") { return gx_kv(n.text, "Bool", id, false, st); }
-    if (n.aux == "float") {
-        Str b = rd_f64_of_lit(n.text);
-        if (b == "") { return gx_unk(id, false, st); }
-        return gx_kv(b, "Float", id, false, st);
-    }
-    // A Dec literal is not an operand the text reducer parses.
+    // A Dec literal is not an operand the reducer parses.
     if (n.aux == "dec") { return gx_badv(st); }
-    return gx_unk(id, false, st);
+    SV l = sem_lit(n);
+    if (!l.k) { return gx_unk(id, false, st); }
+    return gx_kv(l.v, l.ty, id, false, st);
 }
 
-GV gx_int_lit(Str text, Int id, GS st) {
-    Int n = str_len(text);
-    if (!rd_all_digits(text, 0, n) || n == 0 || n > 78) { return gx_unk(id, false, st); }
-    if (n <= 18) { return gx_kv(rd_itoa(rd_atoi(text)), "Int", id, false, st); }
-    // Past 18 digits a literal is carried wide; it takes the type of the
-    // operand it is written beside (rd_fold) or the slot it flows into.
-    Int(512) x = rd_w(text);
-    if (!rd_carried(x)) { return gx_unk(id, false, st); }
-    Str ty = if (rd_wfits(x, "Int(128)")) { "Int(128)" } else { "Int(256)" };
-    return gx_kv(rd_wtoa(x), ty, id, false, st);
+// A literal's value: an integer of up to 78 digits (carried wide past 18;
+// it takes the type of the operand it is written beside, rd_fold, or of
+// the slot it flows into), a Str, a Bool, a Float.
+SV sem_lit(KN n) {
+    if (n.aux == "int") {
+        Str text = n.text;
+        Int k = str_len(text);
+        // A literal without leading zeros is its own canonical text.
+        if (k > 0 && k <= 18 && (k == 1 || str_char_at(text, 0) != 48)) { return sv_of(text, "Int"); }
+        if (!rd_all_digits(text, 0, k) || k == 0 || k > 78) { return sv_no(); }
+        if (k <= 18) { return sv_of(rd_itoa(rd_atoi(text)), "Int"); }
+        Int(512) x = rd_w(text);
+        if (!rd_carried(x)) { return sv_no(); }
+        return sv_of(rd_wtoa(x), if (rd_wfits(x, "Int(128)")) { "Int(128)" } else { "Int(256)" });
+    }
+    if (n.aux == "str") {
+        RdSd d = rd_str_dec(n.text);
+        return if (d.ok) { sv_of(d.v, "Str") } else { sv_no() };
+    }
+    if (n.aux == "bool") { return sv_of(n.text, "Bool"); }
+    if (n.aux == "float") {
+        Str b = rd_f64_of_lit(n.text);
+        return if (b == "") { sv_no() } else { sv_of(b, "Float") };
+    }
+    return sv_no();
 }
 
 GV gx_ref(GXT ft, Int id, RdE env, GS st) {
@@ -360,46 +362,36 @@ GV gx_un(GXT ft, Int id, RdE env, GS st) {
     GV e = gx_expr(ft, gx_kid(st, id, 0), env, st);
     if (e.bad) { return e; }
     GXN nr = if (e.ch) { gx_re(e.st, id, [e.r]) } else { gx_n(e.st, id) };
-    if (op == "!") {
-        if (e.k && e.ty == "Bool") {
-            Str nv = if (e.v == "true") { "false" } else { "true" };
-            return gx_folded(nv, "Bool", nr.id, e.ch, nr.st);
-        }
-        return gx_unk(nr.id, e.ch, nr.st);
-    }
     // `+e` is e.
     if (op == "+") { return gx_with_r(gx_with_st(e, nr.st), nr.id, e.ch); }
+    SV u = if (e.k) { sem_un(op, e.v, e.ty) } else { sv_no() };
+    if (!u.k) { return gx_unk(nr.id, e.ch, nr.st); }
+    // A negated integer literal is already a literal: keep its text.
+    if (op == "-" && !e.ch && rd_is_int_ty(e.ty)) { return gx_kv(u.v, u.ty, id, false, nr.st); }
+    return gx_folded(u.v, u.ty, nr.id, true, nr.st);
+}
+
+// A unary operator on a known value; one that would trap is not folded.
+SV sem_un(Str op, Str v, Str ty) {
+    if (op == "+") { return sv_of(v, ty); }
+    if (op == "!") { return if (ty == "Bool") { sv_of(if (v == "true") { "false" } else { "true" }, "Bool") } else { sv_no() }; }
     // Negating a Float flips its sign bit, which the pattern carries.
-    if (op == "-" && e.k && rd_is_f64(e.ty)) {
-        return gx_folded_r(rd_f64_bits(0.0 - rd_f64(e.v)), "Float", nr.id, true, nr.st, "select");
+    if (op == "-" && rd_is_f64(ty)) { return sv_of(rd_f64_bits(0.0 - rd_f64(v)), "Float"); }
+    if (!rd_is_int_ty(ty) || (op != "-" && op != "~")) { return sv_no(); }
+    if (!rd_small(v) || rd_iw(ty) > 64) {
+        Int(512) wv = rd_w(v);
+        Str wt = if (op == "~") { rd_wbits(0 - wv - 1, ty) } else { rd_wtoa(0 - wv) };
+        return if (wt == "" || !rd_int_fits(wt, ty)) { sv_no() } else { sv_of(wt, ty) };
     }
-    if (e.k && rd_is_int_ty(e.ty) && (!rd_small(e.v) || rd_iw(e.ty) > 64)) {
-        Int(512) wv = rd_w(e.v);
-        Str wt = if (op == "~") { rd_wbits(0 - wv - 1, e.ty) } else { rd_wtoa(0 - wv) };
-        if (wt == "" || !rd_int_fits(wt, e.ty)) { return gx_unk(nr.id, e.ch, nr.st); }
-        return gx_folded(wt, e.ty, nr.id, true, nr.st);
+    Int iv = rd_atoi(v);
+    if (op == "~") {
+        if (iv == rd_i64_min()) { return sv_no(); }
+        Str ct = rd_bits_ty(wrapping_sub(wrapping_sub(0, iv), 1), ty);
+        return if (ct == "") { sv_no() } else { sv_of(ct, ty) };
     }
-    if (e.k && rd_is_int_ty(e.ty)) {
-        Int iv = rd_atoi(e.v);
-        if (op == "~") {
-            // The complement is a width's worth of bits: above the
-            // values the evaluator carries it is not one, so it stays
-            // residual there.
-            if (rd_iw(e.ty) > 64 || iv == rd_i64_min()) { return gx_unk(nr.id, e.ch, nr.st); }
-            Int comp = wrapping_sub(wrapping_sub(0, iv), 1);
-            Str ct = rd_bits_ty(comp, e.ty);
-            if (ct == "") { return gx_unk(nr.id, e.ch, nr.st); }
-            return gx_folded(ct, e.ty, nr.id, true, nr.st);
-        }
-        // A negation that does not fit is a trap, and stays one.
-        if (iv == rd_i64_min()) { return gx_unk(nr.id, e.ch, nr.st); }
-        Int neg = 0 - iv;
-        if (!rd_int_fits(rd_itoa(neg), e.ty)) { return gx_unk(nr.id, e.ch, nr.st); }
-        // A negated literal is already a literal: keep its text.
-        if (!e.ch) { return gx_kv(rd_itoa(neg), e.ty, id, false, nr.st); }
-        return gx_folded(rd_itoa(neg), e.ty, nr.id, true, nr.st);
-    }
-    return gx_unk(nr.id, e.ch, nr.st);
+    // A negation that does not fit is a trap, and stays one.
+    if (iv == rd_i64_min() || !rd_int_fits(rd_itoa(0 - iv), ty)) { return sv_no(); }
+    return sv_of(rd_itoa(0 - iv), ty);
 }
 
 GV gx_rt(GXT ft, Int id, RdE env, GS st) {
@@ -449,14 +441,16 @@ GXN gx_pbin(GS st, Str op, Int l, Int r, Int like) {
 // literal, or arithmetic over them, which the code generator reads as one
 // literal (§6.1a). Read from the graph rather than from the reduced node,
 // since a folded value keeps its own node inside a call.
-Bool gx_lit_expr(GS st, Int id) {
-    Str k = gx_kind(st, id);
-    if (k == "lit") { return st.g.ns[id].aux == "int"; }
-    if (k == "paren") { return gx_lit_expr(st, gx_kid(st, id, 0)); }
-    if (k != "bin") { return false; }
-    Str op = st.g.ns[id].text;
+Bool gx_lit_expr(GS st, Int id) { return gk_lit_expr(st.g, id); }
+
+Bool gk_lit_expr(Kg g, Int id) {
+    KN n = g.ns[id];
+    if (n.kind == "lit") { return n.aux == "int"; }
+    if (n.kind == "paren") { return gk_lit_expr(g, kg_kid(g, id, 0)); }
+    if (n.kind != "bin") { return false; }
+    Str op = n.text;
     if (op != "+" && op != "-" && op != "*" && op != "/" && op != "%") { return false; }
-    return gx_lit_expr(st, gx_kid(st, id, 0)) && gx_lit_expr(st, gx_kid(st, id, 1));
+    return gk_lit_expr(g, kg_kid(g, id, 0)) && gk_lit_expr(g, kg_kid(g, id, 1));
 }
 
 GV gx_apply(GXT ft, Str op, Int id, GV l, GV r) {
@@ -514,21 +508,8 @@ GV gx_try(GXT ft, Int id, RdE env, GS st) {
     // So does a known Ok; a known Err returns early.
     GXS rs = if (l.k && str_starts_with(rd_norm_ty(l.ty), "Result(")) { gx_sum_of(ft, l.v, l.ty) } else { gx_sum_of(ft, "", "") };
     if (rs.ok && rs.tag == "Ok" && rs.pts[0] != "") { return gx_folded_r(rs.ps[0], rs.pts[0], rq.id, true, rq.st, "unwrap"); }
-    // While β-reducing, the early return is the value of the call when the
-    // `?` is a statement's whole value (gx_early).
-    if (rq.st.depth > 0 && l.k && qt != "" && l.v == "N") { return gx_early("N", "Option(_)", rq); }
-    if (rq.st.depth > 0 && rs.ok && rs.tag == "Err" && rs.pts[0] != "") { return gx_early(l.v, "Result(_, " + rs.pts[0] + ")", rq); }
     return gx_unk(rq.id, l.ch, rq.st);
 }
-
-// A `?` that returns early: unknown as a value (px -2 marks it), and the
-// function's result where a statement consumes it whole.
-GV gx_early(Str v, Str ty, GXN rq) {
-    List(Int) nb = [];
-    return GV {.k = false, .v = v, .ty = ty, .r = rq.id, .ch = true, .bad = false, .bs = nb, .sx = "", .px = -2, .st = rq.st};
-}
-
-GXR gx_early_ret(GV v) { return gx_dead(gx_none(), gx_mk(gx_none(), true, true, true, v.v, v.ty, v.st)); }
 
 GV gx_tern(GXT ft, Int id, RdE env, GS st) {
     Int ck = gx_kid(st, id, 0);
@@ -587,15 +568,15 @@ GXA gx_args(GXT ft, Int id, Int i, RdE env, GXA acc) {
     GV v = gx_expr(ft, vk, env, acc.st);
     if (v.bad) { return GXA {.vs = acc.vs, .ts = acc.ts, .rs = acc.rs, .allk = false, .ch = acc.ch, .named = acc.named, .bad = true, .st = v.st, .lits = acc.lits}; }
     GXN piece = if (nm && v.ch) { gx_re(v.st, kid, [v.r]) } else { gx_n(v.st, if (nm) { kid } else { v.r }) };
-    GXA a2 = GXA {.vs = acc.vs.concat([v.v]), .ts = acc.ts.concat([v.ty]), .rs = acc.rs.concat([piece.id]), .allk = acc.allk && v.k, .ch = acc.ch || v.ch, .named = acc.named || nm, .bad = false, .st = piece.st, .lits = acc.lits.concat([gx_lit_kind(acc.st, vk)])};
+    GXA a2 = GXA {.vs = acc.vs.concat([v.v]), .ts = acc.ts.concat([v.ty]), .rs = acc.rs.concat([piece.id]), .allk = acc.allk && v.k, .ch = acc.ch || v.ch, .named = acc.named || nm, .bad = false, .st = piece.st, .lits = acc.lits};
     return gx_args(ft, id, i + 1, env, a2);
 }
 
-Int gx_lit_kind(GS st, Int id) {
-    KN n = st.g.ns[id];
+Int gk_lit_kind(Kg g, Int id) {
+    KN n = g.ns[id];
     if (n.kind == "lit") { return if (n.aux == "int") { 1 } else { 0 }; }
-    if (n.kind == "un" && n.text == "-" && gx_kind(st, gx_kid(st, id, 0)) == "lit" && st.g.ns[gx_kid(st, id, 0)].aux == "int") { return 1; }
-    return if (gx_lit_expr(st, id)) { 2 } else { 0 };
+    if (n.kind == "un" && n.text == "-" && g.ns[kg_kid(g, id, 0)].kind == "lit" && g.ns[kg_kid(g, id, 0)].aux == "int") { return 1; }
+    return if (gk_lit_expr(g, id)) { 2 } else { 0 };
 }
 
 GXA gx_args0(GS st) {
@@ -613,8 +594,8 @@ GV gx_call(GXT ft, Int id, RdE env, GS st) {
     GS s1 = cr.st;
     if (ei >= 0) { return gx_unk(cr.id, a.ch, s1); }
     Int ufi = ft.fidx.get(name) else { -1 };
-    if (ufi >= 0 && s1.depth == 0 && ft.ffold[ufi] && (!a.allk || a.named) && !gx_in_fold(ft, s1)) { return gx_unk(cr.id, a.ch, gx_fold_err(ft, id, name, "args", s1)); }
-    if (!a.allk && !a.named && ufi >= 0 && s1.depth == 0) { return gx_specialize(ft, ufi, a, cr.id, id, s1); }
+    if (ufi >= 0 && ft.ffold[ufi] && (!a.allk || a.named) && !gx_in_fold(ft, s1)) { return gx_unk(cr.id, a.ch, gx_fold_err(ft, id, name, "args", s1)); }
+    if (!a.allk && !a.named && ufi >= 0) { return gx_specialize(ft, ufi, a, cr.id, id, s1); }
     if (!a.allk || a.named) { return gx_unk(cr.id, a.ch, s1); }
     if (name == "Some") {
         if (a.ts.len() != 1) { return gx_unk(cr.id, a.ch, s1); }
@@ -626,7 +607,7 @@ GV gx_call(GXT ft, Int id, RdE env, GS st) {
         if (a.ts.len() != 1) { return gx_unk(cr.id, a.ch, s1); }
         Str pt = rd_norm_ty(a.ts[0]);
         Str rty = if (name == "Ok") { "Result(" + pt + ", _)" } else { "Result(_, " + pt + ")" };
-        return gx_kv(rd_enc([name, a.vs[0]]), rty, cr.id, a.ch, gx_charge(s1, str_len(a.vs[0])));
+        return gx_kv(rd_enc([name, a.vs[0]]), rty, cr.id, a.ch, s1);
     }
     // A builder is linear (E0401-E0404), so a known one is a plain value:
     // the text or encoded list so far.
@@ -637,34 +618,43 @@ GV gx_call(GXT ft, Int id, RdE env, GS st) {
     if (vci >= 0) { return gx_variant(ft, vci, name, a, cr.id, s1); }
     RdV bv = rd_builtin(name, gx_rda(a, ft.rds), "", 0, ft.rds);
     if (bv.k) { return gx_folded_r(bv.v, bv.ty, cr.id, a.ch, s1, "eval"); }
-    RdV xv = gx_builtin(ft, name, ufi, a);
-    if (xv.k) { return gx_folded_r(xv.v, xv.ty, cr.id, a.ch, gx_scan(s1, gx_lens(a.vs, 0, 0)), "eval"); }
+    Bool mm = name == "abs" || name == "min" || name == "max" || name == "clamp";
+    List(Int) lits = if (mm) { gk_lits(s1.g, id, 0, ListBuf()) } else { gx_none() };
+    RdV xv = gx_builtin(ft, name, ufi, a.vs, a.ts, lits);
+    if (xv.k) { return gx_folded_r(xv.v, xv.ty, cr.id, a.ch, s1, "eval"); }
     if (ufi < 0) { return gx_unk(cr.id, a.ch, s1); }
     GV uv = gx_call_user(ft, ufi, a, cr.id, s1);
-    if (uv.k || s1.depth > 0 || !ft.ffold[ufi] || gx_in_fold(ft, s1)) { return uv; }
+    if (uv.k || !ft.ffold[ufi] || gx_in_fold(ft, s1)) { return uv; }
     return gx_with_st(uv, gx_fold_err(ft, id, name, "", uv.st));
+}
+
+// Each argument's literal kind (gk_lit_kind), which only the
+// abs/min/max/clamp expansion reads.
+List(Int) gk_lits(Kg g, Int id, Int i, ListBuf(Int) acc) {
+    if (i >= g.ns[id].nk) { return acc.finish(); }
+    return gk_lits(g, id, i + 1, acc.push(gk_lit_kind(g, kg_kid(g, id, i))));
 }
 
 // Builtins the lowering expands in place (lower.resid lw_call): sort, and,
 // unless a user function takes the name, abs/min/max/clamp and the
 // checked conversions (`i64(x)`, `f64(x)`, ...).
-RdV gx_builtin(GXT ft, Str name, Int ufi, GXA a) {
+RdV gx_builtin(GXT ft, Str name, Int ufi, List(Str) vs, List(Str) ts, List(Int) lits) {
     RdV none = rd_unk("", false, 0, ft.rds);
-    Int n = a.vs.len();
+    Int n = vs.len();
     if (name == "sort") {
-        Str et = rd_inner(rd_norm_ty(if (n == 1) { a.ts[0] } else { "" }), "List(");
+        Str et = rd_inner(rd_norm_ty(if (n == 1) { ts[0] } else { "" }), "List(");
         if (et == "") { return none; }
-        if (et == "?") { return gx_rv(a.vs[0], a.ts[0], ft); }
-        Str sv = rd_sort(a.vs[0], et);
+        if (et == "?") { return gx_rv(vs[0], ts[0], ft); }
+        Str sv = rd_sort(vs[0], et);
         if (sv == str_from_code(1)) { return none; }
-        return gx_rv(sv, a.ts[0], ft);
+        return gx_rv(sv, ts[0], ft);
     }
     if (ufi >= 0) { return none; }
-    if (name == "abs" || name == "min" || name == "max" || name == "clamp") { return gx_minmax(ft, name, a); }
+    if (name == "abs" || name == "min" || name == "max" || name == "clamp") { return gx_minmax(ft, name, vs, ts, lits); }
     Str to = conv_helper_type_cg(name);
     if (to == "" || n != 1 || str_starts_with(name, "wrapping_")) { return none; }
     Str want = if (rd_is_f64(to)) { "Float" } else { rd_norm_ty(to) };
-    Str cv = rd_convert(a.vs[0], a.ts[0], want);
+    Str cv = rd_convert(vs[0], ts[0], want);
     if (cv == "") { return none; }
     return gx_rv(cv, want, ft);
 }
@@ -676,38 +666,38 @@ RdV gx_rv(Str v, Str ty, GXT ft) {
 // abs / min / max / clamp as the expressions they stand for (lw_minmax):
 // an integer literal argument takes the type of the first other integer
 // argument, and the comparisons and arithmetic fold as written.
-RdV gx_minmax(GXT ft, Str name, GXA a) {
+RdV gx_minmax(GXT ft, Str name, List(Str) vs, List(Str) ts, List(Int) lits) {
     RdV none = rd_unk("", false, 0, ft.rds);
-    Int n = a.vs.len();
+    Int n = vs.len();
     Int want = if (name == "abs") { 1 } else if (name == "clamp") { 3 } else { 2 };
     if (n != want) { return none; }
-    Str target = gx_mm_target(a, 0);
-    List(RdV) xs = gx_mm_vals(ft, a, target, 0, ListBuf());
+    Str target = gx_mm_target(ts, lits, 0);
+    List(RdV) xs = gx_mm_vals(ft, vs, ts, lits, target, 0, ListBuf());
     if (xs.len() != n) { return none; }
     return gx_mm_same(ft, name, xs, xs[0].ty);
 }
 
-Str gx_mm_target(GXA a, Int i) {
-    if (i >= a.vs.len()) { return ""; }
-    Str t = rd_norm_ty(a.ts[i]);
-    if (!gx_mm_lit(a, i) && rd_is_int_ty(t)) { return t; }
-    return gx_mm_target(a, i + 1);
+Str gx_mm_target(List(Str) ts, List(Int) lits, Int i) {
+    if (i >= ts.len()) { return ""; }
+    Str t = rd_norm_ty(ts[i]);
+    if (!gx_mm_lit(lits, i) && rd_is_int_ty(t)) { return t; }
+    return gx_mm_target(ts, lits, i + 1);
 }
 
 // An integer literal argument: its residual node is a literal (or a
 // negated one).
-Bool gx_mm_lit(GXA a, Int i) { return a.lits.len() > i && a.lits[i] == 1; }
+Bool gx_mm_lit(List(Int) lits, Int i) { return lits.len() > i && lits[i] == 1; }
 
-List(RdV) gx_mm_vals(GXT ft, GXA a, Str target, Int i, ListBuf(RdV) acc) {
-    if (i >= a.vs.len()) { return acc.finish(); }
-    Str t = rd_norm_ty(a.ts[i]);
-    Bool retype = target != "" && gx_mm_lit(a, i);
+List(RdV) gx_mm_vals(GXT ft, List(Str) vs, List(Str) ts, List(Int) lits, Str target, Int i, ListBuf(RdV) acc) {
+    if (i >= vs.len()) { return acc.finish(); }
+    Str t = rd_norm_ty(ts[i]);
+    Bool retype = target != "" && gx_mm_lit(lits, i);
     Str ty = if (retype) { target } else { t };
     // Literal arithmetic is retyped only once reduced to one literal.
-    if (a.lits.len() > i && a.lits[i] == 2 && t != target && target != "") { return acc.finish(); }
+    if (lits.len() > i && lits[i] == 2 && t != target && target != "") { return acc.finish(); }
     // A literal that does not fit the target is a conversion that traps.
-    if (retype && !rd_int_fits(a.vs[i], target)) { return acc.finish(); }
-    return gx_mm_vals(ft, a, target, i + 1, acc.push(gx_rv(a.vs[i], ty, ft)));
+    if (retype && !rd_int_fits(vs[i], target)) { return acc.finish(); }
+    return gx_mm_vals(ft, vs, ts, lits, target, i + 1, acc.push(gx_rv(vs[i], ty, ft)));
 }
 
 RdV gx_mm_same(GXT ft, Str name, List(RdV) xs, Str t0) {
@@ -743,14 +733,21 @@ Bool gx_mm_all(List(RdV) xs, Str t0, Int i) {
 // `V(args)` of a declared sum type: known when every payload fits its
 // declared type.
 GV gx_variant(GXT ft, Int vi, Str name, GXA a, Int r, GS st) {
-    List(Str) ps0 = if (ft.vtys[vi] == "") { gx_nos() } else { split_rest_depth(ft.vtys[vi], ", ") };
-    if (ps0.len() != a.vs.len() || !gx_fit_all(ps0, a, 0)) { return gx_unk(r, a.ch, st); }
-    return gx_kv(rd_enc([name].concat(a.vs)), ft.vsum[vi], r, a.ch, gx_charge(st, gx_lens(a.vs, 0, 0)));
+    Str v = gx_variant_v(ft, vi, name, a.vs, a.ts);
+    if (v == str_from_code(1)) { return gx_unk(r, a.ch, st); }
+    return gx_kv(v, ft.vsum[vi], r, a.ch, st);
 }
 
-Bool gx_fit_all(List(Str) pts, GXA a, Int i) {
+// The value of variant `name` with payloads vs, or "\x01".
+Str gx_variant_v(GXT ft, Int vi, Str name, List(Str) vs, List(Str) ts) {
+    List(Str) ps0 = if (ft.vtys[vi] == "") { gx_nos() } else { split_rest_depth(ft.vtys[vi], ", ") };
+    if (ps0.len() != vs.len() || !gx_fit_all(ps0, vs, ts, 0)) { return str_from_code(1); }
+    return rd_enc([name].concat(vs));
+}
+
+Bool gx_fit_all(List(Str) pts, List(Str) vs, List(Str) ts, Int i) {
     if (i >= pts.len()) { return true; }
-    return rd_coerce_v(a.ts[i], pts[i], a.vs[i]) != "" && gx_fit_all(pts, a, i + 1);
+    return rd_coerce_v(ts[i], pts[i], vs[i]) != "" && gx_fit_all(pts, vs, ts, i + 1);
 }
 
 // A known value of a sum type taken apart: its variant, payloads and
@@ -788,25 +785,13 @@ GV gx_field(GXT ft, Int id, RdE env, GS st) {
     GXN fr = if (b.ch) { gx_re(b.st, id, [b.r]) } else { gx_n(b.st, id) };
     GV none = gx_unk(fr.id, b.ch, fr.st);
     if (!b.k) { return none; }
-    Int si = gx_struct_idx(ft, b.ty, 0);
-    if (si < 0) { return none; }
-    Str decl = ft.sfs[si];
-    if (decl == "") { return none; }
-    List(Str) dfs = str_split(decl, str_from_code(31));
-    Int fi = rd_find_named(dfs, st.g.ns[id].text, 0);
+    Str key = b.ty + str_from_code(31) + st.g.ns[id].text;
+    Int fi = ft.sfx.get(key) else { -1 };
     if (fi < 0) { return none; }
-    Str d = dfs[fi];
-    Int sep = str_find_char(d, 30, 0);
-    Str fty = rd_norm_ty(str_slice(d, sep + 1, str_len(d)));
+    Str fty = ft.sft.get(key) else { "" };
     Str fv = rd_nth(b.v, fi);
     if (fv == str_from_code(1)) { return none; }
-    return gx_folded(fv, fty, fr.id, b.ch, gx_scan(fr.st, str_len(b.v)));
-}
-
-Int gx_struct_idx(GXT ft, Str name, Int i) {
-    if (i >= ft.sts.len()) { return -1; }
-    if (ft.sts[i] == name) { return i; }
-    return gx_struct_idx(ft, name, i + 1);
+    return gx_folded(fv, fty, fr.id, b.ch, fr.st);
 }
 
 GV gx_mcall(GXT ft, Int id, RdE env, GS st) {
@@ -818,55 +803,127 @@ GV gx_mcall(GXT ft, Int id, RdE env, GS st) {
     GXN mr = if (mch) { gx_re(a.st, id, [b.r].concat(a.rs)) } else { gx_n(a.st, id) };
     GV none = gx_unk(mr.id, mch, mr.st);
     if (!b.k || !a.allk || a.named) { return none; }
-    Str name = st.g.ns[id].text;
-    Str bt = rd_norm_ty(b.ty);
-    if (bt == "StrBuf" || str_starts_with(bt, "ListBuf(")) { return gx_builder(name, bt, b, a, mr, mch); }
-    if (bt == "{}" || str_starts_with(bt, "Map(") || str_starts_with(bt, "Set(")) { return gx_map_method(name, bt, b, a, mr, mch); }
-    Str et = rd_inner(b.ty, "List(");
-    if (et == "") { return none; }
-    // Reading an encoded list is work in proportion to its text.
-    GS ms = gx_scan(mr.st, str_len(b.v));
-    if (name == "len") {
-        if (a.ts.len() != 0) { return none; }
-        return gx_folded(rd_itoa(rd_count(b.v)), "Int", mr.id, mch, ms);
+    SV r = sem_mcall(ft, st.g.ns[id].text, b.v, b.ty, a.vs, a.ts);
+    if (!r.k) { return none; }
+    return gx_folded(r.v, r.ty, mr.id, mch, mr.st);
+}
+
+// ─── Value semantics ────────────────────────────────────────────────
+
+// An operation on two Ints below 10^18 in magnitude: the result's text,
+// "\x01" when it would trap (left to run), "" when not decided here.
+Str sem_int_op(Int op, Int a, Int b) {
+    Int big = 1000000000000000000;
+    if (a >= big || a <= 0 - big || b >= big || b <= 0 - big) { return ""; }
+    if (op == 1) { return rd_ntext(rd_add(a, b)); }
+    if (op == 2) { return rd_ntext(rd_sub(a, b)); }
+    if (op == 3) { return rd_ntext(rd_mul(a, b)); }
+    if (op == 4 || op == 5) { return rd_ntext(rd_div(a, b, op == 5)); }
+    if (op >= 6 && op <= 11) {
+        Bool t = if (op == 6) { a < b } else if (op == 7) { a <= b } else if (op == 8) { a > b } else if (op == 9) { a >= b } else if (op == 10) { a == b } else { a != b };
+        return if (t) { "true" } else { "false" };
     }
+    if (op == 14) { return rd_itoa(a & b); }
+    if (op == 15) { return rd_itoa(a | b); }
+    if (op == 16) { return rd_itoa(a ^ b); }
+    return "";
+}
+
+Str rd_ntext(RdN x) { return if (x.ok) { rd_itoa(x.v) } else { str_from_code(1) }; }
+// What an operation on known values gives, shared by the residual
+// reducer (gx_*) and the evaluator (gy_*): known or not, and the bytes
+// read through to get it (charged as a scan).
+
+type SV = { Bool k; Str v; Str ty; Int scan; };
+
+SV sv_no() { return SV {.k = false, .v = "", .ty = "", .scan = 0}; }
+SV sv_of(Str v, Str ty) { return SV {.k = true, .v = v, .ty = ty, .scan = 0}; }
+SV sv_scan(Str v, Str ty, Int n) { return SV {.k = true, .v = v, .ty = ty, .scan = n}; }
+
+// `b.name(args)` on a known value: lists, builders, maps and sets.
+SV sem_mcall(GXT ft, Str name, Str bv, Str bty, List(Str) vs, List(Str) ts) {
+    Str bt = rd_norm_ty(bty);
+    if (bt == "StrBuf" || str_starts_with(bt, "ListBuf(")) { return sem_builder(name, bt, bv, vs, ts); }
+    if (bt == "{}" || str_starts_with(bt, "Map(") || str_starts_with(bt, "Set(")) { return sem_map(name, bt, bv, vs, ts); }
+    Str et = rd_inner(bty, "List(");
+    if (et == "") { return sv_no(); }
+    Int n = ts.len();
+    if (name == "len") { return if (n == 0) { sv_of(rd_itoa(rd_count(bv)), "Int") } else { sv_no() }; }
+    // The other verbs read the whole list: work in proportion to its text.
+    Int sc = str_len(bv);
     if (name == "concat") {
-        if (a.ts.len() != 1) { return none; }
-        Str ot = rd_norm_ty(a.ts[0]);
-        Str rt = if (et == "?") { ot } else { rd_norm_ty(b.ty) };
-        if (rd_coerce(ot, rt) == "" && rd_coerce(b.ty, ot) == "") { return none; }
-        Str rty = if (rt == "List(?)") { ot } else { rt };
-        // Encoded lists concatenate as text.
-        return gx_folded(b.v + a.vs[0], rty, mr.id, mch, ms);
+        if (n != 1) { return sv_no(); }
+        Str ot = rd_norm_ty(ts[0]);
+        Str rt = if (et == "?") { ot } else { rd_norm_ty(bty) };
+        if (rd_coerce(ot, rt) == "" && rd_coerce(bty, ot) == "") { return sv_no(); }
+        return sv_scan(rd_cat(bv, vs[0]), if (rt == "List(?)") { ot } else { rt }, sc);
     }
-    if (et == "?") { return none; }
+    if (et == "?") { return sv_no(); }
     if (name == "with") {
         // An index out of range aborts at run time.
-        if (a.ts.len() != 2 || !rd_is_int_ty(rd_norm_ty(a.ts[0])) || !rd_small(a.vs[0])) { return none; }
-        List(Str) items = rd_dec(b.v);
-        Int wi = rd_atoi(a.vs[0]);
-        if (wi < 0 || wi >= items.len() || rd_coerce_v(a.ts[1], et, a.vs[1]) == "") { return none; }
-        return gx_folded(rd_enc(items[0..wi].concat([a.vs[1]]).concat(items[wi + 1..items.len()])), b.ty, mr.id, mch, ms);
+        if (n != 2 || !rd_is_int_ty(rd_norm_ty(ts[0])) || !rd_small(vs[0])) { return sv_no(); }
+        List(Str) items = rd_dec(bv);
+        Int wi = rd_atoi(vs[0]);
+        if (wi < 0 || wi >= items.len() || rd_coerce_v(ts[1], et, vs[1]) == "") { return sv_no(); }
+        return sv_scan(rd_enc(items[0..wi].concat([vs[1]]).concat(items[wi + 1..items.len()])), bty, sc);
     }
     // A user function of the name is called instead (lw_mcall).
-    if (ft.fidx.get(name) else { -1 } >= 0) { return none; }
-    if (name == "reverse" && a.ts.len() == 0) { return gx_folded(rd_enc(gx_rev(rd_dec(b.v), rd_count(b.v) - 1, ListBuf())), b.ty, mr.id, mch, ms); }
-    if (name == "contains" && a.ts.len() == 1) {
-        Str cv = rd_coerce_v(a.ts[0], et, a.vs[0]);
-        if (cv == "") { return none; }
-        Bool has = if (rd_is_f64(et)) { gx_has_f64(rd_dec(b.v), rd_f64(a.vs[0]), 0) } else { rd_list_has(rd_dec(b.v), a.vs[0], 0) };
-        return gx_folded(if (has) { "true" } else { "false" }, "Bool", mr.id, mch, ms);
+    if (ft.fidx.get(name) else { -1 } >= 0) { return sv_no(); }
+    if (name == "reverse" && n == 0) { return sv_scan(rd_enc(gx_rev(rd_dec(bv), rd_count(bv) - 1, ListBuf())), bty, sc); }
+    if (name == "contains" && n == 1) {
+        if (rd_coerce_v(ts[0], et, vs[0]) == "") { return sv_no(); }
+        Bool has = if (rd_is_f64(et)) { gx_has_f64(rd_dec(bv), rd_f64(vs[0]), 0) } else { rd_list_has(rd_dec(bv), vs[0], 0) };
+        return sv_scan(if (has) { "true" } else { "false" }, "Bool", sc);
     }
-    if (name == "sum" && a.ts.len() == 0) {
-        List(Str) items = rd_dec(b.v);
-        if (rd_is_f64(et)) { return gx_folded(rd_f64_bits(gx_sumf(items, 0, 0.0)), "Float", mr.id, mch, ms); }
+    if (name == "sum" && n == 0) {
+        List(Str) items = rd_dec(bv);
+        if (rd_is_f64(et)) { return sv_scan(rd_f64_bits(gx_sumf(items, 0, 0.0)), "Float", sc); }
         // An Int sum that would overflow is left to run.
-        if (et != "Int" || !rd_all_small(items, 0)) { return none; }
+        if (et != "Int" || !rd_all_small(items, 0)) { return sv_no(); }
         Int(512) tot = gx_sumw(items, 0, (Int(512))0);
-        if (!rd_wfits(tot, "Int")) { return none; }
-        return gx_folded(rd_wtoa(tot), "Int", mr.id, mch, ms);
+        return if (rd_wfits(tot, "Int")) { sv_scan(rd_wtoa(tot), "Int", sc) } else { sv_no() };
     }
-    return none;
+    return sv_no();
+}
+
+// `b[x]` on a known list (an index out of range aborts at run time) or
+// map (`m.get(x)`).
+SV sem_index(GXT ft, Str bv, Str bty, Str xv, Str xty) {
+    if (str_starts_with(rd_norm_ty(bty), "Map(")) { return sem_map("get", rd_norm_ty(bty), bv, [xv], [xty]); }
+    Str et = rd_inner(bty, "List(");
+    if (et == "" || et == "?" || !rd_is_int_ty(rd_norm_ty(xty)) || !rd_small(xv)) { return sv_no(); }
+    Int i = rd_atoi(xv);
+    if (i < 0) { return sv_no(); }
+    Str item = rd_nth(bv, i);
+    if (item == str_from_code(1)) { return sv_no(); }
+    return sv_of(item, et);
+}
+
+// `{k: v, ...}` from its entries (key, value, key, value, ...).
+SV sem_mapv(List(Str) vs, List(Str) ts) {
+    if (vs.len() == 0) { return sv_no(); }
+    Str kt = rd_norm_ty(ts[0]);
+    Str vt = rd_norm_ty(ts[1]);
+    Str mv = gx_map_fill(vs, ts, kt, vt, 0, "");
+    if (mv == str_from_code(1)) { return sv_no(); }
+    return sv_of(mv, "Map(" + kt + ", " + vt + ")");
+}
+
+// `{a, b, ...}`.
+SV sem_setv(List(Str) vs, List(Str) ts) {
+    if (vs.len() == 0) { return sv_no(); }
+    Str kt = rd_norm_ty(ts[0]);
+    Str sv = gx_set_fill(vs, ts, kt, 0, "");
+    if (sv == str_from_code(1)) { return sv_no(); }
+    return sv_of(sv, "Set(" + kt + ")");
+}
+
+// `[a, b, ...]`: items of one type.
+SV sem_list(List(Str) vs, List(Str) ts) {
+    if (vs.len() == 0) { return sv_of("", "List(?)"); }
+    Str et0 = rd_norm_ty(ts[0]);
+    if (!rd_same_tys(ts, et0, 1)) { return sv_no(); }
+    return sv_of(rd_enc(vs), "List(" + et0 + ")");
 }
 
 // `{k: v, ...}`: entries put in order.
@@ -875,12 +932,10 @@ GV gx_mapv(GXT ft, Int id, RdE env, GS st) {
     if (es.bad) { return gx_badv(es.st); }
     GXN mr = if (es.ch) { gx_re(es.st, id, es.rs) } else { gx_n(es.st, id) };
     GV none = gx_unk(mr.id, es.ch, mr.st);
-    if (!es.allk || es.vs.len() == 0) { return none; }
-    Str kt = rd_norm_ty(es.ts[0]);
-    Str vt = rd_norm_ty(es.ts[1]);
-    Str mv = gx_map_fill(es, kt, vt, 0, "");
-    if (mv == str_from_code(1)) { return none; }
-    return gx_folded(mv, "Map(" + kt + ", " + vt + ")", mr.id, es.ch, mr.st);
+    if (!es.allk) { return none; }
+    SV m = sem_mapv(es.vs, es.ts);
+    if (!m.k) { return none; }
+    return gx_folded(m.v, m.ty, mr.id, es.ch, mr.st);
 }
 
 // Each entry's key and value, as two arguments.
@@ -894,14 +949,14 @@ GXA gx_entries(GXT ft, Int id, Int i, RdE env, GXA acc) {
     return gx_entries(ft, id, i + 1, env, a2);
 }
 
-// The entries of es (key, value, key, value, ...) put one by one; "\x01"
-// when a key or value does not fit or two keys tie.
-Str gx_map_fill(GXA es, Str kt, Str vt, Int i, Str acc) {
-    if (i >= es.vs.len()) { return acc; }
-    if (rd_coerce_v(es.ts[i], kt, es.vs[i]) != kt || rd_coerce_v(es.ts[i + 1], vt, es.vs[i + 1]) != vt) { return str_from_code(1); }
-    Str m = rd_map_put(rd_dec(acc), es.vs[i], es.vs[i + 1], kt, 2);
+// The entries (key, value, key, value, ...) put one by one; "\x01" when
+// a key or value does not fit or two keys tie.
+Str gx_map_fill(List(Str) vs, List(Str) ts, Str kt, Str vt, Int i, Str acc) {
+    if (i >= vs.len()) { return acc; }
+    if (rd_coerce_v(ts[i], kt, vs[i]) != kt || rd_coerce_v(ts[i + 1], vt, vs[i + 1]) != vt) { return str_from_code(1); }
+    Str m = rd_map_put(rd_dec(acc), vs[i], vs[i + 1], kt, 2);
     if (m == str_from_code(1)) { return m; }
-    return gx_map_fill(es, kt, vt, i + 2, m);
+    return gx_map_fill(vs, ts, kt, vt, i + 2, m);
 }
 
 // `{a, b, ...}`.
@@ -910,76 +965,73 @@ GV gx_setv(GXT ft, Int id, RdE env, GS st) {
     if (el.bad) { return gx_badv(el.st); }
     GXN sr = if (el.ch) { gx_re(el.st, id, el.rs) } else { gx_n(el.st, id) };
     GV none = gx_unk(sr.id, el.ch, sr.st);
-    if (!el.allk || el.named || el.vs.len() == 0) { return none; }
-    Str kt = rd_norm_ty(el.ts[0]);
-    Str sv = gx_set_fill(el, kt, 0, "");
-    if (sv == str_from_code(1)) { return none; }
-    return gx_folded(sv, "Set(" + kt + ")", sr.id, el.ch, sr.st);
+    if (!el.allk || el.named) { return none; }
+    SV m = sem_setv(el.vs, el.ts);
+    if (!m.k) { return none; }
+    return gx_folded(m.v, m.ty, sr.id, el.ch, sr.st);
 }
 
-Str gx_set_fill(GXA el, Str kt, Int i, Str acc) {
-    if (i >= el.vs.len()) { return acc; }
-    if (rd_coerce_v(el.ts[i], kt, el.vs[i]) != kt) { return str_from_code(1); }
-    Str m = rd_map_put(rd_dec(acc), el.vs[i], "", kt, 1);
+Str gx_set_fill(List(Str) vs, List(Str) ts, Str kt, Int i, Str acc) {
+    if (i >= vs.len()) { return acc; }
+    if (rd_coerce_v(ts[i], kt, vs[i]) != kt) { return str_from_code(1); }
+    Str m = rd_map_put(rd_dec(acc), vs[i], "", kt, 1);
     if (m == str_from_code(1)) { return m; }
-    return gx_set_fill(el, kt, i + 1, m);
+    return gx_set_fill(vs, ts, kt, i + 1, m);
 }
 
 // Methods of a known map or set (lw_map_method / lw_set_method); `{}`
 // becomes a map on a two-argument insert and a set on a one-argument one.
-GV gx_map_method(Str name, Str bt, GV b, GXA a, GXN mr, Bool mch) {
-    GV none = gx_unk(mr.id, mch, mr.st);
-    Int n = a.ts.len();
+SV sem_map(Str name, Str bt, Str bv, List(Str) vs, List(Str) ts) {
+    Int n = ts.len();
     Bool emp = bt == "{}";
     Bool isset = str_starts_with(bt, "Set(") || (emp && name == "insert" && n == 1);
     List(Str) targs = if (emp) { gx_nos() } else { rd_targs(bt) };
-    Str kt = if (emp) { if (n > 0) { rd_norm_ty(a.ts[0]) } else { "" } } else { targs[0] };
-    Str vt = if (emp) { if (n > 1) { rd_norm_ty(a.ts[1]) } else { "" } } else if (isset) { "" } else { targs[1] };
+    Str kt = if (emp) { if (n > 0) { rd_norm_ty(ts[0]) } else { "" } } else { targs[0] };
+    Str vt = if (emp) { if (n > 1) { rd_norm_ty(ts[1]) } else { "" } } else if (isset) { "" } else { targs[1] };
     Int stride = if (isset) { 1 } else { 2 };
-    List(Str) items = rd_dec(b.v);
-    GS ms = gx_scan(mr.st, str_len(b.v));
-    if (name == "len" && n == 0) { return gx_folded(rd_itoa(items.len() / stride), "Int", mr.id, mch, ms); }
-    if (emp && name != "insert") { return none; }
-    if (str_contains(kt, "?") || str_contains(kt, "_") || str_contains(vt, "?") || str_contains(vt, "_")) { return none; }
+    List(Str) items = rd_dec(bv);
+    Int sc = str_len(bv);
+    if (name == "len" && n == 0) { return sv_scan(rd_itoa(items.len() / stride), "Int", sc); }
+    if (emp && name != "insert") { return sv_no(); }
+    if (str_contains(kt, "?") || str_contains(kt, "_") || str_contains(vt, "?") || str_contains(vt, "_")) { return sv_no(); }
     Str mty = if (isset) { "Set(" + kt + ")" } else { "Map(" + kt + ", " + vt + ")" };
-    if (name == "keys" && n == 0 && !isset) { return gx_folded(rd_enc(rd_every(items, 0, 2, 0, ListBuf())), "List(" + kt + ")", mr.id, mch, ms); }
-    if (name == "values" && n == 0 && !isset) { return gx_folded(rd_enc(rd_every(items, 1, 2, 0, ListBuf())), "List(" + vt + ")", mr.id, mch, ms); }
-    if (name == "to_list" && n == 0 && isset) { return gx_folded(b.v, "List(" + kt + ")", mr.id, mch, ms); }
-    if (n == 0 || rd_coerce_v(a.ts[0], kt, a.vs[0]) != kt || rd_key_rank(a.vs[0], kt) < 0) { return none; }
-    Str k = a.vs[0];
+    if (name == "keys" && n == 0 && !isset) { return sv_scan(rd_enc(rd_every(items, 0, 2, 0, ListBuf())), "List(" + kt + ")", sc); }
+    if (name == "values" && n == 0 && !isset) { return sv_scan(rd_enc(rd_every(items, 1, 2, 0, ListBuf())), "List(" + vt + ")", sc); }
+    if (name == "to_list" && n == 0 && isset) { return sv_scan(bv, "List(" + kt + ")", sc); }
+    if (n == 0 || rd_coerce_v(ts[0], kt, vs[0]) != kt || rd_key_rank(vs[0], kt) < 0) { return sv_no(); }
+    Str k = vs[0];
     Int at = rd_map_find(items, k, stride, 0);
-    if (name == "contains" && n == 1) { return gx_folded(if (at >= 0) { "true" } else { "false" }, "Bool", mr.id, mch, ms); }
-    if (name == "get" && n == 1 && !isset) { return gx_folded(if (at >= 0) { "S" + items[at + 1] } else { "N" }, "Option(" + vt + ")", mr.id, mch, ms); }
-    if (name == "remove" && n == 1) { return gx_folded(rd_map_del(items, k, stride), mty, mr.id, mch, ms); }
-    if (name != "insert" || n != stride) { return none; }
-    if (!isset && rd_coerce_v(a.ts[1], vt, a.vs[1]) != vt) { return none; }
-    Str nv = rd_map_put(items, k, if (isset) { "" } else { a.vs[1] }, kt, stride);
-    if (nv == str_from_code(1)) { return none; }
-    return gx_folded(nv, mty, mr.id, mch, ms);
+    if (name == "contains" && n == 1) { return sv_scan(if (at >= 0) { "true" } else { "false" }, "Bool", sc); }
+    if (name == "get" && n == 1 && !isset) { return sv_scan(if (at >= 0) { "S" + items[at + 1] } else { "N" }, "Option(" + vt + ")", sc); }
+    if (name == "remove" && n == 1) { return sv_scan(rd_map_del(items, k, stride), mty, sc); }
+    if (name != "insert" || n != stride) { return sv_no(); }
+    if (!isset && rd_coerce_v(ts[1], vt, vs[1]) != vt) { return sv_no(); }
+    Str nv = rd_map_put(items, k, if (isset) { "" } else { vs[1] }, kt, stride);
+    if (nv == str_from_code(1)) { return sv_no(); }
+    return sv_scan(nv, mty, sc);
 }
 
 // push / push_char / finish on a known builder.
-GV gx_builder(Str name, Str bt, GV b, GXA a, GXN mr, Bool mch) {
-    GV none = gx_unk(mr.id, mch, mr.st);
-    Int n = a.ts.len();
+SV sem_builder(Str name, Str bt, Str bv, List(Str) vs, List(Str) ts) {
+    Int n = ts.len();
     if (bt == "StrBuf") {
-        if (name == "finish" && n == 0) { return gx_folded(b.v, "Str", mr.id, mch, mr.st); }
-        if (name == "push" && n == 1 && rd_norm_ty(a.ts[0]) == "Str") { return gx_folded(b.v + a.vs[0], "StrBuf", mr.id, mch, mr.st); }
-        if (name != "push_char" || n != 1 || !rd_is_int_ty(rd_norm_ty(a.ts[0])) || !rd_small(a.vs[0])) { return none; }
+        if (name == "finish" && n == 0) { return sv_of(bv, "Str"); }
+        if (name == "push" && n == 1 && rd_norm_ty(ts[0]) == "Str") { return sv_of(bv + vs[0], "StrBuf"); }
+        if (name != "push_char" || n != 1 || !rd_is_int_ty(rd_norm_ty(ts[0])) || !rd_small(vs[0])) { return sv_no(); }
         // A codepoint str_from_code would refuse stays residual.
-        Int cp = rd_atoi(a.vs[0]);
-        if (cp < 1 || cp > 1114111 || (cp >= 55296 && cp <= 57343)) { return none; }
-        return gx_folded(b.v + str_from_code(cp), "StrBuf", mr.id, mch, mr.st);
+        Int cp = rd_atoi(vs[0]);
+        if (cp < 1 || cp > 1114111 || (cp >= 55296 && cp <= 57343)) { return sv_no(); }
+        return sv_of(bv + str_from_code(cp), "StrBuf");
     }
     Str et = rd_inner(bt, "ListBuf(");
-    if (name == "finish" && n == 0) { return gx_folded(b.v, "List(" + et + ")", mr.id, mch, mr.st); }
-    if (name != "push" || n != 1) { return none; }
+    if (name == "finish" && n == 0) { return sv_of(bv, "List(" + et + ")"); }
+    if (name != "push" || n != 1) { return sv_no(); }
     // The first push of an untyped builder gives it the item's type.
-    Str it = rd_norm_ty(a.ts[0]);
-    Str et2 = if (et == "?") { if (str_contains(it, "?") || str_contains(it, "_")) { "" } else { it } } else { rd_coerce_v(it, et, a.vs[0]) };
-    if (et2 == "") { return none; }
+    Str it = rd_norm_ty(ts[0]);
+    Str et2 = if (et == "?") { if (str_contains(it, "?") || str_contains(it, "_")) { "" } else { it } } else { rd_coerce_v(it, et, vs[0]) };
+    if (et2 == "") { return sv_no(); }
     Str nt = if (et == "?") { et2 } else { et };
-    return gx_folded(b.v + rd_enc([a.vs[0]]), "ListBuf(" + nt + ")", mr.id, mch, mr.st);
+    return sv_of(rd_push(bv, vs[0]), "ListBuf(" + nt + ")");
 }
 
 List(Str) gx_rev(List(Str) xs, Int i, ListBuf(Str) acc) {
@@ -1029,22 +1081,10 @@ GV gx_index(GXT ft, Int id, RdE env, GS st) {
     Bool ich = b.ch || ix.ch;
     GXN ir = if (ich) { gx_re(ix.st, id, [b.r, ix.r]) } else { gx_n(ix.st, id) };
     GV none = gx_unk(ir.id, ich, ir.st);
-    // Known-list indexing; an out-of-range index aborts at run time.
     if (!b.k || !ix.k) { return none; }
-    // `m[k]` is `m.get(k)`.
-    if (str_starts_with(rd_norm_ty(b.ty), "Map(")) {
-        List(Int) ei = [];
-        GXA ka = GXA {.vs = [ix.v], .ts = [ix.ty], .rs = ei, .allk = true, .ch = false, .named = false, .bad = false, .st = ir.st, .lits = ei};
-        return gx_map_method("get", rd_norm_ty(b.ty), b, ka, ir, ich);
-    }
-    Str et = rd_inner(b.ty, "List(");
-    if (et == "" || et == "?") { return none; }
-    if (!rd_is_int_ty(rd_norm_ty(ix.ty)) || !rd_small(ix.v)) { return none; }
-    Int i = rd_atoi(ix.v);
-    if (i < 0) { return none; }
-    Str item = rd_nth(b.v, i);
-    if (item == str_from_code(1)) { return none; }
-    return gx_folded(item, et, ir.id, ich, gx_scan(ir.st, str_len(b.v)));
+    SV r = sem_index(ft, b.v, b.ty, ix.v, ix.ty);
+    if (!r.k) { return none; }
+    return gx_folded(r.v, r.ty, ir.id, ich, ir.st);
 }
 
 // `xs[lo..hi]` of a known list: the runtime clamps both bounds, so it
@@ -1053,7 +1093,7 @@ GV gx_slicev(GV b, GV lo, Bool hunk, Str hv, GXN sn, Bool sch) {
     GV none = gx_unk(sn.id, sch, sn.st);
     if (!b.k || !lo.k || hunk || rd_inner(b.ty, "List(") == "") { return none; }
     if (!rd_small(lo.v) || !rd_small(hv)) { return none; }
-    return gx_folded(rd_slice(b.v, rd_atoi(lo.v), rd_atoi(hv)), b.ty, sn.id, sch, gx_scan(sn.st, str_len(b.v)));
+    return gx_folded(rd_slice(b.v, rd_atoi(lo.v), rd_atoi(hv)), b.ty, sn.id, sch, sn.st);
 }
 
 // `xs[..]` / `xs[..hi]`.
@@ -1075,35 +1115,49 @@ GV gx_list(GXT ft, Int id, RdE env, GS st) {
     GXA el = gx_args(ft, id, 0, env, gx_args0(st));
     if (el.bad) { return gx_badv(el.st); }
     GXN lr = if (el.ch) { gx_re(el.st, id, el.rs) } else { gx_n(el.st, id) };
-    if (el.allk && !el.named) {
-        Str et0 = rd_norm_ty(el.ts[0]);
-        if (rd_same_tys(el.ts, et0, 1)) {
-            GV lv = gx_folded(rd_enc(el.vs), "List(" + et0 + ")", lr.id, el.ch, lr.st);
-            // An unchanged literal list keeps its own text.
-            if (!el.ch) { return gx_with_r(lv, id, false); }
-            return lv;
-        }
-    }
-    return gx_unk(lr.id, el.ch, lr.st);
+    SV l = if (el.allk && !el.named) { sem_list(el.vs, el.ts) } else { sv_no() };
+    if (!l.k) { return gx_unk(lr.id, el.ch, lr.st); }
+    GV lv = gx_folded(l.v, l.ty, lr.id, el.ch, lr.st);
+    // An unchanged literal list keeps its own text.
+    if (!el.ch) { return gx_with_r(lv, id, false); }
+    return lv;
 }
 
 // `Name {.f = e, ...}`: known when every field is; the value lists the
 // fields in declaration order.
 GV gx_struct(GXT ft, Int id, RdE env, GS st) {
     Str name = st.g.ns[id].text;
-    if (rd_env_idx(env, name) >= 0 || gx_struct_idx(ft, name, 0) < 0) { return gx_badv(st); }
+    Int si = ft.sidx.get(name) else { -1 };
+    if (rd_env_idx(env, name) >= 0 || si < 0) { return gx_badv(st); }
     GXA fa = gx_finits(ft, id, 0, env, gx_args0(st));
     if (fa.bad) { return gx_badv(fa.st); }
     GXN sr = if (fa.ch) { gx_re(fa.st, id, fa.rs) } else { gx_n(fa.st, id) };
     GV none = gx_unk(sr.id, fa.ch, sr.st);
-    if (!fa.allk) { return none; }
-    Str decl = ft.sfs[gx_struct_idx(ft, name, 0)];
-    if (decl == "") { return none; }
-    List(Str) dfs = str_split(decl, str_from_code(31));
-    List(Str) nv0 = [];
-    List(Str) vals = rd_field_order(dfs, fa.vs, fa.ts, 0, nv0);
-    if (vals.len() != dfs.len()) { return none; }
+    Int n = ft.snf[si];
+    if (!fa.allk || n == 0 || fa.vs.len() != n) { return none; }
+    List(Str) vals = gx_field_vals(ft, sr.st.g, id, name, fa.vs, fa.ts, 0, n, ListBuf());
+    if (vals.len() != n) { return none; }
     return gx_kv(rd_enc(vals), name, sr.id, fa.ch, sr.st);
+}
+
+// The initializers in declaration order; shorter when a field is missing
+// or a value does not fit its field.
+List(Str) gx_field_vals(GXT ft, Kg g, Int id, Str name, List(Str) vs, List(Str) ts, Int j, Int n, ListBuf(Str) acc) {
+    if (j >= n) { return acc.finish(); }
+    Int i = gx_init_for(ft, g, id, name, j, 0);
+    if (i < 0) { return acc.finish(); }
+    Str fty = ft.sft.get(name + str_from_code(31) + g.ns[kg_kid(g, id, i)].text) else { "" };
+    if (rd_coerce_v(ts[i], fty, vs[i]) == "") { return acc.finish(); }
+    return gx_field_vals(ft, g, id, name, vs, ts, j + 1, n, acc.push(vs[i]));
+}
+
+// Which initializer sets field j (written in order, it is the j-th).
+Int gx_init_for(GXT ft, Kg g, Int id, Str name, Int j, Int k) {
+    Int i = if (k == 0) { j } else { k - 1 };
+    if (i >= g.ns[id].nk) { return -1; }
+    if ((ft.sfx.get(name + str_from_code(31) + g.ns[kg_kid(g, id, i)].text) else { -1 }) == j) { return i; }
+    if (k == 0) { return gx_init_for(ft, g, id, name, j, 1); }
+    return gx_init_for(ft, g, id, name, j, k + 1);
 }
 
 GXA gx_finits(GXT ft, Int id, Int i, RdE env, GXA acc) {
@@ -1112,8 +1166,7 @@ GXA gx_finits(GXT ft, Int id, Int i, RdE env, GXA acc) {
     GV v = gx_expr(ft, gx_kid(acc.st, fi, 0), env, acc.st);
     if (v.bad) { return GXA {.vs = acc.vs, .ts = acc.ts, .rs = acc.rs, .allk = false, .ch = acc.ch, .named = false, .bad = true, .st = v.st, .lits = acc.lits}; }
     GXN piece = if (v.ch) { gx_re(v.st, fi, [v.r]) } else { gx_n(v.st, fi) };
-    Str fname = acc.st.g.ns[fi].text;
-    GXA a2 = GXA {.vs = acc.vs.concat([fname + str_from_code(30) + v.v]), .ts = acc.ts.concat([v.ty]), .rs = acc.rs.concat([piece.id]), .allk = acc.allk && v.k, .ch = acc.ch || v.ch, .named = false, .bad = false, .st = piece.st, .lits = acc.lits};
+    GXA a2 = GXA {.vs = acc.vs.concat([v.v]), .ts = acc.ts.concat([v.ty]), .rs = acc.rs.concat([piece.id]), .allk = acc.allk && v.k, .ch = acc.ch || v.ch, .named = false, .bad = false, .st = piece.st, .lits = acc.lits};
     return gx_finits(ft, id, i + 1, env, a2);
 }
 
@@ -1165,8 +1218,6 @@ GV gx_ifx(GXT ft, Int id, RdE env, GS st) {
             GXN p0 = gx_paren(x.st, x.r, id);
             return gx_unk(p0.id, true, p0.st);
         }
-        // While β-reducing an unknown arm fails the call anyway.
-        if (x.st.depth > 0) { return gx_unk(id, false, x.st); }
         return gx_ifx_full(ft, id, env, c, gx_with_g(c.st, x.st.g));
     }
     return gx_ifx_full(ft, id, env, c, c.st);
@@ -1251,7 +1302,6 @@ RdE gx_arm_env(GS st, Int arm, GXS sv, Int i, Int nb, RdE env) {
 // Every arm reduced with its names unknown (at depth 0 only: while
 // β-reducing an unknown match fails the call anyway).
 GV gx_match_resid(GXT ft, Int id, RdE env, GV sc) {
-    if (sc.st.depth > 0) { return gx_unk(id, false, sc.st); }
     GXA arms = gx_match_arms(ft, id, 1, env, gx_args0(sc.st));
     if (arms.bad) { return gx_unk(id, false, gx_with_g(sc.st, arms.st.g)); }
     if (!sc.ch && !arms.ch) { return gx_unk(id, false, arms.st); }
@@ -1300,9 +1350,9 @@ GXF gx_fst_scan(GXT ft, Int id, Int i, RdE env, GXF acc) {
     // would use are called in-process, so there is one implementation of
     // what a spec means. A hole whose value is unknown still goes residual.
     Bool specd = i + 1 < n && gx_kind(acc.st, gx_kid(acc.st, id, i + 1)) == "fspec";
-    Str txt = if (v.k) { gx_fst_text(v) } else { "" };
+    Str txt = if (v.k) { gx_fst_text(v.ty, v.v) } else { "" };
     if (specd) {
-        Str sp = gx_fst_spec(v, txt, acc.st.g.ns[gx_kid(acc.st, id, i + 1)].text);
+        Str sp = gx_fst_spec(v.k, v.ty, txt, acc.st.g.ns[gx_kid(acc.st, id, i + 1)].text);
         if (sp == "") { return gx_fst_bad(acc, v.st); }
         GXF ak = GXF {.allk = acc.allk && v.k, .ch = acc.ch || v.ch, .bad = false, .val = acc.val + sp, .pend = acc.pend + rd_fst_escape(sp), .parts = acc.parts, .st = v.st};
         return gx_fst_scan(ft, id, i + 2, env, ak);
@@ -1337,9 +1387,9 @@ GXF gx_fst_lit(Str t, Int i, Int n, GXF a) {
     return gx_fst_lit(t, i + 1, n, a3);
 }
 
-Str gx_fst_text(GV v) {
-    Str t = rd_norm_ty(v.ty);
-    if (t == "Str" || rd_is_int_ty(t) || t == "Bool") { return v.v; }
+Str gx_fst_text(Str ty, Str v) {
+    Str t = rd_norm_ty(ty);
+    if (t == "Str" || rd_is_int_ty(t) || t == "Bool") { return v; }
     return "";
 }
 
@@ -1349,11 +1399,11 @@ Str gx_fst_text(GV v) {
 // worth building at compile time). The order of operations is the one the
 // lowering uses (spec §14): radix, then grouping, then case, then sign,
 // then width.
-Str gx_fst_spec(GV v, Str txt, Str spectext) {
+Str gx_fst_spec(Bool k, Str vty, Str txt, Str spectext) {
     Fsp fs = fs_parse_compat(spectext);
     if (fs.err != "") { return ""; }
-    Str ty = rd_norm_ty(v.ty);
-    if (!v.k) { return ""; }
+    Str ty = rd_norm_ty(vty);
+    if (!k) { return ""; }
     // A Float's own text depends on its value, not on its digits, so a
     // style or a precision needs the value; the reducer carries Floats
     // as a bit pattern and not as text, so those stay residual.
@@ -1394,12 +1444,6 @@ GV gx_call_user(GXT ft, Int fi, GXA a, Int orig, GS st) {
     Int bk = ft.fbody[fi];
     if (bk < 0) { return none; }
     if (st.fuel <= 0) { return gx_unk(orig, a.ch, gx_reason(gx_spent(st), orig, "budget(fuel)")); }
-    if (st.depth >= ft.rb.depth) { return gx_unk(orig, a.ch, gx_spent(st)); }
-    // Near the end of the compiler's stack the build fails rather than
-    // leaving the call residual: how much stack there is is not a budget
-    // (it depends on RESID_STACK_MB), and a budget is all that may decide.
-    Int left = resid_stack_left();
-    if (left >= 0 && left < 16777216) { return gx_unk(orig, a.ch, gx_stack_err(ft, orig, ft.fnames[fi], st)); }
     Str name = ft.fnames[fi];
     Str key = rd_memo_key(name, gx_rda(a, ft.rds));
     Str hit = st.memo.get(key) else { "" };
@@ -1409,10 +1453,7 @@ GV gx_call_user(GXT ft, Int fi, GXA a, Int orig, GS st) {
         Int sp = str_find_char(hit, 31, 0);
         return gx_folded_r(str_slice(hit, sp + 1, str_len(hit)), str_slice(hit, 0, sp), orig, a.ch, st, "beta");
     }
-    if (st.depth == 0) { return gx_top(ft, fi, a, orig, key, hit, st); }
-    GXC c = gx_eval_call(ft, fi, a, key, st);
-    if (!c.ok) { return gx_unk(orig, a.ch, c.st); }
-    return gx_folded_r(c.v, c.ty, orig, a.ch, c.st, "beta");
+    return gx_top(ft, fi, a, orig, key, hit, st);
 }
 
 // A call evaluated in full: its value and type, or why not (spent: a
@@ -1420,98 +1461,10 @@ GV gx_call_user(GXT ft, Int fi, GXA a, Int orig, GS st) {
 type GXC = { Bool ok; Str v; Str ty; Bool spent; GS st; };
 
 GXC gx_eval_call(GXT ft, Int fi, GXA a, Str key, GS st) {
-    GXC fail = GXC {.ok = false, .v = "", .ty = "", .spent = false, .st = st};
-    List(Str) pns = rd_split(ft.fpns[fi], ",");
-    List(Str) pts = rd_split(ft.fpts[fi], "|");
-    if (pns.len() != a.ts.len()) { return fail; }
-    RdE env = rd_bind_params(pns, pts, gx_rda(a, ft.rds), 0, rd_env_empty());
-    if (env.ns.len() == 1 && env.ns[0] == "") { return fail; }
-    // "?" marks the call in progress: an identical re-entry stays residual.
-    GS inner = gx_cost(gx_st_depth(gx_st_memo(st, key, "?"), st.depth + 1, st.hist), rd_call_bytes(), 0);
-    GXR res = gx_tramp(ft, fi, gx_stmts(ft, ft.fbody[fi], 0, env, inner));
-    // The body's residual nodes stay unused (restoring the older graph
-    // would make the next append copy it).
-    GS after = gx_st_depth(res.st, st.depth, st.hist);
-    Bool spent = res.st.bx > st.bx;
-    Str cty = if (res.ret && res.ok && !res.bad) { rd_coerce_v(res.rty, rd_norm_ty(ft.frets[fi]), res.rv) } else { "" };
-    if (cty == "") {
-        // Out of budget is not a property of the call: "~" allows a retry.
-        return GXC {.ok = false, .v = "", .ty = "", .spent = spent, .st = gx_st_memo(after, key, if (spent) { "~" } else { "!" })};
-    }
-    return GXC {.ok = true, .v = res.rv, .ty = cty, .spent = false, .st = gx_st_memo(after, key, cty + str_from_code(31) + res.rv)};
-}
-
-// Tail calls while β-reducing run here one after another, at the depth of
-// the call that made the first: tail recursion takes no stack, and only
-// the first call is memoized.
-GXR gx_tramp(GXT ft, Int fi, GXR r) {
-    // A tail call is followed only when every statement before it was
-    // decided (ok): after an `if` on an unknown condition the body may
-    // already have returned something else.
-    if (r.bad || r.tfi < 0 || !r.ok) { return gx_ret_as(ft, fi, r); }
-    Str err = r.st.memo.get("__ERR__") else { "" };
-    GXH h = gx_hop(ft, r.st, r.tfi, r.tvs, r.tts, GXH {.how = 0, .v = "", .ty = "", .steps = r.st.steps, .fuel = r.st.fuel, .mem = r.st.mem, .bx = r.st.bx, .err = err});
-    GS s1 = gx_st_count(r.st, h);
-    if (h.how == 2) { return gx_rbad(s1); }
-    if (h.how == 1) { return gx_mk(gx_none(), true, true, true, h.v, h.ty, s1); }
-    return gx_mk0(false, s1);
-}
-
-// What gx_tramp's loop carries and returns: how it ended (0 running or no
-// value, 1 a value, 2 not reducible), the value, and the counters.
-type GXH = { Int how; Str v; Str ty; Int steps; Int fuel; Int mem; Int bx; Str err; };
-
-GXH gx_hend(GXH c, Int how, Str v, Str ty, GS st) {
-    Str err = st.memo.get("__ERR__") else { "" };
-    return GXH {.how = how, .v = v, .ty = ty, .steps = st.steps, .fuel = st.fuel, .mem = st.mem, .bx = st.bx, .err = err};
-}
-
-// One hop of gx_tramp's loop: g(vs: ts) from st with c's counters. st does
-// not change from hop to hop and only scalars, text and the arguments are
-// carried, so the loop gets a region of its own (lower.resid lr_region)
-// and each hop's garbage is compacted away: a loop keeps its arguments, not
-// its history. A hop's memo entries are dropped with it.
-GXH gx_hop(GXT ft, GS st, Int g, List(Str) vs, List(Str) ts, GXH c) {
-    GS s0 = gx_st_count(st, c);
-    if (ft.fbody[g] < 0) { return gx_hend(c, 0, "", "", s0); }
-    // No memo lookup: a hop is the next step of a loop, rarely a call
-    // made before, and the key would copy every argument.
-    RdA ra = RdA {.vs = vs, .ts = ts, .rs = gx_nos(), .allk = true, .ch = false, .named = false, .bad = false, .pos = 0, .st = ft.rds};
-    if (gx_over(s0)) { return gx_hend(c, 0, "", "", gx_spent(s0)); }
-    List(Str) pns = rd_split(ft.fpns[g], ",");
-    if (pns.len() != ts.len()) { return gx_hend(c, 0, "", "", s0); }
-    RdE env = rd_bind_params(pns, rd_split(ft.fpts[g], "|"), ra, 0, rd_env_empty());
-    if (env.ns.len() == 1 && env.ns[0] == "") { return gx_hend(c, 0, "", "", s0); }
-    GXR n0 = gx_stmts(ft, ft.fbody[g], 0, env, s0);
-    if (n0.bad) { return gx_hend(c, 2, "", "", n0.st); }
-    if (n0.tfi < 0 || !n0.ok) {
-        GXR n = gx_ret_as(ft, g, n0);
-        return gx_hend(c, if (n.ret && n.ok) { 1 } else { 0 }, n.rv, n.rty, n.st);
-    }
-    // The meter goes back to where the loop began, less the arguments:
-    // they are all a hop keeps.
-    GXH k = gx_hend(c, 0, "", "", n0.st);
-    GXH k2 = GXH {.how = 0, .v = "", .ty = "", .steps = k.steps, .fuel = k.fuel, .mem = st.mem - gx_lens(n0.tvs, 0, 0), .bx = k.bx, .err = k.err};
-    return gx_hop(ft, st, n0.tfi, n0.tvs, n0.tts, k2);
-}
-
-// st with the counters (and error) a hop carries.
-GS gx_st_count(GS s, GXH c) {
-    Map(Str, Str) m = if (c.err != "") { s.memo.insert("__ERR__", c.err) } else { s.memo };
-    return GS {.steps = c.steps, .depth = s.depth, .fuel = c.fuel, .memo = m, .specs = s.specs, .nspec = s.nspec, .hist = s.hist, .notes = s.notes, .g = s.g, .dn = s.dn, .df = s.df, .dr = s.dr, .rs = s.rs, .lim = s.lim, .mem = c.mem, .bx = c.bx};
-}
-
-Int gx_lens(List(Str) xs, Int i, Int acc) {
-    if (i >= xs.len()) { return acc; }
-    return gx_lens(xs, i + 1, acc + str_len(xs[i]));
-}
-
-// A returned value coerced to fi's declared result.
-GXR gx_ret_as(GXT ft, Int fi, GXR r) {
-    if (r.bad || !r.ret || !r.ok) { return r; }
-    Str cty = rd_coerce_v(r.rty, rd_norm_ty(ft.frets[fi]), r.rv);
-    if (cty == "") { return gx_mk0(false, r.st); }
-    return gx_mk(r.out, true, true, true, r.rv, cty, r.st);
+    GY y = GY {.steps = st.steps, .depth = st.depth, .fuel = st.fuel, .lim = st.lim, .mem = st.mem, .bx = st.bx, .memo = st.memo};
+    YC r = gy_eval_call(GYC {.ft = ft, .g = st.g}, fi, a.vs, a.ts, key, y);
+    GS s2 = GS {.steps = r.st.steps, .depth = st.depth, .fuel = r.st.fuel, .memo = r.st.memo, .specs = st.specs, .nspec = st.nspec, .hist = st.hist, .notes = st.notes, .g = st.g, .dn = st.dn, .df = st.df, .dr = st.dr, .rs = st.rs, .lim = st.lim, .mem = r.st.mem, .bx = r.st.bx};
+    return GXC {.ok = r.ok, .v = r.v, .ty = r.ty, .spent = r.spent, .st = s2};
 }
 
 // A call at depth 0. Each attempt runs in its own bulk arena, so its garbage
@@ -1556,13 +1509,6 @@ GV gx_attempt(GXT ft, Int fi, GXA a, Int orig, Str key, Int lim, Int cap, GS st)
     return gx_unk(orig, a.ch, gx_reason(s2, orig, "budget(" + what + ")"));
 }
 
-GS gx_stack_err(GXT ft, Int orig, Str name, GS st) {
-    Str prev = st.memo.get("__ERR__") else { "" };
-    if (prev != "") { return gx_spent(st); }
-    Int line = str_count(str_slice(ft.src, 0, st.g.ns[orig].sp), "\n") + 1;
-    return gx_spent(gx_st_memo(st, "__ERR__", "error[E0902]: compile-time evaluation of " + name + f"(...) at line {line} nests {st.depth} calls deep and would run past the compiler's stack: raise RESID_STACK_MB, or bound the reduction (--reduce-budget N)"));
-}
-
 // Whether the top-level function being reduced is itself `@fold`.
 Bool gx_in_fold(GXT ft, GS st) {
     Int ci = ft.fidx.get(st.memo.get(gx_cur_key()) else { "" }) else { -1 };
@@ -1578,10 +1524,6 @@ GS gx_fold_err(GXT ft, Int orig, Str name, Str why, GS st) {
     return gx_st_memo(st, "__ERR__", "error[E0903]: @fold function " + name + f": the call at line {line} must reduce at compile time, but " + msg);
 }
 
-GS gx_st_depth(GS s, Int depth, List(Str) hist) {
-    return GS {.steps = s.steps, .depth = depth, .fuel = s.fuel, .memo = s.memo, .specs = s.specs, .nspec = s.nspec, .hist = hist, .notes = s.notes, .g = s.g, .dn = s.dn, .df = s.df, .dr = s.dr, .rs = s.rs, .lim = s.lim, .mem = s.mem, .bx = s.bx};
-}
-
 GS gx_st_attempt(GS s, Int lim, Int mem, Int fuel) {
     return GS {.steps = 0, .depth = s.depth, .fuel = fuel, .memo = s.memo, .specs = s.specs, .nspec = s.nspec, .hist = s.hist, .notes = s.notes, .g = s.g, .dn = s.dn, .df = s.df, .dr = s.dr, .rs = s.rs, .lim = lim, .mem = mem, .bx = 0};
 }
@@ -1593,21 +1535,6 @@ GS gx_st_fuel(GS s, Int fuel) {
 // A budget ran out here.
 GS gx_spent(GS s) {
     return GS {.steps = s.steps, .depth = s.depth, .fuel = s.fuel, .memo = s.memo, .specs = s.specs, .nspec = s.nspec, .hist = s.hist, .notes = s.notes, .g = s.g, .dn = s.dn, .df = s.df, .dr = s.dr, .rs = s.rs, .lim = s.lim, .mem = s.mem, .bx = s.bx + 1};
-}
-
-Bool gx_over(GS s) { return s.steps > s.lim || s.fuel <= 0 || s.mem <= 0; }
-
-// A value of n bytes made while β-reducing: n on the memory meter, and a
-// step per 256 bytes (copying text is work too).
-GS gx_charge(GS s, Int n) { return gx_cost(s, n, n >> 8); }
-
-// An encoded value of n bytes read through: a step per 32 bytes walked,
-// and its decoding on the meter.
-GS gx_scan(GS s, Int n) { return gx_cost(s, n, n >> 5); }
-
-GS gx_cost(GS s, Int n, Int k) {
-    if (s.depth == 0) { return s; }
-    return GS {.steps = s.steps + k, .depth = s.depth, .fuel = s.fuel - k, .memo = s.memo, .specs = s.specs, .nspec = s.nspec, .hist = s.hist, .notes = s.notes, .g = s.g, .dn = s.dn, .df = s.df, .dr = s.dr, .rs = s.rs, .lim = s.lim, .mem = s.mem - n, .bx = s.bx};
 }
 
 // Specialization pattern (RdSp) with residual argument nodes; kbty/klit
@@ -1746,7 +1673,7 @@ GV gx_sp_call(Str sname, GXP p, Int co, GS st) {
 // ─── Statements ─────────────────────────────────────────────────────
 
 GXR gx_mk(List(Int) out, Bool dead, Bool ok, Bool ret, Str rv, Str rty, GS st) {
-    return GXR {.out = out, .dead = dead, .ok = ok, .ret = ret, .rv = rv, .rty = rty, .bad = false, .st = st, .tfi = -1, .tvs = gx_nos(), .tts = gx_nos()};
+    return GXR {.out = out, .dead = dead, .ok = ok, .ret = ret, .rv = rv, .rty = rty, .bad = false, .st = st};
 }
 
 GXR gx_mk0(Bool ok, GS st) {
@@ -1756,38 +1683,28 @@ GXR gx_mk0(Bool ok, GS st) {
 
 GXR gx_rbad(GS st) {
     List(Int) e = [];
-    return GXR {.out = e, .dead = false, .ok = false, .ret = false, .rv = "", .rty = "", .bad = true, .st = st, .tfi = -1, .tvs = gx_nos(), .tts = gx_nos()};
+    return GXR {.out = e, .dead = false, .ok = false, .ret = false, .rv = "", .rty = "", .bad = true, .st = st};
 }
 
 // One statement's nodes followed by the rest of the block.
 GXR gx_then(List(Int) text, Bool ok, GXR rest) {
-    return GXR {.out = text.concat(rest.out), .dead = rest.dead, .ok = ok && rest.ok, .ret = rest.ret, .rv = rest.rv, .rty = rest.rty, .bad = rest.bad, .st = rest.st, .tfi = rest.tfi, .tvs = rest.tvs, .tts = rest.tts};
+    return GXR {.out = text.concat(rest.out), .dead = rest.dead, .ok = ok && rest.ok, .ret = rest.ret, .rv = rest.rv, .rty = rest.rty, .bad = rest.bad, .st = rest.st};
 }
 
 // A new statement node made after the rest was reduced.
 GXR gx_then_n(GXN n, Bool ok, GXR rest) {
-    return GXR {.out = [n.id].concat(rest.out), .dead = rest.dead, .ok = ok && rest.ok, .ret = rest.ret, .rv = rest.rv, .rty = rest.rty, .bad = rest.bad, .st = n.st, .tfi = rest.tfi, .tvs = rest.tvs, .tts = rest.tts};
+    return GXR {.out = [n.id].concat(rest.out), .dead = rest.dead, .ok = ok && rest.ok, .ret = rest.ret, .rv = rest.rv, .rty = rest.rty, .bad = rest.bad, .st = n.st};
 }
 
 // A statement ending the block: the rest is unreachable and dropped.
 GXR gx_dead(List(Int) text, GXR r0) {
-    return GXR {.out = text, .dead = true, .ok = r0.ok, .ret = r0.ret, .rv = r0.rv, .rty = r0.rty, .bad = false, .st = r0.st, .tfi = r0.tfi, .tvs = r0.tvs, .tts = r0.tts};
-}
-
-GS gx_tick(GS st) {
-    if (st.depth == 0) { return st; }
-    return GS {.steps = st.steps + 1, .depth = st.depth, .fuel = st.fuel - 1, .memo = st.memo, .specs = st.specs, .nspec = st.nspec, .hist = st.hist, .notes = st.notes, .g = st.g, .dn = st.dn, .df = st.df, .dr = st.dr, .rs = st.rs, .lim = st.lim, .mem = st.mem - rd_step_bytes(), .bx = st.bx};
+    return GXR {.out = text, .dead = true, .ok = r0.ok, .ret = r0.ret, .rv = r0.rv, .rty = r0.rty, .bad = false, .st = r0.st};
 }
 
 // Statements of block `blk` from kid i (rd_stmts).
-GXR gx_stmts(GXT ft, Int blk, Int i, RdE env, GS st0) {
-    Int n = gx_nk(st0, blk);
-    if (i >= n) { return gx_mk0(true, st0); }
-    GS st = gx_tick(st0);
-    if (st.depth > 0 && gx_over(st)) {
-        List(Int) ks = gx_kids(st.g, blk);
-        return gx_mk(ks[i..n], false, false, false, "", "", gx_spent(st));
-    }
+GXR gx_stmts(GXT ft, Int blk, Int i, RdE env, GS st) {
+    Int n = gx_nk(st, blk);
+    if (i >= n) { return gx_mk0(true, st); }
     Int id = gx_kid(st, blk, i);
     KN nd = st.g.ns[id];
     Str k = nd.kind;
@@ -1795,7 +1712,6 @@ GXR gx_stmts(GXT ft, Int blk, Int i, RdE env, GS st0) {
     if (k == "discard") {
         GV v = gx_expr(ft, gx_kid(st, id, 0), env, st);
         if (v.bad) { return gx_rbad(v.st); }
-        if (v.px == -2) { return gx_early_ret(v); }
         GXR rest = gx_stmts(ft, blk, i + 1, env, v.st);
         List(Int) e = [];
         if (v.k) { return gx_then(e, true, rest); }
@@ -1848,80 +1764,19 @@ pub List(Int) gx_none() {
 
 GXR gx_ret(GXT ft, Int id, RdE env, GS st) {
     if (gx_nk(st, id) == 0) { return gx_dead([id], gx_mk(gx_none(), true, true, false, "", "", st)); }
-    if (st.depth > 0) { return gx_tail(ft, gx_kid(st, id, 0), env, st); }
     GV v = gx_expr(ft, gx_kid(st, id, 0), env, st);
     if (v.bad) { return gx_rbad(v.st); }
     GXN r = if (v.ch) { gx_re(v.st, id, [v.r]) } else { gx_n(v.st, id) };
     return gx_dead([r.id], gx_mk(gx_none(), true, v.k, v.k, v.v, v.ty, r.st));
 }
 
-// `return e` while β-reducing: a call of a user function with known
-// arguments (through parens and known conditions) comes back as a tail
-// call for gx_tramp; anything else is evaluated here.
-GXR gx_tail(GXT ft, Int id, RdE env, GS st) {
-    Str k = gx_kind(st, id);
-    if (k == "paren") { return gx_tail(ft, gx_kid(st, id, 0), env, st); }
-    if ((k == "ifx" && gx_nk(st, id) == 3) || k == "tern") {
-        GV c = gx_expr(ft, gx_kid(st, id, 0), env, st);
-        if (c.bad) { return gx_rbad(c.st); }
-        // An unknown condition fails the call.
-        if (!c.k || (c.v != "true" && c.v != "false")) { return gx_tval(gx_unk(id, false, c.st)); }
-        Int x = gx_kid(st, id, if (c.v == "true") { 1 } else { 2 });
-        if (k == "tern" || gx_kind(st, x) == "ifx") { return gx_tail(ft, x, env, c.st); }
-        return gx_tail_eb(ft, x, 0, env, c.st);
-    }
-    if (k == "call") { return gx_tail_call(ft, id, env, st); }
-    return gx_tval(gx_expr(ft, id, env, st));
-}
-
-// An arm `{ [T name = e;]* tail }` in tail position. It recurses through
-// gx_tail_ebk rather than looping: a loop would get a region of its own
-// (lower.resid lr_region), one per nested call evaluated in its tail.
-GXR gx_tail_eb(GXT ft, Int bx, Int i, RdE env, GS st) { return gx_tail_ebk(ft, bx, i, env, st); }
-
-GXR gx_tail_ebk(GXT ft, Int bx, Int i, RdE env, GS st) {
-    Int kid = gx_kid(st, bx, i);
-    if (i == gx_nk(st, bx) - 1) { return gx_tail(ft, kid, env, st); }
-    if (gx_kind(st, kid) != "bind") { return gx_rbad(st); }
-    GV v = gx_expr(ft, gx_kid(st, kid, 1), env, st);
-    if (v.bad) { return gx_rbad(v.st); }
-    Str cty = if (v.k) { rd_coerce_v(v.ty, st.g.ns[gx_kid(st, kid, 0)].text, v.v) } else { "" };
-    Str name = st.g.ns[kid].text;
-    RdE env2 = if (cty != "") { rd_env_add(env, name, v.v, cty) } else { rd_env_add(env, name, "", "") };
-    return gx_tail_eb(ft, bx, i + 1, env2, v.st);
-}
-
-GXR gx_tail_call(GXT ft, Int id, RdE env, GS st) {
-    Str name = st.g.ns[id].text;
-    Int ufi = ft.fidx.get(name) else { -1 };
-    if (ufi < 0 || name == "Some" || rd_env_idx(env, name) >= 0) { return gx_tval(gx_expr(ft, id, env, st)); }
-    GXA a = gx_args(ft, id, 0, env, gx_args0(st));
-    if (a.bad) { return gx_rbad(a.st); }
-    if (!a.allk || a.named) { return gx_tval(gx_unk(id, false, a.st)); }
-    RdV bv = rd_builtin(name, gx_rda(a, ft.rds), "", 0, ft.rds);
-    if (bv.k) { return gx_tval(gx_folded_r(bv.v, bv.ty, id, false, a.st, "eval")); }
-    if (ft.fbody[ufi] < 0) { return gx_tval(gx_unk(id, false, a.st)); }
-    GXR t = gx_mk(gx_none(), true, true, true, "", "", a.st);
-    return GXR {.out = t.out, .dead = true, .ok = true, .ret = true, .rv = "", .rty = "", .bad = false, .st = a.st, .tfi = ufi, .tvs = a.vs, .tts = a.ts};
-}
-
-// A returned value, as gx_ret makes it.
-GXR gx_tval(GV v) {
-    if (v.bad) { return gx_rbad(v.st); }
-    if (v.px == -2) { return gx_early_ret(v); }
-    return gx_dead(gx_none(), gx_mk(gx_none(), true, v.k, v.k, v.v, v.ty, v.st));
-}
-
 GXR gx_estmt(GXT ft, Int blk, Int i, Int id, RdE env, GS st) {
     Int ek = gx_kid(st, id, 0);
     Str cn = if (gx_kind(st, ek) == "call") { st.g.ns[ek].text } else { "" };
-    if (st.depth == 0) {
-        if (cn == "comptime_print") { return gx_cprint(ft, blk, i, ek, env, st); }
-        if (cn == "known" && !rd_list_has(ft.fnames, "known", 0)) { return gx_known(ft, blk, i, ek, env, st); }
-    }
+    if (cn == "comptime_print") { return gx_cprint(ft, blk, i, ek, env, st); }
+    if (cn == "known" && !rd_list_has(ft.fnames, "known", 0)) { return gx_known(ft, blk, i, ek, env, st); }
     GV e = gx_expr(ft, ek, env, st);
     if (e.bad) { return gx_rbad(e.st); }
-    if (e.px == -2) { return gx_early_ret(e); }
     GXR rest = gx_stmts(ft, blk, i + 1, env, e.st);
     if (e.k) { return gx_then(gx_none(), true, rest); }
     GXN en = if (e.ch) { gx_re(rest.st, id, [e.r]) } else { gx_n(rest.st, id) };
@@ -1974,7 +1829,6 @@ GXR gx_bind(GXT ft, Int blk, Int i, Int id, RdE env, GS st) {
     Str name = st.g.ns[id].text;
     GV v0 = gx_expr(ft, gx_kid(st, id, 1), env, st);
     if (v0.bad) { return gx_rbad(v0.st); }
-    if (v0.px == -2) { return gx_early_ret(v0); }
     // A known value bound to a constraint type discharges the constraint
     // now: false is error E0301.
     Int ci = gx_ct_idx(ft.cts, ty, 0);
@@ -2016,7 +1870,7 @@ GXR gx_block(GXT ft, Int bk, RdE env, GS st) {
     GXR inner = gx_stmts(ft, bk, 0, env, st);
     if (inner.bad) { return inner; }
     GXN b = gx_re(inner.st, bk, inner.out);
-    return GXR {.out = [b.id], .dead = inner.dead, .ok = inner.ok, .ret = inner.ret, .rv = inner.rv, .rty = inner.rty, .bad = false, .st = b.st, .tfi = inner.tfi, .tvs = inner.tvs, .tts = inner.tts};
+    return GXR {.out = [b.id], .dead = inner.dead, .ok = inner.ok, .ret = inner.ret, .rv = inner.rv, .rty = inner.rty, .bad = false, .st = b.st};
 }
 
 // Names a `(Pat = e)` header binds, unknown in env (rd_pat_env over the
@@ -2037,7 +1891,6 @@ GXR gx_ifstmt(GXT ft, Int id, RdE env, GS st) {
     Int ek = if (hasel) { gx_kid(st, id, 2) } else { -1 };
     Bool elif = hasel && gx_kind(st, ek) == "if";
     if (gx_kind(st, ck) == "pat") {
-        if (st.depth > 0) { return gx_mk([id], false, false, false, "", "", st); }
         // The header stays; the then-arm is reduced with the pattern's
         // names unknown, the rest of the chain as usual.
         GXR la = gx_block(ft, tk, gx_pat_env(ft, id, env, st), st);
@@ -2060,7 +1913,7 @@ GXR gx_ifstmt(GXT ft, Int id, RdE env, GS st) {
     GXR b = if (!hasel) { gx_mk0(true, a.st) } else if (elif) { gx_ifstmt(ft, ek, env, a.st) } else { gx_block(ft, ek, env, a.st) };
     if (b.bad) { return b; }
     if (c.k) {
-        if (c.v == "true") { return GXR {.out = a.out, .dead = a.dead, .ok = a.ok, .ret = a.ret, .rv = a.rv, .rty = a.rty, .bad = false, .st = b.st, .tfi = a.tfi, .tvs = a.tvs, .tts = a.tts}; }
+        if (c.v == "true") { return GXR {.out = a.out, .dead = a.dead, .ok = a.ok, .ret = a.ret, .rv = a.rv, .rty = a.rty, .bad = false, .st = b.st}; }
         if (!hasel) { return gx_mk0(true, b.st); }
         return b;
     }
@@ -2074,7 +1927,6 @@ GXR gx_while(GXT ft, Int blk, Int i, Int id, RdE env, GS st) {
     Int ck = gx_kid(st, id, 0);
     Int bk = gx_kid(st, id, 1);
     if (gx_kind(st, bk) != "block") { return gx_rbad(st); }
-    if (st.depth > 0) { return gx_then([id], false, gx_stmts(ft, blk, i + 1, env, st)); }
     if (gx_kind(st, ck) == "pat") {
         GXR lb = gx_block(ft, bk, gx_pat_env(ft, id, env, st), st);
         if (lb.bad) { return gx_then([id], false, gx_stmts(ft, blk, i + 1, env, lb.st)); }
@@ -2096,7 +1948,6 @@ GXR gx_with(GXT ft, Int blk, Int i, Int id, RdE env, GS st) {
     Int n = gx_nk(st, id);
     Int bk = gx_kid(st, id, n - 1);
     if (gx_kind(st, bk) != "block") { return gx_rbad(st); }
-    if (st.depth > 0) { return gx_then([id], false, gx_stmts(ft, blk, i + 1, env, st)); }
     Str src = gx_pr(st, id);
     Tok kw = lex_tok(src, 0);
     Tok wo = lex_tok(src, kw.pos);
@@ -2111,63 +1962,844 @@ GXR gx_with(GXT ft, Int blk, Int i, Int id, RdE env, GS st) {
 GXR gx_for(GXT ft, Int blk, Int i, Int id, RdE env, GS st) {
     Int bk = gx_kid(st, id, 2);
     if (gx_kind(st, bk) != "block") { return gx_rbad(st); }
-    if (st.depth > 0) {
-        GXR fr = gx_for_eval(ft, id, env, st);
-        if (fr.ok && !fr.bad) {
-            if (fr.ret) { return gx_dead(gx_none(), fr); }
-            return gx_then(gx_none(), true, gx_stmts(ft, blk, i + 1, env, fr.st));
-        }
-        return gx_then([id], false, gx_stmts(ft, blk, i + 1, env, fr.st));
-    }
-    // Outside β-reduction the loop runs at run time: the header stays and
-    // the body is reduced with the loop variable unknown.
+    // The loop runs at run time: the header stays and the body is reduced
+    // with the loop variable unknown.
     GXR fb = gx_block(ft, bk, rd_env_add(env, st.g.ns[id].text, "", ""), st);
     if (fb.bad) { return gx_then([id], false, gx_stmts(ft, blk, i + 1, env, fb.st)); }
     GXN f = gx_re(fb.st, id, [gx_kid(st, id, 0), gx_kid(st, id, 1)].concat(fb.out));
     return gx_then([f.id], false, gx_stmts(ft, blk, i + 1, env, f.st));
 }
 
-// Iterate a known list or range while β-reducing (rd_for_eval).
-GXR gx_for_eval(GXT ft, Int id, RdE env, GS st) {
-    GXR fail = gx_mk0(false, st);
-    Str name = st.g.ns[id].text;
-    Str vty = rd_norm_ty(st.g.ns[gx_kid(st, id, 0)].text);
-    Int it = gx_kid(st, id, 1);
-    Int bk = gx_kid(st, id, 2);
-    KN itn = st.g.ns[it];
-    if (itn.kind == "bin" && (itn.text == ".." || itn.text == "..=")) {
-        GV a = gx_expr(ft, gx_kid(st, it, 0), env, st);
-        if (a.bad || !a.k || !rd_small(a.v)) { return fail; }
-        GV b = gx_expr(ft, gx_kid(st, it, 1), env, a.st);
-        if (b.bad || !b.k || !rd_small(b.v)) { return fail; }
-        if (!rd_is_int_ty(rd_norm_ty(a.ty)) || !rd_is_int_ty(rd_norm_ty(b.ty)) || !rd_is_int_ty(vty)) { return fail; }
-        Int lo = rd_atoi(a.v);
-        Int hi0 = rd_atoi(b.v);
-        Int hi = if (itn.text == "..=") { hi0 } else { hi0 - 1 };
-        return gx_for_range(ft, bk, name, vty, lo, hi, env, b.st);
+// ─── The evaluator ──────────────────────────────────────────────────
+//
+// A call whose arguments are all known is evaluated here (β-reduction),
+// on values alone: no residual is built, and the first unknown value
+// fails the call (a failed call's work is never used). Budgets are the
+// residual reducer's: a step per statement, a value's bytes, the bytes a
+// scan reads, a frame per call that is not a tail call.
+
+// The program: its function table and graph.
+type GYC = { GXT ft; Kg g; };
+// Counters, the call depth and the memo (shared with the residual reducer).
+type GY = { Int steps; Int depth; Int fuel; Int lim; Int mem; Int bx; Map(Str, Str) memo; };
+// An expression's value (ok); early: a `?` returning early, with the
+// function's result in v and ty.
+type YV = { Bool ok; Bool early; Str v; Str ty; GY st; };
+// Statements: how 0 ran to the end, 1 returned v (ty), 2 failed, 3 a tail
+// call tfi(tvs: tts), 4 break, 5 continue.
+type YR = { Int how; Str v; Str ty; GY st; Int tfi; List(Str) tvs; List(Str) tts; };
+// Arguments, all known (ok).
+type YA = { Bool ok; List(Str) vs; List(Str) ts; GY st; };
+// A call evaluated: its value, or why not (spent: a budget ran out).
+type YC = { Bool ok; Str v; Str ty; Bool spent; GY st; };
+
+YV gy_fail(GY st) { return YV {.ok = false, .early = false, .v = "", .ty = "", .st = st}; }
+// Every type given here is normalized (rd_norm_ty) where it comes from.
+YV gy_val(Str v, Str ty, GY st) { return YV {.ok = true, .early = false, .v = v, .ty = ty, .st = st}; }
+// A value computed here: its bytes go on the meter (a scalar's are few).
+YV gy_made(Str v, Str ty, GY st) {
+    Bool scalar = ty == "Int" || ty == "Bool" || ty == "Float";
+    return gy_val(v, ty, if (scalar) { st } else { gy_charge(st, str_len(v)) });
+}
+YV gy_sv(SV r, GY st) { return if (r.k) { gy_made(r.v, r.ty, gy_scan(st, r.scan)) } else { gy_fail(st) }; }
+
+YR gy_r(Int how, GY st) { return YR {.how = how, .v = "", .ty = "", .st = st, .tfi = -1, .tvs = gx_nos(), .tts = gx_nos()}; }
+YR gy_ret(Str v, Str ty, GY st) { return YR {.how = 1, .v = v, .ty = ty, .st = st, .tfi = -1, .tvs = gx_nos(), .tts = gx_nos()}; }
+
+GY gy_cost(GY s, Int n, Int k) { return GY {.steps = s.steps + k, .depth = s.depth, .fuel = s.fuel - k, .lim = s.lim, .mem = s.mem - n, .bx = s.bx, .memo = s.memo}; }
+GY gy_charge(GY s, Int n) { return gy_cost(s, n, n >> 8); }
+GY gy_scan(GY s, Int n) { return if (n == 0) { s } else { gy_cost(s, n, n >> 5) }; }
+GY gy_tick(GY s) { return GY {.steps = s.steps + 1, .depth = s.depth, .fuel = s.fuel - 1, .lim = s.lim, .mem = s.mem - rd_step_bytes(), .bx = s.bx, .memo = s.memo}; }
+Bool gy_over(GY s) { return s.steps > s.lim || s.fuel <= 0 || s.mem <= 0; }
+GY gy_spent(GY s) { return GY {.steps = s.steps, .depth = s.depth, .fuel = s.fuel, .lim = s.lim, .mem = s.mem, .bx = s.bx + 1, .memo = s.memo}; }
+GY gy_memo(GY s, Str k, Str v) { return GY {.steps = s.steps, .depth = s.depth, .fuel = s.fuel, .lim = s.lim, .mem = s.mem, .bx = s.bx, .memo = s.memo.insert(k, v)}; }
+GY gy_depth(GY s, Int d) { return GY {.steps = s.steps, .depth = d, .fuel = s.fuel, .lim = s.lim, .mem = s.mem, .bx = s.bx, .memo = s.memo}; }
+
+Int gy_kid(GYC c, Int id, Int i) { return kg_kid(c.g, id, i); }
+
+Int gy_lens(List(Str) xs, Int i, Int acc) {
+    if (i >= xs.len()) { return acc; }
+    return gy_lens(xs, i + 1, acc + str_len(xs[i]));
+}
+
+RdV gy_rdv(YV x, RdS rs) {
+    return RdV {.k = true, .v = x.v, .ty = x.ty, .r = "", .ch = false, .bad = false, .bd = false, .sx = "", .px = "", .pos = 0, .st = rs};
+}
+
+RdA gy_rda(List(Str) vs, List(Str) ts, RdS rs) {
+    return RdA {.vs = vs, .ts = ts, .rs = gx_nos(), .allk = true, .ch = false, .named = false, .bad = false, .pos = 0, .st = rs};
+}
+
+// ─── Expressions ────────────────────────────────────────────────────
+
+YV gy_expr(GYC c, Int id, RdE env, GY st) {
+    KN n = c.g.ns[id];
+    Int k = n.kc;
+    if (k == 1) { return gy_ref(c, n, env, st); }
+    if (k >= 100) { return gy_bin(c, id, n, k - 100, env, st); }
+    if (k == 23) { return gy_val(n.text, "Int", st); }
+    if (k == 2) {
+        SV l = if (n.aux == "dec") { sv_no() } else { sem_lit(n) };
+        return if (l.k) { gy_val(l.v, l.ty, st) } else { gy_fail(st) };
     }
-    GV l = gx_expr(ft, it, env, st);
-    if (l.bad || !l.k) { return fail; }
+    if (k == 4) { return gy_call(c, id, n, env, st); }
+    if (k == 5) { return gy_field(c, id, n, env, st); }
+    if (k == 6) { return gy_expr(c, gy_kid(c, id, 0), env, st); }
+    if (k == 7) { return gy_mcall(c, id, n, env, st); }
+    if (k == 8) { return gy_index(c, id, env, st); }
+    if (k == 9) { return gy_un(c, id, n, env, st); }
+    if (k == 10) { return gy_ifx(c, id, env, st); }
+    if (k == 11) { return gy_struct(c, id, n, env, st); }
+    if (k == 12) { return gy_match(c, id, env, st); }
+    if (k == 13) { return gy_fstr(c, id, env, st); }
+    if (k == 14) { return gy_tern(c, id, env, st); }
+    if (k == 15) {
+        YA a = gy_args(c, id, 0, env, gy_args0(st));
+        return if (a.ok) { gy_sv(sem_list(a.vs, a.ts), a.st) } else { gy_fail(a.st) };
+    }
+    if (k == 16) { return gy_try(c, id, env, st); }
+    if (k == 17) { return gy_orelse(c, id, env, st); }
+    if (k == 18) { return gy_cast(c, id, env, st); }
+    if (k == 19) { return gy_slice(c, id, env, st); }
+    if (k == 20) { return gy_mapv(c, id, 0, env, gy_args0(st)); }
+    if (k == 21) {
+        YA a = gy_args(c, id, 0, env, gy_args0(st));
+        return if (a.ok) { gy_sv(sem_setv(a.vs, a.ts), a.st) } else { gy_fail(a.st) };
+    }
+    if (k == 22) { return gy_val("", "{}", st); }
+    return gy_fail(st);
+}
+
+YV gy_ref(GYC c, KN n, RdE env, GY st) {
+    Str name = n.text;
+    Int ei = rd_env_idx(env, name);
+    if (ei >= 0) { return if (env.ts[ei] != "") { gy_val(env.vs[ei], env.ts[ei], st) } else { gy_fail(st) }; }
+    if (name == "None") { return gy_val("N", "Option(_)", st); }
+    // A variant without a payload.
+    Int vi = c.ft.vidx.get(name) else { -1 };
+    if (vi >= 0 && c.ft.vtys[vi] == "") { return gy_val(rd_enc([name]), c.ft.vsum[vi], st); }
+    return gy_fail(st);
+}
+
+YV gy_bin(GYC c, Int id, KN n, Int opc, RdE env, GY st) {
+    Int lk = gy_kid(c, id, 0);
+    YV l = gy_expr(c, lk, env, st);
+    // Ranges only parse in `for` headers and slices.
+    if (!l.ok || opc == 0 || opc >= 19) { return gy_fail(l.st); }
+    // `false && e` / `true || e`: e is never evaluated (spec §30).
+    if ((opc == 12 && l.v == "false") || (opc == 13 && l.v == "true")) { return l; }
+    Int rk = gy_kid(c, id, 1);
+    YV r = gy_expr(c, rk, env, l.st);
+    if (!r.ok) { return gy_fail(r.st); }
+    Str op = n.text;
+    if (l.ty == "Int" && r.ty == "Int") {
+        Str iv = sem_int_op(opc, str_parse_int(l.v), str_parse_int(r.v));
+        if (iv != "") { return if (iv == str_from_code(1)) { gy_fail(r.st) } else { gy_val(iv, if (iv == "true" || iv == "false") { "Bool" } else { "Int" }, r.st) }; }
+    }
+    // Whether an operand is written in literals matters only for operands
+    // of different types, or past 64 bits.
+    Bool same = l.ty == r.ty && rd_small(l.v) && rd_small(r.v);
+    RdV x = rd_fold(op, gy_rdv(l, c.ft.rds), gy_rdv(r, c.ft.rds), !same && gk_lit_expr(c.g, lk), !same && gk_lit_expr(c.g, rk), "", 0, c.ft.rds);
+    return if (x.k) { gy_made(x.v, x.ty, r.st) } else { gy_fail(r.st) };
+}
+
+YV gy_un(GYC c, Int id, KN n, RdE env, GY st) {
+    YV e = gy_expr(c, gy_kid(c, id, 0), env, st);
+    if (!e.ok) { return gy_fail(e.st); }
+    SV u = sem_un(n.text, e.v, e.ty);
+    return if (u.k) { gy_made(u.v, u.ty, e.st) } else { gy_fail(e.st) };
+}
+
+YV gy_cast(GYC c, Int id, RdE env, GY st) {
+    Str ty = c.g.ns[gy_kid(c, id, 0)].text;
+    if (!is_known_type_cg(ty)) { return gy_fail(st); }
+    YV e = gy_expr(c, gy_kid(c, id, 1), env, st);
+    if (!e.ok) { return gy_fail(e.st); }
+    Str want = if (rd_is_f64(ty)) { "Float" } else { rd_norm_ty(ty) };
+    Str cv = rd_convert(e.v, e.ty, want);
+    return if (cv != "") { gy_made(cv, want, e.st) } else { gy_fail(e.st) };
+}
+
+YA gy_args0(GY st) { return YA {.ok = true, .vs = gx_nos(), .ts = gx_nos(), .st = st}; }
+
+// Arguments from kid i (after acc's); a named one is not evaluated here.
+YA gy_args(GYC c, Int id, Int i, RdE env, YA acc) {
+    YA r = gy_args_b(c, id, i, env, acc.st, ListBuf(), ListBuf());
+    if (acc.vs.len() == 0) { return r; }
+    return YA {.ok = r.ok, .vs = acc.vs.concat(r.vs), .ts = acc.ts.concat(r.ts), .st = r.st};
+}
+
+YA gy_args_b(GYC c, Int id, Int i, RdE env, GY st, ListBuf(Str) bv, ListBuf(Str) bt) {
+    if (i >= c.g.ns[id].nk) { return YA {.ok = true, .vs = bv.finish(), .ts = bt.finish(), .st = st}; }
+    Int kid = gy_kid(c, id, i);
+    YV v = if (c.g.ns[kid].kc == 42) { gy_fail(st) } else { gy_expr(c, kid, env, st) };
+    if (!v.ok) { return YA {.ok = false, .vs = bv.finish(), .ts = bt.finish(), .st = v.st}; }
+    return gy_args_n(c, id, i + 1, env, v.st, bv.push(v.v), bt.push(v.ty));
+}
+
+// The evaluator's helpers that evaluate in a loop recurse through a second
+// function: a self-tail call would be a loop with a region of its own,
+// which copies the state (and its memo) out at every exit.
+YA gy_args_n(GYC c, Int id, Int i, RdE env, GY st, ListBuf(Str) bv, ListBuf(Str) bt) { return gy_args_b(c, id, i, env, st, bv, bt); }
+
+YV gy_call(GYC c, Int id, KN n, RdE env, GY st) {
+    Str name = n.text;
+    if (rd_env_idx(env, name) >= 0) { return gy_fail(st); }
+    YA a = gy_args(c, id, 0, env, gy_args0(st));
+    if (!a.ok) { return gy_fail(a.st); }
+    GXT ft = c.ft;
+    Int ufi = ft.fidx.get(name) else { -1 };
+    Int na = a.vs.len();
+    if (name == "Some") { return if (na == 1) { gy_made("S" + a.vs[0], "Option(" + rd_norm_ty(a.ts[0]) + ")", a.st) } else { gy_fail(a.st) }; }
+    if (ufi < 0) {
+        if (name == "Ok" || name == "Err") {
+            if (na != 1) { return gy_fail(a.st); }
+            Str pt = rd_norm_ty(a.ts[0]);
+            return gy_made(rd_enc([name, a.vs[0]]), if (name == "Ok") { "Result(" + pt + ", _)" } else { "Result(_, " + pt + ")" }, a.st);
+        }
+        // A builder is linear, so a known one is a plain value.
+        if ((name == "StrBuf" || name == "ListBuf") && na == 0) { return gy_val("", if (name == "StrBuf") { "StrBuf" } else { "ListBuf(?)" }, a.st); }
+        Int vi = ft.vidx.get(name) else { -1 };
+        if (vi >= 0) {
+            Str vv = gx_variant_v(ft, vi, name, a.vs, a.ts);
+            return if (vv == str_from_code(1)) { gy_fail(a.st) } else { gy_made(vv, ft.vsum[vi], a.st) };
+        }
+    }
+    RdV bv = if (ufi < 0) { rd_builtin(name, gy_rda(a.vs, a.ts, ft.rds), "", 0, ft.rds) } else { rd_unk("", false, 0, ft.rds) };
+    if (bv.k) { return gy_made(bv.v, bv.ty, a.st); }
+    Bool mm = name == "abs" || name == "min" || name == "max" || name == "clamp";
+    RdV xv = gx_builtin(ft, name, ufi, a.vs, a.ts, if (mm) { gk_lits(c.g, id, 0, ListBuf()) } else { gx_none() });
+    if (xv.k) { return gy_made(xv.v, xv.ty, gy_scan(a.st, gy_lens(a.vs, 0, 0))); }
+    if (ufi < 0) { return gy_fail(a.st); }
+    return gy_call_user(c, ufi, id, a.vs, a.ts, a.st);
+}
+
+YV gy_field(GYC c, Int id, KN n, RdE env, GY st) {
+    YV b = gy_expr(c, gy_kid(c, id, 0), env, st);
+    if (!b.ok) { return gy_fail(b.st); }
+    // "Struct\x1findex\x1ftype" when one record type has the field.
+    Str one = c.ft.fone.get(n.text) else { "" };
+    Int s1 = if (one == "") { -1 } else { str_find_char(one, 31, 0) };
+    if (s1 >= 0 && str_slice(one, 0, s1) == b.ty) {
+        Int s2 = str_find_char(one, 31, s1 + 1);
+        Str fv1 = rd_nth(b.v, str_parse_int(str_slice(one, s1 + 1, s2)));
+        if (fv1 == str_from_code(1)) { return gy_fail(b.st); }
+        return gy_val(fv1, str_slice(one, s2 + 1, str_len(one)), b.st);
+    }
+    Str key = b.ty + str_from_code(31) + n.text;
+    Int fi = c.ft.sfx.get(key) else { -1 };
+    if (fi < 0) { return gy_fail(b.st); }
+    Str fv = rd_nth(b.v, fi);
+    if (fv == str_from_code(1)) { return gy_fail(b.st); }
+    return gy_val(fv, c.ft.sft.get(key) else { "" }, b.st);
+}
+
+YV gy_mcall(GYC c, Int id, KN n, RdE env, GY st) {
+    YV b = gy_expr(c, gy_kid(c, id, 0), env, st);
+    if (!b.ok) { return gy_fail(b.st); }
+    YA a = gy_args(c, id, 1, env, gy_args0(b.st));
+    if (!a.ok) { return gy_fail(a.st); }
+    return gy_sv(sem_mcall(c.ft, n.text, b.v, b.ty, a.vs, a.ts), a.st);
+}
+
+YV gy_index(GYC c, Int id, RdE env, GY st) {
+    YV b = gy_expr(c, gy_kid(c, id, 0), env, st);
+    if (!b.ok) { return gy_fail(b.st); }
+    Int xk = gy_kid(c, id, 1);
+    KN xn = c.g.ns[xk];
+    Bool rng = xn.kc == 119 || xn.kc == 120;
+    if (rng || xn.kc == 46) {
+        YV lo = gy_expr(c, gy_kid(c, xk, 0), env, b.st);
+        if (!lo.ok) { return gy_fail(lo.st); }
+        YV hi = if (rng) { gy_expr(c, gy_kid(c, xk, 1), env, lo.st) } else { lo };
+        if (!hi.ok) { return gy_fail(hi.st); }
+        // `a..=b` is `a..b + 1`, wrapping as the lowering's add does.
+        Str hv = if (!rng) { rd_itoa(rd_i64_max()) } else if (xn.text == "..=" && rd_small(hi.v)) { rd_itoa(wrapping_add(rd_atoi(hi.v), 1)) } else { hi.v };
+        return gy_slicev(b, lo.v, hv, hi.st);
+    }
+    YV ix = gy_expr(c, xk, env, b.st);
+    if (!ix.ok) { return gy_fail(ix.st); }
+    return gy_sv(sem_index(c.ft, b.v, b.ty, ix.v, ix.ty), ix.st);
+}
+
+// `xs[lo..hi]`, clamped by the runtime, so it never traps.
+YV gy_slicev(YV b, Str lo, Str hi, GY st) {
+    if (rd_inner(b.ty, "List(") == "" || !rd_small(lo) || !rd_small(hi)) { return gy_fail(st); }
+    return gy_made(rd_slice(b.v, rd_atoi(lo), rd_atoi(hi)), b.ty, gy_scan(st, str_len(b.v)));
+}
+
+// `xs[..]` / `xs[..hi]`.
+YV gy_slice(GYC c, Int id, RdE env, GY st) {
+    YV b = gy_expr(c, gy_kid(c, id, 0), env, st);
+    if (!b.ok) { return gy_fail(b.st); }
+    if (c.g.ns[id].nk < 2) { return gy_slicev(b, "0", rd_itoa(rd_i64_max()), b.st); }
+    YV hi = gy_expr(c, gy_kid(c, id, 1), env, b.st);
+    if (!hi.ok) { return gy_fail(hi.st); }
+    return gy_slicev(b, "0", hi.v, hi.st);
+}
+
+// `Name {.f = e, ...}`: every field known; the value lists the fields in
+// declaration order.
+YV gy_struct(GYC c, Int id, KN n, RdE env, GY st) {
+    Str name = n.text;
+    Int si = c.ft.sidx.get(name) else { -1 };
+    if (si < 0 || rd_env_idx(env, name) >= 0) { return gy_fail(st); }
+    YA a = gy_finits(c, id, 0, env, st, ListBuf(), ListBuf());
+    Int nf = c.ft.snf[si];
+    if (!a.ok || nf == 0 || a.vs.len() != nf) { return gy_fail(a.st); }
+    List(Str) vals = gx_field_vals(c.ft, c.g, id, name, a.vs, a.ts, 0, nf, ListBuf());
+    if (vals.len() != nf) { return gy_fail(a.st); }
+    return gy_made(rd_enc(vals), name, a.st);
+}
+
+YA gy_finits(GYC c, Int id, Int i, RdE env, GY st, ListBuf(Str) bv, ListBuf(Str) bt) {
+    if (i >= c.g.ns[id].nk) { return YA {.ok = true, .vs = bv.finish(), .ts = bt.finish(), .st = st}; }
+    YV v = gy_expr(c, gy_kid(c, gy_kid(c, id, i), 0), env, st);
+    if (!v.ok) { return YA {.ok = false, .vs = bv.finish(), .ts = bt.finish(), .st = v.st}; }
+    return gy_finits_n(c, id, i + 1, env, v.st, bv.push(v.v), bt.push(v.ty));
+}
+
+YA gy_finits_n(GYC c, Int id, Int i, RdE env, GY st, ListBuf(Str) bv, ListBuf(Str) bt) { return gy_finits(c, id, i, env, st, bv, bt); }
+
+// `{k: v, ...}`: each entry's key and value, then the map.
+YV gy_mapv(GYC c, Int id, Int i, RdE env, YA acc) {
+    if (i >= c.g.ns[id].nk) { return gy_sv(sem_mapv(acc.vs, acc.ts), acc.st); }
+    YA kv = gy_args(c, gy_kid(c, id, i), 0, env, acc);
+    if (!kv.ok) { return gy_fail(kv.st); }
+    return gy_mapv_n(c, id, i + 1, env, kv);
+}
+
+YV gy_mapv_n(GYC c, Int id, Int i, RdE env, YA acc) { return gy_mapv(c, id, i, env, acc); }
+
+// `{ [Type name = expr;]* tail }` from kid i.
+YV gy_eblock(GYC c, Int bx, Int i, RdE env, GY st) {
+    Int kid = gy_kid(c, bx, i);
+    if (i == c.g.ns[bx].nk - 1) { return gy_expr(c, kid, env, st); }
+    if (c.g.ns[kid].kc != 30) { return gy_fail(st); }
+    YV v = gy_expr(c, gy_kid(c, kid, 1), env, st);
+    if (!v.ok) { return gy_fail(v.st); }
+    Str cty = rd_coerce_v(v.ty, c.g.ns[gy_kid(c, kid, 0)].text, v.v);
+    if (cty == "") { return gy_fail(v.st); }
+    return gy_eblock_n(c, bx, i + 1, rd_env_add(env, c.g.ns[kid].text, v.v, cty), v.st);
+}
+
+YV gy_eblock_n(GYC c, Int bx, Int i, RdE env, GY st) { return gy_eblock(c, bx, i, env, st); }
+
+// A known condition: 1 true, 0 false, -1 not a known Bool.
+Int gy_bool(YV v) { return if (!v.ok) { -1 } else if (v.v == "true") { 1 } else if (v.v == "false") { 0 } else { -1 }; }
+
+YV gy_ifx(GYC c, Int id, RdE env, GY st) {
+    // An `if` without `else` (zero value when false) is left to run.
+    if (c.g.ns[id].nk < 3) { return gy_fail(st); }
+    YV cv = gy_expr(c, gy_kid(c, id, 0), env, st);
+    Int b = gy_bool(cv);
+    if (b < 0) { return gy_fail(cv.st); }
+    if (b == 1) { return gy_eblock(c, gy_kid(c, id, 1), 0, env, cv.st); }
+    Int ek = gy_kid(c, id, 2);
+    if (c.g.ns[ek].kc == 10) { return gy_expr(c, ek, env, cv.st); }
+    return gy_eblock(c, ek, 0, env, cv.st);
+}
+
+YV gy_tern(GYC c, Int id, RdE env, GY st) {
+    YV cv = gy_expr(c, gy_kid(c, id, 0), env, st);
+    Int b = gy_bool(cv);
+    if (b < 0) { return gy_fail(cv.st); }
+    return gy_expr(c, gy_kid(c, id, if (b == 1) { 1 } else { 2 }), env, cv.st);
+}
+
+YV gy_match(GYC c, Int id, RdE env, GY st) {
+    YV sc = gy_expr(c, gy_kid(c, id, 0), env, st);
+    if (!sc.ok) { return gy_fail(sc.st); }
+    GXS sv = gx_sum_of(c.ft, sc.v, sc.ty);
+    if (!sv.ok) { return gy_fail(sc.st); }
+    Int ai = gy_arm_for(c, id, 1, sv.tag);
+    if (ai < 0) { return gy_fail(sc.st); }
+    Int arm = gy_kid(c, id, ai);
+    Int nb = c.g.ns[arm].nk - 1;
+    if (nb > 0 && nb != sv.ps.len()) { return gy_fail(sc.st); }
+    return gy_expr(c, gy_kid(c, arm, nb), gy_bind_ps(c, arm, sv, 0, nb, env), sc.st);
+}
+
+// The first arm from kid i written for `variant`, or `_`; -1 for none.
+Int gy_arm_for(GYC c, Int id, Int i, Str variant) {
+    if (i >= c.g.ns[id].nk) { return -1; }
+    Str t = c.g.ns[gy_kid(c, id, i)].text;
+    if (t == variant || t == "_") { return i; }
+    return gy_arm_for(c, id, i + 1, variant);
+}
+
+// An arm's names bound to the payloads (`_` binds nothing; a payload of
+// a type the value does not know is bound unknown).
+RdE gy_bind_ps(GYC c, Int arm, GXS sv, Int i, Int nb, RdE env) {
+    if (i >= nb) { return env; }
+    Str nm = c.g.ns[gy_kid(c, arm, i)].text;
+    Str pt = rd_norm_ty(sv.pts[i]);
+    RdE e2 = if (nm == "_") { env } else if (pt == "") { rd_env_add(env, nm, "", "") } else { rd_env_add(env, nm, sv.ps[i], pt) };
+    return gy_bind_ps(c, arm, sv, i + 1, nb, e2);
+}
+
+// A `?` on a known value: a Some or an Ok unwraps; a None or an Err is the
+// function's early return.
+YV gy_try(GYC c, Int id, RdE env, GY st) {
+    YV l = gy_expr(c, gy_kid(c, id, 0), env, st);
+    if (!l.ok) { return gy_fail(l.st); }
+    Str t = rd_norm_ty(l.ty);
+    if (!str_starts_with(t, "Option(") && !str_starts_with(t, "Result(")) { return gy_fail(l.st); }
+    GXS sv = gx_sum_of(c.ft, l.v, l.ty);
+    if (!sv.ok) { return gy_fail(l.st); }
+    if (sv.tag == "Some" || sv.tag == "Ok") { return if (sv.pts[0] != "") { gy_val(sv.ps[0], rd_norm_ty(sv.pts[0]), l.st) } else { gy_fail(l.st) }; }
+    if (sv.tag == "None") { return YV {.ok = false, .early = true, .v = "N", .ty = "Option(_)", .st = l.st}; }
+    if (sv.pts[0] == "") { return gy_fail(l.st); }
+    return YV {.ok = false, .early = true, .v = l.v, .ty = "Result(_, " + sv.pts[0] + ")", .st = l.st};
+}
+
+// `e else { fallback }`.
+YV gy_orelse(GYC c, Int id, RdE env, GY st) {
+    Int fbx = gy_kid(c, id, 1);
+    if (c.g.ns[fbx].aux == ";") { return gy_fail(st); }
+    YV l = gy_expr(c, gy_kid(c, id, 0), env, st);
+    if (!l.ok) { return gy_fail(l.st); }
+    Str t = rd_norm_ty(l.ty);
+    if (!str_starts_with(t, "Option(") && !str_starts_with(t, "Result(")) { return gy_fail(l.st); }
+    GXS sv = gx_sum_of(c.ft, l.v, l.ty);
+    if (!sv.ok) { return gy_fail(l.st); }
+    if (sv.tag == "Some" || sv.tag == "Ok") { return if (sv.pts[0] != "") { gy_val(sv.ps[0], rd_norm_ty(sv.pts[0]), l.st) } else { gy_fail(l.st) }; }
+    return gy_eblock(c, fbx, 0, env, l.st);
+}
+
+// An f-string whose every hole is known (spec'd holes through the same
+// primitives the program would call).
+YV gy_fstr(GYC c, Int id, RdE env, GY st) { return gy_fst_at(c, id, 0, env, st, StrBuf()); }
+
+YV gy_fst_at(GYC c, Int id, Int i, RdE env, GY st, StrBuf acc) {
+    Int n = c.g.ns[id].nk;
+    if (i >= n) { return gy_made(acc.finish(), "Str", st); }
+    Int kid = gy_kid(c, id, i);
+    KN kn = c.g.ns[kid];
+    if (kn.kc == 43) {
+        Str t = gy_fst_lit(kn.text, 0, str_len(kn.text), StrBuf());
+        StrBuf a2 = acc.push(t);
+        return if (t == str_from_code(1)) { gy_fst_fail(a2, st) } else { gy_fst_n(c, id, i + 1, env, st, a2) };
+    }
+    YV v = gy_expr(c, kid, env, st);
+    if (!v.ok) { return gy_fst_fail(acc, v.st); }
+    Str txt = gx_fst_text(v.ty, v.v);
+    if (i + 1 < n && c.g.ns[gy_kid(c, id, i + 1)].kc == 44) {
+        Str sp = gx_fst_spec(true, v.ty, txt, c.g.ns[gy_kid(c, id, i + 1)].text);
+        StrBuf a2 = acc.push(sp);
+        return if (sp == "") { gy_fst_fail(a2, v.st) } else { gy_fst_n(c, id, i + 2, env, v.st, a2) };
+    }
+    StrBuf a3 = acc.push(txt);
+    if (txt == "" && rd_norm_ty(v.ty) != "Str") { return gy_fst_fail(a3, v.st); }
+    return gy_fst_n(c, id, i + 1, env, v.st, a3);
+}
+
+YV gy_fst_n(GYC c, Int id, Int i, RdE env, GY st, StrBuf acc) { return gy_fst_at(c, id, i, env, st, acc); }
+
+// A failed f-string: its builder is finished and dropped.
+YV gy_fst_fail(StrBuf acc, GY st) {
+    Str _done = acc.finish();
+    return gy_fail(st);
+}
+
+// A part's literal text decoded (gx_fst_lit); "\x01" when it spells NUL.
+Str gy_fst_lit(Str t, Int i, Int n, StrBuf acc) {
+    if (i >= n) { return acc.finish(); }
+    Int ch = str_char_at(t, i);
+    if (ch != 92) { return gy_fst_lit(t, i + 1, n, acc.push_char(ch)); }
+    Int e = str_char_at(t, i + 1);
+    Int x = rd_hex_esc(t, i);
+    Int d = if (x >= 0) { x } else if (e == 110) { 10 } else if (e == 116) { 9 } else if (e == 114) { 13 } else { e };
+    if (e == 48 || x == 0) {
+        Str _done = acc.finish();
+        return str_from_code(1);
+    }
+    return gy_fst_lit(t, i + (if (x >= 0) { 4 } else { 2 }), n, acc.push_char(d));
+}
+
+// ─── Calls ──────────────────────────────────────────────────────────
+
+YV gy_call_user(GYC c, Int fi, Int at, List(Str) vs, List(Str) ts, GY st) {
+    GXT ft = c.ft;
+    if (ft.fbody[fi] < 0) { return gy_fail(st); }
+    if (st.fuel <= 0 || st.depth >= ft.rb.depth) { return gy_fail(gy_spent(st)); }
+    // Near the end of the compiler's stack the build fails (E0902) rather
+    // than leaving the call residual: the stack is not a budget.
+    Int left = resid_stack_left();
+    if (left >= 0 && left < 16777216) { return gy_fail(gy_stack_err(c, at, ft.fnames[fi], st)); }
+    Str key = rd_memo_key(ft.fnames[fi], gy_rda(vs, ts, ft.rds));
+    Str hit = st.memo.get(key) else { "" };
+    if (hit == "?" || hit == "!") { return gy_fail(st); }
+    if (hit != "" && !str_starts_with(hit, "~")) {
+        Int sp = str_find_char(hit, 31, 0);
+        return gy_made(str_slice(hit, sp + 1, str_len(hit)), str_slice(hit, 0, sp), st);
+    }
+    YC r = gy_eval_call(c, fi, vs, ts, key, st);
+    return if (r.ok) { gy_made(r.v, r.ty, r.st) } else { gy_fail(r.st) };
+}
+
+GY gy_stack_err(GYC c, Int at, Str name, GY st) {
+    Str prev = st.memo.get("__ERR__") else { "" };
+    if (prev != "") { return gy_spent(st); }
+    Int line = str_count(str_slice(c.ft.src, 0, c.g.ns[at].sp), "\n") + 1;
+    return gy_spent(gy_memo(st, "__ERR__", "error[E0902]: compile-time evaluation of " + name + f"(...) at line {line} nests {st.depth} calls deep and would run past the compiler's stack: raise RESID_STACK_MB, or bound the reduction (--reduce-budget N)"));
+}
+
+// fi(vs: ts) evaluated in full, its result memoized ("?" while it runs, so
+// an identical re-entry fails; "~" when a budget ran out, which a retry
+// with more may get past; "!" when it does not reduce).
+YC gy_eval_call(GYC c, Int fi, List(Str) vs, List(Str) ts, Str key, GY st) {
+    GXT ft = c.ft;
+    YC fail = YC {.ok = false, .v = "", .ty = "", .spent = false, .st = st};
+    List(Str) pns = ft.fpnl[fi];
+    if (pns.len() != ts.len()) { return fail; }
+    RdE env = rd_bind_env(pns, ft.fptl[fi], vs, ts, 0, ListBuf(), ListBuf(), ListBuf());
+    if (env.ns.len() == 1 && env.ns[0] == "") { return fail; }
+    GY inner = gy_cost(gy_depth(gy_memo(st, key, "?"), st.depth + 1), rd_call_bytes(), 0);
+    YR res = gy_tramp(c, fi, gy_stmts(c, ft.fbody[fi], 0, env, inner));
+    GY after = gy_depth(res.st, st.depth);
+    Bool spent = res.st.bx > st.bx;
+    if (res.how != 1) { return YC {.ok = false, .v = "", .ty = "", .spent = spent, .st = gy_memo(after, key, if (spent) { "~" } else { "!" })}; }
+    return YC {.ok = true, .v = res.v, .ty = res.ty, .spent = false, .st = gy_memo(after, key, res.ty + str_from_code(31) + res.v)};
+}
+
+// A returned value coerced to fi's declared result.
+YR gy_ret_as(GYC c, Int fi, YR r) {
+    if (r.how != 1) { return r; }
+    Str cty = rd_coerce_v(r.ty, rd_norm_ty(c.ft.frets[fi]), r.v);
+    return if (cty == "") { gy_r(2, r.st) } else { gy_ret(r.v, cty, r.st) };
+}
+
+// Tail calls run here one after another, at the depth of the call that
+// made the first: tail recursion takes no stack, and only the first call
+// is memoized.
+YR gy_tramp(GYC c, Int fi, YR r) {
+    if (r.how != 3) { return gy_ret_as(c, fi, r); }
+    Str err = r.st.memo.get("__ERR__") else { "" };
+    GYH h = gy_hop(c, r.st, r.tfi, r.tvs, r.tts, GYH {.how = 0, .v = "", .ty = "", .steps = r.st.steps, .fuel = r.st.fuel, .mem = r.st.mem, .bx = r.st.bx, .err = err});
+    GY s1 = gy_count(r.st, h);
+    return if (h.how == 1) { gy_ret(h.v, h.ty, s1) } else { gy_r(2, s1) };
+}
+
+// What gy_tramp's loop carries: how it ended (0 no value, 1 a value), the
+// value, and the counters.
+type GYH = { Int how; Str v; Str ty; Int steps; Int fuel; Int mem; Int bx; Str err; };
+
+GYH gy_hend(Int how, Str v, Str ty, GY st) {
+    Str err = st.memo.get("__ERR__") else { "" };
+    return GYH {.how = how, .v = v, .ty = ty, .steps = st.steps, .fuel = st.fuel, .mem = st.mem, .bx = st.bx, .err = err};
+}
+
+// One hop: g(vs: ts) from st with h's counters. st does not change from
+// hop to hop and only scalars, text and the arguments are carried, so the
+// loop gets a region of its own (lower.resid lr_region): a loop keeps its
+// arguments, not its history. A hop's memo entries are dropped with it.
+GYH gy_hop(GYC c, GY st, Int g, List(Str) vs, List(Str) ts, GYH h) {
+    GY s0 = gy_count(st, h);
+    GXT ft = c.ft;
+    if (ft.fbody[g] < 0) { return gy_hend(0, "", "", s0); }
+    if (gy_over(s0)) { return gy_hend(0, "", "", gy_spent(s0)); }
+    List(Str) pns = ft.fpnl[g];
+    if (pns.len() != ts.len()) { return gy_hend(0, "", "", s0); }
+    RdE env = rd_bind_env(pns, ft.fptl[g], vs, ts, 0, ListBuf(), ListBuf(), ListBuf());
+    if (env.ns.len() == 1 && env.ns[0] == "") { return gy_hend(0, "", "", s0); }
+    YR n0 = gy_stmts(c, ft.fbody[g], 0, env, s0);
+    if (n0.how != 3) {
+        YR n = gy_ret_as(c, g, n0);
+        return gy_hend(if (n.how == 1) { 1 } else { 0 }, n.v, n.ty, n.st);
+    }
+    // The meter goes back to where the loop began, less the arguments:
+    // they are all a hop keeps.
+    GYH k = gy_hend(0, "", "", n0.st);
+    GYH k2 = GYH {.how = 0, .v = "", .ty = "", .steps = k.steps, .fuel = k.fuel, .mem = st.mem - gy_lens(n0.tvs, 0, 0), .bx = k.bx, .err = k.err};
+    return gy_hop(c, st, n0.tfi, n0.tvs, n0.tts, k2);
+}
+
+// st with the counters (and error) a hop carries.
+GY gy_count(GY s, GYH h) {
+    Map(Str, Str) m = if (h.err != "") { s.memo.insert("__ERR__", h.err) } else { s.memo };
+    return GY {.steps = h.steps, .depth = s.depth, .fuel = h.fuel, .lim = s.lim, .mem = h.mem, .bx = h.bx, .memo = m};
+}
+
+// ─── Statements ─────────────────────────────────────────────────────
+
+YR gy_stmts(GYC c, Int blk, Int i, RdE env, GY st0) {
+    if (i >= c.g.ns[blk].nk) { return gy_r(0, st0); }
+    GY st = gy_tick(st0);
+    if (gy_over(st)) { return gy_r(2, gy_spent(st)); }
+    Int id = gy_kid(c, blk, i);
+    KN nd = c.g.ns[id];
+    Int k = nd.kc;
+    if (k == 30) { return gy_bind(c, blk, i, id, nd, env, st); }
+    if (k == 31) { return if (nd.nk == 0) { gy_r(2, st) } else { gy_tail(c, gy_kid(c, id, 0), env, st) }; }
+    if (k == 32 || k == 33) { return gy_estmt(c, blk, i, id, env, st); }
+    if (k == 34) { return gy_then(c, blk, i, env, gy_if(c, id, env, st)); }
+    if (k == 35) { return gy_then(c, blk, i, env, gy_block(c, id, env, st)); }
+    if (k == 36) { return gy_then(c, blk, i, env, gy_for(c, id, env, st)); }
+    if (k == 37) { return gy_then(c, blk, i, env, gy_while(c, id, env, st)); }
+    if (k == 38) { return gy_r(4, st); }
+    if (k == 39) { return gy_r(5, st); }
+    if (k == 40) { return gy_letpat(c, blk, i, id, nd, env, st); }
+    if (k == 41) { return gy_destr(c, blk, i, id, env, st); }
+    return gy_r(2, st);
+}
+
+// The rest of the block after a statement that ran to its end.
+YR gy_then(GYC c, Int blk, Int i, RdE env, YR r) {
+    if (r.how != 0) { return r; }
+    return gy_stmts(c, blk, i + 1, env, r.st);
+}
+
+YR gy_early(YV v) { return gy_ret(v.v, v.ty, v.st); }
+
+YR gy_bind(GYC c, Int blk, Int i, Int id, KN nd, RdE env, GY st) {
+    // `@residual T x = e;`: the binding stays residual.
+    if (nd.aux == "@residual") { return gy_r(2, st); }
+    Str ty = c.g.ns[gy_kid(c, id, 0)].text;
+    YV v = gy_expr(c, gy_kid(c, id, 1), env, st);
+    if (v.early) { return gy_early(v); }
+    if (!v.ok) { return gy_r(2, v.st); }
+    // A known value bound to a constraint type discharges the constraint
+    // now: false is error E0301.
+    Int ci = gx_ct_idx(c.ft.cts, ty, 0);
+    GY s2 = if (ci >= 0) { gy_ct_check(c, id, nd.text, ty, ci, v) } else { v.st };
+    Str cty = rd_coerce_v(v.ty, ty, v.v);
+    if (cty == "") { return gy_r(2, s2); }
+    return gy_stmts(c, blk, i + 1, rd_env_add(env, nd.text, v.v, cty), s2);
+}
+
+GY gy_ct_check(GYC c, Int id, Str name, Str ty, Int ci, YV v) {
+    List(Str) parts = str_split(c.ft.cts[ci], str_from_code(31));
+    RdE cenv = rd_env_add(rd_env_empty(), "value", v.v, rd_coerce_v(v.ty, parts[1], v.v));
+    YV r = gy_expr(c, c.ft.cpred[ci], cenv, v.st);
+    if (!r.ok || r.v != "false") { return r.st; }
+    Str prev = r.st.memo.get("__ERR__") else { "" };
+    if (prev != "") { return r.st; }
+    // The line of the binding's `=`.
+    Str src = c.ft.src;
+    Tok nm = lex_tok(src, c.g.ns[gy_kid(c, id, 0)].ep);
+    Tok eq = lex_tok(src, nm.pos);
+    Int line = str_count(str_slice(src, 0, eq.pos), "\n") + 1;
+    return gy_memo(r.st, "__ERR__", "error[E0301]: constraint of " + ty + " (" + parts[2] + ") does not hold for " + name + " = " + rd_render(v.v, v.ty) + f" at line {line}");
+}
+
+YR gy_estmt(GYC c, Int blk, Int i, Int id, RdE env, GY st) {
+    Int ek = gy_kid(c, id, 0);
+    KN en = c.g.ns[ek];
+    // `known(e)`, `rt_known(e)` and `comptime_print(e)` are erased at run time.
+    Bool erased = en.kc == 4 && (en.text == "known" || en.text == "rt_known" || en.text == "comptime_print") && (c.ft.fidx.get(en.text) else { -1 }) < 0;
+    if (erased) { return gy_stmts(c, blk, i + 1, env, st); }
+    YV v = gy_expr(c, ek, env, st);
+    if (v.early) { return gy_early(v); }
+    if (!v.ok) { return gy_r(2, v.st); }
+    return gy_stmts(c, blk, i + 1, env, v.st);
+}
+
+// `return e`: a call of a user function with known arguments (through
+// parens and known conditions) is a tail call for gy_tramp; anything else
+// is evaluated here.
+YR gy_tail(GYC c, Int id, RdE env, GY st) {
+    KN n = c.g.ns[id];
+    Int k = n.kc;
+    if (k == 6) { return gy_tail_n(c, gy_kid(c, id, 0), env, st); }
+    if ((k == 10 && n.nk == 3) || k == 14) {
+        YV cv = gy_expr(c, gy_kid(c, id, 0), env, st);
+        Int b = gy_bool(cv);
+        if (b < 0) { return gy_r(2, cv.st); }
+        Int x = gy_kid(c, id, if (b == 1) { 1 } else { 2 });
+        if (k == 14 || c.g.ns[x].kc == 10) { return gy_tail_n(c, x, env, cv.st); }
+        return gy_tail_eb(c, x, 0, env, cv.st);
+    }
+    if (k == 4) { return gy_tail_call(c, id, n, env, st); }
+    return gy_tval(gy_expr(c, id, env, st));
+}
+
+YR gy_tail_n(GYC c, Int id, RdE env, GY st) { return gy_tail(c, id, env, st); }
+
+// An arm `{ [T name = e;]* tail }` in tail position.
+YR gy_tail_eb(GYC c, Int bx, Int i, RdE env, GY st) {
+    Int kid = gy_kid(c, bx, i);
+    if (i == c.g.ns[bx].nk - 1) { return gy_tail(c, kid, env, st); }
+    if (c.g.ns[kid].kc != 30) { return gy_r(2, st); }
+    YV v = gy_expr(c, gy_kid(c, kid, 1), env, st);
+    if (!v.ok) { return gy_r(2, v.st); }
+    Str cty = rd_coerce_v(v.ty, c.g.ns[gy_kid(c, kid, 0)].text, v.v);
+    if (cty == "") { return gy_r(2, v.st); }
+    return gy_tail_ebn(c, bx, i + 1, rd_env_add(env, c.g.ns[kid].text, v.v, cty), v.st);
+}
+
+YR gy_tail_ebn(GYC c, Int bx, Int i, RdE env, GY st) { return gy_tail_eb(c, bx, i, env, st); }
+
+YR gy_tail_call(GYC c, Int id, KN n, RdE env, GY st) {
+    Str name = n.text;
+    Int ufi = c.ft.fidx.get(name) else { -1 };
+    if (ufi < 0 || name == "Some" || rd_env_idx(env, name) >= 0) { return gy_tval(gy_expr(c, id, env, st)); }
+    YA a = gy_args(c, id, 0, env, gy_args0(st));
+    if (!a.ok || c.ft.fbody[ufi] < 0) { return gy_r(2, a.st); }
+    return YR {.how = 3, .v = "", .ty = "", .st = a.st, .tfi = ufi, .tvs = a.vs, .tts = a.ts};
+}
+
+YR gy_tval(YV v) {
+    if (v.early || v.ok) { return gy_ret(v.v, v.ty, v.st); }
+    return gy_r(2, v.st);
+}
+
+// `{ stmts }`: a statement that is not a block is not evaluated here.
+YR gy_block(GYC c, Int bk, RdE env, GY st) {
+    if (c.g.ns[bk].kc != 35) { return gy_r(2, st); }
+    return gy_stmts(c, bk, 0, env, st);
+}
+
+// A `V(name) = e` condition on a known value: the env with name bound
+// when it matches, -1 not known, 0 no match, 1 a match (in how).
+type YP = { Int how; RdE env; GY st; };
+
+YP gy_pat(GYC c, Int ck, RdE env, GY st) {
+    YV v = gy_expr(c, gy_kid(c, ck, 0), env, st);
+    if (!v.ok) { return YP {.how = -1, .env = env, .st = v.st}; }
+    GXS sv = gx_sum_of(c.ft, v.v, v.ty);
+    if (!sv.ok) { return YP {.how = -1, .env = env, .st = v.st}; }
+    if (sv.tag != c.g.ns[ck].text) { return YP {.how = 0, .env = env, .st = v.st}; }
+    if (sv.ps.len() != 1 || sv.pts[0] == "") { return YP {.how = -1, .env = env, .st = v.st}; }
+    return YP {.how = 1, .env = rd_env_add(env, c.g.ns[ck].aux, sv.ps[0], rd_norm_ty(sv.pts[0])), .st = v.st};
+}
+
+YR gy_if(GYC c, Int id, RdE env, GY st) {
+    Int ck = gy_kid(c, id, 0);
+    YP p = if (c.g.ns[ck].kc == 45) { gy_pat(c, ck, env, st) } else {
+        YV cv = gy_expr(c, ck, env, st);
+        YP {.how = gy_bool(cv), .env = env, .st = cv.st}
+    };
+    if (p.how < 0) { return gy_r(2, p.st); }
+    if (p.how == 1) { return gy_block(c, gy_kid(c, id, 1), p.env, p.st); }
+    if (c.g.ns[id].nk < 3) { return gy_r(0, p.st); }
+    Int ek = gy_kid(c, id, 2);
+    if (c.g.ns[ek].kc == 34) { return gy_if_n(c, ek, env, p.st); }
+    return gy_block(c, ek, env, p.st);
+}
+
+YR gy_if_n(GYC c, Int id, RdE env, GY st) { return gy_if(c, id, env, st); }
+
+// `while (c) { body }`: bindings are immutable, so a body that runs to its
+// end would run the same way forever; only one that returns or breaks
+// out ends the loop.
+YR gy_while(GYC c, Int id, RdE env, GY st) {
+    Int ck = gy_kid(c, id, 0);
+    YP p = if (c.g.ns[ck].kc == 45) { gy_pat(c, ck, env, st) } else {
+        YV cv = gy_expr(c, ck, env, st);
+        YP {.how = gy_bool(cv), .env = env, .st = cv.st}
+    };
+    if (p.how < 0) { return gy_r(2, p.st); }
+    if (p.how == 0) { return gy_r(0, p.st); }
+    YR r = gy_block(c, gy_kid(c, id, 1), p.env, p.st);
+    if (r.how == 4) { return gy_r(0, r.st); }
+    if (r.how == 0 || r.how == 5) { return gy_r(2, r.st); }
+    return r;
+}
+
+// `for (T x in xs)` over a known list or range.
+YR gy_for(GYC c, Int id, RdE env, GY st) {
+    Str name = c.g.ns[id].text;
+    Str vty = rd_norm_ty(c.g.ns[gy_kid(c, id, 0)].text);
+    Int it = gy_kid(c, id, 1);
+    Int bk = gy_kid(c, id, 2);
+    if (c.g.ns[bk].kc != 35) { return gy_r(2, st); }
+    KN itn = c.g.ns[it];
+    if (itn.kc == 119 || itn.kc == 120) {
+        YV a = gy_expr(c, gy_kid(c, it, 0), env, st);
+        if (!a.ok || !rd_small(a.v)) { return gy_r(2, a.st); }
+        YV b = gy_expr(c, gy_kid(c, it, 1), env, a.st);
+        if (!b.ok || !rd_small(b.v)) { return gy_r(2, b.st); }
+        if (!rd_is_int_ty(rd_norm_ty(a.ty)) || !rd_is_int_ty(rd_norm_ty(b.ty)) || !rd_is_int_ty(vty)) { return gy_r(2, b.st); }
+        Int hi0 = rd_atoi(b.v);
+        return gy_for_range(c, bk, name, vty, rd_atoi(a.v), if (itn.text == "..=") { hi0 } else { hi0 - 1 }, env, b.st);
+    }
+    YV l = gy_expr(c, it, env, st);
+    if (!l.ok) { return gy_r(2, l.st); }
     Str et = rd_inner(l.ty, "List(");
-    if (et == "") { return fail; }
-    Str cty = if (et == "?") { vty } else { rd_coerce(et, vty) };
-    if (cty == "") { return fail; }
-    List(Str) its = rd_dec(l.v);
-    return gx_for_items(ft, bk, name, cty, its, 0, env, gx_scan(l.st, str_len(l.v)));
+    Str cty = if (et == "") { "" } else if (et == "?") { vty } else { rd_coerce(et, vty) };
+    if (cty == "") { return gy_r(2, l.st); }
+    return gy_for_items(c, bk, name, cty, rd_dec(l.v), 0, env, gy_scan(l.st, str_len(l.v)));
 }
 
-GXR gx_for_items(GXT ft, Int bk, Str name, Str ty, List(Str) items, Int i, RdE env, GS st) {
-    if (i >= items.len()) { return gx_mk0(true, st); }
-    GXR r = gx_stmts(ft, bk, 0, rd_env_add(env, name, items[i], ty), st);
-    if (!r.ok || r.bad || r.ret) { return r; }
-    return gx_for_items(ft, bk, name, ty, items, i + 1, env, r.st);
+// A `for` runs as gy_hop does: from a base state that does not change,
+// with the counters (and an error) carried, so the loop keeps its region
+// and an iteration's memo entries go with it.
+YR gy_for_items(GYC c, Int bk, Str name, Str ty, List(Str) items, Int i, RdE env, GY st) {
+    GYF f = gy_items_at(c, bk, name, ty, items, i, env, st, gy_fend(0, st, gx_nos(), gx_nos()));
+    return gy_fres(f, st);
 }
 
-GXR gx_for_range(GXT ft, Int bk, Str name, Str ty, Int i, Int hi, RdE env, GS st) {
-    if (i > hi) { return gx_mk0(true, st); }
-    GXR r = gx_stmts(ft, bk, 0, rd_env_add(env, name, rd_itoa(i), ty), st);
-    if (!r.ok || r.bad || r.ret) { return r; }
-    return gx_for_range(ft, bk, name, ty, i + 1, hi, env, r.st);
+YR gy_for_range(GYC c, Int bk, Str name, Str ty, Int i, Int hi, RdE env, GY st) {
+    GYF f = gy_range_at(c, bk, name, ty, i, hi, env, st, gy_fend(0, st, gx_nos(), gx_nos()));
+    return gy_fres(f, st);
+}
+
+// A loop's carried state: how the last iteration ended (YR's how), its
+// value or tail call (v, ty / tfi, tvs, tts) and the counters.
+type GYF = { Int how; Str v; Str ty; Int tfi; List(Str) tvs; List(Str) tts; Int steps; Int fuel; Int mem; Int bx; Str err; };
+
+GYF gy_fend(Int how, GY st, List(Str) tvs, List(Str) tts) {
+    Str err = st.memo.get("__ERR__") else { "" };
+    return GYF {.how = how, .v = "", .ty = "", .tfi = -1, .tvs = tvs, .tts = tts, .steps = st.steps, .fuel = st.fuel, .mem = st.mem, .bx = st.bx, .err = err};
+}
+
+GYF gy_fof(YR r) {
+    Str err = r.st.memo.get("__ERR__") else { "" };
+    return GYF {.how = r.how, .v = r.v, .ty = r.ty, .tfi = r.tfi, .tvs = r.tvs, .tts = r.tts, .steps = r.st.steps, .fuel = r.st.fuel, .mem = r.st.mem, .bx = r.st.bx, .err = err};
+}
+
+GY gy_fst(GY s, GYF f) {
+    Map(Str, Str) m = if (f.err != "") { s.memo.insert("__ERR__", f.err) } else { s.memo };
+    return GY {.steps = f.steps, .depth = s.depth, .fuel = f.fuel, .lim = s.lim, .mem = f.mem, .bx = f.bx, .memo = m};
+}
+
+YR gy_fres(GYF f, GY st) {
+    GY s1 = gy_fst(st, f);
+    return YR {.how = f.how, .v = f.v, .ty = f.ty, .st = s1};
+}
+
+GYF gy_items_at(GYC c, Int bk, Str name, Str ty, List(Str) items, Int i, RdE env, GY st, GYF f) {
+    if (i >= items.len()) { return f; }
+    YR r = gy_stmts(c, bk, 0, rd_env_add(env, name, items[i], ty), gy_fst(st, f));
+    if (r.how == 4) { return gy_fend(0, r.st, gx_nos(), gx_nos()); }
+    if (r.how != 0 && r.how != 5) { return gy_fof(r); }
+    return gy_items_at(c, bk, name, ty, items, i + 1, env, st, gy_fend(0, r.st, gx_nos(), gx_nos()));
+}
+
+GYF gy_range_at(GYC c, Int bk, Str name, Str ty, Int i, Int hi, RdE env, GY st, GYF f) {
+    if (i > hi) { return f; }
+    YR r = gy_stmts(c, bk, 0, rd_env_add(env, name, rd_itoa(i), ty), gy_fst(st, f));
+    if (r.how == 4) { return gy_fend(0, r.st, gx_nos(), gx_nos()); }
+    if (r.how != 0 && r.how != 5) { return gy_fof(r); }
+    return gy_range_at(c, bk, name, ty, i + 1, hi, env, st, gy_fend(0, r.st, gx_nos(), gx_nos()));
+}
+
+// `Some(v) = e;`: a value that does not match aborts at run time.
+YR gy_letpat(GYC c, Int blk, Int i, Int id, KN nd, RdE env, GY st) {
+    YP p = gy_pat(c, id, env, st);
+    if (p.how != 1) { return gy_r(2, p.st); }
+    return gy_stmts(c, blk, i + 1, p.env, p.st);
+}
+
+// `Name {a, b} = e;`: each name bound to the field of that name.
+YR gy_destr(GYC c, Int blk, Int i, Int id, RdE env, GY st) {
+    Int n = c.g.ns[id].nk;
+    YV v = gy_expr(c, gy_kid(c, id, n - 1), env, st);
+    if (!v.ok) { return gy_r(2, v.st); }
+    RdE e2 = gy_destr_at(c, id, 0, n - 1, v, env);
+    if (e2.ns.len() == 1 && e2.ns[0] == "") { return gy_r(2, v.st); }
+    return gy_stmts(c, blk, i + 1, e2, v.st);
+}
+
+RdE gy_destr_at(GYC c, Int id, Int i, Int n, YV v, RdE env) {
+    if (i >= n) { return env; }
+    Str f = c.g.ns[gy_kid(c, id, i)].text;
+    Str key = v.ty + str_from_code(31) + f;
+    Int fi = c.ft.sfx.get(key) else { -1 };
+    Str fv = if (fi < 0) { str_from_code(1) } else { rd_nth(v.v, fi) };
+    if (fv == str_from_code(1)) { return RdE {.ns = [""], .vs = [], .ts = []}; }
+    return gy_destr_at(c, id, i + 1, n, v, rd_env_add(env, f, fv, c.ft.sft.get(key) else { "" }));
 }
 
 // ─── Program ────────────────────────────────────────────────────────
@@ -2177,7 +2809,8 @@ GXT gx_table_empty(Str src, RB rb) {
     List(Str) es = [];
     List(Int) ei = [];
     List(Bool) eb = [];
-    return GXT {.fnames = es, .fpns = es, .fpts = es, .frets = es, .fbody = ei, .sts = es, .sfs = es, .fidx = e, .cts = es, .cpred = ei, .fann = es, .src = src, .rds = gx_rds0(), .rb = rb, .fcap = ei, .ffold = eb, .vsum = es, .vtys = es, .vidx = e};
+    List(List(Str)) ell = [];
+    return GXT {.fnames = es, .fpns = es, .fpts = es, .frets = es, .fbody = ei, .sts = es, .sfs = es, .fidx = e, .cts = es, .cpred = ei, .fann = es, .src = src, .rds = gx_rds0(), .rb = rb, .fcap = ei, .ffold = eb, .vsum = es, .vtys = es, .vidx = e, .sidx = e, .snf = ei, .sfx = e, .sft = {"__EMPTY__": ""}, .fpnl = ell, .fptl = ell, .fone = {"__EMPTY__": ""}};
 }
 
 // The generic parameters of a type declaration ("" when none).
@@ -2208,14 +2841,14 @@ GXT gx_collect(Kg g, Int unit, Int i, GXT ft) {
     Int d = kg_kid(g, unit, i);
     KN n = g.ns[d];
     if (n.kind == "struct_t" && gx_gparams(n.aux) == "") {
-        GXT f1 = GXT {.fnames = ft.fnames, .fpns = ft.fpns, .fpts = ft.fpts, .frets = ft.frets, .fbody = ft.fbody, .sts = ft.sts.concat([n.text]), .sfs = ft.sfs.concat([gx_fields(g, d, 0, "")]), .fidx = ft.fidx, .cts = ft.cts, .cpred = ft.cpred, .fann = ft.fann, .src = ft.src, .rds = ft.rds, .rb = ft.rb, .fcap = ft.fcap, .ffold = ft.ffold, .vsum = ft.vsum, .vtys = ft.vtys, .vidx = ft.vidx};
-        return gx_collect(g, unit, i + 1, f1);
+        GXT f1 = GXT {.fnames = ft.fnames, .fpns = ft.fpns, .fpts = ft.fpts, .frets = ft.frets, .fbody = ft.fbody, .sts = ft.sts.concat([n.text]), .sfs = ft.sfs.concat([gx_fields(g, d, 0, "")]), .fidx = ft.fidx, .cts = ft.cts, .cpred = ft.cpred, .fann = ft.fann, .src = ft.src, .rds = ft.rds, .rb = ft.rb, .fcap = ft.fcap, .ffold = ft.ffold, .vsum = ft.vsum, .vtys = ft.vtys, .vidx = ft.vidx, .sidx = ft.sidx.insert(n.text, ft.sts.len()), .snf = ft.snf.concat([n.nk]), .sfx = ft.sfx, .sft = ft.sft, .fpnl = ft.fpnl, .fptl = ft.fptl, .fone = ft.fone};
+        return gx_collect(g, unit, i + 1, gx_sfields(g, d, n.text, 0, f1));
     }
     if ((n.kind == "ctype_t" || n.kind == "cwhere_t") && gx_gparams(n.aux) == "") {
         Int pk = kg_kid(g, d, 1);
         Str ctext = str_trim(str_slice(ft.src, g.ns[pk].sp, g.ns[pk].ep));
         Str ent = n.text + str_from_code(31) + g.ns[kg_kid(g, d, 0)].text + str_from_code(31) + ctext;
-        GXT f2 = GXT {.fnames = ft.fnames, .fpns = ft.fpns, .fpts = ft.fpts, .frets = ft.frets, .fbody = ft.fbody, .sts = ft.sts, .sfs = ft.sfs, .fidx = ft.fidx, .cts = ft.cts.concat([ent]), .cpred = ft.cpred.concat([pk]), .fann = ft.fann, .src = ft.src, .rds = ft.rds, .rb = ft.rb, .fcap = ft.fcap, .ffold = ft.ffold, .vsum = ft.vsum, .vtys = ft.vtys, .vidx = ft.vidx};
+        GXT f2 = GXT {.fnames = ft.fnames, .fpns = ft.fpns, .fpts = ft.fpts, .frets = ft.frets, .fbody = ft.fbody, .sts = ft.sts, .sfs = ft.sfs, .fidx = ft.fidx, .cts = ft.cts.concat([ent]), .cpred = ft.cpred.concat([pk]), .fann = ft.fann, .src = ft.src, .rds = ft.rds, .rb = ft.rb, .fcap = ft.fcap, .ffold = ft.ffold, .vsum = ft.vsum, .vtys = ft.vtys, .vidx = ft.vidx, .sidx = ft.sidx, .snf = ft.snf, .sfx = ft.sfx, .sft = ft.sft, .fpnl = ft.fpnl, .fptl = ft.fptl, .fone = ft.fone};
         return gx_collect(g, unit, i + 1, f2);
     }
     if (n.kind == "sum_t" && gx_gparams(n.aux) == "") { return gx_collect(g, unit, i + 1, gx_variants(g, d, 0, ft)); }
@@ -2224,16 +2857,34 @@ GXT gx_collect(Kg g, Int unit, Int i, GXT ft) {
         // time (an effect, spec §47): it has no body to reduce.
         Int nk = n.nk;
         List(Str) fa = if (str_contains(n.aux, "@")) { ft.fann.concat([n.text]) } else { ft.fann };
-        GXT f3 = GXT {.fnames = ft.fnames.concat([n.text]), .fpns = ft.fpns.concat([gx_param_list(g, d, 1, nk - 1, false, ",", "")]), .fpts = ft.fpts.concat([gx_param_list(g, d, 1, nk - 1, true, "|", "")]), .frets = ft.frets.concat([g.ns[kg_kid(g, d, 0)].text]), .fbody = ft.fbody.concat([if (str_contains(n.aux, "@link")) { -1 } else { kg_kid(g, d, nk - 1) }]), .sts = ft.sts, .sfs = ft.sfs, .fidx = ft.fidx.insert(n.text, ft.fnames.len()), .cts = ft.cts, .cpred = ft.cpred, .fann = fa, .src = ft.src, .rds = ft.rds, .rb = ft.rb, .fcap = ft.fcap.concat([gx_ann_cap(n.aux)]), .ffold = ft.ffold.concat([gx_ann_word(n.aux, "@fold")]), .vsum = ft.vsum, .vtys = ft.vtys, .vidx = ft.vidx};
+        GXT f3 = GXT {.fnames = ft.fnames.concat([n.text]), .fpns = ft.fpns.concat([gx_param_list(g, d, 1, nk - 1, false, ",", "")]), .fpts = ft.fpts.concat([gx_param_list(g, d, 1, nk - 1, true, "|", "")]), .frets = ft.frets.concat([g.ns[kg_kid(g, d, 0)].text]), .fbody = ft.fbody.concat([if (str_contains(n.aux, "@link")) { -1 } else { kg_kid(g, d, nk - 1) }]), .sts = ft.sts, .sfs = ft.sfs, .fidx = ft.fidx.insert(n.text, ft.fnames.len()), .cts = ft.cts, .cpred = ft.cpred, .fann = fa, .src = ft.src, .rds = ft.rds, .rb = ft.rb, .fcap = ft.fcap.concat([gx_ann_cap(n.aux)]), .ffold = ft.ffold.concat([gx_ann_word(n.aux, "@fold")]), .vsum = ft.vsum, .vtys = ft.vtys, .vidx = ft.vidx, .sidx = ft.sidx, .snf = ft.snf, .sfx = ft.sfx, .sft = ft.sft, .fpnl = ft.fpnl.concat([rd_split(gx_param_list(g, d, 1, nk - 1, false, ",", ""), ",")]), .fptl = ft.fptl.concat([gx_norm_all(rd_split(gx_param_list(g, d, 1, nk - 1, true, "|", ""), "|"), 0, ListBuf())]), .fone = ft.fone};
         return gx_collect(g, unit, i + 1, f3);
     }
     return gx_collect(g, unit, i + 1, ft);
 }
 
+List(Str) gx_norm_all(List(Str) ts, Int i, ListBuf(Str) acc) {
+    if (i >= ts.len()) { return acc.finish(); }
+    return gx_norm_all(ts, i + 1, acc.push(rd_norm_ty(ts[i])));
+}
+
+// Each field's index and type, by "Struct\x1ffield".
+GXT gx_sfields(Kg g, Int d, Str sname, Int i, GXT ft) {
+    if (i >= g.ns[d].nk) { return ft; }
+    Int f = kg_kid(g, d, i);
+    Str fname = g.ns[f].text;
+    Str key = sname + str_from_code(31) + fname;
+    Str fty = rd_norm_ty(g.ns[kg_kid(g, f, 0)].text);
+    // A field name only one record type has is found by its name alone.
+    Map(Str, Str) one = if (ft.fone.contains(fname)) { ft.fone.insert(fname, "") } else { ft.fone.insert(fname, sname + str_from_code(31) + rd_itoa(i) + str_from_code(31) + fty) };
+    GXT f2 = GXT {.fnames = ft.fnames, .fpns = ft.fpns, .fpts = ft.fpts, .frets = ft.frets, .fbody = ft.fbody, .sts = ft.sts, .sfs = ft.sfs, .fidx = ft.fidx, .cts = ft.cts, .cpred = ft.cpred, .fann = ft.fann, .src = ft.src, .rds = ft.rds, .rb = ft.rb, .fcap = ft.fcap, .ffold = ft.ffold, .vsum = ft.vsum, .vtys = ft.vtys, .vidx = ft.vidx, .sidx = ft.sidx, .snf = ft.snf, .sfx = ft.sfx.insert(key, i), .sft = ft.sft.insert(key, fty), .fpnl = ft.fpnl, .fptl = ft.fptl, .fone = one};
+    return gx_sfields(g, d, sname, i + 1, f2);
+}
+
 GXT gx_variants(Kg g, Int d, Int i, GXT ft) {
     if (i >= g.ns[d].nk) { return ft; }
     KN v = g.ns[kg_kid(g, d, i)];
-    GXT f2 = GXT {.fnames = ft.fnames, .fpns = ft.fpns, .fpts = ft.fpts, .frets = ft.frets, .fbody = ft.fbody, .sts = ft.sts, .sfs = ft.sfs, .fidx = ft.fidx, .cts = ft.cts, .cpred = ft.cpred, .fann = ft.fann, .src = ft.src, .rds = ft.rds, .rb = ft.rb, .fcap = ft.fcap, .ffold = ft.ffold, .vsum = ft.vsum.concat([g.ns[d].text]), .vtys = ft.vtys.concat([v.aux]), .vidx = ft.vidx.insert(v.text, ft.vsum.len())};
+    GXT f2 = GXT {.fnames = ft.fnames, .fpns = ft.fpns, .fpts = ft.fpts, .frets = ft.frets, .fbody = ft.fbody, .sts = ft.sts, .sfs = ft.sfs, .fidx = ft.fidx, .cts = ft.cts, .cpred = ft.cpred, .fann = ft.fann, .src = ft.src, .rds = ft.rds, .rb = ft.rb, .fcap = ft.fcap, .ffold = ft.ffold, .vsum = ft.vsum.concat([g.ns[d].text]), .vtys = ft.vtys.concat([v.aux]), .vidx = ft.vidx.insert(v.text, ft.vsum.len()), .sidx = ft.sidx, .snf = ft.snf, .sfx = ft.sfx, .sft = ft.sft, .fpnl = ft.fpnl, .fptl = ft.fptl, .fone = ft.fone};
     return gx_variants(g, d, i + 1, f2);
 }
 

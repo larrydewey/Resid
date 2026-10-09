@@ -1,0 +1,56 @@
+// Statements the evaluator runs while β-reducing: loops with break and
+// continue, `while` that returns or breaks, pattern conditions and
+// bindings, destructuring, and `known` (erased at run time).
+type Pt = { Int x; Int y; };
+
+Int first_over(List(Int) xs, Int lim) {
+    Int found = -1;
+    for (Int x in xs) {
+        if (x <= lim) { continue; }
+        return x;
+    }
+    return found;
+}
+
+Int sum_until(Int n) {
+    for (Int i in 0..n) {
+        if (i == 7) { break; }
+    }
+    return n * 2;
+}
+
+Int spin(Int n) {
+    while (true) {
+        if (n > 3) { return n * 10; }
+        break;
+    }
+    return -1;
+}
+
+Int unwrap_or(Option(Int) o, Int d) {
+    if (Some(v) = o) { return v + 1; }
+    return d;
+}
+
+Int must(Option(Int) o) {
+    Some(v) = o;
+    return v * 3;
+}
+
+Int norm1(Pt p) {
+    Pt {x, y} = p;
+    return abs(x) + abs(y);
+}
+
+Int three() {
+    Int z = 3;
+    known(z);
+    return z;
+}
+
+Int main() {
+    List(Int) xs = [1, 5, 9, 12];
+    println(f"{first_over(xs, 6)} {first_over(xs, 20)} {sum_until(10)} {spin(5)} {spin(1)}");
+    println(f"{unwrap_or(Some(4), 0)} {unwrap_or(None, 9)} {must(Some(7))} {norm1(Pt {.x = -3, .y = 4})} {three()}");
+    return 0;
+}

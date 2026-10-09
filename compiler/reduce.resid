@@ -18,7 +18,7 @@ type RdE = { List(Str) ns; List(Str) vs; List(Str) ts; };
 // tail may absorb further known strings (Str `+` is pure and associative).
 type RdV = { Bool k; Str v; Str ty; Str r; Bool ch; Bool bad; Bool bd; Str sx; Str px; Int pos; RdS st; };
 type RdA = { List(Str) vs; List(Str) ts; List(Str) rs; Bool allk; Bool ch; Bool named; Bool bad; Int pos; RdS st; };
-type RdN = { Bool ok; Int v; };
+pub type RdN = { Bool ok; Int v; };
 
 // Budgets (spec §27). Every one counts work -- steps, nesting, abstract
 // bytes -- and never time or native memory, so a program reduces the same
@@ -109,10 +109,10 @@ pub Str rd_join(List(Str) xs, Int i, Str sep, Str acc) {
 // ─── Values and types ───────────────────────────────────────────
 
 pub Str rd_norm_ty(Str t) {
-    if (t == "Int" || t == "Str" || t == "Bool") { return t; }
+    // Only Int(64) and UInt(64) are spelled two ways.
+    if (!str_contains(t, "t(64)")) { return t; }
     if (t == "Int(64)") { return "Int"; }
     if (t == "UInt(64)") { return "UInt"; }
-    if (!str_contains(t, "(")) { return t; }
     return str_replace(t, "Int(64)", "Int");
 }
 
@@ -173,6 +173,9 @@ pub Bool rd_int_fits(Str v, Str t) {
 
 // Whether a value's text is an Int (the common case, computed in 64 bits).
 pub Bool rd_small(Str v) {
+    // A canonical decimal below 10^18 in magnitude has at most 18 digits.
+    Int p = str_parse_int(v);
+    if (p < 1000000000000000000 && p > -1000000000000000000) { return true; }
     Int n = str_len(v);
     Int d = if (str_starts_with(v, "-")) { n - 1 } else { n };
     if (d <= 18) { return true; }
@@ -323,58 +326,94 @@ pub Str rd_coerce_v(Str have, Str want, Str v) {
 }
 
 // ─── Composite encoding ─────────────────────────────────────────
-// A list or struct value is its items' values, each prefixed by its
-// length: "3:abc1:x". An Option is "N" or "S" + payload.
+// A list or struct value is its item count, then each item's end offset
+// (8 hex digits, in codepoints from the start of the items), then the
+// items: "2:0000000300000004abcx" is ["abc", "x"]. An item is found
+// without walking the ones before it. The empty list is "". An Option is
+// "N" or "S" + payload.
 
-Str rd_enc_at(List(Str) items, Int i, Str sb) {
-    if (i >= items.len()) { return str_sb_finish(sb); }
-    Str it = items[i];
-    Str sb2 = str_sb_append(sb, rd_itoa(str_len(it)) + ":");
-    Str sb3 = str_sb_append(sb2, it);
-    Int k = i + 1;
-    return rd_enc_at(items, k, sb3);
+Str rd_hex8(Int x) { return rd_hex8_at(x, 28, StrBuf()); }
+
+Str rd_hex8_at(Int x, Int sh, StrBuf acc) {
+    if (sh < 0) { return acc.finish(); }
+    Int d = (x >> sh) & 15;
+    return rd_hex8_at(x, sh - 4, acc.push_char(if (d < 10) { 48 + d } else { 87 + d }));
+}
+
+Int rd_hex_at(Str v, Int pos, Int i, Int acc) {
+    if (i >= 8) { return acc; }
+    Int c = str_char_at(v, pos + i);
+    return rd_hex_at(v, pos, i + 1, (acc << 4) | (if (c >= 97) { c - 87 } else { c - 48 }));
+}
+
+// Item count and where the offsets start.
+type RdL = { Int n; Int at; };
+
+RdL rd_head(Str v) {
+    if (v == "") { return RdL {.n = 0, .at = 0}; }
+    Int colon = str_find_char(v, 58, 0);
+    return RdL {.n = rd_digits(v, 0, colon, 0), .at = colon + 1};
+}
+
+Int rd_digits(Str v, Int i, Int e, Int acc) {
+    if (i >= e) { return acc; }
+    return rd_digits(v, i + 1, e, acc * 10 + str_char_at(v, i) - 48);
+}
+
+Str rd_offs(List(Str) items, Int i, Int end, StrBuf acc) {
+    if (i >= items.len()) { return acc.finish(); }
+    Int e = end + str_len(items[i]);
+    return rd_offs(items, i + 1, e, acc.push(rd_hex8(e)));
 }
 
 pub Str rd_enc(List(Str) items) {
     if (items.len() == 0) { return ""; }
-    return rd_enc_at(items, 0, str_sb_new());
-}
-
-List(Str) rd_dec_at(Str v, Int pos, Int n, List(Str) acc) {
-    if (pos >= n) { return acc; }
-    Int colon = str_find_char(v, 58, pos);
-    Int len = rd_atoi(str_slice(v, pos, colon));
-    Int st = colon + 1;
-    Int en = st + len;
-    List(Str) acc2 = acc.concat([str_slice(v, st, en)]);
-    return rd_dec_at(v, en, n, acc2);
-}
-
-// Item i of an encoded list without decoding the rest; "\x01" when the
-// list is shorter.
-pub Str rd_nth(Str v, Int i) { return rd_nth_at(v, 0, str_len(v), i); }
-
-Str rd_nth_at(Str v, Int pos, Int n, Int i) {
-    if (pos >= n) { return str_from_code(1); }
-    Int colon = str_find_char(v, 58, pos);
-    Int en = colon + 1 + rd_atoi(str_slice(v, pos, colon));
-    if (i == 0) { return str_slice(v, colon + 1, en); }
-    return rd_nth_at(v, en, n, i - 1);
-}
-
-// The number of items of an encoded list.
-pub Int rd_count(Str v) { return rd_count_at(v, 0, str_len(v), 0); }
-
-Int rd_count_at(Str v, Int pos, Int n, Int acc) {
-    if (pos >= n) { return acc; }
-    Int colon = str_find_char(v, 58, pos);
-    return rd_count_at(v, colon + 1 + rd_atoi(str_slice(v, pos, colon)), n, acc + 1);
+    return rd_itoa(items.len()) + ":" + rd_offs(items, 0, 0, StrBuf()) + str_join(items, "");
 }
 
 pub List(Str) rd_dec(Str v) {
-    List(Str) none = [];
-    return rd_dec_at(v, 0, str_len(v), none);
+    RdL h = rd_head(v);
+    return rd_dec_at(v, h, 0, 0, ListBuf());
 }
+
+List(Str) rd_dec_at(Str v, RdL h, Int i, Int st, ListBuf(Str) acc) {
+    if (i >= h.n) { return acc.finish(); }
+    Int base = h.at + 8 * h.n;
+    Int e = rd_hex_at(v, h.at + 8 * i, 0, 0);
+    return rd_dec_at(v, h, i + 1, e, acc.push(str_slice(v, base + st, base + e)));
+}
+
+// Item i of an encoded list; "\x01" when the list is shorter.
+pub Str rd_nth(Str v, Int i) {
+    RdL h = rd_head(v);
+    if (i < 0 || i >= h.n) { return str_from_code(1); }
+    Int base = h.at + 8 * h.n;
+    Int st = if (i == 0) { 0 } else { rd_hex_at(v, h.at + 8 * (i - 1), 0, 0) };
+    return str_slice(v, base + st, base + rd_hex_at(v, h.at + 8 * i, 0, 0));
+}
+
+// The number of items of an encoded list.
+pub Int rd_count(Str v) { return rd_head(v).n; }
+
+// a's items then b's.
+pub Str rd_cat(Str a, Str b) {
+    if (a == "") { return b; }
+    if (b == "") { return a; }
+    RdL ha = rd_head(a);
+    RdL hb = rd_head(b);
+    Int ba = ha.at + 8 * ha.n;
+    Int bb = hb.at + 8 * hb.n;
+    Int la = rd_hex_at(a, ha.at + 8 * (ha.n - 1), 0, 0);
+    return rd_itoa(ha.n + hb.n) + ":" + str_slice(a, ha.at, ba) + rd_shift_offs(b, hb, 0, la, StrBuf()) + str_slice(a, ba, str_len(a)) + str_slice(b, bb, str_len(b));
+}
+
+Str rd_shift_offs(Str b, RdL hb, Int i, Int by, StrBuf acc) {
+    if (i >= hb.n) { return acc.finish(); }
+    return rd_shift_offs(b, hb, i + 1, by, acc.push(rd_hex8(rd_hex_at(b, hb.at + 8 * i, 0, 0) + by)));
+}
+
+// v with one more item.
+pub Str rd_push(Str v, Str item) { return rd_cat(v, rd_enc([item])); }
 
 pub Int rd_atoi(Str v) {
     return str_parse_int(v);
@@ -694,11 +733,7 @@ pub RdV rd_unk(Str r, Bool ch, Int pos, RdS st) {
 // came from). Falls back to the residual text when the value has no
 // literal form — it is still known to the evaluator.
 RdV rd_folded(Str v, Str ty, Str orig, Bool och, Int pos, RdS st) {
-    Str lit = rd_render(v, ty);
-    if (lit == "") {
-        return RdV {.k = true, .v = v, .ty = rd_norm_ty(ty), .r = orig, .ch = och, .bad = false, .bd = false, .sx = "", .px = "", .pos = pos, .st = st};
-    }
-    return RdV {.k = true, .v = v, .ty = rd_norm_ty(ty), .r = lit, .ch = true, .bad = false, .bd = false, .sx = "", .px = "", .pos = pos, .st = st};
+    return RdV {.k = true, .v = v, .ty = rd_norm_ty(ty), .r = orig, .ch = true, .bad = false, .bd = false, .sx = "", .px = "", .pos = pos, .st = st};
 }
 
 // ─── Environment ────────────────────────────────────────────────
@@ -730,11 +765,11 @@ pub Int rd_env_idx(RdE e, Str name) {
 
 // ─── Integer arithmetic with the code generator's semantics ─────
 
-RdN rd_n(Bool ok, Int v) {
+pub RdN rd_n(Bool ok, Int v) {
     return RdN {.ok = ok, .v = v};
 }
 
-RdN rd_add(Int a, Int b) {
+pub RdN rd_add(Int a, Int b) {
     if (b > 0) {
         Int lim = rd_i64_max() - b;
         if (a > lim) { return rd_n(false, 0); }
@@ -746,7 +781,7 @@ RdN rd_add(Int a, Int b) {
     return rd_n(true, a + b);
 }
 
-RdN rd_sub(Int a, Int b) {
+pub RdN rd_sub(Int a, Int b) {
     if (b < 0) {
         Int lim = rd_i64_max() + b;
         if (a > lim) { return rd_n(false, 0); }
@@ -758,7 +793,7 @@ RdN rd_sub(Int a, Int b) {
     return rd_n(true, a - b);
 }
 
-RdN rd_mul(Int a, Int b) {
+pub RdN rd_mul(Int a, Int b) {
     Int(128) p = (Int(128))a * b;
     Int(128) hi = (Int(128))rd_i64_max();
     Int(128) lo = (Int(128))rd_i64_min();
@@ -767,7 +802,7 @@ RdN rd_mul(Int a, Int b) {
     return rd_n(true, (Int)p);
 }
 
-RdN rd_div(Int a, Int b, Bool rem) {
+pub RdN rd_div(Int a, Int b, Bool rem) {
     if (b == 0) { return rd_n(false, 0); }
     if (b == -1) {
         if (a == rd_i64_min()) { return rd_n(false, 0); }
@@ -886,6 +921,8 @@ Str rd_bool(Bool b) {
 }
 
 pub RdV rd_fold(Str op, RdV l, RdV r, Bool llit, Bool rlit, Str orig, Int pos, RdS st) {
+    // The common case first: two Ints.
+    if (l.ty == "Int" && r.ty == "Int" && rd_small(l.v) && rd_small(r.v)) { return rd_fold_int64(op, rd_atoi(l.v), rd_atoi(r.v), "Int", 64, 64, orig, pos, st); }
     Str lt0 = rd_norm_ty(l.ty);
     Str rt0 = rd_norm_ty(r.ty);
     // A literal past 64 bits takes the type of the operand beside it.
@@ -1406,17 +1443,26 @@ pub Str rd_sort(Str v, Str et0) {
 // ─── β-reduction of user functions ──────────────────────────────
 
 pub Str rd_memo_key(Str name, RdA a) {
-    List(Str) ts = a.ts;
-    List(Str) vs = a.vs;
     Str sep = str_from_code(1);
-    return name + sep + rd_memo_args(ts, vs, 0, sep, "");
+    return rd_memo_args(a.ts, a.vs, 0, sep, StrBuf().push(name).push(sep));
 }
 
-Str rd_memo_args(List(Str) ts, List(Str) vs, Int i, Str sep, Str acc) {
-    if (i >= ts.len()) { return acc; }
-    Str a2 = acc + rd_norm_ty(ts[i]) + sep + vs[i] + sep;
-    Int k = i + 1;
-    return rd_memo_args(ts, vs, k, sep, a2);
+Str rd_memo_args(List(Str) ts, List(Str) vs, Int i, Str sep, StrBuf acc) {
+    if (i >= ts.len()) { return acc.finish(); }
+    return rd_memo_args(ts, vs, i + 1, sep, acc.push(rd_norm_ty(ts[i])).push(sep).push(vs[i]).push(sep));
+}
+
+// Parameters bound to known arguments in a new environment; "" names
+// mark an unusable call.
+pub RdE rd_bind_env(List(Str) pns, List(Str) pts, List(Str) vs, List(Str) ts, Int i, ListBuf(Str) bn, ListBuf(Str) bv, ListBuf(Str) bt) {
+    if (i >= pns.len()) { return RdE {.ns = bn.finish(), .vs = bv.finish(), .ts = bt.finish()}; }
+    // pts are normalized: an argument of the parameter's own type flows as is.
+    Str ty = if (ts[i] == pts[i]) { pts[i] } else { rd_coerce_v(ts[i], pts[i], vs[i]) };
+    if (ty == "") {
+        RdE _d = RdE {.ns = bn.finish(), .vs = bv.finish(), .ts = bt.finish()};
+        return RdE {.ns = [""], .vs = [], .ts = []};
+    }
+    return rd_bind_env(pns, pts, vs, ts, i + 1, bn.push(pns[i]), bv.push(vs[i]), bt.push(ty));
 }
 
 // Bind parameters to known arguments; "" names mark an unusable call.

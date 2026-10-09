@@ -351,6 +351,30 @@ the evaluator could not run.
   Folds 3,501 -> 3,592. Found on the way: a set literal with a negative
   element (`{9, -5}`) did not compile without reduction (lowering
   compared `Int` with `Int(64)`).
+- **Step 5: evaluator speed.** A call with known arguments is evaluated
+  by a separate evaluator, `gy_*`, on values alone: no residual nodes, a
+  7-field state instead of the reducer's 16, and a failure at the first
+  unknown value (which is what any unknown did to a β-reduction anyway).
+  Both evaluators use one set of value semantics (`sem_*`). Then: kind and
+  operator codes on graph nodes (`KN.kc`), Ints computed natively between
+  two operations, canonical Int literals used as their own text, an
+  indexed list encoding (item i without walking the ones before it, so
+  `xs[i]`, `.len()` and field reads cost O(1) and are charged so),
+  per-function parameter lists and per-field tables built once, memo keys
+  built in a StrBuf, builtins tried only where no user function has the
+  name (as lowering calls them), and no self-tail loops among the
+  evaluator's helpers: a loop's region copied the whole state, memo
+  included, out at every exit. `for` loops run like tail calls (base state
+  fixed, counters carried). The evaluator also runs `while` bodies that
+  return or break, `break`/`continue` in `for`, pattern conditions,
+  `Some(v) = o;`, destructuring, and erases `known`/`comptime_print`.
+  The leaf analysis no longer counts a binding's declared type, nor a `+`
+  after a field that is scalar in every record, so fewer calls get a
+  scope (22% fewer scope pushes in the compiler; benchmarks unchanged).
+  Compile-time loops: a tail loop 6.8x faster, nested non-tail recursion
+  3.9x, a record-building loop 2.9x, list building 4.5x (and it now folds
+  where it ran out of steps); the 443-program corpus compiles in 29 s
+  instead of 56 s. Self-compile time and memory unchanged; seed +2%.
 
 ### 0zx. Reduction budgets that count work, and tail calls that loop (2026-10-09)
 

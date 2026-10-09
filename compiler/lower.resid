@@ -5952,9 +5952,9 @@ Str lf_first(Kg g, Int id) {
     return "{";
 }
 
-List(Str) lf_kids(Kg g, Int id, Int i, Int n, List(Str) ptrs, List(Str) acc) {
+List(Str) lf_kids(Kg g, Int id, Int i, Int n, List(Str) ptrs, Funcs fs, List(Str) acc) {
     if (i >= n || lf_bad(acc)) { return acc; }
-    return lf_kids(g, id, i + 1, n, ptrs, lf_node(g, kg_kid(g, id, i), ptrs, acc));
+    return lf_kids(g, id, i + 1, n, ptrs, fs, lf_node(g, kg_kid(g, id, i), ptrs, fs, acc));
 }
 
 // `[` after `prev`: indexing follows a value, else it opens a list.
@@ -5969,7 +5969,7 @@ List(Str) lf_kw(Str w, Kg g, Int c, List(Str) acc) {
     return lf_ident(w, lf_first(g, c) == "(", acc);
 }
 
-List(Str) lf_node(Kg g, Int id, List(Str) ptrs, List(Str) acc) {
+List(Str) lf_node(Kg g, Int id, List(Str) ptrs, Funcs fs, List(Str) acc) {
     if (lf_bad(acc)) { return acc; }
     Str k = g.ns[id].kind;
     Str t = g.ns[id].text;
@@ -5983,64 +5983,76 @@ List(Str) lf_node(Kg g, Int id, List(Str) ptrs, List(Str) acc) {
     if (k == "lambda" || k == "spawn" || k == "list") { return lf_no(); }
     if (k == "ref" || k == "name" || k == "lparam") { return lf_ident(t, false, acc); }
     if (k == "ty") { return lf_text(t, "", ptrs, acc); }
-    if (k == "call") { return lf_kids(g, id, 0, n, ptrs, lf_ident(t, true, acc)); }
+    if (k == "call") { return lf_kids(g, id, 0, n, ptrs, fs, lf_ident(t, true, acc)); }
     if (k == "callv") {
         Int f = kg_kid(g, id, 0);
         Str fk = g.ns[f].kind;
         if (fk == "field") {
             if (g.ns[f].text != "len" || n > 1) { return lf_no(); }
-            return lf_node(g, kg_kid(g, f, 0), ptrs, acc);
+            return lf_node(g, kg_kid(g, f, 0), ptrs, fs, acc);
         }
-        List(Str) a1 = if (fk == "ref") { lf_ident(g.ns[f].text, true, acc) } else { lf_node(g, f, ptrs, acc) };
-        return lf_kids(g, id, 1, n, ptrs, a1);
+        List(Str) a1 = if (fk == "ref") { lf_ident(g.ns[f].text, true, acc) } else { lf_node(g, f, ptrs, fs, acc) };
+        return lf_kids(g, id, 1, n, ptrs, fs, a1);
     }
     if (k == "mcall") {
         // Vector methods stay in registers (a misjudged leaf only goes
         // without a scope).
         Bool vm = t == "any" || t == "all" || t == "bits" || t == "sum" || t == "with" || t == "shuffle" || str_starts_with(t, "wrapping_");
-        if (vm) { return lf_kids(g, id, 0, n, ptrs, acc); }
+        if (vm) { return lf_kids(g, id, 0, n, ptrs, fs, acc); }
         if (t != "len" || n > 1) { return lf_no(); }
-        return lf_node(g, kg_kid(g, id, 0), ptrs, acc);
+        return lf_node(g, kg_kid(g, id, 0), ptrs, fs, acc);
     }
     if (k == "field") {
         if (!lf_word(t) && !lf_upper(t)) { return lf_no(); }
-        return lf_node(g, kg_kid(g, id, 0), ptrs, acc);
+        return lf_node(g, kg_kid(g, id, 0), ptrs, fs, acc);
     }
     if (k == "index" || k == "slice") {
         Int b = kg_kid(g, id, 0);
-        List(Str) a1 = lf_node(g, b, ptrs, acc);
+        List(Str) a1 = lf_node(g, b, ptrs, fs, acc);
         if (lf_bad(a1) || !lf_after_val(lf_last(g, b))) { return lf_no(); }
-        return lf_kids(g, id, 1, n, ptrs, a1);
+        return lf_kids(g, id, 1, n, ptrs, fs, a1);
     }
-    if (k == "struct" || k == "destr") { return lf_kids(g, id, 0, n, ptrs, lf_ident(t, false, acc)); }
+    if (k == "struct" || k == "destr") { return lf_kids(g, id, 0, n, ptrs, fs, lf_ident(t, false, acc)); }
     if (k == "bin" && t == "+") {
         Str pl = lf_last(g, kg_kid(g, id, 0));
         Str nf = lf_first(g, kg_kid(g, id, 1));
-        if (str_starts_with(pl, ".") || pl == "]" || list_has_str(ptrs, pl)) { return lf_no(); }
+        // A field read is a number when every record with that field has
+        // a scalar there; anything else may be a Str concatenation.
+        Bool numf = str_starts_with(pl, ".") && lf_num_field(fs, str_slice(pl, 1, str_len(pl)), 0);
+        if ((str_starts_with(pl, ".") && !numf) || pl == "]" || list_has_str(ptrs, pl)) { return lf_no(); }
         if (list_has_str(ptrs, nf)) { return lf_no(); }
-        return lf_kids(g, id, 0, n, ptrs, acc);
+        return lf_kids(g, id, 0, n, ptrs, fs, acc);
     }
     if (k == "arm" || k == "letpat" || k == "pat") {
         Str pat = if (k == "arm") { kg_pr_pat(g, id, 0, n - 1) } else { t + "(" + g.ns[id].aux + ")" };
-        return lf_kids(g, id, 0, n, ptrs, lf_text(pat, "", ptrs, acc));
+        return lf_kids(g, id, 0, n, ptrs, fs, lf_text(pat, "", ptrs, acc));
     }
     if (k == "rbind") {
         Int ty = kg_kid(g, id, 0);
-        List(Str) a1 = lf_node(g, ty, ptrs, acc);
+        List(Str) a1 = lf_node(g, ty, ptrs, fs, acc);
         Tok lt = lf_last_tok(g.ns[ty].text, 0, "");
         if (!lf_after_val(lt.text)) { return lf_no(); }
-        return lf_kids(g, id, 1, n, ptrs, a1);
+        return lf_kids(g, id, 1, n, ptrs, fs, a1);
     }
-    if (k == "bind") { return lf_kids(g, id, 0, n, ptrs, lf_text(g.ns[id].aux, "", ptrs, acc)); }
+    // A binding's declared type allocates nothing: only its value counts.
+    if (k == "bind") { return lf_kids(g, id, 1, n, ptrs, fs, lf_text(g.ns[id].aux, "", ptrs, acc)); }
     if (k == "for") {
-        List(Str) a1 = lf_node(g, kg_kid(g, id, 0), ptrs, acc);
-        return lf_kids(g, id, 1, n, ptrs, lf_kw("in", g, kg_kid(g, id, 1), a1));
+        List(Str) a1 = lf_node(g, kg_kid(g, id, 0), ptrs, fs, acc);
+        return lf_kids(g, id, 1, n, ptrs, fs, lf_kw("in", g, kg_kid(g, id, 1), a1));
     }
-    if (k == "with") { return lf_kids(g, id, 0, n, ptrs, lf_ident("with", true, acc)); }
-    if (k == "rt") { return lf_kids(g, id, 0, n, ptrs, lf_kw("rt", g, kg_kid(g, id, 0), acc)); }
-    if (k == "named") { return lf_kids(g, id, 0, n, ptrs, acc); }
-    if (k == "un") { return lf_kids(g, id, 0, n, ptrs, acc); }
-    return lf_kids(g, id, 0, n, ptrs, acc);
+    if (k == "with") { return lf_kids(g, id, 0, n, ptrs, fs, lf_ident("with", true, acc)); }
+    if (k == "rt") { return lf_kids(g, id, 0, n, ptrs, fs, lf_kw("rt", g, kg_kid(g, id, 0), acc)); }
+    if (k == "named") { return lf_kids(g, id, 0, n, ptrs, fs, acc); }
+    if (k == "un") { return lf_kids(g, id, 0, n, ptrs, fs, acc); }
+    return lf_kids(g, id, 0, n, ptrs, fs, acc);
+}
+
+// Whether every record type with a field of this name has a scalar there.
+Bool lf_num_field(Funcs fs, Str f, Int i) {
+    if (i >= fs.stf.len()) { return true; }
+    Str ft = field_ty(fs.stf[i], f);
+    if (ft != "" && !scal_ll(ll_ty(ct_base_of(fs.ctn, fs.ctb, ft)))) { return false; }
+    return lf_num_field(fs, f, i + 1);
 }
 
 // Last token of a text: its text in a Tok.
@@ -6061,7 +6073,7 @@ List(Str) lf_summary(Kg g, Funcs fs, Int i) {
     List(Str) tyl = if (pts == "") { nil_list() } else { split_rest_depth(pts, ", ") };
     List(Str) nml = if (pns == "") { nil_list() } else { split_rest(pns, ",") };
     List(Str) ptrs = ptr_params(fs, tyl, nml, 0, []);
-    return lf_node(g, kg_kid(g, d, g.ns[d].nk - 1), ptrs, []);
+    return lf_node(g, kg_kid(g, d, g.ns[d].nk - 1), ptrs, fs, []);
 }
 
 List(List(Str)) lf_summaries(Kg g, Funcs fs, Int i, ListBuf(List(Str)) acc) {

@@ -10,7 +10,8 @@
 // parse_type/PRes, is_known_type, imp_close_paren and find_sqclose_d.
 
 // One node: kind, text, aux, child slice kids[a0 .. a0 + nk), source span.
-type KN = { Str kind; Str text; Str aux; Int a0; Int nk; Int sp; Int ep; };
+// kc: the kind as a number (kg_kc), for dispatch without comparing text.
+type KN = { Str kind; Str text; Str aux; Int a0; Int nk; Int sp; Int ep; Int kc; };
 type Kg = { List(KN) ns; List(Int) kids; Map(Int, Str) docs; };
 // A parse result: the grown graph, the node built, the position after it.
 type KP = { Kg g; Int id; Int pos; Str err; };
@@ -33,10 +34,93 @@ pub Str gm_gs() { return str_from_code(29); }
 
 pub Int kg_kid(Kg g, Int id, Int i) { return g.kids[g.ns[id].a0 + i]; }
 
+// A node's code: kg_kc, except that a binary operator is 100 plus its
+// operator's code (kg_opc) and an integer literal that is its own canonical
+// text (no leading zero, at most 18 digits) is 23.
+pub Int kg_kcx(Str k, Str text, Str aux) {
+    if (k == "bin") { return 100 + kg_opc(text); }
+    if (k == "lit" && aux == "int") {
+        Int n = str_len(text);
+        Int c0 = str_char_at(text, 0);
+        return if ((n <= 18 && c0 >= 49 && c0 <= 57) || text == "0") { 23 } else { 2 };
+    }
+    return kg_kc(k);
+}
+
+// Operator codes.
+pub Int kg_opc(Str op) {
+    if (op == "+") { return 1; }
+    if (op == "-") { return 2; }
+    if (op == "*") { return 3; }
+    if (op == "/") { return 4; }
+    if (op == "%") { return 5; }
+    if (op == "<") { return 6; }
+    if (op == "<=") { return 7; }
+    if (op == ">") { return 8; }
+    if (op == ">=") { return 9; }
+    if (op == "==") { return 10; }
+    if (op == "!=") { return 11; }
+    if (op == "&&") { return 12; }
+    if (op == "||") { return 13; }
+    if (op == "&") { return 14; }
+    if (op == "|") { return 15; }
+    if (op == "^") { return 16; }
+    if (op == "<<") { return 17; }
+    if (op == ">>") { return 18; }
+    if (op == "..") { return 19; }
+    if (op == "..=") { return 20; }
+    return 0;
+}
+
+// Kind codes: expressions from 1, statements from 30, parts from 42; 0
+// for every other kind.
+pub Int kg_kc(Str k) {
+    if (k == "ref") { return 1; }
+    if (k == "lit") { return 2; }
+    if (k == "bin") { return 3; }
+    if (k == "call") { return 4; }
+    if (k == "field") { return 5; }
+    if (k == "paren") { return 6; }
+    if (k == "mcall") { return 7; }
+    if (k == "index") { return 8; }
+    if (k == "un") { return 9; }
+    if (k == "ifx") { return 10; }
+    if (k == "struct") { return 11; }
+    if (k == "match") { return 12; }
+    if (k == "fstr") { return 13; }
+    if (k == "tern") { return 14; }
+    if (k == "list") { return 15; }
+    if (k == "try") { return 16; }
+    if (k == "orelse") { return 17; }
+    if (k == "cast") { return 18; }
+    if (k == "slice") { return 19; }
+    if (k == "map") { return 20; }
+    if (k == "set") { return 21; }
+    if (k == "emptyb") { return 22; }
+    if (k == "bind") { return 30; }
+    if (k == "ret") { return 31; }
+    if (k == "estmt") { return 32; }
+    if (k == "discard") { return 33; }
+    if (k == "if") { return 34; }
+    if (k == "block") { return 35; }
+    if (k == "for") { return 36; }
+    if (k == "while") { return 37; }
+    if (k == "brk") { return 38; }
+    if (k == "cont") { return 39; }
+    if (k == "letpat") { return 40; }
+    if (k == "destr") { return 41; }
+    if (k == "named") { return 42; }
+    if (k == "fpart") { return 43; }
+    if (k == "fspec") { return 44; }
+    if (k == "pat") { return 45; }
+    if (k == "rangefrom") { return 46; }
+    return 0;
+}
+
 // Append a node; its id is the node count before the append.
 pub KP kg_add(Kg g, Str kind, Str text, Str aux, List(Int) ks, Int sp, Int pos) {
     Int id = g.ns.len();
-    KN n = KN {.kind = kind, .text = text, .aux = aux, .a0 = g.kids.len(), .nk = ks.len(), .sp = sp, .ep = pos};
+    KN n = KN {.kind = kind, .text = text, .aux = aux, .a0 = g.kids.len(), .nk = ks.len(), .sp = sp, .ep = pos, .kc = kg_kcx(kind, text, aux)};
     Kg g2 = Kg {.ns = g.ns.concat([n]), .kids = g.kids.concat(ks), .docs = g.docs};
     return KP {.g = g2, .id = id, .pos = pos, .err = ""};
 }

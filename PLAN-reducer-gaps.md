@@ -1,7 +1,7 @@
 # PLAN: closing the reducer's gaps
 
 Status: in progress (written 2026-10-09, after the budgets rework in
-PROGRESS §0zx). Steps 1-4 done (PROGRESS §0zy).
+PROGRESS §0zx). Steps 1-5 done (PROGRESS §0zy).
 Goal: make compile-time reduction (`compiler/greduce.resid`, helpers in
 `compiler/reduce.resid`) fold everything provable. Budgets are no longer the
 main limit. The limit is now the constructs the evaluator cannot run: one
@@ -78,7 +78,10 @@ Effects (`println`, clock, `read_bytes`, `resid_crypto_random_byte`,
    - Literals, `{}`, `insert`, `remove`, `get` (Option), `contains`, `len`,
      `keys`, `values`.
 5. **Evaluator speed.** Today about 1.5 µs per step. Faster evaluation means
-   more folds per budget.
+   more folds per budget. Done: a separate evaluator for known calls
+   (`gy_*`), kind and operator codes, Ints computed natively, an indexed
+   list encoding, precomputed parameter and field tables, and no memo
+   copies at loop exits; 3-7x on evaluation loops, 2x on the corpus.
    - About 25% of the time is `rt_scope_push`/`pop`: compiler-inferred
      scalar scopes in the reducer's own helpers (`gx_kind ==`, `gx_kid`, ...).
    - About 7% is `c_strcmp`: dispatch on node-kind strings.
@@ -95,7 +98,7 @@ Effects (`println`, clock, `read_bytes`, `resid_crypto_random_byte`,
 
 Smaller items:
 - Memo entries made inside a tail-loop hop are dropped each iteration
-  (`gx_hop` keeps `st` fixed). Keeping pure inner results would avoid
+  (`gy_hop` keeps `st` fixed). Keeping pure inner results would avoid
   recomputation.
 - Non-tail nesting uses only about 1.3 KB of stack per level, so
   `rd_max_depth` (20,000) could go higher. E0902 stays the backstop.
@@ -115,7 +118,7 @@ Smaller items:
   stays residual. Add a conformance case per construct, including a negative
   one. The readline miscompile (`reduce_tail_after_unknown`) shows how a
   fold can look right and be wrong.
-- **`gx_hop`** must carry only scalars, Str and List(Str), so it keeps its
+- **`gy_hop`** must carry only scalars, Str and List(Str), so it keeps its
   loop region. Evaluator helpers that recurse into evaluation must not be
   self-tail loops (one 1 MB region page per nesting level).
 - After each step: `./boot.sh --bootstrap-from-self`, then `./boot.sh`

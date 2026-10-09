@@ -216,7 +216,7 @@ Map(Int, KN) gm_edits(Kg g, List(Str) log, Int i, Map(Int, KN) acc) {
     Int id = if (c) { str_parse_int(f[1]) } else { -1 };
     Bool hit = c && id >= 0 && id < kg_count(g) && g.ns[id].text != f[2];
     KN n = if (hit) { g.ns[id] } else { g.ns[0] };
-    return gm_edits(g, log, i + 1, if (hit) { acc.insert(id, KN {.kind = n.kind, .text = f[2], .aux = n.aux, .a0 = n.a0, .nk = n.nk, .sp = n.sp, .ep = n.ep}) } else { acc });
+    return gm_edits(g, log, i + 1, if (hit) { acc.insert(id, KN {.kind = n.kind, .text = f[2], .aux = n.aux, .a0 = n.a0, .nk = n.nk, .sp = n.sp, .ep = n.ep, .kc = kg_kcx(n.kind, f[2], n.aux)}) } else { acc });
 }
 
 // The graph grown by new nodes, and node replacements.
@@ -234,14 +234,14 @@ GE gm_ops(Kg g, List(Str) log, Int i, Map(Int, KN) acc) {
     KN n = g.ns[id];
     Int l = kg_kid(g, id, 0);
     Int r = kg_kid(g, id, 1);
-    if (f[2] == "==") { return gm_ops(g, log, i + 1, acc.insert(id, KN {.kind = "call", .text = f[3], .aux = "", .a0 = n.a0, .nk = 2, .sp = n.sp, .ep = n.ep})); }
+    if (f[2] == "==") { return gm_ops(g, log, i + 1, acc.insert(id, KN {.kind = "call", .text = f[3], .aux = "", .a0 = n.a0, .nk = 2, .sp = n.sp, .ep = n.ep, .kc = kg_kc("call")})); }
     KP c = kg_add(g, "call", f[3], "", [l, r], n.sp, n.ep);
     List(Int) none = [];
     KP z = kg_add(c.g, "lit", "0", "int", none, n.sp, n.ep);
     List(Int) ks = if (f[2] == "!=") { [c.id] } else { [c.id, z.id] };
     Int a0 = z.g.kids.len();
     Kg g2 = Kg {.ns = z.g.ns, .kids = z.g.kids.concat(ks), .docs = z.g.docs};
-    KN rn = if (f[2] == "!=") { KN {.kind = "un", .text = "!", .aux = "", .a0 = a0, .nk = 1, .sp = n.sp, .ep = n.ep} } else { KN {.kind = "bin", .text = f[2], .aux = "", .a0 = a0, .nk = 2, .sp = n.sp, .ep = n.ep} };
+    KN rn = if (f[2] == "!=") { KN {.kind = "un", .text = "!", .aux = "", .a0 = a0, .nk = 1, .sp = n.sp, .ep = n.ep, .kc = kg_kc("un")} } else { KN {.kind = "bin", .text = f[2], .aux = "", .a0 = a0, .nk = 2, .sp = n.sp, .ep = n.ep, .kc = kg_kcx("bin", f[2], "")} };
     return gm_ops(g2, log, i + 1, acc.insert(id, rn));
 }
 
@@ -252,17 +252,17 @@ GE gm_ops_more(Kg g, List(Str) log, Int i, List(Str) f, Map(Int, KN) acc) {
     Int id = if (f.len() >= 2 && (f[0] == "U" || f[0] == "R" || f[0] == "D" || f[0] == "M")) { str_parse_int(f[1]) } else { -1 };
     if (id < 0 || id >= kg_count(g)) { return gm_ops(g, log, i + 1, acc); }
     KN n = acc.get(id) else { g.ns[id] };
-    if (f[0] == "D") { return gm_ops(g, log, i + 1, acc.insert(id, KN {.kind = n.kind, .text = n.text, .aux = n.aux, .a0 = n.a0, .nk = n.nk - 1, .sp = n.sp, .ep = n.ep})); }
+    if (f[0] == "D") { return gm_ops(g, log, i + 1, acc.insert(id, KN {.kind = n.kind, .text = n.text, .aux = n.aux, .a0 = n.a0, .nk = n.nk - 1, .sp = n.sp, .ep = n.ep, .kc = n.kc})); }
     if (f[0] == "M" && n.kind == "mcall" && n.nk >= 1) {
         List(Int) nk = g.kids[n.a0 + 1 .. n.a0 + n.nk];
         Int a0 = g.kids.len();
         Kg g2 = Kg {.ns = g.ns, .kids = g.kids.concat(nk), .docs = g.docs};
-        return gm_ops(g2, log, i + 1, acc.insert(id, KN {.kind = "call", .text = n.text, .aux = n.aux, .a0 = a0, .nk = n.nk - 1, .sp = n.sp, .ep = n.ep}));
+        return gm_ops(g2, log, i + 1, acc.insert(id, KN {.kind = "call", .text = n.text, .aux = n.aux, .a0 = a0, .nk = n.nk - 1, .sp = n.sp, .ep = n.ep, .kc = kg_kc("call")}));
     }
     if (f[0] == "R" && n.nk >= 2) {
         Int a0 = g.kids.len();
         Kg g2 = Kg {.ns = g.ns, .kids = g.kids.concat([g.kids[n.a0 + 1], g.kids[n.a0]]), .docs = g.docs};
-        return gm_ops(g2, log, i + 1, acc.insert(id, KN {.kind = n.kind, .text = n.text, .aux = n.aux, .a0 = a0, .nk = 2, .sp = n.sp, .ep = n.ep}));
+        return gm_ops(g2, log, i + 1, acc.insert(id, KN {.kind = n.kind, .text = n.text, .aux = n.aux, .a0 = a0, .nk = 2, .sp = n.sp, .ep = n.ep, .kc = n.kc}));
     }
     if (f[0] == "U" && f.len() >= 3 && n.nk == 1) {
         KP e = kg_expr(f[2], g, 0);
@@ -270,7 +270,7 @@ GE gm_ops_more(Kg g, List(Str) log, Int i, List(Str) f, Map(Int, KN) acc) {
         KP nm = kg_add(e.g, "named", "using", "", [e.id], n.sp, n.ep);
         Int a0 = nm.g.kids.len();
         Kg g2 = Kg {.ns = nm.g.ns, .kids = nm.g.kids.concat([g.kids[n.a0], nm.id]), .docs = nm.g.docs};
-        return gm_ops(g2, log, i + 1, acc.insert(id, KN {.kind = n.kind, .text = n.text, .aux = n.aux, .a0 = a0, .nk = 2, .sp = n.sp, .ep = n.ep}));
+        return gm_ops(g2, log, i + 1, acc.insert(id, KN {.kind = n.kind, .text = n.text, .aux = n.aux, .a0 = a0, .nk = 2, .sp = n.sp, .ep = n.ep, .kc = n.kc}));
     }
     return gm_ops(g, log, i + 1, acc);
 }
