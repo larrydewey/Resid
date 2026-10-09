@@ -225,9 +225,7 @@ Str render_text_note(Note n) {
 //
 //   compiler/driver.resid
 //   146:46  scan_digits  [whistle]
-//           specialization was generalized to terminate: ...
-//
-type PrintState = { Str file; Int i; };
+//       specialization was generalized to terminate: ...
 
 Int print_notes_text_acc(List(Note) notes, Str cur_file, Int i) {
     if (i >= notes.len()) { return 0; }
@@ -238,10 +236,7 @@ Int print_notes_text_acc(List(Note) notes, Str cur_file, Int i) {
         println(head);
         return print_notes_text_acc(notes, n.file, i);
     }
-    // A continuation line hangs under the symbol column when possible.
-    Str pos = f"{n.line}:{n.col + 1}";
-    println(pos + "  " + n.symbol + "  [" + n.kind + "]");
-    println("    " + explain(n.kind));
+    println(render_text_note(n));
     return print_notes_text_acc(notes, cur_file, i + 1);
 }
 
