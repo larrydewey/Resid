@@ -4654,7 +4654,8 @@ Int gk_finish(GK k0, List(Int) fnode, Str src, Str smap) {
     Bool err4 = gk_spawn_all(k, fnode, eff, 0);
     Bool err5 = gk_authority(k, fnode, facts);
     Bool err6 = gk_internals_at(k, 0, gk_newlines(src, 0, ListBuf()), smap, false);
-    if (err1 || err2 || err3 || err4 || err5 || err6) { return 1; }
+    Bool err7 = sec_wide_scan(k, k.tl.keys, k.tl.tys, 0, src, smap);
+    if (err1 || err2 || err3 || err4 || err5 || err6 || err7) { return 1; }
     if (!resid_quiet()) { println("typecheck OK"); }
     return 0;
 }
@@ -4784,10 +4785,14 @@ Bool gm_unknown_types(Kg g, Int id, Map(Str, Int) known, Str src, Str smap, Bool
     Str u = if (g.ns[id].kind == "ty") { gm_unknown_in(g.ns[id].text, 0, known) } else { "" };
     Str sk = if (g.ns[id].kind == "ty" && u == "") { sec_key_err(g.ns[id].text) } else { "" };
     if (sk != "") { gk_diag("E0253", sk, g, id, src, smap); }
+    Str sw = if (g.ns[id].kind == "ty" && u == "" && sk == "") { sec_wide_err(g.ns[id].text) } else { "" };
+    if (sw != "") { gk_diag("E0258", sw, g, id, src, smap); }
+    Bool rsv = (g.ns[id].kind == "fn" || g.ns[id].kind == "proto") && sec_reserved(g.ns[id].text);
+    if (rsv) { gk_diag("E0259", "`" + g.ns[id].text + "` is a builtin of secret values (spec §48) and cannot be redefined: a function by that name would replace it in every module, libraries included", g, id, src, smap); }
     Str near = if (u == "") { "" } else { gm_near(known.keys(), 0, u) };
     Str hint = if (near != "") { " (did you mean `" + near + "`?)" } else { "; a type parameter is a single uppercase letter (T, K, V)" };
     if (u != "") { gk_diag("E0001", "type error: unknown type `" + u + "`" + hint, g, id, src, smap); }
-    return gm_unknown_types(g, id + 1, known, src, smap, acc || u != "" || sk != "");
+    return gm_unknown_types(g, id + 1, known, src, smap, acc || u != "" || sk != "" || sw != "" || rsv);
 }
 
 // ─── Ambiguous imports (E0223) ──────────────────────────────────────
@@ -4837,7 +4842,9 @@ pub GKR gk_analyze_m(Kg g, Int unit, Str src, Str smap0, Bool log, Bool fin) {
 
     List(Int) e = [];
     List(Str) es = [];
-    TL tl = TL {.on = log, .keys = e, .tys = es, .mem = e, .bm = e};
+    // A program with secrets logs every expression's type, so E0258 is
+    // checked on inferred types and generic copies too (sec_wide_scan).
+    TL tl = TL {.on = log || sec_graph_has(g, 0), .keys = e, .tys = es, .mem = e, .bm = e};
     Map(Str, Int) m0 = {};
     if (gm_unknown_types(g, 0, gm_known_types(sg, m0), src, smap, false)) { return GKR {.status = 1, .ty = es, .def = e, .rs = rs, .fs = sg.fs, .log = es}; }
     GX gx = gm_gx_init(g, unit, sg, src, smap0);
@@ -5279,3 +5286,72 @@ GKT sec_shape(GK k, Int id, Str n, Str exp) {
 
 // Builtins that compute on a secret's payload without branching on it.
 Bool sec_liftable(Str n) { return (str_starts_with(n, "wrapping_") && wrap_conv_type(n) != "") || n == "wrapping_add" || n == "wrapping_sub" || n == "wrapping_mul" || n == "wrapping_uadd" || n == "wrapping_usub" || n == "wrapping_umul"; }
+
+// E0258: a secret integer wider than 32 bits stored in a list, builder,
+// vector, map or set, directly (List(Secret(Int))) or under a secret
+// container (Secret(List(Int))). The runtime keeps list integers below 2^54
+// inline and boxes larger ones, a choice made on the value: a secret that
+// could be that large would branch on itself. 64-bit secrets live in
+// records and parameters; secret byte strings are UInt(8) lists.
+pub Str sec_wide_err(Str t) {
+    Str c = str_trim(t);
+    if (c == "" || !str_contains(c, "Secret(")) { return ""; }
+    Str h = ty_head(c);
+    List(Str) as = ty_args(c);
+    Bool box = h == "List" || h == "ListBuf" || h == "Set" || h == "Map" || h == "Vec";
+    Str direct = if (box) { sec_wide_args(as, 0, false) } else { "" };
+    if (direct != "") { return "a secret " + direct + " in " + c + " could be boxed by its value (a branch on the secret); keep wide secrets in records and parameters, and use a 32-bit or narrower element type (UInt(8) for bytes)"; }
+    Str under = if (sec_is(c)) { sec_wide_container(sec_inner(c)) } else { "" };
+    if (under != "") { return "a secret " + under + " element in " + c + " could be boxed by its value (a branch on the secret); use a 32-bit or narrower element type (UInt(8) for bytes)"; }
+    return sec_wide_list(as, 0);
+}
+
+Str sec_wide_list(List(Str) as, Int i) {
+    if (i >= as.len()) { return ""; }
+    Str e = sec_wide_err(as[i]);
+    return if (e != "") { e } else { sec_wide_list(as, i + 1) };
+}
+
+// The first container argument that is a secret wide integer, or "".
+Str sec_wide_args(List(Str) as, Int i, Bool any) {
+    if (i >= as.len()) { return ""; }
+    Str a = str_trim(as[i]);
+    Bool hit = sec_is(a) && sec_wide_int(sec_inner(a));
+    return if (hit) { sec_inner(a) } else { sec_wide_args(as, i + 1, any) };
+}
+
+// A container whose elements are wide integers: its element type, or "".
+Str sec_wide_container(Str t) {
+    Str h = ty_head(t);
+    List(Str) as = ty_args(t);
+    Bool box = h == "List" || h == "ListBuf" || h == "Set" || h == "Map" || h == "Vec";
+    if (!box) { return ""; }
+    return sec_wide_plain(as, 0);
+}
+
+Str sec_wide_plain(List(Str) as, Int i) {
+    if (i >= as.len()) { return ""; }
+    Str a = str_trim(as[i]);
+    return if (sec_wide_int(a)) { a } else { sec_wide_plain(as, i + 1) };
+}
+
+Bool sec_wide_int(Str t) {
+    Str n = num_norm(str_trim(t));
+    return is_int_ty(n) && ty_bits(n) > 32;
+}
+
+// The same rule over every type the checker gave an expression, so inferred
+// types and generic copies are covered as well as written ones.
+Bool sec_wide_scan(GK k, List(Int) keys, List(Str) tys, Int i, Str src, Str smap) {
+    if (i >= keys.len()) { return false; }
+    Str t = tys[keys[i] % 4294967296];
+    Str e = if (str_contains(t, "Secret(")) { sec_wide_err(t) } else { "" };
+    if (e != "") {
+        gk_diag("E0258", e, k.g, keys[i] / 4294967296, src, smap);
+        return true;
+    }
+    return sec_wide_scan(k, keys, tys, i + 1, src, smap);
+}
+
+// Builtin names of secret values that no program may define (E0259).
+Bool sec_reserved(Str n) { return sec_is_wrapper(n) || n == "ct_select"; }

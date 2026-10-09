@@ -13,7 +13,9 @@ results are refused (E0253, E0255); `write_secret` takes a declassified
 value. Runtime zeroing (§6) is in as option B, chosen 2026-10-09: a program
 that handles secrets runs its whole allocator in secret mode (zero on free
 and reuse, every heap mapping `MADV_DONTDUMP`); measured cost on the
-compiler's own build is within noise. `mlock` is not used. Step 2 of §7 has begun (2026-10-09), as option B: one generic
+compiler's own build is within noise. `mlock` is not used. E0258 (decided 2026-10-09, option A): no secret integer wider than 32 bits
+in a container, so a list never boxes a secret by its value; secret bytes
+are UInt(8). Step 2 of §7 has begun (2026-10-09), as option B: one generic
 implementation per primitive over `Word(T)` (`lib/word.resid`), checked by
 the compiler at `Secret(Int)`. `lib/sha256g.resid` (SHA-256, HMAC, HKDF) and
 `lib/sha512g.resid` (SHA-512/384 and their HMACs) are in, with

@@ -40,6 +40,8 @@ own), with the offending source line.
 | `E0255` | a secret decides control, an address or a public result: a condition, a `match`, `&&`/`\|\|`, a comparison, `/` or `%`, an index, a range bound, a shift amount, a method other than a sequence's `.len()`, a provider argument, or a `spawn` region's result |
 | `E0256` | showing a secret, or a value holding one through the structural `Show` (the error names the field path) |
 | `E0257` | `Show`, `Serialize`, `Hash`, `Eq` or `Ord` given for, or asked of, a secret |
+| `E0258` | a secret integer wider than 32 bits in a list, builder, vector, map or set (`List(Secret(Int))`, `Secret(List(Int))`), written or inferred: list integers of 2^54 or more are boxed, a choice made on the value; use 32-bit or narrower elements (`UInt(8)` for bytes) and keep wider secrets in records and parameters |
+| `E0259` | a function named after a builtin of secret values (`secret`, `declassify`, `classify`, `secret_split`, `secret_join`, `ct_select`): it would replace the builtin in every module, libraries included |
 | `E0301` | a known value violates its constraint type |
 | `E0401` | a builder is not consumed on some path |
 | `E0402` | a builder is used twice |

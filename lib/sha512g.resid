@@ -1,7 +1,7 @@
 // sha512g.resid — SHA-512 and SHA-384 (FIPS 180-4) generic over 64-bit
 // words (lib/word.resid's Word64(W, B)): one implementation for public
 // bytes (W = UInt(64), B = Int) and secret bytes (Secret(UInt(64)),
-// Secret(Int)). Messages and digests are byte lists, List(B); lengths are
+// Secret(UInt(8))). Messages and digests are byte lists, List(B); lengths are
 // public.
 
 import "word.resid";

@@ -50,8 +50,20 @@ To persist key material, declassify it under the grant and write it with
 `filesystem.write_secret`, which keeps the file readable by its owner only:
 `filesystem.write_secret(path, declassify(key, "persist the key"))`.
 
+The builtins `secret`, `declassify`, `classify`, `secret_split`,
+`secret_join` and `ct_select` are reserved: a program cannot define a
+function by those names (`E0259`), since it would replace the builtin in
+every module, libraries included.
+
 ## Secret byte strings and public values
 
+- Secret byte strings are `UInt(8)` lists: `Secret(List(UInt(8)))` or
+  `List(Secret(UInt(8)))`. A secret integer wider than 32 bits may not be
+  stored in a list, builder, vector, map or set (`E0258`), written or
+  inferred: the runtime boxes list integers of 2^54 or more, a choice made
+  on the value. Keep 64-bit secrets in records and parameters.
+  `secret_bytes(bs)` in `lib/word.resid` turns a byte string read at run
+  time into `List(Secret(UInt(8)))`.
 - `secret_split(s)` turns a `Secret(List(T))` into a `List(Secret(T))`
   (its length is public); `secret_join(xs)` turns it back. Both are free at
   run time. Generic code takes byte strings as `List(T)`, so the split form
@@ -62,9 +74,11 @@ To persist key material, declassify it under the grant and write it with
 
 ## One implementation for public and secret data
 
-`lib/word.resid` declares `Word(T)`: the 32-bit word operations SHA-2 and
-friends need (xor, and, or, add modulo 2^32, rotations, shifts by a public
-amount, public constants), with instances for `Int` and `Secret(Int)`.
+`lib/word.resid` declares `Word(W, B)`: the 32-bit word operations SHA-2
+and friends need (xor, and, or, add modulo 2^32, rotations, shifts by a
+public amount, public constants, byte conversions), with instances for
+public data `(Int, Int)` and secret data `(Secret(UInt(32)),
+Secret(UInt(8)))`.
 Cryptographic code is written once, generic over `T`, and the compiler
 checks the secret copy like any other code on secrets. The public copy is
 the same code, compiled separately, at the cost of hand-written `Int` code.
@@ -75,14 +89,14 @@ SHA-256 block function is its public copy. `lib/sha512g.resid` does the
 same for SHA-512, SHA-384 and their HMACs over `Word64(W, B)` (64-bit
 words `W`, bytes `B`).
 
-A 64-bit secret word is never stored in a list: the runtime boxes list
-integers of 2^54 or more, which is a branch on the value. Generic code
-keeps such words in records and parameters; `tests/ct` checks it.
+A 64-bit secret word is never stored in a list (`E0258`): generic code
+keeps such words in records and parameters, and `tests/ct` checks the
+result under valgrind.
 
 ```text
-List(Secret(Int)) key = secret_split(secret(read_key()));
-List(Secret(Int)) prk = hkdf256g_extract(salt_lifted, key);
-List(Secret(Int)) okm = hkdf256g_expand(prk, info_lifted, 32);
+List(Secret(UInt(8))) key = secret_bytes(read_key());
+List(Secret(UInt(8))) prk = hkdf256g_extract(salt_lifted, key);
+List(Secret(UInt(8))) okm = hkdf256g_expand(prk, info_lifted, 32);
 ```
 
 ## Constant-time helpers
@@ -90,7 +104,7 @@ List(Secret(Int)) okm = hkdf256g_expand(prk, info_lifted, 32);
 - `ct_select(c, a, b)` returns `a` when the secret `c` holds, else `b`,
   computed with masks rather than a branch. `a` and `b` are integers of at
   most 64 bits, or Bools, secret or public; the result is secret.
-- `ct_eq(a, b)` in `lib/crypto.resid` compares two `Secret(List(Int))`
+- `ct_eq(a, b)` in `lib/crypto.resid` compares two `Secret(List(UInt(8)))`
   byte lists in constant time and returns a public `Bool`. Only that one
   bit is published, which is a declassification, so `ct_eq` needs
   `@requires(declassify)`.

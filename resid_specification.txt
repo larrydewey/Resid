@@ -3152,6 +3152,17 @@ lib/crypto.resid's ct_eq compares secret byte lists in
 constant time and publishes the one-bit verdict, so it needs
 the declassify grant.
 
+The builtin names secret, declassify, classify, secret_split,
+secret_join and ct_select are reserved (E0259): a function by
+one of those names would replace the builtin in every module,
+libraries included.
+
+A secret integer wider than 32 bits may not be stored in a
+list, builder, vector, map or set, whether the type is written
+or inferred (E0258): the runtime boxes list integers of 2^54
+or more, a choice made on the value. Secret byte strings are
+UInt(8) lists; wider secrets live in records and parameters.
+
 A secret whose value is known after reduction is refused
 (E0250): it would be in the binary for everyone who has it.
 A secret(...) written directly inside declassify(...) is
@@ -3195,9 +3206,10 @@ back. classify(x) lifts a public value into secret
 computation and claims no secrecy, so E0250 does not apply.
 All three are free at run time.
 
-lib/word.resid's Word(T) behavior lets cryptographic code be
-written once and instantiated for public words (Int) and
-secret words (Secret(Int)); lib/sha256g.resid (SHA-256,
+lib/word.resid's Word(W, B) and Word64(W, B) behaviors let
+cryptographic code be written once and instantiated for
+public data and secret data (UInt(32)/UInt(64) words, UInt(8)
+bytes); lib/sha256g.resid (SHA-256,
 HMAC-SHA-256, HKDF-SHA-256) is written that way.
 
 Planned (PLAN-secret-type.md): the rest of the cryptography
