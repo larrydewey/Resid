@@ -1,6 +1,6 @@
 # Secret Values — Implementation Plan (revision 1)
 
-**Status: PROPOSED (2026-10-09).** Under review; two open questions settled (§7).
+**Status: PROPOSED (2026-10-09).** Under review; three open questions settled (§8).
 
 **Goal**: make "this value is a secret" knowledge the compiler holds and
 enforces, so that code which branches on, indexes with, prints, compares
@@ -15,7 +15,7 @@ code that enforces it and the test that fails if it breaks. The threat model
 is `SECURITY.md`'s with one change: timing side channels that come from
 **secret-dependent control flow and memory addresses** move into scope for
 values typed `Secret(T)`. Variable-latency instructions are handled by a
-refusal list (§4), not a proof. Power, EM and microarchitectural leaks below
+refusal list (§3, §5), not a proof. Power, EM and microarchitectural leaks below
 that level (speculation, port contention) stay out of scope.
 
 ---
@@ -47,7 +47,10 @@ public and who was granted the authority to do it.
 | Law 11: provenance | Every `declassify` is a graph node with its source span and a required reason string; the provenance record lists them | `ga_declassify` (`gart.resid`) | `declassify_in_graph` |
 | Law 12: runtime uncertainty is explicit | A `Secret(Result(..))` or `Secret(Option(..))` is refused: whether an operation failed is control flow. Fallible secret operations return `Result(Secret(T), E)`, where the error depends only on public data | checker | `err_secret_wraps_result` |
 | Law 14: no ambient authority; only attenuated | Publishing a secret in any way is authority: `declassify` needs the capability family `declassify`, checked transitively (E0219), bounded by spawn lists, sandboxes and manifest ceilings, and recorded on the graph. Writing a secret out (`write_secret`, a secret-taking device descriptor) needs `declassify` too, in addition to its own family | `gk_all_facts`, `resid_cap_check("declassify")`, manifest | `err_declassify_ungranted`, `err_declassify_sandbox`, `pkg_declassify_ceiling`, `declassify_in_graph` |
-| §4: values immutable, no observable identity | Unchanged. Storage that held a secret is zeroed before reuse or release (§5) | runtime allocator | `secret_zeroed_on_release` |
+| Law 13: knowledge is first-class (behaviors are compile-time knowledge about a type) | The instance table for prelude observation behaviors on secret-bearing types is fixed and empty; structural defaults refuse secrets; instance bodies are flow-checked (§4) | checker: instance declaration, structural default selection, per-copy taint | `err_secret_show_default`, `err_secret_serialize_default`, `err_secret_show_instance`, `err_secret_hash_instance`, `err_secret_wrapper_instance_leak`, `secret_wrapper_instance_declassified_ok` |
+| Generic code is checked per concrete copy | Taint runs after monomorphization, on each copy | checker | `err_secret_generic_show`, `err_secret_generic_branch` |
+| Compile-time outputs carry no secret value | Emitters for `comptime_print`, `--dump-reduced`, the graph artifact, provenance and LSP refuse or omit secret-marked nodes | `gart.resid`, `prov_payload`, LSP hover | `secret_absent_from_artifacts` |
+| §4: values immutable, no observable identity | Unchanged. Storage that held a secret is zeroed before reuse or release (§6) | runtime allocator | `secret_zeroed_on_release` |
 
 ## 2. Surface
 
@@ -83,9 +86,64 @@ or of a secret (variable latency on x86-64 and AArch64), `==`/`!=`/`<`
 (use `ct_eq`), any condition, index, slice bound, loop bound, `match`
 scrutinee, `&&`/`||` operand, map key, `Show`, `Serialize`, f-string hole,
 `print*`, a provider write other than `write_secret`, a native-module argument,
-a `spawn` return, and `todo`/`assert` on a secret.
+a `spawn` return, and `todo`/`assert` on a secret. Behaviors and generic code follow §4.
 
-## 4. Code generation
+## 4. Behaviors, instances and observation
+
+Every path from a secret to anything observable must go through `declassify`.
+Behaviors are the place where that is easiest to get wrong, because instances
+are chosen at compile time from the program as a whole and the prelude gives
+`Show` and `Serialize` a structural default for every type. The rules:
+
+1. **Structural defaults refuse secrets (E0256).** The built-in structural
+   `Show` and `Serialize` are a compile error for any type that contains
+   `Secret` anywhere: a field, a list or vector element, a sum-type payload,
+   or any of these nested at any depth. The error names the field path from
+   the shown type to the secret (`KeyPair.priv`). There is no redacted
+   rendering: a program that wants to show a record holding a secret writes
+   its own instance, which falls under rule 3.
+2. **No prelude observation instances (E0257).** Declaring an instance of
+   `Show`, `Serialize`, `Hash`, `Eq` or `Ord` whose type arguments contain
+   `Secret` at any depth is refused. This is a fixed rule of the compiler, not
+   a general negative-instance feature: the compiler owns the instance table
+   for these behaviors on secret-bearing types, and that table is empty.
+3. **Every instance body is flow-checked.** An instance for a type that holds a
+   secret (`Show(KeyPair)` reading `k.priv`), and any instance of a user
+   behavior, is an ordinary function under §3. A public result computed from
+   secret data needs `declassify`, so an override either fails to type-check or
+   declassifies on the record. `Hash`, `Eq`, `Ord` and `Serialize` results
+   computed from a secret are themselves secret and cannot be returned as their
+   public types. A comparator passed with `using =` to `sort` over secrets is
+   refused, since `sort` branches on its result.
+4. **Checks run on every generic instantiation.** Taint is checked on each
+   concrete copy of a generic function, the same way E0219 already names copies
+   (`label(Task)`). `@needs(Show(T)) Str label(T x)` used with
+   `T = Secret(Bytes)` fails rule 2; a generic body using a structural default
+   fails rule 1; a generic body that branches on a `T` that is secret fails §3.
+   A generic library cannot launder a secret.
+5. **Compile-time and tooling exits.** `comptime_print`, `known`,
+   `--dump-reduced`, the graph artifact, the provenance record and LSP hovers
+   never contain a secret's value. A secret known at compile time is already
+   refused (§1), so this is a backstop, enforced by the emitters and tested.
+   At run time, `resid-debug` reading a secret's memory needs `process`
+   authority over the target: a debugger with that authority can read secrets,
+   and this plan does not claim otherwise. `MADV_DONTDUMP` (§6) keeps secrets
+   out of core dumps.
+6. **Public by design.** These are not leaks and are documented as such: the
+   length of a secret list or bytes value; whether a structure holds a secret
+   (its type is public); the Bool from `ct_eq` and from signature and AEAD
+   verification. When a length is itself sensitive, padding to a fixed length
+   is the caller's job.
+
+**Why not a negative-instance feature.** A transitive negative instance, as
+Zyl's `impl-not` provides, would also stop wrappers from acquiring `Show`.
+Resid uses information flow instead because it covers more than behaviors: a
+plain function, a closure, a provider write or a native call that turns secret
+data into public data is caught by the same rule as an instance body. Rules 1
+and 2 are the compiler's own fixed negative facts for the prelude behaviors;
+no general `impl-not` is added to the language.
+
+## 5. Code generation
 
 - Secret masks pass through `ct_hide` automatically (today the library does it
   by hand), so LLVM cannot turn a select back into a branch.
@@ -97,7 +155,7 @@ a `spawn` return, and `todo`/`assert` on a secret.
   stays x86-64 only (as `SECURITY.md` already says). An AArch64 backstop is
   out of scope for this plan.
 
-## 5. Runtime
+## 6. Runtime
 
 - Storage holding a secret is zeroed when its last reference dies, including
   when the compiler reuses it in place. The allocator gets a zeroing release
@@ -108,7 +166,7 @@ a `spawn` return, and `todo`/`assert` on a secret.
   device descriptor marked secret (PLAN-device-access.md), or a native module
   explicitly declared to take secrets (later; refused for now).
 
-## 6. Migration
+## 7. Migration
 
 1. Land the type, checker rules and errors with no library changes.
 2. Convert `lib/` key handling to `Secret(T)`: ecdsa, p256, p384, x25519,
@@ -117,7 +175,7 @@ a `spawn` return, and `todo`/`assert` on a secret.
    compiler now inserts it.
 3. Make `tests/ct/run.sh` generate its cases from the graph.
 
-## 7. Open questions
+## 8. Open questions
 
 1. Settled (2026-10-09): publishing a secret requires the `declassify`
    capability and is recorded on the graph.
@@ -127,3 +185,7 @@ a `spawn` return, and `todo`/`assert` on a secret.
 3. Settled (2026-10-09): secrets known at compile time are refused unless
    passed explicitly through `declassify`. Test keys are read from fixtures at
    run time, or declassified explicitly.
+4. Settled (2026-10-09): no `impl-not` in Resid. Overriding `Show` (or any
+   observation behavior) cannot leak a secret: structural defaults refuse
+   secrets at compile time, prelude observation instances on secret-bearing
+   types are refused, and every instance body is flow-checked (§4).
