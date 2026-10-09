@@ -251,6 +251,8 @@ pub Str rd_coerce(Str have, Str want) {
         return w;
     }
     if (h == "List(?)" && str_starts_with(w, "List(")) { return w; }
+    // `{}` is an empty map or set, whichever the slot is.
+    if (h == "{}" && (str_starts_with(w, "Map(") || str_starts_with(w, "Set("))) { return w; }
     // An untyped builder takes the slot's element type; never a fixed one's.
     if (h == "ListBuf(?)" && str_starts_with(w, "ListBuf(") && rd_targs(w).len() == 1) { return w; }
     if (h == "Option(_)" && str_starts_with(w, "Option(")) { return w; }
@@ -1276,6 +1278,79 @@ pub RdV rd_builtin(Str name, RdA a, Str orig, Int pos, RdS st) {
         return rd_folded(str_join(parts, v[1]), "Str", orig, a.ch, pos, st);
     }
     return none;
+}
+
+// ─── Maps and sets ──────────────────────────────────────────────
+//
+// A known map is its entries flattened (k1, v1, k2, v2, ...), a set its
+// elements, in the runtime's canonical order (runtime/rt/map.resid): by
+// the key hash's twelve 5-bit chunks, lowest chunk first. Keys are Int
+// (FNV-1a of the decimal text) or Str (of the UTF-8 bytes); two keys
+// whose chunks tie fall back to insertion order there, which is not
+// modelled, so such a map is not folded.
+
+// FNV-1a over a Str's UTF-8 bytes.
+Int rd_fnv(Str s, Int i, Int n, Int h) {
+    if (i >= n) { return h; }
+    Int c = str_char_at(s, i);
+    Int h1 = if (c < 128) { rd_fnv_b(h, c) } else if (c < 2048) { rd_fnv_b(rd_fnv_b(h, 192 | (c >> 6)), 128 | (c & 63)) } else if (c < 65536) { rd_fnv_b(rd_fnv_b(rd_fnv_b(h, 224 | (c >> 12)), 128 | ((c >> 6) & 63)), 128 | (c & 63)) } else { rd_fnv_b(rd_fnv_b(rd_fnv_b(rd_fnv_b(h, 240 | (c >> 18)), 128 | ((c >> 12) & 63)), 128 | ((c >> 6) & 63)), 128 | (c & 63)) };
+    return rd_fnv(s, i + 1, n, h1);
+}
+
+Int rd_fnv_b(Int h, Int b) { return wrapping_mul(h ^ b, 1099511628211); }
+
+Int rd_rank_at(Int h, Int l, Int r) {
+    if (l >= 12) { return r; }
+    return rd_rank_at(h, l + 1, (r << 5) | ((h >> (l * 5)) & 31));
+}
+
+// A key's place in the canonical order, or -1 for a key type not folded.
+pub Int rd_key_rank(Str k, Str kt) {
+    Str t = rd_norm_ty(kt);
+    if (t != "Int" && t != "Str") { return -1; }
+    if (t == "Int" && !rd_small(k)) { return -1; }
+    return rd_rank_at(rd_fnv(k, 0, str_len(k), 0 - 3750763034362895579), 0, 0);
+}
+
+// Index of key k among the entries (stride 2 for a map, 1 for a set), or -1.
+pub Int rd_map_find(List(Str) items, Str k, Int stride, Int i) {
+    if (i >= items.len()) { return -1; }
+    if (items[i] == k) { return i; }
+    return rd_map_find(items, k, stride, i + stride);
+}
+
+// The entries with k put in (replacing its value when present), or
+// "\x01" when two keys' ranks tie.
+pub Str rd_map_put(List(Str) items, Str k, Str v, Str kt, Int stride) {
+    Int r = rd_key_rank(k, kt);
+    if (r < 0) { return str_from_code(1); }
+    Int at = rd_map_find(items, k, stride, 0);
+    if (at >= 0) { return if (stride == 1) { rd_enc(items) } else { rd_enc(items[0..at + 1].concat([v]).concat(items[at + 2..items.len()])) }; }
+    Int pos = rd_map_pos(items, r, kt, stride, 0);
+    if (pos < 0) { return str_from_code(1); }
+    List(Str) ent = if (stride == 1) { [k] } else { [k, v] };
+    return rd_enc(items[0..pos].concat(ent).concat(items[pos..items.len()]));
+}
+
+// Where a key of rank r goes: before the first larger rank; -1 on a tie.
+Int rd_map_pos(List(Str) items, Int r, Str kt, Int stride, Int i) {
+    if (i >= items.len()) { return i; }
+    Int ri = rd_key_rank(items[i], kt);
+    if (ri == r) { return -1; }
+    if (ri > r) { return i; }
+    return rd_map_pos(items, r, kt, stride, i + stride);
+}
+
+pub Str rd_map_del(List(Str) items, Str k, Int stride) {
+    Int at = rd_map_find(items, k, stride, 0);
+    if (at < 0) { return rd_enc(items); }
+    return rd_enc(items[0..at].concat(items[at + stride..items.len()]));
+}
+
+// Every stride-th item from `from`: a map's keys (0) or values (1).
+pub List(Str) rd_every(List(Str) items, Int from, Int stride, Int i, ListBuf(Str) acc) {
+    if (from + i >= items.len()) { return acc.finish(); }
+    return rd_every(items, from, stride, i + stride, acc.push(items[from + i]));
 }
 
 // ─── Lists ──────────────────────────────────────────────────────

@@ -333,7 +333,7 @@ GT lw_set_rest(LW w, Int id, Int i, Str et, List(Str) env, GT sv) {
     GT e0 = lw_part(w, lw_kid(w, id, i), lw_want_arg(w.want, "Set", 0), env, sv);
     if (e0.err != "") { return e0; }
     GT e = lw_adopt_wider(e0, et);
-    if (e.ty != et) { return gt_err("set element type mismatch: " + et + " vs " + e.ty, e); }
+    if (num_norm_cg(e.ty) != num_norm_cg(et)) { return gt_err("set element type mismatch: " + et + " vs " + e.ty, e); }
     return lw_set_rest(w, id, i + 1, et, env, lw_set_lit_put(w, sv.val, e, et, env));
 }
 

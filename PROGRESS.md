@@ -339,6 +339,18 @@ the evaluator could not run.
   Unknown values met while β-reducing 12,494 -> 7,032; folds 3,223 ->
   3,501 (more calls now run long enough to meet the step budget: 71 ->
   91, which is step 5's).
+- **Step 4: Map and Set values.** A map is its entries flattened, a set
+  its elements, in the runtime's canonical order: ascending by the key
+  hash's twelve 5-bit chunks, lowest first (FNV-1a over an Int's decimal
+  text or a Str's UTF-8 bytes, as `runtime/rt/map.resid` hashes them).
+  Keys are Int or Str; two keys whose chunks tie fall back to insertion
+  order in the runtime, so such a map is left unfolded. Literals, `{}`
+  (a map or a set by its slot or first insert), `insert`, `remove`,
+  `get`, `m[k]`, `contains`, `len`, `keys`, `values`, `to_list`. Order
+  checked against the runtime on 40 Int keys and Str keys with UTF-8.
+  Folds 3,501 -> 3,592. Found on the way: a set literal with a negative
+  element (`{9, -5}`) did not compile without reduction (lowering
+  compared `Int` with `Int(64)`).
 
 ### 0zx. Reduction budgets that count work, and tail calls that loop (2026-10-09)
 

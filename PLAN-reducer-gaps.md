@@ -1,7 +1,7 @@
 # PLAN: closing the reducer's gaps
 
 Status: in progress (written 2026-10-09, after the budgets rework in
-PROGRESS §0zx). Steps 1-3 done (PROGRESS §0zy).
+PROGRESS §0zx). Steps 1-4 done (PROGRESS §0zy).
 Goal: make compile-time reduction (`compiler/greduce.resid`, helpers in
 `compiler/reduce.resid`) fold everything provable. Budgets are no longer the
 main limit. The limit is now the constructs the evaluator cannot run: one
@@ -70,7 +70,8 @@ Effects (`println`, clock, `read_bytes`, `resid_crypto_random_byte`,
    - `StrBuf`/`ListBuf` are linear (E0401–E0404), so a known builder can be
      a plain known value: `push` appends, `finish` yields the Str or list.
    - Check the linearity rules still hold when reduction removes uses.
-4. **Map / Set values.**
+4. **Map / Set values.** Done for Int and Str keys (set algebra and
+   other key types stay residual).
    - Encode with the runtime's canonical key order (FNV-1a, 5-bit chunks;
      see `runtime/rt/map.resid` and memory note project_map_ownership). The
      order is observable through `keys()`/`values()`/formatting.

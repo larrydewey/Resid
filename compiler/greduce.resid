@@ -283,7 +283,10 @@ GV gx_expr(GXT ft, Int id, RdE env, GS st) {
     if (k == "slice") { return gx_slice(ft, id, env, st); }
     if (k == "list") { return gx_list(ft, id, env, st); }
     if (k == "struct") { return gx_struct(ft, id, env, st); }
-    if (k == "map" || k == "set" || k == "emptyb" || k == "lambda") { return gx_unk(id, false, st); }
+    if (k == "emptyb") { return gx_kv("", "{}", id, false, st); }
+    if (k == "map") { return gx_mapv(ft, id, env, st); }
+    if (k == "set") { return gx_setv(ft, id, env, st); }
+    if (k == "lambda") { return gx_unk(id, false, st); }
     if (k == "spawn") {
         if (rd_env_idx(env, "spawn") >= 0) { return gx_badv(st); }
         return gx_unk(id, false, st);
@@ -818,6 +821,7 @@ GV gx_mcall(GXT ft, Int id, RdE env, GS st) {
     Str name = st.g.ns[id].text;
     Str bt = rd_norm_ty(b.ty);
     if (bt == "StrBuf" || str_starts_with(bt, "ListBuf(")) { return gx_builder(name, bt, b, a, mr, mch); }
+    if (bt == "{}" || str_starts_with(bt, "Map(") || str_starts_with(bt, "Set(")) { return gx_map_method(name, bt, b, a, mr, mch); }
     Str et = rd_inner(b.ty, "List(");
     if (et == "") { return none; }
     // Reading an encoded list is work in proportion to its text.
@@ -863,6 +867,95 @@ GV gx_mcall(GXT ft, Int id, RdE env, GS st) {
         return gx_folded(rd_wtoa(tot), "Int", mr.id, mch, ms);
     }
     return none;
+}
+
+// `{k: v, ...}`: entries put in order.
+GV gx_mapv(GXT ft, Int id, RdE env, GS st) {
+    GXA es = gx_entries(ft, id, 0, env, gx_args0(st));
+    if (es.bad) { return gx_badv(es.st); }
+    GXN mr = if (es.ch) { gx_re(es.st, id, es.rs) } else { gx_n(es.st, id) };
+    GV none = gx_unk(mr.id, es.ch, mr.st);
+    if (!es.allk || es.vs.len() == 0) { return none; }
+    Str kt = rd_norm_ty(es.ts[0]);
+    Str vt = rd_norm_ty(es.ts[1]);
+    Str mv = gx_map_fill(es, kt, vt, 0, "");
+    if (mv == str_from_code(1)) { return none; }
+    return gx_folded(mv, "Map(" + kt + ", " + vt + ")", mr.id, es.ch, mr.st);
+}
+
+// Each entry's key and value, as two arguments.
+GXA gx_entries(GXT ft, Int id, Int i, RdE env, GXA acc) {
+    if (i >= gx_nk(acc.st, id)) { return acc; }
+    Int en = gx_kid(acc.st, id, i);
+    GXA kv = gx_args(ft, en, 0, env, gx_args0(acc.st));
+    if (kv.bad || kv.vs.len() != 2) { return GXA {.vs = acc.vs, .ts = acc.ts, .rs = acc.rs, .allk = false, .ch = acc.ch, .named = false, .bad = true, .st = kv.st, .lits = acc.lits}; }
+    GXN er = if (kv.ch) { gx_re(kv.st, en, kv.rs) } else { gx_n(kv.st, en) };
+    GXA a2 = GXA {.vs = acc.vs.concat(kv.vs), .ts = acc.ts.concat(kv.ts), .rs = acc.rs.concat([er.id]), .allk = acc.allk && kv.allk, .ch = acc.ch || kv.ch, .named = false, .bad = false, .st = er.st, .lits = acc.lits};
+    return gx_entries(ft, id, i + 1, env, a2);
+}
+
+// The entries of es (key, value, key, value, ...) put one by one; "\x01"
+// when a key or value does not fit or two keys tie.
+Str gx_map_fill(GXA es, Str kt, Str vt, Int i, Str acc) {
+    if (i >= es.vs.len()) { return acc; }
+    if (rd_coerce_v(es.ts[i], kt, es.vs[i]) != kt || rd_coerce_v(es.ts[i + 1], vt, es.vs[i + 1]) != vt) { return str_from_code(1); }
+    Str m = rd_map_put(rd_dec(acc), es.vs[i], es.vs[i + 1], kt, 2);
+    if (m == str_from_code(1)) { return m; }
+    return gx_map_fill(es, kt, vt, i + 2, m);
+}
+
+// `{a, b, ...}`.
+GV gx_setv(GXT ft, Int id, RdE env, GS st) {
+    GXA el = gx_args(ft, id, 0, env, gx_args0(st));
+    if (el.bad) { return gx_badv(el.st); }
+    GXN sr = if (el.ch) { gx_re(el.st, id, el.rs) } else { gx_n(el.st, id) };
+    GV none = gx_unk(sr.id, el.ch, sr.st);
+    if (!el.allk || el.named || el.vs.len() == 0) { return none; }
+    Str kt = rd_norm_ty(el.ts[0]);
+    Str sv = gx_set_fill(el, kt, 0, "");
+    if (sv == str_from_code(1)) { return none; }
+    return gx_folded(sv, "Set(" + kt + ")", sr.id, el.ch, sr.st);
+}
+
+Str gx_set_fill(GXA el, Str kt, Int i, Str acc) {
+    if (i >= el.vs.len()) { return acc; }
+    if (rd_coerce_v(el.ts[i], kt, el.vs[i]) != kt) { return str_from_code(1); }
+    Str m = rd_map_put(rd_dec(acc), el.vs[i], "", kt, 1);
+    if (m == str_from_code(1)) { return m; }
+    return gx_set_fill(el, kt, i + 1, m);
+}
+
+// Methods of a known map or set (lw_map_method / lw_set_method); `{}`
+// becomes a map on a two-argument insert and a set on a one-argument one.
+GV gx_map_method(Str name, Str bt, GV b, GXA a, GXN mr, Bool mch) {
+    GV none = gx_unk(mr.id, mch, mr.st);
+    Int n = a.ts.len();
+    Bool emp = bt == "{}";
+    Bool isset = str_starts_with(bt, "Set(") || (emp && name == "insert" && n == 1);
+    List(Str) targs = if (emp) { gx_nos() } else { rd_targs(bt) };
+    Str kt = if (emp) { if (n > 0) { rd_norm_ty(a.ts[0]) } else { "" } } else { targs[0] };
+    Str vt = if (emp) { if (n > 1) { rd_norm_ty(a.ts[1]) } else { "" } } else if (isset) { "" } else { targs[1] };
+    Int stride = if (isset) { 1 } else { 2 };
+    List(Str) items = rd_dec(b.v);
+    GS ms = gx_scan(mr.st, str_len(b.v));
+    if (name == "len" && n == 0) { return gx_folded(rd_itoa(items.len() / stride), "Int", mr.id, mch, ms); }
+    if (emp && name != "insert") { return none; }
+    if (str_contains(kt, "?") || str_contains(kt, "_") || str_contains(vt, "?") || str_contains(vt, "_")) { return none; }
+    Str mty = if (isset) { "Set(" + kt + ")" } else { "Map(" + kt + ", " + vt + ")" };
+    if (name == "keys" && n == 0 && !isset) { return gx_folded(rd_enc(rd_every(items, 0, 2, 0, ListBuf())), "List(" + kt + ")", mr.id, mch, ms); }
+    if (name == "values" && n == 0 && !isset) { return gx_folded(rd_enc(rd_every(items, 1, 2, 0, ListBuf())), "List(" + vt + ")", mr.id, mch, ms); }
+    if (name == "to_list" && n == 0 && isset) { return gx_folded(b.v, "List(" + kt + ")", mr.id, mch, ms); }
+    if (n == 0 || rd_coerce_v(a.ts[0], kt, a.vs[0]) != kt || rd_key_rank(a.vs[0], kt) < 0) { return none; }
+    Str k = a.vs[0];
+    Int at = rd_map_find(items, k, stride, 0);
+    if (name == "contains" && n == 1) { return gx_folded(if (at >= 0) { "true" } else { "false" }, "Bool", mr.id, mch, ms); }
+    if (name == "get" && n == 1 && !isset) { return gx_folded(if (at >= 0) { "S" + items[at + 1] } else { "N" }, "Option(" + vt + ")", mr.id, mch, ms); }
+    if (name == "remove" && n == 1) { return gx_folded(rd_map_del(items, k, stride), mty, mr.id, mch, ms); }
+    if (name != "insert" || n != stride) { return none; }
+    if (!isset && rd_coerce_v(a.ts[1], vt, a.vs[1]) != vt) { return none; }
+    Str nv = rd_map_put(items, k, if (isset) { "" } else { a.vs[1] }, kt, stride);
+    if (nv == str_from_code(1)) { return none; }
+    return gx_folded(nv, mty, mr.id, mch, ms);
 }
 
 // push / push_char / finish on a known builder.
@@ -938,6 +1031,12 @@ GV gx_index(GXT ft, Int id, RdE env, GS st) {
     GV none = gx_unk(ir.id, ich, ir.st);
     // Known-list indexing; an out-of-range index aborts at run time.
     if (!b.k || !ix.k) { return none; }
+    // `m[k]` is `m.get(k)`.
+    if (str_starts_with(rd_norm_ty(b.ty), "Map(")) {
+        List(Int) ei = [];
+        GXA ka = GXA {.vs = [ix.v], .ts = [ix.ty], .rs = ei, .allk = true, .ch = false, .named = false, .bad = false, .st = ir.st, .lits = ei};
+        return gx_map_method("get", rd_norm_ty(b.ty), b, ka, ir, ich);
+    }
     Str et = rd_inner(b.ty, "List(");
     if (et == "" || et == "?") { return none; }
     if (!rd_is_int_ty(rd_norm_ty(ix.ty)) || !rd_small(ix.v)) { return none; }

@@ -1,0 +1,9 @@
+lacks: sq_keys(
+lacks: sq_vals(
+lacks: sq_len(
+lacks: word_keys(
+lacks: the_count(
+lacks: set_list(
+lacks: has_c(
+lacks: lit_keys(
+lacks: lit_set(

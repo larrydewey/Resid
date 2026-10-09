@@ -1,0 +1,49 @@
+// Map and Set values at compile time, in the runtime's canonical order.
+Map(Int, Int) squares(Int n, Int i, Map(Int, Int) m) {
+    if (i >= n) { return m; }
+    return squares(n, i + 1, m.insert(i * 7 - 40, i * i));
+}
+
+Map(Str, Int) counts(List(Str) ws, Int i, Map(Str, Int) m) {
+    if (i >= ws.len()) { return m; }
+    Int c = m.get(ws[i]) else { 0 };
+    return counts(ws, i + 1, m.insert(ws[i], c + 1));
+}
+
+Set(Str) uniq(List(Str) ws, Int i, Set(Str) s) {
+    if (i >= ws.len()) { return s; }
+    return uniq(ws, i + 1, s.insert(ws[i]));
+}
+
+List(Int) sq_keys() { return squares(40, 0, {}).keys(); }
+List(Int) sq_vals() { return squares(40, 0, {}).values(); }
+Int sq_len() { return squares(40, 0, {}).remove(-40).remove(999).len(); }
+List(Str) word_keys() {
+    List(Str) ws = str_split("the quick brown fox jumps over the lazy dog the end é ü 日本 the", " ");
+    return counts(ws, 0, {}).keys();
+}
+Int the_count() {
+    List(Str) ws = str_split("the quick brown fox jumps over the lazy dog the end", " ");
+    Map(Str, Int) m = counts(ws, 0, {});
+    return (m["the"] else { -1 }) * 100 + (m.get("cat") else { 7 });
+}
+List(Str) set_list() { return uniq(str_split("b a c a b d e f g h", " "), 0, {}).to_list(); }
+Bool has_c() { return uniq(str_split("b a c", " "), 0, {}).contains("c"); }
+List(Int) lit_keys() {
+    Map(Int, Str) m = {5: "five", 1: "one", 300: "three hundred", -2: "minus two"};
+    return m.keys();
+}
+List(Int) lit_set() {
+    Set(Int) s = {9, 8, 7, 100, -5};
+    return s.to_list();
+}
+
+Int main() {
+    println(f"{sq_keys()}");
+    println(f"{sq_vals()}");
+    println(f"{sq_len()} {the_count()} {has_c()}");
+    println(f"{word_keys()}");
+    println(f"{set_list()}");
+    println(f"{lit_keys()} {lit_set()}");
+    return 0;
+}
