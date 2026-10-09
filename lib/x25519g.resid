@@ -1,0 +1,245 @@
+// x25519g.resid — X25519 (RFC 7748), written once and generic over
+// lib/word.resid's Wide512(P, B): one implementation for public bytes
+// (P = Int(512), B = Int) and secret bytes (P = Secret(Int(512)),
+// B = Secret(UInt(8))). The secret copy is checked by the compiler
+// (spec §48): no branch, index, comparison or division depends on the
+// private scalar or on any field element derived from it.
+// lib/x25519.resid's public API is the public copy.
+//
+// Public by design: the peer's public key (decoded and lifted into P),
+// every length, the field prime and the inversion exponent, whether the
+// shared secret is all zeros (one bit, published through CtSame(B), which
+// needs the declassify grant at secret types), and the public key derived
+// from a private key (published through X25519Pub(B), likewise).
+//
+// Field elements mod p = 2^255 - 19 are P values kept in parameters (a wide
+// secret never goes in a list, E0258), always fully reduced: below p, so
+// a product stays below 2^510 and the signed 512-bit arithmetic never sees
+// its sign bit. Reduction subtracts p under the sign mask of the
+// difference (p_sign, behind ct_hide); the ladder's conditional swaps are
+// xor masks built from the scalar bit with p_sign, never branches.
+
+import "word.resid";
+import "crypto.resid";
+
+// ── constants (public) ──────────────────────────────────────────────
+
+Int(512) xg_p() { return ((Int(512)) 1 << (Int(512)) 255) - (Int(512)) 19; }
+Int(512) xg_m256() { return ((Int(512)) 1 << (Int(512)) 256) - (Int(512)) 1; }
+// The scalar clamp: bits 0..2 and 255 cleared (bit 254 is set apart).
+Int(512) xg_clamp() { return ((Int(512)) 1 << (Int(512)) 255) - (Int(512)) 8; }
+Int(512) xg_bit254() { return (Int(512)) 1 << (Int(512)) 254; }
+// The inversion exponent p - 2.
+Int(512) xg_pm2() { return ((Int(512)) 1 << (Int(512)) 255) - (Int(512)) 21; }
+
+// ── field arithmetic mod p (inputs and outputs below p) ─────────────
+
+// u - p when u >= p, else u (0 <= u < 2^511), without a branch on u.
+@needs(Wide512(P, B))
+P xg_csub(P u) {
+    P pp = p_lift(xg_p());
+    P d = p_sub(u, pp);
+    P neg = p_sign(d);
+    P ones = p_lift((Int(512)) 0 - (Int(512)) 1);
+    return p_or(p_and(u, neg), p_and(d, p_xor(neg, ones)));
+}
+
+@needs(Wide512(P, B))
+P xg_add(P a, P b) { return xg_csub(p_add(a, b)); }
+
+@needs(Wide512(P, B))
+P xg_sub(P a, P b) {
+    P pp = p_lift(xg_p());
+    return xg_csub(p_sub(p_add(a, pp), b));
+}
+
+// a * b mod p: a * b < 2^510; two folds of the high half (2^256 = 38 mod
+// p) leave less than 2^256 + 2^11 < 3p, then two masked subtractions.
+// The masks by 2^256 - 1 on the factors change no value (all are below
+// 2^256); they show the optimizer that the high limbs are zero, which
+// halves the cost of the 512-bit products.
+@needs(Wide512(P, B))
+P xg_mul(P a, P b) {
+    P m = p_lift(xg_m256());
+    P k38 = p_lift((Int(512)) 38);
+    P t = p_mul(p_and(a, m), p_and(b, m));
+    P r = p_add(p_and(t, m), p_mul(p_and(p_shr(t, 256), m), k38));
+    P r2 = p_add(p_and(r, m), p_mul(p_shr(r, 256), k38));
+    return xg_csub(xg_csub(r2));
+}
+
+@needs(Wide512(P, B))
+P xg_sq(P a) { return xg_mul(a, a); }
+
+// res * base^(e's bits i..0) by square and multiply; the exponent is
+// public (p - 2), so its bits may decide.
+@needs(Wide512(P, B))
+P xg_pow(P res, P base, Int(512) e, Int i) {
+    if (i < 0) { return res; }
+    P rs = xg_sq(res);
+    Bool bit = ((e >> (Int(512)) i) & (Int(512)) 1) == (Int(512)) 1;
+    P nr = if (bit) { xg_mul(rs, base) } else { rs };
+    return xg_pow(nr, base, e, i - 1);
+}
+
+// a^(p - 2) = 1 / a (0 for a = 0).
+@needs(Wide512(P, B))
+P xg_inv(P a) {
+    P one = p_lift((Int(512)) 1);
+    return xg_pow(one, a, xg_pm2(), 254);
+}
+
+// ── decoding ────────────────────────────────────────────────────────
+
+// The 32 little-endian scalar bytes, clamped (RFC 7748 §5).
+@needs(Wide512(P, B))
+P xg_scalar_at(List(B) k, Int i, P acc) {
+    if (i >= 32) { return acc; }
+    return xg_scalar_at(k, i + 1, p_or(acc, p_shl(p_from_byte(k[i]), 8 * i)));
+}
+
+@needs(Wide512(P, B))
+P xg_scalar(List(B) k) {
+    P zero = p_lift((Int(512)) 0);
+    P raw = xg_scalar_at(k, 0, zero);
+    P clamp = p_lift(xg_clamp());
+    P top = p_lift(xg_bit254());
+    return p_or(p_and(raw, clamp), top);
+}
+
+// The public u-coordinate: bit 255 masked, then reduced mod p (a
+// non-canonical u is accepted and taken mod p, RFC 7748 §5).
+Int(512) xg_u_at(List(Int) u, Int i, Int(512) acc) {
+    if (i >= 32) { return acc; }
+    Int(512) b = (Int(512)) (u[i] & 255);
+    return xg_u_at(u, i + 1, acc | (b << (Int(512)) (8 * i)));
+}
+
+Int(512) xg_u(List(Int) u) {
+    Int(512) v = xg_u_at(u, 0, (Int(512)) 0) & (((Int(512)) 1 << (Int(512)) 255) - (Int(512)) 1);
+    return if (v >= xg_p()) { v - xg_p() } else { v };
+}
+
+// ── Montgomery ladder (RFC 7748 §5) ─────────────────────────────────
+
+// All ones when bit (0 or 1) is 1, else 0, without a branch.
+@needs(Wide512(P, B))
+P xg_mask(P bit) {
+    P zero = p_lift((Int(512)) 0);
+    return p_sign(p_sub(zero, bit));
+}
+
+// Bit t of k downward to 0; (x2, z2), (x3, z3) are swapped when swap is 1
+// (a mask, so the scalar bit stays hidden). Returns x2 / z2 after the
+// final swap.
+@needs(Wide512(P, B))
+P xg_ladder(P x1, P k, Int t, P x2, P z2, P x3, P z3, P swap) {
+    if (t < 0) {
+        P mf = xg_mask(swap);
+        P fx = p_xor(x2, p_and(p_xor(x2, x3), mf));
+        P fz = p_xor(z2, p_and(p_xor(z2, z3), mf));
+        return xg_mul(fx, xg_inv(fz));
+    }
+    P one = p_lift((Int(512)) 1);
+    P a24 = p_lift((Int(512)) 121665);
+    P kt = p_and(p_shr(k, t), one);
+    P m = xg_mask(p_xor(swap, kt));
+    P dx = p_and(p_xor(x2, x3), m);
+    P dz = p_and(p_xor(z2, z3), m);
+    P sx2 = p_xor(x2, dx);
+    P sz2 = p_xor(z2, dz);
+    P sx3 = p_xor(x3, dx);
+    P sz3 = p_xor(z3, dz);
+
+    P a = xg_add(sx2, sz2);
+    P aa = xg_sq(a);
+    P b = xg_sub(sx2, sz2);
+    P bb = xg_sq(b);
+    P e = xg_sub(aa, bb);
+    P c = xg_add(sx3, sz3);
+    P d = xg_sub(sx3, sz3);
+    P da = xg_mul(d, a);
+    P cb = xg_mul(c, b);
+    P nx3 = xg_sq(xg_add(da, cb));
+    P nz3 = xg_mul(x1, xg_sq(xg_sub(da, cb)));
+    P nx2 = xg_mul(aa, bb);
+    P nz2 = xg_mul(e, xg_add(aa, xg_mul(a24, e)));
+    return xg_ladder(x1, k, t - 1, nx2, nz2, nx3, nz3, kt);
+}
+
+@needs(Wide512(P, B))
+List(B) xg_bytes(P x, Int i, ListBuf(B) acc) {
+    if (i >= 32) { return acc.finish(); }
+    return xg_bytes(x, i + 1, acc.push(p_byte(x, 8 * i)));
+}
+
+// ── API ─────────────────────────────────────────────────────────────
+
+// Raw X25519: the 32-byte little-endian scalar k times the public
+// u-coordinate u (both 32 bytes; a shorter k aborts on the index, as
+// before). At secret types the result is secret.
+@needs(Wide512(P, B))
+pub List(B) x25519g(List(B) k, List(Int) u) {
+    P x1 = p_lift(xg_u(u));
+    P one = p_lift((Int(512)) 1);
+    P zero = p_lift((Int(512)) 0);
+    P r = xg_ladder(x1, xg_scalar(k), 254, one, zero, x1, one, zero);
+    ListBuf(B) acc = ListBuf();
+    return xg_bytes(r, 0, acc);
+}
+
+// The X25519 base point, u = 9.
+pub List(Int) x25519g_base() {
+    return [9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+}
+
+// X25519Pub(B): a public key computed from a private one is public by
+// design. At public bytes it is the bytes; at secret bytes it is a
+// declassification, so the secret copy of x25519g_public needs the
+// declassify grant -- carried to every caller of the secret copy, and to
+// no caller of the public one.
+behavior X25519Pub(B) { List(Int) xg_publish(List(B) k); }
+
+List(Int) xg_publish_pub(List(Int) k) { return k; }
+
+List(Int) xg_widen(List(UInt(8)) b, Int i, ListBuf(Int) acc) {
+    if (i >= b.len()) { return acc.finish(); }
+    return xg_widen(b, i + 1, acc.push((Int) b[i]));
+}
+
+@requires(declassify)
+List(Int) xg_publish_secret(List(Secret(UInt(8))) k) {
+    ListBuf(Int) acc = ListBuf();
+    return xg_widen(declassify(secret_join(k), "an X25519 public key is public by design"), 0, acc);
+}
+
+X25519Pub(Int) = xg_publish_pub;
+X25519Pub(Secret(UInt(8))) = xg_publish_secret;
+
+// The public key of a 32-byte private key; empty for another length.
+@needs(Wide512(P, B), X25519Pub(B))
+pub List(Int) x25519g_public(List(B) priv) {
+    if (priv.len() != 32) { return []; }
+    return xg_publish(x25519g(priv, x25519g_base()));
+}
+
+@needs(Wide512(P, B))
+List(B) xg_zeros(Int i, ListBuf(B) acc) {
+    if (i >= 32) { return acc.finish(); }
+    P zero = p_lift((Int(512)) 0);
+    return xg_zeros(i + 1, acc.push(p_byte(zero, 0)));
+}
+
+// Diffie-Hellman (RFC 7748 §6.1): the shared secret, or empty when either
+// input is not 32 bytes or the result is all zeros (a low-order peer
+// point, which every protocol on top must refuse). Whether it was zero is
+// the one fact made public (CtSame(B)); at secret types the shared secret
+// stays secret.
+@needs(Wide512(P, B), CtSame(B))
+pub List(B) x25519g_shared(List(B) priv, List(Int) peer) {
+    if (priv.len() != 32 || peer.len() != 32) { return []; }
+    List(B) s = x25519g(priv, peer);
+    ListBuf(B) zb = ListBuf();
+    if (ct_same(s, xg_zeros(0, zb))) { return []; }
+    return s;
+}

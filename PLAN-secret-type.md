@@ -24,7 +24,12 @@ the compiler at `Secret(Int)`. `lib/sha256g.resid` (SHA-256, HMAC, HKDF) and
 `Wide512(P, B)` (Poly1305 on `Int(512)` / `Secret(Int(512))` in
 parameters), with `lib/chacha.resid` as its public copy; open's verdict
 goes through `CtSame(B)` (`ct_eq` at secret bytes, so it needs
-`declassify`), and `ct_hide` is accepted on a secret. Next are AES-GCM, X25519, Ed25519, P-256/P-384, HPKE and the TLS
+`declassify`), and `ct_hide` is accepted on a secret. X25519 is in
+(2026-10-09): `lib/x25519g.resid`, generic over `Wide512(P, B)` (field
+elements in parameters, mask swaps), with `lib/x25519.resid` as its public
+copy (as fast as before, about 12% faster); the zero-share verdict goes
+through `CtSame(B)` and the derived public key through `X25519Pub(B)`,
+both declassifying at secret types. Next are AES-GCM, Ed25519, P-256/P-384, HPKE and the TLS
 key schedule. Still to do: a
 force-time `resid_cap_check("declassify")` (declassify lowers to nothing,
 so the static check is the whole check today), and steps 2–3 of §7.

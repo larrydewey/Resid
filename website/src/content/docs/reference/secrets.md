@@ -108,6 +108,24 @@ bit, whether the tag matched, through `CtSame(B)` in `lib/crypto.resid`:
 `ct_equal` at public bytes and `ct_eq` at secret bytes, so the secret copy
 needs `@requires(declassify)` and the public copy does not.
 
+`lib/x25519g.resid` is X25519 (RFC 7748), generic over `Wide512(P, B)`:
+field elements mod 2^255 - 19 are `P` values in parameters, always
+reduced below p, and the Montgomery ladder swaps with xor masks built
+from the scalar bit, never a branch. `lib/x25519.resid`'s API is the
+public copy. The private scalar is secret; the peer's public key is public
+and lifted. `x25519g(k, u)` and `x25519g_shared(priv, peer)` return the
+shared secret as secret bytes. Two facts are published, each through a
+behavior whose secret instance declassifies, so the secret copy needs
+`@requires(declassify)`: whether the shared secret is all zeros (a
+low-order peer, refused; `CtSame(B)`), and the public key derived by
+`x25519g_public(priv)` (public by design; `X25519Pub(B)`).
+
+```text
+List(Secret(UInt(8))) sk = secret_bytes(read_key());
+List(Int) pk = x25519g_public(sk);                  // published
+List(Secret(UInt(8))) shared = x25519g_shared(sk, peer_pk);
+```
+
 ```text
 List(Secret(UInt(8))) key = secret_bytes(read_key());
 List(Secret(UInt(8))) sealed = chacha20poly1305g_seal(key, nonce, secret_bytes(msg), aad);
@@ -164,5 +182,5 @@ not covered. `main` runs on its own thread stack, which is.
 ## Not yet enforced
 
 `PLAN-secret-type.md` lists the rest of the plan: moving the rest of the
-cryptography library (AES-GCM, X25519, Ed25519, P-256/P-384, HPKE, the
+cryptography library (AES-GCM, Ed25519, P-256/P-384, HPKE, the
 TLS key schedule) onto `Word(T)`.
