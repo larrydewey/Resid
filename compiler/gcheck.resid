@@ -1233,6 +1233,7 @@ GKT gk_expr0(GK k, Int id, Str exp) {
         if (!has) { return gterr(k, "a spawn's Result needs a declared type: Result(T, RegionError) r = spawn (...) { ... };", id); }
         Str vt = str_slice(exp, 7, str_len(exp) - 14);
         if (vt == "File") { return gterr(k, "a spawn region returns values, not handles (spec §19)", id); }
+        if (str_contains(vt, "Secret(")) { return gterr(k, "E0255: a spawn region cannot return a secret (" + vt + "): its Result crosses the region boundary; keep the secret inside the region, or declassify it", id); }
         GKS b = gk_stmt(k, gk_kid(k, id, 0), vt);
         if (b.err != "") { return gt_of(b); }
         Int svc = gv_captured(b.k, id, id);
@@ -2519,6 +2520,7 @@ GKT gk_provider(GK kp, Int id, Str fam, Str m) {
     GKA a = gk_args(k0, id, 1, wl, 0, "", 0);
     if (a.err != "") { return gterr(a.k, a.err, a.at); }
     GK k = a.k;
+    if (str_contains(a.tys, "Secret(")) { return gterr(k, "E0255: " + fam + "." + m + " takes public values, got (" + a.tys + "); declassify the secret first" + (if (m == "write_secret") { " (write_secret keeps the file readable by its owner only)" } else { "" }), id); }
     Bool fits = want == "?" || a.tys == want || (a.count == wl.len() && params_accept(want, a.tys, a.count));
     if (!fits) { return gterr(k, fam + "." + m + " expects (" + want + "), got (" + a.tys + ")", id); }
     if (fam == "environment" && m == "get") { return gt(k, "Str", id); }
@@ -4779,10 +4781,12 @@ Map(Str, Int) gm_add_names(List(Str) ns, Int i, Map(Str, Int) m) {
 Bool gm_unknown_types(Kg g, Int id, Map(Str, Int) known, Str src, Str smap, Bool acc) {
     if (id >= kg_count(g)) { return acc; }
     Str u = if (g.ns[id].kind == "ty") { gm_unknown_in(g.ns[id].text, 0, known) } else { "" };
+    Str sk = if (g.ns[id].kind == "ty" && u == "") { sec_key_err(g.ns[id].text) } else { "" };
+    if (sk != "") { gk_diag("E0253", sk, g, id, src, smap); }
     Str near = if (u == "") { "" } else { gm_near(known.keys(), 0, u) };
     Str hint = if (near != "") { " (did you mean `" + near + "`?)" } else { "; a type parameter is a single uppercase letter (T, K, V)" };
     if (u != "") { gk_diag("E0001", "type error: unknown type `" + u + "`" + hint, g, id, src, smap); }
-    return gm_unknown_types(g, id + 1, known, src, smap, acc || u != "");
+    return gm_unknown_types(g, id + 1, known, src, smap, acc || u != "" || sk != "");
 }
 
 // ─── Ambiguous imports (E0223) ──────────────────────────────────────
@@ -5224,4 +5228,27 @@ Bool sec_known_tree(Kg g, Int id, Int depth) {
 Bool sec_known_kids(Kg g, Int id, Int i, Int depth) {
     if (i >= g.ns[id].nk) { return true; }
     return sec_known_tree(g, kg_kid(g, id, i), depth + 1) && sec_known_kids(g, id, i + 1, depth);
+}
+
+// E0253 in a written type: a secret as a Map key or a Set element, where it
+// would decide where lookups and inserts go.
+Str sec_key_err(Str t) {
+    Int m = sec_find_head(t, "Map(", 0);
+    Int st = sec_find_head(t, "Set(", 0);
+    Bool mk = m >= 0 && str_starts_with(str_trim(str_slice(t, m + 4, str_len(t))), "Secret(");
+    Bool se = st >= 0 && str_starts_with(str_trim(str_slice(t, st + 4, str_len(t))), "Secret(");
+    if (mk) { return "a secret cannot be a Map key: keys decide where lookups go (" + t + ")"; }
+    if (se) { return "a secret cannot be a Set element: elements decide where lookups go (" + t + ")"; }
+    if (m >= 0 && sec_key_err(str_slice(t, m + 4, str_len(t))) != "") { return sec_key_err(str_slice(t, m + 4, str_len(t))); }
+    if (st >= 0 && sec_key_err(str_slice(t, st + 4, str_len(t))) != "") { return sec_key_err(str_slice(t, st + 4, str_len(t))); }
+    return "";
+}
+
+// The first `h` (e.g. "Map(") at a word start in t, from `from`, or -1.
+Int sec_find_head(Str t, Str h, Int from) {
+    Int rel = str_find(str_slice(t, from, str_len(t)), h);
+    if (rel < 0) { return 0 - 1; }
+    Int at = from + rel;
+    Bool word = at == 0 || !(is_alnum(str_char_at(t, at - 1)) || str_char_at(t, at - 1) == 95);
+    return if (word) { at } else { sec_find_head(t, h, at + 1) };
 }

@@ -3159,8 +3159,10 @@ accepted, since that states the value is public.
 
 A secret may not: decide an if, while, match or ternary, or
 an && / || operand; be compared, divided or taken a remainder
-of; be an index, a range bound or a shift amount, or have a
-method called on it other than .len() (E0255); go
+of; be an index, a range bound or a shift amount, have a
+method called on it other than .len(), be a provider
+argument, or be a spawn region's result (E0255); be a Map
+key or Set element in any written type (E0253); go
 through checked + - *, whose overflow abort is a branch on the
 value (E0254); wrap Option, Result, a sum type, Map, Set, a
 handle, a function or another secret (E0253).

@@ -8,11 +8,11 @@ E0250, E0251 and E0253–E0257, per-copy checking of generic code, erasure
 before lowering, `ct_select` (a compiler builtin) and `ct_eq` (in
 `lib/crypto.resid`, which needs the `declassify` grant because it publishes
 one bit), and the public `.len()` of a secret sequence; `tests/ct` checks
-both helpers under valgrind (spec §48, `SECURITY.md`). Still to do: the
-force-time `resid_cap_check("declassify")`, secrets as `Map` keys and `Set`
-elements in declarations, dedicated errors for secrets passed to native
-modules, spawn results and provider writes (refused today by type mismatch),
-runtime zeroing (§6), and steps 2–3 of §7.
+both helpers under valgrind (spec §48, `SECURITY.md`). Secrets as `Map` keys or `Set` elements, provider arguments and `spawn`
+results are refused (E0253, E0255); `write_secret` takes a declassified
+value. Still to do: a force-time `resid_cap_check("declassify")` (declassify
+lowers to nothing, so the static check is the whole check today), runtime
+zeroing (§6), and steps 2–3 of §7.
 
 **Goal**: make "this value is a secret" knowledge the compiler holds and
 enforces, so that code which branches on, indexes with, prints, compares

@@ -42,6 +42,13 @@ Int main() {
 | reading a secret list at a public index | a secret index, range bound or shift amount (`E0255`) |
 | storing it in a record field or list | deciding an `if`, `while`, `match` or ternary (`E0255`) |
 | `ct_select(c, a, b)` with a `Secret(Bool)` `c` | methods, except a secret list's, bytes' or text's `.len()` (`E0255`) |
+| | being a `Map` key or `Set` element in any type (`E0253`) |
+| | a provider argument, including `filesystem.write_secret` (`E0255`) |
+| | a `spawn` region's result (`E0255`) |
+
+To persist key material, declassify it under the grant and write it with
+`filesystem.write_secret`, which keeps the file readable by its owner only:
+`filesystem.write_secret(path, declassify(key, "persist the key"))`.
 
 ## Constant-time helpers
 

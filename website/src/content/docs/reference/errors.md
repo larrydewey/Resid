@@ -35,9 +35,9 @@ own), with the offending source line.
 | `E0237` | a native artifact is refused (it reaches outside itself, runs at load time, …), or a malformed `-native` |
 | `E0250` | `secret(...)` of a value the compiler knows after reduction (it would be in the binary); pass it straight to `declassify` to state that it is public |
 | `E0251` | `declassify` without a non-empty string-literal reason ([secret values](/Resid/reference/secrets/)) |
-| `E0253` | `Secret(T)` wrapping a type whose shape is control or identity: `Option`, `Result`, a sum type, `Map`, `Set`, a handle, a function, or another secret |
+| `E0253` | `Secret(T)` wrapping a type whose shape is control or identity: `Option`, `Result`, a sum type, `Map`, `Set`, a handle, a function, or another secret; or a secret as a `Map` key or `Set` element in any written type |
 | `E0254` | checked `+`, `-` or `*` on a secret (its overflow abort is a branch on the value); use `wrapping_add` / `wrapping_sub` / `wrapping_mul` |
-| `E0255` | a secret decides control, an address or a public result: a condition, a `match`, `&&`/`\|\|`, a comparison, `/` or `%`, an index, a range bound, a shift amount, or a method other than a sequence's `.len()` |
+| `E0255` | a secret decides control, an address or a public result: a condition, a `match`, `&&`/`\|\|`, a comparison, `/` or `%`, an index, a range bound, a shift amount, a method other than a sequence's `.len()`, a provider argument, or a `spawn` region's result |
 | `E0256` | showing a secret, or a value holding one through the structural `Show` (the error names the field path) |
 | `E0257` | `Show`, `Serialize`, `Hash`, `Eq` or `Ord` given for, or asked of, a secret |
 | `E0301` | a known value violates its constraint type |
