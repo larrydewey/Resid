@@ -3218,6 +3218,13 @@ for Poly1305 (Int(512) or Secret(Int(512)), kept in
 parameters); lib/chacha.resid is its public copy. Its open
 publishes one bit through CtSame(B) (lib/crypto.resid), whose
 secret instance is ct_eq and so needs the declassify grant.
+lib/ed25519g.resid (Ed25519 key generation and signing) is
+generic over Wide512(P, B) and Word64(W, B), with a masked
+double-and-always-add ladder; lib/ed25519.resid is its public
+copy. The public key and the signature are published through
+Publish(B) (lib/word.resid), whose secret instance declassifies,
+so signing with a secret seed needs the declassify grant; the
+compiler signs its provenance record that way.
 ct_hide(x) on a secret x keeps it secret.
 
 Planned (PLAN-secret-type.md): the rest of the cryptography

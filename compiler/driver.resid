@@ -1341,6 +1341,8 @@ Bool scope_num_head(Str t) {
 Bool scope_arith_builtin(Str n) {
     if (n == "abs" || n == "min" || n == "max" || n == "clamp") { return true; }
     if (n == "str_char_at" || n == "str_len" || n == "sqrt") { return true; }
+    // Constant-time barriers and selects work on registers only.
+    if (n == "ct_hide" || n == "ct_select") { return true; }
     // Vectors live in registers (spec §46).
     if (n == "splat" || n == "lanes" || n == "select") { return true; }
     if (str_starts_with(n, "checked_") || str_starts_with(n, "wrapping_") || str_starts_with(n, "saturating_")) { return true; }
@@ -8242,6 +8244,8 @@ Bool e0211_check_all(Sigs fs, List(Str) eff, List(Str) edges, Int i) {
 
 import "../lib/crypto.resid";
 import "../lib/ed25519.resid";
+import "../lib/word.resid";
+import "../lib/ed25519g.resid";
 import "../lib/cose.resid";
 import "graph.resid";
 import "fmt.resid";
@@ -8523,14 +8527,17 @@ List(Int) prov_u32(Int v) {
 }
 
 // Sign `out` in place. Returns 0, or 1 when signing is required but fails.
-@requires(filesystem, environment)
+// The seed is held as a secret from the moment it is read: the public key
+// and the signature are computed by the secret copy of lib/ed25519g.resid
+// and published (declassified) by it, which is the declassify grant here.
+@requires(filesystem, environment, declassify)
 Int write_provenance(Str out, Str profile, Str done, Str grant, Str native, Str reduce) {
     Str kpath = prov_key_path();
     if (kpath == "") {
         println("note: provenance: unsigned " + profile + " build (no signing key)");
         return 0;
     }
-    List(Int) seed = prov_read_seed(kpath);
+    List(Secret(UInt(8))) seed = secret_bytes(prov_read_seed(kpath));
     if (seed.len() != 32) {
         println("error: provenance: signing key " + kpath + " is not a 32-byte hex seed");
         return 1;
@@ -8545,7 +8552,7 @@ Int write_provenance(Str out, Str profile, Str done, Str grant, Str native, Str 
         println("error: provenance: RESID_PROV_ENCRYPT=1 needs RESID_PROV_KEY");
         return 1;
     }
-    List(Int) pubk = pub_key(seed);
+    List(Int) pubk = ed25519g_pub(seed);
     Str kid = prov_kid(pubk);
     List(Int) payload = if (conceal) { cose_encrypt0_seal(map, cose_hex_decode(ekey), kid) } else { map };
     List(Int) cose = cose_sign1(payload, kid, seed);
@@ -8562,7 +8569,14 @@ Int write_provenance(Str out, Str profile, Str done, Str grant, Str native, Str 
 
 // ─── `residc keygen [dir]` ────────────────────────────────────────
 
-@requires(filesystem)
+List(Int) keygen_widen(List(UInt(8)) b, Int i, ListBuf(Int) acc) {
+    if (i >= b.len()) { return acc.finish(); }
+    return keygen_widen(b, i + 1, acc.push((Int) b[i]));
+}
+
+// The seed is a secret from the start; writing it to the owner-only key
+// file and printing the public key are the two declassifications.
+@requires(filesystem, declassify)
 Int cmd_keygen(Str dir) {
     Str kp = dir + "/resid-ed25519.key";
     if (filesystem.exists(kp)) {
@@ -8570,10 +8584,11 @@ Int cmd_keygen(Str dir) {
         return 1;
     }
     Bool mk = filesystem.create_dir(dir);
-    List(Int) seed = random_bytes(32);
-    Str pub = hex_encode(pub_key(seed));
+    List(Secret(UInt(8))) seed = secret_bytes(random_bytes(32));
+    Str pub = hex_encode(ed25519g_pub(seed));
     // The secret key is readable by its owner only.
-    Bool w1 = filesystem.write_secret(kp, bytes_of(hex_encode(seed) + "\n"));
+    List(UInt(8)) keep = declassify(secret_join(seed), "persist the signing key (owner-only file)");
+    Bool w1 = filesystem.write_secret(kp, bytes_of(hex_encode(keygen_widen(keep, 0, ListBuf())) + "\n"));
     Bool w2 = filesystem.write_all(dir + "/resid-ed25519.pub", pub + "\n");
     if (!w1 || !w2) {
         println("error: keygen: cannot write keys in " + dir);
@@ -9205,7 +9220,7 @@ Int test_all(Int argc) {
     return if (r.fail > 0) { 1 } else { 0 };
 }
 
-@requires(args, filesystem, process, environment)
+@requires(args, filesystem, process, environment, declassify)
 Int main() {
     // A runaway compile stops at a memory budget (RESID_MEM_LIMIT overrides).
     Int _budget = resid_mem_limit_set(4096);

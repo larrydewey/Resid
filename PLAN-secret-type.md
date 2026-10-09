@@ -24,8 +24,14 @@ the compiler at `Secret(Int)`. `lib/sha256g.resid` (SHA-256, HMAC, HKDF) and
 `Wide512(P, B)` (Poly1305 on `Int(512)` / `Secret(Int(512))` in
 parameters), with `lib/chacha.resid` as its public copy; open's verdict
 goes through `CtSame(B)` (`ct_eq` at secret bytes, so it needs
-`declassify`), and `ct_hide` is accepted on a secret. Next are AES-GCM, X25519, Ed25519, P-256/P-384, HPKE and the TLS
-key schedule. Still to do: a
+`declassify`), and `ct_hide` is accepted on a secret. Ed25519 is in (2026-10-09):
+`lib/ed25519g.resid` (key generation and signing, generic over
+`Wide512(P, B)` and `Word64(W, B)`, a masked double-and-always-add ladder)
+with `lib/ed25519.resid` as its public copy; the public key and signature
+leave through `Publish(B)` (`lib/word.resid`), a declassification at secret
+bytes, and the compiler's provenance signing holds its seed as a secret
+under the `declassify` grant. Next are AES-GCM, X25519, P-256/P-384, HPKE
+and the TLS key schedule. Still to do: a
 force-time `resid_cap_check("declassify")` (declassify lowers to nothing,
 so the static check is the whole check today), and steps 2–3 of §7.
 
