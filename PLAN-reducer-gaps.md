@@ -1,7 +1,7 @@
 # PLAN: closing the reducer's gaps
 
 Status: in progress (written 2026-10-09, after the budgets rework in
-PROGRESS §0zx). Step 1 done (PROGRESS §0zy).
+PROGRESS §0zx). Steps 1 and 2 done (PROGRESS §0zy).
 Goal: make compile-time reduction (`compiler/greduce.resid`, helpers in
 `compiler/reduce.resid`) fold everything provable. Budgets are no longer the
 main limit. The limit is now the constructs the evaluator cannot run: one
@@ -55,7 +55,9 @@ Effects (`println`, clock, `read_bytes`, `resid_crypto_random_byte`,
      known lists, and the `str_*` family where missing.
    - Each one must match the runtime bit for bit. Fuzz against the runtime:
      compile the same expressions with `--no-reduce` and compare the outputs.
-2. **`Result`, user sum types, general `match`.**
+2. **`Result`, user sum types, general `match`.** Done, for declared
+   sum types without generic parameters; variant values are left
+   unrenderable.
    - A value encoding for variants (tag plus payload, like `S`/`N` for
      Option).
    - Constructors (`Ok(x)`, user variants) and `match` with any arms,

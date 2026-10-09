@@ -317,6 +317,19 @@ the evaluator could not run.
   Folds 2,532 -> 3,042; not reducible 1,449 -> 998; `bad` results 124 -> 0.
   The LSP memory test now warms up with hovers too: the folded prelude
   text moved the arenas' working size (flat after ~20 edits either way).
+- **Step 2: Result, declared sum types, general `match`.** A variant is
+  its name then its payloads, encoded as a list (Option keeps `N`/`S`).
+  `Ok`/`Err` are typed `Result(T, _)` / `Result(_, E)` and coerce into a
+  full Result by their known side; a declared (non-generic) sum type's
+  constructors and payload-less variants are known values. `match` over
+  any of them reduces the selected arm with its payloads bound (`_` arms
+  and `_` bindings included); over an unknown value, every arm is reduced
+  with its bindings unknown. `?` and `else` unwrap a known Ok, and while
+  β-reducing a `?` on a known Err or None is the call's early return
+  when a statement consumes it whole. Option and Result payloads, and
+  list items, flow into a slot by their value (`List(UInt(8)) b = [1,
+  2]`). Folds 3,042 -> 3,223. Variant values have no literal form yet:
+  a top-level call returning one stays residual.
 
 ### 0zx. Reduction budgets that count work, and tail calls that loop (2026-10-09)
 

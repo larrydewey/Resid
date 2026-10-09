@@ -1,0 +1,91 @@
+// Result, declared sum types and match on them, folded at compile time.
+type Shape = Circle(Int) | Rect(Int, Int) | Empty;
+type Parse = Parsed(Int) | Malformed(Str);
+
+Shape mk(Int k) {
+    if (k == 0) { return Empty; }
+    if (k == 1) { return Circle(3); }
+    return Rect(k, k + 1);
+}
+
+Int area(Shape s) {
+    return match s {
+        Circle(r) => r * r * 3,
+        Rect(w, h) => w * h,
+        Empty => 0
+    };
+}
+
+Int sides(Shape s) {
+    return match s {
+        Rect(_, _) => 4,
+        _ => 0
+    };
+}
+
+Parse parse_digit(Str c) {
+    Int d = str_char_at(c, 0) - 48;
+    if (d < 0 || d > 9) { return Malformed(c); }
+    return Parsed(d);
+}
+
+Result(Int, Str) half(Int x) {
+    if (x % 2 != 0) { return Err(f"{x} is odd"); }
+    return Ok(x / 2);
+}
+
+Result(Int, Str) quarter(Int x) {
+    Int h = half(x)?;
+    return half(h);
+}
+
+Int unwrap_or(Result(Int, Str) r, Int d) {
+    return match r {
+        Ok(v) => v,
+        Err(_) => d
+    };
+}
+
+Str why(Result(Int, Str) r) {
+    return match r {
+        Ok(_) => "fine",
+        Err(e) => e
+    };
+}
+
+Int digit_or(Str c) {
+    return match parse_digit(c) {
+        Parsed(d) => d,
+        Malformed(_) => -1
+    };
+}
+
+Int opt(Option(Int) o) {
+    return match o {
+        Some(v) => v + 1,
+        None => 0
+    };
+}
+
+Int else_ok(Int x) { return half(x) else { 99 }; }
+
+Int arms(Shape s) {
+    return match s {
+        Circle(r) => r + 2 * 3,
+        _ => 1 + 1
+    };
+}
+
+@requires(args) Int main() {
+    println(f"{area(mk(0))} {area(mk(1))} {area(mk(4))} {sides(mk(2))} {sides(mk(1))}");
+    println(f"{unwrap_or(quarter(12), -1)} {unwrap_or(quarter(6), -1)}");
+    Str w = why(half(7));
+    Str w2 = why(quarter(5));
+    println(w + " / " + w2);
+    Str s7 = "7";
+    Str sx = "x";
+    println(f"{digit_or(s7)} {digit_or(sx)} {opt(Some(4))} {opt(None)}");
+    println(f"{else_ok(8)} {else_ok(9)}");
+    println(f"{arms(mk(args.count()))}");
+    return 0;
+}

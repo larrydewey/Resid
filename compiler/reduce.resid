@@ -252,7 +252,34 @@ pub Str rd_coerce(Str have, Str want) {
     }
     if (h == "List(?)" && str_starts_with(w, "List(")) { return w; }
     if (h == "Option(_)" && str_starts_with(w, "Option(")) { return w; }
+    // A Result made by Ok or Err knows one side: "_" stands for the other.
+    if (str_starts_with(h, "Result(") && str_starts_with(w, "Result(")) {
+        List(Str) hs = rd_targs(h);
+        List(Str) ws = rd_targs(w);
+        if (hs.len() != 2 || ws.len() != 2) { return ""; }
+        if ((hs[0] == "_" || rd_coerce(hs[0], ws[0]) == ws[0]) && (hs[1] == "_" || rd_coerce(hs[1], ws[1]) == ws[1])) { return w; }
+    }
     return "";
+}
+
+// The type arguments of "Head(A, B, ...)", split at the top level.
+pub List(Str) rd_targs(Str t) {
+    Int o = str_find_char(t, 40, 0);
+    if (o < 0 || !str_ends_with(t, ")")) { return gx_nostr(); }
+    return rd_targs_at(t, o + 1, o + 1, str_len(t) - 1, 0, ListBuf());
+}
+
+List(Str) rd_targs_at(Str t, Int st, Int i, Int e, Int depth, ListBuf(Str) acc) {
+    if (i >= e) { return acc.push(str_trim(str_slice(t, st, e))).finish(); }
+    Int c = str_char_at(t, i);
+    if (c == 44 && depth == 0) { return rd_targs_at(t, i + 1, i + 1, e, depth, acc.push(str_trim(str_slice(t, st, i)))); }
+    Int d = if (c == 40) { depth + 1 } else if (c == 41) { depth - 1 } else { depth };
+    return rd_targs_at(t, st, i + 1, e, d, acc);
+}
+
+List(Str) gx_nostr() {
+    List(Str) e = [];
+    return e;
 }
 
 // As rd_coerce, where the value's text is at hand: a value that fits a
@@ -263,6 +290,21 @@ pub Str rd_coerce_v(Str have, Str want, Str v) {
     Str h = rd_norm_ty(have);
     Str w = rd_norm_ty(want);
     if (rd_is_int_ty(h) && rd_is_int_ty(w) && rd_int_fits(v, w)) { return w; }
+    // An Option's or a Result's payload flows by its value, as an integer does.
+    if (str_starts_with(h, "Option(") && str_starts_with(w, "Option(")) {
+        if (v == "N") { return w; }
+        Str pc = rd_coerce_v(rd_inner(h, "Option("), rd_inner(w, "Option("), str_slice(v, 1, str_len(v)));
+        return if (pc != "") { w } else { "" };
+    }
+    if (str_starts_with(h, "Result(") && str_starts_with(w, "Result(")) {
+        List(Str) hs = rd_targs(h);
+        List(Str) ws = rd_targs(w);
+        if (hs.len() != 2 || ws.len() != 2) { return ""; }
+        Int i = if (rd_nth(v, 0) == "Ok") { 0 } else { 1 };
+        Int j = 1 - i;
+        Bool other = hs[j] == "_" || rd_coerce(hs[j], ws[j]) == ws[j];
+        if (other && hs[i] != "_" && rd_coerce_v(hs[i], ws[i], rd_nth(v, 1)) != "") { return w; }
+    }
     return "";
 }
 
