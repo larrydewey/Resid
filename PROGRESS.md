@@ -330,6 +330,15 @@ the evaluator could not run.
   list items, flow into a slot by their value (`List(UInt(8)) b = [1,
   2]`). Folds 3,042 -> 3,223. Variant values have no literal form yet:
   a top-level call returning one stays residual.
+- **Step 3: builders.** `StrBuf()` and `ListBuf()` are known values (the
+  text, the encoded list so far): builders are linear (E0401-E0404), so
+  no older version is ever read again. `push`, `push_char` (a codepoint
+  `str_from_code` accepts) and `finish` fold; an untyped `ListBuf()` takes
+  its type from the slot or the first push, never a fixed-capacity one.
+  The legacy `str_sb_*` accumulators are not linear and stay residual.
+  Unknown values met while β-reducing 12,494 -> 7,032; folds 3,223 ->
+  3,501 (more calls now run long enough to meet the step budget: 71 ->
+  91, which is step 5's).
 
 ### 0zx. Reduction budgets that count work, and tail calls that loop (2026-10-09)
 

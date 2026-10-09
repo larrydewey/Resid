@@ -625,6 +625,11 @@ GV gx_call(GXT ft, Int id, RdE env, GS st) {
         Str rty = if (name == "Ok") { "Result(" + pt + ", _)" } else { "Result(_, " + pt + ")" };
         return gx_kv(rd_enc([name, a.vs[0]]), rty, cr.id, a.ch, gx_charge(s1, str_len(a.vs[0])));
     }
+    // A builder is linear (E0401-E0404), so a known one is a plain value:
+    // the text or encoded list so far.
+    if ((name == "StrBuf" || name == "ListBuf") && ufi < 0 && a.ts.len() == 0) {
+        return gx_kv("", if (name == "StrBuf") { "StrBuf" } else { "ListBuf(?)" }, cr.id, a.ch, s1);
+    }
     Int vci = if (ufi < 0) { ft.vidx.get(name) else { -1 } } else { -1 };
     if (vci >= 0) { return gx_variant(ft, vci, name, a, cr.id, s1); }
     RdV bv = rd_builtin(name, gx_rda(a, ft.rds), "", 0, ft.rds);
@@ -810,9 +815,11 @@ GV gx_mcall(GXT ft, Int id, RdE env, GS st) {
     GXN mr = if (mch) { gx_re(a.st, id, [b.r].concat(a.rs)) } else { gx_n(a.st, id) };
     GV none = gx_unk(mr.id, mch, mr.st);
     if (!b.k || !a.allk || a.named) { return none; }
+    Str name = st.g.ns[id].text;
+    Str bt = rd_norm_ty(b.ty);
+    if (bt == "StrBuf" || str_starts_with(bt, "ListBuf(")) { return gx_builder(name, bt, b, a, mr, mch); }
     Str et = rd_inner(b.ty, "List(");
     if (et == "") { return none; }
-    Str name = st.g.ns[id].text;
     // Reading an encoded list is work in proportion to its text.
     GS ms = gx_scan(mr.st, str_len(b.v));
     if (name == "len") {
@@ -856,6 +863,30 @@ GV gx_mcall(GXT ft, Int id, RdE env, GS st) {
         return gx_folded(rd_wtoa(tot), "Int", mr.id, mch, ms);
     }
     return none;
+}
+
+// push / push_char / finish on a known builder.
+GV gx_builder(Str name, Str bt, GV b, GXA a, GXN mr, Bool mch) {
+    GV none = gx_unk(mr.id, mch, mr.st);
+    Int n = a.ts.len();
+    if (bt == "StrBuf") {
+        if (name == "finish" && n == 0) { return gx_folded(b.v, "Str", mr.id, mch, mr.st); }
+        if (name == "push" && n == 1 && rd_norm_ty(a.ts[0]) == "Str") { return gx_folded(b.v + a.vs[0], "StrBuf", mr.id, mch, mr.st); }
+        if (name != "push_char" || n != 1 || !rd_is_int_ty(rd_norm_ty(a.ts[0])) || !rd_small(a.vs[0])) { return none; }
+        // A codepoint str_from_code would refuse stays residual.
+        Int cp = rd_atoi(a.vs[0]);
+        if (cp < 1 || cp > 1114111 || (cp >= 55296 && cp <= 57343)) { return none; }
+        return gx_folded(b.v + str_from_code(cp), "StrBuf", mr.id, mch, mr.st);
+    }
+    Str et = rd_inner(bt, "ListBuf(");
+    if (name == "finish" && n == 0) { return gx_folded(b.v, "List(" + et + ")", mr.id, mch, mr.st); }
+    if (name != "push" || n != 1) { return none; }
+    // The first push of an untyped builder gives it the item's type.
+    Str it = rd_norm_ty(a.ts[0]);
+    Str et2 = if (et == "?") { if (str_contains(it, "?") || str_contains(it, "_")) { "" } else { it } } else { rd_coerce_v(it, et, a.vs[0]) };
+    if (et2 == "") { return none; }
+    Str nt = if (et == "?") { et2 } else { et };
+    return gx_folded(b.v + rd_enc([a.vs[0]]), "ListBuf(" + nt + ")", mr.id, mch, mr.st);
 }
 
 List(Str) gx_rev(List(Str) xs, Int i, ListBuf(Str) acc) {

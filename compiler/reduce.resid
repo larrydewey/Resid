@@ -251,6 +251,8 @@ pub Str rd_coerce(Str have, Str want) {
         return w;
     }
     if (h == "List(?)" && str_starts_with(w, "List(")) { return w; }
+    // An untyped builder takes the slot's element type; never a fixed one's.
+    if (h == "ListBuf(?)" && str_starts_with(w, "ListBuf(") && rd_targs(w).len() == 1) { return w; }
     if (h == "Option(_)" && str_starts_with(w, "Option(")) { return w; }
     // A Result made by Ok or Err knows one side: "_" stands for the other.
     if (str_starts_with(h, "Result(") && str_starts_with(w, "Result(")) {
@@ -260,6 +262,11 @@ pub Str rd_coerce(Str have, Str want) {
         if ((hs[0] == "_" || rd_coerce(hs[0], ws[0]) == ws[0]) && (hs[1] == "_" || rd_coerce(hs[1], ws[1]) == ws[1])) { return w; }
     }
     return "";
+}
+
+Bool rd_items_fit(List(Str) xs, Str he, Str we, Int i) {
+    if (i >= xs.len()) { return true; }
+    return rd_coerce_v(he, we, xs[i]) != "" && rd_items_fit(xs, he, we, i + 1);
 }
 
 // The type arguments of "Head(A, B, ...)", split at the top level.
@@ -290,6 +297,11 @@ pub Str rd_coerce_v(Str have, Str want, Str v) {
     Str h = rd_norm_ty(have);
     Str w = rd_norm_ty(want);
     if (rd_is_int_ty(h) && rd_is_int_ty(w) && rd_int_fits(v, w)) { return w; }
+    // So do a list's items.
+    if (str_starts_with(h, "List(") && str_starts_with(w, "List(") && rd_targs(w).len() == 1) {
+        Str we = rd_inner(w, "List(");
+        return if (rd_items_fit(rd_dec(v), rd_inner(h, "List("), we, 0)) { w } else { "" };
+    }
     // An Option's or a Result's payload flows by its value, as an integer does.
     if (str_starts_with(h, "Option(") && str_starts_with(w, "Option(")) {
         if (v == "N") { return w; }

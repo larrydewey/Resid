@@ -1,0 +1,49 @@
+// StrBuf and ListBuf builders evaluated at compile time: a builder is
+// linear, so a known one is a plain value.
+Str csv(List(Int) xs, Int i, StrBuf acc) {
+    if (i >= xs.len()) { return acc.finish(); }
+    StrBuf a2 = if (i > 0) { acc.push(",") } else { acc };
+    return csv(xs, i + 1, a2.push(f"{xs[i]}"));
+}
+
+List(Int) squares(Int n, Int i, ListBuf(Int) acc) {
+    if (i >= n) { return acc.finish(); }
+    return squares(n, i + 1, acc.push(i * i));
+}
+
+List(UInt(8)) bytes_of(Str s, Int i, ListBuf(UInt(8)) acc) {
+    if (i >= str_len(s)) { return acc.finish(); }
+    return bytes_of(s, i + 1, acc.push((UInt(8))str_char_at(s, i)));
+}
+
+Str stars(Int n) {
+    StrBuf b = StrBuf();
+    StrBuf b2 = b.push_char(91);
+    return stars_at(n, b2).push_char(93).finish();
+}
+
+StrBuf stars_at(Int n, StrBuf b) {
+    if (n == 0) { return b; }
+    return stars_at(n - 1, b.push_char(42));
+}
+
+Int total(List(UInt(8)) xs) {
+    List(Int) ws = widen(xs, 0, ListBuf());
+    return ws.sum();
+}
+
+List(Int) widen(List(UInt(8)) xs, Int i, ListBuf(Int) acc) {
+    if (i >= xs.len()) { return acc.finish(); }
+    return widen(xs, i + 1, acc.push((Int)xs[i]));
+}
+
+List(UInt(8)) small() { return [1, 2, 3]; }
+
+Int main() {
+    Str a = csv([3, 1, 4, 1, 5], 0, StrBuf());
+    List(Int) sq = squares(6, 0, ListBuf());
+    Str st = stars(4);
+    Int t = total(bytes_of("AB", 0, ListBuf()));
+    println(f"{a} {st} {t} {sq.len()} {sq[5]} {small()[2]}");
+    return 0;
+}
