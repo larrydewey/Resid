@@ -5080,7 +5080,7 @@ pub KP sec_erase(KP p) {
     return KP {.g = g, .id = p.id, .pos = p.pos, .err = p.err};
 }
 
-Bool sec_graph_has(Kg g, Int i) {
+pub Bool sec_graph_has(Kg g, Int i) {
     if (i >= g.ns.len()) { return false; }
     KN n = g.ns[i];
     Bool lit = n.kind == "lit" || n.kind == "fpart" || n.kind == "fspec";

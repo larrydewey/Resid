@@ -10,9 +10,12 @@ before lowering, `ct_select` (a compiler builtin) and `ct_eq` (in
 one bit), and the public `.len()` of a secret sequence; `tests/ct` checks
 both helpers under valgrind (spec §48, `SECURITY.md`). Secrets as `Map` keys or `Set` elements, provider arguments and `spawn`
 results are refused (E0253, E0255); `write_secret` takes a declassified
-value. Still to do: a force-time `resid_cap_check("declassify")` (declassify
-lowers to nothing, so the static check is the whole check today), runtime
-zeroing (§6), and steps 2–3 of §7.
+value. Runtime zeroing (§6) is in as option B, chosen 2026-10-09: a program
+that handles secrets runs its whole allocator in secret mode (zero on free
+and reuse, every heap mapping `MADV_DONTDUMP`); measured cost on the
+compiler's own build is within noise. `mlock` is not used. Still to do: a
+force-time `resid_cap_check("declassify")` (declassify lowers to nothing,
+so the static check is the whole check today), and steps 2–3 of §7.
 
 **Goal**: make "this value is a secret" knowledge the compiler holds and
 enforces, so that code which branches on, indexes with, prints, compares

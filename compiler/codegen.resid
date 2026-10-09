@@ -3059,10 +3059,10 @@ List(Str) td_run_calls(List(Str) syms, Int i, List(Str) acc) {
 // The generated entry point (SPEC-testing.md §4.1's `test_main`): plan, run
 // each discovered test, then let the runtime print the summary and decide
 // the exit code (§7.2 — 0 all passed, 1 any failure).
-List(Str) td_main_ir(List(Str) names, List(Str) syms, Str module) {
+List(Str) td_main_ir(List(Str) names, List(Str) syms, Str module, Bool sec) {
     List(Str) g0 = td_name_globals(names, 0, nil_list());
-    List(Str) g1 = g0.concat([td_str_const("@.tmod", module)]);
-    List(Str) b0 = g1.concat(["define i64 @main() {", "entry:"]);
+    List(Str) g1 = g0.concat([td_str_const("@.tmod", module)]).concat(secret_mode_decl(sec));
+    List(Str) b0 = g1.concat(["define i64 @main() {", "entry:"]).concat(secret_mode_call(sec));
     List(Str) b1 = b0.concat([f"%tplan = call i8 @resid_test_plan(i64 {names.len()}, ptr @.tmod)"]);
     List(Str) b2 = td_run_calls(syms, 0, b1);
     List(Str) b3 = b2.concat(["%trc = call i64 @resid_test_summary()"]);
@@ -4877,11 +4877,16 @@ List(Str) tco_function(List(Str) head, List(Str) body, Str fname, Str rty, List(
 // Process entry point: run the program's main on a thread with a large
 // stack (runtime/resid_rt.c resid_run_main). Resid loops are recursion, and
 // both user programs and the compiler's own evaluator recurse deeply.
-List(Str) main_entry_ir() {
+List(Str) main_entry_ir(Bool sec) {
     // The process entry (no C library): resid_start sets up the process,
-    // main runs, its result is the exit status.
-    return ["define i32 @main() {", "entry:", "  %r = call i32 @resid_run_main(ptr @resid_user_main)", "  ret i32 %r", "}"].concat(start_entry_ir());
+    // main runs, its result is the exit status. A program that handles
+    // Secret(T) values (spec §48) switches the allocator to secret mode
+    // first.
+    return secret_mode_decl(sec).concat(["define i32 @main() {", "entry:"]).concat(secret_mode_call(sec)).concat(["  %r = call i32 @resid_run_main(ptr @resid_user_main)", "  ret i32 %r", "}"]).concat(start_entry_ir());
 }
+
+List(Str) secret_mode_decl(Bool sec) { return if (sec) { ["declare i8 @resid_secret_mode_set(i1)"] } else { nil_list() }; }
+List(Str) secret_mode_call(Bool sec) { return if (sec) { ["  %sm = call i8 @resid_secret_mode_set(i1 true)"] } else { nil_list() }; }
 
 // The process entry alone, around whichever @main the program defines (a
 // test binary's is generated).

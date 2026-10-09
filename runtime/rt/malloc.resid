@@ -45,7 +45,31 @@ pub Int class_of(Int n) {
 pub Int sys_mmap(Int n) {
     Int p = resid_raw_syscall(9, 0, n, 3, 34, 0 - 1, 0);   // RW, PRIVATE|ANON
     if (p < 0 && p > 0 - 4096) { return 0; }
+    _ = if (secret_mode()) { resid_raw_syscall(28, p, n, 16, 0, 0, 0) } else { 0 };   // MADV_DONTDUMP
     return p;
+}
+
+// ─── Secret mode (spec §48) ────────────────────────────────────────────
+// A program that handles Secret(T) values switches this on before main
+// runs (the compiler emits the call). From then on every heap mapping is
+// left out of core dumps, and memory is zeroed when it is freed or handed
+// back for reuse: c_free, the big-block cache and the region page cache.
+// Memory returned to the kernel is not zeroed here: the kernel zero-fills
+// it before anyone maps it again.
+
+Int sec_mode() { return resid_raw_global("rt_secret_mode", 8); }
+pub Bool secret_mode() { return ld64(sec_mode()) != 0; }
+
+// The mapping of the most recent TLS block (base, length); the main
+// thread's is mapped before secret mode can be set, so the setter marks it.
+pub Int tls_last() { return resid_raw_global("rt_tls_last", 16); }
+
+@export("resid_secret_mode_set", "i8(i1)")
+pub Int rt_secret_mode_set(Int on) {
+    _ = st64(sec_mode(), on);
+    Int t = tls_last();
+    _ = if (on != 0 && ld64(t) != 0) { resid_raw_syscall(28, ld64(t), ld64(t + 8), 16, 0, 0, 0) } else { 0 };
+    return 1;
 }
 
 pub Int sys_munmap(Int p, Int n) { return resid_raw_syscall(11, p, n, 0, 0, 0, 0); }
@@ -214,6 +238,7 @@ pub Int c_free(Int p) {
     if (h == 63) { return 0; }   // an arena block (bulk_block)
     if (h < 64) {
         Int head = heap_tls() + h * 8;
+        _ = if (secret_mode()) { resid_raw_fill(p, 0, class_size(h)) } else { 0 };
         _ = st64(p, ld64(head));
         return st64(head, p);
     }
@@ -223,6 +248,7 @@ pub Int c_free(Int p) {
 Int big_free(Int b, Int h) {
     Int t = heap_tls();
     if (ld64(t + 408) >= 256 || ld64(t + 416) + h > 67108864) { return heap_unmap(b, h); }
+    _ = if (secret_mode()) { resid_raw_fill(b + 16, 0, h - 16) } else { 0 };
     _ = st64(b + 8, ld64(t + 400));
     _ = st64(t + 400, b);
     _ = st64(t + 408, ld64(t + 408) + 1);

@@ -120,7 +120,7 @@ Int pages_take(Int k, Int id) {
     _ = if (p != 0) { st64(c, ld64(p)) + st64(c + 8, ld64(c + 8) - 1) } else { 0 };
     Int q = if (p != 0) { p } else { run_take(k) };
     _ = own_set(q, 1 << k, id);
-    _ = if (p == 0) { rg_dump(q, k, true) } else { 0 };
+    _ = if (p == 0 && !secret_mode()) { rg_dump(q, k, true) } else { 0 };
     return q;
 }
 
@@ -142,7 +142,9 @@ Int run_take(Int k) {
 Int pages_give(Int p, Int k) {
     _ = own_set(p, 1 << k, 0);
     Int c = rg_cache();
-    if (k == 0 && ld64(c + 8) < 64) { return st64(p, ld64(c)) + st64(c, p) + st64(c + 8, ld64(c + 8) + 1); }
+    // In secret mode a freed page is never reused as it is: MADV_DONTNEED
+    // below zero-fills it on its next touch.
+    if (k == 0 && ld64(c + 8) < 64 && !secret_mode()) { return st64(p, ld64(c)) + st64(c, p) + st64(c + 8, ld64(c + 8) + 1); }
     _ = resid_raw_syscall(28, p, (1 << k) * rg_page(), 4, 0, 0, 0);   // MADV_DONTNEED
     _ = rg_dump(p, k, false);
     _ = mem_give((1 << k) * rg_page());

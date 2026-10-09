@@ -76,7 +76,21 @@ binary: no branch or memory address depends on the secret.
   checked like any function, so it can only reach the secret through
   `declassify`.
 
+## At run time
+
+`Secret(T)` costs nothing per value: it lowers exactly as `T`. A program
+that uses secrets anywhere runs its allocator in secret mode, switched on
+before `main`:
+
+- every heap, region, thread-stack and thread-local mapping is left out of
+  core dumps (`MADV_DONTDUMP`);
+- memory is zeroed when it is freed or handed back for reuse; memory given
+  back to the kernel is zero-filled by the kernel.
+
+Registers, the binary's static data and the process's initial stack are
+not covered. `main` runs on its own thread stack, which is.
+
 ## Not yet enforced
 
-`PLAN-secret-type.md` lists the rest of the plan: zeroing storage that
-held a secret, and moving the cryptography library onto `Secret(T)`.
+`PLAN-secret-type.md` lists the rest of the plan: moving the
+cryptography library onto `Secret(T)`.

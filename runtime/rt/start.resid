@@ -147,6 +147,7 @@ Int tls_block_a64() {
     Int al = max(ld64(g + 24), 16);
     Int off = (16 + al - 1) & (0 - al);
     Int base = sys_mmap(off + tls_size() + al + 256);
+    _ = st64(tls_last(), base) + st64(tls_last() + 8, off + tls_size() + al + 256);
     Int tp = (base + al - 1) & (0 - al);
     _ = if (ld64(g + 8) > 0) { mcopy(tp + off, ld64(g), ld64(g + 8)) } else { 0 };
     return tp;
@@ -158,6 +159,7 @@ Int tls_block_x86() {
     Int ts = tls_size();
     Int total = ts + al + 256;
     Int base = sys_mmap(total);
+    _ = st64(tls_last(), base) + st64(tls_last() + 8, total);
     Int tp = (base + ts + al - 1) & (0 - al);
     Int blk = tp - ts;
     _ = if (ld64(g + 8) > 0) { mcopy(blk, ld64(g), ld64(g + 8)) } else { 0 };

@@ -3180,5 +3180,14 @@ secret only through declassify.
 After checking and reduction Secret(T) is erased: it lowers
 exactly as T, and secret(x) and declassify(x, r) as x.
 
-Planned (PLAN-secret-type.md): zeroing storage that held a
-secret, and the cryptography library on Secret(T).
+A program that handles secrets runs its allocator in secret
+mode, switched on before main: every heap, region, thread
+stack and thread-local mapping is left out of core dumps,
+and memory is zeroed when it is freed or handed back for
+reuse (memory returned to the kernel is zero-filled by the
+kernel). Registers, the binary's static data and the
+process's initial stack are not covered; main runs on its
+own thread stack, which is.
+
+Planned (PLAN-secret-type.md): the cryptography library on
+Secret(T).
