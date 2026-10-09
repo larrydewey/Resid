@@ -1,7 +1,8 @@
 # PLAN: closing the reducer's gaps
 
 Status: in progress (written 2026-10-09, after the budgets rework in
-PROGRESS §0zx). Steps 1-6 done (PROGRESS §0zy).
+PROGRESS §0zx). Done: steps 1-6, `while` and closures (PROGRESS §0zy,
+with what stays residual by design).
 Goal: make compile-time reduction (`compiler/greduce.resid`, helpers in
 `compiler/reduce.resid`) fold everything provable. Budgets are no longer the
 main limit. The limit is now the constructs the evaluator cannot run: one
@@ -35,8 +36,8 @@ mostly propagation, not an origin.
 | Map / Set values: `{}` (emptyb), map literals, `.insert`, `.get`, `.contains`, `.len` | ~140 | 9+ | `gx_expr` returns unknown for map/set/emptyb |
 | Slices `xs[a..]`, `xs[a..b]` while β-reducing | 88 (`bad:rangefrom`, `bad:index`) | 13 | a `bad` result: the call is marked not reducible ("!") |
 | Records with collection fields | many `field:` misses | — | a struct is known only when every field is |
-| `while` while β-reducing | (stmt:while) | — | left residual at depth > 0 (`gx_while`) |
-| Lambdas / `callv` / closures | few | — | always unknown |
+| `while` while β-reducing | (stmt:while) | — | left residual at depth > 0 (done: a body that returns or breaks evaluates) |
+| Lambdas / `callv` / closures | few | — | always unknown (done: closures evaluate) |
 
 Effects (`println`, clock, `read_bytes`, `resid_crypto_random_byte`,
 `spawn`) also show up in the log. They are correct to stay residual.

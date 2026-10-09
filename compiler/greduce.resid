@@ -283,7 +283,9 @@ GV gx_expr(GXT ft, Int id, RdE env, GS st) {
     if (k == "emptyb") { return gx_kv("", "{}", id, false, st); }
     if (k == "map") { return gx_mapv(ft, id, env, st); }
     if (k == "set") { return gx_setv(ft, id, env, st); }
-    if (k == "lambda") { return gx_unk(id, false, st); }
+    // A lambda is a closure over the bindings in scope (their values, known
+    // or not); it has no literal, so its node stays.
+    if (k == "lambda") { return gx_kv(gx_closure(id, env), "λ", id, false, st); }
     if (k == "spawn") {
         if (rd_env_idx(env, "spawn") >= 0) { return gx_badv(st); }
         return gx_unk(id, false, st);
@@ -346,6 +348,11 @@ GV gx_ref(GXT ft, Int id, RdE env, GS st) {
     }
     return gx_unk(id, false, st);
 }
+
+// A closure is its lambda's node and the bindings it was made under.
+Str gx_lam_tag() { return str_from_code(4) + "lambda"; }
+
+Str gx_closure(Int id, RdE env) { return rd_enc([gx_lam_tag(), rd_itoa(id), rd_enc(env.ns), rd_enc(env.vs), rd_enc(env.ts)]); }
 
 GV gx_parenv(GXT ft, Int id, RdE env, GS st) {
     GV e = gx_expr(ft, gx_kid(st, id, 0), env, st);
@@ -592,6 +599,9 @@ GV gx_call(GXT ft, Int id, RdE env, GS st) {
     if (a.bad) { return gx_badv(a.st); }
     GXN cr = if (a.ch) { gx_re(a.st, id, a.rs) } else { gx_n(a.st, id) };
     GS s1 = cr.st;
+    // A call through a binding holding a known function value, with known
+    // arguments, is evaluated.
+    if (ei >= 0 && env.ts[ei] != "" && a.allk && !a.named) { return gx_apply_top(ft, env.vs[ei], env.ts[ei], a, cr.id, s1); }
     if (ei >= 0) { return gx_unk(cr.id, a.ch, s1); }
     Int ufi = ft.fidx.get(name) else { -1 };
     if (ufi >= 0 && ft.ffold[ufi] && (!a.allk || a.named) && !gx_in_fold(ft, s1)) { return gx_unk(cr.id, a.ch, gx_fold_err(ft, id, name, "args", s1)); }
@@ -1517,6 +1527,23 @@ GV gx_attempt(GXT ft, Int fi, GXA a, Int orig, Str key, Int lim, Int cap, GS st)
     return gx_unk(orig, a.ch, gx_reason(s2, orig, "budget(" + what + ")"));
 }
 
+// A function value applied at depth 0: one attempt, in its own bulk arena,
+// with the step allowance a call's first attempt may grow to.
+GV gx_apply_top(GXT ft, Str fv, Str fty, GXA a, Int orig, GS st) {
+    Str err0 = st.memo.get("__ERR__") else { "" };
+    Int _in = resid_bulk_push();
+    GS s0 = gx_st_attempt(st, max(ft.rb.step0, st.fuel / 8), ft.rb.mem, st.fuel);
+    GY y = GY {.steps = s0.steps, .depth = 0, .fuel = s0.fuel, .lim = s0.lim, .mem = s0.mem, .bx = 0, .memo = s0.memo};
+    YV r = gy_apply(GYC {.ft = ft, .g = st.g}, orig, fv, fty, a.vs, a.ts, y);
+    Str err1 = r.st.memo.get("__ERR__") else { "" };
+    List(Str) keep = resid_list_str_persist_copy([if (r.ok) { "1" } else { "" }, r.v, r.ty, if (err1 != err0) { err1 } else { "" }]);
+    Int fuel = r.st.fuel;
+    Int _out = resid_bulk_pop();
+    GS s1 = gx_st_fuel(if (keep[3] != "") { gx_st_memo(st, "__ERR__", keep[3]) } else { st }, fuel);
+    if (keep[0] == "") { return gx_unk(orig, a.ch, s1); }
+    return gx_folded_r(keep[1], keep[2], orig, a.ch, s1, "beta");
+}
+
 // Whether the top-level function being reduced is itself `@fold`.
 Bool gx_in_fold(GXT ft, GS st) {
     Int ci = ft.fidx.get(st.memo.get(gx_cur_key()) else { "" }) else { -1 };
@@ -2075,6 +2102,15 @@ YV gy_expr(GYC c, Int id, RdE env, GY st) {
         return if (a.ok) { gy_sv(sem_setv(a.vs, a.ts), a.st) } else { gy_fail(a.st) };
     }
     if (k == 22) { return gy_val("", "{}", st); }
+    if (k == 24) { return if (n.aux == ";") { gy_fail(st) } else { gy_eblock(c, id, 0, env, st) }; }
+    if (k == 25) { return gy_made(gx_closure(id, env), "λ", st); }
+    if (k == 26) {
+        YV f = gy_expr(c, gy_kid(c, id, 0), env, st);
+        if (!f.ok) { return gy_fail(f.st); }
+        YA a = gy_args(c, id, 1, env, gy_args0(f.st));
+        if (!a.ok) { return gy_fail(a.st); }
+        return gy_apply(c, id, f.v, f.ty, a.vs, a.ts, a.st);
+    }
     return gy_fail(st);
 }
 
@@ -2152,9 +2188,11 @@ YA gy_args_n(GYC c, Int id, Int i, RdE env, GY st, ListBuf(Str) bv, ListBuf(Str)
 
 YV gy_call(GYC c, Int id, KN n, RdE env, GY st) {
     Str name = n.text;
-    if (rd_env_idx(env, name) >= 0) { return gy_fail(st); }
+    Int ei = rd_env_idx(env, name);
     YA a = gy_args(c, id, 0, env, gy_args0(st));
     if (!a.ok) { return gy_fail(a.st); }
+    // A call through a binding holding a function value.
+    if (ei >= 0) { return if (env.ts[ei] == "") { gy_fail(a.st) } else { gy_apply(c, id, env.vs[ei], env.ts[ei], a.vs, a.ts, a.st) }; }
     GXT ft = c.ft;
     Int ufi = ft.fidx.get(name) else { -1 };
     Int na = a.vs.len();
@@ -2426,6 +2464,42 @@ Str gy_fst_lit(Str t, Int i, Int n, StrBuf acc) {
 }
 
 // ─── Calls ──────────────────────────────────────────────────────────
+
+// A closure applied: its body is evaluated under the bindings it was made
+// with and its parameters, as a call (it counts toward the depth, not the
+// memo). Its result is coerced to the declared type when the value has one.
+YV gy_apply(GYC c, Int at, Str fv, Str fty, List(Str) vs, List(Str) ts, GY st) {
+    List(Str) it = rd_dec(fv);
+    if (it.len() != 5 || it[0] != gx_lam_tag() || !rd_small(it[1])) { return gy_fail(st); }
+    Int lam = rd_atoi(it[1]);
+    Int np = c.g.ns[lam].nk - 1;
+    if (np != vs.len()) { return gy_fail(st); }
+    if (st.fuel <= 0 || st.depth >= c.ft.rb.depth) { return gy_fail(gy_spent(st)); }
+    Int left = resid_stack_left();
+    if (left >= 0 && left < 16777216) { return gy_fail(gy_stack_err(c, at, "a closure", st)); }
+    // Declared parameter and result types, when the value has a closure type.
+    Bool typed = str_contains(fty, " closure(");
+    List(Str) pts = if (typed) { gx_norm_all(fn_param_list(fty), 0, ListBuf()) } else { ts };
+    if (pts.len() != vs.len()) { return gy_fail(st); }
+    RdE cap = RdE {.ns = rd_dec(it[2]), .vs = rd_dec(it[3]), .ts = rd_dec(it[4])};
+    RdE env = gy_bind_lp(c, lam, 0, np, vs, ts, pts, cap);
+    if (env.ns.len() == 1 && env.ns[0] == "") { return gy_fail(st); }
+    GY inner = gy_cost(gy_depth(st, st.depth + 1), rd_call_bytes(), 0);
+    YV r = gy_expr(c, gy_kid(c, lam, np), env, inner);
+    GY after = gy_depth(r.st, st.depth);
+    if (!r.ok) { return gy_fail(after); }
+    Str rty = if (typed) { rd_norm_ty(fn_ret(fty)) } else { r.ty };
+    Str cty = rd_coerce_v(r.ty, rty, r.v);
+    return if (cty == "") { gy_fail(after) } else { gy_val(r.v, cty, after) };
+}
+
+// A lambda's parameters bound on top of its captured bindings.
+RdE gy_bind_lp(GYC c, Int lam, Int i, Int np, List(Str) vs, List(Str) ts, List(Str) pts, RdE env) {
+    if (i >= np) { return env; }
+    Str ty = rd_coerce_v(ts[i], pts[i], vs[i]);
+    if (ty == "") { return RdE {.ns = [""], .vs = [], .ts = []}; }
+    return gy_bind_lp(c, lam, i + 1, np, vs, ts, pts, rd_env_add(env, c.g.ns[gy_kid(c, lam, i)].text, vs[i], ty));
+}
 
 YV gy_call_user(GYC c, Int fi, Int at, List(Str) vs, List(Str) ts, GY st) {
     GXT ft = c.ft;

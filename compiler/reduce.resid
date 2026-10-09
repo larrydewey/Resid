@@ -254,6 +254,8 @@ pub Str rd_coerce(Str have, Str want) {
         return w;
     }
     if (h == "List(?)" && str_starts_with(w, "List(")) { return w; }
+    // A closure or function value made while reducing takes its slot's type.
+    if (h == "λ" && str_contains(w, " closure(")) { return w; }
     // `{}` is an empty map or set, whichever the slot is.
     if (h == "{}" && (str_starts_with(w, "Map(") || str_starts_with(w, "Set("))) { return w; }
     // An untyped builder takes the slot's element type; never a fixed one's.

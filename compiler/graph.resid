@@ -97,6 +97,9 @@ pub Int kg_kc(Str k) {
     if (k == "map") { return 20; }
     if (k == "set") { return 21; }
     if (k == "emptyb") { return 22; }
+    if (k == "bexpr") { return 24; }
+    if (k == "lambda") { return 25; }
+    if (k == "callv") { return 26; }
     if (k == "bind") { return 30; }
     if (k == "ret") { return 31; }
     if (k == "estmt") { return 32; }

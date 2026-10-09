@@ -1,0 +1,31 @@
+// Closures applied at compile time: returned, captured, passed as
+// arguments, stored and called through a binding.
+type Pt = { Int x; };
+
+Int closure(Int) adder(Int k) {
+    return lambda(v) { v + k };
+}
+
+Int apply(Int closure(Int) f, Int x) { return f(x); }
+
+Int twice_of(Int closure(Int) f, Int x) { return f(f(x)); }
+
+Int square(Int v) { return v * v; }
+Int closure(Int) sq_fn() { return lambda(v) { square(v) }; }
+
+List(Int) map_all(List(Int) xs, Int closure(Int) f, Int i, ListBuf(Int) acc) {
+    if (i >= xs.len()) { return acc.finish(); }
+    return map_all(xs, f, i + 1, acc.push(f(xs[i])));
+}
+
+Int main() {
+    Int closure(Int) add5 = adder(5);
+    Int closure(Int) twice = lambda(v) { add5(add5(v)) };
+    Pt p = Pt {.x = 7};
+    Int closure(Int) plus_p = lambda(v) { v + p.x };
+    List(Int) sq = map_all([1, 2, 3], sq_fn(), 0, ListBuf());
+    List(Int) bumped = map_all([1, 2, 3], lambda(v) { v * 10 + 1 }, 0, ListBuf());
+    println(f"{twice(1)} {plus_p(1)} {apply(lambda(z) { z * 3 }, 4)} {twice_of(sq_fn(), 3)} {apply(adder(2), 40)}");
+    println(f"{sq.len()} {sq[2]} {bumped[1]}");
+    return 0;
+}

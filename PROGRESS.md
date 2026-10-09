@@ -389,6 +389,21 @@ the evaluator could not run.
   call, wide or deep): a step is 1 KB on the meter and a call 2 KB (were
   4 KB each), and non-tail nesting may go to 100,000 (was 20,000; under
   6 KiB of stack per level, and E0902 stays the backstop).
+- **Closures.** A lambda is a known value: its node and the bindings in
+  scope when it was made. Applying one (a call through a binding or
+  parameter that holds it, or `f(x)` on any closure expression) evaluates
+  its body under those bindings and its parameters, as a call (depth, not
+  memo), coercing to the closure type's parameter and result types. At
+  depth 0 a call through a binding holding a known closure with known
+  arguments is evaluated in one attempt of its own. Returned, captured,
+  passed and stored closures fold (`tests/reduce/cases/closures`). Folds
+  3,851 -> 3,867.
+
+What stays residual, by design: effects; the legacy `str_sb_*`
+accumulators (not linear, so an older version may be read again);
+integers past 2^255 and Float(16/32/128) and Dec values (not carried);
+sum types with generic parameters; a `while` whose body runs to its end
+(it would run forever).
 
 ### 0zx. Reduction budgets that count work, and tail calls that loop (2026-10-09)
 

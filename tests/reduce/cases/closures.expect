@@ -1,0 +1,2 @@
+has: println("11 8 12 81 42");
+has: println("3 9 21");

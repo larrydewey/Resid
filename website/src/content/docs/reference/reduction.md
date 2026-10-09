@@ -20,7 +20,8 @@ check discharge from facts.
   Known values are integers of every width (carried exactly up to 2^255),
   `Float`, `Str`, `Bool`, lists, records, `Option`, `Result`, declared sum
   types, maps and sets with `Int` or `Str` keys (in the runtime's own
-  iteration order), and `StrBuf`/`ListBuf` builders. A call whose
+  iteration order), `StrBuf`/`ListBuf` builders, and closures (a lambda
+  with the bindings it captured, applied where it is called). A call whose
   arguments are all known but whose body does not evaluate in full (it
   performs an effect, or uses a construct evaluation does not run) is
   specialized on those arguments instead, so the known part of its body
