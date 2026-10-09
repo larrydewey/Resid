@@ -8,8 +8,18 @@
 // Inputs are untrusted and every refusal is a value: a malformed
 // signature, a key off the curve or a scalar out of range verifies as
 // false or produces an empty list, never an abort.
+//
+// Signing, ECDH and public key derivation are written once, generic over
+// the byte type B of the private key (spec §48): ecdsag_*, ecdhg and
+// ec_public_keyg take List(B), Int bytes or Secret(UInt(8)) bytes
+// (secret_bytes in lib/word.resid). The secret copies are checked by the
+// compiler and need @requires(declassify): a signature, a public key and
+// the verdict "this key is usable" are published (lib/p256.resid's
+// P256Word); an ECDH result stays secret. The functions on List(Int)
+// below are the public copies; verification is public only.
 
 import "hash.resid";
+import "word.resid";
 import "p256.resid";
 import "p384.resid";
 
@@ -136,26 +146,45 @@ pub Bool ec_public_ok(Curve c, List(Int) pubkey) {
 // allows, or longer only by leading zeros. The bytes are ORed together
 // rather than stripped, so how many leading zeros a key has stays
 // private; only the verdict is made public.
-Bool ec_priv_len_ok(Curve c, List(Int) priv) {
+@needs(P256Word(F, B))
+Bool ec_priv_len_okg(Curve c, List(B) priv) {
     Int extra = priv.len() - curve_bytes(c);
     if (extra <= 0) { return true; }
-    return ct_public(ec_or(priv, 0, extra, 0)) == 0;
+    F z = p256w_lift(0);
+    return p256w_open(ec_org(priv, 0, extra, z)) == 0;
 }
 
-Int ec_or(List(Int) b, Int i, Int end, Int acc) {
+@needs(P256Word(F, B))
+F ec_org(List(B) b, Int i, Int end, F acc) {
     if (i >= end) { return acc; }
-    return ec_or(b, i + 1, end, acc | (b[i] & 255));
+    return ec_org(b, i + 1, end, p256w_or(acc, p256w_from_byte(b[i])));
 }
 
 // The uncompressed public key 04 || X || Y of a private key, or empty
-// when the key is not in [1, n-1].
-pub List(Int) ec_public_key(Curve c, List(Int) priv) {
-    if (!ec_priv_len_ok(c, priv)) { return []; }
+// when the key is not in [1, n-1]. At secret types the key is published
+// by design (a declassification).
+@needs(P256Word(E, B), P384Word(G, B))
+pub List(Int) ec_public_keyg(Curve c, List(B) priv) {
+    if (!ec_priv_len_okg(c, priv)) { return []; }
     return match c {
-        P256 => ec_enc256(p256_public(p256_from_be(priv))),
-        P384 => ec_enc384(p384_public(p384_from_be(priv))),
+        P256 => ec_pub256(priv),
+        P384 => ec_pub384(priv),
     };
 }
+
+@needs(P256Word(F, B))
+List(Int) ec_pub256(List(B) priv) {
+    F d = p256_load(priv);
+    return ec_enc256(p256_public(d));
+}
+
+@needs(P384Word(F, B))
+List(Int) ec_pub384(List(B) priv) {
+    F d = p384_load(priv);
+    return ec_enc384(p384_public(d));
+}
+
+pub List(Int) ec_public_key(Curve c, List(Int) priv) { return ec_public_keyg(c, priv); }
 
 List(Int) ec_enc256(P256Aff a) { return if (a.ok) { p256_encode(a) } else { [] }; }
 List(Int) ec_enc384(P384Aff a) { return if (a.ok) { p384_encode(a) } else { [] }; }
@@ -171,14 +200,32 @@ List(Int) ec_gen_try(Curve c, Int tries) {
 }
 
 // ECDH (SEC 1 §3.3.1): the x-coordinate of priv * peer, curve_bytes
-// long; empty for an invalid peer key or private key.
-pub List(Int) ecdh(Curve c, List(Int) priv, List(Int) peer) {
-    if (!ec_priv_len_ok(c, priv)) { return []; }
+// long; empty for an invalid peer key or private key. At secret types the
+// shared secret is secret; whether the keys were usable is public.
+@needs(P256Word(E, B), P384Word(G, B))
+pub List(B) ecdhg(Curve c, List(B) priv, List(Int) peer) {
+    ListBuf(B) eb = ListBuf();
+    List(B) none = eb.finish();
+    if (!ec_priv_len_okg(c, priv)) { return none; }
     return match c {
-        P256 => p256_ecdh(p256_from_be(priv), p256_decode(peer)),
-        P384 => p384_ecdh(p384_from_be(priv), p384_decode(peer)),
+        P256 => ec_ecdh256(priv, peer),
+        P384 => ec_ecdh384(priv, peer),
     };
 }
+
+@needs(P256Word(F, B))
+List(B) ec_ecdh256(List(B) priv, List(Int) peer) {
+    F d = p256_load(priv);
+    return p256_ecdh(d, p256_decode(peer));
+}
+
+@needs(P384Word(F, B))
+List(B) ec_ecdh384(List(B) priv, List(Int) peer) {
+    F d = p384_load(priv);
+    return p384_ecdh(d, p384_decode(peer));
+}
+
+pub List(Int) ecdh(Curve c, List(Int) priv, List(Int) peer) { return ecdhg(c, priv, peer); }
 
 // ─── ECDSA ───────────────────────────────────────────────────────────
 
@@ -206,13 +253,32 @@ pub Bool ecdsa_verify_raw(Curve c, HashAlg h, List(Int) pubkey, List(Int) msg, L
 }
 
 // Sign a digest made with h; the nonce is RFC 6979's, so signing needs
-// no randomness and a repeated nonce cannot leak the key.
-pub EcSig ecdsa_sign_digest(Curve c, HashAlg h, List(Int) priv, List(Int) digest) {
-    if (!ec_priv_len_ok(c, priv)) { return ec_sig_bad(); }
+// no randomness and a repeated nonce cannot leak the key. The private key
+// is List(B): at secret types the signature (public by design) is
+// declassified.
+@needs(P256Word(E, B), P384Word(G, B), Word(W, B), Word64(D, B))
+pub EcSig ecdsag_sign_digest(Curve c, HashAlg h, List(B) priv, List(Int) digest) {
+    if (!ec_priv_len_okg(c, priv)) { return ec_sig_bad(); }
     return match c {
-        P256 => ec_sig256(p256_sign_digest(h, p256_from_be(priv), digest)),
-        P384 => ec_sig384(p384_sign_digest(h, p384_from_be(priv), digest)),
+        P256 => ec_sign256(h, priv, digest),
+        P384 => ec_sign384(h, priv, digest),
     };
+}
+
+@needs(P256Word(F, B), Word(W, B), Word64(D, B))
+EcSig ec_sign256(HashAlg h, List(B) priv, List(Int) digest) {
+    F d = p256_load(priv);
+    return ec_sig256(p256_sign_digest(h, d, digest));
+}
+
+@needs(P384Word(F, B), Word(W, B), Word64(D, B))
+EcSig ec_sign384(HashAlg h, List(B) priv, List(Int) digest) {
+    F d = p384_load(priv);
+    return ec_sig384(p384_sign_digest(h, d, digest));
+}
+
+pub EcSig ecdsa_sign_digest(Curve c, HashAlg h, List(Int) priv, List(Int) digest) {
+    return ecdsag_sign_digest(c, h, priv, digest);
 }
 
 EcSig ec_sig256(P256Sig s) {
@@ -222,27 +288,52 @@ EcSig ec_sig384(P384Sig s) {
     return if (s.ok) { EcSig {.ok = true, .r = ec_strip(p384_to_be(s.r), 0), .s = ec_strip(p384_to_be(s.s), 0)} } else { ec_sig_bad() };
 }
 
-// DER signature of msg hashed with h; empty for an unusable key.
-pub List(Int) ecdsa_sign(Curve c, HashAlg h, List(Int) priv, List(Int) msg) {
-    EcSig s = ecdsa_sign_digest(c, h, priv, hash_bytes(h, msg));
+// DER signature of msg (public) hashed with h; empty for an unusable key.
+@needs(P256Word(E, B), P384Word(G, B), Word(W, B), Word64(D, B))
+pub List(Int) ecdsag_sign(Curve c, HashAlg h, List(B) priv, List(Int) msg) {
+    EcSig s = ecdsag_sign_digest(c, h, priv, hash_bytes(h, msg));
     return if (s.ok) { ecdsa_der_of(s) } else { [] };
 }
 
-// r || s signature of msg hashed with h; empty for an unusable key.
-pub List(Int) ecdsa_sign_raw(Curve c, HashAlg h, List(Int) priv, List(Int) msg) {
-    EcSig s = ecdsa_sign_digest(c, h, priv, hash_bytes(h, msg));
+// r || s signature of msg (public) hashed with h; empty for an unusable key.
+@needs(P256Word(E, B), P384Word(G, B), Word(W, B), Word64(D, B))
+pub List(Int) ecdsag_sign_raw(Curve c, HashAlg h, List(B) priv, List(Int) msg) {
+    EcSig s = ecdsag_sign_digest(c, h, priv, hash_bytes(h, msg));
     return if (s.ok) { ecdsa_raw_of(c, s) } else { [] };
 }
+
+pub List(Int) ecdsa_sign(Curve c, HashAlg h, List(Int) priv, List(Int) msg) { return ecdsag_sign(c, h, priv, msg); }
+
+pub List(Int) ecdsa_sign_raw(Curve c, HashAlg h, List(Int) priv, List(Int) msg) { return ecdsag_sign_raw(c, h, priv, msg); }
 
 // Sign with an explicit nonce k (big-endian). For known-answer tests
 // only: a k that repeats or leaks gives the private key away. Empty
 // (ok = false) when k or the key is out of range.
-pub EcSig ecdsa_sign_digest_k(Curve c, List(Int) priv, List(Int) digest, List(Int) k) {
-    if (!ec_priv_len_ok(c, priv) || !ec_priv_len_ok(c, k)) { return ec_sig_bad(); }
+@needs(P256Word(E, B), P384Word(G, B))
+pub EcSig ecdsag_sign_digest_k(Curve c, List(B) priv, List(Int) digest, List(B) k) {
+    if (!ec_priv_len_okg(c, priv) || !ec_priv_len_okg(c, k)) { return ec_sig_bad(); }
     return match c {
-        P256 => ec_sig256(p256_sign_k(p256_from_be(priv), digest, p256_from_be(k))),
-        P384 => ec_sig384(p384_sign_k(p384_from_be(priv), digest, p384_from_be(k))),
+        P256 => ec_sign256_k(priv, digest, k),
+        P384 => ec_sign384_k(priv, digest, k),
     };
+}
+
+@needs(P256Word(F, B))
+EcSig ec_sign256_k(List(B) priv, List(Int) digest, List(B) k) {
+    F d = p256_load(priv);
+    F kk = p256_load(k);
+    return ec_sig256(p256_sign_k(d, digest, kk));
+}
+
+@needs(P384Word(F, B))
+EcSig ec_sign384_k(List(B) priv, List(Int) digest, List(B) k) {
+    F d = p384_load(priv);
+    F kk = p384_load(k);
+    return ec_sig384(p384_sign_k(d, digest, kk));
+}
+
+pub EcSig ecdsa_sign_digest_k(Curve c, List(Int) priv, List(Int) digest, List(Int) k) {
+    return ecdsag_sign_digest_k(c, priv, digest, k);
 }
 
 // The same signature with s in the lower half of [1, n-1] (n - s when

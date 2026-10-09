@@ -3170,7 +3170,8 @@ accepted, since that states the value is public.
 
 A secret may not: decide an if, while, match or ternary, or
 an && / || operand; be compared, divided or taken a remainder
-of; be an index, a range bound or a shift amount, have a
+of; be cast to a type that cannot hold every value; be an
+index, a range bound or a shift amount, have a
 method called on it other than .len(), be a provider
 argument, or be a spawn region's result (E0255); be a Map
 key or Set element in any written type (E0253); go
@@ -3218,7 +3219,20 @@ for Poly1305 (Int(512) or Secret(Int(512)), kept in
 parameters); lib/chacha.resid is its public copy. Its open
 publishes one bit through CtSame(B) (lib/crypto.resid), whose
 secret instance is ct_eq and so needs the declassify grant.
-ct_hide(x) on a secret x keeps it secret.
+ct_hide(x) on a secret x keeps it secret, and so does a cast to
+an integer type that holds every value of x (the same or a
+wider width, or unsigned to a wider signed type); any other
+cast of a secret is checked, and so refused (E0255).
+lib/p256.resid and lib/p384.resid (P-256 and P-384, generated
+by tools/gen_nistp.py) are generic over P256Word(F, B) and
+P384Word(F, B), field elements UInt(576)/UInt(832) or their
+secrets: key derivation, ECDH, ECDSA signing and its RFC 6979
+nonce (over the generic HMACs) are written once, and
+lib/ecdsa.resid's ecdsag_*, ec_public_keyg and ecdhg take the
+private key as List(B). A signature, a public key and whether
+a key is usable are published through the behavior's open
+verb, a declassification at secret types, so those secret
+copies need the declassify grant; an ECDH result stays secret.
 
 Planned (PLAN-secret-type.md): the rest of the cryptography
 library on Word(T).

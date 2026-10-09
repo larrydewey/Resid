@@ -40,6 +40,7 @@ Int main() {
 | `&`, `\|`, `^` with integers; `<<` and `>>` by a public amount | `+ - *` (checked: overflow aborts, `E0254`) |
 | `wrapping_add`, `wrapping_sub`, `wrapping_mul`, `wrapping_i8` .. `wrapping_u512` conversions | `/`, `%`, comparisons, `&&`, `\|\|` (`E0255`) |
 | `ct_hide(x)` (an optimizer barrier for a mask) | |
+| a cast to an integer type that holds every value (`(UInt(576)) b` for a `Secret(UInt(8))` `b`) | a cast that could lose a value, which is checked and aborts (`E0255`; use `wrapping_*`) |
 | reading a secret list at a public index | a secret index, range bound or shift amount (`E0255`) |
 | storing it in a record field or list | deciding an `if`, `while`, `match` or ternary (`E0255`) |
 | `ct_select(c, a, b)` with a `Secret(Bool)` `c` | methods, except a secret list's, bytes' or text's `.len()` (`E0255`) |
@@ -115,6 +116,31 @@ List(UInt(8)) wire = declassify(secret_join(sealed), "AEAD output is public");
 Option(List(Secret(UInt(8)))) opened = chacha20poly1305g_decrypt(key, nonce, received, aad);
 ```
 
+`lib/p256.resid` and `lib/p384.resid` (generated from one template by
+`tools/gen_nistp.py`) are P-256 and P-384, generic over `P256Word(F, B)`
+and `P384Word(F, B)`: field elements `F` are `UInt(576)` / `UInt(832)`,
+or `Secret(UInt(576))` / `Secret(UInt(832))` when they derive from a
+private key or a nonce, always in records and parameters. The field and
+scalar arithmetic, the masked ladder, Fermat inversion of the nonce
+(a fixed public exponent), public key derivation, ECDH, signing and the
+RFC 6979 nonce (an HMAC-DRBG over the generic HMACs, keyed by the secret
+key) are written once. `lib/ecdsa.resid` takes the private key as
+`List(B)`: `ecdsag_sign_digest`, `ecdsag_sign`, `ecdsag_sign_raw`,
+`ecdsag_sign_digest_k`, `ec_public_keyg` and `ecdhg`, and its functions
+on `List(Int)` are the public copies. A signature and a public key are
+public by design, and so are the verdicts "this key is usable" and "this
+point is not infinity": they are published through the behavior's
+`p256w_open` / `p384w_open`, `ct_public` at public types and `declassify`
+at secret types, so the secret copies of signing, key derivation and
+ECDH need `@requires(declassify)`. The ECDH shared secret stays secret.
+Verification takes only public data and runs on the public copy.
+
+```text
+List(Secret(UInt(8))) d = secret_bytes(read_key());
+List(Int) sig = ecdsag_sign(P256, Sha256, d, msg);           // published: needs declassify
+List(Secret(UInt(8))) z = ecdhg(P384, d384, peer_public_key); // stays secret
+```
+
 ```text
 List(Secret(UInt(8))) key = secret_bytes(read_key());
 List(Secret(UInt(8))) prk = hkdf256g_extract(salt_lifted, key);
@@ -164,5 +190,5 @@ not covered. `main` runs on its own thread stack, which is.
 ## Not yet enforced
 
 `PLAN-secret-type.md` lists the rest of the plan: moving the rest of the
-cryptography library (AES-GCM, X25519, Ed25519, P-256/P-384, HPKE, the
-TLS key schedule) onto `Word(T)`.
+cryptography library (AES-GCM, X25519, Ed25519, HPKE, the TLS key
+schedule) onto `Word(T)`.
