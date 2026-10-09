@@ -9,6 +9,9 @@
 // inline arithmetic as call arguments (bind temps first).
 
 import "der.resid";
+import "calendar.resid";
+import "hash.resid";
+import "ecdsa.resid";
 
 // ─── Position helpers ────────────────────────────────────────────────
 
@@ -260,20 +263,7 @@ pub Int x509_ext_value_pos(List(Int) cert, Str oid) {
 // so a certificate with no basicConstraints is not a CA, and treating the
 // absence as permission would let any leaf sign for anything.
 pub Bool x509_is_ca(List(Int) cert) {
-    Int vp = x509_ext_value_pos(cert, "2.5.29.19");
-    if (vp < 0) { return false; }
-    // der_tag_sequence() is the tag *number*; the identifier octet on the
-    // wire is 0x20 | that, so the comparison masks the way der_is_seq does.
-    if (!der_is_seq(cert, vp, der_tag_sequence())) { return false; }
-    DerTlv t = der_next(cert, vp);
-    Int first = vp + t.hdr_len;
-    DerTlv b = der_next(cert, first);
-    if (b.cls == 0 && b.tag == 1) {
-        List(Int) c = der_content(cert, first);
-        if (c.len() < 1) { return false; }
-        return c[0] != 0;
-    }
-    return false;
+    return match x509_parse(cert) { Ok(c) => cert_is_ca(c), Err(e) => false };
 }
 
 // The mask for bit `bit` of a DER BIT STRING: bit 0 is the *most*
@@ -292,15 +282,7 @@ Int x509_bit_mask_at(Int shift) {
 // RFC 5280 permits, so this reports true when the extension is missing and
 // is only useful to a caller that also asked for the extension.
 pub Bool x509_key_usage(List(Int) cert, Int bit) {
-    Int vp = x509_ext_value_pos(cert, "2.5.29.15");
-    if (vp < 0) { return true; }
-    // The first content octet of a BIT STRING is the count of unused bits
-    // in the last one, not data: keyUsage 0x06 encodes as 03 02 01 06, and
-    // reading the 0x01 as a bit pattern finds nothing.
-    Int byte = 1 + bit / 8;
-    List(Int) c = der_content(cert, vp);
-    if (c.len() <= byte) { return false; }
-    return (c[byte] & x509_bit_mask(bit)) != 0;
+    return match x509_parse(cert) { Ok(c) => cert_key_usage(c, bit), Err(e) => false };
 }
 
 // extendedKeyUsage (2.5.29.37): is `oid` one of the purposes listed?
@@ -314,20 +296,7 @@ pub Bool x509_key_usage(List(Int) cert, Int bit) {
 // purpose", an unmarked certificate would be authorised for everything,
 // and a certificate issued for one job would answer for another.
 pub Bool x509_eku_has(List(Int) cert, Str oid) {
-    Int vp = x509_ext_value_pos(cert, "2.5.29.37");
-    if (vp < 0) { return false; }
-    if (!der_is_seq(cert, vp, der_tag_sequence())) { return false; }
-    DerTlv s = der_next(cert, vp);
-    Int first = vp + s.hdr_len;
-    return eku_scan(cert, first, first + s.val_len, oid);
-}
-
-Bool eku_scan(List(Int) cert, Int pos, Int end, Str oid) {
-    if (pos >= end) { return false; }
-    if (der_oid_str(cert, pos) == oid) { return true; }
-    Int nxt = x509_skip_tlv(cert, pos);
-    if (nxt <= pos) { return false; }
-    return eku_scan(cert, nxt, end, oid);
+    return match x509_parse(cert) { Ok(c) => cert_eku_has(c, oid), Err(e) => false };
 }
 
 // The signature bytes of a signatureValue BIT STRING, given the whole
@@ -350,4 +319,439 @@ pub List(Int) x509_sig_bytes(List(Int) tlv, Int want) {
 pub List(Int) x509_serial_bytes(List(Int) cert) {
     Int p = x509_serial_pos(cert);
     return der_content(cert, p);
+}
+
+// ─── Validity window ─────────────────────────────────────────────────
+
+// The digits of `s` from `i` to `last`, as a number; -1 when any of them
+// is not a digit.
+pub Int time_digits(Str s, Int i, Int last, Int acc) {
+    if (i > last) { return acc; }
+    Int d = str_char_at(s, i) - 48;
+    if (d < 0 || d > 9) { return 0 - 1; }
+    return time_digits(s, i + 1, last, acc * 10 + d);
+}
+
+// "YYMMDDHHMMSSZ" (UTCTime) or "YYYYMMDDHHMMSSZ" (GeneralizedTime) as
+// seconds since the epoch, through lib/calendar.resid: the same civil to
+// timeline arithmetic every other date in the language uses.
+//
+// A UTCTime's two-digit year is RFC 5280's sliding window: 00-49 means
+// 20xx, 50-99 means 19xx. A string of neither shape, with a zone other
+// than Z, or with a field out of range has no time: -1, which every
+// caller rejects rather than compares.
+pub Int x509_time_to_unix(Str s) {
+    Int n = str_len(s);
+    if (n != 13 && n != 15) { return 0 - 1; }
+    if (str_char_at(s, n - 1) != 90) { return 0 - 1; }
+    Bool utc = n == 13;
+    Int p = if (utc) { 2 } else { 4 };
+    Int yy = time_digits(s, 0, p - 1, 0);
+    Int mo = time_digits(s, p, p + 1, 0);
+    Int d = time_digits(s, p + 2, p + 3, 0);
+    Int hh = time_digits(s, p + 4, p + 5, 0);
+    Int mi = time_digits(s, p + 6, p + 7, 0);
+    Int ss = time_digits(s, p + 8, p + 9, 0);
+    if (yy < 0 || mo < 1 || mo > 12 || d < 1 || hh < 0 || mi < 0 || ss < 0) { return 0 - 1; }
+    Int year = if (utc) { if (yy < 50) { 2000 + yy } else { 1900 + yy } } else { yy };
+    if (d > cal_days_in_month(year, mo)) { return 0 - 1; }
+    if (hh > 23 || mi > 59 || ss > 60) { return 0 - 1; }
+    return cal_days_from_civil(year, mo, d) * cal_sec_per_day() + hh * 3600 + mi * 60 + ss;
+}
+
+// ─── Algorithms ──────────────────────────────────────────────────────
+//
+// A signature algorithm and a public key are both read once, strictly,
+// into these records, and every verifier (certificates, CRLs, OCSP, TLS
+// CertificateVerify, COSE) dispatches on them: the hash a signature is
+// checked with is the one its algorithm names, never an assumed one.
+
+// kind: 0 unsupported, 1 ECDSA, 2 RSA PKCS#1 v1.5, 3 RSA-PSS, 4 Ed25519.
+// mgf and salt only mean something for PSS.
+pub type SigAlg = { Int kind; HashAlg hash; HashAlg mgf; Int salt; };
+
+pub SigAlg sigalg_none() { return SigAlg {.kind = 0, .hash = Sha256, .mgf = Sha256, .salt = 0}; }
+pub Int sigalg_ecdsa() { return 1; }
+pub Int sigalg_pkcs1() { return 2; }
+pub Int sigalg_pss() { return 3; }
+pub Int sigalg_ed25519() { return 4; }
+
+SigAlg sa(Int kind, HashAlg h) { return SigAlg {.kind = kind, .hash = h, .mgf = h, .salt = hash_len(h)}; }
+
+// kind: 0 unusable, 1 EC (curve, point), 2 RSA (n, e), 3 Ed25519 (point).
+// pss_only marks an id-RSASSA-PSS key, which must not verify PKCS#1.
+pub type PubKey = { Int kind; Curve curve; List(Int) point; List(Int) n; List(Int) e; Bool pss_only; };
+
+pub PubKey pubkey_none() { return PubKey {.kind = 0, .curve = P256, .point = [], .n = [], .e = [], .pss_only = false}; }
+pub Int pubkey_ec() { return 1; }
+pub Int pubkey_rsa() { return 2; }
+pub Int pubkey_ed25519() { return 3; }
+
+// Whether the parameters after an algorithm OID are absent or NULL.
+Bool alg_params_null_or_absent(List(Int) b, Der oid, Der alg) {
+    if (der_is_last(oid, alg)) { return true; }
+    Der p = der_sibling(b, oid, alg);
+    return p.ok && p.tag == 5 && p.len == 0 && der_is_last(p, alg);
+}
+
+// A hash AlgorithmIdentifier (inside PSS parameters): OID, then NULL or
+// nothing. Only SHA-256/384/512.
+Option(HashAlg) alg_hash(List(Int) b, Der alg) {
+    if (!alg.ok || alg.tag != 48) { return None; }
+    Der oid = der_child(b, alg);
+    if (!alg_params_null_or_absent(b, oid, alg)) { return None; }
+    Option(HashAlg) h = hash_from_oid(der_oid(b, oid));
+    return match h { Some(x) => if (hash_len(x) >= 32) { Some(x) } else { None }, None => None };
+}
+
+// RSASSA-PSS-params (RFC 4055 §3.1). hashAlgorithm and maskGenAlgorithm
+// must be present: their defaults are SHA-1, which is refused anyway, so
+// leaving one out can only mean SHA-1. saltLength defaults to 20 and
+// trailerField to 1 (the only value). The MGF1 hash must be the message
+// hash, as RFC 4055 recommends and every CA does.
+SigAlg alg_pss(List(Int) b, Der params) {
+    if (!params.ok || params.tag != 48) { return sigalg_none(); }
+    Der h0 = der_child(b, params);
+    if (!h0.ok || h0.tag != 160) { return sigalg_none(); }
+    Der m0 = der_sibling(b, h0, params);
+    if (!m0.ok || m0.tag != 161) { return sigalg_none(); }
+    Der rest = if (der_is_last(m0, params)) { der_bad() } else { der_sibling(b, m0, params) };
+    if (!der_is_last(m0, params) && !rest.ok) { return sigalg_none(); }
+    Bool has_salt = rest.ok && rest.tag == 162;
+    Der after_salt = if (has_salt && !der_is_last(rest, params)) { der_sibling(b, rest, params) } else { if (has_salt) { der_bad() } else { rest } };
+    if (after_salt.ok && (after_salt.tag != 163 || !der_is_last(after_salt, params))) { return sigalg_none(); }
+    if (has_salt && !der_is_last(rest, params) && !after_salt.ok) { return sigalg_none(); }
+    if (after_salt.ok) {
+        Der tv = der_child(b, after_salt);
+        if (!der_is_last(tv, after_salt) || der_small_uint(b, tv) != 1) { return sigalg_none(); }
+    }
+    Der ha = der_child(b, h0);
+    if (!der_is_last(ha, h0)) { return sigalg_none(); }
+    Option(HashAlg) h = alg_hash(b, ha);
+    Der ma = der_child(b, m0);
+    if (!der_is_last(ma, m0) || ma.tag != 48) { return sigalg_none(); }
+    Der moid = der_child(b, ma);
+    if (der_oid(b, moid) != "1.2.840.113549.1.1.8") { return sigalg_none(); }
+    Der mh = der_sibling(b, moid, ma);
+    if (!der_is_last(mh, ma)) { return sigalg_none(); }
+    Option(HashAlg) mgf = alg_hash(b, mh);
+    Der sv = if (has_salt) { der_child(b, rest) } else { der_bad() };
+    if (has_salt && !der_is_last(sv, rest)) { return sigalg_none(); }
+    Int salt = if (has_salt) { der_small_uint(b, sv) } else { 20 };
+    return match h {
+        Some(hx) => match mgf {
+            Some(mx) => if (hash_same(hx, mx) && salt >= 0 && salt <= 1024) { SigAlg {.kind = 3, .hash = hx, .mgf = mx, .salt = salt} } else { sigalg_none() },
+            None => sigalg_none(),
+        },
+        None => sigalg_none(),
+    };
+}
+
+// A signature AlgorithmIdentifier element. Anything not listed, a SHA-1
+// algorithm, or parameters where none belong is kind 0 (refused).
+pub SigAlg sigalg_parse(List(Int) b, Der alg) {
+    if (!alg.ok || alg.tag != 48) { return sigalg_none(); }
+    Der oid = der_child(b, alg);
+    Str o = der_oid(b, oid);
+    Bool none_params = der_is_last(oid, alg);
+    if (o == "1.2.840.10045.4.3.2") { return if (none_params) { sa(1, Sha256) } else { sigalg_none() }; }
+    if (o == "1.2.840.10045.4.3.3") { return if (none_params) { sa(1, Sha384) } else { sigalg_none() }; }
+    if (o == "1.2.840.10045.4.3.4") { return if (none_params) { sa(1, Sha512) } else { sigalg_none() }; }
+    if (o == "1.3.101.112") { return if (none_params) { sa(4, Sha512) } else { sigalg_none() }; }
+    Bool rsa_params = alg_params_null_or_absent(b, oid, alg);
+    if (o == "1.2.840.113549.1.1.11") { return if (rsa_params) { sa(2, Sha256) } else { sigalg_none() }; }
+    if (o == "1.2.840.113549.1.1.12") { return if (rsa_params) { sa(2, Sha384) } else { sigalg_none() }; }
+    if (o == "1.2.840.113549.1.1.13") { return if (rsa_params) { sa(2, Sha512) } else { sigalg_none() }; }
+    if (o == "1.2.840.113549.1.1.10") {
+        if (none_params) { return sigalg_none(); }
+        Der params = der_sibling(b, oid, alg);
+        if (!der_is_last(params, alg)) { return sigalg_none(); }
+        return alg_pss(b, params);
+    }
+    return sigalg_none();
+}
+
+// RSAPublicKey ::= SEQUENCE { modulus INTEGER, publicExponent INTEGER }:
+// n and e as unsigned bytes, or a key of kind 0.
+PubKey rsa_key_parts(List(Int) k, Bool pss_only) {
+    Der seq = der_top(k);
+    if (!seq.ok || seq.tag != 48) { return pubkey_none(); }
+    Der dn = der_child(k, seq);
+    Der de = der_sibling(k, dn, seq);
+    if (!der_is_last(de, seq)) { return pubkey_none(); }
+    DerBytes n = der_uint(k, dn);
+    DerBytes e = der_uint(k, de);
+    if (!n.ok || !e.ok) { return pubkey_none(); }
+    return PubKey {.kind = 2, .curve = P256, .point = [], .n = n.v, .e = e.v, .pss_only = pss_only};
+}
+
+// SubjectPublicKeyInfo ::= SEQUENCE { algorithm AlgorithmIdentifier,
+//                                     subjectPublicKey BIT STRING }
+// EC keys must name P-256 or P-384 and be a point on that curve.
+pub PubKey spki_parse(List(Int) b, Der spki) {
+    if (!spki.ok || spki.tag != 48) { return pubkey_none(); }
+    Der alg = der_child(b, spki);
+    Der bits = der_sibling(b, alg, spki);
+    if (!alg.ok || alg.tag != 48 || !der_is_last(bits, spki)) { return pubkey_none(); }
+    DerBytes key = der_bits(b, bits);
+    if (!key.ok) { return pubkey_none(); }
+    Der oid = der_child(b, alg);
+    Str o = der_oid(b, oid);
+    if (o == "1.2.840.10045.2.1") {
+        Der cp = der_sibling(b, oid, alg);
+        if (!der_is_last(cp, alg) || cp.tag != 6) { return pubkey_none(); }
+        Option(Curve) c = curve_from_oid(der_oid(b, cp));
+        return match c {
+            Some(cv) => if (ec_public_ok(cv, key.v)) { PubKey {.kind = 1, .curve = cv, .point = key.v, .n = [], .e = [], .pss_only = false} } else { pubkey_none() },
+            None => pubkey_none(),
+        };
+    }
+    if (o == "1.2.840.113549.1.1.1") {
+        if (!alg_params_null_or_absent(b, oid, alg)) { return pubkey_none(); }
+        return rsa_key_parts(key.v, false);
+    }
+    // id-RSASSA-PSS key: parameters, when present, restrict it further;
+    // the signature's own PSS parameters are what get checked.
+    if (o == "1.2.840.113549.1.1.10") { return rsa_key_parts(key.v, true); }
+    if (o == "1.3.101.112") {
+        if (!der_is_last(oid, alg) || key.v.len() != 32) { return pubkey_none(); }
+        return PubKey {.kind = 3, .curve = P256, .point = key.v, .n = [], .e = [], .pss_only = false};
+    }
+    return pubkey_none();
+}
+
+// A standalone DER SubjectPublicKeyInfo (as in a PEM "PUBLIC KEY").
+pub PubKey spki_parse_der(List(Int) der) { return spki_parse(der, der_top(der)); }
+
+// ─── Signed structures ───────────────────────────────────────────────
+//
+// A certificate, a CRL and an OCSP BasicResponse are all
+//   SEQUENCE { tbs SEQUENCE, signatureAlgorithm, signature BIT STRING }
+
+pub type Signed = { List(Int) tbs; Der tbs_el; SigAlg alg; List(Int) alg_der; List(Int) sig; };
+
+pub Result(Signed, Str) signed_parse(List(Int) b, Der outer) {
+    if (!outer.ok || outer.tag != 48) { return Err("not a SEQUENCE"); }
+    Der tbs = der_child(b, outer);
+    if (!tbs.ok || tbs.tag != 48) { return Err("no signed body"); }
+    Der alg = der_sibling(b, tbs, outer);
+    Der sig = der_sibling(b, alg, outer);
+    if (!alg.ok || !sig.ok) { return Err("truncated"); }
+    DerBytes sv = der_bits(b, sig);
+    if (!sv.ok) { return Err("bad signature BIT STRING"); }
+    return Ok(Signed {.tbs = der_encoded(b, tbs), .tbs_el = tbs, .alg = sigalg_parse(b, alg), .alg_der = der_encoded(b, alg), .sig = sv.v});
+}
+
+// ─── Certificates ────────────────────────────────────────────────────
+
+// Everything verification reads from a certificate, checked once.
+// issuer and subject are the Name elements as encoded; not_before and
+// not_after are seconds since the epoch; exts is the [3] element (ok =
+// false when there are none).
+pub type Cert = {
+    List(Int) der;
+    Signed signed;
+    Int version;
+    List(Int) serial;
+    List(Int) issuer;
+    List(Int) subject;
+    Int not_before;
+    Int not_after;
+    PubKey key;
+    List(Int) spki;
+    Der exts;
+};
+
+Str x509_time_str(List(Int) b, Der t) {
+    if (!t.ok || (t.tag != 23 && t.tag != 24) || t.len > 32) { return ""; }
+    return der_str_acc(b[t.start..t.next], 0, t.len - 1, "");
+}
+
+// A time element (UTCTime or GeneralizedTime) as seconds, or -1.
+pub Int x509_time_at(List(Int) b, Der t) {
+    Str s = x509_time_str(b, t);
+    if (s == "") { return 0 - 1; }
+    // RFC 5280 §4.1.2.5: UTCTime is 13 characters, GeneralizedTime 15.
+    if ((t.tag == 23 && str_len(s) != 13) || (t.tag == 24 && str_len(s) != 15)) { return 0 - 1; }
+    return x509_time_to_unix(s);
+}
+
+// Parse a DER certificate strictly. Every structural error is an Err with
+// a reason; nothing here indexes outside the input. The inner signature
+// AlgorithmIdentifier must equal the outer one byte for byte (RFC 5280
+// §4.1.1.2), or a signature could be checked under an algorithm the CA
+// did not sign.
+pub Result(Cert, Str) x509_parse(List(Int) der) {
+    Der outer = der_top(der);
+    if (!outer.ok) { return Err("not one DER element"); }
+    Signed sg = signed_parse(der, outer)?;
+    Der tbs = sg.tbs_el;
+    Der f0 = der_child(der, tbs);
+    if (!f0.ok) { return Err("empty TBSCertificate"); }
+    Bool has_ver = f0.tag == 160;
+    Der vint = if (has_ver) { der_child(der, f0) } else { der_bad() };
+    Int version = if (has_ver) { der_small_uint(der, vint) } else { 0 };
+    if (has_ver && (!der_is_last(vint, f0) || version < 0 || version > 2)) { return Err("bad version"); }
+    Der serial = if (has_ver) { der_sibling(der, f0, tbs) } else { f0 };
+    if (!serial.ok || serial.tag != 2 || serial.len < 1 || serial.len > 20) { return Err("bad serial number"); }
+    Der alg = der_sibling(der, serial, tbs);
+    if (!alg.ok || alg.tag != 48) { return Err("bad signature algorithm"); }
+    if (!eq_list(der_encoded(der, alg), sg.alg_der)) { return Err("inner and outer signature algorithms differ"); }
+    Der issuer = der_sibling(der, alg, tbs);
+    if (!issuer.ok || issuer.tag != 48) { return Err("bad issuer"); }
+    Der validity = der_sibling(der, issuer, tbs);
+    if (!validity.ok || validity.tag != 48) { return Err("bad validity"); }
+    Der nb = der_child(der, validity);
+    Der na = der_sibling(der, nb, validity);
+    if (!der_is_last(na, validity)) { return Err("bad validity"); }
+    Int t0 = x509_time_at(der, nb);
+    Int t1 = x509_time_at(der, na);
+    if (t0 == 0 - 1 || t1 == 0 - 1) { return Err("bad validity time"); }
+    Der subject = der_sibling(der, validity, tbs);
+    if (!subject.ok || subject.tag != 48) { return Err("bad subject"); }
+    Der spki = der_sibling(der, subject, tbs);
+    if (!spki.ok || spki.tag != 48) { return Err("bad subjectPublicKeyInfo"); }
+    Der exts = x509_tail(der, spki, tbs);
+    if (exts.tag == 0 - 1) { return Err("bad optional fields after the key"); }
+    if (exts.ok && !x509_exts_wellformed(der, exts)) { return Err("bad extensions"); }
+    return Ok(Cert {.der = der, .signed = sg, .version = version, .serial = der_value(der, serial),
+                    .issuer = der_encoded(der, issuer), .subject = der_encoded(der, subject),
+                    .not_before = t0, .not_after = t1, .key = spki_parse(der, spki),
+                    .spki = der_encoded(der, spki), .exts = exts});
+}
+
+// After the key: optional [1] and [2] unique IDs, then optional [3]
+// extensions, then nothing. The extensions element (ok = false when
+// absent), or a Der with tag -1 when the tail is malformed.
+Der x509_tail(List(Int) b, Der spki, Der tbs) {
+    Der bad = Der {.ok = false, .tag = 0 - 1, .pos = 0, .start = 0, .len = 0, .next = 0};
+    if (der_is_last(spki, tbs)) { return der_bad(); }
+    Der e1 = der_sibling(b, spki, tbs);
+    if (!e1.ok) { return bad; }
+    Der e2 = if (e1.tag == 129 && !der_is_last(e1, tbs)) { der_sibling(b, e1, tbs) } else { e1 };
+    if (e1.tag == 129 && der_is_last(e1, tbs)) { return der_bad(); }
+    Der e3 = if (e2.tag == 130 && !der_is_last(e2, tbs)) { der_sibling(b, e2, tbs) } else { e2 };
+    if (e2.tag == 130 && der_is_last(e2, tbs)) { return der_bad(); }
+    if (!e3.ok || e3.tag != 163 || !der_is_last(e3, tbs)) { return bad; }
+    return e3;
+}
+
+// [3] { SEQUENCE OF Extension }, each SEQUENCE { OID, [BOOLEAN,] OCTET
+// STRING }, with no extension OID twice (RFC 5280 §4.2).
+Bool x509_exts_wellformed(List(Int) b, Der e3) {
+    Der seq = der_child(b, e3);
+    if (!seq.ok || seq.tag != 48 || !der_is_last(seq, e3) || seq.len == 0) { return false; }
+    List(Str) none = [];
+    return x509_ext_scan(b, der_child(b, seq), seq, none);
+}
+
+Bool x509_ext_scan(List(Int) b, Der e, Der seq, List(Str) seen) {
+    if (!e.ok || e.tag != 48) { return false; }
+    Der oid = der_child(b, e);
+    Str o = der_oid(b, oid);
+    if (o == "" || seen.contains(o)) { return false; }
+    Der v1 = der_sibling(b, oid, e);
+    Bool crit = v1.ok && v1.tag == 1;
+    if (crit && (v1.len != 1 || b[v1.start] != 255)) { return false; }
+    Der v = if (crit) { der_sibling(b, v1, e) } else { v1 };
+    if (!v.ok || v.tag != 4 || !der_is_last(v, e)) { return false; }
+    if (der_is_last(e, seq)) { return true; }
+    return x509_ext_scan(b, der_sibling(b, e, seq), seq, seen.concat([o]));
+}
+
+pub Bool eq_list(List(Int) a, List(Int) b) {
+    if (a.len() != b.len()) { return false; }
+    return eq_list_at(a, b, 0);
+}
+
+Bool eq_list_at(List(Int) a, List(Int) b, Int i) {
+    if (i >= a.len()) { return true; }
+    if (a[i] != b[i]) { return false; }
+    return eq_list_at(a, b, i + 1);
+}
+
+// ─── Extensions, on a parsed certificate ─────────────────────────────
+
+// The extnValue OCTET STRING element of the extension named `oid`, or a
+// Der with ok = false when the certificate has no such extension. The
+// extensions were checked well-formed (and free of duplicates) by
+// x509_parse, so the first match is the only one.
+pub Der cert_ext(Cert c, Str oid) {
+    if (!c.exts.ok) { return der_bad(); }
+    Der seq = der_child(c.der, c.exts);
+    return cert_ext_scan(c.der, der_child(c.der, seq), seq, oid);
+}
+
+Der cert_ext_scan(List(Int) b, Der e, Der seq, Str oid) {
+    if (!e.ok) { return der_bad(); }
+    Der id = der_child(b, e);
+    Der v1 = der_sibling(b, id, e);
+    Der v = if (v1.ok && v1.tag == 1) { der_sibling(b, v1, e) } else { v1 };
+    if (der_oid(b, id) == oid) { return v; }
+    if (der_is_last(e, seq)) { return der_bad(); }
+    return cert_ext_scan(b, der_sibling(b, e, seq), seq, oid);
+}
+
+// The single element an extension value holds, which must fill it.
+pub Der cert_ext_inner(Cert c, Str oid) {
+    Der v = cert_ext(c, oid);
+    if (!v.ok) { return der_bad(); }
+    Der inner = der_at(c.der, v.start, der_end(v));
+    if (!inner.ok || inner.next != der_end(v)) { return der_bad(); }
+    return inner;
+}
+
+// basicConstraints cA (2.5.29.19). Absent means not a CA: RFC 5280 gives
+// cA a DEFAULT of FALSE, and treating absence as permission would let any
+// leaf sign for anything.
+pub Bool cert_is_ca(Cert c) {
+    Der bc = cert_ext_inner(c, "2.5.29.19");
+    if (!bc.ok || bc.tag != 48 || bc.len == 0) { return false; }
+    Der first = der_child(c.der, bc);
+    return first.ok && first.tag == 1 && first.len == 1 && c.der[first.start] == 255;
+}
+
+// keyUsage (2.5.29.15) bit `bit` (0 = digitalSignature, 5 = keyCertSign).
+// Absent means unrestricted (RFC 5280 permits it); a present but
+// malformed one allows nothing.
+pub Bool cert_key_usage(Cert c, Int bit) {
+    Der ku = cert_ext_inner(c, "2.5.29.15");
+    if (!cert_ext(c, "2.5.29.15").ok) { return true; }
+    if (!ku.ok || ku.tag != 3 || ku.len < 2 || bit < 0) { return false; }
+    // The first content octet counts the unused bits of the last one.
+    Int byte = 1 + bit / 8;
+    if (byte >= ku.len) { return false; }
+    return (c.der[ku.start + byte] & x509_bit_mask(bit % 8)) != 0;
+}
+
+// extendedKeyUsage (2.5.29.37) lists `oid`. Absent is false: a caller
+// asking whether a certificate may do one particular thing wants to see
+// it written down.
+pub Bool cert_eku_has(Cert c, Str oid) {
+    Der eku = cert_ext_inner(c, "2.5.29.37");
+    if (!eku.ok || eku.tag != 48) { return false; }
+    return cert_oid_in(c.der, der_child(c.der, eku), eku, oid);
+}
+
+Bool cert_oid_in(List(Int) b, Der e, Der seq, Str oid) {
+    if (!e.ok) { return false; }
+    if (der_oid(b, e) == oid) { return true; }
+    if (der_is_last(e, seq)) { return false; }
+    return cert_oid_in(b, der_sibling(b, e, seq), seq, oid);
+}
+
+// The subjectAltName (2.5.29.17) entries of one GeneralName kind: tag
+// 130 dNSName, 135 iPAddress. Each is the raw value.
+pub List(List(Int)) cert_san(Cert c, Int tag) {
+    Der gns = cert_ext_inner(c, "2.5.29.17");
+    List(List(Int)) none = [];
+    if (!gns.ok || gns.tag != 48) { return none; }
+    return cert_san_scan(c.der, der_child(c.der, gns), gns, tag, none);
+}
+
+List(List(Int)) cert_san_scan(List(Int) b, Der e, Der seq, Int tag, List(List(Int)) acc) {
+    if (!e.ok) { return acc; }
+    List(List(Int)) acc2 = if (e.tag == tag) { acc.concat([der_value(b, e)]) } else { acc };
+    if (der_is_last(e, seq)) { return acc2; }
+    return cert_san_scan(b, der_sibling(b, e, seq), seq, tag, acc2);
 }

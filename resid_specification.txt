@@ -563,6 +563,36 @@ complement representation, for bit-level code:
   wrapping_u8(300)    // 44
   wrapping_u64(-1)    // 18446744073709551615
 
+6.8  Constant-Time Helpers
+--------------------------------------------------
+
+Code that handles secrets (keys, nonces, shared secrets) must
+not let a secret steer a branch, a conditional move or a memory
+address. Three builtins support writing and checking such code;
+each returns its argument unchanged:
+
+  ct_secret(x)    // any integer: x, marked secret for checking
+  ct_public(x)    // any integer: x, deliberately made public
+  ct_hide(x)      // an integer of at most 64 bits: x, opaque
+                  // to the optimizer
+
+ct_secret and ct_public are valgrind client requests
+(MAKE_MEM_UNDEFINED, MAKE_MEM_DEFINED) on the value's bytes:
+under memcheck a branch, select or address computed from a
+ct_secret value is reported, and ct_public marks a
+declassification point (a verdict such as "the tag matched", a
+signature that is published anyway). Outside valgrind both are
+a few instructions and have no effect.
+
+ct_hide passes x through an empty inline assembly statement,
+so the optimizer cannot see its value: a mask built from it
+(0 - ct_hide(bit)) stays a mask and is not turned back into a
+branch or a conditional move.
+
+None of the three is reduced at compile time; a call on known
+arguments stays in the residual program. tests/ct runs the
+library's secret-handling code under memcheck this way.
+
 
 ==================================================
 7. BINDINGS AND IDENTITY

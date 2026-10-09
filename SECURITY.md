@@ -252,21 +252,23 @@ secret and writes with its own.
 
 Not guaranteed:
 
-- Only `ecdsa_secp256r1_sha256` and `ed25519` are produced. RSA signing,
-  P-384, session resumption (PSK or tickets), client certificates,
-  encrypted ClientHello, record compression and 0-RTT are not implemented.
-  A client offering none of the two signature algorithms is refused rather
-  than served with a signature the certificate does not cover.
+- Only `ecdsa_secp256r1_sha256`, `ecdsa_secp384r1_sha384` and `ed25519`
+  are produced. RSA signing, session resumption (PSK or tickets), client
+  certificates, encrypted ClientHello, record compression and 0-RTT are
+  not implemented. A client offering none of the server key's algorithm
+  is refused rather than served with a signature the certificate does not
+  cover.
 - No session ticket is ever sent, so every connection pays a full
   handshake. That is the safe direction to be wrong in.
-- This repository's own client (`examples/tls_client.resid`) verifies only
-  ECDSA-P256 and RSA-PSS CertificateVerifies, so an Ed25519 server is
-  checked end to end with an external client. The server side signs with
-  either.
+- This repository's own client verifies the CertificateVerify schemes
+  ECDSA P-256/SHA-256, ECDSA P-384/SHA-384, Ed25519 and RSA-PSS with
+  SHA-256/384/512 (rsaEncryption and RSASSA-PSS keys), each only with a
+  certificate key of the matching kind (`tls_scheme_alg`).
 - The key file's permissions are not checked (see above).
-- Constant-time behavior of compiled code is not verified: the compiler
-  (and LLVM) may introduce branches, so the ECDSA and AES implementations
-  are not claimed to be constant-time.
+- Constant time is checked for the operations listed under
+  "Cryptography library" below, on the shipped (optimized, LTO) code; the
+  TLS record layer, handshake and key schedule around them are not
+  separately checked.
 
 ## Provenance (spec §33.1)
 
@@ -306,11 +308,15 @@ relative layout reproduced.
 
 | Guarantee | Tests |
 |---|---|
-| Ed25519 verification is strict (RFC 8032 §5.1.7): 64-byte signatures, `S < L` as a full integer, canonical `y < p`, keys and `R` must decode to curve points; malformed input returns false, never aborts. | `ed25519_verify_strict`, `ed25519_verify_in_resid` |
-| ECDSA P-256 verification rejects `r` or `s` outside `[1, n-1]` (including the `r = Qx, s = 0` forgery), keys off the curve and sums at infinity, and accepts DER integers with leading zeros stripped. | `ecdsa_verify_strict` |
-| RSA PKCS#1 v1.5 certificate verification (`rsa_cert_verify`) compares the full expected encoding and rejects a signature representative `>= n`. | (library code) |
+| Every primitive agrees with Wycheproof (C2SP, committed under `tests/crypto/vectors/`, including every "invalid" case): ECDSA P-256/P-384 with SHA-256/384/512 in DER and r‖s form; ECDH P-256/P-384 (raw points and SubjectPublicKeyInfo); RSA PKCS#1 v1.5 and RSA-PSS at 2048/3072/4096 bits with SHA-256/384/512; HMAC and HKDF with SHA-256/384/512; AES-128/192/256-GCM; AES key wrap; ChaCha20-Poly1305; X25519; Ed25519. | `tests/crypto/run.sh` (≈12,400 vectors) |
+| Deterministic ECDSA nonces are RFC 6979's, byte for byte (the RFC's own vectors and pyca/cryptography's). | `ecdsa_rfc6979.txt` |
+| HPKE (RFC 9180) matches the RFC's vectors for DHKEM(P-256) and DHKEM(X25519) in all four modes with every KDF and AEAD, and interoperates with pyca/cryptography for DHKEM(P-384). A forged tag never opens and does not advance the sequence number. | `hpke_rfc9180.txt`, `hpke_p384_pyca.txt`, roundtrip |
+| COSE_Sign1 (ES256, ES384, PS256/384/512, RS256/384/512, EdDSA) reads the algorithm only from the protected header, requires the key type and curve it names, and refuses a wrong tag, trailing bytes, a swapped payload and an algorithm only in the unprotected header. | `cose_sign1.txt` |
+| ECDSA verification rejects `r` or `s` outside `[1, n-1]`, keys off the curve, sums at infinity, and DER signatures that are not strict DER (BER lengths, padded or negative integers, trailing bytes). | Wycheproof ECDSA files |
+| RSA verification refuses moduli below 2048 bits, even moduli and even or tiny exponents, compares PKCS#1 v1.5 by re-encoding (never by parsing the recovered block), and rejects a signature representative `>= n`. | Wycheproof RSA files, `rsa1024-ca` |
+| **Constant time, checked on the binary.** `tests/ct/run.sh` runs ECDSA signing (P-256, P-384), ECDH, public-key derivation, X25519, Ed25519 signing, AES (AES-NI and software, encrypt and decrypt), AES-GCM, GHASH, AES key unwrap, ChaCha20-Poly1305, SHA-512, HMAC, HKDF, HPKE open and `ct_equal` under valgrind memcheck with the secret marked undefined (`ct_secret`). No branch, conditional move or memory address depends on a secret in the optimized, LTO-linked code; a negative control (a secret-indexed table) must be reported. The software AES S-box is computed, not looked up; field reductions, point selection and conditional subtractions are masks, and masks pass through `ct_hide` so LLVM cannot turn them back into branches. | `tests/ct/run.sh` |
+| Every parser of untrusted bytes is total: certificates, CRLs, OCSP responses, keys (PKCS#8, SEC1, SPKI, RSAPublicKey, COSE_Key), ECDSA signatures, CBOR/COSE, TLS handshake messages and PEM never abort and never loop on malformed input; mutated inputs are run through all of them (an abort is caught per input, a hang times out). | fuzz section of `tests/crypto/run.sh` |
 | Randomness comes from `getrandom(2)`, falling back to `/dev/urandom`; failure aborts. | (runtime code) |
-| `ct_equal` and the AEAD tag checks accumulate every byte with no data-dependent exit in the source. | (library code) |
 
 ## TLS server authentication
 
@@ -333,7 +339,7 @@ certificate's `notBefore` cannot drift from what the rest of the language
 calls the same day. A time this cannot read rejects rather than comparing
 against a moment it did not read.
 
-| Certificate signatures are verified for ECDSA P-256 (`1.2.840.10045.4.3.2`), RSA PKCS#1 v1.5 (`1.2.840.113549.1.1.11`) and RSA-PSS (`1.2.840.113549.1.1.10`). A PSS signature is only accepted when its parameters *say* SHA-256, MGF1-SHA-256 and salt 32 -- RFC 4055's defaults are SHA-1, which is not verified, so absent parameters are refused rather than assumed. | rsa_pkcs1, rsa_pss, pss parameter check |
+| Certificates are parsed strictly (`x509_parse`: DER only, inner and outer signature algorithms byte-equal, well-formed and duplicate-free extensions) and verified for ECDSA with SHA-256/384/512 on P-256 or P-384 keys, RSA PKCS#1 v1.5 with SHA-256/384/512, RSA-PSS with SHA-256/384/512 (any salt length; MGF1 must use the message hash; `hashAlgorithm` and `maskGenAlgorithm` must be present, since their defaults are SHA-1) and Ed25519. An id-RSASSA-PSS key only verifies PSS. AMD's published SEV ARK/ASK chains (Milan, Genoa) and the AWS Nitro root verify. | rsa_pkcs1, rsa_pss, pss parameter check, the x509 section of `tests/crypto/run.sh` |
 | A certificate may only sign for another if it says `CA:TRUE` and allows `keyCertSign`. A leaf handed over as an intermediate cannot issue. | leaf must not be a CA, issuer CA checks |
 | A store carrying CRLs enforces them: a certificate the issuer's current CRL lists is refused. | good.der, bad.der |
 | A CRL is used only if it is signed by the issuing CA and inside its `thisUpdate`..`nextUpdate` window, so a stale CRL cannot certify anything. | a stale CRL must not be usable |
@@ -353,12 +359,18 @@ Not guaranteed:
 - A trust anchor is not itself checked for revocation.
 - `require_signatures` does not extend to path dependencies, which spec
   §28.3 exempts as local source.
-- Constant-time behavior of compiled code is not verified: the compiler
-  (and LLVM) may introduce branches.
-- DER, X.509 and HPACK parsers abort on malformed input rather than
-  returning an error.
-- Certificate signature algorithms other than ECDSA P-256, RSA PKCS#1
-  v1.5 and RSA-PSS with SHA-256 are not verified.
+- The HPACK decoder (`lib/h2.resid`) can still abort on malformed input;
+  the certificate, CRL, OCSP, key and TLS message parsers cannot (see the
+  cryptography table).
+- P-521, SHA-1 (in any signature), SHA-3, DSA, RSA below 2048 bits and
+  ECDSA over curves other than P-256 and P-384 are not verified: such a
+  certificate is refused, not accepted on another algorithm's terms.
+- Constant time is checked with valgrind on x86-64 only, and covers
+  secret-dependent control flow and addresses, not variable-latency
+  instructions (the only divides in the checked binary are on public
+  indices in the AES key schedule and in the allocator, found by reading
+  its disassembly rather than by a test). The checks need valgrind installed;
+  without it `tests/ct/run.sh` reports itself skipped.
 
 ## Bootstrap
 

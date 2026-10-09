@@ -10,6 +10,7 @@ Int main() {
     println(f"{intv.val_len}");
     List(Int) v = der_content(blob, ipos);
     println(f"{v[0]}");
+    // A long-form length (0x2015) that runs past the input is malformed.
     List(Int) big = [0, 2, 130, 32, 21, 9, 9];
     DerTlv lf = der_next(big, 1);
     println(f"{lf.val_len}");

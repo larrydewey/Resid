@@ -1,0 +1,265 @@
+// hpke.resid — Hybrid Public Key Encryption (RFC 9180).
+//
+// How a key broker hands a secret (a model-weight DEK, say) to a workload
+// it has just attested: the workload makes a key pair inside the TEE and
+// binds the public key into its evidence; the broker seals the DEK to
+// that key; only the holder of the private key can open it.
+//
+// KEMs:  DHKEM(P-256, HKDF-SHA256) 0x0010, DHKEM(P-384, HKDF-SHA384)
+//        0x0011, DHKEM(X25519, HKDF-SHA256) 0x0020.
+// KDFs:  HKDF-SHA256 0x0001, HKDF-SHA384 0x0002, HKDF-SHA512 0x0003.
+// AEADs: AES-128-GCM 0x0001, AES-256-GCM 0x0002, ChaCha20-Poly1305
+//        0x0003, export-only 0xFFFF.
+// Modes: base 0, psk 1, auth 2, auth_psk 3.
+//
+// Every failure (an unknown suite, a peer key off the curve, a bad tag)
+// is a context with ok = false or None, never an abort.
+
+import "hash.resid";
+import "ecdsa.resid";
+import "x25519.resid";
+import "aesgcm.resid";
+import "chacha.resid";
+
+pub type HpkeSuite = { Int kem; Int kdf; Int aead; };
+
+pub HpkeSuite hpke_suite(Int kem, Int kdf, Int aead) { return HpkeSuite {.kem = kem, .kdf = kdf, .aead = aead}; }
+
+// ─── Parameters (RFC 9180 §7) ────────────────────────────────────────
+
+pub Bool hpke_kem_ok(Int kem) { return kem == 16 || kem == 17 || kem == 32; }
+Bool hpke_kdf_ok(Int kdf) { return kdf >= 1 && kdf <= 3; }
+Bool hpke_aead_ok(Int aead) { return (aead >= 1 && aead <= 3) || aead == 65535; }
+pub Bool hpke_suite_ok(HpkeSuite s) { return hpke_kem_ok(s.kem) && hpke_kdf_ok(s.kdf) && hpke_aead_ok(s.aead); }
+
+HashAlg kem_hash(Int kem) { return if (kem == 17) { Sha384 } else { Sha256 }; }
+HashAlg kdf_hash(Int kdf) { return if (kdf == 2) { Sha384 } else { if (kdf == 3) { Sha512 } else { Sha256 } }; }
+
+// Nsecret (= Nh of the KEM's hash), Nsk.
+Int kem_nsecret(Int kem) { return if (kem == 17) { 48 } else { 32 }; }
+Int kem_nsk(Int kem) { return if (kem == 17) { 48 } else { 32 }; }
+
+Int aead_nk(Int aead) { return if (aead == 1) { 16 } else { if (aead == 65535) { 0 } else { 32 } }; }
+Int aead_nn(Int aead) { return if (aead == 65535) { 0 } else { 12 }; }
+
+// ─── Labeled HKDF (§4) ───────────────────────────────────────────────
+
+List(Int) i2osp(Int v, Int n) {
+    if (n <= 0) { return []; }
+    return i2osp(v >> 8, n - 1).concat([v & 255]);
+}
+
+List(Int) kem_suite_id(Int kem) { return bytes_of("KEM").concat(i2osp(kem, 2)); }
+List(Int) hpke_suite_id(HpkeSuite s) { return bytes_of("HPKE").concat(i2osp(s.kem, 2)).concat(i2osp(s.kdf, 2)).concat(i2osp(s.aead, 2)); }
+
+List(Int) labeled_extract(HashAlg h, List(Int) sid, List(Int) salt, Str label, List(Int) ikm) {
+    return hkdf_extract_with(h, salt, bytes_of("HPKE-v1").concat(sid).concat(bytes_of(label)).concat(ikm));
+}
+
+List(Int) labeled_expand(HashAlg h, List(Int) sid, List(Int) prk, Str label, List(Int) info, Int len) {
+    List(Int) li = i2osp(len, 2).concat(bytes_of("HPKE-v1")).concat(sid).concat(bytes_of(label)).concat(info);
+    return hkdf_expand_with(h, prk, li, len);
+}
+
+// ─── DHKEM (§4.1) ────────────────────────────────────────────────────
+
+Curve kem_curve(Int kem) { return if (kem == 17) { P384 } else { P256 }; }
+
+// The public key of sk, serialized (uncompressed point, or 32 bytes).
+pub List(Int) hpke_public_key(Int kem, List(Int) sk) {
+    if (kem == 32) { return x25519_public(sk); }
+    if (!hpke_kem_ok(kem)) { return []; }
+    return ec_public_key(kem_curve(kem), sk);
+}
+
+// DH(sk, pk): the shared x-coordinate, or the X25519 output; empty for a
+// peer key that is not a valid point (or a low-order X25519 point).
+List(Int) kem_dh(Int kem, List(Int) sk, List(Int) pk) {
+    if (kem == 32) { return x25519_shared(sk, pk); }
+    return ecdh(kem_curve(kem), sk, pk);
+}
+
+List(Int) kem_eae(Int kem, List(Int) dh, List(Int) ctx) {
+    List(Int) sid = kem_suite_id(kem);
+    HashAlg h = kem_hash(kem);
+    List(Int) prk = labeled_extract(h, sid, [], "eae_prk", dh);
+    return labeled_expand(h, sid, prk, "shared_secret", ctx, kem_nsecret(kem));
+}
+
+pub type HpkeKeyPair = { Bool ok; List(Int) sk; List(Int) pk; };
+
+HpkeKeyPair kp_bad() { return HpkeKeyPair {.ok = false, .sk = [], .pk = []}; }
+
+// DeriveKeyPair (§7.1.3): deterministic keys from input keying material,
+// for tests and for keys derived from a sealed secret.
+pub HpkeKeyPair hpke_derive_keypair(Int kem, List(Int) ikm) {
+    if (!hpke_kem_ok(kem)) { return kp_bad(); }
+    List(Int) sid = kem_suite_id(kem);
+    HashAlg h = kem_hash(kem);
+    List(Int) prk = labeled_extract(h, sid, [], "dkp_prk", ikm);
+    if (kem == 32) {
+        List(Int) sk = labeled_expand(h, sid, prk, "sk", [], 32);
+        return HpkeKeyPair {.ok = true, .sk = sk, .pk = x25519_public(sk)};
+    }
+    return dkp_candidate(kem, h, sid, prk, 0);
+}
+
+// Candidates until one is a valid scalar (the bitmask is 0xFF for both
+// NIST curves here, so the candidate is used as is).
+HpkeKeyPair dkp_candidate(Int kem, HashAlg h, List(Int) sid, List(Int) prk, Int counter) {
+    if (counter > 255) { return kp_bad(); }
+    List(Int) sk = labeled_expand(h, sid, prk, "candidate", [counter], kem_nsk(kem));
+    List(Int) pk = ec_public_key(kem_curve(kem), sk);
+    if (pk.len() > 0) { return HpkeKeyPair {.ok = true, .sk = sk, .pk = pk}; }
+    return dkp_candidate(kem, h, sid, prk, counter + 1);
+}
+
+// A fresh key pair from the operating system's randomness.
+pub HpkeKeyPair hpke_generate_keypair(Int kem) { return hpke_derive_keypair(kem, random_bytes(kem_nsk(kem))); }
+
+type Encap = { Bool ok; List(Int) shared; List(Int) enc; };
+
+Encap encap_bad() { return Encap {.ok = false, .shared = [], .enc = []}; }
+
+// Encap / AuthEncap with ephemeral key pair e; skS empty for no auth.
+Encap kem_encap(Int kem, List(Int) pkR, HpkeKeyPair e, List(Int) skS) {
+    if (!e.ok) { return encap_bad(); }
+    List(Int) dh1 = kem_dh(kem, e.sk, pkR);
+    List(Int) dh2 = if (skS.len() > 0) { kem_dh(kem, skS, pkR) } else { [] };
+    if (dh1.len() == 0 || (skS.len() > 0 && dh2.len() == 0)) { return encap_bad(); }
+    List(Int) pkS = if (skS.len() > 0) { hpke_public_key(kem, skS) } else { [] };
+    List(Int) ctx = e.pk.concat(pkR).concat(pkS);
+    return Encap {.ok = true, .shared = kem_eae(kem, dh1.concat(dh2), ctx), .enc = e.pk};
+}
+
+// Decap / AuthDecap; pkS empty for no auth.
+List(Int) kem_decap(Int kem, List(Int) enc, List(Int) skR, List(Int) pkS) {
+    List(Int) dh1 = kem_dh(kem, skR, enc);
+    List(Int) dh2 = if (pkS.len() > 0) { kem_dh(kem, skR, pkS) } else { [] };
+    if (dh1.len() == 0 || (pkS.len() > 0 && dh2.len() == 0)) { return []; }
+    List(Int) pkR = hpke_public_key(kem, skR);
+    if (pkR.len() == 0) { return []; }
+    return kem_eae(kem, dh1.concat(dh2), enc.concat(pkR).concat(pkS));
+}
+
+// ─── Key schedule (§5.1) ─────────────────────────────────────────────
+
+// A context: the AEAD key, the base nonce, the exporter secret and the
+// sequence number of the next message.
+pub type HpkeCtx = { Bool ok; HpkeSuite suite; List(Int) key; List(Int) base_nonce; List(Int) exporter; Int seq; };
+
+pub HpkeCtx hpke_ctx_bad(HpkeSuite s) { return HpkeCtx {.ok = false, .suite = s, .key = [], .base_nonce = [], .exporter = [], .seq = 0}; }
+
+HpkeCtx key_schedule(HpkeSuite s, Int mode, List(Int) shared, List(Int) info, List(Int) psk, List(Int) psk_id) {
+    // psk and psk_id together or not at all (§5.1.1).
+    Bool with_psk = mode == 1 || mode == 3;
+    if (with_psk != (psk.len() > 0) || (psk.len() > 0) != (psk_id.len() > 0)) { return hpke_ctx_bad(s); }
+    if (with_psk && psk.len() < 32) { return hpke_ctx_bad(s); }
+    List(Int) sid = hpke_suite_id(s);
+    HashAlg h = kdf_hash(s.kdf);
+    List(Int) ksc = [mode].concat(labeled_extract(h, sid, [], "psk_id_hash", psk_id)).concat(labeled_extract(h, sid, [], "info_hash", info));
+    List(Int) secret = labeled_extract(h, sid, shared, "secret", psk);
+    List(Int) key = labeled_expand(h, sid, secret, "key", ksc, aead_nk(s.aead));
+    List(Int) nonce = labeled_expand(h, sid, secret, "base_nonce", ksc, aead_nn(s.aead));
+    List(Int) exp = labeled_expand(h, sid, secret, "exp", ksc, hash_len(h));
+    return HpkeCtx {.ok = true, .suite = s, .key = key, .base_nonce = nonce, .exporter = exp, .seq = 0};
+}
+
+// The result of setting up a sender: its context and the encapsulated key
+// to send alongside the ciphertext.
+pub type HpkeSender = { HpkeCtx ctx; List(Int) enc; };
+
+// Every sender setup (§5.1.2-5.1.4): mode from which of psk and skS are
+// given; ikmE pins the ephemeral key (tests), empty draws a fresh one.
+pub HpkeSender hpke_setup_sender_full(HpkeSuite s, List(Int) pkR, List(Int) info, List(Int) psk, List(Int) psk_id, List(Int) skS, List(Int) ikmE) {
+    HpkeSender bad = HpkeSender {.ctx = hpke_ctx_bad(s), .enc = []};
+    if (!hpke_suite_ok(s)) { return bad; }
+    HpkeKeyPair e = if (ikmE.len() > 0) { hpke_derive_keypair(s.kem, ikmE) } else { hpke_generate_keypair(s.kem) };
+    Encap en = kem_encap(s.kem, pkR, e, skS);
+    if (!en.ok) { return bad; }
+    Int mode = (if (psk.len() > 0) { 1 } else { 0 }) + (if (skS.len() > 0) { 2 } else { 0 });
+    return HpkeSender {.ctx = key_schedule(s, mode, en.shared, info, psk, psk_id), .enc = en.enc};
+}
+
+pub HpkeCtx hpke_setup_receiver_full(HpkeSuite s, List(Int) enc, List(Int) skR, List(Int) info, List(Int) psk, List(Int) psk_id, List(Int) pkS) {
+    if (!hpke_suite_ok(s)) { return hpke_ctx_bad(s); }
+    List(Int) shared = kem_decap(s.kem, enc, skR, pkS);
+    if (shared.len() == 0) { return hpke_ctx_bad(s); }
+    Int mode = (if (psk.len() > 0) { 1 } else { 0 }) + (if (pkS.len() > 0) { 2 } else { 0 });
+    return key_schedule(s, mode, shared, info, psk, psk_id);
+}
+
+// Base mode (the common case).
+pub HpkeSender hpke_setup_sender(HpkeSuite s, List(Int) pkR, List(Int) info) {
+    return hpke_setup_sender_full(s, pkR, info, [], [], [], []);
+}
+
+pub HpkeCtx hpke_setup_receiver(HpkeSuite s, List(Int) enc, List(Int) skR, List(Int) info) {
+    return hpke_setup_receiver_full(s, enc, skR, info, [], [], []);
+}
+
+// ─── Encryption (§5.2) and export (§5.3) ─────────────────────────────
+
+ListBuf(Int) xor_seq(List(Int) nonce, Int seq, Int i, ListBuf(Int) acc) {
+    if (i >= nonce.len()) { return acc; }
+    Int shift = 8 * (nonce.len() - 1 - i);
+    Int b = if (shift < 63) { (seq >> shift) & 255 } else { 0 };
+    return xor_seq(nonce, seq, i + 1, acc.push(nonce[i] ^ b));
+}
+
+// The nonce for message number seq.
+pub List(Int) hpke_nonce(HpkeCtx c, Int seq) { return xor_seq(c.base_nonce, seq, 0, ListBuf()).finish(); }
+
+// The context with its sequence number set (to resume, or in tests).
+pub HpkeCtx hpke_at_seq(HpkeCtx c, Int seq) {
+    return HpkeCtx {.ok = c.ok, .suite = c.suite, .key = c.key, .base_nonce = c.base_nonce, .exporter = c.exporter, .seq = seq};
+}
+
+pub type HpkeSealed = { HpkeCtx ctx; List(Int) ct; };
+
+// Seal the next message: ciphertext || tag, and the context to use for
+// the one after. Empty ct for a failed context or an export-only suite.
+pub HpkeSealed hpke_seal(HpkeCtx c, List(Int) aad, List(Int) pt) {
+    if (!c.ok || c.suite.aead == 65535) { return HpkeSealed {.ctx = c, .ct = []}; }
+    List(Int) nonce = hpke_nonce(c, c.seq);
+    List(Int) ct = if (c.suite.aead == 3) { chacha20poly1305_seal(c.key, nonce, pt, aad) } else { aes_gcm_seal(c.key, nonce, pt, aad) };
+    return HpkeSealed {.ctx = hpke_at_seq(c, c.seq + 1), .ct = ct};
+}
+
+pub type HpkeOpened = { HpkeCtx ctx; Bool ok; List(Int) pt; };
+
+// Open the next message. On failure the sequence number does not move
+// (§5.2: the receiver's state is unchanged by a forgery).
+pub HpkeOpened hpke_open(HpkeCtx c, List(Int) aad, List(Int) ct) {
+    if (!c.ok || c.suite.aead == 65535) { return HpkeOpened {.ctx = c, .ok = false, .pt = []}; }
+    List(Int) nonce = hpke_nonce(c, c.seq);
+    Option(List(Int)) pt = if (c.suite.aead == 3) { chacha20poly1305_decrypt(c.key, nonce, ct, aad) } else { aes_gcm_decrypt(c.key, nonce, ct, aad) };
+    return match pt {
+        Some(p) => HpkeOpened {.ctx = hpke_at_seq(c, c.seq + 1), .ok = true, .pt = p},
+        None => HpkeOpened {.ctx = c, .ok = false, .pt = []},
+    };
+}
+
+// A secret of len bytes bound to the context and exporter_context.
+pub List(Int) hpke_export(HpkeCtx c, List(Int) exporter_context, Int len) {
+    if (!c.ok) { return []; }
+    HashAlg h = kdf_hash(c.suite.kdf);
+    return labeled_expand(h, hpke_suite_id(c.suite), c.exporter, "sec", exporter_context, len);
+}
+
+// ─── Single-shot (§6) ────────────────────────────────────────────────
+
+pub type HpkeMessage = { Bool ok; List(Int) enc; List(Int) ct; };
+
+// Seal one message to pkR in base mode.
+pub HpkeMessage hpke_seal_to(HpkeSuite s, List(Int) pkR, List(Int) info, List(Int) aad, List(Int) pt) {
+    HpkeSender snd = hpke_setup_sender(s, pkR, info);
+    HpkeSealed sealed = hpke_seal(snd.ctx, aad, pt);
+    return HpkeMessage {.ok = sealed.ct.len() > 0, .enc = snd.enc, .ct = sealed.ct};
+}
+
+// Open one base-mode message with skR.
+pub Option(List(Int)) hpke_open_with(HpkeSuite s, List(Int) enc, List(Int) skR, List(Int) info, List(Int) aad, List(Int) ct) {
+    HpkeOpened o = hpke_open(hpke_setup_receiver(s, enc, skR, info), aad, ct);
+    return if (o.ok) { Some(o.pt) } else { None };
+}

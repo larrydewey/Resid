@@ -1,0 +1,49 @@
+// x509probe.resid — one certificate link through the strict parser and
+// the signature dispatch.
+//
+//   x509probe <child.der> <issuer.der> [k]
+//
+// With k, byte len - k of the child is flipped first (k = 1 is the last
+// byte of the signature).
+// Prints KEY=value lines: parse (ok or the refusal), alg (signature kind
+// and hash), key (the issuer's key kind), sig (the signature alone) and
+// chain (chain_verify at 2030-01-01, CA and validity checks included).
+
+import "../../lib/chain.resid";
+import "../../lib/instant.resid";
+
+Str kind_name(Int k) {
+    if (k == sigalg_ecdsa()) { return "ecdsa"; }
+    if (k == sigalg_pkcs1()) { return "pkcs1"; }
+    if (k == sigalg_pss()) { return "pss"; }
+    if (k == sigalg_ed25519()) { return "ed25519"; }
+    return "none";
+}
+
+Str key_name(PubKey k) {
+    if (k.kind == pubkey_ec()) { return curve_name(k.curve); }
+    if (k.kind == pubkey_rsa()) { return if (k.pss_only) { "rsa-pss" } else { "rsa" }; }
+    if (k.kind == pubkey_ed25519()) { return "ed25519"; }
+    return "none";
+}
+
+@requires(args, filesystem(readonly))
+Int main() {
+    List(Int) raw = filesystem.read_bytes(args.get(1));
+    Int k = if (args.count() > 3) { str_parse_int(args.get(3)) } else { 0 };
+    List(Int) child = if (k > 0 && k <= raw.len()) { raw.with(raw.len() - k, raw[raw.len() - k] ^ 1) } else { raw };
+    List(Int) issuer = filesystem.read_bytes(args.get(2));
+    Instant at = instant_of_seconds(1893456000);
+    Result(Cert, Str) c = x509_parse(child);
+    Result(Cert, Str) i = x509_parse(issuer);
+    println("parse=" + match c { Ok(x) => "ok", Err(e) => e });
+    println("issuer_parse=" + match i { Ok(x) => "ok", Err(e) => e });
+    match c {
+        Ok(x) => println("alg=" + if (x.signed.alg.kind == 0) { "none" } else { kind_name(x.signed.alg.kind) + "/" + hash_name(x.signed.alg.hash) + f" salt={x.signed.alg.salt}" }),
+        Err(e) => println("alg=none"),
+    };
+    match i { Ok(x) => println("key=" + key_name(x.key)), Err(e) => println("key=none") };
+    println(f"sig={x509_signed_by(child, issuer)}");
+    println(f"chain={chain_verify(child, issuer, at)}");
+    return 0;
+}

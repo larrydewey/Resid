@@ -1,0 +1,254 @@
+// fuzz.resid — mutation fuzzing of every parser that reads untrusted
+// bytes: DER, X.509 (strict and positional), CRLs, OCSP responses, keys,
+// signatures, CBOR/COSE and TLS handshake messages.
+//
+//   fuzz <kind> <seed-file> <iterations> <rng-seed> [<extra-file>...]
+//
+// Each iteration mutates the seed (bit flips, interesting bytes, length
+// octets, truncation, deletion, duplication, insertion; one to four of
+// them) and runs every parser of <kind> on the result inside a spawn
+// region, so an abort is caught and reported instead of ending the run:
+//
+//   CRASH <kind> iter=<i> <message> input=<hex, first 256 bytes>
+//   FUZZ <kind> iterations=<n> crashes=<c>
+//
+// The extra files are the other inputs a parser needs (an issuer for a
+// child, a certificate for a CRL). Exit status 1 when anything crashed.
+
+import "../../lib/chain.resid";
+import "../../lib/instant.resid";
+import "../../lib/tlskey.resid";
+import "../../lib/tlsmsg.resid";
+import "../../lib/cosesig.resid";
+import "../../lib/hpke.resid";
+import "../../lib/rsa.resid";
+
+// ─── Randomness: xorshift64*, deterministic from the seed ───────────
+
+Int rng_next(Int s) {
+    Int a = s ^ (s << 13);
+    Int b = a ^ ((a >> 7) & 144115188075855871);
+    return b ^ (b << 17);
+}
+
+Int rng_pick(Int s, Int n) {
+    if (n <= 0) { return 0; }
+    Int v = (s >> 3) & 4611686018427387903;
+    return v % n;
+}
+
+// ─── Mutations ───────────────────────────────────────────────────────
+
+List(Int) interesting() { return [0, 1, 2, 3, 4, 5, 6, 48, 127, 128, 129, 130, 131, 132, 133, 160, 163, 255]; }
+
+type Mut = { List(Int) b; Int s; };
+
+Mut mutate_once(List(Int) b, Int s0) {
+    Int s1 = rng_next(s0);
+    Int s2 = rng_next(s1);
+    Int s3 = rng_next(s2);
+    Int n = b.len();
+    Int op = rng_pick(s1, 8);
+    if (n == 0) { return Mut {.b = [rng_pick(s2, 256)], .s = s3}; }
+    Int at = rng_pick(s2, n);
+    if (op == 0) { return Mut {.b = b.with(at, b[at] ^ (1 << rng_pick(s3, 8))), .s = s3}; }
+    if (op == 1) { return Mut {.b = b.with(at, interesting()[rng_pick(s3, interesting().len())]), .s = s3}; }
+    if (op == 2) { return Mut {.b = b[0..at], .s = s3}; }
+    if (op == 3) {
+        Int len = 1 + rng_pick(s3, min(32, n - at));
+        return Mut {.b = b[0..at].concat(b[at + len..]), .s = s3};
+    }
+    if (op == 4) {
+        Int len = 1 + rng_pick(s3, min(64, n - at));
+        return Mut {.b = b[0..at + len].concat(b[at..at + len]).concat(b[at + len..]), .s = s3};
+    }
+    if (op == 5) { return Mut {.b = b[0..at].concat([rng_pick(s3, 256), rng_pick(rng_next(s3), 256)]).concat(b[at..]), .s = rng_next(s3)}; }
+    // A length octet: the byte after something that looks like a tag.
+    if (op == 6) {
+        Int v = interesting()[rng_pick(s3, interesting().len())];
+        Int pos = if (at + 1 < n) { at + 1 } else { at };
+        return Mut {.b = b.with(pos, v), .s = s3};
+    }
+    return Mut {.b = b.with(at, rng_pick(s3, 256)), .s = s3};
+}
+
+Mut mutate(List(Int) b, Int s, Int times) {
+    if (times <= 0) { return Mut {.b = b, .s = s}; }
+    Mut m = mutate_once(b, s);
+    return mutate(m.b, m.s, times - 1);
+}
+
+// ─── What each kind exercises ────────────────────────────────────────
+
+Int bit(Bool b) { return if (b) { 1 } else { 0 }; }
+
+Int hashish(List(Int) b) { return b.len(); }
+
+// A certificate as child, as issuer, through the strict parser and every
+// positional accessor chain.resid and tlsmsg.resid still use.
+Int run_cert(List(Int) m, List(Int) other) {
+    Instant now = instant_of_seconds(1893456000);
+    Int a = match x509_parse(m) { Ok(c) => 1 + c.serial.len() + c.key.kind, Err(e) => 0 };
+    Int b = bit(chain_verify(m, other, now)) + bit(chain_verify(other, m, now)) + bit(x509_valid_now(m, now));
+    Int c = str_len(x509_issuer_str(m)) + str_len(x509_subject_str(m)) + str_len(x509_sigalg_oid(m)) + str_len(x509_spki_alg_oid(m));
+    Int d = str_len(x509_not_before(m)) + str_len(x509_not_after(m)) + x509_serial(m);
+    Int e = bit(x509_is_ca(m)) + bit(x509_key_usage(m, 5)) + bit(x509_eku_has(m, "1.3.6.1.5.5.7.3.9")) + x509_exts_pos(m) + x509_exts_end(m);
+    Int f = bit(san_has_match(m, str_to_bytes("localhost"))) + bit(san_has_match(m, str_to_bytes("127.0.0.1"))) + hashish(cert_pubkey_bits(m));
+    Int g = hashish(x509_serial_bytes(m)) + hashish(cert_tbs(m)) + hashish(cert_elem(m, 2)) + bit(x509_signed_by(m, other));
+    TrustStore st = trust_store_add(trust_store_empty(), other);
+    Int h = bit(tls_server_trusted(m, [other], str_to_bytes("localhost"), now, st)) + bit(trust_store_has(st, m, 0));
+    PubKey k = spki_parse_der(m);
+    return a + b + c + d + e + f + g + h + k.kind;
+}
+
+// A CRL from `issuer` naming (or not) `cert`.
+Int run_crl(List(Int) m, List(Int) issuer, List(Int) cert) {
+    Instant now = instant_of_seconds(1893456000);
+    TrustStore st = trust_store_add_crl(trust_store_add(trust_store_empty(), issuer), m);
+    Rev r = crl_check(st, cert, issuer, now);
+    Int a = bit(crl_usable(m, issuer, now)) + bit(crl_revokes(m, cert)) + crl_revoked_serials(m).len() + bit(r.revoked) + bit(issuer_accepts(st, cert, issuer, now));
+    // The positional readers crl_usable reaches only after the signature.
+    Int b = crl_issuer_pos(m) + crl_this_update_pos(m) + crl_next_update_pos(m) + crl_revoked_pos(m);
+    Int c = str_len(der_str_value(m, crl_this_update_pos(m))) + str_len(der_str_value(m, crl_next_update_pos(m))) + hashish(name_at(m, crl_issuer_pos(m)));
+    return a + b + c;
+}
+
+// An OCSP response about `cert` from `issuer`.
+Int run_ocsp(List(Int) m, List(Int) issuer, List(Int) cert) {
+    Instant now = instant_of_seconds(1893456000);
+    Int a = ocsp_status_for(issuer, cert, m, now.seconds) + ocsp_status_with_delegate(issuer, cert, m, now) + ocsp_revoked_at(issuer, cert, m);
+    // The readers a valid signature would let through, called directly on
+    // the basic response (and on m itself, as if it were one).
+    return a + ocsp_inside(ocsp_basic(m), issuer, cert) + ocsp_inside(m, issuer, cert);
+}
+
+Int ocsp_inside(List(Int) d, List(Int) issuer, List(Int) cert) {
+    List(Int) want = ocsp_certid_for(issuer, cert, []);
+    Int seq = ocsp_find_sr(d, want, ocsp_rd_responses(d), ocsp_rd_end(d));
+    Int s0 = if (seq < 0) { ocsp_rd_responses(d) } else { seq };
+    Int a = ocsp_status_code(d, s0) + ocsp_rev_time(d, s0) + ocsp_sr_next_update(d, s0) + ocsp_sr_this_update(d, s0);
+    Int b = str_len(der_str_value(d, ocsp_sr_this_update(d, s0))) + str_len(der_str_value(d, ocsp_rd_produced_at(d)));
+    return a + b + hashish(ocsp_delegate_cert(d)) + ocsp_rd_responder_id(d) + ocsp_basic_certs_pos(d);
+}
+
+Int key_kind(Option(ServerKey) k) { return match k { Some(x) => tls_key_sigalg(x), None => 0 }; }
+
+// Private and public keys in every encoding read here.
+Int run_key(List(Int) m) {
+    RsaPub r = rsa_pub_der(m);
+    PubKey p = spki_parse_der(m);
+    PubKey c = cose_key_public(m);
+    return key_kind(tk_pkcs8(m)) + key_kind(tk_sec1(m)) + bit(r.ok) + p.kind + c.kind + bit(ec_public_ok(P256, m)) + bit(ec_public_ok(P384, m));
+}
+
+// Signatures and peer keys: as DER and raw ECDSA, RSA, Ed25519, ECDH and
+// HPKE input, against fixed keys.
+Int run_sig(List(Int) m) {
+    List(Int) d256 = sha256_bytes(bytes_of("k256"));
+    List(Int) d384 = sha384_bytes(bytes_of("k384"));
+    List(Int) p256 = ec_public_key(P256, d256);
+    List(Int) p384 = ec_public_key(P384, d384);
+    EcSig s = ecdsa_sig_der(m);
+    Int a = bit(s.ok) + bit(ecdsa_verify(P256, Sha256, p256, [1], m)) + bit(ecdsa_verify(P384, Sha384, p384, [1], m));
+    Int b = bit(ecdsa_verify_raw(P384, Sha384, p384, [1], m)) + bit(ecdsa_verify(P384, Sha384, m, [1], ecdsa_sign(P384, Sha384, d384, [1])));
+    Int c = ecdh(P256, d256, m).len() + ecdh(P384, d384, m).len() + ecdh(P384, m, p384).len() + x25519_shared(d256, m).len();
+    Int e = bit(verify_sig_bytes([1], m, d256)) + bit(verify_sig_bytes([1], d256.concat(d256), m));
+    RsaPub rk = rsa_pub(m, [1, 0, 1]);
+    Int f = bit(rk.ok) + rsa_public_op(rk, m).len();
+    Option(List(Int)) h = hpke_open_with(hpke_suite(17, 2, 2), m, d384, [], [], m);
+    Option(List(Int)) h2 = hpke_open_with(hpke_suite(32, 1, 3), m, d256, [], [], m);
+    Int g = match h { Some(x) => 1, None => 0 } + match h2 { Some(x) => 1, None => 0 };
+    return a + b + c + e + f + g;
+}
+
+// CBOR and COSE: the provenance reader, the general Sign1 reader, keys.
+Int run_cose(List(Int) m) {
+    CoseMsg c = cose_sign1_read(m);
+    CoseSign1 old = cose_sign1_parse(m);
+    CoseOpen o = cose_encrypt0_open(m, sha256_bytes([1]));
+    PubKey k = cose_key_public(m);
+    Option(List(Int)) p = cose_sign1_open(m, k, []);
+    return bit(c.ok) + bit(old.ok) + bit(o.ok) + k.kind + cbor_skip(m, 0, 16) + cbor_map_find(m, 0, 1) + match p { Some(x) => 1, None => 0 };
+}
+
+// TLS handshake bodies as a peer could send them.
+Int run_tls(List(Int) m, List(Int) cert) {
+    ClientHello ch = ts_client_hello(m);
+    Int a = tm_cert_list(m).len() + bit(tm_verify_cv(m, cert, sha256_bytes([1]))) + bit(tm_is_ecdsa_cv(m)) + tm_cv_sig(m).len();
+    Int b = ts_ee_alpn(m).len() + tm_find_fin_last(m) + tm_find_pos(m, 11, 0) + tm_find(m, 15, 0).len();
+    Int c = bit(tm_verify_cv(cert, m, sha256_bytes([1])));
+    return a + b + c + hashish(m) + ch.err;
+}
+
+// PEM text, as a trust-store file holds it.
+Int run_pem(List(Int) m) {
+    Str text = bytes_to_str_lossy(m);
+    TrustStore st = trust_store_add_pem(trust_store_empty(), text);
+    return pem_certificates(text).len() + pem_certs_and_crls(text).len() + st.roots.len() + tk_pem_block(text, ["PRIVATE KEY"]).len();
+}
+
+Str bytes_to_str_lossy(List(Int) b) { return bts(b, 0, StrBuf()); }
+
+Str bts(List(Int) b, Int i, StrBuf acc) {
+    if (i >= b.len()) { return acc.finish(); }
+    Int c = b[i];
+    return bts(b, i + 1, acc.push_char(if (c > 0 && c < 128) { c } else { 63 }));
+}
+
+Int exercise(Str kind, List(Int) m, List(Int) x1, List(Int) x2) {
+    if (kind == "cert") { return run_cert(m, x1); }
+    if (kind == "crl") { return run_crl(m, x1, x2); }
+    if (kind == "ocsp") { return run_ocsp(m, x1, x2); }
+    if (kind == "key") { return run_key(m); }
+    if (kind == "sig") { return run_sig(m); }
+    if (kind == "cose") { return run_cose(m); }
+    if (kind == "tls") { return run_tls(m, x1); }
+    if (kind == "pem") { return run_pem(m); }
+    return 0;
+}
+
+// ─── Driver ──────────────────────────────────────────────────────────
+
+Int report(Str kind, Str where, Str msg, List(Int) input) {
+    println("CRASH " + kind + " " + where + " " + msg + " input=" + hex_encode(input[0..min(256, input.len())]));
+    return 1;
+}
+
+Int fuzz_loop(Str kind, List(Int) seed, List(Int) x1, List(Int) x2, Int i, Int n, Int s, Int crashes, Bool trace) {
+    if (i >= n) { return crashes; }
+    Int times = 1 + rng_pick(s, 4);
+    Mut m = mutate(seed, rng_next(s), times);
+    List(Int) input = m.b;
+    if (trace) { eprintln(f"ITER {i} " + hex_encode(input)); }
+    Result(Int, RegionError) r = spawn () { return exercise(kind, input, x1, x2); };
+    Int crashed = match r { Ok(v) => 0, Err(e) => report(kind, f"iter={i}", e.message, input) };
+    return fuzz_loop(kind, seed, x1, x2, i + 1, n, rng_next(m.s), crashes + crashed, trace);
+}
+
+@requires(args, filesystem(readonly))
+Int main() {
+    Str kind = args.get(1);
+    // fuzz <kind> --hex <hex> [<extra-file>...]: one input, no region, so
+    // an abort shows where it happened.
+    if (args.get(2) == "--hex") {
+        List(Int) none0 = [];
+        List(Int) e1 = if (args.count() > 4) { filesystem.read_bytes(args.get(4)) } else { none0 };
+        List(Int) e2 = if (args.count() > 5) { filesystem.read_bytes(args.get(5)) } else { none0 };
+        println(f"{exercise(kind, cose_hex_decode(args.get(3)), e1, e2)}");
+        return 0;
+    }
+    List(Int) seed = filesystem.read_bytes(args.get(2));
+    Int n = str_parse_int(args.get(3));
+    Int s0 = str_parse_int(args.get(4));
+    List(Int) none = [];
+    List(Int) x1 = if (args.count() > 5) { filesystem.read_bytes(args.get(5)) } else { none };
+    List(Int) x2 = if (args.count() > 6) { filesystem.read_bytes(args.get(6)) } else { none };
+    // The unmutated seed must not crash either.
+    Result(Int, RegionError) base = spawn () { return exercise(kind, seed, x1, x2); };
+    Int c0 = match base { Ok(v) => 0, Err(e) => report(kind, "seed", e.message, seed) };
+    // A negative seed traces every input to stderr (for finding a hang).
+    Int sa = if (s0 < 0) { 0 - s0 } else { s0 };
+    Int crashes = c0 + fuzz_loop(kind, seed, x1, x2, 0, n, if (sa == 0) { 88172645463325252 } else { sa }, 0, s0 < 0);
+    println("FUZZ " + kind + f" iterations={n} crashes={crashes}");
+    return if (crashes > 0) { 1 } else { 0 };
+}

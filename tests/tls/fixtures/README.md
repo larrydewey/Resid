@@ -62,6 +62,7 @@ handshake that has to sign something, and nothing else uses them.
 | `srv.pem`, `srv.der`, `srv.key`, `srv.key.der` | `CN=localhost`, SAN `DNS:localhost,IP:127.0.0.1`, EKU serverAuth, signed by that CA, serial `0x5000`. The key is PKCS#8 PEM and, in `srv.key.der`, PKCS#8 DER |
 | `srvedca.pem`, `srvedca.der`, `srvedca.key` | `CN=TLS Server Ed25519 CA` |
 | `srved.pem`, `srved.der`, `srved.key`, `srved.key.der` | the same leaf under the Ed25519 CA, serial `0x5001` |
+| `srv384.pem`, `srv384.der`, `srv384.key` | `CN=localhost` with an ECDSA P-384 key, signed by `srvca` (ecdsa-with-SHA256), serial `0x5002` |
 
 Both leaves are served with their CA in the chain, so the client walks
 intermediates rather than being handed a single certificate.
@@ -80,7 +81,8 @@ Made with:
     openssl pkey -in srv.key -outform der -out srv.key.der
 
 and the same three steps with `openssl genpkey -algorithm ed25519` for the
-Ed25519 pair. `ch-ossl.bin` is a whole TLS 1.3 record: a real openssl 3.6
+Ed25519 pair, and with `ec_paramgen_curve:P-384` and serial `0x5002` for
+`srv384`. `ch-ossl.bin` is a whole TLS 1.3 record: a real openssl 3.6
 `ClientHello`, captured on a loopback socket, headers included.
 
 Two things about that capture are worth keeping in mind. It leads with an

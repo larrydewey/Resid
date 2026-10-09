@@ -1,0 +1,82 @@
+// ctprobe.resid — constant-time checks under valgrind (ctgrind).
+//
+//   ctprobe <case>
+//
+// Each case marks its secret inputs with ct_secret (valgrind treats them
+// as undefined) and runs one operation; memcheck then reports any branch
+// or memory address that depends on them. Results are declassified with
+// ct_public before they are printed. Outside valgrind ct_secret and
+// ct_public are identities, so the same program checks the answers.
+//
+// tests/ct/run.sh runs every case under valgrind and fails on any
+// "Conditional jump or move depends on uninitialised value(s)" or "Use of
+// uninitialised value" report.
+
+import "../../lib/hpke.resid";
+import "../../lib/ed25519.resid";
+import "../../lib/aesgcm.resid";
+
+List(Int) secret(List(Int) b) { return sec_at(b, 0, ListBuf()); }
+
+List(Int) sec_at(List(Int) b, Int i, ListBuf(Int) acc) {
+    if (i >= b.len()) { return acc.finish(); }
+    // Only the low eight bits are secret: a byte is a byte, and the upper
+    // bits being known zero is what lets memcheck see that the list's
+    // small-integer check cannot depend on the value.
+    return sec_at(b, i + 1, acc.push(ct_secret(b[i]) & 255));
+}
+
+List(Int) public(List(Int) b) { return pub_at(b, 0, ListBuf()); }
+
+List(Int) pub_at(List(Int) b, Int i, ListBuf(Int) acc) {
+    if (i >= b.len()) { return acc.finish(); }
+    return pub_at(b, i + 1, acc.push(ct_public(b[i])));
+}
+
+List(Int) bytes_n(Int n, Int v) { return fill_at(n, v, ListBuf()); }
+
+List(Int) fill_at(Int n, Int v, ListBuf(Int) acc) {
+    if (n <= 0) { return acc.finish(); }
+    return fill_at(n - 1, (v * 167 + 13) & 255, acc.push(v));
+}
+
+Str reveal(List(Int) b) { return hex_encode(public(b)); }
+
+@requires(args)
+Int main() {
+    Str c = args.get(1);
+    List(Int) k32 = secret(bytes_n(32, rt 7));
+    List(Int) k48 = secret(bytes_n(48, rt 9));
+    List(Int) msg = bytes_n(100, rt 3);
+    List(Int) peer256 = ec_public_key(P256, bytes_n(32, 5));
+    List(Int) peer384 = ec_public_key(P384, bytes_n(48, 5));
+    Str out = if (c == "p256-sign") { reveal(ecdsa_sign(P256, Sha256, k32, msg)) }
+        else if (c == "p384-sign") { reveal(ecdsa_sign(P384, Sha384, k48, msg)) }
+        else if (c == "p256-ecdh") { reveal(ecdh(P256, k32, peer256)) }
+        else if (c == "p384-ecdh") { reveal(ecdh(P384, k48, peer384)) }
+        else if (c == "p384-public") { reveal(ec_public_key(P384, k48)) }
+        else if (c == "x25519") { reveal(x25519_shared(k32, x25519_base())) }
+        else if (c == "ed25519-sign") { reveal(sign_msg_bytes(k32, msg)) }
+        else if (c == "aes-gcm") { reveal(aes_gcm_seal(k32, bytes_n(12, 1), secret(msg), [])) }
+        else if (c == "aes-sw") { reveal(aes_encrypt_block_sw(aes_key_expand(k32), secret(bytes_n(16, 2)))) }
+        else if (c == "aes-dec") { reveal(aes_decrypt_block(aes_key_expand(k32), secret(bytes_n(16, 2)))) }
+        else if (c == "aes-kw") { reveal(aes_key_unwrap(k32, aes_key_wrap(bytes_n(32, 7), bytes_n(32, 1))) else { [] }) }
+        else if (c == "ghash") { reveal(be_bytes(gf128_mul(be_pack(k32, 0, 16, 0, (UInt(128)) 0), be_pack(msg, 0, 16, 0, (UInt(128)) 0)), 0, ListBuf())) }
+        else if (c == "chacha") { reveal(chacha20poly1305_seal(k32, bytes_n(12, 1), secret(msg), [])) }
+        else if (c == "hmac") { reveal(hmac_bytes(Sha384, k48, msg)) }
+        else if (c == "hkdf") { reveal(hkdf_with(Sha256, [], k32, msg, 64)) }
+        else if (c == "sha512") { reveal(sha512_bytes(k48)) }
+        else if (c == "ct-equal") { if (ct_public(if (ct_equal(k32, bytes_n(32, 7))) { 1 } else { 0 }) == 1) { "equal" } else { "differ" } }
+        else if (c == "hpke-open") {
+            HpkeKeyPair r = hpke_derive_keypair(17, bytes_n(48, 1));
+            HpkeMessage m = hpke_seal_to(hpke_suite(17, 2, 2), r.pk, [], [], msg);
+            reveal(hpke_open_with(hpke_suite(17, 2, 2), m.enc, secret(r.sk), [], [], m.ct) else { [] })
+        }
+        // A negative control: a table indexed by a secret byte, which every
+        // cache-timing attack on table-driven AES exploits. run.sh requires
+        // memcheck to report this one.
+        else if (c == "control") { f"{ct_public(bytes_n(256, 1)[k32[0]])}" }
+        else { "unknown case" };
+    println(c + " " + out);
+    return 0;
+}

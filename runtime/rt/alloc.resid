@@ -500,7 +500,9 @@ Int scalar_box(Int ty, Int payload_size) {
 
 @export("resid_box_i64", "ptr(i64)")
 pub Int rt_box_i64(Int v) {
-    if (v >= imm_min() && v <= imm_max()) { return v + imm_off(); }
+    // imm_min <= v <= imm_max, read off the top bits only (a secret
+    // byte's low bits must not steer it; see box_imm in show.resid).
+    if (ult(ct_hide(v >> 54) + 1, 2)) { return v + imm_off(); }
     Int b = scalar_box(resid_raw_addr("i64"), 8);
     return st64(b + 24, v) * 0 + b;
 }

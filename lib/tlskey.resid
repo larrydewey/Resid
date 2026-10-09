@@ -1,6 +1,6 @@
 // ─── lib/tlskey.resid — what a TLS server signs with ─────────────────
 //
-// A private key (an Ed25519 seed or an ECDSA P-256 scalar) and the chain
+// A private key (an Ed25519 seed or an ECDSA P-256 or P-384 scalar) and the chain
 // it presents, loaded from the files a deployment actually has: PKCS#8
 // ("PRIVATE KEY") or SEC1 ("EC PRIVATE KEY"), PEM or DER.
 //
@@ -14,20 +14,24 @@
 // so a permission check is not expressible here (SECURITY.md).
 
 import "crypto.resid";
-import "ec256.resid";
+import "ecdsa.resid";
+import "hash.resid";
 import "ed25519.resid";
 import "chain.resid";
 import "certverify.resid";
 
-// EcKey's payload is the 32-byte big-endian scalar, EdKey's the 32-byte
-// seed. A key this language cannot sign with parses into neither.
-type ServerKey = EcKey(List(Int)) | EdKey(List(Int));
+// EcKey's payload is the 32-byte big-endian P-256 scalar, Ec384Key's the
+// 48-byte P-384 one, EdKey's the 32-byte seed. A key this language cannot
+// sign with parses into none of them.
+type ServerKey = EcKey(List(Int)) | Ec384Key(List(Int)) | EdKey(List(Int));
 
-// The TLS SignatureAlgorithm code point (RFC 8446 §4.2.3) this key signs
-// with: 0x0403 ecdsa_secp256r1_sha256, 0x0807 ed25519.
+// The TLS SignatureScheme code point (RFC 8446 §4.2.3) this key signs
+// with: 0x0403 ecdsa_secp256r1_sha256, 0x0503 ecdsa_secp384r1_sha384,
+// 0x0807 ed25519.
 pub Int tls_key_sigalg(ServerKey key) {
     return match key {
         EcKey(scalar) => 1027,
+        Ec384Key(scalar) => 1283,
         EdKey(seed) => 2055
     };
 }
@@ -37,17 +41,9 @@ pub Int tls_key_sigalg(ServerKey key) {
 pub List(Int) tls_key_pubkey(ServerKey key) {
     return match key {
         EdKey(seed) => pub_key(seed),
-        EcKey(scalar) => tk_ec_point(scalar)
+        EcKey(scalar) => ec_public_key(P256, scalar),
+        Ec384Key(scalar) => ec_public_key(P384, scalar)
     };
-}
-
-List(Int) tk_ec_point(List(Int) scalar) {
-    Int(256) d = ec_from_be(scalar);
-    Int(512) packed = ec_mul_packed(d, ec_gx(), ec_gy());
-    Int(256) x = ec_unpack_x(packed);
-    Int(256) y = ec_unpack_y(packed);
-    List(Int) empty = [];
-    return [4].concat(ec_to_be32(x)).concat(ec_to_be32(y));
 }
 
 // True when the leaf certificate carries this key's public key. A server
@@ -71,31 +67,23 @@ pub Bool tls_key_cert_matches(ServerKey key, List(Int) leaf_der) {
 
 // Sign the bytes to be hashed (a CertificateVerify signs a transcript
 // hash, not the transcript): DER SEQUENCE { r, s } for ECDSA, the 64 raw
-// bytes Ed25519 produces. An empty list means the key refused — an ECDSA
-// nonce that never landed in [1, N-1] — and the caller must fail the
-// handshake rather than put an empty signature on the wire.
+// bytes Ed25519 produces. ECDSA nonces are RFC 6979's, derived from the
+// key and the message, so no entropy failure can repeat one, and s is
+// put in its low half so the bytes are canonical. An empty list means
+// the key refused, and the caller must fail the handshake rather than
+// put an empty signature on the wire.
 pub List(Int) tls_key_sign(ServerKey key, List(Int) content) {
     return match key {
-        EcKey(scalar) => tk_ec_sign_at(content, scalar, 0),
+        EcKey(scalar) => tk_ec_sign(P256, Sha256, scalar, content),
+        Ec384Key(scalar) => tk_ec_sign(P384, Sha384, scalar, content),
         EdKey(seed) => sign_msg_bytes(seed, content)
     };
 }
 
-// A fresh nonce per signature: reusing k under two different messages
-// leaks the key (PS3 A.2.5), so the draw is never cached. The bound on
-// tries only exists so a broken entropy source ends the handshake
-// instead of spinning in it.
-List(Int) tk_ec_sign_at(List(Int) content, List(Int) scalar, Int tries) {
-    List(Int) nonce = ec_nonce_ok(random_bytes(32));
-    if (nonce.len() == 32) {
-        return ecdsa_sign_k(content, scalar, nonce);
-    }
-    Int nt = tries + 1;
-    if (nt >= 8) {
-        List(Int) none = [];
-        return none;
-    }
-    return tk_ec_sign_at(content, scalar, nt);
+List(Int) tk_ec_sign(Curve c, HashAlg h, List(Int) scalar, List(Int) content) {
+    EcSig s = ecdsa_sign_digest(c, h, scalar, hash_bytes(h, content));
+    if (!s.ok) { return []; }
+    return ecdsa_der_of(ecdsa_low_s(c, s));
 }
 
 // ─── DER, 0-based ─────────────────────────────────────────────────────
@@ -321,10 +309,11 @@ pub Option(ServerKey) tk_pkcs8(List(Int) der) {
     }
     Bool is_ec = a1 == "1.2.840.10045.2.1";
     if (!is_ec) { return None; }
-    Str curve = tk_alg_oid2(der, alg);
-    Bool is_p256 = curve == "1.2.840.10045.3.1.7";
-    if (!is_p256) { return None; }
-    return tk_curve_private(tk_value(der, key));
+    Option(Curve) curve = curve_from_oid(tk_alg_oid2(der, alg));
+    return match curve {
+        Some(c) => tk_ec_private(tk_value(der, key), Some(c)),
+        None => None
+    };
 }
 
 // RFC 8410 CurvePrivateKey is an OCTET STRING holding the key; RFC 5915
@@ -339,17 +328,18 @@ pub Option(ServerKey) tk_curve_private(List(Int) b) {
         if (seed.len() != 32) { return None; }
         return Some(EdKey(seed));
     }
-    if (tk_tag_num(t) == tk_tag_seq()) { return tk_sec1(b); }
     return None;
 }
 
 // ECPrivateKey ::= SEQUENCE { version INTEGER (1), privateKey
 // OCTET STRING, [0] parameters OPTIONAL, [1] publicKey OPTIONAL }. The
-// curve comes from the file name in the SEC1 form and from the
-// AlgorithmIdentifier in the PKCS#8 form, so the optional [0] is not
-// consulted: a P-384 scalar is not a P-256 one whatever it is filed
-// under.
-pub Option(ServerKey) tk_sec1(List(Int) der) {
+// curve is the PKCS#8 AlgorithmIdentifier's when there is one, else the
+// [0] parameters', else the scalar's length (32 bytes P-256, 48 P-384).
+// When two of those disagree the key is refused: a P-384 scalar is not a
+// P-256 one whatever it is filed under.
+pub Option(ServerKey) tk_sec1(List(Int) der) { return tk_ec_private(der, None); }
+
+Option(ServerKey) tk_ec_private(List(Int) der, Option(Curve) named) {
     Tlv seq = tk_tlv(der, 0);
     if (!seq.ok || tk_tag_num(seq) != tk_tag_seq()) { return None; }
     Tlv ver = tk_tlv(der, seq.start);
@@ -357,6 +347,17 @@ pub Option(ServerKey) tk_sec1(List(Int) der) {
     Tlv key = tk_tlv(der, ver.end);
     if (!key.ok || tk_tag_num(key) != tk_tag_octet()) { return None; }
     List(Int) scalar = tk_value(der, key);
-    if (scalar.len() != 32) { return None; }
-    return Some(EcKey(scalar));
+    Tlv p0 = tk_tlv(der, key.end);
+    Bool has_p0 = p0.ok && p0.end <= seq.end && p0.tag == 160;
+    Tlv poid = if (has_p0) { tk_tlv(der, p0.start) } else { tk_bad(0) };
+    Int inner = if (has_p0 && poid.ok) { tk_curve_len(curve_from_oid(tk_oid_str(der, poid))) } else { 0 };
+    if (has_p0 && inner == 0) { return None; }
+    Int want = match named { Some(x) => curve_bytes(x), None => if (inner != 0) { inner } else { scalar.len() } };
+    if (scalar.len() != want || (inner != 0 && inner != want)) { return None; }
+    if (want != 32 && want != 48) { return None; }
+    Curve c = if (want == 48) { P384 } else { P256 };
+    if (ec_public_key(c, scalar).len() == 0) { return None; }
+    return if (want == 48) { Some(Ec384Key(scalar)) } else { Some(EcKey(scalar)) };
 }
+
+Int tk_curve_len(Option(Curve) c) { return match c { Some(x) => curve_bytes(x), None => 0 }; }

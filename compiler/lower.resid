@@ -2346,7 +2346,13 @@ GT lw_lit(LW w, Int id, GT c) {
         Int dl = str_len_1(lv);
         Str w1 = if (dl > 18) { "Int(128)" } else { "Int" };
         Str w2 = if (dl > 38) { "Int(256)" } else { w1 };
-        Str ity = if (dl > 77) { "Int(512)" } else { w2 };
+        // Int(256) holds at most 2^255 - 1, 77 digits only up to 5.7e76; a
+        // literal past 512 bits takes the next multiple of 64 that holds it.
+        Int big = ((dl * 3322) / 1000 + 2 + 63) / 64 * 64;
+        Str w3 = if (big > 512) { f"Int({big})" } else { "Int(512)" };
+        // 77 digits fit Int(256) up to 2^255 - 1 exactly.
+        Bool fits256 = dl < 77 || (dl == 77 && lv <= "57896044618658097711785492504343953926634992332820282019728792003956564819967");
+        Str ity = if (fits256) { w2 } else { w3 };
         return lw_with(c, lv, ity, c.lines, c.tmp);
     }
     if (lk == "char") {
@@ -2903,6 +2909,8 @@ GT lw_call(LW w, Int id, List(Str) env, GT c) {
         return GT {.pos = 0, .val = pr.val, .ty = pr.ty, .cnt = 0, .err = "", .glines = pr.glines, .lines = pr.lines, .tmp = pr.tmp, .lbl = pr.lbl, .tail = false};
     }
     if ((n == "aesni_enc_round" || n == "aesni_enc_last_round") && !user_fn) { return lw_aesni(w, id, n, env, c); }
+    if ((n == "ct_secret" || n == "ct_public") && !user_fn) { return lw_ct(w, id, n, env, c); }
+    if (n == "ct_hide" && !user_fn) { return lw_ct_hide(w, id, env, c); }
     if (n == "resid_test_run_closure" && !user_fn) { return lw_extern(w, id, n, l2s("Void closure()", "Str"), "Int", env, c); }
     if (n == "sort") { return lw_sort(w, id, env, c); }
     if (n == "select" && fn_index(w.fs, n) < 0) { return lv_select(w, id, "", env, c); }
@@ -2980,6 +2988,51 @@ GT lw_debug_builtin(LW w, Int id, Str name, List(Str) env, GT c) {
     Str call = if (is_assert) { r + " = zext i1 " + a.val + " to i8" } else { r + " = add i8 0, 0" };
     Str call2 = if (is_assert) { "call void @resid_assert(i8 " + r + ", ptr " + msgv + ")" } else { "call void @resid_todo(i8 " + pick_str(name == "todo", "0", "1") + ", ptr " + msgv + ")" };
     return lw_step(m, "false", "Void", m.lines.concat([call, call2]), t1);
+}
+
+// ct_hide: the value passes through an empty asm in a register, which
+// LLVM must treat as an unknown result.
+GT lw_ct_hide(LW w, Int id, List(Str) env, GT c) {
+    if (w.g.ns[id].nk != 1) { return lw_gerr("ct_hide arity", c); }
+    GT a = lw_expr(w, lw_kid(w, id, 0), env, c);
+    if (a.err != "") { return a; }
+    Str lt = ll_ty(a.ty);
+    Str r = f"%t{a.tmp + 1}";
+    return lw_step(a, r, a.ty, a.lines.concat([r + " = call " + lt + " asm \"\", \"=r,0\"(" + lt + " " + a.val + ")"]), a.tmp + 1);
+}
+
+// ct_secret / ct_public: the value goes through a frame slot that a
+// valgrind client request marks undefined (MAKE_MEM_UNDEFINED) or defined
+// (MAKE_MEM_DEFINED). Outside valgrind the sequence is a no-op.
+GT lw_ct(LW w, Int id, Str n, List(Str) env, GT c) {
+    if (w.g.ns[id].nk != 1) { return lw_gerr(n + " arity", c); }
+    GT a = lw_expr(w, lw_kid(w, id, 0), env, c);
+    if (a.err != "") { return a; }
+    Str lt = ll_ty(a.ty);
+    Int nb = (ty_bits(a.ty) + 7) / 8;
+    Int req = if (n == "ct_secret") { 1296236545 } else { 1296236546 };
+    Int t = a.tmp;
+    Str slot = f"%t{t + 1}";
+    Str args = f"%t{t + 2}";
+    Str addr = f"%t{t + 3}";
+    Str g1 = f"%t{t + 4}";
+    Str g2 = f"%t{t + 5}";
+    Str g3 = f"%t{t + 6}";
+    Str g4 = f"%t{t + 7}";
+    Str g5 = f"%t{t + 8}";
+    Str r = f"%t{t + 9}";
+    Str v = f"%t{t + 10}";
+    Str asm = "rolq $$3, %rdi ; rolq $$13, %rdi ; rolq $$61, %rdi ; rolq $$51, %rdi ; xchgq %rbx, %rbx";
+    List(Str) ls = [fixed_alloca(slot, nb + 16), fixed_alloca(args, 48), "store " + lt + " " + a.val + ", ptr " + slot, addr + " = ptrtoint ptr " + slot + " to i64",
+        f"store i64 {req}, ptr " + args,
+        g1 + " = getelementptr i64, ptr " + args + ", i64 1", "store i64 " + addr + ", ptr " + g1,
+        g2 + " = getelementptr i64, ptr " + args + ", i64 2", f"store i64 {nb}, ptr " + g2,
+        g3 + " = getelementptr i64, ptr " + args + ", i64 3", "store i64 0, ptr " + g3,
+        g4 + " = getelementptr i64, ptr " + args + ", i64 4", "store i64 0, ptr " + g4,
+        g5 + " = getelementptr i64, ptr " + args + ", i64 5", "store i64 0, ptr " + g5,
+        r + " = call i64 asm sideeffect \"" + asm + "\", \"={dx},{ax},0,~{cc},~{memory},~{dirflag},~{fpsr},~{flags}\"(ptr " + args + ", i64 0)",
+        v + " = load " + lt + ", ptr " + slot];
+    return lw_step(a, v, a.ty, a.lines.concat(ls), t + 10);
 }
 
 // cg_primary's aesni_enc_round / aesni_enc_last_round.

@@ -1,0 +1,21 @@
+import "../../lib/tlsmsg.resid";
+import "../../lib/cose.resid";
+@requires(args, filesystem(readonly))
+Int main() {
+    List(Int) m = cose_hex_decode(args.get(2));
+    List(Int) cert = filesystem.read_bytes(args.get(3));
+    Str f = args.get(1);
+    Int r = if (f == "hello") { ts_client_hello(m).err }
+      else if (f == "certlist") { tm_cert_list(m).len() }
+      else if (f == "cv") { if (tm_verify_cv(m, cert, sha256_bytes([1]))) { 1 } else { 0 } }
+      else if (f == "cv2") { if (tm_verify_cv(cert, m, sha256_bytes([1]))) { 1 } else { 0 } }
+      else if (f == "ecdsa") { if (tm_is_ecdsa_cv(m)) { 1 } else { 0 } }
+      else if (f == "sig") { tm_cv_sig(m).len() }
+      else if (f == "alpn") { ts_ee_alpn(m).len() }
+      else if (f == "fin") { tm_find_fin_last(m) }
+      else if (f == "pos") { tm_find_pos(m, 11, 0) }
+      else if (f == "find") { tm_find(m, 15, 0).len() }
+      else { 0 - 1 };
+    println(f"{r}");
+    return 0;
+}

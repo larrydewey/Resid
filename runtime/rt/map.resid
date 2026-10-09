@@ -1586,7 +1586,16 @@ Int keep_elem(Int it, Int ek, Int ctx) { return if (ek == 0) { elem_move(it, ctx
 
 // A list element (a scalar box or a string).
 Int elem_move(Int p, Int ctx) {
-    if (p == 0 || ult(p, 4096) || box_imm(p) || box_fimm(p) || !mv_src(ctx, p)) { return p; }
+    // Immediates first, on their own: the test reads only the tag bits,
+    // and the rest is out of line so the optimizer cannot fold it into
+    // one comparison that also reads an immediate's value bits (tests/ct).
+    if (box_imm(p) || box_fimm(p)) { return p; }
+    return elem_move_ptr(p, ctx);
+}
+
+@noinline
+Int elem_move_ptr(Int p, Int ctx) {
+    if (p == 0 || ult(p, 4096) || !mv_src(ctx, p)) { return p; }
     if (!is_boxed(p)) { return str_move(p, ctx); }
     // A scalar box: header and payload (at most 16 bytes) copied whole.
     Int st = stype(p);

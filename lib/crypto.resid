@@ -250,26 +250,24 @@ pub List(Int) digest_block(List(Int) m, Int base, List(Int) h) {
 // Big-endian word j of the block at base.
 pub Int word_at_list(List(Int) m, Int base, Int j) {
     Int off = base + j * 4;
-    return ((m[off] << 24) | (m[off + 1] << 16) | (m[off + 2] << 8) | m[off + 3]) & 4294967295;
+    return (((m[off] & 255) << 24) | ((m[off + 1] & 255) << 16) | ((m[off + 2] & 255) << 8) | (m[off + 3] & 255)) & 4294967295;
 }
 
 pub Int sched_w_l(List(Int) m, Int base, Int i, Int w0, Int w1, Int w9, Int w14) {
     if (i < 16) { return word_at_list(m, base, i); }
-    Int s = ssig1(w14) + w9;
-    Int t = ssig0(w1) + w0;
-    return (s + t) & 4294967295;
+    return wrapping_add(wrapping_add(ssig1(w14), w9), wrapping_add(ssig0(w1), w0)) & 4294967295;
 }
 
 // sha_blk over a byte list: the same 64 rounds with the state and the
 // schedule window in scalar parameters.
 pub List(Int) sha_blk_l(List(Int) m, Int base, Int i, List(Int) h0, Int a, Int b, Int c, Int d, Int e, Int f, Int g, Int h, Int w0, Int w1, Int w2, Int w3, Int w4, Int w5, Int w6, Int w7, Int w8, Int w9, Int w10, Int w11, Int w12, Int w13, Int w14, Int w15) {
     if (i >= 64) {
-        return [(h0[0] + a) & 4294967295, (h0[1] + b) & 4294967295, (h0[2] + c) & 4294967295, (h0[3] + d) & 4294967295, (h0[4] + e) & 4294967295, (h0[5] + f) & 4294967295, (h0[6] + g) & 4294967295, (h0[7] + h) & 4294967295];
+        return [wrapping_add(h0[0], a) & 4294967295, wrapping_add(h0[1], b) & 4294967295, wrapping_add(h0[2], c) & 4294967295, wrapping_add(h0[3], d) & 4294967295, wrapping_add(h0[4], e) & 4294967295, wrapping_add(h0[5], f) & 4294967295, wrapping_add(h0[6], g) & 4294967295, wrapping_add(h0[7], h) & 4294967295];
     }
     Int wi = sched_w_l(m, base, i, w0, w1, w9, w14);
-    Int t1 = (h + bsig1(e) + ch_of(e, f, g) + k_at(i) + wi) & 4294967295;
-    Int t2 = (bsig0(a) + maj_of(a, b, c)) & 4294967295;
-    return sha_blk_l(m, base, i + 1, h0, (t1 + t2) & 4294967295, a, b, c, (d + t1) & 4294967295, e, f, g, w1, w2, w3, w4, w5, w6, w7, w8, w9, w10, w11, w12, w13, w14, w15, wi);
+    Int t1 = wrapping_add(wrapping_add(wrapping_add(h, bsig1(e)), wrapping_add(ch_of(e, f, g), k_at(i))), wi) & 4294967295;
+    Int t2 = wrapping_add(bsig0(a), maj_of(a, b, c)) & 4294967295;
+    return sha_blk_l(m, base, i + 1, h0, wrapping_add(t1, t2) & 4294967295, a, b, c, wrapping_add(d, t1) & 4294967295, e, f, g, w1, w2, w3, w4, w5, w6, w7, w8, w9, w10, w11, w12, w13, w14, w15, wi);
 }
 
 pub List(Int) digest_blocks(List(Int) m, Int pos, Int total, List(Int) h) {
@@ -628,8 +626,9 @@ pub List(Int) hmac_sha256_bytes(List(Int) key, List(Int) msg) {
 
 pub Bool ct_equal(List(Int) a, List(Int) b) {
     if (a.len() != b.len()) { return false; }
+    // Every byte is compared; only the verdict is made public.
     Int d = ct_acc(a, b, 0, 0);
-    return d == 0;
+    return ct_public(d) == 0;
 }
 
 pub Int ct_acc(List(Int) a, List(Int) b, Int i, Int acc) {
@@ -1364,7 +1363,7 @@ pub UInt(64) word64_at(List(Int) m, Int base, Int j) { return w64_bytes(m, base 
 
 pub UInt(64) w64_bytes(List(Int) m, Int off, Int k, UInt(64) acc) {
     if (k >= 8) { return acc; }
-    return w64_bytes(m, off, k + 1, (acc << ((UInt(64)) 8)) | ((UInt(64)) m[off + k]));
+    return w64_bytes(m, off, k + 1, (acc << ((UInt(64)) 8)) | wrapping_u64(m[off + k] & 255));
 }
 
 pub UInt(64) sched64(List(Int) m, Int base, Int i, UInt(64) w0, UInt(64) w1, UInt(64) w9, UInt(64) w14) {
@@ -1372,9 +1371,15 @@ pub UInt(64) sched64(List(Int) m, Int base, Int i, UInt(64) w0, UInt(64) w1, UIn
     return wrapping_uadd(wrapping_uadd(ss1_64(w14), w9), wrapping_uadd(ss0_64(w1), w0));
 }
 
-pub List(UInt(64)) sha512_blk(List(Int) m, Int base, Int i, List(UInt(64)) h0, UInt(64) a, UInt(64) b, UInt(64) c, UInt(64) d, UInt(64) e, UInt(64) f, UInt(64) g, UInt(64) h, UInt(64) w0, UInt(64) w1, UInt(64) w2, UInt(64) w3, UInt(64) w4, UInt(64) w5, UInt(64) w6, UInt(64) w7, UInt(64) w8, UInt(64) w9, UInt(64) w10, UInt(64) w11, UInt(64) w12, UInt(64) w13, UInt(64) w14, UInt(64) w15) {
+// The SHA-512 working state. A record rather than a List(UInt(64)): a
+// list boxes a word of 2^54 or more, so a state held in one would
+// allocate, or not, depending on secret values (tests/ct).
+pub type W512 = { UInt(64) a; UInt(64) b; UInt(64) c; UInt(64) d; UInt(64) e; UInt(64) f; UInt(64) g; UInt(64) h; };
+
+pub W512 sha512_blk(List(Int) m, Int base, Int i, W512 h0, UInt(64) a, UInt(64) b, UInt(64) c, UInt(64) d, UInt(64) e, UInt(64) f, UInt(64) g, UInt(64) h, UInt(64) w0, UInt(64) w1, UInt(64) w2, UInt(64) w3, UInt(64) w4, UInt(64) w5, UInt(64) w6, UInt(64) w7, UInt(64) w8, UInt(64) w9, UInt(64) w10, UInt(64) w11, UInt(64) w12, UInt(64) w13, UInt(64) w14, UInt(64) w15) {
     if (i >= 80) {
-        return [wrapping_uadd(h0[0], a), wrapping_uadd(h0[1], b), wrapping_uadd(h0[2], c), wrapping_uadd(h0[3], d), wrapping_uadd(h0[4], e), wrapping_uadd(h0[5], f), wrapping_uadd(h0[6], g), wrapping_uadd(h0[7], h)];
+        return W512 {.a = wrapping_uadd(h0.a, a), .b = wrapping_uadd(h0.b, b), .c = wrapping_uadd(h0.c, c), .d = wrapping_uadd(h0.d, d),
+                     .e = wrapping_uadd(h0.e, e), .f = wrapping_uadd(h0.f, f), .g = wrapping_uadd(h0.g, g), .h = wrapping_uadd(h0.h, h)};
     }
     UInt(64) wi = sched64(m, base, i, w0, w1, w9, w14);
     UInt(64) ch = (e & f) ^ (~e & g);
@@ -1383,27 +1388,27 @@ pub List(UInt(64)) sha512_blk(List(Int) m, Int base, Int i, List(UInt(64)) h0, U
     return sha512_blk(m, base, i + 1, h0, wrapping_uadd(t1, t2), a, b, c, wrapping_uadd(d, t1), e, f, g, w1, w2, w3, w4, w5, w6, w7, w8, w9, w10, w11, w12, w13, w14, w15, wi);
 }
 
-pub List(UInt(64)) sha512_blocks(List(Int) m, Int pos, Int total, List(UInt(64)) h) {
+pub W512 sha512_blocks(List(Int) m, Int pos, Int total, W512 h) {
     if (pos >= total) { return h; }
     UInt(64) z = 0;
-    return sha512_blocks(m, pos + 128, total, sha512_blk(m, pos, 0, h, h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], z, z, z, z, z, z, z, z, z, z, z, z, z, z, z, z));
+    return sha512_blocks(m, pos + 128, total, sha512_blk(m, pos, 0, h, h.a, h.b, h.c, h.d, h.e, h.f, h.g, h.h, z, z, z, z, z, z, z, z, z, z, z, z, z, z, z, z));
 }
 
-pub List(UInt(64)) sha512_iv() {
+pub W512 sha512_iv() {
     List(Int) l = state512_init();
-    return [w64u(l, 0), w64u(l, 1), w64u(l, 2), w64u(l, 3), w64u(l, 4), w64u(l, 5), w64u(l, 6), w64u(l, 7)];
+    return W512 {.a = w64u(l, 0), .b = w64u(l, 1), .c = w64u(l, 2), .d = w64u(l, 3), .e = w64u(l, 4), .f = w64u(l, 5), .g = w64u(l, 6), .h = w64u(l, 7)};
 }
 
 pub UInt(64) w64u(List(Int) limbs, Int i) { return (((UInt(64)) limbs[2 * i]) << ((UInt(64)) 32)) | ((UInt(64)) limbs[2 * i + 1]); }
 
 pub ListBuf(Int) be64_push(UInt(64) v, Int k, ListBuf(Int) acc) {
     if (k >= 8) { return acc; }
-    return be64_push(v, k + 1, acc.push((Int) ((v >> ((UInt(64)) (56 - k * 8))) & ((UInt(64)) 255))));
+    return be64_push(v, k + 1, acc.push(wrapping_i64((v >> ((UInt(64)) (56 - k * 8))) & ((UInt(64)) 255))));
 }
 
-pub List(Int) words64_bytes(List(UInt(64)) h, Int i, ListBuf(Int) acc) {
-    if (i >= 8) { return acc.finish(); }
-    return words64_bytes(h, i + 1, be64_push(h[i], 0, acc));
+pub List(Int) words64_bytes(W512 h, Int i, ListBuf(Int) acc) {
+    ListBuf(Int) a1 = be64_push(h.d, 0, be64_push(h.c, 0, be64_push(h.b, 0, be64_push(h.a, 0, acc))));
+    return be64_push(h.h, 0, be64_push(h.g, 0, be64_push(h.f, 0, be64_push(h.e, 0, a1)))).finish();
 }
 
 // SHA-512 of a byte list; returns the 64-byte digest as a List(Int).
@@ -1411,7 +1416,7 @@ pub List(Int) words64_bytes(List(UInt(64)) h, Int i, ListBuf(Int) acc) {
 pub List(Int) sha512_bytes(List(Int) msg) {
     Int n = msg.len();
     Int full = (n / 128) * 128;
-    List(UInt(64)) h1 = sha512_blocks(msg, 0, full, sha512_iv());
+    W512 h1 = sha512_blocks(msg, 0, full, sha512_iv());
     List(Int) tail = pad512_tail(msg[full..], n);
     return words64_bytes(sha512_blocks(tail, 0, tail.len(), h1), 0, ListBuf());
 }

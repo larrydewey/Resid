@@ -17,7 +17,6 @@
 import "crypto.resid";
 import "x509.resid";
 import "rsa.resid";
-import "ec256.resid";
 import "calendar.resid";
 import "instant.resid";
 import "certverify.resid";
@@ -32,18 +31,14 @@ pub List(Int) cert_tbs(List(Int) cert) {
     return cert_elem(cert, 0);
 }
 
-// Is `cert` inside its own validity window at `now`? An unparseable time
-// on either end rejects: a certificate whose dates this cannot read is not
-// one to trust on the strength of everything else.
+// Is `cert` inside its own validity window at `now`? A certificate that
+// does not parse, or whose dates cannot be read, is not.
 pub Bool x509_valid_now(List(Int) cert, Instant now) {
-    Int nb = x509_time_to_unix(x509_not_before(cert));
-    Int na = x509_time_to_unix(x509_not_after(cert));
-    if (nb == 0 - 1) { return false; }
-    if (na == 0 - 1) { return false; }
-    Int t = now.seconds;
-    if (t < nb) { return false; }
-    if (t > na) { return false; }
-    return true;
+    return match x509_parse(cert) { Ok(c) => cert_valid_at(c, now), Err(e) => false };
+}
+
+pub Bool cert_valid_at(Cert c, Instant now) {
+    return now.seconds >= c.not_before && now.seconds <= c.not_after;
 }
 
 pub Int ci_ch(Int c) {
@@ -109,65 +104,6 @@ pub Bool dns_match(List(Int) host, List(Int) pat) {
         return ci_eq_range(host, dnext, pat, 2, suflen);
     }
     return ci_eq_bytes(host, pat);
-}
-
-// Locate the [3] EXPLICIT extensions element after the SPKI; -1 if absent.
-pub Int cert_ext3_pos(List(Int) cert) {
-    Int sp = x509_spki_pos(cert);
-    Int e1 = x509_skip_tlv(cert, sp);
-    DerTlv t1 = der_next(cert, e1);
-    if (t1.cls == 2 && (t1.tag & 31) == 3) {
-        return e1;
-    }
-    Int e2 = x509_skip_tlv(cert, e1);
-    DerTlv t2 = der_next(cert, e2);
-    if (t2.cls == 2 && (t2.tag & 31) == 3) {
-        return e2;
-    }
-    Int e3 = x509_skip_tlv(cert, e2);
-    DerTlv t3 = der_next(cert, e3);
-    if (t3.cls == 2 && (t3.tag & 31) == 3) {
-        return e3;
-    }
-    return 0 - 1;
-}
-
-// Walk Extension entries; returns the position of the GeneralNames
-// SEQUENCE inside subjectAltName's OCTET STRING, or -1.
-pub Int san_gns_pos(List(Int) cert, Int pos, Int end) {
-    if (pos > end) { return 0 - 1; }
-    Int oidp = der_content_pos(cert, pos);
-    Str oidv = der_oid_str(cert, oidp);
-    if (oidv == "2.5.29.17") {
-        Int rest = x509_skip_tlv(cert, oidp);
-        DerTlv cand = der_next(cert, rest);
-        Bool isbool = cand.cls == 0 && (cand.tag & 31) == 1;
-        Int octp = if (isbool) { x509_skip_tlv(cert, rest) } else { rest };
-        return der_content_pos(cert, octp);
-    }
-    Int nxt = x509_skip_tlv(cert, pos);
-    return san_gns_pos(cert, nxt, end);
-}
-
-pub Bool san_scan(List(Int) cert, Int gns, List(Int) host, Int end) {
-    if (gns > end) { return false; }
-    DerTlv g = der_next(cert, gns);
-    if (g.cls == 2 && (g.tag & 31) == 2) {
-        Int nstart = gns + g.hdr_len;
-        Int nend = nstart + g.val_len - 1;
-        List(Int) nameb = der_slice_seeded(cert, nstart, nend);
-        Bool hit = dns_match(host, nameb);
-        if (hit) { return true; }
-    }
-    if (g.cls == 2 && (g.tag & 31) == 7) {
-        Int nstart = gns + g.hdr_len;
-        Int nend = nstart + g.val_len - 1;
-        List(Int) addr = der_slice_seeded(cert, nstart, nend);
-        Bool hit = ip_san_hit(addr, host);
-        if (hit) { return true; }
-    }
-    Int nxt = gns + g.hdr_len + g.val_len;
-    return san_scan(cert, nxt, host, end);
 }
 
 // An iPAddress SAN is the address in bytes -- four of them, or sixteen --
@@ -290,55 +226,52 @@ pub List(Int) ip_zero_bytes(Int n) {
     return [0].concat(ip_zero_bytes(n - 1));
 }
 
-// True when the certificate names `host`: a dNSName SAN under the usual
-// wildcard rules, or an iPAddress SAN equal to the literal.
+// Does the certificate name `host` in its subjectAltName (a dNSName,
+// wildcards per dns_match, or an iPAddress)? A certificate that does not
+// parse names nothing.
 pub Bool san_has_match(List(Int) cert, List(Int) host) {
-    Int e3 = cert_ext3_pos(cert);
-    if (e3 < 0) { return false; }
-    Int extseq = der_content_pos(cert, e3);
-    DerTlv sv = der_next(cert, extseq);
-    Int start = extseq + sv.hdr_len;
-    Int end = start + sv.val_len - 1;
-    Int gseq = san_gns_pos(cert, start, end);
-    if (gseq < 0) { return false; }
-    Int gns = der_content_pos(cert, gseq);
-    Int gend = san_gns_end(cert, gseq);
-    return san_scan(cert, gns, host, gend);
+    return match x509_parse(cert) { Ok(c) => cert_san_match(c, host), Err(e) => false };
 }
+
+pub Bool cert_san_match(Cert c, List(Int) host) {
+    return san_any_dns(cert_san(c, 130), host, 0) || san_any_ip(cert_san(c, 135), host, 0);
+}
+
+Bool san_any_dns(List(List(Int)) names, List(Int) host, Int i) {
+    if (i >= names.len()) { return false; }
+    if (dns_match(host, names[i])) { return true; }
+    return san_any_dns(names, host, i + 1);
+}
+
+Bool san_any_ip(List(List(Int)) addrs, List(Int) host, Int i) {
+    if (i >= addrs.len()) { return false; }
+    if (ip_san_hit(addrs[i], host)) { return true; }
+    return san_any_ip(addrs, host, i + 1);
+}
+
 pub Bool chain_verify(List(Int) child, List(Int) issuer, Instant now) {
-    Int cip = x509_issuer_pos(child);
-    Int cis = der_content_pos(child, cip);
-    Int cie = x509_skip_tlv(child, cip);
-    Int cie1 = cie - 1;
-    List(Int) cname = der_slice_seeded(child, cis, cie1);
-    Int isp = x509_subject_pos(issuer);
-    Int iss = der_content_pos(issuer, isp);
-    Int ise = x509_skip_tlv(issuer, isp);
-    Int ise1 = ise - 1;
-    List(Int) sname = der_slice_seeded(issuer, iss, ise1);
-    if (!eq_bytes(cname, sname)) { return false; }
-    Bool cv = x509_valid_now(child, now);
-    Bool iv = x509_valid_now(issuer, now);
-    if (!cv) { return false; }
-    if (!iv) { return false; }
+    return match x509_parse(child) {
+        Ok(c) => match x509_parse(issuer) { Ok(i) => chain_verify_parsed(c, i, now), Err(e) => false },
+        Err(e) => false,
+    };
+}
+
+// The issuer link, on parsed certificates: names match, both are current,
+// the issuer is a CA allowed to sign certificates, and its key verifies
+// the child's signature under the algorithm the child names.
+pub Bool chain_verify_parsed(Cert c, Cert i, Instant now) {
+    if (!eq_list(c.issuer, i.subject)) { return false; }
+    if (!cert_valid_at(c, now) || !cert_valid_at(i, now)) { return false; }
     // A certificate may only sign for another certificate if it says it is
     // a CA and is allowed to. Without this, any leaf that happened to be
     // in the trust store -- or handed over as an intermediate -- could
     // issue for anything, and the chain would still verify: the issuer
     // check above is only a name comparison.
-    if (!x509_is_ca(issuer)) { return false; }
-    if (!x509_key_usage(issuer, 5)) { return false; }
-    List(Int) tbsv = cert_tbs(child);
-    List(Int) sigb = cert_elem(child, 2);
-    List(Int) keyb = cert_pubkey_bits(issuer);
-    return x509_sig_ok(child, x509_sigalg_pos(child), tbsv, keyb, sigb);
+    if (!cert_is_ca(i)) { return false; }
+    if (!cert_key_usage(i, 5)) { return false; }
+    return sig_verify(c.signed.alg, i.key, c.signed.tbs, c.signed.sig);
 }
 
-pub Int san_gns_end(List(Int) cert, Int gseq) {
-    DerTlv gv = der_next(cert, gseq);
-    Int e = gseq + gv.hdr_len + gv.val_len - 1;
-    return e;
-}
 
 // ─── Trust store ─────────────────────────────────────────────────────
 //
@@ -640,7 +573,7 @@ pub Bool crl_revokes(List(Int) crl, List(Int) cert) {
 }
 
 // The Name DER of an element at `pos`, as a comparable byte string.
-List(Int) name_at(List(Int) data, Int pos) {
+pub List(Int) name_at(List(Int) data, Int pos) {
     Int cs = der_content_pos(data, pos);
     Int e = x509_skip_tlv(data, pos);
     return der_slice_seeded(data, cs, e - 1);
@@ -653,6 +586,9 @@ List(Int) name_at(List(Int) data, Int pos) {
 // it says what was true when it was issued, and a stale CRL is exactly how
 // a revoked certificate keeps working.
 pub Bool crl_usable(List(Int) crl, List(Int) issuer, Instant now) {
+    // The signature first: it parses the CRL strictly, and the positions
+    // read below are then in a structure the issuer vouched for.
+    if (!x509_signed_by(crl, issuer)) { return false; }
     Int ip = crl_issuer_pos(crl);
     if (ip < 0) { return false; }
     Int sp2 = x509_subject_pos(issuer);
@@ -667,14 +603,7 @@ pub Bool crl_usable(List(Int) crl, List(Int) issuer, Instant now) {
     if (nu < 0) { return false; }
     Int nextn = x509_time_to_unix(der_str_value(crl, nu));
     if (nextn == 0 - 1) { return false; }
-    if (t > nextn) { return false; }
-    Int ap = crl_sigalg_pos(crl);
-    if (ap < 0) { return false; }
-    Int sp = x509_tbs_pos(crl);
-    if (sp < 0) { return false; }
-    List(Int) keyb = cert_pubkey_bits(issuer);
-    if (keyb.len() == 0) { return false; }
-    return x509_sig_ok(crl, ap, cert_tbs(crl), keyb, cert_elem(crl, 2));
+    return t <= nextn;
 }
 
 // Did any CRL in the store, signed by `issuer` and current at `now`, list

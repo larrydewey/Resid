@@ -52,7 +52,7 @@ pub Int cbe_be_read(List(Int) b, Int pos, Int n, Int acc) {
     return cbe_be_read(b, pos + 1, n - 1, (acc << 8) | b[pos]);
 }
 pub CbeHead cbe_read_head(List(Int) b, Int pos) {
-    if (pos >= b.len()) { return CbeHead {.ok = false, .major = 0, .val = 0, .pos = pos}; }
+    if (pos < 0 || pos >= b.len()) { return CbeHead {.ok = false, .major = 0, .val = 0, .pos = pos}; }
     Int byte = b[pos];
     Int major = byte >> 5;
     Int minor = byte & 31;
@@ -76,7 +76,7 @@ type CbeStr = { Bool ok; List(Int) bytes; Int pos; };
 pub CbeStr cbe_read_str(List(Int) b, Int pos, Int major) {
     List(Int) empty = [];
     CbeHead h = cbe_read_head(b, pos);
-    if (!h.ok || h.major != major) { return CbeStr {.ok = false, .bytes = empty, .pos = pos}; }
+    if (!h.ok || h.major != major || h.val < 0) { return CbeStr {.ok = false, .bytes = empty, .pos = pos}; }
     Int end = h.pos + h.val;
     if (end > b.len()) { return CbeStr {.ok = false, .bytes = empty, .pos = pos}; }
     return CbeStr {.ok = true, .bytes = slice_bytes(b, h.pos, end - 1), .pos = end};

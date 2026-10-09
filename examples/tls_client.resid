@@ -8,7 +8,7 @@ import "clock.resid";
 
 // TLS 1.3 client:
 //   args.get(1) = host, args.get(2) = port, args.get(3) = server cert
-//   DER hex (ECDSA P-256), args.get(4) = optional client seed hex,
+//   DER hex (any key the CertificateVerify schemes cover), args.get(4) = optional client seed hex,
 //   args.get(5) = trust store (PEM bundle, or a directory of DER certs).
 //
 // The server is authenticated against that trust store: the leaf must name
@@ -279,7 +279,7 @@ Bool verify_cv(List(Int) inner2, List(Int) tr2b, Str cert_hex, List(Int) thct2) 
     Int cstart = 4;
     Int ccount = cvmsg.len() - 4;
     List(Int) cvbody = slice_seed(cvmsg, cstart, ccount, []);
-    // dispatches on the signature algorithm: ECDSA-P256 and RSA-PSS
+    // dispatches on the scheme: ECDSA P-256/P-384, Ed25519, RSA-PSS
     return tm_verify_cv(cvbody, scert, thct2);
 }
 

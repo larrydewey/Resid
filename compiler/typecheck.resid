@@ -2697,6 +2697,20 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (argtys == "Bool") { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_quiet_set expects (Bool), got (" + argtys + ")"};
     }
+    // Constant-time checking (spec §6.8): identity on an integer, which
+    // under valgrind marks the value secret (undefined) or public again.
+    // ct_hide: identity the optimizer cannot see through (a value
+    // barrier), so masks built from it are not turned back into branches.
+    if (name == "ct_hide") {
+        Str ch = str_trim(rawtys);
+        if (argc == 1 && is_int_ty(ch) && ty_bits(ch) <= 64) { return ERes {.pos = pos, .ty = ch, .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "ct_hide expects one integer of at most 64 bits, got (" + rawtys + ")"};
+    }
+    if (name == "ct_secret" || name == "ct_public") {
+        Str ca = str_trim(rawtys);
+        if (argc == 1 && is_int_ty(ca)) { return ERes {.pos = pos, .ty = ca, .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects one integer, got (" + rawtys + ")"};
+    }
     if (name == "aesni_enc_round" || name == "aesni_enc_last_round") {
         if (argtys == "UInt(128),UInt(128)") { return ERes {.pos = pos, .ty = "UInt(128)", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = name + " expects (UInt(128), UInt(128)), got (" + argtys + ")"};

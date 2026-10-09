@@ -1,0 +1,75 @@
+// roundtrip.resid — what the vectors cannot cover: P-384 HPKE (RFC 9180
+// publishes no DHKEM(P-384) vectors), fresh keys from the OS, and the
+// refusals a caller depends on. One "ok <name>" or "FAIL <name>" line
+// per check; exit 1 when any failed.
+
+import "../../lib/hpke.resid";
+import "../../lib/cosesig.resid";
+import "../../lib/aesgcm.resid";
+
+Int check(Str name, Bool ok) {
+    println(if (ok) { "ok " + name } else { "FAIL " + name });
+    return if (ok) { 0 } else { 1 };
+}
+
+Bool is_none(Option(List(Int)) o) { return match o { Some(x) => false, None => true }; }
+Bool is_some_eq(Option(List(Int)) o, List(Int) want) { return match o { Some(x) => ct_equal(x, want), None => false }; }
+
+Int hpke_case(Int kdf, Int aead) {
+    HpkeSuite s = hpke_suite(17, kdf, aead);
+    HpkeKeyPair r = hpke_derive_keypair(17, bytes_of(f"recipient {kdf} {aead}"));
+    HpkeKeyPair other = hpke_generate_keypair(17);
+    List(Int) dek = random_bytes(32);
+    HpkeMessage m = hpke_seal_to(s, r.pk, bytes_of("weights v1"), bytes_of("aad"), dek);
+    Option(List(Int)) good = hpke_open_with(s, m.enc, r.sk, bytes_of("weights v1"), bytes_of("aad"), m.ct);
+    Option(List(Int)) wrong_key = hpke_open_with(s, m.enc, other.sk, bytes_of("weights v1"), bytes_of("aad"), m.ct);
+    Option(List(Int)) wrong_info = hpke_open_with(s, m.enc, r.sk, bytes_of("weights v2"), bytes_of("aad"), m.ct);
+    Option(List(Int)) wrong_aad = hpke_open_with(s, m.enc, r.sk, bytes_of("weights v1"), bytes_of("aaD"), m.ct);
+    HpkeSender snd = hpke_setup_sender(s, r.pk, bytes_of("ctx"));
+    HpkeCtx rcv = hpke_setup_receiver(s, snd.enc, r.sk, bytes_of("ctx"));
+    Bool exp = ct_equal(hpke_export(snd.ctx, bytes_of("x"), 48), hpke_export(rcv, bytes_of("x"), 48));
+    Bool ok = r.ok && m.ok && m.enc.len() == 97 && is_some_eq(good, dek) && is_none(wrong_key) && is_none(wrong_info) && is_none(wrong_aad) && exp;
+    return check(f"hpke p384 kdf={kdf} aead={aead}", ok);
+}
+
+Int hpke_all(Int kdf, Int aead, Int acc) {
+    if (kdf > 3) { return acc; }
+    Int r = hpke_case(kdf, aead);
+    return if (aead >= 3) { hpke_all(kdf + 1, 1, acc + r) } else { hpke_all(kdf, aead + 1, acc + r) };
+}
+
+Int main() {
+    Int f0 = hpke_all(1, 1, 0);
+    // A peer key off the curve or of the wrong curve sets up nothing.
+    HpkeSuite s = hpke_suite(17, 2, 2);
+    HpkeKeyPair r256 = hpke_derive_keypair(16, bytes_of("p256"));
+    Int f1 = check("hpke refuses a P-256 key under the P-384 KEM", !hpke_setup_sender(s, r256.pk, []).ctx.ok);
+    Int f2 = check("hpke refuses an unknown suite", !hpke_setup_sender(hpke_suite(18, 1, 1), r256.pk, []).ctx.ok);
+    // ECDH both ways, fresh keys.
+    List(Int) a = ec_generate(P384);
+    List(Int) b = ec_generate(P384);
+    List(Int) ab = ecdh(P384, a, ec_public_key(P384, b));
+    Int f3 = check("ecdh p384 agrees", ab.len() == 48 && ct_equal(ab, ecdh(P384, b, ec_public_key(P384, a))));
+    Int f4 = check("ecdh refuses a scalar of zero", ecdh(P384, [0], ec_public_key(P384, b)).len() == 0);
+    // ECDSA with a hash longer than the curve.
+    List(Int) sig = ecdsa_sign(P384, Sha512, a, bytes_of("m"));
+    Int f5 = check("ecdsa p384/sha512 round trip", ecdsa_verify(P384, Sha512, ec_public_key(P384, a), bytes_of("m"), sig));
+    Int f6 = check("ecdsa refuses another message", !ecdsa_verify(P384, Sha512, ec_public_key(P384, a), bytes_of("n"), sig));
+    // Key wrap of a 256-bit DEK under AES-256.
+    List(Int) kek = random_bytes(32);
+    List(Int) dek = random_bytes(32);
+    List(Int) w = aes_key_wrap(kek, dek);
+    Int f7 = check("aes-kw round trip", w.len() == 40 && is_some_eq(aes_key_unwrap(kek, w), dek));
+    Int f8 = check("aes-kw refuses another kek", is_none(aes_key_unwrap(random_bytes(32), w)));
+    Int f9 = check("aes-gcm empty plaintext opens as Some([])", is_some_eq(aes_gcm_decrypt(kek, [1, 2, 3], aes_gcm_seal(kek, [1, 2, 3], [], []), []), []));
+    List(Int) zeros = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    Int f10 = check("x25519 refuses a low-order point", x25519_shared(random_bytes(32), zeros).len() == 0);
+    // COSE: sign here, verify here, and the curve must match the alg.
+    List(Int) c = cose_sign1_ecdsa(P256, a[0..32], bytes_of("p"), []);
+    PubKey k256 = PubKey {.kind = pubkey_ec(), .curve = P256, .point = ec_public_key(P256, a[0..32]), .n = [], .e = [], .pss_only = false};
+    Int f11 = check("cose es256 round trip", is_some_eq(cose_sign1_open(c, k256, []), bytes_of("p")));
+    Int f12 = check("cose refuses other external aad", is_none(cose_sign1_open(c, k256, [1])));
+    Int fails = f0 + f1 + f2 + f3 + f4 + f5 + f6 + f7 + f8 + f9 + f10 + f11 + f12;
+    println(f"roundtrip: {fails} failed");
+    return if (fails > 0) { 1 } else { 0 };
+}

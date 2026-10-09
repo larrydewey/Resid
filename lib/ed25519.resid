@@ -21,74 +21,51 @@ pub Int(256) fe_pm2() {
     return 57896044618658097711785492504343953926634992332820282019728792003956564819947;
 }
 
-pub Int(256) cond_sub(Int(256) v) {
-    if (v >= fe_p()) {
-        Int(256) r = v - fe_p();
-        return r;
-    }
-    return v;
+// ─── Branch-free arithmetic ──────────────────────────────────────────
+// Every operation that can see a secret (a signing key, a nonce, an
+// X25519 scalar) runs on UInt(576) with masks: no comparison, no
+// overflow check and no select branches on the value (tests/ct). Values
+// cross back to Int(256) with wrapping conversions, which do not check.
+
+UInt(576) fe_w(Int(256) a) { return (UInt(576)) wrapping_u256(a); }
+Int(256) fe_n(UInt(576) v) { return wrapping_i256(v); }
+UInt(576) fe_pw() { return 57896044618658097711785492504343953926634992332820282019728792003956564819949; }
+UInt(576) fe_lw() { return 7237005577332262213973186563042994240857116359379907606001950938285454250989; }
+UInt(576) fe_m256() { return (((UInt(576)) 1) << 256) - 1; }
+UInt(576) fe_guard() { return ((UInt(576)) 1) << 264; }
+UInt(576) fe_ones() { return ((((UInt(576)) 1) << 575) - 1) * 2 + 1; }
+
+// u - m when u >= m, else u (u < 2^263).
+UInt(576) fe_csub(UInt(576) u, UInt(576) m) {
+    UInt(576) d = wrapping_usub(wrapping_uadd(u, fe_guard()), m);
+    UInt(576) keep = wrapping_usub((UInt(576)) 0, (UInt(576)) wrapping_u64(ct_hide(wrapping_i64((d >> 264) & 1))));
+    return ((d & (fe_guard() - 1)) & keep) | (u & (keep ^ fe_ones()));
 }
-pub Int(256) cond_sub2(Int(256) v) {
-    Int(256) a = cond_sub(v);
-    return cond_sub(a);
-}
-pub Int(256) cond_sub_l(Int(256) v) {
-    if (v >= fe_l()) {
-        Int(256) r = v - fe_l();
-        return r;
-    }
-    return v;
-}
-pub Int(512) cs512(Int(512) v) {
-    Int(512) pp = (Int(512)) fe_p();
-    if (v >= pp) {
-        Int(512) r = v - pp;
-        return r;
-    }
-    return v;
-}
-pub Int(256) fe_add(Int(256) a, Int(256) b) {
-    Int(256) lim = fe_p() - b;
-    if (a >= lim) {
-        Int(256) r = a - lim;
-        return r;
-    }
-    Int(256) s = a + b;
-    return s;
-}
+
+pub Int(256) cond_sub(Int(256) v) { return fe_n(fe_csub(fe_w(v), fe_pw())); }
+pub Int(256) cond_sub2(Int(256) v) { return cond_sub(cond_sub(v)); }
+pub Int(256) cond_sub_l(Int(256) v) { return fe_n(fe_csub(fe_w(v), fe_lw())); }
+pub Int(512) cs512(Int(512) v) { return (Int(512)) fe_n(fe_csub((UInt(576)) wrapping_u512(v), fe_pw())); }
+
+pub Int(256) fe_add(Int(256) a, Int(256) b) { return fe_n(fe_csub(wrapping_uadd(fe_w(a), fe_w(b)), fe_pw())); }
 pub Int(256) fe_sub(Int(256) a, Int(256) b) {
-    if (a >= b) {
-        Int(256) r = a - b;
-        return r;
-    }
-    Int(256) pb = fe_p() - b;
-    Int(256) s = a + pb;
-    return s;
+    return fe_n(fe_csub(wrapping_usub(wrapping_uadd(fe_w(a), fe_pw()), fe_w(b)), fe_pw()));
 }
 pub Int(512) mask512() {
     Int(512) o = 1;
     Int(512) hs = 256;
     return (o << hs) - o;
 }
+
+// a * b mod p: fold the high half in three times (2^256 = 38 mod p),
+// leaving less than 3p, then two masked subtractions.
 pub Int(256) fe_mul(Int(256) a, Int(256) b) {
-    Int(512) aa = (Int(512)) a;
-    Int(512) bb = (Int(512)) b;
-    Int(512) t = aa * bb;
-    Int(512) m = mask512();
-    Int(512) lo = t & m;
-    Int(512) hs = 256;
-    Int(512) hi = t >> hs;
-    Int(512) k38 = 38;
-    Int(512) r = lo + hi * k38;
-    Int(512) lo2 = r & m;
-    Int(512) hi2 = r >> hs;
-    Int(512) r2 = lo2 + hi2 * k38;
-    Int(512) c = r2 >> hs;
-    Int(512) r3 = (r2 & m) + c * k38;
-    Int(512) q1 = cs512(r3);
-    Int(512) q2 = cs512(q1);
-    Int(256) v = (Int(256)) q2;
-    return cond_sub2(v);
+    UInt(576) t = wrapping_umul(fe_w(a), fe_w(b));
+    UInt(576) k38 = 38;
+    UInt(576) r = wrapping_uadd(t & fe_m256(), wrapping_umul(t >> 256, k38));
+    UInt(576) r2 = wrapping_uadd(r & fe_m256(), wrapping_umul(r >> 256, k38));
+    UInt(576) r3 = wrapping_uadd(r2 & fe_m256(), wrapping_umul(r2 >> 256, k38));
+    return fe_n(fe_csub(fe_csub(r3, fe_pw()), fe_pw()));
 }
 pub Int(256) fe_sq(Int(256) a) {
     return fe_mul(a, a);
@@ -120,9 +97,8 @@ pub Int top7(Int i, Int raw) {
 }
 pub Int(256) b2a(List(Int) b, Int(256) v, Int i) {
     if (i < 0) { return v; }
-    Int(256) raw = (Int(256)) top7(i + 1, b[i]);
-    Int(256) t = v * 256;
-    Int(256) v2 = t + raw;
+    Int(256) raw = (Int(256)) (top7(i + 1, b[i]) & 255);
+    Int(256) v2 = (v << 8) | raw;
     Int ni = i - 1;
     return b2a(b, v2, ni);
 }
@@ -321,12 +297,19 @@ pub Ept ept_add(Ept p, Ept q) {
 }
 
 // [k]q, most significant bit first from bit i.
+// Every bit costs a doubling and an addition; the bit picks between them
+// with a mask (the formulas are complete, so adding the identity is fine).
 pub Ept ept_mul(Int(256) k, Ept q, Ept r, Int i) {
     if (i < 0) { return r; }
     Ept d = ept_dbl(r);
-    Int bit = i64((k >> ((Int(256)) i)) & 1);
-    if (bit == 1) { return ept_mul(k, q, ept_add(d, q), i - 1); }
-    return ept_mul(k, q, d, i - 1);
+    Int(256) m = wrapping_sub((Int(256)) 0, (Int(256)) ct_hide(wrapping_i64((k >> ((Int(256)) i)) & 1)));
+    return ept_mul(k, q, ept_sel(m, ept_add(d, q), d), i - 1);
+}
+
+// a when m is all ones, b when it is zero.
+Ept ept_sel(Int(256) m, Ept a, Ept b) {
+    Int(256) nm = m ^ wrapping_sub((Int(256)) 0, (Int(256)) 1);
+    return Ept {.x = (a.x & m) | (b.x & nm), .y = (a.y & m) | (b.y & nm), .z = (a.z & m) | (b.z & nm), .t = (a.t & m) | (b.t & nm)};
 }
 
 // The encoding of a point: y with the sign of x in the top bit.
@@ -469,10 +452,8 @@ pub Int(256) modl_acc(List(Int) dig, Int(256) v, Int j) {
     Int nb = j >> 3;
     Int rem = j - nb * 8;
     Int byte = dig[nb];
-    Int bit = ((byte >> rem) & 1);
-    Int(256) v2 = v * 2;
-    Int(256) v3 = v2 + bit;
-    Int(256) v4 = cond_sub_l(v3);
+    Int(256) bit = (Int(256)) ((byte >> rem) & 1);
+    Int(256) v4 = cond_sub_l(wrapping_add(wrapping_add(v, v), bit));
     Int ni = j - 1;
     return modl_acc(dig, v4, ni);
 }
@@ -525,23 +506,15 @@ pub Bool verify_sig(Str msg, List(Int) sig, List(Int) pubk) {
 }
 
 // ── deterministic signing (RFC 8032 §5.1.6) ──
-pub Int(512) cond_sub_l512(Int(512) v) {
-    Int(512) ll = (Int(512)) fe_l();
-    if (v >= ll) {
-        Int(512) r = v - ll;
-        return r;
-    }
-    return v;
-}
+pub Int(512) cond_sub_l512(Int(512) v) { return (Int(512)) fe_n(fe_csub((UInt(576)) wrapping_u512(v), fe_lw())); }
 // fold a 512-bit value down mod L, one bit at a time (MSB first)
 pub Int(256) mlw_acc(Int(256) v, Int(512) w, Int j) {
     if (j < 0) { return v; }
     Int(512) sh = j;
     Int(512) mw = ((w >> sh) & 1);
-    Int(512) v2 = v * 2;
-    Int(512) v3 = v2 + mw;
-    Int(512) v4 = cond_sub_l512(v3);
-    Int(256) v5 = (Int(256)) v4;
+    Int(512) v2 = (Int(512)) v;
+    Int(512) v4 = cond_sub_l512(wrapping_add(wrapping_add(v2, v2), mw));
+    Int(256) v5 = wrapping_i256(v4);
     Int ni = j - 1;
     return mlw_acc(v5, w, ni);
 }
@@ -560,8 +533,7 @@ pub Int(256) clamp_scalar(Int(256) s) {
 }
 pub List(Int) encode_pt_bytes(Int(256) axi, List(Int) ayb) {
     Int sign = i64(axi & 1);
-    Int last = ayb[31];
-    Int lb = last + sign * 128;
+    Int lb = ayb[31] | (sign << 7);
     List(Int) apre = slice_bytes(ayb, 0, 30);
     return apre.concat([lb]);
 }
@@ -594,9 +566,7 @@ pub List(Int) sign_msg_bytes(List(Int) seed, List(Int) mb) {
     // S = (r + k*a) mod L
     Int(512) kvx = (Int(512)) kv;
     Int(512) avx = (Int(512)) av2;
-    Int(512) pr = kvx * avx;
-    Int(512) rvx = (Int(512)) rv;
-    Int(512) sum = pr + rvx;
+    Int(512) sum = wrapping_add(wrapping_mul(kvx, avx), (Int(512)) rv);
     Int(256) sv = mod_l_w(sum);
     return concat_bytes(r_enc, int_to_bytes(sv));
 }

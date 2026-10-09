@@ -18,7 +18,7 @@ import "chain.resid";
 // -- handshake message walker ------------------------------------------
 
 pub Int tm_u24_at(List(Int) b, Int off) {
-    if (off + 2 > b.len() - 1) {
+    if (off < 0 || off + 2 > b.len() - 1) {
         return 0;
     }
     Int p1 = b[off] * 65536;
@@ -58,26 +58,31 @@ pub Int tm_ff_acc(List(Int) payload, Int pos, Int k) {
 }
 
 // start = index of a handshake message header; returns the start of the
-// next message, or 0 when the payload is exhausted.
+// next message, or -1 when the message there is truncated or the payload
+// is exhausted. (It used to return 0, which sent every walker back to the
+// first message: a peer that truncated its flight hung the reader.)
 pub Int tm_next(List(Int) payload, Int start) {
-    if (start + 4 > payload.len()) {
-        return 0;
+    if (start < 0 || start + 4 > payload.len()) {
+        return -1;
     }
     Int o1 = start + 1;
     Int mlen = tm_u24_at(payload, o1);
     Int o4 = start + 4;
     Int adv = o4 + mlen;
     if (adv > payload.len()) {
-        return 0;
+        return -1;
     }
     return adv;
 }
 
 pub Int tm_type_at(List(Int) payload, Int start) {
+    if (start < 0 || start >= payload.len()) { return -1; }
     return payload[start];
 }
 
+// The body of the message at start, or empty when it is truncated.
 pub List(Int) tm_body(List(Int) payload, Int start) {
+    if (tm_next(payload, start) < 0) { return []; }
     Int o1 = start + 1;
     Int mlen = tm_u24_at(payload, o1);
     return slice_seed(payload, adv0(start), mlen, []);
@@ -95,7 +100,7 @@ pub List(Int) tm_find(List(Int) payload, Int mtype, Int k) {
 }
 
 pub List(Int) tm_find_acc(List(Int) payload, Int pos, Int mtype, Int k, List(Int) acc) {
-    if (pos >= payload.len()) {
+    if (pos < 0 || pos >= payload.len()) {
         return acc;
     }
     Int t = tm_type_at(payload, pos);
@@ -116,7 +121,7 @@ pub Int tm_find_pos(List(Int) payload, Int mtype, Int k) {
 }
 
 pub Int tm_fp_acc(List(Int) payload, Int pos, Int mtype, Int k) {
-    if (pos >= payload.len()) {
+    if (pos < 0 || pos >= payload.len()) {
         return -1;
     }
     Int t = tm_type_at(payload, pos);
@@ -133,6 +138,7 @@ pub Int tm_fp_acc(List(Int) payload, Int pos, Int mtype, Int k) {
 
 // full handshake message bytes (header included)
 pub List(Int) tm_full_msg(List(Int) payload, Int start) {
+    if (tm_next(payload, start) < 0) { return []; }
     Int o1 = start + 1;
     Int mlen = tm_u24_at(payload, o1);
     Int total = mlen + 4;
@@ -219,7 +225,7 @@ List(Int) tls_client_exts(Str sni, List(Str) alpn, List(Int) share32) {
     // wish as the negotiated protocol has proved nothing at all.
     List(Int) e6 = if (alpn.len() == 0) { e5 } else { ts_ext_bytes(e5, 16, tls_alpn_ext_data(alpn)) };
     List(Int) e7 = ts_ext_bytes(e6, 43, [2, 3, 4]);
-    List(Int) e8 = ts_ext_bytes(e7, 13, ts_u16(8).concat(tls_client_sigalgs()));
+    List(Int) e8 = ts_ext_bytes(e7, 13, ts_u16(tls_client_sigalgs().len()).concat(tls_client_sigalgs()));
     List(Int) e9 = ts_ext_bytes(e8, 45, [1, 1]);
     return e9;
 }
@@ -248,16 +254,17 @@ List(Int) tls_ext_server_name(Str sni) {
     return ts_ext_bytes([], 0, ts_u16(entry.len()).concat(entry));
 }
 
-// What a server may sign with, best first: ECDSA P-256 (what this
-// repository's own server uses), Ed25519, then RSA-PSS and PKCS#1 for a
-// server that has no EC key.
+// What a server may sign with, best first: ECDSA P-256 and P-384, Ed25519,
+// RSA-PSS (rsaEncryption keys, then RSASSA-PSS keys), and the PKCS#1
+// codes, which TLS 1.3 allows only for signatures in certificates.
 List(Int) tls_client_sigalgs() {
-    List(Int) empty = [];
-    List(Int) a = empty.concat(ts_u16(1027));
-    List(Int) b = a.concat(ts_u16(2055));
-    List(Int) c = b.concat(ts_u16(2052));
-    List(Int) d = c.concat(ts_u16(1025));
-    return d;
+    List(Int) codes = [1027, 1283, 2055, 2052, 2053, 2054, 2057, 2058, 2059, 1025, 1281, 1537];
+    return ts_u16_list(codes, 0, []);
+}
+
+List(Int) ts_u16_list(List(Int) codes, Int i, List(Int) acc) {
+    if (i >= codes.len()) { return acc; }
+    return ts_u16_list(codes, i + 1, acc.concat(ts_u16(codes[i])));
 }
 // -- Certificate / CertificateVerify / Finished --------------------------
 
@@ -266,6 +273,7 @@ List(Int) tls_client_sigalgs() {
 pub List(Int) tm_cert_der(List(Int) body) {
     // body: u8 context-len || u24 total || u24 cert-len || DER ...
     Int clen = tm_u24_at(body, 4);
+    if (7 + clen > body.len()) { return []; }
     return slice_seed(body, 7, clen, []);
 }
 
@@ -319,17 +327,18 @@ List(List(Int)) tm_cert_list_acc(List(Int) body, Int p, Int end, List(List(Int))
 }
 
 pub Bool tm_is_ecdsa_cv(List(Int) cvbody) {
+    if (cvbody.len() < 2) { return false; }
     Int alg = cvbody[0] * 256 + cvbody[1];
-    return alg == 1027;
+    return alg == 1027 || alg == 1283;
 }
 
+// The signature of a CertificateVerify body (alg u16, length u16, bytes),
+// or empty when the length disagrees with what is there.
 pub List(Int) tm_cv_sig(List(Int) cvbody) {
-    // alg(u16) || sig-len(u16) || signature
-    Int hi = cvbody[2] * 256;
-    Int lo = cvbody[3];
-    Int slen = hi + lo;
-    Int off6 = 4;
-    return slice_seed(cvbody, off6, slen, []);
+    if (cvbody.len() < 4) { return []; }
+    Int slen = cvbody[2] * 256 + cvbody[3];
+    if (slen == 0 || 4 + slen != cvbody.len()) { return []; }
+    return cvbody[4..];
 }
 
 // TLS 1.3 CertificateVerify signed content:
@@ -349,66 +358,36 @@ pub List(Int) tm_cv_content(List(Int) thash) {
     return sconcat(p2, thash);
 }
 
-// verify a TLS 1.3 CertificateVerify body against the transcript hash
-// and the leaf certificate; dispatches on the signature algorithm:
-//   0x0403 (1027) ecdsa_secp256r1_sha256
-//   0x0804 (2052) rsa_pss_rsae_sha256
+// The signature algorithm a TLS 1.3 SignatureScheme names, for a key of
+// the given kind (RFC 8446 §4.2.3). ECDSA schemes fix the curve as well
+// as the hash; rsa_pss_rsae_* need an rsaEncryption key and
+// rsa_pss_pss_* an RSASSA-PSS one. PKCS#1 is not a CertificateVerify
+// scheme in TLS 1.3, so it is kind 0 here.
+pub SigAlg tls_scheme_alg(Int code, PubKey key) {
+    Bool ec256 = key.kind == pubkey_ec() && curve_bytes(key.curve) == 32;
+    Bool ec384 = key.kind == pubkey_ec() && curve_bytes(key.curve) == 48;
+    Bool rsae = key.kind == pubkey_rsa() && !key.pss_only;
+    Bool rsap = key.kind == pubkey_rsa() && key.pss_only;
+    if (code == 1027 && ec256) { return SigAlg {.kind = sigalg_ecdsa(), .hash = Sha256, .mgf = Sha256, .salt = 0}; }
+    if (code == 1283 && ec384) { return SigAlg {.kind = sigalg_ecdsa(), .hash = Sha384, .mgf = Sha384, .salt = 0}; }
+    if (code == 2055 && key.kind == pubkey_ed25519()) { return SigAlg {.kind = sigalg_ed25519(), .hash = Sha512, .mgf = Sha512, .salt = 0}; }
+    if ((code == 2052 && rsae) || (code == 2057 && rsap)) { return SigAlg {.kind = sigalg_pss(), .hash = Sha256, .mgf = Sha256, .salt = 32}; }
+    if ((code == 2053 && rsae) || (code == 2058 && rsap)) { return SigAlg {.kind = sigalg_pss(), .hash = Sha384, .mgf = Sha384, .salt = 48}; }
+    if ((code == 2054 && rsae) || (code == 2059 && rsap)) { return SigAlg {.kind = sigalg_pss(), .hash = Sha512, .mgf = Sha512, .salt = 64}; }
+    return sigalg_none();
+}
+
+// Verify a TLS 1.3 server CertificateVerify body against the transcript
+// hash and the leaf certificate: the scheme it names, the key the leaf
+// carries, nothing assumed.
 pub Bool tm_verify_cv(List(Int) cvbody, List(Int) cert_der, List(Int) thash) {
-    Int alg = cvbody[0] * 256 + cvbody[1];
-    Bool isec = alg == 1027;
-    if (isec) {
-        List(Int) sig = tm_cv_sig(cvbody);
-        List(Int) content = tm_cv_content(thash);
-        List(Int) keyb = cert_pubkey_bits(cert_der);
-        // strip the BIT STRING unused-bits octet: 04 || X || Y
-        List(Int) keyb2 = slice_seed(keyb, 0, 66, []);
-        return tm_ecdsa_verify_sha256(content, keyb2, sig);
-    }
-    Bool ispss = alg == 2052;
-    if (ispss) {
-        List(Int) sig = tm_cv_sig(cvbody);
-        List(Int) content = tm_cv_content(thash);
-        List(Int) keyb = cert_pubkey_bits(cert_der);
-        return rsa_pss_verify_sha256(content, keyb, sig);
-    }
-    return false;
+    List(Int) sig = tm_cv_sig(cvbody);
+    if (sig.len() == 0) { return false; }
+    PubKey key = match x509_parse(cert_der) { Ok(c) => c.key, Err(e) => pubkey_none() };
+    SigAlg alg = tls_scheme_alg(cvbody[0] * 256 + cvbody[1], key);
+    return sig_verify(alg, key, tm_cv_content(thash), sig);
 }
 
-// -- direct ECDSA P-256 CV verification --------------------------------
-
-pub Int(256) tm_be_acc(List(Int) b, Int idx, Int end, Int(256) v) {
-    if (idx >= end) { return v; }
-    Int byte = b[idx];
-    Int(256) bv = (Int(256)) byte;
-    Int(256) shifted = v << 8;
-    Int(256) v2 = shifted | bv;
-    Int ni = idx + 1;
-    return tm_be_acc(b, ni, end, v2);
-}
-
-pub Int(256) tm_be256(List(Int) b, Int off, Int n) {
-    Int end = off + n;
-    return tm_be_acc(b, off, end, 0);
-}
-
-// verify ECDSA-P256/SHA256: content bytes, keyb = 00|04|X|Y bit-string
-// content, sig = DER SEQUENCE { r, s }
-pub Bool tm_ecdsa_verify_sha256(List(Int) content, List(Int) keyb, List(Int) sig) {
-    List(Int) digest = sha256_bytes(content);
-    Int(256) eint = ec_from_be(digest);
-    Int rlen = sig[3];
-    Int(256) r = tm_be256(sig, 4, rlen);
-    Int stag = 5 + rlen;
-    Int slen = sig[stag];
-    Int soff = stag + 1;
-    Int(256) sv = tm_be256(sig, soff, slen);
-    List(Int) kbx = slice_seed(keyb, 2, 32, []);
-    List(Int) kby = slice_seed(keyb, 34, 32, []);
-    Int(256) qx = ec_from_be(kbx);
-    Int(256) qy = ec_from_be(kby);
-    Int(256) vx = ecdsa_vx(eint, r, sv, qx, qy);
-    return vx == r;
-}
 // reverse linear scan: Finished is the final handshake message of the
 // flight, so search from the end
 pub Int tm_find_fin_last(List(Int) payload) {

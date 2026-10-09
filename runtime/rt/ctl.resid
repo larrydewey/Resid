@@ -32,18 +32,25 @@ Int rt_fail(Int msg, Int at) {
         _ = st64(catch_msg(), if (msg != 0) { msg } else { resid_raw_addr("region abort") });
         return c_longjmp(jb, 1);
     }
+    // At top level: the message goes straight to stderr, with no
+    // allocation, so a failure inside the allocator (or an abort while
+    // aborting) cannot recurse into the code that failed.
+    Int depth = resid_raw_tls("rt_failing", 8);
+    _ = st64(depth, ld64(depth) + 1);
+    _ = if (ld64(depth) > 1) { fail_put(resid_raw_addr("resid: abort while aborting\n")) + c_libc_abort() } else { 0 };
     _ = term_exit();
-    Int sb = rt_sb_new();
     Bool hasmsg = msg != 0 && ld8(msg) != 0;
     Bool hasat = at != 0 && ld8(at) != 0;
-    _ = sb_lit(sb, resid_raw_addr("resid: abort"));
-    _ = if (hasat) { sb_lit(sb, resid_raw_addr(": ")) + sb_lit(sb, if (hasmsg) { msg } else { resid_raw_addr("abort") }) + sb_lit(sb, resid_raw_addr(" (")) + sb_lit(sb, at) + sb_lit(sb, resid_raw_addr(")")) } else { 0 };
-    _ = if (!hasat && hasmsg) { sb_lit(sb, resid_raw_addr(": ")) + sb_lit(sb, msg) } else { 0 };
-    _ = sb_lit(sb, resid_raw_addr("\n"));
-    Int text = rt_sb_finish(sb);
-    _ = write_all(2, text, c_strlen(text));
+    Int m = if (hasmsg) { msg } else { resid_raw_addr("abort") };
+    _ = fail_put(resid_raw_addr("resid: abort"));
+    _ = if (hasat || hasmsg) { fail_put(resid_raw_addr(": ")) + fail_put(m) } else { 0 };
+    _ = if (hasat) { fail_put(resid_raw_addr(" (")) + fail_put(at) + fail_put(resid_raw_addr(")")) } else { 0 };
+    _ = fail_put(resid_raw_addr("\n"));
     return c_libc_abort();
 }
+
+// A C string to stderr, unbuffered and without allocating.
+Int fail_put(Int text) { return if (write_all(2, text, c_strlen(text))) { 1 } else { 0 }; }
 
 @export("resid_abort", "void(ptr)")
 pub Int rt_abort_msg(Int msg) { return rt_fail(msg, 0); }

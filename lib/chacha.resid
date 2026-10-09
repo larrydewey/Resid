@@ -13,11 +13,7 @@ import "crypto.resid";
 // ── little-endian helpers ────────────────────────────────────────────
 
 pub Int le32_at(List(Int) b, Int off) {
-    Int b0 = b[off];
-    Int b1 = b[off + 1] * 256;
-    Int b2 = b[off + 2] * 65536;
-    Int b3 = b[off + 3] * 16777216;
-    return b0 + b1 + b2 + b3;
+    return (b[off] & 255) | ((b[off + 1] & 255) << 8) | ((b[off + 2] & 255) << 16) | ((b[off + 3] & 255) << 24);
 }
 
 pub Int m32() {
@@ -67,10 +63,7 @@ pub List(Int) cc_state(List(Int) key, Int counter, List(Int) nonce) {
     return cc_state_build(key, counter, nonce, 0, []);
 }
 
-pub Int qr_t(Int a, Int b) {
-    Int s = a + b;
-    return s & m32();
-}
+pub Int qr_t(Int a, Int b) { return wrapping_add(a, b) & m32(); }
 
 pub List(Int) quarter(List(Int) x, Int a, Int b, Int c, Int d) {
     Int xa = qr_t(x[a], x[b]);
@@ -139,8 +132,7 @@ pub List(Int) ser_acc(List(Int) w, Int i, Int n, List(Int) acc) {
 
 pub List(Int) cc_add_states(List(Int) a, List(Int) b, Int i) {
     if (i >= 16) { return b; }
-    Int s = a[i] + b[i];
-    Int v = s & m32();
+    Int v = wrapping_add(a[i], b[i]) & m32();
     List(Int) nb = ls_set(b, i, v);
     Int ni = i + 1;
     return cc_add_states(a, nb, ni);
@@ -151,70 +143,70 @@ pub List(Int) cc_add_states(List(Int) a, List(Int) b, Int i) {
 // n double rounds from x0..x15; then the initial state (st, with ctr as
 // word 12) added back. No list is built per quarter round.
 pub List(Int) cc_core(List(Int) st, Int ctr, Int n, Int x0, Int x1, Int x2, Int x3, Int x4, Int x5, Int x6, Int x7, Int x8, Int x9, Int x10, Int x11, Int x12, Int x13, Int x14, Int x15) {
-    if (n == 0) { return [(x0 + st[0]) & 4294967295, (x1 + st[1]) & 4294967295, (x2 + st[2]) & 4294967295, (x3 + st[3]) & 4294967295, (x4 + st[4]) & 4294967295, (x5 + st[5]) & 4294967295, (x6 + st[6]) & 4294967295, (x7 + st[7]) & 4294967295, (x8 + st[8]) & 4294967295, (x9 + st[9]) & 4294967295, (x10 + st[10]) & 4294967295, (x11 + st[11]) & 4294967295, (x12 + ctr) & 4294967295, (x13 + st[13]) & 4294967295, (x14 + st[14]) & 4294967295, (x15 + st[15]) & 4294967295]; }
-    Int x0c1 = (x0 + x4) & 4294967295;
+    if (n == 0) { return [wrapping_add(x0, st[0]) & 4294967295, wrapping_add(x1, st[1]) & 4294967295, wrapping_add(x2, st[2]) & 4294967295, wrapping_add(x3, st[3]) & 4294967295, wrapping_add(x4, st[4]) & 4294967295, wrapping_add(x5, st[5]) & 4294967295, wrapping_add(x6, st[6]) & 4294967295, wrapping_add(x7, st[7]) & 4294967295, wrapping_add(x8, st[8]) & 4294967295, wrapping_add(x9, st[9]) & 4294967295, wrapping_add(x10, st[10]) & 4294967295, wrapping_add(x11, st[11]) & 4294967295, wrapping_add(x12, ctr) & 4294967295, wrapping_add(x13, st[13]) & 4294967295, wrapping_add(x14, st[14]) & 4294967295, wrapping_add(x15, st[15]) & 4294967295]; }
+    Int x0c1 = wrapping_add(x0, x4) & 4294967295;
     Int x12c1 = rotl32(x12 ^ x0c1, 16);
-    Int x8c1 = (x8 + x12c1) & 4294967295;
+    Int x8c1 = wrapping_add(x8, x12c1) & 4294967295;
     Int x4c1 = rotl32(x4 ^ x8c1, 12);
-    Int x0c = (x0c1 + x4c1) & 4294967295;
+    Int x0c = wrapping_add(x0c1, x4c1) & 4294967295;
     Int x12c = rotl32(x12c1 ^ x0c, 8);
-    Int x8c = (x8c1 + x12c) & 4294967295;
+    Int x8c = wrapping_add(x8c1, x12c) & 4294967295;
     Int x4c = rotl32(x4c1 ^ x8c, 7);
-    Int x1c1 = (x1 + x5) & 4294967295;
+    Int x1c1 = wrapping_add(x1, x5) & 4294967295;
     Int x13c1 = rotl32(x13 ^ x1c1, 16);
-    Int x9c1 = (x9 + x13c1) & 4294967295;
+    Int x9c1 = wrapping_add(x9, x13c1) & 4294967295;
     Int x5c1 = rotl32(x5 ^ x9c1, 12);
-    Int x1c = (x1c1 + x5c1) & 4294967295;
+    Int x1c = wrapping_add(x1c1, x5c1) & 4294967295;
     Int x13c = rotl32(x13c1 ^ x1c, 8);
-    Int x9c = (x9c1 + x13c) & 4294967295;
+    Int x9c = wrapping_add(x9c1, x13c) & 4294967295;
     Int x5c = rotl32(x5c1 ^ x9c, 7);
-    Int x2c1 = (x2 + x6) & 4294967295;
+    Int x2c1 = wrapping_add(x2, x6) & 4294967295;
     Int x14c1 = rotl32(x14 ^ x2c1, 16);
-    Int x10c1 = (x10 + x14c1) & 4294967295;
+    Int x10c1 = wrapping_add(x10, x14c1) & 4294967295;
     Int x6c1 = rotl32(x6 ^ x10c1, 12);
-    Int x2c = (x2c1 + x6c1) & 4294967295;
+    Int x2c = wrapping_add(x2c1, x6c1) & 4294967295;
     Int x14c = rotl32(x14c1 ^ x2c, 8);
-    Int x10c = (x10c1 + x14c) & 4294967295;
+    Int x10c = wrapping_add(x10c1, x14c) & 4294967295;
     Int x6c = rotl32(x6c1 ^ x10c, 7);
-    Int x3c1 = (x3 + x7) & 4294967295;
+    Int x3c1 = wrapping_add(x3, x7) & 4294967295;
     Int x15c1 = rotl32(x15 ^ x3c1, 16);
-    Int x11c1 = (x11 + x15c1) & 4294967295;
+    Int x11c1 = wrapping_add(x11, x15c1) & 4294967295;
     Int x7c1 = rotl32(x7 ^ x11c1, 12);
-    Int x3c = (x3c1 + x7c1) & 4294967295;
+    Int x3c = wrapping_add(x3c1, x7c1) & 4294967295;
     Int x15c = rotl32(x15c1 ^ x3c, 8);
-    Int x11c = (x11c1 + x15c) & 4294967295;
+    Int x11c = wrapping_add(x11c1, x15c) & 4294967295;
     Int x7c = rotl32(x7c1 ^ x11c, 7);
-    Int x0cd1 = (x0c + x5c) & 4294967295;
+    Int x0cd1 = wrapping_add(x0c, x5c) & 4294967295;
     Int x15cd1 = rotl32(x15c ^ x0cd1, 16);
-    Int x10cd1 = (x10c + x15cd1) & 4294967295;
+    Int x10cd1 = wrapping_add(x10c, x15cd1) & 4294967295;
     Int x5cd1 = rotl32(x5c ^ x10cd1, 12);
-    Int x0cd = (x0cd1 + x5cd1) & 4294967295;
+    Int x0cd = wrapping_add(x0cd1, x5cd1) & 4294967295;
     Int x15cd = rotl32(x15cd1 ^ x0cd, 8);
-    Int x10cd = (x10cd1 + x15cd) & 4294967295;
+    Int x10cd = wrapping_add(x10cd1, x15cd) & 4294967295;
     Int x5cd = rotl32(x5cd1 ^ x10cd, 7);
-    Int x1cd1 = (x1c + x6c) & 4294967295;
+    Int x1cd1 = wrapping_add(x1c, x6c) & 4294967295;
     Int x12cd1 = rotl32(x12c ^ x1cd1, 16);
-    Int x11cd1 = (x11c + x12cd1) & 4294967295;
+    Int x11cd1 = wrapping_add(x11c, x12cd1) & 4294967295;
     Int x6cd1 = rotl32(x6c ^ x11cd1, 12);
-    Int x1cd = (x1cd1 + x6cd1) & 4294967295;
+    Int x1cd = wrapping_add(x1cd1, x6cd1) & 4294967295;
     Int x12cd = rotl32(x12cd1 ^ x1cd, 8);
-    Int x11cd = (x11cd1 + x12cd) & 4294967295;
+    Int x11cd = wrapping_add(x11cd1, x12cd) & 4294967295;
     Int x6cd = rotl32(x6cd1 ^ x11cd, 7);
-    Int x2cd1 = (x2c + x7c) & 4294967295;
+    Int x2cd1 = wrapping_add(x2c, x7c) & 4294967295;
     Int x13cd1 = rotl32(x13c ^ x2cd1, 16);
-    Int x8cd1 = (x8c + x13cd1) & 4294967295;
+    Int x8cd1 = wrapping_add(x8c, x13cd1) & 4294967295;
     Int x7cd1 = rotl32(x7c ^ x8cd1, 12);
-    Int x2cd = (x2cd1 + x7cd1) & 4294967295;
+    Int x2cd = wrapping_add(x2cd1, x7cd1) & 4294967295;
     Int x13cd = rotl32(x13cd1 ^ x2cd, 8);
-    Int x8cd = (x8cd1 + x13cd) & 4294967295;
+    Int x8cd = wrapping_add(x8cd1, x13cd) & 4294967295;
     Int x7cd = rotl32(x7cd1 ^ x8cd, 7);
-    Int x3cd1 = (x3c + x4c) & 4294967295;
+    Int x3cd1 = wrapping_add(x3c, x4c) & 4294967295;
     Int x14cd1 = rotl32(x14c ^ x3cd1, 16);
-    Int x9cd1 = (x9c + x14cd1) & 4294967295;
+    Int x9cd1 = wrapping_add(x9c, x14cd1) & 4294967295;
     Int x4cd1 = rotl32(x4c ^ x9cd1, 12);
-    Int x3cd = (x3cd1 + x4cd1) & 4294967295;
+    Int x3cd = wrapping_add(x3cd1, x4cd1) & 4294967295;
     Int x14cd = rotl32(x14cd1 ^ x3cd, 8);
-    Int x9cd = (x9cd1 + x14cd) & 4294967295;
+    Int x9cd = wrapping_add(x9cd1, x14cd) & 4294967295;
     Int x4cd = rotl32(x4cd1 ^ x9cd, 7);
     return cc_core(st, ctr, n - 1, x0cd, x1cd, x2cd, x3cd, x4cd, x5cd, x6cd, x7cd, x8cd, x9cd, x10cd, x11cd, x12cd, x13cd, x14cd, x15cd);
 }
@@ -231,7 +223,7 @@ pub ListBuf(Int) cc_xor_run(List(Int) st, Int ctr, List(Int) data, Int pos, List
     List(Int) w = cc_words(st, ctr);
     Int left = data.len() - pos;
     Int take = if (left < 64) { left } else { 64 };
-    return cc_xor_run(st, (ctr + 1) & 4294967295, data, pos + take, cc_xor_bytes(w, data, pos, 0, take, out));
+    return cc_xor_run(st, wrapping_add(ctr, 1) & 4294967295, data, pos + take, cc_xor_bytes(w, data, pos, 0, take, out));
 }
 
 pub ListBuf(Int) cc_xor_bytes(List(Int) w, List(Int) data, Int pos, Int k, Int take, ListBuf(Int) out) {
@@ -285,8 +277,7 @@ pub Int(256) dec_le_acc_w(List(Int) b, Int off, Int idx, Int(256) v) {
 
 pub List(Int) enc_le_wide(Int(256) v, Int n, List(Int) acc) {
     if (n == 0) { return acc; }
-    Int(256) bw = v & 255;
-    Int b = (Int) bw;
+    Int b = wrapping_i64(v & 255);
     List(Int) acc2 = acc.concat([b]);
     Int(256) rest = v >> 8;
     Int nn = n - 1;
@@ -338,19 +329,17 @@ pub Int(512) poly_p_wide() {
 
 // reduce t mod 2^130-5 where t < 2^257; result < p+11, canonicalized
 // by one conditional subtract of p
+// h mod 2^130 - 5 for h < 2^257, without a branch on h: two folds of
+// hi * 5 into the low 130 bits, then p subtracted under a mask taken from
+// the borrow (tests/ct).
 pub Int(256) poly_reduce(Int(512) t) {
     Int(512) mm = p130_m_wide();
-    Int(512) lo = t & mm;
-    Int(512) hi = t >> 130;
     Int(512) five = 5;
-    Int(512) h = lo + hi * five;
-    Int(512) lo2 = h & mm;
-    Int(512) hi2 = h >> 130;
-    Int(512) h2 = lo2 + hi2 * five;
-    Int(512) pv = poly_p_wide();
-    Int(512) sub = h2 - pv;
-    Int(512) hr = if (h2 >= pv) { sub } else { h2 };
-    return (Int(256)) hr;
+    Int(512) h = wrapping_add(t & mm, wrapping_mul(t >> 130, five));
+    Int(512) h2 = wrapping_add(h & mm, wrapping_mul(h >> 130, five));
+    Int(512) d = wrapping_sub(h2, poly_p_wide());
+    Int(512) neg = (Int(512)) ct_hide(wrapping_i64(d >> 511));
+    return wrapping_i256((h2 & neg) | (d & (neg ^ wrapping_sub((Int(512)) 0, (Int(512)) 1))));
 }
 
 // process one <=16-byte block: h = (h + n_with_2^128) * r mod p
@@ -359,13 +348,8 @@ pub Int(256) poly_block(Int(256) h, List(Int) msg, Int off, Int remaining, Int(2
     Int(256) n = dec_le_wide(msg, off, take);
     Int(256) one = 1;
     Int(256) shb = take * 8;
-    Int(256) term = one << shb;
-    Int(256) nb = n + term;
-    Int(256) sum = h + nb;
-    Int(512) tv = (Int(512)) sum;
-    Int(512) rv = (Int(512)) r;
-    Int(512) prod = tv * rv;
-    return poly_reduce(prod);
+    Int(256) sum = wrapping_add(h, wrapping_add(n, one << shb));
+    return poly_reduce(wrapping_mul((Int(512)) sum, (Int(512)) r));
 }
 
 pub Int(256) poly_blocks(Int(256) h, List(Int) msg, Int off, Int remaining, Int(256) r) {
@@ -390,8 +374,7 @@ pub List(Int) poly1305(List(Int) key, List(Int) msg) {
     Int(256) s = dec_le_wide(key, 16, 16);
     Int mlen = msg.len();
     Int(256) h = poly_blocks(0, msg, 0, mlen, r);
-    Int(256) tag_v = h + s;
-    Int(256) tag_m = tag_v & p128_mask_wide();
+    Int(256) tag_m = wrapping_add(h, s) & p128_mask_wide();
     return enc_le_wide(tag_m, 16, []);
 }
 
@@ -451,15 +434,22 @@ pub List(Int) chacha20poly1305_seal(List(Int) key, List(Int) nonce, List(Int) pl
 }
 
 pub Bool chacha20poly1305_open(List(Int) key, List(Int) nonce, List(Int) ct_and_tag, List(Int) aad) {
-    Int total = ct_and_tag.len();
-    Int clen = total - 16;
-    Int clen2 = (Int) clen;
-    List(Int) ct = slice_list(ct_and_tag, 0, clen2, []);
-    Int tstart = clen;
-    List(Int) tag = slice_list(ct_and_tag, tstart, 16, []);
-    List(Int) ks = chacha_block(key, 0, nonce);
-    List(Int) mackey = slice_list(ks, 0, 32, []);
-    List(Int) mi = aead_mac_input(aad, ct);
-    List(Int) expect = poly1305(mackey, mi);
-    return ct_equal(expect, tag);
+    return match chacha20poly1305_decrypt(key, nonce, ct_and_tag, aad) { Some(p) => true, None => false };
+}
+
+// The plaintext when the tag verifies (in constant time), None for a bad
+// tag, a key that is not 32 bytes, a nonce that is not 12, or an input
+// shorter than a tag. An empty plaintext is Some([]).
+pub Option(List(Int)) chacha20poly1305_decrypt(List(Int) key, List(Int) nonce, List(Int) ct_and_tag, List(Int) aad) {
+    Int clen = ct_and_tag.len() - 16;
+    if (key.len() != 32 || nonce.len() != 12 || clen < 0) { return None; }
+    List(Int) ct = ct_and_tag[0..clen];
+    List(Int) mackey = slice_list(chacha_block(key, 0, nonce), 0, 32, []);
+    if (!ct_equal(poly1305(mackey, aead_mac_input(aad, ct)), ct_and_tag[clen..])) { return None; }
+    return Some(chacha20_xor(key, 1, nonce, ct));
+}
+
+// The plaintext, or empty when the tag does not verify.
+pub List(Int) chacha20poly1305_open_bytes(List(Int) key, List(Int) nonce, List(Int) ct_and_tag, List(Int) aad) {
+    return chacha20poly1305_decrypt(key, nonce, ct_and_tag, aad) else { [] };
 }

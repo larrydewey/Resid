@@ -1,29 +1,12 @@
+import "p256.resid";
 
-import "ec256.resid";
-import "crypto.resid";
-
-List(Int) hb_acc(Str s, Int i, List(Int) acc) {
-    if (i >= str_len(s)) { return acc; }
-    Int c = str_char_at(s, i);
-    Int dhi = c - 87;
-    Int dlo = c - 48;
-    Int hi = if (c > 96) { dhi } else { dlo };
-    Int j = i + 1;
-    Int c2 = str_char_at(s, j);
-    Int ehi = c2 - 87;
-    Int elo = c2 - 48;
-    Int lo = if (c2 > 96) { ehi } else { elo };
-    Int byt = hi * 16 + lo;
-    List(Int) acc2 = acc.concat([byt]);
-    Int ni = i + 2;
-    return hb_acc(s, ni, acc2);
-}
-List(Int) hb(Str s) { return hb_acc(s, 0, []); }
-
+// Scalars are unsigned: the all-ones 256-bit value must compare above
+// zero, which a signed compare of the same bits gets backwards.
 Int main() {
-    Int(256) a = ec_from_be(hb("0000000000000000000000000000000000000000000000000000000000000000"));
-    Int(256) b = ec_from_be(hb("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"));
-    Bool t = ec_ge(a, b);
-    if (!t) { println("ZERO-MAX OK"); } else { println("ZERO-MAX BAD"); }
+    List(Int) zero = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    List(Int) ones = [255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255];
+    UInt(576) a = p256_from_be(rt zero);
+    UInt(576) b = p256_from_be(rt ones);
+    if (a < b && !p256_scalar_ok(b) && !p256_scalar_ok(a)) { println("ZERO-MAX OK"); } else { println("ZERO-MAX BAD"); }
     return 0;
 }

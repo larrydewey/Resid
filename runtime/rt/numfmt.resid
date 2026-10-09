@@ -109,6 +109,21 @@ pub Int rt_int512_to_string(Int l0, Int l1, Int l2, Int l3, Int l4, Int l5, Int 
 @export("UInt512ToString", "ptr(i64,i64,i64,i64,i64,i64,i64,i64)")
 pub Int rt_uint512_to_string(Int l0, Int l1, Int l2, Int l3, Int l4, Int l5, Int l6, Int l7) { return limbs_to_str(limbs8(l0, l1, l2, l3, l4, l5, l6, l7), 8, false); }
 
+// An integer wider than 512 bits, given as `count` little-endian words at
+// p (already sign- or zero-extended to whole words), up to 128 words.
+@export("WideToString", "ptr(ptr,i64,i8)")
+pub Int rt_wide_to_string(Int p, Int count, Int signed) {
+    Int n = if (count > 128) { 128 } else { count };
+    Int w = resid_raw_tls("wide_limbs", 1024);
+    _ = mcopy(w, p, n * 8);
+    Bool neg = signed != 0 && ld64(w + (n - 1) * 8) < 0;
+    _ = if (neg) { limbs_negate(w, 0, n, 1) } else { 0 };
+    Int buf = resid_raw_tls("wide_buf", 2480);
+    Int q = limbs_digits(w, n, buf + 2476);
+    Int start = if (neg) { st8(q - 1, 45) + q - 1 } else { q };
+    return cstr_from(start, buf + 2476 - start, 1);
+}
+
 // A Float as the shortest text that reads back as the same value.
 @export("FloatToString", "ptr(double)")
 pub Int rt_float_to_string(Float v) {

@@ -861,7 +861,16 @@ Int ll_size(Str t) {
     if (t == "i128" || t == "fp128") { return 16; }
     if (t == "i256") { return 32; }
     if (t == "i512") { return 64; }
-    return 8;
+    return wide_int_words(t) * 8;
+}
+
+// 8-byte words of an LLVM integer type wider than 64 bits (i832 is 13),
+// else 1.
+Int wide_int_words(Str t) {
+    Int n = str_len(t);
+    if (n < 3 || str_char_at(t, 0) != 105 || !str_is_int(str_slice(t, 1, n))) { return 1; }
+    Int bits = str_parse_int(str_slice(t, 1, n));
+    return if (bits <= 64) { 1 } else { (bits + 63) / 64 };
 }
 
 Int fixed_bytes(Str ty) {
@@ -1599,7 +1608,7 @@ Int field_words(Str ty) {
     if (lt == "i128" || lt == "fp128") { return 2; }
     if (lt == "i256") { return 4; }
     if (lt == "i512") { return 8; }
-    return 1;
+    return wide_int_words(lt);
 }
 
 Int struct_words_at(Str fields, Int i, Int acc) {
@@ -3374,6 +3383,24 @@ Str tostr_argty(Str name) {
     return "UInt(512)";
 }
 
+// Display of an integer wider than 512 bits: extended to whole 64-bit
+// words in a frame slot, then WideToString(ptr, words, signed).
+GT tostr_wide(GT v) {
+    Int bits = ll_width_of(num_norm_cg(v.ty));
+    Int words = (bits + 63) / 64;
+    Bool u = fam_head(v.ty) == "UInt";
+    Str ll = ll_ty(v.ty);
+    Str wide = f"i{words * 64}";
+    Int t = v.tmp;
+    Str ext = f"%t{t + 1}";
+    Str slot = f"%t{t + 2}";
+    Str r = f"%t{t + 3}";
+    Str ext_line = if (wide == ll) { ext + " = add " + ll + " " + v.val + ", 0" } else { ext + " = " + pick_str(u, "zext", "sext") + " " + ll + " " + v.val + " to " + wide };
+    List(Str) ls = v.lines.concat([ext_line, fixed_alloca(slot, words * 8), "store " + wide + " " + ext + ", ptr " + slot,
+        r + " = call ptr @WideToString(ptr " + slot + f", i64 {words}, i8 " + pick_str(u, "0", "1") + ")"]);
+    return GT {.pos = v.pos, .val = r, .ty = "Str", .cnt = 0, .err = "", .glines = v.glines, .lines = ls, .tmp = t + 3, .lbl = v.lbl, .tail = false};
+}
+
 // Display of any value an f-string hole may hold (spec §14): every
 // integer width, Float(16..128), Bool, Str.
 Str tostr_fn_for(Str ty) {
@@ -4151,6 +4178,7 @@ GT fst_tostr(GT v) {
     if (v.ty == "Str") {
         return GT {.pos = v.pos, .val = v.val, .ty = "Str", .cnt = 0, .err = "", .glines = v.glines, .lines = v.lines, .tmp = v.tmp, .lbl = v.lbl, .tail = false};
     }
+    if (int_fam(v.ty) && ll_width_of(num_norm_cg(v.ty)) > 512) { return tostr_wide(v); }
     Str tfn = tostr_fn_for(v.ty);
     if (tfn != "") {
         return tostr_call(v, tfn, tostr_argty(tfn));

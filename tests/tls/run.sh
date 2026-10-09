@@ -386,6 +386,19 @@ if [ -n "$SRVPORT" ]; then
 else bad "https server did not report a port"; fi
 unserve
 
+# The same with a P-384 server key (CertificateVerify 0x0503) and an
+# Ed25519 one (0x0807): this client verifies both schemes.
+for kind in srv384:srvca srved:srvedca; do
+    leaf="${kind%%:*}"; ca="${kind##*:}"
+    serve 1 "$W/srv_$leaf.log" "$F/$leaf.pem" "$F/$leaf.key"
+    if [ -n "$SRVPORT" ]; then
+        LAST="$("$W/tlsclient" localhost "$SRVPORT" "$(hex_of "$F/$leaf.der")" "" "$F/$ca.pem" 2>&1)"
+        printf '%s\n' "$LAST" | grep -q "^REPLY: HTTP/1.1 200 OK" && ok \
+            || bad "resid client against the $leaf server: $(printf '%s' "$LAST" | tr '\n' ' ')"
+    else bad "https server did not report a port ($leaf)"; fi
+    unserve
+done
+
 # Clients that stall mid-handshake -- silent, or with half a ClientHello --
 # outnumber the server's two workers; the handshake is a step in each
 # worker's event loop, so this repository's client is still served.
@@ -422,10 +435,8 @@ else bad "https server did not report a port (2)"; fi
 unserve
 
 # openssl, when it is installed: the reference client against the ECDSA
-# server, then the Ed25519 one (this repository's own client verifies only
-# ECDSA-P256 and RSA-PSS CertificateVerifies, so openssl is what covers
-# the other algorithm end to end), and a version this server does not
-# speak.
+# P-256 server, the P-384 one and the Ed25519 one, and a version this
+# server does not speak.
 if command -v openssl > /dev/null; then
     serve 2 "$W/ossl_srv.log" "$F/srv.pem" "$F/srv.key"
     if [ -n "$SRVPORT" ]; then
@@ -441,6 +452,16 @@ if command -v openssl > /dev/null; then
         grep -qiE "alert|protocol version|error|no protocols" "$W/ossl12.out" && ok \
             || bad "TLS 1.2 should be refused: $(tail -2 "$W/ossl12.out" | tr '\n' ' ')"
     else bad "https server did not report a port (3)"; fi
+    unserve
+
+    serve 1 "$W/ossl_384.log" "$F/srv384.pem" "$F/srv384.key"
+    if [ -n "$SRVPORT" ]; then
+        printf 'GET /files/note.txt HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' \
+            | timeout 180 openssl s_client -connect 127.0.0.1:"$SRVPORT" -CAfile "$F/srvca.pem" \
+                -servername localhost -quiet > "$W/ossl384.out" 2>"$W/ossl384.err"
+        grep -q "served over tls" "$W/ossl384.out" && ok \
+            || bad "openssl against the P-384 server: $(tail -2 "$W/ossl384.out" | tr '\n' ' ') $(tail -1 "$W/ossl384.err")"
+    else bad "https server did not report a port (p384)"; fi
     unserve
 
     serve 1 "$W/ossl_ed.log" "$F/srved.pem" "$F/srved.key"

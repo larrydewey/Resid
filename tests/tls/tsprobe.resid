@@ -154,10 +154,7 @@ Int sig_main() {
     println("sigalg    = " + x509_sigalg_oid(cert));
     println("is_ca     = " + f"{x509_is_ca(cert)}");
     println("keycertsign = " + f"{x509_key_usage(cert, 5)}");
-    List(Int) tbsv = cert_tbs(cert);
-    List(Int) keyb = cert_pubkey_bits(cert);
-    List(Int) sigtlv = cert_elem(cert, 2);
-    println("sig_ok    = " + f"{x509_sig_ok(cert, x509_sigalg_pos(cert), tbsv, keyb, sigtlv)}");
+    println("sig_ok    = " + f"{x509_signed_by(cert, cert)}");
     println("chain_verify = " + f"{chain_verify(cert, cert, nowi)}");
     _ = now;
     return 0;

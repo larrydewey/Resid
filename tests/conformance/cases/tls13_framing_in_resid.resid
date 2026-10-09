@@ -3,6 +3,8 @@ import "tlsmsg.resid";
 import "tls.resid";
 import "crypto.resid";
 import "aesgcm.resid";
+import "ecdsa.resid";
+import "hash.resid";
 import "x25519.resid";
 import "chain.resid";
 
@@ -82,7 +84,7 @@ Int main() {
     List(Int) content = tm_cv_content(thcv);
     List(Int) keyb = cert_pubkey_bits(ecdsa_cert);
     List(Int) keyb2 = slice_seed(keyb, 0, 66, []);
-    Bool okcv = tm_ecdsa_verify_sha256(content, keyb2, ec_sig);
+    Bool okcv = ecdsa_verify(P256, Sha256, keyb2[1..], content, ec_sig) && tm_verify_cv([4, 3, 0, ec_sig.len()].concat(ec_sig), ecdsa_cert, thcv);
     if (okcv) { println("CV-ECDSA OK"); } else { println("CV-ECDSA BAD"); }
     return 0;
 }

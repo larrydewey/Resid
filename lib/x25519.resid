@@ -15,9 +15,10 @@ pub Int(256) xa24() {
 }
 
 // select b when cond != 0, else a (cswap primitive)
+// (cond is 0 or 1; a mask, not a branch, so the scalar bit stays hidden)
 pub Int(256) xs_sel(Int(256) cond, Int(256) a, Int(256) b) {
-    Int(256) r = if (cond != 0) { b } else { a };
-    return r;
+    Int(256) m = wrapping_sub((Int(256)) 0, (Int(256)) ct_hide(wrapping_i64(cond & 1)));
+    return (b & m) | (a & (m ^ wrapping_sub((Int(256)) 0, (Int(256)) 1)));
 }
 
 // ── little-endian byte decoders ──────────────────────────────────────
@@ -28,10 +29,9 @@ pub Int(256) xk_acc(List(Int) b, Int(256) v, Int i) {
     Int raw = b[i];
     Int c0 = if (i == 0) { raw & 248 } else { raw };
     Int c = if (i == 31) { (c0 & 127) | 64 } else { c0 };
-    Int(256) cv = (Int(256)) c;
-    Int(256) v2 = v * 256 + cv;
+    Int(256) cv = (Int(256)) (c & 255);
     Int ni = i - 1;
-    return xk_acc(b, v2, ni);
+    return xk_acc(b, (v << 8) | cv, ni);
 }
 
 // u-coordinate: mask bit 255 (byte31 &= 127)
@@ -39,10 +39,9 @@ pub Int(256) xu_acc(List(Int) b, Int(256) v, Int i) {
     if (i < 0) { return v; }
     Int raw = b[i];
     Int c = if (i == 31) { raw & 127 } else { raw };
-    Int(256) cv = (Int(256)) c;
-    Int(256) v2 = v * 256 + cv;
+    Int(256) cv = (Int(256)) (c & 255);
     Int ni = i - 1;
-    return xu_acc(b, v2, ni);
+    return xu_acc(b, (v << 8) | cv, ni);
 }
 
 pub Int(256) x_decode_k(List(Int) b) {
@@ -117,9 +116,36 @@ pub List(Int) x25519(List(Int) k_bytes, List(Int) u_bytes) {
     Int(512) m = x_mask_low();
     Int(512) xw = pz >> 256;
     Int(512) zw = pz & m;
-    Int(256) xx = (Int(256)) xw;
-    Int(256) zz = (Int(256)) zw;
+    Int(256) xx = wrapping_i256(xw);
+    Int(256) zz = wrapping_i256(zw);
     Int(256) inv = fe_inv(zz);
     Int(256) res = fe_mul(xx, inv);
     return int_to_bytes(res);
+}
+
+// The X25519 base point, u = 9.
+pub List(Int) x25519_base() {
+    return [9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+}
+
+// The public key of a 32-byte private key; empty for another length.
+pub List(Int) x25519_public(List(Int) priv) {
+    if (priv.len() != 32) { return []; }
+    return x25519(priv, x25519_base());
+}
+
+Int x_or_bytes(List(Int) b, Int i, Int acc) {
+    if (i >= b.len()) { return acc; }
+    return x_or_bytes(b, i + 1, acc | b[i]);
+}
+
+// Diffie-Hellman (RFC 7748 §6.1): the shared secret, or empty when either
+// input is not 32 bytes or the result is all zeros (a low-order peer
+// point, which every protocol on top must refuse). Whether it was zero is
+// the one fact made public.
+pub List(Int) x25519_shared(List(Int) priv, List(Int) peer) {
+    if (priv.len() != 32 || peer.len() != 32) { return []; }
+    List(Int) s = x25519(priv, peer);
+    if (ct_public(x_or_bytes(s, 0, 0)) == 0) { return []; }
+    return s;
 }

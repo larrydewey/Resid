@@ -1,0 +1,228 @@
+// probe.resid — runs one converted Wycheproof vector file (see
+// gen_vectors.py) through the library and reports every disagreement.
+//
+//   probe <vectors.txt>
+//
+// Prints one "FAIL <file> tc=<id> ..." line per test whose outcome differs
+// from the expected result ("acceptable" accepts either), then
+// "SUMMARY pass=<n> fail=<n> skip=<n>". Exit status 1 when anything failed.
+
+import "../../lib/hash.resid";
+import "../../lib/ecdsa.resid";
+import "../../lib/rsa.resid";
+import "../../lib/x509.resid";
+import "../../lib/aesgcm.resid";
+import "../../lib/chacha.resid";
+import "../../lib/x25519.resid";
+import "../../lib/ed25519.resid";
+import "../../lib/hpke.resid";
+import "../../lib/cosesig.resid";
+
+// ─── Hex ─────────────────────────────────────────────────────────────
+
+Int nib(Int c) {
+    if (c >= 48 && c <= 57) { return c - 48; }
+    if (c >= 97 && c <= 102) { return c - 87; }
+    if (c >= 65 && c <= 70) { return c - 55; }
+    return 0;
+}
+
+ListBuf(Int) unhex_acc(Str s, Int i, Int n, ListBuf(Int) acc) {
+    if (i + 1 >= n) { return acc; }
+    return unhex_acc(s, i + 2, n, acc.push(nib(str_char_at(s, i)) * 16 + nib(str_char_at(s, i + 1))));
+}
+
+List(Int) unhex(Str s) {
+    if (s == "-") { return []; }
+    return unhex_acc(s, 0, str_len(s), ListBuf()).finish();
+}
+
+HashAlg hash_named(Str s) {
+    if (s == "sha1") { return Sha1; }
+    if (s == "sha384") { return Sha384; }
+    if (s == "sha512") { return Sha512; }
+    return Sha256;
+}
+
+Curve curve_named(Str s) { return if (s == "p384") { P384 } else { P256 }; }
+
+// ─── One test ────────────────────────────────────────────────────────
+
+// The library's answer for test t under group g: 1 accepted, 0 refused,
+// -1 not run (a kind this probe does not cover).
+Int run_one(List(Str) g, List(Str) t) {
+    Str kind = g[1];
+    if (kind == "ecdsa") {
+        Curve c = curve_named(g[2]);
+        HashAlg h = hash_named(g[3]);
+        List(Int) pubkey = unhex(g[5]);
+        List(Int) msg = unhex(t[3]);
+        List(Int) sig = unhex(t[4]);
+        Bool ok = if (g[4] == "raw") { ecdsa_verify_raw(c, h, pubkey, msg, sig) } else { ecdsa_verify(c, h, pubkey, msg, sig) };
+        return if (ok) { 1 } else { 0 };
+    }
+    if (kind == "sign") {
+        Curve c = curve_named(g[2]);
+        HashAlg h = hash_named(g[3]);
+        List(Int) msg = unhex(t[4]);
+        List(Int) sig = ecdsa_sign_raw(c, h, unhex(t[3]), msg);
+        List(Int) pubkey = ec_public_key(c, unhex(t[3]));
+        Bool ok = ct_equal(sig, unhex(t[5])) && ecdsa_verify_raw(c, h, pubkey, msg, sig)
+            && ecdsa_verify(c, h, pubkey, msg, ecdsa_sign(c, h, unhex(t[3]), msg));
+        return if (ok) { 1 } else { 0 };
+    }
+    if (kind == "ecdh") {
+        Curve c = curve_named(g[2]);
+        PubKey k = spki_parse_der(unhex(t[3]));
+        Bool same = k.kind == pubkey_ec() && curve_bytes(k.curve) == curve_bytes(c);
+        List(Int) peer = if (g[3] == "point") { unhex(t[3]) } else { if (same) { k.point } else { [] } };
+        List(Int) shared = ecdh(c, unhex(t[4]), peer);
+        if (shared.len() == 0) { return 0; }
+        return if (ct_equal(shared, unhex(t[5]))) { 1 } else { 0 };
+    }
+    if (kind == "rsa1") {
+        RsaPub key = rsa_pub(unhex(g[3]), unhex(g[4]));
+        Bool ok = rsa_pkcs1_verify(hash_named(g[2]), key, unhex(t[3]), unhex(t[4]));
+        return if (ok) { 1 } else { 0 };
+    }
+    if (kind == "pss") {
+        RsaPub key = rsa_pub(unhex(g[5]), unhex(g[6]));
+        Bool ok = rsa_pss_verify(hash_named(g[2]), hash_named(g[3]), str_parse_int(g[4]), key, unhex(t[3]), unhex(t[4]));
+        return if (ok) { 1 } else { 0 };
+    }
+    if (kind == "gcm") {
+        if (g[3] != "128") { return 0 - 1; }
+        List(Int) key = unhex(t[3]);
+        List(Int) iv = unhex(t[4]);
+        List(Int) aad = unhex(t[5]);
+        List(Int) ctt = unhex(t[7]).concat(unhex(t[8]));
+        Option(List(Int)) pt = aes_gcm_decrypt(key, iv, ctt, aad);
+        Bool opened = match pt { Some(p) => ct_equal(p, unhex(t[6])), None => false };
+        // Sealing must give the same bytes whenever opening accepts.
+        Bool sealed = ct_equal(aes_gcm_seal(key, iv, unhex(t[6]), aad), ctt);
+        if (opened != sealed) { return 0 - 2; }
+        return if (opened) { 1 } else { 0 };
+    }
+    if (kind == "kw") {
+        List(Int) key = unhex(t[3]);
+        Option(List(Int)) pt = aes_key_unwrap(key, unhex(t[5]));
+        Bool opened = match pt { Some(p) => ct_equal(p, unhex(t[4])), None => false };
+        List(Int) w = aes_key_wrap(key, unhex(t[4]));
+        Bool sealed = w.len() > 0 && ct_equal(w, unhex(t[5]));
+        if (opened != sealed) { return 0 - 2; }
+        return if (opened) { 1 } else { 0 };
+    }
+    if (kind == "chacha") {
+        List(Int) key = unhex(t[3]);
+        List(Int) iv = unhex(t[4]);
+        if (key.len() != 32 || iv.len() != 12) { return 0; }
+        List(Int) aad = unhex(t[5]);
+        List(Int) ctt = unhex(t[7]).concat(unhex(t[8]));
+        Bool opened = chacha20poly1305_open(key, iv, ctt, aad) && ct_equal(chacha20poly1305_open_bytes(key, iv, ctt, aad), unhex(t[6]));
+        Bool sealed = ct_equal(chacha20poly1305_seal(key, iv, unhex(t[6]), aad), ctt);
+        if (opened != sealed) { return 0 - 2; }
+        return if (opened) { 1 } else { 0 };
+    }
+    if (kind == "x25519") {
+        List(Int) shared = x25519_shared(unhex(t[4]), unhex(t[3]));
+        if (shared.len() == 0) { return 0; }
+        return if (ct_equal(shared, unhex(t[5]))) { 1 } else { 0 };
+    }
+    if (kind == "ed25519") {
+        return if (verify_sig_bytes(unhex(t[3]), unhex(t[4]), unhex(g[2]))) { 1 } else { 0 };
+    }
+    if (kind == "hpke") { return run_hpke(g, t); }
+    if (kind == "hpkeo") {
+        HpkeSuite s = hpke_suite(str_parse_int(g[2]), str_parse_int(g[3]), str_parse_int(g[4]));
+        List(Int) blob = unhex(t[5]);
+        Int ne = if (s.kem == 17) { 97 } else { 65 };
+        if (blob.len() < ne) { return 0; }
+        Option(List(Int)) pt = hpke_open_with(s, blob[0..ne], unhex(g[5]), unhex(t[3]), [], blob[ne..]);
+        return match pt { Some(x) => if (ct_equal(x, unhex(t[4]))) { 1 } else { 0 }, None => 0 };
+    }
+    if (kind == "cose") {
+        PubKey key = if (g[2] == "ckey") { cose_key_public(unhex(g[3])) } else { spki_parse_der(unhex(g[3])) };
+        Option(List(Int)) p = cose_sign1_open(unhex(t[3]), key, []);
+        return match p { Some(x) => if (ct_equal(x, unhex(t[4]))) { 1 } else { 0 }, None => 0 };
+    }
+    if (kind == "hmac") {
+        HashAlg h = hash_named(g[2]);
+        Int tl = str_parse_int(g[3]);
+        List(Int) mac = hmac_bytes(h, unhex(t[3]), unhex(t[4]));
+        List(Int) want = unhex(t[5]);
+        if (want.len() != tl) { return 0; }
+        return if (ct_equal(mac[0..tl], want)) { 1 } else { 0 };
+    }
+    if (kind == "hkdf") {
+        HashAlg h = hash_named(g[2]);
+        Int size = str_parse_int(t[6]);
+        List(Int) okm = hkdf_with(h, unhex(t[4]), unhex(t[3]), unhex(t[5]), size);
+        if (okm.len() != size) { return 0; }
+        return if (ct_equal(okm, unhex(t[7]))) { 1 } else { 0 };
+    }
+    return 0 - 1;
+}
+
+// One RFC 9180 vector: the key schedule from the pinned ephemeral and
+// recipient keys must reproduce enc, key, base_nonce and exporter_secret,
+// and then the message (sealed by the sender, opened by the recipient) or
+// the export must match.
+Int run_hpke(List(Str) g, List(Str) t) {
+    HpkeSuite s = hpke_suite(str_parse_int(g[3]), str_parse_int(g[4]), str_parse_int(g[5]));
+    Int kem = s.kem;
+    HpkeKeyPair r = hpke_derive_keypair(kem, unhex(g[8]));
+    HpkeKeyPair snd = if (g[9] == "-") { HpkeKeyPair {.ok = true, .sk = [], .pk = []} } else { hpke_derive_keypair(kem, unhex(g[9])) };
+    List(Int) info = unhex(g[6]);
+    List(Int) psk = unhex(g[10]);
+    List(Int) psk_id = unhex(g[11]);
+    if (!r.ok || !ct_equal(r.pk, unhex(g[16]))) { return 0; }
+    HpkeSender se = hpke_setup_sender_full(s, r.pk, info, psk, psk_id, snd.sk, unhex(g[7]));
+    HpkeCtx rc = hpke_setup_receiver_full(s, se.enc, r.sk, info, psk, psk_id, snd.pk);
+    Bool sched = se.ctx.ok && rc.ok && ct_equal(se.enc, unhex(g[12])) && ct_equal(se.ctx.key, unhex(g[13]))
+        && ct_equal(se.ctx.base_nonce, unhex(g[14])) && ct_equal(rc.exporter, unhex(g[15]));
+    if (!sched) { return 0; }
+    if (t[3] == "x") {
+        List(Int) v = hpke_export(rc, unhex(t[4]), str_parse_int(t[5]));
+        return if (ct_equal(v, unhex(t[6])) && ct_equal(hpke_export(se.ctx, unhex(t[4]), str_parse_int(t[5])), v)) { 1 } else { 0 };
+    }
+    Int seq = str_parse_int(t[4]);
+    List(Int) aad = unhex(t[5]);
+    HpkeSealed sealed = hpke_seal(hpke_at_seq(se.ctx, seq), aad, unhex(t[6]));
+    HpkeOpened opened = hpke_open(hpke_at_seq(rc, seq), aad, unhex(t[7]));
+    // A tampered tag must not open.
+    List(Int) bad = unhex(t[7]).with(0, unhex(t[7])[0] ^ 1);
+    HpkeOpened forged = hpke_open(hpke_at_seq(rc, seq), aad, bad);
+    Bool ok = ct_equal(sealed.ct, unhex(t[7])) && opened.ok && ct_equal(opened.pt, unhex(t[6])) && !forged.ok && opened.ctx.seq == seq + 1;
+    return if (ok) { 1 } else { 0 };
+}
+
+type Tally = { Int pass; Int fail; Int skip; };
+
+@requires(filesystem(readonly))
+Tally run_lines(Str file, List(Str) lines, Int i, List(Str) g, Tally acc) {
+    if (i >= lines.len()) { return acc; }
+    Str line = lines[i];
+    if (line == "" || str_starts_with(line, "#")) { return run_lines(file, lines, i + 1, g, acc); }
+    List(Str) f = str_split(line, " ");
+    if (f[0] == "G") { return run_lines(file, lines, i + 1, f, acc); }
+    Int got = run_one(g, f);
+    Str want = f[2];
+    if (got == 0 - 2) { println("FAIL " + file + " tc=" + f[1] + " seal and open disagree"); }
+    if (got == 0 - 1) {
+        return run_lines(file, lines, i + 1, g, Tally {.pass = acc.pass, .fail = acc.fail, .skip = acc.skip + 1});
+    }
+    Bool right = want == "acceptable" || (want == "valid") == (got == 1);
+    if (!right) { println("FAIL " + file + " tc=" + f[1] + " want=" + want + f" got={got}"); }
+    Tally next = if (right) { Tally {.pass = acc.pass + 1, .fail = acc.fail, .skip = acc.skip} } else { Tally {.pass = acc.pass, .fail = acc.fail + 1, .skip = acc.skip} };
+    return run_lines(file, lines, i + 1, g, next);
+}
+
+@requires(args, filesystem(readonly))
+Int main() {
+    Str path = args.get(1);
+    List(Str) lines = str_split(filesystem.read_all(path), "\n");
+    List(Str) none = [];
+    Tally t = run_lines(path, lines, 0, none, Tally {.pass = 0, .fail = 0, .skip = 0});
+    println(f"SUMMARY pass={t.pass} fail={t.fail} skip={t.skip}");
+    return if (t.fail > 0) { 1 } else { 0 };
+}

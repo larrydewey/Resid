@@ -21,11 +21,16 @@
 // words 5-7 for the inline fast path.
 
 Int rg_page() { return 1048576; }
-Int rg_pages() { return 262144; }      // 256 GB of address space
+
+// Pages in the reserved range: 256 GB of address space where the system
+// grants it, else the largest of 64, 16, 4 or 1 GB that it does (valgrind
+// and tight overcommit limits refuse the first).
+Int rg_pages() { return ld64(rg_g() + 192); }
 
 // Process-wide words: 0 the range's base, 1 the next untouched page, 2 the
-// page table, 3 a lock, 4-22 the free runs of 2^k pages, 23 the last id.
-Int rg_g() { return resid_raw_global("rt_regions", 192); }
+// page table, 3 a lock, 4-22 the free runs of 2^k pages, 23 the last id,
+// 24 the range's size in pages.
+Int rg_g() { return resid_raw_global("rt_regions", 200); }
 
 Int rg_lock() {
     if (resid_raw_cas(rg_g() + 24, 0, 1)) { return 0; }
@@ -44,22 +49,33 @@ Int rg_base() {
 @cold
 Int rg_init() {
     _ = rg_lock();
-    _ = if (ld64(rg_g()) == 0) { rg_map() } else { 0 };
+    Int ok = if (ld64(rg_g()) == 0) { rg_map(262144) } else { 1 };
+    // Unlock before any abort: the abort path must not find the lock held.
     _ = rg_unlock();
+    _ = if (ok == 0) { rt_abort("cannot reserve region address space") } else { 0 };
     return ld64(rg_g());
 }
 
-Int rg_map() {
-    Int tab = rg_reserve(rg_pages() * 8);
-    Int base = rg_reserve(rg_pages() * rg_page());
-    _ = st64(rg_g() + 16, tab) + st64(rg_g() + 8, 0);
-    return st64(rg_g(), base);
+// Reserve `pages` pages and their table, halving twice per refusal down
+// to 1 GB; 0 when even that is refused.
+Int rg_map(Int pages) {
+    if (pages < 1024) { return 0; }
+    Int base = rg_reserve(pages * rg_page());
+    if (base == 0) { return rg_map(pages / 4); }
+    Int tab = rg_reserve(pages * 8);
+    if (tab == 0) {
+        _ = resid_raw_syscall(11, base, pages * rg_page(), 0, 0, 0, 0);   // munmap
+        return rg_map(pages / 4);
+    }
+    _ = st64(rg_g() + 192, pages) + st64(rg_g() + 16, tab) + st64(rg_g() + 8, 0);
+    return st64(rg_g(), base) * 0 + 1;
 }
 
-// Left out of core dumps until a region owns it (rg_dump).
+// Address space without memory behind it, left out of core dumps until a
+// region owns it (rg_dump); 0 when the system refuses.
 Int rg_reserve(Int n) {
     Int p = resid_raw_syscall(9, 0, n, 3, 16418, 0 - 1, 0);   // RW, PRIVATE|ANON|NORESERVE
-    if (p < 0 && p > 0 - 4096) { return rt_abort("cannot reserve region address space"); }
+    if (p < 0 && p > 0 - 4096) { return 0; }
     _ = resid_raw_syscall(28, p, n, 16, 0, 0, 0);              // MADV_DONTDUMP
     return p;
 }

@@ -3,8 +3,13 @@
 
 // Box layout: {tag i32, count i32, type ptr}, slots from +16; a scalar
 // box (tag -1) keeps its payload at +24.
-pub Bool box_imm(Int p) { return ult(p - 281474976710656, 36028797018963968); }
-pub Bool box_fimm(Int p) { return !ult(p, 72057594037927936); }
+// Both tests read only the top bits of p: an immediate's low bits are its
+// value, and a secret byte in a list must not steer a branch (tests/ct).
+// box_imm: 2^48 <= p < 2^48 + 2^55; box_fimm: p >= 2^56 (unsigned).
+// ct_hide keeps the optimizer from widening them back into one compare
+// of all 64 bits.
+pub Bool box_imm(Int p) { return ult(ct_hide(p >> 48) - 1, 128); }
+pub Bool box_fimm(Int p) { return ((ct_hide(p >> 48) >> 8) & 255) != 0; }
 pub Int imm_val(Int p) { return p - 18295873486192640; }
 pub Int sx32(Int v) { return (v << 32) >> 32; }
 pub Int box_tag(Int p) { return sx32(ld32(p)); }
