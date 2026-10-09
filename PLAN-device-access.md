@@ -1,6 +1,6 @@
 # Device Access — Implementation Plan (revision 1)
 
-**Status: PROPOSED (2026-10-09).** Not yet reviewed. Depends on
+**Status: PROPOSED (2026-10-09).** Under review; two open questions settled (§7). Depends on
 PLAN-secret-type.md for descriptors that return key material.
 
 **Goal**: let a Resid program talk to kernel devices (ioctls on character
@@ -69,6 +69,7 @@ All are plain Resid records in `lib/dev/`, reduced to KNOWN at compile time
 | `Transact` | `/dev/tpmrm0` (TPM 2.0 command/response) | open; write command; read response up to a declared maximum |
 | `ConfigfsReport` | `/sys/kernel/config/tsm/report` (SNP, TDX, Arm CCA, and any future TSM provider) | create a fresh entry; write `inblob` (and `privlevel`, `service_provider` when given); read `outblob`, `auxblob`, `manifestblob`, `provider`, `generation`; check `generation` did not change between write and read; remove the entry |
 | `ReadAttr` | read-only sysfs attributes the attesters need (for example the TSM provider name, NVIDIA CC mode state) | open; read up to a declared maximum |
+| `Sequence` | stateful interfaces where one call's output is the next call's input: NVIDIA's resource-manager objects (allocate a client, a device, the confidential-computing object, then make the control call) | open the path once; run the listed `Ioctl` steps in order in the same host; copy declared output fields of one step into declared input fields of a later step; return only the final step's declared outputs. Handles and intermediate structs never leave the host |
 
 An `Ioctl` descriptor's layout is a list of fields:
 
@@ -92,6 +93,14 @@ The compiler checks every descriptor (E0263, naming the field):
 - the architecture: request numbers that differ between x86-64 and AArch64 are
   given per target, and a descriptor without one for the build's target is
   refused.
+
+A `Sequence` is a list of `Ioctl` steps plus a list of links
+`Link(from_step, from_offset, to_step, to_offset, width)`. The compiler checks
+(E0264) that every link goes forward, reads a `Scalar` output of an earlier
+step and writes a `Scalar` input of a later one with the same width, and that
+only the last step has outputs visible to the program. The host keeps the fd
+open across the steps and closes it before replying. The seccomp filter allows
+each step's request number on that fd and nothing else.
 
 Pointer fields never reach the program. It supplies and receives buffer
 *contents* as `Bytes` (or `Secret(Bytes)` when the field is marked secret);
@@ -167,9 +176,35 @@ only the host's memory, never the program's.
 - `tpm`: `/dev/tpmrm0` transact (bare metal, NitroTPM, the Azure and Google
   vTPMs, including Azure's paravisor report in its NV index).
 - `nsm`: AWS Nitro Secure Module request/response ioctl.
-- `nvidia`: the confidential-computing attestation control calls of NVIDIA's
-  open kernel modules (versioned per driver release), and the PCI TSM/TDISP
-  interfaces as the kernel exposes them.
+- `pci_tsm`: the kernel's PCI TSM interfaces for TDISP device
+  authentication (sysfs, from Linux 6.19), through `ReadAttr` and, as the
+  device-assignment flow lands, `Ioctl`. This is the primary path for NVIDIA
+  Blackwell and later generations, and for any TDISP device: a stable kernel
+  interface, not a vendor driver's.
+- `nvidia_rm`: Hopper's attestation through NVIDIA's open kernel modules, as a
+  `Sequence`. This is the legacy path (§6.1).
+
+### 6.1 Driver-versioned descriptors (NVIDIA Hopper)
+
+The evidence a GPU returns (an SPDM measurements response and a certificate
+chain) is defined by DMTF, so parsing and verification never depend on the
+driver. Only the resource-manager calls that fetch it do. To keep driver
+releases from becoming code changes:
+
+1. **Generated, not written.** `tools/resid-devgen` reads the structs and
+   request codes it needs from `open-gpu-kernel-modules` at a release tag and
+   emits a descriptor module under `lib/dev/nvidia_rm/`. A new driver release
+   is a regenerated file and a reviewed diff. The generator's input list (which
+   structs, which commands) is itself checked in, so the review covers exactly
+   what changed.
+2. **Keyed by layout, not by release.** Each generated descriptor carries a
+   fingerprint of its layout. Releases that don't change the layout map to the
+   same descriptor, so most driver releases add only a table row.
+3. **Selected at run time, failing closed.** The wrapper first reads the loaded
+   driver's version (`ReadAttr`), picks the descriptor whose release range
+   covers it, and returns `Err(DeviceError::UnknownDriver(version))` when none
+   does. It never guesses a layout.
+
 
 ## 7. Open questions
 
@@ -177,7 +212,9 @@ only the host's memory, never the program's.
    The host creates the entry, applies a Landlock ruleset limited to that
    entry, then installs the seccomp filter. Where Landlock is unavailable the
    call fails closed (`Err(DeviceError)`), not open.
-2. NVIDIA control calls change between driver releases. Descriptors keyed by
-   driver version, with the version read first through `ReadAttr`?
+2. Settled (2026-10-09): PCI TSM is the primary path for new GPU generations;
+   Hopper uses generated descriptors keyed by layout and selected by driver
+   version at run time, failing closed (§6.1). Stateful driver interfaces use
+   the `Sequence` kind.
 3. Should the whole descriptor list appear in `residc --version` output, so an
    auditor can see the device surface of a given compiler?
