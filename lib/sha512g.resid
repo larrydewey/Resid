@@ -1,0 +1,198 @@
+// sha512g.resid — SHA-512 and SHA-384 (FIPS 180-4) generic over 64-bit
+// words (lib/word.resid's Word64(W, B)): one implementation for public
+// bytes (W = UInt(64), B = Int) and secret bytes (Secret(UInt(64)),
+// Secret(Int)). Messages and digests are byte lists, List(B); lengths are
+// public.
+
+import "word.resid";
+
+List(UInt(64)) sha512g_k() {
+    return [
+        (UInt(64)) 4794697086780616226, (UInt(64)) 8158064640168781261, (UInt(64)) 13096744586834688815, (UInt(64)) 16840607885511220156,
+        (UInt(64)) 4131703408338449720, (UInt(64)) 6480981068601479193, (UInt(64)) 10538285296894168987, (UInt(64)) 12329834152419229976,
+        (UInt(64)) 15566598209576043074, (UInt(64)) 1334009975649890238, (UInt(64)) 2608012711638119052, (UInt(64)) 6128411473006802146,
+        (UInt(64)) 8268148722764581231, (UInt(64)) 9286055187155687089, (UInt(64)) 11230858885718282805, (UInt(64)) 13951009754708518548,
+        (UInt(64)) 16472876342353939154, (UInt(64)) 17275323862435702243, (UInt(64)) 1135362057144423861, (UInt(64)) 2597628984639134821,
+        (UInt(64)) 3308224258029322869, (UInt(64)) 5365058923640841347, (UInt(64)) 6679025012923562964, (UInt(64)) 8573033837759648693,
+        (UInt(64)) 10970295158949994411, (UInt(64)) 12119686244451234320, (UInt(64)) 12683024718118986047, (UInt(64)) 13788192230050041572,
+        (UInt(64)) 14330467153632333762, (UInt(64)) 15395433587784984357, (UInt(64)) 489312712824947311, (UInt(64)) 1452737877330783856,
+        (UInt(64)) 2861767655752347644, (UInt(64)) 3322285676063803686, (UInt(64)) 5560940570517711597, (UInt(64)) 5996557281743188959,
+        (UInt(64)) 7280758554555802590, (UInt(64)) 8532644243296465576, (UInt(64)) 9350256976987008742, (UInt(64)) 10552545826968843579,
+        (UInt(64)) 11727347734174303076, (UInt(64)) 12113106623233404929, (UInt(64)) 14000437183269869457, (UInt(64)) 14369950271660146224,
+        (UInt(64)) 15101387698204529176, (UInt(64)) 15463397548674623760, (UInt(64)) 17586052441742319658, (UInt(64)) 1182934255886127544,
+        (UInt(64)) 1847814050463011016, (UInt(64)) 2177327727835720531, (UInt(64)) 2830643537854262169, (UInt(64)) 3796741975233480872,
+        (UInt(64)) 4115178125766777443, (UInt(64)) 5681478168544905931, (UInt(64)) 6601373596472566643, (UInt(64)) 7507060721942968483,
+        (UInt(64)) 8399075790359081724, (UInt(64)) 8693463985226723168, (UInt(64)) 9568029438360202098, (UInt(64)) 10144078919501101548,
+        (UInt(64)) 10430055236837252648, (UInt(64)) 11840083180663258601, (UInt(64)) 13761210420658862357, (UInt(64)) 14299343276471374635,
+        (UInt(64)) 14566680578165727644, (UInt(64)) 15097957966210449927, (UInt(64)) 16922976911328602910, (UInt(64)) 17689382322260857208,
+        (UInt(64)) 500013540394364858, (UInt(64)) 748580250866718886, (UInt(64)) 1242879168328830382, (UInt(64)) 1977374033974150939,
+        (UInt(64)) 2944078676154940804, (UInt(64)) 3659926193048069267, (UInt(64)) 4368137639120453308, (UInt(64)) 4836135668995329356,
+        (UInt(64)) 5532061633213252278, (UInt(64)) 6448918945643986474, (UInt(64)) 6902733635092675308, (UInt(64)) 7801388544844847127
+    ];
+}
+
+pub List(UInt(64)) sha512g_iv() { return [(UInt(64)) 7640891576956012808, (UInt(64)) 13503953896175478587, (UInt(64)) 4354685564936845355, (UInt(64)) 11912009170470909681, (UInt(64)) 5840696475078001361, (UInt(64)) 11170449401992604703, (UInt(64)) 2270897969802886507, (UInt(64)) 6620516959819538809]; }
+pub List(UInt(64)) sha384g_iv() { return [(UInt(64)) 14680500436340154072, (UInt(64)) 7105036623409894663, (UInt(64)) 10473403895298186519, (UInt(64)) 1526699215303891257, (UInt(64)) 7436329637833083697, (UInt(64)) 10282925794625328401, (UInt(64)) 15784041429090275239, (UInt(64)) 5167115440072839076]; }
+
+@needs(Word64(W, B))
+W g5_word_at(List(B) m, Int off) {
+    W z = d_lift((UInt(64)) 0);
+    return g5_word_acc(m, off, 0, z);
+}
+
+@needs(Word64(W, B))
+W g5_word_acc(List(B) m, Int off, Int j, W acc) {
+    if (j >= 8) { return acc; }
+    W low56 = d_lift((UInt(64)) 72057594037927935);
+    W shifted = d_and(acc, low56);
+    W byte = d_from_byte(m[off + j]);
+    return g5_word_acc(m, off, j + 1, d_xor(g5_shl8(shifted), byte));
+}
+
+// acc << 8, written with the verbs a word has (rotate, then clear the low byte).
+@needs(Word64(W, B))
+W g5_shl8(W x) {
+    W high = d_lift((UInt(64)) 18446744073709551360);
+    return d_and(d_rotr(x, 56), high);
+}
+
+@needs(Word64(W, B))
+W g5_s0(W x) { return d_xor(d_xor(d_rotr(x, 1), d_rotr(x, 8)), d_shr(x, 7)); }
+@needs(Word64(W, B))
+W g5_s1(W x) { return d_xor(d_xor(d_rotr(x, 19), d_rotr(x, 61)), d_shr(x, 6)); }
+@needs(Word64(W, B))
+W g5_b0(W x) { return d_xor(d_xor(d_rotr(x, 28), d_rotr(x, 34)), d_rotr(x, 39)); }
+@needs(Word64(W, B))
+W g5_b1(W x) { return d_xor(d_xor(d_rotr(x, 14), d_rotr(x, 18)), d_rotr(x, 41)); }
+@needs(Word64(W, B))
+W g5_ch(W e, W f, W g) { return d_xor(d_and(e, f), d_and(d_not(e), g)); }
+@needs(Word64(W, B))
+W g5_maj(W a, W b, W c) { return d_xor(d_xor(d_and(a, b), d_and(a, c)), d_and(b, c)); }
+
+// The state as a record and the schedule as a 16-word window in
+// parameters: a 64-bit secret word is never stored in a list, where values
+// of 2^54 or more are boxed (a branch on the value).
+type H8(W) = { W a; W b; W c; W d; W e; W f; W g; W h; };
+
+@needs(Word64(W, B))
+W g5_sched(List(B) m, Int base, Int i, W w0, W w1, W w9, W w14) {
+    if (i < 16) { return g5_word_at(m, base + i * 8); }
+    return d_add(d_add(g5_s1(w14), w9), d_add(g5_s0(w1), w0));
+}
+
+@needs(Word64(W, B))
+H8(W) g5_blk(List(B) m, Int base, List(UInt(64)) ks, Int i, H8(W) h0, W a, W b, W c, W d, W e, W f, W g, W h, W w0, W w1, W w2, W w3, W w4, W w5, W w6, W w7, W w8, W w9, W w10, W w11, W w12, W w13, W w14, W w15) {
+    if (i >= 80) {
+        return H8 {.a = d_add(h0.a, a), .b = d_add(h0.b, b), .c = d_add(h0.c, c), .d = d_add(h0.d, d), .e = d_add(h0.e, e), .f = d_add(h0.f, f), .g = d_add(h0.g, g), .h = d_add(h0.h, h)};
+    }
+    W wi = g5_sched(m, base, i, w0, w1, w9, w14);
+    W t1 = d_add(d_addk(d_add(d_add(h, g5_b1(e)), g5_ch(e, f, g)), ks[i]), wi);
+    W t2 = d_add(g5_b0(a), g5_maj(a, b, c));
+    return g5_blk(m, base, ks, i + 1, h0, d_add(t1, t2), a, b, c, d_add(d, t1), e, f, g, w1, w2, w3, w4, w5, w6, w7, w8, w9, w10, w11, w12, w13, w14, w15, wi);
+}
+
+@needs(Word64(W, B))
+pub H8(W) sha512g_block(List(B) m, Int base, H8(W) h) {
+    W z = d_lift((UInt(64)) 0);
+    return g5_blk(m, base, sha512g_k(), 0, h, h.a, h.b, h.c, h.d, h.e, h.f, h.g, h.h, z, z, z, z, z, z, z, z, z, z, z, z, z, z, z, z);
+}
+
+@needs(Word64(W, B))
+pub H8(W) sha512g_blocks(List(B) m, Int pos, Int total, H8(W) h) {
+    if (pos >= total) { return h; }
+    return sha512g_blocks(m, pos + 128, total, sha512g_block(m, pos, h));
+}
+
+// FIPS 180-4 §5.1.2 padding: 0x80, zeros, the 128-bit bit length.
+pub List(Int) sha512g_pad(Int len) {
+    Int total = ((len + 17 + 127) / 128) * 128;
+    return sha512g_pad_at(len, total - len - 17, 0, ListBuf()).finish();
+}
+
+ListBuf(Int) sha512g_pad_at(Int len, Int zeros, Int i, ListBuf(Int) acc) {
+    if (i == 0) { return sha512g_pad_at(len, zeros, 1, acc.push(128)); }
+    if (i <= zeros + 8) { return sha512g_pad_at(len, zeros, i + 1, acc.push(0)); }
+    if (i <= zeros + 16) {
+        Int sh = (zeros + 16 - i) * 8;
+        return sha512g_pad_at(len, zeros, i + 1, acc.push(if (sh >= 61) { 0 } else { ((len * 8) >> sh) & 255 }));
+    }
+    return acc;
+}
+
+@needs(Word64(W, B))
+List(B) g5_lift_bytes(List(Int) bs, Int i, ListBuf(B) acc) {
+    if (i >= bs.len()) { return acc.finish(); }
+    W wv = d_lift(wrapping_u64(bs[i]));
+    return g5_lift_bytes(bs, i + 1, acc.push(d_byte(wv, 0)));
+}
+
+@needs(Word64(W, B))
+H8(W) g5_lift_state(List(UInt(64)) v) {
+    return H8 {.a = d_lift(v[0]), .b = d_lift(v[1]), .c = d_lift(v[2]), .d = d_lift(v[3]), .e = d_lift(v[4]), .f = d_lift(v[5]), .g = d_lift(v[6]), .h = d_lift(v[7])};
+}
+
+@needs(Word64(W, B))
+W g5_state_word(H8(W) h, Int j) {
+    return if (j == 0) { h.a } else if (j == 1) { h.b } else if (j == 2) { h.c } else if (j == 3) { h.d } else if (j == 4) { h.e } else if (j == 5) { h.f } else if (j == 6) { h.g } else { h.h };
+}
+
+@needs(Word64(W, B))
+List(B) g5_out(H8(W) h, Int n, Int i, ListBuf(B) acc) {
+    if (i >= n) { return acc.finish(); }
+    return g5_out(h, n, i + 1, acc.push(d_byte(g5_state_word(h, i / 8), 56 - (i % 8) * 8)));
+}
+
+@needs(Word64(W, B))
+List(B) g5_hash(List(B) msg, List(UInt(64)) iv, Int outlen) {
+    ListBuf(B) pb = ListBuf();
+    ListBuf(B) ob = ListBuf();
+    List(B) padded = msg.concat(g5_lift_bytes(sha512g_pad(msg.len()), 0, pb));
+    H8(W) h0 = g5_lift_state(iv);
+    H8(W) h = sha512g_blocks(padded, 0, padded.len(), h0);
+    return g5_out(h, outlen, 0, ob);
+}
+
+@needs(Word64(W, B))
+pub List(B) sha512g(List(B) msg) { return g5_hash(msg, sha512g_iv(), 64); }
+
+@needs(Word64(W, B))
+pub List(B) sha384g(List(B) msg) { return g5_hash(msg, sha384g_iv(), 48); }
+
+// ─── HMAC-SHA-512 and HMAC-SHA-384 (RFC 2104, 128-byte blocks) ───
+
+@needs(Word64(W, B))
+List(B) g5_xor_pad(List(B) kb, Int x, Int i, ListBuf(B) acc) {
+    if (i >= kb.len()) { return acc.finish(); }
+    W xw = d_lift(wrapping_u64(x));
+    W kw = d_xor(d_from_byte(kb[i]), xw);
+    return g5_xor_pad(kb, x, i + 1, acc.push(d_byte(kw, 0)));
+}
+
+@needs(Word64(W, B))
+List(B) g5_hmac(List(B) key, List(B) msg, List(UInt(64)) iv, Int outlen) {
+    List(B) k = if (key.len() > 128) { g5_hash(key, iv, outlen) } else { key };
+    ListBuf(B) zb = ListBuf();
+    ListBuf(B) ib = ListBuf();
+    ListBuf(B) ob = ListBuf();
+    List(B) kb = k.concat(g5_lift_bytes(sha512g_zero_bytes(128 - k.len(), 0, ListBuf()), 0, zb));
+    List(B) inner = g5_hash(g5_xor_pad(kb, 54, 0, ib).concat(msg), iv, outlen);
+    return g5_hash(g5_xor_pad(kb, 92, 0, ob).concat(inner), iv, outlen);
+}
+
+List(Int) sha512g_zero_bytes(Int n, Int i, ListBuf(Int) acc) {
+    if (i >= n) { return acc.finish(); }
+    return sha512g_zero_bytes(n, i + 1, acc.push(0));
+}
+
+@needs(Word64(W, B))
+pub List(B) hmac512g(List(B) key, List(B) msg) { return g5_hmac(key, msg, sha512g_iv(), 64); }
+
+@needs(Word64(W, B))
+pub List(B) hmac384g(List(B) key, List(B) msg) { return g5_hmac(key, msg, sha384g_iv(), 48); }
+
+// Public bytes taking part in a computation on B.
+@needs(Word64(W, B))
+pub List(B) d_lift_bytes(List(Int) bs) {
+    ListBuf(B) acc = ListBuf();
+    return g5_lift_bytes(bs, 0, acc);
+}

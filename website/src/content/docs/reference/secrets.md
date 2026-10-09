@@ -71,7 +71,13 @@ the same code, compiled separately, at the cost of hand-written `Int` code.
 
 `lib/sha256g.resid` is the first such module: SHA-256, HMAC-SHA-256 and
 HKDF-SHA-256 for `List(T)` byte strings. `lib/crypto.resid`'s software
-SHA-256 block function is its public copy.
+SHA-256 block function is its public copy. `lib/sha512g.resid` does the
+same for SHA-512, SHA-384 and their HMACs over `Word64(W, B)` (64-bit
+words `W`, bytes `B`).
+
+A 64-bit secret word is never stored in a list: the runtime boxes list
+integers of 2^54 or more, which is a branch on the value. Generic code
+keeps such words in records and parameters; `tests/ct` checks it.
 
 ```text
 List(Secret(Int)) key = secret_split(secret(read_key()));

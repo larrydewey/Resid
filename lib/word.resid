@@ -64,3 +64,48 @@ pub List(T) w_lift_all(List(Int) bs, Int i, ListBuf(T) acc) {
 
 @needs(Word(T))
 pub List(T) w_concat(List(T) a, List(T) b) { return a.concat(b); }
+
+// ─── 64-bit words (SHA-512, SHA-384) ────────────────────────────
+// Word64(W, B): 64-bit words W and the bytes B they are read from and
+// written to; instances for public (UInt(64), Int) and secret
+// (Secret(UInt(64)), Secret(Int)) data. Conversions keep the low bits
+// (wrapping), so none of them can abort on a value.
+
+behavior Word64(W, B) {
+    W d_xor(W a, W b);
+    W d_and(W a, W b);
+    W d_add(W a, W b);          // modulo 2^64
+    W d_addk(W a, UInt(64) k);
+    W d_rotr(W x, Int n);       // 0 < n < 64
+    W d_shr(W x, Int n);
+    W d_not(W x);
+    W d_lift(UInt(64) k);
+    W d_from_byte(B b);         // a byte (0..255) as a word
+    B d_byte(W w, Int sh);      // the byte at bit sh
+}
+
+UInt(64) di_xor(UInt(64) a, UInt(64) b) { return a ^ b; }
+UInt(64) di_and(UInt(64) a, UInt(64) b) { return a & b; }
+UInt(64) di_add(UInt(64) a, UInt(64) b) { return wrapping_uadd(a, b); }
+UInt(64) di_addk(UInt(64) a, UInt(64) k) { return wrapping_uadd(a, k); }
+UInt(64) di_rotr(UInt(64) x, Int n) { return (x >> (UInt(64)) n) | (x << (UInt(64)) (64 - n)); }
+UInt(64) di_shr(UInt(64) x, Int n) { return x >> (UInt(64)) n; }
+UInt(64) di_not(UInt(64) x) { return x ^ (UInt(64)) 18446744073709551615; }
+UInt(64) di_lift(UInt(64) k) { return k; }
+UInt(64) di_from_byte(Int b) { return wrapping_u64(b & 255); }
+Int di_byte(UInt(64) w, Int sh) { return wrapping_i64((w >> (UInt(64)) sh) & (UInt(64)) 255); }
+
+Word64(UInt(64), Int) = { .d_xor = di_xor, .d_and = di_and, .d_add = di_add, .d_addk = di_addk, .d_rotr = di_rotr, .d_shr = di_shr, .d_not = di_not, .d_lift = di_lift, .d_from_byte = di_from_byte, .d_byte = di_byte };
+
+Secret(UInt(64)) ds_xor(Secret(UInt(64)) a, Secret(UInt(64)) b) { return a ^ b; }
+Secret(UInt(64)) ds_and(Secret(UInt(64)) a, Secret(UInt(64)) b) { return a & b; }
+Secret(UInt(64)) ds_add(Secret(UInt(64)) a, Secret(UInt(64)) b) { return wrapping_uadd(a, b); }
+Secret(UInt(64)) ds_addk(Secret(UInt(64)) a, UInt(64) k) { return wrapping_uadd(a, k); }
+Secret(UInt(64)) ds_rotr(Secret(UInt(64)) x, Int n) { return (x >> (UInt(64)) n) | (x << (UInt(64)) (64 - n)); }
+Secret(UInt(64)) ds_shr(Secret(UInt(64)) x, Int n) { return x >> (UInt(64)) n; }
+Secret(UInt(64)) ds_not(Secret(UInt(64)) x) { return x ^ (UInt(64)) 18446744073709551615; }
+Secret(UInt(64)) ds_lift(UInt(64) k) { return classify(k); }
+Secret(UInt(64)) ds_from_byte(Secret(Int) b) { return wrapping_u64(b & 255); }
+Secret(Int) ds_byte(Secret(UInt(64)) w, Int sh) { return wrapping_i64((w >> (UInt(64)) sh) & (UInt(64)) 255); }
+
+Word64(Secret(UInt(64)), Secret(Int)) = { .d_xor = ds_xor, .d_and = ds_and, .d_add = ds_add, .d_addk = ds_addk, .d_rotr = ds_rotr, .d_shr = ds_shr, .d_not = ds_not, .d_lift = ds_lift, .d_from_byte = ds_from_byte, .d_byte = ds_byte };
