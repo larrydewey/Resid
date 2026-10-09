@@ -38,7 +38,8 @@ Int main() {
 | Allowed, result secret | Refused |
 |---|---|
 | `&`, `\|`, `^` with integers; `<<` and `>>` by a public amount | `+ - *` (checked: overflow aborts, `E0254`) |
-| `wrapping_add`, `wrapping_sub`, `wrapping_mul` | `/`, `%`, comparisons, `&&`, `\|\|` (`E0255`) |
+| `wrapping_add`, `wrapping_sub`, `wrapping_mul`, `wrapping_i8` .. `wrapping_u512` conversions | `/`, `%`, comparisons, `&&`, `\|\|` (`E0255`) |
+| `ct_hide(x)` (an optimizer barrier for a mask) | |
 | reading a secret list at a public index | a secret index, range bound or shift amount (`E0255`) |
 | storing it in a record field or list | deciding an `if`, `while`, `match` or ternary (`E0255`) |
 | `ct_select(c, a, b)` with a `Secret(Bool)` `c` | methods, except a secret list's, bytes' or text's `.len()` (`E0255`) |
@@ -93,6 +94,27 @@ A 64-bit secret word is never stored in a list (`E0258`): generic code
 keeps such words in records and parameters, and `tests/ct` checks the
 result under valgrind.
 
+`lib/chachag.resid` is ChaCha20, Poly1305 and the ChaCha20-Poly1305 AEAD
+(RFC 8439), generic over `Word(W, B)` for the ChaCha words and
+`Wide512(P, B)` (also in `lib/word.resid`) for Poly1305: 512-bit
+integers, `Int(512)` or `Secret(Int(512))`, with wrapping arithmetic,
+public shifts, a sign mask and public constants. The accumulator and key
+live in parameters, never in a list. `lib/chacha.resid`'s API is the
+public copy. The nonce, the block counter, the associated data, every
+length and the received ciphertext are public (lifted into `B` with
+`w_lift_bytes`). Sealing at secret types returns a secret ciphertext and
+tag; the caller declassifies them to send them. Opening publishes one
+bit, whether the tag matched, through `CtSame(B)` in `lib/crypto.resid`:
+`ct_equal` at public bytes and `ct_eq` at secret bytes, so the secret copy
+needs `@requires(declassify)` and the public copy does not.
+
+```text
+List(Secret(UInt(8))) key = secret_bytes(read_key());
+List(Secret(UInt(8))) sealed = chacha20poly1305g_seal(key, nonce, secret_bytes(msg), aad);
+List(UInt(8)) wire = declassify(secret_join(sealed), "AEAD output is public");
+Option(List(Secret(UInt(8)))) opened = chacha20poly1305g_decrypt(key, nonce, received, aad);
+```
+
 ```text
 List(Secret(UInt(8))) key = secret_bytes(read_key());
 List(Secret(UInt(8))) prk = hkdf256g_extract(salt_lifted, key);
@@ -142,5 +164,5 @@ not covered. `main` runs on its own thread stack, which is.
 ## Not yet enforced
 
 `PLAN-secret-type.md` lists the rest of the plan: moving the rest of the
-cryptography library (SHA-512, ChaCha20-Poly1305, AES-GCM, X25519,
-Ed25519, P-256/P-384, HPKE, the TLS key schedule) onto `Word(T)`.
+cryptography library (AES-GCM, X25519, Ed25519, P-256/P-384, HPKE, the
+TLS key schedule) onto `Word(T)`.

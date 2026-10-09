@@ -19,8 +19,12 @@ are UInt(8). Step 2 of §7 has begun (2026-10-09), as option B: one generic
 implementation per primitive over `Word(T)` (`lib/word.resid`), checked by
 the compiler at `Secret(Int)`. `lib/sha256g.resid` (SHA-256, HMAC, HKDF) and
 `lib/sha512g.resid` (SHA-512/384 and their HMACs) are in, with
-`secret_split`, `secret_join` and `classify`; next are
-ChaCha20-Poly1305, AES-GCM, X25519, Ed25519, P-256/P-384, HPKE and the TLS
+`secret_split`, `secret_join` and `classify`. ChaCha20-Poly1305 is in
+(2026-10-09): `lib/chachag.resid`, generic over `Word(W, B)` and
+`Wide512(P, B)` (Poly1305 on `Int(512)` / `Secret(Int(512))` in
+parameters), with `lib/chacha.resid` as its public copy; open's verdict
+goes through `CtSame(B)` (`ct_eq` at secret bytes, so it needs
+`declassify`), and `ct_hide` is accepted on a secret. Next are AES-GCM, X25519, Ed25519, P-256/P-384, HPKE and the TLS
 key schedule. Still to do: a
 force-time `resid_cap_check("declassify")` (declassify lowers to nothing,
 so the static check is the whole check today), and steps 2–3 of §7.

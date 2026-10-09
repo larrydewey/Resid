@@ -684,6 +684,21 @@ Secret(UInt(8)) ct_eq_acc(Secret(List(UInt(8))) a, Secret(List(UInt(8))) b, Int 
     return ct_eq_acc(a, b, i + 1, acc | (a[i] ^ b[i]));
 }
 
+// CtSame(B): the constant-time equality verdict for generic code over
+// byte lists List(B) (lib/word.resid's byte types). At public bytes it is
+// ct_equal; at secret bytes it is ct_eq, which publishes one bit and so
+// needs the declassify grant -- carried to every caller of the secret copy,
+// and to no caller of the public one.
+behavior CtSame(B) { Bool ct_same(List(B) a, List(B) b); }
+
+Bool ct_same_pub(List(Int) a, List(Int) b) { return ct_equal(a, b); }
+
+@requires(declassify)
+Bool ct_same_secret(List(Secret(UInt(8))) a, List(Secret(UInt(8))) b) { return ct_eq(secret_join(a), secret_join(b)); }
+
+CtSame(Int) = ct_same_pub;
+CtSame(Secret(UInt(8))) = ct_same_secret;
+
 // ─── Base64 (RFC 4648 standard alphabet, padded) ────────────────
 
 pub Str b64_char(Int v) {

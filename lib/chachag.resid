@@ -1,0 +1,286 @@
+// chachag.resid — ChaCha20, Poly1305 and the ChaCha20-Poly1305 AEAD
+// (RFC 8439), written once and generic over lib/word.resid's Word(W, B)
+// (the 32-bit ChaCha words) and Wide512(P, B) (Poly1305's wide integers):
+// one implementation for public bytes (W = B = Int, P = Int(512)) and
+// secret bytes (Secret(UInt(32)) words, Secret(UInt(8)) bytes,
+// Secret(Int(512)) accumulators). The secret copy is checked by the
+// compiler (spec §48): no branch, index, comparison or division depends on
+// the key, the plaintext, the keystream or the MAC state.
+// lib/chacha.resid's public API is the public copy.
+//
+// Public by design: the nonce, the block counter, the associated data,
+// every length, the received ciphertext and tag (lifted into B with
+// w_lift_bytes), and open's verdict (one bit, published through
+// CtSame(B), which needs the declassify grant at secret types).
+//
+// ChaCha20 runs on the 16 state words as scalar parameters (cg_core), so no
+// list is built per quarter round. Poly1305 keeps its accumulator and key
+// in parameters (a wide secret never goes in a list, E0258); with the
+// clamped r < 2^124 every product stays below 2^255, two folds of hi * 5
+// over 2^130 leave h < p + 11, and p is subtracted under a sign mask.
+
+import "word.resid";
+import "crypto.resid";
+
+// ── ChaCha20 block function ─────────────────────────────────────────
+
+// A public little-endian 32-bit word (nonce words).
+Int cg_le32(List(Int) b, Int off) {
+    return (b[off] & 255) | ((b[off + 1] & 255) << 8) | ((b[off + 2] & 255) << 16) | ((b[off + 3] & 255) << 24);
+}
+
+// A little-endian key word.
+@needs(Word(W, B))
+W cg_key_word(List(B) key, Int off) {
+    return w_or(w_or(w_from_byte(key[off]), w_shl(w_from_byte(key[off + 1]), 8)), w_or(w_shl(w_from_byte(key[off + 2]), 16), w_shl(w_from_byte(key[off + 3]), 24)));
+}
+
+// The initial state for (key, counter, nonce): constants, key, counter,
+// nonce (RFC 8439 §2.3). Key and nonce are 32 and 12 bytes.
+@needs(Word(W, B))
+pub List(W) chachag_state(List(B) key, Int counter, List(Int) nonce) {
+    W c0 = w_lift(1634760805);
+    W c1 = w_lift(857760878);
+    W c2 = w_lift(2036477234);
+    W c3 = w_lift(1797285236);
+    W ctr = w_lift(counter & 4294967295);
+    W n0 = w_lift(cg_le32(nonce, 0));
+    W n1 = w_lift(cg_le32(nonce, 4));
+    W n2 = w_lift(cg_le32(nonce, 8));
+    return [c0, c1, c2, c3, cg_key_word(key, 0), cg_key_word(key, 4), cg_key_word(key, 8), cg_key_word(key, 12), cg_key_word(key, 16), cg_key_word(key, 20), cg_key_word(key, 24), cg_key_word(key, 28), ctr, n0, n1, n2];
+}
+
+// n double rounds (column, then diagonal quarter rounds) from x0..x15, then
+// the initial state st, with ctr as word 12, added back. rotl by 16, 12, 8,
+// 7 is rotr by 16, 20, 24, 25.
+@needs(Word(W, B))
+List(W) cg_core(List(W) st, W ctr, Int n, W x0, W x1, W x2, W x3, W x4, W x5, W x6, W x7, W x8, W x9, W x10, W x11, W x12, W x13, W x14, W x15) {
+    if (n == 0) { return [w_add(x0, st[0]), w_add(x1, st[1]), w_add(x2, st[2]), w_add(x3, st[3]), w_add(x4, st[4]), w_add(x5, st[5]), w_add(x6, st[6]), w_add(x7, st[7]), w_add(x8, st[8]), w_add(x9, st[9]), w_add(x10, st[10]), w_add(x11, st[11]), w_add(x12, ctr), w_add(x13, st[13]), w_add(x14, st[14]), w_add(x15, st[15])]; }
+    W x0c1 = w_add(x0, x4);
+    W x12c1 = w_rotr(w_xor(x12, x0c1), 16);
+    W x8c1 = w_add(x8, x12c1);
+    W x4c1 = w_rotr(w_xor(x4, x8c1), 20);
+    W x0c = w_add(x0c1, x4c1);
+    W x12c = w_rotr(w_xor(x12c1, x0c), 24);
+    W x8c = w_add(x8c1, x12c);
+    W x4c = w_rotr(w_xor(x4c1, x8c), 25);
+    W x1c1 = w_add(x1, x5);
+    W x13c1 = w_rotr(w_xor(x13, x1c1), 16);
+    W x9c1 = w_add(x9, x13c1);
+    W x5c1 = w_rotr(w_xor(x5, x9c1), 20);
+    W x1c = w_add(x1c1, x5c1);
+    W x13c = w_rotr(w_xor(x13c1, x1c), 24);
+    W x9c = w_add(x9c1, x13c);
+    W x5c = w_rotr(w_xor(x5c1, x9c), 25);
+    W x2c1 = w_add(x2, x6);
+    W x14c1 = w_rotr(w_xor(x14, x2c1), 16);
+    W x10c1 = w_add(x10, x14c1);
+    W x6c1 = w_rotr(w_xor(x6, x10c1), 20);
+    W x2c = w_add(x2c1, x6c1);
+    W x14c = w_rotr(w_xor(x14c1, x2c), 24);
+    W x10c = w_add(x10c1, x14c);
+    W x6c = w_rotr(w_xor(x6c1, x10c), 25);
+    W x3c1 = w_add(x3, x7);
+    W x15c1 = w_rotr(w_xor(x15, x3c1), 16);
+    W x11c1 = w_add(x11, x15c1);
+    W x7c1 = w_rotr(w_xor(x7, x11c1), 20);
+    W x3c = w_add(x3c1, x7c1);
+    W x15c = w_rotr(w_xor(x15c1, x3c), 24);
+    W x11c = w_add(x11c1, x15c);
+    W x7c = w_rotr(w_xor(x7c1, x11c), 25);
+    W x0cd1 = w_add(x0c, x5c);
+    W x15cd1 = w_rotr(w_xor(x15c, x0cd1), 16);
+    W x10cd1 = w_add(x10c, x15cd1);
+    W x5cd1 = w_rotr(w_xor(x5c, x10cd1), 20);
+    W x0cd = w_add(x0cd1, x5cd1);
+    W x15cd = w_rotr(w_xor(x15cd1, x0cd), 24);
+    W x10cd = w_add(x10cd1, x15cd);
+    W x5cd = w_rotr(w_xor(x5cd1, x10cd), 25);
+    W x1cd1 = w_add(x1c, x6c);
+    W x12cd1 = w_rotr(w_xor(x12c, x1cd1), 16);
+    W x11cd1 = w_add(x11c, x12cd1);
+    W x6cd1 = w_rotr(w_xor(x6c, x11cd1), 20);
+    W x1cd = w_add(x1cd1, x6cd1);
+    W x12cd = w_rotr(w_xor(x12cd1, x1cd), 24);
+    W x11cd = w_add(x11cd1, x12cd);
+    W x6cd = w_rotr(w_xor(x6cd1, x11cd), 25);
+    W x2cd1 = w_add(x2c, x7c);
+    W x13cd1 = w_rotr(w_xor(x13c, x2cd1), 16);
+    W x8cd1 = w_add(x8c, x13cd1);
+    W x7cd1 = w_rotr(w_xor(x7c, x8cd1), 20);
+    W x2cd = w_add(x2cd1, x7cd1);
+    W x13cd = w_rotr(w_xor(x13cd1, x2cd), 24);
+    W x8cd = w_add(x8cd1, x13cd);
+    W x7cd = w_rotr(w_xor(x7cd1, x8cd), 25);
+    W x3cd1 = w_add(x3c, x4c);
+    W x14cd1 = w_rotr(w_xor(x14c, x3cd1), 16);
+    W x9cd1 = w_add(x9c, x14cd1);
+    W x4cd1 = w_rotr(w_xor(x4c, x9cd1), 20);
+    W x3cd = w_add(x3cd1, x4cd1);
+    W x14cd = w_rotr(w_xor(x14cd1, x3cd), 24);
+    W x9cd = w_add(x9cd1, x14cd);
+    W x4cd = w_rotr(w_xor(x4cd1, x9cd), 25);
+    return cg_core(st, ctr, n - 1, x0cd, x1cd, x2cd, x3cd, x4cd, x5cd, x6cd, x7cd, x8cd, x9cd, x10cd, x11cd, x12cd, x13cd, x14cd, x15cd);
+}
+
+// The 16 output words of the block whose counter word is ctr.
+@needs(Word(W, B))
+List(W) cg_words(List(W) st, W ctr) {
+    return cg_core(st, ctr, 10, st[0], st[1], st[2], st[3], st[4], st[5], st[6], st[7], st[8], st[9], st[10], st[11], ctr, st[13], st[14], st[15]);
+}
+
+@needs(Word(W, B))
+List(B) cg_ser(List(W) w, Int k, ListBuf(B) acc) {
+    if (k >= 64) { return acc.finish(); }
+    return cg_ser(w, k + 1, acc.push(w_byte(w[k / 4], (k % 4) * 8)));
+}
+
+// The 64-byte keystream block for (key, counter, nonce).
+@needs(Word(W, B))
+pub List(B) chachag_block(List(B) key, Int counter, List(Int) nonce) {
+    List(W) st = chachag_state(key, counter, nonce);
+    ListBuf(B) acc = ListBuf();
+    return cg_ser(cg_words(st, st[12]), 0, acc);
+}
+
+@needs(Word(W, B))
+ListBuf(B) cg_xor_run(List(W) st, Int ctr, List(B) data, Int pos, ListBuf(B) out) {
+    if (pos >= data.len()) { return out; }
+    W cw = w_lift(ctr);
+    List(W) w = cg_words(st, cw);
+    Int left = data.len() - pos;
+    Int take = if (left < 64) { left } else { 64 };
+    return cg_xor_run(st, wrapping_add(ctr, 1) & 4294967295, data, pos + take, cg_xor_bytes(w, data, pos, 0, take, out));
+}
+
+@needs(Word(W, B))
+ListBuf(B) cg_xor_bytes(List(W) w, List(B) data, Int pos, Int k, Int take, ListBuf(B) out) {
+    if (k >= take) { return out; }
+    return cg_xor_bytes(w, data, pos, k + 1, take, out.push(b_xor(data[pos + k], w_byte(w[k / 4], (k % 4) * 8))));
+}
+
+// ChaCha20 encryption (and decryption) of data, starting at block `counter`.
+@needs(Word(W, B))
+pub List(B) chachag_xor(List(B) key, Int counter, List(Int) nonce, List(B) data) {
+    ListBuf(B) out = ListBuf();
+    return cg_xor_run(chachag_state(key, counter, nonce), counter & 4294967295, data, 0, out).finish();
+}
+
+// ── Poly1305 (RFC 8439 §2.5) ────────────────────────────────────────
+
+Int(512) pg_m130() { return ((Int(512)) 1 << (Int(512)) 130) - (Int(512)) 1; }
+Int(512) pg_p() { return ((Int(512)) 1 << (Int(512)) 130) - (Int(512)) 5; }
+Int(512) pg_m128() { return ((Int(512)) 1 << (Int(512)) 128) - (Int(512)) 1; }
+// r's clamp, 0x0ffffffc0ffffffc0ffffffc0fffffff.
+Int(512) pg_clamp() { return ((Int(512)) 1152921487695413244 << (Int(512)) 64) | (Int(512)) 1152921487695413247; }
+
+// n little-endian bytes of m from off, as a wide integer.
+@needs(Wide512(P, B))
+P pg_le(List(B) m, Int off, Int n, Int i, P acc) {
+    if (i >= n) { return acc; }
+    return pg_le(m, off, n, i + 1, p_or(acc, p_shl(p_from_byte(m[off + i]), 8 * i)));
+}
+
+// t mod 2^130 - 5 for 0 <= t < 2^257, without a branch on t: two folds of
+// hi * 5 into the low 130 bits, then p subtracted under the sign mask of
+// the difference.
+@needs(Wide512(P, B))
+P pg_reduce(P t) {
+    P mm = p_lift(pg_m130());
+    P five = p_lift((Int(512)) 5);
+    P pp = p_lift(pg_p());
+    P ones = p_lift((Int(512)) 0 - (Int(512)) 1);
+    P h = p_add(p_and(t, mm), p_mul(p_shr(t, 130), five));
+    P h2 = p_add(p_and(h, mm), p_mul(p_shr(h, 130), five));
+    P d = p_sub(h2, pp);
+    P neg = p_sign(d);
+    return p_or(p_and(h2, neg), p_and(d, p_xor(neg, ones)));
+}
+
+// h = (h + block + 2^(8 * len)) * r mod p, one block of at most 16 bytes
+// at a time (the block boundaries are public).
+@needs(Wide512(P, B))
+P pg_blocks(P h, List(B) msg, Int off, P r) {
+    Int left = msg.len() - off;
+    if (left <= 0) { return h; }
+    Int take = if (left < 16) { left } else { 16 };
+    P z = p_lift((Int(512)) 0);
+    P hb = p_lift((Int(512)) 1 << (Int(512)) (take * 8));
+    P sum = p_add(h, p_add(pg_le(msg, off, take, 0, z), hb));
+    return pg_blocks(pg_reduce(p_mul(sum, r)), msg, off + take, r);
+}
+
+@needs(Wide512(P, B))
+List(B) pg_bytes(P x, Int i, ListBuf(B) acc) {
+    if (i >= 16) { return acc.finish(); }
+    return pg_bytes(x, i + 1, acc.push(p_byte(x, 8 * i)));
+}
+
+// The 16-byte Poly1305 tag of msg under the 32-byte one-time key r || s.
+@needs(Wide512(P, B))
+pub List(B) poly1305g(List(B) key, List(B) msg) {
+    P z = p_lift((Int(512)) 0);
+    P clamp = p_lift(pg_clamp());
+    P m128 = p_lift(pg_m128());
+    P r = p_and(pg_le(key, 0, 16, 0, z), clamp);
+    P s = pg_le(key, 16, 16, 0, z);
+    P h = pg_blocks(z, msg, 0, r);
+    ListBuf(B) acc = ListBuf();
+    return pg_bytes(p_and(p_add(h, s), m128), 0, acc);
+}
+
+// ── AEAD (RFC 8439 §2.8) ────────────────────────────────────────────
+
+// Zero bytes padding n to a multiple of 16.
+Int cg_pad16(Int n) {
+    Int rr = n % 16;
+    return if (rr == 0) { 0 } else { 16 - rr };
+}
+
+List(Int) cg_zeros(Int n, Int i, ListBuf(Int) acc) {
+    if (i >= n) { return acc.finish(); }
+    return cg_zeros(n, i + 1, acc.push(0));
+}
+
+List(Int) cg_le64(Int v, Int i, ListBuf(Int) acc) {
+    if (i >= 8) { return acc.finish(); }
+    return cg_le64(v, i + 1, acc.push((v >> (8 * i)) & 255));
+}
+
+// MAC input: AAD || pad || CT || pad || le64(len AAD) || le64(len CT).
+// Only the ciphertext is in B; the rest is public and lifted.
+@needs(Word(W, B))
+List(B) cg_mac_input(List(Int) aad, List(B) ct) {
+    List(Int) head = aad.concat(cg_zeros(cg_pad16(aad.len()), 0, ListBuf()));
+    List(Int) tail = cg_zeros(cg_pad16(ct.len()), 0, ListBuf()).concat(cg_le64(aad.len(), 0, ListBuf())).concat(cg_le64(ct.len(), 0, ListBuf()));
+    ListBuf(B) hb = ListBuf();
+    ListBuf(B) tb = ListBuf();
+    return w_lift_bytes(head, 0, hb).concat(ct).concat(w_lift_bytes(tail, 0, tb));
+}
+
+// Seal: ciphertext || 16-byte tag. At secret types the output is secret;
+// the caller declassifies it to send it.
+@needs(Word(W, B), Wide512(P, B))
+pub List(B) chacha20poly1305g_seal(List(B) key, List(Int) nonce, List(B) plaintext, List(Int) aad) {
+    List(B) mackey = chachag_block(key, 0, nonce)[0..32];
+    List(B) ct = chachag_xor(key, 1, nonce, plaintext);
+    return ct.concat(poly1305g(mackey, cg_mac_input(aad, ct)));
+}
+
+// Open: the plaintext when the tag verifies, compared in constant time;
+// None for a bad tag, a key that is not 32 bytes, a nonce that is not 12,
+// or an input shorter than a tag. An empty plaintext is Some([]). The
+// verdict is public (CtSame(B)); at secret types the plaintext stays
+// secret.
+@needs(Word(W, B), Wide512(P, B), CtSame(B))
+pub Option(List(B)) chacha20poly1305g_decrypt(List(B) key, List(Int) nonce, List(Int) ct_and_tag, List(Int) aad) {
+    Int clen = ct_and_tag.len() - 16;
+    if (key.len() != 32 || nonce.len() != 12 || clen < 0) { return None; }
+    ListBuf(B) cb = ListBuf();
+    ListBuf(B) tb = ListBuf();
+    List(B) ct = w_lift_bytes(ct_and_tag[0..clen], 0, cb);
+    List(B) want = w_lift_bytes(ct_and_tag[clen..], 0, tb);
+    List(B) mackey = chachag_block(key, 0, nonce)[0..32];
+    if (!ct_same(poly1305g(mackey, cg_mac_input(aad, ct)), want)) { return None; }
+    return Some(chachag_xor(key, 1, nonce, ct));
+}
