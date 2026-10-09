@@ -1,7 +1,7 @@
 # PLAN: closing the reducer's gaps
 
 Status: in progress (written 2026-10-09, after the budgets rework in
-PROGRESS §0zx). Steps 1-5 done (PROGRESS §0zy).
+PROGRESS §0zx). Steps 1-6 done (PROGRESS §0zy).
 Goal: make compile-time reduction (`compiler/greduce.resid`, helpers in
 `compiler/reduce.resid`) fold everything provable. Budgets are no longer the
 main limit. The limit is now the constructs the evaluator cannot run: one
@@ -94,17 +94,19 @@ Effects (`println`, clock, `read_bytes`, `resid_crypto_random_byte`,
 6. **Partial evaluation inside β-reduction.** Today a call with some unknown
    arguments inside a compile-time call fails the whole attempt. Online
    partial evaluation would leave a smaller residual. This is the biggest
-   design change; do it last.
+   design change; do it last. Done through the specializer: a call
+   with all arguments known that does not evaluate is specialized on
+   them, and the calls inside its body are evaluated or specialized in
+   turn.
 
 Smaller items:
 - Memo entries made inside a tail-loop hop are dropped each iteration
   (`gy_hop` keeps `st` fixed). Keeping pure inner results would avoid
   recomputation.
-- Non-tail nesting uses only about 1.3 KB of stack per level, so
-  `rd_max_depth` (20,000) could go higher. E0902 stays the backstop.
-- The meter constants (`rd_step_bytes`, `rd_call_bytes` = 4096) were
-  calibrated on two shapes (tail loops, wide non-tail recursion).
-  Re-calibrate after step 5.
+  Not done: carrying the memo from hop to hop would make the loop carry
+  a map that grows with every iteration, and lose its region.
+- Done: `rd_max_depth` is 100,000 (gy_* uses under 6 KiB per level).
+- Done: the meter is recalibrated on gy_* (step 1 KB, call 2 KB).
 
 ## Constraints that must hold at every step
 

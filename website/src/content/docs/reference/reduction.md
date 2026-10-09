@@ -17,6 +17,14 @@ check discharge from facts.
 
 - **Evaluation.** A call whose arguments are all known is evaluated. A pure
   call that re-enters itself with identical arguments is left residual.
+  Known values are integers of every width (carried exactly up to 2^255),
+  `Float`, `Str`, `Bool`, lists, records, `Option`, `Result`, declared sum
+  types, maps and sets with `Int` or `Str` keys (in the runtime's own
+  iteration order), and `StrBuf`/`ListBuf` builders. A call whose
+  arguments are all known but whose body does not evaluate in full (it
+  performs an effect, or uses a construct evaluation does not run) is
+  specialized on those arguments instead, so the known part of its body
+  still folds.
 - **Specialization.** A call whose arguments are partly known is replaced by
   a call to a copy of the callee reduced under the known arguments. Known
   fields of a partly known record count as known.
@@ -56,7 +64,7 @@ folded; it stays residual and traps at run time.
 | fuel | 16,000,000 steps | evaluation over the whole program |
 | steps | 65,536, doubling | one top-level call's attempt; a call that runs out is tried again with twice the steps, up to an eighth of the fuel left |
 | memory | ¼ of `RESID_MEM_LIMIT` | what one attempt holds: each step and non-tail call, and the bytes of each value built or read |
-| depth | 20,000 | non-tail nesting |
+| depth | 100,000 | non-tail nesting |
 | specs | 400 per program, 8 per function | specialization attempts |
 
 How far it goes scales with what the program asks for, not with one fixed

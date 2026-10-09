@@ -624,8 +624,16 @@ GV gx_call(GXT ft, Int id, RdE env, GS st) {
     if (xv.k) { return gx_folded_r(xv.v, xv.ty, cr.id, a.ch, s1, "eval"); }
     if (ufi < 0) { return gx_unk(cr.id, a.ch, s1); }
     GV uv = gx_call_user(ft, ufi, a, cr.id, s1);
-    if (uv.k || !ft.ffold[ufi] || gx_in_fold(ft, s1)) { return uv; }
-    return gx_with_st(uv, gx_fold_err(ft, id, name, "", uv.st));
+    if (uv.k) { return uv; }
+    if (ft.ffold[ufi] && !gx_in_fold(ft, s1)) { return gx_with_st(uv, gx_fold_err(ft, id, name, "", uv.st)); }
+    // Online partial evaluation: a call whose arguments are all known but
+    // which does not evaluate (an effect, a construct the evaluator does
+    // not run) is specialized on them, so what is known in its body still
+    // folds; kept only when that shrinks the body. A call stopped by a
+    // budget is not: its body would mostly run again.
+    Str hit = uv.st.memo.get(rd_memo_key(name, gx_rda(a, ft.rds))) else { "" };
+    if (hit != "!") { return uv; }
+    return gx_specialize(ft, ufi, a, cr.id, id, uv.st);
 }
 
 // Each argument's literal kind (gk_lit_kind), which only the

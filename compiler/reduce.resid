@@ -31,14 +31,14 @@ pub Int rd_fuel_default() { return 16000000; }
 // of the fuel left.
 pub Int rd_step0() { return 65536; }
 // Non-tail nesting (tail calls take no stack): the evaluator recurses
-// natively, ~16 KiB per level, on the compiler's 1 GiB stack.
-pub Int rd_max_depth() { return 20000; }
+// natively, under 6 KiB per level (measured), on the compiler's 1 GiB stack.
+pub Int rd_max_depth() { return 100000; }
 // The memory meter: a step costs rd_step_bytes and a call that is not a
-// tail call rd_call_bytes (what the evaluator's own records take, measured),
-// a value its length. A tail loop's meter goes back to its start each
-// iteration (gx_hop).
-pub Int rd_step_bytes() { return 4096; }
-pub Int rd_call_bytes() { return 4096; }
+// tail call rd_call_bytes, a value its length. Calibrated on gy_* to what
+// a call keeps (~5 KB, measured on wide and on deep recursion). A tail
+// loop's meter goes back to its start each iteration (gy_hop).
+pub Int rd_step_bytes() { return 1024; }
+pub Int rd_call_bytes() { return 2048; }
 // "No limit".
 pub Int rd_unbounded() { return 4611686018427387903; }
 Int rd_max_lit() { return 4096; }

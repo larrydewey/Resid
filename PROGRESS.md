@@ -375,6 +375,20 @@ the evaluator could not run.
   3.9x, a record-building loop 2.9x, list building 4.5x (and it now folds
   where it ran out of steps); the 443-program corpus compiles in 29 s
   instead of 56 s. Self-compile time and memory unchanged; seed +2%.
+- **Step 6: partial evaluation of known calls.** A call whose arguments
+  are all known but that does not evaluate in full (an effect, or a
+  construct the evaluator does not run; not a budget, whose body would
+  mostly run again) is specialized on those arguments instead of left as
+  written, so what is known in its body still folds: `scaled(100)` with an
+  `@residual` binding inside becomes `scaled__rs2(100)`, whose body is
+  `@residual Int r = 3; return ((338350 * r) + 42925);`. The usual rules
+  hold (the whistle, 400/8 attempts, kept only when it shrinks the body).
+  Folds inside the specialized bodies: 3,596 -> 3,851 over the corpus;
+  IR +0.25%, compile time and benchmarks unchanged. With the cheaper
+  evaluator the budgets were recalibrated on what it keeps (~5 KB per
+  call, wide or deep): a step is 1 KB on the meter and a call 2 KB (were
+  4 KB each), and non-tail nesting may go to 100,000 (was 20,000; under
+  6 KiB of stack per level, and E0902 stays the backstop).
 
 ### 0zx. Reduction budgets that count work, and tail calls that loop (2026-10-09)
 

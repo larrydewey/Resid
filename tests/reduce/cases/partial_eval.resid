@@ -1,0 +1,17 @@
+// A call whose arguments are all known but which does not evaluate in
+// full is specialized on them: what is known in its body still folds.
+Int squares(Int i, Int n, Int acc) {
+    if (i > n) { return acc; }
+    return squares(i + 1, n, acc + i * i);
+}
+
+Int scaled(Int n) {
+    Int k = squares(1, n, 0);
+    @residual Int r = 3;
+    return k * r + squares(1, n / 2, 0);
+}
+
+Int main() {
+    println(f"{scaled(100)}");
+    return 0;
+}

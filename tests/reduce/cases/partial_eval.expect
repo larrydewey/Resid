@@ -1,0 +1,3 @@
+has: scaled__rs
+has: return ((338350 * r) + 42925);
+lacks: squares(1, n, 0)
