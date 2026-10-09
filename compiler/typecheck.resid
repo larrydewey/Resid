@@ -2734,6 +2734,12 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (dok) { return ERes {.pos = pos, .ty = str_trim(str_slice(d0, 7, str_len(d0) - 1)), .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "declassify expects (Secret(T), Str), got (" + rawtys + ")"};
     }
+    if (name == "ct_select") {
+        Str s1 = str_trim(ty_list_at(rawtys, 1));
+        Str v1 = if (ck_str_starts_with(s1, "Secret(")) { str_trim(str_slice(s1, 7, str_len(s1) - 1)) } else { s1 };
+        if (argc == 3) { return ERes {.pos = pos, .ty = v1, .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "ct_select(c, a, b) takes 3 arguments"};
+    }
     if (name == "ct_secret" || name == "ct_public") {
         Str ca = str_trim(rawtys);
         if (argc == 1 && is_int_ty(ca)) { return ERes {.pos = pos, .ty = ca, .err = ""}; }

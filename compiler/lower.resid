@@ -2987,6 +2987,7 @@ GT lw_call(LW w, Int id, List(Str) env, GT c) {
     if ((n == "sha256_compress_hw" || n == "sha512_compress_hw") && !user_fn) { return lw_sha_hw(w, id, n, env, c); }
     if ((n == "ct_secret" || n == "ct_public") && !user_fn) { return lw_ct(w, id, n, env, c); }
     if (n == "ct_hide" && !user_fn) { return lw_ct_hide(w, id, env, c); }
+    if (n == "ct_select" && !user_fn) { return lw_ct_select(w, id, env, c); }
     if (n == "resid_test_run_closure" && !user_fn) { return lw_extern(w, id, n, l2s("Void closure()", "Str"), "Int", env, c); }
     if (n == "sort") { return lw_sort(w, id, env, c); }
     if (n == "select" && fn_index(w.fs, n) < 0) { return lv_select(w, id, "", env, c); }
@@ -3075,6 +3076,40 @@ GT lw_ct_hide(LW w, Int id, List(Str) env, GT c) {
     Str lt = ll_ty(a.ty);
     Str r = f"%t{a.tmp + 1}";
     return lw_step(a, r, a.ty, a.lines.concat([r + " = call " + lt + " asm \"\", \"=r,0\"(" + lt + " " + a.val + ")"]), a.tmp + 1);
+}
+
+// ct_select(c, a, b) (spec §48): (a & m) | (b & ~m) with m all ones when c
+// holds, the mask passed through an empty asm so the optimizer cannot turn
+// it back into a branch or a select.
+GT lw_ct_select(LW w, Int id, List(Str) env, GT c) {
+    if (w.g.ns[id].nk != 3) { return lw_gerr("ct_select arity", c); }
+    GT k0 = lw_expr(w, lw_kid(w, id, 0), env, c);
+    if (k0.err != "") { return k0; }
+    GT a = lw_expr(w, lw_kid(w, id, 1), env, k0);
+    if (a.err != "") { return a; }
+    GT b0 = lw_expr(w, lw_kid(w, id, 2), env, a);
+    if (b0.err != "") { return b0; }
+    GT b = widen_val(b0, a.ty);
+    Str lt0 = ll_ty(a.ty);
+    // Bools are chosen in a byte: an i1 has no register of its own for the
+    // barrier.
+    Bool bl = lt0 == "i1";
+    Str lt = if (bl) { "i8" } else { lt0 };
+    Int t = b.tmp;
+    Str av = if (bl) { f"%t{t + 8}" } else { a.val };
+    Str bv = if (bl) { f"%t{t + 9}" } else { b.val };
+    List(Str) widen = if (bl) { [av + " = zext i1 " + a.val + " to i8", bv + " = zext i1 " + b.val + " to i8"] } else { [] };
+    Str m0 = f"%t{t + 1}";
+    Str m1 = f"%t{t + 2}";
+    Str m = f"%t{t + 3}";
+    Str x = f"%t{t + 4}";
+    Str nm = f"%t{t + 5}";
+    Str y = f"%t{t + 6}";
+    Str r = f"%t{t + 7}";
+    Str rb = f"%t{t + 10}";
+    List(Str) body = widen.concat([m0 + " = zext i1 " + k0.val + " to " + lt, m1 + " = sub " + lt + " 0, " + m0, m + " = call " + lt + " asm \"\", \"=r,0\"(" + lt + " " + m1 + ")", x + " = and " + lt + " " + av + ", " + m, nm + " = xor " + lt + " " + m + ", -1", y + " = and " + lt + " " + bv + ", " + nm, r + " = or " + lt + " " + x + ", " + y]);
+    List(Str) fin = if (bl) { [rb + " = trunc i8 " + r + " to i1"] } else { [] };
+    return lw_step(b, if (bl) { rb } else { r }, a.ty, b.lines.concat(body).concat(fin), t + 10);
 }
 
 // ct_secret / ct_public: the value goes through a frame slot that a

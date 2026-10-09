@@ -3144,12 +3144,23 @@ could leave that knowledge are checked.
 A secret may: take part in & | ^ with integers; be shifted by
 a public amount; go through wrapping_add, wrapping_sub and
 wrapping_mul; be read at a public index when it is a list;
-be stored in a record field or a list element. The result is
-secret.
+be stored in a record field or a list element; be chosen by
+ct_select(c, a, b), a mask selection on a Secret(Bool) c
+between integers of at most 64 bits or Bools. The result is
+secret. A secret list's, bytes' or text's .len() is public.
+lib/crypto.resid's ct_eq compares secret byte lists in
+constant time and publishes the one-bit verdict, so it needs
+the declassify grant.
+
+A secret whose value is known after reduction is refused
+(E0250): it would be in the binary for everyone who has it.
+A secret(...) written directly inside declassify(...) is
+accepted, since that states the value is public.
 
 A secret may not: decide an if, while, match or ternary, or
 an && / || operand; be compared, divided or taken a remainder
-of; be an index, a range bound or a shift amount (E0255); go
+of; be an index, a range bound or a shift amount, or have a
+method called on it other than .len() (E0255); go
 through checked + - *, whose overflow abort is a branch on the
 value (E0254); wrap Option, Result, a sum type, Map, Set, a
 handle, a function or another secret (E0253).
@@ -3167,7 +3178,5 @@ secret only through declassify.
 After checking and reduction Secret(T) is erased: it lowers
 exactly as T, and secret(x) and declassify(x, r) as x.
 
-Planned (PLAN-secret-type.md): refusing secrets known at
-compile time (E0250), ct_eq and ct_select, zeroing storage
-that held a secret, and the cryptography library on
-Secret(T).
+Planned (PLAN-secret-type.md): zeroing storage that held a
+secret, and the cryptography library on Secret(T).

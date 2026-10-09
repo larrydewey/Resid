@@ -1,0 +1,5 @@
+Int main() {
+    Secret(Int) a = secret(rt 1);
+    Secret(Int) b = ct_select(true, a, a);
+    return 0;
+}

@@ -674,6 +674,31 @@ pub Int ct_acc(List(Int) a, List(Int) b, Int i, Int acc) {
     return ct_acc(a, b, ni, acc2);
 }
 
+// ─── Secret equality (spec §48) ─────────────────────────────────
+// ct_eq compares two secret byte lists without a branch on their bytes:
+// every position is folded into one secret word, which is reduced to a
+// single bit before that bit, and only it, is published. Publishing it is
+// a declassification, so ct_eq needs the grant. Lengths are public.
+
+@requires(declassify)
+pub Bool ct_eq(Secret(List(Int)) a, Secret(List(Int)) b) {
+    if (a.len() != b.len()) { return false; }
+    if (a.len() == 0) { return true; }
+    Secret(Int) d = ct_eq_acc(a, b, 1, a[0] ^ b[0]);
+    // d is 0 exactly when the lists are equal; d | -d has its sign bit set
+    // otherwise, so the arithmetic shift leaves 0 or -1.
+    Secret(Int) neg = wrapping_sub(0, d);
+    Secret(Int) bit = (d | neg) >> 63;
+    // ct_public: the verdict is public by design, so a constant-time check
+    // under valgrind (tests/ct) sees it as defined from here on.
+    return ct_public(declassify(bit, "ct_eq verdict")) == 0;
+}
+
+Secret(Int) ct_eq_acc(Secret(List(Int)) a, Secret(List(Int)) b, Int i, Secret(Int) acc) {
+    if (i >= a.len()) { return acc; }
+    return ct_eq_acc(a, b, i + 1, acc | (a[i] ^ b[i]));
+}
+
 // ─── Base64 (RFC 4648 standard alphabet, padded) ────────────────
 
 pub Str b64_char(Int v) {

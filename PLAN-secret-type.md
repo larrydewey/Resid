@@ -4,12 +4,14 @@
 
 **Progress.** Step 1 of §7 is in (2026-10-09): the `Secret(T)` type,
 `secret` and `declassify`, the `declassify` family with its graph record,
-E0251 and E0253–E0257, per-copy checking of generic code, and erasure before
-lowering (spec §48, `SECURITY.md`, 26 conformance cases). Still to do: E0250
-(secrets known at compile time), `ct_eq` and `ct_select`, the force-time
-`resid_cap_check("declassify")`, secrets as `Map` keys and `Set` elements in
-declarations, refusing secret arguments to native modules, spawn results and
-provider writes explicitly (they are refused today only by type mismatch),
+E0250, E0251 and E0253–E0257, per-copy checking of generic code, erasure
+before lowering, `ct_select` (a compiler builtin) and `ct_eq` (in
+`lib/crypto.resid`, which needs the `declassify` grant because it publishes
+one bit), and the public `.len()` of a secret sequence; `tests/ct` checks
+both helpers under valgrind (spec §48, `SECURITY.md`). Still to do: the
+force-time `resid_cap_check("declassify")`, secrets as `Map` keys and `Set`
+elements in declarations, dedicated errors for secrets passed to native
+modules, spawn results and provider writes (refused today by type mismatch),
 runtime zeroing (§6), and steps 2–3 of §7.
 
 **Goal**: make "this value is a secret" knowledge the compiler holds and

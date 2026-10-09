@@ -47,6 +47,22 @@ for c in $CASES; do
         [ "$got" = "$want" ] || echo "  output differs under valgrind: $got"
     fi
 done
+# Secret(T) operations (spec §48), from their own probe.
+(cd "$ROOT" && "$COMPILER" tests/ct/secretprobe.resid -o "$W/secretprobe") > "$W/build2.log" 2>&1 || {
+    echo "FAIL build secretprobe"; grep -i -A3 error "$W/build2.log" | head -8; exit 1; }
+for c in ct-select ct-eq; do
+    want="$("$W/secretprobe" "$c" 2>&1)"
+    got="$(valgrind -q --error-limit=no --expensive-definedness-checks=yes --log-file="$W/vg.s.$c" "$W/secretprobe" "$c" 2>&1)"
+    n="$(grep -c -E 'depends on uninitialised|Use of uninitialised' "$W/vg.s.$c")"
+    if [ "$n" = 0 ] && [ "$got" = "$want" ] && [ "${want#"$c "}" != "$want" ]; then
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1))
+        echo "FAIL $c: $n secret-dependent branch(es) or address(es)"
+        grep -A3 -E 'depends on uninitialised|Use of uninitialised' "$W/vg.s.$c" | head -8
+        [ "$got" = "$want" ] || echo "  output differs under valgrind: $got"
+    fi
+done
 # The control must be caught, or the checks above prove nothing.
 valgrind -q --error-limit=no --expensive-definedness-checks=yes --log-file="$W/vg.control" "$W/ctprobe" control > /dev/null 2>&1
 if [ "$(grep -c -E 'depends on uninitialised|Use of uninitialised' "$W/vg.control")" -gt 0 ]; then

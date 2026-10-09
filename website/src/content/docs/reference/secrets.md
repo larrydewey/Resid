@@ -23,6 +23,10 @@ Int main() {
 
 - `secret(x)` wraps a value. `T` may not be `Option`, `Result`, a sum type,
   `Map`, `Set`, a handle, a function or a secret (`E0253`).
+- A secret whose value the compiler knows after reduction is refused
+  (`E0250`): it would be in the binary for everyone who has it. Read
+  secrets at run time. `declassify(secret(41), "why")` is accepted, since it
+  states that the value is public.
 - `declassify(s, "reason")` returns the `T`. It needs
   `@requires(declassify)`, carried to every caller like any capability
   (`E0219`); the family has no modes. The reason is a non-empty string
@@ -37,6 +41,21 @@ Int main() {
 | `wrapping_add`, `wrapping_sub`, `wrapping_mul` | `/`, `%`, comparisons, `&&`, `\|\|` (`E0255`) |
 | reading a secret list at a public index | a secret index, range bound or shift amount (`E0255`) |
 | storing it in a record field or list | deciding an `if`, `while`, `match` or ternary (`E0255`) |
+| `ct_select(c, a, b)` with a `Secret(Bool)` `c` | methods, except a secret list's, bytes' or text's `.len()` (`E0255`) |
+
+## Constant-time helpers
+
+- `ct_select(c, a, b)` returns `a` when the secret `c` holds, else `b`,
+  computed with masks rather than a branch. `a` and `b` are integers of at
+  most 64 bits, or Bools, secret or public; the result is secret.
+- `ct_eq(a, b)` in `lib/crypto.resid` compares two `Secret(List(Int))`
+  byte lists in constant time and returns a public `Bool`. Only that one
+  bit is published, which is a declassification, so `ct_eq` needs
+  `@requires(declassify)`.
+- A secret list's, bytes' or text's `.len()` is public.
+
+`tests/ct/run.sh` checks both helpers under valgrind on the optimized
+binary: no branch or memory address depends on the secret.
 
 ## Observation behaviors
 
@@ -52,7 +71,5 @@ Int main() {
 
 ## Not yet enforced
 
-`PLAN-secret-type.md` lists the rest of the plan: refusing secrets known
-at compile time (`E0250`), the constant-time `ct_eq` and `ct_select`,
-zeroing storage that held a secret, and moving the cryptography library
-onto `Secret(T)`.
+`PLAN-secret-type.md` lists the rest of the plan: zeroing storage that
+held a secret, and moving the cryptography library onto `Secret(T)`.

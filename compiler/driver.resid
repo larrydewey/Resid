@@ -7086,6 +7086,12 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (dok) { return ERes {.pos = pos, .ty = str_trim(str_slice(d0, 7, str_len(d0) - 1)), .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "declassify expects (Secret(T), Str), got (" + rawtys + ")"};
     }
+    if (name == "ct_select") {
+        Str s1 = str_trim(ty_list_at(rawtys, 1));
+        Str v1 = if (ck_str_starts_with(s1, "Secret(")) { str_trim(str_slice(s1, 7, str_len(s1) - 1)) } else { s1 };
+        if (argc == 3) { return ERes {.pos = pos, .ty = v1, .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "ct_select(c, a, b) takes 3 arguments"};
+    }
     if (name == "ct_secret" || name == "ct_public") {
         Str ca = str_trim(rawtys);
         if (argc == 1 && is_int_ty(ca)) { return ERes {.pos = pos, .ty = ca, .err = ""}; }
@@ -9433,7 +9439,9 @@ Int main() {
     // start from a small heap. `--dump-reduced <path>` writes the residual
     // program printed.
     Int _cg_in = resid_bulk_push();
-    KP lkp = sec_erase(gx_unpack(gpk[2]));
+    KP lkp0 = gx_unpack(gpk[2]);
+    if (sec_known_check(lkp0, rsrc, rr.map)) { return 1; }
+    KP lkp = sec_erase(lkp0);
     Str dump_path  =  pick_opt(argc, "--dump-reduced", "");
     if (dump_path != "") {
         Bool dumped = filesystem.write_all(dump_path, kg_print(lkp.g, lkp.id));

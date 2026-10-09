@@ -1,0 +1,8 @@
+// ct_eq publishes one bit, so it needs the declassify grant.
+import "crypto.resid";
+
+Int main() {
+    Secret(List(Int)) a = secret(rt [1, 2]);
+    Bool e = ct_eq(a, a);
+    return 0;
+}

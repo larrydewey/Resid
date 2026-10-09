@@ -1506,6 +1506,7 @@ GKT gk_call(GK k, Int id, Str exp) {
     // receiver form `x.verb()` is the verb (spec §11).
     if (ck_fn_index(k.fs, n) < 0 && k.gx.verbs.contains(n)) { return gk_vcall(k, id, n, exp); }
     if ((n == "secret" || n == "declassify") && ck_fn_index(k.fs, n) < 0) { return sec_call(k, id, n, exp); }
+    if (n == "ct_select" && ck_fn_index(k.fs, n) < 0) { return sec_select(k, id, exp); }
     if ((n == "wrapping_add" || n == "wrapping_sub" || n == "wrapping_mul") && ck_fn_index(k.fs, n) < 0 && argn == 2) {
         GKA wa = gk_args(k, id, 0, gk_nopts(), 0, "", 0);
         if (wa.err != "") { return gterr(wa.k, wa.err, wa.at); }
@@ -2554,6 +2555,7 @@ GKM gk_mcall_r(GK k0, Int id, Str exp) {
     if (b.err != "") { return gkm(b, false); }
     GK k = b.k;
     Str bt = b.ty;
+    if (sec_is(bt)) { return gkm(sec_method(k, id, bt, m, na), true); }
     if (gk_is_builder(bt)) { return gkm(gk_builder_method(k, id, bt, m, na), true); }
     if (gv_is(bt)) { return gkm(gv_method(k, id, bt, m, na), true); }
     if (m == "len") {
@@ -5135,4 +5137,91 @@ Bool sec_obs(Str b, List(Str) args) { return gm_builtin_behavior(b) && str_conta
 
 Str sec_obs_msg(Str b, List(Str) args) {
     return "E0257: " + b + "(" + list_join(args, 0, ", ", "") + "): " + b + " is never given for a secret, since its result would reveal it; declassify the value first";
+}
+
+// ct_select(c, a, b): a where the secret Bool c is true, else b, by masks
+// rather than a branch. a and b are integers of one type (at most 64 bits)
+// or Bools, secret or public; the result is secret.
+GKT sec_select(GK k, Int id, Str exp) {
+    if (k.g.ns[id].nk != 3) { return gterr(k, "ct_select(c, a, b) takes 3 arguments", id); }
+    GKT c = gk_expr(k, gk_kid(k, id, 0), "");
+    if (c.err != "") { return c; }
+    if (c.ty != "Secret(Bool)") { return gterr(c.k, "ct_select's condition is a Secret(Bool), got " + c.ty + " (a public condition can use if)", id); }
+    Int an = gk_kid(k, id, 1);
+    Int bn = gk_kid(k, id, 2);
+    Str want = if (sec_is(exp)) { sec_inner(exp) } else { "" };
+    GKT a = gk_expr(c.k, an, if (gk_bare_int(k.g, an) && want == "") { "" } else { want });
+    if (a.err != "") { return a; }
+    Str at = sec_inner(a.ty);
+    GKT b = gk_expr(a.k, bn, at);
+    if (b.err != "") { return b; }
+    Str bt = sec_inner(b.ty);
+    Bool alit = gk_bare_int(k.g, an);
+    Bool blit = gk_bare_int(k.g, bn);
+    Str t = if (alit && !blit) { bt } else { at };
+    Bool num = is_int_ty(t) && ty_bits(num_norm(t)) <= 64;
+    if (!(num || t == "Bool")) { return gterr(b.k, "ct_select chooses between integers of at most 64 bits or Bools, got " + at + " and " + bt, id); }
+    Bool same = ty_same(t, if (alit && !blit) { bt } else { at }) && (ty_same(t, bt) || blit);
+    if (!same && !(alit && ty_same(t, bt))) { return gterr(b.k, "ct_select's two values must have one type, got " + a.ty + " and " + b.ty, id); }
+    GK ka = if (alit && t != a.ty) { gk_tl(b.k, tl_add(b.k.tl, an, t)) } else { b.k };
+    GK kb = if (blit && t != b.ty) { gk_tl(ka, tl_add(ka.tl, bn, t)) } else { ka };
+    return gt(kb, "Secret(" + t + ")", id);
+}
+
+// A method on a secret: only its public length, for lists, bytes and text.
+GKT sec_method(GK k, Int id, Str bt, Str m, Int na) {
+    Str in = sec_inner(bt);
+    Bool seq = is_list_type(in) || in == "Str" || in == "Bytes" || str_starts_with(in, "Bytes(") || str_starts_with(in, "Str(");
+    if (m == "len" && seq) {
+        if (na != 0) { return gterr(k, ".len() takes no arguments", id); }
+        return gt(k, "Int", id);
+    }
+    return gterr(k, "E0255: ." + m + "() on a secret (" + bt + ") could reveal it; only a secret sequence's .len() is public. Call a function that takes the secret (wrapping_add, ct_select, ct_eq), or declassify it", id);
+}
+
+// E0250: a secret whose value the compiler knows after reduction is one
+// every holder of the binary has. Refused, unless the program states that
+// it is public by passing it straight to declassify. Prints the diagnostic
+// and returns true when one is found.
+pub Bool sec_known_check(KP p, Str src, Str smap) {
+    if (!sec_graph_has(p.g, 0)) { return false; }
+    Map(Str, Int) none = {};
+    Map(Str, Int) user = sec_user_fns(p.g, 0, none);
+    if (user.contains("secret")) { return false; }
+    Map(Int, Int) ok = sec_declassified(p.g, 0, user, {});
+    Int bad = sec_known_at(p.g, 0, ok);
+    if (bad < 0) { return false; }
+    gk_diag("E0250", "secret(...) of a value the compiler knows: the value is in the binary for everyone who has it. Read the secret at run time, or pass it straight to declassify(...) to state that it is public", p.g, bad, src, smap);
+    return true;
+}
+
+// secret(...) calls written directly inside declassify(...).
+Map(Int, Int) sec_declassified(Kg g, Int i, Map(Str, Int) user, Map(Int, Int) acc) {
+    if (i >= g.ns.len()) { return acc; }
+    KN n = g.ns[i];
+    Bool d = n.kind == "call" && n.text == "declassify" && !user.contains("declassify") && n.nk >= 1;
+    Int c = if (d) { kg_kid(g, i, 0) } else { 0 - 1 };
+    Bool inner = c >= 0 && g.ns[c].kind == "call" && g.ns[c].text == "secret";
+    return sec_declassified(g, i + 1, user, if (inner) { acc.insert(c, 1) } else { acc });
+}
+
+Int sec_known_at(Kg g, Int i, Map(Int, Int) ok) {
+    if (i >= g.ns.len()) { return 0 - 1; }
+    KN n = g.ns[i];
+    Bool hit = n.kind == "call" && n.text == "secret" && n.nk == 1 && !ok.contains(i) && sec_known_tree(g, kg_kid(g, i, 0), 0);
+    return if (hit) { i } else { sec_known_at(g, i + 1, ok) };
+}
+
+// Built only from literals: nothing read at run time feeds it.
+Bool sec_known_tree(Kg g, Int id, Int depth) {
+    if (depth > 64) { return false; }
+    Str k = g.ns[id].kind;
+    Bool shape = k == "lit" || k == "list" || k == "struct" || k == "finit" || k == "paren" || k == "un" || k == "bin" || k == "cast" || k == "ty" || k == "map" || k == "entry" || k == "set" || k == "named" || k == "emptyb";
+    if (!shape) { return false; }
+    return sec_known_kids(g, id, 0, depth);
+}
+
+Bool sec_known_kids(Kg g, Int id, Int i, Int depth) {
+    if (i >= g.ns[id].nk) { return true; }
+    return sec_known_tree(g, kg_kid(g, id, i), depth + 1) && sec_known_kids(g, id, i + 1, depth);
 }
