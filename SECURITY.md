@@ -315,7 +315,7 @@ relative layout reproduced.
 | ECDSA verification rejects `r` or `s` outside `[1, n-1]`, keys off the curve, sums at infinity, and DER signatures that are not strict DER (BER lengths, padded or negative integers, trailing bytes). | Wycheproof ECDSA files |
 | RSA verification refuses moduli below 2048 bits, even moduli and even or tiny exponents, compares PKCS#1 v1.5 by re-encoding (never by parsing the recovered block), and rejects a signature representative `>= n`. | Wycheproof RSA files, `rsa1024-ca` |
 | **Constant time, checked on the binary.** `tests/ct/run.sh` runs ECDSA signing (P-256, P-384), ECDH, public-key derivation, X25519, Ed25519 signing, AES (AES-NI and software, encrypt and decrypt), AES-GCM, GHASH, AES key unwrap, ChaCha20-Poly1305, SHA-512, HMAC, HKDF, HPKE open and `ct_equal` under valgrind memcheck with the secret marked undefined (`ct_secret`). No branch, conditional move or memory address depends on a secret in the optimized, LTO-linked code; a negative control (a secret-indexed table) must be reported. The software AES S-box is computed, not looked up; field reductions, point selection and conditional subtractions are masks, and masks pass through `ct_hide` so LLVM cannot turn them back into branches. | `tests/ct/run.sh` |
-| Every parser of untrusted bytes is total: certificates, CRLs, OCSP responses, keys (PKCS#8, SEC1, SPKI, RSAPublicKey, COSE_Key), ECDSA signatures, CBOR/COSE, TLS handshake messages and PEM never abort and never loop on malformed input; mutated inputs are run through all of them (an abort is caught per input, a hang times out). | fuzz section of `tests/crypto/run.sh` |
+| Every parser of untrusted bytes is total: certificates, CRLs, OCSP responses, keys (PKCS#8, SEC1, SPKI, RSAPublicKey, COSE_Key), ECDSA signatures, CBOR/COSE, TLS handshake messages, PEM, HTTP/2 frame headers and HPACK header blocks never abort and never loop on malformed input; mutated inputs are run through all of them (an abort is caught per input, a hang times out). | fuzz section of `tests/crypto/run.sh` |
 | Randomness comes from `getrandom(2)`, falling back to `/dev/urandom`; failure aborts. | (runtime code) |
 
 ## TLS server authentication
@@ -359,9 +359,6 @@ Not guaranteed:
 - A trust anchor is not itself checked for revocation.
 - `require_signatures` does not extend to path dependencies, which spec
   §28.3 exempts as local source.
-- The HPACK decoder (`lib/h2.resid`) can still abort on malformed input;
-  the certificate, CRL, OCSP, key and TLS message parsers cannot (see the
-  cryptography table).
 - P-521, SHA-1 (in any signature), SHA-3, DSA, RSA below 2048 bits and
   ECDSA over curves other than P-256 and P-384 are not verified: such a
   certificate is refused, not accepted on another algorithm's terms.

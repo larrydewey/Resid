@@ -104,7 +104,8 @@ printf '%s\n' "$rt" | grep -q '^roundtrip: 0 failed' || { [ "$nf" != 0 ] || { ec
 
 # ── parsers under mutation ───────────────────────────────────────────
 # Every parser that reads untrusted bytes, on mutated certificates, CRLs,
-# OCSP responses, keys, signatures, COSE, TLS messages and PEM: an abort
+# OCSP responses, keys, signatures, COSE, TLS messages, PEM and HTTP/2
+# frames with HPACK blocks: an abort
 # (caught per input by fuzz.resid) or a hang (the timeout) is a failure.
 # The rng seeds are fixed, so a failure reproduces.
 (cd "$ROOT" && "$COMPILER" tests/crypto/fuzz.resid -o "$W/fuzz") > "$W/build.log" 2>&1 || {
@@ -140,6 +141,8 @@ fz tls "$F/certmsg.bin" "$N" 45 "$F/leaf.der"
 fz tls "$F/ch-ossl.bin" "$N" 46 "$F/leaf.der"
 fz pem "$F/root.pem" "$N" 47
 fz pem "$F/srv.key" "$N" 48
+fz hpack "$SD/hpack-huff.bin" "$N" 61
+fz hpack "$SD/hpack-raw.bin" "$N" 62
 
 echo "crypto: $pass passed, $fail failed ($files vector files)"
 [ "$fail" -eq 0 ]

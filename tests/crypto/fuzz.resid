@@ -22,6 +22,7 @@ import "../../lib/tlsmsg.resid";
 import "../../lib/cosesig.resid";
 import "../../lib/hpke.resid";
 import "../../lib/rsa.resid";
+import "../../lib/h2.resid";
 
 // ─── Randomness: xorshift64*, deterministic from the seed ───────────
 
@@ -195,7 +196,19 @@ Str bts(List(Int) b, Int i, StrBuf acc) {
     return bts(b, i + 1, acc.push_char(if (c > 0 && c < 128) { c } else { 63 }));
 }
 
+// HTTP/2 frames and HPACK header blocks, as a peer could send them.
+Int run_hpack(List(Int) m) {
+    List(Str) dyn = [];
+    List(HpField) none = [];
+    HpBlock blk = hp_decode_block(m, 0, m.len() - 1, dyn, none);
+    H2FrameHdr h = h2_frame_hdr(m, 0);
+    Int n = h2_settings_count(m);
+    Int sid = if (n > 0) { h2_setting_id(m, n - 1) + h2_setting_value(m, n - 1) } else { 0 };
+    return blk.fields.len() + bit(blk.bad) + bit(h.bad) + h2_count_data(m, 0, m.len() - 1) + sid;
+}
+
 Int exercise(Str kind, List(Int) m, List(Int) x1, List(Int) x2) {
+    if (kind == "hpack") { return run_hpack(m); }
     if (kind == "cert") { return run_cert(m, x1); }
     if (kind == "crl") { return run_crl(m, x1, x2); }
     if (kind == "ocsp") { return run_ocsp(m, x1, x2); }

@@ -39,7 +39,7 @@ pub Int h2_u24(List(Int) b, Int pos) {
 // Decode the 9-octet frame header starting at pos.
 pub H2FrameHdr h2_frame_hdr(List(Int) b, Int pos) {
     Int n = b.len() - 1;
-    if (pos + 8 > n) {
+    if (pos < 0 || pos + 8 > n) {
         return H2FrameHdr { .length = 0, .stype = 0, .flags = 0, .sid = 0, .bad = true };
     }
     Int len = h2_u24(b, pos);
@@ -293,7 +293,9 @@ pub HpInt hp_read_int(List(Int) b, Int pos, Int first, Int pfxmask) {
 
 pub HpInt hp_int_cont(List(Int) b, Int pos, Int pfxmask, Int acc, Int m) {
     Int n = b.len() - 1;
-    if (pos > n) { return HpInt { .val = 0, .next = pos, .bad = true }; }
+    // Past 28 bits of continuation the value is no length any frame has
+    // (RFC 7541 §5.1 lets a decoder refuse it), and it would overflow.
+    if (pos < 0 || pos > n || m > 28) { return HpInt { .val = 0, .next = pos, .bad = true }; }
     Int byte = b[pos];
     Int cont = byte & 128;
     Int low = byte - cont;
@@ -327,11 +329,12 @@ type HpStr = { Str s; Int(64) next; Bool huffman; Bool bad; };
 
 pub HpStr hp_read_str(List(Int) b, Int pos) {
     Int n = b.len() - 1;
-    if (pos > n) { return HpStr { .s = "", .next = pos, .huffman = false, .bad = true }; }
+    if (pos < 0 || pos > n) { return HpStr { .s = "", .next = pos, .huffman = false, .bad = true }; }
     Int first = b[pos];
     Bool huf = first >= 128;
     HpInt li = hp_read_int(b, pos, first, 127);
     if (li.bad) { return HpStr { .s = "", .next = li.next, .huffman = huf, .bad = true }; }
+    if (li.next + 1 + li.val > b.len()) { return HpStr { .s = "", .next = li.next, .huffman = huf, .bad = true }; }
     if (huf) {
         HuffDec hd = hp_huff_str(b, li.next + 1, li.val);
         Str hs = hd.s;
