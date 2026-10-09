@@ -7081,7 +7081,7 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
     }
     // secret / declassify (PLAN-secret-type.md): the checker types them
     // in gcheck (sec_call); this is the payload view used after erasure.
-    if (name == "secret") {
+    if (name == "secret" || name == "classify") {
         if (argc == 1) { return ERes {.pos = pos, .ty = "Secret(" + str_trim(rawtys) + ")", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "secret(x) takes 1 argument"};
     }
@@ -7090,6 +7090,10 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         Bool dok = argc == 2 && ck_str_starts_with(d0, "Secret(") && str_trim(ty_list_at(rawtys, 1)) == "Str";
         if (dok) { return ERes {.pos = pos, .ty = str_trim(str_slice(d0, 7, str_len(d0) - 1)), .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "declassify expects (Secret(T), Str), got (" + rawtys + ")"};
+    }
+    if (name == "secret_split" || name == "secret_join") {
+        if (argc == 1) { return ERes {.pos = pos, .ty = str_trim(rawtys), .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " takes 1 argument"};
     }
     if (name == "ct_select") {
         Str s1 = str_trim(ty_list_at(rawtys, 1));

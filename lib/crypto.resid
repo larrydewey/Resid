@@ -7,6 +7,8 @@
 // No mutation: every loop is tail recursion; every update rebuilds the list.
 // 32-bit semantics come from masking with 0xFFFFFFFF after each add.
 
+import "sha256g.resid";
+
 // ─── Bit helpers ────────────────────────────────────────────────
 
 pub Int mask32(Int x) {
@@ -243,31 +245,14 @@ pub List(Int) add_h(List(Int) h, List(Int) hv, Int i) {
             add_w(h, hv, 4), add_w(h, hv, 5), add_w(h, hv, 6), add_w(h, hv, 7)];
 }
 
-pub List(Int) digest_block(List(Int) m, Int base, List(Int) h) {
-    return sha_blk_l(m, base, 0, h, h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
-}
+// One block in software: lib/sha256g.resid's generic block function at
+// public words, the same code secret hashing is checked in.
+pub List(Int) digest_block(List(Int) m, Int base, List(Int) h) { return sha256g_block(m, base, h); }
 
 // Big-endian word j of the block at base.
 pub Int word_at_list(List(Int) m, Int base, Int j) {
     Int off = base + j * 4;
     return (((m[off] & 255) << 24) | ((m[off + 1] & 255) << 16) | ((m[off + 2] & 255) << 8) | (m[off + 3] & 255)) & 4294967295;
-}
-
-pub Int sched_w_l(List(Int) m, Int base, Int i, Int w0, Int w1, Int w9, Int w14) {
-    if (i < 16) { return word_at_list(m, base, i); }
-    return wrapping_add(wrapping_add(ssig1(w14), w9), wrapping_add(ssig0(w1), w0)) & 4294967295;
-}
-
-// sha_blk over a byte list: the same 64 rounds with the state and the
-// schedule window in scalar parameters.
-pub List(Int) sha_blk_l(List(Int) m, Int base, Int i, List(Int) h0, Int a, Int b, Int c, Int d, Int e, Int f, Int g, Int h, Int w0, Int w1, Int w2, Int w3, Int w4, Int w5, Int w6, Int w7, Int w8, Int w9, Int w10, Int w11, Int w12, Int w13, Int w14, Int w15) {
-    if (i >= 64) {
-        return [wrapping_add(h0[0], a) & 4294967295, wrapping_add(h0[1], b) & 4294967295, wrapping_add(h0[2], c) & 4294967295, wrapping_add(h0[3], d) & 4294967295, wrapping_add(h0[4], e) & 4294967295, wrapping_add(h0[5], f) & 4294967295, wrapping_add(h0[6], g) & 4294967295, wrapping_add(h0[7], h) & 4294967295];
-    }
-    Int wi = sched_w_l(m, base, i, w0, w1, w9, w14);
-    Int t1 = wrapping_add(wrapping_add(wrapping_add(h, bsig1(e)), wrapping_add(ch_of(e, f, g), k_at(i))), wi) & 4294967295;
-    Int t2 = wrapping_add(bsig0(a), maj_of(a, b, c)) & 4294967295;
-    return sha_blk_l(m, base, i + 1, h0, wrapping_add(t1, t2) & 4294967295, a, b, c, wrapping_add(d, t1) & 4294967295, e, f, g, w1, w2, w3, w4, w5, w6, w7, w8, w9, w10, w11, w12, w13, w14, w15, wi);
 }
 
 pub List(Int) digest_blocks(List(Int) m, Int pos, Int total, List(Int) h) {

@@ -1,0 +1,66 @@
+// word.resid — one word type for public and secret computation (spec §48).
+//
+// Cryptographic code is written once, generic over T with @needs(Word(T)),
+// and instantiated for public words (Int) and secret words (Secret(Int)).
+// The secret copy is checked by the compiler like any code on secrets: no
+// branch, index, comparison or early exit on a word. The public copy is the
+// same code, monomorphized, so it costs what hand-written Int code costs.
+//
+// A word holds an unsigned 32-bit value in an Int (bits 32..63 zero); a
+// byte is a word below 256. Shift and rotate amounts and the k operands are
+// public.
+
+behavior Word(T) {
+    T w_xor(T a, T b);
+    T w_and(T a, T b);
+    T w_or(T a, T b);
+    T w_add(T a, T b);       // modulo 2^32
+    T w_addk(T a, Int k);    // a + k modulo 2^32, k public
+    T w_xork(T a, Int k);
+    T w_andk(T a, Int k);
+    T w_rotr(T x, Int n);    // 32-bit rotate right, 0 < n < 32
+    T w_shr(T x, Int n);
+    T w_shl(T x, Int n);     // within 32 bits
+    T w_not(T x);            // 32-bit complement
+    T w_lift(Int k);         // a public value taking part in the computation
+}
+
+Int wi_xor(Int a, Int b) { return a ^ b; }
+Int wi_and(Int a, Int b) { return a & b; }
+Int wi_or(Int a, Int b) { return a | b; }
+Int wi_add(Int a, Int b) { return wrapping_add(a, b) & 4294967295; }
+Int wi_addk(Int a, Int k) { return wrapping_add(a, k) & 4294967295; }
+Int wi_xork(Int a, Int k) { return a ^ k; }
+Int wi_andk(Int a, Int k) { return a & k; }
+Int wi_rotr(Int x, Int n) { return ((x >> n) | (x << (32 - n))) & 4294967295; }
+Int wi_shr(Int x, Int n) { return x >> n; }
+Int wi_shl(Int x, Int n) { return (x << n) & 4294967295; }
+Int wi_not(Int x) { return (x ^ 4294967295) & 4294967295; }
+Int wi_lift(Int k) { return k; }
+
+Word(Int) = { .w_xor = wi_xor, .w_and = wi_and, .w_or = wi_or, .w_add = wi_add, .w_addk = wi_addk, .w_xork = wi_xork, .w_andk = wi_andk, .w_rotr = wi_rotr, .w_shr = wi_shr, .w_shl = wi_shl, .w_not = wi_not, .w_lift = wi_lift };
+
+Secret(Int) ws_xor(Secret(Int) a, Secret(Int) b) { return a ^ b; }
+Secret(Int) ws_and(Secret(Int) a, Secret(Int) b) { return a & b; }
+Secret(Int) ws_or(Secret(Int) a, Secret(Int) b) { return a | b; }
+Secret(Int) ws_add(Secret(Int) a, Secret(Int) b) { return wrapping_add(a, b) & 4294967295; }
+Secret(Int) ws_addk(Secret(Int) a, Int k) { return wrapping_add(a, k) & 4294967295; }
+Secret(Int) ws_xork(Secret(Int) a, Int k) { return a ^ k; }
+Secret(Int) ws_andk(Secret(Int) a, Int k) { return a & k; }
+Secret(Int) ws_rotr(Secret(Int) x, Int n) { return ((x >> n) | (x << (32 - n))) & 4294967295; }
+Secret(Int) ws_shr(Secret(Int) x, Int n) { return x >> n; }
+Secret(Int) ws_shl(Secret(Int) x, Int n) { return (x << n) & 4294967295; }
+Secret(Int) ws_not(Secret(Int) x) { return (x ^ 4294967295) & 4294967295; }
+Secret(Int) ws_lift(Int k) { return classify(k); }
+
+Word(Secret(Int)) = { .w_xor = ws_xor, .w_and = ws_and, .w_or = ws_or, .w_add = ws_add, .w_addk = ws_addk, .w_xork = ws_xork, .w_andk = ws_andk, .w_rotr = ws_rotr, .w_shr = ws_shr, .w_shl = ws_shl, .w_not = ws_not, .w_lift = ws_lift };
+
+// Public bytes taking part in a computation on T.
+@needs(Word(T))
+pub List(T) w_lift_all(List(Int) bs, Int i, ListBuf(T) acc) {
+    if (i >= bs.len()) { return acc.finish(); }
+    return w_lift_all(bs, i + 1, acc.push(w_lift(bs[i])));
+}
+
+@needs(Word(T))
+pub List(T) w_concat(List(T) a, List(T) b) { return a.concat(b); }

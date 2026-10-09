@@ -1,0 +1,164 @@
+// sha256g.resid — SHA-256 (FIPS 180-4) generic over the word type
+// (lib/word.resid): one implementation for public bytes (T = Int) and
+// secret bytes (T = Secret(Int)). The secret copy is checked by the
+// compiler: no branch, index or comparison depends on the message.
+//
+// Messages are byte lists, List(T); the digest is 32 bytes, List(T).
+// Lengths are public.
+
+import "word.resid";
+
+Int sha2k(Int i) {
+    List(Int) ks = [
+        1116352408, 1899447441, 3049323471, 3921009573, 961987163, 1508970993, 2453635748, 2870763221,
+        3624381080, 310598401, 607225278, 1426881987, 1925078388, 2162078206, 2614888103, 3248222580,
+        3835390401, 4022224774, 264347078, 604807628, 770255983, 1249150122, 1555081692, 1996064986,
+        2554220882, 2821834349, 2952996808, 3210313671, 3336571891, 3584528711, 113926993, 338241895,
+        666307205, 773529912, 1294757372, 1396182291, 1695183700, 1986661051, 2177026350, 2456956037,
+        2730485921, 2820302411, 3259730800, 3345764771, 3516065817, 3600352804, 4094571909, 275423344,
+        430227734, 506948616, 659060556, 883997877, 958139571, 1322822218, 1537002063, 1747873779,
+        1955562222, 2024104815, 2227730452, 2361852424, 2428436474, 2756734187, 3204031479, 3329325298
+    ];
+    return ks[i];
+}
+
+@needs(Word(T))
+T g_word_at(List(T) m, Int base, Int j) {
+    Int off = base + j * 4;
+    return w_or(w_or(w_shl(w_andk(m[off], 255), 24), w_shl(w_andk(m[off + 1], 255), 16)), w_or(w_shl(w_andk(m[off + 2], 255), 8), w_andk(m[off + 3], 255)));
+}
+
+@needs(Word(T))
+T g_ssig0(T x) { return w_xor(w_xor(w_rotr(x, 7), w_rotr(x, 18)), w_shr(x, 3)); }
+@needs(Word(T))
+T g_ssig1(T x) { return w_xor(w_xor(w_rotr(x, 17), w_rotr(x, 19)), w_shr(x, 10)); }
+@needs(Word(T))
+T g_bsig0(T x) { return w_xor(w_xor(w_rotr(x, 2), w_rotr(x, 13)), w_rotr(x, 22)); }
+@needs(Word(T))
+T g_bsig1(T x) { return w_xor(w_xor(w_rotr(x, 6), w_rotr(x, 11)), w_rotr(x, 25)); }
+@needs(Word(T))
+T g_ch(T e, T f, T g) { return w_xor(w_and(e, f), w_and(w_not(e), g)); }
+@needs(Word(T))
+T g_maj(T a, T b, T c) { return w_xor(w_xor(w_and(a, b), w_and(a, c)), w_and(b, c)); }
+
+@needs(Word(T))
+T g_sched(List(T) m, Int base, Int i, T w0, T w1, T w9, T w14) {
+    if (i < 16) { return g_word_at(m, base, i); }
+    return w_add(w_add(g_ssig1(w14), w9), w_add(g_ssig0(w1), w0));
+}
+
+// The 64 rounds of one block, the state and the schedule window in
+// parameters (the loop index i is public).
+@needs(Word(T))
+List(T) g_blk(List(T) m, Int base, Int i, List(T) h0, T a, T b, T c, T d, T e, T f, T g, T h, T w0, T w1, T w2, T w3, T w4, T w5, T w6, T w7, T w8, T w9, T w10, T w11, T w12, T w13, T w14, T w15) {
+    if (i >= 64) {
+        return [w_add(h0[0], a), w_add(h0[1], b), w_add(h0[2], c), w_add(h0[3], d), w_add(h0[4], e), w_add(h0[5], f), w_add(h0[6], g), w_add(h0[7], h)];
+    }
+    T wi = g_sched(m, base, i, w0, w1, w9, w14);
+    T t1 = w_add(w_addk(w_add(w_add(h, g_bsig1(e)), g_ch(e, f, g)), sha2k(i)), wi);
+    T t2 = w_add(g_bsig0(a), g_maj(a, b, c));
+    return g_blk(m, base, i + 1, h0, w_add(t1, t2), a, b, c, w_add(d, t1), e, f, g, w1, w2, w3, w4, w5, w6, w7, w8, w9, w10, w11, w12, w13, w14, w15, wi);
+}
+
+@needs(Word(T))
+pub List(T) sha256g_block(List(T) m, Int base, List(T) h) {
+    T z = w_lift(0);
+    // The state words as unsigned 32-bit values, whatever the caller held
+    // them as (a signed Int is the same word).
+    Int m32 = 4294967295;
+    return g_blk(m, base, 0, h, w_andk(h[0], m32), w_andk(h[1], m32), w_andk(h[2], m32), w_andk(h[3], m32), w_andk(h[4], m32), w_andk(h[5], m32), w_andk(h[6], m32), w_andk(h[7], m32), z, z, z, z, z, z, z, z, z, z, z, z, z, z, z, z);
+}
+
+@needs(Word(T))
+pub List(T) sha256g_blocks(List(T) m, Int pos, Int total, List(T) h) {
+    if (pos >= total) { return h; }
+    return sha256g_blocks(m, pos + 64, total, sha256g_block(m, pos, h));
+}
+
+// FIPS 180-4 §5.1.1 padding: the message, 0x80, zeros, the bit length.
+pub List(Int) sha256g_pad(Int len) {
+    Int total = ((len + 9 + 63) / 64) * 64;
+    return sha256g_pad_at(len, total - len - 9, 0, ListBuf()).finish();
+}
+
+ListBuf(Int) sha256g_pad_at(Int len, Int zeros, Int i, ListBuf(Int) acc) {
+    if (i == 0) { return sha256g_pad_at(len, zeros, 1, acc.push(128)); }
+    if (i <= zeros) { return sha256g_pad_at(len, zeros, i + 1, acc.push(0)); }
+    if (i <= zeros + 8) {
+        Int sh = (zeros + 8 - i) * 8;
+        return sha256g_pad_at(len, zeros, i + 1, acc.push(((len * 8) >> sh) & 255));
+    }
+    return acc;
+}
+
+pub List(Int) sha256g_iv() { return [1779033703, 3144134277, 1013904242, 2773480762, 1359893119, 2600822924, 528734635, 1541459225]; }
+
+@needs(Word(T))
+List(T) g_digest_bytes(List(T) h, Int i, ListBuf(T) acc) {
+    if (i >= 32) { return acc.finish(); }
+    T wv = h[i / 4];
+    return g_digest_bytes(h, i + 1, acc.push(w_andk(w_shr(wv, 24 - (i % 4) * 8), 255)));
+}
+
+// SHA-256 of a byte list, for any word type.
+@needs(Word(T))
+pub List(T) sha256g(List(T) msg) {
+    ListBuf(T) b1 = ListBuf();
+    ListBuf(T) b2 = ListBuf();
+    ListBuf(T) b3 = ListBuf();
+    List(T) padded = w_concat(msg, w_lift_all(sha256g_pad(msg.len()), 0, b1));
+    List(T) h = sha256g_blocks(padded, 0, padded.len(), w_lift_all(sha256g_iv(), 0, b2));
+    return g_digest_bytes(h, 0, b3);
+}
+
+// ─── HMAC-SHA-256 and HKDF-SHA-256 (RFC 2104, RFC 5869) ──────────
+// Generic like the hash: with T = Secret(Int) the key, every intermediate
+// and the output stay secret. A public message or info string takes part
+// through w_lift_all.
+
+@needs(Word(T))
+List(T) g_xor_pad(List(T) kb, Int x, Int i, ListBuf(T) acc) {
+    if (i >= kb.len()) { return acc.finish(); }
+    return g_xor_pad(kb, x, i + 1, acc.push(w_xork(kb[i], x)));
+}
+
+@needs(Word(T))
+List(T) g_key_block(List(T) key) {
+    List(T) k = if (key.len() > 64) { sha256g(key) } else { key };
+    ListBuf(T) zb = ListBuf();
+    List(Int) zeros = sha256g_zeros(64 - k.len(), 0, ListBuf());
+    return w_concat(k, w_lift_all(zeros, 0, zb));
+}
+
+List(Int) sha256g_zeros(Int n, Int i, ListBuf(Int) acc) {
+    if (i >= n) { return acc.finish(); }
+    return sha256g_zeros(n, i + 1, acc.push(0));
+}
+
+@needs(Word(T))
+pub List(T) hmac256g(List(T) key, List(T) msg) {
+    List(T) kb = g_key_block(key);
+    ListBuf(T) ib = ListBuf();
+    ListBuf(T) ob = ListBuf();
+    List(T) inner = sha256g(w_concat(g_xor_pad(kb, 54, 0, ib), msg));
+    return sha256g(w_concat(g_xor_pad(kb, 92, 0, ob), inner));
+}
+
+@needs(Word(T))
+pub List(T) hkdf256g_extract(List(T) salt, List(T) ikm) { return hmac256g(salt, ikm); }
+
+@needs(Word(T))
+List(T) g_expand(List(T) prk, List(T) info, Int c, Int len, List(T) t, List(T) okm) {
+    if (okm.len() >= len) { return okm[0..len]; }
+    ListBuf(T) cb = ListBuf();
+    List(T) ti = hmac256g(prk, w_concat(w_concat(t, info), w_lift_all([c], 0, cb)));
+    return g_expand(prk, info, c + 1, len, ti, w_concat(okm, ti));
+}
+
+// OKM of `len` bytes; empty when len exceeds 255 * 32 (RFC 5869 §2.3).
+@needs(Word(T))
+pub List(T) hkdf256g_expand(List(T) prk, List(T) info, Int len) {
+    List(T) none = prk[0..0];
+    if (len < 0 || len > 255 * 32) { return none; }
+    return g_expand(prk, info, 1, len, none, none);
+}

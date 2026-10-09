@@ -50,6 +50,35 @@ To persist key material, declassify it under the grant and write it with
 `filesystem.write_secret`, which keeps the file readable by its owner only:
 `filesystem.write_secret(path, declassify(key, "persist the key"))`.
 
+## Secret byte strings and public values
+
+- `secret_split(s)` turns a `Secret(List(T))` into a `List(Secret(T))`
+  (its length is public); `secret_join(xs)` turns it back. Both are free at
+  run time. Generic code takes byte strings as `List(T)`, so the split form
+  lets it take secret ones.
+- `classify(x)` lifts a public value into secret computation, for example
+  padding constants or public message bytes mixed with a key. It claims no
+  secrecy, so `E0250` does not apply to it.
+
+## One implementation for public and secret data
+
+`lib/word.resid` declares `Word(T)`: the 32-bit word operations SHA-2 and
+friends need (xor, and, or, add modulo 2^32, rotations, shifts by a public
+amount, public constants), with instances for `Int` and `Secret(Int)`.
+Cryptographic code is written once, generic over `T`, and the compiler
+checks the secret copy like any other code on secrets. The public copy is
+the same code, compiled separately, at the cost of hand-written `Int` code.
+
+`lib/sha256g.resid` is the first such module: SHA-256, HMAC-SHA-256 and
+HKDF-SHA-256 for `List(T)` byte strings. `lib/crypto.resid`'s software
+SHA-256 block function is its public copy.
+
+```text
+List(Secret(Int)) key = secret_split(secret(read_key()));
+List(Secret(Int)) prk = hkdf256g_extract(salt_lifted, key);
+List(Secret(Int)) okm = hkdf256g_expand(prk, info_lifted, 32);
+```
+
 ## Constant-time helpers
 
 - `ct_select(c, a, b)` returns `a` when the secret `c` holds, else `b`,
@@ -92,5 +121,6 @@ not covered. `main` runs on its own thread stack, which is.
 
 ## Not yet enforced
 
-`PLAN-secret-type.md` lists the rest of the plan: moving the
-cryptography library onto `Secret(T)`.
+`PLAN-secret-type.md` lists the rest of the plan: moving the rest of the
+cryptography library (SHA-512, ChaCha20-Poly1305, AES-GCM, X25519,
+Ed25519, P-256/P-384, HPKE, the TLS key schedule) onto `Word(T)`.

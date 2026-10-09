@@ -1506,7 +1506,8 @@ GKT gk_call(GK k, Int id, Str exp) {
     // A verb named like a builtin keeps the builtin for a bare call; the
     // receiver form `x.verb()` is the verb (spec §11).
     if (ck_fn_index(k.fs, n) < 0 && k.gx.verbs.contains(n)) { return gk_vcall(k, id, n, exp); }
-    if ((n == "secret" || n == "declassify") && ck_fn_index(k.fs, n) < 0) { return sec_call(k, id, n, exp); }
+    if ((n == "secret" || n == "declassify" || n == "classify") && ck_fn_index(k.fs, n) < 0) { return sec_call(k, id, n, exp); }
+    if ((n == "secret_split" || n == "secret_join") && ck_fn_index(k.fs, n) < 0) { return sec_shape(k, id, n, exp); }
     if (n == "ct_select" && ck_fn_index(k.fs, n) < 0) { return sec_select(k, id, exp); }
     if ((n == "wrapping_add" || n == "wrapping_sub" || n == "wrapping_mul") && ck_fn_index(k.fs, n) < 0 && argn == 2) {
         GKA wa = gk_args(k, id, 0, gk_nopts(), 0, "", 0);
@@ -4973,8 +4974,11 @@ Str sec_wrap_err(GK k, Str t) {
 // on the graph.
 GKT sec_call(GK k, Int id, Str n, Str exp) {
     Int argn = k.g.ns[id].nk;
-    if (n == "secret") {
-        if (argn != 1) { return gterr(k, "secret(x) takes 1 argument", id); }
+    // classify(x) is secret(x) for a public value that only takes part in
+    // secret computation (a padding constant, public message bytes): no
+    // secrecy is claimed for it, so E0250 does not apply.
+    if (n == "secret" || n == "classify") {
+        if (argn != 1) { return gterr(k, n + "(x) takes 1 argument", id); }
         Str pexp = if (sec_is(exp)) { sec_inner(exp) } else { "" };
         GKA a = gk_args(k, id, 0, if (pexp == "") { gk_nopts() } else { [pexp] }, 0, "", 0);
         if (a.err != "") { return gterr(a.k, a.err, a.at); }
@@ -5084,13 +5088,13 @@ pub Bool sec_graph_has(Kg g, Int i) {
     if (i >= g.ns.len()) { return false; }
     KN n = g.ns[i];
     Bool lit = n.kind == "lit" || n.kind == "fpart" || n.kind == "fspec";
-    Bool hit = !lit && (str_contains(n.text, "Secret(") || str_contains(n.aux, "Secret(") || ((n.kind == "call" || n.kind == "mcall") && (n.text == "secret" || n.text == "declassify")));
+    Bool hit = !lit && (str_contains(n.text, "Secret(") || str_contains(n.aux, "Secret(") || ((n.kind == "call" || n.kind == "mcall") && sec_is_wrapper(n.text)));
     return if (hit) { true } else { sec_graph_has(g, i + 1) };
 }
 
 Map(Str, Int) sec_user_fns(Kg g, Int i, Map(Str, Int) acc) {
     if (i >= g.ns.len()) { return acc; }
-    Bool f = g.ns[i].kind == "fn" && (g.ns[i].text == "secret" || g.ns[i].text == "declassify");
+    Bool f = g.ns[i].kind == "fn" && sec_is_wrapper(g.ns[i].text);
     return sec_user_fns(g, i + 1, if (f) { acc.insert(g.ns[i].text, 1) } else { acc });
 }
 
@@ -5098,7 +5102,7 @@ List(KN) sec_erase_ns(Kg g, Int i, Map(Str, Int) user, ListBuf(KN) acc) {
     if (i >= g.ns.len()) { return acc.finish(); }
     KN n = g.ns[i];
     Bool lit = n.kind == "lit" || n.kind == "fpart" || n.kind == "fspec";
-    Bool wrap = (n.kind == "call" || n.kind == "mcall") && (n.text == "secret" || n.text == "declassify") && !user.contains(n.text) && n.nk >= 1;
+    Bool wrap = (n.kind == "call" || n.kind == "mcall") && sec_is_wrapper(n.text) && !user.contains(n.text) && n.nk >= 1;
     KN m = if (wrap) { KN {.kind = "paren", .text = "", .aux = "", .a0 = n.a0, .nk = 1, .sp = n.sp, .ep = n.ep, .kc = kg_kc("paren")} }
            else if (lit) { n }
            else { KN {.kind = n.kind, .text = sec_erase_text(n.text), .aux = sec_erase_text(n.aux), .a0 = n.a0, .nk = n.nk, .sp = n.sp, .ep = n.ep, .kc = n.kc} };
@@ -5251,4 +5255,24 @@ Int sec_find_head(Str t, Str h, Int from) {
     Int at = from + rel;
     Bool word = at == 0 || !(is_alnum(str_char_at(t, at - 1)) || str_char_at(t, at - 1) == 95);
     return if (word) { at } else { sec_find_head(t, h, at + 1) };
+}
+
+// The builtins that erase to their first argument (spec §48).
+Bool sec_is_wrapper(Str n) { return n == "secret" || n == "declassify" || n == "secret_split" || n == "secret_join" || n == "classify"; }
+
+// secret_split(s): a Secret(List(T)) as a List(Secret(T)), its length
+// public; secret_join(xs) the other way. Both are the same bytes at run
+// time; they let generic code over List(T) take secret byte strings.
+GKT sec_shape(GK k, Int id, Str n, Str exp) {
+    if (k.g.ns[id].nk != 1) { return gterr(k, n + " takes 1 argument", id); }
+    GKT a = gk_expr(k, gk_kid(k, id, 0), "");
+    if (a.err != "") { return a; }
+    if (n == "secret_split") {
+        Str in = sec_inner(a.ty);
+        if (!sec_is(a.ty) || !is_list_type(in)) { return gterr(a.k, "secret_split expects a Secret(List(T)), got " + a.ty, id); }
+        return gt(a.k, "List(Secret(" + inner_of(in) + "))", id);
+    }
+    Str el = if (is_list_type(a.ty)) { inner_of(a.ty) } else { "" };
+    if (!sec_is(el)) { return gterr(a.k, "secret_join expects a List(Secret(T)), got " + a.ty, id); }
+    return gt(a.k, "Secret(List(" + sec_inner(el) + "))", id);
 }

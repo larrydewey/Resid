@@ -3189,5 +3189,16 @@ kernel). Registers, the binary's static data and the
 process's initial stack are not covered; main runs on its
 own thread stack, which is.
 
-Planned (PLAN-secret-type.md): the cryptography library on
-Secret(T).
+secret_split(s) turns a Secret(List(T)) into a
+List(Secret(T)), its length public; secret_join(xs) turns it
+back. classify(x) lifts a public value into secret
+computation and claims no secrecy, so E0250 does not apply.
+All three are free at run time.
+
+lib/word.resid's Word(T) behavior lets cryptographic code be
+written once and instantiated for public words (Int) and
+secret words (Secret(Int)); lib/sha256g.resid (SHA-256,
+HMAC-SHA-256, HKDF-SHA-256) is written that way.
+
+Planned (PLAN-secret-type.md): the rest of the cryptography
+library on Word(T).

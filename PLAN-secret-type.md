@@ -13,7 +13,12 @@ results are refused (E0253, E0255); `write_secret` takes a declassified
 value. Runtime zeroing (§6) is in as option B, chosen 2026-10-09: a program
 that handles secrets runs its whole allocator in secret mode (zero on free
 and reuse, every heap mapping `MADV_DONTDUMP`); measured cost on the
-compiler's own build is within noise. `mlock` is not used. Still to do: a
+compiler's own build is within noise. `mlock` is not used. Step 2 of §7 has begun (2026-10-09), as option B: one generic
+implementation per primitive over `Word(T)` (`lib/word.resid`), checked by
+the compiler at `Secret(Int)`. `lib/sha256g.resid` (SHA-256, HMAC, HKDF) is
+in, with `secret_split`, `secret_join` and `classify`; next are SHA-512,
+ChaCha20-Poly1305, AES-GCM, X25519, Ed25519, P-256/P-384, HPKE and the TLS
+key schedule. Still to do: a
 force-time `resid_cap_check("declassify")` (declassify lowers to nothing,
 so the static check is the whole check today), and steps 2–3 of §7.
 
