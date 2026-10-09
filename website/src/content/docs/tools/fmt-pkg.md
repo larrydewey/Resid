@@ -32,6 +32,9 @@ require_signatures = true
 [native.zlib]
 path   = "native/zlib.ll"
 sha256 = "<64 lowercase hex digits>"
+
+[reduce]
+budget = 100_000_000
 ```
 
 Each dependency's `capabilities` must be grantable under `grant`, modes
@@ -39,6 +42,9 @@ included, and a dependency's own dependencies get at most its ceiling
 ([capabilities](/Resid/reference/capabilities/#manifests)). `[native.<m>]`
 pins a [native module](/Resid/reference/native-modules/)'s artifact by
 SHA-256; the build refuses a changed one and passes `-native` for it.
+`[reduce] budget` is the [reduction budget](/Resid/reference/reduction/#determinism-and-budgets)
+for the build and its tests: a step count, or `"unbounded"`
+(`--reduce-budget`).
 
 A `version =` dependency is fetched from the registry, named either as a
 directory (`[registry] path`) or as an `http://` or `https://` base URL

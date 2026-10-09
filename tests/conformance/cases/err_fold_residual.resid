@@ -1,0 +1,5 @@
+@fold
+Int sq(Int n) { return n * n; }
+
+@requires(args)
+Int main() { return sq(args.count()); }

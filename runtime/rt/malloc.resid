@@ -75,12 +75,35 @@ pub Int rt_mem_limit_set(Int mb) {
     return st64(mem_lim(), if (mb > 0) { mb * 1048576 } else { 0 - 1 }) * 0;
 }
 
-// Count n more heap bytes (or region pages); past the budget, abort.
+// Count n more heap bytes (or region pages); past the budget, abort. A
+// region page is counted whole when taken, but a deep nest of regions
+// barely touches each of its pages, so past the count the process's
+// resident memory decides.
 pub Int mem_take(Int n) {
     Int now = resid_raw_fetch_add(mem_used(), n) + n;
     Int lim = limit_bytes();
-    if (lim > 0 && now > lim) { return over_budget(lim); }
+    if (lim > 0 && now > lim && resident_bytes() > lim) { return over_budget(lim); }
     return 0;
+}
+
+// Resident bytes (/proc/self/statm's second field), or 2^62 when unreadable.
+@cold
+Int resident_bytes() {
+    Int b = resid_raw_tls("statm_buf", 128);
+    Int fd = sys_open(resid_raw_addr("/proc/self/statm"), o_rdonly(), 0);
+    if (fd < 0) { return 4611686018427387904; }
+    Int n = resid_raw_syscall(0, fd, b, 127, 0, 0, 0);
+    _ = sys_close(fd);
+    if (n <= 0) { return 4611686018427387904; }
+    Int sp = statm_skip(b, 0, n);
+    return statm_num(b, sp + 1, n, 0) * 4096;
+}
+
+Int statm_skip(Int b, Int i, Int n) { return if (i >= n || ld8(b + i) == 32) { i } else { statm_skip(b, i + 1, n) }; }
+
+Int statm_num(Int b, Int i, Int n, Int acc) {
+    Int c = if (i < n) { ld8(b + i) } else { 0 };
+    return if (c >= 48 && c <= 57) { statm_num(b, i + 1, n, acc * 10 + c - 48) } else { acc };
 }
 
 pub Int mem_give(Int n) { return resid_raw_fetch_add(mem_used(), 0 - n) * 0; }

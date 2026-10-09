@@ -1,0 +1,12 @@
+// The memory meter (spec §27): a non-tail recursion keeps what each call
+// made, so one this wide stops on the meter -- counted, the same on every
+// compiler -- long before the compiler's memory, and stays residual.
+Int g(Int n, Int s) {
+    if (n == 0) { return s % 7; }
+    return g(n - 1, s * 2) + g(n - 1, s * 2 + 1);
+}
+
+Int main() {
+    println(f"{g(20, 1)}");
+    return 0;
+}

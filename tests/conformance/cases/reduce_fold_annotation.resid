@@ -1,0 +1,20 @@
+// `@fold` (spec §27): every call reduces at compile time, with no step
+// limit; `@reduce(steps = N)` gives each call of a function N steps of its
+// own.
+@fold
+Int tri(Int n, Int acc) {
+    if (n == 0) { return acc; }
+    return tri(n - 1, acc + n);
+}
+
+@reduce(steps = 5_000_000)
+Int mix(Int n, Int acc) {
+    if (n == 0) { return acc; }
+    return mix(n - 1, (acc * 31 + n) % 1000003);
+}
+
+Int main() {
+    known(mix(1000000, 7));
+    println(f"{tri(1000000, 0)} {mix(1000000, 7)}");
+    return 0;
+}

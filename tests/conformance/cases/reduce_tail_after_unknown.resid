@@ -1,0 +1,16 @@
+// A tail call after an `if` on a value known only at run time is not the
+// call's result: the `if` may return first. Folding it would read no input.
+Int other() { return 0 - 2; }
+
+@requires(args)
+Int pick() {
+    Int n = args.count();
+    if (n > 0) { return n; }
+    return other();
+}
+
+@requires(args)
+Int main() {
+    println(f"{pick()}");
+    return 0;
+}

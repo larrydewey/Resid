@@ -173,10 +173,23 @@ pub Int thread_spawn(Int fn, Int arg, Int stack) {
 // A thread's body: fn(arg), its result kept, the exit hooks run.
 pub Int thread_main(Int rec) {
     _ = heap_adopt();
+    _ = st64(stack_floor(), ld64(rec + 32) + 65536);
     Int res = resid_raw_call2(ld64(rec), ld64(rec + 8), 0);
     _ = st64(rec + 16, res);
     _ = scope_thread_exit(0);
     return heap_retire();
+}
+
+// The lowest usable stack address of this thread, above its guard (0 on
+// the process's first thread, whose stack the kernel made).
+Int stack_floor() { return resid_raw_tls("stk_floor", 8); }
+
+// Bytes of stack left below the caller, or -1 where the floor is unknown.
+// The reducer stops before an evaluation would run off the end (E0902).
+@export("resid_stack_left", "i64()")
+pub Int rt_stack_left() {
+    Int lo = ld64(stack_floor());
+    return if (lo == 0) { 0 - 1 } else { resid_raw_sp() - lo };
 }
 
 // Wait for the thread to finish; its result. The record goes.

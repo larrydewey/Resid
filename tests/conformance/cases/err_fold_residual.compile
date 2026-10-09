@@ -1,0 +1,1 @@
+error[E0903]: @fold function sq: the call at line 5 must reduce at compile time, but its arguments are not all known

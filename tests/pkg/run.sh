@@ -481,6 +481,21 @@ printf 'import "mathlib";\ntest "a bare dependency import resolves in a test fil
 (cd "$ROOT" && "$MAN" test "$W/tsuite/resid.toml" "$COMPILER") > "$W/tsuite.out" 2>&1
 if [ $? -eq 0 ] && grep -q "3 file/s passed, 0 failed, 0 did not compile" "$W/tsuite.out"; then ok; else bad "manifest test: $(tail -3 "$W/tsuite.out" | tr '\n' '|')"; fi
 
+# `[reduce] budget` reaches the compiler as --reduce-budget (spec §27): the
+# build reduces under it and records it in the provenance record; a value
+# that is not a budget is refused.
+mkdir -p "$W/rbud/src"
+printf '[package]\nname = "rbud"\nversion = "0.1.0"\n\n[reduce]\nbudget = 2_000\n' > "$W/rbud/resid.toml"
+printf 'Int sum(Int i, Int n, Int acc) {\n    if (i >= n) { return acc; }\n    return sum(i + 1, n, acc + i);\n}\nInt main() {\n    println(f"{sum(0, 5000, 0)}");\n    return 0;\n}\n' > "$W/rbud/src/main.resid"
+(cd "$ROOT" && "$MAN" build "$W/rbud/resid.toml" "$COMPILER") > "$W/rbud.out" 2>&1
+if [ $? -eq 0 ] && grep -q "reduction budget (fuel) exhausted evaluating sum" "$W/rbud.out" && [ "$("$W/rbud/target/resid/rbud")" = "12497500" ]; then ok; else bad "[reduce] budget: $(tail -3 "$W/rbud.out" | tr '\n' '|')"; fi
+if [ -n "${RESID_SIGNING_KEY:-}" ]; then RPUB="${RESID_SIGNING_KEY%.key}.pub"; else RPUB="$ROOT/keys/resid-ed25519.pub"; fi
+"$COMPILER" verify "$W/rbud/target/resid/rbud" --pub "$(cat "$RPUB")" > "$W/rbud2.out" 2>&1
+if grep -q "attestation: reduction budget 2000 steps, memory 4096 MB" "$W/rbud2.out"; then ok; else bad "the budget is not in the provenance record: $(tail -2 "$W/rbud2.out" | tr '\n' '|')"; fi
+printf '[package]\nname = "rbud"\nversion = "0.1.0"\n\n[reduce]\nbudget = "lots"\n' > "$W/rbud/resid.toml"
+(cd "$ROOT" && "$MAN" build "$W/rbud/resid.toml" "$COMPILER") > "$W/rbud3.out" 2>&1
+if [ $? -ne 0 ] && grep -q "budget must be a step count" "$W/rbud3.out"; then ok; else bad "a bad [reduce] budget was accepted"; fi
+
 # A failing test fails only its own file; the rest still run, exit is 1.
 printf 'test "arithmetic" {\n    expect(2 + 2).toEqual(5);\n}\n' > "$W/tsuite/src/math_test.resid"
 (cd "$ROOT" && "$MAN" test "$W/tsuite/resid.toml" "$COMPILER") > "$W/tsuite2.out" 2>&1

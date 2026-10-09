@@ -3512,6 +3512,11 @@ GKS gk_decls(GK k, Int id, Int i, Str src, Str smap) {
             eprintln("error[E0213]: " + k.g.ns[d].text + ": " + rq);
             return gs_err(k, "reported", d);
         }
+        Str rb = gk_reduce_err(k.g.ns[d].aux);
+        if (rb != "") {
+            eprintln("error[E0904]: " + k.g.ns[d].text + ": " + rb);
+            return gs_err(k, "reported", d);
+        }
         if (str_contains(k.g.ns[d].aux, "@link")) {
             GKS lk = gk_link_decl(k, d, src, smap);
             if (lk.err != "") { return lk; }
@@ -3799,6 +3804,36 @@ List(Int) lin_params(GK k, Int d, Int i, Int n, List(Int) bs, ListBuf(Int) acc) 
 Int gk_b_count(Sigs fs, Str b, Str t, Int i, Int n) {
     if (i >= fs.bnames.len()) { return n; }
     return gk_b_count(fs, b, t, i + 1, if (fs.bnames[i] == b && fs.bparams[i] == t) { n + 1 } else { n });
+}
+
+// A malformed reduction budget annotation (spec §27), or "": `@reduce`
+// takes `(steps = N)` or `(steps = unbounded)`, and `@fold` already has no
+// step limit.
+Str gk_reduce_err(Str prefix) {
+    Int at = gk_ann_at(prefix, "@reduce", 0);
+    if (at < 0) { return ""; }
+    if (gk_ann_at(prefix, "@fold", 0) >= 0) { return "`@fold` and `@reduce` together: `@fold` already has no step limit"; }
+    if (gk_ann_at(prefix, "@link", 0) >= 0) { return "`@reduce` on an `@link` function: a native call is never reduced"; }
+    Str bad = "malformed `@reduce`: write `@reduce(steps = N)` with N > 0, or `@reduce(steps = unbounded)`";
+    Str rest = str_trim(str_slice(prefix, at + 7, str_len(prefix)));
+    Int rp = str_find_char(rest, 41, 0);
+    if (!str_starts_with(rest, "(") || rp < 0) { return bad; }
+    List(Str) kv = str_split(str_slice(rest, 1, rp), "=");
+    if (kv.len() != 2 || str_trim(kv[0]) != "steps") { return bad; }
+    Str v = str_trim(kv[1]);
+    if (v == "unbounded") { return ""; }
+    Str d = str_replace(v, "_", "");
+    if (!str_is_int(d) || str_starts_with(d, "-") || str_parse_int(d) <= 0) { return bad; }
+    return "";
+}
+
+// Where `@name` (not a longer name) starts in prefix, from i; -1 if absent.
+pub Int gk_ann_at(Str prefix, Str name, Int i) {
+    Int at = str_index_of(prefix, name, i);
+    if (at < 0) { return -1; }
+    Int c = str_char_at(prefix, at + str_len(name));
+    Bool more = c == 95 || (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122);
+    return if (more) { gk_ann_at(prefix, name, at + 1) } else { at };
 }
 
 // A malformed @requires: an unknown mode or capability family, or "".
@@ -4105,7 +4140,7 @@ Bool gk_builtin_write(Str n) { return n == "resid_term_raw" || n == "resid_term_
 // (spec §5: storage is never exposed). Only the compiler's own source may
 // call them, checked with --runtime-internals (E0220).
 Bool gk_internal(Str n) {
-    return str_starts_with(n, "resid_raw_") || n == "resid_mem_limit_set" || n == "resid_arena_push" || n == "resid_arena_pop" || n == "resid_bulk_push" || n == "resid_bulk_pop" || n == "resid_list_str_persist_copy" || n == "resid_dec_persist" || n == "resid_internals_set" || n == "resid_rtmod_set";
+    return str_starts_with(n, "resid_raw_") || n == "resid_mem_limit_set" || n == "resid_arena_push" || n == "resid_arena_pop" || n == "resid_bulk_push" || n == "resid_bulk_pop" || n == "resid_stack_left" || n == "resid_list_str_persist_copy" || n == "resid_dec_persist" || n == "resid_internals_set" || n == "resid_rtmod_set";
 }
 
 // The text-formatting primitives of spec §14. A hole's spec reaches them

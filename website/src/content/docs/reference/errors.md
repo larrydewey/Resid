@@ -42,6 +42,9 @@ own), with the offending source line.
 | `E0411` | a vector type nested inside another type, or a vector captured by a lambda or `spawn` |
 | `E0412` | a vector literal, `splat` or `lanes` without a vector slot to take its type from |
 | `E0901` | `known(x)` on a residual value |
+| `E0902` | compile-time evaluation nests deeper than the compiler's stack (raise `RESID_STACK_MB`, or bound the reduction with `--reduce-budget`) |
+| `E0903` | a call of an `@fold` function has an argument that is not known, does not reduce, or runs out of memory or depth |
+| `E0904` | a malformed `@reduce(...)`, or `@reduce` with `@fold` or `@link` |
 
 Runtime failures (overflow, division by zero, index out of range, a failed
 conversion, a broken constraint, an assertion, `todo`) abort with a message
@@ -49,4 +52,6 @@ naming what failed. Inside a `spawn` region they become
 `Err(RegionError)`.
 
 Notes (`note: ...`) are not errors: they report reduction budgets that ran
-out, residual notes recorded, and whether the build was signed.
+out (`note: reduce: reduction budget (steps) exhausted evaluating f(...)`),
+residual notes recorded, and whether the build was signed. A compile-time
+evaluation long enough to double past 2^26 steps also says so as it goes.

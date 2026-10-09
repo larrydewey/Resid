@@ -1,0 +1,11 @@
+// `--reduce-budget N` sets the fuel: a call that needs more stays residual
+// and says so; the program means the same.
+Int sum(Int i, Int n, Int acc) {
+    if (i >= n) { return acc; }
+    return sum(i + 1, n, acc + i);
+}
+
+Int main() {
+    println(f"{sum(0, 5000, 0)}");
+    return 0;
+}

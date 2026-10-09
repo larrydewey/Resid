@@ -20,21 +20,28 @@ type RdV = { Bool k; Str v; Str ty; Str r; Bool ch; Bool bad; Bool bd; Str sx; S
 type RdA = { List(Str) vs; List(Str) ts; List(Str) rs; Bool allk; Bool ch; Bool named; Bool bad; Int pos; RdS st; };
 type RdN = { Bool ok; Int v; };
 
-// Budgets. A single top-level evaluation attempt may run rd_max_steps
-// statements; nesting is capped at rd_max_depth calls (the evaluator
-// recurses natively, ~16 KiB of stack per level, on the 1 GiB stack
-// resid_run_main gives the compiler). rd_max_fuel bounds the whole
-// program.
-pub Int rd_max_steps() { return 2000000; }
+// Budgets (spec §27). Every one counts work -- steps, nesting, abstract
+// bytes -- and never time or native memory, so a program reduces the same
+// way under every implementation of the compiler. The defaults below are
+// what `--reduce-budget` overrides (greduce.resid gx_budget).
+// Steps over the whole program (some 20 s of evaluation; a call may take
+// an eighth of what is left, 2M steps at first).
+pub Int rd_fuel_default() { return 16000000; }
+// A top-level call's first attempt; each retry doubles it, up to an eighth
+// of the fuel left.
+pub Int rd_step0() { return 65536; }
+// Non-tail nesting (tail calls take no stack): the evaluator recurses
+// natively, ~16 KiB per level, on the compiler's 1 GiB stack.
 pub Int rd_max_depth() { return 20000; }
-pub Int rd_max_fuel() { return 400000000; }
+// The memory meter: a step costs rd_step_bytes and a call that is not a
+// tail call rd_call_bytes (what the evaluator's own records take, measured),
+// a value its length. A tail loop's meter goes back to its start each
+// iteration (gx_hop).
+pub Int rd_step_bytes() { return 4096; }
+pub Int rd_call_bytes() { return 4096; }
+// "No limit".
+pub Int rd_unbounded() { return 4611686018427387903; }
 Int rd_max_lit() { return 4096; }
-// Bytes the whole reduction may request (runtime allocation counter; see
-// resid_mem_mark). Evaluating something heavy at compile time — a
-// signature over a constant message, say — must fall back to the
-// residual call, not exhaust memory. Normal programs use well under a
-// quarter of this (the compiler's own source: ~100MB).
-pub Int rd_max_mem() { return 536870912; }
 // The longest text a reduced format spec may build. A width is bounded
 // in practice, but `group` on a wide integer's decimal text and a large
 // fill are not, so the fold gives up above this rather than growing the
@@ -102,6 +109,7 @@ pub Str rd_join(List(Str) xs, Int i, Str sep, Str acc) {
 // ─── Values and types ───────────────────────────────────────────
 
 pub Str rd_norm_ty(Str t) {
+    if (t == "Int" || t == "Str" || t == "Bool") { return t; }
     if (t == "Int(64)") { return "Int"; }
     if (t == "UInt(64)") { return "UInt"; }
     if (!str_contains(t, "(")) { return t; }
@@ -129,6 +137,7 @@ pub Bool rd_is_int_ty(Str t) { return rd_int_head(t) != ""; }
 pub Bool rd_int_signed(Str t) { return rd_int_head(t) == "Int"; }
 
 pub Int rd_iw(Str t) {
+    if (t == "Int" || t == "UInt") { return 64; }
     Str h = rd_int_head(t);
     if (h == "") { return 0; }
     Str n = rd_norm_ty(t);
@@ -223,6 +232,27 @@ List(Str) rd_dec_at(Str v, Int pos, Int n, List(Str) acc) {
     Int en = st + len;
     List(Str) acc2 = acc.concat([str_slice(v, st, en)]);
     return rd_dec_at(v, en, n, acc2);
+}
+
+// Item i of an encoded list without decoding the rest; "\x01" when the
+// list is shorter.
+pub Str rd_nth(Str v, Int i) { return rd_nth_at(v, 0, str_len(v), i); }
+
+Str rd_nth_at(Str v, Int pos, Int n, Int i) {
+    if (pos >= n) { return str_from_code(1); }
+    Int colon = str_find_char(v, 58, pos);
+    Int en = colon + 1 + rd_atoi(str_slice(v, pos, colon));
+    if (i == 0) { return str_slice(v, colon + 1, en); }
+    return rd_nth_at(v, en, n, i - 1);
+}
+
+// The number of items of an encoded list.
+pub Int rd_count(Str v) { return rd_count_at(v, 0, str_len(v), 0); }
+
+Int rd_count_at(Str v, Int pos, Int n, Int acc) {
+    if (pos >= n) { return acc; }
+    Int colon = str_find_char(v, 58, pos);
+    return rd_count_at(v, colon + 1 + rd_atoi(str_slice(v, pos, colon)), n, acc + 1);
 }
 
 pub List(Str) rd_dec(Str v) {

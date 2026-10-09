@@ -966,7 +966,7 @@ List(Str) hdr_map_typed() {
 // Runtime declarations added after the long hdr_core lists; both mains
 // append these.
 List(Str) hdr_extra() {
-    return ["declare ptr @resid_decp_from_str(ptr, i64)", "declare ptr @resid_decp_from_i64(i64, i64)", "declare ptr @resid_decp_round(ptr, i64)", "declare ptr @resid_decp_add(ptr, ptr, i64)", "declare ptr @resid_decp_sub(ptr, ptr, i64)", "declare ptr @resid_decp_mul(ptr, ptr, i64)", "declare ptr @resid_decp_div(ptr, ptr, i64)", "declare ptr @resid_decp_neg(ptr)", "declare i64 @resid_decp_cmp(ptr, ptr)", "declare ptr @resid_decp_to_str(ptr, i8)", "declare i64 @resid_decp_to_i64(ptr)", "declare double @resid_decp_to_f64(ptr)", "declare void @resid_handle_release(ptr)", "declare ptr @resid_spawn(ptr, ptr)", "declare ptr @resid_spawn_start(ptr, ptr)", "declare ptr @resid_spawn_wait(ptr)", "declare ptr @resid_ok_box(ptr)", "declare ptr @resid_sacc_from(ptr)", "declare ptr @resid_sacc_append(ptr, ptr)", "declare ptr @resid_sacc_append_int(ptr, i64)", "declare ptr @resid_gmalloc(i64)", "declare void @resid_gfree(ptr)", "declare i64 @resid_bulk_push()", "declare i64 @resid_bulk_pop()", "declare i64 @resid_mem_mark()", "declare i64 @resid_mem_since_mark()", "declare i64 @str_index_of(ptr, ptr, i64)", "declare ptr @str_sha256(ptr)", "declare i8 @resid_fs_write_hex(ptr, ptr)", "declare i8 @resid_fs_append_hex(ptr, ptr)", "declare ptr @resid_decp_persist(ptr)", "declare i64 @resid_scope_push()", "declare void @resid_scope_pop(i64)", "declare i1 @resid_sb_print(ptr, i8)", "declare i8 @resid_print_bytes(ptr)", "declare ptr @resid_box_alloc(i64, i64, ptr)", "declare ptr @resid_sb2_push(ptr, ptr, ptr)", "declare ptr @resid_sb2_push_cp(ptr, ptr, i64)", "declare ptr @resid_sb2_finish(ptr, ptr)", "declare ptr @resid_sb2_lim()", "declare i1 @resid_sb2_print(ptr, ptr, i8)", "declare void @resid_sb2_discard(ptr, ptr)", "declare ptr @resid_fsb_push(ptr, i64, ptr)", "declare ptr @resid_fsb_push_cp(ptr, i64, i64)", "declare ptr @resid_fbb_push(ptr, i64, i64)", "declare void @resid_fb_overflow(i64, i64)", "declare ptr @resid_bytes_show(ptr, i64)", "declare ptr @resid_map_format_t(ptr, i8, i8, ptr, ptr)", "declare ptr @resid_set_format_t(ptr, i8, ptr)", "declare ptr @resid_list_show_t(ptr, i8)", "declare ptr @resid_fmt_radix(ptr, i64)", "declare ptr @resid_fmt_group(ptr)", "declare ptr @resid_fmt_case(ptr, i64)", "declare ptr @resid_fmt_sign(ptr, i64)", "declare ptr @resid_fmt_pad(ptr, i64)", "declare ptr @resid_fmt_style(double, i64)", "declare void @resid_fb_underfill(i64, i64)", "declare i64 @resid_str_ascii_len(ptr)", "declare i64 @resid_char_at_n(ptr, i64, i64)", "declare double @llvm.sqrt.f64(double)", "declare i64 @resid_disp_connect()", "declare ptr @resid_disp_pair()", "declare i8 @resid_disp_send(i64, ptr, i64)", "declare ptr @resid_disp_recv(i64, i64)", "declare ptr @resid_disp_poll(ptr, ptr, i64)", "declare i64 @resid_disp_recv_fd()", "declare i8 @resid_disp_close(i64)", "declare i64 @resid_disp_shm_new(i64)", "declare i64 @resid_disp_shm_fd(i64)", "declare i8 @resid_disp_shm_put(i64, i64, ptr, i64)", "declare i8 @resid_disp_shm_free(i64)", "declare ptr @resid_dbg_dump(i64, i64)"];
+    return ["declare ptr @resid_decp_from_str(ptr, i64)", "declare ptr @resid_decp_from_i64(i64, i64)", "declare ptr @resid_decp_round(ptr, i64)", "declare ptr @resid_decp_add(ptr, ptr, i64)", "declare ptr @resid_decp_sub(ptr, ptr, i64)", "declare ptr @resid_decp_mul(ptr, ptr, i64)", "declare ptr @resid_decp_div(ptr, ptr, i64)", "declare ptr @resid_decp_neg(ptr)", "declare i64 @resid_decp_cmp(ptr, ptr)", "declare ptr @resid_decp_to_str(ptr, i8)", "declare i64 @resid_decp_to_i64(ptr)", "declare double @resid_decp_to_f64(ptr)", "declare void @resid_handle_release(ptr)", "declare ptr @resid_spawn(ptr, ptr)", "declare ptr @resid_spawn_start(ptr, ptr)", "declare ptr @resid_spawn_wait(ptr)", "declare ptr @resid_ok_box(ptr)", "declare ptr @resid_sacc_from(ptr)", "declare ptr @resid_sacc_append(ptr, ptr)", "declare ptr @resid_sacc_append_int(ptr, i64)", "declare ptr @resid_gmalloc(i64)", "declare void @resid_gfree(ptr)", "declare i64 @resid_bulk_push()", "declare i64 @resid_bulk_pop()", "declare i64 @resid_mem_mark()", "declare i64 @resid_mem_since_mark()", "declare i64 @resid_stack_left()", "declare i64 @str_index_of(ptr, ptr, i64)", "declare ptr @str_sha256(ptr)", "declare i8 @resid_fs_write_hex(ptr, ptr)", "declare i8 @resid_fs_append_hex(ptr, ptr)", "declare ptr @resid_decp_persist(ptr)", "declare i64 @resid_scope_push()", "declare void @resid_scope_pop(i64)", "declare i1 @resid_sb_print(ptr, i8)", "declare i8 @resid_print_bytes(ptr)", "declare ptr @resid_box_alloc(i64, i64, ptr)", "declare ptr @resid_sb2_push(ptr, ptr, ptr)", "declare ptr @resid_sb2_push_cp(ptr, ptr, i64)", "declare ptr @resid_sb2_finish(ptr, ptr)", "declare ptr @resid_sb2_lim()", "declare i1 @resid_sb2_print(ptr, ptr, i8)", "declare void @resid_sb2_discard(ptr, ptr)", "declare ptr @resid_fsb_push(ptr, i64, ptr)", "declare ptr @resid_fsb_push_cp(ptr, i64, i64)", "declare ptr @resid_fbb_push(ptr, i64, i64)", "declare void @resid_fb_overflow(i64, i64)", "declare ptr @resid_bytes_show(ptr, i64)", "declare ptr @resid_map_format_t(ptr, i8, i8, ptr, ptr)", "declare ptr @resid_set_format_t(ptr, i8, ptr)", "declare ptr @resid_list_show_t(ptr, i8)", "declare ptr @resid_fmt_radix(ptr, i64)", "declare ptr @resid_fmt_group(ptr)", "declare ptr @resid_fmt_case(ptr, i64)", "declare ptr @resid_fmt_sign(ptr, i64)", "declare ptr @resid_fmt_pad(ptr, i64)", "declare ptr @resid_fmt_style(double, i64)", "declare void @resid_fb_underfill(i64, i64)", "declare i64 @resid_str_ascii_len(ptr)", "declare i64 @resid_char_at_n(ptr, i64, i64)", "declare double @llvm.sqrt.f64(double)", "declare i64 @resid_disp_connect()", "declare ptr @resid_disp_pair()", "declare i8 @resid_disp_send(i64, ptr, i64)", "declare ptr @resid_disp_recv(i64, i64)", "declare ptr @resid_disp_poll(ptr, ptr, i64)", "declare i64 @resid_disp_recv_fd()", "declare i8 @resid_disp_close(i64)", "declare i64 @resid_disp_shm_new(i64)", "declare i64 @resid_disp_shm_fd(i64)", "declare i8 @resid_disp_shm_put(i64, i64, ptr, i64)", "declare i8 @resid_disp_shm_free(i64)", "declare ptr @resid_dbg_dump(i64, i64)"];
 }
 
 Bool is_dec_cg(Str t) {
@@ -6671,7 +6671,7 @@ pub Bool num_all_same(List(Str) ts, Int i, Str t) {
 
 // Runtime primitives (compiler-only): argument and result types.
 ERes raw_sig(Str name, Str op, Str argtys, Int argc, Int pos) {
-    Str want = if (op == "cpuid") { "Int,Int" } else { if (op == "catch") { "Int,Int,Int" } else { if (op == "popcount") { "Int" } else { want0(op) } } };
+    Str want = if (op == "sp") { "" } else if (op == "cpuid") { "Int,Int" } else { if (op == "catch") { "Int,Int,Int" } else { if (op == "popcount") { "Int" } else { want0(op) } } };
     Str rty = if (op == "cas") { "Bool" } else { if (op == "str") { "Str" } else { if (op == "bits_f64") { "Float" } else { if (op == "f128_bits") { "Int(128)" } else { if (op == "bits_f128") { "Float(128)" } else { "Int" } } } } };
     if (want == "?") { return ERes {.pos = pos, .ty = "", .err = "unknown runtime primitive " + name}; }
     Bool scalar = argtys == "Int" || argtys == "Float" || argtys == "Bool";
@@ -6772,9 +6772,9 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
     // resid_bulk_push/pop: an arena scope that also takes the generated
     // code's own allocations (runtime/resid_rt.c, g_bulk_arena). For the
     // driver's whole-phase scopes only, under the same caller-proof rule.
-    // resid_mem_mark / resid_mem_since_mark: the reducer's allocation
-    // budget (bytes requested since the mark).
-    Bool zero_arg_rt = if (name == "resid_bulk_push" || name == "resid_bulk_pop") { true } else { name == "resid_mem_mark" || name == "resid_mem_since_mark" };
+    // resid_mem_mark / resid_mem_since_mark: bytes requested since the mark.
+    // resid_stack_left: bytes of stack below the caller (-1: unknown).
+    Bool zero_arg_rt = if (name == "resid_bulk_push" || name == "resid_bulk_pop" || name == "resid_stack_left") { true } else { name == "resid_mem_mark" || name == "resid_mem_since_mark" };
     if (zero_arg_rt) {
         if (argc == 0) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = name + " expects no arguments"};
@@ -8349,8 +8349,10 @@ Str graph_hash_esc(Str hex, Int i, StrBuf acc) {
 // The Provenance map, keys in deterministic (length, then bytewise) order.
 // `grant` is main's declared authority ("filesystem(readonly),environment");
 // `comp` is the SHA-256 of the compiler binary itself, [] when unreadable.
+// `reduce` is a reduction budget other than the default ("" for none): it
+// changes what the output computes at compile time.
 @requires(filesystem(readonly))
-List(Int) prov_payload(Str out, Str profile, Str done, List(Int) code, List(Int) notes, List(Int) graph, Str grant, List(Int) comp, Str native) {
+List(Int) prov_payload(Str out, Str profile, Str done, List(Int) code, List(Int) notes, List(Int) graph, Str grant, List(Int) comp, Str native, Str reduce) {
     List(Str) paths = str_split(done, ";");
     List(Str) gs = if (grant == "") { [] } else { str_split(grant, ",") };
     // `native`: "module=sha256hex;..." for each linked native module (§47).
@@ -8359,13 +8361,15 @@ List(Int) prov_payload(Str out, Str profile, Str done, List(Int) code, List(Int)
     Int gopt = if (graph.len() > 0) { 1 } else { 0 };
     Int copt = if (comp.len() == 32) { 1 } else { 0 };
     Int vopt = if (ns.len() > 0) { 1 } else { 0 };
-    List(Int) m0 = cbe_map(6 + nopt + gopt + copt + vopt, []);
+    Int ropt = if (reduce != "") { 1 } else { 0 };
+    List(Int) m0 = cbe_map(6 + nopt + gopt + copt + vopt + ropt, []);
     List(Int) m1 = cbe_bytes(code, cbe_text("code", m0));
     List(Int) m2 = prov_texts(gs, 0, cbe_array(gs.len(), cbe_text("grant", m1)));
     List(Int) m3 = if (gopt == 1) { cbe_bytes(graph, cbe_text("graph", m2)) } else { m2 };
     List(Int) m4a = if (nopt == 1) { cbe_bytes(notes, cbe_text("notes", m3)) } else { m3 };
     List(Int) m4 = if (vopt == 1) { prov_native(ns, 0, cbe_map(ns.len(), cbe_text("native", m4a))) } else { m4a };
-    List(Int) m5 = cbe_text(out, cbe_text("output", m4));
+    List(Int) m5a = cbe_text(out, cbe_text("output", m4));
+    List(Int) m5 = if (ropt == 1) { cbe_text(reduce, cbe_text("reduce", m5a)) } else { m5a };
     List(Int) m6 = cbe_text(profile, cbe_text("profile", m5));
     List(Int) m7 = cbe_array(prov_count_paths(paths, 0, 0), cbe_text("sources", m6));
     List(Int) m8 = prov_sources(paths, 0, m7);
@@ -8454,7 +8458,7 @@ List(Int) prov_u32(Int v) {
 
 // Sign `out` in place. Returns 0, or 1 when signing is required but fails.
 @requires(filesystem, environment)
-Int write_provenance(Str out, Str profile, Str done, Str grant, Str native) {
+Int write_provenance(Str out, Str profile, Str done, Str grant, Str native, Str reduce) {
     Str kpath = prov_key_path();
     if (kpath == "") {
         println("note: provenance: unsigned " + profile + " build (no signing key)");
@@ -8468,7 +8472,7 @@ Int write_provenance(Str out, Str profile, Str done, Str grant, Str native) {
     List(Int) code = filesystem.sha256(out);
     List(Int) notes = prov_file_hash(out + ".resid-notes.cbor");
     List(Int) graph = prov_file_hash(out + ".resid-graph.cbor");
-    List(Int) map = prov_payload(out, profile, done, code, notes, graph, grant, prov_self_hash(), native);
+    List(Int) map = prov_payload(out, profile, done, code, notes, graph, grant, prov_self_hash(), native, reduce);
     Str ekey = environment.get("RESID_PROV_KEY");
     Bool conceal = environment.get("RESID_PROV_ENCRYPT") == "1";
     if (conceal && ekey == "") {
@@ -8831,6 +8835,8 @@ Int cmd_verify(Str bin_path, Str pub_given, Bool anchored, Str srcdir) {
     }
     println("attestation: toolchain " + cbe_map_text(map, "toolchain") + ", profile " + cbe_map_text(map, "profile") + ", output " + cbe_map_text(map, "output"));
     println("attestation: grant [" + list_join(grant, 0, ", ", "") + "]");
+    Str red = cbe_map_text(map, "reduce");
+    Bool _rp = if (red != "") { println("attestation: reduction budget " + red) } else { true };
     List(Str) natv = vf_native_of(map);
     Bool _nv = vf_print_native(natv, 0);
     println("verify: ok (kid " + c.kid + ", code " + hex_encode(code) + ", trust " + mode + ")");
@@ -9091,8 +9097,10 @@ Int test_all(Int argc) {
     Str rtr  =  pick_opt(argc, "-rtr", if (rhome == "") { "build/boot/rt.ll" } else { rhome + "/rt.ll" });
     // Each test file links the same native modules (spec §47).
     List(Str) nats  =  nt_flag_values();
-    Str nat  =  str_join(nt_prefix_all(nats, 0, ListBuf()), "");
-    Int g  =  guard_no_space([self, root, bindir, depmap, rtr, rtc, fmt, flt].concat(nats));
+    // ... and reduces under the same budget (spec §27).
+    Str rbud  =  pick_opt(argc, "--reduce-budget", "");
+    Str nat  =  str_join(nt_prefix_all(nats, 0, ListBuf()), "") + opt_arg("--reduce-budget", rbud);
+    Int g  =  guard_no_space([self, root, bindir, depmap, rtr, rtc, fmt, flt, rbud].concat(nats));
     if (g != 0) { return g; }
     if (!filesystem.is_dir(root)) {
         println("error: not a directory: " + root);
@@ -9321,8 +9329,21 @@ Int main() {
     // reasons. `--no-reduce` skips reduction.
     // The runtime is not reduced: an @import stub's body is not its value.
     Bool noreduce  =  pick_flag(argc, "--no-reduce") || rtmod;
+    // `--reduce-budget N|unbounded` (spec §27); the memory meter follows the
+    // compiler's memory budget.
+    Str memenv  =  environment.get("RESID_MEM_LIMIT");
+    Int memmb  =  if (str_is_int(memenv) && str_parse_int(memenv) > 0) { str_parse_int(memenv) } else { 4096 };
+    Str rbflag  =  pick_opt(argc, "--reduce-budget", "");
+    RB rbud = gx_budget(rbflag, memmb);
+    if (rbud.specs < 0) {
+        println("error: --reduce-budget takes a step count or `unbounded`");
+        return 1;
+    }
+    // A budget other than the default is part of the provenance record.
+    Str rbsteps  =  if (rbflag == "") { "default steps" } else if (rbflag == "unbounded") { "unbounded" } else { rbflag + " steps" };
+    Str redrec  =  if (rbflag == "" && memmb == 4096) { "" } else { rbsteps + f", memory {memmb} MB" };
     Int _gr_in = resid_bulk_push();
-    GXO grd = gx_run(gx_unpack(ckpk[0]), rsrc, !noreduce);
+    GXO grd = gx_run(gx_unpack(ckpk[0]), rsrc, !noreduce, rbud);
     GSR gsa0 = if (grd.err != "") { GSR {.g = grd.g, .id = -1, .dv = ""} } else { gs_program(grd.g, grd.root) };
     List(Str) gpk = resid_list_str_persist_copy([grd.notes, grd.err, if (gsa0.id < 0) { "" } else { gx_pack(gsa0.g, gsa0.id) }, grd.dv + gsa0.dv, grd.rs]);
     Int _gr_out = resid_bulk_pop();
@@ -9436,7 +9457,7 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     Int _prov_in = resid_bulk_push();
     // Notes are a projection of the residual graph (gart.resid).
     Int nrc  =  write_graph_notes(out, ga_notes(gx_unpack(gpk[2]), gpk[4], rsrc, rr.map, path));
-    Int prc  =  write_provenance(out, profile, rr.done, grk[0], nkeep[1]);
+    Int prc  =  write_provenance(out, profile, rr.done, grk[0], nkeep[1], redrec);
     Int _prov_out = resid_bulk_pop();
     return prc;
 }

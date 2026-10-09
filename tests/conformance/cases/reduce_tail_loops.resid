@@ -1,0 +1,27 @@
+// Tail calls reduce in a loop of their own (spec §27): no stack and no
+// memo entry per step, so long loops fold. A known condition reduces only
+// the arm it selects, so a recursion's base case does not run the other
+// arm on, and a `for` over a known range has no length limit.
+Int sum(Int i, Int n, Int acc) {
+    if (i >= n) { return acc; }
+    return sum(i + 1, n, acc + i);
+}
+
+Int count(Int n) {
+    return if (n == 0) { 0 } else { count(n - 1) };
+}
+
+Int first_square_over(Int limit) {
+    for (Int x in 0..100000) {
+        if (x * x > limit) { return x; }
+    }
+    return -1;
+}
+
+Int main() {
+    known(sum(0, 200000, 0));
+    known(count(100000));
+    known(first_square_over(2000000000));
+    println(f"{sum(0, 200000, 0)} {count(100000)} {first_square_over(2000000000)}");
+    return 0;
+}

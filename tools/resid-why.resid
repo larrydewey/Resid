@@ -201,7 +201,7 @@ Str explain(Str kind) {
         return "queries an external provider (filesystem/env/git/...); grant the capability at build time with a concrete value to discharge it";
     }
     if (kind == "budget") {
-        return "compile-time evaluation ran out of its reduction budget (steps or fuel); the call runs at run time";
+        return "compile-time evaluation ran out of its reduction budget (steps, fuel, memory or depth); the call runs at run time. Raise it with --reduce-budget N (or unbounded), [reduce] budget in resid.toml, @reduce(steps = N) on the function, or require it with @fold";
     }
     if (kind == "loop") {
         return "the call re-entered itself with identical arguments during compile-time evaluation, so it stays a run-time call";

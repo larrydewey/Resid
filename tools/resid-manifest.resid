@@ -291,6 +291,7 @@ type Manifest = {
     Str name; Str version; Str root; List(Str) grant; List(NativeEntry) natives;
     List(Dependency) dependencies; Bool require_signatures; Bool allow_unsigned; Str keyring;
     Str registry_path; Str registry_url; Str registry_pubkey; Str registry_ca;
+    Str reduce_budget;
 };
 
 Dependency build_dep(List(TomlEntry) entries, Str name) {
@@ -328,8 +329,21 @@ Manifest load_manifest(Str text) {
         .registry_path = toml_str(entries, "registry", "path", ""),
         .registry_url = toml_str(entries, "registry", "url", ""),
         .registry_pubkey = toml_str(entries, "registry", "pubkey", ""),
-        .registry_ca = toml_str(entries, "registry", "ca", "")
+        .registry_ca = toml_str(entries, "registry", "ca", ""),
+        .reduce_budget = toml_str(entries, "reduce", "budget", "")
     };
+}
+
+// `[reduce] budget = N` or `"unbounded"` (spec §27) as the compiler's
+// `--reduce-budget` flag; err names a value that is neither.
+type ReduceFlag = { Str err; Str flag; };
+
+ReduceFlag reduce_flag(Manifest m) {
+    Str b = str_replace(m.reduce_budget, "_", "");
+    if (b == "") { return ReduceFlag {.err = "", .flag = ""}; }
+    Bool ok = b == "unbounded" || (str_is_int(b) && !str_starts_with(b, "-"));
+    if (!ok) { return ReduceFlag {.err = "[reduce] budget must be a step count or \"unbounded\", not `" + m.reduce_budget + "`", .flag = ""}; }
+    return ReduceFlag {.err = "", .flag = " --reduce-budget " + b};
 }
 
 List(Str) native_names(List(TomlEntry) entries, Int i, List(Str) acc) {
@@ -1551,6 +1565,7 @@ Int cmd_manifest(Str path) {
     println("registry_path=" + m.registry_path);
     println("registry_url=" + m.registry_url);
     println("registry_pubkey=" + m.registry_pubkey);
+    println("reduce_budget=" + m.reduce_budget);
     Int _p = print_deps(m.dependencies, 0);
     return 0;
 }
@@ -1691,7 +1706,12 @@ Int cmd_test(Str manifest_path, Str driver_bin, Str rtc) {
         eprintln("error: " + nf.err);
         return 1;
     }
-    Str cmd = driver_bin + " test --root " + src_dir + " --testbin-dir " + out_dir + " -depmap " + depmap_path + rtx + nf.flags;
+    ReduceFlag rf = reduce_flag(m);
+    if (rf.err != "") {
+        eprintln("error: " + rf.err);
+        return 1;
+    }
+    Str cmd = driver_bin + " test --root " + src_dir + " --testbin-dir " + out_dir + " -depmap " + depmap_path + rtx + nf.flags + rf.flag;
     Str sp = first_space_path([driver_bin, src_dir, out_dir, depmap_path, rtc], 0);
     if (sp != "") {
         eprintln("error: this path contains a space, which process.run cannot pass as one argument:");
@@ -1754,7 +1774,12 @@ Int cmd_build(Str manifest_path, Str driver_bin, Str rtc) {
         eprintln("error: " + nf.err);
         return 1;
     }
-    Str cmd = driver_bin + " " + root + " -o " + out + rtx + " -depmap " + depmap_path + nf.flags;
+    ReduceFlag rf = reduce_flag(m);
+    if (rf.err != "") {
+        eprintln("error: " + rf.err);
+        return 1;
+    }
+    Str cmd = driver_bin + " " + root + " -o " + out + rtx + " -depmap " + depmap_path + nf.flags + rf.flag;
     Int rc = process.run(cmd);
     if (rc != 0) {
         eprintln("error: build failed");

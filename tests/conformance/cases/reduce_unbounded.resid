@@ -1,0 +1,12 @@
+// `--reduce-budget unbounded`: no step limit, only the memory meter. A
+// loop longer than the default allows a call folds.
+Int mix(Int n, Int acc) {
+    if (n == 0) { return acc; }
+    return mix(n - 1, (acc * 31 + n) % 1000003);
+}
+
+Int main() {
+    known(mix(1000000, 7));
+    println(f"{mix(1000000, 7)}");
+    return 0;
+}

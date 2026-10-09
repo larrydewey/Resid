@@ -293,6 +293,55 @@ re-entry) and `whistle` (a generalized specialization), recorded against
 the call and inherited along derive edges. Self-compile: 2,517 budget and
 605 whistle reasons; debug peak 690MB.
 
+### 0zx. Reduction budgets that count work, and tail calls that loop (2026-10-09)
+
+Goal: reduce as much as possible with no arbitrary cutoff, while staying
+deterministic across implementations (resid-ddc must reproduce every
+reduction). Budgets now count only work; the compiler's real stack and
+memory fail the build (fail-closed) rather than silently change output.
+
+- **Memory meter instead of native bytes.** `rd_max_mem` (512 MB of
+  *requested native* allocation, unreproducible by resid-ddc) is gone. One
+  attempt carries an abstract meter: 4096 per step, 4096 per non-tail call,
+  each value's length, each encoded value read (`gx_charge`, `gx_scan`); a
+  quarter of `RESID_MEM_LIMIT` (half under `unbounded`). The five conformance
+  cases resid-ddc disagreed on (`dt_calendar`, `loop_regions_lists`,
+  `reduce_known_names`, `scalar_scopes`, `regex_basics`) now agree.
+- **Tail calls trampolined.** `return f(known...)` (through parens and known
+  `if`/`?:`) comes back to `gx_tramp`, which runs `gx_hop` in a loop: no
+  depth, no memo entry per iteration, and `gx_hop` carries only scalars and
+  argument strings so lower.resid gives it a compacting loop region. A 10M
+  iteration loop folds in 24 MB (it used to stop near 190K iterations).
+- **Only the taken arm.** `if`/`?:`/`match` with a known condition reduce
+  only the selected arm; before, `count(n - 1)` in the base case's other arm
+  ran on to the depth limit (count(10) cost 37 MB).
+- **Doubling attempts.** A top-level call starts at 65,536 steps and doubles
+  up to fuel/8 (fuel default 16M steps); `~lim` in the memo stops a retry
+  that cannot go further. A budget failure is told from a real one by `bx`.
+- **Knobs.** `--reduce-budget N|unbounded`, `[reduce] budget` in resid.toml
+  (resid-manifest, forwarded to each test file), `@reduce(steps = N)` (own
+  allowance), `@fold` (E0903 when a call does not reduce), E0904 for a bad
+  `@reduce`. A non-default budget is the provenance record's `reduce` key.
+- **Other limits removed.** The 10,000-item `for` limit; list `len`/index/
+  field no longer decode the whole value (`rd_nth`, `rd_count`), and concat
+  is text concatenation.
+- **Stack, fail-closed.** `resid_raw_sp` (new raw primitive) and
+  `resid_stack_left` (runtime, from each thread's floor); within 16 MB of the
+  end the build fails with E0902.
+- **Runtime budget fix (pre-existing bug).** Each nested loop region claims
+  a 1 MB page; ~4,000 nested ones exhausted the 4 GB *counted* budget at
+  46 MB resident, so `inc(e(n - 1))` 19,000 deep aborted the committed
+  compiler. `mem_take` now checks `/proc/self/statm` before aborting.
+- **A miscompile found and fixed on the way:** a tail call after an `if` on
+  an unknown condition was followed as the result (readline's `rl_esc()`
+  folded to -2); `reduce_tail_after_unknown` covers it.
+- Specialization scaled per function was tried and reverted: +8% IR and
+  compile memory, no speed (compiler and benchmark suite measured).
+
+Seed +159 KB (+1.7%), stage2 +56 KB; compile time within 1-4% of before;
+benchmark run times unchanged (fasta -2.9%, its IR 15% smaller).
+Conformance 410 (9 new cases), pkg 100.
+
 ### 0zw. The depmap says whether a dependency has a ceiling (2026-10-08)
 
 Found while making `resid-book` import the Datastar SDK by package name.

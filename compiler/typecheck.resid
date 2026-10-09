@@ -2337,7 +2337,7 @@ pub Bool num_all_same(List(Str) ts, Int i, Str t) {
 
 // Runtime primitives (compiler-only): argument and result types.
 ERes raw_sig(Str name, Str op, Str argtys, Int argc, Int pos) {
-    Str want = if (op == "cpuid") { "Int,Int" } else { if (op == "catch") { "Int,Int,Int" } else { if (op == "popcount") { "Int" } else { want0(op) } } };
+    Str want = if (op == "sp") { "" } else if (op == "cpuid") { "Int,Int" } else { if (op == "catch") { "Int,Int,Int" } else { if (op == "popcount") { "Int" } else { want0(op) } } };
     Str rty = if (op == "cas") { "Bool" } else { if (op == "str") { "Str" } else { if (op == "bits_f64") { "Float" } else { if (op == "f128_bits") { "Int(128)" } else { if (op == "bits_f128") { "Float(128)" } else { "Int" } } } } };
     if (want == "?") { return ERes {.pos = pos, .ty = "", .err = "unknown runtime primitive " + name}; }
     Bool scalar = argtys == "Int" || argtys == "Float" || argtys == "Bool";
@@ -2438,9 +2438,9 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
     // resid_bulk_push/pop: an arena scope that also takes the generated
     // code's own allocations (runtime/resid_rt.c, g_bulk_arena). For the
     // driver's whole-phase scopes only, under the same caller-proof rule.
-    // resid_mem_mark / resid_mem_since_mark: the reducer's allocation
-    // budget (bytes requested since the mark).
-    Bool zero_arg_rt = if (name == "resid_bulk_push" || name == "resid_bulk_pop") { true } else { name == "resid_mem_mark" || name == "resid_mem_since_mark" };
+    // resid_mem_mark / resid_mem_since_mark: bytes requested since the mark.
+    // resid_stack_left: bytes of stack below the caller (-1: unknown).
+    Bool zero_arg_rt = if (name == "resid_bulk_push" || name == "resid_bulk_pop" || name == "resid_stack_left") { true } else { name == "resid_mem_mark" || name == "resid_mem_since_mark" };
     if (zero_arg_rt) {
         if (argc == 0) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = name + " expects no arguments"};

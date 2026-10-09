@@ -1,0 +1,4 @@
+@reduce(steps = lots)
+Int f(Int n) { return n; }
+
+Int main() { return f(1); }

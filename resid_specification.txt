@@ -1420,13 +1420,57 @@ therefore:
      (LLVM).
 
 The reduction outcome is deterministic: budgets count
-evaluation steps, calls and allocations, never time, so a
-given compiler reduces a given program the same way every
-time. Program meaning never depends on a budget: reduced
-and unreduced programs have identical observable
-behavior, and a budget only decides how much work is left
-residual. Every budget that leaves work residual is
-reported as a compiler note ("note: reduce: ...").
+evaluation steps, calls and the size of the values the
+evaluator builds, never time or the compiler's native
+memory, so every implementation of the compiler reduces a
+given program the same way. Program meaning never depends
+on a budget: reduced and unreduced programs have identical
+observable behavior, and a budget only decides how much
+work is left residual. Every budget that leaves work
+residual is reported as a compiler note ("note: reduce:
+...").
+
+The budgets:
+
+  fuel     evaluation steps over the whole program
+           (default 16,000,000; `--reduce-budget N`,
+           `--reduce-budget unbounded`, or `[reduce]
+           budget` in resid.toml).
+  steps    one top-level call's attempt. The first
+           attempt has 65,536 steps; a call that runs
+           out is tried again with twice as many, up to
+           an eighth of the fuel left, so cheap calls
+           cost nothing and an expensive one wastes at
+           most what it finally needs.
+  memory   a meter of what one attempt holds: each step,
+           each call that is not a tail call, and the
+           length of each value built and each encoded
+           value read. It is a quarter of the compiler's
+           memory budget (RESID_MEM_LIMIT, default
+           4096 MB; half under `unbounded`). A tail loop's
+           meter returns to its start each iteration.
+  depth    non-tail nesting, 20,000 calls (none under
+           `unbounded`).
+  specs    specialization attempts: 400 per program and
+           8 per function (more does not make the code
+           faster, measured on the compiler itself and
+           the benchmark suite).
+
+`@reduce(steps = N)` (or `steps = unbounded`) on a
+function gives each of its top-level calls N steps of its
+own, outside the fuel. `@fold` on a function makes every
+call of it reduce at compile time, with no step limit: a
+call with an argument that is not known, or one that does
+not reduce, is error E0903 (calls inside another `@fold`
+function are exempt; they reduce where that function's
+calls do). A malformed `@reduce` is E0904.
+
+What the compiler has may still run out first. The
+evaluator recurses on the compiler's stack; past its end
+the build fails with E0902 rather than leaving the call
+residual (raise RESID_STACK_MB), since how much stack
+there is is not a budget. Past the memory budget the
+compiler aborts.
 
 Release builds may omit diagnostic metadata from residual
 thunks. Capability checks may be elided when the required
@@ -2084,7 +2128,7 @@ relative to the symbol. Nodes
 created by reduction have the span of the node they
 derive from. Every RESIDUAL or EFFECT node has a reason;
 its detail is the effect for effect and the budget that
-ran out (fuel, steps, specs) for budget, and dep names
+ran out (fuel, steps, memory, depth, specs) for budget, and dep names
 the first RESIDUAL operand or definition for unknown.
 
 Provenance (CDDL; the COSE_Sign1 payload, §33.1):
@@ -2094,7 +2138,8 @@ Provenance (CDDL; the COSE_Sign1 payload, §33.1):
                  ? graph: bstr, ? notes: bstr,
                  ? cache: bstr, grant: [* tstr],
                  ? native: { * tstr => bstr },
-                 output: tstr, ? compiler: bstr }
+                 output: tstr, ? reduce: tstr,
+                 ? compiler: bstr }
 
 Hashes are SHA-256. code is the hash of the binary before
 its trailer; graph, notes and cache are the hashes of
@@ -2108,12 +2153,18 @@ the SHA-256 of its artifact as given, before the compiler
 rewrote it; like grant it is ATTESTATION: the code hash
 covers the linked result, and the signer names the
 artifact it came from.
+reduce names a reduction budget other than the default
+(§27), e.g. "unbounded, memory 8192 MB": the budget
+decides how much of the program was computed at compile
+time, so a rebuild needs the same one to reproduce the
+code hash.
 
 ResidualNotes is a projection of the graph: one note for
 each residual node, reachable from the residual roots,
 that a programmer can act on: an `rt` value
 (rt-binding), a provider call (provider-call), and a call
-whose reason is budget (fuel or steps), loop or whistle.
+whose reason is budget (fuel, steps, memory or depth),
+loop or whistle.
 A note is [kind, symbol, line, col, file]: symbol is the
 source from the node to the end of its line (at most 40
 characters), col is 0-based, and notes are sorted by
@@ -2234,8 +2285,10 @@ Termination of reduction:
 
   - A call with all arguments known is evaluated; a pure
     call that re-enters itself with identical arguments is
-    left residual immediately, and step / depth / fuel /
-    memory budgets bound the rest.
+    left residual immediately, and the budgets of §27
+    (steps, fuel, memory, depth) bound the rest. A tail
+    call is evaluated in a loop, not nested: it costs no
+    depth, and only what it passes on stays live.
   - Specialization terminates by a homeomorphic-embedding
     test on the active chain of specializations of the same
     function with the same known positions: integers embed
