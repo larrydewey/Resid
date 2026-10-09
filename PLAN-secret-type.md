@@ -31,7 +31,11 @@ in records and parameters, round keys as 32-bit words), with
 `lib/aesgcm.resid` as its public copy; the AES-NI and carry-less multiply
 builtins take secrets (`sec_liftable`), the software S-box is computed
 four bytes per word, and GCM open and key unwrap publish their verdict
-through `CtSame(B)`. Next are X25519, Ed25519, P-256/P-384, HPKE and the TLS
+through `CtSame(B)`. X25519 is in (2026-10-09): `lib/x25519g.resid`, generic over `Wide512(P, B)` (field
+elements in parameters, mask swaps), with `lib/x25519.resid` as its public
+copy (as fast as before, about 12% faster); the zero-share verdict goes
+through `CtSame(B)` and the derived public key through `X25519Pub(B)`,
+both declassifying at secret types. Next are Ed25519, P-256/P-384, HPKE and the TLS
 key schedule. Still to do: a
 force-time `resid_cap_check("declassify")` (declassify lowers to nothing,
 so the static check is the whole check today), and steps 2–3 of §7.
