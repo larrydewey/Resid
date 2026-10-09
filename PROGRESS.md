@@ -407,11 +407,18 @@ the evaluator could not run.
   so compiling one Int(4096) operation needed over 4 GB; it now builds the
   digits in a buffer.
 
+- **Generic sum types.** `type Tree(T) = Leaf | Node(Tree(T), T, Tree(T))`
+  and the like: a variant's type arguments are the ones its payloads give,
+  by matching the declared payload types against theirs (`rd_unify`); one
+  they do not give is `_`, and such a value flows into any instance
+  (`Leaf` into `Tree(Int)`, as `None` and `Ok` already did). `match` binds
+  payloads at the instance's types (`rd_subst`). Folds over the corpus
+  with wide integers and generic sums: 3,867 -> 4,195.
+
 What stays residual, by design: effects; the legacy `str_sb_*`
 accumulators (not linear, so an older version may be read again);
-integers past 2^1023 and Float(16/32/128) and Dec values (not carried);
-sum types with generic parameters; a `while` whose body runs to its end
-(it would run forever).
+integers past 2^1023 and Float(16/32/128) and Dec values (not carried); a
+`while` whose body runs to its end (it would run forever).
 
 ### 0zx. Reduction budgets that count work, and tail calls that loop (2026-10-09)
 

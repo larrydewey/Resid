@@ -1,0 +1,2 @@
+has: println("16 2 42 3");
+has: println("3 300");

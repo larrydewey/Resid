@@ -1,0 +1,56 @@
+// Sum types with generic parameters at compile time: the parameters are
+// the ones the payloads give; a variant that gives none flows into any.
+type Tree(T) = Leaf | Node(Tree(T), T, Tree(T));
+type Either(A, B) = Left(A) | Right(B);
+type Pair(K, V) = { K k; V v; };
+type Step(K) = Done(Str) | More(List(K));
+
+Tree(Int) insert(Tree(Int) t, Int v) {
+    return match t {
+        Leaf => Node(Leaf, v, Leaf),
+        Node(l, x, r) => if (v < x) { Node(insert(l, v), x, r) } else { Node(l, x, insert(r, v)) }
+    };
+}
+
+Int total(Tree(Int) t) {
+    return match t {
+        Leaf => 0,
+        Node(l, x, r) => total(l) + x + total(r)
+    };
+}
+
+Int depth(Tree(Str) t) {
+    return match t {
+        Leaf => 0,
+        Node(l, _, r) => 1 + max(depth(l), depth(r))
+    };
+}
+
+Either(Int, Str) parse(Str s) {
+    if (str_is_int(s)) { return Left(str_parse_int(s)); }
+    return Right(s);
+}
+
+Int side(Either(Int, Str) e) {
+    return match e {
+        Left(n) => n,
+        Right(s) => str_len(s)
+    };
+}
+
+Int steps(Step(Int) s) {
+    return match s {
+        Done(m) => str_len(m),
+        More(xs) => xs.len() * 100
+    };
+}
+
+Int main() {
+    Tree(Int) t = insert(insert(insert(Leaf, 5), 2), 9);
+    Tree(Str) u = Node(Node(Leaf, "a", Leaf), "b", Leaf);
+    Str s42 = "42";
+    Str sab = "abc";
+    println(f"{total(t)} {depth(u)} {side(parse(s42))} {side(parse(sab))}");
+    println(f"{steps(Done(sab))} {steps(More([1, 2, 3]))}");
+    return 0;
+}

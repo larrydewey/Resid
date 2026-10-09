@@ -19,7 +19,7 @@ check discharge from facts.
   call that re-enters itself with identical arguments is left residual.
   Known values are integers of every width (carried exactly up to 2^1023),
   `Float`, `Str`, `Bool`, lists, records, `Option`, `Result`, declared sum
-  types, maps and sets with `Int` or `Str` keys (in the runtime's own
+  types (generic ones too), maps and sets with `Int` or `Str` keys (in the runtime's own
   iteration order), `StrBuf`/`ListBuf` builders, and closures (a lambda
   with the bindings it captured, applied where it is called). A call whose
   arguments are all known but whose body does not evaluate in full (it

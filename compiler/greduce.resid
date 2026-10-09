@@ -30,7 +30,7 @@ type GS = { Int steps; Int depth; Int fuel; Map(Str, Str) memo; List(Int) specs;
 // `@fold`), 0 for none; ffold: `@fold`.
 // vsum / vtys: each variant's sum type (declared, not generic) and its
 // payload types ("T1, T2"; "" for none), by vidx.
-type GXT = { List(Str) fnames; List(Str) fpns; List(Str) fpts; List(Str) frets; List(Int) fbody; List(Str) sts; List(Str) sfs; Map(Str, Int) fidx; List(Str) cts; List(Int) cpred; List(Str) fann; Str src; RdS rds; RB rb; List(Int) fcap; List(Bool) ffold; List(Str) vsum; List(Str) vtys; Map(Str, Int) vidx; Map(Str, Int) sidx; List(Int) snf; Map(Str, Int) sfx; Map(Str, Str) sft; List(List(Str)) fpnl; List(List(Str)) fptl; Map(Str, Str) fone; };
+type GXT = { List(Str) fnames; List(Str) fpns; List(Str) fpts; List(Str) frets; List(Int) fbody; List(Str) sts; List(Str) sfs; Map(Str, Int) fidx; List(Str) cts; List(Int) cpred; List(Str) fann; Str src; RdS rds; RB rb; List(Int) fcap; List(Bool) ffold; List(Str) vsum; List(Str) vtys; Map(Str, Int) vidx; Map(Str, Int) sidx; List(Int) snf; Map(Str, Int) sfx; Map(Str, Str) sft; List(List(Str)) fpnl; List(List(Str)) fptl; Map(Str, Str) fone; List(Str) vgps; };
 // Reduction budgets (spec §27): fuel, the steps of the whole program; step0,
 // a top-level call's first attempt (each retry doubles it); depth, non-tail
 // nesting; mem, one attempt's meter in abstract bytes; specs, the
@@ -341,7 +341,7 @@ GV gx_ref(GXT ft, Int id, RdE env, GS st) {
     if (name == "None" && ei < 0) { return gx_kv("N", "Option(_)", id, false, st); }
     // A variant without a payload.
     Int vi = if (ei < 0) { ft.vidx.get(name) else { -1 } } else { -1 };
-    if (vi >= 0 && ft.vtys[vi] == "") { return gx_kv(rd_enc([name]), ft.vsum[vi], id, false, st); }
+    if (vi >= 0 && ft.vtys[vi] == "") { return gx_kv(rd_enc([name]), gx_variant_ty(ft, vi, gx_nos()), id, false, st); }
     if (ei >= 0) {
         Str ety = env.ts[ei];
         if (ety != "") { return gx_folded_r(env.vs[ei], ety, id, false, st, "known"); }
@@ -753,19 +753,58 @@ Bool gx_mm_all(List(RdV) xs, Str t0, Int i) {
 GV gx_variant(GXT ft, Int vi, Str name, GXA a, Int r, GS st) {
     Str v = gx_variant_v(ft, vi, name, a.vs, a.ts);
     if (v == str_from_code(1)) { return gx_unk(r, a.ch, st); }
-    return gx_kv(v, ft.vsum[vi], r, a.ch, st);
+    return gx_kv(v, gx_variant_ty(ft, vi, a.ts), r, a.ch, st);
 }
 
-// The value of variant `name` with payloads vs, or "\x01".
+// The value of variant `name` with payloads vs, or "\x01". A generic sum's
+// parameters are those the payloads' types give (gx_vbind).
 Str gx_variant_v(GXT ft, Int vi, Str name, List(Str) vs, List(Str) ts) {
     List(Str) ps0 = if (ft.vtys[vi] == "") { gx_nos() } else { split_rest_depth(ft.vtys[vi], ", ") };
-    if (ps0.len() != vs.len() || !gx_fit_all(ps0, vs, ts, 0)) { return str_from_code(1); }
+    if (ps0.len() != vs.len()) { return str_from_code(1); }
+    List(Str) gps = gx_vparams(ft, vi);
+    List(Str) bs = gx_vbind(ps0, ts, gps, 0, gx_unbound(gps.len(), ListBuf()));
+    if (bs.len() != gps.len() || !gx_fit_all(gx_subst_all(ps0, gps, bs, 0, ListBuf()), vs, ts, 0)) { return str_from_code(1); }
     return rd_enc([name].concat(vs));
+}
+
+// The type a variant made from payloads of types ts has: the sum's name,
+// with its parameters as the payloads give them ("_" for one they do not).
+Str gx_variant_ty(GXT ft, Int vi, List(Str) ts) {
+    List(Str) gps = gx_vparams(ft, vi);
+    if (gps.len() == 0) { return ft.vsum[vi]; }
+    List(Str) ps0 = if (ft.vtys[vi] == "") { gx_nos() } else { split_rest_depth(ft.vtys[vi], ", ") };
+    List(Str) bs = gx_vbind(ps0, ts, gps, 0, gx_unbound(gps.len(), ListBuf()));
+    return ft.vsum[vi] + "(" + rd_join(bs, 0, ", ", "") + ")";
+}
+
+List(Str) gx_vparams(GXT ft, Int vi) { return if (ft.vgps[vi] == "") { gx_nos() } else { split_rest_depth(ft.vgps[vi], ", ") }; }
+
+List(Str) gx_unbound(Int n, ListBuf(Str) acc) { return if (n <= 0) { acc.finish() } else { gx_unbound(n - 1, acc.push("_")) }; }
+
+// Each parameter bound by matching declared payload types against the
+// payloads' own; a short list when two payloads disagree.
+List(Str) gx_vbind(List(Str) pts, List(Str) ts, List(Str) gps, Int i, List(Str) bs) {
+    if (i >= pts.len() || bs.len() != gps.len()) { return bs; }
+    return gx_vbind(pts, ts, gps, i + 1, rd_unify(pts[i], rd_norm_ty(ts[i]), gps, bs));
+}
+
+List(Str) gx_subst_all(List(Str) ts, List(Str) gps, List(Str) bs, Int i, ListBuf(Str) acc) {
+    if (i >= ts.len()) { return acc.finish(); }
+    return gx_subst_all(ts, gps, bs, i + 1, acc.push(rd_subst(ts[i], gps, bs)));
 }
 
 Bool gx_fit_all(List(Str) pts, List(Str) vs, List(Str) ts, Int i) {
     if (i >= pts.len()) { return true; }
-    return rd_coerce_v(ts[i], pts[i], vs[i]) != "" && gx_fit_all(pts, vs, ts, i + 1);
+    // A payload of a parameter no payload fixed is itself not fully typed
+    // (an empty list, a None, a generic variant of its own).
+    Bool open = str_contains(pts[i], "_");
+    Bool ok = if (open) { str_contains(ts[i], "_") || str_contains(ts[i], "?") } else { rd_coerce_v(ts[i], pts[i], vs[i]) != "" };
+    return ok && gx_fit_all(pts, vs, ts, i + 1);
+}
+
+List(Str) gx_open_none(List(Str) ts, Int i, ListBuf(Str) acc) {
+    if (i >= ts.len()) { return acc.finish(); }
+    return gx_open_none(ts, i + 1, acc.push(if (ts[i] == "_") { "" } else { ts[i] }));
 }
 
 // A known value of a sum type taken apart: its variant, payloads and
@@ -791,9 +830,16 @@ GXS gx_sum_of(GXT ft, Str v, Str ty) {
         return GXS {.ok = true, .tag = tag, .ps = [items[1]], .pts = [if (pt == "_") { "" } else { pt }]};
     }
     Int vi = ft.vidx.get(tag) else { -1 };
-    if (vi < 0 || ft.vsum[vi] != t) { return none; }
-    List(Str) pts = if (ft.vtys[vi] == "") { e } else { split_rest_depth(ft.vtys[vi], ", ") };
-    if (pts.len() != items.len() - 1) { return none; }
+    if (vi < 0) { return none; }
+    List(Str) gps = gx_vparams(ft, vi);
+    Int o = str_find_char(t, 40, 0);
+    Str head = if (o < 0) { t } else { str_slice(t, 0, o) };
+    List(Str) targs = if (o < 0) { e } else { rd_targs(t) };
+    if (head != ft.vsum[vi] || targs.len() != gps.len()) { return none; }
+    List(Str) pts0 = if (ft.vtys[vi] == "") { e } else { split_rest_depth(ft.vtys[vi], ", ") };
+    if (pts0.len() != items.len() - 1) { return none; }
+    // A payload whose type the value does not fix is bound unknown.
+    List(Str) pts = gx_open_none(gx_subst_all(pts0, gps, targs, 0, ListBuf()), 0, ListBuf());
     return GXS {.ok = true, .tag = tag, .ps = items[1..items.len()], .pts = pts};
 }
 
@@ -2121,7 +2167,7 @@ YV gy_ref(GYC c, KN n, RdE env, GY st) {
     if (name == "None") { return gy_val("N", "Option(_)", st); }
     // A variant without a payload.
     Int vi = c.ft.vidx.get(name) else { -1 };
-    if (vi >= 0 && c.ft.vtys[vi] == "") { return gy_val(rd_enc([name]), c.ft.vsum[vi], st); }
+    if (vi >= 0 && c.ft.vtys[vi] == "") { return gy_val(rd_enc([name]), gx_variant_ty(c.ft, vi, gx_nos()), st); }
     return gy_fail(st);
 }
 
@@ -2208,7 +2254,7 @@ YV gy_call(GYC c, Int id, KN n, RdE env, GY st) {
         Int vi = ft.vidx.get(name) else { -1 };
         if (vi >= 0) {
             Str vv = gx_variant_v(ft, vi, name, a.vs, a.ts);
-            return if (vv == str_from_code(1)) { gy_fail(a.st) } else { gy_made(vv, ft.vsum[vi], a.st) };
+            return if (vv == str_from_code(1)) { gy_fail(a.st) } else { gy_made(vv, gx_variant_ty(ft, vi, a.ts), a.st) };
         }
     }
     RdV bv = if (ufi < 0) { rd_builtin(name, gy_rda(a.vs, a.ts, ft.rds), "", 0, ft.rds) } else { rd_unk("", false, 0, ft.rds) };
@@ -2892,7 +2938,7 @@ GXT gx_table_empty(Str src, RB rb) {
     List(Int) ei = [];
     List(Bool) eb = [];
     List(List(Str)) ell = [];
-    return GXT {.fnames = es, .fpns = es, .fpts = es, .frets = es, .fbody = ei, .sts = es, .sfs = es, .fidx = e, .cts = es, .cpred = ei, .fann = es, .src = src, .rds = gx_rds0(), .rb = rb, .fcap = ei, .ffold = eb, .vsum = es, .vtys = es, .vidx = e, .sidx = e, .snf = ei, .sfx = e, .sft = {"__EMPTY__": ""}, .fpnl = ell, .fptl = ell, .fone = {"__EMPTY__": ""}};
+    return GXT {.fnames = es, .fpns = es, .fpts = es, .frets = es, .fbody = ei, .sts = es, .sfs = es, .fidx = e, .cts = es, .cpred = ei, .fann = es, .src = src, .rds = gx_rds0(), .rb = rb, .fcap = ei, .ffold = eb, .vsum = es, .vtys = es, .vidx = e, .sidx = e, .snf = ei, .sfx = e, .sft = {"__EMPTY__": ""}, .fpnl = ell, .fptl = ell, .fone = {"__EMPTY__": ""}, .vgps = es};
 }
 
 // The generic parameters of a type declaration ("" when none).
@@ -2923,23 +2969,23 @@ GXT gx_collect(Kg g, Int unit, Int i, GXT ft) {
     Int d = kg_kid(g, unit, i);
     KN n = g.ns[d];
     if (n.kind == "struct_t" && gx_gparams(n.aux) == "") {
-        GXT f1 = GXT {.fnames = ft.fnames, .fpns = ft.fpns, .fpts = ft.fpts, .frets = ft.frets, .fbody = ft.fbody, .sts = ft.sts.concat([n.text]), .sfs = ft.sfs.concat([gx_fields(g, d, 0, "")]), .fidx = ft.fidx, .cts = ft.cts, .cpred = ft.cpred, .fann = ft.fann, .src = ft.src, .rds = ft.rds, .rb = ft.rb, .fcap = ft.fcap, .ffold = ft.ffold, .vsum = ft.vsum, .vtys = ft.vtys, .vidx = ft.vidx, .sidx = ft.sidx.insert(n.text, ft.sts.len()), .snf = ft.snf.concat([n.nk]), .sfx = ft.sfx, .sft = ft.sft, .fpnl = ft.fpnl, .fptl = ft.fptl, .fone = ft.fone};
+        GXT f1 = GXT {.fnames = ft.fnames, .fpns = ft.fpns, .fpts = ft.fpts, .frets = ft.frets, .fbody = ft.fbody, .sts = ft.sts.concat([n.text]), .sfs = ft.sfs.concat([gx_fields(g, d, 0, "")]), .fidx = ft.fidx, .cts = ft.cts, .cpred = ft.cpred, .fann = ft.fann, .src = ft.src, .rds = ft.rds, .rb = ft.rb, .fcap = ft.fcap, .ffold = ft.ffold, .vsum = ft.vsum, .vtys = ft.vtys, .vidx = ft.vidx, .sidx = ft.sidx.insert(n.text, ft.sts.len()), .snf = ft.snf.concat([n.nk]), .sfx = ft.sfx, .sft = ft.sft, .fpnl = ft.fpnl, .fptl = ft.fptl, .fone = ft.fone, .vgps = ft.vgps};
         return gx_collect(g, unit, i + 1, gx_sfields(g, d, n.text, 0, f1));
     }
     if ((n.kind == "ctype_t" || n.kind == "cwhere_t") && gx_gparams(n.aux) == "") {
         Int pk = kg_kid(g, d, 1);
         Str ctext = str_trim(str_slice(ft.src, g.ns[pk].sp, g.ns[pk].ep));
         Str ent = n.text + str_from_code(31) + g.ns[kg_kid(g, d, 0)].text + str_from_code(31) + ctext;
-        GXT f2 = GXT {.fnames = ft.fnames, .fpns = ft.fpns, .fpts = ft.fpts, .frets = ft.frets, .fbody = ft.fbody, .sts = ft.sts, .sfs = ft.sfs, .fidx = ft.fidx, .cts = ft.cts.concat([ent]), .cpred = ft.cpred.concat([pk]), .fann = ft.fann, .src = ft.src, .rds = ft.rds, .rb = ft.rb, .fcap = ft.fcap, .ffold = ft.ffold, .vsum = ft.vsum, .vtys = ft.vtys, .vidx = ft.vidx, .sidx = ft.sidx, .snf = ft.snf, .sfx = ft.sfx, .sft = ft.sft, .fpnl = ft.fpnl, .fptl = ft.fptl, .fone = ft.fone};
+        GXT f2 = GXT {.fnames = ft.fnames, .fpns = ft.fpns, .fpts = ft.fpts, .frets = ft.frets, .fbody = ft.fbody, .sts = ft.sts, .sfs = ft.sfs, .fidx = ft.fidx, .cts = ft.cts.concat([ent]), .cpred = ft.cpred.concat([pk]), .fann = ft.fann, .src = ft.src, .rds = ft.rds, .rb = ft.rb, .fcap = ft.fcap, .ffold = ft.ffold, .vsum = ft.vsum, .vtys = ft.vtys, .vidx = ft.vidx, .sidx = ft.sidx, .snf = ft.snf, .sfx = ft.sfx, .sft = ft.sft, .fpnl = ft.fpnl, .fptl = ft.fptl, .fone = ft.fone, .vgps = ft.vgps};
         return gx_collect(g, unit, i + 1, f2);
     }
-    if (n.kind == "sum_t" && gx_gparams(n.aux) == "") { return gx_collect(g, unit, i + 1, gx_variants(g, d, 0, ft)); }
+    if (n.kind == "sum_t") { return gx_collect(g, unit, i + 1, gx_variants(g, d, 0, ft)); }
     if (n.kind == "fn") {
         // An @link function's answer comes from its native module at run
         // time (an effect, spec §47): it has no body to reduce.
         Int nk = n.nk;
         List(Str) fa = if (str_contains(n.aux, "@")) { ft.fann.concat([n.text]) } else { ft.fann };
-        GXT f3 = GXT {.fnames = ft.fnames.concat([n.text]), .fpns = ft.fpns.concat([gx_param_list(g, d, 1, nk - 1, false, ",", "")]), .fpts = ft.fpts.concat([gx_param_list(g, d, 1, nk - 1, true, "|", "")]), .frets = ft.frets.concat([g.ns[kg_kid(g, d, 0)].text]), .fbody = ft.fbody.concat([if (str_contains(n.aux, "@link")) { -1 } else { kg_kid(g, d, nk - 1) }]), .sts = ft.sts, .sfs = ft.sfs, .fidx = ft.fidx.insert(n.text, ft.fnames.len()), .cts = ft.cts, .cpred = ft.cpred, .fann = fa, .src = ft.src, .rds = ft.rds, .rb = ft.rb, .fcap = ft.fcap.concat([gx_ann_cap(n.aux)]), .ffold = ft.ffold.concat([gx_ann_word(n.aux, "@fold")]), .vsum = ft.vsum, .vtys = ft.vtys, .vidx = ft.vidx, .sidx = ft.sidx, .snf = ft.snf, .sfx = ft.sfx, .sft = ft.sft, .fpnl = ft.fpnl.concat([rd_split(gx_param_list(g, d, 1, nk - 1, false, ",", ""), ",")]), .fptl = ft.fptl.concat([gx_norm_all(rd_split(gx_param_list(g, d, 1, nk - 1, true, "|", ""), "|"), 0, ListBuf())]), .fone = ft.fone};
+        GXT f3 = GXT {.fnames = ft.fnames.concat([n.text]), .fpns = ft.fpns.concat([gx_param_list(g, d, 1, nk - 1, false, ",", "")]), .fpts = ft.fpts.concat([gx_param_list(g, d, 1, nk - 1, true, "|", "")]), .frets = ft.frets.concat([g.ns[kg_kid(g, d, 0)].text]), .fbody = ft.fbody.concat([if (str_contains(n.aux, "@link")) { -1 } else { kg_kid(g, d, nk - 1) }]), .sts = ft.sts, .sfs = ft.sfs, .fidx = ft.fidx.insert(n.text, ft.fnames.len()), .cts = ft.cts, .cpred = ft.cpred, .fann = fa, .src = ft.src, .rds = ft.rds, .rb = ft.rb, .fcap = ft.fcap.concat([gx_ann_cap(n.aux)]), .ffold = ft.ffold.concat([gx_ann_word(n.aux, "@fold")]), .vsum = ft.vsum, .vtys = ft.vtys, .vidx = ft.vidx, .sidx = ft.sidx, .snf = ft.snf, .sfx = ft.sfx, .sft = ft.sft, .fpnl = ft.fpnl.concat([rd_split(gx_param_list(g, d, 1, nk - 1, false, ",", ""), ",")]), .fptl = ft.fptl.concat([gx_norm_all(rd_split(gx_param_list(g, d, 1, nk - 1, true, "|", ""), "|"), 0, ListBuf())]), .fone = ft.fone, .vgps = ft.vgps};
         return gx_collect(g, unit, i + 1, f3);
     }
     return gx_collect(g, unit, i + 1, ft);
@@ -2959,14 +3005,16 @@ GXT gx_sfields(Kg g, Int d, Str sname, Int i, GXT ft) {
     Str fty = rd_norm_ty(g.ns[kg_kid(g, f, 0)].text);
     // A field name only one record type has is found by its name alone.
     Map(Str, Str) one = if (ft.fone.contains(fname)) { ft.fone.insert(fname, "") } else { ft.fone.insert(fname, sname + str_from_code(31) + rd_itoa(i) + str_from_code(31) + fty) };
-    GXT f2 = GXT {.fnames = ft.fnames, .fpns = ft.fpns, .fpts = ft.fpts, .frets = ft.frets, .fbody = ft.fbody, .sts = ft.sts, .sfs = ft.sfs, .fidx = ft.fidx, .cts = ft.cts, .cpred = ft.cpred, .fann = ft.fann, .src = ft.src, .rds = ft.rds, .rb = ft.rb, .fcap = ft.fcap, .ffold = ft.ffold, .vsum = ft.vsum, .vtys = ft.vtys, .vidx = ft.vidx, .sidx = ft.sidx, .snf = ft.snf, .sfx = ft.sfx.insert(key, i), .sft = ft.sft.insert(key, fty), .fpnl = ft.fpnl, .fptl = ft.fptl, .fone = one};
+    GXT f2 = GXT {.fnames = ft.fnames, .fpns = ft.fpns, .fpts = ft.fpts, .frets = ft.frets, .fbody = ft.fbody, .sts = ft.sts, .sfs = ft.sfs, .fidx = ft.fidx, .cts = ft.cts, .cpred = ft.cpred, .fann = ft.fann, .src = ft.src, .rds = ft.rds, .rb = ft.rb, .fcap = ft.fcap, .ffold = ft.ffold, .vsum = ft.vsum, .vtys = ft.vtys, .vidx = ft.vidx, .sidx = ft.sidx, .snf = ft.snf, .sfx = ft.sfx.insert(key, i), .sft = ft.sft.insert(key, fty), .fpnl = ft.fpnl, .fptl = ft.fptl, .fone = one, .vgps = ft.vgps};
     return gx_sfields(g, d, sname, i + 1, f2);
 }
 
 GXT gx_variants(Kg g, Int d, Int i, GXT ft) {
     if (i >= g.ns[d].nk) { return ft; }
     KN v = g.ns[kg_kid(g, d, i)];
-    GXT f2 = GXT {.fnames = ft.fnames, .fpns = ft.fpns, .fpts = ft.fpts, .frets = ft.frets, .fbody = ft.fbody, .sts = ft.sts, .sfs = ft.sfs, .fidx = ft.fidx, .cts = ft.cts, .cpred = ft.cpred, .fann = ft.fann, .src = ft.src, .rds = ft.rds, .rb = ft.rb, .fcap = ft.fcap, .ffold = ft.ffold, .vsum = ft.vsum.concat([g.ns[d].text]), .vtys = ft.vtys.concat([v.aux]), .vidx = ft.vidx.insert(v.text, ft.vsum.len()), .sidx = ft.sidx, .snf = ft.snf, .sfx = ft.sfx, .sft = ft.sft, .fpnl = ft.fpnl, .fptl = ft.fptl, .fone = ft.fone};
+    Str gp = gx_gparams(g.ns[d].aux);
+    Str gps = if (str_starts_with(gp, "(")) { str_slice(gp, 1, str_len(gp) - 1) } else { gp };
+    GXT f2 = GXT {.fnames = ft.fnames, .fpns = ft.fpns, .fpts = ft.fpts, .frets = ft.frets, .fbody = ft.fbody, .sts = ft.sts, .sfs = ft.sfs, .fidx = ft.fidx, .cts = ft.cts, .cpred = ft.cpred, .fann = ft.fann, .src = ft.src, .rds = ft.rds, .rb = ft.rb, .fcap = ft.fcap, .ffold = ft.ffold, .vsum = ft.vsum.concat([g.ns[d].text]), .vtys = ft.vtys.concat([v.aux]), .vidx = ft.vidx.insert(v.text, ft.vsum.len()), .sidx = ft.sidx, .snf = ft.snf, .sfx = ft.sfx, .sft = ft.sft, .fpnl = ft.fpnl, .fptl = ft.fptl, .fone = ft.fone, .vgps = ft.vgps.concat([gps])};
     return gx_variants(g, d, i + 1, f2);
 }
 

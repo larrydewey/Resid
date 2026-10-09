@@ -261,14 +261,71 @@ pub Str rd_coerce(Str have, Str want) {
     // An untyped builder takes the slot's element type; never a fixed one's.
     if (h == "ListBuf(?)" && str_starts_with(w, "ListBuf(") && rd_targs(w).len() == 1) { return w; }
     if (h == "Option(_)" && str_starts_with(w, "Option(")) { return w; }
-    // A Result made by Ok or Err knows one side: "_" stands for the other.
-    if (str_starts_with(h, "Result(") && str_starts_with(w, "Result(")) {
+    // A value made by a constructor knows the type arguments its payloads
+    // give (Ok, Err, a generic variant): "_" stands for the others.
+    Int ho = str_find_char(h, 40, 0);
+    if (ho > 0 && str_contains(h, "_") && str_slice(h, 0, ho + 1) == str_slice(w, 0, min(ho + 1, str_len(w)))) {
         List(Str) hs = rd_targs(h);
         List(Str) ws = rd_targs(w);
-        if (hs.len() != 2 || ws.len() != 2) { return ""; }
-        if ((hs[0] == "_" || rd_coerce(hs[0], ws[0]) == ws[0]) && (hs[1] == "_" || rd_coerce(hs[1], ws[1]) == ws[1])) { return w; }
+        if (hs.len() == ws.len() && rd_args_cover(hs, ws, 0)) { return w; }
     }
     return "";
+}
+
+Bool rd_args_cover(List(Str) hs, List(Str) ws, Int i) {
+    if (i >= hs.len()) { return true; }
+    return (hs[i] == "_" || rd_coerce(hs[i], ws[i]) == ws[i]) && rd_args_cover(hs, ws, i + 1);
+}
+
+// Type parameters bound by matching a declared type (over the parameters
+// gps) against a concrete one; bs is each one's binding ("_" unbound). A
+// short list when they disagree.
+pub List(Str) rd_unify(Str p, Str t, List(Str) gps, List(Str) bs) {
+    Int k = rd_param_at(gps, p, 0);
+    if (k >= 0) {
+        // A type not fully known yet fixes nothing.
+        if (str_contains(t, "_") || str_contains(t, "?")) { return bs; }
+        if (bs[k] == "_") { return bs[0..k].concat([t]).concat(bs[k + 1..bs.len()]); }
+        return if (bs[k] == t) { bs } else { rd_short(bs) };
+    }
+    Int po = str_find_char(p, 40, 0);
+    Int to = str_find_char(t, 40, 0);
+    if (po < 0 || to < 0 || str_slice(p, 0, po) != str_slice(t, 0, to)) { return bs; }
+    List(Str) pa = rd_targs(p);
+    List(Str) ta = rd_targs(t);
+    if (pa.len() != ta.len()) { return bs; }
+    return rd_unify_args(pa, ta, gps, 0, bs);
+}
+
+List(Str) rd_unify_args(List(Str) pa, List(Str) ta, List(Str) gps, Int i, List(Str) bs) {
+    if (i >= pa.len() || bs.len() != gps.len()) { return bs; }
+    return rd_unify_args(pa, ta, gps, i + 1, rd_unify(pa[i], ta[i], gps, bs));
+}
+
+List(Str) rd_short(List(Str) bs) { return bs[0..bs.len() - 1]; }
+
+Int rd_param_at(List(Str) gps, Str p, Int i) {
+    if (i >= gps.len()) { return -1; }
+    if (gps[i] == p) { return i; }
+    return rd_param_at(gps, p, i + 1);
+}
+
+// A type with each parameter replaced by its binding.
+pub Str rd_subst(Str t, List(Str) gps, List(Str) bs) {
+    if (gps.len() == 0) { return t; }
+    return rd_subst_at(t, gps, bs, 0, 0, str_len(t), StrBuf());
+}
+
+Str rd_subst_at(Str t, List(Str) gps, List(Str) bs, Int st, Int i, Int n, StrBuf acc) {
+    if (i > n) { return acc.finish(); }
+    Int c = if (i < n) { str_char_at(t, i) } else { 32 };
+    Bool word = (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95;
+    if (word) { return rd_subst_at(t, gps, bs, st, i + 1, n, acc); }
+    Str tok = str_slice(t, st, i);
+    Int k = rd_param_at(gps, tok, 0);
+    StrBuf a2 = acc.push(if (k >= 0) { bs[k] } else { tok });
+    StrBuf a3 = if (i < n) { a2.push_char(c) } else { a2 };
+    return rd_subst_at(t, gps, bs, i + 1, i + 1, n, a3);
 }
 
 Bool rd_items_fit(List(Str) xs, Str he, Str we, Int i) {
