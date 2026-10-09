@@ -1,6 +1,6 @@
 # Device Access — Implementation Plan (revision 1)
 
-**Status: PROPOSED (2026-10-09).** Under review; three open questions settled (§7). Depends on
+**Status: ACCEPTED (2026-10-09).** Open questions 1, 2 and 4 settled (§7); question 3 is decided during implementation. Depends on
 PLAN-secret-type.md for descriptors that return key material.
 
 **Goal**: let a Resid program talk to kernel devices (ioctls on character
