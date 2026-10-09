@@ -5286,8 +5286,11 @@ GKT sec_shape(GK k, Int id, Str n, Str exp) {
 
 // Builtins that compute on a secret's payload without branching on it.
 // ct_hide is the optimizer barrier for a mask built from a secret (a sign
-// mask, say): the value is unchanged and stays secret.
-Bool sec_liftable(Str n) { return (str_starts_with(n, "wrapping_") && wrap_conv_type(n) != "") || n == "wrapping_add" || n == "wrapping_sub" || n == "wrapping_mul" || n == "wrapping_uadd" || n == "wrapping_usub" || n == "wrapping_umul" || n == "ct_hide"; }
+// mask, say): the value is unchanged and stays secret. The AES round and
+// carry-less multiply instructions (aesni_enc_round, aesni_enc_last_round,
+// gf128_mul_hw) run in constant time on the CPUs that have them, so a
+// secret block or key goes through them and the result is secret.
+Bool sec_liftable(Str n) { return (str_starts_with(n, "wrapping_") && wrap_conv_type(n) != "") || n == "wrapping_add" || n == "wrapping_sub" || n == "wrapping_mul" || n == "wrapping_uadd" || n == "wrapping_usub" || n == "wrapping_umul" || n == "ct_hide" || n == "aesni_enc_round" || n == "aesni_enc_last_round" || n == "gf128_mul_hw"; }
 
 // E0258: a secret integer wider than 32 bits stored in a list, builder,
 // vector, map or set, directly (List(Secret(Int))) or under a secret

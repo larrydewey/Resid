@@ -24,7 +24,14 @@ the compiler at `Secret(Int)`. `lib/sha256g.resid` (SHA-256, HMAC, HKDF) and
 `Wide512(P, B)` (Poly1305 on `Int(512)` / `Secret(Int(512))` in
 parameters), with `lib/chacha.resid` as its public copy; open's verdict
 goes through `CtSame(B)` (`ct_eq` at secret bytes, so it needs
-`declassify`), and `ct_hide` is accepted on a secret. Next are AES-GCM, X25519, Ed25519, P-256/P-384, HPKE and the TLS
+`declassify`), and `ct_hide` is accepted on a secret. AES-GCM is in
+(2026-10-09): `lib/aesgcmg.resid` (AES-128/192/256, GCM with any IV, key
+wrap), generic over `Word(W, B)` and `Block128(X, W, B)` (128-bit blocks
+in records and parameters, round keys as 32-bit words), with
+`lib/aesgcm.resid` as its public copy; the AES-NI and carry-less multiply
+builtins take secrets (`sec_liftable`), the software S-box is computed
+four bytes per word, and GCM open and key unwrap publish their verdict
+through `CtSame(B)`. Next are X25519, Ed25519, P-256/P-384, HPKE and the TLS
 key schedule. Still to do: a
 force-time `resid_cap_check("declassify")` (declassify lowers to nothing,
 so the static check is the whole check today), and steps 2–3 of §7.

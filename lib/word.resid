@@ -192,3 +192,68 @@ Secret(Int(512)) ps_from_byte(Secret(UInt(8)) b) { return wrapping_i512(b); }
 Secret(UInt(8)) ps_byte(Secret(Int(512)) x, Int sh) { return wrapping_u8(x >> (Int(512)) sh); }
 
 Wide512(Secret(Int(512)), Secret(UInt(8))) = { .p_add = ps_add, .p_sub = ps_sub, .p_mul = ps_mul, .p_and = ps_and, .p_or = ps_or, .p_xor = ps_xor, .p_shl = ps_shl, .p_shr = ps_shr, .p_sign = ps_sign, .p_lift = ps_lift, .p_from_byte = ps_from_byte, .p_byte = ps_byte };
+
+// ─── 128-bit blocks (AES, GHASH) ────────────────────────────────
+// Block128(X, W, B): 128-bit blocks X, the 32-bit words W (Word(W, B)) and
+// bytes B they are built from and taken apart into; instances for public
+// (UInt(128), Int, Int) and secret (Secret(UInt(128)), Secret(UInt(32)),
+// Secret(UInt(8))) data. Shift amounts, bit positions and lifted constants
+// are public. A secret block never goes in a list (E0258): generic code
+// keeps X values in records and parameters.
+//
+// x_aes_round and x_aes_last are one AES round on AES-NI / ARMv8 AESE and
+// x_clmul the GCM multiply on PCLMULQDQ / PMULL (gf128_mul_hw): constant
+// time on the CPUs that have them. Call them only when
+// resid_cpu_has_aesni() / resid_cpu_has_clmul() say so.
+
+behavior Block128(X, W, B) {
+    X x_xor(X a, X b);
+    X x_and(X a, X b);
+    X x_or(X a, X b);
+    X x_shl(X x, Int n);         // 0 <= n < 128
+    X x_shr(X x, Int n);         // logical
+    X x_lift(UInt(128) k);       // a public block taking part
+    X x_from_word(W w);          // a word as the low 32 bits
+    W x_word(X x, Int sh);       // the 32 bits at bit sh
+    X x_from_byte(B b);          // a byte as the low 8 bits
+    B x_byte(X x, Int sh);       // the byte at bit sh
+    X x_bit(X x, Int i);         // all ones when bit i is set, else 0, without a branch
+    X x_aes_round(X s, X k);     // aesni_enc_round
+    X x_aes_last(X s, X k);      // aesni_enc_last_round
+    X x_clmul(X a, X b);         // gf128_mul_hw
+}
+
+UInt(128) xi_xor(UInt(128) a, UInt(128) b) { return a ^ b; }
+UInt(128) xi_and(UInt(128) a, UInt(128) b) { return a & b; }
+UInt(128) xi_or(UInt(128) a, UInt(128) b) { return a | b; }
+UInt(128) xi_shl(UInt(128) x, Int n) { return x << (UInt(128)) n; }
+UInt(128) xi_shr(UInt(128) x, Int n) { return x >> (UInt(128)) n; }
+UInt(128) xi_lift(UInt(128) k) { return k; }
+UInt(128) xi_from_word(Int w) { return (UInt(128)) wrapping_u64(w & 4294967295); }
+Int xi_word(UInt(128) x, Int sh) { return wrapping_i64((x >> (UInt(128)) sh) & (UInt(128)) 4294967295); }
+UInt(128) xi_from_byte(Int b) { return (UInt(128)) wrapping_u64(b & 255); }
+Int xi_byte(UInt(128) x, Int sh) { return wrapping_i64((x >> (UInt(128)) sh) & (UInt(128)) 255); }
+// ct_hide keeps the optimizer from turning the mask back into a branch.
+UInt(128) xi_bit(UInt(128) x, Int i) { return wrapping_usub((UInt(128)) 0, wrapping_u128(ct_hide(wrapping_i64((x >> (UInt(128)) i) & (UInt(128)) 1)))); }
+UInt(128) xi_aes_round(UInt(128) s, UInt(128) k) { return aesni_enc_round(s, k); }
+UInt(128) xi_aes_last(UInt(128) s, UInt(128) k) { return aesni_enc_last_round(s, k); }
+UInt(128) xi_clmul(UInt(128) a, UInt(128) b) { return gf128_mul_hw(a, b); }
+
+Block128(UInt(128), Int, Int) = { .x_xor = xi_xor, .x_and = xi_and, .x_or = xi_or, .x_shl = xi_shl, .x_shr = xi_shr, .x_lift = xi_lift, .x_from_word = xi_from_word, .x_word = xi_word, .x_from_byte = xi_from_byte, .x_byte = xi_byte, .x_bit = xi_bit, .x_aes_round = xi_aes_round, .x_aes_last = xi_aes_last, .x_clmul = xi_clmul };
+
+Secret(UInt(128)) xs_xor(Secret(UInt(128)) a, Secret(UInt(128)) b) { return a ^ b; }
+Secret(UInt(128)) xs_and(Secret(UInt(128)) a, Secret(UInt(128)) b) { return a & b; }
+Secret(UInt(128)) xs_or(Secret(UInt(128)) a, Secret(UInt(128)) b) { return a | b; }
+Secret(UInt(128)) xs_shl(Secret(UInt(128)) x, Int n) { return x << (UInt(128)) n; }
+Secret(UInt(128)) xs_shr(Secret(UInt(128)) x, Int n) { return x >> (UInt(128)) n; }
+Secret(UInt(128)) xs_lift(UInt(128) k) { return classify(k); }
+Secret(UInt(128)) xs_from_word(Secret(UInt(32)) w) { return wrapping_u128(w); }
+Secret(UInt(32)) xs_word(Secret(UInt(128)) x, Int sh) { return wrapping_u32(x >> (UInt(128)) sh); }
+Secret(UInt(128)) xs_from_byte(Secret(UInt(8)) b) { return wrapping_u128(b); }
+Secret(UInt(8)) xs_byte(Secret(UInt(128)) x, Int sh) { return wrapping_u8(x >> (UInt(128)) sh); }
+Secret(UInt(128)) xs_bit(Secret(UInt(128)) x, Int i) { return wrapping_usub((UInt(128)) 0, wrapping_u128(ct_hide(wrapping_i64((x >> (UInt(128)) i) & (UInt(128)) 1)))); }
+Secret(UInt(128)) xs_aes_round(Secret(UInt(128)) s, Secret(UInt(128)) k) { return aesni_enc_round(s, k); }
+Secret(UInt(128)) xs_aes_last(Secret(UInt(128)) s, Secret(UInt(128)) k) { return aesni_enc_last_round(s, k); }
+Secret(UInt(128)) xs_clmul(Secret(UInt(128)) a, Secret(UInt(128)) b) { return gf128_mul_hw(a, b); }
+
+Block128(Secret(UInt(128)), Secret(UInt(32)), Secret(UInt(8))) = { .x_xor = xs_xor, .x_and = xs_and, .x_or = xs_or, .x_shl = xs_shl, .x_shr = xs_shr, .x_lift = xs_lift, .x_from_word = xs_from_word, .x_word = xs_word, .x_from_byte = xs_from_byte, .x_byte = xs_byte, .x_bit = xs_bit, .x_aes_round = xs_aes_round, .x_aes_last = xs_aes_last, .x_clmul = xs_clmul };

@@ -3219,6 +3219,15 @@ parameters); lib/chacha.resid is its public copy. Its open
 publishes one bit through CtSame(B) (lib/crypto.resid), whose
 secret instance is ct_eq and so needs the declassify grant.
 ct_hide(x) on a secret x keeps it secret.
+lib/aesgcmg.resid (AES-128/192/256, GCM with any IV, AES key
+wrap) is generic over Word(W, B) and Block128(X, W, B),
+128-bit blocks (UInt(128) or Secret(UInt(128)), kept in
+records and parameters; round keys are a list of 32-bit
+words); lib/aesgcm.resid is its public copy. The AES-NI
+rounds and the carry-less multiply (aesni_enc_round,
+aesni_enc_last_round, gf128_mul_hw) take secrets, as they run
+in constant time, and keep the result secret. GCM open and
+key unwrap publish one bit each through CtSame(B).
 
 Planned (PLAN-secret-type.md): the rest of the cryptography
 library on Word(T).

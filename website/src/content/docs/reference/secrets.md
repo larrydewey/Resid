@@ -40,6 +40,7 @@ Int main() {
 | `&`, `\|`, `^` with integers; `<<` and `>>` by a public amount | `+ - *` (checked: overflow aborts, `E0254`) |
 | `wrapping_add`, `wrapping_sub`, `wrapping_mul`, `wrapping_i8` .. `wrapping_u512` conversions | `/`, `%`, comparisons, `&&`, `\|\|` (`E0255`) |
 | `ct_hide(x)` (an optimizer barrier for a mask) | |
+| `aesni_enc_round`, `aesni_enc_last_round`, `gf128_mul_hw` (constant-time instructions) | |
 | reading a secret list at a public index | a secret index, range bound or shift amount (`E0255`) |
 | storing it in a record field or list | deciding an `if`, `while`, `match` or ternary (`E0255`) |
 | `ct_select(c, a, b)` with a `Secret(Bool)` `c` | methods, except a secret list's, bytes' or text's `.len()` (`E0255`) |
@@ -115,6 +116,28 @@ List(UInt(8)) wire = declassify(secret_join(sealed), "AEAD output is public");
 Option(List(Secret(UInt(8)))) opened = chacha20poly1305g_decrypt(key, nonce, received, aad);
 ```
 
+`lib/aesgcmg.resid` is AES-128/192/256, AES-GCM with any IV length and
+AES key wrap (RFC 3394), generic over `Word(W, B)` and `Block128(X, W,
+B)` (also in `lib/word.resid`): 128-bit blocks, `UInt(128)` or
+`Secret(UInt(128))`, kept in records and parameters. The round keys are
+the schedule as a list of 32-bit words, and the 128-bit round keys the
+AES-NI path uses live in a record (`AesKeyG`). On a CPU with AES-NI /
+AESE and PCLMULQDQ / PMULL the rounds and GHASH run on
+`aesni_enc_round`, `aesni_enc_last_round` and `gf128_mul_hw`, which take
+secrets since they run in constant time; otherwise the software cipher
+computes the S-box four bytes at a time in a 32-bit word and GHASH
+multiplies with masks. `lib/aesgcm.resid`'s API is the public copy. The
+IV, the associated data, the lengths, the received ciphertext and the
+wrapped key are public; sealing and wrapping at secret types return
+secret bytes the caller declassifies; open and unwrap publish one bit
+through `CtSame(B)`, so the secret copies need `@requires(declassify)`.
+
+```text
+List(Secret(UInt(8))) key = secret_bytes(read_key());
+List(Secret(UInt(8))) sealed = aes_gcmg_seal(key, iv, secret_bytes(msg), aad);
+Option(List(Secret(UInt(8)))) dek = aes_key_unwrapg(key, wrapped);
+```
+
 ```text
 List(Secret(UInt(8))) key = secret_bytes(read_key());
 List(Secret(UInt(8))) prk = hkdf256g_extract(salt_lifted, key);
@@ -164,5 +187,5 @@ not covered. `main` runs on its own thread stack, which is.
 ## Not yet enforced
 
 `PLAN-secret-type.md` lists the rest of the plan: moving the rest of the
-cryptography library (AES-GCM, X25519, Ed25519, P-256/P-384, HPKE, the
-TLS key schedule) onto `Word(T)`.
+cryptography library (X25519, Ed25519, P-256/P-384, HPKE, the TLS key
+schedule) onto `Word(T)`.

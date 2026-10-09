@@ -1335,7 +1335,7 @@ Bool scal_ll(Str t) {
 }
 
 Bool scope_num_head(Str t) {
-    return t == "Int" || t == "UInt" || t == "Float" || t == "Bool" || t == "ISize" || t == "USize" || t == "Vec";
+    return t == "Int" || t == "UInt" || t == "Float" || t == "Bool" || t == "ISize" || t == "USize" || t == "Vec" || t == "Secret";
 }
 
 Bool scope_arith_builtin(Str n) {
@@ -1343,6 +1343,11 @@ Bool scope_arith_builtin(Str n) {
     if (n == "str_char_at" || n == "str_len" || n == "sqrt") { return true; }
     // Vectors live in registers (spec §46).
     if (n == "splat" || n == "lanes" || n == "select") { return true; }
+    // Constant-time helpers and the AES / carry-less multiply instructions
+    // compute on scalars in registers; the secret wrappers erase to their
+    // argument (spec §48). None of them allocates.
+    if (n == "ct_hide" || n == "ct_select" || n == "aesni_enc_round" || n == "aesni_enc_last_round" || n == "gf128_mul_hw") { return true; }
+    if (n == "secret" || n == "declassify" || n == "classify") { return true; }
     if (str_starts_with(n, "checked_") || str_starts_with(n, "wrapping_") || str_starts_with(n, "saturating_")) { return true; }
     Int c0 = str_char_at(n, 0);
     Bool conv = (c0 == 105 || c0 == 117 || c0 == 102) && str_len(n) >= 2 && str_is_int(str_slice(n, 1, str_len(n)));

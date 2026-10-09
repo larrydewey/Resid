@@ -1,0 +1,636 @@
+// aesgcmg.resid — AES (FIPS 197), GCM (SP 800-38D) and AES key wrap
+// (RFC 3394), written once and generic over lib/word.resid's Word(W, B)
+// (32-bit words, bytes) and Block128(X, W, B) (128-bit blocks): one
+// implementation for public bytes (X = UInt(128), W = B = Int) and secret
+// bytes (Secret(UInt(128)) blocks, Secret(UInt(32)) words, Secret(UInt(8))
+// bytes). The secret copy is checked by the compiler (spec §48): no
+// branch, index, comparison or division depends on the key, the round
+// keys, the plaintext, the keystream or the GHASH state.
+// lib/aesgcm.resid's public API is the public copy.
+//
+// Public by design: the IV, the associated data, every length, the
+// received ciphertext and tag, the wrapped key handed to unwrap, which
+// key size it is, whether the CPU has AES-NI / carry-less multiply, and
+// the verdicts of open and unwrap (one bit each, published through
+// CtSame(B), which needs the declassify grant at secret types).
+//
+// Round keys are the FIPS 197 schedule as 32-bit words (List(W): a secret
+// word of 32 bits may be a list element, E0258), word i holding bytes
+// 4i..4i+3 little-endian. Blocks pack little-endian too (byte 0 low), which
+// is AES-NI's load order, so round key r is words 4r..4r+3 side by side.
+// The 128-bit round keys for the AES-NI path live in a record (AesKeyG),
+// never in a list. GHASH blocks pack big-endian, as SP 800-38D writes them.
+//
+// The software cipher works on the four column words of the state and
+// computes the S-box (the GF(2^8) inverse as x^254, then the affine map)
+// on four bytes at once, so no table is indexed by a secret. GHASH in
+// software multiplies with masks, not branches.
+
+import "word.resid";
+import "crypto.resid";
+
+// ── Packed GF(2^8): the four bytes of a word at once ────────────────
+
+// b in every byte of a word.
+Int ag_rep(Int b) { return (b & 255) * 16843009; }
+
+// Each byte times x: the shift, then 0x1b where the top bit was set (a
+// multiply by the bit spelled as shifts and xors).
+@needs(Word(W, B))
+pub W aesg_xtime(W a) {
+    W m = w_shr(w_andk(a, 2155905152), 7);
+    W red = w_xor(w_xor(m, w_shl(m, 1)), w_xor(w_shl(m, 3), w_shl(m, 4)));
+    return w_xor(w_shl(w_andk(a, 2139062143), 1), red);
+}
+
+// 0xff in each byte of b whose bit i is set, else 0: m * 255 = (m << 8) - m
+// for m with 0 or 1 in each byte (modulo 2^32, so the top byte is right too).
+@needs(Word(W, B))
+W ag_spread(W b, Int i) {
+    W m = w_andk(w_shr(b, i), 16843009);
+    return w_add(w_shl(m, 8), w_addk(w_not(m), 1));
+}
+
+@needs(Word(W, B))
+W ag_mul_at(W a, W b, Int i, W p) {
+    if (i >= 8) { return p; }
+    return ag_mul_at(aesg_xtime(a), b, i + 1, w_xor(p, w_and(a, ag_spread(b, i))));
+}
+
+// Bytewise a * b in GF(2^8).
+@needs(Word(W, B))
+pub W aesg_mul(W a, W b) {
+    W z = w_lift(0);
+    return ag_mul_at(a, b, 0, z);
+}
+
+@needs(Word(W, B))
+W ag_sq(W a) { return aesg_mul(a, a); }
+
+// Bytewise x^254 = x^-1 (and 0 for 0).
+@needs(Word(W, B))
+pub W aesg_inv(W x) {
+    W x2 = ag_sq(x);
+    W x3 = aesg_mul(x2, x);
+    W x6 = ag_sq(x3);
+    W x7 = aesg_mul(x6, x);
+    W x12 = ag_sq(x6);
+    W x15 = aesg_mul(x12, x3);
+    W x120 = ag_sq(ag_sq(ag_sq(x15)));
+    return ag_sq(aesg_mul(x120, x7));
+}
+
+// Each byte rotated left by n (0 < n < 8).
+@needs(Word(W, B))
+W ag_rotl8(W b, Int n) {
+    return w_or(w_andk(w_shl(b, n), ag_rep((255 << n) & 255)), w_andk(w_shr(b, 8 - n), ag_rep(255 >> (8 - n))));
+}
+
+// The S-box on each byte: the inverse, then the affine map.
+@needs(Word(W, B))
+pub W aesg_sub(W v) {
+    W b = aesg_inv(v);
+    return w_xork(w_xor(w_xor(b, ag_rotl8(b, 1)), w_xor(w_xor(ag_rotl8(b, 2), ag_rotl8(b, 3)), ag_rotl8(b, 4))), ag_rep(99));
+}
+
+// The inverse S-box on each byte: the inverse affine map, then the inverse.
+@needs(Word(W, B))
+pub W aesg_inv_sub(W s) {
+    return aesg_inv(w_xork(w_xor(w_xor(ag_rotl8(s, 1), ag_rotl8(s, 3)), ag_rotl8(s, 6)), ag_rep(5)));
+}
+
+// ── Key expansion (FIPS 197 §5.2) ───────────────────────────────────
+
+pub Int aesg_rcon(Int i) {
+    if (i == 1) { return 1; }
+    if (i == 2) { return 2; }
+    if (i == 3) { return 4; }
+    if (i == 4) { return 8; }
+    if (i == 5) { return 16; }
+    if (i == 6) { return 32; }
+    if (i == 7) { return 64; }
+    if (i == 8) { return 128; }
+    if (i == 9) { return 27; }
+    return 54;
+}
+
+// The little-endian word of bytes off..off+3.
+@needs(Word(W, B))
+W ag_word_of(List(B) b, Int off) {
+    return w_or(w_or(w_from_byte(b[off]), w_shl(w_from_byte(b[off + 1]), 8)), w_or(w_shl(w_from_byte(b[off + 2]), 16), w_shl(w_from_byte(b[off + 3]), 24)));
+}
+
+@needs(Word(W, B))
+List(W) ag_key_words(List(B) key, Int i, Int nk, List(W) acc) {
+    if (i >= nk) { return acc; }
+    return ag_key_words(key, i + 1, nk, acc.concat([ag_word_of(key, 4 * i)]));
+}
+
+// Words i.. of the schedule. RotWord is a rotate right by 8 of the
+// little-endian word; Rcon goes into its first byte, the low one. Which
+// words are substituted depends only on i and the key size.
+@needs(Word(W, B))
+List(W) ag_ke(List(W) w, Int nk, Int i, Int total) {
+    if (i >= total) { return w; }
+    W prev = w[i - 1];
+    Bool rot = i % nk == 0;
+    Bool sub = nk > 6 && i % nk == 4;
+    W t = if (rot) { w_xork(aesg_sub(w_rotr(prev, 8)), aesg_rcon(i / nk)) } else { if (sub) { aesg_sub(prev) } else { prev } };
+    return ag_ke(w.concat([w_xor(w[i - nk], t)]), nk, i + 1, total);
+}
+
+// The schedule of a 16-, 24- or 32-byte key as 4 * (rounds + 1) words;
+// empty for any other length (the length is public).
+@needs(Word(W, B))
+pub List(W) aesg_key_expand(List(B) key) {
+    Int n = key.len();
+    List(W) none = [];
+    if (n != 16 && n != 24 && n != 32) { return none; }
+    Int nk = n / 4;
+    return ag_ke(ag_key_words(key, 0, nk, none), nk, nk, 4 * (nk + 7));
+}
+
+pub Int aesg_rounds(Int words) { return words / 4 - 1; }
+
+// ── Software block cipher, on the four column words ─────────────────
+
+// Byte r of the result from argument r: ShiftRows on column words.
+@needs(Word(W, B))
+W ag_pick(W a, W b, W c, W d) {
+    return w_or(w_or(w_andk(a, 255), w_andk(b, 65280)), w_or(w_andk(c, 16711680), w_andk(d, 4278190080)));
+}
+
+// MixColumns on one column: 2a_r ^ 3a_{r+1} ^ a_{r+2} ^ a_{r+3}, with
+// byte r + 1 brought down by a rotate right of 8.
+@needs(Word(W, B))
+W ag_mix(W a) {
+    W r1 = w_rotr(a, 8);
+    return w_xor(w_xor(aesg_xtime(w_xor(a, r1)), r1), w_xor(w_rotr(a, 16), w_rotr(a, 24)));
+}
+
+// InvMixColumns: a ^ 4(a_r ^ a_{r+2}) in each byte, then MixColumns.
+@needs(Word(W, B))
+W ag_inv_mix(W a) { return ag_mix(w_xor(a, aesg_xtime(aesg_xtime(w_xor(a, w_rotr(a, 16)))))); }
+
+// The four column words of a state, carried out of the round loops.
+type AgCols(W) = { W c0; W c1; W c2; W c3; };
+
+@needs(Word(W, B))
+AgCols(W) ag_enc_rounds(List(W) rk, Int r, Int nr, W s0, W s1, W s2, W s3) {
+    W u0 = aesg_sub(s0);
+    W u1 = aesg_sub(s1);
+    W u2 = aesg_sub(s2);
+    W u3 = aesg_sub(s3);
+    W t0 = ag_pick(u0, u1, u2, u3);
+    W t1 = ag_pick(u1, u2, u3, u0);
+    W t2 = ag_pick(u2, u3, u0, u1);
+    W t3 = ag_pick(u3, u0, u1, u2);
+    Int o = 4 * r;
+    if (r == nr) { return AgCols {.c0 = w_xor(t0, rk[o]), .c1 = w_xor(t1, rk[o + 1]), .c2 = w_xor(t2, rk[o + 2]), .c3 = w_xor(t3, rk[o + 3])}; }
+    return ag_enc_rounds(rk, r + 1, nr, w_xor(ag_mix(t0), rk[o]), w_xor(ag_mix(t1), rk[o + 1]), w_xor(ag_mix(t2), rk[o + 2]), w_xor(ag_mix(t3), rk[o + 3]));
+}
+
+// From the state after AddRoundKey(nr): rounds r down to 0.
+@needs(Word(W, B))
+AgCols(W) ag_dec_rounds(List(W) rk, Int r, W s0, W s1, W s2, W s3) {
+    Int o = 4 * r;
+    W v0 = w_xor(aesg_inv_sub(ag_pick(s0, s3, s2, s1)), rk[o]);
+    W v1 = w_xor(aesg_inv_sub(ag_pick(s1, s0, s3, s2)), rk[o + 1]);
+    W v2 = w_xor(aesg_inv_sub(ag_pick(s2, s1, s0, s3)), rk[o + 2]);
+    W v3 = w_xor(aesg_inv_sub(ag_pick(s3, s2, s1, s0)), rk[o + 3]);
+    if (r == 0) { return AgCols {.c0 = v0, .c1 = v1, .c2 = v2, .c3 = v3}; }
+    return ag_dec_rounds(rk, r - 1, ag_inv_mix(v0), ag_inv_mix(v1), ag_inv_mix(v2), ag_inv_mix(v3));
+}
+
+@needs(Word(W, B), Block128(X, W, B))
+X ag_block_of(AgCols(W) c) {
+    return x_or(x_or(x_from_word(c.c0), x_shl(x_from_word(c.c1), 32)), x_or(x_shl(x_from_word(c.c2), 64), x_shl(x_from_word(c.c3), 96)));
+}
+
+// One block (little-endian packed) under the schedule rk, in software.
+@needs(Word(W, B), Block128(X, W, B))
+pub X aesg_encrypt_sw(List(W) rk, X b) {
+    AgCols(W) c = ag_enc_rounds(rk, 1, aesg_rounds(rk.len()), w_xor(x_word(b, 0), rk[0]), w_xor(x_word(b, 32), rk[1]), w_xor(x_word(b, 64), rk[2]), w_xor(x_word(b, 96), rk[3]));
+    return ag_block_of(c);
+}
+
+// The inverse cipher (FIPS 197 §5.3), software only: key unwrapping is
+// its one user, and it is short.
+@needs(Word(W, B), Block128(X, W, B))
+pub X aesg_decrypt_sw(List(W) rk, X b) {
+    Int nr = aesg_rounds(rk.len());
+    Int o = 4 * nr;
+    AgCols(W) c = ag_dec_rounds(rk, nr - 1, w_xor(x_word(b, 0), rk[o]), w_xor(x_word(b, 32), rk[o + 1]), w_xor(x_word(b, 64), rk[o + 2]), w_xor(x_word(b, 96), rk[o + 3]));
+    return ag_block_of(c);
+}
+
+// ── Keys for either path ────────────────────────────────────────────
+
+// The schedule and, for AES-NI, its round keys as blocks; nr is 10, 12 or
+// 14 and unused keys are zero. hw says which path aesg_block takes.
+type AesKeyG(X, W) = { Bool hw; Int nr; List(W) rk; X k0; X k1; X k2; X k3; X k4; X k5; X k6; X k7; X k8; X k9; X k10; X k11; X k12; X k13; X k14; };
+
+@needs(Word(W, B), Block128(X, W, B))
+X ag_rk(List(W) rk, Int r) {
+    Int o = 4 * r;
+    if (o + 4 > rk.len()) { return x_lift((UInt(128)) 0); }
+    return x_or(x_or(x_from_word(rk[o]), x_shl(x_from_word(rk[o + 1]), 32)), x_or(x_shl(x_from_word(rk[o + 2]), 64), x_shl(x_from_word(rk[o + 3]), 96)));
+}
+
+// Keys for the schedule rk, on AES-NI when hw holds.
+@needs(Word(W, B), Block128(X, W, B))
+pub AesKeyG(X, W) aesg_keys_with(List(W) rk, Bool hw) {
+    return AesKeyG {.hw = hw, .nr = aesg_rounds(rk.len()), .rk = rk, .k0 = ag_rk(rk, 0), .k1 = ag_rk(rk, 1), .k2 = ag_rk(rk, 2), .k3 = ag_rk(rk, 3), .k4 = ag_rk(rk, 4), .k5 = ag_rk(rk, 5), .k6 = ag_rk(rk, 6), .k7 = ag_rk(rk, 7), .k8 = ag_rk(rk, 8), .k9 = ag_rk(rk, 9), .k10 = ag_rk(rk, 10), .k11 = ag_rk(rk, 11), .k12 = ag_rk(rk, 12), .k13 = ag_rk(rk, 13), .k14 = ag_rk(rk, 14)};
+}
+
+// Keys for the schedule rk, on AES-NI when the CPU has it.
+@needs(Word(W, B), Block128(X, W, B))
+pub AesKeyG(X, W) aesg_keys(List(W) rk) { return aesg_keys_with(rk, resid_cpu_has_aesni()); }
+
+// One block, little-endian packed in and out.
+@needs(Word(W, B), Block128(X, W, B))
+pub X aesg_block(AesKeyG(X, W) k, X b) {
+    if (!k.hw) { return aesg_encrypt_sw(k.rk, b); }
+    X s1 = x_aes_round(x_xor(b, k.k0), k.k1);
+    X s2 = x_aes_round(s1, k.k2);
+    X s3 = x_aes_round(s2, k.k3);
+    X s4 = x_aes_round(s3, k.k4);
+    X s5 = x_aes_round(s4, k.k5);
+    X s6 = x_aes_round(s5, k.k6);
+    X s7 = x_aes_round(s6, k.k7);
+    X s8 = x_aes_round(s7, k.k8);
+    X s9 = x_aes_round(s8, k.k9);
+    if (k.nr == 10) { return x_aes_last(s9, k.k10); }
+    X s11 = x_aes_round(x_aes_round(s9, k.k10), k.k11);
+    if (k.nr == 12) { return x_aes_last(s11, k.k12); }
+    return x_aes_last(x_aes_round(x_aes_round(s11, k.k12), k.k13), k.k14);
+}
+
+// ── Bytes and blocks ────────────────────────────────────────────────
+
+// Bytes off..off+15 of b, little-endian packed.
+@needs(Word(W, B), Block128(X, W, B))
+pub X aesg_le_pack(List(B) b, Int off) {
+    W w0 = ag_word_of(b, off);
+    W w1 = ag_word_of(b, off + 4);
+    W w2 = ag_word_of(b, off + 8);
+    W w3 = ag_word_of(b, off + 12);
+    return x_or(x_or(x_from_word(w0), x_shl(x_from_word(w1), 32)), x_or(x_shl(x_from_word(w2), 64), x_shl(x_from_word(w3), 96)));
+}
+
+@needs(Word(W, B), Block128(X, W, B))
+pub ListBuf(B) aesg_le_bytes(X v, Int i, ListBuf(B) acc) {
+    if (i >= 16) { return acc; }
+    return aesg_le_bytes(v, i + 1, acc.push(x_byte(v, 8 * i)));
+}
+
+// Bytes [off, off + n) of b, n <= 16, big-endian packed (zero padded).
+@needs(Word(W, B), Block128(X, W, B))
+X ag_be_pack(List(B) b, Int off, Int n, Int i, X acc) {
+    if (i >= n) { return acc; }
+    return ag_be_pack(b, off, n, i + 1, x_or(acc, x_shl(x_from_byte(b[off + i]), 120 - 8 * i)));
+}
+
+// The same for public bytes, packed before they are lifted.
+pub UInt(128) aesg_be_pack_pub(List(Int) b, Int off, Int n, Int i, UInt(128) acc) {
+    if (i >= n) { return acc; }
+    return aesg_be_pack_pub(b, off, n, i + 1, acc | ((UInt(128)) wrapping_u64(b[off + i] & 255) << ((UInt(128)) (120 - 8 * i))));
+}
+
+// The bytes of v reversed (little-endian packing to big-endian).
+@needs(Word(W, B), Block128(X, W, B))
+X ag_swap(X v, Int i, X acc) {
+    if (i >= 16) { return acc; }
+    return ag_swap(v, i + 1, x_or(acc, x_shl(x_from_byte(x_byte(v, 8 * i)), 120 - 8 * i)));
+}
+
+// A whole block, written out rather than looped: bytes o..o+15 of b,
+// big-endian packed, through four big-endian words.
+@needs(Word(W, B))
+W ag_be_word(List(B) b, Int o) {
+    return w_or(w_or(w_shl(w_from_byte(b[o]), 24), w_shl(w_from_byte(b[o + 1]), 16)), w_or(w_shl(w_from_byte(b[o + 2]), 8), w_from_byte(b[o + 3])));
+}
+
+@needs(Word(W, B), Block128(X, W, B))
+X ag_be16(List(B) b, Int o) {
+    return x_or(x_or(x_shl(x_from_word(ag_be_word(b, o)), 96), x_shl(x_from_word(ag_be_word(b, o + 4)), 64)), x_or(x_shl(x_from_word(ag_be_word(b, o + 8)), 32), x_from_word(ag_be_word(b, o + 12))));
+}
+
+Int ag_be_word_pub(List(Int) b, Int o) { return ((b[o] & 255) << 24) | ((b[o + 1] & 255) << 16) | ((b[o + 2] & 255) << 8) | (b[o + 3] & 255); }
+
+pub UInt(128) aesg_be16_pub(List(Int) b, Int o) {
+    UInt(64) hi = wrapping_u64((ag_be_word_pub(b, o) << 32) | ag_be_word_pub(b, o + 4));
+    UInt(64) lo = wrapping_u64((ag_be_word_pub(b, o + 8) << 32) | ag_be_word_pub(b, o + 12));
+    return ((UInt(128)) hi << (UInt(128)) 64) | (UInt(128)) lo;
+}
+
+// ── GHASH ───────────────────────────────────────────────────────────
+
+// X * Y in GF(2^128), big-endian packed (SP 800-38D, algorithm 1), in
+// software: each bit selects with a mask, 128 steps.
+@needs(Word(W, B), Block128(X, W, B))
+pub X aesg_gf128_sw(X x, X y) {
+    X z = x_lift((UInt(128)) 0);
+    return ag_gf128_at(x, y, z, 0);
+}
+
+@needs(Word(W, B), Block128(X, W, B))
+X ag_gf128_at(X x, X v, X z, Int i) {
+    if (i >= 128) { return z; }
+    X r = x_lift((UInt(128)) 225 << (UInt(128)) 120);
+    return ag_gf128_at(x, x_xor(x_shr(v, 1), x_and(r, x_bit(v, 0))), x_xor(z, x_and(v, x_bit(x, 127 - i))), i + 1);
+}
+
+// X * Y on PCLMULQDQ / PMULL when clmul holds, else in software.
+@needs(Word(W, B), Block128(X, W, B))
+pub X aesg_gf128(Bool clmul, X x, X y) { return if (clmul) { x_clmul(x, y) } else { aesg_gf128_sw(x, y) }; }
+
+// GHASH over bytes [off, off + n) of data, zero padded to whole blocks.
+@needs(Word(W, B), Block128(X, W, B))
+X ag_ghash(Bool clmul, X h, X y, List(B) data, Int off, Int n) {
+    if (n <= 0) { return y; }
+    Int take = if (n < 16) { n } else { 16 };
+    X z = x_lift((UInt(128)) 0);
+    X blk = if (take == 16) { ag_be16(data, off) } else { ag_be_pack(data, off, take, 0, z) };
+    return ag_ghash(clmul, h, aesg_gf128(clmul, x_xor(y, blk), h), data, off + 16, n - 16);
+}
+
+// The same over public bytes (the associated data, a received ciphertext).
+@needs(Word(W, B), Block128(X, W, B))
+pub X aesg_ghash_pub(Bool clmul, X h, X y, List(Int) data, Int off, Int n) {
+    if (n <= 0) { return y; }
+    Int take = if (n < 16) { n } else { 16 };
+    X blk = x_lift(if (take == 16) { aesg_be16_pub(data, off) } else { aesg_be_pack_pub(data, off, take, 0, (UInt(128)) 0) });
+    return aesg_ghash_pub(clmul, h, aesg_gf128(clmul, x_xor(y, blk), h), data, off + 16, n - 16);
+}
+
+// ── GCM ─────────────────────────────────────────────────────────────
+
+// GCM state for one key and IV: the hash key H (big-endian packed) and
+// the pre-counter block J0 as its first 12 bytes (little-endian packed) and
+// its 32-bit count. J0 is public for a 12-byte IV and secret otherwise
+// (it is a GHASH under H), so both are kept at the secret types.
+type GcmG(X, W) = { AesKeyG(X, W) k; Bool clmul; X h; X j0head; W j0c; };
+
+// The counter block for count c: head, then c as four big-endian bytes.
+@needs(Word(W, B), Block128(X, W, B))
+X ag_ctr_block(X head, W c) {
+    W be = w_or(w_or(w_shl(w_andk(c, 255), 24), w_shl(w_andk(w_shr(c, 8), 255), 16)), w_or(w_shl(w_andk(w_shr(c, 16), 255), 8), w_shr(c, 24)));
+    return x_or(head, x_shl(x_from_word(be), 96));
+}
+
+// SP 800-38D §7.1 steps 1-2.
+@needs(Word(W, B), Block128(X, W, B))
+GcmG(X, W) ag_gcm(AesKeyG(X, W) k, Bool clmul, List(Int) iv) {
+    X z = x_lift((UInt(128)) 0);
+    X h = ag_swap(aesg_block(k, z), 0, z);
+    if (iv.len() == 12) {
+        X head12 = x_lift(aesg_le_pack_pub(iv, 11, (UInt(128)) 0));
+        W one = w_lift(1);
+        return GcmG {.k = k, .clmul = clmul, .h = h, .j0head = head12, .j0c = one};
+    }
+    // Any other length: J0 = GHASH(IV || 0^s || [0]_64 || [len(IV)]_64).
+    X y = aesg_ghash_pub(clmul, h, z, iv, 0, iv.len());
+    X lens = x_lift((UInt(128)) (iv.len() * 8));
+    X j0 = aesg_gf128(clmul, x_xor(y, lens), h);
+    // Big-endian j0: its low 32 bits are the count; its top 12 bytes, reversed, the head.
+    X low96 = x_lift(((UInt(128)) 1 << (UInt(128)) 96) - (UInt(128)) 1);
+    X head = x_and(ag_swap(j0, 0, z), low96);
+    return GcmG {.k = k, .clmul = clmul, .h = h, .j0head = head, .j0c = x_word(j0, 0)};
+}
+
+// Public bytes 0..i of b, little-endian packed.
+pub UInt(128) aesg_le_pack_pub(List(Int) b, Int i, UInt(128) v) {
+    if (i < 0) { return v; }
+    return aesg_le_pack_pub(b, i - 1, v | ((UInt(128)) wrapping_u64(b[i] & 255) << ((UInt(128)) (i * 8))));
+}
+
+// CTR keystream XOR over data[pos..], counting from c.
+@needs(Word(W, B), Block128(X, W, B))
+pub ListBuf(B) aesg_ctr(AesKeyG(X, W) k, X head, W c, List(B) data, Int pos, ListBuf(B) out) {
+    if (pos >= data.len()) { return out; }
+    X ks = aesg_block(k, ag_ctr_block(head, c));
+    Int left = data.len() - pos;
+    Int take = if (left < 16) { left } else { 16 };
+    return aesg_ctr(k, head, w_addk(c, 1), data, pos + take, if (take == 16) { ag_ctr16(ks, data, pos, out) } else { ag_ctr_bytes(ks, data, pos, 0, take, out) });
+}
+
+// A whole keystream block applied, written out rather than looped.
+@needs(Word(W, B), Block128(X, W, B))
+ListBuf(B) ag_ctr16(X ks, List(B) d, Int p, ListBuf(B) out) {
+    W k0 = x_word(ks, 0);
+    W k1 = x_word(ks, 32);
+    W k2 = x_word(ks, 64);
+    W k3 = x_word(ks, 96);
+    return out.push(b_xor(d[p], w_byte(k0, 0))).push(b_xor(d[p + 1], w_byte(k0, 8))).push(b_xor(d[p + 2], w_byte(k0, 16))).push(b_xor(d[p + 3], w_byte(k0, 24)))
+        .push(b_xor(d[p + 4], w_byte(k1, 0))).push(b_xor(d[p + 5], w_byte(k1, 8))).push(b_xor(d[p + 6], w_byte(k1, 16))).push(b_xor(d[p + 7], w_byte(k1, 24)))
+        .push(b_xor(d[p + 8], w_byte(k2, 0))).push(b_xor(d[p + 9], w_byte(k2, 8))).push(b_xor(d[p + 10], w_byte(k2, 16))).push(b_xor(d[p + 11], w_byte(k2, 24)))
+        .push(b_xor(d[p + 12], w_byte(k3, 0))).push(b_xor(d[p + 13], w_byte(k3, 8))).push(b_xor(d[p + 14], w_byte(k3, 16))).push(b_xor(d[p + 15], w_byte(k3, 24)));
+}
+
+@needs(Word(W, B), Block128(X, W, B))
+ListBuf(B) ag_ctr16_pub(X ks, List(Int) d, Int p, ListBuf(B) out) {
+    W k0 = x_word(ks, 0);
+    W k1 = x_word(ks, 32);
+    W k2 = x_word(ks, 64);
+    W k3 = x_word(ks, 96);
+    return out.push(b_xork(w_byte(k0, 0), d[p])).push(b_xork(w_byte(k0, 8), d[p + 1])).push(b_xork(w_byte(k0, 16), d[p + 2])).push(b_xork(w_byte(k0, 24), d[p + 3]))
+        .push(b_xork(w_byte(k1, 0), d[p + 4])).push(b_xork(w_byte(k1, 8), d[p + 5])).push(b_xork(w_byte(k1, 16), d[p + 6])).push(b_xork(w_byte(k1, 24), d[p + 7]))
+        .push(b_xork(w_byte(k2, 0), d[p + 8])).push(b_xork(w_byte(k2, 8), d[p + 9])).push(b_xork(w_byte(k2, 16), d[p + 10])).push(b_xork(w_byte(k2, 24), d[p + 11]))
+        .push(b_xork(w_byte(k3, 0), d[p + 12])).push(b_xork(w_byte(k3, 8), d[p + 13])).push(b_xork(w_byte(k3, 16), d[p + 14])).push(b_xork(w_byte(k3, 24), d[p + 15]));
+}
+
+@needs(Word(W, B), Block128(X, W, B))
+ListBuf(B) ag_ctr_bytes(X ks, List(B) data, Int pos, Int i, Int take, ListBuf(B) out) {
+    if (i >= take) { return out; }
+    return ag_ctr_bytes(ks, data, pos, i + 1, take, out.push(b_xor(data[pos + i], x_byte(ks, 8 * i))));
+}
+
+// The same over public input (a received ciphertext): the output is B.
+@needs(Word(W, B), Block128(X, W, B))
+ListBuf(B) ag_ctr_pub(AesKeyG(X, W) k, X head, W c, List(Int) data, Int pos, Int end, ListBuf(B) out) {
+    if (pos >= end) { return out; }
+    X ks = aesg_block(k, ag_ctr_block(head, c));
+    Int left = end - pos;
+    Int take = if (left < 16) { left } else { 16 };
+    return ag_ctr_pub(k, head, w_addk(c, 1), data, pos + take, end, if (take == 16) { ag_ctr16_pub(ks, data, pos, out) } else { ag_ctr_pub_bytes(ks, data, pos, 0, take, out) });
+}
+
+@needs(Word(W, B), Block128(X, W, B))
+ListBuf(B) ag_ctr_pub_bytes(X ks, List(Int) data, Int pos, Int i, Int take, ListBuf(B) out) {
+    if (i >= take) { return out; }
+    return ag_ctr_pub_bytes(ks, data, pos, i + 1, take, out.push(b_xork(x_byte(ks, 8 * i), data[pos + i])));
+}
+
+// The tag from the GHASH y of the associated data and ciphertext:
+// (y ^ lengths) * H, xor E(J0), as 16 bytes.
+@needs(Word(W, B), Block128(X, W, B))
+List(B) ag_tag(GcmG(X, W) g, X y, Int alen, Int clen) {
+    UInt(128) lens = ((UInt(128)) (alen * 8) << (UInt(128)) 64) | (UInt(128)) (clen * 8);
+    X lx = x_lift(lens);
+    X s = aesg_gf128(g.clmul, x_xor(y, lx), g.h);
+    X e = aesg_block(g.k, ag_ctr_block(g.j0head, g.j0c));
+    ListBuf(B) acc = ListBuf();
+    return ag_tag_bytes(s, e, 0, acc);
+}
+
+// Tag byte i: byte i of s (big-endian) xor byte i of e (little-endian).
+@needs(Word(W, B), Block128(X, W, B))
+List(B) ag_tag_bytes(X s, X e, Int i, ListBuf(B) acc) {
+    if (i >= 16) { return acc.finish(); }
+    return ag_tag_bytes(s, e, i + 1, acc.push(b_xor(x_byte(s, 120 - 8 * i), x_byte(e, 8 * i))));
+}
+
+// AES-GCM encryption under a 16-, 24- or 32-byte key and an IV of at
+// least one byte: ciphertext || 16-byte tag, or empty for a bad key or IV.
+// hw and clmul choose AES-NI and carry-less multiply (aes_gcmg_seal asks
+// the CPU). At secret types the output is secret; the caller declassifies
+// it to send it.
+@needs(Word(W, B), Block128(X, W, B))
+pub List(B) aes_gcmg_seal_with(Bool hw, Bool clmul, List(B) key, List(Int) iv, List(B) plaintext, List(Int) aad) {
+    List(W) rk = aesg_key_expand(key);
+    List(B) none = [];
+    if (rk.len() == 0 || iv.len() == 0) { return none; }
+    GcmG(X, W) g = ag_gcm(aesg_keys_with(rk, hw), clmul, iv);
+    ListBuf(B) ob = ListBuf();
+    List(B) ct = aesg_ctr(g.k, g.j0head, w_addk(g.j0c, 1), plaintext, 0, ob).finish();
+    X z = x_lift((UInt(128)) 0);
+    X y = ag_ghash(g.clmul, g.h, aesg_ghash_pub(g.clmul, g.h, z, aad, 0, aad.len()), ct, 0, ct.len());
+    return ct.concat(ag_tag(g, y, aad.len(), ct.len()));
+}
+
+@needs(Word(W, B), Block128(X, W, B))
+pub List(B) aes_gcmg_seal(List(B) key, List(Int) iv, List(B) plaintext, List(Int) aad) {
+    return aes_gcmg_seal_with(resid_cpu_has_aesni(), resid_cpu_has_clmul(), key, iv, plaintext, aad);
+}
+
+// The plaintext when the tag verifies (compared in constant time), None
+// otherwise, or for a bad key, an empty IV or an input shorter than a tag;
+// an empty plaintext is Some([]). The verdict is public (CtSame(B)); at
+// secret types the plaintext stays secret.
+@needs(Word(W, B), Block128(X, W, B), CtSame(B))
+pub Option(List(B)) aes_gcmg_decrypt_with(Bool hw, Bool clmul, List(B) key, List(Int) iv, List(Int) ct_and_tag, List(Int) aad) {
+    List(W) rk = aesg_key_expand(key);
+    Int clen = ct_and_tag.len() - 16;
+    if (rk.len() == 0 || iv.len() == 0 || clen < 0) { return None; }
+    GcmG(X, W) g = ag_gcm(aesg_keys_with(rk, hw), clmul, iv);
+    X z = x_lift((UInt(128)) 0);
+    X y = aesg_ghash_pub(g.clmul, g.h, aesg_ghash_pub(g.clmul, g.h, z, aad, 0, aad.len()), ct_and_tag, 0, clen);
+    ListBuf(B) tb = ListBuf();
+    if (!ct_same(ag_tag(g, y, aad.len(), clen), w_lift_bytes(ct_and_tag[clen..], 0, tb))) { return None; }
+    ListBuf(B) ob = ListBuf();
+    return Some(ag_ctr_pub(g.k, g.j0head, w_addk(g.j0c, 1), ct_and_tag, 0, clen, ob).finish());
+}
+
+@needs(Word(W, B), Block128(X, W, B), CtSame(B))
+pub Option(List(B)) aes_gcmg_decrypt(List(B) key, List(Int) iv, List(Int) ct_and_tag, List(Int) aad) {
+    return aes_gcmg_decrypt_with(resid_cpu_has_aesni(), resid_cpu_has_clmul(), key, iv, ct_and_tag, aad);
+}
+
+// ── AES key wrap (RFC 3394) ─────────────────────────────────────────
+//
+// For wrapping one key (a weight DEK, say) under another. The input is
+// whole 64-bit blocks, at least two of them; the default IV A6..A6 is
+// checked on unwrap in constant time. The state is kept as bytes, so no
+// 64-bit secret goes in a list.
+
+@needs(Word(W, B))
+ListBuf(B) kwg_cat(List(B) b, Int i, Int end, ListBuf(B) acc) {
+    if (i >= end) { return acc; }
+    return kwg_cat(b, i + 1, end, acc.push(b[i]));
+}
+
+// The 64-bit counter t (public) as eight big-endian bytes, xored into a.
+@needs(Word(W, B))
+List(B) kwg_xor_t(List(B) a, Int t, Int i, ListBuf(B) acc) {
+    if (i >= 8) { return acc.finish(); }
+    return kwg_xor_t(a, t, i + 1, acc.push(b_xork(a[i], (t >> (56 - 8 * i)) & 255)));
+}
+
+List(Int) kwg_iv() { return [166, 166, 166, 166, 166, 166, 166, 166]; }
+
+// R with block i (8 bytes, 0-based) replaced by blk[8..16].
+@needs(Word(W, B))
+List(B) kwg_set(List(B) r, Int i, List(B) blk) {
+    ListBuf(B) acc = ListBuf();
+    return kwg_cat(r, 8 * i + 8, r.len(), kwg_cat(blk, 8, 16, kwg_cat(r, 0, 8 * i, acc))).finish();
+}
+
+type KwStateG(B) = { List(B) a; List(B) r; };
+
+// a || block i of r, as one AES block.
+@needs(Word(W, B), Block128(X, W, B))
+X kwg_in(List(B) a, List(B) r, Int i) {
+    ListBuf(B) acc = ListBuf();
+    return aesg_le_pack(kwg_cat(r, 8 * i, 8 * i + 8, kwg_cat(a, 0, 8, acc)).finish(), 0);
+}
+
+@needs(Word(W, B), Block128(X, W, B))
+List(B) kwg_out(X v) {
+    ListBuf(B) acc = ListBuf();
+    return aesg_le_bytes(v, 0, acc).finish();
+}
+
+@needs(Word(W, B), Block128(X, W, B))
+KwStateG(B) kwg_wrap_pass(AesKeyG(X, W) k, KwStateG(B) st, Int n, Int j, Int i) {
+    if (i > n) { return st; }
+    List(B) b = kwg_out(aesg_block(k, kwg_in(st.a, st.r, i - 1)));
+    ListBuf(B) acc = ListBuf();
+    KwStateG(B) next = KwStateG {.a = kwg_xor_t(b, n * j + i, 0, acc), .r = kwg_set(st.r, i - 1, b)};
+    return kwg_wrap_pass(k, next, n, j, i + 1);
+}
+
+@needs(Word(W, B), Block128(X, W, B))
+KwStateG(B) kwg_wrap_all(AesKeyG(X, W) k, KwStateG(B) st, Int n, Int j) {
+    if (j > 5) { return st; }
+    return kwg_wrap_all(k, kwg_wrap_pass(k, st, n, j, 1), n, j + 1);
+}
+
+// Wrap `plain` (a multiple of 8 bytes, at least 16) under `kek`, on AES-NI
+// when hw holds; empty for a bad length or key. At secret types the
+// output is secret; the caller declassifies it to store or send it.
+@needs(Word(W, B), Block128(X, W, B))
+pub List(B) aes_key_wrapg_with(Bool hw, List(B) kek, List(B) plain) {
+    List(W) rk = aesg_key_expand(kek);
+    Int n = plain.len() / 8;
+    List(B) none = [];
+    if (rk.len() == 0 || plain.len() % 8 != 0 || n < 2) { return none; }
+    ListBuf(B) ib = ListBuf();
+    KwStateG(B) st = kwg_wrap_all(aesg_keys_with(rk, hw), KwStateG {.a = w_lift_bytes(kwg_iv(), 0, ib), .r = plain}, n, 0);
+    return st.a.concat(st.r);
+}
+
+@needs(Word(W, B), Block128(X, W, B))
+pub List(B) aes_key_wrapg(List(B) kek, List(B) plain) { return aes_key_wrapg_with(resid_cpu_has_aesni(), kek, plain); }
+
+@needs(Word(W, B), Block128(X, W, B))
+KwStateG(B) kwg_unwrap_pass(List(W) rk, KwStateG(B) st, Int n, Int j, Int i) {
+    if (i < 1) { return st; }
+    ListBuf(B) acc = ListBuf();
+    List(B) b = kwg_out(aesg_decrypt_sw(rk, kwg_in(kwg_xor_t(st.a, n * j + i, 0, acc), st.r, i - 1)));
+    KwStateG(B) next = KwStateG {.a = b[0..8], .r = kwg_set(st.r, i - 1, b)};
+    return kwg_unwrap_pass(rk, next, n, j, i - 1);
+}
+
+@needs(Word(W, B), Block128(X, W, B))
+KwStateG(B) kwg_unwrap_all(List(W) rk, KwStateG(B) st, Int n, Int j) {
+    if (j < 0) { return st; }
+    return kwg_unwrap_all(rk, kwg_unwrap_pass(rk, st, n, j, n), n, j - 1);
+}
+
+// The key wrapped in `wrapped` under `kek`, or None when the integrity
+// check fails or the input is not a wrap (24 bytes or more, whole 64-bit
+// blocks). The check is compared in constant time and published as one
+// bit (CtSame(B)); at secret types the key stays secret.
+@needs(Word(W, B), Block128(X, W, B), CtSame(B))
+pub Option(List(B)) aes_key_unwrapg(List(B) kek, List(Int) wrapped) {
+    List(W) rk = aesg_key_expand(kek);
+    Int n = wrapped.len() / 8 - 1;
+    if (rk.len() == 0 || wrapped.len() % 8 != 0 || n < 2) { return None; }
+    ListBuf(B) ab = ListBuf();
+    ListBuf(B) rb = ListBuf();
+    KwStateG(B) st = kwg_unwrap_all(rk, KwStateG {.a = w_lift_bytes(wrapped[0..8], 0, ab), .r = w_lift_bytes(wrapped[8..], 0, rb)}, n, 5);
+    ListBuf(B) ib = ListBuf();
+    if (!ct_same(st.a, w_lift_bytes(kwg_iv(), 0, ib))) { return None; }
+    return Some(st.r);
+}
