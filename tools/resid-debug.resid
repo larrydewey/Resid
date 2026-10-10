@@ -758,6 +758,15 @@ Int db_nloop(DB d, NT n) {
         Bool c = resid_dbg_cont(t, 0);
         return db_nloop(d, n);
     }
+    // A program in secret mode (spec §48) made itself not dumpable before
+    // main, and the kernel then refuses a tracer's reads and writes of its
+    // memory: rewriting the breakpoint in place fails. Stop rather than
+    // report zeros and run on with a breakpoint that cannot be stepped over.
+    Int w0 = n.saved.get(a) else { 0 };
+    if (!resid_dbg_poke(t, a, (w0 & -256) | 204)) {
+        Bool k0 = resid_dbg_kill();
+        return db_say("cannot read or write the program's memory: it handles secrets, so it runs in secret mode, which makes it not dumpable (spec §48); it cannot be debugged past the start of main", 1);
+    }
     Bool s = resid_dbg_set_pc(t, a);
     NT n2 = db_nreport(d, n, t, a, false);
     if (d.steps > 0) {

@@ -284,28 +284,28 @@ Bool native_maps_line(Int p, Int i) {
     return native_maps_line(p, e + 1);
 }
 
-Int native_eol(Int p, Int i) { return if (ld8(p + i) == 0 || ld8(p + i) == 10) { i } else { native_eol(p, i + 1) }; }
+pub Int native_eol(Int p, Int i) { return if (ld8(p + i) == 0 || ld8(p + i) == 10) { i } else { native_eol(p, i + 1) }; }
 
-Bool native_ends(Int p, Int i, Int e, Int suf) {
+pub Bool native_ends(Int p, Int i, Int e, Int suf) {
     Int k = c_strlen(suf);
     if (e - i < k) { return false; }
     return native_same(p + e - k, suf, k);
 }
 
-Bool native_same(Int a, Int b, Int k) {
+pub Bool native_same(Int a, Int b, Int k) {
     if (k == 0) { return true; }
     return ld8(a) == ld8(b) && native_same(a + 1, b + 1, k - 1);
 }
 
-Int native_hexd(Int c) { return if (c >= 48 && c <= 57) { c - 48 } else if (c >= 97 && c <= 102) { c - 87 } else { 0 - 1 }; }
+pub Int native_hexd(Int c) { return if (c >= 48 && c <= 57) { c - 48 } else if (c >= 97 && c <= 102) { c - 87 } else { 0 - 1 }; }
 
-Int native_hex(Int p, Int i, Int acc) {
+pub Int native_hex(Int p, Int i, Int acc) {
     Int d = native_hexd(ld8(p + i));
     if (d < 0) { return acc; }
     return native_hex(p, i + 1, acc * 16 + d);
 }
 
-Int native_skip_hex(Int p, Int i) { return if (native_hexd(ld8(p + i)) < 0) { i } else { native_skip_hex(p, i + 1) }; }
+pub Int native_skip_hex(Int p, Int i) { return if (native_hexd(ld8(p + i)) < 0) { i } else { native_skip_hex(p, i + 1) }; }
 
 // The seccomp program (classic BPF over struct seccomp_data: nr at 0, arch
 // at 4, args from 16). Allowed: read/write on fd 3; mmap/mprotect without

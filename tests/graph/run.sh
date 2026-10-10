@@ -162,6 +162,19 @@ if "$COMPILER" tools/resid-debug.resid -o "$CK/rdbg" >/dev/null 2>&1 && [ -x "$D
     else
         fail=$((fail + 1)); echo "FAIL debug_abort build"
     fi
+    # A program holding a secret is not dumpable from the start of main
+    # (secret mode, spec §48), so the kernel refuses the tracer's memory
+    # access: resid-debug says so and stops instead of running on.
+    if "$COMPILER" tests/runtime/nodump/secret_abort.resid -o "$CK/sab" --profile debug >/dev/null 2>&1; then
+        got="$(timeout 60 "$CK/rdbg" "$CK/sab" -ex "break secret_abort.resid:7" -ex run 2>&1)"
+        if [[ "$got" == *"runs in secret mode, which makes it not dumpable"* ]]; then
+            pass=$((pass + 1))
+        else
+            fail=$((fail + 1)); echo "FAIL resid-debug secret mode: $got"
+        fi
+    else
+        fail=$((fail + 1)); echo "FAIL secret_abort build"
+    fi
     # The gdb backend, when gdb is installed, sees the same.
     if command -v gdb >/dev/null 2>&1; then
         got="$("$CK/rdbg" "$DB" -ex "backend gdb" -ex "break sq" -ex "step 40" -ex run 2>&1)"

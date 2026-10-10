@@ -340,10 +340,28 @@ before `main`:
 - every heap, region, thread-stack and thread-local mapping is left out of
   core dumps (`MADV_DONTDUMP`);
 - memory is zeroed when it is freed or handed back for reuse; memory given
-  back to the kernel is zero-filled by the kernel.
+  back to the kernel is zero-filled by the kernel;
+- the process's initial stack is left out of core dumps too (found in
+  `/proc/self/maps`; `main` runs on its own thread stack, which is a heap
+  mapping);
+- core dumps are off altogether: the process is made not dumpable
+  (`PR_SET_DUMPABLE` 0) and its core limit is set to zero, because a core
+  would also hold the registers (AES-NI round keys live in vector
+  registers) and the binary's static data, which no mapping flag covers. A
+  crash such as a stack overflow's SIGSEGV leaves no core;
+- an abort (a checked overflow, a failed bound or contract) prints its
+  `resid: abort: ...` message and ends with status 134, as before, but by
+  exiting rather than by raising SIGABRT.
 
-Registers, the binary's static data and the process's initial stack are
-not covered. `main` runs on its own thread stack, which is.
+Two consequences follow from "not dumpable", and both are intended.
+Another process of the same user cannot attach to the program with ptrace
+or read its memory through `/proc` (`gdb -p`, `strace -p`). And even a
+debugger that started the program itself loses access to its memory once
+the mode is on, at the start of `main`: the kernel refuses a tracer's reads
+and writes of a process that is not dumpable. `resid-debug` stops with a
+message saying so; debug the code on public inputs in a program without
+secrets instead. The zero core limit is inherited, so programs a
+secret-mode program starts dump no core either.
 
 ## Status
 

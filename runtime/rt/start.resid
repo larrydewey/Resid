@@ -231,8 +231,11 @@ Int futex_wait_zero(Int addr) {
     return futex_wait_zero(addr);
 }
 
-// abort(): SIGABRT (unblocked first), and if that returns, exit 134.
+// abort(): SIGABRT (unblocked first), and if that returns, exit 134. In
+// secret mode the process exits 134 directly: no signal, so no core and no
+// handler sees the registers.
 pub Int c_libc_abort() {
+    if (secret_mode()) { return resid_raw_syscall(231, 134, 0, 0, 0, 0, 0); }
     Int set = resid_raw_tls("abort_set", 8);
     _ = st64(set, 32);                                 // 1 << (6 - 1)
     _ = resid_raw_syscall(14, 1, set, 0, 8, 0, 0);     // SIG_UNBLOCK
