@@ -1,2 +1,2 @@
-fx.provider: unsupported; fx.report: unsupported; fx.seq: unsupported; fx.len: unsupported
-fx.tpm: unsupported
+fx.provider: device absent; fx.report: device absent; fx.seq: device absent; fx.len: device absent
+fx.tpm: device absent

@@ -4185,7 +4185,7 @@ Str gk_builtin_family(Str n) {
     if (str_starts_with(n, "resid_dbg_")) { return "process"; }
     if (str_starts_with(n, "resid_term_")) { return "terminal"; }
     if (str_starts_with(n, "resid_clock_")) { return "clock"; }
-    if (n == "resid_device_call" || n == "resid_device_call_w") { return "device"; }
+    if (n == "resid_device_call" || n == "resid_device_call_w" || n == "resid_device_secret") { return "device"; }
     return "";
 }
 
@@ -5573,7 +5573,7 @@ Str dv_misplaced(GK k, Int id, Bool inlib) {
         Int d = k.sd.get(n.text) else { 0 - 1 };
         if (d >= 0 && dv_kind_tag(k.g.ns[d].aux)) { return "a `" + n.text + "` literal outside lib/dev/: a device descriptor comes only from the standard library's lib/dev/ (call its wrappers, or pass one of its descriptors)"; }
     }
-    if ((kd == "call" || kd == "ref") && (n.text == "resid_device_call" || n.text == "resid_device_call_w") && kg_def(k.rs, id) < 0 && !inlib) {
+    if ((kd == "call" || kd == "ref") && (n.text == "resid_device_call" || n.text == "resid_device_call_w" || n.text == "resid_device_secret") && kg_def(k.rs, id) < 0 && !inlib) {
         return "`" + n.text + "` is the device engine's runtime entry; a program reaches a device through the `device` verbs with a descriptor from lib/dev/";
     }
     if (kd == "call" || kd == "ref") {

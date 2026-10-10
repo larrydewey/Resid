@@ -1,0 +1,8 @@
+// Fixture for device_stateless (installed as lib/dev/fx_device_stateless.resid).
+import "device.resid";
+
+pub IoctlOp fx_ptn() {
+    return IoctlOp {.name = "fx.tiocgptn", .path = "/dev/ptmx", .requests = dv_both(dv_ior(84, 48, 4)), .size = 4, .fields = [Scalar(0, 4, Out)], .write = false, .version = Unversioned, .stability = Uapi};
+}
+
+pub ReadAttr fx_online() { return ReadAttr {.name = "fx.cpu_online", .path = "/sys/devices/system/cpu/online", .max = 256, .stability = Uapi}; }

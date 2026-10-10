@@ -1,0 +1,25 @@
+// Transact (spec §49): write a command, read one response of at most
+// max_response bytes, in a host whose filter allows read and write on
+// that one descriptor.
+import "dev/fx_device_transact.resid";
+
+Int sum(List(UInt(8)) bs, Int i, Int acc) {
+    if (i >= bs.len()) { return acc; }
+    return sum(bs, i + 1, acc + (Int)bs[i]);
+}
+
+Str says(Result(List(DevOut), DeviceError) r) {
+    return match (r) {
+        Ok(o) => match (dv_out_bytes(o, 0)) { Some(bs) => f"{bs.len()} bytes, sum {sum(bs, 0, 0)}", None => "no bytes", },
+        Err(e) => device_error_text(e),
+    };
+}
+
+@requires(device(readonly))
+Int main() {
+    println(says(device.transact(fx_zero(), [(UInt(8))1, 2, 3])));
+    println(says(device.transact(fx_null(), [(UInt(8))1])));
+    println(says(device.transact(fx_zero(), [(UInt(8))0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])));
+    println(says(device.transact(fx_not_device(), [(UInt(8))1])));
+    return 0;
+}

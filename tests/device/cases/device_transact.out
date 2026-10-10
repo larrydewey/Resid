@@ -1,0 +1,4 @@
+16 bytes, sum 0
+0 bytes, sum 0
+fx.zero: bad input: command of 17 bytes, at most 16
+fx.not_device: unsupported

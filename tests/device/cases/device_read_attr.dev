@@ -1,0 +1,12 @@
+// Fixture for device_read_attr: sysfs attributes any user may read, and paths that are not one (installed as lib/dev/fx_device_read_attr.resid).
+import "device.resid";
+
+pub ReadAttr fx_online() { return ReadAttr {.name = "fx.cpu_online", .path = "/sys/devices/system/cpu/online", .max = 256, .stability = Uapi}; }
+
+pub ReadAttr fx_possible() { return ReadAttr {.name = "fx.cpu_possible", .path = "/sys/devices/system/cpu/possible", .max = 256, .stability = Uapi}; }
+
+// A character device, not a sysfs attribute.
+pub ReadAttr fx_not_attr() { return ReadAttr {.name = "fx.not_attr", .path = "/dev/null", .max = 16, .stability = Uapi}; }
+
+// A directory, not an attribute.
+pub ReadAttr fx_dir() { return ReadAttr {.name = "fx.dir", .path = "/sys/devices/system/cpu", .max = 16, .stability = Uapi}; }

@@ -2807,6 +2807,12 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (argtys == "List(Int)") { return ERes {.pos = pos, .ty = "List(Int)", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = name + " expects (List(Int)), got (" + argtys + ")"};
     }
+    // A secret output of the last device call on this thread, taken once
+    // (runtime/rt/device.resid): only the engine may call it (E0260).
+    if (name == "resid_device_secret") {
+        if (argtys == "Int") { return ERes {.pos = pos, .ty = "List(Secret(UInt(8)))", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (Int), got (" + argtys + ")"};
+    }
     if (name == "resid_tcp_poll") {
         if (builtin_args(argtys, "List(Int),List(Int),Int")) { return ERes {.pos = pos, .ty = "List(Int)", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_tcp_poll expects (List(Int), List(Int), Int), got (" + argtys + ")"};

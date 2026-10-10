@@ -1,0 +1,18 @@
+// Fixture for device_version_mismatch: DRM_IOCTL_VERSION with its major version as the interface version field, declared as one no driver has (installed as lib/dev/fx_device_version_mismatch.resid).
+//     struct drm_version {                //  64 bytes
+//         int version_major;              //   0
+//         int version_minor;              //   4
+//         int version_patchlevel;         //   8
+//         __kernel_size_t name_len;       //  16  in: capacity, out: the length
+//         char __user *name;              //  24
+//         __kernel_size_t date_len;       //  32
+//         char __user *date;              //  40
+//         __kernel_size_t desc_len;       //  48
+//         char __user *desc;              //  56
+//     };
+//     #define DRM_IOCTL_VERSION DRM_IOWR(0x00, struct drm_version)   // _IOWR('d', 0, 64)
+import "device.resid";
+
+pub IoctlOp fx_drm_v4000() {
+    return IoctlOp {.name = "fx.drm_v4000", .path = "/dev/dri/renderD128", .requests = dv_both(dv_iowr(100, 0, 64)), .size = 64, .fields = [Scalar(4, 4, Out), Scalar(16, 8, InOut), Buffer(24, 16, 64, Out, false)], .write = false, .version = Versioned(0, 4, 4000), .stability = Uapi};
+}

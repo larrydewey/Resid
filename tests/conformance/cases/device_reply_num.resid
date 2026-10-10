@@ -1,7 +1,8 @@
 // The engine reads the device host's reply as untrusted input
 // (lib/dev/device.resid): a number output must fit its Scalar's width, and
 // any 8-byte value -- a high word with its top bit set included -- decodes
-// without an abort.
+// without an abort. Reading a reply is a `device` effect (a secret output
+// is taken from the runtime), so the test holds device(readonly).
 import "dev/device.resid";
 
 List(Int) le(Int v, Int n, ListBuf(Int) acc) {
@@ -9,6 +10,7 @@ List(Int) le(Int v, Int n, ListBuf(Int) acc) {
     return le(v >> 8, n - 1, acc.push(v & 255));
 }
 
+@requires(device(readonly))
 Str reply(Int width, List(Int) value) {
     DvReq rq = DvReq {.err = "", .req = [], .outs = [DvSlot {.num = true, .max = width, .secret = false}]};
     List(Int) r = [0, 1, 0, 0, 0, 0].concat(value);
@@ -18,6 +20,7 @@ Str reply(Int width, List(Int) value) {
     };
 }
 
+@requires(device(readonly))
 Int main() {
     println(reply(rt 4, le(rt 4294967295, 8, ListBuf())));
     println(reply(rt 4, le(rt 4294967296, 8, ListBuf())));

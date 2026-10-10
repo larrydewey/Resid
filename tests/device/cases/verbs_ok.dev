@@ -1,4 +1,4 @@
-// Fixture for verbs_ok: one well-formed descriptor of each kind (installed as lib/dev/fx_verbs_ok.resid).
+// Fixture for verbs_ok: one well-formed descriptor of each kind, every path one that exists nowhere (installed as lib/dev/fx_verbs_ok.resid).
 import "device.resid";
 import "device_write.resid";
 
@@ -7,15 +7,15 @@ pub Sequence fx_seq() {
 }
 
 pub Transact fx_tpm() {
-    return Transact {.name = "fx.tpm", .path = "/dev/tpmrm0", .max_command = 4096, .max_response = 4096, .secret = false, .write = true, .stability = Uapi};
+    return Transact {.name = "fx.tpm", .path = "/dev/resid_no_such_tpm", .max_command = 4096, .max_response = 4096, .secret = false, .write = true, .stability = Uapi};
 }
 
 pub ReadAttr fx_attr() {
-    return ReadAttr {.name = "fx.provider", .path = "/sys/kernel/config/tsm/report/provider", .max = 64, .stability = AbiTesting};
+    return ReadAttr {.name = "fx.provider", .path = "/sys/kernel/config/resid_no_such_tsm/report/provider", .max = 64, .stability = AbiTesting};
 }
 
 pub ConfigfsReport fx_report() {
-    return ConfigfsReport {.name = "fx.report", .path = "/sys/kernel/config/tsm/report", .providers = ["sev_guest", "tdx_guest"], .max_inblob = 64, .max_outblob = 32768, .max_auxblob = 32768, .max_manifestblob = 32768, .write = false, .stability = AbiTesting};
+    return ConfigfsReport {.name = "fx.report", .path = "/sys/kernel/config/resid_no_such_tsm/report", .providers = ["sev_guest", "tdx_guest"], .max_inblob = 64, .max_outblob = 32768, .max_auxblob = 32768, .max_manifestblob = 32768, .write = false, .stability = AbiTesting};
 }
 
 pub IoctlOp fx_len() {

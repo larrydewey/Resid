@@ -1,0 +1,22 @@
+// Fixture for device_sequence: ioctl steps on one /dev/ptmx (installed as lib/dev/fx_device_sequence.resid).
+import "device.resid";
+import "device_write.resid";
+
+pub IoctlOp fx_ptn() {
+    return IoctlOp {.name = "fx.tiocgptn", .path = "/dev/ptmx", .requests = dv_both(dv_ior(84, 48, 4)), .size = 4, .fields = [Scalar(0, 4, Out)], .write = false, .version = Unversioned, .stability = Uapi};
+}
+
+pub IoctlOp fx_lock() {
+    return IoctlOp {.name = "fx.tiocsptlck", .path = "/dev/ptmx", .requests = dv_both(dv_iow(84, 49, 4)), .size = 4, .fields = [Scalar(0, 4, In)], .write = true, .version = Unversioned, .stability = Uapi};
+}
+
+// TIOCSPTLCK (the program's input), then TIOCGPTN.
+pub Sequence fx_unlock_ptn() {
+    return Sequence {.name = "fx.unlock_ptn", .path = "/dev/ptmx", .steps = [fx_lock(), fx_ptn()], .links = [], .write = true, .stability = Uapi};
+}
+
+// TIOCGPTN, TIOCSPTLCK with the first step's number linked in (so the pty
+// is locked), TIOCGPTN: the same pty, one open file.
+pub Sequence fx_linked() {
+    return Sequence {.name = "fx.linked", .path = "/dev/ptmx", .steps = [fx_ptn(), fx_lock(), fx_ptn()], .links = [link(0, 0, 1, 0, 4)], .write = true, .stability = Uapi};
+}

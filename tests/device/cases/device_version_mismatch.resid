@@ -1,0 +1,15 @@
+// A descriptor names the interface version it speaks; the host sets the
+// version field before the call and checks it after. A kernel that answers
+// in another version is Err(Version) with the version it gave, never data
+// read with the wrong layout (PLAN-device-access.md §6.2).
+import "dev/fx_device_version_mismatch.resid";
+
+@requires(device(readonly))
+Int main() {
+    Str s = match (device.ioctl(fx_drm_v4000(), [])) {
+        Ok(o) => "accepted",
+        Err(e) => match (e) { Version(n, v) => if (v != 4000 && v >= 0) { n + ": another interface version" } else { "the same version" }, Absent(n) => "absent", Denied(n) => "denied", Kernel(n, x) => "kernel", TooLong(n) => "too long", GenerationChanged(n) => "generation", Unsupported(n) => "unsupported", Overrun(n) => "overrun", UnknownDriver(n, x) => "driver", BadInput(n, x) => "input", BadReply(n, x) => "reply", },
+    };
+    println(s);
+    return 0;
+}

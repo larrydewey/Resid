@@ -1,0 +1,16 @@
+// Fixture for device_absent_is_err: a device node, a sysfs attribute and a configfs report root that exist nowhere (installed as lib/dev/fx_device_absent_is_err.resid).
+import "device.resid";
+
+pub IoctlOp fx_missing_node() {
+    return IoctlOp {.name = "fx.missing_node", .path = "/dev/resid_no_such_device", .requests = dv_both(dv_ior(84, 48, 4)), .size = 4, .fields = [Scalar(0, 4, Out)], .write = false, .version = Unversioned, .stability = Uapi};
+}
+
+pub ReadAttr fx_missing_attr() {
+    return ReadAttr {.name = "fx.missing_attr", .path = "/sys/kernel/resid_no_such_attribute", .max = 64, .stability = AbiTesting};
+}
+
+pub ConfigfsReport fx_missing_report() {
+    return ConfigfsReport {.name = "fx.missing_report", .path = "/sys/kernel/config/resid_no_such_tsm/report", .providers = ["sev_guest"], .max_inblob = 64, .max_outblob = 8192, .max_auxblob = 8192, .max_manifestblob = 8192, .write = false, .stability = Uapi};
+}
+
+pub ReportReq fx_req(List(UInt(8)) inblob) { return ReportReq {.inblob = inblob, .privlevel = 0 - 1, .service_provider = ""}; }

@@ -135,12 +135,19 @@ type DevOut = OutNum(Int) | OutBytes(List(UInt(8))) | OutSecret(List(Secret(UInt
 //   Kernel        the operation failed with this errno
 //   TooLong       a reply longer than the descriptor's maximum
 //   GenerationChanged  a configfs entry changed between write and read
-//   Unsupported   ENOTTY / EINVAL from the request, or no device engine
+//   Unsupported   ENOTTY / EINVAL from the request, a path that is not the
+//                 kind of file the descriptor needs (or a symbolic link),
+//                 a missing configfs attribute, or no Landlock to confine
+//                 a configfs report
 //   Version       the kernel answered in another interface version
 //   Overrun       the kernel wrote past a buffer (guard page or canary)
-//   UnknownDriver no descriptor covers the loaded driver's version
-//   BadInput      the program's inputs do not fit the descriptor
-//   BadReply      the isolated host's reply did not parse
+//   UnknownDriver no descriptor covers the loaded driver's version, or a
+//                 configfs report came from a provider the descriptor
+//                 does not accept (the text says which)
+//   BadInput      the program's inputs do not fit the descriptor, or the
+//                 device host refused the request
+//   BadReply      the isolated host failed: killed, a bad exit, no
+//                 sandbox, or a reply that did not parse
 @descriptor(error)
 type DeviceError = Absent(Str) | Denied(Str) | Kernel(Str, Int) | TooLong(Str) | GenerationChanged(Str) | Unsupported(Str) | Version(Str, Int) | Overrun(Str) | UnknownDriver(Str, Str) | BadInput(Str, Str) | BadReply(Str, Str);
 
@@ -154,7 +161,7 @@ pub Str device_error_text(DeviceError e) {
         Unsupported(n) => n + ": unsupported",
         Version(n, v) => n + f": interface version {v}",
         Overrun(n) => n + ": buffer overrun",
-        UnknownDriver(n, v) => n + ": no descriptor for driver version " + v,
+        UnknownDriver(n, v) => n + ": no descriptor for " + v,
         BadInput(n, why) => n + ": bad input: " + why,
         BadReply(n, why) => n + ": bad reply: " + why,
     };
@@ -208,7 +215,9 @@ pub DvReq dv_prep_sequence(Sequence op, List(DevIn) args) {
     return DvReq {.err = "", .req = dv_args(b2, args, 0).finish(), .outs = dv_outs(last.fields, last.fields, 0, ListBuf())};
 }
 
-// The reply to a prepared request.
+// The reply to a prepared request. Reading it takes the secret outputs
+// from the runtime (resid_device_secret), a `device` effect.
+@requires(device(readonly))
 pub Result(List(DevOut), DeviceError) dv_answer(Str name, DvReq r, List(Int) reply) {
     return dv_reply(name, r.outs, reply);
 }
@@ -340,8 +349,14 @@ Bool dv_fits(Int v, Int width) {
 //   5 sequence), write, name, path (u16 length, bytes), then the kind's own
 //   part and the inputs (u8 count; tag 0 + 8-byte integer, or tag 1 + u32
 //   length + bytes).
-// The reply is 0, u32 count, outputs (as the inputs), or 1, an error code
-// (1 Absent .. 8 Overrun, as DeviceError), an 8-byte value.
+// The reply is 0, u32 count, outputs (as the inputs; a secret output is
+// tag 2 + u32 length, its bytes taken from the runtime with
+// resid_device_secret, never in the reply), or 1, an error code, an
+// 8-byte value: 1 Absent .. 8 Overrun as DeviceError; 9 a provider the
+// descriptor does not accept, its text (the value's length of printable
+// bytes) following; 10 the device host refused the request; 11 the host
+// failed (value: 256 * what + detail -- 1 killed by signal detail, 2 exit
+// status detail, 3 no sandbox, 4 a malformed reply, 5 no host process).
 
 ListBuf(Int) dv_u(ListBuf(Int) b, Int v, Int n) {
     if (n <= 0) { return b; }
@@ -445,6 +460,7 @@ Int dv_rd64(List(Int) r, Int at) {
     return shi * 4294967296 + dv_rd(r, at, 4);
 }
 
+@requires(device(readonly))
 Result(List(DevOut), DeviceError) dv_reply(Str name, List(DvSlot) slots, List(Int) r) {
     if (r.len() < 1) { return Err(BadReply(name, "empty")); }
     if (r[0] == 1) {
@@ -459,15 +475,42 @@ Result(List(DevOut), DeviceError) dv_reply(Str name, List(DvSlot) slots, List(In
         if (code == 6) { return Err(Unsupported(name)); }
         if (code == 7) { return Err(Version(name, v)); }
         if (code == 8) { return Err(Overrun(name)); }
+        if (code == 9) {
+            if (v < 1 || v > 256 || r.len() != 10 + v) { return Err(BadReply(name, "provider text")); }
+            return Err(UnknownDriver(name, "provider " + dv_text(r, 10, 10 + v, "")));
+        }
+        if (code == 10) { return Err(BadInput(name, f"the device host refused the request ({v})")); }
+        if (code == 11) { return Err(BadReply(name, dv_host_failure(v))); }
         return Err(BadReply(name, f"error code {code}"));
     }
     if (r[0] != 0) { return Err(BadReply(name, "status")); }
     Int n = dv_rd(r, 1, 4);
     if (n != slots.len()) { return Err(BadReply(name, f"{n} outputs, the descriptor gives {slots.len()}")); }
-    return dv_items(name, slots, r, 5, 0);
+    return dv_items(name, slots, r, 5, 0, 0);
 }
 
-Result(List(DevOut), DeviceError) dv_items(Str name, List(DvSlot) slots, List(Int) r, Int at, Int i) {
+// What happened to the device host (error code 11).
+Str dv_host_failure(Int v) {
+    Int what = v >> 8;
+    Int n = v & 255;
+    if (what == 1) { return f"the device host was killed by signal {n}"; }
+    if (what == 2) { return f"the device host exited with status {n}"; }
+    if (what == 3) { return "the device host's sandbox could not be installed"; }
+    if (what == 4) { return "malformed reply from the device host"; }
+    if (what == 5) { return "the device host could not be started"; }
+    return f"device host failure {v}";
+}
+
+// Printable text of the bytes [i, end) (anything else shows as `?`).
+Str dv_text(List(Int) r, Int i, Int end, Str acc) {
+    if (i >= end) { return acc; }
+    Int c = r[i] & 255;
+    return dv_text(r, i + 1, end, acc + (if (c >= 32 && c < 127) { str_from_code(c) } else { "?" }));
+}
+
+// Output i on, from byte `at`; k counts the secret outputs taken so far.
+@requires(device(readonly))
+Result(List(DevOut), DeviceError) dv_items(Str name, List(DvSlot) slots, List(Int) r, Int at, Int i, Int k) {
     if (i >= slots.len()) {
         List(DevOut) none = [];
         return if (at == r.len()) { Ok(none) } else { Err(BadReply(name, "trailing bytes")) };
@@ -480,15 +523,24 @@ Result(List(DevOut), DeviceError) dv_items(Str name, List(DvSlot) slots, List(In
         // a reply the descriptor does not allow.
         Int v = dv_rd64(r, at + 1);
         if (!dv_fits(v, s.max)) { return Err(BadReply(name, f"output {i} does not fit {s.max} bytes")); }
-        List(DevOut) rest = dv_items(name, slots, r, at + 9, i + 1)?;
+        List(DevOut) rest = dv_items(name, slots, r, at + 9, i + 1, k)?;
         return Ok([OutNum(v)].concat(rest));
     }
     Int len = dv_rd(r, at + 1, 4);
+    // A secret buffer's bytes never travel in the reply: the runtime holds
+    // them, already Secret, and hands each over once.
+    if (s.secret) {
+        if (tag != 2 || len < 0) { return Err(BadReply(name, f"output {i}")); }
+        if (len > s.max) { return Err(TooLong(name)); }
+        List(Secret(UInt(8))) sb = resid_device_secret(k);
+        if (sb.len() != len) { return Err(BadReply(name, f"output {i}: {sb.len()} secret bytes, the reply says {len}")); }
+        List(DevOut) srest = dv_items(name, slots, r, at + 5, i + 1, k + 1)?;
+        return Ok([OutSecret(sb)].concat(srest));
+    }
     if (tag != 1 || len < 0 || at + 5 + len > r.len()) { return Err(BadReply(name, f"output {i}")); }
     if (len > s.max) { return Err(TooLong(name)); }
-    DevOut o = if (s.secret) { OutSecret(dv_secret(r, at + 5, at + 5 + len, ListBuf())) } else { OutBytes(dv_pub(r, at + 5, at + 5 + len, ListBuf())) };
-    List(DevOut) rest = dv_items(name, slots, r, at + 5 + len, i + 1)?;
-    return Ok([o].concat(rest));
+    List(DevOut) rest = dv_items(name, slots, r, at + 5 + len, i + 1, k)?;
+    return Ok([OutBytes(dv_pub(r, at + 5, at + 5 + len, ListBuf()))].concat(rest));
 }
 
 List(UInt(8)) dv_pub(List(Int) r, Int i, Int end, ListBuf(UInt(8)) acc) {
@@ -496,10 +548,6 @@ List(UInt(8)) dv_pub(List(Int) r, Int i, Int end, ListBuf(UInt(8)) acc) {
     return dv_pub(r, i + 1, end, acc.push((UInt(8))(r[i] & 255)));
 }
 
-List(Secret(UInt(8))) dv_secret(List(Int) r, Int i, Int end, ListBuf(Secret(UInt(8))) acc) {
-    if (i >= end) { return acc.finish(); }
-    return dv_secret(r, i + 1, end, acc.push(secret((UInt(8))(r[i] & 255))));
-}
 
 // -- Helpers for the device modules ----------------------------------------
 

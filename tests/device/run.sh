@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Device descriptor checks (spec §49, PLAN-device-access.md): E0262-E0264
-# on descriptors that only the standard library's lib/dev/ may declare.
+# on descriptors that only the standard library's lib/dev/ may declare, and
+# the device verbs run end to end against devices any user can open.
 #
 # Usage: tests/device/run.sh [-c COMPILER] [FILTER...]
 #
@@ -15,6 +16,17 @@
 #   NAME.fail     compilation must fail
 #   NAME.compile  lines that must each appear in the compiler's output
 #   NAME.out      expected stdout of the built binary
+#   NAME.needs    device paths the case runs against, one per line: when one
+#                 is missing (or not readable and writable) here, the case
+#                 is skipped
+#
+# The cases that run (device_*, configfs_*) talk to real devices any user
+# can open -- /dev/ptmx, /dev/zero, /dev/null, sysfs attributes, a DRM
+# render node -- through the isolated device host (runtime/rt/device.resid).
+# The host's fault paths (seccomp, guard pages, canaries, a killed host, a
+# malformed reply, the configfs flow on a fake configfs) are
+# tests/runtime/device_host.c: they need a self-test mode no Resid program
+# can turn on.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 CASES="$ROOT/tests/device/cases"
@@ -45,12 +57,20 @@ for f in "$CASES"/*.dev; do
     cp "$f" "$HOME_DIR/lib/dev/fx_$(basename "$f" .dev).resid"
 done
 export RESID_HOME="$HOME_DIR"
-pass=0; fail=0
+pass=0; fail=0; skip=0
 for f in "$CASES"/*.resid; do
     n="$(basename "$f" .resid)"
     if [ "$#" -gt 0 ]; then
         hit=0; for pat in "$@"; do [[ "$n" == *"$pat"* ]] && hit=1; done
         [ "$hit" -eq 1 ] || continue
+    fi
+    if [ -f "$CASES/$n.needs" ]; then
+        missing=""
+        while IFS= read -r dev; do
+            [ -z "$dev" ] && continue
+            { [ -r "$dev" ] && [ -w "$dev" ]; } || missing="$dev"
+        done < "$CASES/$n.needs"
+        if [ -n "$missing" ]; then echo "SKIP $n (no usable $missing here)"; skip=$((skip + 1)); continue; fi
     fi
     d="$WORK/$n"; mkdir -p "$d"; cp "$f" "$d/$n.resid"
     why=""
@@ -93,5 +113,5 @@ if [ "$#" -eq 0 ] || [[ " $* " == *" e0260_relative_stdroot "* ]]; then
     fi
 fi
 echo "---"
-echo "$pass passed, $fail failed"
+echo "$pass passed, $fail failed$([ "$skip" -gt 0 ] && echo ", $skip skipped")"
 [ "$fail" -eq 0 ]

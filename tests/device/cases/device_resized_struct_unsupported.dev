@@ -1,0 +1,6 @@
+// Fixture for device_resized_struct_unsupported: TIOCGPTN as if its struct had grown to 8 bytes; the request number encodes the size, so the kernel does not know it (installed as lib/dev/fx_device_resized_struct_unsupported.resid).
+import "device.resid";
+
+pub IoctlOp fx_ptn8() {
+    return IoctlOp {.name = "fx.tiocgptn8", .path = "/dev/ptmx", .requests = dv_both(dv_ior(84, 48, 8)), .size = 8, .fields = [Scalar(0, 8, Out)], .write = false, .version = Unversioned, .stability = Uapi};
+}

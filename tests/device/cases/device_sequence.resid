@@ -1,0 +1,20 @@
+// A Sequence runs its steps in order on one open file in one host; a
+// Link copies a step's Scalar output into a later step's input; only the
+// last step's outputs come back (spec §49).
+import "dev/fx_device_sequence.resid";
+
+Str num(Result(List(DevOut), DeviceError) r) {
+    return match (r) {
+        Ok(o) => match (dv_out_num(o, 0)) { Some(v) => if (v >= 0 && o.len() == 1) { "a pty number" } else { "not a pty number" }, None => "no number", },
+        Err(e) => device_error_text(e),
+    };
+}
+
+@requires(device)
+Int main() {
+    println(num(device.sequence(fx_unlock_ptn(), [InNum(rt 0)])));
+    println(num(device.sequence(fx_linked(), [])));
+    Str bad = match (device.sequence(fx_linked(), [InNum(rt 0)])) { Ok(o) => "accepted", Err(e) => device_error_text(e), };
+    println(bad);
+    return 0;
+}

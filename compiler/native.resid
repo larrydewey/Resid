@@ -481,13 +481,29 @@ List(Str) nt_call_args(List(Str) ts, Int i, ListBuf(Str) acc) {
 
 // The program's entry runs the host first: it returns at once unless this
 // process is a module's sandboxed host.
-pub List(Str) nt_hook_main(List(Str) ls, Int n) { return nt_hook_at(ls, 0, n, false, ListBuf()); }
+pub List(Str) nt_hook_main(List(Str) ls, Int n) { return nt_hook_at(ls, 0, "  call void @resid_native_host(ptr @resid.native.tab, i64 " + f"{n}" + ")", false, ListBuf()); }
 
-List(Str) nt_hook_at(List(Str) ls, Int i, Int n, Bool in_main, ListBuf(Str) acc) {
+// A program that reaches a device verb (spec §49) runs the device host
+// first the same way (runtime/rt/device.resid's resid_device_host).
+pub List(Str) dv_hook_main(List(Str) ls) {
+    if (!dv_calls_host(ls, 0)) { return ls; }
+    return nt_hook_at(ls.concat(["declare void @resid_device_host()"]), 0, "  call void @resid_device_host()", false, ListBuf());
+}
+
+// An instruction calling the device entry (a global, such as a string
+// constant that spells the call, is not one).
+Bool dv_calls_host(List(Str) ls, Int i) {
+    if (i >= ls.len()) { return false; }
+    Str l = ls[i];
+    if (!str_starts_with(l, "@") && !str_starts_with(l, "!") && str_contains(l, "call ptr @resid_device_call")) { return true; }
+    return dv_calls_host(ls, i + 1);
+}
+
+List(Str) nt_hook_at(List(Str) ls, Int i, Str call, Bool in_main, ListBuf(Str) acc) {
     if (i >= ls.len()) { return acc.finish(); }
     Str l = ls[i];
-    if (in_main && l == "entry:") { return nt_hook_at(ls, i + 1, n, false, acc.push(l).push("  call void @resid_native_host(ptr @resid.native.tab, i64 " + f"{n}" + ")")); }
-    return nt_hook_at(ls, i + 1, n, str_starts_with(l, "define i32 @main(") || str_starts_with(l, "define i64 @main("), acc.push(l));
+    if (in_main && l == "entry:") { return nt_hook_at(ls, i + 1, call, false, acc.push(l).push(call)); }
+    return nt_hook_at(ls, i + 1, call, str_starts_with(l, "define i32 @main(") || str_starts_with(l, "define i64 @main("), acc.push(l));
 }
 
 // ─── The build step ─────────────────────────────────────────────────

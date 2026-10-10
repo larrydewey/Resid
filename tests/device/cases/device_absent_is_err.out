@@ -1,0 +1,3 @@
+fx.missing_node: device absent
+fx.missing_attr: device absent
+fx.missing_report: device absent

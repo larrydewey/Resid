@@ -1,4 +1,4 @@
-sev_guest.snp_get_report: unsupported
+sev_guest.snp_get_report: device absent
 sev_guest.snp_get_report: bad input: report_data is 64 bytes, got 63
 sev_guest.snp_get_report: bad input: vmpl is 0 to 3, got 4
-sev_guest.snp_get_derived_key: unsupported
+sev_guest.snp_get_derived_key: device absent

@@ -1,0 +1,23 @@
+// ReadAttr (spec §49): one regular sysfs or configfs file, read up to its
+// maximum in a host that may read only that descriptor; anything else at
+// the path is Unsupported.
+import "dev/fx_device_read_attr.resid";
+
+Str says(Result(List(DevOut), DeviceError) r) {
+    return match (r) {
+        Ok(o) => match (dv_out_bytes(o, 0)) {
+            Some(bs) => if (bs.len() > 1 && bs[bs.len() - 1] == 10 && bs[0] >= 48 && bs[0] <= 57) { "a cpu list" } else { f"{bs.len()} unexpected bytes" },
+            None => "no bytes",
+        },
+        Err(e) => device_error_text(e),
+    };
+}
+
+@requires(device(readonly))
+Int main() {
+    println(says(device.read_attr(fx_online())));
+    println(says(device.read_attr(fx_possible())));
+    println(says(device.read_attr(fx_not_attr())));
+    println(says(device.read_attr(fx_dir())));
+    return 0;
+}

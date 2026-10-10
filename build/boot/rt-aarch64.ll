@@ -45318,75 +45318,3018 @@ entry:
 %t20278 = call i64 @st32(i64 %t20277, i64 %p5)
 ret i64 0
 }
-define internal i64 @__mruntime_rt_device_resid__dev_err_reply(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_device_resid__dv_buf_max() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20279 = call i64 @xmalloc(i64 80)
-%t20280 = call i64 @c_box_i64(i64 1)
-%t20281 = call i64 @st64(i64 %t20279, i64 %t20280)
-%t20282 = add i64 %t20279, 8
-%t20283 = call i64 @c_box_i64(i64 %p0)
-%t20284 = call i64 @st64(i64 %t20282, i64 %t20283)
-%t20285 = call i64 @__mruntime_rt_device_resid__dev_zero_slots(i64 %t20279, i64 2, i64 10)
-%t20287 = ptrtoint ptr @.s20286 to i64
-%t20288 = call i64 @c_list_new(i64 10, i64 %t20279, i64 %t20287)
-%t20289 = call i64 @c_free(i64 %t20279)
-%t20290 = mul nsw i64 %t20289, 0
-%t20291 = add nsw i64 %t20290, %t20288
-ret i64 %t20291
+ret i64 16777216
 }
-define internal i64 @__mruntime_rt_device_resid__dev_zero_slots(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+define internal i64 @__mruntime_rt_device_resid__dv_req_max() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+ret i64 67108864
+}
+define internal i64 @__mruntime_rt_device_resid__dv_sec_max() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+ret i64 64
+}
+define internal i64 @__mruntime_rt_device_resid__de_refused() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+ret i64 10
+}
+define internal i64 @__mruntime_rt_device_resid__de_host() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+ret i64 11
+}
+define internal i64 @le_get(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t20279 = sub i64 %p1, 1
+%t20280 = call i64 @__mruntime_rt_device_resid__le_get_at(i64 %p0, i64 %t20279, i64 0)
+ret i64 %t20280
+}
+define internal i64 @__mruntime_rt_device_resid__le_get_at(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
 %p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
-%p1 = phi i64 [ %p1.in, %entry ], [ %t20297, %tco.s0 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
-%t20292 = icmp sge i64 %p1, %p2
-br i1 %t20292, label %L6631, label %L6633
+%p1 = phi i64 [ %p1.in, %entry ], [ %t20282, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t20286, %tco.s0 ]
+%t20281 = icmp slt i64 %p1, 0
+br i1 %t20281, label %L6631, label %L6633
 L6631:
-ret i64 0
+ret i64 %p2
 L6633:
-%t20293 = mul i64 %p1, 8
-%t20294 = add i64 %p0, %t20293
-%t20295 = call i64 @c_box_i64(i64 0)
-%t20296 = call i64 @st64(i64 %t20294, i64 %t20295)
-%t20297 = add nsw i64 %p1, 1
+%t20282 = sub nsw i64 %p1, 1
+%t20283 = shl i64 %p2, 8
+%t20284 = add i64 %p0, %p1
+%t20285 = call i64 @ld8(i64 %t20284)
+%t20286 = or i64 %t20283, %t20285
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i64 @le_put(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %t20291, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %t20292, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t20293, %tco.s0 ]
+%t20288 = icmp sle i64 %p2, 0
+br i1 %t20288, label %L6634, label %L6636
+L6634:
+ret i64 0
+L6636:
+%t20289 = and i64 %p1, 255
+%t20290 = call i64 @st8(i64 %p0, i64 %t20289)
+%t20291 = add i64 %p0, 1
+%t20292 = ashr i64 %p1, 8
+%t20293 = sub nsw i64 %p2, 1
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i1 @__mruntime_rt_device_resid__dv_fits_w(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t20295 = icmp sle i64 %p1, 0
+br i1 %t20295, label %L6637, label %L6639
+L6637:
+ret i1 false
+L6639:
+%t20296 = icmp sge i64 %p1, 8
+br i1 %t20296, label %L6640, label %L6642
+L6640:
+ret i1 true
+L6642:
+%t20297 = mul nsw i64 %p1, 8
+%t20298 = sub nsw i64 %t20297, 1
+%t20299 = icmp uge i64 %t20298, 64
+%t20300 = add i64 %t20298, 0
+%t20301 = shl i64 1, %t20300
+%t20302 = select i1 %t20299, i64 0, i64 %t20301
+%t20303 = sub i64 0, %t20302
+%t20304 = icmp sge i64 %p0, %t20303
+br label %LSL20305
+LSL20305:
+br i1 %t20304, label %LSR20305, label %LSJ20305
+LSR20305:
+%t20306 = icmp uge i64 %t20297, 64
+%t20307 = add i64 %t20297, 0
+%t20308 = shl i64 1, %t20307
+%t20309 = select i1 %t20306, i64 0, i64 %t20308
+%t20310 = icmp slt i64 %p0, %t20309
+br label %LSJ20305
+LSJ20305:
+%t20311 = phi i1 [ false, %LSL20305 ], [ %t20310, %LSR20305 ]
+ret i1 %t20311
+}
+define internal i64 @__mruntime_rt_device_resid__dp_list(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t20312 = mul i64 %p1, 8
+%t20313 = add i64 %t20312, 8
+%t20314 = call i64 @xmalloc(i64 %t20313)
+%t20315 = call i64 @__mruntime_rt_device_resid__dp_box(i64 %p0, i64 %t20314, i64 0, i64 %p1)
+%t20317 = ptrtoint ptr @.s20316 to i64
+%t20318 = call i64 @c_list_new(i64 %p1, i64 %t20314, i64 %t20317)
+%t20319 = call i64 @c_free(i64 %t20314)
+%t20320 = mul nsw i64 %t20319, 0
+%t20321 = add nsw i64 %t20320, %t20318
+ret i64 %t20321
+}
+define internal i64 @__mruntime_rt_device_resid__dp_box(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t20329, %tco.s0 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ]
+%t20322 = icmp sge i64 %p2, %p3
+br i1 %t20322, label %L6643, label %L6645
+L6643:
+ret i64 0
+L6645:
+%t20323 = mul i64 %p2, 8
+%t20324 = add i64 %p1, %t20323
+%t20325 = add i64 %p0, %p2
+%t20326 = call i64 @ld8(i64 %t20325)
+%t20327 = call i64 @c_box_i64(i64 %t20326)
+%t20328 = call i64 @st64(i64 %t20324, i64 %t20327)
+%t20329 = add nsw i64 %p2, 1
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i64 @__mruntime_rt_device_resid__dev_err_reply(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t20331 = call i64 @xmalloc(i64 16)
+%t20332 = call i64 @st8(i64 %t20331, i64 1)
+%t20333 = add i64 %t20331, 1
+%t20334 = call i64 @st8(i64 %t20333, i64 %p0)
+%t20335 = add i64 %t20332, %t20334
+%t20336 = add i64 %t20331, 2
+%t20337 = call i64 @le_put(i64 %t20336, i64 %p1, i64 8)
+%t20338 = add i64 %t20335, %t20337
+%t20339 = call i64 @__mruntime_rt_device_resid__dp_list(i64 %t20331, i64 10)
+%t20340 = call i64 @c_free(i64 %t20331)
+%t20341 = mul nsw i64 %t20340, 0
+%t20342 = add nsw i64 %t20341, %t20339
+ret i64 %t20342
+}
+define internal i64 @__mruntime_rt_device_resid__dv_map(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t20343 = sub nsw i64 0, 1
+%t20344 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 222, i64 0, i64 %p0, i64 3, i64 34, i64 %t20343, i64 0)
+%t20345 = icmp slt i64 %t20344, 0
+br label %LSL20346
+LSL20346:
+br i1 %t20345, label %LSR20346, label %LSJ20346
+LSR20346:
+%t20347 = sub nsw i64 0, 4096
+%t20348 = icmp sgt i64 %t20344, %t20347
+br label %LSJ20346
+LSJ20346:
+%t20349 = phi i1 [ false, %LSL20346 ], [ %t20348, %LSR20346 ]
+br i1 %t20349, label %L6646, label %L6648
+L6646:
+ret i64 0
+L6648:
+%t20350 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 233, i64 %t20344, i64 %p0, i64 16, i64 0, i64 0, i64 0)
+ret i64 %t20344
+}
+define internal i64 @__mruntime_rt_device_resid__dv_unmap(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t20351 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 215, i64 %p0, i64 %p1, i64 0, i64 0, i64 0, i64 0)
+ret i64 %t20351
+}
+define internal i64 @__mruntime_rt_device_resid__o_nofollow() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t20352 = call i1 @on_a64()
+br i1 %t20352, label %L6649, label %L6650
+L6649:
+br label %L6651
+L6650:
+br label %L6651
+L6651:
+%t20353 = phi i64 [ 32768, %L6649 ], [ 131072, %L6650 ]
+ret i64 %t20353
+}
+define internal i64 @__mruntime_rt_device_resid__o_directory() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t20354 = call i1 @on_a64()
+br i1 %t20354, label %L6652, label %L6653
+L6652:
+br label %L6654
+L6653:
+br label %L6654
+L6654:
+%t20355 = phi i64 [ 16384, %L6652 ], [ 65536, %L6653 ]
+ret i64 %t20355
+}
+define internal i64 @__mruntime_rt_device_resid__o_path() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+ret i64 2097152
+}
+define internal i64 @__mruntime_rt_device_resid__o_cloexec() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+ret i64 524288
+}
+define internal i64 @__mruntime_rt_device_resid__rd_new(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t20356 = call i64 @xmalloc(i64 32)
+%t20357 = call i64 @st64(i64 %t20356, i64 %p0)
+%t20358 = add i64 %t20356, 8
+%t20359 = call i64 @st64(i64 %t20358, i64 %p1)
+%t20360 = add i64 %t20357, %t20359
+%t20361 = add i64 %t20356, 16
+%t20362 = call i64 @st64(i64 %t20361, i64 0)
+%t20363 = add i64 %t20360, %t20362
+%t20364 = add i64 %t20356, 24
+%t20365 = call i64 @st64(i64 %t20364, i64 0)
+%t20366 = add i64 %t20363, %t20365
+ret i64 %t20356
+}
+define internal i1 @__mruntime_rt_device_resid__rd_bad(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t20367 = add i64 %p0, 24
+%t20368 = call i64 @ld64(i64 %t20367)
+%t20369 = icmp ne i64 %t20368, 0
+ret i1 %t20369
+}
+define internal i64 @__mruntime_rt_device_resid__rd_fail(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t20370 = add i64 %p0, 24
+%t20371 = call i64 @st64(i64 %t20370, i64 1)
+ret i64 %t20371
+}
+define internal i64 @__mruntime_rt_device_resid__rd_u(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t20372 = add i64 %p0, 16
+%t20373 = call i64 @ld64(i64 %t20372)
+%t20374 = call i1 @__mruntime_rt_device_resid__rd_bad(i64 %p0)
+br label %LSL20375
+LSL20375:
+br i1 %t20374, label %LSJ20375, label %LSR20375
+LSR20375:
+%t20376 = add i64 %t20373, %p1
+%t20377 = add i64 %p0, 8
+%t20378 = call i64 @ld64(i64 %t20377)
+%t20379 = icmp sgt i64 %t20376, %t20378
+br label %LSJ20375
+LSJ20375:
+%t20380 = phi i1 [ true, %LSL20375 ], [ %t20379, %LSR20375 ]
+br i1 %t20380, label %L6655, label %L6657
+L6655:
+%t20381 = call i64 @__mruntime_rt_device_resid__rd_fail(i64 %p0)
+%t20382 = mul nsw i64 %t20381, 0
+ret i64 %t20382
+L6657:
+%t20383 = add i64 %p0, 16
+%t20384 = add i64 %t20373, %p1
+%t20385 = call i64 @st64(i64 %t20383, i64 %t20384)
+%t20386 = call i64 @ld64(i64 %p0)
+%t20387 = add i64 %t20386, %t20373
+%t20388 = tail call i64 @le_get(i64 %t20387, i64 %p1)
+ret i64 %t20388
+}
+define internal i64 @__mruntime_rt_device_resid__rd_take(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t20389 = add i64 %p0, 16
+%t20390 = call i64 @ld64(i64 %t20389)
+%t20391 = call i1 @__mruntime_rt_device_resid__rd_bad(i64 %p0)
+br label %LSL20392
+LSL20392:
+br i1 %t20391, label %LSJ20392, label %LSR20392
+LSR20392:
+%t20393 = icmp slt i64 %p1, 0
+br label %LSJ20392
+LSJ20392:
+%t20394 = phi i1 [ true, %LSL20392 ], [ %t20393, %LSR20392 ]
+br label %LSL20395
+LSL20395:
+br i1 %t20394, label %LSJ20395, label %LSR20395
+LSR20395:
+%t20396 = add i64 %t20390, %p1
+%t20397 = add i64 %p0, 8
+%t20398 = call i64 @ld64(i64 %t20397)
+%t20399 = icmp sgt i64 %t20396, %t20398
+br label %LSJ20395
+LSJ20395:
+%t20400 = phi i1 [ true, %LSL20395 ], [ %t20399, %LSR20395 ]
+br i1 %t20400, label %L6658, label %L6660
+L6658:
+%t20401 = call i64 @__mruntime_rt_device_resid__rd_fail(i64 %p0)
+%t20402 = mul nsw i64 %t20401, 0
+ret i64 %t20402
+L6660:
+%t20403 = add i64 %p0, 16
+%t20404 = add i64 %t20390, %p1
+%t20405 = call i64 @st64(i64 %t20403, i64 %t20404)
+%t20406 = call i64 @ld64(i64 %p0)
+%t20407 = add i64 %t20406, %t20390
+ret i64 %t20407
+}
+define internal i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t20408 = mul i64 %p1, 8
+%t20409 = add i64 %p0, %t20408
+%t20410 = call i64 @ld64(i64 %t20409)
+ret i64 %t20410
+}
+define internal i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t20411 = mul i64 %p1, 8
+%t20412 = add i64 %p0, %t20411
+%t20413 = call i64 @st64(i64 %t20412, i64 %p2)
+ret i64 %t20413
+}
+define internal i64 @__mruntime_rt_device_resid__fw(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t20414 = add i64 %p0, 24
+%t20415 = call i64 @ld64(i64 %t20414)
+%t20416 = mul i64 %p1, 48
+%t20417 = add i64 %t20415, %t20416
+%t20418 = mul i64 %p2, 8
+%t20419 = add i64 %t20417, %t20418
+%t20420 = call i64 @ld64(i64 %t20419)
+ret i64 %t20420
+}
+define internal i64 @__mruntime_rt_device_resid__f_len(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t20421 = call i64 @__mruntime_rt_device_resid__fw(i64 %p0, i64 %p1, i64 0)
+%t20422 = icmp eq i64 %t20421, 2
+br i1 %t20422, label %L6661, label %L6662
+L6661:
+br label %L6663
+L6662:
+%t20423 = call i64 @__mruntime_rt_device_resid__fw(i64 %p0, i64 %p1, i64 2)
+br label %L6663
+L6663:
+%t20424 = phi i64 [ 8, %L6661 ], [ %t20423, %L6662 ]
+ret i64 %t20424
+}
+define internal i64 @__mruntime_rt_device_resid__step_of(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t20425 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 7)
+%t20426 = mul i64 %p1, 8
+%t20427 = add i64 %t20425, %t20426
+%t20428 = call i64 @ld64(i64 %t20427)
+ret i64 %t20428
+}
+define internal i64 @__mruntime_rt_device_resid__pq_alloc(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t20429 = add i64 %p1, 16
+%t20430 = call i64 @xmalloc(i64 %t20429)
+%t20431 = add i64 %p1, 16
+%t20432p = inttoptr i64 %t20430 to ptr
+%t20432q = trunc i64 0 to i8
+call void @llvm.memset.p0.i64(ptr %t20432p, i8 %t20432q, i64 %t20431, i1 false)
+%t20432 = add i64 0, 0
+%t20433 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 31)
+%t20434 = call i64 @st64(i64 %t20430, i64 %t20433)
+%t20435 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 31, i64 %t20430)
+%t20436 = add i64 %t20430, 16
+ret i64 %t20436
+}
+define internal i64 @pq_free(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t20437 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 31)
+%t20438 = call i64 @__mruntime_rt_device_resid__pq_free_at(i64 %t20437)
+%t20439 = tail call i64 @c_free(i64 %p0)
+ret i64 %t20439
+}
+define internal i64 @__mruntime_rt_device_resid__pq_free_at(i64 %p0.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %t20441, %tco.s0 ]
+%t20440 = icmp eq i64 %p0, 0
+br i1 %t20440, label %L6664, label %L6666
+L6664:
+ret i64 0
+L6666:
+%t20441 = call i64 @ld64(i64 %p0)
+%t20442 = call i64 @c_free(i64 %p0)
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i64 @pq_parse(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t20444 = call i64 @xmalloc(i64 256)
+%t20445p = inttoptr i64 %t20444 to ptr
+%t20445q = trunc i64 0 to i8
+call void @llvm.memset.p0.i64(ptr %t20445p, i8 %t20445q, i64 256, i1 false)
+%t20445 = add i64 0, 0
+%t20446 = call i64 @__mruntime_rt_device_resid__rd_new(i64 %p0, i64 %p1)
+%t20447 = call i64 @__mruntime_rt_device_resid__pq_parse_r(i64 %t20444, i64 %t20446, i64 %p1)
+%t20448 = call i64 @c_free(i64 %t20446)
+%t20449 = call i64 @__mruntime_rt_device_resid__dset(i64 %t20444, i64 28, i64 %t20447)
+ret i64 %t20444
+}
+define internal i64 @__mruntime_rt_device_resid__pq_parse_r(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t20450 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p1, i64 1)
+%t20451 = icmp ne i64 %t20450, 82
+br label %LSL20452
+LSL20452:
+br i1 %t20451, label %LSJ20452, label %LSR20452
+LSR20452:
+%t20453 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p1, i64 1)
+%t20454 = icmp ne i64 %t20453, 68
+br label %LSJ20452
+LSJ20452:
+%t20455 = phi i1 [ true, %LSL20452 ], [ %t20454, %LSR20452 ]
+br label %LSL20456
+LSL20456:
+br i1 %t20455, label %LSJ20456, label %LSR20456
+LSR20456:
+%t20457 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p1, i64 1)
+%t20458 = icmp ne i64 %t20457, 86
+br label %LSJ20456
+LSJ20456:
+%t20459 = phi i1 [ true, %LSL20456 ], [ %t20458, %LSR20456 ]
+br label %LSL20460
+LSL20460:
+br i1 %t20459, label %LSJ20460, label %LSR20460
+LSR20460:
+%t20461 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p1, i64 1)
+%t20462 = icmp ne i64 %t20461, 1
+br label %LSJ20460
+LSJ20460:
+%t20463 = phi i1 [ true, %LSL20460 ], [ %t20462, %LSR20460 ]
+br i1 %t20463, label %L6667, label %L6669
+L6667:
+ret i64 1
+L6669:
+%t20464 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p1, i64 1)
+%t20465 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p1, i64 1)
+%t20466 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p1, i64 2)
+%t20467 = call i64 @__mruntime_rt_device_resid__rd_take(i64 %p1, i64 %t20466)
+%t20468 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p1, i64 2)
+%t20469 = call i64 @__mruntime_rt_device_resid__rd_take(i64 %p1, i64 %t20468)
+%t20470 = call i1 @__mruntime_rt_device_resid__rd_bad(i64 %p1)
+br i1 %t20470, label %L6670, label %L6672
+L6670:
+ret i64 2
+L6672:
+%t20471 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 0, i64 %t20464)
+%t20472 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 1, i64 %t20465)
+%t20473 = add i64 %t20471, %t20472
+%t20474 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 2, i64 %t20467)
+%t20475 = add i64 %t20473, %t20474
+%t20476 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 3, i64 %t20466)
+%t20477 = add i64 %t20475, %t20476
+%t20478 = add i64 %t20468, 1
+%t20479 = call i64 @__mruntime_rt_device_resid__pq_alloc(i64 %p0, i64 %t20478)
+%t20480 = call i64 @mcopy(i64 %t20479, i64 %t20469, i64 %t20468)
+%t20481 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 4, i64 %t20479)
+%t20482 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 5, i64 %t20468)
+%t20483 = add i64 %t20481, %t20482
+%t20484 = icmp eq i64 %t20464, 1
+br i1 %t20484, label %L6673, label %L6674
+L6673:
+%t20485 = call i1 @__mruntime_rt_device_resid__pq_ioctl(i64 %p0, i64 %p1)
+br label %L6675
+L6674:
+%t20486 = icmp eq i64 %t20464, 2
+br i1 %t20486, label %L6676, label %L6677
+L6676:
+%t20487 = call i1 @__mruntime_rt_device_resid__pq_transact(i64 %p0, i64 %p1)
+br label %L6678
+L6677:
+%t20488 = icmp eq i64 %t20464, 3
+br i1 %t20488, label %L6679, label %L6680
+L6679:
+%t20489 = call i1 @__mruntime_rt_device_resid__pq_attr(i64 %p0, i64 %p1)
+br label %L6681
+L6680:
+%t20490 = icmp eq i64 %t20464, 4
+br i1 %t20490, label %L6682, label %L6683
+L6682:
+%t20491 = call i1 @__mruntime_rt_device_resid__pq_report(i64 %p0, i64 %p1)
+br label %L6684
+L6683:
+%t20492 = icmp eq i64 %t20464, 5
+br i1 %t20492, label %L6685, label %L6686
+L6685:
+%t20493 = call i1 @__mruntime_rt_device_resid__pq_seq(i64 %p0, i64 %p1)
+br label %L6687
+L6686:
+br label %L6687
+L6687:
+%t20494 = phi i1 [ %t20493, %L6685 ], [ false, %L6686 ]
+br label %L6684
+L6684:
+%t20495 = phi i1 [ %t20491, %L6682 ], [ %t20494, %L6687 ]
+br label %L6681
+L6681:
+%t20496 = phi i1 [ %t20489, %L6679 ], [ %t20495, %L6684 ]
+br label %L6678
+L6678:
+%t20497 = phi i1 [ %t20487, %L6676 ], [ %t20496, %L6681 ]
+br label %L6675
+L6675:
+%t20498 = phi i1 [ %t20485, %L6673 ], [ %t20497, %L6678 ]
+%t20499 = xor i1 %t20498, true
+br label %LSL20500
+LSL20500:
+br i1 %t20499, label %LSJ20500, label %LSR20500
+LSR20500:
+%t20501 = call i1 @__mruntime_rt_device_resid__rd_bad(i64 %p1)
+br label %LSJ20500
+LSJ20500:
+%t20502 = phi i1 [ true, %LSL20500 ], [ %t20501, %LSR20500 ]
+br i1 %t20502, label %L6688, label %L6690
+L6688:
+ret i64 3
+L6690:
+%t20503 = icmp eq i64 %t20464, 1
+br label %LSL20504
+LSL20504:
+br i1 %t20503, label %LSJ20504, label %LSR20504
+LSR20504:
+%t20505 = icmp eq i64 %t20464, 5
+br label %LSJ20504
+LSJ20504:
+%t20506 = phi i1 [ true, %LSL20504 ], [ %t20505, %LSR20504 ]
+br label %LSL20507
+LSL20507:
+br i1 %t20506, label %LSR20507, label %LSJ20507
+LSR20507:
+%t20508 = call i1 @__mruntime_rt_device_resid__pq_args(i64 %p0, i64 %p1)
+%t20509 = xor i1 %t20508, true
+br label %LSJ20507
+LSJ20507:
+%t20510 = phi i1 [ false, %LSL20507 ], [ %t20509, %LSR20507 ]
+br i1 %t20510, label %L6691, label %L6693
+L6691:
+ret i64 4
+L6693:
+%t20511 = call i1 @__mruntime_rt_device_resid__rd_bad(i64 %p1)
+br label %LSL20512
+LSL20512:
+br i1 %t20511, label %LSJ20512, label %LSR20512
+LSR20512:
+%t20513 = add i64 %p1, 16
+%t20514 = call i64 @ld64(i64 %t20513)
+%t20515 = icmp ne i64 %t20514, %p2
+br label %LSJ20512
+LSJ20512:
+%t20516 = phi i1 [ true, %LSL20512 ], [ %t20515, %LSR20512 ]
+br i1 %t20516, label %L6694, label %L6696
+L6694:
+ret i64 5
+L6696:
+%t20517 = call i64 @__mruntime_rt_device_resid__pq_check(i64 %p0)
+ret i64 %t20517
+}
+define internal i64 @__mruntime_rt_device_resid__pq_step(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t20518 = call i64 @__mruntime_rt_device_resid__pq_alloc(i64 %p0, i64 128)
+%t20519 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p1, i64 1)
+%t20520 = mul i64 %t20519, 16
+%t20521 = add i64 %t20520, 8
+%t20522 = call i64 @__mruntime_rt_device_resid__pq_alloc(i64 %p0, i64 %t20521)
+%t20523 = call i64 @__mruntime_rt_device_resid__pq_reqs(i64 %p1, i64 %t20522, i64 0, i64 %t20519)
+%t20524 = call i64 @__mruntime_rt_device_resid__dset(i64 %t20518, i64 8, i64 %t20519)
+%t20525 = call i64 @__mruntime_rt_device_resid__dset(i64 %t20518, i64 9, i64 %t20522)
+%t20526 = add i64 %t20524, %t20525
+%t20527 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p1, i64 4)
+%t20528 = call i64 @__mruntime_rt_device_resid__dset(i64 %t20518, i64 1, i64 %t20527)
+%t20529 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p1, i64 1)
+%t20530 = mul i64 %t20529, 48
+%t20531 = add i64 %t20530, 8
+%t20532 = call i64 @__mruntime_rt_device_resid__pq_alloc(i64 %p0, i64 %t20531)
+%t20533 = call i64 @__mruntime_rt_device_resid__pq_fields(i64 %p1, i64 %t20532, i64 0, i64 %t20529)
+%t20534 = call i64 @__mruntime_rt_device_resid__dset(i64 %t20518, i64 2, i64 %t20529)
+%t20535 = call i64 @__mruntime_rt_device_resid__dset(i64 %t20518, i64 3, i64 %t20532)
+%t20536 = add i64 %t20534, %t20535
+%t20537 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p1, i64 1)
+%t20538 = icmp eq i64 %t20537, 1
+br i1 %t20538, label %L6697, label %L6699
+L6697:
+%t20539 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p1, i64 4)
+%t20540 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p1, i64 1)
+%t20541 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p1, i64 8)
+%t20542 = call i64 @__mruntime_rt_device_resid__dset(i64 %t20518, i64 4, i64 %t20540)
+%t20543 = call i64 @__mruntime_rt_device_resid__dset(i64 %t20518, i64 5, i64 %t20539)
+%t20544 = add i64 %t20542, %t20543
+%t20545 = call i64 @__mruntime_rt_device_resid__dset(i64 %t20518, i64 6, i64 %t20541)
+%t20546 = add i64 %t20544, %t20545
+%t20547 = icmp eq i64 %t20540, 0
+br i1 %t20547, label %L6700, label %L6701
+L6700:
+%t20548 = call i64 @__mruntime_rt_device_resid__rd_fail(i64 %p1)
+br label %L6702
+L6701:
+br label %L6702
+L6702:
+%t20549 = phi i64 [ %t20548, %L6700 ], [ 0, %L6701 ]
+br label %L6699
+L6699:
+%t20550 = icmp sgt i64 %t20537, 1
+br i1 %t20550, label %L6703, label %L6704
+L6703:
+%t20551 = call i64 @__mruntime_rt_device_resid__rd_fail(i64 %p1)
+br label %L6705
+L6704:
+br label %L6705
+L6705:
+%t20552 = phi i64 [ %t20551, %L6703 ], [ 0, %L6704 ]
+%t20553 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p1, i64 1)
+ret i64 %t20518
+}
+define internal i64 @__mruntime_rt_device_resid__pq_reqs(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t20565, %tco.s0 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ]
+%t20554 = icmp sge i64 %p2, %p3
+br i1 %t20554, label %L6706, label %L6708
+L6706:
+ret i64 0
+L6708:
+%t20555 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p0, i64 1)
+%t20556 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p0, i64 4)
+%t20557 = mul i64 %p2, 16
+%t20558 = add i64 %p1, %t20557
+%t20559 = call i64 @st64(i64 %t20558, i64 %t20555)
+%t20560 = mul i64 %p2, 16
+%t20561 = add i64 %p1, %t20560
+%t20562 = add i64 %t20561, 8
+%t20563 = call i64 @st64(i64 %t20562, i64 %t20556)
+%t20564 = add i64 %t20559, %t20563
+%t20565 = add nsw i64 %p2, 1
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i64 @__mruntime_rt_device_resid__pq_fields(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t20613, %tco.s0 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ]
+%t20567 = icmp sge i64 %p2, %p3
+br i1 %t20567, label %L6709, label %L6711
+L6709:
+ret i64 0
+L6711:
+%t20568 = mul i64 %p2, 48
+%t20569 = add i64 %p1, %t20568
+%t20570 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p0, i64 1)
+%t20571 = call i64 @st64(i64 %t20569, i64 %t20570)
+%t20572 = icmp eq i64 %t20570, 0
+br label %LSL20573
+LSL20573:
+br i1 %t20572, label %LSJ20573, label %LSR20573
+LSR20573:
+%t20574 = icmp eq i64 %t20570, 1
+br label %LSJ20573
+LSJ20573:
+%t20575 = phi i1 [ true, %LSL20573 ], [ %t20574, %LSR20573 ]
+br i1 %t20575, label %L6712, label %L6714
+L6712:
+%t20576 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p0, i64 4)
+%t20577 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p0, i64 4)
+%t20578 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p0, i64 1)
+%t20579 = add i64 %t20569, 8
+%t20580 = call i64 @st64(i64 %t20579, i64 %t20576)
+%t20581 = add i64 %t20569, 16
+%t20582 = call i64 @st64(i64 %t20581, i64 %t20577)
+%t20583 = add i64 %t20580, %t20582
+%t20584 = add i64 %t20569, 32
+%t20585 = call i64 @st64(i64 %t20584, i64 %t20578)
+%t20586 = add i64 %t20583, %t20585
+br label %L6714
+L6714:
+%t20587 = icmp eq i64 %t20570, 2
+br i1 %t20587, label %L6715, label %L6717
+L6715:
+%t20588 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p0, i64 4)
+%t20589 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p0, i64 4)
+%t20590 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p0, i64 4)
+%t20591 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p0, i64 1)
+%t20592 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p0, i64 1)
+%t20593 = add i64 %t20569, 8
+%t20594 = call i64 @st64(i64 %t20593, i64 %t20588)
+%t20595 = add i64 %t20569, 16
+%t20596 = icmp eq i64 %t20589, 4294967295
+br i1 %t20596, label %L6718, label %L6719
+L6718:
+%t20597 = sub nsw i64 0, 1
+br label %L6720
+L6719:
+br label %L6720
+L6720:
+%t20598 = phi i64 [ %t20597, %L6718 ], [ %t20589, %L6719 ]
+%t20599 = call i64 @st64(i64 %t20595, i64 %t20598)
+%t20600 = add i64 %t20594, %t20599
+%t20601 = add i64 %t20569, 24
+%t20602 = call i64 @st64(i64 %t20601, i64 %t20590)
+%t20603 = add i64 %t20600, %t20602
+%t20604 = add i64 %t20569, 32
+%t20605 = call i64 @st64(i64 %t20604, i64 %t20591)
+%t20606 = add i64 %t20603, %t20605
+%t20607 = add i64 %t20569, 40
+%t20608 = call i64 @st64(i64 %t20607, i64 %t20592)
+%t20609 = add i64 %t20606, %t20608
+br label %L6717
+L6717:
+%t20610 = icmp sgt i64 %t20570, 2
+br i1 %t20610, label %L6721, label %L6722
+L6721:
+%t20611 = call i64 @__mruntime_rt_device_resid__rd_fail(i64 %p0)
+br label %L6723
+L6722:
+br label %L6723
+L6723:
+%t20612 = phi i64 [ %t20611, %L6721 ], [ 0, %L6722 ]
+%t20613 = add nsw i64 %p2, 1
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i1 @__mruntime_rt_device_resid__pq_ioctl(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t20615 = call i64 @__mruntime_rt_device_resid__pq_alloc(i64 %p0, i64 8)
+%t20616 = call i64 @__mruntime_rt_device_resid__pq_step(i64 %p0, i64 %p1)
+%t20617 = call i64 @st64(i64 %t20615, i64 %t20616)
+%t20618 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 1)
+%t20619 = call i64 @__mruntime_rt_device_resid__dset(i64 %t20616, i64 7, i64 %t20618)
+%t20620 = add i64 %t20617, %t20619
+%t20621 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 6, i64 1)
+%t20622 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 7, i64 %t20615)
+%t20623 = add i64 %t20621, %t20622
+%t20624 = call i1 @__mruntime_rt_device_resid__rd_bad(i64 %p1)
+%t20625 = xor i1 %t20624, true
+ret i1 %t20625
+}
+define internal i1 @__mruntime_rt_device_resid__pq_seq(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t20626 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p1, i64 1)
+%t20627 = mul i64 %t20626, 8
+%t20628 = add i64 %t20627, 8
+%t20629 = call i64 @__mruntime_rt_device_resid__pq_alloc(i64 %p0, i64 %t20628)
+%t20630 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 6, i64 %t20626)
+%t20631 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 7, i64 %t20629)
+%t20632 = add i64 %t20630, %t20631
+%t20633 = call i64 @__mruntime_rt_device_resid__pq_seq_steps(i64 %p0, i64 %p1, i64 %t20629, i64 0, i64 %t20626)
+%t20634 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p1, i64 1)
+%t20635 = mul i64 %t20634, 40
+%t20636 = add i64 %t20635, 8
+%t20637 = call i64 @__mruntime_rt_device_resid__pq_alloc(i64 %p0, i64 %t20636)
+%t20638 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 8, i64 %t20634)
+%t20639 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 9, i64 %t20637)
+%t20640 = add i64 %t20638, %t20639
+%t20641 = call i64 @__mruntime_rt_device_resid__pq_links(i64 %p1, i64 %t20637, i64 0, i64 %t20634)
+%t20642 = call i1 @__mruntime_rt_device_resid__rd_bad(i64 %p1)
+%t20643 = xor i1 %t20642, true
+ret i1 %t20643
+}
+define internal i64 @__mruntime_rt_device_resid__pq_seq_steps(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %t20654, %tco.s0 ]
+%p4 = phi i64 [ %p4.in, %entry ], [ %p4, %tco.s0 ]
+%t20644 = icmp sge i64 %p3, %p4
+br i1 %t20644, label %L6724, label %L6726
+L6724:
+ret i64 0
+L6726:
+%t20645 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p1, i64 2)
+%t20646 = call i64 @__mruntime_rt_device_resid__rd_take(i64 %p1, i64 %t20645)
+%t20647 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p1, i64 1)
+%t20648 = call i64 @__mruntime_rt_device_resid__pq_step(i64 %p0, i64 %p1)
+%t20649 = call i64 @__mruntime_rt_device_resid__dset(i64 %t20648, i64 7, i64 %t20647)
+%t20650 = mul i64 %p3, 8
+%t20651 = add i64 %p2, %t20650
+%t20652 = call i64 @st64(i64 %t20651, i64 %t20648)
+%t20653 = add i64 %t20649, %t20652
+%t20654 = add nsw i64 %p3, 1
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i64 @__mruntime_rt_device_resid__pq_links(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t20677, %tco.s0 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ]
+%t20656 = icmp sge i64 %p2, %p3
+br i1 %t20656, label %L6727, label %L6729
+L6727:
+ret i64 0
+L6729:
+%t20657 = mul i64 %p2, 40
+%t20658 = add i64 %p1, %t20657
+%t20659 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p0, i64 1)
+%t20660 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p0, i64 4)
+%t20661 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p0, i64 1)
+%t20662 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p0, i64 4)
+%t20663 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p0, i64 1)
+%t20664 = call i64 @st64(i64 %t20658, i64 %t20659)
+%t20665 = add i64 %t20658, 8
+%t20666 = call i64 @st64(i64 %t20665, i64 %t20660)
+%t20667 = add i64 %t20664, %t20666
+%t20668 = add i64 %t20658, 16
+%t20669 = call i64 @st64(i64 %t20668, i64 %t20661)
+%t20670 = add i64 %t20667, %t20669
+%t20671 = add i64 %t20658, 24
+%t20672 = call i64 @st64(i64 %t20671, i64 %t20662)
+%t20673 = add i64 %t20670, %t20672
+%t20674 = add i64 %t20658, 32
+%t20675 = call i64 @st64(i64 %t20674, i64 %t20663)
+%t20676 = add i64 %t20673, %t20675
+%t20677 = add nsw i64 %p2, 1
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i1 @__mruntime_rt_device_resid__pq_transact(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t20679 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p1, i64 4)
+%t20680 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p1, i64 4)
+%t20681 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p1, i64 1)
+%t20682 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p1, i64 4)
+%t20683 = call i64 @__mruntime_rt_device_resid__rd_take(i64 %p1, i64 %t20682)
+%t20684 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 10, i64 %t20679)
+%t20685 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 11, i64 %t20680)
+%t20686 = add i64 %t20684, %t20685
+%t20687 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 12, i64 %t20681)
+%t20688 = add i64 %t20686, %t20687
+%t20689 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 13, i64 %t20683)
+%t20690 = add i64 %t20688, %t20689
+%t20691 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 14, i64 %t20682)
+%t20692 = add i64 %t20690, %t20691
+%t20693 = call i1 @__mruntime_rt_device_resid__rd_bad(i64 %p1)
+%t20694 = xor i1 %t20693, true
+ret i1 %t20694
+}
+define internal i1 @__mruntime_rt_device_resid__pq_attr(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t20695 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p1, i64 4)
+%t20696 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 10, i64 %t20695)
+%t20697 = call i1 @__mruntime_rt_device_resid__rd_bad(i64 %p1)
+%t20698 = xor i1 %t20697, true
+ret i1 %t20698
+}
+define internal i1 @__mruntime_rt_device_resid__pq_report(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t20699 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p1, i64 1)
+%t20700 = mul i64 %t20699, 16
+%t20701 = add i64 %t20700, 8
+%t20702 = call i64 @__mruntime_rt_device_resid__pq_alloc(i64 %p0, i64 %t20701)
+%t20703 = call i64 @__mruntime_rt_device_resid__pq_provs(i64 %p1, i64 %t20702, i64 0, i64 %t20699)
+%t20704 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 15, i64 %t20699)
+%t20705 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 16, i64 %t20702)
+%t20706 = add i64 %t20704, %t20705
+%t20707 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p1, i64 4)
+%t20708 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p1, i64 4)
+%t20709 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p1, i64 4)
+%t20710 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p1, i64 4)
+%t20711 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 10, i64 %t20707)
+%t20712 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 11, i64 %t20708)
+%t20713 = add i64 %t20711, %t20712
+%t20714 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 12, i64 %t20709)
+%t20715 = add i64 %t20713, %t20714
+%t20716 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 13, i64 %t20710)
+%t20717 = add i64 %t20715, %t20716
+%t20718 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p1, i64 4)
+%t20719 = call i64 @__mruntime_rt_device_resid__rd_take(i64 %p1, i64 %t20718)
+%t20720 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p1, i64 8)
+%t20721 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p1, i64 2)
+%t20722 = call i64 @__mruntime_rt_device_resid__rd_take(i64 %p1, i64 %t20721)
+%t20723 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 17, i64 %t20719)
+%t20724 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 18, i64 %t20718)
+%t20725 = add i64 %t20723, %t20724
+%t20726 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 19, i64 %t20720)
+%t20727 = add i64 %t20725, %t20726
+%t20728 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 20, i64 %t20722)
+%t20729 = add i64 %t20727, %t20728
+%t20730 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 21, i64 %t20721)
+%t20731 = add i64 %t20729, %t20730
+%t20732 = call i1 @__mruntime_rt_device_resid__rd_bad(i64 %p1)
+%t20733 = xor i1 %t20732, true
+ret i1 %t20733
+}
+define internal i64 @__mruntime_rt_device_resid__pq_provs(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t20745, %tco.s0 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ]
+%t20734 = icmp sge i64 %p2, %p3
+br i1 %t20734, label %L6730, label %L6732
+L6730:
+ret i64 0
+L6732:
+%t20735 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p0, i64 2)
+%t20736 = call i64 @__mruntime_rt_device_resid__rd_take(i64 %p0, i64 %t20735)
+%t20737 = mul i64 %p2, 16
+%t20738 = add i64 %p1, %t20737
+%t20739 = call i64 @st64(i64 %t20738, i64 %t20736)
+%t20740 = mul i64 %p2, 16
+%t20741 = add i64 %p1, %t20740
+%t20742 = add i64 %t20741, 8
+%t20743 = call i64 @st64(i64 %t20742, i64 %t20735)
+%t20744 = add i64 %t20739, %t20743
+%t20745 = add nsw i64 %p2, 1
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i1 @__mruntime_rt_device_resid__pq_args(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t20747 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p1, i64 1)
+%t20748 = mul i64 %t20747, 24
+%t20749 = add i64 %t20748, 8
+%t20750 = call i64 @__mruntime_rt_device_resid__pq_alloc(i64 %p0, i64 %t20749)
+%t20751 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 22, i64 %t20747)
+%t20752 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 23, i64 %t20750)
+%t20753 = add i64 %t20751, %t20752
+%t20754 = call i64 @__mruntime_rt_device_resid__pq_args_at(i64 %p1, i64 %t20750, i64 0, i64 %t20747)
+%t20755 = call i1 @__mruntime_rt_device_resid__rd_bad(i64 %p1)
+%t20756 = xor i1 %t20755, true
+ret i1 %t20756
+}
+define internal i64 @__mruntime_rt_device_resid__pq_args_at(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t20777, %tco.s0 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ]
+%t20757 = icmp sge i64 %p2, %p3
+br i1 %t20757, label %L6733, label %L6735
+L6733:
+ret i64 0
+L6735:
+%t20758 = mul i64 %p2, 24
+%t20759 = add i64 %p1, %t20758
+%t20760 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p0, i64 1)
+%t20761 = call i64 @st64(i64 %t20759, i64 %t20760)
+%t20762 = icmp eq i64 %t20760, 0
+br i1 %t20762, label %L6736, label %L6738
+L6736:
+%t20763 = add i64 %t20759, 8
+%t20764 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p0, i64 8)
+%t20765 = call i64 @st64(i64 %t20763, i64 %t20764)
+br label %L6738
+L6738:
+%t20766 = icmp eq i64 %t20760, 1
+br i1 %t20766, label %L6739, label %L6741
+L6739:
+%t20767 = call i64 @__mruntime_rt_device_resid__rd_u(i64 %p0, i64 4)
+%t20768 = call i64 @__mruntime_rt_device_resid__rd_take(i64 %p0, i64 %t20767)
+%t20769 = add i64 %t20759, 8
+%t20770 = call i64 @st64(i64 %t20769, i64 %t20768)
+%t20771 = add i64 %t20759, 16
+%t20772 = call i64 @st64(i64 %t20771, i64 %t20767)
+%t20773 = add i64 %t20770, %t20772
+br label %L6741
+L6741:
+%t20774 = icmp sgt i64 %t20760, 1
+br i1 %t20774, label %L6742, label %L6743
+L6742:
+%t20775 = call i64 @__mruntime_rt_device_resid__rd_fail(i64 %p0)
+br label %L6744
+L6743:
+br label %L6744
+L6744:
+%t20776 = phi i64 [ %t20775, %L6742 ], [ 0, %L6743 ]
+%t20777 = add nsw i64 %p2, 1
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i64 @__mruntime_rt_device_resid__pq_check(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t20779 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 0)
+%t20780 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 1)
+%t20781 = icmp ne i64 %t20780, 0
+br label %LSL20782
+LSL20782:
+br i1 %t20781, label %LSR20782, label %LSJ20782
+LSR20782:
+%t20783 = icmp ne i64 %t20780, 1
+br label %LSJ20782
+LSJ20782:
+%t20784 = phi i1 [ false, %LSL20782 ], [ %t20783, %LSR20782 ]
+br i1 %t20784, label %L6745, label %L6747
+L6745:
+ret i64 10
+L6747:
+%t20785 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 2)
+%t20786 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 3)
+%t20787 = call i1 @__mruntime_rt_device_resid__pq_name_ok(i64 %t20785, i64 0, i64 %t20786)
+%t20788 = xor i1 %t20787, true
+br i1 %t20788, label %L6748, label %L6750
+L6748:
+ret i64 11
+L6750:
+%t20789 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 4)
+%t20790 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 5)
+%t20791 = call i1 @__mruntime_rt_device_resid__pq_path_ok(i64 %t20789, i64 %t20790)
+%t20792 = xor i1 %t20791, true
+br i1 %t20792, label %L6751, label %L6753
+L6751:
+ret i64 12
+L6753:
+%t20793 = icmp eq i64 %t20779, 3
+br label %LSL20794
+LSL20794:
+br i1 %t20793, label %LSR20794, label %LSJ20794
+LSR20794:
+%t20795 = icmp ne i64 %t20780, 0
+br label %LSJ20794
+LSJ20794:
+%t20796 = phi i1 [ false, %LSL20794 ], [ %t20795, %LSR20794 ]
+br i1 %t20796, label %L6754, label %L6756
+L6754:
+ret i64 13
+L6756:
+%t20797 = icmp eq i64 %t20779, 2
+br label %LSL20798
+LSL20798:
+br i1 %t20797, label %LSR20798, label %LSJ20798
+LSR20798:
+%t20799 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 10)
+%t20800 = call i1 @__mruntime_rt_device_resid__pq_max_ok(i64 %t20799)
+%t20801 = xor i1 %t20800, true
+br label %LSL20802
+LSL20802:
+br i1 %t20801, label %LSJ20802, label %LSR20802
+LSR20802:
+%t20803 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 11)
+%t20804 = call i1 @__mruntime_rt_device_resid__pq_max_ok(i64 %t20803)
+%t20805 = xor i1 %t20804, true
+br label %LSJ20802
+LSJ20802:
+%t20806 = phi i1 [ true, %LSL20802 ], [ %t20805, %LSR20802 ]
+br label %LSL20807
+LSL20807:
+br i1 %t20806, label %LSJ20807, label %LSR20807
+LSR20807:
+%t20808 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 12)
+%t20809 = icmp sgt i64 %t20808, 1
+br label %LSJ20807
+LSJ20807:
+%t20810 = phi i1 [ true, %LSL20807 ], [ %t20809, %LSR20807 ]
+br label %LSL20811
+LSL20811:
+br i1 %t20810, label %LSJ20811, label %LSR20811
+LSR20811:
+%t20812 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 14)
+%t20813 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 10)
+%t20814 = icmp sgt i64 %t20812, %t20813
+br label %LSJ20811
+LSJ20811:
+%t20815 = phi i1 [ true, %LSL20811 ], [ %t20814, %LSR20811 ]
+br label %LSJ20798
+LSJ20798:
+%t20816 = phi i1 [ false, %LSL20798 ], [ %t20815, %LSJ20811 ]
+br i1 %t20816, label %L6757, label %L6759
+L6757:
+ret i64 14
+L6759:
+%t20817 = icmp eq i64 %t20779, 3
+br label %LSL20818
+LSL20818:
+br i1 %t20817, label %LSR20818, label %LSJ20818
+LSR20818:
+%t20819 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 10)
+%t20820 = call i1 @__mruntime_rt_device_resid__pq_max_ok(i64 %t20819)
+%t20821 = xor i1 %t20820, true
+br label %LSJ20818
+LSJ20818:
+%t20822 = phi i1 [ false, %LSL20818 ], [ %t20821, %LSR20818 ]
+br i1 %t20822, label %L6760, label %L6762
+L6760:
+ret i64 15
+L6762:
+%t20823 = icmp eq i64 %t20779, 4
+br i1 %t20823, label %L6763, label %L6765
+L6763:
+%t20824 = call i64 @__mruntime_rt_device_resid__pq_report_err(i64 %p0)
+%t20825 = icmp ne i64 %t20824, 0
+br i1 %t20825, label %L6766, label %L6768
+L6766:
+ret i64 %t20824
+L6768:
+br label %L6765
+L6765:
+%t20826 = icmp eq i64 %t20779, 1
+br label %LSL20827
+LSL20827:
+br i1 %t20826, label %LSJ20827, label %LSR20827
+LSR20827:
+%t20828 = icmp eq i64 %t20779, 5
+br label %LSJ20827
+LSJ20827:
+%t20829 = phi i1 [ true, %LSL20827 ], [ %t20828, %LSR20827 ]
+br i1 %t20829, label %L6769, label %L6771
+L6769:
+%t20830 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 6)
+%t20831 = icmp slt i64 %t20830, 1
+br label %LSL20832
+LSL20832:
+br i1 %t20831, label %LSJ20832, label %LSR20832
+LSR20832:
+%t20833 = icmp eq i64 %t20779, 1
+br label %LSL20834
+LSL20834:
+br i1 %t20833, label %LSR20834, label %LSJ20834
+LSR20834:
+%t20835 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 6)
+%t20836 = icmp ne i64 %t20835, 1
+br label %LSJ20834
+LSJ20834:
+%t20837 = phi i1 [ false, %LSL20834 ], [ %t20836, %LSR20834 ]
+br label %LSJ20832
+LSJ20832:
+%t20838 = phi i1 [ true, %LSL20832 ], [ %t20837, %LSJ20834 ]
+br i1 %t20838, label %L6772, label %L6774
+L6772:
+ret i64 16
+L6774:
+%t20839 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 6)
+%t20840 = call i64 @__mruntime_rt_device_resid__pq_steps_err(i64 %p0, i64 0, i64 %t20839)
+%t20841 = icmp ne i64 %t20840, 0
+br i1 %t20841, label %L6775, label %L6777
+L6775:
+ret i64 %t20840
+L6777:
+%t20842 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 8)
+%t20843 = call i64 @__mruntime_rt_device_resid__pq_links_err(i64 %p0, i64 0, i64 %t20842)
+%t20844 = icmp ne i64 %t20843, 0
+br i1 %t20844, label %L6778, label %L6780
+L6778:
+ret i64 %t20843
+L6780:
+br label %L6771
+L6771:
+%t20845 = call i64 @__mruntime_rt_device_resid__pq_slots(i64 %p0)
+%t20846 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 29)
+%t20847 = call i64 @__mruntime_rt_device_resid__dv_sec_max()
+%t20848 = icmp sgt i64 %t20846, %t20847
+br i1 %t20848, label %L6781, label %L6783
+L6781:
+ret i64 17
+L6783:
+%t20849 = icmp eq i64 %t20779, 1
+br label %LSL20850
+LSL20850:
+br i1 %t20849, label %LSJ20850, label %LSR20850
+LSR20850:
+%t20851 = icmp eq i64 %t20779, 5
+br label %LSJ20850
+LSJ20850:
+%t20852 = phi i1 [ true, %LSL20850 ], [ %t20851, %LSR20850 ]
+br label %LSL20853
+LSL20853:
+br i1 %t20852, label %LSR20853, label %LSJ20853
+LSR20853:
+%t20854 = call i1 @__mruntime_rt_device_resid__pq_args_fit(i64 %p0, i64 0)
+%t20855 = xor i1 %t20854, true
+br label %LSJ20853
+LSJ20853:
+%t20856 = phi i1 [ false, %LSL20853 ], [ %t20855, %LSR20853 ]
+br i1 %t20856, label %L6784, label %L6786
+L6784:
+ret i64 18
+L6786:
+ret i64 0
+}
+define internal i1 @__mruntime_rt_device_resid__pq_max_ok(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t20857 = icmp sge i64 %p0, 1
+br label %LSL20858
+LSL20858:
+br i1 %t20857, label %LSR20858, label %LSJ20858
+LSR20858:
+%t20859 = call i64 @__mruntime_rt_device_resid__dv_buf_max()
+%t20860 = icmp sle i64 %p0, %t20859
+br label %LSJ20858
+LSJ20858:
+%t20861 = phi i1 [ false, %LSL20858 ], [ %t20860, %LSR20858 ]
+ret i1 %t20861
+}
+define internal i1 @__mruntime_rt_device_resid__pq_name_ok(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t20862 = icmp eq i64 %p2, 0
+br i1 %t20862, label %L6787, label %L6789
+L6787:
+ret i1 false
+L6789:
+%t20863 = icmp sge i64 %p1, %p2
+br i1 %t20863, label %L6790, label %L6792
+L6790:
+ret i1 true
+L6792:
+%t20864 = add i64 %p0, %p1
+%t20865 = call i64 @ld8(i64 %t20864)
+%t20866 = icmp sge i64 %t20865, 97
+br label %LSL20867
+LSL20867:
+br i1 %t20866, label %LSR20867, label %LSJ20867
+LSR20867:
+%t20868 = icmp sle i64 %t20865, 122
+br label %LSJ20867
+LSJ20867:
+%t20869 = phi i1 [ false, %LSL20867 ], [ %t20868, %LSR20867 ]
+br label %LSL20870
+LSL20870:
+br i1 %t20869, label %LSJ20870, label %LSR20870
+LSR20870:
+%t20871 = icmp sge i64 %t20865, 48
+br label %LSL20872
+LSL20872:
+br i1 %t20871, label %LSR20872, label %LSJ20872
+LSR20872:
+%t20873 = icmp sle i64 %t20865, 57
+br label %LSJ20872
+LSJ20872:
+%t20874 = phi i1 [ false, %LSL20872 ], [ %t20873, %LSR20872 ]
+br label %LSJ20870
+LSJ20870:
+%t20875 = phi i1 [ true, %LSL20870 ], [ %t20874, %LSJ20872 ]
+br label %LSL20876
+LSL20876:
+br i1 %t20875, label %LSJ20876, label %LSR20876
+LSR20876:
+%t20877 = icmp eq i64 %t20865, 95
+br label %LSJ20876
+LSJ20876:
+%t20878 = phi i1 [ true, %LSL20876 ], [ %t20877, %LSR20876 ]
+br label %LSL20879
+LSL20879:
+br i1 %t20878, label %LSJ20879, label %LSR20879
+LSR20879:
+%t20880 = icmp eq i64 %t20865, 46
+br label %LSJ20879
+LSJ20879:
+%t20881 = phi i1 [ true, %LSL20879 ], [ %t20880, %LSR20879 ]
+br label %LSL20882
+LSL20882:
+br i1 %t20881, label %LSR20882, label %LSJ20882
+LSR20882:
+%t20883 = add nsw i64 %p1, 1
+%t20884 = call i1 @__mruntime_rt_device_resid__pq_name_ok(i64 %p0, i64 %t20883, i64 %p2)
+br label %LSJ20882
+LSJ20882:
+%t20885 = phi i1 [ false, %LSL20882 ], [ %t20884, %LSR20882 ]
+ret i1 %t20885
+}
+define internal i1 @__mruntime_rt_device_resid__pq_path_ok(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t20886 = icmp sle i64 %p1, 5
+br i1 %t20886, label %L6793, label %L6795
+L6793:
+ret i1 false
+L6795:
+%t20888 = ptrtoint ptr @.s20887 to i64
+%t20889 = call i64 @c_strncmp(i64 %p0, i64 %t20888, i64 5)
+%t20890 = icmp eq i64 %t20889, 0
+br label %LSL20891
+LSL20891:
+br i1 %t20890, label %LSJ20891, label %LSR20891
+LSR20891:
+%t20893 = ptrtoint ptr @.s20892 to i64
+%t20894 = call i64 @c_strncmp(i64 %p0, i64 %t20893, i64 5)
+%t20895 = icmp eq i64 %t20894, 0
+br label %LSJ20891
+LSJ20891:
+%t20896 = phi i1 [ true, %LSL20891 ], [ %t20895, %LSR20891 ]
+br label %LSL20897
+LSL20897:
+br i1 %t20896, label %LSR20897, label %LSJ20897
+LSR20897:
+%t20898 = add i64 %p0, %p1
+%t20899 = sub nsw i64 %t20898, 1
+%t20900 = call i64 @ld8(i64 %t20899)
+%t20901 = icmp ne i64 %t20900, 47
+br label %LSJ20897
+LSJ20897:
+%t20902 = phi i1 [ false, %LSL20897 ], [ %t20901, %LSR20897 ]
+br label %LSL20903
+LSL20903:
+br i1 %t20902, label %LSR20903, label %LSJ20903
+LSR20903:
+%t20904 = call i1 @__mruntime_rt_device_resid__pq_path_chars(i64 %p0, i64 0, i64 %p1)
+br label %LSJ20903
+LSJ20903:
+%t20905 = phi i1 [ false, %LSL20903 ], [ %t20904, %LSR20903 ]
+ret i1 %t20905
+}
+define internal i1 @__mruntime_rt_device_resid__pq_path_chars(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %t20930, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
+%t20906 = icmp sge i64 %p1, %p2
+br i1 %t20906, label %L6796, label %L6798
+L6796:
+ret i1 true
+L6798:
+%t20907 = add i64 %p0, %p1
+%t20908 = call i64 @ld8(i64 %t20907)
+%t20909 = icmp eq i64 %t20908, 0
+br i1 %t20909, label %L6799, label %L6801
+L6799:
+ret i1 false
+L6801:
+%t20910 = add nsw i64 %p1, 1
+%t20911 = icmp slt i64 %t20910, %p2
+br label %LSL20912
+LSL20912:
+br i1 %t20911, label %LSR20912, label %LSJ20912
+LSR20912:
+%t20913 = icmp eq i64 %t20908, 46
+br label %LSL20914
+LSL20914:
+br i1 %t20913, label %LSR20914, label %LSJ20914
+LSR20914:
+%t20915 = add i64 %p0, %p1
+%t20916 = add i64 %t20915, 1
+%t20917 = call i64 @ld8(i64 %t20916)
+%t20918 = icmp eq i64 %t20917, 46
+br label %LSJ20914
+LSJ20914:
+%t20919 = phi i1 [ false, %LSL20914 ], [ %t20918, %LSR20914 ]
+br label %LSL20920
+LSL20920:
+br i1 %t20919, label %LSJ20920, label %LSR20920
+LSR20920:
+%t20921 = icmp eq i64 %t20908, 47
+br label %LSL20922
+LSL20922:
+br i1 %t20921, label %LSR20922, label %LSJ20922
+LSR20922:
+%t20923 = add i64 %p0, %p1
+%t20924 = add i64 %t20923, 1
+%t20925 = call i64 @ld8(i64 %t20924)
+%t20926 = icmp eq i64 %t20925, 47
+br label %LSJ20922
+LSJ20922:
+%t20927 = phi i1 [ false, %LSL20922 ], [ %t20926, %LSR20922 ]
+br label %LSJ20920
+LSJ20920:
+%t20928 = phi i1 [ true, %LSL20920 ], [ %t20927, %LSJ20922 ]
+br label %LSJ20912
+LSJ20912:
+%t20929 = phi i1 [ false, %LSL20912 ], [ %t20928, %LSJ20920 ]
+br i1 %t20929, label %L6802, label %L6804
+L6802:
+ret i1 false
+L6804:
+%t20930 = add nsw i64 %p1, 1
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i64 @__mruntime_rt_device_resid__pq_report_err(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t20932 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 5)
+%t20933 = icmp sle i64 %t20932, 19
+br label %LSL20934
+LSL20934:
+br i1 %t20933, label %LSJ20934, label %LSR20934
+LSR20934:
+%t20935 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 4)
+%t20937 = ptrtoint ptr @.s20936 to i64
+%t20938 = call i64 @c_strncmp(i64 %t20935, i64 %t20937, i64 19)
+%t20939 = icmp ne i64 %t20938, 0
+br label %LSJ20934
+LSJ20934:
+%t20940 = phi i1 [ true, %LSL20934 ], [ %t20939, %LSR20934 ]
+br i1 %t20940, label %L6805, label %L6807
+L6805:
+ret i64 20
+L6807:
+%t20941 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 15)
+%t20942 = icmp slt i64 %t20941, 1
+br label %LSL20943
+LSL20943:
+br i1 %t20942, label %LSJ20943, label %LSR20943
+LSR20943:
+%t20944 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 16)
+%t20945 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 15)
+%t20946 = call i1 @__mruntime_rt_device_resid__pq_provs_ok(i64 %t20944, i64 0, i64 %t20945)
+%t20947 = xor i1 %t20946, true
+br label %LSJ20943
+LSJ20943:
+%t20948 = phi i1 [ true, %LSL20943 ], [ %t20947, %LSR20943 ]
+br i1 %t20948, label %L6808, label %L6810
+L6808:
+ret i64 21
+L6810:
+%t20949 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 10)
+%t20950 = call i1 @__mruntime_rt_device_resid__pq_max_ok(i64 %t20949)
+%t20951 = xor i1 %t20950, true
+br label %LSL20952
+LSL20952:
+br i1 %t20951, label %LSJ20952, label %LSR20952
+LSR20952:
+%t20953 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 11)
+%t20954 = call i1 @__mruntime_rt_device_resid__pq_max_ok(i64 %t20953)
+%t20955 = xor i1 %t20954, true
+br label %LSJ20952
+LSJ20952:
+%t20956 = phi i1 [ true, %LSL20952 ], [ %t20955, %LSR20952 ]
+br label %LSL20957
+LSL20957:
+br i1 %t20956, label %LSJ20957, label %LSR20957
+LSR20957:
+%t20958 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 12)
+%t20959 = call i1 @__mruntime_rt_device_resid__pq_max_ok(i64 %t20958)
+%t20960 = xor i1 %t20959, true
+br label %LSJ20957
+LSJ20957:
+%t20961 = phi i1 [ true, %LSL20957 ], [ %t20960, %LSR20957 ]
+br label %LSL20962
+LSL20962:
+br i1 %t20961, label %LSJ20962, label %LSR20962
+LSR20962:
+%t20963 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 13)
+%t20964 = call i1 @__mruntime_rt_device_resid__pq_max_ok(i64 %t20963)
+%t20965 = xor i1 %t20964, true
+br label %LSJ20962
+LSJ20962:
+%t20966 = phi i1 [ true, %LSL20962 ], [ %t20965, %LSR20962 ]
+br i1 %t20966, label %L6811, label %L6813
+L6811:
+ret i64 22
+L6813:
+%t20967 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 18)
+%t20968 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 10)
+%t20969 = icmp sgt i64 %t20967, %t20968
+br label %LSL20970
+LSL20970:
+br i1 %t20969, label %LSJ20970, label %LSR20970
+LSR20970:
+%t20971 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 21)
+%t20972 = icmp sgt i64 %t20971, 256
+br label %LSJ20970
+LSJ20970:
+%t20973 = phi i1 [ true, %LSL20970 ], [ %t20972, %LSR20970 ]
+br label %LSL20974
+LSL20974:
+br i1 %t20973, label %LSJ20974, label %LSR20974
+LSR20974:
+%t20975 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 20)
+%t20976 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 21)
+%t20977 = call i1 @pq_text_ok(i64 %t20975, i64 0, i64 %t20976)
+%t20978 = xor i1 %t20977, true
+br label %LSJ20974
+LSJ20974:
+%t20979 = phi i1 [ true, %LSL20974 ], [ %t20978, %LSR20974 ]
+br i1 %t20979, label %L6814, label %L6816
+L6814:
+ret i64 23
+L6816:
+ret i64 0
+}
+define internal i1 @__mruntime_rt_device_resid__pq_provs_ok(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %t20996, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
+%t20980 = icmp sge i64 %p1, %p2
+br i1 %t20980, label %L6817, label %L6819
+L6817:
+ret i1 true
+L6819:
+%t20981 = mul i64 %p1, 16
+%t20982 = add i64 %p0, %t20981
+%t20983 = add i64 %t20982, 8
+%t20984 = call i64 @ld64(i64 %t20983)
+%t20985 = icmp slt i64 %t20984, 1
+br label %LSL20986
+LSL20986:
+br i1 %t20985, label %LSJ20986, label %LSR20986
+LSR20986:
+%t20987 = icmp sgt i64 %t20984, 256
+br label %LSJ20986
+LSJ20986:
+%t20988 = phi i1 [ true, %LSL20986 ], [ %t20987, %LSR20986 ]
+br label %LSL20989
+LSL20989:
+br i1 %t20988, label %LSJ20989, label %LSR20989
+LSR20989:
+%t20990 = mul i64 %p1, 16
+%t20991 = add i64 %p0, %t20990
+%t20992 = call i64 @ld64(i64 %t20991)
+%t20993 = call i1 @pq_text_ok(i64 %t20992, i64 0, i64 %t20984)
+%t20994 = xor i1 %t20993, true
+br label %LSJ20989
+LSJ20989:
+%t20995 = phi i1 [ true, %LSL20989 ], [ %t20994, %LSR20989 ]
+br i1 %t20995, label %L6820, label %L6822
+L6820:
+ret i1 false
+L6822:
+%t20996 = add nsw i64 %p1, 1
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i1 @pq_text_ok(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t20998 = icmp sge i64 %p1, %p2
+br i1 %t20998, label %L6823, label %L6825
+L6823:
+ret i1 true
+L6825:
+%t20999 = add i64 %p0, %p1
+%t21000 = call i64 @ld8(i64 %t20999)
+%t21001 = icmp sge i64 %t21000, 32
+br label %LSL21002
+LSL21002:
+br i1 %t21001, label %LSR21002, label %LSJ21002
+LSR21002:
+%t21003 = icmp slt i64 %t21000, 127
+br label %LSJ21002
+LSJ21002:
+%t21004 = phi i1 [ false, %LSL21002 ], [ %t21003, %LSR21002 ]
+br label %LSL21005
+LSL21005:
+br i1 %t21004, label %LSR21005, label %LSJ21005
+LSR21005:
+%t21006 = add nsw i64 %p1, 1
+%t21007 = call i1 @pq_text_ok(i64 %p0, i64 %t21006, i64 %p2)
+br label %LSJ21005
+LSJ21005:
+%t21008 = phi i1 [ false, %LSL21005 ], [ %t21007, %LSR21005 ]
+ret i1 %t21008
+}
+define internal i64 @__mruntime_rt_device_resid__pq_steps_err(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %t21027, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
+%t21009 = icmp sge i64 %p1, %p2
+br i1 %t21009, label %L6826, label %L6828
+L6826:
+ret i64 0
+L6828:
+%t21010 = call i64 @__mruntime_rt_device_resid__step_of(i64 %p0, i64 %p1)
+%t21011 = call i64 @__mruntime_rt_device_resid__pq_step_err(i64 %t21010)
+%t21012 = icmp ne i64 %t21011, 0
+br i1 %t21012, label %L6829, label %L6831
+L6829:
+ret i64 %t21011
+L6831:
+%t21013 = call i64 @__mruntime_rt_device_resid__dget(i64 %t21010, i64 7)
+%t21014 = icmp eq i64 %t21013, 1
+br label %LSL21015
+LSL21015:
+br i1 %t21014, label %LSR21015, label %LSJ21015
+LSR21015:
+%t21016 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 1)
+%t21017 = icmp ne i64 %t21016, 1
+br label %LSJ21015
+LSJ21015:
+%t21018 = phi i1 [ false, %LSL21015 ], [ %t21017, %LSR21015 ]
+br i1 %t21018, label %L6832, label %L6834
+L6832:
+ret i64 30
+L6834:
+%t21019 = call i64 @__mruntime_rt_device_resid__dget(i64 %t21010, i64 7)
+%t21020 = icmp sgt i64 %t21019, 1
+br i1 %t21020, label %L6835, label %L6837
+L6835:
+ret i64 30
+L6837:
+%t21021 = sub nsw i64 %p2, 1
+%t21022 = icmp slt i64 %p1, %t21021
+br label %LSL21023
+LSL21023:
+br i1 %t21022, label %LSR21023, label %LSJ21023
+LSR21023:
+%t21024 = call i64 @__mruntime_rt_device_resid__dget(i64 %t21010, i64 2)
+%t21025 = call i1 @__mruntime_rt_device_resid__pq_hidden_out(i64 %t21010, i64 0, i64 %t21024)
+br label %LSJ21023
+LSJ21023:
+%t21026 = phi i1 [ false, %LSL21023 ], [ %t21025, %LSR21023 ]
+br i1 %t21026, label %L6838, label %L6840
+L6838:
+ret i64 31
+L6840:
+%t21027 = add nsw i64 %p1, 1
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i1 @__mruntime_rt_device_resid__pq_hidden_out(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %t21037, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
+%t21029 = icmp sge i64 %p1, %p2
+br i1 %t21029, label %L6841, label %L6843
+L6841:
+ret i1 false
+L6843:
+%t21030 = call i64 @__mruntime_rt_device_resid__fw(i64 %p0, i64 %p1, i64 0)
+%t21031 = icmp ne i64 %t21030, 0
+br label %LSL21032
+LSL21032:
+br i1 %t21031, label %LSR21032, label %LSJ21032
+LSR21032:
+%t21033 = call i64 @__mruntime_rt_device_resid__fw(i64 %p0, i64 %p1, i64 4)
+%t21034 = and i64 %t21033, 2
+%t21035 = icmp ne i64 %t21034, 0
+br label %LSJ21032
+LSJ21032:
+%t21036 = phi i1 [ false, %LSL21032 ], [ %t21035, %LSR21032 ]
+br i1 %t21036, label %L6844, label %L6846
+L6844:
+ret i1 true
+L6846:
+%t21037 = add nsw i64 %p1, 1
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i64 @__mruntime_rt_device_resid__pq_step_err(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t21039 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 1)
+%t21040 = icmp sgt i64 %t21039, 16383
+br i1 %t21040, label %L6847, label %L6849
+L6847:
+ret i64 40
+L6849:
+%t21041 = add i64 0, 1
+%t21042 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 8)
+%t21043 = call i64 @__mruntime_rt_device_resid__pq_req_for(i64 %p0, i64 %t21041, i64 0, i64 %t21042, i64 0, i64 0)
+%t21044 = icmp slt i64 %t21043, 0
+br i1 %t21044, label %L6850, label %L6852
+L6850:
+ret i64 41
+L6852:
+%t21045 = sub i64 1, %t21041
+%t21046 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 8)
+%t21047 = call i64 @__mruntime_rt_device_resid__pq_req_for(i64 %p0, i64 %t21045, i64 0, i64 %t21046, i64 0, i64 0)
+%t21048 = sub nsw i64 0, 2
+%t21049 = icmp eq i64 %t21047, %t21048
+br label %LSL21050
+LSL21050:
+br i1 %t21049, label %LSJ21050, label %LSR21050
+LSR21050:
+%t21051 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 8)
+%t21052 = call i1 @__mruntime_rt_device_resid__pq_arches_ok(i64 %p0, i64 0, i64 %t21051)
+%t21053 = xor i1 %t21052, true
+br label %LSJ21050
+LSJ21050:
+%t21054 = phi i1 [ true, %LSL21050 ], [ %t21053, %LSR21050 ]
+br i1 %t21054, label %L6853, label %L6855
+L6853:
+ret i64 41
+L6855:
+%t21055 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 0, i64 %t21043)
+%t21056 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 2)
+%t21057 = call i1 @__mruntime_rt_device_resid__pq_fields_ok(i64 %p0, i64 0, i64 %t21056)
+%t21058 = xor i1 %t21057, true
+br i1 %t21058, label %L6856, label %L6858
+L6856:
+ret i64 42
+L6858:
+%t21059 = call i1 @__mruntime_rt_device_resid__pq_version_ok(i64 %p0)
+%t21060 = xor i1 %t21059, true
+br i1 %t21060, label %L6859, label %L6861
+L6859:
+ret i64 43
+L6861:
+%t21061 = call i1 @__mruntime_rt_device_resid__pq_apart(i64 %p0, i64 0, i64 1)
+%t21062 = xor i1 %t21061, true
+br i1 %t21062, label %L6862, label %L6864
+L6862:
+ret i64 44
+L6864:
+%t21063 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 8)
+%t21064 = call i1 @__mruntime_rt_device_resid__pq_reqs_ok(i64 %p0, i64 0, i64 %t21063)
+%t21065 = xor i1 %t21064, true
+br i1 %t21065, label %L6865, label %L6867
+L6865:
+ret i64 45
+L6867:
+ret i64 0
+}
+define internal i64 @__mruntime_rt_device_resid__pq_req_for(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t21078, %tco.s0 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ]
+%p4 = phi i64 [ %p4.in, %entry ], [ %t21080, %tco.s0 ]
+%p5 = phi i64 [ %p5.in, %entry ], [ %t21083, %tco.s0 ]
+%t21066 = icmp sge i64 %p2, %p3
+br i1 %t21066, label %L6868, label %L6870
+L6868:
+%t21067 = icmp eq i64 %p4, 1
+br i1 %t21067, label %L6871, label %L6872
+L6871:
+br label %L6873
+L6872:
+%t21068 = icmp eq i64 %p4, 0
+br i1 %t21068, label %L6874, label %L6875
+L6874:
+%t21069 = sub nsw i64 0, 1
+br label %L6876
+L6875:
+%t21070 = sub nsw i64 0, 2
+br label %L6876
+L6876:
+%t21071 = phi i64 [ %t21069, %L6874 ], [ %t21070, %L6875 ]
+br label %L6873
+L6873:
+%t21072 = phi i64 [ %p5, %L6871 ], [ %t21071, %L6876 ]
+ret i64 %t21072
+L6870:
+%t21073 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 9)
+%t21074 = mul i64 %p2, 16
+%t21075 = add i64 %t21073, %t21074
+%t21076 = call i64 @ld64(i64 %t21075)
+%t21077 = icmp eq i64 %t21076, %p1
+%t21078 = add nsw i64 %p2, 1
+br i1 %t21077, label %L6877, label %L6878
+L6877:
+%t21079 = add i64 %p4, 1
+br label %L6879
+L6878:
+br label %L6879
+L6879:
+%t21080 = phi i64 [ %t21079, %L6877 ], [ %p4, %L6878 ]
+br i1 %t21077, label %L6880, label %L6881
+L6880:
+%t21081 = add i64 %t21075, 8
+%t21082 = call i64 @ld64(i64 %t21081)
+br label %L6882
+L6881:
+br label %L6882
+L6882:
+%t21083 = phi i64 [ %t21082, %L6880 ], [ %p5, %L6881 ]
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i1 @__mruntime_rt_device_resid__pq_arches_ok(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t21085 = icmp sge i64 %p1, %p2
+br i1 %t21085, label %L6883, label %L6885
+L6883:
+ret i1 true
+L6885:
+%t21086 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 9)
+%t21087 = mul i64 %p1, 16
+%t21088 = add i64 %t21086, %t21087
+%t21089 = call i64 @ld64(i64 %t21088)
+%t21090 = icmp sle i64 %t21089, 1
+br label %LSL21091
+LSL21091:
+br i1 %t21090, label %LSR21091, label %LSJ21091
+LSR21091:
+%t21092 = add nsw i64 %p1, 1
+%t21093 = call i1 @__mruntime_rt_device_resid__pq_arches_ok(i64 %p0, i64 %t21092, i64 %p2)
+br label %LSJ21091
+LSJ21091:
+%t21094 = phi i1 [ false, %LSL21091 ], [ %t21093, %LSR21091 ]
+ret i1 %t21094
+}
+define internal i1 @__mruntime_rt_device_resid__pq_fields_ok(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %t21150, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
+%t21095 = icmp sge i64 %p1, %p2
+br i1 %t21095, label %L6886, label %L6888
+L6886:
+ret i1 true
+L6888:
+%t21096 = call i64 @__mruntime_rt_device_resid__fw(i64 %p0, i64 %p1, i64 0)
+%t21097 = call i64 @__mruntime_rt_device_resid__fw(i64 %p0, i64 %p1, i64 1)
+%t21098 = call i64 @__mruntime_rt_device_resid__f_len(i64 %p0, i64 %p1)
+%t21099 = call i64 @__mruntime_rt_device_resid__fw(i64 %p0, i64 %p1, i64 4)
+%t21100 = icmp sle i64 %t21098, 0
+br label %LSL21101
+LSL21101:
+br i1 %t21100, label %LSJ21101, label %LSR21101
+LSR21101:
+%t21102 = add i64 %t21097, %t21098
+%t21103 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 1)
+%t21104 = icmp sgt i64 %t21102, %t21103
+br label %LSJ21101
+LSJ21101:
+%t21105 = phi i1 [ true, %LSL21101 ], [ %t21104, %LSR21101 ]
+br label %LSL21106
+LSL21106:
+br i1 %t21105, label %LSJ21106, label %LSR21106
+LSR21106:
+%t21107 = icmp slt i64 %t21099, 1
+br label %LSJ21106
+LSJ21106:
+%t21108 = phi i1 [ true, %LSL21106 ], [ %t21107, %LSR21106 ]
+br label %LSL21109
+LSL21109:
+br i1 %t21108, label %LSJ21109, label %LSR21109
+LSR21109:
+%t21110 = icmp sgt i64 %t21099, 3
+br label %LSJ21109
+LSJ21109:
+%t21111 = phi i1 [ true, %LSL21109 ], [ %t21110, %LSR21109 ]
+br i1 %t21111, label %L6889, label %L6891
+L6889:
+ret i1 false
+L6891:
+%t21112 = icmp eq i64 %t21096, 0
+br label %LSL21113
+LSL21113:
+br i1 %t21112, label %LSR21113, label %LSJ21113
+LSR21113:
+%t21114 = icmp ne i64 %t21098, 1
+br label %LSJ21113
+LSJ21113:
+%t21115 = phi i1 [ false, %LSL21113 ], [ %t21114, %LSR21113 ]
+br label %LSL21116
+LSL21116:
+br i1 %t21115, label %LSR21116, label %LSJ21116
+LSR21116:
+%t21117 = icmp ne i64 %t21098, 2
+br label %LSJ21116
+LSJ21116:
+%t21118 = phi i1 [ false, %LSL21116 ], [ %t21117, %LSR21116 ]
+br label %LSL21119
+LSL21119:
+br i1 %t21118, label %LSR21119, label %LSJ21119
+LSR21119:
+%t21120 = icmp ne i64 %t21098, 4
+br label %LSJ21119
+LSJ21119:
+%t21121 = phi i1 [ false, %LSL21119 ], [ %t21120, %LSR21119 ]
+br label %LSL21122
+LSL21122:
+br i1 %t21121, label %LSR21122, label %LSJ21122
+LSR21122:
+%t21123 = icmp ne i64 %t21098, 8
+br label %LSJ21122
+LSJ21122:
+%t21124 = phi i1 [ false, %LSL21122 ], [ %t21123, %LSR21122 ]
+br i1 %t21124, label %L6892, label %L6894
+L6892:
+ret i1 false
+L6894:
+%t21125 = icmp eq i64 %t21096, 2
+br label %LSL21126
+LSL21126:
+br i1 %t21125, label %LSR21126, label %LSJ21126
+LSR21126:
+%t21127 = srem i64 %t21097, 8
+%t21128 = icmp ne i64 %t21127, 0
+br label %LSL21129
+LSL21129:
+br i1 %t21128, label %LSJ21129, label %LSR21129
+LSR21129:
+%t21130 = call i64 @__mruntime_rt_device_resid__fw(i64 %p0, i64 %p1, i64 3)
+%t21131 = call i1 @__mruntime_rt_device_resid__pq_max_ok(i64 %t21130)
+%t21132 = xor i1 %t21131, true
+br label %LSJ21129
+LSJ21129:
+%t21133 = phi i1 [ true, %LSL21129 ], [ %t21132, %LSR21129 ]
+br label %LSL21134
+LSL21134:
+br i1 %t21133, label %LSJ21134, label %LSR21134
+LSR21134:
+%t21135 = call i64 @__mruntime_rt_device_resid__fw(i64 %p0, i64 %p1, i64 5)
+%t21136 = icmp sgt i64 %t21135, 1
+br label %LSJ21134
+LSJ21134:
+%t21137 = phi i1 [ true, %LSL21134 ], [ %t21136, %LSR21134 ]
+br label %LSJ21126
+LSJ21126:
+%t21138 = phi i1 [ false, %LSL21126 ], [ %t21137, %LSJ21134 ]
+br i1 %t21138, label %L6895, label %L6897
+L6895:
+ret i1 false
+L6897:
+%t21139 = icmp eq i64 %t21096, 2
+br label %LSL21140
+LSL21140:
+br i1 %t21139, label %LSR21140, label %LSJ21140
+LSR21140:
+%t21141 = call i64 @__mruntime_rt_device_resid__fw(i64 %p0, i64 %p1, i64 2)
+%t21142 = sub nsw i64 0, 1
+%t21143 = icmp ne i64 %t21141, %t21142
+br label %LSJ21140
+LSJ21140:
+%t21144 = phi i1 [ false, %LSL21140 ], [ %t21143, %LSR21140 ]
+br label %LSL21145
+LSL21145:
+br i1 %t21144, label %LSR21145, label %LSJ21145
+LSR21145:
+%t21146 = call i64 @__mruntime_rt_device_resid__fw(i64 %p0, i64 %p1, i64 2)
+%t21147 = call i64 @__mruntime_rt_device_resid__pq_scalar_at(i64 %p0, i64 %t21146, i64 0, i64 %p2)
+%t21148 = icmp slt i64 %t21147, 0
+br label %LSJ21145
+LSJ21145:
+%t21149 = phi i1 [ false, %LSL21145 ], [ %t21148, %LSR21145 ]
+br i1 %t21149, label %L6898, label %L6900
+L6898:
+ret i1 false
+L6900:
+%t21150 = add nsw i64 %p1, 1
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i64 @__mruntime_rt_device_resid__pq_scalar_at(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t21160, %tco.s0 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ]
+%t21152 = icmp sge i64 %p2, %p3
+br i1 %t21152, label %L6901, label %L6903
+L6901:
+%t21153 = sub nsw i64 0, 1
+ret i64 %t21153
+L6903:
+%t21154 = call i64 @__mruntime_rt_device_resid__fw(i64 %p0, i64 %p2, i64 0)
+%t21155 = icmp eq i64 %t21154, 0
+br label %LSL21156
+LSL21156:
+br i1 %t21155, label %LSR21156, label %LSJ21156
+LSR21156:
+%t21157 = call i64 @__mruntime_rt_device_resid__fw(i64 %p0, i64 %p2, i64 1)
+%t21158 = icmp eq i64 %t21157, %p1
+br label %LSJ21156
+LSJ21156:
+%t21159 = phi i1 [ false, %LSL21156 ], [ %t21158, %LSR21156 ]
+br i1 %t21159, label %L6904, label %L6906
+L6904:
+ret i64 %p2
+L6906:
+%t21160 = add nsw i64 %p2, 1
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i1 @__mruntime_rt_device_resid__pq_version_ok(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t21162 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 4)
+%t21163 = icmp eq i64 %t21162, 0
+br i1 %t21163, label %L6907, label %L6909
+L6907:
+ret i1 true
+L6909:
+%t21164 = icmp ne i64 %t21162, 1
+br label %LSL21165
+LSL21165:
+br i1 %t21164, label %LSR21165, label %LSJ21165
+LSR21165:
+%t21166 = icmp ne i64 %t21162, 2
+br label %LSJ21165
+LSJ21165:
+%t21167 = phi i1 [ false, %LSL21165 ], [ %t21166, %LSR21165 ]
+br label %LSL21168
+LSL21168:
+br i1 %t21167, label %LSR21168, label %LSJ21168
+LSR21168:
+%t21169 = icmp ne i64 %t21162, 4
+br label %LSJ21168
+LSJ21168:
+%t21170 = phi i1 [ false, %LSL21168 ], [ %t21169, %LSR21168 ]
+br label %LSL21171
+LSL21171:
+br i1 %t21170, label %LSR21171, label %LSJ21171
+LSR21171:
+%t21172 = icmp ne i64 %t21162, 8
+br label %LSJ21171
+LSJ21171:
+%t21173 = phi i1 [ false, %LSL21171 ], [ %t21172, %LSR21171 ]
+br i1 %t21173, label %L6910, label %L6912
+L6910:
+ret i1 false
+L6912:
+%t21174 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 5)
+%t21175 = add i64 %t21174, %t21162
+%t21176 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 1)
+%t21177 = icmp sgt i64 %t21175, %t21176
+br i1 %t21177, label %L6913, label %L6915
+L6913:
+ret i1 false
+L6915:
+%t21178 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 6)
+%t21179 = icmp sge i64 %t21162, 8
+br label %LSL21180
+LSL21180:
+br i1 %t21179, label %LSJ21180, label %LSR21180
+LSR21180:
+%t21181 = icmp sge i64 %t21178, 0
+br label %LSL21182
+LSL21182:
+br i1 %t21181, label %LSR21182, label %LSJ21182
+LSR21182:
+%t21183 = mul i64 %t21162, 8
+%t21184 = icmp uge i64 %t21183, 64
+%t21185 = add i64 %t21183, 0
+%t21186 = shl i64 1, %t21185
+%t21187 = select i1 %t21184, i64 0, i64 %t21186
+%t21188 = icmp slt i64 %t21178, %t21187
+br label %LSJ21182
+LSJ21182:
+%t21189 = phi i1 [ false, %LSL21182 ], [ %t21188, %LSR21182 ]
+br label %LSJ21180
+LSJ21180:
+%t21190 = phi i1 [ true, %LSL21180 ], [ %t21189, %LSJ21182 ]
+ret i1 %t21190
+}
+define internal i1 @__mruntime_rt_device_resid__pq_apart(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ], [ %p0, %tco.s1 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %t21198, %tco.s0 ], [ %p1, %tco.s1 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t21199, %tco.s0 ], [ %t21223, %tco.s1 ]
+%t21191 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 2)
+%t21192 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 4)
+%t21193 = icmp sgt i64 %t21192, 0
+br i1 %t21193, label %L6916, label %L6917
+L6916:
+br label %L6918
+L6917:
+br label %L6918
+L6918:
+%t21194 = phi i64 [ 1, %L6916 ], [ 0, %L6917 ]
+%t21195 = add i64 %t21191, %t21194
+%t21196 = icmp sge i64 %p1, %t21195
+br i1 %t21196, label %L6919, label %L6921
+L6919:
+ret i1 true
+L6921:
+%t21197 = icmp sge i64 %p2, %t21195
+br i1 %t21197, label %L6922, label %L6924
+L6922:
+%t21198 = add nsw i64 %p1, 1
+%t21199 = add i64 %p1, 2
+br label %tco.s0
+tco.s0:
+br label %tco.head
+L6924:
+%t21201 = icmp slt i64 %p1, %t21191
+br i1 %t21201, label %L6925, label %L6926
+L6925:
+%t21202 = call i64 @__mruntime_rt_device_resid__fw(i64 %p0, i64 %p1, i64 1)
+br label %L6927
+L6926:
+%t21203 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 5)
+br label %L6927
+L6927:
+%t21204 = phi i64 [ %t21202, %L6925 ], [ %t21203, %L6926 ]
+%t21205 = icmp slt i64 %p1, %t21191
+br i1 %t21205, label %L6928, label %L6929
+L6928:
+%t21206 = call i64 @__mruntime_rt_device_resid__f_len(i64 %p0, i64 %p1)
+br label %L6930
+L6929:
+%t21207 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 4)
+br label %L6930
+L6930:
+%t21208 = phi i64 [ %t21206, %L6928 ], [ %t21207, %L6929 ]
+%t21209 = icmp slt i64 %p2, %t21191
+br i1 %t21209, label %L6931, label %L6932
+L6931:
+%t21210 = call i64 @__mruntime_rt_device_resid__fw(i64 %p0, i64 %p2, i64 1)
+br label %L6933
+L6932:
+%t21211 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 5)
+br label %L6933
+L6933:
+%t21212 = phi i64 [ %t21210, %L6931 ], [ %t21211, %L6932 ]
+%t21213 = icmp slt i64 %p2, %t21191
+br i1 %t21213, label %L6934, label %L6935
+L6934:
+%t21214 = call i64 @__mruntime_rt_device_resid__f_len(i64 %p0, i64 %p2)
+br label %L6936
+L6935:
+%t21215 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 4)
+br label %L6936
+L6936:
+%t21216 = phi i64 [ %t21214, %L6934 ], [ %t21215, %L6935 ]
+%t21217 = add i64 %t21212, %t21216
+%t21218 = icmp slt i64 %t21204, %t21217
+br label %LSL21219
+LSL21219:
+br i1 %t21218, label %LSR21219, label %LSJ21219
+LSR21219:
+%t21220 = add i64 %t21204, %t21208
+%t21221 = icmp slt i64 %t21212, %t21220
+br label %LSJ21219
+LSJ21219:
+%t21222 = phi i1 [ false, %LSL21219 ], [ %t21221, %LSR21219 ]
+br i1 %t21222, label %L6937, label %L6939
+L6937:
+ret i1 false
+L6939:
+%t21223 = add nsw i64 %p2, 1
+br label %tco.s1
+tco.s1:
+br label %tco.head
+}
+define internal i1 @__mruntime_rt_device_resid__pq_reqs_ok(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %t21264, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
+%t21225 = icmp sge i64 %p1, %p2
+br i1 %t21225, label %L6940, label %L6942
+L6940:
+ret i1 true
+L6942:
+%t21226 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 9)
+%t21227 = mul i64 %p1, 16
+%t21228 = add i64 %t21226, %t21227
+%t21229 = add i64 %t21228, 8
+%t21230 = call i64 @ld64(i64 %t21229)
+%t21231 = ashr i64 %t21230, 30
+%t21232 = ashr i64 %t21230, 16
+%t21233 = and i64 %t21232, 16383
+%t21234 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 1)
+%t21235 = icmp ne i64 %t21233, %t21234
+br i1 %t21235, label %L6943, label %L6945
+L6943:
+ret i1 false
+L6945:
+%t21236 = icmp eq i64 %t21231, 0
+br label %LSL21237
+LSL21237:
+br i1 %t21236, label %LSR21237, label %LSJ21237
+LSR21237:
+%t21238 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 1)
+%t21239 = icmp ne i64 %t21238, 0
+br label %LSJ21237
+LSJ21237:
+%t21240 = phi i1 [ false, %LSL21237 ], [ %t21239, %LSR21237 ]
+br i1 %t21240, label %L6946, label %L6948
+L6946:
+ret i1 false
+L6948:
+%t21241 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 2)
+%t21242 = call i1 @__mruntime_rt_device_resid__pq_to_kernel(i64 %p0, i64 0, i64 %t21241)
+br label %LSL21243
+LSL21243:
+br i1 %t21242, label %LSR21243, label %LSJ21243
+LSR21243:
+%t21244 = and i64 %t21231, 1
+%t21245 = icmp eq i64 %t21244, 0
+br label %LSJ21243
+LSJ21243:
+%t21246 = phi i1 [ false, %LSL21243 ], [ %t21245, %LSR21243 ]
+br i1 %t21246, label %L6949, label %L6951
+L6949:
+ret i1 false
+L6951:
+%t21247 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 2)
+%t21248 = call i1 @__mruntime_rt_device_resid__pq_from_kernel(i64 %p0, i64 0, i64 %t21247)
+br label %LSL21249
+LSL21249:
+br i1 %t21248, label %LSR21249, label %LSJ21249
+LSR21249:
+%t21250 = and i64 %t21231, 2
+%t21251 = icmp eq i64 %t21250, 0
+br label %LSJ21249
+LSJ21249:
+%t21252 = phi i1 [ false, %LSL21249 ], [ %t21251, %LSR21249 ]
+br i1 %t21252, label %L6952, label %L6954
+L6952:
+ret i1 false
+L6954:
+%t21253 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 7)
+%t21254 = icmp eq i64 %t21253, 0
+br label %LSL21255
+LSL21255:
+br i1 %t21254, label %LSR21255, label %LSJ21255
+LSR21255:
+%t21256 = and i64 %t21231, 1
+%t21257 = icmp ne i64 %t21256, 0
+br label %LSJ21255
+LSJ21255:
+%t21258 = phi i1 [ false, %LSL21255 ], [ %t21257, %LSR21255 ]
+br label %LSL21259
+LSL21259:
+br i1 %t21258, label %LSR21259, label %LSJ21259
+LSR21259:
+%t21260 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 2)
+%t21261 = call i1 @__mruntime_rt_device_resid__pq_any_out(i64 %p0, i64 0, i64 %t21260)
+%t21262 = xor i1 %t21261, true
+br label %LSJ21259
+LSJ21259:
+%t21263 = phi i1 [ false, %LSL21259 ], [ %t21262, %LSR21259 ]
+br i1 %t21263, label %L6955, label %L6957
+L6955:
+ret i1 false
+L6957:
+%t21264 = add nsw i64 %p1, 1
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i1 @__mruntime_rt_device_resid__pq_to_kernel(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t21266 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 4)
+%t21267 = icmp sgt i64 %t21266, 0
+br i1 %t21267, label %L6958, label %L6960
+L6958:
+ret i1 true
+L6960:
+%t21268 = icmp sge i64 %p1, %p2
+br i1 %t21268, label %L6961, label %L6963
+L6961:
+ret i1 false
+L6963:
+%t21269 = call i64 @__mruntime_rt_device_resid__fw(i64 %p0, i64 %p1, i64 0)
+%t21270 = icmp eq i64 %t21269, 2
+br label %LSL21271
+LSL21271:
+br i1 %t21270, label %LSJ21271, label %LSR21271
+LSR21271:
+%t21272 = call i64 @__mruntime_rt_device_resid__fw(i64 %p0, i64 %p1, i64 4)
+%t21273 = and i64 %t21272, 1
+%t21274 = icmp ne i64 %t21273, 0
+br label %LSJ21271
+LSJ21271:
+%t21275 = phi i1 [ true, %LSL21271 ], [ %t21274, %LSR21271 ]
+br label %LSL21276
+LSL21276:
+br i1 %t21275, label %LSJ21276, label %LSR21276
+LSR21276:
+%t21277 = add nsw i64 %p1, 1
+%t21278 = call i1 @__mruntime_rt_device_resid__pq_to_kernel(i64 %p0, i64 %t21277, i64 %p2)
+br label %LSJ21276
+LSJ21276:
+%t21279 = phi i1 [ true, %LSL21276 ], [ %t21278, %LSR21276 ]
+ret i1 %t21279
+}
+define internal i1 @__mruntime_rt_device_resid__pq_from_kernel(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t21280 = icmp sge i64 %p1, %p2
+br i1 %t21280, label %L6964, label %L6966
+L6964:
+ret i1 false
+L6966:
+%t21281 = call i64 @__mruntime_rt_device_resid__fw(i64 %p0, i64 %p1, i64 0)
+%t21282 = icmp ne i64 %t21281, 2
+br label %LSL21283
+LSL21283:
+br i1 %t21282, label %LSR21283, label %LSJ21283
+LSR21283:
+%t21284 = call i64 @__mruntime_rt_device_resid__fw(i64 %p0, i64 %p1, i64 4)
+%t21285 = and i64 %t21284, 2
+%t21286 = icmp ne i64 %t21285, 0
+br label %LSJ21283
+LSJ21283:
+%t21287 = phi i1 [ false, %LSL21283 ], [ %t21286, %LSR21283 ]
+br label %LSL21288
+LSL21288:
+br i1 %t21287, label %LSJ21288, label %LSR21288
+LSR21288:
+%t21289 = add nsw i64 %p1, 1
+%t21290 = call i1 @__mruntime_rt_device_resid__pq_from_kernel(i64 %p0, i64 %t21289, i64 %p2)
+br label %LSJ21288
+LSJ21288:
+%t21291 = phi i1 [ true, %LSL21288 ], [ %t21290, %LSR21288 ]
+ret i1 %t21291
+}
+define internal i1 @__mruntime_rt_device_resid__pq_any_out(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t21292 = icmp sge i64 %p1, %p2
+br i1 %t21292, label %L6967, label %L6969
+L6967:
+ret i1 false
+L6969:
+%t21293 = call i64 @__mruntime_rt_device_resid__fw(i64 %p0, i64 %p1, i64 4)
+%t21294 = and i64 %t21293, 2
+%t21295 = icmp ne i64 %t21294, 0
+br label %LSL21296
+LSL21296:
+br i1 %t21295, label %LSJ21296, label %LSR21296
+LSR21296:
+%t21297 = add nsw i64 %p1, 1
+%t21298 = call i1 @__mruntime_rt_device_resid__pq_any_out(i64 %p0, i64 %t21297, i64 %p2)
+br label %LSJ21296
+LSJ21296:
+%t21299 = phi i1 [ true, %LSL21296 ], [ %t21298, %LSR21296 ]
+ret i1 %t21299
+}
+define internal i64 @__mruntime_rt_device_resid__pq_links_err(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %t21344, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
+%t21300 = icmp sge i64 %p1, %p2
+br i1 %t21300, label %L6970, label %L6972
+L6970:
+ret i64 0
+L6972:
+%t21301 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 9)
+%t21302 = mul i64 %p1, 40
+%t21303 = add i64 %t21301, %t21302
+%t21304 = call i64 @ld64(i64 %t21303)
+%t21305 = add i64 %t21303, 8
+%t21306 = call i64 @ld64(i64 %t21305)
+%t21307 = add i64 %t21303, 16
+%t21308 = call i64 @ld64(i64 %t21307)
+%t21309 = add i64 %t21303, 24
+%t21310 = call i64 @ld64(i64 %t21309)
+%t21311 = add i64 %t21303, 32
+%t21312 = call i64 @ld64(i64 %t21311)
+%t21313 = icmp sge i64 %t21304, %t21308
+br label %LSL21314
+LSL21314:
+br i1 %t21313, label %LSJ21314, label %LSR21314
+LSR21314:
+%t21315 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 6)
+%t21316 = icmp sge i64 %t21308, %t21315
+br label %LSJ21314
+LSJ21314:
+%t21317 = phi i1 [ true, %LSL21314 ], [ %t21316, %LSR21314 ]
+br i1 %t21317, label %L6973, label %L6975
+L6973:
+ret i64 50
+L6975:
+%t21318 = call i64 @__mruntime_rt_device_resid__step_of(i64 %p0, i64 %t21304)
+%t21319 = call i64 @__mruntime_rt_device_resid__step_of(i64 %p0, i64 %t21308)
+%t21320 = call i64 @__mruntime_rt_device_resid__dget(i64 %t21318, i64 2)
+%t21321 = call i64 @__mruntime_rt_device_resid__pq_scalar_at(i64 %t21318, i64 %t21306, i64 0, i64 %t21320)
+%t21322 = call i64 @__mruntime_rt_device_resid__dget(i64 %t21319, i64 2)
+%t21323 = call i64 @__mruntime_rt_device_resid__pq_scalar_at(i64 %t21319, i64 %t21310, i64 0, i64 %t21322)
+%t21324 = icmp slt i64 %t21321, 0
+br label %LSL21325
+LSL21325:
+br i1 %t21324, label %LSJ21325, label %LSR21325
+LSR21325:
+%t21326 = call i64 @__mruntime_rt_device_resid__fw(i64 %t21318, i64 %t21321, i64 4)
+%t21327 = and i64 %t21326, 2
+%t21328 = icmp eq i64 %t21327, 0
+br label %LSJ21325
+LSJ21325:
+%t21329 = phi i1 [ true, %LSL21325 ], [ %t21328, %LSR21325 ]
+br i1 %t21329, label %L6976, label %L6978
+L6976:
+ret i64 51
+L6978:
+%t21330 = icmp slt i64 %t21323, 0
+br label %LSL21331
+LSL21331:
+br i1 %t21330, label %LSJ21331, label %LSR21331
+LSR21331:
+%t21332 = call i64 @__mruntime_rt_device_resid__fw(i64 %t21319, i64 %t21323, i64 4)
+%t21333 = and i64 %t21332, 1
+%t21334 = icmp eq i64 %t21333, 0
+br label %LSJ21331
+LSJ21331:
+%t21335 = phi i1 [ true, %LSL21331 ], [ %t21334, %LSR21331 ]
+br i1 %t21335, label %L6979, label %L6981
+L6979:
+ret i64 52
+L6981:
+%t21336 = call i64 @__mruntime_rt_device_resid__fw(i64 %t21318, i64 %t21321, i64 2)
+%t21337 = icmp ne i64 %t21336, %t21312
+br label %LSL21338
+LSL21338:
+br i1 %t21337, label %LSJ21338, label %LSR21338
+LSR21338:
+%t21339 = call i64 @__mruntime_rt_device_resid__fw(i64 %t21319, i64 %t21323, i64 2)
+%t21340 = icmp ne i64 %t21339, %t21312
+br label %LSJ21338
+LSJ21338:
+%t21341 = phi i1 [ true, %LSL21338 ], [ %t21340, %LSR21338 ]
+br i1 %t21341, label %L6982, label %L6984
+L6982:
+ret i64 53
+L6984:
+%t21342 = call i64 @__mruntime_rt_device_resid__pq_links_into(i64 %p0, i64 %t21308, i64 %t21310, i64 0, i64 %p2, i64 0)
+%t21343 = icmp sgt i64 %t21342, 1
+br i1 %t21343, label %L6985, label %L6987
+L6985:
+ret i64 54
+L6987:
+%t21344 = add nsw i64 %p1, 1
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i64 @__mruntime_rt_device_resid__pq_links_into(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %t21358, %tco.s0 ]
+%p4 = phi i64 [ %p4.in, %entry ], [ %p4, %tco.s0 ]
+%p5 = phi i64 [ %p5.in, %entry ], [ %t21360, %tco.s0 ]
+%t21346 = icmp sge i64 %p3, %p4
+br i1 %t21346, label %L6988, label %L6990
+L6988:
+ret i64 %p5
+L6990:
+%t21347 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 9)
+%t21348 = mul i64 %p3, 40
+%t21349 = add i64 %t21347, %t21348
+%t21350 = add i64 %t21349, 16
+%t21351 = call i64 @ld64(i64 %t21350)
+%t21352 = icmp eq i64 %t21351, %p1
+br label %LSL21353
+LSL21353:
+br i1 %t21352, label %LSR21353, label %LSJ21353
+LSR21353:
+%t21354 = add i64 %t21349, 24
+%t21355 = call i64 @ld64(i64 %t21354)
+%t21356 = icmp eq i64 %t21355, %p2
+br label %LSJ21353
+LSJ21353:
+%t21357 = phi i1 [ false, %LSL21353 ], [ %t21356, %LSR21353 ]
+%t21358 = add nsw i64 %p3, 1
+br i1 %t21357, label %L6991, label %L6992
+L6991:
+%t21359 = add i64 %p5, 1
+br label %L6993
+L6992:
+br label %L6993
+L6993:
+%t21360 = phi i64 [ %t21359, %L6991 ], [ %p5, %L6992 ]
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i1 @__mruntime_rt_device_resid__pq_linked(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %t21375, %tco.s0 ]
+%t21362 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 8)
+%t21363 = icmp sge i64 %p3, %t21362
+br i1 %t21363, label %L6994, label %L6996
+L6994:
+ret i1 false
+L6996:
+%t21364 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 9)
+%t21365 = mul i64 %p3, 40
+%t21366 = add i64 %t21364, %t21365
+%t21367 = add i64 %t21366, 16
+%t21368 = call i64 @ld64(i64 %t21367)
+%t21369 = icmp eq i64 %t21368, %p1
+br label %LSL21370
+LSL21370:
+br i1 %t21369, label %LSR21370, label %LSJ21370
+LSR21370:
+%t21371 = add i64 %t21366, 24
+%t21372 = call i64 @ld64(i64 %t21371)
+%t21373 = icmp eq i64 %t21372, %p2
+br label %LSJ21370
+LSJ21370:
+%t21374 = phi i1 [ false, %LSL21370 ], [ %t21373, %LSR21370 ]
+br i1 %t21374, label %L6997, label %L6999
+L6997:
+ret i1 true
+L6999:
+%t21375 = add nsw i64 %p3, 1
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i1 @__mruntime_rt_device_resid__pq_is_len(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t21384, %tco.s0 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ]
+%t21377 = icmp sge i64 %p2, %p3
+br i1 %t21377, label %L7000, label %L7002
+L7000:
+ret i1 false
+L7002:
+%t21378 = call i64 @__mruntime_rt_device_resid__fw(i64 %p0, i64 %p2, i64 0)
+%t21379 = icmp eq i64 %t21378, 2
+br label %LSL21380
+LSL21380:
+br i1 %t21379, label %LSR21380, label %LSJ21380
+LSR21380:
+%t21381 = call i64 @__mruntime_rt_device_resid__fw(i64 %p0, i64 %p2, i64 2)
+%t21382 = icmp eq i64 %t21381, %p1
+br label %LSJ21380
+LSJ21380:
+%t21383 = phi i1 [ false, %LSL21380 ], [ %t21382, %LSR21380 ]
+br i1 %t21383, label %L7003, label %L7005
+L7003:
+ret i1 true
+L7005:
+%t21384 = add nsw i64 %p2, 1
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i64 @__mruntime_rt_device_resid__pq_slots(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t21386 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 0)
+%t21387 = icmp eq i64 %t21386, 1
+br label %LSL21388
+LSL21388:
+br i1 %t21387, label %LSJ21388, label %LSR21388
+LSR21388:
+%t21389 = icmp eq i64 %t21386, 5
+br label %LSJ21388
+LSJ21388:
+%t21390 = phi i1 [ true, %LSL21388 ], [ %t21389, %LSR21388 ]
+br i1 %t21390, label %L7006, label %L7007
+L7006:
+%t21391 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 6)
+%t21392 = call i64 @__mruntime_rt_device_resid__pq_fields_total(i64 %p0, i64 0, i64 %t21391, i64 0)
+br label %L7008
+L7007:
+br label %L7008
+L7008:
+%t21393 = phi i64 [ %t21392, %L7006 ], [ 5, %L7007 ]
+%t21394 = mul i64 %t21393, 24
+%t21395 = add i64 %t21394, 8
+%t21396 = call i64 @__mruntime_rt_device_resid__pq_alloc(i64 %p0, i64 %t21395)
+%t21397 = mul i64 %t21393, 24
+%t21398 = add i64 %t21397, 8
+%t21399 = call i64 @__mruntime_rt_device_resid__pq_alloc(i64 %p0, i64 %t21398)
+%t21400 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 25, i64 %t21396)
+%t21401 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 27, i64 %t21399)
+%t21402 = add i64 %t21400, %t21401
+%t21403 = icmp eq i64 %t21386, 2
+br i1 %t21403, label %L7009, label %L7011
+L7009:
+%t21404 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 11)
+%t21405 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 12)
+%t21406 = call i64 @__mruntime_rt_device_resid__pq_slot(i64 %t21396, i64 0, i64 0, i64 %t21404, i64 %t21405)
+%t21407 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 24, i64 %t21406)
+br label %L7011
+L7011:
+%t21408 = icmp eq i64 %t21386, 3
+br i1 %t21408, label %L7012, label %L7014
+L7012:
+%t21409 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 10)
+%t21410 = call i64 @__mruntime_rt_device_resid__pq_slot(i64 %t21396, i64 0, i64 0, i64 %t21409, i64 0)
+%t21411 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 24, i64 %t21410)
+br label %L7014
+L7014:
+%t21412 = icmp eq i64 %t21386, 4
+br i1 %t21412, label %L7015, label %L7017
+L7015:
+%t21413 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 11)
+%t21414 = call i64 @__mruntime_rt_device_resid__pq_slot(i64 %t21396, i64 0, i64 0, i64 %t21413, i64 0)
+%t21415 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 12)
+%t21416 = call i64 @__mruntime_rt_device_resid__pq_slot(i64 %t21396, i64 1, i64 0, i64 %t21415, i64 0)
+%t21417 = add i64 %t21414, %t21416
+%t21418 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 13)
+%t21419 = call i64 @__mruntime_rt_device_resid__pq_slot(i64 %t21396, i64 2, i64 0, i64 %t21418, i64 0)
+%t21420 = add i64 %t21417, %t21419
+%t21421 = call i64 @__mruntime_rt_device_resid__pq_slot(i64 %t21396, i64 3, i64 0, i64 256, i64 0)
+%t21422 = call i64 @__mruntime_rt_device_resid__pq_slot(i64 %t21396, i64 4, i64 1, i64 8, i64 0)
+%t21423 = add i64 %t21421, %t21422
+%t21424 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 24, i64 5)
+br label %L7017
+L7017:
+%t21425 = icmp eq i64 %t21386, 1
+br label %LSL21426
+LSL21426:
+br i1 %t21425, label %LSJ21426, label %LSR21426
+LSR21426:
+%t21427 = icmp eq i64 %t21386, 5
+br label %LSJ21426
+LSJ21426:
+%t21428 = phi i1 [ true, %LSL21426 ], [ %t21427, %LSR21426 ]
+br i1 %t21428, label %L7018, label %L7020
+L7018:
+%t21429 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 6)
+%t21430 = sub i64 %t21429, 1
+%t21431 = call i64 @__mruntime_rt_device_resid__step_of(i64 %p0, i64 %t21430)
+%t21432 = call i64 @__mruntime_rt_device_resid__dget(i64 %t21431, i64 2)
+%t21433 = call i64 @__mruntime_rt_device_resid__pq_outs(i64 %t21431, i64 0, i64 %t21432, i64 %t21396, i64 0)
+%t21434 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 24, i64 %t21433)
+%t21435 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 6)
+%t21436 = call i64 @__mruntime_rt_device_resid__pq_ins_steps(i64 %p0, i64 0, i64 %t21435, i64 %t21399, i64 0)
+%t21437 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 26, i64 %t21436)
+br label %L7020
+L7020:
+%t21438 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 24)
+%t21439 = call i64 @__mruntime_rt_device_resid__pq_secrets(i64 %t21396, i64 0, i64 %t21438, i64 0)
+%t21440 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 29, i64 %t21439)
+ret i64 %t21440
+}
+define internal i64 @__mruntime_rt_device_resid__pq_fields_total(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %t21443, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %t21446, %tco.s0 ]
+%t21441 = icmp sge i64 %p1, %p2
+br i1 %t21441, label %L7021, label %L7023
+L7021:
+%t21442 = add i64 %p3, 1
+ret i64 %t21442
+L7023:
+%t21443 = add nsw i64 %p1, 1
+%t21444 = call i64 @__mruntime_rt_device_resid__step_of(i64 %p0, i64 %p1)
+%t21445 = call i64 @__mruntime_rt_device_resid__dget(i64 %t21444, i64 2)
+%t21446 = add i64 %p3, %t21445
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i64 @__mruntime_rt_device_resid__pq_slot(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t21448 = mul i64 %p1, 24
+%t21449 = add i64 %p0, %t21448
+%t21450 = call i64 @st64(i64 %t21449, i64 %p2)
+%t21451 = mul i64 %p1, 24
+%t21452 = add i64 %p0, %t21451
+%t21453 = add i64 %t21452, 8
+%t21454 = call i64 @st64(i64 %t21453, i64 %p3)
+%t21455 = add i64 %t21450, %t21454
+%t21456 = mul i64 %p1, 24
+%t21457 = add i64 %p0, %t21456
+%t21458 = add i64 %t21457, 16
+%t21459 = call i64 @st64(i64 %t21458, i64 %p4)
+%t21460 = add i64 %t21455, %t21459
+%t21461 = add i64 %p1, 1
+ret i64 %t21461
+}
+define internal i64 @__mruntime_rt_device_resid__pq_outs(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %t21483, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ]
+%p4 = phi i64 [ %p4.in, %entry ], [ %t21482, %tco.s0 ]
+%t21462 = icmp sge i64 %p1, %p2
+br i1 %t21462, label %L7024, label %L7026
+L7024:
+ret i64 %p4
+L7026:
+%t21463 = call i64 @__mruntime_rt_device_resid__fw(i64 %p0, i64 %p1, i64 0)
+%t21464 = call i64 @__mruntime_rt_device_resid__fw(i64 %p0, i64 %p1, i64 4)
+%t21465 = and i64 %t21464, 2
+%t21466 = icmp ne i64 %t21465, 0
+%t21467 = xor i1 %t21466, true
+br i1 %t21467, label %L7027, label %L7028
+L7027:
+br label %L7029
+L7028:
+%t21468 = icmp eq i64 %t21463, 0
+br i1 %t21468, label %L7030, label %L7031
+L7030:
+%t21469 = call i64 @__mruntime_rt_device_resid__fw(i64 %p0, i64 %p1, i64 1)
+%t21470 = call i1 @__mruntime_rt_device_resid__pq_is_len(i64 %p0, i64 %t21469, i64 0, i64 %p2)
+br i1 %t21470, label %L7033, label %L7034
+L7033:
+br label %L7035
+L7034:
+%t21471 = call i64 @__mruntime_rt_device_resid__fw(i64 %p0, i64 %p1, i64 2)
+%t21472 = call i64 @__mruntime_rt_device_resid__pq_slot(i64 %p3, i64 %p4, i64 1, i64 %t21471, i64 0)
+br label %L7035
+L7035:
+%t21473 = phi i64 [ %p4, %L7033 ], [ %t21472, %L7034 ]
+br label %L7032
+L7031:
+%t21474 = icmp eq i64 %t21463, 1
+br i1 %t21474, label %L7036, label %L7037
+L7036:
+%t21475 = call i64 @__mruntime_rt_device_resid__fw(i64 %p0, i64 %p1, i64 2)
+%t21476 = call i64 @__mruntime_rt_device_resid__pq_slot(i64 %p3, i64 %p4, i64 0, i64 %t21475, i64 0)
+br label %L7038
+L7037:
+%t21477 = call i64 @__mruntime_rt_device_resid__fw(i64 %p0, i64 %p1, i64 3)
+%t21478 = call i64 @__mruntime_rt_device_resid__fw(i64 %p0, i64 %p1, i64 5)
+%t21479 = call i64 @__mruntime_rt_device_resid__pq_slot(i64 %p3, i64 %p4, i64 0, i64 %t21477, i64 %t21478)
+br label %L7038
+L7038:
+%t21480 = phi i64 [ %t21476, %L7036 ], [ %t21479, %L7037 ]
+br label %L7032
+L7032:
+%t21481 = phi i64 [ %t21473, %L7035 ], [ %t21480, %L7038 ]
+br label %L7029
+L7029:
+%t21482 = phi i64 [ %p4, %L7027 ], [ %t21481, %L7032 ]
+%t21483 = add nsw i64 %p1, 1
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i64 @__mruntime_rt_device_resid__pq_ins_steps(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %t21487, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ]
+%p4 = phi i64 [ %p4.in, %entry ], [ %t21489, %tco.s0 ]
+%t21485 = icmp sge i64 %p1, %p2
+br i1 %t21485, label %L7039, label %L7041
+L7039:
+ret i64 %p4
+L7041:
+%t21486 = call i64 @__mruntime_rt_device_resid__step_of(i64 %p0, i64 %p1)
+%t21487 = add nsw i64 %p1, 1
+%t21488 = call i64 @__mruntime_rt_device_resid__dget(i64 %t21486, i64 2)
+%t21489 = call i64 @__mruntime_rt_device_resid__pq_ins(i64 %p0, i64 %p1, i64 %t21486, i64 0, i64 %t21488, i64 %p3, i64 %p4)
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i64 @__mruntime_rt_device_resid__pq_ins(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %t21516, %tco.s0 ]
+%p4 = phi i64 [ %p4.in, %entry ], [ %p4, %tco.s0 ]
+%p5 = phi i64 [ %p5.in, %entry ], [ %p5, %tco.s0 ]
+%p6 = phi i64 [ %p6.in, %entry ], [ %t21515, %tco.s0 ]
+%t21491 = icmp sge i64 %p3, %p4
+br i1 %t21491, label %L7042, label %L7044
+L7042:
+ret i64 %p6
+L7044:
+%t21492 = call i64 @__mruntime_rt_device_resid__fw(i64 %p2, i64 %p3, i64 0)
+%t21493 = call i64 @__mruntime_rt_device_resid__fw(i64 %p2, i64 %p3, i64 4)
+%t21494 = and i64 %t21493, 1
+%t21495 = icmp ne i64 %t21494, 0
+%t21496 = xor i1 %t21495, true
+br i1 %t21496, label %L7045, label %L7046
+L7045:
+br label %L7047
+L7046:
+%t21497 = icmp eq i64 %t21492, 0
+br i1 %t21497, label %L7048, label %L7049
+L7048:
+%t21498 = call i64 @__mruntime_rt_device_resid__fw(i64 %p2, i64 %p3, i64 1)
+%t21499 = call i1 @__mruntime_rt_device_resid__pq_is_len(i64 %p2, i64 %t21498, i64 0, i64 %p4)
+br label %LSL21500
+LSL21500:
+br i1 %t21499, label %LSJ21500, label %LSR21500
+LSR21500:
+%t21501 = call i64 @__mruntime_rt_device_resid__fw(i64 %p2, i64 %p3, i64 1)
+%t21502 = call i1 @__mruntime_rt_device_resid__pq_linked(i64 %p0, i64 %p1, i64 %t21501, i64 0)
+br label %LSJ21500
+LSJ21500:
+%t21503 = phi i1 [ true, %LSL21500 ], [ %t21502, %LSR21500 ]
+br i1 %t21503, label %L7051, label %L7052
+L7051:
+br label %L7053
+L7052:
+%t21504 = call i64 @__mruntime_rt_device_resid__fw(i64 %p2, i64 %p3, i64 2)
+%t21505 = call i64 @__mruntime_rt_device_resid__pq_slot(i64 %p5, i64 %p6, i64 1, i64 %t21504, i64 0)
+br label %L7053
+L7053:
+%t21506 = phi i64 [ %p6, %L7051 ], [ %t21505, %L7052 ]
+br label %L7050
+L7049:
+%t21507 = icmp eq i64 %t21492, 1
+br i1 %t21507, label %L7054, label %L7055
+L7054:
+%t21508 = call i64 @__mruntime_rt_device_resid__fw(i64 %p2, i64 %p3, i64 2)
+%t21509 = call i64 @__mruntime_rt_device_resid__pq_slot(i64 %p5, i64 %p6, i64 0, i64 %t21508, i64 0)
+br label %L7056
+L7055:
+%t21510 = call i64 @__mruntime_rt_device_resid__fw(i64 %p2, i64 %p3, i64 3)
+%t21511 = call i64 @__mruntime_rt_device_resid__fw(i64 %p2, i64 %p3, i64 5)
+%t21512 = call i64 @__mruntime_rt_device_resid__pq_slot(i64 %p5, i64 %p6, i64 0, i64 %t21510, i64 %t21511)
+br label %L7056
+L7056:
+%t21513 = phi i64 [ %t21509, %L7054 ], [ %t21512, %L7055 ]
+br label %L7050
+L7050:
+%t21514 = phi i64 [ %t21506, %L7053 ], [ %t21513, %L7056 ]
+br label %L7047
+L7047:
+%t21515 = phi i64 [ %p6, %L7045 ], [ %t21514, %L7050 ]
+%t21516 = add nsw i64 %p3, 1
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i64 @__mruntime_rt_device_resid__pq_secrets(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %t21519, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %t21524, %tco.s0 ]
+%t21518 = icmp sge i64 %p1, %p2
+br i1 %t21518, label %L7057, label %L7059
+L7057:
+ret i64 %p3
+L7059:
+%t21519 = add nsw i64 %p1, 1
+%t21520 = mul i64 %p1, 24
+%t21521 = add i64 %p0, %t21520
+%t21522 = add i64 %t21521, 16
+%t21523 = call i64 @ld64(i64 %t21522)
+%t21524 = add i64 %p3, %t21523
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i1 @__mruntime_rt_device_resid__pq_args_fit(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t21526 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 26)
+%t21527 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 22)
+%t21528 = icmp ne i64 %t21527, %t21526
+br i1 %t21528, label %L7060, label %L7062
+L7060:
+ret i1 false
+L7062:
+%t21529 = icmp sge i64 %p1, %t21526
+br i1 %t21529, label %L7063, label %L7065
+L7063:
+ret i1 true
+L7065:
+%t21530 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 23)
+%t21531 = mul i64 %p1, 24
+%t21532 = add i64 %t21530, %t21531
+%t21533 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 27)
+%t21534 = mul i64 %p1, 24
+%t21535 = add i64 %t21533, %t21534
+%t21536 = call i64 @ld64(i64 %t21535)
+%t21537 = icmp eq i64 %t21536, 1
+br i1 %t21537, label %L7066, label %L7067
+L7066:
+%t21538 = call i64 @ld64(i64 %t21532)
+%t21539 = icmp eq i64 %t21538, 0
+br label %LSL21540
+LSL21540:
+br i1 %t21539, label %LSR21540, label %LSJ21540
+LSR21540:
+%t21541 = add i64 %t21532, 8
+%t21542 = call i64 @ld64(i64 %t21541)
+%t21543 = add i64 %t21535, 8
+%t21544 = call i64 @ld64(i64 %t21543)
+%t21545 = call i1 @__mruntime_rt_device_resid__dv_fits_w(i64 %t21542, i64 %t21544)
+br label %LSJ21540
+LSJ21540:
+%t21546 = phi i1 [ false, %LSL21540 ], [ %t21545, %LSR21540 ]
+br label %L7068
+L7067:
+%t21547 = call i64 @ld64(i64 %t21532)
+%t21548 = icmp eq i64 %t21547, 1
+br label %LSL21549
+LSL21549:
+br i1 %t21548, label %LSR21549, label %LSJ21549
+LSR21549:
+%t21550 = add i64 %t21532, 16
+%t21551 = call i64 @ld64(i64 %t21550)
+%t21552 = add i64 %t21535, 8
+%t21553 = call i64 @ld64(i64 %t21552)
+%t21554 = icmp sle i64 %t21551, %t21553
+br label %LSJ21549
+LSJ21549:
+%t21555 = phi i1 [ false, %LSL21549 ], [ %t21554, %LSR21549 ]
+br label %L7068
+L7068:
+%t21556 = phi i1 [ %t21546, %LSJ21540 ], [ %t21555, %LSJ21549 ]
+br label %LSL21557
+LSL21557:
+br i1 %t21556, label %LSR21557, label %LSJ21557
+LSR21557:
+%t21558 = add nsw i64 %p1, 1
+%t21559 = call i1 @__mruntime_rt_device_resid__pq_args_fit(i64 %p0, i64 %t21558)
+br label %LSJ21557
+LSJ21557:
+%t21560 = phi i1 [ false, %LSL21557 ], [ %t21559, %LSR21557 ]
+ret i1 %t21560
+}
+define internal i64 @pq_reply_cap(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t21561 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 25)
+%t21562 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 24)
+%t21563 = call i64 @__mruntime_rt_device_resid__pq_cap_at(i64 %t21561, i64 0, i64 %t21562, i64 0)
+%t21564 = add i64 5, %t21563
+%t21565 = icmp sgt i64 266, %t21564
+br i1 %t21565, label %L7069, label %L7070
+L7069:
+br label %L7071
+L7070:
+br label %L7071
+L7071:
+%t21566 = phi i64 [ 266, %L7069 ], [ %t21564, %L7070 ]
+ret i64 %t21566
+}
+define internal i64 @__mruntime_rt_device_resid__pq_cap_at(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %t21578, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %t21579, %tco.s0 ]
+%t21567 = icmp sge i64 %p1, %p2
+br i1 %t21567, label %L7072, label %L7074
+L7072:
+ret i64 %p3
+L7074:
+%t21568 = mul i64 %p1, 24
+%t21569 = add i64 %p0, %t21568
+%t21570 = call i64 @ld64(i64 %t21569)
+%t21571 = icmp eq i64 %t21570, 1
+br i1 %t21571, label %L7075, label %L7076
+L7075:
+br label %L7077
+L7076:
+%t21572 = mul i64 %p1, 24
+%t21573 = add i64 %p0, %t21572
+%t21574 = add i64 %t21573, 8
+%t21575 = call i64 @ld64(i64 %t21574)
+%t21576 = add i64 5, %t21575
+br label %L7077
+L7077:
+%t21577 = phi i64 [ 9, %L7075 ], [ %t21576, %L7076 ]
+%t21578 = add nsw i64 %p1, 1
+%t21579 = add i64 %p3, %t21577
 br label %tco.s0
 tco.s0:
 br label %tco.head
 }
 define internal i64 @__mruntime_rt_device_resid__dev_write_byte(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20299 = icmp eq i64 %p0, 0
-br label %LSL20300
-LSL20300:
-br i1 %t20299, label %LSJ20300, label %LSR20300
-LSR20300:
-%t20301 = call i64 @c_list_len(i64 %p0)
-%t20302 = icmp slt i64 %t20301, 6
-br label %LSJ20300
-LSJ20300:
-%t20303 = phi i1 [ true, %LSL20300 ], [ %t20302, %LSR20300 ]
-br i1 %t20303, label %L6634, label %L6636
-L6634:
-%t20304 = sub nsw i64 0, 1
-ret i64 %t20304
-L6636:
-%t20305 = call i64 @c_list_get(i64 %p0, i64 5)
-%t20306 = tail call i64 @c_unbox_i64(i64 %t20305)
-ret i64 %t20306
+%t21581 = icmp eq i64 %p0, 0
+br label %LSL21582
+LSL21582:
+br i1 %t21581, label %LSJ21582, label %LSR21582
+LSR21582:
+%t21583 = call i64 @c_list_len(i64 %p0)
+%t21584 = icmp slt i64 %t21583, 6
+br label %LSJ21582
+LSJ21582:
+%t21585 = phi i1 [ true, %LSL21582 ], [ %t21584, %LSR21582 ]
+br i1 %t21585, label %L7078, label %L7080
+L7078:
+%t21586 = sub nsw i64 0, 1
+ret i64 %t21586
+L7080:
+%t21587 = call i64 @c_list_get(i64 %p0, i64 5)
+%t21588 = tail call i64 @c_unbox_i64(i64 %t21587)
+ret i64 %t21588
 }
 define internal i64 @rt_device_call(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20307 = call i64 @__mruntime_rt_device_resid__dev_write_byte(i64 %p0)
-%t20308 = icmp ne i64 %t20307, 0
-br i1 %t20308, label %L6637, label %L6639
-L6637:
-%t20309 = tail call i64 @__mruntime_rt_device_resid__dev_err_reply(i64 2)
-ret i64 %t20309
-L6639:
-%t20310 = tail call i64 @__mruntime_rt_device_resid__dev_err_reply(i64 6)
-ret i64 %t20310
+%t21589 = call i64 @__mruntime_rt_device_resid__dev_write_byte(i64 %p0)
+%t21590 = icmp ne i64 %t21589, 0
+br i1 %t21590, label %L7081, label %L7083
+L7081:
+%t21591 = call i64 @__mruntime_rt_device_resid__dev_err_reply(i64 2, i64 0)
+ret i64 %t21591
+L7083:
+%t21592 = tail call i64 @__mruntime_rt_device_resid__dp_call(i64 %p0)
+ret i64 %t21592
 }
 define ptr @resid_device_call(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
@@ -45397,8 +48340,8 @@ ret ptr %rv
 }
 define internal i64 @rt_device_call_w(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20311 = tail call i64 @__mruntime_rt_device_resid__dev_err_reply(i64 6)
-ret i64 %t20311
+%t21593 = tail call i64 @__mruntime_rt_device_resid__dp_call(i64 %p0)
+ret i64 %t21593
 }
 define ptr @resid_device_call_w(ptr %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
@@ -45407,11 +48350,4059 @@ entry:
 %rv = inttoptr i64 %r to ptr
 ret ptr %rv
 }
+define internal i64 @__mruntime_rt_device_resid__dp_call(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t21594 = call i64 @__mruntime_rt_device_resid__dsec_clear()
+%t21595 = icmp eq i64 %p0, 0
+br i1 %t21595, label %L7084, label %L7085
+L7084:
+br label %L7086
+L7085:
+%t21596 = call i64 @c_list_len(i64 %p0)
+br label %L7086
+L7086:
+%t21597 = phi i64 [ 0, %L7084 ], [ %t21596, %L7085 ]
+%t21598 = icmp slt i64 %t21597, 6
+br label %LSL21599
+LSL21599:
+br i1 %t21598, label %LSJ21599, label %LSR21599
+LSR21599:
+%t21600 = call i64 @__mruntime_rt_device_resid__dv_req_max()
+%t21601 = icmp sgt i64 %t21597, %t21600
+br label %LSJ21599
+LSJ21599:
+%t21602 = phi i1 [ true, %LSL21599 ], [ %t21601, %LSR21599 ]
+br i1 %t21602, label %L7087, label %L7089
+L7087:
+%t21603 = call i64 @__mruntime_rt_device_resid__de_refused()
+%t21604 = call i64 @__mruntime_rt_device_resid__dev_err_reply(i64 %t21603, i64 1)
+ret i64 %t21604
+L7089:
+%t21605 = call i64 @xmalloc(i64 %t21597)
+%t21606 = call i1 @__mruntime_rt_device_resid__dp_bytes(i64 %p0, i64 %t21605, i64 0, i64 %t21597)
+%t21607 = xor i1 %t21606, true
+br i1 %t21607, label %L7090, label %L7092
+L7090:
+%t21608 = call i64 @c_free(i64 %t21605)
+%t21609 = mul nsw i64 %t21608, 0
+%t21610 = call i64 @__mruntime_rt_device_resid__de_refused()
+%t21611 = call i64 @__mruntime_rt_device_resid__dev_err_reply(i64 %t21610, i64 1)
+%t21612 = add nsw i64 %t21609, %t21611
+ret i64 %t21612
+L7092:
+%t21613 = call i64 @pq_parse(i64 %t21605, i64 %t21597)
+%t21614 = call i64 @__mruntime_rt_device_resid__dget(i64 %t21613, i64 28)
+%t21615 = icmp ne i64 %t21614, 0
+br i1 %t21615, label %L7093, label %L7094
+L7093:
+%t21616 = call i64 @__mruntime_rt_device_resid__de_refused()
+%t21617 = call i64 @__mruntime_rt_device_resid__dev_err_reply(i64 %t21616, i64 %t21614)
+br label %L7095
+L7094:
+%t21618 = call i64 @__mruntime_rt_device_resid__dp_run(i64 %t21613, i64 %t21605, i64 %t21597)
+br label %L7095
+L7095:
+%t21619 = phi i64 [ %t21617, %L7093 ], [ %t21618, %L7094 ]
+%t21620 = call i64 @pq_free(i64 %t21613)
+%t21621 = call i64 @c_free(i64 %t21605)
+ret i64 %t21619
+}
+define internal i1 @__mruntime_rt_device_resid__dp_bytes(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t21631, %tco.s0 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ]
+%t21622 = icmp sge i64 %p2, %p3
+br i1 %t21622, label %L7096, label %L7098
+L7096:
+ret i1 true
+L7098:
+%t21623 = call i64 @c_list_get(i64 %p0, i64 %p2)
+%t21624 = call i64 @c_unbox_i64(i64 %t21623)
+%t21625 = icmp slt i64 %t21624, 0
+br label %LSL21626
+LSL21626:
+br i1 %t21625, label %LSJ21626, label %LSR21626
+LSR21626:
+%t21627 = icmp sgt i64 %t21624, 255
+br label %LSJ21626
+LSJ21626:
+%t21628 = phi i1 [ true, %LSL21626 ], [ %t21627, %LSR21626 ]
+br i1 %t21628, label %L7099, label %L7101
+L7099:
+ret i1 false
+L7101:
+%t21629 = add i64 %p1, %p2
+%t21630 = call i64 @st8(i64 %t21629, i64 %t21624)
+%t21631 = add nsw i64 %p2, 1
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i64 @__mruntime_rt_device_resid__dp_run(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t21633 = call i64 @xmalloc(i64 16)
+%t21635 = ptrtoint ptr @.s21634 to i64
+%t21636 = call i64 @st64(i64 %t21633, i64 %t21635)
+%t21637 = add i64 %t21633, 8
+%t21638 = call i64 @st64(i64 %t21637, i64 0)
+%t21639 = add i64 %t21636, %t21638
+%t21640 = call i64 @xmalloc(i64 8)
+%t21641 = call i64 @hs_spawn(i64 %t21633, i64 %t21640)
+%t21642 = call i64 @ld64(i64 %t21640)
+%t21643 = call i64 @c_free(i64 %t21633)
+%t21644 = call i64 @c_free(i64 %t21640)
+%t21645 = add i64 %t21643, %t21644
+%t21646 = icmp slt i64 %t21641, 0
+br i1 %t21646, label %L7102, label %L7104
+L7102:
+%t21647 = call i64 @__mruntime_rt_device_resid__de_host()
+%t21648 = mul nsw i64 5, 256
+%t21649 = call i64 @__mruntime_rt_device_resid__dev_err_reply(i64 %t21647, i64 %t21648)
+ret i64 %t21649
+L7104:
+%t21650 = call i64 @xmalloc(i64 8)
+%t21651 = call i64 @st64(i64 %t21650, i64 %p2)
+%t21652 = call i1 @native_send(i64 %t21641, i64 %t21650, i64 0, i64 8)
+br i1 %t21652, label %L7105, label %L7106
+L7105:
+%t21653 = call i1 @native_send(i64 %t21641, i64 %p1, i64 0, i64 %p2)
+br label %L7107
+L7106:
+br label %L7107
+L7107:
+%t21654 = phi i1 [ %t21653, %L7105 ], [ false, %L7106 ]
+%t21655 = call i64 @c_free(i64 %t21650)
+%t21656 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 210, i64 %t21641, i64 1, i64 0, i64 0, i64 0, i64 0)
+%t21657 = call i64 @pq_reply_cap(i64 %p0)
+%t21658 = add i64 %t21657, 1
+%t21659 = call i64 @__mruntime_rt_device_resid__dv_map(i64 %t21658)
+%t21660 = icmp eq i64 %t21659, 0
+br i1 %t21660, label %L7108, label %L7109
+L7108:
+br label %L7110
+L7109:
+%t21661 = add i64 %t21657, 1
+%t21662 = call i64 @native_recv(i64 %t21641, i64 %t21659, i64 0, i64 %t21661)
+br label %L7110
+L7110:
+%t21663 = phi i64 [ 0, %L7108 ], [ %t21662, %L7109 ]
+%t21664 = call i64 @sys_close(i64 %t21641)
+%t21665 = icmp eq i64 %t21659, 0
+br i1 %t21665, label %L7111, label %L7112
+L7111:
+%t21666 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 129, i64 %t21642, i64 9, i64 0, i64 0, i64 0, i64 0)
+br label %L7113
+L7112:
+br label %L7113
+L7113:
+%t21667 = phi i64 [ %t21666, %L7111 ], [ 0, %L7112 ]
+%t21668 = call i64 @wait_pid(i64 %t21642, i64 0)
+%t21669 = call i64 @__mruntime_rt_device_resid__dp_judge(i64 %p0, i64 %t21668, i64 %t21659, i64 %t21663, i64 %t21657)
+%t21670 = icmp ne i64 %t21659, 0
+br i1 %t21670, label %L7114, label %L7115
+L7114:
+%t21671 = add i64 %t21657, 1
+%t21672p = inttoptr i64 %t21659 to ptr
+%t21672q = trunc i64 0 to i8
+call void @llvm.memset.p0.i64(ptr %t21672p, i8 %t21672q, i64 %t21671, i1 false)
+%t21672 = add i64 0, 0
+%t21673 = add i64 %t21657, 1
+%t21674 = call i64 @__mruntime_rt_device_resid__dv_unmap(i64 %t21659, i64 %t21673)
+%t21675 = add i64 %t21672, %t21674
+br label %L7116
+L7115:
+br label %L7116
+L7116:
+%t21676 = phi i64 [ %t21675, %L7114 ], [ 0, %L7115 ]
+ret i64 %t21669
+}
+define internal i64 @__mruntime_rt_device_resid__dp_judge(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t21677 = icmp slt i64 %p1, 0
+br i1 %t21677, label %L7117, label %L7119
+L7117:
+%t21678 = call i64 @__mruntime_rt_device_resid__de_host()
+%t21679 = mul nsw i64 5, 256
+%t21680 = call i64 @__mruntime_rt_device_resid__dev_err_reply(i64 %t21678, i64 %t21679)
+ret i64 %t21680
+L7119:
+%t21681 = and i64 %p1, 127
+%t21682 = icmp eq i64 %t21681, 11
+br label %LSL21683
+LSL21683:
+br i1 %t21682, label %LSJ21683, label %LSR21683
+LSR21683:
+%t21684 = icmp eq i64 %t21681, 7
+br label %LSJ21683
+LSJ21683:
+%t21685 = phi i1 [ true, %LSL21683 ], [ %t21684, %LSR21683 ]
+br i1 %t21685, label %L7120, label %L7122
+L7120:
+%t21686 = call i64 @__mruntime_rt_device_resid__dev_err_reply(i64 8, i64 0)
+ret i64 %t21686
+L7122:
+%t21687 = icmp ne i64 %t21681, 0
+br i1 %t21687, label %L7123, label %L7125
+L7123:
+%t21688 = call i64 @__mruntime_rt_device_resid__de_host()
+%t21689 = add nsw i64 256, %t21681
+%t21690 = call i64 @__mruntime_rt_device_resid__dev_err_reply(i64 %t21688, i64 %t21689)
+ret i64 %t21690
+L7125:
+%t21691 = ashr i64 %p1, 8
+%t21692 = and i64 %t21691, 255
+%t21693 = icmp eq i64 %t21692, 126
+br i1 %t21693, label %L7126, label %L7128
+L7126:
+%t21694 = call i64 @__mruntime_rt_device_resid__de_host()
+%t21695 = mul nsw i64 3, 256
+%t21696 = call i64 @__mruntime_rt_device_resid__dev_err_reply(i64 %t21694, i64 %t21695)
+ret i64 %t21696
+L7128:
+%t21697 = icmp ne i64 %t21692, 0
+br i1 %t21697, label %L7129, label %L7131
+L7129:
+%t21698 = call i64 @__mruntime_rt_device_resid__de_host()
+%t21699 = mul nsw i64 2, 256
+%t21700 = add nsw i64 %t21699, %t21692
+%t21701 = call i64 @__mruntime_rt_device_resid__dev_err_reply(i64 %t21698, i64 %t21700)
+ret i64 %t21701
+L7131:
+%t21702 = icmp eq i64 %p2, 0
+br label %LSL21703
+LSL21703:
+br i1 %t21702, label %LSJ21703, label %LSR21703
+LSR21703:
+%t21704 = icmp slt i64 %p3, 1
+br label %LSJ21703
+LSJ21703:
+%t21705 = phi i1 [ true, %LSL21703 ], [ %t21704, %LSR21703 ]
+br label %LSL21706
+LSL21706:
+br i1 %t21705, label %LSJ21706, label %LSR21706
+LSR21706:
+%t21707 = icmp sgt i64 %p3, %p4
+br label %LSJ21706
+LSJ21706:
+%t21708 = phi i1 [ true, %LSL21706 ], [ %t21707, %LSR21706 ]
+br i1 %t21708, label %L7132, label %L7134
+L7132:
+%t21709 = call i64 @__mruntime_rt_device_resid__de_host()
+%t21710 = mul nsw i64 4, 256
+%t21711 = call i64 @__mruntime_rt_device_resid__dev_err_reply(i64 %t21709, i64 %t21710)
+ret i64 %t21711
+L7134:
+%t21712 = call i64 @__mruntime_rt_device_resid__dp_reply(i64 %p0, i64 %p2, i64 %p3)
+%t21713 = icmp eq i64 %t21712, 0
+br i1 %t21713, label %L7135, label %L7136
+L7135:
+%t21714 = call i64 @__mruntime_rt_device_resid__de_host()
+%t21715 = mul nsw i64 4, 256
+%t21716 = call i64 @__mruntime_rt_device_resid__dev_err_reply(i64 %t21714, i64 %t21715)
+br label %L7137
+L7136:
+br label %L7137
+L7137:
+%t21717 = phi i64 [ %t21716, %L7135 ], [ %t21712, %L7136 ]
+ret i64 %t21717
+}
+define internal i64 @__mruntime_rt_device_resid__dp_reply(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t21718 = call i64 @ld8(i64 %p1)
+%t21719 = icmp eq i64 %t21718, 1
+br i1 %t21719, label %L7138, label %L7140
+L7138:
+%t21720 = icmp slt i64 %p2, 10
+br i1 %t21720, label %L7141, label %L7143
+L7141:
+ret i64 0
+L7143:
+%t21721 = add i64 %p1, 1
+%t21722 = call i64 @ld8(i64 %t21721)
+%t21723 = add i64 %p1, 2
+%t21724 = call i64 @le_get(i64 %t21723, i64 8)
+%t21725 = icmp slt i64 %t21722, 1
+br label %LSL21726
+LSL21726:
+br i1 %t21725, label %LSJ21726, label %LSR21726
+LSR21726:
+%t21727 = icmp sgt i64 %t21722, 10
+br label %LSJ21726
+LSJ21726:
+%t21728 = phi i1 [ true, %LSL21726 ], [ %t21727, %LSR21726 ]
+br i1 %t21728, label %L7144, label %L7146
+L7144:
+ret i64 0
+L7146:
+%t21729 = icmp eq i64 %t21722, 9
+br label %LSL21730
+LSL21730:
+br i1 %t21729, label %LSR21730, label %LSJ21730
+LSR21730:
+%t21731 = icmp slt i64 %t21724, 1
+br label %LSL21732
+LSL21732:
+br i1 %t21731, label %LSJ21732, label %LSR21732
+LSR21732:
+%t21733 = icmp sgt i64 %t21724, 256
+br label %LSJ21732
+LSJ21732:
+%t21734 = phi i1 [ true, %LSL21732 ], [ %t21733, %LSR21732 ]
+br label %LSL21735
+LSL21735:
+br i1 %t21734, label %LSJ21735, label %LSR21735
+LSR21735:
+%t21736 = add nsw i64 10, %t21724
+%t21737 = icmp ne i64 %p2, %t21736
+br label %LSJ21735
+LSJ21735:
+%t21738 = phi i1 [ true, %LSL21735 ], [ %t21737, %LSR21735 ]
+br label %LSL21739
+LSL21739:
+br i1 %t21738, label %LSJ21739, label %LSR21739
+LSR21739:
+%t21740 = add i64 %p1, 10
+%t21741 = call i1 @pq_text_ok(i64 %t21740, i64 0, i64 %t21724)
+%t21742 = xor i1 %t21741, true
+br label %LSJ21739
+LSJ21739:
+%t21743 = phi i1 [ true, %LSL21739 ], [ %t21742, %LSR21739 ]
+br label %LSJ21730
+LSJ21730:
+%t21744 = phi i1 [ false, %LSL21730 ], [ %t21743, %LSJ21739 ]
+br i1 %t21744, label %L7147, label %L7149
+L7147:
+ret i64 0
+L7149:
+%t21745 = icmp ne i64 %t21722, 9
+br label %LSL21746
+LSL21746:
+br i1 %t21745, label %LSR21746, label %LSJ21746
+LSR21746:
+%t21747 = icmp ne i64 %p2, 10
+br label %LSJ21746
+LSJ21746:
+%t21748 = phi i1 [ false, %LSL21746 ], [ %t21747, %LSR21746 ]
+br i1 %t21748, label %L7150, label %L7152
+L7150:
+ret i64 0
+L7152:
+%t21749 = call i64 @__mruntime_rt_device_resid__dp_list(i64 %p1, i64 %p2)
+ret i64 %t21749
+L7140:
+%t21750 = icmp ne i64 %t21718, 0
+br label %LSL21751
+LSL21751:
+br i1 %t21750, label %LSJ21751, label %LSR21751
+LSR21751:
+%t21752 = icmp slt i64 %p2, 5
+br label %LSJ21751
+LSJ21751:
+%t21753 = phi i1 [ true, %LSL21751 ], [ %t21752, %LSR21751 ]
+br label %LSL21754
+LSL21754:
+br i1 %t21753, label %LSJ21754, label %LSR21754
+LSR21754:
+%t21755 = add i64 %p1, 1
+%t21756 = call i64 @le_get(i64 %t21755, i64 4)
+%t21757 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 24)
+%t21758 = icmp ne i64 %t21756, %t21757
+br label %LSJ21754
+LSJ21754:
+%t21759 = phi i1 [ true, %LSL21754 ], [ %t21758, %LSR21754 ]
+br i1 %t21759, label %L7153, label %L7155
+L7153:
+ret i64 0
+L7155:
+%t21760 = call i64 @__mruntime_rt_device_resid__dv_sec_max()
+%t21761 = mul i64 %t21760, 8
+%t21762 = add i64 %t21761, 8
+%t21763 = call i64 @xmalloc(i64 %t21762)
+%t21764 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 25)
+%t21765 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 24)
+%t21766 = call i64 @__mruntime_rt_device_resid__dp_walk(i64 %t21764, i64 0, i64 %t21765, i64 %p1, i64 %p2, i64 5, i64 %t21763, i64 0)
+%t21767 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 29)
+%t21768 = call i64 @__mruntime_rt_device_resid__dp_sum(i64 %t21763, i64 0, i64 %t21767, i64 0)
+%t21769 = icmp slt i64 %t21766, 0
+br label %LSL21770
+LSL21770:
+br i1 %t21769, label %LSJ21770, label %LSR21770
+LSR21770:
+%t21771 = add i64 %t21766, %t21768
+%t21772 = icmp ne i64 %t21771, %p2
+br label %LSJ21770
+LSJ21770:
+%t21773 = phi i1 [ true, %LSL21770 ], [ %t21772, %LSR21770 ]
+br i1 %t21773, label %L7156, label %L7158
+L7156:
+%t21774 = call i64 @c_free(i64 %t21763)
+%t21775 = mul nsw i64 %t21774, 0
+ret i64 %t21775
+L7158:
+%t21776 = add i64 %p1, %t21766
+%t21777 = call i64 @__mruntime_rt_device_resid__dp_secrets(i64 %t21763, i64 0, i64 %t21767, i64 %t21776)
+%t21778 = call i64 @__mruntime_rt_device_resid__dsec()
+%t21779 = call i64 @st64(i64 %t21778, i64 %t21767)
+%t21780 = call i64 @c_free(i64 %t21763)
+%t21781 = call i64 @__mruntime_rt_device_resid__dp_list(i64 %p1, i64 %t21766)
+ret i64 %t21781
+}
+define internal i64 @__mruntime_rt_device_resid__dp_walk(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in, i64 %p7.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ], [ %p0, %tco.s1 ], [ %p0, %tco.s2 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %t21807, %tco.s0 ], [ %t21825, %tco.s1 ], [ %t21836, %tco.s2 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ], [ %p2, %tco.s1 ], [ %p2, %tco.s2 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ], [ %p3, %tco.s1 ], [ %p3, %tco.s2 ]
+%p4 = phi i64 [ %p4.in, %entry ], [ %p4, %tco.s0 ], [ %p4, %tco.s1 ], [ %p4, %tco.s2 ]
+%p5 = phi i64 [ %p5.in, %entry ], [ %t21808, %tco.s0 ], [ %t21826, %tco.s1 ], [ %t21838, %tco.s2 ]
+%p6 = phi i64 [ %p6.in, %entry ], [ %p6, %tco.s0 ], [ %p6, %tco.s1 ], [ %p6, %tco.s2 ]
+%p7 = phi i64 [ %p7.in, %entry ], [ %p7, %tco.s0 ], [ %t21827, %tco.s1 ], [ %p7, %tco.s2 ]
+%t21782 = icmp sge i64 %p1, %p2
+br i1 %t21782, label %L7159, label %L7161
+L7159:
+ret i64 %p5
+L7161:
+%t21783 = mul i64 %p1, 24
+%t21784 = add i64 %p0, %t21783
+%t21785 = add i64 %p5, 5
+%t21786 = icmp sgt i64 %t21785, %p4
+br i1 %t21786, label %L7162, label %L7164
+L7162:
+%t21787 = sub nsw i64 0, 1
+ret i64 %t21787
+L7164:
+%t21788 = add i64 %p3, %p5
+%t21789 = call i64 @ld8(i64 %t21788)
+%t21790 = call i64 @ld64(i64 %t21784)
+%t21791 = icmp eq i64 %t21790, 1
+br i1 %t21791, label %L7165, label %L7167
+L7165:
+%t21792 = icmp ne i64 %t21789, 0
+br label %LSL21793
+LSL21793:
+br i1 %t21792, label %LSJ21793, label %LSR21793
+LSR21793:
+%t21794 = add i64 %p5, 9
+%t21795 = icmp sgt i64 %t21794, %p4
+br label %LSJ21793
+LSJ21793:
+%t21796 = phi i1 [ true, %LSL21793 ], [ %t21795, %LSR21793 ]
+br label %LSL21797
+LSL21797:
+br i1 %t21796, label %LSJ21797, label %LSR21797
+LSR21797:
+%t21798 = add i64 %p3, %p5
+%t21799 = add i64 %t21798, 1
+%t21800 = call i64 @le_get(i64 %t21799, i64 8)
+%t21801 = add i64 %t21784, 8
+%t21802 = call i64 @ld64(i64 %t21801)
+%t21803 = call i1 @__mruntime_rt_device_resid__dv_fits_w(i64 %t21800, i64 %t21802)
+%t21804 = xor i1 %t21803, true
+br label %LSJ21797
+LSJ21797:
+%t21805 = phi i1 [ true, %LSL21797 ], [ %t21804, %LSR21797 ]
+br i1 %t21805, label %L7168, label %L7170
+L7168:
+%t21806 = sub nsw i64 0, 1
+ret i64 %t21806
+L7170:
+%t21807 = add nsw i64 %p1, 1
+%t21808 = add i64 %p5, 9
+br label %tco.s0
+tco.s0:
+br label %tco.head
+L7167:
+%t21810 = add i64 %p3, %p5
+%t21811 = add i64 %t21810, 1
+%t21812 = call i64 @le_get(i64 %t21811, i64 4)
+%t21813 = add i64 %t21784, 8
+%t21814 = call i64 @ld64(i64 %t21813)
+%t21815 = icmp sgt i64 %t21812, %t21814
+br i1 %t21815, label %L7171, label %L7173
+L7171:
+%t21816 = sub nsw i64 0, 1
+ret i64 %t21816
+L7173:
+%t21817 = add i64 %t21784, 16
+%t21818 = call i64 @ld64(i64 %t21817)
+%t21819 = icmp eq i64 %t21818, 1
+br i1 %t21819, label %L7174, label %L7176
+L7174:
+%t21820 = icmp ne i64 %t21789, 2
+br i1 %t21820, label %L7177, label %L7179
+L7177:
+%t21821 = sub nsw i64 0, 1
+ret i64 %t21821
+L7179:
+%t21822 = mul i64 %p7, 8
+%t21823 = add i64 %p6, %t21822
+%t21824 = call i64 @st64(i64 %t21823, i64 %t21812)
+%t21825 = add nsw i64 %p1, 1
+%t21826 = add i64 %p5, 5
+%t21827 = add i64 %p7, 1
+br label %tco.s1
+tco.s1:
+br label %tco.head
+L7176:
+%t21829 = icmp ne i64 %t21789, 1
+br label %LSL21830
+LSL21830:
+br i1 %t21829, label %LSJ21830, label %LSR21830
+LSR21830:
+%t21831 = add i64 %p5, 5
+%t21832 = add i64 %t21831, %t21812
+%t21833 = icmp sgt i64 %t21832, %p4
+br label %LSJ21830
+LSJ21830:
+%t21834 = phi i1 [ true, %LSL21830 ], [ %t21833, %LSR21830 ]
+br i1 %t21834, label %L7180, label %L7182
+L7180:
+%t21835 = sub nsw i64 0, 1
+ret i64 %t21835
+L7182:
+%t21836 = add nsw i64 %p1, 1
+%t21837 = add i64 %p5, 5
+%t21838 = add i64 %t21837, %t21812
+br label %tco.s2
+tco.s2:
+br label %tco.head
+}
+define internal i64 @__mruntime_rt_device_resid__dp_sum(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %t21841, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %t21845, %tco.s0 ]
+%t21840 = icmp sge i64 %p1, %p2
+br i1 %t21840, label %L7183, label %L7185
+L7183:
+ret i64 %p3
+L7185:
+%t21841 = add nsw i64 %p1, 1
+%t21842 = mul i64 %p1, 8
+%t21843 = add i64 %p0, %t21842
+%t21844 = call i64 @ld64(i64 %t21843)
+%t21845 = add i64 %p3, %t21844
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i64 @__mruntime_rt_device_resid__dsec() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t21847p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.dev_secret)
+%t21847 = ptrtoint ptr %t21847p to i64
+ret i64 %t21847
+}
+define internal i64 @__mruntime_rt_device_resid__dsec_clear() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t21848 = call i64 @__mruntime_rt_device_resid__dsec()
+%t21849p = inttoptr i64 %t21848 to ptr
+%t21849q = trunc i64 0 to i8
+call void @llvm.memset.p0.i64(ptr %t21849p, i8 %t21849q, i64 528, i1 false)
+%t21849 = add i64 0, 0
+ret i64 %t21849
+}
+define internal i64 @__mruntime_rt_device_resid__dp_secrets(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %t21860, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %t21861, %tco.s0 ]
+%t21850 = icmp sge i64 %p1, %p2
+br i1 %t21850, label %L7186, label %L7188
+L7186:
+ret i64 0
+L7188:
+%t21851 = mul i64 %p1, 8
+%t21852 = add i64 %p0, %t21851
+%t21853 = call i64 @ld64(i64 %t21852)
+%t21854 = call i64 @__mruntime_rt_device_resid__dsec()
+%t21855 = add i64 %t21854, 8
+%t21856 = mul i64 %p1, 8
+%t21857 = add i64 %t21855, %t21856
+%t21858 = call i64 @__mruntime_rt_device_resid__dp_secret_list(i64 %p3, i64 %t21853)
+%t21859 = call i64 @st64(i64 %t21857, i64 %t21858)
+%t21860 = add nsw i64 %p1, 1
+%t21861 = add i64 %p3, %t21853
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i64 @__mruntime_rt_device_resid__dp_secret_list(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t21863 = mul i64 %p1, 8
+%t21864 = add i64 %t21863, 8
+%t21865 = call i64 @xmalloc(i64 %t21864)
+%t21866 = call i64 @__mruntime_rt_device_resid__dp_box(i64 %p0, i64 %t21865, i64 0, i64 %p1)
+%t21868 = ptrtoint ptr @.s21867 to i64
+%t21869 = call i64 @c_list_new(i64 %p1, i64 %t21865, i64 %t21868)
+%t21870 = mul i64 %p1, 8
+%t21871 = add i64 %t21870, 8
+%t21872p = inttoptr i64 %t21865 to ptr
+%t21872q = trunc i64 0 to i8
+call void @llvm.memset.p0.i64(ptr %t21872p, i8 %t21872q, i64 %t21871, i1 false)
+%t21872 = add i64 0, 0
+%t21873 = call i64 @c_free(i64 %t21865)
+%t21874 = mul nsw i64 %t21873, 0
+%t21875 = add nsw i64 %t21874, %t21869
+ret i64 %t21875
+}
+define internal i64 @rt_device_secret(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t21876 = call i64 @__mruntime_rt_device_resid__dsec()
+%t21877 = icmp sge i64 %p0, 0
+br label %LSL21878
+LSL21878:
+br i1 %t21877, label %LSR21878, label %LSJ21878
+LSR21878:
+%t21879 = call i64 @ld64(i64 %t21876)
+%t21880 = icmp slt i64 %p0, %t21879
+br label %LSJ21878
+LSJ21878:
+%t21881 = phi i1 [ false, %LSL21878 ], [ %t21880, %LSR21878 ]
+br label %LSL21882
+LSL21882:
+br i1 %t21881, label %LSR21882, label %LSJ21882
+LSR21882:
+%t21883 = call i64 @__mruntime_rt_device_resid__dv_sec_max()
+%t21884 = icmp slt i64 %p0, %t21883
+br label %LSJ21882
+LSJ21882:
+%t21885 = phi i1 [ false, %LSL21882 ], [ %t21884, %LSR21882 ]
+br i1 %t21885, label %L7189, label %L7190
+L7189:
+%t21886 = add i64 %t21876, 8
+%t21887 = mul i64 %p0, 8
+%t21888 = add i64 %t21886, %t21887
+%t21889 = call i64 @ld64(i64 %t21888)
+br label %L7191
+L7190:
+br label %L7191
+L7191:
+%t21890 = phi i64 [ %t21889, %L7189 ], [ 0, %L7190 ]
+%t21891 = icmp ne i64 %t21890, 0
+br i1 %t21891, label %L7192, label %L7193
+L7192:
+%t21892 = add i64 %t21876, 8
+%t21893 = mul i64 %p0, 8
+%t21894 = add i64 %t21892, %t21893
+%t21895 = call i64 @st64(i64 %t21894, i64 0)
+br label %L7194
+L7193:
+br label %L7194
+L7194:
+%t21896 = phi i64 [ %t21895, %L7192 ], [ 0, %L7193 ]
+%t21897 = icmp ne i64 %t21890, 0
+br i1 %t21897, label %L7195, label %L7196
+L7195:
+br label %L7197
+L7196:
+%t21899 = ptrtoint ptr @.s21898 to i64
+%t21900 = call i64 @c_list_new(i64 0, i64 0, i64 %t21899)
+br label %L7197
+L7197:
+%t21901 = phi i64 [ %t21890, %L7195 ], [ %t21900, %L7196 ]
+ret i64 %t21901
+}
+define ptr @resid_device_secret(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%r = call i64 @rt_device_secret(i64 %a0)
+%rv = inttoptr i64 %r to ptr
+ret ptr %rv
+}
+define internal i64 @rt_device_host() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t21902 = call i64 @argv_w()
+%t21903 = call i64 @ld64(i64 %t21902)
+%t21904 = call i64 @argv_w()
+%t21905 = add i64 %t21904, 8
+%t21906 = call i64 @ld64(i64 %t21905)
+%t21907 = icmp ne i64 %t21903, 1
+br label %LSL21908
+LSL21908:
+br i1 %t21907, label %LSJ21908, label %LSR21908
+LSR21908:
+%t21909 = icmp eq i64 %t21906, 0
+br label %LSJ21908
+LSJ21908:
+%t21910 = phi i1 [ true, %LSL21908 ], [ %t21909, %LSR21908 ]
+br i1 %t21910, label %L7198, label %L7200
+L7198:
+ret i64 0
+L7200:
+%t21911 = add i64 %t21906, 16
+%t21912 = call i64 @__mruntime_rt_device_resid__dh_main(i64 %t21906, i64 %t21911, i64 0, i64 0)
+ret i64 %t21912
+}
+define void @resid_device_host() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%r = call i64 @rt_device_host()
+ret void
+}
+define internal i64 @rt_device_host_test(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t21913 = icmp ne i64 %p0, 1
+br label %LSL21914
+LSL21914:
+br i1 %t21913, label %LSJ21914, label %LSR21914
+LSR21914:
+%t21915 = icmp eq i64 %p1, 0
+br label %LSJ21914
+LSJ21914:
+%t21916 = phi i1 [ true, %LSL21914 ], [ %t21915, %LSR21914 ]
+br i1 %t21916, label %L7201, label %L7203
+L7201:
+ret i64 0
+L7203:
+%t21917 = call i64 @__mruntime_rt_device_resid__dh_main(i64 %p1, i64 %p2, i64 %p3, i64 %p4)
+ret i64 %t21917
+}
+define void @resid_device_host_test(i64 %a0, ptr %a1, ptr %a2, i64 %a3, ptr %a4) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%x1i = ptrtoint ptr %a1 to i64
+%x2i = ptrtoint ptr %a2 to i64
+%x4i = ptrtoint ptr %a4 to i64
+%r = call i64 @rt_device_host_test(i64 %a0, i64 %x1i, i64 %x2i, i64 %a3, i64 %x4i)
+ret void
+}
+define internal i64 @__mruntime_rt_device_resid__dh_main(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t21918 = call i64 @ld64(i64 %p0)
+%t21920 = ptrtoint ptr @.s21919 to i64
+%t21921 = call i64 @c_strcmp(i64 %t21918, i64 %t21920)
+%t21922 = icmp ne i64 %t21921, 0
+br i1 %t21922, label %L7204, label %L7206
+L7204:
+ret i64 0
+L7206:
+%t21923 = icmp eq i64 %p1, 0
+br label %LSL21924
+LSL21924:
+br i1 %t21923, label %LSJ21924, label %LSR21924
+LSR21924:
+%t21925 = call i64 @ld64(i64 %p1)
+%t21926 = icmp ne i64 %t21925, 0
+br label %LSJ21924
+LSJ21924:
+%t21927 = phi i1 [ true, %LSL21924 ], [ %t21926, %LSR21924 ]
+br i1 %t21927, label %L7207, label %L7209
+L7207:
+ret i64 0
+L7209:
+%t21928 = call i1 @native_fd3_socket()
+%t21929 = xor i1 %t21928, true
+br i1 %t21929, label %L7210, label %L7212
+L7210:
+ret i64 0
+L7212:
+%t21930 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 436, i64 0, i64 2, i64 0, i64 0, i64 0, i64 0)
+%t21931 = icmp slt i64 %t21930, 0
+br i1 %t21931, label %L7213, label %L7215
+L7213:
+%t21932 = call i64 @native_child_exit(i64 126)
+ret i64 %t21932
+L7215:
+%t21933 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 436, i64 4, i64 4294967295, i64 0, i64 0, i64 0, i64 0)
+%t21934 = icmp slt i64 %t21933, 0
+br i1 %t21934, label %L7216, label %L7218
+L7216:
+%t21935 = call i64 @native_child_exit(i64 126)
+ret i64 %t21935
+L7218:
+%t21936 = call i1 @__mruntime_rt_device_resid__dh_same_ids()
+%t21937 = xor i1 %t21936, true
+br i1 %t21937, label %L7219, label %L7221
+L7219:
+%t21938 = call i64 @native_child_exit(i64 125)
+ret i64 %t21938
+L7221:
+%t21939 = call i1 @hs_quiet()
+%t21940 = xor i1 %t21939, true
+br i1 %t21940, label %L7222, label %L7224
+L7222:
+%t21941 = call i64 @native_child_exit(i64 126)
+ret i64 %t21941
+L7224:
+%t21942 = call i64 @__mruntime_rt_device_resid__dh_ctx(i64 %p2, i64 %p3)
+%t21943 = icmp eq i64 %t21942, 0
+br i1 %t21943, label %L7225, label %L7227
+L7225:
+%t21944 = call i64 @native_child_exit(i64 125)
+ret i64 %t21944
+L7227:
+%t21945 = call i64 @xmalloc(i64 8)
+%t21946 = call i64 @native_recv(i64 3, i64 %t21945, i64 0, i64 8)
+%t21947 = icmp ne i64 %t21946, 8
+br i1 %t21947, label %L7228, label %L7230
+L7228:
+%t21948 = call i64 @native_child_exit(i64 125)
+ret i64 %t21948
+L7230:
+%t21949 = call i64 @ld64(i64 %t21945)
+%t21950 = icmp slt i64 %t21949, 6
+br label %LSL21951
+LSL21951:
+br i1 %t21950, label %LSJ21951, label %LSR21951
+LSR21951:
+%t21952 = call i64 @__mruntime_rt_device_resid__dv_req_max()
+%t21953 = icmp sgt i64 %t21949, %t21952
+br label %LSJ21951
+LSJ21951:
+%t21954 = phi i1 [ true, %LSL21951 ], [ %t21953, %LSR21951 ]
+br i1 %t21954, label %L7231, label %L7233
+L7231:
+%t21955 = call i64 @native_child_exit(i64 125)
+ret i64 %t21955
+L7233:
+%t21956 = call i64 @__mruntime_rt_device_resid__dv_map(i64 %t21949)
+%t21957 = icmp eq i64 %t21956, 0
+br label %LSL21958
+LSL21958:
+br i1 %t21957, label %LSJ21958, label %LSR21958
+LSR21958:
+%t21959 = call i64 @native_recv(i64 3, i64 %t21956, i64 0, i64 %t21949)
+%t21960 = icmp ne i64 %t21959, %t21949
+br label %LSJ21958
+LSJ21958:
+%t21961 = phi i1 [ true, %LSL21958 ], [ %t21960, %LSR21958 ]
+br i1 %t21961, label %L7234, label %L7236
+L7234:
+%t21962 = call i64 @native_child_exit(i64 125)
+ret i64 %t21962
+L7236:
+%t21963 = call i64 @pq_parse(i64 %t21956, i64 %t21949)
+%t21964 = call i64 @__mruntime_rt_device_resid__dget(i64 %t21963, i64 28)
+%t21965 = icmp ne i64 %t21964, 0
+br i1 %t21965, label %L7237, label %L7239
+L7237:
+%t21966 = call i64 @__mruntime_rt_device_resid__de_refused()
+%t21967 = call i64 @__mruntime_rt_device_resid__dget(i64 %t21963, i64 28)
+%t21968 = call i64 @__mruntime_rt_device_resid__dh_fail(i64 %t21942, i64 %t21966, i64 %t21967)
+ret i64 %t21968
+L7239:
+%t21969 = icmp eq i64 %p2, 5
+br i1 %t21969, label %L7240, label %L7242
+L7240:
+%t21970 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 172, i64 0, i64 0, i64 0, i64 0, i64 0, i64 0)
+%t21971 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 129, i64 %t21970, i64 9, i64 0, i64 0, i64 0, i64 0)
+br label %L7242
+L7242:
+%t21972 = icmp eq i64 %p2, 14
+br i1 %t21972, label %L7243, label %L7245
+L7243:
+%t21973 = call i64 @native_child_exit(i64 42)
+ret i64 %t21973
+L7245:
+%t21974 = call i64 @__mruntime_rt_device_resid__dget(i64 %t21963, i64 0)
+%t21975 = icmp eq i64 %t21974, 2
+br i1 %t21975, label %L7246, label %L7248
+L7246:
+%t21976 = call i64 @__mruntime_rt_device_resid__dh_transact(i64 %t21942, i64 %t21963)
+ret i64 %t21976
+L7248:
+%t21977 = icmp eq i64 %t21974, 3
+br i1 %t21977, label %L7249, label %L7251
+L7249:
+%t21978 = call i64 @__mruntime_rt_device_resid__dh_attr(i64 %t21942, i64 %t21963)
+ret i64 %t21978
+L7251:
+%t21979 = icmp eq i64 %t21974, 4
+br i1 %t21979, label %L7252, label %L7254
+L7252:
+%t21980 = call i64 @__mruntime_rt_device_resid__dh_report(i64 %t21942, i64 %t21963)
+ret i64 %t21980
+L7254:
+%t21981 = call i64 @__mruntime_rt_device_resid__dh_ioctl(i64 %t21942, i64 %t21963)
+ret i64 %t21981
+}
+define internal i1 @__mruntime_rt_device_resid__dh_same_ids() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t21982 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 174, i64 0, i64 0, i64 0, i64 0, i64 0, i64 0)
+%t21983 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 175, i64 0, i64 0, i64 0, i64 0, i64 0, i64 0)
+%t21984 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 176, i64 0, i64 0, i64 0, i64 0, i64 0, i64 0)
+%t21985 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 177, i64 0, i64 0, i64 0, i64 0, i64 0, i64 0)
+%t21986 = icmp eq i64 %t21982, %t21983
+br label %LSL21987
+LSL21987:
+br i1 %t21986, label %LSR21987, label %LSJ21987
+LSR21987:
+%t21988 = icmp eq i64 %t21984, %t21985
+br label %LSJ21987
+LSJ21987:
+%t21989 = phi i1 [ false, %LSL21987 ], [ %t21988, %LSR21987 ]
+ret i1 %t21989
+}
+define internal i64 @__mruntime_rt_device_resid__dh_ctx(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t21990 = call i64 @xmalloc(i64 256)
+%t21991p = inttoptr i64 %t21990 to ptr
+%t21991q = trunc i64 0 to i8
+call void @llvm.memset.p0.i64(ptr %t21991p, i8 %t21991q, i64 256, i1 false)
+%t21991 = add i64 0, 0
+%t21992 = call i64 @xmalloc(i64 16)
+%t21993 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 278, i64 %t21992, i64 8, i64 0, i64 0, i64 0, i64 0)
+%t21994 = icmp ne i64 %t21993, 8
+br i1 %t21994, label %L7255, label %L7257
+L7255:
+ret i64 0
+L7257:
+%t21995 = call i64 @__mruntime_rt_device_resid__dset(i64 %t21990, i64 0, i64 %p0)
+%t21996 = call i64 @__mruntime_rt_device_resid__dset(i64 %t21990, i64 1, i64 %p1)
+%t21997 = add i64 %t21995, %t21996
+%t21998 = call i64 @page_size()
+%t21999 = call i64 @__mruntime_rt_device_resid__dset(i64 %t21990, i64 2, i64 %t21998)
+%t22000 = add i64 %t21997, %t21999
+%t22001 = call i64 @__mruntime_rt_device_resid__dset(i64 %t21990, i64 3, i64 %t21992)
+%t22002 = add i64 %t22000, %t22001
+%t22003 = sub nsw i64 0, 1
+%t22004 = call i64 @__mruntime_rt_device_resid__dset(i64 %t21990, i64 7, i64 %t22003)
+%t22005 = call i64 @xmalloc(i64 272)
+%t22006 = call i64 @__mruntime_rt_device_resid__dset(i64 %t21990, i64 14, i64 %t22005)
+%t22007 = add i64 %t22004, %t22006
+%t22008 = mul nsw i64 64, 32
+%t22009 = call i64 @xmalloc(i64 %t22008)
+%t22010 = call i64 @__mruntime_rt_device_resid__dset(i64 %t21990, i64 15, i64 %t22009)
+%t22011 = call i64 @__mruntime_rt_device_resid__dset(i64 %t21990, i64 16, i64 0)
+%t22012 = add i64 %t22010, %t22011
+ret i64 %t21990
+}
+define internal i1 @__mruntime_rt_device_resid__dh_regions(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t22013 = mul i64 %p1, 32
+%t22014 = add i64 %t22013, 32
+%t22015 = call i64 @xmalloc(i64 %t22014)
+%t22016 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 4, i64 %t22015)
+%t22017 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 5, i64 0)
+%t22018 = add i64 %t22016, %t22017
+%t22019 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 6, i64 %p1)
+%t22020 = add i64 %t22018, %t22019
+%t22021 = icmp ne i64 %t22015, 0
+ret i1 %t22021
+}
+define internal i64 @__mruntime_rt_device_resid__dh_region(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t22022 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 2)
+%t22023 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 5)
+%t22024 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 6)
+%t22025 = icmp sge i64 %t22023, %t22024
+br i1 %t22025, label %L7258, label %L7260
+L7258:
+ret i64 0
+L7260:
+%t22026 = icmp sgt i64 %p1, 1
+br i1 %t22026, label %L7261, label %L7262
+L7261:
+br label %L7263
+L7262:
+br label %L7263
+L7263:
+%t22027 = phi i64 [ %p1, %L7261 ], [ 1, %L7262 ]
+%t22028 = add i64 %t22027, %t22022
+%t22029 = sub i64 %t22028, 1
+%t22030 = icmp eq i64 %t22022, 0
+%t22031 = zext i1 %t22030 to i8
+call void @resid_div_check(i8 %t22031)
+%t22032 = icmp eq i64 %t22022, -1
+%t22033 = icmp eq i64 %t22029, -9223372036854775808
+%t22034 = and i1 %t22032, %t22033
+%t22037 = zext i1 %t22034 to i8
+call void @resid_overflow_check(i8 %t22037)
+%t22035 = add i64 %t22022, 0
+%t22036 = sdiv i64 %t22029, %t22035
+%t22038 = mul i64 %t22036, %t22022
+%t22039 = add i64 %t22038, %t22022
+%t22040 = call i64 @__mruntime_rt_device_resid__dv_map(i64 %t22039)
+%t22041 = icmp eq i64 %t22040, 0
+br i1 %t22041, label %L7264, label %L7266
+L7264:
+ret i64 0
+L7266:
+%t22042 = add i64 %t22040, %t22038
+%t22043 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 226, i64 %t22042, i64 %t22022, i64 0, i64 0, i64 0, i64 0)
+%t22044 = icmp ne i64 %t22043, 0
+br i1 %t22044, label %L7267, label %L7269
+L7267:
+ret i64 0
+L7269:
+%t22045 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 3)
+%t22046 = call i64 @__mruntime_rt_device_resid__dh_canary_fill(i64 %t22045, i64 %t22040, i64 %p1, i64 %t22038)
+%t22047 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 4)
+%t22048 = mul i64 %t22023, 32
+%t22049 = add i64 %t22047, %t22048
+%t22050 = call i64 @st64(i64 %t22049, i64 %t22040)
+%t22051 = add i64 %t22049, 8
+%t22052 = call i64 @st64(i64 %t22051, i64 %p1)
+%t22053 = add i64 %t22050, %t22052
+%t22054 = add i64 %t22049, 16
+%t22055 = call i64 @st64(i64 %t22054, i64 %t22038)
+%t22056 = add i64 %t22053, %t22055
+%t22057 = add i64 %t22049, 24
+%t22058 = call i64 @st64(i64 %t22057, i64 %p2)
+%t22059 = add i64 %t22056, %t22058
+%t22060 = add nsw i64 %t22023, 1
+%t22061 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 5, i64 %t22060)
+ret i64 %t22040
+}
+define internal i64 @__mruntime_rt_device_resid__dh_canary_fill(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t22068, %tco.s0 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ]
+%t22062 = icmp sge i64 %p2, %p3
+br i1 %t22062, label %L7270, label %L7272
+L7270:
+ret i64 0
+L7272:
+%t22063 = add i64 %p1, %p2
+%t22064 = and i64 %p2, 7
+%t22065 = add i64 %p0, %t22064
+%t22066 = call i64 @ld8(i64 %t22065)
+%t22067 = call i64 @st8(i64 %t22063, i64 %t22066)
+%t22068 = add nsw i64 %p2, 1
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i1 @__mruntime_rt_device_resid__dh_canary_ok(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t22070 = icmp sge i64 %p2, %p3
+br i1 %t22070, label %L7273, label %L7275
+L7273:
+ret i1 true
+L7275:
+%t22071 = add i64 %p1, %p2
+%t22072 = call i64 @ld8(i64 %t22071)
+%t22073 = and i64 %p2, 7
+%t22074 = add i64 %p0, %t22073
+%t22075 = call i64 @ld8(i64 %t22074)
+%t22076 = icmp eq i64 %t22072, %t22075
+br label %LSL22077
+LSL22077:
+br i1 %t22076, label %LSR22077, label %LSJ22077
+LSR22077:
+%t22078 = add nsw i64 %p2, 1
+%t22079 = call i1 @__mruntime_rt_device_resid__dh_canary_ok(i64 %p0, i64 %p1, i64 %t22078, i64 %p3)
+br label %LSJ22077
+LSJ22077:
+%t22080 = phi i1 [ false, %LSL22077 ], [ %t22079, %LSR22077 ]
+ret i1 %t22080
+}
+define internal i1 @__mruntime_rt_device_resid__dh_canaries(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t22081 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 5)
+%t22082 = icmp sge i64 %p1, %t22081
+br i1 %t22082, label %L7276, label %L7278
+L7276:
+ret i1 true
+L7278:
+%t22083 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 4)
+%t22084 = mul i64 %p1, 32
+%t22085 = add i64 %t22083, %t22084
+%t22086 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 3)
+%t22087 = call i64 @ld64(i64 %t22085)
+%t22088 = add i64 %t22085, 8
+%t22089 = call i64 @ld64(i64 %t22088)
+%t22090 = add i64 %t22085, 16
+%t22091 = call i64 @ld64(i64 %t22090)
+%t22092 = call i1 @__mruntime_rt_device_resid__dh_canary_ok(i64 %t22086, i64 %t22087, i64 %t22089, i64 %t22091)
+br label %LSL22093
+LSL22093:
+br i1 %t22092, label %LSR22093, label %LSJ22093
+LSR22093:
+%t22094 = add nsw i64 %p1, 1
+%t22095 = call i1 @__mruntime_rt_device_resid__dh_canaries(i64 %p0, i64 %t22094)
+br label %LSJ22093
+LSJ22093:
+%t22096 = phi i1 [ false, %LSL22093 ], [ %t22095, %LSR22093 ]
+ret i1 %t22096
+}
+define internal i64 @__mruntime_rt_device_resid__dh_after_op(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t22097 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 0)
+%t22098 = icmp ne i64 %t22097, 2
+br label %LSL22099
+LSL22099:
+br i1 %t22098, label %LSR22099, label %LSJ22099
+LSR22099:
+%t22100 = icmp ne i64 %t22097, 4
+br label %LSJ22099
+LSJ22099:
+%t22101 = phi i1 [ false, %LSL22099 ], [ %t22100, %LSR22099 ]
+br i1 %t22101, label %L7279, label %L7281
+L7279:
+ret i64 0
+L7281:
+%t22102 = call i64 @__mruntime_rt_device_resid__dh_slack_region(i64 %p0, i64 0)
+%t22103 = icmp eq i64 %t22102, 0
+br i1 %t22103, label %L7282, label %L7284
+L7282:
+ret i64 0
+L7284:
+%t22104 = call i64 @ld64(i64 %t22102)
+%t22105 = add i64 %t22102, 8
+%t22106 = call i64 @ld64(i64 %t22105)
+%t22107 = add i64 %t22104, %t22106
+%t22108 = icmp eq i64 %t22097, 2
+br i1 %t22108, label %L7285, label %L7287
+L7285:
+%t22109 = call i64 @ld8(i64 %t22107)
+%t22110 = xor i64 %t22109, 255
+%t22111 = call i64 @st8(i64 %t22107, i64 %t22110)
+ret i64 %t22111
+L7287:
+%t22112 = call i64 @ld64(i64 %t22102)
+%t22113 = add i64 %t22102, 16
+%t22114 = call i64 @ld64(i64 %t22113)
+%t22115 = add i64 %t22112, %t22114
+%t22116 = call i64 @st8(i64 %t22115, i64 1)
+ret i64 %t22116
+}
+define internal i64 @__mruntime_rt_device_resid__dh_slack_region(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %t22127, %tco.s0 ]
+%t22117 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 5)
+%t22118 = icmp sge i64 %p1, %t22117
+br i1 %t22118, label %L7288, label %L7290
+L7288:
+ret i64 0
+L7290:
+%t22119 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 4)
+%t22120 = mul i64 %p1, 32
+%t22121 = add i64 %t22119, %t22120
+%t22122 = add i64 %t22121, 16
+%t22123 = call i64 @ld64(i64 %t22122)
+%t22124 = add i64 %t22121, 8
+%t22125 = call i64 @ld64(i64 %t22124)
+%t22126 = icmp sgt i64 %t22123, %t22125
+br i1 %t22126, label %L7291, label %L7293
+L7291:
+ret i64 %t22121
+L7293:
+%t22127 = add nsw i64 %p1, 1
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i64 @__mruntime_rt_device_resid__dh_wipe(i64 %p0.in, i64 %p1.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %t22148, %tco.s0 ]
+%t22129 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 5)
+%t22130 = icmp sge i64 %p1, %t22129
+br i1 %t22130, label %L7294, label %L7296
+L7294:
+%t22131 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 11)
+%t22132 = icmp ne i64 %t22131, 0
+br i1 %t22132, label %L7297, label %L7298
+L7297:
+%t22133 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 11)
+%t22134 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 12)
+%t22135p = inttoptr i64 %t22133 to ptr
+%t22135q = trunc i64 0 to i8
+call void @llvm.memset.p0.i64(ptr %t22135p, i8 %t22135q, i64 %t22134, i1 false)
+%t22135 = add i64 0, 0
+br label %L7299
+L7298:
+br label %L7299
+L7299:
+%t22136 = phi i64 [ %t22135, %L7297 ], [ 0, %L7298 ]
+ret i64 %t22136
+L7296:
+%t22137 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 4)
+%t22138 = mul i64 %p1, 32
+%t22139 = add i64 %t22137, %t22138
+%t22140 = add i64 %t22139, 24
+%t22141 = call i64 @ld64(i64 %t22140)
+%t22142 = icmp ne i64 %t22141, 0
+br i1 %t22142, label %L7300, label %L7301
+L7300:
+%t22143 = call i64 @ld64(i64 %t22139)
+%t22144 = add i64 %t22139, 16
+%t22145 = call i64 @ld64(i64 %t22144)
+%t22146p = inttoptr i64 %t22143 to ptr
+%t22146q = trunc i64 0 to i8
+call void @llvm.memset.p0.i64(ptr %t22146p, i8 %t22146q, i64 %t22145, i1 false)
+%t22146 = add i64 0, 0
+br label %L7302
+L7301:
+br label %L7302
+L7302:
+%t22147 = phi i64 [ %t22146, %L7300 ], [ 0, %L7301 ]
+%t22148 = add nsw i64 %p1, 1
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i1 @__mruntime_rt_device_resid__dh_wiped(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t22150 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 5)
+%t22151 = icmp sge i64 %p1, %t22150
+br i1 %t22151, label %L7303, label %L7305
+L7303:
+%t22152 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 11)
+%t22153 = icmp eq i64 %t22152, 0
+br label %LSL22154
+LSL22154:
+br i1 %t22153, label %LSJ22154, label %LSR22154
+LSR22154:
+%t22155 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 11)
+%t22156 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 12)
+%t22157 = call i1 @__mruntime_rt_device_resid__dh_zero(i64 %t22155, i64 0, i64 %t22156)
+br label %LSJ22154
+LSJ22154:
+%t22158 = phi i1 [ true, %LSL22154 ], [ %t22157, %LSR22154 ]
+ret i1 %t22158
+L7305:
+%t22159 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 4)
+%t22160 = mul i64 %p1, 32
+%t22161 = add i64 %t22159, %t22160
+%t22162 = add i64 %t22161, 24
+%t22163 = call i64 @ld64(i64 %t22162)
+%t22164 = icmp eq i64 %t22163, 0
+br label %LSL22165
+LSL22165:
+br i1 %t22164, label %LSJ22165, label %LSR22165
+LSR22165:
+%t22166 = call i64 @ld64(i64 %t22161)
+%t22167 = add i64 %t22161, 16
+%t22168 = call i64 @ld64(i64 %t22167)
+%t22169 = call i1 @__mruntime_rt_device_resid__dh_zero(i64 %t22166, i64 0, i64 %t22168)
+br label %LSJ22165
+LSJ22165:
+%t22170 = phi i1 [ true, %LSL22165 ], [ %t22169, %LSR22165 ]
+br label %LSL22171
+LSL22171:
+br i1 %t22170, label %LSR22171, label %LSJ22171
+LSR22171:
+%t22172 = add nsw i64 %p1, 1
+%t22173 = call i1 @__mruntime_rt_device_resid__dh_wiped(i64 %p0, i64 %t22172)
+br label %LSJ22171
+LSJ22171:
+%t22174 = phi i1 [ false, %LSL22171 ], [ %t22173, %LSR22171 ]
+ret i1 %t22174
+}
+define internal i1 @__mruntime_rt_device_resid__dh_zero(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t22175 = icmp sge i64 %p1, %p2
+br i1 %t22175, label %L7306, label %L7308
+L7306:
+ret i1 true
+L7308:
+%t22176 = add i64 %p0, %p1
+%t22177 = call i64 @ld8(i64 %t22176)
+%t22178 = icmp eq i64 %t22177, 0
+br label %LSL22179
+LSL22179:
+br i1 %t22178, label %LSR22179, label %LSJ22179
+LSR22179:
+%t22180 = add nsw i64 %p1, 1
+%t22181 = call i1 @__mruntime_rt_device_resid__dh_zero(i64 %p0, i64 %t22180, i64 %p2)
+br label %LSJ22179
+LSJ22179:
+%t22182 = phi i1 [ false, %LSL22179 ], [ %t22181, %LSR22179 ]
+ret i1 %t22182
+}
+define internal i1 @__mruntime_rt_device_resid__dh_bufs(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t22183 = call i64 @pq_reply_cap(i64 %p1)
+%t22184 = add i64 %t22183, 16
+%t22185 = call i64 @__mruntime_rt_device_resid__dv_map(i64 %t22184)
+%t22186 = call i64 @__mruntime_rt_device_resid__dget(i64 %p1, i64 25)
+%t22187 = call i64 @__mruntime_rt_device_resid__dget(i64 %p1, i64 24)
+%t22188 = call i64 @__mruntime_rt_device_resid__dh_secret_room(i64 %t22186, i64 0, i64 %t22187, i64 0)
+%t22189 = icmp sgt i64 1, %t22188
+br i1 %t22189, label %L7309, label %L7310
+L7309:
+br label %L7311
+L7310:
+br label %L7311
+L7311:
+%t22190 = phi i64 [ 1, %L7309 ], [ %t22188, %L7310 ]
+%t22191 = call i64 @__mruntime_rt_device_resid__dv_map(i64 %t22190)
+%t22192 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 8, i64 %t22185)
+%t22193 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 9, i64 %t22183)
+%t22194 = add i64 %t22192, %t22193
+%t22195 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 10, i64 0)
+%t22196 = add i64 %t22194, %t22195
+%t22197 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 11, i64 %t22191)
+%t22198 = add i64 %t22196, %t22197
+%t22199 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 12, i64 %t22190)
+%t22200 = add i64 %t22198, %t22199
+%t22201 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 13, i64 0)
+%t22202 = add i64 %t22200, %t22201
+%t22203 = icmp ne i64 %t22185, 0
+br label %LSL22204
+LSL22204:
+br i1 %t22203, label %LSR22204, label %LSJ22204
+LSR22204:
+%t22205 = icmp ne i64 %t22191, 0
+br label %LSJ22204
+LSJ22204:
+%t22206 = phi i1 [ false, %LSL22204 ], [ %t22205, %LSR22204 ]
+ret i1 %t22206
+}
+define internal i64 @__mruntime_rt_device_resid__dh_secret_room(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %t22218, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %t22219, %tco.s0 ]
+%t22207 = icmp sge i64 %p1, %p2
+br i1 %t22207, label %L7312, label %L7314
+L7312:
+ret i64 %p3
+L7314:
+%t22208 = mul i64 %p1, 24
+%t22209 = add i64 %p0, %t22208
+%t22210 = add i64 %t22209, 16
+%t22211 = call i64 @ld64(i64 %t22210)
+%t22212 = icmp eq i64 %t22211, 1
+br i1 %t22212, label %L7315, label %L7316
+L7315:
+%t22213 = mul i64 %p1, 24
+%t22214 = add i64 %p0, %t22213
+%t22215 = add i64 %t22214, 8
+%t22216 = call i64 @ld64(i64 %t22215)
+br label %L7317
+L7316:
+br label %L7317
+L7317:
+%t22217 = phi i64 [ %t22216, %L7315 ], [ 0, %L7316 ]
+%t22218 = add nsw i64 %p1, 1
+%t22219 = add i64 %p3, %t22217
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i64 @__mruntime_rt_device_resid__gput(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t22221 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 8)
+%t22222 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 10)
+%t22223 = add i64 %t22221, %t22222
+%t22224 = call i64 @le_put(i64 %t22223, i64 %p1, i64 %p2)
+%t22225 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 10)
+%t22226 = add i64 %t22225, %p2
+%t22227 = tail call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 10, i64 %t22226)
+ret i64 %t22227
+}
+define internal i64 @__mruntime_rt_device_resid__gbytes(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t22228 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 8)
+%t22229 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 10)
+%t22230 = add i64 %t22228, %t22229
+%t22231 = call i64 @mcopy(i64 %t22230, i64 %p1, i64 %p2)
+%t22232 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 10)
+%t22233 = add i64 %t22232, %p2
+%t22234 = tail call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 10, i64 %t22233)
+ret i64 %t22234
+}
+define internal i64 @__mruntime_rt_device_resid__sbytes(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t22235 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 11)
+%t22236 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 13)
+%t22237 = add i64 %t22235, %t22236
+%t22238 = call i64 @mcopy(i64 %t22237, i64 %p1, i64 %p2)
+%t22239 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 13)
+%t22240 = add i64 %t22239, %p2
+%t22241 = tail call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 13, i64 %t22240)
+ret i64 %t22241
+}
+define internal i64 @__mruntime_rt_device_resid__gout(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t22242 = icmp eq i64 %p3, 1
+br i1 %t22242, label %L7318, label %L7320
+L7318:
+%t22243 = call i64 @__mruntime_rt_device_resid__gput(i64 %p0, i64 2, i64 1)
+%t22244 = call i64 @__mruntime_rt_device_resid__gput(i64 %p0, i64 %p2, i64 4)
+%t22245 = add i64 %t22243, %t22244
+%t22246 = call i64 @__mruntime_rt_device_resid__sbytes(i64 %p0, i64 %p1, i64 %p2)
+%t22247 = add i64 %t22245, %t22246
+ret i64 %t22247
+L7320:
+%t22248 = call i64 @__mruntime_rt_device_resid__gput(i64 %p0, i64 1, i64 1)
+%t22249 = call i64 @__mruntime_rt_device_resid__gput(i64 %p0, i64 %p2, i64 4)
+%t22250 = add i64 %t22248, %t22249
+%t22251 = call i64 @__mruntime_rt_device_resid__gbytes(i64 %p0, i64 %p1, i64 %p2)
+%t22252 = add i64 %t22250, %t22251
+ret i64 %t22252
+}
+define internal i64 @__mruntime_rt_device_resid__dh_reply(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t22253 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 0)
+%t22254 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 8)
+%t22255 = icmp eq i64 %t22253, 6
+br i1 %t22255, label %L7321, label %L7323
+L7321:
+%t22256 = call i64 @st8(i64 %t22254, i64 0)
+%t22257 = add i64 %t22254, 1
+%t22258 = call i64 @le_put(i64 %t22257, i64 9, i64 4)
+%t22259 = add i64 %t22256, %t22258
+%t22260 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 10, i64 5)
+%t22261 = add i64 %t22259, %t22260
+%t22262 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 13, i64 0)
+%t22263 = add i64 %t22261, %t22262
+br label %L7323
+L7323:
+%t22264 = icmp eq i64 %t22253, 7
+br label %LSL22265
+LSL22265:
+br i1 %t22264, label %LSR22265, label %LSJ22265
+LSR22265:
+%t22266 = add i64 %t22254, 5
+%t22267 = call i64 @ld8(i64 %t22266)
+%t22268 = icmp eq i64 %t22267, 1
+br label %LSJ22265
+LSJ22265:
+%t22269 = phi i1 [ false, %LSL22265 ], [ %t22268, %LSR22265 ]
+br i1 %t22269, label %L7324, label %L7326
+L7324:
+%t22270 = add i64 %t22254, 6
+%t22271 = add i64 %t22254, 6
+%t22272 = call i64 @le_get(i64 %t22271, i64 4)
+%t22273 = add i64 %t22272, 1
+%t22274 = call i64 @le_put(i64 %t22270, i64 %t22273, i64 4)
+br label %L7326
+L7326:
+%t22275 = icmp eq i64 %t22253, 8
+br i1 %t22275, label %L7327, label %L7329
+L7327:
+%t22276 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 9)
+%t22277 = call i1 @native_write(i64 %t22254, i64 0, i64 %t22276)
+br label %L7329
+L7329:
+%t22278 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 10)
+%t22279 = call i1 @native_write(i64 %t22254, i64 0, i64 %t22278)
+br label %LSL22280
+LSL22280:
+br i1 %t22279, label %LSR22280, label %LSJ22280
+LSR22280:
+%t22281 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 11)
+%t22282 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 13)
+%t22283 = call i1 @native_write(i64 %t22281, i64 0, i64 %t22282)
+br label %LSJ22280
+LSJ22280:
+%t22284 = phi i1 [ false, %LSL22280 ], [ %t22283, %LSR22280 ]
+%t22285 = call i64 @__mruntime_rt_device_resid__dh_wipe(i64 %p0, i64 0)
+%t22286 = icmp eq i64 %t22253, 13
+br label %LSL22287
+LSL22287:
+br i1 %t22286, label %LSR22287, label %LSJ22287
+LSR22287:
+%t22288 = call i1 @__mruntime_rt_device_resid__dh_wiped(i64 %p0, i64 0)
+%t22289 = xor i1 %t22288, true
+br label %LSJ22287
+LSJ22287:
+%t22290 = phi i1 [ false, %LSL22287 ], [ %t22289, %LSR22287 ]
+br i1 %t22290, label %L7330, label %L7332
+L7330:
+%t22291 = tail call i64 @native_child_exit(i64 99)
+ret i64 %t22291
+L7332:
+br i1 %t22284, label %L7333, label %L7334
+L7333:
+br label %L7335
+L7334:
+br label %L7335
+L7335:
+%t22292 = phi i64 [ 0, %L7333 ], [ 125, %L7334 ]
+%t22293 = tail call i64 @native_child_exit(i64 %t22292)
+ret i64 %t22293
+}
+define internal i64 @__mruntime_rt_device_resid__dh_fail(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t22294 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 14)
+%t22295 = call i64 @st8(i64 %t22294, i64 1)
+%t22296 = add i64 %t22294, 1
+%t22297 = call i64 @st8(i64 %t22296, i64 %p1)
+%t22298 = add i64 %t22295, %t22297
+%t22299 = add i64 %t22294, 2
+%t22300 = call i64 @le_put(i64 %t22299, i64 %p2, i64 8)
+%t22301 = add i64 %t22298, %t22300
+%t22302 = call i1 @native_write(i64 %t22294, i64 0, i64 10)
+%t22303 = call i64 @__mruntime_rt_device_resid__dh_wipe(i64 %p0, i64 0)
+br i1 %t22302, label %L7336, label %L7337
+L7336:
+br label %L7338
+L7337:
+br label %L7338
+L7338:
+%t22304 = phi i64 [ 0, %L7336 ], [ 125, %L7337 ]
+%t22305 = call i64 @native_child_exit(i64 %t22304)
+ret i64 %t22305
+}
+define internal i64 @__mruntime_rt_device_resid__dh_errno(i64 %p0, i1 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t22306 = icmp eq i64 %p0, 2
+br label %LSL22307
+LSL22307:
+br i1 %t22306, label %LSJ22307, label %LSR22307
+LSR22307:
+%t22308 = icmp eq i64 %p0, 19
+br label %LSJ22307
+LSJ22307:
+%t22309 = phi i1 [ true, %LSL22307 ], [ %t22308, %LSR22307 ]
+br label %LSL22310
+LSL22310:
+br i1 %t22309, label %LSJ22310, label %LSR22310
+LSR22310:
+%t22311 = icmp eq i64 %p0, 6
+br label %LSJ22310
+LSJ22310:
+%t22312 = phi i1 [ true, %LSL22310 ], [ %t22311, %LSR22310 ]
+br label %LSL22313
+LSL22313:
+br i1 %t22312, label %LSJ22313, label %LSR22313
+LSR22313:
+%t22314 = icmp eq i64 %p0, 20
+br label %LSJ22313
+LSJ22313:
+%t22315 = phi i1 [ true, %LSL22313 ], [ %t22314, %LSR22313 ]
+br i1 %t22315, label %L7339, label %L7341
+L7339:
+ret i64 1
+L7341:
+%t22316 = icmp eq i64 %p0, 13
+br label %LSL22317
+LSL22317:
+br i1 %t22316, label %LSJ22317, label %LSR22317
+LSR22317:
+%t22318 = icmp eq i64 %p0, 1
+br label %LSJ22317
+LSJ22317:
+%t22319 = phi i1 [ true, %LSL22317 ], [ %t22318, %LSR22317 ]
+br i1 %t22319, label %L7342, label %L7344
+L7342:
+ret i64 2
+L7344:
+br label %LSL22320
+LSL22320:
+br i1 %p1, label %LSR22320, label %LSJ22320
+LSR22320:
+%t22321 = icmp eq i64 %p0, 25
+br label %LSL22322
+LSL22322:
+br i1 %t22321, label %LSJ22322, label %LSR22322
+LSR22322:
+%t22323 = icmp eq i64 %p0, 22
+br label %LSJ22322
+LSJ22322:
+%t22324 = phi i1 [ true, %LSL22322 ], [ %t22323, %LSR22322 ]
+br label %LSJ22320
+LSJ22320:
+%t22325 = phi i1 [ false, %LSL22320 ], [ %t22324, %LSJ22322 ]
+br i1 %t22325, label %L7345, label %L7347
+L7345:
+ret i64 6
+L7347:
+%t22326 = icmp eq i64 %p0, 40
+br i1 %t22326, label %L7348, label %L7350
+L7348:
+ret i64 6
+L7350:
+%t22327 = icmp eq i64 %p0, 14
+br i1 %t22327, label %L7351, label %L7353
+L7351:
+ret i64 8
+L7353:
+ret i64 3
+}
+define internal i64 @__mruntime_rt_device_resid__dh_fail_errno(i64 %p0, i64 %p1, i1 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t22328 = sub i64 0, %p1
+%t22329 = call i64 @__mruntime_rt_device_resid__dh_errno(i64 %t22328, i1 %p2)
+%t22330 = sub i64 0, %p1
+%t22331 = call i64 @__mruntime_rt_device_resid__dh_fail(i64 %p0, i64 %t22329, i64 %t22330)
+ret i64 %t22331
+}
+define internal i64 @__mruntime_rt_device_resid__dh_ftype(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t22332 = call i64 @xmalloc(i64 160)
+%t22333 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 80, i64 %p0, i64 %t22332, i64 0, i64 0, i64 0, i64 0)
+%t22334 = icmp eq i64 %t22333, 0
+br i1 %t22334, label %L7354, label %L7355
+L7354:
+%t22335 = call i64 @st_mode_at()
+%t22336 = add i64 %t22332, %t22335
+%t22337 = call i64 @ld32(i64 %t22336)
+%t22338 = and i64 %t22337, 61440
+br label %L7356
+L7355:
+%t22339 = sub nsw i64 0, 1
+br label %L7356
+L7356:
+%t22340 = phi i64 [ %t22338, %L7354 ], [ %t22339, %L7355 ]
+%t22341 = call i64 @c_free(i64 %t22332)
+%t22342 = mul nsw i64 %t22341, 0
+%t22343 = add nsw i64 %t22342, %t22340
+ret i64 %t22343
+}
+define internal i64 @__mruntime_rt_device_resid__dh_fsmagic(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t22344 = call i64 @xmalloc(i64 160)
+%t22345 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 44, i64 %p0, i64 %t22344, i64 0, i64 0, i64 0, i64 0)
+%t22346 = icmp eq i64 %t22345, 0
+br i1 %t22346, label %L7357, label %L7358
+L7357:
+%t22347 = call i64 @ld64(i64 %t22344)
+br label %L7359
+L7358:
+%t22348 = sub nsw i64 0, 1
+br label %L7359
+L7359:
+%t22349 = phi i64 [ %t22347, %L7357 ], [ %t22348, %L7358 ]
+%t22350 = call i64 @c_free(i64 %t22344)
+%t22351 = mul nsw i64 %t22350, 0
+%t22352 = add nsw i64 %t22351, %t22349
+ret i64 %t22352
+}
+define internal i1 @__mruntime_rt_device_resid__dh_is_chr(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t22353 = call i64 @__mruntime_rt_device_resid__dh_ftype(i64 %p0)
+%t22354 = icmp eq i64 %t22353, 8192
+ret i1 %t22354
+}
+define internal i1 @__mruntime_rt_device_resid__dh_is_configfs(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t22355 = call i64 @__mruntime_rt_device_resid__dh_fsmagic(i64 %p0)
+%t22356 = icmp eq i64 %t22355, 1650812272
+ret i1 %t22356
+}
+define internal i1 @__mruntime_rt_device_resid__dh_is_attr(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t22357 = call i64 @__mruntime_rt_device_resid__dh_fsmagic(i64 %p0)
+%t22358 = call i64 @__mruntime_rt_device_resid__dh_ftype(i64 %p0)
+%t22359 = icmp eq i64 %t22358, 32768
+br label %LSL22360
+LSL22360:
+br i1 %t22359, label %LSR22360, label %LSJ22360
+LSR22360:
+%t22361 = icmp eq i64 %t22357, 1650812274
+br label %LSL22362
+LSL22362:
+br i1 %t22361, label %LSJ22362, label %LSR22362
+LSR22362:
+%t22363 = icmp eq i64 %t22357, 1650812272
+br label %LSJ22362
+LSJ22362:
+%t22364 = phi i1 [ true, %LSL22362 ], [ %t22363, %LSR22362 ]
+br label %LSJ22360
+LSJ22360:
+%t22365 = phi i1 [ false, %LSL22360 ], [ %t22364, %LSJ22362 ]
+ret i1 %t22365
+}
+define internal i64 @__mruntime_rt_device_resid__dh_open_at(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t22366 = call i64 @__mruntime_rt_device_resid__o_cloexec()
+%t22367 = or i64 %p2, %t22366
+%t22368 = call i64 @__mruntime_rt_device_resid__o_nofollow()
+%t22369 = or i64 %t22367, %t22368
+%t22370 = call i64 @sc4(i64 257, i64 %p0, i64 %p1, i64 %t22369, i64 0)
+ret i64 %t22370
+}
+define internal i64 @__mruntime_rt_device_resid__dh_rule(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t22371 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 16)
+%t22372 = icmp sge i64 %t22371, 512
+br i1 %t22372, label %L7360, label %L7362
+L7360:
+ret i64 0
+L7362:
+%t22373 = icmp sgt i64 %t22371, 0
+br label %LSL22374
+LSL22374:
+br i1 %t22373, label %LSR22374, label %LSJ22374
+LSR22374:
+%t22375 = srem i64 %t22371, 64
+%t22376 = icmp eq i64 %t22375, 0
+br label %LSJ22374
+LSJ22374:
+%t22377 = phi i1 [ false, %LSL22374 ], [ %t22376, %LSR22374 ]
+br i1 %t22377, label %L7363, label %L7364
+L7363:
+%t22378 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 15)
+%t22379 = add nsw i64 %t22371, 64
+%t22380 = mul nsw i64 %t22379, 32
+%t22381 = call i64 @xrealloc(i64 %t22378, i64 %t22380)
+%t22382 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 15, i64 %t22381)
+br label %L7365
+L7364:
+br label %L7365
+L7365:
+%t22383 = phi i64 [ %t22382, %L7363 ], [ 0, %L7364 ]
+%t22384 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 15)
+%t22385 = mul i64 %t22371, 32
+%t22386 = add i64 %t22384, %t22385
+%t22387 = call i64 @st64(i64 %t22386, i64 %p1)
+%t22388 = add i64 %t22386, 8
+%t22389 = call i64 @st64(i64 %t22388, i64 %p2)
+%t22390 = add i64 %t22387, %t22389
+%t22391 = add i64 %t22386, 16
+%t22392 = call i64 @st64(i64 %t22391, i64 %p3)
+%t22393 = add i64 %t22390, %t22392
+%t22394 = add i64 %t22386, 24
+%t22395 = call i64 @st64(i64 %t22394, i64 %p4)
+%t22396 = add i64 %t22393, %t22395
+%t22397 = add nsw i64 %t22371, 1
+%t22398 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 16, i64 %t22397)
+ret i64 %t22398
+}
+define internal i64 @__mruntime_rt_device_resid__dh_base_rules(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t22399 = add i64 0, 64
+%t22400 = call i64 @__mruntime_rt_device_resid__dh_rule(i64 %p0, i64 %t22399, i64 1, i64 3, i64 0)
+%t22401 = add i64 0, 222
+%t22402 = call i64 @__mruntime_rt_device_resid__dh_rule(i64 %p0, i64 %t22401, i64 4, i64 0, i64 0)
+%t22403 = add i64 0, 215
+%t22404 = call i64 @__mruntime_rt_device_resid__dh_rule(i64 %p0, i64 %t22403, i64 0, i64 0, i64 0)
+%t22405 = add i64 0, 93
+%t22406 = call i64 @__mruntime_rt_device_resid__dh_rule(i64 %p0, i64 %t22405, i64 0, i64 0, i64 0)
+%t22407 = add i64 0, 94
+%t22408 = call i64 @__mruntime_rt_device_resid__dh_rule(i64 %p0, i64 %t22407, i64 0, i64 0, i64 0)
+ret i64 %t22408
+}
+define internal i1 @__mruntime_rt_device_resid__dh_lock(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t22409 = call i64 @__mruntime_rt_device_resid__dh_base_rules(i64 %p0)
+%t22410 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 16)
+%t22411 = mul i64 %t22410, 11
+%t22412 = add i64 7, %t22411
+%t22413 = mul i64 %t22412, 8
+%t22414 = call i64 @xmalloc(i64 %t22413)
+%t22415 = call i64 @__mruntime_rt_device_resid__bf_head(i64 %t22414)
+%t22416 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 15)
+%t22417 = call i64 @__mruntime_rt_device_resid__bf_rules(i64 %t22414, i64 %t22415, i64 %t22416, i64 0, i64 %t22410)
+%t22418 = call i64 @bpf(i64 %t22414, i64 %t22417, i64 6, i64 0, i64 0, i64 2147483648)
+%t22419 = add i64 %t22417, 1
+%t22420 = call i1 @hs_filter_install(i64 %t22414, i64 %t22419)
+br label %LSL22421
+LSL22421:
+br i1 %t22420, label %LSR22421, label %LSJ22421
+LSR22421:
+%t22422 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 0)
+%t22423 = icmp eq i64 %t22422, 1
+br label %LSJ22421
+LSJ22421:
+%t22424 = phi i1 [ false, %LSL22421 ], [ %t22423, %LSR22421 ]
+br i1 %t22424, label %L7366, label %L7367
+L7366:
+%t22425 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 172, i64 0, i64 0, i64 0, i64 0, i64 0, i64 0)
+br label %L7368
+L7367:
+br label %L7368
+L7368:
+%t22426 = phi i64 [ %t22425, %L7366 ], [ 0, %L7367 ]
+ret i1 %t22420
+}
+define internal i64 @__mruntime_rt_device_resid__bf_head(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t22427 = call i64 @bpf(i64 %p0, i64 0, i64 32, i64 0, i64 0, i64 4)
+%t22428 = call i1 @on_a64()
+br i1 %t22428, label %L7369, label %L7370
+L7369:
+br label %L7371
+L7370:
+br label %L7371
+L7371:
+%t22429 = phi i64 [ 3221225655, %L7369 ], [ 3221225534, %L7370 ]
+%t22430 = call i64 @bpf(i64 %p0, i64 1, i64 21, i64 1, i64 0, i64 %t22429)
+%t22431 = add i64 %t22427, %t22430
+%t22432 = call i64 @bpf(i64 %p0, i64 2, i64 6, i64 0, i64 0, i64 2147483648)
+%t22433 = add i64 %t22431, %t22432
+%t22434 = call i64 @bpf(i64 %p0, i64 3, i64 32, i64 0, i64 0, i64 0)
+%t22435 = add i64 %t22433, %t22434
+%t22436 = call i64 @bpf(i64 %p0, i64 4, i64 53, i64 0, i64 1, i64 1073741824)
+%t22437 = add i64 %t22435, %t22436
+%t22438 = call i64 @bpf(i64 %p0, i64 5, i64 6, i64 0, i64 0, i64 2147483648)
+%t22439 = add i64 %t22437, %t22438
+ret i64 6
+}
+define internal i64 @__mruntime_rt_device_resid__bf_rules(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %t22450, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %t22451, %tco.s0 ]
+%p4 = phi i64 [ %p4.in, %entry ], [ %p4, %tco.s0 ]
+%t22440 = icmp sge i64 %p3, %p4
+br i1 %t22440, label %L7372, label %L7374
+L7372:
+ret i64 %p1
+L7374:
+%t22441 = mul i64 %p3, 32
+%t22442 = add i64 %p2, %t22441
+%t22443 = call i64 @ld64(i64 %t22442)
+%t22444 = add i64 %t22442, 8
+%t22445 = call i64 @ld64(i64 %t22444)
+%t22446 = add i64 %t22442, 16
+%t22447 = call i64 @ld64(i64 %t22446)
+%t22448 = add i64 %t22442, 24
+%t22449 = call i64 @ld64(i64 %t22448)
+%t22450 = call i64 @__mruntime_rt_device_resid__bf_rule(i64 %p0, i64 %p1, i64 %t22443, i64 %t22445, i64 %t22447, i64 %t22449)
+%t22451 = add nsw i64 %p3, 1
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i64 @__mruntime_rt_device_resid__bf_rule(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t22453 = icmp eq i64 %p3, 0
+br i1 %t22453, label %L7375, label %L7376
+L7375:
+br label %L7377
+L7376:
+%t22454 = icmp eq i64 %p3, 1
+br i1 %t22454, label %L7378, label %L7379
+L7378:
+br label %L7380
+L7379:
+%t22455 = icmp eq i64 %p3, 4
+br i1 %t22455, label %L7381, label %L7382
+L7381:
+br label %L7383
+L7382:
+br label %L7383
+L7383:
+%t22456 = phi i64 [ 5, %L7381 ], [ 11, %L7382 ]
+br label %L7380
+L7380:
+%t22457 = phi i64 [ 7, %L7378 ], [ %t22456, %L7383 ]
+br label %L7377
+L7377:
+%t22458 = phi i64 [ 3, %L7375 ], [ %t22457, %L7380 ]
+%t22459 = add i64 %p1, %t22458
+%t22460 = call i64 @bpf(i64 %p0, i64 %p1, i64 32, i64 0, i64 0, i64 0)
+%t22461 = add i64 %p1, 1
+%t22462 = sub i64 %t22459, %p1
+%t22463 = sub i64 %t22462, 2
+%t22464 = call i64 @bpf(i64 %p0, i64 %t22461, i64 21, i64 0, i64 %t22463, i64 %p2)
+%t22465 = add i64 %t22460, %t22464
+%t22466 = icmp eq i64 %p3, 4
+br i1 %t22466, label %L7384, label %L7386
+L7384:
+%t22467 = add i64 %p1, 2
+%t22468 = call i64 @bpf(i64 %p0, i64 %t22467, i64 32, i64 0, i64 0, i64 32)
+%t22469 = add i64 %p1, 3
+%t22470 = call i64 @bpf(i64 %p0, i64 %t22469, i64 69, i64 1, i64 0, i64 4)
+%t22471 = add i64 %t22468, %t22470
+%t22472 = add i64 %p1, 4
+%t22473 = call i64 @bpf(i64 %p0, i64 %t22472, i64 6, i64 0, i64 0, i64 2147418112)
+%t22474 = mul nsw i64 %t22473, 0
+%t22475 = add nsw i64 %t22474, %t22459
+ret i64 %t22475
+L7386:
+%t22476 = icmp eq i64 %p3, 0
+br i1 %t22476, label %L7387, label %L7388
+L7387:
+%t22477 = add i64 %p1, 2
+br label %L7389
+L7388:
+%t22478 = add i64 %p1, 2
+%t22479 = call i64 @__mruntime_rt_device_resid__bf_eq(i64 %p0, i64 %t22478, i64 %t22459, i64 16, i64 %p4)
+br label %L7389
+L7389:
+%t22480 = phi i64 [ %t22477, %L7387 ], [ %t22479, %L7388 ]
+%t22481 = icmp eq i64 %p3, 2
+br i1 %t22481, label %L7390, label %L7391
+L7390:
+%t22482 = call i64 @__mruntime_rt_device_resid__bf_eq(i64 %p0, i64 %t22480, i64 %t22459, i64 24, i64 %p5)
+br label %L7392
+L7391:
+%t22483 = icmp eq i64 %p3, 3
+br i1 %t22483, label %L7393, label %L7394
+L7393:
+%t22484 = call i64 @__mruntime_rt_device_resid__bf_eq(i64 %p0, i64 %t22480, i64 %t22459, i64 32, i64 %p5)
+br label %L7395
+L7394:
+br label %L7395
+L7395:
+%t22485 = phi i64 [ %t22484, %L7393 ], [ %t22480, %L7394 ]
+br label %L7392
+L7392:
+%t22486 = phi i64 [ %t22482, %L7390 ], [ %t22485, %L7395 ]
+%t22487 = call i64 @bpf(i64 %p0, i64 %t22486, i64 6, i64 0, i64 0, i64 2147418112)
+%t22488 = mul nsw i64 %t22487, 0
+%t22489 = add nsw i64 %t22488, %t22459
+ret i64 %t22489
+}
+define internal i64 @__mruntime_rt_device_resid__bf_eq(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t22490 = call i64 @bpf(i64 %p0, i64 %p1, i64 32, i64 0, i64 0, i64 %p3)
+%t22491 = add i64 %p1, 1
+%t22492 = sub i64 %p2, %p1
+%t22493 = sub i64 %t22492, 2
+%t22494 = and i64 %p4, 4294967295
+%t22495 = call i64 @bpf(i64 %p0, i64 %t22491, i64 21, i64 0, i64 %t22493, i64 %t22494)
+%t22496 = add i64 %t22490, %t22495
+%t22497 = add i64 %p1, 2
+%t22498 = add i64 %p3, 4
+%t22499 = call i64 @bpf(i64 %p0, i64 %t22497, i64 32, i64 0, i64 0, i64 %t22498)
+%t22500 = add i64 %p1, 3
+%t22501 = sub i64 %p2, %p1
+%t22502 = sub i64 %t22501, 4
+%t22503 = ashr i64 %p4, 32
+%t22504 = and i64 %t22503, 4294967295
+%t22505 = call i64 @bpf(i64 %p0, i64 %t22500, i64 21, i64 0, i64 %t22502, i64 %t22504)
+%t22506 = add i64 %t22499, %t22505
+%t22507 = add i64 %p1, 4
+ret i64 %t22507
+}
+define internal i64 @__mruntime_rt_device_resid__dh_ioctl(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t22508 = call i64 @__mruntime_rt_device_resid__dget(i64 %p1, i64 1)
+%t22509 = icmp eq i64 %t22508, 1
+br i1 %t22509, label %L7396, label %L7397
+L7396:
+br label %L7398
+L7397:
+br label %L7398
+L7398:
+%t22510 = phi i64 [ 2, %L7396 ], [ 0, %L7397 ]
+%t22511 = sub nsw i64 0, 100
+%t22512 = call i64 @__mruntime_rt_device_resid__dget(i64 %p1, i64 4)
+%t22513 = call i64 @__mruntime_rt_device_resid__dh_open_at(i64 %t22511, i64 %t22512, i64 %t22510)
+%t22514 = icmp slt i64 %t22513, 0
+br i1 %t22514, label %L7399, label %L7401
+L7399:
+%t22515 = call i64 @__mruntime_rt_device_resid__dh_fail_errno(i64 %p0, i64 %t22513, i1 false)
+ret i64 %t22515
+L7401:
+%t22516 = call i1 @__mruntime_rt_device_resid__dh_is_chr(i64 %t22513)
+%t22517 = xor i1 %t22516, true
+br i1 %t22517, label %L7402, label %L7404
+L7402:
+%t22518 = call i64 @__mruntime_rt_device_resid__dh_fail(i64 %p0, i64 6, i64 0)
+ret i64 %t22518
+L7404:
+%t22519 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 7, i64 %t22513)
+%t22520 = call i64 @__mruntime_rt_device_resid__dget(i64 %p1, i64 6)
+%t22521 = call i64 @__mruntime_rt_device_resid__pq_fields_total(i64 %p1, i64 0, i64 %t22520, i64 0)
+%t22522 = add i64 %t22521, %t22520
+%t22523 = add i64 %t22522, 4
+%t22524 = call i1 @__mruntime_rt_device_resid__dh_regions(i64 %p0, i64 %t22523)
+%t22525 = xor i1 %t22524, true
+br i1 %t22525, label %L7405, label %L7407
+L7405:
+%t22526 = call i64 @native_child_exit(i64 125)
+ret i64 %t22526
+L7407:
+%t22527 = call i64 @__mruntime_rt_device_resid__dh_prep(i64 %p0, i64 %p1, i64 0, i64 %t22520, i64 0)
+%t22528 = icmp slt i64 %t22527, 0
+br i1 %t22528, label %L7408, label %L7410
+L7408:
+%t22529 = call i64 @native_child_exit(i64 125)
+ret i64 %t22529
+L7410:
+%t22530 = call i1 @__mruntime_rt_device_resid__dh_bufs(i64 %p0, i64 %p1)
+%t22531 = xor i1 %t22530, true
+br i1 %t22531, label %L7411, label %L7413
+L7411:
+%t22532 = call i64 @native_child_exit(i64 125)
+ret i64 %t22532
+L7413:
+%t22533 = call i64 @__mruntime_rt_device_resid__dh_ioctl_rules(i64 %p0, i64 %p1, i64 %t22513, i64 0, i64 %t22520)
+%t22534 = call i1 @__mruntime_rt_device_resid__dh_lock(i64 %p0)
+%t22535 = xor i1 %t22534, true
+br i1 %t22535, label %L7414, label %L7416
+L7414:
+%t22536 = call i64 @native_child_exit(i64 126)
+ret i64 %t22536
+L7416:
+%t22537 = call i64 @__mruntime_rt_device_resid__dh_steps(i64 %p0, i64 %p1, i64 %t22513, i64 0, i64 %t22520)
+ret i64 %t22537
+}
+define internal i64 @__mruntime_rt_device_resid__dh_ioctl_rules(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %t22543, %tco.s0 ]
+%p4 = phi i64 [ %p4.in, %entry ], [ %p4, %tco.s0 ]
+%t22538 = icmp sge i64 %p3, %p4
+br i1 %t22538, label %L7417, label %L7419
+L7417:
+ret i64 0
+L7419:
+%t22539 = add i64 0, 29
+%t22540 = call i64 @__mruntime_rt_device_resid__step_of(i64 %p1, i64 %p3)
+%t22541 = call i64 @__mruntime_rt_device_resid__dget(i64 %t22540, i64 0)
+%t22542 = call i64 @__mruntime_rt_device_resid__dh_rule(i64 %p0, i64 %t22539, i64 2, i64 %p2, i64 %t22541)
+%t22543 = add nsw i64 %p3, 1
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i64 @__mruntime_rt_device_resid__dh_prep(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t22572, %tco.s0 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ]
+%p4 = phi i64 [ %p4.in, %entry ], [ %t22561, %tco.s0 ]
+%t22545 = icmp sge i64 %p2, %p3
+br i1 %t22545, label %L7420, label %L7422
+L7420:
+ret i64 %p4
+L7422:
+%t22546 = call i64 @__mruntime_rt_device_resid__step_of(i64 %p1, i64 %p2)
+%t22547 = call i64 @__mruntime_rt_device_resid__dget(i64 %t22546, i64 1)
+%t22548 = call i64 @__mruntime_rt_device_resid__dh_region(i64 %p0, i64 %t22547, i64 0)
+%t22549 = icmp eq i64 %t22548, 0
+br i1 %t22549, label %L7423, label %L7425
+L7423:
+%t22550 = sub nsw i64 0, 1
+ret i64 %t22550
+L7425:
+%t22551 = call i64 @__mruntime_rt_device_resid__dget(i64 %t22546, i64 1)
+%t22552p = inttoptr i64 %t22548 to ptr
+%t22552q = trunc i64 0 to i8
+call void @llvm.memset.p0.i64(ptr %t22552p, i8 %t22552q, i64 %t22551, i1 false)
+%t22552 = add i64 0, 0
+%t22553 = call i64 @__mruntime_rt_device_resid__dset(i64 %t22546, i64 10, i64 %t22548)
+%t22554 = call i64 @__mruntime_rt_device_resid__dget(i64 %t22546, i64 2)
+%t22555 = mul i64 %t22554, 8
+%t22556 = add i64 %t22555, 8
+%t22557 = call i64 @__mruntime_rt_device_resid__pq_alloc(i64 %p1, i64 %t22556)
+%t22558 = call i64 @__mruntime_rt_device_resid__dset(i64 %t22546, i64 11, i64 %t22557)
+%t22559 = add i64 %t22553, %t22558
+%t22560 = call i64 @__mruntime_rt_device_resid__dget(i64 %t22546, i64 2)
+%t22561 = call i64 @__mruntime_rt_device_resid__dh_fill(i64 %p0, i64 %p1, i64 %p2, i64 %t22546, i64 0, i64 %t22560, i64 %p4)
+%t22562 = icmp slt i64 %t22561, 0
+br i1 %t22562, label %L7426, label %L7428
+L7426:
+%t22563 = sub nsw i64 0, 1
+ret i64 %t22563
+L7428:
+%t22564 = call i64 @__mruntime_rt_device_resid__dget(i64 %t22546, i64 4)
+%t22565 = icmp sgt i64 %t22564, 0
+br i1 %t22565, label %L7429, label %L7430
+L7429:
+%t22566 = call i64 @__mruntime_rt_device_resid__dget(i64 %t22546, i64 5)
+%t22567 = add i64 %t22548, %t22566
+%t22568 = call i64 @__mruntime_rt_device_resid__dget(i64 %t22546, i64 6)
+%t22569 = call i64 @__mruntime_rt_device_resid__dget(i64 %t22546, i64 4)
+%t22570 = call i64 @le_put(i64 %t22567, i64 %t22568, i64 %t22569)
+br label %L7431
+L7430:
+br label %L7431
+L7431:
+%t22571 = phi i64 [ %t22570, %L7429 ], [ 0, %L7430 ]
+%t22572 = add nsw i64 %p2, 1
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i64 @__mruntime_rt_device_resid__arg_w(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t22574 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 23)
+%t22575 = mul i64 %p1, 24
+%t22576 = add i64 %t22574, %t22575
+%t22577 = mul i64 %p2, 8
+%t22578 = add i64 %t22576, %t22577
+%t22579 = call i64 @ld64(i64 %t22578)
+ret i64 %t22579
+}
+define internal i64 @__mruntime_rt_device_resid__dh_fill(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in, i64 %p5.in, i64 %p6.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ], [ %p0, %tco.s1 ], [ %p0, %tco.s2 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ], [ %p1, %tco.s1 ], [ %p1, %tco.s2 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ], [ %p2, %tco.s1 ], [ %p2, %tco.s2 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ], [ %p3, %tco.s1 ], [ %p3, %tco.s2 ]
+%p4 = phi i64 [ %p4.in, %entry ], [ %t22601, %tco.s0 ], [ %t22611, %tco.s1 ], [ %t22645, %tco.s2 ]
+%p5 = phi i64 [ %p5.in, %entry ], [ %p5, %tco.s0 ], [ %p5, %tco.s1 ], [ %p5, %tco.s2 ]
+%p6 = phi i64 [ %p6.in, %entry ], [ %t22603, %tco.s0 ], [ %t22613, %tco.s1 ], [ %t22647, %tco.s2 ]
+%t22580 = icmp sge i64 %p4, %p5
+br i1 %t22580, label %L7432, label %L7434
+L7432:
+ret i64 %p6
+L7434:
+%t22581 = call i64 @__mruntime_rt_device_resid__dget(i64 %p3, i64 10)
+%t22582 = call i64 @__mruntime_rt_device_resid__fw(i64 %p3, i64 %p4, i64 0)
+%t22583 = call i64 @__mruntime_rt_device_resid__fw(i64 %p3, i64 %p4, i64 1)
+%t22584 = call i64 @__mruntime_rt_device_resid__fw(i64 %p3, i64 %p4, i64 4)
+%t22585 = and i64 %t22584, 1
+%t22586 = icmp ne i64 %t22585, 0
+%t22587 = icmp eq i64 %t22582, 0
+br i1 %t22587, label %L7435, label %L7437
+L7435:
+br label %LSL22588
+LSL22588:
+br i1 %t22586, label %LSR22588, label %LSJ22588
+LSR22588:
+%t22589 = call i1 @__mruntime_rt_device_resid__pq_is_len(i64 %p3, i64 %t22583, i64 0, i64 %p5)
+%t22590 = xor i1 %t22589, true
+br label %LSJ22588
+LSJ22588:
+%t22591 = phi i1 [ false, %LSL22588 ], [ %t22590, %LSR22588 ]
+br label %LSL22592
+LSL22592:
+br i1 %t22591, label %LSR22592, label %LSJ22592
+LSR22592:
+%t22593 = call i1 @__mruntime_rt_device_resid__pq_linked(i64 %p1, i64 %p2, i64 %t22583, i64 0)
+%t22594 = xor i1 %t22593, true
+br label %LSJ22592
+LSJ22592:
+%t22595 = phi i1 [ false, %LSL22592 ], [ %t22594, %LSR22592 ]
+br i1 %t22595, label %L7438, label %L7439
+L7438:
+%t22596 = add i64 %t22581, %t22583
+%t22597 = call i64 @__mruntime_rt_device_resid__arg_w(i64 %p1, i64 %p6, i64 1)
+%t22598 = call i64 @__mruntime_rt_device_resid__fw(i64 %p3, i64 %p4, i64 2)
+%t22599 = call i64 @le_put(i64 %t22596, i64 %t22597, i64 %t22598)
+br label %L7440
+L7439:
+br label %L7440
+L7440:
+%t22600 = phi i64 [ %t22599, %L7438 ], [ 0, %L7439 ]
+%t22601 = add nsw i64 %p4, 1
+br i1 %t22595, label %L7441, label %L7442
+L7441:
+%t22602 = add i64 %p6, 1
+br label %L7443
+L7442:
+br label %L7443
+L7443:
+%t22603 = phi i64 [ %t22602, %L7441 ], [ %p6, %L7442 ]
+br label %tco.s0
+tco.s0:
+br label %tco.head
+L7437:
+%t22605 = icmp eq i64 %t22582, 1
+br i1 %t22605, label %L7444, label %L7446
+L7444:
+br i1 %t22586, label %L7447, label %L7448
+L7447:
+%t22606 = add i64 %t22581, %t22583
+%t22607 = call i64 @__mruntime_rt_device_resid__arg_w(i64 %p1, i64 %p6, i64 1)
+%t22608 = call i64 @__mruntime_rt_device_resid__arg_w(i64 %p1, i64 %p6, i64 2)
+%t22609 = call i64 @mcopy(i64 %t22606, i64 %t22607, i64 %t22608)
+br label %L7449
+L7448:
+br label %L7449
+L7449:
+%t22610 = phi i64 [ %t22609, %L7447 ], [ 0, %L7448 ]
+%t22611 = add nsw i64 %p4, 1
+br i1 %t22586, label %L7450, label %L7451
+L7450:
+%t22612 = add i64 %p6, 1
+br label %L7452
+L7451:
+br label %L7452
+L7452:
+%t22613 = phi i64 [ %t22612, %L7450 ], [ %p6, %L7451 ]
+br label %tco.s1
+tco.s1:
+br label %tco.head
+L7446:
+%t22615 = call i64 @__mruntime_rt_device_resid__fw(i64 %p3, i64 %p4, i64 3)
+%t22616 = call i64 @__mruntime_rt_device_resid__fw(i64 %p3, i64 %p4, i64 5)
+%t22617 = call i64 @__mruntime_rt_device_resid__dh_region(i64 %p0, i64 %t22615, i64 %t22616)
+%t22618 = icmp eq i64 %t22617, 0
+br i1 %t22618, label %L7453, label %L7455
+L7453:
+%t22619 = sub nsw i64 0, 1
+ret i64 %t22619
+L7455:
+%t22620p = inttoptr i64 %t22617 to ptr
+%t22620q = trunc i64 0 to i8
+call void @llvm.memset.p0.i64(ptr %t22620p, i8 %t22620q, i64 %t22615, i1 false)
+%t22620 = add i64 0, 0
+%t22621 = add i64 %t22581, %t22583
+%t22622 = call i64 @st64(i64 %t22621, i64 %t22617)
+%t22623 = call i64 @__mruntime_rt_device_resid__dget(i64 %p3, i64 11)
+%t22624 = mul i64 %p4, 8
+%t22625 = add i64 %t22623, %t22624
+%t22626 = call i64 @st64(i64 %t22625, i64 %t22617)
+%t22627 = add i64 %t22622, %t22626
+br i1 %t22586, label %L7456, label %L7457
+L7456:
+%t22628 = call i64 @__mruntime_rt_device_resid__arg_w(i64 %p1, i64 %p6, i64 2)
+br label %L7458
+L7457:
+br label %L7458
+L7458:
+%t22629 = phi i64 [ %t22628, %L7456 ], [ 0, %L7457 ]
+br i1 %t22586, label %L7459, label %L7460
+L7459:
+%t22630 = call i64 @__mruntime_rt_device_resid__arg_w(i64 %p1, i64 %p6, i64 1)
+%t22631 = call i64 @mcopy(i64 %t22617, i64 %t22630, i64 %t22629)
+br label %L7461
+L7460:
+br label %L7461
+L7461:
+%t22632 = phi i64 [ %t22631, %L7459 ], [ 0, %L7460 ]
+%t22633 = call i64 @__mruntime_rt_device_resid__fw(i64 %p3, i64 %p4, i64 2)
+%t22634 = icmp sge i64 %t22633, 0
+br i1 %t22634, label %L7462, label %L7463
+L7462:
+%t22635 = call i64 @__mruntime_rt_device_resid__pq_scalar_at(i64 %p3, i64 %t22633, i64 0, i64 %p5)
+br label %L7464
+L7463:
+%t22636 = sub nsw i64 0, 1
+br label %L7464
+L7464:
+%t22637 = phi i64 [ %t22635, %L7462 ], [ %t22636, %L7463 ]
+%t22638 = icmp sge i64 %t22637, 0
+br i1 %t22638, label %L7465, label %L7466
+L7465:
+%t22639 = add i64 %t22581, %t22633
+%t22640 = icmp eq i64 %t22584, 1
+br i1 %t22640, label %L7468, label %L7469
+L7468:
+br label %L7470
+L7469:
+br label %L7470
+L7470:
+%t22641 = phi i64 [ %t22629, %L7468 ], [ %t22615, %L7469 ]
+%t22642 = call i64 @__mruntime_rt_device_resid__fw(i64 %p3, i64 %t22637, i64 2)
+%t22643 = call i64 @le_put(i64 %t22639, i64 %t22641, i64 %t22642)
+br label %L7467
+L7466:
+br label %L7467
+L7467:
+%t22644 = phi i64 [ %t22643, %L7470 ], [ 0, %L7466 ]
+%t22645 = add nsw i64 %p4, 1
+br i1 %t22586, label %L7471, label %L7472
+L7471:
+%t22646 = add i64 %p6, 1
+br label %L7473
+L7472:
+br label %L7473
+L7473:
+%t22647 = phi i64 [ %t22646, %L7471 ], [ %p6, %L7472 ]
+br label %tco.s2
+tco.s2:
+br label %tco.head
+}
+define internal i64 @__mruntime_rt_device_resid__dh_steps(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in, i64 %p4.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %t22675, %tco.s0 ]
+%p4 = phi i64 [ %p4.in, %entry ], [ %p4, %tco.s0 ]
+%t22649 = icmp sge i64 %p3, %p4
+br i1 %t22649, label %L7474, label %L7476
+L7474:
+%t22650 = call i64 @__mruntime_rt_device_resid__dh_ioctl_reply(i64 %p0, i64 %p1)
+ret i64 %t22650
+L7476:
+%t22651 = call i64 @__mruntime_rt_device_resid__step_of(i64 %p1, i64 %p3)
+%t22652 = call i64 @__mruntime_rt_device_resid__dh_links_into(i64 %p1, i64 %p3, i64 0)
+%t22653 = call i64 @__mruntime_rt_device_resid__dget(i64 %t22651, i64 0)
+%t22654 = call i64 @__mruntime_rt_device_resid__dget(i64 %t22651, i64 10)
+%t22655 = call i64 @sc(i64 16, i64 %p2, i64 %t22653, i64 %t22654)
+%t22656 = call i64 @__mruntime_rt_device_resid__dh_after_op(i64 %p0)
+%t22657 = icmp slt i64 %t22655, 0
+br i1 %t22657, label %L7477, label %L7479
+L7477:
+%t22658 = call i64 @__mruntime_rt_device_resid__dh_fail_errno(i64 %p0, i64 %t22655, i1 true)
+ret i64 %t22658
+L7479:
+%t22659 = call i1 @__mruntime_rt_device_resid__dh_canaries(i64 %p0, i64 0)
+%t22660 = xor i1 %t22659, true
+br i1 %t22660, label %L7480, label %L7482
+L7480:
+%t22661 = call i64 @__mruntime_rt_device_resid__dh_fail(i64 %p0, i64 8, i64 0)
+ret i64 %t22661
+L7482:
+%t22662 = call i64 @__mruntime_rt_device_resid__dget(i64 %t22651, i64 4)
+%t22663 = icmp sgt i64 %t22662, 0
+br i1 %t22663, label %L7483, label %L7484
+L7483:
+%t22664 = call i64 @__mruntime_rt_device_resid__dget(i64 %t22651, i64 10)
+%t22665 = call i64 @__mruntime_rt_device_resid__dget(i64 %t22651, i64 5)
+%t22666 = add i64 %t22664, %t22665
+%t22667 = call i64 @le_get(i64 %t22666, i64 %t22662)
+br label %L7485
+L7484:
+br label %L7485
+L7485:
+%t22668 = phi i64 [ %t22667, %L7483 ], [ 0, %L7484 ]
+%t22669 = icmp sgt i64 %t22662, 0
+br label %LSL22670
+LSL22670:
+br i1 %t22669, label %LSR22670, label %LSJ22670
+LSR22670:
+%t22671 = call i64 @__mruntime_rt_device_resid__dget(i64 %t22651, i64 6)
+%t22672 = icmp ne i64 %t22668, %t22671
+br label %LSJ22670
+LSJ22670:
+%t22673 = phi i1 [ false, %LSL22670 ], [ %t22672, %LSR22670 ]
+br i1 %t22673, label %L7486, label %L7488
+L7486:
+%t22674 = call i64 @__mruntime_rt_device_resid__dh_fail(i64 %p0, i64 7, i64 %t22668)
+ret i64 %t22674
+L7488:
+%t22675 = add nsw i64 %p3, 1
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i64 @__mruntime_rt_device_resid__dh_links_into(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t22700, %tco.s0 ]
+%t22677 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 8)
+%t22678 = icmp sge i64 %p2, %t22677
+br i1 %t22678, label %L7489, label %L7491
+L7489:
+ret i64 0
+L7491:
+%t22679 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 9)
+%t22680 = mul i64 %p2, 40
+%t22681 = add i64 %t22679, %t22680
+%t22682 = add i64 %t22681, 16
+%t22683 = call i64 @ld64(i64 %t22682)
+%t22684 = icmp eq i64 %t22683, %p1
+br i1 %t22684, label %L7492, label %L7493
+L7492:
+%t22685 = call i64 @__mruntime_rt_device_resid__step_of(i64 %p0, i64 %p1)
+%t22686 = call i64 @__mruntime_rt_device_resid__dget(i64 %t22685, i64 10)
+%t22687 = add i64 %t22681, 24
+%t22688 = call i64 @ld64(i64 %t22687)
+%t22689 = add i64 %t22686, %t22688
+%t22690 = call i64 @ld64(i64 %t22681)
+%t22691 = call i64 @__mruntime_rt_device_resid__step_of(i64 %p0, i64 %t22690)
+%t22692 = call i64 @__mruntime_rt_device_resid__dget(i64 %t22691, i64 10)
+%t22693 = add i64 %t22681, 8
+%t22694 = call i64 @ld64(i64 %t22693)
+%t22695 = add i64 %t22692, %t22694
+%t22696 = add i64 %t22681, 32
+%t22697 = call i64 @ld64(i64 %t22696)
+%t22698 = call i64 @mcopy(i64 %t22689, i64 %t22695, i64 %t22697)
+br label %L7494
+L7493:
+br label %L7494
+L7494:
+%t22699 = phi i64 [ %t22698, %L7492 ], [ 0, %L7493 ]
+%t22700 = add nsw i64 %p2, 1
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i64 @__mruntime_rt_device_resid__dh_ioctl_reply(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t22702 = call i64 @__mruntime_rt_device_resid__dget(i64 %p1, i64 6)
+%t22703 = sub i64 %t22702, 1
+%t22704 = call i64 @__mruntime_rt_device_resid__step_of(i64 %p1, i64 %t22703)
+%t22705 = call i64 @__mruntime_rt_device_resid__gput(i64 %p0, i64 0, i64 1)
+%t22706 = call i64 @__mruntime_rt_device_resid__dget(i64 %p1, i64 24)
+%t22707 = call i64 @__mruntime_rt_device_resid__gput(i64 %p0, i64 %t22706, i64 4)
+%t22708 = add i64 %t22705, %t22707
+%t22709 = call i64 @__mruntime_rt_device_resid__dget(i64 %t22704, i64 2)
+%t22710 = call i64 @__mruntime_rt_device_resid__dh_outs(i64 %p0, i64 %t22704, i64 0, i64 %t22709)
+%t22711 = icmp ne i64 %t22710, 0
+br i1 %t22711, label %L7495, label %L7497
+L7495:
+%t22712 = call i64 @__mruntime_rt_device_resid__dh_fail(i64 %p0, i64 %t22710, i64 0)
+ret i64 %t22712
+L7497:
+%t22713 = call i64 @__mruntime_rt_device_resid__dh_reply(i64 %p0)
+ret i64 %t22713
+}
+define internal i64 @__mruntime_rt_device_resid__dh_outs(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t22755, %tco.s0 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ]
+%t22714 = icmp sge i64 %p2, %p3
+br i1 %t22714, label %L7498, label %L7500
+L7498:
+ret i64 0
+L7500:
+%t22715 = call i64 @__mruntime_rt_device_resid__dget(i64 %p1, i64 10)
+%t22716 = call i64 @__mruntime_rt_device_resid__fw(i64 %p1, i64 %p2, i64 0)
+%t22717 = call i64 @__mruntime_rt_device_resid__fw(i64 %p1, i64 %p2, i64 1)
+%t22718 = call i64 @__mruntime_rt_device_resid__fw(i64 %p1, i64 %p2, i64 4)
+%t22719 = and i64 %t22718, 2
+%t22720 = icmp ne i64 %t22719, 0
+br label %LSL22721
+LSL22721:
+br i1 %t22720, label %LSR22721, label %LSJ22721
+LSR22721:
+%t22722 = icmp eq i64 %t22716, 0
+br label %LSJ22721
+LSJ22721:
+%t22723 = phi i1 [ false, %LSL22721 ], [ %t22722, %LSR22721 ]
+br label %LSL22724
+LSL22724:
+br i1 %t22723, label %LSR22724, label %LSJ22724
+LSR22724:
+%t22725 = call i1 @__mruntime_rt_device_resid__pq_is_len(i64 %p1, i64 %t22717, i64 0, i64 %p3)
+%t22726 = xor i1 %t22725, true
+br label %LSJ22724
+LSJ22724:
+%t22727 = phi i1 [ false, %LSL22724 ], [ %t22726, %LSR22724 ]
+br i1 %t22727, label %L7501, label %L7503
+L7501:
+%t22728 = call i64 @__mruntime_rt_device_resid__gput(i64 %p0, i64 0, i64 1)
+%t22729 = add i64 %t22715, %t22717
+%t22730 = call i64 @__mruntime_rt_device_resid__fw(i64 %p1, i64 %p2, i64 2)
+%t22731 = call i64 @le_get(i64 %t22729, i64 %t22730)
+%t22732 = call i64 @__mruntime_rt_device_resid__gput(i64 %p0, i64 %t22731, i64 8)
+%t22733 = add i64 %t22728, %t22732
+br label %L7503
+L7503:
+br label %LSL22734
+LSL22734:
+br i1 %t22720, label %LSR22734, label %LSJ22734
+LSR22734:
+%t22735 = icmp eq i64 %t22716, 1
+br label %LSJ22734
+LSJ22734:
+%t22736 = phi i1 [ false, %LSL22734 ], [ %t22735, %LSR22734 ]
+br i1 %t22736, label %L7504, label %L7506
+L7504:
+%t22737 = add i64 %t22715, %t22717
+%t22738 = call i64 @__mruntime_rt_device_resid__fw(i64 %p1, i64 %p2, i64 2)
+%t22739 = call i64 @__mruntime_rt_device_resid__gout(i64 %p0, i64 %t22737, i64 %t22738, i64 0)
+br label %L7506
+L7506:
+br label %LSL22740
+LSL22740:
+br i1 %t22720, label %LSR22740, label %LSJ22740
+LSR22740:
+%t22741 = icmp eq i64 %t22716, 2
+br label %LSJ22740
+LSJ22740:
+%t22742 = phi i1 [ false, %LSL22740 ], [ %t22741, %LSR22740 ]
+br i1 %t22742, label %L7507, label %L7509
+L7507:
+%t22743 = call i64 @__mruntime_rt_device_resid__dh_buf_len(i64 %p1, i64 %p2, i64 %p3)
+%t22744 = icmp slt i64 %t22743, 0
+br label %LSL22745
+LSL22745:
+br i1 %t22744, label %LSJ22745, label %LSR22745
+LSR22745:
+%t22746 = call i64 @__mruntime_rt_device_resid__fw(i64 %p1, i64 %p2, i64 3)
+%t22747 = icmp sgt i64 %t22743, %t22746
+br label %LSJ22745
+LSJ22745:
+%t22748 = phi i1 [ true, %LSL22745 ], [ %t22747, %LSR22745 ]
+br i1 %t22748, label %L7510, label %L7512
+L7510:
+ret i64 4
+L7512:
+%t22749 = call i64 @__mruntime_rt_device_resid__dget(i64 %p1, i64 11)
+%t22750 = mul i64 %p2, 8
+%t22751 = add i64 %t22749, %t22750
+%t22752 = call i64 @ld64(i64 %t22751)
+%t22753 = call i64 @__mruntime_rt_device_resid__fw(i64 %p1, i64 %p2, i64 5)
+%t22754 = call i64 @__mruntime_rt_device_resid__gout(i64 %p0, i64 %t22752, i64 %t22743, i64 %t22753)
+br label %L7509
+L7509:
+%t22755 = add nsw i64 %p2, 1
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i64 @__mruntime_rt_device_resid__dh_buf_len(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t22757 = call i64 @__mruntime_rt_device_resid__fw(i64 %p0, i64 %p1, i64 2)
+%t22758 = icmp sge i64 %t22757, 0
+br i1 %t22758, label %L7513, label %L7514
+L7513:
+%t22759 = call i64 @__mruntime_rt_device_resid__pq_scalar_at(i64 %p0, i64 %t22757, i64 0, i64 %p2)
+br label %L7515
+L7514:
+%t22760 = sub nsw i64 0, 1
+br label %L7515
+L7515:
+%t22761 = phi i64 [ %t22759, %L7513 ], [ %t22760, %L7514 ]
+%t22762 = icmp slt i64 %t22761, 0
+br label %LSL22763
+LSL22763:
+br i1 %t22762, label %LSJ22763, label %LSR22763
+LSR22763:
+%t22764 = call i64 @__mruntime_rt_device_resid__fw(i64 %p0, i64 %t22761, i64 4)
+%t22765 = and i64 %t22764, 2
+%t22766 = icmp eq i64 %t22765, 0
+br label %LSJ22763
+LSJ22763:
+%t22767 = phi i1 [ true, %LSL22763 ], [ %t22766, %LSR22763 ]
+br i1 %t22767, label %L7516, label %L7518
+L7516:
+%t22768 = tail call i64 @__mruntime_rt_device_resid__fw(i64 %p0, i64 %p1, i64 3)
+ret i64 %t22768
+L7518:
+%t22769 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 10)
+%t22770 = add i64 %t22769, %t22757
+%t22771 = call i64 @__mruntime_rt_device_resid__fw(i64 %p0, i64 %t22761, i64 2)
+%t22772 = call i64 @le_get(i64 %t22770, i64 %t22771)
+ret i64 %t22772
+}
+define internal i64 @__mruntime_rt_device_resid__dh_transact(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t22773 = sub nsw i64 0, 100
+%t22774 = call i64 @__mruntime_rt_device_resid__dget(i64 %p1, i64 4)
+%t22775 = call i64 @__mruntime_rt_device_resid__dh_open_at(i64 %t22773, i64 %t22774, i64 2)
+%t22776 = icmp slt i64 %t22775, 0
+br i1 %t22776, label %L7519, label %L7521
+L7519:
+%t22777 = call i64 @__mruntime_rt_device_resid__dh_fail_errno(i64 %p0, i64 %t22775, i1 false)
+ret i64 %t22777
+L7521:
+%t22778 = call i1 @__mruntime_rt_device_resid__dh_is_chr(i64 %t22775)
+%t22779 = xor i1 %t22778, true
+br i1 %t22779, label %L7522, label %L7524
+L7522:
+%t22780 = call i64 @__mruntime_rt_device_resid__dh_fail(i64 %p0, i64 6, i64 0)
+ret i64 %t22780
+L7524:
+%t22781 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 7, i64 %t22775)
+%t22782 = call i64 @__mruntime_rt_device_resid__dget(i64 %p1, i64 11)
+%t22783 = call i1 @__mruntime_rt_device_resid__dh_regions(i64 %p0, i64 4)
+%t22784 = xor i1 %t22783, true
+br i1 %t22784, label %L7525, label %L7527
+L7525:
+%t22785 = call i64 @native_child_exit(i64 125)
+ret i64 %t22785
+L7527:
+%t22786 = call i64 @__mruntime_rt_device_resid__dget(i64 %p1, i64 10)
+%t22787 = call i64 @__mruntime_rt_device_resid__dh_region(i64 %p0, i64 %t22786, i64 0)
+%t22788 = call i64 @__mruntime_rt_device_resid__dget(i64 %p1, i64 12)
+%t22789 = call i64 @__mruntime_rt_device_resid__dh_region(i64 %p0, i64 %t22782, i64 %t22788)
+%t22790 = icmp eq i64 %t22787, 0
+br label %LSL22791
+LSL22791:
+br i1 %t22790, label %LSJ22791, label %LSR22791
+LSR22791:
+%t22792 = icmp eq i64 %t22789, 0
+br label %LSJ22791
+LSJ22791:
+%t22793 = phi i1 [ true, %LSL22791 ], [ %t22792, %LSR22791 ]
+br label %LSL22794
+LSL22794:
+br i1 %t22793, label %LSJ22794, label %LSR22794
+LSR22794:
+%t22795 = call i1 @__mruntime_rt_device_resid__dh_bufs(i64 %p0, i64 %p1)
+%t22796 = xor i1 %t22795, true
+br label %LSJ22794
+LSJ22794:
+%t22797 = phi i1 [ true, %LSL22794 ], [ %t22796, %LSR22794 ]
+br i1 %t22797, label %L7528, label %L7530
+L7528:
+%t22798 = call i64 @native_child_exit(i64 125)
+ret i64 %t22798
+L7530:
+%t22799 = call i64 @__mruntime_rt_device_resid__dget(i64 %p1, i64 13)
+%t22800 = call i64 @__mruntime_rt_device_resid__dget(i64 %p1, i64 14)
+%t22801 = call i64 @mcopy(i64 %t22787, i64 %t22799, i64 %t22800)
+%t22802 = add i64 0, 64
+%t22803 = call i64 @__mruntime_rt_device_resid__dh_rule(i64 %p0, i64 %t22802, i64 1, i64 %t22775, i64 0)
+%t22804 = add i64 0, 63
+%t22805 = call i64 @__mruntime_rt_device_resid__dh_rule(i64 %p0, i64 %t22804, i64 1, i64 %t22775, i64 0)
+%t22806 = add i64 %t22803, %t22805
+%t22807 = call i1 @__mruntime_rt_device_resid__dh_lock(i64 %p0)
+%t22808 = xor i1 %t22807, true
+br i1 %t22808, label %L7531, label %L7533
+L7531:
+%t22809 = call i64 @native_child_exit(i64 126)
+ret i64 %t22809
+L7533:
+%t22810 = call i64 @__mruntime_rt_device_resid__dget(i64 %p1, i64 14)
+%t22811 = call i64 @__mruntime_rt_device_resid__dh_write_all(i64 %t22775, i64 %t22787, i64 0, i64 %t22810)
+%t22812 = icmp slt i64 %t22811, 0
+br i1 %t22812, label %L7534, label %L7536
+L7534:
+%t22813 = call i64 @__mruntime_rt_device_resid__dh_fail_errno(i64 %p0, i64 %t22811, i1 false)
+ret i64 %t22813
+L7536:
+%t22814 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 2)
+%t22815 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 0)
+%t22816 = icmp eq i64 %t22815, 3
+br i1 %t22816, label %L7537, label %L7538
+L7537:
+%t22817 = add i64 %t22782, %t22814
+%t22818 = sub i64 %t22817, 1
+%t22819 = icmp eq i64 %t22814, 0
+%t22820 = zext i1 %t22819 to i8
+call void @resid_div_check(i8 %t22820)
+%t22821 = icmp eq i64 %t22814, -1
+%t22822 = icmp eq i64 %t22818, -9223372036854775808
+%t22823 = and i1 %t22821, %t22822
+%t22826 = zext i1 %t22823 to i8
+call void @resid_overflow_check(i8 %t22826)
+%t22824 = add i64 %t22814, 0
+%t22825 = sdiv i64 %t22818, %t22824
+%t22827 = mul i64 %t22825, %t22814
+%t22828 = add i64 %t22827, %t22814
+br label %L7539
+L7538:
+br label %L7539
+L7539:
+%t22829 = phi i64 [ %t22828, %L7537 ], [ %t22782, %L7538 ]
+%t22830 = call i64 @sc(i64 0, i64 %t22775, i64 %t22789, i64 %t22829)
+%t22831 = call i64 @__mruntime_rt_device_resid__dh_after_op(i64 %p0)
+%t22832 = icmp slt i64 %t22830, 0
+br i1 %t22832, label %L7540, label %L7542
+L7540:
+%t22833 = call i64 @__mruntime_rt_device_resid__dh_fail_errno(i64 %p0, i64 %t22830, i1 false)
+ret i64 %t22833
+L7542:
+%t22834 = icmp sgt i64 %t22830, %t22782
+br label %LSL22835
+LSL22835:
+br i1 %t22834, label %LSJ22835, label %LSR22835
+LSR22835:
+%t22836 = call i1 @__mruntime_rt_device_resid__dh_canaries(i64 %p0, i64 0)
+%t22837 = xor i1 %t22836, true
+br label %LSJ22835
+LSJ22835:
+%t22838 = phi i1 [ true, %LSL22835 ], [ %t22837, %LSR22835 ]
+br i1 %t22838, label %L7543, label %L7545
+L7543:
+%t22839 = call i64 @__mruntime_rt_device_resid__dh_fail(i64 %p0, i64 8, i64 0)
+ret i64 %t22839
+L7545:
+%t22840 = call i64 @__mruntime_rt_device_resid__gput(i64 %p0, i64 0, i64 1)
+%t22841 = call i64 @__mruntime_rt_device_resid__gput(i64 %p0, i64 1, i64 4)
+%t22842 = add i64 %t22840, %t22841
+%t22843 = call i64 @__mruntime_rt_device_resid__dget(i64 %p1, i64 12)
+%t22844 = call i64 @__mruntime_rt_device_resid__gout(i64 %p0, i64 %t22789, i64 %t22830, i64 %t22843)
+%t22845 = add i64 %t22842, %t22844
+%t22846 = call i64 @__mruntime_rt_device_resid__dh_reply(i64 %p0)
+ret i64 %t22846
+}
+define internal i64 @__mruntime_rt_device_resid__dh_write_all(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t22854, %tco.s0 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ]
+%t22847 = icmp sge i64 %p2, %p3
+br i1 %t22847, label %L7546, label %L7548
+L7546:
+ret i64 %p3
+L7548:
+%t22848 = add i64 %p1, %p2
+%t22849 = sub i64 %p3, %p2
+%t22850 = call i64 @sc(i64 1, i64 %p0, i64 %t22848, i64 %t22849)
+%t22851 = icmp slt i64 %t22850, 0
+br i1 %t22851, label %L7549, label %L7551
+L7549:
+ret i64 %t22850
+L7551:
+%t22852 = icmp eq i64 %t22850, 0
+br i1 %t22852, label %L7552, label %L7554
+L7552:
+%t22853 = sub nsw i64 0, 5
+ret i64 %t22853
+L7554:
+%t22854 = add i64 %p2, %t22850
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i64 @__mruntime_rt_device_resid__dh_read_all(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t22862, %tco.s0 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ]
+%t22856 = icmp sge i64 %p2, %p3
+br i1 %t22856, label %L7555, label %L7557
+L7555:
+ret i64 %p2
+L7557:
+%t22857 = add i64 %p1, %p2
+%t22858 = sub i64 %p3, %p2
+%t22859 = call i64 @sc(i64 0, i64 %p0, i64 %t22857, i64 %t22858)
+%t22860 = icmp slt i64 %t22859, 0
+br i1 %t22860, label %L7558, label %L7560
+L7558:
+ret i64 %t22859
+L7560:
+%t22861 = icmp eq i64 %t22859, 0
+br i1 %t22861, label %L7561, label %L7563
+L7561:
+ret i64 %p2
+L7563:
+%t22862 = add i64 %p2, %t22859
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i64 @__mruntime_rt_device_resid__dh_attr(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t22864 = sub nsw i64 0, 100
+%t22865 = call i64 @__mruntime_rt_device_resid__dget(i64 %p1, i64 4)
+%t22866 = call i64 @__mruntime_rt_device_resid__dh_open_at(i64 %t22864, i64 %t22865, i64 0)
+%t22867 = icmp slt i64 %t22866, 0
+br i1 %t22867, label %L7564, label %L7566
+L7564:
+%t22868 = call i64 @__mruntime_rt_device_resid__dh_fail_errno(i64 %p0, i64 %t22866, i1 false)
+ret i64 %t22868
+L7566:
+%t22869 = call i1 @__mruntime_rt_device_resid__dh_is_attr(i64 %t22866)
+%t22870 = xor i1 %t22869, true
+br i1 %t22870, label %L7567, label %L7569
+L7567:
+%t22871 = call i64 @__mruntime_rt_device_resid__dh_fail(i64 %p0, i64 6, i64 0)
+ret i64 %t22871
+L7569:
+%t22872 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 7, i64 %t22866)
+%t22873 = call i64 @__mruntime_rt_device_resid__dget(i64 %p1, i64 10)
+%t22874 = call i1 @__mruntime_rt_device_resid__dh_regions(i64 %p0, i64 2)
+%t22875 = xor i1 %t22874, true
+br i1 %t22875, label %L7570, label %L7572
+L7570:
+%t22876 = call i64 @native_child_exit(i64 125)
+ret i64 %t22876
+L7572:
+%t22877 = add i64 %t22873, 1
+%t22878 = call i64 @__mruntime_rt_device_resid__dh_region(i64 %p0, i64 %t22877, i64 0)
+%t22879 = icmp eq i64 %t22878, 0
+br label %LSL22880
+LSL22880:
+br i1 %t22879, label %LSJ22880, label %LSR22880
+LSR22880:
+%t22881 = call i1 @__mruntime_rt_device_resid__dh_bufs(i64 %p0, i64 %p1)
+%t22882 = xor i1 %t22881, true
+br label %LSJ22880
+LSJ22880:
+%t22883 = phi i1 [ true, %LSL22880 ], [ %t22882, %LSR22880 ]
+br i1 %t22883, label %L7573, label %L7575
+L7573:
+%t22884 = call i64 @native_child_exit(i64 125)
+ret i64 %t22884
+L7575:
+%t22885 = add i64 0, 63
+%t22886 = call i64 @__mruntime_rt_device_resid__dh_rule(i64 %p0, i64 %t22885, i64 1, i64 %t22866, i64 0)
+%t22887 = call i1 @__mruntime_rt_device_resid__dh_lock(i64 %p0)
+%t22888 = xor i1 %t22887, true
+br i1 %t22888, label %L7576, label %L7578
+L7576:
+%t22889 = call i64 @native_child_exit(i64 126)
+ret i64 %t22889
+L7578:
+%t22890 = add i64 %t22873, 1
+%t22891 = call i64 @__mruntime_rt_device_resid__dh_read_all(i64 %t22866, i64 %t22878, i64 0, i64 %t22890)
+%t22892 = call i64 @__mruntime_rt_device_resid__dh_after_op(i64 %p0)
+%t22893 = icmp slt i64 %t22891, 0
+br i1 %t22893, label %L7579, label %L7581
+L7579:
+%t22894 = call i64 @__mruntime_rt_device_resid__dh_fail_errno(i64 %p0, i64 %t22891, i1 false)
+ret i64 %t22894
+L7581:
+%t22895 = call i1 @__mruntime_rt_device_resid__dh_canaries(i64 %p0, i64 0)
+%t22896 = xor i1 %t22895, true
+br i1 %t22896, label %L7582, label %L7584
+L7582:
+%t22897 = call i64 @__mruntime_rt_device_resid__dh_fail(i64 %p0, i64 8, i64 0)
+ret i64 %t22897
+L7584:
+%t22898 = icmp sgt i64 %t22891, %t22873
+br i1 %t22898, label %L7585, label %L7587
+L7585:
+%t22899 = call i64 @__mruntime_rt_device_resid__dh_fail(i64 %p0, i64 4, i64 0)
+ret i64 %t22899
+L7587:
+%t22900 = call i64 @__mruntime_rt_device_resid__gput(i64 %p0, i64 0, i64 1)
+%t22901 = call i64 @__mruntime_rt_device_resid__gput(i64 %p0, i64 1, i64 4)
+%t22902 = add i64 %t22900, %t22901
+%t22903 = call i64 @__mruntime_rt_device_resid__gout(i64 %p0, i64 %t22878, i64 %t22891, i64 0)
+%t22904 = add i64 %t22902, %t22903
+%t22905 = call i64 @__mruntime_rt_device_resid__dh_reply(i64 %p0)
+ret i64 %t22905
+}
+define internal i64 @__mruntime_rt_device_resid__cf(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t22906 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 18)
+%t22907 = mul i64 %p1, 8
+%t22908 = add i64 %t22906, %t22907
+%t22909 = call i64 @ld64(i64 %t22908)
+ret i64 %t22909
+}
+define internal i64 @__mruntime_rt_device_resid__cf_set(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t22910 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 18)
+%t22911 = mul i64 %p1, 8
+%t22912 = add i64 %t22910, %t22911
+%t22913 = call i64 @st64(i64 %t22912, i64 %p2)
+ret i64 %t22913
+}
+define internal i64 @__mruntime_rt_device_resid__dh_report(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t22914 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 0)
+%t22915 = icmp sge i64 %t22914, 9
+br label %LSL22916
+LSL22916:
+br i1 %t22915, label %LSR22916, label %LSJ22916
+LSR22916:
+%t22917 = icmp sle i64 %t22914, 12
+br label %LSJ22916
+LSJ22916:
+%t22918 = phi i1 [ false, %LSL22916 ], [ %t22917, %LSR22916 ]
+br label %LSL22919
+LSL22919:
+br i1 %t22918, label %LSR22919, label %LSJ22919
+LSR22919:
+%t22920 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 1)
+%t22921 = icmp ne i64 %t22920, 0
+br label %LSJ22919
+LSJ22919:
+%t22922 = phi i1 [ false, %LSL22919 ], [ %t22921, %LSR22919 ]
+%t22923 = call i64 @xmalloc(i64 128)
+%t22924p = inttoptr i64 %t22923 to ptr
+%t22924q = trunc i64 255 to i8
+call void @llvm.memset.p0.i64(ptr %t22924p, i8 %t22924q, i64 96, i1 false)
+%t22924 = add i64 0, 0
+%t22925 = add i64 %t22923, 96
+%t22926p = inttoptr i64 %t22925 to ptr
+%t22926q = trunc i64 0 to i8
+call void @llvm.memset.p0.i64(ptr %t22926p, i8 %t22926q, i64 32, i1 false)
+%t22926 = add i64 0, 0
+%t22927 = add i64 %t22924, %t22926
+%t22928 = call i64 @__mruntime_rt_device_resid__dset(i64 %p0, i64 18, i64 %t22923)
+br i1 %t22922, label %L7588, label %L7589
+L7588:
+br label %L7590
+L7589:
+br label %L7590
+L7590:
+%t22929 = phi i64 [ 1, %L7588 ], [ 0, %L7589 ]
+%t22930 = call i64 @__mruntime_rt_device_resid__cf_set(i64 %p0, i64 14, i64 %t22929)
+%t22931 = add i64 %t22928, %t22930
+br i1 %t22922, label %L7591, label %L7592
+L7591:
+%t22932 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 1)
+br label %L7593
+L7592:
+%t22933 = call i64 @__mruntime_rt_device_resid__dget(i64 %p1, i64 4)
+br label %L7593
+L7593:
+%t22934 = phi i64 [ %t22932, %L7591 ], [ %t22933, %L7592 ]
+%t22935 = sub nsw i64 0, 100
+%t22936 = call i64 @__mruntime_rt_device_resid__o_directory()
+%t22937 = call i64 @__mruntime_rt_device_resid__dh_open_at(i64 %t22935, i64 %t22934, i64 %t22936)
+%t22938 = icmp slt i64 %t22937, 0
+br i1 %t22938, label %L7594, label %L7596
+L7594:
+%t22939 = call i64 @__mruntime_rt_device_resid__dh_fail_errno(i64 %p0, i64 %t22937, i1 false)
+ret i64 %t22939
+L7596:
+%t22940 = call i64 @__mruntime_rt_device_resid__cf_set(i64 %p0, i64 0, i64 %t22937)
+%t22941 = xor i1 %t22922, true
+br label %LSL22942
+LSL22942:
+br i1 %t22941, label %LSR22942, label %LSJ22942
+LSR22942:
+%t22943 = call i1 @__mruntime_rt_device_resid__dh_is_configfs(i64 %t22937)
+%t22944 = xor i1 %t22943, true
+br label %LSJ22942
+LSJ22942:
+%t22945 = phi i1 [ false, %LSL22942 ], [ %t22944, %LSR22942 ]
+br i1 %t22945, label %L7597, label %L7599
+L7597:
+%t22946 = call i64 @__mruntime_rt_device_resid__dh_cf_fail(i64 %p0, i64 6, i64 0)
+ret i64 %t22946
+L7599:
+%t22947 = call i64 @__mruntime_rt_device_resid__dh_entry_name()
+%t22948 = icmp eq i64 %t22947, 0
+br i1 %t22948, label %L7600, label %L7602
+L7600:
+%t22949 = call i64 @native_child_exit(i64 125)
+ret i64 %t22949
+L7602:
+%t22950 = call i64 @__mruntime_rt_device_resid__cf_set(i64 %p0, i64 12, i64 %t22947)
+%t22951 = call i64 @sc(i64 258, i64 %t22937, i64 %t22947, i64 448)
+%t22952 = icmp slt i64 %t22951, 0
+br i1 %t22952, label %L7603, label %L7605
+L7603:
+%t22953 = sub i64 0, %t22951
+%t22954 = call i64 @__mruntime_rt_device_resid__dh_errno(i64 %t22953, i1 false)
+%t22955 = sub i64 0, %t22951
+%t22956 = call i64 @__mruntime_rt_device_resid__dh_cf_fail(i64 %p0, i64 %t22954, i64 %t22955)
+ret i64 %t22956
+L7605:
+%t22957 = call i64 @__mruntime_rt_device_resid__cf_set(i64 %p0, i64 13, i64 1)
+%t22958 = call i64 @__mruntime_rt_device_resid__o_path()
+%t22959 = call i64 @__mruntime_rt_device_resid__o_directory()
+%t22960 = or i64 %t22958, %t22959
+%t22961 = call i64 @__mruntime_rt_device_resid__dh_open_at(i64 %t22937, i64 %t22947, i64 %t22960)
+%t22962 = icmp slt i64 %t22961, 0
+br i1 %t22962, label %L7606, label %L7608
+L7606:
+%t22963 = sub i64 0, %t22961
+%t22964 = call i64 @__mruntime_rt_device_resid__dh_errno(i64 %t22963, i1 false)
+%t22965 = sub i64 0, %t22961
+%t22966 = call i64 @__mruntime_rt_device_resid__dh_cf_fail(i64 %p0, i64 %t22964, i64 %t22965)
+ret i64 %t22966
+L7608:
+%t22967 = call i64 @__mruntime_rt_device_resid__cf_set(i64 %p0, i64 1, i64 %t22961)
+br i1 %t22922, label %L7609, label %L7610
+L7609:
+%t22968 = call i64 @__mruntime_rt_device_resid__dh_fake_fill(i64 %t22961, i64 %t22914)
+br label %L7611
+L7610:
+br label %L7611
+L7611:
+%t22969 = phi i64 [ %t22968, %L7609 ], [ 0, %L7610 ]
+%t22970 = icmp eq i64 %t22914, 11
+br label %LSL22971
+LSL22971:
+br i1 %t22970, label %LSJ22971, label %LSR22971
+LSR22971:
+%t22972 = call i1 @__mruntime_rt_device_resid__dh_landlock(i64 %t22937, i64 %t22961, i1 %t22922)
+%t22973 = xor i1 %t22972, true
+br label %LSJ22971
+LSJ22971:
+%t22974 = phi i1 [ true, %LSL22971 ], [ %t22973, %LSR22971 ]
+br i1 %t22974, label %L7612, label %L7614
+L7612:
+%t22975 = call i64 @__mruntime_rt_device_resid__dh_cf_fail(i64 %p0, i64 6, i64 0)
+ret i64 %t22975
+L7614:
+%t22976 = call i64 @__mruntime_rt_device_resid__dh_cf_open(i64 %p0, i64 %p1, i64 %t22961, i64 %t22914)
+%t22977 = icmp ne i64 %t22976, 0
+br i1 %t22977, label %L7615, label %L7617
+L7615:
+%t22978 = icmp eq i64 %t22976, 2
+br i1 %t22978, label %L7618, label %L7619
+L7618:
+br label %L7620
+L7619:
+%t22979 = call i64 @__mruntime_rt_device_resid__dh_errno(i64 %t22976, i1 false)
+br label %L7620
+L7620:
+%t22980 = phi i64 [ 6, %L7618 ], [ %t22979, %L7619 ]
+%t22981 = call i64 @__mruntime_rt_device_resid__dh_cf_fail(i64 %p0, i64 %t22980, i64 %t22976)
+ret i64 %t22981
+L7617:
+%t22982 = call i1 @__mruntime_rt_device_resid__dh_regions(i64 %p0, i64 10)
+%t22983 = xor i1 %t22982, true
+br i1 %t22983, label %L7621, label %L7623
+L7621:
+%t22984 = tail call i64 @__mruntime_rt_device_resid__dh_cf_exit(i64 %p0, i64 125)
+ret i64 %t22984
+L7623:
+%t22985 = call i64 @__mruntime_rt_device_resid__dget(i64 %p1, i64 10)
+%t22986 = call i64 @__mruntime_rt_device_resid__dh_region(i64 %p0, i64 %t22985, i64 0)
+%t22987 = call i64 @__mruntime_rt_device_resid__dget(i64 %p1, i64 11)
+%t22988 = add i64 %t22987, 1
+%t22989 = call i64 @__mruntime_rt_device_resid__dh_region(i64 %p0, i64 %t22988, i64 0)
+%t22990 = call i64 @__mruntime_rt_device_resid__dget(i64 %p1, i64 12)
+%t22991 = add i64 %t22990, 1
+%t22992 = call i64 @__mruntime_rt_device_resid__dh_region(i64 %p0, i64 %t22991, i64 0)
+%t22993 = call i64 @__mruntime_rt_device_resid__dget(i64 %p1, i64 13)
+%t22994 = add i64 %t22993, 1
+%t22995 = call i64 @__mruntime_rt_device_resid__dh_region(i64 %p0, i64 %t22994, i64 0)
+%t22996 = call i64 @__mruntime_rt_device_resid__dh_region(i64 %p0, i64 257, i64 0)
+%t22997 = call i64 @__mruntime_rt_device_resid__dh_region(i64 %p0, i64 32, i64 0)
+%t22998 = call i64 @__mruntime_rt_device_resid__dh_region(i64 %p0, i64 32, i64 0)
+%t22999 = call i64 @__mruntime_rt_device_resid__dh_region(i64 %p0, i64 32, i64 0)
+%t23000 = icmp eq i64 %t22986, 0
+br label %LSL23001
+LSL23001:
+br i1 %t23000, label %LSJ23001, label %LSR23001
+LSR23001:
+%t23002 = icmp eq i64 %t22989, 0
+br label %LSJ23001
+LSJ23001:
+%t23003 = phi i1 [ true, %LSL23001 ], [ %t23002, %LSR23001 ]
+br label %LSL23004
+LSL23004:
+br i1 %t23003, label %LSJ23004, label %LSR23004
+LSR23004:
+%t23005 = icmp eq i64 %t22992, 0
+br label %LSJ23004
+LSJ23004:
+%t23006 = phi i1 [ true, %LSL23004 ], [ %t23005, %LSR23004 ]
+br label %LSL23007
+LSL23007:
+br i1 %t23006, label %LSJ23007, label %LSR23007
+LSR23007:
+%t23008 = icmp eq i64 %t22995, 0
+br label %LSJ23007
+LSJ23007:
+%t23009 = phi i1 [ true, %LSL23007 ], [ %t23008, %LSR23007 ]
+br label %LSL23010
+LSL23010:
+br i1 %t23009, label %LSJ23010, label %LSR23010
+LSR23010:
+%t23011 = icmp eq i64 %t22996, 0
+br label %LSJ23010
+LSJ23010:
+%t23012 = phi i1 [ true, %LSL23010 ], [ %t23011, %LSR23010 ]
+br label %LSL23013
+LSL23013:
+br i1 %t23012, label %LSJ23013, label %LSR23013
+LSR23013:
+%t23014 = icmp eq i64 %t22997, 0
+br label %LSJ23013
+LSJ23013:
+%t23015 = phi i1 [ true, %LSL23013 ], [ %t23014, %LSR23013 ]
+br label %LSL23016
+LSL23016:
+br i1 %t23015, label %LSJ23016, label %LSR23016
+LSR23016:
+%t23017 = icmp eq i64 %t22998, 0
+br label %LSJ23016
+LSJ23016:
+%t23018 = phi i1 [ true, %LSL23016 ], [ %t23017, %LSR23016 ]
+br label %LSL23019
+LSL23019:
+br i1 %t23018, label %LSJ23019, label %LSR23019
+LSR23019:
+%t23020 = icmp eq i64 %t22999, 0
+br label %LSJ23019
+LSJ23019:
+%t23021 = phi i1 [ true, %LSL23019 ], [ %t23020, %LSR23019 ]
+br label %LSL23022
+LSL23022:
+br i1 %t23021, label %LSJ23022, label %LSR23022
+LSR23022:
+%t23023 = call i1 @__mruntime_rt_device_resid__dh_bufs(i64 %p0, i64 %p1)
+%t23024 = xor i1 %t23023, true
+br label %LSJ23022
+LSJ23022:
+%t23025 = phi i1 [ true, %LSL23022 ], [ %t23024, %LSR23022 ]
+br i1 %t23025, label %L7624, label %L7626
+L7624:
+%t23026 = tail call i64 @__mruntime_rt_device_resid__dh_cf_exit(i64 %p0, i64 125)
+ret i64 %t23026
+L7626:
+%t23027 = call i64 @__mruntime_rt_device_resid__dget(i64 %p1, i64 17)
+%t23028 = call i64 @__mruntime_rt_device_resid__dget(i64 %p1, i64 18)
+%t23029 = call i64 @mcopy(i64 %t22986, i64 %t23027, i64 %t23028)
+%t23030 = call i64 @__mruntime_rt_device_resid__dget(i64 %p1, i64 19)
+%t23031 = call i64 @__mruntime_rt_device_resid__dh_itoa(i64 %t22999, i64 %t23030)
+%t23032 = call i64 @__mruntime_rt_device_resid__dh_cf_rules(i64 %p0, i64 %t22937, i64 %t22961, i1 %t22922)
+%t23033 = call i1 @__mruntime_rt_device_resid__dh_lock(i64 %p0)
+%t23034 = xor i1 %t23033, true
+br i1 %t23034, label %L7627, label %L7629
+L7627:
+%t23035 = tail call i64 @__mruntime_rt_device_resid__dh_cf_exit(i64 %p0, i64 126)
+ret i64 %t23035
+L7629:
+%t23036 = call i64 @__mruntime_rt_device_resid__cf(i64 %p0, i64 2)
+%t23037 = call i64 @__mruntime_rt_device_resid__dget(i64 %p1, i64 18)
+%t23038 = call i64 @__mruntime_rt_device_resid__dh_write_all(i64 %t23036, i64 %t22986, i64 0, i64 %t23037)
+%t23039 = icmp slt i64 %t23038, 0
+br i1 %t23039, label %L7630, label %L7632
+L7630:
+%t23040 = sub i64 0, %t23038
+%t23041 = call i64 @__mruntime_rt_device_resid__dh_errno(i64 %t23040, i1 false)
+%t23042 = sub i64 0, %t23038
+%t23043 = call i64 @__mruntime_rt_device_resid__dh_cf_fail(i64 %p0, i64 %t23041, i64 %t23042)
+ret i64 %t23043
+L7632:
+%t23044 = call i64 @__mruntime_rt_device_resid__cf(i64 %p0, i64 2)
+%t23045 = call i64 @sys_close(i64 %t23044)
+%t23046 = sub nsw i64 0, 1
+%t23047 = call i64 @__mruntime_rt_device_resid__cf_set(i64 %p0, i64 2, i64 %t23046)
+%t23048 = add i64 %t23045, %t23047
+%t23049 = call i64 @__mruntime_rt_device_resid__cf(i64 %p0, i64 3)
+%t23050 = icmp sge i64 %t23049, 0
+br i1 %t23050, label %L7633, label %L7634
+L7633:
+%t23051 = call i64 @__mruntime_rt_device_resid__cf(i64 %p0, i64 3)
+%t23052 = call i64 @__mruntime_rt_device_resid__dh_write_all(i64 %t23051, i64 %t22999, i64 0, i64 %t23031)
+br label %L7635
+L7634:
+br label %L7635
+L7635:
+%t23053 = phi i64 [ %t23052, %L7633 ], [ 0, %L7634 ]
+%t23054 = icmp slt i64 %t23053, 0
+br i1 %t23054, label %L7636, label %L7638
+L7636:
+%t23055 = sub i64 0, %t23053
+%t23056 = call i64 @__mruntime_rt_device_resid__dh_errno(i64 %t23055, i1 false)
+%t23057 = sub i64 0, %t23053
+%t23058 = call i64 @__mruntime_rt_device_resid__dh_cf_fail(i64 %p0, i64 %t23056, i64 %t23057)
+ret i64 %t23058
+L7638:
+%t23059 = call i64 @__mruntime_rt_device_resid__cf(i64 %p0, i64 4)
+%t23060 = icmp sge i64 %t23059, 0
+br i1 %t23060, label %L7639, label %L7640
+L7639:
+%t23061 = call i64 @__mruntime_rt_device_resid__cf(i64 %p0, i64 4)
+%t23062 = call i64 @__mruntime_rt_device_resid__dget(i64 %p1, i64 20)
+%t23063 = call i64 @__mruntime_rt_device_resid__dget(i64 %p1, i64 21)
+%t23064 = call i64 @__mruntime_rt_device_resid__dh_write_all(i64 %t23061, i64 %t23062, i64 0, i64 %t23063)
+br label %L7641
+L7640:
+br label %L7641
+L7641:
+%t23065 = phi i64 [ %t23064, %L7639 ], [ 0, %L7640 ]
+%t23066 = icmp slt i64 %t23065, 0
+br i1 %t23066, label %L7642, label %L7644
+L7642:
+%t23067 = sub i64 0, %t23065
+%t23068 = call i64 @__mruntime_rt_device_resid__dh_errno(i64 %t23067, i1 false)
+%t23069 = sub i64 0, %t23065
+%t23070 = call i64 @__mruntime_rt_device_resid__dh_cf_fail(i64 %p0, i64 %t23068, i64 %t23069)
+ret i64 %t23070
+L7644:
+%t23071 = call i64 @__mruntime_rt_device_resid__cf(i64 %p0, i64 9)
+%t23072 = call i64 @__mruntime_rt_device_resid__dh_gen(i64 %t23071, i64 %t22997)
+%t23073 = call i64 @__mruntime_rt_device_resid__cf(i64 %p0, i64 5)
+%t23074 = call i64 @__mruntime_rt_device_resid__dget(i64 %p1, i64 11)
+%t23075 = add i64 %t23074, 1
+%t23076 = call i64 @__mruntime_rt_device_resid__dh_read_all(i64 %t23073, i64 %t22989, i64 0, i64 %t23075)
+%t23077 = call i64 @__mruntime_rt_device_resid__cf(i64 %p0, i64 6)
+%t23078 = icmp sge i64 %t23077, 0
+br i1 %t23078, label %L7645, label %L7646
+L7645:
+%t23079 = call i64 @__mruntime_rt_device_resid__cf(i64 %p0, i64 6)
+%t23080 = call i64 @__mruntime_rt_device_resid__dget(i64 %p1, i64 12)
+%t23081 = add i64 %t23080, 1
+%t23082 = call i64 @__mruntime_rt_device_resid__dh_read_all(i64 %t23079, i64 %t22992, i64 0, i64 %t23081)
+br label %L7647
+L7646:
+br label %L7647
+L7647:
+%t23083 = phi i64 [ %t23082, %L7645 ], [ 0, %L7646 ]
+%t23084 = call i64 @__mruntime_rt_device_resid__cf(i64 %p0, i64 7)
+%t23085 = icmp sge i64 %t23084, 0
+br i1 %t23085, label %L7648, label %L7649
+L7648:
+%t23086 = call i64 @__mruntime_rt_device_resid__cf(i64 %p0, i64 7)
+%t23087 = call i64 @__mruntime_rt_device_resid__dget(i64 %p1, i64 13)
+%t23088 = add i64 %t23087, 1
+%t23089 = call i64 @__mruntime_rt_device_resid__dh_read_all(i64 %t23086, i64 %t22995, i64 0, i64 %t23088)
+br label %L7650
+L7649:
+br label %L7650
+L7650:
+%t23090 = phi i64 [ %t23089, %L7648 ], [ 0, %L7649 ]
+%t23091 = call i64 @__mruntime_rt_device_resid__cf(i64 %p0, i64 8)
+%t23092 = call i64 @__mruntime_rt_device_resid__dh_read_all(i64 %t23091, i64 %t22996, i64 0, i64 257)
+%t23093 = icmp eq i64 %t22914, 10
+br i1 %t23093, label %L7651, label %L7652
+L7651:
+%t23094 = call i64 @__mruntime_rt_device_resid__cf(i64 %p0, i64 11)
+%t23096 = ptrtoint ptr @.s23095 to i64
+%t23097 = call i64 @sc(i64 1, i64 %t23094, i64 %t23096, i64 2)
+br label %L7653
+L7652:
+br label %L7653
+L7653:
+%t23098 = phi i64 [ %t23097, %L7651 ], [ 0, %L7652 ]
+%t23099 = call i64 @__mruntime_rt_device_resid__cf(i64 %p0, i64 10)
+%t23100 = call i64 @__mruntime_rt_device_resid__dh_gen(i64 %t23099, i64 %t22998)
+%t23101 = call i64 @__mruntime_rt_device_resid__dh_after_op(i64 %p0)
+%t23102 = call i64 @__mruntime_rt_device_resid__dh_cf_check(i64 %p0, i64 %p1, i64 %t23076, i64 %t23083, i64 %t23090, i64 %t23092, i64 %t23072, i64 %t23100, i64 %t22996)
+%t23103 = icmp ne i64 %t23102, 0
+br i1 %t23103, label %L7654, label %L7656
+L7654:
+%t23104 = and i64 %t23102, 255
+%t23105 = ashr i64 %t23102, 8
+%t23106 = call i64 @__mruntime_rt_device_resid__dh_cf_fail(i64 %p0, i64 %t23104, i64 %t23105)
+ret i64 %t23106
+L7656:
+%t23107 = call i64 @__mruntime_rt_device_resid__dh_cf_clean(i64 %p0)
+%t23108 = call i64 @__mruntime_rt_device_resid__dh_trim(i64 %t22996, i64 %t23092)
+%t23109 = call i64 @__mruntime_rt_device_resid__gput(i64 %p0, i64 0, i64 1)
+%t23110 = call i64 @__mruntime_rt_device_resid__gput(i64 %p0, i64 5, i64 4)
+%t23111 = add i64 %t23109, %t23110
+%t23112 = call i64 @__mruntime_rt_device_resid__gout(i64 %p0, i64 %t22989, i64 %t23076, i64 0)
+%t23113 = call i64 @__mruntime_rt_device_resid__gout(i64 %p0, i64 %t22992, i64 %t23083, i64 0)
+%t23114 = add i64 %t23112, %t23113
+%t23115 = call i64 @__mruntime_rt_device_resid__gout(i64 %p0, i64 %t22995, i64 %t23090, i64 0)
+%t23116 = add i64 %t23114, %t23115
+%t23117 = call i64 @__mruntime_rt_device_resid__gout(i64 %p0, i64 %t22996, i64 %t23108, i64 0)
+%t23118 = add i64 %t23116, %t23117
+%t23119 = call i64 @__mruntime_rt_device_resid__gput(i64 %p0, i64 0, i64 1)
+%t23120 = call i64 @__mruntime_rt_device_resid__gput(i64 %p0, i64 %t23100, i64 8)
+%t23121 = add i64 %t23119, %t23120
+%t23122 = call i64 @__mruntime_rt_device_resid__dh_reply(i64 %p0)
+ret i64 %t23122
+}
+define internal i64 @__mruntime_rt_device_resid__dh_cf_check(i64 %p0, i64 %p1, i64 %p2, i64 %p3, i64 %p4, i64 %p5, i64 %p6, i64 %p7, i64 %p8) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t23123 = icmp slt i64 %p2, 0
+br i1 %t23123, label %L7657, label %L7658
+L7657:
+br label %L7659
+L7658:
+%t23124 = icmp slt i64 %p3, 0
+br i1 %t23124, label %L7660, label %L7661
+L7660:
+br label %L7662
+L7661:
+%t23125 = icmp slt i64 %p4, 0
+br i1 %t23125, label %L7663, label %L7664
+L7663:
+br label %L7665
+L7664:
+%t23126 = icmp slt i64 %p5, 0
+br i1 %t23126, label %L7666, label %L7667
+L7666:
+br label %L7668
+L7667:
+br label %L7668
+L7668:
+%t23127 = phi i64 [ %p5, %L7666 ], [ 0, %L7667 ]
+br label %L7665
+L7665:
+%t23128 = phi i64 [ %p4, %L7663 ], [ %t23127, %L7668 ]
+br label %L7662
+L7662:
+%t23129 = phi i64 [ %p3, %L7660 ], [ %t23128, %L7665 ]
+br label %L7659
+L7659:
+%t23130 = phi i64 [ %p2, %L7657 ], [ %t23129, %L7662 ]
+%t23131 = icmp slt i64 %t23130, 0
+br i1 %t23131, label %L7669, label %L7671
+L7669:
+%t23132 = sub i64 0, %t23130
+%t23133 = call i64 @__mruntime_rt_device_resid__dh_errno(i64 %t23132, i1 false)
+%t23134 = sub i64 0, %t23130
+%t23135 = shl i64 %t23134, 8
+%t23136 = or i64 %t23133, %t23135
+ret i64 %t23136
+L7671:
+%t23137 = call i1 @__mruntime_rt_device_resid__dh_canaries(i64 %p0, i64 0)
+%t23138 = xor i1 %t23137, true
+br i1 %t23138, label %L7672, label %L7674
+L7672:
+ret i64 8
+L7674:
+%t23139 = call i64 @__mruntime_rt_device_resid__dget(i64 %p1, i64 11)
+%t23140 = icmp sgt i64 %p2, %t23139
+br label %LSL23141
+LSL23141:
+br i1 %t23140, label %LSJ23141, label %LSR23141
+LSR23141:
+%t23142 = call i64 @__mruntime_rt_device_resid__dget(i64 %p1, i64 12)
+%t23143 = icmp sgt i64 %p3, %t23142
+br label %LSJ23141
+LSJ23141:
+%t23144 = phi i1 [ true, %LSL23141 ], [ %t23143, %LSR23141 ]
+br label %LSL23145
+LSL23145:
+br i1 %t23144, label %LSJ23145, label %LSR23145
+LSR23145:
+%t23146 = call i64 @__mruntime_rt_device_resid__dget(i64 %p1, i64 13)
+%t23147 = icmp sgt i64 %p4, %t23146
+br label %LSJ23145
+LSJ23145:
+%t23148 = phi i1 [ true, %LSL23145 ], [ %t23147, %LSR23145 ]
+br label %LSL23149
+LSL23149:
+br i1 %t23148, label %LSJ23149, label %LSR23149
+LSR23149:
+%t23150 = icmp sgt i64 %p5, 256
+br label %LSJ23149
+LSJ23149:
+%t23151 = phi i1 [ true, %LSL23149 ], [ %t23150, %LSR23149 ]
+br i1 %t23151, label %L7675, label %L7677
+L7675:
+ret i64 4
+L7677:
+%t23152 = icmp slt i64 %p6, 0
+br label %LSL23153
+LSL23153:
+br i1 %t23152, label %LSJ23153, label %LSR23153
+LSR23153:
+%t23154 = icmp slt i64 %p7, 0
+br label %LSJ23153
+LSJ23153:
+%t23155 = phi i1 [ true, %LSL23153 ], [ %t23154, %LSR23153 ]
+br i1 %t23155, label %L7678, label %L7680
+L7678:
+ret i64 6
+L7680:
+%t23156 = icmp ne i64 %p6, %p7
+br i1 %t23156, label %L7681, label %L7683
+L7681:
+ret i64 5
+L7683:
+%t23157 = call i64 @__mruntime_rt_device_resid__dh_trim(i64 %p8, i64 %p5)
+%t23158 = call i1 @__mruntime_rt_device_resid__dh_prov_known(i64 %p1, i64 %p8, i64 %t23157, i64 0)
+%t23159 = xor i1 %t23158, true
+br i1 %t23159, label %L7684, label %L7686
+L7684:
+%t23160 = call i64 @__mruntime_rt_device_resid__dh_cf_provider(i64 %p0, i64 %p8, i64 %t23157)
+ret i64 %t23160
+L7686:
+ret i64 0
+}
+define internal i1 @__mruntime_rt_device_resid__dh_prov_known(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %t23174, %tco.s0 ]
+%t23161 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 15)
+%t23162 = icmp sge i64 %p3, %t23161
+br i1 %t23162, label %L7687, label %L7689
+L7687:
+ret i1 false
+L7689:
+%t23163 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 16)
+%t23164 = mul i64 %p3, 16
+%t23165 = add i64 %t23163, %t23164
+%t23166 = add i64 %t23165, 8
+%t23167 = call i64 @ld64(i64 %t23166)
+%t23168 = icmp eq i64 %t23167, %p2
+br label %LSL23169
+LSL23169:
+br i1 %t23168, label %LSR23169, label %LSJ23169
+LSR23169:
+%t23170 = call i64 @ld64(i64 %t23165)
+%t23171 = call i64 @c_memcmp(i64 %t23170, i64 %p1, i64 %p2)
+%t23172 = icmp eq i64 %t23171, 0
+br label %LSJ23169
+LSJ23169:
+%t23173 = phi i1 [ false, %LSL23169 ], [ %t23172, %LSR23169 ]
+br i1 %t23173, label %L7690, label %L7692
+L7690:
+ret i1 true
+L7692:
+%t23174 = add nsw i64 %p3, 1
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i64 @__mruntime_rt_device_resid__dh_cf_provider(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t23176 = call i64 @__mruntime_rt_device_resid__dh_cf_clean(i64 %p0)
+%t23177 = icmp slt i64 %p2, 1
+br i1 %t23177, label %L7693, label %L7694
+L7693:
+br label %L7695
+L7694:
+br label %L7695
+L7695:
+%t23178 = phi i64 [ 1, %L7693 ], [ %p2, %L7694 ]
+%t23179 = call i64 @__mruntime_rt_device_resid__dget(i64 %p0, i64 14)
+%t23180 = call i64 @st8(i64 %t23179, i64 1)
+%t23181 = add i64 %t23179, 1
+%t23182 = call i64 @st8(i64 %t23181, i64 9)
+%t23183 = add i64 %t23180, %t23182
+%t23184 = add i64 %t23179, 2
+%t23185 = call i64 @le_put(i64 %t23184, i64 %t23178, i64 8)
+%t23186 = add i64 %t23183, %t23185
+%t23187 = icmp slt i64 %p2, 1
+br i1 %t23187, label %L7696, label %L7697
+L7696:
+%t23188 = add i64 %t23179, 10
+%t23189 = call i64 @st8(i64 %t23188, i64 63)
+br label %L7698
+L7697:
+%t23190 = add i64 %t23179, 10
+%t23191 = call i64 @__mruntime_rt_device_resid__dh_printable(i64 %t23190, i64 %p1, i64 0, i64 %p2)
+br label %L7698
+L7698:
+%t23192 = phi i64 [ %t23189, %L7696 ], [ %t23191, %L7697 ]
+%t23193 = add i64 10, %t23178
+%t23194 = call i1 @native_write(i64 %t23179, i64 0, i64 %t23193)
+br i1 %t23194, label %L7699, label %L7700
+L7699:
+br label %L7701
+L7700:
+br label %L7701
+L7701:
+%t23195 = phi i64 [ 0, %L7699 ], [ 125, %L7700 ]
+%t23196 = call i64 @native_child_exit(i64 %t23195)
+ret i64 %t23196
+}
+define internal i64 @__mruntime_rt_device_resid__dh_printable(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t23207, %tco.s0 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ]
+%t23197 = icmp sge i64 %p2, %p3
+br i1 %t23197, label %L7702, label %L7704
+L7702:
+ret i64 0
+L7704:
+%t23198 = add i64 %p1, %p2
+%t23199 = call i64 @ld8(i64 %t23198)
+%t23200 = add i64 %p0, %p2
+%t23201 = icmp sge i64 %t23199, 32
+br label %LSL23202
+LSL23202:
+br i1 %t23201, label %LSR23202, label %LSJ23202
+LSR23202:
+%t23203 = icmp slt i64 %t23199, 127
+br label %LSJ23202
+LSJ23202:
+%t23204 = phi i1 [ false, %LSL23202 ], [ %t23203, %LSR23202 ]
+br i1 %t23204, label %L7705, label %L7706
+L7705:
+br label %L7707
+L7706:
+br label %L7707
+L7707:
+%t23205 = phi i64 [ %t23199, %L7705 ], [ 63, %L7706 ]
+%t23206 = call i64 @st8(i64 %t23200, i64 %t23205)
+%t23207 = add nsw i64 %p2, 1
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i64 @__mruntime_rt_device_resid__dh_trim(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t23209 = icmp sgt i64 %p1, 0
+br label %LSL23210
+LSL23210:
+br i1 %t23209, label %LSR23210, label %LSJ23210
+LSR23210:
+%t23211 = add i64 %p0, %p1
+%t23212 = sub nsw i64 %t23211, 1
+%t23213 = call i64 @ld8(i64 %t23212)
+%t23214 = icmp eq i64 %t23213, 10
+br label %LSJ23210
+LSJ23210:
+%t23215 = phi i1 [ false, %LSL23210 ], [ %t23214, %LSR23210 ]
+br i1 %t23215, label %L7708, label %L7709
+L7708:
+%t23216 = sub nsw i64 %p1, 1
+br label %L7710
+L7709:
+br label %L7710
+L7710:
+%t23217 = phi i64 [ %t23216, %L7708 ], [ %p1, %L7709 ]
+ret i64 %t23217
+}
+define internal i64 @__mruntime_rt_device_resid__dh_gen(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t23218 = call i64 @__mruntime_rt_device_resid__dh_read_all(i64 %p0, i64 %p1, i64 0, i64 31)
+%t23219 = icmp sle i64 %t23218, 0
+br i1 %t23219, label %L7711, label %L7713
+L7711:
+%t23220 = sub nsw i64 0, 1
+ret i64 %t23220
+L7713:
+%t23221 = call i64 @__mruntime_rt_device_resid__dh_trim(i64 %p1, i64 %t23218)
+%t23222 = icmp slt i64 %t23221, 1
+br label %LSL23223
+LSL23223:
+br i1 %t23222, label %LSJ23223, label %LSR23223
+LSR23223:
+%t23224 = icmp sgt i64 %t23221, 18
+br label %LSJ23223
+LSJ23223:
+%t23225 = phi i1 [ true, %LSL23223 ], [ %t23224, %LSR23223 ]
+br i1 %t23225, label %L7714, label %L7716
+L7714:
+%t23226 = sub nsw i64 0, 1
+ret i64 %t23226
+L7716:
+%t23227 = call i64 @__mruntime_rt_device_resid__dh_dec(i64 %p1, i64 0, i64 %t23221, i64 0)
+ret i64 %t23227
+}
+define internal i64 @__mruntime_rt_device_resid__dh_dec(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %t23236, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %t23239, %tco.s0 ]
+%t23228 = icmp sge i64 %p1, %p2
+br i1 %t23228, label %L7717, label %L7719
+L7717:
+ret i64 %p3
+L7719:
+%t23229 = add i64 %p0, %p1
+%t23230 = call i64 @ld8(i64 %t23229)
+%t23231 = icmp slt i64 %t23230, 48
+br label %LSL23232
+LSL23232:
+br i1 %t23231, label %LSJ23232, label %LSR23232
+LSR23232:
+%t23233 = icmp sgt i64 %t23230, 57
+br label %LSJ23232
+LSJ23232:
+%t23234 = phi i1 [ true, %LSL23232 ], [ %t23233, %LSR23232 ]
+br i1 %t23234, label %L7720, label %L7722
+L7720:
+%t23235 = sub nsw i64 0, 1
+ret i64 %t23235
+L7722:
+%t23236 = add nsw i64 %p1, 1
+%t23237 = mul i64 %p3, 10
+%t23238 = add i64 %t23237, %t23230
+%t23239 = sub nsw i64 %t23238, 48
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i64 @__mruntime_rt_device_resid__dh_itoa(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t23241 = icmp slt i64 %p1, 0
+br i1 %t23241, label %L7723, label %L7725
+L7723:
+ret i64 0
+L7725:
+%t23242 = call i64 @native_digits(i64 %p1, i64 1)
+%t23243 = call i64 @native_utoa(i64 %p0, i64 %p1)
+%t23244 = add i64 %p0, %t23242
+%t23245 = call i64 @st8(i64 %t23244, i64 10)
+%t23246 = add i64 %t23242, 1
+ret i64 %t23246
+}
+define internal i64 @__mruntime_rt_device_resid__dh_entry_name() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t23247 = call i64 @xmalloc(i64 16)
+%t23248 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 278, i64 %t23247, i64 16, i64 0, i64 0, i64 0, i64 0)
+%t23249 = icmp ne i64 %t23248, 16
+br i1 %t23249, label %L7726, label %L7728
+L7726:
+ret i64 0
+L7728:
+%t23250 = call i64 @xmalloc(i64 40)
+%t23252 = ptrtoint ptr @.s23251 to i64
+%t23253 = call i64 @mcopy(i64 %t23250, i64 %t23252, i64 6)
+%t23254 = add i64 %t23250, 6
+%t23255 = call i64 @__mruntime_rt_device_resid__dh_hex(i64 %t23254, i64 %t23247, i64 0, i64 16)
+%t23256 = add i64 %t23250, 38
+%t23257 = call i64 @st8(i64 %t23256, i64 0)
+ret i64 %t23250
+}
+define internal i64 @__mruntime_rt_device_resid__dh_hex(i64 %p0.in, i64 %p1.in, i64 %p2.in, i64 %p3.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t23273, %tco.s0 ]
+%p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ]
+%t23258 = icmp sge i64 %p2, %p3
+br i1 %t23258, label %L7729, label %L7731
+L7729:
+ret i64 0
+L7731:
+%t23259 = add i64 %p1, %p2
+%t23260 = call i64 @ld8(i64 %t23259)
+%t23261 = mul i64 %p2, 2
+%t23262 = add i64 %p0, %t23261
+%t23263 = ashr i64 %t23260, 4
+%t23264 = call i64 @__mruntime_rt_device_resid__dh_hexd(i64 %t23263)
+%t23265 = call i64 @st8(i64 %t23262, i64 %t23264)
+%t23266 = mul i64 %p2, 2
+%t23267 = add i64 %p0, %t23266
+%t23268 = add i64 %t23267, 1
+%t23269 = and i64 %t23260, 15
+%t23270 = call i64 @__mruntime_rt_device_resid__dh_hexd(i64 %t23269)
+%t23271 = call i64 @st8(i64 %t23268, i64 %t23270)
+%t23272 = add i64 %t23265, %t23271
+%t23273 = add nsw i64 %p2, 1
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i64 @__mruntime_rt_device_resid__dh_hexd(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t23275 = icmp slt i64 %p0, 10
+br i1 %t23275, label %L7732, label %L7733
+L7732:
+%t23276 = add nsw i64 48, %p0
+br label %L7734
+L7733:
+%t23277 = add i64 87, %p0
+br label %L7734
+L7734:
+%t23278 = phi i64 [ %t23276, %L7732 ], [ %t23277, %L7733 ]
+ret i64 %t23278
+}
+define internal i64 @__mruntime_rt_device_resid__dh_cf_open(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t23280 = call i64 @__mruntime_rt_device_resid__dh_cf_attr(i64 %p0, i64 2, i64 %p2, ptr @.s23279, i64 1, i1 true)
+%t23281 = icmp ne i64 %t23280, 0
+br i1 %t23281, label %L7735, label %L7737
+L7735:
+ret i64 %t23280
+L7737:
+%t23282 = call i64 @__mruntime_rt_device_resid__dget(i64 %p1, i64 19)
+%t23283 = icmp sge i64 %t23282, 0
+br i1 %t23283, label %L7738, label %L7739
+L7738:
+%t23285 = call i64 @__mruntime_rt_device_resid__dh_cf_attr(i64 %p0, i64 3, i64 %p2, ptr @.s23284, i64 1, i1 true)
+br label %L7740
+L7739:
+br label %L7740
+L7740:
+%t23286 = phi i64 [ %t23285, %L7738 ], [ 0, %L7739 ]
+%t23287 = icmp ne i64 %t23286, 0
+br i1 %t23287, label %L7741, label %L7743
+L7741:
+ret i64 %t23286
+L7743:
+%t23288 = call i64 @__mruntime_rt_device_resid__dget(i64 %p1, i64 21)
+%t23289 = icmp sgt i64 %t23288, 0
+br i1 %t23289, label %L7744, label %L7745
+L7744:
+%t23291 = call i64 @__mruntime_rt_device_resid__dh_cf_attr(i64 %p0, i64 4, i64 %p2, ptr @.s23290, i64 1, i1 true)
+br label %L7746
+L7745:
+br label %L7746
+L7746:
+%t23292 = phi i64 [ %t23291, %L7744 ], [ 0, %L7745 ]
+%t23293 = icmp ne i64 %t23292, 0
+br i1 %t23293, label %L7747, label %L7749
+L7747:
+ret i64 %t23292
+L7749:
+%t23295 = call i64 @__mruntime_rt_device_resid__dh_cf_attr(i64 %p0, i64 5, i64 %p2, ptr @.s23294, i64 0, i1 true)
+%t23296 = icmp ne i64 %t23295, 0
+br i1 %t23296, label %L7750, label %L7752
+L7750:
+ret i64 %t23295
+L7752:
+%t23298 = call i64 @__mruntime_rt_device_resid__dh_cf_attr(i64 %p0, i64 6, i64 %p2, ptr @.s23297, i64 0, i1 false)
+%t23299 = icmp ne i64 %t23298, 0
+br i1 %t23299, label %L7753, label %L7755
+L7753:
+ret i64 %t23298
+L7755:
+%t23301 = call i64 @__mruntime_rt_device_resid__dh_cf_attr(i64 %p0, i64 7, i64 %p2, ptr @.s23300, i64 0, i1 false)
+%t23302 = icmp ne i64 %t23301, 0
+br i1 %t23302, label %L7756, label %L7758
+L7756:
+ret i64 %t23301
+L7758:
+%t23304 = call i64 @__mruntime_rt_device_resid__dh_cf_attr(i64 %p0, i64 8, i64 %p2, ptr @.s23303, i64 0, i1 true)
+%t23305 = icmp ne i64 %t23304, 0
+br i1 %t23305, label %L7759, label %L7761
+L7759:
+ret i64 %t23304
+L7761:
+%t23307 = call i64 @__mruntime_rt_device_resid__dh_cf_attr(i64 %p0, i64 9, i64 %p2, ptr @.s23306, i64 0, i1 true)
+%t23308 = icmp ne i64 %t23307, 0
+br i1 %t23308, label %L7762, label %L7764
+L7762:
+ret i64 %t23307
+L7764:
+%t23310 = call i64 @__mruntime_rt_device_resid__dh_cf_attr(i64 %p0, i64 10, i64 %p2, ptr @.s23309, i64 0, i1 true)
+%t23311 = icmp ne i64 %t23310, 0
+br i1 %t23311, label %L7765, label %L7767
+L7765:
+ret i64 %t23310
+L7767:
+%t23312 = icmp eq i64 %p3, 10
+br i1 %t23312, label %L7768, label %L7769
+L7768:
+%t23314 = call i64 @__mruntime_rt_device_resid__dh_cf_attr(i64 %p0, i64 11, i64 %p2, ptr @.s23313, i64 1, i1 true)
+br label %L7770
+L7769:
+br label %L7770
+L7770:
+%t23315 = phi i64 [ %t23314, %L7768 ], [ 0, %L7769 ]
+ret i64 %t23315
+}
+define internal i64 @__mruntime_rt_device_resid__dh_cf_attr(i64 %p0, i64 %p1, i64 %p2, ptr %p3, i64 %p4, i1 %p5) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t23316 = ptrtoint ptr %p3 to i64
+%t23317 = call i64 @__mruntime_rt_device_resid__dh_open_at(i64 %p2, i64 %t23316, i64 %p4)
+%t23318 = icmp sge i64 %t23317, 0
+br i1 %t23318, label %L7771, label %L7773
+L7771:
+%t23319 = call i64 @__mruntime_rt_device_resid__cf_set(i64 %p0, i64 %p1, i64 %t23317)
+ret i64 %t23319
+L7773:
+%t23320 = xor i1 %p5, true
+br label %LSL23321
+LSL23321:
+br i1 %t23320, label %LSR23321, label %LSJ23321
+LSR23321:
+%t23322 = sub nsw i64 0, 2
+%t23323 = icmp eq i64 %t23317, %t23322
+br label %LSJ23321
+LSJ23321:
+%t23324 = phi i1 [ false, %LSL23321 ], [ %t23323, %LSR23321 ]
+br i1 %t23324, label %L7774, label %L7776
+L7774:
+ret i64 0
+L7776:
+%t23325 = sub i64 0, %t23317
+ret i64 %t23325
+}
+define internal i64 @__mruntime_rt_device_resid__dh_cf_rules(i64 %p0, i64 %p1, i64 %p2, i1 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t23326 = call i64 @__mruntime_rt_device_resid__dh_cf_rule_each(i64 %p0, i64 2, i64 12)
+%t23327 = add i64 0, 57
+%t23328 = call i64 @__mruntime_rt_device_resid__dh_rule(i64 %p0, i64 %t23327, i64 1, i64 %p2, i64 0)
+%t23329 = add i64 0, 35
+%t23330 = call i64 @__mruntime_rt_device_resid__dh_rule(i64 %p0, i64 %t23329, i64 3, i64 %p1, i64 512)
+br i1 %p3, label %L7777, label %L7778
+L7777:
+%t23331 = add i64 0, 35
+%t23332 = call i64 @__mruntime_rt_device_resid__dh_rule(i64 %p0, i64 %t23331, i64 3, i64 %p2, i64 0)
+br label %L7779
+L7778:
+br label %L7779
+L7779:
+%t23333 = phi i64 [ %t23332, %L7777 ], [ 0, %L7778 ]
+ret i64 %t23333
+}
+define internal i64 @__mruntime_rt_device_resid__dh_cf_rule_each(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %t23354, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
+%t23334 = icmp sge i64 %p1, %p2
+br i1 %t23334, label %L7780, label %L7782
+L7780:
+ret i64 0
+L7782:
+%t23335 = call i64 @__mruntime_rt_device_resid__cf(i64 %p0, i64 %p1)
+%t23336 = icmp eq i64 %p1, 2
+br label %LSL23337
+LSL23337:
+br i1 %t23336, label %LSJ23337, label %LSR23337
+LSR23337:
+%t23338 = icmp eq i64 %p1, 3
+br label %LSJ23337
+LSJ23337:
+%t23339 = phi i1 [ true, %LSL23337 ], [ %t23338, %LSR23337 ]
+br label %LSL23340
+LSL23340:
+br i1 %t23339, label %LSJ23340, label %LSR23340
+LSR23340:
+%t23341 = icmp eq i64 %p1, 4
+br label %LSJ23340
+LSJ23340:
+%t23342 = phi i1 [ true, %LSL23340 ], [ %t23341, %LSR23340 ]
+br label %LSL23343
+LSL23343:
+br i1 %t23342, label %LSJ23343, label %LSR23343
+LSR23343:
+%t23344 = icmp eq i64 %p1, 11
+br label %LSJ23343
+LSJ23343:
+%t23345 = phi i1 [ true, %LSL23343 ], [ %t23344, %LSR23343 ]
+br i1 %t23345, label %L7783, label %L7784
+L7783:
+br label %L7785
+L7784:
+br label %L7785
+L7785:
+%t23346 = phi i64 [ 1, %L7783 ], [ 0, %L7784 ]
+%t23347 = icmp sge i64 %t23335, 0
+br i1 %t23347, label %L7786, label %L7787
+L7786:
+%t23348nk = icmp ult i64 %t23346, 472
+%t23348ni = select i1 %t23348nk, i64 %t23346, i64 0
+%t23348np = getelementptr [472 x i16], ptr @resid.a64nr, i64 0, i64 %t23348ni
+%t23348nw = load i16, ptr %t23348np
+%t23348nx = sext i16 %t23348nw to i64
+%t23348n = select i1 %t23348nk, i64 %t23348nx, i64 -1
+%t23348 = add i64 0, %t23348n
+%t23349 = call i64 @__mruntime_rt_device_resid__dh_rule(i64 %p0, i64 %t23348, i64 1, i64 %t23335, i64 0)
+%t23350 = add i64 0, 57
+%t23351 = call i64 @__mruntime_rt_device_resid__dh_rule(i64 %p0, i64 %t23350, i64 1, i64 %t23335, i64 0)
+%t23352 = add i64 %t23349, %t23351
+br label %L7788
+L7787:
+br label %L7788
+L7788:
+%t23353 = phi i64 [ %t23352, %L7786 ], [ 0, %L7787 ]
+%t23354 = add nsw i64 %p1, 1
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i64 @__mruntime_rt_device_resid__dh_cf_clean(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t23356 = call i64 @__mruntime_rt_device_resid__dh_cf_close(i64 %p0, i64 2, i64 12)
+%t23357 = call i64 @__mruntime_rt_device_resid__cf(i64 %p0, i64 1)
+%t23358 = call i64 @__mruntime_rt_device_resid__cf(i64 %p0, i64 14)
+%t23359 = icmp eq i64 %t23358, 1
+br label %LSL23360
+LSL23360:
+br i1 %t23359, label %LSR23360, label %LSJ23360
+LSR23360:
+%t23361 = icmp sge i64 %t23357, 0
+br label %LSJ23360
+LSJ23360:
+%t23362 = phi i1 [ false, %LSL23360 ], [ %t23361, %LSR23360 ]
+br i1 %t23362, label %L7789, label %L7790
+L7789:
+%t23363 = call i64 @__mruntime_rt_device_resid__dh_fake_clear(i64 %t23357)
+br label %L7791
+L7790:
+br label %L7791
+L7791:
+%t23364 = phi i64 [ %t23363, %L7789 ], [ 0, %L7790 ]
+%t23365 = icmp sge i64 %t23357, 0
+br i1 %t23365, label %L7792, label %L7793
+L7792:
+%t23366 = call i64 @sys_close(i64 %t23357)
+br label %L7794
+L7793:
+br label %L7794
+L7794:
+%t23367 = phi i64 [ %t23366, %L7792 ], [ 0, %L7793 ]
+%t23368 = sub nsw i64 0, 1
+%t23369 = call i64 @__mruntime_rt_device_resid__cf_set(i64 %p0, i64 1, i64 %t23368)
+%t23370 = call i64 @__mruntime_rt_device_resid__cf(i64 %p0, i64 13)
+%t23371 = icmp eq i64 %t23370, 1
+br i1 %t23371, label %L7795, label %L7796
+L7795:
+%t23372 = call i64 @__mruntime_rt_device_resid__cf(i64 %p0, i64 0)
+%t23373 = call i64 @__mruntime_rt_device_resid__cf(i64 %p0, i64 12)
+%t23374 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 35, i64 %t23372, i64 %t23373, i64 512, i64 0, i64 0, i64 0)
+br label %L7797
+L7796:
+br label %L7797
+L7797:
+%t23375 = phi i64 [ %t23374, %L7795 ], [ 0, %L7796 ]
+%t23376 = call i64 @__mruntime_rt_device_resid__cf_set(i64 %p0, i64 13, i64 0)
+ret i64 %t23376
+}
+define internal i64 @__mruntime_rt_device_resid__dh_cf_close(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+br label %tco.head
+tco.head:
+%p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %t23386, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
+%t23377 = icmp sge i64 %p1, %p2
+br i1 %t23377, label %L7798, label %L7800
+L7798:
+ret i64 0
+L7800:
+%t23378 = call i64 @__mruntime_rt_device_resid__cf(i64 %p0, i64 %p1)
+%t23379 = icmp sge i64 %t23378, 0
+br i1 %t23379, label %L7801, label %L7802
+L7801:
+%t23380 = call i64 @__mruntime_rt_device_resid__cf(i64 %p0, i64 %p1)
+%t23381 = call i64 @sys_close(i64 %t23380)
+%t23382 = sub nsw i64 0, 1
+%t23383 = call i64 @__mruntime_rt_device_resid__cf_set(i64 %p0, i64 %p1, i64 %t23382)
+%t23384 = add i64 %t23381, %t23383
+br label %L7803
+L7802:
+br label %L7803
+L7803:
+%t23385 = phi i64 [ %t23384, %L7801 ], [ 0, %L7802 ]
+%t23386 = add nsw i64 %p1, 1
+br label %tco.s0
+tco.s0:
+br label %tco.head
+}
+define internal i64 @__mruntime_rt_device_resid__dh_cf_fail(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t23388 = call i64 @__mruntime_rt_device_resid__dh_cf_clean(i64 %p0)
+%t23389 = tail call i64 @__mruntime_rt_device_resid__dh_fail(i64 %p0, i64 %p1, i64 %p2)
+ret i64 %t23389
+}
+define internal i64 @__mruntime_rt_device_resid__dh_cf_exit(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t23390 = call i64 @__mruntime_rt_device_resid__dh_cf_clean(i64 %p0)
+%t23391 = call i64 @native_child_exit(i64 %p1)
+ret i64 %t23391
+}
+define internal i1 @__mruntime_rt_device_resid__dh_landlock(i64 %p0, i64 %p1, i1 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t23392 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 444, i64 0, i64 0, i64 1, i64 0, i64 0, i64 0)
+%t23393 = icmp slt i64 %t23392, 1
+br i1 %t23393, label %L7804, label %L7806
+L7804:
+ret i1 false
+L7806:
+%t23394 = icmp sge i64 %t23392, 5
+br i1 %t23394, label %L7807, label %L7808
+L7807:
+br label %L7809
+L7808:
+%t23395 = icmp sge i64 %t23392, 3
+br i1 %t23395, label %L7810, label %L7811
+L7810:
+br label %L7812
+L7811:
+%t23396 = icmp sge i64 %t23392, 2
+br i1 %t23396, label %L7813, label %L7814
+L7813:
+br label %L7815
+L7814:
+br label %L7815
+L7815:
+%t23397 = phi i64 [ 16383, %L7813 ], [ 8191, %L7814 ]
+br label %L7812
+L7812:
+%t23398 = phi i64 [ 32767, %L7810 ], [ %t23397, %L7815 ]
+br label %L7809
+L7809:
+%t23399 = phi i64 [ 65535, %L7807 ], [ %t23398, %L7812 ]
+%t23400 = call i64 @xmalloc(i64 24)
+%t23401p = inttoptr i64 %t23400 to ptr
+%t23401q = trunc i64 0 to i8
+call void @llvm.memset.p0.i64(ptr %t23401p, i8 %t23401q, i64 24, i1 false)
+%t23401 = add i64 0, 0
+%t23402 = call i64 @st64(i64 %t23400, i64 %t23399)
+%t23403 = add i64 %t23401, %t23402
+%t23404 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 444, i64 %t23400, i64 8, i64 0, i64 0, i64 0, i64 0)
+%t23405 = icmp slt i64 %t23404, 0
+br i1 %t23405, label %L7816, label %L7818
+L7816:
+ret i1 false
+L7818:
+%t23406 = call i64 @xmalloc(i64 16)
+%t23407 = or i64 4, 2
+br i1 %p2, label %L7819, label %L7820
+L7819:
+br label %L7821
+L7820:
+br label %L7821
+L7821:
+%t23408 = phi i64 [ 32, %L7819 ], [ 0, %L7820 ]
+%t23409 = or i64 %t23407, %t23408
+%t23410 = call i64 @st64(i64 %t23406, i64 %t23409)
+%t23411 = add i64 %t23406, 8
+%t23412 = call i64 @st32(i64 %t23411, i64 %p1)
+%t23413 = add i64 %t23410, %t23412
+%t23414 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 445, i64 %t23404, i64 1, i64 %t23406, i64 0, i64 0, i64 0)
+%t23415 = icmp eq i64 %t23414, 0
+%t23416 = call i64 @st64(i64 %t23406, i64 16)
+%t23417 = add i64 %t23406, 8
+%t23418 = call i64 @st32(i64 %t23417, i64 %p0)
+%t23419 = add i64 %t23416, %t23418
+br label %LSL23420
+LSL23420:
+br i1 %t23415, label %LSR23420, label %LSJ23420
+LSR23420:
+%t23421 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 445, i64 %t23404, i64 1, i64 %t23406, i64 0, i64 0, i64 0)
+%t23422 = icmp eq i64 %t23421, 0
+br label %LSJ23420
+LSJ23420:
+%t23423 = phi i1 [ false, %LSL23420 ], [ %t23422, %LSR23420 ]
+br label %LSL23424
+LSL23424:
+br i1 %t23423, label %LSR23424, label %LSJ23424
+LSR23424:
+%t23425 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 167, i64 38, i64 1, i64 0, i64 0, i64 0, i64 0)
+%t23426 = icmp eq i64 %t23425, 0
+br label %LSJ23424
+LSJ23424:
+%t23427 = phi i1 [ false, %LSL23424 ], [ %t23426, %LSR23424 ]
+br label %LSL23428
+LSL23428:
+br i1 %t23427, label %LSR23428, label %LSJ23428
+LSR23428:
+%t23429 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 446, i64 %t23404, i64 0, i64 0, i64 0, i64 0, i64 0)
+%t23430 = icmp eq i64 %t23429, 0
+br label %LSJ23428
+LSJ23428:
+%t23431 = phi i1 [ false, %LSL23428 ], [ %t23430, %LSR23428 ]
+%t23432 = call i64 @sys_close(i64 %t23404)
+ret i1 %t23431
+}
+define internal i64 @__mruntime_rt_device_resid__dh_fake_fill(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t23435 = call i64 @__mruntime_rt_device_resid__dh_fake_file(i64 %p0, ptr @.s23433, ptr @.s23434)
+%t23438 = call i64 @__mruntime_rt_device_resid__dh_fake_file(i64 %p0, ptr @.s23436, ptr @.s23437)
+%t23439 = add i64 %t23435, %t23438
+%t23442 = call i64 @__mruntime_rt_device_resid__dh_fake_file(i64 %p0, ptr @.s23440, ptr @.s23441)
+%t23443 = add i64 %t23439, %t23442
+%t23444 = icmp ne i64 %p1, 12
+br i1 %t23444, label %L7822, label %L7823
+L7822:
+%t23447 = call i64 @__mruntime_rt_device_resid__dh_fake_file(i64 %p0, ptr @.s23445, ptr @.s23446)
+br label %L7824
+L7823:
+br label %L7824
+L7824:
+%t23448 = phi i64 [ %t23447, %L7822 ], [ 0, %L7823 ]
+%t23451 = call i64 @__mruntime_rt_device_resid__dh_fake_file(i64 %p0, ptr @.s23449, ptr @.s23450)
+%t23454 = call i64 @__mruntime_rt_device_resid__dh_fake_file(i64 %p0, ptr @.s23452, ptr @.s23453)
+%t23455 = add i64 %t23451, %t23454
+%t23458 = call i64 @__mruntime_rt_device_resid__dh_fake_file(i64 %p0, ptr @.s23456, ptr @.s23457)
+%t23459 = add i64 %t23455, %t23458
+ret i64 %t23459
+}
+define internal i64 @__mruntime_rt_device_resid__dh_fake_file(i64 %p0, ptr %p1, ptr %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t23460 = ptrtoint ptr %p1 to i64
+%t23461 = or i64 1, 64
+%t23462 = or i64 %t23461, 512
+%t23463 = call i64 @__mruntime_rt_device_resid__o_cloexec()
+%t23464 = or i64 %t23462, %t23463
+%t23465 = call i64 @__mruntime_rt_device_resid__o_nofollow()
+%t23466 = or i64 %t23464, %t23465
+%t23467 = call i64 @sc4(i64 257, i64 %p0, i64 %t23460, i64 %t23466, i64 384)
+%t23468 = icmp slt i64 %t23467, 0
+br i1 %t23468, label %L7825, label %L7827
+L7825:
+ret i64 0
+L7827:
+%t23469 = ptrtoint ptr %p2 to i64
+%t23470 = call i64 @c_strlen(i64 %t23469)
+%t23471 = call i64 @__mruntime_rt_device_resid__dh_write_all(i64 %t23467, i64 %t23469, i64 0, i64 %t23470)
+%t23472 = call i64 @sys_close(i64 %t23467)
+ret i64 %t23472
+}
+define internal i64 @__mruntime_rt_device_resid__dh_fake_clear(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t23474 = call i64 @__mruntime_rt_device_resid__dh_fake_rm(i64 %p0, ptr @.s23473)
+%t23476 = call i64 @__mruntime_rt_device_resid__dh_fake_rm(i64 %p0, ptr @.s23475)
+%t23477 = add i64 %t23474, %t23476
+%t23479 = call i64 @__mruntime_rt_device_resid__dh_fake_rm(i64 %p0, ptr @.s23478)
+%t23480 = add i64 %t23477, %t23479
+%t23482 = call i64 @__mruntime_rt_device_resid__dh_fake_rm(i64 %p0, ptr @.s23481)
+%t23483 = add i64 %t23480, %t23482
+%t23485 = call i64 @__mruntime_rt_device_resid__dh_fake_rm(i64 %p0, ptr @.s23484)
+%t23487 = call i64 @__mruntime_rt_device_resid__dh_fake_rm(i64 %p0, ptr @.s23486)
+%t23488 = add i64 %t23485, %t23487
+%t23490 = call i64 @__mruntime_rt_device_resid__dh_fake_rm(i64 %p0, ptr @.s23489)
+%t23491 = add i64 %t23488, %t23490
+ret i64 %t23491
+}
+define internal i64 @__mruntime_rt_device_resid__dh_fake_rm(i64 %p0, ptr %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
+entry:
+%t23492 = ptrtoint ptr %p1 to i64
+%t23493 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 35, i64 %p0, i64 %t23492, i64 0, i64 0, i64 0, i64 0)
+%t23494 = mul nsw i64 %t23493, 0
+ret i64 %t23494
+}
 define internal i64 @__mruntime_rt_unix_resid__disp_fds() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20312p = getelementptr i8, ptr @rtg.rt_disp_fds, i64 0
-%t20312 = ptrtoint ptr %t20312p to i64
-ret i64 %t20312
+%t23495p = getelementptr i8, ptr @rtg.rt_disp_fds, i64 0
+%t23495 = ptrtoint ptr %t23495p to i64
+ret i64 %t23495
 }
 define internal i64 @__mruntime_rt_unix_resid__fdq_cap() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
@@ -45419,315 +52410,315 @@ ret i64 30
 }
 define internal i64 @__mruntime_rt_unix_resid__fdq_push(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20313 = call i64 @__mruntime_rt_unix_resid__disp_fds()
-%t20314 = add i64 %t20313, 8
-%t20315 = call i64 @ld64(i64 %t20314)
-%t20316 = call i64 @__mruntime_rt_unix_resid__fdq_cap()
-%t20317 = icmp sge i64 %t20315, %t20316
-br i1 %t20317, label %L6640, label %L6642
-L6640:
-%t20318 = call i64 @__mruntime_rt_unix_resid__fdq_take_all(i64 %t20313)
-br label %L6642
-L6642:
-%t20319 = add i64 %t20313, 8
-%t20320 = call i64 @ld64(i64 %t20319)
-%t20321 = add i64 %t20313, 16
-%t20322 = mul i64 %t20320, 8
-%t20323 = add i64 %t20321, %t20322
-%t20324 = call i64 @st64(i64 %t20323, i64 %p0)
-%t20325 = mul nsw i64 %t20324, 0
-%t20326 = add i64 %t20313, 8
-%t20327 = call i64 @ld64(i64 %t20326)
-%t20328 = add nsw i64 %t20325, %t20327
-ret i64 %t20328
+%t23496 = call i64 @__mruntime_rt_unix_resid__disp_fds()
+%t23497 = add i64 %t23496, 8
+%t23498 = call i64 @ld64(i64 %t23497)
+%t23499 = call i64 @__mruntime_rt_unix_resid__fdq_cap()
+%t23500 = icmp sge i64 %t23498, %t23499
+br i1 %t23500, label %L7828, label %L7830
+L7828:
+%t23501 = call i64 @__mruntime_rt_unix_resid__fdq_take_all(i64 %t23496)
+br label %L7830
+L7830:
+%t23502 = add i64 %t23496, 8
+%t23503 = call i64 @ld64(i64 %t23502)
+%t23504 = add i64 %t23496, 16
+%t23505 = mul i64 %t23503, 8
+%t23506 = add i64 %t23504, %t23505
+%t23507 = call i64 @st64(i64 %t23506, i64 %p0)
+%t23508 = mul nsw i64 %t23507, 0
+%t23509 = add i64 %t23496, 8
+%t23510 = call i64 @ld64(i64 %t23509)
+%t23511 = add nsw i64 %t23508, %t23510
+ret i64 %t23511
 }
 define internal i64 @__mruntime_rt_unix_resid__fdq_pop() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20329 = call i64 @__mruntime_rt_unix_resid__disp_fds()
-%t20330 = call i64 @ld64(i64 %t20329)
-%t20331 = add i64 %t20329, 8
-%t20332 = call i64 @ld64(i64 %t20331)
-%t20333 = icmp sle i64 %t20332, 0
-br i1 %t20333, label %L6643, label %L6645
-L6643:
-%t20334 = sub nsw i64 0, 1
-ret i64 %t20334
-L6645:
-%t20335 = add i64 %t20329, 16
-%t20336 = mul i64 %t20330, 8
-%t20337 = add i64 %t20335, %t20336
-%t20338 = call i64 @ld64(i64 %t20337)
-%t20339 = add i64 %t20330, 1
-%t20340 = call i64 @__mruntime_rt_unix_resid__fdq_cap()
-%t20341 = icmp sge i64 %t20339, %t20340
-br i1 %t20341, label %L6646, label %L6647
-L6646:
-br label %L6648
-L6647:
-%t20342 = add i64 %t20330, 1
-br label %L6648
-L6648:
-%t20343 = phi i64 [ 0, %L6646 ], [ %t20342, %L6647 ]
-%t20344 = call i64 @st64(i64 %t20329, i64 %t20343)
-%t20345 = add i64 %t20329, 8
-%t20346 = sub nsw i64 %t20332, 1
-%t20347 = call i64 @st64(i64 %t20345, i64 %t20346)
-ret i64 %t20338
+%t23512 = call i64 @__mruntime_rt_unix_resid__disp_fds()
+%t23513 = call i64 @ld64(i64 %t23512)
+%t23514 = add i64 %t23512, 8
+%t23515 = call i64 @ld64(i64 %t23514)
+%t23516 = icmp sle i64 %t23515, 0
+br i1 %t23516, label %L7831, label %L7833
+L7831:
+%t23517 = sub nsw i64 0, 1
+ret i64 %t23517
+L7833:
+%t23518 = add i64 %t23512, 16
+%t23519 = mul i64 %t23513, 8
+%t23520 = add i64 %t23518, %t23519
+%t23521 = call i64 @ld64(i64 %t23520)
+%t23522 = add i64 %t23513, 1
+%t23523 = call i64 @__mruntime_rt_unix_resid__fdq_cap()
+%t23524 = icmp sge i64 %t23522, %t23523
+br i1 %t23524, label %L7834, label %L7835
+L7834:
+br label %L7836
+L7835:
+%t23525 = add i64 %t23513, 1
+br label %L7836
+L7836:
+%t23526 = phi i64 [ 0, %L7834 ], [ %t23525, %L7835 ]
+%t23527 = call i64 @st64(i64 %t23512, i64 %t23526)
+%t23528 = add i64 %t23512, 8
+%t23529 = sub nsw i64 %t23515, 1
+%t23530 = call i64 @st64(i64 %t23528, i64 %t23529)
+ret i64 %t23521
 }
 define internal i64 @__mruntime_rt_unix_resid__fdq_drop() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20348 = call i64 @__mruntime_rt_unix_resid__disp_fds()
-%t20349 = call i64 @__mruntime_rt_unix_resid__fdq_take_all(i64 %t20348)
-ret i64 %t20349
+%t23531 = call i64 @__mruntime_rt_unix_resid__disp_fds()
+%t23532 = call i64 @__mruntime_rt_unix_resid__fdq_take_all(i64 %t23531)
+ret i64 %t23532
 }
 define internal i64 @__mruntime_rt_unix_resid__fdq_take_all(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20350 = add i64 %p0, 8
-%t20351 = call i64 @ld64(i64 %t20350)
-%t20352 = call i64 @__mruntime_rt_unix_resid__fdq_close_at(i64 %p0, i64 0, i64 %t20351)
-%t20353 = call i64 @st64(i64 %p0, i64 0)
-%t20354 = add i64 %p0, 8
-%t20355 = call i64 @st64(i64 %t20354, i64 0)
-ret i64 %t20351
+%t23533 = add i64 %p0, 8
+%t23534 = call i64 @ld64(i64 %t23533)
+%t23535 = call i64 @__mruntime_rt_unix_resid__fdq_close_at(i64 %p0, i64 0, i64 %t23534)
+%t23536 = call i64 @st64(i64 %p0, i64 0)
+%t23537 = add i64 %p0, 8
+%t23538 = call i64 @st64(i64 %t23537, i64 0)
+ret i64 %t23534
 }
 define internal i64 @__mruntime_rt_unix_resid__fdq_close_at(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
 br label %tco.head
 tco.head:
 %p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
-%p1 = phi i64 [ %p1.in, %entry ], [ %t20362, %tco.s0 ]
+%p1 = phi i64 [ %p1.in, %entry ], [ %t23545, %tco.s0 ]
 %p2 = phi i64 [ %p2.in, %entry ], [ %p2, %tco.s0 ]
-%t20356 = icmp sge i64 %p1, %p2
-br i1 %t20356, label %L6649, label %L6651
-L6649:
+%t23539 = icmp sge i64 %p1, %p2
+br i1 %t23539, label %L7837, label %L7839
+L7837:
 ret i64 0
-L6651:
-%t20357 = add i64 %p0, 16
-%t20358 = mul i64 %p1, 8
-%t20359 = add i64 %t20357, %t20358
-%t20360 = call i64 @ld64(i64 %t20359)
-%t20361 = call i64 @sys_close(i64 %t20360)
-%t20362 = add nsw i64 %p1, 1
+L7839:
+%t23540 = add i64 %p0, 16
+%t23541 = mul i64 %p1, 8
+%t23542 = add i64 %t23540, %t23541
+%t23543 = call i64 @ld64(i64 %t23542)
+%t23544 = call i64 @sys_close(i64 %t23543)
+%t23545 = add nsw i64 %p1, 1
 br label %tco.s0
 tco.s0:
 br label %tco.head
 }
 define internal i1 @__mruntime_rt_unix_resid__disp_sock_ok(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20364 = icmp slt i64 %p0, 0
-br i1 %t20364, label %L6652, label %L6654
-L6652:
+%t23547 = icmp slt i64 %p0, 0
+br i1 %t23547, label %L7840, label %L7842
+L7840:
 ret i1 false
-L6654:
-%t20365p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.disp_sock_stat)
-%t20365 = ptrtoint ptr %t20365p to i64
-%t20366 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 80, i64 %p0, i64 %t20365, i64 0, i64 0, i64 0, i64 0)
-%t20367 = icmp eq i64 %t20366, 0
-br label %LSL20368
-LSL20368:
-br i1 %t20367, label %LSR20368, label %LSJ20368
-LSR20368:
-%t20369 = call i64 @st_mode_at()
-%t20370 = add i64 %t20365, %t20369
-%t20371 = call i64 @ld32(i64 %t20370)
-%t20372 = and i64 %t20371, 61440
-%t20373 = icmp eq i64 %t20372, 49152
-br label %LSJ20368
-LSJ20368:
-%t20374 = phi i1 [ false, %LSL20368 ], [ %t20373, %LSR20368 ]
-ret i1 %t20374
+L7842:
+%t23548p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.disp_sock_stat)
+%t23548 = ptrtoint ptr %t23548p to i64
+%t23549 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 80, i64 %p0, i64 %t23548, i64 0, i64 0, i64 0, i64 0)
+%t23550 = icmp eq i64 %t23549, 0
+br label %LSL23551
+LSL23551:
+br i1 %t23550, label %LSR23551, label %LSJ23551
+LSR23551:
+%t23552 = call i64 @st_mode_at()
+%t23553 = add i64 %t23548, %t23552
+%t23554 = call i64 @ld32(i64 %t23553)
+%t23555 = and i64 %t23554, 61440
+%t23556 = icmp eq i64 %t23555, 49152
+br label %LSJ23551
+LSJ23551:
+%t23557 = phi i1 [ false, %LSL23551 ], [ %t23556, %LSR23551 ]
+ret i1 %t23557
 }
 define internal i64 @__mruntime_rt_unix_resid__sa_buf() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20375p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.disp_sa)
-%t20375 = ptrtoint ptr %t20375p to i64
-ret i64 %t20375
+%t23558p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.disp_sa)
+%t23558 = ptrtoint ptr %t23558p to i64
+ret i64 %t23558
 }
 define internal i64 @__mruntime_rt_unix_resid__path_buf() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20376p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.disp_path)
-%t20376 = ptrtoint ptr %t20376p to i64
-ret i64 %t20376
+%t23559p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.disp_path)
+%t23559 = ptrtoint ptr %t23559p to i64
+ret i64 %t23559
 }
 define internal i64 @__mruntime_rt_unix_resid__sa_path(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20377 = icmp sle i64 %p1, 0
-br label %LSL20378
-LSL20378:
-br i1 %t20377, label %LSJ20378, label %LSR20378
-LSR20378:
-%t20379 = icmp sgt i64 %p1, 107
-br label %LSJ20378
-LSJ20378:
-%t20380 = phi i1 [ true, %LSL20378 ], [ %t20379, %LSR20378 ]
-br i1 %t20380, label %L6655, label %L6657
-L6655:
-%t20381 = sub nsw i64 0, 1
-ret i64 %t20381
-L6657:
-%t20382 = call i64 @__mruntime_rt_unix_resid__sa_buf()
-%t20383p = inttoptr i64 %t20382 to ptr
-%t20383q = trunc i64 0 to i8
-call void @llvm.memset.p0.i64(ptr %t20383p, i8 %t20383q, i64 112, i1 false)
-%t20383 = add i64 0, 0
-%t20384 = call i64 @st32(i64 %t20382, i64 1)
-%t20385 = add i64 %t20382, 2
-%t20386 = call i64 @mcopy(i64 %t20385, i64 %p0, i64 %p1)
-%t20387 = add i64 %t20382, 2
-%t20388 = add i64 %t20387, %p1
-%t20389 = call i64 @st8(i64 %t20388, i64 0)
-ret i64 %t20382
+%t23560 = icmp sle i64 %p1, 0
+br label %LSL23561
+LSL23561:
+br i1 %t23560, label %LSJ23561, label %LSR23561
+LSR23561:
+%t23562 = icmp sgt i64 %p1, 107
+br label %LSJ23561
+LSJ23561:
+%t23563 = phi i1 [ true, %LSL23561 ], [ %t23562, %LSR23561 ]
+br i1 %t23563, label %L7843, label %L7845
+L7843:
+%t23564 = sub nsw i64 0, 1
+ret i64 %t23564
+L7845:
+%t23565 = call i64 @__mruntime_rt_unix_resid__sa_buf()
+%t23566p = inttoptr i64 %t23565 to ptr
+%t23566q = trunc i64 0 to i8
+call void @llvm.memset.p0.i64(ptr %t23566p, i8 %t23566q, i64 112, i1 false)
+%t23566 = add i64 0, 0
+%t23567 = call i64 @st32(i64 %t23565, i64 1)
+%t23568 = add i64 %t23565, 2
+%t23569 = call i64 @mcopy(i64 %t23568, i64 %p0, i64 %p1)
+%t23570 = add i64 %t23565, 2
+%t23571 = add i64 %t23570, %p1
+%t23572 = call i64 @st8(i64 %t23571, i64 0)
+ret i64 %t23565
 }
 define internal i64 @__mruntime_rt_unix_resid__sa_abstract(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20390 = icmp sle i64 %p1, 0
-br label %LSL20391
-LSL20391:
-br i1 %t20390, label %LSJ20391, label %LSR20391
-LSR20391:
-%t20392 = icmp sgt i64 %p1, 107
-br label %LSJ20391
-LSJ20391:
-%t20393 = phi i1 [ true, %LSL20391 ], [ %t20392, %LSR20391 ]
-br i1 %t20393, label %L6658, label %L6660
-L6658:
-%t20394 = sub nsw i64 0, 1
-ret i64 %t20394
-L6660:
-%t20395 = call i64 @__mruntime_rt_unix_resid__sa_buf()
-%t20396p = inttoptr i64 %t20395 to ptr
-%t20396q = trunc i64 0 to i8
-call void @llvm.memset.p0.i64(ptr %t20396p, i8 %t20396q, i64 112, i1 false)
-%t20396 = add i64 0, 0
-%t20397 = call i64 @st32(i64 %t20395, i64 1)
-%t20398 = add i64 %t20395, 3
-%t20399 = call i64 @mcopy(i64 %t20398, i64 %p0, i64 %p1)
-ret i64 %t20395
+%t23573 = icmp sle i64 %p1, 0
+br label %LSL23574
+LSL23574:
+br i1 %t23573, label %LSJ23574, label %LSR23574
+LSR23574:
+%t23575 = icmp sgt i64 %p1, 107
+br label %LSJ23574
+LSJ23574:
+%t23576 = phi i1 [ true, %LSL23574 ], [ %t23575, %LSR23574 ]
+br i1 %t23576, label %L7846, label %L7848
+L7846:
+%t23577 = sub nsw i64 0, 1
+ret i64 %t23577
+L7848:
+%t23578 = call i64 @__mruntime_rt_unix_resid__sa_buf()
+%t23579p = inttoptr i64 %t23578 to ptr
+%t23579q = trunc i64 0 to i8
+call void @llvm.memset.p0.i64(ptr %t23579p, i8 %t23579q, i64 112, i1 false)
+%t23579 = add i64 0, 0
+%t23580 = call i64 @st32(i64 %t23578, i64 1)
+%t23581 = add i64 %t23578, 3
+%t23582 = call i64 @mcopy(i64 %t23581, i64 %p0, i64 %p1)
+ret i64 %t23578
 }
 define internal i64 @__mruntime_rt_unix_resid__sa_under(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20400 = call i64 @ld8(i64 %p1)
-%t20401 = icmp eq i64 %t20400, 47
-br i1 %t20401, label %L6661, label %L6663
-L6661:
-%t20402 = call i64 @c_strlen(i64 %p1)
-%t20403 = tail call i64 @__mruntime_rt_unix_resid__sa_path(i64 %p1, i64 %t20402)
-ret i64 %t20403
-L6663:
-%t20404 = call i64 @c_strlen(i64 %p1)
-%t20405 = call i64 @c_strlen(i64 %p0)
-%t20406 = icmp sle i64 %t20405, 0
-br label %LSL20407
-LSL20407:
-br i1 %t20406, label %LSJ20407, label %LSR20407
-LSR20407:
-%t20408 = add i64 %t20405, 1
-%t20409 = add i64 %t20408, %t20404
-%t20410 = icmp sgt i64 %t20409, 107
-br label %LSJ20407
-LSJ20407:
-%t20411 = phi i1 [ true, %LSL20407 ], [ %t20410, %LSR20407 ]
-br i1 %t20411, label %L6664, label %L6666
-L6664:
-%t20412 = sub nsw i64 0, 1
-ret i64 %t20412
-L6666:
-%t20413 = call i64 @__mruntime_rt_unix_resid__path_buf()
-%t20414 = call i64 @mcopy(i64 %t20413, i64 %p0, i64 %t20405)
-%t20415 = add i64 %t20413, %t20405
-%t20416 = call i64 @st8(i64 %t20415, i64 47)
-%t20417 = add i64 %t20413, %t20405
-%t20418 = add i64 %t20417, 1
-%t20419 = call i64 @mcopy(i64 %t20418, i64 %p1, i64 %t20404)
-%t20420 = add i64 %t20405, 1
-%t20421 = add i64 %t20420, %t20404
-%t20422 = tail call i64 @__mruntime_rt_unix_resid__sa_path(i64 %t20413, i64 %t20421)
-ret i64 %t20422
+%t23583 = call i64 @ld8(i64 %p1)
+%t23584 = icmp eq i64 %t23583, 47
+br i1 %t23584, label %L7849, label %L7851
+L7849:
+%t23585 = call i64 @c_strlen(i64 %p1)
+%t23586 = tail call i64 @__mruntime_rt_unix_resid__sa_path(i64 %p1, i64 %t23585)
+ret i64 %t23586
+L7851:
+%t23587 = call i64 @c_strlen(i64 %p1)
+%t23588 = call i64 @c_strlen(i64 %p0)
+%t23589 = icmp sle i64 %t23588, 0
+br label %LSL23590
+LSL23590:
+br i1 %t23589, label %LSJ23590, label %LSR23590
+LSR23590:
+%t23591 = add i64 %t23588, 1
+%t23592 = add i64 %t23591, %t23587
+%t23593 = icmp sgt i64 %t23592, 107
+br label %LSJ23590
+LSJ23590:
+%t23594 = phi i1 [ true, %LSL23590 ], [ %t23593, %LSR23590 ]
+br i1 %t23594, label %L7852, label %L7854
+L7852:
+%t23595 = sub nsw i64 0, 1
+ret i64 %t23595
+L7854:
+%t23596 = call i64 @__mruntime_rt_unix_resid__path_buf()
+%t23597 = call i64 @mcopy(i64 %t23596, i64 %p0, i64 %t23588)
+%t23598 = add i64 %t23596, %t23588
+%t23599 = call i64 @st8(i64 %t23598, i64 47)
+%t23600 = add i64 %t23596, %t23588
+%t23601 = add i64 %t23600, 1
+%t23602 = call i64 @mcopy(i64 %t23601, i64 %p1, i64 %t23587)
+%t23603 = add i64 %t23588, 1
+%t23604 = add i64 %t23603, %t23587
+%t23605 = tail call i64 @__mruntime_rt_unix_resid__sa_path(i64 %t23596, i64 %t23604)
+ret i64 %t23605
 }
 define internal i64 @__mruntime_rt_unix_resid__unix_connect(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20423 = or i64 1, 524288
-%t20424 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 198, i64 1, i64 %t20423, i64 0, i64 0, i64 0, i64 0)
-%t20425 = icmp slt i64 %t20424, 0
-br i1 %t20425, label %L6667, label %L6669
-L6667:
-%t20426 = sub nsw i64 0, 1
-ret i64 %t20426
-L6669:
-%t20427 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 203, i64 %t20424, i64 %p0, i64 110, i64 0, i64 0, i64 0)
-%t20428 = icmp ne i64 %t20427, 0
-br i1 %t20428, label %L6670, label %L6672
-L6670:
-%t20429 = call i64 @sys_close(i64 %t20424)
-%t20430 = mul nsw i64 %t20429, 0
-%t20431 = sub nsw i64 %t20430, 1
-ret i64 %t20431
-L6672:
-ret i64 %t20424
+%t23606 = or i64 1, 524288
+%t23607 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 198, i64 1, i64 %t23606, i64 0, i64 0, i64 0, i64 0)
+%t23608 = icmp slt i64 %t23607, 0
+br i1 %t23608, label %L7855, label %L7857
+L7855:
+%t23609 = sub nsw i64 0, 1
+ret i64 %t23609
+L7857:
+%t23610 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 203, i64 %t23607, i64 %p0, i64 110, i64 0, i64 0, i64 0)
+%t23611 = icmp ne i64 %t23610, 0
+br i1 %t23611, label %L7858, label %L7860
+L7858:
+%t23612 = call i64 @sys_close(i64 %t23607)
+%t23613 = mul nsw i64 %t23612, 0
+%t23614 = sub nsw i64 %t23613, 1
+ret i64 %t23614
+L7860:
+ret i64 %t23607
 }
 define internal i64 @rt_disp_connect() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20433 = ptrtoint ptr @.s20432 to i64
-%t20434 = call i64 @c_getenv(i64 %t20433)
-%t20435 = icmp ne i64 %t20434, 0
-br i1 %t20435, label %L6673, label %L6675
-L6673:
-%t20436 = call i64 @__mruntime_rt_unix_resid__disp_inherited(i64 %t20434)
-ret i64 %t20436
-L6675:
-%t20438 = ptrtoint ptr @.s20437 to i64
-%t20439 = call i64 @c_getenv(i64 %t20438)
-%t20440 = icmp eq i64 %t20439, 0
-br i1 %t20440, label %L6676, label %L6677
-L6676:
-%t20442 = ptrtoint ptr @.s20441 to i64
-br label %L6678
-L6677:
-br label %L6678
-L6678:
-%t20443 = phi i64 [ %t20442, %L6676 ], [ %t20439, %L6677 ]
-%t20445 = ptrtoint ptr @.s20444 to i64
-%t20446 = call i64 @c_getenv(i64 %t20445)
-%t20447 = icmp ne i64 %t20446, 0
-br label %LSL20448
-LSL20448:
-br i1 %t20447, label %LSR20448, label %LSJ20448
-LSR20448:
-%t20449 = call i64 @ld8(i64 %t20446)
-%t20450 = icmp ne i64 %t20449, 0
-br label %LSJ20448
-LSJ20448:
-%t20451 = phi i1 [ false, %LSL20448 ], [ %t20450, %LSR20448 ]
-br i1 %t20451, label %L6679, label %L6681
-L6679:
-%t20452 = call i64 @__mruntime_rt_unix_resid__sa_under(i64 %t20446, i64 %t20443)
-%t20453 = icmp sge i64 %t20452, 0
-br i1 %t20453, label %L6682, label %L6684
-L6682:
-%t20454 = call i64 @__mruntime_rt_unix_resid__unix_connect(i64 %t20452)
-ret i64 %t20454
-L6684:
-br label %L6681
-L6681:
-%t20456 = ptrtoint ptr @.s20455 to i64
-%t20457 = call i64 @c_getenv(i64 %t20456)
-%t20458 = icmp eq i64 %t20457, 0
-br label %LSL20459
-LSL20459:
-br i1 %t20458, label %LSJ20459, label %LSR20459
-LSR20459:
-%t20460 = call i64 @ld8(i64 %t20457)
-%t20461 = icmp eq i64 %t20460, 0
-br label %LSJ20459
-LSJ20459:
-%t20462 = phi i1 [ true, %LSL20459 ], [ %t20461, %LSR20459 ]
-br i1 %t20462, label %L6685, label %L6687
-L6685:
-%t20463 = sub nsw i64 0, 1
-ret i64 %t20463
-L6687:
-%t20464 = call i64 @__mruntime_rt_unix_resid__x11_connect(i64 %t20457)
-ret i64 %t20464
+%t23616 = ptrtoint ptr @.s23615 to i64
+%t23617 = call i64 @c_getenv(i64 %t23616)
+%t23618 = icmp ne i64 %t23617, 0
+br i1 %t23618, label %L7861, label %L7863
+L7861:
+%t23619 = call i64 @__mruntime_rt_unix_resid__disp_inherited(i64 %t23617)
+ret i64 %t23619
+L7863:
+%t23621 = ptrtoint ptr @.s23620 to i64
+%t23622 = call i64 @c_getenv(i64 %t23621)
+%t23623 = icmp eq i64 %t23622, 0
+br i1 %t23623, label %L7864, label %L7865
+L7864:
+%t23625 = ptrtoint ptr @.s23624 to i64
+br label %L7866
+L7865:
+br label %L7866
+L7866:
+%t23626 = phi i64 [ %t23625, %L7864 ], [ %t23622, %L7865 ]
+%t23628 = ptrtoint ptr @.s23627 to i64
+%t23629 = call i64 @c_getenv(i64 %t23628)
+%t23630 = icmp ne i64 %t23629, 0
+br label %LSL23631
+LSL23631:
+br i1 %t23630, label %LSR23631, label %LSJ23631
+LSR23631:
+%t23632 = call i64 @ld8(i64 %t23629)
+%t23633 = icmp ne i64 %t23632, 0
+br label %LSJ23631
+LSJ23631:
+%t23634 = phi i1 [ false, %LSL23631 ], [ %t23633, %LSR23631 ]
+br i1 %t23634, label %L7867, label %L7869
+L7867:
+%t23635 = call i64 @__mruntime_rt_unix_resid__sa_under(i64 %t23629, i64 %t23626)
+%t23636 = icmp sge i64 %t23635, 0
+br i1 %t23636, label %L7870, label %L7872
+L7870:
+%t23637 = call i64 @__mruntime_rt_unix_resid__unix_connect(i64 %t23635)
+ret i64 %t23637
+L7872:
+br label %L7869
+L7869:
+%t23639 = ptrtoint ptr @.s23638 to i64
+%t23640 = call i64 @c_getenv(i64 %t23639)
+%t23641 = icmp eq i64 %t23640, 0
+br label %LSL23642
+LSL23642:
+br i1 %t23641, label %LSJ23642, label %LSR23642
+LSR23642:
+%t23643 = call i64 @ld8(i64 %t23640)
+%t23644 = icmp eq i64 %t23643, 0
+br label %LSJ23642
+LSJ23642:
+%t23645 = phi i1 [ true, %LSL23642 ], [ %t23644, %LSR23642 ]
+br i1 %t23645, label %L7873, label %L7875
+L7873:
+%t23646 = sub nsw i64 0, 1
+ret i64 %t23646
+L7875:
+%t23647 = call i64 @__mruntime_rt_unix_resid__x11_connect(i64 %t23640)
+ret i64 %t23647
 }
 define i64 @resid_disp_connect() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
@@ -45736,206 +52727,206 @@ ret i64 %r
 }
 define internal i64 @__mruntime_rt_unix_resid__disp_inherited(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20465 = call i64 @__mruntime_rt_unix_resid__disp_dec(i64 %p0)
-%t20466 = icmp sge i64 %t20465, 0
-br i1 %t20466, label %L6688, label %L6689
-L6688:
-br label %L6690
-L6689:
-%t20467 = sub nsw i64 0, 1
-br label %L6690
-L6690:
-%t20468 = phi i64 [ %t20465, %L6688 ], [ %t20467, %L6689 ]
-ret i64 %t20468
+%t23648 = call i64 @__mruntime_rt_unix_resid__disp_dec(i64 %p0)
+%t23649 = icmp sge i64 %t23648, 0
+br i1 %t23649, label %L7876, label %L7877
+L7876:
+br label %L7878
+L7877:
+%t23650 = sub nsw i64 0, 1
+br label %L7878
+L7878:
+%t23651 = phi i64 [ %t23648, %L7876 ], [ %t23650, %L7877 ]
+ret i64 %t23651
 }
 define internal i64 @__mruntime_rt_unix_resid__disp_dec(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20469 = call i64 @__mruntime_rt_unix_resid__disp_digits(i64 %p0)
-%t20470 = icmp eq i64 %t20469, %p0
-br i1 %t20470, label %L6691, label %L6693
-L6691:
-%t20471 = sub nsw i64 0, 1
-ret i64 %t20471
-L6693:
-%t20472 = call i64 @__mruntime_rt_unix_resid__disp_value(i64 %p0, i64 %t20469, i64 0)
-ret i64 %t20472
+%t23652 = call i64 @__mruntime_rt_unix_resid__disp_digits(i64 %p0)
+%t23653 = icmp eq i64 %t23652, %p0
+br i1 %t23653, label %L7879, label %L7881
+L7879:
+%t23654 = sub nsw i64 0, 1
+ret i64 %t23654
+L7881:
+%t23655 = call i64 @__mruntime_rt_unix_resid__disp_value(i64 %p0, i64 %t23652, i64 0)
+ret i64 %t23655
 }
 define internal i64 @__mruntime_rt_unix_resid__disp_digits(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20473 = call i64 @ld8(i64 %p0)
-%t20474 = icmp sge i64 %t20473, 48
-br label %LSL20475
-LSL20475:
-br i1 %t20474, label %LSR20475, label %LSJ20475
-LSR20475:
-%t20476 = call i64 @ld8(i64 %p0)
-%t20477 = icmp sle i64 %t20476, 57
-br label %LSJ20475
-LSJ20475:
-%t20478 = phi i1 [ false, %LSL20475 ], [ %t20477, %LSR20475 ]
-br i1 %t20478, label %L6694, label %L6695
-L6694:
-%t20479 = add i64 %p0, 1
-%t20480 = call i64 @__mruntime_rt_unix_resid__disp_digits(i64 %t20479)
-br label %L6696
-L6695:
-br label %L6696
-L6696:
-%t20481 = phi i64 [ %t20480, %L6694 ], [ %p0, %L6695 ]
-ret i64 %t20481
+%t23656 = call i64 @ld8(i64 %p0)
+%t23657 = icmp sge i64 %t23656, 48
+br label %LSL23658
+LSL23658:
+br i1 %t23657, label %LSR23658, label %LSJ23658
+LSR23658:
+%t23659 = call i64 @ld8(i64 %p0)
+%t23660 = icmp sle i64 %t23659, 57
+br label %LSJ23658
+LSJ23658:
+%t23661 = phi i1 [ false, %LSL23658 ], [ %t23660, %LSR23658 ]
+br i1 %t23661, label %L7882, label %L7883
+L7882:
+%t23662 = add i64 %p0, 1
+%t23663 = call i64 @__mruntime_rt_unix_resid__disp_digits(i64 %t23662)
+br label %L7884
+L7883:
+br label %L7884
+L7884:
+%t23664 = phi i64 [ %t23663, %L7882 ], [ %p0, %L7883 ]
+ret i64 %t23664
 }
 define internal i64 @__mruntime_rt_unix_resid__disp_value(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20482 = icmp sge i64 %p0, %p1
-br i1 %t20482, label %L6697, label %L6698
-L6697:
-br label %L6699
-L6698:
-%t20483 = add nsw i64 %p0, 1
-%t20484 = mul i64 %p2, 10
-%t20485 = call i64 @ld8(i64 %p0)
-%t20486 = add i64 %t20484, %t20485
-%t20487 = sub i64 %t20486, 48
-%t20488 = call i64 @__mruntime_rt_unix_resid__disp_value(i64 %t20483, i64 %p1, i64 %t20487)
-br label %L6699
-L6699:
-%t20489 = phi i64 [ %p2, %L6697 ], [ %t20488, %L6698 ]
-ret i64 %t20489
+%t23665 = icmp sge i64 %p0, %p1
+br i1 %t23665, label %L7885, label %L7886
+L7885:
+br label %L7887
+L7886:
+%t23666 = add nsw i64 %p0, 1
+%t23667 = mul i64 %p2, 10
+%t23668 = call i64 @ld8(i64 %p0)
+%t23669 = add i64 %t23667, %t23668
+%t23670 = sub i64 %t23669, 48
+%t23671 = call i64 @__mruntime_rt_unix_resid__disp_value(i64 %t23666, i64 %p1, i64 %t23670)
+br label %L7887
+L7887:
+%t23672 = phi i64 [ %p2, %L7885 ], [ %t23671, %L7886 ]
+ret i64 %t23672
 }
 define internal i64 @__mruntime_rt_unix_resid__x11_connect(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20491 = ptrtoint ptr @.s20490 to i64
-%t20492 = call i64 @c_strncmp(i64 %p0, i64 %t20491, i64 5)
-%t20493 = icmp eq i64 %t20492, 0
-br i1 %t20493, label %L6700, label %L6701
-L6700:
-%t20494 = add i64 %p0, 5
-br label %L6702
-L6701:
-br label %L6702
-L6702:
-%t20495 = phi i64 [ %t20494, %L6700 ], [ %p0, %L6701 ]
-%t20496 = call i64 @ld8(i64 %t20495)
-%t20497 = icmp eq i64 %t20496, 64
-br i1 %t20497, label %L6703, label %L6705
-L6703:
-%t20498 = add i64 %t20495, 1
-%t20499 = add i64 %t20495, 1
-%t20500 = call i64 @c_strlen(i64 %t20499)
-%t20501 = call i64 @__mruntime_rt_unix_resid__sa_abstract(i64 %t20498, i64 %t20500)
-%t20502 = tail call i64 @__mruntime_rt_unix_resid__unix_connect(i64 %t20501)
-ret i64 %t20502
-L6705:
-%t20503 = call i64 @c_strchr(i64 %t20495, i64 58)
-%t20504 = icmp eq i64 %t20503, 0
-br label %LSL20505
-LSL20505:
-br i1 %t20504, label %LSJ20505, label %LSR20505
-LSR20505:
-%t20506 = icmp ne i64 %t20503, %t20495
-br label %LSJ20505
-LSJ20505:
-%t20507 = phi i1 [ true, %LSL20505 ], [ %t20506, %LSR20505 ]
-br i1 %t20507, label %L6706, label %L6708
-L6706:
-%t20508 = sub nsw i64 0, 1
-ret i64 %t20508
-L6708:
-%t20509 = add i64 %t20495, 1
-%t20510 = call i64 @__mruntime_rt_unix_resid__disp_digits(i64 %t20509)
-%t20511 = sub i64 %t20510, %t20509
-%t20512 = icmp sle i64 %t20511, 0
-br label %LSL20513
-LSL20513:
-br i1 %t20512, label %LSJ20513, label %LSR20513
-LSR20513:
-%t20514 = icmp sgt i64 %t20511, 3
-br label %LSJ20513
-LSJ20513:
-%t20515 = phi i1 [ true, %LSL20513 ], [ %t20514, %LSR20513 ]
-br label %LSL20516
-LSL20516:
-br i1 %t20515, label %LSJ20516, label %LSR20516
-LSR20516:
-%t20517 = call i1 @__mruntime_rt_unix_resid__disp_screen_ok(i64 %t20510)
-%t20518 = xor i1 %t20517, true
-br label %LSJ20516
-LSJ20516:
-%t20519 = phi i1 [ true, %LSL20516 ], [ %t20518, %LSR20516 ]
-br i1 %t20519, label %L6709, label %L6711
-L6709:
-%t20520 = sub nsw i64 0, 1
-ret i64 %t20520
-L6711:
-%t20521 = call i64 @__mruntime_rt_unix_resid__path_buf()
-%t20523 = ptrtoint ptr @.s20522 to i64
-%t20524 = call i64 @mcopy(i64 %t20521, i64 %t20523, i64 15)
-%t20525 = add i64 %t20521, 15
-%t20526 = call i64 @mcopy(i64 %t20525, i64 %t20509, i64 %t20511)
-%t20527 = add nsw i64 15, %t20511
-%t20528 = call i64 @__mruntime_rt_unix_resid__sa_path(i64 %t20521, i64 %t20527)
-%t20529 = tail call i64 @__mruntime_rt_unix_resid__unix_connect(i64 %t20528)
-ret i64 %t20529
+%t23674 = ptrtoint ptr @.s23673 to i64
+%t23675 = call i64 @c_strncmp(i64 %p0, i64 %t23674, i64 5)
+%t23676 = icmp eq i64 %t23675, 0
+br i1 %t23676, label %L7888, label %L7889
+L7888:
+%t23677 = add i64 %p0, 5
+br label %L7890
+L7889:
+br label %L7890
+L7890:
+%t23678 = phi i64 [ %t23677, %L7888 ], [ %p0, %L7889 ]
+%t23679 = call i64 @ld8(i64 %t23678)
+%t23680 = icmp eq i64 %t23679, 64
+br i1 %t23680, label %L7891, label %L7893
+L7891:
+%t23681 = add i64 %t23678, 1
+%t23682 = add i64 %t23678, 1
+%t23683 = call i64 @c_strlen(i64 %t23682)
+%t23684 = call i64 @__mruntime_rt_unix_resid__sa_abstract(i64 %t23681, i64 %t23683)
+%t23685 = tail call i64 @__mruntime_rt_unix_resid__unix_connect(i64 %t23684)
+ret i64 %t23685
+L7893:
+%t23686 = call i64 @c_strchr(i64 %t23678, i64 58)
+%t23687 = icmp eq i64 %t23686, 0
+br label %LSL23688
+LSL23688:
+br i1 %t23687, label %LSJ23688, label %LSR23688
+LSR23688:
+%t23689 = icmp ne i64 %t23686, %t23678
+br label %LSJ23688
+LSJ23688:
+%t23690 = phi i1 [ true, %LSL23688 ], [ %t23689, %LSR23688 ]
+br i1 %t23690, label %L7894, label %L7896
+L7894:
+%t23691 = sub nsw i64 0, 1
+ret i64 %t23691
+L7896:
+%t23692 = add i64 %t23678, 1
+%t23693 = call i64 @__mruntime_rt_unix_resid__disp_digits(i64 %t23692)
+%t23694 = sub i64 %t23693, %t23692
+%t23695 = icmp sle i64 %t23694, 0
+br label %LSL23696
+LSL23696:
+br i1 %t23695, label %LSJ23696, label %LSR23696
+LSR23696:
+%t23697 = icmp sgt i64 %t23694, 3
+br label %LSJ23696
+LSJ23696:
+%t23698 = phi i1 [ true, %LSL23696 ], [ %t23697, %LSR23696 ]
+br label %LSL23699
+LSL23699:
+br i1 %t23698, label %LSJ23699, label %LSR23699
+LSR23699:
+%t23700 = call i1 @__mruntime_rt_unix_resid__disp_screen_ok(i64 %t23693)
+%t23701 = xor i1 %t23700, true
+br label %LSJ23699
+LSJ23699:
+%t23702 = phi i1 [ true, %LSL23699 ], [ %t23701, %LSR23699 ]
+br i1 %t23702, label %L7897, label %L7899
+L7897:
+%t23703 = sub nsw i64 0, 1
+ret i64 %t23703
+L7899:
+%t23704 = call i64 @__mruntime_rt_unix_resid__path_buf()
+%t23706 = ptrtoint ptr @.s23705 to i64
+%t23707 = call i64 @mcopy(i64 %t23704, i64 %t23706, i64 15)
+%t23708 = add i64 %t23704, 15
+%t23709 = call i64 @mcopy(i64 %t23708, i64 %t23692, i64 %t23694)
+%t23710 = add nsw i64 15, %t23694
+%t23711 = call i64 @__mruntime_rt_unix_resid__sa_path(i64 %t23704, i64 %t23710)
+%t23712 = tail call i64 @__mruntime_rt_unix_resid__unix_connect(i64 %t23711)
+ret i64 %t23712
 }
 define internal i1 @__mruntime_rt_unix_resid__disp_screen_ok(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20530 = call i64 @ld8(i64 %p0)
-%t20531 = icmp eq i64 %t20530, 0
-br i1 %t20531, label %L6712, label %L6714
-L6712:
+%t23713 = call i64 @ld8(i64 %p0)
+%t23714 = icmp eq i64 %t23713, 0
+br i1 %t23714, label %L7900, label %L7902
+L7900:
 ret i1 true
-L6714:
-%t20532 = call i64 @ld8(i64 %p0)
-%t20533 = icmp ne i64 %t20532, 46
-br i1 %t20533, label %L6715, label %L6717
-L6715:
+L7902:
+%t23715 = call i64 @ld8(i64 %p0)
+%t23716 = icmp ne i64 %t23715, 46
+br i1 %t23716, label %L7903, label %L7905
+L7903:
 ret i1 false
-L6717:
-%t20534 = add i64 %p0, 1
-%t20535 = call i64 @__mruntime_rt_unix_resid__disp_digits(i64 %t20534)
-%t20536 = add i64 %p0, 1
-%t20537 = icmp sgt i64 %t20535, %t20536
-br label %LSL20538
-LSL20538:
-br i1 %t20537, label %LSR20538, label %LSJ20538
-LSR20538:
-%t20539 = call i64 @ld8(i64 %t20535)
-%t20540 = icmp eq i64 %t20539, 0
-br label %LSJ20538
-LSJ20538:
-%t20541 = phi i1 [ false, %LSL20538 ], [ %t20540, %LSR20538 ]
-ret i1 %t20541
+L7905:
+%t23717 = add i64 %p0, 1
+%t23718 = call i64 @__mruntime_rt_unix_resid__disp_digits(i64 %t23717)
+%t23719 = add i64 %p0, 1
+%t23720 = icmp sgt i64 %t23718, %t23719
+br label %LSL23721
+LSL23721:
+br i1 %t23720, label %LSR23721, label %LSJ23721
+LSR23721:
+%t23722 = call i64 @ld8(i64 %t23718)
+%t23723 = icmp eq i64 %t23722, 0
+br label %LSJ23721
+LSJ23721:
+%t23724 = phi i1 [ false, %LSL23721 ], [ %t23723, %LSR23721 ]
+ret i1 %t23724
 }
 define internal i64 @rt_disp_pair() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20542p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.disp_pair)
-%t20542 = ptrtoint ptr %t20542p to i64
-%t20543 = call i64 @st32(i64 %t20542, i64 0)
-%t20544 = add i64 %t20542, 4
-%t20545 = call i64 @st32(i64 %t20544, i64 0)
-%t20546 = add i64 %t20543, %t20545
-%t20547 = or i64 1, 524288
-%t20548 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 199, i64 1, i64 %t20547, i64 0, i64 %t20542, i64 0, i64 0)
-%t20549 = icmp ne i64 %t20548, 0
-br i1 %t20549, label %L6718, label %L6720
-L6718:
-%t20550 = tail call i64 @xempty()
-ret i64 %t20550
-L6720:
-%t20551 = call i64 @xmalloc(i64 16)
-%t20552 = call i64 @ld32(i64 %t20542)
-%t20553 = add i64 %t20552, 18295873486192640
-%t20554 = call i64 @st64(i64 %t20551, i64 %t20553)
-%t20555 = add i64 %t20551, 8
-%t20556 = add i64 %t20542, 4
-%t20557 = call i64 @ld32(i64 %t20556)
-%t20558 = add i64 %t20557, 18295873486192640
-%t20559 = call i64 @st64(i64 %t20555, i64 %t20558)
-%t20560 = add i64 %t20554, %t20559
-%t20562 = ptrtoint ptr @.s20561 to i64
-%t20563 = call i64 @c_list_new(i64 2, i64 %t20551, i64 %t20562)
-%t20564 = call i64 @c_free(i64 %t20551)
-ret i64 %t20563
+%t23725p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.disp_pair)
+%t23725 = ptrtoint ptr %t23725p to i64
+%t23726 = call i64 @st32(i64 %t23725, i64 0)
+%t23727 = add i64 %t23725, 4
+%t23728 = call i64 @st32(i64 %t23727, i64 0)
+%t23729 = add i64 %t23726, %t23728
+%t23730 = or i64 1, 524288
+%t23731 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 199, i64 1, i64 %t23730, i64 0, i64 %t23725, i64 0, i64 0)
+%t23732 = icmp ne i64 %t23731, 0
+br i1 %t23732, label %L7906, label %L7908
+L7906:
+%t23733 = tail call i64 @xempty()
+ret i64 %t23733
+L7908:
+%t23734 = call i64 @xmalloc(i64 16)
+%t23735 = call i64 @ld32(i64 %t23725)
+%t23736 = add i64 %t23735, 18295873486192640
+%t23737 = call i64 @st64(i64 %t23734, i64 %t23736)
+%t23738 = add i64 %t23734, 8
+%t23739 = add i64 %t23725, 4
+%t23740 = call i64 @ld32(i64 %t23739)
+%t23741 = add i64 %t23740, 18295873486192640
+%t23742 = call i64 @st64(i64 %t23738, i64 %t23741)
+%t23743 = add i64 %t23737, %t23742
+%t23745 = ptrtoint ptr @.s23744 to i64
+%t23746 = call i64 @c_list_new(i64 2, i64 %t23734, i64 %t23745)
+%t23747 = call i64 @c_free(i64 %t23734)
+ret i64 %t23746
 }
 define ptr @resid_disp_pair() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
@@ -45945,103 +52936,103 @@ ret ptr %rv
 }
 define internal i64 @__mruntime_rt_unix_resid__msg_buf() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20565p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.disp_msg)
-%t20565 = ptrtoint ptr %t20565p to i64
-ret i64 %t20565
+%t23748p = call ptr @llvm.threadlocal.address.p0(ptr @rtg.disp_msg)
+%t23748 = ptrtoint ptr %t23748p to i64
+ret i64 %t23748
 }
 define internal i64 @__mruntime_rt_unix_resid__disp_msg_head(i64 %p0, i64 %p1, i1 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20566 = call i64 @__mruntime_rt_unix_resid__msg_buf()
-%t20567p = inttoptr i64 %t20566 to ptr
-%t20567q = trunc i64 0 to i8
-call void @llvm.memset.p0.i64(ptr %t20567p, i8 %t20567q, i64 96, i1 false)
-%t20567 = add i64 0, 0
-%t20568 = call i64 @st64(i64 %t20566, i64 %p0)
-%t20569 = add i64 %t20566, 8
-%t20570 = call i64 @st64(i64 %t20569, i64 %p1)
-%t20571 = add i64 %t20568, %t20570
-%t20572 = add i64 %t20566, 32
-%t20573 = call i64 @st64(i64 %t20572, i64 %t20566)
-%t20574 = add i64 %t20566, 40
-%t20575 = call i64 @st64(i64 %t20574, i64 1)
-%t20576 = add i64 %t20573, %t20575
-%t20577 = add i64 %t20566, 64
-%t20578 = call i64 @st64(i64 %t20577, i64 0)
-br i1 %p2, label %L6721, label %L6723
-L6721:
-%t20579 = add i64 %t20566, 48
-%t20580 = add i64 %t20566, 72
-%t20581 = call i64 @st64(i64 %t20579, i64 %t20580)
-%t20582 = add i64 %t20566, 56
-%t20583 = call i64 @st64(i64 %t20582, i64 24)
-%t20584 = add i64 %t20581, %t20583
-%t20585 = add i64 %t20566, 72
-%t20586 = call i64 @st64(i64 %t20585, i64 20)
-%t20587 = add i64 %t20566, 80
-%t20588 = call i64 @st32(i64 %t20587, i64 1)
-%t20589 = add i64 %t20586, %t20588
-%t20590 = add i64 %t20566, 84
-%t20591 = call i64 @st32(i64 %t20590, i64 1)
-%t20592 = add i64 %t20589, %t20591
-br label %L6723
-L6723:
-%t20593 = add i64 %t20566, 16
-ret i64 %t20593
+%t23749 = call i64 @__mruntime_rt_unix_resid__msg_buf()
+%t23750p = inttoptr i64 %t23749 to ptr
+%t23750q = trunc i64 0 to i8
+call void @llvm.memset.p0.i64(ptr %t23750p, i8 %t23750q, i64 96, i1 false)
+%t23750 = add i64 0, 0
+%t23751 = call i64 @st64(i64 %t23749, i64 %p0)
+%t23752 = add i64 %t23749, 8
+%t23753 = call i64 @st64(i64 %t23752, i64 %p1)
+%t23754 = add i64 %t23751, %t23753
+%t23755 = add i64 %t23749, 32
+%t23756 = call i64 @st64(i64 %t23755, i64 %t23749)
+%t23757 = add i64 %t23749, 40
+%t23758 = call i64 @st64(i64 %t23757, i64 1)
+%t23759 = add i64 %t23756, %t23758
+%t23760 = add i64 %t23749, 64
+%t23761 = call i64 @st64(i64 %t23760, i64 0)
+br i1 %p2, label %L7909, label %L7911
+L7909:
+%t23762 = add i64 %t23749, 48
+%t23763 = add i64 %t23749, 72
+%t23764 = call i64 @st64(i64 %t23762, i64 %t23763)
+%t23765 = add i64 %t23749, 56
+%t23766 = call i64 @st64(i64 %t23765, i64 24)
+%t23767 = add i64 %t23764, %t23766
+%t23768 = add i64 %t23749, 72
+%t23769 = call i64 @st64(i64 %t23768, i64 20)
+%t23770 = add i64 %t23749, 80
+%t23771 = call i64 @st32(i64 %t23770, i64 1)
+%t23772 = add i64 %t23769, %t23771
+%t23773 = add i64 %t23749, 84
+%t23774 = call i64 @st32(i64 %t23773, i64 1)
+%t23775 = add i64 %t23772, %t23774
+br label %L7911
+L7911:
+%t23776 = add i64 %t23749, 16
+ret i64 %t23776
 }
 define internal i64 @__mruntime_rt_unix_resid__disp_set_ctl_fd(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20594 = call i64 @__mruntime_rt_unix_resid__msg_buf()
-%t20595 = add i64 %t20594, 88
-%t20596 = call i64 @st32(i64 %t20595, i64 %p0)
-ret i64 %t20596
+%t23777 = call i64 @__mruntime_rt_unix_resid__msg_buf()
+%t23778 = add i64 %t23777, 88
+%t23779 = call i64 @st32(i64 %t23778, i64 %p0)
+ret i64 %t23779
 }
 define internal i64 @rt_disp_send(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20597 = call i1 @__mruntime_rt_unix_resid__disp_sock_ok(i64 %p0)
-%t20598 = xor i1 %t20597, true
-br i1 %t20598, label %L6724, label %L6726
-L6724:
+%t23780 = call i1 @__mruntime_rt_unix_resid__disp_sock_ok(i64 %p0)
+%t23781 = xor i1 %t23780, true
+br i1 %t23781, label %L7912, label %L7914
+L7912:
 ret i64 0
-L6726:
-%t20599 = call i64 @c_list_len(i64 %p1)
-%t20600 = icmp slt i64 %t20599, 0
-br label %LSL20601
-LSL20601:
-br i1 %t20600, label %LSJ20601, label %LSR20601
-LSR20601:
-%t20602 = icmp sgt i64 %t20599, 1048576
-br label %LSJ20601
-LSJ20601:
-%t20603 = phi i1 [ true, %LSL20601 ], [ %t20602, %LSR20601 ]
-br i1 %t20603, label %L6727, label %L6729
-L6727:
+L7914:
+%t23782 = call i64 @c_list_len(i64 %p1)
+%t23783 = icmp slt i64 %t23782, 0
+br label %LSL23784
+LSL23784:
+br i1 %t23783, label %LSJ23784, label %LSR23784
+LSR23784:
+%t23785 = icmp sgt i64 %t23782, 1048576
+br label %LSJ23784
+LSJ23784:
+%t23786 = phi i1 [ true, %LSL23784 ], [ %t23785, %LSR23784 ]
+br i1 %t23786, label %L7915, label %L7917
+L7915:
 ret i64 0
-L6729:
-%t20604 = icmp sle i64 %t20599, 0
-br i1 %t20604, label %L6730, label %L6732
-L6730:
+L7917:
+%t23787 = icmp sle i64 %t23782, 0
+br i1 %t23787, label %L7918, label %L7920
+L7918:
 ret i64 1
-L6732:
-%t20605 = call i64 @xmalloc(i64 %t20599)
-%t20606 = call i64 @__mruntime_rt_unix_resid__disp_bytes_of(i64 %p1, i64 %t20605, i64 0, i64 %t20599)
-%t20607 = icmp sge i64 %p2, 0
-%t20608 = call i64 @__mruntime_rt_unix_resid__disp_msg_head(i64 %t20605, i64 %t20599, i1 %t20607)
-br i1 %t20607, label %L6733, label %L6735
-L6733:
-%t20609 = call i64 @__mruntime_rt_unix_resid__disp_set_ctl_fd(i64 %p2)
-br label %L6735
-L6735:
-%t20610 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 211, i64 %p0, i64 %t20608, i64 0, i64 0, i64 0, i64 0)
-%t20611 = call i64 @c_free(i64 %t20605)
-%t20612 = icmp eq i64 %t20610, %t20599
-br i1 %t20612, label %L6736, label %L6737
-L6736:
-br label %L6738
-L6737:
-br label %L6738
-L6738:
-%t20613 = phi i64 [ 1, %L6736 ], [ 0, %L6737 ]
-ret i64 %t20613
+L7920:
+%t23788 = call i64 @xmalloc(i64 %t23782)
+%t23789 = call i64 @__mruntime_rt_unix_resid__disp_bytes_of(i64 %p1, i64 %t23788, i64 0, i64 %t23782)
+%t23790 = icmp sge i64 %p2, 0
+%t23791 = call i64 @__mruntime_rt_unix_resid__disp_msg_head(i64 %t23788, i64 %t23782, i1 %t23790)
+br i1 %t23790, label %L7921, label %L7923
+L7921:
+%t23792 = call i64 @__mruntime_rt_unix_resid__disp_set_ctl_fd(i64 %p2)
+br label %L7923
+L7923:
+%t23793 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 211, i64 %p0, i64 %t23791, i64 0, i64 0, i64 0, i64 0)
+%t23794 = call i64 @c_free(i64 %t23788)
+%t23795 = icmp eq i64 %t23793, %t23782
+br i1 %t23795, label %L7924, label %L7925
+L7924:
+br label %L7926
+L7925:
+br label %L7926
+L7926:
+%t23796 = phi i64 [ 1, %L7924 ], [ 0, %L7925 ]
+ret i64 %t23796
 }
 define i8 @resid_disp_send(i64 %a0, ptr %a1, i64 %a2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
@@ -46056,108 +53047,108 @@ br label %tco.head
 tco.head:
 %p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
 %p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t20620, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t23803, %tco.s0 ]
 %p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ]
-%t20614 = icmp sge i64 %p2, %p3
-br i1 %t20614, label %L6739, label %L6741
-L6739:
+%t23797 = icmp sge i64 %p2, %p3
+br i1 %t23797, label %L7927, label %L7929
+L7927:
 ret i64 0
-L6741:
-%t20615 = add i64 %p1, %p2
-%t20616 = call i64 @c_list_get(i64 %p0, i64 %p2)
-%t20617 = call i64 @unbox_word(i64 %t20616)
-%t20618 = and i64 %t20617, 255
-%t20619 = call i64 @st8(i64 %t20615, i64 %t20618)
-%t20620 = add nsw i64 %p2, 1
+L7929:
+%t23798 = add i64 %p1, %p2
+%t23799 = call i64 @c_list_get(i64 %p0, i64 %p2)
+%t23800 = call i64 @unbox_word(i64 %t23799)
+%t23801 = and i64 %t23800, 255
+%t23802 = call i64 @st8(i64 %t23798, i64 %t23801)
+%t23803 = add nsw i64 %p2, 1
 br label %tco.s0
 tco.s0:
 br label %tco.head
 }
 define internal i64 @rt_disp_recv(i64 %p0, i64 %p1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20622 = call i1 @__mruntime_rt_unix_resid__disp_sock_ok(i64 %p0)
-%t20623 = xor i1 %t20622, true
-br i1 %t20623, label %L6742, label %L6744
-L6742:
-%t20624 = call i64 @xempty()
-ret i64 %t20624
-L6744:
-%t20625 = icmp slt i64 %p1, 0
-br i1 %t20625, label %L6745, label %L6746
-L6745:
-br label %L6747
-L6746:
-%t20626 = icmp sgt i64 %p1, 1048576
-br i1 %t20626, label %L6748, label %L6749
-L6748:
-br label %L6750
-L6749:
-br label %L6750
-L6750:
-%t20627 = phi i64 [ 1048576, %L6748 ], [ %p1, %L6749 ]
-br label %L6747
-L6747:
-%t20628 = phi i64 [ 0, %L6745 ], [ %t20627, %L6750 ]
-%t20629 = icmp sle i64 %t20628, 0
-br i1 %t20629, label %L6751, label %L6753
-L6751:
-%t20630 = call i64 @xempty()
-ret i64 %t20630
-L6753:
-%t20631 = call i64 @xmalloc(i64 %t20628)
-%t20632 = call i64 @xmalloc(i64 64)
-%t20633p = inttoptr i64 %t20632 to ptr
-%t20633q = trunc i64 0 to i8
-call void @llvm.memset.p0.i64(ptr %t20633p, i8 %t20633q, i64 64, i1 false)
-%t20633 = add i64 0, 0
-%t20634 = call i64 @__mruntime_rt_unix_resid__disp_msg_head(i64 %t20631, i64 %t20628, i1 false)
-%t20635 = call i64 @__mruntime_rt_unix_resid__msg_buf()
-%t20636 = add i64 %t20635, 48
-%t20637 = call i64 @st64(i64 %t20636, i64 %t20632)
-%t20638 = call i64 @__mruntime_rt_unix_resid__msg_buf()
-%t20639 = add i64 %t20638, 56
-%t20640 = call i64 @st64(i64 %t20639, i64 64)
-%t20641 = add i64 %t20637, %t20640
-%t20642 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 212, i64 %p0, i64 %t20634, i64 0, i64 0, i64 0, i64 0)
-%t20643 = icmp sgt i64 %t20642, 0
-br i1 %t20643, label %L6754, label %L6755
-L6754:
-br label %L6756
-L6755:
-br label %L6756
-L6756:
-%t20644 = phi i64 [ %t20642, %L6754 ], [ 0, %L6755 ]
-%t20645 = call i64 @__mruntime_rt_unix_resid__msg_buf()
-%t20646 = add i64 %t20645, 56
-%t20647 = call i64 @ld64(i64 %t20646)
-%t20648 = icmp sgt i64 %t20647, 64
-br i1 %t20648, label %L6757, label %L6758
-L6757:
-br label %L6759
-L6758:
-br label %L6759
-L6759:
-%t20649 = phi i64 [ 64, %L6757 ], [ %t20647, %L6758 ]
-%t20650 = call i64 @__mruntime_rt_unix_resid__disp_take_fds(i64 %t20632, i64 %t20649, i64 0)
-%t20651 = icmp sgt i64 %t20644, 0
-br i1 %t20651, label %L6760, label %L6761
-L6760:
-%t20652 = mul i64 %t20644, 8
-br label %L6762
-L6761:
-br label %L6762
-L6762:
-%t20653 = phi i64 [ %t20652, %L6760 ], [ 8, %L6761 ]
-%t20654 = call i64 @xmalloc(i64 %t20653)
-%t20655 = call i64 @__mruntime_rt_unix_resid__disp_byte_boxes(i64 %t20631, i64 %t20654, i64 0, i64 %t20644)
-%t20657 = ptrtoint ptr @.s20656 to i64
-%t20658 = call i64 @c_list_new(i64 %t20644, i64 %t20654, i64 %t20657)
-%t20659 = call i64 @c_free(i64 %t20631)
-%t20660 = call i64 @c_free(i64 %t20632)
-%t20661 = add i64 %t20659, %t20660
-%t20662 = call i64 @c_free(i64 %t20654)
-%t20663 = add i64 %t20661, %t20662
-ret i64 %t20658
+%t23805 = call i1 @__mruntime_rt_unix_resid__disp_sock_ok(i64 %p0)
+%t23806 = xor i1 %t23805, true
+br i1 %t23806, label %L7930, label %L7932
+L7930:
+%t23807 = call i64 @xempty()
+ret i64 %t23807
+L7932:
+%t23808 = icmp slt i64 %p1, 0
+br i1 %t23808, label %L7933, label %L7934
+L7933:
+br label %L7935
+L7934:
+%t23809 = icmp sgt i64 %p1, 1048576
+br i1 %t23809, label %L7936, label %L7937
+L7936:
+br label %L7938
+L7937:
+br label %L7938
+L7938:
+%t23810 = phi i64 [ 1048576, %L7936 ], [ %p1, %L7937 ]
+br label %L7935
+L7935:
+%t23811 = phi i64 [ 0, %L7933 ], [ %t23810, %L7938 ]
+%t23812 = icmp sle i64 %t23811, 0
+br i1 %t23812, label %L7939, label %L7941
+L7939:
+%t23813 = call i64 @xempty()
+ret i64 %t23813
+L7941:
+%t23814 = call i64 @xmalloc(i64 %t23811)
+%t23815 = call i64 @xmalloc(i64 64)
+%t23816p = inttoptr i64 %t23815 to ptr
+%t23816q = trunc i64 0 to i8
+call void @llvm.memset.p0.i64(ptr %t23816p, i8 %t23816q, i64 64, i1 false)
+%t23816 = add i64 0, 0
+%t23817 = call i64 @__mruntime_rt_unix_resid__disp_msg_head(i64 %t23814, i64 %t23811, i1 false)
+%t23818 = call i64 @__mruntime_rt_unix_resid__msg_buf()
+%t23819 = add i64 %t23818, 48
+%t23820 = call i64 @st64(i64 %t23819, i64 %t23815)
+%t23821 = call i64 @__mruntime_rt_unix_resid__msg_buf()
+%t23822 = add i64 %t23821, 56
+%t23823 = call i64 @st64(i64 %t23822, i64 64)
+%t23824 = add i64 %t23820, %t23823
+%t23825 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 212, i64 %p0, i64 %t23817, i64 0, i64 0, i64 0, i64 0)
+%t23826 = icmp sgt i64 %t23825, 0
+br i1 %t23826, label %L7942, label %L7943
+L7942:
+br label %L7944
+L7943:
+br label %L7944
+L7944:
+%t23827 = phi i64 [ %t23825, %L7942 ], [ 0, %L7943 ]
+%t23828 = call i64 @__mruntime_rt_unix_resid__msg_buf()
+%t23829 = add i64 %t23828, 56
+%t23830 = call i64 @ld64(i64 %t23829)
+%t23831 = icmp sgt i64 %t23830, 64
+br i1 %t23831, label %L7945, label %L7946
+L7945:
+br label %L7947
+L7946:
+br label %L7947
+L7947:
+%t23832 = phi i64 [ 64, %L7945 ], [ %t23830, %L7946 ]
+%t23833 = call i64 @__mruntime_rt_unix_resid__disp_take_fds(i64 %t23815, i64 %t23832, i64 0)
+%t23834 = icmp sgt i64 %t23827, 0
+br i1 %t23834, label %L7948, label %L7949
+L7948:
+%t23835 = mul i64 %t23827, 8
+br label %L7950
+L7949:
+br label %L7950
+L7950:
+%t23836 = phi i64 [ %t23835, %L7948 ], [ 8, %L7949 ]
+%t23837 = call i64 @xmalloc(i64 %t23836)
+%t23838 = call i64 @__mruntime_rt_unix_resid__disp_byte_boxes(i64 %t23814, i64 %t23837, i64 0, i64 %t23827)
+%t23840 = ptrtoint ptr @.s23839 to i64
+%t23841 = call i64 @c_list_new(i64 %t23827, i64 %t23837, i64 %t23840)
+%t23842 = call i64 @c_free(i64 %t23814)
+%t23843 = call i64 @c_free(i64 %t23815)
+%t23844 = add i64 %t23842, %t23843
+%t23845 = call i64 @c_free(i64 %t23837)
+%t23846 = add i64 %t23844, %t23845
+ret i64 %t23841
 }
 define ptr @resid_disp_recv(i64 %a0, i64 %a1) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
@@ -46167,62 +53158,62 @@ ret ptr %rv
 }
 define internal i64 @__mruntime_rt_unix_resid__disp_take_fds(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20664 = add i64 %p2, 16
-%t20665 = icmp sgt i64 %t20664, %p1
-br i1 %t20665, label %L6763, label %L6765
-L6763:
+%t23847 = add i64 %p2, 16
+%t23848 = icmp sgt i64 %t23847, %p1
+br i1 %t23848, label %L7951, label %L7953
+L7951:
 ret i64 0
-L6765:
-%t20666 = add i64 %p0, %p2
-%t20667 = call i64 @ld64(i64 %t20666)
-%t20668 = icmp slt i64 %t20667, 16
-br label %LSL20669
-LSL20669:
-br i1 %t20668, label %LSJ20669, label %LSR20669
-LSR20669:
-%t20670 = add i64 %p2, %t20667
-%t20671 = icmp sgt i64 %t20670, %p1
-br label %LSJ20669
-LSJ20669:
-%t20672 = phi i1 [ true, %LSL20669 ], [ %t20671, %LSR20669 ]
-br i1 %t20672, label %L6766, label %L6768
-L6766:
+L7953:
+%t23849 = add i64 %p0, %p2
+%t23850 = call i64 @ld64(i64 %t23849)
+%t23851 = icmp slt i64 %t23850, 16
+br label %LSL23852
+LSL23852:
+br i1 %t23851, label %LSJ23852, label %LSR23852
+LSR23852:
+%t23853 = add i64 %p2, %t23850
+%t23854 = icmp sgt i64 %t23853, %p1
+br label %LSJ23852
+LSJ23852:
+%t23855 = phi i1 [ true, %LSL23852 ], [ %t23854, %LSR23852 ]
+br i1 %t23855, label %L7954, label %L7956
+L7954:
 ret i64 0
-L6768:
-%t20673 = add i64 %p0, %p2
-%t20674 = add i64 %t20673, 8
-%t20675 = call i64 @ld32(i64 %t20674)
-%t20676 = icmp eq i64 %t20675, 1
-br label %LSL20677
-LSL20677:
-br i1 %t20676, label %LSR20677, label %LSJ20677
-LSR20677:
-%t20678 = add i64 %p0, %p2
-%t20679 = add i64 %t20678, 12
-%t20680 = call i64 @ld32(i64 %t20679)
-%t20681 = icmp eq i64 %t20680, 1
-br label %LSJ20677
-LSJ20677:
-%t20682 = phi i1 [ false, %LSL20677 ], [ %t20681, %LSR20677 ]
-br i1 %t20682, label %L6769, label %L6770
-L6769:
-%t20683 = add i64 %p0, %p2
-%t20684 = add i64 %t20683, 16
-%t20685 = sub nsw i64 %t20667, 16
-%t20686 = sdiv i64 %t20685, 4
-%t20687 = call i64 @__mruntime_rt_unix_resid__disp_take_each(i64 %t20684, i64 %t20686, i64 0)
-br label %L6771
-L6770:
-br label %L6771
-L6771:
-%t20688 = phi i64 [ %t20687, %L6769 ], [ 0, %L6770 ]
-%t20689 = add i64 %t20667, 7
-%t20690 = sub nsw i64 0, 8
-%t20691 = and i64 %t20689, %t20690
-%t20692 = add i64 %p2, %t20691
-%t20693 = call i64 @__mruntime_rt_unix_resid__disp_take_fds(i64 %p0, i64 %p1, i64 %t20692)
-%t20694 = add i64 %t20693, %t20688
-ret i64 %t20694
+L7956:
+%t23856 = add i64 %p0, %p2
+%t23857 = add i64 %t23856, 8
+%t23858 = call i64 @ld32(i64 %t23857)
+%t23859 = icmp eq i64 %t23858, 1
+br label %LSL23860
+LSL23860:
+br i1 %t23859, label %LSR23860, label %LSJ23860
+LSR23860:
+%t23861 = add i64 %p0, %p2
+%t23862 = add i64 %t23861, 12
+%t23863 = call i64 @ld32(i64 %t23862)
+%t23864 = icmp eq i64 %t23863, 1
+br label %LSJ23860
+LSJ23860:
+%t23865 = phi i1 [ false, %LSL23860 ], [ %t23864, %LSR23860 ]
+br i1 %t23865, label %L7957, label %L7958
+L7957:
+%t23866 = add i64 %p0, %p2
+%t23867 = add i64 %t23866, 16
+%t23868 = sub nsw i64 %t23850, 16
+%t23869 = sdiv i64 %t23868, 4
+%t23870 = call i64 @__mruntime_rt_unix_resid__disp_take_each(i64 %t23867, i64 %t23869, i64 0)
+br label %L7959
+L7958:
+br label %L7959
+L7959:
+%t23871 = phi i64 [ %t23870, %L7957 ], [ 0, %L7958 ]
+%t23872 = add i64 %t23850, 7
+%t23873 = sub nsw i64 0, 8
+%t23874 = and i64 %t23872, %t23873
+%t23875 = add i64 %p2, %t23874
+%t23876 = call i64 @__mruntime_rt_unix_resid__disp_take_fds(i64 %p0, i64 %p1, i64 %t23875)
+%t23877 = add i64 %t23876, %t23871
+ret i64 %t23877
 }
 define internal i64 @__mruntime_rt_unix_resid__disp_take_each(i64 %p0.in, i64 %p1.in, i64 %p2.in) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
@@ -46230,17 +53221,17 @@ br label %tco.head
 tco.head:
 %p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
 %p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t20700, %tco.s0 ]
-%t20695 = icmp sge i64 %p2, %p1
-br i1 %t20695, label %L6772, label %L6774
-L6772:
+%p2 = phi i64 [ %p2.in, %entry ], [ %t23883, %tco.s0 ]
+%t23878 = icmp sge i64 %p2, %p1
+br i1 %t23878, label %L7960, label %L7962
+L7960:
 ret i64 0
-L6774:
-%t20696 = mul i64 %p2, 4
-%t20697 = add i64 %p0, %t20696
-%t20698 = call i64 @ld32(i64 %t20697)
-%t20699 = call i64 @__mruntime_rt_unix_resid__fdq_push(i64 %t20698)
-%t20700 = add nsw i64 %p2, 1
+L7962:
+%t23879 = mul i64 %p2, 4
+%t23880 = add i64 %p0, %t23879
+%t23881 = call i64 @ld32(i64 %t23880)
+%t23882 = call i64 @__mruntime_rt_unix_resid__fdq_push(i64 %t23881)
+%t23883 = add nsw i64 %p2, 1
 br label %tco.s0
 tco.s0:
 br label %tco.head
@@ -46251,28 +53242,28 @@ br label %tco.head
 tco.head:
 %p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
 %p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t20709, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t23892, %tco.s0 ]
 %p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ]
-%t20702 = icmp sge i64 %p2, %p3
-br i1 %t20702, label %L6775, label %L6777
-L6775:
+%t23885 = icmp sge i64 %p2, %p3
+br i1 %t23885, label %L7963, label %L7965
+L7963:
 ret i64 0
-L6777:
-%t20703 = mul i64 %p2, 8
-%t20704 = add i64 %p1, %t20703
-%t20705 = add i64 %p0, %p2
-%t20706 = call i64 @ld8(i64 %t20705)
-%t20707 = add i64 %t20706, 18295873486192640
-%t20708 = call i64 @st64(i64 %t20704, i64 %t20707)
-%t20709 = add nsw i64 %p2, 1
+L7965:
+%t23886 = mul i64 %p2, 8
+%t23887 = add i64 %p1, %t23886
+%t23888 = add i64 %p0, %p2
+%t23889 = call i64 @ld8(i64 %t23888)
+%t23890 = add i64 %t23889, 18295873486192640
+%t23891 = call i64 @st64(i64 %t23887, i64 %t23890)
+%t23892 = add nsw i64 %p2, 1
 br label %tco.s0
 tco.s0:
 br label %tco.head
 }
 define internal i64 @rt_disp_poll(i64 %p0, i64 %p1, i64 %p2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20711 = tail call i64 @rt_tcp_poll(i64 %p0, i64 %p1, i64 %p2)
-ret i64 %t20711
+%t23894 = tail call i64 @rt_tcp_poll(i64 %p0, i64 %p1, i64 %p2)
+ret i64 %t23894
 }
 define ptr @resid_disp_poll(ptr %a0, ptr %a1, i64 %a2) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
@@ -46284,8 +53275,8 @@ ret ptr %rv
 }
 define internal i64 @rt_disp_recv_fd() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20712 = tail call i64 @__mruntime_rt_unix_resid__fdq_pop()
-ret i64 %t20712
+%t23895 = tail call i64 @__mruntime_rt_unix_resid__fdq_pop()
+ret i64 %t23895
 }
 define i64 @resid_disp_recv_fd() "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
@@ -46294,32 +53285,32 @@ ret i64 %r
 }
 define internal i64 @rt_disp_close(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20713 = icmp sge i64 %p0, 0
-br label %LSL20714
-LSL20714:
-br i1 %t20713, label %LSR20714, label %LSJ20714
-LSR20714:
-%t20715 = call i1 @__mruntime_rt_unix_resid__disp_sock_ok(i64 %p0)
-br label %LSJ20714
-LSJ20714:
-%t20716 = phi i1 [ false, %LSL20714 ], [ %t20715, %LSR20714 ]
-br i1 %t20716, label %L6778, label %L6779
-L6778:
-%t20717 = call i64 @sys_close(i64 %p0)
-%t20718 = icmp eq i64 %t20717, 0
-br i1 %t20718, label %L6781, label %L6782
-L6781:
-br label %L6783
-L6782:
-br label %L6783
-L6783:
-%t20719 = phi i64 [ 1, %L6781 ], [ 0, %L6782 ]
-br label %L6780
-L6779:
-br label %L6780
-L6780:
-%t20720 = phi i64 [ %t20719, %L6783 ], [ 0, %L6779 ]
-ret i64 %t20720
+%t23896 = icmp sge i64 %p0, 0
+br label %LSL23897
+LSL23897:
+br i1 %t23896, label %LSR23897, label %LSJ23897
+LSR23897:
+%t23898 = call i1 @__mruntime_rt_unix_resid__disp_sock_ok(i64 %p0)
+br label %LSJ23897
+LSJ23897:
+%t23899 = phi i1 [ false, %LSL23897 ], [ %t23898, %LSR23897 ]
+br i1 %t23899, label %L7966, label %L7967
+L7966:
+%t23900 = call i64 @sys_close(i64 %p0)
+%t23901 = icmp eq i64 %t23900, 0
+br i1 %t23901, label %L7969, label %L7970
+L7969:
+br label %L7971
+L7970:
+br label %L7971
+L7971:
+%t23902 = phi i64 [ 1, %L7969 ], [ 0, %L7970 ]
+br label %L7968
+L7967:
+br label %L7968
+L7968:
+%t23903 = phi i64 [ %t23902, %L7971 ], [ 0, %L7967 ]
+ret i64 %t23903
 }
 define i8 @resid_disp_close(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
@@ -46333,70 +53324,70 @@ ret i64 1296386893
 }
 define internal i1 @__mruntime_rt_unix_resid__shm_ok(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20721 = icmp ne i64 %p0, 0
-br label %LSL20722
-LSL20722:
-br i1 %t20721, label %LSR20722, label %LSJ20722
-LSR20722:
-%t20723 = call i64 @ld32(i64 %p0)
-%t20724 = call i64 @__mruntime_rt_unix_resid__shm_magic()
-%t20725 = icmp eq i64 %t20723, %t20724
-br label %LSJ20722
-LSJ20722:
-%t20726 = phi i1 [ false, %LSL20722 ], [ %t20725, %LSR20722 ]
-ret i1 %t20726
+%t23904 = icmp ne i64 %p0, 0
+br label %LSL23905
+LSL23905:
+br i1 %t23904, label %LSR23905, label %LSJ23905
+LSR23905:
+%t23906 = call i64 @ld32(i64 %p0)
+%t23907 = call i64 @__mruntime_rt_unix_resid__shm_magic()
+%t23908 = icmp eq i64 %t23906, %t23907
+br label %LSJ23905
+LSJ23905:
+%t23909 = phi i1 [ false, %LSL23905 ], [ %t23908, %LSR23905 ]
+ret i1 %t23909
 }
 define internal i64 @rt_disp_shm_new(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20727 = icmp sle i64 %p0, 0
-br label %LSL20728
-LSL20728:
-br i1 %t20727, label %LSJ20728, label %LSR20728
-LSR20728:
-%t20729 = icmp sgt i64 %p0, 268435456
-br label %LSJ20728
-LSJ20728:
-%t20730 = phi i1 [ true, %LSL20728 ], [ %t20729, %LSR20728 ]
-br i1 %t20730, label %L6784, label %L6786
-L6784:
+%t23910 = icmp sle i64 %p0, 0
+br label %LSL23911
+LSL23911:
+br i1 %t23910, label %LSJ23911, label %LSR23911
+LSR23911:
+%t23912 = icmp sgt i64 %p0, 268435456
+br label %LSJ23911
+LSJ23911:
+%t23913 = phi i1 [ true, %LSL23911 ], [ %t23912, %LSR23911 ]
+br i1 %t23913, label %L7972, label %L7974
+L7972:
 ret i64 0
-L6786:
-%t20732 = ptrtoint ptr @.s20731 to i64
-%t20733 = or i64 1, 2
-%t20734 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 279, i64 %t20732, i64 %t20733, i64 0, i64 0, i64 0, i64 0)
-%t20735 = icmp slt i64 %t20734, 0
-br i1 %t20735, label %L6787, label %L6789
-L6787:
+L7974:
+%t23915 = ptrtoint ptr @.s23914 to i64
+%t23916 = or i64 1, 2
+%t23917 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 279, i64 %t23915, i64 %t23916, i64 0, i64 0, i64 0, i64 0)
+%t23918 = icmp slt i64 %t23917, 0
+br i1 %t23918, label %L7975, label %L7977
+L7975:
 ret i64 0
-L6789:
-%t20736 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 46, i64 %t20734, i64 %p0, i64 0, i64 0, i64 0, i64 0)
-%t20737 = icmp ne i64 %t20736, 0
-br i1 %t20737, label %L6790, label %L6792
-L6790:
-%t20738 = call i64 @sys_close(i64 %t20734)
-%t20739 = mul nsw i64 %t20738, 0
-ret i64 %t20739
-L6792:
-%t20740 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 222, i64 0, i64 %p0, i64 3, i64 1, i64 %t20734, i64 0)
-%t20741 = icmp slt i64 %t20740, 0
-br i1 %t20741, label %L6793, label %L6795
-L6793:
-%t20742 = call i64 @sys_close(i64 %t20734)
-%t20743 = mul nsw i64 %t20742, 0
-ret i64 %t20743
-L6795:
-%t20744 = call i64 @xmalloc(i64 32)
-%t20745 = call i64 @__mruntime_rt_unix_resid__shm_magic()
-%t20746 = call i64 @st32(i64 %t20744, i64 %t20745)
-%t20747 = add i64 %t20744, 8
-%t20748 = call i64 @st64(i64 %t20747, i64 %t20734)
-%t20749 = add i64 %t20744, 16
-%t20750 = call i64 @st64(i64 %t20749, i64 %p0)
-%t20751 = add i64 %t20748, %t20750
-%t20752 = add i64 %t20744, 24
-%t20753 = call i64 @st64(i64 %t20752, i64 %t20740)
-%t20754 = add i64 %t20751, %t20753
-ret i64 %t20744
+L7977:
+%t23919 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 46, i64 %t23917, i64 %p0, i64 0, i64 0, i64 0, i64 0)
+%t23920 = icmp ne i64 %t23919, 0
+br i1 %t23920, label %L7978, label %L7980
+L7978:
+%t23921 = call i64 @sys_close(i64 %t23917)
+%t23922 = mul nsw i64 %t23921, 0
+ret i64 %t23922
+L7980:
+%t23923 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 222, i64 0, i64 %p0, i64 3, i64 1, i64 %t23917, i64 0)
+%t23924 = icmp slt i64 %t23923, 0
+br i1 %t23924, label %L7981, label %L7983
+L7981:
+%t23925 = call i64 @sys_close(i64 %t23917)
+%t23926 = mul nsw i64 %t23925, 0
+ret i64 %t23926
+L7983:
+%t23927 = call i64 @xmalloc(i64 32)
+%t23928 = call i64 @__mruntime_rt_unix_resid__shm_magic()
+%t23929 = call i64 @st32(i64 %t23927, i64 %t23928)
+%t23930 = add i64 %t23927, 8
+%t23931 = call i64 @st64(i64 %t23930, i64 %t23917)
+%t23932 = add i64 %t23927, 16
+%t23933 = call i64 @st64(i64 %t23932, i64 %p0)
+%t23934 = add i64 %t23931, %t23933
+%t23935 = add i64 %t23927, 24
+%t23936 = call i64 @st64(i64 %t23935, i64 %t23923)
+%t23937 = add i64 %t23934, %t23936
+ret i64 %t23927
 }
 define i64 @resid_disp_shm_new(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
@@ -46405,18 +53396,18 @@ ret i64 %r
 }
 define internal i64 @rt_disp_shm_fd(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20755 = call i1 @__mruntime_rt_unix_resid__shm_ok(i64 %p0)
-br i1 %t20755, label %L6796, label %L6797
-L6796:
-%t20756 = add i64 %p0, 8
-%t20757 = call i64 @ld64(i64 %t20756)
-br label %L6798
-L6797:
-%t20758 = sub nsw i64 0, 1
-br label %L6798
-L6798:
-%t20759 = phi i64 [ %t20757, %L6796 ], [ %t20758, %L6797 ]
-ret i64 %t20759
+%t23938 = call i1 @__mruntime_rt_unix_resid__shm_ok(i64 %p0)
+br i1 %t23938, label %L7984, label %L7985
+L7984:
+%t23939 = add i64 %p0, 8
+%t23940 = call i64 @ld64(i64 %t23939)
+br label %L7986
+L7985:
+%t23941 = sub nsw i64 0, 1
+br label %L7986
+L7986:
+%t23942 = phi i64 [ %t23940, %L7984 ], [ %t23941, %L7985 ]
+ret i64 %t23942
 }
 define i64 @resid_disp_shm_fd(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
@@ -46425,57 +53416,57 @@ ret i64 %r
 }
 define internal i64 @rt_disp_shm_put(i64 %p0, i64 %p1, i64 %p2, i64 %p3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20760 = call i1 @__mruntime_rt_unix_resid__shm_ok(i64 %p0)
-%t20761 = xor i1 %t20760, true
-br label %LSL20762
-LSL20762:
-br i1 %t20761, label %LSJ20762, label %LSR20762
-LSR20762:
-%t20763 = icmp slt i64 %p1, 0
-br label %LSJ20762
-LSJ20762:
-%t20764 = phi i1 [ true, %LSL20762 ], [ %t20763, %LSR20762 ]
-br i1 %t20764, label %L6799, label %L6801
-L6799:
+%t23943 = call i1 @__mruntime_rt_unix_resid__shm_ok(i64 %p0)
+%t23944 = xor i1 %t23943, true
+br label %LSL23945
+LSL23945:
+br i1 %t23944, label %LSJ23945, label %LSR23945
+LSR23945:
+%t23946 = icmp slt i64 %p1, 0
+br label %LSJ23945
+LSJ23945:
+%t23947 = phi i1 [ true, %LSL23945 ], [ %t23946, %LSR23945 ]
+br i1 %t23947, label %L7987, label %L7989
+L7987:
 ret i64 0
-L6801:
-%t20765 = call i64 @c_list_len(i64 %p2)
-%t20766 = icmp slt i64 %p3, 0
-br i1 %t20766, label %L6802, label %L6803
-L6802:
-br label %L6804
-L6803:
-%t20767 = icmp sgt i64 %p3, %t20765
-br i1 %t20767, label %L6805, label %L6806
-L6805:
-br label %L6807
-L6806:
-br label %L6807
-L6807:
-%t20768 = phi i64 [ %t20765, %L6805 ], [ %p3, %L6806 ]
-br label %L6804
-L6804:
-%t20769 = phi i64 [ 0, %L6802 ], [ %t20768, %L6807 ]
-%t20770 = add i64 %p1, %t20769
-%t20771 = add i64 %p0, 16
-%t20772 = call i64 @ld64(i64 %t20771)
-%t20773 = icmp sgt i64 %t20770, %t20772
-br i1 %t20773, label %L6808, label %L6810
-L6808:
+L7989:
+%t23948 = call i64 @c_list_len(i64 %p2)
+%t23949 = icmp slt i64 %p3, 0
+br i1 %t23949, label %L7990, label %L7991
+L7990:
+br label %L7992
+L7991:
+%t23950 = icmp sgt i64 %p3, %t23948
+br i1 %t23950, label %L7993, label %L7994
+L7993:
+br label %L7995
+L7994:
+br label %L7995
+L7995:
+%t23951 = phi i64 [ %t23948, %L7993 ], [ %p3, %L7994 ]
+br label %L7992
+L7992:
+%t23952 = phi i64 [ 0, %L7990 ], [ %t23951, %L7995 ]
+%t23953 = add i64 %p1, %t23952
+%t23954 = add i64 %p0, 16
+%t23955 = call i64 @ld64(i64 %t23954)
+%t23956 = icmp sgt i64 %t23953, %t23955
+br i1 %t23956, label %L7996, label %L7998
+L7996:
 ret i64 0
-L6810:
-%t20774 = icmp sle i64 %t20769, 0
-br i1 %t20774, label %L6811, label %L6813
-L6811:
+L7998:
+%t23957 = icmp sle i64 %t23952, 0
+br i1 %t23957, label %L7999, label %L8001
+L7999:
 ret i64 1
-L6813:
-%t20775 = call i64 @xmalloc(i64 %t20769)
-%t20776 = call i64 @__mruntime_rt_unix_resid__disp_bytes_of(i64 %p2, i64 %t20775, i64 0, i64 %t20769)
-%t20777 = add i64 %p0, 24
-%t20778 = call i64 @ld64(i64 %t20777)
-%t20779 = add i64 %t20778, %p1
-%t20780 = call i64 @mcopy(i64 %t20779, i64 %t20775, i64 %t20769)
-%t20781 = call i64 @c_free(i64 %t20775)
+L8001:
+%t23958 = call i64 @xmalloc(i64 %t23952)
+%t23959 = call i64 @__mruntime_rt_unix_resid__disp_bytes_of(i64 %p2, i64 %t23958, i64 0, i64 %t23952)
+%t23960 = add i64 %p0, 24
+%t23961 = call i64 @ld64(i64 %t23960)
+%t23962 = add i64 %t23961, %p1
+%t23963 = call i64 @mcopy(i64 %t23962, i64 %t23958, i64 %t23952)
+%t23964 = call i64 @c_free(i64 %t23958)
 ret i64 1
 }
 define i8 @resid_disp_shm_put(i64 %a0, i64 %a1, ptr %a2, i64 %a3) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
@@ -46487,21 +53478,21 @@ ret i8 %rv
 }
 define internal i64 @rt_disp_shm_free(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20782 = call i1 @__mruntime_rt_unix_resid__shm_ok(i64 %p0)
-%t20783 = xor i1 %t20782, true
-br i1 %t20783, label %L6814, label %L6816
-L6814:
+%t23965 = call i1 @__mruntime_rt_unix_resid__shm_ok(i64 %p0)
+%t23966 = xor i1 %t23965, true
+br i1 %t23966, label %L8002, label %L8004
+L8002:
 ret i64 0
-L6816:
-%t20784 = add i64 %p0, 24
-%t20785 = call i64 @ld64(i64 %t20784)
-%t20786 = add i64 %p0, 16
-%t20787 = call i64 @ld64(i64 %t20786)
-%t20788 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 215, i64 %t20785, i64 %t20787, i64 0, i64 0, i64 0, i64 0)
-%t20789 = add i64 %p0, 8
-%t20790 = call i64 @ld64(i64 %t20789)
-%t20791 = call i64 @st32(i64 %p0, i64 0)
-%t20792 = call i64 @sys_close(i64 %t20790)
+L8004:
+%t23967 = add i64 %p0, 24
+%t23968 = call i64 @ld64(i64 %t23967)
+%t23969 = add i64 %p0, 16
+%t23970 = call i64 @ld64(i64 %t23969)
+%t23971 = call i64 asm sideeffect "svc #0", "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}"(i64 215, i64 %t23968, i64 %t23970, i64 0, i64 0, i64 0, i64 0)
+%t23972 = add i64 %p0, 8
+%t23973 = call i64 @ld64(i64 %t23972)
+%t23974 = call i64 @st32(i64 %p0, i64 0)
+%t23975 = call i64 @sys_close(i64 %t23973)
 ret i64 1
 }
 define i8 @resid_disp_shm_free(i64 %a0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
@@ -46516,52 +53507,52 @@ br label %tco.head
 tco.head:
 %p0 = phi i64 [ %p0.in, %entry ], [ %p0, %tco.s0 ]
 %p1 = phi i64 [ %p1.in, %entry ], [ %p1, %tco.s0 ]
-%p2 = phi i64 [ %p2.in, %entry ], [ %t20811, %tco.s0 ]
+%p2 = phi i64 [ %p2.in, %entry ], [ %t23994, %tco.s0 ]
 %p3 = phi i64 [ %p3.in, %entry ], [ %p3, %tco.s0 ]
-%t20793 = icmp sge i64 %p2, %p3
-br i1 %t20793, label %L6817, label %L6819
-L6817:
+%t23976 = icmp sge i64 %p2, %p3
+br i1 %t23976, label %L8005, label %L8007
+L8005:
 ret i64 0
-L6819:
-%t20794 = add i64 %p1, %p2
-%t20795 = call i64 @ld8(i64 %t20794)
-%t20796 = and i64 %t20795, 255
-%t20797 = icmp slt i64 %t20796, 16
-br i1 %t20797, label %L6820, label %L6821
-L6820:
-%t20799 = ptrtoint ptr @.s20798 to i64
-br label %L6822
-L6821:
-%t20801 = ptrtoint ptr @.s20800 to i64
-br label %L6822
-L6822:
-%t20802 = phi i64 [ %t20799, %L6820 ], [ %t20801, %L6821 ]
-%t20803 = call i64 @sb_lit(i64 %p0, i64 %t20802)
-%t20804 = ashr i64 %t20796, 4
-%t20805 = call i64 @__mruntime_rt_unix_resid__hex_digit(i64 %t20804)
-%t20806 = call i64 @rt_sb_append_cp(i64 %p0, i64 %t20805)
-%t20807 = and i64 %t20796, 15
-%t20808 = call i64 @__mruntime_rt_unix_resid__hex_digit(i64 %t20807)
-%t20809 = call i64 @rt_sb_append_cp(i64 %p0, i64 %t20808)
-%t20810 = add i64 %t20806, %t20809
-%t20811 = add nsw i64 %p2, 1
+L8007:
+%t23977 = add i64 %p1, %p2
+%t23978 = call i64 @ld8(i64 %t23977)
+%t23979 = and i64 %t23978, 255
+%t23980 = icmp slt i64 %t23979, 16
+br i1 %t23980, label %L8008, label %L8009
+L8008:
+%t23982 = ptrtoint ptr @.s23981 to i64
+br label %L8010
+L8009:
+%t23984 = ptrtoint ptr @.s23983 to i64
+br label %L8010
+L8010:
+%t23985 = phi i64 [ %t23982, %L8008 ], [ %t23984, %L8009 ]
+%t23986 = call i64 @sb_lit(i64 %p0, i64 %t23985)
+%t23987 = ashr i64 %t23979, 4
+%t23988 = call i64 @__mruntime_rt_unix_resid__hex_digit(i64 %t23987)
+%t23989 = call i64 @rt_sb_append_cp(i64 %p0, i64 %t23988)
+%t23990 = and i64 %t23979, 15
+%t23991 = call i64 @__mruntime_rt_unix_resid__hex_digit(i64 %t23990)
+%t23992 = call i64 @rt_sb_append_cp(i64 %p0, i64 %t23991)
+%t23993 = add i64 %t23989, %t23992
+%t23994 = add nsw i64 %p2, 1
 br label %tco.s0
 tco.s0:
 br label %tco.head
 }
 define internal i64 @__mruntime_rt_unix_resid__hex_digit(i64 %p0) "target-features"="+aes,+neon" "probe-stack"="inline-asm" {
 entry:
-%t20813 = icmp slt i64 %p0, 10
-br i1 %t20813, label %L6823, label %L6824
-L6823:
-%t20814 = add nsw i64 48, %p0
-br label %L6825
-L6824:
-%t20815 = add i64 87, %p0
-br label %L6825
-L6825:
-%t20816 = phi i64 [ %t20814, %L6823 ], [ %t20815, %L6824 ]
-ret i64 %t20816
+%t23996 = icmp slt i64 %p0, 10
+br i1 %t23996, label %L8011, label %L8012
+L8011:
+%t23997 = add nsw i64 48, %p0
+br label %L8013
+L8012:
+%t23998 = add i64 87, %p0
+br label %L8013
+L8013:
+%t23999 = phi i64 [ %t23997, %L8011 ], [ %t23998, %L8012 ]
+ret i64 %t23999
 }
 @rtg.rt_heap = internal thread_local global [432 x i8] zeroinitializer, align 16
 @rtg.rt_secret_mode = internal global [8 x i8] zeroinitializer, align 16
@@ -47110,25 +54101,66 @@ entry:
 @.s20128 = private unnamed_addr constant [7 x i8] c"[vdso]\00"
 @.s20132 = private unnamed_addr constant [7 x i8] c"[vvar]\00"
 @.s20137 = private unnamed_addr constant [14 x i8] c"[vvar_vclock]\00"
-@.s20286 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
+@.s20316 = private unnamed_addr constant [14 x i8] c"List(Int(64))\00"
+@.s20887 = private unnamed_addr constant [6 x i8] c"/dev/\00"
+@.s20892 = private unnamed_addr constant [6 x i8] c"/sys/\00"
+@.s20936 = private unnamed_addr constant [20 x i8] c"/sys/kernel/config/\00"
+@.s21634 = private unnamed_addr constant [18 x i8] c"resid-device-host\00"
+@rtg.dev_secret = internal thread_local global [528 x i8] zeroinitializer, align 16
+@.s21867 = private unnamed_addr constant [14 x i8] c"List(UInt(8))\00"
+@.s21898 = private unnamed_addr constant [14 x i8] c"List(UInt(8))\00"
+@.s21919 = private unnamed_addr constant [18 x i8] c"resid-device-host\00"
+@.s23095 = private unnamed_addr constant [3 x i8] c"7\0A\00"
+@.s23251 = private unnamed_addr constant [7 x i8] c"resid-\00"
+@.s23279 = private unnamed_addr constant [7 x i8] c"inblob\00"
+@.s23284 = private unnamed_addr constant [10 x i8] c"privlevel\00"
+@.s23290 = private unnamed_addr constant [17 x i8] c"service_provider\00"
+@.s23294 = private unnamed_addr constant [8 x i8] c"outblob\00"
+@.s23297 = private unnamed_addr constant [8 x i8] c"auxblob\00"
+@.s23300 = private unnamed_addr constant [13 x i8] c"manifestblob\00"
+@.s23303 = private unnamed_addr constant [9 x i8] c"provider\00"
+@.s23306 = private unnamed_addr constant [11 x i8] c"generation\00"
+@.s23309 = private unnamed_addr constant [11 x i8] c"generation\00"
+@.s23313 = private unnamed_addr constant [11 x i8] c"generation\00"
+@.s23433 = private unnamed_addr constant [7 x i8] c"inblob\00"
+@.s23434 = private unnamed_addr constant [1 x i8] c"\00"
+@.s23436 = private unnamed_addr constant [10 x i8] c"privlevel\00"
+@.s23437 = private unnamed_addr constant [1 x i8] c"\00"
+@.s23440 = private unnamed_addr constant [17 x i8] c"service_provider\00"
+@.s23441 = private unnamed_addr constant [1 x i8] c"\00"
+@.s23445 = private unnamed_addr constant [8 x i8] c"outblob\00"
+@.s23446 = private unnamed_addr constant [12 x i8] c"fake report\00"
+@.s23449 = private unnamed_addr constant [8 x i8] c"auxblob\00"
+@.s23450 = private unnamed_addr constant [9 x i8] c"fake aux\00"
+@.s23452 = private unnamed_addr constant [9 x i8] c"provider\00"
+@.s23453 = private unnamed_addr constant [10 x i8] c"fake_tsm\0A\00"
+@.s23456 = private unnamed_addr constant [11 x i8] c"generation\00"
+@.s23457 = private unnamed_addr constant [3 x i8] c"1\0A\00"
+@.s23473 = private unnamed_addr constant [7 x i8] c"inblob\00"
+@.s23475 = private unnamed_addr constant [10 x i8] c"privlevel\00"
+@.s23478 = private unnamed_addr constant [17 x i8] c"service_provider\00"
+@.s23481 = private unnamed_addr constant [8 x i8] c"outblob\00"
+@.s23484 = private unnamed_addr constant [8 x i8] c"auxblob\00"
+@.s23486 = private unnamed_addr constant [9 x i8] c"provider\00"
+@.s23489 = private unnamed_addr constant [11 x i8] c"generation\00"
 @rtg.rt_disp_fds = internal global [256 x i8] zeroinitializer, align 16
 @rtg.disp_sock_stat = internal thread_local global [144 x i8] zeroinitializer, align 16
 @rtg.disp_sa = internal thread_local global [112 x i8] zeroinitializer, align 16
 @rtg.disp_path = internal thread_local global [256 x i8] zeroinitializer, align 16
-@.s20432 = private unnamed_addr constant [15 x i8] c"WAYLAND_SOCKET\00"
-@.s20437 = private unnamed_addr constant [16 x i8] c"WAYLAND_DISPLAY\00"
-@.s20441 = private unnamed_addr constant [10 x i8] c"wayland-0\00"
-@.s20444 = private unnamed_addr constant [16 x i8] c"XDG_RUNTIME_DIR\00"
-@.s20455 = private unnamed_addr constant [8 x i8] c"DISPLAY\00"
-@.s20490 = private unnamed_addr constant [6 x i8] c"unix:\00"
-@.s20522 = private unnamed_addr constant [17 x i8] c"/tmp/.X11-unix/X\00"
+@.s23615 = private unnamed_addr constant [15 x i8] c"WAYLAND_SOCKET\00"
+@.s23620 = private unnamed_addr constant [16 x i8] c"WAYLAND_DISPLAY\00"
+@.s23624 = private unnamed_addr constant [10 x i8] c"wayland-0\00"
+@.s23627 = private unnamed_addr constant [16 x i8] c"XDG_RUNTIME_DIR\00"
+@.s23638 = private unnamed_addr constant [8 x i8] c"DISPLAY\00"
+@.s23673 = private unnamed_addr constant [6 x i8] c"unix:\00"
+@.s23705 = private unnamed_addr constant [17 x i8] c"/tmp/.X11-unix/X\00"
 @rtg.disp_pair = internal thread_local global [8 x i8] zeroinitializer, align 16
-@.s20561 = private unnamed_addr constant [5 x i8] c"List\00"
+@.s23744 = private unnamed_addr constant [5 x i8] c"List\00"
 @rtg.disp_msg = internal thread_local global [96 x i8] zeroinitializer, align 16
-@.s20656 = private unnamed_addr constant [5 x i8] c"List\00"
-@.s20731 = private unnamed_addr constant [10 x i8] c"resid-shm\00"
-@.s20798 = private unnamed_addr constant [3 x i8] c" 0\00"
-@.s20800 = private unnamed_addr constant [2 x i8] c" \00"
+@.s23839 = private unnamed_addr constant [5 x i8] c"List\00"
+@.s23914 = private unnamed_addr constant [10 x i8] c"resid-shm\00"
+@.s23981 = private unnamed_addr constant [3 x i8] c" 0\00"
+@.s23983 = private unnamed_addr constant [2 x i8] c" \00"
 define ptr @memcpy(ptr, ptr, i64) naked noinline nounwind {
   call void asm sideeffect "mov x3, x0\0A1:\0Acmp x2, #16\0Ab.lo 2f\0Aldp x4, x5, [x1], #16\0Astp x4, x5, [x3], #16\0Asub x2, x2, #16\0Ab 1b\0A2:\0Acbz x2, 3f\0Aldrb w4, [x1], #1\0Astrb w4, [x3], #1\0Asub x2, x2, #1\0Ab 2b\0A3:\0Aret", "~{memory}"()
   unreachable

@@ -1,0 +1,16 @@
+// Fixture for device_transact: request/response "devices" any user may open -- /dev/zero answers zeros, /dev/null nothing (installed as lib/dev/fx_device_transact.resid).
+import "device.resid";
+
+pub Transact fx_zero() {
+    return Transact {.name = "fx.zero", .path = "/dev/zero", .max_command = 16, .max_response = 16, .secret = false, .write = false, .stability = Uapi};
+}
+
+pub Transact fx_null() {
+    return Transact {.name = "fx.null", .path = "/dev/null", .max_command = 16, .max_response = 16, .secret = false, .write = false, .stability = Uapi};
+}
+
+// A symbolic link (to /proc/self/fd/0): the host opens with O_NOFOLLOW and
+// refuses it.
+pub Transact fx_not_device() {
+    return Transact {.name = "fx.not_device", .path = "/dev/stdin", .max_command = 16, .max_response = 16, .secret = false, .write = false, .stability = Uapi};
+}

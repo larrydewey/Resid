@@ -1,6 +1,7 @@
 // Every verb with a well-formed descriptor: checked, typed, recorded and
-// run through the engine, which reaches the (phase-1) device host. A read
-// verb needs only device(readonly); transact here is a write.
+// run through the engine, which reaches the device host; no path exists,
+// so each is Err(Absent). A read verb needs only device(readonly);
+// transact here is a write.
 import "dev/fx_verbs_ok.resid";
 
 @requires(device)

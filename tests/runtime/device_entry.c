@@ -2,8 +2,9 @@
  * resid_device_call, which the force-time guard checks only as `device`,
  * refuses a request whose write byte is not 0 (and one too short to say)
  * with Denied (error code 2); the write entry resid_device_call_w, checked
- * as `device!`, takes both. Until the device host exists every accepted
- * request is answered Unsupported (6). */
+ * as `device!`, takes both. A request that gets past the write byte but
+ * does not parse (these stop after the name) is refused (10) before any
+ * device host starts; tests/runtime/device_host.c drives the host. */
 #include <stdint.h>
 #include <stdio.h>
 
@@ -31,11 +32,11 @@ static int64_t code(void* reply) {
 
 int main(void) {
     int bad = 0;
-    if (code(resid_device_call(request(0, 9))) != 6) { puts("read entry: a read is not Unsupported"); bad++; }
+    if (code(resid_device_call(request(0, 9))) != 10) { puts("read entry: a truncated read is not refused"); bad++; }
     if (code(resid_device_call(request(1, 9))) != 2) { puts("read entry: a write is not Denied"); bad++; }
     if (code(resid_device_call(request(7, 9))) != 2) { puts("read entry: write byte 7 is not Denied"); bad++; }
     if (code(resid_device_call(request(0, 5))) != 2) { puts("read entry: a short request is not Denied"); bad++; }
-    if (code(resid_device_call_w(request(0, 9))) != 6) { puts("write entry: a read is not Unsupported"); bad++; }
-    if (code(resid_device_call_w(request(1, 9))) != 6) { puts("write entry: a write is not Unsupported"); bad++; }
+    if (code(resid_device_call_w(request(0, 9))) != 10) { puts("write entry: a truncated read is not refused"); bad++; }
+    if (code(resid_device_call_w(request(1, 9))) != 10) { puts("write entry: a truncated write is not refused"); bad++; }
     return bad != 0;
 }

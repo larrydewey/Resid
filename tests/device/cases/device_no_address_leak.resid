@@ -1,0 +1,30 @@
+// No pointer reaches the program (PLAN-device-access.md §4): the host
+// allocates each buffer in its own guarded mapping and patches the struct's
+// pointer fields itself; the program gets the version numbers and the
+// buffers' contents -- the driver's name, date and description, each cut
+// to the length the kernel wrote back -- and nothing else.
+import "dev/fx_device_no_address_leak.resid";
+
+Bool text(List(UInt(8)) bs, Int i) {
+    if (i >= bs.len()) { return true; }
+    Int c = (Int)bs[i];
+    return c >= 32 && c < 127 && text(bs, i + 1);
+}
+
+Bool small(Option(Int) v) { return match (v) { Some(x) => x >= 0 && x < 65536, None => false, }; }
+
+Bool texts(List(DevOut) o, Int i) {
+    if (i >= o.len()) { return true; }
+    Bool ok = match (dv_out_bytes(o, i)) { Some(bs) => text(bs, 0), None => false, };
+    return ok && texts(o, i + 1);
+}
+
+@requires(device(readonly))
+Int main() {
+    Str s = match (device.ioctl(fx_drm_version(), [])) {
+        Ok(o) => if (o.len() == 6 && small(dv_out_num(o, 0)) && small(dv_out_num(o, 1)) && small(dv_out_num(o, 2)) && texts(o, 3)) { "three numbers, three texts" } else { f"{o.len()} unexpected outputs" },
+        Err(e) => device_error_text(e),
+    };
+    println(s);
+    return 0;
+}

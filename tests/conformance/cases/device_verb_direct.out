@@ -1,4 +1,4 @@
-sev_guest.snp_get_report: unsupported
+sev_guest.snp_get_report: device absent
 sev_guest.snp_get_report: bad input: input 0 has 97 bytes, at most 96
 sev_guest.snp_get_report: bad input: input 0 is a number, the field takes bytes
 sev_guest.snp_get_report: bad input: 0 inputs, the descriptor takes 1

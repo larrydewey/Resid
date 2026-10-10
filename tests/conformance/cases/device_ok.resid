@@ -1,8 +1,8 @@
-// The device verbs end to end in phase 1 (PLAN-device-access.md): the
-// compiler checks the descriptor, records it and calls the engine, which
-// validates the inputs and asks the runtime's device host. The host is not
-// built yet, so a well-formed call is Err(Unsupported); a malformed one
-// never reaches it.
+// The device verbs end to end (PLAN-device-access.md): the compiler checks
+// the descriptor, records it and calls the engine, which validates the
+// inputs and asks the runtime's isolated device host. Off an SEV-SNP guest
+// /dev/sev-guest is not there, so a well-formed call is Err(Absent) -- a
+// value, not an abort; a malformed one never reaches the host.
 import "dev/sev_guest.resid";
 import "dev/sev_guest_key.resid";
 import "_devzeros.resid";
