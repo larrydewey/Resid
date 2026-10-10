@@ -99,7 +99,7 @@ be known, and is checked:
 
 | Code | Rule |
 |---|---|
-| `E0260` | descriptors, the `@descriptor` annotation, the engine and `resid_device_call` belong to `lib/dev/` |
+| `E0260` | descriptors, the `@descriptor` annotation, the engine, `resid_device_call` and `resid_device_secret` belong to `lib/dev/` |
 | `E0261` | a dependency reaches only the descriptors its manifest's `devices = [...]` names, behavior instances it could dispatch to included; a sub-dependency without a bound gets its parent's |
 | `E0262` | the descriptor is known after reduction (not chosen or computed at run time) |
 | `E0263` | `_IOC_SIZE` is the struct size and the direction bits cover the fields; fields inside the struct and apart; Scalars of 1, 2, 4 or 8 bytes; pointers 8-byte aligned; buffers with a maximum; length fields are Scalars; the path under `/dev/` or `/sys/` without `..`; one request number for the build's target; a descriptor marked `write = false` is not an ioctl that only sends |
@@ -124,9 +124,40 @@ artifact each verb is an effect naming its descriptor,
 `device.ioctl(sev_guest.snp_get_report)`, which `resid-why` and
 `resid-graph` show.
 
-## Status
+## The device host
 
-The compile-time half is in: the family, descriptors, the checks, manifest
-bounds and provenance. The runtime's isolated device host (a fresh,
-seccomp-confined process per call) is not built yet, so every call returns
-`Err(Unsupported(name))` after its inputs are validated.
+Every call runs in a fresh, isolated process: the program itself,
+re-executed as `resid-device-host` with an empty environment and one
+socket, every other file descriptor closed, no core dumps, no time-stamp
+counter (x86-64) and no vDSO. It checks the request again -- the same rules
+as `E0263`/`E0264`, and the inputs against the fields -- opens the one path
+without following a final symbolic link, and refuses the wrong kind of file
+(a character device for `ioctl`, `sequence` and `transact`; a regular sysfs
+or configfs file for `read_attr`). The struct and each buffer get a mapping
+of their own that ends at an inaccessible guard page, with a random canary
+in the slack. Then a seccomp filter allows only the descriptor's operation
+on that descriptor -- `ioctl` with each step's request number, or `read`
+and `write` -- plus its reply and exit; anything else kills it.
+
+| What happens | The result |
+|---|---|
+| the path does not exist | `Absent` |
+| the kernel refuses to open it | `Denied` |
+| the driver does not know the request (`ENOTTY`, `EINVAL`), a symbolic link, the wrong kind of file, a missing configfs attribute, no Landlock | `Unsupported` |
+| the kernel writes past a buffer (a canary changed, a guard page hit) | `Overrun` |
+| the version field comes back different | `Version(name, the kernel's)` |
+| a length beyond the descriptor's maximum | `TooLong` |
+| a configfs report's generation changed, or its provider is not listed | `GenerationChanged`, `UnknownDriver(name, "provider ...")` |
+| any other errno | `Kernel(name, errno)` |
+| the host is killed or answers something that does not parse | `BadReply` |
+
+None of them aborts the program. A `Sequence` runs its steps on one open
+file in one host, copying each `Link` just before its step; only the last
+step's outputs come back. A configfs report creates a fresh entry with an
+unpredictable name, confines the host to it with Landlock, writes `inblob`
+(and `privlevel`, `service_provider` when given), reads the generation, the
+blobs and the provider and the generation again, and removes the entry.
+
+A buffer marked secret never travels in the general reply: the host sends
+it separately and zeroes its copy, and the runtime hands it to the engine
+once, already `Secret`.

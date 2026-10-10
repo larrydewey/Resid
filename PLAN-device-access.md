@@ -3,7 +3,9 @@
 **Status: ACCEPTED (2026-10-09).** Open questions 1, 2 and 4 settled (§7); question 3 is decided during implementation. Depends on
 PLAN-secret-type.md for descriptors that return key material.
 
-**Progress.** Phase 1, the compile-time half, is in (2026-10-09; spec §49,
+**Progress.** Phases 1 to 3 are in: the compile-time half, then the
+isolated host and all five operations (2026-10-10, below). Phase 1, the
+compile-time half, came first (2026-10-09; spec §49,
 `SECURITY.md` "Device access"): the `device` family with `readonly` and
 full modes (E0219, spawn lists, sandboxes, manifest grants, the force-time
 guard as `device` / `device!`); the descriptor types in
@@ -83,11 +85,12 @@ call, and keep `resid_device_call` read-only (phase 1's stub already
 refuses, with Denied, a request whose write byte is not 0; the host must
 keep that). The provenance and graph records are already there.
 
-- **TODO (phase 2): secret slots.** A Buffer marked secret reaches the
-  engine inside the reply as ordinary bytes and is wrapped as
-  `Secret(UInt(8))` only there. The host must deliver secret slots in a
-  separate buffer, wiped after the engine copies them, so key material
-  never sits in the general reply.
+- **Secret slots (phase 1 TODO, resolved in phases 2 and 3 below).** A
+  Buffer marked secret reached the engine inside the reply as ordinary
+  bytes and was wrapped as `Secret(UInt(8))` only there. Now the host
+  sends secret outputs in a separate section after the reply, the
+  runtime copies them straight into secret lists and wipes the transport
+  buffer, and the engine takes each with `resid_device_secret(k)`.
 
 **Security review (2026-10-09), fixed:**
 
@@ -117,6 +120,122 @@ keep that). The provenance and graph records are already there.
   dependency's reach includes every behavior instance's functions
   (dispatch, `sort`, operators); a sub-dependency without a bound inherits
   its parent's; functions are looked up by every declaration of a name.
+
+**Phases 2 and 3 (2026-10-10): the isolated host and all five
+operations.** `runtime/rt/device.resid` replaces the `Unsupported` stub
+(spec §49.4, `SECURITY.md` "Device access"):
+
+- **Parent.** `resid_device_call` keeps refusing a write request (Denied);
+  both entries then parse and check the request themselves (`pq_parse`,
+  `pq_check`: the E0263/E0264 rules again, the inputs against the slots,
+  the reply's shape and largest size). A request that fails is refused
+  (error code 10, `BadInput(name, "the device host refused the request
+  (n)")`) and no host starts. Otherwise `hs_spawn` (shared with native
+  modules, `runtime/rt/native.resid`; `hs_quiet` and `hs_filter_install`
+  are shared too) re-executes `/proc/self/exe` as `resid-device-host`
+  with an empty environment and the socket as fd 3. The compiler calls
+  `resid_device_host()` first in `main` of any program whose IR calls the
+  device entry (`dv_hook_main`, `compiler/native.resid`). The reply is
+  read up to the request's cap plus one byte and checked byte by byte
+  (`dp_reply`, `dp_walk`): framing, output count and kinds, every length
+  against its maximum, every number against its width, no trailing
+  bytes.
+- **Host.** `dh_main`: argv `["resid-device-host"]`, empty environment,
+  fd 3 a socket, else return to `main`; then close every other fd, refuse
+  to run set-id (uid/gid differ from euid/egid), no dump, no TSC (x86-64),
+  no vDSO, OOM-first; read and re-check the request; open the one path
+  with `O_NOFOLLOW|O_CLOEXEC` (`O_RDWR` for a writing ioctl and for
+  Transact, else `O_RDONLY`; the flag values differ per target) and check
+  the file: a character device for Ioctl/Sequence/Transact, a regular
+  file on sysfs or configfs (`fstatfs` magic) for ReadAttr; choose the
+  request number for `resid_raw_arch()`; put the struct and every buffer
+  in its own mapping ending at a `PROT_NONE` guard page, the slack filled
+  with an 8-byte random canary; set inputs, length fields (an In buffer's
+  length, else its capacity), pointers and the interface version;
+  allocate the reply; install the filter (`dh_lock`: arch check, no x32,
+  then per-call rules: `ioctl` with `arg0 == fd` and `arg1 ==` each
+  step's request, `read`/`write` with `arg0 ==` the fd, `write` on fd 3,
+  `mmap` without `PROT_EXEC`, `munmap`, `exit`, `exit_group`; anything
+  else `SECCOMP_RET_KILL_PROCESS`); call; check every canary (Overrun),
+  the version field (`Version` with what the kernel wrote), each output
+  buffer's length field against its maximum (TooLong); reply, wipe the
+  secret regions and the secret section, exit.
+- **Kinds.** Ioctl; Sequence (one fd, steps in order, each Link copied
+  into its step's struct just before it runs, only the last step's
+  outputs); Transact (write the command, one `read` of at most
+  `max_response`); ReadAttr (read to EOF, at most `max + 1` bytes: more
+  is TooLong); ConfigfsReport (open the root with `O_DIRECTORY`, check it
+  is configfs, `mkdirat` an entry named `resid-` + 32 hex digits of
+  `getrandom`, open it `O_PATH`, Landlock -- READ_FILE|WRITE_FILE beneath
+  the entry, REMOVE_DIR beneath the root, every right the running ABI
+  knows handled; no Landlock is `Unsupported`, fail closed -- then open
+  the attributes, two files for `generation` because configfs fills an
+  attribute's text at its first read; the filter allows writes to
+  inblob/privlevel/service_provider, reads of the rest, `close` of each,
+  and `unlinkat(root, *, AT_REMOVEDIR)`; write inblob and close it (the
+  commit), privlevel and service_provider when given; read generation,
+  the blobs, provider, generation again; remove the entry on every path;
+  then `GenerationChanged` when the two reads differ, and a provider the
+  descriptor does not list is error code 9 with the provider's printable
+  text, `UnknownDriver(name, "provider X")`). `auxblob` and
+  `manifestblob` are optional (a provider without them hides them); a
+  missing required attribute is `Unsupported`.
+- **Errors.** errno: ENOENT/ENODEV/ENXIO/ENOTDIR Absent, EACCES/EPERM
+  Denied, ENOTTY/EINVAL from an ioctl Unsupported, ELOOP (a symbolic
+  link) Unsupported, EFAULT (the kernel hit a guard page) Overrun, any
+  other `Kernel(errno)`. A host killed by SIGSEGV/SIGBUS is Overrun (its
+  buffers end at guard pages); any other signal, a bad exit status, no
+  sandbox (exit 126), no host, or a malformed reply is error code 11,
+  `BadReply(name, ...)` naming which.
+- **Secret outputs.** The host's reply carries a secret output as tag 2 +
+  length; the bytes follow all outputs in a separate section. The parent
+  copies them into `List(UInt(8))` values (a `List(Secret(UInt(8)))`:
+  secrets are erased after checking) held per thread, zeroes the boxes
+  and the transport mapping, and the engine takes each once with the new
+  builtin `resid_device_secret(k)` (family `device`, E0260 outside
+  lib/dev/), checking its length against the reply. The host zeroes its
+  secret regions and section before it exits.
+
+As built, compared with §3-§5:
+
+- **Law 12 (§4).** The plan said a malformed reply aborts like a native
+  host failure. It is `Err(BadReply)` instead: a device is probed (§3,
+  "a missing device is a value"), and a host that dies or answers
+  garbage is the device misbehaving, which the program must be able to
+  handle as it handles an absent one. Native modules still abort.
+- **Self-test modes.** The fault paths (seccomp kill, canary, guard
+  page, killed host, malformed and oversized replies, the configfs flow,
+  no Landlock) need faults no real device gives on demand. The host has
+  numbered self-test modes reachable only through
+  `resid_device_host_test`, an entry no Resid program can name (the
+  compiler declares only `resid_device_host`); the configfs flow runs
+  against a fake configfs root made by `tests/runtime/device_host.c`.
+  The real `/sys/kernel/config/tsm/report` is tested only for absence.
+- **Request numbers above 2^32**, an `_IOC_NONE` ioctl's integer
+  argument and secret inputs are not supported: every ioctl argument is
+  the struct's address, and inputs are public (`DevIn`).
+- **Not built.** No wall-clock limit on a host (a device that blocks
+  forever blocks its caller; RLIMIT_CPU bounds only CPU time, as for
+  native modules); `AT_SECURE` for file capabilities is not checked (a
+  set-id start is). The device suites run on x86-64; under qemu-user
+  (`RESID_TARGET=aarch64`) seccomp is unavailable and device runs that
+  reach the filter fail closed.
+
+Tests: `tests/device` (runs real devices any user can open: `/dev/ptmx`
+TIOCGPTN/TIOCSPTLCK and a Sequence with a Link, a resized TIOCGPTN
+(ENOTTY, Unsupported), `/dev/zero` and `/dev/null` as Transact devices,
+a secret Transact, sysfs attributes, a DRM render node's
+DRM_IOCTL_VERSION with three buffers behind pointers -- skipped where
+there is none -- for `device_no_address_leak`, `device_version_mismatch`
+and `device_reply_length_drm`, plus `device_absent_is_err`,
+`device_stateless`, `device_reply_length_checked`);
+`tests/runtime/device_host.c` (seccomp kill, `device_overrun_canary`,
+`device_overrun_guard_page` by a kernel read and by a fault,
+`device_host_killed`, malformed and oversized replies, secret delivery
+and the host's wipe, the configfs flow, `configfs_unknown_provider_err`,
+`configfs_missing_attr_err`, generation change, no Landlock, no fd left
+in the parent, the parent's own refusals); conformance
+`err_device_secret_raw`.
 
 **Goal**: let a Resid program talk to kernel devices (ioctls on character
 devices, request/response devices such as `/dev/tpmrm0`, and configfs

@@ -3486,9 +3486,52 @@ resid_device_call_w for a write: the force-time guard asks
 for `device` or `device!`). The reply is validated against
 the descriptor's maxima as untrusted input. Only the engine
 may call the runtime entry or be called itself (E0260).
-The device host that performs the call in an isolated,
-seccomp-confined child process is PLAN-device-access.md §5;
-until it is built every call is Err(Unsupported).
+
+Each call runs in a fresh device host: the program itself,
+re-executed with an empty environment and one socket, every
+other descriptor closed, without core dumps, the time-stamp
+counter or the vDSO, refusing to run set-id. It checks the
+request again (the rules of §49.3 and the inputs against the
+fields), opens the descriptor's one path without following a
+final symbolic link and refuses the wrong kind of file (a
+character device for an ioctl, a Sequence or a Transact; a
+regular sysfs or configfs file for ReadAttr), places the
+struct and each buffer in a mapping of its own that ends at
+an inaccessible guard page, with a random canary between the
+declared length and the guard, sets the interface version,
+and installs a seccomp filter that kills it on any system
+call but the descriptor's operation on that descriptor (an
+ioctl with each step's request number for the running
+target, or read and write), its reply, non-executable memory
+and exit. A Sequence runs its steps in order on the one open
+file, copying each Link just before its step. A configfs
+report makes an entry with an unpredictable name, confines
+the host to it with Landlock (no Landlock: Unsupported),
+writes inblob (and privlevel, service_provider), reads the
+generation, the blobs and the provider, reads the
+generation again, and removes the entry.
+
+Errors: a path that does not exist (ENOENT, ENODEV, ENXIO,
+ENOTDIR) is Absent; EACCES or EPERM is Denied; ENOTTY or
+EINVAL from an ioctl, a symbolic link, the wrong kind of
+file, a missing configfs attribute or no Landlock is
+Unsupported; a spoiled canary, a fault in the host, EFAULT
+or a read longer than asked is Overrun; another version in
+the version field is Version with the kernel's; a length the
+kernel writes back, or a value read, beyond the maximum is
+TooLong; a changed generation is GenerationChanged; a
+provider the descriptor does not list is UnknownDriver; any
+other errno is Kernel. A host that is killed, exits badly or
+answers a reply that does not match the request is BadReply;
+a request the runtime refuses is BadInput. None of these
+aborts: a device that misbehaves is a value, as a missing one
+is.
+
+A secret output never travels in the general reply: the host
+sends it separately and zeroes its copies; the runtime copies
+it into the secret list the engine takes once
+(resid_device_secret, E0260 outside lib/dev/) and wipes the
+transport buffer.
 
 The read entry refuses (Denied) a request that says it
 writes, so a write never travels under a read-only grant.
