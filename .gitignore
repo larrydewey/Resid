@@ -39,3 +39,6 @@ bench/suite/src/**/target/
 bench/suite/src/**/obj/
 bench/suite/src/**/bin/
 bench/**/*.ll
+
+# resid-devgen --matrix / --snapshot kernel checkouts (tools/devgen/kernels.toml).
+tools/devgen/cache/

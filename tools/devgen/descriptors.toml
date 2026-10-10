@@ -1,0 +1,174 @@
+# The input list of tools/resid-devgen (PLAN-device-access.md §6.1, §6.2):
+# which uapi structs and ioctl commands become descriptors in lib/dev/, and
+# the roles a C header cannot say. Everything numeric -- offsets, widths,
+# struct sizes, buffer maxima, request numbers -- comes from clang compiling
+# the kernel's own headers for x86-64 and AArch64, never from this file.
+# A review of a change here is a review of exactly what the device surface
+# gained or lost.
+#
+# [[module]]          one generated file, lib/dev/<file>
+#   interface         the descriptor name prefix (`sev_guest.snp_get_report`),
+#                     which a manifest's `devices = [...]` bound can name
+#   header            the uapi header, relative to include/uapi
+#   since             the first kernel that has it (older matrix trees skip it)
+# [[module.op]]       one IoctlOp
+#   fn                the zero-argument function returning the descriptor
+#   name              the operation; the descriptor is `<interface>.<name>`
+#   request           the request macro (_IOWR(...)), evaluated by clang
+#   struct            the ioctl's argument struct
+#   path              the device node
+#   write             the reviewed write label (lib/dev/device.resid): true
+#                     when the call changes device or platform state or
+#                     hands out key material
+#   stability         Uapi | AbiTesting | OutOfTree
+#   version           { member, value }: the interface version field the
+#                     engine sets and checks, or absent (Unversioned)
+#   fields            in order; each names a `member` of `struct` (`also`:
+#                     names it had in older kernels, same ABI) and its role:
+#                       Scalar  an integer; its width is the member's size
+#                       Inline  bytes inside the struct; the member's size
+#                       Buffer  an 8-byte pointer member; `max` is a C
+#                               expression for its largest size, `length`
+#                               the member holding its length (a Scalar of
+#                               the same struct), `secret` its bytes are
+#                               Secret
+#                     and `dir`: In, Out or InOut.
+#   doc               the descriptor's comment
+# [[module.layout]]   a struct the wrappers fill or parse: its size and
+#                     each member's offset and size become functions
+#                     <prefix>_size(), <prefix>_<member>_at(),
+#                     <prefix>_<member>_len()
+# [[module.const]]    a macro whose value the wrappers need: <lowercase>()
+# [[module.check]]    a request macro checked across the matrix and kept in
+#                     the fingerprint, with no descriptor (yet)
+
+[[module]]
+file = "uapi_sev_guest.resid"
+interface = "sev_guest"
+header = "linux/sev-guest.h"
+since = "v5.19"
+summary = "AMD SEV-SNP guest requests (/dev/sev-guest): the reads."
+
+[[module.op]]
+fn = "snp_get_report_op"
+name = "snp_get_report"
+request = "SNP_GET_REPORT"
+struct = "struct snp_guest_request_ioctl"
+path = "/dev/sev-guest"
+write = false
+stability = "Uapi"
+version = { member = "msg_version", value = 1 }
+fields = [
+    { member = "req_data", role = "Buffer", dir = "In", max = "sizeof(struct snp_report_req)" },
+    { member = "resp_data", role = "Buffer", dir = "Out", max = "sizeof(struct snp_report_resp)" },
+    { member = "exitinfo2", also = ["fw_err"], role = "Scalar", dir = "Out" },
+]
+doc = "SNP_GET_REPORT: struct snp_report_req in, struct snp_report_resp out (struct msg_report_resp: status, report size, the report), exitinfo2 (firmware and VMM error codes) back."
+
+[[module.layout]]
+struct = "struct snp_report_req"
+prefix = "snp_report_req"
+members = ["user_data", "vmpl", "rsvd"]
+
+[[module.layout]]
+struct = "struct snp_report_resp"
+prefix = "snp_report_resp"
+members = ["data"]
+
+[[module.layout]]
+struct = "struct snp_ext_report_req"
+prefix = "snp_ext_report_req"
+members = ["data", "certs_address", "certs_len"]
+
+[[module.check]]
+request = "SNP_GET_EXT_REPORT"
+why = "the certificate buffer is a pointer inside the request buffer, which the engine's Field kinds cannot place yet"
+
+[[module]]
+file = "uapi_sev_guest_key.resid"
+interface = "sev_guest"
+header = "linux/sev-guest.h"
+since = "v5.19"
+summary = "AMD SEV-SNP guest key derivation (/dev/sev-guest): a write, secret out."
+
+[[module.op]]
+fn = "snp_get_derived_key_op"
+name = "snp_get_derived_key"
+request = "SNP_GET_DERIVED_KEY"
+struct = "struct snp_guest_request_ioctl"
+path = "/dev/sev-guest"
+write = true
+stability = "Uapi"
+version = { member = "msg_version", value = 1 }
+fields = [
+    { member = "req_data", role = "Buffer", dir = "In", max = "sizeof(struct snp_derived_key_req)" },
+    { member = "resp_data", role = "Buffer", dir = "Out", max = "sizeof(struct snp_derived_key_resp)", secret = true },
+    { member = "exitinfo2", also = ["fw_err"], role = "Scalar", dir = "Out" },
+]
+doc = "SNP_GET_DERIVED_KEY: struct snp_derived_key_req in, struct snp_derived_key_resp out as secret bytes (struct msg_derived_key_resp: status, reserved, the key), exitinfo2 back. A write: the guest's sealing key."
+
+[[module.layout]]
+struct = "struct snp_derived_key_req"
+prefix = "snp_derived_key_req"
+members = ["root_key_select", "rsvd", "guest_field_select", "vmpl", "guest_svn", "tcb_version"]
+
+[[module.layout]]
+struct = "struct snp_derived_key_resp"
+prefix = "snp_derived_key_resp"
+members = ["data"]
+
+[[module]]
+file = "uapi_tdx_guest.resid"
+interface = "tdx_guest"
+header = "linux/tdx-guest.h"
+since = "v6.2"
+summary = "Intel TDX guest reports (/dev/tdx_guest)."
+
+[[module.op]]
+fn = "tdx_get_report0_op"
+name = "tdx_get_report0"
+request = "TDX_CMD_GET_REPORT0"
+struct = "struct tdx_report_req"
+path = "/dev/tdx_guest"
+write = false
+stability = "Uapi"
+fields = [
+    { member = "reportdata", role = "Inline", dir = "In" },
+    { member = "tdreport", role = "Inline", dir = "Out" },
+]
+doc = "TDX_CMD_GET_REPORT0: REPORTDATA in, TDREPORT (subtype 0) out, both inside struct tdx_report_req."
+
+[[module.const]]
+name = "TDX_REPORTDATA_LEN"
+
+[[module.const]]
+name = "TDX_REPORT_LEN"
+
+[[module]]
+file = "uapi_nsm.resid"
+interface = "nsm"
+header = "linux/nsm.h"
+since = "v6.8"
+summary = "AWS Nitro Secure Module raw requests (/dev/nsm)."
+
+[[module.op]]
+fn = "nsm_raw_op"
+name = "raw"
+request = "NSM_IOCTL_RAW"
+struct = "struct nsm_raw"
+path = "/dev/nsm"
+write = true
+stability = "Uapi"
+fields = [
+    { member = "request.addr", role = "Buffer", dir = "In", max = "NSM_REQUEST_MAX_SIZE", length = "request.len" },
+    { member = "request.len", role = "Scalar", dir = "In" },
+    { member = "response.addr", role = "Buffer", dir = "Out", max = "NSM_RESPONSE_MAX_SIZE", length = "response.len" },
+    { member = "response.len", role = "Scalar", dir = "InOut" },
+]
+doc = "NSM_IOCTL_RAW: a CBOR request of at most NSM_REQUEST_MAX_SIZE bytes in, a CBOR response of at most NSM_RESPONSE_MAX_SIZE out, each behind a struct nsm_iovec. A write: a raw request can extend or lock a PCR."
+
+[[module.const]]
+name = "NSM_REQUEST_MAX_SIZE"
+
+[[module.const]]
+name = "NSM_RESPONSE_MAX_SIZE"

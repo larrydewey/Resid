@@ -1,0 +1,708 @@
+#!/usr/bin/env python3
+"""resid-devgen: generate lib/dev/ descriptors from the kernel's uapi headers.
+
+PLAN-device-access.md §6.1 and §6.2. The input list
+(tools/devgen/descriptors.toml) says which structs and ioctl commands become
+descriptors and the roles a C header cannot express (Buffer or Scalar,
+direction, secret, length links, the write label, the stability class, the
+interface version field). Every number -- struct sizes, member offsets and
+widths, buffer maxima, request numbers -- is the compiler's own ABI view:
+a C probe of `__builtin_offsetof`, `sizeof` and the header's `_IOWR(...)`
+macros is compiled by clang for each target (`--target x86_64-linux-gnu`,
+`aarch64-linux-gnu`) to LLVM IR, and the probe array's constant initializer
+is read back. Nothing is executed, so both targets are probed on any host,
+and nothing is computed by hand here.
+
+Modes:
+  resid-devgen --write        regenerate lib/dev/uapi_*.resid from the
+                              committed header snapshot (tools/devgen/uapi/)
+  resid-devgen --check        regenerate in memory and compare with the
+                              committed files and the snapshot's manifest;
+                              offline; exit 1 on any difference
+  resid-devgen --local [DIR]  compare the descriptors with installed headers
+                              (default /usr/include) or a kernel source tree
+  resid-devgen --matrix       fetch every pinned kernel of
+                              tools/devgen/kernels.toml (include/uapi and the
+                              two arch uapi trees only, cached in
+                              tools/devgen/cache/) and compare each
+                              descriptor's sizes, offsets and request
+                              numbers; exit 1 on drift. The only mode that
+                              uses the network.
+  resid-devgen --snapshot     refresh tools/devgen/uapi/ from the pinned
+                              generation kernel (network)
+  --headers DIR               (with --write/--check) read a kernel source
+                              tree instead of the snapshot
+  --lib DIR                   (with --write/--check) the lib/dev directory
+
+Why Python and not Resid: this is a build-time generator like
+tools/gen_nistp.py, outside every Resid program's trusted base -- its
+output is committed, reviewed, and re-verified by --check. Its work is
+orchestrating clang and git and comparing text; the ABI facts come from
+clang either way.
+"""
+import argparse
+import difflib
+import hashlib
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import tomllib
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DEVGEN = os.path.join(ROOT, "tools", "devgen")
+INPUT = os.path.join(DEVGEN, "descriptors.toml")
+KERNELS = os.path.join(DEVGEN, "kernels.toml")
+# RESID_DEVGEN_SNAPSHOT: another snapshot directory (tests/devgen tampers with a copy).
+SNAPSHOT = os.environ.get("RESID_DEVGEN_SNAPSHOT") or os.path.join(DEVGEN, "uapi")
+CACHE = os.path.join(DEVGEN, "cache")
+LIBDEV = os.path.join(ROOT, "lib", "dev")
+
+# (Resid Arch variant, clang triple, kernel arch directory)
+TARGETS = [("X86_64", "x86_64-linux-gnu", "x86"), ("Aarch64", "aarch64-linux-gnu", "arm64")]
+ARCH_NAME = {"X86_64": "x86-64", "Aarch64": "aarch64"}
+SPARSE = ["include/uapi", "arch/x86/include/uapi", "arch/arm64/include/uapi"]
+ROLES = ("Scalar", "Inline", "Buffer")
+DIRS = ("In", "Out", "InOut")
+STABILITY = ("Uapi", "AbiTesting", "OutOfTree")
+
+
+class DevgenError(Exception):
+    pass
+
+
+# -- Header trees ---------------------------------------------------------
+
+class Tree:
+    """A set of uapi headers: a kernel source tree (include/uapi plus
+    arch/<a>/include/uapi; asm/ headers the arch takes from asm-generic, as
+    Kbuild's generic-y does, are shimmed) or installed headers (/usr/include;
+    their asm/ is the host's, so the other target's asm/ is taken from
+    asm-generic with a 64-bit long)."""
+
+    def __init__(self, root, label, kind="kernel", commit=""):
+        self.root = os.path.abspath(root)
+        self.label = label
+        self.kind = kind
+        self.commit = commit
+        self._shims = {}
+
+    def uapi(self):
+        return os.path.join(self.root, "include", "uapi") if self.kind == "kernel" else self.root
+
+    def has(self, header):
+        return os.path.isfile(os.path.join(self.uapi(), header))
+
+    def includes(self, arch, tmp):
+        generic = os.path.join(self.uapi(), "asm-generic")
+        if self.kind == "kernel":
+            archdir = os.path.join(self.root, "arch", arch, "include", "uapi")
+            shim = self._shim(arch, tmp, generic, os.path.join(archdir, "asm"), False)
+            return ["-I", archdir, "-I", self.uapi(), "-I", shim]
+        host = {"x86": "x86_64", "arm64": "aarch64"}[arch]
+        if os.uname().machine == host:
+            return ["-I", self.root]
+        return ["-I", self._shim(arch, tmp, generic, None, True), "-I", self.root]
+
+    def _shim(self, arch, tmp, generic, archasm, all_generic):
+        key = (arch, tmp)
+        if key in self._shims:
+            return self._shims[key]
+        d = os.path.join(tmp, "shim-" + arch)
+        os.makedirs(os.path.join(d, "asm"), exist_ok=True)
+        names = sorted(os.listdir(generic)) if os.path.isdir(generic) else []
+        for n in names:
+            if not n.endswith(".h"):
+                continue
+            if archasm and os.path.isfile(os.path.join(archasm, n)):
+                continue
+            body = f"#include <asm-generic/{n}>\n"
+            if all_generic and n == "bitsperlong.h":
+                body = "#define __BITS_PER_LONG 64\n" + body
+            with open(os.path.join(d, "asm", n), "w") as f:
+                f.write(body)
+        # headers_install drops these includes; a source tree still has them.
+        os.makedirs(os.path.join(d, "linux"), exist_ok=True)
+        for n in ("compiler.h", "compiler_types.h"):
+            with open(os.path.join(d, "linux", n), "w") as f:
+                f.write("")
+        self._shims[key] = d
+        return d
+
+
+# -- The probe ------------------------------------------------------------
+
+PRELUDE = "#include <linux/ioctl.h>\n#include <linux/types.h>\n"
+
+
+def clang():
+    c = os.environ.get("CLANG", "clang")
+    if shutil.which(c) is None:
+        raise DevgenError("clang not found (set CLANG)")
+    return c
+
+
+def compile_probe(tree, triple, arch, header, exprs, tmp, deps=None):
+    """The values of `exprs` (C integer constant expressions) for one target,
+    or None when the probe does not compile."""
+    src = PRELUDE + f"#include <{header}>\n"
+    body = ",\n  ".join(f"(unsigned long long)({e})" for e in exprs)
+    src += f"unsigned long long resid_probe[{len(exprs)}] = {{\n  {body}\n}};\n"
+    path = os.path.join(tmp, "probe.c")
+    with open(path, "w") as f:
+        f.write(src)
+    # -D: what headers_install (scripts/headers_install.sh) strips or sets.
+    cmd = [clang(), f"--target={triple}", "-std=gnu11", "-nostdinc", "-ffreestanding", "-w",
+           "-U__KERNEL__", "-D__EXPORTED_HEADERS__", "-D__user=", "-D__force=", "-D__iomem=",
+           "-D__attribute_const__=",
+           "-S", "-emit-llvm", "-O0", "-o", "-"] + tree.includes(arch, tmp) + [path]
+    if deps is not None:
+        cmd += ["-MD", "-MF", deps]
+    p = subprocess.run(cmd, capture_output=True, text=True)
+    if p.returncode != 0:
+        return None
+    m = re.search(r"@resid_probe = [^\n]*?\[(\d+) x i64\] (zeroinitializer|\[([^\n]*)\])", p.stdout)
+    if not m or int(m.group(1)) != len(exprs):
+        raise DevgenError(f"{tree.label}: cannot read the probe's IR for {triple}")
+    if m.group(2) == "zeroinitializer":
+        return [0] * len(exprs)
+    vals = [int(x.strip().split()[1]) for x in m.group(3).split(",")]
+    return [v & 0xFFFFFFFFFFFFFFFF for v in vals]
+
+
+def member_names(fld):
+    return [fld["member"]] + list(fld.get("also", []))
+
+
+def module_items(mod):
+    """The probe's questions for one module: (key, kind, struct, names, expr).
+    kind "member" asks offset and size of a member under any of its names."""
+    items = []
+    for op in mod.get("op", []):
+        o = op["name"]
+        st = op["struct"]
+        items.append((f"{o}.size", "expr", None, None, f"sizeof({st})"))
+        items.append((f"{o}.request", "expr", None, None, op["request"]))
+        if "version" in op:
+            items.append((f"{o}.version", "member", st, [op["version"]["member"]], None))
+        for f in op["fields"]:
+            items.append((f"{o}.field.{f['member']}", "member", st, member_names(f), None))
+            if "max" in f:
+                items.append((f"{o}.field.{f['member']}.max", "expr", None, None, f["max"]))
+    for lay in mod.get("layout", []):
+        st = lay["struct"]
+        items.append((f"{lay['prefix']}.size", "expr", None, None, f"sizeof({st})"))
+        for mb in lay["members"]:
+            items.append((f"{lay['prefix']}.{mb}", "member", st, [mb], None))
+    for c in mod.get("const", []):
+        items.append((f"const.{c['name']}", "expr", None, None, c["name"]))
+    for c in mod.get("check", []):
+        items.append((f"check.{c['request']}", "expr", None, None, c["request"]))
+    return items
+
+
+def exprs_for(item, name):
+    key, kind, st, names, expr = item
+    if kind == "expr":
+        return [expr]
+    return [f"__builtin_offsetof({st}, {name})", f"sizeof(((({st} *)0))->{name})"]
+
+
+def probe_module(tree, mod, triple, arch, tmp, deps=None):
+    """{key: value} for one module and target, plus the member names that
+    resolved to an older spelling ({key: name})."""
+    items = module_items(mod)
+    chosen = {it[0]: (it[3][0] if it[1] == "member" else None) for it in items}
+
+    def run(choice, deps_path=None):
+        exprs, spans = [], []
+        for it in items:
+            es = exprs_for(it, choice[it[0]])
+            spans.append((it, len(exprs), len(es)))
+            exprs += es
+        return compile_probe(tree, triple, arch, mod["header"], exprs, tmp, deps_path), spans
+
+    vals, spans = run(chosen, deps)
+    if vals is None:
+        # Find what does not compile here; a member may have an older name.
+        for it in items:
+            ok = None
+            cands = it[3] if it[1] == "member" else [None]
+            for nm in cands:
+                if compile_probe(tree, triple, arch, mod["header"], exprs_for(it, nm), tmp) is not None:
+                    ok = nm or ""
+                    break
+            if ok is None:
+                what = it[4] if it[1] == "expr" else f"{it[2]} member {' / '.join(it[3])}"
+                raise DevgenError(f"{tree.label} ({triple}): {mod['header']} has no {what}")
+            if it[1] == "member":
+                chosen[it[0]] = ok
+        vals, spans = run(chosen, deps)
+        if vals is None:
+            raise DevgenError(f"{tree.label} ({triple}): the probe for {mod['header']} does not compile")
+    facts, renamed = {}, {}
+    for it, at, n in spans:
+        key = it[0]
+        if it[1] == "member":
+            facts[key + ".offset"] = vals[at]
+            facts[key + ".width"] = vals[at + 1]
+            if chosen[key] != it[3][0]:
+                renamed[key] = chosen[key]
+        else:
+            facts[key] = vals[at]
+    return facts, renamed
+
+
+def probe_tree(tree, mods, deps_dir=None, errors=None):
+    """{file: {target: facts}} and renames, for the modules whose header the
+    tree has; absent headers map to None. With `errors` (a dict), a module
+    the tree cannot answer is recorded there instead of raising."""
+    out, renames = {}, {}
+    with tempfile.TemporaryDirectory(prefix="resid-devgen-") as tmp:
+        for mod in mods:
+            if not tree.has(mod["header"]):
+                out[mod["file"]] = None
+                continue
+            per = {}
+            for variant, triple, arch in TARGETS:
+                deps = os.path.join(deps_dir, f"{mod['file']}.{arch}.d") if deps_dir else None
+                try:
+                    facts, ren = probe_module(tree, mod, triple, arch, tmp, deps)
+                except DevgenError as e:
+                    if errors is None:
+                        raise
+                    errors[mod["file"]] = str(e)
+                    break
+                per[variant] = facts
+                for k, v in ren.items():
+                    renames.setdefault(mod["file"], {})[k] = v
+            out[mod["file"]] = None if mod["file"] in (errors or {}) else per
+    return out, renames
+
+
+# -- Validation and emission -------------------------------------------------
+
+def validate(mods):
+    files = set()
+    for mod in mods:
+        for k in ("file", "interface", "header", "since", "summary"):
+            if k not in mod:
+                raise DevgenError(f"descriptors.toml: a module has no `{k}`")
+        if not re.fullmatch(r"uapi_[a-z0-9_]+\.resid", mod["file"]) or mod["file"] in files:
+            raise DevgenError(f"descriptors.toml: bad or repeated file {mod['file']}")
+        files.add(mod["file"])
+        for op in mod.get("op", []):
+            for k in ("fn", "name", "request", "struct", "path", "write", "stability", "fields", "doc"):
+                if k not in op:
+                    raise DevgenError(f"descriptors.toml: op {op.get('name', '?')} has no `{k}`")
+            if op["stability"] not in STABILITY:
+                raise DevgenError(f"{op['name']}: stability is one of {STABILITY}")
+            if not isinstance(op["write"], bool):
+                raise DevgenError(f"{op['name']}: write is true or false")
+            members = [f["member"] for f in op["fields"]]
+            for f in op["fields"]:
+                if f.get("role") not in ROLES or f.get("dir") not in DIRS:
+                    raise DevgenError(f"{op['name']}.{f['member']}: role is one of {ROLES}, dir one of {DIRS}")
+                if f["role"] == "Buffer" and "max" not in f:
+                    raise DevgenError(f"{op['name']}.{f['member']}: a Buffer has a `max`")
+                if f["role"] != "Buffer" and ("max" in f or "length" in f or "secret" in f):
+                    raise DevgenError(f"{op['name']}.{f['member']}: only a Buffer has max, length or secret")
+                if "length" in f and f["length"] not in members:
+                    raise DevgenError(f"{op['name']}.{f['member']}: length {f['length']} is not a field")
+
+
+def ident(s):
+    return re.sub(r"[^a-z0-9_]", "_", s.lower())
+
+
+def layout_of(mod, facts):
+    """The target-independent layout facts; request numbers may differ."""
+    return {k: v for k, v in facts.items() if not k.endswith(".request") and not k.startswith("check.")}
+
+
+def fingerprint(mod, per):
+    lines = []
+    for variant, triple, arch in TARGETS:
+        for k, v in per[variant].items():
+            lines.append(f"{variant} {k} {v}")
+    return hashlib.sha256(("\n".join(lines) + "\n").encode()).hexdigest()[:32]
+
+
+def emit(mod, per, pin, source_label):
+    x = per["X86_64"]
+    for variant, _, _ in TARGETS[1:]:
+        if layout_of(mod, per[variant]) != layout_of(mod, x):
+            raise DevgenError(f"{mod['file']}: the layout differs between targets; a descriptor per target is not supported")
+    fp = fingerprint(mod, per)
+    out = []
+    w = out.append
+    w(f"// --- lib/dev/{mod['file']} - GENERATED by tools/resid-devgen; do not edit")
+    w(f"// {mod['summary']}")
+    w("//")
+    w(f"// Source:      include/uapi/{mod['header']} (since {mod['since']}),")
+    w(f"//              from {source_label}")
+    w(f"// Kernel:      {pin['tag']} (commit {pin['commit']})")
+    w(f"// Input:       tools/devgen/descriptors.toml, module {mod['file']}")
+    w(f"// Fingerprint: {fp}")
+    w("//              (sha256 of the probed layouts and request numbers for")
+    w("//              x86-64 and aarch64, as clang compiles the header)")
+    w("// Regenerate with `tools/resid-devgen --write`; `--check` (tests/devgen)")
+    w("// fails when this file and the snapshot disagree, `--matrix` when a pinned")
+    w("// kernel's header does.")
+    w("")
+    w('import "device.resid";')
+    for op in mod.get("op", []):
+        w("")
+        emit_op(w, mod, op, per)
+    if mod.get("layout") or mod.get("const"):
+        w("")
+        w("// -- Layouts the wrappers fill and parse ----------------------------------")
+    for lay in mod.get("layout", []):
+        p = lay["prefix"]
+        w("")
+        w(f"// {lay['struct']}: {x[p + '.size']} bytes.")
+        w(f"pub Int {p}_size() {{ return {x[p + '.size']}; }}")
+        for mb in lay["members"]:
+            w(f"pub Int {p}_{ident(mb)}_at() {{ return {x[p + '.' + mb + '.offset']}; }}")
+            w(f"pub Int {p}_{ident(mb)}_len() {{ return {x[p + '.' + mb + '.width']}; }}")
+    for c in mod.get("const", []):
+        w("")
+        w(f"// {c['name']}")
+        w(f"pub Int {ident(c['name'])}() {{ return {x['const.' + c['name']]}; }}")
+    for c in mod.get("check", []):
+        w("")
+        nums = ", ".join(f"{ARCH_NAME[v]} 0x{per[v]['check.' + c['request']]:x}" for v, _, _ in TARGETS)
+        for line in wrap(f"{c['request']} ({nums}) is checked across the kernel matrix but has no descriptor: {c['why']}.", 74):
+            w("// " + line)
+    return "\n".join(out) + "\n"
+
+
+def emit_op(w, mod, op, per):
+    x = per["X86_64"]
+    o = op["name"]
+    for line in wrap(op["doc"], 74):
+        w("// " + line)
+    w("//")
+    w(f"//     {op['struct']}   // {x[o + '.size']} bytes")
+    rows = []
+    if "version" in op:
+        k = f"{o}.version"
+        rows.append((x[k + ".offset"], op["version"]["member"], x[k + ".width"], f"version {op['version']['value']}"))
+    for f in op["fields"]:
+        k = f"{o}.field.{f['member']}"
+        role = f["role"] + " " + f["dir"]
+        if f["role"] == "Buffer":
+            role += f", at most {x[k + '.max']} bytes"
+            if "length" in f:
+                role += f", length in {f['length']}"
+            if f.get("secret"):
+                role += ", secret"
+        rows.append((x[k + ".offset"], f["member"], x[k + ".width"], role))
+    for off, name, width, role in sorted(rows):
+        w(f"//         {name:<20} offset {off:>4}, {width:>4} bytes  {role}")
+    reqs = ", ".join(f"{ARCH_NAME[v]} 0x{per[v][o + '.request']:x}" for v, _, _ in TARGETS)
+    w(f"//     {op['request']}: {reqs}")
+    fields = []
+    for f in op["fields"]:
+        k = f"{o}.field.{f['member']}"
+        off, width = x[k + ".offset"], x[k + ".width"]
+        if f["role"] == "Scalar":
+            fields.append(f"Scalar({off}, {width}, {f['dir']})")
+        elif f["role"] == "Inline":
+            fields.append(f"Inline({off}, {width}, {f['dir']})")
+        else:
+            if width != 8:
+                raise DevgenError(f"{o}.{f['member']}: a Buffer's member is an 8-byte address, not {width} bytes")
+            la = x[f"{o}.field.{f['length']}.offset"] if "length" in f else -1
+            sec = "true" if f.get("secret") else "false"
+            fields.append(f"Buffer({off}, {la}, {x[k + '.max']}, {f['dir']}, {sec})")
+    if "version" in op:
+        k = f"{o}.version"
+        ver = f"Versioned({x[k + '.offset']}, {x[k + '.width']}, {op['version']['value']})"
+    else:
+        ver = "Unversioned"
+    # Decimal: a hex literal leaves the descriptor unknown to E0262's check
+    # (the comment above gives each number in hex).
+    requests = ", ".join(f"Request {{.arch = {v}, .number = {per[v][o + '.request']}}}" for v, _, _ in TARGETS)
+    w(f"pub IoctlOp {op['fn']}() {{")
+    w(f"    return IoctlOp {{.name = \"{mod['interface']}.{o}\", .path = \"{op['path']}\", "
+      f".requests = [{requests}], .size = {x[o + '.size']}, .fields = [{', '.join(fields)}], "
+      f".write = {'true' if op['write'] else 'false'}, .version = {ver}, .stability = {op['stability']}}};")
+    w("}")
+
+
+def wrap(text, width):
+    words, lines, cur = text.split(), [], ""
+    for wd in words:
+        if cur and len(cur) + 1 + len(wd) > width:
+            lines.append(cur)
+            cur = wd
+        else:
+            cur = wd if not cur else cur + " " + wd
+    if cur:
+        lines.append(cur)
+    return lines
+
+
+# -- Snapshot -----------------------------------------------------------------
+
+def snapshot_manifest_path():
+    return os.path.join(SNAPSHOT, "MANIFEST")
+
+
+def read_manifest():
+    path = snapshot_manifest_path()
+    if not os.path.isfile(path):
+        raise DevgenError("no header snapshot (tools/devgen/uapi/MANIFEST); run --snapshot")
+    meta, files = {}, {}
+    with open(path) as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("tag ") or line.startswith("commit "):
+                k, v = line.split(" ", 1)
+                meta[k] = v
+            else:
+                h, p = line.split("  ", 1)
+                files[p] = h
+    return meta, files
+
+
+def check_snapshot(pin):
+    meta, files = read_manifest()
+    bad = []
+    if meta.get("tag") != pin["tag"] or meta.get("commit") != pin["commit"]:
+        bad.append(f"the snapshot is {meta.get('tag')} {meta.get('commit')}, kernels.toml pins {pin['tag']} {pin['commit']}")
+    for p, h in sorted(files.items()):
+        fp = os.path.join(SNAPSHOT, p)
+        if not os.path.isfile(fp):
+            bad.append(f"snapshot file missing: {p}")
+        elif sha256_file(fp) != h:
+            bad.append(f"snapshot file changed: {p}")
+    for dp, _, fs in os.walk(SNAPSHOT):
+        for n in fs:
+            rel = os.path.relpath(os.path.join(dp, n), SNAPSHOT)
+            if rel != "MANIFEST" and rel not in files:
+                bad.append(f"snapshot file not in the manifest: {rel}")
+    return bad
+
+
+def sha256_file(p):
+    with open(p, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def take_snapshot(mods, pin, remote):
+    tree = fetch(pin, remote)
+    with tempfile.TemporaryDirectory(prefix="resid-devgen-deps-") as dd:
+        probe_tree(tree, mods, deps_dir=dd)
+        used = set()
+        for n in os.listdir(dd):
+            with open(os.path.join(dd, n)) as f:
+                text = f.read().replace("\\\n", " ")
+            for tok in text.split(":", 1)[1].split():
+                ap = os.path.abspath(tok)
+                if ap.startswith(tree.root + os.sep):
+                    used.add(os.path.relpath(ap, tree.root))
+    if os.path.isdir(SNAPSHOT):
+        shutil.rmtree(SNAPSHOT)
+    lines = ["# The uapi headers resid-devgen generates lib/dev/uapi_*.resid from:",
+             "# every header clang read for the probes of tools/devgen/descriptors.toml",
+             "# on both targets, copied from the pinned kernel by `resid-devgen --snapshot`.",
+             "# The files are the kernel's, under GPL-2.0 WITH Linux-syscall-note.",
+             f"tag {pin['tag']}", f"commit {pin['commit']}"]
+    for rel in sorted(used):
+        dst = os.path.join(SNAPSHOT, rel)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copyfile(os.path.join(tree.root, rel), dst)
+        lines.append(f"{sha256_file(dst)}  {rel}")
+    with open(snapshot_manifest_path(), "w") as f:
+        f.write("\n".join(lines) + "\n")
+    print(f"snapshot: {len(used)} headers from {pin['tag']} ({pin['commit']})")
+
+
+# -- Fetching (matrix and snapshot only) --------------------------------------
+
+def fetch(pin, remote):
+    """A sparse, shallow, blob-filtered checkout of the pin's three uapi
+    trees, cached; the checkout must be the pinned commit."""
+    d = os.path.join(CACHE, pin["tag"])
+    if not os.path.isdir(os.path.join(d, ".git")) or git_head(d) != pin["commit"]:
+        if os.path.isdir(d):
+            shutil.rmtree(d)
+        os.makedirs(CACHE, exist_ok=True)
+        run(["git", "clone", "-q", "--depth", "1", "--branch", pin["tag"], "--filter=blob:none",
+             "--sparse", "--no-checkout", remote, d])
+        run(["git", "-C", d, "sparse-checkout", "set", "--no-cone"] + ["/" + s + "/" for s in SPARSE])
+        run(["git", "-C", d, "-c", "advice.detachedHead=false", "checkout", "-q", pin["commit"]])
+    head = git_head(d)
+    if head != pin["commit"]:
+        raise DevgenError(f"{pin['tag']} resolved to {head}, the pin says {pin['commit']}: refused")
+    return Tree(d, pin["tag"], "kernel", head)
+
+
+def git_head(d):
+    p = subprocess.run(["git", "-C", d, "rev-parse", "HEAD"], capture_output=True, text=True)
+    return p.stdout.strip() if p.returncode == 0 else ""
+
+
+def run(cmd):
+    p = subprocess.run(cmd, capture_output=True, text=True)
+    if p.returncode != 0:
+        raise DevgenError(f"{' '.join(cmd)}: {p.stderr.strip()}")
+
+
+# -- Comparison -----------------------------------------------------------------
+
+def compare(ref, got):
+    """Lines naming every fact that differs (both targets)."""
+    diffs = []
+    for variant, _, arch in TARGETS:
+        a, b = ref[variant], got[variant]
+        for k in a:
+            if k not in b:
+                diffs.append(f"{arch}: {k} missing")
+            elif a[k] != b[k]:
+                diffs.append(f"{arch}: {k} is {fmt(k, b[k])}, the descriptor has {fmt(k, a[k])}")
+    return diffs
+
+
+def fmt(k, v):
+    return f"0x{v:x}" if k.endswith(".request") or k.startswith("check.") else str(v)
+
+
+def load():
+    with open(INPUT, "rb") as f:
+        inp = tomllib.load(f)
+    with open(KERNELS, "rb") as f:
+        kern = tomllib.load(f)
+    mods = inp.get("module", [])
+    validate(mods)
+    return mods, kern
+
+
+def generate_all(mods, pin, tree):
+    facts, _ = probe_tree(tree, mods)
+    texts = {}
+    for mod in mods:
+        if facts[mod["file"]] is None:
+            raise DevgenError(f"{tree.label} has no {mod['header']}")
+        label = "the committed snapshot tools/devgen/uapi/" if tree.label == "snapshot" else tree.label
+        texts[mod["file"]] = emit(mod, facts[mod["file"]], pin, label)
+    return texts, facts
+
+
+def source_tree(args, pin):
+    if args.headers:
+        return Tree(args.headers, os.path.abspath(args.headers), "kernel")
+    return Tree(SNAPSHOT, "snapshot", "kernel", pin["commit"])
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    g = ap.add_mutually_exclusive_group(required=True)
+    g.add_argument("--write", action="store_true")
+    g.add_argument("--check", action="store_true")
+    g.add_argument("--local", nargs="?", const="/usr/include", metavar="DIR")
+    g.add_argument("--matrix", action="store_true")
+    g.add_argument("--snapshot", action="store_true")
+    ap.add_argument("--headers", metavar="DIR")
+    ap.add_argument("--lib", metavar="DIR", default=LIBDEV)
+    ap.add_argument("--remote")
+    ap.add_argument("--only", metavar="TAG", action="append", help="matrix: only these tags")
+    args = ap.parse_args()
+    try:
+        mods, kern = load()
+        pin = kern["generate"]
+        remote = args.remote or kern["remote"]
+        if args.snapshot:
+            take_snapshot(mods, pin, remote)
+            return 0
+        if args.write or args.check:
+            bad = [] if args.headers else check_snapshot(pin)
+            if bad:
+                for b in bad:
+                    print("snapshot: " + b)
+                return 1
+            texts, _ = generate_all(mods, pin, source_tree(args, pin))
+            if args.write:
+                for name, text in texts.items():
+                    with open(os.path.join(args.lib, name), "w") as f:
+                        f.write(text)
+                    print(f"wrote lib/dev/{name}")
+                return 0
+            return check_files(texts, args.lib)
+        ref = generate_all(mods, pin, source_tree(args, pin))[1]
+        if args.local:
+            kind = "kernel" if os.path.isdir(os.path.join(args.local, "include", "uapi")) else "installed"
+            tree = Tree(args.local, args.local, kind)
+            return report([("local", tree)], mods, ref)
+        pins = [p for p in kern["matrix"] if not args.only or p["tag"] in args.only]
+        trees = []
+        for p in pins:
+            print(f"fetching {p['tag']} ({p['commit'][:12]}) ...", flush=True)
+            trees.append((p["tag"], fetch(p, remote)))
+        return report(trees, mods, ref)
+    except DevgenError as e:
+        print(f"resid-devgen: {e}", file=sys.stderr)
+        return 2
+
+
+def check_files(texts, lib):
+    bad = 0
+    for name, text in sorted(texts.items()):
+        path = os.path.join(lib, name)
+        have = open(path).read() if os.path.isfile(path) else None
+        if have == text:
+            print(f"ok    lib/dev/{name}")
+            continue
+        bad += 1
+        if have is None:
+            print(f"FAIL  lib/dev/{name}: missing")
+            continue
+        print(f"FAIL  lib/dev/{name}: differs from what the snapshot generates")
+        for line in list(difflib.unified_diff(have.splitlines(), text.splitlines(), "committed", "generated", lineterm=""))[:40]:
+            print("      " + line)
+    for n in sorted(os.listdir(lib)):
+        if n.startswith("uapi_") and n.endswith(".resid") and n not in texts:
+            print(f"FAIL  lib/dev/{n}: a uapi_ file the input list does not generate")
+            bad += 1
+    print(f"{len(texts) - min(bad, len(texts))} of {len(texts)} generated files match")
+    return 1 if bad else 0
+
+
+def report(trees, mods, ref):
+    drift = 0
+    for label, tree in trees:
+        errors = {}
+        facts, renames = probe_tree(tree, mods, errors=errors)
+        for mod in mods:
+            got = facts[mod["file"]]
+            if mod["file"] in errors:
+                drift += 1
+                print(f"{label:<12} {mod['file']:<26} DRIFT")
+                print(f"{'':<12}   {errors[mod['file']]}")
+                continue
+            if got is None:
+                print(f"{label:<12} {mod['file']:<26} absent (the header is {mod['since']}+)")
+                continue
+            diffs = compare(ref[mod["file"]], got)
+            note = ""
+            if mod["file"] in renames:
+                note = " (" + ", ".join(f"{k.split('.field.')[-1]} is `{v}` here" for k, v in sorted(renames[mod["file"]].items())) + ")"
+            if diffs:
+                drift += 1
+                print(f"{label:<12} {mod['file']:<26} DRIFT{note}")
+                for d in diffs:
+                    print(f"{'':<12}   {d}")
+            else:
+                print(f"{label:<12} {mod['file']:<26} ok {fingerprint(mod, got)[:12]}{note}")
+    print(f"{'drift in ' + str(drift) + ' module(s)' if drift else 'no drift'} across {len(trees)} tree(s)")
+    return 1 if drift else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
