@@ -44,8 +44,17 @@ marked secret ([secret values](/Resid/reference/secrets/)); never as
 
 | Module | Descriptors | Grant |
 |---|---|---|
-| `dev/sev_guest.resid` | `sev_guest.snp_get_report` (SNP attestation report) | `device(readonly)` |
-| `dev/sev_guest_key.resid` | `sev_guest.snp_get_derived_key` (a sealing key, secret) | `device`, `declassify` (only the response's status word is published) |
+| `dev/sev_guest.resid` | `sev_guest.snp_get_report` (SNP attestation report; hardware-signed) | `device(readonly)` |
+| `dev/sev_guest_key.resid` | `sev_guest.snp_get_derived_key` (a sealing key, secret; not signed) | `device`, `declassify` (only the response's status word is published) |
+| `dev/tdx_guest.resid` | `tdx_guest.tdx_get_report0` (TDREPORT; MAC'd for this platform, not signed) | `device(readonly)` |
+| `dev/nsm.resid` | `nsm.raw` (a CBOR request to the Nitro Secure Module; only an attestation document is signed) | `device` (a request can extend or lock a PCR) |
+
+Each wrapper's comment says whether what it returns is signed by hardware
+(and so verified downstream, where a corrupted reply fails) or is only the
+kernel's word. The descriptors of these modules are generated from the
+kernel's uapi headers (below); SNP_GET_EXT_REPORT has none yet, since its
+certificate buffer is a pointer inside the request struct, which no field
+kind places.
 
 ## Modes
 
@@ -92,6 +101,52 @@ A program may call a verb itself, but only with a descriptor from
 is passing a record of another type with the same fields. "`lib/dev/`" is
 the standard library's, compared by absolute path: with `RESID_HOME`
 unset the library root is relative and no file counts.
+
+## Generated descriptors
+
+The ioctl descriptors over `include/uapi` headers are not written by hand:
+`tools/resid-devgen` generates `lib/dev/uapi_*.resid` (each headed
+`GENERATED`, with the header, the kernel tag and commit, and a layout
+fingerprint), and the hand-written module beside each (`sev_guest.resid`,
+`tdx_guest.resid`, ...) holds the typed wrappers. Every number comes from
+the compiler's own view of the ABI: the generator writes a C probe of
+`__builtin_offsetof`, `sizeof` and the header's `_IOWR(...)` macros,
+compiles it with clang for `x86_64-linux-gnu` and `aarch64-linux-gnu` to
+LLVM IR, and reads the probe array's constant initializer back. Nothing is
+computed by hand and nothing runs, so both targets are probed on any host.
+The wrappers fill and parse the request structs through the generated
+`<struct>_size()`, `<struct>_<member>_at()` and `_len()` functions.
+
+| File | Role |
+|---|---|
+| `tools/devgen/descriptors.toml` | the input list: which structs and requests, and what a header cannot say -- Scalar, Inline or Buffer, direction, secret, length links, the write label, the stability class, the version field, older member names |
+| `tools/devgen/kernels.toml` | the pinned kernels: the generation tree and the matrix, each a tag and the commit it must resolve to |
+| `tools/devgen/uapi/` | the generation tree's headers (every header clang read for the probes) and their SHA-256 manifest |
+
+| Command | What it does |
+|---|---|
+| `tools/resid-devgen --write` | regenerate `lib/dev/uapi_*.resid` from the snapshot |
+| `tools/resid-devgen --check` | regenerate in memory and compare byte for byte, and check the snapshot against its manifest; offline (`tests/devgen`, `tests/device`) |
+| `tools/resid-devgen --local [DIR]` | compare with installed headers (`/usr/include`) or a kernel source tree |
+| `tools/resid-devgen --matrix` | fetch each pinned kernel (a sparse, shallow checkout of the uapi trees, cached in `tools/devgen/cache/`, refused unless it is the pinned commit) and compare every size, offset, width, maximum and request number on both targets; drift fails |
+| `tools/resid-devgen --snapshot` | refresh the snapshot from the generation pin |
+
+The network is used only by `--matrix` and `--snapshot`, never by a build
+or a test. `tools/devgen-matrix.sh` is the release job (and
+`.github/workflows/devgen-matrix.yml` runs it). The matrix pins the oldest
+kernel of each interface (5.19 for `sev-guest.h`, 6.2 for `tdx-guest.h`,
+6.8 for `nsm.h`), the LTS lines 6.1, 6.6, 6.12 and 6.18, the current stable
+release and the latest mainline tag. A member renamed without an ABI change
+is reported but is not drift: `snp_guest_request_ioctl`'s `exitinfo2` was
+`fw_err` before Linux 6.4 (so in 5.19 and 6.2; 6.1.y has the new name by
+backport), at the same offset and width.
+
+To add a descriptor: add the module or op to `descriptors.toml` (the
+header must be under `include/uapi`), run `--snapshot` if it needs headers
+the snapshot lacks, then `--write`; write the wrapper in a hand-written
+module (importing `device_write.resid` if the op writes); run
+`--matrix`, and add the header's first kernel to `kernels.toml` when it
+is older than every pin. Review the generated diff like any descriptor.
 
 ## Checks
 

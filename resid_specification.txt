@@ -3391,6 +3391,18 @@ or the `@descriptor` annotation, anywhere else is refused,
 so the kernel interfaces a program can reach are one
 reviewed set of files.
 
+An IoctlOp over an include/uapi struct is generated, not
+written: tools/resid-devgen reads a checked-in input list
+(the roles a header cannot say: field kinds, directions,
+secret, length links, `write`, stability, the version
+field) and the pinned kernel's headers, takes every size,
+offset, maximum and request number from the C compiler
+for each target, and writes lib/dev/uapi_*.resid. Such a
+file must be exactly what the generator produces
+(`resid-devgen --check`), and its numbers the same in
+every pinned kernel (`resid-devgen --matrix`). The typed
+wrappers beside it are written by hand.
+
 --------------------------------------------------
 49.2  Verbs
 --------------------------------------------------

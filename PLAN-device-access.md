@@ -3,8 +3,9 @@
 **Status: ACCEPTED (2026-10-09).** Open questions 1, 2 and 4 settled (§7); question 3 is decided during implementation. Depends on
 PLAN-secret-type.md for descriptors that return key material.
 
-**Progress.** Phases 1 to 3 are in: the compile-time half, then the
-isolated host and all five operations (2026-10-10, below). Phase 1, the
+**Progress.** Phases 1 to 4 are in: the compile-time half, then the
+isolated host and all five operations, then descriptors generated from the
+uapi headers with a kernel matrix (2026-10-10, below). Phase 1, the
 compile-time half, came first (2026-10-09; spec §49,
 `SECURITY.md` "Device access"): the `device` family with `readonly` and
 full modes (E0219, spawn lists, sandboxes, manifest grants, the force-time
@@ -310,6 +311,91 @@ Tests: `tests/runtime/device_host.c` (`device_host_by_hand_other_exe`,
 `e0263_length_shared`, `device_hook_exact`), conformance
 `err_reserved_runtime_name`.
 
+**Phase 4 (2026-10-10): generated descriptors and the kernel matrix.**
+`tools/resid-devgen` (§6.1, §6.2; `SECURITY.md` "Device access"):
+
+- **Input.** `tools/devgen/descriptors.toml` lists each generated module
+  (`lib/dev/uapi_<name>.resid`), its uapi header and first kernel, and per
+  op the request macro, the struct, the path, the reviewed `write` label,
+  the stability class, the version field and each field's member and role
+  (Scalar/Inline/Buffer, direction, `max` as a C expression, `length` link,
+  `secret`, `also`: older member names with the same ABI); plus `layout`
+  structs and `const` macros the wrappers need, and `check` requests kept
+  under the matrix without a descriptor. `tools/devgen/kernels.toml` pins
+  the generation tree and the matrix, each a tag *and* its commit.
+- **Numbers from the compiler.** A C probe (`__builtin_offsetof`, `sizeof`,
+  the header's own `_IOWR(...)`) is compiled by clang with
+  `--target x86_64-linux-gnu` / `aarch64-linux-gnu`, `-nostdinc`, to LLVM
+  IR; the probe array's constant initializer is read back. Nothing runs,
+  so both targets are probed anywhere; no hand arithmetic, and the
+  hand-written `dv_iowr` calls are gone from the uapi descriptors. Kernel
+  source trees get what `headers_install` would add: asm-generic shims
+  for the arch's generic-y headers, empty `linux/compiler*.h`,
+  `__EXPORTED_HEADERS__`. Chosen over `-fdump-record-layouts` (no request
+  numbers, text meant for humans) and over running a probe (no AArch64
+  execution here).
+- **Language.** Python 3 (tomllib) under `tools/`, like `gen_nistp.py`:
+  a build-time generator outside every program's trusted base, whose
+  output is committed, reviewed and re-verified; its work is driving clang
+  and git and comparing text. No new dependency.
+- **Output.** Each `uapi_*.resid` is headed GENERATED with the header, the
+  kernel tag and commit, the input module and a layout fingerprint
+  (SHA-256 of every probed fact on both targets), then each IoctlOp with
+  its layout as a comment table, `<struct>_size()` / `_<member>_at()` /
+  `_len()` and constants. Hand-written wrappers sit beside it:
+  `sev_guest.resid` (`snp_get_report`, now also checking `exitinfo2`),
+  `sev_guest_key.resid` (`snp_get_derived_key`, unchanged API),
+  `tdx_guest.resid` (`tdx_get_report0`), `nsm.resid` (`nsm_request`, a
+  write: a raw request can extend or lock a PCR). Each says whether its
+  data is hardware-signed (§6.2's last row).
+- **Modes.** `--write`; `--check` (regenerate in memory from the committed
+  snapshot `tools/devgen/uapi/`, every header clang read, with a SHA-256
+  manifest; compare byte for byte; offline); `--local [DIR]` (installed
+  headers or a kernel tree); `--matrix` (sparse, shallow, blob-filtered
+  checkouts of `include/uapi` and the two arch uapi trees per pin, from a
+  GitHub mirror of the stable tree, cached in the gitignored
+  `tools/devgen/cache/`, refused unless HEAD is the pinned commit);
+  `--snapshot`. `tools/devgen-matrix.sh` is the release job;
+  `.github/workflows/devgen-matrix.yml` runs it on tags, on changes to
+  the generator or the generated files, and weekly.
+- **Pins.** Generation: v7.2.9. Matrix: v5.19.17 (sev-guest.h's first),
+  v6.1.189, v6.2.16 (tdx-guest.h's first), v6.6.158, v6.8.12 (nsm.h's
+  first), v6.12.112, v6.18.55, v7.2.9, v7.3-rc6. Result: no ABI drift in
+  any interface on either target. Two API changes it reported: the
+  `exitinfo2` union of `struct snp_guest_request_ioctl` (Linux 6.4,
+  backported to 6.1.y) was `__u64 fw_err` in 5.19 and 6.2, at the same
+  offset and width, so `also = ["fw_err"]`; and `SNP_REPORT_USER_DATA_SIZE`
+  is missing from 6.6 and older, so the wrapper takes the 64 from the
+  member's size instead of the macro.
+
+As built, compared with the plan:
+
+- **SNP_GET_EXT_REPORT has no descriptor.** Its certificate buffer is a
+  pointer *inside* the request buffer (`struct snp_ext_report_req`'s
+  `certs_address`, `certs_len`), which no Field kind places: the host
+  patches pointers only in the top-level struct. It needs a nested-buffer
+  field kind in the descriptor, the compiler's E0263 and the runtime host
+  (so a reseed), and, for the kernel's length negotiation (a too-small
+  `certs_len` gives EIO with `exitinfo2`'s VMM half 1 and the needed
+  length written back into the request buffer), outputs from a failed
+  ioctl, which the host does not return. The request number and the
+  request struct's layout are generated and matrix-checked now
+  (`uapi_sev_guest.resid`'s `check`), and the configfs report's auxblob
+  carries the same certificates.
+- **Hex literals.** A descriptor field written as a hex literal (`.size =
+  0x20`) leaves the descriptor unknown after reduction (E0262), so the
+  generator emits decimal and gives hex in the comment.
+
+Tests: `tests/devgen/run.sh` (14: `devgen_check`,
+`devgen_matches_uapi_{sev_guest,sev_guest_key,tdx_guest,nsm}`,
+`devgen_matches_uapi_host` against `/usr/include`, `devgen_byte_stable`,
+`devgen_stale_file`, `devgen_snapshot_tamper`, `devgen_drift_layout`,
+`devgen_drift_request`, `devgen_drift_rename_only`,
+`devgen_request_numbers` -- the descriptors' numbers against clang's
+evaluation of the kernel's `_IOWR` for both targets, independently of the
+generator -- and `devgen_aarch64_descriptors`), `tests/device`
+(`devgen_check`), conformance `device_uapi_wrappers`.
+
 **Goal**: let a Resid program talk to kernel devices (ioctls on character
 devices, request/response devices such as `/dev/tpmrm0`, and configfs
 interfaces such as `/sys/kernel/config/tsm/report`) through **one generic
@@ -525,7 +611,7 @@ how Linux versions its interfaces; the rest is cheap to add.
 | What can change | Why it can't hurt the program | Enforced by (to build) | Test (to write) |
 |---|---|---|---|
 | A struct's size or direction | `_IOC` request numbers encode both. A resized struct is a different request number, so an old descriptor gets `ENOTTY`, not a mismatched layout. The compiler already checks each descriptor's `size` and directions against its request number (E0263) | checker; engine maps `ENOTTY`/`EINVAL` to `Err(DeviceError::Unsupported)` | `device_resized_struct_unsupported` |
-| A layout change behind the same request number | Linux's userspace-ABI rule forbids it for `include/uapi` interfaces. Descriptors are **generated from the uapi headers**, not written by hand (`tools/resid-devgen`, the same generator as §6.1), and a conformance job compiles the headers of every supported kernel and compares `sizeof`/`offsetof` with each descriptor. Drift fails the build before release | `resid-devgen --check`, CI kernel matrix | `devgen_matches_uapi_*` |
+| A layout change behind the same request number | Linux's userspace-ABI rule forbids it for `include/uapi` interfaces. Descriptors are **generated from the uapi headers**, not written by hand (`tools/resid-devgen`, the same generator as §6.1), and a conformance job compiles the headers of every supported kernel and compares `sizeof`/`offsetof` with each descriptor. Drift fails the build before release | `resid-devgen --check` (built, phase 4), CI kernel matrix (`tools/devgen-matrix.sh`) | `devgen_matches_uapi_*` (`tests/devgen`) |
 | An interface's version field (for example `msg_version` on `sev-guest`) | Descriptors declare the version they speak and the engine sets it; a reply carrying another version is `Err(DeviceError::Version)` | engine | `device_version_mismatch` |
 | The kernel writing past a buffer (a kernel bug, or a wrong length field) | The call runs in the isolated host (§5), never in the program. Inside the host, every buffer ends at a `PROT_NONE` guard page and its slack is filled with a canary checked after the call. An overrun kills the host or fails the canary, and the program gets `Err(DeviceError::Overrun)` | engine | `device_overrun_guard_page`, `device_overrun_canary` |
 | A reply's lengths or fields out of range | The parent validates every length and length field against the descriptor's maxima, and treats contents as untrusted input | parent validation | `device_reply_length_checked` |
