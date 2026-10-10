@@ -1341,6 +1341,8 @@ Bool scope_num_head(Str t) {
 Bool scope_arith_builtin(Str n) {
     if (n == "abs" || n == "min" || n == "max" || n == "clamp") { return true; }
     if (n == "str_char_at" || n == "str_len" || n == "sqrt") { return true; }
+    // Constant-time barriers and selects work on registers only.
+    if (n == "ct_hide" || n == "ct_select") { return true; }
     // Vectors live in registers (spec §46).
     if (n == "splat" || n == "lanes" || n == "select") { return true; }
     // Constant-time helpers and the AES / carry-less multiply instructions

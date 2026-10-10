@@ -1,575 +1,173 @@
-import "crypto.resid";
+// ed25519.resid — Ed25519 (RFC 8032) on public byte lists of Int.
+//
+// Key generation and signing are the public copy of lib/ed25519g.resid's
+// generic implementation (Wide512(Int(512), Int), Word64(UInt(64), Int)
+// and Publish(Int) from lib/word.resid): the same code, checked by the
+// compiler at secret types, signs with a secret seed. The field and point
+// arithmetic here are thin wrappers over the same generic code, which
+// lib/x25519.resid and verification share. Verification handles only
+// public data (the key, the signature, the message) and may branch on it.
+// No branch or memory address depends on the seed, the nonce or the
+// scalar (tests/ct: ed25519-sign, ed25519-secret-sign).
 
-// Field elements are Int(256) scalars reduced mod p = 2^255 - 19.
-pub Int(256) fe_p() {
-    return 57896044618658097711785492504343953926634992332820282019728792003956564819949;
-}
-pub Int(256) fe_d() {
-    return 37095705934669439343138083508754565189542113879843219016388785533085940283555;
-}
+import "crypto.resid";
+import "word.resid";
+import "ed25519g.resid";
+
+// Field elements are Int(256) values reduced mod p = 2^255 - 19.
+pub Int(256) fe_p() { return wrapping_i256(eg_p()); }
+pub Int(256) fe_d() { return wrapping_i256(eg_d()); }
 pub Int(256) fe_sqrtm1() {
     return 19681161376707505956807079304988542015446066515923890162744021073123829784752;
 }
-// L = group order = (p+3)/8
-pub Int(256) fe_l() {
-    return 7237005577332262213973186563042994240857116359379907606001950938285454250989;
-}
+// L = the group order.
+pub Int(256) fe_l() { return wrapping_i256(eg_l()); }
+// (p + 3) / 8 and p - 2.
 pub Int(256) fe_p58() {
     return 7237005577332262213973186563042994240829374041602535252466099000494570602494;
 }
 pub Int(256) fe_pm2() {
     return 57896044618658097711785492504343953926634992332820282019728792003956564819947;
 }
+// The base point.
+pub Int(256) fe_bx() { return wrapping_i256(eg_bx()); }
+pub Int(256) fe_by() { return wrapping_i256(eg_by()); }
+pub Int(256) fe_bt() { return fe_mul(fe_bx(), fe_by()); }
 
-// ─── Branch-free arithmetic ──────────────────────────────────────────
-// Every operation that can see a secret (a signing key, a nonce, an
-// X25519 scalar) runs on UInt(576) with masks: no comparison, no
-// overflow check and no select branches on the value (tests/ct). Values
-// cross back to Int(256) with wrapping conversions, which do not check.
+// ── field arithmetic: the public copy of lib/ed25519g.resid's ──
 
-UInt(576) fe_w(Int(256) a) { return (UInt(576)) wrapping_u256(a); }
-Int(256) fe_n(UInt(576) v) { return wrapping_i256(v); }
-UInt(576) fe_pw() { return 57896044618658097711785492504343953926634992332820282019728792003956564819949; }
-UInt(576) fe_lw() { return 7237005577332262213973186563042994240857116359379907606001950938285454250989; }
-UInt(576) fe_m256() { return (((UInt(576)) 1) << 256) - 1; }
-UInt(576) fe_guard() { return ((UInt(576)) 1) << 264; }
-UInt(576) fe_ones() { return ((((UInt(576)) 1) << 575) - 1) * 2 + 1; }
+Int(512) fe_w(Int(256) a) { return (Int(512)) a; }
 
-// u - m when u >= m, else u (u < 2^263).
-UInt(576) fe_csub(UInt(576) u, UInt(576) m) {
-    UInt(576) d = wrapping_usub(wrapping_uadd(u, fe_guard()), m);
-    UInt(576) keep = wrapping_usub((UInt(576)) 0, (UInt(576)) wrapping_u64(ct_hide(wrapping_i64((d >> 264) & 1))));
-    return ((d & (fe_guard() - 1)) & keep) | (u & (keep ^ fe_ones()));
-}
-
-pub Int(256) cond_sub(Int(256) v) { return fe_n(fe_csub(fe_w(v), fe_pw())); }
-pub Int(256) cond_sub2(Int(256) v) { return cond_sub(cond_sub(v)); }
-pub Int(256) cond_sub_l(Int(256) v) { return fe_n(fe_csub(fe_w(v), fe_lw())); }
-pub Int(512) cs512(Int(512) v) { return (Int(512)) fe_n(fe_csub((UInt(576)) wrapping_u512(v), fe_pw())); }
-
-pub Int(256) fe_add(Int(256) a, Int(256) b) { return fe_n(fe_csub(wrapping_uadd(fe_w(a), fe_w(b)), fe_pw())); }
-pub Int(256) fe_sub(Int(256) a, Int(256) b) {
-    return fe_n(fe_csub(wrapping_usub(wrapping_uadd(fe_w(a), fe_pw()), fe_w(b)), fe_pw()));
-}
-pub Int(512) mask512() {
-    Int(512) o = 1;
-    Int(512) hs = 256;
-    return (o << hs) - o;
-}
-
-// a * b mod p: fold the high half in three times (2^256 = 38 mod p),
-// leaving less than 3p, then two masked subtractions.
-pub Int(256) fe_mul(Int(256) a, Int(256) b) {
-    UInt(576) t = wrapping_umul(fe_w(a), fe_w(b));
-    UInt(576) k38 = 38;
-    UInt(576) r = wrapping_uadd(t & fe_m256(), wrapping_umul(t >> 256, k38));
-    UInt(576) r2 = wrapping_uadd(r & fe_m256(), wrapping_umul(r >> 256, k38));
-    UInt(576) r3 = wrapping_uadd(r2 & fe_m256(), wrapping_umul(r2 >> 256, k38));
-    return fe_n(fe_csub(fe_csub(r3, fe_pw()), fe_pw()));
-}
-pub Int(256) fe_sq(Int(256) a) {
-    return fe_mul(a, a);
-}
+pub Int(256) fe_add(Int(256) a, Int(256) b) { return wrapping_i256(eg_fadd(fe_w(a), fe_w(b))); }
+pub Int(256) fe_sub(Int(256) a, Int(256) b) { return wrapping_i256(eg_fsub(fe_w(a), fe_w(b))); }
+pub Int(256) fe_mul(Int(256) a, Int(256) b) { return wrapping_i256(eg_fmul(fe_w(a), fe_w(b))); }
+pub Int(256) fe_sq(Int(256) a) { return fe_mul(a, a); }
+pub Int(256) fe_inv(Int(256) a) { return wrapping_i256(eg_finv(fe_w(a))); }
+// res * base^e, e public, from bit i of e down.
 pub Int(256) pow_acc(Int(256) res, Int(256) base, Int(256) e, Int i) {
-    if (i < 0) { return res; }
-    Int(256) rs = fe_sq(res);
-    Int ni = i - 1;
-    Int(256) sh = i;
-    Int(256) mw = ((e >> sh) & 1);
-    Int bit = i64(mw);
-    if (bit == 1) {
-        Int(256) nr = fe_mul(rs, base);
-        return pow_acc(nr, base, e, ni);
-    }
-    return pow_acc(rs, base, e, ni);
-}
-pub Int(256) fe_inv(Int(256) a) {
-    return pow_acc(1, a, fe_pm2(), 255);
+    return wrapping_i256(eg_fpow(fe_w(res), fe_w(base), fe_w(e), i));
 }
 
 // ── little-endian bytes <-> wide ints ──
-pub Int top7(Int i, Int raw) {
-    if (i == 32) {
-        Int masked = raw & 127;
-        return masked;
-    }
-    return raw;
-}
+// bytes_to_int ignores bit 255 (the sign bit of an encoded point).
+pub Int(256) bytes_to_int(List(Int) b) { return b2a(b, 0, 31); }
 pub Int(256) b2a(List(Int) b, Int(256) v, Int i) {
     if (i < 0) { return v; }
-    Int(256) raw = (Int(256)) (top7(i + 1, b[i]) & 255);
-    Int(256) v2 = (v << 8) | raw;
-    Int ni = i - 1;
-    return b2a(b, v2, ni);
+    Int byte = if (i == 31) { b[i] & 127 } else { b[i] & 255 };
+    return b2a(b, (v << (Int(256)) 8) | (Int(256)) byte, i - 1);
 }
-pub Int(256) bytes_to_int(List(Int) b) {
-    return b2a(b, 0, 31);
+pub List(Int) int_to_bytes(Int(256) v) { return itob_acc(v, 0, ListBuf()); }
+List(Int) itob_acc(Int(256) v, Int i, ListBuf(Int) acc) {
+    if (i > 31) { return acc.finish(); }
+    return itob_acc(v, i + 1, acc.push(wrapping_i64((v >> (Int(256)) (i * 8)) & (Int(256)) 255)));
 }
-pub List(Int) itob_acc(Int(256) v, Int i, List(Int) acc) {
-    if (i > 31) { return acc; }
-    Int(256) sh = i * 8;
-    Int(256) mw = ((v >> sh) & 255);
-    Int b = i64(mw);
-    List(Int) acc2 = acc.concat([b]);
-    Int ni = i + 1;
-    return itob_acc(v, ni, acc2);
-}
-pub List(Int) int_to_bytes(Int(256) v) {
-    return itob_acc(v, 0, []);
-}
-pub List(Int) slice_acc(List(Int) b, Int i, Int end, List(Int) acc) {
-    if (i > end) { return acc; }
-    List(Int) acc2 = acc.concat([b[i]]);
-    Int ni = i + 1;
-    return slice_acc(b, ni, end, acc2);
-}
+// Bytes start..end, inclusive (empty when end < start).
 pub List(Int) slice_bytes(List(Int) b, Int start, Int end) {
-    return slice_acc(b, start, end, []);
+    if (end < start) { return []; }
+    return b[start..end + 1];
 }
+pub List(Int) concat_bytes(List(Int) a, List(Int) b) { return a.concat(b); }
 
-// ── point coordinate formulas (extended coords, a = -1) ──
-pub Int(256) dbl_x(Int(256) x, Int(256) y, Int(256) z) {
-    Int(256) a = fe_sq(x);
-    Int(256) b = fe_sq(y);
-    Int(256) zsq = fe_sq(z);
-    Int(256) c = fe_add(zsq, zsq);
-    Int(256) xy = fe_add(x, y);
-    Int(256) xys = fe_sq(xy);
-    Int(256) e = fe_sub(fe_sub(xys, a), b);
-    Int(256) g = fe_sub(b, a);
-    Int(256) f = fe_sub(g, c);
-    return fe_mul(e, f);
-}
-pub Int(256) dbl_y(Int(256) x, Int(256) y, Int(256) z) {
-    Int(256) a = fe_sq(x);
-    Int(256) b = fe_sq(y);
-    Int(256) zsq = fe_sq(z);
-    Int(256) c = fe_add(zsq, zsq);
-    Int(256) xy = fe_add(x, y);
-    Int(256) xys = fe_sq(xy);
-    Int(256) e = fe_sub(fe_sub(xys, a), b);
-    Int(256) dd = fe_sub(0, a);
-    Int(256) g = fe_add(dd, b);
-    Int(256) f = fe_sub(g, c);
-    Int(256) h = fe_sub(dd, b);
-    return fe_mul(g, h);
-}
-pub Int(256) dbl_z(Int(256) x, Int(256) y, Int(256) z) {
-    Int(256) a = fe_sq(x);
-    Int(256) b = fe_sq(y);
-    Int(256) zsq = fe_sq(z);
-    Int(256) c = fe_add(zsq, zsq);
-    Int(256) g = fe_sub(b, a);
-    Int(256) f = fe_sub(g, c);
-    return fe_mul(f, g);
-}
-pub Int(256) add_t1(Int(256) x1, Int(256) y1, Int(256) z1) {
-    Int(256) zi = fe_inv(z1);
-    return fe_mul(x1, fe_mul(y1, zi));
-}
-pub Int(256) add_x(Int(256) x1, Int(256) y1, Int(256) z1, Int(256) x2, Int(256) y2, Int(256) z2) {
-    Int(256) t1 = add_t1(x1, y1, z1);
-    Int(256) t2 = add_t1(x2, y2, z2);
-    Int(256) a0 = fe_sub(y1, x1);
-    Int(256) b0 = fe_add(y1, x1);
-    Int(256) a2 = fe_sub(y2, x2);
-    Int(256) b2 = fe_add(y2, x2);
-    Int(256) a = fe_mul(a0, a2);
-    Int(256) b = fe_mul(b0, b2);
-    Int(256) t12 = fe_add(t1, t1);
-    Int(256) c0 = fe_mul(t12, fe_d());
-    Int(256) c = fe_mul(c0, t2);
-    Int(256) z12 = fe_add(z1, z1);
-    Int(256) dd = fe_mul(z12, z2);
-    Int(256) e = fe_sub(b, a);
-    Int(256) f = fe_sub(dd, c);
-    return fe_mul(e, f);
-}
-pub Int(256) add_y(Int(256) x1, Int(256) y1, Int(256) z1, Int(256) x2, Int(256) y2, Int(256) z2) {
-    Int(256) t1 = add_t1(x1, y1, z1);
-    Int(256) t2 = add_t1(x2, y2, z2);
-    Int(256) a0 = fe_sub(y1, x1);
-    Int(256) b0 = fe_add(y1, x1);
-    Int(256) a2 = fe_sub(y2, x2);
-    Int(256) b2 = fe_add(y2, x2);
-    Int(256) a = fe_mul(a0, a2);
-    Int(256) b = fe_mul(b0, b2);
-    Int(256) t12 = fe_add(t1, t1);
-    Int(256) c0 = fe_mul(t12, fe_d());
-    Int(256) c = fe_mul(c0, t2);
-    Int(256) z12 = fe_add(z1, z1);
-    Int(256) dd = fe_mul(z12, z2);
-    Int(256) g = fe_add(dd, c);
-    Int(256) h = fe_add(b, a);
-    return fe_mul(g, h);
-}
-pub Int(256) add_z(Int(256) x1, Int(256) y1, Int(256) z1, Int(256) x2, Int(256) y2, Int(256) z2) {
-    Int(256) t1 = add_t1(x1, y1, z1);
-    Int(256) t2 = add_t1(x2, y2, z2);
-    Int(256) a0 = fe_sub(y1, x1);
-    Int(256) b0 = fe_add(y1, x1);
-    Int(256) a2 = fe_sub(y2, x2);
-    Int(256) b2 = fe_add(y2, x2);
-    Int(256) a = fe_mul(a0, a2);
-    Int(256) b = fe_mul(b0, b2);
-    Int(256) t12 = fe_add(t1, t1);
-    Int(256) c0 = fe_mul(t12, fe_d());
-    Int(256) c = fe_mul(c0, t2);
-    Int(256) z12 = fe_add(z1, z1);
-    Int(256) dd = fe_mul(z12, z2);
-    Int(256) f = fe_sub(dd, c);
-    Int(256) g = fe_add(dd, c);
-    return fe_mul(f, g);
-}
-// ── scalar mult returning affine X or Y (recomputes internally) ──
-pub List(Int) smul_x_acc(Int(256) k, Int(256) qx, Int(256) qy, Int(256) qz, Int(256) rx, Int(256) ry, Int(256) rz, Int i) {
-    if (i < 0) {
-        Int(256) zi = fe_inv(rz);
-        return int_to_bytes(fe_mul(rx, zi));
-    }
-    Int ni = i - 1;
-    Int(256) sh = i;
-    Int(256) mw = ((k >> sh) & 1);
-    Int bit = i64(mw);
-    Int(256) dxv = dbl_x(rx, ry, rz);
-    Int(256) dyv = dbl_y(rx, ry, rz);
-    Int(256) dzv = dbl_z(rx, ry, rz);
-    if (bit == 1) {
-        Int(256) nx = add_x(dxv, dyv, dzv, qx, qy, qz);
-        Int(256) ny = add_y(dxv, dyv, dzv, qx, qy, qz);
-        Int(256) nz = add_z(dxv, dyv, dzv, qx, qy, qz);
-        return smul_x_acc(k, qx, qy, qz, nx, ny, nz, ni);
-    }
-    return smul_x_acc(k, qx, qy, qz, dxv, dyv, dzv, ni);
-}
-pub List(Int) smul_y_acc(Int(256) k, Int(256) qx, Int(256) qy, Int(256) qz, Int(256) rx, Int(256) ry, Int(256) rz, Int i) {
-    if (i < 0) {
-        Int(256) zi = fe_inv(rz);
-        return int_to_bytes(fe_mul(ry, zi));
-    }
-    Int ni = i - 1;
-    Int(256) sh = i;
-    Int(256) mw = ((k >> sh) & 1);
-    Int bit = i64(mw);
-    Int(256) dxv = dbl_x(rx, ry, rz);
-    Int(256) dyv = dbl_y(rx, ry, rz);
-    Int(256) dzv = dbl_z(rx, ry, rz);
-    if (bit == 1) {
-        Int(256) nx = add_x(dxv, dyv, dzv, qx, qy, qz);
-        Int(256) ny = add_y(dxv, dyv, dzv, qx, qy, qz);
-        Int(256) nz = add_z(dxv, dyv, dzv, qx, qy, qz);
-        return smul_y_acc(k, qx, qy, qz, nx, ny, nz, ni);
-    }
-    return smul_y_acc(k, qx, qy, qz, dxv, dyv, dzv, ni);
-}
-
-// ── extended coordinates carried whole (X, Y, Z, T with T = XY/Z) ──
-// One call per doubling or addition, and no inversion until the end:
-// dbl-2008-hwcd and add-2008-hwcd-3 for a = -1.
+// ── points in extended coordinates (X, Y, Z, T with T = XY/Z) ──
 type Ept = { Int(256) x; Int(256) y; Int(256) z; Int(256) t; };
 
+EgPt(Int(512)) ept_w(Ept p) { return EgPt {.x = fe_w(p.x), .y = fe_w(p.y), .z = fe_w(p.z), .t = fe_w(p.t)}; }
+Ept ept_n(EgPt(Int(512)) p) { return Ept {.x = wrapping_i256(p.x), .y = wrapping_i256(p.y), .z = wrapping_i256(p.z), .t = wrapping_i256(p.t)}; }
+
 pub Ept ept(Int(256) x, Int(256) y) { return Ept {.x = x, .y = y, .z = 1, .t = fe_mul(x, y)}; }
-
 pub Ept ept_id() { return Ept {.x = 0, .y = 1, .z = 1, .t = 0}; }
-
-pub Ept ept_dbl(Ept p) {
-    Int(256) a = fe_sq(p.x);
-    Int(256) b = fe_sq(p.y);
-    Int(256) zsq = fe_sq(p.z);
-    Int(256) c = fe_add(zsq, zsq);
-    Int(256) e = fe_sub(fe_sub(fe_sq(fe_add(p.x, p.y)), a), b);
-    Int(256) g = fe_sub(b, a);
-    Int(256) f = fe_sub(g, c);
-    Int(256) h = fe_sub(fe_sub(0, a), b);
-    return Ept {.x = fe_mul(e, f), .y = fe_mul(g, h), .z = fe_mul(f, g), .t = fe_mul(e, h)};
-}
-
-pub Ept ept_add(Ept p, Ept q) {
-    Int(256) a = fe_mul(fe_sub(p.y, p.x), fe_sub(q.y, q.x));
-    Int(256) b = fe_mul(fe_add(p.y, p.x), fe_add(q.y, q.x));
-    Int(256) c = fe_mul(fe_mul(fe_add(p.t, p.t), fe_d()), q.t);
-    Int(256) dd = fe_mul(fe_add(p.z, p.z), q.z);
-    Int(256) e = fe_sub(b, a);
-    Int(256) f = fe_sub(dd, c);
-    Int(256) g = fe_add(dd, c);
-    Int(256) h = fe_add(b, a);
-    return Ept {.x = fe_mul(e, f), .y = fe_mul(g, h), .z = fe_mul(f, g), .t = fe_mul(e, h)};
-}
-
-// [k]q, most significant bit first from bit i.
-// Every bit costs a doubling and an addition; the bit picks between them
-// with a mask (the formulas are complete, so adding the identity is fine).
-pub Ept ept_mul(Int(256) k, Ept q, Ept r, Int i) {
-    if (i < 0) { return r; }
-    Ept d = ept_dbl(r);
-    Int(256) m = wrapping_sub((Int(256)) 0, (Int(256)) ct_hide(wrapping_i64((k >> ((Int(256)) i)) & 1)));
-    return ept_mul(k, q, ept_sel(m, ept_add(d, q), d), i - 1);
-}
-
-// a when m is all ones, b when it is zero.
-Ept ept_sel(Int(256) m, Ept a, Ept b) {
-    Int(256) nm = m ^ wrapping_sub((Int(256)) 0, (Int(256)) 1);
-    return Ept {.x = (a.x & m) | (b.x & nm), .y = (a.y & m) | (b.y & nm), .z = (a.z & m) | (b.z & nm), .t = (a.t & m) | (b.t & nm)};
-}
-
-// The encoding of a point: y with the sign of x in the top bit.
-pub List(Int) ept_encode(Ept p) {
-    Int(256) zi = fe_inv(p.z);
-    return encode_pt_bytes(fe_mul(p.x, zi), int_to_bytes(fe_mul(p.y, zi)));
-}
-
-pub Ept ept_base_mul(Int(256) k) { return ept_mul(k, ept(fe_bx(), fe_by()), ept_id(), 255); }
+pub Ept ept_dbl(Ept p) { return ept_n(eg_dbl(ept_w(p))); }
+pub Ept ept_add(Ept p, Ept q) { return ept_n(eg_add(ept_w(p), ept_w(q))); }
+// r doubled once per bit of k from bit i down, plus q for each set bit
+// (chosen with a mask, not a branch).
+pub Ept ept_mul(Int(256) k, Ept q, Ept r, Int i) { return ept_n(eg_ladder(fe_w(k), ept_w(q), ept_w(r), i)); }
+pub Ept ept_base_mul(Int(256) k) { return ept_n(eg_base_mul(fe_w(k))); }
+// The encoding of a point: y with the low bit of x in the top bit.
+pub List(Int) ept_encode(Ept p) { return eg_encode(ept_w(p)); }
 
 // Two points are the same when X1 Z2 = X2 Z1 and Y1 Z2 = Y2 Z1.
 pub Bool ept_eq(Ept p, Ept q) {
     return fe_mul(p.x, q.z) == fe_mul(q.x, p.z) && fe_mul(p.y, q.z) == fe_mul(q.y, p.z);
 }
 
-// base point
-pub Int(256) fe_bx() {
-    return 15112221349535400772501151409588531511454012693041857206046113283949847762202;
-}
-pub Int(256) fe_by() {
-    return 46316835694926478169428394003475163141307993866256225615783033603165251855960;
-}
-pub Int(256) fe_bt() {
-    return fe_mul(fe_bx(), fe_by());
+// [k] (qx, qy, qz) added to (rx, ry, rz) doubled once per bit from bit i,
+// as the 32-byte affine x.
+pub List(Int) smul_x_acc(Int(256) k, Int(256) qx, Int(256) qy, Int(256) qz, Int(256) rx, Int(256) ry, Int(256) rz, Int i) {
+    Ept q = Ept {.x = qx, .y = qy, .z = qz, .t = fe_mul(fe_mul(qx, qy), fe_inv(qz))};
+    Ept r = Ept {.x = rx, .y = ry, .z = rz, .t = fe_mul(fe_mul(rx, ry), fe_inv(rz))};
+    Ept w = ept_mul(k, q, r, i);
+    return int_to_bytes(fe_mul(w.x, fe_inv(w.z)));
 }
 
-// ── decode public keys / R ──
-pub Int(256) dec_adjust(Int(256) x, Int(256) chk) {
-    if (chk != 1) {
-        return fe_mul(x, fe_sqrtm1());
-    }
-    return x;
-}
-pub Int(256) dec_parity(Int(256) x, Int sign) {
-    Int par = i64(x & 1);
-    if (par != sign) {
-        return fe_sub(0, x);
-    }
-    return x;
-}
-pub Int(256) dec_y(List(Int) bs) {
-    return bytes_to_int(bs);
-}
-pub List(Int) ccat(List(Int) b, Int i, List(Int) acc) {
-    if (i >= b.len()) { return acc; }
-    List(Int) acc2 = acc.concat([b[i]]);
-    Int ni = i + 1;
-    return ccat(b, ni, acc2);
-}
-pub List(Int) concat_bytes(List(Int) a, List(Int) b) {
-    return ccat(b, 0, a);
-}
+// ── decoding public keys and R (public data: branches are fine) ──
+pub Int(256) dec_y(List(Int) bs) { return bytes_to_int(bs); }
+
 pub Int(256) dec_x(List(Int) bs) {
     Int(256) y = dec_y(bs);
-    Int ln = bs.len();
-    Int li = ln - 1;
-    Int last = bs[li];
-    Int sign = (last >> 7) & 1;
+    Int sign = (bs[bs.len() - 1] >> 7) & 1;
     Int(256) y2 = fe_sq(y);
     Int(256) u = fe_sub(y2, 1);
-    Int(256) dy = fe_mul(fe_d(), y2);
-    Int(256) v = fe_add(dy, 1);
+    Int(256) v = fe_add(fe_mul(fe_d(), y2), 1);
     Int(256) winv = fe_mul(u, fe_inv(v));
+    // A candidate square root of winv: the root when x0^2 = winv, else
+    // x0 * sqrt(-1) is (when there is one).
     Int(256) x0 = pow_acc(1, winv, fe_p58(), 254);
-    // x0 = winv^((p+3)/8) is a candidate sqrt(winv); it's the *correct*
-    // root exactly when x0^2 == winv, i.e. x0^2 * winv^-1 == 1 — dividing,
-    // not multiplying, by winv. The previous `fe_mul(fe_sq(x0), winv)`
-    // computed x0^2 * winv (not 1 in general, even for a correct x0),
-    // corrupting dec_adjust's "already correct" branch for ~half of all
-    // points (measured: sign+self-verify_sig failed for ~50% of random
-    // seeds, always passed for one fixed test seed — the signature of a
-    // ~50%-of-points bug, not a vague numerical error). Confirmed fixed:
-    // 20/20 random seeds now self-verify.
-    Int(256) chk = fe_mul(fe_sq(x0), fe_inv(winv));
-    Int(256) x1 = dec_adjust(x0, chk);
-    return dec_parity(x1, sign);
+    Int(256) x1 = if (fe_sq(x0) == winv) { x0 } else { fe_mul(x0, fe_sqrtm1()) };
+    return if (wrapping_i64(x1 & 1) != sign) { fe_sub(0, x1) } else { x1 };
 }
 
-// ── W = [h]A + R, returned as affine ratios E/G (=X/Z), H/F (=Y/Z) ──
-pub List(Int) wmul_wx(Int(256) h, Int(256) ax, Int(256) ay, Int(256) az, Int(256) bx2, Int(256) by2, Int(256) bz2, Int(256) rx, Int(256) ry, Int(256) rz, Int i) {
-    if (i < 0) {
-        Int(256) nx = add_x(rx, ry, rz, bx2, by2, bz2);
-        Int(256) nz2 = add_z(rx, ry, rz, bx2, by2, bz2);
-        Int(256) nzi = fe_inv(nz2);
-        return int_to_bytes(fe_mul(nx, nzi));
-    }
-    Int ni = i - 1;
-    Int(256) sh = i;
-    Int(256) mw = ((h >> sh) & 1);
-    Int bit = i64(mw);
-    Int(256) dxv = dbl_x(rx, ry, rz);
-    Int(256) dyv = dbl_y(rx, ry, rz);
-    Int(256) dzv = dbl_z(rx, ry, rz);
-    if (bit == 1) {
-        Int(256) nx = add_x(dxv, dyv, dzv, ax, ay, az);
-        Int(256) ny = add_y(dxv, dyv, dzv, ax, ay, az);
-        Int(256) nz = add_z(dxv, dyv, dzv, ax, ay, az);
-        return wmul_wx(h, ax, ay, az, bx2, by2, bz2, nx, ny, nz, ni);
-    }
-    return wmul_wx(h, ax, ay, az, bx2, by2, bz2, dxv, dyv, dzv, ni);
-}
-pub List(Int) wmul_wy(Int(256) h, Int(256) ax, Int(256) ay, Int(256) az, Int(256) bx2, Int(256) by2, Int(256) bz2, Int(256) rx, Int(256) ry, Int(256) rz, Int i) {
-    if (i < 0) {
-        Int(256) t1 = add_t1(rx, ry, rz);
-        Int(256) t2 = add_t1(bx2, by2, bz2);
-        Int(256) a0 = fe_sub(ry, rx);
-        Int(256) b0 = fe_add(ry, rx);
-        Int(256) a2 = fe_sub(by2, bx2);
-        Int(256) bb2 = fe_add(by2, bx2);
-        Int(256) a = fe_mul(a0, a2);
-        Int(256) b = fe_mul(b0, bb2);
-        Int(256) t12 = fe_add(t1, t1);
-        Int(256) c0 = fe_mul(t12, fe_d());
-        Int(256) c = fe_mul(c0, t2);
-        Int(256) z12 = fe_add(rz, rz);
-        Int(256) dd = fe_mul(z12, bz2);
-        Int(256) f = fe_sub(dd, c);
-        Int(256) hh = fe_add(b, a);
-        Int(256) fi = fe_inv(f);
-        return int_to_bytes(fe_mul(hh, fi));
-    }
-    Int ni = i - 1;
-    Int(256) sh = i;
-    Int(256) mw = ((h >> sh) & 1);
-    Int bit = i64(mw);
-    Int(256) dxv = dbl_x(rx, ry, rz);
-    Int(256) dyv = dbl_y(rx, ry, rz);
-    Int(256) dzv = dbl_z(rx, ry, rz);
-    if (bit == 1) {
-        Int(256) nx = add_x(dxv, dyv, dzv, ax, ay, az);
-        Int(256) ny = add_y(dxv, dyv, dzv, ax, ay, az);
-        Int(256) nz = add_z(dxv, dyv, dzv, ax, ay, az);
-        return wmul_wy(h, ax, ay, az, bx2, by2, bz2, nx, ny, nz, ni);
-    }
-    return wmul_wy(h, ax, ay, az, bx2, by2, bz2, dxv, dyv, dzv, ni);
-}
-// ── h = SHA-512(R||A||M) mod L ──
-pub Int(256) modl_acc(List(Int) dig, Int(256) v, Int j) {
-    if (j < 0) { return v; }
-    Int nb = j >> 3;
-    Int rem = j - nb * 8;
-    Int byte = dig[nb];
-    Int(256) bit = (Int(256)) ((byte >> rem) & 1);
-    Int(256) v4 = cond_sub_l(wrapping_add(wrapping_add(v, v), bit));
-    Int ni = j - 1;
-    return modl_acc(dig, v4, ni);
-}
-pub Int(256) mod_l(List(Int) dig) {
-    return modl_acc(dig, 0, 511);
-}
-
-// ── Ed25519 verification ──
-// `verify_sig_bytes` operates on the message as raw bytes directly — the
-// core all `verify_sig` (`Str` message, UTF-8-safe text only) wraps via
-// `bytes_of`. Needed by anything that must verify a signature over
-// arbitrary binary data (e.g. a CBOR structure, COSE_Sign1) where
-// `bytes_of`'s Str round-trip would corrupt bytes ≥128 (same UTF-8-
-// encoding issue `filesystem.write_bytes` exists to solve — see
-// PLAN-resid-only.md).
 // RFC 8032 §5.1.3 point decoding succeeds: 32 bytes, y < p, a square
 // root exists, and x = 0 is not encoded with the sign bit set.
-pub Bool dec_ok(List(Int) bs) {
-    if (bs.len() != 32) { return false; }
+pub Bool dec_ok(List(Int) bs) { return dec_pt(bs).ok; }
+
+type DecPt = { Bool ok; Int(256) x; Int(256) y; };
+
+DecPt dec_pt(List(Int) bs) {
+    DecPt bad = DecPt {.ok = false, .x = 0, .y = 0};
+    if (bs.len() != 32) { return bad; }
     Int(256) y = dec_y(bs);
-    if (y >= fe_p()) { return false; }
+    if (y >= fe_p()) { return bad; }
     Int(256) x = dec_x(bs);
-    if (x == 0 && ((bs[31] >> 7) & 1) == 1) { return false; }
+    if (x == 0 && ((bs[31] >> 7) & 1) == 1) { return bad; }
     // -x^2 + y^2 == 1 + d x^2 y^2 (fails when no square root exists).
     Int(256) x2 = fe_sq(x);
     Int(256) y2 = fe_sq(y);
-    return fe_sub(y2, x2) == fe_add(1, fe_mul(fe_d(), fe_mul(x2, y2)));
+    return DecPt {.ok = fe_sub(y2, x2) == fe_add(1, fe_mul(fe_d(), fe_mul(x2, y2))), .x = x, .y = y};
 }
 
-// Strict verification (RFC 8032 §5.1.7): a malformed signature or key is
-// rejected, never an abort; S must be below L as a full 256-bit integer.
+// A 64-byte little-endian digest mod L.
+pub Int(256) mod_l(List(Int) dig) { return wrapping_i256(eg_digest_mod_l(dig)); }
+
+// ── verification (RFC 8032 §5.1.7) ──
+// Strict: a malformed signature or key is rejected, never an abort; S
+// must be below L as a full 256-bit integer. The message is raw bytes
+// (verify_sig takes text).
 pub Bool verify_sig_bytes(List(Int) mb, List(Int) sig, List(Int) pubk) {
     if (sig.len() != 64 || pubk.len() != 32) { return false; }
     if (sig[63] >= 128) { return false; }
-    List(Int) rb = slice_bytes(sig, 0, 31);
-    List(Int) sbB = slice_bytes(sig, 32, 63);
-    Int(256) sv = bytes_to_int(sbB);
-    if (sv >= fe_l()) {
-        return false;
-    }
-    if (!dec_ok(pubk) || !dec_ok(rb)) { return false; }
-    Ept a = ept(dec_x(pubk), dec_y(pubk));
-    Ept r = ept(dec_x(rb), dec_y(rb));
-    Int(256) hv = mod_l(sha512_bytes(concat_bytes(concat_bytes(rb, pubk), mb)));
+    List(Int) rb = sig[0..32];
+    Int(256) sv = bytes_to_int(sig[32..64]);
+    if (sv >= fe_l()) { return false; }
+    DecPt ad = dec_pt(pubk);
+    DecPt rd = dec_pt(rb);
+    if (!ad.ok || !rd.ok) { return false; }
+    EgPt(Int(512)) a = eg_pt(fe_w(ad.x), fe_w(ad.y));
+    EgPt(Int(512)) r = eg_pt(fe_w(rd.x), fe_w(rd.y));
+    Int(512) hv = eg_digest_mod_l(sha512_bytes(rb.concat(pubk).concat(mb)));
+    EgPt(Int(512)) o = eg_id();
     // [S]B == R + [h]A
-    return ept_eq(ept_base_mul(sv), ept_add(ept_mul(hv, a, ept_id(), 255), r));
+    return ept_eq(ept_n(eg_base_mul(fe_w(sv))), ept_n(eg_add(eg_ladder(hv, a, o, 255), r)));
 }
 pub Bool verify_sig(Str msg, List(Int) sig, List(Int) pubk) {
     return verify_sig_bytes(bytes_of(msg), sig, pubk);
 }
 
-// ── deterministic signing (RFC 8032 §5.1.6) ──
-pub Int(512) cond_sub_l512(Int(512) v) { return (Int(512)) fe_n(fe_csub((UInt(576)) wrapping_u512(v), fe_lw())); }
-// fold a 512-bit value down mod L, one bit at a time (MSB first)
-pub Int(256) mlw_acc(Int(256) v, Int(512) w, Int j) {
-    if (j < 0) { return v; }
-    Int(512) sh = j;
-    Int(512) mw = ((w >> sh) & 1);
-    Int(512) v2 = (Int(512)) v;
-    Int(512) v4 = cond_sub_l512(wrapping_add(wrapping_add(v2, v2), mw));
-    Int(256) v5 = wrapping_i256(v4);
-    Int ni = j - 1;
-    return mlw_acc(v5, w, ni);
-}
-pub Int(256) mod_l_w(Int(512) w) {
-    return mlw_acc(0, w, 511);
-}
-// clamp: clear low 3 bits and bit 255, set bit 254
-pub Int(256) clamp_scalar(Int(256) s) {
-    Int(256) o = 1;
-    Int(256) e8 = 8;
-    Int(256) shp = 254;
-    Int(256) maskv = ((o << shp) - e8);
-    Int(256) a1 = s & maskv;
-    Int(256) setb = (o << shp);
-    return a1 | setb;
-}
-pub List(Int) encode_pt_bytes(Int(256) axi, List(Int) ayb) {
-    Int sign = i64(axi & 1);
-    Int lb = ayb[31] | (sign << 7);
-    List(Int) apre = slice_bytes(ayb, 0, 30);
-    return apre.concat([lb]);
-}
-pub Int(256) clamp_of_seed(List(Int) seed) {
-    List(Int) h = sha512_bytes(seed);
-    List(Int) hlo = slice_bytes(h, 0, 31);
-    return clamp_scalar(bytes_to_int(hlo));
-}
-pub List(Int) pub_key(List(Int) seed) {
-    return ept_encode(ept_base_mul(clamp_of_seed(seed)));
-}
-// `sign_msg_bytes` signs the message as raw bytes directly — see
-// `verify_sig_bytes`'s doc comment for why this needs to exist
-// alongside the `Str`-message `sign_msg` below.
-pub List(Int) sign_msg_bytes(List(Int) seed, List(Int) mb) {
-    List(Int) h = sha512_bytes(seed);
-    List(Int) hhi = slice_bytes(h, 32, 63);
-    Int(256) av2 = clamp_of_seed(seed);
-    // A = [a]B
-    List(Int) a_enc = ept_encode(ept_base_mul(av2));
-    // r = SHA-512(prefix || M) mod L
-    List(Int) rmac = concat_bytes(hhi, mb);
-    Int(256) rv = mod_l(sha512_bytes(rmac));
-    // R = [r]B
-    List(Int) r_enc = ept_encode(ept_base_mul(rv));
-    // k = SHA-512(R || A || M) mod L
-    List(Int) ra = concat_bytes(r_enc, a_enc);
-    List(Int) ram = concat_bytes(ra, mb);
-    Int(256) kv = mod_l(sha512_bytes(ram));
-    // S = (r + k*a) mod L
-    Int(512) kvx = (Int(512)) kv;
-    Int(512) avx = (Int(512)) av2;
-    Int(512) sum = wrapping_add(wrapping_mul(kvx, avx), (Int(512)) rv);
-    Int(256) sv = mod_l_w(sum);
-    return concat_bytes(r_enc, int_to_bytes(sv));
-}
-pub List(Int) sign_msg(List(Int) seed, Str msg) {
-    return sign_msg_bytes(seed, bytes_of(msg));
-}
+// ── keys and signing: the public copy of lib/ed25519g.resid ──
+// clamp: clear the low 3 bits and bit 255, set bit 254.
+pub Int(256) clamp_scalar(Int(256) s) { return wrapping_i256(eg_clamp(fe_w(s))); }
+// The public key of a 32-byte seed.
+pub List(Int) pub_key(List(Int) seed) { return ed25519g_pub(seed); }
+// The signature of raw message bytes.
+pub List(Int) sign_msg_bytes(List(Int) seed, List(Int) mb) { return ed25519g_sign(seed, mb); }
+// The signature of text.
+pub List(Int) sign_msg(List(Int) seed, Str msg) { return sign_msg_bytes(seed, bytes_of(msg)); }

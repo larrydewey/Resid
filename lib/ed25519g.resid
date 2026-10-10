@@ -1,0 +1,280 @@
+// ed25519g.resid — Ed25519 (RFC 8032) key generation and signing, written
+// once and generic over lib/word.resid's Wide512(P, B) (field elements and
+// scalars as 512-bit integers) and Word64(W, B) (SHA-512 of the seed,
+// lib/sha512g.resid): one implementation for public bytes (P = Int(512),
+// B = Int) and secret bytes (Secret(Int(512)) field elements and scalars,
+// Secret(UInt(8)) bytes). The secret copy is checked by the compiler
+// (spec §48): no branch, index, comparison or division depends on the
+// seed, the expanded key, the nonce r or the scalar arithmetic with a.
+// lib/ed25519.resid's API (including verification, which handles only
+// public data) is the public copy.
+//
+// Public by design: the message, the public key A and the signature
+// (R, S). They leave the generic code through Publish(B) (w_publish), a
+// copy at public bytes and a declassification at secret bytes, so every
+// caller of the secret copy needs @requires(declassify). A and R are
+// published as soon as they are computed; k = SHA-512(R || A || M) is then
+// a hash of public bytes.
+//
+// Field elements are kept below p = 2^255 - 19 in a signed 512-bit
+// integer: a product of two is below 2^510, so wrapping arithmetic never
+// wraps and the sign bit is free for p_sign masks. The scalar
+// multiplication is a double-and-always-add ladder over the 256 bits of
+// the scalar, choosing the sum or the double with a mask (the formulas
+// are complete, so adding the identity is fine): no table, no index and no
+// branch on a scalar bit. Wide secrets live in records and parameters,
+// never in a list (E0258).
+
+import "word.resid";
+import "sha512g.resid";
+import "crypto.resid";
+
+pub Int(512) eg_p() { return 57896044618658097711785492504343953926634992332820282019728792003956564819949; }
+pub Int(512) eg_d() { return 37095705934669439343138083508754565189542113879843219016388785533085940283555; }
+// L = the order of the base point.
+pub Int(512) eg_l() { return 7237005577332262213973186563042994240857116359379907606001950938285454250989; }
+pub Int(512) eg_bx() { return 15112221349535400772501151409588531511454012693041857206046113283949847762202; }
+pub Int(512) eg_by() { return 46316835694926478169428394003475163141307993866256225615783033603165251855960; }
+Int(512) eg_m256() { return ((Int(512)) 1 << (Int(512)) 256) - (Int(512)) 1; }
+Int(512) eg_ones() { return (Int(512)) 0 - (Int(512)) 1; }
+
+// ── field arithmetic mod p, branch-free ─────────────────────────────
+
+// u - m when u >= m, else u (0 <= u < 2^510), under the sign mask of the
+// difference.
+@needs(Wide512(P, B))
+P eg_csub(P u, P m) {
+    P d = p_sub(u, m);
+    P neg = p_sign(d);
+    P ones = p_lift(eg_ones());
+    return p_or(p_and(u, neg), p_and(d, p_xor(neg, ones)));
+}
+
+@needs(Wide512(P, B))
+pub P eg_fadd(P a, P b) {
+    P pp = p_lift(eg_p());
+    return eg_csub(p_add(a, b), pp);
+}
+
+@needs(Wide512(P, B))
+pub P eg_fsub(P a, P b) {
+    P pp = p_lift(eg_p());
+    return eg_csub(p_sub(p_add(a, pp), b), pp);
+}
+
+// a * b mod p: fold the high half in three times (2^256 = 38 mod p),
+// leaving less than 3p, then two masked subtractions.
+@needs(Wide512(P, B))
+pub P eg_fmul(P a, P b) {
+    P m = p_lift(eg_m256());
+    P k38 = p_lift((Int(512)) 38);
+    P pp = p_lift(eg_p());
+    P t = p_mul256(a, b);
+    P r = p_add(p_and(t, m), p_mul256(p_shr(t, 256), k38));
+    P r2 = p_add(p_and(r, m), p_mul256(p_shr(r, 256), k38));
+    P r3 = p_add(p_and(r2, m), p_mul256(p_shr(r2, 256), k38));
+    return eg_csub(eg_csub(r3, pp), pp);
+}
+
+// base^e by square-and-multiply from bit i down; e is public.
+@needs(Wide512(P, B))
+pub P eg_fpow(P res, P base, Int(512) e, Int i) {
+    if (i < 0) { return res; }
+    P rs = eg_fmul(res, res);
+    if (((e >> (Int(512)) i) & (Int(512)) 1) == (Int(512)) 1) {
+        return eg_fpow(eg_fmul(rs, base), base, e, i - 1);
+    }
+    return eg_fpow(rs, base, e, i - 1);
+}
+
+// a^(p - 2) = 1/a (0 for 0).
+@needs(Wide512(P, B))
+pub P eg_finv(P a) {
+    P one = p_lift((Int(512)) 1);
+    return eg_fpow(one, a, eg_p() - (Int(512)) 2, 254);
+}
+
+// ── points in extended coordinates (X, Y, Z, T with T = XY/Z), a = -1 ──
+// dbl-2008-hwcd and add-2008-hwcd-3; both are complete on this curve.
+type EgPt(P) = { P x; P y; P z; P t; };
+
+@needs(Wide512(P, B))
+pub EgPt(P) eg_pt(P x, P y) {
+    P one = p_lift((Int(512)) 1);
+    return EgPt {.x = x, .y = y, .z = one, .t = eg_fmul(x, y)};
+}
+
+@needs(Wide512(P, B))
+pub EgPt(P) eg_id() {
+    P z = p_lift((Int(512)) 0);
+    P o = p_lift((Int(512)) 1);
+    return EgPt {.x = z, .y = o, .z = o, .t = z};
+}
+
+@needs(Wide512(P, B))
+pub EgPt(P) eg_dbl(EgPt(P) p) {
+    P a = eg_fmul(p.x, p.x);
+    P b = eg_fmul(p.y, p.y);
+    P zsq = eg_fmul(p.z, p.z);
+    P c = eg_fadd(zsq, zsq);
+    P xy = eg_fadd(p.x, p.y);
+    P e = eg_fsub(eg_fsub(eg_fmul(xy, xy), a), b);
+    P g = eg_fsub(b, a);
+    P f = eg_fsub(g, c);
+    P zero = p_lift((Int(512)) 0);
+    P h = eg_fsub(eg_fsub(zero, a), b);
+    return EgPt {.x = eg_fmul(e, f), .y = eg_fmul(g, h), .z = eg_fmul(f, g), .t = eg_fmul(e, h)};
+}
+
+@needs(Wide512(P, B))
+pub EgPt(P) eg_add(EgPt(P) p, EgPt(P) q) {
+    P a = eg_fmul(eg_fsub(p.y, p.x), eg_fsub(q.y, q.x));
+    P b = eg_fmul(eg_fadd(p.y, p.x), eg_fadd(q.y, q.x));
+    P cd = p_lift(eg_d());
+    P c = eg_fmul(eg_fmul(eg_fadd(p.t, p.t), cd), q.t);
+    P dd = eg_fmul(eg_fadd(p.z, p.z), q.z);
+    P e = eg_fsub(b, a);
+    P f = eg_fsub(dd, c);
+    P g = eg_fadd(dd, c);
+    P h = eg_fadd(b, a);
+    return EgPt {.x = eg_fmul(e, f), .y = eg_fmul(g, h), .z = eg_fmul(f, g), .t = eg_fmul(e, h)};
+}
+
+// a when m is all ones, b when it is zero.
+@needs(Wide512(P, B))
+EgPt(P) eg_sel(P m, EgPt(P) a, EgPt(P) b) {
+    P ones = p_lift(eg_ones());
+    P nm = p_xor(m, ones);
+    return EgPt {.x = p_or(p_and(a.x, m), p_and(b.x, nm)), .y = p_or(p_and(a.y, m), p_and(b.y, nm)), .z = p_or(p_and(a.z, m), p_and(b.z, nm)), .t = p_or(p_and(a.t, m), p_and(b.t, nm))};
+}
+
+// [k]q added to r doubled once per bit, most significant bit first from
+// bit i (0 <= k < 2^256). Every bit costs a doubling and an addition; the
+// bit, moved to the sign position, picks between them as a mask.
+@needs(Wide512(P, B))
+pub EgPt(P) eg_ladder(P k, EgPt(P) q, EgPt(P) r, Int i) {
+    if (i < 0) { return r; }
+    EgPt(P) d = eg_dbl(r);
+    P m = p_sign(p_shl(k, 511 - i));
+    return eg_ladder(k, q, eg_sel(m, eg_add(d, q), d), i - 1);
+}
+
+@needs(Wide512(P, B))
+pub EgPt(P) eg_base() {
+    P bx = p_lift(eg_bx());
+    P by = p_lift(eg_by());
+    return eg_pt(bx, by);
+}
+
+// [k]B for 0 <= k < 2^256.
+@needs(Wide512(P, B))
+pub EgPt(P) eg_base_mul(P k) {
+    EgPt(P) b = eg_base();
+    EgPt(P) o = eg_id();
+    return eg_ladder(k, b, o, 255);
+}
+
+// ── encodings ───────────────────────────────────────────────────────
+
+// n little-endian bytes of b from off, as an integer.
+@needs(Wide512(P, B))
+pub P eg_le(List(B) b, Int off, Int n, Int i, P acc) {
+    if (i >= n) { return acc; }
+    return eg_le(b, off, n, i + 1, p_or(acc, p_shl(p_from_byte(b[off + i]), 8 * i)));
+}
+
+// The n low bytes of v, little-endian.
+@needs(Wide512(P, B))
+pub List(B) eg_le_bytes(P v, Int n, Int i, ListBuf(B) acc) {
+    if (i >= n) { return acc.finish(); }
+    return eg_le_bytes(v, n, i + 1, acc.push(p_byte(v, 8 * i)));
+}
+
+// The encoding of a point: y, with the low bit of x in bit 255.
+@needs(Wide512(P, B))
+pub List(B) eg_encode(EgPt(P) p) {
+    P zi = eg_finv(p.z);
+    P x = eg_fmul(p.x, zi);
+    P y = eg_fmul(p.y, zi);
+    P one = p_lift((Int(512)) 1);
+    P v = p_or(y, p_shl(p_and(x, one), 255));
+    ListBuf(B) acc = ListBuf();
+    return eg_le_bytes(v, 32, 0, acc);
+}
+
+// ── scalars mod L ───────────────────────────────────────────────────
+
+// v * 2^(i + 1) + (w's bits i..0), reduced mod L one bit at a time
+// (0 <= v < L, w >= 0).
+@needs(Wide512(P, B))
+pub P eg_fold_l(P v, P w, Int i) {
+    if (i < 0) { return v; }
+    P one = p_lift((Int(512)) 1);
+    P ll = p_lift(eg_l());
+    P bit = p_and(p_shr(w, i), one);
+    return eg_fold_l(eg_csub(p_add(p_add(v, v), bit), ll), w, i - 1);
+}
+
+// A 64-byte little-endian digest mod L.
+@needs(Wide512(P, B))
+pub P eg_digest_mod_l(List(B) dig) {
+    P z = p_lift((Int(512)) 0);
+    P hi = eg_le(dig, 32, 32, 0, z);
+    P lo = eg_le(dig, 0, 32, 0, z);
+    return eg_fold_l(eg_fold_l(z, hi, 255), lo, 255);
+}
+
+// The clamped scalar a from the low half of SHA-512(seed): bits 0-2 and
+// 255 cleared, bit 254 set.
+@needs(Wide512(P, B))
+pub P eg_clamp(P s) {
+    Int(512) b254 = (Int(512)) 1 << (Int(512)) 254;
+    P keep = p_lift(b254 - (Int(512)) 8);
+    P set = p_lift(b254);
+    return p_or(p_and(s, keep), set);
+}
+
+// Public bytes taking part in a computation on B.
+@needs(Wide512(P, B))
+List(B) eg_lift_bytes(List(Int) bs, Int i, ListBuf(B) acc) {
+    if (i >= bs.len()) { return acc.finish(); }
+    P v = p_lift((Int(512)) (bs[i] & 255));
+    return eg_lift_bytes(bs, i + 1, acc.push(p_byte(v, 0)));
+}
+
+// ── keys and signatures (RFC 8032 §5.1.5, §5.1.6) ───────────────────
+
+// The secret scalar a of a 32-byte seed.
+@needs(Wide512(P, B))
+P eg_scalar(List(B) h) {
+    P z = p_lift((Int(512)) 0);
+    return eg_clamp(eg_le(h, 0, 32, 0, z));
+}
+
+// The 32-byte public key A = [a]B of a 32-byte seed (published).
+@needs(Wide512(P, B), Word64(W, B), Publish(B))
+pub List(Int) ed25519g_pub(List(B) seed) {
+    List(B) h = sha512g(seed);
+    return w_publish(eg_encode(eg_base_mul(eg_scalar(h))));
+}
+
+// The 64-byte signature R || S of msg under a 32-byte seed. Deterministic:
+// r = SHA-512(prefix || M) mod L, R = [r]B, k = SHA-512(R || A || M) mod L,
+// S = (r + k a) mod L. A and R are published as soon as they are known;
+// S last.
+@needs(Wide512(P, B), Word64(W, B), Publish(B))
+pub List(Int) ed25519g_sign(List(B) seed, List(Int) msg) {
+    List(B) h = sha512g(seed);
+    P a = eg_scalar(h);
+    List(Int) pk = w_publish(eg_encode(eg_base_mul(a)));
+    List(B) mlift = d_lift_bytes(msg);
+    P r = eg_digest_mod_l(sha512g(h[32..64].concat(mlift)));
+    List(Int) rb = w_publish(eg_encode(eg_base_mul(r)));
+    ListBuf(B) kb = ListBuf();
+    P k = eg_digest_mod_l(eg_lift_bytes(sha512_bytes(rb.concat(pk).concat(msg)), 0, kb));
+    // k a + r < 2^253 * 2^255 + 2^253 < 2^509.
+    P z = p_lift((Int(512)) 0);
+    P s = eg_fold_l(z, p_add(p_mul(k, a), r), 508);
+    ListBuf(B) sb = ListBuf();
+    return rb.concat(w_publish(eg_le_bytes(s, 32, 0, sb)));
+}

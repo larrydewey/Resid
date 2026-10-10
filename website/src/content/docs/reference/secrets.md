@@ -182,6 +182,25 @@ List(Int) sig = ecdsag_sign(P256, Sha256, d, msg);           // published: needs
 List(Secret(UInt(8))) z = ecdhg(P384, d384, peer_public_key); // stays secret
 ```
 
+`lib/ed25519g.resid` is Ed25519 key generation and signing (RFC 8032),
+generic over `Wide512(P, B)` (field elements and scalars) and
+`Word64(W, B)` (SHA-512 of the seed); `lib/ed25519.resid`'s API,
+including verification, is the public copy. The seed, the expanded key,
+the nonce `r` and the scalar arithmetic with `a` are secret at secret
+types; the scalar multiplication is a double-and-always-add ladder that
+picks the sum or the double with a mask, with no table, index or branch
+on a scalar bit. The public key and the signature are public by design:
+they leave through `Publish(B)` in `lib/word.resid`, a copy at public
+bytes and a declassification at secret bytes, so signing with a secret
+seed needs `@requires(declassify)`. The compiler signs its provenance
+record this way, with its seed held as a secret.
+
+```text
+List(Secret(UInt(8))) seed = secret_bytes(read_seed());
+List(Int) pk = ed25519g_pub(seed);            // needs @requires(declassify)
+List(Int) sig = ed25519g_sign(seed, msg);     // msg is public
+```
+
 ```text
 List(Secret(UInt(8))) key = secret_bytes(read_key());
 List(Secret(UInt(8))) prk = hkdf256g_extract(salt_lifted, key);
@@ -231,5 +250,5 @@ not covered. `main` runs on its own thread stack, which is.
 ## Not yet enforced
 
 `PLAN-secret-type.md` lists the rest of the plan: moving the rest of the
-cryptography library (Ed25519, HPKE, the TLS key schedule) onto the
-word behaviors.
+cryptography library (HPKE, the TLS key schedule) onto the word
+behaviors.

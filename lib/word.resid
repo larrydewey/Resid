@@ -150,6 +150,7 @@ behavior Wide512(P, B) {
     P p_add(P a, P b);
     P p_sub(P a, P b);
     P p_mul(P a, P b);
+    P p_mul256(P a, P b);        // a * b for 0 <= a, b < 2^256 (the low 256 bits multiplied)
     P p_and(P a, P b);
     P p_or(P a, P b);
     P p_xor(P a, P b);
@@ -164,6 +165,8 @@ behavior Wide512(P, B) {
 Int(512) pi_add(Int(512) a, Int(512) b) { return wrapping_add(a, b); }
 Int(512) pi_sub(Int(512) a, Int(512) b) { return wrapping_sub(a, b); }
 Int(512) pi_mul(Int(512) a, Int(512) b) { return wrapping_mul(a, b); }
+// The operands widened from 256 bits, so the multiply is 256 x 256.
+Int(512) pi_mul256(Int(512) a, Int(512) b) { return wrapping_mul(wrapping_i512(wrapping_u256(a)), wrapping_i512(wrapping_u256(b))); }
 Int(512) pi_and(Int(512) a, Int(512) b) { return a & b; }
 Int(512) pi_or(Int(512) a, Int(512) b) { return a | b; }
 Int(512) pi_xor(Int(512) a, Int(512) b) { return a ^ b; }
@@ -176,11 +179,12 @@ Int(512) pi_lift(Int(512) k) { return k; }
 Int(512) pi_from_byte(Int b) { return (Int(512)) (b & 255); }
 Int pi_byte(Int(512) x, Int sh) { return wrapping_i64((x >> (Int(512)) sh) & (Int(512)) 255); }
 
-Wide512(Int(512), Int) = { .p_add = pi_add, .p_sub = pi_sub, .p_mul = pi_mul, .p_and = pi_and, .p_or = pi_or, .p_xor = pi_xor, .p_shl = pi_shl, .p_shr = pi_shr, .p_sign = pi_sign, .p_lift = pi_lift, .p_from_byte = pi_from_byte, .p_byte = pi_byte };
+Wide512(Int(512), Int) = { .p_add = pi_add, .p_sub = pi_sub, .p_mul = pi_mul, .p_mul256 = pi_mul256, .p_and = pi_and, .p_or = pi_or, .p_xor = pi_xor, .p_shl = pi_shl, .p_shr = pi_shr, .p_sign = pi_sign, .p_lift = pi_lift, .p_from_byte = pi_from_byte, .p_byte = pi_byte };
 
 Secret(Int(512)) ps_add(Secret(Int(512)) a, Secret(Int(512)) b) { return wrapping_add(a, b); }
 Secret(Int(512)) ps_sub(Secret(Int(512)) a, Secret(Int(512)) b) { return wrapping_sub(a, b); }
 Secret(Int(512)) ps_mul(Secret(Int(512)) a, Secret(Int(512)) b) { return wrapping_mul(a, b); }
+Secret(Int(512)) ps_mul256(Secret(Int(512)) a, Secret(Int(512)) b) { return wrapping_mul(wrapping_i512(wrapping_u256(a)), wrapping_i512(wrapping_u256(b))); }
 Secret(Int(512)) ps_and(Secret(Int(512)) a, Secret(Int(512)) b) { return a & b; }
 Secret(Int(512)) ps_or(Secret(Int(512)) a, Secret(Int(512)) b) { return a | b; }
 Secret(Int(512)) ps_xor(Secret(Int(512)) a, Secret(Int(512)) b) { return a ^ b; }
@@ -191,7 +195,33 @@ Secret(Int(512)) ps_lift(Int(512) k) { return classify(k); }
 Secret(Int(512)) ps_from_byte(Secret(UInt(8)) b) { return wrapping_i512(b); }
 Secret(UInt(8)) ps_byte(Secret(Int(512)) x, Int sh) { return wrapping_u8(x >> (Int(512)) sh); }
 
-Wide512(Secret(Int(512)), Secret(UInt(8))) = { .p_add = ps_add, .p_sub = ps_sub, .p_mul = ps_mul, .p_and = ps_and, .p_or = ps_or, .p_xor = ps_xor, .p_shl = ps_shl, .p_shr = ps_shr, .p_sign = ps_sign, .p_lift = ps_lift, .p_from_byte = ps_from_byte, .p_byte = ps_byte };
+Wide512(Secret(Int(512)), Secret(UInt(8))) = { .p_add = ps_add, .p_sub = ps_sub, .p_mul = ps_mul, .p_mul256 = ps_mul256, .p_and = ps_and, .p_or = ps_or, .p_xor = ps_xor, .p_shl = ps_shl, .p_shr = ps_shr, .p_sign = ps_sign, .p_lift = ps_lift, .p_from_byte = ps_from_byte, .p_byte = ps_byte };
+
+// ─── Publishing (signatures, public keys) ───────────────────────
+// Publish(B): turn a byte string computed in B into public bytes, for an
+// output that is public by design (a signature, a public key). At public
+// bytes it is a copy; at secret bytes it is a declassification, so the
+// secret instance carries @requires(declassify) to every caller of the
+// secret copy of the generic code that uses it, and to no caller of the
+// public copy.
+
+behavior Publish(B) { List(Int) w_publish(List(B) xs); }
+
+List(Int) wi_publish(List(Int) xs) { return xs; }
+
+@requires(declassify)
+List(Int) ws_publish(List(Secret(UInt(8))) xs) {
+    List(UInt(8)) out = declassify(secret_join(xs), "public by design: a signature or public key");
+    return ws_widen(out, 0, ListBuf());
+}
+
+List(Int) ws_widen(List(UInt(8)) b, Int i, ListBuf(Int) acc) {
+    if (i >= b.len()) { return acc.finish(); }
+    return ws_widen(b, i + 1, acc.push((Int) b[i]));
+}
+
+Publish(Int) = wi_publish;
+Publish(Secret(UInt(8))) = ws_publish;
 
 // ─── 128-bit blocks (AES, GHASH) ────────────────────────────────
 // Block128(X, W, B): 128-bit blocks X, the 32-bit words W (Word(W, B)) and

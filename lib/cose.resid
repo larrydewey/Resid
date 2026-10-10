@@ -5,6 +5,8 @@
 
 import "crypto.resid";
 import "ed25519.resid";
+import "word.resid";
+import "ed25519g.resid";
 import "chacha.resid";
 
 // ─── CBOR write side ────────────────────────────────────────────────
@@ -119,9 +121,14 @@ pub List(Int) cose_sign1_protected(Str kid) {
     List(Int) a2 = cbe_int(-8, cbe_uint(1, a1));
     return cbe_bytes(bytes_of(kid), cbe_uint(4, a2));
 }
-pub List(Int) cose_sign1(List(Int) payload, Str kid, List(Int) seed) {
+// COSE_Sign1 of payload under a 32-byte Ed25519 seed, generic over the
+// seed's byte type (lib/ed25519g.resid): List(Int) for a public seed, or
+// List(Secret(UInt(8))) for a secret one, which publishes the signature
+// and so needs @requires(declassify).
+@needs(Wide512(P, B), Word64(W, B), Publish(B))
+pub List(Int) cose_sign1(List(Int) payload, Str kid, List(B) seed) {
     List(Int) prot = cose_sign1_protected(kid);
-    List(Int) sig = sign_msg_bytes(seed, cose_sig_structure(prot, payload));
+    List(Int) sig = ed25519g_sign(seed, cose_sig_structure(prot, payload));
     List(Int) o1 = cbe_array(4, cbe_tag(18, []));
     List(Int) o2 = cbe_map(0, cbe_bytes(prot, o1));
     return cbe_bytes(sig, cbe_bytes(payload, o2));

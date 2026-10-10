@@ -53,7 +53,7 @@ done
 for c in ct-select ct-eq sha256-secret hmac-secret sha512-secret hmac512-secret chacha-secret chacha-open-secret poly1305-secret \
          aes-gcm-secret-hw aes-gcm-secret-sw aes-gcm-secret-iv60-hw aes-gcm-secret-iv60-sw aes-gcm-open-secret-hw aes-gcm-open-secret-sw \
          aes-kw-secret-hw aes-kw-secret-sw aes-unwrap-secret x25519-secret \
-         p256-secret-sign p384-secret-ecdh p384-secret-public; do
+         p256-secret-sign p384-secret-ecdh p384-secret-public ed25519-secret-sign ed25519-secret-pub; do
     want="$("$W/secretprobe" "$c" 2>&1)"
     got="$(valgrind -q --error-limit=no --expensive-definedness-checks=yes --log-file="$W/vg.s.$c" "$W/secretprobe" "$c" 2>&1)"
     n="$(grep -c -E 'depends on uninitialised|Use of uninitialised' "$W/vg.s.$c")"

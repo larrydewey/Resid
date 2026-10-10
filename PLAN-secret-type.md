@@ -45,7 +45,13 @@ generic HMACs) are written once; `lib/ecdsa.resid`'s `ecdsag_*`,
 is the public copy; verification is public only. Signatures, public keys
 and key-validity verdicts are published through the behavior's open
 verb (`declassify` at secret types); an ECDH result stays secret. A
-lossless cast of a secret integer stays secret (`sec_cast`). Next are Ed25519, HPKE and the TLS key schedule. Still to do: a
+lossless cast of a secret integer stays secret (`sec_cast`). Ed25519 is in (2026-10-09):
+`lib/ed25519g.resid` (key generation and signing, generic over
+`Wide512(P, B)` and `Word64(W, B)`, a masked double-and-always-add ladder)
+with `lib/ed25519.resid` as its public copy; the public key and signature
+leave through `Publish(B)` (`lib/word.resid`), a declassification at secret
+bytes, and the compiler's provenance signing holds its seed as a secret
+under the `declassify` grant. Next are HPKE and the TLS key schedule. Still to do: a
 force-time `resid_cap_check("declassify")` (declassify lowers to nothing,
 so the static check is the whole check today), and steps 2–3 of §7.
 
