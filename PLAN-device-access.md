@@ -4,7 +4,8 @@
 PLAN-secret-type.md for descriptors that return key material.
 
 **Progress.** Phases 1 to 3 are in: the compile-time half, then the
-isolated host and all five operations (2026-10-10, below). Phase 1, the
+isolated host and all five operations (2026-10-10, below); and phase 5's
+non-ioctl descriptors (tsm_report, tpm, pci_tsm; below). Phase 1, the
 compile-time half, came first (2026-10-09; spec §49,
 `SECURITY.md` "Device access"): the `device` family with `readonly` and
 full modes (E0219, spawn lists, sandboxes, manifest grants, the force-time
@@ -309,6 +310,134 @@ Tests: `tests/runtime/device_host.c` (`device_host_by_hand_other_exe`,
 `tests/device` (`e0263_transact_read`, `e0263_length_narrow`,
 `e0263_length_shared`, `device_hook_exact`), conformance
 `err_reserved_runtime_name`.
+
+**Phase 5, the non-ioctl descriptors (2026-10-10).** Library code only:
+no compiler or runtime change. Checked against Linux 7.3-rc6 (torvalds
+3857c2fe5449), pinned with every fact used in
+`tests/device/kernel-pin.txt`.
+
+- **`lib/dev/tsm_report.resid`**: one ConfigfsReport, `tsm_report.report`
+  (`/sys/kernel/config/tsm/report`, providers `sev_guest`, `tdx_guest`,
+  `arm_cca_guest` -- the drivers' KBUILD_MODNAME, so `arm_cca_guest`, not
+  `arm-cca-guest`; inblob 64, outblob 128 KiB (TDX's GET_QUOTE_BUF_SIZE),
+  auxblob 16 KiB (SEV_FW_BLOB_MAX_SIZE), manifestblob 64 KiB, `write =
+  false`: a report is a read, §1). One descriptor rather than one per
+  platform: the provider check already fails closed, and the provider
+  says which format outblob is. `tsm_report_get(report_data, opts)` ->
+  `TsmReport {provider, platform, outblob, auxblob, manifestblob,
+  generation}`; `tsm_opts`, `tsm_opts_vmpl(n)`, `tsm_opts_svsm()`;
+  `tsm_platform`, `tsm_platform_text`, `tsm_outblob_text`;
+  `tsm_report_decode` (the engine's outputs, checked again);
+  `tsm_report_honoured` refuses a report from a provider other than
+  `sev_guest` asked for a VMPL or an SVSM (CCA has no visibility hooks,
+  so it shows privlevel and service_provider and ignores them); and
+  `tsm_snp_certs`, a total parser of the SNP certificate table in
+  auxblob, with the GHCB GUIDs of the ARK, ASK, VCEK and VLEK. Not
+  reachable: `service_guid` and `service_manifest_version` (the engine's
+  `ReportReq` has no field for them; an engine change, not made), so an
+  SVSM report always covers every service in its first manifest version.
+- **`lib/dev/tpm.resid`** (Transact `tpm.tpmrm0` on `/dev/tpmrm0`, 4096
+  bytes each way = TPM_BUFSIZE, `write = true`) and
+  **`lib/dev/tpm_wire.resid`** (pure encoders and total decoders: TPM2_
+  GetCapability, GetRandom, PCR_Read, ReadPublic, NV_ReadPublic, NV_Read,
+  Quote with an existing key and a password session; TPMS_ATTEST of a
+  quote; the known NV indices and handles with sources: TCG EK
+  certificates, GCE AK certificates and templates (go-tpm-tools), Azure's
+  HCL report 0x01400001, AK certificate 0x01C101D0 and AK 0x81000003
+  (Azure/confidential-computing-cvm-guest-attestation); no AWS NitroTPM
+  index is documented, so none is named). CreatePrimary/Create/Load are
+  out. **Authority**: every TPM wrapper needs the full `device` grant.
+  A read-only TPM descriptor is not possible here, and should not be
+  added: E0263 refuses a Transact marked `write = false`, rightly -- the
+  kernel passes any command through the one `write(2)`, so only a host
+  that parsed TPM commands could keep a "read" descriptor to reads, and
+  that is per-device code the generic host does not have (§0). Instead
+  the descriptor is private to `tpm.resid` (not `pub`), so the TPM's
+  reachable surface is the typed wrappers, none of which sends a command
+  meant to change TPM state; `devices = ["tpm"]` bounds a dependency to
+  them. Not tested live: no TPM this user can open in the test setup.
+- **`lib/dev/pci_tsm.resid`**: the mainline PCI TSM sysfs ABI is
+  `/sys/class/tsm/tsmN`, and per device `tsm/connect` (RW), `tsm/
+  disconnect` (WO), `tsm/dsm`, `tsm/bound`, `authenticated` (RO), plus the
+  host bridge's `available_secure_streams` and `streamH.R.E`
+  (sysfs-bus-pci, sysfs-class-tsm, sysfs-devices-pci-host-bridge; there
+  is no `sysfs-bus-pci-devices-tsm`). No measurement, certificate or
+  TDI-report attribute exists yet. The one fixed path is a ReadAttr,
+  `pci_tsm.tsm0` (`/sys/class/tsm/tsm0/uevent`, AbiTesting), behind
+  `pci_tsm_present()`; `pci_tsm_name` parses the "tsmN\n" / "\n" text of
+  connect and bound for when they are reachable.
+- **Path parameterization (pci_tsm), a proposal, not built.** The
+  per-device attributes sit under a PCI address, which is run-time data;
+  a descriptor's path is known at compile time (E0262) and the engine has
+  no run-time path component, so they are unreachable today. A fixed set
+  of addresses cannot work (they differ per machine). The narrowest safe
+  change is a new kind, not a looser ReadAttr:
+  `@descriptor(pci_attr) type PciAttr = { Str name; Str rel; Int max;
+  Stability stability; }` with the verb
+  `device.read_pci_attr(PciAttr, PciAddr)`, where `rel` is a fixed path
+  under the device's directory (`tsm/connect`), known and checked at
+  compile time (E0263: relative, `[a-z0-9_]` components, no `..`, at most
+  two components), and the address is a typed record,
+  `PciAddr = { Int domain; Int bus; Int device; Int function; }` (domain
+  0..0xffffffff -- the ABI allows more than 16 bits for emulated host
+  bridges --, bus 0..255, device 0..31, function 0..7), never a string, so
+  no path text comes from the program. The engine and the host each
+  check the ranges and format it (`%04x:%02x:%02x.%x`); the host reads the
+  link `/sys/bus/pci/devices/<addr>` with `readlinkat` before its filter,
+  requires the target to be `../../../devices/pci<dom>:<bus>/` followed by
+  address components only (`[0-9a-f:.]`, no `..`), and opens
+  `/sys/devices/...` + `rel` with `RESOLVE_NO_SYMLINKS|
+  RESOLVE_NO_MAGICLINKS` -- the existing checks (a regular sysfs file, at
+  most `max`) then apply unchanged. It is a read (device(readonly)); the
+  provenance record lists the descriptor and `rel` (the address is data,
+  like an ioctl input); manifest bounds work by name as today. Writes
+  (`tsm/connect`, `tsm/disconnect`) would be a separate, writing kind, and
+  are a host-administration act an attester does not need.
+- **nvidia_rm, not built (design note for a later phase).** Hopper's
+  attestation is RM control calls on `/dev/nvidiactl` (and the GPU's
+  `/dev/nvidiaN`), a Sequence per §6.1, generated by `tools/resid-devgen`
+  from `open-gpu-kernel-modules` pinned to a release tag (recorded with
+  the generator's input list). What the input list needs (file paths as
+  remembered from recent releases, to confirm at the pin): the escape
+  numbers and ioctl type ('F', 0x46) from
+  `kernel-open/common/inc/nv-ioctl-numbers.h` (NV_ESC_RM_ALLOC,
+  NV_ESC_RM_CONTROL, NV_ESC_RM_FREE, NV_ESC_REGISTER_FD); the argument
+  structs from `src/common/sdk/nvidia/inc/nvos.h` (NVOS21_PARAMETERS or
+  NVOS64_PARAMETERS for alloc -- the driver picks by the ioctl's size --,
+  NVOS54_PARAMETERS for control, NVOS00_PARAMETERS for free), each with a
+  pointer to a parameters buffer and its size (Buffer fields, length
+  fields per E0263); the classes NV01_ROOT_CLIENT, NV01_DEVICE_0,
+  NV20_SUBDEVICE_0 and NV_CONFIDENTIAL_COMPUTE (class `cb33`, from
+  `src/common/sdk/nvidia/inc/class/`), with their alloc parameter structs;
+  and the confidential-compute control commands that return the GPU's
+  certificate chain and its SPDM-signed attestation report for a 32-byte
+  nonce (`ctrl/ctrlcb33.h`; command numbers and struct sizes taken from
+  the header at the pin, not from memory). The Sequence: alloc the root
+  client (its handle an output), the device and subdevice under it, the
+  CC object, then the control call; Links carry each new handle into the
+  later steps' parent fields; the fd's close frees the objects. The
+  wrapper first reads `/sys/module/nvidia/version` (a ReadAttr), maps it
+  to a layout fingerprint, and answers `UnknownDriver` when no generated
+  descriptor covers it. The evidence (SPDM measurements, the
+  certificate chain) is DMTF-defined and signed by the GPU, so its
+  parser does not depend on the driver. Two engine questions to settle
+  then: whether the RM needs the per-GPU fd registered on the control fd
+  (NV_ESC_REGISTER_FD), which is two files and so outside a one-path
+  Sequence; and the alloc ioctl's size-dependent struct, which needs one
+  request number per layout.
+
+Tests: conformance `device_tsm_report` (input checks, decoding, the
+provider map, VMPL/SVSM honoured only by SNP, the certificate table with
+every prefix and corruption), `device_tpm_wire` (commands against
+tpm2-tss's GetCapability vector and go-tpm v0.9.8's encodings --
+`tests/device/tpm-vectors/` regenerates them --, responses go-tpm decodes
+to the same values, a TPM error, wrong session tag, absurd counts, and
+every response truncated (as read and size-patched) and with every byte
+set to 0xff and 0x00), `device_tpm_ok` and `device_pci_tsm` (reached on
+any host), `err_device_tpm_readonly` (E0219), `err_device_tpm_raw` (the
+private descriptor). The configfs flow itself stays on the fake configfs
+of `tests/runtime/device_host.c`; the wrapper's part past the engine is
+`tsm_report_decode`, tested directly.
 
 **Goal**: let a Resid program talk to kernel devices (ioctls on character
 devices, request/response devices such as `/dev/tpmrm0`, and configfs

@@ -46,6 +46,105 @@ marked secret ([secret values](/Resid/reference/secrets/)); never as
 |---|---|---|
 | `dev/sev_guest.resid` | `sev_guest.snp_get_report` (SNP attestation report) | `device(readonly)` |
 | `dev/sev_guest_key.resid` | `sev_guest.snp_get_derived_key` (a sealing key, secret) | `device`, `declassify` (only the response's status word is published) |
+| `dev/tsm_report.resid` | `tsm_report.report` (the configfs report: SNP, TDX, Arm CCA) | `device(readonly)` |
+| `dev/tpm.resid` | `tpm.tpmrm0` (TPM 2.0 commands on `/dev/tpmrm0`; private to the module) | `device` (a Transact writes) |
+| `dev/tpm_wire.resid` | none: TPM 2.0 command encoders and response decoders, pure | none |
+| `dev/pci_tsm.resid` | `pci_tsm.tsm0` (whether the kernel has a platform TSM) | `device(readonly)` |
+
+The non-ioctl modules were checked against Linux 7.3-rc6 (commit
+`3857c2fe5449`; what was checked is pinned in
+`tests/device/kernel-pin.txt`).
+
+### What is signed
+
+A device's answer is evidence only where hardware signed it; everything
+else is what the kernel or the device says, to be trusted through a
+signature over it.
+
+| Wrapper | Signed by hardware | Unsigned |
+|---|---|---|
+| `snp_get_report` | the report (AMD secure processor: VCEK or VLEK) | -- |
+| `tsm_report_get` on `sev_guest` | `outblob`, the SNP report; under an SVSM the SVSM's report, which binds the nonce and `manifestblob` | `auxblob` (the host's certificate table: each certificate verifies through its own chain; `tsm_snp_certs` parses it), `manifestblob` on its own, `provider`, `generation` |
+| `tsm_report_get` on `tdx_guest` | `outblob`, a TDX quote (the quoting enclave's key, certified through the PCK chain) | `provider`, `generation` |
+| `tsm_report_get` on `arm_cca_guest` | `outblob`, the CCA token (realm token by the RAK, platform token by the CPAK) | `provider`, `generation` |
+| `tpm_quote` | `attest` (by the attestation key; verify the AK through its certificate or the EK) | PCR values the quote does not cover |
+| `tpm_pcr_read`, `tpm_nv_read`, `tpm_nv_read_all`, `tpm_read_public`, `tpm_nv_read_public`, `tpm_get_capability`, `tpm_get_random` | -- | all (an EK or AK certificate read from NV is signed by its issuer, not by the read) |
+| `tpm_azure_hcl_report` | the SNP or TDX report inside it, whose report data hashes the runtime claims after it | the 32-byte header and the claims themselves; written at boot, so no nonce: freshness comes from a quote by the AK it binds |
+| `pci_tsm_present` | -- | all |
+
+### `tsm_report`
+
+```resid
+// check-only
+import "dev/tsm_report.resid";
+
+List(UInt(8)) zeros(Int n, ListBuf(UInt(8)) acc) {
+    if (n <= 0) { return acc.finish(); }
+    return zeros(n - 1, acc.push((UInt(8))0));
+}
+
+@requires(device(readonly))
+Int main() {
+    Str s = match (tsm_report_get(zeros(64, ListBuf()), tsm_opts())) {
+        Ok(r) => tsm_platform_text(r.platform) + f": {r.outblob.len()}-byte " + tsm_outblob_text(r.platform),
+        Err(e) => device_error_text(e),
+    };
+    println(s);
+    return 0;
+}
+```
+
+One descriptor serves every provider the kernel has: `sev_guest`,
+`tdx_guest` and `arm_cca_guest` (the drivers' module names); any other
+provider is `UnknownDriver`. `report_data` is 64 bytes. A report is a
+read: writing `inblob` asks for a report and changes nothing, so
+`device(readonly)` covers it. `tsm_opts_vmpl(n)` asks SNP for VMPL `n`,
+`tsm_opts_svsm()` for the SVSM's report; a report from another provider
+asked for either is `Unsupported` (TDX has neither attribute; CCA shows
+both and ignores them). The kernel's `service_guid` and
+`service_manifest_version` attributes are not reachable: the engine's
+`ReportReq` has no field for them, so an SVSM report covers all services,
+each in its first manifest version.
+
+### `tpm`
+
+The wrappers build one TPM 2.0 command each, send it to `/dev/tpmrm0`
+(the kernel's resource manager: transient objects and sessions are the
+call's own) and decode the response: `tpm_get_capability`,
+`tpm_properties`, `tpm_handles`, `tpm_get_random`, `tpm_pcr_read`,
+`tpm_read_public`, `tpm_nv_read_public`, `tpm_nv_read`, `tpm_nv_read_all`,
+`tpm_quote` (with an existing attestation key) and `tpm_azure_hcl_report`.
+Errors are `TpmError`: `TpmDev(DeviceError)`, `TpmRc(code)`, `TpmBad(why)`
+for a response that does not parse, `TpmArg(why)` for an argument a
+command cannot carry.
+
+All need the full `device` grant. A Transact writes its command, and the
+kernel sees only bytes: a "read-only" TPM descriptor would still pass
+`TPM2_Clear` or `TPM2_NV_Write` unless the generic device host parsed TPM
+commands, which it does not. Instead the descriptor is private to
+`tpm.resid`, so a program reaches the TPM only through the wrappers, none
+of which sends a command meant to change TPM state. Bound a dependency to
+them with `devices = ["tpm"]`.
+
+`dev/tpm_wire.resid` holds the encoders (`tpm2_*_cmd`) and decoders
+(`tpm2_*_resp`, `tpm_attest_quote`) on their own: pure, no grant. Every
+decoder checks each length before it reads and gives `Err(TpmBad)` for
+anything short, long or inconsistent. It also names the NV indices and
+handles where attestation material lives, each with its source: the TCG
+EK certificates (`0x01C00002`, `0x01C0000A`), Google's AK certificates and
+templates (`0x01C10000`-`0x01C10003`), and Azure's HCL report
+(`0x01400001`), AK certificate (`0x01C101D0`) and AK (`0x81000003`).
+
+### `pci_tsm`
+
+`pci_tsm_present()` says whether the kernel has a platform TSM
+(`/sys/class/tsm/tsm0`). The per-device attributes (`tsm/connect`,
+`tsm/bound`, `tsm/dsm`, `authenticated`) live under a PCI address, which
+is run-time data, while a descriptor's path is known at compile time, so
+they are not reachable yet (`PLAN-device-access.md` has the proposal);
+`pci_tsm_name` parses their text. The kernel exposes no TDISP evidence
+(measurements, certificates, interface reports) in sysfs yet. All of it is
+`abi-testing`.
 
 ## Modes
 
