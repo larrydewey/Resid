@@ -1,0 +1,40 @@
+# The kernel matrix for generated device descriptors (tools/devgen-matrix.sh,
+# PLAN-device-access.md §6.2): lib/dev/uapi_*.resid against the uapi headers
+# of every kernel pinned in tools/devgen/kernels.toml, for x86-64 and
+# AArch64. Drift fails the job. It needs only python3, clang and git (no
+# Resid build); the offline half (`resid-devgen --check`) also runs in
+# tests/devgen with every test run.
+name: devgen-matrix
+
+on:
+  push:
+    tags: ["v*"]
+    paths:
+      - "tools/resid-devgen"
+      - "tools/devgen/**"
+      - "lib/dev/uapi_*.resid"
+  pull_request:
+    paths:
+      - "tools/resid-devgen"
+      - "tools/devgen/**"
+      - "lib/dev/uapi_*.resid"
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  matrix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang python3
+          clang --version
+          python3 --version
+      - name: Kernel matrix
+        run: tools/devgen-matrix.sh

@@ -128,6 +128,18 @@ if [ "$#" -eq 0 ] || [[ " $* " == *" device_hook_exact "* ]]; then
         echo "FAIL device_hook_exact: exit $rc, device program hooks $nd, plain program $np ($(grep -m1 -i error "$P/c.log"))"; fail=$((fail + 1))
     fi
 fi
+# The generated descriptors (lib/dev/uapi_*.resid) are what the committed
+# uapi header snapshot generates (tools/resid-devgen --check; tests/devgen
+# has the rest of the generator's cases).
+if [ "$#" -eq 0 ] || [[ " $* " == *" devgen_check "* ]]; then
+    if ! command -v python3 >/dev/null || ! command -v clang >/dev/null; then
+        echo "SKIP devgen_check (no python3 or clang)"; skip=$((skip + 1))
+    elif "$ROOT/tools/resid-devgen" --check > "$WORK/devgen.log" 2>&1; then
+        echo "PASS devgen_check"; pass=$((pass + 1))
+    else
+        echo "FAIL devgen_check: $(grep -m2 -E 'FAIL|snapshot|resid-devgen' "$WORK/devgen.log" | tr '\n' ' ')"; fail=$((fail + 1))
+    fi
+fi
 echo "---"
 echo "$pass passed, $fail failed$([ "$skip" -gt 0 ] && echo ", $skip skipped")"
 [ "$fail" -eq 0 ]
