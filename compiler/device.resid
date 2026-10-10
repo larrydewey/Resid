@@ -581,6 +581,10 @@ Str dv_requests_err(DvD d, Int i) {
     Bool fromk = dv_needs_read(d, 0);
     if (tok && (dir & 1) == 0) { return f"E0263: {which} has no _IOC_WRITE bit, but the struct carries data to the kernel"; }
     if (fromk && (dir & 2) == 0) { return f"E0263: {which} has no _IOC_READ bit, but fields come back from the kernel"; }
+    // `write` is a reviewed label, not something the layout proves; but an
+    // ioctl that only sends (_IOC_WRITE, nothing Out) and is labelled a
+    // read would run under device(readonly) while doing nothing but write.
+    if (d.write == "false" && (dir & 1) != 0 && !dv_has_out(d, 0)) { return f"E0263: {which} only sends data to the kernel (_IOC_WRITE, no Out or InOut field), but the descriptor says `write = false`; a write-only ioctl is a write"; }
     return dv_requests_err(d, i + 1);
 }
 
@@ -588,6 +592,12 @@ Bool dv_needs_write(DvD d, Int i) {
     if (d.vw > 0) { return true; }
     if (i >= d.fk.len()) { return false; }
     return d.fk[i] == 2 || (d.fd[i] & 1) != 0 || dv_needs_write(d, i + 1);
+}
+
+// Whether any field (a Buffer's contents included) comes back.
+Bool dv_has_out(DvD d, Int i) {
+    if (i >= d.fk.len()) { return false; }
+    return (d.fd[i] & 2) != 0 || dv_has_out(d, i + 1);
 }
 
 Bool dv_needs_read(DvD d, Int i) {

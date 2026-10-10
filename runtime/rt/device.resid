@@ -7,7 +7,9 @@
 //
 // Phase 1 has no device host yet: every request is answered with
 // Unsupported (error code 6), which the engine turns into
-// Err(Unsupported(name)). Phase 2 replaces this with the isolated host of
+// Err(Unsupported(name)) -- except that the read entry refuses a request
+// whose write byte is not 0 (Denied), so a write never travels under a
+// read-only grant whatever the engine sent. Phase 2 replaces this with the isolated host of
 // PLAN-device-access.md §5 (the native-module host, re-executed, with a
 // seccomp filter that allows the one descriptor's operation); it must
 // re-check the request's layout itself before acting on it.
@@ -28,8 +30,22 @@ Int dev_zero_slots(Int slots, Int i, Int n) {
     return dev_zero_slots(slots, i + 1, n);
 }
 
-@export("resid_device_call", "ptr(ptr)")
-pub Int rt_device_call(Int req) { return dev_err_reply(6); }
+// The request's write byte (offset 5, after "RDV", the format version and
+// the kind), or -1 when the request is too short to carry one.
+Int dev_write_byte(Int req) {
+    if (req == 0 || c_list_len(req) < 6) { return 0 - 1; }
+    return c_unbox_i64(c_list_get(req, 5));
+}
 
+// The read entry: the force-time guard checked only `device` (a read-only
+// grant covers it), so a request that says it writes -- or does not say --
+// is refused with Denied (error code 2) before anything else looks at it.
+@export("resid_device_call", "ptr(ptr)")
+pub Int rt_device_call(Int req) {
+    if (dev_write_byte(req) != 0) { return dev_err_reply(2); }
+    return dev_err_reply(6);
+}
+
+// The write entry (`device!` checked): reads and writes both.
 @export("resid_device_call_w", "ptr(ptr)")
 pub Int rt_device_call_w(Int req) { return dev_err_reply(6); }

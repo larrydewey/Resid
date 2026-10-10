@@ -27,6 +27,15 @@
 // lib/dev/device_write.resid's for one that writes. The program never sees a pointer, a file
 // descriptor or a raw request: it supplies and receives buffer *contents*.
 //
+// `write` is a reviewed label, not a property the compiler proves: whoever
+// adds a descriptor here decides whether the operation changes device or
+// platform state (or hands out key material) and marks it `write = true`
+// if so, and review of this directory checks that call. The compiler only
+// refuses the one shape that is a write by construction -- an ioctl that
+// sends data and gets nothing back (_IOC_WRITE, no Out or InOut field)
+// marked `write = false` (E0263) -- and the runtime's read entry refuses a
+// request whose write byte is set.
+//
 // Inputs and outputs follow the descriptor's fields in order. An input is
 // one DevIn per In or InOut field; an output is one DevOut per Out or InOut
 // field. A Scalar that some Buffer names as its length field is the
