@@ -118,9 +118,18 @@ this plan: `PR_SET_DUMPABLE` 0, `RLIMIT_CORE` 0, abort by `exit_group`).
 
 **Integrity is a set, not a point.** `Verified` carries a set of anchors
 and a set of evidence identities (§5.5); `Appraised` carries a policy
-identity; any integrity label may carry the qualifiers `time_source`
-(§5.4) and `principal` (§1.2). Joins take unions of sets and the weakest
-qualifier.
+identity. An integrity label also carries **qualifiers**, which are part
+of the integrity dimension, not dimensions of their own:
+
+| Qualifier | Values | Produced by |
+|---|---|---|
+| `time_source` | `RelyingParty`, `SignedEvidence`, `Kernel` | time arguments (§5.4) |
+| `principal` | `InGuest`, `AboveKernel` | anchors and the platform key primitive (§1.2, §5.2) |
+| freshness | `Fresh(purpose)` (Linear), `Delivered`, none | `bind` (§8.3) |
+| identity | `Local`, `ChannelBound`, none | `aead_open` under a platform key, `bind_channel` (§8.5) |
+
+Joins take unions of sets and the weakest qualifier (no freshness and no
+identity are the weakest).
 
 **Relation to knowledge states.**
 
@@ -317,6 +326,7 @@ cannot redefine `Eq(Measurement)`.
 | `aead_open(key, nonce, ct, aad)` | key | `Verified(pt, Aead(anchor of key))` if the key is `Verified(A)`; `Aead(Self)` if `Internal`; **External** if the key is External |
 | `verify_digest(expected, span)` | `Known` or `Verified` digest | `Verified(Span(F), A)` |
 | `bind(evidence, receipt, rp)` | `Verified` evidence, a `Linear` receipt, the relying party's nonce | `Fresh(purpose)` on the evidence (§8.3) |
+| `platform_key(k, selector, report)` | a device-derived key (`External(Secret(Key))`), its typed selector, and this program's `Appraised` report from the same platform | `Verified(Secret(Key), PlatformDerived(P, selector, principal))`: the platform's derivation is accepted as the attesting principal's, so the anchor names the principal (`InGuest` in the default profile) and a `@decides` must list it to rely on it. The key is otherwise External, and E-ext-key and `aead_open` treat it as such |
 | `bind_key(outer, key)` | evidence whose signed span carries `H(key)` | `Verified(Key, outer's anchors, outer's identity)` (Azure HCL, SVSM, CCA realm-to-platform) |
 | `verify_signed_transcript(key, transcript, sig)` | SPDM-style signature over a request/response transcript | `Verified(Span)` with the requester nonce bound |
 | `bind_channel(evidence, exporter)` | evidence whose signed span carries `H(rp_nonce ‖ tls_exporter)` (RFC 9266) or an attested key | `ChannelBound` on the evidence |
@@ -451,6 +461,11 @@ a bug and aborts, and a format's `ensures` failing is an error value.
 | `Fresh`, anchor sets, `single_source` | be at least as strict |
 | `@decides` | have `accept` ⊆ the behavior's and begin label ⊒ |
 
+Behaviors themselves are declared by the libraries that use them: the device
+behaviors (`ReportSource`, `SealingKey`, `Counter`) in PLAN-device-access.md
+R2.5, the attestation roles in the private attestation library. This plan
+defines only the conformance rules they are held to.
+
 ## 8. Usage, freshness and identity
 
 ### 8.1 `Linear`
@@ -523,10 +538,10 @@ does not prove identity.
   `aead_open` under a key that is `Verified` or `Internal`, over a blob
   whose plaintext carries the measurement this program sealed earlier. A
   key the platform derives is External on arrival (the kernel can
-  substitute it); in the `in-guest` profile it is accepted as
-  `Verified(Key, PlatformDerived(P, selector, principal = InGuest))`
-  only through the platform's key primitive, so the reliance on the
-  measured kernel is in the type. A program with neither path cannot
+  substitute it); `platform_key` (§5.2) accepts it as
+  `Verified(Key, PlatformDerived(P, selector, principal))`, so the
+  reliance on the measured kernel (`InGuest`) is in the type, and
+  `aead_open` under that key yields `Local`. A program with neither path cannot
   satisfy `local`.
 - Never by comparing a report with a self-measurement read through the
   kernel (circular).

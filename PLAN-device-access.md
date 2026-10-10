@@ -125,7 +125,7 @@ import a write engine.
 | Channel | Signed below the guest kernel (attesting principal: measured image) | Proven by use | Never verifiable |
 |---|---|---|---|
 | sev-guest report / ext report | report (VCEK or VLEK), echo in `report_data` (relayed field, bound by `bind`) | — | certificate table until chain-verified, `exitinfo2`, errno |
-| sev-guest derived key | — | `aead_open` of data this measurement sealed, through the platform key primitive (`principal = InGuest`) | the key on arrival |
+| sev-guest derived key | — | `platform_key` (labels §5.2, `principal = InGuest`), then `aead_open` of data this measurement sealed | the key on arrival |
 | tdx-guest report0 | MAC'd TDREPORT (checkable on the platform with TDX 1.5 `TDG.MR.VERIFYREPORT`) | — | — |
 | configfs TSM report | outblob (SNP report, TDX quote, CCA token), echo via `inblob` | — | provider, generation, auxblob until chain-verified |
 | TPM | Quote and NV_Certify with echo in `qualifyingData`, by a verified AK | — | GetCapability, PCR_Read, NV_Read, GetRandom |
