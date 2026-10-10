@@ -1,0 +1,35 @@
+// Device access (spec §49, PLAN-device-access.md): the runtime end of the
+// `device` verbs. lib/dev/device.resid's engine serializes a checked
+// descriptor and the program's inputs into a request and calls
+// resid_device_call (a read) or resid_device_call_w (a write; the compiler
+// puts `device!` in front of it in the force-time guard). The reply is
+// validated by the engine as untrusted input.
+//
+// Phase 1 has no device host yet: every request is answered with
+// Unsupported (error code 6), which the engine turns into
+// Err(Unsupported(name)). Phase 2 replaces this with the isolated host of
+// PLAN-device-access.md §5 (the native-module host, re-executed, with a
+// seccomp filter that allows the one descriptor's operation); it must
+// re-check the request's layout itself before acting on it.
+
+// A reply [1, code, value as 8 bytes] as a List(Int).
+Int dev_err_reply(Int code) {
+    Int slots = xmalloc(80);
+    _ = st64(slots, c_box_i64(1));
+    _ = st64(slots + 8, c_box_i64(code));
+    _ = dev_zero_slots(slots, 2, 10);
+    Int out = c_list_new(10, slots, resid_raw_addr("List(Int(64))"));
+    return c_free(slots) * 0 + out;
+}
+
+Int dev_zero_slots(Int slots, Int i, Int n) {
+    if (i >= n) { return 0; }
+    _ = st64(slots + i * 8, c_box_i64(0));
+    return dev_zero_slots(slots, i + 1, n);
+}
+
+@export("resid_device_call", "ptr(ptr)")
+pub Int rt_device_call(Int req) { return dev_err_reply(6); }
+
+@export("resid_device_call_w", "ptr(ptr)")
+pub Int rt_device_call_w(Int req) { return dev_err_reply(6); }
