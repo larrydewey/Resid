@@ -1,6 +1,6 @@
 # Labels, Formats and Contracts — Implementation Plan (revision 2)
 
-**Status: DRAFT for review (2026-10-10).** Nothing here is implemented.
+**Status: ACCEPTED (2026-10-10).** Open questions 1, 2, 4 and 5 settled (§18); question 3 is decided during implementation. Nothing here is implemented yet.
 Revision 2 folds in three adversarial reviews of revision 1
 (information flow, attestation protocol, runtime boundary); §17 maps each
 finding to the section that closes it. Depends on PLAN-secret-type.md
@@ -78,9 +78,8 @@ Therefore:
   runs at a higher privilege than the guest kernel (SNP SVSM at VMPL0, or
   a paravisor), so the guest kernel is outside what the evidence covers.
 
-**Decision needed (open question 1):** this plan drafts option 3 from the
-review: state the boundary precisely now (`in-guest`), add `above-kernel`
-later.
+**Settled (2026-10-10):** `in-guest` now, `above-kernel` as a later phase
+(§15 phase 9).
 
 ### 1.3 Attacker
 
@@ -814,13 +813,15 @@ R2.6); timeouts §8.2.
 
 ## 18. Open questions
 
-1. **Attesting principal** (§1.2): state the boundary precisely now with
-   the `in-guest` profile, and add `above-kernel` later? (Drafted as yes.)
-2. Should `Delivered` (fresh only from our side) be usable in any
-   `@decides`, or refused everywhere?
+1. Settled (2026-10-10): the attesting principal is stated precisely now
+   with the `in-guest` profile; `above-kernel` (SVSM at VMPL0 or a
+   paravisor) follows as phase 9.
+2. Settled (2026-10-10): `Delivered` never satisfies a `@decides`;
+   decisions require `Fresh`.
 3. Label-generic code: label variables (§3.4) only, or also the
-   `Word(W, B)` pattern for code that must differ by label?
-4. Typestate for protocols: with `Linear` (phase 4) or after formats
-   (phase 5)?
-5. Anchor updates without a rebuild (a signed anchor-set update) — in
-   scope for a later revision, or rebuild-only permanently?
+   `Word(W, B)` pattern for code that must differ by label? Decided during
+   implementation.
+4. Settled (2026-10-10): typestate lands with `Linear` in phase 4.
+5. Settled (2026-10-10): anchors are rebuild-only in this revision; a
+   signed anchor-set update, paired with the SNP ID-block path for sealed
+   data, is a later revision.

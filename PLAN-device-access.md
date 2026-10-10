@@ -1,6 +1,6 @@
 # Device Access — Implementation Plan (revision 2)
 
-**Status: revision 2 DRAFT for review (2026-10-10).** Revision 1 is
+**Status: revision 2 ACCEPTED (2026-10-10).** Revision 1 is
 ACCEPTED; phases 1–3 are on `ioctl-device-access` and phases 4–5
 (`resid-devgen`, nested buffers, outputs on error, the uapi and non-ioctl
 descriptors) are on branches being merged (history below, unchanged).
