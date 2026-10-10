@@ -1,0 +1,29 @@
+// The engine reads the device host's reply as untrusted input
+// (lib/dev/device.resid): a number output must fit its Scalar's width, and
+// any 8-byte value -- a high word with its top bit set included -- decodes
+// without an abort.
+import "dev/device.resid";
+
+List(Int) le(Int v, Int n, ListBuf(Int) acc) {
+    if (n <= 0) { return acc.finish(); }
+    return le(v >> 8, n - 1, acc.push(v & 255));
+}
+
+Str reply(Int width, List(Int) value) {
+    DvReq rq = DvReq {.err = "", .req = [], .outs = [DvSlot {.num = true, .max = width, .secret = false}]};
+    List(Int) r = [0, 1, 0, 0, 0, 0].concat(value);
+    return match (dv_answer("n", rq, r)) {
+        Ok(outs) => match (dv_out_num(outs, 0)) { Some(v) => f"{v}", None => "no number", },
+        Err(e) => device_error_text(e),
+    };
+}
+
+Int main() {
+    println(reply(rt 4, le(rt 4294967295, 8, ListBuf())));
+    println(reply(rt 4, le(rt 4294967296, 8, ListBuf())));
+    println(reply(rt 1, le(rt 256, 8, ListBuf())));
+    println(reply(rt 8, [255, 255, 255, 255, 255, 255, 255, 255]));
+    println(reply(rt 8, [0, 0, 0, 0, 0, 0, 0, 128]));
+    println(reply(rt 8, [1, 2, 3, 4, 5, 6, 7, 8]));
+    return 0;
+}
