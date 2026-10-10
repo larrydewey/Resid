@@ -182,6 +182,13 @@ to the replaced node, labelled with the rule:
   elide, discharge, provider, behavior, desugar, widen,
   interpolate
 
+Instantiation (§11, §12) adds its own derive edges before
+reduction: a copy from its generic (instantiate), an
+instance from the one it displaced (replaces), and a
+sandbox rebuilt without its generic declarations from the
+sandbox it replaces (prune); a sandbox whose members are
+unchanged is kept as written.
+
 A node left RESIDUAL or EFFECT carries a reason:
 
   unknown(dep)     depends on the named RESIDUAL dep
