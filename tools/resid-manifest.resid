@@ -284,7 +284,10 @@ List(Str) path_fold_at(List(Str) segs, Int i, List(Str) acc) {
 
 // ─── Manifest assembly ──────────────────────────────────────────────
 
-type Dependency = { Str name; Str path; Str version; List(Str) capabilities; Bool has_caps; Str pubkey; };
+// `devices`: the device descriptors the dependency may reach (spec §49,
+// PLAN-device-access.md), comma-joined; "\x01" when it does not say
+// (unbounded).
+type Dependency = { Str name; Str path; Str version; List(Str) capabilities; Bool has_caps; Str pubkey; Str devices; };
 // `[native.<module>] path, sha256`: a native module's artifact (spec §47).
 type NativeEntry = { Str module; Str path; Str sha256; };
 type Manifest = {
@@ -302,7 +305,8 @@ Dependency build_dep(List(TomlEntry) entries, Str name) {
         .version = toml_str(entries, sec, "version", ""),
         .capabilities = toml_list(entries, sec, "capabilities"),
         .has_caps = toml_has(entries, sec, "capabilities"),
-        .pubkey = toml_str(entries, sec, "pubkey", "")
+        .pubkey = toml_str(entries, sec, "pubkey", ""),
+        .devices = if (toml_has(entries, sec, "devices")) { str_join(toml_list(entries, sec, "devices"), ",") } else { "\x01" }
     };
 }
 List(Dependency) build_deps_acc(List(TomlEntry) entries, List(Str) names, Int i, List(Dependency) acc) {
@@ -1085,7 +1089,7 @@ IndexLoadResult load_verify_index(Registry reg, Str pubkey_hex) {
 // A resolved path dependency (post-walk — the Rust equivalent's
 // `Dependency`; that name is already this file's raw manifest-declared
 // entry, so this one is `ResolvedDep`).
-type ResolvedDep = { Str name; Str dir; Str root; List(Str) capabilities; Bool has_caps; Str pinned_key; };
+type ResolvedDep = { Str name; Str dir; Str root; List(Str) capabilities; Bool has_caps; Str pinned_key; Str devices; };
 type SeenEntry = { Str name; Str dir; };
 type DepResolveResult = { Bool ok; Str err; List(ResolvedDep) deps; List(SeenEntry) seen; };
 
@@ -1099,7 +1103,7 @@ DepResolveResult dep_error(DepResolveResult acc, Str err) {
 }
 
 @requires(filesystem, network, clock(readonly), declassify)
-DepResolveResult collect_dep_path(Str name, Str dep_dir0, List(Str) caps, Bool has_caps, Str pinned_key, Registry reg, TrustPolicy tp, DepResolveResult acc, Int depth) {
+DepResolveResult collect_dep_path(Str name, Str dep_dir0, List(Str) caps, Bool has_caps, Str devs, Str pinned_key, Registry reg, TrustPolicy tp, DepResolveResult acc, Int depth) {
     // One directory reached along two relative paths is one dependency.
     Str dep_dir = path_fold(dep_dir0);
     if (!acc.ok) { return acc; }
@@ -1108,7 +1112,7 @@ DepResolveResult collect_dep_path(Str name, Str dep_dir0, List(Str) caps, Bool h
     if (prev_dir != "") {
         // Reached again: keep this declaration's ceiling and pinned key too,
         // so the narrowest ceiling binds and every pin is checked.
-        if (prev_dir == dep_dir) { return DepResolveResult {.ok = true, .err = "", .deps = acc.deps.concat([ResolvedDep {.name = name, .dir = dep_dir, .root = "", .capabilities = caps, .has_caps = has_caps, .pinned_key = pinned_key}]), .seen = acc.seen}; }
+        if (prev_dir == dep_dir) { return DepResolveResult {.ok = true, .err = "", .deps = acc.deps.concat([ResolvedDep {.name = name, .dir = dep_dir, .root = "", .capabilities = caps, .has_caps = has_caps, .pinned_key = pinned_key, .devices = devs}]), .seen = acc.seen}; }
         return dep_error(acc, "dependency name '" + name + "' claimed by both '" + prev_dir + "' and '" + dep_dir + "'");
     }
     Str manifest_path = dep_dir + "/resid.toml";
@@ -1128,14 +1132,14 @@ DepResolveResult collect_dep_path(Str name, Str dep_dir0, List(Str) caps, Bool h
         return dep_error(acc, "package '" + dm.name + "' provided by both '" + prev_pkg_dir + "' and '" + dep_dir + "' - conflicting dependency versions are not supported");
     }
     DepResolveResult acc2 = DepResolveResult {.ok = true, .err = "", .deps = acc.deps, .seen = acc.seen.concat([SeenEntry {.name = dm.name, .dir = dep_dir}])};
-    DepResolveResult acc3 = collect_sub_deps_at(dm.dependencies, 0, dep_dir, dm.name, caps, reg, tp, acc2, depth + 1);
+    DepResolveResult acc3 = collect_sub_deps_at(dm.dependencies, 0, dep_dir, dm.name, caps, devs, reg, tp, acc2, depth + 1);
     if (!acc3.ok) { return acc3; }
-    ResolvedDep rd = ResolvedDep {.name = dm.name, .dir = dep_dir, .root = root, .capabilities = caps, .has_caps = has_caps, .pinned_key = pinned_key};
+    ResolvedDep rd = ResolvedDep {.name = dm.name, .dir = dep_dir, .root = root, .capabilities = caps, .has_caps = has_caps, .pinned_key = pinned_key, .devices = devs};
     return DepResolveResult {.ok = true, .err = "", .deps = acc3.deps.concat([rd]), .seen = acc3.seen};
 }
 
 @requires(filesystem, network, clock(readonly), declassify)
-DepResolveResult collect_dep_version(Str name, Str version, Registry reg, Str root_pkg_dir, List(Str) caps, Bool has_caps, Str pinned_key, TrustPolicy tp, DepResolveResult acc, Int depth) {
+DepResolveResult collect_dep_version(Str name, Str version, Registry reg, Str root_pkg_dir, List(Str) caps, Bool has_caps, Str devs, Str pinned_key, TrustPolicy tp, DepResolveResult acc, Int depth) {
     if (!registry_configured(reg)) {
         return dep_error(acc, "dependency '" + name + "': version '" + version + "' requested but no [registry] path or url is configured");
     }
@@ -1163,11 +1167,11 @@ DepResolveResult collect_dep_version(Str name, Str version, Registry reg, Str ro
     }
     Int _w = write_lock_entry(lock_path, LockEntry {.name = name, .version = version, .sha256 = cr.sha256});
     // Its key was checked against the registry signature above.
-    return collect_dep_path(name, cr.cache_dir, caps, has_caps, "", reg, tp, acc, depth);
+    return collect_dep_path(name, cr.cache_dir, caps, has_caps, devs, "", reg, tp, acc, depth);
 }
 
 @requires(filesystem, network, clock(readonly), declassify)
-DepResolveResult collect_sub_deps_at(List(Dependency) subs, Int i, Str parent_dir, Str parent, List(Str) parent_caps, Registry reg, TrustPolicy tp, DepResolveResult acc, Int depth) {
+DepResolveResult collect_sub_deps_at(List(Dependency) subs, Int i, Str parent_dir, Str parent, List(Str) parent_caps, Str parent_devs, Registry reg, TrustPolicy tp, DepResolveResult acc, Int depth) {
     if (!acc.ok) { return acc; }
     if (i >= subs.len()) { return acc; }
     Dependency sub = subs[i];
@@ -1176,18 +1180,21 @@ DepResolveResult collect_sub_deps_at(List(Dependency) subs, Int i, Str parent_di
     // [capabilities] grant by check_dep_capabilities.
     Str over = if (parent == "") { "" } else { first_missing_cap(sub.capabilities, parent_caps, 0) };
     if (over != "") { return dep_error(acc, "dependency '" + sub.name + "' (required by '" + parent + "') requires capability '" + over + "', which is outside the capabilities granted to '" + parent + "'"); }
+    // Its device bound, likewise, lies within its parent's.
+    Str dover = if (parent == "") { "" } else { devices_over(sub.devices, parent_devs) };
+    if (dover != "") { return dep_error(acc, "dependency '" + sub.name + "' (required by '" + parent + "') " + dover + ", which is outside the devices granted to '" + parent + "'"); }
     // With both, `path` is the working copy when it is there (development)
     // and `version` comes from the registry when it is not (a published
     // package, extracted where its sibling checkouts are not).
     Bool use_path = sub.path != "" && (sub.version == "" || filesystem.is_dir(parent_dir + "/" + sub.path));
     DepResolveResult acc2 = if (use_path) {
-        collect_dep_path(sub.name, parent_dir + "/" + sub.path, sub.capabilities, sub.has_caps, sub.pubkey, reg, tp, acc, depth)
+        collect_dep_path(sub.name, parent_dir + "/" + sub.path, sub.capabilities, sub.has_caps, sub.devices, sub.pubkey, reg, tp, acc, depth)
     } else if (sub.version != "") {
-        collect_dep_version(sub.name, sub.version, reg, if (reg.home != "") { reg.home } else { parent_dir }, sub.capabilities, sub.has_caps, sub.pubkey, tp, acc, depth)
+        collect_dep_version(sub.name, sub.version, reg, if (reg.home != "") { reg.home } else { parent_dir }, sub.capabilities, sub.has_caps, sub.devices, sub.pubkey, tp, acc, depth)
     } else {
         dep_error(acc, "dependency '" + sub.name + "': needs either 'path' or 'version'")
     };
-    return collect_sub_deps_at(subs, i + 1, parent_dir, parent, parent_caps, reg, tp, acc2, depth);
+    return collect_sub_deps_at(subs, i + 1, parent_dir, parent, parent_caps, parent_devs, reg, tp, acc2, depth);
 }
 
 // A manifest names its registry one of two ways — a directory or a URL —
@@ -1223,7 +1230,7 @@ DepResolveResult resolve_all_deps(Manifest m, Str pkg_dir) {
     if (m.registry_pubkey == "") {
         DepResolveResult start = DepResolveResult {.ok = true, .err = "", .deps = empty_deps, .seen = empty_seen};
         TrustPolicy tp0 = TrustPolicy {.pinned_key = "", .idx_required = false, .idx_entries = no_idx, .keyring = keyring, .allow_unsigned = m.allow_unsigned, .require_signatures = m.require_signatures};
-        return collect_sub_deps_at(m.dependencies, 0, pkg_dir, "", m.grant, reg, tp0, start, 0);
+        return collect_sub_deps_at(m.dependencies, 0, pkg_dir, "", m.grant, "\x01", reg, tp0, start, 0);
     }
     IndexLoadResult idx = load_verify_index(reg, m.registry_pubkey);
     if (!idx.ok) {
@@ -1231,7 +1238,7 @@ DepResolveResult resolve_all_deps(Manifest m, Str pkg_dir) {
     }
     DepResolveResult start = DepResolveResult {.ok = true, .err = "", .deps = empty_deps, .seen = empty_seen};
     TrustPolicy tp1 = TrustPolicy {.pinned_key = "", .idx_required = true, .idx_entries = idx.entries, .keyring = keyring, .allow_unsigned = m.allow_unsigned, .require_signatures = m.require_signatures};
-    return collect_sub_deps_at(m.dependencies, 0, pkg_dir, "", m.grant, reg, tp1, start, 0);
+    return collect_sub_deps_at(m.dependencies, 0, pkg_dir, "", m.grant, "\x01", reg, tp1, start, 0);
 }
 
 // One record per dependency, from the records of every declaration of it:
@@ -1240,7 +1247,7 @@ List(ResolvedDep) merge_deps(List(ResolvedDep) ds, Int i, List(ResolvedDep) acc)
     if (i >= ds.len()) { return acc; }
     ResolvedDep d = ds[i];
     if (d.root == "") { return merge_deps(ds, i + 1, acc); }
-    ResolvedDep m = ResolvedDep {.name = d.name, .dir = d.dir, .root = d.root, .capabilities = meet_all(ds, d.name, 0, d.capabilities), .has_caps = d.has_caps, .pinned_key = d.pinned_key};
+    ResolvedDep m = ResolvedDep {.name = d.name, .dir = d.dir, .root = d.root, .capabilities = meet_all(ds, d.name, 0, d.capabilities), .has_caps = d.has_caps, .pinned_key = d.pinned_key, .devices = meet_devices_all(ds, d.name, 0, d.devices)};
     return merge_deps(ds, i + 1, acc.concat([m]));
 }
 
@@ -1248,6 +1255,56 @@ List(Str) meet_all(List(ResolvedDep) ds, Str name, Int i, List(Str) caps) {
     if (i >= ds.len()) { return caps; }
     List(Str) c2 = if (ds[i].name == name) { meet_caps(caps, ds[i].capabilities, 0, []) } else { caps };
     return meet_all(ds, name, i + 1, c2);
+}
+
+// The narrowest device bound any declaration gives (spec §49): each entry
+// of either kept when the other covers it.
+Str meet_devices_all(List(ResolvedDep) ds, Str name, Int i, Str devs) {
+    if (i >= ds.len()) { return devs; }
+    return meet_devices_all(ds, name, i + 1, if (ds[i].name == name) { meet_devices(devs, ds[i].devices) } else { devs });
+}
+
+Str meet_devices(Str a, Str b) {
+    if (a == "\x01") { return b; }
+    if (b == "\x01") { return a; }
+    List(Str) la = dev_entries(a);
+    List(Str) lb = dev_entries(b);
+    return str_join(dev_sorted_set(dev_covered(la, lb, 0, []).concat(dev_covered(lb, la, 0, []))), ",");
+}
+
+List(Str) dev_entries(Str d) { return if (d == "") { [] } else { str_split(d, ",") }; }
+
+// The entries of xs some entry of bound covers.
+List(Str) dev_covered(List(Str) xs, List(Str) bound, Int i, List(Str) acc) {
+    if (i >= xs.len()) { return acc; }
+    return dev_covered(xs, bound, i + 1, if (dev_covers(bound, str_trim(xs[i]), 0)) { acc.concat([str_trim(xs[i])]) } else { acc });
+}
+
+// An entry names one descriptor (`sev_guest.snp_get_report`) or all of a
+// device module's (`sev_guest`).
+Bool dev_covers(List(Str) bound, Str e, Int i) {
+    if (i >= bound.len()) { return false; }
+    Str b = str_trim(bound[i]);
+    if (e == b || str_starts_with(e, b + ".")) { return true; }
+    return dev_covers(bound, e, i + 1);
+}
+
+List(Str) dev_sorted_set(List(Str) xs) { return dev_dedupe(sort(xs), 0, []); }
+
+List(Str) dev_dedupe(List(Str) xs, Int i, List(Str) acc) {
+    if (i >= xs.len()) { return acc; }
+    return dev_dedupe(xs, i + 1, if (i > 0 && xs[i] == xs[i - 1]) { acc } else { acc.concat([xs[i]]) });
+}
+
+// "" when a sub-dependency's device bound lies within its parent's, else
+// what exceeds it.
+Str devices_over(Str sub, Str parent) {
+    if (parent == "\x01") { return ""; }
+    if (sub == "\x01") { return ""; }
+    List(Str) ls = dev_entries(sub);
+    List(Str) ok = dev_covered(ls, dev_entries(parent), 0, []);
+    if (ok.len() == ls.len()) { return ""; }
+    return "may reach devices [" + sub + "]";
 }
 
 // Per family, what both grant: read-only when either is.
@@ -1635,7 +1692,17 @@ List(Str) depmap_lines_acc(List(ResolvedDep) deps, Int i, List(Str) acc) {
 }
 Str depmap_text(List(ResolvedDep) deps) {
     List(Str) empty = [];
-    return str_join(depmap_lines_acc(merge_deps(deps, 0, []), 0, empty), "\n");
+    List(ResolvedDep) md = merge_deps(deps, 0, []);
+    return str_join(depmap_lines_acc(md, 0, empty).concat(device_lines(md, 0, [])), "\n");
+}
+
+// "@devices::name::a,b" for each dependency with a device bound (spec §49):
+// the compiler refuses code of that dependency reaching any other
+// descriptor (E0261).
+List(Str) device_lines(List(ResolvedDep) deps, Int i, List(Str) acc) {
+    if (i >= deps.len()) { return acc; }
+    Bool has = deps[i].devices != "\x01";
+    return device_lines(deps, i + 1, if (has) { acc.concat(["@devices::" + deps[i].name + "::" + deps[i].devices]) } else { acc });
 }
 
 @requires(filesystem, network, clock(readonly), declassify)

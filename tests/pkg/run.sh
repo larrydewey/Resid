@@ -469,6 +469,33 @@ if [ $? -ne 0 ] && grep -q "but the manifest pins" "$W/napp3.out"; then ok; else
 mkdir -p "$W/ntiny_x"; "$PKG" extract "$W/ntiny_a1" "$W/ntiny_x" > /dev/null
 if ! cmp -s "$W/ntiny_a1" "$W/ntiny_a2" && cmp -s "$W/ntiny_x/native/tiny.ll" "$W/ntiny/native/tiny.ll"; then ok; else bad "the archive does not cover the native artifact"; fi
 
+# Device bounds (spec §49): `devices = [...]` names the descriptors a
+# dependency's code may reach, by descriptor or by device module, and the
+# compiler refuses one it reaches outside them (E0261). A dependency's own
+# dependencies get at most its bound.
+mkpkg "$W/probe" probe 1.0.0 $'import "dev/sev_guest.resid";\n@requires(device(readonly))\npub Str probe_report() { return match (snp_get_report([(UInt(8))0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 0)) { Ok(b) => "report", Err(e) => device_error_text(e), }; }'
+mkdir -p "$W/dapp/src"
+printf '[package]\nname = "dapp"\nversion = "0.1.0"\n\n[capabilities]\ngrant = ["device(readonly)"]\n\n[dependencies.probe]\npath = "../probe"\ncapabilities = ["device(readonly)"]\ndevices = ["tsm_report"]\n' > "$W/dapp/resid.toml"
+printf 'import "probe";\n@requires(device(readonly))\nInt main() { println(probe_report()); return 0; }\n' > "$W/dapp/src/main.resid"
+(cd "$ROOT" && "$MAN" build "$W/dapp/resid.toml" "$COMPILER") > "$W/dapp.out" 2>&1
+if [ $? -ne 0 ] && grep -q "E0261" "$W/dapp.out" && grep -q "sev_guest.snp_get_report" "$W/dapp.out"; then ok; else bad "pkg_device_ceiling: a descriptor outside the bound was reached: $(grep -m1 -i error "$W/dapp.out")"; fi
+sed -i 's/devices = \["tsm_report"\]/devices = ["sev_guest"]/' "$W/dapp/resid.toml"
+(cd "$ROOT" && "$MAN" build "$W/dapp/resid.toml" "$COMPILER") > "$W/dapp2.out" 2>&1
+if [ $? -eq 0 ] && [ "$("$W/dapp/target/resid/dapp")" = "sev_guest.snp_get_report: unsupported" ]; then ok; else bad "pkg_device_ceiling: a device module bound: $(grep -m1 -i error "$W/dapp2.out")"; fi
+sed -i 's/devices = \["sev_guest"\]/devices = ["sev_guest.snp_get_report"]/' "$W/dapp/resid.toml"
+(cd "$ROOT" && "$MAN" build "$W/dapp/resid.toml" "$COMPILER") > "$W/dapp3.out" 2>&1
+if [ $? -eq 0 ]; then ok; else bad "pkg_device_ceiling: a descriptor bound: $(grep -m1 -i error "$W/dapp3.out")"; fi
+(cd "$ROOT" && "$MAN" depmap "$W/dapp/resid.toml" "$W/dapp.depmap") > /dev/null 2>&1
+if grep -qx '@devices::probe::sev_guest.snp_get_report' "$W/dapp.depmap"; then ok; else bad "pkg_device_ceiling: depmap bound line: $(cat "$W/dapp.depmap")"; fi
+# A sub-dependency's bound must lie inside its parent's.
+mkpkg "$W/dmid" dmid 1.0.0 $'import "probe";\npub Int dmid_n() { return 1; }'
+printf '\n[dependencies.probe]\npath = "../probe"\ncapabilities = ["device(readonly)"]\ndevices = ["sev_guest", "tpm"]\n' >> "$W/dmid/resid.toml"
+mkdir -p "$W/dtr/src"
+printf '[package]\nname = "dtr"\nversion = "0.1.0"\n\n[capabilities]\ngrant = ["device(readonly)"]\n\n[dependencies.dmid]\npath = "../dmid"\ncapabilities = ["device(readonly)"]\ndevices = ["sev_guest"]\n' > "$W/dtr/resid.toml"
+printf 'import "dmid";\nInt main() { println(f"{dmid_n()}"); return 0; }\n' > "$W/dtr/src/main.resid"
+(cd "$ROOT" && "$MAN" deps "$W/dtr/resid.toml") > "$W/dtr.out" 2>&1
+if [ $? -ne 0 ] && grep -q "outside the devices granted to 'dmid'" "$W/dtr.out"; then ok; else bad "pkg_device_ceiling: a sub-dependency's wider bound: $(head -3 "$W/dtr.out")"; fi
+
 # `resid-manifest test` resolves dependencies, writes the depmap, then hands
 # discovery to the driver's own `test` mode (SPEC-testing.md §7.1).
 mkpkg "$W/mathlib" mathlib 1.0.0 'pub Int triple(Int a) { return a * 3; }'
