@@ -45,6 +45,7 @@ marked secret ([secret values](/Resid/reference/secrets/)); never as
 | Module | Descriptors | Grant |
 |---|---|---|
 | `dev/sev_guest.resid` | `sev_guest.snp_get_report` (SNP attestation report; hardware-signed) | `device(readonly)` |
+| `dev/sev_guest_ext.resid` | `sev_guest.snp_get_ext_report` (the report, hardware-signed, and the host's certificate table, not signed; the table's size negotiated with the kernel) | `device(readonly)` |
 | `dev/sev_guest_key.resid` | `sev_guest.snp_get_derived_key` (a sealing key, secret; not signed) | `device`, `declassify` (only the response's status word is published) |
 | `dev/tdx_guest.resid` | `tdx_guest.tdx_get_report0` (TDREPORT; MAC'd for this platform, not signed) | `device(readonly)` |
 | `dev/nsm.resid` | `nsm.raw` (a CBOR request to the Nitro Secure Module; only an attestation document is signed) | `device` (a request can extend or lock a PCR) |
@@ -52,9 +53,7 @@ marked secret ([secret values](/Resid/reference/secrets/)); never as
 Each wrapper's comment says whether what it returns is signed by hardware
 (and so verified downstream, where a corrupted reply fails) or is only the
 kernel's word. The descriptors of these modules are generated from the
-kernel's uapi headers (below); SNP_GET_EXT_REPORT has none yet, since its
-certificate buffer is a pointer inside the request struct, which no field
-kind places.
+kernel's uapi headers (below).
 
 ## Modes
 
@@ -91,10 +90,29 @@ Device modules are written over five verbs, each giving
 | `device.sequence(op, args)` | `Sequence`: ioctl steps on one file, with links | `List(DevIn)` |
 
 An `IoctlOp`'s fields are `Scalar(offset, width, dir)`,
-`Inline(offset, length, dir)` and
-`Buffer(offset, length_at, max, dir, secret)`; a `Scalar` a buffer names as
-its length is filled in and read back by the engine. Outputs come back in
-field order as `OutNum`, `OutBytes` or `OutSecret`.
+`Inline(offset, length, dir)`,
+`Buffer(offset, length_at, max, dir, secret)`,
+`Nested(parent, offset, length_at, length_width, max, dir, secret)` and
+`Errno`; a `Scalar` a buffer names as its length is filled in and read
+back by the engine. Outputs come back in field order as `OutNum`,
+`OutBytes` or `OutSecret`.
+
+A `Nested` buffer is one whose pointer (and length) sit *inside* another
+buffer -- the In or InOut `Buffer` whose pointer field is at `parent`,
+listed before it -- as SNP_GET_EXT_REPORT's certificate table sits behind
+`certs_address` in its request struct. The host gives it a guarded
+region of its own and writes its address into the parent; the address
+never comes back (it is zeroed in the parent's output). Its length is its
+input's when it is In, else what the program wrote at `length_at` in the
+parent (at most `max`; more is refused), so a wrapper can size it.
+
+`Errno` makes a failed ioctl give its outputs, the errno among them (0
+on success), instead of `Err(Kernel)`: for a kernel that explains a
+failure in the struct, as SNP's extended report does when the
+certificate buffer is too small (EIO, `exitinfo2`'s VMM half
+`SNP_GUEST_VMM_ERR_INVALID_LEN`, and the needed length written back into
+`certs_len`; `snp_get_ext_report` retries once with it). ENOTTY stays
+`Unsupported` and EFAULT `Overrun`; a Sequence step has no `Errno`.
 
 A program may call a verb itself, but only with a descriptor from
 `lib/dev/`: writing a descriptor literal anywhere else is `E0260`, and so
@@ -158,8 +176,8 @@ be known, and is checked:
 | `E0260` | descriptors, the `@descriptor` annotation, the engine, `resid_device_call` and `resid_device_secret` belong to `lib/dev/` |
 | `E0261` | a dependency reaches only the descriptors its manifest's `devices = [...]` names, behavior instances it could dispatch to included; a sub-dependency without a bound gets its parent's |
 | `E0262` | the descriptor is known after reduction (not chosen or computed at run time) |
-| `E0263` | `_IOC_SIZE` is the struct size and the direction bits cover the fields; fields inside the struct and apart; Scalars of 1, 2, 4 or 8 bytes; pointers 8-byte aligned; buffers with a maximum; length fields are Scalars wide enough for their buffer's maximum, one per buffer; the path under `/dev/` or `/sys/` without `..`; one request number for the build's target; a descriptor marked `write = false` is not an ioctl that only sends, nor a `Transact` |
-| `E0264` | a Sequence's links go forward from a Scalar output to a Scalar input of one width; only the last step has outputs; one path |
+| `E0263` | `_IOC_SIZE` is the struct size and the direction bits cover the fields; fields inside the struct and apart; Scalars of 1, 2, 4 or 8 bytes; pointers 8-byte aligned; buffers with a maximum; length fields are Scalars wide enough for their buffer's maximum, one per buffer; a `Nested` field's parent is an earlier In or InOut `Buffer`, its pointer 8-byte aligned inside the parent and its length field inside it, apart from the pointer and wide enough; at most one `Errno`; the path under `/dev/` or `/sys/` without `..`; one request number for the build's target; a descriptor marked `write = false` is not an ioctl that only sends, nor a `Transact` |
+| `E0264` | a Sequence's links go forward from a Scalar output to a Scalar input of one width; only the last step has outputs; one path; no step has an `Errno` |
 
 These run on the reduced program: `--profile check` does not make them.
 Function names starting with `resid_` are the runtime's (`E0265`), so no
@@ -219,7 +237,8 @@ have run.
 | the version field comes back different | `Version(name, the kernel's)` |
 | a length beyond the descriptor's maximum | `TooLong` |
 | a configfs report's generation changed, or counts a store the host did not make; its provider is not listed | `GenerationChanged`, `UnknownDriver(name, "provider ...")` |
-| any other errno | `Kernel(name, errno)` |
+| any other errno | `Kernel(name, errno)` (with an `Errno` field: the outputs, the errno among them) |
+| a `Nested` length the program wrote past its maximum | `BadInput` (the host refuses it) |
 | the host is killed or answers something that does not parse | `BadReply` |
 | no answer within the wall-clock limit | `Timeout` |
 

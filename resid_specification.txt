@@ -3375,7 +3375,10 @@ lib/dev/device.resid declares, of one of five kinds:
   IoctlOp         an ioctl: path, request numbers per
                   target, struct size, fields (Scalar,
                   Inline, Buffer with a maximum and a
-                  secret flag), interface version
+                  secret flag, Nested: a buffer whose
+                  pointer and length are inside a Buffer,
+                  Errno: the ioctl's errno as an output),
+                  interface version
   Transact        write a command, read a response
   ReadAttr        read an attribute file
   ConfigfsReport  the configfs report interface
@@ -3419,7 +3422,15 @@ InOut field, an output one DevOut (OutNum, OutBytes, or
 OutSecret(List(Secret(UInt(8)))) for a Buffer marked
 secret, §48) per Out or InOut field, in field order; a
 Scalar that a Buffer names as its length is the engine's,
-and only a Sequence's last step has outputs. Bytes cross as
+and only a Sequence's last step has outputs. A Nested
+buffer's length is its input's when it is In, else what the
+program wrote at its length field inside the parent (at most
+its maximum), so a wrapper can size it; its address never
+comes back (the host zeroes it in the parent's output). With
+an Errno field a failed ioctl still gives its outputs, the
+errno among them (0 on success), instead of Kernel: what a
+wrapper needs when the kernel explains a failure in the
+struct; ENOTTY stays Unsupported and EFAULT Overrun. Bytes cross as
 List(UInt(8)), never Bytes(N), which ends at a zero byte. A
 failure is a value: DeviceError says absent, denied, a
 kernel errno, too long, generation changed, unsupported,
@@ -3462,6 +3473,13 @@ reduction (Laws 1 and 5, E0262), and is then checked:
          every buffer has a maximum of 1 byte to 16 MiB; a
          length field is a Scalar of the struct wide enough
          for its buffer's maximum, and no other buffer's;
+         a Nested field's parent is an In or InOut Buffer
+         listed before it (no deeper nesting), its pointer
+         8-byte aligned inside the parent's maximum, its
+         length field 1, 2, 4 or 8 bytes inside the parent,
+         apart from the pointer and wide enough for its
+         maximum, and apart from the parent's other Nested
+         fields; at most one Errno;
          a Transact is marked `write = true` (writing its
          command is a write to the device); the path
          is under /dev/ or /sys/ (a ConfigfsReport's under
@@ -3475,7 +3493,7 @@ reduction (Laws 1 and 5, E0262), and is then checked:
          to a Scalar input of one width, at most one into
          an input; its steps share its path; only its last
          step has outputs other than Scalars; a step that
-         writes makes it a write.
+         writes makes it a write; no step has an Errno.
   E0261  a manifest's `devices = [...]` (§21.1) names the
          descriptors a dependency's code may reach, each
          entry a descriptor (`sev_guest.snp_get_report`) or
@@ -3523,7 +3541,8 @@ pass through sysfs's links; where openat2 is missing, only
 the final component is checked) and refuses the wrong kind
 of file (a character device for an ioctl, a Sequence or a
 Transact; a regular sysfs or configfs file for ReadAttr),
-places the struct and each buffer in a mapping of its own
+places the struct and each buffer (a Nested one too, its
+address written into its parent) in a mapping of its own
 between two inaccessible guard pages, with a random canary
 between the declared length and the guard after, sets the
 interface version, and installs a seccomp filter that kills
@@ -3558,10 +3577,12 @@ Unsupported; a spoiled canary, a fault in the host, EFAULT
 or a read longer than asked is Overrun; another version in
 the version field is Version with the kernel's; a length the
 kernel writes back, or a value read, beyond the maximum is
-TooLong; a generation that changed or counts a store the host
+TooLong; a Nested length past its maximum is BadInput; a
+generation that changed or counts a store the host
 did not make is GenerationChanged; a provider the descriptor
 does not list is UnknownDriver; no answer within the limit
-is Timeout; any other errno is Kernel. A host that is
+is Timeout; any other errno is Kernel (or, with an Errno
+field, the outputs and the errno). A host that is
 killed, exits badly or answers a reply that does not match
 the request is BadReply; a request the runtime refuses is
 BadInput. None of these aborts: a device that misbehaves is

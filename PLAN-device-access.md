@@ -370,31 +370,57 @@ Tests: `tests/runtime/device_host.c` (`device_host_by_hand_other_exe`,
 
 As built, compared with the plan:
 
-- **SNP_GET_EXT_REPORT has no descriptor.** Its certificate buffer is a
-  pointer *inside* the request buffer (`struct snp_ext_report_req`'s
-  `certs_address`, `certs_len`), which no Field kind places: the host
-  patches pointers only in the top-level struct. It needs a nested-buffer
-  field kind in the descriptor, the compiler's E0263 and the runtime host
-  (so a reseed), and, for the kernel's length negotiation (a too-small
-  `certs_len` gives EIO with `exitinfo2`'s VMM half 1 and the needed
-  length written back into the request buffer), outputs from a failed
-  ioctl, which the host does not return. The request number and the
-  request struct's layout are generated and matrix-checked now
-  (`uapi_sev_guest.resid`'s `check`), and the configfs report's auxblob
-  carries the same certificates.
-- **Hex literals.** A descriptor field written as a hex literal (`.size =
-  0x20`) leaves the descriptor unknown after reduction (E0262), so the
-  generator emits decimal and gives hex in the comment.
+- **SNP_GET_EXT_REPORT: Nested and Errno fields.** Its certificate
+  buffer is a pointer *inside* the request buffer (`struct
+  snp_ext_report_req`'s `certs_address`, `certs_len`). Two field kinds
+  were added (lib/dev/device.resid, E0263 in `compiler/device.resid`,
+  `pq_check` and the host in `runtime/rt/device.resid`, wire tags 3 and 4):
+  `Nested(parent, offset, length_at, length_width, max, dir, secret)` -- a
+  buffer whose pointer and length are inside an earlier In or InOut
+  Buffer; the host gives it its own guarded region, patches its address
+  into the parent and zeroes it again in the parent's output; its length
+  is its input's (In) or what the program wrote at `length_at` in the
+  parent, at most `max` (else BadInput), so a wrapper sizes it; no deeper
+  nesting -- and `Errno`, an explicit opt-in that makes a failed ioctl
+  reply with its outputs and the errno (ENOTTY stays Unsupported, EFAULT
+  Overrun; not in a Sequence). The kernel's length negotiation (a
+  too-small `certs_len` gives EIO, `exitinfo2`'s VMM half
+  SNP_GUEST_VMM_ERR_INVALID_LEN, and the needed length written back into
+  the request struct) is `lib/dev/sev_guest_ext.resid`'s
+  `snp_get_ext_report`: two pages first, one retry with the needed length
+  when it is larger, whole 4 KiB pages and at most 16 KiB (the kernel's
+  SEV_FW_BLOB_MAX_SIZE, the descriptor's maximum), else TooLong or
+  BadReply (`sg_ext_need`). The descriptor is generated
+  (`uapi_sev_guest_ext.resid`, its own module so the provenance records of
+  programs importing `sev_guest.resid` are unchanged) and matrix-checked.
+- **Hex literals (fixed).** The reducer did not read `0x` / `0b` / `0o`
+  integer literals (`sem_lit` took only decimal text), so code over them
+  never folded, and a descriptor written in hex stayed unknown (E0262).
+  `sem_lit_dec` reads them by value. The generator still emits decimal
+  (hex in the comment), since seeds before this one do not fold hex.
 
-Tests: `tests/devgen/run.sh` (14: `devgen_check`,
-`devgen_matches_uapi_{sev_guest,sev_guest_key,tdx_guest,nsm}`,
+Tests: `tests/devgen/run.sh` (15: `devgen_check`,
+`devgen_matches_uapi_{sev_guest,sev_guest_ext,sev_guest_key,tdx_guest,nsm}`,
 `devgen_matches_uapi_host` against `/usr/include`, `devgen_byte_stable`,
 `devgen_stale_file`, `devgen_snapshot_tamper`, `devgen_drift_layout`,
 `devgen_drift_request`, `devgen_drift_rename_only`,
 `devgen_request_numbers` -- the descriptors' numbers against clang's
 evaluation of the kernel's `_IOWR` for both targets, independently of the
-generator -- and `devgen_aarch64_descriptors`), `tests/device`
-(`devgen_check`), conformance `device_uapi_wrappers`.
+generator -- and `devgen_aarch64_descriptors`); `tests/device`
+(`devgen_check`, `e0263_nested_parent_out`, `e0263_nested_no_parent`,
+`e0263_nested_unaligned`, `e0263_nested_outside`,
+`e0263_nested_length_narrow`, `e0263_nested_length_overlap`,
+`e0263_nested_siblings`, `e0263_errno_twice`, `e0264_errno`,
+`device_errno` -- TIOCSIG's real EINVAL as an output --
+`device_hex_descriptor`); `tests/runtime/device_host.c`
+(`device_nested_placed`, `device_nested_pointer_never_leaks`,
+`device_nested_overrun_canary`, `device_nested_overrun_guard_page`,
+`device_nested_length_refused`, `device_nested_out_parent_refused`,
+`device_errno_outputs`, `device_errno_opt_in`,
+`device_errno_enotty_unsupported`; self-test modes 23-26 play a kernel
+that follows Nested pointers, since no device any user can open has
+one); `tests/reduce` (`hex_literals`); conformance `device_uapi_wrappers`,
+`device_ext_negotiation`.
 
 **Goal**: let a Resid program talk to kernel devices (ioctls on character
 devices, request/response devices such as `/dev/tpmrm0`, and configfs
