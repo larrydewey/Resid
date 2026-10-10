@@ -119,5 +119,25 @@ if command -v python3 > /dev/null; then
         fail=$((fail + 1)); echo "FAIL readline on a pty: $(grep -m1 -i error "$W/rl.log") $(diff "$W/rl.out" term/drive.out | head -3 | tr '\n' ' ')"
     fi
 fi
+# Secret mode turns core dumps off (runtime/rt/malloc.resid): a program
+# holding a secret aborts with exit 134 and its message, not SIGABRT, and a
+# stack overflow in it dumps no core; the control without a secret still
+# aborts with SIGABRT (needs python3 to tell an exit from a signal).
+if command -v python3 > /dev/null; then
+    nd_ok=1; nd_why=""
+    for p in secret_abort public_abort secret_overflow; do
+        (cd "$ROOT" && "$COMPILER" "tests/runtime/nodump/$p.resid" -o "$W/nd_$p") > "$W/nd_$p.log" 2>&1 \
+            || { nd_ok=0; nd_why="$nd_why $p: $(grep -m1 -i error "$W/nd_$p.log")"; continue; }
+        python3 nodump/check.py "$W/nd_$p" > "$W/nd_$p.out" 2>&1
+    done
+    msg="resid: abort: integer overflow in checked arithmetic"
+    [ "$(head -1 "$W/nd_secret_abort.out" 2>/dev/null)" = "exit 134" ] && grep -qF "$msg" "$W/nd_secret_abort.out" \
+        || { nd_ok=0; nd_why="$nd_why secret_abort: $(tr '\n' ' ' < "$W/nd_secret_abort.out")"; }
+    head -1 "$W/nd_public_abort.out" 2>/dev/null | grep -q '^signal 6 ' && grep -qF "$msg" "$W/nd_public_abort.out" \
+        || { nd_ok=0; nd_why="$nd_why public_abort: $(tr '\n' ' ' < "$W/nd_public_abort.out")"; }
+    [ "$(head -1 "$W/nd_secret_overflow.out" 2>/dev/null)" = "signal 11 nocore" ] \
+        || { nd_ok=0; nd_why="$nd_why secret_overflow: $(tr '\n' ' ' < "$W/nd_secret_overflow.out")"; }
+    if [ "$nd_ok" = 1 ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL secret mode core dumps:$nd_why"; fi
+fi
 echo "runtime: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
