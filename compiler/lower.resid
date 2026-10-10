@@ -4259,6 +4259,32 @@ GT lw_fixed_with(LW w, Int id, GT base, List(Str) env) {
 
 // ─── Closures, spawn, sort, expect ──────────────────────────────────
 
+// Force-time check of the `declassify` grant (spec §48): `declassify`
+// lowers to its operand, so a body that holds one (sec_erase marks it)
+// first asks the runtime whether the running capability frame grants
+// `declassify`, exactly as a provider call asks for its family. Authority
+// is fixed for the length of one call (sandbox regions nest and unwind
+// around calls), so one check at entry covers every declassify the body
+// reaches. Lambda and spawn bodies are functions of their own and check
+// for themselves. The string is `@.declassify.cap`, in the header of
+// every program that handles secrets.
+List(Str) lw_declassify_check(Kg g, Int body) {
+    return if (lw_declassifies(g, body)) { ["call void @resid_cap_check(ptr @.declassify.cap)"] } else { nil_list() };
+}
+
+Bool lw_declassifies(Kg g, Int id) {
+    KN n = g.ns[id];
+    if (n.kind == "paren" && n.aux == "@declassify") { return true; }
+    if (n.kind == "lambda" || n.kind == "spawn") { return false; }
+    return lw_declassifies_kids(g, id, 0, n.nk);
+}
+
+Bool lw_declassifies_kids(Kg g, Int id, Int i, Int n) {
+    if (i >= n) { return false; }
+    if (lw_declassifies(g, kg_kid(g, id, i))) { return true; }
+    return lw_declassifies_kids(g, id, i + 1, n);
+}
+
 // cg_lambda: the closure function goes to glines, its environment array
 // is built here. Named by the text position after `lambda`.
 GT lw_lambda(LW w, Int id, Str fnty, List(Str) env, GT c) {
@@ -4283,7 +4309,7 @@ GT lw_lambda(LW w, Int id, Str fnty, List(Str) env, GT c) {
     Str rv0 = if (bodyw.val == "") { "0" } else { bodyw.val };
     Str retline = if (ret == "Void") { "ret i1 " + rv0 } else { "ret " + rlt + " " + bodyw.val };
     List(Str) rets = if (rfx > 0) { lw_fx_ret(bodyw.val, ret, "%fx.r") } else { [retline] };
-    List(Str) lam = lw_fx_hoist(pr0.lines.concat(bodyw.lines).concat(rets), 0);
+    List(Str) lam = lw_fx_hoist(pr0.lines.concat(lw_declassify_check(w.g, lw_kid(w, id, np))).concat(bodyw.lines).concat(rets), 0);
     Str clo_body = str_join(lam.concat(["}"]), "\n");
     // Instances of one generic function share the lambda's position, so
     // the name also carries a digest of what it lowered to.
@@ -4332,7 +4358,7 @@ GT lw_spawn_mode(LW w, Int id, List(Str) env, GT c, Bool start) {
     CapPP pe = cap_enter_prologue(str_split(scaps, ","), CapPP {.lines = nil_list(), .glines = nil_list(), .n = 0});
     CapPP pi = capinject_at(b1, 0, true, CapPP {.lines = nil_list(), .glines = pe.glines, .n = pe.n});
     Str cpre = "@resid.cap." + str_slice(fnm, 1, str_len(fnm));
-    List(Str) fl = cap_rename_to(["define ptr " + fnm + "(ptr %envp) {", "entry:"].concat(pr0.lines).concat(pe.lines).concat(pi.lines).concat(["}"]).concat(pi.glines), cpre, 0, ListBuf());
+    List(Str) fl = cap_rename_to(["define ptr " + fnm + "(ptr %envp) {", "entry:"].concat(pr0.lines).concat(pe.lines).concat(lw_declassify_check(w.g, lw_kid(w, id, 0))).concat(pi.lines).concat(["}"]).concat(pi.glines), cpre, 0, ListBuf());
     // The region may run while this function goes on: what it captures is
     // shared from here (no in-place update or record reuse may touch it).
     LSC sc0 = lw_share_caps(w, cap0.vals, cap0.tys, 0, LSC {.g = lw_step(c, "", "", c.lines, imax(c.tmp, body.tmp)), .vals = nil_list()});
@@ -4700,7 +4726,15 @@ PG lw_fn_body(LW w0, Int d, PG g) {
     List(Str) bhead = if (split) { [defpre + pd + defpost, "entry:"] } else { pp1.lines };
     List(Str) fn_lines00 = if (tco_ok) { tco_function(bhead, pp2.lines, name, ll_ty(rbase), ptys_ll, lw_fx_sizes(tyl, 0, ListBuf()), lw_fx_texts(tyl, 0, ListBuf()), sret, defpre, defpost, "") } else { bhead.concat(pp2.lines) };
     List(Str) fn_lines01 = if (tco_ok && !resid_rtmod()) { lsv_apply(sv_apply(fn_lines00, tyl), tyl) } else { fn_lines00 };
-    List(Str) fn_lines0 = lw_fx_hoist(fn_lines01, lw_find_line(fn_lines01, "entry:", 0) + 1);
+    List(Str) fn_lines0h = lw_fx_hoist(fn_lines01, lw_find_line(fn_lines01, "entry:", 0) + 1);
+    // A body that declassifies checks the grant once, in the entry block:
+    // after the sandbox prologue's resid_cap_enter when there is one, and
+    // before tco.head, so a self-recursive loop is not checked per step.
+    List(Str) dck = lw_declassify_check(w.g, lw_kid(w, d, n - 1));
+    Int dent = lw_find_line(fn_lines0h, "entry:", 0) + 1;
+    Int denter = if (sandboxed && !split) { lw_find_prefix(fn_lines0h, "call void @resid_cap_enter(", 0) + 1 } else { 0 };
+    Int dat = if (denter > 0) { denter } else { dent };
+    List(Str) fn_lines0 = if (dck.len() == 0) { fn_lines0h } else { fn_lines0h[0..dat].concat(dck).concat(fn_lines0h[dat..fn_lines0h.len()]) };
     // A loop whose iterations carry nothing they allocate frees each
     // iteration's allocations when the next one starts (lr_region).
     Str rev = lr_ret_evac(w.fs, rbase);
@@ -5190,6 +5224,12 @@ LDG lw_dbg_fn(LW w, Int d, Str name, List(Str) ls, Int next, List(Str) tyl) {
 }
 
 type LDV = { List(Str) lines; List(Str) meta; Int next; };
+
+Int lw_find_prefix(List(Str) ls, Str l, Int i) {
+    if (i >= ls.len()) { return -1; }
+    if (str_starts_with(ls[i], l)) { return i; }
+    return lw_find_prefix(ls, l, i + 1);
+}
 
 Int lw_find_line(List(Str) ls, Str l, Int i) {
     if (i >= ls.len()) { return -1; }

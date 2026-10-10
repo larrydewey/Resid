@@ -73,9 +73,20 @@ secret once parsed. Ciphertext, an authenticated record's plaintext and
 the Finished MAC leave through `TlsPublish(B)` (a declassification each);
 so the TLS server, client and transport, and every program using them,
 carry `@requires(declassify)`. Checked against RFC 8448 at both types
-and under valgrind. **Step 2 of §7 is complete.** Still to do: a
-force-time `resid_cap_check("declassify")` (declassify lowers to nothing,
-so the static check is the whole check today), and step 3 of §7.
+and under valgrind. **Step 2 of §7 is complete.** The force-time check
+is in (2026-10-09): `sec_erase` marks every declassify left after
+reduction (one folded to a literal is not marked), and each function,
+lambda and spawn body holding one calls `resid_cap_check` on
+`declassify` in its entry block (`lw_declassify_check` in
+`compiler/lower.resid`), after a sandbox's `resid_cap_enter` and before
+a self-recursive loop's head: the capability frames are fixed for one
+call, so one check covers every declassify the body reaches, and a
+check at entry is never weaker than one at the call (it may refuse a
+call whose declassify the path would not reach, which is fail-closed).
+A closure that declassifies, run inside a spawn list or sandbox
+ceiling without `declassify`, now aborts (`secret_declassify_granted`,
+`secret_declassify_spawn_dropped`, `secret_declassify_sandbox_dropped`).
+Still to do: step 3 of §7.
 
 **Goal**: make "this value is a secret" knowledge the compiler holds and
 enforces, so that code which branches on, indexes with, prints, compares

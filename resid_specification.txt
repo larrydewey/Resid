@@ -3192,6 +3192,18 @@ secret only through declassify.
 After checking and reduction Secret(T) is erased: it lowers
 exactly as T, and secret(x) and declassify(x, r) as x.
 
+The declassify grant is also checked at force time, like a
+provider call (§21.3): a function, lambda or spawn body that
+still declassifies after reduction asks the running thread's
+capability frames for `declassify` when it is entered, once
+per call (a self-recursive loop is not checked per step), and
+aborts with "capability not granted: declassify" when a spawn
+list or sandbox ceiling on the stack dropped it -- for
+instance a closure, made where the grant holds, run inside a
+spawn () or a sandbox without it. Inside a spawn region the
+abort fails the region (its RegionError). A declassify the
+reducer folded to a known value leaves no code and no check.
+
 A program that handles secrets runs its allocator in secret
 mode, switched on before main: every heap, region, thread
 stack and thread-local mapping is left out of core dumps,
@@ -3288,6 +3300,5 @@ program that runs a TLS handshake or record therefore needs the
 declassify grant.
 
 With TLS, every key the cryptography library handles is secret
-at run time (step 2 of PLAN-secret-type.md §7). Planned: a
-run-time check of the declassify grant, and tests/ct cases
-generated from the graph.
+at run time (step 2 of PLAN-secret-type.md §7). Planned:
+tests/ct cases generated from the graph.

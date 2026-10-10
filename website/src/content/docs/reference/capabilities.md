@@ -58,7 +58,11 @@ sandbox (filesystem(readonly)) {
 Nested sandboxes meet (only narrow); `sandbox ()` grants nothing. A
 statically apparent requirement that exceeds a sandbox is a compile-time
 error; a dynamic one fails when the provider call runs, because every
-provider call is checked against the calling thread's sandbox frames. A
+provider call is checked against the calling thread's sandbox frames. So
+is `declassify`: a function, lambda or spawn body that declassifies checks
+the grant against those frames when it is entered, so a closure that
+publishes a secret fails inside a spawn or sandbox that dropped
+`declassify`. A
 handle may enter a sandbox only when every capability it requires fits.
 
 ## Manifests
