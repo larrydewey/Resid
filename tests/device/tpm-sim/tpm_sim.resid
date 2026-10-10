@@ -6,12 +6,17 @@
 // anything but the device host. Run by tests/device/run.sh when
 // RESID_TPM_SIMULATOR names the simulator; argument 1 is its command port.
 //
-// It makes what the wrappers only use: a primary ECC P-256 signing key (the
-// AK, TPM2_CreatePrimary) and an NV index (TPM2_NV_DefineSpace,
+// It makes what the wrappers only use: primary ECC P-256 signing keys (the
+// AK, TPM2_CreatePrimary) and NV indices (TPM2_NV_DefineSpace,
 // TPM2_NV_Write), written here as raw commands (TCG TPM 2.0 Part 3,
 // Tables 160, 225, 241). Then it checks the quote's ECDSA signature over
 // `attest` with the AK's public key from ReadPublic, and the quote's PCR
 // digest against PCR_Read's values.
+//
+// Dictionary-attack lockout: an index and keys with a password and without
+// NO_DA / noDA are made too; the wrappers must refuse them before sending
+// anything the TPM would count (TPM_PT_LOCKOUT_COUNTER stays 0), and one
+// raw NV_Read with the empty password shows that the TPM would have.
 import "dev/tpm_wire.resid";
 import "ecdsa.resid";
 import "hash.resid";
@@ -75,11 +80,16 @@ List(Int) startup() { return cmd(0x8001, 0x144, [0, 0]); }
 // TPM2_CreatePrimary under the owner: an ECC P-256 restricted signing key,
 // ECDSA with SHA-256 (fixedTPM | fixedParent | sensitiveDataOrigin |
 // userWithAuth | restricted | sign = 0x00050072).
-List(Int) create_primary() {
-    List(Int) pub_area = be(0x23, 2).concat(be(0x0b, 2)).concat(be(0x00050072, 4)).concat(be(0, 2))
+List(Int) create_primary() { return create_key(0x00050072, [], []); }
+
+// The same with other objectAttributes, an authPolicy and a password
+// (userAuth).
+List(Int) create_key(Int attrs, List(Int) policy, List(Int) password) {
+    List(Int) pub_area = be(0x23, 2).concat(be(0x0b, 2)).concat(be(attrs, 4)).concat(be(policy.len(), 2)).concat(policy)
         .concat(be(0x10, 2)).concat(be(0x18, 2)).concat(be(0x0b, 2)).concat(be(3, 2)).concat(be(0x10, 2))
         .concat(be(0, 2)).concat(be(0, 2));
-    List(Int) params = be(4, 2).concat(be(0, 2)).concat(be(0, 2))
+    List(Int) sens = be(password.len(), 2).concat(password).concat(be(0, 2));
+    List(Int) params = be(sens.len(), 2).concat(sens)
         .concat(be(pub_area.len(), 2)).concat(pub_area)
         .concat(be(0, 2)).concat(be(0, 4));
     return cmd(0x8002, 0x131, with_auth(be(0x40000001, 4), params));
@@ -88,9 +98,18 @@ List(Int) create_primary() {
 // TPM2_NV_DefineSpace by the owner: `size` bytes at `index`, readable and
 // writable by the owner and with the index's own (empty) auth, no
 // dictionary-attack lockout (0x02060006).
-List(Int) nv_define(Int index, Int size) {
-    List(Int) nvp = be(index, 4).concat(be(0x0b, 2)).concat(be(0x02060006, 4)).concat(be(0, 2)).concat(be(size, 2));
-    return cmd(0x8002, 0x12A, with_auth(be(0x40000001, 4), be(0, 2).concat(be(nvp.len(), 2)).concat(nvp)));
+List(Int) nv_define(Int index, Int size) { return nv_define_as(index, size, 0x02060006, []); }
+
+// The same with other attributes and the index's own password.
+List(Int) nv_define_as(Int index, Int size, Int attrs, List(Int) password) {
+    List(Int) nvp = be(index, 4).concat(be(0x0b, 2)).concat(be(attrs, 4)).concat(be(0, 2)).concat(be(size, 2));
+    return cmd(0x8002, 0x12A, with_auth(be(0x40000001, 4), be(password.len(), 2).concat(password).concat(be(nvp.len(), 2)).concat(nvp)));
+}
+
+// TPM2_NV_Read of `index` by its own authorization with the empty password,
+// raw: what the wrappers refuse to send to a DA-protected index.
+List(Int) nv_read_raw(Int index, Int size) {
+    return cmd(0x8002, 0x14E, with_auth(be(index, 4).concat(be(index, 4)), be(size, 2).concat(be(0, 2))));
 }
 
 // TPM2_NV_Write by the owner: `data` at `offset`.
@@ -165,7 +184,22 @@ List(Int) cat_digests(List(List(UInt(8))) ds, Int i, List(Int) acc) {
     return cat_digests(ds, i + 1, acc.concat(ints(ds[i], 0, ListBuf())));
 }
 
-@requires(network(readonly), args)
+// TPM_PT_LOCKOUT_COUNTER (Part 2, TPM_PT: PT_VAR + 14): failedTries.
+@requires(network(readonly))
+Int lockout_count(Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send) {
+    return match (tpm_properties_via(send, 526, 1)) { Ok(ps) => tpm_property(ps, 526) else { 0 - 1 }, Err(e) => 0 - 2, };
+}
+
+Str refused(Str what, TpmError e) {
+    return match (e) { TpmArg(why) => what + ": refused before sending", TpmDev(d) => what + ": " + tpm_error_text(e), TpmRc(rc) => what + ": " + tpm_error_text(e), TpmBad(why) => what + ": " + tpm_error_text(e), };
+}
+
+@requires(network(readonly))
+Result(List(Secret(UInt(8))), TpmError) send_sim_secret(Int fd, List(UInt(8)) cmd) {
+    return match (send_sim(fd, cmd)) { Ok(r) => Ok(secret_split(classify(r))), Err(e) => Err(e), };
+}
+
+@requires(network(readonly), args, declassify)
 Int main() {
     Int port = str_parse_int(args.get(1));
     Int plat = resid_tcp_connect("127.0.0.1", port + 1);
@@ -204,6 +238,37 @@ Int main() {
     println(match (tpm_nv_read_all_via(send, idx, idx)) { Ok(b) => f"NV_Read by its own auth {b.len()} bytes", Err(e) => tpm_error_text(e), });
     println(match (tpm_nv_read_public_via(send, 0x01500002)) { Ok(n) => "no such index: answered", Err(e) => "no such index: " + tpm_error_text(e), });
     println(match (tpm_handles_via(send, 0x01000000, 16)) { Ok(hs) => f"NV handles {hs}", Err(e) => tpm_error_text(e), });
+
+    // The secret read: the same index, its data as secret bytes.
+    Result(List(Secret(UInt(8))), TpmError) closure(List(UInt(8))) send_secret = lambda(c) { send_sim_secret(fd, c) };
+    println(match (tpm_nv_read_secret_via(send, send_secret, idx, idx, 64, 100)) {
+        Ok(b) => f"NV_Read secret {b.len()} bytes, same as written {same(ints(declassify(secret_join(b), "test output"), 0, ListBuf()), data[100..164], 0)}",
+        Err(e) => tpm_error_text(e),
+    });
+
+    // Dictionary-attack lockout. An index with a password, read with its
+    // own authorization, not NO_DA (0x00060006); keys with a password that
+    // are not noDA: one with an authPolicy too, one whose USER role needs a
+    // policy (adminWithPolicy, no userWithAuth: 0x000500b2).
+    Int da_idx = 0x01500003;
+    List(Int) pw_bytes = [112, 119];
+    println(f"NV_DefineSpace (password, DA-protected) rc {raw(fd, nv_define_as(da_idx, 16, 0x00060006, pw_bytes))}");
+    println(f"NV_Write rc {raw(fd, nv_write(da_idx, data[0..16], 0))}");
+    Int ak_pol = raw_handle(fd, create_key(0x00050072, pattern(32, 0, ListBuf()), pw_bytes));
+    Int ak_adm = raw_handle(fd, create_key(0x000500b2, pattern(32, 0, ListBuf()), pw_bytes));
+    println(f"CreatePrimary with a policy 0x{ak_pol:hex}, policy only 0x{ak_adm:hex}");
+    println(f"lockout counter {lockout_count(send)}");
+    println(match (tpm_nv_read_via(send, da_idx, da_idx, 8, 0)) { Ok(b) => "NV_Read by its own auth, DA-protected: sent", Err(e) => refused("NV_Read by its own auth, DA-protected", e), });
+    println(match (tpm_nv_read_all_via(send, da_idx, da_idx)) { Ok(b) => "NV_Read all by its own auth, DA-protected: sent", Err(e) => refused("NV_Read all by its own auth, DA-protected", e), });
+    println(match (tpm_nv_read_secret_via(send, send_secret, da_idx, da_idx, 8, 0)) { Ok(b) => "NV_Read secret by its own auth, DA-protected: sent", Err(e) => refused("NV_Read secret by its own auth, DA-protected", e), });
+    println(match (tpm_quote_via(send, ak_pol, nonce, sel)) { Ok(q) => "Quote by a key with a policy: sent", Err(e) => refused("Quote by a key with a policy", e), });
+    println(match (tpm_quote_via(send, ak_adm, nonce, sel)) { Ok(q) => "Quote by a policy-only key: sent", Err(e) => refused("Quote by a policy-only key", e), });
+    println(f"lockout counter {lockout_count(send)}");
+    println(match (tpm_nv_read_via(send, tpm_rh_owner(), da_idx, 16, 0)) { Ok(b) => f"NV_Read by owner {b.len()} bytes, same as written {same(ints(b, 0, ListBuf()), data[0..16], 0)}", Err(e) => tpm_error_text(e), });
+    // What the wrappers spared the TPM: the empty password fails
+    // (TPM_RC_AUTH_FAIL, session 1) and the count goes up.
+    println(f"raw NV_Read by its own auth, empty password: rc 0x{raw(fd, nv_read_raw(da_idx, 8)):hex}");
+    println(f"lockout counter {lockout_count(send)}");
     _ = resid_tcp_close(fd);
     return 0;
 }

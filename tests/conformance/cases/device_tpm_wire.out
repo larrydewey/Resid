@@ -30,3 +30,19 @@ ReadPublic: 172 bytes; truncated accepted 0; of 344 mutants 322 parse
 NV_ReadPublic: 62 bytes; truncated accepted 0; of 124 mutants 103 parse
 NV_Read: 29 bytes; truncated accepted 0; of 58 mutants 33 parse
 Quote: 238 bytes; truncated accepted 0; of 476 mutants 442 parse
+NV by owner: allowed
+NV by platform: allowed
+NV by itself, NO_DA: allowed
+NV by itself, DA-protected: tpm: bad argument: index 0x1500001 is read with its own authorization and is not TPMA_NV_NO_DA: if the index has an authValue, the empty password fails and counts toward the TPM's dictionary-attack lockout; read it with the owner's authorization
+NV by itself, no AUTHREAD: allowed
+NV by lockout: tpm: bad argument: NV_Read is authorized by the owner, the platform or the index itself, not 0x4000000a
+NV by another index: tpm: bad argument: NV_Read is authorized by the owner, the platform or the index itself, not 0x1500002
+key noDA: allowed
+key userWithAuth: allowed
+key policy only: tpm: bad argument: the key's USER role needs a policy session (userWithAuth clear); this wrapper authorizes only with an empty password
+key userWithAuth and a policy: tpm: bad argument: the key is not noDA and has an authPolicy, so it may also have an authValue: the empty password would then fail and count toward the TPM's dictionary-attack lockout
+key public area short: tpm: malformed response: objectAttributes: short
+secret data deadbeef01020304
+secret tpm: response code 0x922
+secret tpm: malformed response: data: short
+secret decoder disagrees on 0 prefixes and 0 mutants

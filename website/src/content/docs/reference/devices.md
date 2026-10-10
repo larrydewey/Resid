@@ -80,7 +80,7 @@ signature over it.
 | `tsm_report_get` on `tdx_guest` | `outblob`, a TDX quote (the quoting enclave's key, certified through the PCK chain) | `provider`, `generation` |
 | `tsm_report_get` on `arm_cca_guest` | `outblob`, the CCA token (realm token by the RAK, platform token by the CPAK) | `provider`, `generation` |
 | `tpm_quote` | `attest` (by the attestation key; verify the AK through its certificate or the EK) | PCR values the quote does not cover |
-| `tpm_pcr_read`, `tpm_nv_read`, `tpm_nv_read_all`, `tpm_read_public`, `tpm_nv_read_public`, `tpm_get_capability`, `tpm_get_random` | -- | all (an EK or AK certificate read from NV is signed by its issuer, not by the read) |
+| `tpm_pcr_read`, `tpm_nv_read`, `tpm_nv_read_all`, `tpm_nv_read_secret`, `tpm_read_public`, `tpm_nv_read_public`, `tpm_get_capability`, `tpm_get_random` | -- | all (an EK or AK certificate read from NV is signed by its issuer, not by the read) |
 | `tpm_azure_hcl_report` | the SNP or TDX report inside it, whose report data hashes the runtime claims after it | the 32-byte header and the claims themselves; written at boot, so no nonce: freshness comes from a quote by the AK it binds |
 | `pci_tsm_present` | -- | all |
 
@@ -126,10 +126,30 @@ The wrappers build one TPM 2.0 command each, send it to `/dev/tpmrm0`
 call's own) and decode the response: `tpm_get_capability`,
 `tpm_properties`, `tpm_handles`, `tpm_get_random`, `tpm_pcr_read`,
 `tpm_read_public`, `tpm_nv_read_public`, `tpm_nv_read`, `tpm_nv_read_all`,
-`tpm_quote` (with an existing attestation key) and `tpm_azure_hcl_report`.
-Errors are `TpmError`: `TpmDev(DeviceError)`, `TpmRc(code)`, `TpmBad(why)`
-for a response that does not parse, `TpmArg(why)` for an argument a
-command cannot carry.
+`tpm_nv_read_secret`, `tpm_quote` (with an existing attestation key) and
+`tpm_azure_hcl_report`. Errors are `TpmError`: `TpmDev(DeviceError)`,
+`TpmRc(code)`, `TpmBad(why)` for a response that does not parse,
+`TpmArg(why)` for an argument a command cannot carry or a read the
+wrapper refuses.
+
+`tpm_nv_read`'s bytes are public (`List(UInt(8))`). For an index that
+holds a secret, `tpm_nv_read_secret` (which also needs `declassify`)
+returns `List(Secret(UInt(8)))`: the response arrives through a second
+private descriptor whose output is secret, and only its structure --
+header, sizes, the session's response -- is declassified.
+
+Authorization is the empty password, and nothing else can be passed. A
+wrong password counts toward the TPM's dictionary-attack lockout unless
+the entity is exempt, so `tpm_nv_read` (and `_all`, `_secret`) first
+reads the index's public area and refuses an index authorized by itself
+(`auth_handle` = the index) that has TPMA_NV_AUTHREAD and not
+TPMA_NV_NO_DA; read such an index with `tpm_rh_owner()` (or
+`tpm_rh_platform()`), which are exempt. `tpm_quote` reads the key's
+public area and refuses a key without noDA whose userWithAuth is clear or
+that has an authPolicy. A key without noDA, with userWithAuth and no
+policy (the usual AK) is quoted: if it had a non-empty authValue, that
+Quote would count, which no public area shows (`tpm_nv_read_da_ok`,
+`tpm_quote_key_ok`).
 
 Each wrapper is `dev/tpm_wire.resid`'s `tpm_*_via(send, ...)` over
 `/dev/tpmrm0`; `tests/device` runs the same functions against the IBM TPM
@@ -139,7 +159,7 @@ simulator over TCP (quote signatures verified) when
 All need the full `device` grant. A Transact writes its command, and the
 kernel sees only bytes: a "read-only" TPM descriptor would still pass
 `TPM2_Clear` or `TPM2_NV_Write` unless the generic device host parsed TPM
-commands, which it does not. Instead the descriptor is private to
+commands, which it does not. Instead the descriptors are private to
 `tpm.resid`, so a program reaches the TPM only through the wrappers, none
 of which sends a command meant to change TPM state. Bound a dependency to
 them with `devices = ["tpm"]`.

@@ -17,13 +17,18 @@
 // the commands this module calls too: a quote is signed with a key the TPM
 // holds, a read of an NV index can bump its read lock or lockout counter.
 //
-// What narrows it instead: the descriptor is private to this module (it is
-// not `pub`), so a program reaches /dev/tpmrm0 only through the typed
+// What narrows it instead: the descriptors are private to this module (they
+// are not `pub`), so a program reaches /dev/tpmrm0 only through the typed
 // wrappers below, which build exactly the commands they name -- GetCapability,
 // GetRandom, PCR_Read, ReadPublic, NV_ReadPublic, NV_Read and Quote with an
 // existing key -- and never a command that writes TPM state on purpose. A
-// manifest bound `devices = ["tpm"]` (or `["tpm.tpmrm0"]`) is how a
-// dependency is limited to them.
+// manifest bound `devices = ["tpm"]` (or `["tpm.tpmrm0"]`,
+// `["tpm.tpmrm0_secret"]`) is how a dependency is limited to them.
+//
+// Authorization is the empty password only (tpm_wire.resid has no password
+// parameter), and NV_Read and Quote first read the index's or key's public
+// area and refuse what an empty password could turn into a
+// dictionary-attack lockout count (tpm_nv_read_da_ok, tpm_quote_key_ok).
 //
 // What is signed. A quote's `attest` is signed by the attestation key
 // (verify the signature with the AK's public area, and the AK through its
@@ -46,6 +51,13 @@ Transact tpm_op() {
     return Transact {.name = "tpm.tpmrm0", .path = "/dev/tpmrm0", .max_command = 4096, .max_response = 4096, .secret = false, .write = true, .stability = Uapi};
 }
 
+// The same device with the response marked secret: it comes back as
+// List(Secret(UInt(8))) (through resid_device_secret, never in the host's
+// reply), for tpm_nv_read_secret.
+Transact tpm_op_secret() {
+    return Transact {.name = "tpm.tpmrm0_secret", .path = "/dev/tpmrm0", .max_command = 4096, .max_response = 4096, .secret = true, .write = true, .stability = Uapi};
+}
+
 // -- Wrappers -------------------------------------------------------------------
 // Each is lib/dev/tpm_wire.resid's *_via over /dev/tpmrm0.
 
@@ -56,6 +68,18 @@ Result(List(UInt(8)), TpmError) tpm_send(List(UInt(8)) c) {
         Err(e) => Err(TpmDev(e)),
         Ok(outs) => match (dv_out_bytes(outs, 0)) {
             None => Err(TpmDev(BadReply("tpm.tpmrm0", "no response buffer"))),
+            Some(r) => Ok(r),
+        },
+    };
+}
+
+// One command's bytes to the TPM, the response's back as secret bytes.
+@requires(device)
+Result(List(Secret(UInt(8))), TpmError) tpm_send_secret(List(UInt(8)) c) {
+    return match (device.transact(tpm_op_secret(), c)) {
+        Err(e) => Err(TpmDev(e)),
+        Ok(outs) => match (dv_out_secret(outs, 0)) {
+            None => Err(TpmDev(BadReply("tpm.tpmrm0_secret", "no response buffer"))),
             Some(r) => Ok(r),
         },
     };
@@ -108,12 +132,25 @@ pub Result(NvPublic, TpmError) tpm_nv_read_public(Int index) {
 }
 
 // TPM2_NV_Read of `size` bytes at `offset`, authorized by `auth_handle`
-// (the index itself, or tpm_rh_owner()) with an empty password. A TPM
-// reads at most TPM_PT_NV_BUFFER_MAX bytes per command; tpm_nv_read_all
-// reads a whole index.
+// (tpm_rh_owner(), tpm_rh_platform() or the index itself) with an empty
+// password, after NV_ReadPublic: an index read with its own authorization
+// that is not TPMA_NV_NO_DA is refused (TpmArg), since a wrong password
+// there counts toward the TPM's dictionary-attack lockout. A TPM reads at
+// most TPM_PT_NV_BUFFER_MAX bytes per command; tpm_nv_read_all reads a
+// whole index. The bytes are public (List(UInt(8))): for an index that
+// holds a secret, use tpm_nv_read_secret.
 @requires(device)
 pub Result(List(UInt(8)), TpmError) tpm_nv_read(Int auth_handle, Int index, Int size, Int offset) {
     return tpm_nv_read_via(lambda(c) { tpm_send(c) }, auth_handle, index, size, offset);
+}
+
+// tpm_nv_read for an index that holds a secret (a sealed key, a
+// credential): the response is received as secret bytes and only its
+// structure -- header, sizes, the session's response -- is declassified
+// (tpm2_nv_read_resp_secret), hence `declassify`.
+@requires(device, declassify)
+pub Result(List(Secret(UInt(8))), TpmError) tpm_nv_read_secret(Int auth_handle, Int index, Int size, Int offset) {
+    return tpm_nv_read_secret_via(lambda(c) { tpm_send(c) }, lambda(c) { tpm_send_secret(c) }, auth_handle, index, size, offset);
 }
 
 // A whole NV index, in pieces of the TPM's TPM_PT_NV_BUFFER_MAX.
@@ -124,7 +161,9 @@ pub Result(List(UInt(8)), TpmError) tpm_nv_read_all(Int auth_handle, Int index) 
 
 // TPM2_Quote: the PCRs `sel` selects, signed by the attestation key at
 // `ak_handle` (already loaded or persistent, with an empty password) in its
-// own scheme, with `nonce` (at most 64 bytes) as the qualifying data.
+// own scheme, with `nonce` (at most 64 bytes) as the qualifying data. The
+// key's public area is read first and a key an empty password could
+// DA-count against, as far as it shows, is refused (tpm_quote_key_ok).
 @requires(device)
 pub Result(TpmQuote, TpmError) tpm_quote(Int ak_handle, List(UInt(8)) nonce, List(PcrSel) sel) {
     return tpm_quote_via(lambda(c) { tpm_send(c) }, ak_handle, nonce, sel);

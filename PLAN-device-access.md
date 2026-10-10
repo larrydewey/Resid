@@ -607,6 +607,29 @@ no compiler or runtime change. Checked against Linux 7.3-rc6 (torvalds
   index. The simulator speaks TCP, not a character device, so the device
   host's Transact itself is not exercised against a TPM (no root here for
   CUSE or the `tss` group); no binary gains a non-device path to a TPM.
+- **Review fixes: the TPM's lockout and secret NV data.** The command
+  builders lost their password parameter (a password is a secret, and a
+  command carrying one would need a secret command buffer; only the empty
+  password is ever sent). NV_Read reads NV_ReadPublic first and refuses an
+  index authorized by its own authValue (TPMA_NV_AUTHREAD) without
+  TPMA_NV_NO_DA, and any authorizing handle but the owner, the platform
+  or the index (`tpm_nv_read_da_ok`); Quote reads the key's public area
+  and refuses a key without noDA whose userWithAuth is clear or that has
+  an authPolicy (`tpm_quote_key_ok`). Checked against the reference
+  implementation (ibmswtpm2 e1df46e4, SessionProcess.c `IsDAExempted`,
+  `IncrementLockout`: permanent handles but TPM_RH_LOCKOUT are exempt, an
+  index with NO_DA and an object with noDA are) and go-tpm's bit values.
+  What no public area shows -- whether the authValue is empty -- stays a
+  residual for a userWithAuth key without noDA or policy (SECURITY.md).
+  `tpm_nv_read_secret` reads through a second private Transact,
+  `tpm.tpmrm0_secret`, whose output is secret, and declassifies only the
+  response's structure (`tpm2_nv_read_resp_secret`). Tests: conformance
+  `device_tpm_wire` (every DA rule; the secret decoder agrees with the
+  public one on every prefix and mutant), the simulator case (a
+  DA-protected index with a password and two keys refused with
+  TPM_PT_LOCKOUT_COUNTER still 0, the withheld raw NV_Read then counting
+  1; a secret read of 64 bytes), `tests/ct` (`dev-tpm-nv-resp-secret`,
+  `dev-tpm-nv-read-secret`).
 - **Sources checked.** SNP certificate-table GUIDs and byte order:
   virtee/sev a966d06d and google/go-sev-guest 9c5dffcd (AMD's GHCB PDF,
   56421, could not be retrieved from amd.com); the earlier guid_t

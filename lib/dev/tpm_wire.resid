@@ -24,11 +24,25 @@
 //
 // Authorization: the commands that need one (NV_Read, Quote) use the
 // password session TPM_RS_PW (0x40000009) with an empty nonce, the
-// attribute continueSession and the given password, as go-tpm does
+// attribute continueSession and an empty password, as go-tpm does
 // (legacy/tpm2, encodeQuote and encodeNVRead); a TPM ignores
 // continueSession on the password session (tpm2-tss's ESYS sends 0
 // there). An empty password is what the Azure, Google and
-// TCG-provisioned objects below expect.
+// TCG-provisioned objects below expect, and the only one these builders
+// send: a password is a secret, and a command carrying one would be a
+// secret buffer, which no command here is (the device descriptor's
+// command is public). There is no password parameter to leak.
+//
+// Dictionary-attack lockout. A password the TPM checks and rejects counts
+// against its lockout (failedTries) unless the entity is exempt: a
+// permanent handle other than TPM_RH_LOCKOUT, an NV index with
+// TPMA_NV_NO_DA, an object with noDA (TCG TPM 2.0 Part 1, "Dictionary
+// Attack Protection"; IsDAExempted and IncrementLockout in the reference
+// implementation's SessionProcess.c). An empty password is rejected
+// exactly when the entity's authValue is not empty, which no command
+// shows, so each *_via wrapper reads the public area first and refuses
+// (TpmArg, nothing more sent) what it can see would risk a count:
+// tpm_nv_read_da_ok and tpm_quote_key_ok below say what is checked.
 
 import "device.resid";
 
@@ -86,6 +100,20 @@ pub Int tpm_alg_ecschnorr() { return 28; }
 // Permanent handles (Part 2, Table 28).
 pub Int tpm_rh_owner() { return 1073741825; }    // 0x40000001
 pub Int tpm_rs_pw() { return 1073741833; }       // 0x40000009
+pub Int tpm_rh_platform() { return 1073741836; } // 0x4000000C
+
+// TPMA_NV bits (Part 2, "TPMA_NV (NV Index Attributes)"; go-tpm
+// legacy/tpm2 AttrAuthRead, AttrNoDA): the index's own authorization may
+// read it; failed authorizations of the index do not count toward lockout.
+pub Int tpma_nv_authread() { return 262144; }    // 1 << 18
+pub Int tpma_nv_no_da() { return 33554432; }     // 1 << 25
+
+// TPMA_OBJECT bits (Part 2, "TPMA_OBJECT (Object Attributes)"; go-tpm
+// FlagUserWithAuth, FlagNoDA): the USER role may be authorized with the
+// authValue (a password or HMAC) rather than only a policy; failed
+// authorizations of the object do not count toward lockout.
+pub Int tpma_object_user_with_auth() { return 64; }   // 1 << 6
+pub Int tpma_object_no_da() { return 1024; }          // 1 << 10
 
 // -- Well-known handles and NV indices --------------------------------------
 // Where attestation material lives on the vTPMs an attester meets. Each
@@ -149,9 +177,9 @@ ListBuf(UInt(8)) tw_push_all(ListBuf(UInt(8)) acc, List(UInt(8)) bs, Int i) {
 }
 
 // TPMS_AUTH_COMMAND for the password session: TPM_RS_PW, an empty nonce,
-// continueSession (1), the password as the HMAC field.
-List(UInt(8)) tw_pw_auth(List(UInt(8)) password) {
-    return tw_be(tpm_rs_pw(), 4).concat(tw_be(0, 2)).concat([(UInt(8))1]).concat(tw_2b(password));
+// continueSession (1), an empty password as the HMAC field.
+List(UInt(8)) tw_pw_auth() {
+    return tw_be(tpm_rs_pw(), 4).concat(tw_be(0, 2)).concat([(UInt(8))1]).concat(tw_be(0, 2));
 }
 
 Bool tw_u32_ok(Int v) { return v >= 0 && v <= 4294967295; }
@@ -219,24 +247,23 @@ pub Result(List(UInt(8)), TpmError) tpm2_nv_read_public_cmd(Int index) {
 }
 
 // TPM2_NV_Read (Part 3, Table 236): authHandle, nvIndex, the password
-// session, size, offset.
-pub Result(List(UInt(8)), TpmError) tpm2_nv_read_cmd(Int auth_handle, Int index, Int size, Int offset, List(UInt(8)) password) {
+// session (empty password), size, offset.
+pub Result(List(UInt(8)), TpmError) tpm2_nv_read_cmd(Int auth_handle, Int index, Int size, Int offset) {
     if (!tw_u32_ok(auth_handle) || !tw_u32_ok(index)) { return Err(TpmArg("handles are u32")); }
     if (!tw_u16_ok(size) || !tw_u16_ok(offset)) { return Err(TpmArg("size and offset are u16")); }
-    if (password.len() > 64) { return Err(TpmArg("a password is at most 64 bytes")); }
-    return Ok(tw_command(tpm_cc_nv_read(), [auth_handle, index], tw_pw_auth(password), tw_be(size, 2).concat(tw_be(offset, 2))));
+    return Ok(tw_command(tpm_cc_nv_read(), [auth_handle, index], tw_pw_auth(), tw_be(size, 2).concat(tw_be(offset, 2))));
 }
 
 // TPM2_Quote (Part 3, Table 91): signHandle (an existing attestation key,
-// loaded or persistent), the password session, qualifyingData (the
-// verifier's nonce), inScheme TPM_ALG_NULL (the key's own scheme), PCRselect.
-pub Result(List(UInt(8)), TpmError) tpm2_quote_cmd(Int sign_handle, List(UInt(8)) qualifying, List(PcrSel) sel, List(UInt(8)) password) {
+// loaded or persistent), the password session (empty password),
+// qualifyingData (the verifier's nonce), inScheme TPM_ALG_NULL (the key's
+// own scheme), PCRselect.
+pub Result(List(UInt(8)), TpmError) tpm2_quote_cmd(Int sign_handle, List(UInt(8)) qualifying, List(PcrSel) sel) {
     if (!tw_u32_ok(sign_handle)) { return Err(TpmArg("a handle is u32")); }
     if (qualifying.len() > 64) { return Err(TpmArg(f"qualifying data of {qualifying.len()} bytes, at most 64")); }
-    if (password.len() > 64) { return Err(TpmArg("a password is at most 64 bytes")); }
     List(UInt(8)) s = tw_pcr_selection(sel)?;
     List(UInt(8)) params = tw_2b(qualifying).concat(tw_be(tpm_alg_null(), 2)).concat(s);
-    return Ok(tw_command(tpm_cc_quote(), [sign_handle], tw_pw_auth(password), params));
+    return Ok(tw_command(tpm_cc_quote(), [sign_handle], tw_pw_auth(), params));
 }
 
 // -- Decoding -------------------------------------------------------------------
@@ -474,12 +501,44 @@ pub Result(NvPublic, TpmError) tpm2_nv_read_public_resp(List(UInt(8)) r) {
     return Ok(NvPublic {.index = idx.v, .name_alg = alg.v, .attributes = attrs.v, .auth_policy = pol.v, .data_size = size.v, .name = name.v});
 }
 
-// TPM2_NV_Read's response (Part 3, Table 237): data.
+// TPM2_NV_Read's response (Part 3, Table 237): data. The bytes are
+// public here; tpm2_nv_read_resp_secret is the decoder for an index that
+// holds a secret.
 pub Result(List(UInt(8)), TpmError) tpm2_nv_read_resp(List(UInt(8)) r) {
     TwAt p = tpm_resp_params(r, 0, true)?;
     TwBytes b = tw_take_2b(p, 4096, "data")?;
     _ = tw_done(b.next, "NV_Read")?;
     return Ok(b.v);
+}
+
+// The same response received as secret bytes: everything but the data --
+// the header (tag, size, response code), parameterSize, the data's own
+// size and the password session's response (an empty nonce, the
+// attributes, an empty HMAC) -- is declassified, as structure that says
+// nothing about the index's contents, and checked by tpm2_nv_read_resp
+// over a copy with the data zeroed; the data stays secret. The data's
+// length is public (the caller asked for it).
+@requires(declassify)
+pub Result(List(Secret(UInt(8))), TpmError) tpm2_nv_read_resp_secret(List(Secret(UInt(8))) r) {
+    if (r.len() < 16) {
+        // Too short to hold any data: a TPM error, or malformed.
+        List(UInt(8)) all = declassify(secret_join(r), "a TPM response too short to carry NV data: its header");
+        _ = tpm2_nv_read_resp(all)?;
+        return Err(TpmBad("NV_Read: short"));
+    }
+    List(UInt(8)) head = declassify(secret_join(r[0..16]), "TPM NV_Read response structure: header, parameterSize, the data's size");
+    Int n = ((Int)head[14] << 8) | (Int)head[15];
+    Int end = if (16 + n <= r.len()) { 16 + n } else { r.len() };
+    List(UInt(8)) tail = declassify(secret_join(r[end..]), "TPM NV_Read response structure: the session's response after the data");
+    List(UInt(8)) skeleton = head.concat(tw_zeros(end - 16, ListBuf())).concat(tail);
+    List(UInt(8)) b = tpm2_nv_read_resp(skeleton)?;
+    if (b.len() != n || end != 16 + n) { return Err(TpmBad("NV_Read: data past the response")); }
+    return Ok(r[16..end]);
+}
+
+List(UInt(8)) tw_zeros(Int n, ListBuf(UInt(8)) acc) {
+    if (n <= 0) { return acc.finish(); }
+    return tw_zeros(n - 1, acc.push((UInt(8))0));
 }
 
 // TPMT_SIGNATURE: the algorithm and hash, and the signature: one value
@@ -601,18 +660,97 @@ pub Result(NvPublic, TpmError) tpm_nv_read_public_via(Result(List(UInt(8)), TpmE
     return tpm2_nv_read_public_resp(tpm_run(send, tpm2_nv_read_public_cmd(index))?);
 }
 
+// Whether NV_Read of the index `np` describes, authorized by `auth_handle`
+// with the empty password, is safe from the dictionary-attack lockout.
+// What NV_ReadPublic shows decides it:
+//   - the owner or the platform hierarchy (TPM_RH_OWNER, TPM_RH_PLATFORM):
+//     permanent handles are exempt; a wrong password there is an error
+//     (TPM_RC_BAD_AUTH), never a count;
+//   - the index itself: its authValue is checked only with TPMA_NV_AUTHREAD
+//     set, and a failure counts unless TPMA_NV_NO_DA is set. The authValue
+//     cannot be read, so an index with AUTHREAD set and NO_DA clear is
+//     refused whether or not its authValue is empty;
+//   - any other handle cannot authorize NV_Read (TPMI_RH_NV_AUTH): refused.
+pub Result(Bool, TpmError) tpm_nv_read_da_ok(NvPublic np, Int auth_handle) {
+    if (auth_handle == tpm_rh_owner() || auth_handle == tpm_rh_platform()) { return Ok(true); }
+    if (auth_handle != np.index) { return Err(TpmArg(f"NV_Read is authorized by the owner, the platform or the index itself, not 0x{auth_handle:hex}")); }
+    if ((np.attributes & tpma_nv_authread()) != 0 && (np.attributes & tpma_nv_no_da()) == 0) {
+        return Err(TpmArg(f"index 0x{np.index:hex} is read with its own authorization and is not TPMA_NV_NO_DA: if the index has an authValue, the empty password fails and counts toward the TPM's dictionary-attack lockout; read it with the owner's authorization"));
+    }
+    return Ok(true);
+}
+
+// Whether TPM2_Quote by the key whose public area `p` is (ReadPublic's
+// outPublic: type, nameAlg, objectAttributes, authPolicy, ...), authorized
+// with the empty password, is safe from the dictionary-attack lockout, as
+// far as the public area can say:
+//   - noDA set: a failure never counts -- allowed;
+//   - userWithAuth clear: the USER role (which Quote needs) takes only a
+//     policy session, so a password cannot authorize it -- refused, as a
+//     key this wrapper cannot use;
+//   - userWithAuth set, noDA clear and a non-empty authPolicy: a key
+//     provisioned for policy use, likely with an authValue too -- refused;
+//   - userWithAuth set, noDA clear, no authPolicy (go-tpm-tools' AK
+//     templates, and the AK in tests/device's simulator case): allowed. A
+//     failure would count if the key's authValue is not empty, which only
+//     the provisioner knows: the one case this check cannot rule out
+//     (SECURITY.md, "Not guaranteed").
+pub Result(Bool, TpmError) tpm_quote_key_ok(TpmPublic p) {
+    TwAt head = TwAt {.r = p.public_area, .at = 0, .end = p.public_area.len()};
+    TwNum attrs = tw_num(tw_skip(head, 4), 4, "objectAttributes")?;
+    TwNum pol = tw_num(attrs.next, 2, "authPolicy")?;
+    if ((attrs.v & tpma_object_no_da()) != 0) { return Ok(true); }
+    if ((attrs.v & tpma_object_user_with_auth()) == 0) {
+        return Err(TpmArg("the key's USER role needs a policy session (userWithAuth clear); this wrapper authorizes only with an empty password"));
+    }
+    if (pol.v > 0) {
+        return Err(TpmArg("the key is not noDA and has an authPolicy, so it may also have an authValue: the empty password would then fail and count toward the TPM's dictionary-attack lockout"));
+    }
+    return Ok(true);
+}
+
+// NV_ReadPublic of `index`, checked to answer for that index.
+Result(NvPublic, TpmError) tw_nv_public(Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send, Int index) {
+    NvPublic np = tpm_nv_read_public_via(send, index)?;
+    if (np.index != index) { return Err(TpmBad(f"NV_ReadPublic answered for index 0x{np.index:hex}")); }
+    return Ok(np);
+}
+
+// NV_Read, after NV_ReadPublic and tpm_nv_read_da_ok.
 pub Result(List(UInt(8)), TpmError) tpm_nv_read_via(Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send, Int auth_handle, Int index, Int size, Int offset) {
-    List(UInt(8)) b = tpm2_nv_read_resp(tpm_run(send, tpm2_nv_read_cmd(auth_handle, index, size, offset, []))?)?;
+    NvPublic np = tw_nv_public(send, index)?;
+    _ = tpm_nv_read_da_ok(np, auth_handle)?;
+    return tw_nv_read(send, auth_handle, index, size, offset);
+}
+
+Result(List(UInt(8)), TpmError) tw_nv_read(Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send, Int auth_handle, Int index, Int size, Int offset) {
+    List(UInt(8)) b = tpm2_nv_read_resp(tpm_run(send, tpm2_nv_read_cmd(auth_handle, index, size, offset))?)?;
     if (b.len() != size) { return Err(TpmBad(f"NV_Read gave {b.len()} bytes, {size} asked")); }
     return Ok(b);
 }
 
-// A whole NV index: its size from NV_ReadPublic, then NV_Read in pieces of
-// the TPM's TPM_PT_NV_BUFFER_MAX (512 when the TPM does not say; at most
-// 1024).
+// NV_Read of an index that holds a secret: the command goes out over
+// `send` like any other, the response comes back over `send_secret` as
+// secret bytes (lib/dev/tpm.resid passes a Transact whose response is
+// marked secret), and only its structure is declassified
+// (tpm2_nv_read_resp_secret). NV_ReadPublic and tpm_nv_read_da_ok first,
+// as for tpm_nv_read_via.
+@requires(declassify)
+pub Result(List(Secret(UInt(8))), TpmError) tpm_nv_read_secret_via(Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send, Result(List(Secret(UInt(8))), TpmError) closure(List(UInt(8))) send_secret, Int auth_handle, Int index, Int size, Int offset) {
+    NvPublic np = tw_nv_public(send, index)?;
+    _ = tpm_nv_read_da_ok(np, auth_handle)?;
+    List(UInt(8)) c = tpm2_nv_read_cmd(auth_handle, index, size, offset)?;
+    List(Secret(UInt(8))) b = tpm2_nv_read_resp_secret(send_secret(c)?)?;
+    if (b.len() != size) { return Err(TpmBad(f"NV_Read gave {b.len()} bytes, {size} asked")); }
+    return Ok(b);
+}
+
+// A whole NV index: its size from NV_ReadPublic (and tpm_nv_read_da_ok),
+// then NV_Read in pieces of the TPM's TPM_PT_NV_BUFFER_MAX (512 when the
+// TPM does not say; at most 1024).
 pub Result(List(UInt(8)), TpmError) tpm_nv_read_all_via(Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send, Int auth_handle, Int index) {
-    NvPublic np = tpm_nv_read_public_via(send, index)?;
-    if (np.index != index) { return Err(TpmBad(f"NV_ReadPublic answered for index 0x{np.index:hex}")); }
+    NvPublic np = tw_nv_public(send, index)?;
+    _ = tpm_nv_read_da_ok(np, auth_handle)?;
     List(TpmProperty) ps = tpm_properties_via(send, tpm_pt_nv_buffer_max(), 1) else { [] };
     Int said = tpm_property(ps, tpm_pt_nv_buffer_max()) else { 512 };
     Int chunk = if (said < 64) { 512 } else if (said > 1024) { 1024 } else { said };
@@ -622,10 +760,16 @@ pub Result(List(UInt(8)), TpmError) tpm_nv_read_all_via(Result(List(UInt(8)), Tp
 Result(List(UInt(8)), TpmError) tw_nv_chunks(Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send, Int auth_handle, Int index, Int total, Int chunk, Int at, List(UInt(8)) acc) {
     if (at >= total) { return Ok(acc); }
     Int n = if (total - at < chunk) { total - at } else { chunk };
-    List(UInt(8)) part = tpm_nv_read_via(send, auth_handle, index, n, at)?;
+    List(UInt(8)) part = tw_nv_read(send, auth_handle, index, n, at)?;
     return tw_nv_chunks(send, auth_handle, index, total, chunk, at + n, acc.concat(part));
 }
 
+// TPM2_Quote, after ReadPublic of the key and tpm_quote_key_ok. The key is
+// read and used by two commands, so a key replaced at the same handle in
+// between is quoted with; the quote's signature, verified against the AK
+// the verifier trusts, still decides.
 pub Result(TpmQuote, TpmError) tpm_quote_via(Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send, Int ak_handle, List(UInt(8)) nonce, List(PcrSel) sel) {
-    return tpm2_quote_resp(tpm_run(send, tpm2_quote_cmd(ak_handle, nonce, sel, []))?);
+    TpmPublic key = tpm_read_public_via(send, ak_handle)?;
+    _ = tpm_quote_key_ok(key)?;
+    return tpm2_quote_resp(tpm_run(send, tpm2_quote_cmd(ak_handle, nonce, sel))?);
 }

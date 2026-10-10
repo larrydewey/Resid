@@ -95,6 +95,52 @@ Str attest_text(List(UInt(8)) a) {
     };
 }
 
+// -- Dictionary-attack checks, before NV_Read and Quote ----------------------
+
+NvPublic nv(Int attrs) { return NvPublic {.index = 0x01500001, .name_alg = 11, .attributes = attrs, .auth_policy = [], .data_size = 8, .name = []}; }
+
+List(UInt(8)) be(Int v, Int n) { return if (n <= 0) { [] } else { be(v >> 8, n - 1).concat([(UInt(8))(v & 255)]) }; }
+
+// A TPMT_PUBLIC head: type ECC, nameAlg SHA-256, objectAttributes, an
+// authPolicy of `policy` bytes, then two bytes of parameters.
+TpmPublic key(Int attrs, Int policy) {
+    List(UInt(8)) pa = be(0x23, 2).concat(be(0x0b, 2)).concat(be(attrs, 4)).concat(be(policy, 2)).concat(be(0, policy)).concat(be(0x10, 2));
+    return TpmPublic {.public_area = pa, .type_alg = 0x23, .name_alg = 0x0b, .name = [], .qualified_name = []};
+}
+
+Str da(Str what, Result(Bool, TpmError) r) { return match (r) { Ok(b) => what + ": allowed", Err(e) => what + ": " + tpm_error_text(e), }; }
+
+// -- NV_Read's response as secret bytes ---------------------------------------
+
+List(Secret(UInt(8))) hide(List(UInt(8)) b) { return secret_split(classify(b)); }
+
+@requires(declassify)
+Str decode_secret(List(UInt(8)) r) {
+    return match (tpm2_nv_read_resp_secret(hide(r))) {
+        Ok(b) => "data " + hexs(declassify(secret_join(b), "test output"), 0, ""),
+        Err(e) => tpm_error_text(e),
+    };
+}
+
+// The secret decoder accepts exactly what the public one does, with the
+// same data, over every prefix and every byte set to 0xff and 0x00.
+@requires(declassify)
+Bool agree(List(UInt(8)) r) { return decode_secret(r) == decode(5, r); }
+
+@requires(declassify)
+Int disagree_prefixes(List(UInt(8)) r, Int k, Int acc) {
+    if (k > r.len()) { return acc; }
+    Int a = if (agree(r[0..k]) && agree(resize(r[0..k]))) { 0 } else { 1 };
+    return disagree_prefixes(r, k + 1, acc + a);
+}
+
+@requires(declassify)
+Int disagree_mutants(List(UInt(8)) r, Int i, Int acc) {
+    if (i >= r.len()) { return acc; }
+    Int a = if (agree(set_at(r, i, 255)) && agree(set_at(r, i, 0))) { 0 } else { 1 };
+    return disagree_mutants(r, i + 1, acc + a);
+}
+
 // -- Fuzz: every prefix (as read, and with responseSize patched to fit),
 // and every byte set to 0xff and to 0x00 -------------------------------------
 
@@ -129,6 +175,7 @@ Str fuzz(Str what, Int which, List(UInt(8)) r) {
     return f"{what}: {r.len()} bytes; truncated accepted {p}; of {r.len() * 2} mutants {m} parse";
 }
 
+@requires(declassify)
 Int main() {
     // Commands.
     println(cmd("GetCapability", tpm2_get_capability_cmd(6, 256, 127), "8001000000160000017a00000006000001000000007f"));
@@ -137,13 +184,13 @@ Int main() {
     println(cmd("PCR_Read", tpm2_pcr_read_cmd([pcr_sel(tpm_alg_sha256(), [0, 1, 7])]), "8001000000140000017e00000001000b03830000"));
     println(cmd("ReadPublic", tpm2_read_public_cmd(tpm_handle_azure_ak()), "80010000000e0000017381000003"));
     println(cmd("NV_ReadPublic", tpm2_nv_read_public_cmd(tpm_nv_azure_hcl_report()), "80010000000e0000016901400001"));
-    println(cmd("NV_Read", tpm2_nv_read_cmd(tpm_rh_owner(), tpm_nv_azure_hcl_report(), 8, 0, []), "8002000000230000014e40000001014000010000000940000009000001000000080000"));
-    println(cmd("Quote", tpm2_quote_cmd(tpm_handle_azure_ak(), bytes("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), [pcr_sel(tpm_alg_sha256(), [0, 1, 7])], []), "8002000000490000015881000003000000094000000900000100000020aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa001000000001000b03830000"));
+    println(cmd("NV_Read", tpm2_nv_read_cmd(tpm_rh_owner(), tpm_nv_azure_hcl_report(), 8, 0), "8002000000230000014e40000001014000010000000940000009000001000000080000"));
+    println(cmd("Quote", tpm2_quote_cmd(tpm_handle_azure_ak(), bytes("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), [pcr_sel(tpm_alg_sha256(), [0, 1, 7])]), "8002000000490000015881000003000000094000000900000100000020aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa001000000001000b03830000"));
     // Inputs a command cannot carry.
     println(cmd("GetRandom 0", tpm2_get_random_cmd(0), ""));
     println(cmd("PCR 24", tpm2_pcr_read_cmd([pcr_sel(tpm_alg_sha256(), [24])]), ""));
-    println(cmd("NV_Read size", tpm2_nv_read_cmd(tpm_rh_owner(), 1, 65536, 0, []), ""));
-    println(cmd("Quote nonce", tpm2_quote_cmd(1, bytes("00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ff"), [], []), ""));
+    println(cmd("NV_Read size", tpm2_nv_read_cmd(tpm_rh_owner(), 1, 65536, 0), ""));
+    println(cmd("Quote nonce", tpm2_quote_cmd(1, bytes("00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ff"), []), ""));
 
     // Responses.
     List(UInt(8)) getcap = bytes("8001000001830000000000000000060000002e00000100322e30000000010100000000000001020000009200000103000000a700000104000007e10000010549424d200000010653572020000001072054504d000001080000000000000109000000000000010a000000010000010b201605110000010c001628000000010d000004000000010e000000030000010f00000002000001100000000300000111000000400000011200000018000001130000000300000114ffffffff00000116000000000000011700000800000001180000000600000119000010000000011a0000000c0000011b000000060000011c000001000000011d000000ff0000011e000010000000011f0000100000000120000000300000012100000ce4000001220000014400000123322e30000000012400000000000001250000009200000126000000a700000127000007e1000001280000008000000129000000710000012a0000006d0000012b000000040000012c000004000000012d000000000000012e00000400");
@@ -178,5 +225,27 @@ Int main() {
     println(fuzz("NV_ReadPublic", 4, nvpub));
     println(fuzz("NV_Read", 5, nvread));
     println(fuzz("Quote", 6, quote));
+
+    // NV_Read with an empty password: what could count toward the TPM's
+    // dictionary-attack lockout is refused before anything is sent.
+    println(da("NV by owner", tpm_nv_read_da_ok(nv(0x00060006), tpm_rh_owner())));
+    println(da("NV by platform", tpm_nv_read_da_ok(nv(0x00060006), tpm_rh_platform())));
+    println(da("NV by itself, NO_DA", tpm_nv_read_da_ok(nv(0x02060006), 0x01500001)));
+    println(da("NV by itself, DA-protected", tpm_nv_read_da_ok(nv(0x00060006), 0x01500001)));
+    println(da("NV by itself, no AUTHREAD", tpm_nv_read_da_ok(nv(0x00020002), 0x01500001)));
+    println(da("NV by lockout", tpm_nv_read_da_ok(nv(0x02060006), 0x4000000a)));
+    println(da("NV by another index", tpm_nv_read_da_ok(nv(0x02060006), 0x01500002)));
+    // Quote: the key's objectAttributes and authPolicy.
+    println(da("key noDA", tpm_quote_key_ok(key(0x00050472, 32))));
+    println(da("key userWithAuth", tpm_quote_key_ok(key(0x00050072, 0))));
+    println(da("key policy only", tpm_quote_key_ok(key(0x000500b2, 32))));
+    println(da("key userWithAuth and a policy", tpm_quote_key_ok(key(0x00050072, 32))));
+    println(da("key public area short", tpm_quote_key_ok(TpmPublic {.public_area = be(0x0023000b0005, 6), .type_alg = 0x23, .name_alg = 0x0b, .name = [], .qualified_name = []})));
+
+    // NV_Read's data as secret bytes.
+    println("secret " + decode_secret(nvread));
+    println("secret " + decode_secret(bytes("80010000000a00000922")));
+    println("secret " + decode_secret(bytes("80020000001d000000000000000a0009deadbeef010203040000010000")));
+    println(f"secret decoder disagrees on {disagree_prefixes(nvread, 0, 0)} prefixes and {disagree_mutants(nvread, 0, 0)} mutants");
     return 0;
 }
