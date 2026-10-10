@@ -99,12 +99,13 @@ One descriptor serves every provider the kernel has: `sev_guest`,
 provider is `UnknownDriver`. `report_data` is 64 bytes. A report is a
 read: writing `inblob` asks for a report and changes nothing, so
 `device(readonly)` covers it. `tsm_opts_vmpl(n)` asks SNP for VMPL `n`,
-`tsm_opts_svsm()` for the SVSM's report; a report from another provider
-asked for either is `Unsupported` (TDX has neither attribute; CCA shows
-both and ignores them). The kernel's `service_guid` and
-`service_manifest_version` attributes are not reachable: the engine's
-`ReportReq` has no field for them, so an SVSM report covers all services,
-each in its first manifest version.
+`tsm_opts_svsm()` for the SVSM's report of all its services, and
+`tsm_opts_svsm_service(guid, version)` for one service (its GUID) in one
+manifest version (-1 for the service's default); a report from another
+provider asked for any of them is `Unsupported` (TDX has none of these
+attributes; CCA shows them and ignores them). `tsm_snp_certs` names the
+certificate table's ARK, ASK, VCEK, VLEK and CRL entries
+(`snp_guid_ark()`, ...).
 
 ### `tpm`
 
@@ -117,6 +118,11 @@ call's own) and decode the response: `tpm_get_capability`,
 Errors are `TpmError`: `TpmDev(DeviceError)`, `TpmRc(code)`, `TpmBad(why)`
 for a response that does not parse, `TpmArg(why)` for an argument a
 command cannot carry.
+
+Each wrapper is `dev/tpm_wire.resid`'s `tpm_*_via(send, ...)` over
+`/dev/tpmrm0`; `tests/device` runs the same functions against the IBM TPM
+simulator over TCP (quote signatures verified) when
+`RESID_TPM_SIMULATOR` is set.
 
 All need the full `device` grant. A Transact writes its command, and the
 kernel sees only bytes: a "read-only" TPM descriptor would still pass
@@ -271,7 +277,8 @@ None of them aborts the program. A `Sequence` runs its steps on one open
 file in one host, copying each `Link` just before its step; only the last
 step's outputs come back. A configfs report creates a fresh entry with an
 unpredictable name the program chose, confines the host to it with
-Landlock, writes `inblob` (and `privlevel`, `service_provider` when given),
+Landlock, writes `inblob` (and `privlevel`, `service_provider`,
+`service_guid`, `service_manifest_version` when given),
 reads the generation, the blobs and the provider and the generation again,
 and removes the entry; the program removes it too if the host did not
 (killed, timed out). The kernel counts each store to the entry in
