@@ -2052,6 +2052,7 @@ GKT gk_cast(GK k0, Int id) {
     Str to = k0.g.ns[gk_kid(k0, id, 0)].text;
     GKT e = gk_expr(k0, gk_kid(k0, id, 1), "");
     if (e.err != "") { return e; }
+    if (sec_is(e.ty)) { return sec_cast(e.k, id, to, e.ty); }
     Bool bothint = is_int_ty(to) && is_int_ty(e.ty);
     Bool bothnum = is_num(to) && is_num(e.ty) && !is_dec_ty(to) && !is_dec_ty(e.ty);
     Bool todec = is_dec_ty(to) && (is_int_ty(e.ty) || is_dec_ty(e.ty));
@@ -5360,3 +5361,20 @@ Bool sec_wide_scan(GK k, List(Int) keys, List(Str) tys, Int i, Str src, Str smap
 
 // Builtin names of secret values that no program may define (E0259).
 Bool sec_reserved(Str n) { return sec_is_wrapper(n) || n == "ct_select"; }
+
+// A cast of a secret integer that keeps every value (the same or a wider
+// width of the same signedness, or unsigned to a wider signed type) lowers
+// to an extension with no check, so its result is secret. Any other cast
+// is checked, and its abort would branch on the value (E0255).
+GKT sec_cast(GK k, Int id, Str to, Str from0) {
+    Str from = sec_inner(from0);
+    Str t = if (sec_is(to)) { sec_inner(to) } else { to };
+    if (!is_int_ty(from) || !is_int_ty(t)) { return gterr(k, "cast from " + from0 + " to " + to + " not supported", id); }
+    Int sw = ty_bits(from);
+    Int tw = ty_bits(t);
+    Bool ss = signed_ty(from);
+    Bool ts = signed_ty(t);
+    Bool keeps = (ss == ts && tw >= sw) || (!ss && ts && tw > sw);
+    if (!keeps) { return gterr(k, "E0255: cast from " + from0 + " to " + to + " is checked and would abort on some values, a branch on the secret; widen losslessly, or use wrapping_*", id); }
+    return gt(k, "Secret(" + num_norm(t) + ")", id);
+}

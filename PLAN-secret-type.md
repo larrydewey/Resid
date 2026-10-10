@@ -35,8 +35,17 @@ through `CtSame(B)`. X25519 is in (2026-10-09): `lib/x25519g.resid`, generic ove
 elements in parameters, mask swaps), with `lib/x25519.resid` as its public
 copy (as fast as before, about 12% faster); the zero-share verdict goes
 through `CtSame(B)` and the derived public key through `X25519Pub(B)`,
-both declassifying at secret types. Next are Ed25519, P-256/P-384, HPKE and the TLS
-key schedule. Still to do: a
+both declassifying at secret types. P-256/P-384 are in (2026-10-09):
+`tools/gen_nistp.py` generates `lib/p256.resid` and `lib/p384.resid`
+generic over `P256Word(F, B)` / `P384Word(F, B)` (field elements
+`UInt(576)` / `UInt(832)` or their secrets, in records and parameters),
+so key derivation, ECDH, ECDSA signing and the RFC 6979 nonce (over the
+generic HMACs) are written once; `lib/ecdsa.resid`'s `ecdsag_*`,
+`ec_public_keyg` and `ecdhg` take `List(B)` keys and its `List(Int)` API
+is the public copy; verification is public only. Signatures, public keys
+and key-validity verdicts are published through the behavior's open
+verb (`declassify` at secret types); an ECDH result stays secret. A
+lossless cast of a secret integer stays secret (`sec_cast`). Next are Ed25519, HPKE and the TLS key schedule. Still to do: a
 force-time `resid_cap_check("declassify")` (declassify lowers to nothing,
 so the static check is the whole check today), and steps 2–3 of §7.
 
