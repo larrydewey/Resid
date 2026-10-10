@@ -545,3 +545,87 @@ pub Result(QuoteInfo, TpmError) tpm_attest_quote(List(UInt(8)) a) {
     _ = tw_done(dg.next, "TPMS_ATTEST")?;
     return Ok(QuoteInfo {.signer = signer.v, .extra_data = extra.v, .clock_hi = ch.v, .clock_lo = cl.v, .reset_count = reset.v, .restart_count = restart.v, .safe = safe.v == 1, .fw_hi = fh.v, .fw_lo = fl.v, .pcrs = sel.v, .pcr_digest = dg.v});
 }
+
+// -- Commands run over a transport ----------------------------------------
+// What lib/dev/tpm.resid's wrappers do, over any way of running one TPM
+// command: `send` takes a command's bytes and gives the response's. The
+// wrappers pass /dev/tpmrm0 (a Transact); tests/device's simulator case
+// passes the IBM TPM simulator's TCP port, so this logic runs end to end
+// against a TPM there, and against the kernel's resource manager here,
+// without either path knowing about the other.
+
+// One command: Err(TpmArg) when it cannot be built (nothing is sent),
+// else what `send` answers.
+pub Result(List(UInt(8)), TpmError) tpm_run(Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send, Result(List(UInt(8)), TpmError) cmd) {
+    List(UInt(8)) c = cmd?;
+    return send(c);
+}
+
+pub Result(TpmCap, TpmError) tpm_get_capability_via(Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send, Int capability, Int property, Int count) {
+    return tpm2_get_capability_resp(tpm_run(send, tpm2_get_capability_cmd(capability, property, count))?);
+}
+
+pub Result(List(TpmProperty), TpmError) tpm_properties_via(Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send, Int first, Int count) {
+    TpmCap c = tpm_get_capability_via(send, tpm_cap_tpm_properties(), first, count)?;
+    return match (c.data) {
+        CapProps(ps) => Ok(ps),
+        CapHandles(hs) => Err(TpmBad("GetCapability answered another capability")),
+        CapPcrs(s) => Err(TpmBad("GetCapability answered another capability")),
+        CapOther(k, b) => Err(TpmBad("GetCapability answered another capability")),
+    };
+}
+
+pub Result(List(Int), TpmError) tpm_handles_via(Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send, Int first, Int count) {
+    TpmCap c = tpm_get_capability_via(send, tpm_cap_handles(), first, count)?;
+    return match (c.data) {
+        CapHandles(hs) => Ok(hs),
+        CapProps(ps) => Err(TpmBad("GetCapability answered another capability")),
+        CapPcrs(s) => Err(TpmBad("GetCapability answered another capability")),
+        CapOther(k, b) => Err(TpmBad("GetCapability answered another capability")),
+    };
+}
+
+pub Result(List(UInt(8)), TpmError) tpm_get_random_via(Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send, Int n) {
+    return tpm2_get_random_resp(tpm_run(send, tpm2_get_random_cmd(n))?);
+}
+
+pub Result(PcrRead, TpmError) tpm_pcr_read_via(Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send, List(PcrSel) sel) {
+    return tpm2_pcr_read_resp(tpm_run(send, tpm2_pcr_read_cmd(sel))?);
+}
+
+pub Result(TpmPublic, TpmError) tpm_read_public_via(Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send, Int handle) {
+    return tpm2_read_public_resp(tpm_run(send, tpm2_read_public_cmd(handle))?);
+}
+
+pub Result(NvPublic, TpmError) tpm_nv_read_public_via(Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send, Int index) {
+    return tpm2_nv_read_public_resp(tpm_run(send, tpm2_nv_read_public_cmd(index))?);
+}
+
+pub Result(List(UInt(8)), TpmError) tpm_nv_read_via(Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send, Int auth_handle, Int index, Int size, Int offset) {
+    List(UInt(8)) b = tpm2_nv_read_resp(tpm_run(send, tpm2_nv_read_cmd(auth_handle, index, size, offset, []))?)?;
+    if (b.len() != size) { return Err(TpmBad(f"NV_Read gave {b.len()} bytes, {size} asked")); }
+    return Ok(b);
+}
+
+// A whole NV index: its size from NV_ReadPublic, then NV_Read in pieces of
+// the TPM's TPM_PT_NV_BUFFER_MAX (512 when the TPM does not say; at most
+// 1024).
+pub Result(List(UInt(8)), TpmError) tpm_nv_read_all_via(Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send, Int auth_handle, Int index) {
+    NvPublic np = tpm_nv_read_public_via(send, index)?;
+    if (np.index != index) { return Err(TpmBad(f"NV_ReadPublic answered for index 0x{np.index:hex}")); }
+    List(TpmProperty) ps = tpm_properties_via(send, tpm_pt_nv_buffer_max(), 1) else { [] };
+    Int said = tpm_property(ps, tpm_pt_nv_buffer_max()) else { 512 };
+    Int chunk = if (said < 64) { 512 } else if (said > 1024) { 1024 } else { said };
+    return tw_nv_chunks(send, auth_handle, index, np.data_size, chunk, 0, []);
+}
+
+Result(List(UInt(8)), TpmError) tw_nv_chunks(Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send, Int auth_handle, Int index, Int total, Int chunk, Int at, List(UInt(8)) acc) {
+    if (at >= total) { return Ok(acc); }
+    Int n = if (total - at < chunk) { total - at } else { chunk };
+    List(UInt(8)) part = tpm_nv_read_via(send, auth_handle, index, n, at)?;
+    return tw_nv_chunks(send, auth_handle, index, total, chunk, at + n, acc.concat(part));
+}
+
+pub Result(TpmQuote, TpmError) tpm_quote_via(Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send, Int ak_handle, List(UInt(8)) nonce, List(PcrSel) sel) {
+    return tpm2_quote_resp(tpm_run(send, tpm2_quote_cmd(ak_handle, nonce, sel, []))?);
+}

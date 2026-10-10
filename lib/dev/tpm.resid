@@ -47,11 +47,11 @@ Transact tpm_op() {
 }
 
 // -- Wrappers -------------------------------------------------------------------
+// Each is lib/dev/tpm_wire.resid's *_via over /dev/tpmrm0.
 
-// One command, its response bytes.
+// One command's bytes to the TPM, the response's back.
 @requires(device)
-Result(List(UInt(8)), TpmError) tpm_call(Result(List(UInt(8)), TpmError) cmd) {
-    List(UInt(8)) c = cmd?;
+Result(List(UInt(8)), TpmError) tpm_send(List(UInt(8)) c) {
     return match (device.transact(tpm_op(), c)) {
         Err(e) => Err(TpmDev(e)),
         Ok(outs) => match (dv_out_bytes(outs, 0)) {
@@ -64,59 +64,47 @@ Result(List(UInt(8)), TpmError) tpm_call(Result(List(UInt(8)), TpmError) cmd) {
 // TPM2_GetCapability.
 @requires(device)
 pub Result(TpmCap, TpmError) tpm_get_capability(Int capability, Int property, Int count) {
-    return tpm2_get_capability_resp(tpm_call(tpm2_get_capability_cmd(capability, property, count))?);
+    return tpm_get_capability_via(lambda(c) { tpm_send(c) }, capability, property, count);
 }
 
 // The TPM's properties from `first` on (TPM_CAP_TPM_PROPERTIES), at most
 // `count` of them.
 @requires(device)
 pub Result(List(TpmProperty), TpmError) tpm_properties(Int first, Int count) {
-    TpmCap c = tpm_get_capability(tpm_cap_tpm_properties(), first, count)?;
-    return match (c.data) {
-        CapProps(ps) => Ok(ps),
-        CapHandles(hs) => Err(TpmBad("GetCapability answered another capability")),
-        CapPcrs(s) => Err(TpmBad("GetCapability answered another capability")),
-        CapOther(k, b) => Err(TpmBad("GetCapability answered another capability")),
-    };
+    return tpm_properties_via(lambda(c) { tpm_send(c) }, first, count);
 }
 
 // The handles from `first` on (TPM_CAP_HANDLES): 0x81000000 lists the
 // persistent objects, 0x01000000 the NV indices.
 @requires(device)
 pub Result(List(Int), TpmError) tpm_handles(Int first, Int count) {
-    TpmCap c = tpm_get_capability(tpm_cap_handles(), first, count)?;
-    return match (c.data) {
-        CapHandles(hs) => Ok(hs),
-        CapProps(ps) => Err(TpmBad("GetCapability answered another capability")),
-        CapPcrs(s) => Err(TpmBad("GetCapability answered another capability")),
-        CapOther(k, b) => Err(TpmBad("GetCapability answered another capability")),
-    };
+    return tpm_handles_via(lambda(c) { tpm_send(c) }, first, count);
 }
 
 // `n` (1 to 64) random bytes from the TPM's generator. Public: for a
 // nonce, not for key material.
 @requires(device)
 pub Result(List(UInt(8)), TpmError) tpm_get_random(Int n) {
-    return tpm2_get_random_resp(tpm_call(tpm2_get_random_cmd(n))?);
+    return tpm_get_random_via(lambda(c) { tpm_send(c) }, n);
 }
 
 // TPM2_PCR_Read: at most eight digests per call; `selection` in the answer
 // says which.
 @requires(device)
 pub Result(PcrRead, TpmError) tpm_pcr_read(List(PcrSel) sel) {
-    return tpm2_pcr_read_resp(tpm_call(tpm2_pcr_read_cmd(sel))?);
+    return tpm_pcr_read_via(lambda(c) { tpm_send(c) }, sel);
 }
 
 // TPM2_ReadPublic of a loaded or persistent object (an AK, the EK).
 @requires(device)
 pub Result(TpmPublic, TpmError) tpm_read_public(Int handle) {
-    return tpm2_read_public_resp(tpm_call(tpm2_read_public_cmd(handle))?);
+    return tpm_read_public_via(lambda(c) { tpm_send(c) }, handle);
 }
 
 // TPM2_NV_ReadPublic of an NV index.
 @requires(device)
 pub Result(NvPublic, TpmError) tpm_nv_read_public(Int index) {
-    return tpm2_nv_read_public_resp(tpm_call(tpm2_nv_read_public_cmd(index))?);
+    return tpm_nv_read_public_via(lambda(c) { tpm_send(c) }, index);
 }
 
 // TPM2_NV_Read of `size` bytes at `offset`, authorized by `auth_handle`
@@ -125,30 +113,13 @@ pub Result(NvPublic, TpmError) tpm_nv_read_public(Int index) {
 // reads a whole index.
 @requires(device)
 pub Result(List(UInt(8)), TpmError) tpm_nv_read(Int auth_handle, Int index, Int size, Int offset) {
-    List(UInt(8)) b = tpm2_nv_read_resp(tpm_call(tpm2_nv_read_cmd(auth_handle, index, size, offset, []))?)?;
-    if (b.len() != size) { return Err(TpmBad(f"NV_Read gave {b.len()} bytes, {size} asked")); }
-    return Ok(b);
+    return tpm_nv_read_via(lambda(c) { tpm_send(c) }, auth_handle, index, size, offset);
 }
 
-// A whole NV index: its size from NV_ReadPublic, then NV_Read in pieces of
-// the TPM's TPM_PT_NV_BUFFER_MAX (512 when the TPM does not say; at most
-// 1024).
+// A whole NV index, in pieces of the TPM's TPM_PT_NV_BUFFER_MAX.
 @requires(device)
 pub Result(List(UInt(8)), TpmError) tpm_nv_read_all(Int auth_handle, Int index) {
-    NvPublic np = tpm_nv_read_public(index)?;
-    if (np.index != index) { return Err(TpmBad(f"NV_ReadPublic answered for index 0x{np.index:hex}")); }
-    List(TpmProperty) ps = tpm_properties(tpm_pt_nv_buffer_max(), 1) else { [] };
-    Int said = tpm_property(ps, tpm_pt_nv_buffer_max()) else { 512 };
-    Int chunk = if (said < 64) { 512 } else if (said > 1024) { 1024 } else { said };
-    return tpm_nv_chunks(auth_handle, index, np.data_size, chunk, 0, []);
-}
-
-@requires(device)
-Result(List(UInt(8)), TpmError) tpm_nv_chunks(Int auth_handle, Int index, Int total, Int chunk, Int at, List(UInt(8)) acc) {
-    if (at >= total) { return Ok(acc); }
-    Int n = if (total - at < chunk) { total - at } else { chunk };
-    List(UInt(8)) part = tpm_nv_read(auth_handle, index, n, at)?;
-    return tpm_nv_chunks(auth_handle, index, total, chunk, at + n, acc.concat(part));
+    return tpm_nv_read_all_via(lambda(c) { tpm_send(c) }, auth_handle, index);
 }
 
 // TPM2_Quote: the PCRs `sel` selects, signed by the attestation key at
@@ -156,7 +127,7 @@ Result(List(UInt(8)), TpmError) tpm_nv_chunks(Int auth_handle, Int index, Int to
 // own scheme, with `nonce` (at most 64 bytes) as the qualifying data.
 @requires(device)
 pub Result(TpmQuote, TpmError) tpm_quote(Int ak_handle, List(UInt(8)) nonce, List(PcrSel) sel) {
-    return tpm2_quote_resp(tpm_call(tpm2_quote_cmd(ak_handle, nonce, sel, []))?);
+    return tpm_quote_via(lambda(c) { tpm_send(c) }, ak_handle, nonce, sel);
 }
 
 // Azure confidential VMs: the paravisor's report from NV index 0x01400001,
