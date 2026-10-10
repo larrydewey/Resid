@@ -1,0 +1,7 @@
+// Refused at type check: lowering would treat the value as a heap
+// list and read memory that is not one.
+Int main() {
+    Map(Str, Int) m = {"a": 1};
+    Map(Str, Int) t = m[..1];
+    return t.len();
+}

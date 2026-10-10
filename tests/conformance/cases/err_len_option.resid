@@ -1,0 +1,6 @@
+// Refused at type check: lowering would treat the value as a heap
+// list and read memory that is not one.
+Int main() {
+    Option(Int) o = Some(rt 3);
+    return o.len();
+}

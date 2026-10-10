@@ -1140,6 +1140,16 @@ Access to a fixed-capacity value is bounds-checked against its
 declared capacity and aborts identically on an out-of-range
 index (§44.3).
 
+  xs.len()   s.len()   b.len()   m.len()
+
+`.len()` is defined on lists, text, bytes, maps and sets, and
+nowhere else (a compile-time error). On a Str or Str(N) it is
+the codepoint count, equal to str_len(s); on Bytes, the byte
+count; on a map or set, the entry count. `xs.concat(ys)` joins
+two heap lists of one type, and the slice `xs[..hi]` takes a
+heap list and an integer bound; neither applies to text, bytes,
+fixed-capacity lists or any other value.
+
 Shift counts that are negative or >= the operand's bit width
 yield 0, or -1 for `>>` of a negative signed value (§6.1); they
 never wrap modulo the width. This holds for every integer width,
@@ -2771,7 +2781,8 @@ identically to heap lists (§17):
           // which is x; i checked against N
 
 `.len()` on a List(T, N) or a Bytes(N) is the statically
-known capacity N; they carry no dynamic length.
+known capacity N; they carry no dynamic length. `.len()` on
+a Str(N) is the codepoint count of its content, as str_len.
 `.capacity()` on any fixed-capacity value is N, a
 compile-time constant (also in a generic body, where N is a
 type parameter).

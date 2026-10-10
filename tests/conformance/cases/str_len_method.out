@@ -1,0 +1,14 @@
+lit 5 5
+concat 2 2
+paren 2 2
+inline 2
+rt 7 7
+empty 0 0
+rtempty 0 0
+utf8 11 11
+cjk 3 3
+emoji 3 3
+file 3 3
+fixed 2 2 8
+fixed0 0
+true
