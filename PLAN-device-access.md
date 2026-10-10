@@ -630,6 +630,19 @@ no compiler or runtime change. Checked against Linux 7.3-rc6 (torvalds
   TPM_PT_LOCKOUT_COUNTER still 0, the withheld raw NV_Read then counting
   1; a secret read of 64 bytes), `tests/ct` (`dev-tpm-nv-resp-secret`,
   `dev-tpm-nv-read-secret`).
+- **Self-tests in the production runtime (review).** Moving the fake
+  kernel and fake configfs out of `runtime/rt/device.resid` into a
+  test-only runtime module was considered and not done: they run inside
+  the real host after its seccomp filter, Landlock and guard pages, which
+  is what they test, and a separate module could reach the host only
+  through a hook (a writable function pointer in every host). Moving the
+  self-test mode from the host's heap state into a global so that LTO
+  would fold it to 0 was tried too: the optimizer keeps the loads (the
+  global's address goes through ptrtoint), so it bought nothing. They are
+  unreachable instead: `rt_device_host` starts every program's host with
+  mode 0 and no root, and the harness's entries (`resid_device_host_test`,
+  `resid_device_test_parent`) are absent from program binaries
+  (`tests/device` `device_selftest_entry_absent`, nm).
 - **Sources checked.** SNP certificate-table GUIDs and byte order:
   virtee/sev a966d06d and google/go-sev-guest 9c5dffcd (AMD's GHCB PDF,
   56421, could not be retrieved from amd.com); the earlier guid_t

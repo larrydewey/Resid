@@ -1135,6 +1135,17 @@ pub Int rt_device_host() {
 // and may ask for a self-test `mode` (a fault injected on purpose, or a
 // ConfigfsReport against the fake configfs at `root`). No Resid program
 // can name this entry: the compiler declares only resid_device_host.
+//
+// The self-tests stay in this module rather than a test-only one: they
+// are faults and fake kernels injected inside the real host, after its
+// seccomp filter, Landlock and guard pages are in place, which is what
+// they test, and a separate module could reach them only through hooks
+// (a writable function pointer in every host). They are unreachable from
+// a program instead: rt_device_host passes mode 0 and no root, every
+// self-test branch needs a mode in 1..28 (the fake configfs also a root),
+// and this entry -- the only other caller of dh_main -- is not in a
+// program's binary at all (the link drops it; tests/device's
+// device_selftest_entry_absent checks with nm).
 @export("resid_device_host_test", "void(i64,ptr,ptr,i64,ptr)")
 pub Int rt_device_host_test(Int argc, Int argv, Int envp, Int mode, Int root) {
     if (argc != 1 || argv == 0) { return 0; }

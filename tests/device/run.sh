@@ -128,6 +128,29 @@ if [ "$#" -eq 0 ] || [[ " $* " == *" device_hook_exact "* ]]; then
         echo "FAIL device_hook_exact: exit $rc, device program hooks $nd, plain program $np ($(grep -m1 -i error "$P/c.log"))"; fail=$((fail + 1))
     fi
 fi
+# The C harness's entries into the runtime's self-tests
+# (resid_device_host_test, resid_device_test_parent; the only writers of a
+# self-test mode, a fake configfs root or a test deadline) are named by no
+# compiler and are not in a device program's binary: the link drops them,
+# so the self-test branches in runtime/rt/device.resid run with mode 0 and
+# no fake root there.
+if [ "$#" -eq 0 ] || [[ " $* " == *" device_selftest_entry_absent "* ]]; then
+    if ! command -v nm >/dev/null; then
+        echo "SKIP device_selftest_entry_absent (no nm)"; skip=$((skip + 1))
+    else
+        P="$WORK/selftest"; mkdir -p "$P"
+        printf '%s\n' 'import "dev/fx_device_ioctl.resid";' '@requires(device(readonly))' 'Int main() { println(match (device.ioctl(fx_ptn(), [])) { Ok(o) => "ok", Err(e) => device_error_text(e), }); return 0; }' > "$P/dev.resid"
+        (cd "$P" && timeout 600 "$COMPILER" dev.resid -o dev) > "$P/c.log" 2>&1; rc=$?
+        nm "$P/dev" > "$P/nm.txt" 2>&1
+        nt=$(grep -c -E 'device_host_test|device_test_parent' "$P/nm.txt")
+        nh=$(grep -c -E ' resid_device_host$' "$P/nm.txt")
+        if [ "$rc" -eq 0 ] && [ "$nt" = 0 ] && [ "$nh" = 1 ]; then
+            echo "PASS device_selftest_entry_absent"; pass=$((pass + 1))
+        else
+            echo "FAIL device_selftest_entry_absent: exit $rc, test entries $nt, host entry $nh ($(grep -m1 -i error "$P/c.log"))"; fail=$((fail + 1))
+        fi
+    fi
+fi
 # The generated descriptors (lib/dev/uapi_*.resid) are what the committed
 # uapi header snapshot generates (tools/resid-devgen --check; tests/devgen
 # has the rest of the generator's cases).
