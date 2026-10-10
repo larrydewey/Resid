@@ -5083,6 +5083,11 @@ SP sec_parts(GK k, Str b, List(Str) ps, Int i, Str at, Str seen) {
 // After checking and reduction, `Secret(T)` lowers exactly as T: every
 // type text loses its Secret( ) wrappers and secret(x) / declassify(x, r)
 // become the parenthesized x. Literals and format parts keep their text.
+// A declassify that still computes at run time keeps a mark (the paren's
+// aux is `@declassify`): lowering checks the `declassify` grant against
+// the running capability frame (resid_cap_check) at the entry of each
+// function, lambda and spawn body that holds one. One whose value the
+// reducer already knows (a literal) is code no longer, and is not marked.
 
 pub KP sec_erase(KP p) {
     if (!sec_graph_has(p.g, 0)) { return p; }
@@ -5111,10 +5116,20 @@ List(KN) sec_erase_ns(Kg g, Int i, Map(Str, Int) user, ListBuf(KN) acc) {
     KN n = g.ns[i];
     Bool lit = n.kind == "lit" || n.kind == "fpart" || n.kind == "fspec";
     Bool wrap = (n.kind == "call" || n.kind == "mcall") && sec_is_wrapper(n.text) && !user.contains(n.text) && n.nk >= 1;
-    KN m = if (wrap) { KN {.kind = "paren", .text = "", .aux = "", .a0 = n.a0, .nk = 1, .sp = n.sp, .ep = n.ep, .kc = kg_kc("paren")} }
+    Bool mark = wrap && n.text == "declassify" && !sec_known_under(g, kg_kid(g, i, 0));
+    KN m = if (wrap) { KN {.kind = "paren", .text = "", .aux = if (mark) { "@declassify" } else { "" }, .a0 = n.a0, .nk = 1, .sp = n.sp, .ep = n.ep, .kc = kg_kc("paren")} }
            else if (lit) { n }
            else { KN {.kind = n.kind, .text = sec_erase_text(n.text), .aux = sec_erase_text(n.aux), .a0 = n.a0, .nk = n.nk, .sp = n.sp, .ep = n.ep, .kc = n.kc} };
     return sec_erase_ns(g, i + 1, user, acc.push(m));
+}
+
+// A literal, possibly under parentheses and secret(...)/classify(...):
+// a value the reducer knows, with no run-time code left to check.
+Bool sec_known_under(Kg g, Int id) {
+    KN n = g.ns[id];
+    if (n.kind == "lit") { return true; }
+    Bool pass = n.nk >= 1 && (n.kind == "paren" || (n.kind == "call" && (n.text == "secret" || n.text == "classify")));
+    return if (pass) { sec_known_under(g, kg_kid(g, id, 0)) } else { false };
 }
 
 // Type text with every `Secret(X)` replaced by X.

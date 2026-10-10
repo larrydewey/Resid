@@ -93,9 +93,7 @@ roots, COSE_Sign1, the HPKE exporter and single-shot seal, PKCS#8/SEC1/
 RFC 8410 key parsing with the scalar marked, and the TLS server
 handshake's pure steps (60 cases, all valgrind-clean). The graph records
 no declaration heads or instance tables, so the tool reads those from the
-source at the lines the graph gives. Still to do: a force-time
-`resid_cap_check("declassify")` (declassify lowers to nothing, so the
-static check is the whole check today). Key loading is constant time (2026-10-09):
+source at the lines the graph gives. Key loading is constant time (2026-10-09):
 `tls_key_load` reads the file as bytes and `tls_key_parse` makes all of
 them secret before looking at any, publishing only framing -- byte
 classes (line feed, whitespace, dash, '=') computed with masks, the armor
@@ -107,6 +105,20 @@ public window is closed and `tls_key_load` left `tests/ct/uncovered.txt`:
 `tls-key-secret` loads P-256, P-384 and Ed25519 PKCS#8 PEM, SEC1 PEM and
 DER keys with every byte of the file marked secret, and `base64-secret`
 runs the decoder alone (61 cases, 227 of 232 surface functions reached).
+The force-time check
+is in (2026-10-09): `sec_erase` marks every declassify left after
+reduction (one folded to a literal is not marked), and each function,
+lambda and spawn body holding one calls `resid_cap_check` on
+`declassify` in its entry block (`lw_declassify_check` in
+`compiler/lower.resid`), after a sandbox's `resid_cap_enter` and before
+a self-recursive loop's head: the capability frames are fixed for one
+call, so one check covers every declassify the body reaches, and a
+check at entry is never weaker than one at the call (it may refuse a
+call whose declassify the path would not reach, which is fail-closed).
+A closure that declassifies, run inside a spawn list or sandbox
+ceiling without `declassify`, now aborts (`secret_declassify_granted`,
+`secret_declassify_spawn_dropped`, `secret_declassify_sandbox_dropped`).
+Every step of §7 is done.
 
 **Goal**: make "this value is a secret" knowledge the compiler holds and
 enforces, so that code which branches on, indexes with, prints, compares

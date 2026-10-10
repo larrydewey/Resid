@@ -32,6 +32,14 @@ Int main() {
   (`E0219`); the family has no modes. The reason is a non-empty string
   literal (`E0251`) and is recorded with the call in the graph artifact
   (effect `declassify.<reason>`, capability `declassify`).
+- The grant is also checked at run time, like a provider call: a function,
+  lambda or spawn body that declassifies asks the running thread's
+  capability frames for `declassify` when it is entered (once per call,
+  not per step of a self-recursive loop). A closure made where the grant
+  holds and run inside a `spawn ()` or a sandbox that dropped it aborts
+  with `capability not granted: declassify` (in a spawn, the region
+  fails). A declassify the compiler folded to a known value leaves no
+  code and no check.
 
 ## What a secret may do
 
@@ -334,9 +342,9 @@ before `main`:
 Registers, the binary's static data and the process's initial stack are
 not covered. `main` runs on its own thread stack, which is.
 
-## Not yet enforced
+## Status
 
 The cryptography library's migration onto the word behaviors is complete
-(TLS was the last). `PLAN-secret-type.md` lists the rest of the plan: a
-run-time check of the `declassify` grant (`declassify` lowers to nothing,
-so the static check is the whole check today).
+(TLS was the last), the `declassify` grant is checked at run time as
+well as statically, and `tests/ct` takes its cases from the graph:
+every step of `PLAN-secret-type.md` is done.
