@@ -1179,7 +1179,11 @@ Rules:
   - Child receives a fresh CapEnv: the spawn body and
     everything it calls may use only the listed
     capabilities (E0214), and the child thread runs in
-    its own force-time frame.
+    its own force-time frame. A closure the body calls
+    by the name it is bound to counts as called, so
+    what its lambda uses must be listed too; a closure
+    reached any other way is bounded by that frame
+    when it runs (§21.3).
   - Residual forcing uses only the child’s CapEnv.
   - Returns pure values or residuals.
   - Mutable handles moved; immutable views shareable.
@@ -1324,6 +1328,13 @@ consumer's manifest lists (the driver's -depmap lines
     a capability error. Every provider call is checked
     before it runs against the calling thread's sandbox
     frames; a write needs a grant that is not read-only.
+  - A closure carries no authority of its own: its body
+    runs under the frames where it is called, not where
+    it was made. A lambda made where a family is granted
+    and called inside a sandbox or spawn that drops the
+    family fails at its provider call, as a named
+    function's body would (Law 14: authority crosses a
+    boundary only attenuated).
   - Transitive dependencies are closed under the same
     sandbox; attenuation applies to the entire closure.
   - A handle may enter a sandbox only when every

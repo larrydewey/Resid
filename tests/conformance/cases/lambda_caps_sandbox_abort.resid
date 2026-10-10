@@ -1,0 +1,15 @@
+// A closure that reads a file, made in main and handed to a function in
+// `sandbox (args)`, aborts the program when it runs there: the sandbox's
+// ceiling bounds every provider call made under it, a lambda's included
+// (spec §21.3, §21.4).
+sandbox (args) {
+    Int run_in(Int closure(Int) f, Int x) { return f(x); }
+}
+
+@requires(filesystem, args)
+Int main() {
+    Int closure(Int) f = lambda(v) { str_len(filesystem.read_all("@TMP@/in.txt")) + v };
+    println(f"outside {f(rt 1)}");
+    println(f"inside {run_in(f, rt 1)}");
+    return 0;
+}

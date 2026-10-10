@@ -4309,11 +4309,20 @@ GT lw_lambda(LW w, Int id, Str fnty, List(Str) env, GT c) {
     Str rv0 = if (bodyw.val == "") { "0" } else { bodyw.val };
     Str retline = if (ret == "Void") { "ret i1 " + rv0 } else { "ret " + rlt + " " + bodyw.val };
     List(Str) rets = if (rfx > 0) { lw_fx_ret(bodyw.val, ret, "%fx.r") } else { [retline] };
-    List(Str) lam = lw_fx_hoist(pr0.lines.concat(lw_declassify_check(w.g, lw_kid(w, id, np))).concat(bodyw.lines).concat(rets), 0);
-    Str clo_body = str_join(lam.concat(["}"]), "\n");
+    // A closure runs under whatever capability frames are on top where it
+    // is called -- a sandboxed function's ceiling or a spawn's list -- not
+    // where it was made, so each provider call in its body asks the running
+    // frames first, exactly as in a named function (capinject_at).
+    CapPP li = capinject_at(pr0.lines.concat(lw_declassify_check(w.g, lw_kid(w, id, np))).concat(bodyw.lines).concat(rets), 0, false, CapPP {.lines = nil_list(), .glines = nil_list(), .n = 0});
+    List(Str) lam0 = lw_fx_hoist(li.lines, 0);
     // Instances of one generic function share the lambda's position, so
     // the name also carries a digest of what it lowered to.
-    Str clo = f"@clo{w.g.ns[id].sp + 6 - w.base}_" + str_slice(str_sha256(rlt + sig + clo_body), 0, 10);
+    Str clo = f"@clo{w.g.ns[id].sp + 6 - w.base}_" + str_slice(str_sha256(rlt + sig + str_join(lam0.concat(["}"]), "\n")), 0, 10);
+    // Its capability strings are named after it (`@resid.cap.clo<n>_<h>.N`).
+    Str cpre = "@resid.cap." + str_slice(clo, 1, str_len(clo));
+    List(Str) lam = if (li.n > 0) { cap_rename_to(lam0, cpre, 0, ListBuf()) } else { lam0 };
+    List(Str) cglines = if (li.n > 0) { cap_rename_to(li.glines, cpre, 0, ListBuf()) } else { nil_list() };
+    Str clo_body = str_join(lam.concat(["}"]), "\n");
     Str clo_text = "define " + rlt + " " + clo + "(" + sig + ") {\nentry:\n" + clo_body;
     // A closure may be called after its captures' owner changes: they are
     // shared from here.
@@ -4324,7 +4333,7 @@ GT lw_lambda(LW w, Int id, Str fnty, List(Str) env, GT c) {
     Str g0 = f"%t{tf0 + 2}";
     List(Str) cl4 = sc0.g.lines.concat([arr + f" = call ptr @resid_gmalloc(i64 {(ncap + 1) * 8})", fpreg + " = ptrtoint ptr " + clo + " to i64", g0 + " = getelementptr i64, ptr " + arr + ", i64 0", "store i64 " + fpreg + ", ptr " + g0]);
     List(Str) cl5 = clos_store_lines(sc0.vals, cap0.tys, ncap, 0, arr, tf0 + 3, cl4);
-    return GT {.pos = 0, .val = arr, .ty = fnty, .cnt = 0, .err = "", .glines = bodyw.glines.concat([clo_text]), .lines = cl5, .tmp = tf0 + 3 + ncap * 2, .lbl = c.lbl, .tail = false};
+    return GT {.pos = 0, .val = arr, .ty = fnty, .cnt = 0, .err = "", .glines = bodyw.glines.concat([clo_text]).concat(cglines), .lines = cl5, .tmp = tf0 + 3 + ncap * 2, .lbl = c.lbl, .tail = false};
 }
 
 Str lw_lam_sig(LW w, Int id, Int i, Int n, List(Str) pl, Str acc) {

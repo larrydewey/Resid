@@ -65,6 +65,34 @@ publishes a secret fails inside a spawn or sandbox that dropped
 `declassify`. A
 handle may enter a sandbox only when every capability it requires fits.
 
+### Closures
+
+A closure carries no authority of its own. Its lambda's needs count
+against the function that makes it, but its body runs under the frames
+where it is *called*: a closure made in `main`, where `filesystem` is
+granted, and called inside a sandbox or `spawn` that drops `filesystem`
+fails at its provider call, exactly as a named function's body would.
+
+```text
+sandbox (args) {
+    Int run_in(Int closure(Int) f, Int x) { return f(x); }
+}
+
+@requires(filesystem, args)
+Int main() {
+    Int closure(Int) f = lambda(v) { str_len(filesystem.read_all("in.txt")) + v };
+    println(f"{f(1)}");          // runs: main holds filesystem
+    println(f"{run_in(f, 1)}");  // aborts: capability not granted: filesystem
+    return 0;
+}
+```
+
+Inside a `spawn` the failure is the region's `Err`. A spawn body that calls
+a closure *by the name it is bound to* is checked at compile time, since
+the binding can hold nothing else: `spawn () { return f(1); }` above is
+`E0214`. A closure reached any other way (passed to a function, kept in a
+record) is checked when it runs.
+
 ## Manifests
 
 A project manifest (`resid.toml`) caps what each dependency may receive:
@@ -96,7 +124,7 @@ keep a ceiling a ceiling:
 | `E0211` | a call exceeds the caller's sandbox ceiling (attenuation is transitive) |
 | `E0212` | a region violation: a handle entering a sandbox it exceeds, or a write under a read-only grant |
 | `E0213` | a malformed capability list: unknown family or mode |
-| `E0214` | a `spawn` lists a capability its parent does not have |
+| `E0214` | a `spawn` lists a capability its parent does not have, or its body (with what it calls, closures called by name included) uses one its list does not grant |
 | `E0215` | a call inside a `spawn` needs a capability the region was not given |
 | `E0216` | an attenuated import after the module was imported without attenuation |
 | `E0218` | a provider call in a restricted region uses a family outside it |

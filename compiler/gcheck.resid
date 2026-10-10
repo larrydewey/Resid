@@ -4616,18 +4616,59 @@ Bool gk_auth_tests(GK k, List(Str) need, List(Str) decl, Int id, Bool acc) {
 }
 
 // A spawn body, with everything it calls, is granted only the spawn's
-// capability list (spec §19: child ≤ parent, a fresh CapEnv).
+// capability list (spec §19: child ≤ parent, a fresh CapEnv). That
+// includes a closure made outside the spawn and called in its body by
+// the name it is bound to: the binding is immutable and never shadowed,
+// so the call can only run that lambda. A closure reached any other way
+// (passed to a function, held in a record) is checked when it runs: its
+// provider calls ask the running capability frames, as a named
+// function's do (lower.resid's lw_lambda).
 Bool gk_auth_spawns(GK k, List(Str) need, List(Str) decl, Int id, Bool acc) {
     if (id >= k.g.ns.len()) { return acc; }
     Bool bad = if (k.g.ns[id].kind != "spawn") { false } else {
         List(Str) e = [];
+        List(Int) none = [];
         GKF f = gk_facts(k, id, GKF {.calls = e, .provs = e, .writes = e});
         Str n = gk_need_callees(k.fs, need, decl, f.calls, 0, gk_direct(f, 0, ""));
         PRes sc = cap_list_at(k.g.ns[id].aux + ")", 0, true, "");
         Str all = gk_uncovered_all(csv_split_or_empty(n), 0, sc.ty, "");
-        if (all == "") { false } else { eprintln("error[E0214]: spawn body uses capabilities its list [" + fmt_caps(sc.ty) + "] does not grant: " + all + " (spec §19)") }
+        GKF fl = gk_closure_facts(k, id, none, f).f;
+        Str nl = gk_need_callees(k.fs, need, decl, fl.calls, 0, gk_direct(fl, 0, ""));
+        Str alll = gk_uncovered_all(csv_split_or_empty(nl), 0, sc.ty, "");
+        if (all != "") { eprintln("error[E0214]: spawn body uses capabilities its list [" + fmt_caps(sc.ty) + "] does not grant: " + all + " (spec §19)") }
+        else if (alll != "") { eprintln("error[E0214]: spawn body uses capabilities its list [" + fmt_caps(sc.ty) + "] does not grant: " + alll + ", through a closure it calls (spec §19)") }
+        else { false }
     };
     return gk_auth_spawns(k, need, decl, id + 1, acc || bad);
+}
+
+// Facts of every lambda that a call under `id` reaches by the name it is
+// bound to (`Int closure(Int) f = lambda(...) {...}; ... f(x)`), and of
+// the lambdas those reach in turn; `seen` holds the bindings followed.
+type GKCF = { GKF f; List(Int) seen; };
+
+GKCF gk_closure_facts(GK k, Int id, List(Int) seen, GKF f) {
+    Int lam = gk_called_lambda(k, id);
+    Int b = if (lam >= 0) { kg_def(k.rs, id) } else { -1 };
+    GKCF here = if (lam < 0 || seen.contains(b)) { GKCF {.f = f, .seen = seen} } else {
+        gk_closure_facts(k, lam, seen.concat([b]), gk_facts(k, lam, f))
+    };
+    return gk_closure_kids(k, id, 0, here);
+}
+
+GKCF gk_closure_kids(GK k, Int id, Int i, GKCF a) {
+    if (i >= k.g.ns[id].nk) { return a; }
+    GKCF a2 = gk_closure_facts(k, kg_kid(k.g, id, i), a.seen, a.f);
+    return gk_closure_kids(k, id, i + 1, a2);
+}
+
+// The lambda node a call names through a local binding, or -1.
+Int gk_called_lambda(GK k, Int id) {
+    if (k.g.ns[id].kind != "call") { return -1; }
+    Int d = kg_def(k.rs, id);
+    if (d < 0 || (k.g.ns[d].kind != "bind" && k.g.ns[d].kind != "rbind") || k.g.ns[d].nk < 1) { return -1; }
+    Int v = kg_kid(k.g, d, k.g.ns[d].nk - 1);
+    return if (k.g.ns[v].kind == "lambda") { v } else { -1 };
 }
 
 Bool gk_authority(GK k, List(Int) fnode, GKFs facts) {

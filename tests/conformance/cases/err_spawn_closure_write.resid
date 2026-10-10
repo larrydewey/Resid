@@ -1,0 +1,9 @@
+// A read-only spawn list does not cover a write made by a closure the
+// body calls, nor one reached through a second closure (spec §19).
+@requires(filesystem)
+Int main() {
+    Bool closure(Str) put = lambda(s) { filesystem.write_all("out.txt", s) };
+    Bool closure(Str) twice = lambda(s) { put(s) && put(s) };
+    Result(Bool, RegionError) r = spawn (filesystem(readonly)) { return twice("x"); };
+    return 0;
+}
