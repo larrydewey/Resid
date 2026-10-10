@@ -1,0 +1,132 @@
+// The configfs TSM report wrapper (lib/dev/tsm_report.resid): its input
+// checks, the decoding of the engine's outputs, the provider-to-platform
+// map, and the SNP certificate table parser against good, truncated and
+// corrupted tables (always a value, never an abort). The call itself
+// passes on any host: off a confidential guest the report root is absent
+// (Err(Absent)), on one it answers or refuses this user -- `reached`
+// covers each.
+import "dev/tsm_report.resid";
+import "_devzeros.resid";
+
+Str reached(DeviceError e) {
+    return match (e) {
+        BadInput(n, why) => device_error_text(e),
+        BadReply(n, why) => device_error_text(e),
+        Timeout(n) => device_error_text(e),
+        Absent(n) => "reached", Denied(n) => "reached", Kernel(n, x) => "reached",
+        TooLong(n) => "reached", GenerationChanged(n) => "reached", Unsupported(n) => "reached",
+        Version(n, v) => "reached", Overrun(n) => "reached", UnknownDriver(n, v) => "reached",
+    };
+}
+
+@requires(device(readonly))
+Str get(Int n, TsmOpts o) {
+    return match (tsm_report_get(dev_zeros(n), o)) {
+        Ok(r) => if (r.outblob.len() > 0) { "reached" } else { "empty report" },
+        Err(e) => reached(e),
+    };
+}
+
+List(UInt(8)) text(Str s, Int i, ListBuf(UInt(8)) acc) {
+    if (i >= str_len(s)) { return acc.finish(); }
+    return text(s, i + 1, acc.push((UInt(8))str_char_at(s, i)));
+}
+
+Str dec(Option(List(UInt(8))) out, Option(List(UInt(8))) aux, Str prov, Option(Int) gen) {
+    return match (tsm_report_decode("t", out, aux, Some([]), Some(text(prov, 0, ListBuf())), gen)) {
+        Ok(r) => f"{r.provider}: " + tsm_platform_text(r.platform) + f", {r.outblob.len()}-byte outblob, {r.auxblob.len()}-byte auxblob, generation {r.generation}",
+        Err(e) => device_error_text(e),
+    };
+}
+
+Str honoured(Str prov, TsmOpts o) {
+    TsmReport r = match (tsm_report_decode("t", Some([(UInt(8))1]), Some([]), Some([]), Some(text(prov, 0, ListBuf())), Some(1))) {
+        Ok(x) => x,
+        Err(e) => TsmReport {.provider = "", .platform = SevSnp, .outblob = [], .auxblob = [], .manifestblob = [], .generation = 0},
+    };
+    return match (tsm_report_honoured("t", r, o)) { Ok(x) => prov + ": kept", Err(e) => prov + ": " + device_error_text(e), };
+}
+
+Str plat(Str p) {
+    return match (tsm_platform(p)) { Some(x) => p + " -> " + tsm_platform_text(x), None => p + " -> none", };
+}
+
+// -- SNP certificate tables --------------------------------------------------
+
+List(UInt(8)) le32(Int v) { return [(UInt(8))(v & 255), (UInt(8))((v >> 8) & 255), (UInt(8))((v >> 16) & 255), (UInt(8))((v >> 24) & 255)]; }
+
+// The VCEK GUID 63da758d-e664-4564-adc5-f4b93be8accd in guid_t order.
+List(UInt(8)) vcek_guid() { return [(UInt(8))0x8d, 0x75, 0xda, 0x63, 0x64, 0xe6, 0x64, 0x45, 0xad, 0xc5, 0xf4, 0xb9, 0x3b, 0xe8, 0xac, 0xcd]; }
+// The ARK GUID c0b406a4-a803-4952-9743-3fb6014cd0ae.
+List(UInt(8)) ark_guid() { return [(UInt(8))0xa4, 0x06, 0xb4, 0xc0, 0x03, 0xa8, 0x52, 0x49, 0x97, 0x43, 0x3f, 0xb6, 0x01, 0x4c, 0xd0, 0xae]; }
+
+// Two entries and the terminator (72 bytes), then the certificates.
+List(UInt(8)) table() {
+    List(UInt(8)) head = vcek_guid().concat(le32(72)).concat(le32(5)).concat(ark_guid()).concat(le32(77)).concat(le32(3)).concat(dev_zeros(24));
+    return head.concat([(UInt(8))0x30, 1, 2, 3, 4, 0x30, 9, 9]);
+}
+
+Str certs(List(UInt(8)) t) {
+    return match (tsm_snp_certs(t)) {
+        Ok(cs) => f"{cs.len()} certificates" + cert_names(cs, 0, ""),
+        Err(why) => "refused: " + why,
+    };
+}
+
+Str cert_names(List(SnpCert) cs, Int i, Str acc) {
+    if (i >= cs.len()) { return acc; }
+    Str which = if (cs[i].guid == snp_guid_vcek()) { "VCEK" } else if (cs[i].guid == snp_guid_ark()) { "ARK" } else { cs[i].guid };
+    return cert_names(cs, i + 1, acc + f", {which} {cs[i].cert.len()} bytes");
+}
+
+Bool parses(List(UInt(8)) t) { return match (tsm_snp_certs(t)) { Ok(cs) => true, Err(w) => false, }; }
+
+Int prefixes(List(UInt(8)) t, Int k, Int acc) {
+    if (k > t.len()) { return acc; }
+    return prefixes(t, k + 1, acc + (if (parses(t[0..k])) { 1 } else { 0 }));
+}
+
+List(UInt(8)) set_at(List(UInt(8)) r, Int i, Int v) { return r[0..i].concat([(UInt(8))v]).concat(r[i + 1..]); }
+
+Int mutants(List(UInt(8)) t, Int i, Int acc) {
+    if (i >= t.len()) { return acc; }
+    return mutants(t, i + 1, acc + (if (parses(set_at(t, i, 255))) { 1 } else { 0 }));
+}
+
+@requires(device(readonly))
+Int main() {
+    println(get(rt 64, tsm_opts()));
+    println(get(rt 64, tsm_opts_vmpl(2)));
+    println(get(rt 64, tsm_opts_svsm()));
+    println(get(rt 32, tsm_opts()));
+    println(get(rt 64, tsm_opts_vmpl(4)));
+    println(get(rt 64, TsmOpts {.privlevel = rt 0, .service_provider = "vtpm"}));
+
+    println(dec(Some([(UInt(8))1, 2, 3]), Some([(UInt(8))9]), "sev_guest", Some(rt 1)));
+    println(dec(Some([(UInt(8))1]), Some([]), "tdx_guest", Some(1)));
+    println(dec(Some([(UInt(8))1]), Some([]), "arm_cca_guest", Some(1)));
+    println(dec(Some([(UInt(8))1]), Some([]), "pkvm_guest", Some(1)));
+    println(dec(Some([(UInt(8))1]), Some([]), "sev guest", Some(1)));
+    println(dec(Some([]), Some([]), "sev_guest", Some(1)));
+    println(dec(None, Some([]), "sev_guest", Some(1)));
+    println(dec(Some([(UInt(8))1]), Some([]), "sev_guest", None));
+
+    println(honoured("sev_guest", tsm_opts_vmpl(rt 1)));
+    println(honoured("arm_cca_guest", tsm_opts_vmpl(rt 1)));
+    println(honoured("arm_cca_guest", tsm_opts_svsm()));
+    println(honoured("arm_cca_guest", tsm_opts()));
+    println(plat("sev_guest"));
+    println(plat("tdx_guest"));
+    println(plat("arm_cca_guest"));
+    println(plat("arm-cca-guest"));
+    println(tsm_outblob_text(IntelTdx));
+
+    List(UInt(8)) t = table();
+    println(certs(t));
+    println(certs(t[0..72]));
+    println(certs(set_at(t, 16, 200)));
+    println(certs(set_at(t, 23, 128)));
+    println(certs([]));
+    println(f"{t.len() + 1} prefixes, {prefixes(t, 0, 0)} parse; {t.len()} mutants, {mutants(t, 0, 0)} parse");
+    return 0;
+}

@@ -1,0 +1,217 @@
+// --- lib/dev/tsm_report.resid - the kernel's TSM report (configfs)
+// One attestation report from the confidential-computing guest driver the
+// kernel has, through the configfs report interface
+// /sys/kernel/config/tsm/report (drivers/virt/coco/guest/report.c,
+// Documentation/ABI/testing/configfs-tsm-report). The device host makes a
+// fresh entry, writes `inblob` (and `privlevel`, `service_provider` when
+// asked), reads `outblob`, `auxblob`, `manifestblob`, `provider` and
+// `generation`, and removes the entry (spec §49.4).
+//
+// Checked against Linux 7.3-rc6 (torvalds/linux 3857c2fe5449, 2026-10-10;
+// the pin is tests/device/kernel-pin.txt). The providers are the drivers'
+// KBUILD_MODNAME (kbuild turns `-` into `_`), so:
+//
+//     provider        driver                          outblob
+//     sev_guest       drivers/virt/coco/sev-guest     the SNP attestation report
+//     tdx_guest       drivers/virt/coco/tdx-guest     a TDX quote
+//     arm_cca_guest   drivers/virt/coco/arm-cca-guest a CCA attestation token
+//
+// A report is a read (plan §1): writing `inblob` asks for a report bound
+// to it and changes nothing on the platform, so the descriptor is
+// `write = false` and device(readonly) covers it.
+//
+// What is signed, and by whom:
+//   - sev_guest: outblob is struct attestation_report, signed by the AMD
+//     secure processor (VCEK or VLEK). auxblob is the certificate table
+//     the host supplied (GHCB 2.03 §4.1.8.1 MSG_REPORT_REQ; tsm_snp_certs
+//     parses it): certificates, verified through their own chain to AMD's
+//     root, not by being here; it can be empty. Under an SVSM
+//     (service_provider "svsm"), outblob is the SVSM's attestation report,
+//     whose REPORT_DATA binds the nonce and manifestblob (the services
+//     manifest, unsigned on its own: check its hash).
+//   - tdx_guest: outblob is a TDX quote (Intel TDX DCAP Quote Generation
+//     Library, Appendix 4-5), signed by the quoting enclave's attestation
+//     key, certified through the PCK chain; the host's quoting service
+//     produced it. A quote over 8 KiB is the CBOR web token format of
+//     DICE-based platforms. No auxblob, no manifestblob.
+//   - arm_cca_guest: outblob is the CCA attestation token (a CBOR-tagged
+//     collection: the realm token signed by the RMM's RAK, the platform
+//     token signed by the CPAK). The kernel takes 32 to 64 bytes of
+//     challenge; this module always sends 64.
+//   - provider and generation are the kernel's own text, unsigned.
+
+import "device.resid";
+
+// -- Descriptor ---------------------------------------------------------------
+
+// The maxima are each provider's largest, from the drivers: a TDX quote is
+// at most GET_QUOTE_BUF_SIZE (128 KiB) less its header; an SNP report fits
+// 4 KiB and its certificate table SEV_FW_BLOB_MAX_SIZE (16 KiB); an SVSM
+// manifest grows past 4 KiB only on a retry the SVSM asks for (64 KiB is
+// room); a CCA token is what the RMM says, in practice a few KiB.
+pub ConfigfsReport tsm_report_op() {
+    return ConfigfsReport {.name = "tsm_report.report", .path = "/sys/kernel/config/tsm/report", .providers = ["sev_guest", "tdx_guest", "arm_cca_guest"], .max_inblob = 64, .max_outblob = 131072, .max_auxblob = 16384, .max_manifestblob = 65536, .write = false, .stability = Uapi};
+}
+
+// -- Platforms ------------------------------------------------------------------
+
+type TsmPlatform = SevSnp | IntelTdx | ArmCca;
+
+// The platform a provider name stands for.
+pub Option(TsmPlatform) tsm_platform(Str provider) {
+    if (provider == "sev_guest") { return Some(SevSnp); }
+    if (provider == "tdx_guest") { return Some(IntelTdx); }
+    if (provider == "arm_cca_guest") { return Some(ArmCca); }
+    return None;
+}
+
+pub Str tsm_platform_text(TsmPlatform p) {
+    return match (p) { SevSnp => "AMD SEV-SNP", IntelTdx => "Intel TDX", ArmCca => "Arm CCA", };
+}
+
+// What outblob holds on the platform.
+pub Str tsm_outblob_text(TsmPlatform p) {
+    return match (p) {
+        SevSnp => "SNP attestation report (signed by the AMD secure processor)",
+        IntelTdx => "TDX quote (signed by the quoting enclave)",
+        ArmCca => "CCA attestation token (realm token signed by the RAK, platform token by the CPAK)",
+    };
+}
+
+// -- Request --------------------------------------------------------------------
+
+// What else to ask for: `privlevel` (SNP's VMPL, 0 to 3; -1 leaves it
+// unwritten, the kernel's default is the floor its VMPCK allows) and
+// `service_provider` ("svsm" for a report from the SVSM, which only an SNP
+// guest under an SVSM shows; "" for none). Only SNP gives them meaning: a
+// TDX guest has neither attribute (the call is Err(Unsupported)), and a
+// CCA guest shows both but ignores them, so a report from any provider
+// but sev_guest asked for either is refused (Err(Unsupported)) rather
+// than returned as if it honoured them.
+type TsmOpts = { Int privlevel; Str service_provider; };
+
+pub TsmOpts tsm_opts() { return TsmOpts {.privlevel = 0 - 1, .service_provider = ""}; }
+pub TsmOpts tsm_opts_vmpl(Int vmpl) { return TsmOpts {.privlevel = vmpl, .service_provider = ""}; }
+pub TsmOpts tsm_opts_svsm() { return TsmOpts {.privlevel = 0 - 1, .service_provider = "svsm"}; }
+
+// -- The report -----------------------------------------------------------------
+
+// One report. `outblob` is the evidence; `auxblob` and `manifestblob` are
+// empty when the provider has none.
+type TsmReport = { Str provider; TsmPlatform platform; List(UInt(8)) outblob; List(UInt(8)) auxblob; List(UInt(8)) manifestblob; Int generation; };
+
+// A report bound to `report_data` (64 bytes: put the verifier's nonce, or
+// a hash over it and anything else to bind, here).
+@requires(device(readonly))
+pub Result(TsmReport, DeviceError) tsm_report_get(List(UInt(8)) report_data, TsmOpts opts) {
+    Str name = "tsm_report.report";
+    if (report_data.len() != 64) { return Err(BadInput(name, f"report_data is 64 bytes, got {report_data.len()}")); }
+    if (opts.privlevel < 0 - 1 || opts.privlevel > 3) { return Err(BadInput(name, f"privlevel is 0 to 3 (or -1 for none), got {opts.privlevel}")); }
+    if (opts.service_provider != "" && opts.service_provider != "svsm") { return Err(BadInput(name, "service_provider is \"svsm\" or empty")); }
+    ReportReq rq = ReportReq {.inblob = report_data, .privlevel = opts.privlevel, .service_provider = opts.service_provider};
+    List(DevOut) outs = device.configfs_report(tsm_report_op(), rq)?;
+    TsmReport r = tsm_report_decode(name, dv_out_bytes(outs, 0), dv_out_bytes(outs, 1), dv_out_bytes(outs, 2), dv_out_bytes(outs, 3), dv_out_num(outs, 4))?;
+    return tsm_report_honoured(name, r, opts);
+}
+
+// A report asked for with a privlevel or a service provider is one only
+// sev_guest honours.
+pub Result(TsmReport, DeviceError) tsm_report_honoured(Str name, TsmReport r, TsmOpts opts) {
+    Bool asked = opts.privlevel >= 0 || opts.service_provider != "";
+    Bool snp = match (r.platform) { SevSnp => true, IntelTdx => false, ArmCca => false, };
+    if (asked && !snp) { return Err(Unsupported(name)); }
+    return Ok(r);
+}
+
+// The engine's outputs -- outblob, auxblob, manifestblob, provider (its
+// text without the newline), generation -- as a TsmReport. The engine has
+// checked the lengths and that the provider is one the descriptor lists;
+// this checks it again (the text is printable ASCII naming a known
+// platform) and that there is a report at all.
+pub Result(TsmReport, DeviceError) tsm_report_decode(Str name, Option(List(UInt(8))) out, Option(List(UInt(8))) aux, Option(List(UInt(8))) man, Option(List(UInt(8))) prov, Option(Int) gen) {
+    List(UInt(8)) o = ts_need(name, out, "outblob")?;
+    List(UInt(8)) a = ts_need(name, aux, "auxblob")?;
+    List(UInt(8)) m = ts_need(name, man, "manifestblob")?;
+    List(UInt(8)) p = ts_need(name, prov, "provider")?;
+    Int g = match (gen) { Some(v) => Ok(v), None => Err(BadReply(name, "no generation")), }?;
+    Str ptext = match (ts_ascii(p, 0, "")) { Some(t) => Ok(t), None => Err(BadReply(name, "provider is not printable text")), }?;
+    TsmPlatform plat = match (tsm_platform(ptext)) { Some(x) => Ok(x), None => Err(UnknownDriver(name, "provider " + ptext)), }?;
+    if (o.len() == 0) { return Err(BadReply(name, "empty outblob")); }
+    return Ok(TsmReport {.provider = ptext, .platform = plat, .outblob = o, .auxblob = a, .manifestblob = m, .generation = g});
+}
+
+Result(List(UInt(8)), DeviceError) ts_need(Str name, Option(List(UInt(8))) b, Str what) {
+    return match (b) { Some(x) => Ok(x), None => Err(BadReply(name, "no " + what)), };
+}
+
+// Printable ASCII bytes as text, or None.
+Option(Str) ts_ascii(List(UInt(8)) b, Int i, Str acc) {
+    if (i >= b.len()) { return Some(acc); }
+    Int c = (Int)b[i];
+    if (c < 33 || c > 126) { return None; }
+    return ts_ascii(b, i + 1, acc + str_from_code(c));
+}
+
+// -- SNP certificate table ------------------------------------------------------
+
+// One entry of the SNP extended report's certificate table (auxblob on
+// sev_guest): its GUID (as text, guid_t byte order, as the kernel prints
+// with %pUl) and the certificate's bytes (DER).
+type SnpCert = { Str guid; List(UInt(8)) cert; };
+
+// The GUIDs the GHCB specification names (SEV-ES Guest-Hypervisor
+// Communication Block Standardization 2.03, §4.1.8.1) for AMD's root key,
+// the AMD SEV key, the chip's VCEK and the VLEK.
+pub Str snp_guid_ark() { return "c0b406a4-a803-4952-9743-3fb6014cd0ae"; }
+pub Str snp_guid_ask() { return "4ab7b379-bbac-4fe4-a02f-05aef327c782"; }
+pub Str snp_guid_vcek() { return "63da758d-e664-4564-adc5-f4b93be8accd"; }
+pub Str snp_guid_vlek() { return "a8074bc2-a25a-483e-aae6-39c045a0b8a1"; }
+
+// The table: entries of { guid_t guid; u32 offset; u32 length; }
+// (struct snp_msg_cert_entry, 24 bytes, little endian), offsets from the
+// table's start, ended by an all-zero entry (or the end of the buffer).
+// Total: an entry that points outside the table is Err, never an abort.
+pub Result(List(SnpCert), Str) tsm_snp_certs(List(UInt(8)) table) {
+    return ts_certs(table, 0, []);
+}
+
+Result(List(SnpCert), Str) ts_certs(List(UInt(8)) t, Int at, List(SnpCert) acc) {
+    if (at + 24 > t.len()) { return Ok(acc); }
+    Int off = ts_le32(t, at + 16);
+    Int len = ts_le32(t, at + 20);
+    if (off == 0 && len == 0 && ts_zero(t, at, at + 16)) { return Ok(acc); }
+    if (off > t.len() || len > t.len() - off) { return Err(f"certificate entry {at / 24}: offset {off} and length {len} outside the table of {t.len()} bytes"); }
+    SnpCert c = SnpCert {.guid = ts_guid(t, at), .cert = t[off..off + len]};
+    return ts_certs(t, at + 24, acc.concat([c]));
+}
+
+Int ts_le32(List(UInt(8)) r, Int at) {
+    return (Int)r[at] | ((Int)r[at + 1] << 8) | ((Int)r[at + 2] << 16) | ((Int)r[at + 3] << 24);
+}
+
+Bool ts_zero(List(UInt(8)) r, Int i, Int end) {
+    if (i >= end) { return true; }
+    return r[i] == 0 && ts_zero(r, i + 1, end);
+}
+
+// guid_t as text: the first three fields little endian, the last eight
+// bytes in order.
+Str ts_guid(List(UInt(8)) r, Int at) {
+    Str a = ts_hex(r, [at + 3, at + 2, at + 1, at], 0, "");
+    Str b = ts_hex(r, [at + 5, at + 4], 0, "");
+    Str c = ts_hex(r, [at + 7, at + 6], 0, "");
+    Str d = ts_hex(r, [at + 8, at + 9], 0, "");
+    Str e = ts_hex(r, [at + 10, at + 11, at + 12, at + 13, at + 14, at + 15], 0, "");
+    return a + "-" + b + "-" + c + "-" + d + "-" + e;
+}
+
+Str ts_hex(List(UInt(8)) r, List(Int) idx, Int i, Str acc) {
+    if (i >= idx.len()) { return acc; }
+    return ts_hex(r, idx, i + 1, acc + f"{(Int)r[idx[i]]:hex, zero, width 2}");
+}
+
+// The certificate a GUID names, when the table has it.
+pub Option(List(UInt(8))) tsm_snp_cert(List(SnpCert) certs, Str guid) {
+    for (SnpCert c in certs) { if (c.guid == guid) { return Some(c.cert); } }
+    return None;
+}

@@ -1,0 +1,29 @@
+reached
+reached
+reached
+tsm_report.report: bad input: report_data is 64 bytes, got 32
+tsm_report.report: bad input: privlevel is 0 to 3 (or -1 for none), got 4
+tsm_report.report: bad input: service_provider is "svsm" or empty
+sev_guest: AMD SEV-SNP, 3-byte outblob, 1-byte auxblob, generation 1
+tdx_guest: Intel TDX, 1-byte outblob, 0-byte auxblob, generation 1
+arm_cca_guest: Arm CCA, 1-byte outblob, 0-byte auxblob, generation 1
+t: no descriptor for provider pkvm_guest
+t: bad reply: provider is not printable text
+t: bad reply: empty outblob
+t: bad reply: no outblob
+t: bad reply: no generation
+sev_guest: kept
+arm_cca_guest: t: unsupported
+arm_cca_guest: t: unsupported
+arm_cca_guest: kept
+sev_guest -> AMD SEV-SNP
+tdx_guest -> Intel TDX
+arm_cca_guest -> Arm CCA
+arm-cca-guest -> none
+TDX quote (signed by the quoting enclave)
+2 certificates, VCEK 5 bytes, ARK 3 bytes
+refused: certificate entry 0: offset 72 and length 5 outside the table of 72 bytes
+refused: certificate entry 0: offset 200 and length 5 outside the table of 80 bytes
+refused: certificate entry 0: offset 72 and length 2147483653 outside the table of 80 bytes
+0 certificates
+81 prefixes, 25 parse; 80 mutants, 56 parse

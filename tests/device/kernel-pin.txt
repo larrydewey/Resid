@@ -1,0 +1,64 @@
+# The kernel sources the non-ioctl descriptors in lib/dev/ were checked
+# against (PLAN-device-access.md, phase 5): tsm_report.resid, pci_tsm.resid
+# and tpm.resid. Re-check against a newer tree with:
+#
+#   git clone --depth 1 --filter=blob:none --sparse \
+#       https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+#   git sparse-checkout set --no-cone <the paths below>
+#
+# and compare the attribute names, provider names and maxima noted here.
+
+repository  https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+commit      3857c2fe5449541e24afc5efdb0f81a8a8f9a3a0
+date        2026-10-10 (Merge tag 'pci-v7.3-fixes-4')
+version     7.3.0-rc6
+
+paths
+  Documentation/ABI/testing/configfs-tsm-report
+  Documentation/ABI/testing/sysfs-class-tsm
+  Documentation/ABI/testing/sysfs-bus-pci            (the tsm/ and authenticated entries)
+  Documentation/ABI/testing/sysfs-devices-pci-host-bridge
+  drivers/virt/coco/guest/report.c                   (the configfs report)
+  drivers/virt/coco/sev-guest/sev-guest.c
+  drivers/virt/coco/tdx-guest/tdx-guest.c
+  drivers/virt/coco/arm-cca-guest/arm-cca-guest.c
+  drivers/virt/coco/tsm-core.c
+  drivers/pci/tsm.c
+  drivers/pci/ide.c
+  include/linux/tsm.h
+  include/linux/psp-sev.h
+  include/linux/tpm_command.h
+  drivers/char/tpm/tpm-dev-common.c
+
+tsm_report (configfs /sys/kernel/config/tsm/report/$name/)
+  written     inblob (at most TSM_REPORT_INBLOB_MAX, 64), privlevel (0..3, at
+              least privlevel_floor), service_provider ("svsm"),
+              service_guid, service_manifest_version
+  read        outblob, auxblob, manifestblob, provider, generation,
+              privlevel_floor
+  providers   the drivers' KBUILD_MODNAME, `-` made `_`:
+              sev_guest, tdx_guest, arm_cca_guest
+  inblob      sev_guest exactly 64 (SNP_REPORT_USER_DATA_SIZE); tdx_guest
+              exactly 64 (TDX_REPORTDATA_LEN); arm_cca_guest 32 to 64
+  visible     sev_guest: privlevel, privlevel_floor, auxblob; under an SVSM
+              also service_provider, service_guid, service_manifest_version,
+              manifestblob. tdx_guest: inblob, outblob, provider, generation
+              only. arm_cca_guest: no visibility hooks, so every attribute
+              shows; privlevel and service_provider are stored and ignored.
+  maxima      TDX quote GET_QUOTE_BUF_SIZE (128 KiB) less its header; SNP
+              report within 4 KiB; SNP certificates SEV_FW_BLOB_MAX_SIZE
+              (16 KiB); SVSM manifest 4 KiB, more on an SVSM-requested retry;
+              any blob at most TSM_REPORT_OUTBLOB_MAX (16 MiB)
+
+pci_tsm (sysfs)
+  /sys/class/tsm/tsmN                       tsm-core.c, "tsm%d" from an IDA
+  /sys/bus/pci/devices/.../tsm/connect      RW, "tsmN\n" or "\n"
+  /sys/bus/pci/devices/.../tsm/disconnect   WO
+  /sys/bus/pci/devices/.../tsm/dsm          RO, the DSM's PCI name
+  /sys/bus/pci/devices/.../tsm/bound        RO, "tsmN\n" or "\n"
+  /sys/bus/pci/devices/.../authenticated    RO, the connect state
+  /sys/devices/pciDDDD:BB/available_secure_streams, streamH.R.E
+  No measurement, certificate or interface-report attribute exists.
+
+tpm
+  /dev/tpmrm0 accepts and returns at most TPM_BUFSIZE (4096) bytes.
