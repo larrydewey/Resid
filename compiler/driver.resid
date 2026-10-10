@@ -8054,14 +8054,15 @@ Str e0218_check_func(Sigs fs, List(Str) eff, List(Str) pcsv, Int fi) {
     return "provider call family `" + fam + "` is not granted to this region's capability set [" + fmt_caps(effc) + "] (spec §21.3)";
 }
 
-Bool e0218_check_all(Sigs fs, List(Str) eff, List(Str) pcsv, Int i) {
-    if (i >= fs.names.len()) { return false; }
+Bool e0218_check_all(Sigs fs, List(Str) eff, List(Str) pcsv, Int i) { return e0218_check_at(fs, eff, pcsv, i, false); }
+
+// A loop, not `rest` after the recursive call: a frame per function held
+// across the walk cost the self-compile about 1 MB per function.
+Bool e0218_check_at(Sigs fs, List(Str) eff, List(Str) pcsv, Int i, Bool acc) {
+    if (i >= fs.names.len()) { return acc; }
     Str m = e0218_check_func(fs, eff, pcsv, i);
     Bool printed = if (m != "") { eprintln("error[E0218]: " + m) } else { false };
-    Int k = i + 1;
-    Bool rest = e0218_check_all(fs, eff, pcsv, k);
-    if (printed) { return true; }
-    return rest;
+    return e0218_check_at(fs, eff, pcsv, i + 1, acc || printed);
 }
 
 // ─── Spawn capability bounds (spec §19) ─────────────────────────
@@ -8217,15 +8218,14 @@ Str e0211_check_callees(Sigs fs, Str caller_name, Str caller_eff, List(Str) call
 // Whole-program passes accumulate (rather than stop at the first hit):
 // a violation in one function must not hide a different, later
 // function's diagnostic that a specific caller is looking for.
-Bool e0211_check_all(Sigs fs, List(Str) eff, List(Str) edges, Int i) {
-    if (i >= fs.names.len()) { return false; }
+Bool e0211_check_all(Sigs fs, List(Str) eff, List(Str) edges, Int i) { return e0211_check_at(fs, eff, edges, i, false); }
+
+Bool e0211_check_at(Sigs fs, List(Str) eff, List(Str) edges, Int i, Bool acc) {
+    if (i >= fs.names.len()) { return acc; }
     Str caller_eff = eff[i];
     Str m = if (caller_eff == "") { "" } else { e0211_check_callees(fs, fs.names[i], caller_eff, csv_split_or_empty(edges[i]), 0) };
     Bool printed = if (m != "") { eprintln("error[E0211]: " + m) } else { false };
-    Int k = i + 1;
-    Bool rest = e0211_check_all(fs, eff, edges, k);
-    if (printed) { return true; }
-    return rest;
+    return e0211_check_at(fs, eff, edges, i + 1, acc || printed);
 }
 
 // ─── Graph-reduction pass (spec §33 / §36) ─────────────────────

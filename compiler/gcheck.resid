@@ -4418,12 +4418,16 @@ Str gk_enforce_func(GK k, List(Int) fnode, List(Str) eff, List(GKF) facts, Int f
     return gk_readonly_writes(facts[fi], ceiling);
 }
 
-Bool gk_enforce_all(GK k, List(Int) fnode, List(Str) eff, List(GKF) facts, Int i) {
-    if (i >= fnode.len()) { return false; }
+// Whole-program passes run as loops (an accumulated verdict, not
+// `printed || rest` after the recursive call): a frame per function held
+// open across the whole walk cost the self-compile about 1 MB per function.
+Bool gk_enforce_all(GK k, List(Int) fnode, List(Str) eff, List(GKF) facts, Int i) { return gk_enforce_at(k, fnode, eff, facts, i, false); }
+
+Bool gk_enforce_at(GK k, List(Int) fnode, List(Str) eff, List(GKF) facts, Int i, Bool acc) {
+    if (i >= fnode.len()) { return acc; }
     Str m = gk_enforce_func(k, fnode, eff, facts, i);
     Bool printed = if (m != "") { eprintln("error[E0212]: " + m) } else { false };
-    Bool rest = gk_enforce_all(k, fnode, eff, facts, i + 1);
-    return printed || rest;
+    return gk_enforce_at(k, fnode, eff, facts, i + 1, acc || printed);
 }
 
 // Spawn bounds (E0214, E0215) over a body; the first violation or "".
@@ -4452,12 +4456,13 @@ Str gk_spawn_kids(GK k, Int id, Int i, Bool bounded, Str parent, Bool insp) {
     return gk_spawn_kids(k, id, i + 1, bounded, parent, insp);
 }
 
-Bool gk_spawn_all(GK k, List(Int) fnode, List(Str) eff, Int i) {
-    if (i >= fnode.len()) { return false; }
+Bool gk_spawn_all(GK k, List(Int) fnode, List(Str) eff, Int i) { return gk_spawn_at(k, fnode, eff, i, false); }
+
+Bool gk_spawn_at(GK k, List(Int) fnode, List(Str) eff, Int i, Bool acc) {
+    if (i >= fnode.len()) { return acc; }
     Str m = gk_spawn_scan(k, fnode[i], eff[i] != "", eff[i], false);
     Bool printed = if (m != "") { eprintln(m) } else { false };
-    Bool rest = gk_spawn_all(k, fnode, eff, i + 1);
-    return printed || rest;
+    return gk_spawn_at(k, fnode, eff, i + 1, acc || printed);
 }
 
 // ─── Authority (spec §20: no ambient authority) ─────────────────────
@@ -4591,8 +4596,10 @@ Str gk_fn_label(GK k, List(Int) fnode, Str name) {
     return str_slice(aux, at + 6, imp_close_paren(aux, at + 6, 0) - 1);
 }
 
-Bool gk_auth_all(GK k, List(Int) fnode, List(Str) need, List(Str) decl, List(Str) direct, List(Str) calls, Int i) {
-    if (i >= fnode.len()) { return false; }
+Bool gk_auth_all(GK k, List(Int) fnode, List(Str) need, List(Str) decl, List(Str) direct, List(Str) calls, Int i) { return gk_auth_at(k, fnode, need, decl, direct, calls, i, false); }
+
+Bool gk_auth_at(GK k, List(Int) fnode, List(Str) need, List(Str) decl, List(Str) direct, List(Str) calls, Int i, Bool acc) {
+    if (i >= fnode.len()) { return acc; }
     // A generic function's authority is its own @requires (checked on the
     // generic itself) plus what its instances need, which the concrete
     // caller must hold (through the copy's call edges).
@@ -4608,8 +4615,7 @@ Bool gk_auth_all(GK k, List(Int) fnode, List(Str) need, List(Str) decl, List(Str
     Str how = if (via == "") { "uses" } else { "uses (through `" + gk_fn_label(k, fnode, via) + "`)" };
     Str m = if (miss == "") { "" } else { "function `" + k.fs.names[i] + "` " + how + " capability `" + cap_show(miss) + "` but is not granted it: declare @requires(" + all + ") on it (no ambient authority, spec §20)" };
     Bool printed = if (m != "") { eprintln("error[E0219]: " + m) } else { false };
-    Bool rest = gk_auth_all(k, fnode, need, decl, direct, calls, i + 1);
-    return printed || rest;
+    return gk_auth_at(k, fnode, need, decl, direct, calls, i + 1, acc || printed);
 }
 
 // A `test` block's body is checked like a function: its @requires prefix
