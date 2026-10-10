@@ -400,11 +400,25 @@ As built, compared with the plan:
   `sem_lit_dec` reads them by value. The generator still emits decimal
   (hex in the comment), since seeds before this one do not fold hex.
 
-Tests: `tests/devgen/run.sh` (15: `devgen_check`,
+- **Review fixes (2026-10-10).** The matrix's fetch cache is used only
+  when the checkout is the pinned commit *and* clean (`git status
+  --porcelain --ignored --untracked-files=all` empty), else fetched again;
+  the probe array is read with a line-anchored match and its name is
+  `#undef`d after the header, so neither a header's top-level `asm` nor a
+  macro can supply the values; every input string that reaches the output
+  is validated (identifiers for names, shapes for paths, headers, tags and
+  commits, no control character, quote or backslash anywhere). The input
+  list, kernel list and cache can be pointed elsewhere
+  (`RESID_DEVGEN_INPUT`, `_KERNELS`, `_CACHE`) for the tests:
+  `devgen_probe_anchor`, `devgen_input_escaping`, `devgen_cache_dirty` (a
+  local repository as the mirror).
+
+Tests: `tests/devgen/run.sh` (18: `devgen_check`,
 `devgen_matches_uapi_{sev_guest,sev_guest_ext,sev_guest_key,tdx_guest,nsm}`,
 `devgen_matches_uapi_host` against `/usr/include`, `devgen_byte_stable`,
 `devgen_stale_file`, `devgen_snapshot_tamper`, `devgen_drift_layout`,
 `devgen_drift_request`, `devgen_drift_rename_only`,
+`devgen_probe_anchor`, `devgen_input_escaping`, `devgen_cache_dirty`,
 `devgen_request_numbers` -- the descriptors' numbers against clang's
 evaluation of the kernel's `_IOWR` for both targets, independently of the
 generator -- and `devgen_aarch64_descriptors`); `tests/device`

@@ -53,11 +53,12 @@ import tomllib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEVGEN = os.path.join(ROOT, "tools", "devgen")
-INPUT = os.path.join(DEVGEN, "descriptors.toml")
-KERNELS = os.path.join(DEVGEN, "kernels.toml")
-# RESID_DEVGEN_SNAPSHOT: another snapshot directory (tests/devgen tampers with a copy).
+# RESID_DEVGEN_INPUT, _KERNELS, _SNAPSHOT, _CACHE: another input list,
+# kernel list, snapshot directory or fetch cache (tests/devgen uses copies).
+INPUT = os.environ.get("RESID_DEVGEN_INPUT") or os.path.join(DEVGEN, "descriptors.toml")
+KERNELS = os.environ.get("RESID_DEVGEN_KERNELS") or os.path.join(DEVGEN, "kernels.toml")
 SNAPSHOT = os.environ.get("RESID_DEVGEN_SNAPSHOT") or os.path.join(DEVGEN, "uapi")
-CACHE = os.path.join(DEVGEN, "cache")
+CACHE = os.environ.get("RESID_DEVGEN_CACHE") or os.path.join(DEVGEN, "cache")
 LIBDEV = os.path.join(ROOT, "lib", "dev")
 
 # (Resid Arch variant, clang triple, kernel arch directory)
@@ -149,6 +150,8 @@ def compile_probe(tree, triple, arch, header, exprs, tmp, deps=None):
     or None when the probe does not compile."""
     src = PRELUDE + f"#include <{header}>\n"
     body = ",\n  ".join(f"(unsigned long long)({e})" for e in exprs)
+    # A header cannot rename the probe array with a macro of that name.
+    src += "#undef resid_probe\n"
     src += f"unsigned long long resid_probe[{len(exprs)}] = {{\n  {body}\n}};\n"
     path = os.path.join(tmp, "probe.c")
     with open(path, "w") as f:
@@ -163,7 +166,9 @@ def compile_probe(tree, triple, arch, header, exprs, tmp, deps=None):
     p = subprocess.run(cmd, capture_output=True, text=True)
     if p.returncode != 0:
         return None
-    m = re.search(r"@resid_probe = [^\n]*?\[(\d+) x i64\] (zeroinitializer|\[([^\n]*)\])", p.stdout)
+    # Anchored at the start of a line: the global's own definition, never a
+    # header's `module asm` text (or any other line) that spells it.
+    m = re.search(r"^@resid_probe = [^\n]*?\[(\d+) x i64\] (zeroinitializer|\[([^\n]*)\])", p.stdout, re.M)
     if not m or int(m.group(1)) != len(exprs):
         raise DevgenError(f"{tree.label}: cannot read the probe's IR for {triple}")
     if m.group(2) == "zeroinitializer":
@@ -290,6 +295,96 @@ def probe_tree(tree, mods, deps_dir=None, errors=None):
 
 # -- Validation and emission -------------------------------------------------
 
+# What may reach the generated Resid. Names become identifiers or the text of
+# a string literal; everything else lands in a comment or (C expressions) in
+# the probe. None of it may end a comment line, close a string or start an
+# escape, so control characters, quotes and backslashes are refused
+# everywhere, and names are identifiers outright.
+RESID_NAME = re.compile(r"[a-z_][a-z0-9_]*")
+C_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+C_MEMBER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*")
+C_TYPE = re.compile(r"((struct|union) )?[A-Za-z_][A-Za-z0-9_]*")
+HEADER = re.compile(r"[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)*\.h")
+DEV_PATH = re.compile(r"/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*")
+TAG = re.compile(r"v[0-9][A-Za-z0-9.+-]*")
+COMMIT = re.compile(r"[0-9a-f]{40}")
+
+
+def text_ok(where, v):
+    """Free text bound for a comment: one line, no quote or backslash."""
+    if not isinstance(v, str) or any(ord(c) < 32 or ord(c) == 127 for c in v) or '"' in v or "\\" in v:
+        raise DevgenError(f"{where}: {v!r} has a control character, a quote or a backslash")
+    return v
+
+
+def match_ok(where, pat, v):
+    text_ok(where, v)
+    if not pat.fullmatch(v) or ".." in v:
+        raise DevgenError(f"{where}: {v!r} is not a valid {where.rsplit('.', 1)[-1]}")
+    return v
+
+
+def c_expr_ok(where, v):
+    """A C constant expression for the probe: one line, and nothing that
+    could end the initializer or open a comment or directive."""
+    text_ok(where, v)
+    if any(t in v for t in (";", "{", "}", "#", "/*", "*/", "//")):
+        raise DevgenError(f"{where}: {v!r} is not a plain C expression")
+    return v
+
+
+def validate_pin(where, pin):
+    match_ok(f"{where}.tag", TAG, pin.get("tag", ""))
+    match_ok(f"{where}.commit", COMMIT, pin.get("commit", ""))
+    if "why" in pin:
+        text_ok(f"{where}.why", pin["why"])
+
+
+def validate_text(mods):
+    for mod in mods:
+        f = mod["file"]
+        match_ok(f"{f}.interface", RESID_NAME, mod["interface"])
+        match_ok(f"{f}.header", HEADER, mod["header"])
+        match_ok(f"{f}.since", TAG, mod["since"])
+        text_ok(f"{f}.summary", mod["summary"])
+        for op in mod.get("op", []):
+            o = f"{f}.{op.get('name', '?')}"
+            match_ok(f"{o}.fn", RESID_NAME, op["fn"])
+            match_ok(f"{o}.name", RESID_NAME, op["name"])
+            c_expr_ok(f"{o}.request", op["request"])
+            match_ok(f"{o}.struct", C_TYPE, op["struct"])
+            match_ok(f"{o}.path", DEV_PATH, op["path"])
+            text_ok(f"{o}.doc", op["doc"])
+            if "version" in op:
+                match_ok(f"{o}.version.member", C_MEMBER, op["version"].get("member", ""))
+                if not isinstance(op["version"].get("value"), int) or isinstance(op["version"].get("value"), bool):
+                    raise DevgenError(f"{o}.version.value: an integer")
+            for fld in op["fields"]:
+                if fld.get("role") == "Errno":
+                    continue
+                for k in ("member", "length", "parent"):
+                    if k in fld:
+                        match_ok(f"{o}.field.{k}", C_MEMBER, fld[k])
+                for a in fld.get("also", []):
+                    match_ok(f"{o}.field.also", C_MEMBER, a)
+                if "struct" in fld:
+                    match_ok(f"{o}.field.struct", C_TYPE, fld["struct"])
+                if "max" in fld:
+                    c_expr_ok(f"{o}.field.max", fld["max"])
+                if "secret" in fld and not isinstance(fld["secret"], bool):
+                    raise DevgenError(f"{o}.field.secret: true or false")
+        for lay in mod.get("layout", []):
+            match_ok(f"{f}.layout.prefix", RESID_NAME, lay.get("prefix", ""))
+            match_ok(f"{f}.layout.struct", C_TYPE, lay.get("struct", ""))
+            for mb in lay.get("members", []):
+                match_ok(f"{f}.layout.member", C_MEMBER, mb)
+        for c in mod.get("const", []):
+            match_ok(f"{f}.const.name", C_NAME, c.get("name", ""))
+        for c in mod.get("check", []):
+            match_ok(f"{f}.check.request", C_NAME, c.get("request", ""))
+            text_ok(f"{f}.check.why", c.get("why", ""))
+
+
 def validate(mods):
     files = set()
     for mod in mods:
@@ -327,6 +422,7 @@ def validate(mods):
                         raise DevgenError(f"{op['name']}.{f['member']}: a Nested field names its `parent` (a Buffer listed before it) and the parent's `struct`")
                 elif "parent" in f or "struct" in f:
                     raise DevgenError(f"{op['name']}.{f['member']}: only a Nested field has a parent or struct")
+    validate_text(mods)
 
 
 def ident(s):
@@ -567,10 +663,14 @@ def take_snapshot(mods, pin, remote):
 
 def fetch(pin, remote):
     """A sparse, shallow, blob-filtered checkout of the pin's three uapi
-    trees, cached; the checkout must be the pinned commit."""
+    trees, cached; the checkout must be the pinned commit with a clean
+    working tree. A cached checkout at another commit, or with any change,
+    untracked or ignored file in it (a header edited or added after the
+    fetch would otherwise be read as the kernel's), is fetched again."""
     d = os.path.join(CACHE, pin["tag"])
-    if not os.path.isdir(os.path.join(d, ".git")) or git_head(d) != pin["commit"]:
+    if not os.path.isdir(os.path.join(d, ".git")) or git_head(d) != pin["commit"] or not git_clean(d):
         if os.path.isdir(d):
+            print(f"  {pin['tag']}: the cached checkout is not the pinned commit, or not clean: fetched again", flush=True)
             shutil.rmtree(d)
         os.makedirs(CACHE, exist_ok=True)
         run(["git", "clone", "-q", "--depth", "1", "--branch", pin["tag"], "--filter=blob:none",
@@ -580,7 +680,16 @@ def fetch(pin, remote):
     head = git_head(d)
     if head != pin["commit"]:
         raise DevgenError(f"{pin['tag']} resolved to {head}, the pin says {pin['commit']}: refused")
+    if not git_clean(d):
+        raise DevgenError(f"{pin['tag']}: the checkout has working-tree changes after a fresh fetch: refused")
     return Tree(d, pin["tag"], "kernel", head)
+
+
+def git_clean(d):
+    """No modified, staged, untracked or ignored file in the checkout."""
+    p = subprocess.run(["git", "-C", d, "status", "--porcelain", "--ignored", "--untracked-files=all"],
+                       capture_output=True, text=True)
+    return p.returncode == 0 and p.stdout == ""
 
 
 def git_head(d):
@@ -620,6 +729,9 @@ def load():
         kern = tomllib.load(f)
     mods = inp.get("module", [])
     validate(mods)
+    validate_pin("kernels.toml generate", kern.get("generate", {}))
+    for i, p in enumerate(kern.get("matrix", [])):
+        validate_pin(f"kernels.toml matrix[{i}]", p)
     return mods, kern
 
 
@@ -629,7 +741,7 @@ def generate_all(mods, pin, tree):
     for mod in mods:
         if facts[mod["file"]] is None:
             raise DevgenError(f"{tree.label} has no {mod['header']}")
-        label = "the committed snapshot tools/devgen/uapi/" if tree.label == "snapshot" else tree.label
+        label = "the committed snapshot tools/devgen/uapi/" if tree.label == "snapshot" else text_ok("--headers", tree.label)
         texts[mod["file"]] = emit(mod, facts[mod["file"]], pin, label)
     return texts, facts
 

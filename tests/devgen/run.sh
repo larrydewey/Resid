@@ -125,6 +125,72 @@ if selected devgen_drift_rename_only; then
     fi
 fi
 
+# The probe's array is read from its own definition only: a header that
+# spells "@resid_probe = ..." in a top-level asm statement (module asm in
+# the IR) or renames the array with a macro changes nothing.
+if selected devgen_probe_anchor; then
+    drift_tree
+    printf '%s\n' '#define resid_probe resid_forged' '__asm__("@resid_probe = global [1 x i64] [i64 7]");' >> "$WORK/k/include/uapi/linux/sev-guest.h"
+    "$DEVGEN" --local "$WORK/k" > "$WORK/d4.log" 2>&1; rc=$?
+    if [ "$rc" -eq 0 ] && [ "$(grep -c ' ok ' "$WORK/d4.log")" -eq "$(echo "$MODULES" | wc -w)" ] && ! grep -q DRIFT "$WORK/d4.log"; then
+        ok devgen_probe_anchor
+    else
+        bad devgen_probe_anchor "exit $rc: $(grep -m2 -E 'DRIFT|resid-devgen|is ' "$WORK/d4.log" | tr '\n' ' ')"
+    fi
+fi
+
+# Input that would escape a comment, a string literal or an identifier in
+# the generated Resid is refused before anything is generated.
+if selected devgen_input_escaping; then
+    why=""
+    inject() { # inject <name> <file: input|kernels> <python replace old> <new> <expected message>
+        local src="$ROOT/tools/devgen/descriptors.toml"; [ "$2" = kernels ] && src="$ROOT/tools/devgen/kernels.toml"
+        python3 -c 'import sys; s = open(sys.argv[1]).read(); assert sys.argv[2] in s; open(sys.argv[3], "w").write(s.replace(sys.argv[2], sys.argv[4], 1))' "$src" "$3" "$WORK/inj.toml" "$4" || { why="${why:+$why; }$1: cannot edit"; return; }
+        if [ "$2" = kernels ]; then RESID_DEVGEN_KERNELS="$WORK/inj.toml" "$DEVGEN" --check > "$WORK/inj.log" 2>&1
+        else RESID_DEVGEN_INPUT="$WORK/inj.toml" "$DEVGEN" --check > "$WORK/inj.log" 2>&1; fi
+        local rc=$?
+        [ "$rc" -eq 2 ] && grep -q -- "$5" "$WORK/inj.log" || why="${why:+$why; }$1 not refused (exit $rc: $(head -1 "$WORK/inj.log"))"
+    }
+    inject summary_newline input 'summary = "Intel TDX guest reports (/dev/tdx_guest)."' 'summary = "x\nInt evil() { return 1; }"' "has a control character"
+    inject path_quote input 'path = "/dev/tdx_guest"' 'path = "/dev/tdx_guest\", .write = false, .x = \""' "has a control character, a quote or a backslash"
+    inject doc_backslash input 'doc = "TDX_CMD_GET_REPORT0: ' 'doc = "TDX\\x0a: ' "has a control character, a quote or a backslash"
+    inject fn_not_ident input 'fn = "tdx_get_report0_op"' 'fn = "tdx_get_report0_op() { return evil(); } IoctlOp x"' "is not a valid fn"
+    inject name_not_ident input 'name = "tdx_get_report0"' 'name = "tdx get report0"' "is not a valid name"
+    inject prefix_not_ident input 'prefix = "snp_report_req"' 'prefix = "snp_report_req() { return 0; } Int x"' "is not a valid prefix"
+    inject header_dotdot input 'header = "linux/tdx-guest.h"' 'header = "../linux/tdx-guest.h"' "is not a valid header"
+    inject since_newline input 'since = "v6.2"' 'since = "v6.2\nInt evil"' "has a control character"
+    inject max_semicolon input 'max = "NSM_REQUEST_MAX_SIZE"' 'max = "1}; int x[] = {2"' "is not a plain C expression"
+    inject tag_newline kernels 'tag = "v7.2.9"' 'tag = "v7.2.9\nInt evil"' "has a control character"
+    inject commit_not_hex kernels 'commit = "5fce161649b4d779d1b76d9fcd52dc77779774b8"' 'commit = "5fce16 Int evil"' "is not a valid commit"
+    if [ -z "$why" ]; then ok devgen_input_escaping; else bad devgen_input_escaping "$why"; fi
+fi
+
+# --matrix uses a cached checkout only when it is the pinned commit with
+# a clean working tree: a header edited, or a file added, in the cache
+# after the fetch is not read as the kernel's; the checkout is fetched
+# again. A local repository stands in for the kernel mirror (no network).
+if selected devgen_cache_dirty; then
+    G="$WORK/mirror"; rm -rf "$G" "$WORK/cache"
+    mkdir -p "$G"; cp -r "$ROOT/tools/devgen/uapi/include" "$ROOT/tools/devgen/uapi/arch" "$G/"
+    git -C "$G" init -q && git -C "$G" add -A && git -C "$G" -c user.name=t -c user.email=t@t commit -q -m snapshot && git -C "$G" tag v9.9-test
+    sha="$(git -C "$G" rev-parse HEAD)"
+    python3 -c 'import sys, re; s = open(sys.argv[1]).read(); s = re.sub(r"^remote = .*$", "remote = \"file://" + sys.argv[2] + "\"", s, flags=re.M); s = s[:s.index("[[matrix]]")] + "[[matrix]]\ntag = \"v9.9-test\"\ncommit = \"" + sys.argv[3] + "\"\n"; open(sys.argv[4], "w").write(s)' "$ROOT/tools/devgen/kernels.toml" "$G" "$sha" "$WORK/kern.toml"
+    run_matrix() { RESID_DEVGEN_KERNELS="$WORK/kern.toml" RESID_DEVGEN_CACHE="$WORK/cache" "$DEVGEN" --matrix > "$WORK/$1.log" 2>&1; }
+    why=""
+    run_matrix m1 || why="clean fetch: exit $? $(grep -m1 -E 'DRIFT|resid-devgen' "$WORK/m1.log")"
+    C="$WORK/cache/v9.9-test"
+    sed -i 's/__u32 vmpl;/__u64 vmpl;/' "$C/include/uapi/linux/sev-guest.h"
+    run_matrix m2 || why="${why:+$why; }edited header: exit $? $(grep -m1 -E 'DRIFT|resid-devgen' "$WORK/m2.log")"
+    grep -q "fetched again" "$WORK/m2.log" || why="${why:+$why; }edited header: the cache was used as it was"
+    grep -q "__u32 vmpl;" "$C/include/uapi/linux/sev-guest.h" || why="${why:+$why; }edited header: still in the cache"
+    echo '#define SNP_GET_REPORT 0' > "$C/include/uapi/linux/stray.h"
+    run_matrix m3 || why="${why:+$why; }untracked file: exit $?"
+    grep -q "fetched again" "$WORK/m3.log" && [ ! -e "$C/include/uapi/linux/stray.h" ] || why="${why:+$why; }untracked file: the cache was used as it was"
+    run_matrix m4 || why="${why:+$why; }clean cache: exit $?"
+    grep -q "fetched again" "$WORK/m4.log" && why="${why:+$why; }a clean cache was fetched again"
+    if [ -z "$why" ]; then ok devgen_cache_dirty; else bad devgen_cache_dirty "$why"; fi
+fi
+
 # The installed headers of this host, when it has them.
 if selected devgen_matches_uapi_host; then
     if [ -f /usr/include/linux/ioctl.h ]; then
