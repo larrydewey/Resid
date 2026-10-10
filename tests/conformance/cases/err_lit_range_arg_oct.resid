@@ -1,0 +1,7 @@
+// An argument is checked against the parameter type (octal form).
+Int widen(UInt(8) x) { return (Int) x; }
+
+Int main() {
+    println(f"{widen(0o777)}");
+    return 0;
+}

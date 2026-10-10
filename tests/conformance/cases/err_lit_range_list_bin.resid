@@ -1,0 +1,6 @@
+// A list element is checked against the element type (binary form).
+Int main() {
+    List(UInt(8)) xs = [1, 0b100000000];
+    println(f"{xs}");
+    return 0;
+}

@@ -1,0 +1,6 @@
+// A cast of a literal is checked at compile time, `rt` or not.
+Int main() {
+    Int a = (Int) rt 0xFFFFFFFFFFFFFFFF;
+    println(f"{a}");
+    return 0;
+}

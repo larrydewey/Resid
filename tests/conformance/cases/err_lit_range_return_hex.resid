@@ -1,0 +1,7 @@
+// A return value is checked against the return type.
+UInt(8) low() { return 0x1FF; }
+
+Int main() {
+    println(f"{low()}");
+    return 0;
+}

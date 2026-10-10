@@ -1,0 +1,2 @@
+E0001
+integer literal 0xFFFFFFFFFFFFFFFF does not fit the expected type Int(64)

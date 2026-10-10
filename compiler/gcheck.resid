@@ -1249,9 +1249,17 @@ GKT gk_expr0(GK k, Int id, Str exp) {
     return gterr(k, "unexpected expression " + kind, id);
 }
 
-GKT gk_lit(GK k, Int id, Str exp) {
+GKT gk_lit(GK k, Int id, Str exp) { return gk_lit_n(k, id, exp, false); }
+
+// An integer literal given an integer type by its context (a binding, an
+// `rt`, a list element, an argument, a return) must fit that type, in
+// every base: lowering emits the value at the type's width, so one that
+// does not fit would wrap. `neg`: the literal is under a unary minus.
+GKT gk_lit_n(GK k, Int id, Str exp, Bool neg) {
     Str lk = k.g.ns[id].aux;
     Str t = k.g.ns[id].text;
+    Str ie = if (lk == "int" && is_int_ty(exp) && !gm_has_var(exp)) { lit_range_err(t, neg, num_norm(exp)) } else { "" };
+    if (lk == "int" && ie != "") { return gterr(k, ie, id); }
     if (lk == "int") { return gt(k, if (is_int_ty(exp)) { num_norm(exp) } else { "Int" }, id); }
     if (lk == "float") { return gt(k, if (is_float_ty(exp)) { num_norm(exp) } else { "Float" }, id); }
     if (lk == "dec") { return gt(k, "Dec(34)", id); }
@@ -2035,7 +2043,9 @@ GKT gk_set(GK k, Int id, Int i, Str elem, Str want) {
 
 GKT gk_un(GK k0, Int id) {
     Str op = k0.g.ns[id].text;
-    GKT e = gk_expr(k0, gk_kid(k0, id, 0), "");
+    Int kid = gk_kid(k0, id, 0);
+    Bool nlit = op == "-" && k0.g.ns[kid].kind == "lit" && k0.g.ns[kid].aux == "int";
+    GKT e = if (nlit) { gk_lit_n(k0, kid, "", true) } else { gk_expr(k0, kid, "") };
     if (e.err != "") { return e; }
     GK k = e.k;
     if (gv_is(e.ty)) {
@@ -2059,6 +2069,13 @@ GKT gk_cast(GK k0, Int id) {
     Str to = k0.g.ns[gk_kid(k0, id, 0)].text;
     GKT e = gk_expr(k0, gk_kid(k0, id, 1), "");
     if (e.err != "") { return e; }
+    // A cast of an integer literal (under parentheses, minus signs or
+    // `rt`) to an integer type is checked here: a literal that does not
+    // fit would otherwise wrap, or abort at run time.
+    Int lc = gk_cast_lit(k0.g, gk_kid(k0, id, 1));
+    Bool lneg = lc >= 0 && gv_lit_neg(k0.g, gk_cast_unrt(k0.g, gk_kid(k0, id, 1)));
+    Str lerr = if (lc >= 0 && is_int_ty(to) && !gm_has_var(to)) { lit_range_err(k0.g.ns[lc].text, lneg, num_norm(to)) } else { "" };
+    if (lerr != "") { return gterr(e.k, lerr, id); }
     if (sec_is(e.ty)) { return sec_cast(e.k, id, to, e.ty); }
     Bool bothint = is_int_ty(to) && is_int_ty(e.ty);
     Bool bothnum = is_num(to) && is_num(e.ty) && !is_dec_ty(to) && !is_dec_ty(e.ty);
@@ -2066,6 +2083,20 @@ GKT gk_cast(GK k0, Int id) {
     Bool vcast = gv_is(to) && gv_is(e.ty) && gv_type_err(to, false) == "" && gv_cast_ok(e.ty, to);
     if (bothint || bothnum || todec || vcast || ty_same(to, e.ty) || is_fixed_cast_pair(e.ty, to)) { return gt(e.k, to, id); }
     return gterr(e.k, "cast from " + e.ty + " to " + to + " not supported", id);
+}
+
+// The node under any `rt` wrappers.
+Int gk_cast_unrt(Kg g, Int n) {
+    if (g.ns[n].kind == "rt" && g.ns[n].nk == 1) { return gk_cast_unrt(g, kg_kid(g, n, 0)); }
+    return n;
+}
+
+// The integer literal a cast operand is (through `rt`, parentheses and
+// minus signs), or -1.
+Int gk_cast_lit(Kg g, Int n) {
+    Int c = gv_lit_core(g, gk_cast_unrt(g, n));
+    if (c < 0) { return -1; }
+    return if (g.ns[c].aux == "int") { c } else { -1 };
 }
 
 GKT gk_bin(GK k0, Int id, Str exp) {
@@ -2085,8 +2116,11 @@ GKT gk_bin(GK k0, Int id, Str exp) {
     Str lty = if (lhs_lit && !rhs_lit && !shift && is_int_ty(rt.ty)) { rt.ty } else { lt.ty };
     Str rty = if (rhs_lit && !lhs_lit && !shift && is_int_ty(lt.ty)) { lt.ty } else { rt.ty };
     // An adopted literal must fit the type it adopts (spec §6.1a).
-    Str lfit = if (lhs_lit && lty != lt.ty && gk_bare_int(g, l) && !gm_has_var(lty)) { lit_range_err(g.ns[l].text, false, num_norm(lty)) } else { "" };
-    Str rfit = if (rhs_lit && rty != rt.ty && !gm_has_var(rty)) { lit_range_err(g.ns[r].text, false, num_norm(rty)) } else { "" };
+    // So must one that keeps the other operand's type: it is emitted at
+    // that width and would wrap.
+    Str rfty = if (rhs_lit && !shift && is_int_ty(lt.ty)) { lt.ty } else { rty };
+    Str lfit = if (lhs_lit && gk_bare_int(g, l) && is_int_ty(lty) && !gm_has_var(lty)) { lit_range_err(g.ns[l].text, false, num_norm(lty)) } else { "" };
+    Str rfit = if (rhs_lit && is_int_ty(rfty) && !gm_has_var(rfty)) { lit_range_err(g.ns[r].text, false, num_norm(rfty)) } else { "" };
     if (lfit != "") { return gterr(k, lfit, id); }
     if (rfit != "") { return gterr(k, rfit, id); }
     if (gm_has_var(lty) || gm_has_var(rty)) { return gm_bin(k, id, op, lty, rty, l, r, lt.ty, rt.ty); }
@@ -3291,14 +3325,14 @@ GKS gk_bindst(GK k, Int id) {
     Str nb = if (nb0 == "") { gv_type_err(ty, false) } else { nb0 };
     if (nb != "") { return gs_err(k, nb, id); }
     Int ve = kg_kid(g, id, g.ns[id].nk - 1);
-    GKT v = gk_expr(k, ve, ty);
-    if (v.err != "") { return gs_of(v); }
     Str ety = ct_base_of(k.fs.ctn, k.fs.ctb, ty);
     Str whole = gk_whole_lit(g, ve);
     Bool neg = str_has_prefix(whole, "-");
     Str digits = if (neg) { str_slice(whole, 1, str_len(whole)) } else { whole };
     Str lrerr = if (whole != "" && is_int_ty(ety) && !gm_has_var(ety)) { lit_range_err(digits, neg, num_norm(ety)) } else { "" };
-    if (lrerr != "") { return gs_err(v.k, "binding " + name + ": " + lrerr, id); }
+    if (lrerr != "") { return gs_err(k, "binding " + name + ": " + lrerr, id); }
+    GKT v = gk_expr(k, ve, ty);
+    if (v.err != "") { return gs_of(v); }
     if (is_int_ty(ety) && is_int_ty(v.ty) && !int_adopt_ok(v.ty, num_norm(ety), whole)) {
         return gs_err(v.k, "binding " + name + ": implicit narrowing from " + v.ty + " to " + ty + " requires an explicit cast", id);
     }
