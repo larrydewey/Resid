@@ -68,6 +68,24 @@ for c in ct-select ct-eq sha256-secret hmac-secret sha512-secret hmac512-secret 
         [ "$got" = "$want" ] || echo "  output differs under valgrind: $got"
     fi
 done
+# A whole handshake and a record each way, server and client in one
+# process with no socket, every secret marked (tests/ct/tlsprobe.resid).
+# Run from the repository root: it reads the tests/tls fixtures.
+(cd "$ROOT" && "$COMPILER" tests/ct/tlsprobe.resid -o "$W/tlsprobe") > "$W/build3.log" 2>&1 || {
+    echo "FAIL build tlsprobe"; grep -i -A3 error "$W/build3.log" | head -8; exit 1; }
+for c in tls-handshake-secret; do
+    want="$(cd "$ROOT" && "$W/tlsprobe" "$c" 2>&1)"
+    got="$(cd "$ROOT" && valgrind -q --error-limit=no --expensive-definedness-checks=yes --log-file="$W/vg.t.$c" "$W/tlsprobe" "$c" 2>&1)"
+    n="$(grep -c -E 'depends on uninitialised|Use of uninitialised' "$W/vg.t.$c")"
+    if [ "$n" = 0 ] && [ "$got" = "$want" ] && [ "${want#"$c alpn=http/1.1 "}" != "$want" ]; then
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1))
+        echo "FAIL $c: $n secret-dependent branch(es) or address(es)"
+        grep -A3 -E 'depends on uninitialised|Use of uninitialised' "$W/vg.t.$c" | head -8
+        [ "$got" = "$want" ] || echo "  output differs under valgrind: $got"
+    fi
+done
 # The control must be caught, or the checks above prove nothing.
 valgrind -q --error-limit=no --expensive-definedness-checks=yes --log-file="$W/vg.control" "$W/ctprobe" control > /dev/null 2>&1
 if [ "$(grep -c -E 'depends on uninitialised|Use of uninitialised' "$W/vg.control")" -gt 0 ]; then

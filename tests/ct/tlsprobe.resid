@@ -1,0 +1,91 @@
+// tlsprobe.resid — a whole TLS 1.3 handshake and one record each way, our
+// server and our client in one process with no socket, under valgrind with
+// every secret marked (tests/ct/run.sh).
+//
+//   tlsprobe tls-handshake-secret      (run from the repository root)
+//
+// Marked with ct_secret: the client's and the server's ephemeral x25519
+// keys and the server's signing key. Everything derived from them -- the
+// shared secret, the key schedule, the record keys and nonces, the
+// signature before it is published -- is then undefined to memcheck, and
+// both ends run their real code over it: ts_server_start_with and
+// ts_server_finish on the server, tls_client_finish on the client (a TsIn
+// with no socket reads the other end's bytes from its buffer). Whatever the
+// protocol publishes (key shares, signatures, record ciphertext, opened
+// plaintext, Finished MACs) goes through ct_public at its publish point, so
+// any branch or address that still depends on a secret is reported. The
+// output is fixed: the randoms are given, and ECDSA's nonce is RFC 6979.
+import "../../lib/crypto.resid";
+import "../../lib/word.resid";
+import "../../lib/x25519g.resid";
+import "../../lib/tls.resid";
+import "../../lib/tlsmsg.resid";
+import "../../lib/tlskey.resid";
+import "../../lib/tlsserver.resid";
+import "../../lib/tlsclient.resid";
+import "../../lib/chain.resid";
+import "../../lib/clock.resid";
+import "../../lib/hash.resid";
+
+List(Int) mark(List(Int) b, Int i, ListBuf(Int) acc) {
+    if (i >= b.len()) { return acc.finish(); }
+    return mark(b, i + 1, acc.push(ct_secret(b[i]) & 255));
+}
+
+List(Int) widen(List(UInt(8)) b, Int i, ListBuf(Int) acc) {
+    if (i >= b.len()) { return acc.finish(); }
+    return widen(b, i + 1, acc.push((Int) b[i]));
+}
+
+// The key as loaded, its secret bytes re-marked for memcheck (the file's
+// bytes were defined when they were read).
+@requires(declassify)
+List(Secret(UInt(8))) remark(List(Secret(UInt(8))) k) {
+    return secret_bytes(mark(widen(declassify(secret_join(k), "probe: re-marked for memcheck"), 0, ListBuf()), 0, ListBuf()));
+}
+
+@requires(declassify)
+ServerKey marked_key(ServerKey k) {
+    return match k {
+        EcKey(s) => EcKey(remark(s)),
+        Ec384Key(s) => Ec384Key(remark(s)),
+        EdKey(s) => EdKey(remark(s))
+    };
+}
+
+List(Int) seq_bytes(Int base, Int i, ListBuf(Int) acc) {
+    if (i >= 32) { return acc.finish(); }
+    return seq_bytes(base, i + 1, acc.push((base + i * 37) & 255));
+}
+
+@requires(args, filesystem(readonly), network(readonly), clock(readonly), declassify)
+Int main() {
+    Str c = args.get(1);
+    if (c != "tls-handshake-secret") { println("unknown case " + c); return 2; }
+    Option(ServerKey) mk = tls_key_load("tests/tls/fixtures/srv.key");
+    ServerKey loaded = mk else { EdKey([]) };
+    ServerKey key = marked_key(loaded);
+    List(List(Int)) chain = tls_chain_load("tests/tls/fixtures/srv.pem");
+    TrustStore store = trust_store_load("tests/tls/fixtures/srvca.pem");
+    List(Secret(UInt(8))) cpriv = secret_bytes(mark(seq_bytes(rt 11, 0, ListBuf()), 0, ListBuf()));
+    List(Secret(UInt(8))) spriv = secret_bytes(mark(seq_bytes(rt 23, 0, ListBuf()), 0, ListBuf()));
+    TlsClientCfg cfg = tls_client_cfg("localhost", store, ["http/1.1"]);
+
+    List(Int) ch = tlsmsg_client_hello("localhost", ["http/1.1"], seq_bytes(rt 5, 0, ListBuf()), x25519g_public(cpriv));
+    TsStart st = ts_server_start_with(ch, key, chain, ["http/1.1"], spriv, seq_bytes(rt 7, 0, ListBuf()));
+    if (st.err != 0) { println(f"{c} server-start-err={st.err}"); return 1; }
+    TcDone cd = tls_client_finish(ch, cpriv, cfg, clock_now(), TsIn { .fd = -1, .buf = st.out, .eof = false });
+    if (cd.err != "") { println(c + " client-err=" + cd.err); return 1; }
+    TsProt fin = ts_read_prot(TsIn { .fd = -1, .buf = cd.finished, .eof = false }, st.pend.c_key, st.pend.c_iv, 0, [], 8);
+    if (!fin.ok) { println(c + " server did not read the client finished"); return 1; }
+    TsDone sd = ts_server_finish(st.pend, fin.msg, fin.in.buf);
+    if (sd.err != 0) { println(f"{c} server-finish-err={sd.err}"); return 1; }
+
+    List(Int) req = tls_keys_protect(cd.keys, bytes_of(rt "GET / HTTP/1.1"), 23);
+    List(Int) got = tls_keys_open(sd.keys, req[0..5], req[5..req.len()]);
+    List(Int) reply = tls_keys_protect(sd.keys, bytes_of(rt "HTTP/1.1 200 OK"), 23);
+    List(Int) back = tls_keys_open(cd.keys, reply[0..5], reply[5..reply.len()]);
+    List(Int) wire = sha256_bytes(st.out.concat(cd.finished).concat(req).concat(reply));
+    println(f"{c} alpn={cd.keys.alpn} {hex_encode(wire)} {hex_encode(got)} {hex_encode(back)}");
+    return 0;
+}

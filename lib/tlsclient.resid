@@ -83,12 +83,6 @@ Bool tc_send_plain(Int fd, List(Int) msg) {
     return resid_tcp_send_bin(fd, hdr.concat(msg));
 }
 
-@requires(network(readonly), declassify)
-Bool tc_send_prot(Int fd, List(Secret(UInt(8))) key, List(Secret(UInt(8))) iv, Int seq, List(Int) msg, Int inner) {
-    List(Int) rec = tlsg_protect(seq, key, iv, msg, inner);
-    return resid_tcp_send_bin(fd, rec);
-}
-
 // Connect to `host:port` and shake hands. `cfg.name` is the name the
 // certificate has to carry; an empty one means no server name is sent and
 // no name is checked, which is a client for a server it already trusts by
@@ -100,36 +94,53 @@ pub TlsDial tls_client_connect(Str host, Int port, TlsClientCfg cfg) {
     _ = resid_tcp_deadline(fd, cfg.deadline_ms);
     // Secret from the moment it is drawn; the share is published.
     List(Secret(UInt(8))) priv = secret_bytes(random_bytes(32));
-    List(Int) share = x25519g_public(priv);
-    List(Int) ch = tlsmsg_client_hello(cfg.name, cfg.alpn, random_bytes(32), share);
+    List(Int) ch = tlsmsg_client_hello(cfg.name, cfg.alpn, random_bytes(32), x25519g_public(priv));
     if (!tc_send_plain(fd, ch)) {
         _ = resid_tcp_close(fd);
         return tls_dial_err("cannot send the client hello");
     }
-    TsRec sh_rec = ts_read_record(ts_in(fd));
-    if (!sh_rec.ok || sh_rec.ctype != 22) {
+    TcDone d = tls_client_finish(ch, priv, cfg, clock_now(), ts_in(fd));
+    if (d.err != "") {
         _ = resid_tcp_close(fd);
-        return tls_dial_err("the server did not answer with a handshake");
+        return tls_dial_err(d.err);
     }
+    if (!resid_tcp_send_bin(fd, d.finished)) {
+        _ = resid_tcp_close(fd);
+        return tls_dial_err("cannot send the client finished");
+    }
+    TlsClient c = TlsClient { .fd = fd, .keys = d.keys, .eof = false, .buf = d.in.buf };
+    return TlsDial { .conn = c, .err = "" };
+}
+
+// The client's half of the handshake after its ClientHello `ch` went out
+// (`priv` the key whose share it carries): read the server's answer from
+// `in`, check it, and derive the keys. `finished` is the client's
+// protected Finished record, for the caller to send. Nothing here writes,
+// so a TsIn with no socket (fd -1, the server's flight in its buffer)
+// runs a whole handshake in one process, as tests/ct does under valgrind.
+type TcDone = { TsIn in; TlsKeys keys; List(Int) finished; Str err; };
+
+TcDone tc_fail(TsIn in, Str err) {
+    List(Int) none = [];
+    return TcDone { .in = in, .keys = tls_keys_none(), .finished = none, .err = err };
+}
+
+@requires(network(readonly), declassify)
+pub TcDone tls_client_finish(List(Int) ch, List(Secret(UInt(8))) priv, TlsClientCfg cfg, Instant now, TsIn in0) {
+    TsRec sh_rec = ts_read_record(in0);
+    if (!sh_rec.ok || sh_rec.ctype != 22) { return tc_fail(sh_rec.in, "the server did not answer with a handshake"); }
     List(Int) sh = sh_rec.body;
-    if (sh.len() < 43 || sh[0] != 2) {
-        _ = resid_tcp_close(fd);
-        return tls_dial_err("the server hello is not one");
-    }
+    if (sh.len() < 43 || sh[0] != 2) { return tc_fail(sh_rec.in, "the server hello is not one"); }
     List(Int) server_share = tc_server_share(sh);
     Bool tls13 = tc_says_tls13(sh);
     Bool suite_ok = tc_offers(sh, ts_suite_aes128gcm());
     if (!tls13 || !suite_ok || server_share.len() != 32) {
-        _ = resid_tcp_close(fd);
-        return tls_dial_err("the server does not speak TLS 1.3 with " + ts_suite_name());
+        return tc_fail(sh_rec.in, "the server does not speak TLS 1.3 with " + ts_suite_name());
     }
     // An all-zero shared secret (a low-order share) is refused (RFC 8446
     // §7.4.2); whether it was is one public bit.
     List(Secret(UInt(8))) shared = x25519g_shared(priv, server_share);
-    if (shared.len() == 0) {
-        _ = resid_tcp_close(fd);
-        return tls_dial_err("the server's key share is not usable");
-    }
+    if (shared.len() == 0) { return tc_fail(sh_rec.in, "the server's key share is not usable"); }
     List(Int) tr1 = ch.concat(sh);
     List(Int) th1 = tc_hash(tr1);
     List(Secret(UInt(8))) hs = tlsg_handshake_secret(shared);
@@ -137,54 +148,34 @@ pub TlsDial tls_client_connect(Str host, Int port, TlsClientCfg cfg) {
     List(Secret(UInt(8))) s_hs = tlsg_s_hs_traffic(hs, th1);
     List(Secret(UInt(8))) s_key = tlsg_traffic_key(s_hs);
     List(Secret(UInt(8))) s_iv = tlsg_traffic_iv(s_hs);
-    TsIn in = sh_rec.in;
-    Flight fl = tc_read_flight(in, s_key, s_iv, 0, [], 8);
-    if (!fl.ok) {
-        _ = resid_tcp_close(fd);
-        return tls_dial_err("the server's flight did not arrive whole");
-    }
+    Flight fl = tc_read_flight(sh_rec.in, s_key, s_iv, 0, [], 8);
+    if (!fl.ok) { return tc_fail(fl.in, "the server's flight did not arrive whole"); }
     List(Int) ee = tc_msg_at(fl.msgs, 8, 0);
     List(Int) cert = tc_msg_at(fl.msgs, 11, 1);
     List(Int) cv = tc_msg_at(fl.msgs, 15, 2);
     List(Int) fin = tc_msg_at(fl.msgs, 20, 3);
     if (ee.len() == 0 || cert.len() == 0 || cv.len() == 0 || fin.len() == 0) {
-        _ = resid_tcp_close(fd);
-        return tls_dial_err("the server's flight is not EncryptedExtensions, Certificate, CertificateVerify, Finished");
+        return tc_fail(fl.in, "the server's flight is not EncryptedExtensions, Certificate, CertificateVerify, Finished");
     }
     List(List(Int)) sent = tm_cert_list(tc_body(cert));
     List(Int) host_bytes = str_to_bytes(cfg.name);
-    Instant now = clock_now();
     Bool have_chain = sent.len() > 0;
     List(List(Int)) inters = tc_rest(sent);
     Bool trusted = if (have_chain) { tls_server_trusted(sent[0], inters, host_bytes, now, cfg.store) } else { false };
-    if (!trusted) {
-        _ = resid_tcp_close(fd);
-        return tls_dial_err("the server's certificate is not trusted for '" + cfg.name + "'");
-    }
+    if (!trusted) { return tc_fail(fl.in, "the server's certificate is not trusted for '" + cfg.name + "'"); }
     List(Int) tr2 = tr1.concat(ee).concat(cert);
     List(Int) th2 = tc_hash(tr2);
     List(Int) tr3 = tr2.concat(cv);
     List(Int) th3 = tc_hash(tr3);
     List(Int) cvbody = tc_body(cv);
     Bool cv_ok = tm_verify_cv(cvbody, sent[0], th2);
-    if (!cv_ok) {
-        _ = resid_tcp_close(fd);
-        return tls_dial_err("the server's certificate verify did not verify");
-    }
+    if (!cv_ok) { return tc_fail(fl.in, "the server's certificate verify did not verify"); }
     Bool fin_ok = tlsg_finished_ok(s_hs, th3, tc_body(fin));
-    if (!fin_ok) {
-        _ = resid_tcp_close(fd);
-        return tls_dial_err("the server's finished did not verify");
-    }
+    if (!fin_ok) { return tc_fail(fl.in, "the server's finished did not verify"); }
     List(Int) tr4 = tr3.concat(fin);
     List(Int) th4 = tc_hash(tr4);
     List(Int) cf_body = [20, 0, 0, 32].concat(tlsg_finished_out(c_hs, th4));
-    List(Secret(UInt(8))) c_key = tlsg_traffic_key(c_hs);
-    List(Secret(UInt(8))) c_iv = tlsg_traffic_iv(c_hs);
-    if (!tc_send_prot(fd, c_key, c_iv, 0, cf_body, 22)) {
-        _ = resid_tcp_close(fd);
-        return tls_dial_err("cannot send the client finished");
-    }
+    List(Int) cf_rec = tlsg_protect(0, tlsg_traffic_key(c_hs), tlsg_traffic_iv(c_hs), cf_body, 22);
     List(Secret(UInt(8))) master = tlsg_master_secret(hs);
     List(Secret(UInt(8))) c_ap = tlsg_c_ap_traffic(master, th4);
     List(Secret(UInt(8))) s_ap = tlsg_s_ap_traffic(master, th4);
@@ -194,14 +185,10 @@ pub TlsDial tls_client_connect(Str host, Int port, TlsClientCfg cfg) {
     // application record neither end can open.
     List(Str) chosen = tc_ee_selected(fl.msgs);
     Bool offered_it = if (chosen.len() == 0) { true } else { tc_offers_str(cfg.alpn, 0, chosen[0]) };
-    if (!offered_it) {
-        _ = resid_tcp_close(fd);
-        return tls_dial_err("the server selected '" + chosen[0] + "', which this client did not offer");
-    }
+    if (!offered_it) { return tc_fail(fl.in, "the server selected '" + chosen[0] + "', which this client did not offer"); }
     Str alpn = if (chosen.len() == 0) { "" } else { chosen[0] };
     TlsKeys keys = tls_keys_pending(tlsg_traffic_key(s_ap), tlsg_traffic_iv(s_ap), tlsg_traffic_key(c_ap), tlsg_traffic_iv(c_ap), alpn, fl.in.buf);
-    TlsClient c = TlsClient { .fd = fd, .keys = keys, .eof = false, .buf = fl.in.buf };
-    return TlsDial { .conn = c, .err = "" };
+    return TcDone { .in = fl.in, .keys = keys, .finished = cf_rec, .err = "" };
 }
 
 Str ts_suite_name() {

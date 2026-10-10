@@ -202,9 +202,13 @@ behavior X25519Pub(B) { List(Int) xg_publish(List(B) k); }
 
 List(Int) xg_publish_pub(List(Int) k) { return k; }
 
+// Each byte goes through ct_public: what is published is public, and code
+// past this point branches on it by design (a peer parses a key share, an
+// application reads a record), so tests/ct's valgrind run has to see it
+// as defined from here on, as declassify already says to the type checker.
 List(Int) xg_widen(List(UInt(8)) b, Int i, ListBuf(Int) acc) {
     if (i >= b.len()) { return acc.finish(); }
-    return xg_widen(b, i + 1, acc.push((Int) b[i]));
+    return xg_widen(b, i + 1, acc.push((Int) ct_public(b[i])));
 }
 
 @requires(declassify)
