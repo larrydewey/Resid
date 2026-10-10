@@ -48,7 +48,13 @@ import "device.resid";
 // at most GET_QUOTE_BUF_SIZE (128 KiB) less its header; an SNP report fits
 // 4 KiB and its certificate table SEV_FW_BLOB_MAX_SIZE (16 KiB); an SVSM
 // manifest grows past 4 KiB only on a retry the SVSM asks for (64 KiB is
-// room); a CCA token is what the RMM says, in practice a few KiB.
+// room). A CCA token is at most what the RMM says at RSI_ATTEST_TOKEN_INIT
+// (arm_cca_report_new allocates that much; the kernel sets no cap of its
+// own but TSM_REPORT_OUTBLOB_MAX): TF-RMM (git.trustedfirmware.org
+// TF-RMM/tf-rmm 2e198822, cmake/CommonConfigs.cmake, app/attestation/
+// rmm_stub/include/attest_defs.h) holds the token in RMM_CCA_TOKEN_BUFFER
+// pages of 4 KiB, 1 by default, so 128 KiB covers an RMM built with up to
+// 32; a larger token is Err(TooLong).
 pub ConfigfsReport tsm_report_op() {
     return ConfigfsReport {.name = "tsm_report.report", .path = "/sys/kernel/config/tsm/report", .providers = ["sev_guest", "tdx_guest", "arm_cca_guest"], .max_inblob = 64, .max_outblob = 131072, .max_auxblob = 16384, .max_manifestblob = 65536, .write = false, .stability = Uapi};
 }
@@ -88,11 +94,23 @@ pub Str tsm_outblob_text(TsmPlatform p) {
 // CCA guest shows both but ignores them, so a report from any provider
 // but sev_guest asked for either is refused (Err(Unsupported)) rather
 // than returned as if it honoured them.
-type TsmOpts = { Int privlevel; Str service_provider; };
+//
+// Under an SVSM, `service_guid` names one service to attest ("" for all
+// of them, the kernel's default: the null GUID) and
+// `service_manifest_version` the version of its manifest (-1 for the
+// service's first, the kernel's default 0). Both are written only with
+// service_provider "svsm" (Secure VM Service Module for SEV-SNP Guests
+// 1.00, section 7; configfs-tsm-report, service_guid and
+// service_manifest_version).
+type TsmOpts = { Int privlevel; Str service_provider; Str service_guid; Int service_manifest_version; };
 
-pub TsmOpts tsm_opts() { return TsmOpts {.privlevel = 0 - 1, .service_provider = ""}; }
-pub TsmOpts tsm_opts_vmpl(Int vmpl) { return TsmOpts {.privlevel = vmpl, .service_provider = ""}; }
-pub TsmOpts tsm_opts_svsm() { return TsmOpts {.privlevel = 0 - 1, .service_provider = "svsm"}; }
+pub TsmOpts tsm_opts() { return TsmOpts {.privlevel = 0 - 1, .service_provider = "", .service_guid = "", .service_manifest_version = 0 - 1}; }
+pub TsmOpts tsm_opts_vmpl(Int vmpl) { return TsmOpts {.privlevel = vmpl, .service_provider = "", .service_guid = "", .service_manifest_version = 0 - 1}; }
+pub TsmOpts tsm_opts_svsm() { return TsmOpts {.privlevel = 0 - 1, .service_provider = "svsm", .service_guid = "", .service_manifest_version = 0 - 1}; }
+
+// One SVSM service, by GUID (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx), with
+// its manifest in `version` (-1 for the service's default).
+pub TsmOpts tsm_opts_svsm_service(Str guid, Int version) { return TsmOpts {.privlevel = 0 - 1, .service_provider = "svsm", .service_guid = guid, .service_manifest_version = version}; }
 
 // -- The report -----------------------------------------------------------------
 
@@ -108,7 +126,10 @@ pub Result(TsmReport, DeviceError) tsm_report_get(List(UInt(8)) report_data, Tsm
     if (report_data.len() != 64) { return Err(BadInput(name, f"report_data is 64 bytes, got {report_data.len()}")); }
     if (opts.privlevel < 0 - 1 || opts.privlevel > 3) { return Err(BadInput(name, f"privlevel is 0 to 3 (or -1 for none), got {opts.privlevel}")); }
     if (opts.service_provider != "" && opts.service_provider != "svsm") { return Err(BadInput(name, "service_provider is \"svsm\" or empty")); }
-    ReportReq rq = ReportReq {.inblob = report_data, .privlevel = opts.privlevel, .service_provider = opts.service_provider};
+    if (opts.service_guid != "" && !ts_guid_text_ok(opts.service_guid)) { return Err(BadInput(name, "service_guid is xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")); }
+    if (opts.service_manifest_version < 0 - 1 || opts.service_manifest_version > 4294967295) { return Err(BadInput(name, f"service_manifest_version is a u32 (or -1 for none), got {opts.service_manifest_version}")); }
+    if ((opts.service_guid != "" || opts.service_manifest_version >= 0) && opts.service_provider == "") { return Err(BadInput(name, "service_guid and service_manifest_version need a service_provider")); }
+    ReportReq rq = ReportReq {.inblob = report_data, .privlevel = opts.privlevel, .service_provider = opts.service_provider, .service_guid = opts.service_guid, .service_manifest_version = opts.service_manifest_version};
     List(DevOut) outs = device.configfs_report(tsm_report_op(), rq)?;
     TsmReport r = tsm_report_decode(name, dv_out_bytes(outs, 0), dv_out_bytes(outs, 1), dv_out_bytes(outs, 2), dv_out_bytes(outs, 3), dv_out_num(outs, 4))?;
     return tsm_report_honoured(name, r, opts);
@@ -117,7 +138,7 @@ pub Result(TsmReport, DeviceError) tsm_report_get(List(UInt(8)) report_data, Tsm
 // A report asked for with a privlevel or a service provider is one only
 // sev_guest honours.
 pub Result(TsmReport, DeviceError) tsm_report_honoured(Str name, TsmReport r, TsmOpts opts) {
-    Bool asked = opts.privlevel >= 0 || opts.service_provider != "";
+    Bool asked = opts.privlevel >= 0 || opts.service_provider != "" || opts.service_guid != "" || opts.service_manifest_version >= 0;
     Bool snp = match (r.platform) { SevSnp => true, IntelTdx => false, ArmCca => false, };
     if (asked && !snp) { return Err(Unsupported(name)); }
     return Ok(r);
@@ -144,6 +165,20 @@ Result(List(UInt(8)), DeviceError) ts_need(Str name, Option(List(UInt(8))) b, St
     return match (b) { Some(x) => Ok(x), None => Err(BadReply(name, "no " + what)), };
 }
 
+// A GUID's text: 36 characters, hex digits with dashes at 8, 13, 18, 23.
+pub Bool ts_guid_text_ok(Str g) {
+    if (str_len(g) != 36) { return false; }
+    return ts_guid_chars(g, 0);
+}
+
+Bool ts_guid_chars(Str g, Int i) {
+    if (i >= 36) { return true; }
+    Int c = str_char_at(g, i);
+    Bool dash = i == 8 || i == 13 || i == 18 || i == 23;
+    Bool ok = if (dash) { c == 45 } else { (c >= 48 && c <= 57) || (c >= 97 && c <= 102) || (c >= 65 && c <= 70) };
+    return ok && ts_guid_chars(g, i + 1);
+}
+
 // Printable ASCII bytes as text, or None.
 Option(Str) ts_ascii(List(UInt(8)) b, Int i, Str acc) {
     if (i >= b.len()) { return Some(acc); }
@@ -155,17 +190,31 @@ Option(Str) ts_ascii(List(UInt(8)) b, Int i, Str acc) {
 // -- SNP certificate table ------------------------------------------------------
 
 // One entry of the SNP extended report's certificate table (auxblob on
-// sev_guest): its GUID (as text, guid_t byte order, as the kernel prints
-// with %pUl) and the certificate's bytes (DER).
+// sev_guest): its GUID as text and the certificate's bytes (DER; PEM or
+// DER for the CRL, as the host supplied it).
+//
+// The GUID's 16 bytes are in RFC 4122 order (the text's hex digits in
+// sequence, no field swapped), as both the table's writers and its readers
+// lay it out: virtee/sev (github.com/virtee/sev a966d06d,
+// src/firmware/linux/host/types/snp.rs, `guid.as_bytes()` into the table)
+// and google/go-sev-guest (9c5dffcd, abi/abi.go, CertTableHeaderEntry
+// copies the 16 bytes into a uuid.UUID). The kernel's struct
+// snp_msg_cert_entry (drivers/virt/coco/sev-guest/sev-guest.c) types it
+// guid_t but only tests it for null, so it fixes no order.
 type SnpCert = { Str guid; List(UInt(8)) cert; };
 
-// The GUIDs the GHCB specification names (SEV-ES Guest-Hypervisor
-// Communication Block Standardization 2.03, §4.1.8.1) for AMD's root key,
-// the AMD SEV key, the chip's VCEK and the VLEK.
+// The GUIDs of the certificate table: AMD's root key, the AMD SEV key, the
+// chip's VCEK, the VLEK and the certificate revocation list. The table is
+// GHCB 2.03 §4.1.8.1's (as Documentation/ABI/testing/configfs-tsm-report
+// cites it; AMD's PDF, 56421, was not retrievable when this was checked),
+// so the strings are taken from two implementations that agree on them:
+// virtee/sev a966d06d (src/firmware/host/types/snp.rs, CertType: all
+// five) and google/go-sev-guest 9c5dffcd (abi/abi.go: all but the CRL).
 pub Str snp_guid_ark() { return "c0b406a4-a803-4952-9743-3fb6014cd0ae"; }
 pub Str snp_guid_ask() { return "4ab7b379-bbac-4fe4-a02f-05aef327c782"; }
 pub Str snp_guid_vcek() { return "63da758d-e664-4564-adc5-f4b93be8accd"; }
 pub Str snp_guid_vlek() { return "a8074bc2-a25a-483e-aae6-39c045a0b8a1"; }
+pub Str snp_guid_crl() { return "92f81bc3-5811-4d3d-97ff-d19f88dc67ea"; }
 
 // The table: entries of { guid_t guid; u32 offset; u32 length; }
 // (struct snp_msg_cert_entry, 24 bytes, little endian), offsets from the
@@ -194,12 +243,11 @@ Bool ts_zero(List(UInt(8)) r, Int i, Int end) {
     return r[i] == 0 && ts_zero(r, i + 1, end);
 }
 
-// guid_t as text: the first three fields little endian, the last eight
-// bytes in order.
+// The 16 bytes as GUID text, in RFC 4122 order.
 Str ts_guid(List(UInt(8)) r, Int at) {
-    Str a = ts_hex(r, [at + 3, at + 2, at + 1, at], 0, "");
-    Str b = ts_hex(r, [at + 5, at + 4], 0, "");
-    Str c = ts_hex(r, [at + 7, at + 6], 0, "");
+    Str a = ts_hex(r, [at, at + 1, at + 2, at + 3], 0, "");
+    Str b = ts_hex(r, [at + 4, at + 5], 0, "");
+    Str c = ts_hex(r, [at + 6, at + 7], 0, "");
     Str d = ts_hex(r, [at + 8, at + 9], 0, "");
     Str e = ts_hex(r, [at + 10, at + 11, at + 12, at + 13, at + 14, at + 15], 0, "");
     return a + "-" + b + "-" + c + "-" + d + "-" + e;

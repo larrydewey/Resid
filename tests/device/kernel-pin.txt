@@ -36,6 +36,11 @@ tsm_report (configfs /sys/kernel/config/tsm/report/$name/)
               service_guid, service_manifest_version
   read        outblob, auxblob, manifestblob, provider, generation,
               privlevel_floor
+  generation  each *_store (and inblob's write) calls
+              try_advance_write_generation once per write(2):
+              service_guid's before guid_parse (a bad GUID still counts),
+              privlevel's and service_manifest_version's after parsing,
+              service_provider's first
   providers   the drivers' KBUILD_MODNAME, `-` made `_`:
               sev_guest, tdx_guest, arm_cca_guest
   inblob      sev_guest exactly 64 (SNP_REPORT_USER_DATA_SIZE); tdx_guest

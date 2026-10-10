@@ -55,15 +55,20 @@ Str plat(Str p) {
 
 List(UInt(8)) le32(Int v) { return [(UInt(8))(v & 255), (UInt(8))((v >> 8) & 255), (UInt(8))((v >> 16) & 255), (UInt(8))((v >> 24) & 255)]; }
 
-// The VCEK GUID 63da758d-e664-4564-adc5-f4b93be8accd in guid_t order.
-List(UInt(8)) vcek_guid() { return [(UInt(8))0x8d, 0x75, 0xda, 0x63, 0x64, 0xe6, 0x64, 0x45, 0xad, 0xc5, 0xf4, 0xb9, 0x3b, 0xe8, 0xac, 0xcd]; }
+// The table's GUIDs are in RFC 4122 byte order, as virtee/sev (a966d06d,
+// src/firmware/linux/host/types/snp.rs: `guid.as_bytes()`) writes them and
+// google/go-sev-guest (9c5dffcd, abi/abi.go) reads them.
+// The VCEK GUID 63da758d-e664-4564-adc5-f4b93be8accd.
+List(UInt(8)) vcek_guid() { return [(UInt(8))0x63, 0xda, 0x75, 0x8d, 0xe6, 0x64, 0x45, 0x64, 0xad, 0xc5, 0xf4, 0xb9, 0x3b, 0xe8, 0xac, 0xcd]; }
 // The ARK GUID c0b406a4-a803-4952-9743-3fb6014cd0ae.
-List(UInt(8)) ark_guid() { return [(UInt(8))0xa4, 0x06, 0xb4, 0xc0, 0x03, 0xa8, 0x52, 0x49, 0x97, 0x43, 0x3f, 0xb6, 0x01, 0x4c, 0xd0, 0xae]; }
+List(UInt(8)) ark_guid() { return [(UInt(8))0xc0, 0xb4, 0x06, 0xa4, 0xa8, 0x03, 0x49, 0x52, 0x97, 0x43, 0x3f, 0xb6, 0x01, 0x4c, 0xd0, 0xae]; }
+// The CRL GUID 92f81bc3-5811-4d3d-97ff-d19f88dc67ea (virtee/sev CertType::CRL).
+List(UInt(8)) crl_guid() { return [(UInt(8))0x92, 0xf8, 0x1b, 0xc3, 0x58, 0x11, 0x4d, 0x3d, 0x97, 0xff, 0xd1, 0x9f, 0x88, 0xdc, 0x67, 0xea]; }
 
-// Two entries and the terminator (72 bytes), then the certificates.
+// Three entries and the terminator (96 bytes), then the certificates.
 List(UInt(8)) table() {
-    List(UInt(8)) head = vcek_guid().concat(le32(72)).concat(le32(5)).concat(ark_guid()).concat(le32(77)).concat(le32(3)).concat(dev_zeros(24));
-    return head.concat([(UInt(8))0x30, 1, 2, 3, 4, 0x30, 9, 9]);
+    List(UInt(8)) head = vcek_guid().concat(le32(96)).concat(le32(5)).concat(ark_guid()).concat(le32(101)).concat(le32(3)).concat(crl_guid()).concat(le32(104)).concat(le32(2)).concat(dev_zeros(24));
+    return head.concat([(UInt(8))0x30, 1, 2, 3, 4, 0x30, 9, 9, 0x30, 7]);
 }
 
 Str certs(List(UInt(8)) t) {
@@ -75,7 +80,7 @@ Str certs(List(UInt(8)) t) {
 
 Str cert_names(List(SnpCert) cs, Int i, Str acc) {
     if (i >= cs.len()) { return acc; }
-    Str which = if (cs[i].guid == snp_guid_vcek()) { "VCEK" } else if (cs[i].guid == snp_guid_ark()) { "ARK" } else { cs[i].guid };
+    Str which = if (cs[i].guid == snp_guid_vcek()) { "VCEK" } else if (cs[i].guid == snp_guid_ark()) { "ARK" } else if (cs[i].guid == snp_guid_crl()) { "CRL" } else { cs[i].guid };
     return cert_names(cs, i + 1, acc + f", {which} {cs[i].cert.len()} bytes");
 }
 
@@ -100,7 +105,12 @@ Int main() {
     println(get(rt 64, tsm_opts_svsm()));
     println(get(rt 32, tsm_opts()));
     println(get(rt 64, tsm_opts_vmpl(4)));
-    println(get(rt 64, TsmOpts {.privlevel = rt 0, .service_provider = "vtpm"}));
+    println(get(rt 64, TsmOpts {.privlevel = rt 0, .service_provider = "vtpm", .service_guid = "", .service_manifest_version = 0 - 1}));
+    println(get(rt 64, tsm_opts_svsm_service("c0b406a4-a803-4952-9743-3fb6014cd0ae", rt 2)));
+    println(get(rt 64, tsm_opts_svsm_service("", rt 0)));
+    println(get(rt 64, tsm_opts_svsm_service("c0b406a4-a803-4952-9743-3fb6014cd0a", 0 - 1)));
+    println(get(rt 64, tsm_opts_svsm_service("c0b406a4-a803-4952-9743-3fb6014cd0ae", rt 4294967296)));
+    println(get(rt 64, TsmOpts {.privlevel = 0 - 1, .service_provider = "", .service_guid = "c0b406a4-a803-4952-9743-3fb6014cd0ae", .service_manifest_version = 0 - 1}));
 
     println(dec(Some([(UInt(8))1, 2, 3]), Some([(UInt(8))9]), "sev_guest", Some(rt 1)));
     println(dec(Some([(UInt(8))1]), Some([]), "tdx_guest", Some(1)));
@@ -115,6 +125,7 @@ Int main() {
     println(honoured("arm_cca_guest", tsm_opts_vmpl(rt 1)));
     println(honoured("arm_cca_guest", tsm_opts_svsm()));
     println(honoured("arm_cca_guest", tsm_opts()));
+    println(honoured("tdx_guest", tsm_opts_svsm_service("c0b406a4-a803-4952-9743-3fb6014cd0ae", 1)));
     println(plat("sev_guest"));
     println(plat("tdx_guest"));
     println(plat("arm_cca_guest"));
@@ -123,7 +134,7 @@ Int main() {
 
     List(UInt(8)) t = table();
     println(certs(t));
-    println(certs(t[0..72]));
+    println(certs(t[0..96]));
     println(certs(set_at(t, 16, 200)));
     println(certs(set_at(t, 23, 128)));
     println(certs([]));

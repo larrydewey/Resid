@@ -97,7 +97,8 @@ type Transact = { Str name; Str path; Int max_command; Int max_response; Bool se
 type ReadAttr = { Str name; Str path; Int max; Stability stability; };
 
 // The configfs report interface (/sys/kernel/config/tsm/report): a fresh
-// entry, `inblob` (and `privlevel`, `service_provider` when given) written,
+// entry, `inblob` (and `privlevel`, `service_provider`, `service_guid`,
+// `service_manifest_version` when given) written,
 // `outblob`, `auxblob`, `manifestblob`, `provider` and `generation` read,
 // the provider checked against `providers`, and the generation, read before
 // and after the blobs, against the number of stores the host made (another
@@ -120,10 +121,13 @@ pub Link link(Int from_step, Int from_offset, Int to_step, Int to_offset, Int wi
 @descriptor(sequence)
 type Sequence = { Str name; Str path; List(IoctlOp) steps; List(Link) links; Bool write; Stability stability; };
 
-// What a configfs report is asked for. `privlevel` < 0 and an empty
-// `service_provider` leave those attributes unwritten.
+// What a configfs report is asked for. `privlevel` < 0, an empty
+// `service_provider`, an empty `service_guid` and a
+// `service_manifest_version` < 0 leave those attributes unwritten. A
+// service GUID (36 characters, 8-4-4-4-12 hex digits) and a manifest
+// version (a u32) qualify a service provider and need one.
 @descriptor(report_req)
-type ReportReq = { List(UInt(8)) inblob; Int privlevel; Str service_provider; };
+type ReportReq = { List(UInt(8)) inblob; Int privlevel; Str service_provider; Str service_guid; Int service_manifest_version; };
 
 // -- Values that cross ----------------------------------------------------
 
@@ -211,7 +215,7 @@ pub DvReq dv_prep_configfs_report(ConfigfsReport op, ReportReq rq) {
     if (rq.inblob.len() > op.max_inblob) { return dv_bad(f"inblob of {rq.inblob.len()} bytes, at most {op.max_inblob}"); }
     ListBuf(Int) b0 = dv_strs(dv_u(dv_head(ListBuf(), 4, op.write, op.name, op.path), op.providers.len(), 1), op.providers, 0);
     ListBuf(Int) b1 = dv_u(dv_u(dv_u(dv_u(b0, op.max_inblob, 4), op.max_outblob, 4), op.max_auxblob, 4), op.max_manifestblob, 4);
-    List(Int) req = dv_str(dv_u(dv_bytes(b1, rq.inblob), rq.privlevel, 8), rq.service_provider).finish();
+    List(Int) req = dv_u(dv_str(dv_str(dv_u(dv_bytes(b1, rq.inblob), rq.privlevel, 8), rq.service_provider), rq.service_guid), rq.service_manifest_version, 8).finish();
     return DvReq {.err = "", .req = req, .outs = [dv_blob(op.max_outblob), dv_blob(op.max_auxblob), dv_blob(op.max_manifestblob), dv_blob(256), DvSlot {.num = true, .max = 8, .secret = false}]};
 }
 

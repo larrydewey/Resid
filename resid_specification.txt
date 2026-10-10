@@ -3523,9 +3523,10 @@ its steps in order on the one open file, copying each Link
 just before its step. A configfs report makes an entry whose
 unpredictable name the calling program chose, confines the
 host to it with Landlock (no Landlock: Unsupported), writes
-inblob (and privlevel, service_provider), reads the
-generation, the blobs and the provider, reads the generation
-again, and removes the entry. Both generation reads must
+inblob (and privlevel, service_provider, service_guid,
+service_manifest_version), reads the generation, the blobs
+and the provider, reads the generation again, and removes
+the entry. Both generation reads must
 equal the number of stores the host made (the kernel counts
 each from 0 at the entry's creation; any other count means
 another writer). The calling program removes the entry

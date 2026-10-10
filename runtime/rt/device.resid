@@ -185,7 +185,7 @@ Int rd_take(Int r, Int n) {
     return ld64(r) + at;
 }
 
-// A parsed request, 32 words:
+// A parsed request, 40 words:
 //    0 kind (1 ioctl, 2 transact, 3 read_attr, 4 configfs_report, 5 sequence)
 //    1 write   2 name   3 name length   4 path (NUL-terminated)   5 path length
 //    6 steps   7 step records            8 links  9 link words (5 each)
@@ -198,6 +198,8 @@ Int rd_take(Int r, Int n) {
 //   24 outputs 25 output words (number?, max, secret)
 //   26 input slots  27 slot words (number?, max, secret)
 //   28 why it is refused (0: it is not)   29 secret outputs   31 allocations
+//   32 service_guid  33 its length (0: none)  34 service_manifest_version
+//      (-1: none)
 //
 // A step (an ioctl), 16 words: 0 the request number for this target,
 // 1 size, 2 fields, 3 field words (6 each: kind 0 Scalar / 1 Inline /
@@ -241,8 +243,8 @@ Int pq_free_at(Int p) {
 
 // The request of n bytes at p, parsed and checked: word 28 says why not.
 pub Int pq_parse(Int p, Int n) {
-    Int d = xmalloc(256);
-    _ = resid_raw_fill(d, 0, 256);
+    Int d = xmalloc(320);
+    _ = resid_raw_fill(d, 0, 320);
     Int r = rd_new(p, n);
     Int why = pq_parse_r(d, r, n);
     _ = c_free(r);
@@ -400,6 +402,10 @@ Bool pq_report(Int d, Int r) {
     Int sl = rd_u(r, 2);
     Int sp = rd_take(r, sl);
     _ = dset(d, 17, ip) + dset(d, 18, il) + dset(d, 19, pv) + dset(d, 20, sp) + dset(d, 21, sl);
+    Int gl = rd_u(r, 2);
+    Int gp = rd_take(r, gl);
+    Int mv = rd_u(r, 8);
+    _ = dset(d, 32, gp) + dset(d, 33, gl) + dset(d, 34, mv);
     return !rd_bad(r);
 }
 
@@ -498,7 +504,24 @@ Int pq_report_err(Int d) {
     if (dget(d, 15) < 1 || !pq_provs_ok(dget(d, 16), 0, dget(d, 15))) { return 21; }
     if (!pq_max_ok(dget(d, 10)) || !pq_max_ok(dget(d, 11)) || !pq_max_ok(dget(d, 12)) || !pq_max_ok(dget(d, 13))) { return 22; }
     if (dget(d, 18) > dget(d, 10) || dget(d, 21) > 256 || !pq_text_ok(dget(d, 20), 0, dget(d, 21))) { return 23; }
+    // service_guid (a GUID's 36 characters, as the kernel's guid_parse
+    // takes it) and service_manifest_version (a u32, -1 for none) only
+    // with a service provider, which they qualify.
+    Int gl = dget(d, 33);
+    Int mv = dget(d, 34);
+    if (gl != 0 && (gl != 36 || !pq_guid_ok(dget(d, 32), 0))) { return 24; }
+    if (mv < 0 - 1 || mv > 4294967295) { return 24; }
+    if ((gl != 0 || mv >= 0) && dget(d, 21) == 0) { return 24; }
     return 0;
+}
+
+// xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx, hex digits either case.
+Bool pq_guid_ok(Int p, Int i) {
+    if (i >= 36) { return true; }
+    Int c = ld8(p + i);
+    Bool dash = i == 8 || i == 13 || i == 18 || i == 23;
+    Bool ok = if (dash) { c == 45 } else { (c >= 48 && c <= 57) || (c >= 97 && c <= 102) || (c >= 65 && c <= 70) };
+    return ok && pq_guid_ok(p, i + 1);
 }
 
 // Each provider is non-empty printable text.
@@ -1619,19 +1642,20 @@ Int dh_attr(Int h, Int d) {
 
 // ─── ConfigfsReport ─────────────────────────────────────────────────
 
-// A report's state (h word 18 -> 16 words): descriptors 0 root, 1 entry
+// A report's state (h word 18 -> 20 words): descriptors 0 root, 1 entry
 // (O_PATH), 2 inblob, 3 privlevel, 4 service_provider, 5 outblob,
 // 6 auxblob, 7 manifestblob, 8 provider, 9 generation (first read),
 // 10 generation (second read), 11 generation for writing (self-test 10);
-// 12 the entry's name, 13 whether the entry exists, 14 fake configfs.
+// 12 the entry's name, 13 whether the entry exists, 14 fake configfs;
+// descriptors 15 service_guid, 16 service_manifest_version.
 Int cf(Int h, Int i) { return ld64(dget(h, 18) + i * 8); }
 Int cf_set(Int h, Int i, Int v) { return st64(dget(h, 18) + i * 8, v); }
 
 Int dh_report(Int h, Int d) {
     Int mode = dget(h, 0);
-    Bool fake = ((mode >= 9 && mode <= 12) || (mode >= 17 && mode <= 19)) && dget(h, 1) != 0;
-    Int t = xmalloc(128);
-    _ = resid_raw_fill(t, 255, 96) + resid_raw_fill(t + 96, 0, 32);   // descriptors -1
+    Bool fake = ((mode >= 9 && mode <= 12) || (mode >= 17 && mode <= 19) || mode == 23 || mode == 24) && dget(h, 1) != 0;
+    Int t = xmalloc(160);
+    _ = resid_raw_fill(t, 255, 96) + resid_raw_fill(t + 96, 0, 24) + resid_raw_fill(t + 120, 255, 40);   // descriptors -1
     _ = dset(h, 18, t) + cf_set(h, 14, if (fake) { 1 } else { 0 });
     Int root = if (fake) { dget(h, 1) } else { dget(d, 4) };
     // No link anywhere on the way to the root (configfs has none).
@@ -1650,7 +1674,7 @@ Int dh_report(Int h, Int d) {
     Int efd = dh_open2(rfd, name, o_path() | o_directory(), 14);
     if (efd < 0) { return dh_cf_fail(h, dh_errno(0 - efd, false), 0 - efd); }
     _ = cf_set(h, 1, efd);
-    _ = if (fake) { dh_fake_fill(efd, mode) } else { 0 };
+    _ = if (fake) { dh_fake_fill(rfd, efd, mode) } else { 0 };
     // Self-tests: 17 the host is killed, 18 it never answers (the parent's
     // deadline), each leaving the entry for the parent to remove.
     _ = if (mode == 17) { resid_raw_syscall(62, resid_raw_syscall(39, 0, 0, 0, 0, 0, 0), 9, 0, 0, 0, 0) } else { 0 };
@@ -1660,7 +1684,7 @@ Int dh_report(Int h, Int d) {
     if (mode == 11 || !dh_landlock(rfd, efd, fake)) { return dh_cf_fail(h, 6, 0); }
     Int oe = dh_cf_open(h, d, efd, mode);
     if (oe != 0) { return dh_cf_fail(h, if (oe == 2) { 6 } else { dh_errno(oe, false) }, oe); }
-    if (!dh_regions(h, 10)) { return dh_cf_exit(h, 125); }
+    if (!dh_regions(h, 11)) { return dh_cf_exit(h, 125); }
     Int inb = dh_region(h, dget(d, 10), 0);
     Int outb = dh_region(h, dget(d, 11) + 1, 0);
     Int auxb = dh_region(h, dget(d, 12) + 1, 0);
@@ -1669,14 +1693,18 @@ Int dh_report(Int h, Int d) {
     Int g1 = dh_region(h, 32, 0);
     Int g2 = dh_region(h, 32, 0);
     Int txt = dh_region(h, 32, 0);
-    if (inb == 0 || outb == 0 || auxb == 0 || manb == 0 || provb == 0 || g1 == 0 || g2 == 0 || txt == 0 || !dh_bufs(h, d)) { return dh_cf_exit(h, 125); }
+    Int vtxt = dh_region(h, 32, 0);
+    if (inb == 0 || outb == 0 || auxb == 0 || manb == 0 || provb == 0 || g1 == 0 || g2 == 0 || txt == 0 || vtxt == 0 || !dh_bufs(h, d)) { return dh_cf_exit(h, 125); }
     _ = mcopy(inb, dget(d, 17), dget(d, 18));
     Int tl = dh_itoa(txt, dget(d, 19));
+    Int vl = dh_itoa(vtxt, dget(d, 34));
     _ = dh_cf_rules(h, rfd, efd, fake);
     if (!dh_lock(h)) { return dh_cf_exit(h, 126); }
     // Write inblob (configfs commits it when its file is closed: one
-    // store, one generation, however many writes it took), then privlevel
-    // and service_provider when asked for (each write(2) a store).
+    // store, one generation, however many writes it took), then privlevel,
+    // service_provider, service_guid and service_manifest_version when
+    // asked for (each write(2) a store: report.c advances the generation in
+    // every *_store, service_guid's before it parses, the others' after).
     Int w1 = dh_write_all(cf(h, 2), inb, 0, dget(d, 18));
     if (w1 < 0) { return dh_cf_fail(h, dh_errno(0 - w1, false), 0 - w1); }
     _ = sys_close(cf(h, 2)) + cf_set(h, 2, 0 - 1);
@@ -1685,6 +1713,10 @@ Int dh_report(Int h, Int d) {
     if (w2 < 0) { return dh_cf_fail(h, dh_errno(0 - w2, false), 0 - w2); }
     Int w3 = if (cf(h, 4) >= 0) { dh_cf_write(h, cf(h, 4), dget(d, 20), 0, dget(d, 21)) } else { 0 };
     if (w3 < 0) { return dh_cf_fail(h, dh_errno(0 - w3, false), 0 - w3); }
+    Int w4 = if (cf(h, 15) >= 0) { dh_cf_write(h, cf(h, 15), dget(d, 32), 0, dget(d, 33)) } else { 0 };
+    if (w4 < 0) { return dh_cf_fail(h, dh_errno(0 - w4, false), 0 - w4); }
+    Int w5 = if (cf(h, 16) >= 0) { dh_cf_write(h, cf(h, 16), vtxt, 0, vl) } else { 0 };
+    if (w5 < 0) { return dh_cf_fail(h, dh_errno(0 - w5, false), 0 - w5); }
     // Self-test 19: another writer stores after ours, before the first
     // read (both reads then agree, on someone else's request).
     _ = if (mode == 19) { dh_fake_bump(h) } else { 0 };
@@ -1718,7 +1750,7 @@ Int dh_cf_check(Int h, Int d, Int ro, Int ra, Int rm, Int rp, Int gen1, Int gen2
     if (gen1 < 0 || gen2 < 0) { return 6; }
     // The kernel counts every store to the entry's attributes (inblob,
     // privlevel, service_provider, ...) in `generation`, from 0 at mkdir
-    // (drivers/virt/coco/tsm-report.c, write_generation). The entry is
+    // (drivers/virt/coco/guest/report.c, write_generation). The entry is
     // ours and fresh, so both reads must show exactly the stores this host
     // made: more means someone else wrote to it, and the report may be of
     // their request.
@@ -1838,6 +1870,10 @@ Int dh_cf_open(Int h, Int d, Int efd, Int mode) {
     if (e2 != 0) { return e2; }
     Int e3 = if (dget(d, 21) > 0) { dh_cf_attr(h, 4, efd, "service_provider", 1, true) } else { 0 };
     if (e3 != 0) { return e3; }
+    Int eg = if (dget(d, 33) > 0) { dh_cf_attr(h, 15, efd, "service_guid", 1, true) } else { 0 };
+    if (eg != 0) { return eg; }
+    Int ev = if (dget(d, 34) >= 0) { dh_cf_attr(h, 16, efd, "service_manifest_version", 1, true) } else { 0 };
+    if (ev != 0) { return ev; }
     Int e4 = dh_cf_attr(h, 5, efd, "outblob", 0, true);
     if (e4 != 0) { return e4; }
     Int e5 = dh_cf_attr(h, 6, efd, "auxblob", 0, false);
@@ -1866,12 +1902,13 @@ Int dh_cf_attr(Int h, Int i, Int efd, Str nm, Int flags, Bool need) {
     return 0 - fd;
 }
 
-// Writes to inblob, privlevel and service_provider (and the self-test's
+// Writes to inblob, privlevel, service_provider, service_guid and
+// service_manifest_version (and the self-test's
 // generation), reads of the rest, closes of all of them and the entry,
 // and removing the entry: rmdir under the root (and, for the fake, the
 // files in the entry).
 Int dh_cf_rules(Int h, Int rfd, Int efd, Bool fake) {
-    _ = dh_cf_rule_each(h, 2, 12);
+    _ = dh_cf_rule_each(h, 2, 12) + dh_cf_rule_each(h, 15, 17);
     _ = dh_rule(h, resid_raw_nr(3), 1, efd, 0);
     _ = dh_rule(h, resid_raw_nr(263), 3, rfd, 512);   // unlinkat(root, name, AT_REMOVEDIR)
     return if (fake) { dh_rule(h, resid_raw_nr(263), 3, efd, 0) } else { 0 };
@@ -1881,14 +1918,14 @@ Int dh_cf_rule_each(Int h, Int i, Int n) {
     if (i >= n) { return 0; }
     Int fd = cf(h, i);
     // Slot 11 is the fake's generation, rewritten in place (pwrite64).
-    Int call = if (i == 11) { 18 } else if (i == 2 || i == 3 || i == 4) { 1 } else { 0 };
+    Int call = if (i == 11) { 18 } else if (i == 2 || i == 3 || i == 4 || i == 15 || i == 16) { 1 } else { 0 };
     _ = if (fd >= 0) { dh_rule(h, resid_raw_nr(call), 1, fd, 0) + dh_rule(h, resid_raw_nr(3), 1, fd, 0) } else { 0 };
     return dh_cf_rule_each(h, i + 1, n);
 }
 
 // Close every attribute and the entry, and remove the entry.
 Int dh_cf_clean(Int h) {
-    _ = dh_cf_close(h, 2, 12);
+    _ = dh_cf_close(h, 2, 12) + dh_cf_close(h, 15, 17);
     Int efd = cf(h, 1);
     _ = if (cf(h, 14) == 1 && efd >= 0) { dh_fake_clear(efd) } else { 0 };
     _ = if (efd >= 0) { sys_close(efd) } else { 0 };
@@ -1936,11 +1973,17 @@ Bool dh_landlock(Int rfd, Int efd, Bool fake) {
     return ok;
 }
 
-// The fake configfs of the self-tests (9 to 12, 17 to 19): the attributes
-// a TSM provider shows, made by the host itself (12 leaves out outblob),
-// the generation starting at 0 as the kernel's does.
-Int dh_fake_fill(Int efd, Int mode) {
+// The fake configfs of the self-tests (9 to 12, 17 to 19, 23, 24): the
+// attributes a TSM provider shows, made by the host itself (12 leaves out
+// outblob, 23 service_guid and service_manifest_version, as an SNP guest
+// without an SVSM does), the generation starting at 0 as the kernel's
+// does. In 24, service_guid and service_manifest_version are hard links
+// to "kept_service_guid" and "kept_service_manifest_version" under the
+// root, so what the host wrote outlives the entry for the harness to read.
+Int dh_fake_fill(Int rfd, Int efd, Int mode) {
     _ = dh_fake_file(efd, "inblob", "") + dh_fake_file(efd, "privlevel", "") + dh_fake_file(efd, "service_provider", "");
+    _ = if (mode == 24) { dh_fake_kept(rfd, efd, "kept_service_guid", "service_guid") + dh_fake_kept(rfd, efd, "kept_service_manifest_version", "service_manifest_version") } else { 0 };
+    _ = if (mode != 23 && mode != 24) { dh_fake_file(efd, "service_guid", "") + dh_fake_file(efd, "service_manifest_version", "") } else { 0 };
     _ = if (mode != 12) { dh_fake_file(efd, "outblob", "fake report") } else { 0 };
     return dh_fake_file(efd, "auxblob", "fake aux") + dh_fake_file(efd, "provider", "fake_tsm\n") + dh_fake_file(efd, "generation", "0\n");
 }
@@ -1953,8 +1996,15 @@ Int dh_fake_file(Int efd, Str nm, Str text) {
     return sys_close(fd);
 }
 
+// A file `kept` under the root, linked into the entry as `nm` (self-test 24).
+Int dh_fake_kept(Int rfd, Int efd, Str kept, Str nm) {
+    _ = dh_fake_file(rfd, kept, "");
+    return resid_raw_syscall(265, rfd, resid_raw_addr(kept), efd, resid_raw_addr(nm), 0, 0) * 0;   // linkat
+}
+
 Int dh_fake_clear(Int efd) {
     _ = dh_fake_rm(efd, "inblob") + dh_fake_rm(efd, "privlevel") + dh_fake_rm(efd, "service_provider") + dh_fake_rm(efd, "outblob");
+    _ = dh_fake_rm(efd, "service_guid") + dh_fake_rm(efd, "service_manifest_version");
     return dh_fake_rm(efd, "auxblob") + dh_fake_rm(efd, "provider") + dh_fake_rm(efd, "generation");
 }
 
