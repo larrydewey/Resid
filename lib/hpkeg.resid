@@ -1,0 +1,351 @@
+// hpkeg.resid — Hybrid Public Key Encryption (RFC 9180), written once and
+// generic over lib/word.resid's byte type B: one implementation for public
+// bytes (B = Int) and secret bytes (Secret(UInt(8))). lib/hpke.resid's
+// public API is the public copy; the secret copy is checked by the
+// compiler (spec §48): no branch, index, comparison or division depends on
+// a private key, the shared secret, the key schedule's secrets or a
+// plaintext.
+//
+// What is generic: the labeled HKDF (§4) over HKDF-SHA256
+// (lib/sha256g.resid) and HKDF-SHA384/512 (lib/sha512g.resid's HMACs),
+// DHKEM(X25519, HKDF-SHA256) (§4.1, over lib/x25519g.resid), the key
+// schedule (§5.1) in all four modes, the nonces (§5.2), seal and open
+// over AES-128/256-GCM (lib/aesgcmg.resid) and ChaCha20-Poly1305
+// (lib/chachag.resid), and the exporter (§5.3). The NIST-curve KEMs
+// (DHKEM(P-256) and DHKEM(P-384)) are public-only until their curves are
+// generic: lib/hpke.resid computes their Diffie-Hellman and hands the
+// result to hpkeg_extract_and_expand and hpkeg_key_schedule here.
+//
+// Secret at secret types (List(B)): the recipient's and sender's private
+// keys, the ephemeral private key, the input keying material, the DH
+// outputs, the shared secret, the PSK, the key schedule's secret, key,
+// base_nonce and exporter_secret, each message nonce, plaintexts, sealed
+// output (the caller declassifies a ciphertext to send it) and exported
+// secrets. Public by design (List(Int) / Int): the suite, the mode, public
+// keys and enc, info, psk_id, aad, the received ciphertext, exporter
+// contexts, every length and sequence number, and two verdicts: whether a
+// DH output was all zeros (CtSame(B), in x25519g_shared) and whether a tag
+// verified (CtSame(B), in the AEADs). A public key computed from a private
+// one is published through X25519Pub(B). At secret types CtSame and
+// X25519Pub need the declassify grant, so the secret copies of the KEM
+// and open do too.
+//
+// Type variables: W the 32-bit word (Word), D the 64-bit word (Word64),
+// X the 128-bit block (Block128), P the 512-bit integer (Wide512), B the
+// byte. Every failure is a context with ok = false, an empty list or
+// None, never an abort.
+
+import "word.resid";
+import "crypto.resid";
+import "sha256g.resid";
+import "sha512g.resid";
+import "x25519g.resid";
+import "aesgcmg.resid";
+import "chachag.resid";
+
+pub type HpkeSuite = { Int kem; Int kdf; Int aead; };
+
+pub HpkeSuite hpke_suite(Int kem, Int kdf, Int aead) { return HpkeSuite {.kem = kem, .kdf = kdf, .aead = aead}; }
+
+// ─── Parameters (RFC 9180 §7) ────────────────────────────────────────
+
+pub Bool hpke_kem_ok(Int kem) { return kem == 16 || kem == 17 || kem == 32; }
+Bool hg_kdf_ok(Int kdf) { return kdf >= 1 && kdf <= 3; }
+Bool hg_aead_ok(Int aead) { return (aead >= 1 && aead <= 3) || aead == 65535; }
+pub Bool hpke_suite_ok(HpkeSuite s) { return hpke_kem_ok(s.kem) && hg_kdf_ok(s.kdf) && hg_aead_ok(s.aead); }
+
+// The KDF of a KEM's own HKDF: HKDF-SHA384 for DHKEM(P-384), else
+// HKDF-SHA256.
+pub Int hpke_kem_kdf(Int kem) { return if (kem == 17) { 2 } else { 1 }; }
+
+// Nh of a KDF; Nsecret (= Nh of the KEM's KDF) and Nsk of a KEM.
+pub Int hpke_kdf_nh(Int kdf) { return if (kdf == 2) { 48 } else { if (kdf == 3) { 64 } else { 32 } }; }
+pub Int hpke_kem_nsecret(Int kem) { return hpke_kdf_nh(hpke_kem_kdf(kem)); }
+pub Int hpke_kem_nsk(Int kem) { return if (kem == 17) { 48 } else { 32 }; }
+
+Int hg_aead_nk(Int aead) { return if (aead == 1) { 16 } else { if (aead == 65535) { 0 } else { 32 } }; }
+Int hg_aead_nn(Int aead) { return if (aead == 65535) { 0 } else { 12 }; }
+
+// ─── Labeled HKDF (§4) ───────────────────────────────────────────────
+
+List(Int) hg_i2osp(Int v, Int n) {
+    if (n <= 0) { return []; }
+    return hg_i2osp(v >> 8, n - 1).concat([v & 255]);
+}
+
+pub List(Int) hpke_kem_suite_id(Int kem) { return bytes_of("KEM").concat(hg_i2osp(kem, 2)); }
+pub List(Int) hpke_suite_id(HpkeSuite s) { return bytes_of("HPKE").concat(hg_i2osp(s.kem, 2)).concat(hg_i2osp(s.kdf, 2)).concat(hg_i2osp(s.aead, 2)); }
+
+// HKDF-Extract under KDF kdf (1 SHA-256, 2 SHA-384, 3 SHA-512). An empty
+// salt is the HMAC key of zeros RFC 5869 asks for.
+@needs(Word(W, B), Word64(D, B))
+List(B) hg_extract(Int kdf, List(B) salt, List(B) ikm) {
+    if (kdf == 2) { return hmac384g(salt, ikm); }
+    if (kdf == 3) { return hmac512g(salt, ikm); }
+    return hkdf256g_extract(salt, ikm);
+}
+
+// HKDF-Expand; empty when len exceeds 255 * Nh (RFC 5869 §2.3).
+@needs(Word(W, B), Word64(D, B))
+List(B) hg_expand(Int kdf, List(B) prk, List(B) info, Int len) {
+    if (kdf != 2 && kdf != 3) { return hkdf256g_expand(prk, info, len); }
+    List(B) none = prk[0..0];
+    if (len < 0 || len > 255 * hpke_kdf_nh(kdf)) { return none; }
+    return hg_expand_at(kdf, prk, info, 1, len, none, none);
+}
+
+@needs(Word(W, B), Word64(D, B))
+List(B) hg_expand_at(Int kdf, List(B) prk, List(B) info, Int c, Int len, List(B) t, List(B) okm) {
+    if (okm.len() >= len) { return okm[0..len]; }
+    ListBuf(B) cb = ListBuf();
+    List(B) msg = t.concat(info).concat(w_lift_bytes([c], 0, cb));
+    List(B) ti = if (kdf == 2) { hmac384g(prk, msg) } else { hmac512g(prk, msg) };
+    return hg_expand_at(kdf, prk, info, c + 1, len, ti, okm.concat(ti));
+}
+
+// LabeledExtract(salt, label, ikm): the label and suite id are public.
+@needs(Word(W, B), Word64(D, B))
+pub List(B) hpkeg_labeled_extract(Int kdf, List(Int) sid, List(B) salt, Str label, List(B) ikm) {
+    ListBuf(B) pb = ListBuf();
+    List(B) head = w_lift_bytes(bytes_of("HPKE-v1").concat(sid).concat(bytes_of(label)), 0, pb);
+    return hg_extract(kdf, salt, head.concat(ikm));
+}
+
+// LabeledExpand(prk, label, info, len): info is public in every use
+// (key_schedule_context, kem_context, exporter_context).
+@needs(Word(W, B), Word64(D, B))
+pub List(B) hpkeg_labeled_expand(Int kdf, List(Int) sid, List(B) prk, Str label, List(Int) info, Int len) {
+    List(Int) li = hg_i2osp(len, 2).concat(bytes_of("HPKE-v1")).concat(sid).concat(bytes_of(label)).concat(info);
+    ListBuf(B) ib = ListBuf();
+    return hg_expand(kdf, prk, w_lift_bytes(li, 0, ib), len);
+}
+
+// ─── DHKEM (§4.1) ────────────────────────────────────────────────────
+
+// ExtractAndExpand(dh, kem_context) under the KEM's own KDF: the shared
+// secret. dh is the concatenated DH output(s), kem_context the public
+// enc || pkR (|| pkS).
+@needs(Word(W, B), Word64(D, B))
+pub List(B) hpkeg_extract_and_expand(Int kem, List(B) dh, List(Int) kem_context) {
+    List(Int) sid = hpke_kem_suite_id(kem);
+    Int kdf = hpke_kem_kdf(kem);
+    List(B) none = [];
+    List(B) prk = hpkeg_labeled_extract(kdf, sid, none, "eae_prk", dh);
+    return hpkeg_labeled_expand(kdf, sid, prk, "shared_secret", kem_context, hpke_kem_nsecret(kem));
+}
+
+// A key pair: the private key in B, the public key public.
+pub type HpkeKeyPairG(B) = { Bool ok; List(B) sk; List(Int) pk; };
+
+// DeriveKeyPair (§7.1.3) for DHKEM(X25519): the private key is
+// LabeledExpand(dkp_prk, "sk", "", 32). Not ok for another KEM (the NIST
+// curves are lib/hpke.resid's).
+@needs(Word(W, B), Word64(D, B), Wide512(P, B), X25519Pub(B))
+pub HpkeKeyPairG(B) hpkeg_derive_keypair(Int kem, List(B) ikm) {
+    List(B) none = [];
+    if (kem != 32) { return HpkeKeyPairG {.ok = false, .sk = none, .pk = []}; }
+    List(Int) sid = hpke_kem_suite_id(kem);
+    List(B) prk = hpkeg_labeled_extract(1, sid, none, "dkp_prk", ikm);
+    List(B) sk = hpkeg_labeled_expand(1, sid, prk, "sk", [], 32);
+    return HpkeKeyPairG {.ok = true, .sk = sk, .pk = x25519g_public(sk)};
+}
+
+// A fresh DHKEM(X25519) key pair from the operating system's randomness
+// (classified at secret types).
+@needs(Word(W, B), Word64(D, B), Wide512(P, B), X25519Pub(B))
+pub HpkeKeyPairG(B) hpkeg_generate_keypair(Int kem) {
+    ListBuf(B) rb = ListBuf();
+    return hpkeg_derive_keypair(kem, w_lift_bytes(random_bytes(hpke_kem_nsk(kem)), 0, rb));
+}
+
+// The result of Encap / AuthEncap: the shared secret and enc.
+pub type HpkeEncapG(B) = { Bool ok; List(B) shared; List(Int) enc; };
+
+// Encap / AuthEncap for DHKEM(X25519) with ephemeral key pair e; skS
+// empty for no auth. Not ok for a peer key that is not 32 bytes or gives
+// an all-zero DH output.
+@needs(Word(W, B), Word64(D, B), Wide512(P, B), CtSame(B), X25519Pub(B))
+pub HpkeEncapG(B) hpkeg_x25519_encap(List(Int) pkR, HpkeKeyPairG(B) e, List(B) skS) {
+    List(B) none = [];
+    HpkeEncapG(B) bad = HpkeEncapG {.ok = false, .shared = none, .enc = []};
+    if (!e.ok) { return bad; }
+    Bool auth = skS.len() > 0;
+    List(B) dh1 = x25519g_shared(e.sk, pkR);
+    List(B) dh2 = if (auth) { x25519g_shared(skS, pkR) } else { none };
+    if (dh1.len() == 0 || (auth && dh2.len() == 0)) { return bad; }
+    List(Int) pkS = if (auth) { x25519g_public(skS) } else { [] };
+    List(Int) ctx = e.pk.concat(pkR).concat(pkS);
+    return HpkeEncapG {.ok = true, .shared = hpkeg_extract_and_expand(32, dh1.concat(dh2), ctx), .enc = e.pk};
+}
+
+// Decap / AuthDecap for DHKEM(X25519); pkS empty for no auth. Empty on
+// failure.
+@needs(Word(W, B), Word64(D, B), Wide512(P, B), CtSame(B), X25519Pub(B))
+pub List(B) hpkeg_x25519_decap(List(Int) enc, List(B) skR, List(Int) pkS) {
+    List(B) none = [];
+    Bool auth = pkS.len() > 0;
+    List(B) dh1 = x25519g_shared(skR, enc);
+    List(B) dh2 = if (auth) { x25519g_shared(skR, pkS) } else { none };
+    if (dh1.len() == 0 || (auth && dh2.len() == 0)) { return none; }
+    List(Int) pkR = x25519g_public(skR);
+    if (pkR.len() == 0) { return none; }
+    return hpkeg_extract_and_expand(32, dh1.concat(dh2), enc.concat(pkR).concat(pkS));
+}
+
+// ─── Key schedule (§5.1) ─────────────────────────────────────────────
+
+// A context: the AEAD key, the base nonce, the exporter secret (all in B)
+// and the sequence number of the next message (public).
+pub type HpkeCtxG(B) = { Bool ok; HpkeSuite suite; List(B) key; List(B) base_nonce; List(B) exporter; Int seq; };
+
+@needs(Word(W, B))
+pub HpkeCtxG(B) hpkeg_ctx_bad(HpkeSuite s) {
+    List(B) none = [];
+    return HpkeCtxG {.ok = false, .suite = s, .key = none, .base_nonce = none, .exporter = none, .seq = 0};
+}
+
+// KeySchedule(mode, shared_secret, info, psk, psk_id). psk and psk_id
+// together or not at all (§5.1.1), a PSK of at least 32 bytes. The two
+// hashes of public inputs (psk_id, info) are computed on public bytes.
+@needs(Word(W, B), Word64(D, B))
+pub HpkeCtxG(B) hpkeg_key_schedule(HpkeSuite s, Int mode, List(B) shared, List(Int) info, List(B) psk, List(Int) psk_id) {
+    Bool with_psk = mode == 1 || mode == 3;
+    if (with_psk != (psk.len() > 0) || (psk.len() > 0) != (psk_id.len() > 0)) { return hpkeg_ctx_bad(s); }
+    if (with_psk && psk.len() < 32) { return hpkeg_ctx_bad(s); }
+    List(Int) sid = hpke_suite_id(s);
+    Int kdf = s.kdf;
+    List(Int) e = [];
+    List(Int) psk_id_hash = hpkeg_labeled_extract(kdf, sid, e, "psk_id_hash", psk_id);
+    List(Int) info_hash = hpkeg_labeled_extract(kdf, sid, e, "info_hash", info);
+    List(Int) ksc = [mode].concat(psk_id_hash).concat(info_hash);
+    List(B) sec = hpkeg_labeled_extract(kdf, sid, shared, "secret", psk);
+    List(B) key = hpkeg_labeled_expand(kdf, sid, sec, "key", ksc, hg_aead_nk(s.aead));
+    List(B) nonce = hpkeg_labeled_expand(kdf, sid, sec, "base_nonce", ksc, hg_aead_nn(s.aead));
+    List(B) exp = hpkeg_labeled_expand(kdf, sid, sec, "exp", ksc, hpke_kdf_nh(kdf));
+    return HpkeCtxG {.ok = true, .suite = s, .key = key, .base_nonce = nonce, .exporter = exp, .seq = 0};
+}
+
+// The mode (§5) from which of psk and the sender's key are given.
+pub Int hpke_mode(Bool psk, Bool auth) { return (if (psk) { 1 } else { 0 }) + (if (auth) { 2 } else { 0 }); }
+
+// The result of setting up a sender: its context and enc, the
+// encapsulated key to send alongside the ciphertext.
+pub type HpkeSenderG(B) = { HpkeCtxG(B) ctx; List(Int) enc; };
+
+// Every sender setup (§5.1.2-5.1.4) for DHKEM(X25519): the mode from
+// which of psk and skS are given; ikmE pins the ephemeral key (tests),
+// empty draws a fresh one.
+@needs(Word(W, B), Word64(D, B), Wide512(P, B), CtSame(B), X25519Pub(B))
+pub HpkeSenderG(B) hpkeg_setup_sender_full(HpkeSuite s, List(Int) pkR, List(Int) info, List(B) psk, List(Int) psk_id, List(B) skS, List(B) ikmE) {
+    HpkeSenderG(B) bad = HpkeSenderG {.ctx = hpkeg_ctx_bad(s), .enc = []};
+    if (!hpke_suite_ok(s) || s.kem != 32) { return bad; }
+    HpkeKeyPairG(B) e = if (ikmE.len() > 0) { hpkeg_derive_keypair(32, ikmE) } else { hpkeg_generate_keypair(32) };
+    HpkeEncapG(B) en = hpkeg_x25519_encap(pkR, e, skS);
+    if (!en.ok) { return bad; }
+    Int mode = hpke_mode(psk.len() > 0, skS.len() > 0);
+    return HpkeSenderG {.ctx = hpkeg_key_schedule(s, mode, en.shared, info, psk, psk_id), .enc = en.enc};
+}
+
+@needs(Word(W, B), Word64(D, B), Wide512(P, B), CtSame(B), X25519Pub(B))
+pub HpkeCtxG(B) hpkeg_setup_receiver_full(HpkeSuite s, List(Int) enc, List(B) skR, List(Int) info, List(B) psk, List(Int) psk_id, List(Int) pkS) {
+    if (!hpke_suite_ok(s) || s.kem != 32) { return hpkeg_ctx_bad(s); }
+    List(B) shared = hpkeg_x25519_decap(enc, skR, pkS);
+    if (shared.len() == 0) { return hpkeg_ctx_bad(s); }
+    return hpkeg_key_schedule(s, hpke_mode(psk.len() > 0, pkS.len() > 0), shared, info, psk, psk_id);
+}
+
+// Base mode (the common case).
+@needs(Word(W, B), Word64(D, B), Wide512(P, B), CtSame(B), X25519Pub(B))
+pub HpkeSenderG(B) hpkeg_setup_sender(HpkeSuite s, List(Int) pkR, List(Int) info) {
+    List(B) none = [];
+    return hpkeg_setup_sender_full(s, pkR, info, none, [], none, none);
+}
+
+@needs(Word(W, B), Word64(D, B), Wide512(P, B), CtSame(B), X25519Pub(B))
+pub HpkeCtxG(B) hpkeg_setup_receiver(HpkeSuite s, List(Int) enc, List(B) skR, List(Int) info) {
+    List(B) none = [];
+    return hpkeg_setup_receiver_full(s, enc, skR, info, none, [], []);
+}
+
+// ─── Encryption (§5.2) and export (§5.3) ─────────────────────────────
+
+// base_nonce xor I2OSP(seq, Nn): public shifts of the public sequence
+// number into secret bytes.
+@needs(Word(W, B))
+ListBuf(B) hg_xor_seq(List(B) nonce, Int seq, Int i, ListBuf(B) acc) {
+    if (i >= nonce.len()) { return acc; }
+    Int shift = 8 * (nonce.len() - 1 - i);
+    Int b = if (shift < 63) { (seq >> shift) & 255 } else { 0 };
+    return hg_xor_seq(nonce, seq, i + 1, acc.push(b_xork(nonce[i], b)));
+}
+
+// The nonce for message number seq.
+@needs(Word(W, B))
+pub List(B) hpkeg_nonce(HpkeCtxG(B) c, Int seq) {
+    ListBuf(B) acc = ListBuf();
+    return hg_xor_seq(c.base_nonce, seq, 0, acc).finish();
+}
+
+// The context with its sequence number set (to resume, or in tests).
+pub HpkeCtxG(B) hpkeg_at_seq(HpkeCtxG(B) c, Int seq) {
+    return HpkeCtxG {.ok = c.ok, .suite = c.suite, .key = c.key, .base_nonce = c.base_nonce, .exporter = c.exporter, .seq = seq};
+}
+
+pub type HpkeSealedG(B) = { HpkeCtxG(B) ctx; List(B) ct; };
+
+// Seal the next message: ciphertext || tag, and the context to use for
+// the one after. Empty ct for a failed context or an export-only suite.
+// At secret types the ciphertext is secret: the caller declassifies it to
+// send it.
+@needs(Word(W, B), Block128(X, W, B), Wide512(P, B))
+pub HpkeSealedG(B) hpkeg_seal(HpkeCtxG(B) c, List(Int) aad, List(B) pt) {
+    List(B) none = [];
+    if (!c.ok || c.suite.aead == 65535) { return HpkeSealedG {.ctx = c, .ct = none}; }
+    List(B) nonce = hpkeg_nonce(c, c.seq);
+    List(B) ct = if (c.suite.aead == 3) { chacha20poly1305g_seal_nb(c.key, nonce, pt, aad) } else { aes_gcmg_seal_ivb(c.key, nonce, pt, aad) };
+    return HpkeSealedG {.ctx = hpkeg_at_seq(c, c.seq + 1), .ct = ct};
+}
+
+pub type HpkeOpenedG(B) = { HpkeCtxG(B) ctx; Bool ok; List(B) pt; };
+
+// Open the next message. On failure the sequence number does not move
+// (§5.2: the receiver's state is unchanged by a forgery). The verdict is
+// public (CtSame(B), in the AEAD); the plaintext stays in B.
+@needs(Word(W, B), Block128(X, W, B), Wide512(P, B), CtSame(B))
+pub HpkeOpenedG(B) hpkeg_open(HpkeCtxG(B) c, List(Int) aad, List(Int) ct) {
+    List(B) none = [];
+    if (!c.ok || c.suite.aead == 65535) { return HpkeOpenedG {.ctx = c, .ok = false, .pt = none}; }
+    List(B) nonce = hpkeg_nonce(c, c.seq);
+    Option(List(B)) pt = if (c.suite.aead == 3) { chacha20poly1305g_decrypt_nb(c.key, nonce, ct, aad) } else { aes_gcmg_decrypt_ivb(c.key, nonce, ct, aad) };
+    return match pt {
+        Some(p) => HpkeOpenedG {.ctx = hpkeg_at_seq(c, c.seq + 1), .ok = true, .pt = p},
+        None => HpkeOpenedG {.ctx = c, .ok = false, .pt = none},
+    };
+}
+
+// A secret of len bytes bound to the context and exporter_context.
+@needs(Word(W, B), Word64(D, B))
+pub List(B) hpkeg_export(HpkeCtxG(B) c, List(Int) exporter_context, Int len) {
+    List(B) none = [];
+    if (!c.ok) { return none; }
+    return hpkeg_labeled_expand(c.suite.kdf, hpke_suite_id(c.suite), c.exporter, "sec", exporter_context, len);
+}
+
+// ─── Single-shot (§6) ────────────────────────────────────────────────
+
+pub type HpkeMessageG(B) = { Bool ok; List(Int) enc; List(B) ct; };
+
+// Seal one message to pkR in base mode (DHKEM(X25519)).
+@needs(Word(W, B), Word64(D, B), Block128(X, W, B), Wide512(P, B), CtSame(B), X25519Pub(B))
+pub HpkeMessageG(B) hpkeg_seal_to(HpkeSuite s, List(Int) pkR, List(Int) info, List(Int) aad, List(B) pt) {
+    HpkeSenderG(B) snd = hpkeg_setup_sender(s, pkR, info);
+    HpkeSealedG(B) sealed = hpkeg_seal(snd.ctx, aad, pt);
+    return HpkeMessageG {.ok = sealed.ct.len() > 0, .enc = snd.enc, .ct = sealed.ct};
+}
+
+// Open one base-mode message with skR (DHKEM(X25519)).
+@needs(Word(W, B), Word64(D, B), Block128(X, W, B), Wide512(P, B), CtSame(B), X25519Pub(B))
+pub Option(List(B)) hpkeg_open_with(HpkeSuite s, List(Int) enc, List(B) skR, List(Int) info, List(Int) aad, List(Int) ct) {
+    HpkeOpenedG(B) o = hpkeg_open(hpkeg_setup_receiver(s, enc, skR, info), aad, ct);
+    return if (o.ok) { Some(o.pt) } else { None };
+}

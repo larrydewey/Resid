@@ -39,14 +39,25 @@ W cg_key_word(List(B) key, Int off) {
 // nonce (RFC 8439 §2.3). Key and nonce are 32 and 12 bytes.
 @needs(Word(W, B))
 pub List(W) chachag_state(List(B) key, Int counter, List(Int) nonce) {
+    W n0 = w_lift(cg_le32(nonce, 0));
+    W n1 = w_lift(cg_le32(nonce, 4));
+    W n2 = w_lift(cg_le32(nonce, 8));
+    return cg_state_w(key, counter, n0, n1, n2);
+}
+
+// The same with the nonce in B (12 bytes): at secret types it stays secret.
+@needs(Word(W, B))
+pub List(W) chachag_state_nb(List(B) key, Int counter, List(B) nonce) {
+    return cg_state_w(key, counter, cg_key_word(nonce, 0), cg_key_word(nonce, 4), cg_key_word(nonce, 8));
+}
+
+@needs(Word(W, B))
+List(W) cg_state_w(List(B) key, Int counter, W n0, W n1, W n2) {
     W c0 = w_lift(1634760805);
     W c1 = w_lift(857760878);
     W c2 = w_lift(2036477234);
     W c3 = w_lift(1797285236);
     W ctr = w_lift(counter & 4294967295);
-    W n0 = w_lift(cg_le32(nonce, 0));
-    W n1 = w_lift(cg_le32(nonce, 4));
-    W n2 = w_lift(cg_le32(nonce, 8));
     return [c0, c1, c2, c3, cg_key_word(key, 0), cg_key_word(key, 4), cg_key_word(key, 8), cg_key_word(key, 12), cg_key_word(key, 16), cg_key_word(key, 20), cg_key_word(key, 24), cg_key_word(key, 28), ctr, n0, n1, n2];
 }
 
@@ -138,7 +149,11 @@ List(B) cg_ser(List(W) w, Int k, ListBuf(B) acc) {
 // The 64-byte keystream block for (key, counter, nonce).
 @needs(Word(W, B))
 pub List(B) chachag_block(List(B) key, Int counter, List(Int) nonce) {
-    List(W) st = chachag_state(key, counter, nonce);
+    return cg_block_st(chachag_state(key, counter, nonce));
+}
+
+@needs(Word(W, B))
+List(B) cg_block_st(List(W) st) {
     ListBuf(B) acc = ListBuf();
     return cg_ser(cg_words(st, st[12]), 0, acc);
 }
@@ -283,4 +298,36 @@ pub Option(List(B)) chacha20poly1305g_decrypt(List(B) key, List(Int) nonce, List
     List(B) mackey = chachag_block(key, 0, nonce)[0..32];
     if (!ct_same(poly1305g(mackey, cg_mac_input(aad, ct)), want)) { return None; }
     return Some(chachag_xor(key, 1, nonce, ct));
+}
+
+// ── The AEAD with the nonce in B ────────────────────────────────────
+// For protocols whose nonce is itself key material (HPKE's base_nonce xor
+// the sequence number, a TLS write IV): the 12-byte nonce is List(B), so
+// at secret types it stays secret. Otherwise as above.
+
+@needs(Word(W, B), Wide512(P, B))
+pub List(B) chacha20poly1305g_seal_nb(List(B) key, List(B) nonce, List(B) plaintext, List(Int) aad) {
+    List(B) none = [];
+    if (key.len() != 32 || nonce.len() != 12) { return none; }
+    // One state: the block counter (word 12) is a parameter of the rounds.
+    List(W) st = chachag_state_nb(key, 0, nonce);
+    List(B) mackey = cg_block_st(st)[0..32];
+    ListBuf(B) out = ListBuf();
+    List(B) ct = cg_xor_run(st, 1, plaintext, 0, out).finish();
+    return ct.concat(poly1305g(mackey, cg_mac_input(aad, ct)));
+}
+
+@needs(Word(W, B), Wide512(P, B), CtSame(B))
+pub Option(List(B)) chacha20poly1305g_decrypt_nb(List(B) key, List(B) nonce, List(Int) ct_and_tag, List(Int) aad) {
+    Int clen = ct_and_tag.len() - 16;
+    if (key.len() != 32 || nonce.len() != 12 || clen < 0) { return None; }
+    ListBuf(B) cb = ListBuf();
+    ListBuf(B) tb = ListBuf();
+    List(B) ct = w_lift_bytes(ct_and_tag[0..clen], 0, cb);
+    List(B) want = w_lift_bytes(ct_and_tag[clen..], 0, tb);
+    List(W) st = chachag_state_nb(key, 0, nonce);
+    List(B) mackey = cg_block_st(st)[0..32];
+    if (!ct_same(poly1305g(mackey, cg_mac_input(aad, ct)), want)) { return None; }
+    ListBuf(B) out = ListBuf();
+    return Some(cg_xor_run(st, 1, ct, 0, out).finish());
 }

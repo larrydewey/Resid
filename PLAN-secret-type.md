@@ -51,7 +51,15 @@ lossless cast of a secret integer stays secret (`sec_cast`). Ed25519 is in (2026
 with `lib/ed25519.resid` as its public copy; the public key and signature
 leave through `Publish(B)` (`lib/word.resid`), a declassification at secret
 bytes, and the compiler's provenance signing holds its seed as a secret
-under the `declassify` grant. Next are HPKE and the TLS key schedule. Still to do: a
+under the `declassify` grant. HPKE is in (2026-10-09):
+`lib/hpkeg.resid` (labeled HKDF over HKDF-SHA256/384/512, DHKEM(X25519),
+the key schedule in all four modes, seal/open/export over AES-GCM and
+ChaCha20-Poly1305), generic over `Word`, `Word64`, `Block128` and
+`Wide512`, with `lib/hpke.resid` as its public copy (P-256/P-384 KEMs
+public only until those curves are generic; faster than before, the
+SHA-384/512 KDFs about 8x); the AEADs gained nonce-in-`B` entry points
+(`aes_gcmg_seal_ivb`, `chacha20poly1305g_seal_nb` and their opens) so
+base_nonce stays secret. Next is the TLS key schedule. Still to do: a
 force-time `resid_cap_check("declassify")` (declassify lowers to nothing,
 so the static check is the whole check today), and steps 2–3 of §7.
 
