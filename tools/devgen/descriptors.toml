@@ -32,6 +32,12 @@
 #                               the member holding its length (a Scalar of
 #                               the same struct), `secret` its bytes are
 #                               Secret
+#                       Nested  an 8-byte pointer member of `struct`, the
+#                               struct a `parent` Buffer (listed before
+#                               it) points to; `max`, `length` (a member
+#                               of that struct) and `secret` as a Buffer's
+#                       Errno   no member: a failed ioctl gives the outputs
+#                               and its errno (`{ role = "Errno" }`)
 #                     and `dir`: In, Out or InOut.
 #   doc               the descriptor's comment
 # [[module.layout]]   a struct the wrappers fill or parse: its size and
@@ -75,14 +81,38 @@ struct = "struct snp_report_resp"
 prefix = "snp_report_resp"
 members = ["data"]
 
+[[module]]
+file = "uapi_sev_guest_ext.resid"
+interface = "sev_guest"
+header = "linux/sev-guest.h"
+since = "v5.19"
+summary = "AMD SEV-SNP extended reports (/dev/sev-guest): the report and the host's certificates."
+
+[[module.op]]
+fn = "snp_get_ext_report_op"
+name = "snp_get_ext_report"
+request = "SNP_GET_EXT_REPORT"
+struct = "struct snp_guest_request_ioctl"
+path = "/dev/sev-guest"
+write = false
+stability = "Uapi"
+version = { member = "msg_version", value = 1 }
+# The certificate buffer's maximum is the kernel's SEV_FW_BLOB_MAX_SIZE
+# (include/linux/psp-sev.h, not uapi: 16 KiB since 5.19); the kernel
+# refuses a larger certs_len with EINVAL.
+fields = [
+    { member = "req_data", role = "Buffer", dir = "InOut", max = "sizeof(struct snp_ext_report_req)" },
+    { member = "certs_address", role = "Nested", parent = "req_data", struct = "struct snp_ext_report_req", length = "certs_len", dir = "Out", max = "16384" },
+    { member = "resp_data", role = "Buffer", dir = "Out", max = "sizeof(struct snp_report_resp)" },
+    { member = "exitinfo2", also = ["fw_err"], role = "Scalar", dir = "Out" },
+    { role = "Errno" },
+]
+doc = "SNP_GET_EXT_REPORT: struct snp_ext_report_req in and back (the kernel writes the needed certs_len there when the buffer is too small), the certificate table behind its certs_address, struct snp_report_resp out, exitinfo2, and the errno: a too-small buffer fails with EIO and exitinfo2's VMM half SNP_GUEST_VMM_ERR_INVALID_LEN, which the wrapper must see to retry."
+
 [[module.layout]]
 struct = "struct snp_ext_report_req"
 prefix = "snp_ext_report_req"
 members = ["data", "certs_address", "certs_len"]
-
-[[module.check]]
-request = "SNP_GET_EXT_REPORT"
-why = "the certificate buffer is a pointer inside the request buffer, which the engine's Field kinds cannot place yet"
 
 [[module]]
 file = "uapi_sev_guest_key.resid"

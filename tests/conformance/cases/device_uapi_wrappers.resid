@@ -1,10 +1,12 @@
 // The wrappers over descriptors tools/resid-devgen generates from the
-// kernel's uapi headers (lib/dev/uapi_*.resid): TDX_CMD_GET_REPORT0 and the
+// kernel's uapi headers (lib/dev/uapi_*.resid): SNP_GET_EXT_REPORT (a
+// Nested certificate buffer, an Errno field), TDX_CMD_GET_REPORT0 and the
 // Nitro NSM's raw request compile, take their inputs from the generated
 // layouts, and reach the device host. Off a TDX guest or a Nitro enclave
 // the device is absent (a value), on one it answers or refuses this user;
 // `reached` covers each, so the case passes on any host. A malformed input
 // never reaches the host.
+import "dev/sev_guest_ext.resid";
 import "dev/tdx_guest.resid";
 import "dev/nsm.resid";
 import "_devzeros.resid";
@@ -17,6 +19,14 @@ Str reached(Str name, DeviceError e) {
         Absent(n) => name + ": reached", Denied(n) => name + ": reached", Kernel(n, x) => name + ": reached",
         TooLong(n) => name + ": reached", GenerationChanged(n) => name + ": reached", Unsupported(n) => name + ": reached",
         Version(n, v) => name + ": reached", Overrun(n) => name + ": reached", UnknownDriver(n, v) => name + ": reached",
+    };
+}
+
+@requires(device(readonly))
+Str ext(Int n, Int vmpl) {
+    return match (snp_get_ext_report(dev_zeros(n), vmpl)) {
+        Ok(r) => if (r.report.len() > 0) { "sev_guest.snp_get_ext_report: reached" } else { "empty report" },
+        Err(e) => reached("sev_guest.snp_get_ext_report", e),
     };
 }
 
@@ -43,6 +53,8 @@ Str nsm(List(UInt(8)) req) {
 
 @requires(device)
 Int main() {
+    println(ext(rt 64, 0));
+    println(ext(rt 64, 4));
     println(tdx(rt 64));
     println(tdx(rt 65));
     println(nsm(describe_nsm()));

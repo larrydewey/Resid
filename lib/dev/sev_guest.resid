@@ -46,14 +46,14 @@ pub Result(List(UInt(8)), DeviceError) snp_get_report(List(UInt(8)) report_data,
 }
 
 // struct msg_report_resp: status, report_size, 24 reserved bytes, report.
-Result(List(UInt(8)), DeviceError) sg_report(Str name, Option(List(UInt(8))) resp) {
+pub Result(List(UInt(8)), DeviceError) sg_report(Str name, Option(List(UInt(8))) resp) {
     return match (resp) {
         None => Err(BadReply(name, "no response buffer")),
         Some(r) => sg_report_body(name, r),
     };
 }
 
-Result(List(UInt(8)), DeviceError) sg_report_body(Str name, List(UInt(8)) r) {
+pub Result(List(UInt(8)), DeviceError) sg_report_body(Str name, List(UInt(8)) r) {
     if (r.len() < 32) { return Err(BadReply(name, "short response")); }
     Int status = sg_u32(r, 0);
     if (status != 0) { return Err(Kernel(name, status)); }

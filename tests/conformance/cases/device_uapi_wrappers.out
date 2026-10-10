@@ -1,3 +1,5 @@
+sev_guest.snp_get_ext_report: reached
+sev_guest.snp_get_ext_report: bad input: vmpl is 0 to 3, got 4
 tdx_guest.tdx_get_report0: reached
 tdx_guest.tdx_get_report0: bad input: report_data is 64 bytes, got 65
 nsm.raw: reached

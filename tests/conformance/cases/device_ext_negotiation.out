@@ -1,0 +1,7 @@
+retry with 12288
+retry with 16384
+x: reply too long
+x: bad reply: the kernel asked for a 12288-byte certificate buffer after 8192
+x: bad reply: the kernel asked for a 8192-byte certificate buffer after 8192
+x: bad reply: the kernel asked for a 12000-byte certificate buffer after 8192
+x: bad reply: no request struct back

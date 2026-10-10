@@ -64,7 +64,7 @@ LIBDEV = os.path.join(ROOT, "lib", "dev")
 TARGETS = [("X86_64", "x86_64-linux-gnu", "x86"), ("Aarch64", "aarch64-linux-gnu", "arm64")]
 ARCH_NAME = {"X86_64": "x86-64", "Aarch64": "aarch64"}
 SPARSE = ["include/uapi", "arch/x86/include/uapi", "arch/arm64/include/uapi"]
-ROLES = ("Scalar", "Inline", "Buffer")
+ROLES = ("Scalar", "Inline", "Buffer", "Nested", "Errno")
 DIRS = ("In", "Out", "InOut")
 STABILITY = ("Uapi", "AbiTesting", "OutOfTree")
 
@@ -188,9 +188,15 @@ def module_items(mod):
         if "version" in op:
             items.append((f"{o}.version", "member", st, [op["version"]["member"]], None))
         for f in op["fields"]:
-            items.append((f"{o}.field.{f['member']}", "member", st, member_names(f), None))
+            if f["role"] == "Errno":
+                continue
+            # A Nested field's member and length are in the parent's struct.
+            fst = f.get("struct", st) if f["role"] == "Nested" else st
+            items.append((f"{o}.field.{f['member']}", "member", fst, member_names(f), None))
             if "max" in f:
                 items.append((f"{o}.field.{f['member']}.max", "expr", None, None, f["max"]))
+            if f["role"] == "Nested" and "length" in f:
+                items.append((f"{o}.field.{f['member']}.length", "member", fst, [f["length"]], None))
     for lay in mod.get("layout", []):
         st = lay["struct"]
         items.append((f"{lay['prefix']}.size", "expr", None, None, f"sizeof({st})"))
@@ -301,16 +307,26 @@ def validate(mods):
                 raise DevgenError(f"{op['name']}: stability is one of {STABILITY}")
             if not isinstance(op["write"], bool):
                 raise DevgenError(f"{op['name']}: write is true or false")
-            members = [f["member"] for f in op["fields"]]
-            for f in op["fields"]:
-                if f.get("role") not in ROLES or f.get("dir") not in DIRS:
-                    raise DevgenError(f"{op['name']}.{f['member']}: role is one of {ROLES}, dir one of {DIRS}")
-                if f["role"] == "Buffer" and "max" not in f:
-                    raise DevgenError(f"{op['name']}.{f['member']}: a Buffer has a `max`")
-                if f["role"] != "Buffer" and ("max" in f or "length" in f or "secret" in f):
-                    raise DevgenError(f"{op['name']}.{f['member']}: only a Buffer has max, length or secret")
-                if "length" in f and f["length"] not in members:
+            members = [f.get("member") for f in op["fields"]]
+            for k, f in enumerate(op["fields"]):
+                if f.get("role") == "Errno":
+                    if set(f) != {"role"}:
+                        raise DevgenError(f"{op['name']}: an Errno field has only its role")
+                    continue
+                if "member" not in f or f.get("role") not in ROLES or f.get("dir") not in DIRS:
+                    raise DevgenError(f"{op['name']}.{f.get('member', '?')}: a field has a member, a role (one of {ROLES}) and a dir (one of {DIRS})")
+                if f["role"] in ("Buffer", "Nested") and "max" not in f:
+                    raise DevgenError(f"{op['name']}.{f['member']}: a {f['role']} has a `max`")
+                if f["role"] not in ("Buffer", "Nested") and ("max" in f or "length" in f or "secret" in f):
+                    raise DevgenError(f"{op['name']}.{f['member']}: only a Buffer or Nested has max, length or secret")
+                if f["role"] == "Buffer" and "length" in f and f["length"] not in members:
                     raise DevgenError(f"{op['name']}.{f['member']}: length {f['length']} is not a field")
+                if f["role"] == "Nested":
+                    par = [g for g in op["fields"][:k] if g.get("member") == f.get("parent") and g.get("role") == "Buffer"]
+                    if not par or "struct" not in f:
+                        raise DevgenError(f"{op['name']}.{f['member']}: a Nested field names its `parent` (a Buffer listed before it) and the parent's `struct`")
+                elif "parent" in f or "struct" in f:
+                    raise DevgenError(f"{op['name']}.{f['member']}: only a Nested field has a parent or struct")
 
 
 def ident(s):
@@ -391,8 +407,16 @@ def emit_op(w, mod, op, per):
         k = f"{o}.version"
         rows.append((x[k + ".offset"], op["version"]["member"], x[k + ".width"], f"version {op['version']['value']}"))
     for f in op["fields"]:
+        if f["role"] == "Errno":
+            continue
         k = f"{o}.field.{f['member']}"
         role = f["role"] + " " + f["dir"]
+        if f["role"] == "Nested":
+            role += f" inside {f['parent']} ({f['struct']}), at most {x[k + '.max']} bytes"
+            if "length" in f:
+                role += f", length in {f['length']} (offset {x[k + '.length.offset']}, {x[k + '.length.width']} bytes)"
+            rows.append((10**9 + x[k + ".offset"], f"{f['parent']}->{f['member']}", x[k + ".width"], role))
+            continue
         if f["role"] == "Buffer":
             role += f", at most {x[k + '.max']} bytes"
             if "length" in f:
@@ -401,13 +425,27 @@ def emit_op(w, mod, op, per):
                 role += ", secret"
         rows.append((x[k + ".offset"], f["member"], x[k + ".width"], role))
     for off, name, width, role in sorted(rows):
-        w(f"//         {name:<20} offset {off:>4}, {width:>4} bytes  {role}")
+        at = off - 10**9 if off >= 10**9 else off
+        w(f"//         {name:<20} offset {at:>4}, {width:>4} bytes  {role}")
+    if any(f["role"] == "Errno" for f in op["fields"]):
+        w("//         Errno: a failed ioctl gives the outputs with its errno")
     reqs = ", ".join(f"{ARCH_NAME[v]} 0x{per[v][o + '.request']:x}" for v, _, _ in TARGETS)
     w(f"//     {op['request']}: {reqs}")
     fields = []
     for f in op["fields"]:
+        if f["role"] == "Errno":
+            fields.append("Errno")
+            continue
         k = f"{o}.field.{f['member']}"
         off, width = x[k + ".offset"], x[k + ".width"]
+        if f["role"] == "Nested":
+            if width != 8:
+                raise DevgenError(f"{o}.{f['member']}: a Nested member is an 8-byte address, not {width} bytes")
+            parent = x[f"{o}.field.{f['parent']}.offset"]
+            la, lw = (x[k + ".length.offset"], x[k + ".length.width"]) if "length" in f else (-1, 0)
+            sec = "true" if f.get("secret") else "false"
+            fields.append(f"Nested({parent}, {off}, {la}, {lw}, {x[k + '.max']}, {f['dir']}, {sec})")
+            continue
         if f["role"] == "Scalar":
             fields.append(f"Scalar({off}, {width}, {f['dir']})")
         elif f["role"] == "Inline":
@@ -423,8 +461,9 @@ def emit_op(w, mod, op, per):
         ver = f"Versioned({x[k + '.offset']}, {x[k + '.width']}, {op['version']['value']})"
     else:
         ver = "Unversioned"
-    # Decimal: a hex literal leaves the descriptor unknown to E0262's check
-    # (the comment above gives each number in hex).
+    # Decimal, as the probe reads them (the comment above gives each in
+    # hex). A hex literal works too, but only with a compiler that reads
+    # 0x literals at reduction time, which seeds before this one did not.
     requests = ", ".join(f"Request {{.arch = {v}, .number = {per[v][o + '.request']}}}" for v, _, _ in TARGETS)
     w(f"pub IoctlOp {op['fn']}() {{")
     w(f"    return IoctlOp {{.name = \"{mod['interface']}.{o}\", .path = \"{op['path']}\", "

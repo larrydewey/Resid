@@ -5,7 +5,7 @@
 //              from the committed snapshot tools/devgen/uapi/
 // Kernel:      v7.2.9 (commit 5fce161649b4d779d1b76d9fcd52dc77779774b8)
 // Input:       tools/devgen/descriptors.toml, module uapi_sev_guest.resid
-// Fingerprint: b36a61010976fe42e379524180a1c696
+// Fingerprint: 9877dd85a2805ee6a139a4bd994ad63f
 //              (sha256 of the probed layouts and request numbers for
 //              x86-64 and aarch64, as clang compiles the header)
 // Regenerate with `tools/resid-devgen --write`; `--check` (tests/devgen)
@@ -43,17 +43,3 @@ pub Int snp_report_req_rsvd_len() { return 28; }
 pub Int snp_report_resp_size() { return 4000; }
 pub Int snp_report_resp_data_at() { return 0; }
 pub Int snp_report_resp_data_len() { return 4000; }
-
-// struct snp_ext_report_req: 112 bytes.
-pub Int snp_ext_report_req_size() { return 112; }
-pub Int snp_ext_report_req_data_at() { return 0; }
-pub Int snp_ext_report_req_data_len() { return 96; }
-pub Int snp_ext_report_req_certs_address_at() { return 96; }
-pub Int snp_ext_report_req_certs_address_len() { return 8; }
-pub Int snp_ext_report_req_certs_len_at() { return 104; }
-pub Int snp_ext_report_req_certs_len_len() { return 4; }
-
-// SNP_GET_EXT_REPORT (x86-64 0xc0205302, aarch64 0xc0205302) is checked
-// across the kernel matrix but has no descriptor: the certificate buffer is
-// a pointer inside the request buffer, which the engine's Field kinds cannot
-// place yet.

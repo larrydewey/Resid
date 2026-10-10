@@ -142,7 +142,7 @@ fi
 if selected devgen_request_numbers; then
     S="$ROOT/tools/devgen/uapi"
     printf '%s\n' '#include <linux/ioctl.h>' '#include <linux/types.h>' '#include <linux/sev-guest.h>' '#include <linux/tdx-guest.h>' '#include <linux/nsm.h>' \
-        'unsigned long long resid_req[4] = { SNP_GET_REPORT, SNP_GET_DERIVED_KEY, TDX_CMD_GET_REPORT0, NSM_IOCTL_RAW };' > "$WORK/req.c"
+        'unsigned long long resid_req[5] = { SNP_GET_REPORT, SNP_GET_DERIVED_KEY, SNP_GET_EXT_REPORT, TDX_CMD_GET_REPORT0, NSM_IOCTL_RAW };' > "$WORK/req.c"
     mkdir -p "$WORK/shim/asm"
     for h in types ioctl; do echo "#include <asm-generic/$h.h>" > "$WORK/shim/asm/$h.h"; done
     : > "$WORK/kernel.txt"
@@ -152,12 +152,12 @@ if selected devgen_request_numbers; then
             | sed -n 's/^@resid_req = .*\[\(i64 .*\)\].*/\1/p' | sed 's/i64 //g; s/, /\n/g' > "$WORK/k.${t%%:*}"
     done
     paste -d' ' "$WORK/k.x86_64" "$WORK/k.aarch64" > "$WORK/kernel.txt"
-    printf '%s\n' 'import "dev/sev_guest_key.resid";' 'import "dev/tdx_guest.resid";' 'import "dev/nsm.resid";' \
+    printf '%s\n' 'import "dev/sev_guest_key.resid";' 'import "dev/sev_guest_ext.resid";' 'import "dev/tdx_guest.resid";' 'import "dev/nsm.resid";' \
         'Str reqs(IoctlOp op) { return f"{op.requests[0].number} {op.requests[1].number}"; }' \
         '@requires(device, declassify)' \
-        'Int main() { println(reqs(snp_get_report_op())); println(reqs(snp_get_derived_key_op())); println(reqs(tdx_get_report0_op())); println(reqs(nsm_raw_op())); return 0; }' > "$WORK/reqs.resid"
+        'Int main() { println(reqs(snp_get_report_op())); println(reqs(snp_get_derived_key_op())); println(reqs(snp_get_ext_report_op())); println(reqs(tdx_get_report0_op())); println(reqs(nsm_raw_op())); return 0; }' > "$WORK/reqs.resid"
     (cd "$WORK" && timeout 600 "$COMPILER" reqs.resid -o reqs > reqs.log 2>&1 && ./reqs > resid.txt); rc=$?
-    if [ "$rc" -eq 0 ] && [ "$(wc -l < "$WORK/kernel.txt")" -eq 4 ] && cmp -s "$WORK/kernel.txt" "$WORK/resid.txt"; then
+    if [ "$rc" -eq 0 ] && [ "$(wc -l < "$WORK/kernel.txt")" -eq 5 ] && cmp -s "$WORK/kernel.txt" "$WORK/resid.txt"; then
         ok devgen_request_numbers
     else
         bad devgen_request_numbers "exit $rc; kernel [$(tr '\n' ',' < "$WORK/kernel.txt")] descriptors [$(tr '\n' ',' < "$WORK/resid.txt" 2>/dev/null)]"
@@ -169,9 +169,9 @@ fi
 # builtins this host may not have; E0263 runs before lowering, so the
 # emitted IR is the evidence.
 if selected devgen_aarch64_descriptors; then
-    printf '%s\n' 'import "dev/sev_guest_key.resid";' 'import "dev/tdx_guest.resid";' 'import "dev/nsm.resid";' \
+    printf '%s\n' 'import "dev/sev_guest_key.resid";' 'import "dev/sev_guest_ext.resid";' 'import "dev/tdx_guest.resid";' 'import "dev/nsm.resid";' \
         '@requires(device, declassify)' \
-        'Int main() { Bool a = match (snp_get_report([(UInt(8))(rt 0)], 0)) { Ok(r) => true, Err(e) => false, }; Bool b = match (snp_get_derived_key(0, 0, 0, 0, 0)) { Ok(k) => true, Err(e) => false, }; Bool c = match (tdx_get_report0([(UInt(8))(rt 0)])) { Ok(r) => true, Err(e) => false, }; Bool d = match (nsm_request([(UInt(8))(rt 0)])) { Ok(r) => true, Err(e) => false, }; println(f"{a} {b} {c} {d}"); return 0; }' > "$WORK/a64.resid"
+        'Int main() { Bool x = match (snp_get_ext_report([(UInt(8))(rt 0)], 0)) { Ok(r) => true, Err(e) => false, }; Bool a = match (snp_get_report([(UInt(8))(rt 0)], 0)) { Ok(r) => true, Err(e) => false, }; Bool b = match (snp_get_derived_key(0, 0, 0, 0, 0)) { Ok(k) => true, Err(e) => false, }; Bool c = match (tdx_get_report0([(UInt(8))(rt 0)])) { Ok(r) => true, Err(e) => false, }; Bool d = match (nsm_request([(UInt(8))(rt 0)])) { Ok(r) => true, Err(e) => false, }; println(f"{x} {a} {b} {c} {d}"); return 0; }' > "$WORK/a64.resid"
     (cd "$WORK" && timeout 600 "$COMPILER" a64.resid -o a64 --target aarch64 > a64.log 2>&1)
     n=$(grep -c 'call void @resid_device_host()' "$WORK/a64.ll" 2>/dev/null)
     if ! grep -q 'error\[' "$WORK/a64.log" && [ "$n" = 1 ] && grep -q '"target-features"="+aes,+neon"' "$WORK/a64.ll"; then
