@@ -4244,7 +4244,7 @@ Str gk_internal_use(GK k, Int id) {
     return "";
 }
 
-Bool gk_internals_at(GK k, Int id, List(Int) nls, Str smap, Bool acc) {
+Bool gk_internals_at(GK k, Int id, List(Int) nls, Str smap, Int prel, Bool acc) {
     if (id >= k.g.ns.len()) { return acc; }
     Str u = gk_internal_use(k, id);
     Bool ok = u == "" || (resid_internals() && gk_internal_file(gk_src_path(k, id, nls, smap)));
@@ -4252,7 +4252,23 @@ Bool gk_internals_at(GK k, Int id, List(Int) nls, Str smap, Bool acc) {
         eprintln("error[E0220]: " + u + " is a runtime internal of the compiler, not part of the language (spec §5); only the compiler's own sources and runtime/rt/, built with --runtime-internals, may use it (never the standard library)")
     };
     Bool lbad = gk_link_place(k, id, nls, smap);
-    return gk_internals_at(k, id + 1, nls, smap, acc || bad || lbad);
+    Bool rbad = gk_reserved_name(k, id, nls, smap, prel);
+    return gk_internals_at(k, id + 1, nls, smap, prel, acc || bad || lbad || rbad);
+}
+
+// Function names starting `resid_` belong to the runtime (E0265): its
+// entry points (resid_device_call, resid_device_host, resid_native_host,
+// ...) are symbols in the same link as the program's own functions, and
+// the compiler decides what a program is from the calls it sees -- a
+// program's resid_device_call, or resid_device_callz, must not pass for
+// the runtime's. Only the runtime's own sources (runtime/rt/, with
+// --runtime-internals) may define one, and the compiler's prelude (from
+// `prel` on), whose behavior instances are resid_eq_int and the like.
+Bool gk_reserved_name(GK k, Int id, List(Int) nls, Str smap, Int prel) {
+    KN n = k.g.ns[id];
+    if (n.kind != "fn" || !str_starts_with(n.text, "resid_") || n.sp >= prel) { return false; }
+    if (resid_internals() && gk_internal_file(gk_src_path(k, id, nls, smap))) { return false; }
+    return eprintln("error[E0265]: `" + n.text + "`: function names starting with `resid_` are reserved for the runtime (spec §5); rename it");
 }
 
 // `@link` belongs on a function of a program or package: never in the
@@ -4718,7 +4734,7 @@ Int gk_finish(GK k0, List(Int) fnode, Str src, Str smap, Str smap0) {
     Bool err3 = e0218_check_all(fs, eff, facts.pcsv, 0);
     Bool err4 = gk_spawn_all(k, fnode, eff, 0);
     Bool err5 = gk_authority(k, fnode, facts);
-    Bool err6 = gk_internals_at(k, 0, gk_newlines(src, 0, ListBuf()), smap, false);
+    Bool err6 = gk_internals_at(k, 0, gk_newlines(src, 0, ListBuf()), smap, gm_prelude_pos(src), false);
     Bool err7 = sec_wide_scan(k, k.tl.keys, k.tl.tys, 0, src, smap);
     Bool err8 = dv_scan(k, 0, gk_newlines(src, 0, ListBuf()), src, smap, dv_std_dir(gm_pk(smap0), 0), false);
     if (err1 || err2 || err3 || err4 || err5 || err6 || err7 || err8) { return 1; }

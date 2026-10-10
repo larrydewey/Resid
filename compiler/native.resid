@@ -490,12 +490,16 @@ pub List(Str) dv_hook_main(List(Str) ls) {
     return nt_hook_at(ls.concat(["declare void @resid_device_host()"]), 0, "  call void @resid_device_host()", false, ListBuf());
 }
 
-// An instruction calling the device entry (a global, such as a string
-// constant that spells the call, is not one).
+// An instruction calling one of the device entries by its exact symbol
+// (`@resid_device_call(` or `@resid_device_call_w(`; a global, such as a
+// string constant that spells the call, is not one, nor is a function whose
+// name only starts the same). Only lib/dev/'s engine may call them (E0260),
+// and no program may define a function named resid_... (E0265).
 Bool dv_calls_host(List(Str) ls, Int i) {
     if (i >= ls.len()) { return false; }
     Str l = ls[i];
-    if (!str_starts_with(l, "@") && !str_starts_with(l, "!") && str_contains(l, "call ptr @resid_device_call")) { return true; }
+    Bool call = str_contains(l, "call ptr @resid_device_call(") || str_contains(l, "call ptr @resid_device_call_w(");
+    if (!str_starts_with(l, "@") && !str_starts_with(l, "!") && call) { return true; }
     return dv_calls_host(ls, i + 1);
 }
 

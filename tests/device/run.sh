@@ -112,6 +112,22 @@ if [ "$#" -eq 0 ] || [[ " $* " == *" e0260_relative_stdroot "* ]]; then
         echo "FAIL e0260_relative_stdroot: a project's own lib/dev/ counted as the standard library's (exit $rc)"; fail=$((fail + 1))
     fi
 fi
+# The device host is hooked into main only of a program that calls a
+# device entry by its exact symbol (dv_calls_host): a device program's IR
+# calls resid_device_host first, a plain one's never.
+if [ "$#" -eq 0 ] || [[ " $* " == *" device_hook_exact "* ]]; then
+    P="$WORK/hook"; mkdir -p "$P"
+    printf '%s\n' 'import "dev/fx_device_ioctl.resid";' '@requires(device(readonly))' 'Int main() { println(match (device.ioctl(fx_ptn(), [])) { Ok(o) => "ok", Err(e) => device_error_text(e), }); return 0; }' > "$P/dev.resid"
+    printf '%s\n' 'Str spells_it() { return "call ptr @resid_device_call(ptr %x)"; }' 'Int main() { println(spells_it()); return 0; }' > "$P/plain.resid"
+    (cd "$P" && timeout 600 "$COMPILER" dev.resid -o dev && timeout 600 "$COMPILER" plain.resid -o plain) > "$P/c.log" 2>&1; rc=$?
+    nd=$(grep -c 'call void @resid_device_host()' "$P/dev.ll" 2>/dev/null)
+    np=$(grep -c 'resid_device_host' "$P/plain.ll" 2>/dev/null)
+    if [ "$rc" -eq 0 ] && [ "$nd" = 1 ] && [ "$np" = 0 ]; then
+        echo "PASS device_hook_exact"; pass=$((pass + 1))
+    else
+        echo "FAIL device_hook_exact: exit $rc, device program hooks $nd, plain program $np ($(grep -m1 -i error "$P/c.log"))"; fail=$((fail + 1))
+    fi
+fi
 echo "---"
 echo "$pass passed, $fail failed$([ "$skip" -gt 0 ] && echo ", $skip skipped")"
 [ "$fail" -eq 0 ]
