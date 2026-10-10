@@ -8,7 +8,8 @@
 #
 # The cases come from the knowledge graph (PLAN-secret-type.md §7 step 3),
 # not from a list here: every function named ct_case_<name> in
-# ctprobe.resid and secretprobe.resid is case <name> (underscores to
+# ctprobe.resid, secretprobe.resid and tlsprobe.resid (a whole TLS
+# handshake and a record each way in one process, no socket) is case <name> (underscores to
 # dashes). Before anything runs, a coverage gate (tools/resid-ctcover.resid)
 # lists the library's secret surface -- every function under lib/ whose
 # signature carries a Secret, every generic one that runs on secrets, and
@@ -49,7 +50,7 @@ build "$W/b.ctcover" tools/resid-ctcover.resid -o "$W/ctcover"
 { for f in lib/*.resid; do echo "import \"$ROOT/$f\";"; done; echo 'Int main() { return 0; }'; } > "$W/surface.resid"
 build "$W/b.surface" "$W/surface.resid" --profile check -o "$W/surface"
 "$W/ctcover" "$W/surface" surface > "$W/surface.txt" || { echo "FAIL ct surface: no secret functions found"; exit 1; }
-PROBES="ctprobe secretprobe"
+PROBES="ctprobe secretprobe tlsprobe"
 for p in $PROBES; do
     build "$W/b.$p.g" "tests/ct/$p.resid" --profile check -o "$W/$p.g"
     "$W/ctcover" "$W/$p.g" cases ct_case_ > "$W/$p.cases" || { echo "FAIL ct cases: $p has no ct_case_ functions"; exit 1; }

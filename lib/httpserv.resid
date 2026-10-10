@@ -547,7 +547,12 @@ Int hs_serve_at(T conn, HttpReply closure(HttpRequest) handler, HttpLimits lim, 
     _ = wire_deadline(rq.rest.conn, lim.reply_ms);
     WireOut(T) sent = wire_send(rq.rest.conn, wire);
     if (!sent.ok || !keep) { return served + 1; }
-    return hs_serve_at(sent.conn, handler, lim, rq.rest, served + 1);
+    // The next request is read through the connection the reply went out
+    // on: a TLS transport's write sequence number moved with the reply, and
+    // reading on through the one from before it would seal the next reply
+    // under a nonce already used.
+    HsBuf(T) next = HsBuf { .conn = sent.conn, .data = rq.rest.data, .eof = rq.rest.eof };
+    return hs_serve_at(sent.conn, handler, lim, next, served + 1);
 }
 
 // ─── The event loop ─────────────────────────────────────────────────────

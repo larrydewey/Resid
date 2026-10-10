@@ -116,7 +116,7 @@ pub TsProt ts_read_prot(TsIn s, List(Secret(UInt(8))) key, List(Secret(UInt(8)))
     if (pt.len() == 0) { return TsProt { .in = r.in, .msg = [], .seq = seq2, .alert = -1, .ok = false }; }
     Int ctype = tls_inner_type(pt);
     Int clen = pt.len() - 1;
-    List(Int) content = slice_seed(pt, 0, clen, []);
+    List(Int) content = pt[0..clen];
     if (ctype == 21) {
         Int desc = if (content.len() > 0) { content[0] } else { 0 };
         return TsProt { .in = r.in, .msg = [], .seq = seq2, .alert = desc, .ok = false };
@@ -228,7 +228,7 @@ TsRecs ts_flight_records(List(Secret(UInt(8))) key, List(Secret(UInt(8))) iv, In
     if (at >= flight.len()) { return TsRecs { .bytes = acc, .seq = seq }; }
     Int left = flight.len() - at;
     Int take = if (left > 16384) { 16384 } else { left };
-    List(Int) chunk = slice_seed(flight, at, take, []);
+    List(Int) chunk = flight[at..(at + take)];
     List(Int) rec = tlsg_protect(seq, key, iv, chunk, 22);
     return ts_flight_records(key, iv, seq + 1, flight, at + take, acc.concat(rec));
 }
@@ -242,6 +242,15 @@ TsStart ts_refuse(Int err, Int desc) {
 // what this server speaks, most preferred first.
 @requires(declassify)
 pub TsStart ts_server_start(List(Int) hello, ServerKey key, List(List(Int)) chain, List(Str) alpn_want) {
+    return ts_server_start_with(hello, key, chain, alpn_want, secret_bytes(random_bytes(32)), random_bytes(32));
+}
+
+// The same with this handshake's ephemeral x25519 key and ServerHello
+// random given, not drawn: a test that marks the key for valgrind, or
+// replays a trace, passes them. Nothing else should -- the key has to be
+// fresh per handshake (ts_server_start draws both).
+@requires(declassify)
+pub TsStart ts_server_start_with(List(Int) hello, ServerKey key, List(List(Int)) chain, List(Str) alpn_want, List(Secret(UInt(8))) priv, List(Int) server_random) {
     ClientHello ch = ts_client_hello(hello);
     if (ch.err != ts_err_ok()) { return ts_refuse(ch.err, ts_alert_for(ch.err)); }
     if (!ts_offers_suite(ch, ts_suite_aes128gcm())) { return ts_refuse(tsr_no_suite(), ts_alert_for(tsr_no_suite())); }
@@ -256,11 +265,10 @@ pub TsStart ts_server_start(List(Int) hello, ServerKey key, List(List(Int)) chai
     // private key is secret from the moment it is drawn; the share is
     // published (x25519g_public), and a client share that gives an
     // all-zero secret is refused (RFC 8446 §7.4.2; one public bit).
-    List(Secret(UInt(8))) priv = secret_bytes(random_bytes(32));
     List(Int) share = x25519g_public(priv);
     List(Secret(UInt(8))) shared = x25519g_shared(priv, ch.share);
     if (shared.len() == 0) { return ts_refuse(ts_err_no_share(), ts_alert_illegal_parameter()); }
-    List(Int) sh = ts_server_hello(ch.session_id, random_bytes(32), share);
+    List(Int) sh = ts_server_hello(ch.session_id, server_random, share);
     List(Int) tr1 = ch.raw.concat(sh);
     List(Int) th1 = ts_hash(tr1);
     List(Secret(UInt(8))) hs = tlsg_handshake_secret(shared);
