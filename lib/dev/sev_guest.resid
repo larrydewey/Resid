@@ -83,6 +83,6 @@ List(UInt(8)) sg_zeros(Int n, ListBuf(UInt(8)) acc) {
     return sg_zeros(n - 1, acc.push((UInt(8))0));
 }
 
-Int sg_u32(List(UInt(8)) r, Int at) {
+pub Int sg_u32(List(UInt(8)) r, Int at) {
     return (Int)r[at] | ((Int)r[at + 1] << 8) | ((Int)r[at + 2] << 16) | ((Int)r[at + 3] << 24);
 }

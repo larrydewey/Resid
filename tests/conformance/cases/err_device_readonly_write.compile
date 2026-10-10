@@ -1,2 +1,2 @@
 E0219
-requires(device)
+capability `device` but is not granted

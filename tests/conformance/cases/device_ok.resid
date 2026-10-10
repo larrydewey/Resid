@@ -15,7 +15,7 @@ Str report(Int n, Int vmpl) {
     };
 }
 
-@requires(device)
+@requires(device, declassify)
 Str key() {
     return match (snp_get_derived_key(0, 0, 0, 0, 0)) {
         Ok(k) => f"key of {k.len()} bytes",
@@ -23,7 +23,7 @@ Str key() {
     };
 }
 
-@requires(device)
+@requires(device, declassify)
 Int main() {
     println(report(rt 64, 0));
     println(report(rt 63, 0));
