@@ -481,7 +481,9 @@ printf 'import "probe";\n@requires(device(readonly))\nInt main() { println(probe
 if [ $? -ne 0 ] && grep -q "E0261" "$W/dapp.out" && grep -q "sev_guest.snp_get_report" "$W/dapp.out"; then ok; else bad "pkg_device_ceiling: a descriptor outside the bound was reached: $(grep -m1 -i error "$W/dapp.out")"; fi
 sed -i 's/devices = \["tsm_report"\]/devices = ["sev_guest"]/' "$W/dapp/resid.toml"
 (cd "$ROOT" && "$MAN" build "$W/dapp/resid.toml" "$COMPILER") > "$W/dapp2.out" 2>&1
-if [ $? -eq 0 ] && [ "$("$W/dapp/target/resid/dapp")" = "sev_guest.snp_get_report: device absent" ]; then ok; else bad "pkg_device_ceiling: a device module bound: $(grep -m1 -i error "$W/dapp2.out")"; fi
+# The call reaches the device host: absent off an SEV-SNP guest; on one a
+# report, or a refusal for this user.
+if [ $? -eq 0 ] && grep -qxE 'sev_guest\.snp_get_report: (device absent|permission denied)|report' <<< "$("$W/dapp/target/resid/dapp")"; then ok; else bad "pkg_device_ceiling: a device module bound: $(grep -m1 -i error "$W/dapp2.out")"; fi
 sed -i 's/devices = \["sev_guest"\]/devices = ["sev_guest.snp_get_report"]/' "$W/dapp/resid.toml"
 (cd "$ROOT" && "$MAN" build "$W/dapp/resid.toml" "$COMPILER") > "$W/dapp3.out" 2>&1
 if [ $? -eq 0 ]; then ok; else bad "pkg_device_ceiling: a descriptor bound: $(grep -m1 -i error "$W/dapp3.out")"; fi

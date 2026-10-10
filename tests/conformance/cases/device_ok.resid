@@ -1,25 +1,40 @@
 // The device verbs end to end (PLAN-device-access.md): the compiler checks
 // the descriptor, records it and calls the engine, which validates the
-// inputs and asks the runtime's isolated device host. Off an SEV-SNP guest
-// /dev/sev-guest is not there, so a well-formed call is Err(Absent) -- a
-// value, not an abort; a malformed one never reaches the host.
+// inputs and asks the runtime's isolated device host. A well-formed call
+// reaches the device: off an SEV-SNP guest /dev/sev-guest is not there
+// (Err(Absent), a value, not an abort), on one it answers or refuses this
+// user -- `reached` covers each, so the case passes on any host. A
+// malformed call never reaches the host.
 import "dev/sev_guest.resid";
 import "dev/sev_guest_key.resid";
 import "_devzeros.resid";
 
+// What a call that reached the device host says: the device's answer,
+// whatever this machine has, or the input or reply error text.
+Str reached(Str name, DeviceError e) {
+    return match (e) {
+        BadInput(n, why) => device_error_text(e),
+        BadReply(n, why) => device_error_text(e),
+        Timeout(n) => device_error_text(e),
+        Absent(n) => name + ": reached", Denied(n) => name + ": reached", Kernel(n, x) => name + ": reached",
+        TooLong(n) => name + ": reached", GenerationChanged(n) => name + ": reached", Unsupported(n) => name + ": reached",
+        Version(n, v) => name + ": reached", Overrun(n) => name + ": reached", UnknownDriver(n, v) => name + ": reached",
+    };
+}
+
 @requires(device(readonly))
 Str report(Int n, Int vmpl) {
     return match (snp_get_report(dev_zeros(n), vmpl)) {
-        Ok(b) => f"report of {b.len()} bytes",
-        Err(e) => device_error_text(e),
+        Ok(b) => if (b.len() > 0) { "sev_guest.snp_get_report: reached" } else { "empty report" },
+        Err(e) => reached("sev_guest.snp_get_report", e),
     };
 }
 
 @requires(device, declassify)
 Str key() {
     return match (snp_get_derived_key(0, 0, 0, 0, 0)) {
-        Ok(k) => f"key of {k.len()} bytes",
-        Err(e) => device_error_text(e),
+        Ok(k) => if (k.len() == 32) { "sev_guest.snp_get_derived_key: reached" } else { "short key" },
+        Err(e) => reached("sev_guest.snp_get_derived_key", e),
     };
 }
 

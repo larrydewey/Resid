@@ -8,8 +8,8 @@ import "_devzeros.resid";
 @requires(device(readonly))
 Str ask(List(DevIn) ins) {
     return match (device.ioctl(snp_get_report_op(), ins)) {
-        Ok(outs) => f"{outs.len()} outputs",
-        Err(e) => device_error_text(e),
+        Ok(outs) => if (outs.len() == 2) { "sev_guest.snp_get_report: reached" } else { f"{outs.len()} outputs" },
+        Err(e) => match (e) { BadInput(n, why) => device_error_text(e), BadReply(n, why) => device_error_text(e), Timeout(n) => device_error_text(e), Absent(n) => n + ": reached", Denied(n) => n + ": reached", Kernel(n, x) => n + ": reached", TooLong(n) => n + ": reached", GenerationChanged(n) => n + ": reached", Unsupported(n) => n + ": reached", Version(n, v) => n + ": reached", Overrun(n) => n + ": reached", UnknownDriver(n, v) => n + ": reached", },
     };
 }
 

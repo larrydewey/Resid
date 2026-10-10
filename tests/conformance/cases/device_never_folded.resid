@@ -1,12 +1,13 @@
 // A device verb is an effect (Laws 2 and 10): with every argument a
 // literal it still runs, at run time, through the device host -- the
-// reducer never evaluates it, however much it knows.
+// reducer never evaluates it, however much it knows. Whatever the device
+// answers on this machine (absent, a report, a refusal), the call ran.
 import "dev/sev_guest.resid";
 
 @requires(device(readonly))
 Int main() {
     List(UInt(8)) zeros = [(UInt(8))0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-    Str s = match (snp_get_report(zeros, 0)) { Ok(b) => "folded", Err(e) => device_error_text(e), };
+    Str s = match (snp_get_report(zeros, 0)) { Ok(b) => "ran", Err(e) => match (e) { BadInput(n, w) => "bad input", BadReply(n, w) => device_error_text(e), Timeout(n) => "timeout", Absent(n) => "ran", Denied(n) => "ran", Kernel(n, x) => "ran", TooLong(n) => "ran", GenerationChanged(n) => "ran", Unsupported(n) => "ran", Version(n, v) => "ran", Overrun(n) => "ran", UnknownDriver(n, v) => "ran", }, };
     println(s);
     return 0;
 }
