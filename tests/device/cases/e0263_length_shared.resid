@@ -1,0 +1,6 @@
+// Each Buffer has a length field of its own: one field for two buffers
+// sets one buffer's length from the other's (E0263).
+import "dev/fx_e0263_length_shared.resid";
+
+@requires(device(readonly))
+Int main() { println(fx_call()); return 0; }

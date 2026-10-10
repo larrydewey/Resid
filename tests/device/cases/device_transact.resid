@@ -15,7 +15,7 @@ Str says(Result(List(DevOut), DeviceError) r) {
     };
 }
 
-@requires(device(readonly))
+@requires(device)
 Int main() {
     println(says(device.transact(fx_zero(), [(UInt(8))1, 2, 3])));
     println(says(device.transact(fx_null(), [(UInt(8))1])));

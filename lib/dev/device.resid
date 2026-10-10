@@ -56,8 +56,10 @@ type Dir = In | Out | InOut;
 //                                 an 8-byte pointer at `offset` to a buffer the
 //                                 engine allocates, at most `max` bytes; the
 //                                 Scalar at `length_at` holds its length (-1
-//                                 when the length is always `max`); a secret
-//                                 buffer's bytes come back as secrets
+//                                 when the length is always `max`): wide
+//                                 enough to hold `max`, and no other
+//                                 Buffer's (E0263); a secret buffer's bytes
+//                                 come back as secrets
 type Field = Scalar(Int, Int, Dir) | Inline(Int, Int, Dir) | Buffer(Int, Int, Int, Dir, Bool);
 
 // The architectures a request number is given for. `_IOC` encodes the same
@@ -84,7 +86,9 @@ type IfaceVersion = Unversioned | Versioned(Int, Int, Int);
 type IoctlOp = { Str name; Str path; List(Request) requests; Int size; List(Field) fields; Bool write; IfaceVersion version; Stability stability; };
 
 // A request/response device (/dev/tpmrm0): write a command, read a
-// response of at most `max_response` bytes.
+// response of at most `max_response` bytes. Writing the command is a write
+// to the device, so `write` is true (E0263): device(readonly) never covers
+// a Transact.
 @descriptor(transact)
 type Transact = { Str name; Str path; Int max_command; Int max_response; Bool secret; Bool write; Stability stability; };
 
@@ -95,8 +99,9 @@ type ReadAttr = { Str name; Str path; Int max; Stability stability; };
 // The configfs report interface (/sys/kernel/config/tsm/report): a fresh
 // entry, `inblob` (and `privlevel`, `service_provider` when given) written,
 // `outblob`, `auxblob`, `manifestblob`, `provider` and `generation` read,
-// the provider checked against `providers` and the generation against a
-// change between the write and the read, the entry removed.
+// the provider checked against `providers`, and the generation, read before
+// and after the blobs, against the number of stores the host made (another
+// writer to the entry is GenerationChanged), the entry removed.
 @descriptor(configfs_report)
 type ConfigfsReport = { Str name; Str path; List(Str) providers; Int max_inblob; Int max_outblob; Int max_auxblob; Int max_manifestblob; Bool write; Stability stability; };
 
@@ -148,8 +153,11 @@ type DevOut = OutNum(Int) | OutBytes(List(UInt(8))) | OutSecret(List(Secret(UInt
 //                 device host refused the request
 //   BadReply      the isolated host failed: killed, a bad exit, no
 //                 sandbox, or a reply that did not parse
+//   Timeout       the host did not finish within the call's wall-clock
+//                 limit (30 s; 120 s for a ConfigfsReport) and was
+//                 killed; the operation may have run
 @descriptor(error)
-type DeviceError = Absent(Str) | Denied(Str) | Kernel(Str, Int) | TooLong(Str) | GenerationChanged(Str) | Unsupported(Str) | Version(Str, Int) | Overrun(Str) | UnknownDriver(Str, Str) | BadInput(Str, Str) | BadReply(Str, Str);
+type DeviceError = Absent(Str) | Denied(Str) | Kernel(Str, Int) | TooLong(Str) | GenerationChanged(Str) | Unsupported(Str) | Version(Str, Int) | Overrun(Str) | UnknownDriver(Str, Str) | BadInput(Str, Str) | BadReply(Str, Str) | Timeout(Str);
 
 pub Str device_error_text(DeviceError e) {
     return match (e) {
@@ -164,6 +172,7 @@ pub Str device_error_text(DeviceError e) {
         UnknownDriver(n, v) => n + ": no descriptor for " + v,
         BadInput(n, why) => n + ": bad input: " + why,
         BadReply(n, why) => n + ": bad reply: " + why,
+        Timeout(n) => n + ": timed out",
     };
 }
 
@@ -356,7 +365,9 @@ Bool dv_fits(Int v, Int width) {
 // descriptor does not accept, its text (the value's length of printable
 // bytes) following; 10 the device host refused the request; 11 the host
 // failed (value: 256 * what + detail -- 1 killed by signal detail, 2 exit
-// status detail, 3 no sandbox, 4 a malformed reply, 5 no host process).
+// status detail, 3 no sandbox, 4 a malformed reply, 5 no host process, 6
+// the host ran but its exit status was lost); 12 the host did not finish
+// within the call's wall-clock limit (Timeout).
 
 ListBuf(Int) dv_u(ListBuf(Int) b, Int v, Int n) {
     if (n <= 0) { return b; }
@@ -481,6 +492,7 @@ Result(List(DevOut), DeviceError) dv_reply(Str name, List(DvSlot) slots, List(In
         }
         if (code == 10) { return Err(BadInput(name, f"the device host refused the request ({v})")); }
         if (code == 11) { return Err(BadReply(name, dv_host_failure(v))); }
+        if (code == 12) { return Err(Timeout(name)); }
         return Err(BadReply(name, f"error code {code}"));
     }
     if (r[0] != 0) { return Err(BadReply(name, "status")); }
@@ -498,6 +510,7 @@ Str dv_host_failure(Int v) {
     if (what == 3) { return "the device host's sandbox could not be installed"; }
     if (what == 4) { return "malformed reply from the device host"; }
     if (what == 5) { return "the device host could not be started"; }
+    if (what == 6) { return "the device host ran, but its exit status was lost"; }
     return f"device host failure {v}";
 }
 

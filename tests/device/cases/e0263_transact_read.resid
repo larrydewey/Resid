@@ -1,0 +1,6 @@
+// A Transact writes its command bytes to the device, so it is a write:
+// `write = false` would let device(readonly) send commands (E0263).
+import "dev/fx_e0263_transact_read.resid";
+
+@requires(device(readonly))
+Int main() { println(fx_call()); return 0; }

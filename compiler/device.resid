@@ -8,8 +8,9 @@
 //   - its layout must be consistent (E0263): the request number's size and
 //     direction bits against the fields, fields inside the struct and apart,
 //     pointer fields 8-byte aligned, finite buffers, length fields that are
-//     Scalars, a path under /dev/ or /sys/ without `..`, and a request
-//     number for the build's target;
+//     Scalars wide enough for their buffer's maximum and no other buffer's,
+//     a path under /dev/ or /sys/ without `..`, a request number for the
+//     build's target, and `write = true` on a Transact;
 //   - a Sequence's links must go forward from a Scalar output to a Scalar
 //     input of one width, with outputs only on the last step (E0264);
 //   - a manifest's `devices = [...]` bound on a dependency must cover every
@@ -454,6 +455,8 @@ Str dv_check(DvD d, Bool a64) {
         if (d.provs.len() == 0) { return "E0263: a ConfigfsReport names the providers it accepts (`providers`)"; }
         if (d.provs.contains("\x01") || d.provs.contains("")) { return "E0263: every provider is a non-empty string literal"; }
     }
+    // A Transact writes its command to the device, whatever it reads back.
+    if (d.kind == "transact" && d.write != "true") { return "E0263: a Transact writes its command to the device, so it is a write: `write = true` (device(readonly) never covers one)"; }
     return dv_maxs_err(d.maxs, 0, d.kind);
 }
 
@@ -528,7 +531,18 @@ Str dv_field_errs(DvD d, Int i) {
     if (k == 2 && o % 8 != 0) { return w + ": a pointer field is 8-byte aligned"; }
     if (k == 2 && (d.fm[i] <= 0 || d.fm[i] > dv_max_buf())) { return w + f": a buffer's maximum is from 1 to {dv_max_buf()} bytes, not {d.fm[i]}"; }
     if (k == 2 && d.fa[i] != 0 - 1 && dv_scalar_at(d, d.fa[i], 0) < 0) { return w + f": its length field at offset {d.fa[i]} is not a Scalar of the struct"; }
+    if (k == 2 && d.fa[i] != 0 - 1) {
+        Int lw = d.fl[dv_scalar_at(d, d.fa[i], 0)];
+        if (lw < 8 && d.fm[i] >= (1 << (lw * 8))) { return w + f": its length field at offset {d.fa[i]} is {lw} byte(s), too narrow for its maximum of {d.fm[i]}"; }
+        if (dv_len_users(d, d.fa[i], 0, 0) > 1) { return w + f": its length field at offset {d.fa[i]} is another Buffer's too; each Buffer has its own"; }
+    }
     return dv_field_errs(d, i + 1);
+}
+
+// How many Buffers name the Scalar at `la` as their length field.
+Int dv_len_users(DvD d, Int la, Int i, Int n) {
+    if (i >= d.fk.len()) { return n; }
+    return dv_len_users(d, la, i + 1, if (d.fk[i] == 2 && d.fa[i] == la) { n + 1 } else { n });
 }
 
 // The index of the Scalar at offset `o`, or -1.
