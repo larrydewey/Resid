@@ -1228,11 +1228,13 @@ only where `main` (or a `test` block) declares it:
 @requires entries take the same modes as sandboxes; a
 read-only grant does not cover a write (filesystem write
 verbs, process.run, clock.sleep_ns, terminal raw mode,
-binding a listener to an address other than loopback).
+binding a listener to an address other than loopback, a
+device descriptor whose `write` is true).
 Families:
 
   filesystem, environment, args, process   (providers)
   clock                                   (provider)
+  device                                  (provider, §49)
   network      TCP builtins
   terminal     TTY and raw-mode builtins
   process      also the native debugger builtins
@@ -2161,8 +2163,11 @@ Provenance (CDDL; the COSE_Sign1 payload, §33.1):
                  ? graph: bstr, ? notes: bstr,
                  ? cache: bstr, grant: [* tstr],
                  ? native: { * tstr => bstr },
+                 ? devices: [* device],
                  output: tstr, ? reduce: tstr,
                  ? compiler: bstr }
+  device     = { op: tstr, name: tstr, path: tstr,
+                 request: uint, stability: tstr }
 
 Hashes are SHA-256. code is the hash of the binary before
 its trailer; graph, notes and cache are the hashes of
@@ -2176,6 +2181,15 @@ the SHA-256 of its artifact as given, before the compiler
 rewrote it; like grant it is ATTESTATION: the code hash
 covers the linked result, and the signer names the
 artifact it came from.
+devices lists each kernel device descriptor (§49) the program
+reaches from its entry points, once: the verb (`ioctl`,
+`transact`, `read_attr`, `configfs_report`, `sequence`), the
+descriptor's name and path, the request number for the build's
+target (0 for verbs without one; a Sequence has one entry per
+step, named `sequence:step`) and the interface's stability
+class (`uapi`, `abi-testing`, `out-of-tree`). Like grant it is
+ATTESTATION; the graph artifact shows the same descriptors as
+effects (`device.ioctl(name)`), which is evidence.
 reduce names a reduction budget other than the default
 (§27), e.g. "unbounded, memory 8192 MB": the budget
 decides how much of the program was computed at compile
@@ -2619,6 +2633,13 @@ compare modes, bound a dependency's own dependencies by
 its ceiling, and take the meet when a dependency is
 declared twice; package archives carry .ll artifacts
 (§28.1) and the provenance record names them (§34).
+
+v3.12: device access (§49). The `device` provider and its
+verbs reach kernel devices through descriptors that only the
+standard library's lib/dev/ declares; E0260-E0264. The
+provenance record lists the descriptors a binary reaches
+(§34), and a manifest may bound a dependency to named
+descriptors (§21.1, `devices = [...]`).
 
 
 ==================================================
@@ -3325,3 +3346,133 @@ With TLS, every key the cryptography library handles is secret
 at run time (step 2 of PLAN-secret-type.md §7). tests/ct takes
 its cases from the graph and fails when a library function that
 handles a secret has no case (step 3).
+
+
+==================================================
+49. DEVICE ACCESS
+==================================================
+
+A program talks to a kernel device -- an ioctl on a
+character device, a request/response device such as
+/dev/tpmrm0, a configfs report, a sysfs attribute -- through
+the provider `device` (Law 8). It gains no pointer, no file
+descriptor, no raw request number and no path of its own.
+
+--------------------------------------------------
+49.1  Descriptors
+--------------------------------------------------
+
+What a call does is described by a descriptor: a record
+lib/dev/device.resid declares, of one of five kinds:
+
+  IoctlOp         an ioctl: path, request numbers per
+                  target, struct size, fields (Scalar,
+                  Inline, Buffer with a maximum and a
+                  secret flag), interface version
+  Transact        write a command, read a response
+  ReadAttr        read an attribute file
+  ConfigfsReport  the configfs report interface
+  Sequence        ioctl steps on one open file, with Links
+                  from a step's Scalar output to a later
+                  step's Scalar input
+
+Each has a name, a path, a `write` flag (ReadAttr never
+writes) and a stability class (Uapi, AbiTesting,
+OutOfTree). Descriptors are declared only in the standard
+library's lib/dev/ (E0260): a literal of a descriptor type,
+or the `@descriptor` annotation, anywhere else is refused,
+so the kernel interfaces a program can reach are one
+reviewed set of files.
+
+--------------------------------------------------
+49.2  Verbs
+--------------------------------------------------
+
+  device.ioctl(IoctlOp, List(DevIn))
+  device.transact(Transact, List(UInt(8)))
+  device.configfs_report(ConfigfsReport, ReportReq)
+  device.read_attr(ReadAttr)
+  device.sequence(Sequence, List(DevIn))
+
+each give Result(List(DevOut), DeviceError). An input is
+one DevIn (InNum(Int) or InBytes(List(UInt(8)))) per In or
+InOut field, an output one DevOut (OutNum, OutBytes, or
+OutSecret(List(Secret(UInt(8)))) for a Buffer marked
+secret, §48) per Out or InOut field, in field order; a
+Scalar that a Buffer names as its length is the engine's,
+and only a Sequence's last step has outputs. Bytes cross as
+List(UInt(8)), never Bytes(N), which ends at a zero byte. A
+failure is a value: DeviceError says absent, denied, a
+kernel errno, too long, generation changed, unsupported,
+another interface version, an overrun, an unknown driver,
+bad input or a bad reply, each with the descriptor's name.
+Programs usually call the typed wrappers of a device module
+(lib/dev/sev_guest.resid, ...).
+
+A verb needs `device` when its descriptor's `write` is
+true, else device(readonly) covers it. The checker reads
+`write` from the literal the argument names before
+reduction (a call of a zero-argument function whose body
+returns the literal, or the literal itself); a descriptor
+it cannot read that way counts as a write. `device` is the
+provider in every scope: a binding or function of that name
+is refused.
+
+--------------------------------------------------
+49.3  Checks
+--------------------------------------------------
+
+A verb is an effect (Laws 2 and 10): it is never reduced,
+whatever its arguments. Its descriptor must be known after
+reduction (Laws 1 and 5, E0262), and is then checked:
+
+  E0263  the request number's _IOC size equals the struct
+         size and its direction bits cover the fields (data
+         to the kernel needs _IOC_WRITE, fields back need
+         _IOC_READ); fields lie inside the struct and
+         apart, version field included; Scalars are 1, 2, 4
+         or 8 bytes; pointer fields are 8-byte aligned;
+         every buffer has a maximum of 1 byte to 16 MiB; a
+         length field is a Scalar of the struct; the path
+         is under /dev/ or /sys/ (a ConfigfsReport's under
+         /sys/kernel/config/) without `..`; the target the
+         program is built for has exactly one request
+         number; the name is lower-case words joined by `.`
+         and `_`.
+  E0264  a Sequence's links go forward, from a Scalar output
+         to a Scalar input of one width, at most one into
+         an input; its steps share its path; only its last
+         step has outputs other than Scalars; a step that
+         writes makes it a write.
+  E0261  a manifest's `devices = [...]` (§21.1) names the
+         descriptors a dependency's code may reach, each
+         entry a descriptor (`sev_guest.snp_get_report`) or
+         a device module (`sev_guest`); reaching another is
+         refused. A dependency's own dependencies get at
+         most its bound, and a dependency declared twice
+         gets the narrowest.
+
+These checks run on the reduced program, so `--profile
+check` (type checking only) does not make them, and
+`--no-reduce` leaves every descriptor unknown.
+
+--------------------------------------------------
+49.4  Execution
+--------------------------------------------------
+
+After the checks each verb calls lib/dev/device.resid's
+engine for it (lib/dev/device_write.resid's for a writing
+descriptor), which validates the inputs against the
+descriptor, serializes descriptor and inputs, and hands
+them to the runtime (resid_device_call, or
+resid_device_call_w for a write: the force-time guard asks
+for `device` or `device!`). The reply is validated against
+the descriptor's maxima as untrusted input. Only the engine
+may call the runtime entry or be called itself (E0260).
+The device host that performs the call in an isolated,
+seccomp-confined child process is PLAN-device-access.md §5;
+until it is built every call is Err(Unsupported).
+
+The provenance record lists the descriptors the program
+reaches (§34); the graph artifact records each verb as an
+effect naming its descriptor.

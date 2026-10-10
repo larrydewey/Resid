@@ -17,7 +17,7 @@ them with:
 
 - **Untrusted library code** compiled into a program: it must not gain
   capabilities (file system, processes, environment, arguments, network,
-  terminal, clock, display, declassify)
+  terminal, clock, device, display, declassify)
   that the program did not grant it, or reach the runtime's memory
   internals at all.
 - **Untrusted package sources** (a registry, a mirror, a copied archive):
@@ -118,6 +118,37 @@ Not guaranteed:
 - **The build tree.** `-rt` still links an arbitrary extra C file without
   checks. It is a builder's flag, and an attacker who can write the build
   tree is out of scope.
+
+## Device access (spec §49)
+
+A program reaches a kernel device only through the `device` provider and a
+descriptor from the standard library's `lib/dev/` (`PLAN-device-access.md`).
+Phase 1 is the compile-time half; the runtime's device host returns
+`Unsupported` for every call until the isolated host (plan §5) is built, so
+the rows below are the guarantees that hold today.
+
+| Guarantee | Enforcement | Tests |
+|---|---|---|
+| A device verb needs the family `device`, checked transitively like any capability and bounded by spawn lists, sandboxes and manifest ceilings; a descriptor whose `write` is true needs the full grant, at compile time and in the force-time guard (`resid_device_call_w` is checked as `device!`). A descriptor whose `write` the checker cannot read before reduction counts as a write. | `gk_prov_family`, `dv_writes` (gcheck), `provider_family_of_line`, `rt_cap_check` | `err_device_ungranted`, `err_device_readonly_write`, `err_device_sandbox`, `err_device_spawn`, `device_sandbox_dropped`, `device_ok` |
+| The set of kernel interfaces a program can reach is the files of the standard library's `lib/dev/`: a descriptor literal or the `@descriptor` annotation anywhere else (a dependency's own `lib/dev/` included: the path is compared with the standard library root), a call of the engine, and a call of the runtime entry `resid_device_call` are refused. | `dv_scan`, `dv_misplaced` (E0260) | `err_device_descriptor_outside`, `err_device_annotation`, `err_device_engine_direct`, `err_device_raw_verb` |
+| A descriptor is known at compile time (Laws 1 and 5): one chosen or computed at run time is refused after reduction. | `gx_dev_mcall` (renders it), `dv_known` (E0262) | `err_device_descriptor_residual`, `tests/device` (`e0262_lib_residual`) |
+| A device verb is an effect: never evaluated at compile time, whatever its arguments. | `gx_dev_mcall` returns a residual | `device_never_folded` |
+| A descriptor's layout is consistent with its request number (`_IOC_SIZE` and direction bits), its fields lie inside the struct and apart, pointer fields are 8-byte aligned, buffers have a maximum (at most 16 MiB), length fields are Scalars, the path is under `/dev/` or `/sys/` without `..`, and the build's target has exactly one request number. A Sequence's links go forward from a Scalar output to a Scalar input of one width, and only its last step has outputs. | `dv_check` (E0263, E0264) | `tests/device` (one case per rule) |
+| A manifest's `devices = [...]` bounds the descriptors a dependency's code reaches; a dependency's own dependencies get at most its bound, and a second declaration narrows it. | `dv_bounds` (E0261), `devices_over`, `meet_devices` (resid-manifest) | `tests/pkg` (`pkg_device_ceiling`) |
+| No pointer, file descriptor, request number or path reaches the program: inputs and outputs are values (`List(UInt(8))`, `Int`), and a buffer marked secret comes back as `List(Secret(UInt(8)))`. The engine checks every input against the descriptor before the request is built, and the reply against the descriptor's maxima. | `lib/dev/device.resid` (`dv_check_ins`, `dv_reply`) | `device_verb_direct`, `device_ok` |
+| The signed provenance record lists every descriptor the program reaches (name, path, verb, request number, stability class), and the graph records each verb as an effect naming its descriptor. | `dv_records`, `prov_payload` `devices`, `ga_effect` | `tests/provenance` (`device_in_provenance`, `device_stability_in_provenance`) |
+
+Not guaranteed (phase 1):
+
+- **Isolation of the call.** The device host of plan §5 (fresh process,
+  seccomp filter allowing only the descriptor's operation, guard pages,
+  Landlock for configfs) is not built; every call is `Unsupported`.
+- **Agreement with the kernel's headers.** Descriptors in `lib/dev/` are
+  written by hand in this phase; `tools/resid-devgen` and the kernel matrix
+  that check them against the uapi headers are later phases.
+- **Checks under `--profile check` or `--no-reduce`.** E0261-E0264 run on
+  the reduced program, so a type-check-only run does not make them and
+  `--no-reduce` leaves every descriptor unknown (E0262).
 
 ## Memory safety
 

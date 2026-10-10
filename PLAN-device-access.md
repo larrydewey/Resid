@@ -3,6 +3,84 @@
 **Status: ACCEPTED (2026-10-09).** Open questions 1, 2 and 4 settled (§7); question 3 is decided during implementation. Depends on
 PLAN-secret-type.md for descriptors that return key material.
 
+**Progress.** Phase 1, the compile-time half, is in (2026-10-09; spec §49,
+`SECURITY.md` "Device access"): the `device` family with `readonly` and
+full modes (E0219, spawn lists, sandboxes, manifest grants, the force-time
+guard as `device` / `device!`); the descriptor types in
+`lib/dev/device.resid` (`Dir`, `Field`, `IoctlOp`, `Transact`, `ReadAttr`,
+`ConfigfsReport`, `Sequence`, `Link`, per-target `Request`s, the interface
+version, the stability class, `DeviceError`); the five verbs, typed and
+lowered to the engine in `lib/dev/` and from it to one runtime entry
+(`resid_device_call`, `resid_device_call_w`), which answers `Unsupported`
+until phase 2's host; E0260-E0264 (`compiler/gcheck.resid`,
+`compiler/device.resid`); manifest bounds `devices = [...]`
+(`tools/resid-manifest.resid`); descriptors in the graph artifact and the
+provenance record (`devices`), shown by `residc verify`; the sample
+`lib/dev/sev_guest.resid` (SNP_GET_REPORT) and
+`lib/dev/sev_guest_key.resid` (SNP_GET_DERIVED_KEY). Tests: 14
+conformance cases (`device_*`, `err_device_*`), `tests/device` (25: one per
+E0263/E0264 rule against a private standard library), `tests/pkg`
+(`pkg_device_ceiling`), `tests/provenance` (`device_in_provenance`,
+`device_stability_in_provenance`).
+
+As built, compared with the text below:
+
+- **Bytes.** The plan's `Bytes` / `Bytes(N)` (§2, §3) are NUL-terminated
+  in Resid (spec §44), so they cannot carry device buffers and their
+  length check would branch on secret bytes. Buffers cross as
+  `List(UInt(8))`, secret ones as `List(Secret(UInt(8)))` (the
+  `lib/word.resid` convention); fixed-size inputs are `List(UInt(8))`
+  checked against the descriptor's length.
+- **Shapes.** `Scalar` and `Inline` carry a direction
+  (`Scalar(offset, width, dir)`), which E0263's direction-bit rule and
+  E0264's output/input rule need. `IoctlOp` has `requests: List(Request)`
+  (one per target) for `request`, plus `version: IfaceVersion` and
+  `stability: Stability`. A Resid variant cannot share its sum type's
+  name, so `Link` is a record with a constructor function `link(...)`.
+  Every verb returns `Result(List(DevOut), DeviceError)`, outputs in field
+  order (`OutNum`, `OutBytes`, `OutSecret`); inputs are `List(DevIn)`
+  (`InNum`, `InBytes`). The Sequence verb is `device.sequence(op, args)`.
+- **Who may call a verb.** Any code, with a descriptor from `lib/dev/`
+  (§3): E0260 refuses a descriptor literal or `@descriptor` outside the
+  standard library's `lib/dev/` (by the resolved path, so a dependency's
+  own `lib/dev/` does not count), a call of the engine, and a call of the
+  runtime entry. Descriptor types are found by their `@descriptor(kind)`
+  annotation, not their names.
+- **Read or write.** The checker reads `write` before reduction from the
+  literal the descriptor argument names (a zero-argument function returning
+  the literal); otherwise it assumes a write. The engine is split in two
+  modules, `device.resid` (reads) and `device_write.resid` (writes): a
+  module is compiled inside its importer's ceiling, so a dependency granted
+  `device(readonly)` can import only modules without a writing descriptor.
+  That is why SNP_GET_DERIVED_KEY is `sev_guest_key.resid`.
+- **E0261 names.** A bound entry is a descriptor name
+  (`sev_guest.snp_get_report`) or a device module prefix (`sev_guest`).
+  Descriptor names are `<module>.<op>`.
+- **Reduction.** Records have no literal form in the reducer, so a device
+  verb's known descriptor is written out by `gx_render_full`; and since
+  code inside a sandbox (an attenuated import, a dependency under its
+  ceiling) was not reduced at all, a sandboxed function holding a device
+  verb now is, and sandboxed declarations are known to the evaluator
+  (never specialized, so no copy escapes its sandbox).
+- **Not checked by `--profile check`.** E0261-E0264 run on the reduced
+  program, before lowering.
+- **Open question 3 (decided): no descriptor list in `residc --version`.**
+  The compiler holds no descriptor: the set is the standard library's
+  `lib/dev/` files, versioned with the library and hashed into every
+  provenance record's `sources`. What an auditor needs is per binary --
+  `residc verify` prints the descriptors it reaches, with their stability
+  classes -- and per toolchain the directory itself, which a listing in
+  `--version` could only restate and could drift from.
+
+Phase 2 needs from this: `runtime/rt/device.resid`'s two entries take the
+request `lib/dev/device.resid` documents (magic `RDV`, kind, write, name,
+path, the kind's own part, inputs) and answer the reply it documents (0 +
+outputs, or 1 + error code + value); the host must re-check the layout
+itself (it is not the compiler), choose the request number for
+`resid_raw_arch()`, set the interface version and check it after the
+call, and treat `resid_device_call` as read-only (refuse a request whose
+write byte is 1). The provenance and graph records are already there.
+
 **Goal**: let a Resid program talk to kernel devices (ioctls on character
 devices, request/response devices such as `/dev/tpmrm0`, and configfs
 interfaces such as `/sys/kernel/config/tsm/report`) through **one generic

@@ -23,6 +23,7 @@ therefore enters a program only at `main` or a `test` block.
 | `network` | the TCP builtins |
 | `terminal` | the terminal builtins (`resid_term_*`) and `lib/readline.resid` |
 | `clock` | the `clock` provider and `lib/clock.resid` |
+| `device` | the `device` provider: kernel devices through descriptors from `lib/dev/` ([device access](/Resid/reference/devices/)) |
 | `display` | the display builtins (`resid_disp_*`): the window-server connection, its bytes and descriptors, shared memory and waiting (no modes) |
 | `native_<m>` | calls into [native module](/Resid/reference/native-modules/) `m` (no modes) |
 | `declassify` | `declassify(s, "reason")`: publishing a [secret value](/Resid/reference/secrets/) (no modes); each call is recorded on the graph with its reason |
@@ -34,7 +35,8 @@ Printing, reading stdin and OS randomness need no capability.
 `@requires` entries take the same modes as sandboxes: `readonly` or
 `readwrite` (the default). A read-only grant does not cover a write
 (filesystem write verbs, `process.run`, terminal raw mode, `clock.sleep_ns`,
-and a listener bound to an address other than loopback). An unknown family
+a listener bound to an address other than loopback, and a device descriptor
+whose `write` is true). An unknown family
 or mode is an error (`E0213`).
 
 `network(readonly)` covers connecting out, listening on 127.0.0.1,
@@ -116,6 +118,19 @@ keep a ceiling a ceiling:
   dependency's) gets the meet of the ceilings, the narrowest per family,
   and every pinned key either declaration names must verify.
 
+A dependency granted `device` can also be bounded to named device
+descriptors, by descriptor or by device module:
+
+```text
+[dependencies.attest]
+path = "vendor/attest"
+capabilities = ["device(readonly)"]
+devices = ["sev_guest", "tsm_report.report"]
+```
+
+Its code reaching any other descriptor is `E0261`; its own dependencies'
+bounds must fit inside this one, and a second declaration narrows it.
+
 ## Diagnostics
 
 | Code | Meaning |
@@ -129,3 +144,4 @@ keep a ceiling a ceiling:
 | `E0216` | an attenuated import after the module was imported without attenuation |
 | `E0218` | a provider call in a restricted region uses a family outside it |
 | `E0220` | a compiler-internal primitive used outside the compiler's own sources |
+| `E0260`–`E0264` | [device access](/Resid/reference/devices/): descriptors outside `lib/dev/`, a dependency's `devices` bound, unknown descriptors, inconsistent layouts, Sequence links |
