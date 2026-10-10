@@ -5469,7 +5469,7 @@ GKT sec_cast(GK k, Int id, Str to, Str from0) {
 
 // The name of the type lib/dev/device.resid declares with
 // `@descriptor(role)`, or "" when no such module is imported.
-Str dv_role_ty(Kg g, Str role) { return dv_role_at(g, "@descriptor(" + role + ")", 0); }
+pub Str dv_role_ty(Kg g, Str role) { return dv_role_at(g, "@descriptor(" + role + ")", 0); }
 
 Str dv_role_at(Kg g, Str tag, Int i) {
     if (i >= g.ns.len()) { return ""; }
@@ -5589,19 +5589,24 @@ Bool dv_call_cand(GK k, Int id, KN n) {
     return d >= 0 && k.g.ns[d].kind == "fn" && str_contains(k.g.ns[d].aux, "@descriptor(engine");
 }
 
-// `device` names the provider everywhere: a binding or function of that
-// name would make `device.ioctl(...)` mean something else.
+// `device` names the provider everywhere: a binding, function, type or
+// variant of that name would make `device.ioctl(...)` mean something else.
+// A pattern (`if (Some(device) = x)`, `Some(device) = x;`) keeps its
+// variant in `text` and binds the name in `aux`.
 Bool dv_rebinds(KN n) {
-    if (n.text != "device") { return false; }
     Str kd = n.kind;
-    return kd == "param" || kd == "bind" || kd == "rbind" || kd == "lparam" || kd == "for" || kd == "name" || kd == "fn" || kd == "letpat" || kd == "pat";
+    if (kd == "pat" || kd == "letpat") { return n.aux == "device"; }
+    if (n.text != "device") { return false; }
+    Bool local = kd == "param" || kd == "bind" || kd == "rbind" || kd == "lparam" || kd == "for" || kd == "name";
+    Bool decl = kd == "fn" || kd == "struct_t" || kd == "sum_t" || kd == "alias_t" || kd == "ctype_t" || kd == "cwhere_t" || kd == "variant" || kd == "behavior" || kd == "bdecl" || kd == "proto";
+    return local || decl;
 }
 
 // Every node is looked at, so the test for one worth a closer look reads
 // the node's fields in place (binding the whole node would copy it).
 Bool dv_scan(GK k, Int id, List(Int) nls, Str src, Str smap, Str stddev, Bool acc) {
     if (id >= k.g.ns.len()) { return acc; }
-    Bool cand = str_contains(k.g.ns[id].aux, "@descriptor") || k.g.ns[id].text == "device" || (k.g.ns[id].kind == "struct" && dv_struct_cand(k, k.g.ns[id])) || ((k.g.ns[id].kind == "call" || k.g.ns[id].kind == "ref") && dv_call_cand(k, id, k.g.ns[id]));
+    Bool cand = str_contains(k.g.ns[id].aux, "@descriptor") || k.g.ns[id].text == "device" || k.g.ns[id].aux == "device" || (k.g.ns[id].kind == "struct" && dv_struct_cand(k, k.g.ns[id])) || ((k.g.ns[id].kind == "call" || k.g.ns[id].kind == "ref") && dv_call_cand(k, id, k.g.ns[id]));
     if (!cand) { return dv_scan(k, id + 1, nls, src, smap, stddev, acc); }
     KN n = k.g.ns[id];
     Bool bad = if (!cand) { false } else {

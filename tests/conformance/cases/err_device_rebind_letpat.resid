@@ -1,0 +1,8 @@
+// A pattern statement binds its name like `Int device = ...` does
+// (spec §49: `device` names the provider in every scope).
+Int main() {
+    Option(Int) o = Some(rt 3);
+    Some(device) = o;
+    println(f"{device}");
+    return 0;
+}

@@ -280,12 +280,21 @@ pub RS kg_resolve(Kg g, Int unit) {
     return RS {.pairs = none, .def = dense, .unres = r.unres, .uses = r.uses, .shadow = r.shadow};
 }
 
-// Sorted edge pairs to one def entry per node id.
+// Sorted edge pairs to one def entry per node id. A reduced graph shares
+// subtrees, so one use can be walked twice and have two pairs: the last
+// (largest def) is kept, which prefers a declaration over the builtin
+// prelude (-2), and every pair of the id is consumed.
 List(Int) rs_dense(List(Int) ps, Int i, Int id, Int n, ListBuf(Int) acc) {
     if (id >= n) { return acc.finish(); }
-    Bool hit = i < ps.len() && ps[i] / 4294967296 == id;
-    Int d = if (hit) { ps[i] % 4294967296 - 2 } else { -1 };
-    return rs_dense(ps, if (hit) { i + 1 } else { i }, id + 1, n, acc.push(d));
+    Int j = rs_dense_end(ps, i, id);
+    Int d = if (j > i) { ps[j - 1] % 4294967296 - 2 } else { -1 };
+    return rs_dense(ps, j, id + 1, n, acc.push(d));
+}
+
+// The index past the pairs of use `id` starting at i.
+Int rs_dense_end(List(Int) ps, Int i, Int id) {
+    if (i >= ps.len() || ps[i] / 4294967296 != id) { return i; }
+    return rs_dense_end(ps, i + 1, id);
 }
 
 // The def edge of a use, -1 when unresolved or not a use.
