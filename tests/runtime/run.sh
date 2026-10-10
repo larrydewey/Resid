@@ -6,7 +6,7 @@
 # must not use any compiler internal.
 set -uo pipefail
 cd "$(dirname "$0")"
-W="$(mktemp -d)"; trap 'echo "Preserving $W" >trap 'rm -rf "$W"' EXIT2; ls -la $W' EXIT
+W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT
 pass=0; fail=0
 ROOT="$(cd ../.. && pwd)"
 for t in *.c; do
@@ -60,30 +60,17 @@ if [ "$nat_ok" = 1 ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FA
 # The display transport (runtime/rt/unix.resid): a Unix socket pair, bytes
 # and descriptors over it, a shared mapping through its handle, and the
 # same descriptors pollable under `display` alone.
-echo "DEBUG: starting display transport test, cwd=$(pwd)" >&2
 if (cd "$ROOT" && "$COMPILER" tests/runtime/display.resid -o "$W/display") > "$W/display.log" 2>&1; then
-    echo "DEBUG: compile ok, W=$W" >&2
     "$W/display" > "$W/display.out" 2>&1
     run_rc=$?
-    echo "DEBUG: run rc=$run_rc, display.out size=$(wc -c < $W/display.out)" >&2
-    echo "DEBUG: locale stdout=" >&2
-    locale 2>&1; echo "locale rc=$?" >&2
-    echo "DEBUG: ls stdout=" >&2
-    ls -la "$W/display.out" 2>&1; echo "ls rc=$?" >&2
-    echo "DEBUG: file stdout=" >&2
-    file "$W/display.out" 2>&1; echo "file rc=$?" >&2
-    echo "DEBUG: xxd stdout=" >&2
-    xxd "$W/display.out" | head -3 2>&1; echo "xxd rc=$?" >&2
-    echo "DEBUG: expected output (hex):" >&2
-    xxd tests/runtime/display.out | head -3 >&2; echo "xxd expected rc=$?" >&2
     if [ $run_rc -eq 0 ] && cmp -s "$W/display.out" display.out; then
         pass=$((pass + 1))
     else
-        fail=$((fail + 1)); echo "FAIL display transport: $(grep -m1 -i error "$W/display.log") $(diff "$W/display.out" tests/runtime/display.out 2>/dev/null | head -3 | tr '
+        fail=$((fail + 1)); echo "FAIL display transport: $(grep -m1 -i error "$W/display.log") $(diff "$W/display.out" display.out 2>/dev/null | head -3 | tr '
 ' ' ')"
     fi
 else
-    fail=$((fail + 1)); echo "FAIL display transport: $(grep -m1 -i error "$W/display.log") $(diff "$W/display.out" tests/runtime/display.out 2>/dev/null | head -3 | tr '
+    fail=$((fail + 1)); echo "FAIL display transport: $(grep -m1 -i error "$W/display.log") $(diff "$W/display.out" display.out 2>/dev/null | head -3 | tr '
 ' ' ')"
 fi
 # With no display named in the environment, connecting is refused rather
