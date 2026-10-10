@@ -160,6 +160,22 @@ pub Int rt_fx_stage(Int t, Int v, Int slot, Int n, Int text) {
 @export("resid_fixed_text", "ptr(ptr,i64)")
 pub Int rt_fixed_text(Int p, Int cap) { return cstr_from(p, nul_at(p, 0, cap), 1); }
 
+// Bytes(N) -> Bytes / Str: the same, but a Bytes(N) holds exactly N
+// bytes, so a non-zero byte after a zero one would be dropped by the
+// heap form, which ends at its first zero; that aborts instead.
+@export("resid_fixed_bytes", "ptr(ptr,i64)")
+pub Int rt_fixed_bytes(Int p, Int cap) {
+    Int n = nul_at(p, 0, cap);
+    if (!zero_from(p, n, cap)) { return rt_abort_at(resid_raw_addr("Bytes(N) conversion: a zero byte inside the content would cut it short (a heap Bytes ends at its first zero byte)")); }
+    return cstr_from(p, n, 1);
+}
+
+Bool zero_from(Int p, Int i, Int cap) {
+    if (i >= cap) { return true; }
+    if (ld8(p + i) != 0) { return false; }
+    return zero_from(p, i + 1, cap);
+}
+
 Int nul_at(Int p, Int i, Int cap) {
     if (i >= cap || ld8(p + i) == 0) { return i; }
     return nul_at(p, i + 1, cap);

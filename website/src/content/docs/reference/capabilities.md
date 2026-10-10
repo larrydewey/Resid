@@ -95,6 +95,13 @@ the binding can hold nothing else: `spawn () { return f(1); }` above is
 `E0214`. A closure reached any other way (passed to a function, kept in a
 record) is checked when it runs.
 
+The abort names the family: `capability not granted: filesystem`, with
+` (write)` added when a write was refused under a read-only grant
+(`filesystem(readonly)`, `clock(readonly)`, ...). A mode-less family
+(`display`, `declassify`, `native_<m>`) is named alone. Compile-time
+diagnostics spell capability lists as source does, e.g.
+`[clock(readonly), network(readonly)]`.
+
 ## Manifests
 
 A project manifest (`resid.toml`) caps what each dependency may receive:

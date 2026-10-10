@@ -1249,9 +1249,17 @@ GKT gk_expr0(GK k, Int id, Str exp) {
     return gterr(k, "unexpected expression " + kind, id);
 }
 
-GKT gk_lit(GK k, Int id, Str exp) {
+GKT gk_lit(GK k, Int id, Str exp) { return gk_lit_n(k, id, exp, false); }
+
+// An integer literal given an integer type by its context (a binding, an
+// `rt`, a list element, an argument, a return) must fit that type, in
+// every base: lowering emits the value at the type's width, so one that
+// does not fit would wrap. `neg`: the literal is under a unary minus.
+GKT gk_lit_n(GK k, Int id, Str exp, Bool neg) {
     Str lk = k.g.ns[id].aux;
     Str t = k.g.ns[id].text;
+    Str ie = if (lk == "int" && is_int_ty(exp) && !gm_has_var(exp)) { lit_range_err(t, neg, num_norm(exp)) } else { "" };
+    if (lk == "int" && ie != "") { return gterr(k, ie, id); }
     if (lk == "int") { return gt(k, if (is_int_ty(exp)) { num_norm(exp) } else { "Int" }, id); }
     if (lk == "float") { return gt(k, if (is_float_ty(exp)) { num_norm(exp) } else { "Float" }, id); }
     if (lk == "dec") { return gt(k, "Dec(34)", id); }
@@ -1266,7 +1274,10 @@ GKT gk_lit(GK k, Int id, Str exp) {
         return gterr(k, what + f"{len} bytes, exceeds Str({cap}) capacity", id);
     }
     if (lk == "bytes") {
-        if (!is_bytes_fixed(exp)) { return gt(k, "Bytes", id); }
+        if (!is_bytes_fixed(exp)) {
+            if (bytes_literal_has_zero(t)) { return gterr(k, "a Bytes value ends at its first zero byte, so this literal would be cut short there: use a Bytes(N) (which holds exactly N bytes) or a List(UInt(8))", id); }
+            return gt(k, "Bytes", id);
+        }
         Int cap = fixed_cap(exp);
         Int len = bytes_literal_len(t);
         if (len <= cap) { return gt(k, exp, id); }
@@ -2032,7 +2043,9 @@ GKT gk_set(GK k, Int id, Int i, Str elem, Str want) {
 
 GKT gk_un(GK k0, Int id) {
     Str op = k0.g.ns[id].text;
-    GKT e = gk_expr(k0, gk_kid(k0, id, 0), "");
+    Int kid = gk_kid(k0, id, 0);
+    Bool nlit = op == "-" && k0.g.ns[kid].kind == "lit" && k0.g.ns[kid].aux == "int";
+    GKT e = if (nlit) { gk_lit_n(k0, kid, "", true) } else { gk_expr(k0, kid, "") };
     if (e.err != "") { return e; }
     GK k = e.k;
     if (gv_is(e.ty)) {
@@ -2056,6 +2069,13 @@ GKT gk_cast(GK k0, Int id) {
     Str to = k0.g.ns[gk_kid(k0, id, 0)].text;
     GKT e = gk_expr(k0, gk_kid(k0, id, 1), "");
     if (e.err != "") { return e; }
+    // A cast of an integer literal (under parentheses, minus signs or
+    // `rt`) to an integer type is checked here: a literal that does not
+    // fit would otherwise wrap, or abort at run time.
+    Int lc = gk_cast_lit(k0.g, gk_kid(k0, id, 1));
+    Bool lneg = lc >= 0 && gv_lit_neg(k0.g, gk_cast_unrt(k0.g, gk_kid(k0, id, 1)));
+    Str lerr = if (lc >= 0 && is_int_ty(to) && !gm_has_var(to)) { lit_range_err(k0.g.ns[lc].text, lneg, num_norm(to)) } else { "" };
+    if (lerr != "") { return gterr(e.k, lerr, id); }
     if (sec_is(e.ty)) { return sec_cast(e.k, id, to, e.ty); }
     Bool bothint = is_int_ty(to) && is_int_ty(e.ty);
     Bool bothnum = is_num(to) && is_num(e.ty) && !is_dec_ty(to) && !is_dec_ty(e.ty);
@@ -2063,6 +2083,20 @@ GKT gk_cast(GK k0, Int id) {
     Bool vcast = gv_is(to) && gv_is(e.ty) && gv_type_err(to, false) == "" && gv_cast_ok(e.ty, to);
     if (bothint || bothnum || todec || vcast || ty_same(to, e.ty) || is_fixed_cast_pair(e.ty, to)) { return gt(e.k, to, id); }
     return gterr(e.k, "cast from " + e.ty + " to " + to + " not supported", id);
+}
+
+// The node under any `rt` wrappers.
+Int gk_cast_unrt(Kg g, Int n) {
+    if (g.ns[n].kind == "rt" && g.ns[n].nk == 1) { return gk_cast_unrt(g, kg_kid(g, n, 0)); }
+    return n;
+}
+
+// The integer literal a cast operand is (through `rt`, parentheses and
+// minus signs), or -1.
+Int gk_cast_lit(Kg g, Int n) {
+    Int c = gv_lit_core(g, gk_cast_unrt(g, n));
+    if (c < 0) { return -1; }
+    return if (g.ns[c].aux == "int") { c } else { -1 };
 }
 
 GKT gk_bin(GK k0, Int id, Str exp) {
@@ -2082,8 +2116,11 @@ GKT gk_bin(GK k0, Int id, Str exp) {
     Str lty = if (lhs_lit && !rhs_lit && !shift && is_int_ty(rt.ty)) { rt.ty } else { lt.ty };
     Str rty = if (rhs_lit && !lhs_lit && !shift && is_int_ty(lt.ty)) { lt.ty } else { rt.ty };
     // An adopted literal must fit the type it adopts (spec §6.1a).
-    Str lfit = if (lhs_lit && lty != lt.ty && gk_bare_int(g, l) && !gm_has_var(lty)) { lit_range_err(g.ns[l].text, false, num_norm(lty)) } else { "" };
-    Str rfit = if (rhs_lit && rty != rt.ty && !gm_has_var(rty)) { lit_range_err(g.ns[r].text, false, num_norm(rty)) } else { "" };
+    // So must one that keeps the other operand's type: it is emitted at
+    // that width and would wrap.
+    Str rfty = if (rhs_lit && !shift && is_int_ty(lt.ty)) { lt.ty } else { rty };
+    Str lfit = if (lhs_lit && gk_bare_int(g, l) && is_int_ty(lty) && !gm_has_var(lty)) { lit_range_err(g.ns[l].text, false, num_norm(lty)) } else { "" };
+    Str rfit = if (rhs_lit && is_int_ty(rfty) && !gm_has_var(rfty)) { lit_range_err(g.ns[r].text, false, num_norm(rfty)) } else { "" };
     if (lfit != "") { return gterr(k, lfit, id); }
     if (rfit != "") { return gterr(k, rfit, id); }
     if (gm_has_var(lty) || gm_has_var(rty)) { return gm_bin(k, id, op, lty, rty, l, r, lt.ty, rt.ty); }
@@ -3289,14 +3326,14 @@ GKS gk_bindst(GK k, Int id) {
     Str nb = if (nb0 == "") { gv_type_err(ty, false) } else { nb0 };
     if (nb != "") { return gs_err(k, nb, id); }
     Int ve = kg_kid(g, id, g.ns[id].nk - 1);
-    GKT v = gk_expr(k, ve, ty);
-    if (v.err != "") { return gs_of(v); }
     Str ety = ct_base_of(k.fs.ctn, k.fs.ctb, ty);
     Str whole = gk_whole_lit(g, ve);
     Bool neg = str_has_prefix(whole, "-");
     Str digits = if (neg) { str_slice(whole, 1, str_len(whole)) } else { whole };
     Str lrerr = if (whole != "" && is_int_ty(ety) && !gm_has_var(ety)) { lit_range_err(digits, neg, num_norm(ety)) } else { "" };
-    if (lrerr != "") { return gs_err(v.k, "binding " + name + ": " + lrerr, id); }
+    if (lrerr != "") { return gs_err(k, "binding " + name + ": " + lrerr, id); }
+    GKT v = gk_expr(k, ve, ty);
+    if (v.err != "") { return gs_of(v); }
     if (is_int_ty(ety) && is_int_ty(v.ty) && !int_adopt_ok(v.ty, num_norm(ety), whole)) {
         return gs_err(v.k, "binding " + name + ": implicit narrowing from " + v.ty + " to " + ty + " requires an explicit cast", id);
     }
@@ -4422,7 +4459,7 @@ Str gk_enforce_func(GK k, List(Int) fnode, List(Str) eff, List(GKF) facts, Int f
     Str reqcsv = fs.reqs[fi];
     if (ceiling != "" && reqcsv != "") {
         Str missing = first_missing_req(reqcsv, ceiling);
-        if (missing != "") { return "function `" + fname + "` requires capability `" + missing + "` which exceeds the effective capability ceiling [" + fmt_caps(ceiling) + "]"; }
+        if (missing != "") { return "function `" + fname + "` requires capability `" + cap_spell(missing) + "` which exceeds the effective capability ceiling [" + fmt_caps(ceiling) + "]"; }
     }
     Str effc = eff[fi];
     List(Str) none = [];
@@ -4456,7 +4493,7 @@ Str gk_spawn_scan(GK k, Int id, Bool bounded, Str parent, Bool insp) {
         if (caps.err != "") { return ""; }
         if (bounded) {
             Str over = if (caps.ty == "") { "" } else { spawn_cap_exceeds_at(str_split(caps.ty, ","), parent, 0) };
-            if (over != "") { return "error[E0214]: spawn declares capability `" + over + "` which exceeds the parent's capability ceiling [" + fmt_caps(parent) + "] (child ≤ parent)"; }
+            if (over != "") { return "error[E0214]: spawn declares capability `" + cap_spell(over) + "` which exceeds the parent's capability ceiling [" + fmt_caps(parent) + "] (child ≤ parent)"; }
         }
         return gk_spawn_kids(k, id, 0, true, caps.ty, true);
     }
@@ -4589,10 +4626,11 @@ Str gk_need_via(Sigs fs, List(Str) need, List(Str) decl, List(Str) cs, Int j, St
     return gk_need_via(fs, need, decl, cs, j + 1, e);
 }
 
-// A need as @requires spells it (filesystem, terminal, clock and device
-// grants have modes).
+// A need as @requires spells it (filesystem, terminal, clock, network and
+// device grants have modes; a read of the others is the whole family).
 Str cap_show(Str e) {
-    if (cap_readonly(e) && (cap_family(e) == "filesystem" || cap_family(e) == "terminal" || cap_family(e) == "clock" || cap_family(e) == "device")) { return cap_family(e) + "(readonly)"; }
+    Str f = cap_family(e);
+    if (cap_readonly(e) && (f == "filesystem" || f == "terminal" || f == "clock" || f == "network" || f == "device")) { return f + "(readonly)"; }
     return cap_family(e);
 }
 
@@ -4867,14 +4905,16 @@ Bool gm_unknown_types(Kg g, Int id, Map(Str, Int) known, Str src, Str smap, Bool
     Str u = if (g.ns[id].kind == "ty") { gm_unknown_in(g.ns[id].text, 0, known) } else { "" };
     Str sk = if (g.ns[id].kind == "ty" && u == "") { sec_key_err(g.ns[id].text) } else { "" };
     if (sk != "") { gk_diag("E0253", sk, g, id, src, smap); }
-    Str sw = if (g.ns[id].kind == "ty" && u == "" && sk == "") { sec_wide_err(g.ns[id].text) } else { "" };
+    Str sb = if (g.ns[id].kind == "ty" && u == "" && sk == "") { sec_bytes_err(g.ns[id].text) } else { "" };
+    if (sb != "") { gk_diag("E0253", sb, g, id, src, smap); }
+    Str sw = if (g.ns[id].kind == "ty" && u == "" && sk == "" && sb == "") { sec_wide_err(g.ns[id].text) } else { "" };
     if (sw != "") { gk_diag("E0258", sw, g, id, src, smap); }
     Bool rsv = (g.ns[id].kind == "fn" || g.ns[id].kind == "proto") && sec_reserved(g.ns[id].text);
     if (rsv) { gk_diag("E0259", "`" + g.ns[id].text + "` is a builtin of secret values (spec §48) and cannot be redefined: a function by that name would replace it in every module, libraries included", g, id, src, smap); }
     Str near = if (u == "") { "" } else { gm_near(known.keys(), 0, u) };
     Str hint = if (near != "") { " (did you mean `" + near + "`?)" } else { "; a type parameter is a single uppercase letter (T, K, V)" };
     if (u != "") { gk_diag("E0001", "type error: unknown type `" + u + "`" + hint, g, id, src, smap); }
-    return gm_unknown_types(g, id + 1, known, src, smap, acc || u != "" || sk != "" || sw != "" || rsv);
+    return gm_unknown_types(g, id + 1, known, src, smap, acc || u != "" || sk != "" || sb != "" || sw != "" || rsv);
 }
 
 // ─── Ambiguous imports (E0223) ──────────────────────────────────────
@@ -5054,6 +5094,7 @@ Str sec_wrap_err(GK k, Str t) {
     if (h == "Option" || h == "Result") { return "a secret cannot wrap " + h + ": whether it holds a value is control flow; use " + h + "(Secret(...)) instead"; }
     if (h == "Map" || h == "Set") { return "a secret cannot wrap a " + h + ": its keys decide where lookups go"; }
     if (h == "File" || is_fn_type(t)) { return "a secret cannot wrap a " + h; }
+    if (h == "Bytes") { return sec_bytes_msg(t); }
     if (sumtype_index(k.fs, t) >= 0) { return "a secret cannot wrap the sum type " + t + ": its variant is control flow"; }
     return "";
 }
@@ -5352,6 +5393,25 @@ Str sec_key_err(Str t) {
     return "";
 }
 
+// E0253 in a written or inferred type: a secret Bytes or Bytes(N), or "".
+// A heap Bytes' length is found by scanning for its zero byte, and its
+// conversions stop at one, so its timing and its value depend on the
+// bytes; secret byte strings are List(Secret(UInt(8))).
+Str sec_bytes_err(Str t) { return sec_bytes_at(t, 0); }
+
+Str sec_bytes_at(Str t, Int from) {
+    Int at = sec_find_head(t, "Secret(", from);
+    if (at < 0) { return ""; }
+    Str in = str_trim(str_slice(t, at + 7, str_len(t)));
+    Bool hit = str_starts_with(in, "Bytes") && (str_starts_with(in, "Bytes)") || str_starts_with(in, "Bytes("));
+    if (hit) { return sec_bytes_msg(str_slice(in, 0, imp_close_paren(in, 0, 0) - 1)); }
+    return sec_bytes_at(t, at + 7);
+}
+
+Str sec_bytes_msg(Str t) {
+    return "a secret cannot wrap " + t + ": a byte string's length and conversions scan for a zero byte, a branch on the secret; use List(Secret(UInt(8)))";
+}
+
 // The first `h` (e.g. "Map(") at a word start in t, from `from`, or -1.
 Int sec_find_head(Str t, Str h, Int from) {
     Int rel = str_find(str_slice(t, from, str_len(t)), h);
@@ -5447,6 +5507,11 @@ Bool sec_wide_int(Str t) {
 Bool sec_wide_scan(GK k, List(Int) keys, List(Str) tys, Int i, Str src, Str smap) {
     if (i >= keys.len()) { return false; }
     Str t = tys[keys[i] % 4294967296];
+    Str eb = if (str_contains(t, "Secret(")) { sec_bytes_err(t) } else { "" };
+    if (eb != "") {
+        gk_diag("E0253", eb, k.g, keys[i] / 4294967296, src, smap);
+        return true;
+    }
     Str e = if (str_contains(t, "Secret(")) { sec_wide_err(t) } else { "" };
     if (e != "") {
         gk_diag("E0258", e, k.g, keys[i] / 4294967296, src, smap);

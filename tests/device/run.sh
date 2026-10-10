@@ -128,10 +128,27 @@ if [ "$#" -eq 0 ] || [[ " $* " == *" device_hook_exact "* ]]; then
         echo "FAIL device_hook_exact: exit $rc, device program hooks $nd, plain program $np ($(grep -m1 -i error "$P/c.log"))"; fail=$((fail + 1))
     fi
 fi
+# A program in secret mode (not dumpable, runtime/rt/malloc.resid) still
+# reaches its devices: device_secret_out is such a program (its main
+# switches the mode on) and its calls work -- where the Yama ptrace policy
+# is 1 or more; without it a secret program's host calls are refused
+# (tests/runtime/device_host.c's device_secret_mode_yama_gate), and this
+# check is skipped.
+if [ "$#" -eq 0 ] || { [[ " $* " == *" device_secret_mode_host "* ]] && [ -d "$WORK/device_secret_out" ]; }; then
+    scope="$(cat /proc/sys/kernel/yama/ptrace_scope 2>/dev/null)"
+    if [ -z "$scope" ] || [ "$scope" = 0 ]; then
+        echo "SKIP device_secret_mode_host (no Yama ptrace policy here)"; skip=$((skip + 1))
+    elif grep -q 'call i8 @resid_secret_mode_set(i1 true)' "$WORK/device_secret_out/bin.ll" 2>/dev/null && cmp -s "$WORK/device_secret_out/out" "$CASES/device_secret_out.out"; then
+        echo "PASS device_secret_mode_host"; pass=$((pass + 1))
+    else
+        echo "FAIL device_secret_mode_host: device_secret_out is not in secret mode, or its output differs"; fail=$((fail + 1))
+    fi
+fi
 # The C harness's entries into the runtime's self-tests
-# (resid_device_host_test, resid_device_test_parent; the only writers of a
-# self-test mode, a fake configfs root or a test deadline) are named by no
-# compiler and are not in a device program's binary: the link drops them,
+# (resid_device_host_test, resid_device_test_parent, resid_host_test_yama;
+# the only writers of a self-test mode, a fake configfs root, a test
+# deadline or a Yama policy file) are named by no compiler and are not in
+# a device program's binary: the link drops them,
 # so the self-test branches in runtime/rt/device.resid run with mode 0 and
 # no fake root there.
 if [ "$#" -eq 0 ] || [[ " $* " == *" device_selftest_entry_absent "* ]]; then
@@ -142,7 +159,7 @@ if [ "$#" -eq 0 ] || [[ " $* " == *" device_selftest_entry_absent "* ]]; then
         printf '%s\n' 'import "dev/fx_device_ioctl.resid";' '@requires(device(readonly))' 'Int main() { println(match (device.ioctl(fx_ptn(), [])) { Ok(o) => "ok", Err(e) => device_error_text(e), }); return 0; }' > "$P/dev.resid"
         (cd "$P" && timeout 600 "$COMPILER" dev.resid -o dev) > "$P/c.log" 2>&1; rc=$?
         nm "$P/dev" > "$P/nm.txt" 2>&1
-        nt=$(grep -c -E 'device_host_test|device_test_parent' "$P/nm.txt")
+        nt=$(grep -c -E 'device_host_test|device_test_parent|host_test_yama' "$P/nm.txt")
         nh=$(grep -c -E ' resid_device_host$' "$P/nm.txt")
         if [ "$rc" -eq 0 ] && [ "$nt" = 0 ] && [ "$nh" = 1 ]; then
             echo "PASS device_selftest_entry_absent"; pass=$((pass + 1))

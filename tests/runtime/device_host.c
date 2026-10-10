@@ -24,7 +24,14 @@
  * pointers (fills them; 24 past the length, 25 into the guard page; 26
  * writes a needed length and fails with EIO); 27 a ConfigfsReport on a
  * fake configfs without service_guid and service_manifest_version, 28 one
- * that keeps what was written to them.
+ * that keeps what was written to them; 29 the host hands the rest of the
+ * call to a child of its own, whose reply the parent must not take.
+ *
+ * host_by_hand and host_chain start hosts without resid_device_call, to
+ * test whom a host serves; the Yama gate of secret mode is tested last,
+ * with this program switched to secret mode and the policy read from a
+ * file of the test's choosing (resid_host_test_yama, no Resid program can
+ * name it either).
  *
  * The parent's side of a test (a shorter wall-clock limit, the fake
  * configfs root it cleans up) is set with resid_device_test_parent, which
@@ -37,6 +44,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/ptrace.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -51,6 +59,8 @@ void* resid_device_call_w(void* req);
 void* resid_device_secret(int64_t k);
 void resid_device_host_test(int64_t argc, char** argv, char** envp, int64_t mode, const char* root);
 void resid_device_test_parent(int64_t ms, const char* root);
+void resid_host_test_yama(const char* path);
+int8_t resid_secret_mode_set(int8_t on);
 void* resid_malloc(int64_t n);
 
 static char exe[4096];
@@ -283,6 +293,111 @@ static int host_by_hand(int bash_parent, Req* q, uint8_t* out, int* n) {
     return WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st);
 }
 
+static void write_all(int fd, const void* p, int n) {
+    const uint8_t* b = p;
+    while (n > 0) { int k = write(fd, b, n); if (k <= 0) return; b += k; n -= k; }
+}
+
+/* Hosts started by hand with this process P making the socket pair:
+ * variant 0, P's own child executes the host and P answers; 1, a child X
+ * of P forks and executes the host (its parent X is not the socket's
+ * maker) and P answers; 2, P's child executes the host and another child X
+ * of P answers, with its inherited copy of P's end; 3, P's child stops
+ * for P as its tracer (PTRACE_TRACEME) and then executes the host, P
+ * resuming it. The host's exit status; *n the bytes P (or X) read. */
+static int host_chain(int variant, Req* q, int* n) {
+    int sv[2], pp[2];
+    socketpair(AF_UNIX, SOCK_STREAM, 0, sv);
+    pipe(pp);
+    uint64_t len = q->n;
+    pid_t h = 0, x = 0;
+    if (variant != 1) {
+        h = fork();
+        if (h == 0) {
+            if (variant == 3) ptrace(PTRACE_TRACEME, 0, 0, 0);
+            close(sv[0]); close(pp[0]); close(pp[1]);
+            dup2(sv[1], 3);
+            if (sv[1] != 3) close(sv[1]);
+            char* av[] = {"resid-device-host", NULL};
+            char* ev[] = {NULL};
+            execve("/proc/self/exe", av, ev);
+            _exit(127);
+        }
+        if (variant == 3) {
+            int st;
+            waitpid(h, &st, 0);   /* stopped at execve */
+            ptrace(PTRACE_CONT, h, 0, 0);
+        }
+    }
+    if (variant == 1 || variant == 2) {
+        x = fork();
+        if (x == 0) {
+            close(pp[0]);
+            int got = 0, code = -1;
+            if (variant == 1) {
+                pid_t y = fork();
+                if (y == 0) {
+                    close(sv[0]);
+                    dup2(sv[1], 3);
+                    if (sv[1] != 3) close(sv[1]);
+                    char* av[] = {"resid-device-host", NULL};
+                    char* ev[] = {NULL};
+                    execve("/proc/self/exe", av, ev);
+                    _exit(127);
+                }
+                close(sv[1]); close(sv[0]);
+                int st;
+                waitpid(y, &st, 0);
+                code = WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st);
+            } else {
+                close(sv[1]);
+                uint8_t buf[4096];
+                int k;
+                while (got < 16 && (k = read(sv[0], buf + got, 16 - got)) > 0) got += k;
+                write_all(sv[0], buf, 16);
+                write_all(sv[0], &len, 8);
+                write_all(sv[0], q->b, q->n);
+                shutdown(sv[0], SHUT_WR);
+                while ((k = read(sv[0], buf, sizeof buf)) > 0) got += k;
+            }
+            write(pp[1], &code, sizeof code);
+            write(pp[1], &got, sizeof got);
+            _exit(0);
+        }
+    }
+    close(pp[1]);
+    close(sv[1]);
+    int got = 0;
+    if (variant != 2) {
+        uint8_t buf[4096];
+        int k;
+        while (got < 16 && (k = read(sv[0], buf + got, 16 - got)) > 0) got += k;
+        if (got == 16) {
+            write_all(sv[0], buf, 16);
+            write_all(sv[0], &len, 8);
+            write_all(sv[0], q->b, q->n);
+        }
+        shutdown(sv[0], SHUT_WR);
+        while ((k = read(sv[0], buf, sizeof buf)) > 0) got += k;
+    }
+    close(sv[0]);
+    int code = -1, xgot = 0;
+    if (x > 0) {
+        read(pp[0], &code, sizeof code);
+        read(pp[0], &xgot, sizeof xgot);
+        int st;
+        waitpid(x, &st, 0);
+    }
+    close(pp[0]);
+    if (h > 0) {
+        int st;
+        while (waitpid(h, &st, 0) == h && WIFSTOPPED(st)) ptrace(PTRACE_CONT, h, 0, WSTOPSIG(st) == SIGTRAP ? 0 : WSTOPSIG(st));
+        code = WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st);
+    }
+    *n = variant == 2 ? xgot : got;
+    return code;
+}
+
 static int dir_empty(const char* p) {
     int n = 0;
     DIR* d = opendir(p);
@@ -497,6 +612,23 @@ int main(int argc, char** argv, char** envp) {
     check("device_host_by_hand_other_exe", hst == 124 && hn == 0);
     hst = host_by_hand(0, &q, hb, &hn);
     check("device_host_by_hand_no_answer", hst == 124 && hn == 16);
+    /* By hand, a host serves only its own parent, when that parent made
+     * its socket and answers: it refuses (before its challenge) a socket
+     * made by another process, and (after it) an answer from another
+     * process; and a host traced from its execve refuses before anything. */
+    hst = host_chain(0, &q, &hn);
+    check("device_host_serves_its_parent", hst == 0 && hn > 16);
+    hst = host_chain(1, &q, &hn);
+    check("device_host_peer_not_parent", hst == 124 && hn == 0);
+    hst = host_chain(2, &q, &hn);
+    check("device_host_answer_not_parent", hst == 124 && hn == 16);
+    hst = host_chain(3, &q, &hn);
+    check("device_host_traced_refuses", hst == 124 && hn == 0);
+    /* The parent takes a reply only from the child it made for the call:
+     * one sent by a child of that host is dropped, and the call fails. */
+    req_ptn(&q);
+    r = call_mode(29, NULL, &q, 0);
+    check("device_reply_from_other_process", code(&r) == 11 && (value(&r) == 1024 || value(&r) == 512 + 125 || value(&r) == 512 + 141));
     req_ptn(&q);
     r = call_mode(15, NULL, &q, 0);
     check("device_host_at_secure", code(&r) == 11 && value(&r) == 512 + 124);
@@ -595,6 +727,37 @@ int main(int argc, char** argv, char** envp) {
     int leaked = 0;
     for (int i = 0; i + 5 <= q.n; i++) if (memcmp(again + i, "/sys/", 5) == 0) leaked = 1;
     check("device_request_wiped", code(&r) == 0 && !leaked);
+
+    /* Secret mode (this program is not dumpable from here on): a host
+     * starts only under the Yama ptrace policy -- refused with the
+     * policy file absent or at 0, served at 1; and, where this kernel
+     * has Yama at 1 or more, through the real file. */
+    resid_secret_mode_set(1);
+    char yf[] = "/tmp/resid-yama-XXXXXX";
+    int yfd = mkstemp(yf);
+    req_ptn(&q);
+    resid_host_test_yama("/nonexistent/resid-yama");
+    r = reply(resid_device_call(list_of(&q)));
+    int y_absent = code(&r) == 11 && value(&r) == 7 * 256;
+    write(yfd, "0\n", 2);
+    resid_host_test_yama(yf);
+    r = reply(resid_device_call(list_of(&q)));
+    int y_zero = code(&r) == 11 && value(&r) == 7 * 256;
+    ftruncate(yfd, 0);
+    pwrite(yfd, "1\n", 2, 0);
+    r = reply(resid_device_call(list_of(&q)));
+    int y_one = code(&r) == 0;
+    close(yfd);
+    unlink(yf);
+    check("device_secret_mode_yama_gate", y_absent && y_zero && y_one);
+    resid_host_test_yama(NULL);
+    FILE* yp = fopen("/proc/sys/kernel/yama/ptrace_scope", "r");
+    int scope = -1;
+    if (yp) { if (fscanf(yp, "%d", &scope) != 1) scope = -1; fclose(yp); }
+    if (scope >= 1) {
+        r = reply(resid_device_call(list_of(&q)));
+        check("device_secret_mode_host", code(&r) == 0);
+    }
 
     char p[4096];
     mode_path(p);

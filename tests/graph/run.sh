@@ -28,6 +28,8 @@ for f in compiler/*.resid lib/*.resid tools/*.resid examples/*.resid tests/confo
         tests/conformance/cases/err_assignment.resid|tests/conformance/cases/err_list_missing_comma.resid|tests/conformance/cases/err_fmt_stray_brace.resid|tests/conformance/cases/err_escape_*.resid) continue ;;
         # These resolve imports only with their -depmap (or not at all).
         tests/conformance/cases/err_import_missing.resid|tests/conformance/cases/err_device_import_alias.resid|tests/conformance/cases/*manifest_ceiling*.resid|tests/conformance/cases/behavior_replace_library.resid|tests/conformance/cases/err_instance_orphan.resid) continue ;;
+        # Names `git`, which no scope binds, on purpose.
+        tests/conformance/cases/err_git_provider_unreachable.resid) continue ;;
     esac
     want_lint="graph-lint: 0 mixed-precedence expression(s)"
     case "$f" in *operator_precedence_*|*logical_short_circuit*) want_lint="$("$COMPILER" "$f" --graph-lint 2>&1 | grep '^graph-lint' | tail -1)" ;; esac
@@ -160,6 +162,19 @@ if "$COMPILER" tools/resid-debug.resid -o "$CK/rdbg" >/dev/null 2>&1 && [ -x "$D
     else
         fail=$((fail + 1)); echo "FAIL debug_abort build"
     fi
+    # A program holding a secret is not dumpable from the start of main
+    # (secret mode, spec §48), so the kernel refuses the tracer's memory
+    # access: resid-debug says so and stops instead of running on.
+    if "$COMPILER" tests/runtime/nodump/secret_abort.resid -o "$CK/sab" --profile debug >/dev/null 2>&1; then
+        got="$(timeout 60 "$CK/rdbg" "$CK/sab" -ex "break secret_abort.resid:7" -ex run 2>&1)"
+        if [[ "$got" == *"runs in secret mode, which makes it not dumpable"* ]]; then
+            pass=$((pass + 1))
+        else
+            fail=$((fail + 1)); echo "FAIL resid-debug secret mode: $got"
+        fi
+    else
+        fail=$((fail + 1)); echo "FAIL secret_abort build"
+    fi
     # The gdb backend, when gdb is installed, sees the same.
     if command -v gdb >/dev/null 2>&1; then
         got="$("$CK/rdbg" "$DB" -ex "backend gdb" -ex "break sq" -ex "step 40" -ex run 2>&1)"
@@ -198,7 +213,7 @@ else
     fail=$((fail + 1)); echo "FAIL resid-graph build"
 fi
 # The §3.4 invariants hold on debug builds' graphs.
-for c in tests/graph/cases/debug_locals.resid tests/graph/cases/notes_sample.resid tests/conformance/cases/range_facts_discharge.resid tests/reduce/cases/*.resid; do
+for c in tests/graph/cases/debug_locals.resid tests/graph/cases/notes_sample.resid tests/graph/cases/sandbox_graph.resid tests/conformance/cases/range_facts_discharge.resid tests/reduce/cases/*.resid; do
     b="$CK/inv_$(basename "$c" .resid)"
     "$COMPILER" "$c" -o "$b" --profile debug >/dev/null 2>&1 || continue
     [ -f "$b.resid-graph.cbor" ] || continue

@@ -334,11 +334,9 @@ artifact each verb is an effect naming its descriptor,
 Every call runs in a fresh, isolated process: the program itself,
 re-executed as `resid-device-host` with an empty environment and one
 socket, every other file descriptor closed, no core dumps, no time-stamp
-counter (x86-64) and no vDSO. Before it reads anything it checks who
-started it: not with privilege its parent lacks (no `AT_SECURE`, no extra
-capability), its socket's peer is its parent, the parent runs the same
-executable and answers a random challenge, and every byte after carries the
-parent's credentials. Run by hand, it exits without acting. It checks the
+counter (x86-64) and no vDSO. Before the host reads anything it checks
+who started it (below); run by hand, it serves no one but the process
+that started it. It checks the
 request again -- the same rules as `E0263`/`E0264`, and the inputs against
 the fields -- opens the one path with no symbolic link on the way (`openat2`;
 only magic links are refused on a sysfs attribute's path, which passes
@@ -351,6 +349,43 @@ seccomp filter allows only the descriptor's operation on that descriptor --
 `ioctl` with each step's request number, or `read` and `write` -- plus its
 reply, private anonymous memory without execution, and exit; anything else
 kills it.
+
+### Who starts a host
+
+The program starts each host itself, as a child that shares its memory
+until it executes the host (`CLONE_VM | CLONE_VFORK`), so a program in
+secret mode (§48) -- which is not dumpable, and is never made dumpable
+again -- stays so throughout. Only the call's socket reaches the host, as
+descriptor 3, with an empty environment, CPU and core limits, and a signal
+to die with its parent.
+
+The host's first act is to make itself not dumpable. It then puts
+`/dev/null` on its standard descriptors, closes everything else, and
+refuses to run when it is traced. Before it reads a request it checks
+that its parent made its socket (`SO_PEERCRED`) with the host's user and
+group, holds every capability the host has and is not starting it in
+secure mode (`AT_SECURE`); that the parent sends back 16 random bytes the
+host sends; that every byte after carries the parent's pid
+(`SCM_CREDENTIALS`); and that the parent is still its parent afterwards.
+The program, in turn, takes bytes from the host's socket only from the
+exact child it started for the call. The parent's executable is not
+compared: a non-dumpable program's cannot be read, and a host started by
+anyone else serves only that someone, while the reply the program believes
+can come only from its own child.
+
+A freshly executed host is dumpable until its first act. So a program in
+secret mode starts a host only under the Yama ptrace policy
+(`kernel.yama.ptrace_scope` 1 or more, where only an ancestor may attach);
+without Yama, or at 0, every device call answers `BadReply` (the host was
+not started) and every native call fails. A program without secrets is
+not gated. Installing the program executable but not readable (mode 0111)
+makes the kernel start it and its hosts non-dumpable, which closes that
+window too.
+
+What this rests on is the kernel's word: the pid and credentials it
+stamps on a socket and a message, a process's parent, its capabilities
+and its tracer as the kernel reports them. Nothing else outside the host
+is trusted.
 
 A call has a wall-clock limit: 30 seconds, 120 for a configfs report (a
 quote goes through firmware or a quoting service). A host that has not

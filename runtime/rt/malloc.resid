@@ -56,8 +56,19 @@ pub Int sys_mmap(Int n) {
 // back for reuse: c_free, the big-block cache and the region page cache.
 // Memory returned to the kernel is not zeroed here: the kernel zero-fills
 // it before anyone maps it again.
+//
+// Switching it on also turns core dumps off for the whole process, since a
+// core holds what no mapping flag covers (registers, including the vector
+// registers that hold AES round keys, static data, the initial stack):
+// PR_SET_DUMPABLE 0 and RLIMIT_CORE {0, 0}. Not dumpable also means no
+// process of the same user can ptrace-attach to it or read its
+// /proc/<pid>/mem, and even a tracer that started it can no longer read or
+// write its memory (resid-debug says so); that is intended. RLIMIT_CORE is inherited by children,
+// so processes the program starts dump no core either. The initial stack
+// mapping, found in /proc/self/maps, is marked MADV_DONTDUMP as well. And
+// an abort exits with status 134 instead of raising SIGABRT (c_libc_abort).
 
-Int sec_mode() { return resid_raw_global("rt_secret_mode", 8); }
+pub Int sec_mode() { return resid_raw_global("rt_secret_mode", 8); }
 pub Bool secret_mode() { return ld64(sec_mode()) != 0; }
 
 // The mapping of the most recent TLS block (base, length); the main
@@ -67,9 +78,39 @@ pub Int tls_last() { return resid_raw_global("rt_tls_last", 16); }
 @export("resid_secret_mode_set", "i8(i1)")
 pub Int rt_secret_mode_set(Int on) {
     _ = st64(sec_mode(), on);
+    if (on == 0) { return 1; }
     Int t = tls_last();
-    _ = if (on != 0 && ld64(t) != 0) { resid_raw_syscall(28, ld64(t), ld64(t + 8), 16, 0, 0, 0) } else { 0 };
+    _ = if (ld64(t) != 0) { resid_raw_syscall(28, ld64(t), ld64(t + 8), 16, 0, 0, 0) } else { 0 };
+    _ = stack_nodump();
+    // The limit {0, 0}: a hard limit of 0 cannot be raised again without
+    // privilege. Then not dumpable (after reading /proc/self/maps).
+    Int lim = resid_raw_global("rt_core_lim", 16);
+    _ = st64(lim, 0) + st64(lim + 8, 0);
+    _ = resid_raw_syscall(160, 4, lim, 0, 0, 0, 0);    // setrlimit(RLIMIT_CORE)
+    _ = resid_raw_syscall(157, 4, 0, 0, 0, 0, 0);      // prctl(PR_SET_DUMPABLE, 0)
     return 1;
+}
+
+// Mark the process's initial stack ("[stack]" in /proc/self/maps) left out
+// of core dumps; the flag stays with the mapping as the stack grows. Without
+// /proc nothing is marked: the process is not dumpable anyway.
+Int stack_nodump() {
+    Int maps = read_file_all(resid_raw_addr("/proc/self/maps"));
+    if (maps == 0) { return 0; }
+    _ = stack_line(maps, 0);
+    return c_free(maps);
+}
+
+Int stack_line(Int p, Int i) {
+    if (ld8(p + i) == 0) { return 0; }
+    Int e = native_eol(p, i);
+    if (native_ends(p, i, e, resid_raw_addr("[stack]"))) {
+        Int lo = native_hex(p, i, 0);
+        Int hi = native_hex(p, native_skip_hex(p, i) + 1, 0);
+        return resid_raw_syscall(28, lo, hi - lo, 16, 0, 0, 0);   // MADV_DONTDUMP
+    }
+    if (ld8(p + e) == 0) { return 0; }
+    return stack_line(p, e + 1);
 }
 
 pub Int sys_munmap(Int p, Int n) { return resid_raw_syscall(11, p, n, 0, 0, 0, 0); }

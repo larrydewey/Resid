@@ -10,7 +10,8 @@
 // the reply's shape; a request that does not parse is refused without a
 // host. Then the isolated host is started (hs_spawn, shared with native
 // modules: a fresh re-execution of /proc/self/exe as "resid-device-host",
-// empty environment, one socket as fd 3), answers the host's challenge
+// empty environment, one socket as fd 3; refused in secret mode without
+// the Yama ptrace policy), answers the host's challenge
 // (hs_answer), sends [u64 length][request] (and, for a ConfigfsReport, the
 // 16 random bytes that name its entry), and reads the reply up to the
 // descriptor's maxima -- all within the call's wall-clock limit
@@ -29,8 +30,9 @@
 // the engine takes each with resid_device_secret(k).
 //
 // Host (resid_device_host, called first in main when the program reaches
-// a device verb): drop every descriptor but fd 3; make sure it was started
-// by the program talking to it and holds no privilege of its own (hs_auth,
+// a device verb): not dumpable first; /dev/null on fds 0-2 and every other
+// descriptor but fd 3 closed; not traced; make sure it was started by the
+// program talking to it and holds no privilege of its own (hs_auth,
 // native.resid); no core dump, no time-stamp counter, no vDSO; read the
 // request (each read's sender checked) and check it again (the
 // host trusts no one, not even the compiler); open the one path
@@ -65,7 +67,8 @@ Int dv_sec_max() { return 64; }           // secret outputs in one reply
 // 10 the request was refused (value: which check); 11 the host failed
 // (value: what * 256 + detail -- 1 killed by a signal, 2 a bad exit
 // status, 3 no sandbox, 4 a malformed reply, 5 no host process, 6 the
-// host ran but its exit status was lost); 12 the host did not finish
+// host ran but its exit status was lost, 7 not started: secret mode
+// without the Yama ptrace policy, hs_yama_ok); 12 the host did not finish
 // within the call's wall-clock limit (Timeout; the parent's, never the
 // host's).
 Int de_refused() { return 10; }
@@ -934,13 +937,12 @@ Int dp_run(Int d, Int req, Int n) {
     Int dl = hs_deadline(dv_deadline_ms(kind));
     Int ent = xmalloc(16);
     if (kind == 4 && resid_raw_syscall(318, ent, 16, 0, 0, 0, 0) != 16) { return c_free(ent) * 0 + dev_err_reply(de_host(), 5 * 256); }
-    Int argv = xmalloc(16);
-    _ = st64(argv, resid_raw_addr("resid-device-host")) + st64(argv + 8, 0);
     Int pidp = xmalloc(16);
-    Int a = hs_spawn(argv, pidp);
+    Int a = hs_spawn(1, 0, pidp);
     Int pid = ld64(pidp);
     Int pfd = ld64(pidp + 8);
-    _ = c_free(argv) + c_free(pidp);
+    _ = c_free(pidp);
+    if (a == 0 - 3) { return c_free(ent) * 0 + dev_err_reply(de_host(), 7 * 256); }   // secret mode without Yama
     if (a < 0) { return c_free(ent) * 0 + dev_err_reply(de_host(), 5 * 256); }
     Int hdr = xmalloc(8);
     _ = st64(hdr, n);
@@ -956,7 +958,7 @@ Int dp_run(Int d, Int req, Int n) {
     // One byte past the cap is enough to know the reply is too long.
     Int got = if (rb == 0) { 0 } else { hs_recv_until(a, rb, 0, cap + 1, dl) };
     _ = sys_close(a);
-    _ = if (rb == 0) { resid_raw_syscall(62, pid, 9, 0, 0, 0, 0) } else { 0 };   // kill: no room for its reply
+    _ = if (rb == 0) { st64(hs_timeout_w(), 1) } else { 0 };   // no room for its reply: hs_finish kills it
     Int st = hs_finish(pid, pfd, dl);
     // A report's entry goes whatever happened to the host: killed, timed
     // out or refused, it may have made it and not removed it.
@@ -1142,7 +1144,7 @@ pub Int rt_device_host() {
 // they test, and a separate module could reach them only through hooks
 // (a writable function pointer in every host). They are unreachable from
 // a program instead: rt_device_host passes mode 0 and no root, every
-// self-test branch needs a mode in 1..28 (the fake configfs also a root),
+// self-test branch needs a mode in 1..29 (the fake configfs also a root),
 // and this entry -- the only other caller of dh_main -- is not in a
 // program's binary at all (the link drops it; tests/device's
 // device_selftest_entry_absent checks with nm).
@@ -1155,16 +1157,21 @@ pub Int rt_device_host_test(Int argc, Int argv, Int envp, Int mode, Int root) {
 Int dh_main(Int argv, Int envp, Int mode, Int root) {
     if (c_strcmp(ld64(argv), resid_raw_addr("resid-device-host")) != 0) { return 0; }
     if (envp == 0 || ld64(envp) != 0) { return 0; }   // the environment is empty
+    _ = at_secure() + hs_nodump();   // AT_SECURE read while /proc/self/auxv is still readable
     if (!native_fd3_socket()) { return 0; }
     // From here on this process is a device host and never returns.
-    if (resid_raw_syscall(436, 0, 2, 0, 0, 0, 0) < 0) { return native_child_exit(126); }   // close_range: only fd 3
-    if (resid_raw_syscall(436, 4, 4294967295, 0, 0, 0, 0) < 0) { return native_child_exit(126); }
+    if (!hs_settle()) { return native_child_exit(126); }   // /dev/null on 0-2, nothing else but fd 3
+    if (!hs_untraced()) { return native_child_exit(124); }
     if (!dh_same_ids()) { return native_child_exit(125); }
     // Only for the program that started it, with no privilege of its own
     // (hs_auth; self-tests 15 and 16 pretend AT_SECURE or a capability).
     Int ppid = hs_auth(if (mode == 15) { 1 } else if (mode == 16) { 2 } else { 0 });
     if (ppid <= 0) { return native_child_exit(124); }
     if (!hs_quiet()) { return native_child_exit(126); }
+    // Self-test 29: the rest is done by a child of this host, so the reply
+    // comes from a process that is not the program's child, which the
+    // program must not take (hs_from_host).
+    if (mode == 29) { _ = dh_fork_rest(); }
     Int h = dh_ctx(mode, root);
     if (h == 0) { return native_child_exit(125); }
     Int hdr = xmalloc(8);
@@ -1189,6 +1196,20 @@ Int dh_main(Int argv, Int envp, Int mode, Int root) {
         return dh_report(h, d);
     }
     return dh_ioctl(h, d);
+}
+
+// Self-test 29: fork; the parent waits
+// for the child and exits with its status, the child goes on.
+Int dh_fork_rest() {
+    Int pid = resid_raw_syscall(56, 17 | 8388608, 0, 0, 0, 0, 0);   // clone(SIGCHLD|CLONE_UNTRACED)
+    if (pid == 0) { return 0; }
+    if (pid < 0) { return native_child_exit(125); }
+    Int stp = xmalloc(8);
+    _ = st64(stp, 0);
+    Int r = sc4(61, pid, stp, 0, 0);
+    Int st = ld32(stp);
+    Int code = if (r != pid) { 125 } else if ((st & 127) != 0) { 128 + (st & 127) } else { (st >> 8) & 255 };
+    return native_child_exit(code);
 }
 
 // A host never runs with more privilege than whoever started it.

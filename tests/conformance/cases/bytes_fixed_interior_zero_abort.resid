@@ -1,0 +1,12 @@
+// Converting a Bytes(N) whose content has a zero byte before other bytes
+// to the heap Bytes, which ends at its first zero, would drop the rest:
+// the conversion aborts instead.
+Bytes to_heap(Bytes(8) b) { return (Bytes) b; }
+
+Int main() {
+    Bytes(8) ok = b"abc";
+    println(f"{to_heap(ok).len()}");
+    Bytes(8) f = b"ab\0cd";
+    println(f"{to_heap(f).len()}");
+    return 0;
+}

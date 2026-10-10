@@ -1,2 +1,2 @@
 E0219
-capability `network`
+capability `network(readonly)`

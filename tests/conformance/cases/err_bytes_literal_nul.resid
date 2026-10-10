@@ -1,0 +1,9 @@
+// The `\0` escape is a zero byte too, also where a Bytes parameter gives
+// the literal its type.
+Int show_len(Bytes b) { return b.len(); }
+
+Int main() {
+    Int n = show_len(b"x\0");
+    println(f"{n}");
+    return 0;
+}

@@ -875,9 +875,29 @@ pub Int rt_dbg_kill() {
     return st64(dbg() + 8, 0) + 1;
 }
 
+// Reap the killed debuggee: each thread it is known to have, then its
+// leader -- by pid (__WALL), never wait4(-1): this process's other
+// children (a device or native host, a process_run child) are not the
+// debugger's to reap, and a blocking wait for any child could hang on one.
 Int reap_all() {
+    Int leader = ld64(dbg());
+    _ = reap_tids(leader, 0, ld64(dbg() + 8));
+    return reap_tid(leader);
+}
+
+Int reap_tids(Int leader, Int i, Int n) {
+    if (i >= n) { return 0; }
+    Int t = ld64(dbg() + 32 + i * 8);
+    _ = if (t != leader) { reap_tid(t) } else { 0 };
+    return reap_tids(leader, i + 1, n);
+}
+
+// wait4(t, __WALL) until it is gone (an exit or no such child), passing
+// over the stops a dying tracee may still report.
+Int reap_tid(Int t) {
     Int stp = resid_raw_tls("dbg_status", 8);
-    if (sc4(61, 0 - 1, stp, 1073741824, 0) > 0) { return reap_all(); }
+    Int r = sc4(61, t, stp, 1073741824, 0);
+    if (r == t && st_stopped(ld32(stp))) { return reap_tid(t); }
     return 0;
 }
 

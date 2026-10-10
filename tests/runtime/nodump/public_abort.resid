@@ -1,0 +1,7 @@
+// Control: with no secret, a checked overflow aborts with SIGABRT.
+Int main() {
+    Int big = rt 9223372036854775807;
+    Int x = big + 1;
+    println(f"{x}");
+    return 0;
+}

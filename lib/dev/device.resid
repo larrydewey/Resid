@@ -178,7 +178,9 @@ type DevOut = OutNum(Int) | OutBytes(List(UInt(8))) | OutSecret(List(Secret(UInt
 //   BadInput      the program's inputs do not fit the descriptor, or the
 //                 device host refused the request
 //   BadReply      the isolated host failed: killed, a bad exit, no
-//                 sandbox, or a reply that did not parse
+//                 sandbox, or a reply that did not parse; or it was not
+//                 started (a program in secret mode without the Yama
+//                 ptrace policy: the text says so)
 //   Timeout       the host did not finish within the call's wall-clock
 //                 limit (30 s; 120 s for a ConfigfsReport) and was
 //                 killed; the operation may have run
@@ -404,7 +406,8 @@ Bool dv_fits(Int v, Int width) {
 // bytes) following; 10 the device host refused the request; 11 the host
 // failed (value: 256 * what + detail -- 1 killed by signal detail, 2 exit
 // status detail, 3 no sandbox, 4 a malformed reply, 5 no host process, 6
-// the host ran but its exit status was lost); 12 the host did not finish
+// the host ran but its exit status was lost, 7 not started: secret mode
+// without the Yama ptrace policy); 12 the host did not finish
 // within the call's wall-clock limit (Timeout).
 
 ListBuf(Int) dv_u(ListBuf(Int) b, Int v, Int n) {
@@ -551,6 +554,7 @@ Str dv_host_failure(Int v) {
     if (what == 4) { return "malformed reply from the device host"; }
     if (what == 5) { return "the device host could not be started"; }
     if (what == 6) { return "the device host ran, but its exit status was lost"; }
+    if (what == 7) { return "the device host was not started: a program in secret mode starts one only under the Yama ptrace policy (kernel.yama.ptrace_scope 1 or more)"; }
     return f"device host failure {v}";
 }
 

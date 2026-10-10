@@ -111,9 +111,16 @@ Each call runs in a fresh process:
    (8 bytes per scalar, the bytes of a `Str(N)` or `Bytes(N)`), and starts
    the program's own executable again (`/proc/self/exe`) with an empty
    environment, the arguments `resid-native-host <module>`, and the call's
-   socket as its only descriptor.
-2. The host, before running any native instruction: sets itself
-   undumpable, disables the time-stamp counter (`rdtsc` faults), unmaps
+   socket as its only descriptor. A program in secret mode does so only
+   under the Yama ptrace policy; see [the device host](/Resid/reference/devices/#who-starts-a-host)
+   (§49), whose start and checks native hosts share.
+2. The host first makes itself not dumpable and checks who started it,
+   as a device host does: no `AT_SECURE`, no capability beyond its
+   parent's, its parent made its socket and answers a random challenge,
+   and every byte it reads carries the parent's pid; otherwise it exits
+   124 without reading the request. The caller reads only what that host
+   sent. Then, before running any native instruction, the host: disables
+   the time-stamp counter (`rdtsc` faults), unmaps
    the vDSO clock pages, asks to be the first victim of the OOM killer,
    sets no-new-privileges, and installs a seccomp filter. The filter
    allows `read`/`write` on its socket only, `mmap`/`mprotect` without

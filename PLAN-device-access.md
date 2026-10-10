@@ -255,6 +255,17 @@ in the parent, the parent's own refusals); conformance
   executed host, and the challenge plus per-read credentials defeat a
   pre-written request with an exec or a passed socket. The native host now
   also closes every fd but 3 and reads its whole request before its filter.
+  *Since secret mode (the program is not dumpable, so a host cannot read
+  `/proc/<ppid>/exe`, and the program is never made dumpable again):* the
+  executable check is gone (a host started by anyone else serves only
+  them; the reply that matters is closed on the program's side, which
+  takes bytes only from the exact child it made, `hs_from_host`). The
+  program starts the host with `clone(CLONE_VM|CLONE_VFORK)`, so the child
+  is non-dumpable until `execve`; the host makes itself non-dumpable first
+  and refuses a tracer (`TracerPid`); in secret mode no host starts without
+  Yama `ptrace_scope` >= 1 (`hs_yama_ok`). A spawner process (forked before
+  `main`, dumpable) was tried and removed: readable `/proc` of the
+  program's copy, and a tracer of it could forge replies.
 - **The device-host hook** matches `@resid_device_call(` /
   `@resid_device_call_w(` exactly, and function names starting `resid_` are
   reserved (E0265, prelude and `runtime/rt/` exempt); the checker's family

@@ -1,11 +1,12 @@
 // Native modules (spec §47): each call to an @link function runs the native
 // code in a fresh process with no authority.
 //
-// Parent (resid_native_call): fork, and in the child re-execute this very
-// program (/proc/self/exe) with argv ["resid-native-host", module], an empty
-// environment and the call's socket as fd 3. Then send the request, read
-// the reply, and wait. Anything but a clean exit with a reply of exactly
-// the expected length aborts the calling thread.
+// Parent (resid_native_call): start a child that re-executes this very
+// program (/proc/self/exe) with argv ["resid-native-host", module], an
+// empty environment and the call's socket as fd 3 (hs_spawn). Then send
+// the request, read the reply (only what that child sent), and wait.
+// Anything but a clean exit with a reply of exactly the expected length
+// aborts the calling thread.
 //
 // Child (resid_native_host, called before main): drop everything but fd 3,
 // unmap the vDSO, disable the time-stamp counter, and install a seccomp
@@ -17,8 +18,8 @@
 // a Bytes(N) N bytes, each rounded up to 8.
 //
 // The device host (runtime/rt/device.resid, spec §49) is started and
-// confined the same way: hs_spawn, hs_quiet and hs_filter_install below
-// are shared.
+// confined the same way: hs_spawn, hs_nodump, hs_settle, hs_untraced,
+// hs_auth, hs_quiet and hs_filter_install below are shared.
 
 Int ntab_ent() { return 40; }   // module, function, reqlen, resplen, thunk
 
@@ -26,15 +27,14 @@ Int ntab_ent() { return 40; }   // module, function, reqlen, resplen, thunk
 
 @export("resid_native_call", "void(ptr,ptr,ptr,i64,ptr,i64)")
 pub Int rt_native_call(Int m, Int f, Int req, Int reqlen, Int resp, Int resplen) {
-    Int argv = xmalloc(24);
-    _ = st64(argv, resid_raw_addr("resid-native-host")) + st64(argv + 8, m) + st64(argv + 16, 0);
     Int pidp = xmalloc(16);
     Int dl = hs_deadline(native_wall_ms());
-    Int a = hs_spawn(argv, pidp);
+    Int a = hs_spawn(2, m, pidp);
     Int pid = ld64(pidp);
     Int pfd = ld64(pidp + 8);
-    _ = c_free(argv) + c_free(pidp);
+    _ = c_free(pidp);
     if (a == 0 - 1) { return native_fail(m, f, resid_raw_addr("no socket pair")); }
+    if (a == 0 - 3) { return native_fail(m, f, hs_yama_why()); }
     if (a < 0) { return native_fail(m, f, resid_raw_addr("cannot start the module's process")); }
     // The host proves it is this call's (hs_auth) before it reads anything.
     Bool sent = hs_answer(a, dl) && hs_send_until(a, req, 0, reqlen, dl);
@@ -60,53 +60,137 @@ pub Int rt_native_call(Int m, Int f, Int req, Int reqlen, Int resp, Int resplen)
 // descheduled host gets here; it is killed then.
 Int native_wall_ms() { return native_cpu_seconds() * 2000; }
 
-// Start a sandboxed host: fork, and in the child re-execute this program
-// with `argv`, an empty environment and one end of a socket pair as fd 3.
-// The parent's end of the socket; at pidp the pid and a pidfd for it (-1
-// without pidfd_open); -1 when there is no socket pair, -2 when the fork
-// failed.
-pub Int hs_spawn(Int argv, Int pidp) {
-    _ = sigchld_default() + hs_reap_pending(0) + st64(hs_timeout_w(), 0);
-    // Everything the child needs exists before the fork: between fork and
-    // execve it makes system calls only (other threads may hold locks).
+// Start a sandboxed host: kind 1 the device host, 2 module m's host. A
+// child of this process re-executes it with an empty environment and one
+// end of a socket pair as fd 3 (hs_child). The parent's end of the socket
+// (read with SO_PASSCRED: each read names its sender, and only this
+// child's are taken, hs_recv_until); at pidp the child's pid and a pidfd
+// for it (-1 without pidfd_open). -1 when there is no socket pair, -2 when
+// the child could not be made, -3 when the call is refused: secret mode
+// without the Yama ptrace policy (hs_yama_ok).
+//
+// The child is a clone(CLONE_VM | CLONE_VFORK): it shares this process's
+// memory, and so its non-dumpable state in secret mode, until execve, and
+// this thread waits until then. It runs on a stack of its own and touches
+// only the block made for it here, by system calls: no allocation, no
+// thread-local storage (it has this thread's thread pointer), no write to
+// shared state. After execve it is a fresh, dumpable process until its
+// first act as a host (PR_SET_DUMPABLE 0, then TracerPid).
+pub Int hs_spawn(Int kind, Int m, Int pidp) {
+    _ = sigchld_default() + hs_reap_pending(0) + st64(hs_timeout_w(), 0) + st64(hs_peer_w(), 0);
+    if (!hs_yama_ok()) { return 0 - 3; }
     Int sv = xmalloc(8);
-    Int r = resid_raw_syscall(53, 1, 1 | 524288, 0, sv, 0, 0);   // socketpair(AF_UNIX, SOCK_STREAM|SOCK_CLOEXEC)
-    if (r < 0) { return c_free(sv) * 0 - 1; }
+    Int one = xmalloc(8);
+    _ = st32(one, 1);
+    Bool p1 = resid_raw_syscall(53, 1, 1 | 524288, 0, sv, 0, 0) == 0;   // socketpair(AF_UNIX, SOCK_STREAM|SOCK_CLOEXEC)
     Int a = ld32(sv);
     Int b = ld32(sv + 4);
-    _ = c_free(sv);
-    Int envp = xmalloc(8);
-    _ = st64(envp, 0);
-    Int lim = xmalloc(32);
-    _ = st64(lim, native_cpu_seconds()) + st64(lim + 8, native_cpu_seconds() + 1) + st64(lim + 16, 0) + st64(lim + 24, 0);
-    Int pid = c_fork();
-    if (pid == 0) { return native_child(b, argv, envp, lim); }
-    _ = sys_close(b);
-    _ = c_free(envp) + c_free(lim);
-    if (pid < 0) { return sys_close(a) * 0 - 2; }
+    // SO_PASSCRED on the parent's end before the host can send anything.
+    Bool pc = p1 && resid_raw_syscall(54, a, 1, 16, one, 4, 0) == 0;
+    _ = c_free(sv) + c_free(one);
+    _ = if (p1 && !pc) { sys_close(a) + sys_close(b) } else { 0 };
+    if (!pc) { return 0 - 1; }
+    Int blk = hs_child_block(kind, m, b);
+    Int stk = sys_mmap(hs_child_stack());
+    if (blk == 0 || stk == 0) { return hs_child_free(blk, stk) * 0 + sys_close(a) * 0 + sys_close(b) * 0 - 2; }
+    // The child pops hs_child and its argument off its own stack.
+    Int sp = ((stk + hs_child_stack()) & (0 - 16)) - 16;
+    _ = st64(sp, resid_raw_fn("hs_child")) + st64(sp + 8, blk);
+    // Every signal blocked around the clone: a handler of this process run
+    // in the child would run on shared memory with this thread's TLS. The
+    // child keeps them blocked through execve (which resets the handlers);
+    // the host unblocks them (hs_settle).
+    _ = resid_raw_syscall(14, 2, blk + 80, blk + 88, 8, 0, 0);   // rt_sigprocmask(SIG_SETMASK, all, old)
+    Int pid = c_clone(16384 | 256 | 8388608 | 17, sp, 0, 0, 0);   // CLONE_VFORK|CLONE_VM|CLONE_UNTRACED|SIGCHLD
+    // Back here only once the child has executed the host or exited.
+    _ = resid_raw_syscall(14, 2, blk + 88, 0, 8, 0, 0);
+    _ = hs_child_free(blk, stk) + sys_close(b);
+    if (pid <= 0) { return sys_close(a) * 0 - 2; }
     Int pfd = resid_raw_syscall(434, pid, 0, 0, 0, 0, 0);   // pidfd_open (close-on-exec by itself)
     _ = st64(pidp, pid) + st64(pidp + 8, if (pfd < 0) { 0 - 1 } else { pfd });
+    _ = st64(hs_peer_w(), pid);
     return a;
 }
 
-// CPU seconds a call may use (soft limit; the hard limit is one more).
-Int native_cpu_seconds() { return 60; }
+Int hs_child_stack() { return 65536; }
 
-// The child between fork and execve: system calls only.
-Int native_child(Int b, Int argv, Int envp, Int lim) {
+// The child's block: 0 the socket end b, 8 this process's pid, 16 argv (3
+// pointers), 40 envp (empty), 48 RLIMIT_CPU, 64 RLIMIT_CORE {0, 0}, 80 a
+// full signal mask, 88 the caller's mask, 96 the module name (256). The host itself puts
+// /dev/null on its standard descriptors (hs_null_stdio).
+Int hs_child_block(Int kind, Int m, Int b) {
+    Int k = if (kind == 2) { c_strlen(m) } else { 0 };
+    if (k > 255) { return 0; }
+    Int blk = xmalloc(352);
+    _ = resid_raw_fill(blk, 0, 352);
+    _ = st64(blk, b) + st64(blk + 8, resid_raw_syscall(39, 0, 0, 0, 0, 0, 0));
+    _ = if (k > 0) { mcopy(blk + 96, m, k) } else { 0 };
+    _ = st64(blk + 16, if (kind == 2) { resid_raw_addr("resid-native-host") } else { resid_raw_addr("resid-device-host") });
+    _ = st64(blk + 24, if (kind == 2) { blk + 96 } else { 0 });
+    _ = st64(blk + 48, native_cpu_seconds()) + st64(blk + 56, native_cpu_seconds() + 1);
+    _ = st64(blk + 80, 0 - 1);
+    return blk;
+}
+
+Int hs_child_free(Int blk, Int stk) {
+    _ = if (blk != 0) { c_free(blk) } else { 0 };
+    return if (stk != 0) { sys_munmap(stk, hs_child_stack()) } else { 0 };
+}
+
+// The child between clone and execve: system calls on its block only, all
+// signals blocked. Only the socket crosses execve, as fd 3; CPU and core
+// limits; it dies with the thread that started it (and checks that this
+// thread is still there: the death signal is armed only from now).
+pub Int hs_child(Int blk) {
+    Int b = ld64(blk);
     Int d = if (b == 3) { resid_raw_syscall(72, 3, 2, 0, 0, 0, 0) } else { resid_raw_syscall(292, b, 3, 0, 0, 0, 0) };   // fcntl(F_SETFD, 0) / dup3
     if (d < 0) { return native_child_exit(127); }
-    // Only fd 3 crosses execve: close_range(0, 2) and (4, ~0).
-    if (resid_raw_syscall(436, 0, 2, 0, 0, 0, 0) < 0) { return native_child_exit(127); }
+    if (resid_raw_syscall(436, 0, 2, 0, 0, 0, 0) < 0) { return native_child_exit(127); }   // close_range: only fd 3
     if (resid_raw_syscall(436, 4, 4294967295, 0, 0, 0, 0) < 0) { return native_child_exit(127); }
-    if (resid_raw_syscall(160, 0, lim, 0, 0, 0, 0) < 0) { return native_child_exit(127); }   // setrlimit(RLIMIT_CPU)
-    if (resid_raw_syscall(160, 4, lim + 16, 0, 0, 0, 0) < 0) { return native_child_exit(127); }   // RLIMIT_CORE = 0
+    if (resid_raw_syscall(160, 0, blk + 48, 0, 0, 0, 0) < 0) { return native_child_exit(127); }   // setrlimit(RLIMIT_CPU)
+    if (resid_raw_syscall(160, 4, blk + 64, 0, 0, 0, 0) < 0) { return native_child_exit(127); }   // RLIMIT_CORE = 0
     _ = resid_raw_syscall(157, 1, 9, 0, 0, 0, 0);   // PR_SET_PDEATHSIG, SIGKILL
-    _ = resid_raw_syscall(59, resid_raw_addr("/proc/self/exe"), argv, envp, 0, 0, 0);
+    if (resid_raw_syscall(110, 0, 0, 0, 0, 0, 0) != ld64(blk + 8)) { return native_child_exit(127); }
+    _ = resid_raw_syscall(59, resid_raw_addr("/proc/self/exe"), blk + 16, blk + 40, 0, 0, 0);
     return native_child_exit(127);
 }
 
+// CPU seconds a call may use (soft limit; the hard limit is one more).
+pub Int native_cpu_seconds() { return 60; }
+
 pub Int native_child_exit(Int code) { return resid_raw_syscall(231, code, 0, 0, 0, 0, 0); }
+
+// ─── The Yama gate (parent) ─────────────────────────────────────────
+// A host is dumpable from its execve until its first act
+// (PR_SET_DUMPABLE 0): a process of the same user that may trace it then
+// could take it over and answer the program in its name. Yama's
+// ptrace_scope 1 or more allows that only to an ancestor of the host --
+// the program's own ancestors, who already control how the program is
+// started. So a program in secret mode starts no host unless
+// /proc/sys/kernel/yama/ptrace_scope reads 1, 2 or 3; without Yama, or at
+// 0, every device and native call is refused (fail closed). A program
+// without secrets keeps working either way. (An executable the user may
+// run but not read -- mode 0111 -- is started non-dumpable by the kernel,
+// program and host alike, which closes the window too; an operator's
+// choice, see SECURITY.md.)
+pub Bool hs_yama_ok() {
+    if (ld64(sec_mode()) == 0) { return true; }
+    Int path = ld64(hs_yama_path_w());
+    Int t = read_file_all(if (path != 0) { path } else { resid_raw_addr("/proc/sys/kernel/yama/ptrace_scope") });
+    if (t == 0) { return false; }
+    Int c = ld8(t);
+    Bool ok = c >= 49 && c <= 51 && (ld8(t + 1) == 10 || ld8(t + 1) == 0);
+    return c_free(t) * 0 == 0 && ok;
+}
+
+pub Int hs_yama_why() { return resid_raw_addr("refused: a program in secret mode starts a host only under the Yama ptrace policy (kernel.yama.ptrace_scope 1 or more)"); }
+
+// Where the policy is read; set only by a C test harness
+// (resid_host_test_yama), which no Resid program can name.
+Int hs_yama_path_w() { return resid_raw_global("rt_yama_path", 8); }
+
+@export("resid_host_test_yama", "void(ptr)")
+pub Int rt_host_test_yama(Int path) { return st64(hs_yama_path_w(), path); }
 
 // ─── Deadlines (parent) ─────────────────────────────────────────────
 // A host gets a wall-clock limit as well as RLIMIT_CPU: one blocked in the
@@ -136,15 +220,35 @@ Int hs_poll(Int fd, Int events, Int dl) {
     return (ld32(p + 4) >> 16) & 65535;
 }
 
-// Read into p + i until n bytes, end of file, an error or the deadline;
-// the count.
+// Read the host's socket into p + i until n bytes, end of file, an error,
+// the deadline, or a read sent by anyone but the host (hs_from_host); the
+// count.
 pub Int hs_recv_until(Int fd, Int p, Int i, Int n, Int dl) {
     if (i >= n) { return i; }
     if (hs_poll(fd, 1, dl) == 0) { return i; }
-    Int r = resid_raw_syscall(45, fd, p + i, n - i, 64, 0, 0);   // recvfrom, MSG_DONTWAIT
+    Int m = resid_raw_tls("hs_pmsg", 128);
+    _ = resid_raw_fill(m, 0, 128);
+    // struct msghdr (56 bytes), its iovec at 56, the control buffer at 72.
+    _ = st64(m + 56, p + i) + st64(m + 64, n - i);
+    _ = st64(m + 16, m + 56) + st64(m + 24, 1) + st64(m + 32, m + 72) + st64(m + 40, 48);
+    Int r = resid_raw_syscall(47, fd, m, 64, 0, 0, 0);   // recvmsg, MSG_DONTWAIT
     if (r == 0 - 4 || r == 0 - 11) { return hs_recv_until(fd, p, i, n, dl); }
     if (r <= 0) { return i; }
+    // Bytes from anyone else are dropped, and reading stops.
+    if (!hs_from_host(m)) { return resid_raw_fill(p + i, 0, r) * 0 + i; }
     return hs_recv_until(fd, p, i + r, n, dl);
+}
+
+// The host this thread is talking to (the child hs_spawn made), or 0.
+pub Int hs_peer_w() { return resid_raw_tls("hs_peer", 8); }
+
+// A read's sender is that very child, with this process's uid and gid:
+// pids in SCM_CREDENTIALS are the kernel's stamps, and only a process with
+// CAP_SYS_ADMIN may send another. This process made the child and has not
+// reaped it, so its pid names no one else meanwhile.
+Bool hs_from_host(Int m) {
+    Int want = ld64(hs_peer_w());
+    return want > 0 && hs_cred_pid(m) == want;
 }
 
 // Send n bytes from p + i before the deadline.
@@ -197,14 +301,15 @@ Int hs_nap(Int dl) {
 }
 
 // The end of a call: the host's status by the deadline; past it, SIGKILL
-// and a grace of hs_grace_ms() to reap it, -1 either way (timed out). A
-// host the kernel cannot kill in time (blocked uninterruptibly in a
-// driver) is left to hs_reap_pending: the call returns instead of hanging
-// on it. -2: its status was lost. The pidfd is closed.
+// (through the pidfd when there is one: it names this process and no
+// other) and a grace of hs_grace_ms() to reap it, -1 either way (timed
+// out). A host the kernel cannot kill in time (blocked uninterruptibly in
+// a driver) is left to hs_reap_pending: the call returns instead of
+// hanging on it. -2: its status was lost. The pidfd is closed.
 pub Int hs_finish(Int pid, Int pfd, Int dl) {
     Int st = if (ld64(hs_timeout_w()) != 0) { 0 - 1 } else { hs_wait_until(pid, pfd, dl) };
     if (st != 0 - 1) { return hs_close_pfd(pfd) * 0 + st; }
-    _ = resid_raw_syscall(62, pid, 9, 0, 0, 0, 0);   // kill(SIGKILL)
+    _ = if (pfd >= 0) { resid_raw_syscall(424, pfd, 9, 0, 0, 0, 0) } else { resid_raw_syscall(62, pid, 9, 0, 0, 0, 0) };   // pidfd_send_signal / kill
     Int st2 = hs_wait_until(pid, pfd, hs_deadline(hs_grace_ms()));
     _ = if (st2 == 0 - 1) { hs_pend(pid) } else { 0 };
     _ = st64(hs_timeout_w(), 1);
@@ -241,46 +346,117 @@ pub Int hs_reap_pending(Int i) {
 // ─── Who started this host (host) ───────────────────────────────────
 // A host is this program re-executed with a particular argv, an empty
 // environment and a socket as fd 3, which anyone who can run the binary
-// can also arrange by hand. So before reading a request it checks that
-// it was started by the program that is talking to it, and with no more
-// privilege than that program:
+// can also arrange by hand. Its first act, as soon as its argv and
+// environment have a host's shape, is PR_SET_DUMPABLE 0 (hs_nodump):
+// from then on no process of the same user can trace it or read its
+// memory. Once it is sure to be a host (fd 3 is a socket) it puts
+// /dev/null on its standard descriptors -- so nothing it opens later can
+// land on 0, 1 or 2, and a stray write to stdout or stderr goes nowhere --,
+// closes everything but fd 3, and refuses (exit 124) when it is traced
+// already (TracerPid in /proc/self/status: a tracer that attached between
+// execve and PR_SET_DUMPABLE 0). Then, before reading a request, it checks
+// that it was started by the program that is talking to it, its parent P,
+// and with no more privilege than P:
 //
 //   1. not in secure mode (AT_SECURE: set-id, file capabilities, an LSM
 //      transition gave it privilege its invoker lacks);
 //   2. no capability (effective or permitted; ambient ones are always
-//      permitted) that its parent does not hold -- a program running as
-//      root keeps its own capabilities, a host may not gain any;
-//   3. fd 3's peer (SO_PEERCRED) is its parent, with its uid and gid;
-//   4. the parent runs this same executable (/proc/self/exe and
-//      /proc/<ppid>/exe are one file: device and inode);
-//   5. a challenge: the host sends 16 bytes of getrandom and the parent
-//      must send them back. Every byte the host then reads must come from
-//      its parent's own pid (SCM_CREDENTIALS, checked per read).
+//      permitted) that P does not hold -- a program running as root keeps
+//      its own capabilities, a host may not gain any;
+//   3. fd 3's peer (SO_PEERCRED: who made the socket pair) is P, with this
+//      host's uid and gid;
+//   4. a challenge: the host sends 16 bytes of getrandom and P must send
+//      them back. Every byte the host then reads must come from P's own
+//      pid (SCM_CREDENTIALS, checked per read);
+//   5. after the challenge P is still its parent.
 //
-// Step 5 closes what 3 and 4 leave open: a process could create the
-// socket, write a request into it, hand the socket on or exec this binary
-// itself, and pass 3 and 4 by the time the host looks. The challenge is
-// sent after 4 and is answered only by hs_answer inside a call this
-// program is making, on a socket it made; credentials passed with each
-// read are the sender's, which nobody but the kernel can forge. A token
-// chosen by the parent would not do: a freshly executed host has nothing
-// to check it against.
+// Step 4 closes what 3 leaves open: a process could create the socket,
+// write a request into it, then hand the socket on or exec this binary
+// itself. The challenge is answered only by hs_answer inside a call P is
+// making, on a socket P made; credentials passed with each read are the
+// sender's. A token chosen by P would not do: a freshly executed host has
+// nothing to check it against.
 //
-// The parent's pid, or 0 when the host must not run. `pretend`, from a
-// test harness only: 1 as if AT_SECURE were set, 2 as if the host held a
+// There is no check of P's executable any more: P in secret mode is not
+// dumpable, so /proc/P/exe cannot be read, and P must never be made
+// dumpable again. It is not needed. A host started by anyone else serves
+// only that someone, who could run the program itself (1 and 2 keep a
+// privileged binary from lending its privilege). The forgery that matters
+// is a reply to P that P believes, and P takes bytes only from the child
+// it made for the call (hs_from_host): only P can make its own children.
+//
+// What this rests on, plainly: the kernel's word. SO_PEERCRED, the pid in
+// SCM_CREDENTIALS (only CAP_SYS_ADMIN may send another), getppid, capget
+// and TracerPid are outcomes the kernel reports, and they are taken as
+// such -- nothing else outside the host is trusted.
+//
+// P's pid, or 0 when the host must not run. `pretend`, from a test
+// harness only: 1 as if AT_SECURE were set, 2 as if the host held a
 // capability its parent does not.
 pub Int hs_auth(Int pretend) {
     if (pretend == 1 || at_secure() != 0) { return 0; }
     Int ppid = resid_raw_syscall(110, 0, 0, 0, 0, 0, 0);   // getppid
     if (ppid <= 1) { return 0; }
     if (pretend == 2 || !hs_caps_within(ppid)) { return 0; }
-    if (!hs_peer_is(ppid) || !hs_same_exe(ppid)) { return 0; }
-    if (!hs_challenge(ppid) || !hs_same_exe(ppid)) { return 0; }
+    if (!hs_peer_is(ppid)) { return 0; }
+    if (!hs_challenge(ppid)) { return 0; }
+    if (resid_raw_syscall(110, 0, 0, 0, 0, 0, 0) != ppid) { return 0; }
     return ppid;
 }
 
+// A host's first act: not dumpable.
+pub Int hs_nodump() { return resid_raw_syscall(157, 4, 0, 0, 0, 0, 0); }   // PR_SET_DUMPABLE 0
+
+// /dev/null on fds 0, 1 and 2, then nothing open but fd 3; no signal
+// blocked (the child that executed the host blocked them all).
+pub Bool hs_settle() {
+    Int none = xmalloc(8);
+    _ = st64(none, 0);
+    Int um = resid_raw_syscall(14, 2, none, 0, 8, 0, 0);   // rt_sigprocmask(SIG_SETMASK, {})
+    _ = c_free(none);
+    if (um < 0) { return false; }
+    Int fd = resid_raw_syscall(257, 0 - 100, resid_raw_addr("/dev/null"), 2 | 524288, 0, 0, 0);   // openat(O_RDWR|O_CLOEXEC)
+    if (fd < 0) { return false; }
+    Bool ok = hs_dup_to(fd, 0) && hs_dup_to(fd, 1) && hs_dup_to(fd, 2);
+    return ok && resid_raw_syscall(436, 4, 4294967295, 0, 0, 0, 0) == 0;   // close_range(4, ~0)
+}
+
+Bool hs_dup_to(Int fd, Int to) { return fd == to || resid_raw_syscall(292, fd, to, 0, 0, 0, 0) == to; }   // dup3
+
+// No tracer (TracerPid 0 in /proc/self/status).
+pub Bool hs_untraced() {
+    Int st = read_file_all(resid_raw_addr("/proc/self/status"));
+    if (st == 0) { return false; }
+    Int v = hs_field(st, 0, resid_raw_addr("TracerPid:"));
+    return c_free(st) * 0 == 0 && v == 0;
+}
+
+// The decimal value of the line starting with `key` (then tabs or spaces),
+// or -1.
+Int hs_field(Int p, Int i, Int key) {
+    if (ld8(p + i) == 0) { return 0 - 1; }
+    Int e = native_eol(p, i);
+    Int k = c_strlen(key);
+    if (e - i > k && native_same(p + i, key, k)) { return hs_num(p, hs_skip_ws(p, i + k), e, 0 - 1); }
+    if (ld8(p + e) == 0) { return 0 - 1; }
+    return hs_field(p, e + 1, key);
+}
+
+Int hs_skip_ws(Int p, Int i) { return if (ld8(p + i) == 9 || ld8(p + i) == 32) { hs_skip_ws(p, i + 1) } else { i }; }
+
+// Digits in [i, e) up to the line's end: their value, -1 with none, too
+// many or anything else on the line.
+Int hs_num(Int p, Int i, Int e, Int acc) {
+    if (i >= e) { return acc; }
+    Int c = ld8(p + i);
+    if (c < 48 || c > 57 || acc > 100000000000) { return 0 - 1; }
+    return hs_num(p, i + 1, e, max(acc, 0) * 10 + c - 48);
+}
+
 // capget for this process and for ppid: no effective or permitted
-// capability here that ppid lacks (both 32-bit words).
+// capability here that ppid lacks (both 32-bit words). capget on another
+// process needs no ptrace access, so it works on a non-dumpable parent (an
+// LSM may still refuse it; then the host refuses to run).
 Bool hs_caps_within(Int ppid) {
     Int h = xmalloc(8);
     Int me = xmalloc(24);
@@ -313,21 +489,6 @@ Bool hs_peer_is(Int ppid) {
 Int hs_uid() { return resid_raw_syscall(102, 0, 0, 0, 0, 0, 0); }
 Int hs_gid() { return resid_raw_syscall(104, 0, 0, 0, 0, 0, 0); }
 
-// /proc/self/exe and /proc/<ppid>/exe are one file.
-Bool hs_same_exe(Int ppid) {
-    Int path = xmalloc(48);
-    Int at = native_put(path, resid_raw_addr("/proc/"));
-    _ = native_utoa(at, ppid);
-    Int end = at + c_strlen(at);
-    _ = mcopy(end, resid_raw_addr("/exe"), 5);
-    Int a = xmalloc(160);
-    Int b = xmalloc(160);
-    Int ra = resid_raw_syscall(262, 0 - 100, resid_raw_addr("/proc/self/exe"), a, 0, 0, 0);   // newfstatat
-    Int rb = resid_raw_syscall(262, 0 - 100, path, b, 0, 0, 0);
-    Bool ok = ra == 0 && rb == 0 && ld64(a) == ld64(b) && ld64(a + 8) == ld64(b + 8);   // st_dev, st_ino
-    return c_free(path) * 0 + c_free(a) * 0 + c_free(b) * 0 == 0 && ok;
-}
-
 // Send 16 random bytes on fd 3 and read them back from ppid.
 Bool hs_challenge(Int ppid) {
     Int one = xmalloc(8);
@@ -341,8 +502,8 @@ Bool hs_challenge(Int ppid) {
 }
 
 // Read n bytes into p + i from fd (SO_PASSCRED set), each read's sender
-// ppid with this process's uid and gid; the count (short at end of file),
-// or -1 when a sender is anyone else.
+// ppid with this process's uid and gid; the count (short at
+// end of file), or -1 when a sender is anyone else.
 pub Int hs_recv_cred(Int fd, Int p, Int i, Int n, Int ppid) {
     if (i >= n) { return i; }
     Int m = resid_raw_tls("hs_msg", 128);
@@ -359,12 +520,18 @@ pub Int hs_recv_cred(Int fd, Int p, Int i, Int n, Int ppid) {
 
 // One SCM_CREDENTIALS message, nothing else, nothing cut off: ppid, uid,
 // gid.
-Bool hs_cred_ok(Int m, Int ppid) {
+Bool hs_cred_ok(Int m, Int ppid) { return hs_cred_pid(m) == ppid; }
+
+// The sender's pid of a message read with recvmsg into m (control buffer
+// at m + 72) -- one SCM_CREDENTIALS message, nothing else, nothing cut off,
+// with this process's uid and gid -- or -1.
+pub Int hs_cred_pid(Int m) {
     Int cl = ld64(m + 40);
     Int c = m + 72;
-    if ((ld32(m + 48) & 8) != 0 || cl < 28 || cl > 32) { return false; }   // MSG_CTRUNC
-    if (ld64(c) != 28 || ld32(c + 8) != 1 || ld32(c + 12) != 2) { return false; }   // CMSG_LEN(12), SOL_SOCKET, SCM_CREDENTIALS
-    return ld32(c + 16) == ppid && ld32(c + 20) == hs_uid() && ld32(c + 24) == hs_gid();
+    if ((ld32(m + 48) & 8) != 0 || cl < 28 || cl > 32) { return 0 - 1; }   // MSG_CTRUNC
+    if (ld64(c) != 28 || ld32(c + 8) != 1 || ld32(c + 12) != 2) { return 0 - 1; }   // CMSG_LEN(12), SOL_SOCKET, SCM_CREDENTIALS
+    if (ld32(c + 20) != hs_uid() || ld32(c + 24) != hs_gid()) { return 0 - 1; }
+    return ld32(c + 16);
 }
 
 // "native module `m`: `f` failed: why"
@@ -466,11 +633,12 @@ pub Int rt_native_host(Int tab, Int n) {
     if (argc != 2 || argv == 0) { return 0; }
     if (c_strcmp(ld64(argv), resid_raw_addr("resid-native-host")) != 0) { return 0; }
     if (ld64(argv + 24) != 0) { return 0; }   // the environment is empty
+    _ = at_secure() + hs_nodump();   // AT_SECURE read while /proc/self/auxv is still readable
     if (!native_fd3_socket()) { return 0; }
     // From here on this process is a host and never returns: only fd 3,
     // and only for the program that started it (hs_auth).
-    if (resid_raw_syscall(436, 0, 2, 0, 0, 0, 0) < 0) { return native_child_exit(126); }   // close_range: only fd 3
-    if (resid_raw_syscall(436, 4, 4294967295, 0, 0, 0, 0) < 0) { return native_child_exit(126); }
+    if (!hs_settle()) { return native_child_exit(126); }
+    if (!hs_untraced()) { return native_child_exit(124); }
     Int ppid = hs_auth(0);
     if (ppid <= 0) { return native_child_exit(124); }
     Int m = ld64(argv + 8);
@@ -580,28 +748,28 @@ Bool native_maps_line(Int p, Int i) {
     return native_maps_line(p, e + 1);
 }
 
-Int native_eol(Int p, Int i) { return if (ld8(p + i) == 0 || ld8(p + i) == 10) { i } else { native_eol(p, i + 1) }; }
+pub Int native_eol(Int p, Int i) { return if (ld8(p + i) == 0 || ld8(p + i) == 10) { i } else { native_eol(p, i + 1) }; }
 
-Bool native_ends(Int p, Int i, Int e, Int suf) {
+pub Bool native_ends(Int p, Int i, Int e, Int suf) {
     Int k = c_strlen(suf);
     if (e - i < k) { return false; }
     return native_same(p + e - k, suf, k);
 }
 
-Bool native_same(Int a, Int b, Int k) {
+pub Bool native_same(Int a, Int b, Int k) {
     if (k == 0) { return true; }
     return ld8(a) == ld8(b) && native_same(a + 1, b + 1, k - 1);
 }
 
-Int native_hexd(Int c) { return if (c >= 48 && c <= 57) { c - 48 } else if (c >= 97 && c <= 102) { c - 87 } else { 0 - 1 }; }
+pub Int native_hexd(Int c) { return if (c >= 48 && c <= 57) { c - 48 } else if (c >= 97 && c <= 102) { c - 87 } else { 0 - 1 }; }
 
-Int native_hex(Int p, Int i, Int acc) {
+pub Int native_hex(Int p, Int i, Int acc) {
     Int d = native_hexd(ld8(p + i));
     if (d < 0) { return acc; }
     return native_hex(p, i + 1, acc * 16 + d);
 }
 
-Int native_skip_hex(Int p, Int i) { return if (native_hexd(ld8(p + i)) < 0) { i } else { native_skip_hex(p, i + 1) }; }
+pub Int native_skip_hex(Int p, Int i) { return if (native_hexd(ld8(p + i)) < 0) { i } else { native_skip_hex(p, i + 1) }; }
 
 // The seccomp program (classic BPF over struct seccomp_data: nr at 0, arch
 // at 4, args from 16). Allowed: read/write on fd 3; mmap/mprotect without
