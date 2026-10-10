@@ -3077,8 +3077,11 @@ GXT gx_collect(Kg g, Int unit, Int i, GXT ft) {
     // its manifest ceiling) are known like any others, so a call whose
     // arguments are known evaluates; a function in one is never
     // specialized, since a copy would be emitted outside its sandbox.
+    // Their own `@fold` and `@reduce(steps = ...)` are ignored: code under
+    // a ceiling does not choose how long the importer's build may run, so
+    // a call of one gets the default step limit.
     if (n.kind == "sandbox") {
-        GXT fs = gx_collect(g, d, 0, ft);
+        GXT fs = gx_sb_nocap(gx_collect(g, d, 0, ft), ft.fnames.len());
         return gx_collect(g, unit, i + 1, gx_with_fann(fs, gx_sb_fns(g, d, 0, fs.fann)));
     }
     if (n.kind == "fn") {
@@ -3090,6 +3093,25 @@ GXT gx_collect(Kg g, Int unit, Int i, GXT ft) {
         return gx_collect(g, unit, i + 1, f3);
     }
     return gx_collect(g, unit, i + 1, ft);
+}
+
+// ft with the step caps and `@fold` marks of functions from index `from`
+// on (a sandbox's) cleared.
+GXT gx_sb_nocap(GXT ft, Int from) {
+    Int n = ft.fnames.len();
+    List(Int) caps = ft.fcap[0..from].concat(gx_zeros(n - from, ListBuf()));
+    List(Bool) folds = ft.ffold[0..from].concat(gx_falses(n - from, ListBuf()));
+    return GXT {.fnames = ft.fnames, .fpns = ft.fpns, .fpts = ft.fpts, .frets = ft.frets, .fbody = ft.fbody, .sts = ft.sts, .sfs = ft.sfs, .fidx = ft.fidx, .cts = ft.cts, .cpred = ft.cpred, .fann = ft.fann, .src = ft.src, .rds = ft.rds, .rb = ft.rb, .fcap = caps, .ffold = folds, .vsum = ft.vsum, .vtys = ft.vtys, .vidx = ft.vidx, .sidx = ft.sidx, .snf = ft.snf, .sfx = ft.sfx, .sft = ft.sft, .fpnl = ft.fpnl, .fptl = ft.fptl, .fone = ft.fone, .vgps = ft.vgps};
+}
+
+List(Int) gx_zeros(Int n, ListBuf(Int) acc) {
+    if (n <= 0) { return acc.finish(); }
+    return gx_zeros(n - 1, acc.push(0));
+}
+
+List(Bool) gx_falses(Int n, ListBuf(Bool) acc) {
+    if (n <= 0) { return acc.finish(); }
+    return gx_falses(n - 1, acc.push(false));
 }
 
 // The functions declared in sandbox `d` (nested ones too), added to fa.
