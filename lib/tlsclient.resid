@@ -283,7 +283,7 @@ Flight tc_read_flight(TsIn in, List(Secret(UInt(8))) key, List(Secret(UInt(8))) 
     }
     Int inner = tls_inner_type(pt);
     Int clen = pt.len() - 1;
-    List(Int) content = slice_seed(pt, 0, clen, []);
+    List(Int) content = pt[0..clen];
     if (inner != 22) {
         Flight no = Flight { .in = r.in, .msgs = [], .seq = seq2, .ok = false };
         return no;
@@ -489,7 +489,7 @@ WireIn(TlsClient) tls_fill_rec(TlsClient c, TsRec r, List(Int) have, Int want, I
     }
     Int inner = tls_inner_type(pt);
     Int clen = pt.len() - 1;
-    List(Int) content = slice_seed(pt, 0, clen, []);
+    List(Int) content = pt[0..clen];
     if (inner == 23) {
         List(Int) both = have.concat(content);
         WireIn(TlsClient) out = WireIn { .conn = stepped, .data = both, .eof = false };
@@ -517,7 +517,7 @@ WireOut(TlsClient) tls_c_send_at(TlsClient c, List(Int) b, Int at, Bool ok) {
     }
     Int left = n - at;
     Int take = if (left > 16384) { 16384 } else { left };
-    List(Int) chunk = slice_seed(b, at, take, []);
+    List(Int) chunk = b[at..(at + take)];
     List(Int) rec = tls_keys_protect(c.keys, chunk, 23);
     Bool wrote = resid_tcp_send_bin(c.fd, rec);
     TlsKeys k2 = tls_keys_wseq(c.keys, c.keys.wseq + 1);
@@ -605,35 +605,35 @@ pub HttpsGet tls_https_request(Str url, Str name, TrustStore store, List(Str) al
     }
     HeadScan sc = https_scan(sent.conn, [], [], false, 64);
     if (sc.lines.len() == 0) {
-        _ = wire_close(sent.conn);
+        _ = wire_close(sc.conn);
         return https_failed(url + " closed the connection without sending a response");
     }
     Str head = str_join(sc.lines, "\r\n");
     Int status = https_status(sc.lines[0]);
     if (status == 0 - 1) {
-        _ = wire_close(sent.conn);
+        _ = wire_close(sc.conn);
         return https_failed(url + " sent an unparseable status line");
     }
     if (status != 200 && method == "GET") {
-        _ = wire_close(sent.conn);
+        _ = wire_close(sc.conn);
         return HttpsGet { .status = status, .bytes = [], .err = "", .head = head };
     }
     Str cl = https_header(sc.lines, "content-length");
     if (!https_digits(cl) && method != "GET") {
-        _ = wire_close(sent.conn);
+        _ = wire_close(sc.conn);
         return HttpsGet { .status = status, .bytes = [], .err = "", .head = head };
     }
     if (!https_digits(cl)) {
-        _ = wire_close(sent.conn);
+        _ = wire_close(sc.conn);
         return https_failed(url + " carries no Content-Length");
     }
     Int want = str_parse_int(cl);
     if (want > https_max_body()) {
-        _ = wire_close(sent.conn);
+        _ = wire_close(sc.conn);
         return https_failed(url + " declares " + f"{want}" + " bytes, over this tool's " + f"{https_max_body()}" + "-byte cap");
     }
-    HeadBytes hb = https_body(sent.conn, sc.rest, want);
-    _ = wire_close(sent.conn);
+    HeadBytes hb = https_body(sc.conn, sc.rest, want);
+    _ = wire_close(sc.conn);
     if (!hb.ok) {
         return https_failed(url + " declared " + f"{want}" + " bytes and sent " + f"{hb.body.len()}" + f" (the connection closed, or passed its {ms} ms deadline)");
     }
@@ -649,24 +649,27 @@ Str https_after_scheme(Str url) {
 // The head as a scan: every line up to and including the blank one, and
 // whatever bytes came after it. `done` is what stops the scan -- not the
 // number of lines, and not EOF.
-type HeadScan = { List(Str) lines; List(Int) rest; Bool done; Bool overflow; };
+// `conn` is the connection after the records the scan read: its read
+// sequence number and buffered bytes have moved on, so the body has to be
+// read from it, not from the connection the scan started with.
+type HeadScan = { TlsClient conn; List(Str) lines; List(Int) rest; Bool done; Bool overflow; };
 
 @requires(network, declassify)
 HeadScan https_scan(TlsClient c, List(Int) acc, List(Str) lines, Bool done, Int rounds) {
-    HeadScan stop = HeadScan { .lines = lines, .rest = acc, .done = done, .overflow = false };
+    HeadScan stop = HeadScan { .conn = c, .lines = lines, .rest = acc, .done = done, .overflow = false };
     if (done) { return stop; }
-    if (rounds <= 0) { return HeadScan { .lines = lines, .rest = acc, .done = false, .overflow = true }; }
-    if (acc.len() > 65536) { return HeadScan { .lines = lines, .rest = acc, .done = false, .overflow = true }; }
+    if (rounds <= 0) { return HeadScan { .conn = c, .lines = lines, .rest = acc, .done = false, .overflow = true }; }
+    if (acc.len() > 65536) { return HeadScan { .conn = c, .lines = lines, .rest = acc, .done = false, .overflow = true }; }
     Int nl = https_crlf(acc, 0);
     if (nl < 0) {
         WireIn(TlsClient) in = wire_fill(c, acc, acc.len() + 1, 65536);
-        if (in.eof && https_crlf(in.data, 0) < 0) { return HeadScan { .lines = lines, .rest = in.data, .done = false, .overflow = false }; }
+        if (in.eof && https_crlf(in.data, 0) < 0) { return HeadScan { .conn = in.conn, .lines = lines, .rest = in.data, .done = false, .overflow = false }; }
         return https_scan(in.conn, in.data, lines, done, rounds - 1);
     }
     Str line = https_text(acc, 0, nl);
-    List(Int) rest = slice_seed(acc, nl + 2, acc.len() - nl - 2, []);
+    List(Int) rest = acc[(nl + 2)..acc.len()];
     if (str_trim(line) == "") {
-        return HeadScan { .lines = lines, .rest = rest, .done = true, .overflow = false };
+        return HeadScan { .conn = c, .lines = lines, .rest = rest, .done = true, .overflow = false };
     }
     return https_scan(c, rest, lines.concat([line]), done, rounds - 1);
 }
@@ -683,7 +686,7 @@ HeadBytes https_body(TlsClient c, List(Int) acc, Int want) {
         return empty_body;
     }
     if (acc.len() >= want) {
-        HeadBytes whole = HeadBytes { .body = slice_seed(acc, 0, want, []), .ok = true };
+        HeadBytes whole = HeadBytes { .body = acc[0..want], .ok = true };
         return whole;
     }
     WireIn(TlsClient) in = wire_fill(c, acc, want, want + 16384);

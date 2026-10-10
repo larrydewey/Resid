@@ -380,7 +380,7 @@ pub List(Int) tls_unprotect(Int seq, List(Int) key, List(Int) iv, List(Int) hdr,
         return none;
     }
     Int clen = pt.len() - 1;
-    return slice_seed(pt, 0, clen, []);
+    return pt[0..clen];
 }
 
 // The inner content type of a decrypted record: the last byte of the
@@ -424,8 +424,8 @@ TsTake ts_take(TsIn s, Int n) {
     // the end of the connection, not an index past the end of the buffer.
     Int take = if (have > n) { n } else { have };
     if (have >= n || s.eof) {
-        List(Int) want = slice_seed(s.buf, 0, take, []);
-        List(Int) rest = slice_seed(s.buf, take, have - take, []);
+        List(Int) want = s.buf[0..take];
+        List(Int) rest = s.buf[take..have];
         Bool ok = have >= n;
         return TsTake { .in = TsIn { .fd = s.fd, .buf = rest, .eof = s.eof }, .bytes = want, .ok = ok };
     }
@@ -529,9 +529,9 @@ pub List(Int) tls_record_seal(List(Int) key, List(Int) nonce, List(Int) header, 
 pub Bool tls_record_open(List(Int) key, List(Int) nonce, List(Int) header, List(Int) body) {
     Int total = body.len();
     Int clen16 = total - 16;
-    List(Int) ct = slice_seed(body, 0, clen16, []);
+    List(Int) ct = body[0..clen16];
     Int tstart = clen16;
-    List(Int) tag = slice_seed(body, tstart, 16, []);
+    List(Int) tag = body[tstart..(tstart + 16)];
     List(Int) rk = aes128_key_expand(key);
     List(Int) j0 = tls_j0(nonce);
     List(Int) ek = aes128_encrypt_block(rk, j0);

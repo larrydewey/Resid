@@ -116,7 +116,7 @@ pub TsProt ts_read_prot(TsIn s, List(Secret(UInt(8))) key, List(Secret(UInt(8)))
     if (pt.len() == 0) { return TsProt { .in = r.in, .msg = [], .seq = seq2, .alert = -1, .ok = false }; }
     Int ctype = tls_inner_type(pt);
     Int clen = pt.len() - 1;
-    List(Int) content = slice_seed(pt, 0, clen, []);
+    List(Int) content = pt[0..clen];
     if (ctype == 21) {
         Int desc = if (content.len() > 0) { content[0] } else { 0 };
         return TsProt { .in = r.in, .msg = [], .seq = seq2, .alert = desc, .ok = false };
@@ -228,7 +228,7 @@ TsRecs ts_flight_records(List(Secret(UInt(8))) key, List(Secret(UInt(8))) iv, In
     if (at >= flight.len()) { return TsRecs { .bytes = acc, .seq = seq }; }
     Int left = flight.len() - at;
     Int take = if (left > 16384) { 16384 } else { left };
-    List(Int) chunk = slice_seed(flight, at, take, []);
+    List(Int) chunk = flight[at..(at + take)];
     List(Int) rec = tlsg_protect(seq, key, iv, chunk, 22);
     return ts_flight_records(key, iv, seq + 1, flight, at + take, acc.concat(rec));
 }

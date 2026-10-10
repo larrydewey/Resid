@@ -538,5 +538,30 @@ timeout 180 "$W/tlsclient2" otherhost > "$W/client_bad.out" 2>&1
 grep -q "not trusted for 'otherhost'" "$W/client_bad.out" && ok \
     || bad "untrusted name refused: $(tail -2 "$W/client_bad.out" | tr '\n' ' ')"
 
+# ── large transfers and keep-alive ─────────────────────────────────────
+# Bodies bigger than one record, both ways, against a wall-clock bound: the
+# record paths are linear (8 MiB takes about half a second here; a path
+# that copied everything received so far on each record would not finish). A GET whose head and body
+# arrive in different records has to read the body with the connection the
+# head was read on, and the blocking server's second reply on a kept-alive
+# connection has to go out under the next sequence number, not a reused
+# nonce.
+(cd "$ROOT" && "$COMPILER" tests/tls/bulk.resid -o "$W/bulk") > "$W/build.log" 2>&1 || {
+    echo "FAIL build tests/tls/bulk.resid"; grep -i error "$W/build.log" | head -3; exit 1; }
+bulk_case() {   # <name> <expect-regex> <args...>
+    local name="$1" want="$2"; shift 2
+    local t0 t1 out
+    t0=$(date +%s)
+    out="$(cd "$ROOT" && timeout 120 "$W/bulk" "$@" 2>&1)"
+    t1=$(date +%s)
+    if ! printf '%s\n' "$out" | grep -qE "$want"; then bad "$name: $(printf '%s' "$out" | tr '\n' ' ')"
+    elif [ $((t1 - t0)) -gt 30 ]; then bad "$name took $((t1 - t0)) s (bound 30 s)"
+    else ok; fi
+}
+bulk_case "GET spanning two records" '^GET status=200 len=20000 same=true err=$' get 20000
+bulk_case "GET of 8 MiB" '^GET status=200 len=8388608 same=true err=$' get 8388608
+bulk_case "PUT of 8 MiB" '^PUT status=200 same=true ' put 8388608
+bulk_case "keep-alive on the blocking server" '^SERVE served=2 one=true two=true$' serve
+
 echo "tls: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

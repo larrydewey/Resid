@@ -1,0 +1,108 @@
+// Large transfers and keep-alive over TLS, our server and our client in
+// one process.
+//
+//   bulk.resid get N    the event-loop server answers one GET with an
+//                       N-byte body; tls_https_get reads it back
+//   bulk.resid put N    the client uploads N bytes; the server reports
+//                       the length and a checksum of what it opened
+//   bulk.resid serve    the blocking server (tls_accept, http_serve_conn)
+//                       answers two requests on one kept-alive connection
+//
+// A body bigger than one record is the ordinary case: the head and the
+// body arrive in different records, so the client has to carry its read
+// state from the head into the body. The second reply on a kept-alive
+// connection has to be sealed under the next sequence number, not the
+// first one again.
+import "tlsclient.resid";
+import "tlswire.resid";
+import "tlskey.resid";
+import "chain.resid";
+import "wire.resid";
+import "httpserv.resid";
+import "clock.resid";
+
+ListBuf(Int) pattern(Int i, Int n, ListBuf(Int) acc) {
+    if (i >= n) { return acc; }
+    return pattern(i + 1, n, acc.push((i * 7 + (i >> 9)) & 255));
+}
+
+Int checksum(List(Int) xs, Int i, Int acc) {
+    if (i >= xs.len()) { return acc; }
+    return checksum(xs, i + 1, (acc * 31 + xs[i]) & 1073741823);
+}
+
+HttpReply put_reply(HttpRequest r) {
+    return http_reply_text(200, "text/plain", f"got {r.body.len()} sum {checksum(r.body, 0, 0)}");
+}
+
+HttpReply serve_reply(HttpRequest r) {
+    return http_reply_text(200, "text/plain", "answer to " + r.path);
+}
+
+@requires(network, declassify)
+Str read_reply(TlsClient c, List(Int) acc, Int rounds) {
+    Str text = http_text(acc, 0, acc.len());
+    if (str_index_of(text, "answer to /two", 0) >= 0 || rounds <= 0) { return text; }
+    WireIn(TlsClient) in = wire_fill(c, acc, acc.len() + 1, 1048576);
+    if (in.eof) { return http_text(in.data, 0, in.data.len()); }
+    return read_reply(in.conn, in.data, rounds - 1);
+}
+
+@requires(args, filesystem(readonly), network, clock(readonly), declassify)
+Int main() {
+    Str mode = args.get(1);
+    Int n = if (args.count() > 2) { str_parse_int(args.get(2)) } else { 0 };
+    Option(ServerKey) mk = tls_key_load("tests/tls/fixtures/srv.key");
+    ServerKey key = mk else { EdKey([]) };
+    List(List(Int)) chain = tls_chain_load("tests/tls/fixtures/srv.pem");
+    TrustStore store = trust_store_load("tests/tls/fixtures/srvca.pem");
+    Int lfd = http_listen(0);
+    Int port = http_bound_port(lfd);
+    HttpLimits lim0 = http_limits();
+    HttpLimits lim = HttpLimits { .head_max = lim0.head_max, .body_max = 67108864, .request_ms = lim0.request_ms, .reply_ms = lim0.reply_ms, .requests_max = lim0.requests_max, .open_max = lim0.open_max };
+    Str url = f"https://localhost:{port}/bulk";
+    if (mode == "get") {
+        Result(Int, RegionError) worker = spawn (network(readonly), filesystem(readonly), declassify) {
+            return tls_accept_loop(lfd, tls_cfg(key, chain, ["http/1.1"]), lambda(r) { http_reply_bytes(200, "application/octet-stream", pattern(0, n, ListBuf()).finish()) }, lim, 1);
+        };
+        HttpsGet g = tls_https_get(url, "", store, ["http/1.1"]);
+        Int w = worker else { -1 };
+        List(Int) want = pattern(0, n, ListBuf()).finish();
+        Bool same = g.bytes.len() == n && checksum(g.bytes, 0, 0) == checksum(want, 0, 0);
+        println(f"GET status={g.status} len={g.bytes.len()} same={same} err={g.err}");
+        return 0;
+    }
+    if (mode == "put") {
+        HttpReply closure(HttpRequest) h = lambda(r) { put_reply(r) };
+        Result(Int, RegionError) worker = spawn (network(readonly), filesystem(readonly), declassify) {
+            return tls_accept_loop(lfd, tls_cfg(key, chain, ["http/1.1"]), h, lim, 1);
+        };
+        List(Int) body = pattern(0, n, ListBuf()).finish();
+        HttpsGet g = tls_https_request(url, "", store, ["http/1.1"], 300000, "PUT", "", body);
+        Int w = worker else { -1 };
+        Str reply = http_text(g.bytes, 0, g.bytes.len());
+        Bool same = reply == f"got {n} sum {checksum(body, 0, 0)}";
+        println(f"PUT status={g.status} same={same} reply={reply} err={g.err}");
+        return 0;
+    }
+    if (mode == "serve") {
+        Result(Int, RegionError) worker = spawn (network(readonly), filesystem(readonly), declassify) {
+            Int fd = resid_tcp_accept(lfd);
+            Accepted(TlsConn) a = wire_accept(tls_cfg(key, chain, ["http/1.1"]), fd);
+            if (!a.ok) { return -1; }
+            return http_serve_conn(a.conn, lambda(r) { serve_reply(r) }, lim);
+        };
+        TlsDial d = tls_client_connect("localhost", port, tls_client_cfg("localhost", store, ["http/1.1"]));
+        if (d.err != "") { println("DIAL-FAIL " + d.err); return 1; }
+        List(Int) reqs = http_bytes("GET /one HTTP/1.1\r\nHost: localhost\r\n\r\nGET /two HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+        WireOut(TlsClient) sent = wire_send(d.conn, reqs);
+        Str text = read_reply(sent.conn, [], 32);
+        Int w = worker else { -1 };
+        Bool one = str_index_of(text, "answer to /one", 0) >= 0;
+        Bool two = str_index_of(text, "answer to /two", 0) >= 0;
+        println(f"SERVE served={w} one={one} two={two}");
+        return 0;
+    }
+    println("usage: bulk.resid get N | put N | serve");
+    return 2;
+}

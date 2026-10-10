@@ -79,7 +79,7 @@ WireIn(TlsConn) tls_fill_rec(TlsConn c, TsRec r, List(Int) have, Int want, Int c
     }
     Int inner = tls_inner_type(pt);
     Int clen = pt.len() - 1;
-    List(Int) content = slice_seed(pt, 0, clen, []);
+    List(Int) content = pt[0..clen];
     if (inner == 23) {
         List(Int) both = have.concat(content);
         return WireIn { .conn = stepped, .data = both, .eof = false };
@@ -109,7 +109,7 @@ WireOut(TlsConn) tls_send_at(TlsConn c, List(Int) b, Int at, Bool ok) {
     }
     Int left = n - at;
     Int take = if (left > 16384) { 16384 } else { left };
-    List(Int) chunk = slice_seed(b, at, take, []);
+    List(Int) chunk = b[at..(at + take)];
     List(Int) rec = tls_keys_protect(c.keys, chunk, 23);
     Bool wrote = resid_tcp_send_bin(c.fd, rec);
     TlsKeys k2 = tls_keys_wseq(c.keys, c.keys.wseq + 1);
@@ -264,7 +264,7 @@ TlsOpened tls_open_ready(TlsKeys k, List(Int) raw, Int at, List(Int) plain) {
     if (pt.len() == 0) { return TlsOpened { .keys = k2, .raw = [], .plain = plain, .status = 2 }; }
     Int inner = tls_inner_type(pt);
     Int clen = pt.len() - 1;
-    List(Int) content = slice_seed(pt, 0, clen, []);
+    List(Int) content = pt[0..clen];
     if (inner == 23) { return tls_open_ready(k2, raw, next, plain.concat(content)); }
     if (inner == 21) { return TlsOpened { .keys = k2, .raw = [], .plain = plain, .status = 1 }; }
     // A post-handshake message (a client KeyUpdate, say) is not acted on.
@@ -280,7 +280,7 @@ type TlsSealed = { TlsKeys keys; List(Int) bytes; };
 TlsSealed tls_seal_all(TlsKeys k, List(Int) b, Int at, List(Int) acc) {
     if (at >= b.len()) { return TlsSealed { .keys = k, .bytes = acc }; }
     Int take = if (b.len() - at > 16384) { 16384 } else { b.len() - at };
-    List(Int) chunk = slice_seed(b, at, take, []);
+    List(Int) chunk = b[at..(at + take)];
     List(Int) rec = tls_keys_protect(k, chunk, 23);
     return tls_seal_all(tls_keys_wseq(k, k.wseq + 1), b, at + take, acc.concat(rec));
 }
