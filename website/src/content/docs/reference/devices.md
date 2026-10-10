@@ -36,7 +36,7 @@ A missing device is a value, not an abort: `Err(Absent(name))`, so an
 attester can probe for its platform. Every failure is a `DeviceError`
 naming the descriptor: `Absent`, `Denied`, `Kernel(name, errno)`,
 `TooLong`, `GenerationChanged`, `Unsupported`, `Version`, `Overrun`,
-`UnknownDriver`, `BadInput`, `BadReply`.
+`UnknownDriver`, `BadInput`, `BadReply`, `Timeout`.
 
 Buffers cross as `List(UInt(8))`, or `List(Secret(UInt(8)))` for a buffer
 marked secret ([secret values](/Resid/reference/secrets/)); never as
@@ -60,8 +60,9 @@ any family.
 `write` is a label reviewed with each descriptor in `lib/dev/`, not
 something the compiler proves; but an ioctl that only sends data
 (`_IOC_WRITE`, no Out or InOut field) marked `write = false` is refused
-(`E0263`). The runtime's read entry also refuses a request that says it
-writes.
+(`E0263`), and so is a `Transact` marked `write = false`: sending its
+command is a write to the device, so `device(readonly)` never covers one.
+The runtime's read entry also refuses a request that says it writes.
 
 `device` names the provider everywhere: a binding (a pattern such as
 `if (Some(device) = x)` included), function, type, variant or import alias
@@ -102,10 +103,12 @@ be known, and is checked:
 | `E0260` | descriptors, the `@descriptor` annotation, the engine, `resid_device_call` and `resid_device_secret` belong to `lib/dev/` |
 | `E0261` | a dependency reaches only the descriptors its manifest's `devices = [...]` names, behavior instances it could dispatch to included; a sub-dependency without a bound gets its parent's |
 | `E0262` | the descriptor is known after reduction (not chosen or computed at run time) |
-| `E0263` | `_IOC_SIZE` is the struct size and the direction bits cover the fields; fields inside the struct and apart; Scalars of 1, 2, 4 or 8 bytes; pointers 8-byte aligned; buffers with a maximum; length fields are Scalars; the path under `/dev/` or `/sys/` without `..`; one request number for the build's target; a descriptor marked `write = false` is not an ioctl that only sends |
+| `E0263` | `_IOC_SIZE` is the struct size and the direction bits cover the fields; fields inside the struct and apart; Scalars of 1, 2, 4 or 8 bytes; pointers 8-byte aligned; buffers with a maximum; length fields are Scalars wide enough for their buffer's maximum, one per buffer; the path under `/dev/` or `/sys/` without `..`; one request number for the build's target; a descriptor marked `write = false` is not an ioctl that only sends, nor a `Transact` |
 | `E0264` | a Sequence's links go forward from a Scalar output to a Scalar input of one width; only the last step has outputs; one path |
 
 These run on the reduced program: `--profile check` does not make them.
+Function names starting with `resid_` are the runtime's (`E0265`), so no
+program can stand in for a device entry point.
 
 ## Provenance
 
@@ -129,15 +132,28 @@ artifact each verb is an effect naming its descriptor,
 Every call runs in a fresh, isolated process: the program itself,
 re-executed as `resid-device-host` with an empty environment and one
 socket, every other file descriptor closed, no core dumps, no time-stamp
-counter (x86-64) and no vDSO. It checks the request again -- the same rules
-as `E0263`/`E0264`, and the inputs against the fields -- opens the one path
-without following a final symbolic link, and refuses the wrong kind of file
-(a character device for `ioctl`, `sequence` and `transact`; a regular sysfs
-or configfs file for `read_attr`). The struct and each buffer get a mapping
-of their own that ends at an inaccessible guard page, with a random canary
-in the slack. Then a seccomp filter allows only the descriptor's operation
-on that descriptor -- `ioctl` with each step's request number, or `read`
-and `write` -- plus its reply and exit; anything else kills it.
+counter (x86-64) and no vDSO. Before it reads anything it checks who
+started it: not with privilege its parent lacks (no `AT_SECURE`, no extra
+capability), its socket's peer is its parent, the parent runs the same
+executable and answers a random challenge, and every byte after carries the
+parent's credentials. Run by hand, it exits without acting. It checks the
+request again -- the same rules as `E0263`/`E0264`, and the inputs against
+the fields -- opens the one path with no symbolic link on the way (`openat2`;
+only magic links are refused on a sysfs attribute's path, which passes
+through sysfs's own links; without `openat2`, only the last component is
+checked), and refuses the wrong kind of file (a character device for
+`ioctl`, `sequence` and `transact`; a regular sysfs or configfs file for
+`read_attr`). The struct and each buffer get a mapping of their own between
+two inaccessible guard pages, with a random canary in the slack. Then a
+seccomp filter allows only the descriptor's operation on that descriptor --
+`ioctl` with each step's request number, or `read` and `write` -- plus its
+reply, private anonymous memory without execution, and exit; anything else
+kills it.
+
+A call has a wall-clock limit: 30 seconds, 120 for a configfs report (a
+quote goes through firmware or a quoting service). A host that has not
+answered by then is killed and the call is `Timeout`; the operation may
+have run.
 
 | What happens | The result |
 |---|---|
@@ -147,16 +163,21 @@ and `write` -- plus its reply and exit; anything else kills it.
 | the kernel writes past a buffer (a canary changed, a guard page hit) | `Overrun` |
 | the version field comes back different | `Version(name, the kernel's)` |
 | a length beyond the descriptor's maximum | `TooLong` |
-| a configfs report's generation changed, or its provider is not listed | `GenerationChanged`, `UnknownDriver(name, "provider ...")` |
+| a configfs report's generation changed, or counts a store the host did not make; its provider is not listed | `GenerationChanged`, `UnknownDriver(name, "provider ...")` |
 | any other errno | `Kernel(name, errno)` |
 | the host is killed or answers something that does not parse | `BadReply` |
+| no answer within the wall-clock limit | `Timeout` |
 
 None of them aborts the program. A `Sequence` runs its steps on one open
 file in one host, copying each `Link` just before its step; only the last
 step's outputs come back. A configfs report creates a fresh entry with an
-unpredictable name, confines the host to it with Landlock, writes `inblob`
-(and `privlevel`, `service_provider` when given), reads the generation, the
-blobs and the provider and the generation again, and removes the entry.
+unpredictable name the program chose, confines the host to it with
+Landlock, writes `inblob` (and `privlevel`, `service_provider` when given),
+reads the generation, the blobs and the provider and the generation again,
+and removes the entry; the program removes it too if the host did not
+(killed, timed out). The kernel counts each store to the entry in
+`generation`, so both reads must equal the stores the host made: any other
+writer, before the first read or between the two, is `GenerationChanged`.
 
 A buffer marked secret never travels in the general reply: the host sends
 it separately and zeroes its copy, and the runtime hands it to the engine

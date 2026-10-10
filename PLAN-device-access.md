@@ -214,12 +214,10 @@ As built, compared with §3-§5:
 - **Request numbers above 2^32**, an `_IOC_NONE` ioctl's integer
   argument and secret inputs are not supported: every ioctl argument is
   the struct's address, and inputs are public (`DevIn`).
-- **Not built.** No wall-clock limit on a host (a device that blocks
-  forever blocks its caller; RLIMIT_CPU bounds only CPU time, as for
-  native modules); `AT_SECURE` for file capabilities is not checked (a
-  set-id start is). The device suites run on x86-64; under qemu-user
+- **Not built.** The device suites run on x86-64; under qemu-user
   (`RESID_TARGET=aarch64`) seccomp is unavailable and device runs that
-  reach the filter fail closed.
+  reach the filter fail closed. (The wall-clock limit and the `AT_SECURE`
+  check this list used to name came with the second review, below.)
 
 Tests: `tests/device` (runs real devices any user can open: `/dev/ptmx`
 TIOCGPTN/TIOCSPTLCK and a Sequence with a Link, a resized TIOCGPTN
@@ -236,6 +234,81 @@ and the host's wipe, the configfs flow, `configfs_unknown_provider_err`,
 `configfs_missing_attr_err`, generation change, no Landlock, no fd left
 in the parent, the parent's own refusals); conformance
 `err_device_secret_raw`.
+
+**Security review 2 (2026-10-10), fixed:**
+
+- **A host started by hand.** Both hosts (device and native module) now
+  authenticate before reading a request (`hs_auth`, `runtime/rt/native.resid`):
+  no `AT_SECURE` (read in `resid_start`'s auxv walk, else from
+  `/proc/self/auxv`), no effective or permitted capability the parent lacks,
+  fd 3's `SO_PEERCRED` is the parent with our uid and gid, the parent runs
+  the same executable (`/proc/self/exe` and `/proc/<ppid>/exe` by device
+  and inode), and the parent sends back 16 random bytes the host sends
+  (`hs_answer`); every later read checks `SCM_CREDENTIALS`. Refused: exit
+  124. Deviations from the review: capabilities are compared with the
+  parent's rather than refused outright -- on SNP/TDX guests
+  `/dev/sev-guest` and the configfs report are root's, and a program run as
+  root must keep working; and the token goes host to parent, not parent to
+  host -- a token chosen by the parent cannot be checked by a freshly
+  executed host, and the challenge plus per-read credentials defeat a
+  pre-written request with an exec or a passed socket. The native host now
+  also closes every fd but 3 and reads its whole request before its filter.
+- **The device-host hook** matches `@resid_device_call(` /
+  `@resid_device_call_w(` exactly, and function names starting `resid_` are
+  reserved (E0265, prelude and `runtime/rt/` exempt); the checker's family
+  result is not used, since the hook is decided on the IR after lowering.
+- **Wall-clock limit.** 30 s per call, 120 s for a ConfigfsReport (no
+  descriptor field: a per-kind default, which a C harness can only lower).
+  Every wait polls the socket against the deadline; then SIGKILL, a 2 s
+  bounded reap (pidfd, else WNOHANG naps), and a host still not dead is
+  left for a later call to reap (`hs_reap_pending`). `DeviceError` gains
+  `Timeout(name)` (reply code 12). Native modules get the same at 120 s,
+  though their host can block only if stopped (it makes no blocking call
+  but on its socket, which the parent half-closes).
+- **Transact is a write** (E0263, `pq_check` 19).
+- **ConfigfsReport generation**: both reads must equal the stores the host
+  made (inblob once when committed, each `write(2)` to privlevel and
+  service_provider), as the kernel's `write_generation` counts them from 0;
+  the fake configfs models it (`dh_fake_bump`, a `pwrite64` the filter
+  allows only on the fake's own generation file).
+- **The entry's name comes from the parent**, which removes that one name
+  under the root (opened without links, checked configfs) after every
+  report call, so a killed or timed-out host leaks nothing.
+- **SIGCHLD**: an inherited `SIG_IGN` is reset to the default in
+  `resid_start` and again in `hs_spawn` (a C harness); `wait_pid` already
+  retried EINTR (`sc4`). A host whose status is lost anyway is a distinct
+  `BadReply` (detail 6), or its reply when that arrived whole and checks out.
+- **Secret hygiene**: the parent's request copy is wiped before it is
+  freed, `dp_list` wipes its staging slots (bytes are immediate boxes, so
+  there are no heap boxes to wipe), and secrets the engine did not take are
+  wiped when the next call clears the slots (not freed: they may live in a
+  region).
+- **Hardening**: `mmap` only with flags exactly `MAP_PRIVATE|MAP_ANONYMOUS`,
+  fd -1 and no `PROT_EXEC`; no `munmap` after the filter; a guard page
+  before each region as well as after; length fields at least as wide as
+  their buffer's maximum and not shared (E0263, `pq_check` 42); `openat2`
+  with `RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS` for `/dev/` paths and the
+  configfs root (and `RESOLVE_BENEATH` inside the entry), only
+  `RESOLVE_NO_MAGICLINKS` for sysfs attributes (sysfs class paths are
+  symlinks), falling back to `openat` + `O_NOFOLLOW` where `openat2` is
+  missing (ENOSYS).
+- **Tests independent of the host**: the conformance device cases and
+  `tests/pkg`'s `pkg_device_ceiling` print `reached` for any answer the
+  device gives (absent here, a report or a refusal on an SNP guest), and
+  `configfs_absent` uses a report root that exists nowhere.
+
+Tests: `tests/runtime/device_host.c` (`device_host_by_hand_other_exe`,
+`device_host_by_hand_no_answer`, `device_host_at_secure`,
+`device_host_capability`, `device_timeout`, `configfs_timeout_entry_removed`,
+`configfs_killed_entry_removed`, `configfs_generation_foreign_write`,
+`configfs_root_symlink_refused`, `device_sigchld_ignored`,
+`device_overrun_guard_page_before`, `device_seccomp_mmap_shared`,
+`device_seccomp_munmap`, `device_transact_read_refused`,
+`device_length_field_narrow_refused`, `device_length_field_shared_refused`,
+`device_request_wiped`), `tests/runtime/run.sh` (native host by hand),
+`tests/device` (`e0263_transact_read`, `e0263_length_narrow`,
+`e0263_length_shared`, `device_hook_exact`), conformance
+`err_reserved_runtime_name`.
 
 **Goal**: let a Resid program talk to kernel devices (ioctls on character
 devices, request/response devices such as `/dev/tpmrm0`, and configfs

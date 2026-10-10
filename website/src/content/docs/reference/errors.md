@@ -45,8 +45,9 @@ own), with the offending source line.
 | `E0260` | a device descriptor (`@descriptor`, or a literal of a descriptor type) outside the standard library's `lib/dev/`; a call of the device engine or of `resid_device_call` other than by the compiler; a `device` verb without a descriptor from `lib/dev/` (a record of another type with the same fields included) ([device access](/Resid/reference/devices/)) |
 | `E0261` | a dependency's code reaches a device descriptor outside its manifest bound `devices = [...]` |
 | `E0262` | a device verb's descriptor is not known after reduction |
-| `E0263` | a device descriptor's layout is inconsistent: request size or direction bits, fields outside the struct or overlapping, an unaligned pointer, a buffer without a maximum, a length field that is not a Scalar, a path outside `/dev/` and `/sys/` or with `..`, no request number for the target, an ioctl that only sends data marked `write = false` |
+| `E0263` | a device descriptor's layout is inconsistent: request size or direction bits, fields outside the struct or overlapping, an unaligned pointer, a buffer without a maximum, a length field that is not a Scalar, too narrow for its buffer's maximum, or shared by two buffers, a path outside `/dev/` and `/sys/` or with `..`, no request number for the target, an ioctl that only sends data marked `write = false`, a Transact marked `write = false` (it writes its command) |
 | `E0264` | a Sequence descriptor's links: backwards, not from a Scalar output to a Scalar input of one width, outputs before the last step, steps on another path |
+| `E0265` | a function named `resid_...`: the prefix is the runtime's (its entry points share the program's link, and the compiler recognizes the device entry by name) |
 | `E0301` | a known value violates its constraint type |
 | `E0401` | a builder is not consumed on some path |
 | `E0402` | a builder is used twice |
