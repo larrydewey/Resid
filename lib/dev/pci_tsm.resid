@@ -1,0 +1,86 @@
+// --- lib/dev/pci_tsm.resid - the kernel's PCI TSM (TDISP device security)
+// The PCI TEE Security Manager interface (drivers/pci/tsm.c,
+// drivers/virt/coco/tsm-core.c; Documentation/ABI/testing/sysfs-class-tsm,
+// the tsm/ entries of Documentation/ABI/testing/sysfs-bus-pci and
+// Documentation/ABI/testing/sysfs-devices-pci-host-bridge), checked against
+// Linux 7.3-rc6 (torvalds/linux 3857c2fe5449; tests/device/kernel-pin.txt).
+// All of it is still "testing" ABI: stability AbiTesting.
+//
+// What the kernel exposes there, and what it does not:
+//
+//     /sys/class/tsm/tsmN                       a platform TSM (N from 0)
+//     /sys/bus/pci/devices/<BDF>/tsm/connect    (RW) the connected TSM's name, "" if none
+//     /sys/bus/pci/devices/<BDF>/tsm/disconnect (WO)
+//     /sys/bus/pci/devices/<BDF>/tsm/dsm        (RO) the device's DSM (its function 0)
+//     /sys/bus/pci/devices/<BDF>/tsm/bound      (RO) the TSM, when TDISP LOCKED/RUN/ERROR
+//     /sys/bus/pci/devices/<BDF>/authenticated  (RO) the connect state again
+//     /sys/devices/pciDDDD:BB/available_secure_streams, streamH.R.E  (IDE streams)
+//
+// No measurements, certificates or device-interface reports are exposed in
+// sysfs at this commit: the evidence a TDISP device gives (SPDM
+// measurements, its certificate chain, the TDI report) is not yet a
+// kernel ABI, so there is no descriptor for it.
+//
+// Only the first line is reachable today. The per-device attributes live
+// under a PCI address (<BDF>) that is run-time data, and a descriptor's
+// path must be known at compile time (E0262): the engine has no way to put
+// a run-time component into a path. PLAN-device-access.md (phase 5,
+// pci_tsm) proposes the narrowest engine change that would allow it.
+//
+// Nothing here is signed: these are the kernel's statements about the
+// connection, to be confirmed by the device's own signed evidence once
+// there is a way to read it.
+
+import "device.resid";
+
+// The platform TSM's uevent attribute: present (with any contents) when a
+// TSM has registered. The kernel numbers TSMs from 0 (an IDA in
+// tsm-core.c), so a platform with any TSM has tsm0, except in the moment a
+// tsm0 is being removed.
+pub ReadAttr pci_tsm_tsm0_op() {
+    return ReadAttr {.name = "pci_tsm.tsm0", .path = "/sys/class/tsm/tsm0/uevent", .max = 4096, .stability = AbiTesting};
+}
+
+// Whether the kernel has a platform TSM: Ok(false) when /sys/class/tsm/tsm0
+// is absent, Ok(true) when it is there, any other failure as itself. Only
+// once a TSM is present can a device's lack of a tsm/ directory be taken to
+// mean the device will never have one (sysfs-bus-pci, tsm/).
+@requires(device(readonly))
+pub Result(Bool, DeviceError) pci_tsm_present() {
+    return match (device.read_attr(pci_tsm_tsm0_op())) {
+        Ok(outs) => Ok(true),
+        Err(e) => pci_tsm_absent(e),
+    };
+}
+
+Result(Bool, DeviceError) pci_tsm_absent(DeviceError e) {
+    return match (e) {
+        Absent(n) => Ok(false),
+        Denied(n) => Err(e), Kernel(n, x) => Err(e), TooLong(n) => Err(e), GenerationChanged(n) => Err(e),
+        Unsupported(n) => Err(e), Version(n, v) => Err(e), Overrun(n) => Err(e), UnknownDriver(n, v) => Err(e),
+        BadInput(n, w) => Err(e), BadReply(n, w) => Err(e), Timeout(n) => Err(e),
+    };
+}
+
+// The text of a TSM name attribute (tsm/connect, tsm/bound): Some("tsmN")
+// or None for the empty line the kernel shows when there is none. Anything
+// else is Err: the kernel writes "tsm%d\n" or "\n" (drivers/pci/tsm.c,
+// connect_show, bound_show).
+pub Result(Option(Str), Str) pci_tsm_name(List(UInt(8)) text) {
+    Int n = text.len();
+    if (n == 0 || text[n - 1] != 10) { return Err("no trailing newline"); }
+    if (n == 1) { return Ok(None); }
+    if (n < 5 || n > 14 || text[0] != 116 || text[1] != 115 || text[2] != 109) { return Err("not tsmN"); }
+    if (!pt_digits(text, 3, n - 1)) { return Err("not tsmN"); }
+    return Ok(Some(pt_text(text, 0, n - 1, "")));
+}
+
+Bool pt_digits(List(UInt(8)) b, Int i, Int end) {
+    if (i >= end) { return true; }
+    return b[i] >= 48 && b[i] <= 57 && pt_digits(b, i + 1, end);
+}
+
+Str pt_text(List(UInt(8)) b, Int i, Int end, Str acc) {
+    if (i >= end) { return acc; }
+    return pt_text(b, i + 1, end, acc + str_from_code((Int)b[i]));
+}

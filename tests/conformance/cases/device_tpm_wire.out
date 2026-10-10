@@ -1,0 +1,32 @@
+GetCapability: matches
+GetCapability handles: matches
+GetRandom: matches
+PCR_Read: matches
+ReadPublic: matches
+NV_ReadPublic: matches
+NV_Read: matches
+Quote: matches
+GetRandom 0: tpm: bad argument: 0 random bytes asked, 1 to 64
+PCR 24: tpm: bad argument: PCR 24, the selection holds 0 to 23
+NV_Read size: tpm: bad argument: size and offset are u16
+Quote nonce: tpm: bad argument: qualifying data of 65 bytes, at most 64
+46 properties, more false, PT_FIXED Some(841887744), NV_BUFFER_MAX Some(1024)
+handles [2164260865, 2164260867], more false
+random 0102030405060708
+counter 42 [alg 11 pcrs [0, 1, 7]] 3 digests 1111 7777
+type 0x23 nameAlg 0xb public 88 bytes name 0b33 qn 0b44
+index 0x1400001 nameAlg 11 attributes 0xa0006 policy 0 size 8 name 34
+data deadbeef01020304
+attest 145 bytes, ecc 0x18 hash 0xb r 0101 s 0202, raw 72; extra aaaa clock 1193046 reset 7 restart 3 safe true fw 0x2024010100000002 [alg 11 pcrs [0, 1, 7]] digest 9999
+tpm: response code 0x922
+tpm: malformed response: tag 0x8001, expected 0x8002
+tpm: malformed response: property count 4294967295 past the response
+tpm: malformed response: pcrSelection count 2147483647 past the response
+GetCapability: 387 bytes; truncated accepted 0; of 774 mutants 754 parse
+GetCapability handles: 27 bytes; truncated accepted 0; of 54 mutants 35 parse
+GetRandom: 20 bytes; truncated accepted 0; of 40 mutants 24 parse
+PCR_Read: 130 bytes; truncated accepted 0; of 260 mutants 222 parse
+ReadPublic: 172 bytes; truncated accepted 0; of 344 mutants 322 parse
+NV_ReadPublic: 62 bytes; truncated accepted 0; of 124 mutants 103 parse
+NV_Read: 29 bytes; truncated accepted 0; of 58 mutants 33 parse
+Quote: 238 bytes; truncated accepted 0; of 476 mutants 442 parse

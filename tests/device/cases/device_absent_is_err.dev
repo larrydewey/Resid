@@ -13,4 +13,4 @@ pub ConfigfsReport fx_missing_report() {
     return ConfigfsReport {.name = "fx.missing_report", .path = "/sys/kernel/config/resid_no_such_tsm/report", .providers = ["sev_guest"], .max_inblob = 64, .max_outblob = 8192, .max_auxblob = 8192, .max_manifestblob = 8192, .write = false, .stability = Uapi};
 }
 
-pub ReportReq fx_req(List(UInt(8)) inblob) { return ReportReq {.inblob = inblob, .privlevel = 0 - 1, .service_provider = ""}; }
+pub ReportReq fx_req(List(UInt(8)) inblob) { return ReportReq {.inblob = inblob, .privlevel = 0 - 1, .service_provider = "", .service_guid = "", .service_manifest_version = 0 - 1}; }

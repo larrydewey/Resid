@@ -1,0 +1,209 @@
+// lib/dev/tpm_wire.resid's commands end to end against a TPM: the IBM TPM
+// 2.0 simulator (github.com/kgoldman/ibmswtpm2, the commit build.sh pins),
+// reached over its TCP command port. This is the logic lib/dev/tpm.resid's
+// wrappers run (each wrapper is a tpm_*_via over /dev/tpmrm0); only the
+// transport differs, so no program gains a way to reach a TPM through
+// anything but the device host. Run by tests/device/run.sh when
+// RESID_TPM_SIMULATOR names the simulator; argument 1 is its command port.
+//
+// It makes what the wrappers only use: a primary ECC P-256 signing key (the
+// AK, TPM2_CreatePrimary) and an NV index (TPM2_NV_DefineSpace,
+// TPM2_NV_Write), written here as raw commands (TCG TPM 2.0 Part 3,
+// Tables 160, 225, 241). Then it checks the quote's ECDSA signature over
+// `attest` with the AK's public key from ReadPublic, and the quote's PCR
+// digest against PCR_Read's values.
+import "dev/tpm_wire.resid";
+import "ecdsa.resid";
+import "hash.resid";
+
+// -- The simulator's TCP protocol (ibmswtpm2 src/TcpServerPosix.c) --------
+// Platform port: a u32 signal (1 power on, 11 NV on), answered by a u32 0.
+// Command port: u32 8 (TPM_SEND_COMMAND), u8 locality, u32 length, the
+// command; answered by u32 length, the response, u32 0.
+
+List(Int) be(Int v, Int n) { return if (n <= 0) { [] } else { be(v >> 8, n - 1).concat([v & 255]) }; }
+
+Int be_val(List(Int) b, Int i, Int n, Int acc) {
+    if (i >= n) { return acc; }
+    return be_val(b, i + 1, n, (acc << 8) | b[i]);
+}
+
+List(Int) ints(List(UInt(8)) b, Int i, ListBuf(Int) acc) {
+    if (i >= b.len()) { return acc.finish(); }
+    return ints(b, i + 1, acc.push((Int)b[i]));
+}
+
+List(UInt(8)) u8s(List(Int) b, Int i, ListBuf(UInt(8)) acc) {
+    if (i >= b.len()) { return acc.finish(); }
+    return u8s(b, i + 1, acc.push((UInt(8))(b[i] & 255)));
+}
+
+@requires(network(readonly))
+Bool signal(Int fd, Int s) {
+    Bool sent = resid_tcp_send_bin(fd, be(s, 4));
+    List(Int) ack = resid_tcp_recv_bin(fd, 4);
+    return sent && ack.len() == 4 && be_val(ack, 0, 4, 0) == 0;
+}
+
+@requires(network(readonly))
+Result(List(UInt(8)), TpmError) send_sim(Int fd, List(UInt(8)) cmd) {
+    List(Int) frame = be(8, 4).concat([0]).concat(be(cmd.len(), 4)).concat(ints(cmd, 0, ListBuf()));
+    if (!resid_tcp_send_bin(fd, frame)) { return Err(TpmBad("simulator: send failed")); }
+    List(Int) lb = resid_tcp_recv_bin(fd, 4);
+    Int n = be_val(lb, 0, 4, 0);
+    if (lb.len() != 4 || n > 8192) { return Err(TpmBad("simulator: bad length")); }
+    List(Int) resp = resid_tcp_recv_bin(fd, n);
+    List(Int) ack = resid_tcp_recv_bin(fd, 4);
+    if (resp.len() != n || ack.len() != 4) { return Err(TpmBad("simulator: short response")); }
+    return Ok(u8s(resp, 0, ListBuf()));
+}
+
+// -- Raw commands the wrappers do not build ---------------------------------
+
+List(UInt(8)) hx(List(Int) b) { return u8s(b, 0, ListBuf()); }
+
+// TPMS_AUTH_COMMAND for TPM_RS_PW, empty password.
+List(Int) pw() { return [0x40, 0, 0, 9, 0, 0, 1, 0, 0]; }
+
+List(Int) cmd(Int tag, Int cc, List(Int) rest) { return be(tag, 2).concat(be(10 + rest.len(), 4)).concat(be(cc, 4)).concat(rest); }
+
+List(Int) with_auth(List(Int) handles, List(Int) params) { return handles.concat(be(pw().len(), 4)).concat(pw()).concat(params); }
+
+// TPM2_Startup(TPM_SU_CLEAR).
+List(Int) startup() { return cmd(0x8001, 0x144, [0, 0]); }
+
+// TPM2_CreatePrimary under the owner: an ECC P-256 restricted signing key,
+// ECDSA with SHA-256 (fixedTPM | fixedParent | sensitiveDataOrigin |
+// userWithAuth | restricted | sign = 0x00050072).
+List(Int) create_primary() {
+    List(Int) pub_area = be(0x23, 2).concat(be(0x0b, 2)).concat(be(0x00050072, 4)).concat(be(0, 2))
+        .concat(be(0x10, 2)).concat(be(0x18, 2)).concat(be(0x0b, 2)).concat(be(3, 2)).concat(be(0x10, 2))
+        .concat(be(0, 2)).concat(be(0, 2));
+    List(Int) params = be(4, 2).concat(be(0, 2)).concat(be(0, 2))
+        .concat(be(pub_area.len(), 2)).concat(pub_area)
+        .concat(be(0, 2)).concat(be(0, 4));
+    return cmd(0x8002, 0x131, with_auth(be(0x40000001, 4), params));
+}
+
+// TPM2_NV_DefineSpace by the owner: `size` bytes at `index`, readable and
+// writable by the owner and with the index's own (empty) auth, no
+// dictionary-attack lockout (0x02060006).
+List(Int) nv_define(Int index, Int size) {
+    List(Int) nvp = be(index, 4).concat(be(0x0b, 2)).concat(be(0x02060006, 4)).concat(be(0, 2)).concat(be(size, 2));
+    return cmd(0x8002, 0x12A, with_auth(be(0x40000001, 4), be(0, 2).concat(be(nvp.len(), 2)).concat(nvp)));
+}
+
+// TPM2_NV_Write by the owner: `data` at `offset`.
+List(Int) nv_write(Int index, List(Int) data, Int offset) {
+    return cmd(0x8002, 0x137, with_auth(be(0x40000001, 4).concat(be(index, 4)), be(data.len(), 2).concat(data).concat(be(offset, 2))));
+}
+
+// The response code, and with sessions the first handle (CreatePrimary's).
+Int rc_of(List(UInt(8)) r) { return if (r.len() < 10) { 0 - 1 } else { be_val(ints(r, 0, ListBuf()), 6, 10, 0) }; }
+Int handle_of(List(UInt(8)) r) { return if (r.len() < 14) { 0 - 1 } else { be_val(ints(r[10..14], 0, ListBuf()), 0, 4, 0) }; }
+
+@requires(network(readonly))
+Int raw(Int fd, List(Int) c) {
+    return match (send_sim(fd, hx(c))) { Ok(r) => rc_of(r), Err(e) => 0 - 1, };
+}
+
+@requires(network(readonly))
+Int raw_handle(Int fd, List(Int) c) {
+    return match (send_sim(fd, hx(c))) { Ok(r) => if (rc_of(r) == 0) { handle_of(r) } else { 0 - 1 }, Err(e) => 0 - 1, };
+}
+
+// -- Checks --------------------------------------------------------------------
+
+List(Int) pattern(Int n, Int i, ListBuf(Int) acc) {
+    if (i >= n) { return acc.finish(); }
+    return pattern(n, i + 1, acc.push((i * 7 + 3) & 255));
+}
+
+// The AK's public point (0x04 || x || y) from its TPMT_PUBLIC: type,
+// nameAlg, objectAttributes, authPolicy, TPMS_ECC_PARMS (symmetric,
+// scheme and its hash, curveID, kdf), then unique x and y as TPM2Bs.
+Option(List(Int)) ak_point(List(UInt(8)) pa) {
+    List(Int) b = ints(pa, 0, ListBuf());
+    if (b.len() < 10) { return None; }
+    Int pol = be_val(b, 8, 10, 0);
+    Int at = 10 + pol + 10;
+    if (at + 2 > b.len()) { return None; }
+    Int xl = be_val(b, at, at + 2, 0);
+    if (at + 2 + xl + 2 > b.len()) { return None; }
+    Int yat = at + 2 + xl;
+    Int yl = be_val(b, yat, yat + 2, 0);
+    if (xl != 32 || yl != 32 || yat + 2 + yl != b.len()) { return None; }
+    return Some([4].concat(b[at + 2..at + 2 + xl]).concat(b[yat + 2..yat + 2 + yl]));
+}
+
+Bool same(List(Int) a, List(Int) b, Int i) {
+    if (a.len() != b.len()) { return false; }
+    if (i >= a.len()) { return true; }
+    return a[i] == b[i] && same(a, b, i + 1);
+}
+
+Str quote_check(TpmQuote q, List(UInt(8)) nonce, List(Int) point, List(Int) pcr_cat) {
+    QuoteInfo qi = match (tpm_attest_quote(q.attest)) { Ok(x) => x, Err(e) => QuoteInfo {.signer = [], .extra_data = [], .clock_hi = 0, .clock_lo = 0, .reset_count = 0, .restart_count = 0, .safe = false, .fw_hi = 0, .fw_lo = 0, .pcrs = [], .pcr_digest = []}, };
+    Bool nonce_ok = same(ints(qi.extra_data, 0, ListBuf()), ints(nonce, 0, ListBuf()), 0);
+    Bool digest_ok = same(ints(qi.pcr_digest, 0, ListBuf()), sha256_bytes(pcr_cat), 0);
+    Bool sig_ok = match (q.signature) {
+        SigEcc(alg, h, r, s) => alg == tpm_alg_ecdsa() && h == tpm_alg_sha256()
+            && ecdsa_verify_digest(P256, point, sha256_bytes(ints(q.attest, 0, ListBuf())), EcSig {.ok = true, .r = ints(r, 0, ListBuf()), .s = ints(s, 0, ListBuf())}),
+        SigRsa(a, h, b) => false,
+        SigNull => false,
+    };
+    Bool bad_sig = match (q.signature) {
+        SigEcc(alg, h, r, s) => ecdsa_verify_digest(P256, point, sha256_bytes(ints(q.attest, 0, ListBuf()).concat([0])), EcSig {.ok = true, .r = ints(r, 0, ListBuf()), .s = ints(s, 0, ListBuf())}),
+        SigRsa(a, h, b) => true,
+        SigNull => true,
+    };
+    return f"nonce {nonce_ok}, pcr digest {digest_ok}, signature verifies {sig_ok}, over other bytes {bad_sig}";
+}
+
+List(Int) cat_digests(List(List(UInt(8))) ds, Int i, List(Int) acc) {
+    if (i >= ds.len()) { return acc; }
+    return cat_digests(ds, i + 1, acc.concat(ints(ds[i], 0, ListBuf())));
+}
+
+@requires(network(readonly), args)
+Int main() {
+    Int port = str_parse_int(args.get(1));
+    Int plat = resid_tcp_connect("127.0.0.1", port + 1);
+    if (plat < 0 || !signal(plat, 1) || !signal(plat, 11)) { println("simulator: no platform port"); return 1; }
+    _ = resid_tcp_close(plat);
+    Int fd = resid_tcp_connect("127.0.0.1", port);
+    if (fd < 0) { println("simulator: no command port"); return 1; }
+    Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send = lambda(c) { send_sim(fd, c) };
+    println(f"Startup rc {raw(fd, startup())}");
+
+    println(match (tpm_get_random_via(send, 16)) { Ok(b) => f"GetRandom {b.len()} bytes", Err(e) => tpm_error_text(e), });
+    println(match (tpm_properties_via(send, tpm_pt_fixed(), 1)) { Ok(ps) => f"TPM_PT_FAMILY_INDICATOR 0x{tpm_property(ps, 256) else { 0 }:hex}", Err(e) => tpm_error_text(e), });
+    println(match (tpm_properties_via(send, tpm_pt_nv_buffer_max(), 1)) { Ok(ps) => f"TPM_PT_NV_BUFFER_MAX {tpm_property(ps, 300) else { 0 }}", Err(e) => tpm_error_text(e), });
+    List(PcrSel) sel = [pcr_sel(tpm_alg_sha256(), [0, 1, 7])];
+    PcrRead pr = match (tpm_pcr_read_via(send, sel)) { Ok(p) => p, Err(e) => PcrRead {.update_counter = 0 - 1, .selection = [], .digests = []}, };
+    println(f"PCR_Read {pr.digests.len()} digests of {if (pr.digests.len() > 0) { pr.digests[0].len() } else { 0 }} bytes");
+
+    Int ak = raw_handle(fd, create_primary());
+    println(f"CreatePrimary handle 0x{ak:hex}");
+    TpmPublic tp = match (tpm_read_public_via(send, ak)) { Ok(p) => p, Err(e) => TpmPublic {.public_area = [], .type_alg = 0, .name_alg = 0, .name = [], .qualified_name = []}, };
+    println(f"ReadPublic type 0x{tp.type_alg:hex} nameAlg 0x{tp.name_alg:hex} name {tp.name.len()} bytes");
+    List(Int) point = ak_point(tp.public_area) else { [] };
+    List(UInt(8)) nonce = hx(pattern(32, 0, ListBuf()));
+    println(match (tpm_quote_via(send, ak, nonce, sel)) {
+        Ok(q) => "Quote: " + quote_check(q, nonce, point, cat_digests(pr.digests, 0, [])),
+        Err(e) => tpm_error_text(e),
+    });
+    println(match (tpm_quote_via(send, 0x81007777, nonce, sel)) { Ok(q) => "Quote of no key: accepted", Err(e) => "Quote of no key: " + tpm_error_text(e), });
+
+    Int idx = 0x01500001;
+    List(Int) data = pattern(2000, 0, ListBuf());
+    println(f"NV_DefineSpace rc {raw(fd, nv_define(idx, 2000))}");
+    println(f"NV_Write rc {raw(fd, nv_write(idx, data[0..1000], 0))} {raw(fd, nv_write(idx, data[1000..], 1000))}");
+    println(match (tpm_nv_read_public_via(send, idx)) { Ok(n) => f"NV_ReadPublic index 0x{n.index:hex} size {n.data_size} attributes 0x{n.attributes:hex}", Err(e) => tpm_error_text(e), });
+    println(match (tpm_nv_read_all_via(send, tpm_rh_owner(), idx)) { Ok(b) => f"NV_Read all {b.len()} bytes, same as written {same(ints(b, 0, ListBuf()), data, 0)}", Err(e) => tpm_error_text(e), });
+    println(match (tpm_nv_read_all_via(send, idx, idx)) { Ok(b) => f"NV_Read by its own auth {b.len()} bytes", Err(e) => tpm_error_text(e), });
+    println(match (tpm_nv_read_public_via(send, 0x01500002)) { Ok(n) => "no such index: answered", Err(e) => "no such index: " + tpm_error_text(e), });
+    println(match (tpm_handles_via(send, 0x01000000, 16)) { Ok(hs) => f"NV handles {hs}", Err(e) => tpm_error_text(e), });
+    _ = resid_tcp_close(fd);
+    return 0;
+}

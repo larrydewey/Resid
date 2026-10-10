@@ -27,7 +27,7 @@ Str fx_text(Result(List(DevOut), DeviceError) r) { return match (r) { Ok(o) => f
 @requires(device(readonly))
 pub Str fx_reads() {
     Str a = fx_text(device.read_attr(fx_attr()));
-    Str b = fx_text(device.configfs_report(fx_report(), ReportReq {.inblob = [(UInt(8))1, 2], .privlevel = 0 - 1, .service_provider = ""}));
+    Str b = fx_text(device.configfs_report(fx_report(), ReportReq {.inblob = [(UInt(8))1, 2], .privlevel = 0 - 1, .service_provider = "", .service_guid = "", .service_manifest_version = 0 - 1}));
     Str c = fx_text(device.sequence(fx_seq(), [InNum(7)]));
     Str d = fx_text(device.ioctl(fx_len(), [InBytes([(UInt(8))5]), InNum(1)]));
     return a + "; " + b + "; " + c + "; " + d;

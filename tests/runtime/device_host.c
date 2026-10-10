@@ -22,7 +22,9 @@
  * write into the guard page before a region; 21 a shared mapping and 22
  * an munmap after the filter; 23 to 26 a kernel that follows Nested
  * pointers (fills them; 24 past the length, 25 into the guard page; 26
- * writes a needed length and fails with EIO).
+ * writes a needed length and fails with EIO); 27 a ConfigfsReport on a
+ * fake configfs without service_guid and service_manifest_version, 28 one
+ * that keeps what was written to them.
  *
  * The parent's side of a test (a shorter wall-clock limit, the fake
  * configfs root it cleans up) is set with resid_device_test_parent, which
@@ -156,13 +158,34 @@ static uint32_t le32(const uint8_t* p) { return p[0] | (p[1] << 8) | (p[2] << 16
 
 static const char* report_root = "/sys/kernel/config/tsm/report";
 
-static void req_report(Req* r, const char* provider, int64_t privlevel) {
+/* A report with a service provider, a service GUID ("" for none) and a
+ * manifest version (-1 for none). */
+static void req_report_svc(Req* r, const char* provider, int64_t privlevel, const char* sp, const char* guid, int64_t version) {
     head(r, 4, 0, "fx.report", report_root);
     u(r, 1, 1); str(r, provider);
     u(r, 64, 4); u(r, 64, 4); u(r, 64, 4); u(r, 64, 4);
     u(r, 4, 4); u(r, 'n', 1); u(r, 'o', 1); u(r, 'n', 1); u(r, 'c', 1);
     u(r, (uint64_t)privlevel, 8);
-    u(r, 0, 2);
+    str(r, sp);
+    str(r, guid);
+    u(r, (uint64_t)version, 8);
+}
+
+static void req_report(Req* r, const char* provider, int64_t privlevel) {
+    req_report_svc(r, provider, privlevel, "", "", -1);
+}
+
+/* What self-test 28 kept of attribute `name`: root/kept_<name>, read into
+ * out and removed. */
+static int read_kept(const char* root, const char* name, char* out, int cap) {
+    char f[4600];
+    snprintf(f, sizeof f, "%s/kept_%s", root, name);
+    FILE* fp = fopen(f, "r");
+    int n = fp ? (int)fread(out, 1, cap - 1, fp) : -1;
+    if (fp) fclose(fp);
+    if (n >= 0) out[n] = 0;
+    unlink(f);
+    return n;
 }
 
 /* ─── Replies ─── */
@@ -374,6 +397,35 @@ int main(int argc, char** argv, char** envp) {
     req_report(&q, "fake_tsm", 2);
     r = call_mode(9, root, &q, 0);
     check("configfs_report_privlevel", code(&r) == 0 && dir_empty(root));
+    /* An SVSM report of one service in one manifest version: service_provider,
+     * service_guid and service_manifest_version each one store, so the
+     * generation is 4 with inblob's. */
+    const char* guid = "c0b406a4-a803-4952-9743-3fb6014cd0ae";
+    req_report_svc(&q, "fake_tsm", -1, "svsm", guid, 3);
+    r = call_mode(9, root, &q, 0);
+    check("configfs_report_service_guid", code(&r) == 0 && r.n == 61 && r.b[52] == 0 && r.b[53] == 4 && dir_empty(root));
+    /* What reached the attributes (self-test 28 leaves them). */
+    char got[128], gotv[32];
+    r = call_mode(28, root, &q, 0);
+    int gn = read_kept(root, "service_guid", got, sizeof got);
+    int vn = read_kept(root, "service_manifest_version", gotv, sizeof gotv);
+    check("configfs_service_written", code(&r) == 0 && gn == 36 && strcmp(got, guid) == 0 && vn == 2 && strcmp(gotv, "3\n") == 0 && dir_empty(root));
+    /* A provider without the attributes (an SNP guest with no SVSM). */
+    r = call_mode(27, root, &q, 0);
+    check("configfs_service_guid_missing_attr", code(&r) == 6 && dir_empty(root));
+    /* The parent refuses a malformed GUID, a version past a u32, and
+     * either without a service provider: no host starts. */
+    req_report_svc(&q, "fake_tsm", -1, "svsm", "c0b406a4-a803-4952-9743-3fb6014cd0aZ", -1);
+    r = call_mode(9, root, &q, 0);
+    int bad1 = code(&r) == 10 && value(&r) == 24;
+    req_report_svc(&q, "fake_tsm", -1, "svsm", "", 4294967296LL);
+    r = call_mode(9, root, &q, 0);
+    int bad2 = code(&r) == 10 && value(&r) == 24;
+    req_report_svc(&q, "fake_tsm", -1, "", guid, -1);
+    r = call_mode(9, root, &q, 0);
+    int bad3 = code(&r) == 10 && value(&r) == 24;
+    check("configfs_service_options_refused", bad1 && bad2 && bad3 && dir_empty(root));
+    req_report(&q, "fake_tsm", -1);
     req_report(&q, "sev_guest", -1);
     r = call_mode(9, root, &q, 0);
     check("configfs_unknown_provider_err", code(&r) == 9 && value(&r) == 8 && r.n == 18 && memcmp(r.b + 10, "fake_tsm", 8) == 0 && dir_empty(root));

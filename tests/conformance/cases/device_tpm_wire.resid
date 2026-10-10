@@ -1,0 +1,182 @@
+// TPM 2.0 commands and responses (lib/dev/tpm_wire.resid) against known
+// byte vectors, and every response decoder against truncated and corrupted
+// input: each must answer Err, never abort or hang.
+//
+// Vectors:
+//   - GetCapability(TPM_CAP_TPM_PROPERTIES, PT_FIXED, 127), command and a
+//     real response: tpm2-tss test/unit/tcti-cmd-test.h (getcap_command,
+//     getcap_good_resp; tpm2-software/tpm2-tss 6abc4579).
+//   - The other commands: as google/go-tpm v0.9.8 (legacy/tpm2) encodes
+//     them, and responses go-tpm decodes to the same values checked here
+//     (tests/device/tpm-vectors/main.go regenerates them).
+//   - Layouts: TCG TPM 2.0 Library Part 3, the tables tpm_wire.resid names.
+import "dev/tpm_wire.resid";
+
+Int hexv(Int c) { return if (c >= 97) { c - 87 } else if (c >= 65) { c - 55 } else { c - 48 }; }
+
+List(UInt(8)) unhex(Str s, Int i, ListBuf(UInt(8)) acc) {
+    if (i + 1 >= str_len(s)) { return acc.finish(); }
+    return unhex(s, i + 2, acc.push((UInt(8))(hexv(str_char_at(s, i)) * 16 + hexv(str_char_at(s, i + 1)))));
+}
+
+List(UInt(8)) bytes(Str s) { return unhex(s, 0, ListBuf()); }
+
+Str hexs(List(UInt(8)) b, Int i, Str acc) {
+    if (i >= b.len()) { return acc; }
+    return hexs(b, i + 1, acc + f"{(Int)b[i]:hex, zero, width 2}");
+}
+
+Str cmd(Str what, Result(List(UInt(8)), TpmError) c, Str want) {
+    return match (c) {
+        Ok(b) => if (hexs(b, 0, "") == want) { what + ": matches" } else { what + ": differs " + hexs(b, 0, "") },
+        Err(e) => what + ": " + tpm_error_text(e),
+    };
+}
+
+// -- Decoders, by name, as text ------------------------------------------------
+
+Str sel_text(List(PcrSel) s, Int i, Str acc) {
+    if (i >= s.len()) { return acc; }
+    return sel_text(s, i + 1, acc + f"[alg {s[i].alg} pcrs {s[i].pcrs}]");
+}
+
+Str head2(List(UInt(8)) b) { return if (b.len() >= 2) { hexs(b[0..2], 0, "") } else { "-" }; }
+
+Str decode(Int which, List(UInt(8)) r) {
+    if (which == 0) {
+        return match (tpm2_get_capability_resp(r)) {
+            Ok(c) => match (c.data) {
+                CapProps(ps) => f"{ps.len()} properties, more {c.more}, PT_FIXED {tpm_property(ps, 256)}, NV_BUFFER_MAX {tpm_property(ps, 300)}",
+                CapHandles(hs) => f"handles {hs}, more {c.more}",
+                CapPcrs(s) => "pcrs " + sel_text(s, 0, ""),
+                CapOther(k, b) => f"capability {k}, {b.len()} bytes",
+            },
+            Err(e) => tpm_error_text(e),
+        };
+    }
+    if (which == 1) { return match (tpm2_get_random_resp(r)) { Ok(b) => "random " + hexs(b, 0, ""), Err(e) => tpm_error_text(e), }; }
+    if (which == 2) {
+        return match (tpm2_pcr_read_resp(r)) {
+            Ok(p) => f"counter {p.update_counter} " + sel_text(p.selection, 0, "") + f" {p.digests.len()} digests " + head2(p.digests[0]) + " " + head2(p.digests[2]),
+            Err(e) => tpm_error_text(e),
+        };
+    }
+    if (which == 3) {
+        return match (tpm2_read_public_resp(r)) {
+            Ok(p) => f"type 0x{p.type_alg:hex} nameAlg 0x{p.name_alg:hex} public {p.public_area.len()} bytes name " + head2(p.name[1..]) + " qn " + head2(p.qualified_name[1..]),
+            Err(e) => tpm_error_text(e),
+        };
+    }
+    if (which == 4) {
+        return match (tpm2_nv_read_public_resp(r)) {
+            Ok(n) => f"index 0x{n.index:hex} nameAlg {n.name_alg} attributes 0x{n.attributes:hex} policy {n.auth_policy.len()} size {n.data_size} name {n.name.len()}",
+            Err(e) => tpm_error_text(e),
+        };
+    }
+    if (which == 5) { return match (tpm2_nv_read_resp(r)) { Ok(b) => "data " + hexs(b, 0, ""), Err(e) => tpm_error_text(e), }; }
+    return match (tpm2_quote_resp(r)) {
+        Ok(q) => f"attest {q.attest.len()} bytes, " + sig_text(q.signature) + f", raw {q.sig_raw.len()}; " + attest_text(q.attest),
+        Err(e) => tpm_error_text(e),
+    };
+}
+
+Str sig_text(TpmSignature s) {
+    return match (s) {
+        SigNull => "no signature",
+        SigRsa(a, h, b) => f"rsa 0x{a:hex} hash 0x{h:hex} {b.len()} bytes",
+        SigEcc(a, h, r, s2) => f"ecc 0x{a:hex} hash 0x{h:hex} r " + head2(r) + " s " + head2(s2),
+    };
+}
+
+Str attest_text(List(UInt(8)) a) {
+    return match (tpm_attest_quote(a)) {
+        Ok(q) => "extra " + head2(q.extra_data) + f" clock {q.clock_lo} reset {q.reset_count} restart {q.restart_count} safe {q.safe} fw 0x{q.fw_hi:hex}{q.fw_lo:hex, zero, width 8} " + sel_text(q.pcrs, 0, "") + " digest " + head2(q.pcr_digest),
+        Err(e) => tpm_error_text(e),
+    };
+}
+
+// -- Fuzz: every prefix (as read, and with responseSize patched to fit),
+// and every byte set to 0xff and to 0x00 -------------------------------------
+
+Bool is_ok(Int which, List(UInt(8)) r) { return !str_starts_with(decode(which, r), "tpm:"); }
+
+List(UInt(8)) resize(List(UInt(8)) r) {
+    if (r.len() < 10) { return r; }
+    Int n = r.len();
+    List(UInt(8)) sz = [(UInt(8))((n >> 24) & 255), (UInt(8))((n >> 16) & 255), (UInt(8))((n >> 8) & 255), (UInt(8))(n & 255)];
+    return r[0..2].concat(sz).concat(r[6..]);
+}
+
+List(UInt(8)) set_at(List(UInt(8)) r, Int i, Int v) { return r[0..i].concat([(UInt(8))v]).concat(r[i + 1..]); }
+
+Int prefixes_ok(Int which, List(UInt(8)) r, Int k, Int acc) {
+    if (k >= r.len()) { return acc; }
+    Int a1 = if (is_ok(which, r[0..k])) { 1 } else { 0 };
+    Int a2 = if (is_ok(which, resize(r[0..k]))) { 1 } else { 0 };
+    return prefixes_ok(which, r, k + 1, acc + a1 + a2);
+}
+
+Int mutants_ok(Int which, List(UInt(8)) r, Int i, Int acc) {
+    if (i >= r.len()) { return acc; }
+    Int a1 = if (is_ok(which, set_at(r, i, 255))) { 1 } else { 0 };
+    Int a2 = if (is_ok(which, set_at(r, i, 0))) { 1 } else { 0 };
+    return mutants_ok(which, r, i + 1, acc + a1 + a2);
+}
+
+Str fuzz(Str what, Int which, List(UInt(8)) r) {
+    Int p = prefixes_ok(which, r, 0, 0);
+    Int m = mutants_ok(which, r, 0, 0);
+    return f"{what}: {r.len()} bytes; truncated accepted {p}; of {r.len() * 2} mutants {m} parse";
+}
+
+Int main() {
+    // Commands.
+    println(cmd("GetCapability", tpm2_get_capability_cmd(6, 256, 127), "8001000000160000017a00000006000001000000007f"));
+    println(cmd("GetCapability handles", tpm2_get_capability_cmd(1, 2164260864, 10), "8001000000160000017a00000001810000000000000a"));
+    println(cmd("GetRandom", tpm2_get_random_cmd(8), "80010000000c0000017b0008"));
+    println(cmd("PCR_Read", tpm2_pcr_read_cmd([pcr_sel(tpm_alg_sha256(), [0, 1, 7])]), "8001000000140000017e00000001000b03830000"));
+    println(cmd("ReadPublic", tpm2_read_public_cmd(tpm_handle_azure_ak()), "80010000000e0000017381000003"));
+    println(cmd("NV_ReadPublic", tpm2_nv_read_public_cmd(tpm_nv_azure_hcl_report()), "80010000000e0000016901400001"));
+    println(cmd("NV_Read", tpm2_nv_read_cmd(tpm_rh_owner(), tpm_nv_azure_hcl_report(), 8, 0, []), "8002000000230000014e40000001014000010000000940000009000001000000080000"));
+    println(cmd("Quote", tpm2_quote_cmd(tpm_handle_azure_ak(), bytes("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), [pcr_sel(tpm_alg_sha256(), [0, 1, 7])], []), "8002000000490000015881000003000000094000000900000100000020aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa001000000001000b03830000"));
+    // Inputs a command cannot carry.
+    println(cmd("GetRandom 0", tpm2_get_random_cmd(0), ""));
+    println(cmd("PCR 24", tpm2_pcr_read_cmd([pcr_sel(tpm_alg_sha256(), [24])]), ""));
+    println(cmd("NV_Read size", tpm2_nv_read_cmd(tpm_rh_owner(), 1, 65536, 0, []), ""));
+    println(cmd("Quote nonce", tpm2_quote_cmd(1, bytes("00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ff"), [], []), ""));
+
+    // Responses.
+    List(UInt(8)) getcap = bytes("8001000001830000000000000000060000002e00000100322e30000000010100000000000001020000009200000103000000a700000104000007e10000010549424d200000010653572020000001072054504d000001080000000000000109000000000000010a000000010000010b201605110000010c001628000000010d000004000000010e000000030000010f00000002000001100000000300000111000000400000011200000018000001130000000300000114ffffffff00000116000000000000011700000800000001180000000600000119000010000000011a0000000c0000011b000000060000011c000001000000011d000000ff0000011e000010000000011f0000100000000120000000300000012100000ce4000001220000014400000123322e30000000012400000000000001250000009200000126000000a700000127000007e1000001280000008000000129000000710000012a0000006d0000012b000000040000012c000004000000012d000000000000012e00000400");
+    List(UInt(8)) handles = bytes("80010000001b000000000000000001000000028100000181000003");
+    List(UInt(8)) random = bytes("8001000000140000000000080102030405060708");
+    List(UInt(8)) pcrs = bytes("800100000082000000000000002a00000001000b0383000000000003002011111111111111111111111111111111111111111111111111111111111111110020222222222222222222222222222222222222222222222222222222222222222200207777777777777777777777777777777777777777777777777777777777777777");
+    List(UInt(8)) pubr = bytes("8001000000ac0000000000580023000b00050072000000100018000b0003001000205a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a0020a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a50022000b33333333333333333333333333333333333333333333333333333333333333330022000b4444444444444444444444444444444444444444444444444444444444444444");
+    List(UInt(8)) nvpub = bytes("80010000003e00000000000e01400001000b000a0006000000080022000b6666666666666666666666666666666666666666666666666666666666666666");
+    List(UInt(8)) nvread = bytes("80020000001d000000000000000a0008deadbeef010203040000010000");
+    List(UInt(8)) quote = bytes("8002000000ee00000000000000db0091ff54434780180022000b33333333333333333333333333333333333333333333333333333333333333330020aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000000000123456000000070000000301202401010000000200000001000b03830000002099999999999999999999999999999999999999999999999999999999999999990018000b00200101010101010101010101010101010101010101010101010101010101010101002002020202020202020202020202020202020202020202020202020202020202020000010000");
+    println(decode(0, getcap));
+    println(decode(0, handles));
+    println(decode(1, random));
+    println(decode(2, pcrs));
+    println(decode(3, pubr));
+    println(decode(4, nvpub));
+    println(decode(5, nvread));
+    println(decode(6, quote));
+    // A TPM error (TPM_RC_RETRY, tpm2-tss test/unit/sys-execute.c) and a
+    // response for the wrong session kind.
+    println(decode(1, bytes("80010000000a00000922")));
+    println(decode(5, bytes("8001000000140000000000080102030405060708")));
+    // A count far past the bytes there are is refused before any loop.
+    println(decode(0, bytes("8001" + "00000017" + "00000000" + "00" + "00000006" + "ffffffff" + "00000100")));
+    println(decode(2, bytes("8001" + "00000018" + "00000000" + "0000002a" + "7fffffff" + "000b03830000")));
+
+    println(fuzz("GetCapability", 0, getcap));
+    println(fuzz("GetCapability handles", 0, handles));
+    println(fuzz("GetRandom", 1, random));
+    println(fuzz("PCR_Read", 2, pcrs));
+    println(fuzz("ReadPublic", 3, pubr));
+    println(fuzz("NV_ReadPublic", 4, nvpub));
+    println(fuzz("NV_Read", 5, nvread));
+    println(fuzz("Quote", 6, quote));
+    return 0;
+}

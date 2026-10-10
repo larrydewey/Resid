@@ -1,0 +1,145 @@
+// --- lib/dev/tpm.resid - TPM 2.0 through the kernel's resource manager
+// The TPM commands an attester needs, sent to /dev/tpmrm0 (the kernel's
+// in-kernel resource manager, drivers/char/tpm/tpmrm-dev.c: each open file
+// gets its own view of transient objects and sessions, flushed when it is
+// closed) as one Transact per command. The commands and their responses
+// are lib/dev/tpm_wire.resid's: pure, so a verifier that only parses
+// evidence imports that module and needs no grant.
+//
+// The authority this takes. A Transact writes a command to the device, so
+// its descriptor is a write (`write = true`, E0263) and every wrapper here
+// needs the full `device` grant: device(readonly) never covers it. There is
+// no read-only TPM descriptor, and there cannot be one in this design: the
+// kernel sees only a byte stream, so a "read" descriptor would still let
+// any command through -- TPM2_PCR_Extend, TPM2_NV_Write, TPM2_Clear --
+// unless the device host parsed TPM commands, which is per-device code the
+// generic host does not have (plan §0). And the TPM's state moves under
+// the commands this module calls too: a quote is signed with a key the TPM
+// holds, a read of an NV index can bump its read lock or lockout counter.
+//
+// What narrows it instead: the descriptor is private to this module (it is
+// not `pub`), so a program reaches /dev/tpmrm0 only through the typed
+// wrappers below, which build exactly the commands they name -- GetCapability,
+// GetRandom, PCR_Read, ReadPublic, NV_ReadPublic, NV_Read and Quote with an
+// existing key -- and never a command that writes TPM state on purpose. A
+// manifest bound `devices = ["tpm"]` (or `["tpm.tpmrm0"]`) is how a
+// dependency is limited to them.
+//
+// What is signed. A quote's `attest` is signed by the attestation key
+// (verify the signature with the AK's public area, and the AK through its
+// certificate or the EK); PCR values, NV contents, capabilities and random
+// bytes are what the TPM says, unsigned -- trust them only through a quote
+// over them, or the signature inside them (an EK or AK certificate is
+// signed by its issuer; Azure's HCL report carries a hardware-signed SNP or
+// TDX report, see tpm_azure_hcl_report).
+
+import "device.resid";
+import "device_write.resid";
+import "tpm_wire.resid";
+
+// -- Descriptor ---------------------------------------------------------------
+
+// A command and its response are each at most 4096 bytes: TPM_BUFSIZE
+// (include/linux/tpm_command.h), the largest the character device accepts or
+// returns.
+Transact tpm_op() {
+    return Transact {.name = "tpm.tpmrm0", .path = "/dev/tpmrm0", .max_command = 4096, .max_response = 4096, .secret = false, .write = true, .stability = Uapi};
+}
+
+// -- Wrappers -------------------------------------------------------------------
+// Each is lib/dev/tpm_wire.resid's *_via over /dev/tpmrm0.
+
+// One command's bytes to the TPM, the response's back.
+@requires(device)
+Result(List(UInt(8)), TpmError) tpm_send(List(UInt(8)) c) {
+    return match (device.transact(tpm_op(), c)) {
+        Err(e) => Err(TpmDev(e)),
+        Ok(outs) => match (dv_out_bytes(outs, 0)) {
+            None => Err(TpmDev(BadReply("tpm.tpmrm0", "no response buffer"))),
+            Some(r) => Ok(r),
+        },
+    };
+}
+
+// TPM2_GetCapability.
+@requires(device)
+pub Result(TpmCap, TpmError) tpm_get_capability(Int capability, Int property, Int count) {
+    return tpm_get_capability_via(lambda(c) { tpm_send(c) }, capability, property, count);
+}
+
+// The TPM's properties from `first` on (TPM_CAP_TPM_PROPERTIES), at most
+// `count` of them.
+@requires(device)
+pub Result(List(TpmProperty), TpmError) tpm_properties(Int first, Int count) {
+    return tpm_properties_via(lambda(c) { tpm_send(c) }, first, count);
+}
+
+// The handles from `first` on (TPM_CAP_HANDLES): 0x81000000 lists the
+// persistent objects, 0x01000000 the NV indices.
+@requires(device)
+pub Result(List(Int), TpmError) tpm_handles(Int first, Int count) {
+    return tpm_handles_via(lambda(c) { tpm_send(c) }, first, count);
+}
+
+// `n` (1 to 64) random bytes from the TPM's generator. Public: for a
+// nonce, not for key material.
+@requires(device)
+pub Result(List(UInt(8)), TpmError) tpm_get_random(Int n) {
+    return tpm_get_random_via(lambda(c) { tpm_send(c) }, n);
+}
+
+// TPM2_PCR_Read: at most eight digests per call; `selection` in the answer
+// says which.
+@requires(device)
+pub Result(PcrRead, TpmError) tpm_pcr_read(List(PcrSel) sel) {
+    return tpm_pcr_read_via(lambda(c) { tpm_send(c) }, sel);
+}
+
+// TPM2_ReadPublic of a loaded or persistent object (an AK, the EK).
+@requires(device)
+pub Result(TpmPublic, TpmError) tpm_read_public(Int handle) {
+    return tpm_read_public_via(lambda(c) { tpm_send(c) }, handle);
+}
+
+// TPM2_NV_ReadPublic of an NV index.
+@requires(device)
+pub Result(NvPublic, TpmError) tpm_nv_read_public(Int index) {
+    return tpm_nv_read_public_via(lambda(c) { tpm_send(c) }, index);
+}
+
+// TPM2_NV_Read of `size` bytes at `offset`, authorized by `auth_handle`
+// (the index itself, or tpm_rh_owner()) with an empty password. A TPM
+// reads at most TPM_PT_NV_BUFFER_MAX bytes per command; tpm_nv_read_all
+// reads a whole index.
+@requires(device)
+pub Result(List(UInt(8)), TpmError) tpm_nv_read(Int auth_handle, Int index, Int size, Int offset) {
+    return tpm_nv_read_via(lambda(c) { tpm_send(c) }, auth_handle, index, size, offset);
+}
+
+// A whole NV index, in pieces of the TPM's TPM_PT_NV_BUFFER_MAX.
+@requires(device)
+pub Result(List(UInt(8)), TpmError) tpm_nv_read_all(Int auth_handle, Int index) {
+    return tpm_nv_read_all_via(lambda(c) { tpm_send(c) }, auth_handle, index);
+}
+
+// TPM2_Quote: the PCRs `sel` selects, signed by the attestation key at
+// `ak_handle` (already loaded or persistent, with an empty password) in its
+// own scheme, with `nonce` (at most 64 bytes) as the qualifying data.
+@requires(device)
+pub Result(TpmQuote, TpmError) tpm_quote(Int ak_handle, List(UInt(8)) nonce, List(PcrSel) sel) {
+    return tpm_quote_via(lambda(c) { tpm_send(c) }, ak_handle, nonce, sel);
+}
+
+// Azure confidential VMs: the paravisor's report from NV index 0x01400001,
+// read with owner authorization. It is written once at boot by the HCL, not
+// made for this call, so it carries no nonce: freshness comes from a quote
+// by the AK it binds. Layout (Azure/confidential-computing-cvm-guest-
+// attestation, cvm-guest-attestation.md): a 32-byte header, then the
+// hardware report (an SNP report of 1184 bytes at offset 32, signed by the
+// AMD secure processor; or a TDX report), then the runtime claims (JSON
+// with the AK and EK public keys) whose hash the hardware report's
+// REPORT_DATA holds. Only the hardware report is signed.
+@requires(device)
+pub Result(List(UInt(8)), TpmError) tpm_azure_hcl_report() {
+    return tpm_nv_read_all(tpm_rh_owner(), tpm_nv_azure_hcl_report());
+}
