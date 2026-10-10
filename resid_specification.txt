@@ -1001,7 +1001,10 @@ Escapes in "...", f"...", b"..." and '.' are \n \t \r \0
 parse error. Text is ASCII through \x7f; a byte above that
 belongs in a byte string. A Str ends at NUL, so \0 and \x00
 are refused in text (a byte string and a character take
-them). r"..." has no escapes.
+them). A heap Bytes also ends at its first zero byte, so a
+byte string with \0 or \x00 is refused unless it is a
+Bytes(N) (§44), which holds exactly N bytes. r"..." has no
+escapes.
 
 14.1  A hole's format spec
 
@@ -2750,14 +2753,19 @@ the only operators that may change a fixed capacity.
   Str(N)   -> Str           a heap Str holding the
                             text up to the NUL
   Bytes(N) -> Bytes         a heap Bytes holding the
-                            bytes up to the first zero
+                            bytes up to the first zero;
+                            aborts when a non-zero byte
+                            follows a zero one (it would
+                            be dropped)
   Str      -> Str(N)        explicit bounded copy;
                             keeps the longest prefix of
                             whole codepoints that fits
                             in N bytes
   Bytes    -> Bytes(N)      explicit bounded copy
   Str(N)   -> Str(M)        explicit bounded copy
-  Bytes(N) -> Bytes(M)      explicit bounded copy
+  Bytes(N) -> Bytes(M)      explicit bounded copy of
+                            min(N, M) bytes, zeros
+                            included
   List(T, N) -> List(T)     copies all N dense elements
                             into a heap list; the
                             resulting list's length is N
@@ -3176,7 +3184,7 @@ wrapping_mul; be read at a public index when it is a list;
 be stored in a record field or a list element; be chosen by
 ct_select(c, a, b), a mask selection on a Secret(Bool) c
 between integers of at most 64 bits or Bools. The result is
-secret. A secret list's, bytes' or text's .len() is public.
+secret. A secret list's or text's .len() is public.
 lib/crypto.resid's ct_eq compares secret byte lists in
 constant time and publishes the one-bit verdict, so it needs
 the declassify grant.
@@ -3206,7 +3214,11 @@ argument, or be a spawn region's result (E0255); be a Map
 key or Set element in any written type (E0253); go
 through checked + - *, whose overflow abort is a branch on the
 value (E0254); wrap Option, Result, a sum type, Map, Set, a
-handle, a function or another secret (E0253).
+handle, a function or another secret (E0253); or wrap a Bytes
+or Bytes(N), in any written or inferred type (E0253): a heap
+Bytes ends at its first zero byte, so its .len() and its
+conversions scan the bytes, a branch on each. Secret byte
+strings are List(Secret(UInt(8))).
 
 No observation behavior reaches a secret. The structural Show
 and Serialize refuse a type that holds one at any depth and

@@ -22,7 +22,10 @@ Int main() {
 ## Making and publishing secrets
 
 - `secret(x)` wraps a value. `T` may not be `Option`, `Result`, a sum type,
-  `Map`, `Set`, a handle, a function or a secret (`E0253`).
+  `Map`, `Set`, a handle, a function or a secret (`E0253`), nor `Bytes` or
+  `Bytes(N)` in any written or inferred type (`E0253`): a heap `Bytes` ends
+  at its first zero byte, so its `.len()` and its conversions scan the
+  bytes. Secret byte strings are `List(Secret(UInt(8)))`.
 - A secret whose value the compiler knows after reduction is refused
   (`E0250`): it would be in the binary for everyone who has it. Read
   secrets at run time. `declassify(secret(41), "why")` is accepted, since it
@@ -52,7 +55,7 @@ Int main() {
 | a cast to an integer type that holds every value (`(UInt(576)) b` for a `Secret(UInt(8))` `b`) | a cast that could lose a value, which is checked and aborts (`E0255`; use `wrapping_*`) |
 | reading a secret list at a public index | a secret index, range bound or shift amount (`E0255`) |
 | storing it in a record field or list | deciding an `if`, `while`, `match` or ternary (`E0255`) |
-| `ct_select(c, a, b)` with a `Secret(Bool)` `c` | methods, except a secret list's, bytes' or text's `.len()` (`E0255`) |
+| `ct_select(c, a, b)` with a `Secret(Bool)` `c` | methods, except a secret list's or text's `.len()` (`E0255`) |
 | | being a `Map` key or `Set` element in any type (`E0253`) |
 | | a provider argument, including `filesystem.write_secret` (`E0255`) |
 | | a `spawn` region's result (`E0255`) |
@@ -296,7 +299,7 @@ run time: step 2 of the plan's migration is complete.
   byte lists in constant time and returns a public `Bool`. Only that one
   bit is published, which is a declassification, so `ct_eq` needs
   `@requires(declassify)`.
-- A secret list's, bytes' or text's `.len()` is public.
+- A secret list's or text's `.len()` is public.
 
 `tests/ct/run.sh` checks both helpers under valgrind on the optimized
 binary: no branch or memory address depends on the secret.

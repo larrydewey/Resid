@@ -1266,7 +1266,10 @@ GKT gk_lit(GK k, Int id, Str exp) {
         return gterr(k, what + f"{len} bytes, exceeds Str({cap}) capacity", id);
     }
     if (lk == "bytes") {
-        if (!is_bytes_fixed(exp)) { return gt(k, "Bytes", id); }
+        if (!is_bytes_fixed(exp)) {
+            if (bytes_literal_has_zero(t)) { return gterr(k, "a Bytes value ends at its first zero byte, so this literal would be cut short there: use a Bytes(N) (which holds exactly N bytes) or a List(UInt(8))", id); }
+            return gt(k, "Bytes", id);
+        }
         Int cap = fixed_cap(exp);
         Int len = bytes_literal_len(t);
         if (len <= cap) { return gt(k, exp, id); }
@@ -4843,14 +4846,16 @@ Bool gm_unknown_types(Kg g, Int id, Map(Str, Int) known, Str src, Str smap, Bool
     Str u = if (g.ns[id].kind == "ty") { gm_unknown_in(g.ns[id].text, 0, known) } else { "" };
     Str sk = if (g.ns[id].kind == "ty" && u == "") { sec_key_err(g.ns[id].text) } else { "" };
     if (sk != "") { gk_diag("E0253", sk, g, id, src, smap); }
-    Str sw = if (g.ns[id].kind == "ty" && u == "" && sk == "") { sec_wide_err(g.ns[id].text) } else { "" };
+    Str sb = if (g.ns[id].kind == "ty" && u == "" && sk == "") { sec_bytes_err(g.ns[id].text) } else { "" };
+    if (sb != "") { gk_diag("E0253", sb, g, id, src, smap); }
+    Str sw = if (g.ns[id].kind == "ty" && u == "" && sk == "" && sb == "") { sec_wide_err(g.ns[id].text) } else { "" };
     if (sw != "") { gk_diag("E0258", sw, g, id, src, smap); }
     Bool rsv = (g.ns[id].kind == "fn" || g.ns[id].kind == "proto") && sec_reserved(g.ns[id].text);
     if (rsv) { gk_diag("E0259", "`" + g.ns[id].text + "` is a builtin of secret values (spec §48) and cannot be redefined: a function by that name would replace it in every module, libraries included", g, id, src, smap); }
     Str near = if (u == "") { "" } else { gm_near(known.keys(), 0, u) };
     Str hint = if (near != "") { " (did you mean `" + near + "`?)" } else { "; a type parameter is a single uppercase letter (T, K, V)" };
     if (u != "") { gk_diag("E0001", "type error: unknown type `" + u + "`" + hint, g, id, src, smap); }
-    return gm_unknown_types(g, id + 1, known, src, smap, acc || u != "" || sk != "" || sw != "" || rsv);
+    return gm_unknown_types(g, id + 1, known, src, smap, acc || u != "" || sk != "" || sb != "" || sw != "" || rsv);
 }
 
 // ─── Ambiguous imports (E0223) ──────────────────────────────────────
@@ -5030,6 +5035,7 @@ Str sec_wrap_err(GK k, Str t) {
     if (h == "Option" || h == "Result") { return "a secret cannot wrap " + h + ": whether it holds a value is control flow; use " + h + "(Secret(...)) instead"; }
     if (h == "Map" || h == "Set") { return "a secret cannot wrap a " + h + ": its keys decide where lookups go"; }
     if (h == "File" || is_fn_type(t)) { return "a secret cannot wrap a " + h; }
+    if (h == "Bytes") { return sec_bytes_msg(t); }
     if (sumtype_index(k.fs, t) >= 0) { return "a secret cannot wrap the sum type " + t + ": its variant is control flow"; }
     return "";
 }
@@ -5328,6 +5334,25 @@ Str sec_key_err(Str t) {
     return "";
 }
 
+// E0253 in a written or inferred type: a secret Bytes or Bytes(N), or "".
+// A heap Bytes' length is found by scanning for its zero byte, and its
+// conversions stop at one, so its timing and its value depend on the
+// bytes; secret byte strings are List(Secret(UInt(8))).
+Str sec_bytes_err(Str t) { return sec_bytes_at(t, 0); }
+
+Str sec_bytes_at(Str t, Int from) {
+    Int at = sec_find_head(t, "Secret(", from);
+    if (at < 0) { return ""; }
+    Str in = str_trim(str_slice(t, at + 7, str_len(t)));
+    Bool hit = str_starts_with(in, "Bytes") && (str_starts_with(in, "Bytes)") || str_starts_with(in, "Bytes("));
+    if (hit) { return sec_bytes_msg(str_slice(in, 0, imp_close_paren(in, 0, 0) - 1)); }
+    return sec_bytes_at(t, at + 7);
+}
+
+Str sec_bytes_msg(Str t) {
+    return "a secret cannot wrap " + t + ": a byte string's length and conversions scan for a zero byte, a branch on the secret; use List(Secret(UInt(8)))";
+}
+
 // The first `h` (e.g. "Map(") at a word start in t, from `from`, or -1.
 Int sec_find_head(Str t, Str h, Int from) {
     Int rel = str_find(str_slice(t, from, str_len(t)), h);
@@ -5423,6 +5448,11 @@ Bool sec_wide_int(Str t) {
 Bool sec_wide_scan(GK k, List(Int) keys, List(Str) tys, Int i, Str src, Str smap) {
     if (i >= keys.len()) { return false; }
     Str t = tys[keys[i] % 4294967296];
+    Str eb = if (str_contains(t, "Secret(")) { sec_bytes_err(t) } else { "" };
+    if (eb != "") {
+        gk_diag("E0253", eb, k.g, keys[i] / 4294967296, src, smap);
+        return true;
+    }
     Str e = if (str_contains(t, "Secret(")) { sec_wide_err(t) } else { "" };
     if (e != "") {
         gk_diag("E0258", e, k.g, keys[i] / 4294967296, src, smap);

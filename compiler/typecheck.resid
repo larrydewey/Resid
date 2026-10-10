@@ -3049,6 +3049,26 @@ Int _count_bytes(Str inner, Int i, Int count) {
     return _count_bytes(inner, i + 1, count + 1);
 }
 
+// Whether a byte string literal holds a zero byte (`\0` or `\x00`). A
+// heap Bytes ends at its first zero byte, so such a literal is refused
+// there rather than cut short.
+Bool bytes_literal_has_zero(Str text) {
+    Str inner = str_slice(text, 2, str_len(text) - 1);
+    return bytes_zero_at(inner, 0, str_len(inner));
+}
+
+Bool bytes_zero_at(Str inner, Int i, Int n) {
+    if (i >= n) { return false; }
+    if (str_char_at(inner, i) != 92) { return bytes_zero_at(inner, i + 1, n); }
+    Int e = str_char_at(inner, i + 1);
+    if (e == 48) { return true; }
+    if (e == 120) {
+        if (str_char_at(inner, i + 2) == 48 && str_char_at(inner, i + 3) == 48) { return true; }
+        return bytes_zero_at(inner, i + 4, n);
+    }
+    return bytes_zero_at(inner, i + 2, n);
+}
+
 // Known base type names usable in a cast `(Type) expr`.
 pub Bool is_known_type(Str ty) {
     if (ty == "Int") { return true; }

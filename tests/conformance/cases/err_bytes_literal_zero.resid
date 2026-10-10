@@ -1,0 +1,7 @@
+// A heap Bytes ends at its first zero byte, so a literal holding one
+// (`\x00`) would be cut short there; it is refused instead.
+Int main() {
+    Bytes b = b"ab\x00cd";
+    println(f"{b.len()}");
+    return 0;
+}

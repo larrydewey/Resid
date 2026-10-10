@@ -3493,18 +3493,26 @@ GT cg_cast_fixed(GT inner, Str toty, GT c) {
     Bool to_text = (toty == "Str" && (is_str_fixed(inner.ty) || is_bytes_fixed(inner.ty))) || (toty == "Bytes" && is_bytes_fixed(inner.ty));
     if (to_text) {
         Str r = f"%t{inner.tmp + 1}";
-        List(Str) l1 = inner.lines.concat([r + " = call ptr @resid_fixed_text(ptr " + inner.val + f", i64 {fixed_bytes(inner.ty)})"]);
+        // A Bytes(N) holds exactly N bytes, zeros included; the heap form
+        // ends at the first zero, so a non-zero byte after one aborts
+        // (resid_fixed_bytes) instead of being dropped.
+        Str conv = if (is_bytes_fixed(inner.ty)) { "@resid_fixed_bytes" } else { "@resid_fixed_text" };
+        List(Str) l1 = inner.lines.concat([r + " = call ptr " + conv + "(ptr " + inner.val + f", i64 {fixed_bytes(inner.ty)})"]);
         return GT {.pos = inner.pos, .val = r, .ty = toty, .cnt = 0, .err = "", .glines = inner.glines, .lines = l1, .tmp = inner.tmp + 1, .lbl = inner.lbl, .tail = false};
     }
     if (is_str_fixed(toty) && src_str_like) {
         Int cap = fixed_cap(toty) + 1;
-        Int t1 = inner.tmp + 1;
+        // A Bytes(N) source is first checked for a zero inside its content.
+        Bool fb = is_bytes_fixed(inner.ty);
+        Int t0 = if (fb) { inner.tmp + 1 } else { inner.tmp };
+        Str src = if (fb) { f"%t{t0}" } else { inner.val };
+        List(Str) l0 = if (fb) { inner.lines.concat([src + " = call ptr @resid_fixed_bytes(ptr " + inner.val + f", i64 {fixed_bytes(inner.ty)})"]) } else { inner.lines };
+        Int t1 = t0 + 1;
         Str dst = f"%t{t1}";
-        List(Str) l0 = inner.lines;
         List(Str) l1 = l0.concat(fixed_alloc(dst, toty));
         Int t2 = t1 + 1;
         Str rc = f"%t{t2}";
-        List(Str) l2 = l1.concat([rc + " = call i64 @resid_str_to_fixed(ptr " + dst + ", ptr " + inner.val + f", i64 {cap})"]);
+        List(Str) l2 = l1.concat([rc + " = call i64 @resid_str_to_fixed(ptr " + dst + ", ptr " + src + f", i64 {cap})"]);
         return GT {.pos = inner.pos, .val = dst, .ty = toty, .cnt = 0, .err = "", .glines = inner.glines, .lines = l2, .tmp = t2, .lbl = inner.lbl, .tail = false};
     }
     if (is_bytes_fixed(toty) && src_str_like) {
@@ -3515,7 +3523,11 @@ GT cg_cast_fixed(GT inner, Str toty, GT c) {
         List(Str) l1 = l0.concat(fixed_alloc(dst, toty));
         Int t2 = t1 + 1;
         Str rc = f"%t{t2}";
-        List(Str) l2 = l1.concat([rc + " = call i64 @resid_bytes_to_fixed(ptr " + dst + ", ptr " + inner.val + f", i64 {cap})"]);
+        // Bytes(M) -> Bytes(N) copies min(M, N) bytes, zeros included.
+        Int from = if (is_bytes_fixed(inner.ty)) { fixed_cap(inner.ty) } else { -1 };
+        Int nb = if (from < cap) { from } else { cap };
+        Str copy = if (from >= 0) { "call void @llvm.memmove.p0.p0.i64(ptr " + dst + ", ptr " + inner.val + f", i64 {nb}, i1 false)" } else { rc + " = call i64 @resid_bytes_to_fixed(ptr " + dst + ", ptr " + inner.val + f", i64 {cap})" };
+        List(Str) l2 = l1.concat([copy]);
         return GT {.pos = inner.pos, .val = dst, .ty = toty, .cnt = 0, .err = "", .glines = inner.glines, .lines = l2, .tmp = t2, .lbl = inner.lbl, .tail = false};
     }
     // List(T, N) -> List(T): dense-box every inline slot into a heap list.
