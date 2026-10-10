@@ -1,0 +1,37 @@
+// Fixture for verbs_ok: one well-formed descriptor of each kind (installed as lib/dev/fx_verbs_ok.resid).
+import "device.resid";
+import "device_write.resid";
+
+pub Sequence fx_seq() {
+    return Sequence {.name = "fx.seq", .path = "/dev/fx", .steps = [IoctlOp {.name = "fx.s0", .path = "/dev/fx", .requests = dv_both(dv_ioc(3, 88, 0, 16)), .size = 16, .fields = [Scalar(0, 4, Out), Scalar(8, 4, In)], .write = false, .version = Unversioned, .stability = Uapi}, IoctlOp {.name = "fx.s1", .path = "/dev/fx", .requests = dv_both(dv_ioc(3, 88, 1, 16)), .size = 16, .fields = [Scalar(0, 4, In), Scalar(8, 8, Out)], .write = false, .version = Unversioned, .stability = Uapi}], .links = [link(0, 0, 1, 0, 4)], .write = false, .stability = OutOfTree};
+}
+
+pub Transact fx_tpm() {
+    return Transact {.name = "fx.tpm", .path = "/dev/tpmrm0", .max_command = 4096, .max_response = 4096, .secret = false, .write = true, .stability = Uapi};
+}
+
+pub ReadAttr fx_attr() {
+    return ReadAttr {.name = "fx.provider", .path = "/sys/kernel/config/tsm/report/provider", .max = 64, .stability = AbiTesting};
+}
+
+pub ConfigfsReport fx_report() {
+    return ConfigfsReport {.name = "fx.report", .path = "/sys/kernel/config/tsm/report", .providers = ["sev_guest", "tdx_guest"], .max_inblob = 64, .max_outblob = 32768, .max_auxblob = 32768, .max_manifestblob = 32768, .write = false, .stability = AbiTesting};
+}
+
+pub IoctlOp fx_len() {
+    return IoctlOp {.name = "fx.len", .path = "/dev/fx", .requests = dv_both(dv_iowr(88, 9, 24)), .size = 24, .fields = [Buffer(0, 8, 256, InOut, true), Scalar(8, 4, InOut), Scalar(16, 8, In)], .write = false, .version = Versioned(12, 4, 2), .stability = Uapi};
+}
+
+Str fx_text(Result(List(DevOut), DeviceError) r) { return match (r) { Ok(o) => f"{o.len()} outputs", Err(e) => device_error_text(e), }; }
+
+@requires(device(readonly))
+pub Str fx_reads() {
+    Str a = fx_text(device.read_attr(fx_attr()));
+    Str b = fx_text(device.configfs_report(fx_report(), ReportReq {.inblob = [(UInt(8))1, 2], .privlevel = 0 - 1, .service_provider = ""}));
+    Str c = fx_text(device.sequence(fx_seq(), [InNum(7)]));
+    Str d = fx_text(device.ioctl(fx_len(), [InBytes([(UInt(8))5]), InNum(1)]));
+    return a + "; " + b + "; " + c + "; " + d;
+}
+
+@requires(device)
+pub Str fx_writes() { return fx_text(device.transact(fx_tpm(), [(UInt(8))128, 1])); }

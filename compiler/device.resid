@@ -1,0 +1,826 @@
+// device.resid — device descriptors after reduction (spec §49,
+// PLAN-device-access.md). A `device` verb (device.ioctl(op, args), ...)
+// stays residual through reduction like every provider call (Laws 2 and
+// 10), with its descriptor argument reduced. Here, before lowering:
+//
+//   - the descriptor must be known: a literal built only from literals and
+//     variants (E0262, Laws 1 and 5);
+//   - its layout must be consistent (E0263): the request number's size and
+//     direction bits against the fields, fields inside the struct and apart,
+//     pointer fields 8-byte aligned, finite buffers, length fields that are
+//     Scalars, a path under /dev/ or /sys/ without `..`, and a request
+//     number for the build's target;
+//   - a Sequence's links must go forward from a Scalar output to a Scalar
+//     input of one width, with outputs only on the last step (E0264);
+//   - a manifest's `devices = [...]` bound on a dependency must cover every
+//     descriptor that dependency's code reaches (E0261);
+//   - every descriptor reached from the program's entry points is recorded
+//     for the provenance record (`devices`);
+//   - each verb becomes a call of lib/dev/device.resid's engine for it,
+//     which serializes the descriptor and inputs for the runtime's device
+//     host and validates the reply.
+//
+// The graph artifact is written from the graph before the rewrite, so it
+// shows each verb as an effect naming its descriptor (gart.resid).
+//
+// Imported by compiler/driver.resid.
+
+// One descriptor as parsed from its literal. kind: ioctl, transact,
+// read_attr, configfs_report, sequence. Field lists are parallel: fk the
+// field kind (0 Scalar, 1 Inline, 2 Buffer), fo the offset, fl the width,
+// length or 8 for a buffer's pointer, fd the direction (1 In, 2 Out, 3
+// InOut), fa a buffer's length field (-1 none), fm a buffer's maximum, fs
+// whether it is secret. ra/rn: the request numbers and their arch (0
+// x86-64, 1 AArch64). ver: version offset, width, value (vw 0: none).
+// maxs: a kind's maxima. steps: a Sequence's steps (same shape), links as
+// five Ints each. err: why the literal does not parse ("" when it does).
+pub type DvD = { Str kind; Str name; Str path; List(Int) ra; List(Int) rn; Int size; List(Int) fk; List(Int) fo; List(Int) fl; List(Int) fd; List(Int) fa; List(Int) fm; List(Bool) fs; Str write; Int vo; Int vw; Int vv; Str stab; List(Int) maxs; List(Str) provs; List(DvD) steps; List(Int) links; Str err; };
+
+// What the pass leaves: whether a diagnostic was printed, the rewritten
+// graph, and one provenance entry per descriptor reached
+// ("name\x1fpath\x1fop\x1frequest\x1fstability", sorted, distinct).
+pub type DvPost = { Bool bad; KP p; List(Str) devs; };
+
+pub DvPost dv_post(KP p, Str src, Str smap, Str pk, Bool a64) {
+    Kg g = p.g;
+    // The packed graph keeps every node up to the root, replaced ones too:
+    // only the verbs the residual program reaches count.
+    if (dv_verbs(g, 0, ListBuf()).len() == 0) { return DvPost {.bad = false, .p = p, .devs = []}; }
+    Map(Int, Int) none = {};
+    DvW live = dv_live(g, p.id, DvW {.seen = none, .hits = none});
+    List(Int) calls = sort(live.hits.keys());
+    if (calls.len() == 0) { return DvPost {.bad = false, .p = p, .devs = []}; }
+    Map(Str, Int) vs = dv_variants(g, 0, {});
+    DvRun r = dv_check_all(g, calls, 0, vs, a64, src, smap, DvRun {.bad = false, .ds = []});
+    if (r.bad) { return DvPost {.bad = true, .p = p, .devs = []}; }
+    Map(Str, Str) eng = dv_engines(g, 0, {});
+    Int miss = dv_missing_engine(g, calls, r.ds, eng, 0);
+    if (miss >= 0) {
+        dv_diag_at("E0260", "device." + dv_engine_key(g, calls[miss], r.ds[miss]) + " has no engine: lib/dev/device.resid declares the read engines and lib/dev/device_write.resid the write ones (`@descriptor(engine_<verb>)`, `@descriptor(engine_<verb>_w)`); a device module with a writing descriptor imports device_write.resid", g, calls[miss], src, smap);
+        return DvPost {.bad = true, .p = p, .devs = []};
+    }
+    List(Int) nls = dv_newlines(src, 0, ListBuf());
+    DvFn fns = dv_fns(g, p.id, 0, DvFn {.names = {}, .ids = []});
+    Map(Str, Int) own = dv_owners(g, fns.ids, dv_set(calls, 0, {}), 0, {});
+    Bool over = dv_bounds(g, p.id, fns, own, calls, r.ds, nls, smap, str_split(pk, "\n"), 0, src);
+    if (over) { return DvPost {.bad = true, .p = p, .devs = []}; }
+    List(Int) reach = dv_reach_from(g, fns, dv_roots(g, p.id, fns, nls, smap, ""), 0, {});
+    List(Str) devs = dv_records(own, calls, r.ds, reach, a64, 0, ListBuf());
+    KP p2 = KP {.g = dv_rewrite(g, calls, r.ds, eng, 0), .id = p.id, .pos = p.pos, .err = p.err};
+    return DvPost {.bad = false, .p = p2, .devs = dv_sorted_distinct(devs)};
+}
+
+// The descriptor name of a verb's literal argument ("?" when not known).
+pub Str dv_lit_name(Kg g, Int a) {
+    if (g.ns[a].kind != "struct") { return "?"; }
+    Str t = dv_finit_text(g, a, "name", 0);
+    return if (str_len(t) >= 2) { str_slice(t, 1, str_len(t) - 1) } else { "?" };
+}
+
+type DvRun = { Bool bad; List(DvD) ds; };
+
+Map(Int, Int) dv_set(List(Int) xs, Int i, Map(Int, Int) acc) {
+    if (i >= xs.len()) { return acc; }
+    return dv_set(xs, i + 1, acc.insert(xs[i], 1));
+}
+
+// The engine a verb goes to: `<verb>` for a descriptor that only reads,
+// `<verb>_w` for one that writes.
+Str dv_engine_key(Kg g, Int c, DvD d) { return g.ns[c].text + (if (d.write == "true") { "_w" } else { "" }); }
+
+Int dv_missing_engine(Kg g, List(Int) calls, List(DvD) ds, Map(Str, Str) eng, Int i) {
+    if (i >= calls.len()) { return 0 - 1; }
+    if (!eng.contains(dv_engine_key(g, calls[i], ds[i]))) { return i; }
+    return dv_missing_engine(g, calls, ds, eng, i + 1);
+}
+
+// ─── Finding the verbs ──────────────────────────────────────────────
+
+Bool dv_is_verb(Kg g, Int id) {
+    if (g.ns[id].kind != "mcall" || g.ns[id].nk < 2 || !dev_verb(g.ns[id].text)) { return false; }
+    Int r = kg_kid(g, id, 0);
+    return g.ns[r].kind == "ref" && g.ns[r].text == "device";
+}
+
+List(Int) dv_verbs(Kg g, Int id, ListBuf(Int) acc) {
+    if (id >= g.ns.len()) { return acc.finish(); }
+    return dv_verbs(g, id + 1, if (dv_is_verb(g, id)) { acc.push(id) } else { acc });
+}
+
+type DvW = { Map(Int, Int) seen; Map(Int, Int) hits; };
+
+// The verbs among the nodes reachable from `id`.
+DvW dv_live(Kg g, Int id, DvW w) {
+    if (w.seen.contains(id)) { return w; }
+    DvW w1 = DvW {.seen = w.seen.insert(id, 1), .hits = if (dv_is_verb(g, id)) { w.hits.insert(id, 1) } else { w.hits }};
+    return dv_live_kids(g, id, 0, w1);
+}
+
+DvW dv_live_kids(Kg g, Int id, Int i, DvW w) {
+    if (i >= g.ns[id].nk) { return w; }
+    return dv_live_kids(g, id, i + 1, dv_live(g, kg_kid(g, id, i), w));
+}
+
+// Every declared variant name (a known value's only calls and names).
+Map(Str, Int) dv_variants(Kg g, Int id, Map(Str, Int) acc) {
+    if (id >= g.ns.len()) { return acc; }
+    return dv_variants(g, id + 1, if (g.ns[id].kind == "variant") { acc.insert(g.ns[id].text, 1) } else { acc });
+}
+
+// The engine function for each verb (`@descriptor(engine_<verb>)`).
+Map(Str, Str) dv_engines(Kg g, Int id, Map(Str, Str) acc) {
+    if (id >= g.ns.len()) { return acc; }
+    KN n = g.ns[id];
+    Int at = if (n.kind == "fn") { str_find(n.aux, "@descriptor(engine_") } else { 0 - 1 };
+    if (at < 0) { return dv_engines(g, id + 1, acc); }
+    Int e = str_find_char(n.aux, 41, at);
+    return dv_engines(g, id + 1, acc.insert(str_slice(n.aux, at + 19, e), n.text));
+}
+
+// A lib/dev name as declared: a module-private copy is spelled
+// `__m<path>__Name`.
+Str dv_base(Str n) {
+    if (!str_starts_with(n, "__m")) { return n; }
+    return dv_after_last(n, 3, 0 - 1);
+}
+
+Str dv_after_last(Str n, Int i, Int last) {
+    if (i + 1 >= str_len(n)) { return if (last < 0) { n } else { str_slice(n, last + 2, str_len(n)) }; }
+    Bool hit = str_char_at(n, i) == 95 && str_char_at(n, i + 1) == 95;
+    return dv_after_last(n, i + 1, if (hit) { i } else { last });
+}
+
+// ─── Known (E0262) ──────────────────────────────────────────────────
+
+// Built only from literals, records, lists and variants: nothing a run
+// decides feeds it.
+Bool dv_known(Kg g, Int id, Map(Str, Int) vs, Int depth) {
+    if (depth > 64) { return false; }
+    KN n = g.ns[id];
+    Str k = n.kind;
+    if (k == "lit") { return true; }
+    if (k == "ref") { return vs.contains(n.text); }
+    Bool shape = k == "struct" || k == "finit" || k == "list" || k == "paren" || k == "un" || k == "cast" || k == "ty" || (k == "call" && vs.contains(n.text));
+    if (!shape) { return false; }
+    return dv_known_kids(g, id, 0, vs, depth);
+}
+
+Bool dv_known_kids(Kg g, Int id, Int i, Map(Str, Int) vs, Int depth) {
+    if (i >= g.ns[id].nk) { return true; }
+    return dv_known(g, kg_kid(g, id, i), vs, depth + 1) && dv_known_kids(g, id, i + 1, vs, depth);
+}
+
+DvRun dv_check_all(Kg g, List(Int) calls, Int i, Map(Str, Int) vs, Bool a64, Str src, Str smap, DvRun acc) {
+    if (i >= calls.len()) { return acc; }
+    Int id = calls[i];
+    Int a = kg_kid(g, id, 1);
+    Str verb = g.ns[id].text;
+    if (!dv_known(g, a, vs, 0)) {
+        dv_diag_at("E0262", "the descriptor of device." + verb + " is not known after reduction: it must be a value the compiler computes, built only from literals (a descriptor from lib/dev/, not one chosen or computed at run time; spec Laws 1 and 5)", g, a, src, smap);
+        return dv_check_all(g, calls, i + 1, vs, a64, src, smap, DvRun {.bad = true, .ds = acc.ds.concat([dv_none()])});
+    }
+    DvD d = dv_parse(g, a, verb);
+    Str e = if (d.err != "") { "E0263: " + d.err } else { dv_check(d, a64) };
+    Bool bad = if (e != "") { dv_diag_at(str_slice(e, 0, 5), "device." + verb + "(" + (if (d.name == "") { "?" } else { d.name }) + "): " + str_slice(e, 7, str_len(e)), g, a, src, smap) } else { false };
+    return dv_check_all(g, calls, i + 1, vs, a64, src, smap, DvRun {.bad = acc.bad || bad, .ds = acc.ds.concat([d])});
+}
+
+Bool dv_diag_at(Str code, Str msg, Kg g, Int at, Str src, Str smap) {
+    diag_error(code, msg, if (at >= 0) { g.ns[at].ep } else { 0 }, 3, src, gm_smap(smap), 0);
+    return true;
+}
+
+// ─── Parsing a known literal ────────────────────────────────────────
+
+DvD dv_none() {
+    return DvD {.kind = "", .name = "", .path = "", .ra = [], .rn = [], .size = 0, .fk = [], .fo = [], .fl = [], .fd = [], .fa = [], .fm = [], .fs = [], .write = "", .vo = 0, .vw = 0, .vv = 0, .stab = "", .maxs = [], .provs = [], .steps = [], .links = [], .err = "not known"};
+}
+
+// Field `f` of struct literal st (its value node), or -1.
+Int dv_fld(Kg g, Int st, Str f, Int i) {
+    if (i >= g.ns[st].nk) { return 0 - 1; }
+    Int fi = kg_kid(g, st, i);
+    if (g.ns[fi].kind == "finit" && g.ns[fi].text == f && g.ns[fi].nk == 1) { return kg_kid(g, fi, 0); }
+    return dv_fld(g, st, f, i + 1);
+}
+
+// Through parentheses and type ascriptions to the value.
+Int dv_val(Kg g, Int id) {
+    if (id < 0) { return id; }
+    Str k = g.ns[id].kind;
+    if ((k == "paren" || k == "cast") && g.ns[id].nk >= 1) { return dv_val(g, kg_kid(g, id, g.ns[id].nk - 1)); }
+    return id;
+}
+
+type DvI = { Bool ok; Int v; };
+
+DvI dv_int(Kg g, Int id0) {
+    Int id = dv_val(g, id0);
+    if (id < 0) { return DvI {.ok = false, .v = 0}; }
+    KN n = g.ns[id];
+    if (n.kind == "lit" && str_is_int(n.text)) { return DvI {.ok = true, .v = str_parse_int(n.text)}; }
+    if (n.kind == "un" && n.text == "-" && n.nk == 1) {
+        DvI x = dv_int(g, kg_kid(g, id, 0));
+        return DvI {.ok = x.ok, .v = 0 - x.v};
+    }
+    return DvI {.ok = false, .v = 0};
+}
+
+Str dv_strv(Kg g, Int id0) {
+    Int id = dv_val(g, id0);
+    if (id < 0 || g.ns[id].kind != "lit" || str_char_at(g.ns[id].text, 0) != 34) { return "\x01"; }
+    Str t = g.ns[id].text;
+    return str_slice(t, 1, str_len(t) - 1);
+}
+
+Str dv_boolv(Kg g, Int id0) {
+    Int id = dv_val(g, id0);
+    if (id < 0 || g.ns[id].kind != "lit") { return ""; }
+    return if (g.ns[id].text == "true" || g.ns[id].text == "false") { g.ns[id].text } else { "" };
+}
+
+// A variant value: its declared name and payload nodes.
+Str dv_vname(Kg g, Int id0) {
+    Int id = dv_val(g, id0);
+    if (id < 0) { return ""; }
+    Str k = g.ns[id].kind;
+    return if (k == "ref" || k == "call") { dv_base(g.ns[id].text) } else { "" };
+}
+
+List(Int) dv_items(Kg g, Int id0) {
+    Int id = dv_val(g, id0);
+    if (id < 0 || g.ns[id].kind != "list") { return []; }
+    return dv_kids(g, id, 0, ListBuf());
+}
+
+List(Int) dv_kids(Kg g, Int id, Int i, ListBuf(Int) acc) {
+    if (i >= g.ns[id].nk) { return acc.finish(); }
+    return dv_kids(g, id, i + 1, acc.push(kg_kid(g, id, i)));
+}
+
+// The struct literal a value is (or -1).
+Int dv_struct(Kg g, Int id0) {
+    Int id = dv_val(g, id0);
+    return if (id >= 0 && g.ns[id].kind == "struct") { id } else { 0 - 1 };
+}
+
+DvD dv_err(DvD d, Str e) {
+    return DvD {.kind = d.kind, .name = d.name, .path = d.path, .ra = d.ra, .rn = d.rn, .size = d.size, .fk = d.fk, .fo = d.fo, .fl = d.fl, .fd = d.fd, .fa = d.fa, .fm = d.fm, .fs = d.fs, .write = d.write, .vo = d.vo, .vw = d.vw, .vv = d.vv, .stab = d.stab, .maxs = d.maxs, .provs = d.provs, .steps = d.steps, .links = d.links, .err = if (d.err != "") { d.err } else { e }};
+}
+
+Str dv_stab_of(Kg g, Int st) {
+    Str s = dv_vname(g, dv_fld(g, st, "stability", 0));
+    if (s == "Uapi") { return "uapi"; }
+    if (s == "AbiTesting") { return "abi-testing"; }
+    if (s == "OutOfTree") { return "out-of-tree"; }
+    return "";
+}
+
+// An Int field, or the maxs/err bookkeeping when it is missing.
+Int dv_ifld(Kg g, Int st, Str f) {
+    DvI x = dv_int(g, dv_fld(g, st, f, 0));
+    return if (x.ok) { x.v } else { 0 - 1 };
+}
+
+DvD dv_parse(Kg g, Int a, Str verb) {
+    Int st = dv_struct(g, a);
+    if (st < 0) { return dv_err(DvD {.kind = verb, .name = "", .path = "", .ra = [], .rn = [], .size = 0, .fk = [], .fo = [], .fl = [], .fd = [], .fa = [], .fm = [], .fs = [], .write = "", .vo = 0, .vw = 0, .vv = 0, .stab = "", .maxs = [], .provs = [], .steps = [], .links = [], .err = ""}, "the descriptor is not a record literal"); }
+    Str name = dv_strv(g, dv_fld(g, st, "name", 0));
+    Str path = dv_strv(g, dv_fld(g, st, "path", 0));
+    Str write = if (verb == "read_attr") { "false" } else { dv_boolv(g, dv_fld(g, st, "write", 0)) };
+    Str stab = dv_stab_of(g, st);
+    DvD base = DvD {.kind = verb, .name = if (name == "\x01") { "" } else { name }, .path = if (path == "\x01") { "" } else { path }, .ra = [], .rn = [], .size = 0, .fk = [], .fo = [], .fl = [], .fd = [], .fa = [], .fm = [], .fs = [], .write = write, .vo = 0, .vw = 0, .vv = 0, .stab = stab, .maxs = [], .provs = [], .steps = [], .links = [], .err = ""};
+    DvD b1 = if (name == "\x01") { dv_err(base, "`name` is not a string literal") } else if (path == "\x01") { dv_err(base, "`path` is not a string literal") } else if (write == "") { dv_err(base, "`write` is not a Bool literal") } else if (stab == "") { dv_err(base, "`stability` is not Uapi, AbiTesting or OutOfTree") } else { base };
+    if (verb == "ioctl") { return dv_parse_ioctl(g, st, b1); }
+    if (verb == "sequence") { return dv_parse_seq(g, st, b1); }
+    List(Int) mx = if (verb == "transact") { [dv_ifld(g, st, "max_command"), dv_ifld(g, st, "max_response")] } else if (verb == "read_attr") { [dv_ifld(g, st, "max")] } else { [dv_ifld(g, st, "max_inblob"), dv_ifld(g, st, "max_outblob"), dv_ifld(g, st, "max_auxblob"), dv_ifld(g, st, "max_manifestblob")] };
+    List(Str) provs = if (verb == "configfs_report") { dv_strs(g, dv_items(g, dv_fld(g, st, "providers", 0)), 0, ListBuf()) } else { [] };
+    return DvD {.kind = b1.kind, .name = b1.name, .path = b1.path, .ra = [], .rn = [], .size = 0, .fk = [], .fo = [], .fl = [], .fd = [], .fa = [], .fm = [], .fs = [], .write = b1.write, .vo = 0, .vw = 0, .vv = 0, .stab = b1.stab, .maxs = mx, .provs = provs, .steps = [], .links = [], .err = b1.err};
+}
+
+List(Str) dv_strs(Kg g, List(Int) xs, Int i, ListBuf(Str) acc) {
+    if (i >= xs.len()) { return acc.finish(); }
+    return dv_strs(g, xs, i + 1, acc.push(dv_strv(g, xs[i])));
+}
+
+// The parsed fields of an IoctlOp, accumulated.
+type DvF = { List(Int) fk; List(Int) fo; List(Int) fl; List(Int) fd; List(Int) fa; List(Int) fm; List(Bool) fs; Str err; };
+
+Int dv_dirv(Kg g, Int id) {
+    Str d = dv_vname(g, id);
+    return if (d == "In") { 1 } else if (d == "Out") { 2 } else if (d == "InOut") { 3 } else { 0 };
+}
+
+// Payload node i of a variant value.
+Int dv_arg(Kg g, Int id0, Int i) {
+    Int id = dv_val(g, id0);
+    if (id < 0 || g.ns[id].kind != "call" || i >= g.ns[id].nk) { return 0 - 1; }
+    return kg_kid(g, id, i);
+}
+
+Int dv_argi(Kg g, Int v, Int i) {
+    DvI x = dv_int(g, dv_arg(g, v, i));
+    return if (x.ok) { x.v } else { 0 - 1 };
+}
+
+DvF dv_fields(Kg g, List(Int) xs, Int i, DvF acc) {
+    if (i >= xs.len()) { return acc; }
+    Int v = xs[i];
+    Str k = dv_vname(g, v);
+    Int kc = if (k == "Scalar") { 0 } else if (k == "Inline") { 1 } else if (k == "Buffer") { 2 } else { 0 - 1 };
+    Int o = dv_argi(g, v, 0);
+    Int l = if (kc == 2) { 8 } else { dv_argi(g, v, 1) };
+    Int d = dv_dirv(g, dv_arg(g, v, if (kc == 2) { 3 } else { 2 }));
+    Int la = if (kc == 2) { dv_argi(g, v, 1) } else { 0 - 1 };
+    Int mx = if (kc == 2) { dv_argi(g, v, 2) } else { l };
+    Str sec = if (kc == 2) { dv_boolv(g, dv_arg(g, v, 4)) } else { "false" };
+    Str e = if (kc < 0) { f"field {i} is not Scalar, Inline or Buffer" } else if (d == 0) { f"field {i}: its direction is not In, Out or InOut" } else if (sec == "") { f"field {i}: `secret` is not a Bool literal" } else { "" };
+    DvF a2 = DvF {.fk = acc.fk.concat([kc]), .fo = acc.fo.concat([o]), .fl = acc.fl.concat([l]), .fd = acc.fd.concat([d]), .fa = acc.fa.concat([la]), .fm = acc.fm.concat([mx]), .fs = acc.fs.concat([sec == "true"]), .err = if (acc.err != "") { acc.err } else { e }};
+    return dv_fields(g, xs, i + 1, a2);
+}
+
+DvD dv_parse_ioctl(Kg g, Int st, DvD b) {
+    List(Int) rs = dv_items(g, dv_fld(g, st, "requests", 0));
+    List(Int) ra = dv_req_arch(g, rs, 0, ListBuf());
+    List(Int) rn = dv_req_num(g, rs, 0, ListBuf());
+    DvI size = dv_int(g, dv_fld(g, st, "size", 0));
+    DvF f = dv_fields(g, dv_items(g, dv_fld(g, st, "fields", 0)), 0, DvF {.fk = [], .fo = [], .fl = [], .fd = [], .fa = [], .fm = [], .fs = [], .err = ""});
+    Int ver = dv_fld(g, st, "version", 0);
+    Str vk = dv_vname(g, ver);
+    Bool vok = vk == "Unversioned" || vk == "Versioned";
+    Int vw = if (vk == "Versioned") { dv_argi(g, ver, 1) } else { 0 };
+    Str e = if (!size.ok) { "`size` is not an Int literal" } else if (!vok) { "`version` is not Unversioned or Versioned(offset, width, value)" } else if (dv_has_neg(ra, 0) || dv_has_neg(rn, 0)) { "a request is not Request {.arch = X86_64 or Aarch64, .number = Int}" } else { f.err };
+    DvD d = DvD {.kind = b.kind, .name = b.name, .path = b.path, .ra = ra, .rn = rn, .size = size.v, .fk = f.fk, .fo = f.fo, .fl = f.fl, .fd = f.fd, .fa = f.fa, .fm = f.fm, .fs = f.fs, .write = b.write, .vo = if (vk == "Versioned") { dv_argi(g, ver, 0) } else { 0 }, .vw = vw, .vv = if (vk == "Versioned") { dv_argi(g, ver, 2) } else { 0 }, .stab = b.stab, .maxs = [], .provs = [], .steps = [], .links = [], .err = b.err};
+    return if (e != "") { dv_err(d, e) } else { d };
+}
+
+Bool dv_has_neg(List(Int) xs, Int i) {
+    if (i >= xs.len()) { return false; }
+    return xs[i] < 0 || dv_has_neg(xs, i + 1);
+}
+
+List(Int) dv_req_arch(Kg g, List(Int) rs, Int i, ListBuf(Int) acc) {
+    if (i >= rs.len()) { return acc.finish(); }
+    Int st = dv_struct(g, rs[i]);
+    Str a = if (st < 0) { "" } else { dv_vname(g, dv_fld(g, st, "arch", 0)) };
+    return dv_req_arch(g, rs, i + 1, acc.push(if (a == "X86_64") { 0 } else if (a == "Aarch64") { 1 } else { 0 - 1 }));
+}
+
+List(Int) dv_req_num(Kg g, List(Int) rs, Int i, ListBuf(Int) acc) {
+    if (i >= rs.len()) { return acc.finish(); }
+    Int st = dv_struct(g, rs[i]);
+    DvI n = if (st < 0) { DvI {.ok = false, .v = 0} } else { dv_int(g, dv_fld(g, st, "number", 0)) };
+    return dv_req_num(g, rs, i + 1, acc.push(if (n.ok) { n.v } else { 0 - 1 }));
+}
+
+DvD dv_parse_seq(Kg g, Int st, DvD b) {
+    List(Int) ss = dv_items(g, dv_fld(g, st, "steps", 0));
+    List(DvD) steps = dv_parse_steps(g, ss, 0, ListBuf());
+    List(Int) ls = dv_items(g, dv_fld(g, st, "links", 0));
+    List(Int) links = dv_parse_links(g, ls, 0, ListBuf());
+    Str e = if (links.len() != ls.len() * 5 || dv_has_neg(links, 0)) { "a link is not a Link record of five Int literals" } else { dv_steps_err(steps, 0) };
+    DvD d = DvD {.kind = b.kind, .name = b.name, .path = b.path, .ra = [], .rn = [], .size = 0, .fk = [], .fo = [], .fl = [], .fd = [], .fa = [], .fm = [], .fs = [], .write = b.write, .vo = 0, .vw = 0, .vv = 0, .stab = b.stab, .maxs = [], .provs = [], .steps = steps, .links = links, .err = b.err};
+    return if (e != "") { dv_err(d, e) } else { d };
+}
+
+List(DvD) dv_parse_steps(Kg g, List(Int) ss, Int i, ListBuf(DvD) acc) {
+    if (i >= ss.len()) { return acc.finish(); }
+    return dv_parse_steps(g, ss, i + 1, acc.push(dv_parse(g, ss[i], "ioctl")));
+}
+
+Str dv_steps_err(List(DvD) ss, Int i) {
+    if (i >= ss.len()) { return ""; }
+    if (ss[i].err != "") { return f"step {i}: " + ss[i].err; }
+    return dv_steps_err(ss, i + 1);
+}
+
+List(Int) dv_parse_links(Kg g, List(Int) ls, Int i, ListBuf(Int) acc) {
+    if (i >= ls.len()) { return acc.finish(); }
+    Int st = dv_struct(g, ls[i]);
+    if (st < 0) { return dv_parse_links(g, ls, i + 1, acc.push(0 - 1)); }
+    ListBuf(Int) a2 = acc.push(dv_ifld(g, st, "from_step")).push(dv_ifld(g, st, "from_offset")).push(dv_ifld(g, st, "to_step")).push(dv_ifld(g, st, "to_offset")).push(dv_ifld(g, st, "width"));
+    return dv_parse_links(g, ls, i + 1, a2);
+}
+
+// ─── The checks (E0263, E0264) ──────────────────────────────────────
+
+// The largest buffer a descriptor may declare: 16 MiB.
+Int dv_max_buf() { return 16777216; }
+
+// "" or "E0263: why" / "E0264: why".
+Str dv_check(DvD d, Bool a64) {
+    Str ne = dv_name_err(d.name);
+    if (ne != "") { return "E0263: " + ne; }
+    Str pe = dv_path_err(d.path);
+    if (pe != "") { return "E0263: " + pe; }
+    if (d.kind == "ioctl") { return dv_check_ioctl(d, a64); }
+    if (d.kind == "sequence") { return dv_check_seq(d, a64); }
+    if (d.kind == "configfs_report") {
+        if (!str_starts_with(d.path, "/sys/kernel/config/")) { return "E0263: a ConfigfsReport's path is under /sys/kernel/config/, got " + d.path; }
+        if (d.provs.len() == 0) { return "E0263: a ConfigfsReport names the providers it accepts (`providers`)"; }
+        if (d.provs.contains("\x01") || d.provs.contains("")) { return "E0263: every provider is a non-empty string literal"; }
+    }
+    return dv_maxs_err(d.maxs, 0, d.kind);
+}
+
+Str dv_maxs_err(List(Int) ms, Int i, Str kind) {
+    if (i >= ms.len()) { return ""; }
+    if (ms[i] <= 0 || ms[i] > dv_max_buf()) { return f"E0263: a {kind} maximum is {ms[i]}; every maximum is from 1 to {dv_max_buf()} bytes"; }
+    return dv_maxs_err(ms, i + 1, kind);
+}
+
+Str dv_name_err(Str n) {
+    if (n == "") { return "a descriptor has a `name`"; }
+    if (!dv_name_ok(n, 0)) { return "the name `" + n + "` uses only a-z, 0-9, `_` and `.` (it is how manifests and provenance records name it)"; }
+    return "";
+}
+
+Bool dv_name_ok(Str n, Int i) {
+    if (i >= str_len(n)) { return true; }
+    Int c = str_char_at(n, i);
+    Bool ok = (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c == 95 || c == 46;
+    return ok && dv_name_ok(n, i + 1);
+}
+
+Str dv_path_err(Str p) {
+    Bool under = (str_starts_with(p, "/dev/") || str_starts_with(p, "/sys/")) && str_len(p) > 5;
+    if (!under) { return "the path `" + p + "` is not under /dev/ or /sys/"; }
+    if (str_contains(p, "..")) { return "the path `" + p + "` contains `..`"; }
+    if (str_contains(p, "//") || str_ends_with(p, "/")) { return "the path `" + p + "` is not a plain file path"; }
+    return "";
+}
+
+Str dv_target(Bool a64) { return if (a64) { "aarch64" } else { "x86-64" }; }
+
+Str dv_check_ioctl(DvD d, Bool a64) {
+    if (d.size < 0 || d.size > 16383) { return f"E0263: size {d.size} does not fit _IOC_SIZE (0 to 16383)"; }
+    Int want = if (a64) { 1 } else { 0 };
+    if (!d.ra.contains(want)) { return "E0263: no request number for the build's target (" + dv_target(a64) + ")"; }
+    Str dup = dv_dup_arch(d.ra, 0);
+    if (dup != "") { return "E0263: " + dup; }
+    Str fe = dv_field_errs(d, 0);
+    if (fe != "") { return "E0263: " + fe; }
+    Str ve = dv_version_err(d);
+    if (ve != "") { return "E0263: " + ve; }
+    Str oe = dv_overlaps(d, 0, 0);
+    if (oe != "") { return "E0263: " + oe; }
+    return dv_requests_err(d, 0);
+}
+
+Str dv_dup_arch(List(Int) ra, Int i) {
+    if (i >= ra.len()) { return ""; }
+    if (dv_count(ra, ra[i], 0, 0) > 1) { return "a target has two request numbers"; }
+    return dv_dup_arch(ra, i + 1);
+}
+
+Int dv_count(List(Int) xs, Int v, Int i, Int n) {
+    if (i >= xs.len()) { return n; }
+    return dv_count(xs, v, i + 1, if (xs[i] == v) { n + 1 } else { n });
+}
+
+Str dv_fdesc(DvD d, Int i) {
+    Str k = if (d.fk[i] == 0) { "Scalar" } else if (d.fk[i] == 1) { "Inline" } else { "Buffer" };
+    return f"field {i} ({k} at offset {d.fo[i]})";
+}
+
+Str dv_field_errs(DvD d, Int i) {
+    if (i >= d.fk.len()) { return ""; }
+    Str w = dv_fdesc(d, i);
+    Int k = d.fk[i];
+    Int o = d.fo[i];
+    Int l = d.fl[i];
+    if (o < 0 || l <= 0 || o + l > d.size) { return w + f": bytes {o}..{o + l} are not inside the {d.size}-byte struct"; }
+    if (k == 0 && l != 1 && l != 2 && l != 4 && l != 8) { return w + f": a Scalar is 1, 2, 4 or 8 bytes, not {l}"; }
+    if (k == 2 && o % 8 != 0) { return w + ": a pointer field is 8-byte aligned"; }
+    if (k == 2 && (d.fm[i] <= 0 || d.fm[i] > dv_max_buf())) { return w + f": a buffer's maximum is from 1 to {dv_max_buf()} bytes, not {d.fm[i]}"; }
+    if (k == 2 && d.fa[i] != 0 - 1 && dv_scalar_at(d, d.fa[i], 0) < 0) { return w + f": its length field at offset {d.fa[i]} is not a Scalar of the struct"; }
+    return dv_field_errs(d, i + 1);
+}
+
+// The index of the Scalar at offset `o`, or -1.
+Int dv_scalar_at(DvD d, Int o, Int i) {
+    if (i >= d.fk.len()) { return 0 - 1; }
+    if (d.fk[i] == 0 && d.fo[i] == o) { return i; }
+    return dv_scalar_at(d, o, i + 1);
+}
+
+Str dv_version_err(DvD d) {
+    if (d.vw == 0) { return ""; }
+    if (d.vw != 1 && d.vw != 2 && d.vw != 4 && d.vw != 8) { return f"the version field is 1, 2, 4 or 8 bytes, not {d.vw}"; }
+    if (d.vo < 0 || d.vo + d.vw > d.size) { return f"the version field at offset {d.vo} is not inside the {d.size}-byte struct"; }
+    Bool fits = d.vw >= 8 || (d.vv >= 0 && d.vv < (1 << (d.vw * 8)));
+    if (!fits) { return f"the version {d.vv} does not fit {d.vw} byte(s)"; }
+    return "";
+}
+
+// Fields (and the version field, index fk.len()) pairwise apart.
+Str dv_overlaps(DvD d, Int i, Int j) {
+    Int n = d.fk.len() + (if (d.vw > 0) { 1 } else { 0 });
+    if (i >= n) { return ""; }
+    if (j >= n) { return dv_overlaps(d, i + 1, i + 2); }
+    if (j <= i) { return dv_overlaps(d, i, i + 1); }
+    Int ao = if (i < d.fk.len()) { d.fo[i] } else { d.vo };
+    Int al = if (i < d.fk.len()) { d.fl[i] } else { d.vw };
+    Int bo = if (j < d.fk.len()) { d.fo[j] } else { d.vo };
+    Int bl = if (j < d.fk.len()) { d.fl[j] } else { d.vw };
+    if (ao < bo + bl && bo < ao + al) {
+        Str an = if (i < d.fk.len()) { dv_fdesc(d, i) } else { "the version field" };
+        Str bn = if (j < d.fk.len()) { dv_fdesc(d, j) } else { "the version field" };
+        return an + " overlaps " + bn;
+    }
+    return dv_overlaps(d, i, j + 1);
+}
+
+// Each request number's _IOC_SIZE is the struct's size and its direction
+// bits cover the fields: data to the kernel (an In or InOut Scalar or
+// Inline, any Buffer's pointer, the version) needs _IOC_WRITE (1), data
+// back (an Out or InOut Scalar or Inline) needs _IOC_READ (2), and
+// _IOC_NONE carries no struct.
+Str dv_requests_err(DvD d, Int i) {
+    if (i >= d.rn.len()) { return ""; }
+    Int n = d.rn[i];
+    Str which = (if (d.ra[i] == 1) { "aarch64" } else { "x86-64" }) + f" request 0x{n:hex}";
+    if (n < 0 || n > 4294967295) { return f"E0263: {which} is not a 32-bit request number"; }
+    Int sz = (n >> 16) & 16383;
+    Int dir = n >> 30;
+    if (sz != d.size) { return f"E0263: {which} encodes a {sz}-byte struct, the layout is {d.size} bytes"; }
+    if (dir == 0 && d.size != 0) { return f"E0263: {which} is _IOC_NONE but the layout has a struct"; }
+    Bool tok = dv_needs_write(d, 0);
+    Bool fromk = dv_needs_read(d, 0);
+    if (tok && (dir & 1) == 0) { return f"E0263: {which} has no _IOC_WRITE bit, but the struct carries data to the kernel"; }
+    if (fromk && (dir & 2) == 0) { return f"E0263: {which} has no _IOC_READ bit, but fields come back from the kernel"; }
+    return dv_requests_err(d, i + 1);
+}
+
+Bool dv_needs_write(DvD d, Int i) {
+    if (d.vw > 0) { return true; }
+    if (i >= d.fk.len()) { return false; }
+    return d.fk[i] == 2 || (d.fd[i] & 1) != 0 || dv_needs_write(d, i + 1);
+}
+
+Bool dv_needs_read(DvD d, Int i) {
+    if (i >= d.fk.len()) { return false; }
+    return (d.fk[i] != 2 && (d.fd[i] & 2) != 0) || dv_needs_read(d, i + 1);
+}
+
+Str dv_check_seq(DvD d, Bool a64) {
+    if (d.steps.len() == 0) { return "E0264: a Sequence has at least one step"; }
+    Str se = dv_seq_steps(d, a64, 0);
+    if (se != "") { return se; }
+    return dv_seq_links(d, 0);
+}
+
+Str dv_seq_steps(DvD d, Bool a64, Int i) {
+    if (i >= d.steps.len()) { return ""; }
+    DvD s = d.steps[i];
+    Str e = dv_check(s, a64);
+    if (e != "") { return str_slice(e, 0, 7) + f"step {i} (" + s.name + "): " + str_slice(e, 7, str_len(e)); }
+    if (s.path != d.path) { return f"E0264: step {i} opens " + s.path + ", the Sequence " + d.path + " (its steps share one open file)"; }
+    if (s.write == "true" && d.write != "true") { return f"E0264: step {i} writes, so the Sequence is marked `write`"; }
+    Bool last = i == d.steps.len() - 1;
+    Int out = dv_hidden_out(s, 0);
+    if (!last && out >= 0) { return f"E0264: step {i}'s " + dv_fdesc(s, out) + " is an output, but only the last step's outputs reach the program (link a Scalar output into a later step instead)"; }
+    return dv_seq_steps(d, a64, i + 1);
+}
+
+// An Out or InOut Inline or Buffer field of a step, or -1.
+Int dv_hidden_out(DvD s, Int i) {
+    if (i >= s.fk.len()) { return 0 - 1; }
+    if (s.fk[i] != 0 && (s.fd[i] & 2) != 0) { return i; }
+    return dv_hidden_out(s, i + 1);
+}
+
+Str dv_seq_links(DvD d, Int i) {
+    if (i * 5 >= d.links.len()) { return ""; }
+    Int fs = d.links[i * 5];
+    Int fo = d.links[i * 5 + 1];
+    Int ts = d.links[i * 5 + 2];
+    Int to = d.links[i * 5 + 3];
+    Int w = d.links[i * 5 + 4];
+    Str l = f"link {i} (step {fs} offset {fo} -> step {ts} offset {to}, {w} bytes)";
+    if (fs < 0 || ts >= d.steps.len() || fs >= ts) { return "E0264: " + l + " does not go forward to a later step"; }
+    Int a = dv_scalar_at(d.steps[fs], fo, 0);
+    Int b = dv_scalar_at(d.steps[ts], to, 0);
+    if (a < 0 || (d.steps[fs].fd[a] & 2) == 0) { return "E0264: " + l + " does not read a Scalar output of its step"; }
+    if (b < 0 || (d.steps[ts].fd[b] & 1) == 0) { return "E0264: " + l + " does not write a Scalar input of its step"; }
+    if (d.steps[fs].fl[a] != w || d.steps[ts].fl[b] != w) { return "E0264: " + l + f" joins a {d.steps[fs].fl[a]}-byte and a {d.steps[ts].fl[b]}-byte Scalar; the link and both fields have one width"; }
+    if (dv_link_into(d, ts, to, 0, 0) > 1) { return "E0264: " + l + ": two links fill one input"; }
+    return dv_seq_links(d, i + 1);
+}
+
+Int dv_link_into(DvD d, Int ts, Int to, Int i, Int n) {
+    if (i * 5 >= d.links.len()) { return n; }
+    Bool hit = d.links[i * 5 + 2] == ts && d.links[i * 5 + 3] == to;
+    return dv_link_into(d, ts, to, i + 1, if (hit) { n + 1 } else { n });
+}
+
+// ─── Functions, reachability and dependency bounds (E0261) ──────────
+
+type DvFn = { Map(Str, Int) names; List(Int) ids; };
+
+// Top-level functions (inside sandboxes too) by name.
+DvFn dv_fns(Kg g, Int id, Int i, DvFn acc) {
+    if (i >= g.ns[id].nk) { return acc; }
+    Int d = kg_kid(g, id, i);
+    KN n = g.ns[d];
+    if (n.kind == "sandbox") { return dv_fns(g, id, i + 1, dv_fns(g, d, 0, acc)); }
+    if (n.kind == "fn" || n.kind == "test") { return dv_fns(g, id, i + 1, DvFn {.names = if (n.kind == "fn") { acc.names.insert(n.text, d) } else { acc.names }, .ids = acc.ids.concat([d])}); }
+    return dv_fns(g, id, i + 1, acc);
+}
+
+// Function and test nodes whose package is `pkg` ("" for the program's
+// entry points: main, tests, and every function behaviors name; all
+// functions when there is neither main nor a test).
+List(Int) dv_roots(Kg g, Int root, DvFn fns, List(Int) nls, Str smap, Str pkg) {
+    if (pkg != "") { return dv_pkg_fns(g, fns.ids, 0, nls, smap, pkg, ListBuf()); }
+    Int m = fns.names.get("main") else { 0 - 1 };
+    List(Int) tests = dv_tests(g, fns.ids, 0, ListBuf());
+    if (m < 0 && tests.len() == 0) { return fns.ids; }
+    List(Int) base = if (m >= 0) { tests.concat([m]) } else { tests };
+    return base.concat(dv_inst_fns(g, fns, 0, ListBuf()));
+}
+
+List(Int) dv_tests(Kg g, List(Int) ids, Int i, ListBuf(Int) acc) {
+    if (i >= ids.len()) { return acc.finish(); }
+    return dv_tests(g, ids, i + 1, if (g.ns[ids[i]].kind == "test") { acc.push(ids[i]) } else { acc });
+}
+
+// Functions a behavior instance names (their callers are implicit).
+List(Int) dv_inst_fns(Kg g, DvFn fns, Int id, ListBuf(Int) acc) {
+    if (id >= g.ns.len()) { return acc.finish(); }
+    if (g.ns[id].kind != "behavior") { return dv_inst_fns(g, fns, id + 1, acc); }
+    List(Str) ws = dv_words(g.ns[id].aux, 0, 0, ListBuf());
+    return dv_inst_fns(g, fns, id + 1, dv_named(fns, ws, 0, acc));
+}
+
+ListBuf(Int) dv_named(DvFn fns, List(Str) ws, Int i, ListBuf(Int) acc) {
+    if (i >= ws.len()) { return acc; }
+    Int f = fns.names.get(ws[i]) else { 0 - 1 };
+    return dv_named(fns, ws, i + 1, if (f >= 0) { acc.push(f) } else { acc });
+}
+
+// Identifier words of t.
+List(Str) dv_words(Str t, Int i, Int start, ListBuf(Str) acc) {
+    Bool w = i < str_len(t) && (is_alnum(str_char_at(t, i)) || str_char_at(t, i) == 95);
+    if (w) { return dv_words(t, i + 1, start, acc); }
+    ListBuf(Str) a2 = if (i > start) { acc.push(str_slice(t, start, i)) } else { acc };
+    if (i >= str_len(t)) { return a2.finish(); }
+    return dv_words(t, i + 1, i + 1, a2);
+}
+
+List(Int) dv_pkg_fns(Kg g, List(Int) ids, Int i, List(Int) nls, Str smap, Str pkg, ListBuf(Int) acc) {
+    if (i >= ids.len()) { return acc.finish(); }
+    Bool mine = gm_pkg(dv_path_of(g, ids[i], nls, smap), gm_pk(smap), 0) == "dep:" + pkg;
+    return dv_pkg_fns(g, ids, i + 1, nls, smap, pkg, if (mine) { acc.push(ids[i]) } else { acc });
+}
+
+Str dv_path_of(Kg g, Int id, List(Int) nls, Str smap) {
+    return diag_where(gm_smap(smap), dv_line_of(nls, g.ns[id].sp, 0, nls.len()) + 1).path;
+}
+
+Int dv_line_of(List(Int) nls, Int pos, Int lo, Int hi) {
+    if (lo >= hi) { return lo; }
+    Int mid = (lo + hi) / 2;
+    return if (nls[mid] < pos) { dv_line_of(nls, pos, mid + 1, hi) } else { dv_line_of(nls, pos, lo, mid) };
+}
+
+List(Int) dv_newlines(Str src, Int from, ListBuf(Int) acc) {
+    Int nl = str_find_char(src, 10, from);
+    if (nl < 0) { return acc.finish(); }
+    return dv_newlines(src, nl + 1, acc.push(nl));
+}
+
+// Every function and test node reachable from queue q (from index qi)
+// through calls and function names, as a sorted list of node ids.
+List(Int) dv_reach_from(Kg g, DvFn fns, List(Int) q, Int qi, Map(Int, Int) seen) {
+    if (qi >= q.len()) { return sort(seen.keys()); }
+    Int f = q[qi];
+    if (seen.contains(f)) { return dv_reach_from(g, fns, q, qi + 1, seen); }
+    return dv_reach_from(g, fns, q.concat(dv_callees(g, fns, f, ListBuf()).finish()), qi + 1, seen.insert(f, 1));
+}
+
+// The functions node `id`'s subtree calls or names.
+ListBuf(Int) dv_callees(Kg g, DvFn fns, Int id, ListBuf(Int) acc) {
+    KN n = g.ns[id];
+    Int f = if (n.kind == "call" || n.kind == "ref" || n.kind == "mcall") { fns.names.get(n.text) else { 0 - 1 } } else { 0 - 1 };
+    return dv_callees_kids(g, fns, id, 0, if (f >= 0) { acc.push(f) } else { acc });
+}
+
+ListBuf(Int) dv_callees_kids(Kg g, DvFn fns, Int id, Int i, ListBuf(Int) acc) {
+    if (i >= g.ns[id].nk) { return acc; }
+    return dv_callees_kids(g, fns, id, i + 1, dv_callees(g, fns, kg_kid(g, id, i), acc));
+}
+
+// The functions (and tests) each verb node lies in, as "verb:fn" keys
+// (a subtree reduction left unchanged can be shared by two copies).
+Map(Str, Int) dv_owners(Kg g, List(Int) ids, Map(Int, Int) verbs, Int i, Map(Str, Int) acc) {
+    if (i >= ids.len()) { return acc; }
+    return dv_owners(g, ids, verbs, i + 1, dv_own(g, ids[i], ids[i], verbs, acc));
+}
+
+Map(Str, Int) dv_own(Kg g, Int f, Int id, Map(Int, Int) verbs, Map(Str, Int) acc) {
+    Map(Str, Int) a1 = if (verbs.contains(id)) { acc.insert(f"{id}:{f}", 1) } else { acc };
+    return dv_own_kids(g, f, id, 0, verbs, a1);
+}
+
+Map(Str, Int) dv_own_kids(Kg g, Int f, Int id, Int i, Map(Int, Int) verbs, Map(Str, Int) acc) {
+    if (i >= g.ns[id].nk) { return acc; }
+    return dv_own_kids(g, f, id, i + 1, verbs, dv_own(g, f, kg_kid(g, id, i), verbs, acc));
+}
+
+// Whether verb node c lies in one of the reached functions.
+Bool dv_inside(Map(Str, Int) own, Int c, List(Int) reach, Int i) {
+    if (i >= reach.len()) { return false; }
+    return own.contains(f"{c}:{reach[i]}") || dv_inside(own, c, reach, i + 1);
+}
+
+// E0261: each bounded dependency's reach against its `devices` list. A
+// bound is a "@devices::name::a,b" line of the dependency map; an entry
+// names a descriptor (`sev_guest.snp_get_report`) or every descriptor of
+// one device module (`sev_guest`).
+Bool dv_bounds(Kg g, Int root, DvFn fns, Map(Str, Int) own, List(Int) calls, List(DvD) ds, List(Int) nls, Str smap, List(Str) pk, Int i, Str src) {
+    if (i >= pk.len()) { return false; }
+    Str l = pk[i];
+    if (!str_starts_with(l, "@devices::")) { return dv_bounds(g, root, fns, own, calls, ds, nls, smap, pk, i + 1, src); }
+    Str rest = str_slice(l, 10, str_len(l));
+    Int c = imp_find_dcolon(rest, 0);
+    Str dep = if (c < 0) { rest } else { str_slice(rest, 0, c) };
+    List(Str) allowed = if (c < 0) { [] } else { dv_nonempty(str_split(str_slice(rest, c + 2, str_len(rest)), ","), 0, ListBuf()) };
+    List(Int) reach = dv_reach_from(g, fns, dv_roots(g, root, fns, nls, smap, dep), 0, {});
+    Int over = dv_over(own, calls, ds, reach, allowed, 0);
+    Bool bad = if (over >= 0) {
+        dv_diag_at("E0261", "dependency `" + dep + "` reaches device descriptor `" + ds[over].name + "` (device." + ds[over].kind + "), which its manifest bound devices = [" + str_join(allowed, ", ") + "] does not cover (spec §21.1)", g, calls[over], src, smap)
+    } else { false };
+    return bad || dv_bounds(g, root, fns, own, calls, ds, nls, smap, pk, i + 1, src);
+}
+
+List(Str) dv_nonempty(List(Str) xs, Int i, ListBuf(Str) acc) {
+    if (i >= xs.len()) { return acc.finish(); }
+    Str t = str_trim(xs[i]);
+    return dv_nonempty(xs, i + 1, if (t == "") { acc } else { acc.push(t) });
+}
+
+// The first verb reached outside `allowed`, or -1.
+Int dv_over(Map(Str, Int) own, List(Int) calls, List(DvD) ds, List(Int) reach, List(Str) allowed, Int i) {
+    if (i >= calls.len()) { return 0 - 1; }
+    Bool hit = dv_inside(own, calls[i], reach, 0) && !dv_allowed(ds[i].name, allowed, 0);
+    return if (hit) { i } else { dv_over(own, calls, ds, reach, allowed, i + 1) };
+}
+
+Bool dv_allowed(Str name, List(Str) allowed, Int i) {
+    if (i >= allowed.len()) { return false; }
+    Str a = allowed[i];
+    if (a == name || str_starts_with(name, a + ".")) { return true; }
+    return dv_allowed(name, allowed, i + 1);
+}
+
+// ─── Provenance records ─────────────────────────────────────────────
+
+List(Str) dv_records(Map(Str, Int) own, List(Int) calls, List(DvD) ds, List(Int) reach, Bool a64, Int i, ListBuf(Str) acc) {
+    if (i >= calls.len()) { return acc.finish(); }
+    if (!dv_inside(own, calls[i], reach, 0)) { return dv_records(own, calls, ds, reach, a64, i + 1, acc); }
+    return dv_records(own, calls, ds, reach, a64, i + 1, dv_record(ds[i], a64, acc));
+}
+
+ListBuf(Str) dv_record(DvD d, Bool a64, ListBuf(Str) acc) {
+    if (d.kind == "sequence") { return dv_seq_records(d, a64, 0, acc); }
+    Str us = kg_us();
+    return acc.push(d.name + us + d.path + us + d.kind + us + f"{dv_request(d, a64)}" + us + d.stab);
+}
+
+ListBuf(Str) dv_seq_records(DvD d, Bool a64, Int i, ListBuf(Str) acc) {
+    if (i >= d.steps.len()) { return acc; }
+    Str us = kg_us();
+    DvD s = d.steps[i];
+    return dv_seq_records(d, a64, i + 1, acc.push(d.name + ":" + s.name + us + d.path + us + "sequence" + us + f"{dv_request(s, a64)}" + us + d.stab));
+}
+
+// The request number for the build's target (0 for kinds without one).
+Int dv_request(DvD d, Bool a64) { return dv_request_at(d, if (a64) { 1 } else { 0 }, 0); }
+
+Int dv_request_at(DvD d, Int arch, Int i) {
+    if (i >= d.ra.len()) { return 0; }
+    if (d.ra[i] == arch) { return d.rn[i]; }
+    return dv_request_at(d, arch, i + 1);
+}
+
+List(Str) dv_sorted_distinct(List(Str) xs) { return dv_distinct(sort(xs), 0, ListBuf()); }
+
+List(Str) dv_distinct(List(Str) xs, Int i, ListBuf(Str) acc) {
+    if (i >= xs.len()) { return acc.finish(); }
+    Bool dup = i > 0 && xs[i] == xs[i - 1];
+    return dv_distinct(xs, i + 1, if (dup) { acc } else { acc.push(xs[i]) });
+}
+
+// ─── The rewrite ────────────────────────────────────────────────────
+
+// Each verb node becomes a call of its engine with the same arguments:
+// `device.ioctl(op, args)` is `device_engine_ioctl(op, args)`, or
+// `device_engine_ioctl_w(op, args)` when the descriptor writes.
+Kg dv_rewrite(Kg g, List(Int) calls, List(DvD) ds, Map(Str, Str) eng, Int i) {
+    if (i >= calls.len()) { return g; }
+    KN n = g.ns[calls[i]];
+    Str f = eng.get(dv_engine_key(g, calls[i], ds[i])) else { "" };
+    KN c = KN {.kind = "call", .text = f, .aux = "", .a0 = n.a0 + 1, .nk = n.nk - 1, .sp = n.sp, .ep = n.ep, .kc = kg_kcx("call", f, "")};
+    return dv_rewrite(Kg {.ns = g.ns.with(calls[i], c), .kids = g.kids, .docs = g.docs}, calls, ds, eng, i + 1);
+}

@@ -1,0 +1,33 @@
+// The device verbs end to end in phase 1 (PLAN-device-access.md): the
+// compiler checks the descriptor, records it and calls the engine, which
+// validates the inputs and asks the runtime's device host. The host is not
+// built yet, so a well-formed call is Err(Unsupported); a malformed one
+// never reaches it.
+import "dev/sev_guest.resid";
+import "dev/sev_guest_key.resid";
+import "_devzeros.resid";
+
+@requires(device(readonly))
+Str report(Int n, Int vmpl) {
+    return match (snp_get_report(dev_zeros(n), vmpl)) {
+        Ok(b) => f"report of {b.len()} bytes",
+        Err(e) => device_error_text(e),
+    };
+}
+
+@requires(device)
+Str key() {
+    return match (snp_get_derived_key(0, 0, 0, 0, 0)) {
+        Ok(k) => f"key of {k.len()} bytes",
+        Err(e) => device_error_text(e),
+    };
+}
+
+@requires(device)
+Int main() {
+    println(report(rt 64, 0));
+    println(report(rt 63, 0));
+    println(report(rt 64, 4));
+    println(key());
+    return 0;
+}

@@ -1,0 +1,10 @@
+// A device read needs the `device` family (spec §20, §49), through every
+// caller up to main.
+import "dev/sev_guest.resid";
+import "_devzeros.resid";
+
+Int main() {
+    Bool ok = match (snp_get_report(dev_zeros(64), 0)) { Ok(b) => true, Err(e) => false, };
+    println(f"{ok}");
+    return 0;
+}

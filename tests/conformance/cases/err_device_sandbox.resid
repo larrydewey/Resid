@@ -1,0 +1,12 @@
+// A sandbox only narrows (spec §21): code inside one without `device`
+// cannot reach a device, whatever main holds.
+import "dev/sev_guest.resid";
+import "_devzeros.resid";
+
+sandbox (filesystem(readonly)) {
+    @requires(device(readonly))
+    Bool probe() { return match (snp_get_report(dev_zeros(64), 0)) { Ok(b) => true, Err(e) => false, }; }
+}
+
+@requires(device(readonly), filesystem(readonly))
+Int main() { println(f"{probe()}"); return 0; }

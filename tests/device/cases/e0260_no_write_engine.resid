@@ -1,0 +1,7 @@
+// A writing descriptor runs only through the write engine
+// (lib/dev/device_write.resid), which its module must import; without it
+// there is no engine to call (E0260).
+import "dev/fx_e0260_no_write_engine.resid";
+
+@requires(device)
+Int main() { println(fx_call()); return 0; }

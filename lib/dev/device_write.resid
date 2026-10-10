@@ -1,0 +1,42 @@
+// --- lib/dev/device_write.resid - the engine for descriptors that write
+// The write half of lib/dev/device.resid's engine (spec §49): the compiler
+// calls these for a verb whose descriptor has `write = true`, after it has
+// checked the descriptor; a program cannot call them (E0260). They go to
+// the runtime's device host through resid_device_call_w, which the
+// force-time guard checks as `device!`, so a read-only grant never covers
+// them. A device module with a writing descriptor imports this module;
+// one with reads only does not, and so fits under device(readonly).
+
+import "device.resid";
+
+@descriptor(engine_ioctl_w)
+@requires(device)
+pub Result(List(DevOut), DeviceError) device_engine_ioctl_w(IoctlOp op, List(DevIn) args) {
+    DvReq r = dv_prep_ioctl(op, args);
+    if (r.err != "") { return Err(BadInput(op.name, r.err)); }
+    return dv_answer(op.name, r, resid_device_call_w(r.req));
+}
+
+@descriptor(engine_transact_w)
+@requires(device)
+pub Result(List(DevOut), DeviceError) device_engine_transact_w(Transact op, List(UInt(8)) cmd) {
+    DvReq r = dv_prep_transact(op, cmd);
+    if (r.err != "") { return Err(BadInput(op.name, r.err)); }
+    return dv_answer(op.name, r, resid_device_call_w(r.req));
+}
+
+@descriptor(engine_configfs_report_w)
+@requires(device)
+pub Result(List(DevOut), DeviceError) device_engine_configfs_report_w(ConfigfsReport op, ReportReq rq) {
+    DvReq r = dv_prep_configfs_report(op, rq);
+    if (r.err != "") { return Err(BadInput(op.name, r.err)); }
+    return dv_answer(op.name, r, resid_device_call_w(r.req));
+}
+
+@descriptor(engine_sequence_w)
+@requires(device)
+pub Result(List(DevOut), DeviceError) device_engine_sequence_w(Sequence op, List(DevIn) args) {
+    DvReq r = dv_prep_sequence(op, args);
+    if (r.err != "") { return Err(BadInput(op.name, r.err)); }
+    return dv_answer(op.name, r, resid_device_call_w(r.req));
+}

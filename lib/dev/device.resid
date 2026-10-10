@@ -1,0 +1,512 @@
+// --- lib/dev/device.resid - kernel device descriptors (capability `device`)
+// The one place the standard library describes how to talk to a kernel
+// device (spec §49, PLAN-device-access.md). A *descriptor* is a record the
+// compiler reduces to a known value at compile time: the device path, the
+// operation, its request number for each target, the byte layout of its
+// argument struct and which fields point to buffers. Every descriptor kind
+// below carries `@descriptor(...)`, and both that annotation and a literal
+// of a descriptor type are refused outside the standard library's lib/dev/
+// (E0260), so the set of kernel interfaces a Resid program can reach is the
+// files in this directory and nothing a dependency writes.
+//
+// A program calls the typed wrappers in the device modules beside this one
+// (lib/dev/sev_guest.resid, ...). They call the generic verbs:
+//
+//     device.ioctl(IoctlOp, List(DevIn))               -> Result(List(DevOut), DeviceError)
+//     device.transact(Transact, List(UInt(8)))         -> Result(List(DevOut), DeviceError)
+//     device.configfs_report(ConfigfsReport, ReportReq)-> Result(List(DevOut), DeviceError)
+//     device.read_attr(ReadAttr)                       -> Result(List(DevOut), DeviceError)
+//     device.sequence(Sequence, List(DevIn))           -> Result(List(DevOut), DeviceError)
+//
+// Each verb is a provider call of the `device` family: @requires(device) or,
+// when the descriptor's `write` is false, @requires(device(readonly)). After
+// reduction the compiler checks the descriptor (E0262 when it is not known,
+// E0263 for an inconsistent layout, E0264 for a Sequence's links), records it
+// in the graph artifact and the signed provenance record, and calls the
+// engine for the verb: this module's for a descriptor that only reads,
+// lib/dev/device_write.resid's for one that writes. The program never sees a pointer, a file
+// descriptor or a raw request: it supplies and receives buffer *contents*.
+//
+// Inputs and outputs follow the descriptor's fields in order. An input is
+// one DevIn per In or InOut field; an output is one DevOut per Out or InOut
+// field. A Scalar that some Buffer names as its length field is the
+// engine's, not the program's: it is filled in from the buffer and read
+// back to cut the output to its length. A Buffer marked secret comes back
+// as OutSecret, its bytes Secret(UInt(8)) (spec §48).
+
+// -- Descriptors --------------------------------------------------------
+
+// Which way a field's bytes go: In from the program to the kernel, Out from
+// the kernel back, InOut both.
+type Dir = In | Out | InOut;
+
+// One field of an ioctl's argument struct.
+//   Scalar(offset, width, dir)    an integer of 1, 2, 4 or 8 bytes, little endian
+//   Inline(offset, length, dir)   bytes inside the struct
+//   Buffer(offset, length_at, max, dir, secret)
+//                                 an 8-byte pointer at `offset` to a buffer the
+//                                 engine allocates, at most `max` bytes; the
+//                                 Scalar at `length_at` holds its length (-1
+//                                 when the length is always `max`); a secret
+//                                 buffer's bytes come back as secrets
+type Field = Scalar(Int, Int, Dir) | Inline(Int, Int, Dir) | Buffer(Int, Int, Int, Dir, Bool);
+
+// The architectures a request number is given for. `_IOC` encodes the same
+// way on both today, but a descriptor names each target it was checked on,
+// and a build for a target it does not name is refused (E0263).
+type Arch = X86_64 | Aarch64;
+
+type Request = { Arch arch; Int number; };
+
+// How far the kernel promises the interface: `include/uapi` (Uapi), a sysfs
+// ABI still marked testing (AbiTesting), or an out-of-tree driver
+// (OutOfTree). Recorded in the provenance record, so `residc verify` shows
+// which classes a binary depends on.
+type Stability = Uapi | AbiTesting | OutOfTree;
+
+// The interface version a descriptor speaks: Versioned(offset, width,
+// value) is a field the engine sets before the call and checks after it
+// (Version when the kernel answers in another). Not one of `fields`.
+type IfaceVersion = Unversioned | Versioned(Int, Int, Int);
+
+// An ioctl on a character device. `size` and the direction bits of each
+// request number must agree with `fields` (E0263).
+@descriptor(ioctl)
+type IoctlOp = { Str name; Str path; List(Request) requests; Int size; List(Field) fields; Bool write; IfaceVersion version; Stability stability; };
+
+// A request/response device (/dev/tpmrm0): write a command, read a
+// response of at most `max_response` bytes.
+@descriptor(transact)
+type Transact = { Str name; Str path; Int max_command; Int max_response; Bool secret; Bool write; Stability stability; };
+
+// A read-only attribute file (sysfs), at most `max` bytes.
+@descriptor(read_attr)
+type ReadAttr = { Str name; Str path; Int max; Stability stability; };
+
+// The configfs report interface (/sys/kernel/config/tsm/report): a fresh
+// entry, `inblob` (and `privlevel`, `service_provider` when given) written,
+// `outblob`, `auxblob`, `manifestblob`, `provider` and `generation` read,
+// the provider checked against `providers` and the generation against a
+// change between the write and the read, the entry removed.
+@descriptor(configfs_report)
+type ConfigfsReport = { Str name; Str path; List(Str) providers; Int max_inblob; Int max_outblob; Int max_auxblob; Int max_manifestblob; Bool write; Stability stability; };
+
+// A Sequence step's output copied into a later step's input: the Scalar at
+// `from_offset` of step `from_step` (an output) into the Scalar at
+// `to_offset` of step `to_step` (an input), both `width` bytes (E0264).
+type Link = { Int from_step; Int from_offset; Int to_step; Int to_offset; Int width; };
+
+pub Link link(Int from_step, Int from_offset, Int to_step, Int to_offset, Int width) {
+    return Link {.from_step = from_step, .from_offset = from_offset, .to_step = to_step, .to_offset = to_offset, .width = width};
+}
+
+// Ioctl steps on one open file, run in order in one isolated host; only
+// the last step's outputs reach the program, and handles and intermediate
+// structs never leave the host.
+@descriptor(sequence)
+type Sequence = { Str name; Str path; List(IoctlOp) steps; List(Link) links; Bool write; Stability stability; };
+
+// What a configfs report is asked for. `privlevel` < 0 and an empty
+// `service_provider` leave those attributes unwritten.
+@descriptor(report_req)
+type ReportReq = { List(UInt(8)) inblob; Int privlevel; Str service_provider; };
+
+// -- Values that cross ----------------------------------------------------
+
+@descriptor(in)
+type DevIn = InNum(Int) | InBytes(List(UInt(8)));
+
+@descriptor(out)
+type DevOut = OutNum(Int) | OutBytes(List(UInt(8))) | OutSecret(List(Secret(UInt(8))));
+
+// Every failure is a value (spec Law 12): a missing device is how a program
+// learns which platform it is on. Each carries the descriptor's name.
+//   Absent        the path does not exist
+//   Denied        the kernel refused to open it (EACCES, EPERM)
+//   Kernel        the operation failed with this errno
+//   TooLong       a reply longer than the descriptor's maximum
+//   GenerationChanged  a configfs entry changed between write and read
+//   Unsupported   ENOTTY / EINVAL from the request, or no device engine
+//   Version       the kernel answered in another interface version
+//   Overrun       the kernel wrote past a buffer (guard page or canary)
+//   UnknownDriver no descriptor covers the loaded driver's version
+//   BadInput      the program's inputs do not fit the descriptor
+//   BadReply      the isolated host's reply did not parse
+@descriptor(error)
+type DeviceError = Absent(Str) | Denied(Str) | Kernel(Str, Int) | TooLong(Str) | GenerationChanged(Str) | Unsupported(Str) | Version(Str, Int) | Overrun(Str) | UnknownDriver(Str, Str) | BadInput(Str, Str) | BadReply(Str, Str);
+
+pub Str device_error_text(DeviceError e) {
+    return match (e) {
+        Absent(n) => n + ": device absent",
+        Denied(n) => n + ": permission denied",
+        Kernel(n, errno) => n + f": kernel error {errno}",
+        TooLong(n) => n + ": reply too long",
+        GenerationChanged(n) => n + ": report generation changed",
+        Unsupported(n) => n + ": unsupported",
+        Version(n, v) => n + f": interface version {v}",
+        Overrun(n) => n + ": buffer overrun",
+        UnknownDriver(n, v) => n + ": no descriptor for driver version " + v,
+        BadInput(n, why) => n + ": bad input: " + why,
+        BadReply(n, why) => n + ": bad reply: " + why,
+    };
+}
+
+// -- The engine -----------------------------------------------------------
+// The compiler calls these in place of the verbs, after it has checked the
+// descriptor; a program cannot call them (E0260). Each validates the inputs
+// against the descriptor, serializes descriptor and inputs, hands them to
+// the runtime's isolated device host, and validates the reply against the
+// descriptor's maxima. A descriptor whose `write` is false goes to the
+// engine here, through resid_device_call (the force-time guard asks for
+// `device`); one that writes goes to lib/dev/device_write.resid's, through
+// resid_device_call_w (`device!`). The two live in separate modules so that
+// code under a read-only ceiling (a dependency granted device(readonly))
+// can import this one: a module is compiled inside its importer's ceiling,
+// and an engine that could write would not fit it.
+
+// A request ready for the device host, or why the inputs do not fit (err).
+type DvReq = { Str err; List(Int) req; List(DvSlot) outs; };
+
+DvReq dv_bad(Str why) { return DvReq {.err = why, .req = [], .outs = []}; }
+
+pub DvReq dv_prep_ioctl(IoctlOp op, List(DevIn) args) {
+    Str bad = dv_check_ins(dv_ins(op.fields, op.fields, 0, ListBuf()), args, 0);
+    if (bad != "") { return dv_bad(bad); }
+    ListBuf(Int) b = dv_head(ListBuf(), 1, op.write, op.name, op.path);
+    return DvReq {.err = "", .req = dv_args(dv_ioctl(b, op), args, 0).finish(), .outs = dv_outs(op.fields, op.fields, 0, ListBuf())};
+}
+
+pub DvReq dv_prep_transact(Transact op, List(UInt(8)) cmd) {
+    if (cmd.len() > op.max_command) { return dv_bad(f"command of {cmd.len()} bytes, at most {op.max_command}"); }
+    ListBuf(Int) b = dv_u(dv_u(dv_head(ListBuf(), 2, op.write, op.name, op.path), op.max_command, 4), op.max_response, 4);
+    return DvReq {.err = "", .req = dv_bytes(dv_u(b, dv_bool(op.secret), 1), cmd).finish(), .outs = [DvSlot {.num = false, .max = op.max_response, .secret = op.secret}]};
+}
+
+pub DvReq dv_prep_configfs_report(ConfigfsReport op, ReportReq rq) {
+    if (rq.inblob.len() > op.max_inblob) { return dv_bad(f"inblob of {rq.inblob.len()} bytes, at most {op.max_inblob}"); }
+    ListBuf(Int) b0 = dv_strs(dv_u(dv_head(ListBuf(), 4, op.write, op.name, op.path), op.providers.len(), 1), op.providers, 0);
+    ListBuf(Int) b1 = dv_u(dv_u(dv_u(dv_u(b0, op.max_inblob, 4), op.max_outblob, 4), op.max_auxblob, 4), op.max_manifestblob, 4);
+    List(Int) req = dv_str(dv_u(dv_bytes(b1, rq.inblob), rq.privlevel, 8), rq.service_provider).finish();
+    return DvReq {.err = "", .req = req, .outs = [dv_blob(op.max_outblob), dv_blob(op.max_auxblob), dv_blob(op.max_manifestblob), dv_blob(256), DvSlot {.num = true, .max = 0, .secret = false}]};
+}
+
+pub DvReq dv_prep_sequence(Sequence op, List(DevIn) args) {
+    Str bad = dv_check_ins(dv_seq_ins(op, 0, ListBuf()), args, 0);
+    if (bad != "") { return dv_bad(bad); }
+    ListBuf(Int) b = dv_u(dv_head(ListBuf(), 5, op.write, op.name, op.path), op.steps.len(), 1);
+    ListBuf(Int) b2 = dv_links(dv_u(dv_steps(b, op.steps, 0), op.links.len(), 1), op.links, 0);
+    IoctlOp last = op.steps[op.steps.len() - 1];
+    return DvReq {.err = "", .req = dv_args(b2, args, 0).finish(), .outs = dv_outs(last.fields, last.fields, 0, ListBuf())};
+}
+
+// The reply to a prepared request.
+pub Result(List(DevOut), DeviceError) dv_answer(Str name, DvReq r, List(Int) reply) {
+    return dv_reply(name, r.outs, reply);
+}
+
+@descriptor(engine_ioctl)
+@requires(device(readonly))
+pub Result(List(DevOut), DeviceError) device_engine_ioctl(IoctlOp op, List(DevIn) args) {
+    DvReq r = dv_prep_ioctl(op, args);
+    if (r.err != "") { return Err(BadInput(op.name, r.err)); }
+    return dv_answer(op.name, r, resid_device_call(r.req));
+}
+
+@descriptor(engine_transact)
+@requires(device(readonly))
+pub Result(List(DevOut), DeviceError) device_engine_transact(Transact op, List(UInt(8)) cmd) {
+    DvReq r = dv_prep_transact(op, cmd);
+    if (r.err != "") { return Err(BadInput(op.name, r.err)); }
+    return dv_answer(op.name, r, resid_device_call(r.req));
+}
+
+@descriptor(engine_read_attr)
+@requires(device(readonly))
+pub Result(List(DevOut), DeviceError) device_engine_read_attr(ReadAttr op) {
+    List(Int) req = dv_u(dv_head(ListBuf(), 3, false, op.name, op.path), op.max, 4).finish();
+    return dv_reply(op.name, [DvSlot {.num = false, .max = op.max, .secret = false}], resid_device_call(req));
+}
+
+@descriptor(engine_configfs_report)
+@requires(device(readonly))
+pub Result(List(DevOut), DeviceError) device_engine_configfs_report(ConfigfsReport op, ReportReq rq) {
+    DvReq r = dv_prep_configfs_report(op, rq);
+    if (r.err != "") { return Err(BadInput(op.name, r.err)); }
+    return dv_answer(op.name, r, resid_device_call(r.req));
+}
+
+@descriptor(engine_sequence)
+@requires(device(readonly))
+pub Result(List(DevOut), DeviceError) device_engine_sequence(Sequence op, List(DevIn) args) {
+    DvReq r = dv_prep_sequence(op, args);
+    if (r.err != "") { return Err(BadInput(op.name, r.err)); }
+    return dv_answer(op.name, r, resid_device_call(r.req));
+}
+
+// -- Inputs and outputs ---------------------------------------------------
+
+// One value that crosses: an integer, or bytes of at most `max`.
+type DvSlot = { Bool num; Int max; Bool secret; };
+
+DvSlot dv_blob(Int max) { return DvSlot {.num = false, .max = max, .secret = false}; }
+
+Bool dv_is_in(Dir d) { return match (d) { In => true, Out => false, InOut => true, }; }
+Bool dv_is_out(Dir d) { return match (d) { In => false, Out => true, InOut => true, }; }
+
+// Whether a Buffer of fs names the Scalar at `off` as its length field.
+Bool dv_is_len(List(Field) fs, Int off, Int i) {
+    if (i >= fs.len()) { return false; }
+    Bool hit = match (fs[i]) { Scalar(o, w, d) => false, Inline(o, n, d) => false, Buffer(o, la, mx, d, s) => la == off, };
+    return hit || dv_is_len(fs, off, i + 1);
+}
+
+// The inputs fs takes from the program, in order.
+List(DvSlot) dv_ins(List(Field) all, List(Field) fs, Int i, ListBuf(DvSlot) acc) {
+    if (i >= fs.len()) { return acc.finish(); }
+    ListBuf(DvSlot) acc2 = match (fs[i]) {
+        Scalar(o, w, d) => if (dv_is_in(d) && !dv_is_len(all, o, 0)) { acc.push(DvSlot {.num = true, .max = w, .secret = false}) } else { acc },
+        Inline(o, n, d) => if (dv_is_in(d)) { acc.push(dv_blob(n)) } else { acc },
+        Buffer(o, la, mx, d, s) => if (dv_is_in(d)) { acc.push(DvSlot {.num = false, .max = mx, .secret = s}) } else { acc },
+    };
+    return dv_ins(all, fs, i + 1, acc2);
+}
+
+// The outputs fs gives back, in order.
+List(DvSlot) dv_outs(List(Field) all, List(Field) fs, Int i, ListBuf(DvSlot) acc) {
+    if (i >= fs.len()) { return acc.finish(); }
+    ListBuf(DvSlot) acc2 = match (fs[i]) {
+        Scalar(o, w, d) => if (dv_is_out(d) && !dv_is_len(all, o, 0)) { acc.push(DvSlot {.num = true, .max = w, .secret = false}) } else { acc },
+        Inline(o, n, d) => if (dv_is_out(d)) { acc.push(dv_blob(n)) } else { acc },
+        Buffer(o, la, mx, d, s) => if (dv_is_out(d)) { acc.push(DvSlot {.num = false, .max = mx, .secret = s}) } else { acc },
+    };
+    return dv_outs(all, fs, i + 1, acc2);
+}
+
+// A Sequence's inputs: each step's, less the fields a link fills.
+List(DvSlot) dv_seq_ins(Sequence op, Int s, ListBuf(DvSlot) acc) {
+    if (s >= op.steps.len()) { return acc.finish(); }
+    List(Field) fs = op.steps[s].fields;
+    return dv_seq_ins(op, s + 1, dv_seq_step(op, s, fs, 0, acc));
+}
+
+ListBuf(DvSlot) dv_seq_step(Sequence op, Int s, List(Field) fs, Int i, ListBuf(DvSlot) acc) {
+    if (i >= fs.len()) { return acc; }
+    ListBuf(DvSlot) acc2 = match (fs[i]) {
+        Scalar(o, w, d) => if (dv_is_in(d) && !dv_is_len(fs, o, 0) && !dv_linked(op.links, s, o, 0)) { acc.push(DvSlot {.num = true, .max = w, .secret = false}) } else { acc },
+        Inline(o, n, d) => if (dv_is_in(d)) { acc.push(dv_blob(n)) } else { acc },
+        Buffer(o, la, mx, d, sec) => if (dv_is_in(d)) { acc.push(DvSlot {.num = false, .max = mx, .secret = sec}) } else { acc },
+    };
+    return dv_seq_step(op, s, fs, i + 1, acc2);
+}
+
+Bool dv_linked(List(Link) ls, Int s, Int off, Int i) {
+    if (i >= ls.len()) { return false; }
+    return (ls[i].to_step == s && ls[i].to_offset == off) || dv_linked(ls, s, off, i + 1);
+}
+
+// "" when args fit the slots, else why not.
+Str dv_check_ins(List(DvSlot) want, List(DevIn) args, Int i) {
+    if (args.len() != want.len()) { return f"{args.len()} inputs, the descriptor takes {want.len()}"; }
+    if (i >= args.len()) { return ""; }
+    DvSlot w = want[i];
+    Str bad = match (args[i]) {
+        InNum(v) => if (!w.num) { f"input {i} is a number, the field takes bytes" } else if (!dv_fits(v, w.max)) { f"input {i} does not fit {w.max} bytes" } else { "" },
+        InBytes(bs) => if (w.num) { f"input {i} is bytes, the field takes a number" } else if (bs.len() > w.max) { f"input {i} has {bs.len()} bytes, at most {w.max}" } else { "" },
+    };
+    if (bad != "") { return bad; }
+    return dv_check_ins(want, args, i + 1);
+}
+
+// v fits `width` bytes, signed or unsigned.
+Bool dv_fits(Int v, Int width) {
+    if (width >= 8) { return true; }
+    Int bits = width * 8;
+    return v >= 0 - (1 << (bits - 1)) && v < (1 << bits);
+}
+
+// -- Serialization ----------------------------------------------------------
+// Little endian throughout. The request is
+//   "RDV" 1, kind (1 ioctl, 2 transact, 3 read_attr, 4 configfs_report,
+//   5 sequence), write, name, path (u16 length, bytes), then the kind's own
+//   part and the inputs (u8 count; tag 0 + 8-byte integer, or tag 1 + u32
+//   length + bytes).
+// The reply is 0, u32 count, outputs (as the inputs), or 1, an error code
+// (1 Absent .. 8 Overrun, as DeviceError), an 8-byte value.
+
+ListBuf(Int) dv_u(ListBuf(Int) b, Int v, Int n) {
+    if (n <= 0) { return b; }
+    return dv_u(b.push(v & 255), v >> 8, n - 1);
+}
+
+Int dv_bool(Bool x) { return if (x) { 1 } else { 0 }; }
+
+ListBuf(Int) dv_str(ListBuf(Int) b, Str s) { return dv_str_at(dv_u(b, str_len(s), 2), s, 0); }
+
+ListBuf(Int) dv_str_at(ListBuf(Int) b, Str s, Int i) {
+    if (i >= str_len(s)) { return b; }
+    return dv_str_at(b.push(str_char_at(s, i) & 255), s, i + 1);
+}
+
+ListBuf(Int) dv_strs(ListBuf(Int) b, List(Str) ss, Int i) {
+    if (i >= ss.len()) { return b; }
+    return dv_strs(dv_str(b, ss[i]), ss, i + 1);
+}
+
+// A u32 length, then the bytes.
+ListBuf(Int) dv_bytes(ListBuf(Int) b, List(UInt(8)) bs) { return dv_bytes_at(dv_u(b, bs.len(), 4), bs, 0); }
+
+ListBuf(Int) dv_bytes_at(ListBuf(Int) b, List(UInt(8)) bs, Int i) {
+    if (i >= bs.len()) { return b; }
+    return dv_bytes_at(b.push((Int)bs[i]), bs, i + 1);
+}
+
+ListBuf(Int) dv_head(ListBuf(Int) b, Int kind, Bool write, Str name, Str path) {
+    return dv_str(dv_str(b.push(82).push(68).push(86).push(1).push(kind).push(dv_bool(write)), name), path);
+}
+
+Int dv_arch(Arch a) { return match (a) { X86_64 => 0, Aarch64 => 1, }; }
+Int dv_dir(Dir d) { return match (d) { In => 1, Out => 2, InOut => 3, }; }
+Int dv_stab(Stability s) { return match (s) { Uapi => 0, AbiTesting => 1, OutOfTree => 2, }; }
+
+ListBuf(Int) dv_ioctl(ListBuf(Int) b, IoctlOp op) {
+    ListBuf(Int) b1 = dv_reqs(dv_u(b, op.requests.len(), 1), op.requests, 0);
+    ListBuf(Int) b2 = dv_fields(dv_u(dv_u(b1, op.size, 4), op.fields.len(), 1), op.fields, 0);
+    ListBuf(Int) b3 = match (op.version) {
+        Unversioned => dv_u(b2, 0, 1),
+        Versioned(o, w, v) => dv_u(dv_u(dv_u(dv_u(b2, 1, 1), o, 4), w, 1), v, 8),
+    };
+    return dv_u(b3, dv_stab(op.stability), 1);
+}
+
+ListBuf(Int) dv_reqs(ListBuf(Int) b, List(Request) rs, Int i) {
+    if (i >= rs.len()) { return b; }
+    return dv_reqs(dv_u(dv_u(b, dv_arch(rs[i].arch), 1), rs[i].number, 4), rs, i + 1);
+}
+
+ListBuf(Int) dv_fields(ListBuf(Int) b, List(Field) fs, Int i) {
+    if (i >= fs.len()) { return b; }
+    ListBuf(Int) b2 = match (fs[i]) {
+        Scalar(o, w, d) => dv_u(dv_u(dv_u(dv_u(b, 0, 1), o, 4), w, 4), dv_dir(d), 1),
+        Inline(o, n, d) => dv_u(dv_u(dv_u(dv_u(b, 1, 1), o, 4), n, 4), dv_dir(d), 1),
+        Buffer(o, la, mx, d, s) => dv_u(dv_u(dv_u(dv_u(dv_u(dv_u(b, 2, 1), o, 4), la, 4), mx, 4), dv_dir(d), 1), dv_bool(s), 1),
+    };
+    return dv_fields(b2, fs, i + 1);
+}
+
+ListBuf(Int) dv_steps(ListBuf(Int) b, List(IoctlOp) ss, Int i) {
+    if (i >= ss.len()) { return b; }
+    return dv_steps(dv_ioctl(dv_u(dv_str(b, ss[i].name), dv_bool(ss[i].write), 1), ss[i]), ss, i + 1);
+}
+
+ListBuf(Int) dv_links(ListBuf(Int) b, List(Link) ls, Int i) {
+    if (i >= ls.len()) { return b; }
+    Link l = ls[i];
+    return dv_links(dv_u(dv_u(dv_u(dv_u(dv_u(b, l.from_step, 1), l.from_offset, 4), l.to_step, 1), l.to_offset, 4), l.width, 1), ls, i + 1);
+}
+
+ListBuf(Int) dv_args(ListBuf(Int) b, List(DevIn) args, Int i) {
+    if (i == 0 && args.len() == 0) { return dv_u(b, 0, 1); }
+    ListBuf(Int) b0 = if (i == 0) { dv_u(b, args.len(), 1) } else { b };
+    if (i >= args.len()) { return b0; }
+    ListBuf(Int) b2 = match (args[i]) {
+        InNum(v) => dv_u(dv_u(b0, 0, 1), v, 8),
+        InBytes(bs) => dv_bytes(dv_u(b0, 1, 1), bs),
+    };
+    return dv_args(b2, args, i + 1);
+}
+
+// Little-endian unsigned of n <= 7 bytes at `at`, or -1 past the end.
+Int dv_rd(List(Int) r, Int at, Int n) {
+    if (at < 0 || at + n > r.len()) { return 0 - 1; }
+    return dv_rd_at(r, at, n - 1, 0);
+}
+
+Int dv_rd_at(List(Int) r, Int at, Int i, Int acc) {
+    if (i < 0) { return acc; }
+    return dv_rd_at(r, at, i - 1, (acc << 8) | (r[at + i] & 255));
+}
+
+// The 8-byte two's-complement integer at `at` (the caller checked length).
+Int dv_rd64(List(Int) r, Int at) { return (dv_rd(r, at + 4, 4) << 32) | dv_rd(r, at, 4); }
+
+Result(List(DevOut), DeviceError) dv_reply(Str name, List(DvSlot) slots, List(Int) r) {
+    if (r.len() < 1) { return Err(BadReply(name, "empty")); }
+    if (r[0] == 1) {
+        if (r.len() < 10) { return Err(BadReply(name, "short error")); }
+        Int v = dv_rd64(r, 2);
+        Int code = r[1];
+        if (code == 1) { return Err(Absent(name)); }
+        if (code == 2) { return Err(Denied(name)); }
+        if (code == 3) { return Err(Kernel(name, v)); }
+        if (code == 4) { return Err(TooLong(name)); }
+        if (code == 5) { return Err(GenerationChanged(name)); }
+        if (code == 6) { return Err(Unsupported(name)); }
+        if (code == 7) { return Err(Version(name, v)); }
+        if (code == 8) { return Err(Overrun(name)); }
+        return Err(BadReply(name, f"error code {code}"));
+    }
+    if (r[0] != 0) { return Err(BadReply(name, "status")); }
+    Int n = dv_rd(r, 1, 4);
+    if (n != slots.len()) { return Err(BadReply(name, f"{n} outputs, the descriptor gives {slots.len()}")); }
+    return dv_items(name, slots, r, 5, 0);
+}
+
+Result(List(DevOut), DeviceError) dv_items(Str name, List(DvSlot) slots, List(Int) r, Int at, Int i) {
+    if (i >= slots.len()) {
+        List(DevOut) none = [];
+        return if (at == r.len()) { Ok(none) } else { Err(BadReply(name, "trailing bytes")) };
+    }
+    DvSlot s = slots[i];
+    Int tag = dv_rd(r, at, 1);
+    if (s.num) {
+        if (tag != 0 || at + 9 > r.len()) { return Err(BadReply(name, f"output {i}")); }
+        List(DevOut) rest = dv_items(name, slots, r, at + 9, i + 1)?;
+        return Ok([OutNum(dv_rd64(r, at + 1))].concat(rest));
+    }
+    Int len = dv_rd(r, at + 1, 4);
+    if (tag != 1 || len < 0 || at + 5 + len > r.len()) { return Err(BadReply(name, f"output {i}")); }
+    if (len > s.max) { return Err(TooLong(name)); }
+    DevOut o = if (s.secret) { OutSecret(dv_secret(r, at + 5, at + 5 + len, ListBuf())) } else { OutBytes(dv_pub(r, at + 5, at + 5 + len, ListBuf())) };
+    List(DevOut) rest = dv_items(name, slots, r, at + 5 + len, i + 1)?;
+    return Ok([o].concat(rest));
+}
+
+List(UInt(8)) dv_pub(List(Int) r, Int i, Int end, ListBuf(UInt(8)) acc) {
+    if (i >= end) { return acc.finish(); }
+    return dv_pub(r, i + 1, end, acc.push((UInt(8))(r[i] & 255)));
+}
+
+List(Secret(UInt(8))) dv_secret(List(Int) r, Int i, Int end, ListBuf(Secret(UInt(8))) acc) {
+    if (i >= end) { return acc.finish(); }
+    return dv_secret(r, i + 1, end, acc.push(secret((UInt(8))(r[i] & 255))));
+}
+
+// -- Helpers for the device modules ----------------------------------------
+
+// The `_IOC` request number (asm-generic/ioctl.h, x86-64 and AArch64):
+// dir in bits 30-31 (1 write, 2 read), size in 16-29, type in 8-15, nr in 0-7.
+pub Int dv_ioc(Int dir, Int ty, Int nr, Int size) { return (dir << 30) | (size << 16) | (ty << 8) | nr; }
+pub Int dv_iowr(Int ty, Int nr, Int size) { return dv_ioc(3, ty, nr, size); }
+pub Int dv_iow(Int ty, Int nr, Int size) { return dv_ioc(1, ty, nr, size); }
+pub Int dv_ior(Int ty, Int nr, Int size) { return dv_ioc(2, ty, nr, size); }
+
+// One request number for both targets (asm-generic encodes alike).
+pub List(Request) dv_both(Int number) { return [Request {.arch = X86_64, .number = number}, Request {.arch = Aarch64, .number = number}]; }
+
+// The bytes of output i, when it is public bytes.
+pub Option(List(UInt(8))) dv_out_bytes(List(DevOut) outs, Int i) {
+    if (i >= outs.len()) { return None; }
+    return match (outs[i]) { OutNum(v) => None, OutBytes(bs) => Some(bs), OutSecret(ss) => None, };
+}
+
+// The secret bytes of output i.
+pub Option(List(Secret(UInt(8)))) dv_out_secret(List(DevOut) outs, Int i) {
+    if (i >= outs.len()) { return None; }
+    return match (outs[i]) { OutNum(v) => None, OutBytes(bs) => None, OutSecret(ss) => Some(ss), };
+}
+
+// The number of output i.
+pub Option(Int) dv_out_num(List(DevOut) outs, Int i) {
+    if (i >= outs.len()) { return None; }
+    return match (outs[i]) { OutNum(v) => Some(v), OutBytes(bs) => None, OutSecret(ss) => None, };
+}

@@ -1,0 +1,7 @@
+// `device` names the provider (spec §49); a binding of that name would
+// make `device.ioctl(...)` mean something else.
+Int main() {
+    Int device = 3;
+    println(f"{device}");
+    return 0;
+}

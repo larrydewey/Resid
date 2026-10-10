@@ -1,0 +1,5 @@
+// Fields do not overlap; this descriptor breaks that (E0263).
+import "dev/fx_e0263_overlap.resid";
+
+@requires(device)
+Int main() { println(fx_call()); return 0; }

@@ -1,0 +1,88 @@
+// --- lib/dev/sev_guest.resid - AMD SEV-SNP guest requests (/dev/sev-guest)
+// Descriptors for the SNP guest request ioctls of the Linux `sev-guest`
+// driver, from include/uapi/linux/sev-guest.h. This is the phase-1 sample
+// of PLAN-device-access.md, written by hand; the full set is generated from
+// the uapi headers by tools/resid-devgen (phase 5).
+//
+//     struct snp_guest_request_ioctl {     // 32 bytes
+//         __u8  msg_version;               //  0  the interface version, 1
+//         __u64 req_data;                  //  8  -> the request struct
+//         __u64 resp_data;                 // 16  -> the response struct
+//         union { __u64 exitinfo2; ... };  // 24  firmware and VMM error codes
+//     };
+//     #define SNP_GUEST_REQ_IOC_TYPE 'S'   // 0x53
+//     #define SNP_GET_REPORT      _IOWR(SNP_GUEST_REQ_IOC_TYPE, 0x0, struct snp_guest_request_ioctl)
+//     #define SNP_GET_DERIVED_KEY _IOWR(SNP_GUEST_REQ_IOC_TYPE, 0x1, struct snp_guest_request_ioctl)
+//
+// _IOWR(type, nr, T) is (3 << 30) | (sizeof(T) << 16) | (type << 8) | nr on
+// x86-64 and AArch64 alike (asm-generic/ioctl.h), so SNP_GET_REPORT is
+// 0xC0205300 and SNP_GET_DERIVED_KEY is 0xC0205301; dv_iowr computes them
+// at compile time and the compiler checks the size and direction bits
+// against the layout (E0263).
+//
+// A report is signed by the AMD secure processor and verified downstream,
+// so a corrupted reply fails verification instead of passing.
+//
+// Everything here is a read, so this module fits under device(readonly);
+// SNP_GET_DERIVED_KEY, a write, is lib/dev/sev_guest_key.resid.
+
+import "device.resid";
+
+// -- Descriptors ------------------------------------------------------------
+
+// SNP_GET_REPORT: struct snp_report_req (96 bytes: user_data[64], vmpl,
+// rsvd[28]) in, struct snp_report_resp (data[4000]) out.
+pub IoctlOp snp_get_report_op() {
+    return IoctlOp {.name = "sev_guest.snp_get_report", .path = "/dev/sev-guest", .requests = dv_both(dv_iowr(83, 0, 32)), .size = 32, .fields = [Buffer(8, -1, 96, In, false), Buffer(16, -1, 4000, Out, false), Scalar(24, 8, Out)], .write = false, .version = Versioned(0, 1, 1), .stability = Uapi};
+}
+
+// -- Wrappers ---------------------------------------------------------------
+
+// The attestation report (struct attestation_report, 1184 bytes in this
+// version) for `report_data` (64 bytes, bound into the report) at VMPL
+// `vmpl` (0 to 3).
+@requires(device(readonly))
+pub Result(List(UInt(8)), DeviceError) snp_get_report(List(UInt(8)) report_data, Int vmpl) {
+    Str name = "sev_guest.snp_get_report";
+    if (report_data.len() != 64) { return Err(BadInput(name, f"report_data is 64 bytes, got {report_data.len()}")); }
+    if (vmpl < 0 || vmpl > 3) { return Err(BadInput(name, f"vmpl is 0 to 3, got {vmpl}")); }
+    List(UInt(8)) req = report_data.concat(sg_le32(vmpl)).concat(sg_zeros(28, ListBuf()));
+    List(DevOut) outs = device.ioctl(snp_get_report_op(), [InBytes(req)])?;
+    return sg_report(name, dv_out_bytes(outs, 0));
+}
+
+// struct msg_report_resp: status, report_size, 24 reserved bytes, report.
+Result(List(UInt(8)), DeviceError) sg_report(Str name, Option(List(UInt(8))) resp) {
+    return match (resp) {
+        None => Err(BadReply(name, "no response buffer")),
+        Some(r) => sg_report_body(name, r),
+    };
+}
+
+Result(List(UInt(8)), DeviceError) sg_report_body(Str name, List(UInt(8)) r) {
+    if (r.len() < 32) { return Err(BadReply(name, "short response")); }
+    Int status = sg_u32(r, 0);
+    if (status != 0) { return Err(Kernel(name, status)); }
+    Int size = sg_u32(r, 4);
+    if (size > r.len() - 32) { return Err(TooLong(name)); }
+    return Ok(r[32..32 + size]);
+}
+
+// -- Bytes ----------------------------------------------------------------
+
+pub List(UInt(8)) sg_le32(Int v) { return sg_le(v, 4, ListBuf()); }
+pub List(UInt(8)) sg_le64(Int v) { return sg_le(v, 8, ListBuf()); }
+
+List(UInt(8)) sg_le(Int v, Int n, ListBuf(UInt(8)) acc) {
+    if (n <= 0) { return acc.finish(); }
+    return sg_le(v >> 8, n - 1, acc.push((UInt(8))(v & 255)));
+}
+
+List(UInt(8)) sg_zeros(Int n, ListBuf(UInt(8)) acc) {
+    if (n <= 0) { return acc.finish(); }
+    return sg_zeros(n - 1, acc.push((UInt(8))0));
+}
+
+Int sg_u32(List(UInt(8)) r, Int at) {
+    return (Int)r[at] | ((Int)r[at + 1] << 8) | ((Int)r[at + 2] << 16) | ((Int)r[at + 3] << 24);
+}

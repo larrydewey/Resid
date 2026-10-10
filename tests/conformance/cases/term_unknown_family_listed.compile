@@ -1,1 +1,1 @@
-filesystem, environment, args, process, network, terminal, clock, display, declassify, native_<module>)
+filesystem, environment, args, process, network, terminal, clock, device, display, declassify, native_<module>)

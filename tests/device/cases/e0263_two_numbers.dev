@@ -1,0 +1,11 @@
+// Fixture for e0263_two_numbers: one request number per target (installed as lib/dev/fx_e0263_two_numbers.resid).
+import "device.resid";
+
+pub IoctlOp fx_op() {
+    return IoctlOp {.name = "fx.op", .path = "/dev/fx", .requests = [Request {.arch = X86_64, .number = dv_iowr(88, 0, 32)}, Request {.arch = X86_64, .number = dv_iowr(88, 1, 32)}], .size = 32, .fields = [Buffer(8, -1, 64, In, false), Scalar(16, 8, Out)], .write = false, .version = Unversioned, .stability = Uapi};
+}
+
+@requires(device)
+pub Str fx_call() {
+    return match (device.ioctl(fx_op(), [InBytes([(UInt(8))1])])) { Ok(o) => "ok", Err(e) => device_error_text(e), };
+}

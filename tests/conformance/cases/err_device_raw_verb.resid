@@ -1,0 +1,9 @@
+// The runtime's device entry takes a serialized request: only lib/dev's
+// engine may build one (E0260), so a program cannot name a path or a
+// request number of its own.
+@requires(device)
+Int main() {
+    List(Int) reply = resid_device_call([82, 68, 86, 1, 1, 0]);
+    println(f"{reply.len()}");
+    return 0;
+}

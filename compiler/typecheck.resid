@@ -2793,6 +2793,13 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (argtys == "Int") { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_tcp_shutdown expects (Int), got (" + argtys + ")"};
     }
+    // The isolated device host (runtime/rt/device.resid): a serialized
+    // request in, a serialized reply out. Only lib/dev/device.resid's engine
+    // may call it (E0260); a write descriptor goes through the _w entry.
+    if (name == "resid_device_call" || name == "resid_device_call_w") {
+        if (argtys == "List(Int)") { return ERes {.pos = pos, .ty = "List(Int)", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (List(Int)), got (" + argtys + ")"};
+    }
     if (name == "resid_tcp_poll") {
         if (builtin_args(argtys, "List(Int),List(Int),Int")) { return ERes {.pos = pos, .ty = "List(Int)", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_tcp_poll expects (List(Int), List(Int), Int), got (" + argtys + ")"};
@@ -3698,6 +3705,7 @@ Bool is_prov_family(Str f) {
     if (f == "args") { return true; }
     if (f == "process") { return true; }
     if (f == "clock") { return true; }
+    if (f == "device") { return true; }
     return false;
 }
 
@@ -3726,8 +3734,12 @@ Bool is_prov_verb(Str fam, Str v) {
     if (fam == "args") { if (v == "count") { return true; } return v == "get"; }
     if (fam == "process") { return v == "run"; }
     if (fam == "clock") { return v == "now_ns" || v == "now_sec" || v == "monotonic_ns" || v == "sleep_ns"; }
+    if (fam == "device") { return dev_verb(v); }
     return false;
 }
+
+// The generic device verbs (spec §49); each takes a descriptor from lib/dev/.
+Bool dev_verb(Str v) { return v == "ioctl" || v == "transact" || v == "configfs_report" || v == "read_attr" || v == "sequence"; }
 
 Str first_missing_family_at(List(Str) fams, Str ceiling, Int i) {
     if (i >= fams.len()) { return ""; }

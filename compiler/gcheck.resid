@@ -638,7 +638,7 @@ pub Int gm_prelude_pos(Str src) {
 // The package a source path belongs to: a manifest dependency, the
 // standard library, or the application. `pk` holds the driver's
 // "@dep::name::root" and "@stdroot::dir" lines.
-Str gm_pkg(Str path, List(Str) pk, Int i) {
+pub Str gm_pkg(Str path, List(Str) pk, Int i) {
     if (i >= pk.len()) { return "app"; }
     Str l = pk[i];
     if (str_starts_with(l, "@stdroot::")) {
@@ -694,7 +694,7 @@ pub Str gm_smap(Str smap) {
     return if (c < 0) { smap } else { str_slice(smap, 0, c) };
 }
 
-List(Str) gm_pk(Str smap) {
+pub List(Str) gm_pk(Str smap) {
     Int c = str_find_char(smap, 29, 0);
     if (c < 0) { return gk_nopts(); }
     return str_split(str_slice(smap, c + 1, str_len(smap)), "\n");
@@ -2496,7 +2496,7 @@ GKT gk_marg_same(GK k, Int id, Str want, Str msg, Str ty) {
 Bool gk_is_provider(GK k, Int recv) {
     if (k.g.ns[recv].kind != "ref") { return false; }
     Str n = k.g.ns[recv].text;
-    if (n != "environment" && n != "filesystem" && n != "args" && n != "process" && n != "clock") { return false; }
+    if (n != "environment" && n != "filesystem" && n != "args" && n != "process" && n != "clock" && n != "device") { return false; }
     return kg_def(k.rs, recv) == rs_builtin();
 }
 
@@ -2516,6 +2516,7 @@ Str gk_provider_params(Str fam, Str m) {
 }
 
 GKT gk_provider(GK kp, Int id, Str fam, Str m) {
+    if (fam == "device") { return dv_gk_verb(gk_tl(kp, tl_add(kp.tl, kg_kid(kp.g, id, 0), "Provider(device)")), id, m); }
     GK k0 = gk_tl(kp, tl_add(kp.tl, kg_kid(kp.g, id, 0), "Provider(" + fam + ")"));
     if (k0.g.ns[id].nk == 1) {
         if (fam == "args" && m == "count") { return gt(k0, "Int", id); }
@@ -4029,8 +4030,8 @@ Str gk_unknown_family(List(Str) fs, Int i) {
     if (i >= fs.len()) { return ""; }
     Str f = fs[i];
     Bool native = str_starts_with(f, "native_") && gk_module_name_ok(str_slice(f, 7, str_len(f)), 0);
-    Bool ok = f == "" || f == "filesystem" || f == "environment" || f == "args" || f == "process" || f == "network" || f == "terminal" || f == "clock" || f == "display" || f == "declassify" || native;
-    if (!ok) { return "unknown capability family `" + f + "` (filesystem, environment, args, process, network, terminal, clock, display, declassify, native_<module>)"; }
+    Bool ok = f == "" || f == "filesystem" || f == "environment" || f == "args" || f == "process" || f == "network" || f == "terminal" || f == "clock" || f == "device" || f == "display" || f == "declassify" || native;
+    if (!ok) { return "unknown capability family `" + f + "` (filesystem, environment, args, process, network, terminal, clock, device, display, declassify, native_<module>)"; }
     return gk_unknown_family(fs, i + 1);
 }
 
@@ -4184,13 +4185,14 @@ Str gk_builtin_family(Str n) {
     if (str_starts_with(n, "resid_dbg_")) { return "process"; }
     if (str_starts_with(n, "resid_term_")) { return "terminal"; }
     if (str_starts_with(n, "resid_clock_")) { return "clock"; }
+    if (n == "resid_device_call" || n == "resid_device_call_w") { return "device"; }
     return "";
 }
 
 // Builtins that change state a read-only grant does not cover.
 // Writes under a moded family: raw mode, sleeping, and binding a listener
 // to an address other than loopback (exposing a port is a write).
-Bool gk_builtin_write(Str n) { return n == "resid_term_raw" || n == "resid_term_restore" || n == "resid_clock_sleep_ns" || n == "resid_tcp_listen_at"; }
+Bool gk_builtin_write(Str n) { return n == "resid_term_raw" || n == "resid_term_restore" || n == "resid_clock_sleep_ns" || n == "resid_tcp_listen_at" || n == "resid_device_call_w"; }
 
 // Runtime internals that free or move memory the program may still see
 // (spec §5: storage is never exposed). Only the compiler's own source may
@@ -4336,7 +4338,7 @@ GKF gk_facts(GK k, Int id, GKF f) {
     GKF f1 = if (bfam != "" && gk_builtin_write(k.g.ns[id].text)) { gf_add(f1a, "w", bfam + "." + k.g.ns[id].text) } else { f1a };
     Str fam = gk_prov_family(k, id);
     GKF f2 = if (fam == "") { f1 } else { gf_add(f1, "p", fam) };
-    GKF f3 = if (fam != "" && is_write_verb(fam, k.g.ns[id].text)) { gf_add(f2, "w", fam + "." + k.g.ns[id].text) } else { f2 };
+    GKF f3 = if (fam != "" && (is_write_verb(fam, k.g.ns[id].text) || (fam == "device" && dv_writes(k, id)))) { gf_add(f2, "w", fam + "." + k.g.ns[id].text) } else { f2 };
     return gk_facts_kids(k, id, 0, f3);
 }
 
@@ -4571,10 +4573,10 @@ Str gk_need_via(Sigs fs, List(Str) need, List(Str) decl, List(Str) cs, Int j, St
     return gk_need_via(fs, need, decl, cs, j + 1, e);
 }
 
-// A need as @requires spells it (filesystem, terminal and clock grants
-// have modes).
+// A need as @requires spells it (filesystem, terminal, clock and device
+// grants have modes).
 Str cap_show(Str e) {
-    if (cap_readonly(e) && (cap_family(e) == "filesystem" || cap_family(e) == "terminal" || cap_family(e) == "clock")) { return cap_family(e) + "(readonly)"; }
+    if (cap_readonly(e) && (cap_family(e) == "filesystem" || cap_family(e) == "terminal" || cap_family(e) == "clock" || cap_family(e) == "device")) { return cap_family(e) + "(readonly)"; }
     return cap_family(e);
 }
 
@@ -4702,7 +4704,7 @@ Bool gk_authority(GK k, List(Int) fnode, GKFs facts) {
     return fns || tests || spawns;
 }
 
-Int gk_finish(GK k0, List(Int) fnode, Str src, Str smap) {
+Int gk_finish(GK k0, List(Int) fnode, Str src, Str smap, Str smap0) {
     TL l = k0.tl;
     GK k = gk_tl(k0, TL {.on = l.on, .keys = l.keys, .tys = l.tys, .mem = l.mem, .bm = sort(l.bm)});
     Sigs fs = k.fs;
@@ -4718,7 +4720,8 @@ Int gk_finish(GK k0, List(Int) fnode, Str src, Str smap) {
     Bool err5 = gk_authority(k, fnode, facts);
     Bool err6 = gk_internals_at(k, 0, gk_newlines(src, 0, ListBuf()), smap, false);
     Bool err7 = sec_wide_scan(k, k.tl.keys, k.tl.tys, 0, src, smap);
-    if (err1 || err2 || err3 || err4 || err5 || err6 || err7) { return 1; }
+    Bool err8 = dv_scan(k, 0, gk_newlines(src, 0, ListBuf()), src, smap, dv_std_dir(gm_pk(smap0), 0), false);
+    if (err1 || err2 || err3 || err4 || err5 || err6 || err7 || err8) { return 1; }
     if (!resid_quiet()) { println("typecheck OK"); }
     return 0;
 }
@@ -4917,7 +4920,7 @@ pub GKR gk_analyze_m(Kg g, Int unit, Str src, Str smap0, Bool log, Bool fin) {
     GKS r = gk_decls(gm_log_beaten(k, 0), unit, 0, src, smap);
     if (r.err != "") { return GKR {.status = 1, .ty = es, .def = e, .rs = rs, .fs = sg.fs, .log = es}; }
     if (!fin && r.k.gx.log.len() > 0) { return GKR {.status = 0, .ty = es, .def = e, .rs = rs, .fs = sg.fs, .log = r.k.gx.log}; }
-    Int st = gk_finish(r.k, sg.fnode, src, smap);
+    Int st = gk_finish(r.k, sg.fnode, src, smap, smap0);
     Int n = kg_count(g);
     List(Str) ty = gk_dense_ty(sort(r.k.tl.keys), r.k.tl.tys, 0, 0, n, "", ListBuf());
     List(Int) def = gk_dense_def(sort(r.k.tl.mem), rs, 0, 0, n, ListBuf());
@@ -5454,4 +5457,165 @@ GKT sec_cast(GK k, Int id, Str to, Str from0) {
     Bool keeps = (ss == ts && tw >= sw) || (!ss && ts && tw > sw);
     if (!keeps) { return gterr(k, "E0255: cast from " + from0 + " to " + to + " is checked and would abort on some values, a branch on the secret; widen losslessly, or use wrapping_*", id); }
     return gt(k, "Secret(" + num_norm(t) + ")", id);
+}
+
+// ─── Devices (spec §49, PLAN-device-access.md) ─────────────────────
+// `device` is a provider whose verbs take a descriptor: a record of a type
+// lib/dev/device.resid declares with `@descriptor(<kind>)`. Here: the
+// verbs' types, which of them write, and E0260 (descriptors, the engine
+// and the raw runtime entry belong to lib/dev/). After reduction,
+// compiler/device.resid checks each descriptor's value (E0262-E0264),
+// records it and calls the engine.
+
+// The name of the type lib/dev/device.resid declares with
+// `@descriptor(role)`, or "" when no such module is imported.
+Str dv_role_ty(Kg g, Str role) { return dv_role_at(g, "@descriptor(" + role + ")", 0); }
+
+Str dv_role_at(Kg g, Str tag, Int i) {
+    if (i >= g.ns.len()) { return ""; }
+    KN n = g.ns[i];
+    Bool hit = (n.kind == "struct_t" || n.kind == "sum_t") && str_contains(n.aux, tag);
+    return if (hit) { n.text } else { dv_role_at(g, tag, i + 1) };
+}
+
+// device.<m>(...): the descriptor of its kind, then the inputs.
+GKT dv_gk_verb(GK k, Int id, Str m) {
+    if (!dev_verb(m)) { return gterr(k, "unknown provider method device." + m + " (the device verbs are ioctl, transact, configfs_report, read_attr and sequence)", id); }
+    Str dt = dv_role_ty(k.g, m);
+    Str outt = dv_role_ty(k.g, "out");
+    Str errt = dv_role_ty(k.g, "error");
+    if (dt == "" || outt == "" || errt == "") { return gterr(k, "E0260: device." + m + " takes a descriptor from lib/dev/: import a device module (for example dev/sev_guest.resid)", id); }
+    Int want = if (m == "read_attr") { 1 } else { 2 };
+    Int na = k.g.ns[id].nk - 1;
+    if (na != want) { return gterr(k, f"device.{m} takes {want} argument(s), got {na}", id); }
+    Str second = if (m == "ioctl" || m == "sequence") { "List(" + dv_role_ty(k.g, "in") + ")" } else if (m == "transact") { "List(UInt(8))" } else if (m == "configfs_report") { dv_role_ty(k.g, "report_req") } else { "" };
+    GKT d = gk_expr(k, gk_kid(k, id, 1), dt);
+    if (d.err != "") { return d; }
+    if (!ty_same(d.ty, dt)) { return gterr(d.k, "E0260: device." + m + " takes a descriptor of type " + dt + " from lib/dev/, got " + d.ty, id); }
+    if (want == 1) { return gt(d.k, "Result(List(" + outt + "), " + errt + ")", id); }
+    GKT a = gk_expr(d.k, gk_kid(d.k, id, 2), second);
+    if (a.err != "") { return a; }
+    if (str_contains(a.ty, "Secret(")) { return gterr(a.k, "E0255: device." + m + " takes public inputs, got " + a.ty + "; declassify the secret first", id); }
+    if (!ty_same(a.ty, second) && !params_accept(second, a.ty, 1)) { return gterr(a.k, "device." + m + " expects (" + dt + ", " + second + "), got (" + d.ty + ", " + a.ty + ")", id); }
+    return gt(a.k, "Result(List(" + outt + "), " + errt + ")", id);
+}
+
+// Does this device verb call write? read_attr never does; otherwise the
+// descriptor's `write` decides, read before reduction from the literal the
+// argument names. Anything else counts as a write: a read-only grant then
+// covers only a descriptor whose `.write = false` is written down.
+Bool dv_writes(GK k, Int id) {
+    if (k.g.ns[id].text == "read_attr") { return false; }
+    if (k.g.ns[id].nk < 2) { return true; }
+    Int lit = dv_lit_of(k, kg_kid(k.g, id, 1));
+    return lit < 0 || dv_finit_text(k.g, lit, "write", 0) != "false";
+}
+
+// The struct literal a descriptor argument names: the literal itself, or
+// the one a zero-argument function returns as its whole body; -1 when
+// neither.
+Int dv_lit_of(GK k, Int a) {
+    KN n = k.g.ns[a];
+    if (n.kind == "struct") { return a; }
+    if (n.kind == "paren" && n.nk == 1) { return dv_lit_of(k, kg_kid(k.g, a, 0)); }
+    if (n.kind != "call" || n.nk != 0) { return 0 - 1; }
+    Int d = kg_def(k.rs, a);
+    if (d < 0 || k.g.ns[d].kind != "fn" || k.g.ns[d].nk != 2) { return 0 - 1; }
+    Int body = kg_kid(k.g, d, 1);
+    if (k.g.ns[body].kind != "block" || k.g.ns[body].nk != 1) { return 0 - 1; }
+    Int r = kg_kid(k.g, body, 0);
+    if (k.g.ns[r].kind != "ret" || k.g.ns[r].nk != 1) { return 0 - 1; }
+    Int e = kg_kid(k.g, r, 0);
+    return if (k.g.ns[e].kind == "struct") { e } else { 0 - 1 };
+}
+
+// The text of field `f`'s literal in struct literal `st` ("" when absent
+// or not a literal).
+pub Str dv_finit_text(Kg g, Int st, Str f, Int i) {
+    if (i >= g.ns[st].nk) { return ""; }
+    Int fi = kg_kid(g, st, i);
+    if (g.ns[fi].kind == "finit" && g.ns[fi].text == f && g.ns[fi].nk == 1) {
+        Int v = kg_kid(g, fi, 0);
+        return if (g.ns[v].kind == "lit") { g.ns[v].text } else { "" };
+    }
+    return dv_finit_text(g, st, f, i + 1);
+}
+
+// The standard library's device directory, "<stdroot>/dev/", from the
+// driver's "@stdroot::dir" line.
+pub Str dv_std_dir(List(Str) pk, Int i) {
+    if (i >= pk.len()) { return "lib/dev/"; }
+    if (str_starts_with(pk[i], "@stdroot::")) { return imp_normalize(str_slice(pk[i], 10, str_len(pk[i]))) + "/dev/"; }
+    return dv_std_dir(pk, i + 1);
+}
+
+// The descriptor kinds a program may not write a literal of.
+Bool dv_kind_tag(Str aux) {
+    return str_contains(aux, "@descriptor(ioctl)") || str_contains(aux, "@descriptor(transact)") || str_contains(aux, "@descriptor(read_attr)") || str_contains(aux, "@descriptor(configfs_report)") || str_contains(aux, "@descriptor(sequence)");
+}
+
+// E0260 at node `id`: what is wrong, or "". `inlib`: the node is in
+// lib/dev/ of the standard library.
+Str dv_misplaced(GK k, Int id, Bool inlib) {
+    KN n = k.g.ns[id];
+    Str kd = n.kind;
+    Bool decl = kd == "fn" || kd == "struct_t" || kd == "sum_t" || kd == "alias_t" || kd == "ctype_t" || kd == "cwhere_t" || kd == "test" || kd == "bdecl" || kd == "behavior" || kd == "proto";
+    if (decl && str_contains(n.aux, "@descriptor") && !inlib) { return "`@descriptor` on `" + n.text + "`: device descriptors are declared only in the standard library's lib/dev/, so the set of kernel interfaces a program can reach is reviewed in one place"; }
+    if (kd == "struct" && !inlib) {
+        Int d = k.sd.get(n.text) else { 0 - 1 };
+        if (d >= 0 && dv_kind_tag(k.g.ns[d].aux)) { return "a `" + n.text + "` literal outside lib/dev/: a device descriptor comes only from the standard library's lib/dev/ (call its wrappers, or pass one of its descriptors)"; }
+    }
+    if ((kd == "call" || kd == "ref") && (n.text == "resid_device_call" || n.text == "resid_device_call_w") && kg_def(k.rs, id) < 0 && !inlib) {
+        return "`" + n.text + "` is the device engine's runtime entry; a program reaches a device through the `device` verbs with a descriptor from lib/dev/";
+    }
+    if (kd == "call" || kd == "ref") {
+        Int d = kg_def(k.rs, id);
+        if (d >= 0 && k.g.ns[d].kind == "fn" && str_contains(k.g.ns[d].aux, "@descriptor(engine")) { return "`" + n.text + "` is the engine of a `device` verb; call the verb (device.ioctl(...)) and the compiler calls the engine after checking the descriptor"; }
+    }
+    return "";
+}
+
+// Nodes dv_misplaced looks at (the source path is looked up only for these).
+Bool dv_struct_cand(GK k, KN n) {
+    if (n.kind != "struct") { return false; }
+    Int d = k.sd.get(n.text) else { 0 - 1 };
+    return d >= 0 && dv_kind_tag(k.g.ns[d].aux);
+}
+
+Bool dv_call_cand(GK k, Int id, KN n) {
+    if (n.kind != "call" && n.kind != "ref") { return false; }
+    if (str_starts_with(n.text, "resid_device_")) { return true; }
+    Int d = kg_def(k.rs, id);
+    return d >= 0 && k.g.ns[d].kind == "fn" && str_contains(k.g.ns[d].aux, "@descriptor(engine");
+}
+
+// `device` names the provider everywhere: a binding or function of that
+// name would make `device.ioctl(...)` mean something else.
+Bool dv_rebinds(KN n) {
+    if (n.text != "device") { return false; }
+    Str kd = n.kind;
+    return kd == "param" || kd == "bind" || kd == "rbind" || kd == "lparam" || kd == "for" || kd == "name" || kd == "fn" || kd == "letpat" || kd == "pat";
+}
+
+// Every node is looked at, so the test for one worth a closer look reads
+// the node's fields in place (binding the whole node would copy it).
+Bool dv_scan(GK k, Int id, List(Int) nls, Str src, Str smap, Str stddev, Bool acc) {
+    if (id >= k.g.ns.len()) { return acc; }
+    Bool cand = str_contains(k.g.ns[id].aux, "@descriptor") || k.g.ns[id].text == "device" || (k.g.ns[id].kind == "struct" && dv_struct_cand(k, k.g.ns[id])) || ((k.g.ns[id].kind == "call" || k.g.ns[id].kind == "ref") && dv_call_cand(k, id, k.g.ns[id]));
+    if (!cand) { return dv_scan(k, id + 1, nls, src, smap, stddev, acc); }
+    KN n = k.g.ns[id];
+    Bool bad = if (!cand) { false } else {
+        Str p = gk_src_path(k, id, nls, smap);
+        Bool inlib = str_starts_with(p, stddev) && !str_contains(str_slice(p, str_len(stddev), str_len(p)), "/");
+        Str m = dv_misplaced(k, id, inlib);
+        Bool b1 = if (m != "") { dv_diag("E0260", m, k.g, id, src, smap) } else { false };
+        Bool b2 = if (dv_rebinds(n)) { dv_diag("E0001", "type error: `device` is the device provider (spec §49) and cannot be rebound; choose another name", k.g, id, src, smap) } else { false };
+        b1 || b2
+    };
+    return dv_scan(k, id + 1, nls, src, smap, stddev, acc || bad);
+}
+
+Bool dv_diag(Str code, Str msg, Kg g, Int at, Str src, Str smap) {
+    gk_diag(code, msg, g, at, src, smap);
+    return true;
 }

@@ -1,0 +1,22 @@
+// The force-time guard (spec §21.3): a closure that reads a device, run
+// inside a sandbox whose ceiling has no `device`, aborts before the call
+// reaches the device host.
+import "dev/sev_guest.resid";
+import "_devzeros.resid";
+
+@requires(device(readonly))
+Int probe(Int n) { return match (snp_get_report(dev_zeros(n), 0)) { Ok(b) => 1, Err(e) => 2, }; }
+
+Int apply(Int closure(Int) f, Int x) { return f(x); }
+
+sandbox (filesystem) {
+    Int run_in(Int closure(Int) f, Int x) { return apply(f, x); }
+}
+
+@requires(device(readonly), filesystem)
+Int main() {
+    Int closure(Int) f = lambda(v) { probe(v) };
+    println(f"outside {f(rt 64)}");
+    println(f"inside {run_in(f, rt 64)}");
+    return 0;
+}

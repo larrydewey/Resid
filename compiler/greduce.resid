@@ -859,6 +859,7 @@ GV gx_field(GXT ft, Int id, RdE env, GS st) {
 }
 
 GV gx_mcall(GXT ft, Int id, RdE env, GS st) {
+    if (gx_dev_verb(st, id, env)) { return gx_dev_mcall(ft, id, env, st); }
     GV b = gx_expr(ft, gx_kid(st, id, 0), env, st);
     if (b.bad) { return b; }
     GXA a = gx_args(ft, id, 1, env, gx_args0(b.st));
@@ -870,6 +871,98 @@ GV gx_mcall(GXT ft, Int id, RdE env, GS st) {
     SV r = sem_mcall(ft, st.g.ns[id].text, b.v, b.ty, a.vs, a.ts);
     if (!r.k) { return none; }
     return gx_folded(r.v, r.ty, mr.id, mch, mr.st);
+}
+
+// A device verb (spec §49): `device.ioctl(op, ...)` and the like. It is an
+// effect and stays residual (Laws 2 and 10); its descriptor, once known,
+// is written out as a literal however large, since compiler/device.resid
+// checks and records the value itself (E0262 when it is not known).
+Bool gx_dev_verb(GS st, Int id, RdE env) {
+    KN n = st.g.ns[id];
+    if (n.nk < 2 || !dev_verb(n.text)) { return false; }
+    KN r = st.g.ns[gx_kid(st, id, 0)];
+    return r.kind == "ref" && r.text == "device" && rd_env_idx(env, "device") < 0;
+}
+
+GV gx_dev_mcall(GXT ft, Int id, RdE env, GS st) {
+    GV b = gx_expr(ft, gx_kid(st, id, 0), env, st);
+    if (b.bad) { return b; }
+    Int dn = gx_kid(b.st, id, 1);
+    GV d = gx_expr(ft, dn, env, b.st);
+    if (d.bad) { return d; }
+    Str lit = if (d.k) { gx_render_full(ft, d.v, d.ty, 0) } else { "" };
+    GXN dr = if (lit != "") { gx_lit(d.st, lit, dn, "fold") } else { gx_n(d.st, d.r) };
+    Bool dch = lit != "" || d.ch;
+    GXA a = gx_args(ft, id, 2, env, gx_args0(dr.st));
+    if (a.bad) { return gx_badv(a.st); }
+    Bool mch = b.ch || dch || a.ch;
+    GXN mr = if (mch) { gx_re(a.st, id, [b.r, dr.id].concat(a.rs)) } else { gx_n(a.st, id) };
+    return gx_unk(mr.id, mch, mr.st);
+}
+
+// Source text of a known value of any type the evaluator builds: records
+// and variants too, which rd_render leaves alone; "" when it has none.
+Str gx_render_full(GXT ft, Str v, Str ty, Int depth) {
+    if (depth > 32) { return ""; }
+    Str simple = rd_render(v, ty);
+    if (simple != "") { return simple; }
+    Str t = rd_norm_ty(ty);
+    Str et = rd_inner(t, "List(");
+    if (et != "" && et != "?") {
+        if (v == "") { return "[]"; }
+        Str body = gx_render_items(ft, rd_dec(v), et, depth, 0, StrBuf());
+        return if (body == str_from_code(1)) { "" } else { "[" + body + "]" };
+    }
+    Int si = ft.sidx.get(t) else { 0 - 1 };
+    if (si >= 0) {
+        List(Str) fs = str_split(ft.sfs[si], str_from_code(31));
+        List(Str) items = rd_dec(v);
+        if (items.len() != fs.len()) { return ""; }
+        Str body = gx_render_fields(ft, fs, items, depth, 0, StrBuf());
+        return if (body == str_from_code(1)) { "" } else { t + " { " + body + " }" };
+    }
+    List(Str) parts = rd_dec(v);
+    if (parts.len() == 0) { return ""; }
+    Int vi = ft.vidx.get(parts[0]) else { 0 - 1 };
+    if (vi < 0 || ft.vsum[vi] != t || ft.vgps[vi] != "") { return ""; }
+    if (parts.len() == 1) { return parts[0]; }
+    List(Str) pts = split_rest_depth(ft.vtys[vi], ", ");
+    if (pts.len() != parts.len() - 1) { return ""; }
+    Str body = gx_render_items2(ft, parts, pts, depth, 1, StrBuf());
+    return if (body == str_from_code(1)) { "" } else { parts[0] + "(" + body + ")" };
+}
+
+Str gx_render_items(GXT ft, List(Str) items, Str et, Int depth, Int i, StrBuf acc) {
+    if (i >= items.len()) { return acc.finish(); }
+    Str r = gx_render_full(ft, items[i], et, depth + 1);
+    if (r == "") {
+        Str _drop = acc.finish();
+        return str_from_code(1);
+    }
+    return gx_render_items(ft, items, et, depth, i + 1, (if (i == 0) { acc } else { acc.push(", ") }).push(r));
+}
+
+// A variant's payloads (parts[1..]) at their declared types.
+Str gx_render_items2(GXT ft, List(Str) parts, List(Str) pts, Int depth, Int i, StrBuf acc) {
+    if (i >= parts.len()) { return acc.finish(); }
+    Str r = gx_render_full(ft, parts[i], pts[i - 1], depth + 1);
+    if (r == "") {
+        Str _drop = acc.finish();
+        return str_from_code(1);
+    }
+    return gx_render_items2(ft, parts, pts, depth, i + 1, (if (i == 1) { acc } else { acc.push(", ") }).push(r));
+}
+
+// `.name = value` for each field ("name\x1eType" entries).
+Str gx_render_fields(GXT ft, List(Str) fs, List(Str) items, Int depth, Int i, StrBuf acc) {
+    if (i >= fs.len()) { return acc.finish(); }
+    List(Str) nt = str_split(fs[i], str_from_code(30));
+    Str r = if (nt.len() == 2) { gx_render_full(ft, items[i], nt[1], depth + 1) } else { "" };
+    if (r == "") {
+        Str _drop = acc.finish();
+        return str_from_code(1);
+    }
+    return gx_render_fields(ft, fs, items, depth, i + 1, (if (i == 0) { acc } else { acc.push(", ") }).push("." + nt[0] + " = " + r));
 }
 
 // ─── Value semantics ────────────────────────────────────────────────
@@ -2980,6 +3073,14 @@ GXT gx_collect(Kg g, Int unit, Int i, GXT ft) {
         return gx_collect(g, unit, i + 1, f2);
     }
     if (n.kind == "sum_t") { return gx_collect(g, unit, i + 1, gx_variants(g, d, 0, ft)); }
+    // A sandbox's declarations (an attenuated import, a dependency under
+    // its manifest ceiling) are known like any others, so a call whose
+    // arguments are known evaluates; a function in one is never
+    // specialized, since a copy would be emitted outside its sandbox.
+    if (n.kind == "sandbox") {
+        GXT fs = gx_collect(g, d, 0, ft);
+        return gx_collect(g, unit, i + 1, gx_with_fann(fs, gx_sb_fns(g, d, 0, fs.fann)));
+    }
     if (n.kind == "fn") {
         // An @link function's answer comes from its native module at run
         // time (an effect, spec §47): it has no body to reduce.
@@ -2989,6 +3090,18 @@ GXT gx_collect(Kg g, Int unit, Int i, GXT ft) {
         return gx_collect(g, unit, i + 1, f3);
     }
     return gx_collect(g, unit, i + 1, ft);
+}
+
+// The functions declared in sandbox `d` (nested ones too), added to fa.
+List(Str) gx_sb_fns(Kg g, Int d, Int i, List(Str) fa) {
+    if (i >= g.ns[d].nk) { return fa; }
+    Int k = kg_kid(g, d, i);
+    List(Str) fa2 = if (g.ns[k].kind == "fn") { fa.concat([g.ns[k].text]) } else if (g.ns[k].kind == "sandbox") { gx_sb_fns(g, k, 0, fa) } else { fa };
+    return gx_sb_fns(g, d, i + 1, fa2);
+}
+
+GXT gx_with_fann(GXT ft, List(Str) fa) {
+    return GXT {.fnames = ft.fnames, .fpns = ft.fpns, .fpts = ft.fpts, .frets = ft.frets, .fbody = ft.fbody, .sts = ft.sts, .sfs = ft.sfs, .fidx = ft.fidx, .cts = ft.cts, .cpred = ft.cpred, .fann = fa, .src = ft.src, .rds = ft.rds, .rb = ft.rb, .fcap = ft.fcap, .ffold = ft.ffold, .vsum = ft.vsum, .vtys = ft.vtys, .vidx = ft.vidx, .sidx = ft.sidx, .snf = ft.snf, .sfx = ft.sfx, .sft = ft.sft, .fpnl = ft.fpnl, .fptl = ft.fptl, .fone = ft.fone, .vgps = ft.vgps};
 }
 
 List(Str) gx_norm_all(List(Str) ts, Int i, ListBuf(Str) acc) {
@@ -3022,21 +3135,44 @@ type GXG = { GS st; List(Int) decls; Int nred; };
 
 // Reduce each top-level function; a body holding anything the reducer
 // does not parse is left as written.
-GXG gx_prog(GXT ft, Int unit, Int i, GXG acc) {
+GXG gx_prog(GXT ft, Int unit, Int i, GXG acc) { return gx_prog_in(ft, unit, i, acc, false); }
+
+// In a sandbox (`sb`) only a function holding a device verb is reduced:
+// its descriptor must be known (spec §49); everything else in a sandbox
+// stays as written.
+GXG gx_prog_in(GXT ft, Int unit, Int i, GXG acc, Bool sb) {
     GS st = acc.st;
     if (i >= gx_nk(st, unit)) { return acc; }
     Int d = gx_kid(st, unit, i);
-    if (gx_kind(st, d) != "fn") { return gx_prog(ft, unit, i + 1, GXG {.st = st, .decls = acc.decls.concat([d]), .nred = acc.nred}); }
+    if (gx_kind(st, d) == "sandbox" && gx_has_dev(st.g, d, 0)) {
+        List(Int) none = [];
+        GXG inner = gx_prog_in(ft, d, 0, GXG {.st = st, .decls = none, .nred = 0}, true);
+        GXN sbn = gx_re(inner.st, d, inner.decls);
+        return gx_prog_in(ft, unit, i + 1, GXG {.st = sbn.st, .decls = acc.decls.concat([sbn.id]), .nred = acc.nred + inner.nred}, sb);
+    }
+    if (gx_kind(st, d) != "fn" || (sb && !gx_has_dev(st.g, d, 0))) { return gx_prog_in(ft, unit, i + 1, GXG {.st = st, .decls = acc.decls.concat([d]), .nred = acc.nred}, sb); }
     Int nk = gx_nk(st, d);
     RdE env = gx_param_env(st.g, d, 1, nk - 1, rd_env_empty());
     Int bk = gx_kid(st, d, nk - 1);
     GXR body = gx_stmts(ft, bk, 0, env, gx_st_memo(st, gx_cur_key(), st.g.ns[d].text));
-    if (body.bad) { return gx_prog(ft, unit, i + 1, GXG {.st = body.st, .decls = acc.decls.concat([d]), .nred = acc.nred}); }
+    if (body.bad) { return gx_prog_in(ft, unit, i + 1, GXG {.st = body.st, .decls = acc.decls.concat([d]), .nred = acc.nred}, sb); }
     GXN b = gx_re(body.st, bk, body.out);
     List(Int) ks = gx_kids(b.st.g, d);
     GXN f = gx_re(b.st, d, ks[0..nk - 1].concat([b.id]));
     Int n2 = if (f.id != d) { acc.nred + 1 } else { acc.nred };
-    return gx_prog(ft, unit, i + 1, GXG {.st = f.st, .decls = acc.decls.concat([f.id]), .nred = n2});
+    return gx_prog_in(ft, unit, i + 1, GXG {.st = f.st, .decls = acc.decls.concat([f.id]), .nred = n2}, sb);
+}
+
+// Whether node d's subtree holds a device verb (`device.ioctl(...)`).
+Bool gx_has_dev(Kg g, Int d, Int depth) {
+    if (depth > 4096) { return false; }
+    if (g.ns[d].kind == "mcall" && g.ns[d].nk >= 2 && dev_verb(g.ns[d].text) && g.ns[kg_kid(g, d, 0)].kind == "ref" && g.ns[kg_kid(g, d, 0)].text == "device") { return true; }
+    return gx_has_dev_kids(g, d, 0, depth);
+}
+
+Bool gx_has_dev_kids(Kg g, Int d, Int i, Int depth) {
+    if (i >= g.ns[d].nk) { return false; }
+    return gx_has_dev(g, kg_kid(g, d, i), depth + 1) || gx_has_dev_kids(g, d, i + 1, depth);
 }
 
 RdE gx_param_env(Kg g, Int d, Int i, Int n, RdE env) {

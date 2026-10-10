@@ -1,0 +1,5 @@
+// Links go forward; this descriptor breaks that (E0264).
+import "dev/fx_e0264_backward.resid";
+
+@requires(device)
+Int main() { println(fx_call()); return 0; }

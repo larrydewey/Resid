@@ -1,0 +1,23 @@
+// A program may call a generic verb itself with a descriptor from lib/dev/
+// (spec §49): `.write = false` in the descriptor makes it a read, so
+// device(readonly) covers it. The engine checks the inputs against the
+// descriptor's fields before anything reaches the device host.
+import "dev/sev_guest.resid";
+import "_devzeros.resid";
+
+@requires(device(readonly))
+Str ask(List(DevIn) ins) {
+    return match (device.ioctl(snp_get_report_op(), ins)) {
+        Ok(outs) => f"{outs.len()} outputs",
+        Err(e) => device_error_text(e),
+    };
+}
+
+@requires(device(readonly))
+Int main() {
+    println(ask([InBytes(dev_zeros(rt 96))]));
+    println(ask([InBytes(dev_zeros(rt 97))]));
+    println(ask([InNum(rt 1)]));
+    println(ask([]));
+    return 0;
+}

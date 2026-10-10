@@ -1,0 +1,5 @@
+// A descriptor gives a request number for the build's target; this descriptor breaks that (E0263).
+import "dev/fx_e0263_no_target.resid";
+
+@requires(device)
+Int main() { println(fx_call()); return 0; }

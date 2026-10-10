@@ -72,7 +72,7 @@ RSG rs_globals(Kg g, Int id, Int i, RSG a) {
 // ─── Lookup ─────────────────────────────────────────────────────────
 
 Bool rs_prelude_value(Str n) {
-    return n == "None" || n == "value" || n == "self" || n == "args" || n == "environment" || n == "filesystem" || n == "network" || n == "clock" || n == "random" || n == "process";
+    return n == "None" || n == "value" || n == "self" || n == "args" || n == "environment" || n == "filesystem" || n == "network" || n == "clock" || n == "device" || n == "random" || n == "process";
 }
 
 // A value name: local, function, variant, type (behavior instances like

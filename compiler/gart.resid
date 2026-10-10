@@ -121,7 +121,7 @@ StrBuf ga_pos(StrBuf b, GAF f, Int pos, Bool first) {
 
 // ─── Per-node columns ───────────────────────────────────────────────
 
-Bool ga_provider(Str n) { return n == "filesystem" || n == "environment" || n == "args" || n == "process" || n == "git" || n == "clock"; }
+Bool ga_provider(Str n) { return n == "filesystem" || n == "environment" || n == "args" || n == "process" || n == "git" || n == "clock" || n == "device"; }
 
 // The effect a node performs itself ("" when none); a provider is a name
 // with no local def.
@@ -144,6 +144,9 @@ Str ga_effect(Kg g, Int id, GAX x) {
     if (n.kind == "mcall") {
         Int bi = kg_kid(g, id, 0);
         KN b = g.ns[bi];
+        // A device verb names the descriptor it was given (spec §49):
+        // `device.ioctl(sev_guest.snp_get_report)`.
+        if (b.kind == "ref" && b.text == "device" && ga_def(x, bi) < 0 && n.nk >= 2) { return "device." + n.text + "(" + dv_lit_name(g, kg_kid(g, id, 1)) + ")"; }
         if (b.kind == "ref" && ga_provider(b.text) && ga_def(x, bi) < 0) { return b.text + "." + n.text; }
     }
     return "";

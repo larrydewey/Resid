@@ -1,0 +1,13 @@
+// A descriptor is knowledge the compiler must have (Laws 1 and 5): one
+// chosen at run time is refused after reduction (E0262).
+import "dev/sev_guest.resid";
+import "dev/sev_guest_key.resid";
+import "_devzeros.resid";
+
+@requires(device)
+Int main() {
+    IoctlOp op = if (rt 1 == 1) { snp_get_report_op() } else { snp_get_derived_key_op() };
+    Bool ok = match (device.ioctl(op, [InBytes(dev_zeros(32))])) { Ok(o) => true, Err(e) => false, };
+    println(f"{ok}");
+    return 0;
+}

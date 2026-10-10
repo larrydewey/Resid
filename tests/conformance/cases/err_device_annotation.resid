@@ -1,0 +1,6 @@
+// `@descriptor` marks lib/dev's descriptor and engine declarations; a
+// program cannot claim it (E0260).
+@descriptor(ioctl)
+type MyOp = { Str name; Bool write; };
+
+Int main() { MyOp o = MyOp {.name = "x", .write = false}; println(o.name); return 0; }

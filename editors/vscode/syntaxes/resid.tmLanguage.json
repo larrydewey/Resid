@@ -270,7 +270,7 @@
       "patterns": [
         {
           "name": "entity.other.capability.resid",
-          "match": "\\b(filesystem|environment|git|args|process|network|terminal|clock)(?=\\s*[(,)])",
+          "match": "\\b(filesystem|environment|git|args|process|network|terminal|clock|device)(?=\\s*[(,)])",
           "captures": { "1": { "name": "entity.other.capability.name.resid" } }
         },
         {

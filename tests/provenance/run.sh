@@ -150,6 +150,31 @@ check "native debug build" 0 "provenance: signed" "$COMPILER" n.resid -o nd --pr
 check "native capability within the grant" 0 "its capabilities are within the grant" "$COMPILER" verify nd
 if grep -qa "native_tiny.tiny_add" nd.resid-graph.cbor; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL the graph records the native call as an effect"; fi
 
+# ── Device descriptors (spec §49) ───────────────────────────────────────
+# The record lists each descriptor the program reaches -- name, path, verb,
+# request number for the target and stability class -- and only those: the
+# derived-key descriptor imported but never called is not listed. The graph
+# records each verb as an effect naming its descriptor.
+printf 'import "dev/sev_guest.resid";\nimport "dev/sev_guest_key.resid";\n@requires(device(readonly))\nInt main() {\n    Str s = match (snp_get_report([(UInt(8))(rt 0)], 0)) { Ok(b) => "report", Err(e) => device_error_text(e), };\n    println(s);\n    return 0;\n}\n' > dv.resid
+check "device build" 0 "provenance: signed" "$COMPILER" dv.resid -o dv
+check "device_in_provenance" 0 "attestation: device sev_guest.snp_get_report (ioctl /dev/sev-guest, request 0xc0205300, uapi)" "$COMPILER" verify dv
+check "device_stability_in_provenance" 0 ", uapi)" "$COMPILER" verify dv
+out="$("$COMPILER" verify dv 2>&1)"
+if echo "$out" | grep -q "snp_get_derived_key"; then fail=$((fail + 1)); echo "FAIL an unreached descriptor is in the record"; else pass=$((pass + 1)); fi
+check "device grant" 0 "attestation: grant \[device(readonly)\]" "$COMPILER" verify dv
+check "device debug build" 0 "provenance: signed" "$COMPILER" dv.resid -o dvd --profile debug
+check "device capability within the grant" 0 "its capabilities are within the grant" "$COMPILER" verify dvd
+if grep -qa "device.ioctl(sev_guest.snp_get_report)" dvd.resid-graph.cbor; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL the graph records the device verb as an effect"; fi
+if [ "$HAVE_PY" -eq 1 ]; then
+    rec="$(python3 -c "
+import sys, cbor2
+b = open('dv', 'rb').read()
+clen = int.from_bytes(b[-14:-10], 'big')
+rec = cbor2.loads(cbor2.loads(b[-14 - clen:-14]).value[2])
+print(rec['devices'])")"
+    if [ "$rec" = "[{'op': 'ioctl', 'name': 'sev_guest.snp_get_report', 'path': '/dev/sev-guest', 'request': 3223343872, 'stability': 'uapi'}]" ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL the record's devices, read independently: $rec"; fi
+fi
+
 # ── Tampering ───────────────────────────────────────────────────────────
 cp s s_code; flip s_code 100
 check "tampered code" 1 "code hash mismatch" "$COMPILER" verify s_code

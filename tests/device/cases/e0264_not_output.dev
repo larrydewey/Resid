@@ -1,0 +1,11 @@
+// Fixture for e0264_not_output: a link reads a Scalar output (installed as lib/dev/fx_e0264_not_output.resid).
+import "device.resid";
+
+pub Sequence fx_op() {
+    return Sequence {.name = "fx.seq", .path = "/dev/fx", .steps = [IoctlOp {.name = "fx.s0", .path = "/dev/fx", .requests = dv_both(dv_ioc(3, 88, 0, 16)), .size = 16, .fields = [Scalar(0, 4, Out), Scalar(8, 4, In)], .write = false, .version = Unversioned, .stability = Uapi}, IoctlOp {.name = "fx.s1", .path = "/dev/fx", .requests = dv_both(dv_ioc(3, 88, 1, 16)), .size = 16, .fields = [Scalar(0, 4, In), Scalar(8, 8, Out)], .write = false, .version = Unversioned, .stability = Uapi}], .links = [link(0, 8, 1, 0, 4)], .write = false, .stability = OutOfTree};
+}
+
+@requires(device)
+pub Str fx_call() {
+    return match (device.sequence(fx_op(), [])) { Ok(o) => "ok", Err(e) => device_error_text(e), };
+}
