@@ -135,11 +135,12 @@ Int ocsp_inside(List(Int) d, List(Int) issuer, List(Int) cert) {
 Int key_kind(Option(ServerKey) k) { return match k { Some(x) => tls_key_sigalg(x), None => 0 }; }
 
 // Private and public keys in every encoding read here.
+@requires(declassify)
 Int run_key(List(Int) m) {
     RsaPub r = rsa_pub_der(m);
     PubKey p = spki_parse_der(m);
     PubKey c = cose_key_public(m);
-    return key_kind(tk_pkcs8(m)) + key_kind(tk_sec1(m)) + bit(r.ok) + p.kind + c.kind + bit(ec_public_ok(P256, m)) + bit(ec_public_ok(P384, m));
+    return key_kind(tls_key_parse(m)) + key_kind(tk_pkcs8(secret_bytes(m))) + key_kind(tk_sec1(secret_bytes(m))) + bit(r.ok) + p.kind + c.kind + bit(ec_public_ok(P256, m)) + bit(ec_public_ok(P384, m));
 }
 
 // Signatures and peer keys: as DER and raw ECDSA, RSA, Ed25519, ECDH and
@@ -182,10 +183,11 @@ Int run_tls(List(Int) m, List(Int) cert) {
 }
 
 // PEM text, as a trust-store file holds it.
+@requires(declassify)
 Int run_pem(List(Int) m) {
     Str text = bytes_to_str_lossy(m);
     TrustStore st = trust_store_add_pem(trust_store_empty(), text);
-    return pem_certificates(text).len() + pem_certs_and_crls(text).len() + st.roots.len() + tk_pem_block(text, ["PRIVATE KEY"]).len();
+    return pem_certificates(text).len() + pem_certs_and_crls(text).len() + st.roots.len() + key_kind(tls_key_parse(m)) + base64_decode(text).len();
 }
 
 Str bytes_to_str_lossy(List(Int) b) { return bts(b, 0, StrBuf()); }
@@ -207,6 +209,7 @@ Int run_hpack(List(Int) m) {
     return blk.fields.len() + bit(blk.bad) + bit(h.bad) + h2_count_data(m, 0, m.len() - 1) + sid;
 }
 
+@requires(declassify)
 Int exercise(Str kind, List(Int) m, List(Int) x1, List(Int) x2) {
     if (kind == "hpack") { return run_hpack(m); }
     if (kind == "cert") { return run_cert(m, x1); }
@@ -227,18 +230,19 @@ Int report(Str kind, Str where, Str msg, List(Int) input) {
     return 1;
 }
 
+@requires(declassify)
 Int fuzz_loop(Str kind, List(Int) seed, List(Int) x1, List(Int) x2, Int i, Int n, Int s, Int crashes, Bool trace) {
     if (i >= n) { return crashes; }
     Int times = 1 + rng_pick(s, 4);
     Mut m = mutate(seed, rng_next(s), times);
     List(Int) input = m.b;
     if (trace) { eprintln(f"ITER {i} " + hex_encode(input)); }
-    Result(Int, RegionError) r = spawn () { return exercise(kind, input, x1, x2); };
+    Result(Int, RegionError) r = spawn (declassify) { return exercise(kind, input, x1, x2); };
     Int crashed = match r { Ok(v) => 0, Err(e) => report(kind, f"iter={i}", e.message, input) };
     return fuzz_loop(kind, seed, x1, x2, i + 1, n, rng_next(m.s), crashes + crashed, trace);
 }
 
-@requires(args, filesystem(readonly))
+@requires(args, filesystem(readonly), declassify)
 Int main() {
     Str kind = args.get(1);
     // fuzz <kind> --hex <hex> [<extra-file>...]: one input, no region, so
@@ -257,7 +261,7 @@ Int main() {
     List(Int) x1 = if (args.count() > 5) { filesystem.read_bytes(args.get(5)) } else { none };
     List(Int) x2 = if (args.count() > 6) { filesystem.read_bytes(args.get(6)) } else { none };
     // The unmutated seed must not crash either.
-    Result(Int, RegionError) base = spawn () { return exercise(kind, seed, x1, x2); };
+    Result(Int, RegionError) base = spawn (declassify) { return exercise(kind, seed, x1, x2); };
     Int c0 = match base { Ok(v) => 0, Err(e) => report(kind, "seed", e.message, seed) };
     // A negative seed traces every input to stderr (for finding a hang).
     Int sa = if (s0 < 0) { 0 - s0 } else { s0 };

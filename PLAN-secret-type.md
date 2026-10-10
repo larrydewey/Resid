@@ -85,9 +85,8 @@ graph, what each case reaches through call and reference def edges (a
 behavior verb reaching its `Secret` instances' implementations), a
 generic function counting only when the probe has a copy of it at a
 `Secret` type. A surface function no case reaches fails the run unless
-`tests/ct/uncovered.txt` gives a reason (six: the socket loops, the
-`TlsCfg` constructor, and `tls_key_load`, whose PEM base64 decoding is
-not constant time); a stale entry or a case reaching nothing fails too.
+`tests/ct/uncovered.txt` gives a reason (five: the socket loops and the
+`TlsCfg` constructor); a stale entry or a case reaching nothing fails too.
 New cases close what the gate found: SHA-384, the AES entry points that
 pick AES-NI themselves, ECDSA raw and caller-nonce signing, field square
 roots, COSE_Sign1, the HPKE exporter and single-shot seal, PKCS#8/SEC1/
@@ -96,7 +95,18 @@ handshake's pure steps (60 cases, all valgrind-clean). The graph records
 no declaration heads or instance tables, so the tool reads those from the
 source at the lines the graph gives. Still to do: a force-time
 `resid_cap_check("declassify")` (declassify lowers to nothing, so the
-static check is the whole check today).
+static check is the whole check today). Key loading is constant time (2026-10-09):
+`tls_key_load` reads the file as bytes and `tls_key_parse` makes all of
+them secret before looking at any, publishing only framing -- byte
+classes (line feed, whitespace, dash, '=') computed with masks, the armor
+lines, the DER tags, lengths and OIDs -- and one validity bit from the
+base64 decoder, which is now generic over `Word(W, B)`
+(`base64g_decode`, mask-based character classes; `base64_decode` is its
+public copy). The scalar or seed never leaves secret bytes, so the brief
+public window is closed and `tls_key_load` left `tests/ct/uncovered.txt`:
+`tls-key-secret` loads P-256, P-384 and Ed25519 PKCS#8 PEM, SEC1 PEM and
+DER keys with every byte of the file marked secret, and `base64-secret`
+runs the decoder alone (61 cases, 227 of 232 surface functions reached).
 
 **Goal**: make "this value is a secret" knowledge the compiler holds and
 enforces, so that code which branches on, indexes with, prints, compares

@@ -13,14 +13,22 @@
 // the key file is the operator's business: the language has no stat verb,
 // so a permission check is not expressible here (SECURITY.md).
 //
-// The private key is a secret (spec §48): once parsed it is held as
-// List(Secret(UInt(8))), and signing and public key derivation run on the
+// The private key is a secret (spec §48) from the moment the file is read:
+// tls_key_parse turns the file's bytes into List(Secret(UInt(8))) before
+// looking at any of them, and the PEM reader and the DER parser below
+// publish only framing -- each byte's class (line feed, whitespace, dash,
+// '='), the armor lines, the DER tags, lengths and algorithm OIDs, and the
+// one bit of whether the base64 body was all base64. The base64 body is
+// decoded in constant time (lib/crypto.resid's base64g_decode), and the
+// scalar or seed is sliced out of the secret DER at public bounds and held
+// as List(Secret(UInt(8))) in ServerKey; an EC scalar's range is checked by
+// the constant-time public key derivation, whose "key usable" verdict is
+// published by design. Signing and public key derivation run on the
 // generic code at secret types (lib/ed25519g.resid, lib/ecdsa.resid's
-// ecdsag_*). The file's PEM and DER, and the key bytes from the moment
-// they are read until the parser hands them over, are public bytes: a
-// brief public window, like the compiler's signing seed. A signature and
-// a public key are published by design, so signing and
-// tls_key_pubkey / tls_key_cert_matches need @requires(declassify).
+// ecdsag_*). Publishing framing, a signature or a public key needs the
+// grant, so loading, signing, tls_key_pubkey and tls_key_cert_matches
+// need @requires(declassify). tests/ct's tls-key-secret case loads key
+// files with every byte marked secret.
 
 import "crypto.resid";
 import "ecdsa.resid";
@@ -104,7 +112,22 @@ List(Int) tk_ec_sign(Curve c, HashAlg h, List(Secret(UInt(8))) scalar, List(Int)
     return ecdsa_der_of(ecdsa_low_s(c, s));
 }
 
-// ─── DER, 0-based ─────────────────────────────────────────────────────
+// ─── DER over secret bytes, 0-based ───────────────────────────────────
+//
+// The key's DER is secret bytes from the moment it is read. Its framing --
+// the identifier and length octets of each element, the version and the
+// algorithm OIDs -- is public by design (a fixed-shape key's structure says
+// which kind of key it is and nothing about the key), so the reader below
+// publishes exactly those bytes, one at a time at a public offset, and
+// nothing else: the private scalar or seed is sliced out at public bounds
+// and never published.
+
+// One framing byte, published.
+@requires(declassify)
+Int tk_at(List(Secret(UInt(8))) b, Int i) {
+    UInt(8) v = declassify(b[i], "private key DER framing: a tag, length or algorithm OID octet");
+    return (Int) ct_public(v);
+}
 
 // One TLV read from `b` at `pos`: `start` is the first content byte,
 // `end` the byte after it. `ok` is false for a truncated element, an
@@ -129,18 +152,20 @@ pub Int tk_tag_octet() { return 4; }
 pub Int tk_tag_oid() { return 6; }
 pub Int tk_tag_seq() { return 16; }
 
-pub Tlv tk_tlv(List(Int) b, Int pos) {
+@requires(declassify)
+pub Tlv tk_tlv(List(Secret(UInt(8))) b, Int pos) {
     Int n = b.len();
     if (pos < 0 || pos + 1 >= n) { return tk_bad(pos); }
-    Int tag = b[pos];
-    Int l0 = b[pos + 1];
+    Int tag = tk_at(b, pos);
+    Int l0 = tk_at(b, pos + 1);
     if (l0 < 128) {
         return tk_tlv_at(b, pos, tag, 2, l0);
     }
     return tk_tlv_long(b, pos, tag, l0);
 }
 
-Tlv tk_tlv_long(List(Int) b, Int pos, Int tag, Int l0) {
+@requires(declassify)
+Tlv tk_tlv_long(List(Secret(UInt(8))) b, Int pos, Int tag, Int l0) {
     if (l0 == 128) { return tk_bad(pos); }
     Int n = b.len();
     Int cnt = l0 - 128;
@@ -150,29 +175,33 @@ Tlv tk_tlv_long(List(Int) b, Int pos, Int tag, Int l0) {
     return tk_tlv_at(b, pos, tag, hdr, len);
 }
 
-Tlv tk_tlv_at(List(Int) b, Int pos, Int tag, Int hdr, Int len) {
+Tlv tk_tlv_at(List(Secret(UInt(8))) b, Int pos, Int tag, Int hdr, Int len) {
     Int start = pos + hdr;
     Int end = start + len;
     if (end > b.len()) { return tk_bad(pos); }
     return Tlv { .tag = tag, .start = start, .len = len, .end = end, .ok = true };
 }
 
-Int tk_len_acc(List(Int) b, Int i, Int end, Int acc) {
+@requires(declassify)
+Int tk_len_acc(List(Secret(UInt(8))) b, Int i, Int end, Int acc) {
     if (i >= end) { return acc; }
-    Int byte = b[i];
+    Int byte = tk_at(b, i);
     Int step = acc * 256 + byte;
     return tk_len_acc(b, i + 1, end, step);
 }
 
-pub List(Int) tk_value(List(Int) b, Tlv t) {
-    return slice_seed(b, t.start, t.len, []);
+// An element's content, still secret.
+pub List(Secret(UInt(8))) tk_value(List(Secret(UInt(8))) b, Tlv t) {
+    return b[t.start..t.end];
 }
 
-// An OBJECT IDENTIFIER as dotted decimal (RFC 4514 §2.3). The first octet
-// carries arcs 1 and 2 packed together.
-pub Str tk_oid_str(List(Int) b, Tlv t) {
+// An OBJECT IDENTIFIER as dotted decimal (RFC 4514 §2.3), its octets
+// published (an algorithm or curve name). The first octet carries arcs 1
+// and 2 packed together.
+@requires(declassify)
+pub Str tk_oid_str(List(Secret(UInt(8))) b, Tlv t) {
     if (tk_tag_num(t) != tk_tag_oid()) { return ""; }
-    List(Int) c = tk_value(b, t);
+    List(Int) c = tk_pub_bytes(b, t.start, t.end, ListBuf());
     Int n = c.len();
     if (n == 0) { return ""; }
     Int b0 = c[0];
@@ -182,11 +211,19 @@ pub Str tk_oid_str(List(Int) b, Tlv t) {
     return tk_oid_rest(c, 1, n, head, 0);
 }
 
+@requires(declassify)
+List(Int) tk_pub_bytes(List(Secret(UInt(8))) b, Int i, Int end, ListBuf(Int) acc) {
+    if (i >= end) { return acc.finish(); }
+    return tk_pub_bytes(b, i + 1, end, acc.push(tk_at(b, i)));
+}
+
 // The arcs after the first: 7-bit groups carrying the value being read.
 // A group with the continuation bit set is part of a larger arc, so it is
-// accumulated and not emitted; only the group that ends one is.
+// accumulated and not emitted; only the group that ends one is. An arc
+// too long for an Int is no OID a key names, so it ends the string.
 Str tk_oid_rest(List(Int) c, Int i, Int n, Str acc, Int v) {
     if (i >= n) { return acc; }
+    if (v > 1099511627776) { return acc + ".?"; }
     Int byte = c[i];
     Int cont = byte & 128;
     Int step = v * 128 + (byte - cont);
@@ -200,13 +237,15 @@ Str tk_oid_rest(List(Int) c, Int i, Int n, Str acc, Int v) {
 // element there is not an OID. Ed25519 names one, EC names two (the key
 // type and the curve), and a second one that is not a curve OID is a
 // curve this module does not implement.
-pub Str tk_alg_oid1(List(Int) der, Tlv alg) {
+@requires(declassify)
+pub Str tk_alg_oid1(List(Secret(UInt(8))) der, Tlv alg) {
     Tlv first = tk_tlv(der, alg.start);
     if (!first.ok) { return ""; }
     return tk_oid_str(der, first);
 }
 
-pub Str tk_alg_oid2(List(Int) der, Tlv alg) {
+@requires(declassify)
+pub Str tk_alg_oid2(List(Secret(UInt(8))) der, Tlv alg) {
     Tlv first = tk_tlv(der, alg.start);
     if (!first.ok) { return ""; }
     Tlv second = tk_tlv(der, first.end);
@@ -214,45 +253,133 @@ pub Str tk_alg_oid2(List(Int) der, Tlv alg) {
     return tk_oid_str(der, second);
 }
 
-// ─── PEM ──────────────────────────────────────────────────────────────
+// ─── PEM over secret bytes ────────────────────────────────────────────
+//
+// The whole key file is secret bytes. What is public is its framing: where
+// the lines break, which bytes are whitespace, the armor lines
+// ("-----BEGIN PRIVATE KEY-----" and its END), and where the '=' padding
+// sits. Each byte's class is computed with masks (lib/crypto.resid's
+// b64g_in, no branch or table on the byte) and only the class is
+// published; an armor line, which is all framing, is published whole once
+// its first byte's class says it starts with a dash -- a base64 body line
+// cannot. The body's characters stay secret and are decoded by the
+// constant-time base64g_decode, which publishes one bit: whether they were
+// all base64.
 
-type PemFound = { List(Int) der; Bool found; };
-
-PemFound tk_pem_none() {
-    List(Int) none = [];
-    return PemFound { .der = none, .found = false };
+// A byte's class, as bits: 1 a line feed, 2 other whitespace (space, tab,
+// CR), 4 a dash, 8 '='; 0 for anything else (a body character).
+Secret(UInt(32)) tk_class_w(Secret(UInt(32)) c) {
+    Secret(UInt(32)) nl = b64g_in(c, 10, 10);
+    Secret(UInt(32)) ws = b64g_in(c, 32, 32) | b64g_in(c, 9, 9) | b64g_in(c, 13, 13);
+    Secret(UInt(32)) dash = b64g_in(c, 45, 45);
+    Secret(UInt(32)) pad = b64g_in(c, 61, 61);
+    return nl | (ws << wrapping_u32(1)) | (dash << wrapping_u32(2)) | (pad << wrapping_u32(3));
 }
 
-// The DER of the first block in `text` carrying one of `labels`. A key
+@requires(declassify)
+List(Int) tk_classes(List(Secret(UInt(8))) f, Int i, ListBuf(Int) acc) {
+    if (i >= f.len()) { return acc.finish(); }
+    Secret(UInt(32)) c = (UInt(32)) f[i];
+    UInt(8) k = declassify(wrapping_u8(tk_class_w(c)), "PEM framing: line breaks, whitespace, armor dashes and padding positions");
+    return tk_classes(f, i + 1, acc.push((Int) ct_public(k)));
+}
+
+// Where a block's base64 body is: [start, end) of the file, between the
+// BEGIN line and the END line. `found` is false when there is no complete
+// block with one of the labels.
+type PemSpan = { Int start; Int end; Bool found; };
+
+PemSpan tk_span_none() { return PemSpan { .start = 0, .end = 0, .found = false }; }
+
+// The DER of the first block in the file carrying one of `labels`, as
+// secret bytes ([] when there is none or its body is not base64). A key
 // file holds exactly one block, and the first is the key: a certificate
 // after it is the chain, which comes from the file the operator named as
 // the chain rather than out of the key file. A block with no END is
-// dropped, because half a key is not a key.
-pub List(Int) tk_pem_block(Str text, List(Str) labels) {
-    PemFound f = tk_pem_scan(str_split(text, "\n"), 0, labels, "", false, tk_pem_none());
-    return f.der;
+// dropped, because half a key is not a key, and so is one with any other
+// armor line inside it.
+@requires(declassify)
+pub List(Secret(UInt(8))) tk_pem_block(List(Secret(UInt(8))) f, List(Str) labels) {
+    List(Secret(UInt(8))) none = [];
+    List(Int) cls = tk_classes(f, 0, ListBuf());
+    PemSpan sp = tk_pem_scan(f, cls, 0, labels, -1);
+    if (!sp.found) { return none; }
+    ListBuf(Secret(UInt(8))) body0 = ListBuf();
+    return tk_pem_body(f, cls, sp.start, sp.end, 0, body0);
 }
 
-PemFound tk_pem_scan(List(Str) lines, Int i, List(Str) labels, Str body, Bool in_block, PemFound acc) {
-    if (acc.found || i >= lines.len()) { return acc; }
-    Str line = str_trim(lines[i]);
-    if (!in_block) {
-        Bool starts = tk_label_is(lines, i, "BEGIN", labels);
-        Int ni = i + 1;
-        return tk_pem_scan(lines, ni, labels, "", starts, acc);
+// Line by line from `i` (the start of a line); `begin` is where the body
+// starts once a BEGIN line was seen, else -1.
+@requires(declassify)
+PemSpan tk_pem_scan(List(Secret(UInt(8))) f, List(Int) cls, Int i, List(Str) labels, Int begin) {
+    Int n = cls.len();
+    if (i >= n) { return tk_span_none(); }
+    Int eol = tk_eol(cls, i);
+    Int next = if (eol < n) { eol + 1 } else { n };
+    Int first = tk_skip_ws(cls, i, eol);
+    Bool armor = first < eol && (cls[first] & 4) != 0;
+    if (!armor) { return tk_pem_scan(f, cls, next, labels, begin); }
+    Str line = tk_armor_text(f, cls, first, eol);
+    if (begin < 0) {
+        Int b2 = if (tk_label_is(line, "BEGIN", labels)) { next } else { -1 };
+        return tk_pem_scan(f, cls, next, labels, b2);
     }
-    if (tk_label_is(lines, i, "END", labels)) {
-        List(Int) none = [];
-        return PemFound { .der = base64_decode(body), .found = true };
+    if (tk_label_is(line, "END", labels)) { return PemSpan { .start = begin, .end = i, .found = true }; }
+    return tk_span_none();
+}
+
+// The end of the line starting at i: the index of its line feed, or n.
+Int tk_eol(List(Int) cls, Int i) {
+    if (i >= cls.len() || (cls[i] & 1) != 0) { return i; }
+    return tk_eol(cls, i + 1);
+}
+
+Int tk_skip_ws(List(Int) cls, Int i, Int end) {
+    if (i >= end || (cls[i] & 2) == 0) { return i; }
+    return tk_skip_ws(cls, i + 1, end);
+}
+
+// An armor line from its first dash to its end, trailing whitespace off,
+// published: it is framing, and its label says what the block is.
+@requires(declassify)
+Str tk_armor_text(List(Secret(UInt(8))) f, List(Int) cls, Int i, Int eol) {
+    Int end = tk_trim_end(cls, i, eol);
+    return tk_armor_acc(f, i, end, StrBuf());
+}
+
+Int tk_trim_end(List(Int) cls, Int start, Int end) {
+    if (end <= start || (cls[end - 1] & 2) == 0) { return end; }
+    return tk_trim_end(cls, start, end - 1);
+}
+
+@requires(declassify)
+Str tk_armor_acc(List(Secret(UInt(8))) f, Int i, Int end, StrBuf acc) {
+    if (i >= end) { return acc.finish(); }
+    UInt(8) v = declassify(f[i], "PEM armor line: BEGIN or END and the block's label");
+    Int c = (Int) ct_public(v);
+    return tk_armor_acc(f, i + 1, end, acc.push_char(if (c > 0 && c < 128) { c } else { 63 }));
+}
+
+// The body's base64 characters (secret) and its '=' padding (public
+// positions, so a count), decoded. A body character after padding is
+// refused here, at its public position; whether the characters are all
+// base64 is the decoder's one published bit.
+@requires(declassify)
+List(Secret(UInt(8))) tk_pem_body(List(Secret(UInt(8))) f, List(Int) cls, Int i, Int end, Int pads, ListBuf(Secret(UInt(8))) acc) {
+    if (i >= end) { return base64g_decode(acc.finish(), pads); }
+    Int k = cls[i];
+    if ((k & 3) != 0) { return tk_pem_body(f, cls, i + 1, end, pads, acc); }
+    if ((k & 8) != 0) { return tk_pem_body(f, cls, i + 1, end, pads + 1, acc); }
+    if (pads > 0) {
+        List(Secret(UInt(8))) dropped = acc.finish();
+        return dropped[0..0];
     }
-    Int ni2 = i + 1;
-    return tk_pem_scan(lines, ni2, labels, body + line, true, acc);
+    return tk_pem_body(f, cls, i + 1, end, pads, acc.push(f[i]));
 }
 
 // "-----BEGIN PRIVATE KEY-----" with `label` among the words after
 // BEGIN. The trailing dashes are part of the line, not of the label.
-Bool tk_label_is(List(Str) lines, Int i, Str kind, List(Str) labels) {
-    Str line = str_trim(lines[i]);
+Bool tk_label_is(Str line, Str kind, List(Str) labels) {
     Str head = "-----" + kind + " ";
     if (!str_starts_with(line, head)) { return false; }
     Str rest = str_slice(line, str_len(head), str_len(line));
@@ -280,16 +407,27 @@ Bool tk_in_labels(Str s, List(Str) labels, Int i) {
 // cannot sign with — an unsupported curve included, because signing
 // P-384 through a P-256 implementation is not a fallback, it is a wrong
 // answer wearing a valid key's clothes.
-@requires(filesystem(readonly))
+@requires(filesystem(readonly), declassify)
 pub Option(ServerKey) tls_key_load(Str path) {
     if (!filesystem.exists(path)) { return None; }
-    Str text = filesystem.read_all(path);
-    Bool pem = str_contains(text, "-----BEGIN");
-    List(Int) der = if (pem) { tk_pem_block(text, ["PRIVATE KEY", "EC PRIVATE KEY"]) } else { filesystem.read_bytes(path) };
+    return tls_key_parse(filesystem.read_bytes(path));
+}
+
+// A key file's contents as a key. The bytes are secret from here on: the
+// file is classified (above) and parsed with only its framing published.
+// A DER file is told from a PEM one by its first byte, a SEQUENCE's
+// identifier octet 0x30, which is framing either way (a PEM file starts
+// with its armor's dash or with explanatory text, never with a '0'
+// before the armor in any file this module is given).
+@requires(declassify)
+pub Option(ServerKey) tls_key_parse(List(Int) file) {
+    List(Secret(UInt(8))) f = secret_bytes(file);
+    if (f.len() == 0) { return None; }
+    Bool is_der = tk_at(f, 0) == 48;
+    List(Secret(UInt(8))) der = if (is_der) { f } else { tk_pem_block(f, ["PRIVATE KEY", "EC PRIVATE KEY"]) };
     if (der.len() == 0) { return None; }
     Option(ServerKey) as_pkcs8 = tk_pkcs8(der);
-    Option(ServerKey) as_sec1 = tk_sec1(der);
-    return match as_pkcs8 { Some(key) => Some(key), None => as_sec1 };
+    return match as_pkcs8 { Some(key) => Some(key), None => tk_sec1(der) };
 }
 
 // The chain to present, leaf first: a PEM bundle in the order it lists
@@ -312,7 +450,8 @@ pub List(List(Int)) tls_chain_load(Str path) {
 // Ed25519 arrives as RFC 8410's one-OID algorithm with the seed wrapped
 // in an OCTET STRING; EC as id-ecPublicKey with a named curve, whose
 // privateKey OCTET STRING holds a SEC1 ECPrivateKey.
-pub Option(ServerKey) tk_pkcs8(List(Int) der) {
+@requires(declassify)
+pub Option(ServerKey) tk_pkcs8(List(Secret(UInt(8))) der) {
     Tlv seq = tk_tlv(der, 0);
     if (!seq.ok || tk_tag_num(seq) != tk_tag_seq()) { return None; }
     Tlv ver = tk_tlv(der, seq.start);
@@ -338,14 +477,14 @@ pub Option(ServerKey) tk_pkcs8(List(Int) der) {
 // ECPrivateKey is a SEQUENCE. The two are told apart by that first tag
 // rather than by which algorithm was named above, so a file that says
 // Ed25519 and carries a SEC1 structure is refused instead of half-read.
-pub Option(ServerKey) tk_curve_private(List(Int) b) {
+@requires(declassify)
+pub Option(ServerKey) tk_curve_private(List(Secret(UInt(8))) b) {
     Tlv t = tk_tlv(b, 0);
     if (!t.ok) { return None; }
     if (tk_tag_num(t) == tk_tag_octet()) {
-        List(Int) seed = tk_value(b, t);
+        List(Secret(UInt(8))) seed = tk_value(b, t);
         if (seed.len() != 32) { return None; }
-        // The end of the public window: from here the seed is secret.
-        return Some(EdKey(secret_bytes(seed)));
+        return Some(EdKey(seed));
     }
     return None;
 }
@@ -356,16 +495,18 @@ pub Option(ServerKey) tk_curve_private(List(Int) b) {
 // [0] parameters', else the scalar's length (32 bytes P-256, 48 P-384).
 // When two of those disagree the key is refused: a P-384 scalar is not a
 // P-256 one whatever it is filed under.
-pub Option(ServerKey) tk_sec1(List(Int) der) { return tk_ec_private(der, None); }
+@requires(declassify)
+pub Option(ServerKey) tk_sec1(List(Secret(UInt(8))) der) { return tk_ec_private(der, None); }
 
-Option(ServerKey) tk_ec_private(List(Int) der, Option(Curve) named) {
+@requires(declassify)
+Option(ServerKey) tk_ec_private(List(Secret(UInt(8))) der, Option(Curve) named) {
     Tlv seq = tk_tlv(der, 0);
     if (!seq.ok || tk_tag_num(seq) != tk_tag_seq()) { return None; }
     Tlv ver = tk_tlv(der, seq.start);
     if (!ver.ok || tk_tag_num(ver) != tk_tag_int()) { return None; }
     Tlv key = tk_tlv(der, ver.end);
     if (!key.ok || tk_tag_num(key) != tk_tag_octet()) { return None; }
-    List(Int) scalar = tk_value(der, key);
+    List(Secret(UInt(8))) scalar = tk_value(der, key);
     Tlv p0 = tk_tlv(der, key.end);
     Bool has_p0 = p0.ok && p0.end <= seq.end && p0.tag == 160;
     Tlv poid = if (has_p0) { tk_tlv(der, p0.start) } else { tk_bad(0) };
@@ -375,11 +516,11 @@ Option(ServerKey) tk_ec_private(List(Int) der, Option(Curve) named) {
     if (scalar.len() != want || (inner != 0 && inner != want)) { return None; }
     if (want != 32 && want != 48) { return None; }
     Curve c = if (want == 48) { P384 } else { P256 };
-    // Checked while the scalar is still the file's public bytes (in
-    // [1, n-1]); from here on it is secret.
-    if (ec_public_key(c, scalar).len() == 0) { return None; }
-    List(Secret(UInt(8))) d = secret_bytes(scalar);
-    return if (want == 48) { Some(Ec384Key(d)) } else { Some(EcKey(d)) };
+    // The scalar must be in [1, n-1]: checked on the secret scalar by the
+    // constant-time public key derivation, whose "key usable" verdict is
+    // published by design (lib/ecdsa.resid).
+    if (ec_public_keyg(c, scalar).len() == 0) { return None; }
+    return if (want == 48) { Some(Ec384Key(scalar)) } else { Some(EcKey(scalar)) };
 }
 
 Int tk_curve_len(Option(Curve) c) { return match c { Some(x) => curve_bytes(x), None => 0 }; }

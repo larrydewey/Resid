@@ -245,10 +245,8 @@ handshake and master secrets, the four traffic secrets, the finished
 keys, and the record keys and IVs (`TlsKeys`) are `List(Secret(UInt(8)))`,
 and each record's nonce (the IV xor the sequence number) is computed in
 secret bytes. The server's signing key (`lib/tlskey.resid`'s `ServerKey`,
-Ed25519 or ECDSA P-256/P-384) is held as secret bytes once parsed (the
-key file's bytes are public until the parser hands them over, a brief
-window) and signs CertificateVerify with `ed25519g_sign` /
-`ecdsag_sign_digest`. Transcript hashes, labels, lengths and sequence
+Ed25519 or ECDSA P-256/P-384) is secret from the moment its file is read
+and signs CertificateVerify with `ed25519g_sign` / `ecdsag_sign_digest`. Transcript hashes, labels, lengths and sequence
 numbers are public. What leaves is public by design: the key share, the
 signature, and through `TlsPublish(B)` (in `lib/tls.resid`, one
 declassification each, with its reason) the record ciphertext, the
@@ -258,6 +256,18 @@ through `CtSame(B)`. So every program that runs a handshake or a record
 -- a TLS server (`tls_accept_loop`, `tls_stream_loop`), a client
 (`tls_client_connect`, `tls_https_get`), and their spawn lists -- needs
 `@requires(declassify)`.
+
+Loading that key (`tls_key_load`, or `tls_key_parse` on a file's bytes)
+turns every byte of the file into `Secret(UInt(8))` before reading any of
+it, and publishes only the file's framing: which bytes are line breaks,
+whitespace, dashes or '=' padding (classified with masks), the PEM armor
+lines, and the DER tags, lengths and algorithm OIDs. The base64 body is
+decoded in constant time by `base64g_decode` in `lib/crypto.resid`,
+generic over `Word(W, B)` like the primitives (`base64_decode` is its
+public copy): each character's value comes from range masks, never a
+table or a branch, and the one fact published is whether every character
+was base64. The scalar or seed stays secret bytes into `ServerKey`, so
+loading a key needs `@requires(declassify)`.
 
 ```text
 List(Secret(UInt(8))) shared = x25519g_shared(priv, client_share);
