@@ -1,0 +1,132 @@
+// devprobe.resid — constant-time checks of the device modules' code on
+// secrets (lib/dev/), alongside secretprobe.resid. The device itself is
+// never reached: each case hands the function the bytes a device would
+// have answered, with the secret ones marked by ct_secret, and only the
+// structure the function declassifies on purpose (a status word, a TPM
+// response's header and sizes) left public.
+//
+//   devprobe <case>
+//
+// tests/ct/run.sh takes the cases from this file's knowledge graph
+// (`ct_case_<name>`, underscores for the dashes of the case name) and
+// checks that, with the other probes, they reach every lib/ and lib/dev/
+// function that handles a secret (tests/ct/uncovered.txt lists the device
+// I/O around these, with reasons).
+
+// Through the standard library's root, not a relative path: device
+// descriptors count only from its lib/dev/ (E0260).
+import "word.resid";
+import "dev/sev_guest_key.resid";
+import "dev/tpm_wire.resid";
+
+// Bytes [from, to) marked for valgrind, the rest public.
+List(Int) mark_range(List(Int) b, Int from, Int to, Int i, ListBuf(Int) acc) {
+    if (i >= b.len()) { return acc.finish(); }
+    Int v = if (i >= from && i < to) { ct_secret(b[i]) & 255 } else { b[i] };
+    return mark_range(b, from, to, i + 1, acc.push(v));
+}
+
+List(Int) widen(List(UInt(8)) b, Int i, ListBuf(Int) acc) {
+    if (i >= b.len()) { return acc.finish(); }
+    return widen(b, i + 1, acc.push((Int) b[i]));
+}
+
+List(Int) reveal_all(List(Int) b, Int i, ListBuf(Int) acc) {
+    if (i >= b.len()) { return acc.finish(); }
+    return reveal_all(b, i + 1, acc.push(ct_public(b[i])));
+}
+
+// Secret bytes declassified for printing, marked defined.
+@requires(declassify)
+List(Int) opened(List(Secret(UInt(8))) b) { return reveal_all(widen(declassify(secret_join(b), "probe output"), 0, ListBuf()), 0, ListBuf()); }
+
+List(Int) repeat(Int v, Int n, ListBuf(Int) acc) {
+    if (n <= 0) { return acc.finish(); }
+    return repeat(v, n - 1, acc.push(v));
+}
+
+List(Int) pattern(Int n, Int i, ListBuf(Int) acc) {
+    if (i >= n) { return acc.finish(); }
+    return pattern(n, i + 1, acc.push((i * 37 + 11) & 255));
+}
+
+Int hexv(Int c) { return if (c >= 97) { c - 87 } else { c - 48 }; }
+
+List(Int) unhex(Str s, Int i, ListBuf(Int) acc) {
+    if (i + 1 >= str_len(s)) { return acc.finish(); }
+    return unhex(s, i + 2, acc.push(hexv(str_char_at(s, i)) * 16 + hexv(str_char_at(s, i + 1))));
+}
+
+List(UInt(8)) u8s(List(Int) b, Int i, ListBuf(UInt(8)) acc) {
+    if (i >= b.len()) { return acc.finish(); }
+    return u8s(b, i + 1, acc.push((UInt(8))(b[i] & 255)));
+}
+
+// ─── SNP_GET_DERIVED_KEY's response ─────────────────────────────────
+
+// struct msg_derived_key_resp: status (public, 0), 28 reserved bytes, the
+// 32-byte key (secret).
+@requires(declassify)
+Int ct_case_dev_sg_key_body() {
+    List(Int) resp = repeat(0, 32, ListBuf()).concat(pattern(rt 32, 0, ListBuf()));
+    List(Secret(UInt(8))) r = secret_bytes(mark_range(resp, 32, 64, 0, ListBuf()));
+    println(match (sg_key_body("probe", r)) {
+        Ok(k) => f"dev-sg-key-body {opened(k)}",
+        Err(e) => "dev-sg-key-body " + device_error_text(e),
+    });
+    return 0;
+}
+
+// ─── The engine's outputs ───────────────────────────────────────────
+
+@requires(declassify)
+Int ct_case_dev_outs() {
+    List(Secret(UInt(8))) s = secret_bytes(mark_range(pattern(rt 8, 0, ListBuf()), 0, 8, 0, ListBuf()));
+    List(DevOut) outs = [OutNum(rt 7), OutBytes(u8s(rt [1, 2, 3], 0, ListBuf())), OutSecret(s)];
+    Int n = dv_out_num(outs, 0) else { 0 - 1 };
+    Int nb = match (dv_out_bytes(outs, 1)) { Some(b) => b.len(), None => 0 - 1, };
+    List(Int) sb = match (dv_out_secret(outs, 2)) { Some(b) => opened(b), None => [], };
+    println(f"dev-outs {n} {nb} {sb}");
+    return 0;
+}
+
+// ─── TPM NV_Read of a secret ────────────────────────────────────────
+
+// NV_Read's response with 8 bytes of data (tests/conformance's vector):
+// the data, bytes 16 to 24, is secret.
+List(Int) nv_read_resp() { return unhex(rt "80020000001d000000000000000a0008deadbeef010203040000010000", 0, ListBuf()); }
+
+@requires(declassify)
+Int ct_case_dev_tpm_nv_resp_secret() {
+    List(Secret(UInt(8))) r = secret_bytes(mark_range(nv_read_resp(), 16, 24, 0, ListBuf()));
+    println(match (tpm2_nv_read_resp_secret(r)) {
+        Ok(b) => f"dev-tpm-nv-resp-secret {opened(b)}",
+        Err(e) => "dev-tpm-nv-resp-secret " + tpm_error_text(e),
+    });
+    return 0;
+}
+
+// The whole read over a transport: NV_ReadPublic (public) for an index
+// read by the owner, then NV_Read's response as secret bytes.
+@requires(declassify)
+Int ct_case_dev_tpm_nv_read_secret() {
+    List(UInt(8)) nvpub = u8s(unhex(rt "80010000003e00000000000e01400001000b000a0006000000080022000b6666666666666666666666666666666666666666666666666666666666666666", 0, ListBuf()), 0, ListBuf());
+    Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send = lambda(c) { Ok(nvpub) };
+    Result(List(Secret(UInt(8))), TpmError) closure(List(UInt(8))) send_secret = lambda(c) { Ok(secret_bytes(mark_range(nv_read_resp(), 16, 24, 0, ListBuf()))) };
+    println(match (tpm_nv_read_secret_via(send, send_secret, tpm_rh_owner(), tpm_nv_azure_hcl_report(), 8, 0)) {
+        Ok(b) => f"dev-tpm-nv-read-secret {opened(b)}",
+        Err(e) => "dev-tpm-nv-read-secret " + tpm_error_text(e),
+    });
+    return 0;
+}
+
+@requires(args, declassify)
+Int main() {
+    Str c = args.get(1);
+    if (c == "dev-sg-key-body") { return ct_case_dev_sg_key_body(); }
+    if (c == "dev-outs") { return ct_case_dev_outs(); }
+    if (c == "dev-tpm-nv-resp-secret") { return ct_case_dev_tpm_nv_resp_secret(); }
+    if (c == "dev-tpm-nv-read-secret") { return ct_case_dev_tpm_nv_read_secret(); }
+    println("unknown case " + c);
+    return 2;
+}

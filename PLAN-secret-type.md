@@ -91,6 +91,11 @@ generic function counting only when the probe has a copy of it at a
 `Secret` type. A surface function no case reaches fails the run unless
 `tests/ct/uncovered.txt` gives a reason (five: the socket loops and the
 `TlsCfg` constructor); a stale entry or a case reaching nothing fails too.
+Since 2026-10-10 the surface includes `lib/dev/*.resid`: `devprobe.resid`
+runs the device modules' secret code (`sg_key_body`, the `dv_out_*`
+accessors, the TPM's secret NV_Read) and `uncovered.txt` lists the device
+I/O around it (the engines, `dv_answer`, `snp_get_derived_key`,
+`tpm_nv_read_secret`).
 New cases close what the gate found: SHA-384, the AES entry points that
 pick AES-NI themselves, ECDSA raw and caller-nonce signing, field square
 roots, COSE_Sign1, the HPKE exporter and single-shot seal, PKCS#8/SEC1/

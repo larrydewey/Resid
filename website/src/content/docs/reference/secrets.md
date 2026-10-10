@@ -305,16 +305,18 @@ binary: no branch or memory address depends on the secret.
 
 The type rules are checked again on the compiled binary. `tests/ct/run.sh`
 takes its cases from the knowledge graph -- every `ct_case_<name>` function
-in `tests/ct/ctprobe.resid` and `tests/ct/secretprobe.resid` -- and runs
-each under valgrind with the secret inputs marked undefined. Before that,
+in `tests/ct/ctprobe.resid`, `tests/ct/secretprobe.resid`,
+`tests/ct/tlsprobe.resid` and `tests/ct/devprobe.resid` -- and runs each
+under valgrind with the secret inputs marked undefined. Before that,
 `tools/resid-ctcover.resid` reads the graph of a program importing all of
-`lib/` and lists every library function that handles a secret: a public
+`lib/` and `lib/dev/` and lists every library function that handles a secret: a public
 one whose signature names `Secret` (or a type holding one), a public
 generic one that runs on secrets once instantiated at a `Secret` type,
 and any one that declassifies. The run fails when one of them is reached
 by no case at a secret type, so a new library function on secrets cannot
 skip the check. The few a case cannot reach, such as the socket loops,
-are listed with a reason in `tests/ct/uncovered.txt`.
+and the device I/O of `lib/dev/`, are listed with a reason in
+`tests/ct/uncovered.txt`.
 
 ## Observation behaviors
 
