@@ -1218,9 +1218,13 @@ GKT gk_expr0(GK k, Int id, Str exp) {
     if (kind == "slice") {
         GKT b = gk_expr(k, gk_kid(k, id, 0), "");
         if (b.err != "") { return b; }
+        // Lowered as a heap-list slice: anything else is not that memory.
+        Str st = sec_inner(b.ty);
+        if (!str_has_prefix(st, "List(") || is_list_fixed(st)) { return gterr(b.k, "a slice [..hi] takes a list, got " + b.ty, id); }
         if (g.ns[id].nk > 1) {
-            GKT h = gk_expr(b.k, gk_kid(k, id, 1), "");
+            GKT h = gk_expr(b.k, gk_kid(k, id, 1), "Int");
             if (h.err != "") { return h; }
+            if (!is_int_ty(h.ty)) { return gterr(h.k, "a slice bound must be a public integer, got " + h.ty, id); }
             return gt(h.k, b.ty, id);
         }
         return gt(b.k, b.ty, id);
@@ -2450,6 +2454,7 @@ GKT gk_index_on(GK k, Int id, Str bt, Str ixty) {
         return gt(k, str_trim(ty_args(bt)[0]), id);
     }
     if (is_list_type(bt) && str_has_prefix(ix.ty, "Range")) { return gt(k, bt, id); }
+    if (is_list_type(bt) && !is_int_ty(ix.ty)) { return gterr(k, "list index must be an integer, found " + ix.ty, id); }
     if (is_list_type(bt)) { return gt(k, inner_of(bt), id); }
     if (is_map_type(bt)) {
         Str kt = map_key_type(bt);
@@ -2564,6 +2569,7 @@ GKM gk_mcall_r(GK k0, Int id, Str exp) {
     if (gv_is(bt)) { return gkm(gv_method(k, id, bt, m, na), true); }
     if (m == "len") {
         if (na != 0) { return gkm(gterr(k, ".len() takes no arguments", id), false); }
+        if (!gk_len_recv(bt)) { return gkm(gterr(k, ".len() needs a list, text, bytes, map or set, got " + bt, id), false); }
         return gkm(gt(k, "Int", id), true);
     }
     // The static capacity N of a fixed-capacity value (spec §44.3).
@@ -2574,6 +2580,7 @@ GKM gk_mcall_r(GK k0, Int id, Str exp) {
     // xs.with(i, x): xs with element i replaced (spec §17, §44.3).
     if (m == "with" && str_has_prefix(bt, "List(")) { return gkm(gk_list_with(k, id, bt, na), true); }
     if (m == "concat") {
+        if (!str_has_prefix(bt, "List(") || is_list_fixed(bt)) { return gkm(gterr(k, ".concat() joins two lists, got " + bt + "; use + for text", id), false); }
         GKT a = gk_marg_as(k, id, 0, bt);
         if (a.err != "") { return gkm(a, false); }
         return gkm(gt(a.k, bt, id), true);
@@ -2595,6 +2602,14 @@ GKM gk_mcall_r(GK k0, Int id, Str exp) {
     Str cfty = gk_field_type(k, bt, m);
     if (cfty != "" && is_fn_type(cfty)) { return gkm(gk_fn_call(gk_mem(k, id, gk_sfield(k, bt, m)), id, 1, cfty), true); }
     return gkm(gterr(k, "unsupported method " + m, id), false);
+}
+
+// The receivers `.len()` measures: heap and fixed lists, text, bytes,
+// maps and sets. Text counts codepoints, as str_len does. Anything else
+// would be lowered as a list read of memory that is no list.
+Bool gk_len_recv(Str bt) {
+    if (str_has_prefix(bt, "List(") || is_map_type(bt) || is_set_type(bt)) { return true; }
+    return bt == "Str" || bt == "Bytes" || str_has_prefix(bt, "Str(") || str_has_prefix(bt, "Bytes(");
 }
 
 GKT gk_list_with(GK k, Int id, Str bt, Int na) {

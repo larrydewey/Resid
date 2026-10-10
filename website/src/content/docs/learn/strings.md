@@ -30,7 +30,8 @@ point, as `Int`), `str_from_code`, `str_index_of`, `str_contains`,
 `str_starts_with`, `str_ends_with`, `str_count`, `str_split`, `str_join`,
 `str_trim`, `str_to_upper`, `str_to_lower`, `str_replace`, `str_repeat`,
 `str_reverse`, `str_is_int`, `str_parse_int`, `str_is_float` and
-`str_parse_float`. `+` concatenates, `==` compares, and `<`, `<=`, `>`,
+`str_parse_float`. `s.len()` is `str_len(s)`: both count code points, not
+bytes. `+` concatenates, `==` compares, and `<`, `<=`, `>`,
 `>=` order strings by code point.
 
 ## f-strings

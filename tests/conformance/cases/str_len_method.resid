@@ -1,0 +1,34 @@
+// s.len() on text is its codepoint count, the same as str_len(s), for a
+// literal, a concatenation, a runtime value, a file read at run time, an
+// empty string, multibyte UTF-8 and a fixed-capacity Str(N). It once
+// lowered as a list length and read the text's bytes as a count.
+Int report(Str label, Str s) {
+    println(f"{label} {s.len()} {str_len(s)}");
+    return 0;
+}
+
+@requires(filesystem(readonly))
+Int main() {
+    Str a = "h";
+    Str hi = a + "i";
+    _ = report("lit", "hello");
+    _ = report("concat", hi);
+    _ = report("paren", ("h" + "i"));
+    Int inl = ("h" + "i").len();
+    println(f"inline {inl}");
+    _ = report("rt", rt "runtime");
+    _ = report("empty", "");
+    _ = report("rtempty", rt "");
+    _ = report("utf8", rt "héllo wörld");
+    _ = report("cjk", rt "日本語");
+    _ = report("emoji", rt "a🙂b");
+    Str file = filesystem.read_all("@TMP@/in.txt");
+    _ = report("file", file);
+    Str(8) f8 = "aé";
+    println(f"fixed {f8.len()} {str_len(f8)} {f8.capacity()}");
+    Str(4) f0 = "";
+    println(f"fixed0 {f0.len()}");
+    Bool same = hi.len() == 2 && file.len() == 3;
+    println(f"{same}");
+    return 0;
+}

@@ -1276,7 +1276,11 @@ GT lw_mcall(LW w, Int id, List(Str) env, GT c) {
     if (lv_is(base.ty)) { return lv_method(w, id, base, m, env); }
     if (is_map_type_cg(base.ty)) { return lw_map_method(w, id, base, m, env); }
     if (is_set_type_cg(base.ty)) { return lw_set_method(w, id, base, m, env); }
-    if (m == "len" && base.ty == "Bytes") { return lw_rt1(base, "i64", "@resid_bytes_len(ptr " + base.val + ")", "Int"); }
+    // Text counts codepoints, as str_len does (a Str(N) passes its inline,
+    // NUL-terminated buffer).
+    Str lty = strip_owned_cg(base.ty);
+    if (m == "len" && (lty == "Str" || str_has_prefix_cg(lty, "Str("))) { return lw_rt1(base, "i64", "@str_len(ptr " + base.val + ")", "Int"); }
+    if (m == "len" && lty == "Bytes") { return lw_rt1(base, "i64", "@resid_bytes_len(ptr " + base.val + ")", "Int"); }
     if (m == "len") { return lw_rt1(base, "i64", "@resid_list_len(ptr " + base.val + ")", "Int"); }
     if (m == "with" && is_list_fixed(base.ty)) { return lw_fixed_with(w, id, base, env); }
     if (m == "with" && str_has_prefix_cg(strip_owned_cg(base.ty), "List(")) { return lw_list_with(w, id, base, env); }

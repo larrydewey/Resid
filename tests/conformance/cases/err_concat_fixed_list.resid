@@ -1,0 +1,7 @@
+// Refused at type check: lowering would treat the value as a heap
+// list and read memory that is not one.
+Int main() {
+    List(Int, 2) a = [1, 2];
+    List(Int, 2) c = a.concat(a);
+    return c[0];
+}
