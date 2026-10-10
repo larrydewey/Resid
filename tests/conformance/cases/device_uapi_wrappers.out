@@ -1,0 +1,6 @@
+tdx_guest.tdx_get_report0: reached
+tdx_guest.tdx_get_report0: bad input: report_data is 64 bytes, got 65
+nsm.raw: reached
+nsm.raw: bad input: a request is 1 to 4096 bytes, got 0
+nsm.raw: bad input: a request is 1 to 4096 bytes, got 4097
+64 1024 4096 12288

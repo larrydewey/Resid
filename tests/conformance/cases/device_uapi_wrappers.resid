@@ -1,0 +1,53 @@
+// The wrappers over descriptors tools/resid-devgen generates from the
+// kernel's uapi headers (lib/dev/uapi_*.resid): TDX_CMD_GET_REPORT0 and the
+// Nitro NSM's raw request compile, take their inputs from the generated
+// layouts, and reach the device host. Off a TDX guest or a Nitro enclave
+// the device is absent (a value), on one it answers or refuses this user;
+// `reached` covers each, so the case passes on any host. A malformed input
+// never reaches the host.
+import "dev/tdx_guest.resid";
+import "dev/nsm.resid";
+import "_devzeros.resid";
+
+Str reached(Str name, DeviceError e) {
+    return match (e) {
+        BadInput(n, why) => device_error_text(e),
+        BadReply(n, why) => device_error_text(e),
+        Timeout(n) => device_error_text(e),
+        Absent(n) => name + ": reached", Denied(n) => name + ": reached", Kernel(n, x) => name + ": reached",
+        TooLong(n) => name + ": reached", GenerationChanged(n) => name + ": reached", Unsupported(n) => name + ": reached",
+        Version(n, v) => name + ": reached", Overrun(n) => name + ": reached", UnknownDriver(n, v) => name + ": reached",
+    };
+}
+
+@requires(device(readonly))
+Str tdx(Int n) {
+    return match (tdx_get_report0(dev_zeros(n))) {
+        Ok(r) => if (r.len() == tdx_report_len()) { "tdx_guest.tdx_get_report0: reached" } else { "short TDREPORT" },
+        Err(e) => reached("tdx_guest.tdx_get_report0", e),
+    };
+}
+
+// A DescribeNSM request: the CBOR text string "DescribeNSM".
+List(UInt(8)) describe_nsm() {
+    return [(UInt(8))0x6b, 0x44, 0x65, 0x73, 0x63, 0x72, 0x69, 0x62, 0x65, 0x4e, 0x53, 0x4d];
+}
+
+@requires(device)
+Str nsm(List(UInt(8)) req) {
+    return match (nsm_request(req)) {
+        Ok(r) => if (r.len() > 0) { "nsm.raw: reached" } else { "empty response" },
+        Err(e) => reached("nsm.raw", e),
+    };
+}
+
+@requires(device)
+Int main() {
+    println(tdx(rt 64));
+    println(tdx(rt 65));
+    println(nsm(describe_nsm()));
+    println(nsm(dev_zeros(rt 0)));
+    println(nsm(dev_zeros(rt 4097)));
+    println(f"{tdx_reportdata_len()} {tdx_report_len()} {nsm_request_max_size()} {nsm_response_max_size()}");
+    return 0;
+}
