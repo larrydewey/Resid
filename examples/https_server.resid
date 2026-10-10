@@ -16,6 +16,10 @@
 // Capabilities: reading the key and the chain is `filesystem(readonly)`
 // and nothing more; serving is `network(readonly)`; only `--public`, which
 // binds an address other machines can reach, needs the full `network`.
+// The private key and every TLS secret are typed secret (spec §48), and
+// the handshake and record layer publish what TLS puts on the wire (a
+// key share, a signature, ciphertext) and hand up what it decrypts, so
+// serving also needs `declassify`.
 import "tlswire.resid";
 import "tlskey.resid";
 import "httpserv.resid";
@@ -105,10 +109,10 @@ List(Str) alpn_at(List(Str) parts, Int i, List(Str) acc) {
 }
 
 // `n` regions accepting on the same listener; the count they served.
-@requires(network(readonly), filesystem(readonly))
+@requires(network(readonly), filesystem(readonly), declassify)
 Int workers(Int lfd, Int n, Str root, Int conns, TlsCfg conf) {
     if (n <= 0) { return 0; }
-    Result(Int, RegionError) r = spawn (network(readonly), filesystem(readonly)) {
+    Result(Int, RegionError) r = spawn (network(readonly), filesystem(readonly), declassify) {
         return tls_accept_loop(lfd, conf, lambda(q) { handle(root, q) }, http_limits(), conns);
     };
     Int rest = workers(lfd, n - 1, root, conns, conf);
@@ -116,7 +120,7 @@ Int workers(Int lfd, Int n, Str root, Int conns, TlsCfg conf) {
     return rest + (if (mine < 0) { 0 } else { mine });
 }
 
-@requires(args, network, filesystem)
+@requires(args, network, filesystem, declassify)
 Int main() {
     Opts o = parse(1, args.count(), Opts { .cert = "", .key = "", .alpn = "http/1.1", .port = 8443, .public = false, .workers = 4, .root = "", .conns = 0, .port_file = "", .ok = true });
     if (!o.ok || o.cert == "" || o.key == "") {

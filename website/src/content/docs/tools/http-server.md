@@ -243,7 +243,7 @@ HttpReply handle(HttpRequest r) {
     return http_reply_text(200, "text/plain; charset=utf-8", "hello over tls\n");
 }
 
-@requires(args, filesystem(readonly), network(readonly))
+@requires(args, filesystem(readonly), network(readonly), declassify)
 Int main() {
     Option(ServerKey) maybe_key = tls_key_load("server.key");
     Str err = match maybe_key { Some(k) => "", None => "cannot read the key" };
@@ -281,7 +281,12 @@ ever sent, so every connection pays a full handshake.
 
 Reading the key is `filesystem(readonly)` and serving is
 `network(readonly)`; the two are separate calls, so a server does not carry
-the authority to read a private key just because it serves.
+the authority to read a private key just because it serves. Serving, and
+`tls_key_cert_matches`, also need `declassify`: the private key and every
+TLS secret are `Secret` values ([secret values](/Resid/reference/secrets/)),
+and the handshake and record layer publish what goes on the wire (the key
+share, the signature, ciphertext) and hand up what a record decrypts to.
+A `spawn` that serves lists it too.
 
 ## Not included
 

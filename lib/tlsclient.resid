@@ -15,12 +15,22 @@
 // `clock(readonly)` to ask what time it is for the certificate's validity
 // window. The trust store is passed in, so loading it (and the authority
 // that takes) stays with the caller.
+//
+// The secrets are typed secret (spec §48): the ephemeral x25519 key, the
+// shared secret, the key schedule and the record keys are
+// List(Secret(UInt(8))), on lib/tls.resid's generic key schedule and
+// record layer. The key share, the client's Finished MAC, record
+// ciphertext and the plaintext handed up are published by design, and a
+// record's tag and the server's Finished publish one-bit verdicts, so
+// the handshake, the transport and tls_https_get carry
+// @requires(declassify), as does every program that fetches over TLS.
 
 import "crypto.resid";
+import "word.resid";
 import "wire.resid";
 import "tls.resid";
 import "tlsmsg.resid";
-import "x25519.resid";
+import "x25519g.resid";
 import "chain.resid";
 import "clock.resid";
 
@@ -60,11 +70,6 @@ TlsDial tls_dial_err(Str err) {
 
 // ─── The handshake ────────────────────────────────────────────────────
 
-List(Int) tc_base() {
-    List(Int) empty = [];
-    return empty.concat([9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
-}
-
 List(Int) tc_hash(List(Int) bytes) {
     List(Int) raw = sha256_bytes(bytes);
     return slice_seed(raw, 0, 32, []);
@@ -78,9 +83,9 @@ Bool tc_send_plain(Int fd, List(Int) msg) {
     return resid_tcp_send_bin(fd, hdr.concat(msg));
 }
 
-@requires(network(readonly))
-Bool tc_send_prot(Int fd, List(Int) key, List(Int) iv, Int seq, List(Int) msg, Int inner) {
-    List(Int) rec = tls_protect(seq, key, iv, msg, inner);
+@requires(network(readonly), declassify)
+Bool tc_send_prot(Int fd, List(Secret(UInt(8))) key, List(Secret(UInt(8))) iv, Int seq, List(Int) msg, Int inner) {
+    List(Int) rec = tlsg_protect(seq, key, iv, msg, inner);
     return resid_tcp_send_bin(fd, rec);
 }
 
@@ -88,14 +93,14 @@ Bool tc_send_prot(Int fd, List(Int) key, List(Int) iv, Int seq, List(Int) msg, I
 // certificate has to carry; an empty one means no server name is sent and
 // no name is checked, which is a client for a server it already trusts by
 // key.
-@requires(network(readonly), clock(readonly))
+@requires(network(readonly), clock(readonly), declassify)
 pub TlsDial tls_client_connect(Str host, Int port, TlsClientCfg cfg) {
     Int fd = resid_tcp_connect(host, port);
     if (fd < 0) { return tls_dial_err("cannot connect to " + host + ":" + f"{port}"); }
     _ = resid_tcp_deadline(fd, cfg.deadline_ms);
-    List(Int) priv = random_bytes(32);
-    List(Int) pub = x25519(priv, tc_base());
-    List(Int) share = slice_seed(pub, 0, 32, []);
+    // Secret from the moment it is drawn; the share is published.
+    List(Secret(UInt(8))) priv = secret_bytes(random_bytes(32));
+    List(Int) share = x25519g_public(priv);
     List(Int) ch = tlsmsg_client_hello(cfg.name, cfg.alpn, random_bytes(32), share);
     if (!tc_send_plain(fd, ch)) {
         _ = resid_tcp_close(fd);
@@ -118,14 +123,20 @@ pub TlsDial tls_client_connect(Str host, Int port, TlsClientCfg cfg) {
         _ = resid_tcp_close(fd);
         return tls_dial_err("the server does not speak TLS 1.3 with " + ts_suite_name());
     }
-    List(Int) shared = x25519(priv, server_share);
+    // An all-zero shared secret (a low-order share) is refused (RFC 8446
+    // §7.4.2); whether it was is one public bit.
+    List(Secret(UInt(8))) shared = x25519g_shared(priv, server_share);
+    if (shared.len() == 0) {
+        _ = resid_tcp_close(fd);
+        return tls_dial_err("the server's key share is not usable");
+    }
     List(Int) tr1 = ch.concat(sh);
     List(Int) th1 = tc_hash(tr1);
-    List(Int) hs = tls_handshake_secret(shared);
-    List(Int) c_hs = tls_c_hs_traffic(hs, th1);
-    List(Int) s_hs = tls_s_hs_traffic(hs, th1);
-    List(Int) s_key = tls_traffic_key(s_hs);
-    List(Int) s_iv = tls_traffic_iv(s_hs);
+    List(Secret(UInt(8))) hs = tlsg_handshake_secret(shared);
+    List(Secret(UInt(8))) c_hs = tlsg_c_hs_traffic(hs, th1);
+    List(Secret(UInt(8))) s_hs = tlsg_s_hs_traffic(hs, th1);
+    List(Secret(UInt(8))) s_key = tlsg_traffic_key(s_hs);
+    List(Secret(UInt(8))) s_iv = tlsg_traffic_iv(s_hs);
     TsIn in = sh_rec.in;
     Flight fl = tc_read_flight(in, s_key, s_iv, 0, [], 8);
     if (!fl.ok) {
@@ -160,24 +171,23 @@ pub TlsDial tls_client_connect(Str host, Int port, TlsClientCfg cfg) {
         _ = resid_tcp_close(fd);
         return tls_dial_err("the server's certificate verify did not verify");
     }
-    List(Int) expect = tls_finished(s_hs, th3);
-    Bool fin_ok = ct_equal(expect, tc_body(fin));
+    Bool fin_ok = tlsg_finished_ok(s_hs, th3, tc_body(fin));
     if (!fin_ok) {
         _ = resid_tcp_close(fd);
         return tls_dial_err("the server's finished did not verify");
     }
     List(Int) tr4 = tr3.concat(fin);
     List(Int) th4 = tc_hash(tr4);
-    List(Int) cf_body = [20, 0, 0, 32].concat(tls_finished(c_hs, th4));
-    List(Int) c_key = tls_traffic_key(c_hs);
-    List(Int) c_iv = tls_traffic_iv(c_hs);
+    List(Int) cf_body = [20, 0, 0, 32].concat(tlsg_finished_out(c_hs, th4));
+    List(Secret(UInt(8))) c_key = tlsg_traffic_key(c_hs);
+    List(Secret(UInt(8))) c_iv = tlsg_traffic_iv(c_hs);
     if (!tc_send_prot(fd, c_key, c_iv, 0, cf_body, 22)) {
         _ = resid_tcp_close(fd);
         return tls_dial_err("cannot send the client finished");
     }
-    List(Int) master = tls_master_secret(hs);
-    List(Int) c_ap = tls_c_ap_traffic(master, th4);
-    List(Int) s_ap = tls_s_ap_traffic(master, th4);
+    List(Secret(UInt(8))) master = tlsg_master_secret(hs);
+    List(Secret(UInt(8))) c_ap = tlsg_c_ap_traffic(master, th4);
+    List(Secret(UInt(8))) s_ap = tlsg_s_ap_traffic(master, th4);
     // Directional (RFC 8446 §7.1): the client *reads* with the server's
     // application traffic secret and *writes* with its own. Using one
     // secret for both is a handshake that completes and then an
@@ -189,7 +199,7 @@ pub TlsDial tls_client_connect(Str host, Int port, TlsClientCfg cfg) {
         return tls_dial_err("the server selected '" + chosen[0] + "', which this client did not offer");
     }
     Str alpn = if (chosen.len() == 0) { "" } else { chosen[0] };
-    TlsKeys keys = tls_keys_pending(tls_traffic_key(s_ap), tls_traffic_iv(s_ap), tls_traffic_key(c_ap), tls_traffic_iv(c_ap), alpn, fl.in.buf);
+    TlsKeys keys = tls_keys_pending(tlsg_traffic_key(s_ap), tlsg_traffic_iv(s_ap), tlsg_traffic_key(c_ap), tlsg_traffic_iv(c_ap), alpn, fl.in.buf);
     TlsClient c = TlsClient { .fd = fd, .keys = keys, .eof = false, .buf = fl.in.buf };
     return TlsDial { .conn = c, .err = "" };
 }
@@ -245,8 +255,8 @@ List(Int) tc_body(List(Int) msg) {
 // the first message, which is a transcript that no longer hashes.
 type Flight = { TsIn in; List(Int) msgs; Int seq; Bool ok; };
 
-@requires(network(readonly))
-Flight tc_read_flight(TsIn in, List(Int) key, List(Int) iv, Int seq, List(Int) acc, Int rounds) {
+@requires(network(readonly), declassify)
+Flight tc_read_flight(TsIn in, List(Secret(UInt(8))) key, List(Secret(UInt(8))) iv, Int seq, List(Int) acc, Int rounds) {
     if (tc_flight_complete(acc)) {
         Flight f = Flight { .in = in, .msgs = acc, .seq = seq, .ok = true };
         return f;
@@ -265,7 +275,7 @@ Flight tc_read_flight(TsIn in, List(Int) key, List(Int) iv, Int seq, List(Int) a
         Flight no = Flight { .in = r.in, .msgs = [], .seq = seq, .ok = false };
         return no;
     }
-    List(Int) pt = tls_open(seq, key, iv, r.hdr, r.body);
+    List(Int) pt = tlsg_open(seq, key, iv, r.hdr, r.body);
     Int seq2 = seq + 1;
     if (pt.len() == 0) {
         Flight no = Flight { .in = r.in, .msgs = [], .seq = seq2, .ok = false };
@@ -441,12 +451,12 @@ pub Int tc_at(List(Int) b, Int i) {
 // message -- a session ticket, say -- is consumed and never handed up as
 // response bytes.
 
-@requires(network(readonly))
+@requires(network(readonly), declassify)
 WireIn(TlsClient) tls_fill(TlsClient c, List(Int) have, Int want, Int cap) {
     return tls_fill_at(c, have, want, cap, 8);
 }
 
-@requires(network(readonly))
+@requires(network(readonly), declassify)
 WireIn(TlsClient) tls_fill_at(TlsClient c, List(Int) have, Int want, Int cap, Int rounds) {
     Int n = have.len();
     if (n >= want || c.eof || rounds <= 0 || n > cap) {
@@ -463,14 +473,14 @@ WireIn(TlsClient) tls_fill_at(TlsClient c, List(Int) have, Int want, Int cap, In
     return tls_fill_rec(c, r, have, want, cap, rounds);
 }
 
-@requires(network(readonly))
+@requires(network(readonly), declassify)
 WireIn(TlsClient) tls_fill_rec(TlsClient c, TsRec r, List(Int) have, Int want, Int cap, Int rounds) {
     TlsKeys k2 = tls_keys_rseq(c.keys, c.keys.rseq + 1);
     if (r.ctype != 23) {
         TlsClient next = TlsClient { .fd = c.fd, .keys = c.keys, .eof = c.eof, .buf = r.in.buf };
         return tls_fill_at(next, have, want, cap, rounds - 1);
     }
-    List(Int) pt = tls_open(c.keys.rseq, c.keys.rkey, c.keys.riv, r.hdr, r.body);
+    List(Int) pt = tls_keys_open(c.keys, r.hdr, r.body);
     TlsClient stepped = TlsClient { .fd = c.fd, .keys = k2, .eof = c.eof, .buf = r.in.buf };
     if (pt.len() == 0) {
         TlsClient dead = TlsClient { .fd = c.fd, .keys = k2, .eof = true, .buf = r.in.buf };
@@ -493,12 +503,12 @@ WireIn(TlsClient) tls_fill_rec(TlsClient c, TsRec r, List(Int) have, Int want, I
     return tls_fill_at(stepped, have, want, cap, rounds - 1);
 }
 
-@requires(network(readonly))
+@requires(network(readonly), declassify)
 WireOut(TlsClient) tls_c_send(TlsClient c, List(Int) b) {
     return tls_c_send_at(c, b, 0, true);
 }
 
-@requires(network(readonly))
+@requires(network(readonly), declassify)
 WireOut(TlsClient) tls_c_send_at(TlsClient c, List(Int) b, Int at, Bool ok) {
     Int n = b.len();
     if (at >= n) {
@@ -508,7 +518,7 @@ WireOut(TlsClient) tls_c_send_at(TlsClient c, List(Int) b, Int at, Bool ok) {
     Int left = n - at;
     Int take = if (left > 16384) { 16384 } else { left };
     List(Int) chunk = slice_seed(b, at, take, []);
-    List(Int) rec = tls_protect(c.keys.wseq, c.keys.wkey, c.keys.wiv, chunk, 23);
+    List(Int) rec = tls_keys_protect(c.keys, chunk, 23);
     Bool wrote = resid_tcp_send_bin(c.fd, rec);
     TlsKeys k2 = tls_keys_wseq(c.keys, c.keys.wseq + 1);
     TlsClient next = TlsClient { .fd = c.fd, .keys = k2, .eof = c.eof, .buf = c.buf };
@@ -519,10 +529,10 @@ WireOut(TlsClient) tls_c_send_at(TlsClient c, List(Int) b, Int at, Bool ok) {
 // A close_notify, then the socket closed. The peer sees a clean end rather
 // than a truncated response, which is the difference between "the server
 // hung up" and "the answer was this short".
-@requires(network(readonly))
+@requires(network(readonly), declassify)
 Bool tls_c_close(TlsClient c) {
     List(Int) notice = [1, 0];
-    List(Int) rec = tls_protect(c.keys.wseq, c.keys.wkey, c.keys.wiv, notice, 21);
+    List(Int) rec = tls_keys_protect(c.keys, notice, 21);
     _ = resid_tcp_send_bin(c.fd, rec);
     _ = resid_tcp_shutdown(c.fd);
     return resid_tcp_close(c.fd);
@@ -555,14 +565,14 @@ HttpsGet https_failed(Str err) {
 // certificate has to carry; pass "" to use the host from the url, which is
 // what a registry fetch wants -- the name that has to verify is the one
 // that was asked for.
-@requires(network, clock(readonly))
+@requires(network, clock(readonly), declassify)
 pub HttpsGet tls_https_get(Str url, Str name, TrustStore store, List(Str) alpn) {
     return tls_https_get_within(url, name, store, alpn, tls_client_deadline_ms());
 }
 
 // The same, with the whole exchange -- connect to last byte -- bounded
 // by `ms` instead of the default.
-@requires(network, clock(readonly))
+@requires(network, clock(readonly), declassify)
 pub HttpsGet tls_https_get_within(Str url, Str name, TrustStore store, List(Str) alpn, Int ms) {
     List(Int) none = [];
     return tls_https_request(url, name, store, alpn, ms, "GET", "", none);
@@ -571,7 +581,7 @@ pub HttpsGet tls_https_get_within(Str url, Str name, TrustStore store, List(Str)
 // One request with a method, extra header lines (each ending "\r\n") and a
 // body. A reply that is not 200 carries its body too when it says how long
 // it is (an upload's refusal explains itself); a GET's does not.
-@requires(network, clock(readonly))
+@requires(network, clock(readonly), declassify)
 pub HttpsGet tls_https_request(Str url, Str name, TrustStore store, List(Str) alpn, Int ms, Str method, Str headers, List(Int) body) {
     Str rest = https_after_scheme(url);
     if (rest == "") { return https_failed("not an https url: " + url); }
@@ -641,7 +651,7 @@ Str https_after_scheme(Str url) {
 // number of lines, and not EOF.
 type HeadScan = { List(Str) lines; List(Int) rest; Bool done; Bool overflow; };
 
-@requires(network)
+@requires(network, declassify)
 HeadScan https_scan(TlsClient c, List(Int) acc, List(Str) lines, Bool done, Int rounds) {
     HeadScan stop = HeadScan { .lines = lines, .rest = acc, .done = done, .overflow = false };
     if (done) { return stop; }
@@ -666,7 +676,7 @@ type HeadBytes = { List(Int) body; Bool ok; };
 // The body, by the length the head declared. A response that ends first is
 // a failure, not a short archive: the caller checks a hash either way, but
 // saying "arrived short" names what happened.
-@requires(network)
+@requires(network, declassify)
 HeadBytes https_body(TlsClient c, List(Int) acc, Int want) {
     if (want <= 0) {
         HeadBytes empty_body = HeadBytes { .body = [], .ok = true };

@@ -12,18 +12,29 @@
 // writes a key out, prints one, or keeps it past the call. The mode of
 // the key file is the operator's business: the language has no stat verb,
 // so a permission check is not expressible here (SECURITY.md).
+//
+// The private key is a secret (spec §48): once parsed it is held as
+// List(Secret(UInt(8))), and signing and public key derivation run on the
+// generic code at secret types (lib/ed25519g.resid, lib/ecdsa.resid's
+// ecdsag_*). The file's PEM and DER, and the key bytes from the moment
+// they are read until the parser hands them over, are public bytes: a
+// brief public window, like the compiler's signing seed. A signature and
+// a public key are published by design, so signing and
+// tls_key_pubkey / tls_key_cert_matches need @requires(declassify).
 
 import "crypto.resid";
 import "ecdsa.resid";
 import "hash.resid";
 import "ed25519.resid";
+import "ed25519g.resid";
+import "word.resid";
 import "chain.resid";
 import "certverify.resid";
 
 // EcKey's payload is the 32-byte big-endian P-256 scalar, Ec384Key's the
 // 48-byte P-384 one, EdKey's the 32-byte seed. A key this language cannot
 // sign with parses into none of them.
-type ServerKey = EcKey(List(Int)) | Ec384Key(List(Int)) | EdKey(List(Int));
+type ServerKey = EcKey(List(Secret(UInt(8)))) | Ec384Key(List(Secret(UInt(8)))) | EdKey(List(Secret(UInt(8))));
 
 // The TLS SignatureScheme code point (RFC 8446 §4.2.3) this key signs
 // with: 0x0403 ecdsa_secp256r1_sha256, 0x0503 ecdsa_secp384r1_sha384,
@@ -37,12 +48,14 @@ pub Int tls_key_sigalg(ServerKey key) {
 }
 
 // The public key bytes, in the shape a certificate carries them: 32 raw
-// bytes for Ed25519, the uncompressed point 04||X||Y for ECDSA.
+// bytes for Ed25519, the uncompressed point 04||X||Y for ECDSA. Derived
+// from the secret key and published (a declassification by design).
+@requires(declassify)
 pub List(Int) tls_key_pubkey(ServerKey key) {
     return match key {
-        EdKey(seed) => pub_key(seed),
-        EcKey(scalar) => ec_public_key(P256, scalar),
-        Ec384Key(scalar) => ec_public_key(P384, scalar)
+        EdKey(seed) => ed25519g_pub(seed),
+        EcKey(scalar) => ec_public_keyg(P256, scalar),
+        Ec384Key(scalar) => ec_public_keyg(P384, scalar)
     };
 }
 
@@ -51,6 +64,7 @@ pub List(Int) tls_key_pubkey(ServerKey key) {
 // the certificate does not name, and every client would refuse it — so it
 // is refused at load time, where the operator can see which of the two
 // files is wrong.
+@requires(declassify)
 pub Bool tls_key_cert_matches(ServerKey key, List(Int) leaf_der) {
     List(Int) bits = cert_pubkey_bits(leaf_der);
     // The SubjectPublicKeyInfo BIT STRING opens with its unused-bits
@@ -71,17 +85,21 @@ pub Bool tls_key_cert_matches(ServerKey key, List(Int) leaf_der) {
 // key and the message, so no entropy failure can repeat one, and s is
 // put in its low half so the bytes are canonical. An empty list means
 // the key refused, and the caller must fail the handshake rather than
-// put an empty signature on the wire.
+// put an empty signature on the wire. The key stays secret; the
+// signature is published (ed25519g_sign / ecdsag_sign_digest at secret
+// bytes), so signing needs the declassify grant.
+@requires(declassify)
 pub List(Int) tls_key_sign(ServerKey key, List(Int) content) {
     return match key {
         EcKey(scalar) => tk_ec_sign(P256, Sha256, scalar, content),
         Ec384Key(scalar) => tk_ec_sign(P384, Sha384, scalar, content),
-        EdKey(seed) => sign_msg_bytes(seed, content)
+        EdKey(seed) => ed25519g_sign(seed, content)
     };
 }
 
-List(Int) tk_ec_sign(Curve c, HashAlg h, List(Int) scalar, List(Int) content) {
-    EcSig s = ecdsa_sign_digest(c, h, scalar, hash_bytes(h, content));
+@requires(declassify)
+List(Int) tk_ec_sign(Curve c, HashAlg h, List(Secret(UInt(8))) scalar, List(Int) content) {
+    EcSig s = ecdsag_sign_digest(c, h, scalar, hash_bytes(h, content));
     if (!s.ok) { return []; }
     return ecdsa_der_of(ecdsa_low_s(c, s));
 }
@@ -326,7 +344,8 @@ pub Option(ServerKey) tk_curve_private(List(Int) b) {
     if (tk_tag_num(t) == tk_tag_octet()) {
         List(Int) seed = tk_value(b, t);
         if (seed.len() != 32) { return None; }
-        return Some(EdKey(seed));
+        // The end of the public window: from here the seed is secret.
+        return Some(EdKey(secret_bytes(seed)));
     }
     return None;
 }
@@ -356,8 +375,11 @@ Option(ServerKey) tk_ec_private(List(Int) der, Option(Curve) named) {
     if (scalar.len() != want || (inner != 0 && inner != want)) { return None; }
     if (want != 32 && want != 48) { return None; }
     Curve c = if (want == 48) { P384 } else { P256 };
+    // Checked while the scalar is still the file's public bytes (in
+    // [1, n-1]); from here on it is secret.
     if (ec_public_key(c, scalar).len() == 0) { return None; }
-    return if (want == 48) { Some(Ec384Key(scalar)) } else { Some(EcKey(scalar)) };
+    List(Secret(UInt(8))) d = secret_bytes(scalar);
+    return if (want == 48) { Some(Ec384Key(d)) } else { Some(EcKey(d)) };
 }
 
 Int tk_curve_len(Option(Curve) c) { return match c { Some(x) => curve_bytes(x), None => 0 }; }

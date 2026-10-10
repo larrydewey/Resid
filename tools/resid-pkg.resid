@@ -786,10 +786,10 @@ Int serve_workers(Int lfd, Int n, Str root, Int conns) {
 
 // The same over TLS 1.3: the handshake is a step in each worker's event
 // loop, and the registry is served under the same rules.
-@requires(network(readonly), filesystem(readonly))
+@requires(network(readonly), filesystem(readonly), declassify)
 Int serve_workers_tls(Int lfd, Int n, Str root, Int conns, TlsCfg conf) {
     if (n <= 0) { return 0; }
-    Result(Int, RegionError) r = spawn (network(readonly), filesystem(readonly)) {
+    Result(Int, RegionError) r = spawn (network(readonly), filesystem(readonly), declassify) {
         return tls_accept_loop(lfd, conf, lambda(q) { registry_reply(root, q) }, http_limits(), conns);
     };
     Int rest = serve_workers_tls(lfd, n - 1, root, conns, conf);
@@ -811,9 +811,9 @@ Int serve_worker_up(Int lfd, Str root, Int conns, UploadCfg u) {
     return r else { -1 };
 }
 
-@requires(network(readonly), filesystem)
+@requires(network(readonly), filesystem, declassify)
 Int serve_worker_up_tls(Int lfd, Str root, Int conns, TlsCfg conf, UploadCfg u) {
-    Result(Int, RegionError) r = spawn (network(readonly), filesystem) {
+    Result(Int, RegionError) r = spawn (network(readonly), filesystem, declassify) {
         return tls_accept_loop(lfd, conf, lambda(q) { registry_reply_up(root, u, q) }, upload_limits(), conns);
     };
     return r else { -1 };
@@ -823,7 +823,7 @@ Int serve_worker_up_tls(Int lfd, Str root, Int conns, TlsCfg conf, UploadCfg u) 
 // handshake -- when either is unreadable or they do not belong together.
 type ServeTls = { TlsCfg conf; Str err; };
 
-@requires(filesystem(readonly))
+@requires(filesystem(readonly), declassify)
 ServeTls load_serve_tls(Str cert, Str key) {
     List(List(Int)) none = [];
     Option(ServerKey) maybe_key = tls_key_load(key);
@@ -870,7 +870,7 @@ ServeOpts parse_serve_opts(Int i, Int argc, ServeOpts o) {
     return serve_up(serve_opts(o.port, o.port_file, o.requests, o.cert, o.key, false), o.upload, o.index_key);
 }
 
-@requires(args, filesystem, network)
+@requires(args, filesystem, network, declassify)
 Int cmd_serve(Str root, ServeOpts o) {
     Int port = o.port;
     Str port_file = o.port_file;
@@ -1010,7 +1010,7 @@ Bool upload_signed(Str keyring, List(Str) names, Int i, Str hash_hex, List(Int) 
 }
 
 // `upload <dir> <url> <keyfile> [--ca F]`: pack, sign and PUT one package.
-@requires(filesystem, network, clock(readonly))
+@requires(filesystem, network, clock(readonly), declassify)
 Int cmd_upload(Str dir, Str url, Str keyfile, Str ca) {
     Str manifest_text = filesystem.read_all(dir + "/resid.toml");
     Str name = manifest_field(manifest_text, "name");
@@ -1045,7 +1045,7 @@ Int cmd_upload(Str dir, Str url, Str keyfile, Str ca) {
 
 type UpReply = { Int status; Str text; Str err; };
 
-@requires(filesystem(readonly), network, clock(readonly))
+@requires(filesystem(readonly), network, clock(readonly), declassify)
 UpReply upload_https(Str url, Str ca, Str headers, List(Int) body) {
     if (ca == "") { return UpReply {.status = 0, .text = "", .err = "an https:// registry needs --ca <trust store>; with none nothing is trusted"}; }
     List(Str) no_alpn = [];
@@ -1206,7 +1206,7 @@ Int idx_cmd_verify(Str reg, Str pubkey_hex) {
     return 0;
 }
 
-@requires(args, filesystem, network, clock(readonly))
+@requires(args, filesystem, network, clock(readonly), declassify)
 Int main() {
     Int argc = args.count();
     if (argc < 2) {

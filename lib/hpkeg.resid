@@ -6,15 +6,16 @@
 // a private key, the shared secret, the key schedule's secrets or a
 // plaintext.
 //
-// What is generic: the labeled HKDF (§4) over HKDF-SHA256
+// Everything is generic: the labeled HKDF (§4) over HKDF-SHA256
 // (lib/sha256g.resid) and HKDF-SHA384/512 (lib/sha512g.resid's HMACs),
-// DHKEM(X25519, HKDF-SHA256) (§4.1, over lib/x25519g.resid), the key
-// schedule (§5.1) in all four modes, the nonces (§5.2), seal and open
-// over AES-128/256-GCM (lib/aesgcmg.resid) and ChaCha20-Poly1305
-// (lib/chachag.resid), and the exporter (§5.3). The NIST-curve KEMs
-// (DHKEM(P-256) and DHKEM(P-384)) are public-only until their curves are
-// generic: lib/hpke.resid computes their Diffie-Hellman and hands the
-// result to hpkeg_extract_and_expand and hpkeg_key_schedule here.
+// the three KEMs -- DHKEM(X25519, HKDF-SHA256) over lib/x25519g.resid,
+// and DHKEM(P-256, HKDF-SHA256) and DHKEM(P-384, HKDF-SHA384) over
+// lib/ecdsa.resid's ecdhg / ec_public_keyg (the P256Word / P384Word
+// curves of lib/p256.resid and lib/p384.resid) -- the key schedule
+// (§5.1) in all four modes, the nonces (§5.2), seal and open over
+// AES-128/256-GCM (lib/aesgcmg.resid) and ChaCha20-Poly1305
+// (lib/chachag.resid), and the exporter (§5.3). No KEM has a public-only
+// path: the secret copy runs every suite.
 //
 // Secret at secret types (List(B)): the recipient's and sender's private
 // keys, the ephemeral private key, the input keying material, the DH
@@ -24,22 +25,26 @@
 // secrets. Public by design (List(Int) / Int): the suite, the mode, public
 // keys and enc, info, psk_id, aad, the received ciphertext, exporter
 // contexts, every length and sequence number, and two verdicts: whether a
-// DH output was all zeros (CtSame(B), in x25519g_shared) and whether a tag
-// verified (CtSame(B), in the AEADs). A public key computed from a private
-// one is published through X25519Pub(B). At secret types CtSame and
-// X25519Pub need the declassify grant, so the secret copies of the KEM
-// and open do too.
+// DH output was all zeros (CtSame(B), in x25519g_shared), whether a
+// NIST-curve private key is in range (P256Word / P384Word's open verb,
+// in ecdhg and ec_public_keyg) and whether a tag verified (CtSame(B), in
+// the AEADs). A public key computed from a private one is published
+// through X25519Pub(B) or the curve's open verb. At secret types these
+// need the declassify grant, so the secret copies of key derivation, the
+// KEMs and open do too.
 //
 // Type variables: W the 32-bit word (Word), D the 64-bit word (Word64),
-// X the 128-bit block (Block128), P the 512-bit integer (Wide512), B the
-// byte. Every failure is a context with ok = false, an empty list or
-// None, never an abort.
+// X the 128-bit block (Block128), P the 512-bit integer (Wide512), E and
+// G the P-256 and P-384 field elements (P256Word, P384Word), B the byte.
+// Every failure is a context with ok = false, an empty list or None,
+// never an abort.
 
 import "word.resid";
 import "crypto.resid";
 import "sha256g.resid";
 import "sha512g.resid";
 import "x25519g.resid";
+import "ecdsa.resid";
 import "aesgcmg.resid";
 import "chachag.resid";
 
@@ -137,22 +142,61 @@ pub List(B) hpkeg_extract_and_expand(Int kem, List(B) dh, List(Int) kem_context)
 // A key pair: the private key in B, the public key public.
 pub type HpkeKeyPairG(B) = { Bool ok; List(B) sk; List(Int) pk; };
 
-// DeriveKeyPair (§7.1.3) for DHKEM(X25519): the private key is
-// LabeledExpand(dkp_prk, "sk", "", 32). Not ok for another KEM (the NIST
-// curves are lib/hpke.resid's).
-@needs(Word(W, B), Word64(D, B), Wide512(P, B), X25519Pub(B))
-pub HpkeKeyPairG(B) hpkeg_derive_keypair(Int kem, List(B) ikm) {
-    List(B) none = [];
-    if (kem != 32) { return HpkeKeyPairG {.ok = false, .sk = none, .pk = []}; }
-    List(Int) sid = hpke_kem_suite_id(kem);
-    List(B) prk = hpkeg_labeled_extract(1, sid, none, "dkp_prk", ikm);
-    List(B) sk = hpkeg_labeled_expand(1, sid, prk, "sk", [], 32);
-    return HpkeKeyPairG {.ok = true, .sk = sk, .pk = x25519g_public(sk)};
+// The curve of a NIST-curve KEM.
+Curve hg_curve(Int kem) { return if (kem == 17) { P384 } else { P256 }; }
+
+// The public key of sk, serialized: 32 bytes for X25519, the uncompressed
+// point for P-256 and P-384; empty for an unknown KEM or a private key
+// out of range. Published by design (X25519Pub, or the curve's open).
+@needs(Wide512(P, B), X25519Pub(B), P256Word(E, B), P384Word(G, B))
+pub List(Int) hpkeg_public_key(Int kem, List(B) sk) {
+    if (kem == 32) { return x25519g_public(sk); }
+    if (!hpke_kem_ok(kem)) { return []; }
+    return ec_public_keyg(hg_curve(kem), sk);
 }
 
-// A fresh DHKEM(X25519) key pair from the operating system's randomness
-// (classified at secret types).
-@needs(Word(W, B), Word64(D, B), Wide512(P, B), X25519Pub(B))
+@needs(Word(W, B))
+HpkeKeyPairG(B) hg_kp_bad() {
+    List(B) none = [];
+    return HpkeKeyPairG {.ok = false, .sk = none, .pk = []};
+}
+
+// DeriveKeyPair (§7.1.3): for DHKEM(X25519) the private key is
+// LabeledExpand(dkp_prk, "sk", "", 32); for the NIST curves it is the
+// first "candidate" expansion that is a valid scalar (the bitmask is 0xFF
+// for both, so a candidate is used as is). Which candidate that was is
+// public: the curve publishes its range verdict.
+@needs(Word(W, B), Word64(D, B), Wide512(P, B), X25519Pub(B), P256Word(E, B), P384Word(G, B))
+pub HpkeKeyPairG(B) hpkeg_derive_keypair(Int kem, List(B) ikm) {
+    if (!hpke_kem_ok(kem)) {
+        HpkeKeyPairG(B) bad = hg_kp_bad();
+        return bad;
+    }
+    List(Int) sid = hpke_kem_suite_id(kem);
+    List(B) none = [];
+    List(B) prk = hpkeg_labeled_extract(hpke_kem_kdf(kem), sid, none, "dkp_prk", ikm);
+    if (kem == 32) {
+        List(B) sk = hpkeg_labeled_expand(1, sid, prk, "sk", [], 32);
+        return HpkeKeyPairG {.ok = true, .sk = sk, .pk = x25519g_public(sk)};
+    }
+    return hg_dkp_candidate(kem, sid, prk, 0);
+}
+
+@needs(Word(W, B), Word64(D, B), P256Word(E, B), P384Word(G, B))
+HpkeKeyPairG(B) hg_dkp_candidate(Int kem, List(Int) sid, List(B) prk, Int counter) {
+    if (counter > 255) {
+        HpkeKeyPairG(B) bad = hg_kp_bad();
+        return bad;
+    }
+    List(B) sk = hpkeg_labeled_expand(hpke_kem_kdf(kem), sid, prk, "candidate", [counter], hpke_kem_nsk(kem));
+    List(Int) pk = ec_public_keyg(hg_curve(kem), sk);
+    if (pk.len() > 0) { return HpkeKeyPairG {.ok = true, .sk = sk, .pk = pk}; }
+    return hg_dkp_candidate(kem, sid, prk, counter + 1);
+}
+
+// A fresh key pair from the operating system's randomness (classified at
+// secret types).
+@needs(Word(W, B), Word64(D, B), Wide512(P, B), X25519Pub(B), P256Word(E, B), P384Word(G, B))
 pub HpkeKeyPairG(B) hpkeg_generate_keypair(Int kem) {
     ListBuf(B) rb = ListBuf();
     return hpkeg_derive_keypair(kem, w_lift_bytes(random_bytes(hpke_kem_nsk(kem)), 0, rb));
@@ -190,6 +234,53 @@ pub List(B) hpkeg_x25519_decap(List(Int) enc, List(B) skR, List(Int) pkS) {
     List(Int) pkR = x25519g_public(skR);
     if (pkR.len() == 0) { return none; }
     return hpkeg_extract_and_expand(32, dh1.concat(dh2), enc.concat(pkR).concat(pkS));
+}
+
+// Encap / AuthEncap for DHKEM(P-256) and DHKEM(P-384) (kem 16, 17): ECDH
+// on the generic curves (ecdhg), so at secret types the ephemeral and
+// sender keys and the DH outputs stay secret. Not ok for a peer key off
+// the curve or a private key out of range.
+@needs(Word(W, B), Word64(D, B), P256Word(E, B), P384Word(G, B))
+pub HpkeEncapG(B) hpkeg_nist_encap(Int kem, List(Int) pkR, HpkeKeyPairG(B) e, List(B) skS) {
+    List(B) none = [];
+    HpkeEncapG(B) bad = HpkeEncapG {.ok = false, .shared = none, .enc = []};
+    if (!e.ok) { return bad; }
+    Bool auth = skS.len() > 0;
+    Curve c = hg_curve(kem);
+    List(B) dh1 = ecdhg(c, e.sk, pkR);
+    List(B) dh2 = if (auth) { ecdhg(c, skS, pkR) } else { none };
+    if (dh1.len() == 0 || (auth && dh2.len() == 0)) { return bad; }
+    List(Int) pkS = if (auth) { ec_public_keyg(c, skS) } else { [] };
+    if (auth && pkS.len() == 0) { return bad; }
+    return HpkeEncapG {.ok = true, .shared = hpkeg_extract_and_expand(kem, dh1.concat(dh2), e.pk.concat(pkR).concat(pkS)), .enc = e.pk};
+}
+
+// Decap / AuthDecap for DHKEM(P-256) and DHKEM(P-384); pkS empty for no
+// auth. Empty on failure.
+@needs(Word(W, B), Word64(D, B), P256Word(E, B), P384Word(G, B))
+pub List(B) hpkeg_nist_decap(Int kem, List(Int) enc, List(B) skR, List(Int) pkS) {
+    List(B) none = [];
+    Bool auth = pkS.len() > 0;
+    Curve c = hg_curve(kem);
+    List(B) dh1 = ecdhg(c, skR, enc);
+    List(B) dh2 = if (auth) { ecdhg(c, skR, pkS) } else { none };
+    if (dh1.len() == 0 || (auth && dh2.len() == 0)) { return none; }
+    List(Int) pkR = ec_public_keyg(c, skR);
+    if (pkR.len() == 0) { return none; }
+    return hpkeg_extract_and_expand(kem, dh1.concat(dh2), enc.concat(pkR).concat(pkS));
+}
+
+// Encap / Decap under any of the three KEMs.
+@needs(Word(W, B), Word64(D, B), Wide512(P, B), CtSame(B), X25519Pub(B), P256Word(E, B), P384Word(G, B))
+pub HpkeEncapG(B) hpkeg_encap(Int kem, List(Int) pkR, HpkeKeyPairG(B) e, List(B) skS) {
+    if (kem == 32) { return hpkeg_x25519_encap(pkR, e, skS); }
+    return hpkeg_nist_encap(kem, pkR, e, skS);
+}
+
+@needs(Word(W, B), Word64(D, B), Wide512(P, B), CtSame(B), X25519Pub(B), P256Word(E, B), P384Word(G, B))
+pub List(B) hpkeg_decap(Int kem, List(Int) enc, List(B) skR, List(Int) pkS) {
+    if (kem == 32) { return hpkeg_x25519_decap(enc, skR, pkS); }
+    return hpkeg_nist_decap(kem, enc, skR, pkS);
 }
 
 // ─── Key schedule (§5.1) ─────────────────────────────────────────────
@@ -232,36 +323,36 @@ pub Int hpke_mode(Bool psk, Bool auth) { return (if (psk) { 1 } else { 0 }) + (i
 // encapsulated key to send alongside the ciphertext.
 pub type HpkeSenderG(B) = { HpkeCtxG(B) ctx; List(Int) enc; };
 
-// Every sender setup (§5.1.2-5.1.4) for DHKEM(X25519): the mode from
-// which of psk and skS are given; ikmE pins the ephemeral key (tests),
-// empty draws a fresh one.
-@needs(Word(W, B), Word64(D, B), Wide512(P, B), CtSame(B), X25519Pub(B))
+// Every sender setup (§5.1.2-5.1.4), under any KEM: the mode from which
+// of psk and skS are given; ikmE pins the ephemeral key (tests), empty
+// draws a fresh one.
+@needs(Word(W, B), Word64(D, B), Wide512(P, B), CtSame(B), X25519Pub(B), P256Word(E, B), P384Word(G, B))
 pub HpkeSenderG(B) hpkeg_setup_sender_full(HpkeSuite s, List(Int) pkR, List(Int) info, List(B) psk, List(Int) psk_id, List(B) skS, List(B) ikmE) {
     HpkeSenderG(B) bad = HpkeSenderG {.ctx = hpkeg_ctx_bad(s), .enc = []};
-    if (!hpke_suite_ok(s) || s.kem != 32) { return bad; }
-    HpkeKeyPairG(B) e = if (ikmE.len() > 0) { hpkeg_derive_keypair(32, ikmE) } else { hpkeg_generate_keypair(32) };
-    HpkeEncapG(B) en = hpkeg_x25519_encap(pkR, e, skS);
+    if (!hpke_suite_ok(s)) { return bad; }
+    HpkeKeyPairG(B) e = if (ikmE.len() > 0) { hpkeg_derive_keypair(s.kem, ikmE) } else { hpkeg_generate_keypair(s.kem) };
+    HpkeEncapG(B) en = hpkeg_encap(s.kem, pkR, e, skS);
     if (!en.ok) { return bad; }
     Int mode = hpke_mode(psk.len() > 0, skS.len() > 0);
     return HpkeSenderG {.ctx = hpkeg_key_schedule(s, mode, en.shared, info, psk, psk_id), .enc = en.enc};
 }
 
-@needs(Word(W, B), Word64(D, B), Wide512(P, B), CtSame(B), X25519Pub(B))
+@needs(Word(W, B), Word64(D, B), Wide512(P, B), CtSame(B), X25519Pub(B), P256Word(E, B), P384Word(G, B))
 pub HpkeCtxG(B) hpkeg_setup_receiver_full(HpkeSuite s, List(Int) enc, List(B) skR, List(Int) info, List(B) psk, List(Int) psk_id, List(Int) pkS) {
-    if (!hpke_suite_ok(s) || s.kem != 32) { return hpkeg_ctx_bad(s); }
-    List(B) shared = hpkeg_x25519_decap(enc, skR, pkS);
+    if (!hpke_suite_ok(s)) { return hpkeg_ctx_bad(s); }
+    List(B) shared = hpkeg_decap(s.kem, enc, skR, pkS);
     if (shared.len() == 0) { return hpkeg_ctx_bad(s); }
     return hpkeg_key_schedule(s, hpke_mode(psk.len() > 0, pkS.len() > 0), shared, info, psk, psk_id);
 }
 
 // Base mode (the common case).
-@needs(Word(W, B), Word64(D, B), Wide512(P, B), CtSame(B), X25519Pub(B))
+@needs(Word(W, B), Word64(D, B), Wide512(P, B), CtSame(B), X25519Pub(B), P256Word(E, B), P384Word(G, B))
 pub HpkeSenderG(B) hpkeg_setup_sender(HpkeSuite s, List(Int) pkR, List(Int) info) {
     List(B) none = [];
     return hpkeg_setup_sender_full(s, pkR, info, none, [], none, none);
 }
 
-@needs(Word(W, B), Word64(D, B), Wide512(P, B), CtSame(B), X25519Pub(B))
+@needs(Word(W, B), Word64(D, B), Wide512(P, B), CtSame(B), X25519Pub(B), P256Word(E, B), P384Word(G, B))
 pub HpkeCtxG(B) hpkeg_setup_receiver(HpkeSuite s, List(Int) enc, List(B) skR, List(Int) info) {
     List(B) none = [];
     return hpkeg_setup_receiver_full(s, enc, skR, info, none, [], []);
@@ -335,16 +426,16 @@ pub List(B) hpkeg_export(HpkeCtxG(B) c, List(Int) exporter_context, Int len) {
 
 pub type HpkeMessageG(B) = { Bool ok; List(Int) enc; List(B) ct; };
 
-// Seal one message to pkR in base mode (DHKEM(X25519)).
-@needs(Word(W, B), Word64(D, B), Block128(X, W, B), Wide512(P, B), CtSame(B), X25519Pub(B))
+// Seal one message to pkR in base mode.
+@needs(Word(W, B), Word64(D, B), Block128(X, W, B), Wide512(P, B), CtSame(B), X25519Pub(B), P256Word(E, B), P384Word(G, B))
 pub HpkeMessageG(B) hpkeg_seal_to(HpkeSuite s, List(Int) pkR, List(Int) info, List(Int) aad, List(B) pt) {
     HpkeSenderG(B) snd = hpkeg_setup_sender(s, pkR, info);
     HpkeSealedG(B) sealed = hpkeg_seal(snd.ctx, aad, pt);
     return HpkeMessageG {.ok = sealed.ct.len() > 0, .enc = snd.enc, .ct = sealed.ct};
 }
 
-// Open one base-mode message with skR (DHKEM(X25519)).
-@needs(Word(W, B), Word64(D, B), Block128(X, W, B), Wide512(P, B), CtSame(B), X25519Pub(B))
+// Open one base-mode message with skR.
+@needs(Word(W, B), Word64(D, B), Block128(X, W, B), Wide512(P, B), CtSame(B), X25519Pub(B), P256Word(E, B), P384Word(G, B))
 pub Option(List(B)) hpkeg_open_with(HpkeSuite s, List(Int) enc, List(B) skR, List(Int) info, List(Int) aad, List(Int) ct) {
     HpkeOpenedG(B) o = hpkeg_open(hpkeg_setup_receiver(s, enc, skR, info), aad, ct);
     return if (o.ok) { Some(o.pt) } else { None };

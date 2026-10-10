@@ -11,6 +11,12 @@
 // (`filesystem(readonly)`), so serving does not carry the authority to
 // read a private key. The two are separated by the call, not by a
 // comment.
+//
+// The record keys are secret (lib/tls.resid's TlsKeys), and every read
+// and write publishes through TlsPublish: ciphertext onto the wire,
+// plaintext up to the application. So the transport carries
+// @requires(declassify), and so does every program that serves TLS
+// (tls_accept_loop, tls_stream_loop and their callers).
 
 import "httpserv.resid";
 import "tls.resid";
@@ -38,12 +44,12 @@ pub TlsCfg tls_cfg(ServerKey key, List(List(Int)) chain, List(Str) alpn) {
 // NewSessionTicket after the flight, an alert, a change_cipher_spec that
 // arrived without being asked for. A record that fails its tag ends the
 // connection -- it is not a request, and it is not an empty one either.
-@requires(network(readonly))
+@requires(network(readonly), declassify)
 WireIn(TlsConn) tls_fill(TlsConn c, List(Int) have, Int want, Int cap) {
     return tls_fill_at(c, have, want, cap, 8);
 }
 
-@requires(network(readonly))
+@requires(network(readonly), declassify)
 WireIn(TlsConn) tls_fill_at(TlsConn c, List(Int) have, Int want, Int cap, Int rounds) {
     Int n = have.len();
     if (n >= want || c.eof || rounds <= 0 || n > cap) {
@@ -58,14 +64,14 @@ WireIn(TlsConn) tls_fill_at(TlsConn c, List(Int) have, Int want, Int cap, Int ro
     return tls_fill_rec(c, r, have, want, cap, rounds);
 }
 
-@requires(network(readonly))
+@requires(network(readonly), declassify)
 WireIn(TlsConn) tls_fill_rec(TlsConn c, TsRec r, List(Int) have, Int want, Int cap, Int rounds) {
     TlsKeys k2 = tls_keys_rseq(c.keys, c.keys.rseq + 1);
     if (r.ctype != 23) {
         TlsConn next = TlsConn { .fd = c.fd, .keys = c.keys, .eof = c.eof, .buf = r.in.buf };
         return tls_fill_at(next, have, want, cap, rounds - 1);
     }
-    List(Int) pt = tls_open(c.keys.rseq, c.keys.rkey, c.keys.riv, r.hdr, r.body);
+    List(Int) pt = tls_keys_open(c.keys, r.hdr, r.body);
     TlsConn stepped = TlsConn { .fd = c.fd, .keys = k2, .eof = c.eof, .buf = r.in.buf };
     if (pt.len() == 0) {
         TlsConn dead = TlsConn { .fd = c.fd, .keys = k2, .eof = true, .buf = r.in.buf };
@@ -90,12 +96,12 @@ WireIn(TlsConn) tls_fill_rec(TlsConn c, TsRec r, List(Int) have, Int want, Int c
 // Protect and send. One record per 2^14 bytes of plaintext, each with
 // its own sequence number (RFC 8446 §5.1): a reply larger than a record
 // is ordinary -- a static file is -- so this splits rather than refusing.
-@requires(network(readonly))
+@requires(network(readonly), declassify)
 WireOut(TlsConn) tls_send(TlsConn c, List(Int) b) {
     return tls_send_at(c, b, 0, true);
 }
 
-@requires(network(readonly))
+@requires(network(readonly), declassify)
 WireOut(TlsConn) tls_send_at(TlsConn c, List(Int) b, Int at, Bool ok) {
     Int n = b.len();
     if (at >= n) {
@@ -104,7 +110,7 @@ WireOut(TlsConn) tls_send_at(TlsConn c, List(Int) b, Int at, Bool ok) {
     Int left = n - at;
     Int take = if (left > 16384) { 16384 } else { left };
     List(Int) chunk = slice_seed(b, at, take, []);
-    List(Int) rec = tls_protect(c.keys.wseq, c.keys.wkey, c.keys.wiv, chunk, 23);
+    List(Int) rec = tls_keys_protect(c.keys, chunk, 23);
     Bool wrote = resid_tcp_send_bin(c.fd, rec);
     TlsKeys k2 = tls_keys_wseq(c.keys, c.keys.wseq + 1);
     TlsConn next = TlsConn { .fd = c.fd, .keys = k2, .eof = c.eof, .buf = c.buf };
@@ -116,10 +122,10 @@ WireOut(TlsConn) tls_send_at(TlsConn c, List(Int) b, Int at, Bool ok) {
 // rather than a truncated connection. No draining here: the plain
 // transport drains because unread *plaintext* would reset the socket and
 // lose the reply, and a TLS peer reads records, not bytes.
-@requires(network(readonly))
+@requires(network(readonly), declassify)
 Bool tls_close(TlsConn c) {
     List(Int) notice = [1, 0];
-    List(Int) rec = tls_protect(c.keys.wseq, c.keys.wkey, c.keys.wiv, notice, 21);
+    List(Int) rec = tls_keys_protect(c.keys, notice, 21);
     _ = resid_tcp_send_bin(c.fd, rec);
     _ = resid_tcp_shutdown(c.fd);
     return resid_tcp_close(c.fd);
@@ -131,7 +137,7 @@ Bool tls_close(TlsConn c) {
 // handshake refuses with an alert rather than a silent close, so a client
 // that asked for something this server will not do is told which of the
 // refusals it was.
-@requires(network(readonly))
+@requires(network(readonly), declassify)
 Accepted(TlsConn) tls_accept(TlsCfg conf, Int fd) {
     TlsResult r = tls_server_handshake(fd, conf.key, conf.chain, conf.alpn);
     Bool ok = r.err == 0;
@@ -183,14 +189,14 @@ SessIn(TlsSess) tls_sess_end(TlsSess s, List(Int) out) {
 Int tls_hs_max_bytes() { return 65536; }
 Int tls_hs_max_records() { return 16; }
 
-@requires(network(readonly))
+@requires(network(readonly), declassify)
 SessIn(TlsSess) tls_sess_input(TlsCfg conf, TlsSess s, List(Int) raw) {
     if (s.phase == 3) { return tls_sess_end(s, []); }
     return tls_sess_step(conf, tls_sess_with(s, s.phase, s.raw.concat(raw), s.seen), [], []);
 }
 
 // Advance as far as the bytes in hand allow, collecting what to send.
-@requires(network(readonly))
+@requires(network(readonly), declassify)
 SessIn(TlsSess) tls_sess_step(TlsCfg conf, TlsSess s, List(Int) plain, List(Int) out) {
     if (s.phase == 2) {
         TlsOpened o = tls_open_ready(s.keys, s.raw, 0, plain);
@@ -237,6 +243,7 @@ SessIn(TlsSess) tls_sess_step(TlsCfg conf, TlsSess s, List(Int) plain, List(Int)
 // fails its tag or has no business arriving.
 type TlsOpened = { TlsKeys keys; List(Int) raw; List(Int) plain; Int status; };
 
+@requires(declassify)
 TlsOpened tls_open_ready(TlsKeys k, List(Int) raw, Int at, List(Int) plain) {
     Int n = raw.len();
     Bool whole = at + 5 <= n && at + 5 + raw[at + 3] * 256 + raw[at + 4] <= n;
@@ -252,7 +259,7 @@ TlsOpened tls_open_ready(TlsKeys k, List(Int) raw, Int at, List(Int) plain) {
     if (ctype != 23) { return TlsOpened { .keys = k, .raw = [], .plain = plain, .status = 2 }; }
     List(Int) hdr = raw[at..(at + 5)];
     List(Int) body = raw[(at + 5)..next];
-    List(Int) pt = tls_open(k.rseq, k.rkey, k.riv, hdr, body);
+    List(Int) pt = tls_keys_open(k, hdr, body);
     TlsKeys k2 = tls_keys_rseq(k, k.rseq + 1);
     if (pt.len() == 0) { return TlsOpened { .keys = k2, .raw = [], .plain = plain, .status = 2 }; }
     Int inner = tls_inner_type(pt);
@@ -269,14 +276,16 @@ TlsOpened tls_open_ready(TlsKeys k, List(Int) raw, Int at, List(Int) plain) {
 // number (RFC 8446 §5.1).
 type TlsSealed = { TlsKeys keys; List(Int) bytes; };
 
+@requires(declassify)
 TlsSealed tls_seal_all(TlsKeys k, List(Int) b, Int at, List(Int) acc) {
     if (at >= b.len()) { return TlsSealed { .keys = k, .bytes = acc }; }
     Int take = if (b.len() - at > 16384) { 16384 } else { b.len() - at };
     List(Int) chunk = slice_seed(b, at, take, []);
-    List(Int) rec = tls_protect(k.wseq, k.wkey, k.wiv, chunk, 23);
+    List(Int) rec = tls_keys_protect(k, chunk, 23);
     return tls_seal_all(tls_keys_wseq(k, k.wseq + 1), b, at + take, acc.concat(rec));
 }
 
+@requires(declassify)
 SessOut(TlsSess) tls_sess_output(TlsSess s, List(Int) plain) {
     if (s.phase != 2) { return SessOut { .sess = s, .out = [] }; }
     TlsSealed sealed = tls_seal_all(s.keys, plain, 0, []);
@@ -286,9 +295,10 @@ SessOut(TlsSess) tls_sess_output(TlsSess s, List(Int) plain) {
 
 // A close_notify, so the client reads a clean end rather than a
 // truncated reply.
+@requires(declassify)
 List(Int) tls_sess_goodbye(TlsSess s) {
     if (s.phase != 2) { return []; }
-    return tls_protect(s.keys.wseq, s.keys.wkey, s.keys.wiv, [1, 0], 21);
+    return tls_keys_protect(s.keys, [1, 0], 21);
 }
 
 Session(TlsSess, TlsCfg) = { .sess_open = tls_sess_open, .sess_input = tls_sess_input, .sess_output = tls_sess_output, .sess_goodbye = tls_sess_goodbye };
@@ -296,13 +306,13 @@ Session(TlsSess, TlsCfg) = { .sess_open = tls_sess_open, .sess_input = tls_sess_
 // Accept TLS connections on `lfd` and serve them: the same event loop
 // the plain server runs, over a session that has to shake hands before
 // there is anything to read. `max_conns` 0 means until accept fails.
-@requires(network(readonly))
+@requires(network(readonly), declassify)
 pub Int tls_accept_loop(Int lfd, TlsCfg conf, HttpReply closure(HttpRequest) handler, HttpLimits lim, Int max_conns) {
     return http_accept_loop_where(lfd, conf, handler, lim, max_conns);
 }
 
 // The same with a handler that may stream (lib/httpserv.resid `HttpOut`).
-@requires(network(readonly))
+@requires(network(readonly), declassify)
 pub Int tls_stream_loop(Int lfd, TlsCfg conf, HttpOut(K) closure(HttpRequest) handler, HttpLimits lim, Int max_conns) {
     return http_stream_loop_where(lfd, conf, handler, lim, max_conns);
 }

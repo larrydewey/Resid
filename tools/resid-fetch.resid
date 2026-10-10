@@ -22,11 +22,15 @@
 // <trust-store> is a PEM bundle or a directory of DER certificates, and
 // there is no default: with no store a TLS client trusts nothing, and this
 // tool refuses to run rather than fetching a registry it cannot name.
+//
+// `declassify`: the TLS client's secrets are typed secret (spec §48), and
+// the handshake and record layer publish what goes on the wire and hand
+// up what they decrypt.
 
 import "../lib/chain.resid";
 import "../lib/tlsclient.resid";
 
-@requires(args, filesystem, network, clock(readonly))
+@requires(args, filesystem, network, clock(readonly), declassify)
 Int run() {
     Bool timed = args.count() == 7 && args.get(1) == "--timeout";
     Int at = if (timed) { 3 } else { 1 };
@@ -87,7 +91,7 @@ Bool rf_write(Str path, List(Int) b) {
     return true;
 }
 
-@requires(args, filesystem, network, clock(readonly))
+@requires(args, filesystem, network, clock(readonly), declassify)
 Int main() {
     Int rc = run();
     return rc;

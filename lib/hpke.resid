@@ -15,10 +15,8 @@
 // The public API on byte lists of Int. Every function here is the public
 // copy of lib/hpkeg.resid's generic implementation (B = Int): the same
 // code, checked by the compiler at secret types, runs on secret keys,
-// shared secrets and plaintexts. The one part that is not generic yet is
-// the Diffie-Hellman of the NIST-curve KEMs (P-256, P-384), computed here
-// with lib/ecdsa.resid and handed to the generic ExtractAndExpand and key
-// schedule.
+// shared secrets and plaintexts, under every KEM (the NIST curves'
+// Diffie-Hellman is lib/ecdsa.resid's generic ecdhg).
 //
 // Every failure (an unknown suite, a peer key off the curve, a bad tag)
 // is a context with ok = false or None, never an abort.
@@ -30,68 +28,19 @@ import "aesgcm.resid";
 import "chacha.resid";
 import "hpkeg.resid";
 
-Curve kem_curve(Int kem) { return if (kem == 17) { P384 } else { P256 }; }
-
 // The public key of sk, serialized (uncompressed point, or 32 bytes).
-pub List(Int) hpke_public_key(Int kem, List(Int) sk) {
-    if (kem == 32) { return x25519_public(sk); }
-    if (!hpke_kem_ok(kem)) { return []; }
-    return ec_public_key(kem_curve(kem), sk);
-}
+pub List(Int) hpke_public_key(Int kem, List(Int) sk) { return hpkeg_public_key(kem, sk); }
 
 pub type HpkeKeyPair = { Bool ok; List(Int) sk; List(Int) pk; };
 
-HpkeKeyPair kp_bad() { return HpkeKeyPair {.ok = false, .sk = [], .pk = []}; }
+HpkeKeyPair kp_of(HpkeKeyPairG(Int) g) { return HpkeKeyPair {.ok = g.ok, .sk = g.sk, .pk = g.pk}; }
 
 // DeriveKeyPair (§7.1.3): deterministic keys from input keying material,
 // for tests and for keys derived from a sealed secret.
-pub HpkeKeyPair hpke_derive_keypair(Int kem, List(Int) ikm) {
-    if (!hpke_kem_ok(kem)) { return kp_bad(); }
-    if (kem == 32) {
-        HpkeKeyPairG(Int) g = hpkeg_derive_keypair(kem, ikm);
-        return HpkeKeyPair {.ok = g.ok, .sk = g.sk, .pk = g.pk};
-    }
-    List(Int) sid = hpke_kem_suite_id(kem);
-    List(Int) none = [];
-    return dkp_candidate(kem, sid, hpkeg_labeled_extract(hpke_kem_kdf(kem), sid, none, "dkp_prk", ikm), 0);
-}
-
-// Candidates until one is a valid scalar (the bitmask is 0xFF for both
-// NIST curves here, so the candidate is used as is).
-HpkeKeyPair dkp_candidate(Int kem, List(Int) sid, List(Int) prk, Int counter) {
-    if (counter > 255) { return kp_bad(); }
-    List(Int) sk = hpkeg_labeled_expand(hpke_kem_kdf(kem), sid, prk, "candidate", [counter], hpke_kem_nsk(kem));
-    List(Int) pk = ec_public_key(kem_curve(kem), sk);
-    if (pk.len() > 0) { return HpkeKeyPair {.ok = true, .sk = sk, .pk = pk}; }
-    return dkp_candidate(kem, sid, prk, counter + 1);
-}
+pub HpkeKeyPair hpke_derive_keypair(Int kem, List(Int) ikm) { return kp_of(hpkeg_derive_keypair(kem, ikm)); }
 
 // A fresh key pair from the operating system's randomness.
 pub HpkeKeyPair hpke_generate_keypair(Int kem) { return hpke_derive_keypair(kem, random_bytes(hpke_kem_nsk(kem))); }
-
-// Encap / AuthEncap on a NIST curve with ephemeral key pair e; skS empty
-// for no auth.
-HpkeEncapG(Int) nist_encap(Int kem, List(Int) pkR, HpkeKeyPair e, List(Int) skS) {
-    HpkeEncapG(Int) bad = HpkeEncapG {.ok = false, .shared = [], .enc = []};
-    if (!e.ok) { return bad; }
-    Bool auth = skS.len() > 0;
-    List(Int) dh1 = ecdh(kem_curve(kem), e.sk, pkR);
-    List(Int) dh2 = if (auth) { ecdh(kem_curve(kem), skS, pkR) } else { [] };
-    if (dh1.len() == 0 || (auth && dh2.len() == 0)) { return bad; }
-    List(Int) pkS = if (auth) { hpke_public_key(kem, skS) } else { [] };
-    return HpkeEncapG {.ok = true, .shared = hpkeg_extract_and_expand(kem, dh1.concat(dh2), e.pk.concat(pkR).concat(pkS)), .enc = e.pk};
-}
-
-// Decap / AuthDecap on a NIST curve; pkS empty for no auth.
-List(Int) nist_decap(Int kem, List(Int) enc, List(Int) skR, List(Int) pkS) {
-    Bool auth = pkS.len() > 0;
-    List(Int) dh1 = ecdh(kem_curve(kem), skR, enc);
-    List(Int) dh2 = if (auth) { ecdh(kem_curve(kem), skR, pkS) } else { [] };
-    if (dh1.len() == 0 || (auth && dh2.len() == 0)) { return []; }
-    List(Int) pkR = hpke_public_key(kem, skR);
-    if (pkR.len() == 0) { return []; }
-    return hpkeg_extract_and_expand(kem, dh1.concat(dh2), enc.concat(pkR).concat(pkS));
-}
 
 // ─── Key schedule (§5.1) ─────────────────────────────────────────────
 
@@ -116,25 +65,12 @@ pub type HpkeSender = { HpkeCtx ctx; List(Int) enc; };
 // Every sender setup (§5.1.2-5.1.4): mode from which of psk and skS are
 // given; ikmE pins the ephemeral key (tests), empty draws a fresh one.
 pub HpkeSender hpke_setup_sender_full(HpkeSuite s, List(Int) pkR, List(Int) info, List(Int) psk, List(Int) psk_id, List(Int) skS, List(Int) ikmE) {
-    if (s.kem == 32) {
-        HpkeSenderG(Int) g = hpkeg_setup_sender_full(s, pkR, info, psk, psk_id, skS, ikmE);
-        return HpkeSender {.ctx = ctx_of(g.ctx), .enc = g.enc};
-    }
-    HpkeSender bad = HpkeSender {.ctx = hpke_ctx_bad(s), .enc = []};
-    if (!hpke_suite_ok(s)) { return bad; }
-    HpkeKeyPair e = if (ikmE.len() > 0) { hpke_derive_keypair(s.kem, ikmE) } else { hpke_generate_keypair(s.kem) };
-    HpkeEncapG(Int) en = nist_encap(s.kem, pkR, e, skS);
-    if (!en.ok) { return bad; }
-    HpkeCtxG(Int) c = hpkeg_key_schedule(s, hpke_mode(psk.len() > 0, skS.len() > 0), en.shared, info, psk, psk_id);
-    return HpkeSender {.ctx = ctx_of(c), .enc = en.enc};
+    HpkeSenderG(Int) g = hpkeg_setup_sender_full(s, pkR, info, psk, psk_id, skS, ikmE);
+    return HpkeSender {.ctx = ctx_of(g.ctx), .enc = g.enc};
 }
 
 pub HpkeCtx hpke_setup_receiver_full(HpkeSuite s, List(Int) enc, List(Int) skR, List(Int) info, List(Int) psk, List(Int) psk_id, List(Int) pkS) {
-    if (s.kem == 32) { return ctx_of(hpkeg_setup_receiver_full(s, enc, skR, info, psk, psk_id, pkS)); }
-    if (!hpke_suite_ok(s)) { return hpke_ctx_bad(s); }
-    List(Int) shared = nist_decap(s.kem, enc, skR, pkS);
-    if (shared.len() == 0) { return hpke_ctx_bad(s); }
-    return ctx_of(hpkeg_key_schedule(s, hpke_mode(psk.len() > 0, pkS.len() > 0), shared, info, psk, psk_id));
+    return ctx_of(hpkeg_setup_receiver_full(s, enc, skR, info, psk, psk_id, pkS));
 }
 
 // Base mode (the common case).

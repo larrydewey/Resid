@@ -20,7 +20,7 @@ HttpReply handle(HttpRequest r) {
     return http_reply_text(200, "text/plain; charset=utf-8", "hello from the tls client\n");
 }
 
-@requires(args, filesystem(readonly), network(readonly), clock(readonly))
+@requires(args, filesystem(readonly), network(readonly), clock(readonly), declassify)
 Int main() {
     if (args.count() > 1 && args.get(1) == "parse") {
         // The address parser on its own: what a literal names in bytes, and
@@ -47,7 +47,7 @@ Int main() {
     List(List(Int)) chain = tls_chain_load("tests/tls/fixtures/srv.pem");
     Int lfd = http_listen(0);
     Int port = http_bound_port(lfd);
-    Result(Int, RegionError) worker = spawn (network(readonly), filesystem(readonly)) {
+    Result(Int, RegionError) worker = spawn (network(readonly), filesystem(readonly), declassify) {
         return tls_accept_loop(lfd, tls_cfg(key, chain, ["http/1.1"]), lambda(r) { handle(r) }, http_limits(), 1);
     };
     TrustStore store = trust_store_load("tests/tls/fixtures/srvca.pem");

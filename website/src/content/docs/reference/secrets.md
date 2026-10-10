@@ -202,12 +202,13 @@ List(Int) sig = ed25519g_sign(seed, msg);     // msg is public
 ```
 
 `lib/hpkeg.resid` is HPKE (RFC 9180) written once over all of the above:
-the labeled HKDF over HKDF-SHA256/384/512, DHKEM(X25519, HKDF-SHA256),
-the key schedule in all four modes, the per-message nonces, seal and open
-over AES-128/256-GCM and ChaCha20-Poly1305, and the exporter.
-`lib/hpke.resid`'s API is the public copy; its NIST-curve KEMs (P-256,
-P-384) are public only for now, their Diffie-Hellman computed there and
-handed to the generic key schedule. At secret types the private keys
+the labeled HKDF over HKDF-SHA256/384/512, the three KEMs
+(DHKEM(X25519, HKDF-SHA256), and DHKEM(P-256, HKDF-SHA256) and
+DHKEM(P-384, HKDF-SHA384) over `ecdhg` and `ec_public_keyg`), the key
+schedule in all four modes, the per-message nonces, seal and open over
+AES-128/256-GCM and ChaCha20-Poly1305, and the exporter.
+`lib/hpke.resid`'s API is the public copy; no suite has a public-only
+path. At secret types the private keys
 (recipient, sender, ephemeral), the shared secret, the PSK, the key
 schedule's secret, key, base_nonce and exporter secret, each nonce and the
 plaintext are secret bytes; public keys, `enc`, `info`, `psk_id`, the
@@ -217,8 +218,9 @@ secret bytes) reaches the AEADs' `aes_gcmg_seal_ivb` and
 `chacha20poly1305g_seal_nb`, which take the IV as bytes `B` so it stays
 secret. Sealing returns a secret ciphertext the caller declassifies to
 send; opening publishes the tag verdict through `CtSame(B)`, and the KEM
-publishes the derived public keys (`X25519Pub(B)`) and the all-zero check,
-so the secret copies need `@requires(declassify)`.
+publishes the derived public keys (`X25519Pub(B)`, or the curve's open
+verb), the all-zero check and, for the NIST curves, whether a candidate
+or peer key is usable, so the secret copies need `@requires(declassify)`.
 
 ```text
 HpkeKeyPairG(Secret(UInt(8))) r = hpkeg_derive_keypair(32, secret_bytes(read_ikm()));
@@ -230,6 +232,42 @@ List(Secret(UInt(8))) key = secret_bytes(read_key());
 List(Secret(UInt(8))) prk = hkdf256g_extract(salt_lifted, key);
 List(Secret(UInt(8))) okm = hkdf256g_expand(prk, info_lifted, 32);
 ```
+
+`lib/tls.resid` is the TLS 1.3 key schedule (RFC 8446 §7.1), Finished
+(§4.4.4) and AES-128-GCM record protection (§5.2), written once over the
+byte type (`tlsg_*`, on `lib/sha256g.resid`'s HKDF and
+`lib/aesgcmg.resid`'s `aes_gcmg_seal_ivb` / `aes_gcmg_decrypt_ivb`); its
+`List(Int)` functions (`tls_handshake_secret`, `tls_traffic_key`,
+`tls_protect`, ...) are the public copy. The server (`lib/tlsserver.resid`)
+and client (`lib/tlsclient.resid`) run the secret copy: the x25519
+ephemeral key and shared secret (`lib/x25519g.resid`), the early,
+handshake and master secrets, the four traffic secrets, the finished
+keys, and the record keys and IVs (`TlsKeys`) are `List(Secret(UInt(8)))`,
+and each record's nonce (the IV xor the sequence number) is computed in
+secret bytes. The server's signing key (`lib/tlskey.resid`'s `ServerKey`,
+Ed25519 or ECDSA P-256/P-384) is held as secret bytes once parsed (the
+key file's bytes are public until the parser hands them over, a brief
+window) and signs CertificateVerify with `ed25519g_sign` /
+`ecdsag_sign_digest`. Transcript hashes, labels, lengths and sequence
+numbers are public. What leaves is public by design: the key share, the
+signature, and through `TlsPublish(B)` (in `lib/tls.resid`, one
+declassification each, with its reason) the record ciphertext, the
+plaintext of an authenticated record handed to the application, and the
+Finished MAC; a record's tag and the peer's Finished publish one bit
+through `CtSame(B)`. So every program that runs a handshake or a record
+-- a TLS server (`tls_accept_loop`, `tls_stream_loop`), a client
+(`tls_client_connect`, `tls_https_get`), and their spawn lists -- needs
+`@requires(declassify)`.
+
+```text
+List(Secret(UInt(8))) shared = x25519g_shared(priv, client_share);
+List(Secret(UInt(8))) hs = tlsg_handshake_secret(shared);
+List(Secret(UInt(8))) s_hs = tlsg_s_hs_traffic(hs, transcript_hash);
+List(Int) record = tlsg_protect(seq, tlsg_traffic_key(s_hs), tlsg_traffic_iv(s_hs), content, 22);  // ciphertext published
+```
+
+With TLS, every key handled by the cryptography library is a secret at
+run time: step 2 of the plan's migration is complete.
 
 ## Constant-time helpers
 
@@ -273,5 +311,8 @@ not covered. `main` runs on its own thread stack, which is.
 
 ## Not yet enforced
 
-`PLAN-secret-type.md` lists the rest of the plan: moving the rest of the
-cryptography library (the TLS key schedule) onto the word behaviors.
+The cryptography library's migration onto the word behaviors is complete
+(TLS was the last). `PLAN-secret-type.md` lists the rest of the plan: a
+run-time check of the `declassify` grant (`declassify` lowers to nothing,
+so the static check is the whole check today) and generating
+`tests/ct`'s cases from the graph.

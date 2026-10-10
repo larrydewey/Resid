@@ -59,9 +59,23 @@ ChaCha20-Poly1305), generic over `Word`, `Word64`, `Block128` and
 public only until those curves are generic; faster than before, the
 SHA-384/512 KDFs about 8x); the AEADs gained nonce-in-`B` entry points
 (`aes_gcmg_seal_ivb`, `chacha20poly1305g_seal_nb` and their opens) so
-base_nonce stays secret. Next is the TLS key schedule. Still to do: a
+base_nonce stays secret. HPKE's NIST-curve KEMs moved onto the generic
+curves (2026-10-09): DHKEM(P-256) and DHKEM(P-384) run on `ecdhg` /
+`ec_public_keyg`, so `lib/hpkeg.resid` has no public-only path and its
+secret API runs every suite. The TLS 1.3 key schedule and record layer
+are in (2026-10-09), the last of the library: `lib/tls.resid`'s
+`tlsg_*` (HKDF-Expand-Label over `hkdf256g`, Finished, AES-128-GCM
+records over `aes_gcmg_*_ivb` with the nonce IV xor seq computed in B)
+with its `List(Int)` API as the public copy; the server and client hold
+the x25519 key and shared secret, every secret of the schedule and the
+record keys as `List(Secret(UInt(8)))`, and the server's signing key is
+secret once parsed. Ciphertext, an authenticated record's plaintext and
+the Finished MAC leave through `TlsPublish(B)` (a declassification each);
+so the TLS server, client and transport, and every program using them,
+carry `@requires(declassify)`. Checked against RFC 8448 at both types
+and under valgrind. **Step 2 of §7 is complete.** Still to do: a
 force-time `resid_cap_check("declassify")` (declassify lowers to nothing,
-so the static check is the whole check today), and steps 2–3 of §7.
+so the static check is the whole check today), and step 3 of §7.
 
 **Goal**: make "this value is a secret" knowledge the compiler holds and
 enforces, so that code which branches on, indexes with, prints, compares
