@@ -367,7 +367,17 @@ An integer literal takes its type from its context:
     magnitudes within 64 bits yield plain Int(64).
 
 A literal that does not fit its adopted type is a
-compile-time error at every width. Literal adoption does
+compile-time error at every width and in every base
+(decimal, 0x, 0b, 0o), also under `rt` (which keeps the
+value from the reducer, not from the check), as a list
+element, and as the operand of a cast to an integer type;
+it never wraps. Only a literal under a unary minus may
+reach the negative bound (-2^(N-1)). Arithmetic on literals
+is checked at the literals' type like any other (§6.5):
+`9223372036854775807 + 1` traps; a value the reducer folds
+at a wider type and that does not fit the type it flows
+into is a checked conversion that aborts, never a
+truncation. Literal adoption does
 not reach through `if` / `match` arms: arms must agree in
 type (§18), so write `i128(0)` in an arm that must match an
 Int(128) arm.

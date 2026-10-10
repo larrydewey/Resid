@@ -2350,8 +2350,13 @@ GT lw_lit(LW w, Int id, GT c) {
     if (lk == "int") {
         Str lv = lit_dec_cg(t);
         Int dl = str_len_1(lv);
-        Str w1 = if (dl > 18) { "Int(128)" } else { "Int" };
-        Str w2 = if (dl > 38) { "Int(256)" } else { w1 };
+        // The narrowest of Int(64), Int(128), Int(256) that holds the value
+        // (§6.1a), so arithmetic on two literals that fit Int is checked
+        // at Int rather than done wider and truncated.
+        Bool fits64 = dl < 19 || (dl == 19 && lv <= "9223372036854775807");
+        Bool fits128 = dl < 39 || (dl == 39 && lv <= "170141183460469231731687303715884105727");
+        Str w1 = if (fits64) { "Int" } else { "Int(128)" };
+        Str w2 = if (fits128) { w1 } else { "Int(256)" };
         // Int(256) holds at most 2^255 - 1, 77 digits only up to 5.7e76; a
         // literal past 512 bits takes the next multiple of 64 that holds it.
         Int big = ((dl * 3322) / 1000 + 2 + 63) / 64 * 64;
@@ -3004,7 +3009,7 @@ GT lw_call(LW w, Int id, List(Str) env, GT c) {
             if (na != 1) { return lw_gerr("conversion arity", c); }
             GT a = lw_expr(w, lw_kid(w, id, 0), env, c);
             if (a.err != "") { return a; }
-            GT cv = pick_gt(str_starts_with(n, "wrapping_"), widen_val(a, conv_to), conv_checked(a, conv_to));
+            GT cv = pick_gt(str_starts_with(n, "wrapping_"), widen_wrap(a, conv_to), conv_checked(a, conv_to));
             return GT {.pos = 0, .val = cv.val, .ty = conv_to, .cnt = 0, .err = "", .glines = cv.glines, .lines = cv.lines, .tmp = cv.tmp, .lbl = cv.lbl, .tail = false};
         }
         if (cg_arith_family(n)) { return lw_arith(w, id, n, env, c); }
