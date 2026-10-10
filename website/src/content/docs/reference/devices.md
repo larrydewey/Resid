@@ -45,7 +45,7 @@ marked secret ([secret values](/Resid/reference/secrets/)); never as
 | Module | Descriptors | Grant |
 |---|---|---|
 | `dev/sev_guest.resid` | `sev_guest.snp_get_report` (SNP attestation report) | `device(readonly)` |
-| `dev/sev_guest_key.resid` | `sev_guest.snp_get_derived_key` (a sealing key, secret) | `device` |
+| `dev/sev_guest_key.resid` | `sev_guest.snp_get_derived_key` (a sealing key, secret) | `device`, `declassify` (only the response's status word is published) |
 
 ## Modes
 
@@ -57,8 +57,15 @@ from the literal the descriptor argument names; one it cannot read counts as
 a write. `device` works in spawn lists, sandboxes and manifest ceilings like
 any family.
 
-`device` names the provider everywhere: a binding or function called
-`device` is refused.
+`write` is a label reviewed with each descriptor in `lib/dev/`, not
+something the compiler proves; but an ioctl that only sends data
+(`_IOC_WRITE`, no Out or InOut field) marked `write = false` is refused
+(`E0263`). The runtime's read entry also refuses a request that says it
+writes.
+
+`device` names the provider everywhere: a binding (a pattern such as
+`if (Some(device) = x)` included), function, type, variant or import alias
+called `device` is refused.
 
 ## The generic verbs
 
@@ -80,7 +87,10 @@ its length is filled in and read back by the engine. Outputs come back in
 field order as `OutNum`, `OutBytes` or `OutSecret`.
 
 A program may call a verb itself, but only with a descriptor from
-`lib/dev/`: writing a descriptor literal anywhere else is `E0260`.
+`lib/dev/`: writing a descriptor literal anywhere else is `E0260`, and so
+is passing a record of another type with the same fields. "`lib/dev/`" is
+the standard library's, compared by absolute path: with `RESID_HOME`
+unset the library root is relative and no file counts.
 
 ## Checks
 
@@ -90,17 +100,18 @@ be known, and is checked:
 | Code | Rule |
 |---|---|
 | `E0260` | descriptors, the `@descriptor` annotation, the engine and `resid_device_call` belong to `lib/dev/` |
-| `E0261` | a dependency reaches only the descriptors its manifest's `devices = [...]` names |
+| `E0261` | a dependency reaches only the descriptors its manifest's `devices = [...]` names, behavior instances it could dispatch to included; a sub-dependency without a bound gets its parent's |
 | `E0262` | the descriptor is known after reduction (not chosen or computed at run time) |
-| `E0263` | `_IOC_SIZE` is the struct size and the direction bits cover the fields; fields inside the struct and apart; Scalars of 1, 2, 4 or 8 bytes; pointers 8-byte aligned; buffers with a maximum; length fields are Scalars; the path under `/dev/` or `/sys/` without `..`; one request number for the build's target |
+| `E0263` | `_IOC_SIZE` is the struct size and the direction bits cover the fields; fields inside the struct and apart; Scalars of 1, 2, 4 or 8 bytes; pointers 8-byte aligned; buffers with a maximum; length fields are Scalars; the path under `/dev/` or `/sys/` without `..`; one request number for the build's target; a descriptor marked `write = false` is not an ioctl that only sends |
 | `E0264` | a Sequence's links go forward from a Scalar output to a Scalar input of one width; only the last step has outputs; one path |
 
 These run on the reduced program: `--profile check` does not make them.
 
 ## Provenance
 
-The signed provenance record lists every descriptor the program reaches from
-its entry points, and `residc verify` prints them:
+The signed provenance record lists every descriptor the program holds --
+reached from an entry point or not, so an imported module's descriptors are
+listed even when unused -- and `residc verify` prints them:
 
 ```text
 attestation: device sev_guest.snp_get_report (ioctl /dev/sev-guest, request 0xc0205300, uapi)
