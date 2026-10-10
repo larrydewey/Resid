@@ -495,6 +495,38 @@ printf '[package]\nname = "dtr"\nversion = "0.1.0"\n\n[capabilities]\ngrant = ["
 printf 'import "dmid";\nInt main() { println(f"{dmid_n()}"); return 0; }\n' > "$W/dtr/src/main.resid"
 (cd "$ROOT" && "$MAN" deps "$W/dtr/resid.toml") > "$W/dtr.out" 2>&1
 if [ $? -ne 0 ] && grep -q "outside the devices granted to 'dmid'" "$W/dtr.out"; then ok; else bad "pkg_device_ceiling: a sub-dependency's wider bound: $(head -3 "$W/dtr.out")"; fi
+# One with no bound of its own under a bounded parent inherits the parent's,
+# so it gets a `@devices` line of its own rather than no bound at all.
+sed -i 's/devices = \["sev_guest", "tpm"\]//' "$W/dmid/resid.toml"
+sed -i 's/devices = \["sev_guest"\]/devices = ["tsm_report"]/' "$W/dtr/resid.toml"
+(cd "$ROOT" && "$MAN" depmap "$W/dtr/resid.toml" "$W/dtr.depmap") > /dev/null 2>&1
+if grep -qx '@devices::probe::tsm_report' "$W/dtr.depmap"; then ok; else bad "pkg_device_ceiling: an unbounded sub-dependency did not inherit its parent's bound: $(grep @devices "$W/dtr.depmap")"; fi
+
+# A dependency reaches an instance's functions by dispatch wherever the
+# instance is declared: here `sort` in a bounded dependency calls the
+# program's Ord instance, whose compare asks for a report, so the bound
+# must cover it (E0261).
+mkpkg "$W/dsort" dsort 1.0.0 $'pub type BTok = { Int x; };\n@requires(device(readonly))\npub Int sorted_first(Int n) { return sort([BTok {.x = n}, BTok {.x = n + 1}])[0].x; }'
+mkdir -p "$W/dsapp/src"
+printf '[package]\nname = "dsapp"\nversion = "0.1.0"\n\n[capabilities]\ngrant = ["device(readonly)"]\n\n[dependencies.dsort]\npath = "../dsort"\ncapabilities = ["device(readonly)"]\ndevices = ["tsm_report"]\n' > "$W/dsapp/resid.toml"
+cat > "$W/dsapp/src/main.resid" <<'EOF2'
+import "dsort";
+import "dev/sev_guest.resid";
+@requires(device(readonly))
+Int btok_cmp(BTok a, BTok b) {
+    Int r = match (snp_get_report([(UInt(8))(rt 0)], 0)) { Ok(x) => 0, Err(e) => 1, };
+    return a.x - b.x + r * 0;
+}
+@requires(device(readonly))
+BTok btok_min(BTok a, BTok b) { return if (btok_cmp(a, b) <= 0) { a } else { b }; }
+@requires(device(readonly))
+BTok btok_max(BTok a, BTok b) { return if (btok_cmp(a, b) >= 0) { a } else { b }; }
+Ord(BTok) = { .compare = btok_cmp, .least = btok_min, .greatest = btok_max };
+@requires(device(readonly))
+Int main() { println(f"{sorted_first(rt 1)}"); return 0; }
+EOF2
+(cd "$ROOT" && "$MAN" build "$W/dsapp/resid.toml" "$COMPILER") > "$W/dsapp.out" 2>&1
+if [ $? -ne 0 ] && grep -q "E0261.*dsort.*sev_guest.snp_get_report" "$W/dsapp.out"; then ok; else bad "pkg_device_ceiling: a dependency's dispatch to an instance escaped its bound: $(grep -m1 -iE 'error|wrote' "$W/dsapp.out")"; fi
 
 # `resid-manifest test` resolves dependencies, writes the depmap, then hands
 # discovery to the driver's own `test` mode (SPEC-testing.md §7.1).

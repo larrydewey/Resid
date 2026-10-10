@@ -14,8 +14,8 @@
 //     input of one width, with outputs only on the last step (E0264);
 //   - a manifest's `devices = [...]` bound on a dependency must cover every
 //     descriptor that dependency's code reaches (E0261);
-//   - every descriptor reached from the program's entry points is recorded
-//     for the provenance record (`devices`);
+//   - every descriptor the residual program holds is recorded for the
+//     provenance record (`devices`), reached from an entry point or not;
 //   - each verb becomes a call of lib/dev/device.resid's engine for it,
 //     which serializes the descriptor and inputs for the runtime's device
 //     host and validates the reply.
@@ -68,8 +68,10 @@ pub DvPost dv_post(KP p, Str src, Str smap, Str pk, Bool a64) {
     Map(Str, Int) own = dv_owners(g, fns.ids, dv_set(calls, 0, {}), 0, {});
     Bool over = dv_bounds(g, p.id, fns, own, calls, r.ds, nls, smap, str_split(pk, "\n"), 0, src);
     if (over) { return DvPost {.bad = true, .p = p, .devs = []}; }
-    List(Int) reach = dv_reach_from(g, fns, dv_roots(g, p.id, fns, nls, smap, ""), 0, {});
-    List(Str) devs = dv_records(own, calls, r.ds, reach, a64, 0, ListBuf());
+    // Every verb the residual program holds is recorded, reached from an
+    // entry point or not: the record over-approximates rather than missing
+    // one an unusual call path (a closure, a dispatch) reaches.
+    List(Str) devs = dv_records(calls, r.ds, a64, 0, ListBuf());
     KP p2 = KP {.g = dv_rewrite(g, calls, r.ds, eng, 0), .id = p.id, .pos = p.pos, .err = p.err};
     return DvPost {.bad = false, .p = p2, .devs = dv_sorted_distinct(devs)};
 }
@@ -658,7 +660,9 @@ Int dv_link_into(DvD d, Int ts, Int to, Int i, Int n) {
 
 // ─── Functions, reachability and dependency bounds (E0261) ──────────
 
-type DvFn = { Map(Str, Int) names; List(Int) ids; };
+// Functions by name (every declaration of a name, should two sandboxes
+// declare one), and every function and test node.
+type DvFn = { Map(Str, List(Int)) names; List(Int) ids; };
 
 // Top-level functions (inside sandboxes too) by name.
 DvFn dv_fns(Kg g, Int id, Int i, DvFn acc) {
@@ -666,19 +670,30 @@ DvFn dv_fns(Kg g, Int id, Int i, DvFn acc) {
     Int d = kg_kid(g, id, i);
     KN n = g.ns[d];
     if (n.kind == "sandbox") { return dv_fns(g, id, i + 1, dv_fns(g, d, 0, acc)); }
-    if (n.kind == "fn" || n.kind == "test") { return dv_fns(g, id, i + 1, DvFn {.names = if (n.kind == "fn") { acc.names.insert(n.text, d) } else { acc.names }, .ids = acc.ids.concat([d])}); }
+    if (n.kind == "fn" || n.kind == "test") {
+        List(Int) prev = acc.names.get(n.text) else { [] };
+        return dv_fns(g, id, i + 1, DvFn {.names = if (n.kind == "fn") { acc.names.insert(n.text, prev.concat([d])) } else { acc.names }, .ids = acc.ids.concat([d])});
+    }
     return dv_fns(g, id, i + 1, acc);
 }
 
+// The functions named `n` ([] when none).
+List(Int) dv_fn_ids(DvFn fns, Str n) { return fns.names.get(n) else { [] }; }
+
 // Function and test nodes whose package is `pkg` ("" for the program's
 // entry points: main, tests, and every function behaviors name; all
-// functions when there is neither main nor a test).
+// functions when there is neither main nor a test). A dependency's code
+// reaches an instance's functions by dispatch wherever the instance is
+// declared -- through a verb, and implicitly through `sort`, comparison
+// operators or an f-string hole -- so every function an instance names is
+// a root of each dependency too: the instance's device calls count
+// against the bound of any dependency that could dispatch to it.
 List(Int) dv_roots(Kg g, Int root, DvFn fns, List(Int) nls, Str smap, Str pkg) {
-    if (pkg != "") { return dv_pkg_fns(g, fns.ids, 0, nls, smap, pkg, ListBuf()); }
-    Int m = fns.names.get("main") else { 0 - 1 };
+    if (pkg != "") { return dv_pkg_fns(g, fns.ids, 0, nls, smap, pkg, ListBuf()).concat(dv_inst_fns(g, fns, 0, ListBuf())); }
+    List(Int) m = dv_fn_ids(fns, "main");
     List(Int) tests = dv_tests(g, fns.ids, 0, ListBuf());
-    if (m < 0 && tests.len() == 0) { return fns.ids; }
-    List(Int) base = if (m >= 0) { tests.concat([m]) } else { tests };
+    if (m.len() == 0 && tests.len() == 0) { return fns.ids; }
+    List(Int) base = tests.concat(m);
     return base.concat(dv_inst_fns(g, fns, 0, ListBuf()));
 }
 
@@ -697,8 +712,12 @@ List(Int) dv_inst_fns(Kg g, DvFn fns, Int id, ListBuf(Int) acc) {
 
 ListBuf(Int) dv_named(DvFn fns, List(Str) ws, Int i, ListBuf(Int) acc) {
     if (i >= ws.len()) { return acc; }
-    Int f = fns.names.get(ws[i]) else { 0 - 1 };
-    return dv_named(fns, ws, i + 1, if (f >= 0) { acc.push(f) } else { acc });
+    return dv_named(fns, ws, i + 1, dv_push_all(acc, dv_fn_ids(fns, ws[i]), 0));
+}
+
+ListBuf(Int) dv_push_all(ListBuf(Int) acc, List(Int) xs, Int i) {
+    if (i >= xs.len()) { return acc; }
+    return dv_push_all(acc.push(xs[i]), xs, i + 1);
 }
 
 // Identifier words of t.
@@ -744,8 +763,8 @@ List(Int) dv_reach_from(Kg g, DvFn fns, List(Int) q, Int qi, Map(Int, Int) seen)
 // The functions node `id`'s subtree calls or names.
 ListBuf(Int) dv_callees(Kg g, DvFn fns, Int id, ListBuf(Int) acc) {
     KN n = g.ns[id];
-    Int f = if (n.kind == "call" || n.kind == "ref" || n.kind == "mcall") { fns.names.get(n.text) else { 0 - 1 } } else { 0 - 1 };
-    return dv_callees_kids(g, fns, id, 0, if (f >= 0) { acc.push(f) } else { acc });
+    Bool use = n.kind == "call" || n.kind == "ref" || n.kind == "mcall";
+    return dv_callees_kids(g, fns, id, 0, if (use) { dv_push_all(acc, dv_fn_ids(fns, n.text), 0) } else { acc });
 }
 
 ListBuf(Int) dv_callees_kids(Kg g, DvFn fns, Int id, Int i, ListBuf(Int) acc) {
@@ -818,10 +837,9 @@ Bool dv_allowed(Str name, List(Str) allowed, Int i) {
 
 // ─── Provenance records ─────────────────────────────────────────────
 
-List(Str) dv_records(Map(Str, Int) own, List(Int) calls, List(DvD) ds, List(Int) reach, Bool a64, Int i, ListBuf(Str) acc) {
+List(Str) dv_records(List(Int) calls, List(DvD) ds, Bool a64, Int i, ListBuf(Str) acc) {
     if (i >= calls.len()) { return acc.finish(); }
-    if (!dv_inside(own, calls[i], reach, 0)) { return dv_records(own, calls, ds, reach, a64, i + 1, acc); }
-    return dv_records(own, calls, ds, reach, a64, i + 1, dv_record(ds[i], a64, acc));
+    return dv_records(calls, ds, a64, i + 1, dv_record(ds[i], a64, acc));
 }
 
 ListBuf(Str) dv_record(DvD d, Bool a64, ListBuf(Str) acc) {
