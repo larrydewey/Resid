@@ -491,7 +491,12 @@ pub List(B) aes_gcmg_seal_with(Bool hw, Bool clmul, List(B) key, List(Int) iv, L
     List(W) rk = aesg_key_expand(key);
     List(B) none = [];
     if (rk.len() == 0 || iv.len() == 0) { return none; }
-    GcmG(X, W) g = ag_gcm(aesg_keys_with(rk, hw), clmul, iv);
+    return ag_seal_g(ag_gcm(aesg_keys_with(rk, hw), clmul, iv), plaintext, aad);
+}
+
+// Seal under prepared GCM state (key schedule, H and J0).
+@needs(Word(W, B), Block128(X, W, B))
+List(B) ag_seal_g(GcmG(X, W) g, List(B) plaintext, List(Int) aad) {
     ListBuf(B) ob = ListBuf();
     List(B) ct = aesg_ctr(g.k, g.j0head, w_addk(g.j0c, 1), plaintext, 0, ob).finish();
     X z = x_lift((UInt(128)) 0);
@@ -513,7 +518,12 @@ pub Option(List(B)) aes_gcmg_decrypt_with(Bool hw, Bool clmul, List(B) key, List
     List(W) rk = aesg_key_expand(key);
     Int clen = ct_and_tag.len() - 16;
     if (rk.len() == 0 || iv.len() == 0 || clen < 0) { return None; }
-    GcmG(X, W) g = ag_gcm(aesg_keys_with(rk, hw), clmul, iv);
+    return ag_open_g(ag_gcm(aesg_keys_with(rk, hw), clmul, iv), ct_and_tag, clen, aad);
+}
+
+// Open under prepared GCM state; clen is the ciphertext length (>= 0).
+@needs(Word(W, B), Block128(X, W, B), CtSame(B))
+Option(List(B)) ag_open_g(GcmG(X, W) g, List(Int) ct_and_tag, Int clen, List(Int) aad) {
     X z = x_lift((UInt(128)) 0);
     X y = aesg_ghash_pub(g.clmul, g.h, aesg_ghash_pub(g.clmul, g.h, z, aad, 0, aad.len()), ct_and_tag, 0, clen);
     ListBuf(B) tb = ListBuf();
@@ -525,6 +535,59 @@ pub Option(List(B)) aes_gcmg_decrypt_with(Bool hw, Bool clmul, List(B) key, List
 @needs(Word(W, B), Block128(X, W, B), CtSame(B))
 pub Option(List(B)) aes_gcmg_decrypt(List(B) key, List(Int) iv, List(Int) ct_and_tag, List(Int) aad) {
     return aes_gcmg_decrypt_with(resid_cpu_has_aesni(), resid_cpu_has_clmul(), key, iv, ct_and_tag, aad);
+}
+
+// ── GCM with a 96-bit IV in B ───────────────────────────────────────
+//
+// For protocols whose nonce is itself key material (HPKE's base_nonce xor
+// the sequence number, a TLS write IV): the IV is 12 bytes of B, so at
+// secret types it stays secret. J0 is IV || 0^31 || 1, packed with masks
+// and shifts, never indexed by a byte's value.
+
+// Bytes 0..i of b, little-endian packed into a block.
+@needs(Word(W, B), Block128(X, W, B))
+X ag_le_pack(List(B) b, Int i, X v) {
+    if (i < 0) { return v; }
+    return ag_le_pack(b, i - 1, x_or(v, x_shl(x_from_byte(b[i]), i * 8)));
+}
+
+@needs(Word(W, B), Block128(X, W, B))
+GcmG(X, W) ag_gcm_ivb(AesKeyG(X, W) k, Bool clmul, List(B) iv) {
+    X z = x_lift((UInt(128)) 0);
+    X h = ag_swap(aesg_block(k, z), 0, z);
+    W one = w_lift(1);
+    return GcmG {.k = k, .clmul = clmul, .h = h, .j0head = ag_le_pack(iv, 11, z), .j0c = one};
+}
+
+// AES-GCM seal with a 12-byte IV in B: ciphertext || tag, or empty for a
+// bad key or an IV that is not 12 bytes. hw and clmul as in
+// aes_gcmg_seal_with.
+@needs(Word(W, B), Block128(X, W, B))
+pub List(B) aes_gcmg_seal_ivb_with(Bool hw, Bool clmul, List(B) key, List(B) iv, List(B) plaintext, List(Int) aad) {
+    List(W) rk = aesg_key_expand(key);
+    List(B) none = [];
+    if (rk.len() == 0 || iv.len() != 12) { return none; }
+    return ag_seal_g(ag_gcm_ivb(aesg_keys_with(rk, hw), clmul, iv), plaintext, aad);
+}
+
+@needs(Word(W, B), Block128(X, W, B))
+pub List(B) aes_gcmg_seal_ivb(List(B) key, List(B) iv, List(B) plaintext, List(Int) aad) {
+    return aes_gcmg_seal_ivb_with(resid_cpu_has_aesni(), resid_cpu_has_clmul(), key, iv, plaintext, aad);
+}
+
+// AES-GCM open with a 12-byte IV in B; None as aes_gcmg_decrypt_with, or
+// for an IV that is not 12 bytes. The verdict is public (CtSame(B)).
+@needs(Word(W, B), Block128(X, W, B), CtSame(B))
+pub Option(List(B)) aes_gcmg_decrypt_ivb_with(Bool hw, Bool clmul, List(B) key, List(B) iv, List(Int) ct_and_tag, List(Int) aad) {
+    List(W) rk = aesg_key_expand(key);
+    Int clen = ct_and_tag.len() - 16;
+    if (rk.len() == 0 || iv.len() != 12 || clen < 0) { return None; }
+    return ag_open_g(ag_gcm_ivb(aesg_keys_with(rk, hw), clmul, iv), ct_and_tag, clen, aad);
+}
+
+@needs(Word(W, B), Block128(X, W, B), CtSame(B))
+pub Option(List(B)) aes_gcmg_decrypt_ivb(List(B) key, List(B) iv, List(Int) ct_and_tag, List(Int) aad) {
+    return aes_gcmg_decrypt_ivb_with(resid_cpu_has_aesni(), resid_cpu_has_clmul(), key, iv, ct_and_tag, aad);
 }
 
 // ── AES key wrap (RFC 3394) ─────────────────────────────────────────

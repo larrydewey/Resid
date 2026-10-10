@@ -35,7 +35,15 @@ through `CtSame(B)`. X25519 is in (2026-10-09): `lib/x25519g.resid`, generic ove
 elements in parameters, mask swaps), with `lib/x25519.resid` as its public
 copy (as fast as before, about 12% faster); the zero-share verdict goes
 through `CtSame(B)` and the derived public key through `X25519Pub(B)`,
-both declassifying at secret types. Next are Ed25519, P-256/P-384, HPKE and the TLS
+both declassifying at secret types. HPKE is in (2026-10-09):
+`lib/hpkeg.resid` (labeled HKDF over HKDF-SHA256/384/512, DHKEM(X25519),
+the key schedule in all four modes, seal/open/export over AES-GCM and
+ChaCha20-Poly1305), generic over `Word`, `Word64`, `Block128` and
+`Wide512`, with `lib/hpke.resid` as its public copy (P-256/P-384 KEMs
+public only until those curves are generic; faster than before, the
+SHA-384/512 KDFs about 8x); the AEADs gained nonce-in-`B` entry points
+(`aes_gcmg_seal_ivb`, `chacha20poly1305g_seal_nb` and their opens) so
+base_nonce stays secret. Next are Ed25519, P-256/P-384 and the TLS
 key schedule. Still to do: a
 force-time `resid_cap_check("declassify")` (declassify lowers to nothing,
 so the static check is the whole check today), and steps 2–3 of §7.

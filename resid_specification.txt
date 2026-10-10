@@ -3235,6 +3235,17 @@ rounds and the carry-less multiply (aesni_enc_round,
 aesni_enc_last_round, gf128_mul_hw) take secrets, as they run
 in constant time, and keep the result secret. GCM open and
 key unwrap publish one bit each through CtSame(B).
+lib/hpkeg.resid (HPKE, RFC 9180: the labeled HKDF over
+HKDF-SHA256/384/512, DHKEM(X25519), the key schedule in all
+four modes, seal, open and export over AES-GCM and
+ChaCha20-Poly1305) is generic over the byte type and the
+behaviors above; lib/hpke.resid is its public copy, whose
+P-256/P-384 KEMs are public only. Private keys, the shared
+secret, the key schedule's secrets, nonces and plaintexts are
+secret bytes; the AEADs take the nonce in B (aes_gcmg_seal_ivb,
+chacha20poly1305g_seal_nb), so it stays secret. Derived public
+keys go through X25519Pub(B) and the tag verdict through
+CtSame(B), so the secret copy needs the declassify grant.
 
 Planned (PLAN-secret-type.md): the rest of the cryptography
 library on Word(T).

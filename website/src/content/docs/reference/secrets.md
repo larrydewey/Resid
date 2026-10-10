@@ -156,6 +156,30 @@ List(Secret(UInt(8))) sealed = aes_gcmg_seal(key, iv, secret_bytes(msg), aad);
 Option(List(Secret(UInt(8)))) dek = aes_key_unwrapg(key, wrapped);
 ```
 
+`lib/hpkeg.resid` is HPKE (RFC 9180) written once over all of the above:
+the labeled HKDF over HKDF-SHA256/384/512, DHKEM(X25519, HKDF-SHA256),
+the key schedule in all four modes, the per-message nonces, seal and open
+over AES-128/256-GCM and ChaCha20-Poly1305, and the exporter.
+`lib/hpke.resid`'s API is the public copy; its NIST-curve KEMs (P-256,
+P-384) are public only for now, their Diffie-Hellman computed there and
+handed to the generic key schedule. At secret types the private keys
+(recipient, sender, ephemeral), the shared secret, the PSK, the key
+schedule's secret, key, base_nonce and exporter secret, each nonce and the
+plaintext are secret bytes; public keys, `enc`, `info`, `psk_id`, the
+associated data, the received ciphertext and the sequence number are
+public. The nonce (base_nonce xor the sequence number, a public shift into
+secret bytes) reaches the AEADs' `aes_gcmg_seal_ivb` and
+`chacha20poly1305g_seal_nb`, which take the IV as bytes `B` so it stays
+secret. Sealing returns a secret ciphertext the caller declassifies to
+send; opening publishes the tag verdict through `CtSame(B)`, and the KEM
+publishes the derived public keys (`X25519Pub(B)`) and the all-zero check,
+so the secret copies need `@requires(declassify)`.
+
+```text
+HpkeKeyPairG(Secret(UInt(8))) r = hpkeg_derive_keypair(32, secret_bytes(read_ikm()));
+Option(List(Secret(UInt(8)))) dek = hpkeg_open_with(hpke_suite(32, 1, 1), enc, r.sk, info, aad, ct);
+```
+
 ```text
 List(Secret(UInt(8))) key = secret_bytes(read_key());
 List(Secret(UInt(8))) prk = hkdf256g_extract(salt_lifted, key);
@@ -205,5 +229,5 @@ not covered. `main` runs on its own thread stack, which is.
 ## Not yet enforced
 
 `PLAN-secret-type.md` lists the rest of the plan: moving the rest of the
-cryptography library (Ed25519, P-256/P-384, HPKE, the TLS key schedule)
+cryptography library (Ed25519, P-256/P-384, the TLS key schedule)
 onto the word behaviors.
