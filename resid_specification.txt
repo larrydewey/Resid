@@ -1488,7 +1488,11 @@ call of it reduce at compile time, with no step limit: a
 call with an argument that is not known, or one that does
 not reduce, is error E0903 (calls inside another `@fold`
 function are exempt; they reduce where that function's
-calls do). A malformed `@reduce` is E0904.
+calls do). A malformed `@reduce` is E0904. Both are
+ignored on a function inside a sandbox (an attenuated
+import, a dependency under its manifest ceiling): code
+under a ceiling does not choose how long its importer's
+build runs, so its calls get the default limits.
 
 What the compiler has may still run out first. The
 evaluator recurses on the compiler's stack; past its end
@@ -3414,9 +3418,17 @@ true, else device(readonly) covers it. The checker reads
 `write` from the literal the argument names before
 reduction (a call of a zero-argument function whose body
 returns the literal, or the literal itself); a descriptor
-it cannot read that way counts as a write. `device` is the
-provider in every scope: a binding or function of that name
-is refused.
+it cannot read that way counts as a write. `write` is a
+reviewed label of lib/dev/, not proved from the layout, but
+an ioctl that only sends data (_IOC_WRITE and no Out or
+InOut field) is refused as a read (E0263). `device` is the
+provider in every scope: a binding of that name (a local,
+parameter, loop variable, match arm, destructuring, pattern
+`Some(device) = x`), a function, type or variant, or an
+import alias `as device` is refused. A verb's descriptor is
+a value of the type lib/dev/device.resid declares for the
+verb; a record of another type with the same fields is
+refused (E0260).
 
 --------------------------------------------------
 49.3  Checks
@@ -3438,7 +3450,9 @@ reduction (Laws 1 and 5, E0262), and is then checked:
          /sys/kernel/config/) without `..`; the target the
          program is built for has exactly one request
          number; the name is lower-case words joined by `.`
-         and `_`.
+         and `_`; a descriptor marked `write = false` is
+         not an ioctl that only sends (_IOC_WRITE with no
+         Out or InOut field).
   E0264  a Sequence's links go forward, from a Scalar output
          to a Scalar input of one width, at most one into
          an input; its steps share its path; only its last
@@ -3448,9 +3462,12 @@ reduction (Laws 1 and 5, E0262), and is then checked:
          descriptors a dependency's code may reach, each
          entry a descriptor (`sev_guest.snp_get_report`) or
          a device module (`sev_guest`); reaching another is
-         refused. A dependency's own dependencies get at
-         most its bound, and a dependency declared twice
-         gets the narrowest.
+         refused. What a dependency reaches includes every
+         function a behavior instance names, wherever the
+         instance is declared (it may dispatch to any). A
+         dependency's own dependencies get at most its
+         bound (one that declares none gets its parent's),
+         and a dependency declared twice gets the narrowest.
 
 These checks run on the reduced program, so `--profile
 check` (type checking only) does not make them, and
@@ -3473,6 +3490,14 @@ The device host that performs the call in an isolated,
 seccomp-confined child process is PLAN-device-access.md §5;
 until it is built every call is Err(Unsupported).
 
-The provenance record lists the descriptors the program
-reaches (§34); the graph artifact records each verb as an
-effect naming its descriptor.
+The read entry refuses (Denied) a request that says it
+writes, so a write never travels under a read-only grant.
+A number output wider than its Scalar is a bad reply.
+
+The provenance record lists every descriptor the residual
+program holds (§34), called or not; the graph artifact
+records each verb as an effect naming its descriptor.
+
+E0260's "lib/dev/" is the standard library root's dev/
+directory by absolute path; when the root is not absolute
+(RESID_HOME unset), no file counts as lib/dev/.

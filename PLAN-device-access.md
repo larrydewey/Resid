@@ -17,9 +17,10 @@ until phase 2's host; E0260-E0264 (`compiler/gcheck.resid`,
 (`tools/resid-manifest.resid`); descriptors in the graph artifact and the
 provenance record (`devices`), shown by `residc verify`; the sample
 `lib/dev/sev_guest.resid` (SNP_GET_REPORT) and
-`lib/dev/sev_guest_key.resid` (SNP_GET_DERIVED_KEY). Tests: 14
-conformance cases (`device_*`, `err_device_*`), `tests/device` (25: one per
-E0263/E0264 rule against a private standard library), `tests/pkg`
+`lib/dev/sev_guest_key.resid` (SNP_GET_DERIVED_KEY). Tests: 19
+conformance cases (`device_*`, `err_device_*`), `tests/device` (27: one per
+E0263/E0264 rule against a private standard library, and E0260 with a
+relative library root), `tests/runtime/device_entry.c`, `tests/pkg`
 (`pkg_device_ceiling`), `tests/provenance` (`device_in_provenance`,
 `device_stability_in_provenance`).
 
@@ -78,8 +79,44 @@ path, the kind's own part, inputs) and answer the reply it documents (0 +
 outputs, or 1 + error code + value); the host must re-check the layout
 itself (it is not the compiler), choose the request number for
 `resid_raw_arch()`, set the interface version and check it after the
-call, and treat `resid_device_call` as read-only (refuse a request whose
-write byte is 1). The provenance and graph records are already there.
+call, and keep `resid_device_call` read-only (phase 1's stub already
+refuses, with Denied, a request whose write byte is not 0; the host must
+keep that). The provenance and graph records are already there.
+
+- **TODO (phase 2): secret slots.** A Buffer marked secret reaches the
+  engine inside the reply as ordinary bytes and is wrapped as
+  `Secret(UInt(8))` only there. The host must deliver secret slots in a
+  separate buffer, wiped after the engine copies them, so key material
+  never sits in the general reply.
+
+**Security review (2026-10-09), fixed:**
+
+- A local named `device` bound by a pattern (`if (Some(device) = x)`,
+  `Some(device) = x;`) escaped E0001 (the binder is the node's `aux`), and
+  the device pass then rewrote the program's own `device.ioctl(...)`
+  method call into the write engine with a look-alike record and no
+  grant. Now: every binder form and import aliases are checked
+  (`dv_rebinds`, `imp_resolve_lines_a`); after reduction a verb's
+  `device` must resolve to the builtin provider (`dv_is_provider_verb`,
+  on a resolution of the residual graph -- `rs_dense` now tolerates the
+  repeated uses a shared subtree gives); and the descriptor literal must
+  be of the role type `lib/dev/device.resid` declares, compared in full
+  (`dv_lit_type`, E0260).
+- The runtime's read entry refuses a write request; E0263 refuses an
+  ioctl that only sends labelled `write = false`. Otherwise `write` is a
+  reviewed label.
+- `snp_get_derived_key` checks the response status (declassified alone,
+  so it needs `declassify` as well as `device`) and `exitinfo2`.
+- The engine refuses a number output wider than its Scalar, and decodes
+  any 8-byte value without overflow (`dv_rd64`).
+- E0260's lib/dev/ test fails closed when the standard library root is
+  not absolute (`RESID_HOME` unset).
+- A sandbox's own `@fold` / `@reduce(steps = ...)` are ignored: its
+  functions evaluate under the default step limit (`gx_sb_nocap`).
+- Provenance lists every descriptor the residual program holds; a
+  dependency's reach includes every behavior instance's functions
+  (dispatch, `sort`, operators); a sub-dependency without a bound inherits
+  its parent's; functions are looked up by every declaration of a name.
 
 **Goal**: let a Resid program talk to kernel devices (ioctls on character
 devices, request/response devices such as `/dev/tpmrm0`, and configfs

@@ -1183,14 +1183,18 @@ DepResolveResult collect_sub_deps_at(List(Dependency) subs, Int i, Str parent_di
     // Its device bound, likewise, lies within its parent's.
     Str dover = if (parent == "") { "" } else { devices_over(sub.devices, parent_devs) };
     if (dover != "") { return dep_error(acc, "dependency '" + sub.name + "' (required by '" + parent + "') " + dover + ", which is outside the devices granted to '" + parent + "'"); }
+    // One that declares no bound of its own under a bounded parent gets the
+    // parent's, so it has a `@devices` line of its own: otherwise its code,
+    // which is not the parent's package, would reach any descriptor.
+    Str sdevs = if (parent != "" && sub.devices == "\x01") { parent_devs } else { sub.devices };
     // With both, `path` is the working copy when it is there (development)
     // and `version` comes from the registry when it is not (a published
     // package, extracted where its sibling checkouts are not).
     Bool use_path = sub.path != "" && (sub.version == "" || filesystem.is_dir(parent_dir + "/" + sub.path));
     DepResolveResult acc2 = if (use_path) {
-        collect_dep_path(sub.name, parent_dir + "/" + sub.path, sub.capabilities, sub.has_caps, sub.devices, sub.pubkey, reg, tp, acc, depth)
+        collect_dep_path(sub.name, parent_dir + "/" + sub.path, sub.capabilities, sub.has_caps, sdevs, sub.pubkey, reg, tp, acc, depth)
     } else if (sub.version != "") {
-        collect_dep_version(sub.name, sub.version, reg, if (reg.home != "") { reg.home } else { parent_dir }, sub.capabilities, sub.has_caps, sub.devices, sub.pubkey, tp, acc, depth)
+        collect_dep_version(sub.name, sub.version, reg, if (reg.home != "") { reg.home } else { parent_dir }, sub.capabilities, sub.has_caps, sdevs, sub.pubkey, tp, acc, depth)
     } else {
         dep_error(acc, "dependency '" + sub.name + "': needs either 'path' or 'version'")
     };

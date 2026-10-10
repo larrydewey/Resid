@@ -42,10 +42,10 @@ own), with the offending source line.
 | `E0257` | `Show`, `Serialize`, `Hash`, `Eq` or `Ord` given for, or asked of, a secret |
 | `E0258` | a secret integer wider than 32 bits in a list, builder, vector, map or set (`List(Secret(Int))`, `Secret(List(Int))`), written or inferred: list integers of 2^54 or more are boxed, a choice made on the value; use 32-bit or narrower elements (`UInt(8)` for bytes) and keep wider secrets in records and parameters |
 | `E0259` | a function named after a builtin of secret values (`secret`, `declassify`, `classify`, `secret_split`, `secret_join`, `ct_select`): it would replace the builtin in every module, libraries included |
-| `E0260` | a device descriptor (`@descriptor`, or a literal of a descriptor type) outside the standard library's `lib/dev/`; a call of the device engine or of `resid_device_call` other than by the compiler; a `device` verb without a descriptor from `lib/dev/` ([device access](/Resid/reference/devices/)) |
+| `E0260` | a device descriptor (`@descriptor`, or a literal of a descriptor type) outside the standard library's `lib/dev/`; a call of the device engine or of `resid_device_call` other than by the compiler; a `device` verb without a descriptor from `lib/dev/` (a record of another type with the same fields included) ([device access](/Resid/reference/devices/)) |
 | `E0261` | a dependency's code reaches a device descriptor outside its manifest bound `devices = [...]` |
 | `E0262` | a device verb's descriptor is not known after reduction |
-| `E0263` | a device descriptor's layout is inconsistent: request size or direction bits, fields outside the struct or overlapping, an unaligned pointer, a buffer without a maximum, a length field that is not a Scalar, a path outside `/dev/` and `/sys/` or with `..`, no request number for the target |
+| `E0263` | a device descriptor's layout is inconsistent: request size or direction bits, fields outside the struct or overlapping, an unaligned pointer, a buffer without a maximum, a length field that is not a Scalar, a path outside `/dev/` and `/sys/` or with `..`, no request number for the target, an ioctl that only sends data marked `write = false` |
 | `E0264` | a Sequence descriptor's links: backwards, not from a Scalar output to a Scalar input of one width, outputs before the last step, steps on another path |
 | `E0301` | a known value violates its constraint type |
 | `E0401` | a builder is not consumed on some path |

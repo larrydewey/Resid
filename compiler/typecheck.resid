@@ -661,13 +661,20 @@ RRes imp_resolve_lines_a(List(Str) lines, Int i, Int n, Str dir, Str sb, Str don
         // A missing module is an error, not an empty module.
         Bool missing = !str_contains(done, key) && !filesystem.exists(full);
         Bool mwarned = if (missing) { eprintln("error[E0221]: cannot find module `" + name + "` imported by " + path + " (looked for " + full + ")") } else { false };
-        RRes sub0 = if (missing) {
+        // `device` names the device provider everywhere (spec §49): an
+        // import alias of that name would turn `device.ioctl(...)` into a
+        // call of the module's own `ioctl`.
+        Bool devalias = alias == "device";
+        Bool dwarned = if (devalias) { eprintln("error[E0001]: type error: `device` is the device provider (spec §49) and cannot name an import (`import \"" + name + "\" as device`); choose another alias") } else { false };
+        RRes sub0 = if (devalias) {
+            RRes {.text = "import_alias_reserved\n", .done = done, .map = "", .nl = 1}
+        } else { if (missing) {
             RRes {.text = "import_not_found\n", .done = done, .map = "", .nl = 1}
         } else { if (str_contains(done, key)) {
             RRes {.text = if (clash) { "import_attenuation_conflict\n" } else { "" }, .done = done, .map = "", .nl = if (clash) { 1 } else { 0 }}
         } else {
             imp_resolve_file_vis(full, done, depth, depmap, sel, ml)
-        } };
+        } } };
         RRes sub1 = if (att && !clash) { RRes {.text = "sandbox (" + imp_att_caps(clause, ra + 10, 1, ra + 10) + ") { " + sub0.text + "}\n", .done = sub0.done, .map = sub0.map, .nl = sub0.nl + 1} } else { sub0 };
         // A manifest dependency compiles inside its declared ceiling.
         Str dcaps = if (depmap == "" || sub1.text == "" || full == dir + "/" + name || full == name) { "\x01" } else { depmap_caps_lines(str_split(depmap, "\n"), 0, depmap_dep_name(depmap, name)) };

@@ -5469,7 +5469,7 @@ GKT sec_cast(GK k, Int id, Str to, Str from0) {
 
 // The name of the type lib/dev/device.resid declares with
 // `@descriptor(role)`, or "" when no such module is imported.
-Str dv_role_ty(Kg g, Str role) { return dv_role_at(g, "@descriptor(" + role + ")", 0); }
+pub Str dv_role_ty(Kg g, Str role) { return dv_role_at(g, "@descriptor(" + role + ")", 0); }
 
 Str dv_role_at(Kg g, Str tag, Int i) {
     if (i >= g.ns.len()) { return ""; }
@@ -5542,12 +5542,20 @@ pub Str dv_finit_text(Kg g, Int st, Str f, Int i) {
 }
 
 // The standard library's device directory, "<stdroot>/dev/", from the
-// driver's "@stdroot::dir" line.
+// driver's "@stdroot::dir" line. Membership is by path prefix, so the root
+// must be absolute: a relative one ("lib" when RESID_HOME is unset) would
+// also match a project's own ./lib/dev/. Without an absolute root nothing
+// counts as lib/dev/ (dv_no_std, which no path starts with): fail closed.
 pub Str dv_std_dir(List(Str) pk, Int i) {
-    if (i >= pk.len()) { return "lib/dev/"; }
-    if (str_starts_with(pk[i], "@stdroot::")) { return imp_normalize(str_slice(pk[i], 10, str_len(pk[i]))) + "/dev/"; }
+    if (i >= pk.len()) { return dv_no_std(); }
+    if (str_starts_with(pk[i], "@stdroot::")) {
+        Str r = imp_normalize(str_slice(pk[i], 10, str_len(pk[i])));
+        return if (str_starts_with(r, "/")) { r + "/dev/" } else { dv_no_std() };
+    }
     return dv_std_dir(pk, i + 1);
 }
+
+pub Str dv_no_std() { return "\x01/dev/"; }
 
 // The descriptor kinds a program may not write a literal of.
 Bool dv_kind_tag(Str aux) {
@@ -5589,25 +5597,31 @@ Bool dv_call_cand(GK k, Int id, KN n) {
     return d >= 0 && k.g.ns[d].kind == "fn" && str_contains(k.g.ns[d].aux, "@descriptor(engine");
 }
 
-// `device` names the provider everywhere: a binding or function of that
-// name would make `device.ioctl(...)` mean something else.
+// `device` names the provider everywhere: a binding, function, type or
+// variant of that name would make `device.ioctl(...)` mean something else.
+// A pattern (`if (Some(device) = x)`, `Some(device) = x;`) keeps its
+// variant in `text` and binds the name in `aux`.
 Bool dv_rebinds(KN n) {
-    if (n.text != "device") { return false; }
     Str kd = n.kind;
-    return kd == "param" || kd == "bind" || kd == "rbind" || kd == "lparam" || kd == "for" || kd == "name" || kd == "fn" || kd == "letpat" || kd == "pat";
+    if (kd == "pat" || kd == "letpat") { return n.aux == "device"; }
+    if (n.text != "device") { return false; }
+    Bool local = kd == "param" || kd == "bind" || kd == "rbind" || kd == "lparam" || kd == "for" || kd == "name";
+    Bool decl = kd == "fn" || kd == "struct_t" || kd == "sum_t" || kd == "alias_t" || kd == "ctype_t" || kd == "cwhere_t" || kd == "variant" || kd == "behavior" || kd == "bdecl" || kd == "proto";
+    return local || decl;
 }
 
 // Every node is looked at, so the test for one worth a closer look reads
 // the node's fields in place (binding the whole node would copy it).
 Bool dv_scan(GK k, Int id, List(Int) nls, Str src, Str smap, Str stddev, Bool acc) {
     if (id >= k.g.ns.len()) { return acc; }
-    Bool cand = str_contains(k.g.ns[id].aux, "@descriptor") || k.g.ns[id].text == "device" || (k.g.ns[id].kind == "struct" && dv_struct_cand(k, k.g.ns[id])) || ((k.g.ns[id].kind == "call" || k.g.ns[id].kind == "ref") && dv_call_cand(k, id, k.g.ns[id]));
+    Bool cand = str_contains(k.g.ns[id].aux, "@descriptor") || k.g.ns[id].text == "device" || k.g.ns[id].aux == "device" || (k.g.ns[id].kind == "struct" && dv_struct_cand(k, k.g.ns[id])) || ((k.g.ns[id].kind == "call" || k.g.ns[id].kind == "ref") && dv_call_cand(k, id, k.g.ns[id]));
     if (!cand) { return dv_scan(k, id + 1, nls, src, smap, stddev, acc); }
     KN n = k.g.ns[id];
     Bool bad = if (!cand) { false } else {
         Str p = gk_src_path(k, id, nls, smap);
         Bool inlib = str_starts_with(p, stddev) && !str_contains(str_slice(p, str_len(stddev), str_len(p)), "/");
-        Str m = dv_misplaced(k, id, inlib);
+        Str m0 = dv_misplaced(k, id, inlib);
+        Str m = if (m0 != "" && stddev == dv_no_std()) { m0 + " (the standard library's location is not an absolute path, so no file counts as its lib/dev/: set RESID_HOME to an absolute path)" } else { m0 };
         Bool b1 = if (m != "") { dv_diag("E0260", m, k.g, id, src, smap) } else { false };
         Bool b2 = if (dv_rebinds(n)) { dv_diag("E0001", "type error: `device` is the device provider (spec §49) and cannot be rebound; choose another name", k.g, id, src, smap) } else { false };
         b1 || b2

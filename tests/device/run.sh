@@ -72,6 +72,26 @@ for f in "$CASES"/*.resid; do
     fi
     if [ -z "$why" ]; then echo "PASS $n"; pass=$((pass + 1)); else echo "FAIL $n: $why"; fail=$((fail + 1)); fi
 done
+# E0260 decides "in lib/dev/" by path prefix, so the standard library's
+# root must be absolute. Without RESID_HOME it is the relative `lib`, which
+# a project's own ./lib/dev/ also matches: then nothing counts as lib/dev/
+# and a descriptor there is refused, not trusted.
+if [ "$#" -eq 0 ] || [[ " $* " == *" e0260_relative_stdroot "* ]]; then
+    P="$WORK/relroot"; mkdir -p "$P/lib/dev" "$P/build/boot"
+    cp "$ROOT/lib/dev/device.resid" "$ROOT/lib/dev/device_write.resid" "$P/lib/dev/"
+    ln -s "$ROOT/build/boot/rt.ll" "$P/build/boot/rt.ll"
+    printf '%s\n' 'import "device.resid";' 'import "device_write.resid";' \
+        'pub IoctlOp own_op() { return IoctlOp {.name = "own.op", .path = "/dev/mem", .requests = dv_both(dv_iowr(77, 0, 16)), .size = 16, .fields = [Buffer(0, -1, 64, InOut, false), Scalar(8, 8, Out)], .write = true, .version = Unversioned, .stability = OutOfTree}; }' \
+        '@requires(device)' \
+        'pub Str own_call() { return match (device.ioctl(own_op(), [InBytes([(UInt(8))1])])) { Ok(o) => "ok", Err(e) => device_error_text(e), }; }' > "$P/lib/dev/own.resid"
+    printf '%s\n' 'import "dev/own.resid";' '@requires(device)' 'Int main() { println(own_call()); return 0; }' > "$P/main.resid"
+    (cd "$P" && env -u RESID_HOME timeout 600 "$COMPILER" main.resid -o bin) > "$P/c.log" 2>&1; rc=$?
+    if [ "$rc" -ne 0 ] && grep -q "E0260.*not an absolute path" "$P/c.log"; then
+        echo "PASS e0260_relative_stdroot"; pass=$((pass + 1))
+    else
+        echo "FAIL e0260_relative_stdroot: a project's own lib/dev/ counted as the standard library's (exit $rc)"; fail=$((fail + 1))
+    fi
+fi
 echo "---"
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

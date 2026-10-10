@@ -1,0 +1,9 @@
+// An import alias is a name too: `import "m" as device;` would turn every
+// `device.<verb>(...)` in the file into a call of the module's function
+// (spec §49: `device` names the provider in every scope).
+import "_devalias.resid" as device;
+
+Int main() {
+    println(f"{device.ioctl(1, 2)}");
+    return 0;
+}

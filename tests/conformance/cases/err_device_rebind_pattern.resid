@@ -1,0 +1,24 @@
+// `device` names the provider (spec §49), and a pattern binds a name too:
+// `if (Some(device) = o)` would make `device.ioctl(...)` a call of the
+// program's own `ioctl` method to the checker, while the device pass saw
+// a verb and handed a look-alike record to the write engine with no grant.
+import "dev/sev_guest_key.resid";
+
+type Fake = { Int x; };
+type MyOp = { Str name; Str path; List(Request) requests; Int size; List(Field) fields; Bool write; IfaceVersion version; Stability stability; };
+
+Result(List(DevOut), DeviceError) ioctl(Fake f, MyOp op, List(DevIn) args) {
+    return Err(Absent("user method"));
+}
+
+Int main() {
+    Option(Fake) o = Some(Fake {.x = rt 1});
+    if (Some(device) = o) {
+        Str s = match (device.ioctl(MyOp {.name = "sev_guest.snp_get_derived_key", .path = "/dev/sev-guest", .requests = [Request {.arch = X86_64, .number = 3223343873}, Request {.arch = Aarch64, .number = 3223343873}], .size = 32, .fields = [Buffer(8, -1, 32, In, false), Buffer(16, -1, 64, Out, true), Scalar(24, 8, Out)], .write = true, .version = Versioned(0, 1, 1), .stability = Uapi}, [InBytes([(UInt(8))1])])) {
+            Ok(outs) => f"{outs.len()} outputs",
+            Err(e) => device_error_text(e),
+        };
+        println(s);
+    }
+    return 0;
+}
