@@ -10,7 +10,7 @@ pub Int sc(Int n, Int a, Int b, Int c) {
     return r;
 }
 
-Int sc4(Int n, Int a, Int b, Int c, Int d) {
+pub Int sc4(Int n, Int a, Int b, Int c, Int d) {
     Int r = resid_raw_syscall(n, a, b, c, d, 0, 0);
     if (r == 0 - 4) { return sc4(n, a, b, c, d); }
     return r;

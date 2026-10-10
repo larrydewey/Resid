@@ -15,6 +15,10 @@
 // The request is [i64 index][arguments], the reply [result], both fixed
 // sizes the compiler computed: a scalar is 8 bytes, a Str(N) N + 1 bytes and
 // a Bytes(N) N bytes, each rounded up to 8.
+//
+// The device host (runtime/rt/device.resid, spec §49) is started and
+// confined the same way: hs_spawn, hs_quiet and hs_filter_install below
+// are shared.
 
 Int ntab_ent() { return 40; }   // module, function, reqlen, resplen, thunk
 
@@ -22,25 +26,14 @@ Int ntab_ent() { return 40; }   // module, function, reqlen, resplen, thunk
 
 @export("resid_native_call", "void(ptr,ptr,ptr,i64,ptr,i64)")
 pub Int rt_native_call(Int m, Int f, Int req, Int reqlen, Int resp, Int resplen) {
-    // Everything the child needs exists before the fork: between fork and
-    // execve it makes system calls only (other threads may hold locks).
-    Int sv = xmalloc(8);
-    Int r = resid_raw_syscall(53, 1, 1 | 524288, 0, sv, 0, 0);   // socketpair(AF_UNIX, SOCK_STREAM|SOCK_CLOEXEC)
-    if (r < 0) { return c_free(sv) + native_fail(m, f, resid_raw_addr("no socket pair")); }
-    Int a = ld32(sv);
-    Int b = ld32(sv + 4);
-    _ = c_free(sv);
     Int argv = xmalloc(24);
     _ = st64(argv, resid_raw_addr("resid-native-host")) + st64(argv + 8, m) + st64(argv + 16, 0);
-    Int envp = xmalloc(8);
-    _ = st64(envp, 0);
-    Int lim = xmalloc(32);
-    _ = st64(lim, native_cpu_seconds()) + st64(lim + 8, native_cpu_seconds() + 1) + st64(lim + 16, 0) + st64(lim + 24, 0);
-    Int pid = c_fork();
-    if (pid == 0) { return native_child(b, argv, envp, lim); }
-    _ = sys_close(b);
-    _ = c_free(argv) + c_free(envp) + c_free(lim);
-    if (pid < 0) { return sys_close(a) + native_fail(m, f, resid_raw_addr("cannot start the module's process")); }
+    Int pidp = xmalloc(8);
+    Int a = hs_spawn(argv, pidp);
+    Int pid = ld64(pidp);
+    _ = c_free(argv) + c_free(pidp);
+    if (a == 0 - 1) { return native_fail(m, f, resid_raw_addr("no socket pair")); }
+    if (a < 0) { return native_fail(m, f, resid_raw_addr("cannot start the module's process")); }
     Bool sent = native_send(a, req, 0, reqlen);
     _ = resid_raw_syscall(48, a, 1, 0, 0, 0, 0);   // shutdown(SHUT_WR): the child reads to EOF
     Int got = native_recv(a, resp, 0, resplen);
@@ -56,6 +49,32 @@ pub Int rt_native_call(Int m, Int f, Int req, Int reqlen, Int resp, Int resplen)
     if (code != 0) { return native_fail_n(m, f, resid_raw_addr("exited with status "), code); }
     if (!sent || got != resplen || more > 0) { return native_fail(m, f, resid_raw_addr("malformed reply")); }
     return 0;
+}
+
+// Start a sandboxed host: fork, and in the child re-execute this program
+// with `argv`, an empty environment and one end of a socket pair as fd 3.
+// The parent's end of the socket, the pid at *pidp; -1 when there is no
+// socket pair, -2 when the fork failed.
+pub Int hs_spawn(Int argv, Int pidp) {
+    // Everything the child needs exists before the fork: between fork and
+    // execve it makes system calls only (other threads may hold locks).
+    Int sv = xmalloc(8);
+    Int r = resid_raw_syscall(53, 1, 1 | 524288, 0, sv, 0, 0);   // socketpair(AF_UNIX, SOCK_STREAM|SOCK_CLOEXEC)
+    if (r < 0) { return c_free(sv) * 0 - 1; }
+    Int a = ld32(sv);
+    Int b = ld32(sv + 4);
+    _ = c_free(sv);
+    Int envp = xmalloc(8);
+    _ = st64(envp, 0);
+    Int lim = xmalloc(32);
+    _ = st64(lim, native_cpu_seconds()) + st64(lim + 8, native_cpu_seconds() + 1) + st64(lim + 16, 0) + st64(lim + 24, 0);
+    Int pid = c_fork();
+    if (pid == 0) { return native_child(b, argv, envp, lim); }
+    _ = sys_close(b);
+    _ = c_free(envp) + c_free(lim);
+    if (pid < 0) { return sys_close(a) * 0 - 2; }
+    _ = st64(pidp, pid);
+    return a;
 }
 
 // CPU seconds a call may use (soft limit; the hard limit is one more).
@@ -75,9 +94,9 @@ Int native_child(Int b, Int argv, Int envp, Int lim) {
     return native_child_exit(127);
 }
 
-Int native_child_exit(Int code) { return resid_raw_syscall(231, code, 0, 0, 0, 0, 0); }
+pub Int native_child_exit(Int code) { return resid_raw_syscall(231, code, 0, 0, 0, 0, 0); }
 
-Bool native_send(Int fd, Int p, Int i, Int n) {
+pub Bool native_send(Int fd, Int p, Int i, Int n) {
     if (i >= n) { return true; }
     Int r = resid_raw_syscall(44, fd, p + i, n - i, 16384, 0, 0);   // sendto, MSG_NOSIGNAL
     if (r == 0 - 4) { return native_send(fd, p, i, n); }
@@ -85,7 +104,7 @@ Bool native_send(Int fd, Int p, Int i, Int n) {
     return native_send(fd, p, i + r, n);
 }
 
-Int native_recv(Int fd, Int p, Int i, Int n) {
+pub Int native_recv(Int fd, Int p, Int i, Int n) {
     if (i >= n) { return i; }
     Int r = sc(0, fd, p + i, n - i);
     if (r <= 0) { return i; }
@@ -117,13 +136,13 @@ Int native_put(Int at, Int s) {
 }
 
 // Decimal text of n >= 0 into buf (at least 21 bytes).
-Int native_utoa(Int buf, Int n) {
+pub Int native_utoa(Int buf, Int n) {
     Int k = native_digits(n, 1);
     _ = st8(buf + k, 0);
     return native_utoa_at(buf, n, k - 1);
 }
 
-Int native_digits(Int n, Int k) { return if (n < 10) { k } else { native_digits(n / 10, k + 1) }; }
+pub Int native_digits(Int n, Int k) { return if (n < 10) { k } else { native_digits(n / 10, k + 1) }; }
 
 Int native_utoa_at(Int buf, Int n, Int i) {
     _ = st8(buf + i, 48 + n % 10);
@@ -201,7 +220,7 @@ pub Int rt_native_host(Int tab, Int n) {
 }
 
 // fd 3 is a socket (S_IFSOCK): set by the parent, never by accident.
-Bool native_fd3_socket() {
+pub Bool native_fd3_socket() {
     Int sb = xmalloc(144);
     Int r = resid_raw_syscall(5, 3, sb, 0, 0, 0, 0);   // fstat
     Bool ok = r == 0 && (ld32(sb + st_mode_at()) & 61440) == 49152;
@@ -233,7 +252,7 @@ Int native_serve(Int tab, Int n, Int m, Int req, Int resp) {
     return native_child_exit(0);
 }
 
-Bool native_write(Int p, Int i, Int n) {
+pub Bool native_write(Int p, Int i, Int n) {
     if (i >= n) { return true; }
     Int r = sc(1, 3, p + i, n - i);
     if (r <= 0) { return false; }
@@ -241,16 +260,23 @@ Bool native_write(Int p, Int i, Int n) {
 }
 
 // No clock, no counter, no dump, no new privileges, then the filter.
-Bool native_lockdown() {
+Bool native_lockdown() { return hs_quiet() && hs_filter_install(native_filter(), native_filter_len()); }
+
+// What every host does before it acts: no core dump, no time-stamp
+// counter, first in line for the OOM killer, no clock pages.
+pub Bool hs_quiet() {
     if (resid_raw_syscall(157, 4, 0, 0, 0, 0, 0) < 0) { return false; }    // PR_SET_DUMPABLE 0
     // PR_SET_TSC, PR_TSC_SIGSEGV (x86-64 only: AArch64's CNTVCT_EL0 stays readable).
     if (!on_a64() && resid_raw_syscall(157, 26, 2, 0, 0, 0, 0) < 0) { return false; }
     _ = native_oom_first();
-    if (!native_unmap_clocks()) { return false; }
+    return native_unmap_clocks();
+}
+
+// No new privileges, then the seccomp program of `len` instructions at prog.
+pub Bool hs_filter_install(Int prog, Int len) {
     if (resid_raw_syscall(157, 38, 1, 0, 0, 0, 0) < 0) { return false; }   // PR_SET_NO_NEW_PRIVS
-    Int prog = native_filter();
     Int fprog = xmalloc(16);
-    _ = st64(fprog, native_filter_len()) + st64(fprog + 8, prog);
+    _ = st64(fprog, len) + st64(fprog + 8, prog);
     return resid_raw_syscall(317, 1, 0, fprog, 0, 0, 0) == 0;   // seccomp(SECCOMP_SET_MODE_FILTER)
 }
 
@@ -350,7 +376,7 @@ Int native_filter() {
 }
 
 // Instruction i: u16 code, u8 jt, u8 jf, u32 k.
-Int bpf(Int p, Int i, Int code, Int jt, Int jf, Int k) {
+pub Int bpf(Int p, Int i, Int code, Int jt, Int jf, Int k) {
     Int at = p + i * 8;
     _ = st32(at, code | (jt << 16) | (jf << 24));
     _ = st32(at + 4, k);
