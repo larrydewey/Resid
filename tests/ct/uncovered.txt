@@ -1,0 +1,15 @@
+# Library functions that handle a secret (the surface tools/resid-ctcover.resid
+# reads from the knowledge graph) and that no tests/ct case reaches, each
+# with the reason. tests/ct/run.sh fails on a secret function that is in
+# neither a case's reach nor this list, and on an entry here that a case
+# now reaches or that no longer handles a secret. Keep it short: a
+# function belongs here only when a valgrind case cannot reach it, and its
+# secret work must then be reached through the functions it calls.
+#
+# lib/<file> <function> <reason>
+lib/tlsclient.resid tls_client_connect socket I/O: the client handshake on a live connection; its secret steps (x25519g_*, tlsg_*, tls_keys_*) are cases
+lib/tlsserver.resid tls_server_handshake socket I/O around ts_server_start, ts_read_prot and ts_server_finish, which tls-server-secret runs
+lib/tlswire.resid tls_accept_loop socket I/O: the accept loop that runs tls_server_handshake per connection
+lib/tlswire.resid tls_stream_loop socket I/O: the record loop over tls_keys_protect and tls_keys_open, which tls-record-seal-secret and tls-server-secret run
+lib/tlswire.resid tls_cfg a constructor: it stores the ServerKey and computes nothing
+lib/tlskey.resid tls_key_load file I/O; the PKCS#8/SEC1 parsing it runs is tls-key-secret, but a PEM key file's base64 decoding (base64_decode, Str indexing) branches on the key's characters, a known leak (SECURITY.md)

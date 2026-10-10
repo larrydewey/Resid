@@ -10,7 +10,9 @@
 //
 // tests/ct/run.sh runs every case under valgrind and fails on any
 // "Conditional jump or move depends on uninitialised value(s)" or "Use of
-// uninitialised value" report.
+// uninitialised value" report. Every case is a function `ct_case_<name>`
+// (underscores for the dashes of the case name) and main dispatches to
+// it; run.sh takes the case list from this file's knowledge graph.
 
 import "../../lib/hpke.resid";
 import "../../lib/ed25519.resid";
@@ -42,43 +44,90 @@ List(Int) fill_at(Int n, Int v, ListBuf(Int) acc) {
 
 Str reveal(List(Int) b) { return hex_encode(public(b)); }
 
+List(Int) k32() { return mark_secret(bytes_n(32, rt 7)); }
+
+List(Int) k48() { return mark_secret(bytes_n(48, rt 9)); }
+
+List(Int) msg() { return bytes_n(100, rt 3); }
+
+Int say(Str c, Str out) {
+    println(c + " " + out);
+    return 0;
+}
+
+Int ct_case_p256_sign() { return say("p256-sign", reveal(ecdsa_sign(P256, Sha256, k32(), msg()))); }
+
+Int ct_case_p384_sign() { return say("p384-sign", reveal(ecdsa_sign(P384, Sha384, k48(), msg()))); }
+
+Int ct_case_p256_ecdh() { return say("p256-ecdh", reveal(ecdh(P256, k32(), ec_public_key(P256, bytes_n(32, 5))))); }
+
+Int ct_case_p384_ecdh() { return say("p384-ecdh", reveal(ecdh(P384, k48(), ec_public_key(P384, bytes_n(48, 5))))); }
+
+Int ct_case_p384_public() { return say("p384-public", reveal(ec_public_key(P384, k48()))); }
+
+Int ct_case_x25519() { return say("x25519", reveal(x25519_shared(k32(), x25519_base()))); }
+
+Int ct_case_ed25519_sign() { return say("ed25519-sign", reveal(sign_msg_bytes(k32(), msg()))); }
+
+Int ct_case_aes_gcm() { return say("aes-gcm", reveal(aes_gcm_seal(k32(), bytes_n(12, 1), mark_secret(msg()), []))); }
+
+Int ct_case_aes_sw() { return say("aes-sw", reveal(aes_encrypt_block_sw(aes_key_expand(k32()), mark_secret(bytes_n(16, 2))))); }
+
+Int ct_case_aes_dec() { return say("aes-dec", reveal(aes_decrypt_block(aes_key_expand(k32()), mark_secret(bytes_n(16, 2))))); }
+
+Int ct_case_aes_kw() { return say("aes-kw", reveal(aes_key_unwrap(k32(), aes_key_wrap(bytes_n(32, 7), bytes_n(32, 1))) else { [] })); }
+
+Int ct_case_ghash_sw() { return say("ghash-sw", reveal(be_bytes(gf128_mul_sw(be_pack(k32(), 0, 16, 0, (UInt(128)) 0), be_pack(msg(), 0, 16, 0, (UInt(128)) 0)), 0, ListBuf()))); }
+
+Int ct_case_ghash() { return say("ghash", reveal(be_bytes(gf128_mul(be_pack(k32(), 0, 16, 0, (UInt(128)) 0), be_pack(msg(), 0, 16, 0, (UInt(128)) 0)), 0, ListBuf()))); }
+
+Int ct_case_chacha() { return say("chacha", reveal(chacha20poly1305_seal(k32(), bytes_n(12, 1), mark_secret(msg()), []))); }
+
+Int ct_case_hmac() { return say("hmac", reveal(hmac_bytes(Sha384, k48(), msg()))); }
+
+Int ct_case_hkdf() { return say("hkdf", reveal(hkdf_with(Sha256, [], k32(), msg(), 64))); }
+
+Int ct_case_sha256_sw() { return say("sha256-sw", reveal(words_to_bytes(digest_block(k32().concat(k32()), 0, [1779033703, -1150833019, 1013904242, -1521486534, 1359893119, -1694144372, 528734635, 1541459225])))); }
+
+Int ct_case_sha512() { return say("sha512", reveal(sha512_bytes(k48()))); }
+
+Int ct_case_ct_equal() { return say("ct-equal", if (ct_public(if (ct_equal(k32(), bytes_n(32, 7))) { 1 } else { 0 }) == 1) { "equal" } else { "differ" }); }
+
+Int ct_case_hpke_open() {
+    HpkeKeyPair r = hpke_derive_keypair(17, bytes_n(48, 1));
+    HpkeMessage m = hpke_seal_to(hpke_suite(17, 2, 2), r.pk, [], [], msg());
+    return say("hpke-open", reveal(hpke_open_with(hpke_suite(17, 2, 2), m.enc, mark_secret(r.sk), [], [], m.ct) else { [] }));
+}
+
+// A negative control: a table indexed by a secret byte, which every
+// cache-timing attack on table-driven AES exploits. run.sh requires
+// memcheck to report this one. Not a case: its name has no ct_case_.
+Int ct_control() { return say("control", f"{ct_public(bytes_n(256, 1)[k32()[0]])}"); }
+
 @requires(args)
 Int main() {
     Str c = args.get(1);
-    List(Int) k32 = mark_secret(bytes_n(32, rt 7));
-    List(Int) k48 = mark_secret(bytes_n(48, rt 9));
-    List(Int) msg = bytes_n(100, rt 3);
-    List(Int) peer256 = ec_public_key(P256, bytes_n(32, 5));
-    List(Int) peer384 = ec_public_key(P384, bytes_n(48, 5));
-    Str out = if (c == "p256-sign") { reveal(ecdsa_sign(P256, Sha256, k32, msg)) }
-        else if (c == "p384-sign") { reveal(ecdsa_sign(P384, Sha384, k48, msg)) }
-        else if (c == "p256-ecdh") { reveal(ecdh(P256, k32, peer256)) }
-        else if (c == "p384-ecdh") { reveal(ecdh(P384, k48, peer384)) }
-        else if (c == "p384-public") { reveal(ec_public_key(P384, k48)) }
-        else if (c == "x25519") { reveal(x25519_shared(k32, x25519_base())) }
-        else if (c == "ed25519-sign") { reveal(sign_msg_bytes(k32, msg)) }
-        else if (c == "aes-gcm") { reveal(aes_gcm_seal(k32, bytes_n(12, 1), mark_secret(msg), [])) }
-        else if (c == "aes-sw") { reveal(aes_encrypt_block_sw(aes_key_expand(k32), mark_secret(bytes_n(16, 2)))) }
-        else if (c == "aes-dec") { reveal(aes_decrypt_block(aes_key_expand(k32), mark_secret(bytes_n(16, 2)))) }
-        else if (c == "aes-kw") { reveal(aes_key_unwrap(k32, aes_key_wrap(bytes_n(32, 7), bytes_n(32, 1))) else { [] }) }
-        else if (c == "ghash-sw") { reveal(be_bytes(gf128_mul_sw(be_pack(k32, 0, 16, 0, (UInt(128)) 0), be_pack(msg, 0, 16, 0, (UInt(128)) 0)), 0, ListBuf())) }
-        else if (c == "ghash") { reveal(be_bytes(gf128_mul(be_pack(k32, 0, 16, 0, (UInt(128)) 0), be_pack(msg, 0, 16, 0, (UInt(128)) 0)), 0, ListBuf())) }
-        else if (c == "chacha") { reveal(chacha20poly1305_seal(k32, bytes_n(12, 1), mark_secret(msg), [])) }
-        else if (c == "hmac") { reveal(hmac_bytes(Sha384, k48, msg)) }
-        else if (c == "hkdf") { reveal(hkdf_with(Sha256, [], k32, msg, 64)) }
-        else if (c == "sha256-sw") { reveal(words_to_bytes(digest_block(k32.concat(k32), 0, [1779033703, -1150833019, 1013904242, -1521486534, 1359893119, -1694144372, 528734635, 1541459225]))) }
-        else if (c == "sha512") { reveal(sha512_bytes(k48)) }
-        else if (c == "ct-equal") { if (ct_public(if (ct_equal(k32, bytes_n(32, 7))) { 1 } else { 0 }) == 1) { "equal" } else { "differ" } }
-        else if (c == "hpke-open") {
-            HpkeKeyPair r = hpke_derive_keypair(17, bytes_n(48, 1));
-            HpkeMessage m = hpke_seal_to(hpke_suite(17, 2, 2), r.pk, [], [], msg);
-            reveal(hpke_open_with(hpke_suite(17, 2, 2), m.enc, mark_secret(r.sk), [], [], m.ct) else { [] })
-        }
-        // A negative control: a table indexed by a secret byte, which every
-        // cache-timing attack on table-driven AES exploits. run.sh requires
-        // memcheck to report this one.
-        else if (c == "control") { f"{ct_public(bytes_n(256, 1)[k32[0]])}" }
-        else { "unknown case" };
-    println(c + " " + out);
-    return 0;
+    if (c == "p256-sign") { return ct_case_p256_sign(); }
+    if (c == "p384-sign") { return ct_case_p384_sign(); }
+    if (c == "p256-ecdh") { return ct_case_p256_ecdh(); }
+    if (c == "p384-ecdh") { return ct_case_p384_ecdh(); }
+    if (c == "p384-public") { return ct_case_p384_public(); }
+    if (c == "x25519") { return ct_case_x25519(); }
+    if (c == "ed25519-sign") { return ct_case_ed25519_sign(); }
+    if (c == "aes-gcm") { return ct_case_aes_gcm(); }
+    if (c == "aes-sw") { return ct_case_aes_sw(); }
+    if (c == "aes-dec") { return ct_case_aes_dec(); }
+    if (c == "aes-kw") { return ct_case_aes_kw(); }
+    if (c == "ghash-sw") { return ct_case_ghash_sw(); }
+    if (c == "ghash") { return ct_case_ghash(); }
+    if (c == "chacha") { return ct_case_chacha(); }
+    if (c == "hmac") { return ct_case_hmac(); }
+    if (c == "hkdf") { return ct_case_hkdf(); }
+    if (c == "sha256-sw") { return ct_case_sha256_sw(); }
+    if (c == "sha512") { return ct_case_sha512(); }
+    if (c == "ct-equal") { return ct_case_ct_equal(); }
+    if (c == "hpke-open") { return ct_case_hpke_open(); }
+    if (c == "control") { return ct_control(); }
+    println("unknown case " + c);
+    return 2;
 }

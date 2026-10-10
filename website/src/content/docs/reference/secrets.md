@@ -283,6 +283,21 @@ run time: step 2 of the plan's migration is complete.
 `tests/ct/run.sh` checks both helpers under valgrind on the optimized
 binary: no branch or memory address depends on the secret.
 
+## The valgrind backstop
+
+The type rules are checked again on the compiled binary. `tests/ct/run.sh`
+takes its cases from the knowledge graph -- every `ct_case_<name>` function
+in `tests/ct/ctprobe.resid` and `tests/ct/secretprobe.resid` -- and runs
+each under valgrind with the secret inputs marked undefined. Before that,
+`tools/resid-ctcover.resid` reads the graph of a program importing all of
+`lib/` and lists every library function that handles a secret: a public
+one whose signature names `Secret` (or a type holding one), a public
+generic one that runs on secrets once instantiated at a `Secret` type,
+and any one that declassifies. The run fails when one of them is reached
+by no case at a secret type, so a new library function on secrets cannot
+skip the check. The few a case cannot reach, such as the socket loops,
+are listed with a reason in `tests/ct/uncovered.txt`.
+
 ## Observation behaviors
 
 - A secret, or a value that holds one, cannot be shown through the
@@ -314,5 +329,4 @@ not covered. `main` runs on its own thread stack, which is.
 The cryptography library's migration onto the word behaviors is complete
 (TLS was the last). `PLAN-secret-type.md` lists the rest of the plan: a
 run-time check of the `declassify` grant (`declassify` lowers to nothing,
-so the static check is the whole check today) and generating
-`tests/ct`'s cases from the graph.
+so the static check is the whole check today).

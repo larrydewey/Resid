@@ -73,9 +73,30 @@ secret once parsed. Ciphertext, an authenticated record's plaintext and
 the Finished MAC leave through `TlsPublish(B)` (a declassification each);
 so the TLS server, client and transport, and every program using them,
 carry `@requires(declassify)`. Checked against RFC 8448 at both types
-and under valgrind. **Step 2 of §7 is complete.** Still to do: a
-force-time `resid_cap_check("declassify")` (declassify lowers to nothing,
-so the static check is the whole check today), and step 3 of §7.
+and under valgrind. **Step 2 of §7 is complete.** Step 3 of §7 is in
+(2026-10-09): `tests/ct/run.sh` takes its cases from the graph (every
+`ct_case_<name>` function of the two probes) and runs a coverage gate
+first. `tools/resid-ctcover.resid` reads the graph of a program importing
+all of `lib/` and lists the secret surface -- public functions whose
+signature names `Secret` or a type holding one, public generic functions
+whose `@needs` names a behavior with an instance at a `Secret` type, and
+every function that declassifies (219 today) -- and, from each probe's
+graph, what each case reaches through call and reference def edges (a
+behavior verb reaching its `Secret` instances' implementations), a
+generic function counting only when the probe has a copy of it at a
+`Secret` type. A surface function no case reaches fails the run unless
+`tests/ct/uncovered.txt` gives a reason (six: the socket loops, the
+`TlsCfg` constructor, and `tls_key_load`, whose PEM base64 decoding is
+not constant time); a stale entry or a case reaching nothing fails too.
+New cases close what the gate found: SHA-384, the AES entry points that
+pick AES-NI themselves, ECDSA raw and caller-nonce signing, field square
+roots, COSE_Sign1, the HPKE exporter and single-shot seal, PKCS#8/SEC1/
+RFC 8410 key parsing with the scalar marked, and the TLS server
+handshake's pure steps (60 cases, all valgrind-clean). The graph records
+no declaration heads or instance tables, so the tool reads those from the
+source at the lines the graph gives. Still to do: a force-time
+`resid_cap_check("declassify")` (declassify lowers to nothing, so the
+static check is the whole check today).
 
 **Goal**: make "this value is a secret" knowledge the compiler holds and
 enforces, so that code which branches on, indexes with, prints, compares
@@ -224,8 +245,9 @@ no general `impl-not` is added to the language.
   by hand), so LLVM cannot turn a select back into a branch.
 - The lowering refuses to emit `udiv`/`sdiv`/`urem`/`srem` on a secret operand
   even if the checker missed it (a second line, `lw_secret_div`).
-- `tests/ct/run.sh` gains a generated case per `Secret` use in `lib/`, so the
-  valgrind backstop covers everything the type system claims.
+- `tests/ct/run.sh` takes its cases from the graph and fails when a
+  function on secrets in `lib/` has none, so the valgrind backstop covers
+  everything the type system claims (done, §7 step 3).
 - AArch64: the type rules are architecture-independent; the valgrind check
   stays x86-64 only (as `SECURITY.md` already says). An AArch64 backstop is
   out of scope for this plan.

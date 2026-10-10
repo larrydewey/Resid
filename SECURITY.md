@@ -340,7 +340,7 @@ relative layout reproduced.
 | COSE_Sign1 (ES256, ES384, PS256/384/512, RS256/384/512, EdDSA) reads the algorithm only from the protected header, requires the key type and curve it names, and refuses a wrong tag, trailing bytes, a swapped payload and an algorithm only in the unprotected header. | `cose_sign1.txt` |
 | ECDSA verification rejects `r` or `s` outside `[1, n-1]`, keys off the curve, sums at infinity, and DER signatures that are not strict DER (BER lengths, padded or negative integers, trailing bytes). | Wycheproof ECDSA files |
 | RSA verification refuses moduli below 2048 bits, even moduli and even or tiny exponents, compares PKCS#1 v1.5 by re-encoding (never by parsing the recovered block), and rejects a signature representative `>= n`. | Wycheproof RSA files, `rsa1024-ca` |
-| **Constant time, checked on the binary.** `tests/ct/run.sh` runs ECDSA signing (P-256, P-384), ECDH, public-key derivation, X25519, Ed25519 signing, AES (AES-NI and software, encrypt and decrypt), AES-GCM, GHASH, AES key unwrap, ChaCha20-Poly1305, SHA-512, HMAC, HKDF, HPKE seal and open (X25519 and P-256), the TLS 1.3 key schedule and record protection, and `ct_equal` under valgrind memcheck with the secret marked undefined (`ct_secret`). No branch, conditional move or memory address depends on a secret in the optimized, LTO-linked code; a negative control (a secret-indexed table) must be reported. The software AES S-box is computed, not looked up; field reductions, point selection and conditional subtractions are masks, and masks pass through `ct_hide` so LLVM cannot turn them back into branches. | `tests/ct/run.sh` |
+| **Constant time, checked on the binary.** `tests/ct/run.sh` runs ECDSA signing (P-256, P-384), ECDH, public-key derivation, X25519, Ed25519 signing, AES (AES-NI and software, encrypt and decrypt), AES-GCM, GHASH, AES key unwrap, ChaCha20-Poly1305, SHA-512, HMAC, HKDF, HPKE seal and open (X25519 and P-256), the TLS 1.3 key schedule and record protection, and `ct_equal` under valgrind memcheck with the secret marked undefined (`ct_secret`). No branch, conditional move or memory address depends on a secret in the optimized, LTO-linked code; a negative control (a secret-indexed table) must be reported. The software AES S-box is computed, not looked up; field reductions, point selection and conditional subtractions are masks, and masks pass through `ct_hide` so LLVM cannot turn them back into branches. The case list comes from the knowledge graph, and a coverage gate (`tools/resid-ctcover.resid`) fails the run when a library function that handles a secret -- a public signature with a `Secret` in it (directly or through a record or sum holding one), a public generic function that runs on secrets once instantiated at a `Secret` type, or any function that declassifies -- is reached by no case at a secret type, unless `tests/ct/uncovered.txt` lists it with a reason (today the socket loops, the `TlsCfg` constructor and `tls_key_load`). Of the 219 functions in that surface, 213 are reached by the 60 cases, among them the TLS server handshake's pure steps and PKCS#8/SEC1/Ed25519 key parsing with the private scalar marked secret. | `tests/ct/run.sh` |
 | Every parser of untrusted bytes is total: certificates, CRLs, OCSP responses, keys (PKCS#8, SEC1, SPKI, RSAPublicKey, COSE_Key), ECDSA signatures, CBOR/COSE, TLS handshake messages, PEM, HTTP/2 frame headers and HPACK header blocks never abort and never loop on malformed input; mutated inputs are run through all of them (an abort is caught per input, a hang times out). | fuzz section of `tests/crypto/run.sh` |
 | Randomness comes from `getrandom(2)`, falling back to `/dev/urandom`; failure aborts. | (runtime code) |
 
@@ -393,7 +393,17 @@ Not guaranteed:
   instructions (the only divides in the checked binary are on public
   indices in the AES key schedule and in the allocator, found by reading
   its disassembly rather than by a test). The checks need valgrind installed;
-  without it `tests/ct/run.sh` reports itself skipped.
+  without it `tests/ct/run.sh` runs only its coverage gate and reports the
+  valgrind runs skipped. Coverage is reachability in the call graph: a case
+  covers a function its code can call, not one it is proven to execute on
+  every path (an AES-NI case also reaches the software rounds), and a
+  generic function counts only when the probe instantiates it at a
+  `Secret` type.
+- Loading a PEM private key (`tls_key_load`) is not constant time: the
+  file's base64 decoding (`base64_decode`) and the text indexing under it
+  branch on the key's characters (confirmed under valgrind with the
+  characters marked secret). It runs once, when the server starts; a key
+  given as DER does not go through it. `tests/ct/uncovered.txt` lists it.
 
 ## Bootstrap
 

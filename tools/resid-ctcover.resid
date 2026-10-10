@@ -1,0 +1,458 @@
+/// resid-ctcover.resid — the secret surface of the library and what the
+/// constant-time probes cover, read from knowledge-graph artifacts
+/// (spec §34, §48; PLAN-secret-type.md §5, §7 step 3). tests/ct/run.sh
+/// runs it so that a library function handling Secret(T) cannot escape
+/// the valgrind backstop silently.
+///
+/// Usage: resid-ctcover <artifact> surface
+///        resid-ctcover <artifact> cases PREFIX
+///
+/// `surface` lists, one per line as `lib/<file> <name> <why>`, every
+/// function declared under lib/ that handles a secret:
+///
+///   signature   a `pub` function whose declared parameters or result name
+///               Secret(...) or a library type that holds one (a record or
+///               sum with a Secret field, transitively);
+///   generic     a `pub` generic function whose @needs names a behavior
+///               with an instance at a Secret type, so it runs on secrets
+///               once instantiated there;
+///   declassify  any function, public or not, that publishes a secret
+///               (a `declassify.<reason>` effect in its body).
+///
+/// `cases PREFIX` lists the probe's case functions (those of its main
+/// file named PREFIX...) as `case <name> <n>`, n the nodes of a Secret
+/// type in the case's own body, and for each, every library
+/// function it reaches as `reach <case> lib/<file> <name> <inst>`. Reach
+/// is the call graph of the source: call and reference def edges, and a
+/// call of a behavior verb reaching the implementing function of every
+/// instance at a Secret type. `<inst>` is `secret` when the probe has a
+/// copy of that function instantiated at a Secret type, `public` when its
+/// only copies are public ones, and `plain` for a function that is not
+/// generic. A generic function a case reaches only at public types does
+/// not cover it.
+///
+/// The graph gives every declaration, its file and its lines; a
+/// declaration's head (annotations, result, parameters) and an
+/// instance's verb table are read from the source at those lines, as the
+/// artifact does not carry them.
+
+import "../lib/kgart.resid";
+
+Bool ct_idc(Int c) {
+    if (c >= 48 && c <= 57) { return true; }
+    if (c >= 65 && c <= 90) { return true; }
+    if (c >= 97 && c <= 122) { return true; }
+    return c == 95 || c >= 128;
+}
+
+// ─── Nodes ──────────────────────────────────────────────────────────
+
+// What the queries need of a node: deps only for behavior declarations.
+type CtNode = { Str kind; Str name; Str ty; List(Int) span; Int def; Bool copy; List(Str) effects; List(Int) deps; };
+
+List(CtNode) ct_nodes(GA a, Int id, ListBuf(CtNode) acc) {
+    if (id >= a.offs.len()) { return acc.finish(); }
+    List(Int) b = a.b;
+    Int p = a.offs[id];
+    Str k = ch_text(b, ch_field(b, p, "kind"));
+    Int dp = ch_field(b, p, "def");
+    List(Int) none = [];
+    CtNode n = CtNode {.kind = k, .name = gn_opt_text(b, ch_field(b, p, "name")), .ty = gn_opt_text(b, ch_field(b, p, "type")), .span = ch_ints(b, ch_field(b, p, "span")), .def = if (dp < 0) { -1 } else { ch_int(b, dp) }, .copy = ch_field(b, p, "derive") >= 0, .effects = ch_texts(b, ch_field(b, p, "effects")), .deps = if (k == "bdecl") { ch_ints(b, ch_field(b, p, "deps")) } else { none }};
+    return ct_nodes(a, id + 1, acc.push(n));
+}
+
+// ─── Source text ────────────────────────────────────────────────────
+
+@requires(filesystem(readonly))
+List(List(Str)) ct_sources(List(Str) paths, Int i, ListBuf(List(Str)) acc) {
+    if (i >= paths.len()) { return acc.finish(); }
+    List(Str) none = [];
+    List(Str) ls = if (filesystem.exists(paths[i])) { str_split(filesystem.read_all(paths[i]), "\n") } else { none };
+    return ct_sources(paths, i + 1, acc.push(ls));
+}
+
+Str ct_line(List(List(Str)) src, Int f, Int l) {
+    if (f < 0 || f >= src.len()) { return ""; }
+    List(Str) ls = src[f];
+    return if (l >= 1 && l <= ls.len()) { ls[l - 1] } else { "" };
+}
+
+// Lines l..l1 of file f, joined by spaces.
+Str ct_text(List(List(Str)) src, Int f, Int l, Int l1, StrBuf acc) {
+    if (l > l1) { return acc.finish(); }
+    return ct_text(src, f, l + 1, l1, acc.push(ct_line(src, f, l)).push(" "));
+}
+
+// A declaration's head: its text up to the `{` that opens the body.
+Str ct_head(List(List(Str)) src, Int f, Int l, Int l1, Str acc) {
+    Int at = str_index_of(acc, "{", 0);
+    if (at >= 0) { return str_slice(acc, 0, at); }
+    if (l > l1) { return acc; }
+    return ct_head(src, f, l + 1, l1, acc + ct_line(src, f, l) + " ");
+}
+
+// A library file as `lib/<file>`, or "" for one outside lib/.
+Str ct_lib(Str p) {
+    if (str_starts_with(p, "lib/")) { return p; }
+    Int at = ct_last(p, "/lib/", 0, -1);
+    return if (at < 0) { "" } else { str_slice(p, at + 1, str_len(p)) };
+}
+
+Int ct_last(Str s, Str t, Int from, Int best) {
+    Int i = str_index_of(s, t, from);
+    if (i < 0) { return best; }
+    return ct_last(s, t, i + 1, i);
+}
+
+Str ct_file(GA a, CtNode n) {
+    if (n.span.len() == 0 || n.span[0] >= a.paths.len()) { return ""; }
+    return ct_lib(a.paths[n.span[0]]);
+}
+
+// A function's source name: the module mangling (`__m<path>_resid__`)
+// and the instantiation suffix (`__g_<types>`) taken off.
+Str ct_base(Str n) {
+    Int m = if (str_starts_with(n, "__m")) { str_index_of(n, "_resid__", 0) } else { -1 };
+    Str n1 = if (m >= 0) { str_slice(n, m + 8, str_len(n)) } else { n };
+    Int g = str_index_of(n1, "__g_", 0);
+    return if (g >= 0) { str_slice(n1, 0, g) } else { n1 };
+}
+
+Str ct_targs(Str n) {
+    Int g = str_index_of(n, "__g_", 0);
+    return if (g >= 0) { str_slice(n, g + 4, str_len(n)) } else { "" };
+}
+
+// Whether w occurs in s as a whole identifier.
+Bool ct_word(Str s, Str w, Int from) {
+    Int i = str_index_of(s, w, from);
+    if (i < 0) { return false; }
+    Int e = i + str_len(w);
+    Bool left = i == 0 || !ct_idc(str_char_at(s, i - 1));
+    Bool right = e >= str_len(s) || !ct_idc(str_char_at(s, e));
+    if (left && right) { return true; }
+    return ct_word(s, w, i + 1);
+}
+
+Bool ct_any_word(Str s, List(Str) ws, Int i) {
+    if (i >= ws.len()) { return false; }
+    if (ct_word(s, ws[i], 0)) { return true; }
+    return ct_any_word(s, ws, i + 1);
+}
+
+Bool ct_has(List(Str) xs, Str x, Int i) {
+    if (i >= xs.len()) { return false; }
+    if (xs[i] == x) { return true; }
+    return ct_has(xs, x, i + 1);
+}
+
+Int ct_close(Str s, Int i, Int depth) {
+    if (i >= str_len(s)) { return i; }
+    Int c = str_char_at(s, i);
+    Int d = if (c == 40) { depth + 1 } else if (c == 41) { depth - 1 } else { depth };
+    if (d == 0) { return i; }
+    return ct_close(s, i + 1, d);
+}
+
+// The names applied in a type list: `Word(W, B), Block128(X, W, B)`
+// gives Word and Block128.
+List(Str) ct_applied(Str s, Int i, Int start, ListBuf(Str) acc) {
+    if (i >= str_len(s)) { return acc.finish(); }
+    Int c = str_char_at(s, i);
+    if (ct_idc(c)) { return ct_applied(s, i + 1, if (start < 0) { i } else { start }, acc); }
+    return ct_applied(s, i + 1, -1, if (c == 40 && start >= 0) { acc.push(str_slice(s, start, i)) } else { acc });
+}
+
+// A head split into its @needs list and the rest.
+type CtHead = { Str needs; Str sig; };
+
+CtHead ct_split_head(Str h) {
+    Int at = str_index_of(h, "@needs(", 0);
+    if (at < 0) { return CtHead {.needs = "", .sig = h}; }
+    Int e = ct_close(h, at + 7, 1);
+    return CtHead {.needs = str_slice(h, at + 7, e), .sig = str_slice(h, 0, at) + str_slice(h, min(e + 1, str_len(h)), str_len(h))};
+}
+
+// ─── Declarations ───────────────────────────────────────────────────
+
+// Functions in id order (copies too), for finding the one around a node.
+type CtFn = { Int id; Int file; Int l0; Int l1; };
+
+List(CtFn) ct_fns(List(CtNode) ns, Int i, ListBuf(CtFn) acc) {
+    if (i >= ns.len()) { return acc.finish(); }
+    CtNode n = ns[i];
+    Bool f = n.kind == "fn" && n.span.len() >= 4;
+    return ct_fns(ns, i + 1, if (f) { acc.push(CtFn {.id = i, .file = n.span[0], .l0 = n.span[1], .l1 = n.span[3]}) } else { acc });
+}
+
+// The first function at or after id (a function's nodes come before it).
+Int ct_first_at(List(CtFn) fs, Int id, Int lo, Int hi) {
+    if (lo >= hi) { return lo; }
+    Int mid = (lo + hi) / 2;
+    if (fs[mid].id < id) { return ct_first_at(fs, id, mid + 1, hi); }
+    return ct_first_at(fs, id, lo, mid);
+}
+
+// The function whose body holds node id, or -1.
+Int ct_enclosing(List(CtNode) ns, List(CtFn) fs, Int id) {
+    Int k = ct_first_at(fs, id, 0, fs.len());
+    if (k >= fs.len()) { return -1; }
+    CtFn f = fs[k];
+    List(Int) sp = ns[id].span;
+    if (sp.len() < 2 || sp[0] != f.file || sp[1] < f.l0 || sp[1] > f.l1) { return -1; }
+    return f.id;
+}
+
+// Functions with a declassify effect in their body.
+Map(Int, Bool) ct_declassifiers(List(CtNode) ns, List(CtFn) fs, Int i, Map(Int, Bool) acc) {
+    if (i >= ns.len()) { return acc; }
+    Bool d = ct_declassifies(ns[i].effects, 0);
+    Int f = if (d) { ct_enclosing(ns, fs, i) } else { -1 };
+    return ct_declassifiers(ns, fs, i + 1, if (f >= 0) { acc.insert(f, true) } else { acc });
+}
+
+Bool ct_declassifies(List(Str) es, Int i) {
+    if (i >= es.len()) { return false; }
+    if (str_starts_with(es[i], "declassify.")) { return true; }
+    return ct_declassifies(es, i + 1);
+}
+
+// The text of an instance declaration before its `=`.
+Str ct_inst_head(Str t) {
+    Int eq = str_index_of(t, "=", 0);
+    return if (eq < 0) { t } else { str_slice(t, 0, eq) };
+}
+
+// Behaviors with an instance at a Secret type (in any file).
+List(Str) ct_secret_behaviors(GA a, List(CtNode) ns, List(List(Str)) src, Int i, ListBuf(Str) acc) {
+    if (i >= ns.len()) { return acc.finish(); }
+    CtNode n = ns[i];
+    Bool hit = n.kind == "behavior" && n.span.len() >= 4 && str_contains(ct_inst_head(ct_text(src, n.span[0], n.span[1], n.span[3], StrBuf())), "Secret(");
+    return ct_secret_behaviors(a, ns, src, i + 1, if (hit) { acc.push(n.name) } else { acc });
+}
+
+// Library record and sum types, as name and text.
+type CtTy = { List(Str) names; List(Str) texts; };
+
+CtTy ct_types(GA a, List(CtNode) ns, List(List(Str)) src, Int i, ListBuf(Str) names, ListBuf(Str) texts) {
+    if (i >= ns.len()) { return CtTy {.names = names.finish(), .texts = texts.finish()}; }
+    CtNode n = ns[i];
+    Bool ty = (n.kind == "struct_t" || n.kind == "sum_t") && n.span.len() >= 4 && ct_file(a, n) != "";
+    Str t = if (ty) { ct_text(src, n.span[0], n.span[1], n.span[3], StrBuf()) } else { "" };
+    Int at = if (ty) { str_index_of(t, "type ", 0) } else { -1 };
+    if (at < 0) { return ct_types(a, ns, src, i + 1, names, texts); }
+    Str rest = str_trim(str_slice(t, at + 5, str_len(t)));
+    Int e = ct_ident_end(rest, 0);
+    return ct_types(a, ns, src, i + 1, names.push(str_slice(rest, 0, e)), texts.push(t));
+}
+
+Int ct_ident_end(Str s, Int i) {
+    if (i >= str_len(s) || !ct_idc(str_char_at(s, i))) { return i; }
+    return ct_ident_end(s, i + 1);
+}
+
+// Types that hold a secret: a Secret(...) field, or a field of a type
+// that does, to a fixed point.
+List(Str) ct_secret_types(CtTy t, List(Str) found) {
+    List(Str) more = ct_st_pass(t, 0, found, ListBuf());
+    if (more.len() == 0) { return found; }
+    return ct_secret_types(t, found.concat(more));
+}
+
+List(Str) ct_st_pass(CtTy t, Int i, List(Str) found, ListBuf(Str) acc) {
+    if (i >= t.names.len()) { return acc.finish(); }
+    Bool hit = !ct_has(found, t.names[i], 0) && (str_contains(t.texts[i], "Secret(") || ct_any_word(t.texts[i], found, 0));
+    return ct_st_pass(t, i + 1, found, if (hit) { acc.push(t.names[i]) } else { acc });
+}
+
+// ─── surface ────────────────────────────────────────────────────────
+
+type CtCtx = { GA a; List(CtNode) ns; List(List(Str)) src; List(Str) sbeh; List(Str) sty; Map(Int, Bool) dcl; };
+
+Int ct_surface_at(CtCtx c, Int i, Int shown) {
+    if (i >= c.ns.len()) { return shown; }
+    CtNode n = c.ns[i];
+    Str file = if (n.kind == "fn" && !n.copy && n.span.len() >= 4) { ct_file(c.a, n) } else { "" };
+    if (file == "") { return ct_surface_at(c, i + 1, shown); }
+    CtHead h = ct_split_head(ct_head(c.src, n.span[0], n.span[1], n.span[3], ""));
+    Bool pub = ct_word(h.sig, "pub", 0);
+    Bool sig = str_contains(h.sig, "Secret(") || ct_any_word(h.sig, c.sty, 0);
+    Bool gen = ct_any_in(ct_applied(h.needs, 0, -1, ListBuf()), c.sbeh, 0);
+    Bool dcl = c.dcl.contains(i);
+    List(Str) why = (if (pub && sig) { ["signature"] } else { [] }).concat(if (pub && gen) { ["generic"] } else { [] }).concat(if (dcl) { ["declassify"] } else { [] });
+    if (why.len() == 0) { return ct_surface_at(c, i + 1, shown); }
+    println(file + " " + ct_base(n.name) + " " + str_join(why, ","));
+    return ct_surface_at(c, i + 1, shown + 1);
+}
+
+Bool ct_any_in(List(Str) xs, List(Str) set, Int i) {
+    if (i >= xs.len()) { return false; }
+    if (ct_has(set, xs[i], 0)) { return true; }
+    return ct_any_in(xs, set, i + 1);
+}
+
+@requires(filesystem(readonly))
+CtCtx ct_load(Str artifact) {
+    GA a = ga_load(filesystem.read_bytes(artifact + ".resid-graph.cbor"));
+    List(CtNode) ns = ct_nodes(a, 0, ListBuf());
+    List(List(Str)) src = ct_sources(a.paths, 0, ListBuf());
+    List(CtFn) fs = ct_fns(ns, 0, ListBuf());
+    Map(Int, Bool) d0 = {};
+    List(Str) none = [];
+    CtTy tys = ct_types(a, ns, src, 0, ListBuf(), ListBuf());
+    return CtCtx {.a = a, .ns = ns, .src = src, .sbeh = ct_secret_behaviors(a, ns, src, 0, ListBuf()), .sty = ct_secret_types(tys, none), .dcl = ct_declassifiers(ns, fs, 0, d0)};
+}
+
+@requires(filesystem(readonly))
+Int ct_surface_main(Str artifact) {
+    if (!filesystem.exists(artifact + ".resid-graph.cbor")) {
+        eprintln("resid-ctcover: no graph artifact '" + artifact + ".resid-graph.cbor' (build with --profile check)");
+        return 1;
+    }
+    CtCtx c = ct_load(artifact);
+    Int n = ct_surface_at(c, 0, 0);
+    return if (n > 0) { 0 } else { 1 };
+}
+
+// ─── cases ──────────────────────────────────────────────────────────
+
+// Declared (not copied) functions by `file|name`.
+Map(Str, Int) ct_decl_ids(GA a, List(CtNode) ns, Int i, Map(Str, Int) acc) {
+    if (i >= ns.len()) { return acc; }
+    CtNode n = ns[i];
+    Bool d = n.kind == "fn" && !n.copy && n.span.len() >= 1;
+    return ct_decl_ids(a, ns, i + 1, if (d) { acc.insert(f"{n.span[0]}|" + ct_base(n.name), i) } else { acc });
+}
+
+// Copies by `file|name`: "secret" when one is instantiated at a Secret
+// type, else "public".
+Map(Str, Str) ct_copies(GA a, List(CtNode) ns, Int i, Map(Str, Str) acc) {
+    if (i >= ns.len()) { return acc; }
+    CtNode n = ns[i];
+    Str ta = if (n.kind == "fn") { ct_targs(n.name) } else { "" };
+    if (ta == "") { return ct_copies(a, ns, i + 1, acc); }
+    Str key = ct_file(a, n) + "|" + ct_base(n.name);
+    Bool s = str_contains(ta, "Secret_") || (acc.get(key) else { "" }) == "secret";
+    return ct_copies(a, ns, i + 1, acc.insert(key, if (s) { "secret" } else { "public" }));
+}
+
+// Behavior verbs: proto id -> behavior name.
+Map(Int, Str) ct_protos(List(CtNode) ns, Int i, Map(Int, Str) acc) {
+    if (i >= ns.len()) { return acc; }
+    CtNode n = ns[i];
+    return ct_protos(ns, i + 1, if (n.kind == "bdecl") { ct_proto_kids(n.deps, 0, n.name, acc) } else { acc });
+}
+
+Map(Int, Str) ct_proto_kids(List(Int) ds, Int i, Str b, Map(Int, Str) acc) {
+    if (i >= ds.len()) { return acc; }
+    return ct_proto_kids(ds, i + 1, b, acc.insert(ds[i], b));
+}
+
+// The implementing functions of each verb at a Secret instance, as
+// `Behavior.verb` -> function ids.
+Map(Str, List(Int)) ct_impls(CtCtx c, Map(Str, Int) decls, Int i, Map(Str, List(Int)) acc) {
+    if (i >= c.ns.len()) { return acc; }
+    CtNode n = c.ns[i];
+    Bool inst = n.kind == "behavior" && n.span.len() >= 4;
+    Str t = if (inst) { ct_text(c.src, n.span[0], n.span[1], n.span[3], StrBuf()) } else { "" };
+    if (!inst || !str_contains(ct_inst_head(t), "Secret(")) { return ct_impls(c, decls, i + 1, acc); }
+    Int ob = str_index_of(t, "{", 0);
+    Int cb = str_index_of(t, "}", ob + 1);
+    List(Str) ps = if (ob < 0 || cb < 0) { [] } else { str_split(str_slice(t, ob + 1, cb), ",") };
+    return ct_impls(c, decls, i + 1, ct_impl_pairs(ps, 0, n.name, n.span[0], decls, acc));
+}
+
+Map(Str, List(Int)) ct_impl_pairs(List(Str) ps, Int i, Str beh, Int file, Map(Str, Int) decls, Map(Str, List(Int)) acc) {
+    if (i >= ps.len()) { return acc; }
+    List(Str) kv = str_split(ps[i], "=");
+    Str v = if (kv.len() == 2) { str_trim(kv[0]) } else { "" };
+    Str verb = if (str_starts_with(v, ".")) { str_slice(v, 1, str_len(v)) } else { v };
+    Int f = if (kv.len() == 2) { decls.get(f"{file}|" + str_trim(kv[1])) else { -1 } } else { -1 };
+    if (verb == "" || f < 0) { return ct_impl_pairs(ps, i + 1, beh, file, decls, acc); }
+    Str key = beh + "." + verb;
+    List(Int) old = acc.get(key) else { [] };
+    return ct_impl_pairs(ps, i + 1, beh, file, decls, acc.insert(key, old.concat([f])));
+}
+
+// Call edges: function id -> the functions its body names.
+Map(Int, List(Int)) ct_edges(CtCtx c, List(CtFn) fs, Map(Int, Str) protos, Map(Str, List(Int)) impls, Int i, Map(Int, List(Int)) acc) {
+    if (i >= c.ns.len()) { return acc; }
+    Int d = c.ns[i].def;
+    if (d < 0 || d >= c.ns.len()) { return ct_edges(c, fs, protos, impls, i + 1, acc); }
+    Str dk = c.ns[d].kind;
+    List(Int) none = [];
+    List(Int) to = if (dk == "fn") { [d] } else if (dk == "proto" && protos.contains(d)) { impls.get((protos.get(d) else { "" }) + "." + c.ns[d].name) else { none } } else { none };
+    Int from = if (to.len() > 0) { ct_enclosing(c.ns, fs, i) } else { -1 };
+    if (from < 0) { return ct_edges(c, fs, protos, impls, i + 1, acc); }
+    List(Int) old = acc.get(from) else { none };
+    return ct_edges(c, fs, protos, impls, i + 1, acc.insert(from, old.concat(to)));
+}
+
+// Functions reachable from the worklist.
+Map(Int, Bool) ct_reach(Map(Int, List(Int)) es, List(Int) work, Map(Int, Bool) seen) {
+    if (work.len() == 0) { return seen; }
+    Int f = work[work.len() - 1];
+    List(Int) rest = work[0..work.len() - 1];
+    if (seen.contains(f)) { return ct_reach(es, rest, seen); }
+    List(Int) none = [];
+    return ct_reach(es, rest.concat(es.get(f) else { none }), seen.insert(f, true));
+}
+
+Int ct_print_reach(CtCtx c, Map(Str, Str) copies, Str cname, Map(Int, Bool) seen, Int i) {
+    if (i >= c.ns.len()) { return 0; }
+    CtNode n = c.ns[i];
+    Str file = if (seen.contains(i)) { ct_file(c.a, n) } else { "" };
+    if (file != "") {
+        Str inst = copies.get(file + "|" + ct_base(n.name)) else { "plain" };
+        println("reach " + cname + " " + file + " " + ct_base(n.name) + " " + inst);
+    }
+    return ct_print_reach(c, copies, cname, seen, i + 1);
+}
+
+// Nodes of a Secret type in each function's own body.
+Map(Int, Int) ct_secret_nodes(List(CtNode) ns, List(CtFn) fs, Int i, Map(Int, Int) acc) {
+    if (i >= ns.len()) { return acc; }
+    Int f = if (str_contains(ns[i].ty, "Secret(")) { ct_enclosing(ns, fs, i) } else { -1 };
+    return ct_secret_nodes(ns, fs, i + 1, if (f >= 0) { acc.insert(f, (acc.get(f) else { 0 }) + 1) } else { acc });
+}
+
+Int ct_cases_at(CtCtx c, Map(Int, List(Int)) es, Map(Str, Str) copies, Map(Int, Int) sn, Str prefix, Int i, Int shown) {
+    if (i >= c.ns.len()) { return shown; }
+    CtNode n = c.ns[i];
+    Bool hit = n.kind == "fn" && !n.copy && n.span.len() >= 1 && n.span[0] == 0 && str_starts_with(n.name, prefix);
+    if (!hit) { return ct_cases_at(c, es, copies, sn, prefix, i + 1, shown); }
+    Str cname = str_slice(n.name, str_len(prefix), str_len(n.name));
+    println(f"case {cname} {sn.get(i) else { 0 }}");
+    Map(Int, Bool) s0 = {};
+    Int _p = ct_print_reach(c, copies, cname, ct_reach(es, [i], s0), 0);
+    return ct_cases_at(c, es, copies, sn, prefix, i + 1, shown + 1);
+}
+
+@requires(filesystem(readonly))
+Int ct_cases_main(Str artifact, Str prefix) {
+    if (!filesystem.exists(artifact + ".resid-graph.cbor")) {
+        eprintln("resid-ctcover: no graph artifact '" + artifact + ".resid-graph.cbor' (build with --profile check)");
+        return 1;
+    }
+    CtCtx c = ct_load(artifact);
+    List(CtFn) fs = ct_fns(c.ns, 0, ListBuf());
+    Map(Str, Int) d0 = {};
+    Map(Str, Int) decls = ct_decl_ids(c.a, c.ns, 0, d0);
+    Map(Int, Str) p0 = {};
+    Map(Str, List(Int)) i0 = {};
+    Map(Int, List(Int)) e0 = {};
+    Map(Str, Str) c0 = {};
+    Map(Int, List(Int)) es = ct_edges(c, fs, ct_protos(c.ns, 0, p0), ct_impls(c, decls, 0, i0), 0, e0);
+    Map(Int, Int) s0 = {};
+    Int n = ct_cases_at(c, es, ct_copies(c.a, c.ns, 0, c0), ct_secret_nodes(c.ns, fs, 0, s0), prefix, 0, 0);
+    return if (n > 0) { 0 } else { 1 };
+}
+
+@requires(args, filesystem(readonly))
+Int main() {
+    Int n = args.count();
+    if (n == 3 && args.get(2) == "surface") { return ct_surface_main(args.get(1)); }
+    if (n == 4 && args.get(2) == "cases") { return ct_cases_main(args.get(1), args.get(3)); }
+    eprintln("usage: resid-ctcover <artifact> surface | <artifact> cases PREFIX");
+    return 2;
+}

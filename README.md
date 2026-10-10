@@ -119,7 +119,7 @@ lib/          the standard library: crypto, Ed25519, X25519, P-256, RSA, AES-GCM
               ChaCha20-Poly1305, DER/X.509, TLS 1.3, an HTTP/1.1 client and server,
               HTTP/2 framing, CBOR/COSE, DWARF,
               and date and time (calendar, spans, instants, IANA zones, strftime, clock)
-tools/        resid-why, resid-graph, resid-debug, resid-fmt, resid-pkg, resid-manifest
+tools/        resid-why, resid-graph, resid-debug, resid-fmt, resid-pkg, resid-manifest, resid-ctcover
 tests/        conformance, reduction, provenance, runtime, graph, package, TLS, HTTP and LSP suites
 examples/     complete programs: a settlement ledger (the crown example), an
               HTTP server, TLS and HTTP/2 clients, a lexer and parser
