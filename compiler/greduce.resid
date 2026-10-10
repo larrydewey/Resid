@@ -308,12 +308,37 @@ GV gx_litv(GS st, Int id) {
     return gx_kv(l.v, l.ty, id, false, st);
 }
 
+// The decimal text of an integer literal written 0x / 0b / 0o (any other
+// text unchanged); "" when it has a digit its base lacks or more than 1024
+// bits of digits, which then stays unknown, as a malformed literal would.
+Str sem_lit_dec(Str t) {
+    Int n = str_len(t);
+    if (n < 3 || str_char_at(t, 0) != 48) { return t; }
+    Int c = str_char_at(t, 1);
+    Int base = if (c == 120) { 16 } else if (c == 98) { 2 } else if (c == 111) { 8 } else { 0 };
+    if (base == 0) { return t; }
+    Int bits = if (base == 16) { 4 } else if (base == 8) { 3 } else { 1 };
+    if ((n - 2) * bits > 1024) { return ""; }
+    return sem_lit_base(t, 2, n, base, (Int(2048))0);
+}
+
+Str sem_lit_base(Str t, Int i, Int n, Int base, Int(2048) acc) {
+    if (i >= n) { return rd_wtoa(acc); }
+    Int c = str_char_at(t, i);
+    Int d = if (c >= 48 && c <= 57) { c - 48 } else if (c >= 97 && c <= 102) { c - 87 } else if (c >= 65 && c <= 70) { c - 55 } else { 99 };
+    if (d >= base) { return ""; }
+    return sem_lit_base(t, i + 1, n, base, acc * (Int(2048))base + (Int(2048))d);
+}
+
 // A literal's value: an integer of up to 78 digits (carried wide past 18;
 // it takes the type of the operand it is written beside, rd_fold, or of
 // the slot it flows into), a Str, a Bool, a Float.
 SV sem_lit(KN n) {
     if (n.aux == "int") {
-        Str text = n.text;
+        // A 0x / 0b / 0o literal is read as its decimal value, so it folds
+        // like any other (a descriptor written in hex is as known as one in
+        // decimal, spec §49).
+        Str text = sem_lit_dec(n.text);
         Int k = str_len(text);
         // A literal without leading zeros is its own canonical text.
         if (k > 0 && k <= 18 && (k == 1 || str_char_at(text, 0) != 48)) { return sv_of(text, "Int"); }

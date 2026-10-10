@@ -1,0 +1,11 @@
+// Integer literals written 0x, 0b or 0o are as known as decimal ones: the
+// reducer reads them by value, so code over them folds (and a device
+// descriptor written in hex is known after reduction, spec §49).
+Int masks() { return 0xFF00 + 0b1010 + 0o17 + 0xc0205300; }
+UInt(8) top() { return (UInt(8))0xff; }
+Int wide() { return 0x7FFFFFFFFFFFFFFF - 0x7FFFFFFFFFFFFFFE; }
+
+Int main() {
+    println(f"{masks()} {top()} {wide()}");
+    return 0;
+}
