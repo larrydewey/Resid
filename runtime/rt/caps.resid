@@ -103,6 +103,14 @@ Bool cap_granted(Int cap) {
     return cap_all_frames(0, depth, cap, write);
 }
 
+// Whether text s starts with text p.
+Bool cap_prefix(Int s, Int p) {
+    Int c = ld8(p);
+    if (c == 0) { return true; }
+    if (ld8(s) != c) { return false; }
+    return cap_prefix(s + 1, p + 1);
+}
+
 // The query itself (tests/runtime/cap_guard.c).
 @export("resid_cap_granted", "i8(ptr)")
 pub Int rt_cap_granted(Int cap) { return if (cap_granted(cap)) { 1 } else { 0 }; }
@@ -114,7 +122,10 @@ pub Int rt_cap_check(Int cap) {
     Bool write = n > 0 && ld8(cap + n - 1) == 33;
     Int fam = if (write) { n - 1 } else { n };
     Int pre = resid_raw_addr("capability not granted: ");
-    Int suf = if (write) { resid_raw_addr(" (write)") } else { resid_raw_addr("") };
+    // A native family has no modes: its stubs check `native_<m>!` so a
+    // read-only grant never covers it, but the message names the family.
+    Bool moded = !cap_prefix(cap, resid_raw_addr("native_"));
+    Int suf = if (write && moded) { resid_raw_addr(" (write)") } else { resid_raw_addr("") };
     Int np = c_strlen(pre);
     Int ns = c_strlen(suf);
     Int buf = xmalloc(np + fam + ns + 1);
