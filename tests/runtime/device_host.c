@@ -15,13 +15,26 @@
  * longer than its bytes; 8 more bytes than any reply; 9 to 12 a
  * ConfigfsReport against a fake configfs at the given root (10 another
  * writer changes the generation, 11 no Landlock, 12 no outblob);
- * 13 the host checks that it zeroed its secrets; 14 a bad exit status. */
+ * 13 the host checks that it zeroed its secrets; 14 a bad exit status;
+ * 15 and 16 the host pretends AT_SECURE or a capability its parent lacks;
+ * 17 to 19 a ConfigfsReport on the fake configfs whose host is killed,
+ * never answers, or sees another writer before its first read; 20 a
+ * write into the guard page before a region; 21 a shared mapping and 22
+ * an munmap after the filter.
+ *
+ * The parent's side of a test (a shorter wall-clock limit, the fake
+ * configfs root it cleans up) is set with resid_device_test_parent, which
+ * no Resid program can name either. */
 #include <dirent.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 void* resid_box_i64(int64_t v);
@@ -33,8 +46,11 @@ void* resid_device_call(void* req);
 void* resid_device_call_w(void* req);
 void* resid_device_secret(int64_t k);
 void resid_device_host_test(int64_t argc, char** argv, char** envp, int64_t mode, const char* root);
+void resid_device_test_parent(int64_t ms, const char* root);
+void* resid_malloc(int64_t n);
 
 static char exe[4096];
+static char self[4096];
 
 static void mode_path(char* out) {
     ssize_t n = readlink("/proc/self/exe", out, 4000);
@@ -79,9 +95,10 @@ static void req_ptn(Req* r) {
     u(r, 0, 1);                                       /* no inputs */
 }
 
-/* /dev/zero as a request/response device: max 16 bytes each way. */
+/* /dev/zero as a request/response device: max 16 bytes each way. A
+ * Transact writes its command, so it is a write request. */
 static void req_zero(Req* r, int secret) {
-    head(r, 2, 0, "fx.zero", "/dev/zero");
+    head(r, 2, 1, "fx.zero", "/dev/zero");
     u(r, 16, 4); u(r, 16, 4); u(r, secret, 1);
     u(r, 3, 4); u(r, 1, 1); u(r, 2, 1); u(r, 3, 1);
 }
@@ -91,8 +108,32 @@ static void req_attr(Req* r) {
     u(r, 256, 4);
 }
 
+/* A pty master answers nothing until someone writes to its slave: a read
+ * that blocks forever. */
+static void req_ptmx_read(Req* r) {
+    head(r, 2, 1, "fx.ptmx", "/dev/ptmx");
+    u(r, 16, 4); u(r, 16, 4); u(r, 0, 1);
+    u(r, 0, 4);
+}
+
+/* An ioctl with a Buffer whose length field is `lw` bytes wide, and a
+ * second Buffer sharing it when `shared`. */
+static void req_lenfield(Req* r, int lw, int shared) {
+    head(r, 1, 0, "fx.len", "/dev/ptmx");
+    uint32_t num = (3u << 30) | (24u << 16) | ('x' << 8) | 1;
+    u(r, 2, 1); u(r, 0, 1); u(r, num, 4); u(r, 1, 1); u(r, num, 4);
+    u(r, 24, 4); u(r, shared ? 3 : 2, 1);
+    u(r, 2, 1); u(r, 0, 4); u(r, 8, 4); u(r, 256, 4); u(r, 2, 1); u(r, 0, 1);   /* Buffer(0, 8, 256, Out) */
+    u(r, 0, 1); u(r, 8, 4); u(r, lw, 4); u(r, 3, 1);                            /* Scalar(8, lw, InOut) */
+    if (shared) { u(r, 2, 1); u(r, 16, 4); u(r, 8, 4); u(r, 16, 4); u(r, 2, 1); u(r, 0, 1); }   /* Buffer(16, 8, 16, Out) */
+    u(r, 0, 1); u(r, 0, 1);
+    u(r, 0, 1);
+}
+
+static const char* report_root = "/sys/kernel/config/tsm/report";
+
 static void req_report(Req* r, const char* provider, int64_t privlevel) {
-    head(r, 4, 0, "fx.report", "/sys/kernel/config/tsm/report");
+    head(r, 4, 0, "fx.report", report_root);
     u(r, 1, 1); str(r, provider);
     u(r, 64, 4); u(r, 64, 4); u(r, 64, 4); u(r, 64, 4);
     u(r, 4, 4); u(r, 'n', 1); u(r, 'o', 1); u(r, 'n', 1); u(r, 'c', 1);
@@ -142,6 +183,59 @@ static int count_fds(void) {
     return n;
 }
 
+static double now_s(void) {
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return t.tv_sec + t.tv_nsec / 1e9;
+}
+
+/* Start this program as a device host by hand, as anyone who can run it
+ * could, with the request written into its socket beforehand: through
+ * bash (`bash_parent`: another executable), else from a child of this
+ * program that makes the socket itself and then never answers the host's
+ * challenge. The host's exit status; *n the bytes it sent. */
+static int host_by_hand(int bash_parent, Req* q, uint8_t* out, int* n) {
+    int pp[2];
+    pipe(pp);
+    pid_t x = fork();
+    if (x == 0) {
+        close(pp[0]);
+        int sv[2];
+        socketpair(AF_UNIX, SOCK_STREAM, 0, sv);
+        uint64_t len = q->n;
+        write(sv[0], &len, 8);
+        write(sv[0], q->b, q->n);
+        pid_t y = fork();
+        if (y == 0) {
+            close(sv[0]);
+            dup2(sv[1], 3);
+            if (sv[1] != 3) close(sv[1]);
+            if (bash_parent) {
+                execl("/bin/bash", "bash", "-c", "(exec -c -a resid-device-host \"$0\"); exit $?", self, (char*)0);
+            } else {
+                char* av[] = {"resid-device-host", NULL};
+                char* ev[] = {NULL};
+                execve("/proc/self/exe", av, ev);
+            }
+            _exit(127);
+        }
+        close(sv[1]);
+        int st;
+        waitpid(y, &st, 0);
+        int k, got = 0;
+        while ((k = read(sv[0], out + got, 4096 - got)) > 0) got += k;
+        write(pp[1], &got, sizeof got);
+        _exit(WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st));
+    }
+    close(pp[1]);
+    *n = -1;
+    read(pp[0], n, sizeof *n);
+    close(pp[0]);
+    int st;
+    waitpid(x, &st, 0);
+    return WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st);
+}
+
 static int dir_empty(const char* p) {
     int n = 0;
     DIR* d = opendir(p);
@@ -162,6 +256,8 @@ int main(int argc, char** argv, char** envp) {
         return 125;   /* not a host after all */
     }
     mode_path(exe);
+    ssize_t sl = readlink("/proc/self/exe", self, 4000);
+    self[sl < 0 ? 0 : sl] = 0;
     Req q;
     Rep r;
 
@@ -180,18 +276,28 @@ int main(int argc, char** argv, char** envp) {
     r = call_mode(2, NULL, &q, 0);
     check("device_overrun_canary", code(&r) == 8);
     req_zero(&q, 0);
-    r = call_mode(2, NULL, &q, 0);
+    r = call_mode(2, NULL, &q, 1);
     check("device_overrun_canary_transact", code(&r) == 8);
 
     /* A read past the buffer stops at the guard page (the kernel faults or
      * returns short of it), and a write into the guard faults the host:
      * Overrun either way. */
     req_zero(&q, 0);
-    r = call_mode(3, NULL, &q, 0);
+    r = call_mode(3, NULL, &q, 1);
     check("device_overrun_guard_page", code(&r) == 8);
     req_ptn(&q);
     r = call_mode(4, NULL, &q, 0);
     check("device_overrun_guard_page_fault", code(&r) == 8);
+    /* Every region has a guard page of its own before it too. */
+    r = call_mode(20, NULL, &q, 0);
+    check("device_overrun_guard_page_before", code(&r) == 8);
+
+    /* After the filter: memory only private, anonymous and not
+     * executable; no munmap (a guard page stays). */
+    r = call_mode(21, NULL, &q, 0);
+    check("device_seccomp_mmap_shared", code(&r) == 11 && value(&r) == 256 + 31);
+    r = call_mode(22, NULL, &q, 0);
+    check("device_seccomp_munmap", code(&r) == 11 && value(&r) == 256 + 31);
 
     /* A killed host or a bad exit is an error value, not an abort. */
     req_ptn(&q);
@@ -214,7 +320,7 @@ int main(int argc, char** argv, char** envp) {
      * from resid_device_secret; the host zeroed its copies (mode 13 checks,
      * exiting 99 if not). */
     req_zero(&q, 1);
-    r = call_mode(13, NULL, &q, 0);
+    r = call_mode(13, NULL, &q, 1);
     int ok = code(&r) == 0 && r.n == 10 && r.b[5] == 2 && r.b[6] == 16;
     void* s = resid_device_secret(0);
     ok = ok && resid_list_len(s) == 16;
@@ -222,13 +328,17 @@ int main(int argc, char** argv, char** envp) {
     ok = ok && resid_list_len(resid_device_secret(0)) == 0 && resid_list_len(resid_device_secret(1)) == 0;
     check("device_secret_out", ok);
 
-    /* ConfigfsReport: the real root is not here; then the whole flow on a
+    /* ConfigfsReport: a report root that exists nowhere (on an SNP or TDX
+     * guest /sys/kernel/config/tsm/report does); then the whole flow on a
      * fake configfs, under Landlock. */
+    report_root = "/sys/kernel/config/resid-no-such-tsm/report";
     req_report(&q, "fake_tsm", -1);
     r = call_mode(0, NULL, &q, 0);
     check("configfs_absent", code(&r) == 1);
+    report_root = "/sys/kernel/config/tsm/report";
     char root[] = "/tmp/resid-devhost-XXXXXX";
     if (!mkdtemp(root)) { puts("FAIL no temporary directory"); return 1; }
+    resid_device_test_parent(0, root);
     r = call_mode(9, root, &q, 0);
     ok = code(&r) == 0 && r.n > 5 && r.b[0] == 0 && r.b[1] == 5;
     /* outblob "fake report", auxblob "fake aux", no manifestblob,
@@ -250,7 +360,72 @@ int main(int argc, char** argv, char** envp) {
     check("configfs_no_landlock_fails_closed", code(&r) == 6 && dir_empty(root));
     r = call_mode(12, root, &q, 0);
     check("configfs_missing_attr_err", code(&r) == 6 && dir_empty(root));
+    /* Both generation reads agree, but on more stores than this host made:
+     * someone else wrote to the entry before the first read. */
+    r = call_mode(19, root, &q, 0);
+    check("configfs_generation_foreign_write", code(&r) == 5 && dir_empty(root));
+    /* A host killed after it made the entry, or one that never answers:
+     * the parent removes the entry (it chose the name). */
+    r = call_mode(17, root, &q, 0);
+    check("configfs_killed_entry_removed", code(&r) == 11 && value(&r) == 256 + 9 && dir_empty(root));
+    resid_device_test_parent(1500, root);
+    double t0 = now_s();
+    r = call_mode(18, root, &q, 0);
+    check("configfs_timeout_entry_removed", code(&r) == 12 && now_s() - t0 < 10 && dir_empty(root));
+    resid_device_test_parent(0, NULL);
+    /* No symbolic link on the way to the report root (openat2). */
+    char real[4200], ln[4200], via[4200];
+    snprintf(real, sizeof real, "%s/real", root);
+    snprintf(ln, sizeof ln, "%s/ln", root);
+    snprintf(via, sizeof via, "%s/ln/sub", root);
+    mkdir(real, 0700);
+    snprintf(via, sizeof via, "%s/real/sub", root);
+    mkdir(via, 0700);
+    symlink(real, ln);
+    snprintf(via, sizeof via, "%s/ln/sub", root);
+    resid_device_test_parent(0, via);
+    r = call_mode(9, via, &q, 0);
+    check("configfs_root_symlink_refused", code(&r) == 6);
+    resid_device_test_parent(0, NULL);
+    unlink(ln);
+    snprintf(via, sizeof via, "%s/real/sub", root);
+    rmdir(via);
+    rmdir(real);
     rmdir(root);
+
+    /* A call that never finishes (a pty master read with no writer) is
+     * Timeout once the wall-clock limit passes, not a hang. */
+    resid_device_test_parent(1500, NULL);
+    req_ptmx_read(&q);
+    t0 = now_s();
+    r = call_mode(0, NULL, &q, 1);
+    check("device_timeout", code(&r) == 12 && now_s() - t0 < 10);
+    resid_device_test_parent(0, NULL);
+
+    /* With SIGCHLD ignored (inherited), the host's status is still read:
+     * the runtime puts the default disposition back. */
+    signal(SIGCHLD, SIG_IGN);
+    req_ptn(&q);
+    r = call_mode(0, NULL, &q, 0);
+    check("device_sigchld_ignored", code(&r) == 0);
+    signal(SIGCHLD, SIG_DFL);
+
+    /* A host started by hand: refused before it reads a request -- from
+     * another executable, and from this one when the parent does not
+     * answer the challenge (the request written beforehand). Then the
+     * host refuses AT_SECURE and a capability beyond its parent's. */
+    uint8_t hb[4096];
+    int hn;
+    req_attr(&q);
+    int hst = host_by_hand(1, &q, hb, &hn);
+    check("device_host_by_hand_other_exe", hst == 124 && hn == 0);
+    hst = host_by_hand(0, &q, hb, &hn);
+    check("device_host_by_hand_no_answer", hst == 124 && hn == 16);
+    req_ptn(&q);
+    r = call_mode(15, NULL, &q, 0);
+    check("device_host_at_secure", code(&r) == 11 && value(&r) == 512 + 124);
+    r = call_mode(16, NULL, &q, 0);
+    check("device_host_capability", code(&r) == 11 && value(&r) == 512 + 124);
 
     /* Stateless, and nothing left open in the program. */
     int before = count_fds();
@@ -275,6 +450,31 @@ int main(int argc, char** argv, char** envp) {
     q.b[q.n - 8] = 9;   /* the Scalar's width: 9 bytes */
     r = reply(resid_device_call(list_of(&q)));
     check("device_layout_refused", code(&r) == 10);
+    /* A Transact writes: refused as a read, by both entries. */
+    req_zero(&q, 0);
+    q.b[5] = 0;
+    r = reply(resid_device_call_w(list_of(&q)));
+    check("device_transact_read_refused", code(&r) == 10 && value(&r) == 19);
+    /* A length field too narrow for its buffer's maximum (one byte for
+     * 256), and one length field for two buffers. */
+    req_lenfield(&q, 4, 0);
+    r = reply(resid_device_call(list_of(&q)));
+    int ok_wide = code(&r) != 10;
+    req_lenfield(&q, 1, 0);
+    r = reply(resid_device_call(list_of(&q)));
+    check("device_length_field_narrow_refused", ok_wide && code(&r) == 10 && value(&r) == 42);
+    req_lenfield(&q, 4, 1);
+    r = reply(resid_device_call(list_of(&q)));
+    check("device_length_field_shared_refused", code(&r) == 10 && value(&r) == 42);
+
+    /* The request (the program's inputs) is wiped before it is freed: the
+     * next block of its size holds none of it. */
+    req_attr(&q);
+    r = reply(resid_device_call(list_of(&q)));
+    uint8_t* again = resid_malloc(q.n);
+    int leaked = 0;
+    for (int i = 0; i + 5 <= q.n; i++) if (memcmp(again + i, "/sys/", 5) == 0) leaked = 1;
+    check("device_request_wiped", code(&r) == 0 && !leaked);
 
     char p[4096];
     mode_path(p);

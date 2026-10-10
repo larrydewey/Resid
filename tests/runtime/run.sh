@@ -119,5 +119,41 @@ if command -v python3 > /dev/null; then
         fail=$((fail + 1)); echo "FAIL readline on a pty: $(grep -m1 -i error "$W/rl.log") $(diff "$W/rl.out" term/drive.out | head -3 | tr '\n' ' ')"
     fi
 fi
+# A native module's host started by hand (spec §47, hs_auth): run as
+# `resid-native-host tiny` with a socket on fd 3 and a request already in
+# it, by a parent that is another executable (python3), it refuses before
+# reading anything (exit 124, no reply); called by the program itself it
+# answers.
+if command -v python3 > /dev/null; then
+    if (cd "$ROOT" && "$COMPILER" tests/conformance/cases/native_stateless.resid -native tiny=tests/conformance/native/tiny.ll -o "$W/nh") > "$W/nh.log" 2>&1 \
+        && [ "$("$W/nh")" = "1 1 1" ] \
+        && python3 - "$W/nh" > "$W/nh.out" 2>&1 <<'PY'
+import os, socket, struct, sys
+a, b = socket.socketpair()
+a.sendall(struct.pack("<q", 0)); a.shutdown(socket.SHUT_WR)
+pid = os.fork()
+if pid == 0:
+    os.dup2(b.fileno(), 3)
+    os.execve(sys.argv[1], ["resid-native-host", "tiny"], {})
+b.close()
+data = b""
+while True:
+    try:
+        c = a.recv(4096)
+    except ConnectionResetError:   # it exited with our request unread
+        break
+    if not c: break
+    data += c
+_, st = os.waitpid(pid, 0)
+ok = os.WIFEXITED(st) and os.WEXITSTATUS(st) == 124 and data == b""
+print("refused" if ok else f"answered: status {st}, {len(data)} bytes")
+sys.exit(0 if ok else 1)
+PY
+    then
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1)); echo "FAIL native host by hand: $(grep -m1 -i error "$W/nh.log") $(cat "$W/nh.out" 2>/dev/null)"
+    fi
+fi
 echo "runtime: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

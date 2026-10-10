@@ -10,8 +10,12 @@
 // the reply's shape; a request that does not parse is refused without a
 // host. Then the isolated host is started (hs_spawn, shared with native
 // modules: a fresh re-execution of /proc/self/exe as "resid-device-host",
-// empty environment, one socket as fd 3), sent [u64 length][request], and
-// its reply read up to the descriptor's maxima. The reply is untrusted:
+// empty environment, one socket as fd 3), answers the host's challenge
+// (hs_answer), sends [u64 length][request] (and, for a ConfigfsReport, the
+// 16 random bytes that name its entry), and reads the reply up to the
+// descriptor's maxima -- all within the call's wall-clock limit
+// (dv_deadline_ms), past which the host is killed and the call is Timeout.
+// The reply is untrusted:
 // its framing, every length and every number are checked against the
 // request before it becomes the engine's List(Int). A host that is killed,
 // exits badly or answers malformed bytes gives an error reply (code 11),
@@ -25,23 +29,27 @@
 // the engine takes each with resid_device_secret(k).
 //
 // Host (resid_device_host, called first in main when the program reaches
-// a device verb): drop every descriptor but fd 3, no core dump, no
-// time-stamp counter, no vDSO; read the request and check it again (the
+// a device verb): drop every descriptor but fd 3; make sure it was started
+// by the program talking to it and holds no privilege of its own (hs_auth,
+// native.resid); no core dump, no time-stamp counter, no vDSO; read the
+// request (each read's sender checked) and check it again (the
 // host trusts no one, not even the compiler); open the one path
-// (O_NOFOLLOW; a character device for Ioctl, Sequence and Transact, a
-// regular sysfs or configfs file for ReadAttr); put the struct and each
-// buffer in its own mapping that ends at a PROT_NONE guard page, the slack
-// between the declared length and the guard filled with a random canary;
-// then install a seccomp filter that allows only the operation on that
-// descriptor (ioctl with that fd and each step's request number; read or
-// write on that fd), writes to the socket, non-executable mmap, munmap
-// and exit, and kills the process on anything else. After the call the
+// (openat2 with no link on the way, O_NOFOLLOW; a character device for
+// Ioctl, Sequence and Transact, a regular sysfs or configfs file for
+// ReadAttr); put the struct and each buffer in its own mapping between two
+// PROT_NONE guard pages, the slack between the declared length and the
+// guard after filled with a random canary; then install a seccomp filter
+// that allows only the operation on that descriptor (ioctl with that fd
+// and each step's request number; read or write on that fd), writes to
+// the socket, private anonymous non-executable mmap and exit, and kills
+// the process on anything else. After the call the
 // canaries are checked (Overrun), the interface version is checked
 // (Version), the outputs are copied into the reply and the secret ones
-// zeroed before exit. A ConfigfsReport creates a fresh entry with an
-// unpredictable name, confines itself to it with Landlock (no Landlock: the
-// call fails closed), then opens the entry's attributes and installs the
-// filter.
+// zeroed before exit. A ConfigfsReport creates a fresh entry with the
+// unpredictable name the parent sent, confines itself to it with Landlock
+// (no Landlock: the call fails closed), then opens the entry's attributes
+// and installs the filter; both generation reads must count exactly the
+// stores it made. The parent removes the entry again once the host is gone.
 //
 // The wire formats are lib/dev/device.resid's "Serialization".
 
@@ -56,9 +64,31 @@ Int dv_sec_max() { return 64; }           // secret outputs in one reply
 // provider the descriptor does not name (the provider's text follows);
 // 10 the request was refused (value: which check); 11 the host failed
 // (value: what * 256 + detail -- 1 killed by a signal, 2 a bad exit
-// status, 3 no sandbox, 4 a malformed reply, 5 no host process).
+// status, 3 no sandbox, 4 a malformed reply, 5 no host process, 6 the
+// host ran but its exit status was lost); 12 the host did not finish
+// within the call's wall-clock limit (Timeout; the parent's, never the
+// host's).
 Int de_refused() { return 10; }
 Int de_host() { return 11; }
+Int de_timeout() { return 12; }
+
+// A call's wall-clock limit in milliseconds, by kind: 30 s, and 120 s for
+// a ConfigfsReport (an SNP or TDX quote goes through firmware or a quoting
+// service and can take seconds). No descriptor can raise it; a test
+// harness can only lower it (resid_device_test_parent).
+Int dv_deadline_ms(Int kind) {
+    Int base = if (kind == 4) { 120000 } else { 30000 };
+    Int t = ld64(dv_test_w());
+    return if (t > 0 && t < base) { t } else { base };
+}
+
+// Parent-side settings of a C test harness: [deadline ms, fake configfs
+// root]. A Resid program cannot reach them (resid_device_test_parent is
+// declared by no compiler, and names starting resid_ are reserved, E0265).
+Int dv_test_w() { return resid_raw_global("dv_test", 16); }
+
+@export("resid_device_test_parent", "void(i64,ptr)")
+pub Int rt_device_test_parent(Int ms, Int root) { return st64(dv_test_w(), ms) + st64(dv_test_w() + 8, root); }
 
 // ─── Bytes ──────────────────────────────────────────────────────────
 
@@ -85,10 +115,13 @@ Bool dv_fits_w(Int v, Int width) {
 }
 
 // A List(Int) of the n bytes at p.
+// Bytes are immediate boxes (no heap box of their own), so the slots
+// array is the only copy besides the list: it is wiped before it goes.
 Int dp_list(Int p, Int n) {
     Int slots = xmalloc(n * 8 + 8);
     _ = dp_box(p, slots, 0, n);
     Int out = c_list_new(n, slots, resid_raw_addr("List(Int(64))"));
+    _ = resid_raw_fill(slots, 0, n * 8 + 8);
     return c_free(slots) * 0 + out;
 }
 
@@ -414,6 +447,8 @@ Int pq_check(Int d) {
     if (!pq_path_ok(dget(d, 4), dget(d, 5))) { return 12; }
     if (kind == 3 && wr != 0) { return 13; }
     if (kind == 2 && (!pq_max_ok(dget(d, 10)) || !pq_max_ok(dget(d, 11)) || dget(d, 12) > 1 || dget(d, 14) > dget(d, 10))) { return 14; }
+    // A Transact writes its command to the device: never under a read.
+    if (kind == 2 && wr != 1) { return 19; }
     if (kind == 3 && !pq_max_ok(dget(d, 10))) { return 15; }
     if (kind == 4) {
         Int pe = pq_report_err(d);
@@ -536,8 +571,25 @@ Bool pq_fields_ok(Int s, Int i, Int n) {
     if (l <= 0 || o + l > dget(s, 1) || dir < 1 || dir > 3) { return false; }
     if (k == 0 && l != 1 && l != 2 && l != 4 && l != 8) { return false; }
     if (k == 2 && (o % 8 != 0 || !pq_max_ok(fw(s, i, 3)) || fw(s, i, 5) > 1)) { return false; }
-    if (k == 2 && fw(s, i, 2) != 0 - 1 && pq_scalar_at(s, fw(s, i, 2), 0, n) < 0) { return false; }
+    if (k == 2 && fw(s, i, 2) != 0 - 1 && !pq_len_ok(s, i, n)) { return false; }
     return pq_fields_ok(s, i + 1, n);
+}
+
+// Buffer i's length field: a Scalar of the struct wide enough to hold the
+// buffer's maximum, and no other Buffer's.
+Bool pq_len_ok(Int s, Int i, Int n) {
+    Int la = fw(s, i, 2);
+    Int li = pq_scalar_at(s, la, 0, n);
+    if (li < 0) { return false; }
+    Int w = fw(s, li, 2);
+    if (w < 8 && fw(s, i, 3) >= (1 << (w * 8))) { return false; }
+    return pq_len_users(s, la, 0, n, 0) == 1;
+}
+
+Int pq_len_users(Int s, Int la, Int i, Int n, Int k) {
+    if (i >= n) { return k; }
+    Bool hit = fw(s, i, 0) == 2 && fw(s, i, 2) == la;
+    return pq_len_users(s, la, i + 1, n, if (hit) { k + 1 } else { k });
 }
 
 // The index of the Scalar at offset o, or -1.
@@ -755,11 +807,13 @@ Int dp_call(Int req) {
     Int n = if (req == 0) { 0 } else { c_list_len(req) };
     if (n < 6 || n > dv_req_max()) { return dev_err_reply(de_refused(), 1); }
     Int buf = xmalloc(n);
-    if (!dp_bytes(req, buf, 0, n)) { return c_free(buf) * 0 + dev_err_reply(de_refused(), 1); }
+    if (!dp_bytes(req, buf, 0, n)) { return resid_raw_fill(buf, 0, n) * 0 + c_free(buf) * 0 + dev_err_reply(de_refused(), 1); }
     Int d = pq_parse(buf, n);
     Int why = dget(d, 28);
     Int out = if (why != 0) { dev_err_reply(de_refused(), why) } else { dp_run(d, buf, n) };
     _ = pq_free(d);
+    // The request carries the program's inputs: wiped before it is freed.
+    _ = resid_raw_fill(buf, 0, n);
     _ = c_free(buf);
     return out;
 }
@@ -773,40 +827,62 @@ Bool dp_bytes(Int l, Int buf, Int i, Int n) {
     return dp_bytes(l, buf, i + 1, n);
 }
 
-// One call: a fresh host, the request, the reply, the host's exit.
+// One call: a fresh host, the request, the reply, the host's exit, all
+// within the call's wall-clock limit (dv_deadline_ms). A host that does
+// not answer in time is killed (hs_finish) and the call is Timeout. A
+// ConfigfsReport's entry is named here, not in the host -- "resid-" and
+// 32 hex digits of 16 random bytes sent after the request -- so the
+// parent can remove it whatever happened to the host (dp_cf_remove).
 Int dp_run(Int d, Int req, Int n) {
+    Int kind = dget(d, 0);
+    Int dl = hs_deadline(dv_deadline_ms(kind));
+    Int ent = xmalloc(16);
+    if (kind == 4 && resid_raw_syscall(318, ent, 16, 0, 0, 0, 0) != 16) { return c_free(ent) * 0 + dev_err_reply(de_host(), 5 * 256); }
     Int argv = xmalloc(16);
     _ = st64(argv, resid_raw_addr("resid-device-host")) + st64(argv + 8, 0);
-    Int pidp = xmalloc(8);
+    Int pidp = xmalloc(16);
     Int a = hs_spawn(argv, pidp);
     Int pid = ld64(pidp);
+    Int pfd = ld64(pidp + 8);
     _ = c_free(argv) + c_free(pidp);
-    if (a < 0) { return dev_err_reply(de_host(), 5 * 256); }
+    if (a < 0) { return c_free(ent) * 0 + dev_err_reply(de_host(), 5 * 256); }
     Int hdr = xmalloc(8);
     _ = st64(hdr, n);
-    // A host that stops reading early (it refused the request) still
-    // answers; what it answers is judged below.
-    _ = if (native_send(a, hdr, 0, 8)) { native_send(a, req, 0, n) } else { false };
+    // The host proves it is this call's first (hs_auth's challenge). One
+    // that stops reading early (it refused the request) still answers;
+    // what it answers is judged below.
+    Bool s1 = hs_answer(a, dl) && hs_send_until(a, hdr, 0, 8, dl) && hs_send_until(a, req, 0, n, dl);
+    _ = if (s1 && kind == 4) { hs_send_until(a, ent, 0, 16, dl) } else { false };
     _ = c_free(hdr);
     _ = resid_raw_syscall(48, a, 1, 0, 0, 0, 0);   // shutdown(SHUT_WR): the host reads to EOF
     Int cap = pq_reply_cap(d);
     Int rb = dv_map(cap + 1);
     // One byte past the cap is enough to know the reply is too long.
-    Int got = if (rb == 0) { 0 } else { native_recv(a, rb, 0, cap + 1) };
+    Int got = if (rb == 0) { 0 } else { hs_recv_until(a, rb, 0, cap + 1, dl) };
     _ = sys_close(a);
     _ = if (rb == 0) { resid_raw_syscall(62, pid, 9, 0, 0, 0, 0) } else { 0 };   // kill: no room for its reply
-    Int st = wait_pid(pid, 0);
+    Int st = hs_finish(pid, pfd, dl);
+    // A report's entry goes whatever happened to the host: killed, timed
+    // out or refused, it may have made it and not removed it.
+    _ = if (kind == 4) { dp_cf_remove(d, ent) } else { 0 };
+    _ = c_free(ent);
     Int out = dp_judge(d, st, rb, got, cap);
     _ = if (rb != 0) { resid_raw_fill(rb, 0, cap + 1) + dv_unmap(rb, cap + 1) } else { 0 };
     return out;
 }
 
-// The host's exit status and reply, as the engine's reply.
+// The host's exit status and reply, as the engine's reply. st: -1 timed
+// out, -2 the status was lost (then a complete, well-formed reply still
+// counts: the host sends it last, just before it exits).
 Int dp_judge(Int d, Int st, Int rb, Int got, Int cap) {
-    if (st < 0) { return dev_err_reply(de_host(), 5 * 256); }
+    if (st == 0 - 1) { return dev_err_reply(de_timeout(), 0); }
+    if (st < 0) {
+        Int lost = if (rb == 0 || got < 1 || got > cap) { 0 } else { dp_reply(d, rb, got) };
+        return if (lost == 0) { dev_err_reply(de_host(), 6 * 256) } else { lost };
+    }
     Int sig = st & 127;
-    // A fault in the host is a write past its memory: every buffer ends
-    // at a guard page, so that is the kernel overrunning one.
+    // A fault in the host is a write past its memory: every buffer lies
+    // between guard pages, so that is the kernel overrunning one.
     if (sig == 11 || sig == 7) { return dev_err_reply(8, 0); }
     if (sig != 0) { return dev_err_reply(de_host(), 256 + sig); }
     Int code = (st >> 8) & 255;
@@ -815,6 +891,38 @@ Int dp_judge(Int d, Int st, Int rb, Int got, Int cap) {
     if (rb == 0 || got < 1 || got > cap) { return dev_err_reply(de_host(), 4 * 256); }
     Int out = dp_reply(d, rb, got);
     return if (out == 0) { dev_err_reply(de_host(), 4 * 256) } else { out };
+}
+
+// The entry name for 16 random bytes: "resid-" and 32 hex digits,
+// NUL-terminated (40 bytes).
+Int dv_entry_name(Int raw) {
+    Int name = xmalloc(40);
+    _ = mcopy(name, resid_raw_addr("resid-"), 6);
+    _ = dh_hex(name + 6, raw, 0, 16);
+    _ = st8(name + 38, 0);
+    return name;
+}
+
+// Remove this call's report entry under the report root, if it is there:
+// only that one name, the root opened without following any link and
+// checked to be configfs (a test's fake root instead: its files first).
+Int dp_cf_remove(Int d, Int raw) {
+    Int fake = ld64(dv_test_w() + 8);
+    Int root = if (fake != 0) { fake } else { dget(d, 4) };
+    Int rfd = dh_open2(0 - 100, root, o_directory(), 6);
+    if (rfd < 0) { return 0; }
+    Int name = dv_entry_name(raw);
+    _ = if (fake != 0) { dp_fake_files_rm(rfd, name) } else { 0 };
+    _ = if (fake != 0 || dh_is_configfs(rfd)) { resid_raw_syscall(263, rfd, name, 512, 0, 0, 0) } else { 0 };   // unlinkat(AT_REMOVEDIR)
+    _ = sys_close(rfd) + resid_raw_fill(name, 0, 40) + c_free(name);
+    return 0;
+}
+
+Int dp_fake_files_rm(Int rfd, Int name) {
+    Int efd = dh_open2(rfd, name, o_directory(), 14);
+    if (efd < 0) { return 0; }
+    _ = dh_fake_clear(efd);
+    return sys_close(efd);
 }
 
 // The reply as a List(Int), or 0 when it is malformed. Secret outputs
@@ -872,7 +980,20 @@ Int dp_sum(Int lens, Int i, Int n, Int acc) {
 // the engine takes each once (resid_device_secret).
 Int dsec() { return resid_raw_tls("dev_secret", 528); }
 
-Int dsec_clear() { return resid_raw_fill(dsec(), 0, 528); }
+// Secrets the engine did not take are wiped before the slots are cleared
+// (a secret list is flat: its root's slots are the bytes). They are not
+// freed: the list may live in a region, which frees it with the region.
+Int dsec_clear() {
+    _ = dsec_wipe(dsec(), 0, min(ld64(dsec()), dv_sec_max()));
+    return resid_raw_fill(dsec(), 0, 528);
+}
+
+Int dsec_wipe(Int t, Int k, Int n) {
+    if (k >= n) { return 0; }
+    Int l = ld64(t + 8 + k * 8);
+    _ = if (l != 0 && lshift(l) == 0 - 1 && lroot(l) != 0) { resid_raw_fill(lroot(l) + 24, 0, lcount(l) * 8) } else { 0 };
+    return dsec_wipe(t, k + 1, n);
+}
 
 Int dp_secrets(Int lens, Int k, Int n, Int p) {
     if (k >= n) { return 0; }
@@ -932,15 +1053,19 @@ Int dh_main(Int argv, Int envp, Int mode, Int root) {
     if (resid_raw_syscall(436, 0, 2, 0, 0, 0, 0) < 0) { return native_child_exit(126); }   // close_range: only fd 3
     if (resid_raw_syscall(436, 4, 4294967295, 0, 0, 0, 0) < 0) { return native_child_exit(126); }
     if (!dh_same_ids()) { return native_child_exit(125); }
+    // Only for the program that started it, with no privilege of its own
+    // (hs_auth; self-tests 15 and 16 pretend AT_SECURE or a capability).
+    Int ppid = hs_auth(if (mode == 15) { 1 } else if (mode == 16) { 2 } else { 0 });
+    if (ppid <= 0) { return native_child_exit(124); }
     if (!hs_quiet()) { return native_child_exit(126); }
     Int h = dh_ctx(mode, root);
     if (h == 0) { return native_child_exit(125); }
     Int hdr = xmalloc(8);
-    if (native_recv(3, hdr, 0, 8) != 8) { return native_child_exit(125); }
+    if (hs_recv_cred(3, hdr, 0, 8, ppid) != 8) { return native_child_exit(125); }
     Int n = ld64(hdr);
     if (n < 6 || n > dv_req_max()) { return native_child_exit(125); }
     Int req = dv_map(n);
-    if (req == 0 || native_recv(3, req, 0, n) != n) { return native_child_exit(125); }
+    if (req == 0 || hs_recv_cred(3, req, 0, n, ppid) != n) { return native_child_exit(125); }
     Int d = pq_parse(req, n);
     if (dget(d, 28) != 0) { return dh_fail(h, de_refused(), dget(d, 28)); }
     if (mode == 5) { _ = resid_raw_syscall(62, resid_raw_syscall(39, 0, 0, 0, 0, 0, 0), 9, 0, 0, 0, 0); }   // self-test: killed
@@ -948,7 +1073,14 @@ Int dh_main(Int argv, Int envp, Int mode, Int root) {
     Int kind = dget(d, 0);
     if (kind == 2) { return dh_transact(h, d); }
     if (kind == 3) { return dh_attr(h, d); }
-    if (kind == 4) { return dh_report(h, d); }
+    if (kind == 4) {
+        // The entry's name: 16 random bytes from the parent, which removes
+        // the entry itself if this host dies before it does.
+        Int raw = xmalloc(16);
+        if (hs_recv_cred(3, raw, 0, 16, ppid) != 16) { return native_child_exit(125); }
+        _ = dset(h, 19, dv_entry_name(raw));
+        return dh_report(h, d);
+    }
     return dh_ioctl(h, d);
 }
 
@@ -968,6 +1100,8 @@ Bool dh_same_ids() {
 //    8 reply  9 its room  10 its length  11 secret section  12 its room
 //   13 its length  14 error reply (10 + 256 bytes)  15 filter rules
 //   (4 words each: call, kind, a, b)  16 rules used  18 configfs state
+//   19 the configfs entry's name  20 attribute writes made (configfs)
+//   21 the fake configfs's generation
 Int dh_ctx(Int mode, Int root) {
     Int h = xmalloc(256);
     _ = resid_raw_fill(h, 0, 256);
@@ -986,17 +1120,19 @@ Bool dh_regions(Int h, Int n) {
     return t != 0;
 }
 
-// n bytes in their own mapping, followed by a PROT_NONE guard page; the
-// slack between n and the guard holds the canary. 0 when it cannot be
-// made (the host then exits, and the call fails).
+// n bytes in their own mapping, between two PROT_NONE guard pages; the
+// slack between n and the guard after holds the canary. 0 when it cannot
+// be made (the host then exits, and the call fails).
 Int dh_region(Int h, Int n, Int secret) {
     Int pg = dget(h, 2);
     Int k = dget(h, 5);
     if (k >= dget(h, 6)) { return 0; }
     Int rl = ((max(n, 1) + pg - 1) / pg) * pg;
-    Int p = dv_map(rl + pg);
-    if (p == 0) { return 0; }
-    if (resid_raw_syscall(10, p + rl, pg, 0, 0, 0, 0) != 0) { return 0; }   // mprotect(PROT_NONE): the guard
+    Int m = dv_map(rl + pg * 2);
+    if (m == 0) { return 0; }
+    Int p = m + pg;
+    if (resid_raw_syscall(10, m, pg, 0, 0, 0, 0) != 0) { return 0; }        // mprotect(PROT_NONE): the guard before
+    if (resid_raw_syscall(10, p + rl, pg, 0, 0, 0, 0) != 0) { return 0; }   // and after
     _ = dh_canary_fill(dget(h, 3), p, n, rl);
     Int e = dget(h, 4) + k * 32;
     _ = st64(e, p) + st64(e + 8, n) + st64(e + 16, rl) + st64(e + 24, secret);
@@ -1023,15 +1159,30 @@ Bool dh_canaries(Int h, Int k) {
 }
 
 // Self-tests after the device operation: 2 spoils a canary, 4 writes into
-// a guard page (the host faults).
+// the guard page after a region and 20 into the one before (the host
+// faults), 21 maps shared memory and 22 unmaps a region (the filter kills
+// the host).
 Int dh_after_op(Int h) {
     Int mode = dget(h, 0);
+    if (mode == 21) { return resid_raw_syscall(9, 0, 4096, 3, 33, 0 - 1, 0); }   // MAP_SHARED|MAP_ANONYMOUS
+    if (mode == 22) { return resid_raw_syscall(11, ld64(dget(h, 4)), 4096, 0, 0, 0, 0); }
+    // 20: the page before the first region is its own guard, not another
+    // region's trailing one (exit 99 if not), and a write there faults.
+    if (mode == 20 && dh_guard_shared(h, ld64(dget(h, 4)) - dget(h, 2), 0)) { return native_child_exit(99); }
+    if (mode == 20) { return st8(ld64(dget(h, 4)) - 1, 1); }
     if (mode != 2 && mode != 4) { return 0; }
     Int e = dh_slack_region(h, 0);
     if (e == 0) { return 0; }
     Int at = ld64(e) + ld64(e + 8);
     if (mode == 2) { return st8(at, ld8(at) ^ 255); }
     return st8(ld64(e) + ld64(e + 16), 1);
+}
+
+// Whether page g is the guard after some region.
+Bool dh_guard_shared(Int h, Int g, Int k) {
+    if (k >= dget(h, 5)) { return false; }
+    Int e = dget(h, 4) + k * 32;
+    return ld64(e) + ld64(e + 16) == g || dh_guard_shared(h, g, k + 1);
 }
 
 // The first region with slack after its bytes.
@@ -1162,13 +1313,27 @@ Bool dh_is_attr(Int fd) {
     return dh_ftype(fd) == 32768 && (m == 1650812274 || m == 1650812272);   // SYSFS_MAGIC, CONFIGFS_MAGIC
 }
 
-Int dh_open_at(Int dirfd, Int path, Int flags) { return sc4(257, dirfd, path, flags | o_cloexec() | o_nofollow(), 0); }
+// Open with openat2 and `resolve` (RESOLVE_NO_MAGICLINKS 2, NO_SYMLINKS
+// 4, BENEATH 8), always O_NOFOLLOW|O_CLOEXEC; where the kernel has no
+// openat2 (before 5.6), openat with O_NOFOLLOW alone, as before: the last
+// component is never a link, earlier ones are not checked.
+pub Int dh_open2(Int dirfd, Int path, Int flags, Int resolve) {
+    Int how = resid_raw_tls("dh_how", 24);
+    _ = st64(how, flags | o_cloexec() | o_nofollow()) + st64(how + 8, 0) + st64(how + 16, resolve);
+    Int r = sc4(437, dirfd, path, how, 24);
+    if (r != 0 - 38) { return r; }   // ENOSYS
+    return sc4(257, dirfd, path, flags | o_cloexec() | o_nofollow(), 0);
+}
+
+// A device node under /dev/: no link anywhere on the path.
+Int dh_open_dev(Int path, Int flags) { return dh_open2(0 - 100, path, flags, 6); }
 
 // ─── The seccomp filter ─────────────────────────────────────────────
 
 // A rule the filter allows: call nr with kind 0 any arguments, 1 arg0 ==
-// a, 2 arg0 == a and arg1 == b, 3 arg0 == a and arg2 == b, 4 prot (arg2)
-// without PROT_EXEC.
+// a, 2 arg0 == a and arg1 == b, 3 arg0 == a and arg2 == b, 4 an mmap:
+// prot (arg2) without PROT_EXEC, flags (arg3) exactly MAP_PRIVATE|
+// MAP_ANONYMOUS, fd (arg4, an int) -1.
 Int dh_rule(Int h, Int nr, Int kind, Int a, Int b) {
     Int k = dget(h, 16);
     if (k >= 512) { return 0; }
@@ -1178,12 +1343,12 @@ Int dh_rule(Int h, Int nr, Int kind, Int a, Int b) {
     return dset(h, 16, k + 1);
 }
 
-// The rules every host has: its replies on fd 3, memory without
-// execution, exit.
+// The rules every host has: its replies on fd 3, private anonymous
+// memory without execution, exit. Nothing after the filter frees memory,
+// so there is no munmap: a host cannot unmap a guard page.
 Int dh_base_rules(Int h) {
     _ = dh_rule(h, resid_raw_nr(1), 1, 3, 0);    // write(3, ...)
-    _ = dh_rule(h, resid_raw_nr(9), 4, 0, 0);    // mmap without PROT_EXEC
-    _ = dh_rule(h, resid_raw_nr(11), 0, 0, 0);   // munmap
+    _ = dh_rule(h, resid_raw_nr(9), 4, 0, 0);    // mmap: no PROT_EXEC, MAP_PRIVATE|MAP_ANONYMOUS, fd -1
     _ = dh_rule(h, resid_raw_nr(60), 0, 0, 0);   // exit
     return dh_rule(h, resid_raw_nr(231), 0, 0, 0);   // exit_group
 }
@@ -1224,12 +1389,14 @@ Int bf_rules(Int p, Int i, Int rules, Int k, Int n) {
 // starts by loading the call number again.
 Int bf_rule(Int p, Int i, Int nr, Int kind, Int a, Int b) {
     Int allow = 2147418112;   // SECCOMP_RET_ALLOW
-    Int len = if (kind == 0) { 3 } else if (kind == 1) { 7 } else if (kind == 4) { 5 } else { 11 };
+    Int len = if (kind == 0) { 3 } else if (kind == 1) { 7 } else { 11 };
     Int end = i + len;
     _ = bpf(p, i, 32, 0, 0, 0) + bpf(p, i + 1, 21, 0, end - i - 2, nr);   // ld nr; jeq nr
     if (kind == 4) {
-        _ = bpf(p, i + 2, 32, 0, 0, 32) + bpf(p, i + 3, 69, 1, 0, 4);   // prot & PROT_EXEC: the next rule
-        return bpf(p, i + 4, 6, 0, 0, allow) * 0 + end;
+        _ = bpf(p, i + 2, 32, 0, 0, 32) + bpf(p, i + 3, 69, end - i - 4, 0, 4);   // prot & PROT_EXEC: the next rule
+        Int at = bf_eq(p, i + 4, end, 40, 34);                                      // flags
+        _ = bpf(p, at, 32, 0, 0, 48) + bpf(p, at + 1, 21, 0, end - at - 2, 4294967295);   // fd's low word
+        return bpf(p, at + 2, 6, 0, 0, allow) * 0 + end;
     }
     Int at = if (kind == 0) { i + 2 } else { bf_eq(p, i + 2, end, 16, a) };
     Int at2 = if (kind == 2) { bf_eq(p, at, end, 24, b) } else if (kind == 3) { bf_eq(p, at, end, 32, b) } else { at };
@@ -1248,7 +1415,7 @@ Int bf_eq(Int p, Int i, Int end, Int off, Int v) {
 
 Int dh_ioctl(Int h, Int d) {
     Int fl = if (dget(d, 1) == 1) { 2 } else { 0 };   // O_RDWR for a write, else O_RDONLY
-    Int fd = dh_open_at(0 - 100, dget(d, 4), fl);
+    Int fd = dh_open_dev(dget(d, 4), fl);
     if (fd < 0) { return dh_fail_errno(h, fd, false); }
     if (!dh_is_chr(fd)) { return dh_fail(h, 6, 0); }
     _ = dset(h, 7, fd);
@@ -1380,7 +1547,7 @@ Int dh_buf_len(Int s, Int i, Int n) {
 // ─── Transact ───────────────────────────────────────────────────────
 
 Int dh_transact(Int h, Int d) {
-    Int fd = dh_open_at(0 - 100, dget(d, 4), 2);   // O_RDWR: a command is written
+    Int fd = dh_open_dev(dget(d, 4), 2);   // O_RDWR: a command is written
     if (fd < 0) { return dh_fail_errno(h, fd, false); }
     if (!dh_is_chr(fd)) { return dh_fail(h, 6, 0); }
     _ = dset(h, 7, fd);
@@ -1427,7 +1594,10 @@ Int dh_read_all(Int fd, Int p, Int i, Int n) {
 // ─── ReadAttr ───────────────────────────────────────────────────────
 
 Int dh_attr(Int h, Int d) {
-    Int fd = dh_open_at(0 - 100, dget(d, 4), 0);
+    // sysfs reaches attributes through symbolic links (/sys/class/...), so
+    // only magic links (/proc's) are refused on the way; the last
+    // component is never a link.
+    Int fd = dh_open2(0 - 100, dget(d, 4), 0, 2);
     if (fd < 0) { return dh_fail_errno(h, fd, false); }
     if (!dh_is_attr(fd)) { return dh_fail(h, 6, 0); }
     _ = dset(h, 7, fd);
@@ -1459,27 +1629,32 @@ Int cf_set(Int h, Int i, Int v) { return st64(dget(h, 18) + i * 8, v); }
 
 Int dh_report(Int h, Int d) {
     Int mode = dget(h, 0);
-    Bool fake = mode >= 9 && mode <= 12 && dget(h, 1) != 0;
+    Bool fake = ((mode >= 9 && mode <= 12) || (mode >= 17 && mode <= 19)) && dget(h, 1) != 0;
     Int t = xmalloc(128);
     _ = resid_raw_fill(t, 255, 96) + resid_raw_fill(t + 96, 0, 32);   // descriptors -1
     _ = dset(h, 18, t) + cf_set(h, 14, if (fake) { 1 } else { 0 });
     Int root = if (fake) { dget(h, 1) } else { dget(d, 4) };
-    Int rfd = dh_open_at(0 - 100, root, o_directory());
+    // No link anywhere on the way to the root (configfs has none).
+    Int rfd = dh_open2(0 - 100, root, o_directory(), 6);
     if (rfd < 0) { return dh_fail_errno(h, rfd, false); }
     _ = cf_set(h, 0, rfd);
     if (!fake && !dh_is_configfs(rfd)) { return dh_cf_fail(h, 6, 0); }
     // A fresh entry whose name no one can predict: "resid-" and 32 hex
-    // digits of getrandom.
-    Int name = dh_entry_name();
-    if (name == 0) { return native_child_exit(125); }
+    // digits of the parent's getrandom (dp_run), so the parent can remove
+    // it if this host dies first.
+    Int name = dget(h, 19);
     _ = cf_set(h, 12, name);
     Int mk = sc(258, rfd, name, 448);   // mkdirat(root, name, 0700)
     if (mk < 0) { return dh_cf_fail(h, dh_errno(0 - mk, false), 0 - mk); }
     _ = cf_set(h, 13, 1);
-    Int efd = dh_open_at(rfd, name, o_path() | o_directory());
+    Int efd = dh_open2(rfd, name, o_path() | o_directory(), 14);
     if (efd < 0) { return dh_cf_fail(h, dh_errno(0 - efd, false), 0 - efd); }
     _ = cf_set(h, 1, efd);
     _ = if (fake) { dh_fake_fill(efd, mode) } else { 0 };
+    // Self-tests: 17 the host is killed, 18 it never answers (the parent's
+    // deadline), each leaving the entry for the parent to remove.
+    _ = if (mode == 17) { resid_raw_syscall(62, resid_raw_syscall(39, 0, 0, 0, 0, 0, 0), 9, 0, 0, 0, 0) } else { 0 };
+    _ = if (mode == 18) { dh_hang(0) } else { 0 };
     // Confine the host to the entry before it opens anything in it; no
     // Landlock (self-test 11 pretends so) fails the call closed.
     if (mode == 11 || !dh_landlock(rfd, efd, fake)) { return dh_cf_fail(h, 6, 0); }
@@ -1499,22 +1674,27 @@ Int dh_report(Int h, Int d) {
     Int tl = dh_itoa(txt, dget(d, 19));
     _ = dh_cf_rules(h, rfd, efd, fake);
     if (!dh_lock(h)) { return dh_cf_exit(h, 126); }
-    // Write inblob (configfs commits it when its file is closed), then
-    // privlevel and service_provider when asked for.
+    // Write inblob (configfs commits it when its file is closed: one
+    // store, one generation, however many writes it took), then privlevel
+    // and service_provider when asked for (each write(2) a store).
     Int w1 = dh_write_all(cf(h, 2), inb, 0, dget(d, 18));
     if (w1 < 0) { return dh_cf_fail(h, dh_errno(0 - w1, false), 0 - w1); }
     _ = sys_close(cf(h, 2)) + cf_set(h, 2, 0 - 1);
-    Int w2 = if (cf(h, 3) >= 0) { dh_write_all(cf(h, 3), txt, 0, tl) } else { 0 };
+    _ = if (dget(d, 18) > 0) { dh_cf_wrote(h) } else { 0 };
+    Int w2 = if (cf(h, 3) >= 0) { dh_cf_write(h, cf(h, 3), txt, 0, tl) } else { 0 };
     if (w2 < 0) { return dh_cf_fail(h, dh_errno(0 - w2, false), 0 - w2); }
-    Int w3 = if (cf(h, 4) >= 0) { dh_write_all(cf(h, 4), dget(d, 20), 0, dget(d, 21)) } else { 0 };
+    Int w3 = if (cf(h, 4) >= 0) { dh_cf_write(h, cf(h, 4), dget(d, 20), 0, dget(d, 21)) } else { 0 };
     if (w3 < 0) { return dh_cf_fail(h, dh_errno(0 - w3, false), 0 - w3); }
+    // Self-test 19: another writer stores after ours, before the first
+    // read (both reads then agree, on someone else's request).
+    _ = if (mode == 19) { dh_fake_bump(h) } else { 0 };
     // Read the generation, the blobs, the provider, the generation again.
     Int gen1 = dh_gen(cf(h, 9), g1);
     Int ro = dh_read_all(cf(h, 5), outb, 0, dget(d, 11) + 1);
     Int ra = if (cf(h, 6) >= 0) { dh_read_all(cf(h, 6), auxb, 0, dget(d, 12) + 1) } else { 0 };
     Int rm = if (cf(h, 7) >= 0) { dh_read_all(cf(h, 7), manb, 0, dget(d, 13) + 1) } else { 0 };
     Int rp = dh_read_all(cf(h, 8), provb, 0, 257);
-    _ = if (mode == 10) { sc(1, cf(h, 11), resid_raw_addr("7\n"), 2) } else { 0 };   // self-test: another writer
+    _ = if (mode == 10) { dh_fake_bump(h) } else { 0 };   // self-test: another writer between the reads
     Int gen2 = dh_gen(cf(h, 10), g2);
     _ = dh_after_op(h);
     Int err = dh_cf_check(h, d, ro, ra, rm, rp, gen1, gen2, provb);
@@ -1536,7 +1716,13 @@ Int dh_cf_check(Int h, Int d, Int ro, Int ra, Int rm, Int rp, Int gen1, Int gen2
     if (!dh_canaries(h, 0)) { return 8; }
     if (ro > dget(d, 11) || ra > dget(d, 12) || rm > dget(d, 13) || rp > 256) { return 4; }
     if (gen1 < 0 || gen2 < 0) { return 6; }
-    if (gen1 != gen2) { return 5; }
+    // The kernel counts every store to the entry's attributes (inblob,
+    // privlevel, service_provider, ...) in `generation`, from 0 at mkdir
+    // (drivers/virt/coco/tsm-report.c, write_generation). The entry is
+    // ours and fresh, so both reads must show exactly the stores this host
+    // made: more means someone else wrote to it, and the report may be of
+    // their request.
+    if (gen1 != gen2 || gen1 != dget(h, 20)) { return 5; }
     Int pl = dh_trim(provb, rp);
     if (!dh_prov_known(d, provb, pl, 0)) { return dh_cf_provider(h, provb, pl); }
     return 0;
@@ -1572,6 +1758,41 @@ Int dh_printable(Int dst, Int p, Int i, Int n) {
 // Without its trailing newline.
 Int dh_trim(Int p, Int n) { return if (n > 0 && ld8(p + n - 1) == 10) { n - 1 } else { n }; }
 
+// Write n bytes from p + i to a text attribute, counting each write(2)
+// (configfs stores each one): n, or -errno.
+Int dh_cf_write(Int h, Int fd, Int p, Int i, Int n) {
+    if (i >= n) { return n; }
+    Int r = sc(1, fd, p + i, n - i);
+    if (r < 0) { return r; }
+    if (r == 0) { return 0 - 5; }
+    _ = dh_cf_wrote(h);
+    return dh_cf_write(h, fd, p, i + r, n);
+}
+
+// One store made: counted, and on the fake configfs its generation
+// advanced as the kernel's would be.
+Int dh_cf_wrote(Int h) {
+    _ = dset(h, 20, dget(h, 20) + 1);
+    return if (cf(h, 14) == 1) { dh_fake_bump(h) } else { 0 };
+}
+
+// The fake configfs's generation, one more, written over its file.
+Int dh_fake_bump(Int h) {
+    if (cf(h, 11) < 0) { return 0; }
+    _ = dset(h, 21, dget(h, 21) + 1);
+    Int b = dget(h, 14);
+    Int k = dh_itoa(b, dget(h, 21));
+    return resid_raw_syscall(18, cf(h, 11), b, k, 0, 0, 0);   // pwrite64 at 0
+}
+
+// Self-test 18: never answer.
+Int dh_hang(Int i) {
+    Int ts = resid_raw_tls("dh_hang", 16);
+    _ = st64(ts, 3600) + st64(ts + 8, 0);
+    _ = resid_raw_syscall(35, ts, 0, 0, 0, 0, 0);
+    return dh_hang(i + 1);
+}
+
 // The generation: a decimal number and a newline; -1 when it is not one.
 Int dh_gen(Int fd, Int b) {
     Int r = dh_read_all(fd, b, 0, 31);
@@ -1597,17 +1818,7 @@ Int dh_itoa(Int p, Int v) {
     return k + 1;
 }
 
-// "resid-" and 32 hex digits from getrandom, NUL-terminated.
-Int dh_entry_name() {
-    Int raw = xmalloc(16);
-    if (resid_raw_syscall(318, raw, 16, 0, 0, 0, 0) != 16) { return 0; }
-    Int name = xmalloc(40);
-    _ = mcopy(name, resid_raw_addr("resid-"), 6);
-    _ = dh_hex(name + 6, raw, 0, 16);
-    _ = st8(name + 38, 0);
-    return name;
-}
-
+// Two hex digits for each of n bytes at p.
 Int dh_hex(Int dst, Int p, Int i, Int n) {
     if (i >= n) { return 0; }
     Int b = ld8(p + i);
@@ -1641,13 +1852,15 @@ Int dh_cf_open(Int h, Int d, Int efd, Int mode) {
     if (e8 != 0) { return e8; }
     Int e9 = dh_cf_attr(h, 10, efd, "generation", 0, true);
     if (e9 != 0) { return e9; }
-    return if (mode == 10) { dh_cf_attr(h, 11, efd, "generation", 1, true) } else { 0 };
+    // The fake configfs's generation is advanced by the host itself
+    // (dh_fake_bump), through a third file.
+    return if (cf(h, 14) == 1) { dh_cf_attr(h, 11, efd, "generation", 1, true) } else { 0 };
 }
 
 // Open attribute `nm` into slot i: 0, or the errno (an optional one that
 // is missing is 0, its slot left -1).
 Int dh_cf_attr(Int h, Int i, Int efd, Str nm, Int flags, Bool need) {
-    Int fd = dh_open_at(efd, resid_raw_addr(nm), flags);
+    Int fd = dh_open2(efd, resid_raw_addr(nm), flags, 14);
     if (fd >= 0) { return cf_set(h, i, fd); }
     if (!need && fd == 0 - 2) { return 0; }
     return 0 - fd;
@@ -1667,7 +1880,8 @@ Int dh_cf_rules(Int h, Int rfd, Int efd, Bool fake) {
 Int dh_cf_rule_each(Int h, Int i, Int n) {
     if (i >= n) { return 0; }
     Int fd = cf(h, i);
-    Int call = if (i == 2 || i == 3 || i == 4 || i == 11) { 1 } else { 0 };
+    // Slot 11 is the fake's generation, rewritten in place (pwrite64).
+    Int call = if (i == 11) { 18 } else if (i == 2 || i == 3 || i == 4) { 1 } else { 0 };
     _ = if (fd >= 0) { dh_rule(h, resid_raw_nr(call), 1, fd, 0) + dh_rule(h, resid_raw_nr(3), 1, fd, 0) } else { 0 };
     return dh_cf_rule_each(h, i + 1, n);
 }
@@ -1722,16 +1936,17 @@ Bool dh_landlock(Int rfd, Int efd, Bool fake) {
     return ok;
 }
 
-// The fake configfs of the self-tests (9 to 12): the attributes a TSM
-// provider shows, made by the host itself (12 leaves out outblob).
+// The fake configfs of the self-tests (9 to 12, 17 to 19): the attributes
+// a TSM provider shows, made by the host itself (12 leaves out outblob),
+// the generation starting at 0 as the kernel's does.
 Int dh_fake_fill(Int efd, Int mode) {
     _ = dh_fake_file(efd, "inblob", "") + dh_fake_file(efd, "privlevel", "") + dh_fake_file(efd, "service_provider", "");
     _ = if (mode != 12) { dh_fake_file(efd, "outblob", "fake report") } else { 0 };
-    return dh_fake_file(efd, "auxblob", "fake aux") + dh_fake_file(efd, "provider", "fake_tsm\n") + dh_fake_file(efd, "generation", "1\n");
+    return dh_fake_file(efd, "auxblob", "fake aux") + dh_fake_file(efd, "provider", "fake_tsm\n") + dh_fake_file(efd, "generation", "0\n");
 }
 
 Int dh_fake_file(Int efd, Str nm, Str text) {
-    Int fd = sc4(257, efd, resid_raw_addr(nm), 1 | 64 | 512 | o_cloexec() | o_nofollow(), 384);   // O_WRONLY|O_CREAT|O_TRUNC, 0600
+    Int fd = sc4(257, efd, resid_raw_addr(nm), 1 | 64 | 128 | o_cloexec() | o_nofollow(), 384);   // O_WRONLY|O_CREAT|O_EXCL, 0600
     if (fd < 0) { return 0; }
     Int t = resid_raw_addr(text);
     _ = dh_write_all(fd, t, 0, c_strlen(t));

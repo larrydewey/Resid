@@ -28,20 +28,24 @@ Int ntab_ent() { return 40; }   // module, function, reqlen, resplen, thunk
 pub Int rt_native_call(Int m, Int f, Int req, Int reqlen, Int resp, Int resplen) {
     Int argv = xmalloc(24);
     _ = st64(argv, resid_raw_addr("resid-native-host")) + st64(argv + 8, m) + st64(argv + 16, 0);
-    Int pidp = xmalloc(8);
+    Int pidp = xmalloc(16);
+    Int dl = hs_deadline(native_wall_ms());
     Int a = hs_spawn(argv, pidp);
     Int pid = ld64(pidp);
+    Int pfd = ld64(pidp + 8);
     _ = c_free(argv) + c_free(pidp);
     if (a == 0 - 1) { return native_fail(m, f, resid_raw_addr("no socket pair")); }
     if (a < 0) { return native_fail(m, f, resid_raw_addr("cannot start the module's process")); }
-    Bool sent = native_send(a, req, 0, reqlen);
+    // The host proves it is this call's (hs_auth) before it reads anything.
+    Bool sent = hs_answer(a, dl) && hs_send_until(a, req, 0, reqlen, dl);
     _ = resid_raw_syscall(48, a, 1, 0, 0, 0, 0);   // shutdown(SHUT_WR): the child reads to EOF
-    Int got = native_recv(a, resp, 0, resplen);
+    Int got = hs_recv_until(a, resp, 0, resplen, dl);
     // One byte more than the reply means a malformed one.
     Int extra = xmalloc(8);
-    Int more = if (got == resplen) { sc(0, a, extra, 1) } else { 0 };
+    Int more = if (got == resplen) { hs_recv_until(a, extra, 0, 1, dl) } else { 0 };
     _ = c_free(extra) + sys_close(a);
-    Int st = wait_pid(pid, 0);
+    Int st = hs_finish(pid, pfd, dl);
+    if (st == 0 - 1) { return native_fail(m, f, resid_raw_addr("timed out (no answer within its wall-clock limit)")); }
     if (st < 0) { return native_fail(m, f, resid_raw_addr("lost the module's process")); }
     if ((st & 127) != 0) { return native_fail_n(m, f, resid_raw_addr("killed by signal "), st & 127); }
     Int code = (st >> 8) & 255;
@@ -51,11 +55,18 @@ pub Int rt_native_call(Int m, Int f, Int req, Int reqlen, Int resp, Int resplen)
     return 0;
 }
 
+// A module call's wall-clock limit: twice its CPU limit. The host makes no
+// blocking call but reads and writes on its socket, so only a stopped or
+// descheduled host gets here; it is killed then.
+Int native_wall_ms() { return native_cpu_seconds() * 2000; }
+
 // Start a sandboxed host: fork, and in the child re-execute this program
 // with `argv`, an empty environment and one end of a socket pair as fd 3.
-// The parent's end of the socket, the pid at *pidp; -1 when there is no
-// socket pair, -2 when the fork failed.
+// The parent's end of the socket; at pidp the pid and a pidfd for it (-1
+// without pidfd_open); -1 when there is no socket pair, -2 when the fork
+// failed.
 pub Int hs_spawn(Int argv, Int pidp) {
+    _ = sigchld_default() + hs_reap_pending(0) + st64(hs_timeout_w(), 0);
     // Everything the child needs exists before the fork: between fork and
     // execve it makes system calls only (other threads may hold locks).
     Int sv = xmalloc(8);
@@ -73,7 +84,8 @@ pub Int hs_spawn(Int argv, Int pidp) {
     _ = sys_close(b);
     _ = c_free(envp) + c_free(lim);
     if (pid < 0) { return sys_close(a) * 0 - 2; }
-    _ = st64(pidp, pid);
+    Int pfd = resid_raw_syscall(434, pid, 0, 0, 0, 0, 0);   // pidfd_open (close-on-exec by itself)
+    _ = st64(pidp, pid) + st64(pidp + 8, if (pfd < 0) { 0 - 1 } else { pfd });
     return a;
 }
 
@@ -96,19 +108,263 @@ Int native_child(Int b, Int argv, Int envp, Int lim) {
 
 pub Int native_child_exit(Int code) { return resid_raw_syscall(231, code, 0, 0, 0, 0, 0); }
 
-pub Bool native_send(Int fd, Int p, Int i, Int n) {
-    if (i >= n) { return true; }
-    Int r = resid_raw_syscall(44, fd, p + i, n - i, 16384, 0, 0);   // sendto, MSG_NOSIGNAL
-    if (r == 0 - 4) { return native_send(fd, p, i, n); }
-    if (r <= 0) { return false; }
-    return native_send(fd, p, i + r, n);
+// ─── Deadlines (parent) ─────────────────────────────────────────────
+// A host gets a wall-clock limit as well as RLIMIT_CPU: one blocked in the
+// kernel (a device that never answers) uses no CPU. Every wait on its
+// socket polls against the deadline, and the host is then killed and
+// reaped with a bounded wait (hs_finish).
+
+// The monotonic time `ms` milliseconds from now, in nanoseconds.
+pub Int hs_deadline(Int ms) { return rt_clock_monotonic_ns() + ms * 1000000; }
+
+// Set when a wait on a host's socket reached its deadline.
+pub Int hs_timeout_w() { return resid_raw_tls("hs_timeout", 8); }
+
+// poll(2) on fd for `events` until the deadline: its revents, 0 when the
+// deadline passed (and the timeout flag set), POLLERR when poll failed.
+Int hs_poll(Int fd, Int events, Int dl) {
+    Int left = dl - rt_clock_monotonic_ns();
+    if (left <= 0) { return st64(hs_timeout_w(), 1) * 0; }
+    Int p = resid_raw_tls("hs_pfd", 8);
+    Int ts = resid_raw_tls("hs_pts", 16);
+    _ = st32(p, fd) + st32(p + 4, events);
+    _ = st64(ts, left / 1000000000) + st64(ts + 8, left % 1000000000);
+    Int r = resid_raw_syscall(271, p, 1, ts, 0, 8, 0);   // ppoll
+    if (r == 0 - 4) { return hs_poll(fd, events, dl); }
+    if (r < 0) { return 8; }
+    if (r == 0) { return hs_poll(fd, events, dl); }   // early wakeup: the clock decides
+    return (ld32(p + 4) >> 16) & 65535;
 }
 
-pub Int native_recv(Int fd, Int p, Int i, Int n) {
+// Read into p + i until n bytes, end of file, an error or the deadline;
+// the count.
+pub Int hs_recv_until(Int fd, Int p, Int i, Int n, Int dl) {
     if (i >= n) { return i; }
-    Int r = sc(0, fd, p + i, n - i);
+    if (hs_poll(fd, 1, dl) == 0) { return i; }
+    Int r = resid_raw_syscall(45, fd, p + i, n - i, 64, 0, 0);   // recvfrom, MSG_DONTWAIT
+    if (r == 0 - 4 || r == 0 - 11) { return hs_recv_until(fd, p, i, n, dl); }
     if (r <= 0) { return i; }
-    return native_recv(fd, p, i + r, n);
+    return hs_recv_until(fd, p, i + r, n, dl);
+}
+
+// Send n bytes from p + i before the deadline.
+pub Bool hs_send_until(Int fd, Int p, Int i, Int n, Int dl) {
+    if (i >= n) { return true; }
+    Int r = resid_raw_syscall(44, fd, p + i, n - i, 16384 | 64, 0, 0);   // sendto, MSG_NOSIGNAL|MSG_DONTWAIT
+    if (r == 0 - 4) { return hs_send_until(fd, p, i, n, dl); }
+    if (r == 0 - 11) { return hs_poll(fd, 4, dl) != 0 && hs_send_until(fd, p, i, n, dl); }
+    if (r <= 0) { return false; }
+    return hs_send_until(fd, p, i + r, n, dl);
+}
+
+// The parent's half of hs_auth's challenge: the host's 16 random bytes,
+// sent back.
+pub Bool hs_answer(Int fd, Int dl) {
+    Int b = xmalloc(16);
+    Bool ok = hs_recv_until(fd, b, 0, 16, dl) == 16 && hs_send_until(fd, b, 0, 16, dl);
+    return c_free(b) * 0 == 0 && ok;
+}
+
+// The host's wait status once it exits, waiting until the deadline: -1
+// when it has not exited by then, -2 when its status is lost (no such
+// child: something else reaped it).
+pub Int hs_wait_until(Int pid, Int pfd, Int dl) {
+    Int st = hs_wait_nohang(pid);
+    if (st != 0 - 1) { return st; }
+    if (rt_clock_monotonic_ns() >= dl) { return 0 - 1; }
+    Int ev = if (pfd >= 0) { hs_poll(pfd, 1, dl) } else { 0 };
+    _ = if (ev != 1) { hs_nap(dl) } else { 0 };
+    return hs_wait_until(pid, pfd, dl);
+}
+
+// wait4(pid, WNOHANG): the status, -1 still running, -2 no such child.
+Int hs_wait_nohang(Int pid) {
+    Int stp = resid_raw_tls("hs_wstatus", 8);
+    _ = st64(stp, 0);
+    Int r = sc4(61, pid, stp, 1, 0);
+    if (r == 0) { return 0 - 1; }
+    if (r < 0) { return 0 - 2; }
+    return ld32(stp);
+}
+
+// Sleep 2 ms, or until the deadline when that is sooner.
+Int hs_nap(Int dl) {
+    Int left = dl - rt_clock_monotonic_ns();
+    Int ns = if (left < 2000000) { max(left, 0) } else { 2000000 };
+    Int ts = resid_raw_tls("hs_nap", 16);
+    _ = st64(ts, 0) + st64(ts + 8, ns);
+    return resid_raw_syscall(35, ts, 0, 0, 0, 0, 0);
+}
+
+// The end of a call: the host's status by the deadline; past it, SIGKILL
+// and a grace of hs_grace_ms() to reap it, -1 either way (timed out). A
+// host the kernel cannot kill in time (blocked uninterruptibly in a
+// driver) is left to hs_reap_pending: the call returns instead of hanging
+// on it. -2: its status was lost. The pidfd is closed.
+pub Int hs_finish(Int pid, Int pfd, Int dl) {
+    Int st = if (ld64(hs_timeout_w()) != 0) { 0 - 1 } else { hs_wait_until(pid, pfd, dl) };
+    if (st != 0 - 1) { return hs_close_pfd(pfd) * 0 + st; }
+    _ = resid_raw_syscall(62, pid, 9, 0, 0, 0, 0);   // kill(SIGKILL)
+    Int st2 = hs_wait_until(pid, pfd, hs_deadline(hs_grace_ms()));
+    _ = if (st2 == 0 - 1) { hs_pend(pid) } else { 0 };
+    _ = st64(hs_timeout_w(), 1);
+    return hs_close_pfd(pfd) * 0 - 1;
+}
+
+Int hs_close_pfd(Int pfd) { return if (pfd >= 0) { sys_close(pfd) } else { 0 }; }
+
+Int hs_grace_ms() { return 2000; }
+
+// Hosts killed but not yet reaped, this thread's: [count, pid x 63]. Each
+// spawn reaps what has exited since; past 63 a host is not recorded (it
+// stays a zombie until the program exits).
+Int hs_pending() { return resid_raw_tls("hs_pending", 512); }
+
+Int hs_pend(Int pid) {
+    Int t = hs_pending();
+    Int k = ld64(t);
+    if (k >= 63) { return 0; }
+    return st64(t + 8 + k * 8, pid) + st64(t, k + 1);
+}
+
+pub Int hs_reap_pending(Int i) {
+    Int t = hs_pending();
+    if (i >= ld64(t)) { return 0; }
+    Int pid = ld64(t + 8 + i * 8);
+    if (hs_wait_nohang(pid) == 0 - 1) { return hs_reap_pending(i + 1); }
+    // Reaped (or gone): drop it, the last entry taking its place.
+    Int last = ld64(t) - 1;
+    _ = st64(t + 8 + i * 8, ld64(t + 8 + last * 8)) + st64(t, last);
+    return hs_reap_pending(i);
+}
+
+// ─── Who started this host (host) ───────────────────────────────────
+// A host is this program re-executed with a particular argv, an empty
+// environment and a socket as fd 3, which anyone who can run the binary
+// can also arrange by hand. So before reading a request it checks that
+// it was started by the program that is talking to it, and with no more
+// privilege than that program:
+//
+//   1. not in secure mode (AT_SECURE: set-id, file capabilities, an LSM
+//      transition gave it privilege its invoker lacks);
+//   2. no capability (effective or permitted; ambient ones are always
+//      permitted) that its parent does not hold -- a program running as
+//      root keeps its own capabilities, a host may not gain any;
+//   3. fd 3's peer (SO_PEERCRED) is its parent, with its uid and gid;
+//   4. the parent runs this same executable (/proc/self/exe and
+//      /proc/<ppid>/exe are one file: device and inode);
+//   5. a challenge: the host sends 16 bytes of getrandom and the parent
+//      must send them back. Every byte the host then reads must come from
+//      its parent's own pid (SCM_CREDENTIALS, checked per read).
+//
+// Step 5 closes what 3 and 4 leave open: a process could create the
+// socket, write a request into it, hand the socket on or exec this binary
+// itself, and pass 3 and 4 by the time the host looks. The challenge is
+// sent after 4 and is answered only by hs_answer inside a call this
+// program is making, on a socket it made; credentials passed with each
+// read are the sender's, which nobody but the kernel can forge. A token
+// chosen by the parent would not do: a freshly executed host has nothing
+// to check it against.
+//
+// The parent's pid, or 0 when the host must not run. `pretend`, from a
+// test harness only: 1 as if AT_SECURE were set, 2 as if the host held a
+// capability its parent does not.
+pub Int hs_auth(Int pretend) {
+    if (pretend == 1 || at_secure() != 0) { return 0; }
+    Int ppid = resid_raw_syscall(110, 0, 0, 0, 0, 0, 0);   // getppid
+    if (ppid <= 1) { return 0; }
+    if (pretend == 2 || !hs_caps_within(ppid)) { return 0; }
+    if (!hs_peer_is(ppid) || !hs_same_exe(ppid)) { return 0; }
+    if (!hs_challenge(ppid) || !hs_same_exe(ppid)) { return 0; }
+    return ppid;
+}
+
+// capget for this process and for ppid: no effective or permitted
+// capability here that ppid lacks (both 32-bit words).
+Bool hs_caps_within(Int ppid) {
+    Int h = xmalloc(8);
+    Int me = xmalloc(24);
+    Int pa = xmalloc(24);
+    _ = st32(h, 537396514) + st32(h + 4, 0);   // _LINUX_CAPABILITY_VERSION_3
+    Int r1 = resid_raw_syscall(125, h, me, 0, 0, 0, 0);
+    _ = st32(h, 537396514) + st32(h + 4, ppid);
+    Int r2 = resid_raw_syscall(125, h, pa, 0, 0, 0, 0);
+    Bool ok = r1 == 0 && r2 == 0 && hs_cap_word(me, pa, 0) && hs_cap_word(me, pa, 12);
+    return c_free(h) * 0 + c_free(me) * 0 + c_free(pa) * 0 == 0 && ok;
+}
+
+// struct __user_cap_data_struct at o: effective, permitted, inheritable.
+Bool hs_cap_word(Int me, Int pa, Int o) {
+    Bool eff = (ld32(me + o) & (4294967295 - ld32(pa + o))) == 0;
+    Bool prm = (ld32(me + o + 4) & (4294967295 - ld32(pa + o + 4))) == 0;
+    return eff && prm;
+}
+
+// fd 3's peer is ppid, with this process's uid and gid.
+Bool hs_peer_is(Int ppid) {
+    Int c = xmalloc(16);
+    Int lp = xmalloc(8);
+    _ = st64(lp, 12);
+    Int r = resid_raw_syscall(55, 3, 1, 17, c, lp, 0);   // getsockopt(SOL_SOCKET, SO_PEERCRED)
+    Bool ok = r == 0 && ld32(c) == ppid && ld32(c + 4) == hs_uid() && ld32(c + 8) == hs_gid();
+    return c_free(c) * 0 + c_free(lp) * 0 == 0 && ok;
+}
+
+Int hs_uid() { return resid_raw_syscall(102, 0, 0, 0, 0, 0, 0); }
+Int hs_gid() { return resid_raw_syscall(104, 0, 0, 0, 0, 0, 0); }
+
+// /proc/self/exe and /proc/<ppid>/exe are one file.
+Bool hs_same_exe(Int ppid) {
+    Int path = xmalloc(48);
+    Int at = native_put(path, resid_raw_addr("/proc/"));
+    _ = native_utoa(at, ppid);
+    Int end = at + c_strlen(at);
+    _ = mcopy(end, resid_raw_addr("/exe"), 5);
+    Int a = xmalloc(160);
+    Int b = xmalloc(160);
+    Int ra = resid_raw_syscall(262, 0 - 100, resid_raw_addr("/proc/self/exe"), a, 0, 0, 0);   // newfstatat
+    Int rb = resid_raw_syscall(262, 0 - 100, path, b, 0, 0, 0);
+    Bool ok = ra == 0 && rb == 0 && ld64(a) == ld64(b) && ld64(a + 8) == ld64(b + 8);   // st_dev, st_ino
+    return c_free(path) * 0 + c_free(a) * 0 + c_free(b) * 0 == 0 && ok;
+}
+
+// Send 16 random bytes on fd 3 and read them back from ppid.
+Bool hs_challenge(Int ppid) {
+    Int one = xmalloc(8);
+    _ = st32(one, 1);
+    Bool pc = resid_raw_syscall(54, 3, 1, 16, one, 4, 0) == 0;   // setsockopt(SOL_SOCKET, SO_PASSCRED)
+    Int n = xmalloc(16);
+    Int e = xmalloc(16);
+    Bool sent = pc && resid_raw_syscall(318, n, 16, 0, 0, 0, 0) == 16 && native_write(n, 0, 16);
+    Bool ok = sent && hs_recv_cred(3, e, 0, 16, ppid) == 16 && c_memcmp(n, e, 16) == 0;
+    return c_free(one) * 0 + c_free(n) * 0 + c_free(e) * 0 == 0 && ok;
+}
+
+// Read n bytes into p + i from fd (SO_PASSCRED set), each read's sender
+// ppid with this process's uid and gid; the count (short at end of file),
+// or -1 when a sender is anyone else.
+pub Int hs_recv_cred(Int fd, Int p, Int i, Int n, Int ppid) {
+    if (i >= n) { return i; }
+    Int m = resid_raw_tls("hs_msg", 128);
+    _ = resid_raw_fill(m, 0, 128);
+    // struct msghdr (56 bytes), its iovec at 56, the control buffer at 72.
+    _ = st64(m + 56, p + i) + st64(m + 64, n - i);
+    _ = st64(m + 16, m + 56) + st64(m + 24, 1) + st64(m + 32, m + 72) + st64(m + 40, 48);
+    Int r = resid_raw_syscall(47, fd, m, 0, 0, 0, 0);   // recvmsg
+    if (r == 0 - 4) { return hs_recv_cred(fd, p, i, n, ppid); }
+    if (r <= 0) { return i; }
+    if (!hs_cred_ok(m, ppid)) { return 0 - 1; }
+    return hs_recv_cred(fd, p, i + r, n, ppid);
+}
+
+// One SCM_CREDENTIALS message, nothing else, nothing cut off: ppid, uid,
+// gid.
+Bool hs_cred_ok(Int m, Int ppid) {
+    Int cl = ld64(m + 40);
+    Int c = m + 72;
+    if ((ld32(m + 48) & 8) != 0 || cl < 28 || cl > 32) { return false; }   // MSG_CTRUNC
+    if (ld64(c) != 28 || ld32(c + 8) != 1 || ld32(c + 12) != 2) { return false; }   // CMSG_LEN(12), SOL_SOCKET, SCM_CREDENTIALS
+    return ld32(c + 16) == ppid && ld32(c + 20) == hs_uid() && ld32(c + 24) == hs_gid();
 }
 
 // "native module `m`: `f` failed: why"
@@ -211,12 +467,20 @@ pub Int rt_native_host(Int tab, Int n) {
     if (c_strcmp(ld64(argv), resid_raw_addr("resid-native-host")) != 0) { return 0; }
     if (ld64(argv + 24) != 0) { return 0; }   // the environment is empty
     if (!native_fd3_socket()) { return 0; }
+    // From here on this process is a host and never returns: only fd 3,
+    // and only for the program that started it (hs_auth).
+    if (resid_raw_syscall(436, 0, 2, 0, 0, 0, 0) < 0) { return native_child_exit(126); }   // close_range: only fd 3
+    if (resid_raw_syscall(436, 4, 4294967295, 0, 0, 0, 0) < 0) { return native_child_exit(126); }
+    Int ppid = hs_auth(0);
+    if (ppid <= 0) { return native_child_exit(124); }
     Int m = ld64(argv + 8);
     Int need = native_sizes(tab, n, m, 0, 0);
     if (need == 0) { return native_child_exit(125); }
     Int buf = xmalloc(need * 2 + 16);
+    Int e = native_read_req(tab, n, m, buf, ppid);
+    if (e == 0) { return native_child_exit(125); }
     if (!native_lockdown()) { return native_child_exit(126); }
-    return native_serve(tab, n, m, buf, buf + need + 8);
+    return native_serve(e, buf, buf + need + 8);
 }
 
 // fd 3 is a socket (S_IFSOCK): set by the parent, never by accident.
@@ -236,16 +500,22 @@ Int native_sizes(Int tab, Int n, Int m, Int i, Int acc) {
     return native_sizes(tab, n, m, i + 1, a2);
 }
 
-// Read one request, run its thunk, write the reply, exit.
-Int native_serve(Int tab, Int n, Int m, Int req, Int resp) {
-    if (native_recv(3, req, 0, 8) != 8) { return native_child_exit(125); }
+// Read one request from the parent (before the filter: each read checks
+// the sender, hs_recv_cred); its table entry, or 0.
+Int native_read_req(Int tab, Int n, Int m, Int req, Int ppid) {
+    if (hs_recv_cred(3, req, 0, 8, ppid) != 8) { return 0; }
     Int idx = ld64(req);
-    if (idx < 0 || idx >= n) { return native_child_exit(125); }
+    if (idx < 0 || idx >= n) { return 0; }
     Int e = tab + idx * ntab_ent();
-    if (c_strcmp(ld64(e), m) != 0) { return native_child_exit(125); }
+    if (c_strcmp(ld64(e), m) != 0) { return 0; }
     Int reqlen = ld64(e + 16);
+    if (hs_recv_cred(3, req + 8, 0, reqlen - 8, ppid) != reqlen - 8) { return 0; }
+    return e;
+}
+
+// Run the request's thunk, write the reply, exit.
+Int native_serve(Int e, Int req, Int resp) {
     Int resplen = ld64(e + 24);
-    if (native_recv(3, req + 8, 0, reqlen - 8) != reqlen - 8) { return native_child_exit(125); }
     _ = resid_raw_fill(resp, 0, resplen + 8);
     _ = resid_raw_call2(ld64(e + 32), req, resp);
     if (!native_write(resp, 0, resplen)) { return native_child_exit(125); }

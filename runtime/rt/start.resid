@@ -32,6 +32,8 @@ pub Int rt_start(Int sp, Int dyn) {
     _ = find_tls(auxv);
     _ = st64(hwcap_w(), auxv_get(auxv, 16));   // AT_HWCAP
     _ = st64(pagesz_w(), auxv_get(auxv, 6));   // AT_PAGESZ
+    _ = st64(secure_w(), auxv_get(auxv, 23) + 1);   // AT_SECURE, plus one
+    _ = sigchld_default_at(resid_raw_global("rt_sigchld", 64));   // one thread yet: a global buffer
     Int tp = tls_block();
     return resid_raw_tp_set(tp);
 }
@@ -39,6 +41,42 @@ pub Int rt_start(Int sp, Int dyn) {
 // The kernel's page size: 4 KB on x86-64; 4, 16 or 64 KB on AArch64.
 Int pagesz_w() { return resid_raw_global("rt_pagesz", 8); }
 pub Int page_size() { return if (ld64(pagesz_w()) > 0) { ld64(pagesz_w()) } else { 4096 }; }
+
+// AT_SECURE plus one, as resid_start found it: 0 when resid_start did not
+// run (a C harness's main), and at_secure reads /proc/self/auxv instead.
+Int secure_w() { return resid_raw_global("rt_at_secure", 8); }
+
+// Whether the kernel started this process in secure mode (set-id, file
+// capabilities, an LSM transition): 1 also when that cannot be read.
+pub Int at_secure() {
+    Int w = ld64(secure_w());
+    if (w > 0) { return w - 1; }
+    Int blk = read_file_all(resid_raw_addr("/proc/self/auxv"));
+    if (blk == 0) { return 1; }
+    Int v = auxv_get_or(blk, 23, 1);
+    return c_free(blk) * 0 + v;
+}
+
+Int auxv_get_or(Int a, Int key, Int none) {
+    Int k = ld64(a);
+    if (k == 0) { return none; }
+    if (k == key) { return ld64(a + 8); }
+    return auxv_get_or(a + 16, key, none);
+}
+
+// An inherited SIGCHLD of SIG_IGN makes the kernel reap children itself,
+// so wait4 on a host or a process_run child would fail with ECHILD after
+// it ran. Put the default back (the runtime installs no handler of its
+// own, so nothing else is replaced). resid_start does it once, and the
+// host spawner again for a C program that never ran resid_start.
+pub Int sigchld_default() { return sigchld_default_at(resid_raw_tls("sigchld", 64)); }
+
+// The same with 64 bytes of scratch at b (two struct sigaction).
+Int sigchld_default_at(Int b) {
+    _ = resid_raw_fill(b, 0, 64);
+    if (resid_raw_syscall(13, 17, 0, b, 8, 0, 0) != 0 || ld64(b) != 1) { return 0; }   // rt_sigaction(SIGCHLD); SIG_IGN is 1
+    return resid_raw_syscall(13, 17, b + 32, 0, 8, 0, 0);
+}
 
 // The CPU's AT_HWCAP bits (AArch64: bit 3 is AES).
 pub Int hwcap_w() { return resid_raw_global("rt_hwcap", 8); }
