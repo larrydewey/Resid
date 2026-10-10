@@ -26,7 +26,10 @@ while getopts "c:" opt; do
     esac
 done
 shift $((OPTIND - 1))
-if [ -z "${RESID_SIGNING_KEY:-}" ] && [ ! -f "$ROOT/keys/resid-ed25519.key" ]; then
+# The private RESID_HOME below hides the checkout's keys/, so name the key.
+if [ -z "${RESID_SIGNING_KEY:-}" ] && [ -f "$ROOT/keys/resid-ed25519.key" ]; then
+    export RESID_SIGNING_KEY="$ROOT/keys/resid-ed25519.key"
+elif [ -z "${RESID_SIGNING_KEY:-}" ]; then
     KEYDIR="$(mktemp -d)"
     "$COMPILER" keygen "$KEYDIR" >/dev/null && export RESID_SIGNING_KEY="$KEYDIR/resid-ed25519.key"
 fi
