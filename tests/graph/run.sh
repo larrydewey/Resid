@@ -28,6 +28,8 @@ for f in compiler/*.resid lib/*.resid tools/*.resid examples/*.resid tests/confo
         tests/conformance/cases/err_assignment.resid|tests/conformance/cases/err_list_missing_comma.resid|tests/conformance/cases/err_fmt_stray_brace.resid|tests/conformance/cases/err_escape_*.resid) continue ;;
         # These resolve imports only with their -depmap (or not at all).
         tests/conformance/cases/err_import_missing.resid|tests/conformance/cases/*manifest_ceiling*.resid|tests/conformance/cases/behavior_replace_library.resid|tests/conformance/cases/err_instance_orphan.resid) continue ;;
+        # Names `git`, which no scope binds, on purpose.
+        tests/conformance/cases/err_git_provider_unreachable.resid) continue ;;
     esac
     want_lint="graph-lint: 0 mixed-precedence expression(s)"
     case "$f" in *operator_precedence_*|*logical_short_circuit*) want_lint="$("$COMPILER" "$f" --graph-lint 2>&1 | grep '^graph-lint' | tail -1)" ;; esac
