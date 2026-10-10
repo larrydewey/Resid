@@ -139,12 +139,19 @@ Int run_take(Int k) {
     return if (p != 0) { p } else { base + at * rg_page() };
 }
 
-Int pages_give(Int p, Int k) {
+// `bump` is the bump pointer of the region the page belonged to: on the
+// page that holds it, nothing above it was ever allocated.
+Int pages_give(Int p, Int k, Int bump) {
     _ = own_set(p, 1 << k, 0);
     Int c = rg_cache();
-    // In secret mode a freed page is never reused as it is: MADV_DONTNEED
-    // below zero-fills it on its next touch.
-    if (k == 0 && ld64(c + 8) < 64 && !secret_mode()) { return st64(p, ld64(c)) + st64(c, p) + st64(c + 8, ld64(c + 8) + 1); }
+    Bool cache = k == 0 && ld64(c + 8) < 64;
+    // In secret mode a freed page is zeroed before it is cached for reuse:
+    // the part that can have been written, which on the page holding the
+    // region's bump ends there. A page that is not cached goes back with
+    // MADV_DONTNEED below, which zero-fills it on its next touch.
+    Int used = if (bump > p && bump <= p + rg_page()) { bump - p } else { rg_page() };
+    _ = if (cache && secret_mode()) { resid_raw_fill(p, 0, used) } else { 0 };
+    if (cache) { return st64(p, ld64(c)) + st64(c, p) + st64(c + 8, ld64(c + 8) + 1); }
     _ = resid_raw_syscall(28, p, (1 << k) * rg_page(), 4, 0, 0, 0);   // MADV_DONTNEED
     _ = rg_dump(p, k, false);
     _ = mem_give((1 << k) * rg_page());
@@ -155,11 +162,12 @@ Int pages_give(Int p, Int k) {
 }
 
 // A region's pages, newest first: each starts with {previous, order}.
-pub Int pages_free(Int p, Int n) {
+// `bump` is the region's bump pointer (pages_give).
+pub Int pages_free(Int p, Int n, Int bump) {
     if (p == 0) { return n; }
     Int prev = ld64(p);
-    _ = pages_give(p, ld64(p + 8));
-    return pages_free(prev, n + 1);
+    _ = pages_give(p, ld64(p + 8), bump);
+    return pages_free(prev, n + 1, bump);
 }
 
 // ─── Region records ────────────────────────────────────────────────────
@@ -283,7 +291,7 @@ pub Int rt_loop_move(Int l, Int step) {
         _ = rec_init(nr, new_region_id());
         return mv_ctx(resid_raw_tls("rg_mv_loop", 24), ld64(r), ld64(r), nr);
     }
-    _ = pages_free(ld64(r + 8), 0);
+    _ = pages_free(ld64(r + 8), 0, rec_bump(r));
     _ = mcopy(r, nr, 64);
     _ = st64(r + 40, ld64(nr + 32)) + st64(r + 48, 0);
     _ = rec_load(r);

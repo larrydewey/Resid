@@ -178,6 +178,9 @@ pub Int rec_at(Int d) { return ag(8) + d * 64; }
 
 // The innermost region's page, bump and end: into its record, or back.
 pub Int rec_save(Int r) { return st64(r + 8, ag(5)) + st64(r + 16, ag(6)) + st64(r + 24, ag(7)); }
+// Region r's bump: the live allocator word when r is the current region
+// (its record is saved only on a switch), else the record's.
+pub Int rec_bump(Int r) { return if (ag(10) == r) { ag(6) } else { ld64(r + 16) }; }
 pub Int rec_load(Int r) { return as_(5, ld64(r + 8)) + as_(6, ld64(r + 16)) + as_(7, ld64(r + 24)); }
 
 @export("resid_scope_push", "i64()")
@@ -203,7 +206,7 @@ pub Int rt_scope_pop(Int d) {
 
 Int pop_regions(Int i, Int d, Int n) {
     if (i < d) { return n; }
-    return pop_regions(i - 1, d, pages_free(ld64(rec_at(i) + 8), n));
+    return pop_regions(i - 1, d, pages_free(ld64(rec_at(i) + 8), n, ld64(rec_at(i) + 16)));
 }
 
 // The innermost region's bump: the fast path, inlined at each call.

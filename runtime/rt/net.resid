@@ -85,6 +85,7 @@ pub Int rt_tcp_connect(Int host, Int port) {
     if (fd < 0) { return 0 - 1; }
     if (!connect_within(fd, sa, 30000)) { return sys_close(fd) * 0 - 1; }
     _ = base_timeouts(fd);
+    _ = no_delay(fd);
     _ = dl_set(fd, 0);
     return fd;
 }
@@ -127,6 +128,17 @@ Int set_timeouts_ns(Int fd, Int ns) {
 
 // A fresh socket: 30 s for any one receive or blocked send.
 Int base_timeouts(Int fd) { return set_timeouts_ns(fd, 30000000000); }
+
+// A connected socket sends each write at once (TCP_NODELAY). Every write
+// is a whole message or record -- a TLS flight, a request, a reply -- so
+// Nagle has nothing to coalesce; with it on, a write that follows a small
+// unacknowledged one waits for the peer's delayed ACK, about 40 ms per
+// TLS handshake on loopback.
+Int no_delay(Int fd) {
+    Int one = resid_raw_tls("nd_one", 4);
+    _ = st32(one, 1);
+    return resid_raw_syscall(54, fd, 6, 1, one, 4, 0);    // IPPROTO_TCP, TCP_NODELAY
+}
 
 // I/O deadlines per descriptor (resid_tcp_deadline): absolute
 // monotonic ns, 0 for none. Descriptors past the table get none.
@@ -239,6 +251,7 @@ pub Int rt_tcp_accept(Int fd) {
     if (c == 0 - 11) { return poll_one(fd, 1, 0 - 1) * 0 + rt_tcp_accept(fd); }
     if (c < 0) { return 0 - 1; }
     _ = base_timeouts(c);
+    _ = no_delay(c);
     _ = dl_set(c, 0);
     return c;
 }
@@ -258,6 +271,7 @@ pub Int rt_tcp_accept_now(Int fd) {
     if (c == 0 - 11 || c == 0 - 4 || c == 0 - 103) { return 0 - 2; }   // EAGAIN, EINTR, ECONNABORTED
     if (c < 0) { return 0 - 1; }
     _ = base_timeouts(c);
+    _ = no_delay(c);
     _ = dl_set(c, 0);
     return c;
 }
