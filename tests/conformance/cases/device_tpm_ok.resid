@@ -1,0 +1,37 @@
+// The TPM wrappers (lib/dev/tpm.resid) end to end: each builds its
+// command, sends it to /dev/tpmrm0 through the device host (a Transact, a
+// write: they need the full `device` grant) and decodes the response. The
+// case passes on any host: without a TPM the device is absent, without
+// access to it the open is denied, with one it answers -- `reached` covers
+// each. An argument a command cannot carry never reaches the device.
+import "dev/tpm.resid";
+
+Str reached(Str what, TpmError e) {
+    return match (e) {
+        TpmDev(d) => match (d) {
+            BadInput(n, why) => device_error_text(d),
+            BadReply(n, why) => device_error_text(d),
+            Timeout(n) => device_error_text(d),
+            Absent(n) => what + ": reached", Denied(n) => what + ": reached", Kernel(n, x) => what + ": reached",
+            TooLong(n) => what + ": reached", GenerationChanged(n) => what + ": reached", Unsupported(n) => what + ": reached",
+            Version(n, v) => what + ": reached", Overrun(n) => what + ": reached", UnknownDriver(n, v) => what + ": reached",
+        },
+        TpmRc(rc) => what + ": reached",
+        TpmBad(why) => what + ": " + tpm_error_text(e),
+        TpmArg(why) => what + ": " + tpm_error_text(e),
+    };
+}
+
+Str said(Str what, Bool ok) { return if (ok) { what + ": reached" } else { what + ": empty" }; }
+
+@requires(device)
+Int main() {
+    println(match (tpm_get_random(rt 8)) { Ok(b) => said("GetRandom", b.len() > 0), Err(e) => reached("GetRandom", e), });
+    println(match (tpm_properties(tpm_pt_fixed(), rt 8)) { Ok(ps) => said("GetCapability", true), Err(e) => reached("GetCapability", e), });
+    println(match (tpm_pcr_read([pcr_sel(tpm_alg_sha256(), [0, rt 7])])) { Ok(p) => said("PCR_Read", true), Err(e) => reached("PCR_Read", e), });
+    println(match (tpm_nv_read_public(tpm_nv_ek_cert_rsa())) { Ok(n) => said("NV_ReadPublic", true), Err(e) => reached("NV_ReadPublic", e), });
+    println(match (tpm_read_public(tpm_handle_ek_rsa())) { Ok(p) => said("ReadPublic", true), Err(e) => reached("ReadPublic", e), });
+    println(match (tpm_get_random(rt 65)) { Ok(b) => "GetRandom 65: sent", Err(e) => reached("GetRandom 65", e), });
+    println(match (tpm_pcr_read([pcr_sel(tpm_alg_sha256(), [rt 24])])) { Ok(p) => "PCR 24: sent", Err(e) => reached("PCR 24", e), });
+    return 0;
+}

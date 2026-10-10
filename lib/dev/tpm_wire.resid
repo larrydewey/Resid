@@ -1,0 +1,547 @@
+// --- lib/dev/tpm_wire.resid - TPM 2.0 commands and responses, as bytes
+// Pure encoders for the TPM 2.0 commands an attester needs and total
+// decoders for their responses (TCG TPM 2.0 Library, Part 2 "Structures"
+// and Part 3 "Commands", revision 1.59 and later; every layout below names
+// its Part 3 table). Nothing here touches a device: lib/dev/tpm.resid sends
+// the commands to /dev/tpmrm0. A verifier that only parses evidence can
+// import this module without any grant.
+//
+// Every number on the wire is big endian. A command is
+//     tag (TPM_ST_NO_SESSIONS 0x8001 | TPM_ST_SESSIONS 0x8002) u16,
+//     commandSize u32, commandCode u32, handles (u32 each),
+//     [authorizationSize u32, TPMS_AUTH_COMMAND...]  (with sessions),
+//     parameters
+// and a response
+//     tag u16, responseSize u32, responseCode u32, handles,
+//     [parameterSize u32]  (with sessions), parameters,
+//     [TPMS_AUTH_RESPONSE...]  (with sessions).
+//
+// A response is untrusted input: a decoder checks every length against the
+// bytes it has before it reads, gives Err(TpmBad(...)) for anything that
+// does not parse exactly -- short, long, a count that cannot fit, trailing
+// bytes -- and never indexes past the end, so no reply can abort or hang
+// the program. A TPM error is Err(TpmRc(code)).
+//
+// Authorization: the commands that need one (NV_Read, Quote) use the
+// password session TPM_RS_PW (0x40000009) with an empty nonce, the
+// attribute continueSession and the given password, as go-tpm does
+// (legacy/tpm2, encodeQuote and encodeNVRead); a TPM ignores
+// continueSession on the password session (tpm2-tss's ESYS sends 0
+// there). An empty password is what the Azure, Google and
+// TCG-provisioned objects below expect.
+
+import "device.resid";
+
+// -- Errors -----------------------------------------------------------------
+
+// A device failure (the call never reached the TPM, or the device host
+// failed), a TPM response code other than TPM_RC_SUCCESS, a response that
+// does not parse, or an argument a command cannot carry (nothing sent).
+type TpmError = TpmDev(DeviceError) | TpmRc(Int) | TpmBad(Str) | TpmArg(Str);
+
+pub Str tpm_error_text(TpmError e) {
+    return match (e) {
+        TpmDev(d) => device_error_text(d),
+        TpmRc(rc) => f"tpm: response code 0x{rc:hex}",
+        TpmBad(why) => "tpm: malformed response: " + why,
+        TpmArg(why) => "tpm: bad argument: " + why,
+    };
+}
+
+// -- Constants (TPM 2.0 Part 2) ---------------------------------------------
+
+pub Int tpm_st_no_sessions() { return 32769; }   // 0x8001
+pub Int tpm_st_sessions() { return 32770; }      // 0x8002
+
+pub Int tpm_cc_nv_read() { return 334; }         // 0x0000014E
+pub Int tpm_cc_quote() { return 344; }           // 0x00000158
+pub Int tpm_cc_nv_read_public() { return 361; }  // 0x00000169
+pub Int tpm_cc_read_public() { return 371; }     // 0x00000173
+pub Int tpm_cc_get_capability() { return 378; }  // 0x0000017A
+pub Int tpm_cc_get_random() { return 379; }      // 0x0000017B
+pub Int tpm_cc_pcr_read() { return 382; }        // 0x0000017E
+
+// TPM_CAP (Part 2, Table 22).
+pub Int tpm_cap_handles() { return 1; }
+pub Int tpm_cap_pcrs() { return 5; }
+pub Int tpm_cap_tpm_properties() { return 6; }
+
+// TPM_PT (Part 2, Table 24): PT_FIXED starts at 0x100.
+pub Int tpm_pt_fixed() { return 256; }
+pub Int tpm_pt_nv_buffer_max() { return 300; }   // 0x12C
+
+// TPM_ALG_ID (TCG Algorithm Registry).
+pub Int tpm_alg_sha1() { return 4; }
+pub Int tpm_alg_sha256() { return 11; }
+pub Int tpm_alg_sha384() { return 12; }
+pub Int tpm_alg_sha512() { return 13; }
+pub Int tpm_alg_null() { return 16; }
+pub Int tpm_alg_rsassa() { return 20; }
+pub Int tpm_alg_rsapss() { return 22; }
+pub Int tpm_alg_ecdsa() { return 24; }
+pub Int tpm_alg_ecdaa() { return 26; }
+pub Int tpm_alg_sm2() { return 27; }
+pub Int tpm_alg_ecschnorr() { return 28; }
+
+// Permanent handles (Part 2, Table 28).
+pub Int tpm_rh_owner() { return 1073741825; }    // 0x40000001
+pub Int tpm_rs_pw() { return 1073741833; }       // 0x40000009
+
+// -- Well-known handles and NV indices --------------------------------------
+// Where attestation material lives on the vTPMs an attester meets. Each
+// names its source; none is signed by being here -- a certificate is
+// verified against its issuer, a report against its platform's key.
+
+// TCG EK Credential Profile 2.3 r2, section 2.2.1.4 (also go-tpm-tools
+// client/handles.go): the EK certificates, RSA 2048 and ECC P-256.
+pub Int tpm_nv_ek_cert_rsa() { return 29360130; }       // 0x01C00002
+pub Int tpm_nv_ek_cert_ecc() { return 29360138; }       // 0x01C0000A
+// TCG TPM v2.0 Provisioning Guidance 1.0 r1, Table 2: the persistent EK.
+pub Int tpm_handle_ek_rsa() { return 2164326401; }      // 0x81010001
+
+// Google Compute Engine (go-tpm-tools client/handles.go): the AK
+// certificates and AK templates, RSA and ECC.
+pub Int tpm_nv_gce_ak_cert_rsa() { return 29425664; }       // 0x01C10000
+pub Int tpm_nv_gce_ak_template_rsa() { return 29425665; }   // 0x01C10001
+pub Int tpm_nv_gce_ak_cert_ecc() { return 29425666; }       // 0x01C10002
+pub Int tpm_nv_gce_ak_template_ecc() { return 29425667; }   // 0x01C10003
+
+// Microsoft Azure confidential VMs (Azure/confidential-computing-cvm-guest-
+// attestation, client-library/src/Attestation/LinuxTpm/lib/Tss2Util.h and
+// cvm-guest-attestation.md): the paravisor's (HCL's) report, read with
+// owner authorization (`tpm2_nvread -C o 0x01400001`); the AK certificate;
+// the AK as a persistent handle.
+pub Int tpm_nv_azure_hcl_report() { return 20971521; }  // 0x01400001
+pub Int tpm_nv_azure_ak_cert() { return 29430224; }     // 0x01C101D0
+pub Int tpm_handle_azure_ak() { return 2164260867; }    // 0x81000003
+
+// -- Encoding -----------------------------------------------------------------
+
+// v as n big-endian bytes.
+pub List(UInt(8)) tw_be(Int v, Int n) { return tw_be_at(v, n - 1, ListBuf()); }
+
+List(UInt(8)) tw_be_at(Int v, Int i, ListBuf(UInt(8)) acc) {
+    if (i < 0) { return acc.finish(); }
+    return tw_be_at(v, i - 1, acc.push((UInt(8))((v >> (i * 8)) & 255)));
+}
+
+// A TPM2B: a u16 size, then the bytes.
+List(UInt(8)) tw_2b(List(UInt(8)) bs) { return tw_be(bs.len(), 2).concat(bs); }
+
+// A whole command: header, handles, the auth area when there is one, the
+// parameters.
+List(UInt(8)) tw_command(Int cc, List(Int) handles, List(UInt(8)) auth, List(UInt(8)) params) {
+    List(UInt(8)) hs = tw_handles(handles, 0, ListBuf());
+    List(UInt(8)) area = if (auth.len() > 0) { tw_be(auth.len(), 4).concat(auth) } else { [] };
+    Int tag = if (auth.len() > 0) { tpm_st_sessions() } else { tpm_st_no_sessions() };
+    Int size = 10 + hs.len() + area.len() + params.len();
+    return tw_be(tag, 2).concat(tw_be(size, 4)).concat(tw_be(cc, 4)).concat(hs).concat(area).concat(params);
+}
+
+List(UInt(8)) tw_handles(List(Int) hs, Int i, ListBuf(UInt(8)) acc) {
+    if (i >= hs.len()) { return acc.finish(); }
+    return tw_handles(hs, i + 1, tw_push_all(acc, tw_be(hs[i], 4), 0));
+}
+
+ListBuf(UInt(8)) tw_push_all(ListBuf(UInt(8)) acc, List(UInt(8)) bs, Int i) {
+    if (i >= bs.len()) { return acc; }
+    return tw_push_all(acc.push(bs[i]), bs, i + 1);
+}
+
+// TPMS_AUTH_COMMAND for the password session: TPM_RS_PW, an empty nonce,
+// continueSession (1), the password as the HMAC field.
+List(UInt(8)) tw_pw_auth(List(UInt(8)) password) {
+    return tw_be(tpm_rs_pw(), 4).concat(tw_be(0, 2)).concat([(UInt(8))1]).concat(tw_2b(password));
+}
+
+Bool tw_u32_ok(Int v) { return v >= 0 && v <= 4294967295; }
+Bool tw_u16_ok(Int v) { return v >= 0 && v <= 65535; }
+
+// One PCR bank and the PCRs selected in it (TPMS_PCR_SELECTION).
+type PcrSel = { Int alg; List(Int) pcrs; };
+
+pub PcrSel pcr_sel(Int alg, List(Int) pcrs) { return PcrSel {.alg = alg, .pcrs = pcrs}; }
+
+// TPML_PCR_SELECTION with a 3-byte bitmap per bank (PCRs 0 to 23, the PC
+// Client platform's), or why the selection cannot be encoded.
+Result(List(UInt(8)), TpmError) tw_pcr_selection(List(PcrSel) sel) {
+    if (sel.len() > 16) { return Err(TpmArg(f"{sel.len()} PCR banks selected, at most 16")); }
+    return tw_sel_banks(sel, 0, tw_be(sel.len(), 4));
+}
+
+Result(List(UInt(8)), TpmError) tw_sel_banks(List(PcrSel) sel, Int i, List(UInt(8)) acc) {
+    if (i >= sel.len()) { return Ok(acc); }
+    PcrSel s = sel[i];
+    if (!tw_u16_ok(s.alg)) { return Err(TpmArg(f"hash algorithm {s.alg}")); }
+    Int bits = tw_sel_bits(s.pcrs, 0, 0)?;
+    List(UInt(8)) one = tw_be(s.alg, 2).concat([(UInt(8))3, (UInt(8))(bits & 255), (UInt(8))((bits >> 8) & 255), (UInt(8))((bits >> 16) & 255)]);
+    return tw_sel_banks(sel, i + 1, acc.concat(one));
+}
+
+Result(Int, TpmError) tw_sel_bits(List(Int) pcrs, Int i, Int acc) {
+    if (i >= pcrs.len()) { return Ok(acc); }
+    Int p = pcrs[i];
+    if (p < 0 || p > 23) { return Err(TpmArg(f"PCR {p}, the selection holds 0 to 23")); }
+    return tw_sel_bits(pcrs, i + 1, acc | (1 << p));
+}
+
+// -- Commands (Part 3) --------------------------------------------------------
+
+// TPM2_GetCapability (Part 3, Table 208): capability, property,
+// propertyCount.
+pub Result(List(UInt(8)), TpmError) tpm2_get_capability_cmd(Int capability, Int property, Int count) {
+    if (!tw_u32_ok(capability) || !tw_u32_ok(property) || !tw_u32_ok(count)) { return Err(TpmArg("capability, property and count are u32")); }
+    return Ok(tw_command(tpm_cc_get_capability(), [], [], tw_be(capability, 4).concat(tw_be(property, 4)).concat(tw_be(count, 4))));
+}
+
+// TPM2_GetRandom (Part 3, Table 34): bytesRequested.
+pub Result(List(UInt(8)), TpmError) tpm2_get_random_cmd(Int n) {
+    if (n < 1 || n > 64) { return Err(TpmArg(f"{n} random bytes asked, 1 to 64")); }
+    return Ok(tw_command(tpm_cc_get_random(), [], [], tw_be(n, 2)));
+}
+
+// TPM2_PCR_Read (Part 3, Table 114): pcrSelectionIn.
+pub Result(List(UInt(8)), TpmError) tpm2_pcr_read_cmd(List(PcrSel) sel) {
+    List(UInt(8)) s = tw_pcr_selection(sel)?;
+    return Ok(tw_command(tpm_cc_pcr_read(), [], [], s));
+}
+
+// TPM2_ReadPublic (Part 3, Table 32): objectHandle.
+pub Result(List(UInt(8)), TpmError) tpm2_read_public_cmd(Int handle) {
+    if (!tw_u32_ok(handle)) { return Err(TpmArg("a handle is u32")); }
+    return Ok(tw_command(tpm_cc_read_public(), [handle], [], []));
+}
+
+// TPM2_NV_ReadPublic (Part 3, Table 230): nvIndex.
+pub Result(List(UInt(8)), TpmError) tpm2_nv_read_public_cmd(Int index) {
+    if (!tw_u32_ok(index)) { return Err(TpmArg("an NV index is u32")); }
+    return Ok(tw_command(tpm_cc_nv_read_public(), [index], [], []));
+}
+
+// TPM2_NV_Read (Part 3, Table 236): authHandle, nvIndex, the password
+// session, size, offset.
+pub Result(List(UInt(8)), TpmError) tpm2_nv_read_cmd(Int auth_handle, Int index, Int size, Int offset, List(UInt(8)) password) {
+    if (!tw_u32_ok(auth_handle) || !tw_u32_ok(index)) { return Err(TpmArg("handles are u32")); }
+    if (!tw_u16_ok(size) || !tw_u16_ok(offset)) { return Err(TpmArg("size and offset are u16")); }
+    if (password.len() > 64) { return Err(TpmArg("a password is at most 64 bytes")); }
+    return Ok(tw_command(tpm_cc_nv_read(), [auth_handle, index], tw_pw_auth(password), tw_be(size, 2).concat(tw_be(offset, 2))));
+}
+
+// TPM2_Quote (Part 3, Table 91): signHandle (an existing attestation key,
+// loaded or persistent), the password session, qualifyingData (the
+// verifier's nonce), inScheme TPM_ALG_NULL (the key's own scheme), PCRselect.
+pub Result(List(UInt(8)), TpmError) tpm2_quote_cmd(Int sign_handle, List(UInt(8)) qualifying, List(PcrSel) sel, List(UInt(8)) password) {
+    if (!tw_u32_ok(sign_handle)) { return Err(TpmArg("a handle is u32")); }
+    if (qualifying.len() > 64) { return Err(TpmArg(f"qualifying data of {qualifying.len()} bytes, at most 64")); }
+    if (password.len() > 64) { return Err(TpmArg("a password is at most 64 bytes")); }
+    List(UInt(8)) s = tw_pcr_selection(sel)?;
+    List(UInt(8)) params = tw_2b(qualifying).concat(tw_be(tpm_alg_null(), 2)).concat(s);
+    return Ok(tw_command(tpm_cc_quote(), [sign_handle], tw_pw_auth(password), params));
+}
+
+// -- Decoding -------------------------------------------------------------------
+
+// A position in a response: where the parameters are, and the next byte.
+type TwAt = { List(UInt(8)) r; Int at; Int end; };
+
+// An unsigned number of n <= 4 bytes at p.at, and the position after it.
+type TwNum = { Int v; TwAt next; };
+type TwBytes = { List(UInt(8)) v; TwAt next; };
+
+Result(TwNum, TpmError) tw_num(TwAt p, Int n, Str what) {
+    if (p.at < 0 || n < 1 || n > 4 || p.at + n > p.end || p.end > p.r.len()) { return Err(TpmBad(what + ": short")); }
+    return Ok(TwNum {.v = tw_be_val(p.r, p.at, n, 0), .next = tw_skip(p, n)});
+}
+
+Int tw_be_val(List(UInt(8)) r, Int at, Int n, Int acc) {
+    if (n <= 0) { return acc; }
+    return tw_be_val(r, at + 1, n - 1, (acc << 8) | (Int)r[at]);
+}
+
+TwAt tw_skip(TwAt p, Int n) { return TwAt {.r = p.r, .at = p.at + n, .end = p.end}; }
+
+// A TPM2B of at most `max` bytes.
+Result(TwBytes, TpmError) tw_take_2b(TwAt p, Int max, Str what) {
+    TwNum sz = tw_num(p, 2, what)?;
+    TwAt q = sz.next;
+    if (sz.v > max) { return Err(TpmBad(f"{what}: {sz.v} bytes, at most {max}")); }
+    if (q.at + sz.v > q.end) { return Err(TpmBad(what + ": short")); }
+    return Ok(TwBytes {.v = q.r[q.at..q.at + sz.v], .next = tw_skip(q, sz.v)});
+}
+
+// The parameters were read exactly.
+Result(Bool, TpmError) tw_done(TwAt p, Str what) {
+    if (p.at != p.end) { return Err(TpmBad(f"{what}: {p.end - p.at} trailing bytes")); }
+    return Ok(true);
+}
+
+// The response header: Err(TpmRc) for a TPM error, else the parameters'
+// span after `handles` response handles. With sessions, parameterSize
+// bounds the parameters and one TPMS_AUTH_RESPONSE must follow them
+// exactly.
+pub Result(TwAt, TpmError) tpm_resp_params(List(UInt(8)) r, Int handles, Bool sessions) {
+    TwAt all = TwAt {.r = r, .at = 0, .end = r.len()};
+    if (r.len() < 10) { return Err(TpmBad(f"a response of {r.len()} bytes, the header is 10")); }
+    TwNum tag = tw_num(all, 2, "tag")?;
+    TwNum size = tw_num(tag.next, 4, "responseSize")?;
+    TwNum rc = tw_num(size.next, 4, "responseCode")?;
+    if (size.v != r.len()) { return Err(TpmBad(f"responseSize {size.v}, {r.len()} bytes read")); }
+    if (tag.v != tpm_st_no_sessions() && tag.v != tpm_st_sessions()) { return Err(TpmBad(f"tag 0x{tag.v:hex}")); }
+    if (rc.v != 0) { return Err(TpmRc(rc.v)); }
+    Int want = if (sessions) { tpm_st_sessions() } else { tpm_st_no_sessions() };
+    if (tag.v != want) { return Err(TpmBad(f"tag 0x{tag.v:hex}, expected 0x{want:hex}")); }
+    if (r.len() < 10 + 4 * handles) { return Err(TpmBad("handles: short")); }
+    TwAt after = tw_skip(rc.next, 4 * handles);
+    if (!sessions) { return Ok(after); }
+    TwNum ps = tw_num(after, 4, "parameterSize")?;
+    TwAt params = ps.next;
+    if (ps.v > params.end - params.at) { return Err(TpmBad(f"parameterSize {ps.v} past the response")); }
+    Int pend = params.at + ps.v;
+    // TPMS_AUTH_RESPONSE: nonce (TPM2B), sessionAttributes, hmac (TPM2B).
+    TwAt auth = TwAt {.r = r, .at = pend, .end = r.len()};
+    TwBytes nonce = tw_take_2b(auth, 64, "auth nonce")?;
+    TwNum attrs = tw_num(nonce.next, 1, "auth attributes")?;
+    TwBytes hmac = tw_take_2b(attrs.next, 64, "auth hmac")?;
+    _ = tw_done(hmac.next, "auth area")?;
+    return Ok(TwAt {.r = r, .at = params.at, .end = pend});
+}
+
+// One TPML_PCR_SELECTION.
+type TwSel = { List(PcrSel) v; TwAt next; };
+
+Result(TwSel, TpmError) tw_take_sel(TwAt p) {
+    TwNum n = tw_num(p, 4, "pcrSelection count")?;
+    // Each TPMS_PCR_SELECTION is at least 3 bytes: a count past what is
+    // left is refused before the loop.
+    if (n.v > (n.next.end - n.next.at) / 3) { return Err(TpmBad(f"pcrSelection count {n.v} past the response")); }
+    return tw_sel_items(n.next, n.v, []);
+}
+
+Result(TwSel, TpmError) tw_sel_items(TwAt p, Int left, List(PcrSel) acc) {
+    if (left <= 0) { return Ok(TwSel {.v = acc, .next = p}); }
+    TwNum h = tw_num(p, 2, "pcrSelection hash")?;
+    TwNum sz = tw_num(h.next, 1, "sizeofSelect")?;
+    TwAt q = sz.next;
+    if (q.at + sz.v > q.end) { return Err(TpmBad("pcrSelect: short")); }
+    List(Int) pcrs = tw_bits(q.r, q.at, sz.v, 0, ListBuf());
+    return tw_sel_items(tw_skip(q, sz.v), left - 1, acc.concat([PcrSel {.alg = h.v, .pcrs = pcrs}]));
+}
+
+// The PCR numbers whose bits are set in the n bytes at `at`.
+List(Int) tw_bits(List(UInt(8)) r, Int at, Int n, Int i, ListBuf(Int) acc) {
+    if (i >= n * 8) { return acc.finish(); }
+    Bool set = (((Int)r[at + i / 8] >> (i % 8)) & 1) == 1;
+    return tw_bits(r, at, n, i + 1, if (set) { acc.push(i) } else { acc });
+}
+
+// n TPM2Bs (a TPML_DIGEST's digests, ...), each at most `max` bytes.
+type TwList = { List(List(UInt(8))) v; TwAt next; };
+
+Result(TwList, TpmError) tw_take_2bs(TwAt p, Int max, Str what) {
+    TwNum n = tw_num(p, 4, what + " count")?;
+    if (n.v > (n.next.end - n.next.at) / 2) { return Err(TpmBad(f"{what} count {n.v} past the response")); }
+    return tw_2b_items(n.next, n.v, max, what, []);
+}
+
+Result(TwList, TpmError) tw_2b_items(TwAt p, Int left, Int max, Str what, List(List(UInt(8))) acc) {
+    if (left <= 0) { return Ok(TwList {.v = acc, .next = p}); }
+    TwBytes b = tw_take_2b(p, max, what)?;
+    return tw_2b_items(b.next, left - 1, max, what, acc.concat([b.v]));
+}
+
+// -- Responses ------------------------------------------------------------------
+
+type TpmProperty = { Int property; Int value; };
+
+// What TPM2_GetCapability answered: TPML_TAGGED_TPM_PROPERTY (TPM_CAP_
+// TPM_PROPERTIES), TPML_HANDLE (TPM_CAP_HANDLES), TPML_PCR_SELECTION
+// (TPM_CAP_PCRS), or another capability's raw union bytes.
+type TpmCapData = CapProps(List(TpmProperty)) | CapHandles(List(Int)) | CapPcrs(List(PcrSel)) | CapOther(Int, List(UInt(8)));
+type TpmCap = { Bool more; TpmCapData data; };
+
+// TPM2_GetCapability's response (Part 3, Table 209): moreData,
+// capabilityData.
+pub Result(TpmCap, TpmError) tpm2_get_capability_resp(List(UInt(8)) r) {
+    TwAt p = tpm_resp_params(r, 0, false)?;
+    TwNum more = tw_num(p, 1, "moreData")?;
+    if (more.v > 1) { return Err(TpmBad(f"moreData {more.v}")); }
+    TwNum cap = tw_num(more.next, 4, "capability")?;
+    TwAt q = cap.next;
+    if (cap.v == tpm_cap_tpm_properties()) {
+        TwNum n = tw_num(q, 4, "property count")?;
+        if (n.v > (n.next.end - n.next.at) / 8) { return Err(TpmBad(f"property count {n.v} past the response")); }
+        List(TpmProperty) props = tw_props(n.next, n.v, [])?;
+        _ = tw_done(tw_skip(n.next, n.v * 8), "properties")?;
+        return Ok(TpmCap {.more = more.v == 1, .data = CapProps(props)});
+    }
+    if (cap.v == tpm_cap_handles()) {
+        TwNum n = tw_num(q, 4, "handle count")?;
+        if (n.v > (n.next.end - n.next.at) / 4) { return Err(TpmBad(f"handle count {n.v} past the response")); }
+        List(Int) hs = tw_u32s(n.next, n.v, [])?;
+        _ = tw_done(tw_skip(n.next, n.v * 4), "handles")?;
+        return Ok(TpmCap {.more = more.v == 1, .data = CapHandles(hs)});
+    }
+    if (cap.v == tpm_cap_pcrs()) {
+        TwSel s = tw_take_sel(q)?;
+        _ = tw_done(s.next, "pcrs")?;
+        return Ok(TpmCap {.more = more.v == 1, .data = CapPcrs(s.v)});
+    }
+    return Ok(TpmCap {.more = more.v == 1, .data = CapOther(cap.v, r[q.at..q.end])});
+}
+
+Result(List(TpmProperty), TpmError) tw_props(TwAt p, Int left, List(TpmProperty) acc) {
+    if (left <= 0) { return Ok(acc); }
+    TwNum k = tw_num(p, 4, "property")?;
+    TwNum v = tw_num(k.next, 4, "property value")?;
+    return tw_props(v.next, left - 1, acc.concat([TpmProperty {.property = k.v, .value = v.v}]));
+}
+
+Result(List(Int), TpmError) tw_u32s(TwAt p, Int left, List(Int) acc) {
+    if (left <= 0) { return Ok(acc); }
+    TwNum h = tw_num(p, 4, "handle")?;
+    return tw_u32s(h.next, left - 1, acc.concat([h.v]));
+}
+
+// A property's value, when the list has it.
+pub Option(Int) tpm_property(List(TpmProperty) props, Int property) {
+    for (TpmProperty t in props) { if (t.property == property) { return Some(t.value); } }
+    return None;
+}
+
+// TPM2_GetRandom's response (Part 3, Table 35): randomBytes.
+pub Result(List(UInt(8)), TpmError) tpm2_get_random_resp(List(UInt(8)) r) {
+    TwAt p = tpm_resp_params(r, 0, false)?;
+    TwBytes b = tw_take_2b(p, 64, "randomBytes")?;
+    _ = tw_done(b.next, "GetRandom")?;
+    return Ok(b.v);
+}
+
+// TPM2_PCR_Read's response (Part 3, Table 115). A TPM returns at most
+// eight digests per call: `selection` says which PCRs `digests` holds, in
+// order (bank by bank, lowest PCR first); ask again for the rest.
+type PcrRead = { Int update_counter; List(PcrSel) selection; List(List(UInt(8))) digests; };
+
+pub Result(PcrRead, TpmError) tpm2_pcr_read_resp(List(UInt(8)) r) {
+    TwAt p = tpm_resp_params(r, 0, false)?;
+    TwNum ctr = tw_num(p, 4, "pcrUpdateCounter")?;
+    TwSel s = tw_take_sel(ctr.next)?;
+    TwList ds = tw_take_2bs(s.next, 64, "pcrValues")?;
+    _ = tw_done(ds.next, "PCR_Read")?;
+    if (ds.v.len() != tw_count_pcrs(s.v, 0, 0)) { return Err(TpmBad(f"{ds.v.len()} digests for {tw_count_pcrs(s.v, 0, 0)} selected PCRs")); }
+    return Ok(PcrRead {.update_counter = ctr.v, .selection = s.v, .digests = ds.v});
+}
+
+Int tw_count_pcrs(List(PcrSel) s, Int i, Int acc) {
+    if (i >= s.len()) { return acc; }
+    return tw_count_pcrs(s, i + 1, acc + s[i].pcrs.len());
+}
+
+// TPM2_ReadPublic's response (Part 3, Table 33): outPublic (the
+// TPMT_PUBLIC, raw: its name is nameAlg || H(outPublic)), name,
+// qualifiedName. `type_alg` and `name_alg` are outPublic's first two
+// fields.
+type TpmPublic = { List(UInt(8)) public_area; Int type_alg; Int name_alg; List(UInt(8)) name; List(UInt(8)) qualified_name; };
+
+pub Result(TpmPublic, TpmError) tpm2_read_public_resp(List(UInt(8)) r) {
+    TwAt p = tpm_resp_params(r, 0, false)?;
+    TwBytes outp = tw_take_2b(p, 4096, "outPublic")?;
+    TwBytes name = tw_take_2b(outp.next, 68, "name")?;
+    TwBytes qname = tw_take_2b(name.next, 68, "qualifiedName")?;
+    _ = tw_done(qname.next, "ReadPublic")?;
+    TwAt head = TwAt {.r = outp.v, .at = 0, .end = outp.v.len()};
+    TwNum ty = tw_num(head, 2, "outPublic type")?;
+    TwNum na = tw_num(ty.next, 2, "outPublic nameAlg")?;
+    return Ok(TpmPublic {.public_area = outp.v, .type_alg = ty.v, .name_alg = na.v, .name = name.v, .qualified_name = qname.v});
+}
+
+// TPM2_NV_ReadPublic's response (Part 3, Table 231): nvPublic
+// (TPMS_NV_PUBLIC: nvIndex, nameAlg, attributes, authPolicy, dataSize),
+// nvName.
+type NvPublic = { Int index; Int name_alg; Int attributes; List(UInt(8)) auth_policy; Int data_size; List(UInt(8)) name; };
+
+pub Result(NvPublic, TpmError) tpm2_nv_read_public_resp(List(UInt(8)) r) {
+    TwAt p = tpm_resp_params(r, 0, false)?;
+    TwBytes nvp = tw_take_2b(p, 4096, "nvPublic")?;
+    TwBytes name = tw_take_2b(nvp.next, 68, "nvName")?;
+    _ = tw_done(name.next, "NV_ReadPublic")?;
+    TwAt q = TwAt {.r = nvp.v, .at = 0, .end = nvp.v.len()};
+    TwNum idx = tw_num(q, 4, "nvIndex")?;
+    TwNum alg = tw_num(idx.next, 2, "nameAlg")?;
+    TwNum attrs = tw_num(alg.next, 4, "attributes")?;
+    TwBytes pol = tw_take_2b(attrs.next, 64, "authPolicy")?;
+    TwNum size = tw_num(pol.next, 2, "dataSize")?;
+    _ = tw_done(size.next, "nvPublic")?;
+    return Ok(NvPublic {.index = idx.v, .name_alg = alg.v, .attributes = attrs.v, .auth_policy = pol.v, .data_size = size.v, .name = name.v});
+}
+
+// TPM2_NV_Read's response (Part 3, Table 237): data.
+pub Result(List(UInt(8)), TpmError) tpm2_nv_read_resp(List(UInt(8)) r) {
+    TwAt p = tpm_resp_params(r, 0, true)?;
+    TwBytes b = tw_take_2b(p, 4096, "data")?;
+    _ = tw_done(b.next, "NV_Read")?;
+    return Ok(b.v);
+}
+
+// TPMT_SIGNATURE: the algorithm and hash, and the signature: one value
+// (RSASSA, RSAPSS) or r and s (ECDSA, ECDAA, SM2, ECSCHNORR); none for
+// TPM_ALG_NULL.
+type TpmSignature = SigNull | SigRsa(Int, Int, List(UInt(8))) | SigEcc(Int, Int, List(UInt(8)), List(UInt(8)));
+
+// TPM2_Quote's response (Part 3, Table 92): quoted (a TPMS_ATTEST, the
+// signed bytes) and signature, and the signature's own encoding (`sig_raw`,
+// for a verifier that parses it itself).
+type TpmQuote = { List(UInt(8)) attest; TpmSignature signature; List(UInt(8)) sig_raw; };
+
+pub Result(TpmQuote, TpmError) tpm2_quote_resp(List(UInt(8)) r) {
+    TwAt p = tpm_resp_params(r, 0, true)?;
+    TwBytes quoted = tw_take_2b(p, 1024, "quoted")?;
+    TwAt s0 = quoted.next;
+    TwNum alg = tw_num(s0, 2, "sigAlg")?;
+    if (alg.v == tpm_alg_null()) {
+        _ = tw_done(alg.next, "Quote")?;
+        return Ok(TpmQuote {.attest = quoted.v, .signature = SigNull, .sig_raw = r[s0.at..alg.next.at]});
+    }
+    TwNum halg = tw_num(alg.next, 2, "signature hash")?;
+    if (alg.v == tpm_alg_rsassa() || alg.v == tpm_alg_rsapss()) {
+        TwBytes sig = tw_take_2b(halg.next, 512, "RSA signature")?;
+        _ = tw_done(sig.next, "Quote")?;
+        return Ok(TpmQuote {.attest = quoted.v, .signature = SigRsa(alg.v, halg.v, sig.v), .sig_raw = r[s0.at..sig.next.at]});
+    }
+    if (alg.v == tpm_alg_ecdsa() || alg.v == tpm_alg_ecdaa() || alg.v == tpm_alg_sm2() || alg.v == tpm_alg_ecschnorr()) {
+        TwBytes sr = tw_take_2b(halg.next, 128, "signature r")?;
+        TwBytes ss = tw_take_2b(sr.next, 128, "signature s")?;
+        _ = tw_done(ss.next, "Quote")?;
+        return Ok(TpmQuote {.attest = quoted.v, .signature = SigEcc(alg.v, halg.v, sr.v, ss.v), .sig_raw = r[s0.at..ss.next.at]});
+    }
+    return Err(TpmBad(f"signature algorithm 0x{alg.v:hex}"));
+}
+
+// The quote a TPMS_ATTEST carries (Part 2, Tables 120, 123, 131): magic
+// TPM_GENERATED_VALUE (0xFF544347), type TPM_ST_ATTEST_QUOTE (0x8018),
+// qualifiedSigner, extraData (the qualifying data asked for), clockInfo,
+// firmwareVersion, and TPMS_QUOTE_INFO (the PCRs and their digest).
+// Parsing it checks nothing about who signed it: verify the signature over
+// `attest` with the AK's public key before trusting any field.
+type QuoteInfo = { List(UInt(8)) signer; List(UInt(8)) extra_data; Int clock_hi; Int clock_lo; Int reset_count; Int restart_count; Bool safe; Int fw_hi; Int fw_lo; List(PcrSel) pcrs; List(UInt(8)) pcr_digest; };
+
+pub Result(QuoteInfo, TpmError) tpm_attest_quote(List(UInt(8)) a) {
+    TwAt p = TwAt {.r = a, .at = 0, .end = a.len()};
+    TwNum magic = tw_num(p, 4, "magic")?;
+    if (magic.v != 4283712327) { return Err(TpmBad(f"magic 0x{magic.v:hex}")); }
+    TwNum ty = tw_num(magic.next, 2, "type")?;
+    if (ty.v != 32792) { return Err(TpmBad(f"attestation type 0x{ty.v:hex}, a quote is 0x8018")); }
+    TwBytes signer = tw_take_2b(ty.next, 68, "qualifiedSigner")?;
+    TwBytes extra = tw_take_2b(signer.next, 66, "extraData")?;
+    TwNum ch = tw_num(extra.next, 4, "clock")?;
+    TwNum cl = tw_num(ch.next, 4, "clock")?;
+    TwNum reset = tw_num(cl.next, 4, "resetCount")?;
+    TwNum restart = tw_num(reset.next, 4, "restartCount")?;
+    TwNum safe = tw_num(restart.next, 1, "safe")?;
+    if (safe.v > 1) { return Err(TpmBad(f"safe {safe.v}")); }
+    TwNum fh = tw_num(safe.next, 4, "firmwareVersion")?;
+    TwNum fl = tw_num(fh.next, 4, "firmwareVersion")?;
+    TwSel sel = tw_take_sel(fl.next)?;
+    TwBytes dg = tw_take_2b(sel.next, 64, "pcrDigest")?;
+    _ = tw_done(dg.next, "TPMS_ATTEST")?;
+    return Ok(QuoteInfo {.signer = signer.v, .extra_data = extra.v, .clock_hi = ch.v, .clock_lo = cl.v, .reset_count = reset.v, .restart_count = restart.v, .safe = safe.v == 1, .fw_hi = fh.v, .fw_lo = fl.v, .pcrs = sel.v, .pcr_digest = dg.v});
+}
