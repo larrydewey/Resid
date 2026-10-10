@@ -1,0 +1,2 @@
+E0214
+spawn body uses capabilities its list [clock(readonly)] does not grant: filesystem(readonly)

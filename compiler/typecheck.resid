@@ -3638,9 +3638,23 @@ Str list_join(List(Str) xs, Int i, Str sep, Str acc) {
     return list_join(xs, k, sep, piece);
 }
 
+// A capability list as diagnostics show it, in source spelling
+// (`clock:ro` is `clock(readonly)`).
 Str fmt_caps(Str csv) {
     if (csv == "" || csv == "_") { return ""; }
-    return list_join(str_split(csv, ","), 0, ", ", "");
+    return list_join(caps_spelled(str_split(csv, ","), 0, ListBuf()), 0, ", ", "");
+}
+
+List(Str) caps_spelled(List(Str) cs, Int i, ListBuf(Str) acc) {
+    if (i >= cs.len()) { return acc.finish(); }
+    return caps_spelled(cs, i + 1, acc.push(cap_spell(cs[i])));
+}
+
+// One encoded capability as source spells it: `fam:ro` is
+// `fam(readonly)`, anything else is its family.
+Str cap_spell(Str cap) {
+    if (cap_readonly(cap)) { return cap_family(cap) + "(readonly)"; }
+    return cap;
 }
 
 Str first_missing_req_at(List(Str) reqs, Str ceiling, Int i) {
@@ -3792,7 +3806,7 @@ Str spawn_call_check(Funcs fs, Str callee, Str parent) {
     if (reqcsv == "") { return ""; }
     Str missing = first_missing_req(reqcsv, parent);
     if (missing == "") { return ""; }
-    return "error[E0215]: call to `" + callee + "` requires capability `" + missing + "` which is not granted to this region's capability set [" + fmt_caps(parent) + "]";
+    return "error[E0215]: call to `" + callee + "` requires capability `" + cap_spell(missing) + "` which is not granted to this region's capability set [" + fmt_caps(parent) + "]";
 }
 
 // Reverse call-graph index (callee name -> comma-joined caller names),
@@ -3903,7 +3917,7 @@ Str e0211_check_callee(Funcs fs, Str caller_name, Str caller_eff, Str callee_nam
     if (j < 0) { return ""; }
     Str missing = first_missing_req(fs.reqs[j], caller_eff);
     if (missing == "") { return ""; }
-    return "call to `" + callee_name + "` requires capability `" + missing + "` which exceeds the caller's effective sandbox ceiling [" + fmt_caps(caller_eff) + "] (attenuation is transitive across the call closure)";
+    return "call to `" + callee_name + "` requires capability `" + cap_spell(missing) + "` which exceeds the caller's effective sandbox ceiling [" + fmt_caps(caller_eff) + "] (attenuation is transitive across the call closure)";
 }
 Str e0211_check_callees(Funcs fs, Str caller_name, Str caller_eff, List(Str) callees, Int k) {
     if (k >= callees.len()) { return ""; }

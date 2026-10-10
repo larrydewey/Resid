@@ -1,0 +1,6 @@
+// A read-only network need is asked for as `network(readonly)`, not as
+// the wider `network`.
+@requires(network(readonly))
+Bool probe() { return resid_tcp_close(resid_tcp_listen(0)); }
+
+Int main() { return if (probe()) { 0 } else { 1 }; }

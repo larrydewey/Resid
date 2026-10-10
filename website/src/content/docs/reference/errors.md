@@ -4,7 +4,9 @@ description: What the compiler's error codes mean.
 ---
 
 Diagnostics name the file, line and column (in imported modules, their
-own), with the offending source line.
+own), with the offending source line. Capabilities and capability lists
+are spelled as in source: `filesystem(readonly)`, `[clock(readonly),
+network]`.
 
 | Code | Meaning |
 |---|---|

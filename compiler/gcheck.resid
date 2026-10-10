@@ -4404,7 +4404,7 @@ Str gk_enforce_func(GK k, List(Int) fnode, List(Str) eff, List(GKF) facts, Int f
     Str reqcsv = fs.reqs[fi];
     if (ceiling != "" && reqcsv != "") {
         Str missing = first_missing_req(reqcsv, ceiling);
-        if (missing != "") { return "function `" + fname + "` requires capability `" + missing + "` which exceeds the effective capability ceiling [" + fmt_caps(ceiling) + "]"; }
+        if (missing != "") { return "function `" + fname + "` requires capability `" + cap_spell(missing) + "` which exceeds the effective capability ceiling [" + fmt_caps(ceiling) + "]"; }
     }
     Str effc = eff[fi];
     List(Str) none = [];
@@ -4434,7 +4434,7 @@ Str gk_spawn_scan(GK k, Int id, Bool bounded, Str parent, Bool insp) {
         if (caps.err != "") { return ""; }
         if (bounded) {
             Str over = if (caps.ty == "") { "" } else { spawn_cap_exceeds_at(str_split(caps.ty, ","), parent, 0) };
-            if (over != "") { return "error[E0214]: spawn declares capability `" + over + "` which exceeds the parent's capability ceiling [" + fmt_caps(parent) + "] (child ≤ parent)"; }
+            if (over != "") { return "error[E0214]: spawn declares capability `" + cap_spell(over) + "` which exceeds the parent's capability ceiling [" + fmt_caps(parent) + "] (child ≤ parent)"; }
         }
         return gk_spawn_kids(k, id, 0, true, caps.ty, true);
     }
@@ -4566,10 +4566,11 @@ Str gk_need_via(Sigs fs, List(Str) need, List(Str) decl, List(Str) cs, Int j, St
     return gk_need_via(fs, need, decl, cs, j + 1, e);
 }
 
-// A need as @requires spells it (filesystem, terminal and clock grants
-// have modes).
+// A need as @requires spells it (filesystem, terminal, clock and network
+// grants have modes; a read of the others is the whole family).
 Str cap_show(Str e) {
-    if (cap_readonly(e) && (cap_family(e) == "filesystem" || cap_family(e) == "terminal" || cap_family(e) == "clock")) { return cap_family(e) + "(readonly)"; }
+    Str f = cap_family(e);
+    if (cap_readonly(e) && (f == "filesystem" || f == "terminal" || f == "clock" || f == "network")) { return f + "(readonly)"; }
     return cap_family(e);
 }
 
