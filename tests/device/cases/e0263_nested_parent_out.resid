@@ -1,0 +1,5 @@
+// A Nested buffer's pointer goes to the kernel inside its parent, so the parent is In or InOut (E0263).
+import "dev/fx_e0263_nested_parent_out.resid";
+
+@requires(device(readonly))
+Int main() { println(fx_call()); return 0; }

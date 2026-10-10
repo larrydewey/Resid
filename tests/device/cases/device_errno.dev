@@ -1,0 +1,20 @@
+// Fixture for device_errno: TIOCSIG on a pty master with an Errno field (installed as lib/dev/fx_device_errno.resid).
+import "device.resid";
+import "device_write.resid";
+
+// TIOCSIG, _IOW('T', 0x36, int). The kernel reads the signal from the
+// ioctl's argument itself, which the host always sets to the struct's
+// address: never SIGINT, SIGQUIT or SIGTSTP, so the pty answers EINVAL.
+pub IoctlOp fx_sig() {
+    return IoctlOp {.name = "fx.tiocsig", .path = "/dev/ptmx", .requests = dv_both(dv_iow(84, 54, 4)), .size = 4, .fields = [Scalar(0, 4, In), Errno], .write = true, .version = Unversioned, .stability = Uapi};
+}
+
+// The same without Errno: the failure is Err(Kernel).
+pub IoctlOp fx_sig_plain() {
+    return IoctlOp {.name = "fx.tiocsig_plain", .path = "/dev/ptmx", .requests = dv_both(dv_iow(84, 54, 4)), .size = 4, .fields = [Scalar(0, 4, In)], .write = true, .version = Unversioned, .stability = Uapi};
+}
+
+// TIOCGPTN with Errno: a call that succeeds gives errno 0.
+pub IoctlOp fx_ptn_errno() {
+    return IoctlOp {.name = "fx.tiocgptn_errno", .path = "/dev/ptmx", .requests = dv_both(dv_ior(84, 48, 4)), .size = 4, .fields = [Scalar(0, 4, Out), Errno], .write = false, .version = Unversioned, .stability = Uapi};
+}

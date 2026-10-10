@@ -1,0 +1,5 @@
+// Two Nested fields of one parent are apart (E0263).
+import "dev/fx_e0263_nested_siblings.resid";
+
+@requires(device(readonly))
+Int main() { println(fx_call()); return 0; }

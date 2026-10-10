@@ -200,20 +200,26 @@ Int rd_take(Int r, Int n) {
 //   28 why it is refused (0: it is not)   29 secret outputs   31 allocations
 //
 // A step (an ioctl), 16 words: 0 the request number for this target,
-// 1 size, 2 fields, 3 field words (6 each: kind 0 Scalar / 1 Inline /
-// 2 Buffer, offset, width / length / length field (-1: none), max, dir
-// (1 In, 2 Out, 3 InOut), secret), 4 version width (0: unversioned),
-// 5 version offset, 6 version, 7 write, 8 requests, 9 request words
-// (arch, number), 10 the host's struct, 11 the host's buffers (a word per
-// field).
+// 1 size, 2 fields, 3 field words (8 each: kind 0 Scalar / 1 Inline /
+// 2 Buffer / 3 Nested / 4 Errno, offset, width / length / length field
+// (-1: none), max, dir (1 In, 2 Out, 3 InOut), secret, a Nested field's
+// parent (its Buffer's pointer offset in the struct) and its length
+// field's width), 4 version width (0: unversioned), 5 version offset,
+// 6 version, 7 write, 8 requests, 9 request words (arch, number), 10 the
+// host's struct, 11 the host's buffers (a word per field), 12 their
+// lengths (a word per field).
 Int dget(Int d, Int i) { return ld64(d + i * 8); }
 Int dset(Int d, Int i, Int v) { return st64(d + i * 8, v); }
 
 // Field word k of field i of step s.
-Int fw(Int s, Int i, Int k) { return ld64(ld64(s + 24) + i * 48 + k * 8); }
+Int fw(Int s, Int i, Int k) { return ld64(ld64(s + 24) + i * 64 + k * 8); }
 
-// A field's bytes in the struct: a Buffer is its 8-byte pointer.
-Int f_len(Int s, Int i) { return if (fw(s, i, 0) == 2) { 8 } else { fw(s, i, 2) }; }
+// A field's bytes in the struct: a Buffer is its 8-byte pointer; a Nested
+// field and Errno hold none.
+Int f_len(Int s, Int i) {
+    Int k = fw(s, i, 0);
+    return if (k == 2) { 8 } else if (k >= 3) { 0 } else { fw(s, i, 2) };
+}
 
 // Step i of request d.
 Int step_of(Int d, Int i) { return ld64(dget(d, 7) + i * 8); }
@@ -280,7 +286,7 @@ Int pq_step(Int d, Int r) {
     Int size = rd_u(r, 4);
     _ = dset(s, 1, size);
     Int nf = rd_u(r, 1);
-    Int fs = pq_alloc(d, nf * 48 + 8);
+    Int fs = pq_alloc(d, nf * 64 + 8);
     _ = pq_fields(r, fs, 0, nf);
     _ = dset(s, 2, nf) + dset(s, 3, fs);
     Int vf = rd_u(r, 1);
@@ -306,7 +312,7 @@ Int pq_reqs(Int r, Int rq, Int i, Int n) {
 
 Int pq_fields(Int r, Int fs, Int i, Int n) {
     if (i >= n) { return 0; }
-    Int f = fs + i * 48;
+    Int f = fs + i * 64;
     Int tag = rd_u(r, 1);
     _ = st64(f, tag);
     if (tag == 0 || tag == 1) {
@@ -323,7 +329,19 @@ Int pq_fields(Int r, Int fs, Int i, Int n) {
         Int sec = rd_u(r, 1);
         _ = st64(f + 8, o) + st64(f + 16, if (la == 4294967295) { 0 - 1 } else { la }) + st64(f + 24, mx) + st64(f + 32, dir) + st64(f + 40, sec);
     }
-    _ = if (tag > 2) { rd_fail(r) } else { 0 };
+    if (tag == 3) {
+        Int par = rd_u(r, 4);
+        Int o = rd_u(r, 4);
+        Int la = rd_u(r, 4);
+        Int lw = rd_u(r, 1);
+        Int mx = rd_u(r, 4);
+        Int dir = rd_u(r, 1);
+        Int sec = rd_u(r, 1);
+        _ = st64(f + 8, o) + st64(f + 16, if (la == 4294967295) { 0 - 1 } else { la }) + st64(f + 24, mx) + st64(f + 32, dir) + st64(f + 40, sec) + st64(f + 48, par) + st64(f + 56, lw);
+    }
+    // Errno: its value comes back as a number output.
+    _ = if (tag == 4) { st64(f + 32, 2) } else { 0 };
+    _ = if (tag > 4) { rd_fail(r) } else { 0 };
     return pq_fields(r, fs, i + 1, n);
 }
 
@@ -525,7 +543,14 @@ Int pq_steps_err(Int d, Int i, Int n) {
     if (dget(s, 7) == 1 && dget(d, 1) != 1) { return 30; }
     if (dget(s, 7) > 1) { return 30; }
     if (i < n - 1 && pq_hidden_out(s, 0, dget(s, 2))) { return 31; }
+    if (dget(d, 0) == 5 && pq_has_errno(s, 0, dget(s, 2)) > 0) { return 32; }
     return pq_steps_err(d, i + 1, n);
+}
+
+// How many Errno fields s has.
+Int pq_has_errno(Int s, Int i, Int n) {
+    if (i >= n) { return 0; }
+    return (if (fw(s, i, 0) == 4) { 1 } else { 0 }) + pq_has_errno(s, i + 1, n);
 }
 
 Bool pq_hidden_out(Int s, Int i, Int n) {
@@ -565,6 +590,8 @@ Bool pq_arches_ok(Int s, Int i, Int n) {
 Bool pq_fields_ok(Int s, Int i, Int n) {
     if (i >= n) { return true; }
     Int k = fw(s, i, 0);
+    if (k == 4) { return pq_has_errno(s, 0, n) == 1 && pq_fields_ok(s, i + 1, n); }
+    if (k == 3) { return pq_nested_ok(s, i, n) && pq_fields_ok(s, i + 1, n); }
     Int o = fw(s, i, 1);
     Int l = f_len(s, i);
     Int dir = fw(s, i, 4);
@@ -574,6 +601,49 @@ Bool pq_fields_ok(Int s, Int i, Int n) {
     if (k == 2 && fw(s, i, 2) != 0 - 1 && !pq_len_ok(s, i, n)) { return false; }
     return pq_fields_ok(s, i + 1, n);
 }
+
+// Nested field i (compiler/device.resid's dv_nested_err): its parent an
+// earlier In or InOut Buffer, its pointer 8-aligned inside the parent's
+// maximum, its length field (if any) 1, 2, 4 or 8 bytes inside the parent,
+// apart from the pointer, wide enough for its maximum; apart from the
+// parent's other Nested fields.
+Bool pq_nested_ok(Int s, Int i, Int n) {
+    Int pi = pq_buffer_at(s, fw(s, i, 6), 0, n);
+    if (pi < 0 || pi > i || (fw(s, pi, 4) & 1) == 0) { return false; }
+    Int pm = fw(s, pi, 3);
+    Int o = fw(s, i, 1);
+    Int dir = fw(s, i, 4);
+    if (o < 0 || o % 8 != 0 || o + 8 > pm || dir < 1 || dir > 3 || fw(s, i, 5) > 1 || !pq_max_ok(fw(s, i, 3))) { return false; }
+    Int la = fw(s, i, 2);
+    Int lw = fw(s, i, 7);
+    if (la != 0 - 1) {
+        if (lw != 1 && lw != 2 && lw != 4 && lw != 8) { return false; }
+        if (la < 0 || la + lw > pm || (la < o + 8 && o < la + lw)) { return false; }
+        if (lw < 8 && fw(s, i, 3) >= (1 << (lw * 8))) { return false; }
+    }
+    return pq_nested_apart(s, i, 0, n);
+}
+
+// The index of the Buffer whose pointer is at offset o, or -1.
+Int pq_buffer_at(Int s, Int o, Int i, Int n) {
+    if (i >= n) { return 0 - 1; }
+    if (fw(s, i, 0) == 2 && fw(s, i, 1) == o) { return i; }
+    return pq_buffer_at(s, o, i + 1, n);
+}
+
+Bool pq_nested_apart(Int s, Int i, Int j, Int n) {
+    if (j >= n) { return true; }
+    if (j != i && fw(s, j, 0) == 3 && fw(s, j, 6) == fw(s, i, 6)) {
+        Int ao = fw(s, i, 1);
+        Int bo = fw(s, j, 1);
+        Int al = fw(s, i, 2);
+        Int bl = fw(s, j, 2);
+        if (pq_meet(ao, 8, bo, 8) || pq_meet(ao, 8, bl, fw(s, j, 7)) || pq_meet(al, fw(s, i, 7), bo, 8) || pq_meet(al, fw(s, i, 7), bl, fw(s, j, 7))) { return false; }
+    }
+    return pq_nested_apart(s, i, j + 1, n);
+}
+
+Bool pq_meet(Int a, Int al, Int b, Int bl) { return a >= 0 && b >= 0 && a < b + bl && b < a + al; }
 
 // Buffer i's length field: a Scalar of the struct wide enough to hold the
 // buffer's maximum, and no other Buffer's.
@@ -614,6 +684,9 @@ Bool pq_apart(Int s, Int i, Int j) {
     Int n = nf + (if (dget(s, 4) > 0) { 1 } else { 0 });
     if (i >= n) { return true; }
     if (j >= n) { return pq_apart(s, i + 1, i + 2); }
+    // Nested and Errno fields hold no bytes of the struct.
+    if (i < nf && fw(s, i, 0) >= 3) { return pq_apart(s, i + 1, i + 2); }
+    if (j < nf && fw(s, j, 0) >= 3) { return pq_apart(s, i, j + 1); }
     Int ao = if (i < nf) { fw(s, i, 1) } else { dget(s, 5) };
     Int al = if (i < nf) { f_len(s, i) } else { dget(s, 4) };
     Int bo = if (j < nf) { fw(s, j, 1) } else { dget(s, 5) };
@@ -639,17 +712,17 @@ Bool pq_reqs_ok(Int s, Int i, Int n) {
 Bool pq_to_kernel(Int s, Int i, Int n) {
     if (dget(s, 4) > 0) { return true; }
     if (i >= n) { return false; }
-    return fw(s, i, 0) == 2 || (fw(s, i, 4) & 1) != 0 || pq_to_kernel(s, i + 1, n);
+    return fw(s, i, 0) == 2 || (fw(s, i, 0) < 3 && (fw(s, i, 4) & 1) != 0) || pq_to_kernel(s, i + 1, n);
 }
 
 Bool pq_from_kernel(Int s, Int i, Int n) {
     if (i >= n) { return false; }
-    return (fw(s, i, 0) != 2 && (fw(s, i, 4) & 2) != 0) || pq_from_kernel(s, i + 1, n);
+    return (fw(s, i, 0) < 2 && (fw(s, i, 4) & 2) != 0) || pq_from_kernel(s, i + 1, n);
 }
 
 Bool pq_any_out(Int s, Int i, Int n) {
     if (i >= n) { return false; }
-    return (fw(s, i, 4) & 2) != 0 || pq_any_out(s, i + 1, n);
+    return (fw(s, i, 0) != 4 && (fw(s, i, 4) & 2) != 0) || pq_any_out(s, i + 1, n);
 }
 
 // A Sequence's links (E0264): forward, from a Scalar output to a Scalar
@@ -736,7 +809,7 @@ Int pq_outs(Int s, Int i, Int n, Int sl, Int k) {
     if (i >= n) { return k; }
     Int kd = fw(s, i, 0);
     Bool out = (fw(s, i, 4) & 2) != 0;
-    Int k2 = if (!out) { k } else if (kd == 0) { if (pq_is_len(s, fw(s, i, 1), 0, n)) { k } else { pq_slot(sl, k, 1, fw(s, i, 2), 0) } } else if (kd == 1) { pq_slot(sl, k, 0, fw(s, i, 2), 0) } else { pq_slot(sl, k, 0, fw(s, i, 3), fw(s, i, 5)) };
+    Int k2 = if (!out) { k } else if (kd == 4) { pq_slot(sl, k, 1, 8, 0) } else if (kd == 0) { if (pq_is_len(s, fw(s, i, 1), 0, n)) { k } else { pq_slot(sl, k, 1, fw(s, i, 2), 0) } } else if (kd == 1) { pq_slot(sl, k, 0, fw(s, i, 2), 0) } else { pq_slot(sl, k, 0, fw(s, i, 3), fw(s, i, 5)) };
     return pq_outs(s, i + 1, n, sl, k2);
 }
 
@@ -749,7 +822,7 @@ Int pq_ins_steps(Int d, Int i, Int n, Int sl, Int k) {
 Int pq_ins(Int d, Int si, Int s, Int i, Int n, Int sl, Int k) {
     if (i >= n) { return k; }
     Int kd = fw(s, i, 0);
-    Bool inp = (fw(s, i, 4) & 1) != 0;
+    Bool inp = kd != 4 && (fw(s, i, 4) & 1) != 0;
     Int k2 = if (!inp) { k } else if (kd == 0) { if (pq_is_len(s, fw(s, i, 1), 0, n) || pq_linked(d, si, fw(s, i, 1), 0)) { k } else { pq_slot(sl, k, 1, fw(s, i, 2), 0) } } else if (kd == 1) { pq_slot(sl, k, 0, fw(s, i, 2), 0) } else { pq_slot(sl, k, 0, fw(s, i, 3), fw(s, i, 5)) };
     return pq_ins(d, si, s, i + 1, n, sl, k2);
 }
@@ -1421,7 +1494,11 @@ Int dh_ioctl(Int h, Int d) {
     _ = dset(h, 7, fd);
     Int ns = dget(d, 6);
     if (!dh_regions(h, pq_fields_total(d, 0, ns, 0) + ns + 4)) { return native_child_exit(125); }
-    if (dh_prep(h, d, 0, ns, 0) < 0) { return native_child_exit(125); }
+    Int pr = dh_prep(h, d, 0, ns, 0);
+    // -2: a Nested buffer's length, as the program wrote it, is past its
+    // maximum (refused like any request that does not fit, error 10).
+    if (pr == 0 - 2) { return dh_fail(h, 10, 60); }
+    if (pr < 0) { return native_child_exit(125); }
     if (!dh_bufs(h, d)) { return native_child_exit(125); }
     _ = dh_ioctl_rules(h, d, fd, 0, ns);
     if (!dh_lock(h)) { return native_child_exit(126); }
@@ -1442,9 +1519,9 @@ Int dh_prep(Int h, Int d, Int i, Int n, Int ai) {
     Int st = dh_region(h, dget(s, 1), 0);
     if (st == 0) { return 0 - 1; }
     _ = resid_raw_fill(st, 0, dget(s, 1));
-    _ = dset(s, 10, st) + dset(s, 11, pq_alloc(d, dget(s, 2) * 8 + 8));
+    _ = dset(s, 10, st) + dset(s, 11, pq_alloc(d, dget(s, 2) * 8 + 8)) + dset(s, 12, pq_alloc(d, dget(s, 2) * 8 + 8));
     Int a2 = dh_fill(h, d, i, s, 0, dget(s, 2), ai);
-    if (a2 < 0) { return 0 - 1; }
+    if (a2 < 0) { return a2; }
     // The interface version the descriptor speaks, set before the call.
     _ = if (dget(s, 4) > 0) { le_put(st + dget(s, 5), dget(s, 6), dget(s, 4)) } else { 0 };
     return dh_prep(h, d, i + 1, n, a2);
@@ -1469,6 +1546,8 @@ Int dh_fill(Int h, Int d, Int si, Int s, Int i, Int n, Int ai) {
         _ = if (inp) { mcopy(st + o, arg_w(d, ai, 1), arg_w(d, ai, 2)) } else { 0 };
         return dh_fill(h, d, si, s, i + 1, n, if (inp) { ai + 1 } else { ai });
     }
+    if (kd == 4) { return dh_fill(h, d, si, s, i + 1, n, ai); }
+    if (kd == 3) { return dh_nested(h, d, si, s, i, n, ai); }
     // A Buffer: its own guarded region, its address in the struct, and
     // its length field set -- the input's length for an In buffer, else
     // the capacity.
@@ -1476,7 +1555,7 @@ Int dh_fill(Int h, Int d, Int si, Int s, Int i, Int n, Int ai) {
     Int b = dh_region(h, mx, fw(s, i, 5));
     if (b == 0) { return 0 - 1; }
     _ = resid_raw_fill(b, 0, mx);
-    _ = st64(st + o, b) + st64(dget(s, 11) + i * 8, b);
+    _ = st64(st + o, b) + st64(dget(s, 11) + i * 8, b) + st64(dget(s, 12) + i * 8, mx);
     Int l = if (inp) { arg_w(d, ai, 2) } else { 0 };
     _ = if (inp) { mcopy(b, arg_w(d, ai, 1), l) } else { 0 };
     Int la = fw(s, i, 2);
@@ -1485,14 +1564,44 @@ Int dh_fill(Int h, Int d, Int si, Int s, Int i, Int n, Int ai) {
     return dh_fill(h, d, si, s, i + 1, n, if (inp) { ai + 1 } else { ai });
 }
 
+// A Nested buffer: a guarded region of its length -- an In buffer's input
+// length, else the length the program wrote at its length field in the
+// parent (no length field: its maximum) -- its address patched into the
+// parent buffer (filled already: the parent is listed first), and its
+// length field set. -2 when the program's length is past the maximum.
+Int dh_nested(Int h, Int d, Int si, Int s, Int i, Int n, Int ai) {
+    Int pi = pq_buffer_at(s, fw(s, i, 6), 0, n);
+    Int pb = ld64(dget(s, 11) + pi * 8);
+    Int dir = fw(s, i, 4);
+    Bool inp = (dir & 1) != 0;
+    Int mx = fw(s, i, 3);
+    Int la = fw(s, i, 2);
+    Int lw = fw(s, i, 7);
+    Int il = if (inp) { arg_w(d, ai, 2) } else { 0 };
+    Int want = if (dir == 1) { il } else if (la >= 0) { le_get(pb + la, lw) } else { mx };
+    if (want < 0 || want > mx || il > want) { return 0 - 2; }
+    Int b = dh_region(h, want, fw(s, i, 5));
+    if (b == 0) { return 0 - 1; }
+    _ = resid_raw_fill(b, 0, want);
+    _ = if (inp) { mcopy(b, arg_w(d, ai, 1), il) } else { 0 };
+    _ = st64(pb + fw(s, i, 1), b) + st64(dget(s, 11) + i * 8, b) + st64(dget(s, 12) + i * 8, want);
+    _ = if (la >= 0) { le_put(pb + la, want, lw) } else { 0 };
+    return dh_fill(h, d, si, s, i + 1, n, if (inp) { ai + 1 } else { ai });
+}
+
 // Run step i on, then reply with the last step's outputs.
 Int dh_steps(Int h, Int d, Int fd, Int i, Int n) {
     if (i >= n) { return dh_ioctl_reply(h, d); }
     Int s = step_of(d, i);
     _ = dh_links_into(d, i, 0);
-    Int r = sc(16, fd, dget(s, 0), dget(s, 10));
+    Int r = dh_fake_kernel(h, s, sc(16, fd, dget(s, 0), dget(s, 10)));
     _ = dh_after_op(h);
-    if (r < 0) { return dh_fail_errno(h, r, true); }
+    // With an Errno field a failed ioctl still replies with its outputs,
+    // the errno among them -- except ENOTTY (another layout: Unsupported)
+    // and EFAULT (a guard page: Overrun).
+    Bool keep = r < 0 && r != 0 - 25 && r != 0 - 14 && pq_has_errno(s, 0, dget(s, 2)) > 0;
+    if (r < 0 && !keep) { return dh_fail_errno(h, r, true); }
+    _ = if (keep) { dset(h, 17, 0 - r) } else { 0 };
     if (!dh_canaries(h, 0)) { return dh_fail(h, 8, 0); }
     // The kernel answered in the version the descriptor speaks, or the
     // call is Err(Version) with the one it did.
@@ -1500,6 +1609,35 @@ Int dh_steps(Int h, Int d, Int fd, Int i, Int n) {
     Int v = if (vw > 0) { le_get(dget(s, 10) + dget(s, 5), vw) } else { 0 };
     if (vw > 0 && v != dget(s, 6)) { return dh_fail(h, 7, v); }
     return dh_steps(h, d, fd, i + 1, n);
+}
+
+// Self-tests 23 to 26 stand in for a kernel that follows Nested pointers
+// (no device any user can open has one): it reads each Nested buffer's
+// address from the parent buffer, as the kernel would, and fills the
+// buffer's length with 0xa5 -- 24 also one byte past it (the canary), 25
+// into the guard page after it -- and the call succeeds; 26 instead writes
+// 8192 into the length field and fails with EIO, as SNP's extended report
+// does when the buffer is too small.
+Int dh_fake_kernel(Int h, Int s, Int r) {
+    Int mode = dget(h, 0);
+    if (mode < 23 || mode > 26) { return r; }
+    _ = dh_fake_nested(h, s, 0, dget(s, 2), mode);
+    return if (mode == 26) { 0 - 5 } else { 0 };
+}
+
+Int dh_fake_nested(Int h, Int s, Int i, Int n, Int mode) {
+    if (i >= n) { return 0; }
+    if (fw(s, i, 0) == 3) {
+        Int pb = ld64(dget(s, 11) + pq_buffer_at(s, fw(s, i, 6), 0, n) * 8);
+        Int b = ld64(pb + fw(s, i, 1));
+        Int l = ld64(dget(s, 12) + i * 8);
+        Int pg = dget(h, 2);
+        _ = if (mode == 26) { 0 } else { resid_raw_fill(b, 165, l) };
+        _ = if (mode == 24) { st8(b + l, ld8(b + l) ^ 255) } else { 0 };
+        _ = if (mode == 25) { st8(b + ((max(l, 1) + pg - 1) / pg) * pg, 1) } else { 0 };
+        _ = if (mode == 26 && fw(s, i, 2) >= 0) { le_put(pb + fw(s, i, 2), 8192, fw(s, i, 7)) } else { 0 };
+    }
+    return dh_fake_nested(h, s, i + 1, n, mode);
 }
 
 // Copy each link into step si from its (earlier) step's struct.
@@ -1527,12 +1665,30 @@ Int dh_outs(Int h, Int s, Int i, Int n) {
     Bool out = (fw(s, i, 4) & 2) != 0;
     if (out && kd == 0 && !pq_is_len(s, o, 0, n)) { _ = gput(h, 0, 1) + gput(h, le_get(st + o, fw(s, i, 2)), 8); }
     if (out && kd == 1) { _ = gout(h, st + o, fw(s, i, 2), 0); }
+    if (kd == 4) { _ = gput(h, 0, 1) + gput(h, dget(h, 17), 8); }
     if (out && kd == 2) {
         Int l = dh_buf_len(s, i, n);
         if (l < 0 || l > fw(s, i, 3)) { return 4; }
+        Int gat = dget(h, 10) + 5;
+        Int sat = dget(h, 13);
         _ = gout(h, ld64(dget(s, 11) + i * 8), l, fw(s, i, 5));
+        // A Nested buffer's address never leaves the host: zero it in this
+        // copy of its parent.
+        _ = dh_blank_ptrs(h, s, o, if (fw(s, i, 5) == 1) { dget(h, 11) + sat } else { dget(h, 8) + gat }, l, 0, n);
     }
+    // A Nested buffer's output is the length the kernel was given.
+    if (out && kd == 3) { _ = gout(h, ld64(dget(s, 11) + i * 8), ld64(dget(s, 12) + i * 8), fw(s, i, 5)); }
     return dh_outs(h, s, i + 1, n);
+}
+
+// Zero, in the copy at p of l bytes of the Buffer whose pointer is at o,
+// the address of each Nested buffer inside it.
+Int dh_blank_ptrs(Int h, Int s, Int o, Int p, Int l, Int j, Int n) {
+    if (j >= n) { return 0; }
+    Bool child = fw(s, j, 0) == 3 && fw(s, j, 6) == o;
+    Int at = fw(s, j, 1);
+    _ = if (child && at + 8 <= l) { resid_raw_fill(p + at, 0, 8) } else if (child && at < l) { resid_raw_fill(p + at, 0, l - at) } else { 0 };
+    return dh_blank_ptrs(h, s, o, p, l, j + 1, n);
 }
 
 // An output buffer's length: its length field as the kernel left it when

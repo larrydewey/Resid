@@ -1,0 +1,19 @@
+// An Errno field (spec §49): a failed ioctl still gives its outputs, the
+// errno last, so a wrapper can read what the kernel left in the struct;
+// without one the failure is Err(Kernel(errno)).
+import "dev/fx_device_errno.resid";
+
+Str told(Result(List(DevOut), DeviceError) r) {
+    return match (r) {
+        Ok(o) => f"{o.len()} outputs, errno " + (match (dv_out_num(o, o.len() - 1)) { Some(v) => f"{v}", None => "?", }),
+        Err(e) => device_error_text(e),
+    };
+}
+
+@requires(device)
+Int main() {
+    println(told(device.ioctl(fx_sig(), [InNum(rt 2)])));
+    println(told(device.ioctl(fx_sig_plain(), [InNum(rt 2)])));
+    println(told(device.ioctl(fx_ptn_errno(), [])));
+    return 0;
+}

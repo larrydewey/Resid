@@ -1,0 +1,5 @@
+// A descriptor has at most one Errno (E0263).
+import "dev/fx_e0263_errno_twice.resid";
+
+@requires(device(readonly))
+Int main() { println(fx_call()); return 0; }

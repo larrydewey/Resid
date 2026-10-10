@@ -1,0 +1,6 @@
+// An Errno field is for a single ioctl: a Sequence stops at its first
+// failed step (E0264).
+import "dev/fx_e0264_errno.resid";
+
+@requires(device)
+Int main() { println(fx_call()); return 0; }

@@ -1,0 +1,11 @@
+// Fixture for e0263_nested_length_overlap: a Nested length field is apart from its pointer (installed as lib/dev/fx_e0263_nested_length_overlap.resid).
+import "device.resid";
+
+pub IoctlOp fx_op() {
+    return IoctlOp {.name = "fx.op", .path = "/dev/fx", .requests = dv_both(dv_iowr(88, 0, 16)), .size = 16, .fields = [Buffer(0, -1, 64, InOut, false), Nested(0, 16, 20, 4, 4096, Out, false)], .write = false, .version = Unversioned, .stability = Uapi};
+}
+
+@requires(device(readonly))
+pub Str fx_call() {
+    return match (device.ioctl(fx_op(), [InBytes([(UInt(8))(rt 0)])])) { Ok(o) => "ok", Err(e) => device_error_text(e), };
+}

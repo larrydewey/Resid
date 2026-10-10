@@ -20,7 +20,9 @@
  * 17 to 19 a ConfigfsReport on the fake configfs whose host is killed,
  * never answers, or sees another writer before its first read; 20 a
  * write into the guard page before a region; 21 a shared mapping and 22
- * an munmap after the filter.
+ * an munmap after the filter; 23 to 26 a kernel that follows Nested
+ * pointers (fills them; 24 past the length, 25 into the guard page; 26
+ * writes a needed length and fails with EIO).
  *
  * The parent's side of a test (a shorter wall-clock limit, the fake
  * configfs root it cleans up) is set with resid_device_test_parent, which
@@ -129,6 +131,28 @@ static void req_lenfield(Req* r, int lw, int shared) {
     u(r, 0, 1); u(r, 0, 1);
     u(r, 0, 1);
 }
+
+/* A Nested buffer (spec §49): a 32-byte struct whose Buffer at 0 (64
+ * bytes, `pdir`) holds the Nested pointer at 16 and its 4-byte length at
+ * 24 (max 4096, Out), a Scalar out at 8, and an Errno field when `errno_f`.
+ * The program's input is the parent's 64 bytes, with `len` at 24. No
+ * device any user can open follows such a pointer: modes 23-26 play the
+ * kernel (the ioctl itself, an unknown request on /dev/ptmx, is ENOTTY). */
+static void req_nested(Req* r, uint32_t len, int errno_f, int pdir) {
+    head(r, 1, 1, "fx.nested", "/dev/ptmx");
+    uint32_t num = (3u << 30) | (32u << 16) | ('T' << 8) | 0x7f;
+    u(r, 2, 1); u(r, 0, 1); u(r, num, 4); u(r, 1, 1); u(r, num, 4);
+    u(r, 32, 4); u(r, errno_f ? 4 : 3, 1);
+    u(r, 2, 1); u(r, 0, 4); u(r, 0xffffffff, 4); u(r, 64, 4); u(r, pdir, 1); u(r, 0, 1);              /* Buffer(0, -1, 64, pdir) */
+    u(r, 3, 1); u(r, 0, 4); u(r, 16, 4); u(r, 24, 4); u(r, 4, 1); u(r, 4096, 4); u(r, 2, 1); u(r, 0, 1); /* Nested(0, 16, 24, 4, 4096, Out) */
+    u(r, 0, 1); u(r, 8, 4); u(r, 8, 4); u(r, 2, 1);                                                   /* Scalar(8, 8, Out) */
+    if (errno_f) u(r, 4, 1);                                                                          /* Errno */
+    u(r, 0, 1); u(r, 0, 1);
+    u(r, 1, 1); u(r, 1, 1); u(r, 64, 4);
+    for (int i = 0; i < 64; i++) u(r, i == 24 ? (len & 255) : i == 25 ? ((len >> 8) & 255) : i == 26 ? ((len >> 16) & 255) : i == 27 ? (len >> 24) : 0x11, 1);
+}
+
+static uint32_t le32(const uint8_t* p) { return p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32_t)p[3] << 24); }
 
 static const char* report_root = "/sys/kernel/config/tsm/report";
 
@@ -466,6 +490,50 @@ int main(int argc, char** argv, char** envp) {
     req_lenfield(&q, 4, 1);
     r = reply(resid_device_call(list_of(&q)));
     check("device_length_field_shared_refused", code(&r) == 10 && value(&r) == 42);
+
+    /* Nested buffers: the host places each in its own guarded region,
+     * writes its address into the parent buffer and its length (as the
+     * program wrote it, at most the maximum) beside it, and zeroes the
+     * address in the parent's output -- the pointer never reaches the
+     * program. Reply: parent (5 + 64), nested (5 + 100), Scalar (9). */
+    req_nested(&q, 100, 0, 3);
+    r = call_mode(23, NULL, &q, 1);
+    ok = code(&r) == 0 && r.n == 5 + 69 + 105 + 9 && r.b[5] == 1 && le32(r.b + 6) == 64;
+    for (int i = 0; ok && i < 8; i++) ok = r.b[10 + 16 + i] == 0;
+    ok = ok && le32(r.b + 10 + 24) == 100 && r.b[10] == 0x11 && r.b[10 + 63] == 0x11;
+    ok = ok && r.b[74] == 1 && le32(r.b + 75) == 100;
+    for (int i = 0; ok && i < 100; i++) ok = r.b[79 + i] == 0xa5;
+    check("device_nested_placed", ok);
+    check("device_nested_pointer_never_leaks", ok && r.b[10 + 16] == 0 && r.b[10 + 23] == 0);
+    /* A kernel that writes past the Nested buffer: the canary after its
+     * length, or the guard page after its region. */
+    r = call_mode(24, NULL, &q, 1);
+    check("device_nested_overrun_canary", code(&r) == 8);
+    r = call_mode(25, NULL, &q, 1);
+    check("device_nested_overrun_guard_page", code(&r) == 8);
+    /* A length the program wrote past the maximum: refused (60). */
+    req_nested(&q, 5000, 0, 3);
+    r = call_mode(23, NULL, &q, 1);
+    check("device_nested_length_refused", code(&r) == 10 && value(&r) == 60);
+    /* The parent must go to the kernel: an Out parent is refused (42). */
+    req_nested(&q, 100, 0, 2);
+    r = reply(resid_device_call_w(list_of(&q)));
+    check("device_nested_out_parent_refused", code(&r) == 10 && value(&r) == 42);
+    /* Errno: a failed ioctl (EIO, the needed length written back) gives the
+     * outputs with the errno, so a wrapper can retry; without the field
+     * it is Kernel(EIO). */
+    req_nested(&q, 100, 1, 3);
+    r = call_mode(26, NULL, &q, 1);
+    ok = code(&r) == 0 && r.n == 5 + 69 + 105 + 9 + 9 && le32(r.b + 10 + 24) == 8192 && r.b[10 + 16] == 0;
+    ok = ok && r.b[188] == 0 && r.b[189] == 5;
+    check("device_errno_outputs", ok);
+    req_nested(&q, 100, 0, 3);
+    r = call_mode(26, NULL, &q, 1);
+    check("device_errno_opt_in", code(&r) == 3 && value(&r) == 5);
+    /* ENOTTY stays Unsupported with an Errno field: another layout. */
+    req_nested(&q, 100, 1, 3);
+    r = call_mode(0, NULL, &q, 1);
+    check("device_errno_enotty_unsupported", code(&r) == 6);
 
     /* The request (the program's inputs) is wiped before it is freed: the
      * next block of its size holds none of it. */

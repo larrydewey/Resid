@@ -35,7 +35,7 @@
 // x86-64, 1 AArch64). ver: version offset, width, value (vw 0: none).
 // maxs: a kind's maxima. steps: a Sequence's steps (same shape), links as
 // five Ints each. err: why the literal does not parse ("" when it does).
-pub type DvD = { Str kind; Str name; Str path; List(Int) ra; List(Int) rn; Int size; List(Int) fk; List(Int) fo; List(Int) fl; List(Int) fd; List(Int) fa; List(Int) fm; List(Bool) fs; Str write; Int vo; Int vw; Int vv; Str stab; List(Int) maxs; List(Str) provs; List(DvD) steps; List(Int) links; Str err; };
+pub type DvD = { Str kind; Str name; Str path; List(Int) ra; List(Int) rn; Int size; List(Int) fk; List(Int) fo; List(Int) fl; List(Int) fd; List(Int) fa; List(Int) fm; List(Bool) fs; List(Int) fp; Str write; Int vo; Int vw; Int vv; Str stab; List(Int) maxs; List(Str) provs; List(DvD) steps; List(Int) links; Str err; };
 
 // What the pass leaves: whether a diagnostic was printed, the rewritten
 // graph, and one provenance entry per descriptor reached
@@ -222,7 +222,7 @@ Bool dv_diag_at(Str code, Str msg, Kg g, Int at, Str src, Str smap) {
 // ─── Parsing a known literal ────────────────────────────────────────
 
 DvD dv_none() {
-    return DvD {.kind = "", .name = "", .path = "", .ra = [], .rn = [], .size = 0, .fk = [], .fo = [], .fl = [], .fd = [], .fa = [], .fm = [], .fs = [], .write = "", .vo = 0, .vw = 0, .vv = 0, .stab = "", .maxs = [], .provs = [], .steps = [], .links = [], .err = "not known"};
+    return DvD {.kind = "", .name = "", .path = "", .ra = [], .rn = [], .size = 0, .fk = [], .fo = [], .fl = [], .fd = [], .fa = [], .fm = [], .fs = [], .fp = [], .write = "", .vo = 0, .vw = 0, .vv = 0, .stab = "", .maxs = [], .provs = [], .steps = [], .links = [], .err = "not known"};
 }
 
 // Field `f` of struct literal st (its value node), or -1.
@@ -294,7 +294,7 @@ Int dv_struct(Kg g, Int id0) {
 }
 
 DvD dv_err(DvD d, Str e) {
-    return DvD {.kind = d.kind, .name = d.name, .path = d.path, .ra = d.ra, .rn = d.rn, .size = d.size, .fk = d.fk, .fo = d.fo, .fl = d.fl, .fd = d.fd, .fa = d.fa, .fm = d.fm, .fs = d.fs, .write = d.write, .vo = d.vo, .vw = d.vw, .vv = d.vv, .stab = d.stab, .maxs = d.maxs, .provs = d.provs, .steps = d.steps, .links = d.links, .err = if (d.err != "") { d.err } else { e }};
+    return DvD {.kind = d.kind, .name = d.name, .path = d.path, .ra = d.ra, .rn = d.rn, .size = d.size, .fk = d.fk, .fo = d.fo, .fl = d.fl, .fd = d.fd, .fa = d.fa, .fm = d.fm, .fs = d.fs, .fp = d.fp, .write = d.write, .vo = d.vo, .vw = d.vw, .vv = d.vv, .stab = d.stab, .maxs = d.maxs, .provs = d.provs, .steps = d.steps, .links = d.links, .err = if (d.err != "") { d.err } else { e }};
 }
 
 Str dv_stab_of(Kg g, Int st) {
@@ -313,18 +313,18 @@ Int dv_ifld(Kg g, Int st, Str f) {
 
 DvD dv_parse(Kg g, Int a, Str verb) {
     Int st = dv_struct(g, a);
-    if (st < 0) { return dv_err(DvD {.kind = verb, .name = "", .path = "", .ra = [], .rn = [], .size = 0, .fk = [], .fo = [], .fl = [], .fd = [], .fa = [], .fm = [], .fs = [], .write = "", .vo = 0, .vw = 0, .vv = 0, .stab = "", .maxs = [], .provs = [], .steps = [], .links = [], .err = ""}, "the descriptor is not a record literal"); }
+    if (st < 0) { return dv_err(DvD {.kind = verb, .name = "", .path = "", .ra = [], .rn = [], .size = 0, .fk = [], .fo = [], .fl = [], .fd = [], .fa = [], .fm = [], .fs = [], .fp = [], .write = "", .vo = 0, .vw = 0, .vv = 0, .stab = "", .maxs = [], .provs = [], .steps = [], .links = [], .err = ""}, "the descriptor is not a record literal"); }
     Str name = dv_strv(g, dv_fld(g, st, "name", 0));
     Str path = dv_strv(g, dv_fld(g, st, "path", 0));
     Str write = if (verb == "read_attr") { "false" } else { dv_boolv(g, dv_fld(g, st, "write", 0)) };
     Str stab = dv_stab_of(g, st);
-    DvD base = DvD {.kind = verb, .name = if (name == "\x01") { "" } else { name }, .path = if (path == "\x01") { "" } else { path }, .ra = [], .rn = [], .size = 0, .fk = [], .fo = [], .fl = [], .fd = [], .fa = [], .fm = [], .fs = [], .write = write, .vo = 0, .vw = 0, .vv = 0, .stab = stab, .maxs = [], .provs = [], .steps = [], .links = [], .err = ""};
+    DvD base = DvD {.kind = verb, .name = if (name == "\x01") { "" } else { name }, .path = if (path == "\x01") { "" } else { path }, .ra = [], .rn = [], .size = 0, .fk = [], .fo = [], .fl = [], .fd = [], .fa = [], .fm = [], .fs = [], .fp = [], .write = write, .vo = 0, .vw = 0, .vv = 0, .stab = stab, .maxs = [], .provs = [], .steps = [], .links = [], .err = ""};
     DvD b1 = if (name == "\x01") { dv_err(base, "`name` is not a string literal") } else if (path == "\x01") { dv_err(base, "`path` is not a string literal") } else if (write == "") { dv_err(base, "`write` is not a Bool literal") } else if (stab == "") { dv_err(base, "`stability` is not Uapi, AbiTesting or OutOfTree") } else { base };
     if (verb == "ioctl") { return dv_parse_ioctl(g, st, b1); }
     if (verb == "sequence") { return dv_parse_seq(g, st, b1); }
     List(Int) mx = if (verb == "transact") { [dv_ifld(g, st, "max_command"), dv_ifld(g, st, "max_response")] } else if (verb == "read_attr") { [dv_ifld(g, st, "max")] } else { [dv_ifld(g, st, "max_inblob"), dv_ifld(g, st, "max_outblob"), dv_ifld(g, st, "max_auxblob"), dv_ifld(g, st, "max_manifestblob")] };
     List(Str) provs = if (verb == "configfs_report") { dv_strs(g, dv_items(g, dv_fld(g, st, "providers", 0)), 0, ListBuf()) } else { [] };
-    return DvD {.kind = b1.kind, .name = b1.name, .path = b1.path, .ra = [], .rn = [], .size = 0, .fk = [], .fo = [], .fl = [], .fd = [], .fa = [], .fm = [], .fs = [], .write = b1.write, .vo = 0, .vw = 0, .vv = 0, .stab = b1.stab, .maxs = mx, .provs = provs, .steps = [], .links = [], .err = b1.err};
+    return DvD {.kind = b1.kind, .name = b1.name, .path = b1.path, .ra = [], .rn = [], .size = 0, .fk = [], .fo = [], .fl = [], .fd = [], .fa = [], .fm = [], .fs = [], .fp = [], .write = b1.write, .vo = 0, .vw = 0, .vv = 0, .stab = b1.stab, .maxs = mx, .provs = provs, .steps = [], .links = [], .err = b1.err};
 }
 
 List(Str) dv_strs(Kg g, List(Int) xs, Int i, ListBuf(Str) acc) {
@@ -333,7 +333,7 @@ List(Str) dv_strs(Kg g, List(Int) xs, Int i, ListBuf(Str) acc) {
 }
 
 // The parsed fields of an IoctlOp, accumulated.
-type DvF = { List(Int) fk; List(Int) fo; List(Int) fl; List(Int) fd; List(Int) fa; List(Int) fm; List(Bool) fs; Str err; };
+type DvF = { List(Int) fk; List(Int) fo; List(Int) fl; List(Int) fd; List(Int) fa; List(Int) fm; List(Bool) fs; List(Int) fp; Str err; };
 
 Int dv_dirv(Kg g, Int id) {
     Str d = dv_vname(g, id);
@@ -352,19 +352,25 @@ Int dv_argi(Kg g, Int v, Int i) {
     return if (x.ok) { x.v } else { 0 - 1 };
 }
 
+// Field kinds: 0 Scalar, 1 Inline, 2 Buffer, 3 Nested, 4 Errno. For a
+// Nested field `fo` is its pointer's offset in the parent buffer, `fa` its
+// length field's there, `fl` that field's width, `fp` the parent's
+// pointer offset in the struct; `fp` is -1 for every other kind.
 DvF dv_fields(Kg g, List(Int) xs, Int i, DvF acc) {
     if (i >= xs.len()) { return acc; }
     Int v = xs[i];
     Str k = dv_vname(g, v);
-    Int kc = if (k == "Scalar") { 0 } else if (k == "Inline") { 1 } else if (k == "Buffer") { 2 } else { 0 - 1 };
-    Int o = dv_argi(g, v, 0);
-    Int l = if (kc == 2) { 8 } else { dv_argi(g, v, 1) };
-    Int d = dv_dirv(g, dv_arg(g, v, if (kc == 2) { 3 } else { 2 }));
-    Int la = if (kc == 2) { dv_argi(g, v, 1) } else { 0 - 1 };
-    Int mx = if (kc == 2) { dv_argi(g, v, 2) } else { l };
-    Str sec = if (kc == 2) { dv_boolv(g, dv_arg(g, v, 4)) } else { "false" };
-    Str e = if (kc < 0) { f"field {i} is not Scalar, Inline or Buffer" } else if (d == 0) { f"field {i}: its direction is not In, Out or InOut" } else if (sec == "") { f"field {i}: `secret` is not a Bool literal" } else { "" };
-    DvF a2 = DvF {.fk = acc.fk.concat([kc]), .fo = acc.fo.concat([o]), .fl = acc.fl.concat([l]), .fd = acc.fd.concat([d]), .fa = acc.fa.concat([la]), .fm = acc.fm.concat([mx]), .fs = acc.fs.concat([sec == "true"]), .err = if (acc.err != "") { acc.err } else { e }};
+    Int kc = if (k == "Scalar") { 0 } else if (k == "Inline") { 1 } else if (k == "Buffer") { 2 } else if (k == "Nested") { 3 } else if (k == "Errno") { 4 } else { 0 - 1 };
+    Int base = if (kc == 3) { 1 } else { 0 };
+    Int o = if (kc == 4) { 0 - 1 } else { dv_argi(g, v, base) };
+    Int l = if (kc == 2 || kc == 4) { 8 } else if (kc == 3) { dv_argi(g, v, 3) } else { dv_argi(g, v, 1) };
+    Int d = if (kc == 4) { 2 } else { dv_dirv(g, dv_arg(g, v, if (kc == 2) { 3 } else if (kc == 3) { 5 } else { 2 })) };
+    Int la = if (kc == 2 || kc == 3) { dv_argi(g, v, base + 1) } else { 0 - 1 };
+    Int mx = if (kc == 2) { dv_argi(g, v, 2) } else if (kc == 3) { dv_argi(g, v, 4) } else { l };
+    Str sec = if (kc == 2) { dv_boolv(g, dv_arg(g, v, 4)) } else if (kc == 3) { dv_boolv(g, dv_arg(g, v, 6)) } else { "false" };
+    Int par = if (kc == 3) { dv_argi(g, v, 0) } else { 0 - 1 };
+    Str e = if (kc < 0) { f"field {i} is not Scalar, Inline, Buffer, Nested or Errno" } else if (d == 0) { f"field {i}: its direction is not In, Out or InOut" } else if (sec == "") { f"field {i}: `secret` is not a Bool literal" } else { "" };
+    DvF a2 = DvF {.fk = acc.fk.concat([kc]), .fo = acc.fo.concat([o]), .fl = acc.fl.concat([l]), .fd = acc.fd.concat([d]), .fa = acc.fa.concat([la]), .fm = acc.fm.concat([mx]), .fs = acc.fs.concat([sec == "true"]), .fp = acc.fp.concat([par]), .err = if (acc.err != "") { acc.err } else { e }};
     return dv_fields(g, xs, i + 1, a2);
 }
 
@@ -373,13 +379,13 @@ DvD dv_parse_ioctl(Kg g, Int st, DvD b) {
     List(Int) ra = dv_req_arch(g, rs, 0, ListBuf());
     List(Int) rn = dv_req_num(g, rs, 0, ListBuf());
     DvI size = dv_int(g, dv_fld(g, st, "size", 0));
-    DvF f = dv_fields(g, dv_items(g, dv_fld(g, st, "fields", 0)), 0, DvF {.fk = [], .fo = [], .fl = [], .fd = [], .fa = [], .fm = [], .fs = [], .err = ""});
+    DvF f = dv_fields(g, dv_items(g, dv_fld(g, st, "fields", 0)), 0, DvF {.fk = [], .fo = [], .fl = [], .fd = [], .fa = [], .fm = [], .fs = [], .fp = [], .err = ""});
     Int ver = dv_fld(g, st, "version", 0);
     Str vk = dv_vname(g, ver);
     Bool vok = vk == "Unversioned" || vk == "Versioned";
     Int vw = if (vk == "Versioned") { dv_argi(g, ver, 1) } else { 0 };
     Str e = if (!size.ok) { "`size` is not an Int literal" } else if (!vok) { "`version` is not Unversioned or Versioned(offset, width, value)" } else if (dv_has_neg(ra, 0) || dv_has_neg(rn, 0)) { "a request is not Request {.arch = X86_64 or Aarch64, .number = Int}" } else { f.err };
-    DvD d = DvD {.kind = b.kind, .name = b.name, .path = b.path, .ra = ra, .rn = rn, .size = size.v, .fk = f.fk, .fo = f.fo, .fl = f.fl, .fd = f.fd, .fa = f.fa, .fm = f.fm, .fs = f.fs, .write = b.write, .vo = if (vk == "Versioned") { dv_argi(g, ver, 0) } else { 0 }, .vw = vw, .vv = if (vk == "Versioned") { dv_argi(g, ver, 2) } else { 0 }, .stab = b.stab, .maxs = [], .provs = [], .steps = [], .links = [], .err = b.err};
+    DvD d = DvD {.kind = b.kind, .name = b.name, .path = b.path, .ra = ra, .rn = rn, .size = size.v, .fk = f.fk, .fo = f.fo, .fl = f.fl, .fd = f.fd, .fa = f.fa, .fm = f.fm, .fs = f.fs, .fp = f.fp, .write = b.write, .vo = if (vk == "Versioned") { dv_argi(g, ver, 0) } else { 0 }, .vw = vw, .vv = if (vk == "Versioned") { dv_argi(g, ver, 2) } else { 0 }, .stab = b.stab, .maxs = [], .provs = [], .steps = [], .links = [], .err = b.err};
     return if (e != "") { dv_err(d, e) } else { d };
 }
 
@@ -409,7 +415,7 @@ DvD dv_parse_seq(Kg g, Int st, DvD b) {
     List(Int) ls = dv_items(g, dv_fld(g, st, "links", 0));
     List(Int) links = dv_parse_links(g, ls, 0, ListBuf());
     Str e = if (links.len() != ls.len() * 5 || dv_has_neg(links, 0)) { "a link is not a Link record of five Int literals" } else { dv_steps_err(steps, 0) };
-    DvD d = DvD {.kind = b.kind, .name = b.name, .path = b.path, .ra = [], .rn = [], .size = 0, .fk = [], .fo = [], .fl = [], .fd = [], .fa = [], .fm = [], .fs = [], .write = b.write, .vo = 0, .vw = 0, .vv = 0, .stab = b.stab, .maxs = [], .provs = [], .steps = steps, .links = links, .err = b.err};
+    DvD d = DvD {.kind = b.kind, .name = b.name, .path = b.path, .ra = [], .rn = [], .size = 0, .fk = [], .fo = [], .fl = [], .fd = [], .fa = [], .fm = [], .fs = [], .fp = [], .write = b.write, .vo = 0, .vw = 0, .vv = 0, .stab = b.stab, .maxs = [], .provs = [], .steps = steps, .links = links, .err = b.err};
     return if (e != "") { dv_err(d, e) } else { d };
 }
 
@@ -516,7 +522,10 @@ Int dv_count(List(Int) xs, Int v, Int i, Int n) {
 }
 
 Str dv_fdesc(DvD d, Int i) {
-    Str k = if (d.fk[i] == 0) { "Scalar" } else if (d.fk[i] == 1) { "Inline" } else { "Buffer" };
+    Int kc = d.fk[i];
+    if (kc == 4) { return f"field {i} (Errno)"; }
+    if (kc == 3) { return f"field {i} (Nested at offset {d.fo[i]} of the buffer at {d.fp[i]})"; }
+    Str k = if (kc == 0) { "Scalar" } else if (kc == 1) { "Inline" } else { "Buffer" };
     return f"field {i} ({k} at offset {d.fo[i]})";
 }
 
@@ -524,6 +533,15 @@ Str dv_field_errs(DvD d, Int i) {
     if (i >= d.fk.len()) { return ""; }
     Str w = dv_fdesc(d, i);
     Int k = d.fk[i];
+    if (k == 4) {
+        if (dv_count(d.fk, 4, 0, 0) > 1) { return w + ": a descriptor has at most one Errno"; }
+        return dv_field_errs(d, i + 1);
+    }
+    if (k == 3) {
+        Str ne = dv_nested_err(d, i, w);
+        if (ne != "") { return ne; }
+        return dv_field_errs(d, i + 1);
+    }
     Int o = d.fo[i];
     Int l = d.fl[i];
     if (o < 0 || l <= 0 || o + l > d.size) { return w + f": bytes {o}..{o + l} are not inside the {d.size}-byte struct"; }
@@ -537,6 +555,52 @@ Str dv_field_errs(DvD d, Int i) {
         if (dv_len_users(d, d.fa[i], 0, 0) > 1) { return w + f": its length field at offset {d.fa[i]} is another Buffer's too; each Buffer has its own"; }
     }
     return dv_field_errs(d, i + 1);
+}
+
+// A Nested field: its parent is an earlier In or InOut Buffer; its
+// pointer is 8-byte aligned inside the parent's maximum; its length field,
+// when it has one, is 1, 2, 4 or 8 bytes inside the parent, apart from the
+// pointer and wide enough for its maximum; and it is apart from the
+// parent's other Nested fields.
+Str dv_nested_err(DvD d, Int i, Str w) {
+    Int pi = dv_buffer_at(d, d.fp[i], 0);
+    if (pi < 0 || pi > i) { return w + f": its parent at offset {d.fp[i]} is not a Buffer listed before it (no deeper nesting)"; }
+    if ((d.fd[pi] & 1) == 0) { return w + ": its parent Buffer is Out; the pointer goes to the kernel, so the parent is In or InOut"; }
+    Int pm = d.fm[pi];
+    Int o = d.fo[i];
+    if (o < 0 || o % 8 != 0 || o + 8 > pm) { return w + f": its pointer is 8-byte aligned inside the parent's {pm} bytes"; }
+    if (d.fm[i] <= 0 || d.fm[i] > dv_max_buf()) { return w + f": a buffer's maximum is from 1 to {dv_max_buf()} bytes, not {d.fm[i]}"; }
+    Int la = d.fa[i];
+    Int lw = d.fl[i];
+    if (la != 0 - 1) {
+        if (lw != 1 && lw != 2 && lw != 4 && lw != 8) { return w + f": its length field is 1, 2, 4 or 8 bytes, not {lw}"; }
+        if (la < 0 || la + lw > pm) { return w + f": its length field at {la} is not inside the parent's {pm} bytes"; }
+        if (la < o + 8 && o < la + lw) { return w + ": its length field overlaps its pointer"; }
+        if (lw < 8 && d.fm[i] >= (1 << (lw * 8))) { return w + f": its length field is {lw} byte(s), too narrow for its maximum of {d.fm[i]}"; }
+    }
+    return dv_nested_apart(d, i, 0, w);
+}
+
+// The index of the Buffer whose pointer is at offset o, or -1.
+Int dv_buffer_at(DvD d, Int o, Int i) {
+    if (i >= d.fk.len()) { return 0 - 1; }
+    if (d.fk[i] == 2 && d.fo[i] == o) { return i; }
+    return dv_buffer_at(d, o, i + 1);
+}
+
+Str dv_nested_apart(DvD d, Int i, Int j, Str w) {
+    if (j >= d.fk.len()) { return ""; }
+    if (j != i && d.fk[j] == 3 && d.fp[j] == d.fp[i]) {
+        Bool clash = dv_meet(d.fo[i], 8, d.fo[j], 8) || dv_meet(d.fo[i], 8, d.fa[j], d.fl[j]) || dv_meet(d.fa[i], d.fl[i], d.fo[j], 8) || dv_meet(d.fa[i], d.fl[i], d.fa[j], d.fl[j]);
+        if (clash) { return w + f": its pointer or length overlaps field {j}'s in the same parent"; }
+    }
+    return dv_nested_apart(d, i, j + 1, w);
+}
+
+// [a, a + al) and [b, b + bl) meet (an absent field, at -1, meets nothing).
+Bool dv_meet(Int a, Int al, Int b, Int bl) {
+    if (a < 0 || b < 0) { return false; }
+    return a < b + bl && b < a + al;
 }
 
 // How many Buffers name the Scalar at `la` as their length field.
@@ -567,6 +631,9 @@ Str dv_overlaps(DvD d, Int i, Int j) {
     if (i >= n) { return ""; }
     if (j >= n) { return dv_overlaps(d, i + 1, i + 2); }
     if (j <= i) { return dv_overlaps(d, i, i + 1); }
+    // Nested and Errno fields hold no bytes of the struct.
+    if (i < d.fk.len() && d.fk[i] >= 3) { return dv_overlaps(d, i + 1, i + 2); }
+    if (j < d.fk.len() && d.fk[j] >= 3) { return dv_overlaps(d, i, j + 1); }
     Int ao = if (i < d.fk.len()) { d.fo[i] } else { d.vo };
     Int al = if (i < d.fk.len()) { d.fl[i] } else { d.vw };
     Int bo = if (j < d.fk.len()) { d.fo[j] } else { d.vo };
@@ -607,18 +674,18 @@ Str dv_requests_err(DvD d, Int i) {
 Bool dv_needs_write(DvD d, Int i) {
     if (d.vw > 0) { return true; }
     if (i >= d.fk.len()) { return false; }
-    return d.fk[i] == 2 || (d.fd[i] & 1) != 0 || dv_needs_write(d, i + 1);
+    return d.fk[i] == 2 || (d.fk[i] < 3 && (d.fd[i] & 1) != 0) || dv_needs_write(d, i + 1);
 }
 
 // Whether any field (a Buffer's contents included) comes back.
 Bool dv_has_out(DvD d, Int i) {
     if (i >= d.fk.len()) { return false; }
-    return (d.fd[i] & 2) != 0 || dv_has_out(d, i + 1);
+    return (d.fk[i] != 4 && (d.fd[i] & 2) != 0) || dv_has_out(d, i + 1);
 }
 
 Bool dv_needs_read(DvD d, Int i) {
     if (i >= d.fk.len()) { return false; }
-    return (d.fk[i] != 2 && (d.fd[i] & 2) != 0) || dv_needs_read(d, i + 1);
+    return (d.fk[i] < 2 && (d.fd[i] & 2) != 0) || dv_needs_read(d, i + 1);
 }
 
 Str dv_check_seq(DvD d, Bool a64) {
@@ -635,6 +702,7 @@ Str dv_seq_steps(DvD d, Bool a64, Int i) {
     if (e != "") { return str_slice(e, 0, 7) + f"step {i} (" + s.name + "): " + str_slice(e, 7, str_len(e)); }
     if (s.path != d.path) { return f"E0264: step {i} opens " + s.path + ", the Sequence " + d.path + " (its steps share one open file)"; }
     if (s.write == "true" && d.write != "true") { return f"E0264: step {i} writes, so the Sequence is marked `write`"; }
+    if (s.fk.contains(4)) { return f"E0264: step {i} has an Errno field; a Sequence stops at the first failed step, so Errno is for a single ioctl"; }
     Bool last = i == d.steps.len() - 1;
     Int out = dv_hidden_out(s, 0);
     if (!last && out >= 0) { return f"E0264: step {i}'s " + dv_fdesc(s, out) + " is an output, but only the last step's outputs reach the program (link a Scalar output into a later step instead)"; }

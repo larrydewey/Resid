@@ -60,7 +60,29 @@ type Dir = In | Out | InOut;
 //                                 enough to hold `max`, and no other
 //                                 Buffer's (E0263); a secret buffer's bytes
 //                                 come back as secrets
-type Field = Scalar(Int, Int, Dir) | Inline(Int, Int, Dir) | Buffer(Int, Int, Int, Dir, Bool);
+//   Nested(parent, offset, length_at, length_width, max, dir, secret)
+//                                 a buffer behind an 8-byte pointer *inside*
+//                                 the In or InOut Buffer whose pointer field
+//                                 is at `parent` (listed before it): the
+//                                 pointer at `offset` of that buffer, its
+//                                 length the `length_width`-byte integer at
+//                                 `length_at` of it (-1: none, the length
+//                                 is `max`). An In buffer's length is its
+//                                 input's; an Out or InOut one's is what
+//                                 the program wrote at `length_at` (at most
+//                                 `max`), so a wrapper can size it. The
+//                                 pointer never comes back: the host zeroes
+//                                 it in the parent's output. No deeper
+//                                 nesting.
+//   Errno                         the ioctl's errno, an output (0 when it
+//                                 succeeded). With it, a failed ioctl still
+//                                 gives the outputs (as the kernel left
+//                                 them) instead of Err(Kernel): what a
+//                                 wrapper needs when the kernel explains a
+//                                 failure in the struct (SNP's exitinfo2, a
+//                                 needed length). ENOTTY stays Unsupported
+//                                 and EFAULT Overrun. Not in a Sequence.
+type Field = Scalar(Int, Int, Dir) | Inline(Int, Int, Dir) | Buffer(Int, Int, Int, Dir, Bool) | Nested(Int, Int, Int, Int, Int, Dir, Bool) | Errno;
 
 // The architectures a request number is given for. `_IOC` encodes the same
 // way on both today, but a descriptor names each target it was checked on,
@@ -283,7 +305,7 @@ Bool dv_is_out(Dir d) { return match (d) { In => false, Out => true, InOut => tr
 // Whether a Buffer of fs names the Scalar at `off` as its length field.
 Bool dv_is_len(List(Field) fs, Int off, Int i) {
     if (i >= fs.len()) { return false; }
-    Bool hit = match (fs[i]) { Scalar(o, w, d) => false, Inline(o, n, d) => false, Buffer(o, la, mx, d, s) => la == off, };
+    Bool hit = match (fs[i]) { Scalar(o, w, d) => false, Inline(o, n, d) => false, Buffer(o, la, mx, d, s) => la == off, Nested(p, o, la, lw, mx, d, s) => false, Errno => false, };
     return hit || dv_is_len(fs, off, i + 1);
 }
 
@@ -294,6 +316,8 @@ List(DvSlot) dv_ins(List(Field) all, List(Field) fs, Int i, ListBuf(DvSlot) acc)
         Scalar(o, w, d) => if (dv_is_in(d) && !dv_is_len(all, o, 0)) { acc.push(DvSlot {.num = true, .max = w, .secret = false}) } else { acc },
         Inline(o, n, d) => if (dv_is_in(d)) { acc.push(dv_blob(n)) } else { acc },
         Buffer(o, la, mx, d, s) => if (dv_is_in(d)) { acc.push(DvSlot {.num = false, .max = mx, .secret = s}) } else { acc },
+        Nested(p, o, la, lw, mx, d, s) => if (dv_is_in(d)) { acc.push(DvSlot {.num = false, .max = mx, .secret = s}) } else { acc },
+        Errno => acc,
     };
     return dv_ins(all, fs, i + 1, acc2);
 }
@@ -305,6 +329,8 @@ List(DvSlot) dv_outs(List(Field) all, List(Field) fs, Int i, ListBuf(DvSlot) acc
         Scalar(o, w, d) => if (dv_is_out(d) && !dv_is_len(all, o, 0)) { acc.push(DvSlot {.num = true, .max = w, .secret = false}) } else { acc },
         Inline(o, n, d) => if (dv_is_out(d)) { acc.push(dv_blob(n)) } else { acc },
         Buffer(o, la, mx, d, s) => if (dv_is_out(d)) { acc.push(DvSlot {.num = false, .max = mx, .secret = s}) } else { acc },
+        Nested(p, o, la, lw, mx, d, s) => if (dv_is_out(d)) { acc.push(DvSlot {.num = false, .max = mx, .secret = s}) } else { acc },
+        Errno => acc.push(DvSlot {.num = true, .max = 8, .secret = false}),
     };
     return dv_outs(all, fs, i + 1, acc2);
 }
@@ -322,6 +348,8 @@ ListBuf(DvSlot) dv_seq_step(Sequence op, Int s, List(Field) fs, Int i, ListBuf(D
         Scalar(o, w, d) => if (dv_is_in(d) && !dv_is_len(fs, o, 0) && !dv_linked(op.links, s, o, 0)) { acc.push(DvSlot {.num = true, .max = w, .secret = false}) } else { acc },
         Inline(o, n, d) => if (dv_is_in(d)) { acc.push(dv_blob(n)) } else { acc },
         Buffer(o, la, mx, d, sec) => if (dv_is_in(d)) { acc.push(DvSlot {.num = false, .max = mx, .secret = sec}) } else { acc },
+        Nested(p, o, la, lw, mx, d, sec) => if (dv_is_in(d)) { acc.push(DvSlot {.num = false, .max = mx, .secret = sec}) } else { acc },
+        Errno => acc,
     };
     return dv_seq_step(op, s, fs, i + 1, acc2);
 }
@@ -357,7 +385,13 @@ Bool dv_fits(Int v, Int width) {
 //   "RDV" 1, kind (1 ioctl, 2 transact, 3 read_attr, 4 configfs_report,
 //   5 sequence), write, name, path (u16 length, bytes), then the kind's own
 //   part and the inputs (u8 count; tag 0 + 8-byte integer, or tag 1 + u32
-//   length + bytes).
+//   length + bytes). An ioctl's part: u8 request count, each u8 arch + u32
+//   number; u32 size; u8 field count, each field a tag and its words --
+//   0 Scalar / 1 Inline: u32 offset, u32 width, u8 dir; 2 Buffer: u32
+//   offset, u32 length field (0xffffffff none), u32 max, u8 dir, u8 secret;
+//   3 Nested: u32 parent, u32 offset, u32 length field, u8 its width, u32
+//   max, u8 dir, u8 secret; 4 Errno: nothing -- then the version (u8 0, or
+//   1 + u32 offset + u8 width + u64 value) and u8 stability.
 // The reply is 0, u32 count, outputs (as the inputs; a secret output is
 // tag 2 + u32 length, its bytes taken from the runtime with
 // resid_device_secret, never in the reply), or 1, an error code, an
@@ -425,6 +459,8 @@ ListBuf(Int) dv_fields(ListBuf(Int) b, List(Field) fs, Int i) {
         Scalar(o, w, d) => dv_u(dv_u(dv_u(dv_u(b, 0, 1), o, 4), w, 4), dv_dir(d), 1),
         Inline(o, n, d) => dv_u(dv_u(dv_u(dv_u(b, 1, 1), o, 4), n, 4), dv_dir(d), 1),
         Buffer(o, la, mx, d, s) => dv_u(dv_u(dv_u(dv_u(dv_u(dv_u(b, 2, 1), o, 4), la, 4), mx, 4), dv_dir(d), 1), dv_bool(s), 1),
+        Nested(p, o, la, lw, mx, d, s) => dv_u(dv_u(dv_u(dv_u(dv_u(dv_u(dv_u(dv_u(b, 3, 1), p, 4), o, 4), la, 4), lw, 1), mx, 4), dv_dir(d), 1), dv_bool(s), 1),
+        Errno => dv_u(b, 4, 1),
     };
     return dv_fields(b2, fs, i + 1);
 }
