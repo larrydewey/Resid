@@ -1,0 +1,2 @@
+E0219
+capability `network(readonly)` but is not granted it: declare @requires(network(readonly))

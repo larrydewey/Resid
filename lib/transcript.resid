@@ -1,0 +1,34 @@
+// transcript.resid — what this program saw (PLAN-attestation.md §9): a
+// running SHA-256 over every device crossing, written ahead (a request is
+// noted before it is sent), and a bounded log of the last 256 crossings.
+// Secret outputs are noted by length only. Reading it turns it on for the
+// whole program from the start of main (the compiler sees the call), so a
+// program that never reads it pays nothing.
+//
+// The result is External: a commitment to what the program saw, not an
+// endorsement, kept in memory the kernel can write. Publishing it is a
+// declassification only when the program chooses to send it.
+
+pub type Transcript = { List(UInt(8)) hash; Int count; List(TranscriptEntry) log; };
+
+// One crossing: the SHA-256 of the descriptor's name (first 8 bytes),
+// the direction (0 request, 1 reply), the challenge record's handle (all
+// ones for none), and the SHA-256 of the whole noted entry.
+pub type TranscriptEntry = { List(UInt(8)) site; Int direction; Int record; List(UInt(8)) digest; };
+
+pub Transcript transcript() {
+    List(Int) b = resid_tr_read();
+    List(UInt(8)) none = [];
+    List(TranscriptEntry) ne = [];
+    if (b.len() < 40) { return Transcript {.hash = none, .count = 0, .log = ne}; }
+    return Transcript {.hash = tr_u8(b[0..32], 0, ListBuf()), .count = tr_be(b, 32, 8, 0), .log = tr_entries(b, 40, ListBuf())};
+}
+
+List(TranscriptEntry) tr_entries(List(Int) b, Int at, ListBuf(TranscriptEntry) acc) {
+    if (at + 48 > b.len()) { return acc.finish(); }
+    TranscriptEntry e = TranscriptEntry {.site = tr_u8(b[at..at + 8], 0, ListBuf()), .direction = b[at + 8], .record = tr_be(b, at + 9, 7, 0), .digest = tr_u8(b[at + 16..at + 48], 0, ListBuf())};
+    return tr_entries(b, at + 48, acc.push(e));
+}
+
+Int tr_be(List(Int) b, Int at, Int n, Int acc) { return if (n <= 0) { acc } else { tr_be(b, at + 1, n - 1, (acc << 8) | b[at]) }; }
+List(UInt(8)) tr_u8(List(Int) b, Int i, ListBuf(UInt(8)) acc) { return if (i >= b.len()) { acc.finish() } else { tr_u8(b, i + 1, acc.push((UInt(8)) b[i])) }; }

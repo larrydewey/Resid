@@ -1,0 +1,93 @@
+// transcript.resid — the program's transcript (PLAN-attestation.md §9): a
+// running SHA-256 over every channel crossing the device engines note,
+// and a bounded log beside it. Off unless the program reads it (the
+// compiler then starts main with resid_tr_enable): device code that never
+// ships evidence pays nothing. Only lib/dev/'s engines note crossings and
+// only lib/transcript.resid reads them (E0277).
+//
+// State: {lock, on, count, hash (32)}, then a ring of 256 log entries of
+// 48 bytes: the entry's first 16 bytes (site and direction, written by the
+// engine) and the SHA-256 of the whole entry. It lives in memory the
+// kernel can write: the transcript is a commitment to what the program
+// saw, never an endorsement.
+
+Int tr_cap() { return 256; }
+Int tr_esz() { return 48; }
+Int tr_meta() { return resid_raw_global("rt_tr_meta", 64); }
+Int tr_ring() { return resid_raw_global("rt_tr_ring", 12288); }
+
+Int tr_lock() {
+    if (resid_raw_cas(tr_meta(), 0, 1)) { return 0; }
+    _ = resid_raw_syscall(24, 0, 0, 0, 0, 0, 0);   // sched_yield
+    return tr_lock();
+}
+
+Int tr_unlock(Int v) { return st64(tr_meta(), 0) * 0 + v; }
+
+@export("resid_tr_enable", "void()")
+pub Int rt_tr_enable() { return st64(tr_meta() + 8, 1); }
+
+// Note one crossing: its bytes (List(Int)); 0 done, 1 off. An empty
+// entry notes nothing and only asks whether the transcript is on.
+@export("resid_tr_note", "i64(ptr)")
+pub Int rt_tr_note(Int entry) {
+    if (ld64(tr_meta() + 8) != 1) { return 1; }
+    Int n = c_list_len(entry);
+    if (n == 0) { return 0; }
+    Int buf = xmalloc(if (n > 0) { n } else { 1 });
+    _ = bytes_of(entry, buf, 0, n);
+    Int d = xmalloc(32);
+    _ = tr_sha(buf, n, d);
+    _ = tr_lock();
+    // hash = SHA-256(hash ‖ SHA-256(entry))
+    Int cat = xmalloc(64);
+    _ = resid_raw_copy(cat, tr_meta() + 24, 32);
+    _ = resid_raw_copy(cat + 32, d, 32);
+    _ = tr_sha(cat, 64, tr_meta() + 24);
+    Int k = ld64(tr_meta() + 16);
+    Int e = tr_ring() + (k % tr_cap()) * tr_esz();
+    _ = resid_raw_fill(e, 0, tr_esz());
+    _ = resid_raw_copy(e, buf, if (n < 16) { n } else { 16 });
+    _ = resid_raw_copy(e + 16, d, 32);
+    _ = st64(tr_meta() + 16, k + 1);
+    _ = tr_unlock(0);
+    return c_free(cat) + c_free(d) + c_free(buf);
+}
+
+// The transcript: hash (32) ‖ count (8, big-endian) ‖ the log, oldest
+// first (at most 256 entries of 48 bytes).
+@export("resid_tr_read", "ptr()")
+pub Int rt_tr_read() {
+    _ = tr_lock();
+    Int k = ld64(tr_meta() + 16);
+    Int m = if (k < tr_cap()) { k } else { tr_cap() };
+    Int n = 40 + m * tr_esz();
+    Int out = xmalloc(n);
+    _ = resid_raw_copy(out, tr_meta() + 24, 32);
+    _ = tr_be(out + 32, k, 0);
+    _ = tr_log(out + 40, k - m, k, 0);
+    _ = tr_unlock(0);
+    Int l = bytes_list(out, n);
+    return c_free(out) + l;
+}
+
+Int tr_log(Int out, Int from, Int to, Int i) {
+    if (from + i >= to) { return 0; }
+    _ = resid_raw_copy(out + i * tr_esz(), tr_ring() + ((from + i) % tr_cap()) * tr_esz(), tr_esz());
+    return tr_log(out, from, to, i + 1);
+}
+
+Int tr_be(Int at, Int v, Int i) {
+    if (i >= 8) { return 0; }
+    _ = st8(at + i, lshr(v, 8 * (7 - i)) & 255);
+    return tr_be(at, v, i + 1);
+}
+
+// SHA-256 of n bytes at p into 32 bytes at out.
+Int tr_sha(Int p, Int n, Int out) {
+    Int s = sha_new();
+    Int full = sha_bytes(s, p, n);
+    _ = sha_finish(s, p + full, n - full, n);
+    _ = sha_out(s, out, 0);
+    return c_free(s);
+}

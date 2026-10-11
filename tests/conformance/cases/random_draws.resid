@@ -1,0 +1,12 @@
+// Randomness (PLAN-labels §6.6): draws of any length, keys secret from
+// the start, and a report of the CPU source.
+import "random.resid";
+Int main() {
+    List(Int) a = random_bytes(100);
+    List(Int) b = random_bytes(100);
+    List(Secret(UInt(8))) s = random_secret(70);
+    Bool differ = f"{a}" != f"{b}";
+    Bool known = match random_source() { KernelOnly => true, KernelAndCpu => true };
+    println(f"{a.len()} {s.len()} {differ} {known} {random_bytes(0).len()}");
+    return 0;
+}

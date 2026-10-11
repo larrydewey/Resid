@@ -1,0 +1,29 @@
+// The terminal and display families are bounded at force time like the
+// others (lambda_caps_spawn_dropped): each closure is made in main, which
+// holds both, and called inside a spawn whose list drops its family --
+// through a named function, so no static check sees the call. The builtin
+// call fails the region; raw mode under `terminal(readonly)` is a write
+// and fails too. A spawn that grants the family runs the same closure.
+@requires(terminal, display)
+Int main() {
+    Int closure(Int) tty = lambda(v) { if (resid_term_is_tty(0) || true) { v } else { -1 } };
+    Int closure(Int) cols = lambda(v) { if (resid_term_cols() > 0) { v } else { -1 } };
+    Int closure(Int) raw = lambda(v) { if (resid_term_raw() || resid_term_restore()) { v } else { v } };
+    Int closure(Int) disp = lambda(v) { if (resid_disp_close(-1)) { -1 } else { v } };
+    Int r = rt 0;
+    println(report("terminal query", spawn () { return apply(tty, r); }));
+    println(report("terminal size", spawn (display) { return apply(cols, r); }));
+    println(report("terminal raw", spawn (terminal(readonly)) { return apply(raw, r); }));
+    println(report("display", spawn (terminal) { return apply(disp, r); }));
+    println(report("terminal query granted", spawn (terminal(readonly)) { return apply(tty, r); }));
+    println(report("terminal size granted", spawn (terminal(readonly)) { return apply(cols, r); }));
+    println(report("terminal raw granted", spawn (terminal) { return apply(raw, r); }));
+    println(report("display granted", spawn (display) { return apply(disp, r); }));
+    return 0;
+}
+
+Int apply(Int closure(Int) f, Int x) { return f(x); }
+
+Str report(Str what, Result(Int, RegionError) r) {
+    return match r { Ok(n) => f"{what}: ok {n}", Err(e) => what + ": failed: " + e.message };
+}

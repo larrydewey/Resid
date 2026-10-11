@@ -1,0 +1,14 @@
+// A descriptor written with hex (and binary) literals is as known after
+// reduction as one in decimal (E0262 used to refuse it: the reducer did
+// not read 0x / 0b / 0o literals), and checks and runs the same.
+import "dev/fx_device_hex_descriptor.resid";
+
+@requires(device(readonly))
+Int main() {
+    Str s = match (device.ioctl(fx_ptn_hex(), [])) {
+        Ok(o) => match (dv_out_num(o, 0)) { Some(v) => if (v >= 0) { "a pty number" } else { "not a pty number" }, None => "no number", },
+        Err(e) => device_error_text(e),
+    };
+    println(s);
+    return 0;
+}

@@ -145,10 +145,46 @@ NAT="tiny=$ROOT/tests/conformance/native/tiny.ll"
 NHASH="$(sha256sum "$ROOT/tests/conformance/native/tiny.ll" | cut -d' ' -f1)"
 check "native build" 0 "provenance: signed" "$COMPILER" n.resid -o n -native "$NAT"
 check "native artifact in the record" 0 "attestation: native module tiny from an artifact with SHA-256 $NHASH" "$COMPILER" verify n
+# Inline asm in a module is allowed (it runs only in the confined host)
+# and stated, sites by mnemonic: tiny's forged reply, esc's escapes; spin
+# has none, so no line.
+check "native asm in the record (tiny)" 0 "attestation: native module tiny contains inline asm, 2 sites: syscall x2" "$COMPILER" verify n
+printf '@link("spin") Int spin(Int n) {}\n@requires(native_spin)\nInt main() { println(f"{spin(rt 3)}"); return 0; }\n' > sp.resid
+check "native build without asm" 0 "provenance: signed" "$COMPILER" sp.resid -o sp -native "spin=$ROOT/tests/conformance/native/spin.ll"
+if "$COMPILER" verify sp 2>&1 | grep -q "contains inline asm"; then fail=$((fail + 1)); echo "FAIL a module without inline asm was said to have some"; else pass=$((pass + 1)); fi
+printf '@link("esc") Int esc_getpid() {}\n@requires(native_esc)\nInt main() {\n    Result(Int, RegionError) r = spawn (native_esc) { return esc_getpid(); };\n    return 0;\n}\n' > ne.resid
+check "native asm build" 0 "provenance: signed" "$COMPILER" ne.resid -o ne -native "esc=$ROOT/tests/conformance/native/esc.ll"
+check "native asm in the record" 0 "attestation: native module esc contains inline asm, 13 sites: syscall x12, rdtsc x1" "$COMPILER" verify ne
 check "native grant" 0 "attestation: grant \[native_tiny\]" "$COMPILER" verify n
 check "native debug build" 0 "provenance: signed" "$COMPILER" n.resid -o nd --profile debug -native "$NAT"
 check "native capability within the grant" 0 "its capabilities are within the grant" "$COMPILER" verify nd
 if grep -qa "native_tiny.tiny_add" nd.resid-graph.cbor; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL the graph records the native call as an effect"; fi
+
+# ── Device descriptors (spec §49) ───────────────────────────────────────
+# The record lists each descriptor the program holds -- name, path, verb,
+# request number for the target and stability class. It over-approximates:
+# the derived-key descriptor, imported but never called, is listed too, so
+# no call path the compiler's reachability misses can leave one out. The
+# graph records each verb as an effect naming its descriptor.
+printf 'import "dev/sev_guest.resid";\nimport "dev/sev_guest_key.resid";\n@requires(device(readonly), declassify)\nInt main() {\n    Str s = match (snp_get_report([(UInt(8))(rt 0)], 0)) { Ok(b) => "report", Err(e) => device_error_text(e), };\n    println(s);\n    return 0;\n}\n' > dv.resid
+check "device build" 0 "provenance: signed" "$COMPILER" dv.resid -o dv
+check "device_in_provenance" 0 "attestation: device sev_guest.snp_get_report (ioctl /dev/sev-guest, request 0xc0205300, uapi)" "$COMPILER" verify dv
+check "device_stability_in_provenance" 0 ", uapi)" "$COMPILER" verify dv
+out="$("$COMPILER" verify dv 2>&1)"
+if echo "$out" | grep -q "attestation: device sev_guest.snp_get_derived_key (ioctl /dev/sev-guest, request 0xc0205301, uapi)"; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL an imported, uncalled descriptor is missing from the record"; fi
+check "device grant" 0 "attestation: grant \[device(readonly), declassify\]" "$COMPILER" verify dv
+check "device debug build" 0 "provenance: signed" "$COMPILER" dv.resid -o dvd --profile debug
+check "device capability within the grant" 0 "its capabilities are within the grant" "$COMPILER" verify dvd
+if grep -qa "device.ioctl(sev_guest.snp_get_report)" dvd.resid-graph.cbor; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL the graph records the device verb as an effect"; fi
+if [ "$HAVE_PY" -eq 1 ]; then
+    rec="$(python3 -c "
+import sys, cbor2
+b = open('dv', 'rb').read()
+clen = int.from_bytes(b[-14:-10], 'big')
+rec = cbor2.loads(cbor2.loads(b[-14 - clen:-14]).value[2])
+print(rec['devices'])")"
+    if [ "$rec" = "[{'op': 'ioctl', 'name': 'sev_guest.snp_get_derived_key', 'path': '/dev/sev-guest', 'request': 3223343873, 'stability': 'uapi'}, {'op': 'ioctl', 'name': 'sev_guest.snp_get_report', 'path': '/dev/sev-guest', 'request': 3223343872, 'stability': 'uapi'}]" ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL the record's devices, read independently: $rec"; fi
+fi
 
 # ── Tampering ───────────────────────────────────────────────────────────
 cp s s_code; flip s_code 100

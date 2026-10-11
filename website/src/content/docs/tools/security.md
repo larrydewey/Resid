@@ -46,8 +46,8 @@ runtime, under a driver flag that is honored only for those entry files
 
 **Native modules.** Code from another language runs only as a
 [native module](/Resid/reference/native-modules/), each call in a fresh
-process the kernel confines to computation (a seccomp filter: its own
-socket, non-executable memory, exit). It gets no descriptors, no
+process the kernel confines to computation (a seccomp filter: a write
+on its own socket, exit; a shadow stack where the CPU has one). It gets no descriptors, no
 environment, no clock and none of the program's memory. Its reply is
 checked as untrusted input. The artifact is checked before linking so it
 cannot run code in the program itself. Calling it needs the family

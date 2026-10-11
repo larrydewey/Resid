@@ -1,0 +1,10 @@
+// Arithmetic on literals that stays in range folds or runs to the exact
+// value, at the bounds of Int and Int(128).
+Int top() { return 9223372036854775806 + 1; }
+Int bottom() { return 0 - 9223372036854775807 - 1; }
+Int(128) wide() { return 170141183460469231731687303715884105726 + 1; }
+
+Int main() {
+    println(f"{top()} {bottom()} {wide()} {0x7FFFFFFFFFFFFFFE + 0x1}");
+    return 0;
+}

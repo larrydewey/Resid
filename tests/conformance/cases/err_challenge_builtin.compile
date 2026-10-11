@@ -1,0 +1,1 @@
+error[E0277]: `resid_chal_spend` keeps a challenge record

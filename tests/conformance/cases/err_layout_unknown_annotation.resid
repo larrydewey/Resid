@@ -1,0 +1,4 @@
+import "dev/device.resid";
+@layout(le)
+type Unk = { @maybe(1) UInt(8) a; };
+Int main() { return 0; }

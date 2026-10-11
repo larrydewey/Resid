@@ -1,0 +1,23 @@
+// Top-level sandboxes in a debug build's graph: one whose members are
+// unchanged by instantiation (kept as written) and one that loses its
+// generic declaration (rebuilt, with a derive edge to the original), plus
+// the sandbox repeated around the generic's copy. resid-graph --check
+// must find no source node left without a fate (spec 3.4).
+sandbox (filesystem(readonly)) {
+    Int plain(Int n) { return n + 1; }
+
+    @requires(filesystem(readonly))
+    Bool root_here() { return filesystem.is_dir("/"); }
+}
+
+sandbox () {
+    T first(List(T) xs) { return xs[0]; }
+    Int twice(Int n) { return n * 2; }
+}
+
+@requires(filesystem(readonly))
+Int main() {
+    List(Int) xs = [rt(3), 4];
+    println(f"{first(xs)} {plain(rt(2))} {twice(rt(5))} {root_here()}");
+    return 0;
+}

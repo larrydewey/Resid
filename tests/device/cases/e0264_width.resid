@@ -1,0 +1,5 @@
+// Both ends of a link have its width; this descriptor breaks that (E0264).
+import "dev/fx_e0264_width.resid";
+
+@requires(device)
+Int main() { println(fx_call()); return 0; }

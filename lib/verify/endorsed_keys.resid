@@ -1,0 +1,54 @@
+// verify/endorsed_keys.resid — attestation keys a CoRIM endorses
+// (PLAN-attestation.md §3.1, §4: attest-key triples, verify/corim.resid),
+// as anchors for the verifiers that take a key rather than a chain: the
+// CCA platform token's CPAK (cca_verify_endorsed) and a TPM's AK
+// (tpm_verify_quote_endorsed). Each candidate is an Anchor whose identity
+// is the endorser's, so the evidence rests on the endorser's word and a
+// decision on it names the endorser in `accept`.
+//
+// Only keys whose environment names an instance are candidates, and the
+// evidence must come from that instance: the CCA token's own instance ID,
+// or the instance a TPM verifier names. The CoRIM's not-after and the
+// endorser anchor's expiry bound the evidence time.
+
+import "core.resid";
+import "corim.resid";
+import "../crypto.resid";
+import "../hash.resid";
+import "../x509.resid";
+import "../ecdsa.resid";
+
+pub type EndorsedKey = { Anchor a; Str instance_hex; };
+
+// The candidates for `instance_hex` ("" any instance), as anchors of kind
+// `kind` for `format`; refused when there is none.
+@verify_internal
+pub Result(List(EndorsedKey), VerifyError) endorsed_keys(Verified(CorimRefs) keys, Str instance_hex, Str kind, Str format, Str principal, EvidenceTime t, Str who) {
+    if (keys.anchors.len() != 1 || keys.format != "CorimRefs") { return Err(Refused(who, "the keys are not one endorser's CoRIM")); }
+    if (keys.value.valid_until >= 0 && t.at.seconds > keys.value.valid_until) { return Err(Stale("the CoRIM's validity ended before the evidence time")); }
+    List(EndorsedKey) c = ek_pick(keys, str_to_lower(instance_hex), kind, format, principal, 0, []);
+    if (c.len() == 0) { return Err(Refused(who, "the CoRIM endorses no attestation key for " + (if (instance_hex == "") { "an instance" } else { "instance " + instance_hex }))); }
+    return Ok(c);
+}
+
+List(EndorsedKey) ek_pick(Verified(CorimRefs) keys, Str inst, Str kind, Str format, Str principal, Int i, List(EndorsedKey) acc) {
+    List(CorimKey) ks = keys.value.keys;
+    if (i >= ks.len()) { return acc; }
+    Bool take = ks[i].instance_hex != "" && (inst == "" || ks[i].instance_hex == inst);
+    List(EndorsedKey) acc2 = if (take) { acc.concat([EndorsedKey {.a = ek_anchor(ks[i], keys, kind, format, principal), .instance_hex = ks[i].instance_hex}]) } else { acc };
+    return ek_pick(keys, inst, kind, format, principal, i + 1, acc2);
+}
+
+// The algorithms a key allows: ECDSA on its curve with the matching hash,
+// or RSASSA-PKCS1 SHA-256 (a TPM's RSA AK).
+Anchor ek_anchor(CorimKey k, Verified(CorimRefs) keys, Str kind, Str format, Str principal) {
+    PubKey pk = spki_parse_der(k.spki);
+    List(Str) algs = if (pk.kind == pubkey_rsa()) { ["RsaSsaSha256"] } else if (curve_bytes(pk.curve) == 48) { ["EcdsaP384Sha384"] } else { ["EcdsaP256Sha256"] };
+    return Anchor {.id = keys.anchors[0], .kind = kind, .product = "", .principal = principal, .formats = [format], .algorithms = algs, .der = k.spki, .fingerprint = "sha256:" + hex_encode(sha256_bytes(k.spki)), .expires = keys.value.expires};
+}
+
+// Whether a failure under one candidate leaves the next to try: the key
+// did not sign, or signs with what the evidence does not use.
+pub Bool endorsed_try_next(VerifyError e) {
+    return match e { BadSignature(m) => true, Refused(w, m) => true, _ => false };
+}

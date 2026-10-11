@@ -1,0 +1,55 @@
+# Library functions that handle a secret (the surface tools/resid-ctcover.resid
+# reads from the knowledge graph) and that no tests/ct case reaches, each
+# with the reason. tests/ct/run.sh fails on a secret function that is in
+# neither a case's reach nor this list, and on an entry here that a case
+# now reaches or that no longer handles a secret. Keep it short: a
+# function belongs here only when a valgrind case cannot reach it, and its
+# secret work must then be reached through the functions it calls.
+#
+# lib/<file> <function> <reason>
+lib/tlsclient.resid tls_client_connect socket I/O: the client handshake on a live connection; its secret steps (x25519g_*, tlsg_*, tls_keys_*) are cases
+lib/tlsserver.resid tls_server_handshake socket I/O around ts_server_start, ts_read_prot and ts_server_finish, which tls-server-secret runs
+lib/tlswire.resid tls_accept_loop socket I/O: the accept loop that runs tls_server_handshake per connection
+lib/tlswire.resid tls_stream_loop socket I/O: the record loop over tls_keys_protect and tls_keys_open, which tls-record-seal-secret and tls-server-secret run
+lib/tlswire.resid tls_cfg a constructor: it stores the ServerKey and computes nothing
+lib/dev/device.resid dv_answer device I/O: parses the device host's reply and takes its secret outputs from the runtime (resid_device_secret); the accessors over its result (dv_out_*) are cases
+lib/dev/device.resid device_engine_ioctl device I/O: the engine runs the device host; its secret outputs reach the program only through dv_answer
+lib/dev/device.resid device_engine_transact device I/O: the engine runs the device host; its secret outputs reach the program only through dv_answer
+lib/dev/device.resid device_engine_read_attr device I/O: the engine runs the device host; its secret outputs reach the program only through dv_answer
+lib/dev/device.resid device_engine_configfs_report device I/O: the engine runs the device host; its secret outputs reach the program only through dv_answer
+lib/dev/device.resid device_engine_sequence device I/O: the engine runs the device host; its secret outputs reach the program only through dv_answer
+lib/dev/device_write.resid device_engine_ioctl_w device I/O: the writing engine; as device_engine_ioctl
+lib/dev/device_write.resid device_engine_transact_w device I/O: the writing engine; as device_engine_transact
+lib/dev/device_write.resid device_engine_configfs_report_w device I/O: the writing engine; as device_engine_configfs_report
+lib/dev/device_write.resid device_engine_sequence_w device I/O: the writing engine; as device_engine_sequence
+lib/dev/sev_guest_key.resid snp_get_derived_key device I/O: the SNP_GET_DERIVED_KEY ioctl; its response's secret handling is sg_key_body, which dev-sg-key-body runs
+lib/dev/tpm.resid tpm_nv_read_secret device I/O: NV_Read on /dev/tpmrm0; its logic is tpm_nv_read_secret_via, which dev-tpm-nv-read-secret runs
+lib/tls.resid channel_exporter_ok a length test: the exporter's length is public
+lib/tlswire.resid tlsserver_exporter a constructor over a live connection's keys; their derivation (tls_keys_exporter) runs in tls-server-secret
+lib/tlsclient.resid tlsclient_exporter a constructor over a live connection's keys; their derivation (tls_keys_exporter) runs in tls-server-secret
+lib/challenge_bind.resid challenge_with_channel needs a ChannelExporter, which only a live handshake gives; its secret work is sha512g (sha512-secret) over the exporter, and tests/tls exercises it end to end
+lib/challenge_bind.resid chal_publish_as the declassifying loop of challenge_with_channel: one declassify per byte, no branch on a secret
+lib/challenge_export.resid challenge_import generic over SpentStore(S): the coverage reads the generic; its MemSpentStore copy runs in challenge-tokens
+lib/verify/core.resid vf_channel_id needs a ChannelExporter, which only a live handshake gives; its secret work is sha256g (sha256-secret) and the one-way publication vf_publish
+lib/verify/core.resid vf_publish publishes the SHA-256 of an exporter, a one-way image (declassify per byte, no branch)
+lib/verify/snp.resid snp_verify_channel_bound needs a live connection's ChannelExporter; its secret work is challenge_with_channel and vf_channel_id
+lib/verify/nsm.resid nsm_verify_channel_bound needs a live connection's ChannelExporter; as snp_verify_channel_bound
+lib/verify/cca.resid cca_verify_channel_bound needs a live connection's ChannelExporter; as snp_verify_channel_bound
+lib/verify/tdx.resid tdx_verify_quote_channel_bound needs a live connection's ChannelExporter; as snp_verify_channel_bound
+lib/verify/channel.resid seal_to_channel needs Appraised evidence bound to a live connection (tests/attest channel_broker runs it); it copies the secret value unread
+lib/verify/channel.resid ch_plain publishes a release on its TLS connection (declassify per byte, no branch); TLS encrypts it to the peer
+lib/verify/channel.resid tlsserver_send_bound socket I/O on a live connection; its secret work is ch_plain and the TLS record layer (tls-record-seal-secret)
+lib/verify/channel.resid tlsclient_send_bound socket I/O on a live connection; as tlsserver_send_bound
+lib/verify/ear.resid ear_cwt needs Appraised evidence (tests/attest ear_flow); its secret work is ecdsag_sign_raw over P-256 (p256-secret-sign)
+lib/verify/sealing.resid snp_platform_key device I/O: SNP_GET_DERIVED_KEY, whose response is sg_key_body (dev-sg-key-body)
+lib/verify/sealing.resid local_seal needs a PlatformKey (tests/attest local_flow); its secret work is aes_gcmg_seal (aes-gcm-secret-sw, -hw) and local_publish
+lib/verify/sealing.resid local_publish publishes AES-GCM ciphertext (declassify per byte, no branch)
+lib/verify/sealing.resid local_open needs a PlatformKey (tests/attest local_flow); its secret work is aes_gcmg_decrypt (aes-gcm-open-secret-sw, -hw), whose verdict is public
+lib/verify/sealing.resid local_public publishes a sealed blob's counter name, public metadata (declassify per byte, no branch)
+lib/verify/sealing.resid local_version publishes a sealed blob's version, public metadata (declassify per byte, no branch)
+lib/verify/sealing.resid bind_counter compares only public fields (the version and the counter's name) of a value whose secret bytes it copies unread
+lib/verify/sealing.resid first_seal builds an empty secret list from public facts
+lib/verify/seal.resid seal_to_evidence needs Appraised evidence (tests/attest key_broker); its secret work is hpkeg_setup_sender_full and hpkeg_seal (hpke-seal-secret) and seal_publish
+lib/verify/seal.resid seal_publish publishes HPKE ciphertext (declassify per byte, no branch)
+lib/verify/seal.resid open_released needs a release (tests/attest key_broker); its secret work is hpkeg_setup_receiver_full and hpkeg_open (hpke-open-secret), whose verdict is public
+lib/verify/spdm.resid spdm_verify_channel_bound needs a live connection's ChannelExporter; as snp_verify_channel_bound

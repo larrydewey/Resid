@@ -1,0 +1,25 @@
+// Each call runs in a fresh host that exits after it (PLAN-device-access.md
+// §4): no descriptor of the device, the host or its socket is left in the
+// program -- the same descriptors are open before and after -- and every
+// call opens the device anew.
+import "dev/fx_device_stateless.resid";
+
+Bool ok(Result(List(DevOut), DeviceError) r) { return match (r) { Ok(o) => o.len() == 1, Err(e) => false, }; }
+
+@requires(device(readonly))
+Int calls(Int n, Int good) {
+    if (n <= 0) { return good; }
+    Int g = if (ok(device.ioctl(fx_ptn(), [])) && ok(device.read_attr(fx_online()))) { 1 } else { 0 };
+    return calls(n - 1, good + g);
+}
+
+@requires(device(readonly), filesystem(readonly))
+Int main() {
+    Int before = filesystem.list_dir("/proc/self/fd").len();
+    Int good = calls(rt 20, 0);
+    Int after = filesystem.list_dir("/proc/self/fd").len();
+    println(f"{good} of 20 pairs of calls");
+    Str same = if (before == after) { "the same" } else { f"{before} then {after}" };
+    println("descriptors before and after: " + same);
+    return 0;
+}

@@ -1,0 +1,7 @@
+// Refused at type check: lowering would treat the value as a heap
+// list and read memory that is not one.
+Int main() {
+    List(Int, 4) s = [1, 2, 3, 4];
+    List(Int, 4) t = s[..2];
+    return t[0];
+}

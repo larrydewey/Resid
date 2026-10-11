@@ -1,0 +1,11 @@
+// Fixture for e0263_outside: fields lie inside the struct (installed as lib/dev/fx_e0263_outside.resid).
+import "device.resid";
+
+pub IoctlOp fx_op() {
+    return IoctlOp {.name = "fx.op", .path = "/dev/fx", .requests = dv_both(dv_ioc(3, 88, 0, 32)), .size = 32, .fields = [Buffer(8, -1, 64, In, false), Scalar(28, 8, Out)], .write = false, .version = Unversioned, .stability = Uapi};
+}
+
+@requires(device)
+pub Str fx_call() {
+    return match (device.ioctl(fx_op(), [InBytes([(UInt(8))1])])) { Ok(o) => "ok", Err(e) => device_error_text(e), };
+}

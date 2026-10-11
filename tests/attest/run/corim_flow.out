@@ -1,0 +1,12 @@
+veraison signed CoRIM: ok, id test corim id, 3 reference values, signer ACME Ltd signing key
+veraison, after not-after: stale: the CoRIM's signature is not valid at this time
+veraison, other endorser: bad signature: the endorser did not sign this CoRIM
+veraison, tampered: bad signature: the endorser did not sign this CoRIM
+test CoRIM: ok, id resid-test-corim, 6 reference values, signer Resid test endorser
+test CoRIM, expired: stale: the CoRIM's signature is not valid at this time
+SNP endorsed: appraised, 2 anchors
+SNP other image: refused (snp_appraise): the launch measurement is not one the policy names
+CCA endorsed: appraised
+SPDM endorsed: appraised
+SPDM unendorsed block: refused (spdm_appraise_endorsed): measurement 1 is not endorsed
+released and opened: same key

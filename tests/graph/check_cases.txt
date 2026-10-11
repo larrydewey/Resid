@@ -271,7 +271,7 @@ return without a value in a Int function
 Int f() { return; }
 Int main() { return 0; }
 === rowrite
-error[E0212]: provider call `filesystem.write_all` is a write operation, but only a read-only grant of capability `filesystem` is available here [filesystem:ro] (capability modes only restrict, never amplify)
+error[E0212]: provider call `filesystem.write_all` is a write operation, but only a read-only grant of capability `filesystem` is available here [filesystem(readonly)] (capability modes only restrict, never amplify)
 sandbox(filesystem(readonly)) {
 Int g() { Bool b = filesystem.write_all("x", "y"); return 0; }
 }

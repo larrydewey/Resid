@@ -92,6 +92,7 @@ labels = [i["label"] for i in (r.get("result") or {}).get("items", [])]
 check("completion", "norm2" in labels and "Point" in labels and "match" in labels, r)
 # Behavior verbs complete; the prelude's own functions do not.
 check("completion builtins", "resid_read_byte" in labels and "resid_term_raw" in labels and "resid_tcp_listen_at" in labels, r)
+check("completion secret builtins", "declassify" in labels and "secret_join" in labels and "Secret" in labels, r)
 check("completion verbs", "compare" in labels and "show" in labels and "resid_ord_int" not in labels, r)
 
 # Inside a format spec, completion offers the flags and nothing else
@@ -105,6 +106,10 @@ check("fspec hover", "group" in v and "minimum field width" not in v, r)
 r = query("textDocument/completion", 5, 12)
 labels = [i["label"] for i in (r.get("result") or {}).get("items", [])]
 check("completion outside a spec", "match" in labels and "group" not in labels, r)
+# After `@`, the annotations and nothing else.
+r = query("textDocument/completion", 8, 7)
+labels = [i["label"] for i in (r.get("result") or {}).get("items", [])]
+check("annotation completion", "requires" in labels and "decides" in labels and "anchor" in labels and "match" not in labels, r)
 
 # Memory stays flat across edits (each message runs in its own arena).
 def rss():

@@ -1,0 +1,9 @@
+TF-M token: ok, lifecycle 0x3003, 4 software components, profile http://arm.com/CCA-SSD/1.0.0
+TF-M token, other CPAK: bad signature: the CPAK did not sign the platform token
+TF-M token, tampered: bad signature: the CPAK did not sign the platform token
+fresh: appraised, 1 software component(s)
+again: not fresh: challenge already accepted, or exported
+not secured: refused (cca_appraise): the platform's security lifecycle 0x2000 is not secured
+platform bound to another realm: bad signature: the platform token is not bound to this realm's RAK
+other challenge: not fresh: the evidence does not carry this challenge
+released and opened: same key

@@ -1,18 +1,85 @@
-// OS entropy, the AES-NI query, the bounds-check trap, and blocking TCP
+// OS entropy (getrandom and the CPU source), the AES-NI query, the bounds-check trap, and blocking TCP
 // sockets for lib/http.resid and the TLS transport.
 
-// One byte of OS entropy (getrandom, else /dev/urandom).
+// One byte of getrandom (flags 0: blocks until the pool is ready). There is
+// no /dev/urandom fallback: a process denied getrandom stops here.
 @export("resid_crypto_random_byte", "i64()")
 pub Int rt_crypto_random_byte() {
     Int b = resid_raw_tls("rand_byte", 8);
     _ = st64(b, 0);
-    if (sc(318, b, 1, 0) == 1) { return ld8(b); }
-    Int fd = sys_open(resid_raw_addr("/dev/urandom"), o_rdonly(), 0);
-    if (fd < 0) { return rt_abort("crypto_random_byte: no entropy source"); }
-    Int n = sc(0, fd, b, 1);
-    _ = sys_close(fd);
-    if (n != 1) { return rt_abort("crypto_random_byte: read failed"); }
-    return ld8(b);
+    if (rnd_os_fill(b, 0, 1) == 1) { return ld8(b); }
+    return rt_abort("crypto_random_byte: getrandom failed");
+}
+
+// ─── Randomness (PLAN-labels.md §6.6) ────────────────────────────────
+// Two raw sources; lib/crypto.resid hashes one draw of each together, so
+// either alone suffices and neither can cancel the other. Nothing is kept
+// between draws: a forked child cannot repeat its parent's bytes.
+
+// n bytes (at most 1 MB) of getrandom with flags 0, which blocks until the
+// kernel's pool is ready (never GRND_INSECURE). Empty when getrandom fails:
+// there is no /dev/urandom fallback, so a process denied getrandom gets no
+// randomness rather than possibly unseeded randomness.
+@export("resid_random_os", "ptr(i64)")
+pub Int rt_random_os(Int n0) {
+    Int n = clamp(n0, 0, 1048576);
+    Int buf = xmalloc(if (n > 0) { n } else { 1 });
+    Int m = if (rnd_os_fill(buf, 0, n) == n) { n } else { 0 };
+    return rnd_list(buf, n, m);
+}
+
+Int rnd_os_fill(Int buf, Int got, Int n) {
+    if (got >= n) { return got; }
+    Int r = sc(318, buf + got, n - got, 0);
+    if (r == 0 - 4) { return rnd_os_fill(buf, got, n); }   // EINTR
+    if (r <= 0) { return got; }
+    return rnd_os_fill(buf, got + r, n);
+}
+
+// The first m bytes of buf as a List(Int); buf (n bytes) is wiped and freed.
+pub Int rnd_list(Int buf, Int n, Int m) {
+    Int slots = xmalloc(if (m > 0) { m * 8 } else { 8 });
+    _ = byte_boxes(buf, slots, 0, m);
+    Int out = c_list_new(m, slots, resid_raw_addr("List"));
+    _ = resid_raw_fill(buf, 0, n);
+    _ = c_free(buf) + c_free(slots);
+    return out;
+}
+
+// Is there a CPU source: RDSEED (CPUID leaf 7 EBX bit 18) on x86-64, RNDR
+// (AT_HWCAP2 bit 16) on AArch64? A hidden one counts as absent. Asked once.
+pub Int rt_cpu_has_seed() {
+    Int g = resid_raw_global("rt_has_seed", 8);
+    if (ld64(g) == 0) { _ = st64(g, 1 + if (resid_raw_arch() == 1) { (ld64(hwcap2_w()) >> 16) & 1 } else { cpu_leaf7_b(18) }); }
+    return ld64(g) - 1;
+}
+
+// n bytes (at most 4096) from the CPU source, 64-bit reads only (16- and
+// 32-bit RDSEED return zero with success on some parts), each retried a
+// bounded number of times. Empty when there is no source, or when a read
+// is exhausted, zero, or repeats the one before: all mean "no CPU source".
+@export("resid_random_cpu", "ptr(i64)")
+pub Int rt_random_cpu(Int n0) {
+    Int n = clamp(n0, 0, 4096);
+    Int words = (n + 7) / 8;
+    Int buf = xmalloc(if (words > 0) { words * 8 } else { 8 });
+    Bool ok = n > 0 && rt_cpu_has_seed() == 1 && rnd_cpu_words(buf, 0, words);
+    return rnd_list(buf, if (words > 0) { words * 8 } else { 8 }, if (ok) { n } else { 0 });
+}
+
+Bool rnd_cpu_words(Int buf, Int i, Int words) {
+    if (i >= words) { return true; }
+    Int at = buf + i * 8;
+    if (!rnd_cpu_word(at, 0)) { return false; }
+    if (ld64(at) == 0) { return false; }
+    if (i > 0 && ld64(at) == ld64(at - 8)) { return false; }
+    return rnd_cpu_words(buf, i + 1, words);
+}
+
+Bool rnd_cpu_word(Int at, Int tries) {
+    if (tries >= 100) { return false; }
+    if (resid_raw_rdseed(at) == 1) { return true; }
+    return rnd_cpu_word(at, tries + 1);
 }
 
 // CPUID leaf 1, ECX bit 1 (PCLMULQDQ); AT_HWCAP bit 4 (PMULL) on AArch64.
@@ -85,6 +152,7 @@ pub Int rt_tcp_connect(Int host, Int port) {
     if (fd < 0) { return 0 - 1; }
     if (!connect_within(fd, sa, 30000)) { return sys_close(fd) * 0 - 1; }
     _ = base_timeouts(fd);
+    _ = no_delay(fd);
     _ = dl_set(fd, 0);
     return fd;
 }
@@ -127,6 +195,17 @@ Int set_timeouts_ns(Int fd, Int ns) {
 
 // A fresh socket: 30 s for any one receive or blocked send.
 Int base_timeouts(Int fd) { return set_timeouts_ns(fd, 30000000000); }
+
+// A connected socket sends each write at once (TCP_NODELAY). Every write
+// is a whole message or record -- a TLS flight, a request, a reply -- so
+// Nagle has nothing to coalesce; with it on, a write that follows a small
+// unacknowledged one waits for the peer's delayed ACK, about 40 ms per
+// TLS handshake on loopback.
+Int no_delay(Int fd) {
+    Int one = resid_raw_tls("nd_one", 4);
+    _ = st32(one, 1);
+    return resid_raw_syscall(54, fd, 6, 1, one, 4, 0);    // IPPROTO_TCP, TCP_NODELAY
+}
 
 // I/O deadlines per descriptor (resid_tcp_deadline): absolute
 // monotonic ns, 0 for none. Descriptors past the table get none.
@@ -239,6 +318,7 @@ pub Int rt_tcp_accept(Int fd) {
     if (c == 0 - 11) { return poll_one(fd, 1, 0 - 1) * 0 + rt_tcp_accept(fd); }
     if (c < 0) { return 0 - 1; }
     _ = base_timeouts(c);
+    _ = no_delay(c);
     _ = dl_set(c, 0);
     return c;
 }
@@ -258,6 +338,7 @@ pub Int rt_tcp_accept_now(Int fd) {
     if (c == 0 - 11 || c == 0 - 4 || c == 0 - 103) { return 0 - 2; }   // EAGAIN, EINTR, ECONNABORTED
     if (c < 0) { return 0 - 1; }
     _ = base_timeouts(c);
+    _ = no_delay(c);
     _ = dl_set(c, 0);
     return c;
 }
@@ -610,7 +691,7 @@ pub Int rt_tcp_send_bin(Int fd, Int l) {
     return if (ok) { 1 } else { 0 };
 }
 
-Int bytes_of(Int l, Int buf, Int i, Int n) {
+pub Int bytes_of(Int l, Int buf, Int i, Int n) {
     if (i >= n) { return 0; }
     _ = st8(buf + i, unbox_word(c_list_get(l, i)) & 255);
     return bytes_of(l, buf, i + 1, n);

@@ -1,0 +1,13 @@
+// A spawn region gets only its list (spec §19): without `device` its body
+// cannot read a device.
+import "dev/sev_guest.resid";
+import "_devzeros.resid";
+
+@requires(device(readonly))
+Int main() {
+    Result(Bool, RegionError) r = spawn (filesystem(readonly)) {
+        return match (snp_get_report(dev_zeros(64), 0)) { Ok(b) => true, Err(e) => false, };
+    };
+    println("spawned");
+    return 0;
+}

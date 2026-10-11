@@ -1030,7 +1030,25 @@ GT bin_dec(Str op, GT l, GT r) {
 }
 
 // Convert an integer value to a target Resid type (no-op when equal).
+// An integer constant that does not fit the target is never truncated:
+// it is a literal, or arithmetic on literals the reducer folded at a wider
+// type, and narrowing it would wrap the value. It becomes the checked
+// conversion's abort ("numeric conversion out of range"), as the same
+// arithmetic does at run time.
 GT widen_val(GT v, Str target_ty) {
+    Str vt = num_norm_cg(v.ty);
+    Str tt = num_norm_cg(target_ty);
+    if (vt == tt) { return v; }
+    if (int_fam(vt) && int_fam(tt) && cg_int_const(v.val) && !cg_const_fits(v.val, tt)) {
+        List(Str) ab = if (resid_rtmod()) { v.lines } else { v.lines.concat(["call void @resid_conv_check(i8 1)"]) };
+        return GT {.pos = v.pos, .val = "0", .ty = target_ty, .cnt = v.cnt, .err = "", .glines = v.glines, .lines = ab, .tmp = v.tmp, .lbl = v.lbl, .tail = false};
+    }
+    return widen_wrap(v, target_ty);
+}
+
+// widen_val without the constant check: the bits, extended or truncated
+// (`wrapping_*` conversions).
+GT widen_wrap(GT v, Str target_ty) {
     Str vt = num_norm_cg(v.ty);
     Str tt = num_norm_cg(target_ty);
     if (vt == tt) { return v; }
@@ -1042,6 +1060,57 @@ GT widen_val(GT v, Str target_ty) {
     // which is exactly the bug that made cg_args's ll_ty(v.ty) format a
     // freshly-sext'd i128 register back out as "i64").
     return GT {.pos = conv.pos, .val = conv.val, .ty = target_ty, .cnt = conv.cnt, .err = "", .glines = conv.glines, .lines = conv.lines, .tmp = conv.tmp, .lbl = conv.lbl, .tail = false};
+}
+
+// Whether s is a decimal integer constant (an optional minus, digits).
+Bool cg_int_const(Str s) {
+    Int n = str_len(s);
+    Int i = if (n > 0 && str_char_at(s, 0) == 45) { 1 } else { 0 };
+    return n > i && cg_digits_from(s, i, n);
+}
+
+Bool cg_digits_from(Str s, Int i, Int n) {
+    if (i >= n) { return true; }
+    Int ch = str_char_at(s, i);
+    if (ch < 48 || ch > 57) { return false; }
+    return cg_digits_from(s, i + 1, n);
+}
+
+// Whether decimal constant s lies in integer type t's range.
+Bool cg_const_fits(Str s, Str t) {
+    Bool neg = str_has_prefix_cg(s, "-");
+    Str d = cg_dec_strip(if (neg) { str_slice(s, 1, str_len(s)) } else { s }, 0);
+    Int bits = ll_width_of(t);
+    Bool sg = ll_is_signed(t);
+    if (d == "0") { return true; }
+    if (neg && !sg) { return false; }
+    // signed: d <= 2^(bits-1) - 1, or d <= 2^(bits-1) when negative;
+    // unsigned: d <= 2^bits - 1.
+    Str lim = cg_pow2(if (sg) { bits - 1 } else { bits }, "1");
+    return cg_dec_lt(d, lim) || (sg && neg && d == lim);
+}
+
+Str cg_dec_strip(Str d, Int i) {
+    if (i >= str_len(d) - 1 || str_char_at(d, i) != 48) { return str_slice(d, i, str_len(d)); }
+    return cg_dec_strip(d, i + 1);
+}
+
+// 2^k * acc for a decimal digit string acc.
+Str cg_pow2(Int k, Str acc) {
+    if (k <= 0) { return acc; }
+    return cg_pow2(k - 1, cg_double(acc, str_len(acc) - 1, 0, ""));
+}
+
+Str cg_double(Str d, Int i, Int carry, Str acc) {
+    if (i < 0) { return if (carry > 0) { f"{carry}" + acc } else { acc }; }
+    Int v = (str_char_at(d, i) - 48) * 2 + carry;
+    return cg_double(d, i - 1, v / 10, f"{v % 10}" + acc);
+}
+
+// a < b for decimal digit strings without leading zeros.
+Bool cg_dec_lt(Str a, Str b) {
+    if (str_len(a) != str_len(b)) { return str_len(a) < str_len(b); }
+    return a < b;
 }
 
 // Emit a conversion from value `v` (LLVM type `from`) to `to`.
@@ -1335,14 +1404,21 @@ Bool scal_ll(Str t) {
 }
 
 Bool scope_num_head(Str t) {
-    return t == "Int" || t == "UInt" || t == "Float" || t == "Bool" || t == "ISize" || t == "USize" || t == "Vec";
+    return t == "Int" || t == "UInt" || t == "Float" || t == "Bool" || t == "ISize" || t == "USize" || t == "Vec" || t == "Secret";
 }
 
 Bool scope_arith_builtin(Str n) {
     if (n == "abs" || n == "min" || n == "max" || n == "clamp") { return true; }
     if (n == "str_char_at" || n == "str_len" || n == "sqrt") { return true; }
+    // Constant-time barriers and selects work on registers only.
+    if (n == "ct_hide" || n == "ct_select") { return true; }
     // Vectors live in registers (spec §46).
     if (n == "splat" || n == "lanes" || n == "select") { return true; }
+    // Constant-time helpers and the AES / carry-less multiply instructions
+    // compute on scalars in registers; the secret wrappers erase to their
+    // argument (spec §48). None of them allocates.
+    if (n == "ct_hide" || n == "ct_select" || n == "aesni_enc_round" || n == "aesni_enc_last_round" || n == "gf128_mul_hw") { return true; }
+    if (n == "secret" || n == "declassify" || n == "classify") { return true; }
     if (str_starts_with(n, "checked_") || str_starts_with(n, "wrapping_") || str_starts_with(n, "saturating_")) { return true; }
     Int c0 = str_char_at(n, 0);
     Bool conv = (c0 == 105 || c0 == 117 || c0 == 102) && str_len(n) >= 2 && str_is_int(str_slice(n, 1, str_len(n)));
@@ -2332,12 +2408,17 @@ Str cg_extern_ret(Str name) {
     if (name == "resid_tcp_close") { return "Bool"; }
     if (name == "resid_tcp_send_bin") { return "Bool"; }
     if (name == "resid_tcp_recv_bin") { return "List(Int)"; }
+    if (name == "resid_random_os" || name == "resid_random_cpu" || name == "resid_chal_bound" || name == "resid_tr_read") { return "List(Int)"; }
+    if (name == "resid_tr_note") { return "Int"; }
+    if (name == "resid_chal_new" || name == "resid_chal_mark" || name == "resid_chal_spend" || name == "resid_chal_bind" || name == "resid_chal_left") { return "Int"; }
     if (name == "resid_tcp_listen") { return "Int"; }
     if (name == "resid_tcp_listen_at") { return "Int"; }
     if (name == "resid_tcp_recv_some") { return "List(Int)"; }
     if (name == "resid_tcp_shutdown") { return "Bool"; }
     if (name == "resid_tcp_deadline") { return "Bool"; }
     if (name == "resid_tcp_poll") { return "List(Int)"; }
+    if (name == "resid_device_call" || name == "resid_device_call_w") { return "List(Int)"; }
+    if (name == "resid_device_secret") { return "List(Secret(UInt(8)))"; }
     if (name == "resid_tcp_send_some") { return "Int"; }
     if (name == "resid_tcp_accept_now") { return "Int"; }
     if (name == "resid_tcp_bound_port") { return "Int"; }
@@ -3059,10 +3140,10 @@ List(Str) td_run_calls(List(Str) syms, Int i, List(Str) acc) {
 // The generated entry point (SPEC-testing.md §4.1's `test_main`): plan, run
 // each discovered test, then let the runtime print the summary and decide
 // the exit code (§7.2 — 0 all passed, 1 any failure).
-List(Str) td_main_ir(List(Str) names, List(Str) syms, Str module) {
+List(Str) td_main_ir(List(Str) names, List(Str) syms, Str module, Bool sec) {
     List(Str) g0 = td_name_globals(names, 0, nil_list());
-    List(Str) g1 = g0.concat([td_str_const("@.tmod", module)]);
-    List(Str) b0 = g1.concat(["define i64 @main() {", "entry:"]);
+    List(Str) g1 = g0.concat([td_str_const("@.tmod", module)]).concat(secret_mode_decl(sec));
+    List(Str) b0 = g1.concat(["define i64 @main() {", "entry:"]).concat(secret_mode_call(sec));
     List(Str) b1 = b0.concat([f"%tplan = call i8 @resid_test_plan(i64 {names.len()}, ptr @.tmod)"]);
     List(Str) b2 = td_run_calls(syms, 0, b1);
     List(Str) b3 = b2.concat(["%trc = call i64 @resid_test_summary()"]);
@@ -3486,18 +3567,26 @@ GT cg_cast_fixed(GT inner, Str toty, GT c) {
     Bool to_text = (toty == "Str" && (is_str_fixed(inner.ty) || is_bytes_fixed(inner.ty))) || (toty == "Bytes" && is_bytes_fixed(inner.ty));
     if (to_text) {
         Str r = f"%t{inner.tmp + 1}";
-        List(Str) l1 = inner.lines.concat([r + " = call ptr @resid_fixed_text(ptr " + inner.val + f", i64 {fixed_bytes(inner.ty)})"]);
+        // A Bytes(N) holds exactly N bytes, zeros included; the heap form
+        // ends at the first zero, so a non-zero byte after one aborts
+        // (resid_fixed_bytes) instead of being dropped.
+        Str conv = if (is_bytes_fixed(inner.ty)) { "@resid_fixed_bytes" } else { "@resid_fixed_text" };
+        List(Str) l1 = inner.lines.concat([r + " = call ptr " + conv + "(ptr " + inner.val + f", i64 {fixed_bytes(inner.ty)})"]);
         return GT {.pos = inner.pos, .val = r, .ty = toty, .cnt = 0, .err = "", .glines = inner.glines, .lines = l1, .tmp = inner.tmp + 1, .lbl = inner.lbl, .tail = false};
     }
     if (is_str_fixed(toty) && src_str_like) {
         Int cap = fixed_cap(toty) + 1;
-        Int t1 = inner.tmp + 1;
+        // A Bytes(N) source is first checked for a zero inside its content.
+        Bool fb = is_bytes_fixed(inner.ty);
+        Int t0 = if (fb) { inner.tmp + 1 } else { inner.tmp };
+        Str src = if (fb) { f"%t{t0}" } else { inner.val };
+        List(Str) l0 = if (fb) { inner.lines.concat([src + " = call ptr @resid_fixed_bytes(ptr " + inner.val + f", i64 {fixed_bytes(inner.ty)})"]) } else { inner.lines };
+        Int t1 = t0 + 1;
         Str dst = f"%t{t1}";
-        List(Str) l0 = inner.lines;
         List(Str) l1 = l0.concat(fixed_alloc(dst, toty));
         Int t2 = t1 + 1;
         Str rc = f"%t{t2}";
-        List(Str) l2 = l1.concat([rc + " = call i64 @resid_str_to_fixed(ptr " + dst + ", ptr " + inner.val + f", i64 {cap})"]);
+        List(Str) l2 = l1.concat([rc + " = call i64 @resid_str_to_fixed(ptr " + dst + ", ptr " + src + f", i64 {cap})"]);
         return GT {.pos = inner.pos, .val = dst, .ty = toty, .cnt = 0, .err = "", .glines = inner.glines, .lines = l2, .tmp = t2, .lbl = inner.lbl, .tail = false};
     }
     if (is_bytes_fixed(toty) && src_str_like) {
@@ -3508,7 +3597,11 @@ GT cg_cast_fixed(GT inner, Str toty, GT c) {
         List(Str) l1 = l0.concat(fixed_alloc(dst, toty));
         Int t2 = t1 + 1;
         Str rc = f"%t{t2}";
-        List(Str) l2 = l1.concat([rc + " = call i64 @resid_bytes_to_fixed(ptr " + dst + ", ptr " + inner.val + f", i64 {cap})"]);
+        // Bytes(M) -> Bytes(N) copies min(M, N) bytes, zeros included.
+        Int from = if (is_bytes_fixed(inner.ty)) { fixed_cap(inner.ty) } else { -1 };
+        Int nb = if (from < cap) { from } else { cap };
+        Str copy = if (from >= 0) { "call void @llvm.memmove.p0.p0.i64(ptr " + dst + ", ptr " + inner.val + f", i64 {nb}, i1 false)" } else { rc + " = call i64 @resid_bytes_to_fixed(ptr " + dst + ", ptr " + inner.val + f", i64 {cap})" };
+        List(Str) l2 = l1.concat([copy]);
         return GT {.pos = inner.pos, .val = dst, .ty = toty, .cnt = 0, .err = "", .glines = inner.glines, .lines = l2, .tmp = t2, .lbl = inner.lbl, .tail = false};
     }
     // List(T, N) -> List(T): dense-box every inline slot into a heap list.
@@ -4440,6 +4533,9 @@ Str provider_family_of_line(Str line) {
     if (str_contains(line, "@resid_disp_")) { return "display"; }
     if (str_contains(line, "@resid_term_raw") || str_contains(line, "@resid_term_restore")) { return "terminal!"; }
     if (str_contains(line, "@resid_term_")) { return "terminal"; }
+    if (str_contains(line, "@resid_device_call_w(")) { return "device!"; }
+    if (str_contains(line, "@resid_device_call(")) { return "device"; }
+    if (str_contains(line, "@resid_device_secret(")) { return "device"; }
     if (str_contains(line, "@resid_clock_sleep_ns")) { return "clock!"; }
     if (str_contains(line, "@resid_clock_")) { return "clock"; }
     return "";
@@ -4877,11 +4973,16 @@ List(Str) tco_function(List(Str) head, List(Str) body, Str fname, Str rty, List(
 // Process entry point: run the program's main on a thread with a large
 // stack (runtime/resid_rt.c resid_run_main). Resid loops are recursion, and
 // both user programs and the compiler's own evaluator recurse deeply.
-List(Str) main_entry_ir() {
+List(Str) main_entry_ir(Bool sec) {
     // The process entry (no C library): resid_start sets up the process,
-    // main runs, its result is the exit status.
-    return ["define i32 @main() {", "entry:", "  %r = call i32 @resid_run_main(ptr @resid_user_main)", "  ret i32 %r", "}"].concat(start_entry_ir());
+    // main runs, its result is the exit status. A program that handles
+    // Secret(T) values (spec §48) switches the allocator to secret mode
+    // first.
+    return secret_mode_decl(sec).concat(["define i32 @main() {", "entry:"]).concat(secret_mode_call(sec)).concat(["  %r = call i32 @resid_run_main(ptr @resid_user_main)", "  ret i32 %r", "}"]).concat(start_entry_ir());
 }
+
+List(Str) secret_mode_decl(Bool sec) { return if (sec) { ["declare i8 @resid_secret_mode_set(i1)"] } else { nil_list() }; }
+List(Str) secret_mode_call(Bool sec) { return if (sec) { ["  %sm = call i8 @resid_secret_mode_set(i1 true)"] } else { nil_list() }; }
 
 // The process entry alone, around whichever @main the program defines (a
 // test binary's is generated).
@@ -5231,13 +5332,32 @@ RRes imp_resolve_lines_a(List(Str) lines, Int i, Int n, Str dir, Str sb, Str don
         // A missing module is an error, not an empty module.
         Bool missing = !str_contains(done, key) && !filesystem.exists(full);
         Bool mwarned = if (missing) { eprintln("error[E0221]: cannot find module `" + name + "` imported by " + path + " (looked for " + full + ")") } else { false };
-        RRes sub0 = if (missing) {
+        // `device` names the device provider everywhere (spec §49): an
+        // import alias of that name would turn `device.ioctl(...)` into a
+        // call of the module's own `ioctl`.
+        Bool devalias = alias == "device";
+        Bool dwarned = if (devalias) { eprintln("error[E0001]: type error: `device` is the device provider (spec §49) and cannot name an import (`import \"" + name + "\" as device`); choose another alias") } else { false };
+        // A module that compiles inside a sandbox (an attenuated import or a
+        // manifest dependency) keeps the standard library outside it: each
+        // stdlib file it reaches through its own files is resolved here
+        // first, at this level, so inside the sandbox it is already done.
+        // Its calls into the stdlib are still bounded by the sandbox
+        // (transitively, E0211/E0215); only uncalled stdlib code no longer
+        // counts against the ceiling, wherever the import order put it.
+        Bool fresh = !devalias && !missing && !str_contains(done, key);
+        Bool depw = depmap != "" && full != dir + "/" + name && full != name && depmap_caps_lines(str_split(depmap, "\n"), 0, depmap_dep_name(depmap, name)) != "\x01";
+        RRes hoist = if (fresh && ((att && !clash) || depw)) { imp_hoist_std(imp_std_reach(full, depmap, ";", 0, []), 0, done, depth, depmap, ml) } else { RRes {.text = "", .done = done, .map = "", .nl = 0} };
+        Str doneh = hoist.done;
+        Int mlh = ml + hoist.nl;
+        RRes sub0 = if (devalias) {
+            RRes {.text = "import_alias_reserved\n", .done = done, .map = "", .nl = 1}
+        } else { if (missing) {
             RRes {.text = "import_not_found\n", .done = done, .map = "", .nl = 1}
         } else { if (str_contains(done, key)) {
             RRes {.text = if (clash) { "import_attenuation_conflict\n" } else { "" }, .done = done, .map = "", .nl = if (clash) { 1 } else { 0 }}
         } else {
-            imp_resolve_file_vis(full, done, depth, depmap, sel, ml)
-        } };
+            imp_resolve_file_vis(full, doneh, depth, depmap, sel, mlh)
+        } } };
         RRes sub1 = if (att && !clash) { RRes {.text = "sandbox (" + imp_att_caps(clause, ra + 10, 1, ra + 10) + ") { " + sub0.text + "}\n", .done = sub0.done, .map = sub0.map, .nl = sub0.nl + 1} } else { sub0 };
         // A manifest dependency compiles inside its declared ceiling.
         Str dcaps = if (depmap == "" || sub1.text == "" || full == dir + "/" + name || full == name) { "\x01" } else { depmap_caps_lines(str_split(depmap, "\n"), 0, depmap_dep_name(depmap, name)) };
@@ -5246,16 +5366,56 @@ RRes imp_resolve_lines_a(List(Str) lines, Int i, Int n, Str dir, Str sb, Str don
         // Keep the importing file's line numbering: the module text goes
         // where the import line was, and the import line itself becomes
         // the newline that ends it.
-        Str sb2 = str_sb_append(sb, sub.text);
+        Str sb2 = str_sb_append(str_sb_append(sb, hoist.text), sub.text);
         Str al2 = if (alias == "") { aliases } else { aliases + ";" + alias + ";" };
-        Int ml2 = ml + sub.nl;
-        Str map2 = map + sub.map + f"{ml2} {i + 2} " + path + "\n";
+        Int ml2 = mlh + sub.nl;
+        Str map2 = map + hoist.map + sub.map + f"{ml2} {i + 2} " + path + "\n";
         return imp_resolve_lines_a(lines, ni2, n, dir, sb2, sub.done, depth, depmap, al2, path, ml0, ml2, map2);
     }
     Int ni3 = i + 1;
     Str line2 = if (aliases == "") { line } else { imp_unalias(line, aliases) };
     Str sb3 = str_sb_append(str_sb_append(sb, line2), "\n");
     return imp_resolve_lines_a(lines, ni3, n, dir, sb3, done, depth, depmap, aliases, path, ml0, ml + 1, map);
+}
+
+// The standard-library files a module reaches through its own imports
+// (not through other stdlib files: those come with the file that imports
+// them), each once, in import order. Only under an absolute stdlib root,
+// as for E0260; otherwise none.
+@requires(filesystem(readonly))
+List(Str) imp_std_reach(Str path, Str depmap, Str seen, Int depth, List(Str) acc) {
+    if (depth > 8 || str_contains(seen, ";" + path + ";") || !filesystem.exists(path)) { return acc; }
+    List(Str) lines = str_split(filesystem.read_all(path), "\n");
+    return imp_std_reach_at(lines, 0, imp_dir_of(path, str_len(path) - 1), depmap, seen + path + ";", depth, acc);
+}
+
+@requires(filesystem(readonly))
+List(Str) imp_std_reach_at(List(Str) lines, Int i, Str dir, Str depmap, Str seen, Int depth, List(Str) acc) {
+    if (i >= lines.len()) { return acc; }
+    Str name = if (ck_str_starts_with(lines[i], "import ")) { imp_target(lines[i]) } else { "" };
+    if (name == "") { return imp_std_reach_at(lines, i + 1, dir, depmap, seen, depth, acc); }
+    Str full = imp_resolve_target(dir, name, depmap);
+    Str sd = depmap_stdlib(str_split(depmap, "\n"), 0);
+    Str root = imp_normalize(sd) + "/";
+    Bool std = ck_str_starts_with(sd, "/") && ck_str_starts_with(full, root);
+    Bool have = imp_list_has(acc, full, 0);
+    List(Str) acc2 = if (std) { if (have) { acc } else { acc.concat([full]) } } else { imp_std_reach(full, depmap, seen, depth + 1, acc) };
+    return imp_std_reach_at(lines, i + 1, dir, depmap, seen + full + ";", depth, acc2);
+}
+
+Bool imp_list_has(List(Str) xs, Str x, Int i) {
+    if (i >= xs.len()) { return false; }
+    return xs[i] == x || imp_list_has(xs, x, i + 1);
+}
+
+// Resolve the hoisted stdlib files in order, at the importer's level.
+@requires(filesystem(readonly))
+RRes imp_hoist_std(List(Str) fs, Int i, Str done, Int depth, Str depmap, Int ml) {
+    if (i >= fs.len()) { return RRes {.text = "", .done = done, .map = "", .nl = 0}; }
+    if (str_contains(done, ";" + fs[i] + ";")) { return imp_hoist_std(fs, i + 1, done, depth, depmap, ml); }
+    RRes r = imp_resolve_file_vis(fs[i], done, depth, depmap, "*", ml);
+    RRes rest = imp_hoist_std(fs, i + 1, r.done, depth, depmap, ml + r.nl);
+    return RRes {.text = r.text + rest.text, .done = rest.done, .map = r.map + rest.map, .nl = r.nl + rest.nl};
 }
 
 // The capability list of an import's `@requires(...)`, from `from` to its
@@ -6689,7 +6849,7 @@ pub Bool num_all_same(List(Str) ts, Int i, Str t) {
 
 // Runtime primitives (compiler-only): argument and result types.
 ERes raw_sig(Str name, Str op, Str argtys, Int argc, Int pos) {
-    Str want = if (op == "sp" || op == "arch") { "" } else if (op == "nr" || op == "tp_set") { "Int" } else if (op == "cpuid" || op == "cpuid_ab") { "Int,Int" } else { if (op == "catch") { "Int,Int,Int" } else { if (op == "popcount") { "Int" } else { want0(op) } } };
+    Str want = if (op == "sp" || op == "arch") { "" } else if (op == "nr" || op == "tp_set" || op == "rdseed") { "Int" } else if (op == "cpuid" || op == "cpuid_ab") { "Int,Int" } else { if (op == "catch") { "Int,Int,Int" } else { if (op == "popcount") { "Int" } else { want0(op) } } };
     Str rty = if (op == "cas") { "Bool" } else { if (op == "str") { "Str" } else { if (op == "bits_f64") { "Float" } else { if (op == "f128_bits") { "Int(128)" } else { if (op == "bits_f128") { "Float(128)" } else { "Int" } } } } };
     if (want == "?") { return ERes {.pos = pos, .ty = "", .err = "unknown runtime primitive " + name}; }
     Bool scalar = argtys == "Int" || argtys == "Float" || argtys == "Bool";
@@ -7074,6 +7234,28 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (argc == 1 && is_int_ty(ch) && ty_bits(ch) <= 64) { return ERes {.pos = pos, .ty = ch, .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "ct_hide expects one integer of at most 64 bits, got (" + rawtys + ")"};
     }
+    // secret / declassify (PLAN-secret-type.md): the checker types them
+    // in gcheck (sec_call); this is the payload view used after erasure.
+    if (name == "secret" || name == "classify") {
+        if (argc == 1) { return ERes {.pos = pos, .ty = "Secret(" + str_trim(rawtys) + ")", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "secret(x) takes 1 argument"};
+    }
+    if (name == "declassify") {
+        Str d0 = str_trim(ty_list_at(rawtys, 0));
+        Bool dok = argc == 2 && ck_str_starts_with(d0, "Secret(") && str_trim(ty_list_at(rawtys, 1)) == "Str";
+        if (dok) { return ERes {.pos = pos, .ty = str_trim(str_slice(d0, 7, str_len(d0) - 1)), .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "declassify expects (Secret(T), Str), got (" + rawtys + ")"};
+    }
+    if (name == "secret_split" || name == "secret_join") {
+        if (argc == 1) { return ERes {.pos = pos, .ty = str_trim(rawtys), .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " takes 1 argument"};
+    }
+    if (name == "ct_select") {
+        Str s1 = str_trim(ty_list_at(rawtys, 1));
+        Str v1 = if (ck_str_starts_with(s1, "Secret(")) { str_trim(str_slice(s1, 7, str_len(s1) - 1)) } else { s1 };
+        if (argc == 3) { return ERes {.pos = pos, .ty = v1, .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "ct_select(c, a, b) takes 3 arguments"};
+    }
     if (name == "ct_secret" || name == "ct_public") {
         Str ca = str_trim(rawtys);
         if (argc == 1 && is_int_ty(ca)) { return ERes {.pos = pos, .ty = ca, .err = ""}; }
@@ -7103,6 +7285,38 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (builtin_args(argtys, "Int,List(Int)")) { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_tcp_send_bin expects (Int, List(Int)), got (" + argtys + ")"};
     }
+    if (name == "resid_chal_new") {
+        if (builtin_args(argtys, "List(Int),Int,Int")) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (List(Int), Int, Int), got (" + argtys + ")"};
+    }
+    if (name == "resid_chal_mark") {
+        if (builtin_args(argtys, "Int,Int")) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (Int, Int), got (" + argtys + ")"};
+    }
+    if (name == "resid_chal_spend" || name == "resid_chal_left") {
+        if (argtys == "Int") { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (Int), got (" + argtys + ")"};
+    }
+    if (name == "resid_chal_bind") {
+        if (builtin_args(argtys, "Int,List(Int),List(Int)")) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (Int, List(Int), List(Int)), got (" + argtys + ")"};
+    }
+    if (name == "resid_chal_bound") {
+        if (argtys == "Int") { return ERes {.pos = pos, .ty = "List(Int)", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (Int), got (" + argtys + ")"};
+    }
+    if (name == "resid_tr_note") {
+        if (argtys == "List(Int)") { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (List(Int)), got (" + argtys + ")"};
+    }
+    if (name == "resid_tr_read") {
+        if (argtys == "") { return ERes {.pos = pos, .ty = "List(Int)", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " takes no arguments, got (" + argtys + ")"};
+    }
+    if (name == "resid_random_os" || name == "resid_random_cpu") {
+        if (argtys == "Int") { return ERes {.pos = pos, .ty = "List(Int)", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (Int), got (" + argtys + ")"};
+    }
     if (name == "resid_tcp_recv_bin") {
         if (builtin_args(argtys, "Int,Int")) { return ERes {.pos = pos, .ty = "List(Int)", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_tcp_recv_bin expects (Int, Int), got (" + argtys + ")"};
@@ -7122,6 +7336,19 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
     if (name == "resid_tcp_shutdown") {
         if (argtys == "Int") { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_tcp_shutdown expects (Int), got (" + argtys + ")"};
+    }
+    // The isolated device host (runtime/rt/device.resid): a serialized
+    // request in, a serialized reply out. Only lib/dev/device.resid's engine
+    // may call it (E0260); a write descriptor goes through the _w entry.
+    if (name == "resid_device_call" || name == "resid_device_call_w") {
+        if (argtys == "List(Int)") { return ERes {.pos = pos, .ty = "List(Int)", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (List(Int)), got (" + argtys + ")"};
+    }
+    // A secret output of the last device call on this thread, taken once
+    // (runtime/rt/device.resid): only the engine may call it (E0260).
+    if (name == "resid_device_secret") {
+        if (argtys == "Int") { return ERes {.pos = pos, .ty = "List(Secret(UInt(8)))", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (Int), got (" + argtys + ")"};
     }
     if (name == "resid_tcp_poll") {
         if (builtin_args(argtys, "List(Int),List(Int),Int")) { return ERes {.pos = pos, .ty = "List(Int)", .err = ""}; }
@@ -7369,6 +7596,26 @@ Int _count_bytes(Str inner, Int i, Int count) {
     Int c = str_char_at(inner, i);
     if (c == 92) { return _count_bytes(inner, if (str_char_at(inner, i + 1) == 120) { i + 4 } else { i + 2 }, count + 1); }
     return _count_bytes(inner, i + 1, count + 1);
+}
+
+// Whether a byte string literal holds a zero byte (`\0` or `\x00`). A
+// heap Bytes ends at its first zero byte, so such a literal is refused
+// there rather than cut short.
+Bool bytes_literal_has_zero(Str text) {
+    Str inner = str_slice(text, 2, str_len(text) - 1);
+    return bytes_zero_at(inner, 0, str_len(inner));
+}
+
+Bool bytes_zero_at(Str inner, Int i, Int n) {
+    if (i >= n) { return false; }
+    if (str_char_at(inner, i) != 92) { return bytes_zero_at(inner, i + 1, n); }
+    Int e = str_char_at(inner, i + 1);
+    if (e == 48) { return true; }
+    if (e == 120) {
+        if (str_char_at(inner, i + 2) == 48 && str_char_at(inner, i + 3) == 48) { return true; }
+        return bytes_zero_at(inner, i + 4, n);
+    }
+    return bytes_zero_at(inner, i + 2, n);
 }
 
 // Known base type names usable in a cast `(Type) expr`.
@@ -7905,9 +8152,23 @@ Str list_join(List(Str) xs, Int i, Str sep, Str acc) {
     return list_join(xs, k, sep, piece);
 }
 
+// A capability list as diagnostics show it, in source spelling
+// (`clock:ro` is `clock(readonly)`).
 Str fmt_caps(Str csv) {
     if (csv == "" || csv == "_") { return ""; }
-    return list_join(str_split(csv, ","), 0, ", ", "");
+    return list_join(caps_spelled(str_split(csv, ","), 0, ListBuf()), 0, ", ", "");
+}
+
+List(Str) caps_spelled(List(Str) cs, Int i, ListBuf(Str) acc) {
+    if (i >= cs.len()) { return acc.finish(); }
+    return caps_spelled(cs, i + 1, acc.push(cap_spell(cs[i])));
+}
+
+// One encoded capability as source spells it: `fam:ro` is
+// `fam(readonly)`, anything else is its family.
+Str cap_spell(Str cap) {
+    if (cap_readonly(cap)) { return cap_family(cap) + "(readonly)"; }
+    return cap;
 }
 
 Str first_missing_req_at(List(Str) reqs, Str ceiling, Int i) {
@@ -7965,6 +8226,7 @@ Bool is_prov_family(Str f) {
     if (f == "args") { return true; }
     if (f == "process") { return true; }
     if (f == "clock") { return true; }
+    if (f == "device") { return true; }
     return false;
 }
 
@@ -7993,8 +8255,12 @@ Bool is_prov_verb(Str fam, Str v) {
     if (fam == "args") { if (v == "count") { return true; } return v == "get"; }
     if (fam == "process") { return v == "run"; }
     if (fam == "clock") { return v == "now_ns" || v == "now_sec" || v == "monotonic_ns" || v == "sleep_ns"; }
+    if (fam == "device") { return dev_verb(v); }
     return false;
 }
+
+// The generic device verbs (spec §49); each takes a descriptor from lib/dev/.
+Bool dev_verb(Str v) { return v == "ioctl" || v == "transact" || v == "configfs_report" || v == "read_attr" || v == "sequence"; }
 
 Str first_missing_family_at(List(Str) fams, Str ceiling, Int i) {
     if (i >= fams.len()) { return ""; }
@@ -8020,14 +8286,15 @@ Str e0218_check_func(Sigs fs, List(Str) eff, List(Str) pcsv, Int fi) {
     return "provider call family `" + fam + "` is not granted to this region's capability set [" + fmt_caps(effc) + "] (spec §21.3)";
 }
 
-Bool e0218_check_all(Sigs fs, List(Str) eff, List(Str) pcsv, Int i) {
-    if (i >= fs.names.len()) { return false; }
+Bool e0218_check_all(Sigs fs, List(Str) eff, List(Str) pcsv, Int i) { return e0218_check_at(fs, eff, pcsv, i, false); }
+
+// A loop, not `rest` after the recursive call: a frame per function held
+// across the walk cost the self-compile about 1 MB per function.
+Bool e0218_check_at(Sigs fs, List(Str) eff, List(Str) pcsv, Int i, Bool acc) {
+    if (i >= fs.names.len()) { return acc; }
     Str m = e0218_check_func(fs, eff, pcsv, i);
     Bool printed = if (m != "") { eprintln("error[E0218]: " + m) } else { false };
-    Int k = i + 1;
-    Bool rest = e0218_check_all(fs, eff, pcsv, k);
-    if (printed) { return true; }
-    return rest;
+    return e0218_check_at(fs, eff, pcsv, i + 1, acc || printed);
 }
 
 // ─── Spawn capability bounds (spec §19) ─────────────────────────
@@ -8059,7 +8326,7 @@ Str spawn_call_check(Sigs fs, Str callee, Str parent) {
     if (reqcsv == "") { return ""; }
     Str missing = first_missing_req(reqcsv, parent);
     if (missing == "") { return ""; }
-    return "error[E0215]: call to `" + callee + "` requires capability `" + missing + "` which is not granted to this region's capability set [" + fmt_caps(parent) + "]";
+    return "error[E0215]: call to `" + callee + "` requires capability `" + cap_spell(missing) + "` which is not granted to this region's capability set [" + fmt_caps(parent) + "]";
 }
 
 // Reverse call-graph index (callee name -> comma-joined caller names),
@@ -8170,7 +8437,7 @@ Str e0211_check_callee(Sigs fs, Str caller_name, Str caller_eff, Str callee_name
     if (j < 0) { return ""; }
     Str missing = first_missing_req(fs.reqs[j], caller_eff);
     if (missing == "") { return ""; }
-    return "call to `" + callee_name + "` requires capability `" + missing + "` which exceeds the caller's effective sandbox ceiling [" + fmt_caps(caller_eff) + "] (attenuation is transitive across the call closure)";
+    return "call to `" + callee_name + "` requires capability `" + cap_spell(missing) + "` which exceeds the caller's effective sandbox ceiling [" + fmt_caps(caller_eff) + "] (attenuation is transitive across the call closure)";
 }
 Str e0211_check_callees(Sigs fs, Str caller_name, Str caller_eff, List(Str) callees, Int k) {
     if (k >= callees.len()) { return ""; }
@@ -8183,15 +8450,14 @@ Str e0211_check_callees(Sigs fs, Str caller_name, Str caller_eff, List(Str) call
 // Whole-program passes accumulate (rather than stop at the first hit):
 // a violation in one function must not hide a different, later
 // function's diagnostic that a specific caller is looking for.
-Bool e0211_check_all(Sigs fs, List(Str) eff, List(Str) edges, Int i) {
-    if (i >= fs.names.len()) { return false; }
+Bool e0211_check_all(Sigs fs, List(Str) eff, List(Str) edges, Int i) { return e0211_check_at(fs, eff, edges, i, false); }
+
+Bool e0211_check_at(Sigs fs, List(Str) eff, List(Str) edges, Int i, Bool acc) {
+    if (i >= fs.names.len()) { return acc; }
     Str caller_eff = eff[i];
     Str m = if (caller_eff == "") { "" } else { e0211_check_callees(fs, fs.names[i], caller_eff, csv_split_or_empty(edges[i]), 0) };
     Bool printed = if (m != "") { eprintln("error[E0211]: " + m) } else { false };
-    Int k = i + 1;
-    Bool rest = e0211_check_all(fs, eff, edges, k);
-    if (printed) { return true; }
-    return rest;
+    return e0211_check_at(fs, eff, edges, i + 1, acc || printed);
 }
 
 // ─── Graph-reduction pass (spec §33 / §36) ─────────────────────
@@ -8215,6 +8481,8 @@ Bool e0211_check_all(Sigs fs, List(Str) eff, List(Str) edges, Int i) {
 
 import "../lib/crypto.resid";
 import "../lib/ed25519.resid";
+import "../lib/word.resid";
+import "../lib/ed25519g.resid";
 import "../lib/cose.resid";
 import "graph.resid";
 import "fmt.resid";
@@ -8228,6 +8496,12 @@ import "gart.resid";
 import "desugar.resid";
 import "lsp.resid";
 import "native.resid";
+import "device.resid";
+import "labels.resid";
+import "layout.resid";
+import "ekey.resid";
+import "attest.resid";
+import "verify_pins.resid";
 
 // ─── `<out>.resid-notes.cbor` sidecar (spec §27/§34) ───────────────
 // Byte-exact with the Rust pipeline's `resid_notes`/`resid_cache::cbor`
@@ -8390,8 +8664,13 @@ Str graph_hash_esc(Str hex, Int i, StrBuf acc) {
 // `comp` is the SHA-256 of the compiler binary itself, [] when unreadable.
 // `reduce` is a reduction budget other than the default ("" for none): it
 // changes what the output computes at compile time.
+// `devices`: one "name\x1fpath\x1fop\x1frequest\x1fstability" line per
+// device descriptor the program reaches (spec §49), sorted.
+// `attest`: the anchors, policies and decisions a program declares and
+// whether the verify closure was pinned (compiler/attest.resid), one text
+// per line.
 @requires(filesystem(readonly))
-List(Int) prov_payload(Str out, Str profile, Str done, List(Int) code, List(Int) notes, List(Int) graph, Str grant, List(Int) comp, Str native, Str reduce) {
+List(Int) prov_payload(Str out, Str profile, Str done, List(Int) code, List(Int) notes, List(Int) graph, Str grant, List(Int) comp, Str native, Str reduce, Str devices, Str nasm, Str attest) {
     List(Str) paths = str_split(done, ";");
     List(Str) gs = if (grant == "") { [] } else { str_split(grant, ",") };
     // `native`: "module=sha256hex;..." for each linked native module (§47).
@@ -8401,19 +8680,68 @@ List(Int) prov_payload(Str out, Str profile, Str done, List(Int) code, List(Int)
     Int copt = if (comp.len() == 32) { 1 } else { 0 };
     Int vopt = if (ns.len() > 0) { 1 } else { 0 };
     Int ropt = if (reduce != "") { 1 } else { 0 };
-    List(Int) m0 = cbe_map(6 + nopt + gopt + copt + vopt + ropt, []);
+    List(Str) dvs = if (devices == "") { [] } else { str_split(devices, "\n") };
+    Int dopt = if (dvs.len() > 0) { 1 } else { 0 };
+    // `nasm`: "module\x1fsummary" lines for each native module with inline
+    // asm (compiler/native.resid's nt_asm_summary), sorted by module.
+    List(Str) nas = if (nasm == "") { [] } else { prov_by_key(str_split(nasm, "\n")) };
+    Int aopt = if (nas.len() > 0) { 1 } else { 0 };
+    List(Str) ats = if (attest == "") { [] } else { str_split(attest, "\n") };
+    Int topt = if (ats.len() > 0) { 1 } else { 0 };
+    List(Int) m0 = cbe_map(6 + nopt + gopt + copt + vopt + ropt + dopt + aopt + topt, []);
     List(Int) m1 = cbe_bytes(code, cbe_text("code", m0));
     List(Int) m2 = prov_texts(gs, 0, cbe_array(gs.len(), cbe_text("grant", m1)));
     List(Int) m3 = if (gopt == 1) { cbe_bytes(graph, cbe_text("graph", m2)) } else { m2 };
     List(Int) m4a = if (nopt == 1) { cbe_bytes(notes, cbe_text("notes", m3)) } else { m3 };
-    List(Int) m4 = if (vopt == 1) { prov_native(ns, 0, cbe_map(ns.len(), cbe_text("native", m4a))) } else { m4a };
+    List(Int) m4b = if (topt == 1) { prov_texts(ats, 0, cbe_array(ats.len(), cbe_text("attest", m4a))) } else { m4a };
+    List(Int) m4 = if (vopt == 1) { prov_native(ns, 0, cbe_map(ns.len(), cbe_text("native", m4b))) } else { m4b };
     List(Int) m5a = cbe_text(out, cbe_text("output", m4));
-    List(Int) m5 = if (ropt == 1) { cbe_text(reduce, cbe_text("reduce", m5a)) } else { m5a };
+    List(Int) m5b = if (ropt == 1) { cbe_text(reduce, cbe_text("reduce", m5a)) } else { m5a };
+    List(Int) m5 = if (dopt == 1) { prov_devices(dvs, 0, cbe_array(dvs.len(), cbe_text("devices", m5b))) } else { m5b };
     List(Int) m6 = cbe_text(profile, cbe_text("profile", m5));
     List(Int) m7 = cbe_array(prov_count_paths(paths, 0, 0), cbe_text("sources", m6));
     List(Int) m8 = prov_sources(paths, 0, m7);
     List(Int) m9 = if (copt == 1) { cbe_bytes(comp, cbe_text("compiler", m8)) } else { m8 };
-    return cbe_text(prov_toolchain(), cbe_text("toolchain", m9));
+    List(Int) m10 = cbe_text(prov_toolchain(), cbe_text("toolchain", m9));
+    return if (aopt == 1) { prov_nasm(nas, 0, cbe_map(nas.len(), cbe_text("native_asm", m10))) } else { m10 };
+}
+
+// "key\x1fvalue" entries in canonical CBOR order of their keys.
+List(Str) prov_by_key(List(Str) xs) { return prov_by_key_at(prov_sort_keys(prov_keys_of(xs, 0, ListBuf())), xs, 0, ListBuf()); }
+
+List(Str) prov_keys_of(List(Str) xs, Int i, ListBuf(Str) acc) { return if (i >= xs.len()) { acc.finish() } else { prov_keys_of(xs, i + 1, acc.push(str_split(xs[i], kg_us())[0])) }; }
+
+List(Str) prov_by_key_at(List(Str) ks, List(Str) xs, Int i, ListBuf(Str) acc) {
+    if (i >= ks.len()) { return acc.finish(); }
+    return prov_by_key_at(ks, xs, i + 1, acc.push(prov_entry_of(xs, ks[i], 0)));
+}
+
+Str prov_entry_of(List(Str) xs, Str k, Int i) { return if (i >= xs.len()) { "" } else if (str_split(xs[i], kg_us())[0] == k) { xs[i] } else { prov_entry_of(xs, k, i + 1) }; }
+
+// "module\x1fsummary" entries as a map from module name to the summary.
+List(Int) prov_nasm(List(Str) xs, Int i, List(Int) acc) {
+    if (i >= xs.len()) { return acc; }
+    List(Str) f = str_split(xs[i], kg_us());
+    return prov_nasm(xs, i + 1, cbe_text(f[1], cbe_text(f[0], acc)));
+}
+
+// Each device descriptor as {op, name, path, request, stability} (keys in
+// canonical order).
+List(Int) prov_devices(List(Str) ds, Int i, List(Int) acc) {
+    if (i >= ds.len()) { return acc; }
+    List(Str) f = str_split(ds[i], kg_us());
+    if (f.len() != 5) { return prov_devices(ds, i + 1, acc); }
+    List(Int) m = cbe_text(f[2], cbe_text("op", cbe_map(5, acc)));
+    List(Int) m2 = cbe_text(f[1], cbe_text("path", cbe_text(f[0], cbe_text("name", m))));
+    List(Int) m3 = cbe_text(f[4], cbe_text("stability", cbe_uint(str_parse_int(f[3]), cbe_text("request", m2))));
+    return prov_devices(ds, i + 1, m3);
+}
+
+// The dependency map's "@devices::name::a,b" bound lines, each ending in
+// a newline (spec §21.1, resid-manifest's `devices = [...]`).
+Str dv_bound_lines(List(Str) ls, Int i, Str acc) {
+    if (i >= ls.len()) { return acc; }
+    return dv_bound_lines(ls, i + 1, if (ck_str_starts_with(ls[i], "@devices::")) { acc + ls[i] + "\n" } else { acc });
 }
 
 // `module=hex` entries as a map from module name to the artifact's SHA-256.
@@ -8496,14 +8824,17 @@ List(Int) prov_u32(Int v) {
 }
 
 // Sign `out` in place. Returns 0, or 1 when signing is required but fails.
-@requires(filesystem, environment)
-Int write_provenance(Str out, Str profile, Str done, Str grant, Str native, Str reduce) {
+// The seed is held as a secret from the moment it is read: the public key
+// and the signature are computed by the secret copy of lib/ed25519g.resid
+// and published (declassified) by it, which is the declassify grant here.
+@requires(filesystem, environment, declassify)
+Int write_provenance(Str out, Str profile, Str done, Str grant, Str native, Str reduce, Str devices, Str nasm, Str attest) {
     Str kpath = prov_key_path();
     if (kpath == "") {
         println("note: provenance: unsigned " + profile + " build (no signing key)");
         return 0;
     }
-    List(Int) seed = prov_read_seed(kpath);
+    List(Secret(UInt(8))) seed = secret_bytes(prov_read_seed(kpath));
     if (seed.len() != 32) {
         println("error: provenance: signing key " + kpath + " is not a 32-byte hex seed");
         return 1;
@@ -8511,14 +8842,14 @@ Int write_provenance(Str out, Str profile, Str done, Str grant, Str native, Str 
     List(Int) code = filesystem.sha256(out);
     List(Int) notes = prov_file_hash(out + ".resid-notes.cbor");
     List(Int) graph = prov_file_hash(out + ".resid-graph.cbor");
-    List(Int) map = prov_payload(out, profile, done, code, notes, graph, grant, prov_self_hash(), native, reduce);
+    List(Int) map = prov_payload(out, profile, done, code, notes, graph, grant, prov_self_hash(), native, reduce, devices, nasm, attest);
     Str ekey = environment.get("RESID_PROV_KEY");
     Bool conceal = environment.get("RESID_PROV_ENCRYPT") == "1";
     if (conceal && ekey == "") {
         println("error: provenance: RESID_PROV_ENCRYPT=1 needs RESID_PROV_KEY");
         return 1;
     }
-    List(Int) pubk = pub_key(seed);
+    List(Int) pubk = ed25519g_pub(seed);
     Str kid = prov_kid(pubk);
     List(Int) payload = if (conceal) { cose_encrypt0_seal(map, cose_hex_decode(ekey), kid) } else { map };
     List(Int) cose = cose_sign1(payload, kid, seed);
@@ -8535,7 +8866,14 @@ Int write_provenance(Str out, Str profile, Str done, Str grant, Str native, Str 
 
 // ─── `residc keygen [dir]` ────────────────────────────────────────
 
-@requires(filesystem)
+List(Int) keygen_widen(List(UInt(8)) b, Int i, ListBuf(Int) acc) {
+    if (i >= b.len()) { return acc.finish(); }
+    return keygen_widen(b, i + 1, acc.push((Int) b[i]));
+}
+
+// The seed is a secret from the start; writing it to the owner-only key
+// file and printing the public key are the two declassifications.
+@requires(filesystem, declassify)
 Int cmd_keygen(Str dir) {
     Str kp = dir + "/resid-ed25519.key";
     if (filesystem.exists(kp)) {
@@ -8543,10 +8881,11 @@ Int cmd_keygen(Str dir) {
         return 1;
     }
     Bool mk = filesystem.create_dir(dir);
-    List(Int) seed = random_bytes(32);
-    Str pub = hex_encode(pub_key(seed));
+    List(Secret(UInt(8))) seed = secret_bytes(random_bytes(32));
+    Str pub = hex_encode(ed25519g_pub(seed));
     // The secret key is readable by its owner only.
-    Bool w1 = filesystem.write_secret(kp, bytes_of(hex_encode(seed) + "\n"));
+    List(UInt(8)) keep = declassify(secret_join(seed), "persist the signing key (owner-only file)");
+    Bool w1 = filesystem.write_secret(kp, bytes_of(hex_encode(keygen_widen(keep, 0, ListBuf())) + "\n"));
     Bool w2 = filesystem.write_all(dir + "/resid-ed25519.pub", pub + "\n");
     if (!w1 || !w2) {
         println("error: keygen: cannot write keys in " + dir);
@@ -8652,12 +8991,84 @@ List(Str) vf_native_at(List(Int) b, Int pos, Int left, ListBuf(Str) acc) {
     return vf_native_at(b, v.pos, left - 1, acc.push(cbe_ascii(k.bytes, 0, "") + " " + hex_encode(v.bytes)));
 }
 
+// The `devices` array (spec §49) as "name|op|path|request|stability"
+// entries; [] when absent.
+List(Str) vf_devices_of(List(Int) b) {
+    List(Str) empty = [];
+    Int p = cbe_map_find_in(b, 0, "devices");
+    if (p < 0) { return empty; }
+    CbeHead a = cbe_read_head(b, p);
+    if (!a.ok || a.major != 4) { return empty; }
+    return vf_devices_at(b, a.pos, a.val, ListBuf());
+}
+
+List(Str) vf_devices_at(List(Int) b, Int pos, Int left, ListBuf(Str) acc) {
+    if (left <= 0) { return acc.finish(); }
+    Int rq = cbe_map_find_in(b, pos, "request");
+    CbeHead r = if (rq < 0) { CbeHead {.ok = false, .major = 0, .val = 0, .pos = pos} } else { cbe_read_head(b, rq) };
+    Str e = vf_map_text(b, pos, "name") + "|" + vf_map_text(b, pos, "op") + "|" + vf_map_text(b, pos, "path") + "|" + f"{if (r.ok && r.major == 0) { r.val } else { 0 - 1 }}" + "|" + vf_map_text(b, pos, "stability");
+    return vf_devices_at(b, cbe_skip(b, pos), left - 1, acc.push(e));
+}
+
+Str vf_map_text(List(Int) b, Int pos, Str key) {
+    Int p = cbe_map_find_in(b, pos, key);
+    if (p < 0) { return ""; }
+    CbeStr v = cbe_read_str(b, p, 3);
+    return if (v.ok) { cbe_ascii(v.bytes, 0, "") } else { "" };
+}
+
+// The signer's word for which kernel interfaces the program reaches.
+Bool vf_print_devices(List(Str) ds, Int i) {
+    if (i >= ds.len()) { return true; }
+    List(Str) p = str_split(ds[i], "|");
+    Str req = if (str_parse_int(p[3]) > 0) { f", request 0x{str_parse_int(p[3]):hex}" } else { "" };
+    println("attestation: device " + p[0] + " (" + p[1] + " " + p[2] + req + ", " + p[4] + ")");
+    return vf_print_devices(ds, i + 1);
+}
+
 // The signer's word for which artifact each native module was built from.
 Bool vf_print_native(List(Str) ns, Int i) {
     if (i >= ns.len()) { return true; }
     List(Str) p = str_split(ns[i], " ");
     println("attestation: native module " + p[0] + " from an artifact with SHA-256 " + p[1]);
     return vf_print_native(ns, i + 1);
+}
+
+// The `native_asm` map: "module\x1fsummary" entries; [] when absent.
+List(Str) vf_nasm_of(List(Int) b) {
+    List(Str) empty = [];
+    Int p = cbe_map_find_in(b, 0, "native_asm");
+    if (p < 0) { return empty; }
+    CbeHead m = cbe_read_head(b, p);
+    if (!m.ok || m.major != 5) { return empty; }
+    return vf_nasm_at(b, m.pos, m.val, ListBuf());
+}
+
+List(Str) vf_nasm_at(List(Int) b, Int pos, Int left, ListBuf(Str) acc) {
+    if (left <= 0) { return acc.finish(); }
+    CbeStr k = cbe_read_str(b, pos, 3);
+    CbeStr v = cbe_read_str(b, k.pos, 3);
+    if (!k.ok || !v.ok) { return acc.finish(); }
+    return vf_nasm_at(b, v.pos, left - 1, acc.push(cbe_ascii(k.bytes, 0, "") + kg_us() + cbe_ascii(v.bytes, 0, "")));
+}
+
+// What the program declares about attestation (PLAN-attestation.md §11):
+// anchors with their origin, policies, decisions with their requirements
+// (identity = none, appraised = none and fresh = false marked), and an
+// unpinned verify closure.
+Bool vf_print_attest(List(Str) xs, Int i) {
+    if (i >= xs.len()) { return true; }
+    println("attestation: " + xs[i]);
+    return vf_print_attest(xs, i + 1);
+}
+
+// Inline asm in a native module: allowed (it runs only in the confined
+// host, spec §47) and stated, so a reviewer sees it.
+Bool vf_print_nasm(List(Str) xs, Int i) {
+    if (i >= xs.len()) { return true; }
+    List(Str) f = str_split(xs[i], kg_us());
+    println("attestation: native module " + f[0] + " contains inline asm, " + f[1]);
+    return vf_print_nasm(xs, i + 1);
 }
 
 // The {path, hash} entries of the array under `key`, each as "HEX PATH".
@@ -8878,6 +9289,9 @@ Int cmd_verify(Str bin_path, Str pub_given, Bool anchored, Str srcdir) {
     Bool _rp = if (red != "") { println("attestation: reduction budget " + red) } else { true };
     List(Str) natv = vf_native_of(map);
     Bool _nv = vf_print_native(natv, 0);
+    Bool _na = vf_print_nasm(vf_nasm_of(map), 0);
+    Bool _at = vf_print_attest(cbe_map_texts_in(map, 0, "attest"), 0);
+    Bool _dv = vf_print_devices(vf_devices_of(map), 0);
     println("verify: ok (kid " + c.kid + ", code " + hex_encode(code) + ", trust " + mode + ")");
     return 0;
 }
@@ -9178,7 +9592,7 @@ Int test_all(Int argc) {
     return if (r.fail > 0) { 1 } else { 0 };
 }
 
-@requires(args, filesystem, process, environment)
+@requires(args, filesystem, process, environment, declassify)
 Int main() {
     // A runaway compile stops at a memory budget (RESID_MEM_LIMIT overrides).
     Int _budget = resid_mem_limit_set(4096);
@@ -9261,7 +9675,16 @@ Int main() {
     // Names two modules export are renamed per module (spec §22).
     Str depmap  =  depmap1 + "\n" + imp_ns_table(path, filesystem.read_all(path), depmap1);
     RRes rra = imp_resolve_file(path, ";", 0, depmap);
-    Str rtext = ds_desugar(with_builtin_types(rra.text));
+    // Layout types (compiler/layout.resid): annotations blanked, parsers
+    // and serializers appended.
+    // Anchors (compiler/attest.resid): each @anchor body's anchor_der
+    // carries the annotation's facts.
+    LyR atr = at_expand(rra.text);
+    LyR lyr0 = ly_expand(atr.text);
+    LyR lyr = if (atr.err != "") { atr } else { lyr0 };
+    Int lybad = if (lyr.err != "") { 1 } else { 0 };
+    if (lyr.err != "") { diag_error(lyr.code, lyr.err, lyr.at + 1, 1, rra.text, rra.map, 0); }
+    Str rtext = ds_desugar(with_builtin_types(lyr.text));
     // Comptime discovery: rewrite each `test "..." { }` into a plain
     // declaration and keep the display names for the generated entry point.
     TD tda  =  if (testmode) { td_desugar(rtext) } else { TD {.text = rtext, .names = [], .syms = [], .err = ""} };
@@ -9273,6 +9696,7 @@ Int main() {
     Int _rs_out = resid_bulk_pop();
     RRes rr = RRes {.text = rk[0], .done = rk[1], .map = rk[2], .nl = rnl};
     TD td = TD {.text = rk[0], .names = tdn, .syms = tds, .err = rk[3]};
+    if (lybad != 0) { return 1; }
     if (td.err != "") {
         println(td.err);
         return 2;
@@ -9362,21 +9786,56 @@ Int main() {
     Int _tc_in = resid_bulk_push();
     KP ckp0 = kg_parse(rsrc);
     // Generic functions and records are instantiated (compiler/mono.resid).
-    GMO gmo = gm_run(ckp0, rsrc, rr.map + gm_gs() + gm_pkg_lines(depmap0) + "@stdroot::" + stdlib_dir(), gart);
+    // The attestation checks and E0286 read the def column, so a program
+    // with their annotations keeps it in every profile.
+    Bool atcols = ckp0.err == "" && at_any(ckp0.g, ckp0.id, 0);
+    // Instance pinning (E0294): before instantiation drops a replaced one.
+    Str ivroot = op_std_root(["@stdroot::" + stdlib_dir()], 0);
+    Bool ireach = ckp0.err == "" && ivroot != dv_no_std() && at_reaches_verify(str_split(rr.done, ";"), ivroot + "verify/", 0);
+    Bool instbad = ireach && at_instances(ckp0.g, ckp0.id, rsrc, rr.map + gm_gs() + gm_pkg_lines(depmap0) + "@stdroot::" + stdlib_dir());
+    GMO gmo = gm_run(ckp0, rsrc, rr.map + gm_gs() + gm_pkg_lines(depmap0) + "@stdroot::" + stdlib_dir(), gart || atcols);
     KP ckp = gmo.kp;
     GKC ckc = gmo.c;
     Int tc  =  ckc.status;
-    List(Str) ckpk = resid_list_str_persist_copy([if (tc != 0) { "" } else { gx_pack(ckp.g, ckp.id) }, ckc.def, f"{kg_count(ckp.g)}", gmo.dv]);
+    // Integrity labels (compiler/labels.resid) for the artifact.
+    Bool hasdec = tc == 0 && at_has_decides(ckp.g, ckp.id, 0);
+    LBR lbr = if (tc == 0 && (gart || hasdec)) { lb_run(ckp.g, ckp.id, ga_defs(ckc.def, 0, ListBuf()), rsrc, rr.map + gm_gs() + gm_pkg_lines(depmap0) + "@stdroot::" + stdlib_dir()) } else { LBR {.text = "", .err = "", .errat = -1, .warn = []} };
+    // Control over disclosure (E0291, E0292): warnings during the rollout.
+    Bool lbw = lb_print_warn(lbr.warn, 0, ckp.g, rsrc, rr.map);
+    // A label error names its code ("E0286\x1f...") or is E0271.
+    Bool lbcoded = str_starts_with(lbr.err, "E0") && str_find_char(lbr.err, 31, 0) == 5;
+    Bool lbbad0 = if (lbr.err != "") { dv_diag_at(if (lbcoded) { str_slice(lbr.err, 0, 5) } else { "E0271" }, if (lbcoded) { str_slice(lbr.err, 6, str_len(lbr.err)) } else { lbr.err }, ckp.g, lbr.errat, rsrc, rr.map) } else { false };
+    // Attestation (compiler/attest.resid): anchors, primitives, policies
+    // and decisions.
+    Bool atbad = tc == 0 && at_run(ckp.g, ckp.id, ga_defs(ckc.def, 0, ListBuf()), rsrc, rr.map + gm_gs() + gm_pkg_lines(depmap0) + "@stdroot::" + stdlib_dir());
+    Bool lbbad = lbbad0 || atbad || instbad;
+    Str atrep = if (tc == 0) { at_report(ckp.g, ckp.id, rsrc, rr.map + gm_gs() + gm_pkg_lines(depmap0) + "@stdroot::" + stdlib_dir()) } else { "" };
+    List(Str) ckpk = resid_list_str_persist_copy([if (tc != 0) { "" } else { gx_pack(ckp.g, ckp.id) }, ckc.def, f"{kg_count(ckp.g)}", gmo.dv, lbr.text, atrep]);
     List(Str) cktys = resid_list_str_persist_copy(ckc.ty);
     Int _tc_out = resid_bulk_pop();
     // §7.2: under `test`, a file that does not compile exits 2, so it is not
     // mistaken for a test that ran and failed (1).
     if (tc != 0) { return if (testmode) { 2 } else { tc }; }
+    if (lbbad) { return 1; }
+    // The verify closure and the runtime (PLAN-attestation.md §3.2): a
+    // program that reaches lib/verify/ compiles only against the ones this
+    // compiler was released with, unless --verify-lib-dev (recorded).
+    Bool vdev = pick_flag(argc, "--verify-lib-dev");
+    Str vroot = op_std_root(["@stdroot::" + stdlib_dir()], 0);
+    Bool reachv = vroot != dv_no_std() && at_reaches_verify(str_split(rr.done, ";"), vroot + "verify/", 0);
+    Str vrhome = environment.get("RESID_HOME");
+    Str vrt = if (vrhome == "") { "build/boot/" + (if (tgt_a64()) { "rt-aarch64.ll" } else { "rt.ll" }) } else { vrhome + "/" + (if (tgt_a64()) { "rt-aarch64.ll" } else { "rt.ll" }) };
+    Str vpe = if (!reachv || vdev) { "" } else if (pick_opt(argc, "-rtr", "") != "" || pick_opt(argc, "-rt", "") != "") { "-rt and -rtr replace the runtime, which holds the challenge marks and the random source" } else { at_pins_check(rr.done, vroot, vrt, vp_pins()) };
+    if (vpe != "") {
+        println("error[E0290]: this program reaches lib/verify/, and " + vpe + "; build with the standard library and runtime this residc was released with (or --verify-lib-dev while working on the library, which the provenance record states)");
+        return 1;
+    }
+    Str attest_rec = if (ckpk[5] == "" && !(reachv && vdev)) { "" } else { ckpk[5] + (if (reachv && vdev) { (if (ckpk[5] == "") { "" } else { "\n" }) + "verify-lib-dev: built against an unpinned lib/verify/ closure or runtime" } else { "" }) };
     // `--profile check` (spec §35): type checking only, no binary. The
     // `release` profile is the default -O2 build; `debug` builds at -O0.
     if (profile == "check") {
         Int _ga_in = resid_bulk_push();
-        Str gh = ga_write(out + ".resid-graph.cbor", gx_unpack(ckpk[0]), str_parse_int(ckpk[2]), false, ckpk[3], "", cktys, ckpk[1], rsrc, rr.map, path, "");
+        Str gh = ga_write(out + ".resid-graph.cbor", gx_unpack(ckpk[0]), str_parse_int(ckpk[2]), false, ckpk[3], "", cktys, ckpk[1], rsrc, rr.map, path, "", ckpk[4]);
         Int _ga_out = resid_bulk_pop();
         println("check: ok");
         return 0;
@@ -9421,7 +9880,25 @@ Int main() {
     // start from a small heap. `--dump-reduced <path>` writes the residual
     // program printed.
     Int _cg_in = resid_bulk_push();
-    KP lkp = gx_unpack(gpk[2]);
+    KP lkp00 = gx_unpack(gpk[2]);
+    // Device descriptors (spec §49, compiler/device.resid): checked,
+    // bounded by the manifest, recorded, and each verb handed to its engine.
+    Str dvpk  =  gm_pkg_lines(depmap0) + dv_bound_lines(str_split(depmap0, "\n"), 0, "") + "@stdroot::" + stdlib_dir();
+    DvPost dvp = dv_post(lkp00, rsrc, rr.map + gm_gs() + dvpk, dvpk, tgt_a64());
+    // A refused program's reduced form is still dumped, to see why.
+    if (dvp.bad && pick_opt(argc, "--dump-reduced", "") != "") { Bool _dd = filesystem.write_all(pick_opt(argc, "--dump-reduced", ""), kg_print(lkp00.g, lkp00.id)); }
+    if (dvp.bad) { return 1; }
+    List(Str) dvkeep = resid_list_str_persist_copy([str_join(dvp.devs, "\n")]);
+    KP lkp0 = dvp.p;
+    if (sec_known_check(lkp0, rsrc, rr.map)) { return 1; }
+    // Keys must be unpredictable (compiler/ekey.resid, E0270): warnings
+    // while the rule is rolled out (PLAN-labels.md §4.6).
+    EKR ekr = if (rtmod) { EKR {.warnings = "", .n = 0} } else { ek_run(lkp0.g, lkp0.id, rsrc, rr.map, environment.get("RESID_EKEY_DEBUG")) };
+    if (ekr.n > 0) { print(ekr.warnings); }
+    // A program that handles secrets runs its allocator in secret mode
+    // (spec §48): zero on free, heap left out of core dumps.
+    Bool secmode = sec_graph_has(lkp0.g, 0);
+    KP lkp = sec_erase(lkp0);
     Str dump_path  =  pick_opt(argc, "--dump-reduced", "");
     if (dump_path != "") {
         Bool dumped = filesystem.write_all(dump_path, kg_print(lkp.g, lkp.id));
@@ -9437,8 +9914,11 @@ Int main() {
         println("test error: no `test \"...\" { ... }` blocks found in " + path);
         return 2;
     }
-List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "declare i1 @eprintln(ptr)", "declare void @resid_cap_check(ptr)", "declare void @resid_cap_enter(ptr, i64)", "declare void @resid_cap_leave()", "declare ptr @malloc(i64)", "declare void @free(ptr)", "declare ptr @resid_str_concat(ptr, ptr)", "declare i8 @resid_str_eq(ptr, ptr)", "declare ptr @resid_fs_read_all(ptr)", "declare i8 @resid_fs_write_all(ptr, ptr)", "declare ptr @resid_fs_read_bytes(ptr)", "declare i8 @resid_fs_write_bytes(ptr, ptr)", "declare i8 @resid_fs_write_secret(ptr, ptr)", "declare ptr @resid_fs_sha256(ptr)", "declare i8 @resid_fs_append_bytes(ptr, ptr)", "declare ptr @resid_fs_open(ptr)", "declare ptr @resid_fs_read_handle(ptr)", "declare i8 @resid_fs_close(ptr)", "declare i8 @resid_fs_exists(ptr)", "declare i8 @resid_fs_is_dir(ptr)", "declare i8 @resid_fs_create_dir_all(ptr)", "declare ptr @resid_fs_list_dir(ptr)", "declare i64 @resid_args_count()", "declare ptr @resid_args_get(i64)", "declare i64 @resid_process_run(ptr)", "declare ptr @resid_env_get(ptr)", "declare i64 @str_char_at(ptr, i64)", "declare ptr @str_from_code(i64)", "declare i64 @str_len(ptr)", "declare ptr @str_slice(ptr, i64, i64)", "declare ptr @str_sb_new()", "declare ptr @str_sb_append(ptr, ptr)", "declare ptr @str_sb_append_cp(ptr, i64)", "declare ptr @str_sb_append_slice(ptr, ptr, i64, i64)", "declare ptr @str_sb_finish(ptr)", "declare i64 @resid_arena_push()", "declare i64 @resid_arena_pop()", "declare ptr @resid_list_str_persist_copy(ptr)", "declare i32 @resid_run_main(ptr)", "declare ptr @resid_list_const_i64(ptr, i64, ptr, ptr)", "declare ptr @resid_list_const_ptr(ptr, i64, ptr, ptr)", "declare ptr @resid_list_const_bool(ptr, i64, ptr, ptr)", "declare i64 @resid_crypto_random_byte()", "declare ptr @resid_read_line()", "declare i64 @resid_read_byte()", "declare i8 @resid_term_is_tty(i64)", "declare i64 @resid_term_cols()", "declare i64 @resid_term_rows()", "declare i8 @resid_term_raw()", "declare i8 @resid_term_restore()", "declare i64 @resid_clock_now_ns()", "declare i64 @resid_clock_now_sec()", "declare i64 @resid_clock_monotonic_ns()", "declare i64 @resid_clock_sleep_ns(i64)", "declare i64 @resid_dbg_spawn(ptr)", "declare i64 @resid_dbg_wait()", "declare i8 @resid_dbg_cont(i64, i64)", "declare i8 @resid_dbg_step(i64)", "declare i64 @resid_dbg_peek(i64, i64)", "declare i8 @resid_dbg_poke(i64, i64, i64)", "declare i64 @resid_dbg_reg(i64, i64)", "declare i8 @resid_dbg_set_pc(i64, i64)", "declare i64 @resid_dbg_signal()", "declare i64 @resid_dbg_exit_code()", "declare i8 @resid_dbg_kill()", "declare ptr @resid_dbg_f64(i64)", "declare i8 @resid_cpu_has_aesni()", "declare i8 @resid_cpu_has_clmul()", "declare i8 @resid_cpu_has_sha256()", "declare i8 @resid_cpu_has_sha512()", "declare <2 x i64> @llvm.x86.aesni.aesenc(<2 x i64>, <2 x i64>)", "declare <2 x i64> @llvm.x86.aesni.aesenclast(<2 x i64>, <2 x i64>)", "declare i64 @resid_tcp_connect(ptr, i64)", "declare i8 @resid_tcp_send(i64, ptr)", "declare ptr @resid_tcp_recv_all(i64)", "declare i8 @resid_tcp_close(i64)", "declare i8 @resid_tcp_send_bin(i64, ptr)", "declare ptr @resid_tcp_recv_bin(i64, i64)", "declare i64 @resid_tcp_listen(i64)", "declare i64 @resid_tcp_bound_port(i64)", "declare i64 @resid_tcp_accept(i64)", "declare i64 @resid_tcp_listen_at(ptr, i64)", "declare ptr @resid_tcp_recv_some(i64, i64)", "declare i8 @resid_tcp_shutdown(i64)", "declare i8 @resid_tcp_deadline(i64, i64)", "declare ptr @resid_tcp_poll(ptr, ptr, i64)", "declare i64 @resid_tcp_send_some(i64, ptr)", "declare i64 @resid_tcp_accept_now(i64)", "declare ptr @str_trim(ptr)", "declare ptr @str_to_lower(ptr)", "declare ptr @str_to_upper(ptr)", "declare ptr @str_reverse(ptr)", "declare i8 @str_contains(ptr, ptr)", "declare i8 @str_starts_with(ptr, ptr)", "declare i8 @str_ends_with(ptr, ptr)", "declare ptr @str_repeat(ptr, i64)", "declare ptr @str_replace(ptr, ptr, ptr)", "declare ptr @str_split(ptr, ptr)", "declare ptr @str_join(ptr, ptr)", "declare i8 @str_is_int(ptr)", "declare i64 @str_parse_int(ptr)", "declare i8 @str_is_float(ptr)", "declare double @str_parse_float(ptr)", "declare i64 @str_count(ptr, ptr)", "declare i64 @abs_i64(i64)", "declare i64 @min_i64(i64, i64)", "declare i64 @max_i64(i64, i64)", "declare i64 @clamp_i64(i64, i64, i64)", "declare ptr @resid_list_new(i64, ptr, ptr)", "declare i64 @resid_list_len(ptr)", "declare ptr @resid_list_get(ptr, i64)", "declare ptr @resid_list_get_nc(ptr, i64)", "declare ptr @resid_list_vdata(ptr)", "declare i64 @resid_list_vlen(ptr)", "declare ptr @resid_list_get_v(ptr, i64, ptr, i64)", "declare ptr @resid_list_with(ptr, i8, i64, ptr)", "declare ptr @resid_list_concat_own(ptr, i8, ptr)", "declare ptr @resid_list_freeze(ptr)", "declare ptr @resid_rec_evac(ptr, i64, i8)", "declare ptr @resid_list_evac_f(ptr, ptr)", "declare ptr @resid_fx_move(ptr, ptr, i64, i8)", "declare ptr @resid_fx_stage(ptr, ptr, ptr, i64, i8)", "declare void @resid_str_index_drop(ptr, i64)", "declare ptr @resid_fixed_text(ptr, i64)", "declare ptr @resid_list_concat(ptr, ptr)", "declare ptr @resid_list_push(ptr, ptr)", "declare ptr @resid_listbuf_new()", "declare ptr @resid_listbuf_push(ptr, ptr)", "declare ptr @resid_listbuf_finish(ptr, ptr)", "declare ptr @resid_list_slice(ptr, i64, i64)", "declare ptr @resid_range_list(i64, i64)", "declare ptr @resid_range_list_incl(i64, i64)", "declare ptr @list_sort_ints(ptr)", "declare ptr @list_sort_wide(ptr, i64)", "declare ptr @list_sort_floats(ptr)", "declare ptr @list_sort_strs(ptr)", "declare ptr @list_reverse_ints(ptr)", "declare i8 @list_contains_int(ptr, i64)", "declare i8 @list_contains_str(ptr, ptr)", "declare i8 @list_contains_float(ptr, double)", "declare i64 @list_sum(ptr)", "declare double @list_sumf(ptr)", "declare ptr @list_sort_by(ptr, ptr)", "declare i64 @checked_add(i64, i64)", "declare i64 @checked_sub(i64, i64)", "declare i64 @checked_mul(i64, i64)", "declare i64 @checked_div(i64, i64)", "declare i64 @checked_uadd(i64, i64)", "declare i64 @checked_usub(i64, i64)", "declare i64 @checked_umul(i64, i64)", "declare i64 @checked_udiv(i64, i64)", "declare i64 @wrapping_add(i64, i64)", "declare i64 @wrapping_sub(i64, i64)", "declare i64 @wrapping_mul(i64, i64)", "declare i64 @wrapping_div(i64, i64)", "declare i64 @wrapping_uadd(i64, i64)", "declare i64 @wrapping_usub(i64, i64)", "declare i64 @wrapping_umul(i64, i64)", "declare i64 @wrapping_udiv(i64, i64)", "declare i64 @saturating_add(i64, i64)", "declare i64 @saturating_sub(i64, i64)", "declare i64 @saturating_mul(i64, i64)", "declare i64 @saturating_uadd(i64, i64)", "declare i64 @saturating_usub(i64, i64)", "declare i64 @saturating_umul(i64, i64)", "declare ptr @resid_set_new()", "declare ptr @resid_map_get(ptr, ptr)", "declare ptr @resid_map_insert(ptr, ptr, ptr)", "declare ptr @resid_map_remove(ptr, ptr)", "declare i8 @resid_map_contains(ptr, ptr)", "declare i64 @resid_map_len(ptr)", "declare ptr @resid_map_keys(ptr)", "declare ptr @resid_map_values(ptr)", "declare ptr @resid_map_format(ptr)", "declare ptr @resid_set_insert(ptr, ptr)", "declare ptr @resid_set_remove(ptr, ptr)", "declare i8 @resid_set_contains(ptr, ptr)", "declare i64 @resid_set_len(ptr)", "declare ptr @resid_set_union(ptr, ptr)", "declare ptr @resid_set_difference(ptr, ptr)", "declare ptr @resid_set_intersection(ptr, ptr)", "declare ptr @resid_set_to_list(ptr)", "declare ptr @resid_set_format(ptr)", "declare ptr @ToString(ptr)", "declare ptr @resid_list_to_string(ptr)", "declare ptr @resid_list_show(ptr, i64)", "declare void @resid_assert(i8, ptr)", "declare void @resid_todo(i8, ptr)", "declare ptr @resid_box_new(i64, i64, ptr, ptr)",         "declare ptr @resid_box_i64(i64)", "declare ptr @resid_box_f64(double)", "declare ptr @resid_box_bool(i8)", "declare ptr @resid_box_i128(i128)", "declare ptr @resid_box_u128(i128)", "declare i64 @resid_unbox_i64(ptr)", "declare double @resid_unbox_f64(ptr)", "declare i8 @resid_unbox_bool(ptr)", "declare i128 @resid_unbox_i128(ptr)", "declare i128 @resid_unbox_u128(ptr)", "declare ptr @resid_box_i256(i256)", "declare i256 @resid_unbox_i256(ptr)", "declare ptr @resid_box_u256(i256)", "declare i256 @resid_unbox_u256(ptr)", "declare ptr @resid_box_i512(i512)", "declare i512 @resid_unbox_i512(ptr)", "declare ptr @resid_box_u512(i512)", "declare i512 @resid_unbox_u512(ptr)", "declare ptr @Int128ToString(i128)", "declare ptr @UIntToString(i64)", "declare ptr @Int256ToString(i64, i64, i64, i64)", "declare ptr @UInt256ToString(i64, i64, i64, i64)", "declare ptr @Int512ToString(i64, i64, i64, i64, i64, i64, i64, i64)", "declare ptr @UInt512ToString(i64, i64, i64, i64, i64, i64, i64, i64)", "declare ptr @WideToString(ptr, i64, i8)", "declare ptr @FloatToString(double)", "declare ptr @Float128ToString(fp128)", "declare ptr @BoolToString(i8)", "declare void @resid_overflow_check(i8)", "declare void @resid_div_check(i8)", "declare void @resid_conv_check(i8)", "declare {i8, i1} @llvm.sadd.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.sadd.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.sadd.with.overflow.i32(i32, i32)", "declare {i64, i1} @llvm.sadd.with.overflow.i64(i64, i64)", "declare {i128, i1} @llvm.sadd.with.overflow.i128(i128, i128)", "declare {i256, i1} @llvm.sadd.with.overflow.i256(i256, i256)", "declare {i512, i1} @llvm.sadd.with.overflow.i512(i512, i512)", "declare {i8, i1} @llvm.ssub.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.ssub.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.ssub.with.overflow.i32(i32, i32)", "declare {i64, i1} @llvm.ssub.with.overflow.i64(i64, i64)", "declare {i128, i1} @llvm.ssub.with.overflow.i128(i128, i128)", "declare {i256, i1} @llvm.ssub.with.overflow.i256(i256, i256)", "declare {i512, i1} @llvm.ssub.with.overflow.i512(i512, i512)", "declare {i8, i1} @llvm.smul.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.smul.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.smul.with.overflow.i32(i32, i32)", "declare {i64, i1} @llvm.smul.with.overflow.i64(i64, i64)", "declare {i128, i1} @llvm.smul.with.overflow.i128(i128, i128)", "declare {i256, i1} @llvm.smul.with.overflow.i256(i256, i256)", "declare {i512, i1} @llvm.smul.with.overflow.i512(i512, i512)", "declare {i8, i1} @llvm.uadd.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.uadd.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.uadd.with.overflow.i32(i32, i32)", "declare {i64, i1} @llvm.uadd.with.overflow.i64(i64, i64)", "declare {i128, i1} @llvm.uadd.with.overflow.i128(i128, i128)", "declare {i256, i1} @llvm.uadd.with.overflow.i256(i256, i256)", "declare {i512, i1} @llvm.uadd.with.overflow.i512(i512, i512)", "declare {i8, i1} @llvm.usub.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.usub.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.usub.with.overflow.i32(i32, i32)", "declare {i64, i1} @llvm.usub.with.overflow.i64(i64, i64)", "declare {i128, i1} @llvm.usub.with.overflow.i128(i128, i128)", "declare {i256, i1} @llvm.usub.with.overflow.i256(i256, i256)", "declare {i512, i1} @llvm.usub.with.overflow.i512(i512, i512)", "declare {i8, i1} @llvm.umul.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.umul.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.umul.with.overflow.i32(i32, i32)", "declare {i64, i1} @llvm.umul.with.overflow.i64(i64, i64)", "declare {i128, i1} @llvm.umul.with.overflow.i128(i128, i128)", "declare {i256, i1} @llvm.umul.with.overflow.i256(i256, i256)", "declare {i512, i1} @llvm.umul.with.overflow.i512(i512, i512)", "declare ptr @resid_str_from_codepoints(ptr)", "declare i64 @resid_str_to_fixed(ptr, ptr, i64)", "declare i64 @resid_bytes_to_fixed(ptr, ptr, i64)", "declare void @resid_index_abort(i64, i64, ptr) noreturn", "declare void @resid_abort(ptr) noreturn", "declare void @resid_expect_fail(ptr, ptr, ptr) noreturn", "declare i8 @resid_regex_match(ptr, ptr)", "declare i8 @resid_quiet()", "declare i8 @resid_quiet_set(i1)", "declare i64 @resid_mem_limit_set(i64)", "declare i64 @resid_bytes_len(ptr)", "declare ptr @Float32ToString(double)", "declare double @resid_close_tol(i64)", "declare ptr @resid_str_quote(ptr)", "declare ptr @resid_list_show_clo(ptr, ptr)", "declare i8 @resid_internals()", "declare i8 @resid_internals_set(i1)", "declare i8 @resid_rtmod()", "declare i8 @resid_rtmod_set(i1)", "declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)", "declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)", "declare ptr @llvm.threadlocal.address.p0(ptr)", "declare i8 @resid_expect_throws(ptr)", "declare i64 @resid_box_tag(ptr)", "declare i8 @resid_test_plan(i64, ptr)", "declare i64 @resid_test_run_closure(ptr, ptr)", "declare i64 @resid_test_run(ptr, ptr)", "declare i64 @resid_test_summary()", "@.fixedidx = private unnamed_addr constant [12 x i8] c\"fixed index\\00\"", "declare ptr @UInt128ToString(i128)", rt_itoa_def(), "declare i32 @resid_setjmp(ptr) returns_twice", rt_catch_def()];
-    List(Str) header = header_with_cmps(hdr_core.concat(hdr_extra()).concat(hdr_map_typed()), fs);
+List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "declare i1 @eprintln(ptr)", "declare void @resid_cap_check(ptr)", "declare void @resid_cap_enter(ptr, i64)", "declare void @resid_cap_leave()", "declare ptr @malloc(i64)", "declare void @free(ptr)", "declare ptr @resid_str_concat(ptr, ptr)", "declare i8 @resid_str_eq(ptr, ptr)", "declare ptr @resid_fs_read_all(ptr)", "declare i8 @resid_fs_write_all(ptr, ptr)", "declare ptr @resid_fs_read_bytes(ptr)", "declare i8 @resid_fs_write_bytes(ptr, ptr)", "declare i8 @resid_fs_write_secret(ptr, ptr)", "declare ptr @resid_fs_sha256(ptr)", "declare i8 @resid_fs_append_bytes(ptr, ptr)", "declare ptr @resid_fs_open(ptr)", "declare ptr @resid_fs_read_handle(ptr)", "declare i8 @resid_fs_close(ptr)", "declare i8 @resid_fs_exists(ptr)", "declare i8 @resid_fs_is_dir(ptr)", "declare i8 @resid_fs_create_dir_all(ptr)", "declare ptr @resid_fs_list_dir(ptr)", "declare i64 @resid_args_count()", "declare ptr @resid_args_get(i64)", "declare i64 @resid_process_run(ptr)", "declare ptr @resid_env_get(ptr)", "declare i64 @str_char_at(ptr, i64)", "declare ptr @str_from_code(i64)", "declare i64 @str_len(ptr)", "declare ptr @str_slice(ptr, i64, i64)", "declare ptr @str_sb_new()", "declare ptr @str_sb_append(ptr, ptr)", "declare ptr @str_sb_append_cp(ptr, i64)", "declare ptr @str_sb_append_slice(ptr, ptr, i64, i64)", "declare ptr @str_sb_finish(ptr)", "declare i64 @resid_arena_push()", "declare i64 @resid_arena_pop()", "declare ptr @resid_list_str_persist_copy(ptr)", "declare i32 @resid_run_main(ptr)", "declare ptr @resid_list_const_i64(ptr, i64, ptr, ptr)", "declare ptr @resid_list_const_ptr(ptr, i64, ptr, ptr)", "declare ptr @resid_list_const_bool(ptr, i64, ptr, ptr)", "declare i64 @resid_crypto_random_byte()", "declare ptr @resid_read_line()", "declare i64 @resid_read_byte()", "declare i8 @resid_term_is_tty(i64)", "declare i64 @resid_term_cols()", "declare i64 @resid_term_rows()", "declare i8 @resid_term_raw()", "declare i8 @resid_term_restore()", "declare i64 @resid_clock_now_ns()", "declare i64 @resid_clock_now_sec()", "declare i64 @resid_clock_monotonic_ns()", "declare i64 @resid_clock_sleep_ns(i64)", "declare i64 @resid_dbg_spawn(ptr)", "declare i64 @resid_dbg_wait()", "declare i8 @resid_dbg_cont(i64, i64)", "declare i8 @resid_dbg_step(i64)", "declare i64 @resid_dbg_peek(i64, i64)", "declare i8 @resid_dbg_poke(i64, i64, i64)", "declare i64 @resid_dbg_reg(i64, i64)", "declare i8 @resid_dbg_set_pc(i64, i64)", "declare i64 @resid_dbg_signal()", "declare i64 @resid_dbg_exit_code()", "declare i8 @resid_dbg_kill()", "declare ptr @resid_dbg_f64(i64)", "declare i8 @resid_cpu_has_aesni()", "declare i8 @resid_cpu_has_clmul()", "declare i8 @resid_cpu_has_sha256()", "declare i8 @resid_cpu_has_sha512()", "declare <2 x i64> @llvm.x86.aesni.aesenc(<2 x i64>, <2 x i64>)", "declare <2 x i64> @llvm.x86.aesni.aesenclast(<2 x i64>, <2 x i64>)", "declare i64 @resid_tcp_connect(ptr, i64)", "declare i8 @resid_tcp_send(i64, ptr)", "declare ptr @resid_tcp_recv_all(i64)", "declare i8 @resid_tcp_close(i64)", "declare i8 @resid_tcp_send_bin(i64, ptr)", "declare ptr @resid_tcp_recv_bin(i64, i64)", "declare i64 @resid_tcp_listen(i64)", "declare i64 @resid_tcp_bound_port(i64)", "declare i64 @resid_tcp_accept(i64)", "declare i64 @resid_tcp_listen_at(ptr, i64)", "declare ptr @resid_tcp_recv_some(i64, i64)", "declare i8 @resid_tcp_shutdown(i64)", "declare i8 @resid_tcp_deadline(i64, i64)", "declare ptr @resid_tcp_poll(ptr, ptr, i64)", "declare ptr @resid_device_call(ptr)", "declare ptr @resid_device_call_w(ptr)", "declare ptr @resid_device_secret(i64)", "declare ptr @resid_random_os(i64)", "declare ptr @resid_random_cpu(i64)", "declare i64 @resid_chal_new(ptr, i64, i64)", "declare i64 @resid_chal_mark(i64, i64)", "declare i64 @resid_chal_spend(i64)", "declare i64 @resid_chal_left(i64)", "declare i64 @resid_chal_bind(i64, ptr, ptr)", "declare ptr @resid_chal_bound(i64)", "declare i64 @resid_tr_note(ptr)", "declare ptr @resid_tr_read()", "declare i64 @resid_tcp_send_some(i64, ptr)", "declare i64 @resid_tcp_accept_now(i64)", "declare ptr @str_trim(ptr)", "declare ptr @str_to_lower(ptr)", "declare ptr @str_to_upper(ptr)", "declare ptr @str_reverse(ptr)", "declare i8 @str_contains(ptr, ptr)", "declare i8 @str_starts_with(ptr, ptr)", "declare i8 @str_ends_with(ptr, ptr)", "declare ptr @str_repeat(ptr, i64)", "declare ptr @str_replace(ptr, ptr, ptr)", "declare ptr @str_split(ptr, ptr)", "declare ptr @str_join(ptr, ptr)", "declare i8 @str_is_int(ptr)", "declare i64 @str_parse_int(ptr)", "declare i8 @str_is_float(ptr)", "declare double @str_parse_float(ptr)", "declare i64 @str_count(ptr, ptr)", "declare i64 @abs_i64(i64)", "declare i64 @min_i64(i64, i64)", "declare i64 @max_i64(i64, i64)", "declare i64 @clamp_i64(i64, i64, i64)", "declare ptr @resid_list_new(i64, ptr, ptr)", "declare i64 @resid_list_len(ptr)", "declare ptr @resid_list_get(ptr, i64)", "declare ptr @resid_list_get_nc(ptr, i64)", "declare ptr @resid_list_vdata(ptr)", "declare i64 @resid_list_vlen(ptr)", "declare ptr @resid_list_get_v(ptr, i64, ptr, i64)", "declare ptr @resid_list_with(ptr, i8, i64, ptr)", "declare ptr @resid_list_concat_own(ptr, i8, ptr)", "declare ptr @resid_list_freeze(ptr)", "declare ptr @resid_rec_evac(ptr, i64, i8)", "declare ptr @resid_list_evac_f(ptr, ptr)", "declare ptr @resid_fx_move(ptr, ptr, i64, i8)", "declare ptr @resid_fx_stage(ptr, ptr, ptr, i64, i8)", "declare void @resid_str_index_drop(ptr, i64)", "declare ptr @resid_fixed_text(ptr, i64)", "declare ptr @resid_list_concat(ptr, ptr)", "declare ptr @resid_list_push(ptr, ptr)", "declare ptr @resid_listbuf_new()", "declare ptr @resid_listbuf_push(ptr, ptr)", "declare ptr @resid_listbuf_finish(ptr, ptr)", "declare ptr @resid_list_slice(ptr, i64, i64)", "declare ptr @resid_range_list(i64, i64)", "declare ptr @resid_range_list_incl(i64, i64)", "declare ptr @list_sort_ints(ptr)", "declare ptr @list_sort_wide(ptr, i64)", "declare ptr @list_sort_floats(ptr)", "declare ptr @list_sort_strs(ptr)", "declare ptr @list_reverse_ints(ptr)", "declare i8 @list_contains_int(ptr, i64)", "declare i8 @list_contains_str(ptr, ptr)", "declare i8 @list_contains_float(ptr, double)", "declare i64 @list_sum(ptr)", "declare double @list_sumf(ptr)", "declare ptr @list_sort_by(ptr, ptr)", "declare i64 @checked_add(i64, i64)", "declare i64 @checked_sub(i64, i64)", "declare i64 @checked_mul(i64, i64)", "declare i64 @checked_div(i64, i64)", "declare i64 @checked_uadd(i64, i64)", "declare i64 @checked_usub(i64, i64)", "declare i64 @checked_umul(i64, i64)", "declare i64 @checked_udiv(i64, i64)", "declare i64 @wrapping_add(i64, i64)", "declare i64 @wrapping_sub(i64, i64)", "declare i64 @wrapping_mul(i64, i64)", "declare i64 @wrapping_div(i64, i64)", "declare i64 @wrapping_uadd(i64, i64)", "declare i64 @wrapping_usub(i64, i64)", "declare i64 @wrapping_umul(i64, i64)", "declare i64 @wrapping_udiv(i64, i64)", "declare i64 @saturating_add(i64, i64)", "declare i64 @saturating_sub(i64, i64)", "declare i64 @saturating_mul(i64, i64)", "declare i64 @saturating_uadd(i64, i64)", "declare i64 @saturating_usub(i64, i64)", "declare i64 @saturating_umul(i64, i64)", "declare ptr @resid_set_new()", "declare ptr @resid_map_get(ptr, ptr)", "declare ptr @resid_map_insert(ptr, ptr, ptr)", "declare ptr @resid_map_remove(ptr, ptr)", "declare i8 @resid_map_contains(ptr, ptr)", "declare i64 @resid_map_len(ptr)", "declare ptr @resid_map_keys(ptr)", "declare ptr @resid_map_values(ptr)", "declare ptr @resid_map_format(ptr)", "declare ptr @resid_set_insert(ptr, ptr)", "declare ptr @resid_set_remove(ptr, ptr)", "declare i8 @resid_set_contains(ptr, ptr)", "declare i64 @resid_set_len(ptr)", "declare ptr @resid_set_union(ptr, ptr)", "declare ptr @resid_set_difference(ptr, ptr)", "declare ptr @resid_set_intersection(ptr, ptr)", "declare ptr @resid_set_to_list(ptr)", "declare ptr @resid_set_format(ptr)", "declare ptr @ToString(ptr)", "declare ptr @resid_list_to_string(ptr)", "declare ptr @resid_list_show(ptr, i64)", "declare void @resid_assert(i8, ptr)", "declare void @resid_todo(i8, ptr)", "declare ptr @resid_box_new(i64, i64, ptr, ptr)",         "declare ptr @resid_box_i64(i64)", "declare ptr @resid_box_f64(double)", "declare ptr @resid_box_bool(i8)", "declare ptr @resid_box_i128(i128)", "declare ptr @resid_box_u128(i128)", "declare i64 @resid_unbox_i64(ptr)", "declare double @resid_unbox_f64(ptr)", "declare i8 @resid_unbox_bool(ptr)", "declare i128 @resid_unbox_i128(ptr)", "declare i128 @resid_unbox_u128(ptr)", "declare ptr @resid_box_i256(i256)", "declare i256 @resid_unbox_i256(ptr)", "declare ptr @resid_box_u256(i256)", "declare i256 @resid_unbox_u256(ptr)", "declare ptr @resid_box_i512(i512)", "declare i512 @resid_unbox_i512(ptr)", "declare ptr @resid_box_u512(i512)", "declare i512 @resid_unbox_u512(ptr)", "declare ptr @Int128ToString(i128)", "declare ptr @UIntToString(i64)", "declare ptr @Int256ToString(i64, i64, i64, i64)", "declare ptr @UInt256ToString(i64, i64, i64, i64)", "declare ptr @Int512ToString(i64, i64, i64, i64, i64, i64, i64, i64)", "declare ptr @UInt512ToString(i64, i64, i64, i64, i64, i64, i64, i64)", "declare ptr @WideToString(ptr, i64, i8)", "declare ptr @FloatToString(double)", "declare ptr @Float128ToString(fp128)", "declare ptr @BoolToString(i8)", "declare void @resid_overflow_check(i8)", "declare void @resid_div_check(i8)", "declare void @resid_conv_check(i8)", "declare {i8, i1} @llvm.sadd.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.sadd.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.sadd.with.overflow.i32(i32, i32)", "declare {i64, i1} @llvm.sadd.with.overflow.i64(i64, i64)", "declare {i128, i1} @llvm.sadd.with.overflow.i128(i128, i128)", "declare {i256, i1} @llvm.sadd.with.overflow.i256(i256, i256)", "declare {i512, i1} @llvm.sadd.with.overflow.i512(i512, i512)", "declare {i8, i1} @llvm.ssub.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.ssub.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.ssub.with.overflow.i32(i32, i32)", "declare {i64, i1} @llvm.ssub.with.overflow.i64(i64, i64)", "declare {i128, i1} @llvm.ssub.with.overflow.i128(i128, i128)", "declare {i256, i1} @llvm.ssub.with.overflow.i256(i256, i256)", "declare {i512, i1} @llvm.ssub.with.overflow.i512(i512, i512)", "declare {i8, i1} @llvm.smul.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.smul.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.smul.with.overflow.i32(i32, i32)", "declare {i64, i1} @llvm.smul.with.overflow.i64(i64, i64)", "declare {i128, i1} @llvm.smul.with.overflow.i128(i128, i128)", "declare {i256, i1} @llvm.smul.with.overflow.i256(i256, i256)", "declare {i512, i1} @llvm.smul.with.overflow.i512(i512, i512)", "declare {i8, i1} @llvm.uadd.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.uadd.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.uadd.with.overflow.i32(i32, i32)", "declare {i64, i1} @llvm.uadd.with.overflow.i64(i64, i64)", "declare {i128, i1} @llvm.uadd.with.overflow.i128(i128, i128)", "declare {i256, i1} @llvm.uadd.with.overflow.i256(i256, i256)", "declare {i512, i1} @llvm.uadd.with.overflow.i512(i512, i512)", "declare {i8, i1} @llvm.usub.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.usub.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.usub.with.overflow.i32(i32, i32)", "declare {i64, i1} @llvm.usub.with.overflow.i64(i64, i64)", "declare {i128, i1} @llvm.usub.with.overflow.i128(i128, i128)", "declare {i256, i1} @llvm.usub.with.overflow.i256(i256, i256)", "declare {i512, i1} @llvm.usub.with.overflow.i512(i512, i512)", "declare {i8, i1} @llvm.umul.with.overflow.i8(i8, i8)", "declare {i16, i1} @llvm.umul.with.overflow.i16(i16, i16)", "declare {i32, i1} @llvm.umul.with.overflow.i32(i32, i32)", "declare {i64, i1} @llvm.umul.with.overflow.i64(i64, i64)", "declare {i128, i1} @llvm.umul.with.overflow.i128(i128, i128)", "declare {i256, i1} @llvm.umul.with.overflow.i256(i256, i256)", "declare {i512, i1} @llvm.umul.with.overflow.i512(i512, i512)", "declare ptr @resid_str_from_codepoints(ptr)", "declare i64 @resid_str_to_fixed(ptr, ptr, i64)", "declare i64 @resid_bytes_to_fixed(ptr, ptr, i64)", "declare void @resid_index_abort(i64, i64, ptr) noreturn", "declare void @resid_abort(ptr) noreturn", "declare void @resid_expect_fail(ptr, ptr, ptr) noreturn", "declare i8 @resid_regex_match(ptr, ptr)", "declare i8 @resid_quiet()", "declare i8 @resid_quiet_set(i1)", "declare i64 @resid_mem_limit_set(i64)", "declare i64 @resid_bytes_len(ptr)", "declare ptr @Float32ToString(double)", "declare double @resid_close_tol(i64)", "declare ptr @resid_str_quote(ptr)", "declare ptr @resid_list_show_clo(ptr, ptr)", "declare i8 @resid_internals()", "declare i8 @resid_internals_set(i1)", "declare i8 @resid_rtmod()", "declare i8 @resid_rtmod_set(i1)", "declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)", "declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)", "declare ptr @llvm.threadlocal.address.p0(ptr)", "declare i8 @resid_expect_throws(ptr)", "declare i64 @resid_box_tag(ptr)", "declare i8 @resid_test_plan(i64, ptr)", "declare i64 @resid_test_run_closure(ptr, ptr)", "declare i64 @resid_test_run(ptr, ptr)", "declare i64 @resid_test_summary()", "@.fixedidx = private unnamed_addr constant [12 x i8] c\"fixed index\\00\"", "declare ptr @resid_fixed_bytes(ptr, i64)", "declare ptr @UInt128ToString(i128)", rt_itoa_def(), "declare i32 @resid_setjmp(ptr) returns_twice", rt_catch_def()];
+    // The family a declassify asks the running capability frame for
+    // (lower.resid's lw_declassify_check).
+    List(Str) hdr_sec = if (secmode) { ["@.declassify.cap = private unnamed_addr constant [11 x i8] c\"declassify\\00\"", "@.provision.cap = private unnamed_addr constant [10 x i8] c\"provision\\00\""] } else { [] };
+    List(Str) header = header_with_cmps(hdr_core.concat(hdr_extra()).concat(hdr_map_typed()).concat(hdr_sec), fs);
     // Debug builds carry DWARF (lower.resid); metadata ids from 1000 are
     // the functions', below are the unit and files.
     Bool gdbg = profile == "debug";
@@ -9452,16 +9932,21 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     List(Str) ol = res.lines;
     List(Str) mid = ol.concat(res.hlines);
     List(Str) all0 = mid.concat(rtg_dedupe(res.glines, 0, [], ListBuf()));
-    List(Str) all1 = if (fn_index(fs, "main") >= 0) { all0.concat(main_entry_ir()) } else { all0 };
-    List(Str) all2 = if (testmode) { all1.concat(td_main_ir(td.names, td.syms, td_module_name(path))).concat(start_entry_ir()) } else { all1 };
+    List(Str) all1 = if (fn_index(fs, "main") >= 0) { all0.concat(main_entry_ir(secmode)) } else { all0 };
+    List(Str) all2 = if (testmode) { all1.concat(td_main_ir(td.names, td.syms, td_module_name(path), secmode)).concat(start_entry_ir()) } else { all1 };
     List(Str) all3 = if (gdbg) { all2.concat(dbg_unit_ir(gdf.paths)) } else { all2 };
     // Native modules (spec §47): stubs, thunks and the host table, and each
     // checked, rewritten artifact for the link.
     List(NFn) nfs = if (rtmod) { [] } else { nt_fns(lkp.g, lkp.id) };
     NB nb = nt_build(nfs, out);
     if (!nb.ok) { return 1; }
-    List(Str) all = if (nfs.len() > 0) { nt_hook_main(all3.concat(nt_decls()).concat(nt_ir(nfs)), nfs.len()) } else { all3 };
-    List(Str) nkeep = resid_list_str_persist_copy([str_join(nb.links, " "), str_join(nb.prov, ";")]);
+    List(Str) all4 = if (nfs.len() > 0) { nt_hook_main(all3.concat(nt_decls()).concat(nt_ir(nfs)), nfs.len()) } else { all3 };
+    // Device access (spec §49): the device host runs before main.
+    List(Str) all5 = if (rtmod) { all4 } else { dv_hook_main(all4) };
+    // The transcript (PLAN-attestation.md §9) runs only in a program that
+    // reads it: main turns it on first.
+    List(Str) all = if (rtmod) { all5 } else { tr_hook_main(all5) };
+    List(Str) nkeep = resid_list_str_persist_copy([str_join(nb.links, " "), str_join(nb.prov, ";"), str_join(nb.asm, "\n")]);
     Str doc  =  probe_stack(str_join(if (rtmod) { rt_clean(all.concat(rt_asm_defs())) } else { all }, "\n") + "\n");
     // Debug builds record each runtime check for the artifact's facts.
     List(Str) chk = resid_list_str_persist_copy([if (gdbg) { ga_check_lines(all, 0, StrBuf()) } else { "" }]);
@@ -9477,7 +9962,7 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     // The graph artifact (spec §33), after code generation's arena is
     // freed, from the persisted residual pack; its hash goes into the binary.
     Int _ga_in = resid_bulk_push();
-    List(Str) ghk = resid_list_str_persist_copy([if (gart) { ga_write(out + ".resid-graph.cbor", gx_unpack(gpk[2]), str_parse_int(ckpk[2]), true, ckpk[3] + gpk[3], gpk[4], cktys, ckpk[1], rsrc, rr.map, path, chk[0]) } else { "" }]);
+    List(Str) ghk = resid_list_str_persist_copy([if (gart) { ga_write(out + ".resid-graph.cbor", gx_unpack(gpk[2]), str_parse_int(ckpk[2]), true, ckpk[3] + gpk[3], gpk[4], cktys, ckpk[1], rsrc, rr.map, path, chk[0], ckpk[4]) } else { "" }]);
     Int _ga_out = resid_bulk_pop();
     // A stale artifact from an earlier build must not be signed as this one's.
     Bool gclr = if (!gart && filesystem.exists(out + ".resid-graph.cbor")) { filesystem.write_all(out + ".resid-graph.cbor", "") } else { false };
@@ -9531,7 +10016,7 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     Int _prov_in = resid_bulk_push();
     // Notes are a projection of the residual graph (gart.resid).
     Int nrc  =  write_graph_notes(out, ga_notes(gx_unpack(gpk[2]), gpk[4], rsrc, rr.map, path));
-    Int prc  =  write_provenance(out, profile, rr.done, grk[0], nkeep[1], redrec);
+    Int prc  =  write_provenance(out, profile, rr.done, grk[0], nkeep[1], redrec, dvkeep[0], nkeep[2], attest_rec);
     Int _prov_out = resid_bulk_pop();
     return prc;
 }

@@ -1,0 +1,4 @@
+// Fixture for device_reply_length_checked: an attribute longer than its descriptor allows (installed as lib/dev/fx_device_reply_length_checked.resid).
+import "device.resid";
+
+pub ReadAttr fx_online_short() { return ReadAttr {.name = "fx.cpu_online", .path = "/sys/devices/system/cpu/online", .max = 1, .stability = Uapi}; }

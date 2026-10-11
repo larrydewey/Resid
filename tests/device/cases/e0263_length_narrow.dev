@@ -1,0 +1,11 @@
+// Fixture for e0263_length_narrow: a buffer's length field must hold the buffer's maximum, and a 1-byte field cannot hold 256 (installed as lib/dev/fx_e0263_length_narrow.resid).
+import "device.resid";
+
+pub IoctlOp fx_op() {
+    return IoctlOp {.name = "fx.op", .path = "/dev/fx", .requests = dv_both(dv_iowr(88, 0, 16)), .size = 16, .fields = [Buffer(0, 8, 256, Out, false), Scalar(8, 1, InOut)], .write = false, .version = Unversioned, .stability = Uapi};
+}
+
+@requires(device(readonly))
+pub Str fx_call() {
+    return match (device.ioctl(fx_op(), [])) { Ok(o) => "ok", Err(e) => device_error_text(e), };
+}

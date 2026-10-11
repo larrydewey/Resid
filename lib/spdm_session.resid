@@ -1,0 +1,232 @@
+// spdm_session.resid — the requester's half of an SPDM 1.1 session
+// (DSP0274 1.1 §10.6 and the key schedule of §10.13, DSP0277 secured
+// messages): the ECDHE secret, the handshake and data secrets, the
+// ResponderVerifyData check, the FINISH request, and secured messages.
+// One suite: SHA-384, ECDHE secp384r1, AES-256-GCM, the SPDM key
+// schedule, which verify/spdm_session.resid requires the device to choose.
+// The responder's signature is checked there (spdm_session_verify), and
+// its SpdmSession gives the transcript this file extends.
+//
+// Generic over the byte type (lib/word.resid, spec §48), as lib/tls.resid
+// is: at secret bytes the ephemeral private key, the shared secret, every
+// derived secret, finished key, key and IV stay secret, and bytes leave
+// only through SpdmPublish(B) (a sealed message, an opened message's
+// payload, the RequesterVerifyData MAC). Labels, transcript hashes,
+// lengths, session IDs and sequence numbers are public.
+//
+// Key schedule (libspdm's labels, "spdm1.1 " prefix): bin(len, label,
+// ctx) = len (LE2) ‖ "spdm1.1 " ‖ label ‖ ctx. HandshakeSecret =
+// HKDF-Extract(salt = 48 zero bytes, DHE); req/rsp handshake secrets =
+// Expand(HS, bin(48, "req hs data"/"rsp hs data", TH1)); finished keys =
+// Expand(secret, bin(48, "finished")); Master = HKDF-Extract(salt =
+// Expand(HS, bin(48, "derived")), 48 zero bytes); data secrets =
+// Expand(Master, bin(48, "req app data"/"rsp app data", TH2)); key and IV
+// = Expand(secret, bin(32, "key")) and bin(12, "iv").
+//
+// Secured messages: SessionID (LE4) ‖ Length (LE2) ‖ AES-256-GCM of
+// (AppLength (LE2) ‖ app) ‖ tag, the first six bytes the AAD, the IV the
+// salt XOR the sequence number (LE, from byte 0), no sequence number on
+// the wire (the MCTP and PCI DOE bindings) and no random padding sent.
+
+import "word.resid";
+import "crypto.resid";
+import "hash.resid";
+import "sha512g.resid";
+import "aesgcmg.resid";
+import "ecdsa.resid";
+
+pub type SpdmSecrets(B) = { List(B) hs; List(B) req; List(B) rsp; };
+pub type SpdmKeys(B) = { List(B) req_key; List(B) req_iv; List(B) rsp_key; List(B) rsp_iv; };
+
+// ─── What a session publishes ───────────────────────────────────────
+
+behavior SpdmPublish(B) {
+    List(Int) spdmp_sealed(List(B) ct);
+    List(Int) spdmp_plain(List(B) pt);
+    List(Int) spdmp_mac(List(B) mac);
+}
+
+List(Int) spdmp_pub(List(Int) xs) { return xs; }
+
+@requires(declassify)
+List(Int) spdmp_sealed_secret(List(Secret(UInt(8))) xs) {
+    return spdm_widen(declassify(secret_join(xs), "an SPDM secured message's ciphertext and tag: public by design, they go on the wire (DSP0277)"), 0, ListBuf());
+}
+
+@requires(declassify)
+List(Int) spdmp_plain_secret(List(Secret(UInt(8))) xs) {
+    return spdm_widen(declassify(secret_join(xs), "an authenticated SPDM secured message's payload, handed to the requester as a device's reply"), 0, ListBuf());
+}
+
+@requires(declassify)
+List(Int) spdmp_mac_secret(List(Secret(UInt(8))) xs) {
+    return spdm_widen(declassify(secret_join(xs), "SPDM RequesterVerifyData: a transcript MAC sent in FINISH (DSP0274 1.1)"), 0, ListBuf());
+}
+
+// Published bytes are public from here on (ct_public), as in lib/tls.resid.
+List(Int) spdm_widen(List(UInt(8)) b, Int i, ListBuf(Int) acc) {
+    if (i >= b.len()) { return acc.finish(); }
+    return spdm_widen(b, i + 1, acc.push((Int) ct_public(b[i])));
+}
+
+SpdmPublish(Int) = { .spdmp_sealed = spdmp_pub, .spdmp_plain = spdmp_pub, .spdmp_mac = spdmp_pub };
+SpdmPublish(Secret(UInt(8))) = { .spdmp_sealed = spdmp_sealed_secret, .spdmp_plain = spdmp_plain_secret, .spdmp_mac = spdmp_mac_secret };
+
+// ─── The key schedule ───────────────────────────────────────────────
+
+pub List(Int) spdm_bin(Int len, Str label, List(Int) ctx) { return [len & 255, (len >> 8) & 255].concat(bytes_of("spdm1.1 " + label)).concat(ctx); }
+
+// HKDF-Expand over SHA-384 with a public info (len at most 48 here).
+@needs(Word(W, B), Word64(D, B))
+List(B) spdmg_expand(List(B) prk, Int len, Str label, List(Int) ctx) {
+    ListBuf(B) ib = ListBuf();
+    List(B) info = w_lift_bytes(spdm_bin(len, label, ctx).concat([1]), 0, ib);
+    return hmac384g(prk, info)[0..len];
+}
+
+@needs(Word(W, B))
+List(B) spdmg_zeros48() {
+    ListBuf(B) zb = ListBuf();
+    return w_lift_bytes(spdm_le(0, 48), 0, zb);
+}
+
+// The requester's exchange data (X ‖ Y, 96 bytes) for its ephemeral
+// private key; empty for a key out of range. Public by design.
+@needs(P256Word(E, B), P384Word(G, B))
+pub List(Int) spdmg_exchange_data(List(B) priv) {
+    List(Int) pk = ec_public_keyg(P384, priv);
+    List(Int) none = [];
+    return if (pk.len() == 97) { pk[1..97] } else { none };
+}
+
+// The ECDHE secret with the device's exchange data (96 bytes); empty for
+// a bad key or point.
+@needs(P256Word(E, B), P384Word(G, B))
+pub List(B) spdmg_shared(List(B) priv, List(Int) rsp_exchange) {
+    List(Int) peer = if (rsp_exchange.len() == 96) { [4].concat(rsp_exchange) } else { [] };
+    return ecdhg(P384, priv, peer);
+}
+
+// The handshake secrets from the ECDHE secret and th1, the SHA-384 of TH1
+// with the signature (SpdmSession.th).
+@needs(Word(W, B), Word64(D, B))
+pub SpdmSecrets(B) spdmg_handshake(List(B) shared, List(Int) th1) {
+    List(B) z = spdmg_zeros48();
+    List(B) hs = hmac384g(z, shared);
+    return SpdmSecrets {.hs = hs, .req = spdmg_expand(hs, 48, "req hs data", th1), .rsp = spdmg_expand(hs, 48, "rsp hs data", th1)};
+}
+
+@needs(Word(W, B), Word64(D, B))
+List(B) spdmg_verify(List(B) secret, List(Int) thash) {
+    ListBuf(B) hb = ListBuf();
+    return hmac384g(spdmg_expand(secret, 48, "finished", []), w_lift_bytes(thash, 0, hb));
+}
+
+// Whether the device's ResponderVerifyData is the one the keys give over
+// th1; compared in constant time, one public bit.
+@needs(Word(W, B), Word64(D, B), CtSame(B))
+pub Bool spdmg_responder_ok(SpdmSecrets(B) s, List(Int) th1, List(Int) verify_data) {
+    if (verify_data.len() != 48) { return false; }
+    ListBuf(B) vb = ListBuf();
+    return ct_same(spdmg_verify(s.rsp, th1), w_lift_bytes(verify_data, 0, vb));
+}
+
+// FINISH without a signature: its header and RequesterVerifyData over
+// SHA-384(TH1 ‖ ResponderVerifyData ‖ header), which spdm_finish_hash
+// computes from the transcript.
+@needs(Word(W, B), Word64(D, B), SpdmPublish(B))
+pub List(Int) spdmg_finish(SpdmSecrets(B) s, List(Int) th) { return spdm_finish_head().concat(spdmp_mac(spdmg_verify(s.req, th))); }
+
+pub List(Int) spdm_finish_head() { return [17, 229, 0, 0]; }
+
+// The transcript hashes the requester needs, from TH1 with the signature
+// (SpdmSession.transcript) and the ResponderVerifyData: for FINISH, and
+// TH2 once FINISH_RSP (its header, and its verify data when the handshake
+// was in the clear) has come back.
+pub List(Int) spdm_finish_hash(List(Int) transcript, List(Int) rsp_verify) { return sha384_bytes(transcript.concat(rsp_verify).concat(spdm_finish_head())); }
+
+pub List(Int) spdm_th2(List(Int) transcript, List(Int) rsp_verify, List(Int) finish, List(Int) finish_rsp) { return sha384_bytes(transcript.concat(rsp_verify).concat(finish).concat(finish_rsp)); }
+
+@needs(Word(W, B), Word64(D, B))
+SpdmKeys(B) spdmg_keys_of(List(B) req, List(B) rsp) {
+    return SpdmKeys {.req_key = spdmg_expand(req, 32, "key", []), .req_iv = spdmg_expand(req, 12, "iv", []), .rsp_key = spdmg_expand(rsp, 32, "key", []), .rsp_iv = spdmg_expand(rsp, 12, "iv", [])};
+}
+
+// The keys FINISH and FINISH_RSP travel under (not in the clear).
+@needs(Word(W, B), Word64(D, B))
+pub SpdmKeys(B) spdmg_handshake_keys(SpdmSecrets(B) s) { return spdmg_keys_of(s.req, s.rsp); }
+
+// The data keys, from TH2.
+@needs(Word(W, B), Word64(D, B))
+pub SpdmKeys(B) spdmg_data_keys(SpdmSecrets(B) s, List(Int) th2) {
+    List(B) z = spdmg_zeros48();
+    List(B) master = hmac384g(spdmg_expand(s.hs, 48, "derived", []), z);
+    return spdmg_keys_of(spdmg_expand(master, 48, "req app data", th2), spdmg_expand(master, 48, "rsp app data", th2));
+}
+
+// ─── Secured messages ───────────────────────────────────────────────
+
+// salt XOR the sequence number, little-endian from byte 0.
+@needs(Word(W, B))
+List(B) spdmg_iv(List(B) salt, Int seq) {
+    ListBuf(B) acc = ListBuf();
+    return spdmg_iv_at(salt, seq, 0, acc).finish();
+}
+
+@needs(Word(W, B))
+ListBuf(B) spdmg_iv_at(List(B) salt, Int seq, Int i, ListBuf(B) acc) {
+    if (i >= salt.len()) { return acc; }
+    Int k = if (i < 8) { (seq >> (8 * i)) & 255 } else { 0 };
+    return spdmg_iv_at(salt, seq, i + 1, acc.push(b_xork(salt[i], k)));
+}
+
+List(Int) spdm_le(Int v, Int n) { return if (n <= 0) { [] } else { [v & 255].concat(spdm_le(v >> 8, n - 1)) }; }
+
+// A request (SPDM message) sealed as message `seq` of the session under
+// the requester's key and IV.
+@needs(Word(W, B), Block128(X, W, B), SpdmPublish(B))
+pub List(Int) spdmg_seal(Int session_id, Int seq, List(B) key, List(B) iv, List(Int) app) {
+    List(Int) hdr = spdm_le(session_id, 4).concat(spdm_le(2 + app.len() + 16, 2));
+    ListBuf(B) pb = ListBuf();
+    List(B) sealed = aes_gcmg_seal_ivb(key, spdmg_iv(iv, seq), w_lift_bytes(spdm_le(app.len(), 2).concat(app), 0, pb), hdr);
+    return hdr.concat(spdmp_sealed(sealed));
+}
+
+// A response opened as message `seq` under the responder's key and IV:
+// its SPDM message, or None when the session ID, length or tag is wrong.
+// Random padding after the message is dropped.
+@needs(Word(W, B), Block128(X, W, B), CtSame(B), SpdmPublish(B))
+pub Option(List(Int)) spdmg_open(Int session_id, Int seq, List(B) key, List(B) iv, List(Int) msg) {
+    if (msg.len() < 24 || msg.len() > 65541 || spdm_le_at(msg, 0, 4) != session_id || spdm_le_at(msg, 4, 2) != msg.len() - 6) { return None; }
+    return match aes_gcmg_decrypt_ivb(key, spdmg_iv(iv, seq), msg[6..msg.len()], msg[0..6]) {
+        Some(p) => spdm_app(spdmp_plain(p)),
+        None => None,
+    };
+}
+
+Option(List(Int)) spdm_app(List(Int) pt) {
+    if (pt.len() < 2) { return None; }
+    Int n = spdm_le_at(pt, 0, 2);
+    return if (2 + n <= pt.len()) { Some(pt[2..2 + n]) } else { None };
+}
+
+Int spdm_le_at(List(Int) b, Int at, Int n) { return if (n <= 0) { 0 } else { b[at] | (spdm_le_at(b, at + 1, n - 1) << 8) }; }
+
+// ─── Messages ───────────────────────────────────────────────────────
+
+// KEY_EXCHANGE: summary_type 0, 1 or 255, a certificate slot, the
+// requester's session ID half, its random (the challenge, 32 bytes) and
+// exchange data (96 bytes), opaque data.
+pub List(Int) spdm_key_exchange(Int summary_type, Int slot, Int req_session_id, List(Int) random, List(Int) exchange, List(Int) opaque) {
+    return [17, 228, summary_type & 255, slot & 255].concat(spdm_le(req_session_id, 2)).concat([0, 0]).concat(random).concat(exchange).concat(spdm_le(opaque.len(), 2)).concat(opaque);
+}
+
+// ─── The public copy ────────────────────────────────────────────────
+
+pub SpdmSecrets(Int) spdm_handshake(List(Int) shared, List(Int) th1) { return spdmg_handshake(shared, th1); }
+pub Bool spdm_responder_ok(SpdmSecrets(Int) s, List(Int) th1, List(Int) verify_data) { return spdmg_responder_ok(s, th1, verify_data); }
+pub List(Int) spdm_finish(SpdmSecrets(Int) s, List(Int) th) { return spdmg_finish(s, th); }
+pub SpdmKeys(Int) spdm_handshake_keys(SpdmSecrets(Int) s) { return spdmg_handshake_keys(s); }
+pub SpdmKeys(Int) spdm_data_keys(SpdmSecrets(Int) s, List(Int) th2) { return spdmg_data_keys(s, th2); }
+pub List(Int) spdm_seal(Int session_id, Int seq, List(Int) key, List(Int) iv, List(Int) app) { return spdmg_seal(session_id, seq, key, iv, app); }
+pub Option(List(Int)) spdm_open(Int session_id, Int seq, List(Int) key, List(Int) iv, List(Int) msg) { return spdmg_open(session_id, seq, key, iv, msg); }

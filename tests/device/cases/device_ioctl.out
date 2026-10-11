@@ -1,0 +1,5 @@
+a pty number
+0 outputs
+0 outputs
+fx.tiocsptlck: bad input: input 0 does not fit 4 bytes
+fx.dir: unsupported

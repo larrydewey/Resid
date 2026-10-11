@@ -1,0 +1,12 @@
+// Every length is checked against the descriptor's maximum: a value longer
+// than ReadAttr's `max` is Err(TooLong), never cut and never past the
+// buffer (PLAN-device-access.md §6.2). The host-side checks of a reply's
+// framing are tests/runtime/device_host.c.
+import "dev/fx_device_reply_length_checked.resid";
+
+@requires(device(readonly))
+Int main() {
+    Str s = match (device.read_attr(fx_online_short())) { Ok(o) => "accepted", Err(e) => device_error_text(e), };
+    println(s);
+    return 0;
+}

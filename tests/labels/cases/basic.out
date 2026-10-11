@@ -1,0 +1,17 @@
+bind a @ basic.resid:5:5: External
+  basic.resid:5:13  mcall get  -- outside data enters here (args.get)
+  basic.resid:5:5  bind a
+bind e @ basic.resid:6:5: External
+  basic.resid:6:13  mcall get  -- outside data enters here (environment.get)
+  basic.resid:6:5  bind e
+bind k @ basic.resid:7:5: Internal
+bind kr @ basic.resid:8:5: Internal
+bind n @ basic.resid:9:5: External
+  basic.resid:5:13  mcall get  -- outside data enters here (args.get)
+  basic.resid:5:5  bind a
+  basic.resid:9:13  call str_len
+  basic.resid:9:5  bind n
+bind both @ basic.resid:10:5: External
+  basic.resid:5:13  mcall get  -- outside data enters here (args.get)
+  basic.resid:5:5  bind a
+  basic.resid:10:5  bind both

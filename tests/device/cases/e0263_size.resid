@@ -1,0 +1,5 @@
+// _IOC_SIZE of the request is the struct's size; this descriptor breaks that (E0263).
+import "dev/fx_e0263_size.resid";
+
+@requires(device)
+Int main() { println(fx_call()); return 0; }

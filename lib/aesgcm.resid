@@ -1,365 +1,133 @@
 // ─── lib/aesgcm.resid — AES (FIPS 197), GCM (SP 800-38D), key wrap ──
 // AES-128, AES-192 and AES-256 in pure Resid; GCM with any IV length;
-// AES key wrap (RFC 3394). The block cipher runs on AES-NI when the CPU
-// has it and in software otherwise, and both are free of secret-indexed
-// memory: the software S-box is computed (an inverse in GF(2^8) and the
-// affine map) rather than looked up in a table, so neither the key
-// schedule nor a block leaks through the cache. GHASH multiplies with
-// masks, not branches. tests/ct checks both under valgrind.
+// AES key wrap (RFC 3394). The public API on byte lists of Int. Every
+// cipher function here is the public copy of lib/aesgcmg.resid's generic
+// implementation (Word(Int, Int) and Block128(UInt(128), Int, Int) from
+// lib/word.resid): the same code, checked by the compiler at secret
+// types, computes on secret keys and plaintexts.
 //
-// An expanded key is the flat schedule, 16 * (rounds + 1) bytes, so its
-// length says which AES it is. Byte lists are 0-based.
+// The block cipher runs on AES-NI / AESE when the CPU has it and in
+// software otherwise, and both are free of secret-indexed memory: the
+// software S-box is computed (an inverse in GF(2^8) and the affine map,
+// four bytes at a time) rather than looked up in a table, so neither the
+// key schedule nor a block leaks through the cache. GHASH runs on
+// PCLMULQDQ / PMULL or multiplies with masks, not branches. tests/ct
+// checks both under valgrind.
+//
+// An expanded key is the FIPS 197 schedule as 4 * (rounds + 1) 32-bit
+// words (word i is bytes 4i..4i+3, little-endian), so its length says
+// which AES it is. Byte lists are 0-based.
 
 import "crypto.resid";
+import "word.resid";
+import "aesgcmg.resid";
 
-// ── GF(2^8), constant time ───────────────────────────────────────────
+// ── GF(2^8) and the S-box, one byte at a time ───────────────────────
 
 pub Int m8() { return 255; }
 
-// a * 2 in GF(2^8): the reduction is a multiply by the top bit, not a
-// branch on it.
-pub Int xtime(Int a) { return ((a << 1) & 255) ^ (wrapping_sub(0, ct_hide((a >> 7) & 1)) & 27); }
+// a * 2 in GF(2^8).
+pub Int xtime(Int a) { return aesg_xtime(a & 255); }
 
-pub Int gf8_mul(Int a, Int b) { return gf8_mul_at(a & 255, b & 255, 0, 0); }
-
-Int gf8_mul_at(Int a, Int b, Int i, Int p) {
-    if (i >= 8) { return p; }
-    return gf8_mul_at(xtime(a), b >> 1, i + 1, p ^ (a & wrapping_sub(0, ct_hide(b & 1))));
-}
-
-Int gf8_sq(Int a) { return gf8_mul(a, a); }
+pub Int gf8_mul(Int a, Int b) { return aesg_mul(a & 255, b & 255); }
 
 // x^254 = x^-1 (and 0 for 0).
-pub Int gf8_inv(Int x) {
-    Int x2 = gf8_sq(x);
-    Int x3 = gf8_mul(x2, x);
-    Int x6 = gf8_sq(x3);
-    Int x7 = gf8_mul(x6, x);
-    Int x12 = gf8_sq(x6);
-    Int x15 = gf8_mul(x12, x3);
-    Int x120 = gf8_sq(gf8_sq(gf8_sq(x15)));
-    return gf8_sq(gf8_mul(x120, x7));
-}
-
-Int rotl8(Int b, Int n) { return ((b << n) | (b >> (8 - n))) & 255; }
+pub Int gf8_inv(Int x) { return aesg_inv(x & 255); }
 
 // The S-box, computed: the GF(2^8) inverse, then the affine map.
-pub Int sbox_at(Int v) {
-    Int b = gf8_inv(v & 255);
-    return b ^ rotl8(b, 1) ^ rotl8(b, 2) ^ rotl8(b, 3) ^ rotl8(b, 4) ^ 99;
-}
+pub Int sbox_at(Int v) { return aesg_sub(v & 255) & 255; }
 
 // The inverse S-box: the inverse affine map, then the inverse.
-pub Int inv_sbox_at(Int v) {
-    Int s = v & 255;
-    return gf8_inv(rotl8(s, 1) ^ rotl8(s, 3) ^ rotl8(s, 6) ^ 5);
-}
+pub Int inv_sbox_at(Int v) { return aesg_inv_sub(v & 255) & 255; }
 
 // ── Key expansion (FIPS 197 §5.2) ────────────────────────────────────
 
-pub Int rcon_at(Int i) {
-    if (i == 1) { return 1; }
-    if (i == 2) { return 2; }
-    if (i == 3) { return 4; }
-    if (i == 4) { return 8; }
-    if (i == 5) { return 16; }
-    if (i == 6) { return 32; }
-    if (i == 7) { return 64; }
-    if (i == 8) { return 128; }
-    if (i == 9) { return 27; }
-    return 54;
-}
+pub Int rcon_at(Int i) { return aesg_rcon(i); }
 
-// Words nk.. of the schedule, appended to w (4 bytes per word).
-List(Int) ke_words(List(Int) w, Int nk, Int i, Int total) {
-    if (i >= total) { return w; }
-    Int p = 4 * (i - 1);
-    Int q = 4 * (i - nk);
-    Bool rot = i % nk == 0;
-    Bool sub = rot || (nk > 6 && i % nk == 4);
-    Int a0 = if (rot) { w[p + 1] } else { w[p] };
-    Int a1 = if (rot) { w[p + 2] } else { w[p + 1] };
-    Int a2 = if (rot) { w[p + 3] } else { w[p + 2] };
-    Int a3 = if (rot) { w[p] } else { w[p + 3] };
-    Int s0 = if (sub) { sbox_at(a0) } else { a0 };
-    Int s1 = if (sub) { sbox_at(a1) } else { a1 };
-    Int s2 = if (sub) { sbox_at(a2) } else { a2 };
-    Int s3 = if (sub) { sbox_at(a3) } else { a3 };
-    Int rc = if (rot) { rcon_at(i / nk) } else { 0 };
-    return ke_words(w.concat([w[q] ^ s0 ^ rc, w[q + 1] ^ s1, w[q + 2] ^ s2, w[q + 3] ^ s3]), nk, i + 1, total);
-}
-
-// The schedule of a 16-, 24- or 32-byte key; empty for any other length.
-pub List(Int) aes_key_expand(List(Int) key) {
-    Int n = key.len();
-    if (n != 16 && n != 24 && n != 32) { return []; }
-    Int nk = n / 4;
-    return ke_words(key[0..n], nk, nk, 4 * (nk + 7));
-}
+// The schedule of a 16-, 24- or 32-byte key, as words; empty for any
+// other length.
+pub List(Int) aes_key_expand(List(Int) key) { return aesg_key_expand(key); }
 
 // The AES-128 schedule (kept for the TLS record layer; any key size works).
 pub List(Int) aes128_key_expand(List(Int) key) { return aes_key_expand(key); }
 
-pub Int aes_rounds_of(List(Int) rk) { return rk.len() / 16 - 1; }
+pub Int aes_rounds_of(List(Int) rk) { return aesg_rounds(rk.len()); }
 
-// ── Software block cipher ────────────────────────────────────────────
-
-pub List(Int) ark(List(Int) st, List(Int) rk, Int rkoff, Int i, List(Int) acc) {
-    if (i >= 16) { return acc; }
-    return ark(st, rk, rkoff, i + 1, acc.concat([st[i] ^ rk[rkoff + i]]));
-}
-
-pub List(Int) add_round_key(List(Int) st, List(Int) rk, Int rkoff) { return ark(st, rk, rkoff, 0, []); }
-
-List(Int) map16(List(Int) st, Bool inv, Int i, List(Int) acc) {
-    if (i >= 16) { return acc; }
-    return map16(st, inv, i + 1, acc.concat([if (inv) { inv_sbox_at(st[i]) } else { sbox_at(st[i]) }]));
-}
-
-pub List(Int) sub_bytes(List(Int) st) { return map16(st, false, 0, []); }
-pub List(Int) inv_sub_bytes(List(Int) st) { return map16(st, true, 0, []); }
-
-// ShiftRows on the column-major state: new[r + 4c] = old[r + 4((c + r) % 4)];
-// the inverse shifts the other way.
-List(Int) sr_build(List(Int) st, Int dir, Int i, List(Int) acc) {
-    if (i >= 16) { return acc; }
-    Int r = i % 4;
-    Int c = i / 4;
-    Int src = r + 4 * ((c + dir * r + 4) % 4);
-    return sr_build(st, dir, i + 1, acc.concat([st[src]]));
-}
-
-pub List(Int) shift_rows(List(Int) st) { return sr_build(st, 1, 0, []); }
-pub List(Int) inv_shift_rows(List(Int) st) { return sr_build(st, 0 - 1, 0, []); }
-
-List(Int) mc_cols(List(Int) st, Bool inv, Int c, List(Int) acc) {
-    if (c >= 4) { return acc; }
-    Int k = c * 4;
-    Int a0 = st[k];
-    Int a1 = st[k + 1];
-    Int a2 = st[k + 2];
-    Int a3 = st[k + 3];
-    List(Int) col = if (inv) {
-        [gf8_mul(a0, 14) ^ gf8_mul(a1, 11) ^ gf8_mul(a2, 13) ^ gf8_mul(a3, 9),
-         gf8_mul(a0, 9) ^ gf8_mul(a1, 14) ^ gf8_mul(a2, 11) ^ gf8_mul(a3, 13),
-         gf8_mul(a0, 13) ^ gf8_mul(a1, 9) ^ gf8_mul(a2, 14) ^ gf8_mul(a3, 11),
-         gf8_mul(a0, 11) ^ gf8_mul(a1, 13) ^ gf8_mul(a2, 9) ^ gf8_mul(a3, 14)]
-    } else {
-        [xtime(a0) ^ xtime(a1) ^ a1 ^ a2 ^ a3,
-         a0 ^ xtime(a1) ^ xtime(a2) ^ a2 ^ a3,
-         a0 ^ a1 ^ xtime(a2) ^ xtime(a3) ^ a3,
-         xtime(a0) ^ a0 ^ a1 ^ a2 ^ xtime(a3)]
-    };
-    return mc_cols(st, inv, c + 1, acc.concat(col));
-}
-
-pub List(Int) mix_columns(List(Int) st) { return mc_cols(st, false, 0, []); }
-pub List(Int) inv_mix_columns(List(Int) st) { return mc_cols(st, true, 0, []); }
-
-List(Int) enc_rounds(List(Int) st, List(Int) rk, Int round, Int nr) {
-    List(Int) s = shift_rows(sub_bytes(st));
-    if (round == nr) { return add_round_key(s, rk, 16 * nr); }
-    return enc_rounds(add_round_key(mix_columns(s), rk, 16 * round), rk, round + 1, nr);
-}
-
-pub List(Int) aes_encrypt_block_sw(List(Int) rk, List(Int) blk) {
-    return enc_rounds(add_round_key(blk, rk, 0), rk, 1, aes_rounds_of(rk));
-}
-
-List(Int) dec_rounds(List(Int) st, List(Int) rk, Int round) {
-    List(Int) s = add_round_key(inv_sub_bytes(inv_shift_rows(st)), rk, 16 * round);
-    if (round == 0) { return s; }
-    return dec_rounds(inv_mix_columns(s), rk, round - 1);
-}
-
-// The inverse cipher (FIPS 197 §5.3), software only: key unwrapping is
-// its one user, and it is short.
-pub List(Int) aes_decrypt_block(List(Int) rk, List(Int) blk) {
-    Int nr = aes_rounds_of(rk);
-    return dec_rounds(add_round_key(blk, rk, 16 * nr), rk, nr - 1);
-}
-
-pub List(Int) aes128_encrypt_block_sw(List(Int) rk, List(Int) blk) { return aes_encrypt_block_sw(rk, blk); }
-
-// ── AES-NI ───────────────────────────────────────────────────────────
+// ── Blocks ───────────────────────────────────────────────────────────
 // Blocks pack little-endian (byte 0 low), which is AES-NI's own load
 // order on this target.
 
-pub UInt(128) pb_acc(List(Int) b, UInt(128) v, Int i) {
-    if (i < 0) { return v; }
-    UInt(128) byte = (UInt(128)) wrapping_u64(b[i] & 255);
-    return pb_acc(b, v | (byte << ((UInt(128)) (i * 8))), i - 1);
+pub UInt(128) pb_acc(List(Int) b, UInt(128) v, Int i) { return aesg_le_pack_pub(b, i, v); }
+pub UInt(128) pack_block128(List(Int) b) { return aesg_le_pack_pub(b, 15, (UInt(128)) 0); }
+
+pub List(Int) unpack_block128(UInt(128) v) {
+    ListBuf(Int) acc = ListBuf();
+    return aesg_le_bytes(v, 0, acc).finish();
 }
-pub UInt(128) pack_block128(List(Int) b) { return pb_acc(b, 0, 15); }
 
-pub List(Int) ub_acc(UInt(128) v, Int i, List(Int) acc) {
-    if (i >= 16) { return acc; }
-    return ub_acc(v, i + 1, acc.concat([le_byte(v, i)]));
-}
-pub List(Int) unpack_block128(UInt(128) v) { return ub_acc(v, 0, []); }
+// Byte i (0..15) of a little-endian packed block.
+pub Int le_byte(UInt(128) v, Int i) { return wrapping_i64((v >> ((UInt(128)) (i * 8))) & ((UInt(128)) 255)); }
 
-pub UInt(128) round_key128(List(Int) rk, Int r) { return pack_block128(slice_seed(rk, r * 16, 16, [])); }
-
-// Packed round keys; nr is 10, 12 or 14. Unused keys are zero.
-type AesKeys = { Bool hw; Int nr; List(Int) rk; UInt(128) k0; UInt(128) k1; UInt(128) k2; UInt(128) k3; UInt(128) k4; UInt(128) k5; UInt(128) k6; UInt(128) k7; UInt(128) k8; UInt(128) k9; UInt(128) k10; UInt(128) k11; UInt(128) k12; UInt(128) k13; UInt(128) k14; };
-
-UInt(128) rk_or0(List(Int) rk, Int r) { return if (16 * r + 16 <= rk.len()) { round_key128(rk, r) } else { (UInt(128)) 0 }; }
-
-pub AesKeys aes_keys(List(Int) rk) {
-    return AesKeys {.hw = resid_cpu_has_aesni(), .nr = aes_rounds_of(rk), .rk = rk, .k0 = rk_or0(rk, 0), .k1 = rk_or0(rk, 1), .k2 = rk_or0(rk, 2), .k3 = rk_or0(rk, 3), .k4 = rk_or0(rk, 4), .k5 = rk_or0(rk, 5), .k6 = rk_or0(rk, 6), .k7 = rk_or0(rk, 7), .k8 = rk_or0(rk, 8), .k9 = rk_or0(rk, 9), .k10 = rk_or0(rk, 10), .k11 = rk_or0(rk, 11), .k12 = rk_or0(rk, 12), .k13 = rk_or0(rk, 13), .k14 = rk_or0(rk, 14)};
-}
+// The packed round keys and the path (AES-NI or software) for a schedule.
+pub AesKeyG(UInt(128), Int) aes_keys(List(Int) rk) { return aesg_keys(rk); }
 
 // One block, little-endian packed in and out.
-pub UInt(128) aes_block(AesKeys k, UInt(128) b) {
-    if (!k.hw) { return pack_block128(aes_encrypt_block_sw(k.rk, unpack_block128(b))); }
-    UInt(128) s1 = aesni_enc_round(b ^ k.k0, k.k1);
-    UInt(128) s2 = aesni_enc_round(s1, k.k2);
-    UInt(128) s3 = aesni_enc_round(s2, k.k3);
-    UInt(128) s4 = aesni_enc_round(s3, k.k4);
-    UInt(128) s5 = aesni_enc_round(s4, k.k5);
-    UInt(128) s6 = aesni_enc_round(s5, k.k6);
-    UInt(128) s7 = aesni_enc_round(s6, k.k7);
-    UInt(128) s8 = aesni_enc_round(s7, k.k8);
-    UInt(128) s9 = aesni_enc_round(s8, k.k9);
-    if (k.nr == 10) { return aesni_enc_last_round(s9, k.k10); }
-    UInt(128) s11 = aesni_enc_round(aesni_enc_round(s9, k.k10), k.k11);
-    if (k.nr == 12) { return aesni_enc_last_round(s11, k.k12); }
-    return aesni_enc_last_round(aesni_enc_round(aesni_enc_round(s11, k.k12), k.k13), k.k14);
-}
+pub UInt(128) aes_block(AesKeyG(UInt(128), Int) k, UInt(128) b) { return aesg_block(k, b); }
 
 // One block of any AES, bytes in and out, on AES-NI when present.
 pub List(Int) aes_encrypt_block(List(Int) rk, List(Int) blk) {
-    return unpack_block128(aes_block(aes_keys(rk), pack_block128(blk)));
+    return unpack_block128(aesg_block(aes_keys(rk), pack_block128(blk)));
+}
+
+// The same in software, whatever the CPU has.
+pub List(Int) aes_encrypt_block_sw(List(Int) rk, List(Int) blk) {
+    return unpack_block128(aesg_encrypt_sw(rk, pack_block128(blk)));
+}
+
+// The inverse cipher (FIPS 197 §5.3), software only.
+pub List(Int) aes_decrypt_block(List(Int) rk, List(Int) blk) {
+    return unpack_block128(aesg_decrypt_sw(rk, pack_block128(blk)));
 }
 
 pub List(Int) aes128_encrypt_block(List(Int) rk, List(Int) blk) { return aes_encrypt_block(rk, blk); }
 pub List(Int) aes128_encrypt_block_hw(List(Int) rk, List(Int) blk) { return aes_encrypt_block(rk, blk); }
-
-// Byte i (0..15) of a little-endian packed block.
-pub Int le_byte(UInt(128) v, Int i) { return wrapping_i64((v >> ((UInt(128)) (i * 8))) & ((UInt(128)) 255)); }
+pub List(Int) aes128_encrypt_block_sw(List(Int) rk, List(Int) blk) { return aes_encrypt_block_sw(rk, blk); }
 
 // ── GCM ──────────────────────────────────────────────────────────────
 
 // Bytes [off, off + n) of b, n <= 16, big-endian packed (zero padded).
 pub UInt(128) be_pack(List(Int) b, Int off, Int n, Int i, UInt(128) acc) {
-    if (i >= 16) { return acc; }
-    UInt(128) byte = if (i < n) { (UInt(128)) wrapping_u64(b[off + i] & 255) } else { (UInt(128)) 0 };
-    return be_pack(b, off, n, i + 1, acc | (byte << ((UInt(128)) (120 - i * 8))));
+    Int m = if (n < 16) { n } else { 16 };
+    return aesg_be_pack_pub(b, off, m, i, acc);
 }
 
-pub UInt(128) le_to_be(UInt(128) v, Int i, UInt(128) acc) {
-    if (i >= 16) { return acc; }
-    UInt(128) byte = (UInt(128)) wrapping_u64(le_byte(v, i));
-    return le_to_be(v, i + 1, acc | (byte << ((UInt(128)) (120 - i * 8))));
-}
+// X * Y in GF(2^128), both big-endian packed (SP 800-38D, algorithm 1):
+// carry-less multiplication where the CPU has it, else 128 masked
+// shift-and-add steps; both are constant time.
+pub UInt(128) gf128_mul(UInt(128) x, UInt(128) y) { return aesg_gf128(resid_cpu_has_clmul(), x, y); }
 
-// X * Y in GF(2^128), both big-endian packed (SP 800-38D, algorithm 1).
-// Each bit selects with a mask: H is secret, so no branch may see it.
-// Carry-less multiplication (PCLMULQDQ, PMULL) where the CPU has it, else
-// 128 masked shift-and-add steps; both are constant time.
-pub UInt(128) gf128_mul(UInt(128) x, UInt(128) y) { return if (resid_cpu_has_clmul()) { gf128_mul_hw(x, y) } else { gf128_mul_sw(x, y) }; }
-
-pub UInt(128) gf128_mul_sw(UInt(128) x, UInt(128) y) { return gf128_at(x, y, (UInt(128)) 0, 0); }
-
-UInt(128) gf128_at(UInt(128) x, UInt(128) v, UInt(128) z, Int i) {
-    if (i >= 128) { return z; }
-    UInt(128) one = (UInt(128)) 1;
-    UInt(128) xm = wrapping_usub((UInt(128)) 0, (UInt(128)) wrapping_u64(ct_hide(wrapping_i64((x >> ((UInt(128)) (127 - i))) & one))));
-    UInt(128) vm = wrapping_usub((UInt(128)) 0, (UInt(128)) wrapping_u64(ct_hide(wrapping_i64(v & one))));
-    UInt(128) r = ((UInt(128)) 225) << ((UInt(128)) 120);
-    return gf128_at(x, (v >> one) ^ (r & vm), z ^ (v & xm), i + 1);
-}
+pub UInt(128) gf128_mul_sw(UInt(128) x, UInt(128) y) { return aesg_gf128_sw(x, y); }
 
 // GHASH over bytes [off, off + n) of data, zero padded to whole blocks.
 pub UInt(128) ghash128(UInt(128) h, UInt(128) y, List(Int) data, Int off, Int n) {
-    if (n <= 0) { return y; }
-    Int take = if (n < 16) { n } else { 16 };
-    return ghash128(h, gf128_mul(y ^ be_pack(data, off, take, 0, (UInt(128)) 0), h), data, off + 16, n - 16);
+    return aesg_ghash_pub(resid_cpu_has_clmul(), h, y, data, off, n);
 }
-
-// The counter block for the first 12 bytes of J0 (little-endian packed)
-// and a 32-bit big-endian count.
-pub UInt(128) ctr_block(UInt(128) ivp, Int c) {
-    Int w = ((c >> 24) & 255) | (((c >> 16) & 255) << 8) | (((c >> 8) & 255) << 16) | ((c & 255) << 24);
-    return ivp | (((UInt(128)) w) << ((UInt(128)) 96));
-}
-
-// CTR keystream XOR over data[done..], into out.
-pub ListBuf(Int) ctr_run(AesKeys k, UInt(128) ivp, Int c, List(Int) data, Int done, ListBuf(Int) out) {
-    Int total = data.len();
-    if (done >= total) { return out; }
-    UInt(128) ks = aes_block(k, ctr_block(ivp, c));
-    Int left = total - done;
-    Int take = if (left < 16) { left } else { 16 };
-    return ctr_run(k, ivp, (c + 1) & 4294967295, data, done + take, ctr_bytes(ks, data, done, 0, take, out));
-}
-
-pub ListBuf(Int) ctr_bytes(UInt(128) ks, List(Int) data, Int done, Int i, Int take, ListBuf(Int) out) {
-    if (i >= take) { return out; }
-    return ctr_bytes(ks, data, done, i + 1, take, out.push(data[done + i] ^ le_byte(ks, i)));
-}
-
-// The 12-byte head of a 16-byte counter block, packed, and its count.
-pub UInt(128) ctr_iv(List(Int) cb) { return pb_acc(cb, (UInt(128)) 0, 11); }
-pub Int ctr_count(List(Int) cb) { return cb[12] * 16777216 + cb[13] * 65536 + cb[14] * 256 + cb[15]; }
 
 pub List(Int) be_bytes(UInt(128) v, Int i, ListBuf(Int) acc) {
     if (i >= 16) { return acc.finish(); }
     return be_bytes(v, i + 1, acc.push(wrapping_i64((v >> ((UInt(128)) (120 - i * 8))) & ((UInt(128)) 255))));
 }
 
-// GCM state for one key and IV: the hash key H and the pre-counter block
-// J0, split as the counter code wants it (SP 800-38D §7.1 steps 1-2).
-type GcmCtx = { AesKeys k; UInt(128) h; UInt(128) j0iv; Int j0c; };
-
-GcmCtx gcm_ctx(List(Int) rk, List(Int) iv) {
-    AesKeys k = aes_keys(rk);
-    UInt(128) h = le_to_be(aes_block(k, (UInt(128)) 0), 0, (UInt(128)) 0);
-    if (iv.len() == 12) { return GcmCtx {.k = k, .h = h, .j0iv = pb_acc(iv, (UInt(128)) 0, 11), .j0c = 1}; }
-    // Any other length: J0 = GHASH(IV || 0^s || [0]_64 || [len(IV)]_64).
-    UInt(128) y = ghash128(h, (UInt(128)) 0, iv, 0, iv.len());
-    List(Int) j0 = be_bytes(gf128_mul(y ^ ((UInt(128)) (iv.len() * 8)), h), 0, ListBuf());
-    return GcmCtx {.k = k, .h = h, .j0iv = pb_acc(j0, (UInt(128)) 0, 11), .j0c = ctr_count(j0)};
-}
-
-// The tag: GHASH(aad, ct, lengths) xor E(J0), as 16 bytes.
-List(Int) gcm_ctx_tag(GcmCtx g, List(Int) aad, List(Int) ct) {
-    UInt(128) y1 = ghash128(g.h, (UInt(128)) 0, aad, 0, aad.len());
-    UInt(128) y2 = ghash128(g.h, y1, ct, 0, ct.len());
-    UInt(128) lens = (((UInt(128)) (aad.len() * 8)) << ((UInt(128)) 64)) | ((UInt(128)) (ct.len() * 8));
-    UInt(128) s = gf128_mul(y2 ^ lens, g.h);
-    UInt(128) e = le_to_be(aes_block(g.k, ctr_block(g.j0iv, g.j0c)), 0, (UInt(128)) 0);
-    return be_bytes(s ^ e, 0, ListBuf());
-}
-
-Int gcm_inc(Int c) { return (c + 1) & 4294967295; }
-
-// The 96-bit-IV tag the TLS layer computes from its own counter block.
-pub List(Int) gcm_tag(AesKeys k, UInt(128) ivp, List(Int) aad, List(Int) ct) {
-    UInt(128) h = le_to_be(aes_block(k, (UInt(128)) 0), 0, (UInt(128)) 0);
-    return gcm_ctx_tag(GcmCtx {.k = k, .h = h, .j0iv = ivp, .j0c = 1}, aad, ct);
-}
-
 // AES-GCM encryption under a 16-, 24- or 32-byte key and an IV of at
 // least one byte: ciphertext || 16-byte tag, or empty for a bad key or IV.
 pub List(Int) aes_gcm_seal(List(Int) key, List(Int) iv, List(Int) plaintext, List(Int) aad) {
-    List(Int) rk = aes_key_expand(key);
-    if (rk.len() == 0 || iv.len() == 0) { return []; }
-    GcmCtx g = gcm_ctx(rk, iv);
-    List(Int) ct = ctr_run(g.k, g.j0iv, gcm_inc(g.j0c), plaintext, 0, ListBuf()).finish();
-    return ct.concat(gcm_ctx_tag(g, aad, ct));
+    return aes_gcmg_seal(key, iv, plaintext, aad);
 }
 
 // The plaintext when the tag verifies (compared in constant time), None
 // otherwise -- an empty plaintext is Some([]), not a failure.
 pub Option(List(Int)) aes_gcm_decrypt(List(Int) key, List(Int) iv, List(Int) ct_and_tag, List(Int) aad) {
-    List(Int) rk = aes_key_expand(key);
-    Int clen = ct_and_tag.len() - 16;
-    if (rk.len() == 0 || iv.len() == 0 || clen < 0) { return None; }
-    GcmCtx g = gcm_ctx(rk, iv);
-    List(Int) ct = ct_and_tag[0..clen];
-    if (!ct_equal(gcm_ctx_tag(g, aad, ct), ct_and_tag[clen..])) { return None; }
-    return Some(ctr_run(g.k, g.j0iv, gcm_inc(g.j0c), ct, 0, ListBuf()).finish());
+    return aes_gcmg_decrypt(key, iv, ct_and_tag, aad);
 }
 
 // ── Byte-list helpers kept for the TLS record layer ─────────────────
@@ -416,23 +184,16 @@ pub List(Int) gcm_len_block(Int alen, Int clen) {
 // GCM counter blocks: J0 = IV || 00000001; inc32 increments last 4 bytes
 pub List(Int) inc32(List(Int) ctr) {
     List(Int) head = slice_seed(ctr, 0, 12, []);
-    Int b12 = ctr[12];
-    Int b13 = ctr[13];
-    Int b14 = ctr[14];
-    Int b15 = ctr[15];
-    Int hi = b12 * 256 + b13;
-    Int full = hi * 65536 + b14 * 256 + b15;
-    Int f1 = full + 1;
-    Int n0 = (f1 >> 24) & 255;
-    Int n1 = (f1 >> 16) & 255;
-    Int n2 = (f1 >> 8) & 255;
-    Int n3 = f1 & 255;
-    return head.concat([n0, n1, n2, n3]);
+    Int full = ctr[12] * 16777216 + ctr[13] * 65536 + ctr[14] * 256 + ctr[15];
+    Int f1 = (full + 1) & 4294967295;
+    return head.concat([(f1 >> 24) & 255, (f1 >> 16) & 255, (f1 >> 8) & 255, f1 & 255]);
 }
 
-// CTR mode XOR
+// CTR mode XOR from the 16-byte counter block cb, appended to acc.
 pub List(Int) ctr_xor(List(Int) rk, List(Int) cb, List(Int) data, Int done, List(Int) acc) {
-    List(Int) out = ctr_run(aes_keys(rk), ctr_iv(cb), ctr_count(cb), data, done, ListBuf()).finish();
+    Int count = cb[12] * 16777216 + cb[13] * 65536 + cb[14] * 256 + cb[15];
+    ListBuf(Int) ob = ListBuf();
+    List(Int) out = aesg_ctr(aes_keys(rk), aesg_le_pack_pub(cb, 11, (UInt(128)) 0), count, data, done, ob).finish();
     return if (acc.len() == 0) { out } else { acc.concat(out) };
 }
 
@@ -444,7 +205,6 @@ pub List(Int) ctr_take(List(Int) ks, List(Int) data, Int done, Int i, Int take, 
     Int ni = i + 1;
     return ctr_take(ks, data, done, ni, take, acc2);
 }
-
 
 // ── AES-128-GCM names the TLS record layer uses ──────────────────────
 
@@ -474,75 +234,13 @@ pub List(Int) aes128_gcm_open_bytes(List(Int) key, List(Int) iv, List(Int) ct_an
 //
 // For wrapping one key (a weight DEK, say) under another. The input is
 // whole 64-bit blocks, at least two of them; the default IV A6..A6 is
-// checked on unwrap in constant time. The state is kept as bytes: a
-// List(UInt(64)) would box any word of 2^54 or more, which is a
-// secret-dependent allocation (tests/ct).
-
-ListBuf(Int) kw_cat(List(Int) b, Int i, Int end, ListBuf(Int) acc) {
-    if (i >= end) { return acc; }
-    return kw_cat(b, i + 1, end, acc.push(b[i]));
-}
-
-// The 64-bit counter t as eight big-endian bytes, XORed into a.
-List(Int) kw_xor_t(List(Int) a, Int t) { return kw_xt(a, t, 0, ListBuf()); }
-
-List(Int) kw_xt(List(Int) a, Int t, Int i, ListBuf(Int) acc) {
-    if (i >= 8) { return acc.finish(); }
-    return kw_xt(a, t, i + 1, acc.push(a[i] ^ ((t >> (56 - 8 * i)) & 255)));
-}
-
-List(Int) kw_iv() { return [166, 166, 166, 166, 166, 166, 166, 166]; }
-
-// R with block i (8 bytes, 0-based) replaced by blk[8..16].
-List(Int) kw_set(List(Int) r, Int i, List(Int) blk) {
-    return kw_cat(r, 8 * i + 8, r.len(), kw_cat(blk, 8, 16, kw_cat(r, 0, 8 * i, ListBuf()))).finish();
-}
-
-type KwState = { List(Int) a; List(Int) r; };
-
-KwState kw_wrap_pass(List(Int) rk, KwState st, Int n, Int j, Int i) {
-    if (i > n) { return st; }
-    List(Int) b = aes_encrypt_block(rk, kw_cat(st.r, 8 * (i - 1), 8 * i, kw_cat(st.a, 0, 8, ListBuf())).finish());
-    KwState next = KwState {.a = kw_xor_t(b[0..8], n * j + i), .r = kw_set(st.r, i - 1, b)};
-    return kw_wrap_pass(rk, next, n, j, i + 1);
-}
-
-KwState kw_wrap_all(List(Int) rk, KwState st, Int n, Int j) {
-    if (j > 5) { return st; }
-    return kw_wrap_all(rk, kw_wrap_pass(rk, st, n, j, 1), n, j + 1);
-}
+// checked on unwrap in constant time.
 
 // Wrap `plain` (a multiple of 8 bytes, at least 16) under `kek`; empty
 // for a bad length or key.
-pub List(Int) aes_key_wrap(List(Int) kek, List(Int) plain) {
-    List(Int) rk = aes_key_expand(kek);
-    Int n = plain.len() / 8;
-    if (rk.len() == 0 || plain.len() % 8 != 0 || n < 2) { return []; }
-    KwState st = kw_wrap_all(rk, KwState {.a = kw_iv(), .r = plain}, n, 0);
-    return st.a.concat(st.r);
-}
-
-KwState kw_unwrap_pass(List(Int) rk, KwState st, Int n, Int j, Int i) {
-    if (i < 1) { return st; }
-    List(Int) blk = kw_cat(st.r, 8 * (i - 1), 8 * i, kw_cat(kw_xor_t(st.a, n * j + i), 0, 8, ListBuf())).finish();
-    List(Int) b = aes_decrypt_block(rk, blk);
-    KwState next = KwState {.a = b[0..8], .r = kw_set(st.r, i - 1, b)};
-    return kw_unwrap_pass(rk, next, n, j, i - 1);
-}
-
-KwState kw_unwrap_all(List(Int) rk, KwState st, Int n, Int j) {
-    if (j < 0) { return st; }
-    return kw_unwrap_all(rk, kw_unwrap_pass(rk, st, n, j, n), n, j - 1);
-}
+pub List(Int) aes_key_wrap(List(Int) kek, List(Int) plain) { return aes_key_wrapg(kek, plain); }
 
 // The key wrapped in `wrapped` under `kek`, or None when the integrity
 // check fails or the input is not a wrap (24 bytes or more, whole 64-bit
 // blocks).
-pub Option(List(Int)) aes_key_unwrap(List(Int) kek, List(Int) wrapped) {
-    List(Int) rk = aes_key_expand(kek);
-    Int n = wrapped.len() / 8 - 1;
-    if (rk.len() == 0 || wrapped.len() % 8 != 0 || n < 2) { return None; }
-    KwState st = kw_unwrap_all(rk, KwState {.a = wrapped[0..8], .r = wrapped[8..]}, n, 5);
-    if (!ct_equal(st.a, kw_iv())) { return None; }
-    return Some(st.r);
-}
+pub Option(List(Int)) aes_key_unwrap(List(Int) kek, List(Int) wrapped) { return aes_key_unwrapg(kek, wrapped); }

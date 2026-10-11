@@ -1,0 +1,5 @@
+// A struct that carries data to the kernel needs _IOC_WRITE; this descriptor breaks that (E0263).
+import "dev/fx_e0263_dir_write.resid";
+
+@requires(device)
+Int main() { println(fx_call()); return 0; }

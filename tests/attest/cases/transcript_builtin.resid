@@ -1,0 +1,4 @@
+Int main() {
+    List(Int) t = resid_tr_read();
+    return t.len();
+}

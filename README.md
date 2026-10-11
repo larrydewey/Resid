@@ -68,6 +68,20 @@ Int main() {
   compiled from C or any other LLVM language. Each call runs in a fresh
   process the kernel confines to computation, so native code holds no
   authority, sees only its arguments, and keeps nothing between calls.
+- **Secrets the compiler keeps.** `Secret(T)` never decides a branch,
+  an index or a comparison, and leaves only through
+  `declassify(x, "reason")`; the cryptography and TLS run on secret bytes
+  and are checked constant-time under valgrind.
+- **Devices without ioctls.** The `device` capability reaches kernel
+  devices (SEV-SNP, TDX, Nitro, TPM, the configfs TSM report) only through
+  descriptors the standard library declares and the compiler checks; each
+  call runs in a confined host process.
+- **Attestation the compiler checks.** `lib/verify/` verifies SEV-SNP,
+  TDX, Nitro, Arm CCA, TPM and NVIDIA GPU (SPDM) evidence and signed
+  CoRIMs. A `@decides` function releases a secret only when the compiler
+  can see the evidence rests on the anchors it accepts, was appraised
+  under its policy, is fresh, and is bound to the key the secret is
+  sealed to.
 - **Signed provenance.** Every release binary carries a COSE signature
   binding its source, code, sidecars, builder and grant; `residc verify`
   reports what it re-derived apart from what the signer asserts.
@@ -119,7 +133,7 @@ lib/          the standard library: crypto, Ed25519, X25519, P-256, RSA, AES-GCM
               ChaCha20-Poly1305, DER/X.509, TLS 1.3, an HTTP/1.1 client and server,
               HTTP/2 framing, CBOR/COSE, DWARF,
               and date and time (calendar, spans, instants, IANA zones, strftime, clock)
-tools/        resid-why, resid-graph, resid-debug, resid-fmt, resid-pkg, resid-manifest
+tools/        resid-why, resid-graph, resid-debug, resid-fmt, resid-pkg, resid-manifest, resid-ctcover
 tests/        conformance, reduction, provenance, runtime, graph, package, TLS, HTTP and LSP suites
 examples/     complete programs: a settlement ledger (the crown example), an
               HTTP server, TLS and HTTP/2 clients, a lexer and parser

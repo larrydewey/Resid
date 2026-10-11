@@ -1276,7 +1276,11 @@ GT lw_mcall(LW w, Int id, List(Str) env, GT c) {
     if (lv_is(base.ty)) { return lv_method(w, id, base, m, env); }
     if (is_map_type_cg(base.ty)) { return lw_map_method(w, id, base, m, env); }
     if (is_set_type_cg(base.ty)) { return lw_set_method(w, id, base, m, env); }
-    if (m == "len" && base.ty == "Bytes") { return lw_rt1(base, "i64", "@resid_bytes_len(ptr " + base.val + ")", "Int"); }
+    // Text counts codepoints, as str_len does (a Str(N) passes its inline,
+    // NUL-terminated buffer).
+    Str lty = strip_owned_cg(base.ty);
+    if (m == "len" && (lty == "Str" || str_has_prefix_cg(lty, "Str("))) { return lw_rt1(base, "i64", "@str_len(ptr " + base.val + ")", "Int"); }
+    if (m == "len" && lty == "Bytes") { return lw_rt1(base, "i64", "@resid_bytes_len(ptr " + base.val + ")", "Int"); }
     if (m == "len") { return lw_rt1(base, "i64", "@resid_list_len(ptr " + base.val + ")", "Int"); }
     if (m == "with" && is_list_fixed(base.ty)) { return lw_fixed_with(w, id, base, env); }
     if (m == "with" && str_has_prefix_cg(strip_owned_cg(base.ty), "List(")) { return lw_list_with(w, id, base, env); }
@@ -2346,8 +2350,13 @@ GT lw_lit(LW w, Int id, GT c) {
     if (lk == "int") {
         Str lv = lit_dec_cg(t);
         Int dl = str_len_1(lv);
-        Str w1 = if (dl > 18) { "Int(128)" } else { "Int" };
-        Str w2 = if (dl > 38) { "Int(256)" } else { w1 };
+        // The narrowest of Int(64), Int(128), Int(256) that holds the value
+        // (§6.1a), so arithmetic on two literals that fit Int is checked
+        // at Int rather than done wider and truncated.
+        Bool fits64 = dl < 19 || (dl == 19 && lv <= "9223372036854775807");
+        Bool fits128 = dl < 39 || (dl == 39 && lv <= "170141183460469231731687303715884105727");
+        Str w1 = if (fits64) { "Int" } else { "Int(128)" };
+        Str w2 = if (fits128) { w1 } else { "Int(256)" };
         // Int(256) holds at most 2^255 - 1, 77 digits only up to 5.7e76; a
         // literal past 512 bits takes the next multiple of 64 that holds it.
         Int big = ((dl * 3322) / 1000 + 2 + 63) / 64 * 64;
@@ -2818,6 +2827,16 @@ GT lw_raw(LW w, Int id, Str n, List(Str) env, GT c) {
         List(Str) cl = [r + "a = trunc i64 " + v[0] + " to i32", r + "b = trunc i64 " + v[1] + " to i32", r + "s = call { i32, i32, i32, i32 } asm \"cpuid\", \"={ax},={bx},={cx},={dx},{ax},{cx}\"(i32 " + r + "a, i32 " + r + "b)", r + "c = extractvalue { i32, i32, i32, i32 } " + r + "s, 2", r + "d = extractvalue { i32, i32, i32, i32 } " + r + "s, 3", r + "h = zext i32 " + r + "c to i64", r + "l = zext i32 " + r + "d to i64", r + "k = shl i64 " + r + "h, 32", r + " = or i64 " + r + "k, " + r + "l"];
         return lw_step(g, r, "Int", g.lines.concat(cl), t);
     }
+    // rdseed(addr): one 64-bit hardware seed (RDSEED; RNDR on AArch64)
+    // stored at addr; 1 when the instruction reported success, else 0.
+    if (op == "rdseed" && tgt_a64()) {
+        List(Str) al = [r + "s = call { i64, i64 } asm sideeffect \"mrs $0, s3_3_c2_c4_0\\0Acset $1, ne\", \"=r,=r,~{cc}\"()", r + "v = extractvalue { i64, i64 } " + r + "s, 0", r + " = extractvalue { i64, i64 } " + r + "s, 1", p + " = inttoptr i64 " + v[0] + " to ptr", "store i64 " + r + "v, ptr " + p];
+        return lw_step(g, r, "Int", g.lines.concat(al), t);
+    }
+    if (op == "rdseed") {
+        List(Str) xl = [r + "s = call { i64, i8 } asm sideeffect \"rdseed $0\\0Asetc $1\", \"=r,=r,~{dirflag},~{fpsr},~{flags}\"()", r + "v = extractvalue { i64, i8 } " + r + "s, 0", r + "c = extractvalue { i64, i8 } " + r + "s, 1", r + " = zext i8 " + r + "c to i64", p + " = inttoptr i64 " + v[0] + " to ptr", "store i64 " + r + "v, ptr " + p];
+        return lw_step(g, r, "Int", g.lines.concat(xl), t);
+    }
     if (op == "str") { return lw_step(g, r, "Str", g.lines.concat([r + " = inttoptr i64 " + v[0] + " to ptr"]), t); }
     if (op == "f128_bits") { return lw_step(g, r, "Int(128)", g.lines.concat([r + " = bitcast fp128 " + v[0] + " to i128"]), t); }
     if (op == "bits_f128") { return lw_step(g, r, "Float(128)", g.lines.concat([r + " = bitcast i128 " + v[0] + " to fp128"]), t); }
@@ -2987,6 +3006,7 @@ GT lw_call(LW w, Int id, List(Str) env, GT c) {
     if ((n == "sha256_compress_hw" || n == "sha512_compress_hw") && !user_fn) { return lw_sha_hw(w, id, n, env, c); }
     if ((n == "ct_secret" || n == "ct_public") && !user_fn) { return lw_ct(w, id, n, env, c); }
     if (n == "ct_hide" && !user_fn) { return lw_ct_hide(w, id, env, c); }
+    if (n == "ct_select" && !user_fn) { return lw_ct_select(w, id, env, c); }
     if (n == "resid_test_run_closure" && !user_fn) { return lw_extern(w, id, n, l2s("Void closure()", "Str"), "Int", env, c); }
     if (n == "sort") { return lw_sort(w, id, env, c); }
     if (n == "select" && fn_index(w.fs, n) < 0) { return lv_select(w, id, "", env, c); }
@@ -2999,7 +3019,7 @@ GT lw_call(LW w, Int id, List(Str) env, GT c) {
             if (na != 1) { return lw_gerr("conversion arity", c); }
             GT a = lw_expr(w, lw_kid(w, id, 0), env, c);
             if (a.err != "") { return a; }
-            GT cv = pick_gt(str_starts_with(n, "wrapping_"), widen_val(a, conv_to), conv_checked(a, conv_to));
+            GT cv = pick_gt(str_starts_with(n, "wrapping_"), widen_wrap(a, conv_to), conv_checked(a, conv_to));
             return GT {.pos = 0, .val = cv.val, .ty = conv_to, .cnt = 0, .err = "", .glines = cv.glines, .lines = cv.lines, .tmp = cv.tmp, .lbl = cv.lbl, .tail = false};
         }
         if (cg_arith_family(n)) { return lw_arith(w, id, n, env, c); }
@@ -3075,6 +3095,40 @@ GT lw_ct_hide(LW w, Int id, List(Str) env, GT c) {
     Str lt = ll_ty(a.ty);
     Str r = f"%t{a.tmp + 1}";
     return lw_step(a, r, a.ty, a.lines.concat([r + " = call " + lt + " asm \"\", \"=r,0\"(" + lt + " " + a.val + ")"]), a.tmp + 1);
+}
+
+// ct_select(c, a, b) (spec §48): (a & m) | (b & ~m) with m all ones when c
+// holds, the mask passed through an empty asm so the optimizer cannot turn
+// it back into a branch or a select.
+GT lw_ct_select(LW w, Int id, List(Str) env, GT c) {
+    if (w.g.ns[id].nk != 3) { return lw_gerr("ct_select arity", c); }
+    GT k0 = lw_expr(w, lw_kid(w, id, 0), env, c);
+    if (k0.err != "") { return k0; }
+    GT a = lw_expr(w, lw_kid(w, id, 1), env, k0);
+    if (a.err != "") { return a; }
+    GT b0 = lw_expr(w, lw_kid(w, id, 2), env, a);
+    if (b0.err != "") { return b0; }
+    GT b = widen_val(b0, a.ty);
+    Str lt0 = ll_ty(a.ty);
+    // Bools are chosen in a byte: an i1 has no register of its own for the
+    // barrier.
+    Bool bl = lt0 == "i1";
+    Str lt = if (bl) { "i8" } else { lt0 };
+    Int t = b.tmp;
+    Str av = if (bl) { f"%t{t + 8}" } else { a.val };
+    Str bv = if (bl) { f"%t{t + 9}" } else { b.val };
+    List(Str) widen = if (bl) { [av + " = zext i1 " + a.val + " to i8", bv + " = zext i1 " + b.val + " to i8"] } else { [] };
+    Str m0 = f"%t{t + 1}";
+    Str m1 = f"%t{t + 2}";
+    Str m = f"%t{t + 3}";
+    Str x = f"%t{t + 4}";
+    Str nm = f"%t{t + 5}";
+    Str y = f"%t{t + 6}";
+    Str r = f"%t{t + 7}";
+    Str rb = f"%t{t + 10}";
+    List(Str) body = widen.concat([m0 + " = zext i1 " + k0.val + " to " + lt, m1 + " = sub " + lt + " 0, " + m0, m + " = call " + lt + " asm \"\", \"=r,0\"(" + lt + " " + m1 + ")", x + " = and " + lt + " " + av + ", " + m, nm + " = xor " + lt + " " + m + ", -1", y + " = and " + lt + " " + bv + ", " + nm, r + " = or " + lt + " " + x + ", " + y]);
+    List(Str) fin = if (bl) { [rb + " = trunc i8 " + r + " to i1"] } else { [] };
+    return lw_step(b, if (bl) { rb } else { r }, a.ty, b.lines.concat(body).concat(fin), t + 10);
 }
 
 // ct_secret / ct_public: the value goes through a frame slot that a
@@ -4224,6 +4278,34 @@ GT lw_fixed_with(LW w, Int id, GT base, List(Str) env) {
 
 // ─── Closures, spawn, sort, expect ──────────────────────────────────
 
+// Force-time check of the `declassify` grant (spec §48): `declassify`
+// lowers to its operand, so a body that holds one (sec_erase marks it)
+// first asks the runtime whether the running capability frame grants
+// `declassify`, exactly as a provider call asks for its family. Authority
+// is fixed for the length of one call (sandbox regions nest and unwind
+// around calls), so one check at entry covers every declassify the body
+// reaches. Lambda and spawn bodies are functions of their own and check
+// for themselves. The string is `@.declassify.cap`, in the header of
+// every program that handles secrets.
+List(Str) lw_declassify_check(Kg g, Int body) {
+    List(Str) d = if (lw_declassifies(g, body, "@declassify")) { ["call void @resid_cap_check(ptr @.declassify.cap)"] } else { nil_list() };
+    return if (lw_declassifies(g, body, "@provision")) { d.concat(["call void @resid_cap_check(ptr @.provision.cap)"]) } else { d };
+}
+
+// Does the body hold a marked wrapper (`@declassify`, `@provision`)?
+Bool lw_declassifies(Kg g, Int id, Str tag) {
+    KN n = g.ns[id];
+    if (n.kind == "paren" && n.aux == tag) { return true; }
+    if (n.kind == "lambda" || n.kind == "spawn") { return false; }
+    return lw_declassifies_kids(g, id, 0, n.nk, tag);
+}
+
+Bool lw_declassifies_kids(Kg g, Int id, Int i, Int n, Str tag) {
+    if (i >= n) { return false; }
+    if (lw_declassifies(g, kg_kid(g, id, i), tag)) { return true; }
+    return lw_declassifies_kids(g, id, i + 1, n, tag);
+}
+
 // cg_lambda: the closure function goes to glines, its environment array
 // is built here. Named by the text position after `lambda`.
 GT lw_lambda(LW w, Int id, Str fnty, List(Str) env, GT c) {
@@ -4248,11 +4330,20 @@ GT lw_lambda(LW w, Int id, Str fnty, List(Str) env, GT c) {
     Str rv0 = if (bodyw.val == "") { "0" } else { bodyw.val };
     Str retline = if (ret == "Void") { "ret i1 " + rv0 } else { "ret " + rlt + " " + bodyw.val };
     List(Str) rets = if (rfx > 0) { lw_fx_ret(bodyw.val, ret, "%fx.r") } else { [retline] };
-    List(Str) lam = lw_fx_hoist(pr0.lines.concat(bodyw.lines).concat(rets), 0);
-    Str clo_body = str_join(lam.concat(["}"]), "\n");
+    // A closure runs under whatever capability frames are on top where it
+    // is called -- a sandboxed function's ceiling or a spawn's list -- not
+    // where it was made, so each provider call in its body asks the running
+    // frames first, exactly as in a named function (capinject_at).
+    CapPP li = capinject_at(pr0.lines.concat(lw_declassify_check(w.g, lw_kid(w, id, np))).concat(bodyw.lines).concat(rets), 0, false, CapPP {.lines = nil_list(), .glines = nil_list(), .n = 0});
+    List(Str) lam0 = lw_fx_hoist(li.lines, 0);
     // Instances of one generic function share the lambda's position, so
     // the name also carries a digest of what it lowered to.
-    Str clo = f"@clo{w.g.ns[id].sp + 6 - w.base}_" + str_slice(str_sha256(rlt + sig + clo_body), 0, 10);
+    Str clo = f"@clo{w.g.ns[id].sp + 6 - w.base}_" + str_slice(str_sha256(rlt + sig + str_join(lam0.concat(["}"]), "\n")), 0, 10);
+    // Its capability strings are named after it (`@resid.cap.clo<n>_<h>.N`).
+    Str cpre = "@resid.cap." + str_slice(clo, 1, str_len(clo));
+    List(Str) lam = if (li.n > 0) { cap_rename_to(lam0, cpre, 0, ListBuf()) } else { lam0 };
+    List(Str) cglines = if (li.n > 0) { cap_rename_to(li.glines, cpre, 0, ListBuf()) } else { nil_list() };
+    Str clo_body = str_join(lam.concat(["}"]), "\n");
     Str clo_text = "define " + rlt + " " + clo + "(" + sig + ") {\nentry:\n" + clo_body;
     // A closure may be called after its captures' owner changes: they are
     // shared from here.
@@ -4263,7 +4354,7 @@ GT lw_lambda(LW w, Int id, Str fnty, List(Str) env, GT c) {
     Str g0 = f"%t{tf0 + 2}";
     List(Str) cl4 = sc0.g.lines.concat([arr + f" = call ptr @resid_gmalloc(i64 {(ncap + 1) * 8})", fpreg + " = ptrtoint ptr " + clo + " to i64", g0 + " = getelementptr i64, ptr " + arr + ", i64 0", "store i64 " + fpreg + ", ptr " + g0]);
     List(Str) cl5 = clos_store_lines(sc0.vals, cap0.tys, ncap, 0, arr, tf0 + 3, cl4);
-    return GT {.pos = 0, .val = arr, .ty = fnty, .cnt = 0, .err = "", .glines = bodyw.glines.concat([clo_text]), .lines = cl5, .tmp = tf0 + 3 + ncap * 2, .lbl = c.lbl, .tail = false};
+    return GT {.pos = 0, .val = arr, .ty = fnty, .cnt = 0, .err = "", .glines = bodyw.glines.concat([clo_text]).concat(cglines), .lines = cl5, .tmp = tf0 + 3 + ncap * 2, .lbl = c.lbl, .tail = false};
 }
 
 Str lw_lam_sig(LW w, Int id, Int i, Int n, List(Str) pl, Str acc) {
@@ -4297,7 +4388,7 @@ GT lw_spawn_mode(LW w, Int id, List(Str) env, GT c, Bool start) {
     CapPP pe = cap_enter_prologue(str_split(scaps, ","), CapPP {.lines = nil_list(), .glines = nil_list(), .n = 0});
     CapPP pi = capinject_at(b1, 0, true, CapPP {.lines = nil_list(), .glines = pe.glines, .n = pe.n});
     Str cpre = "@resid.cap." + str_slice(fnm, 1, str_len(fnm));
-    List(Str) fl = cap_rename_to(["define ptr " + fnm + "(ptr %envp) {", "entry:"].concat(pr0.lines).concat(pe.lines).concat(pi.lines).concat(["}"]).concat(pi.glines), cpre, 0, ListBuf());
+    List(Str) fl = cap_rename_to(["define ptr " + fnm + "(ptr %envp) {", "entry:"].concat(pr0.lines).concat(pe.lines).concat(lw_declassify_check(w.g, lw_kid(w, id, 0))).concat(pi.lines).concat(["}"]).concat(pi.glines), cpre, 0, ListBuf());
     // The region may run while this function goes on: what it captures is
     // shared from here (no in-place update or record reuse may touch it).
     LSC sc0 = lw_share_caps(w, cap0.vals, cap0.tys, 0, LSC {.g = lw_step(c, "", "", c.lines, imax(c.tmp, body.tmp)), .vals = nil_list()});
@@ -4665,7 +4756,15 @@ PG lw_fn_body(LW w0, Int d, PG g) {
     List(Str) bhead = if (split) { [defpre + pd + defpost, "entry:"] } else { pp1.lines };
     List(Str) fn_lines00 = if (tco_ok) { tco_function(bhead, pp2.lines, name, ll_ty(rbase), ptys_ll, lw_fx_sizes(tyl, 0, ListBuf()), lw_fx_texts(tyl, 0, ListBuf()), sret, defpre, defpost, "") } else { bhead.concat(pp2.lines) };
     List(Str) fn_lines01 = if (tco_ok && !resid_rtmod()) { lsv_apply(sv_apply(fn_lines00, tyl), tyl) } else { fn_lines00 };
-    List(Str) fn_lines0 = lw_fx_hoist(fn_lines01, lw_find_line(fn_lines01, "entry:", 0) + 1);
+    List(Str) fn_lines0h = lw_fx_hoist(fn_lines01, lw_find_line(fn_lines01, "entry:", 0) + 1);
+    // A body that declassifies checks the grant once, in the entry block:
+    // after the sandbox prologue's resid_cap_enter when there is one, and
+    // before tco.head, so a self-recursive loop is not checked per step.
+    List(Str) dck = lw_declassify_check(w.g, lw_kid(w, d, n - 1));
+    Int dent = lw_find_line(fn_lines0h, "entry:", 0) + 1;
+    Int denter = if (sandboxed && !split) { lw_find_prefix(fn_lines0h, "call void @resid_cap_enter(", 0) + 1 } else { 0 };
+    Int dat = if (denter > 0) { denter } else { dent };
+    List(Str) fn_lines0 = if (dck.len() == 0) { fn_lines0h } else { fn_lines0h[0..dat].concat(dck).concat(fn_lines0h[dat..fn_lines0h.len()]) };
     // A loop whose iterations carry nothing they allocate frees each
     // iteration's allocations when the next one starts (lr_region).
     Str rev = lr_ret_evac(w.fs, rbase);
@@ -5155,6 +5254,12 @@ LDG lw_dbg_fn(LW w, Int d, Str name, List(Str) ls, Int next, List(Str) tyl) {
 }
 
 type LDV = { List(Str) lines; List(Str) meta; Int next; };
+
+Int lw_find_prefix(List(Str) ls, Str l, Int i) {
+    if (i >= ls.len()) { return -1; }
+    if (str_starts_with(ls[i], l)) { return i; }
+    return lw_find_prefix(ls, l, i + 1);
+}
 
 Int lw_find_line(List(Str) ls, Str l, Int i) {
     if (i >= ls.len()) { return -1; }

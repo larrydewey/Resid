@@ -54,6 +54,9 @@
 
 import "../lib/crypto.resid";
 import "../lib/ed25519.resid";
+import "../lib/word.resid";
+import "../lib/ed25519g.resid";
+import "../lib/random.resid";
 import "../lib/httpserv.resid";
 import "../lib/tlswire.resid";
 import "../lib/tlskey.resid";
@@ -352,16 +355,33 @@ Str usage_text() {
     return "usage: resid-pkg keygen <secret.hex> <pub.hex> | pack <dir> <out> | sign <out> <keyfile> | sign-dir <dir> <keyfile> | checksig <out> <pubkey-hex> | extract <out> <dir> | publish <dir> <registry> [keyfile] | serve <registry> [--port N] [--port-file F] [--requests N] [--cert F --key F] [--upload KEYRING --index-key F] | upload <dir> <registry-url> <keyfile> [--ca F] | index list <registry> | index add <registry> <name> <version> <sha256-hex> <keyfile> | index remove <registry> <name> <version> <keyfile> | index verify <registry> <pubkey-hex>";
 }
 
+// The publisher's signing seed, read from its key file: secret from here
+// on, and relied on as provisioned by whoever wrote the file (PLAN-labels.md
+// §5.2).
+@requires(provision)
+List(Secret(UInt(8))) pkg_seed(Str hex) { return provisioned_key(secret_bytes(hex_decode(str_trim(hex))), "the publisher's signing key file"); }
+
+// An Ed25519 signature of text under a secret seed (published by design).
+@requires(declassify)
+List(Int) pkg_sign(List(Secret(UInt(8))) seed, Str msg) { return ed25519g_sign(seed, bytes_of(msg)); }
+
+// A secret seed written to its key file: a disclosure, stated.
+@requires(declassify)
+List(Int) pkg_seed_bytes(List(Secret(UInt(8))) s, Int i, ListBuf(Int) acc) {
+    if (i >= s.len()) { return acc.finish(); }
+    return pkg_seed_bytes(s, i + 1, acc.push((Int) declassify(s[i], "a new signing key, written to its secret key file")));
+}
+
 // Ed25519 keypair generation (mirrors `resid_build::archive::keygen`): a
 // fresh 32-byte OS-random seed *is* the secret key, and `pub_key` (already
 // in lib/ed25519.resid, used by `sign`/`verify`) derives the public key
 // from it. Writes both as bare hex, no trailing newline, matching what
 // `sign`/`checksig` already read back.
-@requires(filesystem)
+@requires(filesystem, declassify)
 Int cmd_keygen(Str secret_path, Str pub_path) {
-    List(Int) seed = random_bytes(32);
-    List(Int) pubk = pub_key(seed);
-    filesystem.write_secret(secret_path, bytes_of(hex_encode(seed)));
+    List(Secret(UInt(8))) seed = random_secret(32);
+    List(Int) pubk = ed25519g_pub(seed);
+    filesystem.write_secret(secret_path, bytes_of(hex_encode(pkg_seed_bytes(seed, 0, ListBuf()))));
     filesystem.write_bytes(pub_path, bytes_of(hex_encode(pubk)));
     println("wrote " + secret_path + " (keep secret!)");
     println("wrote " + pub_path);
@@ -376,14 +396,14 @@ Int cmd_pack(Str dir, Str out) {
     return 0;
 }
 
-@requires(filesystem)
+@requires(filesystem, provision, declassify)
 Int cmd_sign(Str out, Str keyfile) {
     Str keyhex = filesystem.read_all(keyfile);
     Str ktrim = str_trim(keyhex);
-    List(Int) seed = hex_decode(ktrim);
+    List(Secret(UInt(8))) seed = pkg_seed(ktrim);
     List(Int) archive = filesystem.read_bytes(out + ".resid-pkg");
     Str hash_hex = hex_encode(content_hash(archive));
-    List(Int) sig = sign_msg(seed, hash_hex);
+    List(Int) sig = pkg_sign(seed, hash_hex);
     filesystem.write_bytes(out + ".resid-sig", bytes_of(hex_encode(sig)));
     println(hex_encode(sig));
     return 0;
@@ -392,16 +412,16 @@ Int cmd_sign(Str out, Str keyfile) {
 // `sign-dir <dir> <keyfile>`: sign a path dependency in place. Writes
 // `<dir>/<name>.resid-sig` over the hex SHA-256 of pack(<dir>), which
 // resid-manifest checks for a dependency with a pinned `pubkey`.
-@requires(filesystem)
+@requires(filesystem, provision, declassify)
 Int cmd_sign_dir(Str dir, Str keyfile) {
     Str name = manifest_field(filesystem.read_all(dir + "/resid.toml"), "name");
     if (name == "") {
         eprintln("resid-pkg: cannot read [package] name from '" + dir + "/resid.toml'");
         return 1;
     }
-    List(Int) seed = hex_decode(str_trim(filesystem.read_all(keyfile)));
+    List(Secret(UInt(8))) seed = pkg_seed(filesystem.read_all(keyfile));
     Str hash_hex = hex_encode(content_hash(build_archive(dir)));
-    List(Int) sig = sign_msg(seed, hash_hex);
+    List(Int) sig = pkg_sign(seed, hash_hex);
     filesystem.write_bytes(dir + "/" + name + ".resid-sig", bytes_of(hex_encode(sig)));
     println("signed " + name + " (sha256 " + hash_hex + ")");
     return 0;
@@ -590,26 +610,26 @@ List(IdxEntry) load_existing_index(Str idx_path) {
 
 // Load the existing index (if any), replace this package's entry,
 // write the new index + a fresh signature over its hash.
-@requires(filesystem)
-Int maintain_index(Str reg, Str name, Str version, Str hash_hex, List(Int) seed) {
+@requires(filesystem, declassify)
+Int maintain_index(Str reg, Str name, Str version, Str hash_hex, List(Secret(UInt(8))) seed) {
     DirStore d = index_maintain(DirStore {.root = reg}, name, version, hash_hex, seed);
     return 0;
 }
 
 // Replace this package's index entry and re-sign the whole index.
 @needs(RegStore(T))
-@requires(filesystem)
-T index_maintain(T st, Str name, Str version, Str hash_hex, List(Int) seed) {
+@requires(filesystem, declassify)
+T index_maintain(T st, Str name, Str version, Str hash_hex, List(Secret(UInt(8))) seed) {
     List(Int) old = store_get(st, "pkg/index.resid-idx");
     List(IdxEntry) existing = parse_index_text(bytes_to_ascii(old, 0, old.len(), ""));
     List(IdxEntry) updated = idx_remove_acc(existing, name, version, 0, []).concat([IdxEntry {.name = name, .version = version, .sha256 = hash_hex}]);
     Str new_text = index_text(updated);
     T s1 = store_put(st, "pkg/index.resid-idx", bytes_of(new_text));
-    List(Int) sig = sign_msg(seed, hex_encode(sha256_bytes(bytes_of(new_text))));
+    List(Int) sig = pkg_sign(seed, hex_encode(sha256_bytes(bytes_of(new_text))));
     return store_put(s1, "pkg/index.resid-sig", bytes_of(hex_encode(sig)));
 }
 
-@requires(filesystem)
+@requires(filesystem, provision, declassify)
 Int cmd_publish(Str dir, Str reg, Str keyfile) {
     Str manifest_text = filesystem.read_all(dir + "/resid.toml");
     Str name = manifest_field(manifest_text, "name");
@@ -634,8 +654,8 @@ Int cmd_publish(Str dir, Str reg, Str keyfile) {
     }
     Str keyhex = filesystem.read_all(keyfile);
     Str ktrim = str_trim(keyhex);
-    List(Int) seed = hex_decode(ktrim);
-    List(Int) sig = sign_msg(seed, hash_hex);
+    List(Secret(UInt(8))) seed = pkg_seed(ktrim);
+    List(Int) sig = pkg_sign(seed, hash_hex);
     filesystem.write_bytes(pkg_dir + "/" + base + "-sig", bytes_of(hex_encode(sig)));
     Int _m = maintain_index(reg, name, version, hash_hex, seed);
     println(msg + " (+ signature, index updated)");
@@ -751,7 +771,7 @@ HttpReply registry_reply(Str root, HttpRequest r) {
 }
 
 // The same, with uploads: PUT goes to registry_upload.
-@requires(filesystem)
+@requires(filesystem, declassify)
 HttpReply registry_reply_up(Str root, UploadCfg u, HttpRequest r) {
     if (r.method == "PUT") { return registry_upload(DirStore {.root = root}, u, r).reply; }
     if (r.method != "GET" && r.method != "HEAD") {
@@ -786,10 +806,10 @@ Int serve_workers(Int lfd, Int n, Str root, Int conns) {
 
 // The same over TLS 1.3: the handshake is a step in each worker's event
 // loop, and the registry is served under the same rules.
-@requires(network(readonly), filesystem(readonly))
+@requires(network(readonly), filesystem(readonly), declassify)
 Int serve_workers_tls(Int lfd, Int n, Str root, Int conns, TlsCfg conf) {
     if (n <= 0) { return 0; }
-    Result(Int, RegionError) r = spawn (network(readonly), filesystem(readonly)) {
+    Result(Int, RegionError) r = spawn (network(readonly), filesystem(readonly), declassify) {
         return tls_accept_loop(lfd, conf, lambda(q) { registry_reply(root, q) }, http_limits(), conns);
     };
     Int rest = serve_workers_tls(lfd, n - 1, root, conns, conf);
@@ -803,17 +823,17 @@ HttpLimits upload_limits() {
     return HttpLimits {.head_max = l.head_max, .body_max = 67108864, .requests_max = l.requests_max, .request_ms = 300000, .reply_ms = l.reply_ms, .open_max = l.open_max};
 }
 
-@requires(network(readonly), filesystem)
+@requires(network(readonly), filesystem, declassify)
 Int serve_worker_up(Int lfd, Str root, Int conns, UploadCfg u) {
-    Result(Int, RegionError) r = spawn (network(readonly), filesystem) {
+    Result(Int, RegionError) r = spawn (network(readonly), filesystem, declassify) {
         return http_accept_loop(lfd, lambda(q) { registry_reply_up(root, u, q) }, upload_limits(), conns);
     };
     return r else { -1 };
 }
 
-@requires(network(readonly), filesystem)
+@requires(network(readonly), filesystem, declassify)
 Int serve_worker_up_tls(Int lfd, Str root, Int conns, TlsCfg conf, UploadCfg u) {
-    Result(Int, RegionError) r = spawn (network(readonly), filesystem) {
+    Result(Int, RegionError) r = spawn (network(readonly), filesystem, declassify) {
         return tls_accept_loop(lfd, conf, lambda(q) { registry_reply_up(root, u, q) }, upload_limits(), conns);
     };
     return r else { -1 };
@@ -823,7 +843,7 @@ Int serve_worker_up_tls(Int lfd, Str root, Int conns, TlsCfg conf, UploadCfg u) 
 // handshake -- when either is unreadable or they do not belong together.
 type ServeTls = { TlsCfg conf; Str err; };
 
-@requires(filesystem(readonly))
+@requires(filesystem(readonly), declassify, provision)
 ServeTls load_serve_tls(Str cert, Str key) {
     List(List(Int)) none = [];
     Option(ServerKey) maybe_key = tls_key_load(key);
@@ -870,7 +890,7 @@ ServeOpts parse_serve_opts(Int i, Int argc, ServeOpts o) {
     return serve_up(serve_opts(o.port, o.port_file, o.requests, o.cert, o.key, false), o.upload, o.index_key);
 }
 
-@requires(args, filesystem, network)
+@requires(args, filesystem, network, declassify, provision)
 Int cmd_serve(Str root, ServeOpts o) {
     Int port = o.port;
     Str port_file = o.port_file;
@@ -893,7 +913,7 @@ Int cmd_serve(Str root, ServeOpts o) {
         eprintln("resid-pkg serve: --upload needs a keyring directory and --index-key a key file");
         return 2;
     }
-    UploadCfg ucfg = if (up) { UploadCfg {.on = true, .keyring = o.upload, .seed = hex_decode(str_trim(filesystem.read_all(o.index_key)))} } else { upload_off() };
+    UploadCfg ucfg = if (up) { UploadCfg {.on = true, .keyring = o.upload, .seed = pkg_seed(filesystem.read_all(o.index_key))} } else { upload_off() };
     ServeTls st = if (tls) { load_serve_tls(o.cert, o.key) } else { ServeTls { .conf = tls_cfg(EdKey([]), [], []), .err = "" } };
     if (st.err != "") {
         eprintln("resid-pkg serve: " + st.err);
@@ -934,10 +954,10 @@ Int cmd_serve(Str root, ServeOpts o) {
 // and -sig, and re-signs the index with the index key. Uploads run on one
 // worker, so two cannot interleave their index writes.
 
-type UploadCfg = { Bool on; Str keyring; List(Int) seed; };
+type UploadCfg = { Bool on; Str keyring; List(Secret(UInt(8))) seed; };
 
 UploadCfg upload_off() {
-    List(Int) none = [];
+    List(Secret(UInt(8))) none = [];
     return UploadCfg {.on = false, .keyring = "", .seed = none};
 }
 
@@ -972,7 +992,7 @@ type Uploaded(T) = { T store; HttpReply reply; };
 Uploaded(T) uploaded(T st, Int code, Str msg) { return Uploaded {.store = st, .reply = upload_text(code, msg)}; }
 
 @needs(RegStore(T))
-@requires(filesystem)
+@requires(filesystem, declassify)
 Uploaded(T) registry_upload(T st, UploadCfg u, HttpRequest r) {
     Str base0 = if (str_starts_with(r.path, "/pkg/")) { str_slice(r.path, 5, str_len(r.path)) } else { "" };
     Bool shaped = str_ends_with(base0, ".resid-pkg") && !str_contains(base0, "/") && !path_is_unsafe(r.path);
@@ -1010,7 +1030,7 @@ Bool upload_signed(Str keyring, List(Str) names, Int i, Str hash_hex, List(Int) 
 }
 
 // `upload <dir> <url> <keyfile> [--ca F]`: pack, sign and PUT one package.
-@requires(filesystem, network, clock(readonly))
+@requires(filesystem, network, clock(readonly), declassify, provision)
 Int cmd_upload(Str dir, Str url, Str keyfile, Str ca) {
     Str manifest_text = filesystem.read_all(dir + "/resid.toml");
     Str name = manifest_field(manifest_text, "name");
@@ -1025,7 +1045,7 @@ Int cmd_upload(Str dir, Str url, Str keyfile, Str ca) {
     }
     List(Int) archive = build_archive(dir);
     Str hash_hex = hex_encode(content_hash(archive));
-    List(Int) sig = sign_msg(hex_decode(str_trim(filesystem.read_all(keyfile))), hash_hex);
+    List(Int) sig = pkg_sign(pkg_seed(filesystem.read_all(keyfile)), hash_hex);
     Str base = if (str_ends_with(url, "/")) { str_slice(url, 0, str_len(url) - 1) } else { url };
     Str target = base + "/pkg/" + name + "-" + version + ".resid-pkg";
     Str headers = "X-Resid-Signature: " + hex_encode(sig) + "\r\nContent-Type: application/octet-stream\r\n";
@@ -1045,7 +1065,7 @@ Int cmd_upload(Str dir, Str url, Str keyfile, Str ca) {
 
 type UpReply = { Int status; Str text; Str err; };
 
-@requires(filesystem(readonly), network, clock(readonly))
+@requires(filesystem(readonly), network, clock(readonly), declassify)
 UpReply upload_https(Str url, Str ca, Str headers, List(Int) body) {
     if (ca == "") { return UpReply {.status = 0, .text = "", .err = "an https:// registry needs --ca <trust store>; with none nothing is trusted"}; }
     List(Str) no_alpn = [];
@@ -1098,12 +1118,12 @@ Str index_sig_path_of(Str reg) {
 }
 
 // Write `entries` and a fresh signature over it.
-@requires(filesystem)
-Int write_signed_index(Str reg, List(IdxEntry) entries, List(Int) seed) {
+@requires(filesystem, declassify)
+Int write_signed_index(Str reg, List(IdxEntry) entries, List(Secret(UInt(8))) seed) {
     Str new_text = index_text(entries);
     filesystem.write_all(index_path_of(reg), new_text);
     Str text_hash_hex = hex_encode(sha256_bytes(bytes_of(new_text)));
-    List(Int) sig = sign_msg(seed, text_hash_hex);
+    List(Int) sig = pkg_sign(seed, text_hash_hex);
     filesystem.write_bytes(index_sig_path_of(reg), bytes_of(hex_encode(sig)));
     return 0;
 }
@@ -1131,7 +1151,7 @@ Int idx_cmd_list(Str reg) {
 // The hash is the one the consumer will recompute, so it is not taken on
 // trust: when the archive is already published, this reads it and refuses
 // a hash that does not match.
-@requires(filesystem)
+@requires(filesystem, provision, declassify)
 Int idx_cmd_add(Str reg, Str name, Str version, Str hash_hex, Str keyfile) {
     Bool have_key = keyfile != "" && filesystem.exists(keyfile);
     if (have_key) {
@@ -1150,7 +1170,7 @@ Int idx_cmd_add(Str reg, Str name, Str version, Str hash_hex, Str keyfile) {
         return 1;
     }
     Str keyhex = str_trim(filesystem.read_all(keyfile));
-    List(Int) seed = hex_decode(keyhex);
+    List(Secret(UInt(8))) seed = pkg_seed(keyhex);
     List(IdxEntry) existing = load_existing_index(index_path_of(reg));
     List(IdxEntry) updated = idx_remove_acc(existing, name, version, 0, []).concat([IdxEntry {.name = name, .version = version, .sha256 = hash_hex}]);
     Int _w = write_signed_index(reg, sort_idx_entries(updated), seed);
@@ -1159,7 +1179,7 @@ Int idx_cmd_add(Str reg, Str name, Str version, Str hash_hex, Str keyfile) {
 }
 
 // remove <reg> <name> <version> <keyfile>
-@requires(filesystem)
+@requires(filesystem, provision, declassify)
 Int idx_cmd_remove(Str reg, Str name, Str version, Str keyfile) {
     if (keyfile == "" || !filesystem.exists(keyfile)) {
         eprintln("resid-pkg index remove: needs the signing key that signs this registry's index");
@@ -1172,7 +1192,7 @@ Int idx_cmd_remove(Str reg, Str name, Str version, Str keyfile) {
         return 1;
     }
     Str keyhex = str_trim(filesystem.read_all(keyfile));
-    List(Int) seed = hex_decode(keyhex);
+    List(Secret(UInt(8))) seed = pkg_seed(keyhex);
     Int _w = write_signed_index(reg, kept, seed);
     println("index: removed " + name + " " + version + " (index re-signed)");
     return 0;
@@ -1206,7 +1226,7 @@ Int idx_cmd_verify(Str reg, Str pubkey_hex) {
     return 0;
 }
 
-@requires(args, filesystem, network, clock(readonly))
+@requires(args, filesystem, network, clock(readonly), declassify, provision)
 Int main() {
     Int argc = args.count();
     if (argc < 2) {

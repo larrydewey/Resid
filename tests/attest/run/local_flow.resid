@@ -1,0 +1,74 @@
+import "verify/core.resid";
+import "verify/sealing.resid";
+import "verify/tpm.resid";
+import "verify/testing.resid";
+import "challenge.resid";
+import "crypto.resid";
+import "ecdsa.resid";
+import "hash.resid";
+import "random.resid";
+import "word.resid";
+
+@requires(filesystem(readonly))
+List(Int) rd(Str p) { return filesystem.read_bytes("fixtures/" + p); }
+
+List(Int) fill(Int v, Int n) { return if (n <= 0) { [] } else { [v].concat(fill(v, n - 1)) }; }
+List(Int) u16(Int v) { return [(v >> 8) & 255, v & 255]; }
+List(Int) u64(Int v) { return [(v >> 56) & 255, (v >> 48) & 255, (v >> 40) & 255, (v >> 32) & 255, (v >> 24) & 255, (v >> 16) & 255, (v >> 8) & 255, v & 255]; }
+
+// TPM2_NV_Certify of counter `name` at `value`, for this qualifying data,
+// signed by the test AK.
+@requires(filesystem(readonly))
+List(Int) certify(List(Int) name, Int value, List(Int) q) {
+    return [255, 84, 67, 71, 128, 20].concat(u16(34)).concat(fill(9, 34)).concat(u16(q.len())).concat(q)
+        .concat(u64(1000)).concat([0, 0, 0, 3, 0, 0, 0, 0, 1]).concat(u64(2))
+        .concat(u16(name.len())).concat(name).concat(u16(0)).concat(u16(8)).concat(u64(value));
+}
+
+@requires(filesystem(readonly))
+List(UInt(8)) sig(List(Int) a) {
+    List(Int) rs = ecdsa_sign_raw(P256, Sha256, rd("tpm-ak-d.bin"), a);
+    return chal_bytes(u16(24).concat(u16(11)).concat(u16(32)).concat(rs[0..32]).concat(u16(32)).concat(rs[32..64]));
+}
+
+@requires(declassify)
+List(Int) sec_pub(List(Secret(UInt(8))) k, Int i, ListBuf(Int) acc) { return if (i >= k.len()) { acc.finish() } else { sec_pub(k, i + 1, acc.push((Int) declassify(k[i], "test output"))) }; }
+
+@requires(filesystem(readonly), declassify)
+Str bound(Str what, Verified(PlatformKey) k, List(Int) blob, List(Int) name, Int value) {
+    ChallengeRecord c = challenge_issue(32);
+    List(Int) a = certify(name, value, chal_ints(challenge_value(c)));
+    Result(Verified(LocalBlob), VerifyError) r = match (local_open(k, blob)) {
+        Ok(o) => match (tpm_verify_counter(chal_bytes(a), sig(a), c, test_tpm_ak(), test_time(1791000000))) { Ok(n) => bind_counter(o, n), Err(e) => Err(e) },
+        Err(e) => Err(e),
+    };
+    return what + ": " + match (r) { Ok(v) => f"version {v.value.version}, quals {v.quals}, anchors {v.anchors.len()}", Err(e) => verify_error_text(e) };
+}
+
+@requires(filesystem(readonly))
+Str first(Str what, Verified(PlatformKey) k, List(Int) name, Int value, Int initial) {
+    ChallengeRecord c = challenge_issue(32);
+    List(Int) a = certify(name, value, chal_ints(challenge_value(c)));
+    Result(Verified(LocalBlob), VerifyError) r = match (tpm_verify_counter(chal_bytes(a), sig(a), c, test_tpm_ak(), test_time(1791000000))) { Ok(n) => first_seal(k, n, initial), Err(e) => Err(e) };
+    return what + ": " + match (r) { Ok(v) => f"version {v.value.version}, quals {v.quals}, {v.value.value.len()} bytes", Err(e) => verify_error_text(e) };
+}
+
+@requires(filesystem(readonly), declassify)
+Int main() {
+    List(Int) kb = fill(7, 32);
+    Verified(PlatformKey) k1 = test_platform_key(kb, fill(1, 48));
+    Verified(PlatformKey) k2 = test_platform_key(kb, fill(2, 48));
+    List(Secret(UInt(8))) secret = random_secret(16);
+    List(Int) name = [0, 11].concat(fill(4, 32));
+    List(Int) blob = local_seal(k1, 7, name, secret);
+    println("same measurement: " + match (local_open(k1, blob)) { Ok(v) => f"version {v.value.version}, quals {v.quals}, " + (if (hex_encode(sec_pub(v.value.value, 0, ListBuf())) == hex_encode(sec_pub(secret, 0, ListBuf()))) { "same data" } else { "DATA DIFFERS" }), Err(e) => verify_error_text(e) });
+    println("other measurement: " + match (local_open(k2, blob)) { Ok(v) => "OPENED", Err(e) => verify_error_text(e) });
+    List(Int) bad = blob[0..20].concat([blob[20] ^ 1]).concat(blob[21..blob.len()]);
+    println("tampered: " + match (local_open(k1, bad)) { Ok(v) => "OPENED", Err(e) => verify_error_text(e) });
+    println(bound("counter at the blob's version", k1, blob, name, 7));
+    println(bound("counter past it (a rolled-back blob)", k1, blob, name, 8));
+    println(bound("another counter", k1, blob, [0, 11].concat(fill(5, 32)), 7));
+    println(first("first seal, counter at its initial value", k1, name, 0, 0));
+    println(first("first seal, counter already advanced", k1, name, 3, 0));
+    return 0;
+}

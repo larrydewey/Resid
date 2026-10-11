@@ -1,0 +1,94 @@
+import "verify/core.resid";
+import "verify/snp.resid";
+import "verify/seal.resid";
+import "verify/testing.resid";
+import "challenge.resid";
+import "challenge_bind.resid";
+import "crypto.resid";
+import "ecdsa.resid";
+import "hash.resid";
+import "hpke.resid";
+import "hpkeg.resid";
+import "random.resid";
+import "dev/device.resid";
+
+Str fx() { return "fixtures/"; }
+
+@requires(filesystem(readonly))
+List(UInt(8)) rd(Str p) { return chal_bytes(filesystem.read_bytes(fx() + p)); }
+
+@requires(filesystem(readonly))
+SnpCollateral col() { return SnpCollateral {.vcek_der = rd("test-vcek.der"), .ask_der = rd("test-ask.der"), .crl_der = rd("test-crl.der")}; }
+
+// A report carrying `value` in REPORT_DATA, signed with the test VCEK.
+@requires(filesystem(readonly))
+List(UInt(8)) report_for(List(UInt(8)) value) {
+    List(UInt(8)) t = rd("report-template.bin");
+    List(UInt(8)) rdata = value.concat(zeros(64 - value.len()));
+    List(UInt(8)) body = t[0..80].concat(rdata).concat(t[144..672]);
+    List(Int) sig = ecdsa_sign_raw(P384, Sha384, chal_ints(rd("vcek-d.bin")), chal_ints(body));
+    return body.concat(le72(sig[0..48])).concat(le72(sig[48..96])).concat(t[816..1184]);
+}
+
+List(UInt(8)) zeros(Int n) { return if (n <= 0) { [] } else { [(UInt(8)) 0].concat(zeros(n - 1)) }; }
+List(UInt(8)) le72(List(Int) be) { return le_at(be, 47, ListBuf()).concat(zeros(24)); }
+List(UInt(8)) le_at(List(Int) be, Int i, ListBuf(UInt(8)) acc) { return if (i < 0) { acc.finish() } else { le_at(be, i - 1, acc.push((UInt(8)) be[i])) }; }
+
+@policy
+SnpPolicy release_policy() {
+    return SnpPolicy {.min_tcb = TcbVersion {.fmc = 0, .bootloader = 3, .tee = 0, .snp = 8, .microcode = 115},
+                      .measurements_hex = [hex_encode(sha384_bytes(bytes_of("resid test image")))],
+                      .vmpl = 0, .allow_migration_agent = false, .id_key_digests_hex = [], .host_data_hex = []};
+}
+
+@decides(accept = [test_ark], appraised = release_policy, identity = key_bound)
+@requires(declassify)
+Result(HpkeMessage, VerifyError) release(List(UInt(8)) report, ChallengeRecord issued, SnpCollateral c, List(Int) guest_pk,
+                                         List(Secret(UInt(8))) key, List(Secret(UInt(8))) sender) {
+    Verified(SnpReport) v = snp_verify_key_bound(report, issued, test_ark(), c, test_time(1791000000), 32, guest_pk)?;
+    Appraised(SnpReport) a = snp_appraise(v, release_policy())?;
+    return seal_to_evidence(a, 32, guest_pk, key, sender);
+}
+
+@requires(declassify)
+Str khex(List(Secret(UInt(8))) k) { return hex_encode(sec_pub(k, 0, ListBuf())); }
+@requires(declassify)
+List(Int) sec_pub(List(Secret(UInt(8))) k, Int i, ListBuf(Int) acc) { return if (i >= k.len()) { acc.finish() } else { sec_pub(k, i + 1, acc.push((Int) declassify(k[i], "test output"))) }; }
+
+@requires(filesystem(readonly), declassify)
+Int main() {
+    // The guest's key pair, the broker's challenge, the guest's report.
+    HpkeKeyPairG(Secret(UInt(8))) kp = hpkeg_generate_keypair(32);
+    ChallengeRecord c = challenge_issue(64);
+    List(UInt(8)) bound = match (challenge_with_key(challenge_value(c), 32, kp.sk)) { Ok(b) => b, Err(e) => [] };
+    List(UInt(8)) rep = report_for(bound);
+    List(Secret(UInt(8))) key = random_secret(32);
+    List(Secret(UInt(8))) sender = secret_bytes(chal_ints(rd("sender-sk.bin")));
+    Str r1 = match (release(rep, c, col(), kp.pk, key, sender)) {
+        Ok(m) => match (open_released(32, kp.sk, m, test_sender())) {
+            Ok(v) => if (khex(v.value) == khex(key)) { "released and opened: same key" } else { "released: KEY DIFFERS" },
+            Err(e) => "open: " + verify_error_text(e),
+        },
+        Err(e) => "release: " + verify_error_text(e),
+    };
+    println(r1);
+    Str r2 = match (release(rep, c, col(), kp.pk, key, sender)) { Ok(m) => "replay: RELEASED", Err(e) => "replay: " + verify_error_text(e) };
+    println(r2);
+    // Another key than the attested one.
+    HpkeKeyPairG(Secret(UInt(8))) other = hpkeg_generate_keypair(32);
+    ChallengeRecord c2 = challenge_issue(64);
+    List(UInt(8)) b2 = match (challenge_with_key(challenge_value(c2), 32, kp.sk)) { Ok(b) => b, Err(e) => [] };
+    Str r3 = match (release(report_for(b2), c2, col(), other.pk, key, sender)) { Ok(m) => "other key: RELEASED", Err(e) => "other key: " + verify_error_text(e) };
+    println(r3);
+    // A report for another challenge.
+    ChallengeRecord c3 = challenge_issue(64);
+    Str r4 = match (release(report_for(b2), c3, col(), kp.pk, key, sender)) { Ok(m) => "stale: RELEASED", Err(e) => "other challenge: " + verify_error_text(e) };
+    println(r4);
+    // Plain freshness.
+    ChallengeRecord c4 = challenge_issue(64);
+    Str r5 = match (snp_verify(report_for(challenge_value(c4)), c4, test_ark(), col(), test_time(1791000000))) { Ok(v) => f"plain: quals {v.quals}", Err(e) => "plain: " + verify_error_text(e) };
+    println(r5);
+    Str r6 = match (snp_verify(report_for(challenge_value(c4)), c4, test_ark_vlek(), col(), test_time(1791000000))) { Ok(v) => "vlek root on a VCEK report: ACCEPTED", Err(e) => "vlek root: " + verify_error_text(e) };
+    println(r6);
+    return 0;
+}

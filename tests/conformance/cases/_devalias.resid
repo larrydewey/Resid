@@ -1,0 +1,2 @@
+// Helper for err_device_import_alias: a module with an `ioctl` of its own.
+pub Int ioctl(Int a, Int b) { return a + b; }

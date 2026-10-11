@@ -1,0 +1,11 @@
+// Arithmetic on literals is checked like any arithmetic (spec §6.1a,
+// §6.5): `170141183460469231731687303715884105727 + 1` overflows Int(128) and must abort, never wrap.
+// When reduction folds it at a wider type, narrowing the folded
+// constant to Int(128) is a checked conversion, which aborts.
+Int(128) g() { return 170141183460469231731687303715884105727 + 1; }
+
+Int main() {
+    println("before");
+    println(f"{g()}");
+    return 0;
+}

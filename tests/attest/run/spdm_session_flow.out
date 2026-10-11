@@ -1,0 +1,15 @@
+known answer: 0700000016003e1285641a931570609cf2a8c32f89012f2096f0f3a2 070000001400366c5376645c75c089dadbd2dffaa5ac8274cf1e 11e50000e2984e3969fa25e7f76f8953c3c49a8b763bc1d4b2f32cdee974efb049811c2ed13b536a129c520012131e4895bcf2d1
+requester: FINISH accepted by the device true, FINISH_RSP true, request delivered true, answer true, answer as message 1 false, tampered false, under the handshake keys false
+measurements in the session: true
+other measurements: false
+SNP bound to the session: appraised, 2 anchors
+SNP with the plain challenge: not fresh: the evidence does not carry this challenge
+again: not fresh: challenge already accepted, or exported
+tampered: bad signature: the device did not sign this key exchange
+other negotiation: refused (spdm_session_verify): the device did not choose ECDHE secp384r1, AES-256-GCM and the SPDM key schedule
+chain under another root: bad certificate chain: the chain's root hash is not the anchor's certificate
+mutual authentication asked: refused (spdm_session_verify): the device asks for mutual authentication
+AES-128 negotiated: refused (spdm_session_verify): the device did not choose ECDHE secp384r1, AES-256-GCM and the SPDM key schedule
+other challenge: not fresh: the evidence does not carry this challenge
+SNP bound to a replayable session: not fresh: snp_verify_device_bound: the device session is not fresh
+decision: admitted, 2 anchors

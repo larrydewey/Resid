@@ -1,0 +1,4 @@
+import "dev/device.resid";
+@layout(little)
+type Kind = { UInt(8) a; };
+Int main() { return 0; }

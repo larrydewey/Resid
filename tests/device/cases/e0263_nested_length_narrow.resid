@@ -1,0 +1,5 @@
+// A Nested length field holds its maximum (E0263).
+import "dev/fx_e0263_nested_length_narrow.resid";
+
+@requires(device(readonly))
+Int main() { println(fx_call()); return 0; }

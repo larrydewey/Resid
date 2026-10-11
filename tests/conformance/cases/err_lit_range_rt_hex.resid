@@ -1,0 +1,7 @@
+// `rt` keeps a literal's value from the reducer, not from the range
+// check: 0xFFFFFFFFFFFFFFFF does not fit Int and must not wrap to -1.
+Int main() {
+    Int a = rt 0xFFFFFFFFFFFFFFFF;
+    println(f"{a}");
+    return 0;
+}

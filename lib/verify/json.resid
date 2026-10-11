@@ -1,0 +1,142 @@
+// verify/json.resid — strict JSON for signed collateral
+// (PLAN-attestation.md §3.3): Intel's TCB info and QE identity are JSON
+// objects signed over their exact bytes. Parsed unambiguously: one value,
+// objects without duplicate keys, strings with only the escapes RFC 8259
+// defines (no \u escape of a surrogate, no control character), numbers as
+// integers only, no trailing data, nesting at most 32 deep. Each value
+// keeps where its text starts and ends, so a signature can be checked over
+// the very bytes a member's value spans.
+
+pub type Json = JNull | JBool(Bool) | JNum(Int) | JStr(Str) | JArr(List(JsonAt)) | JObj(List(Str), List(JsonAt));
+
+// A value and its span [start, end) in the text.
+pub type JsonAt = { Json v; Int start; Int end; };
+
+type JsP = { JsonAt at; Int pos; Str err; };
+
+JsP js_fail(Str e, Int pos) { return JsP {.at = JsonAt {.v = JNull, .start = pos, .end = pos}, .pos = pos, .err = e}; }
+
+// The whole text as one value, or why not.
+pub Result(JsonAt, Str) json_parse(List(Int) b) {
+    if (b.len() > 1048576) { return Err("JSON text over 1 MiB"); }
+    JsP p = js_value(b, js_ws(b, 0), 0);
+    if (p.err != "") { return Err(p.err + f" at {p.pos}"); }
+    if (js_ws(b, p.pos) != b.len()) { return Err("trailing data after the JSON value"); }
+    return Ok(p.at);
+}
+
+Int js_ws(List(Int) b, Int i) {
+    if (i < b.len() && (b[i] == 32 || b[i] == 9 || b[i] == 10 || b[i] == 13)) { return js_ws(b, i + 1); }
+    return i;
+}
+
+JsP js_value(List(Int) b, Int i, Int depth) {
+    if (depth > 32) { return js_fail("nested too deep", i); }
+    if (i >= b.len()) { return js_fail("unexpected end", i); }
+    Int c = b[i];
+    if (c == 123) { return js_object(b, js_ws(b, i + 1), i, depth, [], [], true); }
+    if (c == 91) { return js_array(b, js_ws(b, i + 1), i, depth, [], true); }
+    if (c == 34) {
+        JsS s = js_string(b, i + 1, "");
+        if (s.err != "") { return js_fail(s.err, s.pos); }
+        return JsP {.at = JsonAt {.v = JStr(s.v), .start = i, .end = s.pos}, .pos = s.pos, .err = ""};
+    }
+    if (js_word(b, i, "true")) { return JsP {.at = JsonAt {.v = JBool(true), .start = i, .end = i + 4}, .pos = i + 4, .err = ""}; }
+    if (js_word(b, i, "false")) { return JsP {.at = JsonAt {.v = JBool(false), .start = i, .end = i + 5}, .pos = i + 5, .err = ""}; }
+    if (js_word(b, i, "null")) { return JsP {.at = JsonAt {.v = JNull, .start = i, .end = i + 4}, .pos = i + 4, .err = ""}; }
+    if (c == 45 || (c >= 48 && c <= 57)) { return js_number(b, i); }
+    return js_fail("unexpected character", i);
+}
+
+Bool js_word(List(Int) b, Int i, Str w) { return js_word_at(b, i, bytes_of(w), 0); }
+Bool js_word_at(List(Int) b, Int i, List(Int) w, Int k) { return k >= w.len() || (i + k < b.len() && b[i + k] == w[k] && js_word_at(b, i, w, k + 1)); }
+
+// Integers only (no fraction or exponent: no collateral field needs one),
+// no leading zero, at most 18 digits.
+JsP js_number(List(Int) b, Int i) {
+    Bool neg = b[i] == 45;
+    Int d0 = if (neg) { i + 1 } else { i };
+    Int e = js_digits(b, d0);
+    Int n = e - d0;
+    if (n == 0 || n > 18 || (n > 1 && b[d0] == 48)) { return js_fail("a malformed number", i); }
+    if (e < b.len() && (b[e] == 46 || b[e] == 101 || b[e] == 69)) { return js_fail("a number with a fraction or exponent", i); }
+    Int v = js_int(b, d0, e, 0);
+    return JsP {.at = JsonAt {.v = JNum(if (neg) { 0 - v } else { v }), .start = i, .end = e}, .pos = e, .err = ""};
+}
+
+Int js_digits(List(Int) b, Int i) { return if (i < b.len() && b[i] >= 48 && b[i] <= 57) { js_digits(b, i + 1) } else { i }; }
+Int js_int(List(Int) b, Int i, Int e, Int acc) { return if (i >= e) { acc } else { js_int(b, i + 1, e, acc * 10 + (b[i] - 48)) }; }
+
+type JsS = { Str v; Int pos; Str err; };
+
+// A string after its opening quote; ASCII escapes only, no control
+// character, no \u (collateral is ASCII), valid UTF-8 otherwise passed as
+// is byte by byte where printable ASCII.
+JsS js_string(List(Int) b, Int i, Str acc) {
+    if (i >= b.len()) { return JsS {.v = "", .pos = i, .err = "an unterminated string"}; }
+    Int c = b[i];
+    if (c == 34) { return JsS {.v = acc, .pos = i + 1, .err = ""}; }
+    if (c < 32 || c > 126) { return JsS {.v = "", .pos = i, .err = "a control or non-ASCII character in a string"}; }
+    if (c != 92) { return js_string(b, i + 1, acc + str_from_code(c)); }
+    if (i + 1 >= b.len()) { return JsS {.v = "", .pos = i, .err = "an unterminated escape"}; }
+    Int e = b[i + 1];
+    Int r = if (e == 34) { 34 } else if (e == 92) { 92 } else if (e == 47) { 47 } else if (e == 98) { 8 } else if (e == 102) { 12 } else if (e == 110) { 10 } else if (e == 114) { 13 } else if (e == 116) { 9 } else { 0 - 1 };
+    if (r < 0) { return JsS {.v = "", .pos = i, .err = "an escape outside the ASCII ones"}; }
+    return js_string(b, i + 2, acc + str_from_code(r));
+}
+
+JsP js_array(List(Int) b, Int i, Int start, Int depth, List(JsonAt) acc, Bool first) {
+    if (i < b.len() && b[i] == 93 && first) { return JsP {.at = JsonAt {.v = JArr(acc), .start = start, .end = i + 1}, .pos = i + 1, .err = ""}; }
+    if (acc.len() > 4096) { return js_fail("an array of more than 4096 values", i); }
+    JsP v = js_value(b, i, depth + 1);
+    if (v.err != "") { return v; }
+    Int j = js_ws(b, v.pos);
+    if (j < b.len() && b[j] == 44) { return js_array(b, js_ws(b, j + 1), start, depth, acc.concat([v.at]), false); }
+    if (j < b.len() && b[j] == 93) { return JsP {.at = JsonAt {.v = JArr(acc.concat([v.at])), .start = start, .end = j + 1}, .pos = j + 1, .err = ""}; }
+    return js_fail("expected , or ] in an array", j);
+}
+
+JsP js_object(List(Int) b, Int i, Int start, Int depth, List(Str) ks, List(JsonAt) vs, Bool first) {
+    if (i < b.len() && b[i] == 125 && first) { return JsP {.at = JsonAt {.v = JObj(ks, vs), .start = start, .end = i + 1}, .pos = i + 1, .err = ""}; }
+    if (ks.len() > 1024) { return js_fail("an object of more than 1024 members", i); }
+    if (i >= b.len() || b[i] != 34) { return js_fail("expected a member name", i); }
+    JsS k = js_string(b, i + 1, "");
+    if (k.err != "") { return js_fail(k.err, k.pos); }
+    if (js_has(ks, k.v, 0)) { return js_fail("a duplicate member `" + k.v + "`", i); }
+    Int colon = js_ws(b, k.pos);
+    if (colon >= b.len() || b[colon] != 58) { return js_fail("expected :", colon); }
+    JsP v = js_value(b, js_ws(b, colon + 1), depth + 1);
+    if (v.err != "") { return v; }
+    Int j = js_ws(b, v.pos);
+    if (j < b.len() && b[j] == 44) { return js_object(b, js_ws(b, j + 1), start, depth, ks.concat([k.v]), vs.concat([v.at]), false); }
+    if (j < b.len() && b[j] == 125) { return JsP {.at = JsonAt {.v = JObj(ks.concat([k.v]), vs.concat([v.at])), .start = start, .end = j + 1}, .pos = j + 1, .err = ""}; }
+    return js_fail("expected , or } in an object", j);
+}
+
+Bool js_has(List(Str) ks, Str k, Int i) { return i < ks.len() && (ks[i] == k || js_has(ks, k, i + 1)); }
+
+// ─── Reading values ─────────────────────────────────────────────────
+
+// Member k of an object, or None.
+pub Option(JsonAt) json_get(JsonAt o, Str k) {
+    return match (o.v) { JObj(ks, vs) => json_get_at(ks, vs, k, 0), JNull => None, JBool(b) => None, JNum(n) => None, JStr(s) => None, JArr(xs) => None };
+}
+
+Option(JsonAt) json_get_at(List(Str) ks, List(JsonAt) vs, Str k, Int i) {
+    if (i >= ks.len()) { return None; }
+    if (ks[i] == k) { return Some(vs[i]); }
+    return json_get_at(ks, vs, k, i + 1);
+}
+
+pub Result(Str, Str) json_str(JsonAt o, Str k) { return match (json_get(o, k)) { Some(v) => js_as_str(v, k), None => Err("missing `" + k + "`") }; }
+pub Result(Int, Str) json_int(JsonAt o, Str k) { return match (json_get(o, k)) { Some(v) => js_as_int(v, k), None => Err("missing `" + k + "`") }; }
+pub Result(List(JsonAt), Str) json_arr(JsonAt o, Str k) { return match (json_get(o, k)) { Some(v) => js_as_arr(v, k), None => Err("missing `" + k + "`") }; }
+pub Result(JsonAt, Str) json_obj(JsonAt o, Str k) { return match (json_get(o, k)) { Some(v) => js_as_obj(v, k), None => Err("missing `" + k + "`") }; }
+
+pub Result(Str, Str) js_as_str(JsonAt v, Str k) { return match (v.v) { JStr(s) => Ok(s), JNull => Err("`" + k + "` is not a string"), JBool(b) => Err("`" + k + "` is not a string"), JNum(n) => Err("`" + k + "` is not a string"), JArr(xs) => Err("`" + k + "` is not a string"), JObj(a, c) => Err("`" + k + "` is not a string") }; }
+pub Result(Int, Str) js_as_int(JsonAt v, Str k) { return match (v.v) { JNum(n) => Ok(n), JNull => Err("`" + k + "` is not a number"), JBool(b) => Err("`" + k + "` is not a number"), JStr(s) => Err("`" + k + "` is not a number"), JArr(xs) => Err("`" + k + "` is not a number"), JObj(a, c) => Err("`" + k + "` is not a number") }; }
+pub Result(List(JsonAt), Str) js_as_arr(JsonAt v, Str k) { return match (v.v) { JArr(xs) => Ok(xs), JNull => Err("`" + k + "` is not an array"), JBool(b) => Err("`" + k + "` is not an array"), JStr(s) => Err("`" + k + "` is not an array"), JNum(n) => Err("`" + k + "` is not an array"), JObj(a, c) => Err("`" + k + "` is not an array") }; }
+pub Result(JsonAt, Str) js_as_obj(JsonAt v, Str k) {
+    Bool ok = match (v.v) { JObj(a, c) => true, JNull => false, JBool(b) => false, JStr(s) => false, JArr(xs) => false, JNum(n) => false };
+    return if (ok) { Ok(v) } else { Err("`" + k + "` is not an object") };
+}

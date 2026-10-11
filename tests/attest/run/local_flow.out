@@ -1,0 +1,8 @@
+same measurement: version 7, quals 16, same data
+other measurement: bad signature: the blob was not sealed under this key and measurement
+tampered: bad signature: the blob was not sealed under this key and measurement
+counter at the blob's version: version 7, quals 17, anchors 2
+counter past it (a rolled-back blob): stale: the blob is version 7 and the counter is at 8: an old blob
+another counter: refused (bind_counter): the blob is guarded by another counter (or none)
+first seal, counter at its initial value: version 0, quals 17, 0 bytes
+first seal, counter already advanced: refused (first_seal): the counter is at 3, not its initial 0: a blob was sealed against it before

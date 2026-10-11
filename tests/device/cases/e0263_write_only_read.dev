@@ -1,0 +1,11 @@
+// Fixture for e0263_write_only_read: an ioctl that only sends (_IOW, no output) labelled `write = false` (installed as lib/dev/fx_e0263_write_only_read.resid).
+import "device.resid";
+
+pub IoctlOp fx_op() {
+    return IoctlOp {.name = "fx.op", .path = "/dev/fx", .requests = dv_both(dv_iow(88, 0, 16)), .size = 16, .fields = [Buffer(0, 8, 64, In, false), Scalar(8, 8, In)], .write = false, .version = Unversioned, .stability = Uapi};
+}
+
+@requires(device(readonly))
+pub Str fx_call() {
+    return match (device.ioctl(fx_op(), [InBytes([(UInt(8))1])])) { Ok(o) => "ok", Err(e) => device_error_text(e), };
+}

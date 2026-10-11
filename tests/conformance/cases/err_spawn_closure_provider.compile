@@ -1,0 +1,2 @@
+E0214
+spawn body uses capabilities its list [] does not grant: filesystem(readonly), through a closure it calls

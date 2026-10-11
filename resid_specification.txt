@@ -182,6 +182,13 @@ to the replaced node, labelled with the rule:
   elide, discharge, provider, behavior, desugar, widen,
   interpolate
 
+Instantiation (§11, §12) adds its own derive edges before
+reduction: a copy from its generic (instantiate), an
+instance from the one it displaced (replaces), and a
+sandbox rebuilt without its generic declarations from the
+sandbox it replaces (prune); a sandbox whose members are
+unchanged is kept as written.
+
 A node left RESIDUAL or EFFECT carries a reason:
 
   unknown(dep)     depends on the named RESIDUAL dep
@@ -236,7 +243,10 @@ optimization; raw intrinsics are not exposed.
 The runtime's own memory management (arenas, persist
 copies) is not part of the language: a program that calls
 it is rejected (E0220). Only the compiler's own source is
-built with it (--runtime-internals).
+built with it (--runtime-internals). Function names that
+start with `resid_` belong to the runtime, whose entry
+points share the program's link: a program or library that
+defines one is rejected (E0265).
 
 Fixed-capacity value types (§44) carry a statically known
 extent, so the compiler may place them inline in the
@@ -360,7 +370,17 @@ An integer literal takes its type from its context:
     magnitudes within 64 bits yield plain Int(64).
 
 A literal that does not fit its adopted type is a
-compile-time error at every width. Literal adoption does
+compile-time error at every width and in every base
+(decimal, 0x, 0b, 0o), also under `rt` (which keeps the
+value from the reducer, not from the check), as a list
+element, and as the operand of a cast to an integer type;
+it never wraps. Only a literal under a unary minus may
+reach the negative bound (-2^(N-1)). Arithmetic on literals
+is checked at the literals' type like any other (§6.5):
+`9223372036854775807 + 1` traps; a value the reducer folds
+at a wider type and that does not fit the type it flows
+into is a checked conversion that aborts, never a
+truncation. Literal adoption does
 not reach through `if` / `match` arms: arms must agree in
 type (§18), so write `i128(0)` in an arm that must match an
 Int(128) arm.
@@ -994,7 +1014,10 @@ Escapes in "...", f"...", b"..." and '.' are \n \t \r \0
 parse error. Text is ASCII through \x7f; a byte above that
 belongs in a byte string. A Str ends at NUL, so \0 and \x00
 are refused in text (a byte string and a character take
-them). r"..." has no escapes.
+them). A heap Bytes also ends at its first zero byte, so a
+byte string with \0 or \x00 is refused unless it is a
+Bytes(N) (§44), which holds exactly N bytes. r"..." has no
+escapes.
 
 14.1  A hole's format spec
 
@@ -1140,6 +1163,16 @@ Access to a fixed-capacity value is bounds-checked against its
 declared capacity and aborts identically on an out-of-range
 index (§44.3).
 
+  xs.len()   s.len()   b.len()   m.len()
+
+`.len()` is defined on lists, text, bytes, maps and sets, and
+nowhere else (a compile-time error). On a Str or Str(N) it is
+the codepoint count, equal to str_len(s); on Bytes, the byte
+count; on a map or set, the entry count. `xs.concat(ys)` joins
+two heap lists of one type, and the slice `xs[..hi]` takes a
+heap list and an integer bound; neither applies to text, bytes,
+fixed-capacity lists or any other value.
+
 Shift counts that are negative or >= the operand's bit width
 yield 0, or -1 for `>>` of a negative signed value (§6.1); they
 never wrap modulo the width. This holds for every integer width,
@@ -1179,7 +1212,11 @@ Rules:
   - Child receives a fresh CapEnv: the spawn body and
     everything it calls may use only the listed
     capabilities (E0214), and the child thread runs in
-    its own force-time frame.
+    its own force-time frame. A closure the body calls
+    by the name it is bound to counts as called, so
+    what its lambda uses must be listed too; a closure
+    reached any other way is bounded by that frame
+    when it runs (§21.3).
   - Residual forcing uses only the child’s CapEnv.
   - Returns pure values or residuals.
   - Mutable handles moved; immutable views shareable.
@@ -1214,11 +1251,13 @@ only where `main` (or a `test` block) declares it:
 @requires entries take the same modes as sandboxes; a
 read-only grant does not cover a write (filesystem write
 verbs, process.run, clock.sleep_ns, terminal raw mode,
-binding a listener to an address other than loopback).
+binding a listener to an address other than loopback, a
+device descriptor whose `write` is true).
 Families:
 
   filesystem, environment, args, process   (providers)
   clock                                   (provider)
+  device                                  (provider, §49)
   network      TCP builtins
   terminal     TTY and raw-mode builtins
   process      also the native debugger builtins
@@ -1228,6 +1267,8 @@ Families:
                waiting on it; with no modes
   native_<m>   a call into native module m (§47); one
                family per module, with no modes
+  declassify   publishing a secret: declassify(s, "reason")
+               (§48); with no modes
 
 network(readonly) covers connecting out, listening on
 127.0.0.1, accepting, sending and receiving: everything a
@@ -1322,6 +1363,13 @@ consumer's manifest lists (the driver's -depmap lines
     a capability error. Every provider call is checked
     before it runs against the calling thread's sandbox
     frames; a write needs a grant that is not read-only.
+  - A closure carries no authority of its own: its body
+    runs under the frames where it is called, not where
+    it was made. A lambda made where a family is granted
+    and called inside a sandbox or spawn that drops the
+    family fails at its provider call, as a named
+    function's body would (Law 14: authority crosses a
+    boundary only attenuated).
   - Transitive dependencies are closed under the same
     sandbox; attenuation applies to the entire closure.
   - A handle may enter a sandbox only when every
@@ -1463,7 +1511,11 @@ call of it reduce at compile time, with no step limit: a
 call with an argument that is not known, or one that does
 not reduce, is error E0903 (calls inside another `@fold`
 function are exempt; they reduce where that function's
-calls do). A malformed `@reduce` is E0904.
+calls do). A malformed `@reduce` is E0904. Both are
+ignored on a function inside a sandbox (an attenuated
+import, a dependency under its manifest ceiling): code
+under a ceiling does not choose how long its importer's
+build runs, so its calls get the default limits.
 
 What the compiler has may still run out first. The
 evaluator recurses on the compiler's stack; past its end
@@ -2138,8 +2190,11 @@ Provenance (CDDL; the COSE_Sign1 payload, §33.1):
                  ? graph: bstr, ? notes: bstr,
                  ? cache: bstr, grant: [* tstr],
                  ? native: { * tstr => bstr },
+                 ? devices: [* device],
                  output: tstr, ? reduce: tstr,
                  ? compiler: bstr }
+  device     = { op: tstr, name: tstr, path: tstr,
+                 request: uint, stability: tstr }
 
 Hashes are SHA-256. code is the hash of the binary before
 its trailer; graph, notes and cache are the hashes of
@@ -2153,6 +2208,15 @@ the SHA-256 of its artifact as given, before the compiler
 rewrote it; like grant it is ATTESTATION: the code hash
 covers the linked result, and the signer names the
 artifact it came from.
+devices lists each kernel device descriptor (§49) the program
+reaches from its entry points, once: the verb (`ioctl`,
+`transact`, `read_attr`, `configfs_report`, `sequence`), the
+descriptor's name and path, the request number for the build's
+target (0 for verbs without one; a Sequence has one entry per
+step, named `sequence:step`) and the interface's stability
+class (`uapi`, `abi-testing`, `out-of-tree`). Like grant it is
+ATTESTATION; the graph artifact shows the same descriptors as
+effects (`device.ioctl(name)`), which is evidence.
 reduce names a reduction budget other than the default
 (§27), e.g. "unbounded, memory 8192 MB": the budget
 decides how much of the program was computed at compile
@@ -2597,6 +2661,13 @@ its ceiling, and take the meet when a dependency is
 declared twice; package archives carry .ll artifacts
 (§28.1) and the provenance record names them (§34).
 
+v3.12: device access (§49). The `device` provider and its
+verbs reach kernel devices through descriptors that only the
+standard library's lib/dev/ declares; E0260-E0264. The
+provenance record lists the descriptors a binary reaches
+(§34), and a manifest may bound a dependency to named
+descriptors (§21.1, `devices = [...]`).
+
 
 ==================================================
 42. NUMERIC INTEROPERABILITY SUMMARY
@@ -2720,14 +2791,19 @@ the only operators that may change a fixed capacity.
   Str(N)   -> Str           a heap Str holding the
                             text up to the NUL
   Bytes(N) -> Bytes         a heap Bytes holding the
-                            bytes up to the first zero
+                            bytes up to the first zero;
+                            aborts when a non-zero byte
+                            follows a zero one (it would
+                            be dropped)
   Str      -> Str(N)        explicit bounded copy;
                             keeps the longest prefix of
                             whole codepoints that fits
                             in N bytes
   Bytes    -> Bytes(N)      explicit bounded copy
   Str(N)   -> Str(M)        explicit bounded copy
-  Bytes(N) -> Bytes(M)      explicit bounded copy
+  Bytes(N) -> Bytes(M)      explicit bounded copy of
+                            min(N, M) bytes, zeros
+                            included
   List(T, N) -> List(T)     copies all N dense elements
                             into a heap list; the
                             resulting list's length is N
@@ -2758,7 +2834,8 @@ identically to heap lists (§17):
           // which is x; i checked against N
 
 `.len()` on a List(T, N) or a Bytes(N) is the statically
-known capacity N; they carry no dynamic length.
+known capacity N; they carry no dynamic length. `.len()` on
+a Str(N) is the codepoint count of its content, as str_len.
 `.capacity()` on any fixed-capacity value is N, a
 compile-time constant (also in a generic body, where N is a
 type parameter).
@@ -3120,3 +3197,441 @@ never for meaning.
 ==================================================
 END OF DOCUMENT
 ==================================================
+
+
+==================================================
+48. SECRET VALUES
+==================================================
+
+Secret(T) is a value the program holds but may not observe
+through control flow, a memory address or an output. Secrecy
+is knowledge (Law 13) carried in the type: every expression
+computed from a secret is secret, and the places a value
+could leave that knowledge are checked.
+
+  secret(x)               Secret(T) from a T
+  declassify(s, "why")    the T back; needs the declassify
+                          family (Law 14), a non-empty string
+                          literal reason (E0251), and is an
+                          effect in the graph artifact
+                          (declassify.<reason>)
+
+A secret may: take part in & | ^ with integers; be shifted by
+a public amount; go through wrapping_add, wrapping_sub and
+wrapping_mul; be read at a public index when it is a list;
+be stored in a record field or a list element; be chosen by
+ct_select(c, a, b), a mask selection on a Secret(Bool) c
+between integers of at most 64 bits or Bools. The result is
+secret. A secret list's or text's .len() is public.
+lib/crypto.resid's ct_eq compares secret byte lists in
+constant time and publishes the one-bit verdict, so it needs
+the declassify grant.
+
+The builtin names secret, declassify, classify, secret_split,
+secret_join and ct_select are reserved (E0259): a function by
+one of those names would replace the builtin in every module,
+libraries included.
+
+A secret integer wider than 32 bits may not be stored in a
+list, builder, vector, map or set, whether the type is written
+or inferred (E0258): the runtime boxes list integers of 2^54
+or more, a choice made on the value. Secret byte strings are
+UInt(8) lists; wider secrets live in records and parameters.
+
+A secret whose value is known after reduction is refused
+(E0250): it would be in the binary for everyone who has it.
+A secret(...) written directly inside declassify(...) is
+accepted, since that states the value is public.
+
+A secret may not: decide an if, while, match or ternary, or
+an && / || operand; be compared, divided or taken a remainder
+of; be cast to a type that cannot hold every value; be an
+index, a range bound or a shift amount, have a
+method called on it other than .len(), be a provider
+argument, or be a spawn region's result (E0255); be a Map
+key or Set element in any written type (E0253); go
+through checked + - *, whose overflow abort is a branch on the
+value (E0254); wrap Option, Result, a sum type, Map, Set, a
+handle, a function or another secret (E0253); or wrap a Bytes
+or Bytes(N), in any written or inferred type (E0253): a heap
+Bytes ends at its first zero byte, so its .len() and its
+conversions scan the bytes, a branch on each. Secret byte
+strings are List(Secret(UInt(8))).
+
+No observation behavior reaches a secret. The structural Show
+and Serialize refuse a type that holds one at any depth and
+name the field path (E0256). Show, Serialize, Hash, Eq and Ord
+are never given for a type whose arguments contain a secret,
+whether declared, asked for by a verb, or needed by a generic
+function's copy (E0257); a generic function is checked per
+concrete copy. A type that holds a secret may declare its own
+Show; its body is checked like any function, so it reaches the
+secret only through declassify.
+
+After checking and reduction Secret(T) is erased: it lowers
+exactly as T, and secret(x) and declassify(x, r) as x.
+
+The declassify grant is also checked at force time, like a
+provider call (§21.3): a function, lambda or spawn body that
+still declassifies after reduction asks the running thread's
+capability frames for `declassify` when it is entered, once
+per call (a self-recursive loop is not checked per step), and
+aborts with "capability not granted: declassify" when a spawn
+list or sandbox ceiling on the stack dropped it -- for
+instance a closure, made where the grant holds, run inside a
+spawn () or a sandbox without it. Inside a spawn region the
+abort fails the region (its RegionError). A declassify the
+reducer folded to a known value leaves no code and no check.
+
+A program that handles secrets runs its allocator in secret
+mode, switched on before main: every heap, region, thread
+stack and thread-local mapping is left out of core dumps,
+and memory is zeroed when it is freed or handed back for
+reuse (memory returned to the kernel is zero-filled by the
+kernel). Registers, the binary's static data and the
+process's initial stack are not covered; main runs on its
+own thread stack, which is.
+
+secret_split(s) turns a Secret(List(T)) into a
+List(Secret(T)), its length public; secret_join(xs) turns it
+back. classify(x) lifts a public value into secret
+computation and claims no secrecy, so E0250 does not apply.
+All three are free at run time.
+
+lib/word.resid's Word(W, B) and Word64(W, B) behaviors let
+cryptographic code be written once and instantiated for
+public data and secret data (UInt(32)/UInt(64) words, UInt(8)
+bytes); lib/sha256g.resid (SHA-256,
+HMAC-SHA-256, HKDF-SHA-256) and lib/sha512g.resid (SHA-512,
+SHA-384 and their HMACs) are written that way.
+lib/chachag.resid (ChaCha20, Poly1305, ChaCha20-Poly1305) is
+generic over Word(W, B) and Wide512(P, B), 512-bit integers
+for Poly1305 (Int(512) or Secret(Int(512)), kept in
+parameters); lib/chacha.resid is its public copy. Its open
+publishes one bit through CtSame(B) (lib/crypto.resid), whose
+secret instance is ct_eq and so needs the declassify grant.
+lib/x25519g.resid (X25519, RFC 7748) is generic over
+Wide512(P, B) too: field elements mod 2^255 - 19 in P
+parameters, the ladder's swaps as xor masks; lib/x25519.resid
+is its public copy. The peer key is public; the all-zero check
+on the shared secret goes through CtSame(B), and the public key
+of a private key through X25519Pub(B), whose secret instance
+declassifies (so both secret copies need the declassify grant).
+lib/aesgcmg.resid (AES-128/192/256, GCM with any IV, AES key
+wrap) is generic over Word(W, B) and Block128(X, W, B),
+128-bit blocks (UInt(128) or Secret(UInt(128)), kept in
+records and parameters; round keys are a list of 32-bit
+words); lib/aesgcm.resid is its public copy. The AES-NI
+rounds and the carry-less multiply (aesni_enc_round,
+aesni_enc_last_round, gf128_mul_hw) take secrets, as they run
+in constant time, and keep the result secret. GCM open and
+key unwrap publish one bit each through CtSame(B).
+ct_hide(x) on a secret x keeps it secret, and so does a cast to
+an integer type that holds every value of x (the same or a
+wider width, or unsigned to a wider signed type); any other
+cast of a secret is checked, and so refused (E0255).
+lib/p256.resid and lib/p384.resid (P-256 and P-384, generated
+by tools/gen_nistp.py) are generic over P256Word(F, B) and
+P384Word(F, B), field elements UInt(576)/UInt(832) or their
+secrets: key derivation, ECDH, ECDSA signing and its RFC 6979
+nonce (over the generic HMACs) are written once, and
+lib/ecdsa.resid's ecdsag_*, ec_public_keyg and ecdhg take the
+private key as List(B). A signature, a public key and whether
+a key is usable are published through the behavior's open
+verb, a declassification at secret types, so those secret
+copies need the declassify grant; an ECDH result stays secret.
+lib/ed25519g.resid (Ed25519 key generation and signing) is
+generic over Wide512(P, B) and Word64(W, B), with a masked
+double-and-always-add ladder; lib/ed25519.resid is its public
+copy. The public key and the signature are published through
+Publish(B) (lib/word.resid), whose secret instance declassifies,
+so signing with a secret seed needs the declassify grant; the
+compiler signs its provenance record that way.
+lib/hpkeg.resid (HPKE, RFC 9180: the labeled HKDF over
+HKDF-SHA256/384/512, DHKEM(X25519), DHKEM(P-256) and DHKEM(P-384)
+over ecdhg / ec_public_keyg, the key schedule in all four modes,
+seal, open and export over AES-GCM and ChaCha20-Poly1305) is
+generic over the byte type and the behaviors above;
+lib/hpke.resid is its public copy, and no suite has a
+public-only path. Private keys, the shared secret, the key
+schedule's secrets, nonces and plaintexts are secret bytes; the
+AEADs take the nonce in B (aes_gcmg_seal_ivb,
+chacha20poly1305g_seal_nb), so it stays secret. Derived public
+keys go through X25519Pub(B) or the curve's open verb and the
+tag verdict through CtSame(B), so the secret copy needs the
+declassify grant.
+lib/tls.resid's TLS 1.3 key schedule (HKDF-Expand-Label,
+Derive-Secret, the early, handshake and master secrets, the
+traffic secrets, keys and IVs), Finished and AES-128-GCM record
+protection are generic over the byte type (tlsg_*); its
+List(Int) API is the public copy. lib/tlsserver.resid and
+lib/tlsclient.resid run the secret copy: the x25519 ephemeral
+key and shared secret, every secret of the schedule and the
+record keys (TlsKeys) are List(Secret(UInt(8))), each record's
+nonce (IV xor sequence number) is computed in secret bytes, and
+the server's signing key (lib/tlskey.resid) is secret once
+parsed. The key share and signature are published by their
+primitives; record ciphertext, an authenticated record's
+plaintext and the Finished MAC through TlsPublish(B), whose
+secret instance declassifies; a record's tag and the peer's
+Finished publish one bit through CtSame(B). Every function and
+program that runs a TLS handshake or record therefore needs the
+declassify grant.
+
+With TLS, every key the cryptography library handles is secret
+at run time (step 2 of PLAN-secret-type.md §7). tests/ct takes
+its cases from the graph and fails when a library function that
+handles a secret has no case (step 3).
+
+
+==================================================
+49. DEVICE ACCESS
+==================================================
+
+A program talks to a kernel device -- an ioctl on a
+character device, a request/response device such as
+/dev/tpmrm0, a configfs report, a sysfs attribute -- through
+the provider `device` (Law 8). It gains no pointer, no file
+descriptor, no raw request number and no path of its own.
+
+--------------------------------------------------
+49.1  Descriptors
+--------------------------------------------------
+
+What a call does is described by a descriptor: a record
+lib/dev/device.resid declares, of one of five kinds:
+
+  IoctlOp         an ioctl: path, request numbers per
+                  target, struct size, fields (Scalar,
+                  Inline, Buffer with a maximum and a
+                  secret flag, Nested: a buffer whose
+                  pointer and length are inside a Buffer,
+                  Errno: the ioctl's errno as an output),
+                  interface version
+  Transact        write a command, read a response
+  ReadAttr        read an attribute file
+  ConfigfsReport  the configfs report interface
+  Sequence        ioctl steps on one open file, with Links
+                  from a step's Scalar output to a later
+                  step's Scalar input
+
+Each has a name, a path, a `write` flag (ReadAttr never
+writes) and a stability class (Uapi, AbiTesting,
+OutOfTree). Descriptors are declared only in the standard
+library's lib/dev/ (E0260): a literal of a descriptor type,
+or the `@descriptor` annotation, anywhere else is refused,
+so the kernel interfaces a program can reach are one
+reviewed set of files.
+
+An IoctlOp over an include/uapi struct is generated, not
+written: tools/resid-devgen reads a checked-in input list
+(the roles a header cannot say: field kinds, directions,
+secret, length links, `write`, stability, the version
+field) and the pinned kernel's headers, takes every size,
+offset, maximum and request number from the C compiler
+for each target, and writes lib/dev/uapi_*.resid. Such a
+file must be exactly what the generator produces
+(`resid-devgen --check`), and its numbers the same in
+every pinned kernel (`resid-devgen --matrix`). The typed
+wrappers beside it are written by hand.
+
+--------------------------------------------------
+49.2  Verbs
+--------------------------------------------------
+
+  device.ioctl(IoctlOp, List(DevIn))
+  device.transact(Transact, List(UInt(8)))
+  device.configfs_report(ConfigfsReport, ReportReq)
+  device.read_attr(ReadAttr)
+  device.sequence(Sequence, List(DevIn))
+
+each give Result(List(DevOut), DeviceError). An input is
+one DevIn (InNum(Int) or InBytes(List(UInt(8)))) per In or
+InOut field, an output one DevOut (OutNum, OutBytes, or
+OutSecret(List(Secret(UInt(8)))) for a Buffer marked
+secret, §48) per Out or InOut field, in field order; a
+Scalar that a Buffer names as its length is the engine's,
+and only a Sequence's last step has outputs. A Nested
+buffer's length is its input's when it is In, else what the
+program wrote at its length field inside the parent (at most
+its maximum), so a wrapper can size it; its address never
+comes back (the host zeroes it in the parent's output). With
+an Errno field a failed ioctl still gives its outputs, the
+errno among them (0 on success), instead of Kernel: what a
+wrapper needs when the kernel explains a failure in the
+struct; ENOTTY stays Unsupported and EFAULT Overrun. Bytes cross as
+List(UInt(8)), never Bytes(N), which ends at a zero byte. A
+failure is a value: DeviceError says absent, denied, a
+kernel errno, too long, generation changed, unsupported,
+another interface version, an overrun, an unknown driver,
+bad input or a bad reply, each with the descriptor's name.
+Programs usually call the typed wrappers of a device module
+(lib/dev/sev_guest.resid, ...).
+
+A verb needs `device` when its descriptor's `write` is
+true, else device(readonly) covers it. The checker reads
+`write` from the literal the argument names before
+reduction (a call of a zero-argument function whose body
+returns the literal, or the literal itself); a descriptor
+it cannot read that way counts as a write. `write` is a
+reviewed label of lib/dev/, not proved from the layout, but
+an ioctl that only sends data (_IOC_WRITE and no Out or
+InOut field) is refused as a read (E0263). `device` is the
+provider in every scope: a binding of that name (a local,
+parameter, loop variable, match arm, destructuring, pattern
+`Some(device) = x`), a function, type or variant, or an
+import alias `as device` is refused. A verb's descriptor is
+a value of the type lib/dev/device.resid declares for the
+verb; a record of another type with the same fields is
+refused (E0260).
+
+--------------------------------------------------
+49.3  Checks
+--------------------------------------------------
+
+A verb is an effect (Laws 2 and 10): it is never reduced,
+whatever its arguments. Its descriptor must be known after
+reduction (Laws 1 and 5, E0262), and is then checked:
+
+  E0263  the request number's _IOC size equals the struct
+         size and its direction bits cover the fields (data
+         to the kernel needs _IOC_WRITE, fields back need
+         _IOC_READ); fields lie inside the struct and
+         apart, version field included; Scalars are 1, 2, 4
+         or 8 bytes; pointer fields are 8-byte aligned;
+         every buffer has a maximum of 1 byte to 16 MiB; a
+         length field is a Scalar of the struct wide enough
+         for its buffer's maximum, and no other buffer's;
+         a Nested field's parent is an In or InOut Buffer
+         listed before it (no deeper nesting), its pointer
+         8-byte aligned inside the parent's maximum, its
+         length field 1, 2, 4 or 8 bytes inside the parent,
+         apart from the pointer and wide enough for its
+         maximum, and apart from the parent's other Nested
+         fields; at most one Errno;
+         a Transact is marked `write = true` (writing its
+         command is a write to the device); the path
+         is under /dev/ or /sys/ (a ConfigfsReport's under
+         /sys/kernel/config/) without `..`; the target the
+         program is built for has exactly one request
+         number; the name is lower-case words joined by `.`
+         and `_`; a descriptor marked `write = false` is
+         not an ioctl that only sends (_IOC_WRITE with no
+         Out or InOut field).
+  E0264  a Sequence's links go forward, from a Scalar output
+         to a Scalar input of one width, at most one into
+         an input; its steps share its path; only its last
+         step has outputs other than Scalars; a step that
+         writes makes it a write; no step has an Errno.
+  E0261  a manifest's `devices = [...]` (§21.1) names the
+         descriptors a dependency's code may reach, each
+         entry a descriptor (`sev_guest.snp_get_report`) or
+         a device module (`sev_guest`); reaching another is
+         refused. What a dependency reaches includes every
+         function a behavior instance names, wherever the
+         instance is declared (it may dispatch to any). A
+         dependency's own dependencies get at most its
+         bound (one that declares none gets its parent's),
+         and a dependency declared twice gets the narrowest.
+
+These checks run on the reduced program, so `--profile
+check` (type checking only) does not make them, and
+`--no-reduce` leaves every descriptor unknown.
+
+--------------------------------------------------
+49.4  Execution
+--------------------------------------------------
+
+After the checks each verb calls lib/dev/device.resid's
+engine for it (lib/dev/device_write.resid's for a writing
+descriptor), which validates the inputs against the
+descriptor, serializes descriptor and inputs, and hands
+them to the runtime (resid_device_call, or
+resid_device_call_w for a write: the force-time guard asks
+for `device` or `device!`). The reply is validated against
+the descriptor's maxima as untrusted input. Only the engine
+may call the runtime entry or be called itself (E0260).
+
+Each call runs in a fresh device host: the program itself,
+re-executed with an empty environment and one socket, every
+other descriptor closed, without core dumps, the time-stamp
+counter or the vDSO, refusing to run set-id. Before it reads
+a request it checks who started it: not in secure mode
+(AT_SECURE), no capability its parent lacks, the socket's
+peer is its parent with its uid and gid, the parent runs the
+same executable, and the parent answers a random challenge
+the host sends; every byte it then reads must carry its
+parent's credentials (SCM_CREDENTIALS). A host started any
+other way exits without acting. It checks the request again
+(the rules of §49.3 and the inputs against the fields),
+opens the descriptor's one path with no symbolic link on the
+way (only magic links for a sysfs attribute, whose paths
+pass through sysfs's links; where openat2 is missing, only
+the final component is checked) and refuses the wrong kind
+of file (a character device for an ioctl, a Sequence or a
+Transact; a regular sysfs or configfs file for ReadAttr),
+places the struct and each buffer (a Nested one too, its
+address written into its parent) in a mapping of its own
+between two inaccessible guard pages, with a random canary
+between the declared length and the guard after, sets the
+interface version, and installs a seccomp filter that kills
+it on any system call but the descriptor's operation on that
+descriptor (an ioctl with each step's request number for the
+running target, or read and write), its reply, private
+anonymous non-executable memory and exit. A Sequence runs
+its steps in order on the one open file, copying each Link
+just before its step. A configfs report makes an entry whose
+unpredictable name the calling program chose, confines the
+host to it with Landlock (no Landlock: Unsupported), writes
+inblob (and privlevel, service_provider, service_guid,
+service_manifest_version), reads the generation, the blobs
+and the provider, reads the generation again, and removes
+the entry. Both generation reads must
+equal the number of stores the host made (the kernel counts
+each from 0 at the entry's creation; any other count means
+another writer). The calling program removes the entry
+itself when the host did not.
+
+A call has a wall-clock limit: 30 seconds, 120 for a
+configfs report. A host that has not answered by then is
+killed and the call is Timeout (the operation may have run);
+the program waits a bounded time to reap it, and reaps one
+the kernel could not kill in time at a later call instead of
+waiting for it.
+
+Errors: a path that does not exist (ENOENT, ENODEV, ENXIO,
+ENOTDIR) is Absent; EACCES or EPERM is Denied; ENOTTY or
+EINVAL from an ioctl, a symbolic link, the wrong kind of
+file, a missing configfs attribute or no Landlock is
+Unsupported; a spoiled canary, a fault in the host, EFAULT
+or a read longer than asked is Overrun; another version in
+the version field is Version with the kernel's; a length the
+kernel writes back, or a value read, beyond the maximum is
+TooLong; a Nested length past its maximum is BadInput; a
+generation that changed or counts a store the host
+did not make is GenerationChanged; a provider the descriptor
+does not list is UnknownDriver; no answer within the limit
+is Timeout; any other errno is Kernel (or, with an Errno
+field, the outputs and the errno). A host that is
+killed, exits badly or answers a reply that does not match
+the request is BadReply; a request the runtime refuses is
+BadInput. None of these aborts: a device that misbehaves is
+a value, as a missing one is.
+
+A secret output never travels in the general reply: the host
+sends it separately and zeroes its copies; the runtime copies
+it into the secret list the engine takes once
+(resid_device_secret, E0260 outside lib/dev/) and wipes the
+transport buffer.
+
+The read entry refuses (Denied) a request that says it
+writes, so a write never travels under a read-only grant.
+A number output wider than its Scalar is a bad reply.
+
+The provenance record lists every descriptor the residual
+program holds (§34), called or not; the graph artifact
+records each verb as an effect naming its descriptor.
+
+E0260's "lib/dev/" is the standard library root's dev/
+directory by absolute path; when the root is not absolute
+(RESID_HOME unset), no file counts as lib/dev/.

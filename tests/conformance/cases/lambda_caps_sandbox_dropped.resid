@@ -1,0 +1,41 @@
+// A closure handed into a sandbox runs under the sandbox's ceiling (spec
+// §21.3): made in main, which holds every family, and called by a
+// function in `sandbox (terminal)`, its provider call is refused there.
+// Each call is made inside a spawn that grants the family, so the refusal
+// fails that region instead of aborting the program. A sandbox whose
+// ceiling keeps the family runs the same closure.
+sandbox (terminal) {
+    Int run_in(Int closure(Int) f, Int x) { return f(x); }
+}
+
+sandbox (filesystem, environment, process, clock, network, args) {
+    Int run_all(Int closure(Int) f, Int x) { return f(x); }
+}
+
+@requires(filesystem, environment, process, clock, network, args, terminal)
+Int main() {
+    Int closure(Int) rd = lambda(v) { str_len(filesystem.read_all("@TMP@/in.txt")) + v };
+    Int closure(Int) env = lambda(v) { str_len(environment.get("RESID_LAMBDA_CAPS_UNSET")) + v };
+    Int closure(Int) proc = lambda(v) { process.run("true") + v };
+    Int closure(Int) now = lambda(v) { if (clock.now_ns() > 0) { v } else { -1 } };
+    Int closure(Int) net = lambda(v) { if (resid_tcp_close(resid_tcp_listen(0))) { v } else { -1 } };
+    Int closure(Int) argc = lambda(v) { if (args.count() >= 1) { v } else { -1 } };
+    Int r = rt 0;
+    println(report("read", spawn (filesystem, terminal) { return run_in(rd, r); }));
+    println(report("environment", spawn (environment, terminal) { return run_in(env, r); }));
+    println(report("process", spawn (process, terminal) { return run_in(proc, r); }));
+    println(report("clock", spawn (clock, terminal) { return run_in(now, r); }));
+    println(report("network", spawn (network, terminal) { return run_in(net, r); }));
+    println(report("args", spawn (args, terminal) { return run_in(argc, r); }));
+    println(f"read granted: {run_all(rd, r)}");
+    println(f"environment granted: {run_all(env, r)}");
+    println(f"process granted: {run_all(proc, r)}");
+    println(f"clock granted: {run_all(now, r)}");
+    println(f"network granted: {run_all(net, r)}");
+    println(f"args granted: {run_all(argc, r)}");
+    return 0;
+}
+
+Str report(Str what, Result(Int, RegionError) r) {
+    return match r { Ok(n) => f"{what}: ok {n}", Err(e) => what + ": failed: " + e.message };
+}

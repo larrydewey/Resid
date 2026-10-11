@@ -1,0 +1,15 @@
+// The literals that do fit, at their bounds, in every base and context.
+UInt(8) top() { return 0xFF; }
+
+Int widen(UInt(8) x) { return (Int) x; }
+
+Int main() {
+    Int lo = rt -9223372036854775808;
+    Int hi = rt 0x7FFFFFFFFFFFFFFF;
+    UInt u = rt 0xFFFFFFFFFFFFFFFF;
+    UInt m = u & 0xFFFFFFFFFFFFFFFF;
+    List(UInt(8)) xs = [0b11111111, 0o377, rt 255];
+    Int(8) c = (Int(8)) rt -128;
+    println(f"{lo} {hi} {u} {m} {xs} {top()} {widen(0o377)} {c}");
+    return 0;
+}

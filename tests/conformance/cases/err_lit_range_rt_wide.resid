@@ -1,0 +1,6 @@
+// A literal wider than 64 bits under `rt` must not wrap to 0.
+Int main() {
+    Int a = rt 0x10000000000000000;
+    println(f"{a}");
+    return 0;
+}

@@ -1,0 +1,8 @@
+quote: appraised, 3 PCRs, reset 3
+again: not fresh: challenge already accepted, or exported
+other PCR values: bad signature: the PCR values are not the ones the quote's digest covers
+signature of another quote: bad signature: the attestation key did not sign this, or with an algorithm the anchor does not list
+not TPM_GENERATED: bad layout: tpm: malformed response: magic 0xff544348
+not a quote: bad layout: tpm: malformed response: attestation type 0x8017, a quote is 0x8018
+other challenge: not fresh: the evidence does not carry this challenge
+released and opened: same key

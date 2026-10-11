@@ -1,0 +1,26 @@
+// SNP_GET_EXT_REPORT's certificate-buffer negotiation
+// (lib/dev/sev_guest_ext.resid): after EIO with SNP_GUEST_VMM_ERR_INVALID_LEN
+// the kernel has written the needed length into the request struct's
+// certs_len; the wrapper retries once with it -- larger than before, whole
+// 4 KiB pages, at most 16 KiB -- and anything else is an error, never a
+// loop.
+import "dev/sev_guest_ext.resid";
+
+List(UInt(8)) back(Int need) {
+    return sg_zeros(snp_ext_report_req_certs_len_at(), ListBuf()).concat(sg_le32(need)).concat(sg_zeros(4, ListBuf()));
+}
+
+Str next(Int had, Bool retried, Option(List(UInt(8))) b) {
+    return match (sg_ext_need("x", had, retried, b)) { Ok(n) => f"retry with {n}", Err(e) => device_error_text(e), };
+}
+
+Int main() {
+    println(next(rt 8192, false, Some(back(rt 12288))));
+    println(next(rt 8192, false, Some(back(rt 16384))));
+    println(next(rt 8192, false, Some(back(rt 20480))));
+    println(next(rt 8192, true, Some(back(rt 12288))));
+    println(next(rt 8192, false, Some(back(rt 8192))));
+    println(next(rt 8192, false, Some(back(rt 12000))));
+    println(next(rt 8192, false, None));
+    return 0;
+}

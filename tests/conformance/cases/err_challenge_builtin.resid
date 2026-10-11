@@ -1,0 +1,6 @@
+// Spending a challenge record belongs to the device engines.
+Int main() {
+    Int r = resid_chal_spend(65536);
+    List(Int) b = resid_chal_bound(65536);
+    return r;
+}

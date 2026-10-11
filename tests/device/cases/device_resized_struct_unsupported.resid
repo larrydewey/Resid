@@ -1,0 +1,11 @@
+// A struct that changed size is a different request number (_IOC_SIZE),
+// so a stale descriptor gets ENOTTY from the kernel -- Err(Unsupported),
+// never a mismatched layout (PLAN-device-access.md §6.2).
+import "dev/fx_device_resized_struct_unsupported.resid";
+
+@requires(device(readonly))
+Int main() {
+    Str s = match (device.ioctl(fx_ptn8(), [])) { Ok(o) => "accepted", Err(e) => device_error_text(e), };
+    println(s);
+    return 0;
+}

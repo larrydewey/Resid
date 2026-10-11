@@ -1,0 +1,7 @@
+// An operand literal takes the other operand's type, and must fit it.
+Int main() {
+    Int x = rt 3;
+    Int y = x + 9223372036854775808;
+    println(f"{y}");
+    return 0;
+}

@@ -1,0 +1,21 @@
+// Flow summaries: a parameter that reaches or selects the result carries
+// the argument's label; one that does not, does not.
+Int first(Int x, Int y) { return x; }
+Int pick(Int c, Int v) {
+    if (c > 0) { return v; }
+    return 0;
+}
+@requires(environment)
+Str home() { return environment.get("HOME"); }
+Int count(Int n) { return if (n <= 0) { 0 } else { 1 + count(n - 1) }; }
+@requires(args, environment)
+Int main() {
+    Int ext = str_len(args.get(1));
+    Int f1 = first(1, ext);
+    Int f2 = first(ext, 1);
+    Int p = pick(ext, 2);
+    Str h = home();
+    Int r = count(ext);
+    Int r0 = count(3);
+    return f1 + f2 + p + str_len(h) + r + r0;
+}

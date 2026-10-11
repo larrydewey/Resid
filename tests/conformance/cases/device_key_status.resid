@@ -1,0 +1,34 @@
+// SNP_GET_DERIVED_KEY's reply (lib/dev/sev_guest_key.resid): the status
+// word at the head of the secret response buffer and the ioctl's exitinfo2
+// are checked before any key byte is returned. A failed request gives
+// Err(Kernel), never the buffer's bytes as a key.
+import "dev/sev_guest_key.resid";
+
+List(Secret(UInt(8))) resp(Int status, Int i, ListBuf(Secret(UInt(8))) acc) {
+    if (i >= 64) { return acc.finish(); }
+    Int b = if (i < 4) { (status >> (i * 8)) & 255 } else { i };
+    return resp(status, i + 1, acc.push(secret((UInt(8))b)));
+}
+
+@requires(declassify)
+Str body(Int status, Int n) {
+    List(Secret(UInt(8))) r = resp(status, 0, ListBuf());
+    return match (sg_key_body("k", if (n < 64) { r[0..n] } else { r })) {
+        Ok(k) => f"key of {k.len()} bytes",
+        Err(e) => device_error_text(e),
+    };
+}
+
+Str exit2(Option(Int) v) {
+    return match (sg_exitinfo2("k", v)) { Ok(x) => f"exitinfo2 {x}", Err(e) => device_error_text(e), };
+}
+
+@requires(declassify)
+Int main() {
+    println(body(rt 0, 64));
+    println(body(rt 22, 64));
+    println(body(rt 0, 63));
+    println(exit2(Some(rt 0)));
+    println(exit2(None));
+    return 0;
+}

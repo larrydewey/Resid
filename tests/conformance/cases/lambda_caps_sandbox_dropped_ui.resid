@@ -1,0 +1,36 @@
+// A closure handed into a sandbox runs under the sandbox's ceiling, for
+// the terminal and display families too (lambda_caps_sandbox_dropped):
+// made in main, which holds both, and called by a function in a sandbox
+// that drops the family, its builtin call is refused there. Each call is
+// made inside a spawn that grants the family, so the refusal fails that
+// region. A sandbox whose ceiling keeps the family runs the same closure.
+sandbox (args) {
+    Int run_in(Int closure(Int) f, Int x) { return f(x); }
+}
+
+sandbox (terminal(readonly)) {
+    Int run_ro(Int closure(Int) f, Int x) { return f(x); }
+}
+
+sandbox (terminal, display) {
+    Int run_all(Int closure(Int) f, Int x) { return f(x); }
+}
+
+@requires(terminal, display, args)
+Int main() {
+    Int closure(Int) cols = lambda(v) { if (resid_term_cols() > 0) { v } else { -1 } };
+    Int closure(Int) raw = lambda(v) { if (resid_term_raw() || resid_term_restore()) { v } else { v } };
+    Int closure(Int) disp = lambda(v) { if (resid_disp_close(-1)) { -1 } else { v } };
+    Int r = rt 0;
+    println(report("terminal", spawn (terminal, args) { return run_in(cols, r); }));
+    println(report("terminal raw", spawn (terminal) { return run_ro(raw, r); }));
+    println(report("display", spawn (display, args) { return run_in(disp, r); }));
+    println(f"terminal granted: {run_all(cols, r)}");
+    println(f"terminal raw granted: {run_all(raw, r)}");
+    println(f"display granted: {run_all(disp, r)}");
+    return 0;
+}
+
+Str report(Str what, Result(Int, RegionError) r) {
+    return match r { Ok(n) => f"{what}: ok {n}", Err(e) => what + ": failed: " + e.message };
+}

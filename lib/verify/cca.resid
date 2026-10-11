@@ -1,0 +1,393 @@
+// verify/cca.resid — Arm CCA attestation tokens (PLAN-attestation.md §3.2,
+// §3.5, §4): the realm token, signed by the realm attestation key (RAK) it
+// carries, and the platform token, signed by the platform's CPAK (the
+// anchor, kind EndorsedKeys: a key the platform's endorser published),
+// bound together by the platform token's challenge, the hash of the RAK.
+// The challenge is the realm token's (64 bytes, relayed).
+//
+// The collection is CBOR tag 907 (the RMM's earlier encoding) or 399, a
+// map of 44234 (platform) and 44241 (realm), each a COSE_Sign1 given as a
+// byte string or as [263, byte string]. Each token's claims are a map of
+// the documented keys, each once, with no trailing bytes; algorithms are
+// ES256 or ES384 with the matching curve.
+
+import "core.resid";
+import "../crypto.resid";
+import "../hash.resid";
+import "../x509.resid";
+import "../ecdsa.resid";
+import "../certverify.resid";
+import "../cose.resid";
+import "../cosesig.resid";
+import "../tls.resid";
+import "../challenge.resid";
+import "../challenge_bind.resid";
+import "../challenge_export.resid";
+import "../dev/device.resid";
+import "corim.resid";
+import "endorsed_keys.resid";
+
+pub type CcaSwComponent = { Str kind; List(Int) measurement; Str version; List(Int) signer_id; Str hash_alg; };
+
+// Both tokens' claims, as signed. rpv is the realm personalization value
+// (chosen by whoever created the realm), challenge the realm's challenge.
+@signed(sig = cose, span = payload)
+pub type CcaToken = { List(Int) challenge; List(Int) rpv; List(Int) rim; List(List(Int)) rems; Str realm_hash_alg; List(Int) rak; Str rak_hash_alg; Str profile; List(Int) implementation_id; List(Int) instance_id; Int lifecycle; List(Int) config; List(CcaSwComponent) sw; Str verification_service; Str platform_hash_alg; };
+
+// A policy: the realm initial measurements accepted (one must match), the
+// REMs that must hold these values ("index=hex"), and the platform
+// implementation IDs accepted (empty: any).
+pub type CcaPolicy = { List(Str) rim_hex; List(Str) rems_hex; List(Str) implementation_ids_hex; };
+
+pub List(Str) cca_descriptors() { return ["tsm_report.cca"]; }
+
+// ─── Strict CBOR ────────────────────────────────────────────────────
+
+type CcaR = { CcaToken t; Str err; List(Int) seen; };
+
+CcaToken cca_empty() {
+    List(Int) none = [];
+    List(List(Int)) nn = [];
+    List(CcaSwComponent) ns = [];
+    return CcaToken {.challenge = none, .rpv = none, .rim = none, .rems = nn, .realm_hash_alg = "", .rak = none, .rak_hash_alg = "", .profile = "", .implementation_id = none, .instance_id = none, .lifecycle = -1, .config = none, .sw = ns, .verification_service = "", .platform_hash_alg = ""};
+}
+
+Bool cca_has(List(Int) xs, Int x, Int i) { return i < xs.len() && (xs[i] == x || cca_has(xs, x, i + 1)); }
+
+// A COSE_Sign1 from the collection: a byte string, or [263, byte string].
+type CcaPart = { Bool ok; List(Int) cose; Int pos; };
+
+CcaPart cca_part(List(Int) b, Int pos) {
+    List(Int) none = [];
+    CbeHead h = cbe_read_head(b, pos);
+    if (h.ok && h.major == 2) {
+        CbeStr s = cbe_read_str(b, pos, 2);
+        return CcaPart {.ok = s.ok, .cose = s.bytes, .pos = s.pos};
+    }
+    if (!h.ok || h.major != 4 || h.val != 2) { return CcaPart {.ok = false, .cose = none, .pos = pos}; }
+    CbeHead ct = cbe_read_head(b, h.pos);
+    if (!ct.ok || ct.major != 0 || ct.val != 263) { return CcaPart {.ok = false, .cose = none, .pos = pos}; }
+    CbeStr s = cbe_read_str(b, ct.pos, 2);
+    return CcaPart {.ok = s.ok, .cose = s.bytes, .pos = s.pos};
+}
+
+type CcaColl = { List(Int) platform; List(Int) realm; Str err; };
+
+CcaColl cca_collection(List(Int) b) {
+    List(Int) none = [];
+    CbeHead t = cbe_read_head(b, 0);
+    if (!t.ok || t.major != 6 || (t.val != 907 && t.val != 399)) { return CcaColl {.platform = none, .realm = none, .err = "not a CCA token (tag 907 or 399)"}; }
+    CbeHead m = cbe_read_head(b, t.pos);
+    if (!m.ok || m.major != 5 || m.val != 2) { return CcaColl {.platform = none, .realm = none, .err = "the collection is not a map of two tokens"}; }
+    CbeHead k1 = cbe_read_head(b, m.pos);
+    CcaPart p1 = cca_part(b, k1.pos);
+    CbeHead k2 = cbe_read_head(b, p1.pos);
+    CcaPart p2 = cca_part(b, k2.pos);
+    Bool ok = k1.ok && k2.ok && k1.major == 0 && k2.major == 0 && p1.ok && p2.ok && p2.pos == b.len();
+    if (!ok) { return CcaColl {.platform = none, .realm = none, .err = "malformed collection"}; }
+    if (k1.val == 44234 && k2.val == 44241) { return CcaColl {.platform = p1.cose, .realm = p2.cose, .err = ""}; }
+    if (k1.val == 44241 && k2.val == 44234) { return CcaColl {.platform = p2.cose, .realm = p1.cose, .err = ""}; }
+    return CcaColl {.platform = none, .realm = none, .err = "the collection does not hold a platform and a realm token"};
+}
+
+// Claims of either token into one record.
+CcaR cca_claims(List(Int) b, Int pos, Int left, List(Int) keys, CcaR r) {
+    if (r.err != "") { return r; }
+    if (left <= 0) { return if (pos == b.len()) { r } else { CcaR {.t = r.t, .err = "trailing bytes", .seen = r.seen} }; }
+    CbeHead k = cbe_read_head(b, pos);
+    if (!k.ok || k.major != 0) { return CcaR {.t = r.t, .err = "a claim key is not an unsigned integer", .seen = r.seen}; }
+    if (!cca_has(keys, k.val, 0)) { return CcaR {.t = r.t, .err = f"unknown claim {k.val}", .seen = r.seen}; }
+    if (cca_has(r.seen, k.val, 0)) { return CcaR {.t = r.t, .err = f"claim {k.val} twice", .seen = r.seen}; }
+    CcaV v = cca_value(b, k.pos, k.val, r.t);
+    if (v.err != "") { return CcaR {.t = r.t, .err = v.err, .seen = r.seen}; }
+    return cca_claims(b, v.pos, left - 1, keys, CcaR {.t = v.t, .err = "", .seen = r.seen.concat([k.val])});
+}
+
+type CcaV = { CcaToken t; Int pos; Str err; };
+
+CcaV cca_bad(CcaToken t, Str e) { return CcaV {.t = t, .pos = 0, .err = e}; }
+
+// A byte string of one of the given lengths ([] any up to 1024).
+type CcaB = { Bool ok; List(Int) v; Int pos; };
+
+CcaB cca_bytes(List(Int) b, Int pos, List(Int) lens) {
+    CbeStr s = cbe_read_str(b, pos, 2);
+    Bool ok = s.ok && s.bytes.len() <= 1024 && (lens.len() == 0 || cca_has(lens, s.bytes.len(), 0));
+    return CcaB {.ok = ok, .v = s.bytes, .pos = s.pos};
+}
+
+type CcaT = { Bool ok; Str v; Int pos; };
+
+CcaT cca_text(List(Int) b, Int pos) {
+    CbeStr s = cbe_read_str(b, pos, 3);
+    Bool ok = s.ok && s.bytes.len() <= 256 && cca_printable(s.bytes, 0);
+    return CcaT {.ok = ok, .v = if (ok) { cbe_ascii(s.bytes, 0, "") } else { "" }, .pos = s.pos};
+}
+
+Bool cca_printable(List(Int) b, Int i) { return i >= b.len() || (b[i] >= 32 && b[i] < 127 && cca_printable(b, i + 1)); }
+
+CcaToken cca_set(CcaToken t, Int key, List(Int) by, Str tx, Int n, List(List(Int)) rems, List(CcaSwComponent) sw) {
+    return CcaToken {
+        .challenge = t.challenge,
+        .rpv = if (key == 44235) { by } else { t.rpv },
+        .rim = if (key == 44238) { by } else { t.rim },
+        .rems = if (key == 44239) { rems } else { t.rems },
+        .realm_hash_alg = if (key == 44236) { tx } else { t.realm_hash_alg },
+        .rak = if (key == 44237) { by } else { t.rak },
+        .rak_hash_alg = if (key == 44240) { tx } else { t.rak_hash_alg },
+        .profile = if (key == 265) { tx } else { t.profile },
+        .implementation_id = if (key == 2396) { by } else { t.implementation_id },
+        .instance_id = if (key == 256) { by } else { t.instance_id },
+        .lifecycle = if (key == 2395) { n } else { t.lifecycle },
+        .config = if (key == 2401) { by } else { t.config },
+        .sw = if (key == 2399) { sw } else { t.sw },
+        .verification_service = if (key == 2400) { tx } else { t.verification_service },
+        .platform_hash_alg = if (key == 2402) { tx } else { t.platform_hash_alg }
+    };
+}
+
+CcaV cca_value(List(Int) b, Int pos, Int key, CcaToken t) {
+    List(Int) none = [];
+    List(List(Int)) nn = [];
+    List(CcaSwComponent) ns = [];
+    if (key == 10 || key == 44235 || key == 44238 || key == 44237 || key == 2396 || key == 256 || key == 2401) {
+        List(Int) lens = if (key == 44235) { [64] } else if (key == 44238) { [32, 48, 64] } else if (key == 44237) { [65, 97] } else if (key == 2396) { [32] } else if (key == 256) { [33] } else if (key == 10) { [32, 48, 64] } else { none };
+        CcaB v = cca_bytes(b, pos, lens);
+        if (!v.ok) { return cca_bad(t, f"bad claim {key}"); }
+        // The challenge claim (10) is the realm's in the realm token and
+        // the RAK binder in the platform token: kept apart by the caller.
+        return CcaV {.t = if (key == 10) { cca_with_challenge(t, v.v) } else { cca_set(t, key, v.v, "", 0, nn, ns) }, .pos = v.pos, .err = ""};
+    }
+    if (key == 44236 || key == 44240 || key == 265 || key == 2400 || key == 2402) {
+        CcaT v = cca_text(b, pos);
+        if (!v.ok) { return cca_bad(t, f"bad claim {key}"); }
+        return CcaV {.t = cca_set(t, key, none, v.v, 0, nn, ns), .pos = v.pos, .err = ""};
+    }
+    if (key == 2395) {
+        CbeHead h = cbe_read_head(b, pos);
+        if (!h.ok || h.major != 0 || h.val > 65535) { return cca_bad(t, "bad security lifecycle"); }
+        return CcaV {.t = cca_set(t, key, none, "", h.val, nn, ns), .pos = h.pos, .err = ""};
+    }
+    if (key == 44239) {
+        CbeHead a = cbe_read_head(b, pos);
+        if (!a.ok || a.major != 4 || a.val != 4) { return cca_bad(t, "REMs are not four"); }
+        CcaRems r = cca_rems(b, a.pos, 4, []);
+        if (!r.ok) { return cca_bad(t, "a REM is not 32, 48 or 64 bytes"); }
+        return CcaV {.t = cca_set(t, key, none, "", 0, r.v, ns), .pos = r.pos, .err = ""};
+    }
+    if (key == 2399) {
+        CbeHead a = cbe_read_head(b, pos);
+        if (!a.ok || a.major != 4 || a.val < 1 || a.val > 64) { return cca_bad(t, "bad software components"); }
+        CcaSw s = cca_sw(b, a.pos, a.val, []);
+        if (s.err != "") { return cca_bad(t, s.err); }
+        return CcaV {.t = cca_set(t, key, none, "", 0, nn, s.v), .pos = s.pos, .err = ""};
+    }
+    return cca_bad(t, f"unknown claim {key}");
+}
+
+// Claim 10 is the realm's challenge in the realm token and the RAK binder
+// in the platform token; each token is parsed on its own.
+CcaToken cca_with_challenge(CcaToken t, List(Int) v) {
+    return CcaToken {.challenge = v, .rpv = t.rpv, .rim = t.rim, .rems = t.rems, .realm_hash_alg = t.realm_hash_alg, .rak = t.rak, .rak_hash_alg = t.rak_hash_alg, .profile = t.profile, .implementation_id = t.implementation_id, .instance_id = t.instance_id, .lifecycle = t.lifecycle, .config = t.config, .sw = t.sw, .verification_service = t.verification_service, .platform_hash_alg = t.platform_hash_alg};
+}
+
+type CcaRems = { Bool ok; List(List(Int)) v; Int pos; };
+
+CcaRems cca_rems(List(Int) b, Int pos, Int left, List(List(Int)) acc) {
+    if (left <= 0) { return CcaRems {.ok = true, .v = acc, .pos = pos}; }
+    CcaB x = cca_bytes(b, pos, [32, 48, 64]);
+    if (!x.ok) { return CcaRems {.ok = false, .v = acc, .pos = pos}; }
+    return cca_rems(b, x.pos, left - 1, acc.concat([x.v]));
+}
+
+type CcaSw = { List(CcaSwComponent) v; Int pos; Str err; };
+
+CcaSw cca_sw(List(Int) b, Int pos, Int left, List(CcaSwComponent) acc) {
+    if (left <= 0) { return CcaSw {.v = acc, .pos = pos, .err = ""}; }
+    CbeHead m = cbe_read_head(b, pos);
+    if (!m.ok || m.major != 5 || m.val < 1 || m.val > 6) { return CcaSw {.v = acc, .pos = pos, .err = "a software component is not a map"}; }
+    List(Int) none = [];
+    CcaSc c = cca_sc(b, m.pos, m.val, CcaSwComponent {.kind = "", .measurement = none, .version = "", .signer_id = none, .hash_alg = ""}, []);
+    if (c.err != "") { return CcaSw {.v = acc, .pos = pos, .err = c.err}; }
+    if (c.c.measurement.len() == 0) { return CcaSw {.v = acc, .pos = pos, .err = "a software component without a measurement"}; }
+    return cca_sw(b, c.pos, left - 1, acc.concat([c.c]));
+}
+
+type CcaSc = { CcaSwComponent c; Int pos; Str err; };
+
+CcaSc cca_sc(List(Int) b, Int pos, Int left, CcaSwComponent c, List(Int) seen) {
+    if (left <= 0) { return CcaSc {.c = c, .pos = pos, .err = ""}; }
+    CbeHead k = cbe_read_head(b, pos);
+    if (!k.ok || k.major != 0 || k.val < 1 || k.val > 6 || cca_has(seen, k.val, 0)) { return CcaSc {.c = c, .pos = pos, .err = "a software component's key is unknown or repeated"}; }
+    if (k.val == 2 || k.val == 5) {
+        CcaB v = cca_bytes(b, k.pos, [32, 48, 64]);
+        if (!v.ok) { return CcaSc {.c = c, .pos = pos, .err = "a software component's measurement or signer ID is malformed"}; }
+        CcaSwComponent c2 = if (k.val == 2) { CcaSwComponent {.kind = c.kind, .measurement = v.v, .version = c.version, .signer_id = c.signer_id, .hash_alg = c.hash_alg} } else { CcaSwComponent {.kind = c.kind, .measurement = c.measurement, .version = c.version, .signer_id = v.v, .hash_alg = c.hash_alg} };
+        return cca_sc(b, v.pos, left - 1, c2, seen.concat([k.val]));
+    }
+    CcaT v = cca_text(b, k.pos);
+    if (!v.ok) { return CcaSc {.c = c, .pos = pos, .err = "a software component's text is malformed"}; }
+    CcaSwComponent c3 = if (k.val == 1) { CcaSwComponent {.kind = v.v, .measurement = c.measurement, .version = c.version, .signer_id = c.signer_id, .hash_alg = c.hash_alg} } else if (k.val == 4) { CcaSwComponent {.kind = c.kind, .measurement = c.measurement, .version = v.v, .signer_id = c.signer_id, .hash_alg = c.hash_alg} } else { CcaSwComponent {.kind = c.kind, .measurement = c.measurement, .version = c.version, .signer_id = c.signer_id, .hash_alg = v.v} };
+    return cca_sc(b, v.pos, left - 1, c3, seen.concat([k.val]));
+}
+
+List(Int) cca_realm_keys() { return [10, 44235, 44236, 44237, 44238, 44239, 44240]; }
+List(Int) cca_platform_keys() { return [265, 10, 2394, 2396, 256, 2401, 2395, 2402, 2399, 2400]; }
+
+Result(CcaToken, VerifyError) cca_parse(List(Int) payload, List(Int) keys, Str what) {
+    CbeHead m = cbe_read_head(payload, 0);
+    if (!m.ok || m.major != 5 || m.val < 1 || m.val > 16) { return Err(BadLayout(what + " claims are not a map")); }
+    CcaR r = cca_claims(payload, m.pos, m.val, keys, CcaR {.t = cca_empty(), .err = "", .seen = []});
+    if (r.err != "") { return Err(BadLayout(what + ": " + r.err)); }
+    return Ok(r.t);
+}
+
+// ─── Verification ───────────────────────────────────────────────────
+
+List(Int) cca_hash(Str alg, List(Int) b) {
+    if (alg == "sha-256") { return sha256_bytes(b); }
+    if (alg == "sha-384") { return sha384_bytes(b); }
+    if (alg == "sha-512") { return sha512_bytes(b); }
+    return [];
+}
+
+PubKey cca_ec_key(List(Int) point) {
+    Curve c = if (point.len() == 97) { P384 } else { P256 };
+    return PubKey {.kind = pubkey_ec(), .curve = c, .point = point, .n = [], .e = [], .pss_only = false};
+}
+
+@verify_internal
+pub Result(CcaToken, VerifyError) cca_check(List(UInt(8)) token, Anchor cpak, EvidenceTime t) {
+    if (cpak.kind != "EndorsedKeys") { return Err(Refused("cca_verify", "the anchor is not an endorsed platform key (kind " + cpak.kind + ")")); }
+    if (anchor_expired(cpak, t)) { return Err(Stale("the anchor expired " + cpak.expires)); }
+    if (token.len() > 16384) { return Err(BadLayout("a CCA token is at most 16 KiB")); }
+    CcaColl col = cca_collection(chal_ints(token));
+    if (col.err != "") { return Err(BadLayout(col.err)); }
+    CoseMsg rm = cose_sign1_read(col.realm);
+    CoseMsg pm = cose_sign1_read(col.platform);
+    if (!rm.ok || !pm.ok) { return Err(BadLayout("a token is not a COSE_Sign1")); }
+    CcaToken realm = cca_parse(rm.payload, cca_realm_keys(), "realm")?;
+    if (realm.challenge.len() != 64 || realm.rak.len() == 0 || realm.rim.len() == 0 || realm.rems.len() != 4 || realm.rak_hash_alg == "") { return Err(BadLayout("the realm token lacks a required claim")); }
+    if (!ec_public_ok(if (realm.rak.len() == 97) { P384 } else { P256 }, realm.rak)) { return Err(BadLayout("the RAK is not a point on its curve")); }
+    if (!cose_sign1_verify(rm, cca_ec_key(realm.rak), [])) { return Err(BadSignature("the RAK did not sign the realm token")); }
+    PubKey pk = spki_parse_der(cpak.der);
+    Str need = if (pk.kind == pubkey_ec() && curve_bytes(pk.curve) == 48) { "EcdsaP384Sha384" } else { "EcdsaP256Sha256" };
+    if (!anchor_lists(cpak.algorithms, need)) { return Err(Refused("cca_verify", "the anchor does not list " + need)); }
+    if (!cose_sign1_verify(pm, pk, [])) { return Err(BadSignature("the CPAK did not sign the platform token")); }
+    CcaToken plat = cca_parse(pm.payload, cca_platform_keys(), "platform")?;
+    List(Int) binder = cca_hash(realm.rak_hash_alg, realm.rak);
+    if (binder.len() == 0 || !eq_ints(binder, plat.challenge)) { return Err(BadSignature("the platform token is not bound to this realm's RAK")); }
+    if (plat.lifecycle < 0 || plat.implementation_id.len() == 0 || plat.sw.len() == 0) { return Err(BadLayout("the platform token lacks a required claim")); }
+    return Ok(CcaToken {.challenge = realm.challenge, .rpv = realm.rpv, .rim = realm.rim, .rems = realm.rems, .realm_hash_alg = realm.realm_hash_alg, .rak = realm.rak, .rak_hash_alg = realm.rak_hash_alg, .profile = plat.profile, .implementation_id = plat.implementation_id, .instance_id = plat.instance_id, .lifecycle = plat.lifecycle, .config = plat.config, .sw = plat.sw, .verification_service = plat.verification_service, .platform_hash_alg = plat.platform_hash_alg});
+}
+
+Int cca_rp(ChallengeRecord c) { return if (c.bind.len() > 0) { q_rp_bound() } else { 0 }; }
+
+Result(Bool, VerifyError) cca_bind(CcaToken k, List(UInt(8)) want, ChallengeRecord c, List(UInt(8)) token) {
+    if (want.len() != 64) { return Err(NotFresh("a CCA challenge is 64 bytes: issue one with challenge_issue(64)")); }
+    return vf_bind_challenge(chal_bytes(k.challenge), want, c, token, cca_descriptors());
+}
+
+// Fresh for the holder of `c`: the realm challenge is challenge_value(c).
+@primitive(verify, anchor = cpak, gives = [fresh], time = t, format = CcaToken, kinds = [EndorsedKeys], inputs = [token, c, t])
+pub Result(Verified(CcaToken), VerifyError) cca_verify(List(UInt(8)) token, ChallengeRecord c, Anchor cpak, EvidenceTime t) {
+    CcaToken k = cca_check(token, cpak, t)?;
+    Bool spent = cca_bind(k, challenge_value(c), c, token)?;
+    List(Int) none = [];
+    return Ok(vf_make(k, cpak, q_fresh() | cca_rp(c), c, 0, none, none, t, "CcaToken"));
+}
+
+// Fresh and KeyBound(kem, pk).
+@primitive(verify, anchor = cpak, gives = [fresh, key_bound], time = t, format = CcaToken, kinds = [EndorsedKeys], inputs = [token, c, t, kem, pk])
+pub Result(Verified(CcaToken), VerifyError) cca_verify_key_bound(List(UInt(8)) token, ChallengeRecord c, Anchor cpak, EvidenceTime t, Int kem, List(Int) pk) {
+    if (!hpke_kem_ok(kem) || !vf_pk_ok(kem, pk)) { return Err(Refused("cca_verify_key_bound", "the attester's public key is empty or malformed for the KEM")); }
+    CcaToken k = cca_check(token, cpak, t)?;
+    Bool spent = cca_bind(k, challenge_key_value(challenge_value(c), kem, pk), c, token)?;
+    List(Int) none = [];
+    return Ok(vf_make(k, cpak, q_fresh() | q_key_bound() | cca_rp(c), c, kem, pk, none, t, "CcaToken"));
+}
+
+// Fresh and ChannelBound to the connection whose other end is e.
+@primitive(verify, anchor = cpak, gives = [fresh, channel_bound], time = t, format = CcaToken, kinds = [EndorsedKeys], inputs = [token, c, t, e])
+@requires(declassify)
+pub Result(Verified(CcaToken), VerifyError) cca_verify_channel_bound(List(UInt(8)) token, ChallengeRecord c, Anchor cpak, EvidenceTime t, ChannelExporter e) {
+    List(UInt(8)) want = match (challenge_with_channel(challenge_value(c), e)) { Ok(x) => Ok(x), Err(err) => Err(Refused("cca_verify_channel_bound", device_error_text(err))) }?;
+    CcaToken k = cca_check(token, cpak, t)?;
+    Bool spent = cca_bind(k, want, c, token)?;
+    List(Int) none = [];
+    return Ok(vf_make(k, cpak, q_fresh() | q_channel_bound() | cca_rp(c), c, 0, none, vf_channel_id(e), t, "CcaToken"));
+}
+
+// Delivered, for a record imported without a SpentStore.
+@primitive(verify, anchor = cpak, gives = [delivered], time = t, format = CcaToken, kinds = [EndorsedKeys], inputs = [token, c, t])
+pub Result(Verified(CcaToken), VerifyError) cca_verify_replayable(List(UInt(8)) token, ReplayableRecord c, Anchor cpak, EvidenceTime t) {
+    CcaToken k = cca_check(token, cpak, t)?;
+    if (!eq_ints(k.challenge, chal_ints(replayable_value(c)))) { return Err(NotFresh("the realm challenge is not this challenge")); }
+    List(Int) none = [];
+    return Ok(Verified {.value = k, .anchors = [cpak.id], .quals = q_delivered(), .record = 0 - 1, .kem = 0, .pk = none, .chan = none, .time = t.source, .principal = cpak.principal, .format = "CcaToken"});
+}
+
+// ─── Under an endorsed key ──────────────────────────────────────────
+// The CPAK is a key a CoRIM endorses (an attest-key triple, verify/
+// endorsed_keys.resid) for the token's own instance ID, not a pinned
+// anchor; the result rests on the CoRIM's endorser.
+
+type CcaHit = { CcaToken k; Anchor a; };
+
+Result(CcaHit, VerifyError) cca_endorsed_check(List(UInt(8)) token, Verified(CorimRefs) keys, EvidenceTime t) {
+    List(EndorsedKey) ks = endorsed_keys(keys, "", "EndorsedKeys", "CcaToken", "", t, "cca_verify_endorsed")?;
+    return cca_endorsed_at(token, ks, t, 0);
+}
+
+Result(CcaHit, VerifyError) cca_endorsed_at(List(UInt(8)) token, List(EndorsedKey) ks, EvidenceTime t, Int i) {
+    if (i >= ks.len()) { return Err(BadSignature("no key the CoRIM endorses for the token's instance signed the platform token")); }
+    return match (cca_check(token, ks[i].a, t)) {
+        Ok(k) => if (hex_encode(k.instance_id) == ks[i].instance_hex) { Ok(CcaHit {.k = k, .a = ks[i].a}) } else { cca_endorsed_at(token, ks, t, i + 1) },
+        Err(e) => if (endorsed_try_next(e)) { cca_endorsed_at(token, ks, t, i + 1) } else { Err(e) },
+    };
+}
+
+// Fresh for the holder of `c`, under an endorsed CPAK.
+@primitive(verify, from = keys, gives = [fresh], time = t, format = CcaToken, inputs = [token, c, t])
+pub Result(Verified(CcaToken), VerifyError) cca_verify_endorsed(List(UInt(8)) token, ChallengeRecord c, Verified(CorimRefs) keys, EvidenceTime t) {
+    CcaHit h = cca_endorsed_check(token, keys, t)?;
+    Bool spent = cca_bind(h.k, challenge_value(c), c, token)?;
+    List(Int) none = [];
+    return Ok(vf_make(h.k, h.a, q_fresh() | cca_rp(c), c, 0, none, none, t, "CcaToken"));
+}
+
+// Fresh and KeyBound(kem, pk), under an endorsed CPAK.
+@primitive(verify, from = keys, gives = [fresh, key_bound], time = t, format = CcaToken, inputs = [token, c, t, kem, pk])
+pub Result(Verified(CcaToken), VerifyError) cca_verify_endorsed_key_bound(List(UInt(8)) token, ChallengeRecord c, Verified(CorimRefs) keys, EvidenceTime t, Int kem, List(Int) pk) {
+    if (!hpke_kem_ok(kem) || !vf_pk_ok(kem, pk)) { return Err(Refused("cca_verify_endorsed_key_bound", "the attester's public key is empty or malformed for the KEM")); }
+    CcaHit h = cca_endorsed_check(token, keys, t)?;
+    Bool spent = cca_bind(h.k, challenge_key_value(challenge_value(c), kem, pk), c, token)?;
+    List(Int) none = [];
+    return Ok(vf_make(h.k, h.a, q_fresh() | q_key_bound() | cca_rp(c), c, kem, pk, none, t, "CcaToken"));
+}
+
+// ─── Appraisal ──────────────────────────────────────────────────────
+// Mandatory: the platform's security lifecycle is "secured" (0x3000 to
+// 0x30FF). Then the policy's RIM (one must match), REMs and implementation
+// IDs.
+@primitive(appraise, from = v, policy = policy, ptype = CcaPolicy)
+pub Result(Appraised(CcaToken), VerifyError) cca_appraise(Verified(CcaToken) v, CcaPolicy policy) {
+    CcaToken k = v.value;
+    if (k.lifecycle < 12288 || k.lifecycle > 12543) { return Err(Refused("cca_appraise", f"the platform's security lifecycle 0x{k.lifecycle:hex} is not secured")); }
+    if (policy.rim_hex.len() == 0) { return Err(Refused("cca_appraise", "the policy names no realm initial measurement")); }
+    if (!cca_hex_in(k.rim, policy.rim_hex, 0)) { return Err(Refused("cca_appraise", "the realm initial measurement is not one the policy names")); }
+    if (policy.implementation_ids_hex.len() > 0 && !cca_hex_in(k.implementation_id, policy.implementation_ids_hex, 0)) { return Err(Refused("cca_appraise", "the platform implementation is not one the policy names")); }
+    Str bad = cca_rem_miss(k, policy.rems_hex, 0);
+    if (bad != "") { return Err(Refused("cca_appraise", bad)); }
+    return Ok(Appraised {.v = v, .policy = "CcaPolicy"});
+}
+
+Bool cca_hex_in(List(Int) b, List(Str) hs, Int i) { return i < hs.len() && (str_to_lower(hs[i]) == hex_encode(b) || cca_hex_in(b, hs, i + 1)); }
+
+Str cca_rem_miss(CcaToken k, List(Str) want, Int i) {
+    if (i >= want.len()) { return ""; }
+    List(Str) kv = str_split(want[i], "=");
+    if (kv.len() != 2 || !str_is_int(kv[0]) || str_parse_int(kv[0]) < 0 || str_parse_int(kv[0]) > 3) { return "the policy entry `" + want[i] + "` is not index=hex (0..3)"; }
+    if (hex_encode(k.rems[str_parse_int(kv[0])]) != str_to_lower(kv[1])) { return "REM" + kv[0] + " is not the policy's"; }
+    return cca_rem_miss(k, want, i + 1);
+}

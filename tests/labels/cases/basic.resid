@@ -1,0 +1,12 @@
+// Outside data is External; constants and what is built only from them
+// are Internal, `rt` included.
+@requires(args, environment)
+Int main() {
+    Str a = args.get(1);
+    Str e = environment.get("HOME");
+    Int k = 7;
+    Int kr = rt 9;
+    Int n = str_len(a) + k;
+    Str both = a + e;
+    return n + kr;
+}

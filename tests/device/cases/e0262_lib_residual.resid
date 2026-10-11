@@ -1,0 +1,5 @@
+// A descriptor field computed at run time leaves the descriptor unknown; this descriptor breaks that (E0262).
+import "dev/fx_e0262_lib_residual.resid";
+
+@requires(device)
+Int main() { println(fx_call()); return 0; }

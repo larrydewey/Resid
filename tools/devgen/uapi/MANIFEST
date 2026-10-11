@@ -1,0 +1,23 @@
+# The uapi headers resid-devgen generates lib/dev/uapi_*.resid from:
+# every header clang read for the probes of tools/devgen/descriptors.toml
+# on both targets, copied from the pinned kernel by `resid-devgen --snapshot`.
+# The files are the kernel's, under GPL-2.0 WITH Linux-syscall-note.
+tag v7.2.9
+commit 5fce161649b4d779d1b76d9fcd52dc77779774b8
+b31cb28bdf651fc0090215c19dc03f477e03de50cfbd0b7134837d4d2ca591c6  arch/arm64/include/uapi/asm/bitsperlong.h
+ef6ce264aa33309c5b69ad09c2bd293c9bb79a6fc2c3cd22f34dbbd8f5acfb1f  arch/arm64/include/uapi/asm/posix_types.h
+8ef5efeb3f25ae47ce03ba892f5caf77631b1257715fc12de72c21e61db17e43  arch/x86/include/uapi/asm/bitsperlong.h
+c7273fd75b14e5e029619af15bf176f5c676bf3ac0cf71ec7de9e1b3586acd19  arch/x86/include/uapi/asm/posix_types.h
+5cdabc01dac0a3e9731ac16353210a615ca44e85b6ec9eafd2e79206e0b26c76  arch/x86/include/uapi/asm/posix_types_64.h
+fa25db88dc972820b72f8baf9cea6f39ca7f5bd0cf39182089409f6676fa90b6  include/uapi/asm-generic/bitsperlong.h
+faca16150492e943a43c83e6b3069531dd498ef15dc612fb2051b88f7da83afc  include/uapi/asm-generic/int-ll64.h
+8629514cdd724a7100fc6eea84d93db5fbc3285431a1631a77c7f8006b70bce0  include/uapi/asm-generic/ioctl.h
+7f53b56be32916547aca34f8cede9eb1018adea3d223b9f01ba30b1ff0e7ef3a  include/uapi/asm-generic/posix_types.h
+e768a8355242ccf2c18e629ff7cebd9cbeda19e7f6823e16f163efa02ce29d35  include/uapi/asm-generic/types.h
+ba73b5892de6605e6c40b151820e367dfcb98cbdb3f8f468c5ef2bd8437df873  include/uapi/linux/ioctl.h
+a4bd3e142752483b0bbaa9fb6493cde6b29543597a86671490469508787c8612  include/uapi/linux/nsm.h
+bc68636a383418f235d3457e4b21cf27cefc7c7f3edea4c1f6706f1018db196f  include/uapi/linux/posix_types.h
+5d59ad10380e462d92cbb5c1d9d4773e2a0c126e7876db38e8814c9d38a082a5  include/uapi/linux/sev-guest.h
+3703ea363b0f4d3b75a3a1f59b7daaa0b81f2e18cc459fedd6b1df331e8662b8  include/uapi/linux/stddef.h
+8f4857e5e8873b56c86884f781d04cf9bac0e9947e2d784f78dde1ab9b87f943  include/uapi/linux/tdx-guest.h
+f22c5bf977c0bb939577ce7aaa3f69c74e2f5cfa4cd42ff6fb768ce119c9c6fd  include/uapi/linux/types.h

@@ -1,0 +1,5 @@
+// A Nested length field is apart from its pointer (E0263).
+import "dev/fx_e0263_nested_length_overlap.resid";
+
+@requires(device(readonly))
+Int main() { println(fx_call()); return 0; }

@@ -1,0 +1,17 @@
+// A native call reached through a closure is bounded by the frame the
+// closure runs under: a spawn that drops `native_tiny` fails, one that
+// keeps it runs the call (spec §19, §47).
+@link("tiny") Int tiny_add(Int x, Int y) {}
+
+Int apply(Int closure(Int) f, Int x) { return f(x); }
+
+@requires(native_tiny)
+Int main() {
+    Int closure(Int) f = lambda(v) { tiny_add(v, 1) };
+    Int r = rt 1;
+    Result(Int, RegionError) a = spawn () { return apply(f, r); };
+    println(match a { Ok(n) => f"dropped ok {n}", Err(e) => "dropped failed: " + e.message });
+    Result(Int, RegionError) b = spawn (native_tiny) { return apply(f, r); };
+    println(match b { Ok(n) => f"granted ok {n}", Err(e) => "granted failed: " + e.message });
+    return 0;
+}

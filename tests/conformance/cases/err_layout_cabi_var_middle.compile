@@ -1,0 +1,1 @@
+error[E0272]: MidVar.data: under c_abi only the last field has a variable length (a flexible array member)

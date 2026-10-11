@@ -1,0 +1,9 @@
+@requires(args, declassify)
+Int main() {
+    Secret(Int) k = classify(42);
+    Int n = args.count();
+    if (n < 2) { return 0; }
+    Int v = declassify(k, "the key");
+    println(f"{v}");
+    return 0;
+}

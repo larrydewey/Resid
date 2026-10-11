@@ -732,7 +732,7 @@ List(Int) ts_u16(Int v) {
 }
 
 // Handshake message: type || u24 length || body.
-List(Int) ts_message(Int mtype, List(Int) body) {
+pub List(Int) ts_message(Int mtype, List(Int) body) {
     return [mtype].concat(ts_u24(body.len())).concat(body);
 }
 

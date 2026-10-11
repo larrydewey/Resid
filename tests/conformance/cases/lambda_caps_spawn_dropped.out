@@ -1,0 +1,17 @@
+read: failed: capability not granted: filesystem
+write: failed: capability not granted: filesystem (write)
+environment: failed: capability not granted: environment
+process: failed: capability not granted: process (write)
+clock read: failed: capability not granted: clock
+clock sleep: failed: capability not granted: clock (write)
+network: failed: capability not granted: network
+args: failed: capability not granted: args
+read granted: ok 3
+write granted: ok 0
+environment granted: ok 0
+process granted: ok 0
+clock read granted: ok 0
+clock sleep granted: ok 0
+network granted: ok 0
+args granted: ok 0
+in a lambda: failed: capability not granted: filesystem

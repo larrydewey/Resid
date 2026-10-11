@@ -1,0 +1,6 @@
+// The decimal form: 2^63 fits only when negated.
+Int main() {
+    Int a = rt 9223372036854775808;
+    println(f"{a}");
+    return 0;
+}

@@ -1,0 +1,2 @@
+E0001
+integer literal 0b100000000 does not fit the expected type UInt(8)

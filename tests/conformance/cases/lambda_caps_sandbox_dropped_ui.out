@@ -1,0 +1,6 @@
+terminal: failed: capability not granted: terminal
+terminal raw: failed: capability not granted: terminal (write)
+display: failed: capability not granted: display
+terminal granted: 0
+terminal raw granted: 0
+display granted: 0

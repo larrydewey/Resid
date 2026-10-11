@@ -1,0 +1,32 @@
+// The PCI TSM probe (lib/dev/pci_tsm.resid): whether the kernel has a
+// platform TSM, read from sysfs under device(readonly) -- Ok(false) where
+// there is none (here, unless this host has one), Ok(true) where there is
+// -- and the parser for the TSM name attributes the kernel writes.
+import "dev/pci_tsm.resid";
+
+List(UInt(8)) text(Str s, Int i, ListBuf(UInt(8)) acc) {
+    if (i >= str_len(s)) { return acc.finish(); }
+    return text(s, i + 1, acc.push((UInt(8))str_char_at(s, i)));
+}
+
+Str name(Str s) {
+    return match (pci_tsm_name(text(s, 0, ListBuf()))) {
+        Ok(o) => match (o) { Some(n) => "connected to " + n, None => "not connected", },
+        Err(why) => "refused: " + why,
+    };
+}
+
+@requires(device(readonly))
+Int main() {
+    println(match (pci_tsm_present()) { Ok(b) => "pci_tsm: reached", Err(e) => device_error_text(e), });
+    println(name("tsm0\n"));
+    println(name("tsm12\n"));
+    println(name("\n"));
+    println(name(""));
+    println(name("tsm0"));
+    println(name("tsmx\n"));
+    println(name("tsm\n"));
+    println(name("abc0\n"));
+    println(name("tsm123456789012\n"));
+    return 0;
+}

@@ -111,17 +111,25 @@ Each call runs in a fresh process:
    (8 bytes per scalar, the bytes of a `Str(N)` or `Bytes(N)`), and starts
    the program's own executable again (`/proc/self/exe`) with an empty
    environment, the arguments `resid-native-host <module>`, and the call's
-   socket as its only descriptor.
-2. The host, before running any native instruction: sets itself
-   undumpable, disables the time-stamp counter (`rdtsc` faults), unmaps
+   socket as its only descriptor. A program in secret mode does so only
+   under the Yama ptrace policy; see [the device host](/Resid/reference/devices/#who-starts-a-host)
+   (§49), whose start and checks native hosts share.
+2. The host first makes itself not dumpable and checks who started it,
+   as a device host does: no `AT_SECURE`, no capability beyond its
+   parent's, its parent made its socket and answers a random challenge,
+   and every byte it reads carries the parent's pid; otherwise it exits
+   124 without reading the request. The caller reads only what that host
+   sent. Then, before running any native instruction, the host: disables
+   the time-stamp counter (`rdtsc` faults), unmaps
    the vDSO clock pages, asks to be the first victim of the OOM killer,
-   sets no-new-privileges, and installs a seccomp filter. The filter
-   allows `read`/`write` on its socket only, `mmap`/`mprotect` without
-   `PROT_EXEC`, `munmap`, `brk`, `mremap`, `madvise`, `exit` and
-   `exit_group`. Any other system call, an x32 call or a 32-bit entry
-   kills it with `SIGSYS`.
-3. The host reads the request, calls the native function, writes the
-   result and exits. Its CPU time is limited to 60 seconds.
+   reads the request, turns on the shadow stack (below), sets
+   no-new-privileges, and installs a seccomp filter. The filter allows
+   `write` on its socket, `exit` and `exit_group`, nothing else: the
+   request is already read, and nothing the host does afterwards needs
+   memory from the kernel. Any other system call, an x32 call or a 32-bit
+   entry kills it with `SIGSYS`.
+3. The host calls the native function, writes the result and exits. Its
+   CPU time is limited to 60 seconds.
 4. The caller requires a clean exit and a reply of exactly the expected
    length, then checks the value: a `Bool` is 0 or 1, a narrow integer
    fits its type, a `Str(N)` is valid UTF-8 up to a NUL within its
@@ -132,6 +140,33 @@ the calling thread with a message naming the module, the function and
 the reason, such as ``native module `tiny`: `tiny_add` failed: killed by
 signal 31``. Inside a `spawn` region that is the region's
 `Err(RegionError)`.
+
+Hardening of the host, each where the CPU and kernel have it (without
+it the host runs as before):
+
+- **Shadow stack.** On x86-64 the host turns on and locks CET's shadow
+  stack (Linux 6.6); on AArch64, the guarded control stack (Linux 6.13).
+  Every return must then match its call. It starts in the host's last
+  frame, which never returns.
+- **Return signing and landing pads (AArch64).** The compiler builds
+  every function of the module with return-address signing (PAC),
+  landing pads (BTI) and guarded-control-stack compatibility, whatever
+  the artifact's own attributes say, and places the module's code in its
+  own section between two page-aligned marks. The host maps exactly those
+  pages with `PROT_BTI`, so an indirect branch into the module's code
+  must land on a pad. The instructions are hints and do nothing on a CPU
+  without the features. x86-64 has no counterpart for landing pads:
+  Linux does not enable indirect-branch tracking in user space.
+
+**Inline asm** in a module's functions is allowed and recorded. It runs
+only inside the host, after the filter, so it gains nothing the filter
+does not allow: refusing it would not be a boundary, since native code
+can reach the program's own system-call instructions without it. The
+provenance record lists each module that has inline asm, with its sites
+by mnemonic, and `residc verify` prints it, for example
+``attestation: native module esc contains inline asm, 13 sites: syscall x12, rdtsc x1``.
+`module asm` stays refused: it is outside any function and could define
+symbols in the program.
 
 Consequences:
 

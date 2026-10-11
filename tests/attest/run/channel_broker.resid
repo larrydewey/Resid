@@ -1,0 +1,150 @@
+import "verify/core.resid";
+import "verify/snp.resid";
+import "verify/seal.resid";
+import "verify/testing.resid";
+import "challenge.resid";
+import "challenge_bind.resid";
+import "crypto.resid";
+import "ecdsa.resid";
+import "hash.resid";
+import "hpke.resid";
+import "hpkeg.resid";
+import "random.resid";
+import "dev/device.resid";
+import "verify/channel.resid";
+import "tlsclient.resid";
+import "tlswire.resid";
+import "tlskey.resid";
+import "chain.resid";
+import "wire.resid";
+import "httpserv.resid";
+
+Str fx() { return "fixtures/"; }
+
+@requires(filesystem(readonly))
+List(UInt(8)) rd(Str p) { return chal_bytes(filesystem.read_bytes(fx() + p)); }
+
+@requires(filesystem(readonly))
+SnpCollateral col() { return SnpCollateral {.vcek_der = rd("test-vcek.der"), .ask_der = rd("test-ask.der"), .crl_der = rd("test-crl.der")}; }
+
+// A report carrying `value` in REPORT_DATA, signed with the test VCEK.
+@requires(filesystem(readonly))
+List(UInt(8)) report_for(List(UInt(8)) value) { return report_from(rd("report-template.bin"), value); }
+
+// The template with bytes [at, at + b.len()) replaced.
+@requires(filesystem(readonly))
+List(UInt(8)) patched(Int at, List(UInt(8)) b) {
+    List(UInt(8)) t = rd("report-template.bin");
+    return t[0..at].concat(b).concat(t[at + b.len()..t.len()]);
+}
+
+@requires(filesystem(readonly))
+List(UInt(8)) report_from(List(UInt(8)) t, List(UInt(8)) value) {
+    List(UInt(8)) rdata = value.concat(zeros(64 - value.len()));
+    List(UInt(8)) body = t[0..80].concat(rdata).concat(t[144..672]);
+    List(Int) sig = ecdsa_sign_raw(P384, Sha384, chal_ints(rd("vcek-d.bin")), chal_ints(body));
+    return body.concat(le72(sig[0..48])).concat(le72(sig[48..96])).concat(t[816..1184]);
+}
+
+List(UInt(8)) zeros(Int n) { return if (n <= 0) { [] } else { [(UInt(8)) 0].concat(zeros(n - 1)) }; }
+List(UInt(8)) le72(List(Int) be) { return le_at(be, 47, ListBuf()).concat(zeros(24)); }
+List(UInt(8)) le_at(List(Int) be, Int i, ListBuf(UInt(8)) acc) { return if (i < 0) { acc.finish() } else { le_at(be, i - 1, acc.push((UInt(8)) be[i])) }; }
+
+
+
+@policy
+SnpPolicy release_policy() {
+    return SnpPolicy {.min_tcb = TcbVersion {.fmc = 0, .bootloader = 3, .tee = 0, .snp = 8, .microcode = 115},
+                      .measurements_hex = [hex_encode(sha384_bytes(bytes_of("resid test image")))],
+                      .vmpl = 0, .allow_migration_agent = false, .id_key_digests_hex = [], .host_data_hex = []};
+}
+
+@requires(declassify)
+List(Int) sec_pub(List(Secret(UInt(8))) k, Int i, ListBuf(Int) acc) { return if (i >= k.len()) { acc.finish() } else { sec_pub(k, i + 1, acc.push((Int) declassify(k[i], "test output"))) }; }
+
+// The broker's decision: the key leaves only on the connection the report
+// is bound to.
+@decides(accept = [test_ark], appraised = release_policy, identity = channel_bound)
+@requires(declassify)
+Result(ChannelSealed, VerifyError) release(List(UInt(8)) report, ChallengeRecord issued, SnpCollateral c, ChannelExporter x, List(Secret(UInt(8))) key) {
+    Verified(SnpReport) v = snp_verify_channel_bound(report, issued, test_ark(), c, test_time(1791000000), x)?;
+    Appraised(SnpReport) a = snp_appraise(v, release_policy())?;
+    return seal_to_channel(a, x, key);
+}
+
+// Read until n bytes arrived.
+@requires(network(readonly), declassify)
+WireIn(TlsConn) read_n(TlsConn c, List(Int) have, Int n) {
+    if (have.len() >= n) { return WireIn {.conn = c, .data = have, .eof = false}; }
+    WireIn(TlsConn) r = wire_fill(c, have, n, n);
+    if (r.eof || r.data.len() == have.len()) { return r; }
+    return read_n(r.conn, r.data, n);
+}
+
+@requires(network(readonly), declassify)
+WireIn(TlsClient) read_c(TlsClient c, List(Int) have, Int n) {
+    if (have.len() >= n) { return WireIn {.conn = c, .data = have, .eof = false}; }
+    WireIn(TlsClient) r = wire_fill(c, have, n, n);
+    if (r.eof || r.data.len() == have.len()) { return r; }
+    return read_c(r.conn, r.data, n);
+}
+
+// The broker: read a report, decide, write the sealed key on this
+// connection (or on `other`'s exporter when `wrong`).
+@requires(network, declassify, filesystem(readonly))
+Str broker(Int lfd, TlsCfg cfg, ChallengeRecord c, List(Secret(UInt(8))) key, Bool wrong, ChannelExporter other) {
+    Int fd = resid_tcp_accept(lfd);
+    Accepted(TlsConn) a = wire_accept(cfg, fd);
+    if (!a.ok) { return "server handshake failed"; }
+    WireIn(TlsConn) r = read_n(a.conn, [], 1184);
+    ChannelExporter x = if (wrong) { other } else { tlsserver_exporter(r.conn) };
+    Str out = match (release(chal_bytes(r.data[0..1184]), c, col(), x, key)) {
+        Ok(s) => match (tlsserver_send_bound(r.conn, s)) { Ok(cn) => "sent", Err(e) => "send: " + verify_error_text(e) },
+        Err(e) => "release: " + verify_error_text(e),
+    };
+    _ = wire_close(r.conn);
+    return out;
+}
+
+// The attester: bind the broker's challenge to its own connection, send
+// the report, read what comes back.
+@requires(network(readonly), clock(readonly), declassify, filesystem(readonly))
+Str attester(Int port, TrustStore store, List(UInt(8)) value) {
+    TlsDial d = tls_client_connect("localhost", port, tls_client_cfg("localhost", store, ["http/1.1"]));
+    if (d.err != "") { return "dial: " + d.err; }
+    List(UInt(8)) bound = match (challenge_with_channel(value, tlsclient_exporter(d.conn))) { Ok(b) => b, Err(e) => [] };
+    WireOut(TlsClient) o = wire_send(d.conn, chal_ints(report_for(bound)));
+    WireIn(TlsClient) r = read_c(o.conn, [], 32);
+    _ = wire_close(r.conn);
+    return hex_encode(r.data);
+}
+
+@requires(filesystem(readonly), network, clock(readonly), declassify, provision)
+Int main() {
+    Option(ServerKey) mk = tls_key_load("tlsfx/srv.key");
+    ServerKey skey = mk else { EdKey([]) };
+    List(List(Int)) chain = tls_chain_load("tlsfx/srv.pem");
+    TrustStore store = trust_store_load("tlsfx/srvca.pem");
+    Int lfd = http_listen(0);
+    Int port = http_bound_port(lfd);
+    TlsCfg cfg = tls_cfg(skey, chain, ["http/1.1"]);
+    List(Secret(UInt(8))) key = random_secret(32);
+    Str want = hex_encode(sec_pub(key, 0, ListBuf()));
+    ChallengeRecord c1 = challenge_issue(64);
+    // Another connection to the broker, whose exporter a confused broker
+    // might seal to.
+    Result(Str, RegionError) s0 = spawn (network, declassify) { Int fd = resid_tcp_accept(lfd); Accepted(TlsConn) a = wire_accept(cfg, fd); return if (a.ok) { "ok" } else { "no" }; };
+    TlsDial d0 = tls_client_connect("localhost", port, tls_client_cfg("localhost", store, ["http/1.1"]));
+    ChannelExporter other = tlsclient_exporter(d0.conn);
+    Str k0 = s0 else { "region failed" };
+    Result(Str, RegionError) s1 = spawn (network, declassify, filesystem(readonly)) { return broker(lfd, cfg, c1, key, false, other); };
+    Str got = attester(port, store, challenge_value(c1));
+    Str b1 = s1 else { "broker region failed" };
+    println("bound: broker " + b1 + ", attester " + (if (got == want) { "got the key" } else { "got " + got }));
+    ChallengeRecord c2 = challenge_issue(64);
+    Result(Str, RegionError) s2 = spawn (network, declassify, filesystem(readonly)) { return broker(lfd, cfg, c2, key, true, other); };
+    Str got2 = attester(port, store, challenge_value(c2));
+    Str b2 = s2 else { "broker region failed" };
+    println("another connection: broker " + b2 + ", attester " + (if (got2 == want) { "GOT THE KEY" } else { "got nothing" }));
+    return 0;
+}

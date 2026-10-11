@@ -1,0 +1,42 @@
+// A closure runs under the capability frame where it is called, not where
+// it was made (spec §19, §21.4). Each closure below is made in main, which
+// holds every family, and is called inside a spawn whose list drops the
+// family its body uses -- through a named function, so no static check
+// sees the call. The provider call fails the region, as it would in a
+// named function. A spawn that grants the family runs the same closure.
+@requires(filesystem, environment, process, clock, network, args)
+Int main() {
+    Int closure(Int) rd = lambda(v) { str_len(filesystem.read_all("@TMP@/in.txt")) + v };
+    Int closure(Int) wr = lambda(v) { if (filesystem.write_all("@TMP@/out.txt", "x")) { v } else { -1 } };
+    Int closure(Int) env = lambda(v) { str_len(environment.get("RESID_LAMBDA_CAPS_UNSET")) + v };
+    Int closure(Int) proc = lambda(v) { process.run("true") + v };
+    Int closure(Int) now = lambda(v) { if (clock.now_ns() > 0) { v } else { -1 } };
+    Int closure(Int) nap = lambda(v) { clock.sleep_ns(1000) + v };
+    Int closure(Int) net = lambda(v) { if (resid_tcp_close(resid_tcp_listen(0))) { v } else { -1 } };
+    Int closure(Int) argc = lambda(v) { if (args.count() >= 1) { v } else { -1 } };
+    Int r = rt 0;
+    println(report("read", spawn () { return apply(rd, r); }));
+    println(report("write", spawn (filesystem(readonly)) { return apply(wr, r); }));
+    println(report("environment", spawn (filesystem) { return apply(env, r); }));
+    println(report("process", spawn () { return apply(proc, r); }));
+    println(report("clock read", spawn () { return apply(now, r); }));
+    println(report("clock sleep", spawn (clock(readonly)) { return apply(nap, r); }));
+    println(report("network", spawn () { return apply(net, r); }));
+    println(report("args", spawn () { return apply(argc, r); }));
+    println(report("read granted", spawn (filesystem(readonly)) { return apply(rd, r); }));
+    println(report("write granted", spawn (filesystem) { return apply(wr, r); }));
+    println(report("environment granted", spawn (environment) { return apply(env, r); }));
+    println(report("process granted", spawn (process) { return apply(proc, r); }));
+    println(report("clock read granted", spawn (clock(readonly)) { return apply(now, r); }));
+    println(report("clock sleep granted", spawn (clock) { return apply(nap, r); }));
+    println(report("network granted", spawn (network(readonly)) { return apply(net, r); }));
+    println(report("args granted", spawn (args) { return apply(argc, r); }));
+    println(report("in a lambda", spawn () { return apply(lambda(v) { apply(rd, v) }, r); }));
+    return 0;
+}
+
+Int apply(Int closure(Int) f, Int x) { return f(x); }
+
+Str report(Str what, Result(Int, RegionError) r) {
+    return match r { Ok(n) => f"{what}: ok {n}", Err(e) => what + ": failed: " + e.message };
+}

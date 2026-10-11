@@ -1,0 +1,5 @@
+// Pointer fields are 8-byte aligned; this descriptor breaks that (E0263).
+import "dev/fx_e0263_pointer_align.resid";
+
+@requires(device)
+Int main() { println(fx_call()); return 0; }

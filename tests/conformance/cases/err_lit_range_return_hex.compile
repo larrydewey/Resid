@@ -1,0 +1,2 @@
+E0001
+integer literal 0x1FF does not fit the expected type UInt(8)

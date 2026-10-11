@@ -1,0 +1,17 @@
+import "dev/sev_guest.resid";
+import "transcript.resid";
+import "crypto.resid";
+
+// A device request (off an SNP guest it fails: still two crossings).
+@requires(device(readonly))
+Int main() {
+    Str r = match (snp_report()) { Ok(b) => "a report", Err(e) => "no report" };
+    Transcript t = transcript();
+    List(Int) site = sha256_bytes(bytes_of("sev_guest.snp_get_report"))[0..8];
+    Bool sites = t.log.len() == 2 && hex_encode(chal_ints8(t.log[0].site)) == hex_encode(site) && hex_encode(chal_ints8(t.log[1].site)) == hex_encode(site);
+    println(f"{t.count} crossings, directions {t.log[0].direction} {t.log[1].direction}, sites match {sites}, hash {t.hash.len()} bytes");
+    return 0;
+}
+
+List(Int) chal_ints8(List(UInt(8)) b) { return ints_at(b, 0, ListBuf()); }
+List(Int) ints_at(List(UInt(8)) b, Int i, ListBuf(Int) acc) { return if (i >= b.len()) { acc.finish() } else { ints_at(b, i + 1, acc.push((Int) b[i])) }; }

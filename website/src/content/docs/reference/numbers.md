@@ -27,7 +27,11 @@ A literal takes its type from its position:
 - otherwise (`1000000 * 1000000`), the smallest signed width of 64, 128,
   256 or 512 bits that holds it.
 
-A literal that does not fit its adopted type is a compile-time error.
+A literal that does not fit its adopted type is a compile-time error, in
+every base (`0x`, `0b`, `0o` included) and also under `rt`, as a list
+element or as the operand of an integer cast: `Int a = rt
+0xFFFFFFFFFFFFFFFF;` is refused, never wrapped to -1. Arithmetic on literals is checked like any other:
+`9223372036854775807 + 1` aborts rather than wrapping to the minimum.
 Adoption does not reach into `if` / `match` arms: arms must agree, so write
 `i128(0)` in an arm that must match an `Int(128)` arm.
 

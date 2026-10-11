@@ -1,0 +1,15 @@
+// A device that is not there is a value, not an abort (spec §49, Law 12):
+// the host's open fails with ENOENT and every verb gives Err(Absent).
+import "dev/fx_device_absent_is_err.resid";
+
+Str says(Result(List(DevOut), DeviceError) r) {
+    return match (r) { Ok(o) => f"{o.len()} outputs", Err(e) => device_error_text(e), };
+}
+
+@requires(device(readonly))
+Int main() {
+    println(says(device.ioctl(fx_missing_node(), [])));
+    println(says(device.read_attr(fx_missing_attr())));
+    println(says(device.configfs_report(fx_missing_report(), fx_req([(UInt(8))1, 2, 3]))));
+    return 0;
+}

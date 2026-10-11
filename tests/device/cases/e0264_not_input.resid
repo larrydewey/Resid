@@ -1,0 +1,5 @@
+// A link writes a Scalar input; this descriptor breaks that (E0264).
+import "dev/fx_e0264_not_input.resid";
+
+@requires(device)
+Int main() { println(fx_call()); return 0; }

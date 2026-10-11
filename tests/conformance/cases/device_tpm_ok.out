@@ -1,0 +1,7 @@
+GetRandom: reached
+GetCapability: reached
+PCR_Read: reached
+NV_ReadPublic: reached
+ReadPublic: reached
+GetRandom 65: tpm: bad argument: 65 random bytes asked, 1 to 64
+PCR 24: tpm: bad argument: PCR 24, the selection holds 0 to 23

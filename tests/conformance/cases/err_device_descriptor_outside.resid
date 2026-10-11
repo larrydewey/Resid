@@ -1,0 +1,12 @@
+// Descriptors come only from the standard library's lib/dev/ (E0260): a
+// program cannot write its own, so the kernel interfaces it can reach are
+// the reviewed set.
+import "dev/device.resid";
+
+@requires(device)
+Int main() {
+    IoctlOp op = IoctlOp {.name = "mine.op", .path = "/dev/mem", .requests = dv_both(dv_iowr(1, 0, 8)), .size = 8, .fields = [Scalar(0, 8, InOut)], .write = true, .version = Unversioned, .stability = OutOfTree};
+    Bool ok = match (device.ioctl(op, [InNum(1)])) { Ok(o) => true, Err(e) => false, };
+    println(f"{ok}");
+    return 0;
+}

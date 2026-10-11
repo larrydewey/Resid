@@ -1,0 +1,11 @@
+// The engine runs a descriptor the compiler has checked; it is reached
+// only through the `device` verbs (E0260).
+import "dev/sev_guest.resid";
+import "_devzeros.resid";
+
+@requires(device)
+Int main() {
+    Bool ok = match (device_engine_ioctl(snp_get_report_op(), [InBytes(dev_zeros(96))])) { Ok(o) => true, Err(e) => false, };
+    println(f"{ok}");
+    return 0;
+}

@@ -1,0 +1,23 @@
+// The device engine fills a request's challenge slot (PLAN-labels.md §6.2):
+// an issued record is spent before anything is sent, so a second use is
+// refused whether or not the device answered; a wrong length is refused
+// before sending.
+import "dev/sev_guest.resid";
+
+Str shown(Result(List(UInt(8)), DeviceError) r) {
+    return match (r) { Ok(b) => "report", Err(e) => match (e) { BadInput(n, w) => "refused: " + w, Absent(n) => "absent", Denied(n) => "denied", Kernel(n, x) => "kernel", TooLong(n) => "other", GenerationChanged(n) => "other", Unsupported(n) => "other", Version(n, v) => "other", Overrun(n) => "other", UnknownDriver(n, v) => "other", BadReply(n, w) => "other", Timeout(n) => "other", } };
+}
+
+@requires(device(readonly))
+Int main() {
+    ChallengeRecord c = challenge_issue(64);
+    Str first = shown(snp_report(challenge = Issued(c)));
+    println(if (first == "absent" || first == "denied" || first == "report" || first == "kernel") { "first use: sent" } else { "first use: " + first });
+    println("second use: " + shown(snp_report(challenge = Issued(c))));
+    println("short: " + shown(snp_report(challenge = Verbatim([1, 2, 3]))));
+    ChallengeRecord small = challenge_issue(32);
+    println("record of 32: " + shown(snp_report(challenge = Issued(small))));
+    Str rt = shown(snp_report());
+    println(if (rt == "absent" || rt == "denied" || rt == "report" || rt == "kernel") { "runtime: sent" } else { "runtime: " + rt });
+    return 0;
+}

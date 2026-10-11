@@ -1,0 +1,8 @@
+type Point2 = { Str label; List(Str) tags; };
+
+@requires(args)
+Int main() {
+    Point2 p = if (args.count() > 3) { Point2 {.label = "x", .tags = ["y"]} } else { Point2 {.label = "z"} };
+    println(f"{p.tags.len()}");
+    return 0;
+}

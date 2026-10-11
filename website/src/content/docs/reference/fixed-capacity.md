@@ -36,9 +36,14 @@ ever silently truncated except by an explicit cast.
 ## Casts
 
 - `Str(N)` → `Str` and `Bytes(N)` → `Bytes`: a heap copy of the text, since the
-  result may outlive the frame the fixed value lives in.
-- `Str` → `Str(N)`, `Str(N)` → `Str(M)`, and the `Bytes` equivalents: a
+  result may outlive the frame the fixed value lives in. A heap `Bytes` ends
+  at its first zero byte, so a `Bytes(N)` converts only when nothing but
+  zero padding follows its first zero; otherwise (`b"ab\0cd"`) the
+  conversion aborts rather than drop `cd`. The same holds for `Bytes(N)` →
+  `Str` and `Str(M)`.
+- `Str` → `Str(N)`, `Str(N)` → `Str(M)`, and `Bytes` → `Bytes(N)`: a
   bounded copy that keeps the longest prefix of whole code points that fits.
+  `Bytes(N)` → `Bytes(M)` copies the first min(N, M) bytes, zeros included.
 - `List(T, N)` → `List(T)`: copies all N elements.
 
 ## Access

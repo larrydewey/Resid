@@ -1,0 +1,17 @@
+bind a @ closures.resid:8:5: External
+  closures.resid:5:23  mcall get  -- outside data enters here (args.get)
+  closures.resid:5:15  call str_len
+  closures.resid:5:5  bind ext
+  closures.resid:6:28  lambda
+  closures.resid:6:5  bind add
+  closures.resid:8:13  call add
+  closures.resid:8:5  bind a
+bind b @ closures.resid:9:5: Internal
+bind c @ closures.resid:11:5: External
+  closures.resid:5:23  mcall get  -- outside data enters here (args.get)
+  closures.resid:5:15  call str_len
+  closures.resid:5:5  bind ext
+  closures.resid:10:23  ifx  -- chosen by outside data
+  closures.resid:10:5  bind f
+  closures.resid:11:13  call f
+  closures.resid:11:5  bind c

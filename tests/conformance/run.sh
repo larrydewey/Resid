@@ -63,6 +63,8 @@ run_case() {
     local name="$1" dir="$WORK/$1" src
     mkdir -p "$dir"
     cp "$ROOT"/lib/*.resid "$dir"/ 2>/dev/null
+    # Challenge records belong to the standard library's own file (E0277).
+    rm -f "$dir/challenge.resid" "$dir/challenge_export.resid"
     cp "$CASES"/_*.resid "$dir"/ 2>/dev/null
     for m in "$CASES"/_*.depmap; do [ -f "$m" ] && sed "s#@TMP@#$dir#g" "$m" > "$dir/$(basename "$m")"; done
     echo hi > "$dir/in.txt"

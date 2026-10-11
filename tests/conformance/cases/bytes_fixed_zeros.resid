@@ -1,0 +1,21 @@
+// A Bytes(N) holds exactly N bytes, zeros included: a literal with a zero
+// byte adopts a Bytes(N), and a cast to another Bytes(M) copies min(N, M)
+// bytes instead of stopping at the zero. A cast to Bytes, Str or Str(M)
+// keeps the content before trailing zero padding. A `\\0` in a heap Bytes
+// literal is a backslash and a digit, not a zero byte.
+Int main() {
+    Bytes(8) f = b"ab\0cd";
+    Bytes(4) narrow = (Bytes(4)) f;
+    Bytes(10) wide = (Bytes(10)) f;
+    println(f"{f.len()} {f}");
+    println(f"{narrow.len()} {narrow}");
+    println(f"{wide.len()} {wide}");
+    Bytes(8) padded = b"abc";
+    Bytes heap = (Bytes) padded;
+    Str text = (Str) padded;
+    Str(4) short = (Str(4)) padded;
+    println(f"{heap.len()} {heap} {text} {short}");
+    Bytes esc = b"ab\\0cd";
+    println(f"{esc.len()} {esc}");
+    return 0;
+}

@@ -1,0 +1,67 @@
+# Kernel trees tools/resid-devgen reads (PLAN-device-access.md §6.2).
+#
+# `generate` is the tree the lib/dev/uapi_*.resid descriptors are generated
+# from; its headers are committed under tools/devgen/uapi/ (the snapshot),
+# so `resid-devgen --check` needs no network. `matrix` is every tree the
+# release job (`resid-devgen --matrix`) compares the descriptors against:
+# the oldest kernel of each interface, every LTS line, the current stable
+# release and the latest mainline tag. A pin is a tag *and* the commit it
+# must resolve to, so a moved tag or a mirror that serves another tree is
+# refused, not trusted. Commits are the peeled tags of
+# https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git.
+#
+# To move a pin: `git ls-remote --tags <stable repo> 'v6.18.*'`, take the
+# `^{}` line's commit, edit the entry, run `tools/resid-devgen --matrix`.
+# To move `generate`: also `tools/resid-devgen --snapshot` then `--write`,
+# and review the diff of tools/devgen/uapi/ and lib/dev/uapi_*.resid.
+
+remote = "https://github.com/gregkh/linux.git"
+
+[generate]
+tag = "v7.2.9"
+commit = "5fce161649b4d779d1b76d9fcd52dc77779774b8"
+
+[[matrix]]
+tag = "v5.19.17"
+commit = "2b525314c7b57eac29fe8b77a6589428e4a4f6dd"
+why = "oldest with sev-guest.h (5.19)"
+
+[[matrix]]
+tag = "v6.1.189"
+commit = "a500ba24937a966eab140b95eac42782a7ce2c85"
+why = "LTS 6.1"
+
+[[matrix]]
+tag = "v6.2.16"
+commit = "46df6964c1a9eb72027710f626cb1c6bfb5d58c9"
+why = "oldest with tdx-guest.h (6.2)"
+
+[[matrix]]
+tag = "v6.6.158"
+commit = "a91a6aa9253c64936f0bd8273a2a3c11522ec9c3"
+why = "LTS 6.6"
+
+[[matrix]]
+tag = "v6.8.12"
+commit = "632428373bea7581869cb05dce40bef0d37793e3"
+why = "oldest with nsm.h (6.8)"
+
+[[matrix]]
+tag = "v6.12.112"
+commit = "7aba70ab2e8d8ab3cd45abcaa15e1119a00dc42a"
+why = "LTS 6.12"
+
+[[matrix]]
+tag = "v6.18.55"
+commit = "725bd2f3c81d54edccb66fead01d4c0c222e2231"
+why = "LTS 6.18"
+
+[[matrix]]
+tag = "v7.2.9"
+commit = "5fce161649b4d779d1b76d9fcd52dc77779774b8"
+why = "current stable (the generation tree)"
+
+[[matrix]]
+tag = "v7.3-rc6"
+commit = "a90ee4305c4a5df72c11b31dacfdc76e00fcf78a"
+why = "latest mainline"

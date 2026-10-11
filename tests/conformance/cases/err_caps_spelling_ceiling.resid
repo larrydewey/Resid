@@ -1,0 +1,7 @@
+// A sandbox ceiling in a diagnostic is shown as written.
+sandbox (clock(readonly), network(readonly)) {
+    Int nap() { return clock.sleep_ns(1); }
+}
+
+@requires(clock)
+Int main() { return nap(); }

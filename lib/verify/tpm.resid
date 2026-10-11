@@ -1,0 +1,266 @@
+// verify/tpm.resid — TPM 2.0 quotes (PLAN-attestation.md §3.2, §4, §10)
+// under an attestation key a deployment pinned (an anchor of kind TpmAk:
+// its bytes are the AK's SubjectPublicKeyInfo, enrolled the way the
+// deployment trusts, e.g. by credential activation against the EK).
+//
+// The quote's TPMS_ATTEST must be TPM_GENERATED, of type QUOTE, signed by
+// the AK (RSASSA-PKCS1 v1.5 SHA-256 under an RSA AK, ECDSA P-256 SHA-256
+// under an EC AK); its extraData (qualifyingData, relayed) must be the
+// challenge, and its PCR digest the SHA-256 of the PCR values given with
+// it, one SHA-256 bank, in selection order. Only then are the values
+// verified.
+
+import "core.resid";
+import "../crypto.resid";
+import "../hash.resid";
+import "../x509.resid";
+import "../ecdsa.resid";
+import "../certverify.resid";
+import "../challenge.resid";
+import "../challenge_bind.resid";
+import "../challenge_export.resid";
+import "../dev/device.resid";
+import "../dev/tpm_wire.resid";
+import "corim.resid";
+import "endorsed_keys.resid";
+
+// What a verified quote says: the PCRs (SHA-256 bank) and their values,
+// the TPM's clock and boot counters, and its firmware version.
+@signed(sig = signature, span = attest)
+pub type TpmQuoteEvidence = { List(Int) pcr_index; List(List(UInt(8))) pcr_values; Int clock_hi; Int clock_lo; Int reset_count; Int restart_count; Bool safe; Int fw_hi; Int fw_lo; List(UInt(8)) signer; };
+
+// A policy: the PCRs (SHA-256 bank) that must hold these values,
+// "index=hex", every one of them.
+pub type TpmPolicy = { List(Str) pcrs_hex; };
+
+pub List(Str) tpm_descriptors() { return ["tpm.tpmrm0"]; }
+
+// ─── The signature (TPMT_SIGNATURE) ─────────────────────────────────
+
+type TpmSig = { Int alg; Int hash; List(Int) a; List(Int) b; };
+
+Result(TpmSig, VerifyError) tq_sig(List(UInt(8)) s) {
+    List(Int) b = chal_ints(s);
+    if (b.len() < 6) { return Err(BadLayout("TPMT_SIGNATURE: short")); }
+    Int alg = b[0] * 256 + b[1];
+    Int hash = b[2] * 256 + b[3];
+    Int n1 = b[4] * 256 + b[5];
+    if (6 + n1 > b.len()) { return Err(BadLayout("TPMT_SIGNATURE: short")); }
+    List(Int) first = b[6..6 + n1];
+    if (alg == 20) {
+        if (6 + n1 != b.len()) { return Err(BadLayout("TPMT_SIGNATURE: trailing bytes")); }
+        List(Int) none = [];
+        return Ok(TpmSig {.alg = alg, .hash = hash, .a = first, .b = none});
+    }
+    if (alg == 24) {
+        Int at = 6 + n1;
+        if (at + 2 > b.len()) { return Err(BadLayout("TPMT_SIGNATURE: short")); }
+        Int n2 = b[at] * 256 + b[at + 1];
+        if (at + 2 + n2 != b.len()) { return Err(BadLayout("TPMT_SIGNATURE: length")); }
+        return Ok(TpmSig {.alg = alg, .hash = hash, .a = first, .b = b[at + 2..b.len()]});
+    }
+    return Err(Refused("tpm_verify_quote", f"signature algorithm 0x{alg:hex} (RSASSA or ECDSA only)"));
+}
+
+// A big-endian integer as exactly n bytes, or [] when it does not fit.
+List(Int) tq_fixed(List(Int) v, Int n) {
+    if (v.len() > n) { return if (v[0] == 0) { tq_fixed(v[1..v.len()], n) } else { [] }; }
+    if (v.len() < n) { return tq_fixed([0].concat(v), n); }
+    return v;
+}
+
+// ─── Verification ───────────────────────────────────────────────────
+
+type TqOk = { QuoteInfo q; TpmQuoteEvidence e; };
+
+@verify_internal
+pub Result(TqOk, VerifyError) tpm_check(List(UInt(8)) attest, List(UInt(8)) sig, List(List(UInt(8))) pcr_values, Anchor ak, EvidenceTime t) {
+    if (ak.kind != "TpmAk") { return Err(Refused("tpm_verify_quote", "the anchor is not a TPM attestation key (kind " + ak.kind + ")")); }
+    if (anchor_expired(ak, t)) { return Err(Stale("the anchor expired " + ak.expires)); }
+    tq_signed(attest, sig, ak)?;
+    QuoteInfo q = match (tpm_attest_quote(attest)) { Ok(x) => Ok(x), Err(e) => Err(BadLayout(tpm_error_text(e))) }?;
+    if (q.pcrs.len() != 1 || q.pcrs[0].alg != 11) { return Err(Refused("tpm_verify_quote", "the quote selects other than one SHA-256 bank")); }
+    List(Int) idx = q.pcrs[0].pcrs;
+    if (pcr_values.len() != idx.len() || !tq_all32(pcr_values, 0)) { return Err(BadLayout("the PCR values are not one SHA-256 digest per selected PCR")); }
+    if (!eq_ints(sha256_bytes(tq_cat(pcr_values, 0, [])), chal_ints(q.pcr_digest))) { return Err(BadSignature("the PCR values are not the ones the quote's digest covers")); }
+    return Ok(TqOk {.q = q, .e = TpmQuoteEvidence {.pcr_index = idx, .pcr_values = pcr_values, .clock_hi = q.clock_hi, .clock_lo = q.clock_lo, .reset_count = q.reset_count, .restart_count = q.restart_count, .safe = q.safe, .fw_hi = q.fw_hi, .fw_lo = q.fw_lo, .signer = q.signer}});
+}
+
+// The AK signed these TPMS_ATTEST bytes, over SHA-256, with an algorithm
+// the anchor lists.
+Result(Bool, VerifyError) tq_signed(List(UInt(8)) attest, List(UInt(8)) sig, Anchor ak) {
+    PubKey key = spki_parse_der(ak.der);
+    TpmSig s = tq_sig(sig)?;
+    if (s.hash != 11) { return Err(Refused("tpm_verify", "the attestation is not signed over SHA-256")); }
+    List(Int) msg = chal_ints(attest);
+    Bool ok = if (s.alg == 20) {
+        key.kind == pubkey_rsa() && anchor_lists(ak.algorithms, "RsaSsaSha256") && sig_verify(SigAlg {.kind = sigalg_pkcs1(), .hash = Sha256, .mgf = Sha256, .salt = 0}, key, msg, s.a)
+    } else {
+        List(Int) r = tq_fixed(s.a, 32);
+        List(Int) ss = tq_fixed(s.b, 32);
+        key.kind == pubkey_ec() && curve_bytes(key.curve) == 32 && anchor_lists(ak.algorithms, "EcdsaP256Sha256") && r.len() == 32 && ss.len() == 32 && ecdsa_verify_raw(P256, Sha256, key.point, msg, r.concat(ss))
+    };
+    if (!ok) { return Err(BadSignature("the attestation key did not sign this, or with an algorithm the anchor does not list")); }
+    return Ok(true);
+}
+
+Bool tq_all32(List(List(UInt(8))) vs, Int i) { return i >= vs.len() || (vs[i].len() == 32 && tq_all32(vs, i + 1)); }
+List(Int) tq_cat(List(List(UInt(8))) vs, Int i, List(Int) acc) { return if (i >= vs.len()) { acc } else { tq_cat(vs, i + 1, acc.concat(chal_ints(vs[i]))) }; }
+
+Int tq_rp(ChallengeRecord c) { return if (c.bind.len() > 0) { q_rp_bound() } else { 0 }; }
+
+// extraData must be exactly the expected value.
+Result(Bool, VerifyError) tq_bind(QuoteInfo q, List(UInt(8)) want, ChallengeRecord c, List(UInt(8)) attest) {
+    if (q.extra_data.len() != want.len()) { return Err(NotFresh("the quote's qualifying data is not this challenge")); }
+    return vf_bind_challenge(q.extra_data, want, c, attest, tpm_descriptors());
+}
+
+// Fresh for the holder of `c`: qualifyingData was challenge_value(c)
+// (issue a 32-byte challenge: many TPMs take no more).
+@primitive(verify, anchor = ak, gives = [fresh], time = t, format = TpmQuoteEvidence, kinds = [TpmAk], inputs = [attest, sig, pcr_values, c, t])
+pub Result(Verified(TpmQuoteEvidence), VerifyError) tpm_verify_quote(List(UInt(8)) attest, List(UInt(8)) sig, List(List(UInt(8))) pcr_values, ChallengeRecord c, Anchor ak, EvidenceTime t) {
+    TqOk k = tpm_check(attest, sig, pcr_values, ak, t)?;
+    Bool spent = tq_bind(k.q, challenge_value(c), c, attest)?;
+    List(Int) none = [];
+    return Ok(vf_make(k.e, ak, q_fresh() | tq_rp(c), c, 0, none, none, t, "TpmQuoteEvidence"));
+}
+
+// Fresh and KeyBound(kem, pk): qualifyingData was
+// challenge_with_key(challenge_value(c), kem, sk) for the sk behind pk.
+@primitive(verify, anchor = ak, gives = [fresh, key_bound], time = t, format = TpmQuoteEvidence, kinds = [TpmAk], inputs = [attest, sig, pcr_values, c, t, kem, pk])
+pub Result(Verified(TpmQuoteEvidence), VerifyError) tpm_verify_quote_key_bound(List(UInt(8)) attest, List(UInt(8)) sig, List(List(UInt(8))) pcr_values, ChallengeRecord c, Anchor ak, EvidenceTime t, Int kem, List(Int) pk) {
+    if (!hpke_kem_ok(kem) || !vf_pk_ok(kem, pk)) { return Err(Refused("tpm_verify_quote_key_bound", "the attester's public key is empty or malformed for the KEM")); }
+    TqOk k = tpm_check(attest, sig, pcr_values, ak, t)?;
+    Bool spent = tq_bind(k.q, challenge_key_value(challenge_value(c), kem, pk), c, attest)?;
+    List(Int) none = [];
+    return Ok(vf_make(k.e, ak, q_fresh() | q_key_bound() | tq_rp(c), c, kem, pk, none, t, "TpmQuoteEvidence"));
+}
+
+// Delivered, for a record imported without a SpentStore.
+@primitive(verify, anchor = ak, gives = [delivered], time = t, format = TpmQuoteEvidence, kinds = [TpmAk], inputs = [attest, sig, pcr_values, c, t])
+pub Result(Verified(TpmQuoteEvidence), VerifyError) tpm_verify_quote_replayable(List(UInt(8)) attest, List(UInt(8)) sig, List(List(UInt(8))) pcr_values, ReplayableRecord c, Anchor ak, EvidenceTime t) {
+    TqOk k = tpm_check(attest, sig, pcr_values, ak, t)?;
+    if (!eq_ints(chal_ints(k.q.extra_data), chal_ints(replayable_value(c)))) { return Err(NotFresh("the quote's qualifying data is not this challenge")); }
+    List(Int) none = [];
+    return Ok(Verified {.value = k.e, .anchors = [ak.id], .quals = q_delivered(), .record = 0 - 1, .kem = 0, .pk = none, .chan = none, .time = t.source, .principal = ak.principal, .format = "TpmQuoteEvidence"});
+}
+
+// ─── Under an endorsed key ──────────────────────────────────────────
+// The AK is a key a CoRIM endorses (an attest-key triple, verify/
+// endorsed_keys.resid) for the named instance (hex of its instance ID),
+// not a pinned anchor; the result rests on the CoRIM's endorser. A quote
+// does not say which TPM made it, so the verifier names the instance it
+// expects, and only keys endorsed for that instance are tried.
+
+type TqHit = { TqOk k; Anchor a; };
+
+Result(TqHit, VerifyError) tq_endorsed(List(UInt(8)) attest, List(UInt(8)) sig, List(List(UInt(8))) pcr_values, Verified(CorimRefs) keys, Str instance_hex, EvidenceTime t) {
+    if (instance_hex == "") { return Err(Refused("tpm_verify_quote_endorsed", "name the TPM's instance: a quote does not say which TPM made it")); }
+    List(EndorsedKey) ks = endorsed_keys(keys, instance_hex, "TpmAk", "TpmQuoteEvidence", "InGuest", t, "tpm_verify_quote_endorsed")?;
+    return tq_endorsed_at(attest, sig, pcr_values, ks, t, 0);
+}
+
+Result(TqHit, VerifyError) tq_endorsed_at(List(UInt(8)) attest, List(UInt(8)) sig, List(List(UInt(8))) pcr_values, List(EndorsedKey) ks, EvidenceTime t, Int i) {
+    if (i >= ks.len()) { return Err(BadSignature("no key the CoRIM endorses for this instance signed the quote")); }
+    return match (tpm_check(attest, sig, pcr_values, ks[i].a, t)) {
+        Ok(k) => Ok(TqHit {.k = k, .a = ks[i].a}),
+        Err(e) => if (endorsed_try_next(e)) { tq_endorsed_at(attest, sig, pcr_values, ks, t, i + 1) } else { Err(e) },
+    };
+}
+
+// Fresh for the holder of `c`, under an AK endorsed for the instance.
+@primitive(verify, from = keys, gives = [fresh], time = t, format = TpmQuoteEvidence, inputs = [attest, sig, pcr_values, c, t, instance_hex])
+pub Result(Verified(TpmQuoteEvidence), VerifyError) tpm_verify_quote_endorsed(List(UInt(8)) attest, List(UInt(8)) sig, List(List(UInt(8))) pcr_values, ChallengeRecord c, Verified(CorimRefs) keys, Str instance_hex, EvidenceTime t) {
+    TqHit h = tq_endorsed(attest, sig, pcr_values, keys, instance_hex, t)?;
+    Bool spent = tq_bind(h.k.q, challenge_value(c), c, attest)?;
+    List(Int) none = [];
+    return Ok(vf_make(h.k.e, h.a, q_fresh() | tq_rp(c), c, 0, none, none, t, "TpmQuoteEvidence"));
+}
+
+// Fresh and KeyBound(kem, pk), under an AK endorsed for the instance.
+@primitive(verify, from = keys, gives = [fresh, key_bound], time = t, format = TpmQuoteEvidence, inputs = [attest, sig, pcr_values, c, t, instance_hex, kem, pk])
+pub Result(Verified(TpmQuoteEvidence), VerifyError) tpm_verify_quote_endorsed_key_bound(List(UInt(8)) attest, List(UInt(8)) sig, List(List(UInt(8))) pcr_values, ChallengeRecord c, Verified(CorimRefs) keys, Str instance_hex, EvidenceTime t, Int kem, List(Int) pk) {
+    if (!hpke_kem_ok(kem) || !vf_pk_ok(kem, pk)) { return Err(Refused("tpm_verify_quote_endorsed_key_bound", "the attester's public key is empty or malformed for the KEM")); }
+    TqHit h = tq_endorsed(attest, sig, pcr_values, keys, instance_hex, t)?;
+    Bool spent = tq_bind(h.k.q, challenge_key_value(challenge_value(c), kem, pk), c, attest)?;
+    List(Int) none = [];
+    return Ok(vf_make(h.k.e, h.a, q_fresh() | q_key_bound() | tq_rp(c), c, kem, pk, none, t, "TpmQuoteEvidence"));
+}
+
+// ─── Appraisal ──────────────────────────────────────────────────────
+// Every PCR the policy names, by value; the policy names at least one.
+@primitive(appraise, from = v, policy = policy, ptype = TpmPolicy)
+pub Result(Appraised(TpmQuoteEvidence), VerifyError) tpm_appraise(Verified(TpmQuoteEvidence) v, TpmPolicy policy) {
+    if (policy.pcrs_hex.len() == 0) { return Err(Refused("tpm_appraise", "the policy names no PCR")); }
+    Str bad = tq_policy_miss(v.value, policy.pcrs_hex, 0);
+    if (bad != "") { return Err(Refused("tpm_appraise", bad)); }
+    return Ok(Appraised {.v = v, .policy = "TpmPolicy"});
+}
+
+Str tq_policy_miss(TpmQuoteEvidence e, List(Str) want, Int i) {
+    if (i >= want.len()) { return ""; }
+    List(Str) kv = str_split(want[i], "=");
+    if (kv.len() != 2 || !str_is_int(kv[0])) { return "the policy entry `" + want[i] + "` is not index=hex"; }
+    Int at = tq_index_of(e.pcr_index, str_parse_int(kv[0]), 0);
+    if (at < 0) { return "the quote does not cover PCR" + kv[0]; }
+    if (hex_encode(chal_ints(e.pcr_values[at])) != str_to_lower(kv[1])) { return "PCR" + kv[0] + " is not the policy's"; }
+    return tq_policy_miss(e, want, i + 1);
+}
+
+Int tq_index_of(List(Int) xs, Int x, Int i) {
+    if (i >= xs.len()) { return -1; }
+    if (xs[i] == x) { return i; }
+    return tq_index_of(xs, x, i + 1);
+}
+
+// ─── Counters (§8) ──────────────────────────────────────────────────
+// TPM2_NV_Certify of a counter index: TPMS_ATTEST of type
+// TPM_ST_ATTEST_NV (0x8014), TPM_GENERATED, signed by the AK, its
+// extraData the challenge, attesting the whole 8-byte counter at offset 0.
+
+@signed(sig = signature, span = attest)
+pub type TpmCounter = { List(Int) index_name; Int value; };
+
+type TcAttest = { List(Int) extra; List(Int) name; Int offset; List(Int) contents; };
+
+Result(TcAttest, VerifyError) tc_parse(List(Int) a) {
+    if (a.len() < 6) { return Err(BadLayout("TPMS_ATTEST: short")); }
+    if (tc_be(a, 0, 4) != 4283712327) { return Err(BadLayout("TPMS_ATTEST: not TPM_GENERATED")); }
+    if (tc_be(a, 4, 2) != 32788) { return Err(BadLayout("TPMS_ATTEST: not an NV certification (0x8014)")); }
+    TcB signer = tc_2b(a, 6, 68)?;
+    TcB extra = tc_2b(a, signer.next, 64)?;
+    Int after_clock = extra.next + 17 + 8;
+    if (after_clock > a.len()) { return Err(BadLayout("TPMS_ATTEST: short")); }
+    TcB name = tc_2b(a, after_clock, 68)?;
+    if (name.next + 2 > a.len()) { return Err(BadLayout("TPMS_NV_CERTIFY_INFO: short")); }
+    Int off = tc_be(a, name.next, 2);
+    TcB contents = tc_2b(a, name.next + 2, 2048)?;
+    if (contents.next != a.len()) { return Err(BadLayout("TPMS_ATTEST: trailing bytes")); }
+    return Ok(TcAttest {.extra = extra.v, .name = name.v, .offset = off, .contents = contents.v});
+}
+
+type TcB = { List(Int) v; Int next; };
+
+Result(TcB, VerifyError) tc_2b(List(Int) a, Int at, Int max) {
+    if (at + 2 > a.len()) { return Err(BadLayout("TPM2B: short")); }
+    Int n = tc_be(a, at, 2);
+    if (n > max || at + 2 + n > a.len()) { return Err(BadLayout("TPM2B: too long")); }
+    return Ok(TcB {.v = a[at + 2..at + 2 + n], .next = at + 2 + n});
+}
+
+Int tc_be(List(Int) a, Int at, Int n) { return if (n <= 0) { 0 } else { (tc_be(a, at, n - 1) << 8) | a[at + n - 1] }; }
+
+// A counter's value, fresh for the holder of `c` (qualifyingData was
+// challenge_value(c)): the latest version a sealed blob may claim.
+@primitive(verify, anchor = ak, gives = [fresh], time = t, format = TpmCounter, kinds = [TpmAk], inputs = [attest, sig, c, t])
+pub Result(Verified(TpmCounter), VerifyError) tpm_verify_counter(List(UInt(8)) attest, List(UInt(8)) sig, ChallengeRecord c, Anchor ak, EvidenceTime t) {
+    if (ak.kind != "TpmAk") { return Err(Refused("tpm_verify_counter", "the anchor is not a TPM attestation key (kind " + ak.kind + ")")); }
+    if (anchor_expired(ak, t)) { return Err(Stale("the anchor expired " + ak.expires)); }
+    tq_signed(attest, sig, ak)?;
+    TcAttest x = tc_parse(chal_ints(attest))?;
+    if (x.offset != 0 || x.contents.len() != 8) { return Err(Refused("tpm_verify_counter", "the certification is not of a whole 8-byte counter")); }
+    if (x.extra.len() != challenge_value(c).len()) { return Err(NotFresh("the certification's qualifying data is not this challenge")); }
+    Bool spent = vf_bind_challenge(chal_bytes(x.extra), challenge_value(c), c, attest, tpm_descriptors())?;
+    List(Int) none = [];
+    return Ok(vf_make(TpmCounter {.index_name = x.name, .value = tc_be(x.contents, 0, 8)}, ak, q_fresh() | tq_rp(c), c, 0, none, none, t, "TpmCounter"));
+}

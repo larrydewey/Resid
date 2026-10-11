@@ -1,0 +1,5 @@
+// A Nested field's parent is a Buffer of the struct listed before it (E0263).
+import "dev/fx_e0263_nested_no_parent.resid";
+
+@requires(device(readonly))
+Int main() { println(fx_call()); return 0; }

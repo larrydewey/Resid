@@ -1,0 +1,13 @@
+real: ok i-0a22e5c5f24d22174-enc0191cceb4289903f, 16 PCRs
+real, next day: bad certificate chain: cabundle[3] is not signed by the one before it, or one is not current
+real, tampered: bad signature: the certificate's key did not sign this document
+real, test root: bad certificate chain: the bundle does not start at the anchor's certificate
+real debug enclave: ok i-0a22e5c5f24d22174-enc0191ccebaf8feaba, 16 PCRs
+fresh: fresh, quals 1
+again: not fresh: challenge already accepted, or exported
+appraise: appraised
+debug enclave: refused (nsm_appraise): PCR0 is all zeros: the enclave runs in debug mode
+unknown field: bad layout: NSM document: unknown field `extra`
+repeated field: bad layout: NSM document: `digest` twice
+other nonce: not fresh: the evidence does not carry this challenge
+released and opened: same key

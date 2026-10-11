@@ -1,0 +1,11 @@
+// Arithmetic on literals is checked like any arithmetic (spec §6.1a,
+// §6.5): `4611686018427387904 * 2` overflows Int and must abort, never wrap.
+// Without reduction the literals are lowered at Int and the operation
+// itself traps.
+Int g() { return 4611686018427387904 * 2; }
+
+Int main() {
+    println("before");
+    println(f"{g()}");
+    return 0;
+}

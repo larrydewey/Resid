@@ -1,0 +1,11 @@
+// A TPM command is a Transact, and a Transact writes its command to the
+// device (E0263 refuses one marked otherwise): device(readonly) never
+// covers the TPM wrappers, not even GetRandom.
+import "dev/tpm.resid";
+
+@requires(device(readonly))
+Int main() {
+    Bool ok = match (tpm_get_random(8)) { Ok(b) => true, Err(e) => false, };
+    println(f"{ok}");
+    return 0;
+}

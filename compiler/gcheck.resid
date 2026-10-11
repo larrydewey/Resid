@@ -318,6 +318,7 @@ Str gm_need_err(GK k, Str nd) {
     List(Str) args = ty_args(nd);
     if (gm_builtin_inst(b, args)) { return ""; }
     if (gm_find_inst(k, b, args) >= 0) { return ""; }
+    if (sec_obs(b, args)) { return sec_obs_msg(b, args); }
     return "no behavior instance " + nd + gm_inst_reject(k, b, args) + " (declare " + b + "(" + list_join(args, 0, ", ", "") + ") = f;)";
 }
 
@@ -372,6 +373,7 @@ Bool gm_builtin_behavior(Str b) { return b == "Show" || b == "Serialize" || b ==
 // Behaviors the language supplies for built-in types.
 Bool gm_builtin_inst(Str b, List(Str) args) {
     if (args.len() != 1) { return false; }
+    if (gm_builtin_behavior(b) && str_contains(args[0], "Secret(")) { return false; }
     Str t = num_norm(args[0]);
     Bool num = is_num(t) && !is_dec_ty(t);
     if (b == "Show" || b == "Serialize") { return true; }
@@ -400,7 +402,13 @@ pub List(Str) gm_inst_types(Kg g, Int n) { return ty_args("B(" + kg_part(g.ns[n]
 // -1. A need left open by the substitution is not this pass's business:
 // the copy made for the call resolves it (instance-covered needs).
 pub Int gm_find_inst(GK k, Str b, List(Str) args) {
-    return gm_find_inst_at(k, b, args, 0, -1, 0, 0);
+    // No observation behavior is given for a secret (E0257), and the
+    // prelude's structural Show / Serialize never reach one (E0256).
+    if (gm_builtin_behavior(b) && str_contains(list_join(args, 0, ",", ""), "Secret(")) { return 0 - 1; }
+    Int i = gm_find_inst_at(k, b, args, 0, -1, 0, 0);
+    Bool structural = i >= 0 && (b == "Show" || b == "Serialize") && args.len() == 1 && sec_default_impl(kg_part(k.g.ns[i].aux, 2));
+    if (structural && sec_path(k, b, args[0], args[0]) != "") { return 0 - 1; }
+    return i;
 }
 
 Int gm_find_inst_at(GK k, Str b, List(Str) args, Int i, Int best, Int blev, Int depth) {
@@ -456,6 +464,7 @@ Bool gm_needs_open_ok(GK k, List(Str) ns, Int i, GU ui, Int depth) {
 // Why no instance applies: the highest-level match, and the need inside
 // its body that the types leave unmet ("" when there is no such match).
 Str gm_inst_reject(GK k, Str b, List(Str) args) {
+    if (sec_obs(b, args)) { return ""; }
     Int best = -1;
     Int blev = 0;
     Int bi = gm_inst_best_at(k, b, args, 0, best, blev);
@@ -629,7 +638,7 @@ pub Int gm_prelude_pos(Str src) {
 // The package a source path belongs to: a manifest dependency, the
 // standard library, or the application. `pk` holds the driver's
 // "@dep::name::root" and "@stdroot::dir" lines.
-Str gm_pkg(Str path, List(Str) pk, Int i) {
+pub Str gm_pkg(Str path, List(Str) pk, Int i) {
     if (i >= pk.len()) { return "app"; }
     Str l = pk[i];
     if (str_starts_with(l, "@stdroot::")) {
@@ -646,7 +655,7 @@ Str gm_pkg(Str path, List(Str) pk, Int i) {
 }
 
 // Package of node `n` ("prelude" past the prelude marker).
-Str gm_pkg_of(Kg g, Int n, List(Int) nls, Str smap, Int prel, List(Str) pk) {
+pub Str gm_pkg_of(Kg g, Int n, List(Int) nls, Str smap, Int prel, List(Str) pk) {
     if (g.ns[n].sp >= prel) { return "prelude"; }
     return gm_pkg(diag_where(smap, gk_line_of(nls, g.ns[n].sp, 0, nls.len()) + 1).path, pk, 0);
 }
@@ -663,7 +672,7 @@ List(Int) gm_levels(Kg g, List(Int) insts, Int i, List(Int) nls, Str smap, Int p
 }
 
 // The instance's key: behavior and normalized types.
-Str gm_inst_key(Kg g, Int n) { return g.ns[n].text + "(" + gm_norm(kg_part(g.ns[n].aux, 1)) + ")"; }
+pub Str gm_inst_key(Kg g, Int n) { return g.ns[n].text + "(" + gm_norm(kg_part(g.ns[n].aux, 1)) + ")"; }
 
 // A higher level replaces an identical lower-level instance program-wide:
 // the replaced one's level becomes 0.
@@ -685,7 +694,7 @@ pub Str gm_smap(Str smap) {
     return if (c < 0) { smap } else { str_slice(smap, 0, c) };
 }
 
-List(Str) gm_pk(Str smap) {
+pub List(Str) gm_pk(Str smap) {
     Int c = str_find_char(smap, 29, 0);
     if (c < 0) { return gk_nopts(); }
     return str_split(str_slice(smap, c + 1, str_len(smap)), "\n");
@@ -783,6 +792,7 @@ Str gm_inst_err(GK k, Int i, List(Int) nls, Str smap, Int prel, List(Str) pk) {
     List(Str) bps = gm_bparams(g, bd);
     if (bps.len() != ts.len()) { return "behavior " + b + f" takes {bps.len()} type(s), " + inst + f" gives {ts.len()}"; }
     Int lev = k.gx.ilev[i];
+    if (gm_builtin_behavior(b) && str_contains(inst, "Secret(")) { return "E0257: " + inst + ": Show, Serialize, Hash, Eq and Ord cannot be given for a secret; a public result would reveal it"; }
     Bool scalar = b == "Show" && ts.len() == 1 && (is_num(ts[0]) || ts[0] == "Bool" || ts[0] == "Str");
     if (scalar && lev == 3) { return "behavior Show(" + ts[0] + "): numbers, Bool and Str have a fixed display; wrap the value in a record to give it its own format"; }
     Str dup = gm_dup_err(k, i, 0, inst);
@@ -1077,6 +1087,7 @@ GKT gk_vcall_r(GK k0, Int id, Str verb, Str exp, Str recv) {
             return gk_mcall0(gk_gcall(k, id, ov0, fi, "", 0, false, rty), id);
         }
         Int inst = gm_find_inst(k, g.ns[bd].text, bvals);
+        if (inst < 0 && sec_obs(g.ns[bd].text, bvals)) { return gterr(k, sec_obs_msg(g.ns[bd].text, bvals), id); }
         if (inst < 0) { return gterr(k, "E0226: " + verb + ": no behavior instance " + nd + gm_inst_reject(k, g.ns[bd].text, bvals) + " (declare " + g.ns[bd].text + "(" + list_join(bvals, 0, ", ", "") + ") = f;)", id); }
         Str f = gm_impl_for(g, inst, verb);
         Int fi = ck_fn_index(k.fs, f);
@@ -1114,6 +1125,7 @@ GKT gk_vcall_r(GK k0, Int id, Str verb, Str exp, Str recv) {
     Str ov0 = if (uk >= 0) { gk_inst(g, kg_kid(g, uk, 0)) } else { gm_use(k, b) };
     if (ov0 != "") { return gm_vcall_over(k, id, verb, b, bvals, ov0, a); }
     Int inst = gm_find_inst(k, b, bvals);
+    if (inst < 0 && sec_obs(b, bvals)) { return gterr(k, sec_obs_msg(b, bvals), id); }
     if (inst < 0) { return gterr(k, "E0226: " + verb + ": no behavior instance " + nd + gm_inst_reject(k, b, bvals) + " (declare " + b + "(" + list_join(bvals, 0, ", ", "") + ") = f;)", id); }
     Str f = gm_impl_for(g, inst, verb);
     Int fi = ck_fn_index(k.fs, f);
@@ -1206,9 +1218,13 @@ GKT gk_expr0(GK k, Int id, Str exp) {
     if (kind == "slice") {
         GKT b = gk_expr(k, gk_kid(k, id, 0), "");
         if (b.err != "") { return b; }
+        // Lowered as a heap-list slice: anything else is not that memory.
+        Str st = sec_inner(b.ty);
+        if (!str_has_prefix(st, "List(") || is_list_fixed(st)) { return gterr(b.k, "a slice [..hi] takes a list, got " + b.ty, id); }
         if (g.ns[id].nk > 1) {
-            GKT h = gk_expr(b.k, gk_kid(k, id, 1), "");
+            GKT h = gk_expr(b.k, gk_kid(k, id, 1), "Int");
             if (h.err != "") { return h; }
+            if (!is_int_ty(h.ty)) { return gterr(h.k, "a slice bound must be a public integer, got " + h.ty, id); }
             return gt(h.k, b.ty, id);
         }
         return gt(b.k, b.ty, id);
@@ -1221,6 +1237,7 @@ GKT gk_expr0(GK k, Int id, Str exp) {
         if (!has) { return gterr(k, "a spawn's Result needs a declared type: Result(T, RegionError) r = spawn (...) { ... };", id); }
         Str vt = str_slice(exp, 7, str_len(exp) - 14);
         if (vt == "File") { return gterr(k, "a spawn region returns values, not handles (spec §19)", id); }
+        if (str_contains(vt, "Secret(")) { return gterr(k, "E0255: a spawn region cannot return a secret (" + vt + "): its Result crosses the region boundary; keep the secret inside the region, or declassify it", id); }
         GKS b = gk_stmt(k, gk_kid(k, id, 0), vt);
         if (b.err != "") { return gt_of(b); }
         Int svc = gv_captured(b.k, id, id);
@@ -1232,9 +1249,17 @@ GKT gk_expr0(GK k, Int id, Str exp) {
     return gterr(k, "unexpected expression " + kind, id);
 }
 
-GKT gk_lit(GK k, Int id, Str exp) {
+GKT gk_lit(GK k, Int id, Str exp) { return gk_lit_n(k, id, exp, false); }
+
+// An integer literal given an integer type by its context (a binding, an
+// `rt`, a list element, an argument, a return) must fit that type, in
+// every base: lowering emits the value at the type's width, so one that
+// does not fit would wrap. `neg`: the literal is under a unary minus.
+GKT gk_lit_n(GK k, Int id, Str exp, Bool neg) {
     Str lk = k.g.ns[id].aux;
     Str t = k.g.ns[id].text;
+    Str ie = if (lk == "int" && is_int_ty(exp) && !gm_has_var(exp)) { lit_range_err(t, neg, num_norm(exp)) } else { "" };
+    if (lk == "int" && ie != "") { return gterr(k, ie, id); }
     if (lk == "int") { return gt(k, if (is_int_ty(exp)) { num_norm(exp) } else { "Int" }, id); }
     if (lk == "float") { return gt(k, if (is_float_ty(exp)) { num_norm(exp) } else { "Float" }, id); }
     if (lk == "dec") { return gt(k, "Dec(34)", id); }
@@ -1249,7 +1274,10 @@ GKT gk_lit(GK k, Int id, Str exp) {
         return gterr(k, what + f"{len} bytes, exceeds Str({cap}) capacity", id);
     }
     if (lk == "bytes") {
-        if (!is_bytes_fixed(exp)) { return gt(k, "Bytes", id); }
+        if (!is_bytes_fixed(exp)) {
+            if (bytes_literal_has_zero(t)) { return gterr(k, "a Bytes value ends at its first zero byte, so this literal would be cut short there: use a Bytes(N) (which holds exactly N bytes) or a List(UInt(8))", id); }
+            return gt(k, "Bytes", id);
+        }
         Int cap = fixed_cap(exp);
         Int len = bytes_literal_len(t);
         if (len <= cap) { return gt(k, exp, id); }
@@ -1270,6 +1298,8 @@ GKT gk_fstr(GK k, Int id, Int i) {
     GKT h = gk_expr(k, c, "");
     if (h.err != "") { return h; }
     if (gv_is(h.ty)) { return gterr(h.k, "a vector is not shown directly; interpolate v.to_list() (spec §46)", c); }
+    Str shp = sec_path(h.k, "Show", h.ty, h.ty);
+    if (shp != "") { return gterr(h.k, "E0256: " + (if (shp == h.ty) { "a secret (" + h.ty + ") cannot be shown" } else { h.ty + " holds a secret at " + shp + " and has no Show of its own, so the structural Show cannot show it" }) + "; declassify it first", c); }
     Int fs = gk_fspec_at(k, id, i);
     if (fs >= 0) {
         Str fe = fs_check(fs_parse_compat(k.g.ns[fs].text), h.ty);
@@ -1491,6 +1521,17 @@ GKT gk_call(GK k, Int id, Str exp) {
     // A verb named like a builtin keeps the builtin for a bare call; the
     // receiver form `x.verb()` is the verb (spec §11).
     if (ck_fn_index(k.fs, n) < 0 && k.gx.verbs.contains(n)) { return gk_vcall(k, id, n, exp); }
+    if ((n == "secret" || n == "declassify" || n == "classify") && ck_fn_index(k.fs, n) < 0) { return sec_call(k, id, n, exp); }
+    if (n == "provisioned_key" && ck_fn_index(k.fs, n) < 0) { return sec_provision(k, id, exp); }
+    if (n == "assumed" && ck_fn_index(k.fs, n) < 0) { return sec_assumed(k, id, exp); }
+    if ((n == "secret_split" || n == "secret_join") && ck_fn_index(k.fs, n) < 0) { return sec_shape(k, id, n, exp); }
+    if (n == "ct_select" && ck_fn_index(k.fs, n) < 0) { return sec_select(k, id, exp); }
+    if (sec_liftable(n) && ck_fn_index(k.fs, n) < 0 && (argn == 2 || argn == 1)) {
+        GKA wa = gk_args(k, id, 0, gk_nopts(), 0, "", 0);
+        if (wa.err != "") { return gterr(wa.k, wa.err, wa.at); }
+        if (sec_any_arg(str_split(wa.tys, ","), 0)) { return sec_lift(wa.k, id, n, wa.tys, wa.count); }
+        return gk_finish_call(wa.k, id, n, wa.tys, wa.count, false, exp);
+    }
     if (n == "Ok" || n == "Err" || n == "Some" || n == "None") {
         // The payload gets its expected type: Some(x) for an Option(T), Ok /
         // Err for a Result(T, E).
@@ -1840,7 +1881,12 @@ GKT gk_struct(GK k, Int id, Str ty, Int i) {
 // two values, which lowers to two stores of the same place and no
 // diagnostic.
 GKT gk_struct_seen(GK k, Int id, Str ty, Int i, Str seen) {
-    if (i >= k.g.ns[id].nk) { return gt(k, ty, id); }
+    if (i >= k.g.ns[id].nk) {
+        // Every field is set: an unset one would be read as whatever the
+        // allocation held (memory safety).
+        Str miss = gs_unset(k, ty, seen);
+        return if (miss == "") { gt(k, ty, id) } else { gterr(k, "field " + miss + " of " + ty + " is not set: a record literal sets every field", id) };
+    }
     Int fi = gk_kid(k, id, i);
     Str f = k.g.ns[fi].text;
     Str ft = gk_field_type(k, ty, f);
@@ -1854,6 +1900,21 @@ GKT gk_struct_seen(GK k, Int id, Str ty, Int i, Str seen) {
     Bool hok = !ty_same(v.ty, ft) && (str_contains(v.ty, "_") || str_contains(v.ty, "Unknown")) && gk_unify(ft, v.ty) != "";
     if (!vempty && !fok && !hok && !ty_same(v.ty, ft)) { return gterr(v.k, "field " + f + ": expected " + ft + ", got " + v.ty, fi); }
     return gk_struct_seen(gk_mem(v.k, fi, gk_sfield(k, ty, f)), id, ty, i + 1, gs_add_field(seen, f));
+}
+
+// The first field of record type ty not in seen, or "".
+Str gs_unset(GK k, Str ty, Str seen) {
+    Int d0 = k.sd.get(ty) else { -1 };
+    Int d = if (d0 >= 0) { d0 } else { k.sd.get(ty_head(ty)) else { -1 } };
+    if (d < 0) { return ""; }
+    return gs_unset_at(k.g, d, 0, seen);
+}
+
+Str gs_unset_at(Kg g, Int d, Int i, Str seen) {
+    if (i >= g.ns[d].nk) { return ""; }
+    Int c = kg_kid(g, d, i);
+    if (g.ns[c].kind == "sfield" && !gs_has_field(seen, g.ns[c].text)) { return g.ns[c].text; }
+    return gs_unset_at(g, d, i + 1, seen);
 }
 
 // The field names a literal has set so far, as one text.
@@ -2004,7 +2065,9 @@ GKT gk_set(GK k, Int id, Int i, Str elem, Str want) {
 
 GKT gk_un(GK k0, Int id) {
     Str op = k0.g.ns[id].text;
-    GKT e = gk_expr(k0, gk_kid(k0, id, 0), "");
+    Int kid = gk_kid(k0, id, 0);
+    Bool nlit = op == "-" && k0.g.ns[kid].kind == "lit" && k0.g.ns[kid].aux == "int";
+    GKT e = if (nlit) { gk_lit_n(k0, kid, "", true) } else { gk_expr(k0, kid, "") };
     if (e.err != "") { return e; }
     GK k = e.k;
     if (gv_is(e.ty)) {
@@ -2028,12 +2091,34 @@ GKT gk_cast(GK k0, Int id) {
     Str to = k0.g.ns[gk_kid(k0, id, 0)].text;
     GKT e = gk_expr(k0, gk_kid(k0, id, 1), "");
     if (e.err != "") { return e; }
+    // A cast of an integer literal (under parentheses, minus signs or
+    // `rt`) to an integer type is checked here: a literal that does not
+    // fit would otherwise wrap, or abort at run time.
+    Int lc = gk_cast_lit(k0.g, gk_kid(k0, id, 1));
+    Bool lneg = lc >= 0 && gv_lit_neg(k0.g, gk_cast_unrt(k0.g, gk_kid(k0, id, 1)));
+    Str lerr = if (lc >= 0 && is_int_ty(to) && !gm_has_var(to)) { lit_range_err(k0.g.ns[lc].text, lneg, num_norm(to)) } else { "" };
+    if (lerr != "") { return gterr(e.k, lerr, id); }
+    if (sec_is(e.ty)) { return sec_cast(e.k, id, to, e.ty); }
     Bool bothint = is_int_ty(to) && is_int_ty(e.ty);
     Bool bothnum = is_num(to) && is_num(e.ty) && !is_dec_ty(to) && !is_dec_ty(e.ty);
     Bool todec = is_dec_ty(to) && (is_int_ty(e.ty) || is_dec_ty(e.ty));
     Bool vcast = gv_is(to) && gv_is(e.ty) && gv_type_err(to, false) == "" && gv_cast_ok(e.ty, to);
     if (bothint || bothnum || todec || vcast || ty_same(to, e.ty) || is_fixed_cast_pair(e.ty, to)) { return gt(e.k, to, id); }
     return gterr(e.k, "cast from " + e.ty + " to " + to + " not supported", id);
+}
+
+// The node under any `rt` wrappers.
+Int gk_cast_unrt(Kg g, Int n) {
+    if (g.ns[n].kind == "rt" && g.ns[n].nk == 1) { return gk_cast_unrt(g, kg_kid(g, n, 0)); }
+    return n;
+}
+
+// The integer literal a cast operand is (through `rt`, parentheses and
+// minus signs), or -1.
+Int gk_cast_lit(Kg g, Int n) {
+    Int c = gv_lit_core(g, gk_cast_unrt(g, n));
+    if (c < 0) { return -1; }
+    return if (g.ns[c].aux == "int") { c } else { -1 };
 }
 
 GKT gk_bin(GK k0, Int id, Str exp) {
@@ -2046,14 +2131,18 @@ GKT gk_bin(GK k0, Int id, Str exp) {
     GKT rt = gk_expr(lt.k, r, "");
     if (rt.err != "") { return rt; }
     GK k = rt.k;
+    if (sec_is(lt.ty) || sec_is(rt.ty)) { return sec_bin(k, id, op, l, r, lt.ty, rt.ty); }
     Bool lhs_lit = gk_lit_flag(g, l);
     Bool rhs_lit = gk_bare_int(g, r);
     Bool shift = op == "<<" || op == ">>";
     Str lty = if (lhs_lit && !rhs_lit && !shift && is_int_ty(rt.ty)) { rt.ty } else { lt.ty };
     Str rty = if (rhs_lit && !lhs_lit && !shift && is_int_ty(lt.ty)) { lt.ty } else { rt.ty };
     // An adopted literal must fit the type it adopts (spec §6.1a).
-    Str lfit = if (lhs_lit && lty != lt.ty && gk_bare_int(g, l) && !gm_has_var(lty)) { lit_range_err(g.ns[l].text, false, num_norm(lty)) } else { "" };
-    Str rfit = if (rhs_lit && rty != rt.ty && !gm_has_var(rty)) { lit_range_err(g.ns[r].text, false, num_norm(rty)) } else { "" };
+    // So must one that keeps the other operand's type: it is emitted at
+    // that width and would wrap.
+    Str rfty = if (rhs_lit && !shift && is_int_ty(lt.ty)) { lt.ty } else { rty };
+    Str lfit = if (lhs_lit && gk_bare_int(g, l) && is_int_ty(lty) && !gm_has_var(lty)) { lit_range_err(g.ns[l].text, false, num_norm(lty)) } else { "" };
+    Str rfit = if (rhs_lit && is_int_ty(rfty) && !gm_has_var(rfty)) { lit_range_err(g.ns[r].text, false, num_norm(rfty)) } else { "" };
     if (lfit != "") { return gterr(k, lfit, id); }
     if (rfit != "") { return gterr(k, rfit, id); }
     if (gm_has_var(lty) || gm_has_var(rty)) { return gm_bin(k, id, op, lty, rty, l, r, lt.ty, rt.ty); }
@@ -2193,6 +2282,7 @@ GKT gk_tern(GK k, Int id, Str exp) {
 GKT gk_ifx(GK k, Int id, Str exp) {
     GKT c = gk_expr(k, gk_kid(k, id, 0), "");
     if (c.err != "") { return c; }
+    if (sec_is(c.ty)) { return gterr(c.k, "E0255: a secret (" + c.ty + ") cannot decide the condition of `if`: control flow would reveal it; use ct_select, or declassify it", c.at); }
     if (c.ty != "Bool") { return gterr(c.k, "if condition must be Bool, got " + c.ty, c.at); }
     // An expected sized number reaches the branches, so a literal arm
     // adopts it (`Int(8) y = if (c) { 0 } else { x }`), and so does any
@@ -2252,6 +2342,7 @@ GKT gk_match(GK k0, Int id, Str exp0) {
     }
     Int sidx = sumtype_index(k.fs, sc.ty);
     if (sidx >= 0) { return gk_arms(k, id, 1, sumv_names(k.fs.suv[sidx]), sum_payloads(k.fs, sidx, sc.ty), "", "", exp); }
+    if (sec_is(sc.ty)) { return gterr(k, "E0255: a secret (" + sc.ty + ") cannot be matched: the arm taken would reveal it; declassify it first", id); }
     return gterr(k, "match scrutinee must be an Option or a declared sum type, got " + sc.ty, id);
 }
 
@@ -2397,8 +2488,16 @@ GKT gk_index(GK k0, Int id) {
     if (b.err != "") { return b; }
     GKT ix = gk_expr(b.k, gk_kid(k0, id, 1), "");
     if (ix.err != "") { return ix; }
-    GK k = ix.k;
-    Str bt = b.ty;
+    if (sec_is(ix.ty)) { return gterr(ix.k, "E0255: a secret index (" + ix.ty + ") decides which memory is read; index with a public value, or select with ct_select", id); }
+    if (sec_is(b.ty)) {
+        GKT si = gk_index_on(ix.k, id, sec_inner(b.ty), ix.ty);
+        return if (si.err != "") { si } else { gt(si.k, "Secret(" + si.ty + ")", id) };
+    }
+    return gk_index_on(ix.k, id, b.ty, ix.ty);
+}
+
+GKT gk_index_on(GK k, Int id, Str bt, Str ixty) {
+    GKT ix = GKT {.ty = ixty, .err = "", .at = id, .k = k};
     if (gv_is(bt)) {
         if (!is_int_ty(ix.ty)) { return gterr(k, "vector lane index must be an integer, found " + ix.ty, id); }
         return gt(k, gv_elem(bt), id);
@@ -2414,6 +2513,7 @@ GKT gk_index(GK k0, Int id) {
         return gt(k, str_trim(ty_args(bt)[0]), id);
     }
     if (is_list_type(bt) && str_has_prefix(ix.ty, "Range")) { return gt(k, bt, id); }
+    if (is_list_type(bt) && !is_int_ty(ix.ty)) { return gterr(k, "list index must be an integer, found " + ix.ty, id); }
     if (is_list_type(bt)) { return gt(k, inner_of(bt), id); }
     if (is_map_type(bt)) {
         Str kt = map_key_type(bt);
@@ -2455,7 +2555,7 @@ GKT gk_marg_same(GK k, Int id, Str want, Str msg, Str ty) {
 Bool gk_is_provider(GK k, Int recv) {
     if (k.g.ns[recv].kind != "ref") { return false; }
     Str n = k.g.ns[recv].text;
-    if (n != "environment" && n != "filesystem" && n != "args" && n != "process" && n != "clock") { return false; }
+    if (n != "environment" && n != "filesystem" && n != "args" && n != "process" && n != "clock" && n != "device") { return false; }
     return kg_def(k.rs, recv) == rs_builtin();
 }
 
@@ -2475,6 +2575,7 @@ Str gk_provider_params(Str fam, Str m) {
 }
 
 GKT gk_provider(GK kp, Int id, Str fam, Str m) {
+    if (fam == "device") { return dv_gk_verb(gk_tl(kp, tl_add(kp.tl, kg_kid(kp.g, id, 0), "Provider(device)")), id, m); }
     GK k0 = gk_tl(kp, tl_add(kp.tl, kg_kid(kp.g, id, 0), "Provider(" + fam + ")"));
     if (k0.g.ns[id].nk == 1) {
         if (fam == "args" && m == "count") { return gt(k0, "Int", id); }
@@ -2486,6 +2587,7 @@ GKT gk_provider(GK kp, Int id, Str fam, Str m) {
     GKA a = gk_args(k0, id, 1, wl, 0, "", 0);
     if (a.err != "") { return gterr(a.k, a.err, a.at); }
     GK k = a.k;
+    if (str_contains(a.tys, "Secret(")) { return gterr(k, "E0255: " + fam + "." + m + " takes public values, got (" + a.tys + "); declassify the secret first" + (if (m == "write_secret") { " (write_secret keeps the file readable by its owner only)" } else { "" }), id); }
     Bool fits = want == "?" || a.tys == want || (a.count == wl.len() && params_accept(want, a.tys, a.count));
     if (!fits) { return gterr(k, fam + "." + m + " expects (" + want + "), got (" + a.tys + ")", id); }
     if (fam == "environment" && m == "get") { return gt(k, "Str", id); }
@@ -2522,10 +2624,12 @@ GKM gk_mcall_r(GK k0, Int id, Str exp) {
     if (b.err != "") { return gkm(b, false); }
     GK k = b.k;
     Str bt = b.ty;
+    if (sec_is(bt)) { return gkm(sec_method(k, id, bt, m, na), true); }
     if (gk_is_builder(bt)) { return gkm(gk_builder_method(k, id, bt, m, na), true); }
     if (gv_is(bt)) { return gkm(gv_method(k, id, bt, m, na), true); }
     if (m == "len") {
         if (na != 0) { return gkm(gterr(k, ".len() takes no arguments", id), false); }
+        if (!gk_len_recv(bt)) { return gkm(gterr(k, ".len() needs a list, text, bytes, map or set, got " + bt, id), false); }
         return gkm(gt(k, "Int", id), true);
     }
     // The static capacity N of a fixed-capacity value (spec §44.3).
@@ -2536,6 +2640,7 @@ GKM gk_mcall_r(GK k0, Int id, Str exp) {
     // xs.with(i, x): xs with element i replaced (spec §17, §44.3).
     if (m == "with" && str_has_prefix(bt, "List(")) { return gkm(gk_list_with(k, id, bt, na), true); }
     if (m == "concat") {
+        if (!str_has_prefix(bt, "List(") || is_list_fixed(bt)) { return gkm(gterr(k, ".concat() joins two lists, got " + bt + "; use + for text", id), false); }
         GKT a = gk_marg_as(k, id, 0, bt);
         if (a.err != "") { return gkm(a, false); }
         return gkm(gt(a.k, bt, id), true);
@@ -2557,6 +2662,14 @@ GKM gk_mcall_r(GK k0, Int id, Str exp) {
     Str cfty = gk_field_type(k, bt, m);
     if (cfty != "" && is_fn_type(cfty)) { return gkm(gk_fn_call(gk_mem(k, id, gk_sfield(k, bt, m)), id, 1, cfty), true); }
     return gkm(gterr(k, "unsupported method " + m, id), false);
+}
+
+// The receivers `.len()` measures: heap and fixed lists, text, bytes,
+// maps and sets. Text counts codepoints, as str_len does. Anything else
+// would be lowered as a list read of memory that is no list.
+Bool gk_len_recv(Str bt) {
+    if (str_has_prefix(bt, "List(") || is_map_type(bt) || is_set_type(bt)) { return true; }
+    return bt == "Str" || bt == "Bytes" || str_has_prefix(bt, "Str(") || str_has_prefix(bt, "Bytes(");
 }
 
 GKT gk_list_with(GK k, Int id, Str bt, Int na) {
@@ -3164,6 +3277,7 @@ GKS gk_cond(GK k, Int c, Str what) {
     }
     GKT e = gk_expr(k, c, "");
     if (e.err != "") { return gs_of(e); }
+    if (sec_is(e.ty)) { return gs_err(e.k, "E0255: a secret (" + e.ty + ") cannot decide the condition of `" + what + "`: control flow would reveal it; use ct_select, or declassify it", c); }
     if (e.ty != "Bool") { return gs_err(e.k, what + " condition must be Bool, got " + e.ty, c); }
     return gs_ok(e.k);
 }
@@ -3234,14 +3348,14 @@ GKS gk_bindst(GK k, Int id) {
     Str nb = if (nb0 == "") { gv_type_err(ty, false) } else { nb0 };
     if (nb != "") { return gs_err(k, nb, id); }
     Int ve = kg_kid(g, id, g.ns[id].nk - 1);
-    GKT v = gk_expr(k, ve, ty);
-    if (v.err != "") { return gs_of(v); }
     Str ety = ct_base_of(k.fs.ctn, k.fs.ctb, ty);
     Str whole = gk_whole_lit(g, ve);
     Bool neg = str_has_prefix(whole, "-");
     Str digits = if (neg) { str_slice(whole, 1, str_len(whole)) } else { whole };
     Str lrerr = if (whole != "" && is_int_ty(ety) && !gm_has_var(ety)) { lit_range_err(digits, neg, num_norm(ety)) } else { "" };
-    if (lrerr != "") { return gs_err(v.k, "binding " + name + ": " + lrerr, id); }
+    if (lrerr != "") { return gs_err(k, "binding " + name + ": " + lrerr, id); }
+    GKT v = gk_expr(k, ve, ty);
+    if (v.err != "") { return gs_of(v); }
     if (is_int_ty(ety) && is_int_ty(v.ty) && !int_adopt_ok(v.ty, num_norm(ety), whole)) {
         return gs_err(v.k, "binding " + name + ": implicit narrowing from " + v.ty + " to " + ty + " requires an explicit cast", id);
     }
@@ -3847,6 +3961,9 @@ Str gk_requires_err(Str prefix) {
     Str nm = gk_native_moded(str_split(r.ty, ","), 0);
     if (nm != "") { return "`" + nm + "` has no modes: a native module is reached in full or not at all (spec §47)"; }
     if (gk_display_moded(str_split(r.ty, ","), 0)) { return "`display` has no modes: a program reaches the window server in full or not at all (spec §20)"; }
+    if (sec_declassify_moded(str_split(r.ty, ","), 0)) { return "`declassify` has no modes: publishing a secret is granted in full or not at all"; }
+    if (sec_provision_moded(str_split(r.ty, ","), 0)) { return "`provision` has no modes: relying on a provisioned key is granted in full or not at all"; }
+    if (sec_assume_moded(str_split(r.ty, ","), 0)) { return "`assume` has no modes: relying on an assumption is granted in full or not at all"; }
     return gk_unknown_family(caps_families(str_split(r.ty, ","), 0, ListBuf()), 0);
 }
 
@@ -3974,8 +4091,8 @@ Str gk_unknown_family(List(Str) fs, Int i) {
     if (i >= fs.len()) { return ""; }
     Str f = fs[i];
     Bool native = str_starts_with(f, "native_") && gk_module_name_ok(str_slice(f, 7, str_len(f)), 0);
-    Bool ok = f == "" || f == "filesystem" || f == "environment" || f == "args" || f == "process" || f == "network" || f == "terminal" || f == "clock" || f == "display" || native;
-    if (!ok) { return "unknown capability family `" + f + "` (filesystem, environment, args, process, network, terminal, clock, display, native_<module>)"; }
+    Bool ok = f == "" || f == "filesystem" || f == "environment" || f == "args" || f == "process" || f == "network" || f == "terminal" || f == "clock" || f == "device" || f == "display" || f == "declassify" || f == "provision" || f == "assume" || native;
+    if (!ok) { return "unknown capability family `" + f + "` (filesystem, environment, args, process, network, terminal, clock, device, display, declassify, provision, assume, native_<module>)"; }
     return gk_unknown_family(fs, i + 1);
 }
 
@@ -4123,18 +4240,22 @@ Str gk_prov_family(GK k, Int id) {
 
 // Capability family of an effectful runtime builtin, or "".
 Str gk_builtin_family(Str n) {
+    if (n == "declassify") { return "declassify"; }
+    if (n == "provisioned_key") { return "provision"; }
+    if (n == "assumed") { return "assume"; }
     if (str_starts_with(n, "resid_disp_")) { return "display"; }
     if (str_starts_with(n, "resid_tcp_")) { return "network"; }
     if (str_starts_with(n, "resid_dbg_")) { return "process"; }
     if (str_starts_with(n, "resid_term_")) { return "terminal"; }
     if (str_starts_with(n, "resid_clock_")) { return "clock"; }
+    if (n == "resid_device_call" || n == "resid_device_call_w" || n == "resid_device_secret") { return "device"; }
     return "";
 }
 
 // Builtins that change state a read-only grant does not cover.
 // Writes under a moded family: raw mode, sleeping, and binding a listener
 // to an address other than loopback (exposing a port is a write).
-Bool gk_builtin_write(Str n) { return n == "resid_term_raw" || n == "resid_term_restore" || n == "resid_clock_sleep_ns" || n == "resid_tcp_listen_at"; }
+Bool gk_builtin_write(Str n) { return n == "resid_term_raw" || n == "resid_term_restore" || n == "resid_clock_sleep_ns" || n == "resid_tcp_listen_at" || n == "resid_device_call_w"; }
 
 // Runtime internals that free or move memory the program may still see
 // (spec §5: storage is never exposed). Only the compiler's own source may
@@ -4171,7 +4292,7 @@ List(Int) gk_newlines(Str src, Int from, ListBuf(Int) acc) {
 }
 
 // How many of nls[lo..hi] lie before pos.
-Int gk_line_of(List(Int) nls, Int pos, Int lo, Int hi) {
+pub Int gk_line_of(List(Int) nls, Int pos, Int lo, Int hi) {
     if (lo >= hi) { return lo; }
     Int mid = (lo + hi) / 2;
     return if (nls[mid] < pos) { gk_line_of(nls, pos, mid + 1, hi) } else { gk_line_of(nls, pos, lo, mid) };
@@ -4186,7 +4307,7 @@ Str gk_internal_use(GK k, Int id) {
     return "";
 }
 
-Bool gk_internals_at(GK k, Int id, List(Int) nls, Str smap, Bool acc) {
+Bool gk_internals_at(GK k, Int id, List(Int) nls, Str smap, Int prel, Bool acc) {
     if (id >= k.g.ns.len()) { return acc; }
     Str u = gk_internal_use(k, id);
     Bool ok = u == "" || (resid_internals() && gk_internal_file(gk_src_path(k, id, nls, smap)));
@@ -4194,7 +4315,23 @@ Bool gk_internals_at(GK k, Int id, List(Int) nls, Str smap, Bool acc) {
         eprintln("error[E0220]: " + u + " is a runtime internal of the compiler, not part of the language (spec §5); only the compiler's own sources and runtime/rt/, built with --runtime-internals, may use it (never the standard library)")
     };
     Bool lbad = gk_link_place(k, id, nls, smap);
-    return gk_internals_at(k, id + 1, nls, smap, acc || bad || lbad);
+    Bool rbad = gk_reserved_name(k, id, nls, smap, prel);
+    return gk_internals_at(k, id + 1, nls, smap, prel, acc || bad || lbad || rbad);
+}
+
+// Function names starting `resid_` belong to the runtime (E0265): its
+// entry points (resid_device_call, resid_device_host, resid_native_host,
+// ...) are symbols in the same link as the program's own functions, and
+// the compiler decides what a program is from the calls it sees -- a
+// program's resid_device_call, or resid_device_callz, must not pass for
+// the runtime's. Only the runtime's own sources (runtime/rt/, with
+// --runtime-internals) may define one, and the compiler's prelude (from
+// `prel` on), whose behavior instances are resid_eq_int and the like.
+Bool gk_reserved_name(GK k, Int id, List(Int) nls, Str smap, Int prel) {
+    KN n = k.g.ns[id];
+    if (n.kind != "fn" || !str_starts_with(n.text, "resid_") || n.sp >= prel) { return false; }
+    if (resid_internals() && gk_internal_file(gk_src_path(k, id, nls, smap))) { return false; }
+    return eprintln("error[E0265]: `" + n.text + "`: function names starting with `resid_` are reserved for the runtime (spec §5); rename it");
 }
 
 // `@link` belongs on a function of a program or package: never in the
@@ -4280,7 +4417,7 @@ GKF gk_facts(GK k, Int id, GKF f) {
     GKF f1 = if (bfam != "" && gk_builtin_write(k.g.ns[id].text)) { gf_add(f1a, "w", bfam + "." + k.g.ns[id].text) } else { f1a };
     Str fam = gk_prov_family(k, id);
     GKF f2 = if (fam == "") { f1 } else { gf_add(f1, "p", fam) };
-    GKF f3 = if (fam != "" && is_write_verb(fam, k.g.ns[id].text)) { gf_add(f2, "w", fam + "." + k.g.ns[id].text) } else { f2 };
+    GKF f3 = if (fam != "" && (is_write_verb(fam, k.g.ns[id].text) || (fam == "device" && dv_writes(k, id)))) { gf_add(f2, "w", fam + "." + k.g.ns[id].text) } else { f2 };
     return gk_facts_kids(k, id, 0, f3);
 }
 
@@ -4348,7 +4485,7 @@ Str gk_enforce_func(GK k, List(Int) fnode, List(Str) eff, List(GKF) facts, Int f
     Str reqcsv = fs.reqs[fi];
     if (ceiling != "" && reqcsv != "") {
         Str missing = first_missing_req(reqcsv, ceiling);
-        if (missing != "") { return "function `" + fname + "` requires capability `" + missing + "` which exceeds the effective capability ceiling [" + fmt_caps(ceiling) + "]"; }
+        if (missing != "") { return "function `" + fname + "` requires capability `" + cap_spell(missing) + "` which exceeds the effective capability ceiling [" + fmt_caps(ceiling) + "]"; }
     }
     Str effc = eff[fi];
     List(Str) none = [];
@@ -4362,12 +4499,16 @@ Str gk_enforce_func(GK k, List(Int) fnode, List(Str) eff, List(GKF) facts, Int f
     return gk_readonly_writes(facts[fi], ceiling);
 }
 
-Bool gk_enforce_all(GK k, List(Int) fnode, List(Str) eff, List(GKF) facts, Int i) {
-    if (i >= fnode.len()) { return false; }
+// Whole-program passes run as loops (an accumulated verdict, not
+// `printed || rest` after the recursive call): a frame per function held
+// open across the whole walk cost the self-compile about 1 MB per function.
+Bool gk_enforce_all(GK k, List(Int) fnode, List(Str) eff, List(GKF) facts, Int i) { return gk_enforce_at(k, fnode, eff, facts, i, false); }
+
+Bool gk_enforce_at(GK k, List(Int) fnode, List(Str) eff, List(GKF) facts, Int i, Bool acc) {
+    if (i >= fnode.len()) { return acc; }
     Str m = gk_enforce_func(k, fnode, eff, facts, i);
     Bool printed = if (m != "") { eprintln("error[E0212]: " + m) } else { false };
-    Bool rest = gk_enforce_all(k, fnode, eff, facts, i + 1);
-    return printed || rest;
+    return gk_enforce_at(k, fnode, eff, facts, i + 1, acc || printed);
 }
 
 // Spawn bounds (E0214, E0215) over a body; the first violation or "".
@@ -4378,7 +4519,7 @@ Str gk_spawn_scan(GK k, Int id, Bool bounded, Str parent, Bool insp) {
         if (caps.err != "") { return ""; }
         if (bounded) {
             Str over = if (caps.ty == "") { "" } else { spawn_cap_exceeds_at(str_split(caps.ty, ","), parent, 0) };
-            if (over != "") { return "error[E0214]: spawn declares capability `" + over + "` which exceeds the parent's capability ceiling [" + fmt_caps(parent) + "] (child ≤ parent)"; }
+            if (over != "") { return "error[E0214]: spawn declares capability `" + cap_spell(over) + "` which exceeds the parent's capability ceiling [" + fmt_caps(parent) + "] (child ≤ parent)"; }
         }
         return gk_spawn_kids(k, id, 0, true, caps.ty, true);
     }
@@ -4396,12 +4537,13 @@ Str gk_spawn_kids(GK k, Int id, Int i, Bool bounded, Str parent, Bool insp) {
     return gk_spawn_kids(k, id, i + 1, bounded, parent, insp);
 }
 
-Bool gk_spawn_all(GK k, List(Int) fnode, List(Str) eff, Int i) {
-    if (i >= fnode.len()) { return false; }
+Bool gk_spawn_all(GK k, List(Int) fnode, List(Str) eff, Int i) { return gk_spawn_at(k, fnode, eff, i, false); }
+
+Bool gk_spawn_at(GK k, List(Int) fnode, List(Str) eff, Int i, Bool acc) {
+    if (i >= fnode.len()) { return acc; }
     Str m = gk_spawn_scan(k, fnode[i], eff[i] != "", eff[i], false);
     Bool printed = if (m != "") { eprintln(m) } else { false };
-    Bool rest = gk_spawn_all(k, fnode, eff, i + 1);
-    return printed || rest;
+    return gk_spawn_at(k, fnode, eff, i + 1, acc || printed);
 }
 
 // ─── Authority (spec §20: no ambient authority) ─────────────────────
@@ -4510,10 +4652,11 @@ Str gk_need_via(Sigs fs, List(Str) need, List(Str) decl, List(Str) cs, Int j, St
     return gk_need_via(fs, need, decl, cs, j + 1, e);
 }
 
-// A need as @requires spells it (filesystem, terminal and clock grants
-// have modes).
+// A need as @requires spells it (filesystem, terminal, clock, network and
+// device grants have modes; a read of the others is the whole family).
 Str cap_show(Str e) {
-    if (cap_readonly(e) && (cap_family(e) == "filesystem" || cap_family(e) == "terminal" || cap_family(e) == "clock")) { return cap_family(e) + "(readonly)"; }
+    Str f = cap_family(e);
+    if (cap_readonly(e) && (f == "filesystem" || f == "terminal" || f == "clock" || f == "network" || f == "device")) { return f + "(readonly)"; }
     return cap_family(e);
 }
 
@@ -4535,8 +4678,10 @@ Str gk_fn_label(GK k, List(Int) fnode, Str name) {
     return str_slice(aux, at + 6, imp_close_paren(aux, at + 6, 0) - 1);
 }
 
-Bool gk_auth_all(GK k, List(Int) fnode, List(Str) need, List(Str) decl, List(Str) direct, List(Str) calls, Int i) {
-    if (i >= fnode.len()) { return false; }
+Bool gk_auth_all(GK k, List(Int) fnode, List(Str) need, List(Str) decl, List(Str) direct, List(Str) calls, Int i) { return gk_auth_at(k, fnode, need, decl, direct, calls, i, false); }
+
+Bool gk_auth_at(GK k, List(Int) fnode, List(Str) need, List(Str) decl, List(Str) direct, List(Str) calls, Int i, Bool acc) {
+    if (i >= fnode.len()) { return acc; }
     // A generic function's authority is its own @requires (checked on the
     // generic itself) plus what its instances need, which the concrete
     // caller must hold (through the copy's call edges).
@@ -4552,8 +4697,7 @@ Bool gk_auth_all(GK k, List(Int) fnode, List(Str) need, List(Str) decl, List(Str
     Str how = if (via == "") { "uses" } else { "uses (through `" + gk_fn_label(k, fnode, via) + "`)" };
     Str m = if (miss == "") { "" } else { "function `" + k.fs.names[i] + "` " + how + " capability `" + cap_show(miss) + "` but is not granted it: declare @requires(" + all + ") on it (no ambient authority, spec §20)" };
     Bool printed = if (m != "") { eprintln("error[E0219]: " + m) } else { false };
-    Bool rest = gk_auth_all(k, fnode, need, decl, direct, calls, i + 1);
-    return printed || rest;
+    return gk_auth_at(k, fnode, need, decl, direct, calls, i + 1, acc || printed);
 }
 
 // A `test` block's body is checked like a function: its @requires prefix
@@ -4575,18 +4719,59 @@ Bool gk_auth_tests(GK k, List(Str) need, List(Str) decl, Int id, Bool acc) {
 }
 
 // A spawn body, with everything it calls, is granted only the spawn's
-// capability list (spec §19: child ≤ parent, a fresh CapEnv).
+// capability list (spec §19: child ≤ parent, a fresh CapEnv). That
+// includes a closure made outside the spawn and called in its body by
+// the name it is bound to: the binding is immutable and never shadowed,
+// so the call can only run that lambda. A closure reached any other way
+// (passed to a function, held in a record) is checked when it runs: its
+// provider calls ask the running capability frames, as a named
+// function's do (lower.resid's lw_lambda).
 Bool gk_auth_spawns(GK k, List(Str) need, List(Str) decl, Int id, Bool acc) {
     if (id >= k.g.ns.len()) { return acc; }
     Bool bad = if (k.g.ns[id].kind != "spawn") { false } else {
         List(Str) e = [];
+        List(Int) none = [];
         GKF f = gk_facts(k, id, GKF {.calls = e, .provs = e, .writes = e});
         Str n = gk_need_callees(k.fs, need, decl, f.calls, 0, gk_direct(f, 0, ""));
         PRes sc = cap_list_at(k.g.ns[id].aux + ")", 0, true, "");
         Str all = gk_uncovered_all(csv_split_or_empty(n), 0, sc.ty, "");
-        if (all == "") { false } else { eprintln("error[E0214]: spawn body uses capabilities its list [" + fmt_caps(sc.ty) + "] does not grant: " + all + " (spec §19)") }
+        GKF fl = gk_closure_facts(k, id, none, f).f;
+        Str nl = gk_need_callees(k.fs, need, decl, fl.calls, 0, gk_direct(fl, 0, ""));
+        Str alll = gk_uncovered_all(csv_split_or_empty(nl), 0, sc.ty, "");
+        if (all != "") { eprintln("error[E0214]: spawn body uses capabilities its list [" + fmt_caps(sc.ty) + "] does not grant: " + all + " (spec §19)") }
+        else if (alll != "") { eprintln("error[E0214]: spawn body uses capabilities its list [" + fmt_caps(sc.ty) + "] does not grant: " + alll + ", through a closure it calls (spec §19)") }
+        else { false }
     };
     return gk_auth_spawns(k, need, decl, id + 1, acc || bad);
+}
+
+// Facts of every lambda that a call under `id` reaches by the name it is
+// bound to (`Int closure(Int) f = lambda(...) {...}; ... f(x)`), and of
+// the lambdas those reach in turn; `seen` holds the bindings followed.
+type GKCF = { GKF f; List(Int) seen; };
+
+GKCF gk_closure_facts(GK k, Int id, List(Int) seen, GKF f) {
+    Int lam = gk_called_lambda(k, id);
+    Int b = if (lam >= 0) { kg_def(k.rs, id) } else { -1 };
+    GKCF here = if (lam < 0 || seen.contains(b)) { GKCF {.f = f, .seen = seen} } else {
+        gk_closure_facts(k, lam, seen.concat([b]), gk_facts(k, lam, f))
+    };
+    return gk_closure_kids(k, id, 0, here);
+}
+
+GKCF gk_closure_kids(GK k, Int id, Int i, GKCF a) {
+    if (i >= k.g.ns[id].nk) { return a; }
+    GKCF a2 = gk_closure_facts(k, kg_kid(k.g, id, i), a.seen, a.f);
+    return gk_closure_kids(k, id, i + 1, a2);
+}
+
+// The lambda node a call names through a local binding, or -1.
+Int gk_called_lambda(GK k, Int id) {
+    if (k.g.ns[id].kind != "call") { return -1; }
+    Int d = kg_def(k.rs, id);
+    if (d < 0 || (k.g.ns[d].kind != "bind" && k.g.ns[d].kind != "rbind") || k.g.ns[d].nk < 1) { return -1; }
+    Int v = kg_kid(k.g, d, k.g.ns[d].nk - 1);
+    return if (k.g.ns[v].kind == "lambda") { v } else { -1 };
 }
 
 Bool gk_authority(GK k, List(Int) fnode, GKFs facts) {
@@ -4599,7 +4784,7 @@ Bool gk_authority(GK k, List(Int) fnode, GKFs facts) {
     return fns || tests || spawns;
 }
 
-Int gk_finish(GK k0, List(Int) fnode, Str src, Str smap) {
+Int gk_finish(GK k0, List(Int) fnode, Str src, Str smap, Str smap0) {
     TL l = k0.tl;
     GK k = gk_tl(k0, TL {.on = l.on, .keys = l.keys, .tys = l.tys, .mem = l.mem, .bm = sort(l.bm)});
     Sigs fs = k.fs;
@@ -4613,8 +4798,11 @@ Int gk_finish(GK k0, List(Int) fnode, Str src, Str smap) {
     Bool err3 = e0218_check_all(fs, eff, facts.pcsv, 0);
     Bool err4 = gk_spawn_all(k, fnode, eff, 0);
     Bool err5 = gk_authority(k, fnode, facts);
-    Bool err6 = gk_internals_at(k, 0, gk_newlines(src, 0, ListBuf()), smap, false);
-    if (err1 || err2 || err3 || err4 || err5 || err6) { return 1; }
+    Bool err6 = gk_internals_at(k, 0, gk_newlines(src, 0, ListBuf()), smap, gm_prelude_pos(src), false);
+    Bool err7 = sec_wide_scan(k, k.tl.keys, k.tl.tys, 0, src, smap);
+    Bool err8 = dv_scan(k, 0, gk_newlines(src, 0, ListBuf()), src, smap, dv_std_dir(gm_pk(smap0), 0), false);
+    Bool err9 = op_scan(k, 0, gk_newlines(src, 0, ListBuf()), src, smap, op_std_root(gm_pk(smap0), 0), false);
+    if (err1 || err2 || err3 || err4 || err5 || err6 || err7 || err8 || err9) { return 1; }
     if (!resid_quiet()) { println("typecheck OK"); }
     return 0;
 }
@@ -4694,7 +4882,7 @@ Bool gk_case_all(Kg g, Int id, Str src, Str smap, Bool acc) {
 // anything else is a mistake, never an implicit parameter.
 
 Bool gm_builtin_type(Str w) {
-    return w == "Int" || w == "UInt" || w == "Float" || w == "Dec" || w == "Bool" || w == "Str" || w == "Bytes" || w == "List" || w == "Map" || w == "Set" || w == "Option" || w == "Result" || w == "ListBuf" || w == "StrBuf" || w == "BytesBuf" || w == "Void" || w == "File" || w == "Range" || w == "Expect" || w == "ISize" || w == "USize" || w == "closure" || w == "rt" || w == "Unknown" || w == "Slice" || w == "Provider" || w == "Vec";
+    return w == "Int" || w == "UInt" || w == "Float" || w == "Dec" || w == "Bool" || w == "Str" || w == "Bytes" || w == "List" || w == "Map" || w == "Set" || w == "Option" || w == "Result" || w == "ListBuf" || w == "StrBuf" || w == "BytesBuf" || w == "Void" || w == "File" || w == "Range" || w == "Expect" || w == "ISize" || w == "USize" || w == "closure" || w == "rt" || w == "Unknown" || w == "Slice" || w == "Provider" || w == "Vec" || w == "Secret";
 }
 
 // The first unknown type name in type text t, or "".
@@ -4742,10 +4930,18 @@ Map(Str, Int) gm_add_names(List(Str) ns, Int i, Map(Str, Int) m) {
 Bool gm_unknown_types(Kg g, Int id, Map(Str, Int) known, Str src, Str smap, Bool acc) {
     if (id >= kg_count(g)) { return acc; }
     Str u = if (g.ns[id].kind == "ty") { gm_unknown_in(g.ns[id].text, 0, known) } else { "" };
+    Str sk = if (g.ns[id].kind == "ty" && u == "") { sec_key_err(g.ns[id].text) } else { "" };
+    if (sk != "") { gk_diag("E0253", sk, g, id, src, smap); }
+    Str sb = if (g.ns[id].kind == "ty" && u == "" && sk == "") { sec_bytes_err(g.ns[id].text) } else { "" };
+    if (sb != "") { gk_diag("E0253", sb, g, id, src, smap); }
+    Str sw = if (g.ns[id].kind == "ty" && u == "" && sk == "" && sb == "") { sec_wide_err(g.ns[id].text) } else { "" };
+    if (sw != "") { gk_diag("E0258", sw, g, id, src, smap); }
+    Bool rsv = (g.ns[id].kind == "fn" || g.ns[id].kind == "proto") && sec_reserved(g.ns[id].text);
+    if (rsv) { gk_diag("E0259", "`" + g.ns[id].text + "` is a builtin of secret values (spec §48) and cannot be redefined: a function by that name would replace it in every module, libraries included", g, id, src, smap); }
     Str near = if (u == "") { "" } else { gm_near(known.keys(), 0, u) };
     Str hint = if (near != "") { " (did you mean `" + near + "`?)" } else { "; a type parameter is a single uppercase letter (T, K, V)" };
     if (u != "") { gk_diag("E0001", "type error: unknown type `" + u + "`" + hint, g, id, src, smap); }
-    return gm_unknown_types(g, id + 1, known, src, smap, acc || u != "");
+    return gm_unknown_types(g, id + 1, known, src, smap, acc || u != "" || sk != "" || sb != "" || sw != "" || rsv);
 }
 
 // ─── Ambiguous imports (E0223) ──────────────────────────────────────
@@ -4795,7 +4991,9 @@ pub GKR gk_analyze_m(Kg g, Int unit, Str src, Str smap0, Bool log, Bool fin) {
 
     List(Int) e = [];
     List(Str) es = [];
-    TL tl = TL {.on = log, .keys = e, .tys = es, .mem = e, .bm = e};
+    // A program with secrets logs every expression's type, so E0258 is
+    // checked on inferred types and generic copies too (sec_wide_scan).
+    TL tl = TL {.on = log || sec_graph_has(g, 0), .keys = e, .tys = es, .mem = e, .bm = e};
     Map(Str, Int) m0 = {};
     if (gm_unknown_types(g, 0, gm_known_types(sg, m0), src, smap, false)) { return GKR {.status = 1, .ty = es, .def = e, .rs = rs, .fs = sg.fs, .log = es}; }
     GX gx = gm_gx_init(g, unit, sg, src, smap0);
@@ -4805,7 +5003,7 @@ pub GKR gk_analyze_m(Kg g, Int unit, Str src, Str smap0, Bool log, Bool fin) {
     GKS r = gk_decls(gm_log_beaten(k, 0), unit, 0, src, smap);
     if (r.err != "") { return GKR {.status = 1, .ty = es, .def = e, .rs = rs, .fs = sg.fs, .log = es}; }
     if (!fin && r.k.gx.log.len() > 0) { return GKR {.status = 0, .ty = es, .def = e, .rs = rs, .fs = sg.fs, .log = r.k.gx.log}; }
-    Int st = gk_finish(r.k, sg.fnode, src, smap);
+    Int st = gk_finish(r.k, sg.fnode, src, smap, smap0);
     Int n = kg_count(g);
     List(Str) ty = gk_dense_ty(sort(r.k.tl.keys), r.k.tl.tys, 0, 0, n, "", ListBuf());
     List(Int) def = gk_dense_def(sort(r.k.tl.mem), rs, 0, 0, n, ListBuf());
@@ -4882,4 +5080,803 @@ pub Str gk_dump_types(Kg g, GKR r, Int id, Str sb, Int lim) {
     Str dn = if (d >= 0) { f" -> {d} " + g.ns[d].kind + " " + g.ns[d].text } else { "" };
     Str line = if (t == "" && dn == "") { "" } else { f"{id} " + g.ns[id].kind + " " + g.ns[id].text + " : " + t + dn + "\n" };
     return gk_dump_types(g, r, id + 1, str_sb_append(sb, line), lim);
+}
+
+// ─── Secret values (PLAN-secret-type.md) ────────────────────────────
+// `Secret(T)` is a type: a value present but not observable by control
+// flow, an address or an output. Secrecy travels in the type column, so
+// the checks below sit only where a value could leave it.
+
+pub Bool sec_is(Str t) { return str_starts_with(str_trim(t), "Secret("); }
+
+pub Str sec_inner(Str t) {
+    Str c = str_trim(t);
+    return if (sec_is(c)) { str_trim(str_slice(c, 7, str_len(c) - 1)) } else { c };
+}
+
+Bool sec_any_arg(List(Str) ts, Int i) {
+    if (i >= ts.len()) { return false; }
+    return sec_is(ts[i]) || sec_any_arg(ts, i + 1);
+}
+
+Str sec_strip_args(List(Str) ts, Int i, Str acc) {
+    if (i >= ts.len()) { return acc; }
+    Str a = sec_inner(ts[i]);
+    return sec_strip_args(ts, i + 1, if (i == 0) { a } else { acc + "," + a });
+}
+
+Bool sec_assume_moded(List(Str) cs, Int i) {
+    if (i >= cs.len()) { return false; }
+    Bool m = str_starts_with(cs[i], "assume:") || str_starts_with(cs[i], "assume(");
+    return if (m) { true } else { sec_assume_moded(cs, i + 1) };
+}
+
+Bool sec_provision_moded(List(Str) cs, Int i) {
+    if (i >= cs.len()) { return false; }
+    Bool m = str_starts_with(cs[i], "provision:") || str_starts_with(cs[i], "provision(");
+    return if (m) { true } else { sec_provision_moded(cs, i + 1) };
+}
+
+Bool sec_declassify_moded(List(Str) cs, Int i) {
+    if (i >= cs.len()) { return false; }
+    Str c = cs[i];
+    Bool m = str_starts_with(c, "declassify:") || str_starts_with(c, "declassify(");
+    return if (m) { true } else { sec_declassify_moded(cs, i + 1) };
+}
+
+// A type a secret may not wrap: one whose shape is control (Option,
+// Result, a sum type), a key or set element, a handle, a function, or a
+// secret already.
+Str sec_wrap_err(GK k, Str t) {
+    Str h = ty_head(t);
+    if (sec_is(t)) { return "Secret(" + t + ") nests a secret in a secret"; }
+    if (h == "Option" || h == "Result") { return "a secret cannot wrap " + h + ": whether it holds a value is control flow; use " + h + "(Secret(...)) instead"; }
+    if (h == "Map" || h == "Set") { return "a secret cannot wrap a " + h + ": its keys decide where lookups go"; }
+    if (h == "File" || is_fn_type(t)) { return "a secret cannot wrap a " + h; }
+    if (h == "Bytes") { return sec_bytes_msg(t); }
+    if (sumtype_index(k.fs, t) >= 0) { return "a secret cannot wrap the sum type " + t + ": its variant is control flow"; }
+    return "";
+}
+
+// secret(x): Secret(T) from a T. declassify(s, "reason"): the T back,
+// authorized by the `declassify` family (gk_builtin_family) and recorded
+// on the graph.
+GKT sec_call(GK k, Int id, Str n, Str exp) {
+    Int argn = k.g.ns[id].nk;
+    // classify(x) is secret(x) for a public value that only takes part in
+    // secret computation (a padding constant, public message bytes): no
+    // secrecy is claimed for it, so E0250 does not apply.
+    if (n == "secret" || n == "classify") {
+        if (argn != 1) { return gterr(k, n + "(x) takes 1 argument", id); }
+        Str pexp = if (sec_is(exp)) { sec_inner(exp) } else { "" };
+        GKA a = gk_args(k, id, 0, if (pexp == "") { gk_nopts() } else { [pexp] }, 0, "", 0);
+        if (a.err != "") { return gterr(a.k, a.err, a.at); }
+        Str t = str_trim(a.tys);
+        Str we = sec_wrap_err(a.k, t);
+        if (we != "") { return gterr(a.k, "E0253: " + we, id); }
+        return gt(a.k, "Secret(" + t + ")", id);
+    }
+    if (argn != 2) { return gterr(k, "declassify(s, \"reason\") takes 2 arguments", id); }
+    Int rn = gk_kid(k, id, 1);
+    Bool lit = k.g.ns[rn].kind == "lit" && str_starts_with(k.g.ns[rn].text, "\"") && str_len(k.g.ns[rn].text) > 2;
+    if (!lit) { return gterr(k, "E0251: declassify takes its reason as a non-empty string literal, so the graph records why a secret became public", rn); }
+    GKT st = gk_expr(k, gk_kid(k, id, 0), if (exp == "") { "" } else { "Secret(" + exp + ")" });
+    if (st.err != "") { return st; }
+    if (!sec_is(st.ty)) { return gterr(st.k, "declassify expects a Secret(T), got " + st.ty, id); }
+    GKT rt = gk_expr(st.k, rn, "Str");
+    if (rt.err != "") { return rt; }
+    return gt(rt.k, sec_inner(st.ty), id);
+}
+
+// provisioned_key(k, "reason") (PLAN-labels.md §5.2): k, accepted as an
+// unpredictable key on the word of whoever provisioned it -- a stated
+// reliance, granted by the `provision` family and recorded on the graph as
+// `provision.<reason>`. The reason is a non-empty string literal (E0251).
+// assumed(x, "reason") (PLAN-attestation.md §3.6): x, vouched for on an
+// assumption rather than evidence -- granted by the `assume` family, used
+// by lib/verify/assume.resid's assume(), which pins the value.
+GKT sec_assumed(GK k, Int id, Str exp) {
+    if (k.g.ns[id].nk != 2) { return gterr(k, "assumed(x, \"reason\") takes 2 arguments", id); }
+    Int rn = gk_kid(k, id, 1);
+    Bool lit = k.g.ns[rn].kind == "lit" && str_starts_with(k.g.ns[rn].text, "\"") && str_len(k.g.ns[rn].text) > 2;
+    if (!lit) { return gterr(k, "E0251: assumed takes its reason as a non-empty string literal", rn); }
+    GKT xt = gk_expr(k, gk_kid(k, id, 0), exp);
+    if (xt.err != "") { return xt; }
+    GKT rt = gk_expr(xt.k, rn, "Str");
+    if (rt.err != "") { return rt; }
+    return gt(rt.k, xt.ty, id);
+}
+
+GKT sec_provision(GK k, Int id, Str exp) {
+    if (k.g.ns[id].nk != 2) { return gterr(k, "provisioned_key(k, \"reason\") takes 2 arguments", id); }
+    Int rn = gk_kid(k, id, 1);
+    Bool lit = k.g.ns[rn].kind == "lit" && str_starts_with(k.g.ns[rn].text, "\"") && str_len(k.g.ns[rn].text) > 2;
+    if (!lit) { return gterr(k, "E0251: provisioned_key takes its reason as a non-empty string literal, so the graph records whose word a key rests on", rn); }
+    GKT kt = gk_expr(k, gk_kid(k, id, 0), "List(Secret(UInt(8)))");
+    if (kt.err != "") { return kt; }
+    if (kt.ty != "List(Secret(UInt(8)))") { return gterr(kt.k, "provisioned_key expects a List(Secret(UInt(8))), got " + kt.ty, id); }
+    GKT rt = gk_expr(kt.k, rn, "Str");
+    if (rt.err != "") { return rt; }
+    return gt(rt.k, "List(Secret(UInt(8)))", id);
+}
+
+// A builtin that computes on the payload of a secret keeps it secret.
+GKT sec_lift(GK k, Int id, Str n, Str tys, Int count) {
+    ERes b = check_builtin(n, sec_strip_args(str_split(tys, ","), 0, ""), count, 0, "", gk_nopts());
+    if (b.err != "") { return gterr(k, b.err, id); }
+    return gt(k, "Secret(" + b.ty + ")", id);
+}
+
+// An operator with a secret operand: bitwise operators and shifts by a
+// public amount stay secret; checked arithmetic would abort on overflow
+// (a branch on the value); comparisons and division reveal it.
+GKT sec_bin(GK k, Int id, Str op, Int l, Int r, Str lt0, Str rt0) {
+    Kg g = k.g;
+    Str lt = sec_inner(lt0);
+    Str rt = sec_inner(rt0);
+    Bool shift = op == "<<" || op == ">>";
+    Bool bitw = op == "&" || op == "|" || op == "^";
+    if (op == "+" || op == "-" || op == "*") { return gterr(k, "E0254: checked " + op + " on a secret would abort on overflow, a branch on its value; use wrapping_" + (if (op == "+") { "add" } else if (op == "-") { "sub" } else { "mul" }) + "", id); }
+    if (shift && sec_is(rt0)) { return gterr(k, "E0255: a secret shift amount decides the operation's timing; shift by a public amount", id); }
+    if (!shift && !bitw) { return gterr(k, "E0255: operator " + op + " on a secret reveals it (comparison, logic, division or remainder); use ct_eq / ct_select, or declassify it", id); }
+    Bool lhs_lit = gk_bare_int(g, l);
+    Bool rhs_lit = gk_bare_int(g, r);
+    Str lty = if (lhs_lit && !shift && is_int_ty(rt)) { rt } else { lt };
+    Str rty = if (rhs_lit && !shift && is_int_ty(lt)) { lt } else { rt };
+    if (!is_int_ty(lty) || !is_int_ty(rty)) { return gterr(k, "operator " + op + " between " + lt0 + " and " + rt0 + ": bitwise operators on secrets take integers", id); }
+    Str bt = bin_type(op, lty, rty);
+    if (bt == "ERR" || str_starts_with(bt, "ERR")) { return gterr(k, "operator " + op + " between " + lt0 + " and " + rt0, id); }
+    GK ka = if (lhs_lit && lty != lt0) { gk_tl(k, tl_add(k.tl, l, lty)) } else { k };
+    GK kb = if (rhs_lit && rty != rt0) { gk_tl(ka, tl_add(ka.tl, r, rty)) } else { ka };
+    return gt(kb, "Secret(" + bt + ")", id);
+}
+
+// The path from a type to a secret it holds ("" when none): the type
+// itself, a record field, a list, option, result, map or set element, or
+// a variant payload, at any depth (E0256). Each type is explored once.
+type SP = { Str path; Str seen; };
+
+// `b` is the behavior being reached (Show or Serialize): a type with its
+// own instance of it is shown by that instance, which is flow-checked, so
+// the walk stops there.
+pub Str sec_path(GK k, Str b, Str t, Str at) { return sec_walk(k, b, t, at, ",").path; }
+
+Bool sec_own_inst(GK k, Str b, Str t) {
+    Int i = gm_find_inst_at(k, b, [t], 0, -1, 0, 0);
+    return i >= 0 && !sec_default_impl(kg_part(k.g.ns[i].aux, 2));
+}
+
+SP sec_walk(GK k, Str b, Str t, Str at, Str seen) {
+    if (t == "") { return SP {.path = "", .seen = seen}; }
+    if (sec_is(t)) { return SP {.path = at, .seen = seen}; }
+    if (str_contains(seen, "," + t + ",") || sec_own_inst(k, b, t)) { return SP {.path = "", .seen = seen}; }
+    Str seen1 = seen + t + ",";
+    Str h = ty_head(t);
+    Int sd = k.sd.get(h) else { -1 };
+    if (!str_contains(t, "Secret(") && sd < 0 && sumtype_index(k.fs, t) < 0) { return SP {.path = "", .seen = seen1}; }
+    if (sd >= 0) { return sec_fields(k, b, t, sd, 0, at, seen1); }
+    return sec_parts(k, b, gm_components(k, t), 0, at + "[...]", seen1);
+}
+
+SP sec_fields(GK k, Str b, Str t, Int sd, Int i, Str at, Str seen) {
+    if (i >= k.g.ns[sd].nk) { return SP {.path = "", .seen = seen}; }
+    Str fname = k.g.ns[kg_kid(k.g, sd, i)].text;
+    Str ft = gk_field_type(k, t, fname);
+    SP p = if (ft == "") { SP {.path = "", .seen = seen} } else { sec_walk(k, b, ft, at + "." + fname, seen) };
+    return if (p.path != "") { p } else { sec_fields(k, b, t, sd, i + 1, at, p.seen) };
+}
+
+SP sec_parts(GK k, Str b, List(Str) ps, Int i, Str at, Str seen) {
+    if (i >= ps.len()) { return SP {.path = "", .seen = seen}; }
+    SP p = sec_walk(k, b, ps[i], at, seen);
+    return if (p.path != "") { p } else { sec_parts(k, b, ps, i + 1, at, p.seen) };
+}
+
+// ─── Erasing secrets before lowering ────────────────────────────────
+// After checking and reduction, `Secret(T)` lowers exactly as T: every
+// type text loses its Secret( ) wrappers and secret(x) / declassify(x, r)
+// become the parenthesized x. Literals and format parts keep their text.
+// A declassify that still computes at run time keeps a mark (the paren's
+// aux is `@declassify`): lowering checks the `declassify` grant against
+// the running capability frame (resid_cap_check) at the entry of each
+// function, lambda and spawn body that holds one. One whose value the
+// reducer already knows (a literal) is code no longer, and is not marked.
+
+pub KP sec_erase(KP p) {
+    if (!sec_graph_has(p.g, 0)) { return p; }
+    Map(Str, Int) none = {};
+    Map(Str, Int) user = sec_user_fns(p.g, 0, none);
+    Kg g = Kg {.ns = sec_erase_ns(p.g, 0, user, ListBuf()), .kids = p.g.kids, .docs = p.g.docs};
+    return KP {.g = g, .id = p.id, .pos = p.pos, .err = p.err};
+}
+
+pub Bool sec_graph_has(Kg g, Int i) {
+    if (i >= g.ns.len()) { return false; }
+    KN n = g.ns[i];
+    Bool lit = n.kind == "lit" || n.kind == "fpart" || n.kind == "fspec";
+    Bool hit = !lit && (str_contains(n.text, "Secret(") || str_contains(n.aux, "Secret(") || ((n.kind == "call" || n.kind == "mcall") && sec_is_wrapper(n.text)));
+    return if (hit) { true } else { sec_graph_has(g, i + 1) };
+}
+
+Map(Str, Int) sec_user_fns(Kg g, Int i, Map(Str, Int) acc) {
+    if (i >= g.ns.len()) { return acc; }
+    Bool f = g.ns[i].kind == "fn" && sec_is_wrapper(g.ns[i].text);
+    return sec_user_fns(g, i + 1, if (f) { acc.insert(g.ns[i].text, 1) } else { acc });
+}
+
+List(KN) sec_erase_ns(Kg g, Int i, Map(Str, Int) user, ListBuf(KN) acc) {
+    if (i >= g.ns.len()) { return acc.finish(); }
+    KN n = g.ns[i];
+    Bool lit = n.kind == "lit" || n.kind == "fpart" || n.kind == "fspec";
+    Bool wrap = (n.kind == "call" || n.kind == "mcall") && sec_is_wrapper(n.text) && !user.contains(n.text) && n.nk >= 1;
+    Bool mark = wrap && n.text == "declassify" && !sec_known_under(g, kg_kid(g, i, 0));
+    Bool pmark = wrap && n.text == "provisioned_key";
+    KN m = if (wrap) { KN {.kind = "paren", .text = "", .aux = if (mark) { "@declassify" } else if (pmark) { "@provision" } else { "" }, .a0 = n.a0, .nk = 1, .sp = n.sp, .ep = n.ep, .kc = kg_kc("paren")} }
+           else if (lit) { n }
+           else { KN {.kind = n.kind, .text = sec_erase_text(n.text), .aux = sec_erase_text(n.aux), .a0 = n.a0, .nk = n.nk, .sp = n.sp, .ep = n.ep, .kc = n.kc} };
+    return sec_erase_ns(g, i + 1, user, acc.push(m));
+}
+
+// A literal, possibly under parentheses and secret(...)/classify(...):
+// a value the reducer knows, with no run-time code left to check.
+Bool sec_known_under(Kg g, Int id) {
+    KN n = g.ns[id];
+    if (n.kind == "lit") { return true; }
+    Bool pass = n.nk >= 1 && (n.kind == "paren" || (n.kind == "call" && (n.text == "secret" || n.text == "classify")));
+    return if (pass) { sec_known_under(g, kg_kid(g, id, 0)) } else { false };
+}
+
+// Type text with every `Secret(X)` replaced by X.
+pub Str sec_erase_text(Str t) {
+    Int at = sec_find(t, 0);
+    if (at < 0) { return t; }
+    Int open = at + 6;
+    Int close = sec_close(t, open + 1, 1);
+    if (close < 0) { return t; }
+    return sec_erase_text(str_slice(t, 0, at) + str_slice(t, open + 1, close) + str_slice(t, close + 1, str_len(t)));
+}
+
+// The next `Secret(` at a word start, or -1.
+Int sec_find(Str t, Int from) {
+    Int rel = str_find(str_slice(t, from, str_len(t)), "Secret(");
+    if (rel < 0) { return 0 - 1; }
+    Int at = from + rel;
+    Bool word = at == 0 || !(is_alnum(str_char_at(t, at - 1)) || str_char_at(t, at - 1) == 95);
+    return if (word) { at } else { sec_find(t, at + 1) };
+}
+
+Int sec_close(Str t, Int i, Int depth) {
+    if (i >= str_len(t)) { return 0 - 1; }
+    Int c = str_char_at(t, i);
+    if (c == 40) { return sec_close(t, i + 1, depth + 1); }
+    if (c == 41) { return if (depth == 1) { i } else { sec_close(t, i + 1, depth - 1) }; }
+    return sec_close(t, i + 1, depth);
+}
+
+// The prelude's structural instances (`Show(T) = resid_show;`).
+Bool sec_default_impl(Str impl) { return impl == "resid_show" || impl == "resid_serialize"; }
+
+// An observation behavior (Show, Serialize, Hash, Eq, Ord) asked of a
+// secret, directly or through the prelude's structural instances.
+Bool sec_obs(Str b, List(Str) args) { return gm_builtin_behavior(b) && str_contains(list_join(args, 0, ",", ""), "Secret("); }
+
+Str sec_obs_msg(Str b, List(Str) args) {
+    return "E0257: " + b + "(" + list_join(args, 0, ", ", "") + "): " + b + " is never given for a secret, since its result would reveal it; declassify the value first";
+}
+
+// ct_select(c, a, b): a where the secret Bool c is true, else b, by masks
+// rather than a branch. a and b are integers of one type (at most 64 bits)
+// or Bools, secret or public; the result is secret.
+GKT sec_select(GK k, Int id, Str exp) {
+    if (k.g.ns[id].nk != 3) { return gterr(k, "ct_select(c, a, b) takes 3 arguments", id); }
+    GKT c = gk_expr(k, gk_kid(k, id, 0), "");
+    if (c.err != "") { return c; }
+    if (c.ty != "Secret(Bool)") { return gterr(c.k, "ct_select's condition is a Secret(Bool), got " + c.ty + " (a public condition can use if)", id); }
+    Int an = gk_kid(k, id, 1);
+    Int bn = gk_kid(k, id, 2);
+    Str want = if (sec_is(exp)) { sec_inner(exp) } else { "" };
+    GKT a = gk_expr(c.k, an, if (gk_bare_int(k.g, an) && want == "") { "" } else { want });
+    if (a.err != "") { return a; }
+    Str at = sec_inner(a.ty);
+    GKT b = gk_expr(a.k, bn, at);
+    if (b.err != "") { return b; }
+    Str bt = sec_inner(b.ty);
+    Bool alit = gk_bare_int(k.g, an);
+    Bool blit = gk_bare_int(k.g, bn);
+    Str t = if (alit && !blit) { bt } else { at };
+    Bool num = is_int_ty(t) && ty_bits(num_norm(t)) <= 64;
+    if (!(num || t == "Bool")) { return gterr(b.k, "ct_select chooses between integers of at most 64 bits or Bools, got " + at + " and " + bt, id); }
+    Bool same = ty_same(t, if (alit && !blit) { bt } else { at }) && (ty_same(t, bt) || blit);
+    if (!same && !(alit && ty_same(t, bt))) { return gterr(b.k, "ct_select's two values must have one type, got " + a.ty + " and " + b.ty, id); }
+    GK ka = if (alit && t != a.ty) { gk_tl(b.k, tl_add(b.k.tl, an, t)) } else { b.k };
+    GK kb = if (blit && t != b.ty) { gk_tl(ka, tl_add(ka.tl, bn, t)) } else { ka };
+    return gt(kb, "Secret(" + t + ")", id);
+}
+
+// A method on a secret: only its public length, for lists, bytes and text.
+GKT sec_method(GK k, Int id, Str bt, Str m, Int na) {
+    Str in = sec_inner(bt);
+    Bool seq = is_list_type(in) || in == "Str" || in == "Bytes" || str_starts_with(in, "Bytes(") || str_starts_with(in, "Str(");
+    if (m == "len" && seq) {
+        if (na != 0) { return gterr(k, ".len() takes no arguments", id); }
+        return gt(k, "Int", id);
+    }
+    return gterr(k, "E0255: ." + m + "() on a secret (" + bt + ") could reveal it; only a secret sequence's .len() is public. Call a function that takes the secret (wrapping_add, ct_select, ct_eq), or declassify it", id);
+}
+
+// E0250: a secret whose value the compiler knows after reduction is one
+// every holder of the binary has. Refused, unless the program states that
+// it is public by passing it straight to declassify. Prints the diagnostic
+// and returns true when one is found.
+pub Bool sec_known_check(KP p, Str src, Str smap) {
+    if (!sec_graph_has(p.g, 0)) { return false; }
+    Map(Str, Int) none = {};
+    Map(Str, Int) user = sec_user_fns(p.g, 0, none);
+    if (user.contains("secret")) { return false; }
+    Map(Int, Int) ok = sec_declassified(p.g, 0, user, {});
+    Int bad = sec_known_at(p.g, 0, ok);
+    if (bad < 0) { return false; }
+    gk_diag("E0250", "secret(...) of a value the compiler knows: the value is in the binary for everyone who has it. Read the secret at run time, or pass it straight to declassify(...) to state that it is public", p.g, bad, src, smap);
+    return true;
+}
+
+// secret(...) calls written directly inside declassify(...).
+Map(Int, Int) sec_declassified(Kg g, Int i, Map(Str, Int) user, Map(Int, Int) acc) {
+    if (i >= g.ns.len()) { return acc; }
+    KN n = g.ns[i];
+    Bool d = n.kind == "call" && n.text == "declassify" && !user.contains("declassify") && n.nk >= 1;
+    Int c = if (d) { kg_kid(g, i, 0) } else { 0 - 1 };
+    Bool inner = c >= 0 && g.ns[c].kind == "call" && g.ns[c].text == "secret";
+    return sec_declassified(g, i + 1, user, if (inner) { acc.insert(c, 1) } else { acc });
+}
+
+Int sec_known_at(Kg g, Int i, Map(Int, Int) ok) {
+    if (i >= g.ns.len()) { return 0 - 1; }
+    KN n = g.ns[i];
+    Bool hit = n.kind == "call" && n.text == "secret" && n.nk == 1 && !ok.contains(i) && sec_known_tree(g, kg_kid(g, i, 0), 0);
+    return if (hit) { i } else { sec_known_at(g, i + 1, ok) };
+}
+
+// Built only from literals: nothing read at run time feeds it.
+Bool sec_known_tree(Kg g, Int id, Int depth) {
+    if (depth > 64) { return false; }
+    Str k = g.ns[id].kind;
+    Bool shape = k == "lit" || k == "list" || k == "struct" || k == "finit" || k == "paren" || k == "un" || k == "bin" || k == "cast" || k == "ty" || k == "map" || k == "entry" || k == "set" || k == "named" || k == "emptyb";
+    if (!shape) { return false; }
+    return sec_known_kids(g, id, 0, depth);
+}
+
+Bool sec_known_kids(Kg g, Int id, Int i, Int depth) {
+    if (i >= g.ns[id].nk) { return true; }
+    return sec_known_tree(g, kg_kid(g, id, i), depth + 1) && sec_known_kids(g, id, i + 1, depth);
+}
+
+// E0253 in a written type: a secret as a Map key or a Set element, where it
+// would decide where lookups and inserts go.
+Str sec_key_err(Str t) {
+    Int m = sec_find_head(t, "Map(", 0);
+    Int st = sec_find_head(t, "Set(", 0);
+    Bool mk = m >= 0 && str_starts_with(str_trim(str_slice(t, m + 4, str_len(t))), "Secret(");
+    Bool se = st >= 0 && str_starts_with(str_trim(str_slice(t, st + 4, str_len(t))), "Secret(");
+    if (mk) { return "a secret cannot be a Map key: keys decide where lookups go (" + t + ")"; }
+    if (se) { return "a secret cannot be a Set element: elements decide where lookups go (" + t + ")"; }
+    if (m >= 0 && sec_key_err(str_slice(t, m + 4, str_len(t))) != "") { return sec_key_err(str_slice(t, m + 4, str_len(t))); }
+    if (st >= 0 && sec_key_err(str_slice(t, st + 4, str_len(t))) != "") { return sec_key_err(str_slice(t, st + 4, str_len(t))); }
+    return "";
+}
+
+// E0253 in a written or inferred type: a secret Bytes or Bytes(N), or "".
+// A heap Bytes' length is found by scanning for its zero byte, and its
+// conversions stop at one, so its timing and its value depend on the
+// bytes; secret byte strings are List(Secret(UInt(8))).
+Str sec_bytes_err(Str t) { return sec_bytes_at(t, 0); }
+
+Str sec_bytes_at(Str t, Int from) {
+    Int at = sec_find_head(t, "Secret(", from);
+    if (at < 0) { return ""; }
+    Str in = str_trim(str_slice(t, at + 7, str_len(t)));
+    Bool hit = str_starts_with(in, "Bytes") && (str_starts_with(in, "Bytes)") || str_starts_with(in, "Bytes("));
+    if (hit) { return sec_bytes_msg(str_slice(in, 0, imp_close_paren(in, 0, 0) - 1)); }
+    return sec_bytes_at(t, at + 7);
+}
+
+Str sec_bytes_msg(Str t) {
+    return "a secret cannot wrap " + t + ": a byte string's length and conversions scan for a zero byte, a branch on the secret; use List(Secret(UInt(8)))";
+}
+
+// The first `h` (e.g. "Map(") at a word start in t, from `from`, or -1.
+Int sec_find_head(Str t, Str h, Int from) {
+    Int rel = str_find(str_slice(t, from, str_len(t)), h);
+    if (rel < 0) { return 0 - 1; }
+    Int at = from + rel;
+    Bool word = at == 0 || !(is_alnum(str_char_at(t, at - 1)) || str_char_at(t, at - 1) == 95);
+    return if (word) { at } else { sec_find_head(t, h, at + 1) };
+}
+
+// The builtins that erase to their first argument (spec §48).
+Bool sec_is_wrapper(Str n) { return n == "secret" || n == "declassify" || n == "secret_split" || n == "secret_join" || n == "classify" || n == "provisioned_key" || n == "assumed"; }
+
+// secret_split(s): a Secret(List(T)) as a List(Secret(T)), its length
+// public; secret_join(xs) the other way. Both are the same bytes at run
+// time; they let generic code over List(T) take secret byte strings.
+GKT sec_shape(GK k, Int id, Str n, Str exp) {
+    if (k.g.ns[id].nk != 1) { return gterr(k, n + " takes 1 argument", id); }
+    GKT a = gk_expr(k, gk_kid(k, id, 0), "");
+    if (a.err != "") { return a; }
+    if (n == "secret_split") {
+        Str in = sec_inner(a.ty);
+        if (!sec_is(a.ty) || !is_list_type(in)) { return gterr(a.k, "secret_split expects a Secret(List(T)), got " + a.ty, id); }
+        return gt(a.k, "List(Secret(" + inner_of(in) + "))", id);
+    }
+    Str el = if (is_list_type(a.ty)) { inner_of(a.ty) } else { "" };
+    if (!sec_is(el)) { return gterr(a.k, "secret_join expects a List(Secret(T)), got " + a.ty, id); }
+    return gt(a.k, "Secret(List(" + sec_inner(el) + "))", id);
+}
+
+// Builtins that compute on a secret's payload without branching on it.
+// ct_hide is the optimizer barrier for a mask built from a secret (a sign
+// mask, say): the value is unchanged and stays secret. The AES round and
+// carry-less multiply instructions (aesni_enc_round, aesni_enc_last_round,
+// gf128_mul_hw) run in constant time on the CPUs that have them, so a
+// secret block or key goes through them and the result is secret.
+Bool sec_liftable(Str n) { return (str_starts_with(n, "wrapping_") && wrap_conv_type(n) != "") || n == "wrapping_add" || n == "wrapping_sub" || n == "wrapping_mul" || n == "wrapping_uadd" || n == "wrapping_usub" || n == "wrapping_umul" || n == "ct_hide" || n == "aesni_enc_round" || n == "aesni_enc_last_round" || n == "gf128_mul_hw"; }
+
+// E0258: a secret integer wider than 32 bits stored in a list, builder,
+// vector, map or set, directly (List(Secret(Int))) or under a secret
+// container (Secret(List(Int))). The runtime keeps list integers below 2^54
+// inline and boxes larger ones, a choice made on the value: a secret that
+// could be that large would branch on itself. 64-bit secrets live in
+// records and parameters; secret byte strings are UInt(8) lists.
+pub Str sec_wide_err(Str t) {
+    Str c = str_trim(t);
+    if (c == "" || !str_contains(c, "Secret(")) { return ""; }
+    Str h = ty_head(c);
+    List(Str) as = ty_args(c);
+    Bool box = h == "List" || h == "ListBuf" || h == "Set" || h == "Map" || h == "Vec";
+    Str direct = if (box) { sec_wide_args(as, 0, false) } else { "" };
+    if (direct != "") { return "a secret " + direct + " in " + c + " could be boxed by its value (a branch on the secret); keep wide secrets in records and parameters, and use a 32-bit or narrower element type (UInt(8) for bytes)"; }
+    Str under = if (sec_is(c)) { sec_wide_container(sec_inner(c)) } else { "" };
+    if (under != "") { return "a secret " + under + " element in " + c + " could be boxed by its value (a branch on the secret); use a 32-bit or narrower element type (UInt(8) for bytes)"; }
+    return sec_wide_list(as, 0);
+}
+
+Str sec_wide_list(List(Str) as, Int i) {
+    if (i >= as.len()) { return ""; }
+    Str e = sec_wide_err(as[i]);
+    return if (e != "") { e } else { sec_wide_list(as, i + 1) };
+}
+
+// The first container argument that is a secret wide integer, or "".
+Str sec_wide_args(List(Str) as, Int i, Bool any) {
+    if (i >= as.len()) { return ""; }
+    Str a = str_trim(as[i]);
+    Bool hit = sec_is(a) && sec_wide_int(sec_inner(a));
+    return if (hit) { sec_inner(a) } else { sec_wide_args(as, i + 1, any) };
+}
+
+// A container whose elements are wide integers: its element type, or "".
+Str sec_wide_container(Str t) {
+    Str h = ty_head(t);
+    List(Str) as = ty_args(t);
+    Bool box = h == "List" || h == "ListBuf" || h == "Set" || h == "Map" || h == "Vec";
+    if (!box) { return ""; }
+    return sec_wide_plain(as, 0);
+}
+
+Str sec_wide_plain(List(Str) as, Int i) {
+    if (i >= as.len()) { return ""; }
+    Str a = str_trim(as[i]);
+    return if (sec_wide_int(a)) { a } else { sec_wide_plain(as, i + 1) };
+}
+
+Bool sec_wide_int(Str t) {
+    Str n = num_norm(str_trim(t));
+    return is_int_ty(n) && ty_bits(n) > 32;
+}
+
+// The same rule over every type the checker gave an expression, so inferred
+// types and generic copies are covered as well as written ones.
+Bool sec_wide_scan(GK k, List(Int) keys, List(Str) tys, Int i, Str src, Str smap) {
+    if (i >= keys.len()) { return false; }
+    Str t = tys[keys[i] % 4294967296];
+    Str eb = if (str_contains(t, "Secret(")) { sec_bytes_err(t) } else { "" };
+    if (eb != "") {
+        gk_diag("E0253", eb, k.g, keys[i] / 4294967296, src, smap);
+        return true;
+    }
+    Str e = if (str_contains(t, "Secret(")) { sec_wide_err(t) } else { "" };
+    if (e != "") {
+        gk_diag("E0258", e, k.g, keys[i] / 4294967296, src, smap);
+        return true;
+    }
+    return sec_wide_scan(k, keys, tys, i + 1, src, smap);
+}
+
+// Builtin names of secret values that no program may define (E0259).
+Bool sec_reserved(Str n) { return sec_is_wrapper(n) || n == "ct_select"; }
+
+// A cast of a secret integer that keeps every value (the same or a wider
+// width of the same signedness, or unsigned to a wider signed type) lowers
+// to an extension with no check, so its result is secret. Any other cast
+// is checked, and its abort would branch on the value (E0255).
+GKT sec_cast(GK k, Int id, Str to, Str from0) {
+    Str from = sec_inner(from0);
+    Str t = if (sec_is(to)) { sec_inner(to) } else { to };
+    if (!is_int_ty(from) || !is_int_ty(t)) { return gterr(k, "cast from " + from0 + " to " + to + " not supported", id); }
+    Int sw = ty_bits(from);
+    Int tw = ty_bits(t);
+    Bool ss = signed_ty(from);
+    Bool ts = signed_ty(t);
+    Bool keeps = (ss == ts && tw >= sw) || (!ss && ts && tw > sw);
+    if (!keeps) { return gterr(k, "E0255: cast from " + from0 + " to " + to + " is checked and would abort on some values, a branch on the secret; widen losslessly, or use wrapping_*", id); }
+    return gt(k, "Secret(" + num_norm(t) + ")", id);
+}
+
+// ─── Devices (spec §49, PLAN-device-access.md) ─────────────────────
+// `device` is a provider whose verbs take a descriptor: a record of a type
+// lib/dev/device.resid declares with `@descriptor(<kind>)`. Here: the
+// verbs' types, which of them write, and E0260 (descriptors, the engine
+// and the raw runtime entry belong to lib/dev/). After reduction,
+// compiler/device.resid checks each descriptor's value (E0262-E0264),
+// records it and calls the engine.
+
+// The name of the type lib/dev/device.resid declares with
+// `@descriptor(role)`, or "" when no such module is imported.
+pub Str dv_role_ty(Kg g, Str role) { return dv_role_at(g, "@descriptor(" + role + ")", 0); }
+
+Str dv_role_at(Kg g, Str tag, Int i) {
+    if (i >= g.ns.len()) { return ""; }
+    KN n = g.ns[i];
+    Bool hit = (n.kind == "struct_t" || n.kind == "sum_t") && str_contains(n.aux, tag);
+    return if (hit) { n.text } else { dv_role_at(g, tag, i + 1) };
+}
+
+// device.<m>(...): the descriptor of its kind, then the inputs.
+GKT dv_gk_verb(GK k, Int id, Str m) {
+    if (!dev_verb(m)) { return gterr(k, "unknown provider method device." + m + " (the device verbs are ioctl, transact, configfs_report, read_attr and sequence)", id); }
+    Str dt = dv_role_ty(k.g, m);
+    Str outt = dv_role_ty(k.g, "out");
+    Str errt = dv_role_ty(k.g, "error");
+    if (dt == "" || outt == "" || errt == "") { return gterr(k, "E0260: device." + m + " takes a descriptor from lib/dev/: import a device module (for example dev/sev_guest.resid)", id); }
+    Int want = if (m == "read_attr") { 1 } else { 2 };
+    Int na = k.g.ns[id].nk - 1;
+    if (na != want) { return gterr(k, f"device.{m} takes {want} argument(s), got {na}", id); }
+    Str second = if (m == "ioctl" || m == "sequence") { "List(" + dv_role_ty(k.g, "in") + ")" } else if (m == "transact") { "List(UInt(8))" } else if (m == "configfs_report") { dv_role_ty(k.g, "report_req") } else { "" };
+    GKT d = gk_expr(k, gk_kid(k, id, 1), dt);
+    if (d.err != "") { return d; }
+    if (!ty_same(d.ty, dt)) { return gterr(d.k, "E0260: device." + m + " takes a descriptor of type " + dt + " from lib/dev/, got " + d.ty, id); }
+    if (want == 1) { return gt(d.k, "Result(List(" + outt + "), " + errt + ")", id); }
+    GKT a = gk_expr(d.k, gk_kid(d.k, id, 2), second);
+    if (a.err != "") { return a; }
+    if (str_contains(a.ty, "Secret(")) { return gterr(a.k, "E0255: device." + m + " takes public inputs, got " + a.ty + "; declassify the secret first", id); }
+    if (!ty_same(a.ty, second) && !params_accept(second, a.ty, 1)) { return gterr(a.k, "device." + m + " expects (" + dt + ", " + second + "), got (" + d.ty + ", " + a.ty + ")", id); }
+    return gt(a.k, "Result(List(" + outt + "), " + errt + ")", id);
+}
+
+// Does this device verb call write? read_attr never does; otherwise the
+// descriptor's `write` decides, read before reduction from the literal the
+// argument names. Anything else counts as a write: a read-only grant then
+// covers only a descriptor whose `.write = false` is written down.
+Bool dv_writes(GK k, Int id) {
+    if (k.g.ns[id].text == "read_attr") { return false; }
+    if (k.g.ns[id].nk < 2) { return true; }
+    Int lit = dv_lit_of(k, kg_kid(k.g, id, 1));
+    return lit < 0 || dv_finit_text(k.g, lit, "write", 0) != "false";
+}
+
+// The struct literal a descriptor argument names: the literal itself, or
+// the one a zero-argument function returns as its whole body; -1 when
+// neither.
+Int dv_lit_of(GK k, Int a) {
+    KN n = k.g.ns[a];
+    if (n.kind == "struct") { return a; }
+    if (n.kind == "paren" && n.nk == 1) { return dv_lit_of(k, kg_kid(k.g, a, 0)); }
+    if (n.kind != "call" || n.nk != 0) { return 0 - 1; }
+    Int d = kg_def(k.rs, a);
+    if (d < 0 || k.g.ns[d].kind != "fn" || k.g.ns[d].nk != 2) { return 0 - 1; }
+    Int body = kg_kid(k.g, d, 1);
+    if (k.g.ns[body].kind != "block" || k.g.ns[body].nk != 1) { return 0 - 1; }
+    Int r = kg_kid(k.g, body, 0);
+    if (k.g.ns[r].kind != "ret" || k.g.ns[r].nk != 1) { return 0 - 1; }
+    Int e = kg_kid(k.g, r, 0);
+    return if (k.g.ns[e].kind == "struct") { e } else { 0 - 1 };
+}
+
+// The text of field `f`'s literal in struct literal `st` ("" when absent
+// or not a literal).
+pub Str dv_finit_text(Kg g, Int st, Str f, Int i) {
+    if (i >= g.ns[st].nk) { return ""; }
+    Int fi = kg_kid(g, st, i);
+    if (g.ns[fi].kind == "finit" && g.ns[fi].text == f && g.ns[fi].nk == 1) {
+        Int v = kg_kid(g, fi, 0);
+        return if (g.ns[v].kind == "lit") { g.ns[v].text } else { "" };
+    }
+    return dv_finit_text(g, st, f, i + 1);
+}
+
+// The standard library's device directory, "<stdroot>/dev/", from the
+// driver's "@stdroot::dir" line. Membership is by path prefix, so the root
+// must be absolute: a relative one ("lib" when RESID_HOME is unset) would
+// also match a project's own ./lib/dev/. Without an absolute root nothing
+// counts as lib/dev/ (dv_no_std, which no path starts with): fail closed.
+pub Str dv_std_dir(List(Str) pk, Int i) {
+    if (i >= pk.len()) { return dv_no_std(); }
+    if (str_starts_with(pk[i], "@stdroot::")) {
+        Str r = imp_normalize(str_slice(pk[i], 10, str_len(pk[i])));
+        return if (str_starts_with(r, "/")) { r + "/dev/" } else { dv_no_std() };
+    }
+    return dv_std_dir(pk, i + 1);
+}
+
+pub Str dv_no_std() { return "\x01/dev/"; }
+
+// The descriptor kinds a program may not write a literal of.
+Bool dv_kind_tag(Str aux) {
+    return str_contains(aux, "@descriptor(ioctl)") || str_contains(aux, "@descriptor(transact)") || str_contains(aux, "@descriptor(read_attr)") || str_contains(aux, "@descriptor(configfs_report)") || str_contains(aux, "@descriptor(sequence)");
+}
+
+// E0260 at node `id`: what is wrong, or "". `inlib`: the node is in
+// lib/dev/ of the standard library.
+Str dv_misplaced(GK k, Int id, Bool inlib) {
+    KN n = k.g.ns[id];
+    Str kd = n.kind;
+    Bool decl = kd == "fn" || kd == "struct_t" || kd == "sum_t" || kd == "alias_t" || kd == "ctype_t" || kd == "cwhere_t" || kd == "test" || kd == "bdecl" || kd == "behavior" || kd == "proto";
+    if (decl && str_contains(n.aux, "@descriptor") && !inlib) { return "`@descriptor` on `" + n.text + "`: device descriptors are declared only in the standard library's lib/dev/, so the set of kernel interfaces a program can reach is reviewed in one place"; }
+    if (kd == "struct" && !inlib) {
+        Int d = k.sd.get(n.text) else { 0 - 1 };
+        if (d >= 0 && dv_kind_tag(k.g.ns[d].aux)) { return "a `" + n.text + "` literal outside lib/dev/: a device descriptor comes only from the standard library's lib/dev/ (call its wrappers, or pass one of its descriptors)"; }
+    }
+    if ((kd == "call" || kd == "ref") && (n.text == "resid_device_call" || n.text == "resid_device_call_w" || n.text == "resid_device_secret") && kg_def(k.rs, id) < 0 && !inlib) {
+        return "`" + n.text + "` is the device engine's runtime entry; a program reaches a device through the `device` verbs with a descriptor from lib/dev/";
+    }
+    if (kd == "call" || kd == "ref") {
+        Int d = kg_def(k.rs, id);
+        if (d >= 0 && k.g.ns[d].kind == "fn" && str_contains(k.g.ns[d].aux, "@descriptor(engine")) { return "`" + n.text + "` is the engine of a `device` verb; call the verb (device.ioctl(...)) and the compiler calls the engine after checking the descriptor"; }
+    }
+    return "";
+}
+
+// Nodes dv_misplaced looks at (the source path is looked up only for these).
+Bool dv_struct_cand(GK k, KN n) {
+    if (n.kind != "struct") { return false; }
+    Int d = k.sd.get(n.text) else { 0 - 1 };
+    return d >= 0 && dv_kind_tag(k.g.ns[d].aux);
+}
+
+Bool dv_call_cand(GK k, Int id, KN n) {
+    if (n.kind != "call" && n.kind != "ref") { return false; }
+    if (str_starts_with(n.text, "resid_device_")) { return true; }
+    Int d = kg_def(k.rs, id);
+    return d >= 0 && k.g.ns[d].kind == "fn" && str_contains(k.g.ns[d].aux, "@descriptor(engine");
+}
+
+// `device` names the provider everywhere: a binding, function, type or
+// variant of that name would make `device.ioctl(...)` mean something else.
+// A pattern (`if (Some(device) = x)`, `Some(device) = x;`) keeps its
+// variant in `text` and binds the name in `aux`.
+Bool dv_rebinds(KN n) {
+    Str kd = n.kind;
+    if (kd == "pat" || kd == "letpat") { return n.aux == "device"; }
+    if (n.text != "device") { return false; }
+    Bool local = kd == "param" || kd == "bind" || kd == "rbind" || kd == "lparam" || kd == "for" || kd == "name";
+    Bool decl = kd == "fn" || kd == "struct_t" || kd == "sum_t" || kd == "alias_t" || kd == "ctype_t" || kd == "cwhere_t" || kd == "variant" || kd == "behavior" || kd == "bdecl" || kd == "proto";
+    return local || decl;
+}
+
+// Every node is looked at, so the test for one worth a closer look reads
+// the node's fields in place (binding the whole node would copy it).
+Bool dv_scan(GK k, Int id, List(Int) nls, Str src, Str smap, Str stddev, Bool acc) {
+    if (id >= k.g.ns.len()) { return acc; }
+    Bool cand = str_contains(k.g.ns[id].aux, "@descriptor") || k.g.ns[id].text == "device" || k.g.ns[id].aux == "device" || (k.g.ns[id].kind == "struct" && dv_struct_cand(k, k.g.ns[id])) || ((k.g.ns[id].kind == "call" || k.g.ns[id].kind == "ref") && dv_call_cand(k, id, k.g.ns[id]));
+    if (!cand) { return dv_scan(k, id + 1, nls, src, smap, stddev, acc); }
+    KN n = k.g.ns[id];
+    Bool bad = if (!cand) { false } else {
+        Str p = gk_src_path(k, id, nls, smap);
+        Bool inlib = str_starts_with(p, stddev) && !str_contains(str_slice(p, str_len(stddev), str_len(p)), "/");
+        Str m0 = dv_misplaced(k, id, inlib);
+        Str m = if (m0 != "" && stddev == dv_no_std()) { m0 + " (the standard library's location is not an absolute path, so no file counts as its lib/dev/: set RESID_HOME to an absolute path)" } else { m0 };
+        Bool b1 = if (m != "") { dv_diag("E0260", m, k.g, id, src, smap) } else { false };
+        Bool b2 = if (dv_rebinds(n)) { dv_diag("E0001", "type error: `device` is the device provider (spec §49) and cannot be rebound; choose another name", k.g, id, src, smap) } else { false };
+        b1 || b2
+    };
+    return dv_scan(k, id + 1, nls, src, smap, stddev, acc || bad);
+}
+
+// ─── Opaque types and runtime-record builtins (PLAN-labels.md §6.5) ──
+// `@opaque pub type T = {...}`: only the file that declares T builds one
+// (E0276), so a value of T comes only from that file's functions; fields
+// stay readable. The challenge-record builtins are each the business of one
+// standard-library file (E0277): new records and their accept/export marks
+// lib/challenge.resid and lib/challenge_export.resid, spending and binding a record to a reply the device
+// engines, which only compiler-rewritten verbs reach (E0260).
+
+// The standard library's root with a trailing slash, from "@stdroot::";
+// a relative root matches nothing (dv_std_dir's reasoning).
+pub Str op_std_root(List(Str) pk, Int i) {
+    if (i >= pk.len()) { return dv_no_std(); }
+    if (str_starts_with(pk[i], "@stdroot::")) {
+        Str r = imp_normalize(str_slice(pk[i], 10, str_len(pk[i])));
+        return if (str_starts_with(r, "/")) { r + "/" } else { dv_no_std() };
+    }
+    return op_std_root(pk, i + 1);
+}
+
+// The files that may call a challenge builtin, "" for any.
+Str op_chal_home(Str n) {
+    if (n == "resid_chal_new" || n == "resid_chal_mark") { return "challenge.resid|challenge_export.resid"; }
+    if (n == "resid_chal_left") { return "challenge_export.resid"; }
+    if (n == "resid_chal_spend" || n == "resid_chal_bind" || n == "resid_tr_note") { return "dev/device.resid|dev/device_write.resid"; }
+    if (n == "resid_tr_read") { return "transcript.resid"; }
+    return "";
+}
+
+Bool op_home_ok(Str p, Str root, List(Str) homes, Int i) {
+    if (i >= homes.len()) { return false; }
+    if (p == root + homes[i]) { return true; }
+    return op_home_ok(p, root, homes, i + 1);
+}
+
+Bool op_scan(GK k, Int id, List(Int) nls, Str src, Str smap, Str root, Bool acc) {
+    if (id >= k.g.ns.len()) { return acc; }
+    Str kd = k.g.ns[id].kind;
+    // A generic record's literal is respelled with its type arguments
+    // (`Box(Int)`): the declaration is its head's.
+    Bool lit = kd == "struct" && op_opaque_decl(k, ty_head(k.g.ns[id].text)) >= 0;
+    Bool chal = (kd == "call" || kd == "ref") && (str_starts_with(k.g.ns[id].text, "resid_chal_") || str_starts_with(k.g.ns[id].text, "resid_tr_")) && kg_def(k.rs, id) < 0 && op_chal_home(k.g.ns[id].text) != "";
+    Bool prov = kd == "call" && (k.g.ns[id].text == "provisioned_key" || k.g.ns[id].text == "assumed") && kg_def(k.rs, id) < 0;
+    if (!lit && !chal && !prov) { return op_scan(k, id + 1, nls, src, smap, root, acc); }
+    Str p = imp_normalize(gk_src_path(k, id, nls, smap));
+    Str n = if (lit) { ty_head(k.g.ns[id].text) } else { k.g.ns[id].text };
+    // The standard library relies on a provisioned key only where it loads
+    // one (lib/tlskey.resid), passing the reliance to its callers' grant.
+    Bool isasm = prov && n == "assumed";
+    Bool pbad = prov && str_starts_with(p, root) && p != root + (if (isasm) { "verify/assume.resid" } else { "tlskey.resid" });
+    Bool pd = if (pbad && isasm) { dv_diag("E0289", "assumed in the standard library outside lib/verify/assume.resid: only an application states an assumption (PLAN-attestation.md §3.6)", k.g, id, src, smap) } else if (pbad) { dv_diag("E0278", "provisioned_key in the standard library outside its key loader (lib/tlskey.resid): a library takes a key as given and lets its caller state the reliance (PLAN-labels.md §5.2)", k.g, id, src, smap) } else { false };
+    Bool bad = if (prov) { pd } else if (lit) {
+        Int d = op_opaque_decl(k, n);
+        Str dp = imp_normalize(gk_src_path(k, d, nls, smap));
+        if (dp != p && !op_sibling_ok(p, dp, op_opaque_files(k.g.ns[d].aux), 0)) { dv_diag("E0276", "a `" + n + "` literal outside " + dp + ": the type is @opaque, so only the file that declares it (and the files it names) builds one; call their functions", k.g, id, src, smap) } else { false }
+    } else {
+        Str what = if (str_starts_with(n, "resid_tr_")) { "keeps the program's transcript" } else { "keeps a challenge record's marks" };
+        if (!op_home_ok(p, root, str_split(op_chal_home(n), "|"), 0)) { dv_diag("E0277", "`" + n + "` " + what + "; only the standard library's " + str_replace(op_chal_home(n), "|", " or ") + " calls it (a program issues and checks records through lib/challenge.resid and the device verbs, and reads its transcript through lib/transcript.resid)", k.g, id, src, smap) } else { false }
+    };
+    return op_scan(k, id + 1, nls, src, smap, root, acc || bad);
+}
+
+// The sibling files `@opaque("a.resid", ...)` lets build the type too
+// ("*" for every file beside the declaring one).
+List(Str) op_opaque_files(Str aux) {
+    Int a = str_find(aux, "@opaque(");
+    if (a < 0) { return []; }
+    Int b = str_find_char(aux, 41, a);
+    if (b < 0) { return []; }
+    return str_split(str_replace(str_replace(str_slice(aux, a + 8, b), "\"", ""), " ", ""), ",");
+}
+
+Bool op_sibling_ok(Str p, Str dp, List(Str) fs, Int i) {
+    if (i >= fs.len()) { return false; }
+    Int sl = op_last_slash(dp, str_len(dp) - 1);
+    Str dir = if (sl < 0) { "" } else { str_slice(dp, 0, sl + 1) };
+    if (fs[i] != "" && p == dir + fs[i]) { return true; }
+    // "*": every file of the declaring file's directory (lib/verify/).
+    if (fs[i] == "*" && dir != "" && str_starts_with(p, dir) && str_find_char(str_slice(p, str_len(dir), str_len(p)), 47, 0) < 0) { return true; }
+    return op_sibling_ok(p, dp, fs, i + 1);
+}
+
+Int op_last_slash(Str s, Int i) {
+    if (i < 0) { return -1; }
+    if (str_char_at(s, i) == 47) { return i; }
+    return op_last_slash(s, i - 1);
+}
+
+// The declaration node of an @opaque record type named n, or -1.
+Int op_opaque_decl(GK k, Str n) {
+    Int d = k.sd.get(n) else { 0 - 1 };
+    if (d < 0 || !str_contains(k.g.ns[d].aux, "@opaque")) { return -1; }
+    return d;
+}
+
+Bool dv_diag(Str code, Str msg, Kg g, Int at, Str src, Str smap) {
+    gk_diag(code, msg, g, at, src, smap);
+    return true;
 }

@@ -57,5 +57,6 @@ String escapes are `\n`, `\t`, `\r`, `\\`, `\"`, `\'` and `\xHH` (two
 hex digits, ASCII through `\x7f`); any other escape is a compile error.
 Write any other character directly (source files are UTF-8). A string
 cannot contain a NUL character, so `\0` and `\x00` are refused there. A
-byte string `b"..."` takes `\xHH` for any byte, and `\0`. There is no
-`null` literal.
+byte string `b"..."` takes `\xHH` for any byte, and `\0`; a zero byte
+(`\0`, `\x00`) is accepted only where the literal is a `Bytes(N)`, since a
+heap `Bytes` ends at its first zero byte. There is no `null` literal.

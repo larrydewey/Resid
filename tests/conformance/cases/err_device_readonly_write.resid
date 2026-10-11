@@ -1,0 +1,11 @@
+// device(readonly) covers descriptors whose `write` is false; deriving a
+// key (SNP_GET_DERIVED_KEY, `.write = true`) needs the full grant.
+import "dev/sev_guest.resid";
+import "dev/sev_guest_key.resid";
+
+@requires(device(readonly))
+Int main() {
+    Bool ok = match (snp_get_derived_key(0, 0, 0, 0, 0)) { Ok(k) => true, Err(e) => false, };
+    println(f"{ok}");
+    return 0;
+}

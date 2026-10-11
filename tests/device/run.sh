@@ -1,0 +1,214 @@
+#!/usr/bin/env bash
+# Device descriptor checks (spec §49, PLAN-device-access.md): E0262-E0264
+# on descriptors that only the standard library's lib/dev/ may declare, and
+# the device verbs run end to end against devices any user can open.
+#
+# Usage: tests/device/run.sh [-c COMPILER] [FILTER...]
+#
+# The cases need descriptors that are wrong on purpose, and a descriptor is
+# refused outside lib/dev/ (E0260). So the suite builds a private standard
+# library: a copy of lib/ in a temporary RESID_HOME, with each case's
+# fixture NAME.dev installed as lib/dev/fx_NAME.resid. The real lib/dev/
+# never holds a broken descriptor.
+#
+# For each tests/device/cases/NAME.resid:
+#   NAME.dev      the fixture module (imports device.resid)
+#   NAME.fail     compilation must fail
+#   NAME.compile  lines that must each appear in the compiler's output
+#   NAME.out      expected stdout of the built binary
+#   NAME.needs    device paths the case runs against, one per line: when one
+#                 is missing (or not readable and writable) here, the case
+#                 is skipped
+#
+# The cases that run (device_*, configfs_*) talk to real devices any user
+# can open -- /dev/ptmx, /dev/zero, /dev/null, sysfs attributes, a DRM
+# render node -- through the isolated device host (runtime/rt/device.resid).
+# The host's fault paths (seccomp, guard pages, canaries, a killed host, a
+# malformed reply, the configfs flow on a fake configfs) are
+# tests/runtime/device_host.c: they need a self-test mode no Resid program
+# can turn on.
+set -uo pipefail
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+CASES="$ROOT/tests/device/cases"
+COMPILER="$ROOT/build/boot/stage2.bin"
+while getopts "c:" opt; do
+    case "$opt" in
+        c) COMPILER="$(realpath "$OPTARG")" ;;
+        *) exit 2 ;;
+    esac
+done
+shift $((OPTIND - 1))
+# The private RESID_HOME below hides the checkout's keys/, so name the key.
+if [ -z "${RESID_SIGNING_KEY:-}" ] && [ -f "$ROOT/keys/resid-ed25519.key" ]; then
+    export RESID_SIGNING_KEY="$ROOT/keys/resid-ed25519.key"
+elif [ -z "${RESID_SIGNING_KEY:-}" ]; then
+    KEYDIR="$(mktemp -d)"
+    "$COMPILER" keygen "$KEYDIR" >/dev/null && export RESID_SIGNING_KEY="$KEYDIR/resid-ed25519.key"
+fi
+[ -x "$COMPILER" ] || { echo "compiler not found: $COMPILER (run ./boot.sh)"; exit 2; }
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+HOME_DIR="$WORK/home"
+mkdir -p "$HOME_DIR"
+cp -r "$ROOT/lib" "$HOME_DIR/lib"
+ln -s "$ROOT/build/boot/rt.ll" "$HOME_DIR/rt.ll"
+ln -s "$ROOT/build/boot/rt-aarch64.ll" "$HOME_DIR/rt-aarch64.ll"
+for f in "$CASES"/*.dev; do
+    cp "$f" "$HOME_DIR/lib/dev/fx_$(basename "$f" .dev).resid"
+done
+export RESID_HOME="$HOME_DIR"
+pass=0; fail=0; skip=0
+for f in "$CASES"/*.resid; do
+    n="$(basename "$f" .resid)"
+    if [ "$#" -gt 0 ]; then
+        hit=0; for pat in "$@"; do [[ "$n" == *"$pat"* ]] && hit=1; done
+        [ "$hit" -eq 1 ] || continue
+    fi
+    if [ -f "$CASES/$n.needs" ]; then
+        missing=""
+        while IFS= read -r dev; do
+            [ -z "$dev" ] && continue
+            { [ -r "$dev" ] && [ -w "$dev" ]; } || missing="$dev"
+        done < "$CASES/$n.needs"
+        if [ -n "$missing" ]; then echo "SKIP $n (no usable $missing here)"; skip=$((skip + 1)); continue; fi
+    fi
+    d="$WORK/$n"; mkdir -p "$d"; cp "$f" "$d/$n.resid"
+    why=""
+    (cd "$d" && timeout 600 "$COMPILER" "$n.resid" -o bin) > "$d/c.log" 2>&1; rc=$?
+    if [ -f "$CASES/$n.fail" ]; then
+        [ "$rc" -ne 0 ] || why="compiled, but must fail"
+    else
+        [ "$rc" -eq 0 ] || why="compile failed: $(grep -m1 -i error "$d/c.log")"
+    fi
+    if [ -f "$CASES/$n.compile" ]; then
+        while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            grep -qF -- "$line" "$d/c.log" || why="${why:+$why; }compiler output lacks '$line'"
+        done < "$CASES/$n.compile"
+    fi
+    if [ -z "$why" ] && [ -f "$CASES/$n.out" ]; then
+        (cd "$d" && timeout 60 ./bin > out 2>/dev/null) || why="binary exited $?"
+        cmp -s "$d/out" "$CASES/$n.out" || why="${why:+$why; }stdout differs from $n.out"
+    fi
+    if [ -z "$why" ]; then echo "PASS $n"; pass=$((pass + 1)); else echo "FAIL $n: $why"; fail=$((fail + 1)); fi
+done
+# E0260 decides "in lib/dev/" by path prefix, so the standard library's
+# root must be absolute. Without RESID_HOME it is the relative `lib`, which
+# a project's own ./lib/dev/ also matches: then nothing counts as lib/dev/
+# and a descriptor there is refused, not trusted.
+if [ "$#" -eq 0 ] || [[ " $* " == *" e0260_relative_stdroot "* ]]; then
+    P="$WORK/relroot"; mkdir -p "$P/lib/dev" "$P/build/boot"
+    cp "$ROOT/lib/dev/device.resid" "$ROOT/lib/dev/device_write.resid" "$P/lib/dev/"; cp "$ROOT"/lib/*.resid "$P/lib/"
+    ln -s "$ROOT/build/boot/rt.ll" "$P/build/boot/rt.ll"
+    printf '%s\n' 'import "device.resid";' 'import "device_write.resid";' \
+        'pub IoctlOp own_op() { return IoctlOp {.name = "own.op", .path = "/dev/mem", .requests = dv_both(dv_iowr(77, 0, 16)), .size = 16, .fields = [Buffer(0, -1, 64, InOut, false), Scalar(8, 8, Out)], .write = true, .version = Unversioned, .stability = OutOfTree}; }' \
+        '@requires(device)' \
+        'pub Str own_call() { return match (device.ioctl(own_op(), [InBytes([(UInt(8))1])])) { Ok(o) => "ok", Err(e) => device_error_text(e), }; }' > "$P/lib/dev/own.resid"
+    printf '%s\n' 'import "dev/own.resid";' '@requires(device)' 'Int main() { println(own_call()); return 0; }' > "$P/main.resid"
+    (cd "$P" && env -u RESID_HOME timeout 600 "$COMPILER" main.resid -o bin) > "$P/c.log" 2>&1; rc=$?
+    if [ "$rc" -ne 0 ] && grep -q "E0260.*not an absolute path" "$P/c.log"; then
+        echo "PASS e0260_relative_stdroot"; pass=$((pass + 1))
+    else
+        echo "FAIL e0260_relative_stdroot: a project's own lib/dev/ counted as the standard library's (exit $rc)"; fail=$((fail + 1))
+    fi
+fi
+# The device host is hooked into main only of a program that calls a
+# device entry by its exact symbol (dv_calls_host): a device program's IR
+# calls resid_device_host first, a plain one's never.
+if [ "$#" -eq 0 ] || [[ " $* " == *" device_hook_exact "* ]]; then
+    P="$WORK/hook"; mkdir -p "$P"
+    printf '%s\n' 'import "dev/fx_device_ioctl.resid";' '@requires(device(readonly))' 'Int main() { println(match (device.ioctl(fx_ptn(), [])) { Ok(o) => "ok", Err(e) => device_error_text(e), }); return 0; }' > "$P/dev.resid"
+    printf '%s\n' 'Str spells_it() { return "call ptr @resid_device_call(ptr %x)"; }' 'Int main() { println(spells_it()); return 0; }' > "$P/plain.resid"
+    (cd "$P" && timeout 600 "$COMPILER" dev.resid -o dev && timeout 600 "$COMPILER" plain.resid -o plain) > "$P/c.log" 2>&1; rc=$?
+    nd=$(grep -c 'call void @resid_device_host()' "$P/dev.ll" 2>/dev/null)
+    np=$(grep -c 'resid_device_host' "$P/plain.ll" 2>/dev/null)
+    if [ "$rc" -eq 0 ] && [ "$nd" = 1 ] && [ "$np" = 0 ]; then
+        echo "PASS device_hook_exact"; pass=$((pass + 1))
+    else
+        echo "FAIL device_hook_exact: exit $rc, device program hooks $nd, plain program $np ($(grep -m1 -i error "$P/c.log"))"; fail=$((fail + 1))
+    fi
+fi
+# A program in secret mode (not dumpable, runtime/rt/malloc.resid) still
+# reaches its devices: device_secret_out is such a program (its main
+# switches the mode on) and its calls work -- where the Yama ptrace policy
+# is 1 or more; without it a secret program's host calls are refused
+# (tests/runtime/device_host.c's device_secret_mode_yama_gate), and this
+# check is skipped.
+if [ "$#" -eq 0 ] || { [[ " $* " == *" device_secret_mode_host "* ]] && [ -d "$WORK/device_secret_out" ]; }; then
+    scope="$(cat /proc/sys/kernel/yama/ptrace_scope 2>/dev/null)"
+    if [ -z "$scope" ] || [ "$scope" = 0 ]; then
+        echo "SKIP device_secret_mode_host (no Yama ptrace policy here)"; skip=$((skip + 1))
+    elif grep -q 'call i8 @resid_secret_mode_set(i1 true)' "$WORK/device_secret_out/bin.ll" 2>/dev/null && cmp -s "$WORK/device_secret_out/out" "$CASES/device_secret_out.out"; then
+        echo "PASS device_secret_mode_host"; pass=$((pass + 1))
+    else
+        echo "FAIL device_secret_mode_host: device_secret_out is not in secret mode, or its output differs"; fail=$((fail + 1))
+    fi
+fi
+# The C harness's entries into the runtime's self-tests
+# (resid_device_host_test, resid_device_test_parent, resid_host_test_yama;
+# the only writers of a self-test mode, a fake configfs root, a test
+# deadline or a Yama policy file) are named by no compiler and are not in
+# a device program's binary: the link drops them,
+# so the self-test branches in runtime/rt/device.resid run with mode 0 and
+# no fake root there.
+if [ "$#" -eq 0 ] || [[ " $* " == *" device_selftest_entry_absent "* ]]; then
+    if ! command -v nm >/dev/null; then
+        echo "SKIP device_selftest_entry_absent (no nm)"; skip=$((skip + 1))
+    else
+        P="$WORK/selftest"; mkdir -p "$P"
+        printf '%s\n' 'import "dev/fx_device_ioctl.resid";' '@requires(device(readonly))' 'Int main() { println(match (device.ioctl(fx_ptn(), [])) { Ok(o) => "ok", Err(e) => device_error_text(e), }); return 0; }' > "$P/dev.resid"
+        (cd "$P" && timeout 600 "$COMPILER" dev.resid -o dev) > "$P/c.log" 2>&1; rc=$?
+        nm "$P/dev" > "$P/nm.txt" 2>&1
+        nt=$(grep -c -E 'device_host_test|device_test_parent|host_test_yama' "$P/nm.txt")
+        nh=$(grep -c -E ' resid_device_host$' "$P/nm.txt")
+        if [ "$rc" -eq 0 ] && [ "$nt" = 0 ] && [ "$nh" = 1 ]; then
+            echo "PASS device_selftest_entry_absent"; pass=$((pass + 1))
+        else
+            echo "FAIL device_selftest_entry_absent: exit $rc, test entries $nt, host entry $nh ($(grep -m1 -i error "$P/c.log"))"; fail=$((fail + 1))
+        fi
+    fi
+fi
+# The generated descriptors (lib/dev/uapi_*.resid) are what the committed
+# uapi header snapshot generates (tools/resid-devgen --check; tests/devgen
+# has the rest of the generator's cases).
+if [ "$#" -eq 0 ] || [[ " $* " == *" devgen_check "* ]]; then
+    if ! command -v python3 >/dev/null || ! command -v clang >/dev/null; then
+        echo "SKIP devgen_check (no python3 or clang)"; skip=$((skip + 1))
+    elif "$ROOT/tools/resid-devgen" --check > "$WORK/devgen.log" 2>&1; then
+        echo "PASS devgen_check"; pass=$((pass + 1))
+    else
+        echo "FAIL devgen_check: $(grep -m2 -E 'FAIL|snapshot|resid-devgen' "$WORK/devgen.log" | tr '\n' ' ')"; fail=$((fail + 1))
+    fi
+fi
+# lib/dev/tpm_wire.resid's commands end to end against the IBM TPM 2.0
+# simulator (tests/device/tpm-sim/: build.sh builds it at a pinned commit,
+# without root). The simulator speaks TCP, not /dev/tpmrm0, so the case
+# runs the wrappers' tpm_*_via logic over its own transport; no binary
+# gains another way to a TPM. Skipped unless RESID_TPM_SIMULATOR names the
+# simulator's tpm_server.
+if [ "$#" -eq 0 ] || [[ " $* " == *" tpm_simulator "* ]]; then
+    SIMBIN="${RESID_TPM_SIMULATOR:-}"
+    if [ -z "$SIMBIN" ] || [ ! -x "$SIMBIN" ]; then
+        echo "SKIP tpm_simulator (set RESID_TPM_SIMULATOR to the IBM TPM simulator's tpm_server; tests/device/tpm-sim/build.sh builds it)"
+        skip=$((skip + 1))
+    else
+        P="$WORK/tpmsim"; mkdir -p "$P"
+        cp "$ROOT/tests/device/tpm-sim/tpm_sim.resid" "$P/"
+        (cd "$P" && timeout 600 "$COMPILER" tpm_sim.resid -o bin) > "$P/c.log" 2>&1; rc=$?
+        PORT=$((20000 + RANDOM % 20000))
+        (cd "$P" && exec "$SIMBIN" -port "$PORT" -rm > "$P/sim.log" 2>&1) &
+        SIMPID=$!
+        for _ in $(seq 50); do (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null && break; sleep 0.1; done
+        why=""
+        if [ "$rc" -ne 0 ]; then why="compile failed: $(grep -m1 -i error "$P/c.log")"
+        else
+            (cd "$P" && timeout 120 ./bin "$PORT" > out 2>&1) || why="binary exited $?"
+            cmp -s "$P/out" "$ROOT/tests/device/tpm-sim/tpm_sim.out" || why="${why:+$why; }stdout differs from tpm_sim.out"
+        fi
+        kill "$SIMPID" 2>/dev/null; wait "$SIMPID" 2>/dev/null
+        if [ -z "$why" ]; then echo "PASS tpm_simulator"; pass=$((pass + 1)); else echo "FAIL tpm_simulator: $why"; fail=$((fail + 1)); fi
+    fi
+fi
+echo "---"
+echo "$pass passed, $fail failed$([ "$skip" -gt 0 ] && echo ", $skip skipped")"
+[ "$fail" -eq 0 ]

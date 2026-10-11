@@ -1,0 +1,5 @@
+8 b"ab\x00cd\x00\x00\x00"
+4 b"ab\x00c"
+10 b"ab\x00cd\x00\x00\x00\x00\x00"
+3 b"abc" abc abc
+6 b"ab\\0cd"

@@ -1,0 +1,5 @@
+// The path is under /dev/ or /sys/; this descriptor breaks that (E0263).
+import "dev/fx_e0263_path_outside.resid";
+
+@requires(device)
+Int main() { println(fx_call()); return 0; }

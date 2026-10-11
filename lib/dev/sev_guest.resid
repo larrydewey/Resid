@@ -1,0 +1,119 @@
+// --- lib/dev/sev_guest.resid - AMD SEV-SNP guest requests (/dev/sev-guest)
+// The typed wrapper for SNP_GET_REPORT of the Linux `sev-guest` driver
+// (include/uapi/linux/sev-guest.h). The descriptor and the request
+// struct's layout are generated from the uapi header by tools/resid-devgen
+// into lib/dev/uapi_sev_guest.resid; this module only fills and parses the
+// bytes.
+//
+// Trust: the report is signed by the AMD secure processor (with the VCEK or
+// VLEK) and is verified downstream against AMD's chain, so a corrupted or
+// substituted reply fails verification instead of passing. The wrapper's
+// own checks (status, size) only refuse a malformed reply early.
+//
+// Everything here is a read, so this module fits under device(readonly);
+// SNP_GET_DERIVED_KEY, a write, is lib/dev/sev_guest_key.resid.
+// SNP_GET_EXT_REPORT (the report plus the host's certificate table) has no
+// descriptor yet: its certificate buffer is a pointer inside the request
+// struct, which the engine's Field kinds cannot place (uapi_sev_guest.resid
+// keeps that struct's layout and the request number under the matrix
+// check). The configfs report interface's auxblob carries the same
+// certificates.
+
+import "device.resid";
+import "uapi_sev_guest.resid";
+
+// The attestation report (struct attestation_report, 1184 bytes in this
+// version) for `report_data` (64 bytes, bound into the report) at VMPL
+// `vmpl` (0 to 3). Hardware-signed.
+//
+// Failures: Absent off an SNP guest, Denied when this user cannot open the
+// device, Kernel(errno) when the ioctl fails, Kernel(code) with a nonzero
+// exitinfo2 (firmware and VMM error codes) or response status, TooLong or
+// BadReply for a malformed reply.
+@requires(device(readonly))
+pub Result(List(UInt(8)), DeviceError) snp_get_report(List(UInt(8)) report_data, Int vmpl) {
+    Str name = "sev_guest.snp_get_report";
+    Int ud = snp_report_req_user_data_len();
+    if (report_data.len() != ud) { return Err(BadInput(name, f"report_data is {ud} bytes, got {report_data.len()}")); }
+    if (vmpl < 0 || vmpl > 3) { return Err(BadInput(name, f"vmpl is 0 to 3, got {vmpl}")); }
+    List(UInt(8)) blank = sg_zeros(snp_report_req_size(), ListBuf());
+    List(UInt(8)) withvmpl = sg_put(blank, snp_report_req_vmpl_at(), sg_le(vmpl, snp_report_req_vmpl_len(), ListBuf()));
+    List(UInt(8)) req = sg_put(withvmpl, snp_report_req_user_data_at(), report_data);
+    List(DevOut) outs = device.ioctl(snp_get_report_op(), [InBytes(req)])?;
+    Int exitinfo2 = sg_exitinfo2(name, dv_out_num(outs, 1))?;
+    if (exitinfo2 != 0) { return Err(Kernel(name, exitinfo2)); }
+    return sg_report(name, dv_out_bytes(outs, 0));
+}
+
+// The attestation report with its 64-byte report_data slot filled by the
+// device engine (PLAN-labels.md §6.3): a fresh runtime value by default,
+// an issued challenge record's value (spent before the request is sent and
+// bound to this reply, so a verifier accepts it only with this report), or
+// a value a verifier chose. The program passes no nonce.
+//
+//     SnpReport r = snp_report()?;                        // nothing to keep
+//     ChallengeRecord c = challenge_issue(64, bind);
+//     List(UInt(8)) v = snp_report(challenge = Issued(c))?;
+@requires(device(readonly))
+pub Result(List(UInt(8)), DeviceError) snp_report(Challenge challenge = Runtime, Int vmpl = 0) {
+    Str name = "sev_guest.snp_get_report";
+    if (vmpl < 0 || vmpl > 3) { return Err(BadInput(name, f"vmpl is 0 to 3, got {vmpl}")); }
+    List(UInt(8)) blank = sg_zeros(snp_report_req_size(), ListBuf());
+    List(UInt(8)) req = sg_put(blank, snp_report_req_vmpl_at(), sg_le(vmpl, snp_report_req_vmpl_len(), ListBuf()));
+    // The evidence a record is bound to: the report inside the reply
+    // (output 0: status, report_size at 4, 24 reserved, the report at 32).
+    List(Int) evidence = [dv_ev_framed(0, 32, 4)];
+    List(DevOut) outs = device.ioctl(snp_get_report_op(), [InChallenge(req, snp_report_req_user_data_at(), snp_report_req_user_data_len(), challenge, evidence)])?;
+    Int exitinfo2 = sg_exitinfo2(name, dv_out_num(outs, 1))?;
+    if (exitinfo2 != 0) { return Err(Kernel(name, exitinfo2)); }
+    return sg_report(name, dv_out_bytes(outs, 0));
+}
+
+// struct msg_report_resp: status, report_size, 24 reserved bytes, report.
+pub Result(List(UInt(8)), DeviceError) sg_report(Str name, Option(List(UInt(8))) resp) {
+    return match (resp) {
+        None => Err(BadReply(name, "no response buffer")),
+        Some(r) => sg_report_body(name, r),
+    };
+}
+
+pub Result(List(UInt(8)), DeviceError) sg_report_body(Str name, List(UInt(8)) r) {
+    if (r.len() < 32) { return Err(BadReply(name, "short response")); }
+    Int status = sg_u32(r, 0);
+    if (status != 0) { return Err(Kernel(name, status)); }
+    Int size = sg_u32(r, 4);
+    if (size > r.len() - 32) { return Err(TooLong(name)); }
+    return Ok(r[32..32 + size]);
+}
+
+// exitinfo2: the firmware (low half) and VMM (high half) error word the
+// kernel copies back into the ioctl struct.
+pub Result(Int, DeviceError) sg_exitinfo2(Str name, Option(Int) v) {
+    return match (v) { None => Err(BadReply(name, "no exitinfo2")), Some(x) => Ok(x), };
+}
+
+// -- Bytes ----------------------------------------------------------------
+
+pub List(UInt(8)) sg_le32(Int v) { return sg_le(v, 4, ListBuf()); }
+pub List(UInt(8)) sg_le64(Int v) { return sg_le(v, 8, ListBuf()); }
+
+// The low `n` bytes of v, little endian.
+pub List(UInt(8)) sg_le(Int v, Int n, ListBuf(UInt(8)) acc) {
+    if (n <= 0) { return acc.finish(); }
+    return sg_le(v >> 8, n - 1, acc.push((UInt(8))(v & 255)));
+}
+
+pub List(UInt(8)) sg_zeros(Int n, ListBuf(UInt(8)) acc) {
+    if (n <= 0) { return acc.finish(); }
+    return sg_zeros(n - 1, acc.push((UInt(8))0));
+}
+
+// `bs` with `part` written over it from byte `at` (the caller keeps it
+// inside: at + part.len() <= bs.len()).
+pub List(UInt(8)) sg_put(List(UInt(8)) bs, Int at, List(UInt(8)) part) {
+    return bs[0..at].concat(part).concat(bs[at + part.len()..bs.len()]);
+}
+
+pub Int sg_u32(List(UInt(8)) r, Int at) {
+    return (Int)r[at] | ((Int)r[at + 1] << 8) | ((Int)r[at + 2] << 16) | ((Int)r[at + 3] << 24);
+}

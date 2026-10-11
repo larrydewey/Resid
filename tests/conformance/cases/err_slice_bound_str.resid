@@ -1,0 +1,7 @@
+// Refused at type check: lowering would treat the value as a heap
+// list and read memory that is not one.
+Int main() {
+    List(Int) s = [1, 2, 3];
+    List(Int) t = s[.."x"];
+    return t.len();
+}

@@ -48,14 +48,15 @@ GMO gm_final(Kg g, Int unit, GKR r, Bool cols, Str src, Str dv) {
     List(Str) es = [];
     if (r.status != 0) { return gm_fail(g, unit, r.status); }
     Int n0 = kg_count(g);
-    KP pr0 = gm_prune(g, unit);
+    GN pn = gm_prune(g, unit);
+    KP pr0 = KP {.g = pn.g, .id = pn.ids[0], .pos = 0, .err = ""};
     Int pm = gm_prelude_pos(src);
     KP pr = if (pm > str_len(src)) { pr0 } else { gm_drop_prelude(pr0.g, pr0.id, pm) };
     KP sy = gm_records(pr.g, pr.id);
     Int n1 = kg_count(sy.g);
     List(Str) ty = if (cols) { gm_pad_ty(r.ty, n1 - n0) } else { es };
     Str def = if (cols) { gk_def_text(r.def, 0, StrBuf()) + str_repeat("-1,", n1 - n0) } else { "" };
-    return GMO {.kp = sy, .c = GKC {.status = 0, .ty = ty, .def = def}, .dv = gm_dv_sorted(dv)};
+    return GMO {.kp = sy, .c = GKC {.status = 0, .ty = ty, .def = def}, .dv = gm_dv_sorted(dv + pn.made)};
 }
 
 List(Str) gm_pad_ty(List(Str) ty, Int k) {
@@ -68,8 +69,10 @@ List(Str) gm_pad_ty(List(Str) ty, Int k) {
 GA gm_apply(Kg g0, Int unit0, List(Str) log, Str made, Str dv0) {
     // Replaced instances ("X|n|winner") leave the unit first.
     Str drop = gm_x_ids(log, 0, ",");
-    Str dvx = dv0 + gm_x_edges(log, 0, "");
-    KP du = if (drop == ",") { KP {.g = g0, .id = unit0, .pos = 0, .err = ""} } else { gm_drop_decls(g0, unit0, drop) };
+    List(Int) uid = [unit0];
+    GN dd = if (drop == ",") { GN {.g = g0, .ids = uid, .made = ""} } else { gm_drop_decls(g0, unit0, drop) };
+    Str dvx = dv0 + gm_x_edges(log, 0, "") + dd.made;
+    KP du = KP {.g = dd.g, .id = dd.ids[0], .pos = 0, .err = ""};
     Kg g = du.g;
     Int unit = du.id;
     Map(Int, KN) e = {};
@@ -100,23 +103,42 @@ Str gm_x_ids(List(Str) log, Int i, Str acc) {
     return gm_x_ids(log, i + 1, if (x) { acc + f[1] + "," } else { acc });
 }
 
-// The unit without the declarations in `drop` (",id," entries).
-KP gm_drop_decls(Kg g, Int unit, Str drop) {
-    GN r = gm_drop_kids(g, unit, 0, drop, ListBuf());
-    return kg_add(r.g, "unit", "", "", r.ids, 0, g.ns[unit].ep);
+// The unit without the declarations in `drop` (",id," entries), as
+// ids [unit] with the derive edges of rebuilt sandboxes in `made`.
+GN gm_drop_decls(Kg g, Int unit, Str drop) {
+    GN r = gm_drop_kids(g, unit, 0, drop, ListBuf(), "");
+    KP u = kg_add(r.g, "unit", "", "", r.ids, 0, g.ns[unit].ep);
+    return GN {.g = u.g, .ids = [u.id], .made = r.made};
 }
 
-GN gm_drop_kids(Kg g, Int id, Int i, Str drop, ListBuf(Int) acc) {
-    if (i >= g.ns[id].nk) { return GN {.g = g, .ids = acc.finish(), .made = ""}; }
+GN gm_drop_kids(Kg g, Int id, Int i, Str drop, ListBuf(Int) acc, Str dv) {
+    if (i >= g.ns[id].nk) { return GN {.g = g, .ids = acc.finish(), .made = dv}; }
     Int d = kg_kid(g, id, i);
     if (g.ns[d].kind == "sandbox") {
-        GN inner = gm_drop_kids(g, d, 0, drop, ListBuf());
-        KN s = g.ns[d];
-        KP ns = kg_add(inner.g, "sandbox", s.text, s.aux, inner.ids, s.sp, s.ep);
-        return gm_drop_kids(ns.g, id, i + 1, drop, acc.push(ns.id));
+        GN inner = gm_drop_kids(g, d, 0, drop, ListBuf(), dv);
+        GN w = gm_resandbox(inner, d);
+        return gm_drop_kids(w.g, id, i + 1, drop, acc.push(w.ids[0]), w.made);
     }
-    if (str_contains(drop, f",{d},")) { return gm_drop_kids(g, id, i + 1, drop, acc); }
-    return gm_drop_kids(g, id, i + 1, drop, acc.push(d));
+    if (str_contains(drop, f",{d},")) { return gm_drop_kids(g, id, i + 1, drop, acc, dv); }
+    return gm_drop_kids(g, id, i + 1, drop, acc.push(d), dv);
+}
+
+// Sandbox d around `inner.ids`: d itself when its members are unchanged,
+// else a new sandbox with a derive edge to d (spec 3.4: the node a pass
+// replaces is never left without one), appended to `inner.made`.
+GN gm_resandbox(GN inner, Int d) {
+    Kg g = inner.g;
+    if (gm_same_kids(g, d, inner.ids, 0)) { return GN {.g = g, .ids = [d], .made = inner.made}; }
+    KN s = g.ns[d];
+    KP ns = kg_add(g, "sandbox", s.text, s.aux, inner.ids, s.sp, s.ep);
+    return GN {.g = ns.g, .ids = [ns.id], .made = inner.made + f"{ns.id},{d},prune;"};
+}
+
+Bool gm_same_kids(Kg g, Int d, List(Int) ids, Int i) {
+    if (i >= ids.len()) { return i == g.ns[d].nk; }
+    if (i >= g.ns[d].nk) { return false; }
+    if (kg_kid(g, d, i) != ids[i]) { return false; }
+    return gm_same_kids(g, d, ids, i + 1);
 }
 
 // The graph reachable from `root`, renumbered children first.
@@ -430,22 +452,23 @@ pub Bool gm_generic_decl(Kg g, Int d) {
     return false;
 }
 
-KP gm_prune(Kg g, Int unit) {
-    GN r = gm_prune_kids(g, unit, 0, ListBuf());
-    return kg_add(r.g, "unit", "", "", r.ids, 0, g.ns[unit].ep);
+// The unit without its generic declarations, as ids [unit] with the
+// derive edges of rebuilt sandboxes in `made`.
+GN gm_prune(Kg g, Int unit) {
+    GN r = gm_prune_kids(g, unit, 0, ListBuf(), "");
+    KP u = kg_add(r.g, "unit", "", "", r.ids, 0, g.ns[unit].ep);
+    return GN {.g = u.g, .ids = [u.id], .made = r.made};
 }
 
-GN gm_prune_kids(Kg g, Int id, Int i, ListBuf(Int) acc) {
-    if (i >= g.ns[id].nk) { return GN {.g = g, .ids = acc.finish(), .made = ""}; }
+GN gm_prune_kids(Kg g, Int id, Int i, ListBuf(Int) acc, Str dv) {
+    if (i >= g.ns[id].nk) { return GN {.g = g, .ids = acc.finish(), .made = dv}; }
     Int d = kg_kid(g, id, i);
     if (g.ns[d].kind == "sandbox") {
-        GN inner = gm_prune_kids(g, d, 0, ListBuf());
-        KN s = g.ns[d];
-        KP ns = kg_add(inner.g, "sandbox", s.text, s.aux, inner.ids, s.sp, s.ep);
-        return gm_prune_kids(ns.g, id, i + 1, acc.push(ns.id));
+        GN w = gm_resandbox(gm_prune_kids(g, d, 0, ListBuf(), dv), d);
+        return gm_prune_kids(w.g, id, i + 1, acc.push(w.ids[0]), w.made);
     }
-    if (gm_generic_decl(g, d)) { return gm_prune_kids(g, id, i + 1, acc); }
-    return gm_prune_kids(g, id, i + 1, acc.push(d));
+    if (gm_generic_decl(g, d)) { return gm_prune_kids(g, id, i + 1, acc, dv); }
+    return gm_prune_kids(g, id, i + 1, acc.push(d), dv);
 }
 
 // ─── The unused prelude ─────────────────────────────────────────────

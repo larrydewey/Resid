@@ -1,0 +1,7 @@
+// Fixture for device_hex_descriptor: TIOCGPTN written with hex literals (installed as lib/dev/fx_device_hex_descriptor.resid).
+import "device.resid";
+
+// TIOCGPTN, _IOR('T', 0x30, unsigned int) = 0x80045430.
+pub IoctlOp fx_ptn_hex() {
+    return IoctlOp {.name = "fx.tiocgptn_hex", .path = "/dev/ptmx", .requests = [Request {.arch = X86_64, .number = 0x80045430}, Request {.arch = Aarch64, .number = 0x80045430}], .size = 0x4, .fields = [Scalar(0x0, 0b100, Out)], .write = false, .version = Unversioned, .stability = Uapi};
+}

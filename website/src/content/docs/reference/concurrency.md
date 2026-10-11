@@ -17,7 +17,9 @@ Result(T, RegionError) r = spawn (cap1, cap2) {
 - The child receives a fresh capability environment: the spawn body and
   everything it calls may use only the listed capabilities (`E0214`,
   `E0215`), and the child thread runs in its own capability frame at run
-  time.
+  time. A closure the body calls by the name it is bound to counts as
+  called; one reached any other way is bounded by that frame when it runs
+  (see [closures](/Resid/reference/capabilities/#closures)).
 - **Execution.** A region bound to a name starts when the binding runs and
   executes concurrently on its own thread; the first use of the name waits
   for its result. A spawn anywhere else (returned, matched inline) is

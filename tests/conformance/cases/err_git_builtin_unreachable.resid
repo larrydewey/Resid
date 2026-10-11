@@ -1,0 +1,5 @@
+// The git runtime builtins are not part of the language.
+Int main() {
+    println(resid_git_branch());
+    return 0;
+}

@@ -1,0 +1,6 @@
+// A buffer's length field is wide enough for the buffer's maximum: the
+// kernel would read a truncated length otherwise (E0263).
+import "dev/fx_e0263_length_narrow.resid";
+
+@requires(device(readonly))
+Int main() { println(fx_call()); return 0; }

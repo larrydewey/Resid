@@ -1,0 +1,7 @@
+@requires(declassify)
+Int main() {
+    Secret(Int) a = secret(rt 3);
+    Str why = "result";
+    Int x = declassify(a, why);
+    return x;
+}

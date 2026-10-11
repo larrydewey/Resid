@@ -1,0 +1,8 @@
+terminal query: failed: capability not granted: terminal
+terminal size: failed: capability not granted: terminal
+terminal raw: failed: capability not granted: terminal (write)
+display: failed: capability not granted: display
+terminal query granted: ok 0
+terminal size granted: ok 0
+terminal raw granted: ok 0
+display granted: ok 0

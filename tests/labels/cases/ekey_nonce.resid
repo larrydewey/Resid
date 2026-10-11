@@ -1,0 +1,37 @@
+// AEAD nonces (PLAN-labels.md §5.2): a constant nonce only under a key
+// drawn for that one sealing call (E0279, a warning for now).
+import "random.resid";
+import "aesgcmg.resid";
+import "sha256g.resid";
+
+List(Int) zero_iv() { return [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]; }
+
+@requires(declassify)
+Int seal_once(List(Secret(UInt(8))) msg) {
+    List(Secret(UInt(8))) k = random_secret(32);
+    return aes_gcmg_seal(k, zero_iv(), msg, []).len();                  // fine: a fresh key, one seal
+}
+
+@requires(declassify)
+Int seal_twice(List(Secret(UInt(8))) msg) {
+    List(Secret(UInt(8))) k = random_secret(32);
+    Int a = aes_gcmg_seal(k, zero_iv(), msg, []).len();                  // the same key twice: refused
+    Int b = aes_gcmg_seal(k, zero_iv(), msg, []).len();                  // and here
+    return a + b;
+}
+
+@requires(declassify)
+Int seal_given(List(Secret(UInt(8))) k, List(Secret(UInt(8))) msg) {
+    return aes_gcmg_seal(k, zero_iv(), msg, []).len();                   // a key not drawn here: refused
+}
+
+@requires(declassify)
+Int seal_random_nonce(List(Secret(UInt(8))) k, List(Secret(UInt(8))) msg) {
+    return aes_gcmg_seal(k, random_bytes(12), msg, []).len();            // a fresh nonce: fine
+}
+
+@requires(declassify)
+Int main() {
+    List(Secret(UInt(8))) m = random_secret(5);
+    return seal_once(m) + seal_twice(m) + seal_given(random_secret(32), m) + seal_random_nonce(random_secret(32), m);
+}

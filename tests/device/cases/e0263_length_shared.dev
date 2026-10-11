@@ -1,0 +1,11 @@
+// Fixture for e0263_length_shared: two buffers name one length field (installed as lib/dev/fx_e0263_length_shared.resid).
+import "device.resid";
+
+pub IoctlOp fx_op() {
+    return IoctlOp {.name = "fx.op", .path = "/dev/fx", .requests = dv_both(dv_iowr(88, 0, 24)), .size = 24, .fields = [Buffer(0, 8, 64, Out, false), Scalar(8, 4, InOut), Buffer(16, 8, 64, Out, false)], .write = false, .version = Unversioned, .stability = Uapi};
+}
+
+@requires(device(readonly))
+pub Str fx_call() {
+    return match (device.ioctl(fx_op(), [])) { Ok(o) => "ok", Err(e) => device_error_text(e), };
+}

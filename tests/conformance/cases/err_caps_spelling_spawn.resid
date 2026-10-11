@@ -1,0 +1,9 @@
+// A diagnostic names capabilities as source spells them: the spawn list
+// is `[clock(readonly)]`, never the internal `[clock:ro]`.
+@requires(clock(readonly), filesystem(readonly))
+Int main() {
+    Result(Int, RegionError) r = spawn (clock(readonly)) {
+        return clock.now_ns() + if (filesystem.exists("/")) { 1 } else { 0 };
+    };
+    return 0;
+}

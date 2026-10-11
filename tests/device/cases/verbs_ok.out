@@ -1,0 +1,2 @@
+fx.provider: device absent; fx.report: device absent; fx.seq: device absent; fx.len: device absent
+fx.tpm: device absent

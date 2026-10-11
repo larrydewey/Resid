@@ -1,0 +1,8 @@
+// `git` is not a capability family and its runtime builtins
+// (resid_git_rev, resid_git_branch) are not callable: no program, closure
+// or spawn body can reach them, so there is nothing to bound.
+Int main() {
+    Str closure(Int) rev = lambda(v) { git.rev("HEAD") };
+    println(rev(0));
+    return 0;
+}

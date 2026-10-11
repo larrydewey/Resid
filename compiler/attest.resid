@@ -1,0 +1,1096 @@
+// attest.resid — attestation checks (PLAN-attestation.md): anchors,
+// primitives, policies and decisions, on the checked graph.
+//
+// Before parsing, at_expand rewrites the body of every `@anchor(...)`
+// function: its `anchor_der(` becomes `anchor_make("<facts>", `, so the
+// Anchor it returns carries the annotation's kind, product, principal,
+// formats, algorithms, fingerprint and expiry (E0281 for a malformed
+// annotation).
+//
+// After checking, at_run walks the graph:
+//   E0280  @primitive or @verify_internal outside lib/verify/, or a call of
+//          a @verify_internal function from outside it
+//   E0281  an @anchor function of the wrong shape, an anchor_make or
+//          anchor_der call outside one, a format that is not @signed
+//   E0282  a primitive's anchor argument that is not a call of an @anchor
+//          function (directly or through a local binding), or whose kind
+//          or algorithms the primitive does not take
+//   E0283  an appraisal's policy argument that is not a direct call of a
+//          nullary @policy function of the primitive's policy type
+//   E0284  a @decides function without a gate: a success return not
+//          reached through the Ok of a primitive call, or a malformed
+//          @decides annotation
+//   E0285  a gate that does not meet the decision's requirements (accept,
+//          require, appraised, freshness, identity, time)
+//   E0287  a release primitive (seal_to_evidence, seal_to_channel) outside
+//          a @decides function, or a key_bound / channel_bound decision
+//          whose success return is not that release on its gate
+//   E0288  a gate formed inside a loop (a fresh value reaching one
+//          decision per iteration needs one record per iteration)
+// E0286 (inputs that reach the result must not be External) is checked
+// with the integrity labels (compiler/labels.resid).
+//
+// Imported by compiler/driver.resid.
+
+// ─── Annotations ────────────────────────────────────────────────────
+
+// The argument text of annotation @name(...) in aux; found = false when
+// absent. A bare @name gives found and "".
+type AtA = { Bool found; Str args; };
+
+AtA at_ann(Str aux, Str name) {
+    Int k = at_ann_pos(aux, "@" + name, 0);
+    if (k < 0) { return AtA {.found = false, .args = ""}; }
+    Int p = k + str_len(name) + 1;
+    if (p >= str_len(aux) || str_char_at(aux, p) != 40) { return AtA {.found = true, .args = ""}; }
+    Int e = ly_close_pub(aux, p);
+    if (e < 0) { return AtA {.found = true, .args = "\x01"}; }
+    return AtA {.found = true, .args = str_trim(str_slice(aux, p + 1, e - 1))};
+}
+
+// The position of "@name" followed by "(" or a non-identifier character.
+Int at_ann_pos(Str aux, Str pat, Int from) {
+    Int k = ly_find_pub(aux, pat, from);
+    if (k < 0) { return -1; }
+    Int e = k + str_len(pat);
+    if (e < str_len(aux) && ly_ident_pub(str_char_at(aux, e))) { return at_ann_pos(aux, pat, e); }
+    return k;
+}
+
+// "k = v, ..." as keys and values (a value in brackets is a list).
+type AtKv = { List(Str) ks; List(Str) vs; Str err; };
+
+AtKv at_kv(Str args) {
+    List(Str) parts = at_split(args);
+    return at_kv_at(parts, 0, AtKv {.ks = [], .vs = [], .err = ""});
+}
+
+AtKv at_kv_at(List(Str) ps, Int i, AtKv acc) {
+    if (i >= ps.len() || acc.err != "") { return acc; }
+    Int eq = str_find_char(ps[i], 61, 0);
+    if (eq < 0) { return at_kv_at(ps, i + 1, AtKv {.ks = acc.ks.concat([str_trim(ps[i])]), .vs = acc.vs.concat([""]), .err = ""}); }
+    Str k = str_trim(str_slice(ps[i], 0, eq));
+    Str v = str_trim(str_slice(ps[i], eq + 1, str_len(ps[i])));
+    if (at_idx(acc.ks, k, 0) >= 0) { return AtKv {.ks = acc.ks, .vs = acc.vs, .err = "`" + k + "` is given twice"}; }
+    return at_kv_at(ps, i + 1, AtKv {.ks = acc.ks.concat([k]), .vs = acc.vs.concat([v]), .err = ""});
+}
+
+Int at_idx(List(Str) xs, Str x, Int i) {
+    if (i >= xs.len()) { return -1; }
+    if (xs[i] == x) { return i; }
+    return at_idx(xs, x, i + 1);
+}
+
+Str at_get(AtKv kv, Str k) {
+    Int i = at_idx(kv.ks, k, 0);
+    return if (i < 0) { "" } else { kv.vs[i] };
+}
+
+Bool at_has(AtKv kv, Str k) { return at_idx(kv.ks, k, 0) >= 0; }
+
+// Split at commas outside (), [] and strings.
+List(Str) at_split(Str s) { return at_split_at(s, 0, 0, 0, str_len(s), []); }
+
+List(Str) at_split_at(Str s, Int i, Int a, Int depth, Int n, List(Str) acc) {
+    if (i >= n) { return if (str_trim(str_slice(s, a, n)) == "") { acc } else { acc.concat([str_trim(str_slice(s, a, n))]) }; }
+    Int c = str_char_at(s, i);
+    if (c == 34) { return at_split_at(s, at_str_end(s, i + 1, n), a, depth, n, acc); }
+    if (c == 40 || c == 91) { return at_split_at(s, i + 1, a, depth + 1, n, acc); }
+    if (c == 41 || c == 93) { return at_split_at(s, i + 1, a, depth - 1, n, acc); }
+    if (c == 44 && depth == 0) { return at_split_at(s, i + 1, i + 1, depth, n, acc.concat([str_trim(str_slice(s, a, i))])); }
+    return at_split_at(s, i + 1, a, depth, n, acc);
+}
+
+Int at_str_end(Str s, Int i, Int n) {
+    if (i >= n) { return n; }
+    Int c = str_char_at(s, i);
+    if (c == 92) { return at_str_end(s, i + 2, n); }
+    if (c == 34) { return i + 1; }
+    return at_str_end(s, i + 1, n);
+}
+
+// A list value "[a, b]" (or a single word) as its elements.
+List(Str) at_list(Str v) {
+    Str t = str_trim(v);
+    if (t == "") { return []; }
+    Bool br = str_starts_with(t, "[") && str_ends_with(t, "]");
+    Str inner = if (br) { str_slice(t, 1, str_len(t) - 1) } else { t };
+    return at_split(inner);
+}
+
+Str at_unquote(Str v) {
+    Str t = str_trim(v);
+    return if (str_len(t) >= 2 && str_starts_with(t, "\"") && str_ends_with(t, "\"")) { str_slice(t, 1, str_len(t) - 1) } else { t };
+}
+
+// ─── Anchor expansion (before parsing) ──────────────────────────────
+
+// Kinds of anchor, and whether a kind names hardware (its principal is
+// then required).
+Bool at_kind_ok(Str k) {
+    return k == "AmdVcek" || k == "AmdVlek" || k == "IntelPck" || k == "NvidiaDevice" || k == "Nitro" || k == "TpmEk" || k == "TpmAk" || k == "EndorsedKeys" || k == "Endorser" || k == "ReleaseSender" || k == "RelyingParty" || k == "CertificateAuthority";
+}
+
+Bool at_kind_hw(Str k) { return k == "AmdVcek" || k == "AmdVlek" || k == "IntelPck" || k == "NvidiaDevice" || k == "Nitro" || k == "TpmEk" || k == "TpmAk"; }
+
+Bool at_alg_ok(Str a) {
+    return a == "RsaPss4096Sha384" || a == "RsaPssSha256" || a == "RsaPkcs1Sha256" || a == "RsaSsaSha256" || a == "EcdsaP256Sha256" || a == "EcdsaP384Sha384" || a == "Ed25519" || a == "DhkemX25519" || a == "DhkemP256" || a == "DhkemP384";
+}
+
+// "K(product)" or "K": kind and product.
+List(Str) at_kind_split(Str v) {
+    Str t = str_trim(v);
+    Int p = str_find_char(t, 40, 0);
+    if (p < 0) { return [t, ""]; }
+    if (!str_ends_with(t, ")")) { return ["", ""]; }
+    return [str_trim(str_slice(t, 0, p)), str_trim(str_slice(t, p + 1, str_len(t) - 1))];
+}
+
+Bool at_hex(Str s, Int i) {
+    if (i >= str_len(s)) { return true; }
+    Int c = str_char_at(s, i);
+    Bool ok = (c >= 48 && c <= 57) || (c >= 97 && c <= 102) || (c >= 65 && c <= 70);
+    return ok && at_hex(s, i + 1);
+}
+
+Bool at_fp_ok(Str fp) {
+    if (str_starts_with(fp, "sha256:")) { return str_len(fp) == 7 + 64 && at_hex(fp, 7); }
+    if (str_starts_with(fp, "sha384:")) { return str_len(fp) == 7 + 96 && at_hex(fp, 7); }
+    return false;
+}
+
+Bool at_date_ok(Str d) {
+    if (str_len(d) != 10 || str_char_at(d, 4) != 45 || str_char_at(d, 7) != 45) { return false; }
+    return str_is_int(str_slice(d, 0, 4)) && str_is_int(str_slice(d, 5, 7)) && str_is_int(str_slice(d, 8, 10));
+}
+
+// The facts of an @anchor annotation as anchor_make's meta string, or
+// "\x01" + why it is malformed.
+Str at_anchor_meta(Str name, Str args) {
+    AtKv kv = at_kv(args);
+    if (kv.err != "") { return "\x01" + kv.err; }
+    List(Str) need = ["kind", "formats", "source", "fingerprint", "retrieved", "reviewed_by", "algorithms", "expires"];
+    Str miss = at_first_missing(kv, need, 0);
+    if (miss != "") { return "\x01@anchor needs `" + miss + " = ...`"; }
+    Str extra = at_first_unknown(kv.ks, need.concat(["principal"]), 0);
+    if (extra != "") { return "\x01unknown @anchor key `" + extra + "`"; }
+    List(Str) kp = at_kind_split(at_get(kv, "kind"));
+    if (!at_kind_ok(kp[0])) { return "\x01unknown anchor kind `" + at_get(kv, "kind") + "`"; }
+    Str pr = at_get(kv, "principal");
+    if (at_kind_hw(kp[0]) && pr != "InGuest" && pr != "AboveKernel") { return "\x01a hardware anchor names its attesting principal: `principal = InGuest` or `AboveKernel`"; }
+    if (!at_kind_hw(kp[0]) && pr != "") { return "\x01only a hardware anchor has a principal"; }
+    Str fp = at_unquote(at_get(kv, "fingerprint"));
+    if (!at_fp_ok(fp)) { return "\x01the fingerprint is \"sha256:<64 hex>\" or \"sha384:<96 hex>\""; }
+    Str ex = at_unquote(at_get(kv, "expires"));
+    if (!at_date_ok(ex) || !at_date_ok(at_unquote(at_get(kv, "retrieved")))) { return "\x01`retrieved` and `expires` are dates, \"YYYY-MM-DD\""; }
+    List(Str) algs = at_list(at_get(kv, "algorithms"));
+    if (algs.len() == 0) { return "\x01an anchor lists its algorithms"; }
+    Str ba = at_first_bad_alg(algs, 0);
+    if (ba != "") { return "\x01unknown algorithm `" + ba + "`"; }
+    if (at_unquote(at_get(kv, "source")) == "" || at_unquote(at_get(kv, "reviewed_by")) == "") { return "\x01an anchor names its source and reviewer"; }
+    List(Str) fm = at_list(at_get(kv, "formats"));
+    return name + "|" + kp[0] + "|" + str_replace(kp[1], "|", "") + "|" + pr + "|" + str_join(fm, ",") + "|" + str_join(algs, ",") + "|" + str_to_lower(fp) + "|" + ex;
+}
+
+// Every `@anchor(` at the start of a line: its function's `anchor_der(`
+// becomes `anchor_make("<meta>", `.
+pub LyR at_expand(Str src) {
+    LyR a = if (str_contains(src, "@anchor(")) { at_exp_at(src, 0, "", 0) } else { LyR {.text = src, .code = "", .err = "", .at = -1} };
+    LyR b = if (a.err == "" && str_contains(a.text, "@assumption(")) { at_asm_at(a.text, 0, "", 0) } else { a };
+    if (b.err != "" || !str_contains(b.text, "bind")) { return b; }
+    return at_bind_at(b.text, 0, "", 0);
+}
+
+// `@assumption(reason = "...", pins = "sha256:<hex>") Assumption name() {
+// return assumption_pinned(); }`: the call becomes
+// assumption_make("name|pin|reason") (PLAN-attestation.md §3.6).
+LyR at_asm_at(Str s, Int from, Str out, Int copied) {
+    Int k = ly_find_pub(s, "@assumption(", from);
+    if (k < 0) { return LyR {.text = out + str_slice(s, copied, str_len(s)), .code = "", .err = "", .at = -1}; }
+    if (!ly_line_start_pub(s, k)) { return at_asm_at(s, k + 12, out, copied); }
+    Int e = ly_close_pub(s, k + 11);
+    if (e < 0) { return LyR {.text = s, .code = "E0289", .err = "@assumption(...) does not close", .at = k}; }
+    AtKv kv = at_kv(str_slice(s, k + 12, e - 1));
+    Str pin = at_unquote(at_get(kv, "pins"));
+    Str why = at_unquote(at_get(kv, "reason"));
+    if (!str_starts_with(pin, "sha256:") || str_len(pin) != 71 || !at_hex(pin, 7)) { return LyR {.text = s, .code = "E0289", .err = "an assumption pins the value it vouches for: `pins = \"sha256:<64 hex>\"`", .at = k}; }
+    if (why == "" || str_contains(why, "|")) { return LyR {.text = s, .code = "E0289", .err = "an assumption states its reason: `reason = \"...\"`", .at = k}; }
+    Str extra = at_first_unknown(kv.ks, ["reason", "pins"], 0);
+    if (extra != "") { return LyR {.text = s, .code = "E0289", .err = "unknown @assumption key `" + extra + "`", .at = k}; }
+    Int ob = ly_find_pub(s, "{", e);
+    Str head = if (ob < 0) { "" } else { str_slice(s, e, ob) };
+    Int lp = str_find_char(head, 40, 0);
+    List(Str) hw = str_split(str_trim(if (lp < 0) { head } else { str_slice(head, 0, lp) }), " ");
+    Bool shape = ob >= 0 && lp >= 0 && str_trim(str_slice(head, lp, str_len(head))) == "()" && hw.len() >= 2 && hw[hw.len() - 2] == "Assumption";
+    if (!shape) { return LyR {.text = s, .code = "E0289", .err = "an @assumption function is nullary and returns Assumption: `Assumption name() { return assumption_pinned(); }`", .at = k}; }
+    Int cb = ly_close_brace_pub(s, ob);
+    Int d = ly_find_pub(s, "assumption_pinned()", ob);
+    if (d < 0 || d > cb) { return LyR {.text = s, .code = "E0289", .err = "an @assumption function returns assumption_pinned()", .at = k}; }
+    Str meta = hw[hw.len() - 1] + "|" + str_to_lower(pin) + "|" + str_replace(why, "\"", "'");
+    Str o2 = out + str_slice(s, copied, d) + "assumption_make(\"" + meta + "\")";
+    return at_asm_at(s, d + 19, o2, d + 19);
+}
+
+// `@decides(..., bind = "b")`: the decision's record must have been issued
+// for b, checked at run time before anything else in the body. The
+// function takes exactly one ChallengeRecord; its body starts with
+// `decision_bind_check(<record>, "b")?;` (E0293 otherwise).
+LyR at_bind_at(Str s, Int from, Str out, Int copied) {
+    Int k = ly_find_pub(s, "@decides(", from);
+    if (k < 0) { return LyR {.text = out + str_slice(s, copied, str_len(s)), .code = "", .err = "", .at = -1}; }
+    if (!ly_line_start_pub(s, k)) { return at_bind_at(s, k + 9, out, copied); }
+    Int e = ly_close_pub(s, k + 8);
+    if (e < 0) { return LyR {.text = s, .code = "E0284", .err = "@decides(...) does not close", .at = k}; }
+    AtKv kv = at_kv(str_slice(s, k + 9, e - 1));
+    Str b = at_get(kv, "bind");
+    if (b == "") { return at_bind_at(s, e, out, copied); }
+    if (!(str_starts_with(b, "\"") && str_ends_with(b, "\"") && str_len(b) >= 3) || str_contains(str_slice(b, 1, str_len(b) - 1), "\\")) { return LyR {.text = s, .code = "E0293", .err = "bind takes a string literal: `bind = \"purpose\"`", .at = k}; }
+    Int ob = ly_find_pub(s, "{", e);
+    Int lp = ly_find_pub(s, "(", e);
+    if (ob < 0 || lp < 0 || lp > ob) { return LyR {.text = s, .code = "E0284", .err = "@decides marks a function", .at = k}; }
+    Str rec = at_record_param(str_slice(s, lp + 1, ob));
+    if (rec == "") { return LyR {.text = s, .code = "E0293", .err = "a decision with `bind` takes exactly one ChallengeRecord parameter, the record it checks", .at = k}; }
+    Str o2 = out + str_slice(s, copied, ob + 1) + " decision_bind_check(" + rec + ", " + b + ")?;";
+    return at_bind_at(s, ob + 1, o2, ob + 1);
+}
+
+// The name of the one ChallengeRecord parameter in a parameter list's text
+// (up to the body's brace), or "".
+Str at_record_param(Str ps) {
+    Int rp = at_last_char(ps, 41, str_len(ps) - 1);
+    if (rp < 0) { return ""; }
+    List(Str) parts = at_split(str_slice(ps, 0, rp));
+    List(Str) recs = at_recs(parts, 0, []);
+    return if (recs.len() == 1) { recs[0] } else { "" };
+}
+
+List(Str) at_recs(List(Str) parts, Int i, List(Str) acc) {
+    if (i >= parts.len()) { return acc; }
+    List(Str) w = str_split(str_trim(parts[i]), " ");
+    Bool hit = w.len() == 2 && w[0] == "ChallengeRecord";
+    return at_recs(parts, i + 1, if (hit) { acc.concat([w[1]]) } else { acc });
+}
+
+Int at_last_char(Str s, Int c, Int i) {
+    if (i < 0) { return -1; }
+    if (str_char_at(s, i) == c) { return i; }
+    return at_last_char(s, c, i - 1);
+}
+
+LyR at_exp_at(Str s, Int from, Str out, Int copied) {
+    Int k = ly_find_pub(s, "@anchor(", from);
+    if (k < 0) { return LyR {.text = out + str_slice(s, copied, str_len(s)), .code = "", .err = "", .at = -1}; }
+    if (!ly_line_start_pub(s, k)) { return at_exp_at(s, k + 8, out, copied); }
+    Int e = ly_close_pub(s, k + 7);
+    if (e < 0) { return LyR {.text = s, .code = "E0281", .err = "@anchor(...) does not close", .at = k}; }
+    Str args = str_slice(s, k + 8, e - 1);
+    // The function: `[pub] Anchor name() {`.
+    Int ob = ly_find_pub(s, "{", e);
+    if (ob < 0) { return LyR {.text = s, .code = "E0281", .err = "@anchor marks a function", .at = k}; }
+    Str head = str_slice(s, e, ob);
+    Int lp = str_find_char(head, 40, 0);
+    List(Str) hw = str_split(str_trim(if (lp < 0) { head } else { str_slice(head, 0, lp) }), " ");
+    Str name = hw[hw.len() - 1];
+    Bool shape = lp >= 0 && str_trim(str_slice(head, lp, str_len(head))) == "()" && hw.len() >= 2 && hw[hw.len() - 2] == "Anchor";
+    if (!shape) { return LyR {.text = s, .code = "E0281", .err = "an @anchor function is nullary and returns Anchor: `Anchor name() { return anchor_der(bytes); }`", .at = k}; }
+    Str meta = at_anchor_meta(name, args);
+    if (str_starts_with(meta, "\x01")) { return LyR {.text = s, .code = "E0281", .err = str_slice(meta, 1, str_len(meta)), .at = k}; }
+    Int cb = ly_close_brace_pub(s, ob);
+    Int d = ly_find_pub(s, "anchor_der(", ob);
+    Int d2 = if (d < 0) { -1 } else { ly_find_pub(s, "anchor_der(", d + 1) };
+    if (d < 0 || d > cb || (d2 >= 0 && d2 < cb)) { return LyR {.text = s, .code = "E0281", .err = "an @anchor function returns anchor_der(bytes), once", .at = k}; }
+    Str o2 = out + str_slice(s, copied, d) + "anchor_make(\"" + meta + "\", ";
+    return at_exp_at(s, d + 11, o2, d + 11);
+}
+
+// ─── The graph pass ─────────────────────────────────────────────────
+
+type AtC = { Kg g; List(Int) def; Str src; Str smap; List(Int) nls; List(Str) pk; Str vdir; Str croot; Map(Str, List(Int)) fns; };
+
+// What is known of a value that may be evidence: the anchors it rests on
+// (function node ids; -1 not known), qualifiers, the policy function (-1
+// none), the time source, the primitive kind ("verify", "appraise",
+// "open", "" not evidence).
+type AtF = { List(Int) anchors; List(Str) quals; Int policy; Str time; Str kind; Int at; };
+
+AtF at_nof() { return AtF {.anchors = [], .quals = [], .policy = -1, .time = "", .kind = "", .at = -1}; }
+
+Int at_def(AtC c, Int id) { return if (id < c.def.len()) { c.def[id] } else { -1 }; }
+
+Str at_path(AtC c, Int id) { return imp_normalize(diag_where(gm_smap(c.smap), gk_line_of(c.nls, c.g.ns[id].sp, 0, c.nls.len()) + 1).path); }
+
+Bool at_in_verify(AtC c, Int id) { return c.vdir != "" && str_starts_with(at_path(c, id), c.vdir); }
+
+Bool at_err(Str code, Str msg, AtC c, Int at) { return dv_diag_at(code, msg, c.g, at, c.src, c.smap); }
+
+// The function node a call names, or -1.
+Int at_callee(AtC c, Int id) {
+    Int d = at_def(c, id);
+    if (d < 0 || c.g.ns[d].kind != "fn") { return -1; }
+    return d;
+}
+
+// A primitive's annotation, parsed (ks empty when f is none).
+AtKv at_prim(AtC c, Int f) {
+    if (f < 0) { return AtKv {.ks = [], .vs = [], .err = ""}; }
+    AtA a = at_ann(c.g.ns[f].aux, "primitive");
+    if (!a.found) { return AtKv {.ks = [], .vs = [], .err = ""}; }
+    return at_kv(a.args);
+}
+
+// The argument of call `id` for parameter `p` of f (positional or
+// named), or -1.
+Int at_arg(AtC c, Int id, Int f, Str p) {
+    Int pi = at_param_idx(c, f, p, 1);
+    return at_arg_at(c, id, p, pi, 0);
+}
+
+Int at_param_idx(AtC c, Int f, Str p, Int i) {
+    if (i >= c.g.ns[f].nk - 1) { return -1; }
+    if (c.g.ns[kg_kid(c.g, f, i)].text == p) { return i - 1; }
+    return at_param_idx(c, f, p, i + 1);
+}
+
+Int at_arg_at(AtC c, Int id, Str p, Int pi, Int i) {
+    if (i >= c.g.ns[id].nk) { return -1; }
+    Int a = kg_kid(c.g, id, i);
+    if (c.g.ns[a].kind == "named") { return if (c.g.ns[a].text == p) { kg_kid(c.g, a, 0) } else { at_arg_at(c, id, p, pi, i + 1) }; }
+    return if (i == pi) { a } else { at_arg_at(c, id, p, pi, i + 1) };
+}
+
+// Strip parentheses.
+Int at_strip(AtC c, Int id) {
+    if (id >= 0 && c.g.ns[id].kind == "paren" && c.g.ns[id].nk == 1) { return at_strip(c, kg_kid(c.g, id, 0)); }
+    return id;
+}
+
+// The value a local binding was bound to, following refs (-1 when the
+// name is a parameter or anything else).
+Int at_value(AtC c, Int id, Int depth) {
+    Int e = at_strip(c, id);
+    if (e < 0 || depth > 16) { return -1; }
+    if (c.g.ns[e].kind != "ref") { return e; }
+    Int d = at_def(c, e);
+    if (d < 0) { return -1; }
+    Str dk = c.g.ns[d].kind;
+    if ((dk == "bind" || dk == "rbind") && c.g.ns[d].nk > 0) { return at_value(c, kg_kid(c.g, d, c.g.ns[d].nk - 1), depth + 1); }
+    return -1;
+}
+
+// The @anchor function an expression is a call of, or -1.
+Int at_anchor_of(AtC c, Int id) {
+    Int v = at_value(c, id, 0);
+    if (v < 0 || c.g.ns[v].kind != "call") { return -1; }
+    Int f = at_callee(c, v);
+    if (f < 0 || !at_ann(c.g.ns[f].aux, "anchor").found) { return -1; }
+    return f;
+}
+
+// An anchor function's kind and algorithms, from its annotation.
+List(Str) at_anchor_kind(AtC c, Int f) { return at_kind_split(at_get(at_kv(at_ann(c.g.ns[f].aux, "anchor").args), "kind")); }
+List(Str) at_anchor_algs(AtC c, Int f) { return at_list(at_get(at_kv(at_ann(c.g.ns[f].aux, "anchor").args), "algorithms")); }
+
+// The time source an EvidenceTime expression has: kernel_time() is
+// Kernel, a primitive marked `@primitive(time_source = S)` S, anything
+// else Kernel (the weakest).
+Str at_time_of(AtC c, Int id) {
+    Int v = at_value(c, id, 0);
+    if (v < 0 || c.g.ns[v].kind != "call") { return "Kernel"; }
+    Int f = at_callee(c, v);
+    if (f < 0) { return "Kernel"; }
+    if (!at_in_verify(c, f)) { return "Kernel"; }
+    Str s = at_get(at_prim(c, f), "time_source");
+    return if (s == "") { "Kernel" } else { s };
+}
+
+// What a primitive call yields as evidence.
+AtF at_facts_call(AtC c, Int id, Map(Int, AtF) env) {
+    Int f = at_callee(c, id);
+    AtKv p = at_prim(c, f);
+    if (p.ks.len() == 0 || !at_in_verify(c, f)) { return at_nof(); }
+    if (at_has(p, "assume")) {
+        Int asm = at_assumption_of(c, at_arg(c, id, f, at_get(p, "assumption")));
+        return AtF {.anchors = [asm], .quals = [], .policy = -1, .time = "Kernel", .kind = "verify", .at = id};
+    }
+    if (at_has(p, "verify") || at_has(p, "open")) {
+        // The anchor, or with no anchor `from`: verified keys (CoRIM
+        // attest-key triples) and the anchors they rest on. `with`: a
+        // second verified member the evidence is bound to (an SPDM session).
+        Bool keyed = at_has(p, "anchor");
+        AtF from = if (!keyed && at_has(p, "from")) { at_facts(c, at_arg(c, id, f, at_get(p, "from")), env) } else { at_nof() };
+        List(Int) base = if (keyed) { [at_anchor_of(c, at_arg(c, id, f, at_get(p, "anchor")))] } else if (from.kind != "") { from.anchors } else { [-1] };
+        AtF also = if (at_has(p, "with")) { at_facts(c, at_arg(c, id, f, at_get(p, "with")), env) } else { at_nof() };
+        List(Int) anchors = if (!at_has(p, "with")) { base } else if (also.kind != "") { base.concat(also.anchors) } else { [-1] };
+        Str t = if (at_has(p, "time")) { at_time_of(c, at_arg(c, id, f, at_get(p, "time"))) } else { "Kernel" };
+        return AtF {.anchors = anchors, .quals = at_list(at_get(p, "gives")), .policy = -1, .time = t, .kind = if (at_has(p, "verify")) { "verify" } else { "open" }, .at = id};
+    }
+    if (at_has(p, "from") && !at_has(p, "appraise")) {
+        // A derived value (platform_key, local_open): the anchors of what
+        // it came from, its own qualifiers.
+        AtF from = at_facts(c, at_arg(c, id, f, at_get(p, "from")), env);
+        // `with`: a second member bound to it (bind_counter): the anchors
+        // of both (one bound evidence set, §3.5).
+        AtF also = if (at_has(p, "with")) { at_facts(c, at_arg(c, id, f, at_get(p, "with")), env) } else { from };
+        Bool known = from.kind != "" && also.kind != "";
+        return AtF {.anchors = if (known) { from.anchors.concat(also.anchors) } else { [-1] }, .quals = at_list(at_get(p, "gives")), .policy = -1, .time = if (at_has(p, "with")) { also.time } else { from.time }, .kind = "verify", .at = id};
+    }
+    if (at_has(p, "appraise")) {
+        AtF from = at_facts(c, at_arg(c, id, f, at_get(p, "from")), env);
+        Int pol = at_policy_of(c, at_arg(c, id, f, at_get(p, "policy")));
+        // `with`: endorsed reference values; the result rests on their
+        // endorser too.
+        AtF also = if (at_has(p, "with")) { at_facts(c, at_arg(c, id, f, at_get(p, "with")), env) } else { from };
+        Bool known = from.kind != "" && also.kind != "";
+        List(Int) anchors = if (!known) { [-1] } else if (at_has(p, "with")) { from.anchors.concat(also.anchors) } else { from.anchors };
+        return AtF {.anchors = anchors, .quals = from.quals, .policy = pol, .time = from.time, .kind = "appraise", .at = id};
+    }
+    return at_nof();
+}
+
+// The evidence an expression holds: a primitive call, or a binding of one
+// already known (env, by binder node).
+AtF at_facts(AtC c, Int id, Map(Int, AtF) env) {
+    Int e = at_strip(c, id);
+    if (e < 0) { return at_nof(); }
+    if (c.g.ns[e].kind == "try" && c.g.ns[e].nk == 1) { return at_facts(c, kg_kid(c.g, e, 0), env); }
+    if (c.g.ns[e].kind == "call") { return at_facts_call(c, e, env); }
+    if (c.g.ns[e].kind == "ref") {
+        Int d = at_def(c, e);
+        return if (d >= 0) { env.get(d) else { at_nof() } } else { at_nof() };
+    }
+    return at_nof();
+}
+
+// The @assumption function an expression is a call of, or -1.
+Int at_assumption_of(AtC c, Int id) {
+    Int v = at_value(c, id, 0);
+    if (v < 0 || c.g.ns[v].kind != "call") { return -1; }
+    Int f = at_callee(c, v);
+    if (f < 0 || !at_ann(c.g.ns[f].aux, "assumption").found) { return -1; }
+    return f;
+}
+
+// The @policy function a direct call names, or -1.
+Int at_policy_of(AtC c, Int id) {
+    Int e = at_strip(c, id);
+    if (e < 0 || c.g.ns[e].kind != "call") { return -1; }
+    Int f = at_callee(c, e);
+    if (f < 0 || !at_ann(c.g.ns[f].aux, "policy").found) { return -1; }
+    return f;
+}
+
+// ─── Per-node checks ────────────────────────────────────────────────
+
+// Walk every node of function f (cur), checking calls.
+Bool at_walk(AtC c, Int id, Int cur, Bool acc) {
+    KN n = c.g.ns[id];
+    Bool here = if (n.kind == "call") { at_call(c, id, cur) } else { false };
+    return at_walk_kids(c, id, 0, cur, acc || here);
+}
+
+Bool at_walk_kids(AtC c, Int id, Int i, Int cur, Bool acc) {
+    if (i >= c.g.ns[id].nk) { return acc; }
+    return at_walk_kids(c, id, i + 1, cur, at_walk(c, kg_kid(c.g, id, i), cur, acc));
+}
+
+Bool at_call(AtC c, Int id, Int cur) {
+    Int f = at_callee(c, id);
+    if (f < 0) { return false; }
+    Str fa = c.g.ns[f].aux;
+    Str fname = c.g.ns[f].text;
+    Bool inv = at_in_verify(c, id);
+    Bool b1 = if (str_contains(fa, "@verify_internal") && !inv && at_path(c, id) != at_path(c, f)) { at_err("E0280", "`" + fname + "` is internal to lib/verify/: a program checks evidence through the platform verifiers, which call it", c, id) } else { false };
+    Bool core = at_path(c, f) == c.vdir + "core.resid";
+    Bool mk = core && (fname == "anchor_make" || fname == "anchor_der");
+    Bool incore = at_path(c, id) == c.vdir + "core.resid";
+    Bool inanchor = cur >= 0 && at_ann(c.g.ns[cur].aux, "anchor").found;
+    Bool asmcore = at_path(c, f) == c.vdir + "assume.resid" && (fname == "assumption_make" || fname == "assumption_pinned");
+    Bool inasm = cur >= 0 && at_ann(c.g.ns[cur].aux, "assumption").found;
+    Bool b2a = if (asmcore && at_path(c, id) != c.vdir + "assume.resid" && !(inasm && fname == "assumption_make")) { at_err("E0289", "`" + fname + "` is the body of an @assumption function: declare one with @assumption(reason = ..., pins = ...)", c, id) } else { false };
+    Bool b2b = if (mk && !incore && !(inanchor && fname == "anchor_make")) { at_err("E0281", "`" + fname + "` is the body of an @anchor function, which names an anchor; declare one with @anchor(kind = ..., fingerprint = ..., ...)", c, id) } else { false };
+    Bool b2 = b2a || b2b;
+    AtKv p = at_prim(c, f);
+    if (p.ks.len() == 0 || !at_in_verify(c, f) || inv) { return b1 || b2; }
+    Bool b3 = if (at_has(p, "anchor")) { at_check_anchor_arg(c, id, f, p) } else if (at_has(p, "assumption")) { at_check_asm_arg(c, id, f, p) } else { false };
+    Bool b4 = if (at_has(p, "appraise")) { at_check_policy_arg(c, id, f, p) } else { false };
+    Bool rel = at_has(p, "release");
+    Bool indec = cur >= 0 && at_ann(c.g.ns[cur].aux, "decides").found;
+    Bool b5 = if (rel && !indec) { at_err("E0287", "`" + fname + "` releases to attested evidence, which only a @decides function does: mark the function that releases with @decides(accept = ..., appraised = ...)", c, id) } else { false };
+    return b1 || b2 || b3 || b4 || b5;
+}
+
+Bool at_check_anchor_arg(AtC c, Int id, Int f, AtKv p) {
+    Int a = at_arg(c, id, f, at_get(p, "anchor"));
+    Int an = at_anchor_of(c, a);
+    if (an < 0) { return at_err("E0282", "the anchor `" + c.g.ns[f].text + "` verifies under must be a call of an @anchor function (directly or through a local binding), so the compiler knows whose word the result rests on", c, if (a >= 0) { a } else { id }); }
+    List(Str) kinds = at_list(at_get(p, "kinds"));
+    List(Str) kp = at_anchor_kind(c, an);
+    if (kinds.len() > 0 && at_idx(kinds, kp[0], 0) < 0) { return at_err("E0282", "`" + c.g.ns[an].text + "` is an anchor of kind " + kp[0] + ", and `" + c.g.ns[f].text + "` takes " + str_join(kinds, " or "), c, a); }
+    List(Str) algs = at_anchor_algs(c, an);
+    List(Str) want = at_list(at_get(p, "algorithms"));
+    Str w = at_first_unknown(want, algs, 0);
+    if (w != "") { return at_err("E0282", "`" + c.g.ns[f].text + "` verifies with " + w + ", which the anchor `" + c.g.ns[an].text + "` does not list in its algorithms", c, a); }
+    Str fmt = at_get(p, "format");
+    List(Str) fms = at_list(at_get(at_kv(at_ann(c.g.ns[an].aux, "anchor").args), "formats"));
+    if (fmt != "" && at_idx(fms, fmt, 0) < 0) { return at_err("E0282", "the anchor `" + c.g.ns[an].text + "` does not list " + fmt + " in its formats", c, a); }
+    return false;
+}
+
+Bool at_check_asm_arg(AtC c, Int id, Int f, AtKv p) {
+    Int a = at_arg(c, id, f, at_get(p, "assumption"));
+    if (at_assumption_of(c, a) < 0) { return at_err("E0282", "the assumption `" + c.g.ns[f].text + "` rests on must be a call of an @assumption function, so the compiler knows which reliance it is", c, if (a >= 0) { a } else { id }); }
+    return false;
+}
+
+Bool at_check_policy_arg(AtC c, Int id, Int f, AtKv p) {
+    Int a = at_arg(c, id, f, at_get(p, "policy"));
+    Int pol = at_policy_of(c, a);
+    if (pol < 0) { return at_err("E0283", "the policy of `" + c.g.ns[f].text + "` must be a direct call of a @policy function, so the appraisal names a reviewed rule (a policy built at run time or read from outside is refused)", c, if (a >= 0) { a } else { id }); }
+    return false;
+}
+
+// ─── Declarations ───────────────────────────────────────────────────
+
+Bool at_decl(AtC c, Int f) {
+    KN fn = c.g.ns[f];
+    Str aux = fn.aux;
+    Bool prim = str_contains(aux, "@primitive") || str_contains(aux, "@verify_internal");
+    Str p = at_path(c, f);
+    Bool vi_home = p == c.croot + "challenge.resid";
+    Bool b1 = if (prim && !at_in_verify(c, f) && !(vi_home && !str_contains(aux, "@primitive"))) { at_err("E0280", "@primitive and @verify_internal mark the standard library's verifiers (lib/verify/): only they build verified evidence", c, f) } else { false };
+    AtA an = at_ann(aux, "anchor");
+    Bool b2 = if (an.found) { at_anchor_decl(c, f, an.args) } else { false };
+    Bool inlib = gm_pkg(p, c.pk, 0) == "std";
+    Bool b1a = if (at_ann(aux, "assumption").found && inlib) { at_err("E0289", "an assumption in the standard library: only an application states what it assumes (PLAN-attestation.md §3.6)", c, f) } else { false };
+    AtA po = at_ann(aux, "policy");
+    Bool b3 = if (po.found && fn.nk != 2) { at_err("E0283", "a @policy function is nullary: its value is the policy, a Known record", c, f) } else { false };
+    AtA de = at_ann(aux, "decides");
+    Bool b4 = if (de.found) { at_decides(c, f, de.args) } else { false };
+    Bool b5 = at_walk(c, kg_kid(c.g, f, fn.nk - 1), f, false);
+    return b1 || b1a || b2 || b3 || b4 || b5;
+}
+
+Bool at_anchor_decl(AtC c, Int f, Str args) {
+    if (c.g.ns[f].nk != 2) { return at_err("E0281", "an @anchor function is nullary", c, f); }
+    List(Str) fms = at_list(at_get(at_kv(args), "formats"));
+    Str apk = gm_pkg(at_path(c, f), c.pk, 0);
+    return at_formats(c, f, fms, apk, 0);
+}
+
+Bool at_formats(AtC c, Int f, List(Str) fms, Str apk, Int i) {
+    if (i >= fms.len()) { return false; }
+    Str fm = fms[i];
+    List(Int) ds = c.fns.get("type:" + fm) else { [] };
+    if (ds.len() != 1) { return at_err("E0281", "the format `" + fm + "` is not one record type the program declares", c, f); }
+    Int d = ds[0];
+    if (!str_contains(c.g.ns[d].aux, "@signed")) { return at_err("E0281", "the format `" + fm + "` is not a @signed layout type", c, f); }
+    Str tpk = gm_pkg(at_path(c, d), c.pk, 0);
+    if (tpk != "std" && tpk != apk) { return at_err("E0281", "the format `" + fm + "` is declared in " + tpk + ", not in the standard library or this anchor's package: its field origins speak only for the package that declares both", c, f); }
+    return at_formats(c, f, fms, apk, i + 1);
+}
+
+// ─── Decisions (§5.1) ───────────────────────────────────────────────
+
+// The decision's requirements.
+type AtD = { List(Int) accept; List(Int) require; Int appraised; Bool appr_none; Str identity; Bool not_kernel; Bool fresh; Str err; };
+
+// A function node named n with annotation `ann`, or -1 (-2 when several).
+Int at_named(AtC c, Str n, Str ann) {
+    List(Int) ds = c.fns.get("fn:" + n) else { [] };
+    List(Int) hits = at_with_ann(c, ds, ann, 0, []);
+    return if (hits.len() == 1) { hits[0] } else if (hits.len() == 0) { -1 } else { -2 };
+}
+
+List(Int) at_with_ann(AtC c, List(Int) ds, Str ann, Int i, List(Int) acc) {
+    if (i >= ds.len()) { return acc; }
+    return at_with_ann(c, ds, ann, i + 1, if (at_ann(c.g.ns[ds[i]].aux, ann).found) { acc.concat([ds[i]]) } else { acc });
+}
+
+AtD at_dreq(AtC c, Str args) {
+    AtD bad = AtD {.accept = [], .require = [], .appraised = -1, .appr_none = false, .identity = "", .not_kernel = false, .fresh = true, .err = ""};
+    AtKv kv = at_kv(args);
+    if (kv.err != "") { return at_dfail(bad, kv.err); }
+    List(Str) keys = ["accept", "require", "appraised", "identity", "time", "fresh", "bind"];
+    Str uk = at_first_unknown(kv.ks, keys, 0);
+    if (uk != "") { return at_dfail(bad, "unknown @decides key `" + uk + "` (it takes accept, require, appraised, identity, time, fresh, bind)"); }
+    if (at_idx(kv.vs, "", 0) >= 0) { return at_dfail(bad, "@decides takes `key = value` arguments"); }
+    List(Str) acc = at_list(at_get(kv, "accept"));
+    if (acc.len() == 0) { return at_dfail(bad, "a decision names the anchors it accepts: `accept = [anchor_fn, ...]`"); }
+    List(Int) aids = at_anchor_ids(c, acc, 0, []);
+    List(Int) rids = at_anchor_ids(c, at_list(at_get(kv, "require")), 0, []);
+    Int bada = at_first_neg(aids, 0);
+    if (bada >= 0) { return at_dfail(bad, "`" + acc[bada] + "` in accept is not one @anchor or @assumption function"); }
+    Int badr = at_first_neg(rids, 0);
+    if (badr >= 0) { return at_dfail(bad, "`" + at_list(at_get(kv, "require"))[badr] + "` in require is not one @anchor function"); }
+    if (!at_subset(rids, aids, 0)) { return at_dfail(bad, "every required anchor is also accepted"); }
+    Str idn = at_get(kv, "identity");
+    if (idn != "" && idn != "channel_bound" && idn != "key_bound" && idn != "local" && idn != "none") { return at_dfail(bad, "identity is channel_bound, key_bound, local or none"); }
+    Str ap = at_get(kv, "appraised");
+    Int apid = if (ap == "" || ap == "none") { -1 } else { at_named(c, ap, "policy") };
+    if (ap != "" && ap != "none" && apid < 0) { return at_dfail(bad, "`" + ap + "` in appraised is not one @policy function"); }
+    if (ap == "" && idn != "local") { return at_dfail(bad, "a decision says which appraisal its evidence passed: `appraised = <@policy function>` (or `appraised = none`, listed by residc verify)"); }
+    Str tm = at_get(kv, "time");
+    if (tm != "" && tm != "not_kernel") { return at_dfail(bad, "time takes not_kernel"); }
+    Str fr = at_get(kv, "fresh");
+    if (fr != "" && fr != "false") { return at_dfail(bad, "fresh takes false (freshness is required by default)"); }
+    return AtD {.accept = aids, .require = rids, .appraised = apid, .appr_none = ap == "none", .identity = idn, .not_kernel = tm == "not_kernel", .fresh = fr == "", .err = ""};
+}
+
+AtD at_dfail(AtD d, Str e) { return AtD {.accept = d.accept, .require = d.require, .appraised = d.appraised, .appr_none = d.appr_none, .identity = d.identity, .not_kernel = d.not_kernel, .fresh = d.fresh, .err = e}; }
+
+List(Int) at_anchor_ids(AtC c, List(Str) ns, Int i, List(Int) acc) {
+    if (i >= ns.len()) { return acc; }
+    Int a = at_named(c, ns[i], "anchor");
+    return at_anchor_ids(c, ns, i + 1, acc.concat([if (a == -1) { at_named(c, ns[i], "assumption") } else { a }]));
+}
+
+Int at_first_neg(List(Int) xs, Int i) {
+    if (i >= xs.len()) { return -1; }
+    if (xs[i] < 0) { return i; }
+    return at_first_neg(xs, i + 1);
+}
+
+Bool at_has_int(List(Int) xs, Int x) { return at_has_int_at(xs, x, 0); }
+Bool at_has_int_at(List(Int) xs, Int x, Int i) { return i < xs.len() && (xs[i] == x || at_has_int_at(xs, x, i + 1)); }
+
+// Every element of xs in ys.
+Bool at_subset(List(Int) xs, List(Int) ys, Int i) { return i >= xs.len() || (at_has_int(ys, xs[i]) && at_subset(xs, ys, i + 1)); }
+
+// The first element of xs not in ys, or -1.
+Int at_first_out(List(Int) xs, List(Int) ys, Int i) {
+    if (i >= xs.len()) { return -1; }
+    if (!at_has_int(ys, xs[i])) { return xs[i]; }
+    return at_first_out(xs, ys, i + 1);
+}
+
+Str at_first_missing(AtKv kv, List(Str) need, Int i) {
+    if (i >= need.len()) { return ""; }
+    if (!at_has(kv, need[i])) { return need[i]; }
+    return at_first_missing(kv, need, i + 1);
+}
+
+// The first of xs not in allowed, or "".
+Str at_first_unknown(List(Str) xs, List(Str) allowed, Int i) {
+    if (i >= xs.len()) { return ""; }
+    if (at_idx(allowed, xs[i], 0) < 0) { return xs[i]; }
+    return at_first_unknown(xs, allowed, i + 1);
+}
+
+Str at_first_bad_alg(List(Str) xs, Int i) {
+    if (i >= xs.len()) { return ""; }
+    if (!at_alg_ok(xs[i])) { return xs[i]; }
+    return at_first_bad_alg(xs, i + 1);
+}
+
+// The walk over a decision's body: evidence known by binder, the gates in
+// scope (binders whose value came through a primitive's Ok), whether
+// inside a loop, and what was found.
+type AtW = { Map(Int, AtF) env; List(Int) gates; Int loop; Bool bad; };
+
+Bool at_decides(AtC c, Int f, Str args) {
+    AtD d = at_dreq(c, args);
+    if (d.err != "") { return at_err("E0284", d.err, c, f); }
+    Map(Int, AtF) e0 = {};
+    AtW w = at_stmt(c, d, kg_kid(c.g, f, c.g.ns[f].nk - 1), AtW {.env = e0, .gates = [], .loop = 0, .bad = false});
+    return w.bad;
+}
+
+AtW at_wbad(AtW w, Bool b) { return AtW {.env = w.env, .gates = w.gates, .loop = w.loop, .bad = w.bad || b}; }
+
+// Statements in order: a binding of a primitive's result through `?`
+// opens a gate for what follows.
+AtW at_stmt(AtC c, AtD d, Int id, AtW w) {
+    KN n = c.g.ns[id];
+    Str k = n.kind;
+    if (k == "block") { return at_stmts(c, d, id, 0, w); }
+    if (k == "bind" || k == "rbind") {
+        Int v = kg_kid(c.g, id, n.nk - 1);
+        AtW w1 = at_scan_expr(c, d, v, w);
+        AtF fx = at_facts(c, v, w.env);
+        Bool tried = c.g.ns[at_strip(c, v)].kind == "try";
+        if (fx.kind == "") { return w1; }
+        Bool lp = if (tried && w.loop > 0 && fx.kind == "verify") { at_err("E0288", "a gate formed inside a loop: each iteration needs its own fresh evidence, so decide once per call", c, v) } else { false };
+        return at_wbad(AtW {.env = w1.env.insert(id, fx), .gates = if (tried) { w1.gates.concat([id]) } else { w1.gates }, .loop = w1.loop, .bad = w1.bad}, lp);
+    }
+    if (k == "ret") {
+        if (n.nk == 0) { return w; }
+        return at_ret(c, d, kg_kid(c.g, id, 0), w);
+    }
+    if (k == "if") {
+        Int cd = kg_kid(c.g, id, 0);
+        // `if (Ok(x) = P(...)) { ... }`: the block runs on the gate.
+        Bool pat = c.g.ns[cd].kind == "pat" && c.g.ns[cd].text == "Ok";
+        AtF fx = if (pat) { at_facts(c, kg_kid(c.g, cd, 0), w.env) } else { at_nof() };
+        AtW w0 = at_scan_expr(c, d, cd, w);
+        AtW wi = if (pat && fx.kind != "") { AtW {.env = w0.env.insert(cd, fx), .gates = w0.gates.concat([cd]), .loop = w0.loop, .bad = w0.bad} } else { w0 };
+        AtW w2 = at_stmts(c, d, id, 1, wi);
+        return AtW {.env = w2.env, .gates = w.gates, .loop = w.loop, .bad = w2.bad};
+    }
+    if (k == "for" || k == "while") {
+        AtW wl = AtW {.env = w.env, .gates = w.gates, .loop = w.loop + 1, .bad = w.bad};
+        AtW w2 = at_stmts(c, d, id, 0, wl);
+        return AtW {.env = w2.env, .gates = w.gates, .loop = w.loop, .bad = w2.bad};
+    }
+    return at_scan_expr(c, d, id, w);
+}
+
+AtW at_stmts(AtC c, AtD d, Int id, Int i, AtW w) {
+    if (i >= c.g.ns[id].nk) { return w; }
+    Int kid = kg_kid(c.g, id, i);
+    Str kk = c.g.ns[kid].kind;
+    Bool st = kk == "block" || kk == "bind" || kk == "rbind" || kk == "ret" || kk == "if" || kk == "for" || kk == "while" || kk == "estmt" || kk == "discard" || kk == "letpat" || kk == "destr";
+    AtW w2 = if (st) { at_stmt(c, d, kid, w) } else { at_scan_expr(c, d, kid, w) };
+    // Gates stay open to the end of the enclosing block.
+    return at_stmts(c, d, id, i + 1, w2);
+}
+
+// Expressions are scanned for nested statements (block expressions,
+// match arms) that return.
+AtW at_scan_expr(AtC c, AtD d, Int id, AtW w) {
+    KN n = c.g.ns[id];
+    if (n.kind == "bexpr" || n.kind == "block") { return at_stmts(c, d, id, 0, w); }
+    if (n.kind == "ret") { return at_stmt(c, d, id, w); }
+    if (n.kind == "lambda") { return w; }
+    if (n.kind == "match") { return at_match_arms(c, d, id, w, false); }
+    return at_scan_kids(c, d, id, 0, w);
+}
+
+AtW at_scan_kids(AtC c, AtD d, Int id, Int i, AtW w) {
+    if (i >= c.g.ns[id].nk) { return w; }
+    return at_scan_kids(c, d, id, i + 1, at_scan_expr(c, d, kg_kid(c.g, id, i), w));
+}
+
+// A match: the Ok arm of a primitive call runs on its gate. as_ret: the
+// arms are the returned value.
+AtW at_match_arms(AtC c, AtD d, Int id, AtW w, Bool as_ret) {
+    Int sc = kg_kid(c.g, id, 0);
+    AtF fx = at_facts(c, sc, w.env);
+    return at_arms(c, d, id, 1, fx, at_scan_expr(c, d, sc, w), as_ret);
+}
+
+AtW at_arms(AtC c, AtD d, Int id, Int i, AtF fx, AtW w, Bool as_ret) {
+    if (i >= c.g.ns[id].nk) { return w; }
+    Int arm = kg_kid(c.g, id, i);
+    Int na = c.g.ns[arm].nk;
+    Bool okarm = c.g.ns[arm].text == "Ok" && fx.kind != "" && na >= 2;
+    Int binder = if (okarm) { kg_kid(c.g, arm, 0) } else { -1 };
+    AtW wa = if (okarm) { AtW {.env = w.env.insert(binder, fx), .gates = w.gates.concat([binder]), .loop = w.loop, .bad = w.bad} } else { w };
+    Int body = if (na > 0) { kg_kid(c.g, arm, na - 1) } else { -1 };
+    AtW wb = if (body < 0) { wa } else if (as_ret) { at_ret(c, d, body, wa) } else { at_scan_expr(c, d, body, wa) };
+    return at_arms(c, d, id, i + 1, fx, AtW {.env = w.env, .gates = w.gates, .loop = w.loop, .bad = wb.bad}, as_ret);
+}
+
+// A returned expression: Err(...) is a failure; a match, if or block is
+// followed into its arms; anything else is a success return, which must
+// rest on a gate.
+AtW at_ret(AtC c, AtD d, Int id, AtW w) {
+    Int e = at_strip(c, id);
+    KN n = c.g.ns[e];
+    if (n.kind == "call" && n.text == "Err" && at_def(c, e) < 0) { return at_scan_expr(c, d, e, w); }
+    if (n.kind == "match") { return at_match_arms(c, d, e, w, true); }
+    if (n.kind == "ifx" || n.kind == "tern") {
+        AtW w0 = at_scan_expr(c, d, kg_kid(c.g, e, 0), w);
+        AtW w1 = at_ret(c, d, kg_kid(c.g, e, 1), w0);
+        return if (n.nk > 2) { at_ret(c, d, kg_kid(c.g, e, 2), w1) } else { w1 };
+    }
+    if (n.kind == "bexpr") {
+        if (n.nk == 0) { return w; }
+        AtW w0 = at_stmts_upto(c, d, e, 0, n.nk - 1, w);
+        return at_ret(c, d, kg_kid(c.g, e, n.nk - 1), w0);
+    }
+    AtW ws = at_scan_expr(c, d, e, w);
+    return at_wbad(ws, at_success(c, d, e, ws));
+}
+
+AtW at_stmts_upto(AtC c, AtD d, Int id, Int i, Int to, AtW w) {
+    if (i >= to) { return w; }
+    return at_stmts_upto(c, d, id, i + 1, to, at_stmt(c, d, kg_kid(c.g, id, i), w));
+}
+
+// A success return at e. Its gate: the release's evidence argument for a
+// release, the call itself when it is a primitive, else the latest gate
+// in scope.
+Bool at_success(AtC c, AtD d, Int e, AtW w) {
+    Int inner = at_unwrap_ok(c, e);
+    Int f = if (c.g.ns[inner].kind == "call") { at_callee(c, inner) } else { -1 };
+    AtKv p = at_prim(c, f);
+    Str rel = if (f >= 0 && at_in_verify(c, f)) { at_get(p, "release") } else { "" };
+    if (d.identity == "key_bound" || d.identity == "channel_bound") {
+        if (rel != d.identity) { return at_err("E0287", "a " + d.identity + " decision releases only through " + (if (d.identity == "key_bound") { "seal_to_evidence" } else { "seal_to_channel" }) + " on its gate: every success return is that call", c, e); }
+    }
+    AtF g = if (rel != "") { at_gate_arg(c, inner, f, p, w) } else if (f >= 0 && at_prim(c, f).ks.len() > 0 && at_in_verify(c, f)) { at_facts_call(c, inner, w.env) } else { at_latest(w) };
+    if (g.kind == "") { return at_err("E0284", "a success return that no verified evidence gates: return only after the `?` of a primitive's result (or in its Ok arm), so a failed verification can never reach it", c, e); }
+    return at_requires(c, d, g, e);
+}
+
+// Ok(x) or Ok(x?) as x.
+Int at_unwrap_ok(AtC c, Int e) {
+    Int s = at_strip(c, e);
+    KN n = c.g.ns[s];
+    if (n.kind == "call" && n.text == "Ok" && n.nk == 1 && at_def(c, s) < 0) { return at_unwrap_ok(c, kg_kid(c.g, s, 0)); }
+    if (n.kind == "try" && n.nk == 1) { return at_strip(c, kg_kid(c.g, s, 0)); }
+    return s;
+}
+
+AtF at_gate_arg(AtC c, Int call, Int f, AtKv p, AtW w) {
+    Int a = at_arg(c, call, f, at_get(p, "gate"));
+    Int s = at_strip(c, a);
+    if (s < 0) { return at_nof(); }
+    if (c.g.ns[s].kind == "ref") {
+        Int dd = at_def(c, s);
+        if (!at_has_int(w.gates, dd)) { return at_nof(); }
+        return w.env.get(dd) else { at_nof() };
+    }
+    return at_facts(c, s, w.env);
+}
+
+AtF at_latest(AtW w) {
+    if (w.gates.len() == 0) { return at_nof(); }
+    return w.env.get(w.gates[w.gates.len() - 1]) else { at_nof() };
+}
+
+// The gate meets every requirement of the decision.
+Bool at_requires(AtC c, AtD d, AtF g, Int at) {
+    if (at_has_int(g.anchors, -1) || g.anchors.len() == 0) { return at_err("E0285", "the gate's anchors are not known here: verify inside the decision, with an @anchor function's call as the anchor", c, at); }
+    Int na = at_first_out(g.anchors, d.accept, 0);
+    if (na >= 0) { return at_err("E0285", "the gate rests on `" + c.g.ns[na].text + "`, which the decision does not accept", c, at); }
+    Int nr = at_first_out(d.require, g.anchors, 0);
+    if (nr >= 0) { return at_err("E0285", "the decision requires `" + c.g.ns[nr].text + "`, which the gate does not rest on", c, at); }
+    if (d.appraised >= 0 && g.policy != d.appraised) { return at_err("E0285", "the decision requires evidence appraised under `" + c.g.ns[d.appraised].text + "`" + (if (g.policy >= 0) { ", the gate was appraised under `" + c.g.ns[g.policy].text + "`" } else { ", and the gate is only verified" }), c, at); }
+    Bool fresh = at_idx(g.quals, "fresh", 0) >= 0;
+    if (d.fresh && !fresh) { return at_err("E0285", "the gate is not fresh" + (if (at_idx(g.quals, "delivered", 0) >= 0) { " (a replayable record gives Delivered, which never satisfies a decision)" } else { "" }) + ": verify against a challenge record this program issued (or write `fresh = false`, listed by residc verify)", c, at); }
+    Bool kb = at_idx(g.quals, "key_bound", 0) >= 0;
+    Bool cb = at_idx(g.quals, "channel_bound", 0) >= 0;
+    Bool lo = at_idx(g.quals, "local", 0) >= 0;
+    Str idn = d.identity;
+    Bool idok = if (idn == "none") { true } else if (idn == "key_bound") { kb } else if (idn == "channel_bound") { cb } else if (idn == "local") { lo } else { kb || cb || lo };
+    if (!idok) { return at_err("E0285", "the gate carries no " + (if (idn == "") { "identity (KeyBound, ChannelBound or Local)" } else { idn + " identity" }) + ": a fresh answer can be relayed from another genuine machine; verify with the _key_bound or _channel_bound form (or write `identity = none`, listed by residc verify)", c, at); }
+    if (d.not_kernel && g.time == "Kernel") { return at_err("E0285", "the decision requires a time not from the kernel clock (`time = not_kernel`), and the gate's certificates were checked against kernel_time()", c, at); }
+    return false;
+}
+
+// ─── The pass ───────────────────────────────────────────────────────
+
+// Functions and record types by name ("fn:" / "type:" + name).
+Map(Str, List(Int)) at_index(Kg g, Int id, Int i, Map(Str, List(Int)) acc) {
+    if (i >= g.ns[id].nk) { return acc; }
+    Int d = kg_kid(g, id, i);
+    Str k = g.ns[d].kind;
+    Str key = if (k == "fn") { "fn:" + g.ns[d].text } else if (k == "struct_t") { "type:" + g.ns[d].text } else { "" };
+    Map(Str, List(Int)) a2 = if (k == "sandbox") { at_index(g, d, 0, acc) } else if (key != "") { acc.insert(key, (acc.get(key) else { [] }).concat([d])) } else { acc };
+    return at_index(g, id, i + 1, a2);
+}
+
+Bool at_decls(AtC c, Int id, Int i, Bool acc) {
+    if (i >= c.g.ns[id].nk) { return acc; }
+    Int d = kg_kid(c.g, id, i);
+    Str k = c.g.ns[d].kind;
+    Bool b = if (k == "sandbox") { at_decls(c, d, 0, false) } else if (k == "fn" && c.g.ns[d].nk > 0) { at_decl(c, d) } else { false };
+    return at_decls(c, id, i + 1, acc || b);
+}
+
+// Does any function carry an annotation this pass reads?
+pub Bool at_any(Kg g, Int id, Int i) {
+    if (i >= g.ns[id].nk) { return false; }
+    Int d = kg_kid(g, id, i);
+    Str k = g.ns[d].kind;
+    Str a = g.ns[d].aux;
+    Bool hit = if (k == "sandbox") { at_any(g, d, 0) } else { k == "fn" && (str_contains(a, "@primitive") || str_contains(a, "@verify_internal") || str_contains(a, "@anchor") || str_contains(a, "@policy") || str_contains(a, "@decides") || str_contains(a, "@robust_exempt") || str_contains(a, "@assumption")) };
+    return hit || at_any(g, id, i + 1);
+}
+
+// The checks on the program at `unit`; true when any failed.
+pub Bool at_run(Kg g, Int unit, List(Int) def, Str src, Str smap) {
+    if (!at_any(g, unit, 0)) { return false; }
+    Bool binds = at_bind_rule(g, unit, def, src, smap);
+    List(Str) pk = gm_pk(smap);
+    Str root = op_std_root(pk, 0);
+    Map(Str, List(Int)) m0 = {};
+    AtC c = AtC {.g = g, .def = def, .src = src, .smap = smap, .nls = dv_newlines(src, 0, ListBuf()), .pk = pk, .vdir = if (str_starts_with(root, "/")) { root + "verify/" } else { "" }, .croot = root, .fns = at_index(g, unit, 0, m0)};
+    return at_decls(c, unit, 0, false) || binds;
+}
+
+// A program whose challenge_issue calls name more than one purpose (or one
+// the compiler cannot read) names one on every decision (E0293), so a
+// record issued for one protocol cannot satisfy another's decision.
+Bool at_bind_rule(Kg g, Int unit, List(Int) def, Str src, Str smap) {
+    List(Str) bs = at_issue_binds(g, def, 0, []);
+    if (bs.len() <= 1) { return false; }
+    return at_bind_missing(g, unit, 0, src, smap, false);
+}
+
+List(Str) at_issue_binds(Kg g, List(Int) def, Int id, List(Str) acc) {
+    if (id >= g.ns.len()) { return acc; }
+    Bool call = g.ns[id].kind == "call" && g.ns[id].text == "challenge_issue" && id < def.len() && def[id] >= 0 && g.ns[id].nk >= 2;
+    Str t = if (call) { kg_print(g, kg_kid(g, id, 1)) } else { "" };
+    Str key = if (call && at_bind_known(g, kg_kid(g, id, 1))) { t } else if (call) { f"?{id}" } else { "" };
+    List(Str) a2 = if (key != "" && at_idx(acc, key, 0) < 0) { acc.concat([key]) } else { acc };
+    return at_issue_binds(g, def, id + 1, a2);
+}
+
+// A bind argument the compiler reads: a list of literals, or a call of
+// literals only (bytes_of("x"), chal_bytes(bytes_of("x"))).
+Bool at_bind_known(Kg g, Int id) {
+    Str k = g.ns[id].kind;
+    if (k == "lit" || k == "emptyb") { return true; }
+    if (k == "list" || k == "call" || k == "paren" || k == "cast") { return at_bind_kids(g, id, 0); }
+    return false;
+}
+
+Bool at_bind_kids(Kg g, Int id, Int i) { return i >= g.ns[id].nk || (at_bind_known(g, kg_kid(g, id, i)) && at_bind_kids(g, id, i + 1)); }
+
+Bool at_bind_missing(Kg g, Int id, Int i, Str src, Str smap, Bool acc) {
+    if (i >= g.ns[id].nk) { return acc; }
+    Int d = kg_kid(g, id, i);
+    Str k = g.ns[d].kind;
+    AtA de = if (k == "fn") { at_ann(g.ns[d].aux, "decides") } else { AtA {.found = false, .args = ""} };
+    Bool bad = de.found && !at_has(at_kv(de.args), "bind");
+    Bool e = if (bad) { dv_diag_at("E0293", "this program issues challenges for more than one purpose (or one the compiler cannot read), so every decision names the one it accepts: `@decides(..., bind = \"purpose\")`", g, d, src, smap) } else { false };
+    Bool inner = if (k == "sandbox") { at_bind_missing(g, d, 0, src, smap, false) } else { false };
+    return at_bind_missing(g, id, i + 1, src, smap, acc || e || inner);
+}
+
+// Does any function carry @decides? (Then the labels run in every build,
+// for E0286.)
+pub Bool at_has_decides(Kg g, Int id, Int i) {
+    if (i >= g.ns[id].nk) { return false; }
+    Int d = kg_kid(g, id, i);
+    Str k = g.ns[d].kind;
+    Bool hit = if (k == "sandbox") { at_has_decides(g, d, 0) } else { k == "fn" && at_ann(g.ns[d].aux, "decides").found };
+    return hit || at_has_decides(g, id, i + 1);
+}
+
+// ─── What residc verify lists (§11) ─────────────────────────────────
+
+// One line per anchor, policy and decision the program declares, for the
+// provenance record's `attest` array.
+pub Str at_report(Kg g, Int unit, Str src, Str smap) {
+    if (!at_any(g, unit, 0)) { return ""; }
+    List(Str) pk = gm_pk(smap);
+    List(Int) none = [];
+    Map(Str, List(Int)) m0 = {};
+    AtC c = AtC {.g = g, .def = none, .src = src, .smap = smap, .nls = dv_newlines(src, 0, ListBuf()), .pk = pk, .vdir = "", .croot = "", .fns = m0};
+    return str_join(at_rep_decls(c, unit, 0, []), "\n");
+}
+
+List(Str) at_rep_decls(AtC c, Int id, Int i, List(Str) acc) {
+    if (i >= c.g.ns[id].nk) { return acc; }
+    Int d = kg_kid(c.g, id, i);
+    Str k = c.g.ns[d].kind;
+    List(Str) a2 = if (k == "sandbox") { at_rep_decls(c, d, 0, acc) } else if (k == "fn") { acc.concat(at_rep_fn(c, d)) } else { acc };
+    return at_rep_decls(c, id, i + 1, a2);
+}
+
+List(Str) at_rep_fn(AtC c, Int f) {
+    Str aux = c.g.ns[f].aux;
+    Str who = gm_pkg(at_path(c, f), c.pk, 0) + ":" + c.g.ns[f].text;
+    AtA an = at_ann(aux, "anchor");
+    if (an.found) {
+        AtKv kv = at_kv(an.args);
+        Str pr = at_get(kv, "principal");
+        return ["anchor " + who + " kind " + at_get(kv, "kind") + (if (pr == "") { "" } else { " principal " + pr }) + " " + at_unquote(at_get(kv, "fingerprint")) + " from " + at_unquote(at_get(kv, "source")) + " reviewed by " + at_unquote(at_get(kv, "reviewed_by")) + " expires " + at_unquote(at_get(kv, "expires"))];
+    }
+    if (at_ann(aux, "policy").found) { return ["policy " + who]; }
+    AtA asm = at_ann(aux, "assumption");
+    if (asm.found) { return ["assumption " + who + " pins " + at_unquote(at_get(at_kv(asm.args), "pins")) + " because " + at_unquote(at_get(at_kv(asm.args), "reason"))]; }
+    AtA rx = at_ann(aux, "robust_exempt");
+    if (rx.found) { return ["robust_exempt " + who + " " + at_unquote(at_get(at_kv(rx.args), "reason"))]; }
+    AtA de = at_ann(aux, "decides");
+    if (!de.found) { return []; }
+    AtKv kv = at_kv(de.args);
+    Str idn = if (at_has(kv, "identity")) { at_get(kv, "identity") } else { "required" };
+    Str ap = if (at_has(kv, "appraised")) { at_get(kv, "appraised") } else { "none (identity = local)" };
+    List(Str) marks = (if (idn == "none") { ["identity = none"] } else { [] }).concat(if (ap == "none") { ["appraised = none"] } else { [] }).concat(if (at_get(kv, "fresh") == "false") { ["fresh = false"] } else { [] });
+    Str flag = if (marks.len() == 0) { "" } else { " [" + str_join(marks, ", ") + "]" };
+    return ["decides " + who + " accept " + at_get(kv, "accept") + (if (at_has(kv, "require")) { " require " + at_get(kv, "require") } else { "" }) + " appraised " + ap + " identity " + idn + (if (at_has(kv, "time")) { " time " + at_get(kv, "time") } else { "" }) + flag];
+}
+
+// ─── The verify closure (§3.2) ──────────────────────────────────────
+// A program that reaches lib/verify/ is compiled only against the files
+// this compiler was released with (compiler/verify_pins.resid, generated
+// by tools/attest/verify_pins.py) and its runtime: otherwise a substituted
+// RESID_HOME could supply its own primitives or a sig_verify that returns
+// true. `--verify-lib-dev` lifts it, and the record says so.
+
+// "" when the closure matches, else why not. done: the merged files
+// (";"-separated), stdroot with a trailing slash, rtpath the runtime IR
+// the link will use.
+@requires(filesystem(readonly))
+pub Str at_pins_check(Str done, Str stdroot, Str rtpath, List(Str) pins) {
+    List(Str) ps = str_split(done, ";");
+    if (!at_reaches_verify(ps, stdroot + "verify/", 0)) { return ""; }
+    Str extra = at_unpinned(ps, stdroot + "verify/", stdroot, pins, 0);
+    if (extra != "") { return "lib/" + extra + " is not a file this compiler was released with"; }
+    return at_pins_at(pins, 0, stdroot, rtpath);
+}
+
+// A merged file under lib/verify/ the pins do not name, or "".
+Str at_unpinned(List(Str) ps, Str vdir, Str stdroot, List(Str) pins, Int i) {
+    if (i >= ps.len()) { return ""; }
+    Str p = imp_normalize(ps[i]);
+    Str rel = str_slice(p, str_len(stdroot), str_len(p));
+    if (str_starts_with(p, vdir) && !at_pinned(pins, rel, 0)) { return rel; }
+    return at_unpinned(ps, vdir, stdroot, pins, i + 1);
+}
+
+Bool at_pinned(List(Str) pins, Str rel, Int i) { return i < pins.len() && (str_starts_with(pins[i], rel + "=") || at_pinned(pins, rel, i + 1)); }
+
+pub Bool at_reaches_verify(List(Str) ps, Str vdir, Int i) {
+    if (i >= ps.len()) { return false; }
+    if (str_starts_with(imp_normalize(ps[i]), vdir)) { return true; }
+    return at_reaches_verify(ps, vdir, i + 1);
+}
+
+@requires(filesystem(readonly))
+Str at_pins_at(List(Str) pins, Int i, Str stdroot, Str rtpath) {
+    if (i >= pins.len()) { return ""; }
+    Int eq = str_find_char(pins[i], 61, 0);
+    Str rel = str_slice(pins[i], 0, eq);
+    Str want = str_slice(pins[i], eq + 1, str_len(pins[i]));
+    Bool rt = rel == "rt.ll" || rel == "rt-aarch64.ll";
+    Bool skip = rt && !str_ends_with(rtpath, "/" + rel) && rtpath != rel;
+    Str path = if (rt) { rtpath } else { stdroot + rel };
+    Str got = if (skip) { want } else if (filesystem.exists(path)) { hex_encode(filesystem.sha256(path)) } else { "" };
+    if (got != want) { return (if (rt) { "the runtime " } else { "lib/" + rel + " " }) + "is not the one this compiler was released with (" + path + ")"; }
+    return at_pins_at(pins, i + 1, stdroot, rtpath);
+}
+
+// ─── Instance pinning (§3.2) ────────────────────────────────────────
+// An instance a program or a dependency declares replaces the standard
+// library's of the same behavior and types program-wide (mono.resid's
+// gm_replace), so in a program that reaches lib/verify/ it could replace
+// what the verifiers use (Random(Secret(UInt(8))), a Word or a Block128
+// instance). There, a standard-library instance is never replaced
+// (E0294). Run on the parsed graph, before instantiation drops the
+// replaced one.
+pub Bool at_instances(Kg g, Int unit, Str src, Str smap) {
+    List(Int) nls = dv_newlines(src, 0, ListBuf());
+    Int prel = gm_prelude_pos(src);
+    List(Str) pk = gm_pk(smap);
+    List(Int) insts = at_insts(g, unit, 0, []);
+    List(Str) std = at_std_keys(g, insts, 0, nls, gm_smap(smap), prel, pk, []);
+    return at_inst_bad(g, insts, 0, std, nls, smap, prel, pk, src, false);
+}
+
+List(Int) at_insts(Kg g, Int id, Int i, List(Int) acc) {
+    if (i >= g.ns[id].nk) { return acc; }
+    Int d = kg_kid(g, id, i);
+    Str k = g.ns[d].kind;
+    List(Int) a2 = if (k == "sandbox") { at_insts(g, d, 0, acc) } else if (k == "behavior") { acc.concat([d]) } else { acc };
+    return at_insts(g, id, i + 1, a2);
+}
+
+List(Str) at_std_keys(Kg g, List(Int) insts, Int i, List(Int) nls, Str smap, Int prel, List(Str) pk, List(Str) acc) {
+    if (i >= insts.len()) { return acc; }
+    Bool std = gm_pkg_of(g, insts[i], nls, smap, prel, pk) == "std";
+    return at_std_keys(g, insts, i + 1, nls, smap, prel, pk, if (std) { acc.concat([gm_inst_key(g, insts[i])]) } else { acc });
+}
+
+Bool at_inst_bad(Kg g, List(Int) insts, Int i, List(Str) std, List(Int) nls, Str smap, Int prel, List(Str) pk, Str src, Bool acc) {
+    if (i >= insts.len()) { return acc; }
+    Str lvl = gm_pkg_of(g, insts[i], nls, gm_smap(smap), prel, pk);
+    Str key = gm_inst_key(g, insts[i]);
+    Bool bad = lvl != "std" && lvl != "prelude" && at_idx(std, key, 0) >= 0;
+    Bool e = if (bad) { dv_diag_at("E0294", "this program reaches lib/verify/, whose verifiers use the standard library's instance " + key + ": an instance here may not replace it", g, insts[i], src, smap) } else { false };
+    return at_inst_bad(g, insts, i + 1, std, nls, smap, prel, pk, src, acc || e);
+}

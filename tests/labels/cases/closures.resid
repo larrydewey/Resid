@@ -1,0 +1,13 @@
+// A closure carries what it captures; one chosen by outside data makes
+// its result External.
+@requires(args)
+Int main() {
+    Int ext = str_len(args.get(1));
+    Int closure(Int) add = lambda(y) { y + ext };
+    Int closure(Int) one = lambda(y) { y + 1 };
+    Int a = add(1);
+    Int b = one(1);
+    Int closure() f = if (ext > 2) { lambda() { 1 } } else { lambda() { 0 } };
+    Int c = f();
+    return a + b + c;
+}

@@ -1,0 +1,12 @@
+// A length field the kernel writes back is checked against the buffer's
+// maximum: DRM copies at most the capacity it is given but reports the
+// name's whole length, so a two-byte buffer gives Err(TooLong) -- the
+// length is never trusted to cut the buffer (PLAN-device-access.md §6.2).
+import "dev/fx_device_reply_length_drm.resid";
+
+@requires(device(readonly))
+Int main() {
+    Str s = match (device.ioctl(fx_drm_short(), [])) { Ok(o) => "accepted", Err(e) => device_error_text(e), };
+    println(s);
+    return 0;
+}

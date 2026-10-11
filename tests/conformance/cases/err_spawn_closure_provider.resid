@@ -1,0 +1,9 @@
+// A spawn body that calls a closure by the name it is bound to uses what
+// the closure's body uses: the binding is immutable, so the call can run
+// nothing else, and the spawn's list must grant it (spec §19).
+@requires(filesystem)
+Int main() {
+    Int closure(Int) f = lambda(v) { str_len(filesystem.read_all("in.txt")) + v };
+    Result(Int, RegionError) r = spawn () { return f(rt 0); };
+    return 0;
+}

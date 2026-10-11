@@ -1,0 +1,3 @@
+// `git` is not a capability family (E0213).
+@requires(git)
+Int main() { return 0; }

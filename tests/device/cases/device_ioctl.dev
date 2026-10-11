@@ -1,0 +1,18 @@
+// Fixture for device_ioctl: two pseudo-terminal ioctls on /dev/ptmx, which any user may open (installed as lib/dev/fx_device_ioctl.resid).
+import "device.resid";
+import "device_write.resid";
+
+// TIOCGPTN, _IOR('T', 0x30, unsigned int): the number of the fresh pty.
+pub IoctlOp fx_ptn() {
+    return IoctlOp {.name = "fx.tiocgptn", .path = "/dev/ptmx", .requests = dv_both(dv_ior(84, 48, 4)), .size = 4, .fields = [Scalar(0, 4, Out)], .write = false, .version = Unversioned, .stability = Uapi};
+}
+
+// TIOCSPTLCK, _IOW('T', 0x31, int): lock (non-zero) or unlock the pty.
+pub IoctlOp fx_lock() {
+    return IoctlOp {.name = "fx.tiocsptlck", .path = "/dev/ptmx", .requests = dv_both(dv_iow(84, 49, 4)), .size = 4, .fields = [Scalar(0, 4, In)], .write = true, .version = Unversioned, .stability = Uapi};
+}
+
+// A directory is not a character device: the host refuses it.
+pub IoctlOp fx_dir() {
+    return IoctlOp {.name = "fx.dir", .path = "/dev/shm", .requests = dv_both(dv_ior(84, 48, 4)), .size = 4, .fields = [Scalar(0, 4, Out)], .write = false, .version = Unversioned, .stability = Uapi};
+}

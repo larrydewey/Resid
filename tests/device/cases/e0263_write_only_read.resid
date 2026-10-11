@@ -1,0 +1,5 @@
+// An ioctl that only sends data to the kernel is a write whatever its descriptor says; one labelled `write = false` is refused (E0263).
+import "dev/fx_e0263_write_only_read.resid";
+
+@requires(device(readonly))
+Int main() { println(fx_call()); return 0; }

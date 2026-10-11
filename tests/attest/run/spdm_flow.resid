@@ -1,0 +1,93 @@
+import "verify/core.resid";
+import "verify/spdm.resid";
+import "verify/nvidia_anchors.resid";
+import "verify/seal.resid";
+import "verify/testing.resid";
+import "challenge.resid";
+import "challenge_bind.resid";
+import "crypto.resid";
+import "ecdsa.resid";
+import "hash.resid";
+import "hpke.resid";
+import "hpkeg.resid";
+import "random.resid";
+
+@requires(filesystem(readonly))
+List(Int) rd(Str p) { return filesystem.read_bytes("fixtures/" + p); }
+
+List(Int) fill(Int v, Int n) { return if (n <= 0) { [] } else { [v].concat(fill(v, n - 1)) }; }
+List(Int) le(Int v, Int n) { return if (n <= 0) { [] } else { [v & 255].concat(le(v >> 8, n - 1)) }; }
+
+@requires(filesystem(readonly))
+List(List(UInt(8))) h100_chain() { return [chal_bytes(rd("nvidia-h100-chain0.der")), chal_bytes(rd("nvidia-h100-chain1.der")), chal_bytes(rd("nvidia-h100-chain2.der")), chal_bytes(rd("nvidia-h100-chain3.der")), chal_bytes(rd("nvidia-h100-chain4.der"))]; }
+
+@requires(filesystem(readonly))
+List(List(UInt(8))) test_chain() { return [chal_bytes(rd("spdm-leaf.der")), chal_bytes(rd("spdm-root.der"))]; }
+
+// A GET_MEASUREMENTS request for this nonce.
+List(Int) request(List(Int) nonce) { return [17, 224, 1, 255].concat(nonce).concat([0]); }
+
+// Two measurement blocks (indices 1 and 2, 48-byte digests), signed by the
+// test device over request ‖ response.
+@requires(filesystem(readonly))
+List(Int) response(List(Int) req, Int m1) {
+    List(Int) b1 = [1, 1].concat(le(51, 2)).concat([1]).concat(le(48, 2)).concat(fill(m1, 48));
+    List(Int) b2 = [2, 1].concat(le(51, 2)).concat([1]).concat(le(48, 2)).concat(fill(7, 48));
+    List(Int) rec = b1.concat(b2);
+    List(Int) body = [17, 96, 0, 0, 2].concat(le(rec.len(), 3)).concat(rec).concat(fill(3, 32)).concat(le(4, 2)).concat([1, 2, 3, 4]);
+    return body.concat(ecdsa_sign_raw(P384, Sha384, rd("spdm-leaf-d.bin"), req.concat(body)));
+}
+
+@policy
+SpdmPolicy gpu_policy() { return SpdmPolicy {.measurements_hex = ["1=" + hex_encode(fill(5, 48)), "2=" + hex_encode(fill(7, 48))]}; }
+
+@decides(accept = [test_device_root], appraised = gpu_policy, identity = key_bound)
+@requires(declassify)
+Result(HpkeMessage, VerifyError) release(List(UInt(8)) req, List(UInt(8)) resp, List(List(UInt(8))) chain, ChallengeRecord issued, List(Int) guest_pk, List(Secret(UInt(8))) key, List(Secret(UInt(8))) sender) {
+    Verified(SpdmEvidence) v = spdm_verify_key_bound(req, resp, chain, issued, test_device_root(), test_time(1791000000), 32, guest_pk)?;
+    Appraised(SpdmEvidence) a = spdm_appraise(v, gpu_policy())?;
+    return seal_to_evidence(a, 32, guest_pk, key, sender);
+}
+
+@requires(filesystem(readonly))
+Str fresh(Str what, List(Int) req, List(Int) resp, ChallengeRecord c) {
+    return what + ": " + match (spdm_verify(chal_bytes(req), chal_bytes(resp), test_chain(), c, test_device_root(), test_time(1791000000))) {
+        Ok(v) => match (spdm_appraise(v, gpu_policy())) { Ok(a) => f"appraised, {a.v.value.measurements.len()} blocks", Err(e) => verify_error_text(e) },
+        Err(e) => verify_error_text(e),
+    };
+}
+
+@requires(declassify)
+List(Int) sec_pub(List(Secret(UInt(8))) k, Int i, ListBuf(Int) acc) { return if (i >= k.len()) { acc.finish() } else { sec_pub(k, i + 1, acc.push((Int) declassify(k[i], "test output"))) }; }
+
+@requires(filesystem(readonly), declassify)
+Int main() {
+    List(UInt(8)) hreq = chal_bytes(rd("nvidia-h100-request.bin"));
+    List(UInt(8)) hresp = chal_bytes(rd("nvidia-h100-response.bin"));
+    println("H100: " + match (test_spdm_check(hreq, hresp, h100_chain(), nvidia_device_root(), test_time(1791000000))) { Ok(e) => f"ok, SPDM 0x{e.version:hex}, {e.measurements.len()} blocks, {e.opaque.len()} opaque bytes", Err(e) => verify_error_text(e) });
+    List(Int) hr = chal_ints(hresp);
+    println("H100, tampered: " + match (test_spdm_check(hreq, chal_bytes(hr[0..100].concat([hr[100] ^ 1]).concat(hr[101..hr.len()])), h100_chain(), nvidia_device_root(), test_time(1791000000))) { Ok(e) => "ACCEPTED", Err(e) => verify_error_text(e) });
+    println("H100, other nonce: " + match (test_spdm_check(chal_bytes([17, 224, 1, 255].concat(fill(1, 32)).concat([0])), hresp, h100_chain(), nvidia_device_root(), test_time(1791000000))) { Ok(e) => "ACCEPTED", Err(e) => verify_error_text(e) });
+    println("H100, test root: " + match (test_spdm_check(hreq, hresp, h100_chain(), test_device_root(), test_time(1791000000))) { Ok(e) => "ACCEPTED", Err(e) => verify_error_text(e) });
+    ChallengeRecord c1 = challenge_issue(32);
+    List(Int) r1 = request(chal_ints(challenge_value(c1)));
+    println(fresh("fresh", r1, response(r1, 5), c1));
+    println(fresh("again", r1, response(r1, 5), c1));
+    ChallengeRecord c2 = challenge_issue(32);
+    List(Int) r2 = request(chal_ints(challenge_value(c2)));
+    println(fresh("other measurement", r2, response(r2, 6), c2));
+    ChallengeRecord c3 = challenge_issue(32);
+    List(Int) r3 = request(chal_ints(challenge_value(challenge_issue(32))));
+    println(fresh("other challenge", r3, response(r3, 5), c3));
+    HpkeKeyPairG(Secret(UInt(8))) kp = hpkeg_generate_keypair(32);
+    ChallengeRecord c5 = challenge_issue(32);
+    List(Int) bound = chal_ints(match (challenge_with_key(challenge_value(c5), 32, kp.sk)) { Ok(b) => b, Err(e) => [] });
+    List(Int) r5 = request(bound);
+    List(Secret(UInt(8))) key = random_secret(32);
+    Str r = match (release(chal_bytes(r5), chal_bytes(response(r5, 5)), test_chain(), c5, kp.pk, key, secret_bytes(rd("sender-sk.bin")))) {
+        Ok(m) => match (open_released(32, kp.sk, m, test_sender())) { Ok(v) => if (hex_encode(sec_pub(v.value, 0, ListBuf())) == hex_encode(sec_pub(key, 0, ListBuf()))) { "released and opened: same key" } else { "KEY DIFFERS" }, Err(e) => "open: " + verify_error_text(e) },
+        Err(e) => "release: " + verify_error_text(e),
+    };
+    println(r);
+    return 0;
+}

@@ -121,7 +121,7 @@ StrBuf ga_pos(StrBuf b, GAF f, Int pos, Bool first) {
 
 // ─── Per-node columns ───────────────────────────────────────────────
 
-Bool ga_provider(Str n) { return n == "filesystem" || n == "environment" || n == "args" || n == "process" || n == "git" || n == "clock"; }
+Bool ga_provider(Str n) { return n == "filesystem" || n == "environment" || n == "args" || n == "process" || n == "git" || n == "clock" || n == "device"; }
 
 // The effect a node performs itself ("" when none); a provider is a name
 // with no local def.
@@ -130,6 +130,17 @@ Str ga_effect(Kg g, Int id, GAX x) {
     if (n.kind == "call") {
         if (n.text == "print" || n.text == "println" || n.text == "print_bytes") { return "stdout"; }
         if (n.text == "eprintln") { return "stderr"; }
+        // Publishing a secret (PLAN-secret-type.md): the declassify family,
+        // with the reason the source gave.
+        if (n.text == "declassify" && n.nk == 2 && ga_def(x, id) < 0) {
+            Str r = g.ns[kg_kid(g, id, 1)].text;
+            return "declassify." + (if (str_len(r) >= 2) { str_slice(r, 1, str_len(r) - 1) } else { r });
+        }
+        // Relying on a provisioned key (PLAN-labels.md §5.2).
+        if (n.text == "provisioned_key" && n.nk == 2 && ga_def(x, id) < 0) {
+            Str r = g.ns[kg_kid(g, id, 1)].text;
+            return "provision." + (if (str_len(r) >= 2) { str_slice(r, 1, str_len(r) - 1) } else { r });
+        }
         // A call of an @link function asks its native module (spec §47).
         Int d = ga_def(x, id);
         Str nf = if (d >= 0 && g.ns[d].kind == "fn") { gk_link_family(g.ns[d].aux) } else { "" };
@@ -138,6 +149,9 @@ Str ga_effect(Kg g, Int id, GAX x) {
     if (n.kind == "mcall") {
         Int bi = kg_kid(g, id, 0);
         KN b = g.ns[bi];
+        // A device verb names the descriptor it was given (spec §49):
+        // `device.ioctl(sev_guest.snp_get_report)`.
+        if (b.kind == "ref" && b.text == "device" && ga_def(x, bi) < 0 && n.nk >= 2) { return "device." + n.text + "(" + dv_lit_name(g, kg_kid(g, id, 1)) + ")"; }
         if (b.kind == "ref" && ga_provider(b.text) && ga_def(x, bi) < 0) { return b.text + "." + n.text; }
     }
     return "";
@@ -221,7 +235,7 @@ GAD ga_derive(Str dv, Int pos, Int id, Int n, ListBuf(Int) fr, ListBuf(Str) ru) 
 }
 
 // Def edges `d,` per source node.
-List(Int) ga_defs(Str ds, Int pos, ListBuf(Int) acc) {
+pub List(Int) ga_defs(Str ds, Int pos, ListBuf(Int) acc) {
     if (pos >= str_len(ds)) { return acc.finish(); }
     Int c = str_find_char(ds, 44, pos);
     return ga_defs(ds, c + 1, acc.push(str_parse_int(str_slice(ds, pos, c))));
@@ -237,7 +251,7 @@ Str ga_type(Int id, Int n0, List(Str) tys, GAD d) {
 
 // ─── Nodes ──────────────────────────────────────────────────────────
 
-type GAX = { Kg g; Int n0; List(Str) tys; List(Int) defs; GAD d; GAC c; GAF f; Map(Int, Str) rs; Map(Int, Str) rf; Map(Int, Str) ck; };
+type GAX = { Kg g; Int n0; List(Str) tys; List(Int) defs; GAD d; GAC c; GAF f; Map(Int, Str) rs; Map(Int, Str) rf; Map(Int, Str) ck; Map(Int, Str) lb; };
 
 // Range facts (lr_facts) of every function under a unit, as "id=lo,hi;"
 // text; a node shared by several functions keeps the join.
@@ -440,6 +454,32 @@ Int ga_def(GAX x, Int id) {
     return ga_def(x, f);
 }
 
+// Integrity labels (compiler/labels.resid): "id:cause:effect;" entries,
+// kept as "cause:effect" by node.
+Map(Int, Str) ga_labels(Str ls, Int pos, Map(Int, Str) acc) {
+    if (pos >= str_len(ls)) { return acc; }
+    Int c = str_find_char(ls, 58, pos);
+    Int e = str_find_char(ls, 59, c);
+    return ga_labels(ls, e + 1, acc.insert(str_parse_int(str_slice(ls, pos, c)), str_slice(ls, c + 1, e)));
+}
+
+// A node's label entry; a derived node has its origin's.
+Str ga_label(GAX x, Int id) {
+    if (id < x.n0) { return x.lb.get(id) else { "" }; }
+    Int f = x.d.from[id];
+    if (f < 0) { return ""; }
+    return ga_label(x, f);
+}
+
+// `label: {integrity, ? cause, ? effect}`: an External node names the node
+// that made it so, and a source names its effect.
+StrBuf ga_label_out(StrBuf b, Str l) {
+    Int c = str_find_char(l, 58, 0);
+    Str eff = str_slice(l, c + 1, str_len(l));
+    StrBuf b1 = ga_int(ga_key(ga_text(ga_key(ga_head(b, 5, if (eff == "") { 2 } else { 3 }), "integrity"), "external"), "cause"), str_parse_int(str_slice(l, 0, c)));
+    return if (eff == "") { b1 } else { ga_text(ga_key(b1, "effect"), eff) };
+}
+
 StrBuf ga_node(StrBuf b, GAX x, Int id) {
     Kg g = x.g;
     KN n = g.ns[id];
@@ -453,7 +493,8 @@ StrBuf ga_node(StrBuf b, GAX x, Int id) {
     Str ck = x.ck.get(id) else { "" };
     Bool hf = fr != "" || ga_fact_segs(if (fx == "") { [] } else { str_split(fx, "|") }, 0, ListBuf()).len() > 0 || ck != "";
     Bool hn = ga_named(n);
-    Int nf = 9 + (if (hn) { 1 } else { 0 }) + (if (hv) { 1 } else { 0 }) + (if (def >= 0) { 1 } else { 0 }) + (if (from >= 0) { 1 } else { 0 }) + (if (know != "known") { 1 } else { 0 }) + (if (hf) { 1 } else { 0 });
+    Str lab = ga_label(x, id);
+    Int nf = 9 + (if (lab != "") { 1 } else { 0 }) + (if (hn) { 1 } else { 0 }) + (if (hv) { 1 } else { 0 }) + (if (def >= 0) { 1 } else { 0 }) + (if (from >= 0) { 1 } else { 0 }) + (if (know != "known") { 1 } else { 0 }) + (if (hf) { 1 } else { 0 });
     StrBuf b1 = ga_text(ga_key(ga_int(ga_key(ga_head(b, 5, nf), "id"), id), "kind"), n.kind);
     StrBuf b2 = ga_text(ga_key(ga_text(ga_key(b1, "type"), ga_type(id, x.n0, x.tys, x.d)), "knowledge"), know);
     StrBuf b2n = if (hn) { ga_text(ga_key(b2, "name"), n.text) } else { b2 };
@@ -467,7 +508,8 @@ StrBuf ga_node(StrBuf b, GAX x, Int id) {
     StrBuf b9 = if (from >= 0) { ga_text(ga_key(ga_int(ga_key(ga_head(ga_key(b8, "derive"), 5, 2), "from"), from), "rule"), x.d.rule[id]) } else { b8 };
     StrBuf b10 = if (know != "known") { ga_reason(ga_key(b9, "reason"), x, id, eff, def) } else { b9 };
     StrBuf b11 = if (hf) { ga_facts_out(ga_key(b10, "facts"), x, id, fr, fx, ck) } else { b10 };
-    return ga_hexbytes(ga_key(b11, "hash"), x.c.hs[id]);
+    StrBuf b12 = if (lab != "") { ga_label_out(ga_key(b11, "label"), lab) } else { b11 };
+    return ga_hexbytes(ga_key(b12, "hash"), x.c.hs[id]);
 }
 
 StrBuf ga_nodes(StrBuf b, GAX x, Int id, Int n) {
@@ -520,14 +562,14 @@ pub List(Int) ga_where(GAF f, Int pos) {
 // 0..n0-1; with `resid`, p.id is the residual root. The file's SHA-256 as
 // hex, or "" when it could not be written.
 @requires(filesystem)
-pub Str ga_write(Str path, KP p, Int n0, Bool resid, Str dv, Str rs, List(Str) tys, Str defs, Str src, Str smap, Str main, Str checks) {
+pub Str ga_write(Str path, KP p, Int n0, Bool resid, Str dv, Str rs, List(Str) tys, Str defs, Str src, Str smap, Str main, Str checks, Str labels) {
     Kg g = p.g;
     Int n = kg_count(g);
     GAF f = ga_fileinfo(src, smap, main);
     List(Bool) nb = [];
     List(Str) ns = [];
     Map(Int, Str) r0 = {};
-    GAX x = GAX {.g = g, .n0 = n0, .tys = tys, .defs = ga_defs(defs, 0, ListBuf()), .d = ga_derive(dv, 0, 0, n, ListBuf(), ListBuf()), .c = ga_cols(g, 0, n, GAC {.kn = nb, .hs = ns}, ga_prelude_at(src)), .f = f, .rs = ga_reasons(rs, 0, r0), .rf = ga_facts_read(ga_facts(g, p.id, 0, StrBuf()).finish(), 0, r0), .ck = ga_checks(checks, 0, r0)};
+    GAX x = GAX {.g = g, .n0 = n0, .tys = tys, .defs = ga_defs(defs, 0, ListBuf()), .d = ga_derive(dv, 0, 0, n, ListBuf(), ListBuf()), .c = ga_cols(g, 0, n, GAC {.kn = nb, .hs = ns}, ga_prelude_at(src)), .f = f, .rs = ga_reasons(rs, 0, r0), .rf = ga_facts_read(ga_facts(g, p.id, 0, StrBuf()).finish(), 0, r0), .ck = ga_checks(checks, 0, r0), .lb = ga_labels(labels, 0, r0)};
     StrBuf h0 = ga_int(ga_key(ga_head(StrBuf(), 5, 4), "version"), 1);
     StrBuf h1 = ga_sources(ga_head(ga_key(h0, "source"), 4, f.paths.len()), f.paths, 0);
     if (!filesystem.write_hex(path, ga_head(ga_key(h1, "nodes"), 4, n).finish())) { return ""; }

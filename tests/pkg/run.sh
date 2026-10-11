@@ -469,6 +469,82 @@ if [ $? -ne 0 ] && grep -q "but the manifest pins" "$W/napp3.out"; then ok; else
 mkdir -p "$W/ntiny_x"; "$PKG" extract "$W/ntiny_a1" "$W/ntiny_x" > /dev/null
 if ! cmp -s "$W/ntiny_a1" "$W/ntiny_a2" && cmp -s "$W/ntiny_x/native/tiny.ll" "$W/ntiny/native/tiny.ll"; then ok; else bad "the archive does not cover the native artifact"; fi
 
+# Device bounds (spec §49): `devices = [...]` names the descriptors a
+# dependency's code may reach, by descriptor or by device module, and the
+# compiler refuses one it reaches outside them (E0261). A dependency's own
+# dependencies get at most its bound.
+mkpkg "$W/probe" probe 1.0.0 $'import "dev/sev_guest.resid";\n@requires(device(readonly))\npub Str probe_report() { return match (snp_get_report([(UInt(8))0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 0)) { Ok(b) => "report", Err(e) => device_error_text(e), }; }'
+mkdir -p "$W/dapp/src"
+printf '[package]\nname = "dapp"\nversion = "0.1.0"\n\n[capabilities]\ngrant = ["device(readonly)"]\n\n[dependencies.probe]\npath = "../probe"\ncapabilities = ["device(readonly)"]\ndevices = ["tsm_report"]\n' > "$W/dapp/resid.toml"
+printf 'import "probe";\n@requires(device(readonly))\nInt main() { println(probe_report()); return 0; }\n' > "$W/dapp/src/main.resid"
+(cd "$ROOT" && "$MAN" build "$W/dapp/resid.toml" "$COMPILER") > "$W/dapp.out" 2>&1
+if [ $? -ne 0 ] && grep -q "E0261" "$W/dapp.out" && grep -q "sev_guest.snp_get_report" "$W/dapp.out"; then ok; else bad "pkg_device_ceiling: a descriptor outside the bound was reached: $(grep -m1 -i error "$W/dapp.out")"; fi
+sed -i 's/devices = \["tsm_report"\]/devices = ["sev_guest"]/' "$W/dapp/resid.toml"
+(cd "$ROOT" && "$MAN" build "$W/dapp/resid.toml" "$COMPILER") > "$W/dapp2.out" 2>&1
+# The call reaches the device host: absent off an SEV-SNP guest; on one a
+# report, or a refusal for this user.
+if [ $? -eq 0 ] && grep -qxE 'sev_guest\.snp_get_report: (device absent|permission denied)|report' <<< "$("$W/dapp/target/resid/dapp")"; then ok; else bad "pkg_device_ceiling: a device module bound: $(grep -m1 -i error "$W/dapp2.out")"; fi
+sed -i 's/devices = \["sev_guest"\]/devices = ["sev_guest.snp_get_report"]/' "$W/dapp/resid.toml"
+(cd "$ROOT" && "$MAN" build "$W/dapp/resid.toml" "$COMPILER") > "$W/dapp3.out" 2>&1
+if [ $? -eq 0 ]; then ok; else bad "pkg_device_ceiling: a descriptor bound: $(grep -m1 -i error "$W/dapp3.out")"; fi
+(cd "$ROOT" && "$MAN" depmap "$W/dapp/resid.toml" "$W/dapp.depmap") > /dev/null 2>&1
+if grep -qx '@devices::probe::sev_guest.snp_get_report' "$W/dapp.depmap"; then ok; else bad "pkg_device_ceiling: depmap bound line: $(cat "$W/dapp.depmap")"; fi
+# The standard library stays outside a dependency's sandbox: a dependency
+# with an empty ceiling imports lib/crypto.resid (whose ct_eq needs
+# declassify) and uses only its public hashing, and uses a default
+# parameter of its own; one that calls the clock through lib/clock.resid
+# is still refused (E0211, transitively).
+mkpkg "$W/dstd" dstd 1.0.0 $'import "crypto.resid";\npub Int dstd_n(Int extra = 2) { return sha256_bytes([1, 2, 3]).len() + extra; }'
+mkdir -p "$W/sapp/src"
+printf '[package]\nname = "sapp"\nversion = "0.1.0"\n\n[dependencies.dstd]\npath = "../dstd"\ncapabilities = []\n' > "$W/sapp/resid.toml"
+printf 'import "dstd";\nInt main() { println(f"{dstd_n()} {dstd_n(extra = 0)}"); return 0; }\n' > "$W/sapp/src/main.resid"
+(cd "$ROOT" && "$MAN" build "$W/sapp/resid.toml" "$COMPILER") > "$W/sapp.out" 2>&1
+if [ $? -eq 0 ] && [ "$("$W/sapp/target/resid/sapp")" = "34 32" ]; then ok; else bad "pkg_stdlib_outside_sandbox: $(grep -m2 -i error "$W/sapp.out")"; fi
+mkpkg "$W/dstd" dstd 1.0.0 $'import "clock.resid";\npub Int dstd_n() { return clock_now_seconds(); }'
+printf 'import "dstd";\n@requires(clock(readonly))\nInt main() { println(f"{dstd_n()}"); return 0; }\n' > "$W/sapp/src/main.resid"
+(cd "$ROOT" && "$MAN" build "$W/sapp/resid.toml" "$COMPILER") > "$W/sapp2.out" 2>&1
+if [ $? -ne 0 ] && grep -q "E0211.*clock_now_seconds" "$W/sapp2.out"; then ok; else bad "pkg_stdlib_outside_sandbox: a stdlib call beyond the ceiling was not refused: $(grep -m1 -i error "$W/sapp2.out")"; fi
+# A sub-dependency's bound must lie inside its parent's.
+mkpkg "$W/dmid" dmid 1.0.0 $'import "probe";\npub Int dmid_n() { return 1; }'
+printf '\n[dependencies.probe]\npath = "../probe"\ncapabilities = ["device(readonly)"]\ndevices = ["sev_guest", "tpm"]\n' >> "$W/dmid/resid.toml"
+mkdir -p "$W/dtr/src"
+printf '[package]\nname = "dtr"\nversion = "0.1.0"\n\n[capabilities]\ngrant = ["device(readonly)"]\n\n[dependencies.dmid]\npath = "../dmid"\ncapabilities = ["device(readonly)"]\ndevices = ["sev_guest"]\n' > "$W/dtr/resid.toml"
+printf 'import "dmid";\nInt main() { println(f"{dmid_n()}"); return 0; }\n' > "$W/dtr/src/main.resid"
+(cd "$ROOT" && "$MAN" deps "$W/dtr/resid.toml") > "$W/dtr.out" 2>&1
+if [ $? -ne 0 ] && grep -q "outside the devices granted to 'dmid'" "$W/dtr.out"; then ok; else bad "pkg_device_ceiling: a sub-dependency's wider bound: $(head -3 "$W/dtr.out")"; fi
+# One with no bound of its own under a bounded parent inherits the parent's,
+# so it gets a `@devices` line of its own rather than no bound at all.
+sed -i 's/devices = \["sev_guest", "tpm"\]//' "$W/dmid/resid.toml"
+sed -i 's/devices = \["sev_guest"\]/devices = ["tsm_report"]/' "$W/dtr/resid.toml"
+(cd "$ROOT" && "$MAN" depmap "$W/dtr/resid.toml" "$W/dtr.depmap") > /dev/null 2>&1
+if grep -qx '@devices::probe::tsm_report' "$W/dtr.depmap"; then ok; else bad "pkg_device_ceiling: an unbounded sub-dependency did not inherit its parent's bound: $(grep @devices "$W/dtr.depmap")"; fi
+
+# A dependency reaches an instance's functions by dispatch wherever the
+# instance is declared: here `sort` in a bounded dependency calls the
+# program's Ord instance, whose compare asks for a report, so the bound
+# must cover it (E0261).
+mkpkg "$W/dsort" dsort 1.0.0 $'pub type BTok = { Int x; };\n@requires(device(readonly))\npub Int sorted_first(Int n) { return sort([BTok {.x = n}, BTok {.x = n + 1}])[0].x; }'
+mkdir -p "$W/dsapp/src"
+printf '[package]\nname = "dsapp"\nversion = "0.1.0"\n\n[capabilities]\ngrant = ["device(readonly)"]\n\n[dependencies.dsort]\npath = "../dsort"\ncapabilities = ["device(readonly)"]\ndevices = ["tsm_report"]\n' > "$W/dsapp/resid.toml"
+cat > "$W/dsapp/src/main.resid" <<'EOF2'
+import "dsort";
+import "dev/sev_guest.resid";
+@requires(device(readonly))
+Int btok_cmp(BTok a, BTok b) {
+    Int r = match (snp_get_report([(UInt(8))(rt 0)], 0)) { Ok(x) => 0, Err(e) => 1, };
+    return a.x - b.x + r * 0;
+}
+@requires(device(readonly))
+BTok btok_min(BTok a, BTok b) { return if (btok_cmp(a, b) <= 0) { a } else { b }; }
+@requires(device(readonly))
+BTok btok_max(BTok a, BTok b) { return if (btok_cmp(a, b) >= 0) { a } else { b }; }
+Ord(BTok) = { .compare = btok_cmp, .least = btok_min, .greatest = btok_max };
+@requires(device(readonly))
+Int main() { println(f"{sorted_first(rt 1)}"); return 0; }
+EOF2
+(cd "$ROOT" && "$MAN" build "$W/dsapp/resid.toml" "$COMPILER") > "$W/dsapp.out" 2>&1
+if [ $? -ne 0 ] && grep -q "E0261.*dsort.*sev_guest.snp_get_report" "$W/dsapp.out"; then ok; else bad "pkg_device_ceiling: a dependency's dispatch to an instance escaped its bound: $(grep -m1 -iE 'error|wrote' "$W/dsapp.out")"; fi
+
 # `resid-manifest test` resolves dependencies, writes the depmap, then hands
 # discovery to the driver's own `test` mode (SPEC-testing.md §7.1).
 mkpkg "$W/mathlib" mathlib 1.0.0 'pub Int triple(Int a) { return a * 3; }'

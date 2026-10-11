@@ -1,0 +1,30 @@
+Startup rc 0
+GetRandom 16 bytes
+TPM_PT_FAMILY_INDICATOR 0x322e3000
+TPM_PT_NV_BUFFER_MAX 1024
+PCR_Read 3 digests of 32 bytes
+CreatePrimary handle 0x80000000
+ReadPublic type 0x23 nameAlg 0xb name 34 bytes
+Quote: nonce true, pcr digest true, signature verifies true, over other bytes false
+Quote of no key: tpm: response code 0x18b
+NV_DefineSpace rc 0
+NV_Write rc 0 0
+NV_ReadPublic index 0x1500001 size 2000 attributes 0x22060006
+NV_Read all 2000 bytes, same as written true
+NV_Read by its own auth 2000 bytes
+no such index: tpm: response code 0x18b
+NV handles [22020097]
+NV_Read secret 64 bytes, same as written true
+NV_DefineSpace (password, DA-protected) rc 0
+NV_Write rc 0
+CreatePrimary with a policy 0x80000001, policy only 0x80000002
+lockout counter 0
+NV_Read by its own auth, DA-protected: refused before sending
+NV_Read all by its own auth, DA-protected: refused before sending
+NV_Read secret by its own auth, DA-protected: refused before sending
+Quote by a key with a policy: refused before sending
+Quote by a policy-only key: refused before sending
+lockout counter 0
+NV_Read by owner 16 bytes, same as written true
+raw NV_Read by its own auth, empty password: rc 0x98e
+lockout counter 1

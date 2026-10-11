@@ -1,0 +1,130 @@
+import "verify/core.resid";
+import "verify/snp.resid";
+import "verify/seal.resid";
+import "verify/testing.resid";
+import "challenge.resid";
+import "challenge_bind.resid";
+import "crypto.resid";
+import "ecdsa.resid";
+import "hash.resid";
+import "hpke.resid";
+import "hpkeg.resid";
+import "random.resid";
+import "dev/device.resid";
+
+Str fx() { return "fixtures/"; }
+
+@requires(filesystem(readonly))
+List(UInt(8)) rd(Str p) { return chal_bytes(filesystem.read_bytes(fx() + p)); }
+
+@requires(filesystem(readonly))
+SnpCollateral col() { return SnpCollateral {.vcek_der = rd("test-vcek.der"), .ask_der = rd("test-ask.der"), .crl_der = rd("test-crl.der")}; }
+
+// A report carrying `value` in REPORT_DATA, signed with the test VCEK.
+@requires(filesystem(readonly))
+List(UInt(8)) report_for(List(UInt(8)) value) { return report_from(rd("report-template.bin"), value); }
+
+// The template with bytes [at, at + b.len()) replaced.
+@requires(filesystem(readonly))
+List(UInt(8)) patched(Int at, List(UInt(8)) b) {
+    List(UInt(8)) t = rd("report-template.bin");
+    return t[0..at].concat(b).concat(t[at + b.len()..t.len()]);
+}
+
+@requires(filesystem(readonly))
+List(UInt(8)) report_from(List(UInt(8)) t, List(UInt(8)) value) {
+    List(UInt(8)) rdata = value.concat(zeros(64 - value.len()));
+    List(UInt(8)) body = t[0..80].concat(rdata).concat(t[144..672]);
+    List(Int) sig = ecdsa_sign_raw(P384, Sha384, chal_ints(rd("vcek-d.bin")), chal_ints(body));
+    return body.concat(le72(sig[0..48])).concat(le72(sig[48..96])).concat(t[816..1184]);
+}
+
+List(UInt(8)) zeros(Int n) { return if (n <= 0) { [] } else { [(UInt(8)) 0].concat(zeros(n - 1)) }; }
+List(UInt(8)) le72(List(Int) be) { return le_at(be, 47, ListBuf()).concat(zeros(24)); }
+List(UInt(8)) le_at(List(Int) be, Int i, ListBuf(UInt(8)) acc) { return if (i < 0) { acc.finish() } else { le_at(be, i - 1, acc.push((UInt(8)) be[i])) }; }
+
+
+@policy
+SnpPolicy release_policy() {
+    return SnpPolicy {.min_tcb = TcbVersion {.fmc = 0, .bootloader = 3, .tee = 0, .snp = 8, .microcode = 115},
+                      .measurements_hex = [hex_encode(sha384_bytes(bytes_of("resid test image")))],
+                      .vmpl = 0, .allow_migration_agent = false, .id_key_digests_hex = [], .host_data_hex = []};
+}
+
+@policy
+SnpPolicy newer_policy() {
+    return SnpPolicy {.min_tcb = TcbVersion {.fmc = 0, .bootloader = 3, .tee = 0, .snp = 9, .microcode = 115},
+                      .measurements_hex = [hex_encode(sha384_bytes(bytes_of("resid test image")))],
+                      .vmpl = 0, .allow_migration_agent = false, .id_key_digests_hex = [], .host_data_hex = []};
+}
+
+@policy
+SnpPolicy other_image() {
+    return SnpPolicy {.min_tcb = TcbVersion {.fmc = 0, .bootloader = 0, .tee = 0, .snp = 0, .microcode = 0},
+                      .measurements_hex = ["00"], .vmpl = 0, .allow_migration_agent = false, .id_key_digests_hex = [], .host_data_hex = []};
+}
+
+// Releases twice on one gate: the second must fail at run time.
+@decides(accept = [test_ark], appraised = release_policy, identity = key_bound)
+@requires(declassify)
+Result(HpkeMessage, VerifyError) twice(List(UInt(8)) report, ChallengeRecord issued, SnpCollateral c, List(Int) guest_pk,
+                                       List(Secret(UInt(8))) key, List(Secret(UInt(8))) sender) {
+    Verified(SnpReport) v = snp_verify_key_bound(report, issued, test_ark(), c, test_time(1791000000), 32, guest_pk)?;
+    Appraised(SnpReport) a = snp_appraise(v, release_policy())?;
+    HpkeMessage first = seal_to_evidence(a, 32, guest_pk, key, sender)?;
+    return seal_to_evidence(a, 32, guest_pk, key, sender);
+}
+
+@requires(filesystem(readonly))
+Str verify_with(Str what, List(UInt(8)) t, SnpCollateral cl, EvidenceTime tm) {
+    ChallengeRecord c = challenge_issue(64);
+    return what + ": " + match (snp_verify(report_from(t, challenge_value(c)), c, test_ark(), cl, tm)) { Ok(v) => "ACCEPTED", Err(e) => verify_error_text(e) };
+}
+
+@requires(filesystem(readonly))
+Str appraise_with(Str what, List(UInt(8)) t, Int which) {
+    ChallengeRecord c = challenge_issue(64);
+    Result(Verified(SnpReport), VerifyError) v = snp_verify(report_from(t, challenge_value(c)), c, test_ark(), col(), test_time(1791000000));
+    Result(Appraised(SnpReport), VerifyError) a = match (v) {
+        Ok(x) => if (which == 0) { snp_appraise(x, release_policy()) } else if (which == 1) { snp_appraise(x, newer_policy()) } else { snp_appraise(x, other_image()) },
+        Err(e) => Err(e),
+    };
+    return what + ": " + match (a) { Ok(x) => "ACCEPTED", Err(e) => verify_error_text(e) };
+}
+
+List(UInt(8)) u64(Int v) { return le_at([(v >> 56) & 255, (v >> 48) & 255, (v >> 40) & 255, (v >> 32) & 255, (v >> 24) & 255, (v >> 16) & 255, (v >> 8) & 255, v & 255], 7, ListBuf()); }
+
+@requires(filesystem(readonly), declassify)
+Int main() {
+    List(UInt(8)) t = rd("report-template.bin");
+    SnpCollateral revoked = SnpCollateral {.vcek_der = rd("test-vcek.der"), .ask_der = rd("test-ask.der"), .crl_der = rd("test-crl-revoked.der")};
+    SnpCollateral nocrl = SnpCollateral {.vcek_der = rd("test-vcek.der"), .ask_der = rd("test-ask.der"), .crl_der = []};
+    SnpCollateral swapped = SnpCollateral {.vcek_der = rd("test-vcek.der"), .ask_der = rd("test-ark.der"), .crl_der = rd("test-crl.der")};
+    println(verify_with("template", t, col(), test_time(1791000000)));
+    println(verify_with("revoked ASK", t, revoked, test_time(1791000000)));
+    println(verify_with("no CRL", t, nocrl, test_time(1791000000)));
+    SnpCollateral oldcrl = SnpCollateral {.vcek_der = rd("test-vcek.der"), .ask_der = rd("test-ask.der"), .crl_der = rd("test-crl-old.der")};
+    println(verify_with("old CRL", t, oldcrl, test_time(1791000000)));
+    println(verify_with("ARK as ASK", t, swapped, test_time(1791000000)));
+    println(verify_with("after expiry", t, col(), test_time(2300000000)));
+    println(verify_with("reported TCB", patched(384, u64(3 | (9 << 48) | (115 << 56))), col(), test_time(1791000000)));
+    println(verify_with("chip id", patched(416, [(UInt(8)) 9]), col(), test_time(1791000000)));
+    println(verify_with("masked chip", patched(72, [(UInt(8)) 2]), col(), test_time(1791000000)));
+    println(verify_with("VLEK signer", patched(72, [(UInt(8)) 4]), col(), test_time(1791000000)));
+    println(verify_with("version 4", patched(0, [(UInt(8)) 4]), col(), test_time(1791000000)));
+    println(appraise_with("appraise", t, 0));
+    println(appraise_with("debug guest", patched(8, u64(196608 | (1 << 19))), 0));
+    println(appraise_with("migration agent", patched(8, u64(196608 | (1 << 18))), 0));
+    println(appraise_with("vmpl 1", patched(48, [(UInt(8)) 1]), 0));
+    println(appraise_with("old TCB", t, 1));
+    println(appraise_with("other image", t, 2));
+    HpkeKeyPairG(Secret(UInt(8))) kp = hpkeg_generate_keypair(32);
+    ChallengeRecord c = challenge_issue(64);
+    List(UInt(8)) bound = match (challenge_with_key(challenge_value(c), 32, kp.sk)) { Ok(b) => b, Err(e) => [] };
+    List(Secret(UInt(8))) sender = secret_bytes(chal_ints(rd("sender-sk.bin")));
+    println("twice: " + match (twice(report_for(bound), c, col(), kp.pk, random_secret(32), sender)) { Ok(m) => "RELEASED TWICE", Err(e) => verify_error_text(e) });
+    // A record a request of this program spent answers only for its reply.
+    ChallengeRecord own = challenge_issue(64);
+    println("unspent own record: " + match (snp_verify(report_for(challenge_value(own)), own, test_ark(), col(), test_time(1791000000))) { Ok(v) => "fresh", Err(e) => verify_error_text(e) });
+    return 0;
+}

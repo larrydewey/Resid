@@ -1,0 +1,5 @@
+// A Sequence with a writing step is a write; this descriptor breaks that (E0264).
+import "dev/fx_e0264_write.resid";
+
+@requires(device)
+Int main() { println(fx_call()); return 0; }

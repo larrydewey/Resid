@@ -1,0 +1,26 @@
+// A sandbox's functions (an attenuated import, a dependency under its
+// manifest ceiling) are evaluated at compile time like any others, but
+// their own `@reduce(steps = N)` and `@fold` do not raise the budget: the
+// code of a dependency does not choose how long the importer's build
+// runs. Here `spin` would need more steps than the default cap allows, so
+// its call stays residual. `spin_here`, the same function outside the
+// sandbox, keeps its allowance and folds.
+sandbox () {
+    @reduce(steps = 100000000)
+    pub Int spin(Int n, Int acc) {
+        if (n <= 0) { return acc; }
+        return spin(n - 1, (acc + n) % 1000003);
+    }
+}
+
+@reduce(steps = 100000000)
+Int spin_here(Int n, Int acc) {
+    if (n <= 0) { return acc; }
+    return spin_here(n - 1, (acc + n) % 1000003);
+}
+
+Int main() {
+    println(f"{spin(3000000, 0)}");
+    println(f"{spin_here(3000000, 0)}");
+    return 0;
+}

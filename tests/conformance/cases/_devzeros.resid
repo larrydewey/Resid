@@ -1,0 +1,7 @@
+// Helper for the device cases: n zero bytes, built at run time.
+pub List(UInt(8)) dev_zeros(Int n) { return dz_at(n, ListBuf()); }
+
+List(UInt(8)) dz_at(Int n, ListBuf(UInt(8)) acc) {
+    if (n <= 0) { return acc.finish(); }
+    return dz_at(n - 1, acc.push((UInt(8))0));
+}

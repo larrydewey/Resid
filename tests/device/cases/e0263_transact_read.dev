@@ -1,0 +1,11 @@
+// Fixture for e0263_transact_read: a Transact labelled a read (installed as lib/dev/fx_e0263_transact_read.resid).
+import "device.resid";
+
+pub Transact fx_op() {
+    return Transact {.name = "fx.tpm", .path = "/dev/fx", .max_command = 16, .max_response = 16, .secret = false, .write = false, .stability = Uapi};
+}
+
+@requires(device(readonly))
+pub Str fx_call() {
+    return match (device.transact(fx_op(), [(UInt(8))1])) { Ok(o) => "ok", Err(e) => device_error_text(e), };
+}

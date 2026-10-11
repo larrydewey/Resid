@@ -661,13 +661,32 @@ RRes imp_resolve_lines_a(List(Str) lines, Int i, Int n, Str dir, Str sb, Str don
         // A missing module is an error, not an empty module.
         Bool missing = !str_contains(done, key) && !filesystem.exists(full);
         Bool mwarned = if (missing) { eprintln("error[E0221]: cannot find module `" + name + "` imported by " + path + " (looked for " + full + ")") } else { false };
-        RRes sub0 = if (missing) {
+        // `device` names the device provider everywhere (spec §49): an
+        // import alias of that name would turn `device.ioctl(...)` into a
+        // call of the module's own `ioctl`.
+        Bool devalias = alias == "device";
+        Bool dwarned = if (devalias) { eprintln("error[E0001]: type error: `device` is the device provider (spec §49) and cannot name an import (`import \"" + name + "\" as device`); choose another alias") } else { false };
+        // A module that compiles inside a sandbox (an attenuated import or a
+        // manifest dependency) keeps the standard library outside it: each
+        // stdlib file it reaches through its own files is resolved here
+        // first, at this level, so inside the sandbox it is already done.
+        // Its calls into the stdlib are still bounded by the sandbox
+        // (transitively, E0211/E0215); only uncalled stdlib code no longer
+        // counts against the ceiling, wherever the import order put it.
+        Bool fresh = !devalias && !missing && !str_contains(done, key);
+        Bool depw = depmap != "" && full != dir + "/" + name && full != name && depmap_caps_lines(str_split(depmap, "\n"), 0, depmap_dep_name(depmap, name)) != "\x01";
+        RRes hoist = if (fresh && ((att && !clash) || depw)) { imp_hoist_std(imp_std_reach(full, depmap, ";", 0, []), 0, done, depth, depmap, ml) } else { RRes {.text = "", .done = done, .map = "", .nl = 0} };
+        Str doneh = hoist.done;
+        Int mlh = ml + hoist.nl;
+        RRes sub0 = if (devalias) {
+            RRes {.text = "import_alias_reserved\n", .done = done, .map = "", .nl = 1}
+        } else { if (missing) {
             RRes {.text = "import_not_found\n", .done = done, .map = "", .nl = 1}
         } else { if (str_contains(done, key)) {
             RRes {.text = if (clash) { "import_attenuation_conflict\n" } else { "" }, .done = done, .map = "", .nl = if (clash) { 1 } else { 0 }}
         } else {
-            imp_resolve_file_vis(full, done, depth, depmap, sel, ml)
-        } };
+            imp_resolve_file_vis(full, doneh, depth, depmap, sel, mlh)
+        } } };
         RRes sub1 = if (att && !clash) { RRes {.text = "sandbox (" + imp_att_caps(clause, ra + 10, 1, ra + 10) + ") { " + sub0.text + "}\n", .done = sub0.done, .map = sub0.map, .nl = sub0.nl + 1} } else { sub0 };
         // A manifest dependency compiles inside its declared ceiling.
         Str dcaps = if (depmap == "" || sub1.text == "" || full == dir + "/" + name || full == name) { "\x01" } else { depmap_caps_lines(str_split(depmap, "\n"), 0, depmap_dep_name(depmap, name)) };
@@ -676,16 +695,56 @@ RRes imp_resolve_lines_a(List(Str) lines, Int i, Int n, Str dir, Str sb, Str don
         // Keep the importing file's line numbering: the module text goes
         // where the import line was, and the import line itself becomes
         // the newline that ends it.
-        Str sb2 = str_sb_append(sb, sub.text);
+        Str sb2 = str_sb_append(str_sb_append(sb, hoist.text), sub.text);
         Str al2 = if (alias == "") { aliases } else { aliases + ";" + alias + ";" };
-        Int ml2 = ml + sub.nl;
-        Str map2 = map + sub.map + f"{ml2} {i + 2} " + path + "\n";
+        Int ml2 = mlh + sub.nl;
+        Str map2 = map + hoist.map + sub.map + f"{ml2} {i + 2} " + path + "\n";
         return imp_resolve_lines_a(lines, ni2, n, dir, sb2, sub.done, depth, depmap, al2, path, ml0, ml2, map2);
     }
     Int ni3 = i + 1;
     Str line2 = if (aliases == "") { line } else { imp_unalias(line, aliases) };
     Str sb3 = str_sb_append(str_sb_append(sb, line2), "\n");
     return imp_resolve_lines_a(lines, ni3, n, dir, sb3, done, depth, depmap, aliases, path, ml0, ml + 1, map);
+}
+
+// The standard-library files a module reaches through its own imports
+// (not through other stdlib files: those come with the file that imports
+// them), each once, in import order. Only under an absolute stdlib root,
+// as for E0260; otherwise none.
+@requires(filesystem(readonly))
+List(Str) imp_std_reach(Str path, Str depmap, Str seen, Int depth, List(Str) acc) {
+    if (depth > 8 || str_contains(seen, ";" + path + ";") || !filesystem.exists(path)) { return acc; }
+    List(Str) lines = str_split(filesystem.read_all(path), "\n");
+    return imp_std_reach_at(lines, 0, imp_dir_of(path, str_len(path) - 1), depmap, seen + path + ";", depth, acc);
+}
+
+@requires(filesystem(readonly))
+List(Str) imp_std_reach_at(List(Str) lines, Int i, Str dir, Str depmap, Str seen, Int depth, List(Str) acc) {
+    if (i >= lines.len()) { return acc; }
+    Str name = if (ck_str_starts_with(lines[i], "import ")) { imp_target(lines[i]) } else { "" };
+    if (name == "") { return imp_std_reach_at(lines, i + 1, dir, depmap, seen, depth, acc); }
+    Str full = imp_resolve_target(dir, name, depmap);
+    Str sd = depmap_stdlib(str_split(depmap, "\n"), 0);
+    Str root = imp_normalize(sd) + "/";
+    Bool std = ck_str_starts_with(sd, "/") && ck_str_starts_with(full, root);
+    Bool have = imp_list_has(acc, full, 0);
+    List(Str) acc2 = if (std) { if (have) { acc } else { acc.concat([full]) } } else { imp_std_reach(full, depmap, seen, depth + 1, acc) };
+    return imp_std_reach_at(lines, i + 1, dir, depmap, seen + full + ";", depth, acc2);
+}
+
+Bool imp_list_has(List(Str) xs, Str x, Int i) {
+    if (i >= xs.len()) { return false; }
+    return xs[i] == x || imp_list_has(xs, x, i + 1);
+}
+
+// Resolve the hoisted stdlib files in order, at the importer's level.
+@requires(filesystem(readonly))
+RRes imp_hoist_std(List(Str) fs, Int i, Str done, Int depth, Str depmap, Int ml) {
+    if (i >= fs.len()) { return RRes {.text = "", .done = done, .map = "", .nl = 0}; }
+    if (str_contains(done, ";" + fs[i] + ";")) { return imp_hoist_std(fs, i + 1, done, depth, depmap, ml); }
+    RRes r = imp_resolve_file_vis(fs[i], done, depth, depmap, "*", ml);
+    RRes rest = imp_hoist_std(fs, i + 1, r.done, depth, depmap, ml + r.nl);
+    return RRes {.text = r.text + rest.text, .done = rest.done, .map = r.map + rest.map, .nl = r.nl + rest.nl};
 }
 
 // The capability list of an import's `@requires(...)`, from `from` to its
@@ -2337,7 +2396,7 @@ pub Bool num_all_same(List(Str) ts, Int i, Str t) {
 
 // Runtime primitives (compiler-only): argument and result types.
 ERes raw_sig(Str name, Str op, Str argtys, Int argc, Int pos) {
-    Str want = if (op == "sp" || op == "arch") { "" } else if (op == "nr" || op == "tp_set") { "Int" } else if (op == "cpuid" || op == "cpuid_ab") { "Int,Int" } else { if (op == "catch") { "Int,Int,Int" } else { if (op == "popcount") { "Int" } else { want0(op) } } };
+    Str want = if (op == "sp" || op == "arch") { "" } else if (op == "nr" || op == "tp_set" || op == "rdseed") { "Int" } else if (op == "cpuid" || op == "cpuid_ab") { "Int,Int" } else { if (op == "catch") { "Int,Int,Int" } else { if (op == "popcount") { "Int" } else { want0(op) } } };
     Str rty = if (op == "cas") { "Bool" } else { if (op == "str") { "Str" } else { if (op == "bits_f64") { "Float" } else { if (op == "f128_bits") { "Int(128)" } else { if (op == "bits_f128") { "Float(128)" } else { "Int" } } } } };
     if (want == "?") { return ERes {.pos = pos, .ty = "", .err = "unknown runtime primitive " + name}; }
     Bool scalar = argtys == "Int" || argtys == "Float" || argtys == "Bool";
@@ -2722,6 +2781,28 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (argc == 1 && is_int_ty(ch) && ty_bits(ch) <= 64) { return ERes {.pos = pos, .ty = ch, .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "ct_hide expects one integer of at most 64 bits, got (" + rawtys + ")"};
     }
+    // secret / declassify (PLAN-secret-type.md): the checker types them
+    // in gcheck (sec_call); this is the payload view used after erasure.
+    if (name == "secret" || name == "classify") {
+        if (argc == 1) { return ERes {.pos = pos, .ty = "Secret(" + str_trim(rawtys) + ")", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "secret(x) takes 1 argument"};
+    }
+    if (name == "declassify") {
+        Str d0 = str_trim(ty_list_at(rawtys, 0));
+        Bool dok = argc == 2 && ck_str_starts_with(d0, "Secret(") && str_trim(ty_list_at(rawtys, 1)) == "Str";
+        if (dok) { return ERes {.pos = pos, .ty = str_trim(str_slice(d0, 7, str_len(d0) - 1)), .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "declassify expects (Secret(T), Str), got (" + rawtys + ")"};
+    }
+    if (name == "secret_split" || name == "secret_join") {
+        if (argc == 1) { return ERes {.pos = pos, .ty = str_trim(rawtys), .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " takes 1 argument"};
+    }
+    if (name == "ct_select") {
+        Str s1 = str_trim(ty_list_at(rawtys, 1));
+        Str v1 = if (ck_str_starts_with(s1, "Secret(")) { str_trim(str_slice(s1, 7, str_len(s1) - 1)) } else { s1 };
+        if (argc == 3) { return ERes {.pos = pos, .ty = v1, .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "ct_select(c, a, b) takes 3 arguments"};
+    }
     if (name == "ct_secret" || name == "ct_public") {
         Str ca = str_trim(rawtys);
         if (argc == 1 && is_int_ty(ca)) { return ERes {.pos = pos, .ty = ca, .err = ""}; }
@@ -2751,6 +2832,38 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (builtin_args(argtys, "Int,List(Int)")) { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_tcp_send_bin expects (Int, List(Int)), got (" + argtys + ")"};
     }
+    if (name == "resid_chal_new") {
+        if (builtin_args(argtys, "List(Int),Int,Int")) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (List(Int), Int, Int), got (" + argtys + ")"};
+    }
+    if (name == "resid_chal_mark") {
+        if (builtin_args(argtys, "Int,Int")) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (Int, Int), got (" + argtys + ")"};
+    }
+    if (name == "resid_chal_spend" || name == "resid_chal_left") {
+        if (argtys == "Int") { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (Int), got (" + argtys + ")"};
+    }
+    if (name == "resid_chal_bind") {
+        if (builtin_args(argtys, "Int,List(Int),List(Int)")) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (Int, List(Int), List(Int)), got (" + argtys + ")"};
+    }
+    if (name == "resid_chal_bound") {
+        if (argtys == "Int") { return ERes {.pos = pos, .ty = "List(Int)", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (Int), got (" + argtys + ")"};
+    }
+    if (name == "resid_tr_note") {
+        if (argtys == "List(Int)") { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (List(Int)), got (" + argtys + ")"};
+    }
+    if (name == "resid_tr_read") {
+        if (argtys == "") { return ERes {.pos = pos, .ty = "List(Int)", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " takes no arguments, got (" + argtys + ")"};
+    }
+    if (name == "resid_random_os" || name == "resid_random_cpu") {
+        if (argtys == "Int") { return ERes {.pos = pos, .ty = "List(Int)", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (Int), got (" + argtys + ")"};
+    }
     if (name == "resid_tcp_recv_bin") {
         if (builtin_args(argtys, "Int,Int")) { return ERes {.pos = pos, .ty = "List(Int)", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_tcp_recv_bin expects (Int, Int), got (" + argtys + ")"};
@@ -2770,6 +2883,19 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
     if (name == "resid_tcp_shutdown") {
         if (argtys == "Int") { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_tcp_shutdown expects (Int), got (" + argtys + ")"};
+    }
+    // The isolated device host (runtime/rt/device.resid): a serialized
+    // request in, a serialized reply out. Only lib/dev/device.resid's engine
+    // may call it (E0260); a write descriptor goes through the _w entry.
+    if (name == "resid_device_call" || name == "resid_device_call_w") {
+        if (argtys == "List(Int)") { return ERes {.pos = pos, .ty = "List(Int)", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (List(Int)), got (" + argtys + ")"};
+    }
+    // A secret output of the last device call on this thread, taken once
+    // (runtime/rt/device.resid): only the engine may call it (E0260).
+    if (name == "resid_device_secret") {
+        if (argtys == "Int") { return ERes {.pos = pos, .ty = "List(Secret(UInt(8)))", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (Int), got (" + argtys + ")"};
     }
     if (name == "resid_tcp_poll") {
         if (builtin_args(argtys, "List(Int),List(Int),Int")) { return ERes {.pos = pos, .ty = "List(Int)", .err = ""}; }
@@ -3025,6 +3151,26 @@ Int _count_bytes(Str inner, Int i, Int count) {
     Int c = str_char_at(inner, i);
     if (c == 92) { return _count_bytes(inner, if (str_char_at(inner, i + 1) == 120) { i + 4 } else { i + 2 }, count + 1); }
     return _count_bytes(inner, i + 1, count + 1);
+}
+
+// Whether a byte string literal holds a zero byte (`\0` or `\x00`). A
+// heap Bytes ends at its first zero byte, so such a literal is refused
+// there rather than cut short.
+Bool bytes_literal_has_zero(Str text) {
+    Str inner = str_slice(text, 2, str_len(text) - 1);
+    return bytes_zero_at(inner, 0, str_len(inner));
+}
+
+Bool bytes_zero_at(Str inner, Int i, Int n) {
+    if (i >= n) { return false; }
+    if (str_char_at(inner, i) != 92) { return bytes_zero_at(inner, i + 1, n); }
+    Int e = str_char_at(inner, i + 1);
+    if (e == 48) { return true; }
+    if (e == 120) {
+        if (str_char_at(inner, i + 2) == 48 && str_char_at(inner, i + 3) == 48) { return true; }
+        return bytes_zero_at(inner, i + 4, n);
+    }
+    return bytes_zero_at(inner, i + 2, n);
 }
 
 // Known base type names usable in a cast `(Type) expr`.
@@ -3616,9 +3762,23 @@ Str list_join(List(Str) xs, Int i, Str sep, Str acc) {
     return list_join(xs, k, sep, piece);
 }
 
+// A capability list as diagnostics show it, in source spelling
+// (`clock:ro` is `clock(readonly)`).
 Str fmt_caps(Str csv) {
     if (csv == "" || csv == "_") { return ""; }
-    return list_join(str_split(csv, ","), 0, ", ", "");
+    return list_join(caps_spelled(str_split(csv, ","), 0, ListBuf()), 0, ", ", "");
+}
+
+List(Str) caps_spelled(List(Str) cs, Int i, ListBuf(Str) acc) {
+    if (i >= cs.len()) { return acc.finish(); }
+    return caps_spelled(cs, i + 1, acc.push(cap_spell(cs[i])));
+}
+
+// One encoded capability as source spells it: `fam:ro` is
+// `fam(readonly)`, anything else is its family.
+Str cap_spell(Str cap) {
+    if (cap_readonly(cap)) { return cap_family(cap) + "(readonly)"; }
+    return cap;
 }
 
 Str first_missing_req_at(List(Str) reqs, Str ceiling, Int i) {
@@ -3676,6 +3836,7 @@ Bool is_prov_family(Str f) {
     if (f == "args") { return true; }
     if (f == "process") { return true; }
     if (f == "clock") { return true; }
+    if (f == "device") { return true; }
     return false;
 }
 
@@ -3704,8 +3865,12 @@ Bool is_prov_verb(Str fam, Str v) {
     if (fam == "args") { if (v == "count") { return true; } return v == "get"; }
     if (fam == "process") { return v == "run"; }
     if (fam == "clock") { return v == "now_ns" || v == "now_sec" || v == "monotonic_ns" || v == "sleep_ns"; }
+    if (fam == "device") { return dev_verb(v); }
     return false;
 }
+
+// The generic device verbs (spec §49); each takes a descriptor from lib/dev/.
+Bool dev_verb(Str v) { return v == "ioctl" || v == "transact" || v == "configfs_report" || v == "read_attr" || v == "sequence"; }
 
 Str first_missing_family_at(List(Str) fams, Str ceiling, Int i) {
     if (i >= fams.len()) { return ""; }
@@ -3731,14 +3896,15 @@ Str e0218_check_func(Funcs fs, List(Str) eff, List(Str) pcsv, Int fi) {
     return "provider call family `" + fam + "` is not granted to this region's capability set [" + fmt_caps(effc) + "] (spec §21.3)";
 }
 
-Bool e0218_check_all(Funcs fs, List(Str) eff, List(Str) pcsv, Int i) {
-    if (i >= fs.names.len()) { return false; }
+Bool e0218_check_all(Funcs fs, List(Str) eff, List(Str) pcsv, Int i) { return e0218_check_at(fs, eff, pcsv, i, false); }
+
+// A loop, not `rest` after the recursive call: a frame per function held
+// across the walk cost the self-compile about 1 MB per function.
+Bool e0218_check_at(Funcs fs, List(Str) eff, List(Str) pcsv, Int i, Bool acc) {
+    if (i >= fs.names.len()) { return acc; }
     Str m = e0218_check_func(fs, eff, pcsv, i);
     Bool printed = if (m != "") { eprintln("error[E0218]: " + m) } else { false };
-    Int k = i + 1;
-    Bool rest = e0218_check_all(fs, eff, pcsv, k);
-    if (printed) { return true; }
-    return rest;
+    return e0218_check_at(fs, eff, pcsv, i + 1, acc || printed);
 }
 
 // ─── Spawn capability bounds (spec §19) ─────────────────────────
@@ -3770,7 +3936,7 @@ Str spawn_call_check(Funcs fs, Str callee, Str parent) {
     if (reqcsv == "") { return ""; }
     Str missing = first_missing_req(reqcsv, parent);
     if (missing == "") { return ""; }
-    return "error[E0215]: call to `" + callee + "` requires capability `" + missing + "` which is not granted to this region's capability set [" + fmt_caps(parent) + "]";
+    return "error[E0215]: call to `" + callee + "` requires capability `" + cap_spell(missing) + "` which is not granted to this region's capability set [" + fmt_caps(parent) + "]";
 }
 
 // Reverse call-graph index (callee name -> comma-joined caller names),
@@ -3881,7 +4047,7 @@ Str e0211_check_callee(Funcs fs, Str caller_name, Str caller_eff, Str callee_nam
     if (j < 0) { return ""; }
     Str missing = first_missing_req(fs.reqs[j], caller_eff);
     if (missing == "") { return ""; }
-    return "call to `" + callee_name + "` requires capability `" + missing + "` which exceeds the caller's effective sandbox ceiling [" + fmt_caps(caller_eff) + "] (attenuation is transitive across the call closure)";
+    return "call to `" + callee_name + "` requires capability `" + cap_spell(missing) + "` which exceeds the caller's effective sandbox ceiling [" + fmt_caps(caller_eff) + "] (attenuation is transitive across the call closure)";
 }
 Str e0211_check_callees(Funcs fs, Str caller_name, Str caller_eff, List(Str) callees, Int k) {
     if (k >= callees.len()) { return ""; }
@@ -3894,15 +4060,14 @@ Str e0211_check_callees(Funcs fs, Str caller_name, Str caller_eff, List(Str) cal
 // Whole-program passes accumulate (rather than stop at the first hit):
 // a violation in one function must not hide a different, later
 // function's diagnostic that a specific caller is looking for.
-Bool e0211_check_all(Funcs fs, List(Str) eff, List(Str) edges, Int i) {
-    if (i >= fs.names.len()) { return false; }
+Bool e0211_check_all(Funcs fs, List(Str) eff, List(Str) edges, Int i) { return e0211_check_at(fs, eff, edges, i, false); }
+
+Bool e0211_check_at(Funcs fs, List(Str) eff, List(Str) edges, Int i, Bool acc) {
+    if (i >= fs.names.len()) { return acc; }
     Str caller_eff = eff[i];
     Str m = if (caller_eff == "") { "" } else { e0211_check_callees(fs, fs.names[i], caller_eff, csv_split_or_empty(edges[i]), 0) };
     Bool printed = if (m != "") { eprintln("error[E0211]: " + m) } else { false };
-    Int k = i + 1;
-    Bool rest = e0211_check_all(fs, eff, edges, k);
-    if (printed) { return true; }
-    return rest;
+    return e0211_check_at(fs, eff, edges, i + 1, acc || printed);
 }
 
 // ─── Graph-reduction pass (spec §33 / §36) ─────────────────────

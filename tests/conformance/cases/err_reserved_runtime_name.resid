@@ -1,0 +1,14 @@
+// Function names starting with `resid_` belong to the runtime (E0265):
+// a program's resid_device_callz looked enough like the device entry for
+// the compiler to make the program a device host, and its own
+// resid_device_call or resid_device_host would stand in the runtime's
+// place in the link.
+List(Int) resid_device_callz(List(Int) r) { return r.concat(r); }
+
+Int resid_device_host() { return 7; }
+
+Int main() {
+    List(Int) x = resid_device_callz([rt 1, 2, 3]);
+    println(f"{x.len()} {resid_device_host()}");
+    return 0;
+}

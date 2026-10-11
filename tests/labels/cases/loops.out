@@ -1,0 +1,15 @@
+bind a @ loops.resid:19:5: External
+  loops.resid:6:21  mcall get  -- outside data enters here (args.get)
+  loops.resid:6:13  call str_len
+  loops.resid:7:23  ret  -- chosen by outside data
+  loops.resid:19:13  call find
+  loops.resid:19:5  bind a
+bind b @ loops.resid:20:5: Internal
+bind c @ loops.resid:21:5: External
+  loops.resid:21:27  mcall get  -- outside data enters here (args.get)
+  loops.resid:21:19  call str_len
+  loops.resid:21:13  call scan
+  loops.resid:21:5  bind c
+bind s @ loops.resid:22:5: External
+  loops.resid:22:34  spawn  -- outside data enters here (spawn: a region's result and its failure)
+  loops.resid:22:5  bind s

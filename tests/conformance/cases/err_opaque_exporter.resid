@@ -1,0 +1,8 @@
+// A channel exporter comes only from a completed handshake (lib/tls*.resid).
+import "tls.resid";
+import "tlsmsg.resid";
+Int main() {
+    List(Secret(UInt(8))) x = [];
+    ChannelExporter e = ChannelExporter {.x = x};
+    return 0;
+}

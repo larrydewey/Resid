@@ -1,0 +1,70 @@
+// verify/endorsed.resid — appraisals against endorsed reference values
+// (PLAN-attestation.md §4): each platform's appraisal, with the
+// measurements a signed CoRIM endorses (verify/corim.resid) accepted
+// beside the policy's own. The result rests on the evidence's anchors and
+// the endorser's, so a decision on it names both in `accept`; the
+// policy still names the appraisal (E0283), and its mandatory checks are
+// the platform appraisal's.
+
+import "core.resid";
+import "corim.resid";
+import "snp.resid";
+import "tdx.resid";
+import "cca.resid";
+import "spdm.resid";
+
+Verified(T) en_join(Verified(T) v, Verified(CorimRefs) refs) {
+    return Verified {.value = v.value, .anchors = v.anchors.concat(refs.anchors), .quals = v.quals, .record = v.record, .kem = v.kem, .pk = v.pk, .chan = v.chan, .time = v.time, .principal = v.principal, .format = v.format};
+}
+
+// SNP: the launch measurement the policy names or the CoRIM endorses.
+@primitive(appraise, from = v, policy = policy, ptype = SnpPolicy, with = refs)
+pub Result(Appraised(SnpReport), VerifyError) snp_appraise_endorsed(Verified(SnpReport) v, SnpPolicy policy, Verified(CorimRefs) refs) {
+    SnpPolicy p = SnpPolicy {.min_tcb = policy.min_tcb, .measurements_hex = policy.measurements_hex.concat(corim_digests_hex(refs.value)), .vmpl = policy.vmpl, .allow_migration_agent = policy.allow_migration_agent, .id_key_digests_hex = policy.id_key_digests_hex, .host_data_hex = policy.host_data_hex};
+    Appraised(SnpReport) a = snp_appraise(v, p)?;
+    return Ok(Appraised {.v = en_join(a.v, refs), .policy = a.policy});
+}
+
+// TDX: the MRTD the policy names or the CoRIM endorses.
+@primitive(appraise, from = v, policy = policy, ptype = TdxPolicy, with = refs, anchor = root, kinds = [IntelPck], algorithms = [EcdsaP256Sha256], format = TdxQuote, inputs = [col, t])
+pub Result(Appraised(TdxQuote), VerifyError) tdx_appraise_endorsed(Verified(TdxQuote) v, TdxPolicy policy, TdxCollateral col, Anchor root, EvidenceTime t, Verified(CorimRefs) refs) {
+    TdxPolicy p = TdxPolicy {.mrtd_hex = policy.mrtd_hex.concat(corim_digests_hex(refs.value)), .rtmrs_hex = policy.rtmrs_hex, .mrseam_hex = policy.mrseam_hex, .accepted_statuses = policy.accepted_statuses};
+    Appraised(TdxQuote) a = tdx_appraise(v, p, col, root, t)?;
+    return Ok(Appraised {.v = en_join(a.v, refs), .policy = a.policy});
+}
+
+// CCA: the realm initial measurement the policy names or the CoRIM
+// endorses, and every platform software component's measurement endorsed.
+@primitive(appraise, from = v, policy = policy, ptype = CcaPolicy, with = refs)
+pub Result(Appraised(CcaToken), VerifyError) cca_appraise_endorsed(Verified(CcaToken) v, CcaPolicy policy, Verified(CorimRefs) refs) {
+    CcaPolicy p = CcaPolicy {.rim_hex = policy.rim_hex.concat(corim_digests_hex(refs.value)), .rems_hex = policy.rems_hex, .implementation_ids_hex = policy.implementation_ids_hex};
+    Appraised(CcaToken) a = cca_appraise(v, p)?;
+    Str bad = en_sw(v.value.sw, refs.value, 0);
+    if (bad != "") { return Err(Refused("cca_appraise_endorsed", bad)); }
+    return Ok(Appraised {.v = en_join(a.v, refs), .policy = a.policy});
+}
+
+Str en_sw(List(CcaSwComponent) sw, CorimRefs r, Int i) {
+    if (i >= sw.len()) { return ""; }
+    if (!corim_lists_digest(r, sw[i].measurement)) { return "the platform's " + sw[i].kind + " measurement is not endorsed"; }
+    return en_sw(sw, r, i + 1);
+}
+
+// SPDM: every measurement block endorsed under its index, and the
+// policy's own entries.
+@primitive(appraise, from = v, policy = policy, ptype = SpdmPolicy, with = refs)
+pub Result(Appraised(SpdmEvidence), VerifyError) spdm_appraise_endorsed(Verified(SpdmEvidence) v, SpdmPolicy policy, Verified(CorimRefs) refs) {
+    Str bad = en_blocks(v.value.measurements, refs.value, 0);
+    if (bad != "") { return Err(Refused("spdm_appraise_endorsed", bad)); }
+    if (policy.measurements_hex.len() > 0) {
+        Appraised(SpdmEvidence) a = spdm_appraise(v, policy)?;
+        return Ok(Appraised {.v = en_join(a.v, refs), .policy = a.policy});
+    }
+    return Ok(Appraised {.v = en_join(v, refs), .policy = "SpdmPolicy"});
+}
+
+Str en_blocks(List(SpdmMeasurement) ms, CorimRefs r, Int i) {
+    if (i >= ms.len()) { return ""; }
+    if (!corim_lists_keyed(r, ms[i].index, ms[i].value)) { return f"measurement {ms[i].index} is not endorsed"; }
+    return en_blocks(ms, r, i + 1);
+}

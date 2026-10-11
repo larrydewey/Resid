@@ -1,0 +1,167 @@
+// chal.resid — challenge records (PLAN-labels.md §6.5): the process-wide
+// marks behind lib/challenge.resid. A record's nonce and value live in the
+// library's opaque record; here are its state, its lifetime and what spent
+// it, so spending, accepting and exporting are atomic across spawn regions
+// and threads, and a record copied into a region is the same record.
+//
+// 65,536 slots in a ring: a new record takes the oldest slot (an attacker
+// who asks for challenges without answering costs bounded memory and can
+// push out records others wait on: availability only). A handle is
+// slot + 65536 * generation, so a handle to an evicted record is refused.
+// Only lib/challenge.resid calls these (E0277).
+//
+// Slot (160 bytes): generation, state, issue time (monotonic ns), lifetime
+// (ns), nonce (32), the SHA-256 of the descriptor that spent it (32), the
+// SHA-512 of the evidence that call returned (64).
+
+Int ch_cap() { return 65536; }
+Int ch_esz() { return 160; }
+Int ch_tab() { return resid_raw_global("rt_chal_tab", 10485760); }
+// {lock, records issued}
+Int ch_meta() { return resid_raw_global("rt_chal_meta", 16); }
+
+// State bits.
+Int ch_used() { return 1; }
+Int ch_spent() { return 2; }
+Int ch_accepted() { return 4; }
+Int ch_exported() { return 8; }
+Int ch_imported() { return 16; }
+Int ch_bound() { return 32; }
+Int ch_decided() { return 64; }
+
+Int ch_lock() {
+    if (resid_raw_cas(ch_meta(), 0, 1)) { return 0; }
+    _ = resid_raw_syscall(24, 0, 0, 0, 0, 0, 0);   // sched_yield
+    return ch_lock();
+}
+
+Int ch_unlock(Int v) { return st64(ch_meta(), 0) * 0 + v; }
+
+Int ch_slot(Int h) { return ch_tab() + (h % ch_cap()) * ch_esz(); }
+
+// The slot of handle h when it is still that record and not expired, else 0.
+Int ch_live(Int h) {
+    if (h < 0) { return 0; }
+    Int e = ch_slot(h);
+    if (ld64(e) != h / ch_cap() || (ld64(e + 8) & ch_used()) == 0) { return 0; }
+    if (rt_clock_monotonic_ns() - ld64(e + 16) > ld64(e + 24)) { return 0; }
+    return e;
+}
+
+// A new record for a 32-byte nonce, alive for life_s seconds; imported
+// records are refused (-1) when one with the same nonce is still alive.
+@export("resid_chal_new", "i64(ptr,i64,i64)")
+pub Int rt_chal_new(Int nonce, Int life_s, Int imported) {
+    if (c_list_len(nonce) != 32 || life_s <= 0 || life_s > 31536000) { return 0 - 2; }
+    Int buf = xmalloc(32);
+    _ = bytes_of(nonce, buf, 0, 32);
+    _ = ch_lock();
+    Bool dup = imported == 1 && ch_has_import(buf, 0);
+    Int h = if (dup) { 0 - 1 } else { ch_put(buf, life_s, imported) };
+    _ = c_free(buf);
+    return ch_unlock(h);
+}
+
+Bool ch_has_import(Int nonce, Int i) {
+    if (i >= ch_cap()) { return false; }
+    Int e = ch_tab() + i * ch_esz();
+    Int st = ld64(e + 8);
+    Bool hit = (st & ch_imported()) != 0 && ch_live(ld64(e) * ch_cap() + i) != 0 && ch_same(e + 32, nonce, 0, 32);
+    return hit || ch_has_import(nonce, i + 1);
+}
+
+Bool ch_same(Int a, Int b, Int i, Int n) {
+    if (i >= n) { return true; }
+    if (ld8(a + i) != ld8(b + i)) { return false; }
+    return ch_same(a, b, i + 1, n);
+}
+
+Int ch_put(Int nonce, Int life_s, Int imported) {
+    Int seq = ld64(ch_meta() + 8);
+    _ = st64(ch_meta() + 8, seq + 1);
+    Int slot = seq % ch_cap();
+    Int e = ch_tab() + slot * ch_esz();
+    Int gen = ld64(e) + 1;
+    _ = resid_raw_fill(e, 0, ch_esz());
+    _ = st64(e, gen);
+    _ = st64(e + 8, ch_used() | (if (imported == 1) { ch_imported() } else { 0 }));
+    _ = st64(e + 16, rt_clock_monotonic_ns());
+    _ = st64(e + 24, life_s * 1000000000);
+    _ = resid_raw_copy(e + 32, nonce, 32);
+    return gen * ch_cap() + slot;
+}
+
+// op 2 accept by a verifier, 3 export as a token (lib/challenge.resid),
+// 4 decide (a release on an accepted record, lib/verify/), 5 read the
+// state (100 + its bits). 0 done, 1 refused by the record's state, 2 gone
+// (evicted or expired).
+@export("resid_chal_mark", "i64(i64,i64)")
+pub Int rt_chal_mark(Int h, Int op) {
+    if (op != 2 && op != 3 && op != 4 && op != 5) { return 1; }
+    _ = ch_lock();
+    Int e = ch_live(h);
+    Int r = if (e == 0) { 2 } else { ch_apply(e, op) };
+    return ch_unlock(r);
+}
+
+// Spend a record in a request, before anything is sent (the device
+// engines), so a crash, timeout or kill cannot let it serve twice.
+@export("resid_chal_spend", "i64(i64)")
+pub Int rt_chal_spend(Int h) {
+    _ = ch_lock();
+    Int e = ch_live(h);
+    Int r = if (e == 0) { 2 } else { ch_apply(e, 1) };
+    return ch_unlock(r);
+}
+
+Int ch_apply(Int e, Int op) {
+    Int st = ld64(e + 8);
+    Bool spent = (st & ch_spent()) != 0;
+    Bool acc = (st & ch_accepted()) != 0;
+    Bool exp = (st & ch_exported()) != 0;
+    Bool imp = (st & ch_imported()) != 0;
+    // An imported record serves only a verifier; an exported one is
+    // accepted only through an import of its token (§6.8).
+    if (op == 5) { return 100 + st; }
+    Bool dec = (st & ch_decided()) != 0;
+    Bool ok = if (op == 1) { !spent && !acc && !exp && !imp } else if (op == 2) { !acc && !exp } else if (op == 3) { !spent && !acc && !exp && !imp } else if (op == 4) { acc && !dec } else { false };
+    if (!ok) { return 1; }
+    Int bit = if (op == 1) { ch_spent() } else if (op == 2) { ch_accepted() } else if (op == 3) { ch_exported() } else { ch_decided() };
+    _ = st64(e + 8, st | bit);
+    return 0;
+}
+
+// Whole seconds a record has left, 0 when it is gone or expired.
+@export("resid_chal_left", "i64(i64)")
+pub Int rt_chal_left(Int h) {
+    _ = ch_lock();
+    Int e = ch_live(h);
+    Int left = if (e == 0) { 0 } else { (ld64(e + 16) + ld64(e + 24) - rt_clock_monotonic_ns()) / 1000000000 };
+    return ch_unlock(if (left > 0) { left } else { 0 });
+}
+
+// What spent a record: the descriptor's SHA-256 and the evidence's
+// SHA-512, set once, after the spend. 0 done, 1 refused, 2 gone.
+@export("resid_chal_bind", "i64(i64,ptr,ptr)")
+pub Int rt_chal_bind(Int h, Int desc, Int ev) {
+    if (c_list_len(desc) != 32 || c_list_len(ev) != 64) { return 1; }
+    _ = ch_lock();
+    Int e = ch_live(h);
+    Int st = if (e == 0) { 0 } else { ld64(e + 8) };
+    Bool ok = e != 0 && (st & ch_spent()) != 0 && (st & ch_bound()) == 0;
+    _ = if (ok) { bytes_of(desc, e + 64, 0, 32) + bytes_of(ev, e + 96, 0, 64) + st64(e + 8, st | ch_bound()) } else { 0 };
+    return ch_unlock(if (e == 0) { 2 } else if (ok) { 0 } else { 1 });
+}
+
+// The 96 bytes a spend bound (descriptor hash, evidence hash), or an empty
+// list when the record is gone or was never bound.
+@export("resid_chal_bound", "ptr(i64)")
+pub Int rt_chal_bound(Int h) {
+    Int buf = xmalloc(96);
+    _ = ch_lock();
+    Int e = ch_live(h);
+    Bool ok = e != 0 && (ld64(e + 8) & ch_bound()) != 0;
+    _ = if (ok) { resid_raw_copy(buf, e + 64, 96) } else { 0 };
+    _ = ch_unlock(0);
+    return rnd_list(buf, 96, if (ok) { 96 } else { 0 });
+}

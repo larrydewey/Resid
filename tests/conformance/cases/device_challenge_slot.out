@@ -1,0 +1,5 @@
+first use: sent
+second use: refused: challenge already used, accepted, exported or imported
+short: refused: the challenge is 64 bytes, got 3
+record of 32: refused: the challenge record is 32 bytes, the slot 64
+runtime: sent

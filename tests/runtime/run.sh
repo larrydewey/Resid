@@ -6,7 +6,7 @@
 # must not use any compiler internal.
 set -uo pipefail
 cd "$(dirname "$0")"
-W="$(mktemp -d)"; trap 'echo "Preserving $W" >trap 'rm -rf "$W"' EXIT2; ls -la $W' EXIT
+W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT
 pass=0; fail=0
 ROOT="$(cd ../.. && pwd)"
 for t in *.c; do
@@ -60,30 +60,17 @@ if [ "$nat_ok" = 1 ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FA
 # The display transport (runtime/rt/unix.resid): a Unix socket pair, bytes
 # and descriptors over it, a shared mapping through its handle, and the
 # same descriptors pollable under `display` alone.
-echo "DEBUG: starting display transport test, cwd=$(pwd)" >&2
 if (cd "$ROOT" && "$COMPILER" tests/runtime/display.resid -o "$W/display") > "$W/display.log" 2>&1; then
-    echo "DEBUG: compile ok, W=$W" >&2
     "$W/display" > "$W/display.out" 2>&1
     run_rc=$?
-    echo "DEBUG: run rc=$run_rc, display.out size=$(wc -c < $W/display.out)" >&2
-    echo "DEBUG: locale stdout=" >&2
-    locale 2>&1; echo "locale rc=$?" >&2
-    echo "DEBUG: ls stdout=" >&2
-    ls -la "$W/display.out" 2>&1; echo "ls rc=$?" >&2
-    echo "DEBUG: file stdout=" >&2
-    file "$W/display.out" 2>&1; echo "file rc=$?" >&2
-    echo "DEBUG: xxd stdout=" >&2
-    xxd "$W/display.out" | head -3 2>&1; echo "xxd rc=$?" >&2
-    echo "DEBUG: expected output (hex):" >&2
-    xxd tests/runtime/display.out | head -3 >&2; echo "xxd expected rc=$?" >&2
     if [ $run_rc -eq 0 ] && cmp -s "$W/display.out" display.out; then
         pass=$((pass + 1))
     else
-        fail=$((fail + 1)); echo "FAIL display transport: $(grep -m1 -i error "$W/display.log") $(diff "$W/display.out" tests/runtime/display.out 2>/dev/null | head -3 | tr '
+        fail=$((fail + 1)); echo "FAIL display transport: $(grep -m1 -i error "$W/display.log") $(diff "$W/display.out" display.out 2>/dev/null | head -3 | tr '
 ' ' ')"
     fi
 else
-    fail=$((fail + 1)); echo "FAIL display transport: $(grep -m1 -i error "$W/display.log") $(diff "$W/display.out" tests/runtime/display.out 2>/dev/null | head -3 | tr '
+    fail=$((fail + 1)); echo "FAIL display transport: $(grep -m1 -i error "$W/display.log") $(diff "$W/display.out" display.out 2>/dev/null | head -3 | tr '
 ' ' ')"
 fi
 # With no display named in the environment, connecting is refused rather
@@ -118,6 +105,138 @@ if command -v python3 > /dev/null; then
     else
         fail=$((fail + 1)); echo "FAIL readline on a pty: $(grep -m1 -i error "$W/rl.log") $(diff "$W/rl.out" term/drive.out | head -3 | tr '\n' ' ')"
     fi
+fi
+# A native module's host started by hand (spec §47, hs_auth): run as
+# `resid-native-host tiny` with a socket on fd 3 and a request already in
+# it, by a parent (python3) that does not answer its challenge, it sends
+# the challenge and refuses (exit 124, no reply); called by the program
+# itself it answers.
+if command -v python3 > /dev/null; then
+    if (cd "$ROOT" && "$COMPILER" tests/conformance/cases/native_stateless.resid -native tiny=tests/conformance/native/tiny.ll -o "$W/nh") > "$W/nh.log" 2>&1 \
+        && [ "$("$W/nh")" = "1 1 1" ] \
+        && python3 - "$W/nh" > "$W/nh.out" 2>&1 <<'PY'
+import os, socket, struct, sys
+a, b = socket.socketpair()
+a.sendall(struct.pack("<q", 0)); a.shutdown(socket.SHUT_WR)
+pid = os.fork()
+if pid == 0:
+    os.dup2(b.fileno(), 3)
+    os.execve(sys.argv[1], ["resid-native-host", "tiny"], {})
+b.close()
+data = b""
+while True:
+    try:
+        c = a.recv(4096)
+    except ConnectionResetError:   # it exited with our request unread
+        break
+    if not c: break
+    data += c
+_, st = os.waitpid(pid, 0)
+ok = os.WIFEXITED(st) and os.WEXITSTATUS(st) == 124 and len(data) == 16
+print("refused" if ok else f"answered: status {st}, {len(data)} bytes")
+sys.exit(0 if ok else 1)
+PY
+    then
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1)); echo "FAIL native host by hand: $(grep -m1 -i error "$W/nh.log") $(cat "$W/nh.out" 2>/dev/null)"
+    fi
+fi
+# A native module's host while it runs (spec §47): seccomp in filter mode,
+# no new privileges, and, where the CPU and kernel have it, the shadow
+# stack on and locked (x86-64 CET; tests/conformance/native/spin.ll spins
+# so the test can read the live host's /proc status).
+if command -v python3 > /dev/null; then
+    printf '@link("spin") Int spin(Int n) {}\n@requires(native_spin)\nInt main() { println(f"{spin(rt 2000000000)}"); return 0; }\n' > "$W/spin.resid"
+    if (cd "$ROOT" && "$COMPILER" "$W/spin.resid" -native spin=tests/conformance/native/spin.ll -o "$W/spin") > "$W/spin.log" 2>&1 \
+        && python3 - "$W/spin" > "$W/spin.out" 2>&1 <<'PY'
+import os, subprocess, sys, time
+p = subprocess.Popen([sys.argv[1]], stdout=subprocess.PIPE)
+status = None
+deadline = time.time() + 20
+while status is None and time.time() < deadline and p.poll() is None:
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        try:
+            argv = open(f"/proc/{pid}/cmdline", "rb").read().split(b"\0")
+            if argv[:2] == [b"resid-native-host", b"spin"]:
+                status = dict(l.split(":", 1) for l in open(f"/proc/{pid}/status").read().splitlines() if ":" in l)
+        except OSError:
+            pass
+    time.sleep(0.02)
+out = p.communicate()[0].decode().strip()
+if status is None:
+    sys.exit(f"no live host seen (program printed {out!r})")
+flags = open("/proc/cpuinfo").read().split()
+want = {"Seccomp": "2", "NoNewPrivs": "1"}
+bad = [f"{k}={status.get(k, '').strip()}" for k, v in want.items() if status.get(k, "").strip() != v]
+if "user_shstk" in flags and "x86_Thread_features_locked" in status:
+    if "shstk" not in status["x86_Thread_features"] or "shstk" not in status["x86_Thread_features_locked"]:
+        bad.append("shadow stack not on and locked: " + status["x86_Thread_features_locked"].strip())
+if out != "2000000000":
+    bad.append(f"result {out!r}")
+print("host confined" if not bad else "; ".join(bad))
+sys.exit(1 if bad else 0)
+PY
+    then
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1)); echo "FAIL native host confinement: $(grep -m1 -i error "$W/spin.log") $(cat "$W/spin.out" 2>/dev/null)"
+    fi
+fi
+# An AArch64 build hardens a native module's own code (compiler/native.resid,
+# nt_harden): every function signs its return address, gets landing pads
+# and is GCS-compatible, in its own section between page-aligned marks
+# that bound every module symbol (the host maps those pages PROT_BTI).
+# Needs the AArch64 builtins and the AArch64 runtime IR; it only builds.
+RH="${RESID_HOME:-$ROOT/build/boot}"
+if { [ -n "${RESID_AARCH64_BUILTINS:-}" ] || [ -f "$RH/aarch64/libclang_rt.builtins.a" ]; } && [ -f "$RH/rt-aarch64.ll" ] && command -v nm > /dev/null && command -v python3 > /dev/null; then
+    if (cd "$ROOT" && "$COMPILER" tests/conformance/cases/native_ok.resid --target aarch64 -native tiny=tests/conformance/native/aarch64/tiny.ll -o "$W/a64") > "$W/a64.log" 2>&1 \
+        && nm "$W/a64" > "$W/a64.nm" && python3 - "$W/a64.native.tiny.ll" "$W/a64.nm" > "$W/a64.out" 2>&1 <<'PY'
+import sys
+ir = open(sys.argv[1]).read().splitlines()
+defs = [l for l in ir if l.startswith("define ")]
+need = ['"branch-target-enforcement"', '"guarded-control-stack"', '"sign-return-address"="non-leaf"', '"sign-return-address-key"="a_key"', 'section "resid_native_tiny"']
+bad = [l.split("(")[0] for l in defs if not all(n in l for n in need)]
+syms = {}
+for l in open(sys.argv[2]):
+    f = l.split()
+    if len(f) == 3 and f[2].startswith("native.tiny."):
+        syms[f[2]] = int(f[0], 16)
+lo, hi = syms.get("native.tiny.__resid_lo"), syms.get("native.tiny.__resid_hi")
+if lo is None or hi is None or lo % 4096 or hi % 4096 or hi <= lo:
+    bad.append(f"marks {lo} {hi}")
+else:
+    bad += [n for n, a in syms.items() if n != "native.tiny.__resid_hi" and not lo <= a < hi]
+print("hardened" if not bad and len(defs) > 2 else f"not hardened: {bad} ({len(defs)} functions)")
+sys.exit(1 if bad or len(defs) <= 2 else 0)
+PY
+    then
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1)); echo "FAIL aarch64 native hardening: $(grep -m1 -i error "$W/a64.log") $(cat "$W/a64.out" 2>/dev/null)"
+    fi
+fi
+# Secret mode turns core dumps off (runtime/rt/malloc.resid): a program
+# holding a secret aborts with exit 134 and its message, not SIGABRT, and a
+# stack overflow in it dumps no core; the control without a secret still
+# aborts with SIGABRT (needs python3 to tell an exit from a signal).
+if command -v python3 > /dev/null; then
+    nd_ok=1; nd_why=""
+    for p in secret_abort public_abort secret_overflow; do
+        (cd "$ROOT" && "$COMPILER" "tests/runtime/nodump/$p.resid" -o "$W/nd_$p") > "$W/nd_$p.log" 2>&1 \
+            || { nd_ok=0; nd_why="$nd_why $p: $(grep -m1 -i error "$W/nd_$p.log")"; continue; }
+        python3 nodump/check.py "$W/nd_$p" > "$W/nd_$p.out" 2>&1
+    done
+    msg="resid: abort: integer overflow in checked arithmetic"
+    [ "$(head -1 "$W/nd_secret_abort.out" 2>/dev/null)" = "exit 134" ] && grep -qF "$msg" "$W/nd_secret_abort.out" \
+        || { nd_ok=0; nd_why="$nd_why secret_abort: $(tr '\n' ' ' < "$W/nd_secret_abort.out")"; }
+    head -1 "$W/nd_public_abort.out" 2>/dev/null | grep -q '^signal 6 ' && grep -qF "$msg" "$W/nd_public_abort.out" \
+        || { nd_ok=0; nd_why="$nd_why public_abort: $(tr '\n' ' ' < "$W/nd_public_abort.out")"; }
+    [ "$(head -1 "$W/nd_secret_overflow.out" 2>/dev/null)" = "signal 11 nocore" ] \
+        || { nd_ok=0; nd_why="$nd_why secret_overflow: $(tr '\n' ' ' < "$W/nd_secret_overflow.out")"; }
+    if [ "$nd_ok" = 1 ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL secret mode core dumps:$nd_why"; fi
 fi
 echo "runtime: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

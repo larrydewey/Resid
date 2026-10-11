@@ -1,0 +1,5 @@
+// Scalars are 1, 2, 4 or 8 bytes; this descriptor breaks that (E0263).
+import "dev/fx_e0263_scalar_width.resid";
+
+@requires(device)
+Int main() { println(fx_call()); return 0; }

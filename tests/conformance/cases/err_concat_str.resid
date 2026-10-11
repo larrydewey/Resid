@@ -1,0 +1,7 @@
+// Refused at type check: lowering would treat the value as a heap
+// list and read memory that is not one.
+Int main() {
+    Str a = rt "ab";
+    Str b = a.concat("cd");
+    return str_len(b);
+}

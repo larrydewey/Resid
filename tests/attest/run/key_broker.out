@@ -1,0 +1,6 @@
+released and opened: same key
+replay: not fresh: challenge already accepted, or exported
+other key: not fresh: the evidence does not carry this challenge
+other challenge: not fresh: the evidence does not carry this challenge
+plain: quals 1
+vlek root: refused (snp_verify): the report's SIGNING_KEY is 0, the anchor's kind AmdVlek

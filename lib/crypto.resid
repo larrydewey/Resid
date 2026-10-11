@@ -7,6 +7,9 @@
 // No mutation: every loop is tail recursion; every update rebuilds the list.
 // 32-bit semantics come from masking with 0xFFFFFFFF after each add.
 
+import "sha256g.resid";
+import "word.resid";
+
 // ─── Bit helpers ────────────────────────────────────────────────
 
 pub Int mask32(Int x) {
@@ -243,31 +246,14 @@ pub List(Int) add_h(List(Int) h, List(Int) hv, Int i) {
             add_w(h, hv, 4), add_w(h, hv, 5), add_w(h, hv, 6), add_w(h, hv, 7)];
 }
 
-pub List(Int) digest_block(List(Int) m, Int base, List(Int) h) {
-    return sha_blk_l(m, base, 0, h, h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
-}
+// One block in software: lib/sha256g.resid's generic block function at
+// public words, the same code secret hashing is checked in.
+pub List(Int) digest_block(List(Int) m, Int base, List(Int) h) { return sha256g_block(m, base, h); }
 
 // Big-endian word j of the block at base.
 pub Int word_at_list(List(Int) m, Int base, Int j) {
     Int off = base + j * 4;
     return (((m[off] & 255) << 24) | ((m[off + 1] & 255) << 16) | ((m[off + 2] & 255) << 8) | (m[off + 3] & 255)) & 4294967295;
-}
-
-pub Int sched_w_l(List(Int) m, Int base, Int i, Int w0, Int w1, Int w9, Int w14) {
-    if (i < 16) { return word_at_list(m, base, i); }
-    return wrapping_add(wrapping_add(ssig1(w14), w9), wrapping_add(ssig0(w1), w0)) & 4294967295;
-}
-
-// sha_blk over a byte list: the same 64 rounds with the state and the
-// schedule window in scalar parameters.
-pub List(Int) sha_blk_l(List(Int) m, Int base, Int i, List(Int) h0, Int a, Int b, Int c, Int d, Int e, Int f, Int g, Int h, Int w0, Int w1, Int w2, Int w3, Int w4, Int w5, Int w6, Int w7, Int w8, Int w9, Int w10, Int w11, Int w12, Int w13, Int w14, Int w15) {
-    if (i >= 64) {
-        return [wrapping_add(h0[0], a) & 4294967295, wrapping_add(h0[1], b) & 4294967295, wrapping_add(h0[2], c) & 4294967295, wrapping_add(h0[3], d) & 4294967295, wrapping_add(h0[4], e) & 4294967295, wrapping_add(h0[5], f) & 4294967295, wrapping_add(h0[6], g) & 4294967295, wrapping_add(h0[7], h) & 4294967295];
-    }
-    Int wi = sched_w_l(m, base, i, w0, w1, w9, w14);
-    Int t1 = wrapping_add(wrapping_add(wrapping_add(h, bsig1(e)), wrapping_add(ch_of(e, f, g), k_at(i))), wi) & 4294967295;
-    Int t2 = wrapping_add(bsig0(a), maj_of(a, b, c)) & 4294967295;
-    return sha_blk_l(m, base, i + 1, h0, wrapping_add(t1, t2) & 4294967295, a, b, c, wrapping_add(d, t1) & 4294967295, e, f, g, w1, w2, w3, w4, w5, w6, w7, w8, w9, w10, w11, w12, w13, w14, w15, wi);
 }
 
 pub List(Int) digest_blocks(List(Int) m, Int pos, Int total, List(Int) h) {
@@ -674,6 +660,46 @@ pub Int ct_acc(List(Int) a, List(Int) b, Int i, Int acc) {
     return ct_acc(a, b, ni, acc2);
 }
 
+// ─── Secret equality (spec §48) ─────────────────────────────────
+// ct_eq compares two secret byte lists without a branch on their bytes:
+// every position is folded into one secret word, which is reduced to a
+// single bit before that bit, and only it, is published. Publishing it is
+// a declassification, so ct_eq needs the grant. Lengths are public.
+
+@requires(declassify)
+pub Bool ct_eq(Secret(List(UInt(8))) a, Secret(List(UInt(8))) b) {
+    if (a.len() != b.len()) { return false; }
+    if (a.len() == 0) { return true; }
+    Secret(UInt(8)) d = ct_eq_acc(a, b, 1, a[0] ^ b[0]);
+    // d is 0 exactly when the lists are equal; as a 32-bit word, d | -d has
+    // its top bit set otherwise, so the shift leaves 0 or 1.
+    Secret(UInt(32)) w = wrapping_u32(d);
+    Secret(UInt(32)) bit = (w | wrapping_usub((UInt(32)) 0, w)) >> (UInt(32)) 31;
+    // ct_public: the verdict is public by design, so a constant-time check
+    // under valgrind (tests/ct) sees it as defined from here on.
+    return ct_public(declassify(bit, "ct_eq verdict")) == (UInt(32)) 0;
+}
+
+Secret(UInt(8)) ct_eq_acc(Secret(List(UInt(8))) a, Secret(List(UInt(8))) b, Int i, Secret(UInt(8)) acc) {
+    if (i >= a.len()) { return acc; }
+    return ct_eq_acc(a, b, i + 1, acc | (a[i] ^ b[i]));
+}
+
+// CtSame(B): the constant-time equality verdict for generic code over
+// byte lists List(B) (lib/word.resid's byte types). At public bytes it is
+// ct_equal; at secret bytes it is ct_eq, which publishes one bit and so
+// needs the declassify grant -- carried to every caller of the secret copy,
+// and to no caller of the public one.
+behavior CtSame(B) { Bool ct_same(List(B) a, List(B) b); }
+
+Bool ct_same_pub(List(Int) a, List(Int) b) { return ct_equal(a, b); }
+
+@requires(declassify)
+Bool ct_same_secret(List(Secret(UInt(8))) a, List(Secret(UInt(8))) b) { return ct_eq(secret_join(a), secret_join(b)); }
+
+CtSame(Int) = ct_same_pub;
+CtSame(Secret(UInt(8))) = ct_same_secret;
+
 // ─── Base64 (RFC 4648 standard alphabet, padded) ────────────────
 
 pub Str b64_char(Int v) {
@@ -727,14 +753,128 @@ pub StrBuf b64_enc(List(Int) bytes, Int i, Int end, StrBuf acc) {
 // refused rather than skipped. A decoder that silently drops a character
 // it does not recognise turns a corrupted certificate into a *different*
 // certificate, and the caller cannot tell the difference.
+//
+// One implementation, generic over lib/word.resid's Word(W, B), so a
+// private key's PEM body decodes at secret bytes (Secret(UInt(32)) words,
+// Secret(UInt(8)) bytes) and base64_decode is the public copy at Int.
+// The character class of each input byte is computed with masks, never a
+// table indexed by the character or a branch on it; an invalid character
+// sets a bit in a running flag, and only that flag is published, once,
+// through CtSame(B) (at secret bytes a declassification, so the secret
+// copy needs @requires(declassify)). Lengths and padding are public: the
+// caller strips whitespace and the '=' padding at public positions and
+// passes the pad count.
 
-Int b64_val(Int c) {
-    if (c >= 65 && c <= 90) { return c - 65; }          // A-Z
-    if (c >= 97 && c <= 122) { return c - 71; }         // a-z
-    if (c >= 48 && c <= 57) { return c + 4; }           // 0-9
-    if (c == 43) { return 62; }                         // +
-    if (c == 47) { return 63; }                         // /
-    return 0 - 1;
+// 1 when lo <= c <= hi, else 0, as a word; c is a byte (0..255), lo and hi
+// public. c - lo and hi - c, taken modulo 2^32, have bit 31 set exactly
+// when c is outside the range.
+@needs(Word(W, B))
+pub W b64g_in(W c, Int lo, Int hi) {
+    W below = w_addk(c, 0 - lo);
+    W above = w_addk(w_not(c), hi + 1);
+    W out = w_andk(w_shr(w_or(below, above), 31), 1);
+    return w_xork(out, 1);
+}
+
+// All ones when `bit` is 1, zero when it is 0 (the two's complement -bit).
+@needs(Word(W, B))
+W b64g_mask(W bit) { return w_addk(w_not(bit), 1); }
+
+// One character's 6-bit value in bits 0..5, and bit 8 set when the
+// character is not in the alphabet ('=' included: padding is the
+// caller's, at public positions).
+@needs(Word(W, B))
+pub W b64g_sextet(W c) {
+    W up = b64g_in(c, 65, 90);        // A-Z -> 0..25
+    W lo = b64g_in(c, 97, 122);       // a-z -> 26..51
+    W dg = b64g_in(c, 48, 57);        // 0-9 -> 52..61
+    W pl = b64g_in(c, 43, 43);        // +   -> 62
+    W sl = b64g_in(c, 47, 47);        // /   -> 63
+    W v1 = w_or(w_and(b64g_mask(up), w_addk(c, 0 - 65)), w_and(b64g_mask(lo), w_addk(c, 0 - 71)));
+    W v2 = w_or(w_and(b64g_mask(dg), w_addk(c, 4)), w_or(w_andk(b64g_mask(pl), 62), w_andk(b64g_mask(sl), 63)));
+    W ok = w_or(w_or(up, lo), w_or(dg, w_or(pl, sl)));
+    return w_or(w_andk(w_or(v1, v2), 63), w_shl(w_xork(ok, 1), 8));
+}
+
+// The 24-bit number a group of four sextets spells (fewer at the end are
+// zero), with bit 24 set when any of them was not in the alphabet.
+@needs(Word(W, B))
+W b64g_join(W s0, W s1, W s2, W s3) {
+    W hi = w_or(w_shl(w_andk(s0, 63), 18), w_shl(w_andk(s1, 63), 12));
+    W lo = w_or(w_shl(w_andk(s2, 63), 6), w_andk(s3, 63));
+    W bad = w_shl(w_shr(w_andk(w_or(w_or(s0, s1), w_or(s2, s3)), 256), 8), 24);
+    return w_or(w_or(hi, lo), bad);
+}
+
+// The sextet of character i; past the end (a short final group) an 'A',
+// which is value 0 and valid. i is public.
+@needs(Word(W, B))
+W b64g_at(List(B) q, Int i) {
+    if (i >= q.len()) {
+        W a = w_lift(65);
+        return b64g_sextet(a);
+    }
+    B b = q[i];
+    W c = w_from_byte(b);
+    return b64g_sextet(c);
+}
+
+// Groups of four characters from i on, three bytes each (two for a
+// three-character tail, one for a two-character one); `bad` collects the
+// invalid flags in bit 24.
+@needs(Word(W, B), CtSame(B))
+List(B) b64g_groups(List(B) q, Int i, W bad, ListBuf(B) acc) {
+    Int n = q.len();
+    if (i >= n) { return b64g_finish(acc.finish(), bad); }
+    W g = b64g_join(b64g_at(q, i), b64g_at(q, i + 1), b64g_at(q, i + 2), b64g_at(q, i + 3));
+    Int rem = n - i;
+    ListBuf(B) a1 = acc.push(w_byte(g, 16));
+    ListBuf(B) a2 = if (rem > 2) { a1.push(w_byte(g, 8)) } else { a1 };
+    ListBuf(B) a3 = if (rem > 3) { a2.push(w_byte(g, 0)) } else { a2 };
+    W bad2 = w_or(bad, w_andk(g, 16777216));
+    return b64g_groups(q, i + 4, bad2, a3);
+}
+
+// The one published fact: whether every character was in the alphabet.
+@needs(Word(W, B), CtSame(B))
+List(B) b64g_finish(List(B) out, W bad) {
+    B flag = w_byte(bad, 24);
+    B zero = b_lift(0);
+    List(B) none = [];
+    if (!ct_same([flag], [zero])) { return none; }
+    return out;
+}
+
+// Decode base64 characters `q` (whitespace and the '=' padding already
+// removed, at public positions) followed by `pads` padding characters.
+// [] for anything not well-formed: an empty body, a length no padded
+// body has (one character over a group, or padding that does not finish
+// the last group), or a character outside the alphabet ('=' among them).
+// Non-zero bits under the padding are ignored, as base64_decode always
+// has.
+@needs(Word(W, B), CtSame(B))
+pub List(B) base64g_decode(List(B) q, Int pads) {
+    Int n = q.len();
+    Int r = n % 4;
+    Bool shape = n > 0 && ((r == 0 && pads == 0) || (r == 2 && pads == 2) || (r == 3 && pads == 1));
+    List(B) none = [];
+    if (!shape) { return none; }
+    W zero = w_lift(0);
+    ListBuf(B) out = ListBuf();
+    return b64g_groups(q, 0, zero, out);
+}
+
+// The public copy over text: whitespace out (a wrapped PEM body is full of
+// it), up to two trailing '=' counted as padding, everything else kept --
+// a character beyond ASCII as NUL, which the alphabet refuses. Returns []
+// for anything not well-formed base64, because a partial decode of a
+// certificate is never what the caller wanted -- an empty result is a
+// rejection the caller can act on, where a short one is a different
+// certificate nobody asked for.
+pub List(Int) base64_decode(Str s) {
+    List(Int) q = b64_strip(s, 0, str_len(s), ListBuf());
+    Int pads = b64_pads(q, q.len(), 0);
+    return base64g_decode(q[0..q.len() - pads], pads);
 }
 
 Bool b64_is_space(Int c) {
@@ -742,82 +882,19 @@ Bool b64_is_space(Int c) {
     return false;
 }
 
-// Whitespace out (a wrapped PEM body is full of it), everything else kept.
-List(Int) b64_strip_acc(Str s, Int i, List(Int) acc) {
-    Int n = str_len(s);
-    if (i >= n) { return acc; }
+List(Int) b64_strip(Str s, Int i, Int n, ListBuf(Int) acc) {
+    if (i >= n) { return acc.finish(); }
     Int c = str_char_at(s, i);
-    List(Int) acc2 = if (b64_is_space(c)) { acc } else { acc.concat([c]) };
-    Int ni = i + 1;
-    return b64_strip_acc(s, ni, acc2);
+    ListBuf(Int) acc2 = if (b64_is_space(c)) { acc } else { acc.push(if (c > 127 || c < 0) { 0 } else { c }) };
+    return b64_strip(s, i + 1, n, acc2);
 }
 
-// One four-character group -> up to three bytes.
-//
-// The four 6-bit values reassemble into one 24-bit number and the bytes
-// are its top bytes: 4 chars -> 3, 3 chars -> 2, 2 chars -> 1. Padding is
-// only ever legal in the final group, so that is the rule rather than a
-// running count -- "Zg==" is a body, "Zg==Zg==" is not, and neither is a
-// group with '=' anywhere but last.
-//
-// Arithmetic is bound to temporaries first, which this file's convention
-// requires (see lib/chacha.resid) so a wide expression is never evaluated
-// in an argument position.
-List(Int) b64_group(List(Int) q, Int i, Bool last_group, List(Int) acc) {
-    Int c0 = b64_val(q[i]);
-    Int c1 = b64_val(q[i + 1]);
-    if (c0 == 0 - 1 || c1 == 0 - 1) { return acc; }
-    Int eq2 = if (q[i + 2] == 61) { 1 } else { 0 };
-    Int eq3 = if (q[i + 3] == 61) { 1 } else { 0 };
-    Int hi = c0 << 18;
-    Int mid = c1 << 12;
-    if (eq2 == 1) {
-        if (eq3 == 0) { return acc; }
-        if (!last_group) { return acc; }
-        Int n2 = hi | mid;
-        Int b1 = (n2 >> 16) & 255;
-        return acc.concat([b1]);
-    }
-    Int c2 = b64_val(q[i + 2]);
-    if (c2 == 0 - 1) { return acc; }
-    Int lo = c2 << 6;
-    Int n3 = hi | mid | lo;
-    if (eq3 == 1) {
-        if (!last_group) { return acc; }
-        Int b1 = (n3 >> 16) & 255;
-        Int b2 = (n3 >> 8) & 255;
-        return acc.concat([b1, b2]);
-    }
-    Int c3 = b64_val(q[i + 3]);
-    if (c3 == 0 - 1) { return acc; }
-    Int n = n3 | c3;
-    Int b1 = (n >> 16) & 255;
-    Int b2 = (n >> 8) & 255;
-    Int b3 = n & 255;
-    return acc.concat([b1, b2, b3]);
-}
-
-List(Int) b64_quads(List(Int) q, Int i, Int end, List(Int) acc) {
-    if (i >= end) { return acc; }
-    // The group spans i..i+3, so it is the last exactly when i+4 == end.
-    Bool last = if (i + 4 >= end) { true } else { false };
-    List(Int) out = b64_group(q, i, last, acc);
-    Int ni = i + 4;
-    return b64_quads(q, ni, end, out);
-}
-
-// Decode a base64 string. Returns [] for anything not well-formed base64,
-// because a partial decode of a certificate is never what the caller
-// wanted -- an empty result is a rejection the caller can act on, where a
-// short one is a different certificate nobody asked for.
-pub List(Int) base64_decode(Str s) {
-    List(Int) q = b64_strip_acc(s, 0, []);
-    Int n = q.len();
-    if (n == 0) { return []; }
-    if (n % 4 != 0) { return []; }
-    List(Int) out = b64_quads(q, 0, n, []);
-    if (out.len() == 0 && n != 0) { return []; }
-    return out;
+// Trailing '=' characters, at most two (a third is a character of the
+// body, and refused there).
+Int b64_pads(List(Int) q, Int n, Int k) {
+    if (k >= 2 || n - k <= 0) { return k; }
+    if (q[n - k - 1] != 61) { return k; }
+    return b64_pads(q, n, k + 1);
 }
 
 // ─── PBKDF2-HMAC-SHA256 (RFC 2898 §5.2) ────────────────────────
@@ -899,22 +976,35 @@ pub List(Int) hkdf_sha256(List(Int) salt, List(Int) ikm, List(Int) info, Int len
     return hkdf_expand(prk, info, len);
 }
 
-// ─── Secure randomness (OS entropy via runtime hook) ────────────
-// The single C boundary in the library: entropy must come from the OS.
-// Everything above this line is pure Resid.
+// ─── Secure randomness (PLAN-labels.md §6.6) ────────────────────
+// Every 64-byte block is one fresh draw: SHA-512 over u32be(32) ‖ k ‖
+// u32be(len c) ‖ c, where k is 32 bytes of getrandom (blocking, no
+// fallback) and c is 32 bytes of the CPU source (RDSEED, RNDR) or nothing
+// when there is none. Either source alone suffices and neither can cancel
+// the other; nothing is kept between draws.
 
-pub List(Int) rand_acc(List(Int) acc, Int n, Int i) {
-    if (i >= n) { return acc; }
-    Int b = resid_crypto_random_byte();
-    List(Int) acc2 = acc.concat([b]);
-    Int ni = i + 1;
-    return rand_acc(acc2, n, ni);
-}
-
-// n cryptographically random bytes.
+// n fresh bytes. Public: fresh enough for nonces and challenges, never a
+// key (keys draw through random_secret, lib/random.resid). A process whose
+// getrandom fails stops here rather than use unseeded bytes.
+@fresh_source(n)
 pub List(Int) random_bytes(Int n) {
-    return rand_acc([], n, 0);
+    if (n <= 0) { return []; }
+    return rand_blocks(n, []);
 }
+
+List(Int) rand_blocks(Int n, List(Int) acc) {
+    if (acc.len() >= n) { return acc[0..n]; }
+    return rand_blocks(n, acc.concat(rand_block()));
+}
+
+List(Int) rand_block() {
+    List(Int) k = resid_random_os(32);
+    rt_assert(k.len() == 32, "random: getrandom failed, and there is no randomness without it");
+    List(Int) c = resid_random_cpu(32);
+    return sha512_bytes(rand_u32(32).concat(k).concat(rand_u32(c.len())).concat(c));
+}
+
+List(Int) rand_u32(Int v) { return [(v >> 24) & 255, (v >> 16) & 255, (v >> 8) & 255, v & 255]; }
 
 pub Str random_hex(Int nbytes) {
     return hex_encode(random_bytes(nbytes));

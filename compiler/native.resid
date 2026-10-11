@@ -120,28 +120,34 @@ Int nt_sum_slots(List(Str) ts, Int i, Int acc) { return if (i >= ts.len()) { acc
 // ─── The artifact ───────────────────────────────────────────────────
 
 // An ingested artifact: the rewritten text, or why it was refused.
-pub type NArt = { Str err; Str text; List(Str) defs; List(Str) dlines; };
+pub type NArt = { Str err; Str text; List(Str) defs; List(Str) dlines; List(Str) asm; };
 
 // Externals an artifact may reference besides its own symbols and llvm.*.
 Bool nt_extern_ok(Str s) { return s == "memcpy" || s == "memmove" || s == "memset" || str_starts_with(s, "llvm."); }
 
 pub NArt nt_ingest(Str m, Str text) {
     List(Str) ls = str_split(text, "\n");
-    NArt a = nt_scan(ls, 0, false, NArt {.err = "", .text = "", .defs = [], .dlines = []});
+    NArt a = nt_scan(ls, 0, false, NArt {.err = "", .text = "", .defs = [], .dlines = [], .asm = []});
     if (a.err != "") { return a; }
     StrBuf sb = nt_rewrite(ls, 0, m, a.defs, StrBuf());
     Str out = sb.finish();
     Str err = nt_refs_err(out);
-    return NArt {.err = err, .text = out, .defs = a.defs, .dlines = a.dlines};
+    // AArch64: the module's own code gets return signing, landing pads and
+    // the guarded control stack, between page-aligned marks (nt_harden).
+    Str hard = if (err == "" && tgt_a64()) { nt_harden(out, m) } else { out };
+    return NArt {.err = err, .text = hard, .defs = a.defs, .dlines = a.dlines, .asm = a.asm};
 }
 
-NArt nt_fail(NArt a, Int line, Str why) { return NArt {.err = f"line {line + 1}: " + why, .text = "", .defs = a.defs, .dlines = a.dlines}; }
+NArt nt_fail(NArt a, Int line, Str why) { return NArt {.err = f"line {line + 1}: " + why, .text = "", .defs = a.defs, .dlines = a.dlines, .asm = a.asm}; }
 
 // Classify each top-level line and collect what the artifact defines.
 NArt nt_scan(List(Str) ls, Int i, Bool body, NArt a) {
     if (i >= ls.len()) { return if (body) { nt_fail(a, i - 1, "a function body does not end") } else { a }; }
     Str l = ls[i];
-    if (body) { return nt_scan(ls, i + 1, str_trim(l) != "}", a); }
+    // Inline asm runs only in the host, after its filter: allowed, and
+    // recorded (nt_asm_summary) for the provenance record.
+    NArt ab = if (body && nt_inline_asm(l)) { NArt {.err = "", .text = "", .defs = a.defs, .dlines = a.dlines, .asm = a.asm.concat([nt_asm_text(l)])} } else { a };
+    if (body) { return nt_scan(ls, i + 1, str_trim(l) != "}", ab); }
     Str t = str_trim(l);
     if (t == "" || str_starts_with(t, ";") || str_starts_with(t, "source_filename") || str_starts_with(t, "target datalayout") || str_starts_with(t, "attributes #") || str_starts_with(t, "!") || str_starts_with(t, "%")) {
         return nt_scan(ls, i + 1, false, a);
@@ -157,7 +163,8 @@ NArt nt_scan(List(Str) ls, Int i, Bool body, NArt a) {
         Str nm = nt_decl_name(t);
         if (nm == "") { return nt_fail(a, i, "cannot read the function's name"); }
         if (str_starts_with(nm, "llvm.")) { return nt_fail(a, i, "an artifact may not define `@" + nm + "`"); }
-        NArt a2 = NArt {.err = "", .text = "", .defs = a.defs.concat([nm]), .dlines = a.dlines.concat([t])};
+        if (str_starts_with(nm, "__resid")) { return nt_fail(a, i, "`@" + nm + "`: names beginning `__resid` are the compiler's"); }
+        NArt a2 = NArt {.err = "", .text = "", .defs = a.defs.concat([nm]), .dlines = a.dlines.concat([t]), .asm = a.asm};
         return nt_scan(ls, i + 1, str_ends_with(t, "{"), a2);
     }
     if (str_starts_with(t, "declare ")) {
@@ -171,10 +178,65 @@ NArt nt_scan(List(Str) ls, Int i, Bool body, NArt a) {
         if (nm == "" || str_starts_with(nm, "\"")) { return nt_fail(a, i, "a global must have a plain name"); }
         if (str_starts_with(nm, "llvm.")) { return nt_fail(a, i, "an artifact may not define `@" + nm + "` (no constructors, no used lists)"); }
         if (str_contains(t, " external ") || str_contains(t, "extern_weak")) { return nt_fail(a, i, "`@" + nm + "` is external: a native module may reach only its own symbols"); }
-        return nt_scan(ls, i + 1, false, NArt {.err = "", .text = "", .defs = a.defs.concat([nm]), .dlines = a.dlines});
+        if (str_starts_with(nm, "__resid")) { return nt_fail(a, i, "`@" + nm + "`: names beginning `__resid` are the compiler's"); }
+        return nt_scan(ls, i + 1, false, NArt {.err = "", .text = "", .defs = a.defs.concat([nm]), .dlines = a.dlines, .asm = a.asm});
     }
     return nt_fail(a, i, "unrecognized top-level line (only types, globals, functions, declarations, attributes and metadata are allowed)");
 }
+
+// An inline asm call or callbr in a body line.
+Bool nt_inline_asm(Str l) {
+    return str_contains(l, " asm \"") || str_contains(l, " asm sideeffect") || str_contains(l, " asm inteldialect") || str_contains(l, " asm alignstack") || str_contains(l, " asm unwind") || str_contains(l, "callbr ");
+}
+
+// The assembly text of an inline asm line: its first string literal after
+// `asm` (escapes such as \0A left as written).
+Str nt_asm_text(Str l) {
+    Int at = str_find(l, " asm ");
+    Int q = if (at < 0) { 0 - 1 } else { str_find_char(l, 34, at) };
+    Int e = if (q < 0) { 0 - 1 } else { str_find_char(l, 34, q + 1) };
+    return if (e < 0) { "?" } else { str_slice(l, q + 1, e) };
+}
+
+// "N site(s): mnemonic xK, ..." over a module's asm texts, mnemonics in
+// first-seen order; "" when there are none.
+pub Str nt_asm_summary(List(Str) texts) {
+    if (texts.len() == 0) { return ""; }
+    List(Str) ms = nt_asm_mn_all(texts, 0, ListBuf());
+    List(Str) uniq = nt_uniq(ms, 0, ListBuf(), []);
+    Str parts = str_join(nt_asm_counts(uniq, ms, 0, ListBuf()), ", ");
+    return f"{texts.len()} site" + (if (texts.len() == 1) { "" } else { "s" }) + (if (parts == "") { "" } else { ": " + parts });
+}
+
+List(Str) nt_asm_mn_all(List(Str) ts, Int i, ListBuf(Str) acc) {
+    if (i >= ts.len()) { return acc.finish(); }
+    List(Str) pieces = str_split(str_replace(str_replace(ts[i], "\\0A", ";"), "\\09", " "), ";");
+    return nt_asm_mn_all(ts, i + 1, nt_asm_mn(pieces, 0, acc));
+}
+
+// The mnemonic of each instruction: its first word, skipping labels,
+// directives and empty pieces.
+ListBuf(Str) nt_asm_mn(List(Str) ps, Int i, ListBuf(Str) acc) {
+    if (i >= ps.len()) { return acc; }
+    Str t = str_trim(ps[i]);
+    Int sp = str_find_char(t, 32, 0);
+    Str w = if (sp < 0) { t } else { str_slice(t, 0, sp) };
+    Bool skip = w == "" || str_ends_with(w, ":") || str_starts_with(w, ".");
+    return nt_asm_mn(ps, i + 1, if (skip) { acc } else { acc.push(w) });
+}
+
+List(Str) nt_uniq(List(Str) xs, Int i, ListBuf(Str) acc, List(Str) seen) {
+    if (i >= xs.len()) { return acc.finish(); }
+    if (seen.contains(xs[i])) { return nt_uniq(xs, i + 1, acc, seen); }
+    return nt_uniq(xs, i + 1, acc.push(xs[i]), seen.concat([xs[i]]));
+}
+
+List(Str) nt_asm_counts(List(Str) u, List(Str) all, Int i, ListBuf(Str) acc) {
+    if (i >= u.len()) { return acc.finish(); }
+    return nt_asm_counts(u, all, i + 1, acc.push(u[i] + f" x{nt_count_of(all, u[i], 0, 0)}"));
+}
+
+Int nt_count_of(List(Str) xs, Str x, Int i, Int n) { return if (i >= xs.len()) { n } else { nt_count_of(xs, x, i + 1, if (xs[i] == x) { n + 1 } else { n }) }; }
 
 // Constructs that would run code at load time, place it outside the
 // program's sections, or alias a symbol.
@@ -199,6 +261,89 @@ Str nt_decl_name(Str t) {
     if (lp < 0) { return ""; }
     Str nm = str_slice(t, at + 2, lp);
     return if (str_starts_with(nm, "\"")) { "" } else { nm };
+}
+
+// ─── AArch64 hardening ──────────────────────────────────────────────
+// Every function of the module signs its return address (PAC), starts
+// with a landing pad (BTI) and is compatible with the guarded control
+// stack, whatever the artifact's own attributes said; the module's code
+// sits in its own section between two page-aligned marks, @native.<m>.
+// __resid_lo and __resid_hi, so the host can map exactly those pages with
+// PROT_BTI (runtime/rt/native.resid). The instructions are hints: on a
+// CPU without the features they do nothing.
+
+Str nt_hattr() { return " \"branch-target-enforcement\" \"guarded-control-stack\" \"sign-return-address\"=\"non-leaf\" \"sign-return-address-key\"=\"a_key\""; }
+
+Str nt_hsection(Str m) { return " section \"resid_native_" + m + "\""; }
+
+Str nt_mark(Str m, Str which) { return "define hidden void @native." + m + ".__resid_" + which + "()" + nt_hattr() + nt_hsection(m) + " align 4096 {\n  ret void\n}"; }
+
+// The low mark goes just before the first function (the header lines
+// must stay first), the high mark after the last.
+pub Str nt_harden(Str text, Str m) {
+    List(Str) ls = str_split(text, "\n");
+    List(Str) out = nt_harden_at(ls, 0, m, false, ListBuf());
+    return str_join(out, "\n") + "\n" + nt_mark(m, "hi") + "\n";
+}
+
+List(Str) nt_harden_at(List(Str) ls, Int i, Str m, Bool marked, ListBuf(Str) acc) {
+    if (i >= ls.len()) { return acc.finish(); }
+    Str l = ls[i];
+    Bool def = str_starts_with(l, "define ");
+    ListBuf(Str) a2 = if (def && !marked) { acc.push(nt_mark(m, "lo")) } else { acc };
+    Str l2 = if (def) { nt_harden_def(l, m) } else if (str_starts_with(l, "attributes #")) { nt_strip_hattrs(l) } else { l };
+    return nt_harden_at(ls, i + 1, m, marked || def, a2.push(l2));
+}
+
+// `define ... @name(params) [unnamed_addr] attrs [align] [!md] {`: the
+// attributes and the section go where the function attributes end.
+Str nt_harden_def(Str l, Str m) {
+    Int at = str_find(l, " @");
+    Int lp = if (at < 0) { 0 - 1 } else { str_find_char(l, 40, at) };
+    Int rp = if (lp < 0) { 0 - 1 } else { nt_close_paren(l, lp + 1, 0) };
+    if (rp < 0) { return l; }
+    Int stop = nt_attr_end(l, rp + 1);
+    return str_slice(l, 0, stop) + str_slice(nt_hattr(), 1, str_len(nt_hattr())) + nt_hsection(m) + " " + str_slice(l, stop, str_len(l));
+}
+
+// After the `(` at i - 1: the index of its matching `)`, or -1.
+Int nt_close_paren(Str l, Int i, Int depth) {
+    if (i >= str_len(l)) { return 0 - 1; }
+    Int c = str_char_at(l, i);
+    if (c == 34) { Int q = str_find_char(l, 34, i + 1); return if (q < 0) { 0 - 1 } else { nt_close_paren(l, q + 1, depth) }; }
+    if (c == 40) { return nt_close_paren(l, i + 1, depth + 1); }
+    if (c == 41) { return if (depth == 0) { i } else { nt_close_paren(l, i + 1, depth - 1) }; }
+    return nt_close_paren(l, i + 1, depth);
+}
+
+// From i, the start of the first token that ends the function attributes
+// (`align`, `gc`, `prefix`, `prologue`, metadata or the body's `{`).
+Int nt_attr_end(Str l, Int i) {
+    if (i >= str_len(l)) { return str_len(l); }
+    Int c = str_char_at(l, i);
+    if (c == 32) { return nt_attr_end(l, i + 1); }
+    Bool word = str_char_at(l, i - 1) == 32;
+    Str rest = str_slice(l, i, str_len(l));
+    Bool end = word && (c == 123 || c == 33 || str_starts_with(rest, "align ") || str_starts_with(rest, "gc ") || str_starts_with(rest, "prefix ") || str_starts_with(rest, "prologue "));
+    if (end) { return i; }
+    if (c == 34) { Int q = str_find_char(l, 34, i + 1); return if (q < 0) { str_len(l) } else { nt_attr_end(l, q + 1) }; }
+    if (c == 40) { Int r = nt_close_paren(l, i + 1, 0); return if (r < 0) { str_len(l) } else { nt_attr_end(l, r + 1) }; }
+    return nt_attr_end(l, i + 1);
+}
+
+// An attribute group without the artifact's own say on the four.
+Str nt_strip_hattrs(Str l) {
+    return nt_strip_key(nt_strip_key(nt_strip_key(nt_strip_key(l, "branch-target-enforcement"), "guarded-control-stack"), "sign-return-address-key"), "sign-return-address");
+}
+
+Str nt_strip_key(Str l, Str k) {
+    Int at = str_find(l, " \"" + k + "\"");
+    if (at < 0) { return l; }
+    Int e0 = at + str_len(k) + 3;
+    Bool val = e0 + 1 < str_len(l) && str_char_at(l, e0) == 61 && str_char_at(l, e0 + 1) == 34;
+    Int q = if (val) { str_find_char(l, 34, e0 + 2) } else { e0 - 1 };
+    Int e = if (q < 0) { str_len(l) } else { q + 1 };
+    return nt_strip_key(str_slice(l, 0, at) + str_slice(l, e, str_len(l)), k);
 }
 
 // ─── Renaming ───────────────────────────────────────────────────────
@@ -334,10 +479,10 @@ pub List(Str) nt_decls() {
 // Stubs, thunks, strings and the table for every @link function.
 pub List(Str) nt_ir(List(NFn) fs) {
     List(Str) body = nt_ir_at(fs, 0, ListBuf());
-    Str ty = "{ptr, ptr, i64, i64, ptr}";
+    Str ty = "{ptr, ptr, i64, i64, ptr, ptr, ptr}";
     List(Str) ents = nt_tab_ents(fs, 0, ListBuf());
     Str tab = "@resid.native.tab = private constant [" + f"{fs.len()}" + " x " + ty + "] [" + str_join(ents, ", ") + "]";
-    return body.concat([tab]).concat(nt_externs(fs, 0, [], ListBuf()));
+    return body.concat([tab]).concat(nt_externs(fs, 0, [], ListBuf())).concat(if (tgt_a64()) { nt_mark_decls(fs, 0, [], ListBuf()) } else { [] });
 }
 
 // One declaration per native function the thunks call.
@@ -350,9 +495,21 @@ List(Str) nt_externs(List(NFn) fs, Int j, List(Str) seen, ListBuf(Str) acc) {
     return nt_externs(fs, j + 1, seen.concat([sym]), acc.push(d));
 }
 
+// The marks around each module's code (AArch64, nt_harden), once each.
+List(Str) nt_mark_decls(List(NFn) fs, Int j, List(Str) seen, ListBuf(Str) acc) {
+    if (j >= fs.len()) { return acc.finish(); }
+    Str m = fs[j].module;
+    if (seen.contains(m)) { return nt_mark_decls(fs, j + 1, seen, acc); }
+    return nt_mark_decls(fs, j + 1, seen.concat([m]), acc.push("declare void @native." + m + ".__resid_lo()").push("declare void @native." + m + ".__resid_hi()"));
+}
+
+// An entry: module, function, request and reply sizes, thunk, and the
+// bounds of the module's code (AArch64; null elsewhere).
 List(Str) nt_tab_ents(List(NFn) fs, Int j, ListBuf(Str) acc) {
     if (j >= fs.len()) { return acc.finish(); }
-    Str e = "{ptr, ptr, i64, i64, ptr} {ptr @resid.nmod." + f"{j}" + ", ptr @resid.nfn." + f"{j}" + ", i64 " + f"{nt_reqlen(fs[j])}" + ", i64 " + f"{nt_resplen(fs[j])}" + ", ptr @resid.nthunk." + f"{j}" + "}";
+    Str m = fs[j].module;
+    Str bounds = if (tgt_a64()) { "ptr @native." + m + ".__resid_lo, ptr @native." + m + ".__resid_hi" } else { "ptr null, ptr null" };
+    Str e = "{ptr, ptr, i64, i64, ptr, ptr, ptr} {ptr @resid.nmod." + f"{j}" + ", ptr @resid.nfn." + f"{j}" + ", i64 " + f"{nt_reqlen(fs[j])}" + ", i64 " + f"{nt_resplen(fs[j])}" + ", ptr @resid.nthunk." + f"{j}" + ", " + bounds + "}";
     return nt_tab_ents(fs, j + 1, acc.push(e));
 }
 
@@ -481,25 +638,61 @@ List(Str) nt_call_args(List(Str) ts, Int i, ListBuf(Str) acc) {
 
 // The program's entry runs the host first: it returns at once unless this
 // process is a module's sandboxed host.
-pub List(Str) nt_hook_main(List(Str) ls, Int n) { return nt_hook_at(ls, 0, n, false, ListBuf()); }
+pub List(Str) nt_hook_main(List(Str) ls, Int n) { return nt_hook_at(ls, 0, "  call void @resid_native_host(ptr @resid.native.tab, i64 " + f"{n}" + ")", false, ListBuf()); }
 
-List(Str) nt_hook_at(List(Str) ls, Int i, Int n, Bool in_main, ListBuf(Str) acc) {
+// A program that reaches a device verb (spec §49) runs the device host
+// first the same way (runtime/rt/device.resid's resid_device_host).
+pub List(Str) dv_hook_main(List(Str) ls) {
+    if (!dv_calls_host(ls, 0)) { return ls; }
+    return nt_hook_at(ls.concat(["declare void @resid_device_host()"]), 0, "  call void @resid_device_host()", false, ListBuf());
+}
+
+// A program that reads its transcript (lib/transcript.resid's
+// resid_tr_read) turns the runtime's on first thing in main.
+pub List(Str) tr_hook_main(List(Str) ls) {
+    if (!tr_reads(ls, 0)) { return ls; }
+    return nt_hook_at(ls.concat(["declare void @resid_tr_enable()"]), 0, "  call void @resid_tr_enable()", false, ListBuf());
+}
+
+Bool tr_reads(List(Str) ls, Int i) {
+    if (i >= ls.len()) { return false; }
+    Str l = ls[i];
+    if (!str_starts_with(l, "@") && !str_starts_with(l, "!") && str_contains(l, "call ptr @resid_tr_read(")) { return true; }
+    return tr_reads(ls, i + 1);
+}
+
+// An instruction calling one of the device entries by its exact symbol
+// (`@resid_device_call(` or `@resid_device_call_w(`; a global, such as a
+// string constant that spells the call, is not one, nor is a function whose
+// name only starts the same). Only lib/dev/'s engine may call them (E0260),
+// and no program may define a function named resid_... (E0265).
+Bool dv_calls_host(List(Str) ls, Int i) {
+    if (i >= ls.len()) { return false; }
+    Str l = ls[i];
+    Bool call = str_contains(l, "call ptr @resid_device_call(") || str_contains(l, "call ptr @resid_device_call_w(");
+    if (!str_starts_with(l, "@") && !str_starts_with(l, "!") && call) { return true; }
+    return dv_calls_host(ls, i + 1);
+}
+
+List(Str) nt_hook_at(List(Str) ls, Int i, Str call, Bool in_main, ListBuf(Str) acc) {
     if (i >= ls.len()) { return acc.finish(); }
     Str l = ls[i];
-    if (in_main && l == "entry:") { return nt_hook_at(ls, i + 1, n, false, acc.push(l).push("  call void @resid_native_host(ptr @resid.native.tab, i64 " + f"{n}" + ")")); }
-    return nt_hook_at(ls, i + 1, n, str_starts_with(l, "define i32 @main(") || str_starts_with(l, "define i64 @main("), acc.push(l));
+    if (in_main && l == "entry:") { return nt_hook_at(ls, i + 1, call, false, acc.push(l).push(call)); }
+    return nt_hook_at(ls, i + 1, call, str_starts_with(l, "define i32 @main(") || str_starts_with(l, "define i64 @main("), acc.push(l));
 }
 
 // ─── The build step ─────────────────────────────────────────────────
 
 // The artifacts to link and the provenance entries (`module=sha256hex`),
 // or ok = false after printing why.
-pub type NB = { Bool ok; List(Str) links; List(Str) prov; };
+// links: the rewritten artifacts; prov: "module=sha256hex"; asm:
+// "module\x1fsummary" for each module with inline asm (nt_asm_summary).
+pub type NB = { Bool ok; List(Str) links; List(Str) prov; List(Str) asm; };
 
 NB nt_bad(Str code, Str msg) {
     println("error[" + code + "]: " + msg);
     List(Str) none = [];
-    return NB {.ok = false, .links = none, .prov = none};
+    return NB {.ok = false, .links = none, .prov = none, .asm = none};
 }
 
 // The values of every `-native` flag, to forward to a child compile.
@@ -525,7 +718,7 @@ List(Str) nt_flags(Int i, ListBuf(Str) acc) {
 pub NB nt_build(List(NFn) fs, Str out) {
     List(Str) flags = nt_flags(2, ListBuf());
     List(Str) none = [];
-    return nt_build_at(fs, out, flags, 0, NB {.ok = true, .links = none, .prov = none}, none);
+    return nt_build_at(fs, out, flags, 0, NB {.ok = true, .links = none, .prov = none, .asm = none}, none);
 }
 
 @requires(filesystem)
@@ -543,11 +736,13 @@ NB nt_build_at(List(NFn) fs, Str out, List(Str) flags, Int i, NB acc, List(Str) 
     NArt a = nt_ingest(m, filesystem.read_all(path));
     if (a.err != "") { return nt_bad("E0237", "native module `" + m + "` (" + path + "), " + a.err); }
     Str merr = nt_match(fs, m, a, path, 0);
-    if (merr != "") { return NB {.ok = false, .links = acc.links, .prov = acc.prov}; }
+    if (merr != "") { return NB {.ok = false, .links = acc.links, .prov = acc.prov, .asm = acc.asm}; }
     Str dst = out + ".native." + m + ".ll";
     _ = filesystem.write_all(dst, a.text);
     Str hex = hex_encode(filesystem.sha256(path));
-    NB acc2 = NB {.ok = true, .links = acc.links.concat([dst]), .prov = acc.prov.concat([m + "=" + hex])};
+    Str asum = nt_asm_summary(a.asm);
+    List(Str) none2 = [];
+    NB acc2 = NB {.ok = true, .links = acc.links.concat([dst]), .prov = acc.prov.concat([m + "=" + hex]), .asm = acc.asm.concat(if (asum == "") { none2 } else { [m + "\x1f" + asum] })};
     return nt_build_at(fs, out, flags, i + 1, acc2, seen.concat([m]));
 }
 

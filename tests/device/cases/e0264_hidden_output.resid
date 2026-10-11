@@ -1,0 +1,5 @@
+// Only the last step has outputs; this descriptor breaks that (E0264).
+import "dev/fx_e0264_hidden_output.resid";
+
+@requires(device)
+Int main() { println(fx_call()); return 0; }

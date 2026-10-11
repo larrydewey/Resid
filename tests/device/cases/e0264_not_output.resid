@@ -1,0 +1,5 @@
+// A link reads a Scalar output; this descriptor breaks that (E0264).
+import "dev/fx_e0264_not_output.resid";
+
+@requires(device)
+Int main() { println(fx_call()); return 0; }
