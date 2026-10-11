@@ -413,9 +413,16 @@ AtF at_facts_call(AtC c, Int id, Map(Int, AtF) env) {
         return AtF {.anchors = [asm], .quals = [], .policy = -1, .time = "Kernel", .kind = "verify", .at = id};
     }
     if (at_has(p, "verify") || at_has(p, "open")) {
-        Int an = at_anchor_of(c, at_arg(c, id, f, at_get(p, "anchor")));
+        // The anchor, or with no anchor `from`: verified keys (CoRIM
+        // attest-key triples) and the anchors they rest on. `with`: a
+        // second verified member the evidence is bound to (an SPDM session).
+        Bool keyed = at_has(p, "anchor");
+        AtF from = if (!keyed && at_has(p, "from")) { at_facts(c, at_arg(c, id, f, at_get(p, "from")), env) } else { at_nof() };
+        List(Int) base = if (keyed) { [at_anchor_of(c, at_arg(c, id, f, at_get(p, "anchor")))] } else if (from.kind != "") { from.anchors } else { [-1] };
+        AtF also = if (at_has(p, "with")) { at_facts(c, at_arg(c, id, f, at_get(p, "with")), env) } else { at_nof() };
+        List(Int) anchors = if (!at_has(p, "with")) { base } else if (also.kind != "") { base.concat(also.anchors) } else { [-1] };
         Str t = if (at_has(p, "time")) { at_time_of(c, at_arg(c, id, f, at_get(p, "time"))) } else { "Kernel" };
-        return AtF {.anchors = [an], .quals = at_list(at_get(p, "gives")), .policy = -1, .time = t, .kind = if (at_has(p, "verify")) { "verify" } else { "open" }, .at = id};
+        return AtF {.anchors = anchors, .quals = at_list(at_get(p, "gives")), .policy = -1, .time = t, .kind = if (at_has(p, "verify")) { "verify" } else { "open" }, .at = id};
     }
     if (at_has(p, "from") && !at_has(p, "appraise")) {
         // A derived value (platform_key, local_open): the anchors of what

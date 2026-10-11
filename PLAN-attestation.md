@@ -58,13 +58,21 @@ reference page "Attestation"); A5 and A6 not started:
   veraison's CPAK), with the CPAK pinned as an `EndorsedKeys` anchor.
 - SPDM 1.1 device measurements (`lib/verify/spdm.resid`,
   `nvidia_anchors.resid`; NVIDIA's sample H100 report verifies under the
-  real Device Identity CA). Not yet: later SPDM versions, the SPDM session
-  that binds a GPU to the CPU's evidence, OCSP.
+  real Device Identity CA), and SPDM 1.1 sessions
+  (`lib/verify/spdm_session.resid`: the signed KEY_EXCHANGE, the
+  measurements its summary covers; `lib/spdm_session.resid`: the
+  requester's key schedule and secured messages, generic over secret
+  bytes), with SNP and TDX evidence bound to a session
+  (`lib/verify/device_bound.resid`). Not yet: later SPDM versions, mutual
+  authentication, a transport for the requester, NSM and CCA bound to a
+  session, OCSP.
 - Endorsed reference values (A2): signed CoRIMs under an `Endorser` anchor
   (`lib/verify/corim.resid`; veraison's signed CoRIM verifies) and the
   endorsed appraisals of SNP, TDX, CCA and SPDM (`lib/verify/endorsed.resid`),
-  whose result rests on the endorser too. Not yet: attest-key and
-  endorsed-value triples.
+  whose result rests on the endorser too; attest-key triples endorse a CCA
+  CPAK or TPM AK in place of a pinned key (`lib/verify/endorsed_keys.resid`,
+  `cca_verify_endorsed`, `tpm_verify_quote_endorsed`). Not yet:
+  endorsed-value triples, conditioned attest keys.
 - Rollback (§8): `tpm_verify_counter` (TPM2_NV_Certify of a counter
   under a pinned AK), `bind_counter` (a local decision can be fresh) and
   `first_seal` (the explicit first-seal outcome);
@@ -100,8 +108,8 @@ control" is any primitive's result (no `control_anchors` yet). Found
 while implementing: a record literal could leave a field unset (read as
 garbage, a memory-safety hole); the checker now refuses it; and
 lib/tls.resid used a function of lib/tlsmsg.resid it did not import. Not
-yet: closures' own control summaries, `control_anchors`, CoRIM attest-key
-triples, SPDM sessions (A4), the TPM AK's binding to its EK; A5 and A6.
+yet: closures' own control summaries, `control_anchors`, the TPM AK's
+binding to its EK; A5 and A6.
 
 **Goal**: a platform verifier is written once against a contract and
 cannot skip verification, appraisal or freshness, and a decision that

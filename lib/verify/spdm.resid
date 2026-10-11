@@ -12,10 +12,10 @@
 // measurement (type, size, value) filling its block, then the responder
 // nonce, opaque data (at most 1024 bytes) and the signature, to the end.
 //
-// Not covered: binding the GPU to the CPU's evidence through an SPDM
-// session the attested principal runs, OCSP for the device certificates,
-// and NVIDIA's RIMs (XML, refused in the standard library); reference
-// values come from a policy or a CoRIM (verify/corim.resid).
+// Sessions (KEY_EXCHANGE, and the CPU's evidence bound to one) are
+// verify/spdm_session.resid. Not covered: OCSP for the device
+// certificates, and NVIDIA's RIMs (XML, refused in the standard library);
+// reference values come from a policy or a CoRIM (verify/corim.resid).
 
 import "core.resid";
 import "../crypto.resid";
@@ -91,8 +91,9 @@ Bool sp_has_index(List(SpdmMeasurement) ms, Int i, Int k) { return k < ms.len() 
 
 // The chain is the device's leaf first and the anchor's certificate last;
 // each certificate is signed by the next at the evidence time, every one
-// but the leaf a CA.
-Result(Cert, VerifyError) sp_chain(List(List(UInt(8))) chain, Anchor root, EvidenceTime t) {
+// but the leaf a CA. Shared with verify/spdm_session.resid.
+@verify_internal
+pub Result(Cert, VerifyError) sp_chain(List(List(UInt(8))) chain, Anchor root, EvidenceTime t) {
     if (chain.len() < 2 || chain.len() > 8) { return Err(BadChain("the device chain is 2 to 8 certificates")); }
     if (!eq_ints(chal_ints(chain[chain.len() - 1]), root.der)) { return Err(BadChain("the device chain does not end at the anchor's certificate")); }
     Cert top = sp_cert(root.der, "root")?;

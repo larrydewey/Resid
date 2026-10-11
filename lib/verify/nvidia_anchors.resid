@@ -5,8 +5,9 @@
 
 import "core.resid";
 import "spdm.resid";
+import "spdm_session.resid";
 
-@anchor(kind = NvidiaDevice(DeviceIdentityCa), principal = AboveKernel, formats = [SpdmEvidence], source = "https://github.com/NVIDIA/nvtrust (guest_tools/gpu_verifiers/local_gpu_verifier/src/verifier/certs/verifier_device_root.pem)", fingerprint = "sha384:4cbb092410e5a795067c12a3726e9e4c7cc2971bbeba56593219beb598fb399b0d2f877f383edfc06d40e5abad07cc16", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [EcdsaP384Sha384], expires = "9999-12-31")
+@anchor(kind = NvidiaDevice(DeviceIdentityCa), principal = AboveKernel, formats = [SpdmEvidence, SpdmSession], source = "https://github.com/NVIDIA/nvtrust (guest_tools/gpu_verifiers/local_gpu_verifier/src/verifier/certs/verifier_device_root.pem)", fingerprint = "sha384:4cbb092410e5a795067c12a3726e9e4c7cc2971bbeba56593219beb598fb399b0d2f877f383edfc06d40e5abad07cc16", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [EcdsaP384Sha384], expires = "9999-12-31")
 pub Anchor nvidia_device_root() { return anchor_der(nvidia_device_root_der()); }
 
 pub List(Int) nvidia_device_root_der() {

@@ -21,6 +21,8 @@ import "../challenge_bind.resid";
 import "../challenge_export.resid";
 import "../dev/device.resid";
 import "../dev/tpm_wire.resid";
+import "corim.resid";
+import "endorsed_keys.resid";
 
 // What a verified quote says: the PCRs (SHA-256 bank) and their values,
 // the TPM's clock and boot counters, and its firmware version.
@@ -141,6 +143,48 @@ pub Result(Verified(TpmQuoteEvidence), VerifyError) tpm_verify_quote_replayable(
     if (!eq_ints(chal_ints(k.q.extra_data), chal_ints(replayable_value(c)))) { return Err(NotFresh("the quote's qualifying data is not this challenge")); }
     List(Int) none = [];
     return Ok(Verified {.value = k.e, .anchors = [ak.id], .quals = q_delivered(), .record = 0 - 1, .kem = 0, .pk = none, .chan = none, .time = t.source, .principal = ak.principal, .format = "TpmQuoteEvidence"});
+}
+
+// ─── Under an endorsed key ──────────────────────────────────────────
+// The AK is a key a CoRIM endorses (an attest-key triple, verify/
+// endorsed_keys.resid) for the named instance (hex of its instance ID),
+// not a pinned anchor; the result rests on the CoRIM's endorser. A quote
+// does not say which TPM made it, so the verifier names the instance it
+// expects, and only keys endorsed for that instance are tried.
+
+type TqHit = { TqOk k; Anchor a; };
+
+Result(TqHit, VerifyError) tq_endorsed(List(UInt(8)) attest, List(UInt(8)) sig, List(List(UInt(8))) pcr_values, Verified(CorimRefs) keys, Str instance_hex, EvidenceTime t) {
+    if (instance_hex == "") { return Err(Refused("tpm_verify_quote_endorsed", "name the TPM's instance: a quote does not say which TPM made it")); }
+    List(EndorsedKey) ks = endorsed_keys(keys, instance_hex, "TpmAk", "TpmQuoteEvidence", "InGuest", t, "tpm_verify_quote_endorsed")?;
+    return tq_endorsed_at(attest, sig, pcr_values, ks, t, 0);
+}
+
+Result(TqHit, VerifyError) tq_endorsed_at(List(UInt(8)) attest, List(UInt(8)) sig, List(List(UInt(8))) pcr_values, List(EndorsedKey) ks, EvidenceTime t, Int i) {
+    if (i >= ks.len()) { return Err(BadSignature("no key the CoRIM endorses for this instance signed the quote")); }
+    return match (tpm_check(attest, sig, pcr_values, ks[i].a, t)) {
+        Ok(k) => Ok(TqHit {.k = k, .a = ks[i].a}),
+        Err(e) => if (endorsed_try_next(e)) { tq_endorsed_at(attest, sig, pcr_values, ks, t, i + 1) } else { Err(e) },
+    };
+}
+
+// Fresh for the holder of `c`, under an AK endorsed for the instance.
+@primitive(verify, from = keys, gives = [fresh], time = t, format = TpmQuoteEvidence, inputs = [attest, sig, pcr_values, c, t, instance_hex])
+pub Result(Verified(TpmQuoteEvidence), VerifyError) tpm_verify_quote_endorsed(List(UInt(8)) attest, List(UInt(8)) sig, List(List(UInt(8))) pcr_values, ChallengeRecord c, Verified(CorimRefs) keys, Str instance_hex, EvidenceTime t) {
+    TqHit h = tq_endorsed(attest, sig, pcr_values, keys, instance_hex, t)?;
+    Bool spent = tq_bind(h.k.q, challenge_value(c), c, attest)?;
+    List(Int) none = [];
+    return Ok(vf_make(h.k.e, h.a, q_fresh() | tq_rp(c), c, 0, none, none, t, "TpmQuoteEvidence"));
+}
+
+// Fresh and KeyBound(kem, pk), under an AK endorsed for the instance.
+@primitive(verify, from = keys, gives = [fresh, key_bound], time = t, format = TpmQuoteEvidence, inputs = [attest, sig, pcr_values, c, t, instance_hex, kem, pk])
+pub Result(Verified(TpmQuoteEvidence), VerifyError) tpm_verify_quote_endorsed_key_bound(List(UInt(8)) attest, List(UInt(8)) sig, List(List(UInt(8))) pcr_values, ChallengeRecord c, Verified(CorimRefs) keys, Str instance_hex, EvidenceTime t, Int kem, List(Int) pk) {
+    if (!hpke_kem_ok(kem) || !vf_pk_ok(kem, pk)) { return Err(Refused("tpm_verify_quote_endorsed_key_bound", "the attester's public key is empty or malformed for the KEM")); }
+    TqHit h = tq_endorsed(attest, sig, pcr_values, keys, instance_hex, t)?;
+    Bool spent = tq_bind(h.k.q, challenge_key_value(challenge_value(c), kem, pk), c, attest)?;
+    List(Int) none = [];
+    return Ok(vf_make(h.k.e, h.a, q_fresh() | q_key_bound() | tq_rp(c), c, kem, pk, none, t, "TpmQuoteEvidence"));
 }
 
 // ─── Appraisal ──────────────────────────────────────────────────────

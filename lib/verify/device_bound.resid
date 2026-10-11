@@ -1,0 +1,46 @@
+// verify/device_bound.resid — CPU evidence bound to a device session
+// (PLAN-attestation.md §3.5, §10 NVIDIA): the guest's report carries
+// challenge_session_value(challenge_value(c), th) for the transcript hash
+// th of an SPDM session verified fresh (verify/spdm_session.resid), so the
+// device the session reached is the one this guest keyed it with. The
+// result rests on both anchors, the CPU's and the device's, so a decision
+// on it names both in `accept`.
+
+import "core.resid";
+import "snp.resid";
+import "tdx.resid";
+import "spdm_session.resid";
+import "../crypto.resid";
+import "../challenge.resid";
+import "../challenge_bind.resid";
+
+Verified(T) db_join(Verified(T) v, Verified(SpdmSession) s) {
+    return Verified {.value = v.value, .anchors = v.anchors.concat(s.anchors), .quals = v.quals, .record = v.record, .kem = v.kem, .pk = v.pk, .chan = v.chan, .time = v.time, .principal = v.principal, .format = v.format};
+}
+
+Int db_rp(ChallengeRecord c) { return if (c.bind.len() > 0) { q_rp_bound() } else { 0 }; }
+
+Result(Bool, VerifyError) db_fresh(Verified(SpdmSession) s, Str who) {
+    if (!verified_fresh(s)) { return Err(NotFresh(who + ": the device session is not fresh")); }
+    return Ok(true);
+}
+
+// SNP: REPORT_DATA is the session-bound value; fresh for the holder of c.
+@primitive(verify, anchor = root, with = s, gives = [fresh], time = t, format = SnpReport, kinds = [AmdVcek, AmdVlek], algorithms = [RsaPss4096Sha384, EcdsaP384Sha384], inputs = [report, c, col, t])
+pub Result(Verified(SnpReport), VerifyError) snp_verify_device_bound(List(UInt(8)) report, ChallengeRecord c, Anchor root, SnpCollateral col, EvidenceTime t, Verified(SpdmSession) s) {
+    Bool ok = db_fresh(s, "snp_verify_device_bound")?;
+    SnpReport r = snp_check(report, root, col, t)?;
+    Bool spent = vf_bind_challenge(r.report_data, challenge_session_value(challenge_value(c), s.value.th), c, report, snp_descriptors())?;
+    List(Int) none = [];
+    return Ok(db_join(vf_make(r, root, q_fresh() | db_rp(c), c, 0, none, none, t, "SnpReport"), s));
+}
+
+// TDX: REPORTDATA is the session-bound value; fresh for the holder of c.
+@primitive(verify, anchor = root, with = s, gives = [fresh], time = t, format = TdxQuote, kinds = [IntelPck], algorithms = [EcdsaP256Sha256], inputs = [quote, c, t])
+pub Result(Verified(TdxQuote), VerifyError) tdx_verify_quote_device_bound(List(UInt(8)) quote, ChallengeRecord c, Anchor root, EvidenceTime t, Verified(SpdmSession) s) {
+    Bool ok = db_fresh(s, "tdx_verify_quote_device_bound")?;
+    TdxQuote b = tdx_check(quote, root, t)?;
+    Bool spent = vf_bind_challenge(b.body.reportdata, challenge_session_value(challenge_value(c), s.value.th), c, quote, tdx_descriptors())?;
+    List(Int) none = [];
+    return Ok(db_join(vf_make(b, root, q_fresh() | db_rp(c), c, 0, none, none, t, "TdxQuote"), s));
+}

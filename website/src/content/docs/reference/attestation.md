@@ -149,6 +149,50 @@ request and response, and the challenge as the request's 32-byte nonce:
 channel-bound and replayable forms. `spdm_appraise(v, policy)` checks the
 measurement blocks an `SpdmPolicy` names.
 
+### Sessions
+
+`lib/verify/spdm_session.resid` verifies an SPDM 1.1 key exchange:
+`spdm_session_verify(vca, chain, key_exchange, key_exchange_rsp, c, root,
+t)` takes the six negotiation messages (GET_VERSION through ALGORITHMS),
+the certificate chain as GET_CERTIFICATE returned it, KEY_EXCHANGE (whose
+random is the challenge, issued with `challenge_issue(32)`) and
+KEY_EXCHANGE_RSP. The negotiation must have chosen ECDSA P-384, SHA-384,
+ECDHE secp384r1, AES-256-GCM and the SPDM key schedule; mutual
+authentication and a provisioned key are refused. The result,
+`Verified(SpdmSession)`, holds the session ID, both exchange values, the
+measurement summary, the ResponderVerifyData, and `th`, the SHA-384 of the
+transcript through the device's signature. `spdm_session_covers(s, e)`
+says whether a verified MEASUREMENTS response holds exactly the
+measurements the session's all-measurements summary covers.
+
+The guest that holds the session binds its CPU evidence to it: its report
+carries `challenge_session_value(challenge_value(c), th)`
+(`lib/challenge_bind.resid`), and `snp_verify_device_bound(report, c,
+root, col, t, s)` or `tdx_verify_quote_device_bound(quote, c, root, t, s)`
+checks that against a fresh session. The result rests on both anchors:
+
+```text
+@decides(accept = [amd_ark_genoa, nvidia_device_root], appraised = guest_policy, identity = none)
+...
+    Verified(SpdmSession) s = spdm_session_verify(vca, chain, ke, rsp, gpu, nvidia_device_root(), t)?;
+    Verified(SnpReport) r = snp_verify_device_bound(report, cpu, amd_ark_genoa(), col, t, s)?;
+```
+
+The requester's half is `lib/spdm_session.resid`: the exchange data for
+an ephemeral key (`spdmg_exchange_data`), the ECDHE secret
+(`spdmg_shared`), the handshake secrets from `th`
+(`spdmg_handshake`), the ResponderVerifyData check
+(`spdmg_responder_ok`), FINISH (`spdmg_finish` over
+`spdm_finish_hash(transcript, verify_data)`), the handshake and data keys
+(`spdmg_handshake_keys`, `spdmg_data_keys` over `spdm_th2(...)`), and
+DSP0277 secured messages (`spdmg_seal`, `spdmg_open`; no sequence number
+on the wire, as MCTP and PCI DOE carry them). It is generic over the byte
+type: with the ephemeral key as `List(Secret(UInt(8)))` every derived
+secret stays secret, and bytes leave only through `SpdmPublish(B)`, so
+callers carry `@requires(declassify)`. `spdm_*` is the public copy, for
+known-answer tests. No device descriptor speaks SPDM yet, so the transport
+is the caller's.
+
 ## Endorsed reference values
 
 A reference value need not be a hash compiled into a policy: a signed
@@ -166,6 +210,27 @@ endorser as well, so the decision names it:
 ...
     Verified(CorimRefs) refs = corim_verify(corim, image_endorser(), kernel_time())?;
     Appraised(SnpReport) a = snp_appraise_endorsed(v, release_policy(), refs)?;
+```
+
+### Endorsed attestation keys
+
+A CoRIM's attest-key triples endorse keys, so a CCA platform's CPAK or a
+TPM's AK need not be pinned as an anchor. `corim_verify` reads each triple
+without conditions whose keys are PEM SubjectPublicKeyInfo (tag 554) into
+`CorimRefs.keys`, with the triple's environment and instance ID.
+`cca_verify_endorsed(token, c, keys, t)` accepts a platform token signed by
+a key endorsed for the token's own instance ID;
+`tpm_verify_quote_endorsed(attest, sig, pcr_values, c, keys, instance_hex,
+t)` a quote signed by a key endorsed for the instance the verifier names
+(a quote does not say which TPM made it). Both have `_key_bound` forms. The
+CoRIM's not-after and the endorser anchor's expiry bound the evidence
+time, and the result rests on the endorser:
+
+```text
+@decides(accept = [tpm_endorser], appraised = boot_policy, identity = key_bound)
+...
+    Verified(CorimRefs) keys = corim_verify(corim, tpm_endorser(), kernel_time())?;
+    Verified(TpmQuoteEvidence) v = tpm_verify_quote_endorsed_key_bound(a, s, pcrs, c, keys, instance, kernel_time(), 32, pk)?;
 ```
 
 ## Sealing to this measurement

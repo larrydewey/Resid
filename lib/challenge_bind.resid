@@ -34,6 +34,16 @@ pub List(UInt(8)) challenge_key_value(List(UInt(8)) value, Int kem, List(Int) pk
     return chal_bytes(sha512_bytes(m)[0..value.len()]);
 }
 
+// The value a guest's CPU evidence carries to say it holds the SPDM
+// session whose transcript hash is th (verify/spdm_session.resid):
+// SHA-512 truncated to the value's length over
+// "resid.challenge.spdm-session.v1" ‖ len(value) ‖ value ‖ len(th) ‖ th.
+// The requester and the verifier compute it alike; th is public.
+pub List(UInt(8)) challenge_session_value(List(UInt(8)) value, List(Int) th) {
+    List(Int) m = bytes_of("resid.challenge.spdm-session.v1").concat(chal_u32(value.len())).concat(chal_ints(value)).concat(chal_u32(th.len())).concat(th);
+    return chal_bytes(sha512_bytes(m)[0..value.len()]);
+}
+
 // SHA-512 truncated to the value's length over "resid.challenge.channel.v1"
 // ‖ len(value) ‖ value ‖ len(x) ‖ x, where x is the TLS exporter value of
 // the connection e came from (RFC 9266): the attester binds its own

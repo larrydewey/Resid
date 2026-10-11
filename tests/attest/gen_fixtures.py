@@ -245,8 +245,8 @@ acme_pub = ec.EllipticCurvePublicNumbers(int.from_bytes(b64u("MKBCTNIcKUSDii11yS
 acme_spki = acme_pub.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
 end_k = ec.generate_private_key(ec.SECP256R1())
 end_spki = end_k.public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
-def corim(triples, not_before, not_after):
-    comid = {1: {0: "resid-test-comid"}, 4: {0: triples}}
+def corim(triples, not_before, not_after, keys=None):
+    comid = {1: {0: "resid-test-comid"}, 4: ({0: triples} if keys is None else {3: keys})}
     payload = cbor2.dumps(cbor2.CBORTag(501, {0: "resid-test-corim", 1: [cbor2.CBORTag(506, cbor2.dumps(comid))]}))
     meta = cbor2.dumps({0: {0: "Resid test endorser"}, 1: {0: cbor2.CBORTag(1, not_before), 1: cbor2.CBORTag(1, not_after)}})
     prot = cbor2.dumps({1: -7, 3: "application/rim+cbor", 8: meta})
@@ -267,6 +267,22 @@ endorsed = [
     [env("NVIDIA", "Test GPU"), [meas(1, bytes([5] * 48), 8), meas(2, bytes([7] * 48), 8)]],
 ]
 corim_ok = corim(endorsed, 1704067200, 2208988800)
+# Attest-key triples: the test CPAK for the test token's instance (01 04*32),
+# the test TPM AK for instance aa*16, a key under a condition (never
+# taken), and a CCA key endorsed for another instance.
+def pem(spki):
+    return serialization.load_der_public_key(spki).public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo).decode()
+other_k = ec.generate_private_key(ec.SECP384R1())
+other_spki = other_k.public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+def kenv(vendor, model, inst):
+    return {0: {1: vendor, 2: model}, 1: cbor2.CBORTag(550, inst)}
+key_triples = [
+    [kenv("Arm", "CCA platform", bytes([1] + [9] * 32)), [cbor2.CBORTag(554, pem(other_spki))]],
+    [kenv("Arm", "CCA platform", bytes([1] + [4] * 32)), [cbor2.CBORTag(554, pem(cpak_spki))]],
+    [kenv("TPM", "Test", bytes([0xaa] * 16)), [cbor2.CBORTag(554, pem(ak_spki))]],
+    [kenv("TPM", "Test", bytes([0xbb] * 16)), [cbor2.CBORTag(554, pem(ak_spki))], {0: "only when measured"}],
+]
+corim_keys = corim(None, 1704067200, 2208988800, key_triples)
 corim_expired = corim(endorsed, 1577836800, 1609459200)
 
 snd = x25519.X25519PrivateKey.generate()
@@ -309,6 +325,8 @@ w("spdm-leaf.der", dleaf.public_bytes(serialization.Encoding.DER))
 w("spdm-leaf-d.bin", dleaf_k.private_numbers().private_value.to_bytes(48, "big"))
 w("corim-endorsed.cbor", corim_ok)
 w("corim-expired.cbor", corim_expired)
+w("corim-keys.cbor", corim_keys)
+w("cca-other-d.bin", other_k.private_numbers().private_value.to_bytes(48, "big"))
 
 def ints(b):
     return "[" + ", ".join(str(x) for x in b) + "]"
@@ -328,6 +346,9 @@ import "intel_anchors.resid";
 import "sealing.resid";
 import "cca.resid";
 import "spdm.resid";
+import "spdm_session.resid";
+import "device_bound.resid";
+import "endorsed_keys.resid";
 import "corim.resid";
 import "../word.resid";
 import "../instant.resid";
@@ -375,7 +396,7 @@ pub Str tdx_collateral_status(TdxQuote q, TdxCollateral c, Anchor root, Evidence
     return match (tdx_collateral_check(q, c, root, t)) {{ Ok(st) => "TCB " + st[0] + ", QE " + st[1], Err(e) => verify_error_text(e) }};
 }}
 
-@anchor(kind = NvidiaDevice(Test), principal = AboveKernel, formats = [SpdmEvidence], source = "tests/attest/gen_fixtures.py", fingerprint = "sha384:{hashlib.sha384(droot.public_bytes(serialization.Encoding.DER)).hexdigest()}", retrieved = "2026-10-11", reviewed_by = "tests", algorithms = [EcdsaP384Sha384], expires = "2039-12-31")
+@anchor(kind = NvidiaDevice(Test), principal = AboveKernel, formats = [SpdmEvidence, SpdmSession], source = "tests/attest/gen_fixtures.py", fingerprint = "sha384:{hashlib.sha384(droot.public_bytes(serialization.Encoding.DER)).hexdigest()}", retrieved = "2026-10-11", reviewed_by = "tests", algorithms = [EcdsaP384Sha384], expires = "2039-12-31")
 pub Anchor test_device_root() {{ return anchor_der({ints(droot.public_bytes(serialization.Encoding.DER))}); }}
 
 // An SPDM transcript's chain and signature alone, for real reports.

@@ -68,6 +68,8 @@ for src in "$ROOT"/tests/attest/run/*.resid; do
         pass=$((pass + 1)); echo "ok   $name"
     else
         fail=$((fail + 1)); echo "FAIL $name"; grep -v '^OK' "$d/build.log" | grep -i error | head -5; cat "$d/diff" 2>/dev/null | head -10
+        # RESID_ATTEST_GOT=DIR keeps each failing run's whole output there.
+        [ -n "${RESID_ATTEST_GOT:-}" ] && [ -f "$d/got" ] && cp "$d/got" "$RESID_ATTEST_GOT/$name.out"
     fi
 done
 

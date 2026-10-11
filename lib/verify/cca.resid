@@ -24,6 +24,8 @@ import "../challenge.resid";
 import "../challenge_bind.resid";
 import "../challenge_export.resid";
 import "../dev/device.resid";
+import "corim.resid";
+import "endorsed_keys.resid";
 
 pub type CcaSwComponent = { Str kind; List(Int) measurement; Str version; List(Int) signer_id; Str hash_alg; };
 
@@ -323,6 +325,45 @@ pub Result(Verified(CcaToken), VerifyError) cca_verify_replayable(List(UInt(8)) 
     if (!eq_ints(k.challenge, chal_ints(replayable_value(c)))) { return Err(NotFresh("the realm challenge is not this challenge")); }
     List(Int) none = [];
     return Ok(Verified {.value = k, .anchors = [cpak.id], .quals = q_delivered(), .record = 0 - 1, .kem = 0, .pk = none, .chan = none, .time = t.source, .principal = cpak.principal, .format = "CcaToken"});
+}
+
+// ─── Under an endorsed key ──────────────────────────────────────────
+// The CPAK is a key a CoRIM endorses (an attest-key triple, verify/
+// endorsed_keys.resid) for the token's own instance ID, not a pinned
+// anchor; the result rests on the CoRIM's endorser.
+
+type CcaHit = { CcaToken k; Anchor a; };
+
+Result(CcaHit, VerifyError) cca_endorsed_check(List(UInt(8)) token, Verified(CorimRefs) keys, EvidenceTime t) {
+    List(EndorsedKey) ks = endorsed_keys(keys, "", "EndorsedKeys", "CcaToken", "", t, "cca_verify_endorsed")?;
+    return cca_endorsed_at(token, ks, t, 0);
+}
+
+Result(CcaHit, VerifyError) cca_endorsed_at(List(UInt(8)) token, List(EndorsedKey) ks, EvidenceTime t, Int i) {
+    if (i >= ks.len()) { return Err(BadSignature("no key the CoRIM endorses for the token's instance signed the platform token")); }
+    return match (cca_check(token, ks[i].a, t)) {
+        Ok(k) => if (hex_encode(k.instance_id) == ks[i].instance_hex) { Ok(CcaHit {.k = k, .a = ks[i].a}) } else { cca_endorsed_at(token, ks, t, i + 1) },
+        Err(e) => if (endorsed_try_next(e)) { cca_endorsed_at(token, ks, t, i + 1) } else { Err(e) },
+    };
+}
+
+// Fresh for the holder of `c`, under an endorsed CPAK.
+@primitive(verify, from = keys, gives = [fresh], time = t, format = CcaToken, inputs = [token, c, t])
+pub Result(Verified(CcaToken), VerifyError) cca_verify_endorsed(List(UInt(8)) token, ChallengeRecord c, Verified(CorimRefs) keys, EvidenceTime t) {
+    CcaHit h = cca_endorsed_check(token, keys, t)?;
+    Bool spent = cca_bind(h.k, challenge_value(c), c, token)?;
+    List(Int) none = [];
+    return Ok(vf_make(h.k, h.a, q_fresh() | cca_rp(c), c, 0, none, none, t, "CcaToken"));
+}
+
+// Fresh and KeyBound(kem, pk), under an endorsed CPAK.
+@primitive(verify, from = keys, gives = [fresh, key_bound], time = t, format = CcaToken, inputs = [token, c, t, kem, pk])
+pub Result(Verified(CcaToken), VerifyError) cca_verify_endorsed_key_bound(List(UInt(8)) token, ChallengeRecord c, Verified(CorimRefs) keys, EvidenceTime t, Int kem, List(Int) pk) {
+    if (!hpke_kem_ok(kem) || !vf_pk_ok(kem, pk)) { return Err(Refused("cca_verify_endorsed_key_bound", "the attester's public key is empty or malformed for the KEM")); }
+    CcaHit h = cca_endorsed_check(token, keys, t)?;
+    Bool spent = cca_bind(h.k, challenge_key_value(challenge_value(c), kem, pk), c, token)?;
+    List(Int) none = [];
+    return Ok(vf_make(h.k, h.a, q_fresh() | q_key_bound() | cca_rp(c), c, kem, pk, none, t, "CcaToken"));
 }
 
 // ─── Appraisal ──────────────────────────────────────────────────────

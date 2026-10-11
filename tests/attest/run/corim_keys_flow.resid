@@ -1,0 +1,143 @@
+import "verify/core.resid";
+import "verify/snp.resid";
+import "verify/seal.resid";
+import "verify/testing.resid";
+import "challenge.resid";
+import "challenge_bind.resid";
+import "crypto.resid";
+import "ecdsa.resid";
+import "hash.resid";
+import "hpke.resid";
+import "hpkeg.resid";
+import "random.resid";
+import "dev/device.resid";
+import "verify/corim.resid";
+import "verify/endorsed.resid";
+import "verify/cca.resid";
+import "verify/spdm.resid";
+import "cose.resid";
+import "cosesig.resid";
+import "verify/tpm.resid";
+
+Str fx() { return "fixtures/"; }
+
+@requires(filesystem(readonly))
+List(UInt(8)) rd(Str p) { return chal_bytes(filesystem.read_bytes(fx() + p)); }
+
+@requires(filesystem(readonly))
+List(Int) rdi(Str p) { return filesystem.read_bytes("fixtures/" + p); }
+
+List(Int) fill(Int v, Int n) { return if (n <= 0) { [] } else { [v].concat(fill(v, n - 1)) }; }
+List(Int) le(Int v, Int n) { return if (n <= 0) { [] } else { [v & 255].concat(le(v >> 8, n - 1)) }; }
+
+// A token for this realm challenge; `lifecycle` and `binder` to forge.
+@requires(filesystem(readonly))
+List(UInt(8)) token(List(Int) challenge, Int lifecycle, Bool binder_ok, Str cpak) {
+    List(Int) rak = rdi("cca-rak-pub.bin");
+    List(Int) r0 = cbe_map(7, []);
+    List(Int) r1 = cbe_bytes(challenge, cbe_uint(10, r0));
+    List(Int) r2 = cbe_bytes(fill(0, 64), cbe_uint(44235, r1));
+    List(Int) r3 = cbe_text("sha-256", cbe_uint(44236, r2));
+    List(Int) r4 = cbe_bytes(rak, cbe_uint(44237, r3));
+    List(Int) r5 = cbe_bytes(fill(5, 32), cbe_uint(44238, r4));
+    List(Int) r6 = cbe_bytes(fill(0, 32), cbe_bytes(fill(0, 32), cbe_bytes(fill(0, 32), cbe_bytes(fill(6, 32), cbe_array(4, cbe_uint(44239, r5))))));
+    List(Int) realm = cbe_text("sha-256", cbe_uint(44240, r6));
+    List(Int) binder = if (binder_ok) { sha256_bytes(rak) } else { fill(9, 32) };
+    List(Int) p0 = cbe_map(8, []);
+    List(Int) p1 = cbe_text("http://arm.com/CCA-SSD/1.0.0", cbe_uint(265, p0));
+    List(Int) p2 = cbe_bytes(binder, cbe_uint(10, p1));
+    List(Int) p3 = cbe_bytes(fill(3, 32), cbe_uint(2396, p2));
+    List(Int) p4 = cbe_bytes([1].concat(fill(4, 32)), cbe_uint(256, p3));
+    List(Int) p5 = cbe_uint(lifecycle, cbe_uint(2395, p4));
+    List(Int) p6 = cbe_text("sha-256", cbe_uint(2402, p5));
+    List(Int) s0 = cbe_map(4, cbe_array(1, cbe_uint(2399, p6)));
+    List(Int) s1 = cbe_text("BL", cbe_uint(1, s0));
+    List(Int) s2 = cbe_bytes(fill(7, 32), cbe_uint(2, s1));
+    List(Int) s3 = cbe_text("1.0", cbe_uint(4, s2));
+    List(Int) sw = cbe_bytes(fill(8, 32), cbe_uint(5, s3));
+    List(Int) plat = cbe_text("https://veraison.example/verification", cbe_uint(2400, sw));
+    List(Int) rcose = cose_sign1_ecdsa(P384, rdi("cca-rak-d.bin"), realm, []);
+    List(Int) pcose = cose_sign1_ecdsa(P384, rdi(cpak), plat, []);
+    return chal_bytes(cbe_bytes(rcose, cbe_uint(44241, cbe_bytes(pcose, cbe_uint(44234, cbe_map(2, cbe_tag(399, [])))))));
+}
+
+List(Int) u16(Int v) { return [(v >> 8) & 255, v & 255]; }
+List(Int) u32(Int v) { return [(v >> 24) & 255, (v >> 16) & 255, (v >> 8) & 255, v & 255]; }
+
+List(List(UInt(8))) pcrs() { return [chal_bytes(fill(1, 32)), chal_bytes(fill(2, 32)), chal_bytes(fill(3, 32))]; }
+
+// TPMS_ATTEST of a quote over PCRs 0-2 (SHA-256 bank) with this
+// qualifying data, and the test AK's signature over it.
+List(Int) attest(List(Int) q) {
+    List(Int) digest = sha256_bytes(fill(1, 32).concat(fill(2, 32)).concat(fill(3, 32)));
+    return u32(4283712327).concat(u16(32792)).concat(u16(34)).concat(fill(9, 34)).concat(u16(q.len())).concat(q)
+        .concat(u32(0)).concat(u32(1000)).concat(u32(3)).concat(u32(0)).concat([1]).concat(u32(1)).concat(u32(2))
+        .concat(u32(1)).concat(u16(11)).concat([3, 7, 0, 0]).concat(u16(32)).concat(digest);
+}
+
+@requires(filesystem(readonly))
+List(UInt(8)) qsig(List(Int) a) {
+    List(Int) rs = ecdsa_sign_raw(P256, Sha256, rdi("tpm-ak-d.bin"), a);
+    return chal_bytes(u16(24).concat(u16(11)).concat(u16(32)).concat(rs[0..32]).concat(u16(32)).concat(rs[32..64]));
+}
+
+@policy
+TpmPolicy boot_policy() { return TpmPolicy {.pcrs_hex = ["0=" + hex_encode(fill(1, 32))]}; }
+
+// The AK is the endorser's word, not a key compiled in: the decision
+// names the endorser.
+@decides(accept = [test_endorser], appraised = boot_policy, identity = key_bound)
+@requires(declassify)
+Result(HpkeMessage, VerifyError) release(List(UInt(8)) a, List(UInt(8)) s, ChallengeRecord issued, List(Int) guest_pk, List(UInt(8)) corim, List(Secret(UInt(8))) key, List(Secret(UInt(8))) sender) {
+    Verified(CorimRefs) keys = corim_verify(corim, test_endorser(), test_time(1791000000))?;
+    Verified(TpmQuoteEvidence) v = tpm_verify_quote_endorsed_key_bound(a, s, pcrs(), issued, keys, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", test_time(1791000000), 32, guest_pk)?;
+    Appraised(TpmQuoteEvidence) ap = tpm_appraise(v, boot_policy())?;
+    return seal_to_evidence(ap, 32, guest_pk, key, sender);
+}
+
+@requires(declassify)
+List(Int) sec_pub(List(Secret(UInt(8))) k, Int i, ListBuf(Int) acc) { return if (i >= k.len()) { acc.finish() } else { sec_pub(k, i + 1, acc.push((Int) declassify(k[i], "test output"))) }; }
+
+Str keys_of(CorimRefs r, Int i) { return if (i >= r.keys.len()) { "" } else { " " + r.keys[i].model + "/" + r.keys[i].instance_hex + keys_of(r, i + 1) }; }
+
+@requires(filesystem(readonly))
+Str cca(Str what, Verified(CorimRefs) keys, Str cpak, Int at) {
+    ChallengeRecord c = challenge_issue(64);
+    return what + ": " + match (cca_verify_endorsed(token(chal_ints(challenge_value(c)), 12291, true, cpak), c, keys, test_time(at))) { Ok(v) => f"verified, {v.anchors.len()} anchor, endorser's: {v.anchors[0] == test_endorser().id}", Err(e) => verify_error_text(e) };
+}
+
+@requires(filesystem(readonly))
+Str tpm(Str what, Verified(CorimRefs) keys, Str inst) {
+    ChallengeRecord c = challenge_issue(32);
+    List(Int) a = attest(chal_ints(challenge_value(c)));
+    return what + ": " + match (tpm_verify_quote_endorsed(chal_bytes(a), qsig(a), pcrs(), c, keys, inst, test_time(1791000000))) { Ok(v) => match (tpm_appraise(v, boot_policy())) { Ok(x) => "appraised", Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) };
+}
+
+@requires(filesystem(readonly))
+Str with_keys(Verified(CorimRefs) keys) {
+    println("keys:" + keys_of(keys.value, 0));
+    println(cca("CCA, endorsed CPAK", keys, "cca-cpak-d.bin", 1791000000));
+    println(cca("CCA, key endorsed for another instance", keys, "cca-other-d.bin", 1791000000));
+    println(cca("CCA, after the CoRIM's not-after", keys, "cca-cpak-d.bin", 2300000000));
+    println(tpm("TPM, endorsed AK", keys, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"));
+    println(tpm("TPM, conditioned key only", keys, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"));
+    println(tpm("TPM, no instance named", keys, ""));
+    return "";
+}
+
+@requires(filesystem(readonly), declassify)
+Int main() {
+    Str unused = match (corim_verify(rd("corim-keys.cbor"), test_endorser(), test_time(1791000000))) { Ok(keys) => with_keys(keys), Err(e) => verify_error_text(e) };
+    println("reference CoRIM: " + match (corim_verify(rd("corim-endorsed.cbor"), test_endorser(), test_time(1791000000))) { Ok(r) => match (cca_verify_endorsed(token(fill(1, 64), 12291, true, "cca-cpak-d.bin"), challenge_issue(64), r, test_time(1791000000))) { Ok(v) => "VERIFIED", Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) });
+    HpkeKeyPairG(Secret(UInt(8))) kp = hpkeg_generate_keypair(32);
+    ChallengeRecord c6 = challenge_issue(32);
+    List(Int) bound = chal_ints(match (challenge_with_key(challenge_value(c6), 32, kp.sk)) { Ok(b) => b, Err(e) => [] });
+    List(Int) a = attest(bound);
+    List(Secret(UInt(8))) key = random_secret(32);
+    Str r = match (release(chal_bytes(a), qsig(a), c6, kp.pk, rd("corim-keys.cbor"), key, secret_bytes(chal_ints(rd("sender-sk.bin"))))) {
+        Ok(m) => match (open_released(32, kp.sk, m, test_sender())) { Ok(v) => if (hex_encode(sec_pub(v.value, 0, ListBuf())) == hex_encode(sec_pub(key, 0, ListBuf()))) { "released and opened: same key" } else { "KEY DIFFERS" }, Err(e) => "open: " + verify_error_text(e) },
+        Err(e) => "release: " + verify_error_text(e),
+    };
+    println(r);
+    return 0;
+}
