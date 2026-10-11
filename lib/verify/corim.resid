@@ -1,0 +1,340 @@
+// verify/corim.resid — endorsed reference values (PLAN-attestation.md §4):
+// a signed CoRIM (draft-ietf-rats-corim: COSE_Sign1 over a corim-map, tag
+// 501, holding CoMIDs, tag 506) whose signer is an anchor of kind
+// Endorser. The reference triples become Verified(CorimRefs) resting on
+// that anchor, and the platforms' endorsed appraisals accept a measurement
+// a reference value lists, so a decision that uses them names the
+// endorser in `accept` too.
+//
+// Parsed bounded: maps and arrays at most 4096 entries, nesting 16 deep,
+// no indefinite lengths, no duplicate key in a map this file reads, no
+// trailing bytes. Keys and tags this file does not read (extensions, the
+// entity and linked-tag lists, CoSWIDs) are skipped whole. The signature
+// covers the payload as given. The protected header must say
+// application/rim+cbor, and corim-meta's signature validity, when given,
+// must hold at the evidence time.
+
+import "core.resid";
+import "../crypto.resid";
+import "../hash.resid";
+import "../x509.resid";
+import "../ecdsa.resid";
+import "../certverify.resid";
+import "../cose.resid";
+import "../cosesig.resid";
+
+// One reference value: its environment (class ID as hex, vendor, model,
+// layer; -1 or "" when absent), its measurement key (an integer, or text
+// such as a UUID's hex, "" none) and what it endorses: digests (algorithm
+// and value), a raw value, a version, an SVN.
+pub type CorimRef = { Str class_id_hex; Str vendor; Str model; Int layer; Int mkey_int; Str mkey_text; List(Int) digest_algs; List(List(Int)) digests; List(Int) raw; Str version; Int svn; };
+
+@signed(sig = signature, span = payload)
+pub type CorimRefs = { Str id; Str signer; List(CorimRef) refs; };
+
+// ─── CBOR, bounded ──────────────────────────────────────────────────
+
+type CbR = { Bool ok; Int pos; Int val; };
+
+CbR cb_head(List(Int) b, Int pos, Int major) {
+    CbeHead h = cbe_read_head(b, pos);
+    if (!h.ok || h.major != major || h.val < 0) { return CbR {.ok = false, .pos = pos, .val = 0}; }
+    return CbR {.ok = true, .pos = h.pos, .val = h.val};
+}
+
+// A text or byte string at pos.
+type CbS = { Bool ok; List(Int) v; Int pos; };
+
+CbS cb_str(List(Int) b, Int pos, Int major) {
+    CbeStr s = cbe_read_str(b, pos, major);
+    return CbS {.ok = s.ok, .v = s.bytes, .pos = s.pos};
+}
+
+// Skip any one item (bounded by cosesig's cbor_skip).
+Int cb_skip(List(Int) b, Int pos) { return cbor_skip(b, pos, 16); }
+
+// Through any tags to the tagged item: the last tag (-1 none) and where
+// the item starts.
+type CbT = { Int tag; Int pos; };
+
+CbT cb_untag(List(Int) b, Int pos, Int tag, Int depth) {
+    CbeHead h = cbe_read_head(b, pos);
+    if (!h.ok || h.major != 6 || depth > 4) { return CbT {.tag = tag, .pos = pos}; }
+    return cb_untag(b, h.pos, h.val, depth + 1);
+}
+
+Str cb_ascii(List(Int) v) { return cbe_ascii(v, 0, ""); }
+
+// ─── The signed envelope ────────────────────────────────────────────
+
+@verify_internal
+pub Result(CorimRefs, VerifyError) corim_check(List(UInt(8)) corim, Anchor endorser, EvidenceTime t) {
+    if (endorser.kind != "Endorser") { return Err(Refused("corim_verify", "the anchor is not an endorser (kind " + endorser.kind + ")")); }
+    if (anchor_expired(endorser, t)) { return Err(Stale("the anchor expired " + endorser.expires)); }
+    List(Int) b = chal_ints(corim);
+    if (b.len() > 262144) { return Err(BadLayout("a CoRIM is at most 256 KiB")); }
+    CbeHead tag = cbe_read_head(b, 0);
+    if (!tag.ok || tag.major != 6 || tag.val != 18) { return Err(BadLayout("a signed CoRIM is a tagged COSE_Sign1 (18)")); }
+    CoseMsg m = cose_sign1_read(b);
+    if (!m.ok) { return Err(BadLayout(m.err)); }
+    PubKey key = spki_parse_der(endorser.der);
+    Bool p256 = key.kind == pubkey_ec() && curve_bytes(key.curve) == 32;
+    Bool p384 = key.kind == pubkey_ec() && curve_bytes(key.curve) == 48;
+    Bool alg_ok = (m.alg == 0 - 7 && p256 && anchor_lists(endorser.algorithms, "EcdsaP256Sha256")) || (m.alg == 0 - 35 && p384 && anchor_lists(endorser.algorithms, "EcdsaP384Sha384"));
+    if (!alg_ok) { return Err(Refused("corim_verify", "the CoRIM's algorithm is not one the endorser's key and anchor allow")); }
+    if (!cose_sign1_verify(m, key, [])) { return Err(BadSignature("the endorser did not sign this CoRIM")); }
+    Int ct = cbor_map_find(m.prot, 0, 3);
+    CbS cts = if (ct >= 0) { cb_str(m.prot, ct, 3) } else { CbS {.ok = false, .v = [], .pos = 0} };
+    if (!cts.ok || cb_ascii(cts.v) != "application/rim+cbor") { return Err(BadLayout("the protected header's content type is not application/rim+cbor")); }
+    Int meta = cbor_map_find(m.prot, 0, 8);
+    Str signer = if (meta >= 0) { corim_meta_check(m.prot, meta, t)? } else { "" };
+    CorimRefs refs = corim_payload(m.payload)?;
+    return Ok(CorimRefs {.id = refs.id, .signer = signer, .refs = refs.refs});
+}
+
+// corim-meta: {0: signer {0: name}, 1: validity {0: not-before, 1:
+// not-after}} (times tag 1, Unix seconds). The signer's name, if the
+// validity holds at t.
+Result(Str, VerifyError) corim_meta_check(List(Int) prot, Int pos, EvidenceTime t) {
+    CbS mb = cb_str(prot, pos, 2);
+    if (!mb.ok || cb_skip(mb.v, 0) != mb.v.len()) { return Err(BadLayout("malformed corim-meta")); }
+    List(Int) v = mb.v;
+    Int sp = cbor_map_find(v, 0, 0);
+    Int np = if (sp >= 0) { cbor_map_find(v, sp, 0) } else { 0 - 1 };
+    CbS nm = if (np >= 0) { cb_str(v, np, 3) } else { CbS {.ok = false, .v = [], .pos = 0} };
+    Int vp = cbor_map_find(v, 0, 1);
+    if (vp == 0 - 2 || sp == 0 - 2) { return Err(BadLayout("malformed corim-meta")); }
+    if (vp >= 0) {
+        Int nb = corim_time(v, cbor_map_find(v, vp, 0));
+        Int na = corim_time(v, cbor_map_find(v, vp, 1));
+        if (na == 0 - 2 || nb == 0 - 2) { return Err(BadLayout("malformed signature validity")); }
+        if ((nb >= 0 && t.at.seconds < nb) || (na >= 0 && t.at.seconds > na)) { return Err(Stale("the CoRIM's signature is not valid at this time")); }
+    }
+    return Ok(if (nm.ok) { cb_ascii(nm.v) } else { "" });
+}
+
+// A tag-1 time as seconds: -1 absent, -2 malformed.
+Int corim_time(List(Int) b, Int pos) {
+    if (pos == 0 - 1) { return 0 - 1; }
+    if (pos < 0) { return 0 - 2; }
+    CbeHead h = cbe_read_head(b, pos);
+    if (!h.ok || h.major != 6 || h.val != 1) { return 0 - 2; }
+    CbeHead n = cbe_read_head(b, h.pos);
+    return if (n.ok && n.major == 0) { n.val } else { 0 - 2 };
+}
+
+// ─── The corim-map (tag 501) ────────────────────────────────────────
+
+Result(CorimRefs, VerifyError) corim_payload(List(Int) b) {
+    CbT tg = cb_untag(b, 0, 0 - 1, 0);
+    if (tg.tag != 501) { return Err(BadLayout("the payload is not a corim-map (tag 501)")); }
+    CbR m = cb_head(b, tg.pos, 5);
+    if (!m.ok || m.val > 64) { return Err(BadLayout("the corim-map is not a map")); }
+    List(CorimRef) none = [];
+    CmAcc a = corim_entries(b, m.pos, m.val, CmAcc {.id = "", .refs = none, .seen = [], .err = "", .pos = 0});
+    if (a.err != "") { return Err(BadLayout("corim-map: " + a.err)); }
+    if (a.pos != b.len()) { return Err(BadLayout("trailing bytes after the corim-map")); }
+    if (!cb_has(a.seen, 1, 0)) { return Err(BadLayout("the corim-map has no tags")); }
+    return Ok(CorimRefs {.id = a.id, .signer = "", .refs = a.refs});
+}
+
+type CmAcc = { Str id; List(CorimRef) refs; List(Int) seen; Str err; Int pos; };
+
+Bool cb_has(List(Int) xs, Int x, Int i) { return i < xs.len() && (xs[i] == x || cb_has(xs, x, i + 1)); }
+
+CmAcc cm_fail(CmAcc a, Str e) { return CmAcc {.id = a.id, .refs = a.refs, .seen = a.seen, .err = e, .pos = a.pos}; }
+
+CmAcc corim_entries(List(Int) b, Int pos, Int left, CmAcc a) {
+    if (a.err != "") { return a; }
+    if (left <= 0) { return CmAcc {.id = a.id, .refs = a.refs, .seen = a.seen, .err = "", .pos = pos}; }
+    CbR k = cb_head(b, pos, 0);
+    if (!k.ok) { return cm_fail(a, "a key is not an unsigned integer"); }
+    if (cb_has(a.seen, k.val, 0)) { return cm_fail(a, f"key {k.val} twice"); }
+    Int end = cb_skip(b, k.pos);
+    if (end < 0) { return cm_fail(a, f"key {k.val}'s value is malformed"); }
+    CmAcc a2 = CmAcc {.id = a.id, .refs = a.refs, .seen = a.seen.concat([k.val]), .err = "", .pos = a.pos};
+    if (k.val == 0) {
+        CbT tg = cb_untag(b, k.pos, 0 - 1, 0);
+        CbS s = cb_str(b, tg.pos, if (tg.tag == 37) { 2 } else { 3 });
+        if (!s.ok) { return cm_fail(a, "the id is not text or a UUID"); }
+        return corim_entries(b, end, left - 1, CmAcc {.id = if (tg.tag == 37) { hex_encode(s.v) } else { cb_ascii(s.v) }, .refs = a2.refs, .seen = a2.seen, .err = "", .pos = a2.pos});
+    }
+    if (k.val == 1) {
+        CbR arr = cb_head(b, k.pos, 4);
+        if (!arr.ok || arr.val < 1 || arr.val > 64) { return cm_fail(a, "the tags are not an array of 1 to 64"); }
+        RefsAcc r = corim_tags(b, arr.pos, arr.val, a2.refs);
+        if (r.err != "") { return cm_fail(a, r.err); }
+        return corim_entries(b, end, left - 1, CmAcc {.id = a2.id, .refs = r.refs, .seen = a2.seen, .err = "", .pos = a2.pos});
+    }
+    return corim_entries(b, end, left - 1, a2);
+}
+
+type RefsAcc = { List(CorimRef) refs; Str err; };
+
+// Each tag: a CoMID (tag 506 over a byte string) is read; any other kind
+// (CoSWID, CoTL) is skipped.
+RefsAcc corim_tags(List(Int) b, Int pos, Int left, List(CorimRef) acc) {
+    if (left <= 0) { return RefsAcc {.refs = acc, .err = ""}; }
+    Int end = cb_skip(b, pos);
+    if (end < 0) { return RefsAcc {.refs = acc, .err = "a malformed tag"}; }
+    CbT tg = cb_untag(b, pos, 0 - 1, 0);
+    if (tg.tag != 506) { return corim_tags(b, end, left - 1, acc); }
+    CbS s = cb_str(b, tg.pos, 2);
+    if (!s.ok) { return RefsAcc {.refs = acc, .err = "a CoMID is not a byte string"}; }
+    RefsAcc r = comid_refs(s.v, acc);
+    if (r.err != "") { return r; }
+    return corim_tags(b, end, left - 1, r.refs);
+}
+
+// ─── CoMID: triples → reference triples ─────────────────────────────
+
+RefsAcc comid_refs(List(Int) c, List(CorimRef) acc) {
+    if (cb_skip(c, 0) != c.len()) { return RefsAcc {.refs = acc, .err = "a CoMID has trailing bytes or is malformed"}; }
+    if (!cm_keys_unique(c, 0)) { return RefsAcc {.refs = acc, .err = "a CoMID repeats a key"}; }
+    Int tp = cbor_map_find(c, 0, 4);
+    if (tp < 0) { return RefsAcc {.refs = acc, .err = "a CoMID has no triples"}; }
+    if (!cm_keys_unique(c, tp)) { return RefsAcc {.refs = acc, .err = "a CoMID's triples repeat a key"}; }
+    Int rp = cbor_map_find(c, tp, 0);
+    if (rp == 0 - 2) { return RefsAcc {.refs = acc, .err = "malformed triples"}; }
+    if (rp < 0) { return RefsAcc {.refs = acc, .err = ""}; }
+    CbR arr = cb_head(c, rp, 4);
+    if (!arr.ok || arr.val > 4096) { return RefsAcc {.refs = acc, .err = "reference triples are not an array"}; }
+    return ref_triples(c, arr.pos, arr.val, acc);
+}
+
+// Every key of the map at pos appears once (integer keys).
+Bool cm_keys_unique(List(Int) b, Int pos) {
+    CbR m = cb_head(b, pos, 5);
+    if (!m.ok || m.val > 4096) { return false; }
+    return cm_uniq_at(b, m.pos, m.val, []);
+}
+
+Bool cm_uniq_at(List(Int) b, Int pos, Int left, List(Int) seen) {
+    if (left <= 0) { return true; }
+    CbeHead k = cbe_read_head(b, pos);
+    Int kend = cb_skip(b, pos);
+    Int vend = if (kend < 0) { 0 - 1 } else { cb_skip(b, kend) };
+    if (!k.ok || vend < 0) { return false; }
+    // Integer keys are compared; other keys (text) only skipped.
+    Int key = if (k.major == 0) { k.val } else if (k.major == 1) { 0 - 1 - k.val } else { 0 - 1000000 - pos };
+    if (cb_has(seen, key, 0)) { return false; }
+    return cm_uniq_at(b, vend, left - 1, seen.concat([key]));
+}
+
+// [environment-map, [+ measurement-map]]
+RefsAcc ref_triples(List(Int) b, Int pos, Int left, List(CorimRef) acc) {
+    if (left <= 0) { return RefsAcc {.refs = acc, .err = ""}; }
+    Int end = cb_skip(b, pos);
+    CbR pair = cb_head(b, pos, 4);
+    if (end < 0 || !pair.ok || pair.val != 2) { return RefsAcc {.refs = acc, .err = "a reference triple is not [environment, measurements]"}; }
+    Int envp = pair.pos;
+    Int msp = cb_skip(b, envp);
+    if (msp < 0 || !cm_keys_unique(b, envp)) { return RefsAcc {.refs = acc, .err = "a malformed environment"}; }
+    CorimRef env = ref_env(b, envp);
+    CbR ms = cb_head(b, msp, 4);
+    if (!ms.ok || ms.val < 1 || ms.val > 4096) { return RefsAcc {.refs = acc, .err = "a triple's measurements are not an array"}; }
+    RefsAcc r = ref_measurements(b, ms.pos, ms.val, env, acc);
+    if (r.err != "") { return r; }
+    return ref_triples(b, end, left - 1, r.refs);
+}
+
+CorimRef ref_env(List(Int) b, Int envp) {
+    List(Int) none = [];
+    List(List(Int)) nn = [];
+    Int cp = cbor_map_find(b, envp, 0);
+    Bool cls = cp >= 0 && cm_keys_unique(b, cp);
+    Int idp = if (cls) { cbor_map_find(b, cp, 0) } else { 0 - 1 };
+    CbT idt = if (idp >= 0) { cb_untag(b, idp, 0 - 1, 0) } else { CbT {.tag = 0 - 1, .pos = 0 - 1} };
+    CbS id = if (idp >= 0) { cb_str(b, idt.pos, 2) } else { CbS {.ok = false, .v = none, .pos = 0} };
+    CbS vendor = if (cls) { cb_text_at(b, cbor_map_find(b, cp, 1)) } else { cb_none() };
+    CbS model = if (cls) { cb_text_at(b, cbor_map_find(b, cp, 2)) } else { cb_none() };
+    Int lp = if (cls) { cbor_map_find(b, cp, 3) } else { 0 - 1 };
+    CbR layer = if (lp >= 0) { cb_head(b, lp, 0) } else { CbR {.ok = false, .pos = 0, .val = 0} };
+    return CorimRef {.class_id_hex = if (id.ok) { hex_encode(id.v) } else { "" }, .vendor = if (vendor.ok) { cb_ascii(vendor.v) } else { "" }, .model = if (model.ok) { cb_ascii(model.v) } else { "" }, .layer = if (layer.ok) { layer.val } else { 0 - 1 }, .mkey_int = 0 - 1, .mkey_text = "", .digest_algs = none, .digests = nn, .raw = none, .version = "", .svn = 0 - 1};
+}
+
+CbS cb_none() {
+    List(Int) none = [];
+    return CbS {.ok = false, .v = none, .pos = 0};
+}
+
+CbS cb_text_at(List(Int) b, Int pos) { return if (pos >= 0) { cb_str(b, pos, 3) } else { cb_none() }; }
+
+// Each measurement-map: {0 mkey, 1 mval {0 version, 1 svn, 2 digests,
+// 4 raw-value, ...}}.
+RefsAcc ref_measurements(List(Int) b, Int pos, Int left, CorimRef env, List(CorimRef) acc) {
+    if (left <= 0) { return RefsAcc {.refs = acc, .err = ""}; }
+    Int end = cb_skip(b, pos);
+    if (end < 0 || !cm_keys_unique(b, pos)) { return RefsAcc {.refs = acc, .err = "a malformed measurement"}; }
+    Int kp = cbor_map_find(b, pos, 0);
+    CbT kt = if (kp >= 0) { cb_untag(b, kp, 0 - 1, 0) } else { CbT {.tag = 0 - 1, .pos = 0 - 1} };
+    CbeHead kh = if (kp >= 0) { cbe_read_head(b, kt.pos) } else { cbe_read_head(b, 0 - 1) };
+    Int mkey_int = if (kp >= 0 && kh.ok && kh.major == 0) { kh.val } else { 0 - 1 };
+    CbS ks = if (kp >= 0 && kh.ok && (kh.major == 2 || kh.major == 3)) { cb_str(b, kt.pos, kh.major) } else { cb_none() };
+    Str mkey_text = if (ks.ok) { if (kh.major == 2) { hex_encode(ks.v) } else { cb_ascii(ks.v) } } else { "" };
+    Int vp = cbor_map_find(b, pos, 1);
+    if (vp < 0 || !cm_keys_unique(b, vp)) { return RefsAcc {.refs = acc, .err = "a measurement without a valid mval"}; }
+    Int dp = cbor_map_find(b, vp, 2);
+    Dg dg = if (dp >= 0) { ref_digests(b, dp) } else { Dg {.algs = [], .vals = [], .ok = true} };
+    if (!dg.ok) { return RefsAcc {.refs = acc, .err = "malformed digests"}; }
+    Int rp = cbor_map_find(b, vp, 4);
+    CbT rt = if (rp >= 0) { cb_untag(b, rp, 0 - 1, 0) } else { CbT {.tag = 0 - 1, .pos = 0 - 1} };
+    CbS raw = if (rp >= 0) { cb_str(b, rt.pos, 2) } else { cb_none() };
+    Int verp = cbor_map_find(b, vp, 0);
+    CbS ver = if (verp >= 0) { cb_text_at(b, cbor_map_find(b, verp, 0)) } else { cb_none() };
+    Int svp = cbor_map_find(b, vp, 1);
+    CbT svt = if (svp >= 0) { cb_untag(b, svp, 0 - 1, 0) } else { CbT {.tag = 0 - 1, .pos = 0 - 1} };
+    CbR svn = if (svp >= 0) { cb_head(b, svt.pos, 0) } else { CbR {.ok = false, .pos = 0, .val = 0} };
+    CorimRef r = CorimRef {.class_id_hex = env.class_id_hex, .vendor = env.vendor, .model = env.model, .layer = env.layer, .mkey_int = mkey_int, .mkey_text = mkey_text, .digest_algs = dg.algs, .digests = dg.vals, .raw = if (raw.ok) { raw.v } else { env.raw }, .version = if (ver.ok) { cb_ascii(ver.v) } else { "" }, .svn = if (svn.ok) { svn.val } else { 0 - 1 }};
+    return ref_measurements(b, end, left - 1, env, acc.concat([r]));
+}
+
+type Dg = { List(Int) algs; List(List(Int)) vals; Bool ok; };
+
+// [+ [alg (integer), value (bytes)]]
+Dg ref_digests(List(Int) b, Int pos) {
+    CbR arr = cb_head(b, pos, 4);
+    if (!arr.ok || arr.val < 1 || arr.val > 64) { return Dg {.algs = [], .vals = [], .ok = false}; }
+    return ref_dg_at(b, arr.pos, arr.val, Dg {.algs = [], .vals = [], .ok = true});
+}
+
+Dg ref_dg_at(List(Int) b, Int pos, Int left, Dg acc) {
+    if (left <= 0) { return acc; }
+    CbR pair = cb_head(b, pos, 4);
+    CbR alg = if (pair.ok && pair.val == 2) { cb_head(b, pair.pos, 0) } else { CbR {.ok = false, .pos = 0, .val = 0} };
+    CbS v = if (alg.ok) { cb_str(b, alg.pos, 2) } else { cb_none() };
+    if (!v.ok || v.v.len() < 20 || v.v.len() > 64) { return Dg {.algs = [], .vals = [], .ok = false}; }
+    return ref_dg_at(b, v.pos, left - 1, Dg {.algs = acc.algs.concat([alg.val]), .vals = acc.vals.concat([v.v]), .ok = true});
+}
+
+// ─── The primitive ──────────────────────────────────────────────────
+
+// Reference values on the endorser's word. Not fresh: a CoRIM is reusable
+// by design; what makes a decision fresh is its evidence.
+@primitive(verify, anchor = endorser, gives = [], time = t, format = CorimRefs, kinds = [Endorser], inputs = [corim, t])
+pub Result(Verified(CorimRefs), VerifyError) corim_verify(List(UInt(8)) corim, Anchor endorser, EvidenceTime t) {
+    CorimRefs r = corim_check(corim, endorser, t)?;
+    List(Int) none = [];
+    return Ok(Verified {.value = r, .anchors = [endorser.id], .quals = 0, .record = 0 - 1, .kem = 0, .pk = none, .chan = none, .time = t.source, .principal = "", .format = "CorimRefs"});
+}
+
+// Is v a digest some reference value lists (byte for byte)?
+pub Bool corim_lists_digest(CorimRefs r, List(Int) v) { return cr_digest_at(r.refs, v, 0); }
+
+Bool cr_digest_at(List(CorimRef) rs, List(Int) v, Int i) { return i < rs.len() && (cr_in(rs[i].digests, v, 0) || cr_digest_at(rs, v, i + 1)); }
+Bool cr_in(List(List(Int)) ds, List(Int) v, Int i) { return i < ds.len() && (eq_ints(ds[i], v) || cr_in(ds, v, i + 1)); }
+
+// Is v a digest a reference value with integer measurement key k lists?
+pub Bool corim_lists_keyed(CorimRefs r, Int k, List(Int) v) { return cr_keyed_at(r.refs, k, v, 0); }
+
+Bool cr_keyed_at(List(CorimRef) rs, Int k, List(Int) v, Int i) { return i < rs.len() && ((rs[i].mkey_int == k && cr_in(rs[i].digests, v, 0)) || cr_keyed_at(rs, k, v, i + 1)); }
+
+// The hex of every digest, for the platforms' policies.
+pub List(Str) corim_digests_hex(CorimRefs r) { return cr_hex_at(r.refs, 0, []); }
+
+List(Str) cr_hex_at(List(CorimRef) rs, Int i, List(Str) acc) {
+    if (i >= rs.len()) { return acc; }
+    return cr_hex_at(rs, i + 1, acc.concat(cr_hex_list(rs[i].digests, 0, [])));
+}
+
+List(Str) cr_hex_list(List(List(Int)) ds, Int i, List(Str) acc) { return if (i >= ds.len()) { acc } else { cr_hex_list(ds, i + 1, acc.concat([hex_encode(ds[i])])) }; }

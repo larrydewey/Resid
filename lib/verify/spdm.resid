@@ -1,0 +1,207 @@
+// verify/spdm.resid — device measurements over SPDM (PLAN-attestation.md
+// §3.2 verify_signed_transcript, spdm_verify; §10 NVIDIA): a GET_MEASUREMENTS
+// request with the requester's nonce and the signed MEASUREMENTS response,
+// the device certificate chain from the anchor (NVIDIA's Device Identity
+// CA for its GPUs), and the challenge as the requester nonce.
+//
+// SPDM 1.1 (what NVIDIA's Hopper GPUs speak): the signature is ECDSA P-384
+// SHA-384 (r ‖ s, 96 bytes) over the request and the response up to the
+// signature (L1). Later versions sign a prefixed hash over the whole
+// negotiation and are refused here. The response is parsed exactly: the
+// measurement record holds the block count it states, each block a DMTF
+// measurement (type, size, value) filling its block, then the responder
+// nonce, opaque data (at most 1024 bytes) and the signature, to the end.
+//
+// Not covered: binding the GPU to the CPU's evidence through an SPDM
+// session the attested principal runs, OCSP for the device certificates,
+// and NVIDIA's RIMs (XML, refused in the standard library); reference
+// values come from a policy or a CoRIM (verify/corim.resid).
+
+import "core.resid";
+import "../crypto.resid";
+import "../hash.resid";
+import "../x509.resid";
+import "../ecdsa.resid";
+import "../certverify.resid";
+import "../chain.resid";
+import "../instant.resid";
+import "../tls.resid";
+import "../challenge.resid";
+import "../challenge_bind.resid";
+import "../challenge_export.resid";
+import "../dev/device.resid";
+
+// One DMTF measurement block: its index, the DMTF value type, the value.
+pub type SpdmMeasurement = { Int index; Int value_type; List(Int) value; };
+
+// What a verified MEASUREMENTS response says.
+@signed(sig = signature, span = l1)
+pub type SpdmEvidence = { Int version; List(SpdmMeasurement) measurements; List(Int) responder_nonce; List(Int) opaque; };
+
+// A policy: measurement blocks that must hold these values ("index=hex",
+// every one of them).
+pub type SpdmPolicy = { List(Str) measurements_hex; };
+
+pub List(Str) spdm_descriptors() { return ["nvidia.spdm_measurements"]; }
+
+Int sp_le(List(Int) b, Int at, Int n) { return if (n <= 0) { 0 } else { b[at] | (sp_le(b, at + 1, n - 1) << 8) }; }
+
+// ─── Parsing ────────────────────────────────────────────────────────
+
+type SpParsed = { SpdmEvidence e; List(Int) req_nonce; };
+
+Result(SpParsed, VerifyError) sp_parse(List(Int) req, List(Int) resp) {
+    if (req.len() != 37) { return Err(BadLayout("an SPDM 1.1 GET_MEASUREMENTS request is 37 bytes")); }
+    if (req[0] != 17) { return Err(Refused("spdm_verify", f"SPDM version 0x{req[0]:hex} (1.1 only)")); }
+    if (req[1] != 224 || (req[2] & 1) != 1) { return Err(BadLayout("the request is not GET_MEASUREMENTS asking for a signature")); }
+    if (resp.len() < 8 + 32 + 2 + 96 || resp.len() > 65536) { return Err(BadLayout("short or oversized MEASUREMENTS response")); }
+    if (resp[0] != req[0] || resp[1] != 96) { return Err(BadLayout("the response is not MEASUREMENTS of the request's version")); }
+    Int nblocks = resp[4];
+    Int rlen = sp_le(resp, 5, 3);
+    Int after = 8 + rlen;
+    if (after + 32 + 2 + 96 > resp.len()) { return Err(BadLayout("the measurement record overruns the response")); }
+    SpBlocks bl = sp_blocks(resp, 8, after, [])?;
+    if (bl.v.len() != nblocks) { return Err(BadLayout(f"the record holds {bl.v.len()} blocks, the header says {nblocks}")); }
+    Int olen = sp_le(resp, after + 32, 2);
+    if (olen > 1024 || after + 34 + olen + 96 != resp.len()) { return Err(BadLayout("the opaque data and signature do not end the response")); }
+    return Ok(SpParsed {.e = SpdmEvidence {.version = resp[0], .measurements = bl.v, .responder_nonce = resp[after..after + 32], .opaque = resp[after + 34..after + 34 + olen]}, .req_nonce = req[4..36]});
+}
+
+type SpBlocks = { List(SpdmMeasurement) v; };
+
+// Blocks from at up to end, each filling itself exactly.
+Result(SpBlocks, VerifyError) sp_blocks(List(Int) b, Int at, Int end, List(SpdmMeasurement) acc) {
+    if (at == end) { return Ok(SpBlocks {.v = acc}); }
+    if (at + 4 > end) { return Err(BadLayout("a measurement block is truncated")); }
+    Int idx = b[at];
+    Int spec = b[at + 1];
+    Int size = sp_le(b, at + 2, 2);
+    if (spec != 1) { return Err(BadLayout("a measurement block is not a DMTF measurement")); }
+    if (size < 3 || at + 4 + size > end) { return Err(BadLayout("a measurement block overruns the record")); }
+    Int vt = b[at + 4];
+    Int vs = sp_le(b, at + 5, 2);
+    if (3 + vs != size) { return Err(BadLayout("a DMTF measurement does not fill its block")); }
+    if (sp_has_index(acc, idx, 0)) { return Err(BadLayout(f"measurement index {idx} twice")); }
+    return sp_blocks(b, at + 4 + size, end, acc.concat([SpdmMeasurement {.index = idx, .value_type = vt, .value = b[at + 7..at + 7 + vs]}]));
+}
+
+Bool sp_has_index(List(SpdmMeasurement) ms, Int i, Int k) { return k < ms.len() && (ms[k].index == i || sp_has_index(ms, i, k + 1)); }
+
+// ─── Verification ───────────────────────────────────────────────────
+
+// The chain is the device's leaf first and the anchor's certificate last;
+// each certificate is signed by the next at the evidence time, every one
+// but the leaf a CA.
+Result(Cert, VerifyError) sp_chain(List(List(UInt(8))) chain, Anchor root, EvidenceTime t) {
+    if (chain.len() < 2 || chain.len() > 8) { return Err(BadChain("the device chain is 2 to 8 certificates")); }
+    if (!eq_ints(chal_ints(chain[chain.len() - 1]), root.der)) { return Err(BadChain("the device chain does not end at the anchor's certificate")); }
+    Cert top = sp_cert(root.der, "root")?;
+    if (!chain_verify_parsed(top, top, t.at)) { return Err(BadChain("the root is not a current self-signed CA")); }
+    return sp_link(chain, chain.len() - 2, top, t);
+}
+
+Result(Cert, VerifyError) sp_link(List(List(UInt(8))) chain, Int i, Cert issuer, EvidenceTime t) {
+    Cert c = sp_cert(chal_ints(chain[i]), f"certificate {i}")?;
+    if (i == 0) {
+        if (!eq_list(c.issuer, issuer.subject) || !cert_valid_at(c, t.at) || !cert_valid_at(issuer, t.at) || !cert_is_ca(issuer) || !cert_key_usage(issuer, 5) || !sig_verify(c.signed.alg, issuer.key, c.signed.tbs, c.signed.sig)) { return Err(BadChain("the device's certificate is not signed by the one above it, or one is not current")); }
+        return Ok(c);
+    }
+    if (!chain_verify_parsed(c, issuer, t.at)) { return Err(BadChain(f"certificate {i} is not signed by the one above it, or one is not current")); }
+    return sp_link(chain, i - 1, c, t);
+}
+
+Result(Cert, VerifyError) sp_cert(List(Int) der, Str what) {
+    return match (x509_parse(der)) { Ok(c) => Ok(c), Err(e) => Err(BadChain(what + ": " + e)) };
+}
+
+type SpOk = { SpdmEvidence e; List(Int) req_nonce; };
+
+@verify_internal
+pub Result(SpOk, VerifyError) spdm_check(List(UInt(8)) request, List(UInt(8)) response, List(List(UInt(8))) chain, Anchor root, EvidenceTime t) {
+    if (root.kind != "NvidiaDevice") { return Err(Refused("spdm_verify", "the anchor is not a device identity root (kind " + root.kind + ")")); }
+    if (!anchor_lists(root.algorithms, "EcdsaP384Sha384")) { return Err(Refused("spdm_verify", "the anchor does not list ECDSA P-384 SHA-384")); }
+    if (anchor_expired(root, t)) { return Err(Stale("the anchor expired " + root.expires)); }
+    List(Int) req = chal_ints(request);
+    List(Int) resp = chal_ints(response);
+    SpParsed p = sp_parse(req, resp)?;
+    Cert leaf = sp_chain(chain, root, t)?;
+    if (leaf.key.kind != pubkey_ec() || curve_bytes(leaf.key.curve) != 48) { return Err(BadChain("the device key is not P-384")); }
+    if (!ecdsa_verify_raw(P384, Sha384, leaf.key.point, req.concat(resp[0..resp.len() - 96]), resp[resp.len() - 96..resp.len()])) { return Err(BadSignature("the device did not sign this transcript")); }
+    return Ok(SpOk {.e = p.e, .req_nonce = p.req_nonce});
+}
+
+Int sp_rp(ChallengeRecord c) { return if (c.bind.len() > 0) { q_rp_bound() } else { 0 }; }
+
+// The requester nonce must be exactly the expected 32-byte value.
+Result(Bool, VerifyError) sp_bind(SpOk k, List(UInt(8)) want, ChallengeRecord c, List(UInt(8)) response) {
+    if (want.len() != 32) { return Err(NotFresh("an SPDM nonce is 32 bytes: issue the challenge with challenge_issue(32)")); }
+    return vf_bind_challenge(chal_bytes(k.req_nonce), want, c, response, spdm_descriptors());
+}
+
+// Fresh for the holder of `c`: the request's nonce is challenge_value(c).
+@primitive(verify, anchor = root, gives = [fresh], time = t, format = SpdmEvidence, kinds = [NvidiaDevice], algorithms = [EcdsaP384Sha384], inputs = [request, response, chain, c, t])
+pub Result(Verified(SpdmEvidence), VerifyError) spdm_verify(List(UInt(8)) request, List(UInt(8)) response, List(List(UInt(8))) chain, ChallengeRecord c, Anchor root, EvidenceTime t) {
+    SpOk k = spdm_check(request, response, chain, root, t)?;
+    Bool spent = sp_bind(k, challenge_value(c), c, response)?;
+    List(Int) none = [];
+    return Ok(vf_make(k.e, root, q_fresh() | sp_rp(c), c, 0, none, none, t, "SpdmEvidence"));
+}
+
+// Fresh and KeyBound(kem, pk): the nonce is
+// challenge_with_key(challenge_value(c), kem, sk) for the sk behind pk.
+@primitive(verify, anchor = root, gives = [fresh, key_bound], time = t, format = SpdmEvidence, kinds = [NvidiaDevice], algorithms = [EcdsaP384Sha384], inputs = [request, response, chain, c, t, kem, pk])
+pub Result(Verified(SpdmEvidence), VerifyError) spdm_verify_key_bound(List(UInt(8)) request, List(UInt(8)) response, List(List(UInt(8))) chain, ChallengeRecord c, Anchor root, EvidenceTime t, Int kem, List(Int) pk) {
+    if (!hpke_kem_ok(kem) || !vf_pk_ok(kem, pk)) { return Err(Refused("spdm_verify_key_bound", "the attester's public key is empty or malformed for the KEM")); }
+    SpOk k = spdm_check(request, response, chain, root, t)?;
+    Bool spent = sp_bind(k, challenge_key_value(challenge_value(c), kem, pk), c, response)?;
+    List(Int) none = [];
+    return Ok(vf_make(k.e, root, q_fresh() | q_key_bound() | sp_rp(c), c, kem, pk, none, t, "SpdmEvidence"));
+}
+
+// Fresh and ChannelBound to the connection whose other end is e.
+@primitive(verify, anchor = root, gives = [fresh, channel_bound], time = t, format = SpdmEvidence, kinds = [NvidiaDevice], algorithms = [EcdsaP384Sha384], inputs = [request, response, chain, c, t, e])
+@requires(declassify)
+pub Result(Verified(SpdmEvidence), VerifyError) spdm_verify_channel_bound(List(UInt(8)) request, List(UInt(8)) response, List(List(UInt(8))) chain, ChallengeRecord c, Anchor root, EvidenceTime t, ChannelExporter e) {
+    List(UInt(8)) want = match (challenge_with_channel(challenge_value(c), e)) { Ok(x) => Ok(x), Err(err) => Err(Refused("spdm_verify_channel_bound", device_error_text(err))) }?;
+    SpOk k = spdm_check(request, response, chain, root, t)?;
+    Bool spent = sp_bind(k, want, c, response)?;
+    List(Int) none = [];
+    return Ok(vf_make(k.e, root, q_fresh() | q_channel_bound() | sp_rp(c), c, 0, none, vf_channel_id(e), t, "SpdmEvidence"));
+}
+
+// Delivered, for a record imported without a SpentStore.
+@primitive(verify, anchor = root, gives = [delivered], time = t, format = SpdmEvidence, kinds = [NvidiaDevice], algorithms = [EcdsaP384Sha384], inputs = [request, response, chain, c, t])
+pub Result(Verified(SpdmEvidence), VerifyError) spdm_verify_replayable(List(UInt(8)) request, List(UInt(8)) response, List(List(UInt(8))) chain, ReplayableRecord c, Anchor root, EvidenceTime t) {
+    SpOk k = spdm_check(request, response, chain, root, t)?;
+    if (!eq_ints(k.req_nonce, chal_ints(replayable_value(c)))) { return Err(NotFresh("the requester nonce is not this challenge")); }
+    List(Int) none = [];
+    return Ok(Verified {.value = k.e, .anchors = [root.id], .quals = q_delivered(), .record = 0 - 1, .kem = 0, .pk = none, .chan = none, .time = t.source, .principal = root.principal, .format = "SpdmEvidence"});
+}
+
+// ─── Appraisal ──────────────────────────────────────────────────────
+// Every measurement block the policy names, by value; at least one.
+@primitive(appraise, from = v, policy = policy, ptype = SpdmPolicy)
+pub Result(Appraised(SpdmEvidence), VerifyError) spdm_appraise(Verified(SpdmEvidence) v, SpdmPolicy policy) {
+    if (policy.measurements_hex.len() == 0) { return Err(Refused("spdm_appraise", "the policy names no measurement")); }
+    Str bad = sp_policy_miss(v.value, policy.measurements_hex, 0);
+    if (bad != "") { return Err(Refused("spdm_appraise", bad)); }
+    return Ok(Appraised {.v = v, .policy = "SpdmPolicy"});
+}
+
+pub List(Int) spdm_measurement(SpdmEvidence e, Int index) { return sp_value_at(e.measurements, index, 0); }
+
+List(Int) sp_value_at(List(SpdmMeasurement) ms, Int index, Int i) {
+    List(Int) none = [];
+    if (i >= ms.len()) { return none; }
+    if (ms[i].index == index) { return ms[i].value; }
+    return sp_value_at(ms, index, i + 1);
+}
+
+Str sp_policy_miss(SpdmEvidence e, List(Str) want, Int i) {
+    if (i >= want.len()) { return ""; }
+    List(Str) kv = str_split(want[i], "=");
+    if (kv.len() != 2 || !str_is_int(kv[0])) { return "the policy entry `" + want[i] + "` is not index=hex"; }
+    List(Int) got = spdm_measurement(e, str_parse_int(kv[0]));
+    if (got.len() == 0 || hex_encode(got) != str_to_lower(kv[1])) { return "measurement " + kv[0] + " is not the policy's"; }
+    return sp_policy_miss(e, want, i + 1);
+}

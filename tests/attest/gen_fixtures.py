@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fixtures for tests/attest (run once; the output is committed).
 
-A test chain shaped like AMD's: an RSA-4096 ARK (RSASSA-PSS SHA-384,
+(Needs python3 with cryptography and cbor2.) A test chain shaped like AMD's: an RSA-4096 ARK (RSASSA-PSS SHA-384,
 self-signed), an ASK it signs, a P-384 VCEK with AMD's extensions (product
 name, SPLs, hardware ID), an empty CRL from the ARK, an unsigned report
 template whose TCB and CHIP_ID match the VCEK, the VCEK's private scalar
@@ -223,6 +223,52 @@ cpak_spki = cpak_k.public_key().public_bytes(serialization.Encoding.DER, seriali
 rak_k = ec.generate_private_key(ec.SECP384R1())
 rak_pub = rak_k.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)
 
+# A test device chain for SPDM (P-384): a root CA and a leaf that signs.
+droot_k = ec.generate_private_key(ec.SECP384R1())
+dleaf_k = ec.generate_private_key(ec.SECP384R1())
+droot = ec_ca(name("Test Device Identity CA"), name("Test Device Identity CA"), droot_k, droot_k, 31)
+dleaf = (x509.CertificateBuilder().subject_name(name("Test GPU FMC LF")).issuer_name(name("Test Device Identity CA"))
+         .public_key(dleaf_k.public_key()).serial_number(32).not_valid_before(NB).not_valid_after(NA)
+         .add_extension(x509.KeyUsage(digital_signature=True, content_commitment=False, key_encipherment=False,
+                                      data_encipherment=False, key_agreement=False, key_cert_sign=False,
+                                      crl_sign=False, encipher_only=False, decipher_only=False), critical=True)
+         .sign(droot_k, hashes.SHA384()))
+
+# CoRIM: veraison's test signer (corim/testcases/src/ec-p256.jwk), and a
+# test endorser signing a CoRIM that endorses the test platforms'
+# measurements.
+import cbor2
+from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature as dds2
+acme_pub = ec.EllipticCurvePublicNumbers(int.from_bytes(b64u("MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4"), "big"),
+                                         int.from_bytes(b64u("4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM"), "big"),
+                                         ec.SECP256R1()).public_key()
+acme_spki = acme_pub.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+end_k = ec.generate_private_key(ec.SECP256R1())
+end_spki = end_k.public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+def corim(triples, not_before, not_after):
+    comid = {1: {0: "resid-test-comid"}, 4: {0: triples}}
+    payload = cbor2.dumps(cbor2.CBORTag(501, {0: "resid-test-corim", 1: [cbor2.CBORTag(506, cbor2.dumps(comid))]}))
+    meta = cbor2.dumps({0: {0: "Resid test endorser"}, 1: {0: cbor2.CBORTag(1, not_before), 1: cbor2.CBORTag(1, not_after)}})
+    prot = cbor2.dumps({1: -7, 3: "application/rim+cbor", 8: meta})
+    r_, s_ = dds2(end_k.sign(cbor2.dumps(["Signature1", prot, b"", payload]), ec.ECDSA(hashes.SHA256())))
+    return cbor2.dumps(cbor2.CBORTag(18, [prot, {}, payload, r_.to_bytes(32, "big") + s_.to_bytes(32, "big")]))
+def env(vendor, model):
+    return {0: {1: vendor, 2: model}}
+def meas(key, digest, alg):
+    m = {1: {2: [[alg, digest]]}}
+    if key is not None:
+        m[0] = key
+    return m
+endorsed = [
+    [env("AMD", "SEV-SNP"), [meas(None, hashlib.sha384(b"resid test image").digest(), 8)]],
+    [env("Intel", "TDX"), [meas(None, hashlib.sha384(b"resid test td").digest(), 8)]],
+    [env("Arm", "CCA realm"), [meas(None, bytes([5] * 32), 1)]],
+    [env("Arm", "CCA platform"), [meas("BL", bytes([7] * 32), 1)]],
+    [env("NVIDIA", "Test GPU"), [meas(1, bytes([5] * 48), 8), meas(2, bytes([7] * 48), 8)]],
+]
+corim_ok = corim(endorsed, 1704067200, 2208988800)
+corim_expired = corim(endorsed, 1577836800, 1609459200)
+
 snd = x25519.X25519PrivateKey.generate()
 snd_pub = snd.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
 snd_sk = snd.private_bytes(serialization.Encoding.Raw, serialization.PrivateFormat.Raw, serialization.NoEncryption())
@@ -258,6 +304,11 @@ w("tdx-root-crl.der", root_crl)
 w("cca-cpak-d.bin", cpak_k.private_numbers().private_value.to_bytes(48, "big"))
 w("cca-rak-d.bin", rak_k.private_numbers().private_value.to_bytes(48, "big"))
 w("cca-rak-pub.bin", rak_pub)
+w("spdm-root.der", droot.public_bytes(serialization.Encoding.DER))
+w("spdm-leaf.der", dleaf.public_bytes(serialization.Encoding.DER))
+w("spdm-leaf-d.bin", dleaf_k.private_numbers().private_value.to_bytes(48, "big"))
+w("corim-endorsed.cbor", corim_ok)
+w("corim-expired.cbor", corim_expired)
 
 def ints(b):
     return "[" + ", ".join(str(x) for x in b) + "]"
@@ -276,6 +327,8 @@ import "tdx.resid";
 import "intel_anchors.resid";
 import "sealing.resid";
 import "cca.resid";
+import "spdm.resid";
+import "corim.resid";
 import "../word.resid";
 import "../instant.resid";
 
@@ -321,6 +374,23 @@ pub Result(CcaToken, VerifyError) test_cca_check(List(UInt(8)) token, Anchor cpa
 pub Str tdx_collateral_status(TdxQuote q, TdxCollateral c, Anchor root, EvidenceTime t) {{
     return match (tdx_collateral_check(q, c, root, t)) {{ Ok(st) => "TCB " + st[0] + ", QE " + st[1], Err(e) => verify_error_text(e) }};
 }}
+
+@anchor(kind = NvidiaDevice(Test), principal = AboveKernel, formats = [SpdmEvidence], source = "tests/attest/gen_fixtures.py", fingerprint = "sha384:{hashlib.sha384(droot.public_bytes(serialization.Encoding.DER)).hexdigest()}", retrieved = "2026-10-11", reviewed_by = "tests", algorithms = [EcdsaP384Sha384], expires = "2039-12-31")
+pub Anchor test_device_root() {{ return anchor_der({ints(droot.public_bytes(serialization.Encoding.DER))}); }}
+
+// An SPDM transcript's chain and signature alone, for real reports.
+pub Result(SpdmEvidence, VerifyError) test_spdm_check(List(UInt(8)) request, List(UInt(8)) response, List(List(UInt(8))) chain, Anchor root, EvidenceTime t) {{
+    return match (spdm_check(request, response, chain, root, t)) {{ Ok(k) => Ok(k.e), Err(e) => Err(e) }};
+}}
+
+@anchor(kind = Endorser(Acme), formats = [CorimRefs], source = "veraison/corim testcases/src/ec-p256.jwk", fingerprint = "sha256:{hashlib.sha256(acme_spki).hexdigest()}", retrieved = "2026-10-11", reviewed_by = "tests", algorithms = [EcdsaP256Sha256], expires = "2039-12-31")
+pub Anchor test_acme_endorser() {{ return anchor_der({ints(acme_spki)}); }}
+
+@anchor(kind = Endorser(Test), formats = [CorimRefs], source = "tests/attest/gen_fixtures.py", fingerprint = "sha256:{hashlib.sha256(end_spki).hexdigest()}", retrieved = "2026-10-11", reviewed_by = "tests", algorithms = [EcdsaP256Sha256], expires = "2039-12-31")
+pub Anchor test_endorser() {{ return anchor_der({ints(end_spki)}); }}
+
+// A CoRIM's signature, validity and reference values alone.
+pub Result(CorimRefs, VerifyError) test_corim_check(List(UInt(8)) corim, Anchor endorser, EvidenceTime t) {{ return corim_check(corim, endorser, t); }}
 
 // The NSM document's chain and signature alone, for real documents whose
 // nonce carries no challenge of ours.

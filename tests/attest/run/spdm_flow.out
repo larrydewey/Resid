@@ -1,0 +1,9 @@
+H100: ok, SPDM 0x11, 64 blocks, 422 opaque bytes
+H100, tampered: bad signature: the device did not sign this transcript
+H100, other nonce: bad signature: the device did not sign this transcript
+H100, test root: bad certificate chain: the device chain does not end at the anchor's certificate
+fresh: appraised, 2 blocks
+again: not fresh: challenge already accepted, or exported
+other measurement: refused (spdm_appraise): measurement 1 is not the policy's
+other challenge: not fresh: the evidence does not carry this challenge
+released and opened: same key

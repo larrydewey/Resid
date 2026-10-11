@@ -1,0 +1,175 @@
+import "verify/core.resid";
+import "verify/snp.resid";
+import "verify/seal.resid";
+import "verify/testing.resid";
+import "challenge.resid";
+import "challenge_bind.resid";
+import "crypto.resid";
+import "ecdsa.resid";
+import "hash.resid";
+import "hpke.resid";
+import "hpkeg.resid";
+import "random.resid";
+import "dev/device.resid";
+import "verify/corim.resid";
+import "verify/endorsed.resid";
+import "verify/cca.resid";
+import "verify/spdm.resid";
+import "cose.resid";
+import "cosesig.resid";
+
+Str fx() { return "fixtures/"; }
+
+@requires(filesystem(readonly))
+List(UInt(8)) rd(Str p) { return chal_bytes(filesystem.read_bytes(fx() + p)); }
+
+@requires(filesystem(readonly))
+SnpCollateral col() { return SnpCollateral {.vcek_der = rd("test-vcek.der"), .ask_der = rd("test-ask.der"), .crl_der = rd("test-crl.der")}; }
+
+// A report carrying `value` in REPORT_DATA, signed with the test VCEK.
+@requires(filesystem(readonly))
+List(UInt(8)) report_for(List(UInt(8)) value) { return report_from(rd("report-template.bin"), value); }
+
+// The template with bytes [at, at + b.len()) replaced.
+@requires(filesystem(readonly))
+List(UInt(8)) patched(Int at, List(UInt(8)) b) {
+    List(UInt(8)) t = rd("report-template.bin");
+    return t[0..at].concat(b).concat(t[at + b.len()..t.len()]);
+}
+
+@requires(filesystem(readonly))
+List(UInt(8)) report_from(List(UInt(8)) t, List(UInt(8)) value) {
+    List(UInt(8)) rdata = value.concat(zeros(64 - value.len()));
+    List(UInt(8)) body = t[0..80].concat(rdata).concat(t[144..672]);
+    List(Int) sig = ecdsa_sign_raw(P384, Sha384, chal_ints(rd("vcek-d.bin")), chal_ints(body));
+    return body.concat(le72(sig[0..48])).concat(le72(sig[48..96])).concat(t[816..1184]);
+}
+
+List(UInt(8)) zeros(Int n) { return if (n <= 0) { [] } else { [(UInt(8)) 0].concat(zeros(n - 1)) }; }
+List(UInt(8)) le72(List(Int) be) { return le_at(be, 47, ListBuf()).concat(zeros(24)); }
+List(UInt(8)) le_at(List(Int) be, Int i, ListBuf(UInt(8)) acc) { return if (i < 0) { acc.finish() } else { le_at(be, i - 1, acc.push((UInt(8)) be[i])) }; }
+
+
+
+@requires(filesystem(readonly))
+List(Int) rdi(Str p) { return filesystem.read_bytes("fixtures/" + p); }
+
+List(Int) fill(Int v, Int n) { return if (n <= 0) { [] } else { [v].concat(fill(v, n - 1)) }; }
+List(Int) le(Int v, Int n) { return if (n <= 0) { [] } else { [v & 255].concat(le(v >> 8, n - 1)) }; }
+
+// A token for this realm challenge; `lifecycle` and `binder` to forge.
+@requires(filesystem(readonly))
+List(UInt(8)) token(List(Int) challenge, Int lifecycle, Bool binder_ok) {
+    List(Int) rak = rdi("cca-rak-pub.bin");
+    List(Int) r0 = cbe_map(7, []);
+    List(Int) r1 = cbe_bytes(challenge, cbe_uint(10, r0));
+    List(Int) r2 = cbe_bytes(fill(0, 64), cbe_uint(44235, r1));
+    List(Int) r3 = cbe_text("sha-256", cbe_uint(44236, r2));
+    List(Int) r4 = cbe_bytes(rak, cbe_uint(44237, r3));
+    List(Int) r5 = cbe_bytes(fill(5, 32), cbe_uint(44238, r4));
+    List(Int) r6 = cbe_bytes(fill(0, 32), cbe_bytes(fill(0, 32), cbe_bytes(fill(0, 32), cbe_bytes(fill(6, 32), cbe_array(4, cbe_uint(44239, r5))))));
+    List(Int) realm = cbe_text("sha-256", cbe_uint(44240, r6));
+    List(Int) binder = if (binder_ok) { sha256_bytes(rak) } else { fill(9, 32) };
+    List(Int) p0 = cbe_map(8, []);
+    List(Int) p1 = cbe_text("http://arm.com/CCA-SSD/1.0.0", cbe_uint(265, p0));
+    List(Int) p2 = cbe_bytes(binder, cbe_uint(10, p1));
+    List(Int) p3 = cbe_bytes(fill(3, 32), cbe_uint(2396, p2));
+    List(Int) p4 = cbe_bytes([1].concat(fill(4, 32)), cbe_uint(256, p3));
+    List(Int) p5 = cbe_uint(lifecycle, cbe_uint(2395, p4));
+    List(Int) p6 = cbe_text("sha-256", cbe_uint(2402, p5));
+    List(Int) s0 = cbe_map(4, cbe_array(1, cbe_uint(2399, p6)));
+    List(Int) s1 = cbe_text("BL", cbe_uint(1, s0));
+    List(Int) s2 = cbe_bytes(fill(7, 32), cbe_uint(2, s1));
+    List(Int) s3 = cbe_text("1.0", cbe_uint(4, s2));
+    List(Int) sw = cbe_bytes(fill(8, 32), cbe_uint(5, s3));
+    List(Int) plat = cbe_text("https://veraison.example/verification", cbe_uint(2400, sw));
+    List(Int) rcose = cose_sign1_ecdsa(P384, rdi("cca-rak-d.bin"), realm, []);
+    List(Int) pcose = cose_sign1_ecdsa(P384, rdi("cca-cpak-d.bin"), plat, []);
+    return chal_bytes(cbe_bytes(rcose, cbe_uint(44241, cbe_bytes(pcose, cbe_uint(44234, cbe_map(2, cbe_tag(399, [])))))));
+}
+
+// A GET_MEASUREMENTS request for this nonce.
+List(Int) request(List(Int) nonce) { return [17, 224, 1, 255].concat(nonce).concat([0]); }
+
+// Two measurement blocks (indices 1 and 2, 48-byte digests), signed by the
+// test device over request ‖ response.
+@requires(filesystem(readonly))
+List(Int) response(List(Int) req, Int m1) {
+    List(Int) b1 = [1, 1].concat(le(51, 2)).concat([1]).concat(le(48, 2)).concat(fill(m1, 48));
+    List(Int) b2 = [2, 1].concat(le(51, 2)).concat([1]).concat(le(48, 2)).concat(fill(7, 48));
+    List(Int) rec = b1.concat(b2);
+    List(Int) body = [17, 96, 0, 0, 2].concat(le(rec.len(), 3)).concat(rec).concat(fill(3, 32)).concat(le(4, 2)).concat([1, 2, 3, 4]);
+    return body.concat(ecdsa_sign_raw(P384, Sha384, rdi("spdm-leaf-d.bin"), req.concat(body)));
+}
+
+
+@policy
+SnpPolicy endorsed_snp() {
+    return SnpPolicy {.min_tcb = TcbVersion {.fmc = 0, .bootloader = 3, .tee = 0, .snp = 8, .microcode = 115},
+                      .measurements_hex = [], .vmpl = 0, .allow_migration_agent = false, .id_key_digests_hex = [], .host_data_hex = []};
+}
+
+@policy
+CcaPolicy endorsed_realm() { return CcaPolicy {.rim_hex = [], .rems_hex = [], .implementation_ids_hex = []}; }
+
+@policy
+SpdmPolicy endorsed_gpu() { return SpdmPolicy {.measurements_hex = []}; }
+
+// The guest's image is the endorser's word, not a hash compiled in: the
+// decision names both anchors.
+@decides(accept = [test_ark, test_endorser], require = [test_endorser], appraised = endorsed_snp, identity = key_bound)
+@requires(declassify)
+Result(HpkeMessage, VerifyError) release(List(UInt(8)) report, ChallengeRecord issued, SnpCollateral cl, List(Int) guest_pk, List(UInt(8)) corim, List(Secret(UInt(8))) key, List(Secret(UInt(8))) sender) {
+    Verified(CorimRefs) refs = corim_verify(corim, test_endorser(), test_time(1791000000))?;
+    Verified(SnpReport) v = snp_verify_key_bound(report, issued, test_ark(), cl, test_time(1791000000), 32, guest_pk)?;
+    Appraised(SnpReport) a = snp_appraise_endorsed(v, endorsed_snp(), refs)?;
+    return seal_to_evidence(a, 32, guest_pk, key, sender);
+}
+
+@requires(filesystem(readonly))
+Str corim_at(Str what, Str f, Anchor a, Int at) {
+    return what + ": " + match (test_corim_check(rd(f), a, test_time(at))) { Ok(v) => f"ok, id " + v.id + f", {v.refs.len()} reference values, signer " + v.signer, Err(e) => verify_error_text(e) };
+}
+
+@requires(declassify)
+List(Int) sec_pub(List(Secret(UInt(8))) k, Int i, ListBuf(Int) acc) { return if (i >= k.len()) { acc.finish() } else { sec_pub(k, i + 1, acc.push((Int) declassify(k[i], "test output"))) }; }
+
+@requires(filesystem(readonly))
+Str with_refs(Verified(CorimRefs) refs) {
+    ChallengeRecord c1 = challenge_issue(64);
+    println("SNP endorsed: " + match (snp_verify(report_for(challenge_value(c1)), c1, test_ark(), col(), test_time(1791000000))) { Ok(v) => match (snp_appraise_endorsed(v, endorsed_snp(), refs)) { Ok(a) => f"appraised, {a.v.anchors.len()} anchors", Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) });
+    ChallengeRecord c2 = challenge_issue(64);
+    println("SNP other image: " + match (snp_verify(report_from(patched(144, [(UInt(8)) 1]), challenge_value(c2)), c2, test_ark(), col(), test_time(1791000000))) { Ok(v) => match (snp_appraise_endorsed(v, endorsed_snp(), refs)) { Ok(a) => "APPRAISED", Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) });
+    ChallengeRecord c3 = challenge_issue(64);
+    println("CCA endorsed: " + match (cca_verify(token(chal_ints(challenge_value(c3)), 12291, true), c3, test_cpak(), test_time(1791000000))) { Ok(v) => match (cca_appraise_endorsed(v, endorsed_realm(), refs)) { Ok(a) => "appraised", Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) });
+    ChallengeRecord c4 = challenge_issue(32);
+    List(Int) r4 = request(chal_ints(challenge_value(c4)));
+    List(List(UInt(8))) chain = [rd("spdm-leaf.der"), rd("spdm-root.der")];
+    println("SPDM endorsed: " + match (spdm_verify(chal_bytes(r4), chal_bytes(response(r4, 5)), chain, c4, test_device_root(), test_time(1791000000))) { Ok(v) => match (spdm_appraise_endorsed(v, endorsed_gpu(), refs)) { Ok(a) => "appraised", Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) });
+    ChallengeRecord c5 = challenge_issue(32);
+    List(Int) r5 = request(chal_ints(challenge_value(c5)));
+    println("SPDM unendorsed block: " + match (spdm_verify(chal_bytes(r5), chal_bytes(response(r5, 6)), chain, c5, test_device_root(), test_time(1791000000))) { Ok(v) => match (spdm_appraise_endorsed(v, endorsed_gpu(), refs)) { Ok(a) => "APPRAISED", Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) });
+    return "";
+}
+
+@requires(filesystem(readonly), declassify)
+Int main() {
+    println(corim_at("veraison signed CoRIM", "veraison-signed-good-corim.cbor", test_acme_endorser(), 1720000000));
+    println(corim_at("veraison, after not-after", "veraison-signed-good-corim.cbor", test_acme_endorser(), 1791000000));
+    println(corim_at("veraison, other endorser", "veraison-signed-good-corim.cbor", test_endorser(), 1720000000));
+    List(UInt(8)) vb = rd("veraison-signed-good-corim.cbor");
+    println("veraison, tampered: " + match (test_corim_check(vb[0..200].concat([vb[200] ^ (UInt(8)) 1]).concat(vb[201..vb.len()]), test_acme_endorser(), test_time(1720000000))) { Ok(v) => "ACCEPTED", Err(e) => verify_error_text(e) });
+    println(corim_at("test CoRIM", "corim-endorsed.cbor", test_endorser(), 1791000000));
+    println(corim_at("test CoRIM, expired", "corim-expired.cbor", test_endorser(), 1791000000));
+    Str done = match (corim_verify(rd("corim-endorsed.cbor"), test_endorser(), test_time(1791000000))) { Ok(refs) => with_refs(refs), Err(e) => verify_error_text(e) };
+    HpkeKeyPairG(Secret(UInt(8))) kp = hpkeg_generate_keypair(32);
+    ChallengeRecord c6 = challenge_issue(64);
+    List(UInt(8)) bound = match (challenge_with_key(challenge_value(c6), 32, kp.sk)) { Ok(b) => b, Err(e) => [] };
+    List(Secret(UInt(8))) key = random_secret(32);
+    Str r = match (release(report_for(bound), c6, col(), kp.pk, rd("corim-endorsed.cbor"), key, secret_bytes(chal_ints(rd("sender-sk.bin"))))) {
+        Ok(m) => match (open_released(32, kp.sk, m, test_sender())) { Ok(v) => if (hex_encode(sec_pub(v.value, 0, ListBuf())) == hex_encode(sec_pub(key, 0, ListBuf()))) { "released and opened: same key" } else { "KEY DIFFERS" }, Err(e) => "open: " + verify_error_text(e) },
+        Err(e) => "release: " + verify_error_text(e),
+    };
+    println(r);
+    return 0;
+}

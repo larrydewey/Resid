@@ -52,3 +52,4 @@ lib/verify/sealing.resid first_seal builds an empty secret list from public fact
 lib/verify/seal.resid seal_to_evidence needs Appraised evidence (tests/attest key_broker); its secret work is hpkeg_setup_sender_full and hpkeg_seal (hpke-seal-secret) and seal_publish
 lib/verify/seal.resid seal_publish publishes HPKE ciphertext (declassify per byte, no branch)
 lib/verify/seal.resid open_released needs a release (tests/attest key_broker); its secret work is hpkeg_setup_receiver_full and hpkeg_open (hpke-open-secret), whose verdict is public
+lib/verify/spdm.resid spdm_verify_channel_bound needs a live connection's ChannelExporter; as snp_verify_channel_bound

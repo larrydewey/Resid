@@ -4,8 +4,8 @@ description: Verified evidence, anchors, appraisal and decisions that say whose 
 ---
 
 A program that acts on remote attestation evidence (an AMD SEV-SNP report,
-an Intel TDX quote, an AWS Nitro document, an Arm CCA token or a TPM
-quote) checks it with the standard library's verifiers in `lib/verify/`,
+an Intel TDX quote, an AWS Nitro document, an Arm CCA token, a TPM quote
+or a GPU's SPDM measurements) checks it with the standard library's verifiers in `lib/verify/`,
 and marks the function that releases something with `@decides`. The
 compiler then checks that the release cannot happen without fresh,
 verified, appraised evidence from the anchors the decision names. The
@@ -137,6 +137,36 @@ with the challenge in the realm token: `cca_verify` and its key-bound,
 channel-bound and replayable forms. `cca_appraise(v, policy)` requires a
 secured platform lifecycle and checks the realm initial measurement, REMs
 and platform implementation a `CcaPolicy` names.
+
+## Devices over SPDM
+
+`lib/verify/spdm.resid` verifies an SPDM 1.1 GET_MEASUREMENTS exchange
+(what NVIDIA's Hopper GPUs answer) under NVIDIA's Device Identity CA
+(`nvidia_device_root()`, `lib/verify/nvidia_anchors.resid`): the device
+chain from the leaf to the root, the leaf's P-384 signature over the
+request and response, and the challenge as the request's 32-byte nonce:
+`spdm_verify(request, response, chain, c, root, t)` and its key-bound,
+channel-bound and replayable forms. `spdm_appraise(v, policy)` checks the
+measurement blocks an `SpdmPolicy` names.
+
+## Endorsed reference values
+
+A reference value need not be a hash compiled into a policy: a signed
+CoRIM (`lib/verify/corim.resid`) carries an endorser's reference values,
+and `corim_verify(corim, endorser, t)` checks it under an anchor of kind
+`Endorser`. The endorsed appraisals in `lib/verify/endorsed.resid`
+(`snp_appraise_endorsed`, `tdx_appraise_endorsed`,
+`cca_appraise_endorsed`, `spdm_appraise_endorsed`) accept what it
+endorses beside the policy's own values, and their result rests on the
+endorser as well, so the decision names it:
+
+```text
+@decides(accept = [amd_ark_genoa, image_endorser], require = [image_endorser],
+         appraised = release_policy, identity = key_bound)
+...
+    Verified(CorimRefs) refs = corim_verify(corim, image_endorser(), kernel_time())?;
+    Appraised(SnpReport) a = snp_appraise_endorsed(v, release_policy(), refs)?;
+```
 
 ## Sealing to this measurement
 

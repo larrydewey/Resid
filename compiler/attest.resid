@@ -128,7 +128,7 @@ Str at_unquote(Str v) {
 // Kinds of anchor, and whether a kind names hardware (its principal is
 // then required).
 Bool at_kind_ok(Str k) {
-    return k == "AmdVcek" || k == "AmdVlek" || k == "IntelPck" || k == "NvidiaDevice" || k == "Nitro" || k == "TpmEk" || k == "TpmAk" || k == "EndorsedKeys" || k == "ReleaseSender" || k == "RelyingParty" || k == "CertificateAuthority";
+    return k == "AmdVcek" || k == "AmdVlek" || k == "IntelPck" || k == "NvidiaDevice" || k == "Nitro" || k == "TpmEk" || k == "TpmAk" || k == "EndorsedKeys" || k == "Endorser" || k == "ReleaseSender" || k == "RelyingParty" || k == "CertificateAuthority";
 }
 
 Bool at_kind_hw(Str k) { return k == "AmdVcek" || k == "AmdVlek" || k == "IntelPck" || k == "NvidiaDevice" || k == "Nitro" || k == "TpmEk" || k == "TpmAk"; }
@@ -430,7 +430,12 @@ AtF at_facts_call(AtC c, Int id, Map(Int, AtF) env) {
     if (at_has(p, "appraise")) {
         AtF from = at_facts(c, at_arg(c, id, f, at_get(p, "from")), env);
         Int pol = at_policy_of(c, at_arg(c, id, f, at_get(p, "policy")));
-        return AtF {.anchors = if (from.kind == "") { [-1] } else { from.anchors }, .quals = from.quals, .policy = pol, .time = from.time, .kind = "appraise", .at = id};
+        // `with`: endorsed reference values; the result rests on their
+        // endorser too.
+        AtF also = if (at_has(p, "with")) { at_facts(c, at_arg(c, id, f, at_get(p, "with")), env) } else { from };
+        Bool known = from.kind != "" && also.kind != "";
+        List(Int) anchors = if (!known) { [-1] } else if (at_has(p, "with")) { from.anchors.concat(also.anchors) } else { from.anchors };
+        return AtF {.anchors = anchors, .quals = from.quals, .policy = pol, .time = from.time, .kind = "appraise", .at = id};
     }
     return at_nof();
 }
