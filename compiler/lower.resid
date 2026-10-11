@@ -2827,6 +2827,16 @@ GT lw_raw(LW w, Int id, Str n, List(Str) env, GT c) {
         List(Str) cl = [r + "a = trunc i64 " + v[0] + " to i32", r + "b = trunc i64 " + v[1] + " to i32", r + "s = call { i32, i32, i32, i32 } asm \"cpuid\", \"={ax},={bx},={cx},={dx},{ax},{cx}\"(i32 " + r + "a, i32 " + r + "b)", r + "c = extractvalue { i32, i32, i32, i32 } " + r + "s, 2", r + "d = extractvalue { i32, i32, i32, i32 } " + r + "s, 3", r + "h = zext i32 " + r + "c to i64", r + "l = zext i32 " + r + "d to i64", r + "k = shl i64 " + r + "h, 32", r + " = or i64 " + r + "k, " + r + "l"];
         return lw_step(g, r, "Int", g.lines.concat(cl), t);
     }
+    // rdseed(addr): one 64-bit hardware seed (RDSEED; RNDR on AArch64)
+    // stored at addr; 1 when the instruction reported success, else 0.
+    if (op == "rdseed" && tgt_a64()) {
+        List(Str) al = [r + "s = call { i64, i64 } asm sideeffect \"mrs $0, s3_3_c2_c4_0\\0Acset $1, ne\", \"=r,=r,~{cc}\"()", r + "v = extractvalue { i64, i64 } " + r + "s, 0", r + " = extractvalue { i64, i64 } " + r + "s, 1", p + " = inttoptr i64 " + v[0] + " to ptr", "store i64 " + r + "v, ptr " + p];
+        return lw_step(g, r, "Int", g.lines.concat(al), t);
+    }
+    if (op == "rdseed") {
+        List(Str) xl = [r + "s = call { i64, i8 } asm sideeffect \"rdseed $0\\0Asetc $1\", \"=r,=r,~{dirflag},~{fpsr},~{flags}\"()", r + "v = extractvalue { i64, i8 } " + r + "s, 0", r + "c = extractvalue { i64, i8 } " + r + "s, 1", r + " = zext i8 " + r + "c to i64", p + " = inttoptr i64 " + v[0] + " to ptr", "store i64 " + r + "v, ptr " + p];
+        return lw_step(g, r, "Int", g.lines.concat(xl), t);
+    }
     if (op == "str") { return lw_step(g, r, "Str", g.lines.concat([r + " = inttoptr i64 " + v[0] + " to ptr"]), t); }
     if (op == "f128_bits") { return lw_step(g, r, "Int(128)", g.lines.concat([r + " = bitcast fp128 " + v[0] + " to i128"]), t); }
     if (op == "bits_f128") { return lw_step(g, r, "Float(128)", g.lines.concat([r + " = bitcast i128 " + v[0] + " to fp128"]), t); }
@@ -4278,20 +4288,22 @@ GT lw_fixed_with(LW w, Int id, GT base, List(Str) env) {
 // for themselves. The string is `@.declassify.cap`, in the header of
 // every program that handles secrets.
 List(Str) lw_declassify_check(Kg g, Int body) {
-    return if (lw_declassifies(g, body)) { ["call void @resid_cap_check(ptr @.declassify.cap)"] } else { nil_list() };
+    List(Str) d = if (lw_declassifies(g, body, "@declassify")) { ["call void @resid_cap_check(ptr @.declassify.cap)"] } else { nil_list() };
+    return if (lw_declassifies(g, body, "@provision")) { d.concat(["call void @resid_cap_check(ptr @.provision.cap)"]) } else { d };
 }
 
-Bool lw_declassifies(Kg g, Int id) {
+// Does the body hold a marked wrapper (`@declassify`, `@provision`)?
+Bool lw_declassifies(Kg g, Int id, Str tag) {
     KN n = g.ns[id];
-    if (n.kind == "paren" && n.aux == "@declassify") { return true; }
+    if (n.kind == "paren" && n.aux == tag) { return true; }
     if (n.kind == "lambda" || n.kind == "spawn") { return false; }
-    return lw_declassifies_kids(g, id, 0, n.nk);
+    return lw_declassifies_kids(g, id, 0, n.nk, tag);
 }
 
-Bool lw_declassifies_kids(Kg g, Int id, Int i, Int n) {
+Bool lw_declassifies_kids(Kg g, Int id, Int i, Int n, Str tag) {
     if (i >= n) { return false; }
-    if (lw_declassifies(g, kg_kid(g, id, i))) { return true; }
-    return lw_declassifies_kids(g, id, i + 1, n);
+    if (lw_declassifies(g, kg_kid(g, id, i), tag)) { return true; }
+    return lw_declassifies_kids(g, id, i + 1, n, tag);
 }
 
 // cg_lambda: the closure function goes to glines, its environment array

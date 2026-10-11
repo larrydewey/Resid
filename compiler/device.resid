@@ -214,7 +214,7 @@ Str dv_lit_type(Kg g, Int a) {
     return if (st < 0) { "" } else { g.ns[st].text };
 }
 
-Bool dv_diag_at(Str code, Str msg, Kg g, Int at, Str src, Str smap) {
+pub Bool dv_diag_at(Str code, Str msg, Kg g, Int at, Str src, Str smap) {
     diag_error(code, msg, if (at >= 0) { g.ns[at].ep } else { 0 }, 3, src, gm_smap(smap), 0);
     return true;
 }
@@ -827,7 +827,7 @@ Int dv_line_of(List(Int) nls, Int pos, Int lo, Int hi) {
     return if (nls[mid] < pos) { dv_line_of(nls, pos, mid + 1, hi) } else { dv_line_of(nls, pos, lo, mid) };
 }
 
-List(Int) dv_newlines(Str src, Int from, ListBuf(Int) acc) {
+pub List(Int) dv_newlines(Str src, Int from, ListBuf(Int) acc) {
     Int nl = str_find_char(src, 10, from);
     if (nl < 0) { return acc.finish(); }
     return dv_newlines(src, nl + 1, acc.push(nl));

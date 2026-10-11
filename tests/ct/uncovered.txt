@@ -24,3 +24,9 @@ lib/dev/device_write.resid device_engine_configfs_report_w device I/O: the writi
 lib/dev/device_write.resid device_engine_sequence_w device I/O: the writing engine; as device_engine_sequence
 lib/dev/sev_guest_key.resid snp_get_derived_key device I/O: the SNP_GET_DERIVED_KEY ioctl; its response's secret handling is sg_key_body, which dev-sg-key-body runs
 lib/dev/tpm.resid tpm_nv_read_secret device I/O: NV_Read on /dev/tpmrm0; its logic is tpm_nv_read_secret_via, which dev-tpm-nv-read-secret runs
+lib/tls.resid channel_exporter_ok a length test: the exporter's length is public
+lib/tlswire.resid tlsserver_exporter a constructor over a live connection's keys; their derivation (tls_keys_exporter) runs in tls-server-secret
+lib/tlsclient.resid tlsclient_exporter a constructor over a live connection's keys; their derivation (tls_keys_exporter) runs in tls-server-secret
+lib/challenge_bind.resid challenge_with_channel needs a ChannelExporter, which only a live handshake gives; its secret work is sha512g (sha512-secret) over the exporter, and tests/tls exercises it end to end
+lib/challenge_bind.resid chal_publish_as the declassifying loop of challenge_with_channel: one declassify per byte, no branch on a secret
+lib/challenge_export.resid challenge_import generic over SpentStore(S): the coverage reads the generic; its MemSpentStore copy runs in challenge-tokens

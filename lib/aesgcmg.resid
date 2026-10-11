@@ -487,6 +487,8 @@ List(B) ag_tag_bytes(X s, X e, Int i, ListBuf(B) acc) {
 // the CPU). At secret types the output is secret; the caller declassifies
 // it to send it.
 @needs(Word(W, B), Block128(X, W, B))
+@key(key)
+@nonce(iv)
 pub List(B) aes_gcmg_seal_with(Bool hw, Bool clmul, List(B) key, List(Int) iv, List(B) plaintext, List(Int) aad) {
     List(W) rk = aesg_key_expand(key);
     List(B) none = [];
@@ -505,6 +507,8 @@ List(B) ag_seal_g(GcmG(X, W) g, List(B) plaintext, List(Int) aad) {
 }
 
 @needs(Word(W, B), Block128(X, W, B))
+@key(key)
+@nonce(iv)
 pub List(B) aes_gcmg_seal(List(B) key, List(Int) iv, List(B) plaintext, List(Int) aad) {
     return aes_gcmg_seal_with(resid_cpu_has_aesni(), resid_cpu_has_clmul(), key, iv, plaintext, aad);
 }
@@ -563,6 +567,8 @@ GcmG(X, W) ag_gcm_ivb(AesKeyG(X, W) k, Bool clmul, List(B) iv) {
 // bad key or an IV that is not 12 bytes. hw and clmul as in
 // aes_gcmg_seal_with.
 @needs(Word(W, B), Block128(X, W, B))
+@key(key)
+@nonce(iv)
 pub List(B) aes_gcmg_seal_ivb_with(Bool hw, Bool clmul, List(B) key, List(B) iv, List(B) plaintext, List(Int) aad) {
     List(W) rk = aesg_key_expand(key);
     List(B) none = [];
@@ -571,6 +577,8 @@ pub List(B) aes_gcmg_seal_ivb_with(Bool hw, Bool clmul, List(B) key, List(B) iv,
 }
 
 @needs(Word(W, B), Block128(X, W, B))
+@key(key)
+@nonce(iv)
 pub List(B) aes_gcmg_seal_ivb(List(B) key, List(B) iv, List(B) plaintext, List(Int) aad) {
     return aes_gcmg_seal_ivb_with(resid_cpu_has_aesni(), resid_cpu_has_clmul(), key, iv, plaintext, aad);
 }
@@ -664,6 +672,7 @@ pub List(B) aes_key_wrapg_with(Bool hw, List(B) kek, List(B) plain) {
 }
 
 @needs(Word(W, B), Block128(X, W, B))
+@key(kek)
 pub List(B) aes_key_wrapg(List(B) kek, List(B) plain) { return aes_key_wrapg_with(resid_cpu_has_aesni(), kek, plain); }
 
 @needs(Word(W, B), Block128(X, W, B))

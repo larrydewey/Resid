@@ -655,7 +655,7 @@ pub Str gm_pkg(Str path, List(Str) pk, Int i) {
 }
 
 // Package of node `n` ("prelude" past the prelude marker).
-Str gm_pkg_of(Kg g, Int n, List(Int) nls, Str smap, Int prel, List(Str) pk) {
+pub Str gm_pkg_of(Kg g, Int n, List(Int) nls, Str smap, Int prel, List(Str) pk) {
     if (g.ns[n].sp >= prel) { return "prelude"; }
     return gm_pkg(diag_where(smap, gk_line_of(nls, g.ns[n].sp, 0, nls.len()) + 1).path, pk, 0);
 }
@@ -1522,6 +1522,7 @@ GKT gk_call(GK k, Int id, Str exp) {
     // receiver form `x.verb()` is the verb (spec §11).
     if (ck_fn_index(k.fs, n) < 0 && k.gx.verbs.contains(n)) { return gk_vcall(k, id, n, exp); }
     if ((n == "secret" || n == "declassify" || n == "classify") && ck_fn_index(k.fs, n) < 0) { return sec_call(k, id, n, exp); }
+    if (n == "provisioned_key" && ck_fn_index(k.fs, n) < 0) { return sec_provision(k, id, exp); }
     if ((n == "secret_split" || n == "secret_join") && ck_fn_index(k.fs, n) < 0) { return sec_shape(k, id, n, exp); }
     if (n == "ct_select" && ck_fn_index(k.fs, n) < 0) { return sec_select(k, id, exp); }
     if (sec_liftable(n) && ck_fn_index(k.fs, n) < 0 && (argn == 2 || argn == 1)) {
@@ -3940,6 +3941,7 @@ Str gk_requires_err(Str prefix) {
     if (nm != "") { return "`" + nm + "` has no modes: a native module is reached in full or not at all (spec §47)"; }
     if (gk_display_moded(str_split(r.ty, ","), 0)) { return "`display` has no modes: a program reaches the window server in full or not at all (spec §20)"; }
     if (sec_declassify_moded(str_split(r.ty, ","), 0)) { return "`declassify` has no modes: publishing a secret is granted in full or not at all"; }
+    if (sec_provision_moded(str_split(r.ty, ","), 0)) { return "`provision` has no modes: relying on a provisioned key is granted in full or not at all"; }
     return gk_unknown_family(caps_families(str_split(r.ty, ","), 0, ListBuf()), 0);
 }
 
@@ -4067,8 +4069,8 @@ Str gk_unknown_family(List(Str) fs, Int i) {
     if (i >= fs.len()) { return ""; }
     Str f = fs[i];
     Bool native = str_starts_with(f, "native_") && gk_module_name_ok(str_slice(f, 7, str_len(f)), 0);
-    Bool ok = f == "" || f == "filesystem" || f == "environment" || f == "args" || f == "process" || f == "network" || f == "terminal" || f == "clock" || f == "device" || f == "display" || f == "declassify" || native;
-    if (!ok) { return "unknown capability family `" + f + "` (filesystem, environment, args, process, network, terminal, clock, device, display, declassify, native_<module>)"; }
+    Bool ok = f == "" || f == "filesystem" || f == "environment" || f == "args" || f == "process" || f == "network" || f == "terminal" || f == "clock" || f == "device" || f == "display" || f == "declassify" || f == "provision" || native;
+    if (!ok) { return "unknown capability family `" + f + "` (filesystem, environment, args, process, network, terminal, clock, device, display, declassify, provision, native_<module>)"; }
     return gk_unknown_family(fs, i + 1);
 }
 
@@ -4217,6 +4219,7 @@ Str gk_prov_family(GK k, Int id) {
 // Capability family of an effectful runtime builtin, or "".
 Str gk_builtin_family(Str n) {
     if (n == "declassify") { return "declassify"; }
+    if (n == "provisioned_key") { return "provision"; }
     if (str_starts_with(n, "resid_disp_")) { return "display"; }
     if (str_starts_with(n, "resid_tcp_")) { return "network"; }
     if (str_starts_with(n, "resid_dbg_")) { return "process"; }
@@ -4266,7 +4269,7 @@ List(Int) gk_newlines(Str src, Int from, ListBuf(Int) acc) {
 }
 
 // How many of nls[lo..hi] lie before pos.
-Int gk_line_of(List(Int) nls, Int pos, Int lo, Int hi) {
+pub Int gk_line_of(List(Int) nls, Int pos, Int lo, Int hi) {
     if (lo >= hi) { return lo; }
     Int mid = (lo + hi) / 2;
     return if (nls[mid] < pos) { gk_line_of(nls, pos, mid + 1, hi) } else { gk_line_of(nls, pos, lo, mid) };
@@ -4775,7 +4778,8 @@ Int gk_finish(GK k0, List(Int) fnode, Str src, Str smap, Str smap0) {
     Bool err6 = gk_internals_at(k, 0, gk_newlines(src, 0, ListBuf()), smap, gm_prelude_pos(src), false);
     Bool err7 = sec_wide_scan(k, k.tl.keys, k.tl.tys, 0, src, smap);
     Bool err8 = dv_scan(k, 0, gk_newlines(src, 0, ListBuf()), src, smap, dv_std_dir(gm_pk(smap0), 0), false);
-    if (err1 || err2 || err3 || err4 || err5 || err6 || err7 || err8) { return 1; }
+    Bool err9 = op_scan(k, 0, gk_newlines(src, 0, ListBuf()), src, smap, op_std_root(gm_pk(smap0), 0), false);
+    if (err1 || err2 || err3 || err4 || err5 || err6 || err7 || err8 || err9) { return 1; }
     if (!resid_quiet()) { println("typecheck OK"); }
     return 0;
 }
@@ -5078,6 +5082,12 @@ Str sec_strip_args(List(Str) ts, Int i, Str acc) {
     return sec_strip_args(ts, i + 1, if (i == 0) { a } else { acc + "," + a });
 }
 
+Bool sec_provision_moded(List(Str) cs, Int i) {
+    if (i >= cs.len()) { return false; }
+    Bool m = str_starts_with(cs[i], "provision:") || str_starts_with(cs[i], "provision(");
+    return if (m) { true } else { sec_provision_moded(cs, i + 1) };
+}
+
 Bool sec_declassify_moded(List(Str) cs, Int i) {
     if (i >= cs.len()) { return false; }
     Str c = cs[i];
@@ -5127,6 +5137,23 @@ GKT sec_call(GK k, Int id, Str n, Str exp) {
     GKT rt = gk_expr(st.k, rn, "Str");
     if (rt.err != "") { return rt; }
     return gt(rt.k, sec_inner(st.ty), id);
+}
+
+// provisioned_key(k, "reason") (PLAN-labels.md §5.2): k, accepted as an
+// unpredictable key on the word of whoever provisioned it -- a stated
+// reliance, granted by the `provision` family and recorded on the graph as
+// `provision.<reason>`. The reason is a non-empty string literal (E0251).
+GKT sec_provision(GK k, Int id, Str exp) {
+    if (k.g.ns[id].nk != 2) { return gterr(k, "provisioned_key(k, \"reason\") takes 2 arguments", id); }
+    Int rn = gk_kid(k, id, 1);
+    Bool lit = k.g.ns[rn].kind == "lit" && str_starts_with(k.g.ns[rn].text, "\"") && str_len(k.g.ns[rn].text) > 2;
+    if (!lit) { return gterr(k, "E0251: provisioned_key takes its reason as a non-empty string literal, so the graph records whose word a key rests on", rn); }
+    GKT kt = gk_expr(k, gk_kid(k, id, 0), "List(Secret(UInt(8)))");
+    if (kt.err != "") { return kt; }
+    if (kt.ty != "List(Secret(UInt(8)))") { return gterr(kt.k, "provisioned_key expects a List(Secret(UInt(8))), got " + kt.ty, id); }
+    GKT rt = gk_expr(kt.k, rn, "Str");
+    if (rt.err != "") { return rt; }
+    return gt(rt.k, "List(Secret(UInt(8)))", id);
 }
 
 // A builtin that computes on the payload of a secret keeps it secret.
@@ -5239,7 +5266,8 @@ List(KN) sec_erase_ns(Kg g, Int i, Map(Str, Int) user, ListBuf(KN) acc) {
     Bool lit = n.kind == "lit" || n.kind == "fpart" || n.kind == "fspec";
     Bool wrap = (n.kind == "call" || n.kind == "mcall") && sec_is_wrapper(n.text) && !user.contains(n.text) && n.nk >= 1;
     Bool mark = wrap && n.text == "declassify" && !sec_known_under(g, kg_kid(g, i, 0));
-    KN m = if (wrap) { KN {.kind = "paren", .text = "", .aux = if (mark) { "@declassify" } else { "" }, .a0 = n.a0, .nk = 1, .sp = n.sp, .ep = n.ep, .kc = kg_kc("paren")} }
+    Bool pmark = wrap && n.text == "provisioned_key";
+    KN m = if (wrap) { KN {.kind = "paren", .text = "", .aux = if (mark) { "@declassify" } else if (pmark) { "@provision" } else { "" }, .a0 = n.a0, .nk = 1, .sp = n.sp, .ep = n.ep, .kc = kg_kc("paren")} }
            else if (lit) { n }
            else { KN {.kind = n.kind, .text = sec_erase_text(n.text), .aux = sec_erase_text(n.aux), .a0 = n.a0, .nk = n.nk, .sp = n.sp, .ep = n.ep, .kc = n.kc} };
     return sec_erase_ns(g, i + 1, user, acc.push(m));
@@ -5422,7 +5450,7 @@ Int sec_find_head(Str t, Str h, Int from) {
 }
 
 // The builtins that erase to their first argument (spec §48).
-Bool sec_is_wrapper(Str n) { return n == "secret" || n == "declassify" || n == "secret_split" || n == "secret_join" || n == "classify"; }
+Bool sec_is_wrapper(Str n) { return n == "secret" || n == "declassify" || n == "secret_split" || n == "secret_join" || n == "classify" || n == "provisioned_key"; }
 
 // secret_split(s): a Secret(List(T)) as a List(Secret(T)), its length
 // public; secret_join(xs) the other way. Both are the same bytes at run
@@ -5708,6 +5736,92 @@ Bool dv_scan(GK k, Int id, List(Int) nls, Str src, Str smap, Str stddev, Bool ac
         b1 || b2
     };
     return dv_scan(k, id + 1, nls, src, smap, stddev, acc || bad);
+}
+
+// ─── Opaque types and runtime-record builtins (PLAN-labels.md §6.5) ──
+// `@opaque pub type T = {...}`: only the file that declares T builds one
+// (E0276), so a value of T comes only from that file's functions; fields
+// stay readable. The challenge-record builtins are each the business of one
+// standard-library file (E0277): new records and their accept/export marks
+// lib/challenge.resid and lib/challenge_export.resid, spending and binding a record to a reply the device
+// engines, which only compiler-rewritten verbs reach (E0260).
+
+// The standard library's root with a trailing slash, from "@stdroot::";
+// a relative root matches nothing (dv_std_dir's reasoning).
+pub Str op_std_root(List(Str) pk, Int i) {
+    if (i >= pk.len()) { return dv_no_std(); }
+    if (str_starts_with(pk[i], "@stdroot::")) {
+        Str r = imp_normalize(str_slice(pk[i], 10, str_len(pk[i])));
+        return if (str_starts_with(r, "/")) { r + "/" } else { dv_no_std() };
+    }
+    return op_std_root(pk, i + 1);
+}
+
+// The files that may call a challenge builtin, "" for any.
+Str op_chal_home(Str n) {
+    if (n == "resid_chal_new" || n == "resid_chal_mark") { return "challenge.resid|challenge_export.resid"; }
+    if (n == "resid_chal_left") { return "challenge_export.resid"; }
+    if (n == "resid_chal_spend" || n == "resid_chal_bind") { return "dev/device.resid|dev/device_write.resid"; }
+    return "";
+}
+
+Bool op_home_ok(Str p, Str root, List(Str) homes, Int i) {
+    if (i >= homes.len()) { return false; }
+    if (p == root + homes[i]) { return true; }
+    return op_home_ok(p, root, homes, i + 1);
+}
+
+Bool op_scan(GK k, Int id, List(Int) nls, Str src, Str smap, Str root, Bool acc) {
+    if (id >= k.g.ns.len()) { return acc; }
+    Str kd = k.g.ns[id].kind;
+    Bool lit = kd == "struct" && op_opaque_decl(k, k.g.ns[id].text) >= 0;
+    Bool chal = (kd == "call" || kd == "ref") && str_starts_with(k.g.ns[id].text, "resid_chal_") && kg_def(k.rs, id) < 0 && op_chal_home(k.g.ns[id].text) != "";
+    Bool prov = kd == "call" && k.g.ns[id].text == "provisioned_key" && kg_def(k.rs, id) < 0;
+    if (!lit && !chal && !prov) { return op_scan(k, id + 1, nls, src, smap, root, acc); }
+    Str p = imp_normalize(gk_src_path(k, id, nls, smap));
+    Str n = k.g.ns[id].text;
+    // The standard library relies on a provisioned key only where it loads
+    // one (lib/tlskey.resid), passing the reliance to its callers' grant.
+    Bool pbad = prov && str_starts_with(p, root) && p != root + "tlskey.resid";
+    Bool pd = if (pbad) { dv_diag("E0278", "provisioned_key in the standard library outside its key loader (lib/tlskey.resid): a library takes a key as given and lets its caller state the reliance (PLAN-labels.md §5.2)", k.g, id, src, smap) } else { false };
+    Bool bad = if (prov) { pd } else if (lit) {
+        Int d = op_opaque_decl(k, n);
+        Str dp = imp_normalize(gk_src_path(k, d, nls, smap));
+        if (dp != p && !op_sibling_ok(p, dp, op_opaque_files(k.g.ns[d].aux), 0)) { dv_diag("E0276", "a `" + n + "` literal outside " + dp + ": the type is @opaque, so only the file that declares it (and the files it names) builds one; call their functions", k.g, id, src, smap) } else { false }
+    } else {
+        if (!op_home_ok(p, root, str_split(op_chal_home(n), "|"), 0)) { dv_diag("E0277", "`" + n + "` keeps a challenge record's marks; only the standard library's " + str_replace(op_chal_home(n), "|", " or ") + " calls it (a program issues and checks records through lib/challenge.resid and the device verbs)", k.g, id, src, smap) } else { false }
+    };
+    return op_scan(k, id + 1, nls, src, smap, root, acc || bad);
+}
+
+// The sibling files `@opaque("a.resid", ...)` lets build the type too.
+List(Str) op_opaque_files(Str aux) {
+    Int a = str_find(aux, "@opaque(");
+    if (a < 0) { return []; }
+    Int b = str_find_char(aux, 41, a);
+    if (b < 0) { return []; }
+    return str_split(str_replace(str_replace(str_slice(aux, a + 8, b), "\"", ""), " ", ""), ",");
+}
+
+Bool op_sibling_ok(Str p, Str dp, List(Str) fs, Int i) {
+    if (i >= fs.len()) { return false; }
+    Int sl = op_last_slash(dp, str_len(dp) - 1);
+    Str dir = if (sl < 0) { "" } else { str_slice(dp, 0, sl + 1) };
+    if (fs[i] != "" && p == dir + fs[i]) { return true; }
+    return op_sibling_ok(p, dp, fs, i + 1);
+}
+
+Int op_last_slash(Str s, Int i) {
+    if (i < 0) { return -1; }
+    if (str_char_at(s, i) == 47) { return i; }
+    return op_last_slash(s, i - 1);
+}
+
+// The declaration node of an @opaque record type named n, or -1.
+Int op_opaque_decl(GK k, Str n) {
+    Int d = k.sd.get(n) else { 0 - 1 };
+    if (d < 0 || !str_contains(k.g.ns[d].aux, "@opaque")) { return -1; }
+    return d;
 }
 
 Bool dv_diag(Str code, Str msg, Kg g, Int at, Str src, Str smap) {

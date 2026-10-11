@@ -1,0 +1,12 @@
+// Challenge records (PLAN-labels §6.5): fresh values, accepted at most once.
+import "challenge.resid";
+Int main() {
+    ChallengeRecord c = challenge_issue(64, [1, 2, 3]);
+    ChallengeRecord d = challenge_issue(32);
+    List(UInt(8)) v = challenge_value(c);
+    println(f"{v.len()} {challenge_value(d).len()}");
+    println(match challenge_accept_mark(c) { Ok(b) => "accepted", Err(e) => e });
+    println(match challenge_accept_mark(c) { Ok(b) => "accepted", Err(e) => e });
+    println(match challenge_bound(d) { Some(b) => "bound", None => "unbound" });
+    return 0;
+}

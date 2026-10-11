@@ -145,6 +145,16 @@ NAT="tiny=$ROOT/tests/conformance/native/tiny.ll"
 NHASH="$(sha256sum "$ROOT/tests/conformance/native/tiny.ll" | cut -d' ' -f1)"
 check "native build" 0 "provenance: signed" "$COMPILER" n.resid -o n -native "$NAT"
 check "native artifact in the record" 0 "attestation: native module tiny from an artifact with SHA-256 $NHASH" "$COMPILER" verify n
+# Inline asm in a module is allowed (it runs only in the confined host)
+# and stated, sites by mnemonic: tiny's forged reply, esc's escapes; spin
+# has none, so no line.
+check "native asm in the record (tiny)" 0 "attestation: native module tiny contains inline asm, 2 sites: syscall x2" "$COMPILER" verify n
+printf '@link("spin") Int spin(Int n) {}\n@requires(native_spin)\nInt main() { println(f"{spin(rt 3)}"); return 0; }\n' > sp.resid
+check "native build without asm" 0 "provenance: signed" "$COMPILER" sp.resid -o sp -native "spin=$ROOT/tests/conformance/native/spin.ll"
+if "$COMPILER" verify sp 2>&1 | grep -q "contains inline asm"; then fail=$((fail + 1)); echo "FAIL a module without inline asm was said to have some"; else pass=$((pass + 1)); fi
+printf '@link("esc") Int esc_getpid() {}\n@requires(native_esc)\nInt main() {\n    Result(Int, RegionError) r = spawn (native_esc) { return esc_getpid(); };\n    return 0;\n}\n' > ne.resid
+check "native asm build" 0 "provenance: signed" "$COMPILER" ne.resid -o ne -native "esc=$ROOT/tests/conformance/native/esc.ll"
+check "native asm in the record" 0 "attestation: native module esc contains inline asm, 13 sites: syscall x12, rdtsc x1" "$COMPILER" verify ne
 check "native grant" 0 "attestation: grant \[native_tiny\]" "$COMPILER" verify n
 check "native debug build" 0 "provenance: signed" "$COMPILER" n.resid -o nd --profile debug -native "$NAT"
 check "native capability within the grant" 0 "its capabilities are within the grant" "$COMPILER" verify nd

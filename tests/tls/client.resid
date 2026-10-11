@@ -20,7 +20,7 @@ HttpReply handle(HttpRequest r) {
     return http_reply_text(200, "text/plain; charset=utf-8", "hello from the tls client\n");
 }
 
-@requires(args, filesystem(readonly), network(readonly), clock(readonly), declassify)
+@requires(args, filesystem(readonly), network(readonly), clock(readonly), declassify, provision)
 Int main() {
     if (args.count() > 1 && args.get(1) == "parse") {
         // The address parser on its own: what a literal names in bytes, and

@@ -1,0 +1,7 @@
+// A record of an @opaque type is built only by its own file.
+import "challenge.resid";
+Int main() {
+    List(UInt(8)) z = [];
+    ChallengeRecord f = ChallengeRecord {.handle = 1, .nonce = z, .bind = z, .value = z};
+    return 0;
+}

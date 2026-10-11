@@ -321,3 +321,80 @@ pub Int ga_say(Str s) {
     println(s);
     return 0;
 }
+
+// ─── Integrity labels (PLAN-labels.md §4.6) ─────────────────────────
+
+// A node's External cause, or -1 when it is Internal (or not a value).
+pub Int gn_cause(GA a, Int id) {
+    Int lp = ch_field(a.b, a.offs[id], "label");
+    if (lp < 0) { return -1; }
+    return ch_int(a.b, ch_field(a.b, lp, "cause"));
+}
+
+// The effect a source node names, or "".
+pub Str gn_effect(GA a, Int id) {
+    Int lp = ch_field(a.b, a.offs[id], "label");
+    if (lp < 0) { return ""; }
+    return gn_opt_text(a.b, ch_field(a.b, lp, "effect"));
+}
+
+// The path from node id back to where outside data entered: id first.
+pub List(Int) gn_cause_path(GA a, Int id, ListBuf(Int) acc, Int depth) {
+    Int c = gn_cause(a, id);
+    ListBuf(Int) acc2 = acc.push(id);
+    if (c < 0 || c == id || c >= a.offs.len() || depth > 256) { return acc2.finish(); }
+    return gn_cause_path(a, c, acc2, depth + 1);
+}
+
+// `NAME: External`, then the path from the source to the value; or
+// `NAME: Internal`.
+pub Int gn_label_show(GA a, Int id) {
+    GN n = gn_read(a, id);
+    Str nm = if (n.name == "") { n.kind } else { n.kind + " " + n.name };
+    if (gn_cause(a, id) < 0) {
+        println(nm + " @ " + gn_where(a, n) + ": Internal");
+        return 0;
+    }
+    println(nm + " @ " + gn_where(a, n) + ": External");
+    List(Int) p = gn_cause_path(a, id, ListBuf(), 0);
+    return gn_label_steps(a, p, p.len() - 1);
+}
+
+pub Int gn_label_steps(GA a, List(Int) p, Int i) {
+    if (i < 0) { return 0; }
+    GN n = gn_read(a, p[i]);
+    Str eff = gn_effect(a, p[i]);
+    Int from = if (i + 1 < p.len()) { p[i + 1] } else { -1 };
+    // A value chosen by a condition: the cause is not one of its operands
+    // past the condition (an `if`, `match` or ternary's first kid, or a
+    // `return` under a condition).
+    Bool cond = (n.kind == "ifx" || n.kind == "tern" || n.kind == "match") && n.deps.len() > 0 && n.deps[0] == from;
+    Bool chose = from >= 0 && (cond || (n.kind == "ret" && !n.deps.contains(from)));
+    Bool keep = i == 0 || i == p.len() - 1 || eff != "" || chose || gn_label_kind(n.kind) || n.kind == "call" || n.kind == "mcall" || n.kind == "callv" || n.kind == "lambda";
+    Str nm = if (n.name == "") { n.kind } else { n.kind + " " + n.name };
+    Str what = if (eff != "") { nm + "  -- outside data enters here (" + eff + ")" } else if (chose) { nm + "  -- chosen by outside data" } else { nm };
+    Int _p = if (keep) { ga_say("  " + gn_where(a, n) + "  " + what) } else { 0 };
+    return gn_label_steps(a, p, i - 1);
+}
+
+// Value-bearing nodes worth naming in a label query.
+pub Bool gn_label_kind(Str k) {
+    return k == "bind" || k == "rbind" || k == "param" || k == "for" || k == "ret" || k == "letpat" || k == "name" || k == "pat" || k == "lparam";
+}
+
+// Labels of the value nodes starting on line `line` of file fi.
+pub Int ga_label_at(GA a, Int fi, Int line, Int id, Int shown) {
+    if (id >= a.offs.len()) { return shown; }
+    Int p = a.offs[id];
+    List(Int) sp = ch_ints(a.b, ch_field(a.b, p, "span"));
+    Bool hit = sp[0] == fi && sp[1] == line && gn_label_kind(ch_text(a.b, ch_field(a.b, p, "kind")));
+    Int _p = if (hit) { gn_label_show(a, id) } else { 0 };
+    return ga_label_at(a, fi, line, id + 1, if (hit) { shown + 1 } else { shown });
+}
+
+// Labels of the declarations named `name`.
+pub Int ga_label_sym(GA a, List(Int) ds, Int i) {
+    if (i >= ds.len()) { return 0; }
+    Int _s = gn_label_show(a, ds[i]);
+    return ga_label_sym(a, ds, i + 1);
+}

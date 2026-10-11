@@ -1,0 +1,28 @@
+// Exportable challenge records (PLAN-labels §6.8): sealed tokens, a store, single use.
+import "challenge_export.resid";
+Str imp(Result(Imported(MemSpentStore), ChallengeError) r) {
+    return match r { Ok(i) => f"imported {i.record.value.len()}", Err(e) => challenge_error_text(e) };
+}
+@requires(clock(readonly), declassify)
+Int main() {
+    ExportKey k = export_key(random_secret(32));
+    ExportKey other = export_key(random_secret(32));
+    ChallengeRecord c = challenge_issue(48, [9, 9]);
+    List(UInt(8)) tok = match challenge_export(c, k) { Ok(t) => t, Err(e) => [] };
+    println(f"token {tok.len()}");
+    println(match challenge_export(c, k) { Ok(t) => "exported twice", Err(e) => challenge_error_text(e) });
+    println(match challenge_accept_mark(c) { Ok(b) => "accepted locally", Err(e) => e });
+    MemSpentStore s0 = mem_spent_store();
+    println(imp(challenge_import(tok, other, s0)));
+    Result(Imported(MemSpentStore), ChallengeError) r1 = challenge_import(tok, k, s0);
+    println(imp(r1));
+    MemSpentStore s1 = match r1 { Ok(i) => i.store, Err(e) => s0 };
+    println(imp(challenge_import(tok, k, s1)));
+    println(imp(challenge_import(tok, k, s0)));
+    Bool same = match r1 { Ok(i) => f"{challenge_value(i.record)}" == f"{challenge_value(c)}", Err(e) => false };
+    println(f"value recomputed {same}");
+    List(UInt(8)) bad = tok.with(40, (UInt(8)) ((Int) tok[40] ^ 1));
+    println(imp(challenge_import(bad, k, s0)));
+    println(imp(challenge_import(tok[0..20], k, s0)));
+    return 0;
+}

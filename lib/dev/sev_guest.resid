@@ -45,6 +45,29 @@ pub Result(List(UInt(8)), DeviceError) snp_get_report(List(UInt(8)) report_data,
     return sg_report(name, dv_out_bytes(outs, 0));
 }
 
+// The attestation report with its 64-byte report_data slot filled by the
+// device engine (PLAN-labels.md §6.3): a fresh runtime value by default,
+// an issued challenge record's value (spent before the request is sent and
+// bound to this reply, so a verifier accepts it only with this report), or
+// a value a verifier chose. The program passes no nonce.
+//
+//     SnpReport r = snp_report()?;                        // nothing to keep
+//     ChallengeRecord c = challenge_issue(64, bind);
+//     List(UInt(8)) v = snp_report(challenge = Issued(c))?;
+@requires(device(readonly))
+pub Result(List(UInt(8)), DeviceError) snp_report(Challenge challenge = Runtime, Int vmpl = 0) {
+    Str name = "sev_guest.snp_get_report";
+    if (vmpl < 0 || vmpl > 3) { return Err(BadInput(name, f"vmpl is 0 to 3, got {vmpl}")); }
+    List(UInt(8)) blank = sg_zeros(snp_report_req_size(), ListBuf());
+    List(UInt(8)) req = sg_put(blank, snp_report_req_vmpl_at(), sg_le(vmpl, snp_report_req_vmpl_len(), ListBuf()));
+    // The evidence a record is bound to: the reply buffer (output 0).
+    List(Int) evidence = [0];
+    List(DevOut) outs = device.ioctl(snp_get_report_op(), [InChallenge(req, snp_report_req_user_data_at(), snp_report_req_user_data_len(), challenge, evidence)])?;
+    Int exitinfo2 = sg_exitinfo2(name, dv_out_num(outs, 1))?;
+    if (exitinfo2 != 0) { return Err(Kernel(name, exitinfo2)); }
+    return sg_report(name, dv_out_bytes(outs, 0));
+}
+
 // struct msg_report_resp: status, report_size, 24 reserved bytes, report.
 pub Result(List(UInt(8)), DeviceError) sg_report(Str name, Option(List(UInt(8))) resp) {
     return match (resp) {

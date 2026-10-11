@@ -1,0 +1,30 @@
+// random.resid — randomness for keys (PLAN-labels.md §5.2, §6.6).
+//
+// random_bytes (lib/crypto.resid) is fresh and public: nonces and
+// challenges. A key or seed draws through random_secret, whose bytes are
+// never public, and generic code draws through the Random behavior, whose
+// instance at a Secret byte type is random_secret. Both come from the same
+// draws: getrandom and the CPU source hashed together.
+
+import "crypto.resid";
+import "word.resid";
+
+// n fresh bytes for a key, secret from the start.
+@key_source(n)
+pub List(Secret(UInt(8))) random_secret(Int n) { return secret_bytes(random_bytes(n)); }
+
+// Drawing at a generic byte type B.
+behavior Random(B) {
+    List(B) b_random(Int n);
+}
+
+List(Int) rnd_public(Int n) { return random_bytes(n); }
+
+Random(Int) = rnd_public;
+Random(Secret(UInt(8))) = random_secret;
+
+// Whether the CPU source contributes to draws now: without it they rest on
+// the kernel alone (reported, never refused: PLAN-labels.md §5.2).
+type RandomSource = KernelOnly | KernelAndCpu;
+
+pub RandomSource random_source() { return if (resid_random_cpu(8).len() == 8) { KernelAndCpu } else { KernelOnly }; }

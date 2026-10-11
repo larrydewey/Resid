@@ -164,6 +164,7 @@ F ec_org(List(B) b, Int i, Int end, F acc) {
 // when the key is not in [1, n-1]. At secret types the key is published
 // by design (a declassification).
 @needs(P256Word(E, B), P384Word(G, B))
+@one_way(priv)
 pub List(Int) ec_public_keyg(Curve c, List(B) priv) {
     if (!ec_priv_len_okg(c, priv)) { return []; }
     return match c {
@@ -203,6 +204,7 @@ List(Int) ec_gen_try(Curve c, Int tries) {
 // long; empty for an invalid peer key or private key. At secret types the
 // shared secret is secret; whether the keys were usable is public.
 @needs(P256Word(E, B), P384Word(G, B))
+@agree(priv)
 pub List(B) ecdhg(Curve c, List(B) priv, List(Int) peer) {
     ListBuf(B) eb = ListBuf();
     List(B) none = eb.finish();
@@ -257,6 +259,7 @@ pub Bool ecdsa_verify_raw(Curve c, HashAlg h, List(Int) pubkey, List(Int) msg, L
 // is List(B): at secret types the signature (public by design) is
 // declassified.
 @needs(P256Word(E, B), P384Word(G, B), Word(W, B), Word64(D, B))
+@key(priv)
 pub EcSig ecdsag_sign_digest(Curve c, HashAlg h, List(B) priv, List(Int) digest) {
     if (!ec_priv_len_okg(c, priv)) { return ec_sig_bad(); }
     return match c {
@@ -290,6 +293,7 @@ EcSig ec_sig384(P384Sig s) {
 
 // DER signature of msg (public) hashed with h; empty for an unusable key.
 @needs(P256Word(E, B), P384Word(G, B), Word(W, B), Word64(D, B))
+@key(priv)
 pub List(Int) ecdsag_sign(Curve c, HashAlg h, List(B) priv, List(Int) msg) {
     EcSig s = ecdsag_sign_digest(c, h, priv, hash_bytes(h, msg));
     return if (s.ok) { ecdsa_der_of(s) } else { [] };
@@ -297,6 +301,7 @@ pub List(Int) ecdsag_sign(Curve c, HashAlg h, List(B) priv, List(Int) msg) {
 
 // r || s signature of msg (public) hashed with h; empty for an unusable key.
 @needs(P256Word(E, B), P384Word(G, B), Word(W, B), Word64(D, B))
+@key(priv)
 pub List(Int) ecdsag_sign_raw(Curve c, HashAlg h, List(B) priv, List(Int) msg) {
     EcSig s = ecdsag_sign_digest(c, h, priv, hash_bytes(h, msg));
     return if (s.ok) { ecdsa_raw_of(c, s) } else { [] };

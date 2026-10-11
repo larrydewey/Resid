@@ -10,4 +10,4 @@ mmap_exec -1
 x32 -1
 getrandom -1
 vdso_time -1
-ok_mmap 1
+mmap -1

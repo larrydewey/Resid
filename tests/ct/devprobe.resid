@@ -90,6 +90,27 @@ Int ct_case_dev_outs() {
     return 0;
 }
 
+// ─── A challenge bound to a reply with a secret output ───────────────
+
+// The engine spends an issued record, then binds it to the descriptor and
+// the evidence output (public bytes); the secret output beside them is
+// only stepped over.
+@requires(declassify)
+Int ct_case_dev_bound() {
+    ChallengeRecord c = challenge_issue(32);
+    List(UInt(8)) req = u8s(repeat(0, 32, ListBuf()), 0, ListBuf());
+    List(DevIn) ins = [InChallenge(req, 0, 32, Issued(c), [1])];
+    Str got = match (dv_fill("probe", ins, 0, [], 0 - 1, [])) {
+        Ok(fl) => match (dv_bound("probe", fl, Ok([OutSecret(secret_bytes(mark_range(pattern(rt 8, 0, ListBuf()), 0, 8, 0, ListBuf()))), OutBytes(u8s(rt [1, 2, 3], 0, ListBuf()))]))) {
+            Ok(o) => match (challenge_bound(c)) { Some(b) => f"{b.len()}", None => "unbound" },
+            Err(e) => device_error_text(e),
+        },
+        Err(e) => device_error_text(e),
+    };
+    println("dev-bound " + got);
+    return 0;
+}
+
 // ─── TPM NV_Read of a secret ────────────────────────────────────────
 
 // NV_Read's response with 8 bytes of data (tests/conformance's vector):
@@ -125,6 +146,7 @@ Int main() {
     Str c = args.get(1);
     if (c == "dev-sg-key-body") { return ct_case_dev_sg_key_body(); }
     if (c == "dev-outs") { return ct_case_dev_outs(); }
+    if (c == "dev-bound") { return ct_case_dev_bound(); }
     if (c == "dev-tpm-nv-resp-secret") { return ct_case_dev_tpm_nv_resp_secret(); }
     if (c == "dev-tpm-nv-read-secret") { return ct_case_dev_tpm_nv_read_secret(); }
     println("unknown case " + c);

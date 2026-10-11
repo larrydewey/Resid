@@ -50,6 +50,15 @@ network]`.
 | `E0263` | a device descriptor's layout is inconsistent: request size or direction bits, fields outside the struct or overlapping, an unaligned pointer, a buffer without a maximum, a length field that is not a Scalar, too narrow for its buffer's maximum, or shared by two buffers, a path outside `/dev/` and `/sys/` or with `..`, no request number for the target, an ioctl that only sends data marked `write = false`, a Transact marked `write = false` (it writes its command) |
 | `E0264` | a Sequence descriptor's links: backwards, not from a Scalar output to a Scalar input of one width, outputs before the last step, steps on another path |
 | `E0265` | a function named `resid_...`: the prefix is the runtime's (its entry points share the program's link, and the compiler recognizes the device entry by name) |
+| `E0271` | a builtin with no entry in the integrity source table (compiler/labels.resid): every builtin's result is classified as acquired from outside or computed from its arguments, and one without an entry is refused rather than guessed ([integrity labels](/Resid/reference/labels/)) |
+| `E0272` | a layout type is malformed: `@layout` not on a record type or with a kind other than `c_abi`, `le`, `be`; an unknown field annotation; a field type a layout cannot hold; `@len` on a non-byte field, naming a later or non-integer field, or missing on a `List(UInt(8))`; a variable-length field other than the last under `c_abi`; a nested type of another layout, of variable size under `c_abi`, or containing itself ([layout types](/Resid/reference/layouts/)) |
+| `E0273` | a `Secret` layout field with a `@check`: a failed check would publish a bit of it |
+| `E0274` | a layout field of a type only the runtime builds (`ChallengeRecord` and the like): parsing outside bytes must never forge one |
+| `E0270` | (warning while the rule is rolled out) a key, seed or keying argument that could be known to someone else: fewer than min(length, 32) unpredictable bytes (a constant, bytes from a file, the network, a device or a native module, a short draw padded or repeated, bytes disclosed anywhere), a key that must be own but was agreed or provisioned, or a public keying copy outside tests ([integrity labels](/Resid/reference/labels/)) |
+| `E0276` | a literal of an `@opaque` record type outside the file that declares it (and the files it names) |
+| `E0277` | a challenge-record builtin (`resid_chal_*`) outside the one standard-library file that owns it |
+| `E0278` | `provisioned_key` in the standard library outside lib/tlskey.resid |
+| `E0279` | (warning while the rule is rolled out) an AEAD nonce that is a constant, outside a single-use key: one drawn in the same function, outside any loop or closure, for that one sealing call |
 | `E0301` | a known value violates its constraint type |
 | `E0401` | a builder is not consumed on some path |
 | `E0402` | a builder is used twice |

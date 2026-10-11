@@ -31,6 +31,7 @@ pub Int rt_start(Int sp, Int dyn) {
     _ = set_envp(envp);
     _ = find_tls(auxv);
     _ = st64(hwcap_w(), auxv_get(auxv, 16));   // AT_HWCAP
+    _ = st64(hwcap2_w(), auxv_get(auxv, 26));  // AT_HWCAP2
     _ = st64(pagesz_w(), auxv_get(auxv, 6));   // AT_PAGESZ
     _ = st64(secure_w(), auxv_get(auxv, 23) + 1);   // AT_SECURE, plus one
     _ = sigchld_default_at(resid_raw_global("rt_sigchld", 64));   // one thread yet: a global buffer
@@ -82,6 +83,9 @@ Int sigchld_default_at(Int b) {
 
 // The CPU's AT_HWCAP bits (AArch64: bit 3 is AES).
 pub Int hwcap_w() { return resid_raw_global("rt_hwcap", 8); }
+
+// The CPU's AT_HWCAP2 bits (AArch64: bit 16 is RNG, the RNDR register).
+pub Int hwcap2_w() { return resid_raw_global("rt_hwcap2", 8); }
 
 // The load bias: from PT_PHDR (6), else from where _DYNAMIC (PT_DYNAMIC,
 // 2) actually is (a static PIE has no PT_PHDR).

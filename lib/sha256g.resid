@@ -109,6 +109,7 @@ List(B) g_digest_bytes(List(W) h, Int i, ListBuf(B) acc) {
 
 // SHA-256 of a byte list, public or secret.
 @needs(Word(W, B))
+@key_from(msg)
 pub List(B) sha256g(List(B) msg) {
     ListBuf(B) b1 = ListBuf();
     ListBuf(W) b2 = ListBuf();
@@ -142,6 +143,7 @@ List(B) g_key_block(List(B) key) {
 }
 
 @needs(Word(W, B))
+@key_from(key, msg)
 pub List(B) hmac256g(List(B) key, List(B) msg) {
     List(B) kb = g_key_block(key);
     ListBuf(B) ib = ListBuf();
@@ -151,6 +153,7 @@ pub List(B) hmac256g(List(B) key, List(B) msg) {
 }
 
 @needs(Word(W, B))
+@key_from(salt, ikm)
 pub List(B) hkdf256g_extract(List(B) salt, List(B) ikm) { return hmac256g(salt, ikm); }
 
 @needs(Word(W, B))
@@ -163,6 +166,7 @@ List(B) g_expand(List(B) prk, List(B) info, Int c, Int len, List(B) t, List(B) o
 
 // OKM of `len` bytes; empty when len exceeds 255 * 32 (RFC 5869 §2.3).
 @needs(Word(W, B))
+@key_from(prk)
 pub List(B) hkdf256g_expand(List(B) prk, List(B) info, Int len) {
     List(B) none = prk[0..0];
     if (len < 0 || len > 255 * 32) { return none; }

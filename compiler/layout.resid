@@ -1,0 +1,556 @@
+// layout.resid — layout types (PLAN-labels.md §7): a record `type` marked
+// `@layout(c_abi)`, `@layout(le)` or `@layout(be)` gets a generated, total
+// parser and serializer, and its field annotations (`@check`, `@len`,
+// `@reserved`) are taken out of the declaration the checker sees.
+//
+// Expansion runs on the merged text before parsing. Each annotation is
+// overwritten with spaces, so every position and line stays where it was;
+// the generated functions are appended after the program. For a type
+// `SnpReportResp` (snake `snp_report_resp`) it writes:
+//
+//   Result(SnpReportResp, DeviceError) snp_report_resp_parse(List(UInt(8)) b)
+//   Result(SnpReportResp__At, DeviceError) snp_report_resp_parse_at(List(UInt(8)) b, Int at)
+//   Result(List(UInt(8)), DeviceError) snp_report_resp_bytes(SnpReportResp r)
+//   Int snp_report_resp_size()             (the fixed part's size)
+//
+// A parser reads only inside the bytes it is given and checks every length
+// before it slices, so it returns an error value on any input; it never
+// backtracks. A c_abi type follows the target's C layout (natural
+// alignment, tail padding, little-endian on both targets) and may end in
+// one variable-length field; `le` and `be` are packed in that byte order,
+// with variable lengths anywhere, and must be consumed exactly.
+//
+// Imported by compiler/driver.resid.
+
+// A field: its name and type text, `@check` conditions with their
+// constructors ("" for the default error), its `@len` ("" none), or the
+// size of an `@reserved(n)` (name ""). pos: where the field starts.
+type LyF = { Str name; Str ty; List(Str) checks; List(Str) ctors; Str len; Int rsv; Int pos; };
+
+// A layout type: name, byte order ("c_abi", "le", "be"), fields, position.
+type LyT = { Str name; Str kind; List(LyF) fs; Int pos; };
+
+// The expansion: the text with annotations blanked and the generated code
+// appended, or an error code, message and position.
+pub type LyR = { Str text; Str code; Str err; Int at; };
+
+// One scan step: the types found so far, the blanked text, the position.
+type LyS = { List(LyT) ts; List(Str) out; Int i; Str code; Str err; Int at; };
+
+LyR ly_fail(Str src, Str code, Str msg, Int at) { return LyR {.text = src, .code = code, .err = msg, .at = at}; }
+
+// ─── Scanning ───────────────────────────────────────────────────────
+
+Bool ly_space(Int c) { return c == 32 || c == 9 || c == 10 || c == 13; }
+Bool ly_ident(Int c) { return (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57) || c == 95; }
+
+Int ly_skip_ws(Str s, Int i, Int n) {
+    if (i >= n || !ly_space(str_char_at(s, i))) { return i; }
+    return ly_skip_ws(s, i + 1, n);
+}
+
+// Is position i at the start of a line, after indentation only?
+Bool ly_line_start(Str s, Int i) {
+    if (i <= 0) { return true; }
+    Int c = str_char_at(s, i - 1);
+    if (c == 10) { return true; }
+    if (c == 32 || c == 9) { return ly_line_start(s, i - 1); }
+    return false;
+}
+
+// The position after the parenthesized group opening at i (s[i] == '('),
+// skipping string literals; -1 when it does not close.
+Int ly_close(Str s, Int i, Int n, Int depth) {
+    if (i >= n) { return -1; }
+    Int c = str_char_at(s, i);
+    if (c == 34) { return ly_close(s, ly_str_end(s, i + 1, n), n, depth); }
+    if (c == 40) { return ly_close(s, i + 1, n, depth + 1); }
+    if (c == 41) { return if (depth == 1) { i + 1 } else { ly_close(s, i + 1, n, depth - 1) }; }
+    return ly_close(s, i + 1, n, depth);
+}
+
+Int ly_str_end(Str s, Int i, Int n) {
+    if (i >= n) { return n; }
+    Int c = str_char_at(s, i);
+    if (c == 92) { return ly_str_end(s, i + 2, n); }
+    if (c == 34) { return i + 1; }
+    return ly_str_end(s, i + 1, n);
+}
+
+// The first occurrence of pat at or after i, or -1.
+Int ly_find_from(Str s, Str pat, Int i) {
+    Int k = ly_char(s, str_char_at(pat, 0), i, str_len(s));
+    if (k < 0) { return -1; }
+    if (k + str_len(pat) <= str_len(s) && str_slice(s, k, k + str_len(pat)) == pat) { return k; }
+    return ly_find_from(s, pat, k + 1);
+}
+
+Int ly_char(Str s, Int c, Int i, Int n) {
+    if (i >= n) { return -1; }
+    if (str_char_at(s, i) == c) { return i; }
+    return ly_char(s, c, i + 1, n);
+}
+
+// Spaces for s[a..b), newlines kept.
+List(Str) ly_blank(List(Str) out, Str s, Int a, Int b) {
+    if (a >= b) { return out; }
+    List(Str) ls = str_split(str_slice(s, a, b), "\n");
+    return out.concat([str_join(ly_spaces(ls, 0, []), "\n")]);
+}
+
+List(Str) ly_spaces(List(Str) ls, Int i, List(Str) acc) {
+    if (i >= ls.len()) { return acc; }
+    return ly_spaces(ls, i + 1, acc.concat([str_repeat(" ", str_len(ls[i]))]));
+}
+
+// Copy s[a..b) unchanged.
+List(Str) ly_copy(List(Str) out, Str s, Int a, Int b) { return if (a >= b) { out } else { out.concat([str_slice(s, a, b)]) }; }
+
+// Every `@layout(` at the start of a line, outside comments: the scan
+// copies text up to it, then reads the declaration.
+LyS ly_scan(Str s, LyS st) {
+    Int n = str_len(s);
+    Int k = ly_find_from(s, "@layout(", st.i);
+    if (k < 0 || st.err != "") { return LyS {.ts = st.ts, .out = ly_copy(st.out, s, st.i, n), .i = n, .code = st.code, .err = st.err, .at = st.at}; }
+    if (!ly_line_start(s, k)) {
+        return ly_scan(s, LyS {.ts = st.ts, .out = ly_copy(st.out, s, st.i, k + 8), .i = k + 8, .code = "", .err = "", .at = -1});
+    }
+    return ly_scan(s, ly_decl(s, k, LyS {.ts = st.ts, .out = ly_copy(st.out, s, st.i, k), .i = k, .code = "", .err = "", .at = -1}));
+}
+
+LyS ly_bad(LyS st, Str code, Str msg, Int at) { return LyS {.ts = st.ts, .out = st.out, .i = st.i, .code = code, .err = msg, .at = at}; }
+
+// `@layout(kind) [annotations] [pub] type Name = { fields };` at k.
+LyS ly_decl(Str s, Int k, LyS st) {
+    Int n = str_len(s);
+    Int e = ly_close(s, k + 7, n, 0);
+    if (e < 0) { return ly_bad(st, "E0272", "@layout(...) does not close", k); }
+    Str kind = str_trim(str_slice(s, k + 8, e - 1));
+    if (kind != "c_abi" && kind != "le" && kind != "be") { return ly_bad(st, "E0272", "@layout takes c_abi, le or be, got `" + kind + "`", k); }
+    Int t = ly_find_from(s, "type ", e);
+    Int eq = if (t < 0) { -1 } else { ly_find_from(s, "=", t) };
+    Int ob = if (eq < 0) { -1 } else { ly_skip_ws(s, eq + 1, n) };
+    if (ob < 0 || ob >= n || str_char_at(s, ob) != 123) { return ly_bad(st, "E0272", "@layout marks a record type: `@layout(" + kind + ") type Name = { ... };`", k); }
+    Str name = str_trim(str_slice(s, t + 5, eq));
+    List(Str) o1 = ly_copy(st.out, s, k, ob + 1);
+    return ly_fields(s, ob + 1, n, name, kind, k, [], LyS {.ts = st.ts, .out = o1, .i = ob + 1, .code = "", .err = "", .at = -1});
+}
+
+// Fields up to the closing brace; annotations are blanked as they are read.
+LyS ly_fields(Str s, Int i, Int n, Str name, Str kind, Int at, List(LyF) acc, LyS st) {
+    Int j = ly_skip_ws(s, i, n);
+    List(Str) o = ly_copy(st.out, s, i, j);
+    if (j >= n) { return ly_bad(st, "E0272", "layout type " + name + " does not close", at); }
+    if (str_char_at(s, j) == 125) {
+        LyT ty = LyT {.name = name, .kind = kind, .fs = acc, .pos = at};
+        return LyS {.ts = st.ts.concat([ty]), .out = o.concat(["}"]), .i = j + 1, .code = "", .err = "", .at = -1};
+    }
+    LyF f0 = LyF {.name = "", .ty = "", .checks = [], .ctors = [], .len = "", .rsv = 0, .pos = j};
+    return ly_field(s, j, n, name, kind, at, acc, f0, LyS {.ts = st.ts, .out = o, .i = j, .code = "", .err = "", .at = -1});
+}
+
+// One field: annotations, then `Type name;` (or nothing after @reserved).
+LyS ly_field(Str s, Int j, Int n, Str name, Str kind, Int at, List(LyF) acc, LyF f, LyS st) {
+    Int i = ly_skip_ws(s, j, n);
+    List(Str) o = ly_copy(st.out, s, j, i);
+    if (i < n && str_char_at(s, i) == 64) {
+        Int p = ly_char(s, 40, i, n);
+        if (p < 0) { return ly_bad(st, "E0272", "a field annotation needs parentheses", i); }
+        Str an = str_slice(s, i + 1, p);
+        Int e = ly_close(s, p, n, 0);
+        if (e < 0) { return ly_bad(st, "E0272", "@" + an + "(...) does not close", i); }
+        Str arg = str_trim(str_slice(s, p + 1, e - 1));
+        List(Str) ob = ly_blank(o, s, i, e);
+        LyS st2 = LyS {.ts = st.ts, .out = ob, .i = e, .code = "", .err = "", .at = -1};
+        if (an == "check") {
+            List(Str) parts = ly_split_top(arg);
+            if (parts.len() == 0 || parts.len() > 2) { return ly_bad(st, "E0272", "@check takes a condition and, optionally, a DeviceError constructor", i); }
+            LyF f2 = LyF {.name = f.name, .ty = f.ty, .checks = f.checks.concat([parts[0]]), .ctors = f.ctors.concat([if (parts.len() == 2) { parts[1] } else { "" }]), .len = f.len, .rsv = f.rsv, .pos = f.pos};
+            return ly_field(s, e, n, name, kind, at, acc, f2, st2);
+        }
+        if (an == "len") {
+            if (f.len != "") { return ly_bad(st, "E0272", "a field has at most one @len", i); }
+            LyF f2 = LyF {.name = f.name, .ty = f.ty, .checks = f.checks, .ctors = f.ctors, .len = arg, .rsv = f.rsv, .pos = f.pos};
+            return ly_field(s, e, n, name, kind, at, acc, f2, st2);
+        }
+        if (an == "reserved") {
+            if (!str_is_int(arg) || str_parse_int(arg) <= 0) { return ly_bad(st, "E0272", "@reserved(n) takes a positive byte count", i); }
+            Int sc = ly_skip_ws(s, e, n);
+            if (sc >= n || str_char_at(s, sc) != 59) { return ly_bad(st, "E0272", "@reserved(n) stands alone: `@reserved(" + arg + ");`", i); }
+            if (f.checks.len() > 0 || f.len != "") { return ly_bad(st, "E0272", "@reserved takes no other annotation", i); }
+            LyF r = LyF {.name = "", .ty = "", .checks = [], .ctors = [], .len = "", .rsv = str_parse_int(arg), .pos = i};
+            List(Str) o3 = ly_blank(ob, s, e, sc + 1);
+            return ly_fields(s, sc + 1, n, name, kind, at, acc.concat([r]), LyS {.ts = st.ts, .out = o3, .i = sc + 1, .code = "", .err = "", .at = -1});
+        }
+        return ly_bad(st, "E0272", "unknown field annotation @" + an + " (a layout field takes @check, @len and @reserved)", i);
+    }
+    Int sc = ly_char(s, 59, i, n);
+    Int cb = ly_char(s, 125, i, n);
+    if (sc < 0 || (cb >= 0 && cb < sc)) { return ly_bad(st, "E0272", "a layout field is `Type name;`", i); }
+    Str decl = str_trim(str_slice(s, i, sc));
+    Int sp = ly_last_space(decl, str_len(decl) - 1);
+    if (sp < 0) { return ly_bad(st, "E0272", "a layout field is `Type name;`", i); }
+    LyF f2 = LyF {.name = str_slice(decl, sp + 1, str_len(decl)), .ty = str_trim(str_slice(decl, 0, sp)), .checks = f.checks, .ctors = f.ctors, .len = f.len, .rsv = 0, .pos = f.pos};
+    List(Str) o4 = ly_copy(o, s, i, sc + 1);
+    return ly_fields(s, sc + 1, n, name, kind, at, acc.concat([f2]), LyS {.ts = st.ts, .out = o4, .i = sc + 1, .code = "", .err = "", .at = -1});
+}
+
+Int ly_last_space(Str s, Int i) {
+    if (i < 0) { return -1; }
+    if (ly_space(str_char_at(s, i))) { return i; }
+    return ly_last_space(s, i - 1);
+}
+
+// Split at commas outside parentheses and strings.
+List(Str) ly_split_top(Str s) { return ly_split_at(s, 0, 0, 0, str_len(s), []); }
+
+List(Str) ly_split_at(Str s, Int i, Int a, Int depth, Int n, List(Str) acc) {
+    if (i >= n) { return if (str_trim(str_slice(s, a, n)) == "") { acc } else { acc.concat([str_trim(str_slice(s, a, n))]) }; }
+    Int c = str_char_at(s, i);
+    if (c == 34) { return ly_split_at(s, ly_str_end(s, i + 1, n), a, depth, n, acc); }
+    if (c == 40) { return ly_split_at(s, i + 1, a, depth + 1, n, acc); }
+    if (c == 41) { return ly_split_at(s, i + 1, a, depth - 1, n, acc); }
+    if (c == 44 && depth == 0) { return ly_split_at(s, i + 1, i + 1, depth, n, acc.concat([str_trim(str_slice(s, a, i))])); }
+    return ly_split_at(s, i + 1, a, depth, n, acc);
+}
+
+// ─── Field kinds and layout ─────────────────────────────────────────
+
+// An integer field's width in bits (0 when the type is not one), signed.
+Int ly_int_bits(Str t) {
+    if (t == "UInt(8)" || t == "Int(8)") { return 8; }
+    if (t == "UInt(16)" || t == "Int(16)") { return 16; }
+    if (t == "UInt(32)" || t == "Int(32)") { return 32; }
+    if (t == "UInt(64)" || t == "Int(64)") { return 64; }
+    return 0;
+}
+
+Bool ly_signed(Str t) { return str_starts_with(t, "Int("); }
+
+// Types only the runtime builds (§7.2 rule 6).
+Bool ly_runtime_type(Str t) {
+    return t == "ChallengeRecord" || t == "ReplayableRecord" || t == "ExportKey" || t == "ChannelExporter" || t == "EvidenceTime" || str_starts_with(t, "ChannelSealed") || t == "Anchor";
+}
+
+Int ly_type_idx(List(LyT) ts, Str name, Int i) {
+    if (i >= ts.len()) { return -1; }
+    if (ts[i].name == name) { return i; }
+    return ly_type_idx(ts, name, i + 1);
+}
+
+Int ly_field_idx(List(LyF) fs, Str name, Int i, Int upto) {
+    if (i >= upto) { return -1; }
+    if (fs[i].name == name) { return i; }
+    return ly_field_idx(fs, name, i + 1, upto);
+}
+
+// A field's alignment and fixed size under c_abi; size -1 when variable.
+Int ly_align(List(LyT) ts, LyF f) {
+    if (f.rsv > 0) { return 1; }
+    Int b = ly_int_bits(f.ty);
+    if (b > 0) { return b / 8; }
+    Int ti = ly_type_idx(ts, f.ty, 0);
+    if (ti >= 0) { return ly_type_align(ts, ts[ti], 0, 1); }
+    return 1;
+}
+
+Int ly_type_align(List(LyT) ts, LyT t, Int i, Int acc) {
+    if (i >= t.fs.len()) { return acc; }
+    Int a = ly_align(ts, t.fs[i]);
+    return ly_type_align(ts, t, i + 1, if (a > acc) { a } else { acc });
+}
+
+Int ly_fsize(List(LyT) ts, LyF f) {
+    if (f.rsv > 0) { return f.rsv; }
+    Int b = ly_int_bits(f.ty);
+    if (b > 0) { return b / 8; }
+    if (f.len != "" && str_is_int(f.len)) { return str_parse_int(f.len); }
+    if (f.len != "") { return -1; }
+    Int ti = ly_type_idx(ts, f.ty, 0);
+    if (ti >= 0) { return ly_type_size(ts, ts[ti]); }
+    return -1;
+}
+
+Int ly_round(Int x, Int a) { return (x + a - 1) / a * a; }
+
+// The fixed part's size: c_abi with padding and tail padding (a trailing
+// variable field adds nothing), packed for le/be; -1 when a variable field
+// is not last.
+Int ly_type_size(List(LyT) ts, LyT t) { return ly_size_at(ts, t, 0, 0); }
+
+Int ly_size_at(List(LyT) ts, LyT t, Int i, Int off) {
+    Bool c = t.kind == "c_abi";
+    if (i >= t.fs.len()) { return if (c) { ly_round(off, ly_type_align(ts, t, 0, 1)) } else { off }; }
+    Int sz = ly_fsize(ts, t.fs[i]);
+    Int o = if (c) { ly_round(off, ly_align(ts, t.fs[i])) } else { off };
+    if (sz < 0) { return if (i == t.fs.len() - 1) { if (c) { ly_round(o, ly_type_align(ts, t, 0, 1)) } else { o } } else { -1 }; }
+    return ly_size_at(ts, t, i + 1, o + sz);
+}
+
+// ─── Rules (§7.2) ───────────────────────────────────────────────────
+
+// "" when the type is well formed, else "CODE\x1fmessage\x1fpos".
+Str ly_check(List(LyT) ts, LyT t, Int i) {
+    if (i >= t.fs.len()) {
+        if (t.fs.len() == 0) { return "E0272\x1flayout type " + t.name + " has no fields\x1f" + f"{t.pos}"; }
+        return "";
+    }
+    LyF f = t.fs[i];
+    Str w = f"\x1f{f.pos}";
+    if (f.rsv > 0) { return ly_check(ts, t, i + 1); }
+    if (ly_runtime_type(f.ty)) { return "E0274\x1f" + t.name + "." + f.name + ": a " + f.ty + " is built only by the runtime, so no layout field holds one (parsing outside bytes must never forge it)" + w; }
+    if (str_starts_with(f.ty, "Challenge(")) { return "E0272\x1f" + t.name + "." + f.name + ": Challenge(N) fields arrive with channels (PLAN-labels phase 3)" + w; }
+    Bool sec = str_contains(f.ty, "Secret(");
+    if (sec && f.checks.len() > 0) { return "E0273\x1f" + t.name + "." + f.name + ": a Secret field takes no @check (a failed check would publish a bit of it)" + w; }
+    if (sec) { return "E0272\x1f" + t.name + "." + f.name + ": Secret fields arrive with channels and per-field secrecy (PLAN-labels phase 3)" + w; }
+    Int b = ly_int_bits(f.ty);
+    Bool bytes = f.ty == "List(UInt(8))";
+    Int ti = ly_type_idx(ts, f.ty, 0);
+    if (b == 0 && !bytes && ti < 0) { return "E0272\x1f" + t.name + "." + f.name + ": a layout field is UInt(8|16|32|64), Int(8|16|32|64), List(UInt(8)) with @len, or another layout type; got " + f.ty + w; }
+    if (bytes && f.len == "") { return "E0272\x1f" + t.name + "." + f.name + ": a List(UInt(8)) field needs @len(field) or @len(count)" + w; }
+    if (!bytes && f.len != "") { return "E0272\x1f" + t.name + "." + f.name + ": @len applies to List(UInt(8)) fields" + w; }
+    if (f.len != "" && !str_is_int(f.len)) {
+        Int li = ly_field_idx(t.fs, f.len, 0, i);
+        if (li < 0) { return "E0272\x1f" + t.name + "." + f.name + ": @len(" + f.len + ") names no earlier field (lengths look backward)" + w; }
+        if (ly_int_bits(t.fs[li].ty) == 0) { return "E0272\x1f" + t.name + "." + f.name + ": @len(" + f.len + ") must name an integer field" + w; }
+        if (t.kind == "c_abi" && i != t.fs.len() - 1) { return "E0272\x1f" + t.name + "." + f.name + ": under c_abi only the last field has a variable length (a flexible array member)" + w; }
+    }
+    if (f.len != "" && str_is_int(f.len) && str_parse_int(f.len) < 0) { return "E0272\x1f" + t.name + "." + f.name + ": a negative length" + w; }
+    if (ti >= 0) {
+        if (ts[ti].name == t.name) { return "E0272\x1f" + t.name + "." + f.name + ": a layout type cannot contain itself" + w; }
+        if (ts[ti].kind != t.kind) { return "E0272\x1f" + t.name + "." + f.name + ": a nested layout type must have the same layout (" + t.kind + ")" + w; }
+        if (t.kind == "c_abi" && ly_type_size(ts, ts[ti]) < 0) { return "E0272\x1f" + t.name + "." + f.name + ": under c_abi a nested type has a fixed size" + w; }
+        if (t.kind == "c_abi" && ly_type_has_var(ts[ti], 0)) { return "E0272\x1f" + t.name + "." + f.name + ": under c_abi a nested type has no variable-length field" + w; }
+    }
+    return ly_check(ts, t, i + 1);
+}
+
+Bool ly_type_has_var(LyT t, Int i) {
+    if (i >= t.fs.len()) { return false; }
+    if (t.fs[i].len != "" && !str_is_int(t.fs[i].len)) { return true; }
+    return ly_type_has_var(t, i + 1);
+}
+
+// Nesting depth is bounded (§7.2 rule 2): a cycle through nested types is
+// refused, and so is depth past 16.
+Int ly_depth(List(LyT) ts, LyT t, Int d) {
+    if (d > 16) { return d; }
+    return ly_depth_at(ts, t, 0, d, d);
+}
+
+Int ly_depth_at(List(LyT) ts, LyT t, Int i, Int d, Int best) {
+    if (i >= t.fs.len()) { return best; }
+    Int ti = ly_type_idx(ts, t.fs[i].ty, 0);
+    Int sub = if (ti >= 0) { ly_depth(ts, ts[ti], d + 1) } else { d };
+    return ly_depth_at(ts, t, i + 1, d, if (sub > best) { sub } else { best });
+}
+
+// ─── Generation ─────────────────────────────────────────────────────
+
+// SnpReportResp -> snp_report_resp.
+Str ly_snake(Str s) { return ly_snake_at(s, 0, str_len(s), StrBuf()); }
+
+Str ly_snake_at(Str s, Int i, Int n, StrBuf acc) {
+    if (i >= n) { return acc.finish(); }
+    Int c = str_char_at(s, i);
+    Bool up = c >= 65 && c <= 90;
+    StrBuf a2 = if (up && i > 0) { acc.push_char(95) } else { acc };
+    return ly_snake_at(s, i + 1, n, a2.push_char(if (up) { c + 32 } else { c }));
+}
+
+// A condition quoted inside a string literal.
+Str ly_quote(Str s) { return str_replace(str_replace(s, "\\", "\\\\"), "\"", "\\\""); }
+
+// `Err(...)` for a failed check: the default (BadReply or BadInput) quotes
+// the condition; a named constructor gets the type's name first and its
+// arguments as Int (string literals as they are).
+Str ly_err(Str tname, LyF f, Int k, Str dflt) {
+    Str ctor = f.ctors[k];
+    if (ctor == "") { return "Err(" + dflt + "(\"" + tname + "\", \"" + ly_quote(f.name + ": " + f.checks[k]) + "\"))"; }
+    Int p = ly_char(ctor, 40, 0, str_len(ctor));
+    if (p < 0) { return "Err(" + ctor + "(\"" + tname + "\"))"; }
+    Str cn = str_slice(ctor, 0, p);
+    List(Str) args = ly_split_top(str_slice(ctor, p + 1, str_len(ctor) - 1));
+    return "Err(" + cn + "(\"" + tname + "\"" + ly_ctor_args(args, 0, "") + "))";
+}
+
+Str ly_ctor_args(List(Str) as, Int i, Str acc) {
+    if (i >= as.len()) { return acc; }
+    Str a = if (str_starts_with(as[i], "\"")) { as[i] } else { "(Int) (" + as[i] + ")" };
+    return ly_ctor_args(as, i + 1, acc + ", " + a);
+}
+
+Str ly_checks(Str tname, LyF f, Int k, Str dflt, Str ind, StrBuf acc) {
+    if (k >= f.checks.len()) { return acc.finish(); }
+    return ly_checks(tname, f, k + 1, dflt, ind, acc.push(ind + "if (!(" + f.checks[k] + ")) { return " + ly_err(tname, f, k, dflt) + "; }\n"));
+}
+
+// The parser's statements for fields from i: `p` is the current offset as
+// an expression.
+Str ly_trunc(Str tname, Str what) { return "Err(BadReply(\"" + tname + "\", \"" + what + ": truncated\"))"; }
+
+StrBuf ly_parse_fields(List(LyT) ts, LyT t, Int i, Str p, StrBuf b) {
+    if (i >= t.fs.len()) { return b; }
+    LyF f = t.fs[i];
+    Bool c = t.kind == "c_abi";
+    Bool be = t.kind == "be";
+    Str at = if (c) { "(__ly_at + " + f"{ly_round_expr(ts, t, i)}" + ")" } else { p };
+    Str nx = f"__ly_p{i}";
+    Str tn = t.name;
+    if (f.rsv > 0) {
+        StrBuf b1 = b.push(f"    if ({at} + {f.rsv} > __ly_b.len()) " + "{ return " + ly_trunc(tn, "reserved bytes") + "; }\n");
+        return ly_parse_fields(ts, t, i + 1, nx, b1.push(f"    Int {nx} = {at} + {f.rsv};\n"));
+    }
+    Int bits = ly_int_bits(f.ty);
+    if (bits > 0) {
+        Int k = bits / 8;
+        Str rd = f"__ly_rd(__ly_b, {at}, {k}, " + (if (be) { "true" } else { "false" }) + ")";
+        Str val = if (ly_signed(f.ty)) { f"wrapping_i{bits}(" + rd + ")" } else { if (bits == 64) { rd } else { "(" + f.ty + ") " + rd } };
+        StrBuf b1 = b.push(f"    if ({at} + {k} > __ly_b.len()) " + "{ return " + ly_trunc(tn, f.name) + "; }\n").push("    " + f.ty + " " + f.name + " = " + val + ";\n");
+        StrBuf b2 = b1.push(ly_checks(tn, f, 0, "BadReply", "    ", StrBuf()));
+        return ly_parse_fields(ts, t, i + 1, nx, b2.push(f"    Int {nx} = {at} + {k};\n"));
+    }
+    if (f.ty == "List(UInt(8))") {
+        Str nn = f"__ly_n{i}";
+        StrBuf b1 = if (str_is_int(f.len)) { b.push(f"    Int {nn} = {f.len};\n") } else {
+            LyF lf = t.fs[ly_field_idx(t.fs, f.len, 0, i)];
+            Str neg = if (ly_signed(lf.ty)) { "    if (" + f.len + " < 0) { return Err(BadReply(\"" + tn + "\", \"" + f.name + ": negative length\")); }\n" } else { "" };
+            Str wide = if (ly_signed(lf.ty)) { "(UInt(64)) " + f.len } else { "(UInt(64)) " + f.len };
+            b.push(neg).push("    if (" + wide + f" > (UInt(64)) (__ly_b.len() - {at})) " + "{ return " + ly_trunc(tn, f.name) + "; }\n").push(f"    Int {nn} = (Int) " + f.len + ";\n")
+        };
+        StrBuf b2 = b1.push(f"    if ({at} + {nn} > __ly_b.len()) " + "{ return " + ly_trunc(tn, f.name) + "; }\n").push("    List(UInt(8)) " + f.name + f" = __ly_b[{at}..{at} + {nn}];\n");
+        StrBuf b3 = b2.push(ly_checks(tn, f, 0, "BadReply", "    ", StrBuf()));
+        return ly_parse_fields(ts, t, i + 1, nx, b3.push(f"    Int {nx} = {at} + {nn};\n"));
+    }
+    // A nested layout type.
+    Str sn = ly_snake(f.ty);
+    StrBuf b1 = b.push("    " + f.ty + "__At " + f"__ly_r{i} = " + sn + f"_parse_at(__ly_b, {at})?;\n").push("    " + f.ty + " " + f.name + f" = __ly_r{i}.v;\n");
+    StrBuf b2 = b1.push(ly_checks(tn, f, 0, "BadReply", "    ", StrBuf()));
+    return ly_parse_fields(ts, t, i + 1, nx, b2.push(f"    Int {nx} = __ly_r{i}.end;\n"));
+}
+
+// The c_abi offset of field i.
+Int ly_round_expr(List(LyT) ts, LyT t, Int i) { return ly_off_at(ts, t, 0, 0, i); }
+
+Int ly_off_at(List(LyT) ts, LyT t, Int j, Int off, Int i) {
+    Int o = ly_round(off, ly_align(ts, t.fs[j]));
+    if (j == i) { return o; }
+    return ly_off_at(ts, t, j + 1, o + ly_fsize(ts, t.fs[j]), i);
+}
+
+Str ly_field_inits(List(LyF) fs, Int i, StrBuf acc, Bool first) {
+    if (i >= fs.len()) { return acc.finish(); }
+    if (fs[i].rsv > 0) { return ly_field_inits(fs, i + 1, acc, first); }
+    StrBuf a2 = if (first) { acc } else { acc.push(", ") };
+    return ly_field_inits(fs, i + 1, a2.push("." + fs[i].name + " = " + fs[i].name), false);
+}
+
+// The serializer: checks, then each field's bytes.
+StrBuf ly_bytes_fields(List(LyT) ts, LyT t, Int i, Int off, StrBuf b) {
+    if (i >= t.fs.len()) {
+        Int pad = if (t.kind == "c_abi") { ly_type_size(ts, t) - off } else { 0 };
+        Str tail = if (pad > 0 && !ly_type_has_var(t, 0)) { f"__ly_zeros({pad})" } else { "[]" };
+        return b.push(f"    List(UInt(8)) __ly_o{i} = __ly_o{i - 1}.concat(" + tail + ");\n");
+    }
+    LyF f = t.fs[i];
+    Bool c = t.kind == "c_abi";
+    Bool be = t.kind == "be";
+    Str prev = if (i == 0) { "__ly_start" } else { f"__ly_o{i - 1}" };
+    Int o = if (c) { ly_round(off, ly_align(ts, f)) } else { off };
+    Str pad = if (o > off) { f"__ly_zeros({o - off})" } else { "[]" };
+    Str tn = t.name;
+    if (f.rsv > 0) { return ly_bytes_fields(ts, t, i + 1, o + f.rsv, b.push(f"    List(UInt(8)) __ly_o{i} = " + prev + ".concat(" + pad + f").concat(__ly_zeros({f.rsv}));\n")); }
+    Int bits = ly_int_bits(f.ty);
+    Str bind = "    " + f.ty + " " + f.name + " = __ly_r." + f.name + ";\n";
+    Str chk = ly_checks(tn, f, 0, "BadInput", "    ", StrBuf());
+    if (bits > 0) {
+        Str v = if (ly_signed(f.ty)) { f"wrapping_u64(" + f.name + ")" } else { "(UInt(64)) " + f.name };
+        Str part = f"__ly_wr(" + v + f", {bits / 8}, " + (if (be) { "true" } else { "false" }) + ")";
+        return ly_bytes_fields(ts, t, i + 1, o + bits / 8, b.push(bind).push(chk).push(f"    List(UInt(8)) __ly_o{i} = " + prev + ".concat(" + pad + ").concat(" + part + ");\n"));
+    }
+    if (f.ty == "List(UInt(8))") {
+        Str lchk = if (str_is_int(f.len)) { "    if (" + f.name + ".len() != " + f.len + ") { return Err(BadInput(\"" + tn + "\", \"" + f.name + ": length " + f.len + "\")); }\n" } else {
+            "    if ((UInt(64)) " + f.name + ".len() != (UInt(64)) " + f.len + ") { return Err(BadInput(\"" + tn + "\", \"" + f.name + ": length is not " + f.len + "\")); }\n"
+        };
+        Int sz = if (str_is_int(f.len)) { str_parse_int(f.len) } else { 0 };
+        return ly_bytes_fields(ts, t, i + 1, o + sz, b.push("    List(UInt(8)) " + f.name + " = __ly_r." + f.name + ";\n").push(lchk).push(chk).push(f"    List(UInt(8)) __ly_o{i} = " + prev + ".concat(" + pad + ").concat(" + f.name + ");\n"));
+    }
+    Str sn = ly_snake(f.ty);
+    Int ti = ly_type_idx(ts, f.ty, 0);
+    Int sz = if (ti >= 0) { ly_type_size(ts, ts[ti]) } else { 0 };
+    return ly_bytes_fields(ts, t, i + 1, o + sz, b.push("    " + f.ty + " " + f.name + " = __ly_r." + f.name + ";\n").push(chk).push(f"    List(UInt(8)) __ly_o{i} = " + prev + ".concat(" + pad + ").concat(" + sn + "_bytes(" + f.name + ")?);\n"));
+}
+
+Str ly_gen_type(List(LyT) ts, LyT t) {
+    Str sn = ly_snake(t.name);
+    Str tn = t.name;
+    Int n = t.fs.len();
+    Int fixed = ly_type_size(ts, t);
+    StrBuf b0 = StrBuf().push("\n// generated from @layout(" + t.kind + ") " + tn + "\n");
+    StrBuf b1 = b0.push("pub type " + tn + "__At = { " + tn + " v; Int end; };\n");
+    StrBuf b2 = b1.push(f"pub Int " + sn + "_size() { return " + f"{fixed}" + "; }\n").push(if (t.kind == "c_abi") { ly_offsets(ts, t, 0, StrBuf()) } else { "" });
+    StrBuf b3 = b2.push("pub Result(" + tn + "__At, DeviceError) " + sn + "_parse_at(List(UInt(8)) __ly_b, Int __ly_at) {\n").push("    if (__ly_at < 0 || __ly_at > __ly_b.len()) { return Err(BadReply(\"" + tn + "\", \"offset outside the bytes\")); }\n");
+    StrBuf b4 = ly_parse_fields(ts, t, 0, "__ly_at", b3);
+    Str end = if (t.kind == "c_abi") { "(if (" + f"__ly_p{n - 1} > __ly_at + {fixed}) " + "{ " + f"__ly_p{n - 1}" + " } else { " + f"__ly_at + {fixed}" + " })" } else { f"__ly_p{n - 1}" };
+    StrBuf b5 = b4.push("    return Ok(" + tn + "__At {.v = " + tn + " {" + ly_field_inits(t.fs, 0, StrBuf(), true) + "}, .end = " + end + "});\n}\n");
+    Str exact = if (t.kind == "c_abi") { "" } else { "    if (__ly_r.end != __ly_b.len()) { return Err(BadReply(\"" + tn + "\", \"trailing bytes\")); }\n" };
+    StrBuf b6 = b5.push("pub Result(" + tn + ", DeviceError) " + sn + "_parse(List(UInt(8)) __ly_b) {\n    " + tn + "__At __ly_r = " + sn + "_parse_at(__ly_b, 0)?;\n" + exact + "    return Ok(__ly_r.v);\n}\n");
+    StrBuf b7 = b6.push("pub Result(List(UInt(8)), DeviceError) " + sn + "_bytes(" + tn + " __ly_r) {\n    List(UInt(8)) __ly_start = [];\n");
+    StrBuf b8 = ly_bytes_fields(ts, t, 0, 0, b7);
+    return b8.push(f"    return Ok(__ly_o{n});\n" + "}\n").finish();
+}
+
+// A c_abi type's field offsets, `<snake>__<field>_at()`, for the
+// cross-check against clang (tests/labels).
+Str ly_offsets(List(LyT) ts, LyT t, Int i, StrBuf acc) {
+    if (i >= t.fs.len()) { return acc.finish(); }
+    LyF f = t.fs[i];
+    if (f.rsv > 0) { return ly_offsets(ts, t, i + 1, acc); }
+    return ly_offsets(ts, t, i + 1, acc.push("pub Int " + ly_snake(t.name) + "__" + f.name + "_at() { return " + f"{ly_round_expr(ts, t, i)}" + "; }\n"));
+}
+
+// Helpers shared by every generated function, written once.
+Str ly_helpers() {
+    return "\n// generated layout helpers (compiler/layout.resid)\n"
+        + "UInt(64) __ly_rd(List(UInt(8)) b, Int p, Int n, Bool be) { return __ly_rd_at(b, p, n, be, 0, (UInt(64)) 0); }\n"
+        + "UInt(64) __ly_rd_at(List(UInt(8)) b, Int p, Int n, Bool be, Int i, UInt(64) acc) {\n"
+        + "    if (i >= n) { return acc; }\n"
+        + "    Int sh = if (be) { (n - 1 - i) * 8 } else { i * 8 };\n"
+        + "    return __ly_rd_at(b, p, n, be, i + 1, acc | ((UInt(64)) b[p + i] << sh));\n}\n"
+        + "List(UInt(8)) __ly_wr(UInt(64) v, Int n, Bool be) { return __ly_wr_at(v, n, be, 0, []); }\n"
+        + "List(UInt(8)) __ly_wr_at(UInt(64) v, Int n, Bool be, Int i, List(UInt(8)) acc) {\n"
+        + "    if (i >= n) { return acc; }\n"
+        + "    Int sh = if (be) { (n - 1 - i) * 8 } else { i * 8 };\n"
+        + "    return __ly_wr_at(v, n, be, i + 1, acc.concat([(UInt(8)) ((v >> sh) & 255)]));\n}\n"
+        + "List(UInt(8)) __ly_zeros(Int n) { return __ly_zeros_at(n, []); }\n"
+        + "List(UInt(8)) __ly_zeros_at(Int n, List(UInt(8)) acc) { return if (n <= 0) { acc } else { __ly_zeros_at(n - 1, acc.concat([(UInt(8)) 0])) }; }\n";
+}
+
+Str ly_gen_all(List(LyT) ts, Int i, StrBuf acc) {
+    if (i >= ts.len()) { return acc.finish(); }
+    return ly_gen_all(ts, i + 1, acc.push(ly_gen_type(ts, ts[i])));
+}
+
+Str ly_check_all(List(LyT) ts, Int i) {
+    if (i >= ts.len()) { return ""; }
+    Str e = ly_check(ts, ts[i], 0);
+    if (e != "") { return e; }
+    if (ly_depth(ts, ts[i], 0) > 16) { return "E0272\x1flayout type " + ts[i].name + " nests too deep or contains itself\x1f" + f"{ts[i].pos}"; }
+    if (ly_type_idx(ts, ts[i].name, i + 1) >= 0) { return "E0272\x1flayout type " + ts[i].name + " is declared twice\x1f" + f"{ts[i].pos}"; }
+    return ly_check_all(ts, i + 1);
+}
+
+// Expand every layout type in the merged text src.
+pub LyR ly_expand(Str src) {
+    if (!str_contains(src, "@layout(")) { return LyR {.text = src, .code = "", .err = "", .at = -1}; }
+    LyS st = ly_scan(src, LyS {.ts = [], .out = [], .i = 0, .code = "", .err = "", .at = -1});
+    if (st.err != "") { return ly_fail(src, st.code, st.err, st.at); }
+    Str text = str_join(st.out, "");
+    if (st.ts.len() == 0) { return LyR {.text = text, .code = "", .err = "", .at = -1}; }
+    Str e = ly_check_all(st.ts, 0);
+    if (e != "") {
+        List(Str) p = str_split(e, "\x1f");
+        return ly_fail(src, p[0], p[1], str_parse_int(p[2]));
+    }
+    return LyR {.text = text + ly_helpers() + ly_gen_all(st.ts, 0, StrBuf()), .code = "", .err = "", .at = -1};
+}

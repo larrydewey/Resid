@@ -44,3 +44,14 @@ inside `sandbox (caps)`: it can use at most those capabilities. A module
 already imported without attenuation cannot be attenuated afterwards
 (`E0216`); import it attenuated first. A manifest dependency is compiled
 inside the capability ceiling its consumer's manifest lists.
+
+The standard library is never compiled inside such a sandbox: a
+standard-library file the module reaches through its own imports is
+compiled first, outside it. The module's calls into the standard library
+are still bounded by the sandbox, transitively (`E0211`, `E0215`), and at
+run time by its frame, so a dependency with no `declassify` can import
+`crypto.resid` for its hashing but not call `ct_eq`. Standard-library code
+it does not call does not count against its ceiling, wherever the import
+order put that file. This needs an absolute standard-library root
+(`RESID_HOME`); without one, nothing counts as the standard library and the
+files stay inside.

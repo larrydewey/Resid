@@ -27,6 +27,7 @@
 
 import "crypto.resid";
 import "word.resid";
+import "random.resid";
 import "wire.resid";
 import "tls.resid";
 import "tlsmsg.resid";
@@ -37,7 +38,11 @@ import "clock.resid";
 // A client's connection: the socket, the keys, and the record bytes read
 // past the server's Finished. A client pipelines too -- it sends its
 // Finished and its first request in one go -- so those bytes matter.
+@opaque
 type TlsClient = { Int fd; TlsKeys keys; Bool eof; List(Int) buf; };
+
+// This client's end of the connection, for challenge_with_channel.
+pub ChannelExporter tlsclient_exporter(TlsClient c) { return ChannelExporter {.x = c.keys.exp}; }
 
 // What a client is told before it connects: the name to ask for (sent as
 // the server name and checked against the certificate), what to check it
@@ -93,7 +98,7 @@ pub TlsDial tls_client_connect(Str host, Int port, TlsClientCfg cfg) {
     if (fd < 0) { return tls_dial_err("cannot connect to " + host + ":" + f"{port}"); }
     _ = resid_tcp_deadline(fd, cfg.deadline_ms);
     // Secret from the moment it is drawn; the share is published.
-    List(Secret(UInt(8))) priv = secret_bytes(random_bytes(32));
+    List(Secret(UInt(8))) priv = random_secret(32);
     List(Int) ch = tlsmsg_client_hello(cfg.name, cfg.alpn, random_bytes(32), x25519g_public(priv));
     if (!tc_send_plain(fd, ch)) {
         _ = resid_tcp_close(fd);
@@ -187,7 +192,7 @@ pub TcDone tls_client_finish(List(Int) ch, List(Secret(UInt(8))) priv, TlsClient
     Bool offered_it = if (chosen.len() == 0) { true } else { tc_offers_str(cfg.alpn, 0, chosen[0]) };
     if (!offered_it) { return tc_fail(fl.in, "the server selected '" + chosen[0] + "', which this client did not offer"); }
     Str alpn = if (chosen.len() == 0) { "" } else { chosen[0] };
-    TlsKeys keys = tls_keys_pending(tlsg_traffic_key(s_ap), tlsg_traffic_iv(s_ap), tlsg_traffic_key(c_ap), tlsg_traffic_iv(c_ap), alpn, fl.in.buf);
+    TlsKeys keys = tls_keys_exporter(tls_keys_pending(tlsg_traffic_key(s_ap), tlsg_traffic_iv(s_ap), tlsg_traffic_key(c_ap), tlsg_traffic_iv(c_ap), alpn, fl.in.buf), master, th4);
     return TcDone { .in = fl.in, .keys = keys, .finished = cf_rec, .err = "" };
 }
 

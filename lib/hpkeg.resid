@@ -47,6 +47,7 @@ import "x25519g.resid";
 import "ecdsa.resid";
 import "aesgcmg.resid";
 import "chachag.resid";
+import "random.resid";
 
 pub type HpkeSuite = { Int kem; Int kdf; Int aead; };
 
@@ -149,6 +150,7 @@ Curve hg_curve(Int kem) { return if (kem == 17) { P384 } else { P256 }; }
 // point for P-256 and P-384; empty for an unknown KEM or a private key
 // out of range. Published by design (X25519Pub, or the curve's open).
 @needs(Wide512(P, B), X25519Pub(B), P256Word(E, B), P384Word(G, B))
+@one_way(sk)
 pub List(Int) hpkeg_public_key(Int kem, List(B) sk) {
     if (kem == 32) { return x25519g_public(sk); }
     if (!hpke_kem_ok(kem)) { return []; }
@@ -194,12 +196,12 @@ HpkeKeyPairG(B) hg_dkp_candidate(Int kem, List(Int) sid, List(B) prk, Int counte
     return hg_dkp_candidate(kem, sid, prk, counter + 1);
 }
 
-// A fresh key pair from the operating system's randomness (classified at
-// secret types).
-@needs(Word(W, B), Word64(D, B), Wide512(P, B), X25519Pub(B), P256Word(E, B), P384Word(G, B))
+// A fresh key pair from the runtime's randomness, drawn at B (secret from
+// the start at secret types: lib/random.resid).
+@needs(Word(W, B), Word64(D, B), Wide512(P, B), X25519Pub(B), P256Word(E, B), P384Word(G, B), Random(B))
 pub HpkeKeyPairG(B) hpkeg_generate_keypair(Int kem) {
-    ListBuf(B) rb = ListBuf();
-    return hpkeg_derive_keypair(kem, w_lift_bytes(random_bytes(hpke_kem_nsk(kem)), 0, rb));
+    List(B) ikm = b_random(hpke_kem_nsk(kem));
+    return hpkeg_derive_keypair(kem, ikm);
 }
 
 // The result of Encap / AuthEncap: the shared secret and enc.
@@ -326,7 +328,7 @@ pub type HpkeSenderG(B) = { HpkeCtxG(B) ctx; List(Int) enc; };
 // Every sender setup (§5.1.2-5.1.4), under any KEM: the mode from which
 // of psk and skS are given; ikmE pins the ephemeral key (tests), empty
 // draws a fresh one.
-@needs(Word(W, B), Word64(D, B), Wide512(P, B), CtSame(B), X25519Pub(B), P256Word(E, B), P384Word(G, B))
+@needs(Word(W, B), Word64(D, B), Wide512(P, B), CtSame(B), X25519Pub(B), P256Word(E, B), P384Word(G, B), Random(B))
 pub HpkeSenderG(B) hpkeg_setup_sender_full(HpkeSuite s, List(Int) pkR, List(Int) info, List(B) psk, List(Int) psk_id, List(B) skS, List(B) ikmE) {
     HpkeSenderG(B) bad = HpkeSenderG {.ctx = hpkeg_ctx_bad(s), .enc = []};
     if (!hpke_suite_ok(s)) { return bad; }
@@ -346,7 +348,7 @@ pub HpkeCtxG(B) hpkeg_setup_receiver_full(HpkeSuite s, List(Int) enc, List(B) sk
 }
 
 // Base mode (the common case).
-@needs(Word(W, B), Word64(D, B), Wide512(P, B), CtSame(B), X25519Pub(B), P256Word(E, B), P384Word(G, B))
+@needs(Word(W, B), Word64(D, B), Wide512(P, B), CtSame(B), X25519Pub(B), P256Word(E, B), P384Word(G, B), Random(B))
 pub HpkeSenderG(B) hpkeg_setup_sender(HpkeSuite s, List(Int) pkR, List(Int) info) {
     List(B) none = [];
     return hpkeg_setup_sender_full(s, pkR, info, none, [], none, none);
@@ -427,7 +429,7 @@ pub List(B) hpkeg_export(HpkeCtxG(B) c, List(Int) exporter_context, Int len) {
 pub type HpkeMessageG(B) = { Bool ok; List(Int) enc; List(B) ct; };
 
 // Seal one message to pkR in base mode.
-@needs(Word(W, B), Word64(D, B), Block128(X, W, B), Wide512(P, B), CtSame(B), X25519Pub(B), P256Word(E, B), P384Word(G, B))
+@needs(Word(W, B), Word64(D, B), Block128(X, W, B), Wide512(P, B), CtSame(B), X25519Pub(B), P256Word(E, B), P384Word(G, B), Random(B))
 pub HpkeMessageG(B) hpkeg_seal_to(HpkeSuite s, List(Int) pkR, List(Int) info, List(Int) aad, List(B) pt) {
     HpkeSenderG(B) snd = hpkeg_setup_sender(s, pkR, info);
     HpkeSealedG(B) sealed = hpkeg_seal(snd.ctx, aad, pt);

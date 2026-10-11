@@ -253,6 +253,7 @@ P eg_scalar(List(B) h) {
 
 // The 32-byte public key A = [a]B of a 32-byte seed (published).
 @needs(Wide512(P, B), Word64(W, B), Publish(B))
+@one_way(seed)
 pub List(Int) ed25519g_pub(List(B) seed) {
     List(B) h = sha512g(seed);
     return w_publish(eg_encode(eg_base_mul(eg_scalar(h))));
@@ -263,6 +264,7 @@ pub List(Int) ed25519g_pub(List(B) seed) {
 // S = (r + k a) mod L. A and R are published as soon as they are known;
 // S last.
 @needs(Wide512(P, B), Word64(W, B), Publish(B))
+@key(seed)
 pub List(Int) ed25519g_sign(List(B) seed, List(Int) msg) {
     List(B) h = sha512g(seed);
     P a = eg_scalar(h);

@@ -1,0 +1,4 @@
+import "dev/device.resid";
+@layout(le)
+type BadField = { Str name; };
+Int main() { return 0; }

@@ -1,0 +1,4 @@
+import "dev/device.resid";
+@layout(be)
+type FwdLen = { @len(n) List(UInt(8)) data; UInt(16) n; };
+Int main() { return 0; }

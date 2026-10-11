@@ -1,0 +1,30 @@
+// c_abi layouts checked against clang (tests/labels/run.sh): every offset
+// and size below must equal the C compiler's for x86-64 and AArch64.
+import "dev/device.resid";
+
+@layout(c_abi)
+type Pad1 = { UInt(8) a; UInt(32) b; UInt(16) c; };
+
+@layout(c_abi)
+type Pad2 = { UInt(64) a; UInt(8) b; };
+
+@layout(c_abi)
+type Inner = { UInt(16) x; UInt(8) y; };
+
+@layout(c_abi)
+type Outer = { UInt(8) a; Inner mid; UInt(64) z; UInt(8) tail; };
+
+@layout(c_abi)
+type Flex = { UInt(32) n; UInt(16) k; @len(n) List(UInt(8)) data; };
+
+@layout(c_abi)
+type Fixed = { @len(5) List(UInt(8)) id; UInt(32) v; Int(16) s; };
+
+Int main() {
+    println(f"Pad1 {pad1_size()} {pad1__a_at()} {pad1__b_at()} {pad1__c_at()}");
+    println(f"Pad2 {pad2_size()} {pad2__a_at()} {pad2__b_at()}");
+    println(f"Outer {outer_size()} {outer__a_at()} {outer__mid_at()} {outer__z_at()} {outer__tail_at()}");
+    println(f"Flex {flex_size()} {flex__n_at()} {flex__k_at()} {flex__data_at()}");
+    println(f"Fixed {fixed_size()} {fixed__id_at()} {fixed__v_at()} {fixed__s_at()}");
+    return 0;
+}

@@ -1,0 +1,58 @@
+// Layout types (PLAN-labels §7): generated total parsers and serializers.
+import "dev/device.resid";
+
+@layout(c_abi)
+pub type DemoResp = {
+    @check(status == 0, Kernel(status)) UInt(32) status;
+    @check(report_size <= 64) UInt(32) report_size;
+    @reserved(24);
+    @len(report_size) List(UInt(8)) report;
+};
+
+@layout(c_abi)
+pub type DemoReq = {
+    @len(8) List(UInt(8)) user_data;
+    @check(vmpl <= 3) UInt(32) vmpl;
+    UInt(8) flag;
+    @reserved(3);
+    UInt(64) wide;
+};
+
+@layout(be)
+pub type TpmHdr = {
+    UInt(16) tag;
+    UInt(32) size;
+    @check(code == 0) UInt(32) code;
+};
+
+@layout(be)
+pub type Tpm2b = {
+    UInt(16) n;
+    @len(n) List(UInt(8)) data;
+    TpmHdr h;
+};
+
+Str showr(Result(DemoResp, DeviceError) r) {
+    return match r { Ok(v) => f"ok status={v.status} size={v.report_size} report={v.report}", Err(e) => device_error_text(e) };
+}
+
+Int main() {
+    List(UInt(8)) good = [0, 0, 0, 0, 3, 0, 0, 0, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 7, 8, 9, 10];
+    println(showr(demo_resp_parse(good)));
+    println(showr(demo_resp_parse(good[0..33])));
+    println(showr(demo_resp_parse(good.with(0, 5))));
+    println(showr(demo_resp_parse(good.with(4, 200))));
+    println(showr(demo_resp_parse([])));
+    println(f"{demo_resp_size()} {demo_req_size()} {tpm_hdr_size()}");
+    DemoReq q = DemoReq {.user_data = [1, 2, 3, 4, 5, 6, 7, 8], .vmpl = 2, .flag = 1, .wide = 258};
+    println(match demo_req_bytes(q) { Ok(b) => f"{b}", Err(e) => device_error_text(e) });
+    DemoReq bad = DemoReq {.user_data = [1, 2, 3, 4, 5, 6, 7, 8], .vmpl = 9, .flag = 1, .wide = 258};
+    println(match demo_req_bytes(bad) { Ok(b) => f"{b}", Err(e) => device_error_text(e) });
+    List(UInt(8)) t = [0, 2, 170, 187, 128, 1, 0, 0, 0, 10, 0, 0, 0, 0];
+    println(match tpm2b_parse(t) { Ok(v) => f"n={v.n} data={v.data} tag={v.h.tag} size={v.h.size}", Err(e) => device_error_text(e) });
+    println(match tpm2b_parse(t.concat([1])) { Ok(v) => "ok", Err(e) => device_error_text(e) });
+    println(match tpm2b_parse([0, 200, 1]) { Ok(v) => "ok", Err(e) => device_error_text(e) });
+    Tpm2b v2 = Tpm2b {.n = 2, .data = [170, 187], .h = TpmHdr {.tag = 32769, .size = 10, .code = 0}};
+    println(match tpm2b_bytes(v2) { Ok(b) => f"{b}", Err(e) => device_error_text(e) });
+    return 0;
+}

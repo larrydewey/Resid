@@ -1,0 +1,8 @@
+// A CPU feature answer is External in a program; the standard library's
+// dispatch on one is selection-equivalent (the hash below is Internal).
+import "crypto.resid";
+Int main() {
+    Bool hw = resid_cpu_has_aesni();
+    Str d = sha256("abc");
+    return if (hw) { str_len(d) } else { 0 };
+}

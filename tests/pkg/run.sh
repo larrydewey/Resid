@@ -489,6 +489,21 @@ sed -i 's/devices = \["sev_guest"\]/devices = ["sev_guest.snp_get_report"]/' "$W
 if [ $? -eq 0 ]; then ok; else bad "pkg_device_ceiling: a descriptor bound: $(grep -m1 -i error "$W/dapp3.out")"; fi
 (cd "$ROOT" && "$MAN" depmap "$W/dapp/resid.toml" "$W/dapp.depmap") > /dev/null 2>&1
 if grep -qx '@devices::probe::sev_guest.snp_get_report' "$W/dapp.depmap"; then ok; else bad "pkg_device_ceiling: depmap bound line: $(cat "$W/dapp.depmap")"; fi
+# The standard library stays outside a dependency's sandbox: a dependency
+# with an empty ceiling imports lib/crypto.resid (whose ct_eq needs
+# declassify) and uses only its public hashing, and uses a default
+# parameter of its own; one that calls the clock through lib/clock.resid
+# is still refused (E0211, transitively).
+mkpkg "$W/dstd" dstd 1.0.0 $'import "crypto.resid";\npub Int dstd_n(Int extra = 2) { return sha256_bytes([1, 2, 3]).len() + extra; }'
+mkdir -p "$W/sapp/src"
+printf '[package]\nname = "sapp"\nversion = "0.1.0"\n\n[dependencies.dstd]\npath = "../dstd"\ncapabilities = []\n' > "$W/sapp/resid.toml"
+printf 'import "dstd";\nInt main() { println(f"{dstd_n()} {dstd_n(extra = 0)}"); return 0; }\n' > "$W/sapp/src/main.resid"
+(cd "$ROOT" && "$MAN" build "$W/sapp/resid.toml" "$COMPILER") > "$W/sapp.out" 2>&1
+if [ $? -eq 0 ] && [ "$("$W/sapp/target/resid/sapp")" = "34 32" ]; then ok; else bad "pkg_stdlib_outside_sandbox: $(grep -m2 -i error "$W/sapp.out")"; fi
+mkpkg "$W/dstd" dstd 1.0.0 $'import "clock.resid";\npub Int dstd_n() { return clock_now_seconds(); }'
+printf 'import "dstd";\n@requires(clock(readonly))\nInt main() { println(f"{dstd_n()}"); return 0; }\n' > "$W/sapp/src/main.resid"
+(cd "$ROOT" && "$MAN" build "$W/sapp/resid.toml" "$COMPILER") > "$W/sapp2.out" 2>&1
+if [ $? -ne 0 ] && grep -q "E0211.*clock_now_seconds" "$W/sapp2.out"; then ok; else bad "pkg_stdlib_outside_sandbox: a stdlib call beyond the ceiling was not refused: $(grep -m1 -i error "$W/sapp2.out")"; fi
 # A sub-dependency's bound must lie inside its parent's.
 mkpkg "$W/dmid" dmid 1.0.0 $'import "probe";\npub Int dmid_n() { return 1; }'
 printf '\n[dependencies.probe]\npath = "../probe"\ncapabilities = ["device(readonly)"]\ndevices = ["sev_guest", "tpm"]\n' >> "$W/dmid/resid.toml"

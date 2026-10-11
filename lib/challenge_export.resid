@@ -1,0 +1,185 @@
+// challenge_export.resid — exportable challenge records (PLAN-labels.md §6.8).
+//
+// Apart from lib/challenge.resid because it reads the clock: a program that
+// only issues and spends records (every device wrapper) keeps a grant
+// without `clock`.
+
+import "challenge.resid";
+import "crypto.resid";
+import "random.resid";
+import "word.resid";
+import "sha256g.resid";
+import "aesgcmg.resid";
+import "sha512g.resid";
+
+// A record leaves its process only as a sealed token, for a verifier that
+// runs as several processes: t ‖ AES-256-GCM(HKDF-SHA256(k, salt = t,
+// info = "resid.challenge.export.v1"), zero nonce, body), where t is 32
+// fresh bytes, so each per-token key seals once. The body is the format
+// version, the value's length, the expiry (Unix seconds), the nonce and
+// bind (lengths as 4 bytes, big-endian). The value is recomputed on import.
+
+// The key all of a verifier's processes hold: 32 bytes, own or provisioned
+// (PLAN-labels.md §5.2, checked by E-key).
+@opaque
+pub type ExportKey = { List(Secret(UInt(8))) k; };
+
+// A record imported without a store: its single use is unchecked across
+// processes, so it has its own type, which a verifier takes only in its
+// replayable form.
+@opaque
+pub type ReplayableRecord = { ChallengeRecord r; };
+
+pub type Imported(S) = { ChallengeRecord record; S store; };
+
+pub type ChallengeError = Malformed | Forged | Expired | Spent | NotExportable;
+
+pub Str challenge_error_text(ChallengeError e) {
+    return match e {
+        Malformed => "challenge token: malformed",
+        Forged => "challenge token: does not open under this key",
+        Expired => "challenge token: expired",
+        Spent => "challenge token: already used",
+        NotExportable => "challenge record: already spent, accepted or exported",
+    };
+}
+
+// Single use across processes: spending an id must be atomic in the store
+// (two processes spending one id see exactly one Ok), and the store keeps
+// its own high-water mark (the latest reading of its own clock), refuses an
+// expiry not after it and forgets an id only once its expiry is behind it.
+// That is each instance's contract, a stated reliance.
+behavior SpentStore(S) {
+    Result(S, Str) spend(S s, List(UInt(8)) id, Int expires_unix);
+}
+
+@key(k, own, provisioned)
+pub ExportKey export_key(List(Secret(UInt(8))) k) {
+    rt_assert(k.len() == 32, "export_key: the key is 32 bytes");
+    return ExportKey {.k = k};
+}
+
+// The per-token key.
+List(Secret(UInt(8))) chal_token_key(ExportKey k, List(UInt(8)) t) {
+    List(Secret(UInt(8))) prk = hkdf256g_extract(chal_lift(t), k.k);
+    return hkdf256g_expand(prk, chal_lift(chal_bytes(bytes_of("resid.challenge.export.v1"))), 32);
+}
+
+List(Int) chal_zero_iv() { return [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]; }
+
+List(Int) chal_u64(Int v) { return chal_u32(v >> 32).concat(chal_u32(v & 4294967295)); }
+
+// A record as a token. Refused when it was spent in a request, accepted or
+// exported; exporting marks it, so from then on it is accepted only through
+// an import of the token, which passes the store.
+@requires(clock(readonly), declassify)
+pub Result(List(UInt(8)), ChallengeError) challenge_export(ChallengeRecord c, ExportKey k) {
+    Int left = resid_chal_left(c.handle);
+    if (left <= 0) { return Err(NotExportable); }
+    if (resid_chal_mark(c.handle, 3) != 0) { return Err(NotExportable); }
+    Int expiry = clock.now_sec() + left;
+    List(Int) body = [1, c.value.len()].concat(chal_u64(expiry)).concat(chal_u32(c.nonce.len())).concat(chal_ints(c.nonce)).concat(chal_u32(c.bind.len())).concat(chal_ints(c.bind));
+    List(UInt(8)) t = chal_bytes(random_bytes(32));
+    List(Secret(UInt(8))) ct = aes_gcmg_seal(chal_token_key(k, t), chal_zero_iv(), chal_lift(chal_bytes(body)), []);
+    return Ok(t.concat(chal_publish(ct, 0, ListBuf())));
+}
+
+// Ciphertext is published: encryption does not disclose the body. Each
+// published byte is also ct_public, so the constant-time check (tests/ct)
+// sees it as public from here on.
+@requires(declassify)
+List(UInt(8)) chal_publish(List(Secret(UInt(8))) ct, Int i, ListBuf(UInt(8)) acc) {
+    if (i >= ct.len()) { return acc.finish(); }
+    return chal_publish(ct, i + 1, acc.push((UInt(8)) ct_public((Int) declassify(ct[i], "challenge export token: ciphertext"))));
+}
+
+@requires(declassify)
+List(UInt(8)) chal_open_body(List(Secret(UInt(8))) pt, Int i, ListBuf(UInt(8)) acc) {
+    if (i >= pt.len()) { return acc.finish(); }
+    return chal_open_body(pt, i + 1, acc.push((UInt(8)) ct_public((Int) declassify(pt[i], "challenge export token: opened body (public fields)"))));
+}
+
+type ChalBody = { Int n; Int expiry; List(UInt(8)) nonce; List(UInt(8)) bind; };
+
+Int chal_be(List(UInt(8)) b, Int at, Int k, Int acc) { return if (k <= 0) { acc } else { chal_be(b, at + 1, k - 1, (acc << 8) | (Int) b[at]) }; }
+
+// Open and parse a token; every length is checked before it is read.
+@requires(declassify)
+Result(ChalBody, ChallengeError) chal_open(List(UInt(8)) token, ExportKey k) {
+    if (token.len() < 32 + 16 + 18 + 32) { return Err(Malformed); }
+    List(UInt(8)) t = token[0..32];
+    Option(List(Secret(UInt(8)))) opened = aes_gcmg_decrypt(chal_token_key(k, t), chal_zero_iv(), chal_ints(token[32..token.len()]), []);
+    List(Secret(UInt(8))) pt = match opened { Some(p) => p, None => [] };
+    if (pt.len() == 0) { return Err(Forged); }
+    List(UInt(8)) b = chal_open_body(pt, 0, ListBuf());
+    if (b.len() < 18 || (Int) b[0] != 1) { return Err(Malformed); }
+    Int n = (Int) b[1];
+    Int expiry = chal_be(b, 2, 8, 0);
+    Int nl = chal_be(b, 10, 4, 0);
+    if (nl != 32 || 14 + nl + 4 > b.len()) { return Err(Malformed); }
+    Int bl = chal_be(b, 14 + nl, 4, 0);
+    if (18 + nl + bl != b.len() || n < 32 || n > 64) { return Err(Malformed); }
+    return Ok(ChalBody {.n = n, .expiry = expiry, .nonce = b[14..14 + nl], .bind = b[18 + nl..18 + nl + bl]});
+}
+
+// The record a token carries, as a record of this process (imported: it
+// serves only a verifier), or why not. Refused when the same token was
+// imported here before, whatever the store says.
+@requires(clock(readonly), declassify)
+Result(ChallengeRecord, ChallengeError) chal_import_record(ChalBody b) {
+    Int left = b.expiry - clock.now_sec();
+    if (left <= 0) { return Err(Expired); }
+    Int h = resid_chal_new(chal_ints(b.nonce), left, 1);
+    if (h == 0 - 1) { return Err(Spent); }
+    if (h <= 0) { return Err(Malformed); }
+    return Ok(ChallengeRecord {.handle = h, .nonce = b.nonce, .bind = b.bind, .value = chal_value(b.nonce, b.bind, b.n)});
+}
+
+// Import a token, spending it in the store first: Spent when the store has
+// seen it. The store comes back with the record, so a store that is a value
+// carries its spends forward.
+@requires(clock(readonly), declassify)
+@needs(SpentStore(S))
+pub Result(Imported(S), ChallengeError) challenge_import(List(UInt(8)) token, ExportKey k, S store) {
+    ChalBody b = chal_open(token, k)?;
+    if (b.expiry - clock.now_sec() <= 0) { return Err(Expired); }
+    List(UInt(8)) id = chal_bytes(sha256_bytes(chal_ints(b.nonce)));
+    Result(S, Str) sp = spend(store, id, b.expiry);
+    S s2 = match sp { Ok(v) => v, Err(e) => store };
+    Bool ok = match sp { Ok(v) => true, Err(e) => false };
+    if (!ok) { return Err(Spent); }
+    ChallengeRecord r = chal_import_record(b)?;
+    return Ok(Imported {.record = r, .store = s2});
+}
+
+// Import a token without a store: single use across processes unchecked.
+@requires(clock(readonly), declassify)
+pub Result(ReplayableRecord, ChallengeError) challenge_import_unspent(List(UInt(8)) token, ExportKey k) {
+    ChalBody b = chal_open(token, k)?;
+    ChallengeRecord r = chal_import_record(b)?;
+    return Ok(ReplayableRecord {.r = r});
+}
+
+pub List(UInt(8)) replayable_value(ReplayableRecord r) { return r.r.value; }
+
+// An in-memory store for tests and single-process use: spent ids with
+// their expiry, and the high-water mark of the clock it reads itself.
+pub type MemSpentStore = { Map(Str, Int) ids; Int mark; };
+
+pub MemSpentStore mem_spent_store() {
+    Map(Str, Int) none = {};
+    return MemSpentStore {.ids = none, .mark = 0};
+}
+
+@requires(clock(readonly))
+Result(MemSpentStore, Str) mem_spend(MemSpentStore s, List(UInt(8)) id, Int expires_unix) {
+    Int now = clock.now_sec();
+    Int mark = if (now > s.mark) { now } else { s.mark };
+    if (expires_unix <= mark) { return Err("expired"); }
+    Str key = f"{id}";
+    if (s.ids.contains(key)) { return Err("spent"); }
+    return Ok(MemSpentStore {.ids = s.ids.insert(key, expires_unix), .mark = mark});
+}
+
+SpentStore(MemSpentStore) = mem_spend;
+

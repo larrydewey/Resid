@@ -538,6 +538,15 @@ timeout 180 "$W/tlsclient2" otherhost > "$W/client_bad.out" 2>&1
 grep -q "not trusted for 'otherhost'" "$W/client_bad.out" && ok \
     || bad "untrusted name refused: $(tail -2 "$W/client_bad.out" | tr '\n' ' ')"
 
+# Channel binding (PLAN-labels.md §6.5): both ends derive one exporter
+# (RFC 9266), so the server's challenge_with_channel equals the client's,
+# and a second connection gives another value.
+(cd "$ROOT" && "$COMPILER" tests/tls/exporter.resid -o "$W/exporter") > "$W/build.log" 2>&1 || {
+    echo "FAIL build tests/tls/exporter.resid"; grep -i error "$W/build.log" | head -3; exit 1; }
+(cd "$ROOT" && timeout 120 "$W/exporter") > "$W/exporter.out" 2>&1
+grep -q "^EXPORTER same=true second_same=true differ=true len=true$" "$W/exporter.out" && ok \
+    || bad "channel binding: $(tail -2 "$W/exporter.out" | tr '\n' ' ')"
+
 # ── large transfers and keep-alive ─────────────────────────────────────
 # Bodies bigger than one record, both ways, against a wall-clock bound: the
 # record paths are linear (8 MiB takes about half a second here; a path

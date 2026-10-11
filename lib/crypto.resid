@@ -976,22 +976,35 @@ pub List(Int) hkdf_sha256(List(Int) salt, List(Int) ikm, List(Int) info, Int len
     return hkdf_expand(prk, info, len);
 }
 
-// ─── Secure randomness (OS entropy via runtime hook) ────────────
-// The single C boundary in the library: entropy must come from the OS.
-// Everything above this line is pure Resid.
+// ─── Secure randomness (PLAN-labels.md §6.6) ────────────────────
+// Every 64-byte block is one fresh draw: SHA-512 over u32be(32) ‖ k ‖
+// u32be(len c) ‖ c, where k is 32 bytes of getrandom (blocking, no
+// fallback) and c is 32 bytes of the CPU source (RDSEED, RNDR) or nothing
+// when there is none. Either source alone suffices and neither can cancel
+// the other; nothing is kept between draws.
 
-pub List(Int) rand_acc(List(Int) acc, Int n, Int i) {
-    if (i >= n) { return acc; }
-    Int b = resid_crypto_random_byte();
-    List(Int) acc2 = acc.concat([b]);
-    Int ni = i + 1;
-    return rand_acc(acc2, n, ni);
-}
-
-// n cryptographically random bytes.
+// n fresh bytes. Public: fresh enough for nonces and challenges, never a
+// key (keys draw through random_secret, lib/random.resid). A process whose
+// getrandom fails stops here rather than use unseeded bytes.
+@fresh_source(n)
 pub List(Int) random_bytes(Int n) {
-    return rand_acc([], n, 0);
+    if (n <= 0) { return []; }
+    return rand_blocks(n, []);
 }
+
+List(Int) rand_blocks(Int n, List(Int) acc) {
+    if (acc.len() >= n) { return acc[0..n]; }
+    return rand_blocks(n, acc.concat(rand_block()));
+}
+
+List(Int) rand_block() {
+    List(Int) k = resid_random_os(32);
+    rt_assert(k.len() == 32, "random: getrandom failed, and there is no randomness without it");
+    List(Int) c = resid_random_cpu(32);
+    return sha512_bytes(rand_u32(32).concat(k).concat(rand_u32(c.len())).concat(c));
+}
+
+List(Int) rand_u32(Int v) { return [(v >> 24) & 255, (v >> 16) & 255, (v >> 8) & 255, v & 255]; }
 
 pub Str random_hex(Int nbytes) {
     return hex_encode(random_bytes(nbytes));

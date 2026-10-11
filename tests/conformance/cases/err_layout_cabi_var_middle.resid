@@ -1,0 +1,4 @@
+import "dev/device.resid";
+@layout(c_abi)
+type MidVar = { UInt(32) n; @len(n) List(UInt(8)) data; UInt(32) after; };
+Int main() { return 0; }

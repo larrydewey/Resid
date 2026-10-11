@@ -1,0 +1,19 @@
+bind bit @ select.resid:7:5: External
+  select.resid:6:13  mcall get  -- outside data enters here (args.get)
+  select.resid:6:5  bind a
+  select.resid:7:19  call str_len
+  select.resid:7:15  ifx  -- chosen by outside data
+  select.resid:7:5  bind bit
+bind m @ select.resid:8:5: External
+  select.resid:6:13  mcall get  -- outside data enters here (args.get)
+  select.resid:6:5  bind a
+  select.resid:8:25  call str_len
+  select.resid:8:19  call maybe
+  select.resid:8:13  match  -- chosen by outside data
+  select.resid:8:5  bind m
+bind after @ select.resid:10:5: Internal
+ret @ select.resid:9:27: External
+  select.resid:6:13  mcall get  -- outside data enters here (args.get)
+  select.resid:6:5  bind a
+  select.resid:9:9  call str_len
+  select.resid:9:27  ret  -- chosen by outside data

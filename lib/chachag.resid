@@ -276,6 +276,8 @@ List(B) cg_mac_input(List(Int) aad, List(B) ct) {
 // Seal: ciphertext || 16-byte tag. At secret types the output is secret;
 // the caller declassifies it to send it.
 @needs(Word(W, B), Wide512(P, B))
+@key(key)
+@nonce(nonce)
 pub List(B) chacha20poly1305g_seal(List(B) key, List(Int) nonce, List(B) plaintext, List(Int) aad) {
     List(B) mackey = chachag_block(key, 0, nonce)[0..32];
     List(B) ct = chachag_xor(key, 1, nonce, plaintext);
@@ -306,6 +308,8 @@ pub Option(List(B)) chacha20poly1305g_decrypt(List(B) key, List(Int) nonce, List
 // at secret types it stays secret. Otherwise as above.
 
 @needs(Word(W, B), Wide512(P, B))
+@key(key)
+@nonce(nonce)
 pub List(B) chacha20poly1305g_seal_nb(List(B) key, List(B) nonce, List(B) plaintext, List(Int) aad) {
     List(B) none = [];
     if (key.len() != 32 || nonce.len() != 12) { return none; }

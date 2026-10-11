@@ -120,7 +120,7 @@ Int workers(Int lfd, Int n, Str root, Int conns, TlsCfg conf) {
     return rest + (if (mine < 0) { 0 } else { mine });
 }
 
-@requires(args, network, filesystem, declassify)
+@requires(args, network, filesystem, declassify, provision)
 Int main() {
     Opts o = parse(1, args.count(), Opts { .cert = "", .key = "", .alpn = "http/1.1", .port = 8443, .public = false, .workers = 4, .root = "", .conns = 0, .port_file = "", .ok = true });
     if (!o.ok || o.cert == "" || o.key == "") {

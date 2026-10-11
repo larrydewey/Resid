@@ -48,7 +48,7 @@ Str read_reply(TlsClient c, List(Int) acc, Int rounds) {
     return read_reply(in.conn, in.data, rounds - 1);
 }
 
-@requires(args, filesystem(readonly), network, clock(readonly), declassify)
+@requires(args, filesystem(readonly), network, clock(readonly), declassify, provision)
 Int main() {
     Str mode = args.get(1);
     Int n = if (args.count() > 2) { str_parse_int(args.get(2)) } else { 0 };

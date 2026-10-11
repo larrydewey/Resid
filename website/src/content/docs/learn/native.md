@@ -86,11 +86,12 @@ Before any native instruction runs, the host locks itself down:
 - It has an empty environment, and none of the calling program's memory.
 - It disables the CPU's time-stamp counter and unmaps the kernel's clock
   pages.
-- It installs a kernel (seccomp) filter that allows reading and writing
-  that one socket, allocating non-executable memory, and exiting.
-  **Anything else kills the process**: opening a file, opening a
-  socket, reading the clock, starting a process, even asking for its own
-  process id.
+- It installs a kernel (seccomp) filter that allows writing the reply
+  to that one socket and exiting. **Anything else kills the process**:
+  opening a file, opening a socket, reading the clock, starting a
+  process, asking for memory, even asking for its own process id.
+- Where the CPU has one, it turns on a shadow stack, so every return
+  must match its call.
 
 So a native module is pure computation, enforced by the kernel rather
 than by trust. If the C code tries to escape, the call fails:

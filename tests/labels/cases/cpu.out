@@ -1,0 +1,4 @@
+bind hw @ cpu.resid:5:5: External
+  cpu.resid:5:15  call resid_cpu_has_aesni  -- outside data enters here (CPU feature query: resid_cpu_has_aesni)
+  cpu.resid:5:5  bind hw
+bind d @ cpu.resid:6:5: Internal

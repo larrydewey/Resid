@@ -96,11 +96,27 @@ Str ds_last_ident(Str s, Int pos, Int end, Str acc) {
 
 // ─── Pass A: signatures ─────────────────────────────────────────
 
+// A dependency's module is wrapped in a top-level `sandbox (caps) { ... }`
+// (spec §22): its braces do not nest the declarations inside. After the
+// `{` of such a header, or -1.
+Int ds_sandbox_open(Str s, Tok t) {
+    if (t.kind != "ident" || t.text != "sandbox") { return -1; }
+    Tok o = lex_tok(s, t.pos);
+    if (o.text != "(") { return -1; }
+    Tok b = lex_tok(s, ds_close(s, o.pos, 0));
+    return if (b.text == "{") { b.pos } else { -1 };
+}
+
+// Depth after a `}`: at the top level it closes a sandbox wrapper.
+Int ds_close_depth(Int depth) { return if (depth > 0) { depth - 1 } else { 0 }; }
+
 DsSig ds_collect(Str s, Int pos, Int depth, DsSig acc) {
     Tok t = lex_tok(s, pos);
     if (t.kind == "eof") { return acc; }
     if (t.text == "{") { return ds_collect(s, t.pos, depth + 1, acc); }
-    if (t.text == "}") { return ds_collect(s, t.pos, depth - 1, acc); }
+    if (t.text == "}") { return ds_collect(s, t.pos, ds_close_depth(depth), acc); }
+    Int sbx = if (depth == 0) { ds_sandbox_open(s, t) } else { -1 };
+    if (sbx >= 0) { return ds_collect(s, sbx, 0, acc); }
     if (depth == 0 && t.kind == "ident") {
         Tok o = lex_tok(s, t.pos);
         if (o.text == "(") {
@@ -151,7 +167,9 @@ Str ds_rewrite(Str s, Int pos, Int end, Int depth, DsSig sg, Str sb, Int copied)
         return str_sb_append(sb, str_slice(s, copied, end));
     }
     if (t.text == "{") { return ds_rewrite(s, t.pos, end, depth + 1, sg, sb, copied); }
-    if (t.text == "}") { return ds_rewrite(s, t.pos, end, depth - 1, sg, sb, copied); }
+    if (t.text == "}") { return ds_rewrite(s, t.pos, end, ds_close_depth(depth), sg, sb, copied); }
+    Int sbx = if (depth == 0) { ds_sandbox_open(s, t) } else { -1 };
+    if (sbx >= 0) { return ds_rewrite(s, sbx, end, 0, sg, sb, copied); }
     if (t.kind == "fstring" && str_contains(t.text, "{")) {
         Int fs = ds_start(t);
         Str sbf = str_sb_append(str_sb_append(sb, str_slice(s, copied, fs)), ds_fholes(t.text, 0, sg, ""));

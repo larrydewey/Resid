@@ -25,7 +25,11 @@ import "tlskey.resid";
 
 // A TLS connection: the socket, the keys and record counters the
 // handshake left behind, and the record bytes read past its Finished.
+@opaque
 type TlsConn = { Int fd; TlsKeys keys; Bool eof; List(Int) buf; };
+
+// This server's end of the connection, for challenge_with_channel.
+pub ChannelExporter tlsserver_exporter(TlsConn c) { return ChannelExporter {.x = c.keys.exp}; }
 
 // What a TLS server is started with: the key it signs with, the chain it
 // presents (leaf first), and the protocols it speaks, most preferred

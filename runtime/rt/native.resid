@@ -21,7 +21,7 @@
 // confined the same way: hs_spawn, hs_nodump, hs_settle, hs_untraced,
 // hs_auth, hs_quiet and hs_filter_install below are shared.
 
-Int ntab_ent() { return 40; }   // module, function, reqlen, resplen, thunk
+Int ntab_ent() { return 56; }   // module, function, reqlen, resplen, thunk, code lo, code hi
 
 // ─── Parent ─────────────────────────────────────────────────────────
 
@@ -647,7 +647,6 @@ pub Int rt_native_host(Int tab, Int n) {
     Int buf = xmalloc(need * 2 + 16);
     Int e = native_read_req(tab, n, m, buf, ppid);
     if (e == 0) { return native_child_exit(125); }
-    if (!native_lockdown()) { return native_child_exit(126); }
     return native_serve(e, buf, buf + need + 8);
 }
 
@@ -681,13 +680,36 @@ Int native_read_req(Int tab, Int n, Int m, Int req, Int ppid) {
     return e;
 }
 
-// Run the request's thunk, write the reply, exit.
+// Lock the host down, run the request's thunk, write the reply, exit.
+// The shadow stack -- CET on x86-64, the guarded control stack on AArch64
+// -- is turned on and locked first, here: it checks every return against
+// its call, so it must start in a frame that never returns, and before the
+// filter, which refuses the calls that turn it on. Without the CPU feature
+// or kernel support (CET: Linux 6.6, GCS: 6.13) the call fails and the
+// host runs without it. On AArch64 the module's own pages are also mapped
+// with PROT_BTI, so an indirect branch into its code must land on a pad.
 Int native_serve(Int e, Int req, Int resp) {
+    _ = native_bti(ld64(e + 40), ld64(e + 48));
+    Bool shstk = if (on_a64()) {
+        resid_raw_syscall(157, 75, 1, 0, 0, 0, 0) == 0     // PR_SET_SHADOW_STACK_STATUS, PR_SHADOW_STACK_ENABLE
+    } else {
+        resid_raw_syscall(158, 20481, 1, 0, 0, 0, 0) == 0  // ARCH_SHSTK_ENABLE, ARCH_SHSTK_SHSTK
+    };
+    _ = if (!shstk) { 0 } else if (on_a64()) { resid_raw_syscall(157, 76, 1, 0, 0, 0, 0) } else { resid_raw_syscall(158, 20483, 1, 0, 0, 0, 0) };   // lock it
+    if (!native_lockdown()) { return native_child_exit(126); }
     Int resplen = ld64(e + 24);
     _ = resid_raw_fill(resp, 0, resplen + 8);
     _ = resid_raw_call2(ld64(e + 32), req, resp);
     if (!native_write(resp, 0, resplen)) { return native_child_exit(125); }
     return native_child_exit(0);
+}
+
+// [lo, hi): the module's code between its page-aligned marks (AArch64,
+// compiler/native.resid's nt_harden), remapped read-execute with PROT_BTI.
+// Without BTI the kernel refuses PROT_BTI and the pages stay as they are.
+Int native_bti(Int lo, Int hi) {
+    if (!on_a64() || lo == 0 || hi <= lo || (lo & 4095) != 0 || (hi & 4095) != 0) { return 0; }
+    return resid_raw_syscall(10, lo, hi - lo, 1 | 4 | 16, 0, 0, 0);   // mprotect(PROT_READ | PROT_EXEC | PROT_BTI)
 }
 
 pub Bool native_write(Int p, Int i, Int n) {
@@ -772,17 +794,17 @@ pub Int native_hex(Int p, Int i, Int acc) {
 pub Int native_skip_hex(Int p, Int i) { return if (native_hexd(ld8(p + i)) < 0) { i } else { native_skip_hex(p, i + 1) }; }
 
 // The seccomp program (classic BPF over struct seccomp_data: nr at 0, arch
-// at 4, args from 16). Allowed: read/write on fd 3; mmap/mprotect without
-// PROT_EXEC; munmap, brk, mremap, madvise, exit, exit_group. Anything else
-// kills the process.
-Int native_filter_len() { return 24; }
+// at 4, args from 16). After lockdown the host only writes its reply and
+// exits: the request was read before, the thunks allocate nothing and a
+// module reaches no allocator. So write on fd 3, exit and exit_group are
+// allowed, the same for every module; anything else kills the process.
+Int native_filter_len() { return 15; }
 
 Int native_filter() {
     Int p = xmalloc(native_filter_len() * 8);
     Int ld = 32;      // BPF_LD|BPF_W|BPF_ABS
     Int jeq = 21;     // BPF_JMP|BPF_JEQ|BPF_K
     Int jge = 53;     // BPF_JMP|BPF_JGE|BPF_K
-    Int jset = 69;    // BPF_JMP|BPF_JSET|BPF_K
     Int ret = 6;      // BPF_RET|BPF_K
     Int kill = 2147483648;    // SECCOMP_RET_KILL_PROCESS
     Int allow = 2147418112;   // SECCOMP_RET_ALLOW
@@ -790,26 +812,17 @@ Int native_filter() {
       + bpf(p, 1, jeq, 1, 0, if (on_a64()) { 3221225655 } else { 3221225534 })   // AUDIT_ARCH_AARCH64 / X86_64
       + bpf(p, 2, ret, 0, 0, kill)
       + bpf(p, 3, ld, 0, 0, 0)                    // nr
-      + bpf(p, 4, jge, 18, 0, 1073741824)         // x32 -> 23 kill
-      + bpf(p, 5, jeq, 10, 0, resid_raw_nr(0))    // read -> 16
-      + bpf(p, 6, jeq, 9, 0, resid_raw_nr(1))     // write -> 16
-      + bpf(p, 7, jeq, 12, 0, resid_raw_nr(9))    // mmap -> 20
-      + bpf(p, 8, jeq, 11, 0, resid_raw_nr(10))   // mprotect -> 20
-      + bpf(p, 9, jeq, 12, 0, resid_raw_nr(11))   // munmap -> 22
-      + bpf(p, 10, jeq, 11, 0, resid_raw_nr(12))  // brk
-      + bpf(p, 11, jeq, 10, 0, resid_raw_nr(25))  // mremap
-      + bpf(p, 12, jeq, 9, 0, resid_raw_nr(28))   // madvise
-      + bpf(p, 13, jeq, 8, 0, resid_raw_nr(60))   // exit
-      + bpf(p, 14, jeq, 7, 0, resid_raw_nr(231))  // exit_group
-      + bpf(p, 15, ret, 0, 0, kill)
-      + bpf(p, 16, ld, 0, 0, 16)                  // fd, low word
-      + bpf(p, 17, jeq, 0, 5, 3)                  // != 3 -> 23 kill
-      + bpf(p, 18, ld, 0, 0, 20)                  // fd, high word
-      + bpf(p, 19, jeq, 2, 3, 0)                  // 0 -> 22 allow, else 23 kill
-      + bpf(p, 20, ld, 0, 0, 32)                  // prot (third argument), low word
-      + bpf(p, 21, jset, 1, 0, 4)                 // PROT_EXEC -> 23 kill
-      + bpf(p, 22, ret, 0, 0, allow)
-      + bpf(p, 23, ret, 0, 0, kill);
+      + bpf(p, 4, jge, 9, 0, 1073741824)          // x32 -> 14 kill
+      + bpf(p, 5, jeq, 3, 0, resid_raw_nr(1))     // write -> 9
+      + bpf(p, 6, jeq, 6, 0, resid_raw_nr(60))    // exit -> 13
+      + bpf(p, 7, jeq, 5, 0, resid_raw_nr(231))   // exit_group -> 13
+      + bpf(p, 8, ret, 0, 0, kill)
+      + bpf(p, 9, ld, 0, 0, 16)                   // fd, low word
+      + bpf(p, 10, jeq, 0, 3, 3)                  // != 3 -> 14 kill
+      + bpf(p, 11, ld, 0, 0, 20)                  // fd, high word
+      + bpf(p, 12, jeq, 0, 1, 0)                  // 0 -> 13 allow, else 14 kill
+      + bpf(p, 13, ret, 0, 0, allow)
+      + bpf(p, 14, ret, 0, 0, kill);
     return p;
 }
 

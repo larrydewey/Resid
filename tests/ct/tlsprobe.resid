@@ -58,7 +58,7 @@ List(Int) seq_bytes(Int base, Int i, ListBuf(Int) acc) {
     return seq_bytes(base, i + 1, acc.push((base + i * 37) & 255));
 }
 
-@requires(filesystem(readonly), network(readonly), clock(readonly), declassify)
+@requires(filesystem(readonly), network(readonly), clock(readonly), declassify, provision)
 Int ct_case_tls_handshake_secret() {
     Str c = "tls-handshake-secret";
     Option(ServerKey) mk = tls_key_load("tests/tls/fixtures/srv.key");
@@ -89,7 +89,7 @@ Int ct_case_tls_handshake_secret() {
     return 0;
 }
 
-@requires(args, filesystem(readonly), network(readonly), clock(readonly), declassify)
+@requires(args, filesystem(readonly), network(readonly), clock(readonly), declassify, provision)
 Int main() {
     Str c = args.get(1);
     if (c == "tls-handshake-secret") { return ct_case_tls_handshake_secret(); }

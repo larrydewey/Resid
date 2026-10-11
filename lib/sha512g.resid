@@ -153,9 +153,11 @@ List(B) g5_hash(List(B) msg, List(UInt(64)) iv, Int outlen) {
 }
 
 @needs(Word64(W, B))
+@key_from(msg)
 pub List(B) sha512g(List(B) msg) { return g5_hash(msg, sha512g_iv(), 64); }
 
 @needs(Word64(W, B))
+@key_from(msg)
 pub List(B) sha384g(List(B) msg) { return g5_hash(msg, sha384g_iv(), 48); }
 
 // ─── HMAC-SHA-512 and HMAC-SHA-384 (RFC 2104, 128-byte blocks) ───
@@ -185,9 +187,11 @@ List(Int) sha512g_zero_bytes(Int n, Int i, ListBuf(Int) acc) {
 }
 
 @needs(Word64(W, B))
+@key_from(key, msg)
 pub List(B) hmac512g(List(B) key, List(B) msg) { return g5_hmac(key, msg, sha512g_iv(), 64); }
 
 @needs(Word64(W, B))
+@key_from(key, msg)
 pub List(B) hmac384g(List(B) key, List(B) msg) { return g5_hmac(key, msg, sha384g_iv(), 48); }
 
 // Public bytes taking part in a computation on B.

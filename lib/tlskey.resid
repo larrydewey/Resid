@@ -407,7 +407,7 @@ Bool tk_in_labels(Str s, List(Str) labels, Int i) {
 // cannot sign with — an unsupported curve included, because signing
 // P-384 through a P-256 implementation is not a fallback, it is a wrong
 // answer wearing a valid key's clothes.
-@requires(filesystem(readonly), declassify)
+@requires(filesystem(readonly), declassify, provision)
 pub Option(ServerKey) tls_key_load(Str path) {
     if (!filesystem.exists(path)) { return None; }
     return tls_key_parse(filesystem.read_bytes(path));
@@ -419,7 +419,7 @@ pub Option(ServerKey) tls_key_load(Str path) {
 // identifier octet 0x30, which is framing either way (a PEM file starts
 // with its armor's dash or with explanatory text, never with a '0'
 // before the armor in any file this module is given).
-@requires(declassify)
+@requires(declassify, provision)
 pub Option(ServerKey) tls_key_parse(List(Int) file) {
     List(Secret(UInt(8))) f = secret_bytes(file);
     if (f.len() == 0) { return None; }
@@ -450,7 +450,7 @@ pub List(List(Int)) tls_chain_load(Str path) {
 // Ed25519 arrives as RFC 8410's one-OID algorithm with the seed wrapped
 // in an OCTET STRING; EC as id-ecPublicKey with a named curve, whose
 // privateKey OCTET STRING holds a SEC1 ECPrivateKey.
-@requires(declassify)
+@requires(declassify, provision)
 pub Option(ServerKey) tk_pkcs8(List(Secret(UInt(8))) der) {
     Tlv seq = tk_tlv(der, 0);
     if (!seq.ok || tk_tag_num(seq) != tk_tag_seq()) { return None; }
@@ -477,14 +477,14 @@ pub Option(ServerKey) tk_pkcs8(List(Secret(UInt(8))) der) {
 // ECPrivateKey is a SEQUENCE. The two are told apart by that first tag
 // rather than by which algorithm was named above, so a file that says
 // Ed25519 and carries a SEC1 structure is refused instead of half-read.
-@requires(declassify)
+@requires(declassify, provision)
 pub Option(ServerKey) tk_curve_private(List(Secret(UInt(8))) b) {
     Tlv t = tk_tlv(b, 0);
     if (!t.ok) { return None; }
     if (tk_tag_num(t) == tk_tag_octet()) {
         List(Secret(UInt(8))) seed = tk_value(b, t);
         if (seed.len() != 32) { return None; }
-        return Some(EdKey(seed));
+        return Some(EdKey(provisioned_key(seed, "a TLS server key from its key file")));
     }
     return None;
 }
@@ -495,10 +495,10 @@ pub Option(ServerKey) tk_curve_private(List(Secret(UInt(8))) b) {
 // [0] parameters', else the scalar's length (32 bytes P-256, 48 P-384).
 // When two of those disagree the key is refused: a P-384 scalar is not a
 // P-256 one whatever it is filed under.
-@requires(declassify)
+@requires(declassify, provision)
 pub Option(ServerKey) tk_sec1(List(Secret(UInt(8))) der) { return tk_ec_private(der, None); }
 
-@requires(declassify)
+@requires(declassify, provision)
 Option(ServerKey) tk_ec_private(List(Secret(UInt(8))) der, Option(Curve) named) {
     Tlv seq = tk_tlv(der, 0);
     if (!seq.ok || tk_tag_num(seq) != tk_tag_seq()) { return None; }
@@ -520,7 +520,10 @@ Option(ServerKey) tk_ec_private(List(Secret(UInt(8))) der, Option(Curve) named) 
     // constant-time public key derivation, whose "key usable" verdict is
     // published by design (lib/ecdsa.resid).
     if (ec_public_keyg(c, scalar).len() == 0) { return None; }
-    return if (want == 48) { Some(Ec384Key(scalar)) } else { Some(EcKey(scalar)) };
+    // Whoever wrote the key file, and the kernel that read it, know the
+    // key: a stated reliance (PLAN-labels.md §5.2), passed to the caller.
+    List(Secret(UInt(8))) k = provisioned_key(scalar, "a TLS server key from its key file");
+    return if (want == 48) { Some(Ec384Key(k)) } else { Some(EcKey(k)) };
 }
 
 Int tk_curve_len(Option(Curve) c) { return match c { Some(x) => curve_bytes(x), None => 0 }; }

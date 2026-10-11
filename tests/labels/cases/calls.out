@@ -1,0 +1,25 @@
+bind f1 @ calls.resid:14:5: Internal
+bind f2 @ calls.resid:15:5: External
+  calls.resid:13:23  mcall get  -- outside data enters here (args.get)
+  calls.resid:13:15  call str_len
+  calls.resid:13:5  bind ext
+  calls.resid:15:14  call first
+  calls.resid:15:5  bind f2
+bind p @ calls.resid:16:5: External
+  calls.resid:13:23  mcall get  -- outside data enters here (args.get)
+  calls.resid:13:15  call str_len
+  calls.resid:13:5  bind ext
+  calls.resid:16:13  call pick
+  calls.resid:16:5  bind p
+bind h @ calls.resid:17:5: External
+  calls.resid:9:21  mcall get  -- outside data enters here (environment.get)
+  calls.resid:9:14  ret
+  calls.resid:17:13  call home
+  calls.resid:17:5  bind h
+bind r @ calls.resid:18:5: External
+  calls.resid:13:23  mcall get  -- outside data enters here (args.get)
+  calls.resid:13:15  call str_len
+  calls.resid:13:5  bind ext
+  calls.resid:18:13  call count
+  calls.resid:18:5  bind r
+bind r0 @ calls.resid:19:5: Internal

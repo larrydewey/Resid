@@ -12,9 +12,10 @@ import "device.resid";
 @descriptor(engine_ioctl_w)
 @requires(device)
 pub Result(List(DevOut), DeviceError) device_engine_ioctl_w(IoctlOp op, List(DevIn) args) {
-    DvReq r = dv_prep_ioctl(op, args);
+    DvFill fl = dv_fill(op.name, args, 0, [], -1, [])?;
+    DvReq r = dv_prep_ioctl(op, fl.args);
     if (r.err != "") { return Err(BadInput(op.name, r.err)); }
-    return dv_answer(op.name, r, resid_device_call_w(r.req));
+    return dv_bound(op.name, fl, dv_answer(op.name, r, resid_device_call_w(r.req)));
 }
 
 @descriptor(engine_transact_w)
@@ -36,7 +37,8 @@ pub Result(List(DevOut), DeviceError) device_engine_configfs_report_w(ConfigfsRe
 @descriptor(engine_sequence_w)
 @requires(device)
 pub Result(List(DevOut), DeviceError) device_engine_sequence_w(Sequence op, List(DevIn) args) {
-    DvReq r = dv_prep_sequence(op, args);
+    DvFill fl = dv_fill(op.name, args, 0, [], -1, [])?;
+    DvReq r = dv_prep_sequence(op, fl.args);
     if (r.err != "") { return Err(BadInput(op.name, r.err)); }
-    return dv_answer(op.name, r, resid_device_call_w(r.req));
+    return dv_bound(op.name, fl, dv_answer(op.name, r, resid_device_call_w(r.req)));
 }

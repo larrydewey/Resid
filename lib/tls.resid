@@ -310,7 +310,35 @@ type TlsKeys = {
     List(Secret(UInt(8))) wkey; List(Secret(UInt(8))) wiv; Int wseq;   // what this end writes
     Str alpn;
     List(Int) pending;   // record bytes read past the peer's Finished
+    List(Secret(UInt(8))) exp;   // the channel-binding exporter (RFC 9266), set by a handshake
 };
+
+// A connection's channel-binding exporter value (RFC 9266), for binding a
+// challenge to this end's own connection (PLAN-labels.md §6.5). Only a
+// completed handshake gives one: tlsserver_exporter (lib/tlswire.resid) and
+// tlsclient_exporter (lib/tlsclient.resid) build it from their opaque
+// connection types.
+@opaque("tlswire.resid", "tlsclient.resid")
+pub type ChannelExporter = { List(Secret(UInt(8))) x; };
+
+pub Bool channel_exporter_ok(ChannelExporter e) { return e.x.len() == 32; }
+
+// TLS-Exporter("EXPORTER-Channel-Binding", "", 32) from the master secret
+// and the transcript hash through the server's Finished (RFC 8446 §7.5:
+// exporter_master_secret = Derive-Secret(master, "exp master", thash)).
+@needs(Word(W, B))
+pub List(B) tlsg_exp_master(List(B) master, List(Int) thash) { return tlsg_derive_secret(master, "exp master", thash); }
+
+@needs(Word(W, B))
+pub List(B) tlsg_channel_binding(List(B) exp_master) {
+    List(B) sec = tlsg_derive_secret(exp_master, "EXPORTER-Channel-Binding", tls_empty_hash());
+    return tlsg_expand_label(sec, "exporter", tls_empty_hash(), 32);
+}
+
+// The keys with the exporter of the handshake that made them.
+pub TlsKeys tls_keys_exporter(TlsKeys k, List(Secret(UInt(8))) master, List(Int) thash) {
+    return TlsKeys { .rkey = k.rkey, .riv = k.riv, .rseq = k.rseq, .wkey = k.wkey, .wiv = k.wiv, .wseq = k.wseq, .alpn = k.alpn, .pending = k.pending, .exp = tlsg_channel_binding(tlsg_exp_master(master, thash)) };
+}
 
 // The keys of a connection that never got one: empty keys, so a caller
 // that forgets to look at the error decrypts nothing rather than
@@ -318,7 +346,7 @@ type TlsKeys = {
 pub TlsKeys tls_keys_none() {
     List(Secret(UInt(8))) none = [];
     List(Int) nob = [];
-    return TlsKeys { .rkey = none, .riv = none, .rseq = 0, .wkey = none, .wiv = none, .wseq = 0, .alpn = "", .pending = nob };
+    return TlsKeys { .rkey = none, .riv = none, .rseq = 0, .wkey = none, .wiv = none, .wseq = 0, .alpn = "", .pending = nob, .exp = none };
 }
 
 // Both counters start at 0, and `alpn` is the protocol the handshake
@@ -332,18 +360,18 @@ pub TlsKeys tls_keys(List(Secret(UInt(8))) rkey, List(Secret(UInt(8))) riv, List
 // handshake has those bytes in the socket before the server is ready for
 // them, and re-reading the socket instead would lose them.
 pub TlsKeys tls_keys_pending(List(Secret(UInt(8))) rkey, List(Secret(UInt(8))) riv, List(Secret(UInt(8))) wkey, List(Secret(UInt(8))) wiv, Str alpn, List(Int) pending) {
-    return TlsKeys { .rkey = rkey, .riv = riv, .rseq = 0, .wkey = wkey, .wiv = wiv, .wseq = 0, .alpn = alpn, .pending = pending };
+    return TlsKeys { .rkey = rkey, .riv = riv, .rseq = 0, .wkey = wkey, .wiv = wiv, .wseq = 0, .alpn = alpn, .pending = pending, .exp = [] };
 }
 
 // The same keys with the read counter moved on, and with the write
 // counter moved on. Immutable values, so a record layer that has just
 // consumed a sequence number carries the new pair back to its caller.
 pub TlsKeys tls_keys_rseq(TlsKeys k, Int seq) {
-    return TlsKeys { .rkey = k.rkey, .riv = k.riv, .rseq = seq, .wkey = k.wkey, .wiv = k.wiv, .wseq = k.wseq, .alpn = k.alpn, .pending = k.pending };
+    return TlsKeys { .rkey = k.rkey, .riv = k.riv, .rseq = seq, .wkey = k.wkey, .wiv = k.wiv, .wseq = k.wseq, .alpn = k.alpn, .pending = k.pending, .exp = k.exp };
 }
 
 pub TlsKeys tls_keys_wseq(TlsKeys k, Int seq) {
-    return TlsKeys { .rkey = k.rkey, .riv = k.riv, .rseq = k.rseq, .wkey = k.wkey, .wiv = k.wiv, .wseq = seq, .alpn = k.alpn, .pending = k.pending };
+    return TlsKeys { .rkey = k.rkey, .riv = k.riv, .rseq = k.rseq, .wkey = k.wkey, .wiv = k.wiv, .wseq = seq, .alpn = k.alpn, .pending = k.pending, .exp = k.exp };
 }
 
 // Protect `content` as record number `seq` under the connection's write

@@ -421,3 +421,29 @@ writer, before the first read or between the two, is `GenerationChanged`.
 A buffer marked secret never travels in the general reply: the host sends
 it separately and zeroes its copy, and the runtime hands it to the engine
 once, already `Secret`.
+
+## Challenges
+
+A request that the device signs back (an SNP report's `report_data`, a
+TPM quote's qualifying data) has a challenge slot the device engine fills,
+so no program passes a nonce. A wrapper takes `Challenge challenge =
+Runtime` (`lib/challenge.resid`):
+
+| Value | The slot holds | Who can check the answer |
+|---|---|---|
+| `Runtime` | a fresh runtime value nobody keeps | no one; the slot is never stale or attacker-chosen |
+| `Issued(c)` | `challenge_value(c)`, from `challenge_issue(n, bind)` | the holder of `c`, for this reply only |
+| `Verbatim(x)` | `x` exactly | whoever chose `x` |
+
+An issued record is spent before the request is sent, so it serves one
+request even if the call times out or the host dies; a second use, an
+expired record or a length other than the slot's is `BadInput` and nothing
+is sent. When the call answers, the record is bound to the descriptor's
+name and the reply's evidence (each evidence output, length-prefixed, in
+order), so a verifier accepts it only with that reply.
+
+```text
+List(UInt(8)) r = snp_report()?;                       // nothing to keep
+ChallengeRecord c = challenge_issue(64, bind);
+List(UInt(8)) v = snp_report(challenge = Issued(c))?;  // this program verifies
+```

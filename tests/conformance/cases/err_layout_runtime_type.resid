@@ -1,0 +1,4 @@
+import "dev/device.resid";
+@layout(le)
+type Forge = { ChallengeRecord c; };
+Int main() { return 0; }

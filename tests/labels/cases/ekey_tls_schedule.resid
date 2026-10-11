@@ -1,0 +1,28 @@
+// A TLS key schedule from an agreed key keeps it unpredictable through HKDF and the record keys.
+import "random.resid";
+import "aesgcmg.resid";
+import "x25519g.resid";
+import "tls.resid";
+import "tlsmsg.resid";
+
+@requires(declassify)
+Int seal(List(Secret(UInt(8))) k) { return aes_gcmg_seal(k, random_bytes(12), random_secret(4), []).len(); }
+
+@requires(declassify)
+Int main() {
+    List(Secret(UInt(8))) priv = random_secret(32);
+    List(Int) peer = x25519g_public(random_secret(32));
+    List(Secret(UInt(8))) shared = x25519g_shared(priv, peer);
+    _ = seal(shared);                                              // A: agreed, fine
+    List(Secret(UInt(8))) hs = tlsg_handshake_secret(shared);
+    _ = seal(hs);                                                  // B
+    List(Secret(UInt(8))) ms = tlsg_master_secret(hs);
+    List(Secret(UInt(8))) ap = tlsg_c_ap_traffic(ms, [1, 2, 3]);
+    _ = seal(tlsg_traffic_key(ap));                                // C
+    TlsKeys k = tls_keys_pending(tlsg_traffic_key(ap), tlsg_traffic_iv(ap), tlsg_traffic_key(ap), tlsg_traffic_iv(ap), "", []);
+    _ = seal(k.wkey);                                              // D
+    TlsKeys k2 = tls_keys_wseq(k, 5);
+    _ = seal(k2.wkey);                                             // E
+    List(Int) rec = tls_keys_protect(k2, [1, 2, 3], 23);           // F
+    return 0;
+}

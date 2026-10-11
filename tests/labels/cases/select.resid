@@ -1,0 +1,12 @@
+// A value chosen by outside data is External even when every arm is a
+// constant; code that merely runs after an exit is not chosen.
+Option(Int) maybe(Int n) { return if (n > 0) { Some(n) } else { None }; }
+@requires(args)
+Int main() {
+    Str a = args.get(1);
+    Int bit = if (str_len(a) == 1) { 1 } else { 0 };
+    Int m = match maybe(str_len(a)) { Some(v) => 5, None => 6 };
+    if (str_len(a) > 9) { return 3; }
+    Int after = 4;
+    return after;
+}

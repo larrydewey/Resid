@@ -1,0 +1,1158 @@
+// ekey.resid — keys must be unpredictable (PLAN-labels.md §5.2, E-key,
+// E0270), checked on the residual graph, where reduction has made the
+// lengths of draws known.
+//
+// A value's unpredictability is the set of unpredictable source nodes whose
+// bytes it holds, with a cap from slicing: each source supplies at most its
+// own length however often its bytes appear, so `r ‖ r` counts r once. The
+// sources are draws (a function marked `@key_source(n)`: random_secret),
+// provisioned keys (`provisioned_key`, a stated reliance), and the results
+// of reviewed library functions: `@key_from(p)` (hashes, HMAC, HKDF: as
+// unpredictable as p, and a value of its own, so publishing sha256(r) and
+// keying with sha256(r) is refused while hkdf(r, "a") after publishing
+// hkdf(r, "b") is not) and `@agree(p)` (key agreement: unpredictable when
+// p is, never own). Every other operation loses it except moving bytes
+// (slices, concatenation, lists, records, `secret`), and a selection keeps
+// only what every arm keeps.
+//
+// A source is disclosed once any copy of it reaches `declassify`; a
+// disclosed source counts zero at every keying site, before or after.
+// `@one_way(p)` functions (public-key derivation) publish without
+// disclosing p. Functions marked with any of these are reviewed primitives:
+// their bodies are not walked.
+//
+// A keying parameter is marked `@key(p)`, `@key(p, own)` or
+// `@key(p, own, provisioned)`; a parameter that reaches one is keying too
+// (flow summaries), so the check is made at every caller. The argument
+// needs min(length, 32) unpredictable bytes (32 when its length is not
+// known); `own` takes only draws, and `provisioned` also provisioned keys.
+// A keying parameter whose type is not Secret is a public copy, allowed
+// only in tests (E0270 as well).
+//
+// Rollout (§4.6): every finding is a warning for now.
+//
+// Imported by compiler/driver.resid.
+
+// An AEAD nonce site (PLAN-labels.md §5.2, Nonces): its call, function,
+// loop or closure depth, whether the nonce is a constant, and the sources
+// the key rests on.
+type EkN = { Int at; Int fn; Int lp; Bool known; List(Int) ksrc; Str callee; };
+
+// A source (one per node, so a draw in a function called twice is one
+// source: its bytes count once, and disclosing one call's discloses all):
+// kind (1 draw, 2 provisioned, 3 agreed, 4 derived), its length
+// in bytes (0 when not known), the sources a derived one rests on, its
+// identity (equal calls are one value), and the node that made it.
+type EkSrc = { Int kind; Int len; List(Int) deps; Int dcap; Str key; Int at; Int fn; };
+
+// An abstract value: sources held, a cap on unpredictable bytes (-1 none),
+// parameters of the enclosing function it holds unchanged ("i" or
+// "i.field"), whether a zero-length arm was dropped to get it, and whether
+// it is known empty (a literal [] or a record of such and scalars: a
+// failure value, which a selection drops).
+// fk/fv: a record's fields and their values. alts: when not empty, the
+// value is one of these (a selection: it holds the smallest count of its
+// arms), and src/ps hold their union for what flows on.
+type EkA = { List(Int) src; Int cap; List(Str) ps; Bool ze; Bool mt; List(Str) fk; List(EkA) fv; List(EkA) alts; };
+
+// A function's summary: what its result holds, its keying requirements
+// ("i|path|own|prov|node"), and the parameters it discloses ("i|path").
+type EkS = { EkA ret; List(Str) reqs; List(Str) discl; };
+
+// A keying site to check once disclosure is known: the argument's value,
+// what it needs, where.
+type EkChk = { EkA v; Bool own; Bool prov; Bool pub; Int at; Str callee; };
+
+type EkT = { Int lp; List(EkN) nch; Map(Str, EkA) env; Map(Str, EkA) fields; Map(Int, EkS) sum; List(EkSrc) srcs; Map(Str, Int) skeys; List(Int) discl; List(EkChk) chks; EkA res; List(Str) reqs; List(Str) dis; Int cur; Map(Int, Bool) edges; Map(Int, Bool) chd; Bool rec; };
+
+type EkC = { Kg g; List(Int) def; Str src; Str smap; List(Int) nls; Str dbg; Bool wide; };
+
+type EkE = { EkA v; EkT t; };
+
+pub type EKR = { Str warnings; Int n; };
+
+EkA ek_none() { return EkA {.src = [], .cap = -1, .ps = [], .ze = false, .mt = false, .fk = [], .fv = [], .alts = []}; }
+
+// An operator's result is a scalar, holding no list of key bytes (a byte
+// it computes becomes one only when pushed, and a push is never empty).
+EkA ek_scalar(EkA a) { return EkA {.src = a.src, .cap = a.cap, .ps = a.ps, .ze = a.ze, .mt = true, .fk = [], .fv = [], .alts = []}; }
+
+EkA ek_flat(EkA a) { return a; }
+EkA ek_of(EkA f) { return f; }
+EkA ek_with_fields(EkA a, List(Str) fk, List(EkA) fv) { return EkA {.src = a.src, .cap = a.cap, .ps = a.ps, .ze = a.ze, .mt = a.mt, .fk = fk, .fv = fv, .alts = a.alts}; }
+
+// ─── Alternatives ───────────────────────────────────────────────────
+
+EkA ek_plain(EkA a) { return EkA {.src = a.src, .cap = a.cap, .ps = a.ps, .ze = a.ze, .mt = a.mt, .fk = a.fk, .fv = a.fv, .alts = []}; }
+
+List(EkA) ek_alts_of(EkA a) { return if (a.alts.len() > 0) { a.alts } else { [ek_plain(a)] }; }
+
+// One of xs: up to four kept apart (the count is the smallest), more met
+// (what every one holds).
+EkA ek_from_alts(List(EkA) xs0) {
+    List(EkA) xs = ek_sort_alts(ek_dedupe(ek_norm_all(xs0, 0, []), 0, [], []));
+    if (xs.len() == 1) { return xs[0]; }
+    if (xs.len() > 4) { return ek_meet_all(xs, 1, xs[0]); }
+    return EkA {.src = ek_union_all(xs, 0, []), .cap = -1, .ps = ek_ps_all(xs, 0, []), .ze = ek_any_ze(xs, 0), .mt = false, .fk = [], .fv = [], .alts = xs};
+}
+
+// Alternatives in a canonical order (by their text).
+List(EkA) ek_sort_alts(List(EkA) xs) {
+    List(Str) ks = sort(ek_texts(xs, 0, []));
+    return ek_pick_sorted(xs, ks, 0, []);
+}
+
+List(Str) ek_texts(List(EkA) xs, Int i, List(Str) acc) { return if (i >= xs.len()) { acc } else { ek_texts(xs, i + 1, acc.concat([ek_val_text(xs[i])])) }; }
+
+List(EkA) ek_pick_sorted(List(EkA) xs, List(Str) ks, Int i, List(EkA) acc) {
+    if (i >= ks.len()) { return acc; }
+    return ek_pick_sorted(xs, ks, i + 1, acc.concat([ek_find_text(xs, ks[i], 0)]));
+}
+
+EkA ek_find_text(List(EkA) xs, Str k, Int i) {
+    if (i >= xs.len()) { return ek_none(); }
+    if (ek_val_text(xs[i]) == k) { return xs[i]; }
+    return ek_find_text(xs, k, i + 1);
+}
+
+List(EkA) ek_dedupe(List(EkA) xs, Int i, List(Str) seen, List(EkA) acc) {
+    if (i >= xs.len()) { return acc; }
+    Str k = ek_val_text(xs[i]);
+    if (seen.contains(k)) { return ek_dedupe(xs, i + 1, seen, acc); }
+    return ek_dedupe(xs, i + 1, seen.concat([k]), acc.concat([xs[i]]));
+}
+
+EkA ek_meet_all(List(EkA) xs, Int i, EkA acc) {
+    if (i >= xs.len()) { return acc; }
+    return ek_meet_all(xs, i + 1, ek_meet(acc, xs[i]));
+}
+
+List(Int) ek_union_all(List(EkA) xs, Int i, List(Int) acc) { return if (i >= xs.len()) { acc } else { ek_union_all(xs, i + 1, ek_union(acc, xs[i].src)) }; }
+List(Str) ek_ps_all(List(EkA) xs, Int i, List(Str) acc) { return if (i >= xs.len()) { acc } else { ek_ps_all(xs, i + 1, ek_sunion(acc, xs[i].ps, 0)) }; }
+Bool ek_any_ze(List(EkA) xs, Int i) { return if (i >= xs.len()) { false } else { xs[i].ze || ek_any_ze(xs, i + 1) }; }
+
+// Bounded shape: an alternative's fields carry no alternatives of their
+// own (met instead), and fields go two levels deep.
+EkA ek_norm(EkA x, Int depth) {
+    if (x.fk.len() == 0) { return x; }
+    if (depth >= 2) { return EkA {.src = x.src, .cap = x.cap, .ps = x.ps, .ze = x.ze, .mt = x.mt, .fk = [], .fv = [], .alts = []}; }
+    return EkA {.src = x.src, .cap = x.cap, .ps = x.ps, .ze = x.ze, .mt = x.mt, .fk = x.fk, .fv = ek_norm_fields(x.fv, depth, 0, []), .alts = []};
+}
+
+List(EkA) ek_norm_fields(List(EkA) fv, Int depth, Int i, List(EkA) acc) {
+    if (i >= fv.len()) { return acc; }
+    return ek_norm_fields(fv, depth, i + 1, acc.concat([ek_norm(ek_collapse(fv[i]), depth + 1)]));
+}
+
+List(EkA) ek_norm_all(List(EkA) xs, Int i, List(EkA) acc) {
+    if (i >= xs.len()) { return acc; }
+    return ek_norm_all(xs, i + 1, acc.concat([ek_norm(ek_plain(xs[i]), 0)]));
+}
+
+EkA ek_deep_collapse(EkA x) {
+    EkA y = ek_collapse(x);
+    return if (y.fk.len() > 0) { ek_with_fields(ek_plain(y), y.fk, ek_deep_all(y.fv, 0, [])) } else { ek_plain(y) };
+}
+
+List(EkA) ek_deep_all(List(EkA) xs, Int i, List(EkA) acc) { return if (i >= xs.len()) { acc } else { ek_deep_all(xs, i + 1, acc.concat([ek_deep_collapse(xs[i])])) }; }
+
+// A value with alternatives collapsed to what every one holds.
+EkA ek_collapse(EkA a) { return if (a.alts.len() > 0) { ek_meet_all(a.alts, 1, a.alts[0]) } else { a }; }
+
+Str ek_val_text(EkA x) {
+    return f"({x.src},{x.cap},{x.ps},{x.ze},{x.mt},{x.fk}," + ek_vals_text(x.fv, 0, StrBuf()) + "," + ek_vals_text(x.alts, 0, StrBuf()) + ")";
+}
+
+Str ek_vals_text(List(EkA) xs, Int i, StrBuf acc) {
+    if (i >= xs.len()) { return acc.finish(); }
+    return ek_vals_text(xs, i + 1, acc.push(ek_val_text(xs[i])));
+}
+
+// A field of a value: of each alternative, or not found.
+type EkFF = { Bool ok; EkA v; };
+
+EkFF ek_field_val(EkA v, Str f) {
+    if (v.alts.len() > 0) { return ek_field_alts(v.alts, f, 0, []); }
+    Int fi = ek_fidx(v.fk, f, 0);
+    return if (fi >= 0) { EkFF {.ok = true, .v = v.fv[fi]} } else { EkFF {.ok = false, .v = ek_none()} };
+}
+
+EkFF ek_field_alts(List(EkA) xs, Str f, Int i, List(EkA) acc) {
+    if (i >= xs.len()) { return EkFF {.ok = true, .v = ek_from_alts(acc)}; }
+    EkFF one = ek_field_val(xs[i], f);
+    if (!one.ok) { return one; }
+    return ek_field_alts(xs, f, i + 1, acc.concat([one.v]));
+}
+
+Int ek_fidx(List(Str) fk, Str f, Int i) {
+    if (i >= fk.len()) { return -1; }
+    if (fk[i] == f) { return i; }
+    return ek_fidx(fk, f, i + 1);
+}
+
+EkA ek_nonempty(EkA a) { return EkA {.src = a.src, .cap = a.cap, .ps = a.ps, .ze = a.ze, .mt = false, .fk = [], .fv = [], .alts = []}; }
+EkE eke(EkA v, EkT t) { return EkE {.v = v, .t = t}; }
+
+Bool ek_lost(EkA a) { return a.src.len() == 0 && a.ps.len() == 0; }
+
+// Sorted union of two id lists.
+List(Int) ek_union(List(Int) a, List(Int) b) { return ek_union_at(a, b, 0, 0, ListBuf()); }
+List(Int) ek_union_at(List(Int) a, List(Int) b, Int i, Int j, ListBuf(Int) acc) {
+    if (i >= a.len() && j >= b.len()) { return acc.finish(); }
+    if (j >= b.len() || (i < a.len() && a[i] < b[j])) { return ek_union_at(a, b, i + 1, j, acc.push(a[i])); }
+    if (i >= a.len() || b[j] < a[i]) { return ek_union_at(a, b, i, j + 1, acc.push(b[j])); }
+    return ek_union_at(a, b, i + 1, j + 1, acc.push(a[i]));
+}
+
+List(Int) ek_inter(List(Int) a, List(Int) b) { return ek_inter_at(a, b, 0, 0, ListBuf()); }
+List(Int) ek_inter_at(List(Int) a, List(Int) b, Int i, Int j, ListBuf(Int) acc) {
+    if (i >= a.len() || j >= b.len()) { return acc.finish(); }
+    if (a[i] < b[j]) { return ek_inter_at(a, b, i + 1, j, acc); }
+    if (b[j] < a[i]) { return ek_inter_at(a, b, i, j + 1, acc); }
+    return ek_inter_at(a, b, i + 1, j + 1, acc.push(a[i]));
+}
+
+// Parameter paths, sorted, without a field path its whole parameter
+// already covers.
+List(Str) ek_sunion(List(Str) a, List(Str) b, Int i) {
+    if (i >= b.len()) { return ek_canon(a); }
+    return ek_sunion(if (a.contains(b[i])) { a } else { a.concat([b[i]]) }, b, i + 1);
+}
+
+List(Str) ek_canon(List(Str) ps) { return sort(ek_canon_at(ps, ps, 0, [])); }
+
+List(Str) ek_canon_at(List(Str) all, List(Str) ps, Int i, List(Str) acc) {
+    if (i >= ps.len()) { return acc; }
+    Bool covered = ek_within(ps[i], all, 0);
+    return ek_canon_at(all, ps, i + 1, if (covered || acc.contains(ps[i])) { acc } else { acc.concat([ps[i]]) });
+}
+
+// What two values both hold: a path in both, or a field path of one whose
+// whole parameter the other holds ("0" holds "0.keys").
+List(Str) ek_sinter(List(Str) a, List(Str) b, Int i, List(Str) acc) {
+    List(Str) x = ek_sinter_at(a, b, 0, acc);
+    return ek_sinter_at(b, a, 0, x);
+}
+
+List(Str) ek_sinter_at(List(Str) a, List(Str) b, Int i, List(Str) acc) {
+    if (i >= a.len()) { return acc; }
+    Bool keep = b.contains(a[i]) || ek_within(a[i], b, 0);
+    return ek_sinter_at(a, b, i + 1, if (keep && !acc.contains(a[i])) { acc.concat([a[i]]) } else { acc });
+}
+
+// Is path p a field of a whole parameter in ws?
+Bool ek_within(Str p, List(Str) ws, Int i) {
+    if (i >= ws.len()) { return false; }
+    if (!str_contains(ws[i], ".") && str_starts_with(p, ws[i] + ".")) { return true; }
+    return ek_within(p, ws, i + 1);
+}
+
+// Bytes moved together (concatenation, lists, builders): caps add. Each
+// pair of alternatives moves together.
+EkA ek_cat(EkA a, EkA b, EkT t) {
+    if (a.alts.len() == 0 && b.alts.len() == 0) { return ek_cat1(a, b, t); }
+    List(EkA) xa = ek_alts_of(a);
+    List(EkA) xb = ek_alts_of(b);
+    if (xa.len() * xb.len() > 4) { return ek_cat1(ek_collapse(a), ek_collapse(b), t); }
+    return ek_from_alts(ek_cat_pairs(xa, xb, 0, 0, t, []));
+}
+
+List(EkA) ek_cat_pairs(List(EkA) xa, List(EkA) xb, Int i, Int j, EkT t, List(EkA) acc) {
+    if (i >= xa.len()) { return acc; }
+    if (j >= xb.len()) { return ek_cat_pairs(xa, xb, i + 1, 0, t, acc); }
+    return ek_cat_pairs(xa, xb, i, j + 1, t, acc.concat([ek_cat1(xa[i], xb[j], t)]));
+}
+
+EkA ek_cat1(EkA a, EkA b, EkT t) {
+    Bool none = a.cap < 0 && b.cap < 0;
+    List(Int) u = ek_union(a.src, b.src);
+    Int cap0 = if (none) { -1 } else { ek_capof(a, t) + ek_capof(b, t) };
+    // A cap no smaller than what the sources can supply limits nothing (and
+    // must not grow around a recursive accumulator).
+    Int cap = if (cap0 >= ek_lens(u, t, 0, 0)) { -1 } else { cap0 };
+    return EkA {.src = u, .cap = cap, .ps = ek_sunion(a.ps, b.ps, 0), .ze = a.ze || b.ze, .mt = a.mt && b.mt, .fk = [], .fv = [], .alts = []};
+}
+
+// The most a value can hold: its cap, else its sources' lengths.
+Int ek_capof(EkA a, EkT t) { return if (a.cap >= 0) { a.cap } else { ek_lens(a.src, t, 0, 0) }; }
+
+Int ek_lens(List(Int) s, EkT t, Int i, Int acc) {
+    if (i >= s.len()) { return acc; }
+    return ek_lens(s, t, i + 1, acc + t.srcs[s[i]].len);
+}
+
+// A selection keeps what every arm keeps; a zero-length arm is dropped
+// (marked, so any later operation on the result counts zero).
+EkA ek_meet(EkA a, EkA b) {
+    return EkA {.src = ek_inter(a.src, b.src), .cap = if (a.cap < 0) { b.cap } else if (b.cap < 0) { a.cap } else if (a.cap < b.cap) { a.cap } else { b.cap }, .ps = ek_sinter(a.ps, b.ps, 0, []), .ze = a.ze || b.ze, .mt = a.mt && b.mt, .fk = [], .fv = [], .alts = []};
+}
+
+EkA ek_capped(EkA a, Int c) {
+    if (a.alts.len() > 0) { return ek_from_alts(ek_capped_all(a.alts, c, 0, [])); }
+    Int cap = if (a.cap < 0 || c < a.cap) { c } else { a.cap };
+    return EkA {.src = a.src, .cap = cap, .ps = a.ps, .ze = a.ze, .mt = a.mt, .fk = [], .fv = [], .alts = []};
+}
+
+// An operation that may make an empty value non-empty: a dropped empty arm
+// counts zero.
+EkA ek_touch(EkA a) {
+    if (a.ze && a.alts.len() == 0) { return ek_none(); }
+    return if (a.alts.len() > 0) { ek_from_alts(ek_touch_all(a.alts, 0, [])) } else { a };
+}
+
+List(EkA) ek_touch_all(List(EkA) xs, Int i, List(EkA) acc) { return if (i >= xs.len()) { acc } else { ek_touch_all(xs, i + 1, acc.concat([ek_touch(xs[i])])) }; }
+List(EkA) ek_capped_all(List(EkA) xs, Int c, Int i, List(EkA) acc) { return if (i >= xs.len()) { acc } else { ek_capped_all(xs, c, i + 1, acc.concat([ek_capped(xs[i], c)])) }; }
+
+EkT ek_lp(EkT t, Int lp) { return EkT {.lp = lp, .nch = t.nch, .env = t.env, .fields = t.fields, .sum = t.sum, .srcs = t.srcs, .skeys = t.skeys, .discl = t.discl, .chks = t.chks, .res = t.res, .reqs = t.reqs, .dis = t.dis, .cur = t.cur, .edges = t.edges, .chd = t.chd, .rec = t.rec}; }
+
+EkT ek_with_env(EkT t, Map(Str, EkA) env) { return EkT {.lp = t.lp, .nch = t.nch, .env = env, .fields = t.fields, .sum = t.sum, .srcs = t.srcs, .skeys = t.skeys, .discl = t.discl, .chks = t.chks, .res = t.res, .reqs = t.reqs, .dis = t.dis, .cur = t.cur, .edges = t.edges, .chd = t.chd, .rec = t.rec}; }
+// Locals by name: a name is bound once in a function and never shadowed
+// (spec "Statements"), and the residual graph shares subtrees between
+// specialized copies, so a use's def edge may name another copy's binder.
+Str ek_bname(EkC c, Int id) { return if (c.g.ns[id].kind == "pat" || c.g.ns[id].kind == "letpat") { c.g.ns[id].aux } else { c.g.ns[id].text }; }
+EkT ek_bind(EkC c, EkT t, Int id, EkA v) { return ek_with_env(t, t.env.insert(ek_bname(c, id), v)); }
+EkT ek_field(EkT t, Str k, EkA v) { return EkT {.lp = t.lp, .nch = t.nch, .env = t.env, .fields = t.fields.insert(k, v), .sum = t.sum, .srcs = t.srcs, .skeys = t.skeys, .discl = t.discl, .chks = t.chks, .res = t.res, .reqs = t.reqs, .dis = t.dis, .cur = t.cur, .edges = t.edges, .chd = t.chd, .rec = t.rec}; }
+EkT ek_res(EkT t, EkA r) { return EkT {.lp = t.lp, .nch = t.nch, .env = t.env, .fields = t.fields, .sum = t.sum, .srcs = t.srcs, .skeys = t.skeys, .discl = t.discl, .chks = t.chks, .res = r, .reqs = t.reqs, .dis = t.dis, .cur = t.cur, .edges = t.edges, .chd = t.chd, .rec = t.rec}; }
+
+// A new source, or the existing one with the same identity.
+EkE ek_source(EkT t, Int kind, Int len, List(Int) deps, Int dcap, Str key, Int at) {
+    Int have = if (key == "") { -1 } else { t.skeys.get(key) else { -1 } };
+    if (have >= 0) { return eke(EkA {.src = [have], .cap = -1, .ps = [], .ze = false, .mt = false, .fk = [], .fv = [], .alts = []}, t); }
+    Int id = t.srcs.len();
+    // The most bytes it can supply: a provisioned key all of its own, a
+    // derived one its cap, an agreed one at most 32.
+    Int most = if (kind == 2) { 1000000 } else if (kind == 4) { dcap } else if (kind == 3) { if (dcap > 32) { 32 } else { dcap } } else { len };
+    EkSrc s = EkSrc {.kind = kind, .len = most, .deps = deps, .dcap = dcap, .key = key, .at = at, .fn = t.cur};
+    EkT t2 = EkT {.lp = t.lp, .nch = t.nch, .env = t.env, .fields = t.fields, .sum = t.sum, .srcs = t.srcs.concat([s]), .skeys = if (key == "") { t.skeys } else { t.skeys.insert(key, id) }, .discl = t.discl, .chks = t.chks, .res = t.res, .reqs = t.reqs, .dis = t.dis, .cur = t.cur, .edges = t.edges, .chd = t.chd, .rec = t.rec};
+    return eke(EkA {.src = [id], .cap = -1, .ps = [], .ze = false, .mt = false, .fk = [], .fv = [], .alts = []}, t2);
+}
+
+// Disclose what v holds: its sources everywhere, its parameters to callers.
+EkT ek_disclose(EkT t, EkA v) {
+    return EkT {.lp = t.lp, .nch = t.nch, .env = t.env, .fields = t.fields, .sum = t.sum, .srcs = t.srcs, .skeys = t.skeys, .discl = ek_union(t.discl, v.src), .chks = t.chks, .res = t.res, .reqs = t.reqs, .dis = ek_sunion(t.dis, v.ps, 0), .cur = t.cur, .edges = t.edges, .chd = t.chd, .rec = t.rec};
+}
+
+Int ek_def(EkC c, Int id) { return if (id < c.def.len()) { c.def[id] } else { -1 }; }
+
+// An annotation's argument list on a function: `@key(sk, own)` -> "sk, own";
+// "" when absent.
+Str ek_ann(Str aux, Str name) {
+    Int a = str_find(aux, "@" + name + "(");
+    if (a < 0) { return ""; }
+    Int b = str_find_char(aux, 41, a);
+    if (b < 0) { return ""; }
+    return str_trim(str_slice(aux, a + str_len(name) + 2, b));
+}
+
+Bool ek_reviewed(Str aux) { return str_contains(aux, "@key(") || str_contains(aux, "@key_from(") || str_contains(aux, "@one_way(") || str_contains(aux, "@agree(") || str_contains(aux, "@key_source(") || str_contains(aux, "@fresh_source(") || str_contains(aux, "@nonce("); }
+
+// Index of parameter `name` of f (kids 1..n-2), or -1.
+Int ek_param(EkC c, Int f, Str name, Int i) {
+    if (i >= c.g.ns[f].nk - 1) { return -1; }
+    Int p = kg_kid(c.g, f, i);
+    if (c.g.ns[p].kind == "param" && c.g.ns[p].text == name) { return i - 1; }
+    return ek_param(c, f, name, i + 1);
+}
+
+Str ek_param_ty(EkC c, Int f, Int i) {
+    Int p = kg_kid(c.g, f, i + 1);
+    return if (c.g.ns[p].nk > 0) { c.g.ns[kg_kid(c.g, p, 0)].text } else { "" };
+}
+
+// ─── Expressions ────────────────────────────────────────────────────
+
+EkE ek_e(EkC c, Int id, EkT t) {
+    KN n = c.g.ns[id];
+    Str k = n.kind;
+    if (k == "lit" || k == "emptyb" || k == "ty" || k == "fstr") { return eke(EkA {.src = [], .cap = -1, .ps = [], .ze = false, .mt = true, .fk = [], .fv = [], .alts = []}, t); }
+    if (k == "ref") {
+        // None and payload-less variants hold no bytes.
+        Int d = ek_def(c, id);
+        Bool unit = (n.text == "None" && !t.env.contains("None")) || (d >= 0 && c.g.ns[d].kind == "variant" && !t.env.contains(n.text));
+        if (unit) { return eke(ek_scalar(ek_none()), t); }
+        return eke(t.env.get(n.text) else { ek_none() }, t);
+    }
+    if (k == "paren" || k == "rt") { return ek_e(c, kg_kid(c.g, id, 0), t); }
+    if (k == "list") {
+        if (n.nk == 0) { return eke(EkA {.src = [], .cap = 0, .ps = [], .ze = false, .mt = true, .fk = [], .fv = [], .alts = []}, t); }
+        EkE l = ek_cat_kids(c, id, 0, ek_none(), true, true, t);
+        return eke(EkA {.src = l.v.src, .cap = l.v.cap, .ps = l.v.ps, .ze = l.v.ze, .mt = false, .fk = [], .fv = [], .alts = []}, l.t);
+    }
+    if (k == "index") {
+        Int bn = kg_kid(c.g, id, 0);
+        EkE b = ek_e(c, bn, t);
+        EkE i = ek_e(c, kg_kid(c.g, id, 1), b.t);
+        // An element of a list of bytes (or other scalars) is one byte; an
+        // element of a list of records may hold all the list holds.
+        return eke(if (ek_record_list(c, bn)) { ek_touch(b.v) } else { ek_capped(ek_touch(b.v), 1) }, i.t);
+    }
+    if (k == "slice") { return ek_slice(c, id, t); }
+    if (k == "field") { return ek_fieldof(c, id, t); }
+    if (k == "struct") { return ek_struct(c, id, 0, ek_none(), true, [], [], t); }
+    if (k == "finit" || k == "named") { return if (n.nk > 0) { ek_e(c, kg_kid(c.g, id, n.nk - 1), t) } else { eke(ek_none(), t) }; }
+    if (k == "cast") { return ek_e(c, kg_kid(c.g, id, n.nk - 1), t); }
+    if (k == "ifx" || k == "tern") {
+        EkE cd = ek_e(c, kg_kid(c.g, id, 0), t);
+        EkE a = ek_e(c, kg_kid(c.g, id, 1), cd.t);
+        EkE b = if (n.nk > 2) { ek_e(c, kg_kid(c.g, id, 2), a.t) } else { eke(ek_none(), a.t) };
+        return eke(ek_arms(a.v, b.v), b.t);
+    }
+    if (k == "match") { return ek_match(c, id, t); }
+    if (k == "bexpr") { return ek_bexpr(c, id, t); }
+    if (k == "orelse") {
+        EkE a = ek_e(c, kg_kid(c.g, id, 0), t);
+        EkE b = ek_e(c, kg_kid(c.g, id, 1), a.t);
+        return eke(ek_arms(a.v, b.v), b.t);
+    }
+    if (k == "try") {
+        EkE a = ek_e(c, kg_kid(c.g, id, 0), t);
+        return a;
+    }
+    if (k == "call") { return ek_call(c, id, t); }
+    if (k == "mcall") { return ek_mcall(c, id, t); }
+    if (k == "pat") {
+        EkE a = ek_e(c, kg_kid(c.g, id, 0), t);
+        return eke(a.v, ek_bind(c, a.t, id, a.v));
+    }
+    if (k == "lambda" || k == "spawn") {
+        // Walked for the keying sites inside; a closure's value is lost.
+        EkA keep = t.res;
+        EkT t1 = ek_lp(ek_res(t, ek_none()), t.lp + 1);
+        EkT t2 = if (k == "lambda") { ek_e(c, kg_kid(c.g, id, n.nk - 1), t1).t } else { ek_s(c, kg_kid(c.g, id, n.nk - 1), t1) };
+        return eke(ek_none(), ek_lp(ek_res(t2, keep), t.lp));
+    }
+    // Arithmetic and everything else: what the operands held is lost,
+    // except an xor, wrapping addition or subtraction with an operand
+    // holding nothing unpredictable (a bijection keeps the other).
+    return ek_op(c, id, t);
+}
+
+// A summary not computed yet: neutral at a selection, so a recursive call
+// does not wipe what the other returns hold before the fixed point.
+EkA ek_bot() { return EkA {.src = [], .cap = -3, .ps = [], .ze = false, .mt = false, .fk = [], .fv = [], .alts = []}; }
+
+EkA ek_arms(EkA a, EkA b) {
+    if (a.cap == -3) { return b; }
+    if (b.cap == -3) { return a; }
+    // A known-empty arm is dropped, and the result marked.
+    Bool ea = a.mt && a.src.len() == 0 && a.ps.len() == 0;
+    Bool eb = b.mt && b.src.len() == 0 && b.ps.len() == 0;
+    if (ea && !eb) { return ek_with_fields(EkA {.src = b.src, .cap = b.cap, .ps = b.ps, .ze = true, .mt = false, .fk = [], .fv = [], .alts = []}, b.fk, b.fv); }
+    if (eb && !ea) { return ek_with_fields(EkA {.src = a.src, .cap = a.cap, .ps = a.ps, .ze = true, .mt = false, .fk = [], .fv = [], .alts = []}, a.fk, a.fv); }
+    // Records of one shape meet field by field; otherwise the value is one
+    // of the arms, holding the smallest count of them (§5.2).
+    if (a.alts.len() == 0 && b.alts.len() == 0 && a.fk.len() > 0 && f"{a.fk}" == f"{b.fk}") { return ek_with_fields(ek_meet(a, b), a.fk, ek_arms_fields(a.fv, b.fv, 0, ListBuf())); }
+    return ek_from_alts(ek_alts_of(a).concat(ek_alts_of(b)));
+}
+
+List(EkA) ek_arms_fields(List(EkA) a, List(EkA) b, Int i, ListBuf(EkA) acc) {
+    if (i >= a.len()) { return acc.finish(); }
+    return ek_arms_fields(a, b, i + 1, acc.push(ek_flat(ek_arms(ek_of(a[i]), ek_of(b[i])))));
+}
+
+// A record literal: the whole joins its fields (placed, not changed), and
+// each field keeps its own value.
+EkE ek_struct(EkC c, Int id, Int i, EkA acc, Bool first, List(Str) fk, List(EkA) fv, EkT t) {
+    if (i >= c.g.ns[id].nk) { return eke(ek_norm(ek_with_fields(acc, fk, fv), 0), t); }
+    Int fi = kg_kid(c.g, id, i);
+    EkE a = ek_e(c, fi, t);
+    Bool named = c.g.ns[fi].kind == "finit";
+    return ek_struct(c, id, i + 1, if (first) { a.v } else { ek_cat(acc, a.v, a.t) }, false, if (named) { fk.concat([c.g.ns[fi].text]) } else { fk }, if (named) { fv.concat([ek_flat(a.v)]) } else { fv }, a.t);
+}
+
+// Kids moved together: list elements (touched: they make a longer value)
+// or record fields (placed: a field is not changed by sitting in a record).
+EkE ek_cat_kids(EkC c, Int id, Int i, EkA acc, Bool first, Bool touch, EkT t) {
+    if (i >= c.g.ns[id].nk) { return eke(acc, t); }
+    EkE a = ek_e(c, kg_kid(c.g, id, i), t);
+    EkA v = if (touch) { ek_touch(a.v) } else { a.v };
+    return ek_cat_kids(c, id, i + 1, if (first) { v } else { ek_cat(acc, v, a.t) }, false, touch, a.t);
+}
+
+EkE ek_op(EkC c, Int id, EkT t) {
+    KN n = c.g.ns[id];
+    if (n.kind == "bin" && n.nk == 2 && (n.text == "^" || n.text == "+" || n.text == "-")) {
+        EkE l = ek_e(c, kg_kid(c.g, id, 0), t);
+        EkE r = ek_e(c, kg_kid(c.g, id, 1), l.t);
+        if (ek_lost(r.v)) { return eke(ek_scalar(ek_touch(l.v)), r.t); }
+        if (ek_lost(l.v)) { return eke(ek_scalar(ek_touch(r.v)), r.t); }
+        return eke(ek_scalar(ek_none()), r.t);
+    }
+    EkE all = ek_kids_vals(c, id, 0, ek_none(), true, t);
+    return eke(ek_scalar(ek_none()), all.t);
+}
+
+EkE ek_kids_vals(EkC c, Int id, Int i, EkA acc, Bool first, EkT t) {
+    if (i >= c.g.ns[id].nk) { return eke(acc, t); }
+    EkE a = ek_e(c, kg_kid(c.g, id, i), t);
+    return ek_kids_vals(c, id, i + 1, acc, false, a.t);
+}
+
+EkE ek_slice(EkC c, Int id, EkT t) {
+    KN n = c.g.ns[id];
+    EkE b = ek_e(c, kg_kid(c.g, id, 0), t);
+    // `x[a..b]`: the length when both bounds are literals, else unknown
+    // (a slice the compiler cannot measure counts zero).
+    Int r = if (n.nk > 1) { kg_kid(c.g, id, 1) } else { -1 };
+    Int len = if (r >= 0) { ek_range_len(c, r) } else { -1 };
+    EkT t2 = if (r >= 0) { ek_e(c, r, b.t).t } else { b.t };
+    return eke(ek_capped(ek_touch(b.v), if (len >= 0) { len } else { 0 }), t2);
+}
+
+Int ek_range_len(EkC c, Int r) {
+    KN n = c.g.ns[r];
+    if (n.kind != "bin" || n.nk != 2 || (n.text != ".." && n.text != "..=")) { return -1; }
+    Int lo = ek_lit(c, kg_kid(c.g, r, 0));
+    Int hi = ek_lit(c, kg_kid(c.g, r, 1));
+    if (lo < 0 || hi < 0 || hi < lo) { return -1; }
+    return hi - lo + (if (n.text == "..=") { 1 } else { 0 });
+}
+
+Int ek_lit(EkC c, Int id) {
+    KN n = c.g.ns[id];
+    if (n.kind == "paren") { return ek_lit(c, kg_kid(c.g, id, 0)); }
+    if (n.kind == "lit" && n.aux == "int" && str_is_int(n.text) && str_len(n.text) <= 9) { return str_parse_int(n.text); }
+    return -1;
+}
+
+// `x.f`: a local built from a record literal keeps each field; a parameter
+// keeps the path, for the caller to fill in.
+EkE ek_fieldof(EkC c, Int id, EkT t) {
+    Int b = kg_kid(c.g, id, 0);
+    EkE bv = ek_e(c, b, t);
+    Str f = c.g.ns[id].text;
+    EkFF fv = ek_field_val(bv.v, f);
+    if (fv.ok) { return eke(fv.v, bv.t); }
+    Str bn = if (c.g.ns[b].kind == "ref") { c.g.ns[b].text } else { "" };
+    if (bn != "" && t.fields.contains(bn + "." + f)) { return eke(t.fields.get(bn + "." + f) else { ek_none() }, bv.t); }
+    // A parameter's field: the path.
+    List(Str) ps = ek_paths(bv.v.ps, f, 0, []);
+    return eke(EkA {.src = bv.v.src, .cap = bv.v.cap, .ps = ps, .ze = bv.v.ze, .mt = bv.v.mt, .fk = [], .fv = [], .alts = []}, bv.t);
+}
+
+// Paths go one field deep: a deeper one stays at its first field (the
+// whole field stands for its parts), so recursion cannot grow them.
+List(Str) ek_paths(List(Str) ps, Str f, Int i, List(Str) acc) {
+    if (i >= ps.len()) { return acc; }
+    Str p = if (str_contains(ps[i], ".")) { ps[i] } else { ps[i] + "." + ek_first(f) };
+    return ek_paths(ps, f, i + 1, if (acc.contains(p)) { acc } else { acc.concat([p]) });
+}
+
+Str ek_first(Str f) {
+    Int d = str_find_char(f, 46, 0);
+    return if (d < 0) { f } else { str_slice(f, 0, d) };
+}
+
+EkE ek_match(EkC c, Int id, EkT t) {
+    EkE s = ek_e(c, kg_kid(c.g, id, 0), t);
+    return ek_arms_at(c, id, 1, s.v, ek_none(), true, s.t);
+}
+
+EkE ek_arms_at(EkC c, Int id, Int i, EkA sv, EkA acc, Bool first, EkT t) {
+    if (i >= c.g.ns[id].nk) { return eke(acc, t); }
+    Int arm = kg_kid(c.g, id, i);
+    Int na = c.g.ns[arm].nk;
+    EkT t1 = ek_bind_kids(c, arm, 0, na - 1, ek_touch(sv), t);
+    EkE b = if (na > 0) { ek_e(c, kg_kid(c.g, arm, na - 1), t1) } else { eke(ek_none(), t1) };
+    return ek_arms_at(c, id, i + 1, sv, if (first) { b.v } else { ek_arms(acc, b.v) }, false, b.t);
+}
+
+EkT ek_bind_kids(EkC c, Int id, Int i, Int to, EkA v, EkT t) {
+    if (i >= to) { return t; }
+    return ek_bind_kids(c, id, i + 1, to, v, ek_bind(c, t, kg_kid(c.g, id, i), v));
+}
+
+EkE ek_bexpr(EkC c, Int id, EkT t) {
+    Int n = c.g.ns[id].nk;
+    if (n == 0) { return eke(ek_none(), t); }
+    EkT t1 = ek_seq(c, id, 0, n - 1, t);
+    if (c.g.ns[id].aux == ";") { return eke(ek_none(), ek_s(c, kg_kid(c.g, id, n - 1), t1)); }
+    return ek_e(c, kg_kid(c.g, id, n - 1), t1);
+}
+
+// ─── Calls ──────────────────────────────────────────────────────────
+
+// A call's arguments, each evaluated once: values and nodes by position.
+type EkAV = { List(EkA) vs; List(Int) nodes; EkT t; };
+
+EkAV ek_eval_args(EkC c, Int id, Int i, ListBuf(EkA) vs, ListBuf(Int) ns, EkT t) {
+    if (i >= c.g.ns[id].nk) { return EkAV {.vs = vs.finish(), .nodes = ns.finish(), .t = t}; }
+    Int a = kg_kid(c.g, id, i);
+    Int an = if (c.g.ns[a].kind == "named" && c.g.ns[a].nk > 0) { kg_kid(c.g, a, 0) } else { a };
+    EkE v = ek_e(c, an, t);
+    return ek_eval_args(c, id, i + 1, vs.push(v.v), ns.push(a), v.t);
+}
+
+// The position of the argument bound to parameter index pi of f, or -1.
+Int ek_arg_pos(EkC c, Int f, EkAV av, Int pi, Int i) {
+    if (i >= av.nodes.len()) { return -1; }
+    Int a = av.nodes[i];
+    if (c.g.ns[a].kind == "named") { if (ek_param(c, f, c.g.ns[a].text, 1) == pi) { return i; } }
+    else { if (i == pi) { return i; } }
+    return ek_arg_pos(c, f, av, pi, i + 1);
+}
+
+EkE ek_call(EkC c, Int id, EkT t) {
+    KN n = c.g.ns[id];
+    Int d = ek_def(c, id);
+    EkAV av = ek_eval_args(c, id, 0, ListBuf(), ListBuf(), t);
+    EkT t1 = av.t;
+    EkA a0 = if (av.vs.len() > 0) { av.vs[0] } else { ek_none() };
+    if (d == -2 && n.text == "declassify") { return eke(ek_none(), ek_disclose(t1, a0)); }
+    if (d == -2 && n.text == "provisioned_key") { return ek_source(t1, 2, 0 - 1, [], -1, f"@{id}", id); }
+    if (d == -2 && (n.text == "secret" || n.text == "classify")) { return eke(ek_touch(a0), t1); }
+    if (d >= 0 && c.g.ns[d].kind == "fn") { return ek_apply(c, id, d, av); }
+    // A variant constructor (Some, Ok, Err, a sum type's) holds its payload.
+    Bool ctor = (d == -2 && (n.text == "Some" || n.text == "Ok" || n.text == "Err")) || (d >= 0 && c.g.ns[d].kind == "variant");
+    if (ctor) { return eke(ek_cat_vals(av.vs, 0, ek_none(), true, t1), t1); }
+    return eke(ek_none(), t1);
+}
+
+EkE ek_mcall(EkC c, Int id, EkT t) {
+    KN n = c.g.ns[id];
+    Int d = ek_def(c, id);
+    EkAV av = ek_eval_args(c, id, 0, ListBuf(), ListBuf(), t);
+    if (d >= 0 && c.g.ns[d].kind == "fn") { return ek_apply(c, id, d, av); }
+    Str m = n.text;
+    EkA b = if (av.vs.len() > 0) { av.vs[0] } else { ek_none() };
+    EkA a1 = if (av.vs.len() > 1) { av.vs[1] } else { ek_none() };
+    // Moving bytes keeps them: concatenation, pushing onto a builder, its
+    // finish, `with`.
+    if (m == "concat" && av.vs.len() == 2) { return eke(ek_cat(ek_touch(b), ek_touch(a1), av.t), av.t); }
+    if (m == "push" && av.vs.len() == 2) { return eke(ek_nonempty(ek_cat(ek_touch(b), ek_touch(a1), av.t)), av.t); }
+    if (m == "finish" || m == "freeze") { return eke(b, av.t); }
+    if (m == "with" && av.vs.len() == 3) { return eke(ek_nonempty(ek_cat(ek_touch(b), ek_touch(av.vs[2]), av.t)), av.t); }
+    return eke(ek_none(), av.t);
+}
+
+EkA ek_cat_vals(List(EkA) vs, Int i, EkA acc, Bool first, EkT t) {
+    if (i >= vs.len()) { return acc; }
+    return ek_cat_vals(vs, i + 1, if (first) { vs[i] } else { ek_cat(acc, vs[i], t) }, false, t);
+}
+
+// A call of function f.
+EkE ek_apply(EkC c, Int id, Int f, EkAV av) {
+    EkT t = av.t;
+    Str aux = c.g.ns[f].aux;
+    if (ek_reviewed(aux)) { return ek_reviewed_call(c, id, f, aux, av); }
+    EkT te = if (t.cur >= 0) { EkT {.lp = t.lp, .nch = t.nch, .env = t.env, .fields = t.fields, .sum = t.sum, .srcs = t.srcs, .skeys = t.skeys, .discl = t.discl, .chks = t.chks, .res = t.res, .reqs = t.reqs, .dis = t.dis, .cur = t.cur, .edges = t.edges.insert(f * 4294967296 + t.cur, true), .chd = t.chd, .rec = t.rec} } else { t };
+    if (!te.sum.contains(f)) { return eke(ek_bot(), te); }
+    EkS s = te.sum.get(f) else { EkS {.ret = ek_none(), .reqs = [], .discl = []} };
+    // The result: the summary's own sources and each parameter it keeps,
+    // filled in from the arguments.
+    EkA r = if (s.ret.cap == -3) { ek_bot() } else { ek_subst_val(c, f, av, s.ret, te) };
+    EkT t2 = ek_reqs(c, id, f, av, s.reqs, 0, te);
+    EkT t3 = ek_discls(c, f, av, s.discl, 0, t2);
+    return eke(r, t3);
+}
+
+// The value at "i" or "i.path" of a call's arguments.
+EkA ek_argpath(EkC c, Int f, EkAV av, Str p, EkT t) {
+    List(Str) parts = str_split(p, ".");
+    Int pos = ek_arg_pos(c, f, av, str_parse_int(parts[0]), 0);
+    if (pos < 0) { return ek_none(); }
+    EkA v = av.vs[pos];
+    if (parts.len() == 1) { return v; }
+    EkFF fv = ek_field_val(v, parts[1]);
+    if (fv.ok) { return fv.v; }
+    // A field of the argument: a local's recorded field, or the path on.
+    Int a = av.nodes[pos];
+    Int an = if (c.g.ns[a].kind == "named" && c.g.ns[a].nk > 0) { kg_kid(c.g, a, 0) } else { a };
+    Str an_name = if (c.g.ns[an].kind == "ref") { c.g.ns[an].text } else { "" };
+    Str rest = str_join(parts[1..parts.len()], ".");
+    Str fk = an_name + "." + rest;
+    if (an_name != "" && t.fields.contains(fk)) { return t.fields.get(fk) else { ek_none() }; }
+    return EkA {.src = v.src, .cap = v.cap, .ps = ek_paths(v.ps, rest, 0, []), .ze = v.ze, .mt = v.mt, .fk = [], .fv = [], .alts = []};
+}
+
+// A summary's value with each parameter filled in from the arguments: its
+// own sources, its fields, its alternatives.
+EkA ek_subst_val(EkC c, Int f, EkAV av, EkA x, EkT t) {
+    if (x.alts.len() > 0) { return ek_from_alts(ek_subst_all(c, f, av, x.alts, 0, t, [])); }
+    EkA base = EkA {.src = x.src, .cap = x.cap, .ps = [], .ze = x.ze, .mt = x.mt, .fk = [], .fv = [], .alts = []};
+    EkA r = ek_subst(c, f, av, x.ps, 0, base, t);
+    return if (x.fk.len() > 0) { ek_with_fields(r, x.fk, ek_subst_all(c, f, av, x.fv, 0, t, [])) } else { r };
+}
+
+List(EkA) ek_subst_all(EkC c, Int f, EkAV av, List(EkA) xs, Int i, EkT t, List(EkA) acc) {
+    if (i >= xs.len()) { return acc; }
+    return ek_subst_all(c, f, av, xs, i + 1, t, acc.concat([ek_subst_val(c, f, av, xs[i], t)]));
+}
+
+EkA ek_subst(EkC c, Int f, EkAV av, List(Str) ps, Int i, EkA acc, EkT t) {
+    if (i >= ps.len()) { return acc; }
+    EkA v = ek_argpath(c, f, av, ps[i], t);
+    return ek_subst(c, f, av, ps, i + 1, ek_cat(acc, v, t), t);
+}
+
+// A callee's keying requirements, checked at this call or passed on when
+// the argument is this function's own parameter.
+EkT ek_reqs(EkC c, Int id, Int f, EkAV av, List(Str) rs, Int i, EkT t) {
+    if (i >= rs.len()) { return t; }
+    List(Str) q = str_split(rs[i], "|");
+    Str path = if (q[1] == "") { q[0] } else { q[0] + "." + q[1] };
+    EkA v0 = ek_argpath(c, f, av, path, t);
+    List(Int) extra = ek_ids_parse(q[5], 0, []);
+    EkA v = ek_cat(v0, EkA {.src = extra, .cap = -1, .ps = [], .ze = false, .mt = extra.len() == 0, .fk = [], .fv = [], .alts = []}, t);
+    EkT t2 = ek_need(c, id, v, q[2] == "1", q[3] == "1", q[6] == "1" && !ek_in_test(c, t), q[4], t);
+    return ek_reqs(c, id, f, av, rs, i + 1, t2);
+}
+
+EkT ek_discls(EkC c, Int f, EkAV av, List(Str) ds, Int i, EkT t) {
+    if (i >= ds.len()) { return t; }
+    return ek_discls(c, f, av, ds, i + 1, ek_disclose(t, ek_argpath(c, f, av, ds[i], t)));
+}
+
+// A keying site: parameters of this function become its requirements; the
+// sources are checked once disclosure is known.
+EkT ek_need(EkC c, Int at, EkA v, Bool own, Bool prov, Bool pub, Str callee, EkT t) {
+    List(Str) mine = ek_req_entries(v.ps, own, prov, pub, callee + "|" + ek_ids_text(v.src, 0, ""), 0, []);
+    EkChk ch = EkChk {.v = EkA {.src = v.src, .cap = v.cap, .ps = [], .ze = v.ze, .mt = v.mt, .fk = [], .fv = [], .alts = v.alts}, .own = own, .prov = prov, .pub = pub && !ek_in_test(c, t), .at = at, .callee = callee};
+    // A value that is entirely this function's parameter is checked at the
+    // callers instead.
+    // Tests (a test block, a file under tests/) key with known-answer
+    // vectors on purpose.
+    // A value that holds this function's parameters is checked at the
+    // callers, with the sources it holds already passed along.
+    Bool here = t.rec && v.ps.len() == 0 && !ek_in_test(c, t);
+    return EkT {.lp = t.lp, .nch = t.nch, .env = t.env, .fields = t.fields, .sum = t.sum, .srcs = t.srcs, .skeys = t.skeys, .discl = t.discl, .chks = if (here) { t.chks.concat([ch]) } else { t.chks }, .res = t.res, .reqs = ek_sunion(t.reqs, mine, 0), .dis = t.dis, .cur = t.cur, .edges = t.edges, .chd = t.chd, .rec = t.rec};
+}
+
+List(Str) ek_req_entries(List(Str) ps, Bool own, Bool prov, Bool pub, Str callee, Int i, List(Str) acc) {
+    if (i >= ps.len()) { return acc; }
+    Int dot = str_find_char(ps[i], 46, 0);
+    Str pi = if (dot < 0) { ps[i] } else { str_slice(ps[i], 0, dot) };
+    Str path = if (dot < 0) { "" } else { str_slice(ps[i], dot + 1, str_len(ps[i])) };
+    // callee carries "name|srcs": the sources the value held besides.
+    Str e = pi + "|" + path + "|" + (if (own) { "1" } else { "0" }) + "|" + (if (prov) { "1" } else { "0" }) + "|" + callee + "|" + (if (pub) { "1" } else { "0" });
+    return ek_req_entries(ps, own, prov, pub, callee, i + 1, acc.concat([e]));
+}
+
+// A call's identity for derived sources: equal calls are one value.
+Str ek_ident(EkC c, Int f, EkAV av, Int i, StrBuf acc) {
+    if (i >= av.nodes.len()) { return acc.finish(); }
+    Int a = av.nodes[i];
+    // An argument holding no unpredictable bytes by its text; one holding
+    // some by its sources (two names can hold one value).
+    Str part = if (av.vs[i].src.len() == 0) { str_trim(kg_print(c.g, a)) } else { f"{av.vs[i].src}/{av.vs[i].cap}" };
+    return ek_ident(c, f, av, i + 1, acc.push(part).push_char(44));
+}
+
+Str ek_ids_text(List(Int) xs, Int i, Str acc) { return if (i >= xs.len()) { acc } else { ek_ids_text(xs, i + 1, if (acc == "") { f"{xs[i]}" } else { acc + f",{xs[i]}" }) }; }
+List(Int) ek_ids_parse(Str s, Int i, List(Int) acc) {
+    if (s == "") { return acc; }
+    List(Str) parts = str_split(s, ",");
+    return ek_ids_list(parts, 0, acc);
+}
+List(Int) ek_ids_list(List(Str) ps, Int i, List(Int) acc) { return if (i >= ps.len()) { sort(acc) } else { ek_ids_list(ps, i + 1, acc.concat([str_parse_int(ps[i])])) }; }
+
+// A reviewed primitive, by its annotations.
+EkE ek_reviewed_call(EkC c, Int id, Int f, Str aux, EkAV av) {
+    EkT t = av.t;
+    Str key = ek_ann(aux, "key");
+    EkT t0 = if (key != "") {
+        List(Str) ks = str_split(key, ",");
+        Str pn = str_trim(ks[0]);
+        Int pi = ek_param(c, f, pn, 1);
+        Bool own = str_contains(key, "own");
+        Bool prov = str_contains(key, "provisioned");
+        Bool pub = pi >= 0 && !str_contains(ek_param_ty(c, f, pi), "Secret(");
+        EkA v = if (pi >= 0) { ek_argpath(c, f, av, f"{pi}", t) } else { ek_none() };
+        if (pi >= 0) { ek_need(c, id, v, own, prov, pub, ek_short(c.g.ns[f].text) + " (" + pn + ")", t) } else { t }
+    } else { t };
+    // A fresh public draw (random_bytes): never a key, but fresh.
+    Str fresh = ek_ann(aux, "fresh_source");
+    if (fresh != "") { return ek_source(t0, 5, 0, [], -1, f"@{id}", id); }
+    Str nn = ek_ann(aux, "nonce");
+    EkT t1 = if (nn != "" && t0.rec) { ek_nonce_site(c, id, f, av, nn, key, t0) } else { t0 };
+    Str src = ek_ann(aux, "key_source");
+    if (src != "") {
+        Int pi = ek_param(c, f, src, 1);
+        Int pos = if (pi >= 0) { ek_arg_pos(c, f, av, pi, 0) } else { -1 };
+        Int len = if (pos >= 0) { ek_lit(c, av.nodes[pos]) } else { -1 };
+        return ek_source(t1, 1, if (len >= 0) { len } else { 0 }, [], -1, f"@{id}", id);
+    }
+    Str kf = ek_ann(aux, "key_from");
+    Str ag = ek_ann(aux, "agree");
+    if (kf != "" || ag != "") {
+        // Unpredictable when any named parameter is (HKDF-Extract keys on
+        // its salt as much as its IKM): their bytes together.
+        EkA v = ek_from_params(c, f, av, str_split(if (kf != "") { kf } else { ag }, ","), 0, ek_none(), true, t1);
+        if (v.src.len() == 0) { return eke(EkA {.src = [], .cap = -1, .ps = v.ps, .ze = false, .mt = false, .fk = [], .fv = [], .alts = []}, t1); }
+        Str ident = ek_short(c.g.ns[f].text) + "(" + ek_ident(c, f, av, 0, StrBuf()) + ")";
+        return ek_source(t1, if (kf != "") { 4 } else { 3 }, 0, v.src, ek_capof(v, t1), ident, id);
+    }
+    return eke(ek_none(), t1);
+}
+
+EkA ek_from_params(EkC c, Int f, EkAV av, List(Str) ns, Int i, EkA acc, Bool first, EkT t) {
+    if (i >= ns.len()) { return acc; }
+    Int pi = ek_param(c, f, str_trim(ns[i]), 1);
+    EkA v = if (pi >= 0) { ek_argpath(c, f, av, f"{pi}", t) } else { ek_none() };
+    return ek_from_params(c, f, av, ns, i + 1, if (first) { v } else { ek_cat(acc, v, t) }, false, t);
+}
+
+// An AEAD nonce: recorded with whether it is a constant (a literal list
+// after reduction) and the sources its key rests on.
+EkT ek_nonce_site(EkC c, Int id, Int f, EkAV av, Str nn, Str key, EkT t) {
+    Int ni = ek_param(c, f, str_trim(nn), 1);
+    Int npos = if (ni >= 0) { ek_arg_pos(c, f, av, ni, 0) } else { -1 };
+    Bool known = npos >= 0 && ek_const_list(c, av.nodes[npos]);
+    Str kn = if (key == "") { "" } else { str_trim(str_split(key, ",")[0]) };
+    Int ki = if (kn == "") { -1 } else { ek_param(c, f, kn, 1) };
+    EkA kv = if (ki >= 0) { ek_argpath(c, f, av, f"{ki}", t) } else { ek_none() };
+    EkN site = EkN {.at = id, .fn = t.cur, .lp = t.lp, .known = known, .ksrc = ek_flat_srcs(t, ek_union_all(ek_alts_of(kv), 0, kv.src), 0, [], 0), .callee = ek_short(c.g.ns[f].text)};
+    return EkT {.lp = t.lp, .nch = t.nch.concat([site]), .env = t.env, .fields = t.fields, .sum = t.sum, .srcs = t.srcs, .skeys = t.skeys, .discl = t.discl, .chks = t.chks, .res = t.res, .reqs = t.reqs, .dis = t.dis, .cur = t.cur, .edges = t.edges, .chd = t.chd, .rec = t.rec};
+}
+
+// A literal list of literals (a constant after reduction).
+Bool ek_const_list(EkC c, Int a) {
+    Int n = if (c.g.ns[a].kind == "named" && c.g.ns[a].nk > 0) { kg_kid(c.g, a, 0) } else { a };
+    if (c.g.ns[n].kind == "paren") { return ek_const_list(c, kg_kid(c.g, n, 0)); }
+    if (c.g.ns[n].kind != "list") { return false; }
+    return ek_all_lits(c, n, 0);
+}
+
+Bool ek_all_lits(EkC c, Int n, Int i) {
+    if (i >= c.g.ns[n].nk) { return true; }
+    Int k = kg_kid(c.g, n, i);
+    if (c.g.ns[k].kind != "lit") { return false; }
+    return ek_all_lits(c, n, i + 1);
+}
+
+// Sources and every source they rest on.
+List(Int) ek_flat_srcs(EkT t, List(Int) s, Int i, List(Int) acc, Int depth) {
+    if (i >= s.len() || depth > 64) { return acc; }
+    List(Int) here = ek_union(acc, [s[i]]);
+    List(Int) under = ek_flat_srcs(t, t.srcs[s[i]].deps, 0, here, depth + 1);
+    return ek_flat_srcs(t, s, i + 1, under, depth);
+}
+
+// A constant nonce is allowed only under a single-use key: one resting on
+// a draw made in the same function, outside any loop or closure, whose
+// draw no other sealing call in that function uses (§5.2).
+Bool ek_single_use(EkT t, EkN n) {
+    if (n.lp > 0) { return false; }
+    return ek_su_at(t, n, 0);
+}
+
+Bool ek_su_at(EkT t, EkN n, Int i) {
+    if (i >= n.ksrc.len()) { return false; }
+    EkSrc x = t.srcs[n.ksrc[i]];
+    Bool fresh = (x.kind == 1 || x.kind == 5) && x.fn == n.fn && x.fn >= 0;
+    if (fresh && ek_seals_with(t, n.fn, n.ksrc[i], 0, 0) == 1) { return true; }
+    return ek_su_at(t, n, i + 1);
+}
+
+Int ek_seals_with(EkT t, Int fn, Int s, Int i, Int acc) {
+    if (i >= t.nch.len()) { return acc; }
+    EkN x = t.nch[i];
+    return ek_seals_with(t, fn, s, i + 1, if (x.fn == fn && x.ksrc.contains(s)) { acc + 1 } else { acc });
+}
+
+Str ek_nonce_warn(EkC c, EkT t, Int i, Str src, Str smap, StrBuf out) {
+    if (i >= t.nch.len()) { return out.finish(); }
+    EkN n = t.nch[i];
+    Bool bad = n.known && !ek_single_use(t, n) && !ek_in_test_fn(c, n.fn);
+    Str w = if (bad) { ek_warn_code("E0279", "an AEAD nonce that is the same on every run: the nonce of " + n.callee + " is a constant, allowed only under a key drawn for this one sealing call (in this function, outside any loop or closure); use the library's stateful sealer or a fresh random nonce", c.g, n.at, src, smap) } else { "" };
+    return ek_nonce_warn(c, t, i + 1, src, smap, out.push(w));
+}
+
+Str ek_dbg_kinds(EkT t, List(Int) s, Int i, Str acc) { return if (i >= s.len()) { acc } else { ek_dbg_kinds(t, s, i + 1, acc + f"{t.srcs[s[i]].kind}@{t.srcs[s[i]].fn} ") }; }
+
+Bool ek_in_test_fn(EkC c, Int fn) {
+    if (fn < 0) { return false; }
+    if (str_starts_with(c.g.ns[fn].text, "restest")) { return true; }
+    Str p = diag_where(gm_smap(c.smap), gk_line_of(c.nls, c.g.ns[fn].sp, 0, c.nls.len()) + 1).path;
+    return str_starts_with(p, "tests/") || str_contains(p, "/tests/");
+}
+
+// A generic copy's name without its instantiation suffix.
+Str ek_short(Str n) {
+    Int g = str_find(n, "__g_");
+    return if (g > 0) { str_slice(n, 0, g) } else { n };
+}
+
+// Keys in tests (a `test` block, or a file under tests/) may be public
+// copies: known-answer vectors need constant keys.
+Bool ek_in_test(EkC c, EkT t) {
+    if (t.cur < 0) { return false; }
+    if (str_starts_with(c.g.ns[t.cur].text, "restest")) { return true; }
+    Str p = diag_where(gm_smap(c.smap), gk_line_of(c.nls, c.g.ns[t.cur].sp, 0, c.nls.len()) + 1).path;
+    return str_starts_with(p, "tests/") || str_contains(p, "/tests/");
+}
+
+// ─── Statements ─────────────────────────────────────────────────────
+
+EkT ek_seq(EkC c, Int id, Int i, Int to, EkT t) {
+    if (i >= to) { return t; }
+    return ek_seq(c, id, i + 1, to, ek_s(c, kg_kid(c.g, id, i), t));
+}
+
+EkT ek_s(EkC c, Int id, EkT t) {
+    KN n = c.g.ns[id];
+    Str k = n.kind;
+    if (k == "block") { return ek_seq(c, id, 0, n.nk, t); }
+    if (k == "bind" || k == "rbind") {
+        Int e = kg_kid(c.g, id, n.nk - 1);
+        EkE v0 = ek_e(c, e, t);
+        Bool sc = n.nk > 1 && c.g.ns[kg_kid(c.g, id, 0)].kind == "ty" && ek_scalar_ty(c.g.ns[kg_kid(c.g, id, 0)].text);
+        EkE v = if (sc) { eke(EkA {.src = [], .cap = -1, .ps = [], .ze = false, .mt = true, .fk = [], .fv = [], .alts = []}, v0.t) } else { v0 };
+        EkT t2 = if (c.g.ns[e].kind == "struct") { ek_struct_fields(c, id, e, 0, v.t) } else { v.t };
+        return ek_bind(c, t2, id, v.v);
+    }
+    if (k == "letpat") {
+        EkE v = ek_e(c, kg_kid(c.g, id, 0), t);
+        return ek_bind(c, v.t, id, v.v);
+    }
+    if (k == "destr") {
+        EkE v = ek_e(c, kg_kid(c.g, id, n.nk - 1), t);
+        return ek_bind_kids(c, id, 0, n.nk - 1, v.v, v.t);
+    }
+    if (k == "ret") {
+        EkE v = if (n.nk > 0) { ek_e(c, kg_kid(c.g, id, 0), t) } else { eke(ek_none(), t) };
+        EkA r = if (v.t.res.cap == -3) { v.v } else { ek_arms(v.t.res, v.v) };
+        return ek_res(v.t, r);
+    }
+    if (k == "if") {
+        EkE cd = ek_e(c, kg_kid(c.g, id, 0), t);
+        return ek_seq(c, id, 1, n.nk, cd.t);
+    }
+    if (k == "while") {
+        EkE cd = ek_e(c, kg_kid(c.g, id, 0), t);
+        return ek_lp(ek_seq(c, id, 1, n.nk, ek_lp(cd.t, t.lp + 1)), t.lp);
+    }
+    if (k == "for") {
+        EkE it = ek_e(c, kg_kid(c.g, id, 1), t);
+        return ek_lp(ek_s(c, kg_kid(c.g, id, 2), ek_bind(c, ek_lp(it.t, t.lp + 1), id, ek_capped(ek_touch(it.v), 1))), t.lp);
+    }
+    if (k == "with") {
+        EkT t1 = ek_seq(c, id, 0, n.nk - 1, t);
+        return ek_s(c, kg_kid(c.g, id, n.nk - 1), t1);
+    }
+    return ek_e(c, id, t).t;
+}
+
+EkT ek_struct_fields(EkC c, Int b, Int s, Int i, EkT t) {
+    if (i >= c.g.ns[s].nk) { return t; }
+    Int fi = kg_kid(c.g, s, i);
+    if (c.g.ns[fi].kind != "finit" || c.g.ns[fi].nk == 0) { return ek_struct_fields(c, b, s, i + 1, t); }
+    EkA v = ek_e(c, kg_kid(c.g, fi, c.g.ns[fi].nk - 1), t).v;
+    return ek_struct_fields(c, b, s, i + 1, ek_field(t, ek_bname(c, b) + "." + c.g.ns[fi].text, v));
+}
+
+// ─── Functions and the fixed point ──────────────────────────────────
+
+// Is node bn a local declared as a list of non-scalar elements?
+Bool ek_record_list(EkC c, Int bn) {
+    if (c.g.ns[bn].kind != "ref") { return false; }
+    Int d = ek_def(c, bn);
+    if (d < 0 || c.g.ns[d].nk == 0) { return false; }
+    Int tk = kg_kid(c.g, d, 0);
+    if (c.g.ns[tk].kind != "ty") { return false; }
+    Str ty = c.g.ns[tk].text;
+    if (!str_starts_with(ty, "List(") || !str_ends_with(ty, ")")) { return false; }
+    Str el = str_slice(ty, 5, str_len(ty) - 1);
+    Str inner = if (str_starts_with(el, "Secret(") && str_ends_with(el, ")")) { str_slice(el, 7, str_len(el) - 1) } else { el };
+    return !ek_scalar_ty(inner) && !str_contains(inner, ",");
+}
+
+// A scalar type holds no key bytes: a value of one is empty of them.
+Bool ek_scalar_ty(Str t) {
+    if (t == "Int" || t == "UInt" || t == "Bool" || t == "Str" || t == "Float" || t == "Bytes") { return true; }
+    return str_starts_with(t, "Int(") || str_starts_with(t, "UInt(") || str_starts_with(t, "Float(") || str_starts_with(t, "Dec(") || str_starts_with(t, "Str(");
+}
+
+EkT ek_params(EkC c, Int f, Int i, EkT t) {
+    if (i >= c.g.ns[f].nk - 1) { return t; }
+    Int p = kg_kid(c.g, f, i);
+    if (c.g.ns[p].kind != "param") { return ek_params(c, f, i + 1, t); }
+    Bool sc = c.g.ns[p].nk > 0 && ek_scalar_ty(c.g.ns[kg_kid(c.g, p, 0)].text);
+    return ek_params(c, f, i + 1, ek_bind(c, t, p, EkA {.src = [], .cap = -1, .ps = if (sc) { [] } else { [f"{i - 1}"] }, .ze = false, .mt = sc, .fk = [], .fv = [], .alts = []}));
+}
+
+Bool ek_same(EkS a, EkS b) {
+    return ek_sum_text(a) == ek_sum_text(b);
+}
+
+Str ek_sum_text(EkS a) {
+    return ek_val_text(a.ret) + f"|{a.reqs}|{a.discl}";
+}
+
+Str ek_fv_text(List(EkA) fv, Int i, StrBuf acc) {
+    if (i >= fv.len()) { return acc.finish(); }
+    EkA x = fv[i];
+    return ek_fv_text(fv, i + 1, acc.push(f"({x.src},{x.cap},{x.ps},{x.ze},{x.mt})"));
+}
+
+EkT ek_fn(EkC c, Int f, EkT t) {
+    KN fn = c.g.ns[f];
+    if (fn.nk == 0 || ek_reviewed(fn.aux)) { return t; }
+    EkA start = EkA {.src = [], .cap = -3, .ps = [], .ze = false, .mt = false, .fk = [], .fv = [], .alts = []};
+    Map(Str, EkA) ne = {};
+    Map(Str, EkA) nf = {};
+    EkT t0 = EkT {.lp = t.lp, .nch = t.nch, .env = ne, .fields = nf, .sum = t.sum, .srcs = t.srcs, .skeys = t.skeys, .discl = t.discl, .chks = t.chks, .res = start, .reqs = [], .dis = [], .cur = f, .edges = t.edges, .chd = t.chd, .rec = t.rec};
+    EkT t1 = ek_params(c, f, 1, t0);
+    EkT t2 = ek_s(c, kg_kid(c.g, f, fn.nk - 1), t1);
+    // A function whose returns are all not known yet stays not known. Past
+    // the widening round, alternatives are met, so the fixed point ends.
+    EkA ret = if (c.wide) { ek_deep_collapse(t2.res) } else { t2.res };
+    EkS now = EkS {.ret = ret, .reqs = t2.reqs, .discl = t2.dis};
+    EkS old = t2.sum.get(f) else { EkS {.ret = ek_none(), .reqs = [], .discl = []} };
+    Bool ch = !ek_same(old, now);
+    return EkT {.lp = t2.lp, .nch = t2.nch, .env = t2.env, .fields = t2.fields, .sum = t2.sum.insert(f, now), .srcs = t2.srcs, .skeys = t2.skeys, .discl = t2.discl, .chks = t2.chks, .res = ek_none(), .reqs = [], .dis = [], .cur = -1, .edges = t2.edges, .chd = if (ch) { t2.chd.insert(f, true) } else { t2.chd }, .rec = t2.rec};
+}
+
+EkT ek_decls(EkC c, Int id, Int i, EkT t) {
+    if (i >= c.g.ns[id].nk) { return t; }
+    Int d = kg_kid(c.g, id, i);
+    Str k = c.g.ns[d].kind;
+    EkT t2 = if (k == "sandbox") { ek_decls(c, d, 0, t) } else if (k == "fn") { ek_fn(c, d, t) } else { t };
+    return ek_decls(c, id, i + 1, t2);
+}
+
+Map(Int, List(Int)) ek_callers(List(Int) ks, Int i, Map(Int, List(Int)) acc) {
+    if (i >= ks.len()) { return acc; }
+    Int callee = ks[i] / 4294967296;
+    List(Int) prev = acc.get(callee) else { [] };
+    return ek_callers(ks, i + 1, acc.insert(callee, prev.concat([ks[i] % 4294967296])));
+}
+
+Map(Int, Bool) ek_next(Map(Int, List(Int)) cs, List(Int) chd, Int i, Map(Int, Bool) acc) {
+    if (i >= chd.len()) { return acc; }
+    List(Int) us = cs.get(chd[i]) else { [] };
+    return ek_next(cs, chd, i + 1, ek_mark(us, 0, acc));
+}
+
+Map(Int, Bool) ek_mark(List(Int) us, Int i, Map(Int, Bool) acc) {
+    if (i >= us.len()) { return acc; }
+    return ek_mark(us, i + 1, acc.insert(us[i], true));
+}
+
+EkT ek_some(EkC c, List(Int) fs, Int i, EkT t) {
+    if (i >= fs.len()) { return t; }
+    return ek_some(c, fs, i + 1, ek_fn(c, fs[i], t));
+}
+
+EkT ek_rounds(EkC c, Map(Int, List(Int)) cs, EkT t, Int round) {
+    Map(Int, Bool) none = {};
+    Map(Int, Bool) work = ek_next(cs, sort(t.chd.keys()), 0, none);
+    if (work.len() == 0 || round > 10000) { return t; }
+    Bool _p = if (c.dbg != "") { println(f"ekey round {round}: {work.len()} functions, {t.srcs.len()} sources") } else { false };
+    EkT t0 = EkT {.lp = t.lp, .nch = t.nch, .env = t.env, .fields = t.fields, .sum = t.sum, .srcs = t.srcs, .skeys = t.skeys, .discl = t.discl, .chks = t.chks, .res = t.res, .reqs = t.reqs, .dis = t.dis, .cur = -1, .edges = t.edges, .chd = none, .rec = t.rec};
+    EkC c2 = if (round >= 30 && !c.wide) { EkC {.g = c.g, .def = c.def, .src = c.src, .smap = c.smap, .nls = c.nls, .dbg = c.dbg, .wide = true} } else { c };
+    return ek_rounds(c2, cs, ek_some(c2, sort(work.keys()), 0, t0), round + 1);
+}
+
+// ─── Checking the sites ─────────────────────────────────────────────
+
+// Unpredictable bytes of a value: its sources, less the disclosed, capped.
+Int ek_count(EkA v, EkT t) {
+    if (v.alts.len() > 0) { return ek_count_min(v.alts, t, 1, ek_count(v.alts[0], t)); }
+    Int sum = ek_count_srcs(v.src, t, 0, 0, 0);
+    return if (v.cap >= 0 && v.cap < sum) { v.cap } else { sum };
+}
+
+Int ek_count_min(List(EkA) xs, EkT t, Int i, Int best) {
+    if (i >= xs.len()) { return best; }
+    Int c = ek_count(xs[i], t);
+    return ek_count_min(xs, t, i + 1, if (c < best) { c } else { best });
+}
+
+// Own when every alternative is.
+Bool ek_own_v(EkA v, EkT t, Bool prov) {
+    if (v.alts.len() > 0) { return ek_own_alts(v.alts, t, prov, 0); }
+    return ek_own(v.src, t, prov, 0, 0);
+}
+
+Bool ek_own_alts(List(EkA) xs, EkT t, Bool prov, Int i) { return if (i >= xs.len()) { true } else { ek_own_v(xs[i], t, prov) && ek_own_alts(xs, t, prov, i + 1) }; }
+
+Int ek_count_srcs(List(Int) s, EkT t, Int i, Int acc, Int depth) {
+    if (i >= s.len()) { return acc; }
+    return ek_count_srcs(s, t, i + 1, acc + ek_src_count(s[i], t, depth), depth);
+}
+
+// One source's unpredictable bytes: zero when disclosed; a derived one as
+// many as what it rests on (to its cap); a provisioned key all of its own.
+Int ek_src_count(Int s, EkT t, Int depth) {
+    if (t.discl.contains(s) || depth > 64) { return 0; }
+    EkSrc x = t.srcs[s];
+    if (x.kind == 2) { return 1000000; }
+    if (x.kind == 1) { return x.len; }
+    if (x.kind == 5) { return 0; }
+    Int under = ek_count_srcs(x.deps, t, 0, 0, depth + 1);
+    Int c = if (x.dcap >= 0 && x.dcap < under) { x.dcap } else { under };
+    return if (x.kind == 3 && c > 32) { 32 } else { c };
+}
+
+// Own: every source a draw (directly or underneath), none disclosed;
+// provisioned keys too when allowed; never an agreed one.
+Bool ek_own(List(Int) s, EkT t, Bool prov, Int i, Int depth) {
+    if (i >= s.len()) { return true; }
+    EkSrc x = t.srcs[s[i]];
+    Bool ok = if (t.discl.contains(s[i]) || depth > 64) { false } else if (x.kind == 1) { true } else if (x.kind == 2) { prov } else if (x.kind == 4) { ek_own(x.deps, t, prov, 0, depth + 1) } else { false };
+    return ok && ek_own(s, t, prov, i + 1, depth);
+}
+
+EkR ek_check_all(EkC c, EkT t, Int i, Str src, Str smap, StrBuf out, Int n) {
+    if (i >= t.chks.len()) { return EkR {.text = out.finish(), .n = n}; }
+    EkChk k = t.chks[i];
+    // A key known to be empty is refused at run time by every keying
+    // primitive (availability, not a key anyone knows): not a finding.
+    if (k.v.mt && !k.pub) { return ek_check_all(c, t, i + 1, src, smap, out, n); }
+    Int have = ek_count(k.v, t);
+    Str why = if (k.pub) { "a public copy of a keying function takes a key that cannot be Secret; it is for known-answer tests only" }
+        else if (have < 32) { f"it has {have} unpredictable byte(s), and a key needs 32 (or its full length): " + (if (k.v.src.len() == 0) { "it holds none (a constant, or bytes a file, the network, a device or a native module supplied)" } else if (k.v.ze) { "an empty value was padded or hashed into it" } else { "some of its bytes were disclosed, repeated, or lost to arithmetic" }) }
+        else if (k.own && !ek_own_v(k.v, t, k.prov)) { "it must be own: drawn by this program with random_secret" + (if (k.prov) { " or provisioned (provisioned_key)" } else { "" }) + ", never agreed with a peer or disclosed" }
+        else { "" };
+    if (why == "") { return ek_check_all(c, t, i + 1, src, smap, out, n); }
+    Str msg = "key could be known to someone else: the key of " + k.callee + ": " + why;
+    return ek_check_all(c, t, i + 1, src, smap, out.push(ek_warn_text(msg, c.g, k.at, src, smap)), n + 1);
+}
+
+type EkR = { Str text; Int n; };
+
+// RESID_EKEY_DEBUG=<part of a name>: the summaries of matching functions.
+Str ek_dbg_sums(EkC c, EkT t, List(Int) fs, Int i, Str pat, StrBuf acc) {
+    if (i >= fs.len()) { return acc.finish(); }
+    Str nm = c.g.ns[fs[i]].text;
+    EkS s = t.sum.get(fs[i]) else { EkS {.ret = ek_none(), .reqs = [], .discl = []} };
+    Str line = if (str_contains(nm, pat)) { "ekey " + nm + ": " + ek_sum_text(s) + "\n" } else { "" };
+    return ek_dbg_sums(c, t, fs, i + 1, pat, acc.push(line));
+}
+
+
+Str ek_warn_text(Str msg, Kg g, Int at, Str src, Str smap) { return ek_warn_code("E0270", msg, g, at, src, smap); }
+
+Str ek_warn_code(Str code, Str msg, Kg g, Int at, Str src, Str smap) {
+    Int pos = g.ns[at].ep;
+    PosInfo pi = pos_to_line_col(src, pos - 1);
+    DiagAt w = diag_where(gm_smap(smap), pi.line);
+    Str loc = if (pi.line > 0 && w.path != "") { "  --> " + w.path + f":{w.line}:{pi.col}\n" } else { "" };
+    return "warning[" + code + "]: " + msg + "\n" + loc;
+}
+
+// Check every keying site of the program at `unit` (a residual graph).
+pub EKR ek_run(Kg g, Int unit, Str src, Str smap, Str dbg) {
+    if (!str_contains(src, "@key(") && !str_contains(src, "@key_source(") && !str_contains(src, "@nonce(")) { return EKR {.warnings = "", .n = 0}; }
+    RS rs = kg_resolve(g, unit);
+    EkC c = EkC {.g = g, .def = rs.def, .src = src, .smap = smap, .nls = dv_newlines(src, 0, ListBuf()), .dbg = dbg, .wide = false};
+    Map(Str, EkA) e = {};
+    Map(Str, EkA) fe = {};
+    Map(Int, EkS) se = {};
+    Map(Str, Int) ke = {};
+    Map(Int, Bool) be = {};
+    EkT t0 = EkT {.lp = 0, .nch = [], .env = e, .fields = fe, .sum = se, .srcs = [], .skeys = ke, .discl = [], .chks = [], .res = ek_none(), .reqs = [], .dis = [], .cur = -1, .edges = be, .chd = be, .rec = false};
+    EkT t1 = ek_decls(c, unit, 0, t0);
+    Map(Int, List(Int)) cs0 = {};
+    EkT t2 = ek_rounds(c, ek_callers(sort(t1.edges.keys()), 0, cs0), t1, 0);
+    // The recording pass: every keying site, with final summaries.
+    // Sources keep their ids (one per node, or per derivation), so the
+    // summaries' references stay valid; disclosure is gathered afresh.
+    EkT t3 = ek_decls(c, unit, 0, EkT {.lp = t2.lp, .nch = t2.nch, .env = e, .fields = fe, .sum = t2.sum, .srcs = t2.srcs, .skeys = t2.skeys, .discl = [], .chks = [], .res = ek_none(), .reqs = [], .dis = [], .cur = -1, .edges = be, .chd = be, .rec = true});
+    EkR r0 = ek_check_all(c, t3, 0, src, smap, StrBuf(), 0);
+    Str nw = ek_nonce_warn(c, t3, 0, src, smap, StrBuf());
+    EkR r = EkR {.text = r0.text + nw, .n = r0.n + str_count(nw, "warning[")};
+    Str d = if (dbg == "") { "" } else { ek_dbg_sums(c, t3, sort(t3.sum.keys()), 0, dbg, StrBuf()) };
+    return EKR {.warnings = d + r.text, .n = r.n + (if (d == "") { 0 } else { 1 })};
+}

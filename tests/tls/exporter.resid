@@ -1,0 +1,50 @@
+// Channel binding (PLAN-labels.md §6.5): both ends of one TLS connection
+// derive the same exporter (RFC 9266), so a challenge bound to it by the
+// server equals the one the client computes; a second connection's differs.
+import "tlsclient.resid";
+import "tlswire.resid";
+import "tlskey.resid";
+import "chain.resid";
+import "wire.resid";
+import "httpserv.resid";
+import "challenge_bind.resid";
+
+List(UInt(8)) fixed_value() { return [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]; }
+
+@requires(network(readonly), declassify)
+Str serve_one(Int lfd, TlsCfg cfg) {
+    Int fd = resid_tcp_accept(lfd);
+    Accepted(TlsConn) a = wire_accept(cfg, fd);
+    if (!a.ok) { return "server handshake failed"; }
+    Str v = match challenge_with_channel(fixed_value(), tlsserver_exporter(a.conn)) { Ok(b) => f"{b}", Err(e) => device_error_text(e) };
+    _ = wire_close(a.conn);
+    return v;
+}
+
+@requires(network(readonly), clock(readonly), declassify)
+Str client_one(Int port, TrustStore store) {
+    TlsDial d = tls_client_connect("localhost", port, tls_client_cfg("localhost", store, ["http/1.1"]));
+    if (d.err != "") { return "DIAL-FAIL " + d.err; }
+    Str v = match challenge_with_channel(fixed_value(), tlsclient_exporter(d.conn)) { Ok(b) => f"{b}", Err(e) => device_error_text(e) };
+    _ = wire_close(d.conn);
+    return v;
+}
+
+@requires(filesystem(readonly), network(readonly), clock(readonly), declassify, provision)
+Int main() {
+    Option(ServerKey) mk = tls_key_load("tests/tls/fixtures/srv.key");
+    ServerKey key = mk else { EdKey([]) };
+    List(List(Int)) chain = tls_chain_load("tests/tls/fixtures/srv.pem");
+    TrustStore store = trust_store_load("tests/tls/fixtures/srvca.pem");
+    Int lfd = http_listen(0);
+    Int port = http_bound_port(lfd);
+    TlsCfg cfg = tls_cfg(key, chain, ["http/1.1"]);
+    Result(Str, RegionError) s1 = spawn (network(readonly), declassify) { return serve_one(lfd, cfg); };
+    Str c1 = client_one(port, store);
+    Str v1 = s1 else { "server region failed" };
+    Result(Str, RegionError) s2 = spawn (network(readonly), declassify) { return serve_one(lfd, cfg); };
+    Str c2 = client_one(port, store);
+    Str v2 = s2 else { "server region failed" };
+    println(f"EXPORTER same={v1 == c1} second_same={v2 == c2} differ={c1 != c2} len={str_len(c1) > 60}");
+    return 0;
+}

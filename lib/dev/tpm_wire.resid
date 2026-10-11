@@ -773,3 +773,74 @@ pub Result(TpmQuote, TpmError) tpm_quote_via(Result(List(UInt(8)), TpmError) clo
     _ = tpm_quote_key_ok(key)?;
     return tpm2_quote_resp(tpm_run(send, tpm2_quote_cmd(ak_handle, nonce, sel))?);
 }
+
+// -- Layout oracles (PLAN-labels.md §7.3) -----------------------------------
+// The hand parsers above are the oracle for generated layout parsers: on
+// every input below, both accept with the same value and end, or both
+// refuse.
+
+@layout(be)
+type TwOracle2b = { @check(n <= 64) UInt(16) n; @len(n) List(UInt(8)) data; };
+
+@layout(be)
+type TwOracleHdr = { UInt(16) tag; UInt(32) size; UInt(32) code; };
+
+Str tw_oracle_hand(List(UInt(8)) r) {
+    TwAt p = TwAt {.r = r, .at = 0, .end = r.len()};
+    Str b = match tw_take_2b(p, 64, "x") { Ok(v) => f"ok {v.v} {v.next.at}", Err(e) => "err" };
+    Str h = match tw_oracle_hdr_hand(p) { Ok(v) => v, Err(e) => "err" };
+    return b + " | " + h;
+}
+
+Result(Str, TpmError) tw_oracle_hdr_hand(TwAt p) {
+    TwNum tag = tw_num(p, 2, "tag")?;
+    TwNum size = tw_num(tag.next, 4, "size")?;
+    TwNum rc = tw_num(size.next, 4, "code")?;
+    return Ok(f"ok {tag.v} {size.v} {rc.v} {rc.next.at}");
+}
+
+Str tw_oracle_gen(List(UInt(8)) r) {
+    Str b = match tw_oracle2b_parse_at(r, 0) { Ok(a) => f"ok {a.v.data} {a.end}", Err(e) => "err" };
+    Str h = match tw_oracle_hdr_parse_at(r, 0) { Ok(a) => f"ok {a.v.tag} {a.v.size} {a.v.code} {a.end}", Err(e) => "err" };
+    return b + " | " + h;
+}
+
+List(UInt(8)) tw_oracle_fill(Int n, Int v, List(UInt(8)) acc) { return if (n <= 0) { acc } else { tw_oracle_fill(n - 1, v, acc.concat([(UInt(8)) (v % 256)])) }; }
+
+List(List(UInt(8))) tw_oracle_seeds() {
+    List(UInt(8)) z = [];
+    List(UInt(8)) h64 = [0, 64];
+    List(UInt(8)) h65 = [0, 65];
+    List(UInt(8)) a = [0];
+    List(UInt(8)) b = [0, 0];
+    List(UInt(8)) c = [0, 3, 1, 2, 3, 9];
+    List(UInt(8)) d = [128, 1, 0, 0, 0, 10, 0, 0, 0, 0];
+    List(UInt(8)) e = [255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255];
+    return [z, a, b, c, h64.concat(tw_oracle_fill(64, 7, z)), h65.concat(tw_oracle_fill(65, 7, z)), d, e];
+}
+
+// Inputs that differ from a seed in one of its first three bytes, or are a
+// prefix of one; the count of disagreements.
+Int tw_oracle_run(List(List(UInt(8))) seeds, Int i, Int bad) {
+    if (i >= seeds.len()) { return bad; }
+    return tw_oracle_run(seeds, i + 1, tw_oracle_prefixes(seeds[i], 0, tw_oracle_muts(seeds[i], 0, 0, bad)));
+}
+
+Int tw_oracle_one(List(UInt(8)) r, Int bad) { return if (tw_oracle_hand(r) == tw_oracle_gen(r)) { bad } else { bad + 1 }; }
+
+Int tw_oracle_prefixes(List(UInt(8)) s, Int k, Int bad) {
+    if (k > s.len()) { return bad; }
+    return tw_oracle_prefixes(s, k + 1, tw_oracle_one(s[0..k], bad));
+}
+
+Int tw_oracle_muts(List(UInt(8)) s, Int pos, Int vi, Int bad) {
+    List(Int) vs = [0, 1, 63, 64, 65, 255];
+    if (pos >= 3 || pos >= s.len()) { return bad; }
+    if (vi >= vs.len()) { return tw_oracle_muts(s, pos + 1, 0, bad); }
+    return tw_oracle_muts(s, pos, vi + 1, tw_oracle_one(s.with(pos, (UInt(8)) vs[vi]), bad));
+}
+
+test "generated layout parsers agree with the hand parsers" {
+    expect(tw_oracle_run(rt tw_oracle_seeds(), 0, 0)).toEqual(0);
+    expect(tw_oracle_gen([0, 2, 170, 187])).toEqual("ok [170, 187] 4 | err");
+}

@@ -1,0 +1,46 @@
+// Keys must be unpredictable (PLAN-labels.md §5.2, E0270, a warning for now).
+import "random.resid";
+import "aesgcmg.resid";
+import "sha256g.resid";
+
+@requires(declassify)
+List(UInt(8)) seal(List(Secret(UInt(8))) k) {
+    List(Secret(UInt(8))) pt = random_secret(4);
+    List(Secret(UInt(8))) ct = aes_gcmg_seal(k, random_bytes(12), pt, []);
+    return [];
+}
+
+@requires(declassify, filesystem(readonly), provision)
+Int main() {
+    List(Secret(UInt(8))) good = random_secret(32);
+    _ = seal(good);                                            // fine
+    List(Secret(UInt(8))) short = random_secret(1);
+    _ = seal(short.concat(classify_bytes()));                  // 1 byte padded: refused
+    List(Secret(UInt(8))) r16 = random_secret(16);
+    _ = seal(r16.concat(r16));                                 // a 16-byte draw twice: refused
+    _ = seal(sha256g(r16.concat(r16)));                        // 16 underneath: refused
+    List(Secret(UInt(8))) pubd = random_secret(32);
+    List(UInt(8)) leaked = reveal(pubd);
+    _ = seal(sha256g(pubd));                                   // disclosed: refused
+    List(Secret(UInt(8))) konst = classify_bytes().concat(classify_bytes());
+    _ = seal(konst);                                           // constant: refused
+    List(Secret(UInt(8))) prov = provisioned_key(classify_bytes().concat(classify_bytes()), "the operator's key");
+    _ = seal(prov);                                            // provisioned: fine
+    List(Secret(UInt(8))) master = random_secret(32);
+    List(UInt(8)) pa = reveal(hkdf256g_expand(master, classify_lit("a"), 32));
+    _ = seal(hkdf256g_expand(master, classify_lit("b"), 32)); // another derivation: fine
+    List(Secret(UInt(8))) other = random_secret(32);
+    _ = seal(if (str_len(classify_tag()) > 1) { good } else { other });       // either draw: fine
+    _ = seal(if (str_len(classify_tag()) > 1) { good } else { konst });       // a constant arm: refused
+    _ = seal(if (str_len(classify_tag()) > 1) { good } else { short });       // the smaller arm: refused
+    return 0;
+}
+
+Str classify_tag() { return rt "ab"; }
+List(Secret(UInt(8))) classify_bytes() { return cl([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16], 0, ListBuf()); }
+List(Secret(UInt(8))) classify_lit(Str s) { return cl([(Int) str_char_at(s, 0)], 0, ListBuf()); }
+List(Secret(UInt(8))) cl(List(Int) b, Int i, ListBuf(Secret(UInt(8))) acc) { return if (i >= b.len()) { acc.finish() } else { cl(b, i + 1, acc.push(classify((UInt(8)) b[i]))) }; }
+@requires(declassify)
+List(UInt(8)) reveal(List(Secret(UInt(8))) s) { return rv(s, 0, ListBuf()); }
+@requires(declassify)
+List(UInt(8)) rv(List(Secret(UInt(8))) s, Int i, ListBuf(UInt(8)) acc) { return if (i >= s.len()) { acc.finish() } else { rv(s, i + 1, acc.push(declassify(s[i], "test"))) }; }

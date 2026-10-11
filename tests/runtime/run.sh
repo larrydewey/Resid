@@ -142,6 +142,82 @@ PY
         fail=$((fail + 1)); echo "FAIL native host by hand: $(grep -m1 -i error "$W/nh.log") $(cat "$W/nh.out" 2>/dev/null)"
     fi
 fi
+# A native module's host while it runs (spec §47): seccomp in filter mode,
+# no new privileges, and, where the CPU and kernel have it, the shadow
+# stack on and locked (x86-64 CET; tests/conformance/native/spin.ll spins
+# so the test can read the live host's /proc status).
+if command -v python3 > /dev/null; then
+    printf '@link("spin") Int spin(Int n) {}\n@requires(native_spin)\nInt main() { println(f"{spin(rt 2000000000)}"); return 0; }\n' > "$W/spin.resid"
+    if (cd "$ROOT" && "$COMPILER" "$W/spin.resid" -native spin=tests/conformance/native/spin.ll -o "$W/spin") > "$W/spin.log" 2>&1 \
+        && python3 - "$W/spin" > "$W/spin.out" 2>&1 <<'PY'
+import os, subprocess, sys, time
+p = subprocess.Popen([sys.argv[1]], stdout=subprocess.PIPE)
+status = None
+deadline = time.time() + 20
+while status is None and time.time() < deadline and p.poll() is None:
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        try:
+            argv = open(f"/proc/{pid}/cmdline", "rb").read().split(b"\0")
+            if argv[:2] == [b"resid-native-host", b"spin"]:
+                status = dict(l.split(":", 1) for l in open(f"/proc/{pid}/status").read().splitlines() if ":" in l)
+        except OSError:
+            pass
+    time.sleep(0.02)
+out = p.communicate()[0].decode().strip()
+if status is None:
+    sys.exit(f"no live host seen (program printed {out!r})")
+flags = open("/proc/cpuinfo").read().split()
+want = {"Seccomp": "2", "NoNewPrivs": "1"}
+bad = [f"{k}={status.get(k, '').strip()}" for k, v in want.items() if status.get(k, "").strip() != v]
+if "user_shstk" in flags and "x86_Thread_features_locked" in status:
+    if "shstk" not in status["x86_Thread_features"] or "shstk" not in status["x86_Thread_features_locked"]:
+        bad.append("shadow stack not on and locked: " + status["x86_Thread_features_locked"].strip())
+if out != "2000000000":
+    bad.append(f"result {out!r}")
+print("host confined" if not bad else "; ".join(bad))
+sys.exit(1 if bad else 0)
+PY
+    then
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1)); echo "FAIL native host confinement: $(grep -m1 -i error "$W/spin.log") $(cat "$W/spin.out" 2>/dev/null)"
+    fi
+fi
+# An AArch64 build hardens a native module's own code (compiler/native.resid,
+# nt_harden): every function signs its return address, gets landing pads
+# and is GCS-compatible, in its own section between page-aligned marks
+# that bound every module symbol (the host maps those pages PROT_BTI).
+# Needs the AArch64 builtins and the AArch64 runtime IR; it only builds.
+RH="${RESID_HOME:-$ROOT/build/boot}"
+if { [ -n "${RESID_AARCH64_BUILTINS:-}" ] || [ -f "$RH/aarch64/libclang_rt.builtins.a" ]; } && [ -f "$RH/rt-aarch64.ll" ] && command -v nm > /dev/null && command -v python3 > /dev/null; then
+    if (cd "$ROOT" && "$COMPILER" tests/conformance/cases/native_ok.resid --target aarch64 -native tiny=tests/conformance/native/aarch64/tiny.ll -o "$W/a64") > "$W/a64.log" 2>&1 \
+        && nm "$W/a64" > "$W/a64.nm" && python3 - "$W/a64.native.tiny.ll" "$W/a64.nm" > "$W/a64.out" 2>&1 <<'PY'
+import sys
+ir = open(sys.argv[1]).read().splitlines()
+defs = [l for l in ir if l.startswith("define ")]
+need = ['"branch-target-enforcement"', '"guarded-control-stack"', '"sign-return-address"="non-leaf"', '"sign-return-address-key"="a_key"', 'section "resid_native_tiny"']
+bad = [l.split("(")[0] for l in defs if not all(n in l for n in need)]
+syms = {}
+for l in open(sys.argv[2]):
+    f = l.split()
+    if len(f) == 3 and f[2].startswith("native.tiny."):
+        syms[f[2]] = int(f[0], 16)
+lo, hi = syms.get("native.tiny.__resid_lo"), syms.get("native.tiny.__resid_hi")
+if lo is None or hi is None or lo % 4096 or hi % 4096 or hi <= lo:
+    bad.append(f"marks {lo} {hi}")
+else:
+    bad += [n for n, a in syms.items() if n != "native.tiny.__resid_hi" and not lo <= a < hi]
+print("hardened" if not bad and len(defs) > 2 else f"not hardened: {bad} ({len(defs)} functions)")
+sys.exit(1 if bad or len(defs) <= 2 else 0)
+PY
+    then
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1)); echo "FAIL aarch64 native hardening: $(grep -m1 -i error "$W/a64.log") $(cat "$W/a64.out" 2>/dev/null)"
+    fi
+fi
 # Secret mode turns core dumps off (runtime/rt/malloc.resid): a program
 # holding a secret aborts with exit 134 and its message, not SIGABRT, and a
 # stack overflow in it dumps no core; the control without a secret still

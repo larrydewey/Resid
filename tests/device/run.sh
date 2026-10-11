@@ -98,7 +98,7 @@ done
 # and a descriptor there is refused, not trusted.
 if [ "$#" -eq 0 ] || [[ " $* " == *" e0260_relative_stdroot "* ]]; then
     P="$WORK/relroot"; mkdir -p "$P/lib/dev" "$P/build/boot"
-    cp "$ROOT/lib/dev/device.resid" "$ROOT/lib/dev/device_write.resid" "$P/lib/dev/"
+    cp "$ROOT/lib/dev/device.resid" "$ROOT/lib/dev/device_write.resid" "$P/lib/dev/"; cp "$ROOT"/lib/*.resid "$P/lib/"
     ln -s "$ROOT/build/boot/rt.ll" "$P/build/boot/rt.ll"
     printf '%s\n' 'import "device.resid";' 'import "device_write.resid";' \
         'pub IoctlOp own_op() { return IoctlOp {.name = "own.op", .path = "/dev/mem", .requests = dv_both(dv_iowr(77, 0, 16)), .size = 16, .fields = [Buffer(0, -1, 64, InOut, false), Scalar(8, 8, Out)], .write = true, .version = Unversioned, .stability = OutOfTree}; }' \
