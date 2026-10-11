@@ -2852,6 +2852,14 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (argtys == "Int") { return ERes {.pos = pos, .ty = "List(Int)", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = name + " expects (Int), got (" + argtys + ")"};
     }
+    if (name == "resid_tr_note") {
+        if (argtys == "List(Int)") { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (List(Int)), got (" + argtys + ")"};
+    }
+    if (name == "resid_tr_read") {
+        if (argtys == "") { return ERes {.pos = pos, .ty = "List(Int)", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " takes no arguments, got (" + argtys + ")"};
+    }
     if (name == "resid_random_os" || name == "resid_random_cpu") {
         if (argtys == "Int") { return ERes {.pos = pos, .ty = "List(Int)", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = name + " expects (Int), got (" + argtys + ")"};

@@ -18,6 +18,7 @@
 import "word.resid";
 import "dev/sev_guest_key.resid";
 import "dev/tpm_wire.resid";
+import "transcript.resid";
 
 // Bytes [from, to) marked for valgrind, the rest public.
 List(Int) mark_range(List(Int) b, Int from, Int to, Int i, ListBuf(Int) acc) {
@@ -111,6 +112,18 @@ Int ct_case_dev_bound() {
     return 0;
 }
 
+// ─── The transcript notes a secret output by its length ─────────────
+
+// With the transcript on (this program reads it), a reply's secret output
+// is noted as its length alone: no branch or index on its bytes.
+Int ct_case_dev_tr_out() {
+    List(Secret(UInt(8))) s = secret_bytes(mark_range(pattern(rt 16, 0, ListBuf()), 0, 16, 0, ListBuf()));
+    Result(List(DevOut), DeviceError) out = dv_tr_out("probe", 0 - 1, Ok([OutNum(rt 5), OutSecret(s)]));
+    Int n = match (out) { Ok(o) => o.len(), Err(e) => 0 - 1 };
+    println(f"dev-tr-out {n} {transcript().count}");
+    return 0;
+}
+
 // ─── TPM NV_Read of a secret ────────────────────────────────────────
 
 // NV_Read's response with 8 bytes of data (tests/conformance's vector):
@@ -147,6 +160,7 @@ Int main() {
     if (c == "dev-sg-key-body") { return ct_case_dev_sg_key_body(); }
     if (c == "dev-outs") { return ct_case_dev_outs(); }
     if (c == "dev-bound") { return ct_case_dev_bound(); }
+    if (c == "dev-tr-out") { return ct_case_dev_tr_out(); }
     if (c == "dev-tpm-nv-resp-secret") { return ct_case_dev_tpm_nv_resp_secret(); }
     if (c == "dev-tpm-nv-read-secret") { return ct_case_dev_tpm_nv_read_secret(); }
     println("unknown case " + c);

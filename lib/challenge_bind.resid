@@ -25,8 +25,13 @@ pub Result(List(UInt(8)), DeviceError) challenge_with_key(List(UInt(8)) value, I
     if (value.len() < 32 || value.len() > 64) { return Err(BadInput("challenge_with_key", "a challenge value is 32 to 64 bytes")); }
     List(Int) pk = hpkeg_public_key(kem, sk);
     if (pk.len() == 0) { return Err(BadInput("challenge_with_key", "the key has no public key")); }
+    return Ok(challenge_key_value(value, kem, pk));
+}
+
+// The key-bound value for a public key, as a verifier recomputes it.
+pub List(UInt(8)) challenge_key_value(List(UInt(8)) value, Int kem, List(Int) pk) {
     List(Int) m = bytes_of("resid.challenge.key.v1").concat(chal_u32(value.len())).concat(chal_ints(value)).concat([(kem >> 8) & 255, kem & 255]).concat(chal_u32(pk.len())).concat(pk);
-    return Ok(chal_bytes(sha512_bytes(m)[0..value.len()]));
+    return chal_bytes(sha512_bytes(m)[0..value.len()]);
 }
 
 // SHA-512 truncated to the value's length over "resid.challenge.channel.v1"

@@ -75,6 +75,7 @@ nav = [
     "page|reference/secrets",
     "page|reference/labels",
     "page|reference/layouts",
+    "page|reference/attestation",
     "page|reference/reduction",
     "page|reference/knowledge-graph",
     "page|reference/provenance",

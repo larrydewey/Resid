@@ -1,0 +1,19 @@
+template: ACCEPTED
+revoked ASK: bad certificate chain: the ASK is revoked
+no CRL: stale: the ARK's CRL is missing, not current, or not signed by the ARK
+old CRL: stale: the CRL's number 11 is below Milan's floor 12
+ARK as ASK: bad certificate chain: the ASK did not sign the VCEK, or one is not current
+after expiry: stale: the anchor expired 2039-12-31
+reported TCB: refused (snp_verify): REPORTED_TCB is not the TCB the VCEK certifies
+chip id: refused (snp_verify): CHIP_ID is not the VCEK's hardware ID
+masked chip: refused (snp_verify): the report masks CHIP_ID, so it cannot be bound to the VCEK's chip
+VLEK signer: refused (snp_verify): the report's SIGNING_KEY is 1, the anchor's kind AmdVcek
+version 4: bad layout: SnpReport: bad reply: version: version == 2 || version == 3 || version == 5
+appraise: ACCEPTED
+debug guest: refused (snp_appraise): the guest policy allows debugging
+migration agent: refused (snp_appraise): the guest policy allows a migration agent
+vmpl 1: refused (snp_appraise): the report is for VMPL 1, the policy 0
+old TCB: refused (snp_appraise): the committed TCB is below the policy's floor
+other image: refused (snp_appraise): the launch measurement is not one the policy names
+twice: not fresh: this evidence already released, or was never accepted
+unspent own record: fresh

@@ -647,6 +647,20 @@ pub List(Str) dv_hook_main(List(Str) ls) {
     return nt_hook_at(ls.concat(["declare void @resid_device_host()"]), 0, "  call void @resid_device_host()", false, ListBuf());
 }
 
+// A program that reads its transcript (lib/transcript.resid's
+// resid_tr_read) turns the runtime's on first thing in main.
+pub List(Str) tr_hook_main(List(Str) ls) {
+    if (!tr_reads(ls, 0)) { return ls; }
+    return nt_hook_at(ls.concat(["declare void @resid_tr_enable()"]), 0, "  call void @resid_tr_enable()", false, ListBuf());
+}
+
+Bool tr_reads(List(Str) ls, Int i) {
+    if (i >= ls.len()) { return false; }
+    Str l = ls[i];
+    if (!str_starts_with(l, "@") && !str_starts_with(l, "!") && str_contains(l, "call ptr @resid_tr_read(")) { return true; }
+    return tr_reads(ls, i + 1);
+}
+
 // An instruction calling one of the device entries by its exact symbol
 // (`@resid_device_call(` or `@resid_device_call_w(`; a global, such as a
 // string constant that spells the call, is not one, nor is a function whose

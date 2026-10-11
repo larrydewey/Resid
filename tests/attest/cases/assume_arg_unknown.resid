@@ -1,0 +1,5 @@
+import "verify/core.resid";
+import "verify/assume.resid";
+@requires(assume)
+Result(Verified(List(Int)), VerifyError) f(List(Int) x, Assumption a) { return assume(x, a); }
+Int main() { return 0; }

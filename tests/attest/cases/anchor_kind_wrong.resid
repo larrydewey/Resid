@@ -1,0 +1,20 @@
+import "verify/core.resid";
+import "verify/snp.resid";
+import "verify/seal.resid";
+import "verify/testing.resid";
+import "verify/amd_anchors.resid";
+import "challenge.resid";
+import "crypto.resid";
+import "hash.resid";
+import "hpke.resid";
+
+@policy
+SnpPolicy pol() {
+    return SnpPolicy {.min_tcb = TcbVersion {.fmc = 0, .bootloader = 0, .tee = 0, .snp = 0, .microcode = 0}, .measurements_hex = ["00"], .vmpl = 0, .allow_migration_agent = false, .id_key_digests_hex = [], .host_data_hex = []};
+}
+@policy
+SnpPolicy pol2() { return pol(); }
+
+@requires(clock(readonly))
+Result(Verified(SnpReport), VerifyError) f(List(UInt(8)) r, ChallengeRecord c, SnpCollateral col) { return snp_verify(r, c, test_sender(), col, kernel_time()); }
+Int main() { return 0; }

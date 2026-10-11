@@ -1,0 +1,69 @@
+// verify/ear.resid — attestation results (PLAN-attestation.md §4): when a
+// Resid program is the verifier, an appraisal can be handed on as an EAR
+// (draft-fv-rats-ear: an EAT Attestation Result with an AR4SI
+// trustworthiness vector), signed as a COSE_Sign1 CWT with the verifier's
+// P-256 key (ES256).
+//
+// The claims (CBOR keys as the draft assigns them): eat_profile (265),
+// iat (6), ear.verifier-id (1004: {0 build, 1 developer}) and submods
+// (266: {name: appraisal}); an appraisal carries ear.status (1000:
+// affirming, 2), ear.trustworthiness-vector (1001) and
+// ear.appraisal-policy-id (1003). The vector affirms (2) what an
+// Appraised value shows: instance identity when the evidence is bound to a
+// key, a channel or this program's sealed state; configuration (the
+// mandatory checks and the policy passed); executables (the measurement is
+// one the policy names); hardware (a hardware anchor signed it); and
+// runtime-opaque (a TEE keeps the memory). The rest make no claim (0).
+
+import "core.resid";
+import "../crypto.resid";
+import "../word.resid";
+import "../ecdsa.resid";
+import "../cose.resid";
+
+pub Str ear_profile() { return "tag:github.com,2023:veraison/ear"; }
+
+pub Int ear_affirming() { return 2; }
+
+// The CWT, or why not. `submod` names the attester in the result, `policy`
+// is the appraisal policy's name, `t` the time the evidence was checked
+// at. The key is the verifier's own (or provisioned) P-256 signing key.
+@requires(declassify)
+@key(key, own, provisioned)
+pub Result(List(Int), VerifyError) ear_cwt(Appraised(T) a, Str submod, Str policy, Str build, Str developer, EvidenceTime t, List(Secret(UInt(8))) key) {
+    if (key.len() != 32) { return Err(Refused("ear_cwt", "the verifier key is a 32-byte P-256 scalar")); }
+    if (submod == "" || policy == "") { return Err(Refused("ear_cwt", "a result names its attester and policy")); }
+    List(Int) payload = ear_claims(a.v.quals, a.v.principal, submod, policy, build, developer, evidence_time_at(t).seconds);
+    List(Int) prot = cbe_int(0 - 7, cbe_uint(1, cbe_map(1, [])));
+    List(Int) sig = ecdsag_sign_raw(P256, Sha256, key, cose_tbs_ear(prot, payload));
+    if (sig.len() != 64) { return Err(Refused("ear_cwt", "the key does not sign (not a P-256 scalar)")); }
+    return Ok(cbe_bytes(sig, cbe_bytes(payload, cbe_map(0, cbe_bytes(prot, cbe_array(4, cbe_tag(18, [])))))));
+}
+
+// Sig_structure (RFC 9052 §4.4), no external AAD.
+List(Int) cose_tbs_ear(List(Int) prot, List(Int) payload) {
+    return cbe_bytes(payload, cbe_bytes([], cbe_bytes(prot, cbe_text("Signature1", cbe_array(4, [])))));
+}
+
+// The claims map, in canonical key order (6, 265, 266, 1004).
+pub List(Int) ear_claims(Int quals, Str principal, Str submod, Str policy, Str build, Str developer, Int iat) {
+    Bool identity = (quals & (q_key_bound() | q_channel_bound() | q_local())) != 0;
+    Bool hw = principal != "";
+    // The trustworthiness vector: instance-identity 0, configuration 1,
+    // executables 2, file-system 3, hardware 4, runtime-opaque 5,
+    // storage-opaque 6, sourced-data 7.
+    List(Int) tv0 = cbe_map(5, []);
+    List(Int) tv1 = cbe_int(if (identity) { 2 } else { 0 }, cbe_uint(0, tv0));
+    List(Int) tv2 = cbe_int(2, cbe_uint(1, tv1));
+    List(Int) tv3 = cbe_int(2, cbe_uint(2, tv2));
+    List(Int) tv4 = cbe_int(if (hw) { 2 } else { 0 }, cbe_uint(4, tv3));
+    List(Int) tv = cbe_int(if (hw) { 2 } else { 0 }, cbe_uint(5, tv4));
+    List(Int) ap1 = cbe_int(ear_affirming(), cbe_uint(1000, cbe_map(3, [])));
+    List(Int) ap2 = cbe_uint(1001, ap1).concat(tv);
+    List(Int) appraisal = cbe_text(policy, cbe_uint(1003, ap2));
+    List(Int) m0 = cbe_map(4, []);
+    List(Int) m1 = cbe_int(iat, cbe_uint(6, m0));
+    List(Int) m2 = cbe_text(ear_profile(), cbe_uint(265, m1));
+    List(Int) m3 = cbe_text(submod, cbe_map(1, cbe_uint(266, m2))).concat(appraisal);
+    return cbe_text(developer, cbe_uint(1, cbe_text(build, cbe_uint(0, cbe_map(2, cbe_uint(1004, m3))))));
+}

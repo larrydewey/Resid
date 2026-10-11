@@ -48,8 +48,8 @@ build() { # build <log> <compiler args...>
 
 # ── The coverage gate ──────────────────────────────────────────────────
 build "$W/b.ctcover" tools/resid-ctcover.resid -o "$W/ctcover"
-{ for f in lib/*.resid lib/dev/*.resid; do echo "import \"$ROOT/$f\";"; done; echo 'Int main() { return 0; }'; } > "$W/surface.resid"
-build "$W/b.surface" "$W/surface.resid" --profile check -o "$W/surface"
+{ for f in lib/*.resid lib/dev/*.resid lib/verify/*.resid; do echo "import \"$ROOT/$f\";"; done; echo 'Int main() { return 0; }'; } > "$W/surface.resid"
+build "$W/b.surface" "$W/surface.resid" --profile check --verify-lib-dev -o "$W/surface"
 "$W/ctcover" "$W/surface" surface > "$W/surface.txt" || { echo "FAIL ct surface: no secret functions found"; exit 1; }
 PROBES="ctprobe secretprobe tlsprobe devprobe"
 for p in $PROBES; do

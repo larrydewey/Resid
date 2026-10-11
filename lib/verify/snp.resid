@@ -1,0 +1,343 @@
+// verify/snp.resid — AMD SEV-SNP attestation reports (PLAN-attestation.md
+// §3.2, §3.3, §4, §6): the report layout with each field's origin, the
+// VCEK/VLEK chain from an AMD root, signer-claim binding, the four
+// verifier forms and the appraisal.
+//
+// The chain: the ARK (the anchor, RSA-4096, RSASSA-PSS SHA-384, self-
+// signed) signs the ASK (or, for VLEK, the ASVK), which signs the VCEK
+// (or VLEK), a P-384 key that signs bytes 0x000..0x2A0 of the report with
+// ECDSA SHA-384. The ARK's CRL (also PSS SHA-384) must be current at the
+// evidence time and not list the ASK. Collateral comes from anywhere (the
+// host, the KDS): the chain decides whether it counts.
+//
+// Signer-claim binding: REPORTED_TCB must equal the TCB the VCEK
+// certifies, CHIP_ID the VCEK's hardware ID (a report that masks its chip
+// ID is refused under a VCEK root), SIGNING_KEY the anchor's kind, the
+// VCEK's product name the anchor's product, and from report version 3
+// CPUID_FAM_ID the product's family.
+
+import "core.resid";
+import "../crypto.resid";
+import "../hash.resid";
+import "../der.resid";
+import "../x509.resid";
+import "../ecdsa.resid";
+import "../certverify.resid";
+import "../chain.resid";
+import "../instant.resid";
+import "../tls.resid";
+import "../challenge.resid";
+import "../challenge_bind.resid";
+import "../challenge_export.resid";
+import "../dev/device.resid";
+
+// struct attestation_report (SEV-SNP firmware ABI, versions 2, 3 and 5),
+// 1184 bytes, little-endian. Bytes 0x000..0x2A0 are signed.
+@layout(le) @signed(sig = sig_r, span = 0..672)
+pub type SnpReport = {
+    @firmware @check(version == 2 || version == 3 || version == 5) UInt(32) version;
+    @measured UInt(32) guest_svn;
+    @measured UInt(64) policy;
+    @host @len(16) List(UInt(8)) family_id;
+    @host @len(16) List(UInt(8)) image_id;
+    @firmware UInt(32) vmpl;
+    @firmware @check(signature_algo == 1) UInt(32) signature_algo;
+    @firmware UInt(64) current_tcb;
+    @firmware UInt(64) platform_info;
+    @firmware UInt(32) flags;
+    @reserved(4);
+    @relayed @len(64) List(UInt(8)) report_data;
+    @measured @len(48) List(UInt(8)) measurement;
+    @host @len(32) List(UInt(8)) host_data;
+    @host @len(48) List(UInt(8)) id_key_digest;
+    @host @len(48) List(UInt(8)) author_key_digest;
+    @firmware @len(32) List(UInt(8)) report_id;
+    @firmware @len(32) List(UInt(8)) report_id_ma;
+    @host UInt(64) reported_tcb;
+    @firmware UInt(8) cpuid_fam_id;
+    @firmware UInt(8) cpuid_mod_id;
+    @firmware UInt(8) cpuid_step;
+    @reserved(21);
+    @firmware @len(64) List(UInt(8)) chip_id;
+    @firmware UInt(64) committed_tcb;
+    @firmware UInt(8) current_build;
+    @firmware UInt(8) current_minor;
+    @firmware UInt(8) current_major;
+    @reserved(1);
+    @firmware UInt(8) committed_build;
+    @firmware UInt(8) committed_minor;
+    @firmware UInt(8) committed_major;
+    @reserved(1);
+    @firmware UInt(64) launch_tcb;
+    @firmware UInt(64) launch_mit_vector;
+    @firmware UInt(64) current_mit_vector;
+    @reserved(152);
+    @len(72) List(UInt(8)) sig_r;
+    @len(72) List(UInt(8)) sig_s;
+    @reserved(368);
+};
+
+pub type SnpCollateral = { List(UInt(8)) vcek_der; List(UInt(8)) ask_der; List(UInt(8)) crl_der; };
+
+// A TCB as its security patch levels (Turin adds fmc; 0 before it).
+pub type TcbVersion = { Int fmc; Int bootloader; Int tee; Int snp; Int microcode; };
+
+pub type SnpPolicy = { TcbVersion min_tcb; List(Str) measurements_hex; Int vmpl; Bool allow_migration_agent; List(Str) id_key_digests_hex; List(Str) host_data_hex; };
+
+// The descriptors whose replies carry an SNP report.
+pub List(Str) snp_descriptors() { return ["sev_guest.snp_get_report"]; }
+
+// ─── TCB (§3.2 tcb_ge) ──────────────────────────────────────────────
+
+pub TcbVersion snp_tcb(Str product, Int v) {
+    Int b0 = v & 255;
+    Int b1 = (v >> 8) & 255;
+    Int b2 = (v >> 16) & 255;
+    Int b3 = (v >> 24) & 255;
+    Int b6 = (v >> 48) & 255;
+    Int b7 = (v >> 56) & 255;
+    if (product == "Turin") { return TcbVersion {.fmc = b0, .bootloader = b1, .tee = b2, .snp = b3, .microcode = b7}; }
+    return TcbVersion {.fmc = 0, .bootloader = b0, .tee = b1, .snp = b6, .microcode = b7};
+}
+
+// Every component at least the floor's: SPLs are per component, so no
+// order on the packed word is meaningful.
+pub Bool tcb_ge(TcbVersion v, TcbVersion floor) {
+    return v.fmc >= floor.fmc && v.bootloader >= floor.bootloader && v.tee >= floor.tee && v.snp >= floor.snp && v.microcode >= floor.microcode;
+}
+
+pub Bool tcb_eq(TcbVersion a, TcbVersion b) { return tcb_ge(a, b) && tcb_ge(b, a); }
+
+// ─── The report's own facts ─────────────────────────────────────────
+
+pub Int snp_signing_key(SnpReport r) { return ((Int) r.flags >> 2) & 7; }
+pub Bool snp_chip_masked(SnpReport r) { return ((Int) r.flags & 2) != 0; }
+pub Bool snp_policy_debug(SnpReport r) { return (((Int) r.policy >> 19) & 1) != 0; }
+pub Bool snp_policy_migrate_ma(SnpReport r) { return (((Int) r.policy >> 18) & 1) != 0; }
+
+// The CPUID family a product's reports name (versions 3 and later).
+Int snp_family(Str product) { return if (product == "Turin") { 26 } else { 25 }; }
+
+// ─── Verification (§3.2) ────────────────────────────────────────────
+
+// The P-384 public key of the VCEK, checked against the chain and the
+// report's claims, or why not.
+@verify_internal
+pub Result(SnpReport, VerifyError) snp_check(List(UInt(8)) report, Anchor root, SnpCollateral col, EvidenceTime t) {
+    Bool vcek_kind = root.kind == "AmdVcek";
+    if (!vcek_kind && root.kind != "AmdVlek") { return Err(Refused("snp_verify", "the anchor is not an AMD VCEK or VLEK root (kind " + root.kind + ")")); }
+    if (!anchor_lists(root.algorithms, "RsaPss4096Sha384") || !anchor_lists(root.algorithms, "EcdsaP384Sha384")) { return Err(Refused("snp_verify", "the anchor does not list RSASSA-PSS SHA-384 and ECDSA P-384 SHA-384")); }
+    if (anchor_expired(root, t)) { return Err(Stale("the anchor expired " + root.expires)); }
+    if (report.len() != 1184) { return Err(BadLayout(f"an SNP report is 1184 bytes, got {report.len()}")); }
+    SnpReport r = snp_parse(report)?;
+    Int sk = snp_signing_key(r);
+    if (sk != (if (vcek_kind) { 0 } else { 1 })) { return Err(Refused("snp_verify", f"the report's SIGNING_KEY is {sk}, the anchor's kind " + root.kind)); }
+    if (r.version >= (UInt(32)) 3 && (Int) r.cpuid_fam_id != snp_family(root.product)) { return Err(Refused("snp_verify", f"the report's CPUID family {r.cpuid_fam_id} is not " + root.product + "'s")); }
+    Cert ark = snp_cert(root.der, "ARK")?;
+    Cert ask = snp_cert(chal_ints(col.ask_der), "ASK")?;
+    Cert vcek = snp_cert(chal_ints(col.vcek_der), "VCEK")?;
+    if (!snp_pss384(ark) || !snp_pss384(ask) || !snp_pss384(vcek)) { return Err(BadChain("a certificate is not signed with RSASSA-PSS SHA-384")); }
+    if (!chain_verify_parsed(ark, ark, t.at)) { return Err(BadChain("the ARK is not a current self-signed CA")); }
+    if (!chain_verify_parsed(ask, ark, t.at)) { return Err(BadChain("the ARK did not sign the ASK, or one is not current")); }
+    if (!snp_signs_leaf(vcek, ask, t.at)) { return Err(BadChain("the ASK did not sign the VCEK, or one is not current")); }
+    List(Int) crl = chal_ints(col.crl_der);
+    if (!crl_usable(crl, root.der, t.at)) { return Err(Stale("the ARK's CRL is missing, not current, or not signed by the ARK")); }
+    if (crl_revokes(crl, ask.der)) { return Err(BadChain("the ASK is revoked")); }
+    Int crlno = snp_crl_number(crl);
+    if (crlno < snp_crl_floor(root.product)) { return Err(Stale(f"the CRL's number {crlno} is below " + root.product + f"'s floor {snp_crl_floor(root.product)}")); }
+    if (vcek.key.kind != pubkey_ec() || curve_bytes(vcek.key.curve) != 48) { return Err(BadChain("the VCEK key is not P-384")); }
+    List(Int) sig = snp_sig_raw(r.sig_r, r.sig_s)?;
+    if (!ecdsa_verify_raw(P384, Sha384, vcek.key.point, chal_ints(report[0..672]), sig)) { return Err(BadSignature("the VCEK did not sign this report")); }
+    snp_claims(r, vcek, root, vcek_kind)?;
+    return Ok(r);
+}
+
+Result(SnpReport, VerifyError) snp_parse(List(UInt(8)) report) {
+    return match (snp_report_parse(report)) { Ok(x) => Ok(x), Err(e) => Err(BadLayout(device_error_text(e))) };
+}
+
+Result(Cert, VerifyError) snp_cert(List(Int) der, Str what) {
+    return match (x509_parse(der)) { Ok(c) => Ok(c), Err(e) => Err(BadChain(what + ": " + e)) };
+}
+
+Bool snp_pss384(Cert c) { return c.signed.alg.kind == sigalg_pss() && hash_len(c.signed.alg.hash) == 48 && hash_len(c.signed.alg.mgf) == 48; }
+
+// A leaf link (the VCEK is not a CA): names, validity, the issuer a CA
+// that signs certificates, and its signature.
+Bool snp_signs_leaf(Cert c, Cert i, Instant now) {
+    if (!eq_list(c.issuer, i.subject)) { return false; }
+    if (!cert_valid_at(c, now) || !cert_valid_at(i, now)) { return false; }
+    if (!cert_is_ca(i) || !cert_key_usage(i, 5)) { return false; }
+    return sig_verify(c.signed.alg, i.key, c.signed.tbs, c.signed.sig);
+}
+
+// r and s are 72 bytes little-endian, of which only the low 48 may be
+// nonzero; ecdsa_verify_raw takes r ‖ s big-endian, 48 bytes each.
+Result(List(Int), VerifyError) snp_sig_raw(List(UInt(8)) r, List(UInt(8)) s) {
+    if (!snp_zero_from(chal_ints(r), 48) || !snp_zero_from(chal_ints(s), 48)) { return Err(BadSignature("a signature component exceeds 48 bytes")); }
+    return Ok(snp_be(r).concat(snp_be(s)));
+}
+
+List(Int) snp_be(List(UInt(8)) le) { return snp_be_at(le, 47, ListBuf()); }
+List(Int) snp_be_at(List(UInt(8)) le, Int i, ListBuf(Int) acc) { return if (i < 0) { acc.finish() } else { snp_be_at(le, i - 1, acc.push((Int) le[i])) }; }
+
+// ─── Collateral floors (§3.4) ───────────────────────────────────────
+// The lowest CRL number accepted per product: a CRL older than one
+// already seen is refused whatever the clock says. The numbers AMD's KDS
+// served on 2026-10-11; raised with each release.
+pub Int snp_crl_floor(Str product) {
+    if (product == "Milan") { return 12; }
+    if (product == "Genoa") { return 11; }
+    if (product == "Turin") { return 8; }
+    return 0;
+}
+
+// The CRL Number extension (2.5.29.20) of a CRL whose signature was
+// checked, or -1: TBSCertList's [0] extensions, walked element by element.
+pub Int snp_crl_number(List(Int) crl) {
+    Der outer = der_top(crl);
+    Der tbs = der_child(crl, outer);
+    if (!outer.ok || !tbs.ok || tbs.tag != 48) { return 0 - 1; }
+    Der exts = snp_find_tag(crl, der_child(crl, tbs), tbs, 160);
+    if (!exts.ok) { return 0 - 1; }
+    Der seq = der_child(crl, exts);
+    if (!seq.ok || seq.tag != 48) { return 0 - 1; }
+    return snp_crlno_scan(crl, der_child(crl, seq), seq);
+}
+
+Der snp_find_tag(List(Int) b, Der e, Der parent, Int tag) {
+    if (!e.ok) { return der_bad(); }
+    if (e.tag == tag) { return e; }
+    if (der_is_last(e, parent)) { return der_bad(); }
+    return snp_find_tag(b, der_sibling(b, e, parent), parent, tag);
+}
+
+Int snp_crlno_scan(List(Int) b, Der e, Der seq) {
+    if (!e.ok) { return 0 - 1; }
+    Der id = der_child(b, e);
+    Der v1 = der_sibling(b, id, e);
+    Der v = if (v1.ok && v1.tag == 1) { der_sibling(b, v1, e) } else { v1 };
+    if (id.ok && der_oid(b, id) == "2.5.29.20" && v.ok && v.tag == 4) {
+        Der n = der_at(b, v.start, der_end(v));
+        return if (n.ok && n.tag == 2 && n.next == der_end(v)) { der_small_uint(b, n) } else { 0 - 1 };
+    }
+    if (der_is_last(e, seq)) { return 0 - 1; }
+    return snp_crlno_scan(b, der_sibling(b, e, seq), seq);
+}
+
+// ─── Signer-claim binding (§3.2) ────────────────────────────────────
+
+Str snp_oid(Str tail) { return "1.3.6.1.4.1.3704.1." + tail; }
+
+// An SPL extension: an INTEGER inside the extension value; -1 when absent.
+Int snp_spl(Cert c, Str tail) {
+    Der d = cert_ext_inner(c, snp_oid(tail));
+    if (!d.ok || d.tag != 2) { return 0 - 1; }
+    return der_small_uint(c.der, d);
+}
+
+Result(Bool, VerifyError) snp_claims(SnpReport r, Cert vcek, Anchor root, Bool vcek_kind) {
+    Der pn = cert_ext_inner(vcek, snp_oid("2"));
+    Str pname = if (pn.ok && pn.tag == 22) { der_str_value(vcek.der, pn.pos) } else { "" };
+    if (!str_starts_with(pname, root.product)) { return Err(Refused("snp_verify", "the VCEK's product " + pname + " is not the anchor's " + root.product)); }
+    TcbVersion rep = snp_tcb(root.product, (Int) r.reported_tcb);
+    Int fmc = snp_spl(vcek, "3.9");
+    TcbVersion cert = TcbVersion {.fmc = if (fmc < 0) { 0 } else { fmc }, .bootloader = snp_spl(vcek, "3.1"), .tee = snp_spl(vcek, "3.2"), .snp = snp_spl(vcek, "3.3"), .microcode = snp_spl(vcek, "3.8")};
+    if (cert.bootloader < 0 || cert.tee < 0 || cert.snp < 0 || cert.microcode < 0) { return Err(BadChain("the VCEK does not certify a TCB")); }
+    if (!tcb_eq(rep, cert)) { return Err(Refused("snp_verify", "REPORTED_TCB is not the TCB the VCEK certifies")); }
+    if (!vcek_kind) { return Ok(true); }
+    if (snp_chip_masked(r)) { return Err(Refused("snp_verify", "the report masks CHIP_ID, so it cannot be bound to the VCEK's chip")); }
+    Der hw = cert_ext(vcek, snp_oid("4"));
+    if (!hw.ok) { return Err(BadChain("the VCEK has no hardware ID")); }
+    List(Int) hwid = der_value(vcek.der, hw);
+    List(Int) chip = chal_ints(r.chip_id);
+    if (hwid.len() == 0 || hwid.len() > 64 || !eq_ints(chip[0..hwid.len()], hwid) || !snp_zero_from(chip, hwid.len())) { return Err(Refused("snp_verify", "CHIP_ID is not the VCEK's hardware ID")); }
+    return Ok(true);
+}
+
+Bool snp_zero_from(List(Int) b, Int i) { return i >= b.len() || (b[i] == 0 && snp_zero_from(b, i + 1)); }
+
+// ─── The verifier forms (§3.2, §6.1) ────────────────────────────────
+
+Int snp_rp(ChallengeRecord c) { return if (c.bind.len() > 0) { q_rp_bound() } else { 0 }; }
+
+// Fresh for the holder of `c`: the report carries challenge_value(c).
+@primitive(verify, anchor = root, gives = [fresh], time = t, format = SnpReport, kinds = [AmdVcek, AmdVlek], algorithms = [RsaPss4096Sha384, EcdsaP384Sha384], inputs = [report, c, col, t])
+pub Result(Verified(SnpReport), VerifyError) snp_verify(List(UInt(8)) report, ChallengeRecord c, Anchor root, SnpCollateral col, EvidenceTime t) {
+    SnpReport r = snp_check(report, root, col, t)?;
+    Bool spent = vf_bind_challenge(r.report_data, challenge_value(c), c, report, snp_descriptors())?;
+    List(Int) none = [];
+    return Ok(vf_make(r, root, q_fresh() | snp_rp(c), c, 0, none, none, t, "SnpReport"));
+}
+
+// Fresh and KeyBound(kem, pk): the report carries
+// challenge_with_key(challenge_value(c), kem, sk) for the sk behind pk.
+@primitive(verify, anchor = root, gives = [fresh, key_bound], time = t, format = SnpReport, kinds = [AmdVcek, AmdVlek], algorithms = [RsaPss4096Sha384, EcdsaP384Sha384], inputs = [report, c, col, t, kem, pk])
+pub Result(Verified(SnpReport), VerifyError) snp_verify_key_bound(List(UInt(8)) report, ChallengeRecord c, Anchor root, SnpCollateral col, EvidenceTime t, Int kem, List(Int) pk) {
+    if (!hpke_kem_ok(kem) || !vf_pk_ok(kem, pk)) { return Err(Refused("snp_verify_key_bound", "the attester's public key is empty or malformed for the KEM")); }
+    SnpReport r = snp_check(report, root, col, t)?;
+    Bool spent = vf_bind_challenge(r.report_data, challenge_key_value(challenge_value(c), kem, pk), c, report, snp_descriptors())?;
+    List(Int) none = [];
+    return Ok(vf_make(r, root, q_fresh() | q_key_bound() | snp_rp(c), c, kem, pk, none, t, "SnpReport"));
+}
+
+// Fresh and ChannelBound: the report carries
+// challenge_with_channel(challenge_value(c), e') for the attester's end of
+// the connection whose other end is e.
+@primitive(verify, anchor = root, gives = [fresh, channel_bound], time = t, format = SnpReport, kinds = [AmdVcek, AmdVlek], algorithms = [RsaPss4096Sha384, EcdsaP384Sha384], inputs = [report, c, col, t, e])
+@requires(declassify)
+pub Result(Verified(SnpReport), VerifyError) snp_verify_channel_bound(List(UInt(8)) report, ChallengeRecord c, Anchor root, SnpCollateral col, EvidenceTime t, ChannelExporter e) {
+    List(UInt(8)) want = match (challenge_with_channel(challenge_value(c), e)) { Ok(x) => Ok(x), Err(err) => Err(Refused("snp_verify_channel_bound", device_error_text(err))) }?;
+    SnpReport r = snp_check(report, root, col, t)?;
+    Bool spent = vf_bind_challenge(r.report_data, want, c, report, snp_descriptors())?;
+    List(Int) none = [];
+    return Ok(vf_make(r, root, q_fresh() | q_channel_bound() | snp_rp(c), c, 0, none, vf_channel_id(e), t, "SnpReport"));
+}
+
+// Delivered: a record imported without a SpentStore may be replayed
+// within its lifetime, so this never satisfies a decision (§6.1).
+@primitive(verify, anchor = root, gives = [delivered], time = t, format = SnpReport, kinds = [AmdVcek, AmdVlek], algorithms = [RsaPss4096Sha384, EcdsaP384Sha384], inputs = [report, c, col, t])
+pub Result(Verified(SnpReport), VerifyError) snp_verify_replayable(List(UInt(8)) report, ReplayableRecord c, Anchor root, SnpCollateral col, EvidenceTime t) {
+    SnpReport r = snp_check(report, root, col, t)?;
+    List(UInt(8)) want = replayable_value(c);
+    if (!eq_ints(chal_ints(r.report_data[0..want.len()]), chal_ints(want)) || !snp_zero_from(chal_ints(r.report_data), want.len())) { return Err(NotFresh("the evidence does not carry this challenge")); }
+    List(Int) none = [];
+    return Ok(Verified {.value = r, .anchors = [root.id], .quals = q_delivered(), .record = 0 - 1, .kem = 0, .pk = none, .chan = none, .time = t.source, .principal = root.principal, .format = "SnpReport"});
+}
+
+// ─── Appraisal (§4) ─────────────────────────────────────────────────
+// Mandatory checks no policy turns off: DEBUG clear, the migration agent
+// only where the policy allows it, the report's own VMPL, the report
+// version and signature algorithm (the layout's checks), the committed
+// and the reported TCB both at least the floor. Then the policy's
+// measurements (one must match), ID key digests and host data (when
+// listed). The policy argument is a direct call of a @policy function
+// (E0283), which names it.
+@primitive(appraise, from = v, policy = policy, ptype = SnpPolicy)
+pub Result(Appraised(SnpReport), VerifyError) snp_appraise(Verified(SnpReport) v, SnpPolicy policy) {
+    SnpReport r = v.value;
+    Str product = snp_product_of(v);
+    if (snp_policy_debug(r)) { return Err(Refused("snp_appraise", "the guest policy allows debugging")); }
+    if (snp_policy_migrate_ma(r) && !policy.allow_migration_agent) { return Err(Refused("snp_appraise", "the guest policy allows a migration agent")); }
+    if ((Int) r.vmpl != policy.vmpl) { return Err(Refused("snp_appraise", f"the report is for VMPL {r.vmpl}, the policy {policy.vmpl}")); }
+    if (!tcb_ge(snp_tcb(product, (Int) r.committed_tcb), policy.min_tcb)) { return Err(Refused("snp_appraise", "the committed TCB is below the policy's floor")); }
+    if (!tcb_ge(snp_tcb(product, (Int) r.reported_tcb), policy.min_tcb)) { return Err(Refused("snp_appraise", "the reported TCB is below the policy's floor")); }
+    if (policy.measurements_hex.len() == 0) { return Err(Refused("snp_appraise", "the policy names no measurement")); }
+    if (!snp_hex_in(r.measurement, policy.measurements_hex)) { return Err(Refused("snp_appraise", "the launch measurement is not one the policy names")); }
+    if (policy.id_key_digests_hex.len() > 0 && !snp_hex_in(r.id_key_digest, policy.id_key_digests_hex)) { return Err(Refused("snp_appraise", "the ID key is not one the policy names")); }
+    if (policy.host_data_hex.len() > 0 && !snp_hex_in(r.host_data, policy.host_data_hex)) { return Err(Refused("snp_appraise", "HOST_DATA is not one the policy names")); }
+    return Ok(Appraised {.v = v, .policy = "SnpPolicy"});
+}
+
+// The product line where the TCB layout differs (Turin, family 1Ah, from
+// report version 3); "" for Milan and Genoa, which share theirs.
+Str snp_product_of(Verified(SnpReport) v) {
+    return if (v.value.version >= (UInt(32)) 3 && (Int) v.value.cpuid_fam_id == 26) { "Turin" } else { "" };
+}
+
+Bool snp_hex_in(List(UInt(8)) b, List(Str) hs) {
+    Str h = hex_encode(chal_ints(b));
+    return snp_hex_at(h, hs, 0);
+}
+
+Bool snp_hex_at(Str h, List(Str) hs, Int i) { return i < hs.len() && (str_to_lower(hs[i]) == h || snp_hex_at(h, hs, i + 1)); }

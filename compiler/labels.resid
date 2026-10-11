@@ -17,14 +17,24 @@
 
 // A value's label: x is -1 (Internal) or the node that made it External; d
 // is the mask of the enclosing function's parameters that reach or select
-// it (bit 62 stands for every parameter past the 62nd).
-type LbV = { Int x; Int d; };
+// it (bit 62 stands for every parameter past the 62nd); k the kinds of
+// source behind it: 1 chosen outside, 2 drawn at random or provisioned
+// (unpredictable, chosen by no request: PLAN-attestation.md §5.1).
+type LbV = { Int x; Int d; Int k; };
 
 // Walk state. env: binder node to label; sum: function node to its summary;
 // why: External node to the node that made it so; src: a source node's
 // effect; res: the current function's result; brk: conditions guarding a
 // break or continue of the innermost loop.
-type LbT = { Map(Int, LbV) env; Map(Int, LbV) sum; Map(Int, Int) why; Map(Int, Str) src; LbV res; LbV brk; LbG gx; Str err; Int errat; };
+type LbT = { Map(Int, LbV) env; Map(Int, LbV) sum; Map(Int, Int) why; Map(Int, Str) src; LbV res; LbV brk; LbG gx; Str err; Int errat; LbR rb; };
+
+// Control over disclosure (PLAN-attestation.md §5.4): ctl joins the
+// conditions under which the current function already exited (a return,
+// `?`, break or continue), so code after them runs only as they decide;
+// cs is each function's control summary (the parameters that decide
+// whether, or what, it discloses), dis whether it discloses at all; warn
+// collects "code\x1fmessage\x1fnode" findings.
+type LbR = { LbV ctl; Map(Int, Int) cs; Map(Int, Bool) dis; List(Str) warn; };
 
 // The fixed point's bookkeeping: the function being walked, call edges
 // (callee * 2^32 + caller) and the functions whose summary just changed.
@@ -33,51 +43,86 @@ type LbG = { Int cur; Map(Int, Bool) edges; Map(Int, Bool) chd; };
 // Fixed for one run: the graph, its def column, newline offsets and the
 // package lines (for the standard library's dispatch sites), and whether
 // this pass records explanations.
-type LbC = { Kg g; List(Int) def; List(Int) nls; Str smap; List(Str) pk; Int prel; Bool rec; Map(Str, Bool) bnames; };
+type LbC = { Kg g; List(Int) def; List(Int) nls; Str smap; List(Str) pk; Int prel; Bool rec; Map(Str, Bool) bnames; Map(Int, Str) origin; };
 
 type LbE = { LbV v; LbT t; };
 
 // What a run leaves: the explanation of every External node as
 // "id:cause:effect;" entries (effect only on sources), or an error.
-pub type LBR = { Str text; Str err; Int errat; };
+pub type LBR = { Str text; Str err; Int errat; List(Str) warn; };
 
-LbV lv_in() { return LbV {.x = -1, .d = 0}; }
+LbV lv_in() { return LbV {.x = -1, .d = 0, .k = 0}; }
 
-LbV lv_join(LbV a, LbV b) { return LbV {.x = if (a.x >= 0) { a.x } else { b.x }, .d = a.d | b.d}; }
+LbV lv_join(LbV a, LbV b) { return LbV {.x = if (a.x >= 0) { a.x } else { b.x }, .d = a.d | b.d, .k = a.k | b.k}; }
 
-Bool lv_same(LbV a, LbV b) { return (a.x >= 0) == (b.x >= 0) && a.d == b.d; }
+Bool lv_same(LbV a, LbV b) { return (a.x >= 0) == (b.x >= 0) && a.d == b.d && a.k == b.k; }
 
 LbE le(LbV v, LbT t) { return LbE {.v = v, .t = t}; }
 
 Int lb_bit(Int i) { return if (i < 62) { 1 << i } else { 1 << 62 }; }
 
-LbT lt_res(LbT t, LbV r) { return LbT {.env = t.env, .sum = t.sum, .why = t.why, .src = t.src, .res = r, .brk = t.brk, .gx = t.gx, .err = t.err, .errat = t.errat}; }
-LbT lt_brk(LbT t, LbV b) { return LbT {.env = t.env, .sum = t.sum, .why = t.why, .src = t.src, .res = t.res, .brk = b, .gx = t.gx, .err = t.err, .errat = t.errat}; }
-LbT lt_bind(LbT t, Int id, LbV v) { return LbT {.env = t.env.insert(id, v), .sum = t.sum, .why = t.why, .src = t.src, .res = t.res, .brk = t.brk, .gx = t.gx, .err = t.err, .errat = t.errat}; }
+LbT lt_res(LbT t, LbV r) { return LbT {.env = t.env, .sum = t.sum, .why = t.why, .src = t.src, .res = r, .brk = t.brk, .gx = t.gx, .err = t.err, .errat = t.errat, .rb = t.rb}; }
+LbT lt_brk(LbT t, LbV b) { return LbT {.env = t.env, .sum = t.sum, .why = t.why, .src = t.src, .res = t.res, .brk = b, .gx = t.gx, .err = t.err, .errat = t.errat, .rb = t.rb}; }
+LbT lt_bind(LbT t, Int id, LbV v) { return LbT {.env = t.env.insert(id, v), .sum = t.sum, .why = t.why, .src = t.src, .res = t.res, .brk = t.brk, .gx = t.gx, .err = t.err, .errat = t.errat, .rb = t.rb}; }
 
 // The current function depends on f's summary.
 LbT lt_edge(LbT t, Int f) {
     if (t.gx.cur < 0) { return t; }
-    return LbT {.env = t.env, .sum = t.sum, .why = t.why, .src = t.src, .res = t.res, .brk = t.brk, .gx = LbG {.cur = t.gx.cur, .edges = t.gx.edges.insert(f * 4294967296 + t.gx.cur, true), .chd = t.gx.chd}, .err = t.err, .errat = t.errat};
+    return LbT {.env = t.env, .sum = t.sum, .why = t.why, .src = t.src, .res = t.res, .brk = t.brk, .gx = LbG {.cur = t.gx.cur, .edges = t.gx.edges.insert(f * 4294967296 + t.gx.cur, true), .chd = t.gx.chd}, .err = t.err, .errat = t.errat, .rb = t.rb};
 }
 
 LbT lt_fail(LbT t, Str e, Int at) {
     if (t.err != "") { return t; }
-    return LbT {.env = t.env, .sum = t.sum, .why = t.why, .src = t.src, .res = t.res, .brk = t.brk, .gx = t.gx, .err = e, .errat = at};
+    return LbT {.env = t.env, .sum = t.sum, .why = t.why, .src = t.src, .res = t.res, .brk = t.brk, .gx = t.gx, .err = e, .errat = at, .rb = t.rb};
 }
 
 // The label of node id given the join j of what reaches it: External nodes
 // record which node made them so.
 LbE lb_at(LbC c, Int id, LbV j, LbT t) {
     if (j.x < 0) { return le(j, t); }
-    LbT t2 = if (c.rec) { LbT {.env = t.env, .sum = t.sum, .why = t.why.insert(id, j.x), .src = t.src, .res = t.res, .brk = t.brk, .gx = t.gx, .err = t.err, .errat = t.errat} } else { t };
-    return le(LbV {.x = id, .d = j.d}, t2);
+    LbT t2 = if (c.rec) { LbT {.env = t.env, .sum = t.sum, .why = t.why.insert(id, j.x), .src = t.src, .res = t.res, .brk = t.brk, .gx = t.gx, .err = t.err, .errat = t.errat, .rb = t.rb} } else { t };
+    return le(LbV {.x = id, .d = j.d, .k = j.k}, t2);
 }
 
 // An information-acquiring effect at node id.
 LbE lb_source(LbC c, Int id, Str what, LbT t) {
-    LbT t2 = if (c.rec) { LbT {.env = t.env, .sum = t.sum, .why = t.why.insert(id, id), .src = t.src.insert(id, what), .res = t.res, .brk = t.brk, .gx = t.gx, .err = t.err, .errat = t.errat} } else { t };
-    return le(LbV {.x = id, .d = 0}, t2);
+    LbT t2 = if (c.rec) { LbT {.env = t.env, .sum = t.sum, .why = t.why.insert(id, id), .src = t.src.insert(id, what), .res = t.res, .brk = t.brk, .gx = t.gx, .err = t.err, .errat = t.errat, .rb = t.rb} } else { t };
+    Int kind = if (str_starts_with(what, "randomness: ") || what == "provisioned key") { 2 } else { 1 };
+    return le(LbV {.x = id, .d = 0, .k = kind}, t2);
+}
+
+// ─── Control over disclosure (PLAN-attestation.md §5.2, §5.4) ──────
+
+LbT lt_rb(LbT t, LbR rb) { return LbT {.env = t.env, .sum = t.sum, .why = t.why, .src = t.src, .res = t.res, .brk = t.brk, .gx = t.gx, .err = t.err, .errat = t.errat, .rb = rb}; }
+
+// Code after an exit under `v` runs only as v decides.
+LbT lt_exit(LbT t, LbV v) { return lt_rb(t, LbR {.ctl = lv_join(t.rb.ctl, v), .cs = t.rb.cs, .dis = t.rb.dis, .warn = t.rb.warn}); }
+
+LbT lt_ctl(LbT t, LbV v) { return lt_rb(t, LbR {.ctl = v, .cs = t.rb.cs, .dis = t.rb.dis, .warn = t.rb.warn}); }
+
+// The standard library's disclosures are its reviewed publication sites
+// (TLS records, sealed releases, public keys, challenge values), and a
+// function marked @robust_exempt(reason = "...") states its own.
+Bool lb_exempt(LbC c, Int id, LbT t) {
+    if (lb_in_std(c, id)) { return true; }
+    Int f = t.gx.cur;
+    return f >= 0 && str_contains(c.g.ns[f].aux, "@robust_exempt");
+}
+
+// A disclosure at node id under control `v` (the conditions deciding
+// whether, and what, it discloses): outside data there is reported on the
+// final pass; parameters there join the function's control summary.
+LbT lb_disclose(LbC c, Int id, LbV v, Str code, Str what, LbT t) {
+    Int f = t.gx.cur;
+    if (f < 0) { return t; }
+    Bool bad = c.rec && v.x >= 0 && (v.k & 1) != 0;
+    Str w = if (bad) { code + "\x1f" + what + " (from " + lb_root_what(t, v.x) + "): decide from verified evidence, or mark the function @robust_exempt(reason = \"...\") (listed by residc verify)\x1f" + f"{id}" } else { "" };
+    Int old = t.rb.cs.get(f) else { 0 };
+    Bool olddis = t.rb.dis.get(f) else { false };
+    LbR rb = LbR {.ctl = t.rb.ctl, .cs = t.rb.cs.insert(f, old | v.d), .dis = t.rb.dis.insert(f, true), .warn = if (bad) { t.rb.warn.concat([w]) } else { t.rb.warn }};
+    Bool ch = (old | v.d) != old || !olddis;
+    LbT t2 = lt_rb(t, rb);
+    return if (ch) { LbT {.env = t2.env, .sum = t2.sum, .why = t2.why, .src = t2.src, .res = t2.res, .brk = t2.brk, .gx = LbG {.cur = t2.gx.cur, .edges = t2.gx.edges, .chd = t2.gx.chd.insert(f, true)}, .err = t2.err, .errat = t2.errat, .rb = t2.rb} } else { t2 };
 }
 
 Int lb_def(LbC c, Int id) { return if (id < c.def.len()) { c.def[id] } else { -1 }; }
@@ -95,6 +140,8 @@ Int lb_builtin(Str n) {
     if (str_starts_with(n, "resid_cpu_has_")) { return 3; }
     if (str_starts_with(n, "resid_tcp_") || str_starts_with(n, "resid_term_") || str_starts_with(n, "resid_dbg_") || str_starts_with(n, "resid_disp_") || str_starts_with(n, "resid_clock_") || str_starts_with(n, "resid_device_")) { return 2; }
     if (str_starts_with(n, "resid_chal_")) { return 2; }
+    if (n == "resid_tr_read") { return 2; }
+    if (n == "resid_tr_note") { return 1; }
     if (n == "resid_crypto_random_byte" || n == "resid_random_os" || n == "resid_random_cpu" || n == "resid_read_line" || n == "resid_read_byte" || n == "resid_mem_mark" || n == "resid_mem_since_mark" || n == "resid_stack_left") { return 2; }
     if (n == "print" || n == "println" || n == "eprintln" || n == "print_bytes") { return 2; }
     if (n == "resid_test_plan" || n == "resid_test_summary" || n == "resid_test_run_closure" || n == "resid_test_run") { return 2; }
@@ -102,7 +149,9 @@ Int lb_builtin(Str n) {
     if (str_starts_with(n, "ct_") || str_starts_with(n, "aesni_") || n == "gf128_mul_hw" || n == "sha256_compress_hw" || n == "sha512_compress_hw") { return 1; }
     if (n == "Some" || n == "Ok" || n == "Err" || n == "None" || n == "abs" || n == "min" || n == "max" || n == "clamp" || n == "sqrt" || n == "classify") { return 1; }
     if (n == "assert" || n == "rt_assert" || n == "known" || n == "rt_known" || n == "expect" || n == "comptime_print" || n == "todo" || n == "unimplemented") { return 1; }
-    if (n == "declassify" || n == "secret" || n == "secret_join" || n == "secret_split" || n == "provisioned_key") { return 1; }
+    if (n == "provisioned_key") { return 4; }
+    if (n == "assumed") { return 1; }
+    if (n == "declassify" || n == "secret" || n == "secret_join" || n == "secret_split") { return 1; }
     if (n == "resid_arena_push" || n == "resid_arena_pop" || n == "resid_bulk_push" || n == "resid_bulk_pop" || n == "resid_list_str_persist_copy" || n == "resid_dec_persist") { return 1; }
     if (n == "resid_internals" || n == "resid_internals_set" || n == "resid_rtmod" || n == "resid_rtmod_set" || n == "resid_quiet" || n == "resid_quiet_set" || n == "resid_mem_limit_set") { return 1; }
     if (n == "abs_i64" || n == "min_i64" || n == "max_i64" || n == "clamp_i64" || n == "sort") { return 1; }
@@ -170,9 +219,20 @@ LbE lb_e(LbC c, Int id, LbV pc, LbT t) {
         // `e?` returns early on the tag of e, so the result is selected by it.
         LbE a = lb_e(c, kg_kid(c.g, id, 0), pc, t);
         LbE r = lb_at(c, id, a.v, a.t);
-        return le(r.v, lt_res(r.t, lv_join(r.t.res, lv_join(r.v, pc))));
+        return le(r.v, lt_exit(lt_res(r.t, lv_join(r.t.res, lv_join(r.v, pc))), lv_join(r.v, pc)));
     }
     if (k == "lambda") { return lb_lambda(c, id, t); }
+    if (k == "field" && c.origin.len() > 0) {
+        // A field of signed evidence that whoever asked for it, or the
+        // host, chose is External whatever its record's label
+        // (PLAN-attestation.md §3.3).
+        Str o = c.origin.get(lb_def(c, id)) else { "" };
+        if (o == "relayed" || o == "host") {
+            LbE a = lb_kids(c, id, 0, n.nk, pc, lv_in(), t);
+            LbE s0 = lb_source(c, id, "a field the " + (if (o == "host") { "host" } else { "requester" }) + " chose in signed evidence: ." + n.text, a.t);
+            return le(lv_join(a.v, s0.v), s0.t);
+        }
+    }
     if (k == "spawn") {
         // The region's result and its failure are chosen outside (§4.2).
         LbV keep = t.res;
@@ -200,7 +260,7 @@ LbE lb_ref(LbC c, Int id, LbT t) {
     // A function used as a value carries what its own result acquires.
     if (c.g.ns[d].kind == "fn") {
         LbV s = t.sum.get(d) else { lv_in() };
-        return lb_at(c, id, LbV {.x = s.x, .d = 0}, lt_edge(t, d));
+        return lb_at(c, id, LbV {.x = s.x, .d = 0, .k = s.k}, lt_edge(t, d));
     }
     LbV v = t.env.get(d) else { lv_in() };
     return lb_at(c, id, v, t);
@@ -252,9 +312,10 @@ LbE lb_bexpr(LbC c, Int id, LbV pc, LbT t) {
 LbE lb_lambda(LbC c, Int id, LbT t) {
     Int n = c.g.ns[id].nk;
     LbV keep = t.res;
+    LbV kctl = t.rb.ctl;
     LbE b = lb_e(c, kg_kid(c.g, id, n - 1), lv_in(), lt_res(t, lv_in()));
     LbV v = lv_join(b.v, b.t.res);
-    return lb_at(c, id, v, lt_res(b.t, keep));
+    return lb_at(c, id, v, lt_ctl(lt_res(b.t, keep), kctl));
 }
 
 // ─── Calls ──────────────────────────────────────────────────────────
@@ -270,7 +331,13 @@ LbE lb_call(LbC c, Int id, LbV pc, LbT t) {
             return le(a0.v, lt_fail(a0.t, "no integrity label for builtin `" + n.text + "`: every builtin needs an entry in the source table (compiler/labels.resid lb_builtin)", id));
         }
         LbE a = lb_kids(c, id, 0, n.nk, pc, lv_in(), t);
+        if (n.text == "declassify" && !lb_exempt(c, id, a.t)) {
+            LbT td = lb_disclose(c, id, lv_join(a.v, lv_join(pc, a.t.rb.ctl)), "E0291", "outside data decides whether, or what, this declassify discloses", a.t);
+            return le(a.v, td);
+        }
         if (b == 2) { return lb_source(c, id, lb_builtin_what(n.text), a.t); }
+        // A provisioned key is the operator's, a stated reliance (provision).
+        if (b == 4) { return lb_source(c, id, "provisioned key", a.t); }
         if (b == 3) {
             // CPU dispatch in the standard library is selection-equivalent:
             // both paths compute the same function (§4.1).
@@ -310,9 +377,16 @@ LbE lb_apply(LbC c, Int id, Int f, LbV pc, LbT t) {
         LbE a = lb_kids(c, id, 0, c.g.ns[id].nk, pc, lv_in(), t);
         return lb_source(c, id, "native module " + gk_link_module(fn.aux) + ": " + fn.text, a.t);
     }
-    LbV s = t.sum.get(f) else { lv_in() };
-    LbE a = lb_args(c, id, f, 0, s.d, pc, LbV {.x = s.x, .d = 0}, lt_edge(t, f));
-    return lb_at(c, id, a.v, a.t);
+    LbV s0 = t.sum.get(f) else { lv_in() };
+    // A primitive of lib/verify/ verifies what it takes: its result is
+    // not External, and the inputs it verifies do not reach it.
+    Bool prim = str_contains(fn.aux, "@primitive(") && lb_in_std(c, f);
+    LbV s = if (prim) { LbV {.x = -1, .d = s0.d & (0 - 1 - lb_inputs_mask(c, f)), .k = 0} } else { s0 };
+    LbE a = lb_args(c, id, f, 0, s.d, pc, LbV {.x = s.x, .d = 0, .k = s.k}, lt_edge(t, f));
+    LbT t2 = if (c.rec && str_contains(fn.aux, "@decides")) { lb_decides_args(c, id, f, s.d, 0, pc, a.t) } else { a.t };
+    Bool fdis = t2.rb.dis.get(f) else { false };
+    LbT t3 = if (fdis) { lb_disclose(c, id, lv_join(lv_join(pc, t2.rb.ctl), lb_args_at(c, id, f, t2.rb.cs.get(f) else { 0 }, 0, lv_in(), t2)), "E0292", "outside data decides whether, or what, `" + fn.text + "` discloses", lt_edge(t2, f)) } else { lt_edge(t2, f) };
+    return lb_at(c, id, a.v, t3);
 }
 
 // Arguments, joined where the summary says the parameter reaches the result.
@@ -324,6 +398,62 @@ LbE lb_args(LbC c, Int id, Int f, Int i, Int mask, LbV pc, LbV acc, LbT t) {
     Int idx = if (c.g.ns[a].kind == "named") { lb_param_index(c, f, c.g.ns[a].text, 1) } else { i };
     Bool reaches = idx < 0 || (mask & lb_bit(idx)) != 0;
     return lb_args(c, id, f, i + 1, mask, pc, if (reaches) { lv_join(acc, v.v) } else { acc }, v.t);
+}
+
+// The join of the labels of the arguments at the parameters in mask
+// (already walked: read back through lb_e without recording, so no state).
+LbV lb_args_at(LbC c, Int id, Int f, Int mask, Int i, LbV acc, LbT t) {
+    if (i >= c.g.ns[id].nk || mask == 0) { return acc; }
+    Int a = kg_kid(c.g, id, i);
+    Int idx = if (c.g.ns[a].kind == "named") { lb_param_index(c, f, c.g.ns[a].text, 1) } else { i };
+    Bool hit = idx >= 0 && (mask & lb_bit(idx)) != 0;
+    LbV v = if (hit) { lb_e(c, a, lv_in(), t).v } else { lv_in() };
+    return lb_args_at(c, id, f, mask, i + 1, lv_join(acc, v), t);
+}
+
+// The parameters a primitive's annotation lists as `inputs = [...]` (the
+// bytes it verifies), as a mask.
+Int lb_inputs_mask(LbC c, Int f) {
+    Str aux = c.g.ns[f].aux;
+    Int a = str_find(aux, "inputs = [");
+    if (a < 0) { return 0; }
+    Int b = str_find_char(aux, 93, a);
+    if (b < 0) { return 0; }
+    List(Str) ns = str_split(str_replace(str_slice(aux, a + 10, b), " ", ""), ",");
+    return lb_mask_of(c, f, ns, 0, 0);
+}
+
+Int lb_mask_of(LbC c, Int f, List(Str) ns, Int i, Int acc) {
+    if (i >= ns.len()) { return acc; }
+    Int pi = lb_param_index(c, f, ns[i], 1);
+    return lb_mask_of(c, f, ns, i + 1, if (pi >= 0) { acc | lb_bit(pi) } else { acc });
+}
+
+// A call of a @decides function: an argument that reaches or selects its
+// result must not be External, unless only unpredictable sources (random
+// draws, provisioned keys) are behind it (PLAN-attestation.md §5.1,
+// E0286). Checked on the final pass, at the caller.
+LbT lb_decides_args(LbC c, Int id, Int f, Int mask, Int i, LbV pc, LbT t) {
+    if (i >= c.g.ns[id].nk || t.err != "") { return t; }
+    Int a = kg_kid(c.g, id, i);
+    Int idx = if (c.g.ns[a].kind == "named") { lb_param_index(c, f, c.g.ns[a].text, 1) } else { i };
+    Bool reaches = idx >= 0 && (mask & lb_bit(idx)) != 0;
+    LbE v = lb_e(c, a, pc, t);
+    Bool bad = reaches && v.v.x >= 0 && (v.v.k & 1) != 0;
+    Str pn = if (idx >= 0 && idx + 1 < c.g.ns[f].nk - 1) { c.g.ns[kg_kid(c.g, f, idx + 1)].text } else { "?" };
+    LbT t2 = if (bad) { lt_fail(t, "E0286\x1foutside data reaches what `" + c.g.ns[f].text + "` decides: its `" + pn + "` reaches or selects the result, and this argument is External (from " + lb_root_what(t, v.v.x) + "); the choice must come from the evidence or the program, or be unpredictable (random_secret, a provisioned key)", a) } else { t };
+    return lb_decides_args(c, id, f, mask, i + 1, pc, t2);
+}
+
+// The source behind External node x, for messages.
+Str lb_root_what(LbT t, Int x) { return lb_root_at(t, x, 0); }
+
+Str lb_root_at(LbT t, Int x, Int depth) {
+    Str w = t.src.get(x) else { "" };
+    if (w != "" || depth > 200) { return if (w == "") { "outside" } else { w }; }
+    Int y = t.why.get(x) else { -1 };
+    if (y < 0 || y == x) { return "outside"; }
+    return lb_root_at(t, y, depth + 1);
 }
 
 // The index of parameter `name` of f (kids 1..n-2), or -1.
@@ -362,9 +492,9 @@ LbT lb_s(LbC c, Int id, LbV pc, LbT t) {
         // A return chosen by a condition is selected by it (§4.3).
         LbE v = if (n.nk > 0) { lb_e(c, kg_kid(c.g, id, 0), pc, t) } else { le(lv_in(), t) };
         LbE r = lb_at(c, id, lv_join(v.v, pc), v.t);
-        return lt_res(r.t, lv_join(r.t.res, r.v));
+        return lt_exit(lt_res(r.t, lv_join(r.t.res, r.v)), pc);
     }
-    if (k == "brk" || k == "cont") { return lt_brk(t, lv_join(t.brk, pc)); }
+    if (k == "brk" || k == "cont") { return lt_exit(lt_brk(t, lv_join(t.brk, pc)), pc); }
     if (k == "if") {
         LbE cd = lb_e(c, kg_kid(c.g, id, 0), pc, t);
         LbV pc2 = lv_join(pc, cd.v);
@@ -405,21 +535,23 @@ LbT lb_params(LbC c, Int f, Int i, LbT t) {
     if (i >= c.g.ns[f].nk - 1) { return t; }
     Int p = kg_kid(c.g, f, i);
     if (c.g.ns[p].kind != "param") { return lb_params(c, f, i + 1, t); }
-    return lb_params(c, f, i + 1, lt_bind(t, p, LbV {.x = -1, .d = lb_bit(i - 1)}));
+    return lb_params(c, f, i + 1, lt_bind(t, p, LbV {.x = -1, .d = lb_bit(i - 1), .k = 0}));
 }
 
 // One function's summary from its body.
 LbT lb_fn(LbC c, Int f, LbT t) {
     KN fn = c.g.ns[f];
     if (fn.nk == 0) { return t; }
-    LbT t0 = LbT {.env = t.env, .sum = t.sum, .why = t.why, .src = t.src, .res = lv_in(), .brk = lv_in(), .gx = LbG {.cur = f, .edges = t.gx.edges, .chd = t.gx.chd}, .err = t.err, .errat = t.errat};
-    LbT t1 = lb_params(c, f, 1, t0);
+    LbT t0 = LbT {.env = t.env, .sum = t.sum, .why = t.why, .src = t.src, .res = lv_in(), .brk = lv_in(), .gx = LbG {.cur = f, .edges = t.gx.edges, .chd = t.gx.chd}, .err = t.err, .errat = t.errat, .rb = t.rb};
+    LbT t1 = lb_params(c, f, 1, lt_ctl(t0, lv_in()));
     LbT t2 = lb_s(c, kg_kid(c.g, f, fn.nk - 1), lv_in(), t1);
     LbV old = t2.sum.get(f) else { lv_in() };
     LbV now = lv_join(old, t2.res);
+    Bool dbad = c.rec && str_contains(fn.aux, "@decides") && now.x >= 0 && (now.k & 1) != 0;
+    LbT t2b = if (dbad) { lt_fail(t2, "E0286\x1foutside data reaches what `" + fn.text + "` decides (from " + lb_root_what(t2, now.x) + "): everything the body obtains that reaches or selects the result must come from the evidence or the program", f) } else { t2 };
     Bool ch = !lv_same(old, now);
-    LbG g2 = if (ch) { LbG {.cur = -1, .edges = t2.gx.edges, .chd = t2.gx.chd.insert(f, true)} } else { t2.gx };
-    return LbT {.env = t2.env, .sum = t2.sum.insert(f, now), .why = t2.why, .src = t2.src, .res = lv_in(), .brk = lv_in(), .gx = g2, .err = t2.err, .errat = t2.errat};
+    LbG g2 = if (ch) { LbG {.cur = -1, .edges = t2b.gx.edges, .chd = t2b.gx.chd.insert(f, true)} } else { t2b.gx };
+    return LbT {.env = t2b.env, .sum = t2b.sum.insert(f, now), .why = t2b.why, .src = t2b.src, .res = lv_in(), .brk = lv_in(), .gx = g2, .err = t2b.err, .errat = t2b.errat, .rb = t2b.rb};
 }
 
 LbT lb_decls(LbC c, Int id, Int i, LbT t) {
@@ -470,7 +602,7 @@ LbT lb_rounds(LbC c, Map(Int, List(Int)) cs, LbT t, Int round) {
     Map(Int, Bool) none = {};
     Map(Int, Bool) work = lb_next(cs, sort(t.gx.chd.keys()), 0, none);
     if (work.len() == 0 || t.err != "" || round > 10000) { return t; }
-    LbT t0 = LbT {.env = t.env, .sum = t.sum, .why = t.why, .src = t.src, .res = t.res, .brk = t.brk, .gx = LbG {.cur = -1, .edges = t.gx.edges, .chd = none}, .err = t.err, .errat = t.errat};
+    LbT t0 = LbT {.env = t.env, .sum = t.sum, .why = t.why, .src = t.src, .res = t.res, .brk = t.brk, .gx = LbG {.cur = -1, .edges = t.gx.edges, .chd = none}, .err = t.err, .errat = t.errat, .rb = t.rb};
     return lb_rounds(c, cs, lb_some(c, sort(work.keys()), 0, t0), round + 1);
 }
 
@@ -494,19 +626,75 @@ Str lb_text(LbT t, List(Int) ks, Int i, StrBuf acc) {
 // Labels of the program at `unit` in graph g, with def column `def`
 // (resolver and member edges). smap: the source map with package lines.
 pub LBR lb_run(Kg g, Int unit, List(Int) def, Str src, Str smap) {
-    Bool cpu = str_contains(src, "resid_cpu_has_") || str_contains(src, "resid_raw_cpuid");
+    Bool cpu = str_contains(src, "resid_cpu_has_") || str_contains(src, "resid_raw_cpuid") || str_contains(src, "@primitive(");
     List(Int) nls = if (cpu) { dv_newlines(src, 0, ListBuf()) } else { [] };
     Map(Str, Bool) bn0 = {};
     Map(Str, Bool) bn = lb_behaviors(g, unit, 0, bn0);
-    LbC c0 = LbC {.g = g, .def = def, .nls = nls, .smap = smap, .pk = gm_pk(smap), .prel = gm_prelude_pos(src), .rec = false, .bnames = bn};
+    Map(Int, Str) or0 = {};
+    Map(Int, Str) orig = if (str_contains(src, "@layout_origins(")) { lb_origins(g, unit, 0, or0) } else { or0 };
+    LbC c0 = LbC {.g = g, .def = def, .nls = nls, .smap = smap, .pk = gm_pk(smap), .prel = gm_prelude_pos(src), .rec = false, .bnames = bn, .origin = orig};
     Map(Int, LbV) e = {};
     Map(Int, Int) w = {};
     Map(Int, Str) s = {};
     Map(Int, Bool) nb = {};
-    LbT t0 = LbT {.env = e, .sum = e, .why = w, .src = s, .res = lv_in(), .brk = lv_in(), .gx = LbG {.cur = -1, .edges = nb, .chd = nb}, .err = "", .errat = -1};
+    Map(Int, Int) cs0 = {};
+    Map(Int, Bool) ds0 = {};
+    LbT t0 = LbT {.env = e, .sum = e, .why = w, .src = s, .res = lv_in(), .brk = lv_in(), .gx = LbG {.cur = -1, .edges = nb, .chd = nb}, .err = "", .errat = -1, .rb = LbR {.ctl = lv_in(), .cs = cs0, .dis = ds0, .warn = []}};
     LbT t1 = lb_fix(c0, unit, t0);
-    if (t1.err != "") { return LBR {.text = "", .err = t1.err, .errat = t1.errat}; }
-    LbC c1 = LbC {.g = g, .def = def, .nls = nls, .smap = smap, .pk = c0.pk, .prel = c0.prel, .rec = true, .bnames = bn};
-    LbT t2 = lb_decls(c1, unit, 0, LbT {.env = e, .sum = t1.sum, .why = w, .src = s, .res = lv_in(), .brk = lv_in(), .gx = LbG {.cur = -1, .edges = nb, .chd = nb}, .err = "", .errat = -1});
-    return LBR {.text = lb_text(t2, sort(t2.why.keys()), 0, StrBuf()), .err = t2.err, .errat = t2.errat};
+    if (t1.err != "") { return LBR {.text = "", .err = t1.err, .errat = t1.errat, .warn = []}; }
+    LbC c1 = LbC {.g = g, .def = def, .nls = nls, .smap = smap, .pk = c0.pk, .prel = c0.prel, .rec = true, .bnames = bn, .origin = orig};
+    LbT t2 = lb_decls(c1, unit, 0, LbT {.env = e, .sum = t1.sum, .why = w, .src = s, .res = lv_in(), .brk = lv_in(), .gx = LbG {.cur = -1, .edges = nb, .chd = nb}, .err = "", .errat = -1, .rb = LbR {.ctl = lv_in(), .cs = t1.rb.cs, .dis = t1.rb.dis, .warn = []}});
+    return LBR {.text = lb_text(t2, sort(t2.why.keys()), 0, StrBuf()), .err = t2.err, .errat = t2.errat, .warn = t2.rb.warn};
+}
+
+// Print each "code\x1fmessage\x1fnode" warning.
+pub Bool lb_print_warn(List(Str) ws, Int i, Kg g, Str src, Str smap) {
+    if (i >= ws.len()) { return true; }
+    List(Str) f = str_split(ws[i], "\x1f");
+    if (f.len() == 3) { print(ek_warn_code(f[0], f[1], g, str_parse_int(f[2]), src, smap)); }
+    return lb_print_warn(ws, i + 1, g, src, smap);
+}
+
+// The origin of each field of a @signed layout type, by its sfield node,
+// from the `@layout_origins(T:f=o;...)` functions compiler/layout.resid
+// generates; a field of a @signed type with none is relayed (§3.3).
+Map(Int, Str) lb_origins(Kg g, Int unit, Int i, Map(Int, Str) acc) {
+    if (i >= g.ns[unit].nk) { return acc; }
+    Int d = kg_kid(g, unit, i);
+    Str a = g.ns[d].aux;
+    Int k = str_find(a, "@layout_origins(");
+    if (g.ns[d].kind == "sandbox") { return lb_origins(g, unit, i + 1, lb_origins(g, d, 0, acc)); }
+    if (g.ns[d].kind != "fn" || k < 0) { return lb_origins(g, unit, i + 1, acc); }
+    Int e = str_find_char(a, 41, k);
+    Str body = str_slice(a, k + 16, if (e < 0) { str_len(a) } else { e });
+    Int colon = str_find_char(body, 58, 0);
+    if (colon < 0) { return lb_origins(g, unit, i + 1, acc); }
+    Str tname = str_trim(str_slice(body, 0, colon));
+    Int st = lb_struct_named(g, unit, tname, 0);
+    if (st < 0 || !str_contains(g.ns[st].aux, "@signed")) { return lb_origins(g, unit, i + 1, acc); }
+    List(Str) ents = str_split(str_slice(body, colon + 1, str_len(body)), ";");
+    return lb_origins(g, unit, i + 1, lb_field_origins(g, st, 0, ents, acc));
+}
+
+Int lb_struct_named(Kg g, Int unit, Str n, Int i) {
+    if (i >= g.ns[unit].nk) { return -1; }
+    Int d = kg_kid(g, unit, i);
+    if (g.ns[d].kind == "struct_t" && g.ns[d].text == n) { return d; }
+    Int inner = if (g.ns[d].kind == "sandbox") { lb_struct_named(g, d, n, 0) } else { -1 };
+    if (inner >= 0) { return inner; }
+    return lb_struct_named(g, unit, n, i + 1);
+}
+
+Map(Int, Str) lb_field_origins(Kg g, Int st, Int i, List(Str) ents, Map(Int, Str) acc) {
+    if (i >= g.ns[st].nk) { return acc; }
+    Int f = kg_kid(g, st, i);
+    Str o = lb_origin_of(ents, g.ns[f].text, 0);
+    return lb_field_origins(g, st, i + 1, ents, acc.insert(f, if (o == "") { "relayed" } else { o }));
+}
+
+Str lb_origin_of(List(Str) ents, Str f, Int i) {
+    if (i >= ents.len()) { return ""; }
+    List(Str) kv = str_split(str_trim(ents[i]), "=");
+    if (kv.len() == 2 && kv[0] == f) { return kv[1]; }
+    return lb_origin_of(ents, f, i + 1);
 }

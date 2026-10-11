@@ -1,11 +1,100 @@
 # Attestation — Implementation Plan (revision 1)
 
-**Status: DRAFT (2026-10-10).** Split out of PLAN-labels.md
+**Status: DRAFT (2026-10-10), implementation started 2026-10-11.** Split out of PLAN-labels.md
 revision 2, which was accepted the same day: everything about remote
 attestation (RATS) that device access does not need. Builds on
 PLAN-labels.md revision 3 ("labels" below) and on device
-access revision 3 for the platforms' channels. Nothing here is
-implemented yet.
+access revision 3 for the platforms' channels.
+
+**Implementation status (2026-10-11).** Phases A1-A4 in large part, for
+SEV-SNP, TDX, AWS Nitro, Arm CCA and TPM 2.0 (`lib/verify/`,
+`compiler/attest.resid`, `tests/attest/`, `SECURITY.md` "Attestation",
+reference page "Attestation"); A5 and A6 not started:
+
+- `Verified(T)`, `Appraised(T)`, `Anchor`, `EvidenceTime` and
+  `VerifyError` (`lib/verify/core.resid`), built only in `lib/verify/`
+  (`@opaque("*")`, which also closed a hole: generic `@opaque` records'
+  literals were not checked); `@primitive` and `@verify_internal` (E0280).
+- Anchors (E0281, E0282): `@anchor` functions with kind, principal,
+  formats, origin, fingerprint, algorithms and expiry; the compiler
+  rewrites `anchor_der` into `anchor_make` with those facts (`at_expand`),
+  and the bytes are checked against the fingerprint at the first use.
+  `lib/verify/amd_anchors.resid` is generated from AMD's ARKs
+  (`tools/attest/gen_amd_anchors.py`).
+- SNP (`lib/verify/snp.resid`): the report as a `@layout(le) @signed` type
+  with field origins; the chain, CRL, signature and signer-claim binding;
+  the four verifier forms; `snp_appraise` with the mandatory checks
+  (A2's appraisal, without reference-value endorsement or EAR).
+- Policies (E0283) and `@decides` (E0284-E0288): gate, accept/require,
+  appraised, freshness, identity, `time = not_kernel`; E0286 (the input
+  rule) through the integrity labels, which now run in every build of a
+  program with a decision.
+- Freshness (A3): `vf_bind_challenge`, the accepted mark, reply binding
+  of records spent on this program's own device (the SNP report inside
+  the reply, `dv_ev_framed`), and the runtime's decided mark (op 4 of
+  `resid_chal_mark`).
+- `seal_to_evidence` and `open_released` (HPKE Auth mode,
+  `lib/verify/seal.resid`).
+- AWS Nitro (`lib/verify/nsm.resid`, `aws_anchors.resid`: the real AWS
+  root; a real document from blocky/nitrite's tests verifies) and TPM 2.0
+  quotes under a pinned AK (`lib/verify/tpm.resid`, kind `TpmAk`), each
+  with its plain, key-bound and replayable forms (NSM also channel-bound)
+  and an appraisal (A4 in part).
+- `seal_to_channel` and the bound TLS sends (`lib/verify/channel.resid`);
+  a channel is named by the SHA-256 of its exporter.
+- Field origins in the labels: relayed and host fields of `@signed` layout
+  types are External when read.
+- E-robust and E-control as warnings (E0291, E0292): control over
+  disclosure through exits and per-function control summaries, in
+  `compiler/labels.resid`; the standard library's sites and functions
+  marked `@robust_exempt(reason = ...)` are the allowlist.
+- TDX quotes v4 and v5 (`lib/verify/tdx.resid`, `intel_anchors.resid`:
+  go-tdx-guest's real quotes verify under Intel's root) and Intel's
+  collateral (TCB info, QE identity: strict JSON, `lib/verify/json.resid`,
+  signed over exact bytes; Intel's real sample collateral verifies), with
+  the TCB status a mandatory appraisal check, and the PCK CA's and root's
+  CRLs (Intel's real ones verify).
+- CCA tokens (`lib/verify/cca.resid`; the TF-M test token verifies under
+  veraison's CPAK), with the CPAK pinned as an `EndorsedKeys` anchor.
+- Rollback (§8): `tpm_verify_counter` (TPM2_NV_Certify of a counter
+  under a pinned AK), `bind_counter` (a local decision can be fresh) and
+  `first_seal` (the explicit first-seal outcome);
+  EAR output (`lib/verify/ear.resid`, A2).
+- The transcript (§9): `runtime/rt/transcript.resid`, notes from the
+  device engines, `lib/transcript.resid`, on only when read; no abort
+  markers for failed regions yet (the hash is process-wide).
+- `bind =` (E0293, a run-time check the compiler inserts), `assume`
+  (`lib/verify/assume.resid`, the `assume` family, `@assumption`, E0289),
+  instance pinning (E0294), AMD CRL number floors, and `Local`
+  (`lib/verify/sealing.resid`: `snp_platform_key`, `local_seal`,
+  `local_open`; without `bind_counter`, so local decisions are written
+  `fresh = false`).
+- The verify closure and runtime are pinned (E0290,
+  `compiler/verify_pins.resid`, `tools/attest/verify_pins.py`, checked by
+  `boot.sh`); the provenance record's `attest` array and `residc verify`
+  list anchors, policies and decisions.
+
+Differences decided while implementing: `Appraised(T)` has no policy
+parameter (the compiler tracks the policy of each gate; the plan's
+`Appraised(T, P)` binding types are inferred anyway); an anchor's kind,
+algorithms and formats are also checked statically against the
+primitive's annotation; qualifiers and inputs of each primitive are
+declared in its `@primitive(...)` annotation (`gives`, `inputs`, `time`,
+`release`, `gate`); a provisioned key is exempt from E0286 without a
+`[labels] provisioned_release` list (it already needs the `provision`
+grant); a record spent on a failed request is refused, not treated as the
+relying party's; the new errors are errors from the start (no program used
+these annotations before), while E-robust and E-control will be warnings
+first; the robust-declassification allowlist is the standard library and
+`@robust_exempt` functions rather than a manifest list, and "trusted for
+control" is any primitive's result (no `control_anchors` yet). Found
+while implementing: a record literal could leave a field unset (read as
+garbage, a memory-safety hole); the checker now refuses it; and
+lib/tls.resid used a function of lib/tlsmsg.resid it did not import. Not
+yet: endorsed reference values (CoRIM, A2), the
+closures' own control
+summaries, `control_anchors`, CoRIM endorsements and SPDM (A4), the TPM AK's binding to
+its EK; A5 and A6.
 
 **Goal**: a platform verifier is written once against a contract and
 cannot skip verification, appraisal or freshness, and a decision that

@@ -15,7 +15,8 @@ pub Result(List(DevOut), DeviceError) device_engine_ioctl_w(IoctlOp op, List(Dev
     DvFill fl = dv_fill(op.name, args, 0, [], -1, [])?;
     DvReq r = dv_prep_ioctl(op, fl.args);
     if (r.err != "") { return Err(BadInput(op.name, r.err)); }
-    return dv_bound(op.name, fl, dv_answer(op.name, r, resid_device_call_w(r.req)));
+    Int _tr = dv_tr_req(op.name, fl.handle, r.req);
+    return dv_bound(op.name, fl, dv_tr_out(op.name, fl.handle, dv_answer(op.name, r, resid_device_call_w(r.req))));
 }
 
 @descriptor(engine_transact_w)
@@ -23,7 +24,8 @@ pub Result(List(DevOut), DeviceError) device_engine_ioctl_w(IoctlOp op, List(Dev
 pub Result(List(DevOut), DeviceError) device_engine_transact_w(Transact op, List(UInt(8)) cmd) {
     DvReq r = dv_prep_transact(op, cmd);
     if (r.err != "") { return Err(BadInput(op.name, r.err)); }
-    return dv_answer(op.name, r, resid_device_call_w(r.req));
+    Int _tr = dv_tr_req(op.name, 0 - 1, r.req);
+    return dv_tr_out(op.name, 0 - 1, dv_answer(op.name, r, resid_device_call_w(r.req)));
 }
 
 @descriptor(engine_configfs_report_w)
@@ -31,7 +33,8 @@ pub Result(List(DevOut), DeviceError) device_engine_transact_w(Transact op, List
 pub Result(List(DevOut), DeviceError) device_engine_configfs_report_w(ConfigfsReport op, ReportReq rq) {
     DvReq r = dv_prep_configfs_report(op, rq);
     if (r.err != "") { return Err(BadInput(op.name, r.err)); }
-    return dv_answer(op.name, r, resid_device_call_w(r.req));
+    Int _tr = dv_tr_req(op.name, 0 - 1, r.req);
+    return dv_tr_out(op.name, 0 - 1, dv_answer(op.name, r, resid_device_call_w(r.req)));
 }
 
 @descriptor(engine_sequence_w)
@@ -40,5 +43,6 @@ pub Result(List(DevOut), DeviceError) device_engine_sequence_w(Sequence op, List
     DvFill fl = dv_fill(op.name, args, 0, [], -1, [])?;
     DvReq r = dv_prep_sequence(op, fl.args);
     if (r.err != "") { return Err(BadInput(op.name, r.err)); }
-    return dv_bound(op.name, fl, dv_answer(op.name, r, resid_device_call_w(r.req)));
+    Int _tr = dv_tr_req(op.name, fl.handle, r.req);
+    return dv_bound(op.name, fl, dv_tr_out(op.name, fl.handle, dv_answer(op.name, r, resid_device_call_w(r.req))));
 }

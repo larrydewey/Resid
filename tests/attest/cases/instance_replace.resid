@@ -1,0 +1,12 @@
+import "verify/core.resid";
+import "verify/seal.resid";
+import "random.resid";
+import "word.resid";
+
+List(Secret(UInt(8))) zero_secret(Int n) { return secret_bytes(zero_ints(n)); }
+List(Int) zero_ints(Int n) { return if (n <= 0) { [] } else { [0].concat(zero_ints(n - 1)) }; }
+
+// A program may not swap the randomness the verifiers' HPKE draws from.
+Random(Secret(UInt(8))) = zero_secret;
+
+Int main() { return 0; }

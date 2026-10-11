@@ -1,0 +1,12 @@
+@robust_exempt(reason = "a password check discloses one bit on an outside guess")
+@requires(declassify)
+Bool check(Secret(Int) pw, Int guess) {
+    Int p = declassify(pw, "the password, compared with an outside guess");
+    return p == guess;
+}
+@requires(args, declassify)
+Int main() {
+    Bool b = check(classify(7), args.count());
+    println(f"{b}");
+    return 0;
+}

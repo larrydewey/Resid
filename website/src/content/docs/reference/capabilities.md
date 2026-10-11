@@ -27,6 +27,7 @@ therefore enters a program only at `main` or a `test` block.
 | `display` | the display builtins (`resid_disp_*`): the window-server connection, its bytes and descriptors, shared memory and waiting (no modes) |
 | `native_<m>` | calls into [native module](/Resid/reference/native-modules/) `m` (no modes) |
 | `declassify` | `declassify(s, "reason")`: publishing a [secret value](/Resid/reference/secrets/) (no modes); each call is recorded on the graph with its reason |
+| `assume` | `assume(x, assumption())` in `lib/verify/assume.resid`: relying on an [assumption](/Resid/reference/attestation/) instead of evidence (no modes) |
 
 Printing, reading stdin and OS randomness need no capability.
 

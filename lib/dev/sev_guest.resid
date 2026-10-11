@@ -60,8 +60,9 @@ pub Result(List(UInt(8)), DeviceError) snp_report(Challenge challenge = Runtime,
     if (vmpl < 0 || vmpl > 3) { return Err(BadInput(name, f"vmpl is 0 to 3, got {vmpl}")); }
     List(UInt(8)) blank = sg_zeros(snp_report_req_size(), ListBuf());
     List(UInt(8)) req = sg_put(blank, snp_report_req_vmpl_at(), sg_le(vmpl, snp_report_req_vmpl_len(), ListBuf()));
-    // The evidence a record is bound to: the reply buffer (output 0).
-    List(Int) evidence = [0];
+    // The evidence a record is bound to: the report inside the reply
+    // (output 0: status, report_size at 4, 24 reserved, the report at 32).
+    List(Int) evidence = [dv_ev_framed(0, 32, 4)];
     List(DevOut) outs = device.ioctl(snp_get_report_op(), [InChallenge(req, snp_report_req_user_data_at(), snp_report_req_user_data_len(), challenge, evidence)])?;
     Int exitinfo2 = sg_exitinfo2(name, dv_out_num(outs, 1))?;
     if (exitinfo2 != 0) { return Err(Kernel(name, exitinfo2)); }

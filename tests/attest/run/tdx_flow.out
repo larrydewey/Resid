@@ -1,0 +1,16 @@
+real v4: ok, MRTD 6363b8043668a3ad...
+real v5: ok, MRTD 7348651a34b2d2d3...
+real v4, test root: bad certificate chain: the PCK chain does not end at the anchor's certificate
+real v4, tampered body: ok, MRTD 6363b8043668a3ad... / bad signature: the attestation key did not sign this quote
+real v4, trailing bytes: bad layout: the signature data does not fill the quote
+fresh: appraised
+again: not fresh: challenge already accepted, or exported
+debug TD: refused (tdx_appraise): TD_ATTRIBUTES.DEBUG is set
+SEPT_VE not disabled: refused (tdx_appraise): TD_ATTRIBUTES.SEPT_VE_DISABLE is clear
+other challenge: not fresh: the evidence does not carry this challenge
+TCB level SWHardeningNeeded: refused (tdx_appraise): the platform's TCB status is SWHardeningNeeded
+SWHardeningNeeded, accepted by the policy: appraised
+revoked PCK: bad certificate chain: the PCK certificate is revoked
+Intel collateral, v4 quote: refused (tdx_appraise): no TCB level matches this platform and TD
+Intel collateral, after nextUpdate: stale: the PCK CA's CRL is missing, not current, or not signed by the PCK's CA
+released and opened: same key

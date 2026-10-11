@@ -1,0 +1,5 @@
+import "verify/core.resid";
+import "verify/assume.resid";
+@assumption(reason = "r", pins = "sha256:039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81")
+Assumption enrolled() { return assumption_pinned(); }
+Int main() { return match (assume([1, 2, 3], enrolled())) { Ok(v) => 0, Err(e) => 1 }; }

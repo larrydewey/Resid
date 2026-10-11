@@ -491,7 +491,8 @@ pub TsRec ts_read_record(TsIn s) {
 pub Bool ts_msg_complete(List(Int) acc) {
     Int n = acc.len();
     if (n < 4) { return false; }
-    Int mlen = tm_u24_at(acc, 1);
+    // The 24-bit length (this file does not import lib/tlsmsg.resid).
+    Int mlen = acc[1] * 65536 + acc[2] * 256 + acc[3];
     return 4 + mlen <= n;
 }
 

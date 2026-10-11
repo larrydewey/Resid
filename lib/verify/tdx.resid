@@ -1,0 +1,398 @@
+// verify/tdx.resid — Intel TDX quotes, versions 4 and 5, with an ECDSA
+// P-256 attestation key (PLAN-attestation.md §3.2, §4): the PCK chain from
+// Intel's SGX root (the anchor), the quoting enclave's report signed by the
+// PCK key and binding the attestation key, the quote signed by that key,
+// and the challenge in REPORTDATA.
+//
+// The verifier forms check the quote itself (and the QE's MRSIGNER and
+// product against Intel's TD quoting enclave, a Known floor). Appraisal
+// takes Intel's collateral: the TCB info and the QE identity, each a JSON
+// object signed over its exact bytes by Intel's TCB signing key, whose
+// certificate chains to the same root; it finds the TCB level the PCK
+// certificate's SGX extensions and the TD's TEE_TCB_SVN reach and the QE
+// identity level of the QE report, and accepts "UpToDate" (or a status the
+// policy names).
+
+import "core.resid";
+import "../crypto.resid";
+import "../hash.resid";
+import "../der.resid";
+import "../x509.resid";
+import "../ecdsa.resid";
+import "../certverify.resid";
+import "../chain.resid";
+import "../instant.resid";
+import "../tls.resid";
+import "../cose.resid";
+import "../challenge.resid";
+import "../challenge_bind.resid";
+import "../challenge_export.resid";
+import "../dev/device.resid";
+import "json.resid";
+
+// The TD quote body (TDX 1.0, 584 bytes; version 5's TDX 1.5 body adds
+// tee_tcb_svn2 and mrservicetd, not kept here).
+@layout(le) @signed(sig = quote_signature, span = header_and_body)
+pub type TdQuoteBody = {
+    @firmware @len(16) List(UInt(8)) tee_tcb_svn;
+    @firmware @len(48) List(UInt(8)) mrseam;
+    @firmware @len(48) List(UInt(8)) mrsignerseam;
+    @firmware UInt(64) seam_attributes;
+    @measured UInt(64) td_attributes;
+    @measured UInt(64) xfam;
+    @measured @len(48) List(UInt(8)) mrtd;
+    @host @len(48) List(UInt(8)) mrconfigid;
+    @host @len(48) List(UInt(8)) mrowner;
+    @host @len(48) List(UInt(8)) mrownerconfig;
+    @measured @len(48) List(UInt(8)) rtmr0;
+    @measured @len(48) List(UInt(8)) rtmr1;
+    @measured @len(48) List(UInt(8)) rtmr2;
+    @measured @len(48) List(UInt(8)) rtmr3;
+    @relayed @len(64) List(UInt(8)) reportdata;
+};
+
+// What a verified quote says: its body, and the platform facts appraisal
+// needs: the PCK certificate's FMSPC, PCE ID, CPUSVN components and
+// PCESVN, and the quoting enclave's identity from its report.
+@signed(sig = quote_signature, span = header_and_body)
+pub type TdxQuote = { TdQuoteBody body; List(Int) fmspc; List(Int) pce_id; List(Int) cpusvn; Int pcesvn; List(Int) qe_mrsigner; Int qe_prodid; Int qe_isvsvn; List(Int) qe_attributes; Int qe_miscselect; List(Int) pck_der; List(Int) ca_der; };
+
+// Intel's collateral for one platform: the TCB info and the QE identity
+// (each a response body), the issuer chains (PEM) PCS sends with them, and
+// the CRLs of the PCK's CA and of the root (DER).
+pub type TdxCollateral = { List(UInt(8)) tcb_info; List(UInt(8)) tcb_chain; List(UInt(8)) qe_identity; List(UInt(8)) qe_chain; List(UInt(8)) pck_crl; List(UInt(8)) root_crl; };
+
+// A policy: the MRTD values accepted (one must match), the RTMRs that
+// must hold these values ("index=hex", every one), and the TDX modules
+// accepted (MRSEAM, one must match; empty: any Intel-signed module).
+// accepted_statuses: TCB statuses besides "UpToDate" the deployment
+// accepts (e.g. "SWHardeningNeeded"); empty: only UpToDate.
+pub type TdxPolicy = { List(Str) mrtd_hex; List(Str) rtmrs_hex; List(Str) mrseam_hex; List(Str) accepted_statuses; };
+
+// The lowest tcbEvaluationDataNumber accepted: collateral older than the
+// one this release was reviewed with is refused whatever the clock says.
+pub Int tdx_tcb_eval_floor() { return 15; }
+
+pub List(Str) tdx_descriptors() { return ["tsm_report.tdx"]; }
+
+// Intel's TD quoting enclave: MRSIGNER and ISVPRODID.
+pub Str tdx_qe_mrsigner_hex() { return "dc9e2a7c6f948f17474e34a7fc43ed030f7c1563f1babddf6340c82e0e54a8c5"; }
+pub Int tdx_qe_prodid() { return 2; }
+
+// ─── Reading the quote ──────────────────────────────────────────────
+
+Int le16(List(Int) b, Int at) { return b[at] | (b[at + 1] << 8); }
+Int le32(List(Int) b, Int at) { return b[at] | (b[at + 1] << 8) | (b[at + 2] << 16) | (b[at + 3] << 24); }
+
+// The parts a verifier needs, at their places.
+type TdxParts = { List(Int) signed; List(Int) body; List(Int) qsig; List(Int) akey; List(Int) qe_report; List(Int) qe_sig; List(Int) qe_auth; Str pem; };
+
+Result(TdxParts, VerifyError) tdx_parts(List(Int) q) {
+    if (q.len() < 48 + 584 + 4 || q.len() > 65536) { return Err(BadLayout("a TDX quote is 636 bytes to 64 KiB")); }
+    Int ver = le16(q, 0);
+    if (ver != 4 && ver != 5) { return Err(BadLayout(f"quote version {ver} (4 and 5 only)")); }
+    if (le16(q, 2) != 2) { return Err(Refused("tdx_verify", "the attestation key is not ECDSA P-256")); }
+    if (le32(q, 4) != 129) { return Err(BadLayout("the quote is not a TDX quote (TEE type 0x81)")); }
+    Int btype = if (ver == 5) { le16(q, 48) } else { 2 };
+    Int bsize = if (ver == 5) { le32(q, 50) } else { 584 };
+    Int bat = if (ver == 5) { 54 } else { 48 };
+    if ((btype == 2 && bsize != 584) || (btype == 3 && bsize != 648) || (btype != 2 && btype != 3)) { return Err(BadLayout(f"body type {btype} of {bsize} bytes")); }
+    Int send = bat + bsize;
+    if (send + 4 > q.len()) { return Err(BadLayout("short quote")); }
+    Int slen = le32(q, send);
+    Int s = send + 4;
+    if (slen < 64 + 64 + 6 || s + slen != q.len()) { return Err(BadLayout("the signature data does not fill the quote")); }
+    if (le16(q, s + 128) != 6) { return Err(BadLayout("the certification data is not the QE report (type 6)")); }
+    Int csize = le32(q, s + 130);
+    Int c = s + 134;
+    if (c + csize != q.len() || csize < 384 + 64 + 2 + 6) { return Err(BadLayout("bad certification data size")); }
+    Int alen = le16(q, c + 448);
+    Int inner = c + 450 + alen;
+    if (inner + 6 > q.len()) { return Err(BadLayout("short QE authentication data")); }
+    if (le16(q, inner) != 5) { return Err(BadLayout("the inner certification data is not a PCK chain (type 5)")); }
+    Int plen = le32(q, inner + 2);
+    if (inner + 6 + plen != q.len()) { return Err(BadLayout("the PCK chain does not end the quote")); }
+    Str pem = tdx_ascii(q, inner + 6, q.len(), StrBuf());
+    return Ok(TdxParts {.signed = q[0..send], .body = q[bat..bat + 584], .qsig = q[s..s + 64], .akey = q[s + 64..s + 128], .qe_report = q[c..c + 384], .qe_sig = q[c + 384..c + 448], .qe_auth = q[c + 450..c + 450 + alen], .pem = pem});
+}
+
+Str tdx_ascii(List(Int) q, Int i, Int n, StrBuf acc) {
+    if (i >= n || q[i] == 0) { return acc.finish(); }
+    return tdx_ascii(q, i + 1, n, acc.push(str_from_code(if (q[i] < 128) { q[i] } else { 63 })));
+}
+
+// ─── Verification ───────────────────────────────────────────────────
+
+@verify_internal
+pub Result(TdxQuote, VerifyError) tdx_check(List(UInt(8)) quote, Anchor root, EvidenceTime t) {
+    if (root.kind != "IntelPck") { return Err(Refused("tdx_verify", "the anchor is not Intel's SGX root (kind " + root.kind + ")")); }
+    if (!anchor_lists(root.algorithms, "EcdsaP256Sha256")) { return Err(Refused("tdx_verify", "the anchor does not list ECDSA P-256 SHA-256")); }
+    if (anchor_expired(root, t)) { return Err(Stale("the anchor expired " + root.expires)); }
+    TdxParts p = tdx_parts(chal_ints(quote))?;
+    List(List(Int)) certs = pem_certificates(p.pem);
+    if (certs.len() != 3) { return Err(BadChain("the PCK chain is not leaf, CA and root")); }
+    if (!eq_ints(certs[2], root.der)) { return Err(BadChain("the PCK chain does not end at the anchor's certificate")); }
+    Cert top = tdx_cert(root.der, "root")?;
+    Cert ca = tdx_cert(certs[1], "PCK CA")?;
+    Cert pck = tdx_cert(certs[0], "PCK")?;
+    if (!chain_verify_parsed(top, top, t.at)) { return Err(BadChain("the root is not a current self-signed CA")); }
+    if (!chain_verify_parsed(ca, top, t.at)) { return Err(BadChain("the root did not sign the PCK CA, or one is not current")); }
+    if (!tdx_signs_leaf(pck, ca, t.at)) { return Err(BadChain("the PCK CA did not sign the PCK certificate, or one is not current")); }
+    if (pck.key.kind != pubkey_ec() || curve_bytes(pck.key.curve) != 32) { return Err(BadChain("the PCK key is not P-256")); }
+    if (!ecdsa_verify_raw(P256, Sha256, pck.key.point, p.qe_report, p.qe_sig)) { return Err(BadSignature("the PCK key did not sign the QE report")); }
+    List(Int) qrd = p.qe_report[320..384];
+    if (!eq_ints(qrd[0..32], sha256_bytes(p.akey.concat(p.qe_auth))) || !tdx_zero(qrd, 32)) { return Err(BadSignature("the QE report does not bind the attestation key")); }
+    if (hex_encode(p.qe_report[128..160]) != tdx_qe_mrsigner_hex() || le16(p.qe_report, 256) != tdx_qe_prodid()) { return Err(Refused("tdx_verify", "the quoting enclave is not Intel's TD QE")); }
+    if (!ecdsa_verify_raw(P256, Sha256, [4].concat(p.akey), p.signed, p.qsig)) { return Err(BadSignature("the attestation key did not sign this quote")); }
+    TdQuoteBody body = match (td_quote_body_parse(chal_bytes(p.body))) { Ok(b) => Ok(b), Err(e) => Err(BadLayout(device_error_text(e))) }?;
+    PckFacts f = tdx_pck_facts(pck)?;
+    List(Int) qr = p.qe_report;
+    return Ok(TdxQuote {.body = body, .fmspc = f.fmspc, .pce_id = f.pce_id, .cpusvn = f.cpusvn, .pcesvn = f.pcesvn, .qe_mrsigner = qr[128..160], .qe_prodid = le16(qr, 256), .qe_isvsvn = le16(qr, 258), .qe_attributes = qr[48..64], .qe_miscselect = le32(qr, 16), .pck_der = certs[0], .ca_der = certs[1]});
+}
+
+// ─── The PCK certificate's SGX extensions ───────────────────────────
+// 1.2.840.113741.1.13.1: a SEQUENCE of {OID, value}; .2 the TCB (sixteen
+// component SVNs .2.1-.2.16 and PCESVN .2.17), .3 the PCE ID, .4 the
+// FMSPC.
+
+type PckFacts = { List(Int) fmspc; List(Int) pce_id; List(Int) cpusvn; Int pcesvn; };
+
+Str sgx_oid(Str tail) { return "1.2.840.113741.1.13.1" + tail; }
+
+Result(PckFacts, VerifyError) tdx_pck_facts(Cert pck) {
+    Der ext = cert_ext_inner(pck, sgx_oid(""));
+    if (!ext.ok || ext.tag != 48) { return Err(BadChain("the PCK certificate has no SGX extensions")); }
+    List(Int) b = pck.der;
+    Der tcb = sgx_find(b, der_child(b, ext), ext, sgx_oid(".2"));
+    Der pce = sgx_find(b, der_child(b, ext), ext, sgx_oid(".3"));
+    Der fm = sgx_find(b, der_child(b, ext), ext, sgx_oid(".4"));
+    if (!tcb.ok || tcb.tag != 48 || !pce.ok || pce.tag != 4 || pce.len != 2 || !fm.ok || fm.tag != 4 || fm.len != 6) { return Err(BadChain("malformed SGX extensions")); }
+    List(Int) comps = sgx_comps(b, tcb, 1, []);
+    Der ps = sgx_find(b, der_child(b, tcb), tcb, sgx_oid(".2.17"));
+    if (comps.len() != 16 || !ps.ok || ps.tag != 2) { return Err(BadChain("the SGX extensions do not give sixteen SVNs and a PCESVN")); }
+    return Ok(PckFacts {.fmspc = der_value(b, fm), .pce_id = der_value(b, pce), .cpusvn = comps, .pcesvn = der_small_uint(b, ps)});
+}
+
+// The value of the {OID, value} pair named oid among e and its siblings.
+Der sgx_find(List(Int) b, Der e, Der parent, Str oid) {
+    if (!e.ok) { return der_bad(); }
+    Der id = der_child(b, e);
+    if (id.ok && id.tag == 6 && der_oid(b, id) == oid) { return der_sibling(b, id, e); }
+    if (der_is_last(e, parent)) { return der_bad(); }
+    return sgx_find(b, der_sibling(b, e, parent), parent, oid);
+}
+
+List(Int) sgx_comps(List(Int) b, Der tcb, Int i, List(Int) acc) {
+    if (i > 16) { return acc; }
+    Der v = sgx_find(b, der_child(b, tcb), tcb, sgx_oid(f".2.{i}"));
+    if (!v.ok || v.tag != 2) { return acc; }
+    return sgx_comps(b, tcb, i + 1, acc.concat([der_small_uint(b, v)]));
+}
+
+Result(Cert, VerifyError) tdx_cert(List(Int) der, Str what) {
+    return match (x509_parse(der)) { Ok(c) => Ok(c), Err(e) => Err(BadChain(what + ": " + e)) };
+}
+
+Bool tdx_signs_leaf(Cert c, Cert i, Instant now) {
+    if (!eq_list(c.issuer, i.subject)) { return false; }
+    if (!cert_valid_at(c, now) || !cert_valid_at(i, now)) { return false; }
+    if (!cert_is_ca(i) || !cert_key_usage(i, 5)) { return false; }
+    return sig_verify(c.signed.alg, i.key, c.signed.tbs, c.signed.sig);
+}
+
+Bool tdx_zero(List(Int) b, Int i) { return i >= b.len() || (b[i] == 0 && tdx_zero(b, i + 1)); }
+
+Int tdx_rp(ChallengeRecord c) { return if (c.bind.len() > 0) { q_rp_bound() } else { 0 }; }
+
+// Fresh for the holder of `c`: REPORTDATA carries challenge_value(c).
+@primitive(verify, anchor = root, gives = [fresh], time = t, format = TdxQuote, kinds = [IntelPck], algorithms = [EcdsaP256Sha256], inputs = [quote, c, t])
+pub Result(Verified(TdxQuote), VerifyError) tdx_verify_quote(List(UInt(8)) quote, ChallengeRecord c, Anchor root, EvidenceTime t) {
+    TdxQuote b = tdx_check(quote, root, t)?;
+    Bool spent = vf_bind_challenge(b.body.reportdata, challenge_value(c), c, quote, tdx_descriptors())?;
+    List(Int) none = [];
+    return Ok(vf_make(b, root, q_fresh() | tdx_rp(c), c, 0, none, none, t, "TdxQuote"));
+}
+
+// Fresh and KeyBound(kem, pk).
+@primitive(verify, anchor = root, gives = [fresh, key_bound], time = t, format = TdxQuote, kinds = [IntelPck], algorithms = [EcdsaP256Sha256], inputs = [quote, c, t, kem, pk])
+pub Result(Verified(TdxQuote), VerifyError) tdx_verify_quote_key_bound(List(UInt(8)) quote, ChallengeRecord c, Anchor root, EvidenceTime t, Int kem, List(Int) pk) {
+    if (!hpke_kem_ok(kem) || !vf_pk_ok(kem, pk)) { return Err(Refused("tdx_verify_quote_key_bound", "the attester's public key is empty or malformed for the KEM")); }
+    TdxQuote b = tdx_check(quote, root, t)?;
+    Bool spent = vf_bind_challenge(b.body.reportdata, challenge_key_value(challenge_value(c), kem, pk), c, quote, tdx_descriptors())?;
+    List(Int) none = [];
+    return Ok(vf_make(b, root, q_fresh() | q_key_bound() | tdx_rp(c), c, kem, pk, none, t, "TdxQuote"));
+}
+
+// Fresh and ChannelBound to the connection whose other end is e.
+@primitive(verify, anchor = root, gives = [fresh, channel_bound], time = t, format = TdxQuote, kinds = [IntelPck], algorithms = [EcdsaP256Sha256], inputs = [quote, c, t, e])
+@requires(declassify)
+pub Result(Verified(TdxQuote), VerifyError) tdx_verify_quote_channel_bound(List(UInt(8)) quote, ChallengeRecord c, Anchor root, EvidenceTime t, ChannelExporter e) {
+    List(UInt(8)) want = match (challenge_with_channel(challenge_value(c), e)) { Ok(x) => Ok(x), Err(err) => Err(Refused("tdx_verify_quote_channel_bound", device_error_text(err))) }?;
+    TdxQuote b = tdx_check(quote, root, t)?;
+    Bool spent = vf_bind_challenge(b.body.reportdata, want, c, quote, tdx_descriptors())?;
+    List(Int) none = [];
+    return Ok(vf_make(b, root, q_fresh() | q_channel_bound() | tdx_rp(c), c, 0, none, vf_channel_id(e), t, "TdxQuote"));
+}
+
+// Delivered, for a record imported without a SpentStore.
+@primitive(verify, anchor = root, gives = [delivered], time = t, format = TdxQuote, kinds = [IntelPck], algorithms = [EcdsaP256Sha256], inputs = [quote, c, t])
+pub Result(Verified(TdxQuote), VerifyError) tdx_verify_quote_replayable(List(UInt(8)) quote, ReplayableRecord c, Anchor root, EvidenceTime t) {
+    TdxQuote b = tdx_check(quote, root, t)?;
+    List(UInt(8)) want = replayable_value(c);
+    if (!eq_ints(chal_ints(b.body.reportdata[0..want.len()]), chal_ints(want)) || !tdx_zero(chal_ints(b.body.reportdata), want.len())) { return Err(NotFresh("the evidence does not carry this challenge")); }
+    List(Int) none = [];
+    return Ok(Verified {.value = b, .anchors = [root.id], .quals = q_delivered(), .record = 0 - 1, .kem = 0, .pk = none, .chan = none, .time = t.source, .principal = root.principal, .format = "TdxQuote"});
+}
+
+// ─── Appraisal (§4) ─────────────────────────────────────────────────
+// Mandatory: TD_ATTRIBUTES.DEBUG clear and SEPT_VE_DISABLE set; Intel's
+// collateral current, signed under the root the quote rests on and not
+// below the evaluation floor; the TCB level the platform and the TD reach
+// and the QE's identity level "UpToDate" or accepted by the policy; the
+// TDX module Intel's. Then the policy's MRTD (one must match), RTMRs and
+// TDX modules.
+@primitive(appraise, from = v, policy = policy, ptype = TdxPolicy, anchor = root, kinds = [IntelPck], algorithms = [EcdsaP256Sha256], format = TdxQuote, inputs = [col, t])
+pub Result(Appraised(TdxQuote), VerifyError) tdx_appraise(Verified(TdxQuote) v, TdxPolicy policy, TdxCollateral col, Anchor root, EvidenceTime t) {
+    TdxQuote q = v.value;
+    TdQuoteBody b = q.body;
+    if (!anchor_lists(v.anchors, root.id)) { return Err(Refused("tdx_appraise", "the quote does not rest on this root")); }
+    Int attrs = (Int) b.td_attributes;
+    if ((attrs & 1) != 0) { return Err(Refused("tdx_appraise", "TD_ATTRIBUTES.DEBUG is set")); }
+    if (((attrs >> 28) & 1) == 0) { return Err(Refused("tdx_appraise", "TD_ATTRIBUTES.SEPT_VE_DISABLE is clear")); }
+    List(Str) st = tdx_collateral_check(q, col, root, t)?;
+    if (st[0] != "UpToDate" && !anchor_lists(policy.accepted_statuses, st[0])) { return Err(Refused("tdx_appraise", "the platform's TCB status is " + st[0])); }
+    if (st[1] != "UpToDate" && !anchor_lists(policy.accepted_statuses, st[1])) { return Err(Refused("tdx_appraise", "the quoting enclave's TCB status is " + st[1])); }
+    if (policy.mrtd_hex.len() == 0) { return Err(Refused("tdx_appraise", "the policy names no MRTD")); }
+    if (!tdx_hex_in(chal_ints(b.mrtd), policy.mrtd_hex, 0)) { return Err(Refused("tdx_appraise", "MRTD is not one the policy names")); }
+    if (policy.mrseam_hex.len() > 0 && !tdx_hex_in(chal_ints(b.mrseam), policy.mrseam_hex, 0)) { return Err(Refused("tdx_appraise", "MRSEAM is not a TDX module the policy names")); }
+    Str bad = tdx_rtmr_miss(b, policy.rtmrs_hex, 0);
+    if (bad != "") { return Err(Refused("tdx_appraise", bad)); }
+    return Ok(Appraised {.v = v, .policy = "TdxPolicy"});
+}
+
+// ─── Collateral ─────────────────────────────────────────────────────
+
+// The platform's and the QE's TCB statuses under Intel's collateral, each
+// response checked first.
+@verify_internal
+pub Result(List(Str), VerifyError) tdx_collateral_check(TdxQuote q, TdxCollateral col, Anchor root, EvidenceTime t) {
+    // Revocation: the PCK CA's CRL and the root's, both current.
+    List(Int) pcrl = chal_ints(col.pck_crl);
+    List(Int) rcrl = chal_ints(col.root_crl);
+    if (!crl_usable(pcrl, q.ca_der, t.at)) { return Err(Stale("the PCK CA's CRL is missing, not current, or not signed by the PCK's CA")); }
+    if (crl_revokes(pcrl, q.pck_der)) { return Err(BadChain("the PCK certificate is revoked")); }
+    if (!crl_usable(rcrl, root.der, t.at)) { return Err(Stale("the root's CRL is missing, not current, or not signed by the root")); }
+    if (crl_revokes(rcrl, q.ca_der)) { return Err(BadChain("the PCK CA is revoked")); }
+    JsonAt ti = tdx_signed_json(chal_ints(col.tcb_info), "tcbInfo", chal_ints(col.tcb_chain), root, t)?;
+    JsonAt qi = tdx_signed_json(chal_ints(col.qe_identity), "enclaveIdentity", chal_ints(col.qe_chain), root, t)?;
+    Str ts = tdx_tcb_status(ti, q)?;
+    Str qs = tdx_qe_status(qi, q)?;
+    return Ok([ts, qs]);
+}
+
+// The member `name` of a PCS response, signed over its exact bytes by the
+// signing certificate of `chain` (signer, then the root, which must be
+// the anchor's), current at t, and not below the evaluation floor.
+@verify_internal
+pub Result(JsonAt, VerifyError) tdx_signed_json(List(Int) text, Str name, List(Int) chain, Anchor root, EvidenceTime t) {
+    JsonAt top = match (json_parse(text)) { Ok(j) => Ok(j), Err(e) => Err(BadLayout(name + ": " + e)) }?;
+    JsonAt body = match (json_obj(top, name)) { Ok(j) => Ok(j), Err(e) => Err(BadLayout(e)) }?;
+    Str sighex = match (json_str(top, "signature")) { Ok(x) => Ok(x), Err(e) => Err(BadLayout(e)) }?;
+    if (str_len(sighex) != 128) { return Err(BadLayout(name + ": the signature is not 64 bytes")); }
+    List(Int) sig = cose_hex_decode(sighex);
+    List(List(Int)) certs = pem_certificates(tdx_ascii(chain, 0, chain.len(), StrBuf()));
+    if (certs.len() != 2 || !eq_ints(certs[1], root.der)) { return Err(BadChain(name + ": the issuer chain is not the signer and the anchor's root")); }
+    Cert top_c = tdx_cert(root.der, "root")?;
+    Cert signer = tdx_cert(certs[0], name + " signer")?;
+    if (!tdx_signs_leaf(signer, top_c, t.at)) { return Err(BadChain(name + ": the root did not sign the signing certificate, or one is not current")); }
+    if (signer.key.kind != pubkey_ec() || curve_bytes(signer.key.curve) != 32) { return Err(BadChain(name + ": the signing key is not P-256")); }
+    if (sig.len() != 64 || !ecdsa_verify_raw(P256, Sha256, signer.key.point, text[body.start..body.end], sig)) { return Err(BadSignature(name + " is not signed by its signing certificate")); }
+    Int issue = tdx_time(json_str(body, "issueDate"));
+    Int next = tdx_time(json_str(body, "nextUpdate"));
+    if (issue < 0 || next < 0) { return Err(BadLayout(name + ": bad issueDate or nextUpdate")); }
+    if (t.at.seconds < issue || t.at.seconds > next) { return Err(Stale(name + " is not current")); }
+    Int eval = match (json_int(body, "tcbEvaluationDataNumber")) { Ok(n) => n, Err(e) => 0 - 1 };
+    if (eval < tdx_tcb_eval_floor()) { return Err(Stale(name + f": tcbEvaluationDataNumber {eval} is below the floor {tdx_tcb_eval_floor()}")); }
+    return Ok(body);
+}
+
+// "YYYY-MM-DDTHH:MM:SSZ" as seconds, or -1.
+Int tdx_time(Result(Str, Str) r) {
+    Str s = match (r) { Ok(x) => x, Err(e) => "" };
+    if (str_len(s) != 20 || str_char_at(s, 4) != 45 || str_char_at(s, 10) != 84 || str_char_at(s, 19) != 90) { return 0 - 1; }
+    return x509_time_to_unix(str_slice(s, 0, 4) + str_slice(s, 5, 7) + str_slice(s, 8, 10) + str_slice(s, 11, 13) + str_slice(s, 14, 16) + str_slice(s, 17, 19) + "Z");
+}
+
+Str tdx_hex(List(Int) b) { return hex_encode(b); }
+
+// The TCB level this platform and TD reach in the TCB info, as its status.
+Result(Str, VerifyError) tdx_tcb_status(JsonAt ti, TdxQuote q) {
+    Str id = match (json_str(ti, "id")) { Ok(x) => x, Err(e) => "" };
+    Int ver = match (json_int(ti, "version")) { Ok(n) => n, Err(e) => 0 };
+    if (id != "TDX" || ver != 3) { return Err(BadLayout("the TCB info is not TDX version 3")); }
+    if (str_to_lower(match (json_str(ti, "fmspc")) { Ok(x) => x, Err(e) => "" }) != tdx_hex(q.fmspc)) { return Err(Refused("tdx_appraise", "the TCB info is for another platform (FMSPC)")); }
+    if (str_to_lower(match (json_str(ti, "pceId")) { Ok(x) => x, Err(e) => "" }) != tdx_hex(q.pce_id)) { return Err(Refused("tdx_appraise", "the TCB info is for another PCE")); }
+    JsonAt module = match (json_obj(ti, "tdxModule")) { Ok(j) => Ok(j), Err(e) => Err(BadLayout(e)) }?;
+    if (str_to_lower(match (json_str(module, "mrsigner")) { Ok(x) => x, Err(e) => "" }) != tdx_hex(chal_ints(q.body.mrsignerseam))) { return Err(Refused("tdx_appraise", "the TDX module is not signed by the signer the TCB info names")); }
+    List(JsonAt) levels = match (json_arr(ti, "tcbLevels")) { Ok(xs) => Ok(xs), Err(e) => Err(BadLayout(e)) }?;
+    return tdx_level(levels, 0, q);
+}
+
+Result(Str, VerifyError) tdx_level(List(JsonAt) levels, Int i, TdxQuote q) {
+    if (i >= levels.len()) { return Err(Refused("tdx_appraise", "no TCB level matches this platform and TD")); }
+    JsonAt tcb = match (json_obj(levels[i], "tcb")) { Ok(j) => Ok(j), Err(e) => Err(BadLayout(e)) }?;
+    List(JsonAt) sgx = match (json_arr(tcb, "sgxtcbcomponents")) { Ok(xs) => Ok(xs), Err(e) => Err(BadLayout(e)) }?;
+    List(JsonAt) tdx = match (json_arr(tcb, "tdxtcbcomponents")) { Ok(xs) => Ok(xs), Err(e) => Err(BadLayout(e)) }?;
+    Int pcesvn = match (json_int(tcb, "pcesvn")) { Ok(n) => n, Err(e) => 1000000 };
+    if (sgx.len() != 16 || tdx.len() != 16) { return Err(BadLayout("a TCB level does not have sixteen components")); }
+    Bool hit = tdx_svns_le(sgx, q.cpusvn, 0) && pcesvn <= q.pcesvn && tdx_svns_le(tdx, chal_ints(q.body.tee_tcb_svn), 0);
+    if (!hit) { return tdx_level(levels, i + 1, q); }
+    return match (json_str(levels[i], "tcbStatus")) { Ok(s) => Ok(s), Err(e) => Err(BadLayout(e)) };
+}
+
+Bool tdx_svns_le(List(JsonAt) comps, List(Int) have, Int i) {
+    if (i >= comps.len()) { return true; }
+    Int svn = match (json_int(comps[i], "svn")) { Ok(n) => n, Err(e) => 1000000 };
+    return svn <= have[i] && tdx_svns_le(comps, have, i + 1);
+}
+
+// The QE identity's level this QE reaches, as its status.
+Result(Str, VerifyError) tdx_qe_status(JsonAt qi, TdxQuote q) {
+    Str id = match (json_str(qi, "id")) { Ok(x) => x, Err(e) => "" };
+    if (id != "TD_QE") { return Err(BadLayout("the QE identity is not TD_QE")); }
+    if (str_to_lower(match (json_str(qi, "mrsigner")) { Ok(x) => x, Err(e) => "" }) != tdx_hex(q.qe_mrsigner)) { return Err(Refused("tdx_appraise", "the QE's MRSIGNER is not the QE identity's")); }
+    if (match (json_int(qi, "isvprodid")) { Ok(n) => n, Err(e) => 0 - 1 } != q.qe_prodid) { return Err(Refused("tdx_appraise", "the QE's product is not the QE identity's")); }
+    List(Int) ms = cose_hex_decode(match (json_str(qi, "miscselect")) { Ok(x) => x, Err(e) => "" });
+    List(Int) mm = cose_hex_decode(match (json_str(qi, "miscselectMask")) { Ok(x) => x, Err(e) => "" });
+    if (ms.len() != 4 || mm.len() != 4 || (tdx_be32(ms) & tdx_be32(mm)) != (q.qe_miscselect & tdx_be32(mm))) { return Err(Refused("tdx_appraise", "the QE's MISCSELECT is not the QE identity's")); }
+    List(Int) at = cose_hex_decode(match (json_str(qi, "attributes")) { Ok(x) => x, Err(e) => "" });
+    List(Int) am = cose_hex_decode(match (json_str(qi, "attributesMask")) { Ok(x) => x, Err(e) => "" });
+    if (at.len() != 16 || am.len() != 16 || !tdx_masked_eq(at, q.qe_attributes, am, 0)) { return Err(Refused("tdx_appraise", "the QE's attributes are not the QE identity's")); }
+    List(JsonAt) levels = match (json_arr(qi, "tcbLevels")) { Ok(xs) => Ok(xs), Err(e) => Err(BadLayout(e)) }?;
+    return tdx_qe_level(levels, 0, q.qe_isvsvn);
+}
+
+Result(Str, VerifyError) tdx_qe_level(List(JsonAt) levels, Int i, Int isvsvn) {
+    if (i >= levels.len()) { return Err(Refused("tdx_appraise", "no QE identity level matches this QE")); }
+    JsonAt tcb = match (json_obj(levels[i], "tcb")) { Ok(j) => Ok(j), Err(e) => Err(BadLayout(e)) }?;
+    Int svn = match (json_int(tcb, "isvsvn")) { Ok(n) => n, Err(e) => 1000000 };
+    if (svn > isvsvn) { return tdx_qe_level(levels, i + 1, isvsvn); }
+    return match (json_str(levels[i], "tcbStatus")) { Ok(s) => Ok(s), Err(e) => Err(BadLayout(e)) };
+}
+
+// SGX's MISCSELECT is little-endian in the report, the hex big-endian.
+Int tdx_be32(List(Int) b) { return b[3] | (b[2] << 8) | (b[1] << 16) | (b[0] << 24); }
+
+Bool tdx_masked_eq(List(Int) want, List(Int) have, List(Int) mask, Int i) { return i >= want.len() || ((want[i] & mask[i]) == (have[i] & mask[i]) && tdx_masked_eq(want, have, mask, i + 1)); }
+
+Bool tdx_hex_in(List(Int) b, List(Str) hs, Int i) { return i < hs.len() && (str_to_lower(hs[i]) == hex_encode(b) || tdx_hex_in(b, hs, i + 1)); }
+
+pub List(UInt(8)) tdx_rtmr(TdQuoteBody b, Int i) { return if (i == 0) { b.rtmr0 } else if (i == 1) { b.rtmr1 } else if (i == 2) { b.rtmr2 } else { b.rtmr3 }; }
+
+Str tdx_rtmr_miss(TdQuoteBody b, List(Str) want, Int i) {
+    if (i >= want.len()) { return ""; }
+    List(Str) kv = str_split(want[i], "=");
+    if (kv.len() != 2 || !str_is_int(kv[0]) || str_parse_int(kv[0]) < 0 || str_parse_int(kv[0]) > 3) { return "the policy entry `" + want[i] + "` is not index=hex (0..3)"; }
+    if (hex_encode(chal_ints(tdx_rtmr(b, str_parse_int(kv[0])))) != str_to_lower(kv[1])) { return "RTMR" + kv[0] + " is not the policy's"; }
+    return tdx_rtmr_miss(b, want, i + 1);
+}

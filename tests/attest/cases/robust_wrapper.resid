@@ -1,0 +1,12 @@
+@requires(declassify)
+Int send(Bool go, Secret(Int) k) {
+    if (!go) { return 0; }
+    Int v = declassify(k, "the key");
+    println(f"{v}");
+    return 1;
+}
+@requires(args, declassify)
+Int main() {
+    Int n = args.count();
+    return send(n > 1, classify(42)) - 1 + 1;
+}

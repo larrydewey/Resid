@@ -1,0 +1,5 @@
+import "verify/core.resid";
+import "verify/assume.resid";
+@assumption(reason = "trust me")
+Assumption enrolled() { return assumption_pinned(); }
+Int main() { return 0; }

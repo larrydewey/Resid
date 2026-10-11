@@ -1,0 +1,80 @@
+// verify/seal.resid — releasing a value to attested evidence
+// (PLAN-attestation.md §3.2, §7): seal_to_evidence, the only way a
+// `key_bound` decision releases, and open_released, how the attester
+// accepts what was released to it.
+//
+// A release is HPKE (RFC 9180) in Auth mode under the releaser's sender
+// key, to the public key the evidence attests: the KEM the attester chose,
+// HKDF-SHA256 and AES-128-GCM (KEM 17 takes HKDF-SHA384), info fixed
+// below. Auth mode lets the attester tell who released the value: without
+// it anyone (the host included) could seal a key of its choosing to the
+// attester's public key.
+
+import "core.resid";
+import "../crypto.resid";
+import "../word.resid";
+import "../hpke.resid";
+import "../hpkeg.resid";
+
+pub HpkeSuite seal_to_evidence_suite(Int kem) { return hpke_suite(kem, hpke_kem_kdf(kem), 1); }
+pub List(Int) seal_to_evidence_info() { return bytes_of("resid.seal_to_evidence.v1"); }
+
+// Seal `value` to the key the gate attests. Refused unless the gate is
+// KeyBound to exactly (kem, pk); the gate's record is marked decided, so a
+// second release on one gate fails. Only a @decides function calls this
+// (E0287), and its every success return is this call on its gate. The
+// attester's key is checked against the evidence, and the sender key by
+// E-key (own or provisioned), so neither counts as a decision's input.
+@primitive(release = key_bound, gate = e, inputs = [kem, pk, sender])
+@requires(declassify)
+@key(sender, own, provisioned)
+pub Result(HpkeMessage, VerifyError) seal_to_evidence(Appraised(T) e, Int kem, List(Int) pk, List(Secret(UInt(8))) value, List(Secret(UInt(8))) sender) {
+    Verified(T) v = e.v;
+    if ((v.quals & q_key_bound()) == 0) { return Err(Refused("seal_to_evidence", "the evidence is not bound to a key")); }
+    if (v.kem != kem || !eq_ints(v.pk, pk)) { return Err(Refused("seal_to_evidence", "the key is not the one the evidence attests")); }
+    if (!hpke_kem_ok(kem) || sender.len() != hpke_kem_nsk(kem)) { return Err(Refused("seal_to_evidence", "the sender key does not fit the KEM")); }
+    vf_decide(v.record)?;
+    List(Secret(UInt(8))) none = [];
+    HpkeSenderG(Secret(UInt(8))) snd = hpkeg_setup_sender_full(seal_to_evidence_suite(kem), pk, seal_to_evidence_info(), none, [], sender, none);
+    HpkeSealedG(Secret(UInt(8))) sealed = hpkeg_seal(snd.ctx, [], value);
+    if (sealed.ct.len() == 0) { return Err(Refused("seal_to_evidence", "HPKE setup failed (a malformed public key)")); }
+    return Ok(HpkeMessage {.ok = true, .enc = snd.enc, .ct = seal_publish(sealed.ct, 0, ListBuf())});
+}
+
+@requires(declassify)
+List(Int) seal_publish(List(Secret(UInt(8))) ct, Int i, ListBuf(Int) acc) {
+    if (i >= ct.len()) { return acc.finish(); }
+    return seal_publish(ct, i + 1, acc.push(ct_public((Int) declassify(ct[i], "a release sealed to attested evidence: HPKE ciphertext"))));
+}
+
+// Open a release with the attester's own private key, accepted only when
+// the pinned releaser sealed it (Auth mode with the anchor's key as the
+// sender's). The result is the releaser's word, so it can key a primitive.
+@primitive(open, anchor = sender, kinds = [ReleaseSender])
+@requires(declassify)
+@key(sk, own)
+pub Result(Verified(List(Secret(UInt(8)))), VerifyError) open_released(Int kem, List(Secret(UInt(8))) sk, HpkeMessage msg, Anchor sender) {
+    if (sender.kind != "ReleaseSender" || sender.product != f"{kem}") { return Err(Refused("open_released", "the anchor is not a ReleaseSender for this KEM")); }
+    if (!hpke_kem_ok(kem)) { return Err(Refused("open_released", f"KEM {kem} is not one HPKE defines here")); }
+    List(Int) pks = seal_sender_key(kem, sender.der);
+    if (pks.len() == 0) { return Err(BadLayout("the ReleaseSender anchor holds no public key for this KEM")); }
+    List(Secret(UInt(8))) none = [];
+    HpkeCtxG(Secret(UInt(8))) ctx = hpkeg_setup_receiver_full(seal_to_evidence_suite(kem), msg.enc, sk, seal_to_evidence_info(), none, [], pks);
+    HpkeOpenedG(Secret(UInt(8))) o = hpkeg_open(ctx, [], msg.ct);
+    if (!o.ok) { return Err(BadSignature("the release does not open under this key from this sender")); }
+    return Ok(Verified {.value = o.pt, .anchors = [sender.id], .quals = 0, .record = 0 - 1, .kem = kem, .pk = [], .chan = [], .time = Kernel, .principal = "", .format = ""});
+}
+
+// The sender's public key from the anchor's bytes: the raw public key
+// (X25519: 32 bytes; P-256/P-384: the uncompressed point) or a DER
+// SubjectPublicKeyInfo holding it (RFC 8410, RFC 5480), in which case the
+// BIT STRING's contents are its tail.
+pub List(Int) seal_sender_key(Int kem, List(Int) der) {
+    Int n = if (kem == 32) { 32 } else if (kem == 16) { 65 } else if (kem == 17) { 97 } else { 0 };
+    if (n == 0 || der.len() < n) { return []; }
+    if (der.len() == n) { return der; }
+    List(Int) tail = der[der.len() - n..der.len()];
+    // An SPKI ends in BIT STRING (03 len 00) then the key.
+    Bool spki = der[0] == 48 && der.len() >= n + 3 && der[der.len() - n - 1] == 0 && der[der.len() - n - 3] == 3 && der[der.len() - n - 2] == n + 1;
+    return if (spki) { tail } else { [] };
+}

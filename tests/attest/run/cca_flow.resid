@@ -1,0 +1,100 @@
+import "verify/core.resid";
+import "verify/cca.resid";
+import "verify/seal.resid";
+import "verify/testing.resid";
+import "challenge.resid";
+import "challenge_bind.resid";
+import "crypto.resid";
+import "cose.resid";
+import "cosesig.resid";
+import "ecdsa.resid";
+import "hash.resid";
+import "hpke.resid";
+import "hpkeg.resid";
+import "random.resid";
+
+@requires(filesystem(readonly))
+List(Int) rd(Str p) { return filesystem.read_bytes("fixtures/" + p); }
+
+List(Int) fill(Int v, Int n) { return if (n <= 0) { [] } else { [v].concat(fill(v, n - 1)) }; }
+
+// A token for this realm challenge; `lifecycle` and `binder` to forge.
+@requires(filesystem(readonly))
+List(UInt(8)) token(List(Int) challenge, Int lifecycle, Bool binder_ok) {
+    List(Int) rak = rd("cca-rak-pub.bin");
+    List(Int) r0 = cbe_map(7, []);
+    List(Int) r1 = cbe_bytes(challenge, cbe_uint(10, r0));
+    List(Int) r2 = cbe_bytes(fill(0, 64), cbe_uint(44235, r1));
+    List(Int) r3 = cbe_text("sha-256", cbe_uint(44236, r2));
+    List(Int) r4 = cbe_bytes(rak, cbe_uint(44237, r3));
+    List(Int) r5 = cbe_bytes(fill(5, 32), cbe_uint(44238, r4));
+    List(Int) r6 = cbe_bytes(fill(0, 32), cbe_bytes(fill(0, 32), cbe_bytes(fill(0, 32), cbe_bytes(fill(6, 32), cbe_array(4, cbe_uint(44239, r5))))));
+    List(Int) realm = cbe_text("sha-256", cbe_uint(44240, r6));
+    List(Int) binder = if (binder_ok) { sha256_bytes(rak) } else { fill(9, 32) };
+    List(Int) p0 = cbe_map(8, []);
+    List(Int) p1 = cbe_text("http://arm.com/CCA-SSD/1.0.0", cbe_uint(265, p0));
+    List(Int) p2 = cbe_bytes(binder, cbe_uint(10, p1));
+    List(Int) p3 = cbe_bytes(fill(3, 32), cbe_uint(2396, p2));
+    List(Int) p4 = cbe_bytes([1].concat(fill(4, 32)), cbe_uint(256, p3));
+    List(Int) p5 = cbe_uint(lifecycle, cbe_uint(2395, p4));
+    List(Int) p6 = cbe_text("sha-256", cbe_uint(2402, p5));
+    List(Int) s0 = cbe_map(4, cbe_array(1, cbe_uint(2399, p6)));
+    List(Int) s1 = cbe_text("BL", cbe_uint(1, s0));
+    List(Int) s2 = cbe_bytes(fill(7, 32), cbe_uint(2, s1));
+    List(Int) s3 = cbe_text("1.0", cbe_uint(4, s2));
+    List(Int) sw = cbe_bytes(fill(8, 32), cbe_uint(5, s3));
+    List(Int) plat = cbe_text("https://veraison.example/verification", cbe_uint(2400, sw));
+    List(Int) rcose = cose_sign1_ecdsa(P384, rd("cca-rak-d.bin"), realm, []);
+    List(Int) pcose = cose_sign1_ecdsa(P384, rd("cca-cpak-d.bin"), plat, []);
+    return chal_bytes(cbe_bytes(rcose, cbe_uint(44241, cbe_bytes(pcose, cbe_uint(44234, cbe_map(2, cbe_tag(399, [])))))));
+}
+
+@policy
+CcaPolicy realm_policy() { return CcaPolicy {.rim_hex = [hex_encode(fill(5, 32))], .rems_hex = ["0=" + hex_encode(fill(6, 32))], .implementation_ids_hex = []}; }
+
+@decides(accept = [test_cpak], appraised = realm_policy, identity = key_bound)
+@requires(declassify)
+Result(HpkeMessage, VerifyError) release(List(UInt(8)) t, ChallengeRecord issued, List(Int) guest_pk, List(Secret(UInt(8))) key, List(Secret(UInt(8))) sender) {
+    Verified(CcaToken) v = cca_verify_key_bound(t, issued, test_cpak(), test_time(1791000000), 32, guest_pk)?;
+    Appraised(CcaToken) a = cca_appraise(v, realm_policy())?;
+    return seal_to_evidence(a, 32, guest_pk, key, sender);
+}
+
+@requires(filesystem(readonly))
+Str fresh(Str what, List(UInt(8)) t, ChallengeRecord c) {
+    return what + ": " + match (cca_verify(t, c, test_cpak(), test_time(1791000000))) {
+        Ok(v) => match (cca_appraise(v, realm_policy())) { Ok(a) => f"appraised, {a.v.value.sw.len()} software component(s)", Err(e) => verify_error_text(e) },
+        Err(e) => verify_error_text(e),
+    };
+}
+
+@requires(declassify)
+List(Int) sec_pub(List(Secret(UInt(8))) k, Int i, ListBuf(Int) acc) { return if (i >= k.len()) { acc.finish() } else { sec_pub(k, i + 1, acc.push((Int) declassify(k[i], "test output"))) }; }
+
+@requires(filesystem(readonly), declassify)
+Int main() {
+    List(UInt(8)) tfm = chal_bytes(rd("cca-tfm-token.bin"));
+    println("TF-M token: " + match (test_cca_check(tfm, test_rmm_cpak(), test_time(1791000000))) { Ok(k) => f"ok, lifecycle 0x{k.lifecycle:hex}, {k.sw.len()} software components, profile " + k.profile, Err(e) => verify_error_text(e) });
+    println("TF-M token, other CPAK: " + match (test_cca_check(tfm, test_cpak(), test_time(1791000000))) { Ok(k) => "ACCEPTED", Err(e) => verify_error_text(e) });
+    List(Int) tb = chal_ints(tfm);
+    println("TF-M token, tampered: " + match (test_cca_check(chal_bytes(tb[0..300].concat([tb[300] ^ 1]).concat(tb[301..tb.len()])), test_rmm_cpak(), test_time(1791000000))) { Ok(k) => "ACCEPTED", Err(e) => verify_error_text(e) });
+    ChallengeRecord c1 = challenge_issue(64);
+    println(fresh("fresh", token(chal_ints(challenge_value(c1)), 12291, true), c1));
+    println(fresh("again", token(chal_ints(challenge_value(c1)), 12291, true), c1));
+    ChallengeRecord c2 = challenge_issue(64);
+    println(fresh("not secured", token(chal_ints(challenge_value(c2)), 8192, true), c2));
+    ChallengeRecord c3 = challenge_issue(64);
+    println(fresh("platform bound to another realm", token(chal_ints(challenge_value(c3)), 12291, false), c3));
+    ChallengeRecord c4 = challenge_issue(64);
+    println(fresh("other challenge", token(chal_ints(challenge_value(challenge_issue(64))), 12291, true), c4));
+    HpkeKeyPairG(Secret(UInt(8))) kp = hpkeg_generate_keypair(32);
+    ChallengeRecord c5 = challenge_issue(64);
+    List(Int) bound = chal_ints(match (challenge_with_key(challenge_value(c5), 32, kp.sk)) { Ok(b) => b, Err(e) => [] });
+    List(Secret(UInt(8))) key = random_secret(32);
+    Str r = match (release(token(bound, 12291, true), c5, kp.pk, key, secret_bytes(rd("sender-sk.bin")))) {
+        Ok(m) => match (open_released(32, kp.sk, m, test_sender())) { Ok(v) => if (hex_encode(sec_pub(v.value, 0, ListBuf())) == hex_encode(sec_pub(key, 0, ListBuf()))) { "released and opened: same key" } else { "KEY DIFFERS" }, Err(e) => "open: " + verify_error_text(e) },
+        Err(e) => "release: " + verify_error_text(e),
+    };
+    println(r);
+    return 0;
+}

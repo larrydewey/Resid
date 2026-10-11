@@ -27,6 +27,7 @@ import "show.resid";
 import "lists.resid";
 import "net.resid";
 import "chal.resid";
+import "transcript.resid";
 import "ctl.resid";
 import "dec.resid";
 import "list.resid";

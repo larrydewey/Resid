@@ -271,8 +271,54 @@ pub Result(List(DevOut), DeviceError) device_engine_ioctl(IoctlOp op, List(DevIn
     DvFill fl = dv_fill(op.name, args, 0, [], -1, [])?;
     DvReq r = dv_prep_ioctl(op, fl.args);
     if (r.err != "") { return Err(BadInput(op.name, r.err)); }
-    return dv_bound(op.name, fl, dv_answer(op.name, r, resid_device_call(r.req)));
+    Int _tr = dv_tr_req(op.name, fl.handle, r.req);
+    return dv_bound(op.name, fl, dv_tr_out(op.name, fl.handle, dv_answer(op.name, r, resid_device_call(r.req))));
 }
+
+// ─── The transcript (PLAN-attestation.md §9) ─────────────────────────────
+// Every crossing is noted with the runtime (off unless the program reads
+// its transcript, lib/transcript.resid): the request before it is sent,
+// then the reply. An entry starts with 16 bytes: the SHA-256 of the
+// descriptor's name (8), the direction (0 request, 1 reply) and the
+// challenge record's handle (7, big-endian; all ones for none); then the
+// request as the engine sends it (no secret goes in one), or each output:
+// a number as 8 bytes, bytes length-prefixed, and a secret buffer as its
+// length alone (a commitment to a low-entropy secret could be guessed).
+
+List(Int) dv_tr_head(Str name, Int dir, Int handle) {
+    Int h = if (handle < 0) { 72057594037927935 } else { handle };
+    return sha256_bytes(bytes_of(name))[0..8].concat([dir]).concat([(h >> 48) & 255, (h >> 40) & 255, (h >> 32) & 255, (h >> 24) & 255, (h >> 16) & 255, (h >> 8) & 255, h & 255]);
+}
+
+// Off (the program never reads its transcript), nothing is built.
+Bool dv_tr_on() {
+    List(Int) none = [];
+    return resid_tr_note(none) == 0;
+}
+
+pub Int dv_tr_req(Str name, Int handle, List(Int) req) {
+    if (!dv_tr_on()) { return 1; }
+    return resid_tr_note(dv_tr_head(name, 0, handle).concat(req));
+}
+
+pub Result(List(DevOut), DeviceError) dv_tr_out(Str name, Int handle, Result(List(DevOut), DeviceError) out) {
+    if (!dv_tr_on()) { return out; }
+    List(Int) body = match (out) { Ok(o) => [1].concat(dv_tr_outs(o, 0, [])), Err(e) => [0].concat(bytes_of(device_error_text(e))) };
+    Int _n = resid_tr_note(dv_tr_head(name, 1, handle).concat(body));
+    return out;
+}
+
+List(Int) dv_tr_outs(List(DevOut) o, Int i, List(Int) acc) {
+    if (i >= o.len()) { return acc; }
+    List(Int) part = match (o[i]) {
+        OutNum(v) => [1].concat(dv_be8(v)),
+        OutBytes(b) => [2].concat(dv_u32(b.len())).concat(dv_ints(b, 0, ListBuf())),
+        OutSecret(z) => [3].concat(dv_u32(z.len())),
+    };
+    return dv_tr_outs(o, i + 1, acc.concat(part));
+}
+
+List(Int) dv_be8(Int v) { return [(v >> 56) & 255, (v >> 48) & 255, (v >> 40) & 255, (v >> 32) & 255, (v >> 24) & 255, (v >> 16) & 255, (v >> 8) & 255, v & 255]; }
 
 // ─── Challenge slots (PLAN-labels.md §6.2, §6.5) ─────────────────────────
 // The engine fills each request's challenge slot itself, so no program
@@ -342,12 +388,34 @@ pub Result(List(DevOut), DeviceError) dv_bound(Str name, DvFill fl, Result(List(
     return out;
 }
 
+// An evidence entry e >= 0 is output e whole; e < 0 names, with
+// v = -1 - e, the bytes of output v % 16 from offset (v / 16) % 4096, as
+// many as the little-endian u32 at offset v / 65536 says (a report inside
+// a reply that frames it). Out of range is empty: it matches no evidence.
 List(Int) dv_evidence(List(DevOut) outs, List(Int) ev, Int i, List(Int) acc) {
     if (i >= ev.len()) { return acc; }
-    List(UInt(8)) b = if (ev[i] >= 0 && ev[i] < outs.len()) { dv_out_raw(outs[ev[i]]) } else { [] };
+    List(UInt(8)) b = dv_ev_part(outs, ev[i]);
     List(Int) part = dv_u32(b.len()).concat(dv_ints(b, 0, ListBuf()));
     return dv_evidence(outs, ev, i + 1, acc.concat(part));
 }
+
+List(UInt(8)) dv_ev_part(List(DevOut) outs, Int e) {
+    List(UInt(8)) none = [];
+    if (e >= 0) { return if (e < outs.len()) { dv_out_raw(outs[e]) } else { none }; }
+    Int v = 0 - 1 - e;
+    Int o = v % 16;
+    Int at = (v / 16) % 4096;
+    Int la = v / 65536;
+    if (o >= outs.len()) { return none; }
+    List(UInt(8)) b = dv_out_raw(outs[o]);
+    if (la < 0 || la + 4 > b.len()) { return none; }
+    Int n = (Int) b[la] | ((Int) b[la + 1] << 8) | ((Int) b[la + 2] << 16) | ((Int) b[la + 3] << 24);
+    if (at + n > b.len()) { return none; }
+    return b[at..at + n];
+}
+
+// The evidence entry for a framed part (dv_evidence).
+pub Int dv_ev_framed(Int out, Int at, Int len_at) { return 0 - 1 - (out + 16 * at + 65536 * len_at); }
 
 List(UInt(8)) dv_out_raw(DevOut o) {
     List(UInt(8)) none = [];
@@ -362,14 +430,16 @@ List(Int) dv_ints(List(UInt(8)) b, Int i, ListBuf(Int) acc) { return if (i >= b.
 pub Result(List(DevOut), DeviceError) device_engine_transact(Transact op, List(UInt(8)) cmd) {
     DvReq r = dv_prep_transact(op, cmd);
     if (r.err != "") { return Err(BadInput(op.name, r.err)); }
-    return dv_answer(op.name, r, resid_device_call(r.req));
+    Int _tr = dv_tr_req(op.name, 0 - 1, r.req);
+    return dv_tr_out(op.name, 0 - 1, dv_answer(op.name, r, resid_device_call(r.req)));
 }
 
 @descriptor(engine_read_attr)
 @requires(device(readonly))
 pub Result(List(DevOut), DeviceError) device_engine_read_attr(ReadAttr op) {
     List(Int) req = dv_u(dv_head(ListBuf(), 3, false, op.name, op.path), op.max, 4).finish();
-    return dv_reply(op.name, [DvSlot {.num = false, .max = op.max, .secret = false}], resid_device_call(req));
+    Int _tr = dv_tr_req(op.name, 0 - 1, req);
+    return dv_tr_out(op.name, 0 - 1, dv_reply(op.name, [DvSlot {.num = false, .max = op.max, .secret = false}], resid_device_call(req)));
 }
 
 @descriptor(engine_configfs_report)
@@ -377,7 +447,8 @@ pub Result(List(DevOut), DeviceError) device_engine_read_attr(ReadAttr op) {
 pub Result(List(DevOut), DeviceError) device_engine_configfs_report(ConfigfsReport op, ReportReq rq) {
     DvReq r = dv_prep_configfs_report(op, rq);
     if (r.err != "") { return Err(BadInput(op.name, r.err)); }
-    return dv_answer(op.name, r, resid_device_call(r.req));
+    Int _tr = dv_tr_req(op.name, 0 - 1, r.req);
+    return dv_tr_out(op.name, 0 - 1, dv_answer(op.name, r, resid_device_call(r.req)));
 }
 
 @descriptor(engine_sequence)
@@ -386,7 +457,8 @@ pub Result(List(DevOut), DeviceError) device_engine_sequence(Sequence op, List(D
     DvFill fl = dv_fill(op.name, args, 0, [], -1, [])?;
     DvReq r = dv_prep_sequence(op, fl.args);
     if (r.err != "") { return Err(BadInput(op.name, r.err)); }
-    return dv_bound(op.name, fl, dv_answer(op.name, r, resid_device_call(r.req)));
+    Int _tr = dv_tr_req(op.name, fl.handle, r.req);
+    return dv_bound(op.name, fl, dv_tr_out(op.name, fl.handle, dv_answer(op.name, r, resid_device_call(r.req))));
 }
 
 // -- Inputs and outputs ---------------------------------------------------

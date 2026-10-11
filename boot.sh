@@ -126,6 +126,9 @@ if [ "$BOOTSTRAP_SELF" -eq 1 ]; then
         cmp -s "${OUT}/reseed_rt${i}.ll" "$RT_LL" && cmp -s "${OUT}/reseed_rta${i}.ll" "$RT_A64_LL" && RT_SAME=1
         cp "${OUT}/reseed_rt${i}.ll" "$RT_LL"
         cp "${OUT}/reseed_rta${i}.ll" "$RT_A64_LL"
+        # The compiler pins the runtime and the verify closure
+        # (compiler/verify_pins.resid): regenerate before compiling.
+        if command -v python3 >/dev/null 2>&1; then python3 tools/attest/verify_pins.py --write > /dev/null; fi
         timeout 600 "$PREV_BIN" "$SRC" -o "$NEXT_BIN" --runtime-internals
         [ -f "$NEXT_LL" ] || die "round $i produced no output"
         if cmp -s "$PREV_LL" "$NEXT_LL" && [ "$RT_SAME" -eq 1 ]; then
@@ -146,6 +149,13 @@ if [ "$BOOTSTRAP_SELF" -eq 1 ]; then
     done
     rm -f "${OUT}"/reseed_round*.ll "${OUT}"/reseed_round*.bin
     die "did not converge after ${MAX_SELF_ROUNDS} rounds — likely a genuinely new language construct the old seed can't parse at all (not just new behavior); reseed in two steps (old source first)"
+fi
+
+# ── 0. the verify closure's pins are current ─────────────────────────────
+if command -v python3 >/dev/null 2>&1; then
+    step "verify closure: compiler/verify_pins.resid matches lib/verify/ and the runtime"
+    python3 tools/attest/verify_pins.py > /dev/null || die "compiler/verify_pins.resid is stale: run tools/attest/verify_pins.py --write, then ./boot.sh --bootstrap-from-self"
+    ok "pins current"
 fi
 
 # ── 1. stage1 from committed seed ────────────────────────────────────────

@@ -1,0 +1,60 @@
+// verify/channel.resid — releasing on the connection the evidence is
+// bound to (PLAN-attestation.md §3.2, §7): seal_to_channel, the only way a
+// `channel_bound` decision releases, and the two sends that write what it
+// sealed, each only on that connection.
+//
+// A channel is named by the SHA-256 of its TLS exporter value (RFC 9266):
+// the two ends of one connection share it, and the two connections of a
+// party in the middle do not.
+
+import "core.resid";
+import "../crypto.resid";
+import "../word.resid";
+import "../tls.resid";
+import "../wire.resid";
+import "../tlswire.resid";
+import "../tlsclient.resid";
+
+// A value sealed to one connection: only the bound sends below write it.
+@opaque("*")
+pub type ChannelSealed = { List(Secret(UInt(8))) value; List(Int) chan; };
+
+// Seal `value` to the connection whose exporter is x, when the gate is
+// ChannelBound to exactly that connection. The gate's record is marked
+// decided. Only a @decides function calls this (E0287).
+@primitive(release = channel_bound, gate = e, inputs = [x])
+@requires(declassify)
+pub Result(ChannelSealed, VerifyError) seal_to_channel(Appraised(T) e, ChannelExporter x, List(Secret(UInt(8))) value) {
+    Verified(T) v = e.v;
+    if ((v.quals & q_channel_bound()) == 0) { return Err(Refused("seal_to_channel", "the evidence is not bound to a channel")); }
+    if (!channel_exporter_ok(x)) { return Err(Refused("seal_to_channel", "the connection has no exporter")); }
+    List(Int) id = vf_channel_id(x);
+    if (!eq_ints(v.chan, id)) { return Err(Refused("seal_to_channel", "the evidence is bound to another connection")); }
+    vf_decide(v.record)?;
+    return Ok(ChannelSealed {.value = value, .chan = id});
+}
+
+@requires(declassify)
+List(Int) ch_plain(List(Secret(UInt(8))) v, Int i, ListBuf(Int) acc) {
+    if (i >= v.len()) { return acc.finish(); }
+    return ch_plain(v, i + 1, acc.push(ct_public((Int) declassify(v[i], "a release written on the attested connection (TLS encrypts it to that peer)"))));
+}
+
+// Write a sealed value on a server connection: refused unless it is the
+// connection the value was sealed to.
+@requires(declassify, network)
+pub Result(TlsConn, VerifyError) tlsserver_send_bound(TlsConn c, ChannelSealed v) {
+    if (!eq_ints(vf_channel_id(tlsserver_exporter(c)), v.chan)) { return Err(Refused("tlsserver_send_bound", "the value was sealed to another connection")); }
+    WireOut(TlsConn) o = wire_send(c, ch_plain(v.value, 0, ListBuf()));
+    if (!o.ok) { return Err(Refused("tlsserver_send_bound", "the connection did not take the bytes")); }
+    return Ok(o.conn);
+}
+
+// Write a sealed value on a client connection, likewise.
+@requires(declassify, network)
+pub Result(TlsClient, VerifyError) tlsclient_send_bound(TlsClient c, ChannelSealed v) {
+    if (!eq_ints(vf_channel_id(tlsclient_exporter(c)), v.chan)) { return Err(Refused("tlsclient_send_bound", "the value was sealed to another connection")); }
+    WireOut(TlsClient) o = wire_send(c, ch_plain(v.value, 0, ListBuf()));
+    if (!o.ok) { return Err(Refused("tlsclient_send_bound", "the connection did not take the bytes")); }
+    return Ok(o.conn);
+}

@@ -59,6 +59,21 @@ network]`.
 | `E0277` | a challenge-record builtin (`resid_chal_*`) outside the one standard-library file that owns it |
 | `E0278` | `provisioned_key` in the standard library outside lib/tlskey.resid |
 | `E0279` | (warning while the rule is rolled out) an AEAD nonce that is a constant, outside a single-use key: one drawn in the same function, outside any loop or closure, for that one sealing call |
+| `E0280` | `@primitive` or `@verify_internal` outside `lib/verify/`, or a call of a `@verify_internal` function from outside it |
+| `E0281` | a malformed `@anchor` (kind, principal, fingerprint, dates, algorithms, a format that is not a `@signed` type of the standard library or its package), an `@anchor` function that is not `Anchor name() { return anchor_der(bytes); }`, or `anchor_make`/`anchor_der` anywhere else |
+| `E0282` | a primitive's anchor argument that is not a call of an `@anchor` function, or one of a kind, algorithms or formats the primitive does not take |
+| `E0283` | an appraisal's policy that is not a direct call of a nullary `@policy` function |
+| `E0284` | a `@decides` function with a success return no primitive's `Ok` gates, or a malformed `@decides` |
+| `E0285` | a decision's gate that does not meet its requirements: anchors not accepted or not required, another policy or none, not fresh, no identity, a kernel time under `time = not_kernel` |
+| `E0286` | outside data reaches or selects what a `@decides` function decides |
+| `E0287` | `seal_to_evidence` or `seal_to_channel` outside a `@decides` function, or a `key_bound` / `channel_bound` decision whose success return is not that release on its gate |
+| `E0288` | a decision's gate formed inside a loop |
+| `E0291` | (warning while the rule is rolled out) outside data decides whether, or what, a `declassify` discloses |
+| `E0292` | (warning while the rule is rolled out) outside data decides whether, or what, a called function discloses |
+| `E0289` | an `@assumption` without a pin or reason, `assumed` or an assumption in the standard library, or `assumption_make`/`assumption_pinned` outside an `@assumption` function |
+| `E0293` | a program that issues challenges for several purposes with a decision that names none (`bind = "..."`), or a `bind` decision without exactly one ChallengeRecord |
+| `E0294` | an instance replacing one of the standard library's in a program that reaches `lib/verify/` |
+| `E0290` | a program that reaches `lib/verify/` built against a closure or runtime this compiler was not released with (or with `-rt`/`-rtr`); `--verify-lib-dev` lifts it |
 | `E0301` | a known value violates its constraint type |
 | `E0401` | a builder is not consumed on some path |
 | `E0402` | a builder is used twice |

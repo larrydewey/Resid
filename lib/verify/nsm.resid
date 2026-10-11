@@ -1,0 +1,294 @@
+// verify/nsm.resid — AWS Nitro Enclaves attestation documents
+// (PLAN-attestation.md §3.2, §4, §10): the NSM's COSE_Sign1 (ES384 only)
+// over a CBOR map, its certificate chain from the AWS root (the anchor),
+// the challenge in `nonce`, and the appraisal of the PCRs.
+//
+// The payload is parsed strictly: a map of exactly the documented keys,
+// each once, definite lengths, no trailing bytes; `module_id` printable
+// ASCII, `digest` "SHA384", PCR indices 0..31 with 32-, 48- or 64-byte
+// values, at most 1024 bytes in each of `certificate`, `cabundle`'s
+// entries, `public_key`, `user_data` and `nonce` (the last three may be
+// null). `cabundle[0]` must be the anchor's certificate; each later entry
+// and then `certificate` must be signed by the one before it at the
+// evidence time. `public_key`, `user_data` and `nonce` are relayed:
+// chosen by whoever asked the NSM, useful only through the challenge.
+
+import "core.resid";
+import "../crypto.resid";
+import "../hash.resid";
+import "../der.resid";
+import "../x509.resid";
+import "../ecdsa.resid";
+import "../certverify.resid";
+import "../chain.resid";
+import "../instant.resid";
+import "../cose.resid";
+import "../cosesig.resid";
+import "../tls.resid";
+import "../challenge.resid";
+import "../challenge_bind.resid";
+import "../challenge_export.resid";
+import "../dev/device.resid";
+
+// The document, as the NSM signed it. pcr_index[i] names pcrs[i].
+@signed(sig = cose, span = payload)
+pub type NsmDocument = { Str module_id; Int timestamp; List(Int) pcr_index; List(List(Int)) pcrs; List(Int) certificate; List(List(Int)) cabundle; List(Int) public_key; List(Int) user_data; List(Int) nonce; };
+
+// A policy: the PCRs that must hold these values ("index=hex", e.g.
+// "0=7d..."), every one of them.
+pub type NsmPolicy = { List(Str) pcrs_hex; };
+
+// ─── Strict CBOR ────────────────────────────────────────────────────
+
+type NsmP = { NsmDocument d; Str err; List(Str) seen; };
+
+NsmDocument nsm_empty() {
+    List(Int) none = [];
+    List(List(Int)) nn = [];
+    return NsmDocument {.module_id = "", .timestamp = 0, .pcr_index = none, .pcrs = nn, .certificate = none, .cabundle = nn, .public_key = none, .user_data = none, .nonce = none};
+}
+
+Result(NsmDocument, VerifyError) nsm_payload(List(Int) b) {
+    CbeHead m = cbe_read_head(b, 0);
+    if (!m.ok || m.major != 5 || m.val < 1 || m.val > 16) { return Err(BadLayout("the NSM payload is not a map")); }
+    NsmP p = nsm_entries(b, m.pos, m.val, NsmP {.d = nsm_empty(), .err = "", .seen = []});
+    if (p.err != "") { return Err(BadLayout("NSM document: " + p.err)); }
+    List(Str) need = ["module_id", "digest", "timestamp", "pcrs", "certificate", "cabundle"];
+    if (!nsm_all_seen(need, p.seen, 0)) { return Err(BadLayout("NSM document: a required field is missing")); }
+    return Ok(p.d);
+}
+
+Bool nsm_all_seen(List(Str) need, List(Str) seen, Int i) { return i >= need.len() || (nsm_has(seen, need[i], 0) && nsm_all_seen(need, seen, i + 1)); }
+Bool nsm_has(List(Str) xs, Str x, Int i) { return i < xs.len() && (xs[i] == x || nsm_has(xs, x, i + 1)); }
+
+NsmP nsm_fail(NsmP p, Str e) { return NsmP {.d = p.d, .err = e, .seen = p.seen}; }
+
+NsmP nsm_entries(List(Int) b, Int pos, Int left, NsmP p) {
+    if (p.err != "") { return p; }
+    if (left <= 0) { return if (pos == b.len()) { p } else { nsm_fail(p, "trailing bytes") }; }
+    CbeStr k = cbe_read_str(b, pos, 3);
+    if (!k.ok) { return nsm_fail(p, "a key is not text"); }
+    Str key = cbe_ascii(k.bytes, 0, "");
+    if (nsm_has(p.seen, key, 0)) { return nsm_fail(p, "`" + key + "` twice"); }
+    NsmV v = nsm_value(b, k.pos, key, p.d);
+    if (v.err != "") { return nsm_fail(p, v.err); }
+    return nsm_entries(b, v.pos, left - 1, NsmP {.d = v.d, .err = "", .seen = p.seen.concat([key])});
+}
+
+type NsmV = { NsmDocument d; Int pos; Str err; };
+
+NsmV nsm_verr(NsmDocument d, Str e) { return NsmV {.d = d, .pos = 0, .err = e}; }
+
+NsmV nsm_value(List(Int) b, Int pos, Str key, NsmDocument d) {
+    if (key == "module_id") {
+        CbeStr s = cbe_read_str(b, pos, 3);
+        if (!s.ok || s.bytes.len() == 0 || s.bytes.len() > 256 || !nsm_printable(s.bytes, 0)) { return nsm_verr(d, "bad module_id"); }
+        return NsmV {.d = nsm_with(d, cbe_ascii(s.bytes, 0, ""), d.timestamp, d.pcr_index, d.pcrs, d.certificate, d.cabundle, d.public_key, d.user_data, d.nonce), .pos = s.pos, .err = ""};
+    }
+    if (key == "digest") {
+        CbeStr s = cbe_read_str(b, pos, 3);
+        if (!s.ok || cbe_ascii(s.bytes, 0, "") != "SHA384") { return nsm_verr(d, "digest is not SHA384"); }
+        return NsmV {.d = d, .pos = s.pos, .err = ""};
+    }
+    if (key == "timestamp") {
+        CbeHead h = cbe_read_head(b, pos);
+        if (!h.ok || h.major != 0 || h.val <= 0) { return nsm_verr(d, "bad timestamp"); }
+        return NsmV {.d = nsm_with(d, d.module_id, h.val, d.pcr_index, d.pcrs, d.certificate, d.cabundle, d.public_key, d.user_data, d.nonce), .pos = h.pos, .err = ""};
+    }
+    if (key == "pcrs") {
+        CbeHead m = cbe_read_head(b, pos);
+        if (!m.ok || m.major != 5 || m.val < 1 || m.val > 32) { return nsm_verr(d, "bad pcrs"); }
+        NsmPc pc = nsm_pcrs(b, m.pos, m.val, [], []);
+        if (pc.err != "") { return nsm_verr(d, pc.err); }
+        return NsmV {.d = nsm_with(d, d.module_id, d.timestamp, pc.idx, pc.vals, d.certificate, d.cabundle, d.public_key, d.user_data, d.nonce), .pos = pc.pos, .err = ""};
+    }
+    if (key == "certificate") {
+        CbeStr s = cbe_read_str(b, pos, 2);
+        if (!s.ok || s.bytes.len() == 0 || s.bytes.len() > 1024) { return nsm_verr(d, "bad certificate"); }
+        return NsmV {.d = nsm_with(d, d.module_id, d.timestamp, d.pcr_index, d.pcrs, s.bytes, d.cabundle, d.public_key, d.user_data, d.nonce), .pos = s.pos, .err = ""};
+    }
+    if (key == "cabundle") {
+        CbeHead a = cbe_read_head(b, pos);
+        if (!a.ok || a.major != 4 || a.val < 1 || a.val > 16) { return nsm_verr(d, "bad cabundle"); }
+        NsmCa ca = nsm_bundle(b, a.pos, a.val, []);
+        if (ca.err != "") { return nsm_verr(d, ca.err); }
+        return NsmV {.d = nsm_with(d, d.module_id, d.timestamp, d.pcr_index, d.pcrs, d.certificate, ca.certs, d.public_key, d.user_data, d.nonce), .pos = ca.pos, .err = ""};
+    }
+    if (key == "public_key" || key == "user_data" || key == "nonce") {
+        NsmO o = nsm_opt_bytes(b, pos);
+        if (!o.ok) { return nsm_verr(d, "bad " + key); }
+        NsmDocument d2 = if (key == "public_key") { nsm_with(d, d.module_id, d.timestamp, d.pcr_index, d.pcrs, d.certificate, d.cabundle, o.v, d.user_data, d.nonce) } else if (key == "user_data") { nsm_with(d, d.module_id, d.timestamp, d.pcr_index, d.pcrs, d.certificate, d.cabundle, d.public_key, o.v, d.nonce) } else { nsm_with(d, d.module_id, d.timestamp, d.pcr_index, d.pcrs, d.certificate, d.cabundle, d.public_key, d.user_data, o.v) };
+        return NsmV {.d = d2, .pos = o.pos, .err = ""};
+    }
+    return nsm_verr(d, "unknown field `" + key + "`");
+}
+
+NsmDocument nsm_with(NsmDocument d, Str m, Int t, List(Int) pi, List(List(Int)) pv, List(Int) cert, List(List(Int)) ca, List(Int) pk, List(Int) ud, List(Int) nonce) {
+    return NsmDocument {.module_id = m, .timestamp = t, .pcr_index = pi, .pcrs = pv, .certificate = cert, .cabundle = ca, .public_key = pk, .user_data = ud, .nonce = nonce};
+}
+
+Bool nsm_printable(List(Int) b, Int i) { return i >= b.len() || (b[i] >= 32 && b[i] < 127 && nsm_printable(b, i + 1)); }
+
+type NsmPc = { List(Int) idx; List(List(Int)) vals; Int pos; Str err; };
+
+NsmPc nsm_pcrs(List(Int) b, Int pos, Int left, List(Int) idx, List(List(Int)) vals) {
+    if (left <= 0) { return NsmPc {.idx = idx, .vals = vals, .pos = pos, .err = ""}; }
+    CbeHead k = cbe_read_head(b, pos);
+    if (!k.ok || k.major != 0 || k.val > 31) { return NsmPc {.idx = idx, .vals = vals, .pos = pos, .err = "a PCR index is not 0..31"}; }
+    if (nsm_has_int(idx, k.val, 0)) { return NsmPc {.idx = idx, .vals = vals, .pos = pos, .err = "a PCR twice"}; }
+    CbeStr v = cbe_read_str(b, k.pos, 2);
+    if (!v.ok || (v.bytes.len() != 32 && v.bytes.len() != 48 && v.bytes.len() != 64)) { return NsmPc {.idx = idx, .vals = vals, .pos = pos, .err = "a PCR value is not 32, 48 or 64 bytes"}; }
+    return nsm_pcrs(b, v.pos, left - 1, idx.concat([k.val]), vals.concat([v.bytes]));
+}
+
+Bool nsm_has_int(List(Int) xs, Int x, Int i) { return i < xs.len() && (xs[i] == x || nsm_has_int(xs, x, i + 1)); }
+
+type NsmCa = { List(List(Int)) certs; Int pos; Str err; };
+
+NsmCa nsm_bundle(List(Int) b, Int pos, Int left, List(List(Int)) acc) {
+    if (left <= 0) { return NsmCa {.certs = acc, .pos = pos, .err = ""}; }
+    CbeStr s = cbe_read_str(b, pos, 2);
+    if (!s.ok || s.bytes.len() == 0 || s.bytes.len() > 1024) { return NsmCa {.certs = acc, .pos = pos, .err = "a cabundle entry is not 1..1024 bytes"}; }
+    return nsm_bundle(b, s.pos, left - 1, acc.concat([s.bytes]));
+}
+
+type NsmO = { Bool ok; List(Int) v; Int pos; };
+
+NsmO nsm_opt_bytes(List(Int) b, Int pos) {
+    List(Int) none = [];
+    CbeHead h = cbe_read_head(b, pos);
+    if (h.ok && h.major == 7 && h.val == 22) { return NsmO {.ok = true, .v = none, .pos = h.pos}; }
+    CbeStr s = cbe_read_str(b, pos, 2);
+    if (!s.ok || s.bytes.len() > 1024) { return NsmO {.ok = false, .v = none, .pos = pos}; }
+    return NsmO {.ok = true, .v = s.bytes, .pos = s.pos};
+}
+
+// ─── Verification ───────────────────────────────────────────────────
+
+// The document, its signature and chain checked.
+@verify_internal
+pub Result(NsmDocument, VerifyError) nsm_check(List(UInt(8)) doc, Anchor root, EvidenceTime t) {
+    if (root.kind != "Nitro") { return Err(Refused("nsm_verify", "the anchor is not an AWS Nitro root (kind " + root.kind + ")")); }
+    if (!anchor_lists(root.algorithms, "EcdsaP384Sha384")) { return Err(Refused("nsm_verify", "the anchor does not list ECDSA P-384 SHA-384")); }
+    if (anchor_expired(root, t)) { return Err(Stale("the anchor expired " + root.expires)); }
+    if (doc.len() > 16384) { return Err(BadLayout("an NSM document is at most 16 KiB")); }
+    CoseMsg m = cose_sign1_read(chal_ints(doc));
+    if (!m.ok) { return Err(BadLayout(m.err)); }
+    if (m.alg != 0 - 35) { return Err(Refused("nsm_verify", "the document is not signed with ES384")); }
+    NsmDocument d = nsm_payload(m.payload)?;
+    if (!eq_ints(d.cabundle[0], root.der)) { return Err(BadChain("the bundle does not start at the anchor's certificate")); }
+    Cert top = nsm_cert(root.der, "root")?;
+    if (!chain_verify_parsed(top, top, t.at)) { return Err(BadChain("the root is not a current self-signed CA")); }
+    Cert last = nsm_chain(d.cabundle, 1, top, t)?;
+    Cert leaf = nsm_cert(d.certificate, "certificate")?;
+    if (!nsm_signs_leaf(leaf, last, t.at)) { return Err(BadChain("the bundle's last CA did not sign the certificate, or one is not current")); }
+    if (leaf.key.kind != pubkey_ec() || curve_bytes(leaf.key.curve) != 48) { return Err(BadChain("the signing key is not P-384")); }
+    if (!cose_sign1_verify(m, leaf.key, [])) { return Err(BadSignature("the certificate's key did not sign this document")); }
+    return Ok(d);
+}
+
+Result(Cert, VerifyError) nsm_cert(List(Int) der, Str what) {
+    return match (x509_parse(der)) { Ok(c) => Ok(c), Err(e) => Err(BadChain(what + ": " + e)) };
+}
+
+// Each bundle entry from i on, signed by the one before; the last CA.
+Result(Cert, VerifyError) nsm_chain(List(List(Int)) ca, Int i, Cert prev, EvidenceTime t) {
+    if (i >= ca.len()) { return Ok(prev); }
+    Cert c = nsm_cert(ca[i], f"cabundle[{i}]")?;
+    if (!chain_verify_parsed(c, prev, t.at)) { return Err(BadChain(f"cabundle[{i}] is not signed by the one before it, or one is not current")); }
+    if (!cert_is_ca(c)) { return Err(BadChain(f"cabundle[{i}] is not a CA")); }
+    return nsm_chain(ca, i + 1, c, t);
+}
+
+Bool nsm_signs_leaf(Cert c, Cert i, Instant now) {
+    if (!eq_list(c.issuer, i.subject)) { return false; }
+    if (!cert_valid_at(c, now) || !cert_valid_at(i, now)) { return false; }
+    if (!cert_is_ca(i) || !cert_key_usage(i, 5)) { return false; }
+    return sig_verify(c.signed.alg, i.key, c.signed.tbs, c.signed.sig);
+}
+
+// The relayed nonce must be exactly the expected value.
+Result(Bool, VerifyError) nsm_bind(NsmDocument d, List(UInt(8)) want, ChallengeRecord c) {
+    if (d.nonce.len() != want.len()) { return Err(NotFresh("the document's nonce is not this challenge")); }
+    Bool spent = vf_bind_challenge(chal_bytes(d.nonce), want, c, chal_bytes(d.nonce), nsm_descriptors())?;
+    return Ok(spent);
+}
+
+// The descriptors whose replies carry an NSM document.
+pub List(Str) nsm_descriptors() { return ["nsm.attestation"]; }
+
+Int nsm_rp(ChallengeRecord c) { return if (c.bind.len() > 0) { q_rp_bound() } else { 0 }; }
+
+// Fresh for the holder of `c`: the document's nonce is challenge_value(c).
+@primitive(verify, anchor = root, gives = [fresh], time = t, format = NsmDocument, kinds = [Nitro], algorithms = [EcdsaP384Sha384], inputs = [doc, c, t])
+pub Result(Verified(NsmDocument), VerifyError) nsm_verify(List(UInt(8)) doc, ChallengeRecord c, Anchor root, EvidenceTime t) {
+    NsmDocument d = nsm_check(doc, root, t)?;
+    Bool spent = nsm_bind(d, challenge_value(c), c)?;
+    List(Int) none = [];
+    return Ok(vf_make(d, root, q_fresh() | nsm_rp(c), c, 0, none, none, t, "NsmDocument"));
+}
+
+// Fresh and KeyBound(kem, pk): the nonce is
+// challenge_with_key(challenge_value(c), kem, sk) for the sk behind pk.
+@primitive(verify, anchor = root, gives = [fresh, key_bound], time = t, format = NsmDocument, kinds = [Nitro], algorithms = [EcdsaP384Sha384], inputs = [doc, c, t, kem, pk])
+pub Result(Verified(NsmDocument), VerifyError) nsm_verify_key_bound(List(UInt(8)) doc, ChallengeRecord c, Anchor root, EvidenceTime t, Int kem, List(Int) pk) {
+    if (!hpke_kem_ok(kem) || !vf_pk_ok(kem, pk)) { return Err(Refused("nsm_verify_key_bound", "the attester's public key is empty or malformed for the KEM")); }
+    NsmDocument d = nsm_check(doc, root, t)?;
+    Bool spent = nsm_bind(d, challenge_key_value(challenge_value(c), kem, pk), c)?;
+    List(Int) none = [];
+    return Ok(vf_make(d, root, q_fresh() | q_key_bound() | nsm_rp(c), c, kem, pk, none, t, "NsmDocument"));
+}
+
+// Fresh and ChannelBound to the connection whose other end is e.
+@primitive(verify, anchor = root, gives = [fresh, channel_bound], time = t, format = NsmDocument, kinds = [Nitro], algorithms = [EcdsaP384Sha384], inputs = [doc, c, t, e])
+@requires(declassify)
+pub Result(Verified(NsmDocument), VerifyError) nsm_verify_channel_bound(List(UInt(8)) doc, ChallengeRecord c, Anchor root, EvidenceTime t, ChannelExporter e) {
+    List(UInt(8)) want = match (challenge_with_channel(challenge_value(c), e)) { Ok(x) => Ok(x), Err(err) => Err(Refused("nsm_verify_channel_bound", device_error_text(err))) }?;
+    NsmDocument d = nsm_check(doc, root, t)?;
+    Bool spent = nsm_bind(d, want, c)?;
+    List(Int) none = [];
+    return Ok(vf_make(d, root, q_fresh() | q_channel_bound() | nsm_rp(c), c, 0, none, vf_channel_id(e), t, "NsmDocument"));
+}
+
+// Delivered, for a record imported without a SpentStore.
+@primitive(verify, anchor = root, gives = [delivered], time = t, format = NsmDocument, kinds = [Nitro], algorithms = [EcdsaP384Sha384], inputs = [doc, c, t])
+pub Result(Verified(NsmDocument), VerifyError) nsm_verify_replayable(List(UInt(8)) doc, ReplayableRecord c, Anchor root, EvidenceTime t) {
+    NsmDocument d = nsm_check(doc, root, t)?;
+    if (!eq_ints(d.nonce, chal_ints(replayable_value(c)))) { return Err(NotFresh("the document's nonce is not this challenge")); }
+    List(Int) none = [];
+    return Ok(Verified {.value = d, .anchors = [root.id], .quals = q_delivered(), .record = 0 - 1, .kem = 0, .pk = none, .chan = none, .time = t.source, .principal = root.principal, .format = "NsmDocument"});
+}
+
+// ─── Appraisal ──────────────────────────────────────────────────────
+// Mandatory: PCRs 0, 1 and 2 present and not all zero (an enclave in
+// debug mode reports zeros). Then every PCR the policy names, by value.
+@primitive(appraise, from = v, policy = policy, ptype = NsmPolicy)
+pub Result(Appraised(NsmDocument), VerifyError) nsm_appraise(Verified(NsmDocument) v, NsmPolicy policy) {
+    NsmDocument d = v.value;
+    if (nsm_pcr(d, 0).len() == 0 || nsm_pcr(d, 1).len() == 0 || nsm_pcr(d, 2).len() == 0) { return Err(Refused("nsm_appraise", "PCRs 0, 1 and 2 are not all present")); }
+    if (nsm_zero(nsm_pcr(d, 0), 0)) { return Err(Refused("nsm_appraise", "PCR0 is all zeros: the enclave runs in debug mode")); }
+    if (policy.pcrs_hex.len() == 0) { return Err(Refused("nsm_appraise", "the policy names no PCR")); }
+    Str bad = nsm_policy_miss(d, policy.pcrs_hex, 0);
+    if (bad != "") { return Err(Refused("nsm_appraise", bad)); }
+    return Ok(Appraised {.v = v, .policy = "NsmPolicy"});
+}
+
+pub List(Int) nsm_pcr(NsmDocument d, Int idx) { return nsm_pcr_at(d, idx, 0); }
+
+List(Int) nsm_pcr_at(NsmDocument d, Int idx, Int i) {
+    List(Int) none = [];
+    if (i >= d.pcr_index.len()) { return none; }
+    if (d.pcr_index[i] == idx) { return d.pcrs[i]; }
+    return nsm_pcr_at(d, idx, i + 1);
+}
+
+Bool nsm_zero(List(Int) b, Int i) { return i >= b.len() || (b[i] == 0 && nsm_zero(b, i + 1)); }
+
+Str nsm_policy_miss(NsmDocument d, List(Str) want, Int i) {
+    if (i >= want.len()) { return ""; }
+    List(Str) kv = str_split(want[i], "=");
+    if (kv.len() != 2 || !str_is_int(kv[0])) { return "the policy entry `" + want[i] + "` is not index=hex"; }
+    List(Int) got = nsm_pcr(d, str_parse_int(kv[0]));
+    if (got.len() == 0 || hex_encode(got) != str_to_lower(kv[1])) { return "PCR" + kv[0] + " is not the policy's"; }
+    return nsm_policy_miss(d, want, i + 1);
+}

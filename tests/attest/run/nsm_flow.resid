@@ -1,0 +1,100 @@
+import "verify/core.resid";
+import "verify/nsm.resid";
+import "verify/aws_anchors.resid";
+import "verify/seal.resid";
+import "verify/testing.resid";
+import "challenge.resid";
+import "challenge_bind.resid";
+import "crypto.resid";
+import "cose.resid";
+import "cosesig.resid";
+import "ecdsa.resid";
+import "hash.resid";
+import "hpke.resid";
+import "hpkeg.resid";
+import "random.resid";
+
+@requires(filesystem(readonly))
+List(Int) rd(Str p) { return filesystem.read_bytes("fixtures/" + p); }
+
+List(Int) pcr(Int fill) { return pcr_at(fill, 48, []); }
+List(Int) pcr_at(Int fill, Int n, List(Int) acc) { return if (n <= 0) { acc } else { pcr_at(fill, n - 1, acc.concat([fill])) }; }
+
+// A document as the NSM would write it, signed with the test leaf key;
+// `extra` adds a field after the others (an unknown or repeated key).
+@requires(filesystem(readonly))
+List(UInt(8)) doc(List(Int) nonce, Int pcr0, Str extra) {
+    Int n = if (extra == "") { 9 } else { 10 };
+    List(Int) m0 = cbe_map(n, []);
+    List(Int) m1 = cbe_text("test-enclave-0123", cbe_text("module_id", m0));
+    List(Int) m2 = cbe_text("SHA384", cbe_text("digest", m1));
+    List(Int) m3 = cbe_uint(1791000000000, cbe_text("timestamp", m2));
+    List(Int) m4 = cbe_bytes(pcr(3), cbe_uint(2, cbe_bytes(pcr(2), cbe_uint(1, cbe_bytes(pcr(pcr0), cbe_uint(0, cbe_map(3, cbe_text("pcrs", m3))))))));
+    List(Int) m5 = cbe_bytes(rd("nitro-leaf.der"), cbe_text("certificate", m4));
+    List(Int) m6 = cbe_bytes(rd("nitro-int.der"), cbe_bytes(rd("nitro-root.der"), cbe_array(2, cbe_text("cabundle", m5))));
+    List(Int) m7 = cbe_head(7, 22, cbe_text("public_key", m6));
+    List(Int) m8 = cbe_head(7, 22, cbe_text("user_data", m7));
+    List(Int) m9 = cbe_bytes(nonce, cbe_text("nonce", m8));
+    List(Int) payload = if (extra == "") { m9 } else { cbe_bytes([1], cbe_text(extra, m9)) };
+    return chal_bytes(cose_sign1_ecdsa(P384, rd("nitro-leaf-d.bin"), payload, []));
+}
+
+@policy
+NsmPolicy enclave_policy() { return NsmPolicy {.pcrs_hex = ["0=" + hex_encode(pcr(1)), "1=" + hex_encode(pcr(2)), "2=" + hex_encode(pcr(3))]}; }
+
+@decides(accept = [test_nitro_root], appraised = enclave_policy, identity = key_bound)
+@requires(declassify)
+Result(HpkeMessage, VerifyError) release(List(UInt(8)) d, ChallengeRecord issued, List(Int) guest_pk, List(Secret(UInt(8))) key, List(Secret(UInt(8))) sender) {
+    Verified(NsmDocument) v = nsm_verify_key_bound(d, issued, test_nitro_root(), test_time(1791000000), 32, guest_pk)?;
+    Appraised(NsmDocument) a = nsm_appraise(v, enclave_policy())?;
+    return seal_to_evidence(a, 32, guest_pk, key, sender);
+}
+
+@requires(declassify)
+List(Int) sec_pub(List(Secret(UInt(8))) k, Int i, ListBuf(Int) acc) { return if (i >= k.len()) { acc.finish() } else { sec_pub(k, i + 1, acc.push((Int) declassify(k[i], "test output"))) }; }
+
+@requires(filesystem(readonly))
+Str check(Str what, List(UInt(8)) d, Anchor root, Int at) {
+    return what + ": " + match (test_nsm_check(d, root, test_time(at))) { Ok(x) => f"ok {x.module_id}, {x.pcr_index.len()} PCRs", Err(e) => verify_error_text(e) };
+}
+
+@requires(filesystem(readonly))
+Str fresh(Str what, List(UInt(8)) d, ChallengeRecord c, Bool appraise) {
+    Result(Verified(NsmDocument), VerifyError) v = nsm_verify(d, c, test_nitro_root(), test_time(1791000000));
+    Str s = match (v) {
+        Ok(x) => if (appraise) { match (nsm_appraise(x, enclave_policy())) { Ok(a) => "appraised", Err(e) => verify_error_text(e) } } else { f"fresh, quals {x.quals}" },
+        Err(e) => verify_error_text(e),
+    };
+    return what + ": " + s;
+}
+
+@requires(filesystem(readonly), declassify)
+Int main() {
+    List(UInt(8)) real = chal_bytes(rd("aws-nitro-doc.bin"));
+    println(check("real", real, aws_nitro_root(), 1725719860));
+    println(check("real, next day", real, aws_nitro_root(), 1725806260));
+    println(check("real, tampered", real[0..300].concat([real[300] ^ (UInt(8)) 1]).concat(real[301..real.len()]), aws_nitro_root(), 1725719860));
+    println(check("real, test root", real, test_nitro_root(), 1725719860));
+    println(check("real debug enclave", chal_bytes(rd("aws-nitro-doc-debug.bin")), aws_nitro_root(), 1725719887));
+    ChallengeRecord c1 = challenge_issue(64);
+    println(fresh("fresh", doc(chal_ints(challenge_value(c1)), 1, ""), c1, false));
+    println(fresh("again", doc(chal_ints(challenge_value(c1)), 1, ""), c1, false));
+    ChallengeRecord c2 = challenge_issue(64);
+    println(fresh("appraise", doc(chal_ints(challenge_value(c2)), 1, ""), c2, true));
+    ChallengeRecord c3 = challenge_issue(64);
+    println(fresh("debug enclave", doc(chal_ints(challenge_value(c3)), 0, ""), c3, true));
+    ChallengeRecord c4 = challenge_issue(64);
+    println(fresh("unknown field", doc(chal_ints(challenge_value(c4)), 1, "extra"), c4, false));
+    println(fresh("repeated field", doc(chal_ints(challenge_value(c4)), 1, "digest"), c4, false));
+    println(fresh("other nonce", doc(chal_ints(challenge_value(challenge_issue(64))), 1, ""), c4, false));
+    HpkeKeyPairG(Secret(UInt(8))) kp = hpkeg_generate_keypair(32);
+    ChallengeRecord c5 = challenge_issue(64);
+    List(UInt(8)) bound = match (challenge_with_key(challenge_value(c5), 32, kp.sk)) { Ok(b) => b, Err(e) => [] };
+    List(Secret(UInt(8))) key = random_secret(32);
+    Str r = match (release(doc(chal_ints(bound), 1, ""), c5, kp.pk, key, secret_bytes(rd("sender-sk.bin")))) {
+        Ok(m) => match (open_released(32, kp.sk, m, test_sender())) { Ok(v) => if (hex_encode(sec_pub(v.value, 0, ListBuf())) == hex_encode(sec_pub(key, 0, ListBuf()))) { "released and opened: same key" } else { "KEY DIFFERS" }, Err(e) => "open: " + verify_error_text(e) },
+        Err(e) => "release: " + verify_error_text(e),
+    };
+    println(r);
+    return 0;
+}

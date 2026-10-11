@@ -1,0 +1,3 @@
+ok version 2 vmpl 0
+bad signature: the VCEK did not sign this report
+bad certificate chain: the ARK did not sign the ASK, or one is not current

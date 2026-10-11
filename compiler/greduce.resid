@@ -3002,7 +3002,7 @@ GY gy_fst(GY s, GYF f) {
 
 YR gy_fres(GYF f, GY st) {
     GY s1 = gy_fst(st, f);
-    return YR {.how = f.how, .v = f.v, .ty = f.ty, .st = s1};
+    return YR {.how = f.how, .v = f.v, .ty = f.ty, .st = s1, .tfi = f.tfi, .tvs = f.tvs, .tts = f.tts};
 }
 
 GYF gy_items_at(GYC c, Int bk, Str name, Str ty, List(Str) items, Int i, RdE env, GY st, GYF f) {

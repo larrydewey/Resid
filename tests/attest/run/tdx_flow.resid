@@ -1,0 +1,117 @@
+import "verify/core.resid";
+import "verify/tdx.resid";
+import "verify/intel_anchors.resid";
+import "verify/seal.resid";
+import "verify/testing.resid";
+import "challenge.resid";
+import "challenge_bind.resid";
+import "crypto.resid";
+import "ecdsa.resid";
+import "hash.resid";
+import "hpke.resid";
+import "hpkeg.resid";
+import "random.resid";
+
+@requires(filesystem(readonly))
+List(Int) rd(Str p) { return filesystem.read_bytes("fixtures/" + p); }
+
+// A test quote: the header, the body with this REPORTDATA (and these
+// TD_ATTRIBUTES), signed by the test attestation key, then the QE report
+// and PCK chain the fixtures prepared.
+@requires(filesystem(readonly))
+List(UInt(8)) quote(List(Int) reportdata, Int attrs) {
+    List(Int) b0 = rd("tdx-body.bin");
+    List(Int) ab = [attrs & 255, (attrs >> 8) & 255, (attrs >> 16) & 255, (attrs >> 24) & 255, 0, 0, 0, 0];
+    List(Int) body = b0[0..120].concat(ab).concat(b0[128..520]).concat(reportdata).concat(zeros(64 - reportdata.len()));
+    List(Int) signed = rd("tdx-header.bin").concat(body);
+    List(Int) tail = rd("tdx-sigdata-tail.bin");
+    List(Int) qsig = ecdsa_sign_raw(P256, Sha256, rd("tdx-ak-d.bin"), signed);
+    return chal_bytes(signed.concat(tail[0..4]).concat(qsig).concat(tail[4..tail.len()]));
+}
+
+List(Int) zeros(Int n) { return if (n <= 0) { [] } else { [0].concat(zeros(n - 1)) }; }
+
+@policy
+TdxPolicy td_policy() { return TdxPolicy {.mrtd_hex = [hex_encode(sha384_bytes(bytes_of("resid test td")))], .rtmrs_hex = ["0=" + hex_encode(zeros(48))], .mrseam_hex = [], .accepted_statuses = []}; }
+
+@policy
+TdxPolicy hardening_ok() { return TdxPolicy {.mrtd_hex = [hex_encode(sha384_bytes(bytes_of("resid test td")))], .rtmrs_hex = [], .mrseam_hex = [], .accepted_statuses = ["SWHardeningNeeded"]}; }
+
+@requires(filesystem(readonly))
+TdxCollateral col(Str tcb) { return col_crl(tcb, "tdx-pck-crl.der"); }
+
+@requires(filesystem(readonly))
+TdxCollateral col_crl(Str tcb, Str crl) { return TdxCollateral {.tcb_info = chal_bytes(rd(tcb)), .tcb_chain = chal_bytes(rd("tdx-tcb-chain.pem")), .qe_identity = chal_bytes(rd("tdx-qe-identity.json")), .qe_chain = chal_bytes(rd("tdx-tcb-chain.pem")), .pck_crl = chal_bytes(rd(crl)), .root_crl = chal_bytes(rd("tdx-root-crl.der"))}; }
+
+@decides(accept = [test_sgx_root], appraised = td_policy, identity = key_bound)
+@requires(declassify)
+Result(HpkeMessage, VerifyError) release(List(UInt(8)) q, ChallengeRecord issued, TdxCollateral c, List(Int) guest_pk, List(Secret(UInt(8))) key, List(Secret(UInt(8))) sender) {
+    Verified(TdxQuote) v = tdx_verify_quote_key_bound(q, issued, test_sgx_root(), test_time(1791000000), 32, guest_pk)?;
+    Appraised(TdxQuote) a = tdx_appraise(v, td_policy(), c, test_sgx_root(), test_time(1791000000))?;
+    return seal_to_evidence(a, 32, guest_pk, key, sender);
+}
+
+@requires(filesystem(readonly))
+Str real(Str what, Str f, Anchor root, Int at) {
+    return what + ": " + match (test_tdx_check(chal_bytes(rd(f)), root, test_time(at))) { Ok(b) => "ok, MRTD " + str_slice(hex_encode(chal_ints(b.body.mrtd)), 0, 16) + "...", Err(e) => verify_error_text(e) };
+}
+
+@requires(filesystem(readonly))
+Str fresh(Str what, List(UInt(8)) q, ChallengeRecord c) { return fresh_with(what, q, c, "tdx-tcb-info.json", false); }
+
+@requires(filesystem(readonly))
+Str fresh_with(Str what, List(UInt(8)) q, ChallengeRecord c, Str tcb, Bool lenient) {
+    return what + ": " + match (tdx_verify_quote(q, c, test_sgx_root(), test_time(1791000000))) {
+        Ok(v) => match (if (lenient) { tdx_appraise(v, hardening_ok(), col(tcb), test_sgx_root(), test_time(1791000000)) } else { tdx_appraise(v, td_policy(), col(tcb), test_sgx_root(), test_time(1791000000)) }) { Ok(a) => "appraised", Err(e) => verify_error_text(e) },
+        Err(e) => verify_error_text(e),
+    };
+}
+
+// Intel's sample collateral against Intel's v4 quote (go-tdx-guest's
+// negative case: the TD's TEE_TCB_SVN reaches no level).
+@requires(filesystem(readonly))
+Str intel_collateral(Int at) {
+    Result(TdxQuote, VerifyError) q = test_tdx_check(chal_bytes(rd("tdx-quote-v4.bin")), intel_sgx_root(), test_time(at));
+    TdxCollateral c = TdxCollateral {.tcb_info = chal_bytes(rd("intel-tcb-info.json")), .tcb_chain = chal_bytes(rd("intel-tcb-chain.pem")), .qe_identity = chal_bytes(rd("intel-qe-identity.json")), .qe_chain = chal_bytes(rd("intel-qe-chain.pem")), .pck_crl = chal_bytes(rd("intel-pck-crl.der")), .root_crl = chal_bytes(rd("intel-root-crl.der"))};
+    return match (q) { Ok(x) => tdx_collateral_status(x, c, intel_sgx_root(), test_time(at)), Err(e) => verify_error_text(e) };
+}
+
+@requires(declassify)
+List(Int) sec_pub(List(Secret(UInt(8))) k, Int i, ListBuf(Int) acc) { return if (i >= k.len()) { acc.finish() } else { sec_pub(k, i + 1, acc.push((Int) declassify(k[i], "test output"))) }; }
+
+@requires(filesystem(readonly), declassify)
+Int main() {
+    println(real("real v4", "tdx-quote-v4.bin", intel_sgx_root(), 1688173200));
+    println(real("real v5", "tdx-quote-v5.bin", intel_sgx_root(), 1770080400));
+    println(real("real v4, test root", "tdx-quote-v4.bin", test_sgx_root(), 1688173200));
+    List(Int) q4 = rd("tdx-quote-v4.bin");
+    println(real("real v4, tampered body", "tdx-quote-v4.bin", intel_sgx_root(), 1688173200) + " / " + match (test_tdx_check(chal_bytes(q4[0..200].concat([q4[200] ^ 1]).concat(q4[201..q4.len()])), intel_sgx_root(), test_time(1688173200))) { Ok(b) => "TAMPERED ACCEPTED", Err(e) => verify_error_text(e) });
+    println("real v4, trailing bytes: " + match (test_tdx_check(chal_bytes(q4.concat([10, 10])), intel_sgx_root(), test_time(1688173200))) { Ok(b) => "TRAILING ACCEPTED", Err(e) => verify_error_text(e) });
+    ChallengeRecord c1 = challenge_issue(64);
+    println(fresh("fresh", quote(chal_ints(challenge_value(c1)), 268435456), c1));
+    println(fresh("again", quote(chal_ints(challenge_value(c1)), 268435456), c1));
+    ChallengeRecord c2 = challenge_issue(64);
+    println(fresh("debug TD", quote(chal_ints(challenge_value(c2)), 268435457), c2));
+    ChallengeRecord c3 = challenge_issue(64);
+    println(fresh("SEPT_VE not disabled", quote(chal_ints(challenge_value(c3)), 0), c3));
+    ChallengeRecord c4 = challenge_issue(64);
+    println(fresh("other challenge", quote(chal_ints(challenge_value(challenge_issue(64))), 268435456), c4));
+    ChallengeRecord c6 = challenge_issue(64);
+    println(fresh_with("TCB level SWHardeningNeeded", quote(chal_ints(challenge_value(c6)), 268435456), c6, "tdx-tcb-info-old.json", false));
+    ChallengeRecord c7 = challenge_issue(64);
+    println(fresh_with("SWHardeningNeeded, accepted by the policy", quote(chal_ints(challenge_value(c7)), 268435456), c7, "tdx-tcb-info-old.json", true));
+    ChallengeRecord c8 = challenge_issue(64);
+    println("revoked PCK: " + match (tdx_verify_quote(quote(chal_ints(challenge_value(c8)), 268435456), c8, test_sgx_root(), test_time(1791000000))) { Ok(v) => match (tdx_appraise(v, td_policy(), col_crl("tdx-tcb-info.json", "tdx-pck-crl-revoked.der"), test_sgx_root(), test_time(1791000000))) { Ok(a) => "APPRAISED", Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) });
+    println("Intel collateral, v4 quote: " + intel_collateral(1688173200));
+    println("Intel collateral, after nextUpdate: " + intel_collateral(1700000000));
+    HpkeKeyPairG(Secret(UInt(8))) kp = hpkeg_generate_keypair(32);
+    ChallengeRecord c5 = challenge_issue(64);
+    List(Int) bound = chal_ints(match (challenge_with_key(challenge_value(c5), 32, kp.sk)) { Ok(b) => b, Err(e) => [] });
+    List(Secret(UInt(8))) key = random_secret(32);
+    Str r = match (release(quote(bound, 268435456), c5, col("tdx-tcb-info.json"), kp.pk, key, secret_bytes(rd("sender-sk.bin")))) {
+        Ok(m) => match (open_released(32, kp.sk, m, test_sender())) { Ok(v) => if (hex_encode(sec_pub(v.value, 0, ListBuf())) == hex_encode(sec_pub(key, 0, ListBuf()))) { "released and opened: same key" } else { "KEY DIFFERS" }, Err(e) => "open: " + verify_error_text(e) },
+        Err(e) => "release: " + verify_error_text(e),
+    };
+    println(r);
+    return 0;
+}

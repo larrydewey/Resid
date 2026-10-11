@@ -1124,7 +1124,7 @@ Str ek_dbg_sums(EkC c, EkT t, List(Int) fs, Int i, Str pat, StrBuf acc) {
 
 Str ek_warn_text(Str msg, Kg g, Int at, Str src, Str smap) { return ek_warn_code("E0270", msg, g, at, src, smap); }
 
-Str ek_warn_code(Str code, Str msg, Kg g, Int at, Str src, Str smap) {
+pub Str ek_warn_code(Str code, Str msg, Kg g, Int at, Str src, Str smap) {
     Int pos = g.ns[at].ep;
     PosInfo pi = pos_to_line_col(src, pos - 1);
     DiagAt w = diag_where(gm_smap(smap), pi.line);

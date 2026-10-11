@@ -25,7 +25,9 @@
 // A field: its name and type text, `@check` conditions with their
 // constructors ("" for the default error), its `@len` ("" none), or the
 // size of an `@reserved(n)` (name ""). pos: where the field starts.
-type LyF = { Str name; Str ty; List(Str) checks; List(Str) ctors; Str len; Int rsv; Int pos; };
+// origin: `@measured`, `@firmware`, `@relayed` or `@host` ("" none; in a
+// `@signed` type that counts as relayed, PLAN-attestation.md §3.3).
+type LyF = { Str name; Str ty; List(Str) checks; List(Str) ctors; Str len; Int rsv; Int pos; Str origin; };
 
 // A layout type: name, byte order ("c_abi", "le", "be"), fields, position.
 type LyT = { Str name; Str kind; List(LyF) fs; Int pos; };
@@ -145,7 +147,7 @@ LyS ly_fields(Str s, Int i, Int n, Str name, Str kind, Int at, List(LyF) acc, Ly
         LyT ty = LyT {.name = name, .kind = kind, .fs = acc, .pos = at};
         return LyS {.ts = st.ts.concat([ty]), .out = o.concat(["}"]), .i = j + 1, .code = "", .err = "", .at = -1};
     }
-    LyF f0 = LyF {.name = "", .ty = "", .checks = [], .ctors = [], .len = "", .rsv = 0, .pos = j};
+    LyF f0 = LyF {.name = "", .ty = "", .checks = [], .ctors = [], .len = "", .rsv = 0, .pos = j, .origin = ""};
     return ly_field(s, j, n, name, kind, at, acc, f0, LyS {.ts = st.ts, .out = o, .i = j, .code = "", .err = "", .at = -1});
 }
 
@@ -153,6 +155,13 @@ LyS ly_fields(Str s, Int i, Int n, Str name, Str kind, Int at, List(LyF) acc, Ly
 LyS ly_field(Str s, Int j, Int n, Str name, Str kind, Int at, List(LyF) acc, LyF f, LyS st) {
     Int i = ly_skip_ws(s, j, n);
     List(Str) o = ly_copy(st.out, s, j, i);
+    Int ie = ly_ident_end(s, i + 1, n);
+    Str bare = if (i < n && str_char_at(s, i) == 64) { str_slice(s, i + 1, ie) } else { "" };
+    if (bare == "measured" || bare == "firmware" || bare == "relayed" || bare == "host") {
+        if (f.origin != "") { return ly_bad(st, "E0272", "a field has at most one origin (@measured, @firmware, @relayed or @host)", i); }
+        LyF fo = LyF {.name = f.name, .ty = f.ty, .checks = f.checks, .ctors = f.ctors, .len = f.len, .rsv = f.rsv, .pos = f.pos, .origin = bare};
+        return ly_field(s, ie, n, name, kind, at, acc, fo, LyS {.ts = st.ts, .out = ly_blank(o, s, i, ie), .i = ie, .code = "", .err = "", .at = -1});
+    }
     if (i < n && str_char_at(s, i) == 64) {
         Int p = ly_char(s, 40, i, n);
         if (p < 0) { return ly_bad(st, "E0272", "a field annotation needs parentheses", i); }
@@ -165,24 +174,24 @@ LyS ly_field(Str s, Int j, Int n, Str name, Str kind, Int at, List(LyF) acc, LyF
         if (an == "check") {
             List(Str) parts = ly_split_top(arg);
             if (parts.len() == 0 || parts.len() > 2) { return ly_bad(st, "E0272", "@check takes a condition and, optionally, a DeviceError constructor", i); }
-            LyF f2 = LyF {.name = f.name, .ty = f.ty, .checks = f.checks.concat([parts[0]]), .ctors = f.ctors.concat([if (parts.len() == 2) { parts[1] } else { "" }]), .len = f.len, .rsv = f.rsv, .pos = f.pos};
+            LyF f2 = LyF {.name = f.name, .ty = f.ty, .checks = f.checks.concat([parts[0]]), .ctors = f.ctors.concat([if (parts.len() == 2) { parts[1] } else { "" }]), .len = f.len, .rsv = f.rsv, .pos = f.pos, .origin = f.origin};
             return ly_field(s, e, n, name, kind, at, acc, f2, st2);
         }
         if (an == "len") {
             if (f.len != "") { return ly_bad(st, "E0272", "a field has at most one @len", i); }
-            LyF f2 = LyF {.name = f.name, .ty = f.ty, .checks = f.checks, .ctors = f.ctors, .len = arg, .rsv = f.rsv, .pos = f.pos};
+            LyF f2 = LyF {.name = f.name, .ty = f.ty, .checks = f.checks, .ctors = f.ctors, .len = arg, .rsv = f.rsv, .pos = f.pos, .origin = f.origin};
             return ly_field(s, e, n, name, kind, at, acc, f2, st2);
         }
         if (an == "reserved") {
             if (!str_is_int(arg) || str_parse_int(arg) <= 0) { return ly_bad(st, "E0272", "@reserved(n) takes a positive byte count", i); }
             Int sc = ly_skip_ws(s, e, n);
             if (sc >= n || str_char_at(s, sc) != 59) { return ly_bad(st, "E0272", "@reserved(n) stands alone: `@reserved(" + arg + ");`", i); }
-            if (f.checks.len() > 0 || f.len != "") { return ly_bad(st, "E0272", "@reserved takes no other annotation", i); }
-            LyF r = LyF {.name = "", .ty = "", .checks = [], .ctors = [], .len = "", .rsv = str_parse_int(arg), .pos = i};
+            if (f.checks.len() > 0 || f.len != "" || f.origin != "") { return ly_bad(st, "E0272", "@reserved takes no other annotation", i); }
+            LyF r = LyF {.name = "", .ty = "", .checks = [], .ctors = [], .len = "", .rsv = str_parse_int(arg), .pos = i, .origin = ""};
             List(Str) o3 = ly_blank(ob, s, e, sc + 1);
             return ly_fields(s, sc + 1, n, name, kind, at, acc.concat([r]), LyS {.ts = st.ts, .out = o3, .i = sc + 1, .code = "", .err = "", .at = -1});
         }
-        return ly_bad(st, "E0272", "unknown field annotation @" + an + " (a layout field takes @check, @len and @reserved)", i);
+        return ly_bad(st, "E0272", "unknown field annotation @" + an + " (a layout field takes @check, @len, @reserved and an origin: @measured, @firmware, @relayed or @host)", i);
     }
     Int sc = ly_char(s, 59, i, n);
     Int cb = ly_char(s, 125, i, n);
@@ -190,9 +199,14 @@ LyS ly_field(Str s, Int j, Int n, Str name, Str kind, Int at, List(LyF) acc, LyF
     Str decl = str_trim(str_slice(s, i, sc));
     Int sp = ly_last_space(decl, str_len(decl) - 1);
     if (sp < 0) { return ly_bad(st, "E0272", "a layout field is `Type name;`", i); }
-    LyF f2 = LyF {.name = str_slice(decl, sp + 1, str_len(decl)), .ty = str_trim(str_slice(decl, 0, sp)), .checks = f.checks, .ctors = f.ctors, .len = f.len, .rsv = 0, .pos = f.pos};
+    LyF f2 = LyF {.name = str_slice(decl, sp + 1, str_len(decl)), .ty = str_trim(str_slice(decl, 0, sp)), .checks = f.checks, .ctors = f.ctors, .len = f.len, .rsv = 0, .pos = f.pos, .origin = f.origin};
     List(Str) o4 = ly_copy(o, s, i, sc + 1);
     return ly_fields(s, sc + 1, n, name, kind, at, acc.concat([f2]), LyS {.ts = st.ts, .out = o4, .i = sc + 1, .code = "", .err = "", .at = -1});
+}
+
+Int ly_ident_end(Str s, Int i, Int n) {
+    if (i >= n || !ly_ident(str_char_at(s, i))) { return i; }
+    return ly_ident_end(s, i + 1, n);
 }
 
 Int ly_last_space(Str s, Int i) {
@@ -497,7 +511,16 @@ Str ly_gen_type(List(LyT) ts, LyT t) {
     StrBuf b6 = b5.push("pub Result(" + tn + ", DeviceError) " + sn + "_parse(List(UInt(8)) __ly_b) {\n    " + tn + "__At __ly_r = " + sn + "_parse_at(__ly_b, 0)?;\n" + exact + "    return Ok(__ly_r.v);\n}\n");
     StrBuf b7 = b6.push("pub Result(List(UInt(8)), DeviceError) " + sn + "_bytes(" + tn + " __ly_r) {\n    List(UInt(8)) __ly_start = [];\n");
     StrBuf b8 = ly_bytes_fields(ts, t, 0, 0, b7);
-    return b8.push(f"    return Ok(__ly_o{n});\n" + "}\n").finish();
+    // Each field's origin, for integrity labels (PLAN-attestation.md §3.3).
+    Str orig = ly_origins(t.fs, 0, StrBuf());
+    Str ofn = if (orig == "") { "" } else { "@layout_origins(" + tn + ":" + orig + ")\npub Int " + sn + "__origins() { return 0; }\n" };
+    return b8.push(f"    return Ok(__ly_o{n});\n" + "}\n").push(ofn).finish();
+}
+
+Str ly_origins(List(LyF) fs, Int i, StrBuf acc) {
+    if (i >= fs.len()) { return acc.finish(); }
+    if (fs[i].origin == "" || fs[i].rsv > 0) { return ly_origins(fs, i + 1, acc); }
+    return ly_origins(fs, i + 1, acc.push(fs[i].name + "=" + fs[i].origin + ";"));
 }
 
 // A c_abi type's field offsets, `<snake>__<field>_at()`, for the
@@ -553,4 +576,29 @@ pub LyR ly_expand(Str src) {
         return ly_fail(src, p[0], p[1], str_parse_int(p[2]));
     }
     return LyR {.text = text + ly_helpers() + ly_gen_all(st.ts, 0, StrBuf()), .code = "", .err = "", .at = -1};
+}
+
+// For compiler/attest.resid, which scans annotations the same way.
+pub Int ly_close_pub(Str s, Int i) { return ly_close(s, i, str_len(s), 0); }
+pub Int ly_find_pub(Str s, Str pat, Int i) { return ly_find_from(s, pat, i); }
+pub Bool ly_ident_pub(Int c) { return ly_ident(c); }
+pub Bool ly_line_start_pub(Str s, Int i) { return ly_line_start(s, i); }
+
+// The position after the brace group opening at i (s[i] == '{'), skipping
+// string literals and line comments; -1 when it does not close.
+pub Int ly_close_brace_pub(Str s, Int i) { return ly_brace(s, i, str_len(s), 0); }
+
+Int ly_brace(Str s, Int i, Int n, Int depth) {
+    if (i >= n) { return -1; }
+    Int c = str_char_at(s, i);
+    if (c == 34) { return ly_brace(s, ly_str_end(s, i + 1, n), n, depth); }
+    if (c == 47 && i + 1 < n && str_char_at(s, i + 1) == 47) { return ly_brace(s, ly_eol(s, i, n), n, depth); }
+    if (c == 123) { return ly_brace(s, i + 1, n, depth + 1); }
+    if (c == 125) { return if (depth == 1) { i + 1 } else { ly_brace(s, i + 1, n, depth - 1) }; }
+    return ly_brace(s, i + 1, n, depth);
+}
+
+Int ly_eol(Str s, Int i, Int n) {
+    if (i >= n || str_char_at(s, i) == 10) { return i; }
+    return ly_eol(s, i + 1, n);
 }

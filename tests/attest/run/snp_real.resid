@@ -1,0 +1,24 @@
+import "verify/core.resid";
+import "verify/snp.resid";
+import "verify/amd_anchors.resid";
+import "verify/testing.resid";
+import "challenge.resid";
+
+@requires(filesystem(readonly))
+List(UInt(8)) rd(Str p) { return chal_bytes(filesystem.read_bytes(p)); }
+
+@requires(filesystem(readonly))
+Int main() {
+    Str f = "fixtures/";
+    SnpCollateral col = SnpCollateral {.vcek_der = rd(f + "gsg-vcek.der"), .ask_der = rd(f + "amd-ask-milan.der"), .crl_der = rd(f + "amd-milan.crl")};
+    List(UInt(8)) rep = rd(f + "gsg-attestation.bin");
+    EvidenceTime t = test_time(1791000000);
+    Str a = match (test_snp_check(rep, amd_ark_milan(), col, t)) { Ok(r) => f"ok version {r.version} vmpl {r.vmpl}", Err(e) => verify_error_text(e) };
+    println(a);
+    List(UInt(8)) bad = rep[0..100].concat([rep[100] ^ (UInt(8)) 1]).concat(rep[101..rep.len()]);
+    Str b = match (test_snp_check(bad, amd_ark_milan(), col, t)) { Ok(r) => "tampered: accepted", Err(e) => verify_error_text(e) };
+    println(b);
+    Str c = match (test_snp_check(rep, amd_ark_genoa(), col, t)) { Ok(r) => "genoa: accepted", Err(e) => verify_error_text(e) };
+    println(c);
+    return 0;
+}

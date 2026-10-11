@@ -27,6 +27,7 @@ Int ch_accepted() { return 4; }
 Int ch_exported() { return 8; }
 Int ch_imported() { return 16; }
 Int ch_bound() { return 32; }
+Int ch_decided() { return 64; }
 
 Int ch_lock() {
     if (resid_raw_cas(ch_meta(), 0, 1)) { return 0; }
@@ -90,11 +91,13 @@ Int ch_put(Int nonce, Int life_s, Int imported) {
     return gen * ch_cap() + slot;
 }
 
-// op 2 accept by a verifier, 3 export as a token (lib/challenge.resid).
-// 0 done, 1 refused by the record's state, 2 gone (evicted or expired).
+// op 2 accept by a verifier, 3 export as a token (lib/challenge.resid),
+// 4 decide (a release on an accepted record, lib/verify/), 5 read the
+// state (100 + its bits). 0 done, 1 refused by the record's state, 2 gone
+// (evicted or expired).
 @export("resid_chal_mark", "i64(i64,i64)")
 pub Int rt_chal_mark(Int h, Int op) {
-    if (op != 2 && op != 3) { return 1; }
+    if (op != 2 && op != 3 && op != 4 && op != 5) { return 1; }
     _ = ch_lock();
     Int e = ch_live(h);
     Int r = if (e == 0) { 2 } else { ch_apply(e, op) };
@@ -119,9 +122,11 @@ Int ch_apply(Int e, Int op) {
     Bool imp = (st & ch_imported()) != 0;
     // An imported record serves only a verifier; an exported one is
     // accepted only through an import of its token (§6.8).
-    Bool ok = if (op == 1) { !spent && !acc && !exp && !imp } else if (op == 2) { !acc && !exp } else if (op == 3) { !spent && !acc && !exp && !imp } else { false };
+    if (op == 5) { return 100 + st; }
+    Bool dec = (st & ch_decided()) != 0;
+    Bool ok = if (op == 1) { !spent && !acc && !exp && !imp } else if (op == 2) { !acc && !exp } else if (op == 3) { !spent && !acc && !exp && !imp } else if (op == 4) { acc && !dec } else { false };
     if (!ok) { return 1; }
-    Int bit = if (op == 1) { ch_spent() } else if (op == 2) { ch_accepted() } else { ch_exported() };
+    Int bit = if (op == 1) { ch_spent() } else if (op == 2) { ch_accepted() } else if (op == 3) { ch_exported() } else { ch_decided() };
     _ = st64(e + 8, st | bit);
     return 0;
 }

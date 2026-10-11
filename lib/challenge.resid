@@ -70,3 +70,23 @@ pub Result(Bool, Str) challenge_accept_mark(ChallengeRecord c) {
     if (r == 0) { return Ok(true); }
     return Err(if (r == 2) { "challenge expired or evicted" } else { "challenge already accepted, or exported" });
 }
+
+// The record's state bits (2 spent, 4 accepted, 8 exported, 16 imported,
+// 32 bound, 64 decided), or -1 when it is gone or expired.
+@verify_internal
+pub Int challenge_state(ChallengeRecord c) { return challenge_state_h(c.handle); }
+
+@verify_internal
+pub Int challenge_state_h(Int handle) {
+    Int r = resid_chal_mark(handle, 5);
+    return if (r >= 100) { r - 100 } else { 0 - 1 };
+}
+
+// Mark an accepted record decided, once (PLAN-attestation.md §6.3): a
+// release primitive does, so one gate releases once.
+@verify_internal
+pub Result(Bool, Str) challenge_decide_mark(Int handle) {
+    Int r = resid_chal_mark(handle, 4);
+    if (r == 0) { return Ok(true); }
+    return Err(if (r == 2) { "challenge expired or evicted" } else { "this evidence already released, or was never accepted" });
+}
