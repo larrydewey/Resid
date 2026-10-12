@@ -26,8 +26,11 @@ import "../tls.resid";
 import "../clock.resid";
 import "../challenge.resid";
 
+/// The error every verification primitive fails with.
+/// Each case carries a message; `Refused` also names what refused.
 pub type VerifyError = BadLayout(Str) | BadChain(Str) | BadSignature(Str) | Stale(Str) | NotFresh(Str) | Refused(Str, Str);
 
+/// A one-line human-readable description of `e`.
 pub Str verify_error_text(VerifyError e) {
     return match e {
         BadLayout(m) => "bad layout: " + m,
@@ -41,15 +44,24 @@ pub Str verify_error_text(VerifyError e) {
 
 // ─── Qualifiers (§2) ────────────────────────────────────────────────
 
+/// The qualifier bit (1) for evidence fresh under a challenge record.
 pub Int q_fresh() { return 1; }
+/// The qualifier bit (2) for evidence verified without a challenge.
 pub Int q_delivered() { return 2; }
+/// The qualifier bit (4) for a value bound to an attester's key.
 pub Int q_key_bound() { return 4; }
+/// The qualifier bit (8) for a value bound to a channel's exporter.
 pub Int q_channel_bound() { return 8; }
+/// The qualifier bit (16) for a value sealed and opened locally.
 pub Int q_local() { return 16; }
+/// The qualifier bit (32) for a challenge issued for a stated purpose.
 pub Int q_rp_bound() { return 32; }
 
+/// Where an evidence time came from: the relying party, signed evidence,
+/// or the kernel's clock.
 pub type TimeSource = RelyingParty | SignedEvidence | Kernel;
 
+/// The name of the time source `s`, as written in the type.
 pub Str time_source_name(TimeSource s) { return match s { RelyingParty => "RelyingParty", SignedEvidence => "SignedEvidence", Kernel => "Kernel", }; }
 
 // ─── Evidence time (§3.4) ───────────────────────────────────────────
@@ -57,13 +69,18 @@ pub Str time_source_name(TimeSource s) { return match s { RelyingParty => "Relyi
 // build one, so a program can neither claim a source it did not use nor
 // pass a past time to make an expired certificate valid.
 
+/// A point in time certificates and evidence are judged at, with its source.
 @opaque("*")
 pub type EvidenceTime = { Instant at; TimeSource source; };
 
+/// The current time read from the kernel's clock, with source `Kernel`.
+/// Needs `clock(readonly)`.
 @requires(clock(readonly))
 pub EvidenceTime kernel_time() { return EvidenceTime {.at = clock_now(), .source = Kernel}; }
 
+/// The instant of the evidence time `t`.
 pub Instant evidence_time_at(EvidenceTime t) { return t.at; }
+/// Where the evidence time `t` came from.
 pub TimeSource evidence_time_source(EvidenceTime t) { return t.source; }
 
 // ─── Anchors (§3.1) ─────────────────────────────────────────────────
@@ -74,18 +91,20 @@ pub TimeSource evidence_time_source(EvidenceTime t) { return t.source; }
 // identity for `@decides` is the function, checked at compile time; here
 // the bytes are checked against the fingerprint at the first use.
 
+/// A trust anchor: a root certificate's DER bytes with its declared facts.
 @opaque("*")
 pub type Anchor = { Str id; Str kind; Str product; Str principal; List(Str) formats; List(Str) algorithms; List(Int) der; Str fingerprint; Str expires; };
 
-// What an @anchor function's body names; never called itself (E0281).
+/// What an @anchor function's body names; never called itself (E0281).
 pub Anchor anchor_der(List(Int) der) {
     rt_assert(false, "anchor_der outside an @anchor function: the compiler rewrites it there");
     return anchor_make("", der);
 }
 
-// meta: "name|kind|product|principal|formats|algorithms|fingerprint|expires",
-// lists comma-separated. Only the compiler's rewrite of an @anchor body
-// calls this (E0281).
+/// Builds an anchor from its facts and DER bytes.
+/// `meta` is "name|kind|product|principal|formats|algorithms|fingerprint|expires",
+/// lists comma-separated; aborts if malformed or the DER does not match the
+/// fingerprint. Only the compiler's rewrite of an @anchor body calls this (E0281).
 pub Anchor anchor_make(Str meta, List(Int) der) {
     List(Str) m = str_split(meta, "|");
     rt_assert(m.len() == 8, "anchor_make: malformed anchor facts");
@@ -95,17 +114,22 @@ pub Anchor anchor_make(Str meta, List(Int) der) {
 
 List(Str) anchor_list(Str s) { return if (s == "") { [] } else { str_split(s, ",") }; }
 
-// "sha256:<hex>" or "sha384:<hex>" over the DER bytes.
+/// Whether the fingerprint `fp` matches the DER bytes `der`.
+/// `fp` is "sha256:<hex>" or "sha384:<hex>" (hex case-insensitive); any
+/// other form is false.
 pub Bool anchor_fp_ok(Str fp, List(Int) der) {
     if (str_starts_with(fp, "sha256:")) { return str_to_lower(str_slice(fp, 7, str_len(fp))) == hex_encode(sha256_bytes(der)); }
     if (str_starts_with(fp, "sha384:")) { return str_to_lower(str_slice(fp, 7, str_len(fp))) == hex_encode(sha384_bytes(der)); }
     return false;
 }
 
+/// Whether the list `xs` contains `x`.
 pub Bool anchor_lists(List(Str) xs, Str x) { return anchor_lists_at(xs, x, 0); }
 Bool anchor_lists_at(List(Str) xs, Str x, Int i) { return i < xs.len() && (xs[i] == x || anchor_lists_at(xs, x, i + 1)); }
 
-// The anchor is past its `expires` date ("YYYY-MM-DD") at t.
+/// Whether the anchor `a` is past its `expires` date at `t`.
+/// The date is "YYYY-MM-DD", taken as midnight UTC; a date not ten
+/// characters long counts as expired.
 pub Bool anchor_expired(Anchor a, EvidenceTime t) {
     if (str_len(a.expires) != 10) { return true; }
     Int y = str_parse_int(str_slice(a.expires, 0, 4));
@@ -117,28 +141,36 @@ pub Bool anchor_expired(Anchor a, EvidenceTime t) {
 
 // ─── Verified and Appraised (§3, §4) ────────────────────────────────
 
-// anchors: the identities of the anchors the value rests on; quals: the
-// qualifier bits; record: the challenge record's handle (-1 none); kem,
-// pk: the key a KeyBound value is bound to; chan: the SHA-256 of the
-// exporter a ChannelBound value is bound to; principal: InGuest or
-// AboveKernel; format: the @signed layout type it was verified under.
+/// A value of T with how it was verified; only lib/verify/ builds one.
+/// anchors: the identities of the anchors the value rests on; quals: the
+/// qualifier bits; record: the challenge record's handle (-1 none); kem,
+/// pk: the key a KeyBound value is bound to; chan: the SHA-256 of the
+/// exporter a ChannelBound value is bound to; principal: InGuest or
+/// AboveKernel; format: the @signed layout type it was verified under.
 @opaque("*")
 pub type Verified(T) = { T value; List(Str) anchors; Int quals; Int record; Int kem; List(Int) pk; List(Int) chan; TimeSource time; Str principal; Str format; };
 
+/// A verified value that passed appraisal under the named `policy`.
 @opaque("*")
 pub type Appraised(T) = { Verified(T) v; Str policy; };
 
+/// The value inside the verified `v`.
 pub T verified_value(Verified(T) v) { return v.value; }
+/// The value inside the appraised `a`.
 pub T appraised_value(Appraised(T) a) { return a.v.value; }
+/// Whether `v` carries the fresh qualifier.
 pub Bool verified_fresh(Verified(T) v) { return (v.quals & q_fresh()) != 0; }
 
 // ─── Challenge binding (§6.1) ───────────────────────────────────────
-// Called inside every platform verifier, never by hand (@verify_internal,
-// E0280). `relayed` is the verified relayed field; `expected` the value it
-// must carry (the record's value, or the key- or channel-bound value made
-// from it). A record a request of this program spent must be bound to
-// this very evidence by a descriptor in `descs`. The record is marked
-// accepted, once, for the whole process.
+
+/// Checks that evidence carries the challenge `c` and marks it accepted.
+/// Called inside every platform verifier, never by hand (@verify_internal,
+/// E0280). `relayed` is the verified relayed field; `expected` the value it
+/// must carry (the record's value, or the key- or channel-bound value made
+/// from it), followed only by zeros. A record a request of this program
+/// spent must be bound to this very evidence by a descriptor in `descs`.
+/// The record is marked accepted, once, for the whole process. Returns
+/// Ok(true) when the record was spent, Ok(false) otherwise, else NotFresh.
 @verify_internal
 pub Result(Bool, VerifyError) vf_bind_challenge(List(UInt(8)) relayed, List(UInt(8)) expected, ChallengeRecord c, List(UInt(8)) evidence, List(Str) descs) {
     if (expected.len() == 0 || expected.len() > relayed.len()) { return Err(NotFresh("the challenge does not fit the evidence's field")); }
@@ -165,25 +197,28 @@ Result(Bool, VerifyError) vf_reply_bound(ChallengeRecord c, List(UInt(8)) eviden
 
 Bool vf_desc_in(List(Int) h, List(Str) descs, Int i) { return i < descs.len() && (eq_ints(h, sha256_bytes(bytes_of(descs[i]))) || vf_desc_in(h, descs, i + 1)); }
 
+/// Whether the integer lists `a` and `b` are equal (not constant time).
 pub Bool eq_ints(List(Int) a, List(Int) b) { return a.len() == b.len() && eq_ints_at(a, b, 0); }
 Bool eq_ints_at(List(Int) a, List(Int) b, Int i) { return i >= a.len() || (a[i] == b[i] && eq_ints_at(a, b, i + 1)); }
 
-// A verified value: what every platform verifier returns.
+/// A verified value: what every platform verifier returns.
 @verify_internal
 pub Verified(T) vf_make(T value, Anchor root, Int quals, ChallengeRecord c, Int kem, List(Int) pk, List(Int) chan, EvidenceTime t, Str format) {
     return Verified {.value = value, .anchors = [root.id], .quals = quals, .record = c.handle, .kem = kem, .pk = pk, .chan = chan, .time = t.source, .principal = root.principal, .format = format};
 }
 
-// The release primitives mark the gate's record decided: a second release
-// on one gate fails at run time, whatever the compiler concluded (§6.3).
+/// Marks the challenge record `record` decided, for the release primitives.
+/// A second release on one gate fails at run time, whatever the compiler
+/// concluded (§6.3); a negative `record` (none) is Ok(true).
 @verify_internal
 pub Result(Bool, VerifyError) vf_decide(Int record) {
     if (record < 0) { return Ok(true); }
     return match (challenge_decide_mark(record)) { Ok(b) => Ok(b), Err(m) => Err(NotFresh(m)) };
 }
 
-// An attester's public key of the right shape for the KEM: X25519 32
-// bytes; P-256 and P-384 an uncompressed point on the curve.
+/// Whether `pk` is an attester's public key of the right shape for `kem`.
+/// `kem` is the RFC 9180 KEM id: 32 (X25519) takes 32 bytes; 16 (P-256) and
+/// 17 (P-384) an uncompressed point on the curve. Other ids are false.
 pub Bool vf_pk_ok(Int kem, List(Int) pk) {
     if (kem == 32) { return pk.len() == 32; }
     if (kem == 16) { return pk.len() == 65 && ec_public_ok(P256, pk); }
@@ -191,9 +226,9 @@ pub Bool vf_pk_ok(Int kem, List(Int) pk) {
     return false;
 }
 
-// A connection's name: the SHA-256 of its TLS exporter (RFC 9266), which
-// both ends share and a party in the middle's two connections do not; a
-// one-way image of a secret, published.
+/// A connection's name: the SHA-256 of its TLS exporter (RFC 9266), which
+/// both ends share and a party in the middle's two connections do not; a
+/// one-way image of a secret, published (needs `declassify`).
 @requires(declassify)
 pub List(Int) vf_channel_id(ChannelExporter e) {
     List(Secret(UInt(8))) h = sha256g(secret_bytes(bytes_of("resid.channel.id.v1")).concat(e.x));
@@ -206,9 +241,9 @@ List(Int) vf_publish(List(Secret(UInt(8))) h, Int i, ListBuf(Int) acc) {
     return vf_publish(h, i + 1, acc.push(ct_public((Int) declassify(h[i], "a connection's name: a one-way image of its exporter"))));
 }
 
-// What `@decides(bind = "b")` runs first (compiler/attest.resid inserts
-// it): the decision's record was issued for b. A check on a record the
-// decision verifies anyway, so it is not one of its inputs (E0286).
+/// What `@decides(bind = "b")` runs first (compiler/attest.resid inserts
+/// it): the decision's record was issued for b. A check on a record the
+/// decision verifies anyway, so it is not one of its inputs (E0286).
 @primitive(check, inputs = [c])
 pub Result(Bool, VerifyError) decision_bind_check(ChallengeRecord c, Str b) {
     if (!eq_ints(chal_ints(c.bind), bytes_of(b))) { return Err(NotFresh("the challenge was issued for another purpose than `" + b + "`")); }

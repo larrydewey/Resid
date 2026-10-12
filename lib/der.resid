@@ -1,24 +1,28 @@
-// ─── lib/der.res — ASN.1 DER decoder in pure Resid ───────────────────
-// Foundation for x509 certificate parsing. Byte lists follow the lib
-// convention: index 0 is a dummy seed; data starts at index 1. All
-// positions are 1-based data indices matching that layout.
-//
-// Scope v1: TLV framing (tag class/number, short + long form lengths,
-// indefinite length rejected). No signature verification here.
+// ─── lib/der.resid — ASN.1 DER decoder in pure Resid ─────────────────
+// Foundation for X.509 certificate parsing (lib/x509.resid) and the other
+// DER readers. Two layers: a lenient TLV reader over positions (DerTlv,
+// der_next, der_content, der_oid_str), and a strict DER reader (Der,
+// der_at, der_child, der_sibling, der_uint, der_oid, der_bits) that checks
+// every element against its parent's bounds and refuses BER encodings.
+// Indefinite lengths are rejected by both. No signature verification here.
 
-// One parsed DER element.
-// tag: identifier octet; cls: 0=universal 1=app 2=context 3=private;
-// hdr_len: start-to-content bytes; val_len: content length (-1 malformed).
+/// One element parsed by the lenient reader.
+/// `tag` is the identifier octet, `cls` its class (0 universal, 1
+/// application, 2 context, 3 private), `hdr_len` the bytes from the start
+/// to the content, and `val_len` the content length (negative if malformed).
 type DerTlv = { Int tag; Int cls; Int hdr_len; Int val_len; };
 
 
+/// The class bits (0 to 3) of identifier octet `tag`.
 pub Int der_cls_of(Int tag) {
     Int sh = tag >> 6;
     return sh & 3;
 }
 
-// Long-form length: first octet 0x80|n gives n following big-endian
-// octets. Returns -1 for indefinite (0x80) or n > 4 (we cap at 32-bit).
+/// The length encoded by the length field starting at data index `pos`.
+/// Short form is one octet; long form 0x80|n is followed by n big-endian
+/// octets. Returns -1 for indefinite length (0x80), n > 4, a field that
+/// runs past the input, or `pos` out of range.
 pub Int der_read_len(List(Int) data, Int pos) {
     Int n = data.len() - 1;
     if (pos < 0 || pos > n) { return -1; }
@@ -34,6 +38,7 @@ pub Int der_read_len(List(Int) data, Int pos) {
 }
 
 
+/// `acc` extended by the big-endian bytes data[i..end] (inclusive).
 pub Int der_read_len_acc(List(Int) data, Int i, Int end, Int acc) {
     if (i > end) { return acc; }
     // Big-endian accumulate: acc = acc*256 + byte.
@@ -43,8 +48,8 @@ pub Int der_read_len_acc(List(Int) data, Int i, Int end, Int acc) {
     return der_read_len_acc(data, ni, end, step);
 }
 
-// Parse the element starting at data index `pos`. On malformed input the
-// returned val_len is negative.
+/// Parse the element starting at data index `pos`. On malformed input the
+/// returned val_len is negative.
 pub DerTlv der_next(List(Int) data, Int pos) {
     Int n = data.len() - 1;
     if (pos < 0 || pos > n) {
@@ -67,8 +72,8 @@ pub DerTlv der_next(List(Int) data, Int pos) {
     return DerTlv { .tag = tag, .cls = c, .hdr_len = hlen, .val_len = len };
 }
 
-// Bytes consumed by the length field at `pos` (which holds the first
-// length octet). 1 for short form; 1+cnt for long form.
+/// Bytes consumed by the length field at `pos` (which holds the first
+/// length octet). 1 for short form; 1+cnt for long form.
 pub Int der_hdr_len(List(Int) data, Int pos) {
     if (pos < 0 || pos >= data.len()) { return 1; }
     Int b0 = data[pos];
@@ -79,15 +84,24 @@ pub Int der_hdr_len(List(Int) data, Int pos) {
 }
 
 // Universal tag numbers used by x509.
+
+/// The universal tag number of INTEGER (2).
 pub Int der_tag_integer() { return 2; }
+/// The universal tag number of BIT STRING (3).
 pub Int der_tag_bit_string() { return 3; }
+/// The universal tag number of OCTET STRING (4).
 pub Int der_tag_octet_string() { return 4; }
+/// The universal tag number of NULL (5).
 pub Int der_tag_null() { return 5; }
+/// The universal tag number of OBJECT IDENTIFIER (6).
 pub Int der_tag_oid() { return 6; }
+/// The universal tag number of SEQUENCE (16).
 pub Int der_tag_sequence() { return 16; }
+/// The universal tag number of SET (17).
 pub Int der_tag_set() { return 17; }
 
-// True when the element at `pos` is a universal SEQUENCE/SET and well-formed.
+/// True when the element at `pos` is well-formed, universal, and has tag
+/// number `want_tag` (the low five bits of its identifier octet).
 pub Bool der_is_seq(List(Int) data, Int pos, Int want_tag) {
     DerTlv t = der_next(data, pos);
     if (t.val_len < 0) { return false; }
@@ -96,16 +110,17 @@ pub Bool der_is_seq(List(Int) data, Int pos, Int want_tag) {
     return low == want_tag;
 }
 
-// Content start (first value byte index) for the element at `pos`:
-// one identifier octet plus the length field; -1 when there is no
-// well-formed element there.
+/// Content start (first value byte index) for the element at `pos`:
+/// one identifier octet plus the length field; -1 when there is no
+/// well-formed element there.
 pub Int der_content_pos(List(Int) data, Int pos) {
     DerTlv t = der_next(data, pos);
     if (t.val_len < 0) { return 0 - 1; }
     return pos + t.hdr_len;
 }
 
-// Slice out the content bytes of the element at `pos` as a fresh list.
+/// The content bytes of the element at `pos` as a fresh list.
+/// Empty when there is no well-formed element there.
 pub List(Int) der_content(List(Int) data, Int pos) {
     DerTlv t = der_next(data, pos);
     if (t.val_len < 0) { return []; }
@@ -115,7 +130,7 @@ pub List(Int) der_content(List(Int) data, Int pos) {
 }
 
 
-// Bytes [start, stop] of data; empty when that is not inside the input.
+/// Bytes [start, stop] of data; empty when that is not inside the input.
 pub List(Int) der_slice_seeded(List(Int) data, Int start, Int stop) {
     List(Int) out = [];
     if (start < 0 || stop >= data.len() || stop < start) { return out; }
@@ -123,6 +138,7 @@ pub List(Int) der_slice_seeded(List(Int) data, Int start, Int stop) {
 }
 
 
+/// `acc` followed by bytes data[i..stop] (inclusive); `start` is unused.
 pub List(Int) der_slice_acc(List(Int) data, Int start, Int stop, Int i, List(Int) acc) {
     if (i > stop) { return acc; }
     Int b = data[i];
@@ -133,9 +149,9 @@ pub List(Int) der_slice_acc(List(Int) data, Int start, Int stop, Int i, List(Int
 
 // ─── Value decoders ──────────────────────────────────────────────────
 
-// Decode a DER INTEGER's content (big-endian, two's complement) assuming
-// it is non-negative and fits in 62 bits (serials we care about are small
-// enough after trimming; big serials return -1).
+/// The value of the INTEGER at `pos`, read as big-endian two's complement.
+/// Returns -1 when the element is malformed or empty, negative, or has more
+/// than eight content bytes. The encoding is not checked for minimality.
 pub Int der_int_value(List(Int) data, Int pos) {
     List(Int) c = der_content(data, pos);
     Int n = c.len() - 1;
@@ -146,6 +162,7 @@ pub Int der_int_value(List(Int) data, Int pos) {
 }
 
 
+/// `acc` extended by the big-endian bytes c[i..n] (inclusive).
 pub Int der_int_acc(List(Int) c, Int i, Int n, Int acc) {
     if (i > n) { return acc; }
     Int byte = c[i];
@@ -155,8 +172,10 @@ pub Int der_int_acc(List(Int) c, Int i, Int n, Int acc) {
 }
 
 // ─── OID rendering ───────────────────────────────────────────────────
-// Base-128 varint arcs; high bit = continuation. acc carries the dotted
-// string so far, accv the in-progress varint value.
+
+/// The dotted OID `acc` extended by the base-128 arcs in c[i..n].
+/// `accv` is the arc value in progress and `inarc` whether one is open.
+/// Returns "" when an arc would exceed 2^56.
 pub Str oid_rest(List(Int) c, Int i, Int n, Str acc, Int accv, Bool inarc) {
     if (i > n) {
         if (inarc) {
@@ -180,44 +199,62 @@ pub Str oid_rest(List(Int) c, Int i, Int n, Str acc, Int accv, Bool inarc) {
     return oid_rest(c, ni, n, joined, 0, false);
 }
 
-// Render an OBJECT IDENTIFIER content as dotted decimal "2.5.4.3".
-// First byte packs arcs 1 and 2: value < 40 → 1.x; 40..79 → 1.(v-40)
-// is impossible for arc1=1 only up to 39; standard rule:
-// v<40 → "1.v"; v<80 → "2.(v-40)"... arc1=1 covers v<40; v>=80 →
-// arc1=2, arc2=v-80; otherwise arc1=v/40.
+/// The OBJECT IDENTIFIER at `pos` as dotted decimal, such as "2.5.4.3".
+/// The first subidentifier (which may span several octets) splits into the
+/// first two arcs: below 80 as `v / 40` and `v % 40`, else `2` and `v - 80`.
+/// Returns "" when the element is malformed or empty, an arc does not end,
+/// or an arc passes 2^56. `der_oid` is the strict form.
 pub Str der_oid_str(List(Int) data, Int pos) {
     List(Int) c = der_content(data, pos);
     Int n = c.len() - 1;
     if (n < 0) { return ""; }
-    Int b0 = c[0];
-    Int raw1 = b0 / 40;
-    Int prod = raw1 * 40;
-    Int sub40 = b0 - 40;
-    Int rem0 = b0 - prod;
-    Bool big = raw1 > 2;
-    Int arc1 = if (big) { 2 } else { raw1 };
-    Int rem = if (big) { sub40 } else { rem0 };
-    Str head = f"{arc1}.{rem}";
     if ((c[n] & 128) != 0) { return ""; }
-    return oid_rest(c, 1, n, head, 0, false);
+    Int e = oid_first_end(c, 0, n);
+    if (e < 0) { return ""; }
+    Int v = oid_first_val(c, 0, e, 0);
+    if (v < 0) { return ""; }
+    Str head = if (v < 80) { f"{v / 40}.{v % 40}" } else { f"2.{v - 80}" };
+    return oid_rest(c, e + 1, n, head, 0, false);
+}
+
+/// The index of the last octet of the subidentifier starting at `i`, or -1
+/// when none ends by `n`.
+pub Int oid_first_end(List(Int) c, Int i, Int n) {
+    if (i > n) { return 0 - 1; }
+    if ((c[i] & 128) == 0) { return i; }
+    return oid_first_end(c, i + 1, n);
+}
+
+/// The value of the subidentifier in octets `i` to `e`, `acc` carried in;
+/// -1 past 2^56.
+pub Int oid_first_val(List(Int) c, Int i, Int e, Int acc) {
+    if (acc > 562949953421311) { return 0 - 1; }
+    Int v = acc * 128 + (c[i] & 127);
+    if (i >= e) { return v; }
+    return oid_first_val(c, i + 1, e, v);
 }
 
 // ─── Strict DER reader ───────────────────────────────────────────────
 //
-// The functions above take positions on faith and index past the end of
-// a truncated input. These do not: every element is checked against the
+// The functions above are lenient: they accept non-minimal lengths and
+// report a malformed element only through a negative length. These are
+// strict: every element is checked against the
 // bounds of its parent before anything is read, and a malformed input is
 // a Der with ok = false, never an abort. They also hold the input to DER
 // rather than BER: one-octet tags, definite lengths in their shortest
 // form, and nothing after the last element unless the caller allows it.
 
-// One element: identifier octet `tag`, its first octet at `pos`, content
-// at [start, start + len), the next element at `next`.
+/// One element: identifier octet `tag`, its first octet at `pos`, content
+/// at [start, start + len), the next element at `next`.
+/// Valid only when `ok`.
 pub type Der = { Bool ok; Int tag; Int pos; Int start; Int len; Int next; };
 
+/// The malformed element: ok = false and every position 0.
 pub Der der_bad() { return Der {.ok = false, .tag = 0, .pos = 0, .start = 0, .len = 0, .next = 0}; }
 
-// The element at b[pos], which must end at or before `end`.
+/// The element at b[pos], which must end at or before `end`.
+/// Malformed (ok = false) for a truncated element, a multi-octet tag, an
+/// indefinite or non-minimal length, or a length field over four octets.
 pub Der der_at(List(Int) b, Int pos, Int end) {
     Int lim = min(end, b.len());
     if (pos < 0 || pos + 2 > lim) { return der_bad(); }
@@ -243,53 +280,58 @@ Der der_fit(Int tag, Int pos, Int start, Int len, Int lim) {
     return Der {.ok = true, .tag = tag, .pos = pos, .start = start, .len = len, .next = start + len};
 }
 
-// der_at with an expected identifier octet.
+/// The element at b[pos] as `der_at` reads it, if its identifier octet is `tag`.
+/// Malformed (ok = false) otherwise.
 pub Der der_tag_at(List(Int) b, Int pos, Int end, Int tag) {
     Der d = der_at(b, pos, end);
     if (!d.ok || d.tag != tag) { return der_bad(); }
     return d;
 }
 
-// The end of an element's content.
+/// The end of an element's content.
 pub Int der_end(Der d) { return d.start + d.len; }
 
-// The first element inside a constructed one.
+/// The first element inside constructed element `parent`.
+/// Malformed when `parent` is malformed or not constructed.
 pub Der der_child(List(Int) b, Der parent) {
     if (!parent.ok || (parent.tag & 32) == 0) { return der_bad(); }
     return der_at(b, parent.start, der_end(parent));
 }
 
-// The element after `prev`, inside `parent`.
+/// The element after `prev`, inside `parent`.
 pub Der der_sibling(List(Int) b, Der prev, Der parent) {
     if (!prev.ok || !parent.ok) { return der_bad(); }
     return der_at(b, prev.next, der_end(parent));
 }
 
-// Whether `d` is the last element in `parent`.
+/// Whether `d` is the last element in `parent`.
 pub Bool der_is_last(Der d, Der parent) { return d.ok && parent.ok && d.next == der_end(parent); }
 
-// The whole input is exactly one element.
+/// The single element that makes up all of `b`, or a malformed one.
 pub Der der_top(List(Int) b) {
     Der d = der_at(b, 0, b.len());
     if (!d.ok || d.next != b.len()) { return der_bad(); }
     return d;
 }
 
+/// The content bytes of element `d`, without its header; empty if malformed.
 pub List(Int) der_value(List(Int) b, Der d) {
     if (!d.ok) { return []; }
     return b[d.start..d.next];
 }
 
-// The element with its header, as it was encoded.
+/// The element with its header, as it was encoded.
 pub List(Int) der_encoded(List(Int) b, Der d) {
     if (!d.ok) { return []; }
     return b[d.pos..d.next];
 }
 
-// A non-negative INTEGER's value as unsigned big-endian bytes (no sign
-// octet), or ok = false for a negative or non-minimal encoding.
+/// Decoded bytes `v`, valid only when `ok`.
 pub type DerBytes = { Bool ok; List(Int) v; };
 
+/// A non-negative INTEGER's value as unsigned big-endian bytes (no sign
+/// octet), or ok = false for a negative, empty or non-minimal encoding or
+/// an element that is not an INTEGER.
 pub DerBytes der_uint(List(Int) b, Der d) {
     DerBytes bad = DerBytes {.ok = false, .v = []};
     if (!d.ok || d.tag != 2 || d.len < 1) { return bad; }
@@ -300,15 +342,16 @@ pub DerBytes der_uint(List(Int) b, Der d) {
     return DerBytes {.ok = true, .v = b[from..d.next]};
 }
 
-// A small non-negative INTEGER (at most 62 bits), or -1.
+/// A small non-negative INTEGER (at most seven value bytes), or -1.
 pub Int der_small_uint(List(Int) b, Der d) {
     DerBytes u = der_uint(b, d);
     if (!u.ok || u.v.len() > 7) { return 0 - 1; }
     return der_int_acc(u.v, 0, u.v.len() - 1, 0);
 }
 
-// An OBJECT IDENTIFIER as dotted decimal, or "" when it is malformed
-// (empty, an arc with a leading 0x80 octet, or an arc that does not end).
+/// An OBJECT IDENTIFIER as dotted decimal, or "" when it is malformed
+/// (empty or over 64 octets, an arc with a leading 0x80 octet, an arc over
+/// eight octets, or an arc that does not end).
 pub Str der_oid(List(Int) b, Der d) {
     if (!d.ok || d.tag != 6 || d.len < 1 || d.len > 64) { return ""; }
     List(Int) c = b[d.start..d.next];
@@ -330,7 +373,8 @@ Bool der_oid_arcs_ok(List(Int) c, Int i, Int run) {
     return der_oid_arcs_ok(c, i + 1, if ((c[i] & 128) == 0) { 0 } else { run + 1 });
 }
 
-// The contents of a BIT STRING with no unused bits (keys, signatures).
+/// The contents of a BIT STRING with no unused bits (keys, signatures).
+/// Not ok for any other element or a nonzero unused-bits octet.
 pub DerBytes der_bits(List(Int) b, Der d) {
     if (!d.ok || d.tag != 3 || d.len < 1 || b[d.start] != 0) { return DerBytes {.ok = false, .v = []}; }
     return DerBytes {.ok = true, .v = b[d.start + 1..d.next]};

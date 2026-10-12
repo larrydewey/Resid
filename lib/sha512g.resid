@@ -31,7 +31,9 @@ List(UInt(64)) sha512g_k() {
     ];
 }
 
+/// The SHA-512 initial hash value H(0) (FIPS 180-4 §5.3.5).
 pub List(UInt(64)) sha512g_iv() { return [(UInt(64)) 7640891576956012808, (UInt(64)) 13503953896175478587, (UInt(64)) 4354685564936845355, (UInt(64)) 11912009170470909681, (UInt(64)) 5840696475078001361, (UInt(64)) 11170449401992604703, (UInt(64)) 2270897969802886507, (UInt(64)) 6620516959819538809]; }
+/// The SHA-384 initial hash value H(0) (FIPS 180-4 §5.3.4).
 pub List(UInt(64)) sha384g_iv() { return [(UInt(64)) 14680500436340154072, (UInt(64)) 7105036623409894663, (UInt(64)) 10473403895298186519, (UInt(64)) 1526699215303891257, (UInt(64)) 7436329637833083697, (UInt(64)) 10282925794625328401, (UInt(64)) 15784041429090275239, (UInt(64)) 5167115440072839076]; }
 
 @needs(Word64(W, B))
@@ -69,9 +71,10 @@ W g5_ch(W e, W f, W g) { return d_xor(d_and(e, f), d_and(d_not(e), g)); }
 @needs(Word64(W, B))
 W g5_maj(W a, W b, W c) { return d_xor(d_xor(d_and(a, b), d_and(a, c)), d_and(b, c)); }
 
-// The state as a record and the schedule as a 16-word window in
-// parameters: a 64-bit secret word is never stored in a list, where values
-// of 2^54 or more are boxed (a branch on the value).
+/// The eight-word SHA-512/384 hash state, held as a record.
+/// The state is a record and the schedule a window of parameters because a
+/// 64-bit secret word is never stored in a list, where values of 2^54 or
+/// more are boxed (a branch on the value).
 type H8(W) = { W a; W b; W c; W d; W e; W f; W g; W h; };
 
 @needs(Word64(W, B))
@@ -91,19 +94,24 @@ H8(W) g5_blk(List(B) m, Int base, List(UInt(64)) ks, Int i, H8(W) h0, W a, W b, 
     return g5_blk(m, base, ks, i + 1, h0, d_add(t1, t2), a, b, c, d_add(d, t1), e, f, g, w1, w2, w3, w4, w5, w6, w7, w8, w9, w10, w11, w12, w13, w14, w15, wi);
 }
 
+/// Compress the 128-byte block of `m` starting at `base` into the state `h`.
+/// The caller makes sure 128 bytes are there.
 @needs(Word64(W, B))
 pub H8(W) sha512g_block(List(B) m, Int base, H8(W) h) {
     W z = d_lift((UInt(64)) 0);
     return g5_blk(m, base, sha512g_k(), 0, h, h.a, h.b, h.c, h.d, h.e, h.f, h.g, h.h, z, z, z, z, z, z, z, z, z, z, z, z, z, z, z, z);
 }
 
+/// Compress the 128-byte blocks of `m` from `pos` up to `total` into `h`.
+/// `total - pos` should be a multiple of 128 (a padded message).
 @needs(Word64(W, B))
 pub H8(W) sha512g_blocks(List(B) m, Int pos, Int total, H8(W) h) {
     if (pos >= total) { return h; }
     return sha512g_blocks(m, pos + 128, total, sha512g_block(m, pos, h));
 }
 
-// FIPS 180-4 §5.1.2 padding: 0x80, zeros, the 128-bit bit length.
+/// The padding for a `len`-byte message (FIPS 180-4 §5.1.2).
+/// It is 0x80, zeros, and the 128-bit big-endian bit length, as public bytes.
 pub List(Int) sha512g_pad(Int len) {
     Int total = ((len + 17 + 127) / 128) * 128;
     return sha512g_pad_at(len, total - len - 17, 0, ListBuf()).finish();
@@ -152,10 +160,14 @@ List(B) g5_hash(List(B) msg, List(UInt(64)) iv, Int outlen) {
     return g5_out(h, outlen, 0, ob);
 }
 
+/// The 64-byte SHA-512 digest of `msg`.
+/// Secret bytes in give a secret digest; the length is public.
 @needs(Word64(W, B))
 @key_from(msg)
 pub List(B) sha512g(List(B) msg) { return g5_hash(msg, sha512g_iv(), 64); }
 
+/// The 48-byte SHA-384 digest of `msg`.
+/// Secret bytes in give a secret digest; the length is public.
 @needs(Word64(W, B))
 @key_from(msg)
 pub List(B) sha384g(List(B) msg) { return g5_hash(msg, sha384g_iv(), 48); }
@@ -186,15 +198,20 @@ List(Int) sha512g_zero_bytes(Int n, Int i, ListBuf(Int) acc) {
     return sha512g_zero_bytes(n, i + 1, acc.push(0));
 }
 
+/// The 64-byte HMAC-SHA-512 of `msg` under `key` (RFC 2104).
+/// A key longer than 128 bytes is hashed first.
 @needs(Word64(W, B))
 @key_from(key, msg)
 pub List(B) hmac512g(List(B) key, List(B) msg) { return g5_hmac(key, msg, sha512g_iv(), 64); }
 
+/// The 48-byte HMAC-SHA-384 of `msg` under `key` (RFC 2104).
+/// A key longer than 128 bytes is hashed first with SHA-384.
 @needs(Word64(W, B))
 @key_from(key, msg)
 pub List(B) hmac384g(List(B) key, List(B) msg) { return g5_hmac(key, msg, sha384g_iv(), 48); }
 
-// Public bytes taking part in a computation on B.
+/// Public bytes `bs` lifted into the byte type `B`.
+/// Each value keeps only its low 8 bits.
 @needs(Word64(W, B))
 pub List(B) d_lift_bytes(List(Int) bs) {
     ListBuf(B) acc = ListBuf();

@@ -2,9 +2,12 @@
 // Pure encoders for the TPM 2.0 commands an attester needs and total
 // decoders for their responses (TCG TPM 2.0 Library, Part 2 "Structures"
 // and Part 3 "Commands", revision 1.59 and later; every layout below names
-// its Part 3 table). Nothing here touches a device: lib/dev/tpm.resid sends
-// the commands to /dev/tpmrm0. A verifier that only parses evidence can
-// import this module without any grant.
+// its Part 3 table), the EK/AK templates and credential activation, and
+// the wrappers' logic as tpm_*_via over any transport (a `send` closure or
+// a command chain). Nothing here touches a device: lib/dev/tpm.resid sends
+// the commands to /dev/tpmrm0, and tests run them against a simulator. A
+// verifier that only parses evidence can import this module without any
+// grant.
 //
 // Every number on the wire is big endian. A command is
 //     tag (TPM_ST_NO_SESSIONS 0x8001 | TPM_ST_SESSIONS 0x8002) u16,
@@ -22,7 +25,8 @@
 // bytes -- and never indexes past the end, so no reply can abort or hang
 // the program. A TPM error is Err(TpmRc(code)).
 //
-// Authorization: the commands that need one (NV_Read, Quote) use the
+// Authorization: the commands that need one (NV_Read, Quote,
+// CreatePrimary, PolicySecret, ActivateCredential's AK) use the
 // password session TPM_RS_PW (0x40000009) with an empty nonce, the
 // attribute continueSession and an empty password, as go-tpm does
 // (legacy/tpm2, encodeQuote and encodeNVRead); a TPM ignores
@@ -40,19 +44,23 @@
 // Attack Protection"; IsDAExempted and IncrementLockout in the reference
 // implementation's SessionProcess.c). An empty password is rejected
 // exactly when the entity's authValue is not empty, which no command
-// shows, so each *_via wrapper reads the public area first and refuses
-// (TpmArg, nothing more sent) what it can see would risk a count:
+// shows, so the NV_Read and Quote *_via wrappers read the public area
+// first and refuse (TpmArg, nothing more sent) what they can see would
+// risk a count:
 // tpm_nv_read_da_ok and tpm_quote_key_ok below say what is checked.
 
 import "device.resid";
 
 // -- Errors -----------------------------------------------------------------
 
-// A device failure (the call never reached the TPM, or the device host
-// failed), a TPM response code other than TPM_RC_SUCCESS, a response that
-// does not parse, or an argument a command cannot carry (nothing sent).
+/// Why a TPM operation failed: a device failure (the call never reached the
+/// TPM, or the device host failed), a TPM response code other than
+/// TPM_RC_SUCCESS, a response that does not parse, or an argument a command
+/// cannot carry (nothing sent).
 type TpmError = TpmDev(DeviceError) | TpmRc(Int) | TpmBad(Str) | TpmArg(Str);
 
+/// The human-readable text of a TPM error, prefixed `tpm:` (a device error
+/// uses the device's own text).
 pub Str tpm_error_text(TpmError e) {
     return match (e) {
         TpmDev(d) => device_error_text(d),
@@ -64,55 +72,93 @@ pub Str tpm_error_text(TpmError e) {
 
 // -- Constants (TPM 2.0 Part 2) ---------------------------------------------
 
+/// The tag TPM_ST_NO_SESSIONS, for a command or response without sessions.
 pub Int tpm_st_no_sessions() { return 32769; }   // 0x8001
+/// The tag TPM_ST_SESSIONS, for a command or response with sessions.
 pub Int tpm_st_sessions() { return 32770; }      // 0x8002
 
+/// The command code TPM_CC_NV_Read.
 pub Int tpm_cc_nv_read() { return 334; }         // 0x0000014E
+/// The command code TPM_CC_Quote.
 pub Int tpm_cc_quote() { return 344; }           // 0x00000158
+/// The command code TPM_CC_NV_ReadPublic.
 pub Int tpm_cc_nv_read_public() { return 361; }  // 0x00000169
+/// The command code TPM_CC_ReadPublic.
 pub Int tpm_cc_read_public() { return 371; }     // 0x00000173
+/// The command code TPM_CC_GetCapability.
 pub Int tpm_cc_get_capability() { return 378; }  // 0x0000017A
+/// The command code TPM_CC_GetRandom.
 pub Int tpm_cc_get_random() { return 379; }      // 0x0000017B
+/// The command code TPM_CC_PCR_Read.
 pub Int tpm_cc_pcr_read() { return 382; }        // 0x0000017E
 
 // TPM_CAP (Part 2, Table 22).
+
+/// The capability TPM_CAP_HANDLES: handles in a range.
 pub Int tpm_cap_handles() { return 1; }
+/// The capability TPM_CAP_PCRS: the PCR banks and the PCRs allocated.
 pub Int tpm_cap_pcrs() { return 5; }
+/// The capability TPM_CAP_TPM_PROPERTIES: tagged TPM properties.
 pub Int tpm_cap_tpm_properties() { return 6; }
 
-// TPM_PT (Part 2, Table 24): PT_FIXED starts at 0x100.
+// TPM_PT (Part 2, Table 24).
+
+/// The first fixed property, PT_FIXED (0x100).
 pub Int tpm_pt_fixed() { return 256; }
+/// The property TPM_PT_NV_BUFFER_MAX: the most bytes one NV_Read may ask.
 pub Int tpm_pt_nv_buffer_max() { return 300; }   // 0x12C
 
 // TPM_ALG_ID (TCG Algorithm Registry).
+
+/// The algorithm TPM_ALG_SHA1.
 pub Int tpm_alg_sha1() { return 4; }
+/// The algorithm TPM_ALG_SHA256.
 pub Int tpm_alg_sha256() { return 11; }
+/// The algorithm TPM_ALG_SHA384.
 pub Int tpm_alg_sha384() { return 12; }
+/// The algorithm TPM_ALG_SHA512.
 pub Int tpm_alg_sha512() { return 13; }
+/// The algorithm TPM_ALG_NULL: no algorithm, or the key's own scheme.
 pub Int tpm_alg_null() { return 16; }
+/// The signature scheme TPM_ALG_RSASSA (PKCS#1 v1.5).
 pub Int tpm_alg_rsassa() { return 20; }
+/// The signature scheme TPM_ALG_RSAPSS.
 pub Int tpm_alg_rsapss() { return 22; }
+/// The signature scheme TPM_ALG_ECDSA.
 pub Int tpm_alg_ecdsa() { return 24; }
+/// The signature scheme TPM_ALG_ECDAA.
 pub Int tpm_alg_ecdaa() { return 26; }
+/// The signature scheme TPM_ALG_SM2.
 pub Int tpm_alg_sm2() { return 27; }
+/// The signature scheme TPM_ALG_ECSCHNORR.
 pub Int tpm_alg_ecschnorr() { return 28; }
 
 // Permanent handles (Part 2, Table 28).
+
+/// The owner hierarchy's handle, TPM_RH_OWNER.
 pub Int tpm_rh_owner() { return 1073741825; }    // 0x40000001
+/// The password session's handle, TPM_RS_PW.
 pub Int tpm_rs_pw() { return 1073741833; }       // 0x40000009
+/// The platform hierarchy's handle, TPM_RH_PLATFORM.
 pub Int tpm_rh_platform() { return 1073741836; } // 0x4000000C
 
 // TPMA_NV bits (Part 2, "TPMA_NV (NV Index Attributes)"; go-tpm
-// legacy/tpm2 AttrAuthRead, AttrNoDA): the index's own authorization may
-// read it; failed authorizations of the index do not count toward lockout.
+// legacy/tpm2 AttrAuthRead, AttrNoDA).
+
+/// The TPMA_NV_AUTHREAD bit: the index's own authorization may read it.
 pub Int tpma_nv_authread() { return 262144; }    // 1 << 18
+/// The TPMA_NV_NO_DA bit: failed authorizations of the index do not count
+/// toward the dictionary-attack lockout.
 pub Int tpma_nv_no_da() { return 33554432; }     // 1 << 25
 
 // TPMA_OBJECT bits (Part 2, "TPMA_OBJECT (Object Attributes)"; go-tpm
-// FlagUserWithAuth, FlagNoDA): the USER role may be authorized with the
-// authValue (a password or HMAC) rather than only a policy; failed
-// authorizations of the object do not count toward lockout.
+// FlagUserWithAuth, FlagNoDA).
+
+/// The userWithAuth bit: the USER role may be authorized with the authValue
+/// (a password or HMAC) rather than only a policy.
 pub Int tpma_object_user_with_auth() { return 64; }   // 1 << 6
+/// The noDA bit: failed authorizations of the object do not count toward
+/// the dictionary-attack lockout.
 pub Int tpma_object_no_da() { return 1024; }          // 1 << 10
 
 // -- Well-known handles and NV indices --------------------------------------
@@ -122,30 +168,43 @@ pub Int tpma_object_no_da() { return 1024; }          // 1 << 10
 
 // TCG EK Credential Profile 2.3 r2, section 2.2.1.4 (also go-tpm-tools
 // client/handles.go): the EK certificates, RSA 2048 and ECC P-256.
+
+/// The NV index of the RSA 2048 EK certificate.
 pub Int tpm_nv_ek_cert_rsa() { return 29360130; }       // 0x01C00002
+/// The NV index of the ECC P-256 EK certificate.
 pub Int tpm_nv_ek_cert_ecc() { return 29360138; }       // 0x01C0000A
-// TCG TPM v2.0 Provisioning Guidance 1.0 r1, Table 2: the persistent EK.
+
+/// The persistent handle of the RSA EK (TCG TPM v2.0 Provisioning Guidance
+/// 1.0 r1, Table 2).
 pub Int tpm_handle_ek_rsa() { return 2164326401; }      // 0x81010001
 
 // Google Compute Engine (go-tpm-tools client/handles.go): the AK
 // certificates and AK templates, RSA and ECC.
+
+/// The NV index of Google Compute Engine's RSA AK certificate.
 pub Int tpm_nv_gce_ak_cert_rsa() { return 29425664; }       // 0x01C10000
+/// The NV index of Google Compute Engine's RSA AK template.
 pub Int tpm_nv_gce_ak_template_rsa() { return 29425665; }   // 0x01C10001
+/// The NV index of Google Compute Engine's ECC AK certificate.
 pub Int tpm_nv_gce_ak_cert_ecc() { return 29425666; }       // 0x01C10002
+/// The NV index of Google Compute Engine's ECC AK template.
 pub Int tpm_nv_gce_ak_template_ecc() { return 29425667; }   // 0x01C10003
 
 // Microsoft Azure confidential VMs (Azure/confidential-computing-cvm-guest-
 // attestation, client-library/src/Attestation/LinuxTpm/lib/Tss2Util.h and
-// cvm-guest-attestation.md): the paravisor's (HCL's) report, read with
-// owner authorization (`tpm2_nvread -C o 0x01400001`); the AK certificate;
-// the AK as a persistent handle.
+// cvm-guest-attestation.md).
+
+/// The NV index of an Azure confidential VM's paravisor (HCL) report, read
+/// with owner authorization (`tpm2_nvread -C o 0x01400001`).
 pub Int tpm_nv_azure_hcl_report() { return 20971521; }  // 0x01400001
+/// The NV index of an Azure confidential VM's AK certificate.
 pub Int tpm_nv_azure_ak_cert() { return 29430224; }     // 0x01C101D0
+/// The persistent handle of an Azure confidential VM's AK.
 pub Int tpm_handle_azure_ak() { return 2164260867; }    // 0x81000003
 
 // -- Encoding -----------------------------------------------------------------
 
-// v as n big-endian bytes.
+/// The low `n` bytes of `v`, most significant first (big endian).
 pub List(UInt(8)) tw_be(Int v, Int n) { return tw_be_at(v, n - 1, ListBuf()); }
 
 List(UInt(8)) tw_be_at(Int v, Int i, ListBuf(UInt(8)) acc) {
@@ -185,9 +244,12 @@ List(UInt(8)) tw_pw_auth() {
 Bool tw_u32_ok(Int v) { return v >= 0 && v <= 4294967295; }
 Bool tw_u16_ok(Int v) { return v >= 0 && v <= 65535; }
 
-// One PCR bank and the PCRs selected in it (TPMS_PCR_SELECTION).
+/// One PCR bank and the PCRs selected in it (TPMS_PCR_SELECTION).
+/// `alg` is the bank's hash algorithm; `pcrs` the selected PCR numbers.
 type PcrSel = { Int alg; List(Int) pcrs; };
 
+/// A PCR selection: the PCRs `pcrs` (0 to 23) in the bank of hash
+/// algorithm `alg` (a TPM_ALG_ID). Range checks happen when it is encoded.
 pub PcrSel pcr_sel(Int alg, List(Int) pcrs) { return PcrSel {.alg = alg, .pcrs = pcrs}; }
 
 // TPML_PCR_SELECTION with a 3-byte bitmap per bank (PCRs 0 to 23, the PC
@@ -215,49 +277,58 @@ Result(Int, TpmError) tw_sel_bits(List(Int) pcrs, Int i, Int acc) {
 
 // -- Commands (Part 3) --------------------------------------------------------
 
-// TPM2_GetCapability (Part 3, Table 208): capability, property,
-// propertyCount.
+/// The bytes of a TPM2_GetCapability command (Part 3, Table 208).
+/// Parameters are `capability`, `property` and propertyCount `count`;
+/// Err(TpmArg) when any is not a u32.
 pub Result(List(UInt(8)), TpmError) tpm2_get_capability_cmd(Int capability, Int property, Int count) {
     if (!tw_u32_ok(capability) || !tw_u32_ok(property) || !tw_u32_ok(count)) { return Err(TpmArg("capability, property and count are u32")); }
     return Ok(tw_command(tpm_cc_get_capability(), [], [], tw_be(capability, 4).concat(tw_be(property, 4)).concat(tw_be(count, 4))));
 }
 
-// TPM2_GetRandom (Part 3, Table 34): bytesRequested.
+/// The bytes of a TPM2_GetRandom command (Part 3, Table 34) asking for `n`
+/// bytes; Err(TpmArg) unless `n` is 1 to 64.
 pub Result(List(UInt(8)), TpmError) tpm2_get_random_cmd(Int n) {
     if (n < 1 || n > 64) { return Err(TpmArg(f"{n} random bytes asked, 1 to 64")); }
     return Ok(tw_command(tpm_cc_get_random(), [], [], tw_be(n, 2)));
 }
 
-// TPM2_PCR_Read (Part 3, Table 114): pcrSelectionIn.
+/// The bytes of a TPM2_PCR_Read command (Part 3, Table 114) for the PCRs
+/// `sel` selects; Err(TpmArg) for more than 16 banks, a hash algorithm that
+/// is not a u16, or a PCR outside 0 to 23.
 pub Result(List(UInt(8)), TpmError) tpm2_pcr_read_cmd(List(PcrSel) sel) {
     List(UInt(8)) s = tw_pcr_selection(sel)?;
     return Ok(tw_command(tpm_cc_pcr_read(), [], [], s));
 }
 
-// TPM2_ReadPublic (Part 3, Table 32): objectHandle.
+/// The bytes of a TPM2_ReadPublic command (Part 3, Table 32) for the object
+/// at `handle`; Err(TpmArg) when `handle` is not a u32.
 pub Result(List(UInt(8)), TpmError) tpm2_read_public_cmd(Int handle) {
     if (!tw_u32_ok(handle)) { return Err(TpmArg("a handle is u32")); }
     return Ok(tw_command(tpm_cc_read_public(), [handle], [], []));
 }
 
-// TPM2_NV_ReadPublic (Part 3, Table 230): nvIndex.
+/// The bytes of a TPM2_NV_ReadPublic command (Part 3, Table 230) for NV
+/// index `index`; Err(TpmArg) when `index` is not a u32.
 pub Result(List(UInt(8)), TpmError) tpm2_nv_read_public_cmd(Int index) {
     if (!tw_u32_ok(index)) { return Err(TpmArg("an NV index is u32")); }
     return Ok(tw_command(tpm_cc_nv_read_public(), [index], [], []));
 }
 
-// TPM2_NV_Read (Part 3, Table 236): authHandle, nvIndex, the password
-// session (empty password), size, offset.
+/// The bytes of a TPM2_NV_Read command (Part 3, Table 236): `size` bytes
+/// at `offset` of NV index `index`, authorized by `auth_handle` with the
+/// password session and an empty password. Err(TpmArg) when a handle is
+/// not a u32 or `size` or `offset` is not a u16.
 pub Result(List(UInt(8)), TpmError) tpm2_nv_read_cmd(Int auth_handle, Int index, Int size, Int offset) {
     if (!tw_u32_ok(auth_handle) || !tw_u32_ok(index)) { return Err(TpmArg("handles are u32")); }
     if (!tw_u16_ok(size) || !tw_u16_ok(offset)) { return Err(TpmArg("size and offset are u16")); }
     return Ok(tw_command(tpm_cc_nv_read(), [auth_handle, index], tw_pw_auth(), tw_be(size, 2).concat(tw_be(offset, 2))));
 }
 
-// TPM2_Quote (Part 3, Table 91): signHandle (an existing attestation key,
-// loaded or persistent), the password session (empty password),
-// qualifyingData (the verifier's nonce), inScheme TPM_ALG_NULL (the key's
-// own scheme), PCRselect.
+/// The bytes of a TPM2_Quote command (Part 3, Table 91) by the attestation
+/// key at `sign_handle` (loaded or persistent), with the password session
+/// and an empty password, `qualifying` (the verifier's nonce, at most 64
+/// bytes) as qualifyingData, the key's own scheme, and the PCRs `sel`
+/// selects. Err(TpmArg) when any argument cannot be encoded.
 pub Result(List(UInt(8)), TpmError) tpm2_quote_cmd(Int sign_handle, List(UInt(8)) qualifying, List(PcrSel) sel) {
     if (!tw_u32_ok(sign_handle)) { return Err(TpmArg("a handle is u32")); }
     if (qualifying.len() > 64) { return Err(TpmArg(f"qualifying data of {qualifying.len()} bytes, at most 64")); }
@@ -268,11 +339,13 @@ pub Result(List(UInt(8)), TpmError) tpm2_quote_cmd(Int sign_handle, List(UInt(8)
 
 // -- Decoding -------------------------------------------------------------------
 
-// A position in a response: where the parameters are, and the next byte.
+/// A position in a response: the bytes `r`, the next byte `at`, and the end
+/// of the parameters `end`.
 type TwAt = { List(UInt(8)) r; Int at; Int end; };
 
-// An unsigned number of n <= 4 bytes at p.at, and the position after it.
+/// A decoded unsigned number of at most 4 bytes, and the position after it.
 type TwNum = { Int v; TwAt next; };
+/// Decoded bytes (a TPM2B's contents), and the position after them.
 type TwBytes = { List(UInt(8)) v; TwAt next; };
 
 Result(TwNum, TpmError) tw_num(TwAt p, Int n, Str what) {
@@ -302,10 +375,11 @@ Result(Bool, TpmError) tw_done(TwAt p, Str what) {
     return Ok(true);
 }
 
-// The response header: Err(TpmRc) for a TPM error, else the parameters'
-// span after `handles` response handles. With sessions, parameterSize
-// bounds the parameters and one TPMS_AUTH_RESPONSE must follow them
-// exactly.
+/// The span of a response's parameters, after its header and `handles`
+/// response handles. Err(TpmRc) for a TPM error, Err(TpmBad) for a header
+/// that does not parse or a tag that disagrees with `sessions`. With
+/// `sessions`, parameterSize bounds the parameters and exactly one
+/// TPMS_AUTH_RESPONSE must follow them.
 pub Result(TwAt, TpmError) tpm_resp_params(List(UInt(8)) r, Int handles, Bool sessions) {
     TwAt all = TwAt {.r = r, .at = 0, .end = r.len()};
     if (r.len() < 10) { return Err(TpmBad(f"a response of {r.len()} bytes, the header is 10")); }
@@ -333,7 +407,7 @@ pub Result(TwAt, TpmError) tpm_resp_params(List(UInt(8)) r, Int handles, Bool se
     return Ok(TwAt {.r = r, .at = params.at, .end = pend});
 }
 
-// One TPML_PCR_SELECTION.
+/// A decoded TPML_PCR_SELECTION, and the position after it.
 type TwSel = { List(PcrSel) v; TwAt next; };
 
 Result(TwSel, TpmError) tw_take_sel(TwAt p) {
@@ -361,7 +435,8 @@ List(Int) tw_bits(List(UInt(8)) r, Int at, Int n, Int i, ListBuf(Int) acc) {
     return tw_bits(r, at, n, i + 1, if (set) { acc.push(i) } else { acc });
 }
 
-// n TPM2Bs (a TPML_DIGEST's digests, ...), each at most `max` bytes.
+/// A decoded list of TPM2Bs (a TPML_DIGEST's digests, ...), and the position
+/// after it.
 type TwList = { List(List(UInt(8))) v; TwAt next; };
 
 Result(TwList, TpmError) tw_take_2bs(TwAt p, Int max, Str what) {
@@ -378,16 +453,20 @@ Result(TwList, TpmError) tw_2b_items(TwAt p, Int left, Int max, Str what, List(L
 
 // -- Responses ------------------------------------------------------------------
 
+/// One TPMS_TAGGED_PROPERTY: a TPM_PT property and its value.
 type TpmProperty = { Int property; Int value; };
 
-// What TPM2_GetCapability answered: TPML_TAGGED_TPM_PROPERTY (TPM_CAP_
-// TPM_PROPERTIES), TPML_HANDLE (TPM_CAP_HANDLES), TPML_PCR_SELECTION
-// (TPM_CAP_PCRS), or another capability's raw union bytes.
+/// What TPM2_GetCapability answered: TPML_TAGGED_TPM_PROPERTY (TPM_CAP_
+/// TPM_PROPERTIES), TPML_HANDLE (TPM_CAP_HANDLES), TPML_PCR_SELECTION
+/// (TPM_CAP_PCRS), or another capability and its raw union bytes.
 type TpmCapData = CapProps(List(TpmProperty)) | CapHandles(List(Int)) | CapPcrs(List(PcrSel)) | CapOther(Int, List(UInt(8)));
+/// A TPM2_GetCapability response: moreData (`more`) and the capability data.
 type TpmCap = { Bool more; TpmCapData data; };
 
-// TPM2_GetCapability's response (Part 3, Table 209): moreData,
-// capabilityData.
+/// The decoded TPM2_GetCapability response (Part 3, Table 209): moreData
+/// and capabilityData. Properties, handles and PCRs are parsed; any other
+/// capability comes back as raw bytes (CapOther). Err(TpmRc) or Err(TpmBad)
+/// as tpm_resp_params, or for a body that does not parse exactly.
 pub Result(TpmCap, TpmError) tpm2_get_capability_resp(List(UInt(8)) r) {
     TwAt p = tpm_resp_params(r, 0, false)?;
     TwNum more = tw_num(p, 1, "moreData")?;
@@ -429,13 +508,14 @@ Result(List(Int), TpmError) tw_u32s(TwAt p, Int left, List(Int) acc) {
     return tw_u32s(h.next, left - 1, acc.concat([h.v]));
 }
 
-// A property's value, when the list has it.
+/// The value of `property` in `props` (the first match), or None.
 pub Option(Int) tpm_property(List(TpmProperty) props, Int property) {
     for (TpmProperty t in props) { if (t.property == property) { return Some(t.value); } }
     return None;
 }
 
-// TPM2_GetRandom's response (Part 3, Table 35): randomBytes.
+/// The random bytes of a TPM2_GetRandom response (Part 3, Table 35), at
+/// most 64; Err(TpmRc) or Err(TpmBad) when it is an error or malformed.
 pub Result(List(UInt(8)), TpmError) tpm2_get_random_resp(List(UInt(8)) r) {
     TwAt p = tpm_resp_params(r, 0, false)?;
     TwBytes b = tw_take_2b(p, 64, "randomBytes")?;
@@ -443,11 +523,14 @@ pub Result(List(UInt(8)), TpmError) tpm2_get_random_resp(List(UInt(8)) r) {
     return Ok(b.v);
 }
 
-// TPM2_PCR_Read's response (Part 3, Table 115). A TPM returns at most
-// eight digests per call: `selection` says which PCRs `digests` holds, in
-// order (bank by bank, lowest PCR first); ask again for the rest.
+/// TPM2_PCR_Read's response (Part 3, Table 115). A TPM returns at most
+/// eight digests per call: `selection` says which PCRs `digests` holds, in
+/// order (bank by bank, lowest PCR first); ask again for the rest.
 type PcrRead = { Int update_counter; List(PcrSel) selection; List(List(UInt(8))) digests; };
 
+/// The decoded TPM2_PCR_Read response: update counter, the selection
+/// answered and its digests. Err(TpmBad) when the digest count differs from
+/// the PCRs selected or the response is malformed; Err(TpmRc) for an error.
 pub Result(PcrRead, TpmError) tpm2_pcr_read_resp(List(UInt(8)) r) {
     TwAt p = tpm_resp_params(r, 0, false)?;
     TwNum ctr = tw_num(p, 4, "pcrUpdateCounter")?;
@@ -463,12 +546,15 @@ Int tw_count_pcrs(List(PcrSel) s, Int i, Int acc) {
     return tw_count_pcrs(s, i + 1, acc + s[i].pcrs.len());
 }
 
-// TPM2_ReadPublic's response (Part 3, Table 33): outPublic (the
-// TPMT_PUBLIC, raw: its name is nameAlg || H(outPublic)), name,
-// qualifiedName. `type_alg` and `name_alg` are outPublic's first two
-// fields.
+/// TPM2_ReadPublic's response (Part 3, Table 33): outPublic (the
+/// TPMT_PUBLIC, raw: its name is nameAlg || H(outPublic)), name,
+/// qualifiedName. `type_alg` and `name_alg` are outPublic's first two
+/// fields.
 type TpmPublic = { List(UInt(8)) public_area; Int type_alg; Int name_alg; List(UInt(8)) name; List(UInt(8)) qualified_name; };
 
+/// The decoded TPM2_ReadPublic response: the raw public area, its type and
+/// nameAlg, the name and the qualified name. Err(TpmRc) for an error,
+/// Err(TpmBad) when malformed.
 pub Result(TpmPublic, TpmError) tpm2_read_public_resp(List(UInt(8)) r) {
     TwAt p = tpm_resp_params(r, 0, false)?;
     TwBytes outp = tw_take_2b(p, 4096, "outPublic")?;
@@ -481,11 +567,13 @@ pub Result(TpmPublic, TpmError) tpm2_read_public_resp(List(UInt(8)) r) {
     return Ok(TpmPublic {.public_area = outp.v, .type_alg = ty.v, .name_alg = na.v, .name = name.v, .qualified_name = qname.v});
 }
 
-// TPM2_NV_ReadPublic's response (Part 3, Table 231): nvPublic
-// (TPMS_NV_PUBLIC: nvIndex, nameAlg, attributes, authPolicy, dataSize),
-// nvName.
+/// TPM2_NV_ReadPublic's response (Part 3, Table 231): nvPublic
+/// (TPMS_NV_PUBLIC: nvIndex, nameAlg, attributes, authPolicy, dataSize),
+/// nvName.
 type NvPublic = { Int index; Int name_alg; Int attributes; List(UInt(8)) auth_policy; Int data_size; List(UInt(8)) name; };
 
+/// The decoded TPM2_NV_ReadPublic response: the index's public area and
+/// name. Err(TpmRc) for an error, Err(TpmBad) when malformed.
 pub Result(NvPublic, TpmError) tpm2_nv_read_public_resp(List(UInt(8)) r) {
     TwAt p = tpm_resp_params(r, 0, false)?;
     TwBytes nvp = tw_take_2b(p, 4096, "nvPublic")?;
@@ -501,9 +589,9 @@ pub Result(NvPublic, TpmError) tpm2_nv_read_public_resp(List(UInt(8)) r) {
     return Ok(NvPublic {.index = idx.v, .name_alg = alg.v, .attributes = attrs.v, .auth_policy = pol.v, .data_size = size.v, .name = name.v});
 }
 
-// TPM2_NV_Read's response (Part 3, Table 237): data. The bytes are
-// public here; tpm2_nv_read_resp_secret is the decoder for an index that
-// holds a secret.
+/// The data of a TPM2_NV_Read response (Part 3, Table 237), at most 4096
+/// bytes. The bytes are public here; tpm2_nv_read_resp_secret is the
+/// decoder for an index that holds a secret. Err(TpmRc) or Err(TpmBad).
 pub Result(List(UInt(8)), TpmError) tpm2_nv_read_resp(List(UInt(8)) r) {
     TwAt p = tpm_resp_params(r, 0, true)?;
     TwBytes b = tw_take_2b(p, 4096, "data")?;
@@ -511,13 +599,14 @@ pub Result(List(UInt(8)), TpmError) tpm2_nv_read_resp(List(UInt(8)) r) {
     return Ok(b.v);
 }
 
-// The same response received as secret bytes: everything but the data --
-// the header (tag, size, response code), parameterSize, the data's own
-// size and the password session's response (an empty nonce, the
-// attributes, an empty HMAC) -- is declassified, as structure that says
-// nothing about the index's contents, and checked by tpm2_nv_read_resp
-// over a copy with the data zeroed; the data stays secret. The data's
-// length is public (the caller asked for it).
+/// The data of a TPM2_NV_Read response received as secret bytes, kept
+/// secret. Everything but the data --
+/// the header (tag, size, response code), parameterSize, the data's own
+/// size and the password session's response (an empty nonce, the
+/// attributes, an empty HMAC) -- is declassified, as structure that says
+/// nothing about the index's contents, and checked by tpm2_nv_read_resp
+/// over a copy with the data zeroed; the data stays secret. The data's
+/// length is public (the caller asked for it).
 @requires(declassify)
 pub Result(List(Secret(UInt(8))), TpmError) tpm2_nv_read_resp_secret(List(Secret(UInt(8))) r) {
     if (r.len() < 16) {
@@ -541,16 +630,19 @@ List(UInt(8)) tw_zeros(Int n, ListBuf(UInt(8)) acc) {
     return tw_zeros(n - 1, acc.push((UInt(8))0));
 }
 
-// TPMT_SIGNATURE: the algorithm and hash, and the signature: one value
-// (RSASSA, RSAPSS) or r and s (ECDSA, ECDAA, SM2, ECSCHNORR); none for
-// TPM_ALG_NULL.
+/// A decoded TPMT_SIGNATURE: the algorithm and hash, and the signature: one
+/// value (RSASSA, RSAPSS) or r and s (ECDSA, ECDAA, SM2, ECSCHNORR); none
+/// for TPM_ALG_NULL.
 type TpmSignature = SigNull | SigRsa(Int, Int, List(UInt(8))) | SigEcc(Int, Int, List(UInt(8)), List(UInt(8)));
 
-// TPM2_Quote's response (Part 3, Table 92): quoted (a TPMS_ATTEST, the
-// signed bytes) and signature, and the signature's own encoding (`sig_raw`,
-// for a verifier that parses it itself).
+/// TPM2_Quote's response (Part 3, Table 92): quoted (a TPMS_ATTEST, the
+/// signed bytes) and signature, and the signature's own encoding
+/// (`sig_raw`, for a verifier that parses it itself).
 type TpmQuote = { List(UInt(8)) attest; TpmSignature signature; List(UInt(8)) sig_raw; };
 
+/// The decoded TPM2_Quote response: the attestation bytes and the parsed
+/// signature. Err(TpmBad) for an unknown signature algorithm or a malformed
+/// response; Err(TpmRc) for an error.
 pub Result(TpmQuote, TpmError) tpm2_quote_resp(List(UInt(8)) r) {
     TwAt p = tpm_resp_params(r, 0, true)?;
     TwBytes quoted = tw_take_2b(p, 1024, "quoted")?;
@@ -575,14 +667,16 @@ pub Result(TpmQuote, TpmError) tpm2_quote_resp(List(UInt(8)) r) {
     return Err(TpmBad(f"signature algorithm 0x{alg.v:hex}"));
 }
 
-// The quote a TPMS_ATTEST carries (Part 2, Tables 120, 123, 131): magic
-// TPM_GENERATED_VALUE (0xFF544347), type TPM_ST_ATTEST_QUOTE (0x8018),
-// qualifiedSigner, extraData (the qualifying data asked for), clockInfo,
-// firmwareVersion, and TPMS_QUOTE_INFO (the PCRs and their digest).
-// Parsing it checks nothing about who signed it: verify the signature over
-// `attest` with the AK's public key before trusting any field.
+/// The quote a TPMS_ATTEST carries (Part 2, Tables 120, 123, 131):
+/// qualifiedSigner, extraData (the qualifying data asked for), clockInfo,
+/// firmwareVersion, and TPMS_QUOTE_INFO (the PCRs and their digest).
+/// Parsing it checks nothing about who signed it: verify the signature over
+/// `attest` with the AK's public key before trusting any field.
 type QuoteInfo = { List(UInt(8)) signer; List(UInt(8)) extra_data; Int clock_hi; Int clock_lo; Int reset_count; Int restart_count; Bool safe; Int fw_hi; Int fw_lo; List(PcrSel) pcrs; List(UInt(8)) pcr_digest; };
 
+/// The fields of a quote's TPMS_ATTEST `a`, parsed without checking any
+/// signature. Err(TpmBad) for a wrong magic or type, or bytes that do not
+/// parse exactly.
 pub Result(QuoteInfo, TpmError) tpm_attest_quote(List(UInt(8)) a) {
     TwAt p = TwAt {.r = a, .at = 0, .end = a.len()};
     TwNum magic = tw_num(p, 4, "magic")?;
@@ -613,17 +707,21 @@ pub Result(QuoteInfo, TpmError) tpm_attest_quote(List(UInt(8)) a) {
 // against a TPM there, and against the kernel's resource manager here,
 // without either path knowing about the other.
 
-// One command: Err(TpmArg) when it cannot be built (nothing is sent),
-// else what `send` answers.
+/// One command: Err(TpmArg) when it cannot be built (nothing is sent),
+/// else what `send` answers.
 pub Result(List(UInt(8)), TpmError) tpm_run(Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send, Result(List(UInt(8)), TpmError) cmd) {
     List(UInt(8)) c = cmd?;
     return send(c);
 }
 
+/// TPM2_GetCapability of `count` items of `capability` from `property`, run
+/// over `send` and decoded.
 pub Result(TpmCap, TpmError) tpm_get_capability_via(Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send, Int capability, Int property, Int count) {
     return tpm2_get_capability_resp(tpm_run(send, tpm2_get_capability_cmd(capability, property, count))?);
 }
 
+/// Up to `count` TPM properties from `first`, over `send`; Err(TpmBad) when
+/// the TPM answers another capability.
 pub Result(List(TpmProperty), TpmError) tpm_properties_via(Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send, Int first, Int count) {
     TpmCap c = tpm_get_capability_via(send, tpm_cap_tpm_properties(), first, count)?;
     return match (c.data) {
@@ -634,6 +732,8 @@ pub Result(List(TpmProperty), TpmError) tpm_properties_via(Result(List(UInt(8)),
     };
 }
 
+/// Up to `count` handles from `first`, over `send`; Err(TpmBad) when the
+/// TPM answers another capability.
 pub Result(List(Int), TpmError) tpm_handles_via(Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send, Int first, Int count) {
     TpmCap c = tpm_get_capability_via(send, tpm_cap_handles(), first, count)?;
     return match (c.data) {
@@ -644,33 +744,40 @@ pub Result(List(Int), TpmError) tpm_handles_via(Result(List(UInt(8)), TpmError) 
     };
 }
 
+/// `n` random bytes from the TPM (1 to 64; the TPM may return fewer), over
+/// `send`.
 pub Result(List(UInt(8)), TpmError) tpm_get_random_via(Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send, Int n) {
     return tpm2_get_random_resp(tpm_run(send, tpm2_get_random_cmd(n))?);
 }
 
+/// TPM2_PCR_Read of the PCRs `sel` selects, over `send`; the TPM may
+/// answer only some of them (see PcrRead).
 pub Result(PcrRead, TpmError) tpm_pcr_read_via(Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send, List(PcrSel) sel) {
     return tpm2_pcr_read_resp(tpm_run(send, tpm2_pcr_read_cmd(sel))?);
 }
 
+/// TPM2_ReadPublic of the object at `handle`, over `send`.
 pub Result(TpmPublic, TpmError) tpm_read_public_via(Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send, Int handle) {
     return tpm2_read_public_resp(tpm_run(send, tpm2_read_public_cmd(handle))?);
 }
 
+/// TPM2_NV_ReadPublic of NV index `index`, over `send`; the answer's index
+/// is not compared with `index`.
 pub Result(NvPublic, TpmError) tpm_nv_read_public_via(Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send, Int index) {
     return tpm2_nv_read_public_resp(tpm_run(send, tpm2_nv_read_public_cmd(index))?);
 }
 
-// Whether NV_Read of the index `np` describes, authorized by `auth_handle`
-// with the empty password, is safe from the dictionary-attack lockout.
-// What NV_ReadPublic shows decides it:
-//   - the owner or the platform hierarchy (TPM_RH_OWNER, TPM_RH_PLATFORM):
-//     permanent handles are exempt; a wrong password there is an error
-//     (TPM_RC_BAD_AUTH), never a count;
-//   - the index itself: its authValue is checked only with TPMA_NV_AUTHREAD
-//     set, and a failure counts unless TPMA_NV_NO_DA is set. The authValue
-//     cannot be read, so an index with AUTHREAD set and NO_DA clear is
-//     refused whether or not its authValue is empty;
-//   - any other handle cannot authorize NV_Read (TPMI_RH_NV_AUTH): refused.
+/// Whether NV_Read of the index `np` describes, authorized by `auth_handle`
+/// with the empty password, is safe from the dictionary-attack lockout.
+/// What NV_ReadPublic shows decides it:
+///   - the owner or the platform hierarchy (TPM_RH_OWNER, TPM_RH_PLATFORM):
+///     permanent handles are exempt; a wrong password there is an error
+///     (TPM_RC_BAD_AUTH), never a count;
+///   - the index itself: its authValue is checked only with TPMA_NV_AUTHREAD
+///     set, and a failure counts unless TPMA_NV_NO_DA is set. The authValue
+///     cannot be read, so an index with AUTHREAD set and NO_DA clear is
+///     refused whether or not its authValue is empty;
+///   - any other handle cannot authorize NV_Read (TPMI_RH_NV_AUTH): refused.
 pub Result(Bool, TpmError) tpm_nv_read_da_ok(NvPublic np, Int auth_handle) {
     if (auth_handle == tpm_rh_owner() || auth_handle == tpm_rh_platform()) { return Ok(true); }
     if (auth_handle != np.index) { return Err(TpmArg(f"NV_Read is authorized by the owner, the platform or the index itself, not 0x{auth_handle:hex}")); }
@@ -680,21 +787,21 @@ pub Result(Bool, TpmError) tpm_nv_read_da_ok(NvPublic np, Int auth_handle) {
     return Ok(true);
 }
 
-// Whether TPM2_Quote by the key whose public area `p` is (ReadPublic's
-// outPublic: type, nameAlg, objectAttributes, authPolicy, ...), authorized
-// with the empty password, is safe from the dictionary-attack lockout, as
-// far as the public area can say:
-//   - noDA set: a failure never counts -- allowed;
-//   - userWithAuth clear: the USER role (which Quote needs) takes only a
-//     policy session, so a password cannot authorize it -- refused, as a
-//     key this wrapper cannot use;
-//   - userWithAuth set, noDA clear and a non-empty authPolicy: a key
-//     provisioned for policy use, likely with an authValue too -- refused;
-//   - userWithAuth set, noDA clear, no authPolicy (go-tpm-tools' AK
-//     templates, and the AK in tests/device's simulator case): allowed. A
-//     failure would count if the key's authValue is not empty, which only
-//     the provisioner knows: the one case this check cannot rule out
-//     (SECURITY.md, "Not guaranteed").
+/// Whether TPM2_Quote by the key whose public area `p` is (ReadPublic's
+/// outPublic: type, nameAlg, objectAttributes, authPolicy, ...), authorized
+/// with the empty password, is safe from the dictionary-attack lockout, as
+/// far as the public area can say:
+///   - noDA set: a failure never counts -- allowed;
+///   - userWithAuth clear: the USER role (which Quote needs) takes only a
+///     policy session, so a password cannot authorize it -- refused, as a
+///     key this wrapper cannot use;
+///   - userWithAuth set, noDA clear and a non-empty authPolicy: a key
+///     provisioned for policy use, likely with an authValue too -- refused;
+///   - userWithAuth set, noDA clear, no authPolicy (go-tpm-tools' AK
+///     templates, and the AK in tests/device's simulator case): allowed. A
+///     failure would count if the key's authValue is not empty, which only
+///     the provisioner knows: the one case this check cannot rule out
+///     (SECURITY.md, "Not guaranteed").
 pub Result(Bool, TpmError) tpm_quote_key_ok(TpmPublic p) {
     TwAt head = TwAt {.r = p.public_area, .at = 0, .end = p.public_area.len()};
     TwNum attrs = tw_num(tw_skip(head, 4), 4, "objectAttributes")?;
@@ -716,7 +823,9 @@ Result(NvPublic, TpmError) tw_nv_public(Result(List(UInt(8)), TpmError) closure(
     return Ok(np);
 }
 
-// NV_Read, after NV_ReadPublic and tpm_nv_read_da_ok.
+/// `size` bytes at `offset` of NV index `index`, over `send`. NV_ReadPublic
+/// and tpm_nv_read_da_ok run first, and Err(TpmArg) means nothing more was
+/// sent; Err(TpmBad) when the TPM returns another length than `size`.
 pub Result(List(UInt(8)), TpmError) tpm_nv_read_via(Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send, Int auth_handle, Int index, Int size, Int offset) {
     NvPublic np = tw_nv_public(send, index)?;
     _ = tpm_nv_read_da_ok(np, auth_handle)?;
@@ -729,12 +838,12 @@ Result(List(UInt(8)), TpmError) tw_nv_read(Result(List(UInt(8)), TpmError) closu
     return Ok(b);
 }
 
-// NV_Read of an index that holds a secret: the command goes out over
-// `send` like any other, the response comes back over `send_secret` as
-// secret bytes (lib/dev/tpm.resid passes a Transact whose response is
-// marked secret), and only its structure is declassified
-// (tpm2_nv_read_resp_secret). NV_ReadPublic and tpm_nv_read_da_ok first,
-// as for tpm_nv_read_via.
+/// NV_Read of an index that holds a secret: the command goes out over
+/// `send` like any other, the response comes back over `send_secret` as
+/// secret bytes (lib/dev/tpm.resid passes a Transact whose response is
+/// marked secret), and only its structure is declassified
+/// (tpm2_nv_read_resp_secret). NV_ReadPublic and tpm_nv_read_da_ok first,
+/// as for tpm_nv_read_via.
 @requires(declassify)
 pub Result(List(Secret(UInt(8))), TpmError) tpm_nv_read_secret_via(Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send, Result(List(Secret(UInt(8))), TpmError) closure(List(UInt(8))) send_secret, Int auth_handle, Int index, Int size, Int offset) {
     NvPublic np = tw_nv_public(send, index)?;
@@ -745,9 +854,9 @@ pub Result(List(Secret(UInt(8))), TpmError) tpm_nv_read_secret_via(Result(List(U
     return Ok(b);
 }
 
-// A whole NV index: its size from NV_ReadPublic (and tpm_nv_read_da_ok),
-// then NV_Read in pieces of the TPM's TPM_PT_NV_BUFFER_MAX (512 when the
-// TPM does not say; at most 1024).
+/// A whole NV index: its size from NV_ReadPublic (and tpm_nv_read_da_ok),
+/// then NV_Read in pieces of the TPM's TPM_PT_NV_BUFFER_MAX (512 when the
+/// TPM does not say; at most 1024).
 pub Result(List(UInt(8)), TpmError) tpm_nv_read_all_via(Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send, Int auth_handle, Int index) {
     NvPublic np = tw_nv_public(send, index)?;
     _ = tpm_nv_read_da_ok(np, auth_handle)?;
@@ -764,10 +873,12 @@ Result(List(UInt(8)), TpmError) tw_nv_chunks(Result(List(UInt(8)), TpmError) clo
     return tw_nv_chunks(send, auth_handle, index, total, chunk, at + n, acc.concat(part));
 }
 
-// TPM2_Quote, after ReadPublic of the key and tpm_quote_key_ok. The key is
-// read and used by two commands, so a key replaced at the same handle in
-// between is quoted with; the quote's signature, verified against the AK
-// the verifier trusts, still decides.
+/// A TPM2_Quote by the AK at `ak_handle` over `nonce` and the PCRs `sel`
+/// selects, run over `send` after ReadPublic of the key and
+/// tpm_quote_key_ok (Err(TpmArg), quote not sent, if refused). The key is
+/// read and used by two commands, so a key replaced at the same handle in
+/// between is quoted with; the quote's signature, verified against the AK
+/// the verifier trusts, still decides.
 pub Result(TpmQuote, TpmError) tpm_quote_via(Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send, Int ak_handle, List(UInt(8)) nonce, List(PcrSel) sel) {
     TpmPublic key = tpm_read_public_via(send, ak_handle)?;
     _ = tpm_quote_key_ok(key)?;
@@ -779,9 +890,13 @@ pub Result(TpmQuote, TpmError) tpm_quote_via(Result(List(UInt(8)), TpmError) clo
 // every input below, both accept with the same value and end, or both
 // refuse.
 
+/// A TPM2B of at most 64 bytes, as a generated layout parser reads it (a
+/// test oracle for tw_take_2b).
 @layout(be)
 type TwOracle2b = { @check(n <= 64) UInt(16) n; @len(n) List(UInt(8)) data; };
 
+/// A response header (tag, responseSize, responseCode), as a generated
+/// layout parser reads it (a test oracle for the hand-written header parse).
 @layout(be)
 type TwOracleHdr = { UInt(16) tag; UInt(32) size; UInt(32) code; };
 
@@ -862,36 +977,59 @@ test "generated layout parsers agree with the hand parsers" {
 // file (device.transact_chain; tpm_chain_via over a transport), the
 // handles the TPM gives copied into the later commands by links.
 
+/// The command code TPM_CC_CreatePrimary.
 pub Int tpm_cc_create_primary() { return 305; }        // 0x131
+/// The command code TPM_CC_StartAuthSession.
 pub Int tpm_cc_start_auth_session() { return 374; }    // 0x176
+/// The command code TPM_CC_PolicySecret.
 pub Int tpm_cc_policy_secret() { return 337; }         // 0x151
+/// The command code TPM_CC_ActivateCredential.
 pub Int tpm_cc_activate_credential() { return 327; }   // 0x147
+/// The command code TPM_CC_FlushContext.
 pub Int tpm_cc_flush_context() { return 357; }         // 0x165
+/// The endorsement hierarchy's handle, TPM_RH_ENDORSEMENT.
 pub Int tpm_rh_endorsement() { return 1073741835; }    // 0x4000000B
+/// The null handle, TPM_RH_NULL.
 pub Int tpm_rh_null() { return 1073741831; }           // 0x40000007
+/// The key type TPM_ALG_RSA.
 pub Int tpm_alg_rsa() { return 1; }
+/// The key type TPM_ALG_ECC.
 pub Int tpm_alg_ecc() { return 35; }                   // 0x23
+/// The symmetric algorithm TPM_ALG_AES.
 pub Int tpm_alg_aes() { return 6; }
+/// The block cipher mode TPM_ALG_CFB.
 pub Int tpm_alg_cfb() { return 67; }                   // 0x43
+/// The curve TPM_ECC_NIST_P256.
 pub Int tpm_ecc_nist_p256() { return 3; }
 
 // objectAttributes bits (Part 2, Table 31).
+
+/// The fixedTPM bit: the object cannot be duplicated out of this TPM.
 pub Int tpma_fixed_tpm() { return 2; }
+/// The fixedParent bit: the object cannot move to another parent.
 pub Int tpma_fixed_parent() { return 16; }
+/// The sensitiveDataOrigin bit: the TPM generated the sensitive data.
 pub Int tpma_sensitive_data_origin() { return 32; }
+/// The userWithAuth bit (the same as tpma_object_user_with_auth).
 pub Int tpma_user_with_auth() { return 64; }
+/// The adminWithPolicy bit: the ADMIN role needs a policy session.
 pub Int tpma_admin_with_policy() { return 128; }
+/// The restricted bit: the key signs or decrypts only TPM-made structures.
 pub Int tpma_restricted() { return 65536; }
+/// The decrypt bit: the key may decrypt.
 pub Int tpma_decrypt() { return 131072; }
+/// The sign bit: the key may sign.
 pub Int tpma_sign() { return 262144; }
 
-// The EK templates' policy: PolicySecret(TPM_RH_ENDORSEMENT), SHA-256.
+/// The EK templates' authPolicy digest: PolicySecret(TPM_RH_ENDORSEMENT),
+/// SHA-256.
 pub List(UInt(8)) tpm_ek_policy() { return tw_hex8([131, 113, 151, 103, 68, 132, 179, 248, 26, 144, 204, 141, 70, 165, 215, 36, 253, 82, 215, 110, 6, 82, 11, 100, 242, 161, 218, 27, 51, 20, 105, 170]); }
 
 List(UInt(8)) tw_hex8(List(Int) xs) { return tw_u8s(xs, 0, ListBuf()); }
 List(UInt(8)) tw_u8s(List(Int) xs, Int i, ListBuf(UInt(8)) acc) { return if (i >= xs.len()) { acc.finish() } else { tw_u8s(xs, i + 1, acc.push((UInt(8))(xs[i] & 255))) }; }
 
-// The EK template: RSA (L-1) or ECC (L-2).
+/// The default EK template (a TPMT_PUBLIC): ECC P-256 (L-2) when `ecc`,
+/// else RSA 2048 (L-1).
 pub List(UInt(8)) tpm_ek_template(Bool ecc) {
     Int attrs = tpma_fixed_tpm() | tpma_fixed_parent() | tpma_sensitive_data_origin() | tpma_admin_with_policy() | tpma_restricted() | tpma_decrypt();
     List(UInt(8)) head = tw_be(if (ecc) { tpm_alg_ecc() } else { tpm_alg_rsa() }, 2).concat(tw_be(tpm_alg_sha256(), 2)).concat(tw_be(attrs, 4)).concat(tw_2b(tpm_ek_policy()));
@@ -900,8 +1038,8 @@ pub List(UInt(8)) tpm_ek_template(Bool ecc) {
     return head.concat(sym).concat(tw_be(tpm_alg_null(), 2)).concat(tw_be(2048, 2)).concat(tw_be(0, 4)).concat(tw_2b(tw_zeros(256, ListBuf())));
 }
 
-// The AK template: a restricted ECDSA P-256 SHA-256 signing key, noDA, its
-// password empty, no policy.
+/// The AK template: a restricted ECDSA P-256 SHA-256 signing key, noDA, its
+/// password empty, no policy.
 pub List(UInt(8)) tpm_ak_template() {
     Int attrs = tpma_fixed_tpm() | tpma_fixed_parent() | tpma_sensitive_data_origin() | tpma_user_with_auth() | tpma_object_no_da() | tpma_restricted() | tpma_sign();
     return tw_be(tpm_alg_ecc(), 2).concat(tw_be(tpm_alg_sha256(), 2)).concat(tw_be(attrs, 4)).concat(tw_be(0, 2))
@@ -909,35 +1047,35 @@ pub List(UInt(8)) tpm_ak_template() {
         .concat(tw_be(0, 2)).concat(tw_be(0, 2));
 }
 
-// TPM2_CreatePrimary (Part 3, Table 164): a primary object of `hierarchy`
-// from `template` (a TPMT_PUBLIC), the password session (empty), an empty
-// sensitive area, no outside info, no creation PCRs.
+/// TPM2_CreatePrimary (Part 3, Table 164): a primary object of `hierarchy`
+/// from `template` (a TPMT_PUBLIC), the password session (empty), an empty
+/// sensitive area, no outside info, no creation PCRs.
 pub Result(List(UInt(8)), TpmError) tpm2_create_primary_cmd(Int hierarchy, List(UInt(8)) template) {
     if (!tw_u32_ok(hierarchy) || template.len() > 1024) { return Err(TpmArg("a hierarchy and a template of at most 1024 bytes")); }
     List(UInt(8)) params = tw_2b(tw_be(0, 2).concat(tw_be(0, 2))).concat(tw_2b(template)).concat(tw_be(0, 2)).concat(tw_be(0, 4));
     return Ok(tw_command(tpm_cc_create_primary(), [hierarchy], tw_pw_auth(), params));
 }
 
-// TPM2_StartAuthSession (Part 3, Table 11): an unbound, unsalted policy
-// session hashing with SHA-256, the caller's nonce (16 to 32 bytes).
+/// TPM2_StartAuthSession (Part 3, Table 11): an unbound, unsalted policy
+/// session hashing with SHA-256, the caller's nonce (16 to 32 bytes).
 pub Result(List(UInt(8)), TpmError) tpm2_start_auth_session_cmd(List(UInt(8)) nonce) {
     if (nonce.len() < 16 || nonce.len() > 32) { return Err(TpmArg("a caller nonce of 16 to 32 bytes")); }
     List(UInt(8)) params = tw_2b(nonce).concat(tw_be(0, 2)).concat([(UInt(8))1]).concat(tw_be(tpm_alg_null(), 2)).concat(tw_be(tpm_alg_sha256(), 2));
     return Ok(tw_command(tpm_cc_start_auth_session(), [tpm_rh_null(), tpm_rh_null()], [], params));
 }
 
-// TPM2_PolicySecret (Part 3, Table 125): authHandle's authorization (the
-// password session, empty) into policySession, no nonce, cpHash or
-// policyRef, no expiration.
+/// TPM2_PolicySecret (Part 3, Table 125): authHandle's authorization (the
+/// password session, empty) into policySession, no nonce, cpHash or
+/// policyRef, no expiration.
 pub Result(List(UInt(8)), TpmError) tpm2_policy_secret_cmd(Int auth_handle, Int session) {
     if (!tw_u32_ok(auth_handle) || !tw_u32_ok(session)) { return Err(TpmArg("handles are u32")); }
     List(UInt(8)) params = tw_be(0, 2).concat(tw_be(0, 2)).concat(tw_be(0, 2)).concat(tw_be(0, 4));
     return Ok(tw_command(tpm_cc_policy_secret(), [auth_handle, session], tw_pw_auth(), params));
 }
 
-// TPM2_ActivateCredential (Part 3, Table 151): activateHandle (the AK, the
-// password session) and keyHandle (the EK, the policy session `session`),
-// credentialBlob, secret.
+/// TPM2_ActivateCredential (Part 3, Table 151): activateHandle (the AK, the
+/// password session) and keyHandle (the EK, the policy session `session`),
+/// credentialBlob, secret.
 pub Result(List(UInt(8)), TpmError) tpm2_activate_credential_cmd(Int ak, Int ek, Int session, List(UInt(8)) blob, List(UInt(8)) secret) {
     if (!tw_u32_ok(ak) || !tw_u32_ok(ek) || !tw_u32_ok(session)) { return Err(TpmArg("handles are u32")); }
     if (blob.len() > 1024 || secret.len() > 1024) { return Err(TpmArg("a credential and secret of at most 1024 bytes")); }
@@ -945,22 +1083,26 @@ pub Result(List(UInt(8)), TpmError) tpm2_activate_credential_cmd(Int ak, Int ek,
     return Ok(tw_command(tpm_cc_activate_credential(), [ak, ek], tw_pw_auth().concat(policy), tw_2b(blob).concat(tw_2b(secret))));
 }
 
-// TPM2_FlushContext (Part 3, Table 192): flushHandle is a parameter.
+/// TPM2_FlushContext (Part 3, Table 192): flushHandle is a parameter.
 pub Result(List(UInt(8)), TpmError) tpm2_flush_context_cmd(Int handle) {
     if (!tw_u32_ok(handle)) { return Err(TpmArg("a handle is u32")); }
     return Ok(tw_command(tpm_cc_flush_context(), [], [], tw_be(handle, 4)));
 }
 
-// The offsets the links copy between: a response's first handle (10), a
-// command's first and second handles (10, 14), and in ActivateCredential
-// the policy session's handle in the authorization area (after two handles,
-// the area's size and the 9-byte password session: 31).
+// The offsets the links copy between.
+
+/// The offset of a response's first handle, and of a command's first
+/// handle (10).
 pub Int tpm_off_handle() { return 10; }
+/// The offset of a command's second handle (14).
 pub Int tpm_off_handle2() { return 14; }
+/// The offset of the policy session's handle in an ActivateCredential
+/// command's authorization area (after two handles, the area's size and the
+/// 9-byte password session: 31).
 pub Int tpm_off_activate_session() { return 31; }
 
-// The response's parameters after `handles` handles, with `sessions`
-// authorization responses (each nonce, attributes, hmac) after them.
+/// The response's parameters after `handles` handles, with `sessions`
+/// authorization responses (each nonce, attributes, hmac) after them.
 pub Result(TwAt, TpmError) tpm_resp_params_n(List(UInt(8)) r, Int handles, Int sessions) {
     if (sessions <= 1) { return tpm_resp_params(r, handles, sessions == 1); }
     TwAt all = TwAt {.r = r, .at = 0, .end = r.len()};
@@ -988,16 +1130,20 @@ Result(TwAt, TpmError) tw_auths(TwAt p, Int n) {
     return tw_auths(hmac.next, n - 1);
 }
 
-// A response's first handle.
+/// The first handle of response `r` (bytes 10 to 13), with no check of the
+/// tag or response code; Err(TpmBad) when `r` is shorter than 14 bytes.
 pub Result(Int, TpmError) tpm_resp_handle(List(UInt(8)) r) {
     if (r.len() < 14) { return Err(TpmBad("no handle in the response")); }
     return Ok(tw_be_val(r, 10, 4, 0));
 }
 
-// What TPM2_CreatePrimary made: its transient handle, its public area (a
-// TPMT_PUBLIC) and its name.
+/// What TPM2_CreatePrimary made: its transient handle, its public area (a
+/// TPMT_PUBLIC) and its name.
 type TpmCreated = { Int handle; List(UInt(8)) public_area; List(UInt(8)) name; };
 
+/// The decoded TPM2_CreatePrimary response: the new object's handle,
+/// public area and name. Err(TpmRc) for an error, Err(TpmBad) when
+/// malformed.
 pub Result(TpmCreated, TpmError) tpm2_create_primary_resp(List(UInt(8)) r) {
     TwAt p = tpm_resp_params(r, 1, true)?;
     Int h = tpm_resp_handle(r)?;
@@ -1012,7 +1158,8 @@ pub Result(TpmCreated, TpmError) tpm2_create_primary_resp(List(UInt(8)) r) {
     return Ok(TpmCreated {.handle = h, .public_area = outp.v, .name = name.v});
 }
 
-// TPM2_ActivateCredential's response: certInfo, the credential recovered.
+/// The credential (certInfo) recovered by a TPM2_ActivateCredential
+/// response with two sessions; Err(TpmRc) or Err(TpmBad).
 pub Result(List(UInt(8)), TpmError) tpm2_activate_credential_resp(List(UInt(8)) r) {
     TwAt p = tpm_resp_params_n(r, 0, 2)?;
     TwBytes ci = tw_take_2b(p, 64, "certInfo")?;
@@ -1020,8 +1167,9 @@ pub Result(List(UInt(8)), TpmError) tpm2_activate_credential_resp(List(UInt(8)) 
     return Ok(ci.v);
 }
 
-// A response with no parameters (PolicySecret's are checked only for an
-// error; FlushContext has none).
+/// Ok(true) when response `r` is a success whose header (and, with
+/// `sessions`, one session response) parses. The parameters are not read:
+/// PolicySecret's are checked only for an error; FlushContext has none.
 pub Result(Bool, TpmError) tpm_resp_ok(List(UInt(8)) r, Bool sessions) {
     TwAt p = tpm_resp_params(r, 0, sessions)?;
     return Ok(true);
@@ -1029,11 +1177,15 @@ pub Result(Bool, TpmError) tpm_resp_ok(List(UInt(8)) r, Bool sessions) {
 
 // -- A public area -----------------------------------------------------------
 
-// A TPMT_PUBLIC (Part 2, Table 225) as far as a verifier needs: its type,
-// nameAlg, objectAttributes, authPolicy, the scheme and curve or key size,
-// and the public key (an RSA modulus and exponent, or an ECC point).
+/// A TPMT_PUBLIC (Part 2, Table 225) as far as a verifier needs: its type,
+/// nameAlg, objectAttributes, authPolicy, the symmetric algorithm, the
+/// scheme and curve or key size, and the public key (an RSA modulus and
+/// exponent, or an ECC point).
 type TpmPubKey = { Int type_alg; Int name_alg; Int attributes; List(UInt(8)) auth_policy; Int sym_alg; Int scheme; Int scheme_hash; Int curve; Int key_bits; Int exponent; List(UInt(8)) rsa_n; List(UInt(8)) ecc_x; List(UInt(8)) ecc_y; };
 
+/// The fields of TPMT_PUBLIC `a` for an RSA or ECC key. An RSA exponent of
+/// 0 reads as 65537. Err(TpmBad) for another key type or bytes that do not
+/// parse exactly.
 pub Result(TpmPubKey, TpmError) tpm_public_parse(List(UInt(8)) a) {
     TwAt p = TwAt {.r = a, .at = 0, .end = a.len()};
     TwNum ty = tw_num(p, 2, "type")?;
@@ -1068,12 +1220,12 @@ pub Result(TpmPubKey, TpmError) tpm_public_parse(List(UInt(8)) a) {
 
 // -- Chains ------------------------------------------------------------------
 
-// Commands run in order over one connection, each patched by its links
-// (quadruples: from step, offset in its response, to step, offset in its
-// command) before it is sent: what device.transact_chain does in the
-// device host, here over a transport `send` (the simulator). A link past
-// its response (an earlier command failed) ends the chain there, the rest
-// of the responses empty, as in the host.
+/// Commands run in order over one connection, each patched by its links
+/// (quadruples: from step, offset in its response, to step, offset in its
+/// command) before it is sent: what device.transact_chain does in the
+/// device host, here over a transport `send` (the simulator). A link past
+/// its response (an earlier command failed) ends the chain there, the rest
+/// of the responses empty, as in the host.
 pub Result(List(List(UInt(8))), TpmError) tpm_chain_via(Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send, List(List(UInt(8))) cmds, List(Int) links) {
     return tw_chain_at(send, cmds, links, 0, []);
 }
@@ -1103,10 +1255,12 @@ Result(List(UInt(8)), TpmError) tw_patch(List(UInt(8)) c, List(Int) l, List(List
     return tw_patch(c2, l, got, i, k + 4);
 }
 
-// The two keys this TPM derives for the templates: the EK (RSA or ECC) and
-// the AK, made and flushed in one chain.
+/// The two keys this TPM derives from the templates: the EK (RSA or ECC)
+/// and the AK, made and flushed in one chain.
 type TpmKeys = { TpmCreated ek; TpmCreated ak; };
 
+/// This TPM's EK (ECC when `ecc`, else RSA) and AK from the templates,
+/// made and flushed in one run of `chain`.
 pub Result(TpmKeys, TpmError) tpm_ek_ak_via(Result(List(List(UInt(8))), TpmError) closure(List(List(UInt(8))), List(Int)) chain, Bool ecc) {
     List(UInt(8)) c0 = tpm2_create_primary_cmd(tpm_rh_endorsement(), tpm_ek_template(ecc))?;
     List(UInt(8)) c1 = tpm2_create_primary_cmd(tpm_rh_endorsement(), tpm_ak_template())?;
@@ -1117,10 +1271,10 @@ pub Result(TpmKeys, TpmError) tpm_ek_ak_via(Result(List(List(UInt(8))), TpmError
     return Ok(TpmKeys {.ek = ek, .ak = ak});
 }
 
-// TPM2_ActivateCredential of (blob, secret) made for this TPM's EK and AK:
-// EK, AK, a policy session satisfied by PolicySecret(TPM_RH_ENDORSEMENT)
-// with the empty endorsement password, then ActivateCredential, then
-// the three flushed. The credential recovered.
+/// TPM2_ActivateCredential of (blob, secret) made for this TPM's EK and AK:
+/// EK, AK, a policy session satisfied by PolicySecret(TPM_RH_ENDORSEMENT)
+/// with the empty endorsement password, then ActivateCredential, then
+/// the three flushed. The credential recovered.
 pub Result(List(UInt(8)), TpmError) tpm_activate_credential_via(Result(List(List(UInt(8))), TpmError) closure(List(List(UInt(8))), List(Int)) chain, Bool ecc, List(UInt(8)) nonce, List(UInt(8)) blob, List(UInt(8)) secret) {
     List(UInt(8)) c0 = tpm2_create_primary_cmd(tpm_rh_endorsement(), tpm_ek_template(ecc))?;
     List(UInt(8)) c1 = tpm2_create_primary_cmd(tpm_rh_endorsement(), tpm_ak_template())?;
@@ -1140,8 +1294,8 @@ pub Result(List(UInt(8)), TpmError) tpm_activate_credential_via(Result(List(List
     return tpm2_activate_credential_resp(rs[4]);
 }
 
-// TPM2_Quote by the endorsement-hierarchy AK (made, used, flushed in one
-// chain): the PCRs `sel` selects, `nonce` the qualifying data.
+/// TPM2_Quote by the endorsement-hierarchy AK (made, used, flushed in one
+/// chain): the PCRs `sel` selects, `nonce` the qualifying data.
 pub Result(TpmQuote, TpmError) tpm_quote_ak_via(Result(List(List(UInt(8))), TpmError) closure(List(List(UInt(8))), List(Int)) chain, List(UInt(8)) nonce, List(PcrSel) sel) {
     List(UInt(8)) c0 = tpm2_create_primary_cmd(tpm_rh_endorsement(), tpm_ak_template())?;
     List(UInt(8)) c1 = tpm2_quote_cmd(0, nonce, sel)?;
@@ -1153,8 +1307,9 @@ pub Result(TpmQuote, TpmError) tpm_quote_ak_via(Result(List(List(UInt(8))), TpmE
 
 // -- EK certificates -----------------------------------------------------------
 
-// Back-to-back DER SEQUENCEs; trailing zero padding (some TPMs pad the
-// index) is ignored.
+/// The back-to-back DER SEQUENCEs in `b` from offset `at`, appended to
+/// `acc`. A zero byte ends the list (some TPMs pad the index); anything
+/// else that is not a SEQUENCE, or a length past `b`, is Err(TpmBad).
 pub Result(List(List(UInt(8))), TpmError) tpm_der_split(List(UInt(8)) b, Int at, List(List(UInt(8))) acc) {
     if (at >= b.len() || b[at] == (UInt(8)) 0) { return Ok(acc); }
     if (b[at] != (UInt(8)) 48 || at + 2 > b.len()) { return Err(TpmBad("an EK chain index holds something other than certificates")); }

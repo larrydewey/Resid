@@ -1,7 +1,10 @@
 // ─── lib/tls.resid — TLS 1.3 handshake core (RFC 8446) in pure Resid ─
 // Key schedule, HKDF-Expand-Label, Derive-Secret, Finished, and
 // AES-128-GCM record protection. SHA-256 cipher suite only.
-// Verified against the RFC 8448 simplified handshake trace.
+// Verified against the RFC 8448 simplified handshake trace. Also: the
+// TlsKeys connection state (directional keys, sequence numbers, the RFC
+// 9266 channel-binding exporter) and record reading from a socket
+// (ts_read_record, which needs network(readonly)).
 //
 // HkdfExpandLabel info encoding (RFC 8446 §7.1):
 //   uint16 L || uint8 |"tls13 "+label| || "tls13 "+label
@@ -23,11 +26,14 @@ import "aesgcmg.resid";
 
 // ── HKDF-Expand-Label / Derive-Secret ────────────────────────────────
 
+/// The bytes of `s` as a list of Ints.
 pub List(Int) tl_str(Str s) {
     return bytes_of(s);
 }
 
-// info = uint16(L) || len("tls13 "+label) || label || len(ctx) || ctx
+/// The HkdfLabel info block (RFC 8446 §7.1) for output length `len`.
+/// Encoded as uint16(`len`) || len("tls13 " + `label`) || "tls13 " +
+/// `label` || len(`ctx`) || `ctx`; lengths over 255 are not checked.
 pub List(Int) tls_label_info(Int len, Str label, List(Int) ctx) {
     Int hi = len / 256;
     Int lo = len % 256;
@@ -44,15 +50,19 @@ pub List(Int) tls_label_info(Int len, Str label, List(Int) ctx) {
     return sconcat(i5, ctx);
 }
 
+/// HKDF-Expand over SHA-256 (RFC 5869) of `prk` with `info`, to `len` bytes.
+/// Public bytes only.
 pub List(Int) tls_expand(List(Int) prk, List(Int) info, Int len) {
     Int n = hkdf_rounds(len);
     return hkdf_take(hkdf_exp_acc(prk, info, 1, n, [], []), 0, len, []);
 }
 
+/// Thirty-two zero bytes, the key schedule's zero input.
 pub List(Int) tls_zeros32() {
     return zeros_seed([], 32);
 }
 
+/// The SHA-256 hash of the empty string, Transcript-Hash("") in RFC 8446.
 pub List(Int) tls_empty_hash() {
     return slice_seed(sha256_bytes([]), 0, 32, []);
 }
@@ -69,18 +79,22 @@ pub List(Int) tls_empty_hash() {
 // transcript hashes, lengths and sequence numbers. HKDF is
 // lib/sha256g.resid's.
 
-// HKDF-Expand-Label (RFC 8446 §7.1): the label and context are public.
+/// HKDF-Expand-Label (RFC 8446 §7.1) of `secret` to `len` bytes over SHA-256.
+/// `label` and `ctx` are public; the result has the byte type of `secret`.
 @needs(Word(W, B))
 pub List(B) tlsg_expand_label(List(B) secret, Str label, List(Int) ctx, Int len) {
     ListBuf(B) ib = ListBuf();
     return hkdf256g_expand(secret, w_lift_bytes(tls_label_info(len, label, ctx), 0, ib), len);
 }
 
+/// Derive-Secret (RFC 8446 §7.1): a 32-byte expansion of `secret` under
+/// `label` with the transcript hash `thash` as context.
 @needs(Word(W, B))
 pub List(B) tlsg_derive_secret(List(B) secret, Str label, List(Int) thash) {
     return tlsg_expand_label(secret, label, thash, 32);
 }
 
+/// HKDF-Extract over SHA-256 of `ikm` with `salt`.
 @needs(Word(W, B))
 pub List(B) tlsg_extract(List(B) salt, List(B) ikm) {
     return hkdf256g_extract(salt, ikm);
@@ -94,12 +108,16 @@ List(B) tlsg_zeros32() {
     return w_lift_bytes(tls_zeros32(), 0, zb);
 }
 
+/// The early secret with no PSK: HKDF-Extract of 32 zero bytes with a
+/// zero salt (RFC 8446 §7.1).
 @needs(Word(W, B))
 pub List(B) tlsg_early_secret() {
     List(B) z = tlsg_zeros32();
     return tlsg_extract(z, z);
 }
 
+/// The handshake secret from the (EC)DHE shared secret `shared`, with no
+/// PSK (RFC 8446 §7.1).
 @needs(Word(W, B))
 pub List(B) tlsg_handshake_secret(List(B) shared) {
     List(B) early = tlsg_early_secret();
@@ -107,6 +125,7 @@ pub List(B) tlsg_handshake_secret(List(B) shared) {
     return tlsg_extract(derived, shared);
 }
 
+/// The master secret from the handshake secret `hs` (RFC 8446 §7.1).
 @needs(Word(W, B))
 pub List(B) tlsg_master_secret(List(B) hs) {
     List(B) derived = tlsg_derive_secret(hs, "derived", tls_empty_hash());
@@ -114,45 +133,57 @@ pub List(B) tlsg_master_secret(List(B) hs) {
     return tlsg_extract(derived, z);
 }
 
+/// The client handshake traffic secret from `hs` and the transcript hash
+/// `thash` through ServerHello.
 @needs(Word(W, B))
 pub List(B) tlsg_c_hs_traffic(List(B) hs, List(Int) thash) { return tlsg_derive_secret(hs, "c hs traffic", thash); }
 
+/// The server handshake traffic secret from `hs` and the transcript hash
+/// `thash` through ServerHello.
 @needs(Word(W, B))
 pub List(B) tlsg_s_hs_traffic(List(B) hs, List(Int) thash) { return tlsg_derive_secret(hs, "s hs traffic", thash); }
 
+/// The client application traffic secret from `master` and the transcript
+/// hash `thash` through the server's Finished.
 @needs(Word(W, B))
 pub List(B) tlsg_c_ap_traffic(List(B) master, List(Int) thash) { return tlsg_derive_secret(master, "c ap traffic", thash); }
 
+/// The server application traffic secret from `master` and the transcript
+/// hash `thash` through the server's Finished.
 @needs(Word(W, B))
 pub List(B) tlsg_s_ap_traffic(List(B) master, List(Int) thash) { return tlsg_derive_secret(master, "s ap traffic", thash); }
 
+/// The 16-byte AES-128-GCM record key of a traffic secret (RFC 8446 §7.3).
 @needs(Word(W, B))
 pub List(B) tlsg_traffic_key(List(B) secret) { return tlsg_expand_label(secret, "key", [], 16); }
 
+/// The 12-byte record IV of a traffic secret (RFC 8446 §7.3).
 @needs(Word(W, B))
 pub List(B) tlsg_traffic_iv(List(B) secret) { return tlsg_expand_label(secret, "iv", [], 12); }
 
-// Finished (RFC 8446 §4.4.4): verify_data = HMAC(finished_key, hash).
+/// The 32-byte finished_key of a traffic secret (RFC 8446 §4.4.4).
 @needs(Word(W, B))
 pub List(B) tlsg_finished_key(List(B) traffic_secret) { return tlsg_expand_label(traffic_secret, "finished", [], 32); }
 
+/// Finished verify_data (RFC 8446 §4.4.4): HMAC-SHA-256 under the finished
+/// key of `traffic_secret` over the transcript hash `thash`.
 @needs(Word(W, B))
 pub List(B) tlsg_finished(List(B) traffic_secret, List(Int) thash) {
     ListBuf(B) hb = ListBuf();
     return hmac256g(tlsg_finished_key(traffic_secret), w_lift_bytes(thash, 0, hb));
 }
 
-// Whether a peer's Finished verify_data is the one these keys give:
-// compared in constant time, and only the one-bit verdict is public
-// (CtSame(B): at secret bytes a declassification).
+/// Whether a peer's Finished verify_data is the one these keys give:
+/// compared in constant time, and only the one-bit verdict is public
+/// (CtSame(B): at secret bytes a declassification).
 @needs(Word(W, B), CtSame(B))
 pub Bool tlsg_finished_ok(List(B) traffic_secret, List(Int) thash, List(Int) verify_data) {
     ListBuf(B) vb = ListBuf();
     return ct_same(tlsg_finished(traffic_secret, thash), w_lift_bytes(verify_data, 0, vb));
 }
 
-// Our own Finished verify_data, to send: a MAC over the transcript, public
-// by design (TlsPublish(B)).
+/// Our own Finished verify_data, to send: a MAC over the transcript, public
+/// by design (TlsPublish(B)).
 @needs(Word(W, B), TlsPublish(B))
 pub List(Int) tlsg_finished_out(List(B) traffic_secret, List(Int) thash) {
     return tlsp_mac(tlsg_finished(traffic_secret, thash));
@@ -170,6 +201,9 @@ pub List(Int) tlsg_finished_out(List(B) traffic_secret, List(Int) thash) {
 // instance carries @requires(declassify) to every caller of the secret
 // record layer and handshake, and to no caller of the public copy.
 
+/// How a connection over byte type B publishes record ciphertext, opened
+/// plaintext and Finished MACs as public bytes. The secret instance
+/// declassifies, so it needs `declassify`; the public one copies.
 behavior TlsPublish(B) {
     List(Int) tlsp_record(List(B) ct);
     List(Int) tlsp_plain(List(B) pt);
@@ -212,8 +246,9 @@ TlsPublish(Secret(UInt(8))) = { .tlsp_record = tlsp_record_secret, .tlsp_plain =
 
 // ─── Protected records, generic ─────────────────────────────────────
 
-// nonce = IV xor the 64-bit sequence number, left-padded to the IV's
-// length (RFC 8446 §5.3): public shifts of the public counter into B.
+/// The per-record nonce: `iv` xor the sequence number `seq` (RFC 8446 §5.3).
+/// `seq` is big-endian and left-padded to the IV's length; it is public and
+/// enters B through a public xor.
 @needs(Word(W, B))
 pub List(B) tlsg_record_nonce(List(B) iv, Int seq) {
     ListBuf(B) acc = ListBuf();
@@ -228,10 +263,10 @@ ListBuf(B) tlsg_xor_seq(List(B) iv, Int seq, Int i, ListBuf(B) acc) {
     return tlsg_xor_seq(iv, seq, i + 1, acc.push(b_xork(iv[i], b)));
 }
 
-// One protected record: the 5-byte header, then ciphertext and tag
-// (published through TlsPublish). The inner plaintext is `content` and
-// the content-type byte (TLSInnerPlaintext); the AAD is the header as it
-// goes on the wire; the outer type is 23 for every protected record.
+/// One protected record: the 5-byte header, then ciphertext and tag
+/// (published through TlsPublish). The inner plaintext is `content` and
+/// the content-type byte (TLSInnerPlaintext); the AAD is the header as it
+/// goes on the wire; the outer type is 23 for every protected record.
 @needs(Word(W, B), Block128(X, W, B), TlsPublish(B))
 pub List(Int) tlsg_protect(Int seq, List(B) key, List(B) iv, List(Int) content, Int inner_type) {
     List(Int) pt = content.concat([inner_type]);
@@ -241,11 +276,11 @@ pub List(Int) tlsg_protect(Int seq, List(B) key, List(B) iv, List(Int) content, 
     return hdr.concat(tlsp_record(sealed));
 }
 
-// The inner plaintext of one protected record (content-type byte still
-// attached), or empty when the tag does not verify. The verdict is one
-// public bit (CtSame(B), in the AEAD); the plaintext is published to the
-// caller through TlsPublish. `hdr` is the five bytes that came off the
-// wire: they are the AAD.
+/// The inner plaintext of one protected record (content-type byte still
+/// attached), or empty when the tag does not verify. The verdict is one
+/// public bit (CtSame(B), in the AEAD); the plaintext is published to the
+/// caller through TlsPublish. `hdr` is the five bytes that came off the
+/// wire: they are the AAD.
 @needs(Word(W, B), Block128(X, W, B), CtSame(B), TlsPublish(B))
 pub List(Int) tlsg_open(Int seq, List(B) key, List(B) iv, List(Int) hdr, List(Int) body) {
     List(Int) none = [];
@@ -258,53 +293,65 @@ pub List(Int) tlsg_open(Int seq, List(B) key, List(B) iv, List(Int) hdr, List(In
 // ── The key schedule on public bytes (RFC 8446 §7.1) ─────────────────
 // The public copy of the generic functions above.
 
+/// HKDF-Expand-Label (RFC 8446 §7.1) on public bytes; see `tlsg_expand_label`.
 pub List(Int) tls_expand_label(List(Int) secret, Str label, List(Int) ctx, Int len) {
     return tlsg_expand_label(secret, label, ctx, len);
 }
 
+/// Derive-Secret (RFC 8446 §7.1) on public bytes; see `tlsg_derive_secret`.
 pub List(Int) tls_derive_secret(List(Int) secret, Str label, List(Int) thash) {
     return tlsg_derive_secret(secret, label, thash);
 }
 
+/// HKDF-Extract over SHA-256 of `ikm` with `salt`, on public bytes.
 pub List(Int) tls_extract(List(Int) salt, List(Int) ikm) {
     return tlsg_extract(salt, ikm);
 }
 
+/// The early secret with no PSK, on public bytes.
 pub List(Int) tls_early_secret() {
     List(Int) e = tlsg_early_secret();
     return e;
 }
 
+/// The handshake secret from the shared secret `shared`, on public bytes.
 pub List(Int) tls_handshake_secret(List(Int) shared) { return tlsg_handshake_secret(shared); }
 
+/// The master secret from the handshake secret `hs`, on public bytes.
 pub List(Int) tls_master_secret(List(Int) hs) { return tlsg_master_secret(hs); }
 
+/// The client handshake traffic secret, on public bytes.
 pub List(Int) tls_c_hs_traffic(List(Int) hs, List(Int) thash) { return tlsg_c_hs_traffic(hs, thash); }
 
+/// The server handshake traffic secret, on public bytes.
 pub List(Int) tls_s_hs_traffic(List(Int) hs, List(Int) thash) { return tlsg_s_hs_traffic(hs, thash); }
 
+/// The client application traffic secret, on public bytes.
 pub List(Int) tls_c_ap_traffic(List(Int) master, List(Int) thash) { return tlsg_c_ap_traffic(master, thash); }
 
+/// The server application traffic secret, on public bytes.
 pub List(Int) tls_s_ap_traffic(List(Int) master, List(Int) thash) { return tlsg_s_ap_traffic(master, thash); }
 
+/// The 16-byte record key of a traffic secret, on public bytes.
 pub List(Int) tls_traffic_key(List(Int) secret) { return tlsg_traffic_key(secret); }
 
+/// The 12-byte record IV of a traffic secret, on public bytes.
 pub List(Int) tls_traffic_iv(List(Int) secret) { return tlsg_traffic_iv(secret); }
 
 // ── Finished (RFC 8446 §4.4.4) ───────────────────────────────────────
 
+/// The 32-byte finished_key of a traffic secret, on public bytes.
 pub List(Int) tls_finished_key(List(Int) traffic_secret) { return tlsg_finished_key(traffic_secret); }
 
+/// Finished verify_data over the transcript hash `thash`, on public bytes.
 pub List(Int) tls_finished(List(Int) traffic_secret, List(Int) thash) { return tlsg_finished(traffic_secret, thash); }
 
 // ─── protected records (RFC 8446 §5.2) ──────────────────────
 
-// A connection's record keys and its two sequence counters. The record
-// layer is the only thing that advances a counter, and it is immutable,
-// so a read and a write each carry the new value back to the caller
-// rather than storing it somewhere both can see. The keys and IVs are
-// secret bytes (spec §48): nothing branches on them, and they leave only
-// as the records they protect.
+/// A connection's record keys and its two sequence counters.
+/// `r*` is what this end reads, `w*` what it writes. The record is
+/// immutable, so a read or write returns the advanced counter to the
+/// caller. Keys and IVs are secret bytes (spec §48).
 type TlsKeys = {
     List(Secret(UInt(8))) rkey; List(Secret(UInt(8))) riv; Int rseq;   // what this end reads
     List(Secret(UInt(8))) wkey; List(Secret(UInt(8))) wiv; Int wseq;   // what this end writes
@@ -313,98 +360,109 @@ type TlsKeys = {
     List(Secret(UInt(8))) exp;   // the channel-binding exporter (RFC 9266), set by a handshake
 };
 
-// A connection's channel-binding exporter value (RFC 9266), for binding a
-// challenge to this end's own connection (PLAN-labels.md §6.5). Only a
-// completed handshake gives one: tlsserver_exporter (lib/tlswire.resid) and
-// tlsclient_exporter (lib/tlsclient.resid) build it from their opaque
-// connection types.
+/// A connection's channel-binding exporter value (RFC 9266), for binding a
+/// challenge to this end's own connection (PLAN-labels.md §6.5). Only a
+/// completed handshake gives one: tlsserver_exporter (lib/tlswire.resid) and
+/// tlsclient_exporter (lib/tlsclient.resid) build it from their opaque
+/// connection types.
 @opaque("tlswire.resid", "tlsclient.resid")
 pub type ChannelExporter = { List(Secret(UInt(8))) x; };
 
+/// Whether `e` holds a full 32-byte exporter value.
 pub Bool channel_exporter_ok(ChannelExporter e) { return e.x.len() == 32; }
 
-// TLS-Exporter("EXPORTER-Channel-Binding", "", 32) from the master secret
-// and the transcript hash through the server's Finished (RFC 8446 §7.5:
-// exporter_master_secret = Derive-Secret(master, "exp master", thash)).
+/// The exporter master secret (RFC 8446 §7.5): Derive-Secret(`master`,
+/// "exp master", `thash`), with `thash` the transcript hash through the
+/// server's Finished.
 @needs(Word(W, B))
 pub List(B) tlsg_exp_master(List(B) master, List(Int) thash) { return tlsg_derive_secret(master, "exp master", thash); }
 
+/// The channel-binding value TLS-Exporter("EXPORTER-Channel-Binding", "",
+/// 32) from the exporter master secret `exp_master` (RFC 9266, RFC 8446
+/// §7.5).
 @needs(Word(W, B))
 pub List(B) tlsg_channel_binding(List(B) exp_master) {
     List(B) sec = tlsg_derive_secret(exp_master, "EXPORTER-Channel-Binding", tls_empty_hash());
     return tlsg_expand_label(sec, "exporter", tls_empty_hash(), 32);
 }
 
-// The keys with the exporter of the handshake that made them.
+/// The keys `k` with the channel-binding exporter of the handshake that made
+/// them, derived from `master` and the transcript hash `thash`.
 pub TlsKeys tls_keys_exporter(TlsKeys k, List(Secret(UInt(8))) master, List(Int) thash) {
     return TlsKeys { .rkey = k.rkey, .riv = k.riv, .rseq = k.rseq, .wkey = k.wkey, .wiv = k.wiv, .wseq = k.wseq, .alpn = k.alpn, .pending = k.pending, .exp = tlsg_channel_binding(tlsg_exp_master(master, thash)) };
 }
 
-// The keys of a connection that never got one: empty keys, so a caller
-// that forgets to look at the error decrypts nothing rather than
-// something.
+/// The keys of a connection that never got one: empty keys, so a caller
+/// that forgets to look at the error decrypts nothing rather than
+/// something.
 pub TlsKeys tls_keys_none() {
     List(Secret(UInt(8))) none = [];
     List(Int) nob = [];
     return TlsKeys { .rkey = none, .riv = none, .rseq = 0, .wkey = none, .wiv = none, .wseq = 0, .alpn = "", .pending = nob, .exp = none };
 }
 
-// Both counters start at 0, and `alpn` is the protocol the handshake
-// settled on ("" when the client offered none this server speaks).
+/// A connection's keys from its read and write keys and IVs.
+/// Both counters start at 0, and `alpn` is the protocol the handshake
+/// settled on ("" when the client offered none this server speaks).
 pub TlsKeys tls_keys(List(Secret(UInt(8))) rkey, List(Secret(UInt(8))) riv, List(Secret(UInt(8))) wkey, List(Secret(UInt(8))) wiv, Str alpn) {
     return tls_keys_pending(rkey, riv, wkey, wiv, alpn, []);
 }
 
-// The same, with the record bytes a handshake read past the peer's
-// Finished. A client that pipelines its first request straight after the
-// handshake has those bytes in the socket before the server is ready for
-// them, and re-reading the socket instead would lose them.
+/// As `tls_keys`, also holding `pending`, the record bytes a handshake read
+/// past the peer's Finished. A client that pipelines its first request
+/// straight after the handshake has those bytes in the socket before the
+/// server is ready for them, and re-reading the socket would lose them.
 pub TlsKeys tls_keys_pending(List(Secret(UInt(8))) rkey, List(Secret(UInt(8))) riv, List(Secret(UInt(8))) wkey, List(Secret(UInt(8))) wiv, Str alpn, List(Int) pending) {
     return TlsKeys { .rkey = rkey, .riv = riv, .rseq = 0, .wkey = wkey, .wiv = wiv, .wseq = 0, .alpn = alpn, .pending = pending, .exp = [] };
 }
 
-// The same keys with the read counter moved on, and with the write
-// counter moved on. Immutable values, so a record layer that has just
-// consumed a sequence number carries the new pair back to its caller.
+/// The keys `k` with the read counter set to `seq`.
+/// Immutable values, so a record layer that has just consumed a sequence
+/// number carries the new keys back to its caller.
 pub TlsKeys tls_keys_rseq(TlsKeys k, Int seq) {
     return TlsKeys { .rkey = k.rkey, .riv = k.riv, .rseq = seq, .wkey = k.wkey, .wiv = k.wiv, .wseq = k.wseq, .alpn = k.alpn, .pending = k.pending, .exp = k.exp };
 }
 
+/// The keys `k` with the write counter set to `seq`.
 pub TlsKeys tls_keys_wseq(TlsKeys k, Int seq) {
     return TlsKeys { .rkey = k.rkey, .riv = k.riv, .rseq = k.rseq, .wkey = k.wkey, .wiv = k.wiv, .wseq = seq, .alpn = k.alpn, .pending = k.pending, .exp = k.exp };
 }
 
-// Protect `content` as record number `seq` under the connection's write
-// keys, and open record number `seq` under its read keys: the secret
-// record layer (tlsg_protect / tlsg_open at secret bytes). Each publishes
-// through TlsPublish, so each needs the declassify grant.
+/// One protected record of `content` and `inner_type` under the write keys
+/// of `k`, as record number `k.wseq` (`tlsg_protect` at secret bytes).
+/// The counter is not advanced here. Needs `declassify`: the ciphertext is
+/// published through TlsPublish.
 @requires(declassify)
 pub List(Int) tls_keys_protect(TlsKeys k, List(Int) content, Int inner_type) {
     return tlsg_protect(k.wseq, k.wkey, k.wiv, content, inner_type);
 }
 
+/// The inner plaintext of record number `k.rseq` under the read keys of `k`,
+/// or empty when the tag does not verify (`tlsg_open` at secret bytes).
+/// Needs `declassify`: the plaintext is published through TlsPublish.
 @requires(declassify)
 pub List(Int) tls_keys_open(TlsKeys k, List(Int) hdr, List(Int) body) {
     return tlsg_open(k.rseq, k.rkey, k.riv, hdr, body);
 }
 
-// The public copy of the record layer, on List(Int) keys (tests, the
-// RFC 8448 trace, examples/tls_client.resid).
+/// One protected record of `content` and `inner_type` as record number
+/// `seq`, on public List(Int) keys: the public copy of `tlsg_protect`
+/// (tests, the RFC 8448 trace, examples/tls_client.resid).
 pub List(Int) tls_protect(Int seq, List(Int) key, List(Int) iv, List(Int) content, Int inner_type) {
     return tlsg_protect(seq, key, iv, content, inner_type);
 }
 
-// The inner plaintext of one protected record, content-type byte still
-// attached, or an empty list when the tag does not verify. A record that
-// fails its tag has no contents, so nothing downstream may act on one
-// that decrypted "mostly". `hdr` must be the five bytes that went on the
-// wire: they are the AAD, and a rebuilt header is a different AAD.
+/// The inner plaintext of one protected record, content-type byte still
+/// attached, or an empty list when the tag does not verify. A record that
+/// fails its tag has no contents, so nothing downstream may act on one
+/// that decrypted "mostly". `hdr` must be the five bytes that went on the
+/// wire: they are the AAD, and a rebuilt header is a different AAD.
 pub List(Int) tls_open(Int seq, List(Int) key, List(Int) iv, List(Int) hdr, List(Int) body) {
     return tlsg_open(seq, key, iv, hdr, body);
 }
 
-// As `tls_open`, with the content-type byte taken off: what the layer
-// above wants to see.
+/// As `tls_open`, with the content-type byte taken off: what the layer
+/// above wants to see.
 pub List(Int) tls_unprotect(Int seq, List(Int) key, List(Int) iv, List(Int) hdr, List(Int) body) {
     List(Int) pt = tls_open(seq, key, iv, hdr, body);
     if (pt.len() == 0) {
@@ -415,8 +473,8 @@ pub List(Int) tls_unprotect(Int seq, List(Int) key, List(Int) iv, List(Int) hdr,
     return pt[0..clen];
 }
 
-// The inner content type of a decrypted record: the last byte of the
-// inner plaintext, or -1 when there is no plaintext at all.
+/// The inner content type of a decrypted record: the last byte of the
+/// inner plaintext, or -1 when there is no plaintext at all.
 pub Int tls_inner_type(List(Int) pt) {
     Int n = pt.len();
     if (n == 0) { return -1; }
@@ -427,9 +485,11 @@ pub Int tls_inner_type(List(Int) pt) {
 
 // ─── Reading the connection ───────────────────────────────────────────
 
-// Bytes read from the socket that the handshake has not consumed yet.
+/// Bytes read from the socket `fd` that the handshake has not consumed yet.
+/// `eof` is set once the peer has closed.
 type TsIn = { Int fd; List(Int) buf; Bool eof; };
 
+/// An empty read buffer over the socket `fd`.
 pub TsIn ts_in(Int fd) {
     return TsIn { .fd = fd, .buf = [], .eof = false };
 }
@@ -446,7 +506,8 @@ TsIn ts_fill(TsIn s) {
     return TsIn { .fd = s.fd, .buf = s.buf.concat(more), .eof = false };
 }
 
-// The next `n` bytes and what is left of the connection.
+/// The next `n` bytes and what is left of the connection.
+/// `ok` is false when the peer closed before `n` bytes arrived.
 type TsTake = { TsIn in; List(Int) bytes; Bool ok; };
 
 @requires(network(readonly))
@@ -464,14 +525,19 @@ TsTake ts_take(TsIn s, Int n) {
     return ts_take(ts_fill(s), n);
 }
 
-// One record: its type, its legacy version and its body.
+/// One record: its type, its legacy version, its header and its body.
+/// `in` is the rest of the connection; `ok` is false when the record was
+/// truncated or too long.
 pub type TsRec = { TsIn in; Int ctype; Int version; List(Int) hdr; List(Int) body; Bool ok; };
 
-// 2^14 + 256: the RFC 8446 §5.1 limit on a plaintext fragment, plus the
-// expansion the AEAD adds. A record that claims more is refused rather
-// than waited for.
+/// 2^14 + 256: the RFC 8446 §5.1 limit on a plaintext fragment, plus the
+/// expansion the AEAD adds. A record that claims more is refused rather
+/// than waited for.
 pub Int tsr_max_record() { return 16640; }
 
+/// The next record from `s`, reading the socket as needed.
+/// `ok` is false when the connection ends first or the header claims more
+/// than `tsr_max_record()` bytes. Needs `network(readonly)`.
 @requires(network(readonly))
 pub TsRec ts_read_record(TsIn s) {
     TsTake hdr = ts_take(s, 5);
@@ -487,7 +553,8 @@ pub TsRec ts_read_record(TsIn s) {
     return TsRec { .in = body.in, .ctype = ctype, .version = version, .hdr = hdr.bytes, .body = body.bytes, .ok = true };
 }
 
-// A handshake message is complete once its declared length is buffered.
+/// Whether `acc` holds a whole handshake message: its 4-byte header and
+/// the 24-bit length it declares.
 pub Bool ts_msg_complete(List(Int) acc) {
     Int n = acc.len();
     if (n < 4) { return false; }
@@ -498,7 +565,8 @@ pub Bool ts_msg_complete(List(Int) acc) {
 
 // ── record layer (RFC 8446 §5.2) ─────────────────────────────────────
 
-// nonce = static IV xor 64-bit big-endian sequence number in 12 bytes
+/// The 12-byte record nonce: `static_iv` xor the 64-bit big-endian `seq`,
+/// left-padded to 12 bytes (RFC 8446 §5.3).
 pub List(Int) tls_record_nonce(List(Int) static_iv, Int seq) {
     Int hiw = seq / 4294967296;
     Int low = seq % 4294967296;
@@ -509,6 +577,7 @@ pub List(Int) tls_record_nonce(List(Int) static_iv, Int seq) {
     return tls_xor12(static_iv, seq12);
 }
 
+/// The bytewise xor of the first 12 bytes of `a` and `b`.
 pub List(Int) tls_xor12(List(Int) a, List(Int) b) {
     List(Int) acc = [];
     Int b1 = a[0] ^ b[0];
@@ -526,6 +595,8 @@ pub List(Int) tls_xor12(List(Int) a, List(Int) b) {
     return acc.concat([b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11, b12]);
 }
 
+/// A 5-byte record header: content type `ctype`, legacy version 0x0303 and
+/// body length `clen`.
 pub List(Int) tls_record_header2(Int ctype, Int clen) {
     Int hi = clen / 256;
     Int lo = clen % 256;
@@ -533,17 +604,19 @@ pub List(Int) tls_record_header2(Int ctype, Int clen) {
     return acc.concat([ctype, 3, 3, hi, lo]);
 }
 
+/// A 5-byte application_data (type 23) record header for body length `clen`.
 pub List(Int) tls_record_header(Int clen) {
     return tls_record_header2(23, clen);
 }
 
-// GCM J0 for a 96-bit nonce: nonce || 0^31 || 1
+/// The GCM pre-counter block J0 for a 96-bit nonce: `nonce` || 0^31 || 1.
 pub List(Int) tls_j0(List(Int) nonce) {
     return nonce.concat([0, 0, 0, 1]);
 }
 
-// seal one protected record body: ciphertext || 16-byte tag over the
-// inner plaintext, with the 5-byte record header as AAD
+/// One sealed record body under AES-128-GCM: ciphertext || 16-byte tag.
+/// `plaintext` is the inner plaintext and `header` the 5-byte record header,
+/// used as AAD. Public bytes only.
 pub List(Int) tls_record_seal(List(Int) key, List(Int) nonce, List(Int) header, List(Int) plaintext) {
     List(Int) rk = aes128_key_expand(key);
     List(Int) j0 = tls_j0(nonce);
@@ -559,6 +632,8 @@ pub List(Int) tls_record_seal(List(Int) key, List(Int) nonce, List(Int) header, 
     return sconcat(ct, slice_seed(tagraw, 0, 16, []));
 }
 
+/// Whether the AES-128-GCM tag at the end of `body` verifies, with `header`
+/// as AAD; compared in constant time. It does not decrypt.
 pub Bool tls_record_open(List(Int) key, List(Int) nonce, List(Int) header, List(Int) body) {
     Int total = body.len();
     Int clen16 = total - 16;

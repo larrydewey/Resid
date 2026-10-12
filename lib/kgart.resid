@@ -2,11 +2,15 @@
 // `<out>.resid-graph.cbor` (spec §34) for tools: a CBOR skipper, an offset
 // index over the nodes, and decoded node records.
 //
-// Imported by tools/resid-why.resid and tools/resid-graph.resid.
+// Imported by tools/resid-why.resid, tools/resid-graph.resid,
+// tools/resid-debug.resid and tools/resid-ctcover.resid.
 
-// Head of a CBOR item: major type, argument, position after the head.
+/// Head of a CBOR item: major type, argument, position after the head.
 type CH = { Int major; Int arg; Int pos; };
 
+/// Decodes the CBOR item head at `pos`: major type, argument and the
+/// position just past the head.
+/// Additional info 27 and above is read as an 8-byte argument.
 pub CH ch_read(List(Int) b, Int pos) {
     Int byte = b[pos];
     Int major = byte / 32;
@@ -19,12 +23,14 @@ pub CH ch_read(List(Int) b, Int pos) {
     return CH {.major = major, .arg = ch_be(b, p1, 8, 0), .pos = p1 + 8};
 }
 
+/// Reads `k` big-endian bytes from `pos`, folded onto `acc`.
 pub Int ch_be(List(Int) b, Int pos, Int k, Int acc) {
     if (k == 0) { return acc; }
     return ch_be(b, pos + 1, k - 1, acc * 256 + b[pos]);
 }
 
-// Position after the item at pos.
+/// Returns the position just past the CBOR item at `pos`.
+/// Arrays and maps are skipped whole; a tag (major 6) skips only its head.
 pub Int ch_skip(List(Int) b, Int pos) {
     CH h = ch_read(b, pos);
     if (h.major == 2 || h.major == 3) { return h.pos + h.arg; }
@@ -33,17 +39,20 @@ pub Int ch_skip(List(Int) b, Int pos) {
     return h.pos;
 }
 
+/// Returns the position just past `n` consecutive CBOR items from `pos`.
 pub Int ch_skip_n(List(Int) b, Int pos, Int n) {
     if (n <= 0) { return pos; }
     return ch_skip_n(b, ch_skip(b, pos), n - 1);
 }
 
-// Text (UTF-8 bytes decoded) at pos.
+/// Returns the CBOR text string at `pos`, its UTF-8 bytes decoded.
 pub Str ch_text(List(Int) b, Int pos) {
     CH h = ch_read(b, pos);
     return ch_utf8(b, h.pos, h.pos + h.arg, StrBuf());
 }
 
+/// Decodes UTF-8 bytes `[i, e)` onto `acc` and returns the text.
+/// Input is trusted: continuation bytes are not validated.
 pub Str ch_utf8(List(Int) b, Int i, Int e, StrBuf acc) {
     if (i >= e) { return acc.finish(); }
     Int c = b[i];
@@ -53,23 +62,28 @@ pub Str ch_utf8(List(Int) b, Int i, Int e, StrBuf acc) {
     return ch_utf8(b, i + 1 + k, e, acc.push_char(ch_cont(b, i + 1, k, lead)));
 }
 
+/// Folds `k` UTF-8 continuation bytes from `i` onto the code point `acc`.
 pub Int ch_cont(List(Int) b, Int i, Int k, Int acc) {
     if (k == 0) { return acc; }
     return ch_cont(b, i + 1, k - 1, acc * 64 + (b[i] & 63));
 }
 
-// An integer (major 0 or 1) at pos.
+/// Returns the CBOR integer (major 0 or 1) at `pos`.
+/// Any other major type yields its head argument.
 pub Int ch_int(List(Int) b, Int pos) {
     CH h = ch_read(b, pos);
     return if (h.major == 1) { 0 - 1 - h.arg } else { h.arg };
 }
 
-// Position of key `k`'s value in the map at pos, or -1.
+/// Returns the position of text key `k`'s value in the CBOR map at `pos`,
+/// or -1 when the key is absent.
 pub Int ch_field(List(Int) b, Int pos, Str k) {
     CH h = ch_read(b, pos);
     return ch_field_at(b, h.pos, h.arg, k);
 }
 
+/// Searches `n` key/value pairs from `pos` for key `k`; helper of
+/// `ch_field`, -1 when absent.
 pub Int ch_field_at(List(Int) b, Int pos, Int n, Str k) {
     if (n <= 0) { return -1; }
     Int v = ch_skip(b, pos);
@@ -77,27 +91,33 @@ pub Int ch_field_at(List(Int) b, Int pos, Int n, Str k) {
     return ch_field_at(b, ch_skip(b, v), n - 1, k);
 }
 
+/// Returns the CBOR array of integers at `pos` as a list.
 pub List(Int) ch_ints(List(Int) b, Int pos) {
     CH h = ch_read(b, pos);
     return ch_ints_at(b, h.pos, h.arg, ListBuf());
 }
 
+/// Appends `n` integers from `pos` to `acc`; helper of `ch_ints`.
 pub List(Int) ch_ints_at(List(Int) b, Int pos, Int n, ListBuf(Int) acc) {
     if (n <= 0) { return acc.finish(); }
     return ch_ints_at(b, ch_skip(b, pos), n - 1, acc.push(ch_int(b, pos)));
 }
 
+/// Returns the CBOR array of text strings at `pos` as a list.
 pub List(Str) ch_texts(List(Int) b, Int pos) {
     CH h = ch_read(b, pos);
     return ch_texts_at(b, h.pos, h.arg, ListBuf());
 }
 
+/// Appends `n` text strings from `pos` to `acc`; helper of `ch_texts`.
 pub List(Str) ch_texts_at(List(Int) b, Int pos, Int n, ListBuf(Str) acc) {
     if (n <= 0) { return acc.finish(); }
     return ch_texts_at(b, ch_skip(b, pos), n - 1, acc.push(ch_text(b, pos)));
 }
 
-// A value (for a node's `value`) rendered as text.
+/// Renders the CBOR value at `pos` (a node's `value`) as text.
+/// Integers print in decimal and text quoted; true/false by name, other
+/// simple values as "?", anything else as "...".
 pub Str ch_show(List(Int) b, Int pos) {
     CH h = ch_read(b, pos);
     if (h.major == 0 || h.major == 1) { return f"{ch_int(b, pos)}"; }
@@ -106,19 +126,25 @@ pub Str ch_show(List(Int) b, Int pos) {
     return "...";
 }
 
-// The artifact: bytes, the offset of every node, source paths, roots.
+/// The artifact: bytes, the offset of every node, source paths, roots.
 type GA = { List(Int) b; List(Int) offs; List(Str) paths; List(Int) sroots; List(Int) rroots; };
 
+/// Appends the start position of each of `n` items from `pos` to `acc`.
 pub List(Int) ga_offsets(List(Int) b, Int pos, Int n, ListBuf(Int) acc) {
     if (n <= 0) { return acc.finish(); }
     return ga_offsets(b, ch_skip(b, pos), n - 1, acc.push(pos));
 }
 
+/// Appends the `path` field of each of `n` source records from `pos` to
+/// `acc`.
 pub List(Str) ga_paths(List(Int) b, Int pos, Int n, ListBuf(Str) acc) {
     if (n <= 0) { return acc.finish(); }
     return ga_paths(b, ch_skip(b, pos), n - 1, acc.push(ch_text(b, ch_field(b, pos, "path"))));
 }
 
+/// Loads a graph artifact from its bytes `b`: node offsets, source paths,
+/// and source and residual roots.
+/// Input is trusted; a malformed artifact is not detected.
 pub GA ga_load(List(Int) b) {
     Int np = ch_field(b, 0, "nodes");
     CH nh = ch_read(b, np);
@@ -128,12 +154,14 @@ pub GA ga_load(List(Int) b) {
     return GA {.b = b, .offs = ga_offsets(b, nh.pos, nh.arg, ListBuf()), .paths = ga_paths(b, sh.pos, sh.arg, ListBuf()), .sroots = ch_ints(b, ch_field(b, rp, "source")), .rroots = ch_ints(b, ch_field(b, rp, "residual"))};
 }
 
-// One node's fields, decoded.
+/// One node's fields, decoded.
 type GN = { Int id; Str kind; Str name; Str ty; Str know; Str value; List(Int) deps; Int def; List(Str) effects; List(Int) span; Int from; Str rule; Str reason; Str facts; };
 
+/// Returns the text at `p`, or "" when `p` is negative.
 pub Str gn_opt_text(List(Int) b, Int p) { return if (p < 0) { "" } else { ch_text(b, p) }; }
 
-// `reason: {kind, ? dep, ? detail}` as `kind(detail) dep #n`.
+/// Renders the `reason` map at `p` as `kind(detail) on #dep`.
+/// Detail and dep are omitted when absent; "" when `p` is negative.
 pub Str gn_reason(List(Int) b, Int p) {
     if (p < 0) { return ""; }
     Str k = ch_text(b, ch_field(b, p, "kind"));
@@ -144,14 +172,17 @@ pub Str gn_reason(List(Int) b, Int p) {
     return k + d + dep;
 }
 
-// `facts: [...]` as `range [lo, hi], nonzero, length [lo, hi], tag V,
-// fields #a #b, discharged overflow using #x #y, check bounds lacking #z`.
+/// Renders the `facts` array at `p` as comma-separated text, or "" when
+/// `p` is negative.
+/// Each fact is `kind [lo, hi] tag #ids`, its parts when present; ids follow
+/// "using" for discharged and "lacking" for check facts.
 pub Str gn_facts(List(Int) b, Int p) {
     if (p < 0) { return ""; }
     CH h = ch_read(b, p);
     return gn_facts_at(b, h.pos, h.arg, "");
 }
 
+/// Appends `n` facts from `pos` to `acc`; helper of `gn_facts`.
 pub Str gn_facts_at(List(Int) b, Int pos, Int n, Str acc) {
     if (n <= 0) { return acc; }
     Str k = ch_text(b, ch_field(b, pos, "kind"));
@@ -168,11 +199,14 @@ pub Str gn_facts_at(List(Int) b, Int pos, Int n, Str acc) {
     return gn_facts_at(b, ch_skip(b, pos), n - 1, if (acc == "") { one } else { acc + ", " + one });
 }
 
+/// Appends ` #id` for each of `ids` from index `i` to `acc`.
 pub Str gn_ids(List(Int) ids, Int i, Str acc) {
     if (i >= ids.len()) { return acc; }
     return gn_ids(ids, i + 1, acc + f" #{ids[i]}");
 }
 
+/// Decodes node `id` of artifact `a` into a record.
+/// Absent optional fields read as "" or -1.
 pub GN gn_read(GA a, Int id) {
     List(Int) b = a.b;
     Int p = a.offs[id];
@@ -182,13 +216,17 @@ pub GN gn_read(GA a, Int id) {
     return GN {.id = id, .kind = ch_text(b, ch_field(b, p, "kind")), .name = gn_opt_text(b, ch_field(b, p, "name")), .ty = ch_text(b, ch_field(b, p, "type")), .know = ch_text(b, ch_field(b, p, "knowledge")), .value = if (vp < 0) { "" } else { ch_show(b, vp) }, .deps = ch_ints(b, ch_field(b, p, "deps")), .def = if (dp < 0) { -1 } else { ch_int(b, dp) }, .effects = ch_texts(b, ch_field(b, p, "effects")), .span = ch_ints(b, ch_field(b, p, "span")), .from = if (dv < 0) { -1 } else { ch_int(b, ch_field(b, dv, "from")) }, .rule = if (dv < 0) { "" } else { ch_text(b, ch_field(b, dv, "rule")) }, .reason = gn_reason(b, ch_field(b, p, "reason")), .facts = gn_facts(b, ch_field(b, p, "facts"))};
 }
 
+/// Returns node `n`'s source place as `file:line:col`, "?" for an unknown
+/// file.
 pub Str gn_where(GA a, GN n) {
     Int fi = n.span[0];
     Str f = if (fi < a.paths.len()) { a.paths[fi] } else { "?" };
     return f + f":{n.span[1]}:{n.span[2]}";
 }
 
-// `#id kind: Type knowledge [= value] [because ...] [facts ...]`.
+/// Renders node `n` as one line: `#id kind name: Type knowledge = value`,
+/// then reason, facts, effects, `<- rule #from` and `@ file:line:col`.
+/// Empty parts are omitted.
 pub Str gn_line(GA a, GN n) {
     Str ty = if (n.ty == "") { "" } else { ": " + n.ty };
     Str v = if (n.value == "") { "" } else { " = " + n.value };
@@ -200,8 +238,8 @@ pub Str gn_line(GA a, GN n) {
     return f"#{n.id} " + n.kind + nm + ty + " " + n.know + v + r + f + e + d + " @ " + gn_where(a, n);
 }
 
-// The last node that derives from `id` (what reduction replaced it with),
-// or -1.
+/// Returns the last node from index `i` that derives from `id` (what
+/// reduction replaced it with), or `best` (pass -1) when none does.
 pub Int gn_replaced(GA a, Int id, Int i, Int best) {
     if (i >= a.offs.len()) { return best; }
     Int dv = ch_field(a.b, a.offs[i], "derive");
@@ -209,8 +247,9 @@ pub Int gn_replaced(GA a, Int id, Int i, Int best) {
     return gn_replaced(a, id, i + 1, if (hit) { i } else { best });
 }
 
-// The node, then each node it derives from back to a source node; a source
-// node that reduction replaced also shows its replacement.
+/// Prints node `id`, then each node it derives from back to a source node;
+/// a source node that reduction replaced also shows its replacement.
+/// At `depth` 0 the node's definition is printed too; returns 0.
 pub Int gn_chain(GA a, Int id, Int depth) {
     GN n = gn_read(a, id);
     Str pad = if (depth == 0) { "" } else { str_repeat("  ", depth) + "from " };
@@ -224,7 +263,9 @@ pub Int gn_chain(GA a, Int id, Int depth) {
     return gn_chain(a, n.from, depth + 1);
 }
 
-// Nodes whose span starts on line `line` of file index fi.
+/// Prints the derive chain of each node from `id` whose span starts on
+/// line `line` of file index `fi`, at most `max` (-1 for no limit).
+/// Returns `shown` plus the number printed.
 pub Int ga_at(GA a, Int fi, Int line, Int id, Int shown, Int max) {
     if (id >= a.offs.len() || (max >= 0 && shown >= max)) { return shown; }
     List(Int) sp = ch_ints(a.b, ch_field(a.b, a.offs[id], "span"));
@@ -233,6 +274,8 @@ pub Int ga_at(GA a, Int fi, Int line, Int id, Int shown, Int max) {
     return ga_at(a, fi, line, id + 1, if (hit) { shown + 1 } else { shown }, max);
 }
 
+/// Returns the index from `i` of the path in `ps` equal to `f` or ending in
+/// `/f`, or -1.
 pub Int ga_file_idx(List(Str) ps, Str f, Int i) {
     if (i >= ps.len()) { return -1; }
     if (ps[i] == f || str_ends_with(ps[i], "/" + f)) { return i; }
@@ -240,14 +283,16 @@ pub Int ga_file_idx(List(Str) ps, Str f, Int i) {
 }
 
 
-// A light index row per node: kind, name and span, for queries by symbol
-// and by place.
+/// A light index row per node: kind, name and span, for queries by symbol
+/// and by place.
 type GI = { Int id; Str kind; Str name; List(Int) span; };
 
+/// Builds the light index row of every node in `a`.
 pub List(GI) ga_index(GA a) {
     return ga_index_at(a, 0, ListBuf());
 }
 
+/// Appends index rows for nodes from `id` to `acc`; helper of `ga_index`.
 pub List(GI) ga_index_at(GA a, Int id, ListBuf(GI) acc) {
     if (id >= a.offs.len()) { return acc.finish(); }
     List(Int) b = a.b;
@@ -256,12 +301,14 @@ pub List(GI) ga_index_at(GA a, Int id, ListBuf(GI) acc) {
     return ga_index_at(a, id + 1, acc.push(r));
 }
 
-// Declarations bind a name; uses (ref, call) point at one by def.
+/// Reports whether node kind `k` is a declaration, one that binds a name.
+/// Uses (refs and calls) point at a declaration by `def`.
 pub Bool gi_decl(Str k) {
     return k == "fn" || k == "param" || k == "bind" || k == "rbind" || k == "for" || k == "sfield" || k == "struct" || k == "lparam" || k == "behavior" || k == "bdecl";
 }
 
-// Ids of the declarations named `name`.
+/// Returns the ids of the declarations named `name` in index `ix`, from
+/// row `i`.
 pub List(Int) ga_decls(List(GI) ix, Str name, Int i, ListBuf(Int) acc) {
     if (i >= ix.len()) { return acc.finish(); }
     GI r = ix[i];
@@ -269,7 +316,8 @@ pub List(Int) ga_decls(List(GI) ix, Str name, Int i, ListBuf(Int) acc) {
     return ga_decls(ix, name, i + 1, if (hit) { acc.push(r.id) } else { acc });
 }
 
-// Uses of `name` (refs and calls) whose def is `decl`.
+/// Returns the ids of the non-declaration nodes named `name` whose `def`
+/// is `decl`, from row `i` of `ix`.
 pub List(Int) ga_uses(GA a, List(GI) ix, Str name, Int decl, Int i, ListBuf(Int) acc) {
     if (i >= ix.len()) { return acc.finish(); }
     GI r = ix[i];
@@ -278,15 +326,16 @@ pub List(Int) ga_uses(GA a, List(GI) ix, Str name, Int decl, Int i, ListBuf(Int)
     return ga_uses(a, ix, name, decl, i + 1, if (hit) { acc.push(r.id) } else { acc });
 }
 
-// Bytes as lowercase hex.
+/// Appends bytes `bs` from index `i` to `acc` as lowercase hex.
 pub Str ga_hex(List(Int) bs, Int i, StrBuf acc) {
     if (i >= bs.len()) { return acc.finish(); }
     Str d = "0123456789abcdef";
     return ga_hex(bs, i + 1, acc.push(str_slice(d, bs[i] / 16, bs[i] / 16 + 1)).push(str_slice(d, bs[i] % 16, bs[i] % 16 + 1)));
 }
 
-// `why NAME`: each declaration named NAME with its derive chain, then its
-// uses: the residual ones with their reasons (up to max), and a count.
+/// Prints `why NAME`: each declaration named `name` with its derive chain,
+/// then its uses: the residual ones (up to `max`, -1 for all) and a count.
+/// Returns 1 when no declaration has that name, else 0.
 pub Int ga_sym(GA a, List(GI) ix, Str name, Int max) {
     List(Int) ds = ga_decls(ix, name, 0, ListBuf());
     if (ds.len() == 0) {
@@ -296,6 +345,8 @@ pub Int ga_sym(GA a, List(GI) ix, Str name, Int max) {
     return ga_sym_at(a, ix, name, ds, 0, max);
 }
 
+/// Prints each declaration in `ds` from index `i` with its uses; helper of
+/// `ga_sym`.
 pub Int ga_sym_at(GA a, List(GI) ix, Str name, List(Int) ds, Int i, Int max) {
     if (i >= ds.len()) { return 0; }
     Int _c = gn_chain(a, ds[i], 0);
@@ -304,6 +355,8 @@ pub Int ga_sym_at(GA a, List(GI) ix, Str name, List(Int) ds, Int i, Int max) {
     return ga_sym_at(a, ix, name, ds, i + 1, max);
 }
 
+/// Prints the uses in `us` not known after reduction (up to `max`, -1 for
+/// all), then a count of known and residual uses; returns 0.
 pub Int ga_use_lines(GA a, List(Int) us, Int i, Int kn, Int shown, Int max) {
     if (i >= us.len()) {
         println(f"  {us.len()} use(s): {kn} known, {us.len() - kn} residual or effect");
@@ -317,6 +370,7 @@ pub Int ga_use_lines(GA a, List(Int) us, Int i, Int kn, Int shown, Int max) {
     return ga_use_lines(a, us, i + 1, if (k) { kn + 1 } else { kn }, if (show) { shown + 1 } else { shown }, max);
 }
 
+/// Prints `s` on its own line and returns 0.
 pub Int ga_say(Str s) {
     println(s);
     return 0;
@@ -324,21 +378,24 @@ pub Int ga_say(Str s) {
 
 // ─── Integrity labels (PLAN-labels.md §4.6) ─────────────────────────
 
-// A node's External cause, or -1 when it is Internal (or not a value).
+/// Returns node `id`'s External cause, or -1 when it is Internal (or not a
+/// value).
 pub Int gn_cause(GA a, Int id) {
     Int lp = ch_field(a.b, a.offs[id], "label");
     if (lp < 0) { return -1; }
     return ch_int(a.b, ch_field(a.b, lp, "cause"));
 }
 
-// The effect a source node names, or "".
+/// Returns the effect that source node `id`'s label names, or "".
 pub Str gn_effect(GA a, Int id) {
     Int lp = ch_field(a.b, a.offs[id], "label");
     if (lp < 0) { return ""; }
     return gn_opt_text(a.b, ch_field(a.b, lp, "effect"));
 }
 
-// The path from node id back to where outside data entered: id first.
+/// Returns the path from node `id` back to where outside data entered, `id`
+/// first, appended to `acc`.
+/// Stops at a self-cause, an out-of-range cause or past depth 256.
 pub List(Int) gn_cause_path(GA a, Int id, ListBuf(Int) acc, Int depth) {
     Int c = gn_cause(a, id);
     ListBuf(Int) acc2 = acc.push(id);
@@ -346,8 +403,8 @@ pub List(Int) gn_cause_path(GA a, Int id, ListBuf(Int) acc, Int depth) {
     return gn_cause_path(a, c, acc2, depth + 1);
 }
 
-// `NAME: External`, then the path from the source to the value; or
-// `NAME: Internal`.
+/// Prints node `id`'s label: `NAME: External`, then the path from the
+/// source to the value; or `NAME: Internal`. Returns 0.
 pub Int gn_label_show(GA a, Int id) {
     GN n = gn_read(a, id);
     Str nm = if (n.name == "") { n.kind } else { n.kind + " " + n.name };
@@ -360,6 +417,8 @@ pub Int gn_label_show(GA a, Int id) {
     return gn_label_steps(a, p, p.len() - 1);
 }
 
+/// Prints the notable steps of cause path `p` from index `i` down to 0,
+/// source first: entry points, choices by outside data, named values, calls.
 pub Int gn_label_steps(GA a, List(Int) p, Int i) {
     if (i < 0) { return 0; }
     GN n = gn_read(a, p[i]);
@@ -377,12 +436,14 @@ pub Int gn_label_steps(GA a, List(Int) p, Int i) {
     return gn_label_steps(a, p, i - 1);
 }
 
-// Value-bearing nodes worth naming in a label query.
+/// Reports whether node kind `k` is value-bearing and worth naming in a
+/// label query.
 pub Bool gn_label_kind(Str k) {
     return k == "bind" || k == "rbind" || k == "param" || k == "for" || k == "ret" || k == "letpat" || k == "name" || k == "pat" || k == "lparam";
 }
 
-// Labels of the value nodes starting on line `line` of file fi.
+/// Prints the labels of the value nodes from `id` starting on line `line`
+/// of file index `fi`; returns `shown` plus the number printed.
 pub Int ga_label_at(GA a, Int fi, Int line, Int id, Int shown) {
     if (id >= a.offs.len()) { return shown; }
     Int p = a.offs[id];
@@ -392,7 +453,8 @@ pub Int ga_label_at(GA a, Int fi, Int line, Int id, Int shown) {
     return ga_label_at(a, fi, line, id + 1, if (hit) { shown + 1 } else { shown });
 }
 
-// Labels of the declarations named `name`.
+/// Prints the label of each declaration id in `ds` from index `i`; returns
+/// 0.
 pub Int ga_label_sym(GA a, List(Int) ds, Int i) {
     if (i >= ds.len()) { return 0; }
     Int _s = gn_label_show(a, ds[i]);

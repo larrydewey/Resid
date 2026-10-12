@@ -23,17 +23,21 @@
 // gives Interrupted. The prompt should be plain text: its width is its
 // code point count, as is each character's.
 
+/// Past input lines, oldest first, bounded to the newest `max`.
+/// Build one with `history_new` and grow it with `history_add`.
 type History = { List(Str) items; Int max; };
+/// The outcome of one read: a line (without its newline), end of input,
+/// or Ctrl-C.
 type ReadResult = Line(Str) | Eof | Interrupted;
 
-// An empty history keeping at most `max` lines (at least 1).
+/// An empty history keeping at most `max` lines (at least 1).
 pub History history_new(Int max) {
     List(Str) none = [];
     return History {.items = none, .max = if (max < 1) { 1 } else { max }};
 }
 
-// `line` appended, unless blank or equal to the newest entry; the oldest
-// entries go past `max`.
+/// The history with `line` appended, unless blank or equal to the newest.
+/// Entries beyond `max` are dropped from the oldest end.
 pub History history_add(History h, Str line) {
     Int n = h.items.len();
     if (str_trim(line) == "" || (n > 0 && h.items[n - 1] == line)) { return h; }
@@ -49,15 +53,19 @@ List(Str) rl_from(List(Str) xs, Int i, List(Str) acc) {
     return rl_from(xs, i + 1, acc.concat([xs[i]]));
 }
 
-// A line read with editing and history.
+/// One line read from stdin after showing `prompt`, with editing and history.
+/// Tab only rings the bell. `h` is browsed, not updated: add the line
+/// yourself.
+/// Needs the `terminal` capability.
 @requires(terminal)
 pub ReadResult readline(Str prompt, History h) {
     return readline_with(prompt, h, lambda(s) { rl_no_completions(s) });
 }
 
-// As readline, with Tab completing the whole line through `complete`: one
-// candidate replaces the line; several extend it to their common prefix,
-// or, when that adds nothing, are listed below it.
+/// Like `readline`, with Tab completing the whole line through `complete`.
+/// One candidate replaces the line; several extend it to their common
+/// prefix or, when that adds nothing, are listed below it; none rings the
+/// bell. Without a terminal, the line is read unedited.
 @requires(terminal)
 pub ReadResult readline_with(Str prompt, History h, List(Str) closure(Str) complete) {
     if (!resid_term_is_tty(0) || !resid_term_raw()) { return rl_plain(prompt); }
@@ -179,9 +187,10 @@ Int rl_tilde(Int p) {
 }
 
 // ─── Editing ───────────────────────────────────────────────────────────
-// buf and pos count code points; hi indexes hist, hist.len() being the
-// line under edit (kept in draft while browsing).
 
+/// The state of a line being edited.
+/// `buf` and `pos` count code points; `hi` indexes `hist`, `hist.len()`
+/// being the line under edit (kept in `draft` while browsing).
 type Ed = { Str prompt; Str buf; Int pos; List(Str) hist; Int hi; Str draft; };
 
 Str esc() { return str_from_code(27); }

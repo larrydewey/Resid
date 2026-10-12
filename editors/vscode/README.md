@@ -60,7 +60,7 @@ cd editors/vscode
 npm install
 npm run compile
 npx @vscode/vsce package
-code --install-extension resid-lang-0.3.0.vsix
+code --install-extension resid-lang-0.4.0.vsix
 ```
 
 Or run the extension in development:

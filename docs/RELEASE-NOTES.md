@@ -1,3 +1,59 @@
+# Resid v0.4.0
+
+From v0.3.0. The standard library is documented in the source, and its API
+reference is generated from that documentation.
+
+## Highlights
+
+- **Doc comments on the whole standard library.** Every declaration a
+  program can import from `lib/`, `lib/dev/` and `lib/verify/` (2,737: each
+  `pub` function, and every `type` and `behavior`, which are visible
+  without `pub`) has a `///` comment directly above it and its
+  annotations, and each module's header comment is its overview. The
+  generators keep their output in the same shape (`tools/gen_nistp.py`,
+  `tools/resid-devgen`, `tools/attest/gen_*_anchors.py`).
+  `tools/check_doc_comments.py` fails when a declaration has none.
+- **A generated API reference.** resid-book reads the source named by
+  `api = "../lib"` in `website/book.toml` and serves a page per module
+  under `/api/`: the overview, then each type, behavior and function with
+  its annotations, its declaration as written, its documentation and a
+  link to its line on GitHub, plus an index by module and by capability
+  family. The pages are searched and exported like the hand-written ones.
+
+## Fixes
+
+Writing the documentation meant reading every function, which turned up
+these:
+
+- **HPACK's dynamic table kept only its newest entry** (`lib/h2.resid`):
+  `lst_join_loop` and `h2_scat_acc` recursed on the list they started
+  with, so `hp_insert`, `h2_join` and `bv_join` dropped what they
+  appended, and a header block naming an older dynamic entry decoded to
+  nothing. Static entries 1 and below were taken to carry values, and an
+  entry without one decoded with its own name as its value. RFC 7541
+  C.3.3 is now in `h2_hpack_in_resid`.
+- **An OCSP response was only read for its first answer**
+  (`lib/certverify.resid`): the search for a certificate's SingleResponse
+  started at the `responses` list rather than inside it, so a certificate
+  answered second came back as no answer. `tests/tls` has a two-answer
+  response (`ocsp-two.der`).
+- **CRLs in PEM were never loaded** (`lib/chain.resid`): the PEM reader
+  knew only `CERTIFICATE` blocks, so `trust_store_crls_from_pem_file` and a
+  PEM `crls` path added nothing. `X509 CRL` blocks are read now, and
+  `tests/tls` revokes through `crl.pem`.
+- **POSIX TZ rules were wrong south of the equator, and for `Jn`**
+  (`lib/zone.resid`): daylight saving was taken to run from the earlier
+  transition to the later, which inverts a rule whose start comes after its
+  end (`AEST-10AEDT,M10.1.0,M4.1.0/3`), and `Jn` days were counted from 1
+  March instead of 1 January. Five declarations read `pub pub`.
+- **DER lengths of 128 and more were encoded one octet short**
+  (`der_long_len`, which built `[128]`, the indefinite-length marker, for
+  200), and **OIDs with a first arc of 2 and a second of 40 or more** read
+  their second arc 40 too high (`der_oid_str`), and could not span octets.
+- **HKDF-Expand with SHA-256 accepted lengths past 255 blocks**
+  (`hkdf_expand`), whose block counter then no longer fit a byte; it now
+  returns nothing, as `hkdf_with` already did.
+
 # Resid v0.3.0
 
 From v0.2.0 to the merge of `attest-complete` into master. Each item's

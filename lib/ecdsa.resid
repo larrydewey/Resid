@@ -28,12 +28,16 @@ import "p256.resid";
 import "p384.resid";
 import "p521.resid";
 
+/// A NIST prime curve: P-256, P-384, or P-521 (verification only).
 pub type Curve = P256 | P384 | P521;
 
+/// The byte length of a scalar or coordinate on `c` (32, 48 or 66).
 pub Int curve_bytes(Curve c) { return match c { P256 => 32, P384 => 48, P521 => 66, }; }
+/// The curve's display name, such as "P-256".
 pub Str curve_name(Curve c) { return match c { P256 => "P-256", P384 => "P-384", P521 => "P-521", }; }
 
-// The namedCurve OID of an id-ecPublicKey SubjectPublicKeyInfo.
+/// The curve named by the namedCurve OID of an id-ecPublicKey
+/// SubjectPublicKeyInfo, in dotted form; None for any other OID.
 pub Option(Curve) curve_from_oid(Str oid) {
     if (oid == "1.2.840.10045.3.1.7") { return Some(P256); }
     if (oid == "1.3.132.0.34") { return Some(P384); }
@@ -41,13 +45,16 @@ pub Option(Curve) curve_from_oid(Str oid) {
     return None;
 }
 
+/// The dotted namedCurve OID of `c`, the inverse of `curve_from_oid`.
 pub Str curve_oid(Curve c) { return match c { P256 => "1.2.840.10045.3.1.7", P384 => "1.3.132.0.34", P521 => "1.3.132.0.35", }; }
 
 // ─── Signature encodings ─────────────────────────────────────────────
 
-// r and s as unsigned big-endian bytes without leading zeros.
+/// An ECDSA signature: `r` and `s` as unsigned big-endian bytes without
+/// leading zeros; `ok` is false for a refused or failed signature.
 pub type EcSig = { Bool ok; List(Int) r; List(Int) s; };
 
+/// The refused signature: `ok` false, `r` and `s` empty.
 pub EcSig ec_sig_bad() { return EcSig {.ok = false, .r = [], .s = []}; }
 
 List(Int) ec_strip(List(Int) b, Int i) {
@@ -55,8 +62,8 @@ List(Int) ec_strip(List(Int) b, Int i) {
     return b[i..];
 }
 
-// A DER length at b[i]: its value and the index after it, or -1 for a
-// length that is not the minimal (DER) encoding or runs past the input.
+/// A DER length read at b[i]: its value and the index after it; `len` is
+/// -1 for a length form this parser refuses or one that runs past the input.
 type EcLen = { Int len; Int next; };
 
 EcLen ec_der_len(List(Int) b, Int i) {
@@ -75,7 +82,8 @@ EcLen ec_der_len(List(Int) b, Int i) {
     return bad;
 }
 
-// A DER INTEGER at b[i] that is non-negative and minimally encoded.
+/// A DER INTEGER read at b[i]: `ok` only when it is non-negative and
+/// minimally encoded; `v` is its value without leading zeros.
 type EcInt = { Bool ok; List(Int) v; Int next; };
 
 EcInt ec_der_uint(List(Int) b, Int i) {
@@ -89,8 +97,9 @@ EcInt ec_der_uint(List(Int) b, Int i) {
     return EcInt {.ok = true, .v = ec_strip(b[a..a + l.len], 0), .next = a + l.len};
 }
 
-// Ecdsa-Sig-Value ::= SEQUENCE { r INTEGER, s INTEGER }, strict DER: BER
-// lengths, negative or padded integers and trailing bytes are refused.
+/// Parses a DER Ecdsa-Sig-Value (SEQUENCE { r INTEGER, s INTEGER }).
+/// Strict DER: BER lengths, negative or padded integers and trailing bytes
+/// give `ec_sig_bad()`.
 pub EcSig ecdsa_sig_der(List(Int) b) {
     if (b.len() < 8 || b[0] != 48) { return ec_sig_bad(); }
     EcLen l = ec_der_len(b, 1);
@@ -102,7 +111,8 @@ pub EcSig ecdsa_sig_der(List(Int) b) {
     return EcSig {.ok = true, .r = r.v, .s = s.v};
 }
 
-// r || s, each exactly curve_bytes long (COSE, JWS, P1363).
+/// Parses an r || s signature (COSE, JWS, P1363).
+/// Each half must be exactly `curve_bytes(c)` long, else `ec_sig_bad()`.
 pub EcSig ecdsa_sig_raw(Curve c, List(Int) raw) {
     Int n = curve_bytes(c);
     if (raw.len() != 2 * n) { return ec_sig_bad(); }
@@ -121,6 +131,7 @@ List(Int) ec_der_hdr(Int tag, Int len) {
     return [tag, 130, len / 256, len % 256];
 }
 
+/// The DER Ecdsa-Sig-Value encoding of `s`.
 pub List(Int) ecdsa_der_of(EcSig s) {
     List(Int) body = ec_der_int(s.r).concat(ec_der_int(s.s));
     return ec_der_hdr(48, body.len()).concat(body);
@@ -137,13 +148,15 @@ List(Int) ec_zeros(Int k, ListBuf(Int) acc) {
     return ec_zeros(k - 1, acc.push(0));
 }
 
+/// The r || s encoding of `s`, each half zero-padded to `curve_bytes(c)`.
+/// The caller ensures `r` and `s` fit.
 pub List(Int) ecdsa_raw_of(Curve c, EcSig s) {
     return ec_pad(s.r, curve_bytes(c)).concat(ec_pad(s.s, curve_bytes(c)));
 }
 
 // ─── Keys ────────────────────────────────────────────────────────────
 
-// Whether `pub` is a valid SEC 1 encoding of a point on curve c.
+/// Whether `pubkey` is a valid SEC 1 encoding of a point on curve `c`.
 pub Bool ec_public_ok(Curve c, List(Int) pubkey) {
     return match c { P256 => p256_decode(pubkey).ok, P384 => p384_decode(pubkey).ok, P521 => p521_decode(pubkey).ok, };
 }
@@ -166,9 +179,9 @@ F ec_org(List(B) b, Int i, Int end, F acc) {
     return ec_org(b, i + 1, end, p256w_or(acc, p256w_from_byte(b[i])));
 }
 
-// The uncompressed public key 04 || X || Y of a private key, or empty
-// when the key is not in [1, n-1]. At secret types the key is published
-// by design (a declassification).
+/// The uncompressed public key 04 || X || Y of private key `priv`.
+/// Empty when the key is not in [1, n-1] or `c` is P-521. At secret types
+/// the public key is published by design (a declassification).
 @needs(P256Word(E, B), P384Word(G, B))
 @one_way(priv)
 pub List(Int) ec_public_keyg(Curve c, List(B) priv) {
@@ -192,14 +205,15 @@ List(Int) ec_pub384(List(B) priv) {
     return ec_enc384(p384_public(d));
 }
 
+/// The public copy of `ec_public_keyg`, for a private key held as Int bytes.
 pub List(Int) ec_public_key(Curve c, List(Int) priv) { return ec_public_keyg(c, priv); }
 
 List(Int) ec_enc256(P256Aff a) { return if (a.ok) { p256_encode(a) } else { [] }; }
 List(Int) ec_enc384(P384Aff a) { return if (a.ok) { p384_encode(a) } else { [] }; }
 
-// A fresh private key from the operating system's randomness: the first
-// candidate in [1, n-1] (for both curves almost always the first draw).
-// Empty for P-521 (verification only).
+/// A fresh private key from the operating system's randomness.
+/// Returns the first candidate in [1, n-1] (almost always the first draw);
+/// gives up after 65 draws and returns the last one. Empty for P-521.
 pub List(Int) ec_generate(Curve c) { return match c { P521 => [], _ => ec_gen_try(c, 0), }; }
 
 List(Int) ec_gen_try(Curve c, Int tries) {
@@ -208,9 +222,10 @@ List(Int) ec_gen_try(Curve c, Int tries) {
     return ec_gen_try(c, tries + 1);
 }
 
-// ECDH (SEC 1 §3.3.1): the x-coordinate of priv * peer, curve_bytes
-// long; empty for an invalid peer key or private key. At secret types the
-// shared secret is secret; whether the keys were usable is public.
+/// The ECDH shared secret (SEC 1 §3.3.1): the x-coordinate of priv * peer.
+/// It is `curve_bytes(c)` long; empty for an invalid peer or private key
+/// or for P-521. At secret types the result stays secret; whether the keys
+/// were usable is public.
 @needs(P256Word(E, B), P384Word(G, B))
 @agree(priv)
 pub List(B) ecdhg(Curve c, List(B) priv, List(Int) peer) {
@@ -236,6 +251,7 @@ List(B) ec_ecdh384(List(B) priv, List(Int) peer) {
     return p384_ecdh(d, p384_decode(peer));
 }
 
+/// The public copy of `ecdhg`, for a private key held as Int bytes.
 pub List(Int) ecdh(Curve c, List(Int) priv, List(Int) peer) { return ecdhg(c, priv, peer); }
 
 // ─── ECDSA ───────────────────────────────────────────────────────────
@@ -244,7 +260,8 @@ Bool ec_sig_fits(Curve c, EcSig s) {
     return s.ok && s.r.len() <= curve_bytes(c) && s.s.len() <= curve_bytes(c);
 }
 
-// Verify sig over a digest the caller computed.
+/// Whether `sig` is a valid signature by `pubkey` over a precomputed digest.
+/// False for a refused signature, a key off the curve or out-of-range r, s.
 pub Bool ecdsa_verify_digest(Curve c, List(Int) pubkey, List(Int) digest, EcSig sig) {
     if (!ec_sig_fits(c, sig)) { return false; }
     return match c {
@@ -254,20 +271,21 @@ pub Bool ecdsa_verify_digest(Curve c, List(Int) pubkey, List(Int) digest, EcSig 
     };
 }
 
-// Verify a DER signature over msg hashed with h.
+/// Whether DER signature `der` by `pubkey` is valid over `msg` hashed with `h`.
 pub Bool ecdsa_verify(Curve c, HashAlg h, List(Int) pubkey, List(Int) msg, List(Int) der) {
     return ecdsa_verify_digest(c, pubkey, hash_bytes(h, msg), ecdsa_sig_der(der));
 }
 
-// Verify an r || s signature over msg hashed with h.
+/// Whether r || s signature `raw` by `pubkey` is valid over `msg` hashed
+/// with `h`.
 pub Bool ecdsa_verify_raw(Curve c, HashAlg h, List(Int) pubkey, List(Int) msg, List(Int) raw) {
     return ecdsa_verify_digest(c, pubkey, hash_bytes(h, msg), ecdsa_sig_raw(c, raw));
 }
 
-// Sign a digest made with h; the nonce is RFC 6979's, so signing needs
-// no randomness and a repeated nonce cannot leak the key. The private key
-// is List(B): at secret types the signature (public by design) is
-// declassified.
+/// Signs a digest made with `h`, using RFC 6979's deterministic nonce.
+/// Needs no randomness, so a repeated nonce cannot leak the key. Returns
+/// `ec_sig_bad()` for an unusable key or P-521. At secret types the
+/// signature (public by design) is declassified.
 @needs(P256Word(E, B), P384Word(G, B), Word(W, B), Word64(D, B))
 @key(priv)
 pub EcSig ecdsag_sign_digest(Curve c, HashAlg h, List(B) priv, List(Int) digest) {
@@ -291,6 +309,7 @@ EcSig ec_sign384(HashAlg h, List(B) priv, List(Int) digest) {
     return ec_sig384(p384_sign_digest(h, d, digest));
 }
 
+/// The public copy of `ecdsag_sign_digest`, for a key held as Int bytes.
 pub EcSig ecdsa_sign_digest(Curve c, HashAlg h, List(Int) priv, List(Int) digest) {
     return ecdsag_sign_digest(c, h, priv, digest);
 }
@@ -302,7 +321,8 @@ EcSig ec_sig384(P384Sig s) {
     return if (s.ok) { EcSig {.ok = true, .r = ec_strip(p384_to_be(s.r), 0), .s = ec_strip(p384_to_be(s.s), 0)} } else { ec_sig_bad() };
 }
 
-// DER signature of msg (public) hashed with h; empty for an unusable key.
+/// The DER signature of public `msg` hashed with `h` (RFC 6979 nonce).
+/// Empty for an unusable key or P-521.
 @needs(P256Word(E, B), P384Word(G, B), Word(W, B), Word64(D, B))
 @key(priv)
 pub List(Int) ecdsag_sign(Curve c, HashAlg h, List(B) priv, List(Int) msg) {
@@ -310,7 +330,8 @@ pub List(Int) ecdsag_sign(Curve c, HashAlg h, List(B) priv, List(Int) msg) {
     return if (s.ok) { ecdsa_der_of(s) } else { [] };
 }
 
-// r || s signature of msg (public) hashed with h; empty for an unusable key.
+/// The r || s signature of public `msg` hashed with `h` (RFC 6979 nonce).
+/// Empty for an unusable key or P-521.
 @needs(P256Word(E, B), P384Word(G, B), Word(W, B), Word64(D, B))
 @key(priv)
 pub List(Int) ecdsag_sign_raw(Curve c, HashAlg h, List(B) priv, List(Int) msg) {
@@ -318,13 +339,16 @@ pub List(Int) ecdsag_sign_raw(Curve c, HashAlg h, List(B) priv, List(Int) msg) {
     return if (s.ok) { ecdsa_raw_of(c, s) } else { [] };
 }
 
+/// The public copy of `ecdsag_sign`, for a key held as Int bytes.
 pub List(Int) ecdsa_sign(Curve c, HashAlg h, List(Int) priv, List(Int) msg) { return ecdsag_sign(c, h, priv, msg); }
 
+/// The public copy of `ecdsag_sign_raw`, for a key held as Int bytes.
 pub List(Int) ecdsa_sign_raw(Curve c, HashAlg h, List(Int) priv, List(Int) msg) { return ecdsag_sign_raw(c, h, priv, msg); }
 
-// Sign with an explicit nonce k (big-endian). For known-answer tests
-// only: a k that repeats or leaks gives the private key away. Empty
-// (ok = false) when k or the key is out of range.
+/// Signs a digest with an explicit big-endian nonce `k`.
+/// For known-answer tests only: a k that repeats or leaks gives the
+/// private key away. Returns `ec_sig_bad()` when k or the key is out of
+/// range, or for P-521.
 @needs(P256Word(E, B), P384Word(G, B))
 pub EcSig ecdsag_sign_digest_k(Curve c, List(B) priv, List(Int) digest, List(B) k) {
     if (!ec_priv_len_okg(c, priv) || !ec_priv_len_okg(c, k)) { return ec_sig_bad(); }
@@ -349,13 +373,14 @@ EcSig ec_sign384_k(List(B) priv, List(Int) digest, List(B) k) {
     return ec_sig384(p384_sign_k(d, digest, kk));
 }
 
+/// The public copy of `ecdsag_sign_digest_k`, for Int-byte key and nonce.
 pub EcSig ecdsa_sign_digest_k(Curve c, List(Int) priv, List(Int) digest, List(Int) k) {
     return ecdsag_sign_digest_k(c, priv, digest, k);
 }
 
-// The same signature with s in the lower half of [1, n-1] (n - s when
-// s > n/2): the form most verifiers and every Bitcoin-style malleability
-// rule expect. Both forms verify; this only makes the bytes canonical.
+/// The same signature with s in the lower half of [1, n-1].
+/// Replaces s by n - s when s > n/2, the form malleability rules expect;
+/// both forms verify. A signature that does not fit `c` is returned as is.
 pub EcSig ecdsa_low_s(Curve c, EcSig sig) {
     if (!ec_sig_fits(c, sig)) { return sig; }
     List(Int) s2 = match c {

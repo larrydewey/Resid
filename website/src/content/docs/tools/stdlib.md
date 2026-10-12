@@ -3,6 +3,10 @@ title: Standard library
 description: The modules in lib/, all written in Resid.
 ---
 
+Every module is documented in its source, and the [API reference](/Resid/api/) is
+generated from that documentation: each type, behavior and function with its
+declaration and doc comment. This page is the overview.
+
 Import a module by file name; the compiler finds it in the standard library
 directory:
 

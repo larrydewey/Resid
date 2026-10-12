@@ -1,7 +1,10 @@
 // --- lib/regex.resid - regular expressions -----------------------------
-// Patterns compile to a Thompson NFA. Spans are found by a lazy DFA (a
-// forward pass for the end, a reverse pass for the start) when the pattern
-// has no assertions, else by a Pike VM, which also fills capture groups.
+// Patterns compile to a Thompson NFA. Without assertions, spans are found
+// by a DFA (a forward pass for the end, a reverse pass for the start):
+// whole tables built at compile time when they have at most 512 states,
+// shift-and for alternatives of equal-length ASCII sequences, else a lazy
+// DFA built during the search. Patterns with assertions, whole-text
+// matches and capture groups run on a Pike VM.
 // Matching time is linear in the text: there are no backreferences and no
 // lookaround, so no pattern can backtrack exponentially.
 //
@@ -16,7 +19,7 @@
 // \e \0 \xHH \x{H...} \uHHHH`, and `\` before any punctuation.
 // `^`/`$` are text ends unless `m`; `.` skips `\n` unless `s`.
 
-// A compiled pattern. Instructions are packed: op | a << 4 | b << 33.
+/// A compiled pattern. Instructions are packed: op | a << 4 | b << 33.
 pub type Regex = {
     Str pattern;
     List(Int) prog;
@@ -36,18 +39,20 @@ pub type Regex = {
     List(Int) bits;
 };
 
-// A whole DFA, built when small: next[state * classes + class], and per
-// state bit 0 matching, bit 2 the scan stops here. ok false: use the lazy one.
-// dense[state * 128 + c] for ASCII c is the target coded as tab_code;
-// skip[c] is 1 when c keeps a non-matching start state where it is.
+/// A whole DFA's transition tables, built at compile time when small.
+/// `ok` false: use the lazy DFA. `next[state * classes + class]`; flag bit 0
+/// is matching, bit 2 stops the scan; `dense[state * 128 + c]` for ASCII c
+/// is the target as a `tab_code`; `skip[c]` is 1 when c keeps a
+/// non-matching start state where it is.
 type Tab = { Bool ok; List(Int) next; List(Int) flags; Int start; List(Int) dense; List(Int) skip; };
 
-// A match: [start, end) and the groups as 2 * ngroups offsets (-1 unset;
-// group 0 is the match). `groups` is empty from the span-only searches.
+/// A match: [start, end) and the groups as 2 * ngroups offsets (-1 unset;
+/// group 0 is the match). `groups` is empty from the span-only searches.
 pub type RegexMatch = { Int start; Int end; List(Int) groups; };
 
 // --- Parser ----------------------------------------------------------------
 
+/// A parsed pattern node: a kind (`k_*`), operands `a`, `b`, `c` and child ids.
 type ReNode = { Int kind; Int a; Int b; Int c; List(Int) kids; };
 
 // Node kinds.
@@ -77,6 +82,9 @@ Int f_x() { return 8; }
 
 Int re_max_cp() { return 1114111; }
 
+/// The parser's state: the pattern, position, nodes and classes so far.
+/// Also the group count and names, flags, the first error (empty when
+/// none) and the id of the last node built.
 type ReP = { Str src; Int n; Int pos; List(ReNode) ns; List(List(Int)) cls; Int ng; List(Str) names; Int fl; Str err; Int id; };
 
 ReP rp_with(ReP p, Int pos, List(ReNode) ns, List(List(Int)) cls, Int ng, List(Str) names, Int fl, Str err, Int id) {
@@ -145,8 +153,9 @@ ReP re_repeat_p(ReP p) {
     return re_quant_p(a, false);
 }
 
-// A counted repetition `{n}`, `{n,}`, `{n,m}` or `{,m}` at i: its bounds
-// and end, or end -1 when the text there is not one (then `{` is literal).
+/// A counted repetition `{n}`, `{n,}`, `{n,m}` or `{,m}`: bounds and end.
+/// `hi` is -1 when unbounded; `next` is -1 when the text is not one (then
+/// `{` is literal).
 type ReCount = { Int lo; Int hi; Int next; };
 
 ReCount re_count_at(ReP p, Int i) {
@@ -222,7 +231,8 @@ Int re_fold(Int c) {
     return c;
 }
 
-// An escape: a codepoint (kind 0), class ranges (1) or an assertion (2).
+/// A parsed escape: a codepoint (kind 0), class ranges (1) or an assertion (2).
+/// `next` is the index after it; `err` is non-empty for a bad escape.
 type ReEsc = { Int kind; Int cp; List(Int) rs; Int next; Str err; };
 
 ReEsc esc_cp(Int cp, Int next) { List(Int) none = []; return ReEsc {.kind = 0, .cp = cp, .rs = none, .next = next, .err = ""}; }
@@ -298,6 +308,7 @@ ReP re_escape_p(ReP p) {
 
 // --- Classes ------------------------------------------------------------------
 
+/// A parsed character class: its ranges, the index after it, and any error.
 type ReCls = { List(Int) rs; Int next; Str err; };
 
 ReP re_class_p(ReP p) {
@@ -648,7 +659,9 @@ Int re_bclass(List(Int) bounds, Int c, Int lo, Int hi) {
     return if (bounds[mid] <= c) { re_bclass(bounds, c, mid, hi) } else { re_bclass(bounds, c, lo, mid) };
 }
 
-// Compile a pattern, or say why it is not one.
+/// Compile a pattern, or say why it is not one.
+/// Err carries the reason: a syntax error with its offset, or a pattern
+/// over 200000 instructions.
 pub Result(Regex, Str) regex_compile(Str pattern) {
     List(ReNode) ns0 = [];
     List(List(Int)) cl0 = [];
@@ -684,7 +697,7 @@ pub Result(Regex, Str) regex_compile(Str pattern) {
     return Ok(Regex {.pattern = pattern, .prog = prog, .fprog = fprog, .rprog = rprog, .cls = r.cls, .mask = mask, .ngroups = r.ng, .names = r.names, .dfa = dfa, .bounds = bounds, .ascii = ascii, .ftab = tab_dense(ft, ascii, bounds.len()), .rtab = if (rt.ok) { tab_dense(rt, ascii, bounds.len()) } else { tab_none() }, .fix = re_fixed(r.ns, r.id), .pre = re_prefix(r.ns, r.id, str_sb_new()), .bits = re_bit_table(r.ns, r.cls, r.id)});
 }
 
-// A pattern known to be valid; aborts with the reason when it is not.
+/// A pattern known to be valid; aborts with the reason when it is not.
 pub Regex regex(Str pattern) {
     Result(Regex, Str) r = regex_compile(pattern);
     return match r { Ok(re) => re, Err(e) => re_bad(pattern, e) };
@@ -734,7 +747,9 @@ Int re_at(Str s, Int n, Int i) { return if (i >= 0 && i < n) { str_char_at(s, i)
 
 // --- Pike VM ------------------------------------------------------------------------
 
+/// Pike VM threads: their pcs, each one's group offsets, and pcs seen this step.
 type ReT = { List(Int) pcs; List(List(Int)) caps; Set(Int) seen; };
+/// One Pike VM step: the next threads and the best match's offsets so far.
 type ReS = { ReT nx; List(Int) best; Bool found; };
 
 ReT re_threads() {
@@ -799,8 +814,9 @@ List(Int) re_unset(Int k, ListBuf(Int) acc) {
 
 // --- Lazy DFA ----------------------------------------------------------------------
 
-// States are ordered NFA pc lists; bit 0 of a flag: a match ends here,
-// bit 1: new starts are still allowed (no match seen yet).
+/// A lazy DFA cache: states, their flags, an index by key, and transitions.
+/// States are ordered NFA pc lists; bit 0 of a flag: a match ends here,
+/// bit 1: new starts are still allowed (no match seen yet).
 type Dfa = { List(List(Int)) states; List(Int) flags; Map(Str, Int) index; Map(Int, Int) trans; };
 
 Dfa dfa_new() {
@@ -811,9 +827,12 @@ Dfa dfa_new() {
     return Dfa {.states = s0, .flags = f0, .index = i0, .trans = t0};
 }
 
+/// A DFA state id with the cache it was found or added in.
 type DfaS = { Int st; Dfa d; };
 
 // Closure of pc into an ordered pc list (no assertions in a DFA program).
+
+/// An ordered NFA pc list being built, with the pcs already in it.
 type ReCl = { List(Int) pcs; Set(Int) seen; };
 
 ReCl re_close(List(Int) prog, Int pc, ReCl a) {
@@ -893,6 +912,7 @@ Int re_class_of(Regex re, Int c) {
     return if (c < 128) { re.ascii[c] } else { re_bclass(re.bounds, c, 0, re.bounds.len()) };
 }
 
+/// A DFA scan's answer (a match end or start, or -1) with the updated cache.
 type DfaR = { Int at; Dfa d; };
 
 // Forward: the end of the leftmost-first match from `from`, or -1.
@@ -1203,7 +1223,7 @@ Str re_prefix_cat(List(ReNode) ns, List(Int) ks, Int i, Str sb) {
 
 // --- Searching -----------------------------------------------------------------------
 
-// A search's result with the caches to reuse: start -1 when none.
+/// A search's result with the DFA caches to reuse; `start` is -1 when none.
 type ReF = { Int start; Int end; List(Int) groups; Dfa f; Dfa r; };
 
 ReF re_search(Regex re, Str s, Int n, Int from, Bool caps, Dfa f0, Dfa r0) {
@@ -1237,38 +1257,44 @@ ReF re_search(Regex re, Str s, Int n, Int from, Bool caps, Dfa f0, Dfa r0) {
 
 RegexMatch re_m(ReF r) { return RegexMatch {.start = r.start, .end = r.end, .groups = r.groups}; }
 
-// Does the pattern match anywhere in s?
+/// Whether the pattern matches anywhere in `s`.
 pub Bool regex_is_match(Regex re, Str s) {
     return match regex_find(re, s) { Some(m) => m.end >= 0, None => false };
 }
 
-// Does the pattern match all of s?
+/// Whether the pattern matches all of `s`.
 pub Bool regex_full_match(Regex re, Str s) {
     List(Int) none = [];
     Int n = str_len(s);
     return re_vm(re, re.fprog, s, n, 0, true, 0, re_threads(), none, false, re_unset(2 * re.ngroups, ListBuf())).len() > 0;
 }
 
-// The leftmost match (its span; no groups).
+/// The leftmost match in `s` (its span; no groups), or None.
 pub Option(RegexMatch) regex_find(Regex re, Str s) { return regex_find_from(re, s, 0); }
 
+/// The leftmost match starting at or after codepoint `from` (span only).
+/// None when there is none or `from` is past the end of `s`.
 pub Option(RegexMatch) regex_find_from(Regex re, Str s, Int from) {
     ReF r = re_search(re, s, str_len(s), from, false, dfa_new(), dfa_new());
     return if (r.start < 0) { None } else { Some(re_m(r)) };
 }
 
-// The leftmost match with its groups.
+/// The leftmost match in `s` with its groups, or None.
 pub Option(RegexMatch) regex_captures(Regex re, Str s) { return regex_captures_from(re, s, 0); }
 
+/// The leftmost match at or after codepoint `from`, with its groups.
+/// None when there is none or `from` is past the end of `s`.
 pub Option(RegexMatch) regex_captures_from(Regex re, Str s, Int from) {
     ReF r = re_search(re, s, str_len(s), from, true, dfa_new(), dfa_new());
     return if (r.start < 0) { None } else { Some(re_m(r)) };
 }
 
-// Every non-overlapping match, left to right; an empty match right after
-// the previous match is skipped.
+/// Every non-overlapping match in `s`, left to right, spans only.
+/// An empty match right after the previous match is skipped.
 pub List(RegexMatch) regex_find_all(Regex re, Str s) { return re_all(re, s, str_len(s), 0, -1, false, dfa_new(), dfa_new(), ListBuf()); }
 
+/// Every non-overlapping match in `s`, left to right, with its groups.
+/// An empty match right after the previous match is skipped.
 pub List(RegexMatch) regex_captures_all(Regex re, Str s) { return re_all(re, s, str_len(s), 0, -1, true, dfa_new(), dfa_new(), ListBuf()); }
 
 List(RegexMatch) re_all(Regex re, Str s, Int n, Int from, Int last, Bool caps, Dfa f, Dfa r, ListBuf(RegexMatch) acc) {
@@ -1281,6 +1307,7 @@ List(RegexMatch) re_all(Regex re, Str s, Int n, Int from, Int last, Bool caps, D
     return re_all(re, s, n, m.end, m.end, caps, m.f, m.r, acc.push(re_m(m)));
 }
 
+/// The number of matches `regex_find_all` would return for `s`.
 pub Int regex_count(Regex re, Str s) {
     if (tab_ok(re)) { return tab_count(re, s, str_len(s), 0, -1, 0); }
     return re_count(re, s, str_len(s), 0, -1, dfa_new(), dfa_new(), 0);
@@ -1310,10 +1337,11 @@ Int re_count(Regex re, Str s, Int n, Int from, Int last, Dfa f, Dfa r, Int acc) 
 
 // --- Groups and text ------------------------------------------------------------------
 
-// The matched text.
+/// The text of `s` that `m` matched.
 pub Str regex_text(RegexMatch m, Str s) { return str_slice(s, m.start, m.end); }
 
-// Group i's text, or None when it took no part (or the match has no groups).
+/// Group `i`'s text in `s`; None when it took no part, `i` is out of range,
+/// or the match has no groups.
 pub Option(Str) regex_group(RegexMatch m, Str s, Int i) {
     if (2 * i + 1 >= m.groups.len() || i < 0) { return None; }
     Int a = m.groups[2 * i];
@@ -1321,7 +1349,7 @@ pub Option(Str) regex_group(RegexMatch m, Str s, Int i) {
     return if (a < 0 || b < 0) { None } else { Some(str_slice(s, a, b)) };
 }
 
-// The index of a named group, or -1.
+/// The index of a named group, or -1.
 pub Int regex_group_index(Regex re, Str name) { return re_name_at(re.names, name, 1); }
 
 Int re_name_at(List(Str) names, Str name, Int i) {
@@ -1330,18 +1358,21 @@ Int re_name_at(List(Str) names, Str name, Int i) {
     return re_name_at(names, name, i + 1);
 }
 
+/// The text of the group called `name`; None when there is no such group
+/// or it took no part.
 pub Option(Str) regex_named(Regex re, RegexMatch m, Str s, Str name) {
     Int i = regex_group_index(re, name);
     return if (i < 0) { None } else { regex_group(m, s, i) };
 }
 
-// Capture groups, group 0 included.
+/// The number of capture groups, group 0 included.
 pub Int regex_groups(Regex re) { return re.ngroups; }
 
 // --- Replacing and splitting -------------------------------------------------------------
 
-// Replace the first match. In rep, `$n` and `${n}` / `${name}` are groups,
-// `$$` is a dollar.
+/// `s` with its first match replaced by `rep`; `s` itself when none.
+/// In `rep`, `$n`, `${n}` and `${name}` are groups (empty when unset), and
+/// `$$` is a dollar.
 pub Str regex_replace(Regex re, Str s, Str rep) {
     Bool caps = str_contains(rep, "$");
     Int n = str_len(s);
@@ -1351,6 +1382,8 @@ pub Str regex_replace(Regex re, Str s, Str rep) {
     return str_slice(s, 0, m.start) + mid + str_slice(s, m.end, n);
 }
 
+/// `s` with every match (as `regex_find_all`) replaced by `rep`.
+/// Group references in `rep` work as in `regex_replace`.
 pub Str regex_replace_all(Regex re, Str s, Str rep) {
     Bool caps = str_contains(rep, "$");
     if (tab_ok(re) && !caps) { return tab_repl(re, s, str_len(s), rep, 0, 0, -1, str_sb_new()); }
@@ -1381,7 +1414,7 @@ Str tab_repl(Regex re, Str s, Int n, Str rep, Int from, Int copied, Int last, St
     return tab_repl(re, s, n, rep, en, en, en, str_sb_append(str_sb_append_slice(sb, s, copied, st), rep));
 }
 
-// Replace every match with what f makes of it (groups filled).
+/// `s` with every match replaced by what `f` makes of it (groups filled).
 pub Str regex_replace_with(Regex re, Str s, Str closure(RegexMatch) f) {
     List(RegexMatch) ms = regex_captures_all(re, s);
     return re_repl_f(s, ms, 0, 0, f, str_sb_new());
@@ -1393,7 +1426,7 @@ Str re_repl_f(Str s, List(RegexMatch) ms, Int i, Int copied, Str closure(RegexMa
     return re_repl_f(s, ms, i + 1, ms[i].end, f, sb1);
 }
 
-// rep with its group references filled from m.
+/// `rep` with its group references filled from `m` over `s`.
 pub Str regex_expand(Regex re, RegexMatch m, Str s, Str rep) { return re_expand(re, m, s, rep, 0, str_len(rep), str_sb_new()); }
 
 Str re_expand(Regex re, RegexMatch m, Str s, Str rep, Int i, Int n, Str sb) {
@@ -1424,7 +1457,8 @@ Int re_dig_end(Str t, Int i, Int n) {
     return i;
 }
 
-// The text between matches.
+/// The pieces of `s` between matches, including before the first match and
+/// after the last.
 pub List(Str) regex_split(Regex re, Str s) {
     List(RegexMatch) ms = regex_find_all(re, s);
     return re_split_at(s, ms, 0, 0, ListBuf());
@@ -1435,7 +1469,7 @@ List(Str) re_split_at(Str s, List(RegexMatch) ms, Int i, Int from, ListBuf(Str) 
     return re_split_at(s, ms, i + 1, ms[i].end, acc.push(str_slice(s, from, ms[i].start)));
 }
 
-// s with every metacharacter escaped, so it matches itself.
+/// `s` with every metacharacter escaped, so it matches itself.
 pub Str regex_escape(Str s) { return re_esc_at(s, 0, str_len(s), str_sb_new()); }
 
 Str re_esc_at(Str s, Int i, Int n, Str sb) {

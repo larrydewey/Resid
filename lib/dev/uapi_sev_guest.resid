@@ -14,32 +14,40 @@
 
 import "device.resid";
 
-// SNP_GET_REPORT: struct snp_report_req in, struct snp_report_resp out
-// (struct msg_report_resp: status, report size, the report), exitinfo2
-// (firmware and VMM error codes) back.
-//
-//     struct snp_guest_request_ioctl   // 32 bytes
-//         msg_version          offset    0,    1 bytes  version 1
-//         req_data             offset    8,    8 bytes  Buffer In, at most 96 bytes
-//         resp_data            offset   16,    8 bytes  Buffer Out, at most 4000 bytes
-//         exitinfo2            offset   24,    8 bytes  Scalar Out
-//     SNP_GET_REPORT: x86-64 0xc0205300, aarch64 0xc0205300
+/// SNP_GET_REPORT: struct snp_report_req in, struct snp_report_resp out
+/// (struct msg_report_resp: status, report size, the report), exitinfo2
+/// (firmware and VMM error codes) back.
+///
+///     struct snp_guest_request_ioctl   // 32 bytes
+///         msg_version          offset    0,    1 bytes  version 1
+///         req_data             offset    8,    8 bytes  Buffer In, at most 96 bytes
+///         resp_data            offset   16,    8 bytes  Buffer Out, at most 4000 bytes
+///         exitinfo2            offset   24,    8 bytes  Scalar Out
+///     SNP_GET_REPORT: x86-64 0xc0205300, aarch64 0xc0205300
 pub IoctlOp snp_get_report_op() {
     return IoctlOp {.name = "sev_guest.snp_get_report", .path = "/dev/sev-guest", .requests = [Request {.arch = X86_64, .number = 3223343872}, Request {.arch = Aarch64, .number = 3223343872}], .size = 32, .fields = [Buffer(8, -1, 96, In, false), Buffer(16, -1, 4000, Out, false), Scalar(24, 8, Out)], .write = false, .version = Versioned(0, 1, 1), .stability = Uapi};
 }
 
 // -- Layouts the wrappers fill and parse ----------------------------------
 
-// struct snp_report_req: 96 bytes.
+/// struct snp_report_req: 96 bytes.
 pub Int snp_report_req_size() { return 96; }
+/// The byte offset of `user_data` in struct snp_report_req.
 pub Int snp_report_req_user_data_at() { return 0; }
+/// The size in bytes of `user_data` in struct snp_report_req.
 pub Int snp_report_req_user_data_len() { return 64; }
+/// The byte offset of `vmpl` in struct snp_report_req.
 pub Int snp_report_req_vmpl_at() { return 64; }
+/// The size in bytes of `vmpl` in struct snp_report_req.
 pub Int snp_report_req_vmpl_len() { return 4; }
+/// The byte offset of `rsvd` in struct snp_report_req.
 pub Int snp_report_req_rsvd_at() { return 68; }
+/// The size in bytes of `rsvd` in struct snp_report_req.
 pub Int snp_report_req_rsvd_len() { return 28; }
 
-// struct snp_report_resp: 4000 bytes.
+/// struct snp_report_resp: 4000 bytes.
 pub Int snp_report_resp_size() { return 4000; }
+/// The byte offset of `data` in struct snp_report_resp.
 pub Int snp_report_resp_data_at() { return 0; }
+/// The size in bytes of `data` in struct snp_report_resp.
 pub Int snp_report_resp_data_len() { return 4000; }

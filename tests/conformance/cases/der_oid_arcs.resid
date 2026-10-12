@@ -1,0 +1,13 @@
+import "der.resid";
+
+// The first subidentifier holds two arcs: 2.x for any x of 40 and more,
+// which takes more than one octet past 2.47.
+Int main() {
+    println(der_oid_str([6, 3, 85, 4, 3], 0));
+    println(der_oid_str([6, 6, 42, 134, 72, 206, 61, 2], 0));
+    println(der_oid_str([6, 2, 120, 1], 0));
+    println(der_oid_str([6, 3, 136, 55, 3], 0));
+    println(der_oid_str([6, 1, 39], 0));
+    println("[" + der_oid_str([6, 2, 136, 136], 0) + "]");
+    return 0;
+}

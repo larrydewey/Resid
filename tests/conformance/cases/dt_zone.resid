@@ -105,6 +105,25 @@ Int main() {
         ck("us fold", pick(zp, 1793496600), "A1793511000,1793514600");
         ck("us offsets", f"{zone_offsets(zp).len()}", "2");
     }
+    // Southern hemisphere: daylight saving spans the new year.
+    Option(PosixTz) syd = posix_parse("AEST-10AEDT,M10.1.0,M4.1.0/3");
+    if (Some(p) = syd) {
+        Zone zs = zone_from_posix("AU", p);
+        ck("au jan", offat(zs, 1768435200), "39600,true,AEDT");
+        ck("au jul", offat(zs, 1782864000), "36000,false,AEST");
+        ck("au before end", offat(zs, 1775318399), "39600,true,AEDT");
+        ck("au at end", offat(zs, 1775318400), "36000,false,AEST");
+        ck("au before start", offat(zs, 1791043199), "36000,false,AEST");
+        ck("au at start", offat(zs, 1791043200), "39600,true,AEDT");
+        ck("au new year", offat(zs, 1798747200), "39600,true,AEDT");
+    }
+    // Jn never counts 29 February: J60 is 1 March in a leap year.
+    Option(PosixTz) jul = posix_parse("XYZ3ABC,J60,J300");
+    if (Some(p) = jul) {
+        Zone zj = zone_from_posix("J", p);
+        ck("j60 before", offat(zj, 1835499599), "-10800,false,XYZ");
+        ck("j60 at", offat(zj, 1835499600), "-7200,true,ABC");
+    }
     cb("safe UTC", zone_name_is_safe("UTC"));
     cb("safe area", zone_name_is_safe("Europe/Berlin"));
     cb("safe underscore", zone_name_is_safe("America/Argentina/Buenos_Aires"));

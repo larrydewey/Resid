@@ -4,6 +4,8 @@
 // 1.3: what a fill is (decrypt records until there is application data),
 // what a send is (protect the bytes and put them in records), and what
 // accepting a socket means (run a handshake, or decline the socket).
+// `Session(TlsSess, TlsCfg)` is the same for the event loop, fed bytes as
+// they arrive; `tls_accept_loop` and `tls_stream_loop` serve over it.
 //
 // Everything here is `network(readonly)`, like the plain transport: this
 // reads and writes on a socket the caller already holds. The key and the
@@ -23,19 +25,21 @@ import "tls.resid";
 import "tlsserver.resid";
 import "tlskey.resid";
 
-// A TLS connection: the socket, the keys and record counters the
-// handshake left behind, and the record bytes read past its Finished.
+/// A TLS connection: the socket, the keys and record counters the
+/// handshake left behind, and the record bytes read past its Finished.
 @opaque
 type TlsConn = { Int fd; TlsKeys keys; Bool eof; List(Int) buf; };
 
-// This server's end of the connection, for challenge_with_channel.
+/// This server's end of the connection, for challenge_with_channel.
 pub ChannelExporter tlsserver_exporter(TlsConn c) { return ChannelExporter {.x = c.keys.exp}; }
 
-// What a TLS server is started with: the key it signs with, the chain it
-// presents (leaf first), and the protocols it speaks, most preferred
-// first. No capability lives in here: loading the files did.
+/// What a TLS server is started with: the key it signs with, the chain it
+/// presents (leaf first), and the protocols it speaks, most preferred
+/// first. No capability lives in here: loading the files did.
 type TlsCfg = { ServerKey key; List(List(Int)) chain; List(Str) alpn; };
 
+/// A server configuration from `key`, its certificate `chain` (DER, leaf
+/// first) and the ALPN protocols in `alpn`, most preferred first.
 pub TlsCfg tls_cfg(ServerKey key, List(List(Int)) chain, List(Str) alpn) {
     return TlsCfg { .key = key, .chain = chain, .alpn = alpn };
 }
@@ -163,9 +167,10 @@ Accept(TlsConn, TlsCfg) = tls_accept;
 // one, so a client that sends its hello a byte at a time costs a header
 // walk per byte, not a parse.
 
-// `phase` 0 waits for the ClientHello, 1 for the client's Finished, 2
-// carries application data, 3 is over. `raw` is what arrived and is not
-// consumed yet; `seen` the complete records in it at the last attempt.
+/// An event-loop TLS session's state. `phase` 0 waits for the ClientHello,
+/// 1 for the client's Finished, 2 carries application data, 3 is over.
+/// `raw` is what arrived and is not consumed yet; `seen` the complete
+/// records in it at the last attempt.
 type TlsSess = { Int phase; List(Int) raw; Int seen; TsPending pend; TlsKeys keys; };
 
 TlsSess tls_sess_open(TlsCfg conf) {
@@ -242,9 +247,9 @@ SessIn(TlsSess) tls_sess_step(TlsCfg conf, TlsSess s, List(Int) plain, List(Int)
     return tls_sess_step(conf, app, plain, out);
 }
 
-// Application records opened as far as they are complete. `status` as in
-// SessIn: 1 after the client's close_notify or alert, 2 for a record that
-// fails its tag or has no business arriving.
+/// Application records opened as far as they are complete. `status` as in
+/// SessIn: 1 after the client's close_notify or alert, 2 for a record
+/// that fails its tag, is oversized or has no business arriving.
 type TlsOpened = { TlsKeys keys; List(Int) raw; List(Int) plain; Int status; };
 
 @requires(declassify)
@@ -276,8 +281,8 @@ TlsOpened tls_open_ready(TlsKeys k, List(Int) raw, Int at, List(Int) plain) {
     return TlsOpened { .keys = k2, .raw = [], .plain = plain, .status = 2 };
 }
 
-// Plaintext into records of at most 2^14 bytes, each its own sequence
-// number (RFC 8446 §5.1).
+/// Plaintext sealed into records of at most 2^14 bytes, each its own
+/// sequence number (RFC 8446 §5.1), and the keys with the counter advanced.
 type TlsSealed = { TlsKeys keys; List(Int) bytes; };
 
 @requires(declassify)
@@ -307,15 +312,16 @@ List(Int) tls_sess_goodbye(TlsSess s) {
 
 Session(TlsSess, TlsCfg) = { .sess_open = tls_sess_open, .sess_input = tls_sess_input, .sess_output = tls_sess_output, .sess_goodbye = tls_sess_goodbye };
 
-// Accept TLS connections on `lfd` and serve them: the same event loop
-// the plain server runs, over a session that has to shake hands before
-// there is anything to read. `max_conns` 0 means until accept fails.
+/// Accept TLS connections on `lfd` and serve them: the same event loop
+/// the plain server runs, over a session that has to shake hands before
+/// there is anything to read. `max_conns` 0 means until accept fails.
 @requires(network(readonly), declassify)
 pub Int tls_accept_loop(Int lfd, TlsCfg conf, HttpReply closure(HttpRequest) handler, HttpLimits lim, Int max_conns) {
     return http_accept_loop_where(lfd, conf, handler, lim, max_conns);
 }
 
-// The same with a handler that may stream (lib/httpserv.resid `HttpOut`).
+/// Accept and serve TLS connections like `tls_accept_loop`, with a
+/// handler that may stream (lib/httpserv.resid `HttpOut`).
 @requires(network(readonly), declassify)
 pub Int tls_stream_loop(Int lfd, TlsCfg conf, HttpOut(K) closure(HttpRequest) handler, HttpLimits lim, Int max_conns) {
     return http_stream_loop_where(lfd, conf, handler, lim, max_conns);

@@ -24,118 +24,150 @@ import "aesgcmg.resid";
 
 // ── GF(2^8) and the S-box, one byte at a time ───────────────────────
 
+/// The byte mask 255.
 pub Int m8() { return 255; }
 
-// a * 2 in GF(2^8).
+/// The product `a` * 2 in GF(2^8), using the low byte of `a`.
 pub Int xtime(Int a) { return aesg_xtime(a & 255); }
 
+/// The product of `a` and `b` in GF(2^8), using the low byte of each.
 pub Int gf8_mul(Int a, Int b) { return aesg_mul(a & 255, b & 255); }
 
-// x^254 = x^-1 (and 0 for 0).
+/// The inverse of `x` in GF(2^8), computed as x^254 (0 for 0).
 pub Int gf8_inv(Int x) { return aesg_inv(x & 255); }
 
-// The S-box, computed: the GF(2^8) inverse, then the affine map.
+/// The AES S-box entry for the low byte of `v`, computed rather than
+/// looked up: the GF(2^8) inverse, then the affine map.
 pub Int sbox_at(Int v) { return aesg_sub(v & 255) & 255; }
 
-// The inverse S-box: the inverse affine map, then the inverse.
+/// The inverse S-box entry for the low byte of `v`: the inverse affine
+/// map, then the GF(2^8) inverse.
 pub Int inv_sbox_at(Int v) { return aesg_inv_sub(v & 255) & 255; }
 
 // ── Key expansion (FIPS 197 §5.2) ────────────────────────────────────
 
+/// The key-expansion round constant for round `i` (1 for `i` = 1,
+/// doubling in GF(2^8)).
 pub Int rcon_at(Int i) { return aesg_rcon(i); }
 
-// The schedule of a 16-, 24- or 32-byte key, as words; empty for any
-// other length.
+/// The FIPS 197 key schedule of a 16-, 24- or 32-byte key, as 32-bit
+/// words; empty for any other length.
 pub List(Int) aes_key_expand(List(Int) key) { return aesg_key_expand(key); }
 
-// The AES-128 schedule (kept for the TLS record layer; any key size works).
+/// The key schedule of `key`, the same as `aes_key_expand`; the name is
+/// kept for the TLS record layer, and any AES key size works.
 pub List(Int) aes128_key_expand(List(Int) key) { return aes_key_expand(key); }
 
+/// The number of rounds (10, 12 or 14) for the key schedule `rk`, read
+/// from its length.
 pub Int aes_rounds_of(List(Int) rk) { return aesg_rounds(rk.len()); }
 
 // ── Blocks ───────────────────────────────────────────────────────────
 // Blocks pack little-endian (byte 0 low), which is AES-NI's own load
 // order on this target.
 
+/// The value `v` with bytes 0..`i` of `b` ORed in, little-endian (byte k
+/// at bit 8k).
 pub UInt(128) pb_acc(List(Int) b, UInt(128) v, Int i) { return aesg_le_pack_pub(b, i, v); }
+/// The first 16 bytes of `b` packed little-endian into one block.
 pub UInt(128) pack_block128(List(Int) b) { return aesg_le_pack_pub(b, 15, (UInt(128)) 0); }
 
+/// The 16 bytes of a little-endian packed block, byte 0 first.
 pub List(Int) unpack_block128(UInt(128) v) {
     ListBuf(Int) acc = ListBuf();
     return aesg_le_bytes(v, 0, acc).finish();
 }
 
-// Byte i (0..15) of a little-endian packed block.
+/// Byte `i` (0..15) of the little-endian packed block `v`.
 pub Int le_byte(UInt(128) v, Int i) { return wrapping_i64((v >> ((UInt(128)) (i * 8))) & ((UInt(128)) 255)); }
 
-// The packed round keys and the path (AES-NI or software) for a schedule.
+/// The packed round keys for the schedule `rk`, set to use AES-NI / AESE
+/// when the CPU has it and software otherwise.
 pub AesKeyG(UInt(128), Int) aes_keys(List(Int) rk) { return aesg_keys(rk); }
 
-// One block, little-endian packed in and out.
+/// The encryption of one block `b` under `k`, little-endian packed in
+/// and out.
 pub UInt(128) aes_block(AesKeyG(UInt(128), Int) k, UInt(128) b) { return aesg_block(k, b); }
 
-// One block of any AES, bytes in and out, on AES-NI when present.
+/// The encryption of the 16-byte block `blk` under the schedule `rk` (any
+/// AES size), on AES-NI / AESE when present.
 pub List(Int) aes_encrypt_block(List(Int) rk, List(Int) blk) {
     return unpack_block128(aesg_block(aes_keys(rk), pack_block128(blk)));
 }
 
-// The same in software, whatever the CPU has.
+/// The encryption of the 16-byte block `blk` under `rk`, always in
+/// software whatever the CPU has.
 pub List(Int) aes_encrypt_block_sw(List(Int) rk, List(Int) blk) {
     return unpack_block128(aesg_encrypt_sw(rk, pack_block128(blk)));
 }
 
-// The inverse cipher (FIPS 197 §5.3), software only.
+/// The decryption of the 16-byte block `blk` under `rk` by the inverse
+/// cipher (FIPS 197 §5.3), in software only.
 pub List(Int) aes_decrypt_block(List(Int) rk, List(Int) blk) {
     return unpack_block128(aesg_decrypt_sw(rk, pack_block128(blk)));
 }
 
+/// The same as `aes_encrypt_block`; an older name, any key size works.
 pub List(Int) aes128_encrypt_block(List(Int) rk, List(Int) blk) { return aes_encrypt_block(rk, blk); }
+/// The same as `aes_encrypt_block`: hardware when present, else software.
 pub List(Int) aes128_encrypt_block_hw(List(Int) rk, List(Int) blk) { return aes_encrypt_block(rk, blk); }
+/// The same as `aes_encrypt_block_sw`; an older name.
 pub List(Int) aes128_encrypt_block_sw(List(Int) rk, List(Int) blk) { return aes_encrypt_block_sw(rk, blk); }
 
 // ── GCM ──────────────────────────────────────────────────────────────
 
-// Bytes [off, off + n) of b, n <= 16, big-endian packed (zero padded).
+/// Bytes [`off`, `off` + `n`) of `b` big-endian packed into `acc` from
+/// index `i` (callers pass 0 and 0); `n` is capped at 16, zero padded.
 pub UInt(128) be_pack(List(Int) b, Int off, Int n, Int i, UInt(128) acc) {
     Int m = if (n < 16) { n } else { 16 };
     return aesg_be_pack_pub(b, off, m, i, acc);
 }
 
-// X * Y in GF(2^128), both big-endian packed (SP 800-38D, algorithm 1):
-// carry-less multiplication where the CPU has it, else 128 masked
-// shift-and-add steps; both are constant time.
+/// The product `x` * `y` in GF(2^128), both big-endian packed (SP
+/// 800-38D, algorithm 1):
+/// carry-less multiplication where the CPU has it, else 128 masked
+/// shift-and-add steps; both are constant time.
 pub UInt(128) gf128_mul(UInt(128) x, UInt(128) y) { return aesg_gf128(resid_cpu_has_clmul(), x, y); }
 
+/// The product `x` * `y` in GF(2^128), always by the constant-time
+/// software path.
 pub UInt(128) gf128_mul_sw(UInt(128) x, UInt(128) y) { return aesg_gf128_sw(x, y); }
 
-// GHASH over bytes [off, off + n) of data, zero padded to whole blocks.
+/// The GHASH state after folding bytes [`off`, `off` + `n`) of `data`,
+/// zero padded to whole blocks, into `y` under the hash key `h`.
 pub UInt(128) ghash128(UInt(128) h, UInt(128) y, List(Int) data, Int off, Int n) {
     return aesg_ghash_pub(resid_cpu_has_clmul(), h, y, data, off, n);
 }
 
+/// The 16 bytes of the big-endian packed block `v`, from byte `i` on,
+/// pushed onto `acc` (callers pass 0 and an empty buffer).
 pub List(Int) be_bytes(UInt(128) v, Int i, ListBuf(Int) acc) {
     if (i >= 16) { return acc.finish(); }
     return be_bytes(v, i + 1, acc.push(wrapping_i64((v >> ((UInt(128)) (120 - i * 8))) & ((UInt(128)) 255))));
 }
 
-// AES-GCM encryption under a 16-, 24- or 32-byte key and an IV of at
-// least one byte: ciphertext || 16-byte tag, or empty for a bad key or IV.
+/// The AES-GCM encryption of `plaintext` with `aad` under a 16-, 24- or
+/// 32-byte key and an IV of at least one byte: ciphertext || 16-byte tag,
+/// or empty for a bad key or IV.
 pub List(Int) aes_gcm_seal(List(Int) key, List(Int) iv, List(Int) plaintext, List(Int) aad) {
     return aes_gcmg_seal(key, iv, plaintext, aad);
 }
 
-// The plaintext when the tag verifies (compared in constant time), None
-// otherwise -- an empty plaintext is Some([]), not a failure.
+/// The AES-GCM plaintext of `ct_and_tag` with `aad` when the tag verifies
+/// (compared in constant time), None otherwise; an empty plaintext is
+/// Some([]), not a failure.
 pub Option(List(Int)) aes_gcm_decrypt(List(Int) key, List(Int) iv, List(Int) ct_and_tag, List(Int) aad) {
     return aes_gcmg_decrypt(key, iv, ct_and_tag, aad);
 }
 
 // ── Byte-list helpers kept for the TLS record layer ─────────────────
 
+/// The bytewise XOR of the first 16 bytes of `a` and `b`.
 pub List(Int) xor16(List(Int) a, List(Int) b) {
     return x16(a, b, 0, []);
 }
 
+/// The XOR of bytes `i`..15 of `a` and `b`, appended to `acc`.
 pub List(Int) x16(List(Int) a, List(Int) b, Int i, List(Int) acc) {
     if (i >= 16) { return acc; }
     Int v = a[i] ^ b[i];
@@ -144,13 +176,15 @@ pub List(Int) x16(List(Int) a, List(Int) b, Int i, List(Int) acc) {
     return x16(a, b, ni, acc2);
 }
 
-// GHASH: Y = ((Y ^ block) * H) over data (padded to 16-byte blocks)
+/// The GHASH state, as 16 bytes, after folding `remaining` bytes of
+/// `data` from `off` (zero padded to whole blocks) into `y` under `h`.
 pub List(Int) ghash_blocks(List(Int) h, List(Int) y, List(Int) data, Int off, Int remaining) {
     UInt(128) hb = be_pack(h, 0, 16, 0, (UInt(128)) 0);
     UInt(128) yb = be_pack(y, 0, 16, 0, (UInt(128)) 0);
     return be_bytes(ghash128(hb, yb, data, off, remaining), 0, ListBuf());
 }
 
+/// The list `acc` with `n` zero bytes appended.
 pub List(Int) zeros_seed(List(Int) acc, Int n) {
     if (n == 0) { return acc; }
     List(Int) acc2 = acc.concat([0]);
@@ -158,13 +192,15 @@ pub List(Int) zeros_seed(List(Int) acc, Int n) {
     return zeros_seed(acc2, nn);
 }
 
+/// The number of zero bytes (0..15) that pad `n` to a multiple of 16.
 pub Int pad16(Int n) {
     Int rr = n % 16;
     if (rr == 0) { return 0; }
     return 16 - rr;
 }
 
-// len block: 8 bytes of zero then 64-bit big-endian bit lengths
+/// The bytes of `v` from bit `shift` down in steps of 8, big-endian,
+/// appended to `acc` (shift 56 gives a 64-bit big-endian value).
 pub List(Int) be64_build(Int v, Int shift, List(Int) acc) {
     if (shift < 0) { return acc; }
     Int b = (v >> shift) & 255;
@@ -173,6 +209,8 @@ pub List(Int) be64_build(Int v, Int shift, List(Int) acc) {
     return be64_build(v, ns, acc2);
 }
 
+/// The GCM length block: the bit lengths of the AAD (`alen` bytes) and
+/// the ciphertext (`clen` bytes), each 64-bit big-endian.
 pub List(Int) gcm_len_block(Int alen, Int clen) {
     Int ab = alen * 8;
     Int cb = clen * 8;
@@ -181,7 +219,8 @@ pub List(Int) gcm_len_block(Int alen, Int clen) {
     return abe.concat(cbe);
 }
 
-// GCM counter blocks: J0 = IV || 00000001; inc32 increments last 4 bytes
+/// The counter block `ctr` with its last 4 bytes incremented as a
+/// big-endian 32-bit count, mod 2^32 (GCM's inc32).
 pub List(Int) inc32(List(Int) ctr) {
     List(Int) head = slice_seed(ctr, 0, 12, []);
     Int full = ctr[12] * 16777216 + ctr[13] * 65536 + ctr[14] * 256 + ctr[15];
@@ -189,7 +228,9 @@ pub List(Int) inc32(List(Int) ctr) {
     return head.concat([(f1 >> 24) & 255, (f1 >> 16) & 255, (f1 >> 8) & 255, f1 & 255]);
 }
 
-// CTR mode XOR from the 16-byte counter block cb, appended to acc.
+/// The CTR-mode XOR of `data` from byte `done` under the schedule `rk`,
+/// starting at the 16-byte counter block `cb` (inc32 per block), appended
+/// to `acc`.
 pub List(Int) ctr_xor(List(Int) rk, List(Int) cb, List(Int) data, Int done, List(Int) acc) {
     Int count = cb[12] * 16777216 + cb[13] * 65536 + cb[14] * 256 + cb[15];
     ListBuf(Int) ob = ListBuf();
@@ -197,6 +238,8 @@ pub List(Int) ctr_xor(List(Int) rk, List(Int) cb, List(Int) data, Int done, List
     return if (acc.len() == 0) { out } else { acc.concat(out) };
 }
 
+/// The XOR of keystream bytes `i`..`take` of `ks` with `data` from
+/// offset `done`, appended to `acc`.
 pub List(Int) ctr_take(List(Int) ks, List(Int) data, Int done, Int i, Int take, List(Int) acc) {
     if (i >= take) { return acc; }
     Int pos = done + i;
@@ -208,24 +251,28 @@ pub List(Int) ctr_take(List(Int) ks, List(Int) data, Int done, Int i, Int take, 
 
 // ── AES-128-GCM names the TLS record layer uses ──────────────────────
 
-// GHASH input: aad, ct, each zero padded, then the length block.
+/// The GHASH input for `aad` and `ct`: each zero padded to whole blocks,
+/// then the length block.
 pub List(Int) gcm_mac_data(List(Int) aad, List(Int) ct) {
     List(Int) za = zeros_seed([], pad16(aad.len()));
     List(Int) zc = zeros_seed([], pad16(ct.len()));
     return aad.concat(za).concat(ct).concat(zc).concat(gcm_len_block(aad.len(), ct.len()));
 }
 
-// returns ciphertext || 16-byte tag
+/// The same as `aes_gcm_seal`: ciphertext || 16-byte tag, or empty for a
+/// bad key or IV; any AES key size works.
 pub List(Int) aes128_gcm_seal(List(Int) key, List(Int) iv, List(Int) plaintext, List(Int) aad) {
     return aes_gcm_seal(key, iv, plaintext, aad);
 }
 
+/// True when the AES-GCM tag of `ct_and_tag` with `aad` verifies under
+/// `key` and `iv`; the plaintext is discarded.
 pub Bool aes128_gcm_open(List(Int) key, List(Int) iv, List(Int) ct_and_tag, List(Int) aad) {
     return match aes_gcm_decrypt(key, iv, ct_and_tag, aad) { Some(p) => true, None => false };
 }
 
-// The decrypted plaintext, or an empty list when the tag does not verify
-// (use aes_gcm_decrypt to tell an empty plaintext from a refusal).
+/// The decrypted plaintext, or an empty list when the tag does not verify
+/// (use `aes_gcm_decrypt` to tell an empty plaintext from a refusal).
 pub List(Int) aes128_gcm_open_bytes(List(Int) key, List(Int) iv, List(Int) ct_and_tag, List(Int) aad) {
     return aes_gcm_decrypt(key, iv, ct_and_tag, aad) else { [] };
 }
@@ -236,11 +283,11 @@ pub List(Int) aes128_gcm_open_bytes(List(Int) key, List(Int) iv, List(Int) ct_an
 // whole 64-bit blocks, at least two of them; the default IV A6..A6 is
 // checked on unwrap in constant time.
 
-// Wrap `plain` (a multiple of 8 bytes, at least 16) under `kek`; empty
-// for a bad length or key.
+/// The RFC 3394 wrap of `plain` (a multiple of 8 bytes, at least 16)
+/// under `kek`; empty for a bad length or key.
 pub List(Int) aes_key_wrap(List(Int) kek, List(Int) plain) { return aes_key_wrapg(kek, plain); }
 
-// The key wrapped in `wrapped` under `kek`, or None when the integrity
-// check fails or the input is not a wrap (24 bytes or more, whole 64-bit
-// blocks).
+/// The key wrapped in `wrapped` under `kek`, or None when the integrity
+/// check fails or the input is not a wrap (24 bytes or more, whole 64-bit
+/// blocks).
 pub Option(List(Int)) aes_key_unwrap(List(Int) kek, List(Int) wrapped) { return aes_key_unwrapg(kek, wrapped); }

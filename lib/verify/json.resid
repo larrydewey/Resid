@@ -1,22 +1,27 @@
 // verify/json.resid — strict JSON for signed collateral
 // (PLAN-attestation.md §3.3): Intel's TCB info and QE identity are JSON
 // objects signed over their exact bytes. Parsed unambiguously: one value,
-// objects without duplicate keys, strings with only the escapes RFC 8259
-// defines (no \u escape of a surrogate, no control character), numbers as
-// integers only, no trailing data, nesting at most 32 deep. Each value
-// keeps where its text starts and ends, so a signature can be checked over
-// the very bytes a member's value spans.
+// objects without duplicate keys, strings of printable ASCII with only the
+// short escapes RFC 8259 defines (no \u escape, no control or non-ASCII
+// character), numbers as integers of at most 18 digits, no trailing data,
+// nesting at most 32 deep, at most 1 MiB of text, 4096 array values and
+// 1024 object members. Each value keeps where its text starts and ends, so
+// a signature can be checked over the very bytes a member's value spans.
 
+/// A parsed JSON value; an object keeps its keys and values in text order.
 pub type Json = JNull | JBool(Bool) | JNum(Int) | JStr(Str) | JArr(List(JsonAt)) | JObj(List(Str), List(JsonAt));
 
-// A value and its span [start, end) in the text.
+/// A value and its byte span [`start`, `end`) in the text.
 pub type JsonAt = { Json v; Int start; Int end; };
 
+/// Parser state: the value read, the next position, and an error or "".
 type JsP = { JsonAt at; Int pos; Str err; };
 
 JsP js_fail(Str e, Int pos) { return JsP {.at = JsonAt {.v = JNull, .start = pos, .end = pos}, .pos = pos, .err = e}; }
 
-// The whole text as one value, or why not.
+/// Parses the bytes `b` strictly as exactly one JSON value.
+/// Returns Err with the reason and byte position on any malformed input,
+/// trailing data, or text over 1 MiB.
 pub Result(JsonAt, Str) json_parse(List(Int) b) {
     if (b.len() > 1048576) { return Err("JSON text over 1 MiB"); }
     JsP p = js_value(b, js_ws(b, 0), 0);
@@ -67,6 +72,7 @@ JsP js_number(List(Int) b, Int i) {
 Int js_digits(List(Int) b, Int i) { return if (i < b.len() && b[i] >= 48 && b[i] <= 57) { js_digits(b, i + 1) } else { i }; }
 Int js_int(List(Int) b, Int i, Int e, Int acc) { return if (i >= e) { acc } else { js_int(b, i + 1, e, acc * 10 + (b[i] - 48)) }; }
 
+/// String scanner state: the decoded text, the next position, and an error or "".
 type JsS = { Str v; Int pos; Str err; };
 
 // A string after its opening quote; ASCII escapes only, no control
@@ -117,7 +123,8 @@ Bool js_has(List(Str) ks, Str k, Int i) { return i < ks.len() && (ks[i] == k || 
 
 // ─── Reading values ─────────────────────────────────────────────────
 
-// Member k of an object, or None.
+/// The value of member `k` of object `o`.
+/// None when `o` is not an object or has no such member.
 pub Option(JsonAt) json_get(JsonAt o, Str k) {
     return match (o.v) { JObj(ks, vs) => json_get_at(ks, vs, k, 0), JNull => None, JBool(b) => None, JNum(n) => None, JStr(s) => None, JArr(xs) => None };
 }
@@ -128,14 +135,22 @@ Option(JsonAt) json_get_at(List(Str) ks, List(JsonAt) vs, Str k, Int i) {
     return json_get_at(ks, vs, k, i + 1);
 }
 
+/// The string value of member `k` of `o`; Err if missing or not a string.
 pub Result(Str, Str) json_str(JsonAt o, Str k) { return match (json_get(o, k)) { Some(v) => js_as_str(v, k), None => Err("missing `" + k + "`") }; }
+/// The integer value of member `k` of `o`; Err if missing or not a number.
 pub Result(Int, Str) json_int(JsonAt o, Str k) { return match (json_get(o, k)) { Some(v) => js_as_int(v, k), None => Err("missing `" + k + "`") }; }
+/// The elements of array member `k` of `o`; Err if missing or not an array.
 pub Result(List(JsonAt), Str) json_arr(JsonAt o, Str k) { return match (json_get(o, k)) { Some(v) => js_as_arr(v, k), None => Err("missing `" + k + "`") }; }
+/// Object member `k` of `o`; Err if missing or not an object.
 pub Result(JsonAt, Str) json_obj(JsonAt o, Str k) { return match (json_get(o, k)) { Some(v) => js_as_obj(v, k), None => Err("missing `" + k + "`") }; }
 
+/// The string in `v`, or Err naming `k` if `v` is not a string.
 pub Result(Str, Str) js_as_str(JsonAt v, Str k) { return match (v.v) { JStr(s) => Ok(s), JNull => Err("`" + k + "` is not a string"), JBool(b) => Err("`" + k + "` is not a string"), JNum(n) => Err("`" + k + "` is not a string"), JArr(xs) => Err("`" + k + "` is not a string"), JObj(a, c) => Err("`" + k + "` is not a string") }; }
+/// The integer in `v`, or Err naming `k` if `v` is not a number.
 pub Result(Int, Str) js_as_int(JsonAt v, Str k) { return match (v.v) { JNum(n) => Ok(n), JNull => Err("`" + k + "` is not a number"), JBool(b) => Err("`" + k + "` is not a number"), JStr(s) => Err("`" + k + "` is not a number"), JArr(xs) => Err("`" + k + "` is not a number"), JObj(a, c) => Err("`" + k + "` is not a number") }; }
+/// The elements of `v`, or Err naming `k` if `v` is not an array.
 pub Result(List(JsonAt), Str) js_as_arr(JsonAt v, Str k) { return match (v.v) { JArr(xs) => Ok(xs), JNull => Err("`" + k + "` is not an array"), JBool(b) => Err("`" + k + "` is not an array"), JStr(s) => Err("`" + k + "` is not an array"), JNum(n) => Err("`" + k + "` is not an array"), JObj(a, c) => Err("`" + k + "` is not an array") }; }
+/// `v` itself if it is an object, or Err naming `k` otherwise.
 pub Result(JsonAt, Str) js_as_obj(JsonAt v, Str k) {
     Bool ok = match (v.v) { JObj(a, c) => true, JNull => false, JBool(b) => false, JStr(s) => false, JArr(xs) => false, JNum(n) => false };
     return if (ok) { Ok(v) } else { Err("`" + k + "` is not an object") };

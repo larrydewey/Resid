@@ -13,11 +13,12 @@ import "dev/device.resid";
 
 // An attester puts one of these in the slot instead of the bare value.
 
-// SHA-512 truncated to the value's length over "resid.challenge.key.v1" ‖
-// len(value) ‖ value ‖ kem (2 bytes) ‖ len(pk) ‖ pk, where pk is derived
-// here from sk, never taken: a program binds only a key it holds (and sk
-// must be own, PLAN-labels.md §5.2). A KEM hpke_kem_ok refuses, or a key
-// with no public key, is BadInput: a request that is never sent.
+/// A challenge value bound to the attester's own HPKE key `sk`.
+/// SHA-512 truncated to the value's length over "resid.challenge.key.v1" ‖
+/// len(value) ‖ value ‖ kem (2 bytes) ‖ len(pk) ‖ pk, where pk is derived
+/// here from sk, never taken: a program binds only a key it holds (and sk
+/// must be own, PLAN-labels.md §5.2). A KEM hpke_kem_ok refuses, a value
+/// outside 32-64 bytes, or a key with no public key is BadInput.
 @requires(declassify)
 @key(sk, own)
 pub Result(List(UInt(8)), DeviceError) challenge_with_key(List(UInt(8)) value, Int kem, List(Secret(UInt(8))) sk) {
@@ -28,27 +29,28 @@ pub Result(List(UInt(8)), DeviceError) challenge_with_key(List(UInt(8)) value, I
     return Ok(challenge_key_value(value, kem, pk));
 }
 
-// The key-bound value for a public key, as a verifier recomputes it.
+/// The key-bound value for a public key, as a verifier recomputes it.
 pub List(UInt(8)) challenge_key_value(List(UInt(8)) value, Int kem, List(Int) pk) {
     List(Int) m = bytes_of("resid.challenge.key.v1").concat(chal_u32(value.len())).concat(chal_ints(value)).concat([(kem >> 8) & 255, kem & 255]).concat(chal_u32(pk.len())).concat(pk);
     return chal_bytes(sha512_bytes(m)[0..value.len()]);
 }
 
-// The value a guest's CPU evidence carries to say it holds the SPDM
-// session whose transcript hash is th (verify/spdm_session.resid):
-// SHA-512 truncated to the value's length over
-// "resid.challenge.spdm-session.v1" ‖ len(value) ‖ value ‖ len(th) ‖ th.
-// The requester and the verifier compute it alike; th is public.
+/// The value a guest's CPU evidence carries to say it holds the SPDM
+/// session whose transcript hash is th (verify/spdm_session.resid):
+/// SHA-512 truncated to the value's length over
+/// "resid.challenge.spdm-session.v1" ‖ len(value) ‖ value ‖ len(th) ‖ th.
+/// The requester and the verifier compute it alike; th is public.
 pub List(UInt(8)) challenge_session_value(List(UInt(8)) value, List(Int) th) {
     List(Int) m = bytes_of("resid.challenge.spdm-session.v1").concat(chal_u32(value.len())).concat(chal_ints(value)).concat(chal_u32(th.len())).concat(th);
     return chal_bytes(sha512_bytes(m)[0..value.len()]);
 }
 
-// SHA-512 truncated to the value's length over "resid.challenge.channel.v1"
-// ‖ len(value) ‖ value ‖ len(x) ‖ x, where x is the TLS exporter value of
-// the connection e came from (RFC 9266): the attester binds its own
-// connection. An exporter of a connection without a handshake is BadInput.
-// The hash of the secret exporter is published: a one-way image.
+/// A challenge value bound to the attester's own TLS connection.
+/// SHA-512 truncated to the value's length over "resid.challenge.channel.v1"
+/// ‖ len(value) ‖ value ‖ len(x) ‖ x, where x is the TLS exporter value of
+/// the connection e came from (RFC 9266). An exporter without a completed
+/// handshake, or a value outside 32-64 bytes, is BadInput. The hash of the
+/// secret exporter is published: a one-way image.
 @requires(declassify)
 pub Result(List(UInt(8)), DeviceError) challenge_with_channel(List(UInt(8)) value, ChannelExporter e) {
     if (!channel_exporter_ok(e)) { return Err(BadInput("challenge_with_channel", "the connection has no exporter (no completed handshake)")); }

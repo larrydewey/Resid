@@ -15,9 +15,9 @@
 // A refusal is an alert, never a silent close: a client that asked for
 // something this server cannot do is told which of the refusals it was
 // (RFC 8446 §6.2). Only TLS_AES_128_GCM_SHA256 is implemented, because
-// that is the only cipher suite lib/aesgcm.resid can protect a record
-// with — a server that answered with anything else would be claiming a
-// guarantee it cannot keep.
+// lib/tls.resid's key schedule and record layer are SHA-256 and
+// AES-128-GCM only — a server that answered with anything else would be
+// claiming a guarantee it cannot keep.
 //
 // The secrets are typed secret (spec §48): the ephemeral x25519 key, the
 // shared secret, every secret of the key schedule and the record keys
@@ -40,15 +40,23 @@ import "x25519g.resid";
 
 // ─── Outcomes ─────────────────────────────────────────────────────────
 
+/// Refusal code: the client offered no cipher suite this server speaks.
 pub Int tsr_no_suite() { return 20; }
+/// Refusal code: the server was given no certificate chain to present.
 pub Int tsr_no_chain() { return 21; }
+/// Refusal code: the leaf certificate does not carry the server's key.
 pub Int tsr_key_mismatch() { return 22; }
+/// Refusal code: signing the CertificateVerify failed.
 pub Int tsr_sign_failed() { return 23; }
+/// Refusal code: the connection ended or a send failed mid-handshake.
 pub Int tsr_io() { return 24; }
+/// Refusal code: the client sent an alert instead of the next message.
 pub Int tsr_alert() { return 25; }
+/// Refusal code: the client's Finished did not verify.
 pub Int tsr_bad_finished() { return 26; }
 
-// The keys, or the reason there are none.
+/// The outcome of a handshake: the connection's keys, or in `err` the
+/// reason there are none (0 on success).
 type TlsResult = { TlsKeys keys; Int err; };
 
 TlsResult tsr_fail(Int err) {
@@ -57,16 +65,17 @@ TlsResult tsr_fail(Int err) {
 
 // ─── Reading the handshake ────────────────────────────────────────────
 
-// What the plaintext phase has assembled: the message, or the alert the
-// client sent instead of it.
-// `alert` is -1 when the client did not send one.
+/// What the plaintext phase has assembled: the message, or the alert the
+/// client sent instead of it.
+/// `alert` is -1 when the client did not send one; `in` is the input left.
 type TsPlain = { TsIn in; List(Int) msg; Int alert; Bool ok; };
 
-// Read plaintext records until a complete handshake message of type
-// `want` is in hand. A change_cipher_spec record in the middle is
-// skipped without disturbing anything (RFC 8446 §5, middlebox
-// compatibility); an alert is the client's decision to stop and is
-// reported rather than retried past.
+/// Read plaintext records until a complete handshake message of type
+/// `want` is in hand. A change_cipher_spec record in the middle is
+/// skipped without disturbing anything (RFC 8446 §5, middlebox
+/// compatibility); an alert is the client's decision to stop and is
+/// reported rather than retried past. Fails (`ok` false) after `rounds`
+/// records, on a complete message of another type, or on a read error.
 @requires(network(readonly))
 pub TsPlain ts_read_plain(TsIn s, List(Int) acc, Int want, Int rounds) {
     if (ts_msg_complete(acc) && acc[0] == want) {
@@ -85,17 +94,21 @@ pub TsPlain ts_read_plain(TsIn s, List(Int) acc, Int want, Int rounds) {
     return ts_read_plain(r.in, acc.concat(r.body), want, rounds - 1);
 }
 
-// The alert code in an alert record body, or 0.
+/// The alert code in an alert record body, or 0.
 pub Int ts_alert_desc(List(Int) body) {
     if (body.len() < 2) { return 0; }
     return body[1];
 }
 
-// The protected phase: records are opened with the handshake keys as
-// they arrive, so the same assembly works with the sequence number
-// carried alongside.
+/// What the protected phase has assembled: the client's Finished, or the
+/// alert it sent instead, with the next read sequence number in `seq`.
+/// `alert` is -1 when the client did not send one.
 type TsProt = { TsIn in; List(Int) msg; Int seq; Int alert; Bool ok; };
 
+/// Open records under the client's handshake `key` and `iv` from `seq`
+/// until a complete Finished message is in hand. A record that fails its
+/// tag, a message of another type, or `rounds` records without one gives
+/// `ok` false; a protected or plaintext alert is reported in `alert`.
 @requires(network(readonly), declassify)
 pub TsProt ts_read_prot(TsIn s, List(Secret(UInt(8))) key, List(Secret(UInt(8))) iv, Int seq, List(Int) acc, Int rounds) {
     if (ts_msg_complete(acc) && acc[0] == 20) {
@@ -128,18 +141,26 @@ pub TsProt ts_read_prot(TsIn s, List(Secret(UInt(8))) key, List(Secret(UInt(8)))
 
 // ─── Alerts ───────────────────────────────────────────────────────────
 
+/// The alert level fatal (2, RFC 8446 §6).
 pub Int ts_alert_fatal() { return 2; }
+/// The handshake_failure alert description (40).
 pub Int ts_alert_handshake_failure() { return 40; }
+/// The illegal_parameter alert description (47).
 pub Int ts_alert_illegal_parameter() { return 47; }
+/// The decrypt_error alert description (51).
 pub Int ts_alert_decrypt_error() { return 51; }
+/// The protocol_version alert description (70).
 pub Int ts_alert_protocol_version() { return 70; }
+/// The insufficient_security alert description (71).
 pub Int ts_alert_insufficient_security() { return 71; }
+/// The internal_error alert description (80).
 pub Int ts_alert_internal_error() { return 80; }
 
-// The alert to send for a refusal. A hello this server cannot speak to
-// is a protocol version or an illegal parameter; a hello it could speak
-// to but will not (no cipher suite, no signature algorithm) is
-// insufficient security.
+/// The alert description to send for refusal code `err`. A hello that is
+/// not TLS 1.3 is protocol_version, a malformed one or one with no usable
+/// key share illegal_parameter, no cipher suite in common
+/// insufficient_security, no signature algorithm handshake_failure, and
+/// anything else internal_error.
 pub Int ts_alert_for(Int err) {
     if (err == ts_err_not_tls13()) { return ts_alert_protocol_version(); }
     if (err == ts_err_short()) { return ts_alert_illegal_parameter(); }
@@ -150,6 +171,8 @@ pub Int ts_alert_for(Int err) {
     return ts_alert_internal_error();
 }
 
+/// A short English description of a handshake refusal code, "ok" for 0;
+/// codes from lib/tlsmsg.resid fall through to `ts_err_text`.
 pub Str tsr_err_text(Int err) {
     if (err == 0) { return "ok"; }
     if (err == tsr_no_suite()) { return "no cipher suite in common"; }
@@ -177,23 +200,25 @@ List(Int) ts_hash(List(Int) transcript) {
 // below and lib/tlswire.resid's event-loop session both run these, so
 // there is one handshake, whatever does the reading.
 
-// What the server needs between its flight and the client's Finished:
-// the handshake keys and secrets (secret), the transcript so far and the
-// server's Finished message (public).
+/// What the server needs between its flight and the client's Finished:
+/// the handshake keys and secrets (secret), the transcript so far and the
+/// server's Finished message (public).
 type TsPending = {
     List(Secret(UInt(8))) c_key; List(Secret(UInt(8))) c_iv; List(Secret(UInt(8))) s_key; List(Secret(UInt(8))) s_iv;
     List(Secret(UInt(8))) c_hs; List(Secret(UInt(8))) hs; List(Int) tr3; List(Int) fin;
     Int sent_seq; Str alpn;
 };
 
-// The bytes to send (the flight, or the alert refusing the hello), the
-// state to finish with, and 0 or the reason for the refusal.
+/// The result of the first handshake step: the bytes to send (the flight,
+/// or the alert refusing the hello), the state to finish with, and 0 or
+/// the reason for the refusal.
 type TsStart = { List(Int) out; TsPending pend; Int err; };
 
-// The bytes to send (an alert, or nothing), the connection's keys, and 0
-// or the reason there are none.
+/// The result of the second handshake step: the bytes to send (an alert,
+/// or nothing), the connection's keys, and 0 or the reason there are none.
 type TsDone = { List(Int) out; TlsKeys keys; Int err; };
 
+/// An empty pending state, for before the ClientHello and after Finished.
 pub TsPending ts_pending_none() {
     List(Secret(UInt(8))) none = [];
     return TsPending { .c_key = none, .c_iv = none, .s_key = none, .s_iv = none, .c_hs = none, .hs = none, .tr3 = [], .fin = [], .sent_seq = 0, .alpn = "" };
@@ -206,22 +231,22 @@ List(Int) ts_plain_record(Int ctype, List(Int) msg, Int version) {
     return hdr.concat(msg);
 }
 
-// An alert before the keys exist, which can only be plaintext.
+/// An alert before the keys exist, which can only be plaintext.
 pub List(Int) ts_plain_alert_record(Int desc) {
     return [21, 3, 3, 0, 2, ts_alert_fatal(), desc];
 }
 
-// A fatal alert under the handshake keys: after ServerHello every alert
-// this server sends is protected (RFC 8446 §5.2).
+/// A fatal alert under the handshake keys: after ServerHello every alert
+/// this server sends is protected (RFC 8446 §5.2).
 @requires(declassify)
 pub List(Int) ts_alert_record(List(Secret(UInt(8))) key, List(Secret(UInt(8))) iv, Int seq, Int desc) {
     return tlsg_protect(seq, key, iv, [ts_alert_fatal(), desc], 21);
 }
 
-// `flight` protected under the handshake keys, split so that no record
-// carries more than 2^14 bytes of handshake payload. A handshake message
-// may span records (RFC 8446 §5.1), so the split is at the size limit
-// and not at a message boundary.
+/// A flight protected under the handshake keys, and the next sequence
+/// number. No record carries more than 2^14 bytes of handshake payload; a
+/// message may span records (RFC 8446 §5.1), so the split is at the size
+/// limit and not at a message boundary.
 type TsRecs = { List(Int) bytes; Int seq; };
 
 @requires(declassify)
@@ -238,18 +263,18 @@ TsStart ts_refuse(Int err, Int desc) {
     return TsStart { .out = ts_plain_alert_record(desc), .pend = ts_pending_none(), .err = err };
 }
 
-// Everything the server answers a ClientHello with: ServerHello, the
-// middlebox change_cipher_spec, and the protected flight. `alpn_want` is
-// what this server speaks, most preferred first.
+/// Everything the server answers a ClientHello with: ServerHello, the
+/// middlebox change_cipher_spec, and the protected flight. `alpn_want` is
+/// what this server speaks, most preferred first.
 @requires(declassify)
 pub TsStart ts_server_start(List(Int) hello, ServerKey key, List(List(Int)) chain, List(Str) alpn_want) {
     return ts_server_start_with(hello, key, chain, alpn_want, random_secret(32), random_bytes(32));
 }
 
-// The same with this handshake's ephemeral x25519 key and ServerHello
-// random given, not drawn: a test that marks the key for valgrind, or
-// replays a trace, passes them. Nothing else should -- the key has to be
-// fresh per handshake (ts_server_start draws both).
+/// The same with this handshake's ephemeral x25519 key and ServerHello
+/// random given, not drawn: a test that marks the key for valgrind, or
+/// replays a trace, passes them. Nothing else should -- the key has to be
+/// fresh per handshake (ts_server_start draws both).
 @requires(declassify)
 pub TsStart ts_server_start_with(List(Int) hello, ServerKey key, List(List(Int)) chain, List(Str) alpn_want, List(Secret(UInt(8))) priv, List(Int) server_random) {
     ClientHello ch = ts_client_hello(hello);
@@ -294,13 +319,11 @@ pub TsStart ts_server_start_with(List(Int) hello, ServerKey key, List(List(Int))
     return TsStart { .out = out, .pend = p, .err = 0 };
 }
 
-// Check the client's Finished message (header included) and derive the
-// application keys. `rest` is what arrived after it, kept for the
-// record layer. The client's Finished covers the transcript through the
-// *server's* Finished, which is also the transcript the application
-// traffic secrets are derived from (RFC 8446 §7.1) -- not one that
-// includes the client's own Finished. The comparison is constant time
-// and only its verdict is public (tlsg_finished_ok).
+/// Check the client's Finished message `msg` (header included) and derive
+/// the application keys; `rest` is what arrived after it, kept for the
+/// record layer. The transcript is the one through the *server's*
+/// Finished (RFC 8446 §7.1). The comparison is constant time and only its
+/// verdict is public; a mismatch gives a decrypt_error alert to send.
 @requires(declassify)
 pub TsDone ts_server_finish(TsPending p, List(Int) msg, List(Int) rest) {
     Int body_len = msg.len() - 4;
@@ -318,8 +341,8 @@ pub TsDone ts_server_finish(TsPending p, List(Int) msg, List(Int) rest) {
     return TsDone { .out = [], .keys = keys, .err = 0 };
 }
 
-// The alert that refuses a failed Finished read: the client's own alert
-// is not answered, anything else is a decrypt_error.
+/// The outcome of a failed Finished read (`tsr_alert` or `tsr_io`): the
+/// client's own alert is not answered, anything else gets a decrypt_error.
 @requires(declassify)
 pub TsDone ts_finish_failed(TsPending p, TsProt done) {
     Int err = if (done.alert >= 0) { tsr_alert() } else { tsr_io() };
@@ -338,8 +361,9 @@ Bool ts_send_all(Int fd, List(Int) b, Int at) {
     return ts_send_all(fd, b, at + take);
 }
 
-// The full handshake on `fd`. The result's `alpn` is what the two agreed
-// on, or "" when the client offered nothing in `alpn_want`.
+/// The full blocking handshake on socket `fd`. On success the keys' `alpn`
+/// is the protocol the two agreed on, or "" when none of `alpn_want` was
+/// offered; on failure `err` is a `tsr_*` or lib/tlsmsg.resid code.
 @requires(network(readonly), declassify)
 pub TlsResult tls_server_handshake(Int fd, ServerKey key, List(List(Int)) chain, List(Str) alpn_want) {
     TsIn in = ts_in(fd);

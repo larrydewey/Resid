@@ -61,6 +61,9 @@ List(W) g_blk(List(B) m, Int base, Int i, List(W) h0, W a, W b, W c, W d, W e, W
     return g_blk(m, base, i + 1, h0, w_add(t1, t2), a, b, c, w_add(d, t1), e, f, g, w1, w2, w3, w4, w5, w6, w7, w8, w9, w10, w11, w12, w13, w14, w15, wi);
 }
 
+/// Runs the compression function on the 64-byte block at `base` of `m`.
+/// Returns the new state from the eight state words `h`, which are first
+/// masked to unsigned 32-bit values.
 @needs(Word(W, B))
 pub List(W) sha256g_block(List(B) m, Int base, List(W) h) {
     W z = w_lift(0);
@@ -70,13 +73,17 @@ pub List(W) sha256g_block(List(B) m, Int base, List(W) h) {
     return g_blk(m, base, 0, h, w_andk(h[0], m32), w_andk(h[1], m32), w_andk(h[2], m32), w_andk(h[3], m32), w_andk(h[4], m32), w_andk(h[5], m32), w_andk(h[6], m32), w_andk(h[7], m32), z, z, z, z, z, z, z, z, z, z, z, z, z, z, z, z);
 }
 
+/// Compresses each 64-byte block of `m` from `pos` up to `total` into `h`.
+/// `total - pos` should be a multiple of 64.
 @needs(Word(W, B))
 pub List(W) sha256g_blocks(List(B) m, Int pos, Int total, List(W) h) {
     if (pos >= total) { return h; }
     return sha256g_blocks(m, pos + 64, total, sha256g_block(m, pos, h));
 }
 
-// FIPS 180-4 §5.1.1 padding: the message, 0x80, zeros, the bit length.
+/// The FIPS 180-4 §5.1.1 padding for a message of `len` bytes.
+/// That is 0x80, zeros, then the bit length as 8 big-endian bytes; the
+/// message itself is not included.
 pub List(Int) sha256g_pad(Int len) {
     Int total = ((len + 9 + 63) / 64) * 64;
     return sha256g_pad_at(len, total - len - 9, 0, ListBuf()).finish();
@@ -92,6 +99,7 @@ ListBuf(Int) sha256g_pad_at(Int len, Int zeros, Int i, ListBuf(Int) acc) {
     return acc;
 }
 
+/// The SHA-256 initial hash value (FIPS 180-4 §5.3.3) as eight words.
 pub List(Int) sha256g_iv() { return [1779033703, 3144134277, 1013904242, 2773480762, 1359893119, 2600822924, 528734635, 1541459225]; }
 
 @needs(Word(W, B))
@@ -107,7 +115,7 @@ List(B) g_digest_bytes(List(W) h, Int i, ListBuf(B) acc) {
     return g_digest_bytes(h, i + 1, acc.push(w_byte(h[i / 4], 24 - (i % 4) * 8)));
 }
 
-// SHA-256 of a byte list, public or secret.
+/// The 32-byte SHA-256 digest of `msg`, public or secret.
 @needs(Word(W, B))
 @key_from(msg)
 pub List(B) sha256g(List(B) msg) {
@@ -142,6 +150,8 @@ List(B) g_key_block(List(B) key) {
     return k.concat(w_lift_bytes(sha256g_zeros(64 - k.len(), 0, ListBuf()), 0, zb));
 }
 
+/// HMAC-SHA-256 of `msg` under `key` (RFC 2104); 32 bytes.
+/// A key longer than 64 bytes is hashed first.
 @needs(Word(W, B))
 @key_from(key, msg)
 pub List(B) hmac256g(List(B) key, List(B) msg) {
@@ -152,6 +162,7 @@ pub List(B) hmac256g(List(B) key, List(B) msg) {
     return sha256g(g_xor_pad(kb, 92, 0, ob).concat(inner));
 }
 
+/// HKDF-SHA-256 Extract (RFC 5869 §2.2): the 32-byte PRK from `salt` and `ikm`.
 @needs(Word(W, B))
 @key_from(salt, ikm)
 pub List(B) hkdf256g_extract(List(B) salt, List(B) ikm) { return hmac256g(salt, ikm); }
@@ -164,7 +175,8 @@ List(B) g_expand(List(B) prk, List(B) info, Int c, Int len, List(B) t, List(B) o
     return g_expand(prk, info, c + 1, len, ti, okm.concat(ti));
 }
 
-// OKM of `len` bytes; empty when len exceeds 255 * 32 (RFC 5869 §2.3).
+/// HKDF-SHA-256 Expand (RFC 5869 §2.3): `len` bytes of OKM from `prk` and `info`.
+/// Empty when `len` is negative or exceeds 255 * 32.
 @needs(Word(W, B))
 @key_from(prk)
 pub List(B) hkdf256g_expand(List(B) prk, List(B) info, Int len) {

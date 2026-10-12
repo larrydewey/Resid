@@ -1,19 +1,22 @@
 // word.resid — one word type for public and secret computation (spec §48).
 //
 // Cryptographic code is written once, generic over T with @needs(Word(T)),
-// and instantiated for public data and secret data (lib/word.resid below).
+// and instantiated for public data and secret data (the instances below).
 // The secret copy is checked by the compiler like any code on secrets: no
 // branch, index, comparison or early exit on a word. The public copy is the
 // same code, monomorphized, so it costs what hand-written Int code costs.
 //
 // Word(W, B) is the 32-bit word behavior (SHA-256, ChaCha20), Word64(W, B)
-// the 64-bit one (SHA-512), Wide512(P, B) 512-bit integers (Poly1305):
-// W the word type, B the byte type. Public data is
-// (Int, Int) and (UInt(64), Int); secret data is (Secret(UInt(32)),
-// Secret(UInt(8))) and (Secret(UInt(64)), Secret(UInt(8))), so secret
-// bytes are UInt(8) everywhere. Shift and rotate amounts and the k operands
-// are public.
+// the 64-bit one (SHA-512), Wide512(P, B) 512-bit integers (Poly1305),
+// Block128(X, W, B) 128-bit blocks (AES, GHASH): W the word type, B the
+// byte type. Public data is (Int, Int), (UInt(64), Int), (Int(512), Int)
+// and (UInt(128), Int, Int); secret data uses Secret(UInt(32)),
+// Secret(UInt(64)), Secret(Int(512)) and Secret(UInt(128)), and secret
+// bytes are Secret(UInt(8)) everywhere. Shift and rotate amounts and the k
+// operands are public. Publish(B) turns bytes that are public by design
+// (signatures, public keys) into public bytes.
 
+/// The 32-bit word operations generic code is written against (SHA-256, ChaCha20).
 behavior Word(W, B) {
     W w_xor(W a, W b);
     W w_and(W a, W b);
@@ -76,7 +79,7 @@ Secret(UInt(8)) bs_lift(Int k) { return classify(wrapping_u8(k)); }
 
 Word(Secret(UInt(32)), Secret(UInt(8))) = { .w_xor = ws_xor, .w_and = ws_and, .w_or = ws_or, .w_add = ws_add, .w_addk = ws_addk, .w_xork = ws_xork, .w_andk = ws_andk, .w_rotr = ws_rotr, .w_shr = ws_shr, .w_shl = ws_shl, .w_not = ws_not, .w_lift = ws_lift, .w_from_byte = ws_from_byte, .w_byte = ws_byte, .b_xork = bs_xork, .b_xor = bs_xor, .b_lift = bs_lift };
 
-// Public bytes taking part in a computation on B.
+/// The public bytes `bs` from index `i` on, lifted to B and appended to `acc`.
 @needs(Word(W, B))
 pub List(B) w_lift_bytes(List(Int) bs, Int i, ListBuf(B) acc) {
     if (i >= bs.len()) { return acc.finish(); }
@@ -84,8 +87,8 @@ pub List(B) w_lift_bytes(List(Int) bs, Int i, ListBuf(B) acc) {
     return w_lift_bytes(bs, i + 1, acc.push(b));
 }
 
-// Secret bytes from a secret Int byte string read at run time (each value
-// is reduced to its low eight bits), and back.
+/// The Int byte string `bs` as secret bytes.
+/// Each value is reduced to its low eight bits.
 pub List(Secret(UInt(8))) secret_bytes(List(Int) bs) { return secret_bytes_at(bs, 0, ListBuf()); }
 
 List(Secret(UInt(8))) secret_bytes_at(List(Int) bs, Int i, ListBuf(Secret(UInt(8))) acc) {
@@ -99,6 +102,7 @@ List(Secret(UInt(8))) secret_bytes_at(List(Int) bs, Int i, ListBuf(Secret(UInt(8
 // (Secret(UInt(64)), Secret(UInt(8))) data. Conversions keep the low bits
 // (wrapping), so none of them can abort on a value.
 
+/// The 64-bit word operations generic code is written against (SHA-512, SHA-384).
 behavior Word64(W, B) {
     W d_xor(W a, W b);
     W d_and(W a, W b);
@@ -146,6 +150,7 @@ Word64(Secret(UInt(64)), Secret(UInt(8))) = { .d_xor = ds_xor, .d_and = ds_and, 
 // are public. A wide secret never goes in a list (E0258): generic code
 // keeps P values in records and parameters.
 
+/// Signed 512-bit integer operations, wrapping modulo 2^512 (Poly1305).
 behavior Wide512(P, B) {
     P p_add(P a, P b);
     P p_sub(P a, P b);
@@ -205,6 +210,8 @@ Wide512(Secret(Int(512)), Secret(UInt(8))) = { .p_add = ps_add, .p_sub = ps_sub,
 // secret copy of the generic code that uses it, and to no caller of the
 // public copy.
 
+/// Turns bytes in B that are public by design into public Int bytes.
+/// At secret bytes this declassifies and needs `declassify`.
 behavior Publish(B) { List(Int) w_publish(List(B) xs); }
 
 List(Int) wi_publish(List(Int) xs) { return xs; }
@@ -240,6 +247,7 @@ Publish(Secret(UInt(8))) = ws_publish;
 // time on the CPUs that have them. Call them only when
 // resid_cpu_has_aesni() / resid_cpu_has_clmul() say so.
 
+/// The 128-bit block operations generic code is written against (AES, GHASH).
 behavior Block128(X, W, B) {
     X x_xor(X a, X b);
     X x_and(X a, X b);

@@ -1,18 +1,22 @@
 // ─── lib/chain.resid — x509 chain validation + SAN matching ─────────
-// Builds on lib/x509.resid (structure walking), lib/crypto.resid
-// (SHA-256), lib/rsa.resid (RSA PKCS#1v1.5 verify) and lib/ec256.resid
-// (ECDSA P-256 verify).
+// Certificate chain validation and server authentication for the TLS
+// client. Certificates are parsed by lib/x509.resid (`x509_parse`) and
+// signatures checked through `sig_verify` in lib/certverify.resid.
 //
 // One-link chain_verify:
-//   1. child.issuer Name == issuer.subject Name (raw DER equality)
-//   2. both certificates valid at the provided "now" instant
-//   3. child signature verifies under issuer SPKI key, dispatched on
-//      signature-algorithm OID:
-//        1.2.840.113549.1.1.11 -> RSA PKCS#1v1.5 SHA-256 (2048-bit)
-//        1.2.840.10045.4.3.2   -> ECDSA P-256
+//   1. child issuer Name == issuer subject Name (raw DER equality)
+//   2. both certificates valid at the provided `now` instant
+//   3. the issuer is a CA (basicConstraints) with keyCertSign
+//   4. child signature verifies under the issuer's key, for whichever
+//      algorithm the child names
 //
-// SAN: walks [3] extensions, finds OID 2.5.29.17, matches dNSName
-// entries case-insensitively incl. leftmost-only wildcards.
+// SAN: dNSName entries match case-insensitively, with a leftmost-only
+// wildcard; iPAddress entries match an IPv4/IPv6 literal byte for byte.
+//
+// TrustStore: roots (PEM bundle or directory of DER), CRLs and OCSP
+// responses (delegated responders included). `tls_server_trusted` is
+// fail-closed: an empty store trusts nothing, and the chain is walked up
+// through the server's intermediates to at most 8 links.
 
 import "crypto.resid";
 import "x509.resid";
@@ -21,26 +25,32 @@ import "calendar.resid";
 import "instant.resid";
 import "certverify.resid";
 
+/// Raw DER, header included, of element `idx` of the outer Certificate
+/// SEQUENCE (0 tbsCertificate, 1 signatureAlgorithm, 2 signatureValue).
 pub List(Int) cert_elem(List(Int) cert, Int idx) {
     Int pos = der_content_pos(cert, 0);
     return cert_elem_at(cert, pos, 0, idx);
 }
 
-// Raw DER of the tbsCertificate element (header included).
+/// Raw DER of the tbsCertificate element (header included).
 pub List(Int) cert_tbs(List(Int) cert) {
     return cert_elem(cert, 0);
 }
 
-// Is `cert` inside its own validity window at `now`? A certificate that
-// does not parse, or whose dates cannot be read, is not.
+/// Is `cert` inside its own validity window at `now`? A certificate that
+/// does not parse, or whose dates cannot be read, is not.
 pub Bool x509_valid_now(List(Int) cert, Instant now) {
     return match x509_parse(cert) { Ok(c) => cert_valid_at(c, now), Err(e) => false };
 }
 
+/// Whether `now` lies within the parsed certificate's notBefore..notAfter
+/// window, both ends inclusive.
 pub Bool cert_valid_at(Cert c, Instant now) {
     return now.seconds >= c.not_before && now.seconds <= c.not_after;
 }
 
+/// The ASCII lowercase of codepoint `c`; anything but `A`-`Z` is returned
+/// unchanged.
 pub Int ci_ch(Int c) {
     if (c >= 65 && c <= 90) {
         Int r = c + 32;
@@ -49,6 +59,8 @@ pub Int ci_ch(Int c) {
     return c;
 }
 
+/// Whether `a` and `b` agree, ignoring ASCII case, at every index from `i`
+/// through `last`. Bounds are the caller's to check.
 pub Bool ci_eq_at(List(Int) a, List(Int) b, Int i, Int last) {
     if (i > last) { return true; }
     Int xa = ci_ch(a[i]);
@@ -58,6 +70,7 @@ pub Bool ci_eq_at(List(Int) a, List(Int) b, Int i, Int last) {
     return ci_eq_at(a, b, ni, last);
 }
 
+/// Whether `a` and `b` are equal ignoring ASCII case.
 pub Bool ci_eq_bytes(List(Int) a, List(Int) b) {
     Int alen = a.len();
     Int blen = b.len();
@@ -65,6 +78,8 @@ pub Bool ci_eq_bytes(List(Int) a, List(Int) b) {
     return ci_eq_at(a, b, 0, alen - 1);
 }
 
+/// Index of the first `.` in `host` from `i` through `last`, or `last + 1`
+/// when there is none.
 pub Int dns_find_dot(List(Int) host, Int i, Int last) {
     if (i > last) { return last + 1; }
     Int c = host[i];
@@ -73,6 +88,8 @@ pub Int dns_find_dot(List(Int) host, Int i, Int last) {
     return dns_find_dot(host, ni, last);
 }
 
+/// Whether `count` elements of `a` from `ai` equal those of `b` from `bi`,
+/// ignoring ASCII case. Bounds are the caller's to check.
 pub Bool ci_eq_range(List(Int) a, Int ai, List(Int) b, Int bi, Int count) {
     if (count == 0) { return true; }
     Int xa = ci_ch(a[ai]);
@@ -84,6 +101,9 @@ pub Bool ci_eq_range(List(Int) a, Int ai, List(Int) b, Int bi, Int count) {
     return ci_eq_range(a, na, b, nb2, nc);
 }
 
+/// Whether `host` matches the dNSName pattern `pat`, ignoring ASCII case.
+/// A leading `*.` stands for exactly one non-empty leftmost label
+/// (RFC 6125); any other pattern must equal `host` whole.
 pub Bool dns_match(List(Int) host, List(Int) pat) {
     Int plen = pat.len();
     Int star = pat[0];
@@ -106,11 +126,12 @@ pub Bool dns_match(List(Int) host, List(Int) pat) {
     return ci_eq_bytes(host, pat);
 }
 
-// An iPAddress SAN is the address in bytes -- four of them, or sixteen --
-// and matches only exactly: there is no wildcard in an address, so
-// `127.0.0.1` against a certificate for `127.0.0.10` is a mismatch, not a
-// near miss. A host that is not an address literal names bytes that no
-// address can produce, so a dNSName never satisfies this.
+/// Whether the iPAddress SAN `addr` is exactly the address literal `host`.
+/// An iPAddress SAN is the address in bytes -- four of them, or sixteen --
+/// and matches only exactly: there is no wildcard in an address, so
+/// `127.0.0.1` against a certificate for `127.0.0.10` is a mismatch, not a
+/// near miss. A host that is not an address literal names bytes that no
+/// address can produce, so a dNSName never satisfies this.
 pub Bool ip_san_hit(List(Int) addr, List(Int) host) {
     if (addr.len() != 4 && addr.len() != 16) { return false; }
     List(Int) want = ip_addr_bytes(host);
@@ -118,27 +139,32 @@ pub Bool ip_san_hit(List(Int) addr, List(Int) host) {
     return eq_bytes(want, addr);
 }
 
-// The bytes an address literal names, or nothing at all when `host` is a
-// name: an empty list is the only value that never equals an address.
+/// The 4 or 16 bytes the address literal `host` names, or an empty list.
+/// A name or malformed literal gives the empty list, the only value that
+/// never equals an address. A `:` anywhere selects IPv6.
 pub List(Int) ip_addr_bytes(List(Int) host) {
     if (ip_has_colon(host, 0)) { return ip_v6_bytes(host); }
     return ip_v4_bytes(host, 0, host.len());
 }
 
+/// Whether `h` contains a `:` at or after index `i`.
 pub Bool ip_has_colon(List(Int) h, Int i) {
     if (i >= h.len()) { return false; }
     if (h[i] == 58) { return true; }
     return ip_has_colon(h, i + 1);
 }
 
-// a.b.c.d, four octets in 0..255, or nothing. Leading zeros are read as
-// decimal, the way every resolver that is not guessing octal reads them.
+/// The four bytes of the dotted-quad `a.b.c.d` in `h[i..n)`, or an empty
+/// list. Each octet is one to three digits in 0..255. Leading zeros are read
+/// as decimal, the way every resolver that is not guessing octal reads them.
 pub List(Int) ip_v4_bytes(List(Int) h, Int i, Int n) {
     List(Int) b = ip_v4_at(h, i, n, 0, 0, []);
     if (b.len() == 4) { return b; }
     return [];
 }
 
+/// Scanner behind `ip_v4_bytes`: `acc` plus the octets in `h[i..n)`, or an
+/// empty list on a malformed octet. The octet count is not checked here.
 pub List(Int) ip_v4_at(List(Int) h, Int i, Int n, Int val, Int digits, List(Int) acc) {
     if (i >= n) {
         if (digits == 0 || val > 255) { return []; }
@@ -154,8 +180,14 @@ pub List(Int) ip_v4_at(List(Int) h, Int i, Int n, Int val, Int digits, List(Int)
     return ip_v4_at(h, i + 1, n, val * 10 + (c - 48), digits + 1, acc);
 }
 
+/// State of the IPv6 literal scanner: bytes before and after a `::`
+/// (`left`, `right`), whether a `::` was seen (`gap`), whether the literal
+/// is malformed (`bad`), and the group being read (`val`, `digits`).
 type IpScan = { List(Int) left; List(Int) right; Bool gap; Bool bad; Int val; Int digits; };
 
+/// The 16 bytes of the IPv6 literal `host`, or an empty list. A single `::`
+/// expands to at least one zero group; dotted IPv4 tails and zone suffixes
+/// are not accepted.
 pub List(Int) ip_v6_bytes(List(Int) host) {
     IpScan s = ip_v6_scan(host, 0, host.len(), IpScan { .left = [], .right = [], .gap = false, .bad = false, .val = 0, .digits = 0 });
     if (s.bad) { return []; }
@@ -169,12 +201,16 @@ pub List(Int) ip_v6_bytes(List(Int) host) {
     return l.concat(r);
 }
 
+/// `acc` with the pending group `val` appended as two bytes; unchanged when
+/// no digits were read, empty when more than four were.
 pub List(Int) ip_v6_end(List(Int) acc, Int val, Int digits) {
     if (digits == 0) { return acc; }
     if (digits > 4) { return []; }
     return acc.concat([(val >> 8) & 255, val & 255]);
 }
 
+/// Scanner behind `ip_v6_bytes`: reads `h[i..n)` into `s`, setting `bad` on
+/// a malformed literal. The last group is left pending in `val`/`digits`.
 pub IpScan ip_v6_scan(List(Int) h, Int i, Int n, IpScan s) {
     if (i >= n) { return s; }
     Int c = h[i];
@@ -199,21 +235,24 @@ pub IpScan ip_v6_scan(List(Int) h, Int i, Int n, IpScan s) {
     return ip_v6_scan(h, i + 1, n, IpScan { .left = s.left, .right = s.right, .gap = s.gap, .bad = false, .val = v, .digits = dg });
 }
 
-// Close the group being read, on whichever side of a `::` we are.
+/// Close the group being read, on whichever side of a `::` we are.
 pub IpScan ip_v6_push(IpScan s) {
     List(Int) done = s.left.concat([(s.val >> 8) & 255, s.val & 255]);
     if (s.gap) { return IpScan { .left = s.left, .right = s.right.concat([(s.val >> 8) & 255, s.val & 255]), .gap = true, .bad = false, .val = 0, .digits = 0 }; }
     return IpScan { .left = done, .right = s.right, .gap = s.gap, .bad = false, .val = 0, .digits = 0 };
 }
 
+/// `s` marked as past its `::`, with a fresh empty group.
 pub IpScan ip_v6_gap(IpScan s) {
     return IpScan { .left = s.left, .right = s.right, .gap = true, .bad = false, .val = 0, .digits = 0 };
 }
 
+/// `s` marked as malformed.
 pub IpScan ip_bad(IpScan s) {
     return IpScan { .left = s.left, .right = s.right, .gap = s.gap, .bad = true, .val = s.val, .digits = s.digits };
 }
 
+/// The value of hex digit `c` in either case, or -1.
 pub Int ip_hex_digit(Int c) {
     if (c >= 48 && c <= 57) { return c - 48; }
     if (c >= 97 && c <= 102) { return c - 87; }
@@ -221,18 +260,21 @@ pub Int ip_hex_digit(Int c) {
     return -1;
 }
 
+/// A list of `n` zero bytes; empty when `n` is zero or negative.
 pub List(Int) ip_zero_bytes(Int n) {
     if (n <= 0) { return []; }
     return [0].concat(ip_zero_bytes(n - 1));
 }
 
-// Does the certificate name `host` in its subjectAltName (a dNSName,
-// wildcards per dns_match, or an iPAddress)? A certificate that does not
-// parse names nothing.
+/// Does the certificate name `host` in its subjectAltName (a dNSName,
+/// wildcards per dns_match, or an iPAddress)? A certificate that does not
+/// parse names nothing.
 pub Bool san_has_match(List(Int) cert, List(Int) host) {
     return match x509_parse(cert) { Ok(c) => cert_san_match(c, host), Err(e) => false };
 }
 
+/// Whether the parsed certificate `c` names `host` in a dNSName or
+/// iPAddress subjectAltName entry.
 pub Bool cert_san_match(Cert c, List(Int) host) {
     return san_any_dns(cert_san(c, 130), host, 0) || san_any_ip(cert_san(c, 135), host, 0);
 }
@@ -249,6 +291,8 @@ Bool san_any_ip(List(List(Int)) addrs, List(Int) host, Int i) {
     return san_any_ip(addrs, host, i + 1);
 }
 
+/// Whether DER `child` is validly issued by DER `issuer` at `now`, as
+/// `chain_verify_parsed` checks it. Either failing to parse gives false.
 pub Bool chain_verify(List(Int) child, List(Int) issuer, Instant now) {
     return match x509_parse(child) {
         Ok(c) => match x509_parse(issuer) { Ok(i) => chain_verify_parsed(c, i, now), Err(e) => false },
@@ -256,9 +300,9 @@ pub Bool chain_verify(List(Int) child, List(Int) issuer, Instant now) {
     };
 }
 
-// The issuer link, on parsed certificates: names match, both are current,
-// the issuer is a CA allowed to sign certificates, and its key verifies
-// the child's signature under the algorithm the child names.
+/// The issuer link, on parsed certificates: names match, both are current,
+/// the issuer is a CA allowed to sign certificates, and its key verifies
+/// the child's signature under the algorithm the child names.
 pub Bool chain_verify_parsed(Cert c, Cert i, Instant now) {
     if (!eq_list(c.issuer, i.subject)) { return false; }
     if (!cert_valid_at(c, now) || !cert_valid_at(i, now)) { return false; }
@@ -286,30 +330,38 @@ pub Bool chain_verify_parsed(Cert c, Cert i, Instant now) {
 // which is why `tls_server_trusted` refuses rather than falling back when
 // the store is empty.
 
+/// The roots, CRLs and OCSP responses (all DER) a TLS client chains to,
+/// and whether a certificate with no covering revocation information is
+/// refused (`revocation_required`).
 type TrustStore = { List(List(Int)) roots; List(List(Int)) crls; List(List(Int)) ocsp; Bool revocation_required; };
 
+/// An empty trust store: no roots, CRLs or OCSP responses, and revocation
+/// not required. It trusts nothing.
 pub TrustStore trust_store_empty() {
     List(List(Int)) none = [];
     return TrustStore { .roots = none, .crls = none, .ocsp = none, .revocation_required = false };
 }
 
-// Require that every certificate in a chain be covered by a current CRL
-// from its issuer. Without it a store that has no CRLs for an issuer
-// treats "no revocation information" as "not revoked", which is the
-// answer a CRL-less client gives and the reason CRLs exist.
+/// `st` with `revocation_required` set to `required`.
+/// When set, a certificate that no current CRL or OCSP response from its
+/// issuer covers is refused. Without it, "no revocation information" is
+/// treated as "not revoked".
 pub TrustStore trust_store_requiring_revocation(TrustStore st, Bool required) {
     return TrustStore { .roots = st.roots, .crls = st.crls, .ocsp = st.ocsp, .revocation_required = required };
 }
 
-// Roots are kept as decoded DER. A root that is not a certificate this
-// code can read is kept anyway: refusing to load a store because one entry
-// is unreadable would leave a caller with a *smaller* trust anchor set
-// than the operator wrote, which is the wrong way to fail.
+/// `st` with `der` added as a root; an empty `der` is ignored.
+/// Roots are kept as decoded DER. A root that is not a certificate this
+/// code can read is kept anyway: refusing to load a store because one entry
+/// is unreadable would leave a caller with a *smaller* trust anchor set
+/// than the operator wrote, which is the wrong way to fail.
 pub TrustStore trust_store_add(TrustStore st, List(Int) der) {
     if (der.len() == 0) { return st; }
     return TrustStore { .roots = st.roots.concat([der]), .crls = st.crls, .ocsp = st.ocsp, .revocation_required = st.revocation_required };
 }
 
+/// Whether `der` is byte for byte one of the store's roots, searching from
+/// index `i`.
 pub Bool trust_store_has(TrustStore st, List(Int) der, Int i) {
     if (i >= st.roots.len()) { return false; }
     if (eq_bytes(st.roots[i], der)) { return true; }
@@ -318,9 +370,9 @@ pub Bool trust_store_has(TrustStore st, List(Int) der, Int i) {
 
 // ─── PEM ─────────────────────────────────────────────────────────────
 //
-// A bundle of "-----BEGIN CERTIFICATE-----" blocks. Only the marker lines
-// and base64 are interpreted; anything else on a line is ignored, which is
-// what a real bundle's human-readable preamble does.
+// A bundle of "-----BEGIN CERTIFICATE-----" (or "X509 CRL") blocks. Only
+// the marker lines and base64 are interpreted; anything else on a line is
+// ignored, which is what a real bundle's human-readable preamble does.
 
 Str pem_body_line(Str line, Str body) {
     // A base64 line: no dashes, and something on it.
@@ -330,38 +382,51 @@ Str pem_body_line(Str line, Str body) {
     return body + line;
 }
 
-type PemScan = { List(List(Int)) certs; Bool in_cert; Str body; };
+/// State of the PEM line scanner: blocks decoded so far, whether a BEGIN
+/// marker is open, the base64 body collected for it, and the labels read
+/// (`CERTIFICATE`, `X509 CRL`).
+type PemScan = { List(List(Int)) certs; Bool in_cert; Str body; List(Str) labels; };
 
 PemScan pem_finish(Str text, PemScan st) {
     // An unterminated block is dropped: half a certificate is not a
     // certificate, and decoding it would produce bytes that merely look
     // like one.
     if (!st.in_cert) { return st; }
-    return PemScan { .certs = st.certs, .in_cert = false, .body = "" };
+    return PemScan { .certs = st.certs, .in_cert = false, .body = "", .labels = st.labels };
+}
+
+// Whether `line` is the BEGIN or END marker (`kind`) of one of `labels`.
+Bool pem_marker(Str line, Str kind, List(Str) labels, Int i) {
+    if (i >= labels.len()) { return false; }
+    if (str_contains(line, "-----" + kind + " " + labels[i] + "-----")) { return true; }
+    return pem_marker(line, kind, labels, i + 1);
 }
 
 PemScan pem_scan_lines(List(Str) lines, Int i, PemScan st) {
     if (i >= lines.len()) { return pem_finish("", st); }
     Str line = str_trim(lines[i]);
-    Bool is_begin = str_contains(line, "-----BEGIN CERTIFICATE-----");
-    Bool is_end = str_contains(line, "-----END CERTIFICATE-----");
+    Bool is_begin = pem_marker(line, "BEGIN", st.labels, 0);
+    Bool is_end = st.in_cert && pem_marker(line, "END", st.labels, 0);
     PemScan st2 = if (is_begin) {
-        PemScan { .certs = st.certs, .in_cert = true, .body = "" }
+        PemScan { .certs = st.certs, .in_cert = true, .body = "", .labels = st.labels }
     } else if (is_end) {
-        PemScan { .certs = st.certs.concat([base64_decode(st.body)]), .in_cert = false, .body = "" }
+        PemScan { .certs = st.certs.concat([base64_decode(st.body)]), .in_cert = false, .body = "", .labels = st.labels }
     } else {
-        PemScan { .certs = st.certs, .in_cert = st.in_cert, .body = if (st.in_cert) { pem_body_line(line, st.body) } else { st.body } }
+        PemScan { .certs = st.certs, .in_cert = st.in_cert, .body = if (st.in_cert) { pem_body_line(line, st.body) } else { st.body }, .labels = st.labels }
     };
     Int ni = i + 1;
     return pem_scan_lines(lines, ni, st2);
 }
 
+/// The decoded DER of every CERTIFICATE block in PEM `text`. An
+/// unterminated block is dropped.
 pub List(List(Int)) pem_certificates(Str text) {
-    PemScan st = PemScan { .certs = [], .in_cert = false, .body = "" };
+    PemScan st = PemScan { .certs = [], .in_cert = false, .body = "", .labels = ["CERTIFICATE"] };
     PemScan done = pem_scan_lines(str_split(text, "\n"), 0, st);
     return done.certs;
 }
 
+/// `st` with every certificate in PEM `text` added as a root.
 pub TrustStore trust_store_add_pem(TrustStore st, Str text) {
     return trust_store_add_all(st, pem_certificates(text), 0);
 }
@@ -371,24 +436,24 @@ TrustStore trust_store_add_all(TrustStore st, List(List(Int)) certs, Int i) {
     return trust_store_add_all(trust_store_add(st, certs[i]), certs, i + 1);
 }
 
-// A CRL is added whole, never as a trust anchor: it says what is revoked,
-// not who is.
+/// `st` with DER CRL `der` added; an empty `der` is ignored.
+/// A CRL is added whole, never as a trust anchor: it says what is revoked,
+/// not who is.
 pub TrustStore trust_store_add_crl(TrustStore st, List(Int) der) {
     if (der.len() == 0) { return st; }
     return TrustStore { .roots = st.roots, .crls = st.crls.concat([der]), .ocsp = st.ocsp, .revocation_required = st.revocation_required };
 }
 
+/// `st` with each of `der[i..]` added as a CRL.
 pub TrustStore trust_store_add_crls(TrustStore st, List(List(Int)) der, Int i) {
     if (i >= der.len()) { return st; }
     return trust_store_add_crls(trust_store_add_crl(st, der[i]), der, i + 1);
 }
 
-// Every CERTIFICATE and X509 CRL block in a PEM bundle. A CA bundle and a
-// CRL bundle are both PEM and both are lists of signed objects, so one
-// reader takes both and the caller says which is which by what it does
-// with them.
+/// The decoded DER of every CERTIFICATE and X509 CRL block in PEM `text`,
+/// in order. An unterminated block is dropped.
 pub List(List(Int)) pem_certs_and_crls(Str text) {
-    PemScan st = PemScan { .certs = [], .in_cert = false, .body = "" };
+    PemScan st = PemScan { .certs = [], .in_cert = false, .body = "", .labels = ["CERTIFICATE", "X509 CRL"] };
     PemScan done = pem_scan_lines(str_split(text, "\n"), 0, st);
     return done.certs;
 }
@@ -405,6 +470,8 @@ TrustStore trust_store_add_der_dir(TrustStore st, Str dir, List(Str) names, Int 
     return trust_store_add_der_dir(st2, dir, names, ni);
 }
 
+/// A store whose roots are the files in directory `dir`, read as DER in
+/// name order. A path that is not a directory gives an empty store.
 @requires(filesystem(readonly))
 pub TrustStore trust_store_from_der_dir(Str dir) {
     List(Str) none = [];
@@ -412,26 +479,28 @@ pub TrustStore trust_store_from_der_dir(Str dir) {
     return trust_store_add_der_dir(trust_store_empty(), dir, names, 0);
 }
 
+/// A store holding every certificate in the PEM bundle at `path`; empty
+/// when the file does not exist.
 @requires(filesystem(readonly))
 pub TrustStore trust_store_from_pem_file(Str path) {
     if (!filesystem.exists(path)) { return trust_store_empty(); }
     return trust_store_add_pem(trust_store_empty(), filesystem.read_all(path));
 }
 
-// CRLs from a PEM bundle or a directory of DER CRLs, the same two shapes
-// the roots take. Kept separate from the roots on purpose: a bundle of
-// CRLs is not a bundle of trust anchors, and adding one to the other by
-// accident would be a way to trust whatever a CRL file happens to contain.
+/// `st` with the blocks of the PEM bundle at `path` added as CRLs, never as
+/// roots; unchanged when the file does not exist. Blocks are read by
+/// `pem_certs_and_crls`.
 @requires(filesystem(readonly))
 pub TrustStore trust_store_crls_from_pem_file(TrustStore st, Str path) {
     if (!filesystem.exists(path)) { return st; }
     return trust_store_add_crls(st, pem_certs_and_crls(filesystem.read_all(path)), 0);
 }
 
-// A CRL file is either a PEM bundle or one DER CRL, and which one is
-// decided by looking rather than by asking: the common case is a single
-// DER file named after the CA, and making the caller say which would be a
-// mode flag on a path.
+/// `st` with the CRLs from the file at `path` added; unchanged when it does
+/// not exist. A CRL file is either a PEM bundle or one DER CRL, and which one is
+/// decided by looking rather than by asking: the common case is a single
+/// DER file named after the CA, and making the caller say which would be a
+/// mode flag on a path.
 @requires(filesystem(readonly))
 pub TrustStore trust_store_crls_from_file(TrustStore st, Str path) {
     if (!filesystem.exists(path)) { return st; }
@@ -449,6 +518,8 @@ TrustStore crls_from_der_dir(TrustStore st, Str dir, List(Str) names, Int i) {
     return crls_from_der_dir(st2, dir, names, i + 1);
 }
 
+/// `st` with each file in directory `dir` added as a DER CRL, in name
+/// order; unchanged when `dir` is not a directory.
 @requires(filesystem(readonly))
 pub TrustStore trust_store_crls_from_der_dir(TrustStore st, Str dir) {
     List(Str) none = [];
@@ -456,14 +527,16 @@ pub TrustStore trust_store_crls_from_der_dir(TrustStore st, Str dir) {
     return crls_from_der_dir(st, dir, names, 0);
 }
 
+/// `st` with the CRLs at `path` added: a directory of DER CRLs, or a single
+/// CRL file in PEM or DER.
 @requires(filesystem(readonly))
 pub TrustStore trust_store_crls_load(TrustStore st, Str path) {
     if (filesystem.is_dir(path)) { return trust_store_crls_from_der_dir(st, path); }
     return trust_store_crls_from_file(st, path);
 }
 
-// A path is read as whatever it is: a directory of DER certificates, or a
-// PEM bundle. One argument, no mode to get wrong at the call site.
+/// A trust store loaded from `path`, a directory of DER certificates or a
+/// PEM bundle. One argument, no mode to get wrong at the call site.
 @requires(filesystem(readonly))
 pub TrustStore trust_store_load(Str path) {
     if (filesystem.is_dir(path)) { return trust_store_from_der_dir(path); }
@@ -487,14 +560,18 @@ pub TrustStore trust_store_load(Str path) {
 //                                            entryExts OPTIONAL } OPTIONAL,
 //     crlExtensions [0] EXPLICIT OPTIONAL }
 
+/// Offset of the tbsCertList element in `crl`.
 pub Int crl_tbs_pos(List(Int) crl) {
     return der_content_pos(crl, 0);
 }
 
+/// Offset of the first field inside the tbsCertList.
 pub Int crl_body_pos(List(Int) crl) {
     return der_content_pos(crl, crl_tbs_pos(crl));
 }
 
+/// Offset of the tbsCertList field after the optional version INTEGER, or
+/// -1 when the first field is malformed.
 pub Int crl_after_version(List(Int) crl) {
     Int body = crl_body_pos(crl);
     DerTlv t = der_next(crl, body);
@@ -503,30 +580,35 @@ pub Int crl_after_version(List(Int) crl) {
     return body;
 }
 
-// This one *names* the field; the ones after it step over what they name.
+/// Offset of the tbsCertList's signature AlgorithmIdentifier, or -1.
+/// This one *names* the field; the ones after it step over what they name.
 pub Int crl_sigalg_pos(List(Int) crl) {
     return crl_after_version(crl);
 }
 
+/// Offset of the CRL's issuer Name, or -1 when malformed.
 pub Int crl_issuer_pos(List(Int) crl) {
     Int p = crl_sigalg_pos(crl);
     if (p < 0) { return 0 - 1; }
     return x509_skip_tlv(crl, p);
 }
 
+/// Offset of the CRL's thisUpdate Time, or -1 when malformed.
 pub Int crl_this_update_pos(List(Int) crl) {
     Int p = crl_issuer_pos(crl);
     if (p < 0) { return 0 - 1; }
     return x509_skip_tlv(crl, p);
 }
 
+/// Offset of the element after thisUpdate, taken as nextUpdate, or -1 when
+/// malformed. The field is not checked to be a Time here.
 pub Int crl_next_update_pos(List(Int) crl) {
     Int p = crl_this_update_pos(crl);
     if (p < 0) { return 0 - 1; }
     return x509_skip_tlv(crl, p);
 }
 
-// The revokedCertificates SEQUENCE, or -1 when the CRL lists nothing.
+/// The revokedCertificates SEQUENCE, or -1 when the CRL lists nothing.
 pub Int crl_revoked_pos(List(Int) crl) {
     Int p = crl_next_update_pos(crl);
     if (p < 0) { return 0 - 1; }
@@ -551,7 +633,7 @@ List(List(Int)) crl_serials_acc(List(Int) crl, Int p, Int end, List(List(Int)) a
     return crl_serials_acc(crl, nxt, end, acc.concat([serial]));
 }
 
-// Every serial this CRL lists as revoked, as DER content bytes.
+/// Every serial this CRL lists as revoked, as DER content bytes.
 pub List(List(Int)) crl_revoked_serials(List(Int) crl) {
     Int p = crl_revoked_pos(crl);
     if (p < 0) { return []; }
@@ -566,25 +648,26 @@ List(List(Int)) crl_serials_has(List(List(Int)) serials, List(Int) want, Int i) 
     return crl_serials_has(serials, want, i + 1);
 }
 
-// Does this CRL list `cert`'s serial?
+/// Does this CRL list `cert`'s serial?
 pub Bool crl_revokes(List(Int) crl, List(Int) cert) {
     List(List(Int)) found = crl_serials_has(crl_revoked_serials(crl), x509_serial_bytes(cert), 0);
     return found.len() > 0;
 }
 
-// The Name DER of an element at `pos`, as a comparable byte string.
+/// The content of the DER element at `pos`, header excluded, as a comparable
+/// byte string; used for Names.
 pub List(Int) name_at(List(Int) data, Int pos) {
     Int cs = der_content_pos(data, pos);
     Int e = x509_skip_tlv(data, pos);
     return der_slice_seeded(data, cs, e - 1);
 }
 
-// Is this CRL one `issuer` signed, and current at `now`?
-//
-// Issuer name, the thisUpdate..nextUpdate window, and the signature over
-// the tbsCertList. A CRL whose nextUpdate has passed is not used at all:
-// it says what was true when it was issued, and a stale CRL is exactly how
-// a revoked certificate keeps working.
+/// Is this CRL one `issuer` signed, and current at `now`?
+///
+/// Issuer name, the thisUpdate..nextUpdate window, and the signature over
+/// the tbsCertList. A CRL whose nextUpdate has passed is not used at all:
+/// it says what was true when it was issued, and a stale CRL is exactly how
+/// a revoked certificate keeps working.
 pub Bool crl_usable(List(Int) crl, List(Int) issuer, Instant now) {
     // The signature first: it parses the CRL strictly, and the positions
     // read below are then in a structure the issuer vouched for.
@@ -606,9 +689,9 @@ pub Bool crl_usable(List(Int) crl, List(Int) issuer, Instant now) {
     return t <= nextn;
 }
 
-// Did any CRL in the store, signed by `issuer` and current at `now`, list
-// `cert`? `covered` says whether one was found at all, which is what
-// `revocation_required` asks about.
+/// What the store's CRLs say about one certificate: whether a usable CRL
+/// revokes it, and whether any usable CRL covers it at all (`covered`, what
+/// `revocation_required` asks about).
 type Rev = { Bool revoked; Bool covered; };
 
 Rev crl_check_at(TrustStore st, List(Int) cert, List(Int) issuer, Instant now, Int i) {
@@ -621,16 +704,18 @@ Rev crl_check_at(TrustStore st, List(Int) cert, List(Int) issuer, Instant now, I
     return rest;
 }
 
+/// What the store's CRLs say about `cert` under `issuer` at `now`: whether
+/// a usable CRL revokes it, and whether any usable CRL covers it at all.
 pub Rev crl_check(TrustStore st, List(Int) cert, List(Int) issuer, Instant now) {
     return crl_check_at(st, cert, issuer, now, 0);
 }
 
-// Does `issuer` validly certify `cert` right now, revocation included?
-//
-// Revocation is part of accepting a certificate, not a separate mode: a
-// store carrying CRLs enforces them, and `revocation_required` additionally
-// refuses a certificate that no current CRL covers -- so a store that
-// cannot answer "is this revoked?" does not silently answer "no".
+/// Does `issuer` validly certify `cert` right now, revocation included?
+///
+/// Revocation is part of accepting a certificate, not a separate mode: a
+/// store carrying CRLs enforces them, and `revocation_required` additionally
+/// refuses a certificate that no current CRL covers -- so a store that
+/// cannot answer "is this revoked?" does not silently answer "no".
 pub Bool issuer_accepts(TrustStore st, List(Int) cert, List(Int) issuer, Instant now) {
     if (!chain_verify(cert, issuer, now)) { return false; }
     Rev r = crl_check(st, cert, issuer, now);
@@ -677,16 +762,16 @@ Int ocsp_any_status_at(List(List(Int)) pool, List(Int) cert, List(Int) issuer, I
 // keyCertSign checks after it are what stop any old certificate in the
 // response from passing as an authority.
 
-// May `delegate` sign OCSP responses on behalf of `issuer`?
+/// May `delegate` sign OCSP responses on behalf of `issuer`?
 pub Bool ocsp_delegate_ok(List(Int) delegate, List(Int) issuer, Instant now) {
     if (delegate.len() == 0) { return false; }
     if (!x509_eku_has(delegate, ocsp_oid_ocsp_signing())) { return false; }
     return chain_verify(delegate, issuer, now);
 }
 
-// What `resp` says about `cert` under `issuer`, from either the issuer
-// itself or a responder it authorised. The issuer's own signature is tried
-// first, so a delegated response never weakens the direct one.
+/// What `resp` says about `cert` under `issuer`, from either the issuer
+/// itself or a responder it authorised. The issuer's own signature is tried
+/// first, so a delegated response never weakens the direct one.
 pub Int ocsp_status_with_delegate(List(Int) issuer, List(Int) cert, List(Int) resp, Instant now) {
     List(Int) d = ocsp_basic(resp);
     if (d.len() == 0) { return ocsp_status_no_answer(); }
@@ -711,6 +796,8 @@ Bool any_root_verifies(TrustStore st, List(Int) cert, Instant now, Int i) {
     return any_root_verifies(st, cert, now, i + 1);
 }
 
+/// Result of searching a certificate pool for an accepting issuer: whether
+/// one was found, and its index in the pool.
 type IssuerHit = { Bool found; Int idx; };
 
 IssuerHit find_issuer_hit(TrustStore st, List(List(Int)) pool, List(Int) cert, Instant now, Int i) {
@@ -740,12 +827,12 @@ Bool chain_to_store(List(Int) cert, List(List(Int)) pool, TrustStore st, Instant
 }
 
 // ─── TLS client-side server-certificate check ────────────────────────
-//
-// Full server authentication: the leaf must name the host we connected to,
-// be inside its validity window, and chain to a root in `st`. An empty
-// store trusts nothing -- a client that cannot say who it trusts does not
-// connect, rather than falling back to "any certificate with the right
-// hostname", which is a check an attacker with any certificate can pass.
+
+/// Full server authentication: the leaf must name the host we connected to,
+/// be inside its validity window, and chain to a root in `st`. An empty
+/// store trusts nothing -- a client that cannot say who it trusts does not
+/// connect, rather than falling back to "any certificate with the right
+/// hostname", which is a check an attacker with any certificate can pass.
 pub Bool tls_server_trusted(List(Int) leaf, List(List(Int)) inters, List(Int) host, Instant now, TrustStore st) {
     if (st.roots.len() == 0) { return false; }
     if (!x509_valid_now(leaf, now)) { return false; }
@@ -753,7 +840,8 @@ pub Bool tls_server_trusted(List(Int) leaf, List(List(Int)) inters, List(Int) ho
     return chain_to_store(leaf, inters, st, now, trust_max_depth());
 }
 
-// String -> byte list (ASCII codepoints).
+/// `acc` followed by the codepoints of `s` from index `i` on, one element
+/// each.
 pub List(Int) str_bytes_acc(Str s, Int i, List(Int) acc) {
     Int n = str_len(s);
     if (i >= n) { return acc; }
@@ -763,13 +851,16 @@ pub List(Int) str_bytes_acc(Str s, Int i, List(Int) acc) {
     return str_bytes_acc(s, ni, acc2);
 }
 
+/// The codepoints of `s` as a list, one element each; these are its bytes
+/// only when `s` is ASCII.
 pub List(Int) str_to_bytes(Str s) {
     return str_bytes_acc(s, 0, []);
 }
 
 
-// An OCSP response answers revocation for the certificates it names, and
-// is checked with the same signature verification as everything else.
+/// `st` with the OCSP response `resp` added.
+/// An OCSP response answers revocation for the certificates it names, and
+/// is checked with the same signature verification as everything else.
 pub TrustStore trust_store_adding_ocsp(TrustStore st, List(Int) resp) {
     return TrustStore { .roots = st.roots, .crls = st.crls, .ocsp = st.ocsp.concat([resp]), .revocation_required = st.revocation_required };
 }

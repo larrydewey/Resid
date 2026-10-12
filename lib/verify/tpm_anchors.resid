@@ -11,10 +11,11 @@
 import "core.resid";
 import "tpm.resid";
 
-// AMD: AMD Pluton Global Factory ICA (EcP384, until 2039-12-15; cross-certified, Windows trusts it as a root).
+/// AMD: AMD Pluton Global Factory ICA (EcP384, until 2039-12-15; cross-certified, Windows trusts it as a root).
 @anchor(kind = TpmEk(AMD), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (AMD/RootCA/AMD-Pluton-Global-Factory-ICA.crt)", fingerprint = "sha256:593a1794f9e17476c7ad427d2908a97c451451c9e0939fdc80d5d662c232d401", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [EcdsaP384Sha384, EcdsaP384Sha256], expires = "2039-12-15")
 pub Anchor tpm_ek_amd_pluton_global_factory_ica() { return anchor_der(tpm_ek_amd_pluton_global_factory_ica_der()); }
 
+/// The DER bytes of AMD's AMD Pluton Global Factory ICA certificate.
 pub List(Int) tpm_ek_amd_pluton_global_factory_ica_der() {
     return [
         48, 130, 4, 73, 48, 130, 2, 49, 160, 3, 2, 1, 2, 2, 1, 29, 48, 13, 6, 9, 42, 134, 72, 134,
@@ -66,10 +67,11 @@ pub List(Int) tpm_ek_amd_pluton_global_factory_ica_der() {
     ];
 }
 
-// AMD: AMD Root CA R4 (Rsa4096, until 2031-12-01).
+/// AMD: AMD Root CA R4 (Rsa4096, until 2031-12-01).
 @anchor(kind = TpmEk(AMD), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (AMD/RootCA/AMD-Root-CA.crt)", fingerprint = "sha256:853d5c5abe1fe97bddb62db0aecb4888a52c83353645cf70b12289d62257e78d", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [RsaPkcs1Sha256], expires = "2031-12-01")
 pub Anchor tpm_ek_amd_root_ca() { return anchor_der(tpm_ek_amd_root_ca_der()); }
 
+/// The DER bytes of AMD's AMD Root CA R4 certificate.
 pub List(Int) tpm_ek_amd_root_ca_der() {
     return [
         48, 130, 5, 251, 48, 130, 3, 227, 160, 3, 2, 1, 2, 2, 20, 98, 109, 22, 203, 8, 57, 39, 58, 150,
@@ -139,10 +141,11 @@ pub List(Int) tpm_ek_amd_root_ca_der() {
     ];
 }
 
-// AMD: Microsoft Pluton Root CA 2021 (EcP384, until 2046-10-14).
+/// AMD: Microsoft Pluton Root CA 2021 (EcP384, until 2046-10-14).
 @anchor(kind = TpmEk(AMD), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (AMD/RootCA/Microsoft Pluton Root CA 2021.cer)", fingerprint = "sha256:32ab5fe7cb4396659fcb621ca14c6fb8fc2420f64050637d77e45a86c5d3916e", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [EcdsaP384Sha384, EcdsaP384Sha256], expires = "2046-10-14")
 pub Anchor tpm_ek_amd_microsoft_pluton_root_ca_2021() { return anchor_der(tpm_ek_amd_microsoft_pluton_root_ca_2021_der()); }
 
+/// The DER bytes of AMD's Microsoft Pluton Root CA 2021 certificate.
 pub List(Int) tpm_ek_amd_microsoft_pluton_root_ca_2021_der() {
     return [
         48, 130, 2, 145, 48, 130, 2, 23, 160, 3, 2, 1, 2, 2, 16, 60, 138, 83, 123, 22, 172, 243, 160, 74,
@@ -176,10 +179,11 @@ pub List(Int) tpm_ek_amd_microsoft_pluton_root_ca_2021_der() {
     ];
 }
 
-// Atmel: Atmel TPM Root Signing Module (EcP256, until 2040-12-31).
+/// Atmel: Atmel TPM Root Signing Module (EcP256, until 2040-12-31).
 @anchor(kind = TpmEk(Atmel), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (Atmel/RootCA/Atmel TPM Root Signing Module.der)", fingerprint = "sha256:3784884ec83a8d7edbfb928ac878dc75c11451381c6a0cb27aaffb3171e0d33f", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [EcdsaP256Sha256, EcdsaP256Sha384], expires = "2040-12-31")
 pub Anchor tpm_ek_atmel_root_signing_module() { return anchor_der(tpm_ek_atmel_root_signing_module_der()); }
 
+/// The DER bytes of Atmel's Atmel TPM Root Signing Module certificate.
 pub List(Int) tpm_ek_atmel_root_signing_module_der() {
     return [
         48, 130, 2, 43, 48, 130, 1, 208, 160, 3, 2, 1, 2, 2, 20, 112, 63, 33, 26, 21, 25, 110, 213, 171,
@@ -209,10 +213,11 @@ pub List(Int) tpm_ek_atmel_root_signing_module_der() {
     ];
 }
 
-// Infineon: IFX TPM EK Root CA (Rsa2048, until 2030-10-24; cross-certified, Windows trusts it as a root).
+/// Infineon: IFX TPM EK Root CA (Rsa2048, until 2030-10-24; cross-certified, Windows trusts it as a root).
 @anchor(kind = TpmEk(Infineon), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (Infineon/RootCA/IFX TPM EK Root CA.cer)", fingerprint = "sha256:7df2c3751c03ce003e99174d9cb2559f57a1b05b1920dd30bb6f8dfcf17f5e62", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [RsaPkcs1Sha256], expires = "2030-10-24")
 pub Anchor tpm_ek_infineon_ifx_tpm_ek_root_ca() { return anchor_der(tpm_ek_infineon_ifx_tpm_ek_root_ca_der()); }
 
+/// The DER bytes of Infineon's IFX TPM EK Root CA certificate.
 pub List(Int) tpm_ek_infineon_ifx_tpm_ek_root_ca_der() {
     return [
         48, 130, 4, 80, 48, 130, 3, 56, 160, 3, 2, 1, 2, 2, 16, 71, 36, 4, 224, 223, 33, 128, 63, 125,
@@ -265,10 +270,11 @@ pub List(Int) tpm_ek_infineon_ifx_tpm_ek_root_ca_der() {
     ];
 }
 
-// Infineon: VeriSign Trusted Platform Module Root CA (Rsa2048, until 2045-10-24).
+/// Infineon: VeriSign Trusted Platform Module Root CA (Rsa2048, until 2045-10-24).
 @anchor(kind = TpmEk(Infineon), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (Infineon/RootCA/IFX-RootCA.cer)", fingerprint = "sha256:967bb3d4544ea2740fce338077e1f5a9ea3085667246e6b968294aa045a57549", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [RsaPkcs1Sha256], expires = "2045-10-24")
 pub Anchor tpm_ek_infineon_ifx_rootca() { return anchor_der(tpm_ek_infineon_ifx_rootca_der()); }
 
+/// The DER bytes of Infineon's VeriSign Trusted Platform Module Root CA certificate.
 pub List(Int) tpm_ek_infineon_ifx_rootca_der() {
     return [
         48, 130, 3, 247, 48, 130, 2, 223, 160, 3, 2, 1, 2, 2, 16, 115, 113, 192, 47, 3, 233, 203, 145, 13,
@@ -317,10 +323,11 @@ pub List(Int) tpm_ek_infineon_ifx_rootca_der() {
     ];
 }
 
-// Infineon: Infineon OPTIGA(TM) ECC Root CA (EcP384, until 2043-07-25).
+/// Infineon: Infineon OPTIGA(TM) ECC Root CA (EcP384, until 2043-07-25).
 @anchor(kind = TpmEk(Infineon), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (Infineon/RootCA/Infineon OPTIGA(TM) ECC Root CA.crt)", fingerprint = "sha256:cfeb02fecd55ad7a73c6e1d11985d4c47dee248ab63dcb66091a2489660443c3", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [EcdsaP384Sha384, EcdsaP384Sha256], expires = "2043-07-25")
 pub Anchor tpm_ek_infineon_optiga_tm_ecc_root_ca() { return anchor_der(tpm_ek_infineon_optiga_tm_ecc_root_ca_der()); }
 
+/// The DER bytes of Infineon's Infineon OPTIGA(TM) ECC Root CA certificate.
 pub List(Int) tpm_ek_infineon_optiga_tm_ecc_root_ca_der() {
     return [
         48, 130, 2, 91, 48, 130, 1, 226, 160, 3, 2, 1, 2, 2, 1, 4, 48, 10, 6, 8, 42, 134, 72, 206,
@@ -352,10 +359,11 @@ pub List(Int) tpm_ek_infineon_optiga_tm_ecc_root_ca_der() {
     ];
 }
 
-// Infineon: Infineon OPTIGA(TM) RSA Root CA (Rsa4096, until 2043-07-25).
+/// Infineon: Infineon OPTIGA(TM) RSA Root CA (Rsa4096, until 2043-07-25).
 @anchor(kind = TpmEk(Infineon), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (Infineon/RootCA/Infineon OPTIGA(TM) RSA Root CA.crt)", fingerprint = "sha256:899e35474c9807eb4c7f2f7a12da0028fb250cd02154d0009fca7d9c66574f3b", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [RsaPkcs1Sha256], expires = "2043-07-25")
 pub Anchor tpm_ek_infineon_optiga_tm_rsa_root_ca() { return anchor_der(tpm_ek_infineon_optiga_tm_rsa_root_ca_der()); }
 
+/// The DER bytes of Infineon's Infineon OPTIGA(TM) RSA Root CA certificate.
 pub List(Int) tpm_ek_infineon_optiga_tm_rsa_root_ca_der() {
     return [
         48, 130, 5, 171, 48, 130, 3, 147, 160, 3, 2, 1, 2, 2, 1, 3, 48, 13, 6, 9, 42, 134, 72, 134,
@@ -422,10 +430,11 @@ pub List(Int) tpm_ek_infineon_optiga_tm_rsa_root_ca_der() {
     ];
 }
 
-// Infineon: Infineon OPTIGA(TM) ECC Root CA 2 (EcP521, until 2054-11-22).
+/// Infineon: Infineon OPTIGA(TM) ECC Root CA 2 (EcP521, until 2054-11-22).
 @anchor(kind = TpmEk(Infineon), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (Infineon/RootCA/Infineon_OPTIGA(TM)_ECC_Root_CA_2.crt)", fingerprint = "sha256:ee0c827555c4e9012037df4257bb8aaa26084a17b13ede41cd7895c8d6c11190", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [EcdsaP521Sha512], expires = "2054-11-22")
 pub Anchor tpm_ek_infineon_optiga_tm_ecc_root_ca_2() { return anchor_der(tpm_ek_infineon_optiga_tm_ecc_root_ca_2_der()); }
 
+/// The DER bytes of Infineon's Infineon OPTIGA(TM) ECC Root CA 2 certificate.
 pub List(Int) tpm_ek_infineon_optiga_tm_ecc_root_ca_2_der() {
     return [
         48, 130, 2, 173, 48, 130, 2, 14, 160, 3, 2, 1, 2, 2, 1, 90, 48, 10, 6, 8, 42, 134, 72, 206,
@@ -460,10 +469,11 @@ pub List(Int) tpm_ek_infineon_optiga_tm_ecc_root_ca_2_der() {
     ];
 }
 
-// Infineon: Infineon OPTIGA(TM) RSA Root CA 2 (Rsa4096, until 2054-11-22).
+/// Infineon: Infineon OPTIGA(TM) RSA Root CA 2 (Rsa4096, until 2054-11-22).
 @anchor(kind = TpmEk(Infineon), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (Infineon/RootCA/Infineon_OPTIGA(TM)_RSA_Root_CA_2.crt)", fingerprint = "sha256:b413c71580af3ec5efe83fad31db2d4af4612355e3b01e50903b10763d738894", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [RsaPkcs1Sha256], expires = "2054-11-22")
 pub Anchor tpm_ek_infineon_optiga_tm_rsa_root_ca_2() { return anchor_der(tpm_ek_infineon_optiga_tm_rsa_root_ca_2_der()); }
 
+/// The DER bytes of Infineon's Infineon OPTIGA(TM) RSA Root CA 2 certificate.
 pub List(Int) tpm_ek_infineon_optiga_tm_rsa_root_ca_2_der() {
     return [
         48, 130, 5, 177, 48, 130, 3, 153, 160, 3, 2, 1, 2, 2, 1, 89, 48, 13, 6, 9, 42, 134, 72, 134,
@@ -530,10 +540,11 @@ pub List(Int) tpm_ek_infineon_optiga_tm_rsa_root_ca_2_der() {
     ];
 }
 
-// Infineon: Infineon OPTIGA(TM) ECC Root CA 3 (EcP521, until 2099-12-31).
+/// Infineon: Infineon OPTIGA(TM) ECC Root CA 3 (EcP521, until 2099-12-31).
 @anchor(kind = TpmEk(Infineon), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (Infineon/RootCA/OptigaEccRootCA3.crt)", fingerprint = "sha256:5a84cc3476221cce5be81af8d755d175fea03d208b3412a231710c56774542fd", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [EcdsaP521Sha512], expires = "2099-12-31")
 pub Anchor tpm_ek_infineon_optigaeccrootca3() { return anchor_der(tpm_ek_infineon_optigaeccrootca3_der()); }
 
+/// The DER bytes of Infineon's Infineon OPTIGA(TM) ECC Root CA 3 certificate.
 pub List(Int) tpm_ek_infineon_optigaeccrootca3_der() {
     return [
         48, 130, 2, 173, 48, 130, 2, 14, 160, 3, 2, 1, 2, 2, 1, 107, 48, 10, 6, 8, 42, 134, 72, 206,
@@ -568,10 +579,11 @@ pub List(Int) tpm_ek_infineon_optigaeccrootca3_der() {
     ];
 }
 
-// Infineon: Infineon OPTIGA(TM) RSA Root CA 3 (Rsa4096, until 2099-12-31).
+/// Infineon: Infineon OPTIGA(TM) RSA Root CA 3 (Rsa4096, until 2099-12-31).
 @anchor(kind = TpmEk(Infineon), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (Infineon/RootCA/OptigaRsaRootCA3.crt)", fingerprint = "sha256:976b0579c016741b0003bf8055e920ab08f72abc819547b3480b0c141e956b70", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [RsaPkcs1Sha256], expires = "2099-12-31")
 pub Anchor tpm_ek_infineon_optigarsarootca3() { return anchor_der(tpm_ek_infineon_optigarsarootca3_der()); }
 
+/// The DER bytes of Infineon's Infineon OPTIGA(TM) RSA Root CA 3 certificate.
 pub List(Int) tpm_ek_infineon_optigarsarootca3_der() {
     return [
         48, 130, 5, 177, 48, 130, 3, 153, 160, 3, 2, 1, 2, 2, 1, 108, 48, 13, 6, 9, 42, 134, 72, 134,
@@ -638,10 +650,11 @@ pub List(Int) tpm_ek_infineon_optigarsarootca3_der() {
     ];
 }
 
-// Intel: www.intel.com (EcP256, until 2049-12-31).
+/// Intel: www.intel.com (EcP256, until 2049-12-31).
 @anchor(kind = TpmEk(Intel), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (Intel/RootCA/EKRootPublicKey.cer)", fingerprint = "sha256:2e1b3ba79af56d758be51697621bc4b9e8cee0983db3e749c55eb9b37c6d2ae0", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [EcdsaP256Sha256, EcdsaP256Sha384], expires = "2049-12-31")
 pub Anchor tpm_ek_intel_ekrootpublickey() { return anchor_der(tpm_ek_intel_ekrootpublickey_der()); }
 
+/// The DER bytes of Intel's www.intel.com certificate.
 pub List(Int) tpm_ek_intel_ekrootpublickey_der() {
     return [
         48, 130, 2, 119, 48, 130, 2, 30, 160, 3, 2, 1, 2, 2, 20, 7, 231, 79, 127, 182, 183, 35, 34, 70,
@@ -674,10 +687,11 @@ pub List(Int) tpm_ek_intel_ekrootpublickey_der() {
     ];
 }
 
-// Intel: www.intel.com (EcP384, until 2049-12-31; cross-certified, Windows trusts it as a root).
+/// Intel: www.intel.com (EcP384, until 2049-12-31; cross-certified, Windows trusts it as a root).
 @anchor(kind = TpmEk(Intel), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (Intel/RootCA/ODCA_CA2_CSME_Intermediate.cer)", fingerprint = "sha256:c001df02b31a60a2b37130365956400a2afcfd147e8552fd7ea3f17f2ab0d457", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [EcdsaP384Sha384, EcdsaP384Sha256], expires = "2049-12-31")
 pub Anchor tpm_ek_intel_odca_ca2_csme_intermediate() { return anchor_der(tpm_ek_intel_odca_ca2_csme_intermediate_der()); }
 
+/// The DER bytes of Intel's www.intel.com certificate.
 pub List(Int) tpm_ek_intel_odca_ca2_csme_intermediate_der() {
     return [
         48, 130, 3, 35, 48, 130, 2, 171, 160, 3, 2, 1, 2, 2, 20, 75, 1, 54, 63, 137, 32, 213, 96, 147,
@@ -717,10 +731,11 @@ pub List(Int) tpm_ek_intel_odca_ca2_csme_intermediate_der() {
     ];
 }
 
-// Intel: www.intel.com (EcP384, until 2049-12-31; cross-certified, Windows trusts it as a root).
+/// Intel: www.intel.com (EcP384, until 2049-12-31; cross-certified, Windows trusts it as a root).
 @anchor(kind = TpmEk(Intel), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (Intel/RootCA/ODCA_CA2_OSSE_Intermediate.cer)", fingerprint = "sha256:98f575d37fcce1139ba4ddfba811d862a8262a207cb46f4c8bd0d9891e406475", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [EcdsaP384Sha384, EcdsaP384Sha256], expires = "2049-12-31")
 pub Anchor tpm_ek_intel_odca_ca2_osse_intermediate() { return anchor_der(tpm_ek_intel_odca_ca2_osse_intermediate_der()); }
 
+/// The DER bytes of Intel's www.intel.com certificate.
 pub List(Int) tpm_ek_intel_odca_ca2_osse_intermediate_der() {
     return [
         48, 130, 3, 36, 48, 130, 2, 171, 160, 3, 2, 1, 2, 2, 20, 123, 214, 103, 196, 39, 203, 138, 13, 145,
@@ -760,10 +775,11 @@ pub List(Int) tpm_ek_intel_odca_ca2_osse_intermediate_der() {
     ];
 }
 
-// Intel: www.intel.com (EcP384, until 2049-12-31).
+/// Intel: www.intel.com (EcP384, until 2049-12-31).
 @anchor(kind = TpmEk(Intel), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (Intel/RootCA/OnDie_CA_RootCA_Certificate.cer)", fingerprint = "sha256:beb40bb7507b33967226aa80e084749fbb6593893c642e818d682e9a8d07fc24", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [EcdsaP384Sha384, EcdsaP384Sha256], expires = "2049-12-31")
 pub Anchor tpm_ek_intel_ondie_ca_rootca_certificate() { return anchor_der(tpm_ek_intel_ondie_ca_rootca_certificate_der()); }
 
+/// The DER bytes of Intel's www.intel.com certificate.
 pub List(Int) tpm_ek_intel_ondie_ca_rootca_certificate_der() {
     return [
         48, 130, 2, 186, 48, 130, 2, 62, 160, 3, 2, 1, 2, 2, 20, 60, 178, 226, 29, 58, 240, 201, 36, 109,
@@ -799,10 +815,11 @@ pub List(Int) tpm_ek_intel_ondie_ca_rootca_certificate_der() {
     ];
 }
 
-// NationZ: Nationz TPM Root CA (EcP384, until 2047-05-13).
+/// NationZ: Nationz TPM Root CA (EcP384, until 2047-05-13).
 @anchor(kind = TpmEk(NationZ), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (NationZ/RootCA/EkRootCA.crt)", fingerprint = "sha256:1293d71d6f61c86b98102fd3d4085ff12538f108e925489c0d545059e5f89c36", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [EcdsaP384Sha384, EcdsaP384Sha256], expires = "2047-05-13")
 pub Anchor tpm_ek_nationz_ekrootca() { return anchor_der(tpm_ek_nationz_ekrootca_der()); }
 
+/// The DER bytes of NationZ's Nationz TPM Root CA certificate.
 pub List(Int) tpm_ek_nationz_ekrootca_der() {
     return [
         48, 130, 2, 68, 48, 130, 1, 202, 160, 3, 2, 1, 2, 2, 1, 1, 48, 10, 6, 8, 42, 134, 72, 206,
@@ -833,10 +850,11 @@ pub List(Int) tpm_ek_nationz_ekrootca_der() {
     ];
 }
 
-// NationZ: NSING TPM ECC ROOT CA 001 (EcP521, until 2059-03-27).
+/// NationZ: NSING TPM ECC ROOT CA 001 (EcP521, until 2059-03-27).
 @anchor(kind = TpmEk(NationZ), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (NationZ/RootCA/NSEccRootCA001.crt)", fingerprint = "sha256:6ccf8a8a803d07a002a15d4889ffa0b125e4a82a1fe4211db3c6e8592919f9dc", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [EcdsaP521Sha512], expires = "2059-03-27")
 pub Anchor tpm_ek_nationz_nseccrootca001() { return anchor_der(tpm_ek_nationz_nseccrootca001_der()); }
 
+/// The DER bytes of NationZ's NSING TPM ECC ROOT CA 001 certificate.
 pub List(Int) tpm_ek_nationz_nseccrootca001_der() {
     return [
         48, 130, 2, 151, 48, 130, 1, 249, 160, 3, 2, 1, 2, 2, 2, 16, 0, 48, 10, 6, 8, 42, 134, 72,
@@ -870,10 +888,11 @@ pub List(Int) tpm_ek_nationz_nseccrootca001_der() {
     ];
 }
 
-// NationZ: NSING TPM RSA ROOT CA 001 (Rsa4096, until 2059-03-27).
+/// NationZ: NSING TPM RSA ROOT CA 001 (Rsa4096, until 2059-03-27).
 @anchor(kind = TpmEk(NationZ), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (NationZ/RootCA/NSRsaRootCA001.crt)", fingerprint = "sha256:72ca00612395af027cd84c5514219f110e964dfa0bfc1efbb3ac147e3b173971", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [RsaPkcs1Sha256], expires = "2059-03-27")
 pub Anchor tpm_ek_nationz_nsrsarootca001() { return anchor_der(tpm_ek_nationz_nsrsarootca001_der()); }
 
+/// The DER bytes of NationZ's NSING TPM RSA ROOT CA 001 certificate.
 pub List(Int) tpm_ek_nationz_nsrsarootca001_der() {
     return [
         48, 130, 5, 156, 48, 130, 3, 132, 160, 3, 2, 1, 2, 2, 2, 16, 0, 48, 13, 6, 9, 42, 134, 72,
@@ -939,10 +958,11 @@ pub List(Int) tpm_ek_nationz_nsrsarootca001_der() {
     ];
 }
 
-// NationZ: Nations TPM ECC ROOT CA 001 (EcP521, until 2059-03-28).
+/// NationZ: Nations TPM ECC ROOT CA 001 (EcP521, until 2059-03-28).
 @anchor(kind = TpmEk(NationZ), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (NationZ/RootCA/NSTPMEccRootCA001.crt)", fingerprint = "sha256:31e7a6de95991cfcca3e7c1680be3ba96de8b2c4bca72da1072ee699da23b2d2", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [EcdsaP521Sha512], expires = "2059-03-28")
 pub Anchor tpm_ek_nationz_nstpmeccrootca001() { return anchor_der(tpm_ek_nationz_nstpmeccrootca001_der()); }
 
+/// The DER bytes of NationZ's Nations TPM ECC ROOT CA 001 certificate.
 pub List(Int) tpm_ek_nationz_nstpmeccrootca001_der() {
     return [
         48, 130, 2, 141, 48, 130, 1, 239, 160, 3, 2, 1, 2, 2, 2, 16, 0, 48, 10, 6, 8, 42, 134, 72,
@@ -976,10 +996,11 @@ pub List(Int) tpm_ek_nationz_nstpmeccrootca001_der() {
     ];
 }
 
-// NationZ: Nations TPM RSA ROOT CA 001 (Rsa4096, until 2059-03-28).
+/// NationZ: Nations TPM RSA ROOT CA 001 (Rsa4096, until 2059-03-28).
 @anchor(kind = TpmEk(NationZ), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (NationZ/RootCA/NSTPMRsaRootCA001.crt)", fingerprint = "sha256:00608b414f9c522c5d30366c4b751681c3fd10b7ea0027e0f3877742c477c5a7", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [RsaPkcs1Sha256], expires = "2059-03-28")
 pub Anchor tpm_ek_nationz_nstpmrsarootca001() { return anchor_der(tpm_ek_nationz_nstpmrsarootca001_der()); }
 
+/// The DER bytes of NationZ's Nations TPM RSA ROOT CA 001 certificate.
 pub List(Int) tpm_ek_nationz_nstpmrsarootca001_der() {
     return [
         48, 130, 5, 146, 48, 130, 3, 122, 160, 3, 2, 1, 2, 2, 2, 16, 0, 48, 13, 6, 9, 42, 134, 72,
@@ -1045,10 +1066,11 @@ pub List(Int) tpm_ek_nationz_nstpmrsarootca001_der() {
     ];
 }
 
-// Nuvoton: NPCTxxx ECC521 RootCA (EcP521, until 2053-04-27).
+/// Nuvoton: NPCTxxx ECC521 RootCA (EcP521, until 2053-04-27).
 @anchor(kind = TpmEk(Nuvoton), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (Nuvoton/RootCA/NPCTxxxECC521RootCA.cer)", fingerprint = "sha256:083e7bd13e8fe0bb9b0c64db9e0c8356681df65714d2d5c4925eb98ae1369d40", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [EcdsaP521Sha512], expires = "2053-04-27")
 pub Anchor tpm_ek_nuvoton_npctxxxecc521rootca() { return anchor_der(tpm_ek_nuvoton_npctxxxecc521rootca_der()); }
 
+/// The DER bytes of Nuvoton's NPCTxxx ECC521 RootCA certificate.
 pub List(Int) tpm_ek_nuvoton_npctxxxecc521rootca_der() {
     return [
         48, 130, 2, 105, 48, 130, 1, 203, 160, 3, 2, 1, 2, 2, 1, 2, 48, 10, 6, 8, 42, 134, 72, 206,
@@ -1080,10 +1102,11 @@ pub List(Int) tpm_ek_nuvoton_npctxxxecc521rootca_der() {
     ];
 }
 
-// Nuvoton: NTC TPM EK Root CA 01 (Rsa2048, until 2032-07-11).
+/// Nuvoton: NTC TPM EK Root CA 01 (Rsa2048, until 2032-07-11).
 @anchor(kind = TpmEk(Nuvoton), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (Nuvoton/RootCA/NTC TPM EK Root CA 01.cer)", fingerprint = "sha256:56b67007f448bd5c5746299fcdea9323971bbdaaefd8e3b9b84773abc888c90e", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [RsaPkcs1Sha256], expires = "2032-07-11")
 pub Anchor tpm_ek_nuvoton_ntc_tpm_ek_root_ca_01() { return anchor_der(tpm_ek_nuvoton_ntc_tpm_ek_root_ca_01_der()); }
 
+/// The DER bytes of Nuvoton's NTC TPM EK Root CA 01 certificate.
 pub List(Int) tpm_ek_nuvoton_ntc_tpm_ek_root_ca_01_der() {
     return [
         48, 130, 3, 74, 48, 130, 2, 50, 160, 3, 2, 1, 2, 2, 6, 0, 173, 227, 93, 246, 213, 48, 13, 6,
@@ -1125,10 +1148,11 @@ pub List(Int) tpm_ek_nuvoton_ntc_tpm_ek_root_ca_01_der() {
     ];
 }
 
-// Nuvoton: NTC TPM EK Root CA 02 (Rsa2048, until 2032-07-11).
+/// Nuvoton: NTC TPM EK Root CA 02 (Rsa2048, until 2032-07-11).
 @anchor(kind = TpmEk(Nuvoton), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (Nuvoton/RootCA/NTC TPM EK Root CA 02.cer)", fingerprint = "sha256:8fac94b462b37acb84431bdc71395585caf518c17f656051ff9c4347a4726ed9", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [RsaPkcs1Sha256], expires = "2032-07-11")
 pub Anchor tpm_ek_nuvoton_ntc_tpm_ek_root_ca_02() { return anchor_der(tpm_ek_nuvoton_ntc_tpm_ek_root_ca_02_der()); }
 
+/// The DER bytes of Nuvoton's NTC TPM EK Root CA 02 certificate.
 pub List(Int) tpm_ek_nuvoton_ntc_tpm_ek_root_ca_02_der() {
     return [
         48, 130, 3, 74, 48, 130, 2, 50, 160, 3, 2, 1, 2, 2, 6, 0, 246, 157, 6, 99, 217, 48, 13, 6,
@@ -1170,10 +1194,11 @@ pub List(Int) tpm_ek_nuvoton_ntc_tpm_ek_root_ca_02_der() {
     ];
 }
 
-// Nuvoton: NTC TPM EK Root CA ARSUF 01 (Rsa2048, until 2034-03-28).
+/// Nuvoton: NTC TPM EK Root CA ARSUF 01 (Rsa2048, until 2034-03-28).
 @anchor(kind = TpmEk(Nuvoton), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (Nuvoton/RootCA/NTC TPM EK Root CA ARSUF 01.cer)", fingerprint = "sha256:9e0434093fd0d4f8b927af1f4f6cffbd75f0584af4ade939bbd6851227fa4263", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [RsaPkcs1Sha256], expires = "2034-03-28")
 pub Anchor tpm_ek_nuvoton_ntc_tpm_ek_root_ca_arsuf_01() { return anchor_der(tpm_ek_nuvoton_ntc_tpm_ek_root_ca_arsuf_01_der()); }
 
+/// The DER bytes of Nuvoton's NTC TPM EK Root CA ARSUF 01 certificate.
 pub List(Int) tpm_ek_nuvoton_ntc_tpm_ek_root_ca_arsuf_01_der() {
     return [
         48, 130, 3, 89, 48, 130, 2, 65, 160, 3, 2, 1, 2, 2, 9, 0, 201, 37, 0, 65, 184, 110, 4, 58,
@@ -1215,10 +1240,11 @@ pub List(Int) tpm_ek_nuvoton_ntc_tpm_ek_root_ca_arsuf_01_der() {
     ];
 }
 
-// Nuvoton: Nuvoton TPM Root CA 1013 (Rsa2048, until 2035-05-07).
+/// Nuvoton: Nuvoton TPM Root CA 1013 (Rsa2048, until 2035-05-07).
 @anchor(kind = TpmEk(Nuvoton), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (Nuvoton/RootCA/Nuvoton TPM Root CA 1013.cer)", fingerprint = "sha256:38f8c5012d1b1321e833376611612b5b1cde466574cabc67fd2262e3b8da2f6d", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [RsaPkcs1Sha256], expires = "2035-05-07")
 pub Anchor tpm_ek_nuvoton_root_ca_1013() { return anchor_der(tpm_ek_nuvoton_root_ca_1013_der()); }
 
+/// The DER bytes of Nuvoton's Nuvoton TPM Root CA 1013 certificate.
 pub List(Int) tpm_ek_nuvoton_root_ca_1013_der() {
     return [
         48, 130, 3, 146, 48, 130, 2, 122, 160, 3, 2, 1, 2, 2, 8, 72, 221, 9, 124, 130, 186, 188, 77, 48,
@@ -1263,10 +1289,11 @@ pub List(Int) tpm_ek_nuvoton_root_ca_1013_der() {
     ];
 }
 
-// Nuvoton: Nuvoton TPM Root CA 1014 (Rsa2048, until 2037-08-17).
+/// Nuvoton: Nuvoton TPM Root CA 1014 (Rsa2048, until 2037-08-17).
 @anchor(kind = TpmEk(Nuvoton), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (Nuvoton/RootCA/Nuvoton TPM Root CA 1014.cer)", fingerprint = "sha256:ad392726a92f62e5b7b112460c4e89f9fcbd523d08f39dcb928210ce8d4f676f", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [RsaPkcs1Sha256], expires = "2037-08-17")
 pub Anchor tpm_ek_nuvoton_root_ca_1014() { return anchor_der(tpm_ek_nuvoton_root_ca_1014_der()); }
 
+/// The DER bytes of Nuvoton's Nuvoton TPM Root CA 1014 certificate.
 pub List(Int) tpm_ek_nuvoton_root_ca_1014_der() {
     return [
         48, 130, 3, 146, 48, 130, 2, 122, 160, 3, 2, 1, 2, 2, 8, 109, 116, 158, 103, 253, 182, 122, 197, 48,
@@ -1311,10 +1338,11 @@ pub List(Int) tpm_ek_nuvoton_root_ca_1014_der() {
     ];
 }
 
-// Nuvoton: Nuvoton TPM Root CA 1110 (EcP256, until 2035-05-07).
+/// Nuvoton: Nuvoton TPM Root CA 1110 (EcP256, until 2035-05-07).
 @anchor(kind = TpmEk(Nuvoton), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (Nuvoton/RootCA/Nuvoton TPM Root CA 1110.cer)", fingerprint = "sha256:2782e51a95e86d9557fe4204316cf805bd6f5898f81f9732e944d742bcdc5f54", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [EcdsaP256Sha256, EcdsaP256Sha384], expires = "2035-05-07")
 pub Anchor tpm_ek_nuvoton_root_ca_1110() { return anchor_der(tpm_ek_nuvoton_root_ca_1110_der()); }
 
+/// The DER bytes of Nuvoton's Nuvoton TPM Root CA 1110 certificate.
 pub List(Int) tpm_ek_nuvoton_root_ca_1110_der() {
     return [
         48, 130, 2, 6, 48, 130, 1, 172, 160, 3, 2, 1, 2, 2, 8, 16, 56, 170, 159, 100, 154, 168, 99, 48,
@@ -1342,10 +1370,11 @@ pub List(Int) tpm_ek_nuvoton_root_ca_1110_der() {
     ];
 }
 
-// Nuvoton: Nuvoton TPM Root CA 1111 (EcP256, until 2037-08-17).
+/// Nuvoton: Nuvoton TPM Root CA 1111 (EcP256, until 2037-08-17).
 @anchor(kind = TpmEk(Nuvoton), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (Nuvoton/RootCA/Nuvoton TPM Root CA 1111.cer)", fingerprint = "sha256:e38c280f7c0e0b49f31efc7531032bb6a86c3fba4eb89beb1d510eaa4510ae4a", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [EcdsaP256Sha256, EcdsaP256Sha384], expires = "2037-08-17")
 pub Anchor tpm_ek_nuvoton_root_ca_1111() { return anchor_der(tpm_ek_nuvoton_root_ca_1111_der()); }
 
+/// The DER bytes of Nuvoton's Nuvoton TPM Root CA 1111 certificate.
 pub List(Int) tpm_ek_nuvoton_root_ca_1111_der() {
     return [
         48, 130, 2, 7, 48, 130, 1, 173, 160, 3, 2, 1, 2, 2, 9, 0, 223, 238, 220, 189, 37, 242, 139, 25,
@@ -1373,10 +1402,11 @@ pub List(Int) tpm_ek_nuvoton_root_ca_1111_der() {
     ];
 }
 
-// Nuvoton: NuvotonTPMRootCA1210 (EcP384, until 2051-07-27).
+/// Nuvoton: NuvotonTPMRootCA1210 (EcP384, until 2051-07-27).
 @anchor(kind = TpmEk(Nuvoton), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (Nuvoton/RootCA/Nuvoton TPM Root CA 1210.cer)", fingerprint = "sha256:ba70a6ea7b77c7fee8947a07b1e70e0b26d39ce5e6307f63d5e4b9507f19a157", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [EcdsaP384Sha384, EcdsaP384Sha256], expires = "2051-07-27")
 pub Anchor tpm_ek_nuvoton_root_ca_1210() { return anchor_der(tpm_ek_nuvoton_root_ca_1210_der()); }
 
+/// The DER bytes of Nuvoton's NuvotonTPMRootCA1210 certificate.
 pub List(Int) tpm_ek_nuvoton_root_ca_1210_der() {
     return [
         48, 130, 2, 29, 48, 130, 1, 163, 160, 3, 2, 1, 2, 2, 1, 1, 48, 10, 6, 8, 42, 134, 72, 206,
@@ -1405,10 +1435,11 @@ pub List(Int) tpm_ek_nuvoton_root_ca_1210_der() {
     ];
 }
 
-// Nuvoton: Nuvoton TPM Root CA 2010 (Rsa2048, until 2035-04-19).
+/// Nuvoton: Nuvoton TPM Root CA 2010 (Rsa2048, until 2035-04-19).
 @anchor(kind = TpmEk(Nuvoton), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (Nuvoton/RootCA/Nuvoton TPM Root CA 2010.cer)", fingerprint = "sha256:970b1cb098896f0d31be45dd299ed31f1640689f7c1618d7370cd71b6eb97560", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [RsaPkcs1Sha256], expires = "2035-04-19")
 pub Anchor tpm_ek_nuvoton_root_ca_2010() { return anchor_der(tpm_ek_nuvoton_root_ca_2010_der()); }
 
+/// The DER bytes of Nuvoton's Nuvoton TPM Root CA 2010 certificate.
 pub List(Int) tpm_ek_nuvoton_root_ca_2010_der() {
     return [
         48, 130, 3, 146, 48, 130, 2, 122, 160, 3, 2, 1, 2, 2, 8, 88, 9, 207, 246, 157, 130, 33, 151, 48,
@@ -1453,10 +1484,11 @@ pub List(Int) tpm_ek_nuvoton_root_ca_2010_der() {
     ];
 }
 
-// Nuvoton: Nuvoton TPM Root CA 2011 (Rsa2048, until 2037-09-07).
+/// Nuvoton: Nuvoton TPM Root CA 2011 (Rsa2048, until 2037-09-07).
 @anchor(kind = TpmEk(Nuvoton), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (Nuvoton/RootCA/Nuvoton TPM Root CA 2011.cer)", fingerprint = "sha256:ab6005053c48534c46f54d2afbbd300a99f7b0e3ab1786034cb0785ca081a7ba", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [RsaPkcs1Sha256], expires = "2037-09-07")
 pub Anchor tpm_ek_nuvoton_root_ca_2011() { return anchor_der(tpm_ek_nuvoton_root_ca_2011_der()); }
 
+/// The DER bytes of Nuvoton's Nuvoton TPM Root CA 2011 certificate.
 pub List(Int) tpm_ek_nuvoton_root_ca_2011_der() {
     return [
         48, 130, 3, 146, 48, 130, 2, 122, 160, 3, 2, 1, 2, 2, 8, 24, 40, 39, 121, 30, 206, 195, 241, 48,
@@ -1501,10 +1533,11 @@ pub List(Int) tpm_ek_nuvoton_root_ca_2011_der() {
     ];
 }
 
-// Nuvoton: Nuvoton TPM Root CA 2012 (Rsa2048, until 2041-03-19).
+/// Nuvoton: Nuvoton TPM Root CA 2012 (Rsa2048, until 2041-03-19).
 @anchor(kind = TpmEk(Nuvoton), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (Nuvoton/RootCA/Nuvoton TPM Root CA 2012.cer)", fingerprint = "sha256:dc79aaba3d09f42a9da4ecd91db0289214e56c16e4201be6ae67433ad273c6dc", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [RsaPkcs1Sha256], expires = "2041-03-19")
 pub Anchor tpm_ek_nuvoton_root_ca_2012() { return anchor_der(tpm_ek_nuvoton_root_ca_2012_der()); }
 
+/// The DER bytes of Nuvoton's Nuvoton TPM Root CA 2012 certificate.
 pub List(Int) tpm_ek_nuvoton_root_ca_2012_der() {
     return [
         48, 130, 3, 146, 48, 130, 2, 122, 160, 3, 2, 1, 2, 2, 8, 107, 115, 20, 169, 17, 170, 153, 19, 48,
@@ -1549,10 +1582,11 @@ pub List(Int) tpm_ek_nuvoton_root_ca_2012_der() {
     ];
 }
 
-// Nuvoton: Nuvoton TPM Root CA 2110 (EcP256, until 2035-10-15).
+/// Nuvoton: Nuvoton TPM Root CA 2110 (EcP256, until 2035-10-15).
 @anchor(kind = TpmEk(Nuvoton), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (Nuvoton/RootCA/Nuvoton TPM Root CA 2110.cer)", fingerprint = "sha256:4aebe77a51ed29959a7f9f5e07a24a558dee8167f3985d724995a541c258dfda", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [EcdsaP256Sha256, EcdsaP256Sha384], expires = "2035-10-15")
 pub Anchor tpm_ek_nuvoton_root_ca_2110() { return anchor_der(tpm_ek_nuvoton_root_ca_2110_der()); }
 
+/// The DER bytes of Nuvoton's Nuvoton TPM Root CA 2110 certificate.
 pub List(Int) tpm_ek_nuvoton_root_ca_2110_der() {
     return [
         48, 130, 2, 6, 48, 130, 1, 172, 160, 3, 2, 1, 2, 2, 8, 63, 147, 47, 157, 153, 60, 22, 187, 48,
@@ -1580,10 +1614,11 @@ pub List(Int) tpm_ek_nuvoton_root_ca_2110_der() {
     ];
 }
 
-// Nuvoton: Nuvoton TPM Root CA 2111 (EcP256, until 2037-09-07).
+/// Nuvoton: Nuvoton TPM Root CA 2111 (EcP256, until 2037-09-07).
 @anchor(kind = TpmEk(Nuvoton), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (Nuvoton/RootCA/Nuvoton TPM Root CA 2111.cer)", fingerprint = "sha256:cd8185ff8995ed09811970090a8c36fafab34ef87f47fa51fdb9ecf95c9c2e04", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [EcdsaP256Sha256, EcdsaP256Sha384], expires = "2037-09-07")
 pub Anchor tpm_ek_nuvoton_root_ca_2111() { return anchor_der(tpm_ek_nuvoton_root_ca_2111_der()); }
 
+/// The DER bytes of Nuvoton's Nuvoton TPM Root CA 2111 certificate.
 pub List(Int) tpm_ek_nuvoton_root_ca_2111_der() {
     return [
         48, 130, 2, 7, 48, 130, 1, 173, 160, 3, 2, 1, 2, 2, 9, 0, 224, 136, 81, 107, 202, 49, 251, 134,
@@ -1611,10 +1646,11 @@ pub List(Int) tpm_ek_nuvoton_root_ca_2111_der() {
     ];
 }
 
-// Nuvoton: Nuvoton TPM Root CA 2112 (EcP256, until 2041-03-19).
+/// Nuvoton: Nuvoton TPM Root CA 2112 (EcP256, until 2041-03-19).
 @anchor(kind = TpmEk(Nuvoton), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (Nuvoton/RootCA/Nuvoton TPM Root CA 2112.cer)", fingerprint = "sha256:66e3a1013d4f697700f731e7d68c69b58351f90ec9580d85862d020ab4abf1af", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [EcdsaP256Sha256, EcdsaP256Sha384], expires = "2041-03-19")
 pub Anchor tpm_ek_nuvoton_root_ca_2112() { return anchor_der(tpm_ek_nuvoton_root_ca_2112_der()); }
 
+/// The DER bytes of Nuvoton's Nuvoton TPM Root CA 2112 certificate.
 pub List(Int) tpm_ek_nuvoton_root_ca_2112_der() {
     return [
         48, 130, 2, 6, 48, 130, 1, 173, 160, 3, 2, 1, 2, 2, 9, 0, 233, 143, 125, 225, 241, 170, 196, 215,
@@ -1642,10 +1678,11 @@ pub List(Int) tpm_ek_nuvoton_root_ca_2112_der() {
     ];
 }
 
-// Nuvoton: NuvotonTPMRootCA2210 (EcP384, until 2052-03-07).
+/// Nuvoton: NuvotonTPMRootCA2210 (EcP384, until 2052-03-07).
 @anchor(kind = TpmEk(Nuvoton), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (Nuvoton/RootCA/Nuvoton TPM Root CA 2210.cer)", fingerprint = "sha256:fc61abbc18100f460205ebe09d8c3e6995ac2be2234344a7facb62e15f9a7584", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [EcdsaP384Sha384, EcdsaP384Sha256], expires = "2052-03-07")
 pub Anchor tpm_ek_nuvoton_root_ca_2210() { return anchor_der(tpm_ek_nuvoton_root_ca_2210_der()); }
 
+/// The DER bytes of Nuvoton's NuvotonTPMRootCA2210 certificate.
 pub List(Int) tpm_ek_nuvoton_root_ca_2210_der() {
     return [
         48, 130, 2, 29, 48, 130, 1, 163, 160, 3, 2, 1, 2, 2, 1, 1, 48, 10, 6, 8, 42, 134, 72, 206,
@@ -1674,10 +1711,11 @@ pub List(Int) tpm_ek_nuvoton_root_ca_2210_der() {
     ];
 }
 
-// Nuvoton: NuvotonTPMRootCA2211 (EcP384, until 2052-03-07).
+/// Nuvoton: NuvotonTPMRootCA2211 (EcP384, until 2052-03-07).
 @anchor(kind = TpmEk(Nuvoton), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (Nuvoton/RootCA/Nuvoton TPM Root CA 2211.cer)", fingerprint = "sha256:2bbc5db224b8f28a6d2cf336d4da7ab21c8c490e3d60ef497801dc0b6ac00227", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [EcdsaP384Sha384, EcdsaP384Sha256], expires = "2052-03-07")
 pub Anchor tpm_ek_nuvoton_root_ca_2211() { return anchor_der(tpm_ek_nuvoton_root_ca_2211_der()); }
 
+/// The DER bytes of Nuvoton's NuvotonTPMRootCA2211 certificate.
 pub List(Int) tpm_ek_nuvoton_root_ca_2211_der() {
     return [
         48, 130, 2, 28, 48, 130, 1, 163, 160, 3, 2, 1, 2, 2, 1, 1, 48, 10, 6, 8, 42, 134, 72, 206,
@@ -1706,10 +1744,11 @@ pub List(Int) tpm_ek_nuvoton_root_ca_2211_der() {
     ];
 }
 
-// QC: Microsoft TPM Root Certificate Authority 2014 (Rsa4096, until 2039-12-10).
+/// QC: Microsoft TPM Root Certificate Authority 2014 (Rsa4096, until 2039-12-10).
 @anchor(kind = TpmEk(QC), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (QC/RootCA/Microsoft TPM Root Certificate Authority 2014.cer)", fingerprint = "sha256:870c7a35ceab3d59979f2c6a524042d404cb71518004350925fb2ced79a999da", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [RsaPkcs1Sha256], expires = "2039-12-10")
 pub Anchor tpm_ek_qc_microsoft_tpm_root_certificate_authority_2014() { return anchor_der(tpm_ek_qc_microsoft_tpm_root_certificate_authority_2014_der()); }
 
+/// The DER bytes of QC's Microsoft TPM Root Certificate Authority 2014 certificate.
 pub List(Int) tpm_ek_qc_microsoft_tpm_root_certificate_authority_2014_der() {
     return [
         48, 130, 5, 245, 48, 130, 3, 221, 160, 3, 2, 1, 2, 2, 16, 93, 182, 48, 78, 12, 191, 39, 191, 73,
@@ -1779,10 +1818,11 @@ pub List(Int) tpm_ek_qc_microsoft_tpm_root_certificate_authority_2014_der() {
     ];
 }
 
-// QC: Qualcomm WES Secure Provisioning Root v2 (EcP521, until 2053-02-14).
+/// QC: Qualcomm WES Secure Provisioning Root v2 (EcP521, until 2053-02-14).
 @anchor(kind = TpmEk(QC), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (QC/RootCA/qwes_prod_ek_provisioning_root.cer)", fingerprint = "sha256:87c849b6ca87a58a0af4031531e49216d149e62a52ebea5df1805819cf44250e", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [EcdsaP521Sha512], expires = "2053-02-14")
 pub Anchor tpm_ek_qc_qwes_prod_ek_provisioning_root() { return anchor_der(tpm_ek_qc_qwes_prod_ek_provisioning_root_der()); }
 
+/// The DER bytes of QC's Qualcomm WES Secure Provisioning Root v2 certificate.
 pub List(Int) tpm_ek_qc_qwes_prod_ek_provisioning_root_der() {
     return [
         48, 130, 2, 206, 48, 130, 2, 48, 160, 3, 2, 1, 2, 2, 9, 0, 130, 117, 165, 44, 236, 33, 187, 251,
@@ -1819,10 +1859,11 @@ pub List(Int) tpm_ek_qc_qwes_prod_ek_provisioning_root_der() {
     ];
 }
 
-// STMicro: GlobalSign Trusted Platform Module Root CA (Rsa2048, until 2049-03-18).
+/// STMicro: GlobalSign Trusted Platform Module Root CA (Rsa2048, until 2049-03-18).
 @anchor(kind = TpmEk(STMicro), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (STMicro/RootCA/GlobalSign Trusted Computing CA.crt)", fingerprint = "sha256:f27bf02c6e00c73d915eeb6a6a2f5fbf0c31ae0393149e6b5c31e41b113841c3", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [RsaPkcs1Sha256], expires = "2049-03-18")
 pub Anchor tpm_ek_stmicro_globalsign_trusted_computing_ca() { return anchor_der(tpm_ek_stmicro_globalsign_trusted_computing_ca_der()); }
 
+/// The DER bytes of STMicro's GlobalSign Trusted Platform Module Root CA certificate.
 pub List(Int) tpm_ek_stmicro_globalsign_trusted_computing_ca_der() {
     return [
         48, 130, 3, 215, 48, 130, 2, 191, 160, 3, 2, 1, 2, 2, 11, 4, 0, 0, 0, 0, 1, 32, 25, 9,
@@ -1870,10 +1911,11 @@ pub List(Int) tpm_ek_stmicro_globalsign_trusted_computing_ca_der() {
     ];
 }
 
-// STMicro: GlobalSign Trusted Platform Module ECC Root CA (EcP384, until 2038-01-19).
+/// STMicro: GlobalSign Trusted Platform Module ECC Root CA (EcP384, until 2038-01-19).
 @anchor(kind = TpmEk(STMicro), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (STMicro/RootCA/GlobalSign Trusted Platform Module ECC Root CA.crt)", fingerprint = "sha256:5a8c7b5eb888cfce9322068e80e82b28b554ffeb7fdc9638dcb3763077401d26", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [EcdsaP384Sha384, EcdsaP384Sha256], expires = "2038-01-19")
 pub Anchor tpm_ek_stmicro_globalsign_trusted_platform_module_ecc_root_ca() { return anchor_der(tpm_ek_stmicro_globalsign_trusted_platform_module_ecc_root_ca_der()); }
 
+/// The DER bytes of STMicro's GlobalSign Trusted Platform Module ECC Root CA certificate.
 pub List(Int) tpm_ek_stmicro_globalsign_trusted_platform_module_ecc_root_ca_der() {
     return [
         48, 130, 2, 179, 48, 130, 2, 58, 160, 3, 2, 1, 2, 2, 14, 69, 220, 156, 140, 21, 21, 219, 89, 208,
@@ -1908,10 +1950,11 @@ pub List(Int) tpm_ek_stmicro_globalsign_trusted_platform_module_ecc_root_ca_der(
     ];
 }
 
-// STMicro: STM TPM EK Root CA (Rsa2048, until 2039-12-31; cross-certified, Windows trusts it as a root).
+/// STMicro: STM TPM EK Root CA (Rsa2048, until 2039-12-31; cross-certified, Windows trusts it as a root).
 @anchor(kind = TpmEk(STMicro), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (STMicro/RootCA/ST TPM Root Certificate.crt)", fingerprint = "sha256:f8e37a86b689a20a6cc0c40cc3f81fb130fa9f44ce7ffa60d62590aaf87273a9", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [RsaPkcs1Sha256], expires = "2039-12-31")
 pub Anchor tpm_ek_stmicro_st_tpm_root_certificate() { return anchor_der(tpm_ek_stmicro_st_tpm_root_certificate_der()); }
 
+/// The DER bytes of STMicro's STM TPM EK Root CA certificate.
 pub List(Int) tpm_ek_stmicro_st_tpm_root_certificate_der() {
     return [
         48, 130, 4, 12, 48, 130, 2, 244, 160, 3, 2, 1, 2, 2, 11, 4, 0, 0, 0, 0, 1, 34, 193, 108,
@@ -1961,10 +2004,11 @@ pub List(Int) tpm_ek_stmicro_st_tpm_root_certificate_der() {
     ];
 }
 
-// STMicro: STM TPM ECC Root CA 01 (EcP384, until 2038-01-19; cross-certified, Windows trusts it as a root).
+/// STMicro: STM TPM ECC Root CA 01 (EcP384, until 2038-01-19; cross-certified, Windows trusts it as a root).
 @anchor(kind = TpmEk(STMicro), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (STMicro/RootCA/STM TPM ECC Root CA 01.crt)", fingerprint = "sha256:c541d7e5b9e3f935621acbd403896225ec641036c9ae3b5f7ac793a606ff9b79", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [EcdsaP384Sha384, EcdsaP384Sha256], expires = "2038-01-19")
 pub Anchor tpm_ek_stmicro_stm_tpm_ecc_root_ca_01() { return anchor_der(tpm_ek_stmicro_stm_tpm_ecc_root_ca_01_der()); }
 
+/// The DER bytes of STMicro's STM TPM ECC Root CA 01 certificate.
 pub List(Int) tpm_ek_stmicro_stm_tpm_ecc_root_ca_01_der() {
     return [
         48, 130, 2, 200, 48, 130, 2, 79, 160, 3, 2, 1, 2, 2, 14, 71, 44, 203, 167, 243, 157, 176, 11, 219,
@@ -2000,10 +2044,11 @@ pub List(Int) tpm_ek_stmicro_stm_tpm_ecc_root_ca_01_der() {
     ];
 }
 
-// STMicro: STSAFE ECC Root CA 02 (EcP521, until 9999-12-31).
+/// STMicro: STSAFE ECC Root CA 02 (EcP521, until 9999-12-31).
 @anchor(kind = TpmEk(STMicro), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (STMicro/RootCA/STSAFE ECC Root CA 02.cer)", fingerprint = "sha256:fd1e7b68accd825636b27b3177c67402d463a7f04c97b6c47ab705fcdc1a04f6", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [EcdsaP521Sha512], expires = "9999-12-31")
 pub Anchor tpm_ek_stmicro_stsafe_ecc_root_ca_02() { return anchor_der(tpm_ek_stmicro_stsafe_ecc_root_ca_02_der()); }
 
+/// The DER bytes of STMicro's STSAFE ECC Root CA 02 certificate.
 pub List(Int) tpm_ek_stmicro_stsafe_ecc_root_ca_02_der() {
     return [
         48, 130, 2, 90, 48, 130, 1, 187, 160, 3, 2, 1, 2, 2, 6, 85, 29, 32, 0, 1, 2, 48, 10, 6,
@@ -2035,10 +2080,11 @@ pub List(Int) tpm_ek_stmicro_stsafe_ecc_root_ca_02_der() {
     ];
 }
 
-// STMicro: STSAFE RSA Root CA 02 (Rsa4096, until 9999-12-31).
+/// STMicro: STSAFE RSA Root CA 02 (Rsa4096, until 9999-12-31).
 @anchor(kind = TpmEk(STMicro), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (STMicro/RootCA/STSAFE RSA Root CA 02.cer)", fingerprint = "sha256:c8f179943356e13d9d84b100201cefabbf408880241e5329e60d950ce1dea623", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [RsaPkcs1Sha256], expires = "9999-12-31")
 pub Anchor tpm_ek_stmicro_stsafe_rsa_root_ca_02() { return anchor_der(tpm_ek_stmicro_stsafe_rsa_root_ca_02_der()); }
 
+/// The DER bytes of STMicro's STSAFE RSA Root CA 02 certificate.
 pub List(Int) tpm_ek_stmicro_stsafe_rsa_root_ca_02_der() {
     return [
         48, 130, 5, 94, 48, 130, 3, 70, 160, 3, 2, 1, 2, 2, 6, 85, 29, 32, 0, 0, 2, 48, 13, 6,

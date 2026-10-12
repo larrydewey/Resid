@@ -7,7 +7,8 @@
 // signed) signs the ASK (or, for VLEK, the ASVK), which signs the VCEK
 // (or VLEK), a P-384 key that signs bytes 0x000..0x2A0 of the report with
 // ECDSA SHA-384. The ARK's CRL (also PSS SHA-384) must be current at the
-// evidence time and not list the ASK. Collateral comes from anywhere (the
+// evidence time, not list the ASK, and carry a CRL number at least the
+// product's floor (snp_crl_floor). Collateral comes from anywhere (the
 // host, the KDS): the chain decides whether it counts.
 //
 // Signer-claim binding: REPORTED_TCB must equal the TCB the VCEK
@@ -31,8 +32,9 @@ import "../challenge_bind.resid";
 import "../challenge_export.resid";
 import "../dev/device.resid";
 
-// struct attestation_report (SEV-SNP firmware ABI, versions 2, 3 and 5),
-// 1184 bytes, little-endian. Bytes 0x000..0x2A0 are signed.
+/// An SEV-SNP attestation report, the firmware ABI's struct attestation_report.
+/// Versions 2, 3 and 5; 1184 bytes, little-endian. Bytes 0x000..0x2A0 are
+/// signed. Each field's annotation names who controls its value.
 @layout(le) @signed(sig = sig_r, span = 0..672)
 pub type SnpReport = {
     @firmware @check(version == 2 || version == 3 || version == 5) UInt(32) version;
@@ -77,18 +79,30 @@ pub type SnpReport = {
     @reserved(368);
 };
 
+/// The DER certificates and CRL that chain a report to an AMD root.
+/// `vcek_der` is the VCEK or VLEK, `ask_der` the ASK or ASVK, and `crl_der`
+/// the ARK's CRL; they may come from any source, the chain decides.
 pub type SnpCollateral = { List(UInt(8)) vcek_der; List(UInt(8)) ask_der; List(UInt(8)) crl_der; };
 
-// A TCB as its security patch levels (Turin adds fmc; 0 before it).
+/// A TCB as its per-component security patch levels.
+/// `fmc` exists only on Turin and is 0 for earlier products.
 pub type TcbVersion = { Int fmc; Int bootloader; Int tee; Int snp; Int microcode; };
 
+/// The appraisal policy for an SNP report, checked by `snp_appraise`.
+/// `min_tcb` is the floor for the committed and reported TCB, and
+/// `measurements_hex` must name at least one launch measurement. Empty
+/// `id_key_digests_hex` or `host_data_hex` lists leave that field unchecked.
 pub type SnpPolicy = { TcbVersion min_tcb; List(Str) measurements_hex; Int vmpl; Bool allow_migration_agent; List(Str) id_key_digests_hex; List(Str) host_data_hex; };
 
-// The descriptors whose replies carry an SNP report.
+/// Returns the device descriptors whose replies carry an SNP report.
 pub List(Str) snp_descriptors() { return ["sev_guest.snp_get_report"]; }
 
 // ─── TCB (§3.2 tcb_ge) ──────────────────────────────────────────────
 
+/// Decodes the packed TCB word `v` using the layout of `product`.
+/// "Turin" reads fmc, bootloader, tee and snp from bytes 0-3; any other
+/// product reads bootloader and tee from bytes 0-1, snp from byte 6, and
+/// sets fmc to 0. Microcode is byte 7 in both.
 pub TcbVersion snp_tcb(Str product, Int v) {
     Int b0 = v & 255;
     Int b1 = (v >> 8) & 255;
@@ -100,19 +114,25 @@ pub TcbVersion snp_tcb(Str product, Int v) {
     return TcbVersion {.fmc = 0, .bootloader = b0, .tee = b1, .snp = b6, .microcode = b7};
 }
 
-// Every component at least the floor's: SPLs are per component, so no
-// order on the packed word is meaningful.
+/// Returns true when every component of `v` is at least that of `floor`.
+/// Patch levels are per component, so the packed word is never compared.
 pub Bool tcb_ge(TcbVersion v, TcbVersion floor) {
     return v.fmc >= floor.fmc && v.bootloader >= floor.bootloader && v.tee >= floor.tee && v.snp >= floor.snp && v.microcode >= floor.microcode;
 }
 
+/// Returns true when `a` and `b` have equal patch levels in every component.
 pub Bool tcb_eq(TcbVersion a, TcbVersion b) { return tcb_ge(a, b) && tcb_ge(b, a); }
 
 // ─── The report's own facts ─────────────────────────────────────────
 
+/// Returns the report's SIGNING_KEY field (flags bits 2-4).
+/// 0 means the VCEK signed it and 1 the VLEK.
 pub Int snp_signing_key(SnpReport r) { return ((Int) r.flags >> 2) & 7; }
+/// Returns true when the report masks its CHIP_ID (flags bit 1).
 pub Bool snp_chip_masked(SnpReport r) { return ((Int) r.flags & 2) != 0; }
+/// Returns true when the guest policy allows debugging (policy bit 19).
 pub Bool snp_policy_debug(SnpReport r) { return (((Int) r.policy >> 19) & 1) != 0; }
+/// Returns true when the guest policy allows a migration agent (bit 18).
 pub Bool snp_policy_migrate_ma(SnpReport r) { return (((Int) r.policy >> 18) & 1) != 0; }
 
 // The CPUID family a product's reports name (versions 3 and later).
@@ -120,8 +140,10 @@ Int snp_family(Str product) { return if (product == "Turin") { 26 } else { 25 };
 
 // ─── Verification (§3.2) ────────────────────────────────────────────
 
-// The P-384 public key of the VCEK, checked against the chain and the
-// report's claims, or why not.
+/// Parses `report` and verifies its signature, chain and signer claims.
+/// Checks the anchor `root`, the ARK/ASK/VCEK chain and CRL in `col` at
+/// time `t`, and binds the VCEK's TCB, chip ID and product to the report.
+/// Returns the report, or the first VerifyError; freshness is not checked.
 @verify_internal
 pub Result(SnpReport, VerifyError) snp_check(List(UInt(8)) report, Anchor root, SnpCollateral col, EvidenceTime t) {
     Bool vcek_kind = root.kind == "AmdVcek";
@@ -182,9 +204,10 @@ List(Int) snp_be(List(UInt(8)) le) { return snp_be_at(le, 47, ListBuf()); }
 List(Int) snp_be_at(List(UInt(8)) le, Int i, ListBuf(Int) acc) { return if (i < 0) { acc.finish() } else { snp_be_at(le, i - 1, acc.push((Int) le[i])) }; }
 
 // ─── Collateral floors (§3.4) ───────────────────────────────────────
-// The lowest CRL number accepted per product: a CRL older than one
-// already seen is refused whatever the clock says. The numbers AMD's KDS
-// served on 2026-10-11; raised with each release.
+/// Returns the lowest CRL number accepted for `product`, 0 if unknown.
+/// A CRL older than one already seen is refused whatever the clock says.
+/// The numbers are those AMD's KDS served on 2026-10-11, raised with each
+/// release.
 pub Int snp_crl_floor(Str product) {
     if (product == "Milan") { return 12; }
     if (product == "Genoa") { return 11; }
@@ -192,8 +215,9 @@ pub Int snp_crl_floor(Str product) {
     return 0;
 }
 
-// The CRL Number extension (2.5.29.20) of a CRL whose signature was
-// checked, or -1: TBSCertList's [0] extensions, walked element by element.
+/// Returns the CRL Number extension (2.5.29.20) of `crl`, or -1 if absent.
+/// Walks TBSCertList's [0] extensions element by element; it does not check
+/// the signature, so call it only on a CRL already verified.
 pub Int snp_crl_number(List(Int) crl) {
     Der outer = der_top(crl);
     Der tbs = der_child(crl, outer);
@@ -261,7 +285,9 @@ Bool snp_zero_from(List(Int) b, Int i) { return i >= b.len() || (b[i] == 0 && sn
 
 Int snp_rp(ChallengeRecord c) { return if (c.bind.len() > 0) { q_rp_bound() } else { 0 }; }
 
-// Fresh for the holder of `c`: the report carries challenge_value(c).
+/// Verifies an SNP report as fresh for the holder of challenge `c`.
+/// The report data must carry challenge_value(c), and the challenge is
+/// spent; otherwise checks as `snp_check`.
 @primitive(verify, anchor = root, gives = [fresh], time = t, format = SnpReport, kinds = [AmdVcek, AmdVlek], algorithms = [RsaPss4096Sha384, EcdsaP384Sha384], inputs = [report, c, col, t])
 pub Result(Verified(SnpReport), VerifyError) snp_verify(List(UInt(8)) report, ChallengeRecord c, Anchor root, SnpCollateral col, EvidenceTime t) {
     SnpReport r = snp_check(report, root, col, t)?;
@@ -270,8 +296,9 @@ pub Result(Verified(SnpReport), VerifyError) snp_verify(List(UInt(8)) report, Ch
     return Ok(vf_make(r, root, q_fresh() | snp_rp(c), c, 0, none, none, t, "SnpReport"));
 }
 
-// Fresh and KeyBound(kem, pk): the report carries
-// challenge_with_key(challenge_value(c), kem, sk) for the sk behind pk.
+/// Verifies an SNP report as fresh and bound to the attester's key `pk`.
+/// The report must carry challenge_with_key(challenge_value(c), kem, sk)
+/// for the sk behind `pk`; a malformed `kem` or `pk` is refused.
 @primitive(verify, anchor = root, gives = [fresh, key_bound], time = t, format = SnpReport, kinds = [AmdVcek, AmdVlek], algorithms = [RsaPss4096Sha384, EcdsaP384Sha384], inputs = [report, c, col, t, kem, pk])
 pub Result(Verified(SnpReport), VerifyError) snp_verify_key_bound(List(UInt(8)) report, ChallengeRecord c, Anchor root, SnpCollateral col, EvidenceTime t, Int kem, List(Int) pk) {
     if (!hpke_kem_ok(kem) || !vf_pk_ok(kem, pk)) { return Err(Refused("snp_verify_key_bound", "the attester's public key is empty or malformed for the KEM")); }
@@ -281,9 +308,10 @@ pub Result(Verified(SnpReport), VerifyError) snp_verify_key_bound(List(UInt(8)) 
     return Ok(vf_make(r, root, q_fresh() | q_key_bound() | snp_rp(c), c, kem, pk, none, t, "SnpReport"));
 }
 
-// Fresh and ChannelBound: the report carries
-// challenge_with_channel(challenge_value(c), e') for the attester's end of
-// the connection whose other end is e.
+/// Verifies an SNP report as fresh and bound to the channel of `e`.
+/// The report must carry challenge_with_channel(challenge_value(c), e')
+/// for the attester's end e' of the connection whose other end is `e`.
+/// Needs the `declassify` capability.
 @primitive(verify, anchor = root, gives = [fresh, channel_bound], time = t, format = SnpReport, kinds = [AmdVcek, AmdVlek], algorithms = [RsaPss4096Sha384, EcdsaP384Sha384], inputs = [report, c, col, t, e])
 @requires(declassify)
 pub Result(Verified(SnpReport), VerifyError) snp_verify_channel_bound(List(UInt(8)) report, ChallengeRecord c, Anchor root, SnpCollateral col, EvidenceTime t, ChannelExporter e) {
@@ -294,8 +322,9 @@ pub Result(Verified(SnpReport), VerifyError) snp_verify_channel_bound(List(UInt(
     return Ok(vf_make(r, root, q_fresh() | q_channel_bound() | snp_rp(c), c, 0, none, vf_channel_id(e), t, "SnpReport"));
 }
 
-// Delivered: a record imported without a SpentStore may be replayed
-// within its lifetime, so this never satisfies a decision (§6.1).
+/// Verifies an SNP report against an imported replayable record `c`.
+/// Gives only Delivered: a record imported without a SpentStore may be
+/// replayed within its lifetime, so this never satisfies a decision (§6.1).
 @primitive(verify, anchor = root, gives = [delivered], time = t, format = SnpReport, kinds = [AmdVcek, AmdVlek], algorithms = [RsaPss4096Sha384, EcdsaP384Sha384], inputs = [report, c, col, t])
 pub Result(Verified(SnpReport), VerifyError) snp_verify_replayable(List(UInt(8)) report, ReplayableRecord c, Anchor root, SnpCollateral col, EvidenceTime t) {
     SnpReport r = snp_check(report, root, col, t)?;
@@ -306,13 +335,14 @@ pub Result(Verified(SnpReport), VerifyError) snp_verify_replayable(List(UInt(8))
 }
 
 // ─── Appraisal (§4) ─────────────────────────────────────────────────
-// Mandatory checks no policy turns off: DEBUG clear, the migration agent
-// only where the policy allows it, the report's own VMPL, the report
-// version and signature algorithm (the layout's checks), the committed
-// and the reported TCB both at least the floor. Then the policy's
-// measurements (one must match), ID key digests and host data (when
-// listed). The policy argument is a direct call of a @policy function
-// (E0283), which names it.
+/// Appraises a verified SNP report against `policy`.
+/// Mandatory checks no policy turns off: DEBUG clear, the migration agent
+/// only where the policy allows it, the report's own VMPL, the report
+/// version and signature algorithm (the layout's checks), the committed
+/// and the reported TCB both at least the floor. Then the policy's
+/// measurements (one must match), ID key digests and host data (when
+/// listed). The policy argument is a direct call of a @policy function
+/// (E0283), which names it.
 @primitive(appraise, from = v, policy = policy, ptype = SnpPolicy)
 pub Result(Appraised(SnpReport), VerifyError) snp_appraise(Verified(SnpReport) v, SnpPolicy policy) {
     SnpReport r = v.value;
@@ -329,8 +359,8 @@ pub Result(Appraised(SnpReport), VerifyError) snp_appraise(Verified(SnpReport) v
     return Ok(Appraised {.v = v, .policy = "SnpPolicy"});
 }
 
-// The product line where the TCB layout differs (Turin, family 1Ah, from
-// report version 3); "" for Milan and Genoa, which share theirs.
+/// Returns "Turin" when the report shows family 1Ah (version 3 or later).
+/// Otherwise returns "", the TCB layout Milan and Genoa share.
 pub Str snp_product_of(Verified(SnpReport) v) {
     return if (v.value.version >= (UInt(32)) 3 && (Int) v.value.cpuid_fam_id == 26) { "Turin" } else { "" };
 }

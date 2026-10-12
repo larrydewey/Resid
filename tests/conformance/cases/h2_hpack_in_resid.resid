@@ -29,6 +29,14 @@ Int main() {
     HpField a5 = fs2[3];
     HpField a6 = fs2[4];
     println("b2=" + a5.name + "|" + a5.value + " " + a6.name + "|" + a6.value);
+    // C.3.3 block: index 63 is the older of two dynamic entries.
+    List(Int) b5 = [0, 130, 135, 133, 191, 64, 10, 99, 117, 115, 116, 111, 109, 45, 107, 101, 121, 12, 99, 117, 115, 116, 111, 109, 45, 118, 97, 108, 117, 101];
+    Int e5 = b5.len() - 1;
+    HpBlock r7 = hp_decode_block(b5, 1, e5, r4.dyn, [HpField { .name = "", .value = "" }]);
+    List(HpField) fs5 = r7.fields;
+    HpField a9 = fs5[4];
+    HpField a10 = fs5[5];
+    println("b5=" + a9.name + "|" + a9.value + " " + a10.name + "|" + a10.value + f" dyn={r7.dyn.len()}");
     // Literal without indexing, new name.
     List(Int) b3 = [0, 0, 3, 102, 111, 111, 3, 98, 97, 114];
     Int e3 = b3.len() - 1;

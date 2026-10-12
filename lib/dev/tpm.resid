@@ -20,8 +20,11 @@
 // What narrows it instead: the descriptors are private to this module (they
 // are not `pub`), so a program reaches /dev/tpmrm0 only through the typed
 // wrappers below, which build exactly the commands they name -- GetCapability,
-// GetRandom, PCR_Read, ReadPublic, NV_ReadPublic, NV_Read and Quote with an
-// existing key -- and never a command that writes TPM state on purpose. A
+// GetRandom, PCR_Read, ReadPublic, NV_ReadPublic, NV_Read and Quote, and in
+// chains on one open file CreatePrimary (EK and AK from the TCG templates),
+// StartAuthSession, PolicySecret, ActivateCredential and FlushContext, whose
+// objects and sessions are transient -- and never a command that writes
+// persistent TPM state on purpose. A
 // manifest bound `devices = ["tpm"]` (or `["tpm.tpmrm0"]`,
 // `["tpm.tpmrm0_secret"]`) is how a dependency is limited to them.
 //
@@ -85,85 +88,86 @@ Result(List(Secret(UInt(8))), TpmError) tpm_send_secret(List(UInt(8)) c) {
     };
 }
 
-// TPM2_GetCapability.
+/// The TPM's TPM2_GetCapability answer for `capability`, from `property` on,
+/// at most `count` entries.
 @requires(device)
 pub Result(TpmCap, TpmError) tpm_get_capability(Int capability, Int property, Int count) {
     return tpm_get_capability_via(lambda(c) { tpm_send(c) }, capability, property, count);
 }
 
-// The TPM's properties from `first` on (TPM_CAP_TPM_PROPERTIES), at most
-// `count` of them.
+/// The TPM's properties from `first` on (TPM_CAP_TPM_PROPERTIES), at most
+/// `count` of them.
 @requires(device)
 pub Result(List(TpmProperty), TpmError) tpm_properties(Int first, Int count) {
     return tpm_properties_via(lambda(c) { tpm_send(c) }, first, count);
 }
 
-// The handles from `first` on (TPM_CAP_HANDLES): 0x81000000 lists the
-// persistent objects, 0x01000000 the NV indices.
+/// The handles from `first` on (TPM_CAP_HANDLES): 0x81000000 lists the
+/// persistent objects, 0x01000000 the NV indices.
 @requires(device)
 pub Result(List(Int), TpmError) tpm_handles(Int first, Int count) {
     return tpm_handles_via(lambda(c) { tpm_send(c) }, first, count);
 }
 
-// `n` (1 to 64) random bytes from the TPM's generator. Public: for a
-// nonce, not for key material.
+/// `n` (1 to 64) random bytes from the TPM's generator. Public: for a
+/// nonce, not for key material.
 @requires(device)
 pub Result(List(UInt(8)), TpmError) tpm_get_random(Int n) {
     return tpm_get_random_via(lambda(c) { tpm_send(c) }, n);
 }
 
-// TPM2_PCR_Read: at most eight digests per call; `selection` in the answer
-// says which.
+/// TPM2_PCR_Read: at most eight digests per call; `selection` in the answer
+/// says which.
 @requires(device)
 pub Result(PcrRead, TpmError) tpm_pcr_read(List(PcrSel) sel) {
     return tpm_pcr_read_via(lambda(c) { tpm_send(c) }, sel);
 }
 
-// TPM2_ReadPublic of a loaded or persistent object (an AK, the EK).
+/// TPM2_ReadPublic of a loaded or persistent object (an AK, the EK).
 @requires(device)
 pub Result(TpmPublic, TpmError) tpm_read_public(Int handle) {
     return tpm_read_public_via(lambda(c) { tpm_send(c) }, handle);
 }
 
-// TPM2_NV_ReadPublic of an NV index.
+/// TPM2_NV_ReadPublic of an NV index.
 @requires(device)
 pub Result(NvPublic, TpmError) tpm_nv_read_public(Int index) {
     return tpm_nv_read_public_via(lambda(c) { tpm_send(c) }, index);
 }
 
-// TPM2_NV_Read of `size` bytes at `offset`, authorized by `auth_handle`
-// (tpm_rh_owner(), tpm_rh_platform() or the index itself) with an empty
-// password, after NV_ReadPublic: an index read with its own authorization
-// that is not TPMA_NV_NO_DA is refused (TpmArg), since a wrong password
-// there counts toward the TPM's dictionary-attack lockout. A TPM reads at
-// most TPM_PT_NV_BUFFER_MAX bytes per command; tpm_nv_read_all reads a
-// whole index. The bytes are public (List(UInt(8))): for an index that
-// holds a secret, use tpm_nv_read_secret.
+/// TPM2_NV_Read of `size` bytes at `offset`, authorized by `auth_handle`
+/// (tpm_rh_owner(), tpm_rh_platform() or the index itself) with an empty
+/// password, after NV_ReadPublic: an index read with its own authorization
+/// that is not TPMA_NV_NO_DA is refused (TpmArg), since a wrong password
+/// there counts toward the TPM's dictionary-attack lockout. A TPM reads at
+/// most TPM_PT_NV_BUFFER_MAX bytes per command; tpm_nv_read_all reads a
+/// whole index. The bytes are public (List(UInt(8))): for an index that
+/// holds a secret, use tpm_nv_read_secret.
 @requires(device)
 pub Result(List(UInt(8)), TpmError) tpm_nv_read(Int auth_handle, Int index, Int size, Int offset) {
     return tpm_nv_read_via(lambda(c) { tpm_send(c) }, auth_handle, index, size, offset);
 }
 
-// tpm_nv_read for an index that holds a secret (a sealed key, a
-// credential): the response is received as secret bytes and only its
-// structure -- header, sizes, the session's response -- is declassified
-// (tpm2_nv_read_resp_secret), hence `declassify`.
+/// tpm_nv_read for an index that holds a secret (a sealed key, a
+/// credential): the response is received as secret bytes and only its
+/// structure -- header, sizes, the session's response -- is declassified
+/// (tpm2_nv_read_resp_secret), hence `declassify`.
 @requires(device, declassify)
 pub Result(List(Secret(UInt(8))), TpmError) tpm_nv_read_secret(Int auth_handle, Int index, Int size, Int offset) {
     return tpm_nv_read_secret_via(lambda(c) { tpm_send(c) }, lambda(c) { tpm_send_secret(c) }, auth_handle, index, size, offset);
 }
 
-// A whole NV index, in pieces of the TPM's TPM_PT_NV_BUFFER_MAX.
+/// A whole NV index, in pieces of the TPM's TPM_PT_NV_BUFFER_MAX.
 @requires(device)
 pub Result(List(UInt(8)), TpmError) tpm_nv_read_all(Int auth_handle, Int index) {
     return tpm_nv_read_all_via(lambda(c) { tpm_send(c) }, auth_handle, index);
 }
 
-// TPM2_Quote: the PCRs `sel` selects, signed by the attestation key at
-// `ak_handle` (already loaded or persistent, with an empty password) in its
-// own scheme, with `nonce` (at most 64 bytes) as the qualifying data. The
-// key's public area is read first and a key an empty password could
-// DA-count against, as far as it shows, is refused (tpm_quote_key_ok).
+/// TPM2_Quote: the PCRs `sel` selects, signed by the attestation key at
+/// `ak_handle` (already loaded or persistent, with an empty password) in its
+/// own scheme, with `nonce` (at most 64 bytes) as the qualifying data. The
+/// key's public area is read first and a key an empty password could
+/// DA-count against, as far as it shows, is refused (tpm_quote_key_ok).
 @requires(device)
 pub Result(TpmQuote, TpmError) tpm_quote(Int ak_handle, List(UInt(8)) nonce, List(PcrSel) sel) {
     return tpm_quote_via(lambda(c) { tpm_send(c) }, ak_handle, nonce, sel);
@@ -188,31 +192,31 @@ Result(List(List(UInt(8))), TpmError) tpm_outs(List(DevOut) outs, Int i, List(Li
     };
 }
 
-// The endorsement key (RSA or ECC, the TCG default template) and the
-// attestation key this TPM derives (tpm_wire.resid's tpm_ak_template):
-// their public areas and names, for a verifier's TPM2_MakeCredential. The
-// keys are made and flushed; nothing persists.
+/// The endorsement key (RSA or ECC, the TCG default template) and the
+/// attestation key this TPM derives (tpm_wire.resid's tpm_ak_template):
+/// their public areas and names, for a verifier's TPM2_MakeCredential. The
+/// keys are made and flushed; nothing persists.
 @requires(device)
 pub Result(TpmKeys, TpmError) tpm_ek_ak(Bool ecc) {
     return tpm_ek_ak_via(lambda(cs, ls) { tpm_chain(cs, ls) }, ecc);
 }
 
-// The EK certificate the manufacturer wrote for the low-range EK (TCG EK
-// Credential Profile: RSA 2048 at NV 0x01C00002, ECC NIST P-256 at
-// 0x01C0000A), read by the owner with the empty password (a hierarchy's
-// authorization, never a lockout count). DER, as the verifier's
-// tpm_ak_challenge and tpm_verify_ak take it.
+/// The EK certificate the manufacturer wrote for the low-range EK (TCG EK
+/// Credential Profile: RSA 2048 at NV 0x01C00002, ECC NIST P-256 at
+/// 0x01C0000A), read by the owner with the empty password (a hierarchy's
+/// authorization, never a lockout count). DER, as the verifier's
+/// tpm_ak_challenge and tpm_verify_ak take it.
 @requires(device)
 pub Result(List(UInt(8)), TpmError) tpm_ek_cert(Bool ecc) {
     return tpm_nv_read_all(tpm_rh_owner(), if (ecc) { 0x01C0000A } else { 0x01C00002 });
 }
 
-// The certificates of the EK's chain the manufacturer stored in the TPM
-// (TCG EK Credential Profile 2.5: NV indices 0x01C00100 to 0x01C001FF, each
-// one or more DER certificates back to back), in index order; empty when
-// it stored none (the verifier then fetches them by the certificate's
-// authority information access). Read by the owner, like the EK
-// certificate.
+/// The certificates of the EK's chain the manufacturer stored in the TPM
+/// (TCG EK Credential Profile 2.5: NV indices 0x01C00100 to 0x01C001FF, each
+/// one or more DER certificates back to back), in index order; empty when
+/// it stored none (the verifier then fetches them by the certificate's
+/// authority information access). Read by the owner, like the EK
+/// certificate.
 @requires(device)
 pub Result(List(List(UInt(8))), TpmError) tpm_ek_chain_certs() {
     List(Int) hs = tpm_handles(0x01C00100, 256)?;
@@ -226,34 +230,34 @@ Result(List(List(UInt(8))), TpmError) tpm_ek_chain_at(List(Int) hs, Int i, List(
     return tpm_ek_chain_at(hs, i + 1, acc.concat(tpm_der_split(b, 0, [])?));
 }
 
-// TPM2_ActivateCredential of a verifier's credential (tpm_credential.resid's
-// TpmCredential: blob and secret) for this TPM's EK and AK: the credential
-// back, which proves to the verifier that the AK is in the TPM whose EK it
-// sealed to. The endorsement hierarchy's password must be empty (a
-// permanent handle: a wrong one is an error, never a lockout count); the
-// AK has noDA.
+/// TPM2_ActivateCredential of a verifier's credential (tpm_credential.resid's
+/// TpmCredential: blob and secret) for this TPM's EK and AK: the credential
+/// back, which proves to the verifier that the AK is in the TPM whose EK it
+/// sealed to. The endorsement hierarchy's password must be empty (a
+/// permanent handle: a wrong one is an error, never a lockout count); the
+/// AK has noDA.
 @requires(device)
 pub Result(List(UInt(8)), TpmError) tpm_activate_credential(Bool ecc, List(UInt(8)) blob, List(UInt(8)) secret) {
     List(UInt(8)) nonce = tpm_get_random(32)?;
     return tpm_activate_credential_via(lambda(cs, ls) { tpm_chain(cs, ls) }, ecc, nonce, blob, secret);
 }
 
-// TPM2_Quote by this TPM's endorsement-hierarchy AK (the one activated):
-// the PCRs `sel` selects, `nonce` the qualifying data (at most 64 bytes).
+/// TPM2_Quote by this TPM's endorsement-hierarchy AK (the one activated):
+/// the PCRs `sel` selects, `nonce` the qualifying data (at most 64 bytes).
 @requires(device)
 pub Result(TpmQuote, TpmError) tpm_quote_ak(List(UInt(8)) nonce, List(PcrSel) sel) {
     return tpm_quote_ak_via(lambda(cs, ls) { tpm_chain(cs, ls) }, nonce, sel);
 }
 
-// Azure confidential VMs: the paravisor's report from NV index 0x01400001,
-// read with owner authorization. It is written once at boot by the HCL, not
-// made for this call, so it carries no nonce: freshness comes from a quote
-// by the AK it binds. Layout (Azure/confidential-computing-cvm-guest-
-// attestation, cvm-guest-attestation.md): a 32-byte header, then the
-// hardware report (an SNP report of 1184 bytes at offset 32, signed by the
-// AMD secure processor; or a TDX report), then the runtime claims (JSON
-// with the AK and EK public keys) whose hash the hardware report's
-// REPORT_DATA holds. Only the hardware report is signed.
+/// Azure confidential VMs: the paravisor's report from NV index 0x01400001,
+/// read with owner authorization. It is written once at boot by the HCL, not
+/// made for this call, so it carries no nonce: freshness comes from a quote
+/// by the AK it binds. Layout (Azure/confidential-computing-cvm-guest-
+/// attestation, cvm-guest-attestation.md): a 32-byte header, then the
+/// hardware report (an SNP report of 1184 bytes at offset 32, signed by the
+/// AMD secure processor; or a TDX report), then the runtime claims (JSON
+/// with the AK and EK public keys) whose hash the hardware report's
+/// REPORT_DATA holds. Only the hardware report is signed.
 @requires(device)
 pub Result(List(UInt(8)), TpmError) tpm_azure_hcl_report() {
     return tpm_nv_read_all(tpm_rh_owner(), tpm_nv_azure_hcl_report());

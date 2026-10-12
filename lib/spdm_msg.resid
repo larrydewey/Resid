@@ -28,100 +28,190 @@ import "ed25519.resid";
 
 // ─── Codes ──────────────────────────────────────────────────────────
 
+/// The request code of GET_VERSION (0x84).
 pub Int spdm_req_get_version() { return 132; }
+/// The request code of GET_CAPABILITIES (0xE1).
 pub Int spdm_req_get_capabilities() { return 225; }
+/// The request code of NEGOTIATE_ALGORITHMS (0xE3).
 pub Int spdm_req_negotiate_algorithms() { return 227; }
+/// The request code of GET_DIGESTS (0x81).
 pub Int spdm_req_get_digests() { return 129; }
+/// The request code of GET_CERTIFICATE (0x82).
 pub Int spdm_req_get_certificate() { return 130; }
+/// The request code of CHALLENGE (0x83).
 pub Int spdm_req_challenge() { return 131; }
+/// The request code of GET_MEASUREMENTS (0xE0).
 pub Int spdm_req_get_measurements() { return 224; }
+/// The request code of KEY_EXCHANGE (0xE4).
 pub Int spdm_req_key_exchange() { return 228; }
+/// The request code of FINISH (0xE5).
 pub Int spdm_req_finish() { return 229; }
+/// The request code of PSK_EXCHANGE (0xE6).
 pub Int spdm_req_psk_exchange() { return 230; }
+/// The request code of PSK_FINISH (0xE7).
 pub Int spdm_req_psk_finish() { return 231; }
+/// The request code of HEARTBEAT (0xE8).
 pub Int spdm_req_heartbeat() { return 232; }
+/// The request code of KEY_UPDATE (0xE9).
 pub Int spdm_req_key_update() { return 233; }
+/// The request code of GET_ENCAPSULATED_REQUEST (0xEA).
 pub Int spdm_req_get_encapsulated_request() { return 234; }
+/// The request code of DELIVER_ENCAPSULATED_RESPONSE (0xEB).
 pub Int spdm_req_deliver_encapsulated_response() { return 235; }
+/// The request code of END_SESSION (0xEC).
 pub Int spdm_req_end_session() { return 236; }
+/// The request code of RESPOND_IF_READY (0xFF).
 pub Int spdm_req_respond_if_ready() { return 255; }
+/// The request code of CHUNK_SEND (0x85).
 pub Int spdm_req_chunk_send() { return 133; }
+/// The request code of CHUNK_GET (0x86).
 pub Int spdm_req_chunk_get() { return 134; }
 
+/// The response code of DIGESTS (0x01).
 pub Int spdm_rsp_digests() { return 1; }
+/// The response code of CERTIFICATE (0x02).
 pub Int spdm_rsp_certificate() { return 2; }
+/// The response code of CHALLENGE_AUTH (0x03).
 pub Int spdm_rsp_challenge_auth() { return 3; }
+/// The response code of VERSION (0x04).
 pub Int spdm_rsp_version() { return 4; }
+/// The response code of CHUNK_SEND_ACK (0x05).
 pub Int spdm_rsp_chunk_send_ack() { return 5; }
+/// The response code of CHUNK_RESPONSE (0x06).
 pub Int spdm_rsp_chunk_response() { return 6; }
+/// The response code of MEASUREMENTS (0x60).
 pub Int spdm_rsp_measurements() { return 96; }
+/// The response code of CAPABILITIES (0x61).
 pub Int spdm_rsp_capabilities() { return 97; }
+/// The response code of ALGORITHMS (0x63).
 pub Int spdm_rsp_algorithms() { return 99; }
+/// The response code of KEY_EXCHANGE_RSP (0x64).
 pub Int spdm_rsp_key_exchange_rsp() { return 100; }
+/// The response code of FINISH_RSP (0x65).
 pub Int spdm_rsp_finish_rsp() { return 101; }
+/// The response code of PSK_EXCHANGE_RSP (0x66).
 pub Int spdm_rsp_psk_exchange_rsp() { return 102; }
+/// The response code of PSK_FINISH_RSP (0x67).
 pub Int spdm_rsp_psk_finish_rsp() { return 103; }
+/// The response code of HEARTBEAT_ACK (0x68).
 pub Int spdm_rsp_heartbeat_ack() { return 104; }
+/// The response code of KEY_UPDATE_ACK (0x69).
 pub Int spdm_rsp_key_update_ack() { return 105; }
+/// The response code of ENCAPSULATED_REQUEST (0x6A).
 pub Int spdm_rsp_encapsulated_request() { return 106; }
+/// The response code of ENCAPSULATED_RESPONSE_ACK (0x6B).
 pub Int spdm_rsp_encapsulated_response_ack() { return 107; }
+/// The response code of END_SESSION_ACK (0x6C).
 pub Int spdm_rsp_end_session_ack() { return 108; }
+/// The response code of ERROR (0x7F).
 pub Int spdm_rsp_error() { return 127; }
 
 // Capability flags (the responder's; the requester's share the bits it
 // has).
+
+/// The CACHE_CAP capability bit.
 pub Int spdm_cap_cache() { return 1; }
+/// The CERT_CAP capability bit.
 pub Int spdm_cap_cert() { return 2; }
+/// The CHAL_CAP capability bit.
 pub Int spdm_cap_chal() { return 4; }
+/// The MEAS_CAP value for measurements without signatures.
 pub Int spdm_cap_meas_no_sig() { return 8; }
+/// The MEAS_CAP value for signed measurements.
 pub Int spdm_cap_meas_sig() { return 16; }
+/// The MEAS_FRESH_CAP capability bit.
 pub Int spdm_cap_meas_fresh() { return 32; }
+/// The ENCRYPT_CAP capability bit.
 pub Int spdm_cap_encrypt() { return 64; }
+/// The MAC_CAP capability bit.
 pub Int spdm_cap_mac() { return 128; }
+/// The MUT_AUTH_CAP capability bit.
 pub Int spdm_cap_mut_auth() { return 256; }
+/// The KEY_EX_CAP capability bit.
 pub Int spdm_cap_key_ex() { return 512; }
+/// The mask of the two-bit PSK_CAP field (either PSK mode).
 pub Int spdm_cap_psk() { return 3072; }
+/// The PSK_CAP value for PSK with a responder context.
 pub Int spdm_cap_psk_with_context() { return 2048; }
+/// The ENCAP_CAP capability bit.
 pub Int spdm_cap_encap() { return 4096; }
+/// The HBEAT_CAP capability bit.
 pub Int spdm_cap_hbeat() { return 8192; }
+/// The KEY_UPD_CAP capability bit.
 pub Int spdm_cap_key_upd() { return 16384; }
+/// The HANDSHAKE_IN_THE_CLEAR_CAP capability bit.
 pub Int spdm_cap_handshake_in_clear() { return 32768; }
+/// The PUB_KEY_ID_CAP capability bit.
 pub Int spdm_cap_pub_key_id() { return 65536; }
+/// The CHUNK_CAP capability bit (1.2).
 pub Int spdm_cap_chunk() { return 131072; }
+/// The mask of the two-bit MULTI_KEY_CAP field (1.3).
 pub Int spdm_cap_multi_key() { return 201326592; }
 
 // Algorithms (the bits of DSP0274's tables).
+
+/// The BaseAsymAlgo bit of RSASSA-2048.
 pub Int spdm_asym_rsassa_2048() { return 1; }
+/// The BaseAsymAlgo bit of RSAPSS-2048.
 pub Int spdm_asym_rsapss_2048() { return 2; }
+/// The BaseAsymAlgo bit of RSASSA-3072.
 pub Int spdm_asym_rsassa_3072() { return 4; }
+/// The BaseAsymAlgo bit of RSAPSS-3072.
 pub Int spdm_asym_rsapss_3072() { return 8; }
+/// The BaseAsymAlgo bit of ECDSA on P-256.
 pub Int spdm_asym_ecdsa_p256() { return 16; }
+/// The BaseAsymAlgo bit of RSASSA-4096.
 pub Int spdm_asym_rsassa_4096() { return 32; }
+/// The BaseAsymAlgo bit of RSAPSS-4096.
 pub Int spdm_asym_rsapss_4096() { return 64; }
+/// The BaseAsymAlgo bit of ECDSA on P-384.
 pub Int spdm_asym_ecdsa_p384() { return 128; }
+/// The BaseAsymAlgo bit of ECDSA on P-521.
 pub Int spdm_asym_ecdsa_p521() { return 256; }
+/// The BaseAsymAlgo bit of Ed25519 (1.2).
 pub Int spdm_asym_ed25519() { return 1024; }
+/// The BaseHashAlgo bit of SHA-256.
 pub Int spdm_hash_sha256() { return 1; }
+/// The BaseHashAlgo bit of SHA-384.
 pub Int spdm_hash_sha384() { return 2; }
+/// The BaseHashAlgo bit of SHA-512.
 pub Int spdm_hash_sha512() { return 4; }
+/// The DHE group bit of secp256r1 (P-256).
 pub Int spdm_dhe_secp256r1() { return 8; }
+/// The DHE group bit of secp384r1 (P-384).
 pub Int spdm_dhe_secp384r1() { return 16; }
+/// The AEAD bit of AES-128-GCM.
 pub Int spdm_aead_aes128gcm() { return 1; }
+/// The AEAD bit of AES-256-GCM.
 pub Int spdm_aead_aes256gcm() { return 2; }
+/// The AEAD bit of ChaCha20-Poly1305.
 pub Int spdm_aead_chacha20poly1305() { return 4; }
 
 // What this library implements, as masks.
+
+/// The signature algorithms this library verifies, as a BaseAsymAlgo mask.
 pub Int spdm_asym_supported() { return 1 | 2 | 4 | 8 | 16 | 32 | 64 | 128 | 256 | 1024; }
+/// The hashes this library implements, as a BaseHashAlgo mask.
 pub Int spdm_hash_supported() { return 1 | 2 | 4; }
+/// The DHE groups this library implements: P-256 and P-384.
 pub Int spdm_dhe_supported() { return 8 | 16; }
+/// The AEADs this library implements: AES-128-GCM, AES-256-GCM and
+/// ChaCha20-Poly1305.
 pub Int spdm_aead_supported() { return 1 | 2 | 4; }
-// RAW_BIT_STREAM, SHA-256, SHA-384, SHA-512.
+/// The measurement hashes accepted, as a MeasurementHashAlgo mask:
+/// RAW_BIT_STREAM, SHA-256, SHA-384 and SHA-512.
 pub Int spdm_meas_hash_supported() { return 1 | 2 | 4 | 8; }
 
+/// The digest length in bytes of hash bit `h`, or 0 for an unknown bit.
 pub Int spdm_hash_len(Int h) { return if (h == 1) { 32 } else if (h == 2) { 48 } else if (h == 4) { 64 } else { 0 }; }
+/// The `HashAlg` of hash bit `h`; any bit other than SHA-256 or SHA-384
+/// gives SHA-512.
 pub HashAlg spdm_hash_alg(Int h) { return if (h == 1) { Sha256 } else if (h == 2) { Sha384 } else { Sha512 }; }
+/// The digest of `m` under hash bit `h`.
 pub List(Int) spdm_hash(Int h, List(Int) m) { return hash_bytes(spdm_hash_alg(h), m); }
 
+/// The signature length in bytes for BaseAsymAlgo bit `a`, or 0 for an
+/// unknown bit.
 pub Int spdm_sig_len(Int a) {
     if (a == 1 || a == 2) { return 256; }
     if (a == 4 || a == 8) { return 384; }
@@ -133,47 +223,57 @@ pub Int spdm_sig_len(Int a) {
     return 0;
 }
 
-// The DHE exchange data: X ‖ Y of the curve.
+/// The length in bytes of the DHE exchange data (X ‖ Y of the curve) for
+/// group bit `d`, or 0 for an unknown bit.
 pub Int spdm_dhe_len(Int d) { return if (d == 8) { 64 } else if (d == 16) { 96 } else { 0 }; }
+/// The curve of DHE group bit `d`: P-256 for secp256r1, else P-384.
 pub Curve spdm_dhe_curve(Int d) { return if (d == 8) { P256 } else { P384 }; }
+/// The AEAD key length in bytes: 16 for AES-128-GCM, else 32.
 pub Int spdm_aead_key_len(Int a) { return if (a == 1) { 16 } else { 32 }; }
 
-// Exactly one bit of `want` set, and it in `mask`.
+/// Whether `v` has exactly one bit set and that bit is in `mask`.
 pub Bool spdm_one_of(Int v, Int mask) { return v != 0 && (v & (v - 1)) == 0 && (v & mask) == v; }
 
 // ─── Byte helpers ───────────────────────────────────────────────────
 
+/// The little-endian integer in the `n` bytes of `b` starting at `at`.
+/// The caller checks the bounds.
 pub Int spdm_le(List(Int) b, Int at, Int n) { return if (n <= 0) { 0 } else { b[at] | (spdm_le(b, at + 1, n - 1) << 8) }; }
+/// The low `n` bytes of `v`, little-endian.
 pub List(Int) spdm_le_bytes(Int v, Int n) { return if (n <= 0) { [] } else { [v & 255].concat(spdm_le_bytes(v >> 8, n - 1)) }; }
 List(Int) sm_zeros(Int n) { return spdm_le_bytes(0, n); }
 
 // ─── The negotiated connection ──────────────────────────────────────
 
-// slack: the zero padding a binding may add after a message (PCI DOE 3,
-// else 0); version: 0x10..0x13; flags: the responder's capabilities, req_flags
-// ours; asym/hash/dhe/aead/key_schedule/req_asym/meas_hash: the selected
-// algorithm bits; opaque_fmt: 0 none, 1 the DSP0277 general format of 1.0
-// and 1.1, 2 format 1 of 1.2; multi_key: the responder's multi-key
-// connection; data_transfer_size and max_msg_size: the responder's (1.2).
+/// The negotiated connection: version, capabilities and selected algorithms.
+/// `slack` is the zero padding a binding may add after a message (PCI DOE 3,
+/// else 0); `version` is 0x10..0x13; `flags` are the responder's
+/// capabilities, `req_flags` ours; `asym`/`hash`/`dhe`/`aead`/`key_schedule`/
+/// `req_asym`/`meas_hash` are the selected algorithm bits; `opaque_fmt` is 0
+/// none, 1 the DSP0277 general format of 1.0 and 1.1, 2 format 1 of 1.2;
+/// `multi_key` is the responder's multi-key connection; `data_transfer_size`
+/// and `max_msg_size` are the responder's (1.2).
 pub type SpdmAlgs = { Int slack; Int version; Int flags; Int req_flags; Int ct_exponent; Int data_transfer_size; Int max_msg_size; Int meas_spec; Int meas_hash; Int asym; Int hash; Int dhe; Int aead; Int key_schedule; Int req_asym; Int opaque_fmt; Bool multi_key; };
 
+/// Whether the responder's capabilities include every bit of `cap`.
 pub Bool spdm_has(SpdmAlgs a, Int cap) { return (a.flags & cap) == cap; }
 
 // ─── Requests ───────────────────────────────────────────────────────
 
+/// GET_VERSION, always sent at version 1.0.
 pub List(Int) spdmq_get_version() { return [16, 132, 0, 0]; }
 
-// GET_CAPABILITIES for `ver`: our flags, CT exponent, and from 1.2 the
-// largest message we take whole and in total.
+/// GET_CAPABILITIES for `ver`: our flags, CT exponent, and from 1.2 the
+/// largest message we take whole and in total.
 pub List(Int) spdmq_get_capabilities(Int ver, Int ct_exp, Int flags, Int dts, Int max_size) {
     if (ver == 16) { return [16, 225, 0, 0]; }
     List(Int) b = [ver, 225, 0, 0, 0, ct_exp, 0, 0].concat(spdm_le_bytes(flags, 4));
     return if (ver >= 18) { b.concat(spdm_le_bytes(dts, 4)).concat(spdm_le_bytes(max_size, 4)) } else { b };
 }
 
-// NEGOTIATE_ALGORITHMS offering everything above, the DMTF measurement
-// specification, and from 1.2 opaque format 1 (and in 1.3 the responder's
-// multi-key connection when `multi_key`).
+/// NEGOTIATE_ALGORITHMS offering everything above, the DMTF measurement
+/// specification, and from 1.2 opaque format 1 (and in 1.3 the responder's
+/// multi-key connection when `multi_key`).
 pub List(Int) spdmq_negotiate_algorithms(Int ver, Bool multi_key) {
     List(Int) structs = if (ver >= 17) {
         [2, 32].concat(spdm_le_bytes(spdm_dhe_supported(), 2))
@@ -188,19 +288,22 @@ pub List(Int) spdmq_negotiate_algorithms(Int ver, Bool multi_key) {
     return [ver, 227, nstructs, 0].concat(spdm_le_bytes(6 + body.len(), 2)).concat(body);
 }
 
+/// GET_DIGESTS for `ver`.
 pub List(Int) spdmq_get_digests(Int ver) { return [ver, 129, 0, 0]; }
 
+/// GET_CERTIFICATE: `len` bytes from `offset` of the chain in `slot` (the
+/// low 4 bits), both as 16-bit fields.
 pub List(Int) spdmq_get_certificate(Int ver, Int slot, Int offset, Int len) { return [ver, 130, slot & 15, 0].concat(spdm_le_bytes(offset, 2)).concat(spdm_le_bytes(len, 2)); }
 
-// CHALLENGE: summary 0 none, 1 TCB, 255 all; a 32-byte nonce; from 1.3 an
-// 8-byte requester context.
+/// CHALLENGE: summary 0 none, 1 TCB, 255 all; a 32-byte nonce; from 1.3 an
+/// 8-byte requester context.
 pub List(Int) spdmq_challenge(Int ver, Int slot, Int summary, List(Int) nonce, List(Int) context) {
     List(Int) b = [ver, 131, slot, summary].concat(nonce);
     return if (ver >= 19) { b.concat(context) } else { b };
 }
 
-// GET_MEASUREMENTS: `op` 0 the count, 1-254 one block, 255 all; signed
-// with a 32-byte nonce and (from 1.1) a slot; from 1.3 a context.
+/// GET_MEASUREMENTS: `op` 0 the count, 1-254 one block, 255 all; signed
+/// with a 32-byte nonce and (from 1.1) a slot; from 1.3 a context.
 pub List(Int) spdmq_get_measurements(Int ver, Bool signed, Bool raw, Int op, List(Int) nonce, Int slot, List(Int) context) {
     Int attrs = (if (signed) { 1 } else { 0 }) | (if (raw && ver >= 18) { 2 } else { 0 });
     List(Int) h = [ver, 224, attrs, op];
@@ -209,8 +312,8 @@ pub List(Int) spdmq_get_measurements(Int ver, Bool signed, Bool raw, Int op, Lis
     return if (ver >= 19) { b.concat(context) } else { b };
 }
 
-// The secured-message versions we offer (DSP0277 1.0, 1.1 and 1.2), as
-// KEY_EXCHANGE or PSK_EXCHANGE opaque data in the connection's format.
+/// The secured-message versions we offer (DSP0277 1.0, 1.1 and 1.2), as
+/// KEY_EXCHANGE or PSK_EXCHANGE opaque data in the connection's format.
 pub List(Int) spdm_opaque_supported_versions(Int fmt) {
     List(Int) el = [1, 1, 3, 0, 16, 0, 17, 0, 18];
     List(Int) elem = [0, 0].concat(spdm_le_bytes(el.len(), 2)).concat(el);
@@ -220,28 +323,46 @@ pub List(Int) spdm_opaque_supported_versions(Int fmt) {
     return [];
 }
 
+/// KEY_EXCHANGE: summary type, slot, our session ID, the session policy
+/// (from 1.2; 0 before), a 32-byte random, our DHE exchange data and the
+/// opaque data.
 pub List(Int) spdmq_key_exchange(Int ver, Int summary, Int slot, Int req_sid, Int policy, List(Int) random, List(Int) exchange, List(Int) opaque) {
     return [ver, 228, summary, slot].concat(spdm_le_bytes(req_sid, 2)).concat([if (ver >= 18) { policy } else { 0 }, 0]).concat(random).concat(exchange).concat(spdm_le_bytes(opaque.len(), 2)).concat(opaque);
 }
 
+/// The 4-byte header of FINISH; when `signed`, it carries the signature flag
+/// and the requester's slot `req_slot`.
 pub List(Int) spdmq_finish_head(Int ver, Bool signed, Int req_slot) { return [ver, 229, if (signed) { 1 } else { 0 }, if (signed) { req_slot } else { 0 }]; }
 
+/// PSK_EXCHANGE: summary type, the session policy (from 1.2; 0 before), our
+/// session ID, the PSK hint, our context and the opaque data.
 pub List(Int) spdmq_psk_exchange(Int ver, Int summary, Int req_sid, Int policy, List(Int) hint, List(Int) context, List(Int) opaque) {
     return [ver, 230, summary, if (ver >= 18) { policy } else { 0 }].concat(spdm_le_bytes(req_sid, 2)).concat(spdm_le_bytes(hint.len(), 2)).concat(spdm_le_bytes(context.len(), 2)).concat(spdm_le_bytes(opaque.len(), 2)).concat(hint).concat(context).concat(opaque);
 }
 
+/// The 4-byte header of PSK_FINISH.
 pub List(Int) spdmq_psk_finish_head(Int ver) { return [ver, 231, 0, 0]; }
+/// HEARTBEAT for `ver`.
 pub List(Int) spdmq_heartbeat(Int ver) { return [ver, 232, 0, 0]; }
-// op 1 UpdateKey, 2 UpdateAllKeys, 3 VerifyNewKey.
+/// KEY_UPDATE: `op` 1 UpdateKey, 2 UpdateAllKeys, 3 VerifyNewKey; the low
+/// byte of `tag`.
 pub List(Int) spdmq_key_update(Int ver, Int op, Int tag) { return [ver, 233, op, tag & 255]; }
+/// END_SESSION, asking the responder to clear its negotiated state when
+/// `clear_state`.
 pub List(Int) spdmq_end_session(Int ver, Bool clear_state) { return [ver, 236, if (clear_state) { 1 } else { 0 }, 0]; }
+/// GET_ENCAPSULATED_REQUEST for `ver`.
 pub List(Int) spdmq_get_encapsulated_request(Int ver) { return [ver, 234, 0, 0]; }
+/// DELIVER_ENCAPSULATED_RESPONSE: the low byte of `request_id`, then our
+/// `response` to the encapsulated request.
 pub List(Int) spdmq_deliver_encapsulated_response(Int ver, Int request_id, List(Int) response) { return [ver, 235, request_id & 255, 0].concat(response); }
+/// RESPOND_IF_READY for the request `code` and the `token` from its
+/// ResponseNotReady error.
 pub List(Int) spdmq_respond_if_ready(Int ver, Int code, Int token) { return [ver, 255, code, token]; }
+/// CHUNK_GET of chunk `seq` (a 16-bit field) of the large response `handle`.
 pub List(Int) spdmq_chunk_get(Int ver, Int handle, Int seq) { return [ver, 134, 0, handle].concat(spdm_le_bytes(seq, 2)); }
 
-// CHUNK_SEND of chunk `seq` of a message of `total` bytes; the first
-// carries the total, the last says so.
+/// CHUNK_SEND of chunk `seq` of a message of `total` bytes; the first
+/// carries the total, the last says so.
 pub List(Int) spdmq_chunk_send(Int ver, Int handle, Int seq, Bool last, Int total, List(Int) chunk) {
     List(Int) size = if (seq == 0) { spdm_le_bytes(total, 4) } else { [] };
     return [ver, 133, if (last) { 1 } else { 0 }, handle].concat(spdm_le_bytes(seq, 2)).concat([0, 0]).concat(spdm_le_bytes(chunk.len(), 4)).concat(size).concat(chunk);
@@ -249,18 +370,20 @@ pub List(Int) spdmq_chunk_send(Int ver, Int handle, Int seq, Bool last, Int tota
 
 // ─── Responses ──────────────────────────────────────────────────────
 
-// ERROR: the code, its data, and the extended data. Codes: 1
-// InvalidRequest, 3 Busy, 4 UnexpectedRequest, 5 Unspecified, 6
-// DecryptError, 7 UnsupportedRequest, 8 RequestInFlight, 9
-// InvalidResponseCode, 10 SessionLimitExceeded, 11 SessionRequired, 12
-// ResetRequired, 13 ResponseTooLarge, 14 RequestTooLarge, 15
-// LargeResponse, 16 MessageLost, 65 VersionMismatch, 66 ResponseNotReady,
-// 67 RequestResynch.
+/// An ERROR response: the error code, its data byte, and the extended data.
+/// Codes include 1 InvalidRequest, 3 Busy, 4 UnexpectedRequest, 5
+/// Unspecified, 7 UnsupportedRequest, 65 VersionMismatch, 66
+/// ResponseNotReady and 67 RequestResynch (`spdm_error_name` names them all).
 pub type SpdmErr = { Int code; Int data; List(Int) ext; };
 
+/// Whether `r` is an ERROR response of at least four bytes.
 pub Bool spdm_is_error(List(Int) r) { return r.len() >= 4 && r[1] == 127; }
+/// The fields of the ERROR response `r`; call it only when `spdm_is_error`
+/// holds.
 pub SpdmErr spdm_error(List(Int) r) { return SpdmErr {.code = r[2], .data = r[3], .ext = r[4..r.len()]}; }
 
+/// The DSP0274 name of an error code, or "error 0x.." for one it does not
+/// define.
 pub Str spdm_error_name(Int code) {
     List(Str) names = ["", "InvalidRequest", "", "Busy", "UnexpectedRequest", "Unspecified", "DecryptError", "UnsupportedRequest", "RequestInFlight", "InvalidResponseCode", "SessionLimitExceeded", "SessionRequired", "ResetRequired", "ResponseTooLarge", "RequestTooLarge", "LargeResponse", "MessageLost", "InvalidPolicy"];
     if (code >= 0 && code < names.len() && names[code] != "") { return names[code]; }
@@ -285,9 +408,12 @@ Result(Bool, Str) sm_head(List(Int) r, Int ver, Int code, Int min, Str what) {
     return Ok(true);
 }
 
-// VERSION: the versions offered, as 0x10..0x14, and its length.
+/// A decoded VERSION response: the versions offered, as 0x10..0x14, and the
+/// message's length without padding.
 pub type SpdmVersions = { List(Int) versions; Int len; };
 
+/// Decodes a VERSION response sent at 1.0, allowing `slack` zero bytes of
+/// padding. Fails when it is an error, is malformed or offers no version.
 pub Result(SpdmVersions, Str) spdm_parse_version(List(Int) r, Int slack) {
     Bool ok = sm_head(r, 16, 4, 6, "VERSION")?;
     Int end = 6 + 2 * r[5];
@@ -297,7 +423,8 @@ pub Result(SpdmVersions, Str) spdm_parse_version(List(Int) r, Int slack) {
 
 List(Int) sm_versions(List(Int) r, Int at, List(Int) acc) { return if (at + 1 >= r.len()) { acc } else { sm_versions(r, at + 2, acc.concat([r[at + 1]])) }; }
 
-// The highest version both offer, of 1.0 to 1.3, or 0.
+/// The highest version in both `theirs` and `ours`, or 0 when none is
+/// shared.
 pub Int spdm_pick_version(List(Int) theirs, List(Int) ours) { return sm_pick(theirs, ours, 0, 0); }
 Int sm_pick(List(Int) t, List(Int) o, Int i, Int best) {
     if (i >= t.len()) { return best; }
@@ -306,10 +433,13 @@ Int sm_pick(List(Int) t, List(Int) o, Int i, Int best) {
 }
 Bool sm_in(List(Int) xs, Int x, Int i) { return i < xs.len() && (xs[i] == x || sm_in(xs, x, i + 1)); }
 
-// CAPABILITIES: CT exponent, flags, and from 1.2 the two sizes. Flag
-// combinations DSP0274 forbids are refused.
+/// A decoded CAPABILITIES response: CT exponent, flags, from 1.2 the data
+/// transfer size and largest message size, and the message's length.
 pub type SpdmCaps = { Int ct_exponent; Int flags; Int dts; Int max_size; Int len; };
 
+/// Decodes a CAPABILITIES response at version `ver`, allowing `slack` zero
+/// bytes of padding. Flag combinations DSP0274 forbids, and from 1.2 a data
+/// transfer size below 42 or above the largest message, are refused.
 pub Result(SpdmCaps, Str) spdm_parse_capabilities(List(Int) r, Int ver, Int slack) {
     Int want = if (ver == 16) { 12 } else if (ver == 17) { 12 } else { 20 };
     Bool ok = sm_head(r, ver, 97, want, "CAPABILITIES")?;
@@ -326,9 +456,10 @@ pub Result(SpdmCaps, Str) spdm_parse_capabilities(List(Int) r, Int ver, Int slac
     return Ok(SpdmCaps {.ct_exponent = r[5], .flags = fl, .dts = dts, .max_size = mx, .len = want});
 }
 
-// ALGORITHMS: one choice of each, within what we offered. The responder's
-// multi-key connection (1.3) is its capability MULTI_KEY_CAP_ONLY, or
-// MULTI_KEY_CAP_NEG when we asked for it.
+/// Decodes an ALGORITHMS response into the negotiated connection, requiring
+/// one choice of each needed algorithm within what we offered. The
+/// responder's multi-key connection (1.3) is its capability
+/// MULTI_KEY_CAP_ONLY, or MULTI_KEY_CAP_NEG when `asked_multi`.
 pub Result(SpdmAlgs, Str) spdm_parse_algorithms(List(Int) rp, Int ver, SpdmCaps caps, Int req_flags, Int slack, Bool asked_multi) {
     Bool ok = sm_head(rp, ver, 99, 36, "ALGORITHMS")?;
     Int end = spdm_le(rp, 4, 2);
@@ -354,6 +485,8 @@ pub Result(SpdmAlgs, Str) spdm_parse_algorithms(List(Int) rp, Int ver, SpdmCaps 
     return Ok(SpdmAlgs {.slack = slack, .version = ver, .flags = caps.flags, .req_flags = req_flags, .ct_exponent = caps.ct_exponent, .data_transfer_size = caps.dts, .max_msg_size = caps.max_size, .meas_spec = r[6], .meas_hash = mhash, .asym = asym, .hash = hash, .dhe = t.dhe, .aead = t.aead, .key_schedule = t.ks, .req_asym = t.req_asym, .opaque_fmt = fmt, .multi_key = ver >= 19 && ((caps.flags & 67108864) != 0 || ((caps.flags & 134217728) != 0 && asked_multi))});
 }
 
+/// The ALGORITHMS response's algorithm structure tables (DHE, AEAD,
+/// requester signing, key schedule), the types seen, and whether all parsed.
 type SmTables = { Int dhe; Int aead; Int req_asym; Int ks; Int seen; Bool ok; };
 
 SmTables sm_tables(List(Int) b, Int at, Int n, SmTables acc) {
@@ -369,10 +502,13 @@ SmTables sm_tables(List(Int) b, Int at, Int n, SmTables acc) {
     return sm_tables(b, next, n - 1, SmTables {.dhe = if (ty == 2) { v } else { acc.dhe }, .aead = if (ty == 3) { v } else { acc.aead }, .req_asym = if (ty == 4) { v } else { acc.req_asym }, .ks = if (ty == 5) { v } else { acc.ks }, .seen = acc.seen | (1 << ty), .ok = true});
 }
 
-// DIGESTS: the slots provisioned and one digest each; with a multi-key
-// connection (1.3) the key pair IDs, certificate infos and key usages.
+/// A decoded DIGESTS response: the slots supported and provisioned, one
+/// digest per provisioned slot, and with a multi-key connection (1.3) the
+/// key pair IDs, certificate infos and key usages.
 pub type SpdmDigests = { Int len; Int supported; Int provisioned; List(List(Int)) digests; List(Int) key_pair_ids; List(Int) cert_infos; List(Int) key_usages; };
 
+/// Decodes a DIGESTS response on connection `a`; fails when the slot mask
+/// and the digests disagree.
 pub Result(SpdmDigests, Str) spdm_parse_digests(List(Int) r, SpdmAlgs a) {
     Bool ok = sm_head(r, a.version, 1, 4, "DIGESTS")?;
     Int slots = sm_bits(r[3], 0, 0);
@@ -392,9 +528,12 @@ Int sm_bits(Int v, Int i, Int n) { return if (i >= 8) { n } else { sm_bits(v, i 
 List(List(Int)) sm_chunks(List(Int) b, Int at, Int size, Int n, List(List(Int)) acc) { return if (n <= 0) { acc } else { sm_chunks(b, at + size, size, n - 1, acc.concat([b[at..at + size]])) }; }
 List(Int) sm_u16s(List(Int) b, Int at, Int n, List(Int) acc) { return if (n <= 0) { acc } else { sm_u16s(b, at + 2, n - 1, acc.concat([spdm_le(b, at, 2)])) }; }
 
-// CERTIFICATE: one portion and what remains.
+/// A decoded CERTIFICATE response: one portion of the chain and the bytes
+/// that remain after it.
 pub type SpdmCertPortion = { Int len; Int slot; List(Int) portion; Int remainder; };
 
+/// Decodes a CERTIFICATE response for `slot`; fails on another slot, an
+/// empty portion, or a portion length that is not the message's.
 pub Result(SpdmCertPortion, Str) spdm_parse_certificate(List(Int) r, SpdmAlgs a, Int slot) {
     Bool ok = sm_head(r, a.version, 2, 8, "CERTIFICATE")?;
     Int pl = spdm_le(r, 4, 2);
@@ -403,10 +542,13 @@ pub Result(SpdmCertPortion, Str) spdm_parse_certificate(List(Int) r, SpdmAlgs a,
     return Ok(SpdmCertPortion {.len = 8 + pl, .slot = slot, .portion = r[8..8 + pl], .remainder = spdm_le(r, 6, 2)});
 }
 
-// A certificate chain in GET_CERTIFICATE's format: length (LE2), reserved
-// (2), the root's hash, DER certificates from the root's side.
+/// A decoded certificate chain: the root's hash and the DER certificates
+/// from the root's side.
 pub type SpdmChain = { List(Int) root_hash; List(List(Int)) certs; };
 
+/// Decodes a chain in GET_CERTIFICATE's format (length LE2, 2 reserved, the
+/// root's hash under hash bit `hash`, DER certificates). Fails on a wrong
+/// length, bytes that are not a certificate, none, or more than 16.
 pub Result(SpdmChain, Str) spdm_parse_chain(List(Int) b, Int hash) {
     Int h = spdm_hash_len(hash);
     if (b.len() < 4 + h || b.len() > 65535 || spdm_le(b, 0, 2) != b.len()) { return Err("the certificate chain's length is not its own"); }
@@ -423,9 +565,12 @@ Result(List(List(Int)), Str) sm_certs(List(Int) b, Int at, List(List(Int)) acc) 
     return sm_certs(b, d.next, acc.concat([b[at..d.next]]));
 }
 
-// CHALLENGE_AUTH: what it binds and where its signature starts.
+/// A decoded CHALLENGE_AUTH response: what it binds and where its signature
+/// starts.
 pub type SpdmChallengeAuth = { Int len; Int slot; Int slot_mask; List(Int) cert_chain_hash; List(Int) nonce; List(Int) summary; List(Int) opaque; List(Int) context; Int sig_at; };
 
+/// Decodes a CHALLENGE_AUTH response for `slot` and `summary_type` (0 means
+/// no measurement summary). The signature is located, not checked.
 pub Result(SpdmChallengeAuth, Str) spdm_parse_challenge_auth(List(Int) r, SpdmAlgs a, Int summary_type, Int slot) {
     Bool ok = sm_head(r, a.version, 3, 4, "CHALLENGE_AUTH")?;
     Int h = spdm_hash_len(a.hash);
@@ -440,12 +585,16 @@ pub Result(SpdmChallengeAuth, Str) spdm_parse_challenge_auth(List(Int) r, SpdmAl
     return Ok(SpdmChallengeAuth {.len = sig_at + spdm_sig_len(a.asym), .slot = r[2] & 15, .slot_mask = r[3], .cert_chain_hash = r[4..4 + h], .nonce = r[4 + h..36 + h], .summary = r[36 + h..at], .opaque = r[at + 2..at + 2 + olen], .context = r[at + 2 + olen..sig_at], .sig_at = sig_at});
 }
 
-// MEASUREMENTS: the blocks (each a DMTF measurement filling itself, an
-// index once), the nonce, opaque data, context, and the signature's start
-// (the length when unsigned).
+/// One measurement block: its index, specification, DMTF value type, the
+/// value, and the whole block as sent.
 pub type SpdmBlock = { Int index; Int spec; Int value_type; List(Int) value; List(Int) raw; };
+/// A decoded MEASUREMENTS response: the blocks (each a DMTF measurement
+/// filling itself, an index once), the nonce, opaque data, context, and the
+/// signature's start (the length when unsigned).
 pub type SpdmMeasurements = { Int len; Int count; Int slot; Int content_changed; List(SpdmBlock) blocks; List(Int) nonce; List(Int) opaque; List(Int) context; Int sig_at; };
 
+/// Decodes a MEASUREMENTS response, with a signature after it when
+/// `signed`. The signature is located, not checked.
 pub Result(SpdmMeasurements, Str) spdm_parse_measurements(List(Int) r, SpdmAlgs a, Bool signed) {
     Bool ok = sm_head(r, a.version, 96, 8, "MEASUREMENTS")?;
     Int nb = r[4];
@@ -479,8 +628,8 @@ Result(List(SpdmBlock), Str) sm_blocks(List(Int) b, Int at, Int end, List(SpdmBl
 
 Bool sm_has_index(List(SpdmBlock) bs, Int i, Int k) { return k < bs.len() && (bs[k].index == i || sm_has_index(bs, i, k + 1)); }
 
-// The measurement summary DSP0274 defines over blocks: the hash of every
-// block (all, 255), or only the immutable-ROM ones (TCB, 1), in order.
+/// The measurement summary DSP0274 defines over blocks: the hash of every
+/// block (all, 255), or only the immutable-ROM ones (TCB, 1), in order.
 pub List(Int) spdm_summary(Int hash, Int summary_type, List(SpdmBlock) bs) { return spdm_hash(hash, sm_summary_bytes(bs, summary_type, 0, [])); }
 
 List(Int) sm_summary_bytes(List(SpdmBlock) bs, Int t, Int i, List(Int) acc) {
@@ -489,9 +638,14 @@ List(Int) sm_summary_bytes(List(SpdmBlock) bs, Int t, Int i, List(Int) acc) {
     return sm_summary_bytes(bs, t, i + 1, if (take) { acc.concat(bs[i].raw) } else { acc });
 }
 
-// KEY_EXCHANGE_RSP.
+/// A decoded KEY_EXCHANGE_RSP: session ID, heartbeat period, mutual
+/// authentication request, random, exchange data, summary, opaque data,
+/// the signature's start and the verify data.
 pub type SpdmKeyExRsp = { Int len; Int sid; Int heartbeat; Int mut_auth; Int req_slot; List(Int) random; List(Int) exchange; List(Int) summary; List(Int) opaque; Int sig_at; List(Int) verify; };
 
+/// Decodes a KEY_EXCHANGE_RSP; with `clear` (handshake in the clear) it
+/// carries no verify data. Fails when the exchange data is not a point on
+/// the curve; the signature is located, not checked.
 pub Result(SpdmKeyExRsp, Str) spdm_parse_key_exchange_rsp(List(Int) r, SpdmAlgs a, Int summary_type, Bool clear) {
     Bool ok = sm_head(r, a.version, 100, 8, "KEY_EXCHANGE_RSP")?;
     Int d = spdm_dhe_len(a.dhe);
@@ -508,9 +662,12 @@ pub Result(SpdmKeyExRsp, Str) spdm_parse_key_exchange_rsp(List(Int) r, SpdmAlgs 
     return Ok(SpdmKeyExRsp {.len = end, .sid = spdm_le(r, 4, 2), .heartbeat = r[2], .mut_auth = r[6], .req_slot = r[7], .random = r[8..40], .exchange = r[40..40 + d], .summary = r[40 + d..at], .opaque = r[at + 2..sig_at], .sig_at = sig_at, .verify = r[sig_at + spdm_sig_len(a.asym)..end]});
 }
 
-// PSK_EXCHANGE_RSP.
+/// A decoded PSK_EXCHANGE_RSP: session ID, heartbeat period, summary, the
+/// responder's context, opaque data, and the verify data and its offset.
 pub type SpdmPskExRsp = { Int len; Int sid; Int heartbeat; List(Int) summary; List(Int) context; List(Int) opaque; List(Int) verify; Int verify_at; };
 
+/// Decodes a PSK_EXCHANGE_RSP for `summary_type` (0 means no measurement
+/// summary); fails when its fields do not fill it.
 pub Result(SpdmPskExRsp, Str) spdm_parse_psk_exchange_rsp(List(Int) r, SpdmAlgs a, Int summary_type) {
     Bool ok = sm_head(r, a.version, 102, 12, "PSK_EXCHANGE_RSP")?;
     Int h = spdm_hash_len(a.hash);
@@ -522,8 +679,10 @@ pub Result(SpdmPskExRsp, Str) spdm_parse_psk_exchange_rsp(List(Int) r, SpdmAlgs 
     return Ok(SpdmPskExRsp {.len = va + h, .sid = spdm_le(r, 4, 2), .heartbeat = r[2], .summary = r[12..12 + sl], .context = r[12 + sl..12 + sl + cl], .opaque = r[12 + sl + cl..va], .verify = r[va..va + h], .verify_at = va});
 }
 
-// A bare acknowledgement: code and, for KEY_UPDATE_ACK, the echoed
-// operation and tag.
+/// Checks a bare 4-byte acknowledgement with response `code`, named `what`
+/// in errors. `p1` and `p2` are the expected parameter bytes (for
+/// KEY_UPDATE_ACK the echoed operation and tag); a negative one is not
+/// checked.
 pub Result(Bool, Str) spdm_parse_ack(List(Int) r, SpdmAlgs a, Int code, Int p1, Int p2, Str what) {
     Bool ok = sm_head(r, a.version, code, 4, what)?;
     if (!sm_fits(r, 4, a.slack)) { return Err(what + " has trailing bytes"); }
@@ -533,9 +692,9 @@ pub Result(Bool, Str) spdm_parse_ack(List(Int) r, SpdmAlgs a, Int code, Int p1, 
 
 // ─── Opaque data ────────────────────────────────────────────────────
 
-// The secured-message version the responder selected in its opaque data
-// (KEY_EXCHANGE_RSP, PSK_EXCHANGE_RSP), as 0x10..0x12; 0 when it selected
-// none (refused by the requester).
+/// The secured-message version the responder selected in its opaque data
+/// (KEY_EXCHANGE_RSP, PSK_EXCHANGE_RSP), as 0x10..0x12; 0 when it selected
+/// none (refused by the requester).
 pub Int spdm_opaque_selected_version(List(Int) o, Int fmt) {
     Int at = if (fmt == 2) { 4 } else { 8 };
     if (o.len() < at + 4) { return 0; }
@@ -560,8 +719,8 @@ Int sm_find_sel(List(Int) o, Int at, Int n) {
 
 // ─── Signatures ─────────────────────────────────────────────────────
 
-// The 1.2+ signing context: "dmtf-spdm-v1.N.*" four times, then the
-// operation's context string right-aligned in 36 bytes.
+/// The 1.2+ signing context: "dmtf-spdm-v1.N.*" four times, then the
+/// operation's context string right-aligned in 36 bytes.
 pub List(Int) spdm_signing_prefix(Int ver, Str context) {
     Str one = f"dmtf-spdm-v1.{ver & 15}.*";
     List(Int) p = bytes_of(one + one + one + one);
@@ -569,21 +728,27 @@ pub List(Int) spdm_signing_prefix(Int ver, Str context) {
     return p.concat(sm_zeros(36 - c.len())).concat(c);
 }
 
+/// The signing context of the responder's CHALLENGE_AUTH.
 pub Str spdm_ctx_challenge_auth() { return "responder-challenge_auth signing"; }
+/// The signing context of the requester's CHALLENGE_AUTH (mutual auth).
 pub Str spdm_ctx_mut_challenge_auth() { return "requester-challenge_auth signing"; }
+/// The signing context of MEASUREMENTS.
 pub Str spdm_ctx_measurements() { return "responder-measurements signing"; }
+/// The signing context of KEY_EXCHANGE_RSP.
 pub Str spdm_ctx_key_exchange_rsp() { return "responder-key_exchange_rsp signing"; }
+/// The signing context of the requester's FINISH.
 pub Str spdm_ctx_finish() { return "requester-finish signing"; }
 
-// What a signer signs for `data` (a transcript): the transcript itself
-// before 1.2, the signing context and the transcript's hash from 1.2.
+/// What a signer signs for `data` (a transcript): the transcript itself
+/// before 1.2, the signing context and the transcript's hash from 1.2.
 pub List(Int) spdm_signed_message(Int ver, Int hash, Str context, List(Int) data) {
     return if (ver >= 18) { spdm_signing_prefix(ver, context).concat(spdm_hash(hash, data)) } else { data };
 }
 
-// Did the key sign `data` under `asym`/`hash` for this version and
-// context? ECDSA r ‖ s big-endian; RSASSA PKCS#1 v1.5; RSAPSS with a salt
-// the hash's length; Ed25519 over the message itself.
+/// Whether `key` signed `data` under `asym`/`hash` for this version and
+/// context. ECDSA r ‖ s big-endian; RSASSA PKCS#1 v1.5; RSAPSS with a salt
+/// the hash's length; Ed25519 over the message itself. False when the
+/// signature length or the key does not fit `asym`.
 pub Bool spdm_sig_ok(Int ver, Int asym, Int hash, Str context, PubKey key, List(Int) data, List(Int) sig) {
     if (sig.len() != spdm_sig_len(asym) || !spdm_key_fits(asym, key)) { return false; }
     List(Int) m = spdm_signed_message(ver, hash, context, data);
@@ -597,7 +762,7 @@ pub Bool spdm_sig_ok(Int ver, Int asym, Int hash, Str context, PubKey key, List(
     return sig_verify(alg, key, m, sig);
 }
 
-// Whether a certificate key fits the negotiated signature algorithm.
+/// Whether a certificate key fits the negotiated signature algorithm.
 pub Bool spdm_key_fits(Int asym, PubKey key) {
     if (asym == 16) { return key.kind == pubkey_ec() && curve_bytes(key.curve) == 32; }
     if (asym == 128) { return key.kind == pubkey_ec() && curve_bytes(key.curve) == 48; }
@@ -608,9 +773,9 @@ pub Bool spdm_key_fits(Int asym, PubKey key) {
 
 Int spdm_rsa_bits(PubKey k) { return if (k.n.len() > 0 && k.n[0] == 0) { (k.n.len() - 1) * 8 } else { k.n.len() * 8 }; }
 
-// The name an anchor lists for a negotiated signature algorithm and hash
-// (compiler/attest.resid's at_spdm_alg): Ed25519 alone, else the
-// algorithm and key size, then the hash.
+/// The name an anchor lists for a negotiated signature algorithm and hash
+/// (compiler/attest.resid's at_spdm_alg): Ed25519 alone, else the
+/// algorithm and key size, then the hash.
 pub Str spdm_alg_name(Int asym, Int hash) {
     Str h = if (hash == 1) { "Sha256" } else if (hash == 2) { "Sha384" } else { "Sha512" };
     if (asym == 1024) { return "Ed25519"; }
@@ -621,8 +786,9 @@ pub Str spdm_alg_name(Int asym, Int hash) {
     return fam + f"{spdm_sig_len(asym) * 8}" + h;
 }
 
-// A negotiation record (the six VCA messages, exact): the algorithms it
-// settled, decoded the way the requester did.
+/// The algorithms a negotiation record settled, decoded the way the
+/// requester did. `vca` is the six VCA messages exactly, GET_VERSION to
+/// ALGORITHMS; any malformation or trailing bytes fail.
 pub Result(SpdmAlgs, Str) spdm_parse_vca(List(List(Int)) vca) {
     if (vca.len() != 6) { return Err("the negotiation is six messages, GET_VERSION to ALGORITHMS"); }
     if (!eq_list(vca[0], [16, 132, 0, 0])) { return Err("the negotiation does not start with GET_VERSION"); }
@@ -642,6 +808,6 @@ pub Result(SpdmAlgs, Str) spdm_parse_vca(List(List(Int)) vca) {
     return Ok(a);
 }
 
-// The certificates of a chain in GET_CERTIFICATE's format, leaf first.
+/// The certificates of a chain in GET_CERTIFICATE's format, leaf first.
 pub List(List(Int)) spdm_chain_leaf_first(SpdmChain c) { return sm_rev(c.certs, c.certs.len() - 1, []); }
 List(List(Int)) sm_rev(List(List(Int)) xs, Int i, List(List(Int)) acc) { return if (i < 0) { acc } else { sm_rev(xs, i - 1, acc.concat([xs[i]])) }; }

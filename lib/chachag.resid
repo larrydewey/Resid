@@ -35,8 +35,8 @@ W cg_key_word(List(B) key, Int off) {
     return w_or(w_or(w_from_byte(key[off]), w_shl(w_from_byte(key[off + 1]), 8)), w_or(w_shl(w_from_byte(key[off + 2]), 16), w_shl(w_from_byte(key[off + 3]), 24)));
 }
 
-// The initial state for (key, counter, nonce): constants, key, counter,
-// nonce (RFC 8439 §2.3). Key and nonce are 32 and 12 bytes.
+/// The initial state for (key, counter, nonce): constants, key, counter,
+/// nonce (RFC 8439 §2.3). Key and nonce are 32 and 12 bytes.
 @needs(Word(W, B))
 pub List(W) chachag_state(List(B) key, Int counter, List(Int) nonce) {
     W n0 = w_lift(cg_le32(nonce, 0));
@@ -45,7 +45,8 @@ pub List(W) chachag_state(List(B) key, Int counter, List(Int) nonce) {
     return cg_state_w(key, counter, n0, n1, n2);
 }
 
-// The same with the nonce in B (12 bytes): at secret types it stays secret.
+/// The initial ChaCha20 state, with the 12-byte nonce given in B.
+/// At secret types the nonce stays secret.
 @needs(Word(W, B))
 pub List(W) chachag_state_nb(List(B) key, Int counter, List(B) nonce) {
     return cg_state_w(key, counter, cg_key_word(nonce, 0), cg_key_word(nonce, 4), cg_key_word(nonce, 8));
@@ -146,7 +147,7 @@ List(B) cg_ser(List(W) w, Int k, ListBuf(B) acc) {
     return cg_ser(w, k + 1, acc.push(w_byte(w[k / 4], (k % 4) * 8)));
 }
 
-// The 64-byte keystream block for (key, counter, nonce).
+/// The 64-byte keystream block for (key, counter, nonce).
 @needs(Word(W, B))
 pub List(B) chachag_block(List(B) key, Int counter, List(Int) nonce) {
     return cg_block_st(chachag_state(key, counter, nonce));
@@ -174,7 +175,8 @@ ListBuf(B) cg_xor_bytes(List(W) w, List(B) data, Int pos, Int k, Int take, ListB
     return cg_xor_bytes(w, data, pos, k + 1, take, out.push(b_xor(data[pos + k], w_byte(w[k / 4], (k % 4) * 8))));
 }
 
-// ChaCha20 encryption (and decryption) of data, starting at block `counter`.
+/// ChaCha20 encryption (and decryption) of `data`, starting at block `counter`.
+/// The block counter wraps modulo 2^32.
 @needs(Word(W, B))
 pub List(B) chachag_xor(List(B) key, Int counter, List(Int) nonce, List(B) data) {
     ListBuf(B) out = ListBuf();
@@ -231,7 +233,8 @@ List(B) pg_bytes(P x, Int i, ListBuf(B) acc) {
     return pg_bytes(x, i + 1, acc.push(p_byte(x, 8 * i)));
 }
 
-// The 16-byte Poly1305 tag of msg under the 32-byte one-time key r || s.
+/// The 16-byte Poly1305 tag of `msg` under the 32-byte one-time key r || s.
+/// RFC 8439 §2.5; r is clamped here.
 @needs(Wide512(P, B))
 pub List(B) poly1305g(List(B) key, List(B) msg) {
     P z = p_lift((Int(512)) 0);
@@ -273,8 +276,9 @@ List(B) cg_mac_input(List(Int) aad, List(B) ct) {
     return w_lift_bytes(head, 0, hb).concat(ct).concat(w_lift_bytes(tail, 0, tb));
 }
 
-// Seal: ciphertext || 16-byte tag. At secret types the output is secret;
-// the caller declassifies it to send it.
+/// ChaCha20-Poly1305 seal (RFC 8439 §2.8): ciphertext || 16-byte tag.
+/// Key and nonce lengths are not checked here. At secret types the output
+/// is secret; the caller declassifies it to send it.
 @needs(Word(W, B), Wide512(P, B))
 @key(key)
 @nonce(nonce)
@@ -284,11 +288,11 @@ pub List(B) chacha20poly1305g_seal(List(B) key, List(Int) nonce, List(B) plainte
     return ct.concat(poly1305g(mackey, cg_mac_input(aad, ct)));
 }
 
-// Open: the plaintext when the tag verifies, compared in constant time;
-// None for a bad tag, a key that is not 32 bytes, a nonce that is not 12,
-// or an input shorter than a tag. An empty plaintext is Some([]). The
-// verdict is public (CtSame(B)); at secret types the plaintext stays
-// secret.
+/// ChaCha20-Poly1305 open: the plaintext when the tag verifies.
+/// The tag is compared in constant time; None for a bad tag, a key that is not 32 bytes, a nonce that is not 12,
+/// or an input shorter than a tag. An empty plaintext is Some([]). The
+/// verdict is public (CtSame(B)); at secret types the plaintext stays
+/// secret.
 @needs(Word(W, B), Wide512(P, B), CtSame(B))
 pub Option(List(B)) chacha20poly1305g_decrypt(List(B) key, List(Int) nonce, List(Int) ct_and_tag, List(Int) aad) {
     Int clen = ct_and_tag.len() - 16;
@@ -307,6 +311,8 @@ pub Option(List(B)) chacha20poly1305g_decrypt(List(B) key, List(Int) nonce, List
 // the sequence number, a TLS write IV): the 12-byte nonce is List(B), so
 // at secret types it stays secret. Otherwise as above.
 
+/// ChaCha20-Poly1305 seal with the 12-byte nonce in B: ciphertext || tag.
+/// Returns an empty list when the key is not 32 bytes or the nonce not 12.
 @needs(Word(W, B), Wide512(P, B))
 @key(key)
 @nonce(nonce)
@@ -321,6 +327,9 @@ pub List(B) chacha20poly1305g_seal_nb(List(B) key, List(B) nonce, List(B) plaint
     return ct.concat(poly1305g(mackey, cg_mac_input(aad, ct)));
 }
 
+/// ChaCha20-Poly1305 open with the 12-byte nonce in B.
+/// Same results as `chacha20poly1305g_decrypt`: None for a bad tag, key,
+/// nonce or a short input; the verdict is public.
 @needs(Word(W, B), Wide512(P, B), CtSame(B))
 pub Option(List(B)) chacha20poly1305g_decrypt_nb(List(B) key, List(B) nonce, List(Int) ct_and_tag, List(Int) aad) {
     Int clen = ct_and_tag.len() - 16;

@@ -18,18 +18,10 @@ import "device_write.resid";
 import "sev_guest.resid";
 import "uapi_sev_guest_key.resid";
 
-// A key derived by the secure processor (struct msg_derived_key_resp's
-// 32-byte key), from the root key `root_key_select` selects (0 the VCEK, 1
-// the VMRK) mixed with the guest fields `guest_field_select` names. Not
-// signed (see above).
-//
-// struct msg_derived_key_resp is { u32 status; u8 rsvd[28]; u8 key[32]; },
-// one buffer, so the status comes back inside the secret slot. Only those
-// four bytes are declassified (a firmware status code is not key material),
-// which is why this needs the `declassify` grant as well. A nonzero status,
-// or a nonzero exitinfo2 (the firmware and VMM error word of the ioctl
-// struct), is Err(Kernel(name, code)): the key bytes of a failed request
-// are never returned. sg_report_body checks a report's status the same way.
+/// The 32-byte key the secure processor derives for this guest, as secret
+/// bytes (not signed). `root_key_select` picks the root (0 VCEK, 1 VMRK) and
+/// `guest_field_select` the guest fields mixed in; `vmpl` outside 0-3 is
+/// Err(BadInput), a nonzero firmware status or exitinfo2 Err(Kernel(...)).
 @requires(device, declassify)
 pub Result(List(Secret(UInt(8))), DeviceError) snp_get_derived_key(Int root_key_select, Int guest_field_select, Int vmpl, Int guest_svn, Int tcb_version) {
     Str name = "sev_guest.snp_get_derived_key";
@@ -49,7 +41,9 @@ pub Result(List(Secret(UInt(8))), DeviceError) snp_get_derived_key(Int root_key_
     };
 }
 
-// struct msg_derived_key_resp: the status (public), then the key.
+/// The 32 key bytes of a struct msg_derived_key_resp `r`, after its status.
+/// Only the four status bytes are declassified. A wrong length is
+/// Err(BadReply), a nonzero status Err(Kernel(name, status)).
 @requires(declassify)
 pub Result(List(Secret(UInt(8))), DeviceError) sg_key_body(Str name, List(Secret(UInt(8))) r) {
     if (r.len() != snp_derived_key_resp_size()) { return Err(BadReply(name, "short response")); }

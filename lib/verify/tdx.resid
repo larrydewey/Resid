@@ -6,7 +6,7 @@
 //
 // The verifier forms check the quote itself (and the QE's MRSIGNER and
 // product against Intel's TD quoting enclave, a Known floor). Appraisal
-// takes Intel's collateral: the TCB info and the QE identity, each a JSON
+// takes Intel's collateral: the PCK CA's and root's CRLs, the TCB info and the QE identity, each a JSON
 // object signed over its exact bytes by Intel's TCB signing key, whose
 // certificate chains to the same root; it finds the TCB level the PCK
 // certificate's SGX extensions and the TD's TEE_TCB_SVN reach and the QE
@@ -30,8 +30,8 @@ import "../challenge_export.resid";
 import "../dev/device.resid";
 import "json.resid";
 
-// The TD quote body (TDX 1.0, 584 bytes; version 5's TDX 1.5 body adds
-// tee_tcb_svn2 and mrservicetd, not kept here).
+/// The TD quote body (TDX 1.0, 584 bytes; version 5's TDX 1.5 body adds
+/// tee_tcb_svn2 and mrservicetd, not kept here).
 @layout(le) @signed(sig = quote_signature, span = header_and_body)
 pub type TdQuoteBody = {
     @firmware @len(16) List(UInt(8)) tee_tcb_svn;
@@ -51,32 +51,34 @@ pub type TdQuoteBody = {
     @relayed @len(64) List(UInt(8)) reportdata;
 };
 
-// What a verified quote says: its body, and the platform facts appraisal
-// needs: the PCK certificate's FMSPC, PCE ID, CPUSVN components and
-// PCESVN, and the quoting enclave's identity from its report.
+/// What a verified quote says: its body, and the platform facts appraisal
+/// needs: the PCK certificate's FMSPC, PCE ID, CPUSVN components and
+/// PCESVN, and the quoting enclave's identity from its report.
 @signed(sig = quote_signature, span = header_and_body)
 pub type TdxQuote = { TdQuoteBody body; List(Int) fmspc; List(Int) pce_id; List(Int) cpusvn; Int pcesvn; List(Int) qe_mrsigner; Int qe_prodid; Int qe_isvsvn; List(Int) qe_attributes; Int qe_miscselect; List(Int) pck_der; List(Int) ca_der; };
 
-// Intel's collateral for one platform: the TCB info and the QE identity
-// (each a response body), the issuer chains (PEM) PCS sends with them, and
-// the CRLs of the PCK's CA and of the root (DER).
+/// Intel's collateral for one platform: the TCB info and the QE identity
+/// (each a response body), the issuer chains (PEM) PCS sends with them, and
+/// the CRLs of the PCK's CA and of the root (DER).
 pub type TdxCollateral = { List(UInt(8)) tcb_info; List(UInt(8)) tcb_chain; List(UInt(8)) qe_identity; List(UInt(8)) qe_chain; List(UInt(8)) pck_crl; List(UInt(8)) root_crl; };
 
-// A policy: the MRTD values accepted (one must match), the RTMRs that
-// must hold these values ("index=hex", every one), and the TDX modules
-// accepted (MRSEAM, one must match; empty: any Intel-signed module).
-// accepted_statuses: TCB statuses besides "UpToDate" the deployment
-// accepts (e.g. "SWHardeningNeeded"); empty: only UpToDate.
+/// An appraisal policy for TDX quotes.
+/// `mrtd_hex`: accepted MRTDs, one must match (empty is refused);
+/// `rtmrs_hex`: "index=hex" entries (index 0..3), every one must hold;
+/// `mrseam_hex`: accepted TDX modules (empty: any Intel-signed module);
+/// `accepted_statuses`: TCB statuses accepted besides "UpToDate".
 pub type TdxPolicy = { List(Str) mrtd_hex; List(Str) rtmrs_hex; List(Str) mrseam_hex; List(Str) accepted_statuses; };
 
-// The lowest tcbEvaluationDataNumber accepted: collateral older than the
-// one this release was reviewed with is refused whatever the clock says.
+/// The lowest tcbEvaluationDataNumber accepted: collateral older than the
+/// one this release was reviewed with is refused whatever the clock says.
 pub Int tdx_tcb_eval_floor() { return 15; }
 
+/// The device descriptors a TDX quote may come from (the TDX configfs report).
 pub List(Str) tdx_descriptors() { return ["tsm_report.tdx"]; }
 
-// Intel's TD quoting enclave: MRSIGNER and ISVPRODID.
+/// The MRSIGNER of Intel's TD quoting enclave, as lowercase hex.
 pub Str tdx_qe_mrsigner_hex() { return "dc9e2a7c6f948f17474e34a7fc43ed030f7c1563f1babddf6340c82e0e54a8c5"; }
+/// The ISVPRODID of Intel's TD quoting enclave.
 pub Int tdx_qe_prodid() { return 2; }
 
 // ─── Reading the quote ──────────────────────────────────────────────
@@ -84,7 +86,7 @@ pub Int tdx_qe_prodid() { return 2; }
 Int le16(List(Int) b, Int at) { return b[at] | (b[at + 1] << 8); }
 Int le32(List(Int) b, Int at) { return b[at] | (b[at + 1] << 8) | (b[at + 2] << 16) | (b[at + 3] << 24); }
 
-// The parts a verifier needs, at their places.
+/// The pieces of a quote a verifier needs, sliced out by `tdx_parts`.
 type TdxParts = { List(Int) signed; List(Int) body; List(Int) qsig; List(Int) akey; List(Int) qe_report; List(Int) qe_sig; List(Int) qe_auth; Str pem; };
 
 Result(TdxParts, VerifyError) tdx_parts(List(Int) q) {
@@ -123,6 +125,10 @@ Str tdx_ascii(List(Int) q, Int i, Int n, StrBuf acc) {
 
 // ─── Verification ───────────────────────────────────────────────────
 
+/// Checks a quote against Intel's SGX root and returns what it says.
+/// Covers the anchor, the PCK chain at `t`, the QE report and its binding
+/// of the attestation key, the QE's identity and the quote signature; the
+/// challenge is not checked here.
 @verify_internal
 pub Result(TdxQuote, VerifyError) tdx_check(List(UInt(8)) quote, Anchor root, EvidenceTime t) {
     if (root.kind != "IntelPck") { return Err(Refused("tdx_verify", "the anchor is not Intel's SGX root (kind " + root.kind + ")")); }
@@ -155,6 +161,7 @@ pub Result(TdxQuote, VerifyError) tdx_check(List(UInt(8)) quote, Anchor root, Ev
 // component SVNs .2.1-.2.16 and PCESVN .2.17), .3 the PCE ID, .4 the
 // FMSPC.
 
+/// The platform facts read from the PCK certificate's SGX extensions.
 type PckFacts = { List(Int) fmspc; List(Int) pce_id; List(Int) cpusvn; Int pcesvn; };
 
 Str sgx_oid(Str tail) { return "1.2.840.113741.1.13.1" + tail; }
@@ -204,7 +211,8 @@ Bool tdx_zero(List(Int) b, Int i) { return i >= b.len() || (b[i] == 0 && tdx_zer
 
 Int tdx_rp(ChallengeRecord c) { return if (c.bind.len() > 0) { q_rp_bound() } else { 0 }; }
 
-// Fresh for the holder of `c`: REPORTDATA carries challenge_value(c).
+/// Verifies a quote as fresh for the holder of `c`.
+/// REPORTDATA must carry challenge_value(c); the challenge is spent.
 @primitive(verify, anchor = root, gives = [fresh], time = t, format = TdxQuote, kinds = [IntelPck], algorithms = [EcdsaP256Sha256], inputs = [quote, c, t])
 pub Result(Verified(TdxQuote), VerifyError) tdx_verify_quote(List(UInt(8)) quote, ChallengeRecord c, Anchor root, EvidenceTime t) {
     TdxQuote b = tdx_check(quote, root, t)?;
@@ -213,7 +221,9 @@ pub Result(Verified(TdxQuote), VerifyError) tdx_verify_quote(List(UInt(8)) quote
     return Ok(vf_make(b, root, q_fresh() | tdx_rp(c), c, 0, none, none, t, "TdxQuote"));
 }
 
-// Fresh and KeyBound(kem, pk).
+/// Verifies a quote as fresh and bound to the attester's HPKE key.
+/// REPORTDATA must carry the challenge with `kem` and `pk`; a malformed
+/// key is refused before the quote is read.
 @primitive(verify, anchor = root, gives = [fresh, key_bound], time = t, format = TdxQuote, kinds = [IntelPck], algorithms = [EcdsaP256Sha256], inputs = [quote, c, t, kem, pk])
 pub Result(Verified(TdxQuote), VerifyError) tdx_verify_quote_key_bound(List(UInt(8)) quote, ChallengeRecord c, Anchor root, EvidenceTime t, Int kem, List(Int) pk) {
     if (!hpke_kem_ok(kem) || !vf_pk_ok(kem, pk)) { return Err(Refused("tdx_verify_quote_key_bound", "the attester's public key is empty or malformed for the KEM")); }
@@ -223,7 +233,8 @@ pub Result(Verified(TdxQuote), VerifyError) tdx_verify_quote_key_bound(List(UInt
     return Ok(vf_make(b, root, q_fresh() | q_key_bound() | tdx_rp(c), c, kem, pk, none, t, "TdxQuote"));
 }
 
-// Fresh and ChannelBound to the connection whose other end is e.
+/// Verifies a quote as fresh and bound to the channel exporter `e`.
+/// The connection's other end is the attester; needs `declassify`.
 @primitive(verify, anchor = root, gives = [fresh, channel_bound], time = t, format = TdxQuote, kinds = [IntelPck], algorithms = [EcdsaP256Sha256], inputs = [quote, c, t, e])
 @requires(declassify)
 pub Result(Verified(TdxQuote), VerifyError) tdx_verify_quote_channel_bound(List(UInt(8)) quote, ChallengeRecord c, Anchor root, EvidenceTime t, ChannelExporter e) {
@@ -234,7 +245,8 @@ pub Result(Verified(TdxQuote), VerifyError) tdx_verify_quote_channel_bound(List(
     return Ok(vf_make(b, root, q_fresh() | q_channel_bound() | tdx_rp(c), c, 0, none, vf_channel_id(e), t, "TdxQuote"));
 }
 
-// Delivered, for a record imported without a SpentStore.
+/// Verifies a quote as delivered, for a record imported without a SpentStore.
+/// REPORTDATA must start with the record's value and be zero after it.
 @primitive(verify, anchor = root, gives = [delivered], time = t, format = TdxQuote, kinds = [IntelPck], algorithms = [EcdsaP256Sha256], inputs = [quote, c, t])
 pub Result(Verified(TdxQuote), VerifyError) tdx_verify_quote_replayable(List(UInt(8)) quote, ReplayableRecord c, Anchor root, EvidenceTime t) {
     TdxQuote b = tdx_check(quote, root, t)?;
@@ -245,12 +257,13 @@ pub Result(Verified(TdxQuote), VerifyError) tdx_verify_quote_replayable(List(UIn
 }
 
 // ─── Appraisal (§4) ─────────────────────────────────────────────────
-// Mandatory: TD_ATTRIBUTES.DEBUG clear and SEPT_VE_DISABLE set; Intel's
-// collateral current, signed under the root the quote rests on and not
-// below the evaluation floor; the TCB level the platform and the TD reach
-// and the QE's identity level "UpToDate" or accepted by the policy; the
-// TDX module Intel's. Then the policy's MRTD (one must match), RTMRs and
-// TDX modules.
+/// Appraises a verified quote under `policy` and Intel's collateral `col`.
+/// Mandatory: TD_ATTRIBUTES.DEBUG clear and SEPT_VE_DISABLE set; the CRLs
+/// current and not revoking the chain; Intel's collateral current, signed
+/// under the root the quote rests on and not below the evaluation floor;
+/// the TCB level the platform and the TD reach and the QE's identity level
+/// "UpToDate" or accepted by the policy; the TDX module Intel's. Then the
+/// policy's MRTD (one must match), RTMRs and TDX modules.
 @primitive(appraise, from = v, policy = policy, ptype = TdxPolicy, anchor = root, kinds = [IntelPck], algorithms = [EcdsaP256Sha256], format = TdxQuote, inputs = [col, t])
 pub Result(Appraised(TdxQuote), VerifyError) tdx_appraise(Verified(TdxQuote) v, TdxPolicy policy, TdxCollateral col, Anchor root, EvidenceTime t) {
     TdxQuote q = v.value;
@@ -272,8 +285,9 @@ pub Result(Appraised(TdxQuote), VerifyError) tdx_appraise(Verified(TdxQuote) v, 
 
 // ─── Collateral ─────────────────────────────────────────────────────
 
-// The platform's and the QE's TCB statuses under Intel's collateral, each
-// response checked first.
+/// The platform's and the QE's TCB statuses under Intel's collateral.
+/// Returns [platform, QE]; the CRLs and each signed response are checked
+/// first.
 @verify_internal
 pub Result(List(Str), VerifyError) tdx_collateral_check(TdxQuote q, TdxCollateral col, Anchor root, EvidenceTime t) {
     // Revocation: the PCK CA's CRL and the root's, both current.
@@ -290,9 +304,9 @@ pub Result(List(Str), VerifyError) tdx_collateral_check(TdxQuote q, TdxCollatera
     return Ok([ts, qs]);
 }
 
-// The member `name` of a PCS response, signed over its exact bytes by the
-// signing certificate of `chain` (signer, then the root, which must be
-// the anchor's), current at t, and not below the evaluation floor.
+/// The member `name` of a PCS response, signed over its exact bytes by the
+/// signing certificate of `chain` (signer, then the root, which must be
+/// the anchor's), current at t, and not below the evaluation floor.
 @verify_internal
 pub Result(JsonAt, VerifyError) tdx_signed_json(List(Int) text, Str name, List(Int) chain, Anchor root, EvidenceTime t) {
     JsonAt top = match (json_parse(text)) { Ok(j) => Ok(j), Err(e) => Err(BadLayout(name + ": " + e)) }?;
@@ -387,6 +401,7 @@ Bool tdx_masked_eq(List(Int) want, List(Int) have, List(Int) mask, Int i) { retu
 
 Bool tdx_hex_in(List(Int) b, List(Str) hs, Int i) { return i < hs.len() && (str_to_lower(hs[i]) == hex_encode(b) || tdx_hex_in(b, hs, i + 1)); }
 
+/// RTMR `i` of the TD quote body; any index above 2 gives RTMR3.
 pub List(UInt(8)) tdx_rtmr(TdQuoteBody b, Int i) { return if (i == 0) { b.rtmr0 } else if (i == 1) { b.rtmr1 } else if (i == 2) { b.rtmr2 } else { b.rtmr3 }; }
 
 Str tdx_rtmr_miss(TdQuoteBody b, List(Str) want, Int i) {

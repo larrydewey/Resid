@@ -8,7 +8,8 @@
 // that rather than lib/der.resid, which is still the old seeded
 // convention — the same choice lib/chain.resid makes.
 //
-// Loading a key is `filesystem(readonly)`, and nothing in this module
+// Loading a key is `filesystem(readonly)` (plus declassify and provision,
+// below), and nothing in this module
 // writes a key out, prints one, or keeps it past the call. The mode of
 // the key file is the operator's business: the language has no stat verb,
 // so a permission check is not expressible here (SECURITY.md).
@@ -39,14 +40,15 @@ import "word.resid";
 import "chain.resid";
 import "certverify.resid";
 
-// EcKey's payload is the 32-byte big-endian P-256 scalar, Ec384Key's the
-// 48-byte P-384 one, EdKey's the 32-byte seed. A key this language cannot
-// sign with parses into none of them.
+/// A TLS server's private key, held as secret bytes.
+/// EcKey's payload is the 32-byte big-endian P-256 scalar, Ec384Key's the
+/// 48-byte P-384 one, EdKey's the 32-byte seed. A key this language cannot
+/// sign with parses into none of them.
 pub type ServerKey = EcKey(List(Secret(UInt(8)))) | Ec384Key(List(Secret(UInt(8)))) | EdKey(List(Secret(UInt(8))));
 
-// The TLS SignatureScheme code point (RFC 8446 §4.2.3) this key signs
-// with: 0x0403 ecdsa_secp256r1_sha256, 0x0503 ecdsa_secp384r1_sha384,
-// 0x0807 ed25519.
+/// The TLS SignatureScheme code point (RFC 8446 §4.2.3) this key signs
+/// with: 0x0403 ecdsa_secp256r1_sha256, 0x0503 ecdsa_secp384r1_sha384,
+/// 0x0807 ed25519.
 pub Int tls_key_sigalg(ServerKey key) {
     return match key {
         EcKey(scalar) => 1027,
@@ -55,9 +57,9 @@ pub Int tls_key_sigalg(ServerKey key) {
     };
 }
 
-// The public key bytes, in the shape a certificate carries them: 32 raw
-// bytes for Ed25519, the uncompressed point 04||X||Y for ECDSA. Derived
-// from the secret key and published (a declassification by design).
+/// The public key bytes, in the shape a certificate carries them: 32 raw
+/// bytes for Ed25519, the uncompressed point 04||X||Y for ECDSA. Derived
+/// from the secret key and published (a declassification by design).
 @requires(declassify)
 pub List(Int) tls_key_pubkey(ServerKey key) {
     return match key {
@@ -67,11 +69,9 @@ pub List(Int) tls_key_pubkey(ServerKey key) {
     };
 }
 
-// True when the leaf certificate carries this key's public key. A server
-// whose certificate and key disagree would sign a transcript with a key
-// the certificate does not name, and every client would refuse it — so it
-// is refused at load time, where the operator can see which of the two
-// files is wrong.
+/// True when the leaf certificate `leaf_der` carries this key's public key.
+/// A server refuses a mismatched pair at load time, where the operator can
+/// see which of the two files is wrong.
 @requires(declassify)
 pub Bool tls_key_cert_matches(ServerKey key, List(Int) leaf_der) {
     List(Int) bits = cert_pubkey_bits(leaf_der);
@@ -87,15 +87,10 @@ pub Bool tls_key_cert_matches(ServerKey key, List(Int) leaf_der) {
 
 // ─── Signing ──────────────────────────────────────────────────────────
 
-// Sign the bytes to be hashed (a CertificateVerify signs a transcript
-// hash, not the transcript): DER SEQUENCE { r, s } for ECDSA, the 64 raw
-// bytes Ed25519 produces. ECDSA nonces are RFC 6979's, derived from the
-// key and the message, so no entropy failure can repeat one, and s is
-// put in its low half so the bytes are canonical. An empty list means
-// the key refused, and the caller must fail the handshake rather than
-// put an empty signature on the wire. The key stays secret; the
-// signature is published (ed25519g_sign / ecdsag_sign_digest at secret
-// bytes), so signing needs the declassify grant.
+/// Signs `content` with the key and returns the published signature.
+/// ECDSA hashes `content` and returns DER SEQUENCE { r, s } with RFC 6979
+/// nonces and low s; Ed25519 returns its 64 raw bytes. An empty list means
+/// the key refused, and the caller must fail the handshake.
 @requires(declassify)
 pub List(Int) tls_key_sign(ServerKey key, List(Int) content) {
     return match key {
@@ -129,29 +124,35 @@ Int tk_at(List(Secret(UInt(8))) b, Int i) {
     return (Int) ct_public(v);
 }
 
-// One TLV read from `b` at `pos`: `start` is the first content byte,
-// `end` the byte after it. `ok` is false for a truncated element, an
-// indefinite length, or a length field with more than four octets — a
-// key never needs one, and a five-octet length is an attack rather than
-// a big number.
+/// One DER element read from secret key bytes, with public framing.
+/// `start` is the first content byte and `end` the byte after it; `ok` is
+/// false for a truncated element, an indefinite length, or a length field
+/// with more than four octets.
 type Tlv = { Int tag; Int start; Int len; Int end; Bool ok; };
 
 Tlv tk_bad(Int pos) {
     return Tlv { .tag = 0, .start = pos, .len = 0, .end = pos, .ok = false };
 }
 
-// The tag number, with the class and constructed bits masked off: the
-// constants below are tag numbers, and an identifier octet is 0x30 for a
-// SEQUENCE rather than 16.
+/// The tag number, with the class and constructed bits masked off: the
+/// constants below are tag numbers, and an identifier octet is 0x30 for a
+/// SEQUENCE rather than 16.
 pub Int tk_tag_num(Tlv t) {
     return t.tag & 31;
 }
 
+/// The DER tag number of INTEGER (2).
 pub Int tk_tag_int() { return 2; }
+/// The DER tag number of OCTET STRING (4).
 pub Int tk_tag_octet() { return 4; }
+/// The DER tag number of OBJECT IDENTIFIER (6).
 pub Int tk_tag_oid() { return 6; }
+/// The DER tag number of SEQUENCE (16).
 pub Int tk_tag_seq() { return 16; }
 
+/// Reads the DER element at `pos` in `b`, publishing only its tag and
+/// length octets. A result with `ok` false means the element is malformed
+/// or runs past the end of `b`.
 @requires(declassify)
 pub Tlv tk_tlv(List(Secret(UInt(8))) b, Int pos) {
     Int n = b.len();
@@ -190,14 +191,14 @@ Int tk_len_acc(List(Secret(UInt(8))) b, Int i, Int end, Int acc) {
     return tk_len_acc(b, i + 1, end, step);
 }
 
-// An element's content, still secret.
+/// An element's content, still secret.
 pub List(Secret(UInt(8))) tk_value(List(Secret(UInt(8))) b, Tlv t) {
     return b[t.start..t.end];
 }
 
-// An OBJECT IDENTIFIER as dotted decimal (RFC 4514 §2.3), its octets
-// published (an algorithm or curve name). The first octet carries arcs 1
-// and 2 packed together.
+/// An OBJECT IDENTIFIER element as dotted decimal, its octets published.
+/// Returns "" when `t` is not an OID or is empty; an arc too long for an
+/// Int ends the string with ".?".
 @requires(declassify)
 pub Str tk_oid_str(List(Secret(UInt(8))) b, Tlv t) {
     if (tk_tag_num(t) != tk_tag_oid()) { return ""; }
@@ -233,10 +234,8 @@ Str tk_oid_rest(List(Int) c, Int i, Int n, Str acc, Int v) {
     return tk_oid_rest(c, ni, n, acc + "." + arc, 0);
 }
 
-// The OIDs of an AlgorithmIdentifier, first and second; "" when the
-// element there is not an OID. Ed25519 names one, EC names two (the key
-// type and the curve), and a second one that is not a curve OID is a
-// curve this module does not implement.
+/// The first OID of the AlgorithmIdentifier `alg` (the key type).
+/// Returns "" when the element there is malformed or not an OID.
 @requires(declassify)
 pub Str tk_alg_oid1(List(Secret(UInt(8))) der, Tlv alg) {
     Tlv first = tk_tlv(der, alg.start);
@@ -244,6 +243,9 @@ pub Str tk_alg_oid1(List(Secret(UInt(8))) der, Tlv alg) {
     return tk_oid_str(der, first);
 }
 
+/// The second OID of the AlgorithmIdentifier `alg` (an EC key's curve).
+/// Returns "" when either element is malformed or the second is not an
+/// OID, as for Ed25519, whose identifier names only one.
 @requires(declassify)
 pub Str tk_alg_oid2(List(Secret(UInt(8))) der, Tlv alg) {
     Tlv first = tk_tlv(der, alg.start);
@@ -284,20 +286,16 @@ List(Int) tk_classes(List(Secret(UInt(8))) f, Int i, ListBuf(Int) acc) {
     return tk_classes(f, i + 1, acc.push((Int) ct_public(k)));
 }
 
-// Where a block's base64 body is: [start, end) of the file, between the
-// BEGIN line and the END line. `found` is false when there is no complete
-// block with one of the labels.
+/// Where a PEM block's base64 body lies in the file, as [start, end).
+/// The span runs between the BEGIN line and the END line; `found` is false
+/// when there is no complete block with one of the labels.
 type PemSpan = { Int start; Int end; Bool found; };
 
 PemSpan tk_span_none() { return PemSpan { .start = 0, .end = 0, .found = false }; }
 
-// The DER of the first block in the file carrying one of `labels`, as
-// secret bytes ([] when there is none or its body is not base64). A key
-// file holds exactly one block, and the first is the key: a certificate
-// after it is the chain, which comes from the file the operator named as
-// the chain rather than out of the key file. A block with no END is
-// dropped, because half a key is not a key, and so is one with any other
-// armor line inside it.
+/// The DER of the first PEM block in `f` carrying one of `labels`, secret.
+/// Returns [] when there is none or its body is not base64. A block with
+/// no END, or with another armor line inside it, is dropped.
 @requires(declassify)
 pub List(Secret(UInt(8))) tk_pem_block(List(Secret(UInt(8))) f, List(Str) labels) {
     List(Secret(UInt(8))) none = [];
@@ -402,23 +400,19 @@ Bool tk_in_labels(Str s, List(Str) labels, Int i) {
 
 // ─── Keys on disk ─────────────────────────────────────────────────────
 
-// A key read from `path`: PEM or DER, PKCS#8 or SEC1. None when the file
-// is missing, is not a key, or is a key for something this language
-// cannot sign with — an unsupported curve included, because signing
-// P-384 through a P-256 implementation is not a fallback, it is a wrong
-// answer wearing a valid key's clothes.
+/// A key read from the file at `path`: PEM or DER, PKCS#8 or SEC1.
+/// None when the file is missing, is not a key, or is a key this module
+/// cannot sign with, an unsupported curve included.
 @requires(filesystem(readonly), declassify, provision)
 pub Option(ServerKey) tls_key_load(Str path) {
     if (!filesystem.exists(path)) { return None; }
     return tls_key_parse(filesystem.read_bytes(path));
 }
 
-// A key file's contents as a key. The bytes are secret from here on: the
-// file is classified (above) and parsed with only its framing published.
-// A DER file is told from a PEM one by its first byte, a SEQUENCE's
-// identifier octet 0x30, which is framing either way (a PEM file starts
-// with its armor's dash or with explanatory text, never with a '0'
-// before the armor in any file this module is given).
+/// Parses a key file's contents (PEM or DER, PKCS#8 or SEC1) into a key.
+/// The bytes are secret from here on and only their framing is published;
+/// a first byte of 0x30 means DER, anything else PEM. None when the file is
+/// empty, holds no key block, or is not a key this module can sign with.
 @requires(declassify, provision)
 pub Option(ServerKey) tls_key_parse(List(Int) file) {
     List(Secret(UInt(8))) f = secret_bytes(file);
@@ -430,10 +424,9 @@ pub Option(ServerKey) tls_key_parse(List(Int) file) {
     return match as_pkcs8 { Some(key) => Some(key), None => tk_sec1(der) };
 }
 
-// The chain to present, leaf first: a PEM bundle in the order it lists
-// them, or one DER certificate. A missing file is an empty chain, which
-// the handshake refuses: a server with no certificate is not a server
-// that answers with an empty one.
+/// The certificate chain to present, leaf first, read from `path`.
+/// A PEM bundle gives its certificates in order, else the file is one DER
+/// certificate. A missing file is an empty chain, which the handshake refuses.
 @requires(filesystem(readonly))
 pub List(List(Int)) tls_chain_load(Str path) {
     List(List(Int)) none = [];
@@ -445,11 +438,10 @@ pub List(List(Int)) tls_chain_load(Str path) {
 
 // ─── PKCS#8 (RFC 5208), SEC1 (RFC 5915), CurvePrivateKey (RFC 8410) ───
 
-// PrivateKeyInfo ::= SEQUENCE { version INTEGER, algorithm
-// AlgorithmIdentifier, privateKey OCTET STRING, attributes [0] OPTIONAL }.
-// Ed25519 arrives as RFC 8410's one-OID algorithm with the seed wrapped
-// in an OCTET STRING; EC as id-ecPublicKey with a named curve, whose
-// privateKey OCTET STRING holds a SEC1 ECPrivateKey.
+/// Parses a PKCS#8 PrivateKeyInfo (RFC 5208) into a key, or None.
+/// Ed25519 arrives as RFC 8410's one-OID algorithm with the seed wrapped
+/// in an OCTET STRING; EC as id-ecPublicKey with a named curve, whose
+/// privateKey OCTET STRING holds a SEC1 ECPrivateKey.
 @requires(declassify, provision)
 pub Option(ServerKey) tk_pkcs8(List(Secret(UInt(8))) der) {
     Tlv seq = tk_tlv(der, 0);
@@ -473,10 +465,9 @@ pub Option(ServerKey) tk_pkcs8(List(Secret(UInt(8))) der) {
     };
 }
 
-// RFC 8410 CurvePrivateKey is an OCTET STRING holding the key; RFC 5915
-// ECPrivateKey is a SEQUENCE. The two are told apart by that first tag
-// rather than by which algorithm was named above, so a file that says
-// Ed25519 and carries a SEC1 structure is refused instead of half-read.
+/// An Ed25519 key from an RFC 8410 CurvePrivateKey, an OCTET STRING
+/// holding the 32-byte seed. None for any other tag or length, so a file
+/// that says Ed25519 and carries a SEC1 SEQUENCE is refused.
 @requires(declassify, provision)
 pub Option(ServerKey) tk_curve_private(List(Secret(UInt(8))) b) {
     Tlv t = tk_tlv(b, 0);
@@ -489,12 +480,10 @@ pub Option(ServerKey) tk_curve_private(List(Secret(UInt(8))) b) {
     return None;
 }
 
-// ECPrivateKey ::= SEQUENCE { version INTEGER (1), privateKey
-// OCTET STRING, [0] parameters OPTIONAL, [1] publicKey OPTIONAL }. The
-// curve is the PKCS#8 AlgorithmIdentifier's when there is one, else the
-// [0] parameters', else the scalar's length (32 bytes P-256, 48 P-384).
-// When two of those disagree the key is refused: a P-384 scalar is not a
-// P-256 one whatever it is filed under.
+/// Parses a SEC1 ECPrivateKey (RFC 5915) into a P-256 or P-384 key.
+/// The curve is the [0] parameters' when present, else the scalar's length
+/// (32 bytes P-256, 48 P-384). None when they disagree, the curve is
+/// another, or the scalar is out of range.
 @requires(declassify, provision)
 pub Option(ServerKey) tk_sec1(List(Secret(UInt(8))) der) { return tk_ec_private(der, None); }
 

@@ -21,13 +21,17 @@ import "../word.resid";
 import "../ecdsa.resid";
 import "../cose.resid";
 
+/// The EAR profile name, the value of the eat_profile claim.
 pub Str ear_profile() { return "tag:github.com,2023:veraison/ear"; }
 
+/// The AR4SI "affirming" value, 2, used for ear.status and the vector.
 pub Int ear_affirming() { return 2; }
 
-// The CWT, or why not. `submod` names the attester in the result, `policy`
-// is the appraisal policy's name, `t` the time the evidence was checked
-// at. The key is the verifier's own (or provisioned) P-256 signing key.
+/// The appraisal `a` as an EAR: a COSE_Sign1 CWT signed ES256 with `key`.
+/// `submod` names the attester, `policy` the appraisal policy, `build` and
+/// `developer` the verifier-id, `t` the time the evidence was checked (iat).
+/// `key` is the verifier's own or provisioned 32-byte P-256 scalar; Err
+/// Refused for a bad key or an empty `submod` or `policy`.
 @requires(declassify)
 @key(key, own, provisioned)
 pub Result(List(Int), VerifyError) ear_cwt(Appraised(T) a, Str submod, Str policy, Str build, Str developer, EvidenceTime t, List(Secret(UInt(8))) key) {
@@ -45,7 +49,9 @@ List(Int) cose_tbs_ear(List(Int) prot, List(Int) payload) {
     return cbe_bytes(payload, cbe_bytes([], cbe_bytes(prot, cbe_text("Signature1", cbe_array(4, [])))));
 }
 
-// The claims map, in canonical key order (6, 265, 266, 1004).
+/// The CBOR claims map, in canonical key order (6, 265, 266, 1004).
+/// `quals` and `principal` (empty for no hardware anchor) set the
+/// trustworthiness vector; `iat` is in seconds.
 pub List(Int) ear_claims(Int quals, Str principal, Str submod, Str policy, Str build, Str developer, Int iat) {
     Bool identity = (quals & (q_key_bound() | q_channel_bound() | q_local())) != 0;
     Bool hw = principal != "";

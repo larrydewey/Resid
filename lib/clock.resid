@@ -24,18 +24,10 @@ import "instant.resid";
 
 // -- Reading ------------------------------------------------------------
 
-// The moment, from the system wall clock.
-//
-// Two readings are needed for full nanosecond resolution and are taken one
-// after the other: `seconds` covers the whole of Int's range, while
-// `now_ns` carries the fraction within the second. Splitting a single
-// nanosecond reading into the two fields would overflow an Int outside
-// 1677-09-21 .. 2262-04-11, so the fraction is taken by remainder instead,
-// which is exact for every instant. The two reads can straddle a second
-// boundary, and a clock that steps between them can describe an instant
-// that never was; both are inherent to asking a wall clock what time it is.
-// clock_monotonic is immune to the stepping, and is what an interval should
-// be measured with.
+/// Returns the current instant from the system wall clock.
+/// Two reads (nanoseconds for the fraction, then whole seconds) keep every
+/// date exact, but can straddle a second or a clock step; measure intervals
+/// with `clock_monotonic_ns` instead. Needs `clock(readonly)`.
 @requires(clock(readonly))
 pub Instant clock_now() {
     Int frac = cal_floor_mod(clock.now_ns(), 1000000000);
@@ -43,39 +35,48 @@ pub Instant clock_now() {
     return floor_to_instant(sec, frac);
 }
 
-// Nanoseconds since the Unix epoch, as one Int: convenient, and only
-// meaningful from 1677-09-21 to 2262-04-11.
+/// Returns wall-clock nanoseconds since the Unix epoch as one Int.
+/// Only meaningful from 1677-09-21 to 2262-04-11. Needs `clock(readonly)`.
 @requires(clock(readonly))
 pub Int clock_now_nanos() { return clock.now_ns(); }
 
-// Whole seconds since the Unix epoch, over the whole of Int's range.
+/// Returns whole wall-clock seconds since the Unix epoch.
+/// Valid over the whole of Int's range. Needs `clock(readonly)`.
 @requires(clock(readonly))
 pub Int clock_now_seconds() { return clock.now_sec(); }
 
-// Nanoseconds from an unspecified monotonic origin, never stepping. An
-// Int of them spans ~292 years, and two reads of it measure an interval.
+/// Returns nanoseconds from an unspecified monotonic origin.
+/// Never steps; the difference of two reads measures an interval (an Int
+/// spans about 292 years). Needs `clock(readonly)`.
 @requires(clock(readonly))
 pub Int clock_monotonic_ns() { return clock.monotonic_ns(); }
 
 // -- Waiting ------------------------------------------------------------
 
-// Sleep at least `ns` nanoseconds. Returns the part of `ns` still unslept
-// when a signal cut it short, which is 0 when the whole duration elapsed,
-// and -1 when the request made no sense. A read-only grant does not cover
-// this: reading the clock is observation, sleeping is consumption.
+/// Sleeps for at least `ns` nanoseconds.
+/// Returns the nanoseconds still unslept when a signal cut it short, 0 when
+/// the whole duration elapsed, -1 for an invalid request. Needs the full
+/// `clock` grant; `clock(readonly)` does not cover sleeping.
 @requires(clock)
 pub Int clock_sleep_ns(Int ns) { return clock.sleep_ns(ns); }
 
+/// Sleeps for at least `us` microseconds.
+/// Returns what `clock_sleep_ns` returns, in nanoseconds. Needs `clock`.
 @requires(clock)
 pub Int clock_sleep_us(Int us) { return clock_sleep_ns(us * 1000); }
 
+/// Sleeps for at least `ms` milliseconds.
+/// Returns what `clock_sleep_ns` returns, in nanoseconds. Needs `clock`.
 @requires(clock)
 pub Int clock_sleep_ms(Int ms) { return clock_sleep_ns(ms * 1000000); }
 
+/// Sleeps for at least `s` seconds.
+/// Returns what `clock_sleep_ns` returns, in nanoseconds. Needs `clock`.
 @requires(clock)
 pub Int clock_sleep_seconds(Int s) { return clock_sleep_ns(s * 1000000000); }
 
-// Sleep for a length of time.
+/// Sleeps for at least the span `d`.
+/// Returns what `clock_sleep_ns` returns, in nanoseconds. Needs `clock`.
 @requires(clock)
 pub Int clock_sleep(Span d) { return clock_sleep_ns(span_total_nanos(d)); }
 
@@ -95,13 +96,16 @@ Int clock_measure(Void closure() body) {
 // Everything below is arithmetic over what clock_now returned, so it needs
 // no further grant: the clock was already read.
 
-// Today's date where the clocks are, at UTC.
+/// Returns today's date in UTC, from the wall clock.
+/// Needs `clock(readonly)`.
 @requires(clock(readonly))
 pub Date clock_today_utc() { return instant_to_utc(clock_now()).date; }
 
-// The current civil time at UTC.
+/// Returns the current civil date and time in UTC, from the wall clock.
+/// Needs `clock(readonly)`.
 @requires(clock(readonly))
 pub DateTime clock_now_utc() { return instant_to_utc(clock_now()); }
 
-// The Unix epoch as a constant, for code that wants to name it.
+/// Returns the Unix epoch (1970-01-01T00:00:00Z) as an instant.
+/// Needs no capability.
 pub Instant clock_epoch() { return instant_zero(); }

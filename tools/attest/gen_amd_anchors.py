@@ -32,9 +32,11 @@ for prod, path in zip(["Milan", "Genoa", "Turin"], sys.argv[1:4]):
     low = prod.lower()
     src = f"https://kdsintf.amd.com/vcek/v1/{prod}/cert_chain"
     for kind, suffix in (("AmdVcek", ""), ("AmdVlek", "_vlek")):
+        out.append(f"/// AMD's {prod} root key (ARK), as the anchor for {'VCEK' if kind == 'AmdVcek' else 'VLEK'}-signed SEV-SNP reports.")
         out.append(f'@anchor(kind = {kind}({prod}), principal = InGuest, formats = [SnpReport], source = "{src}", fingerprint = "sha384:{fp}", retrieved = "{RETRIEVED}", reviewed_by = "{REVIEWER}", algorithms = [RsaPss4096Sha384, EcdsaP384Sha384], expires = "{EXPIRES[prod]}")')
         out.append(f"pub Anchor amd_ark_{low}{suffix}() {{ return anchor_der(amd_ark_{low}_der()); }}")
         out.append("")
+    out.append(f"/// The DER bytes of AMD's {prod} ARK certificate.")
     out.append(f"pub List(Int) amd_ark_{low}_der() {{\n    return {ints(der)};\n}}")
     out.append("")
 sys.stdout.write("\n".join(out))

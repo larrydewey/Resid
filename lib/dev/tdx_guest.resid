@@ -16,10 +16,11 @@
 import "device.resid";
 import "uapi_tdx_guest.resid";
 
-// TDREPORT subtype 0 with its REPORTDATA filled by the device engine
-// (PLAN-labels.md §6.3): Runtime by default, an issued record (spent before
-// the request is sent, bound to this reply) or a verifier's value. Not
-// signed (above): binding a record to it binds it to the kernel's word.
+/// TDREPORT subtype 0 with its REPORTDATA filled by the device engine
+/// (PLAN-labels.md §6.3): Runtime by default, an issued record (spent before
+/// the request is sent, bound to this reply) or a verifier's value. A
+/// TDREPORT is not signed: binding a record to it binds it to the kernel's
+/// word. BadReply when the reply is missing or of the wrong size.
 @requires(device(readonly))
 pub Result(List(UInt(8)), DeviceError) tdx_report0(Challenge challenge = Runtime) {
     Str name = "tdx_guest.tdx_get_report0";
@@ -34,12 +35,12 @@ pub Result(List(UInt(8)), DeviceError) tdx_report0(Challenge challenge = Runtime
 
 List(UInt(8)) tdx_zeros(Int n, ListBuf(UInt(8)) acc) { return if (n <= 0) { acc.finish() } else { tdx_zeros(n - 1, acc.push((UInt(8)) 0)) }; }
 
-// TDREPORT subtype 0 (TDX_REPORT_LEN bytes) for `report_data`
-// (TDX_REPORTDATA_LEN bytes, bound into the report). Not signed (above).
-//
-// Failures: Absent off a TDX guest, Denied when this user cannot open the
-// device, Kernel(errno) when the TDCALL fails (EIO), BadReply for a reply
-// of the wrong size.
+/// TDREPORT subtype 0 (TDX_REPORT_LEN bytes) for `report_data`
+/// (TDX_REPORTDATA_LEN bytes, bound into the report). Not signed.
+///
+/// Failures: BadInput when `report_data` has the wrong length, Absent off a
+/// TDX guest, Denied when this user cannot open the device, Kernel(errno)
+/// when the TDCALL fails (EIO), BadReply for a reply of the wrong size.
 @requires(device(readonly))
 pub Result(List(UInt(8)), DeviceError) tdx_get_report0(List(UInt(8)) report_data) {
     Str name = "tdx_guest.tdx_get_report0";

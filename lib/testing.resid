@@ -29,17 +29,19 @@
 // RESID_TEST_FILTER (a regex over the case name) apply here exactly as they
 // do to `residc test`.
 
-// One registered case: a display name and the body to run. The body is a
-// zero-argument closure, so it captures whatever the surrounding scope had.
+/// One registered case: a display name and the body to run.
+/// The body is a zero-argument closure, so it captures whatever the
+/// surrounding scope had.
 type TestCase = { Str name; Void closure() body; };
 
+/// Builds a test case from a display `name` and a zero-argument `body`.
 pub TestCase test_case(Str name, Void closure() body) {
     return TestCase { .name = name, .body = body };
 }
 
-// A property case is registered the same way; `forall` generators and
-// shrinking are Phase 2 of the spec and are not implemented yet, so this
-// records the intent without pretending to generate anything.
+/// Builds a property test case; for now it is identical to `test_case`.
+/// `forall` generators and shrinking are Phase 2 of the spec and are not
+/// implemented yet, so this records the intent without generating anything.
 pub TestCase property_case(Str name, Void closure() body) {
     return TestCase { .name = name, .body = body };
 }
@@ -53,8 +55,8 @@ Int run_cases_at(List(TestCase) cases, Int i, Int n, Int failed) {
     return run_cases_at(cases, k, n, f2);
 }
 
-// Run every registered case under `module`, printing in the configured
-// format. Returns the process exit code: 0 all passed, 1 any failure.
+/// Run every registered case under `module`, printing in the configured
+/// format. Returns the process exit code: 0 all passed, 1 any failure.
 pub Int run_tests(Str module, List(TestCase) cases) {
     Int n = cases.len();
     Bool p = resid_test_plan(n, module);

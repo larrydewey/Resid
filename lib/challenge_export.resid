@@ -19,21 +19,25 @@ import "sha512g.resid";
 // version, the value's length, the expiry (Unix seconds), the nonce and
 // bind (lengths as 4 bytes, big-endian). The value is recomputed on import.
 
-// The key all of a verifier's processes hold: 32 bytes, own or provisioned
-// (PLAN-labels.md §5.2, checked by E-key).
+/// The secret key that seals and opens exported challenge tokens.
+/// All of a verifier's processes hold it: 32 bytes, own or provisioned
+/// (PLAN-labels.md §5.2, checked by E-key).
 @opaque
 pub type ExportKey = { List(Secret(UInt(8))) k; };
 
-// A record imported without a store: its single use is unchecked across
-// processes, so it has its own type, which a verifier takes only in its
-// replayable form.
+/// A challenge record imported without a store.
+/// Its single use is unchecked across processes, so it has its own type,
+/// which a verifier takes only in its replayable form.
 @opaque
 pub type ReplayableRecord = { ChallengeRecord r; };
 
+/// A record imported through a store, and the store after the spend.
 pub type Imported(S) = { ChallengeRecord record; S store; };
 
+/// Why a challenge record could not be exported or a token imported.
 pub type ChallengeError = Malformed | Forged | Expired | Spent | NotExportable;
 
+/// A one-line English description of `e`.
 pub Str challenge_error_text(ChallengeError e) {
     return match e {
         Malformed => "challenge token: malformed",
@@ -44,15 +48,17 @@ pub Str challenge_error_text(ChallengeError e) {
     };
 }
 
-// Single use across processes: spending an id must be atomic in the store
-// (two processes spending one id see exactly one Ok), and the store keeps
-// its own high-water mark (the latest reading of its own clock), refuses an
-// expiry not after it and forgets an id only once its expiry is behind it.
-// That is each instance's contract, a stated reliance.
+/// A store of spent token ids that keeps imports single use across processes.
+/// `spend` returns the updated store, or Err when the id was spent or the
+/// expiry is not after the store's high-water mark (the latest reading of
+/// its own clock). Spending must be atomic (two processes spending one id
+/// see exactly one Ok), and an id is forgotten only once its expiry is
+/// behind it. That is each instance's contract, a stated reliance.
 behavior SpentStore(S) {
     Result(S, Str) spend(S s, List(UInt(8)) id, Int expires_unix);
 }
 
+/// Wraps the 32 secret bytes `k` as an ExportKey; aborts on another length.
 @key(k, own, provisioned)
 pub ExportKey export_key(List(Secret(UInt(8))) k) {
     rt_assert(k.len() == 32, "export_key: the key is 32 bytes");
@@ -69,9 +75,10 @@ List(Int) chal_zero_iv() { return [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]; }
 
 List(Int) chal_u64(Int v) { return chal_u32(v >> 32).concat(chal_u32(v & 4294967295)); }
 
-// A record as a token. Refused when it was spent in a request, accepted or
-// exported; exporting marks it, so from then on it is accepted only through
-// an import of the token, which passes the store.
+/// Seals record `c` under `k` as a token another process can import.
+/// NotExportable when it was spent in a request, accepted or exported (or
+/// has no time left); exporting marks it, so from then on it is accepted only through
+/// an import of the token, which passes the store.
 @requires(clock(readonly), declassify)
 pub Result(List(UInt(8)), ChallengeError) challenge_export(ChallengeRecord c, ExportKey k) {
     Int left = resid_chal_left(c.handle);
@@ -99,6 +106,8 @@ List(UInt(8)) chal_open_body(List(Secret(UInt(8))) pt, Int i, ListBuf(UInt(8)) a
     return chal_open_body(pt, i + 1, acc.push((UInt(8)) ct_public((Int) declassify(pt[i], "challenge export token: opened body (public fields)"))));
 }
 
+/// An opened token's body: the value's length, expiry (Unix seconds), nonce
+/// and bind.
 type ChalBody = { Int n; Int expiry; List(UInt(8)) nonce; List(UInt(8)) bind; };
 
 Int chal_be(List(UInt(8)) b, Int at, Int k, Int acc) { return if (k <= 0) { acc } else { chal_be(b, at + 1, k - 1, (acc << 8) | (Int) b[at]) }; }
@@ -135,9 +144,10 @@ Result(ChallengeRecord, ChallengeError) chal_import_record(ChalBody b) {
     return Ok(ChallengeRecord {.handle = h, .nonce = b.nonce, .bind = b.bind, .value = chal_value(b.nonce, b.bind, b.n)});
 }
 
-// Import a token, spending it in the store first: Spent when the store has
-// seen it. The store comes back with the record, so a store that is a value
-// carries its spends forward.
+/// Imports a token sealed under `k`, spending it in `store` first.
+/// Malformed, Forged or Expired when it does not open or has lapsed; Spent
+/// when the store refuses it. The store comes back with the record, so a
+/// store that is a value carries its spends forward.
 @requires(clock(readonly), declassify)
 @needs(SpentStore(S))
 pub Result(Imported(S), ChallengeError) challenge_import(List(UInt(8)) token, ExportKey k, S store) {
@@ -152,7 +162,9 @@ pub Result(Imported(S), ChallengeError) challenge_import(List(UInt(8)) token, Ex
     return Ok(Imported {.record = r, .store = s2});
 }
 
-// Import a token without a store: single use across processes unchecked.
+/// Imports a token sealed under `k` without a store.
+/// Single use across processes is unchecked, hence the ReplayableRecord; a
+/// token already imported in this process is still refused (Spent).
 @requires(clock(readonly), declassify)
 pub Result(ReplayableRecord, ChallengeError) challenge_import_unspent(List(UInt(8)) token, ExportKey k) {
     ChalBody b = chal_open(token, k)?;
@@ -160,12 +172,15 @@ pub Result(ReplayableRecord, ChallengeError) challenge_import_unspent(List(UInt(
     return Ok(ReplayableRecord {.r = r});
 }
 
+/// The challenge value of a replayable record.
 pub List(UInt(8)) replayable_value(ReplayableRecord r) { return r.r.value; }
 
-// An in-memory store for tests and single-process use: spent ids with
-// their expiry, and the high-water mark of the clock it reads itself.
+/// An in-memory SpentStore for tests and single-process use.
+/// It holds spent ids with their expiry, and the high-water mark of the
+/// clock it reads itself (`clock(readonly)`); ids are never forgotten.
 pub type MemSpentStore = { Map(Str, Int) ids; Int mark; };
 
+/// An empty MemSpentStore.
 pub MemSpentStore mem_spent_store() {
     Map(Str, Int) none = {};
     return MemSpentStore {.ids = none, .mark = 0};

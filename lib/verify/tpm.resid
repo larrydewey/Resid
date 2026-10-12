@@ -10,7 +10,8 @@
 // under an EC AK); its extraData (qualifyingData, relayed) must be the
 // challenge, and its PCR digest the SHA-256 of the PCR values given with
 // it, one SHA-256 bank, in selection order. Only then are the values
-// verified.
+// verified. NV counters (TPM2_NV_Certify) verify the same way, under a
+// pinned AK or an activated one.
 
 import "core.resid";
 import "../crypto.resid";
@@ -29,19 +30,24 @@ import "../chain.resid";
 import "corim.resid";
 import "endorsed_keys.resid";
 
-// What a verified quote says: the PCRs (SHA-256 bank) and their values,
-// the TPM's clock and boot counters, and its firmware version.
+/// What a verified quote says: the PCRs (SHA-256 bank) and their values,
+/// the TPM's clock and boot counters, and its firmware version.
 @signed(sig = signature, span = attest)
 pub type TpmQuoteEvidence = { List(Int) pcr_index; List(List(UInt(8))) pcr_values; Int clock_hi; Int clock_lo; Int reset_count; Int restart_count; Bool safe; Int fw_hi; Int fw_lo; List(UInt(8)) signer; };
 
-// A policy: the PCRs (SHA-256 bank) that must hold these values,
-// "index=hex", every one of them.
+/// An appraisal policy: PCRs of the SHA-256 bank and the values they must hold.
+/// Each entry is "index=hex" (hex compared case-insensitively); every entry
+/// must match.
 pub type TpmPolicy = { List(Str) pcrs_hex; };
 
+/// The device descriptors TPM evidence comes through (`tpm.tpmrm0`).
+/// Passed to `vf_bind_challenge` when a challenge is bound.
 pub List(Str) tpm_descriptors() { return ["tpm.tpmrm0"]; }
 
 // ─── The signature (TPMT_SIGNATURE) ─────────────────────────────────
 
+/// A parsed TPMT_SIGNATURE: algorithm, hash, and its one or two integers.
+/// RSASSA (`alg` 20) uses `a` only; ECDSA (`alg` 24) has r in `a`, s in `b`.
 type TpmSig = { Int alg; Int hash; List(Int) a; List(Int) b; };
 
 Result(TpmSig, VerifyError) tq_sig(List(UInt(8)) s) {
@@ -76,8 +82,12 @@ List(Int) tq_fixed(List(Int) v, Int n) {
 
 // ─── Verification ───────────────────────────────────────────────────
 
+/// A checked quote: the parsed TPMS_ATTEST and the evidence it yields.
 pub type TqOk = { QuoteInfo q; TpmQuoteEvidence e; };
 
+/// Checks a quote under a pinned AK anchor, without its challenge binding.
+/// Refuses an anchor not of kind TpmAk or expired at `t`, then checks the
+/// signature (`tq_signed_by`) and the body (`tq_quote`).
 @verify_internal
 pub Result(TqOk, VerifyError) tpm_check(List(UInt(8)) attest, List(UInt(8)) sig, List(List(UInt(8))) pcr_values, Anchor ak, EvidenceTime t) {
     if (ak.kind != "TpmAk") { return Err(Refused("tpm_verify_quote", "the anchor is not a TPM attestation key (kind " + ak.kind + ")")); }
@@ -86,7 +96,10 @@ pub Result(TqOk, VerifyError) tpm_check(List(UInt(8)) attest, List(UInt(8)) sig,
     return tq_quote(attest, pcr_values);
 }
 
-// The quote's body, once its signature is checked.
+/// Checks a quote's body once its signature is checked.
+/// It must select exactly one SHA-256 bank, `pcr_values` must hold one
+/// 32-byte digest per selected PCR, and their SHA-256 must be the quote's
+/// PCR digest; otherwise BadLayout, Refused or BadSignature.
 @verify_internal
 pub Result(TqOk, VerifyError) tq_quote(List(UInt(8)) attest, List(List(UInt(8))) pcr_values) {
     QuoteInfo q = match (tpm_attest_quote(attest)) { Ok(x) => Ok(x), Err(e) => Err(BadLayout(tpm_error_text(e))) }?;
@@ -103,7 +116,9 @@ Result(Bool, VerifyError) tq_signed(List(UInt(8)) attest, List(UInt(8)) sig, Anc
     return tq_signed_by(attest, sig, spki_parse_der(ak.der), anchor_lists(ak.algorithms, "RsaSsaSha256"), anchor_lists(ak.algorithms, "EcdsaP256Sha256"));
 }
 
-// The same under a key and the algorithms allowed for it.
+/// Checks that `key` signed the TPMS_ATTEST bytes `attest` over SHA-256.
+/// `rsa_ok` allows RSASSA-PKCS1 v1.5 under an RSA key, `ec_ok` ECDSA under
+/// a P-256 key. Returns Ok(true), or Refused / BadSignature.
 @verify_internal
 pub Result(Bool, VerifyError) tq_signed_by(List(UInt(8)) attest, List(UInt(8)) sig, PubKey key, Bool rsa_ok, Bool ec_ok) {
     TpmSig s = tq_sig(sig)?;
@@ -125,15 +140,18 @@ List(Int) tq_cat(List(List(UInt(8))) vs, Int i, List(Int) acc) { return if (i >=
 
 Int tq_rp(ChallengeRecord c) { return if (c.bind.len() > 0) { q_rp_bound() } else { 0 }; }
 
-// extraData must be exactly the expected value.
+/// Checks that the quote's extraData is exactly `want` for challenge `c`.
+/// A length mismatch is NotFresh; the comparison and binding to `attest`
+/// are `vf_bind_challenge`'s.
 @verify_internal
 pub Result(Bool, VerifyError) tq_bind(QuoteInfo q, List(UInt(8)) want, ChallengeRecord c, List(UInt(8)) attest) {
     if (q.extra_data.len() != want.len()) { return Err(NotFresh("the quote's qualifying data is not this challenge")); }
     return vf_bind_challenge(q.extra_data, want, c, attest, tpm_descriptors());
 }
 
-// Fresh for the holder of `c`: qualifyingData was challenge_value(c)
-// (issue a 32-byte challenge: many TPMs take no more).
+/// Verifies a TPM quote under a pinned AK, fresh for the holder of `c`.
+/// qualifyingData must be challenge_value(c) (issue a 32-byte challenge:
+/// many TPMs take no more).
 @primitive(verify, anchor = ak, gives = [fresh], time = t, format = TpmQuoteEvidence, kinds = [TpmAk], inputs = [attest, sig, pcr_values, c, t])
 pub Result(Verified(TpmQuoteEvidence), VerifyError) tpm_verify_quote(List(UInt(8)) attest, List(UInt(8)) sig, List(List(UInt(8))) pcr_values, ChallengeRecord c, Anchor ak, EvidenceTime t) {
     TqOk k = tpm_check(attest, sig, pcr_values, ak, t)?;
@@ -142,8 +160,9 @@ pub Result(Verified(TpmQuoteEvidence), VerifyError) tpm_verify_quote(List(UInt(8
     return Ok(vf_make(k.e, ak, q_fresh() | tq_rp(c), c, 0, none, none, t, "TpmQuoteEvidence"));
 }
 
-// Fresh and KeyBound(kem, pk): qualifyingData was
-// challenge_with_key(challenge_value(c), kem, sk) for the sk behind pk.
+/// Verifies a TPM quote under a pinned AK, fresh and KeyBound(kem, pk).
+/// qualifyingData must be challenge_key_value(challenge_value(c), kem, pk);
+/// a KEM or `pk` that is malformed is refused first.
 @primitive(verify, anchor = ak, gives = [fresh, key_bound], time = t, format = TpmQuoteEvidence, kinds = [TpmAk], inputs = [attest, sig, pcr_values, c, t, kem, pk])
 pub Result(Verified(TpmQuoteEvidence), VerifyError) tpm_verify_quote_key_bound(List(UInt(8)) attest, List(UInt(8)) sig, List(List(UInt(8))) pcr_values, ChallengeRecord c, Anchor ak, EvidenceTime t, Int kem, List(Int) pk) {
     if (!hpke_kem_ok(kem) || !vf_pk_ok(kem, pk)) { return Err(Refused("tpm_verify_quote_key_bound", "the attester's public key is empty or malformed for the KEM")); }
@@ -153,7 +172,9 @@ pub Result(Verified(TpmQuoteEvidence), VerifyError) tpm_verify_quote_key_bound(L
     return Ok(vf_make(k.e, ak, q_fresh() | q_key_bound() | tq_rp(c), c, kem, pk, none, t, "TpmQuoteEvidence"));
 }
 
-// Delivered, for a record imported without a SpentStore.
+/// Verifies a TPM quote under a pinned AK as Delivered, not Fresh.
+/// For a record imported without a SpentStore: qualifyingData must equal
+/// replayable_value(c), and nothing is spent.
 @primitive(verify, anchor = ak, gives = [delivered], time = t, format = TpmQuoteEvidence, kinds = [TpmAk], inputs = [attest, sig, pcr_values, c, t])
 pub Result(Verified(TpmQuoteEvidence), VerifyError) tpm_verify_quote_replayable(List(UInt(8)) attest, List(UInt(8)) sig, List(List(UInt(8))) pcr_values, ReplayableRecord c, Anchor ak, EvidenceTime t) {
     TqOk k = tpm_check(attest, sig, pcr_values, ak, t)?;
@@ -169,6 +190,7 @@ pub Result(Verified(TpmQuoteEvidence), VerifyError) tpm_verify_quote_replayable(
 // does not say which TPM made it, so the verifier names the instance it
 // expects, and only keys endorsed for that instance are tried.
 
+/// A quote checked under an endorsed key, and the anchor of that key.
 type TqHit = { TqOk k; Anchor a; };
 
 Result(TqHit, VerifyError) tq_endorsed(List(UInt(8)) attest, List(UInt(8)) sig, List(List(UInt(8))) pcr_values, Verified(CorimRefs) keys, Str instance_hex, EvidenceTime t) {
@@ -185,7 +207,9 @@ Result(TqHit, VerifyError) tq_endorsed_at(List(UInt(8)) attest, List(UInt(8)) si
     };
 }
 
-// Fresh for the holder of `c`, under an AK endorsed for the instance.
+/// Verifies a TPM quote under an AK a CoRIM endorses, fresh for `c`.
+/// `instance_hex` names the expected TPM instance (required); each key
+/// endorsed for it is tried in turn.
 @primitive(verify, from = keys, gives = [fresh], time = t, format = TpmQuoteEvidence, inputs = [attest, sig, pcr_values, c, t, instance_hex])
 pub Result(Verified(TpmQuoteEvidence), VerifyError) tpm_verify_quote_endorsed(List(UInt(8)) attest, List(UInt(8)) sig, List(List(UInt(8))) pcr_values, ChallengeRecord c, Verified(CorimRefs) keys, Str instance_hex, EvidenceTime t) {
     TqHit h = tq_endorsed(attest, sig, pcr_values, keys, instance_hex, t)?;
@@ -194,7 +218,9 @@ pub Result(Verified(TpmQuoteEvidence), VerifyError) tpm_verify_quote_endorsed(Li
     return Ok(vf_make(h.k.e, h.a, q_fresh() | tq_rp(c), c, 0, none, none, t, "TpmQuoteEvidence"));
 }
 
-// Fresh and KeyBound(kem, pk), under an AK endorsed for the instance.
+/// Verifies a TPM quote under an endorsed AK, fresh and KeyBound(kem, pk).
+/// As `tpm_verify_quote_endorsed`, with qualifyingData
+/// challenge_key_value(challenge_value(c), kem, pk).
 @primitive(verify, from = keys, gives = [fresh, key_bound], time = t, format = TpmQuoteEvidence, inputs = [attest, sig, pcr_values, c, t, instance_hex, kem, pk])
 pub Result(Verified(TpmQuoteEvidence), VerifyError) tpm_verify_quote_endorsed_key_bound(List(UInt(8)) attest, List(UInt(8)) sig, List(List(UInt(8))) pcr_values, ChallengeRecord c, Verified(CorimRefs) keys, Str instance_hex, EvidenceTime t, Int kem, List(Int) pk) {
     if (!hpke_kem_ok(kem) || !vf_pk_ok(kem, pk)) { return Err(Refused("tpm_verify_quote_endorsed_key_bound", "the attester's public key is empty or malformed for the KEM")); }
@@ -205,7 +231,9 @@ pub Result(Verified(TpmQuoteEvidence), VerifyError) tpm_verify_quote_endorsed_ke
 }
 
 // ─── Appraisal ──────────────────────────────────────────────────────
-// Every PCR the policy names, by value; the policy names at least one.
+/// Appraises verified quote evidence against a PCR policy.
+/// Every PCR the policy names must be in the quote with that value; a
+/// policy naming no PCR, or a malformed entry, is refused.
 @primitive(appraise, from = v, policy = policy, ptype = TpmPolicy)
 pub Result(Appraised(TpmQuoteEvidence), VerifyError) tpm_appraise(Verified(TpmQuoteEvidence) v, TpmPolicy policy) {
     if (policy.pcrs_hex.len() == 0) { return Err(Refused("tpm_appraise", "the policy names no PCR")); }
@@ -235,9 +263,11 @@ Int tq_index_of(List(Int) xs, Int x, Int i) {
 // TPM_ST_ATTEST_NV (0x8014), TPM_GENERATED, signed by the AK, its
 // extraData the challenge, attesting the whole 8-byte counter at offset 0.
 
+/// A certified NV counter: the index's TPM name and its 8-byte value.
 @signed(sig = signature, span = attest)
 pub type TpmCounter = { List(Int) index_name; Int value; };
 
+/// A parsed TPM_ST_ATTEST_NV: extraData, NV name, offset and contents.
 type TcAttest = { List(Int) extra; List(Int) name; Int offset; List(Int) contents; };
 
 Result(TcAttest, VerifyError) tc_parse(List(Int) a) {
@@ -256,6 +286,7 @@ Result(TcAttest, VerifyError) tc_parse(List(Int) a) {
     return Ok(TcAttest {.extra = extra.v, .name = name.v, .offset = off, .contents = contents.v});
 }
 
+/// A TPM2B's bytes and the offset just past it.
 type TcB = { List(Int) v; Int next; };
 
 Result(TcB, VerifyError) tc_2b(List(Int) a, Int at, Int max) {
@@ -267,8 +298,10 @@ Result(TcB, VerifyError) tc_2b(List(Int) a, Int at, Int max) {
 
 Int tc_be(List(Int) a, Int at, Int n) { return if (n <= 0) { 0 } else { (tc_be(a, at, n - 1) << 8) | a[at + n - 1] }; }
 
-// A counter's value, fresh for the holder of `c` (qualifyingData was
-// challenge_value(c)): the latest version a sealed blob may claim.
+/// Verifies an NV counter certified by a pinned AK, fresh for `c`.
+/// qualifyingData must be challenge_value(c), and the certification must
+/// cover the whole 8-byte counter: the latest version a sealed blob may
+/// claim.
 @primitive(verify, anchor = ak, gives = [fresh], time = t, format = TpmCounter, kinds = [TpmAk], inputs = [attest, sig, c, t])
 pub Result(Verified(TpmCounter), VerifyError) tpm_verify_counter(List(UInt(8)) attest, List(UInt(8)) sig, ChallengeRecord c, Anchor ak, EvidenceTime t) {
     if (ak.kind != "TpmAk") { return Err(Refused("tpm_verify_counter", "the anchor is not a TPM attestation key (kind " + ak.kind + ")")); }
@@ -301,6 +334,9 @@ pub Result(Verified(TpmCounter), VerifyError) tpm_verify_counter(List(UInt(8)) a
 //   4. quotes and counters signed by that AK verify from it
 //      (tpm_verify_quote_activated, tpm_verify_counter_activated).
 
+/// An AK proven by credential activation, with its EK's TPM identity.
+/// `manufacturer`, `model` and `version` come from the EK certificate's
+/// subjectAltName ("" when absent).
 @signed(sig = activated, span = ak_public)
 pub type TpmAk = { List(UInt(8)) public_area; List(UInt(8)) name; Int type_alg; Str manufacturer; Str model; Str version; List(Int) ek_cert_sha256; };
 
@@ -314,6 +350,7 @@ Str tk_ek_eku() { return "2.23.133.8.1"; }
 Int tk_ak_must() { return 2 | 16 | 32 | 65536 | 262144; }
 Int tk_ak_decrypt() { return 131072; }
 
+/// A checked AK public area, its computed name and its key.
 type TkAk = { TpmPubKey k; List(Int) name; PubKey key; };
 
 // The AK's public area: a restricted signing key fixed to its TPM, nameAlg
@@ -351,10 +388,10 @@ Result(Cert, VerifyError) tk_cert(List(Int) der, Str what) {
     return match (x509_parse(der)) { Ok(c) => Ok(c), Err(e) => Err(BadChain(what + ": " + e)) };
 }
 
-// Step 1: the credential to send to the attester's TPM
-// (tpm_activate_credential(ecc, blob, secret), ecc as the certificate's
-// key). Nothing is trusted yet: a wrong certificate or AK only makes
-// activation fail, or tpm_verify_ak refuse.
+/// Makes the credential to send to the attester's TPM (step 1).
+/// Use it as tpm_activate_credential(ecc, blob, secret), ecc as the
+/// certificate's key. Nothing is trusted yet: a wrong certificate or AK
+/// only makes activation fail, or tpm_verify_ak refuse.
 pub Result(TpmCredential, VerifyError) tpm_ak_challenge(List(UInt(8)) ek_cert, List(UInt(8)) ak_public, ChallengeRecord c) {
     Cert ek = tk_cert(chal_ints(ek_cert), "the EK certificate")?;
     TkAk ak = tk_ak(ak_public)?;
@@ -452,8 +489,12 @@ Str tk_text(List(Int) v, Int i, Str acc) {
     return tk_text(v, i + 1, acc + (if (ch >= 32 && ch < 127) { str_from_code(ch) } else { "?" }));
 }
 
+/// A checked AK and the credential its TPM must return.
 type TkOk = { TpmAk ak; List(Int) cred; };
 
+/// Checks the EK chain to a TpmEk anchor and the AK, before activation.
+/// Returns the AK's facts and the expected credential; refuses a wrong or
+/// expired anchor, a bad chain or revocation, or an unfit AK.
 @verify_internal
 pub Result(TkOk, VerifyError) tpm_ak_check(List(List(UInt(8))) ek_chain, List(List(UInt(8))) crls, List(UInt(8)) ak_public, ChallengeRecord c, Anchor root, EvidenceTime t) {
     if (root.kind != "TpmEk") { return Err(Refused("tpm_verify_ak", "the anchor is not a TPM manufacturer's EK root (kind " + root.kind + ")")); }
@@ -464,10 +505,10 @@ pub Result(TkOk, VerifyError) tpm_ak_check(List(List(UInt(8))) ek_chain, List(Li
     return Ok(TkOk {.ak = v, .cred = chal_ints(tk_credential(c, ak.name, ek.spki))});
 }
 
-// Step 3: the AK lives in the TPM whose EK the manufacturer certified,
-// fresh for the holder of `c`: `activated` is what the TPM's
-// ActivateCredential returned for tpm_ak_challenge's credential, and
-// ek_chain is the EK certificate first, then any intermediates.
+/// Verifies that the AK lives in the TPM whose EK the manufacturer certified.
+/// Step 3, fresh for `c`: `activated` is what ActivateCredential returned
+/// for tpm_ak_challenge's credential, `ek_chain` the EK certificate first,
+/// then intermediates, and `crls` must cover each one below the anchor.
 @primitive(verify, anchor = root, gives = [fresh], time = t, format = TpmAk, kinds = [TpmEk], inputs = [ek_chain, crls, ak_public, activated, c, t])
 pub Result(Verified(TpmAk), VerifyError) tpm_verify_ak(List(List(UInt(8))) ek_chain, List(List(UInt(8))) crls, List(UInt(8)) ak_public, List(UInt(8)) activated, ChallengeRecord c, Anchor root, EvidenceTime t) {
     TkOk k = tpm_ak_check(ek_chain, crls, ak_public, c, root, t)?;
@@ -477,20 +518,22 @@ pub Result(Verified(TpmAk), VerifyError) tpm_verify_ak(List(List(UInt(8))) ek_ch
     return Ok(vf_make(k.ak, root, q_fresh() | tq_rp(c), c, 0, none, none, t, "TpmAk"));
 }
 
+/// The signing key of an activated AK, re-derived from its public area.
 @verify_internal
 pub Result(PubKey, VerifyError) tk_key(Verified(TpmAk) ak) {
     TkAk k = tk_ak(ak.value.public_area)?;
     return Ok(k.key);
 }
 
+/// Builds a Verified result resting on an activated AK's anchors.
 @verify_internal
 pub Verified(T) tk_make(T value, Verified(TpmAk) ak, Int quals, ChallengeRecord c, Int kem, List(Int) pk, EvidenceTime t, Str format) {
     List(Int) none = [];
     return Verified {.value = value, .anchors = ak.anchors, .quals = quals, .record = c.handle, .kem = kem, .pk = pk, .chan = none, .time = t.source, .principal = ak.principal, .format = format};
 }
 
-// A quote by an activated AK, fresh for the holder of `c`
-// (qualifyingData was challenge_value(c)).
+/// Verifies a TPM quote by an activated AK, fresh for the holder of `c`.
+/// qualifyingData must be challenge_value(c).
 @primitive(verify, from = ak, gives = [fresh], time = t, format = TpmQuoteEvidence, inputs = [attest, sig, pcr_values, c, t])
 pub Result(Verified(TpmQuoteEvidence), VerifyError) tpm_verify_quote_activated(List(UInt(8)) attest, List(UInt(8)) sig, List(List(UInt(8))) pcr_values, ChallengeRecord c, Verified(TpmAk) ak, EvidenceTime t) {
     PubKey key = tk_key(ak)?;
@@ -501,7 +544,7 @@ pub Result(Verified(TpmQuoteEvidence), VerifyError) tpm_verify_quote_activated(L
     return Ok(tk_make(k.e, ak, q_fresh() | tq_rp(c), c, 0, none, t, "TpmQuoteEvidence"));
 }
 
-// Fresh and KeyBound(kem, pk), by an activated AK.
+/// Verifies a TPM quote by an activated AK, fresh and KeyBound(kem, pk).
 @primitive(verify, from = ak, gives = [fresh, key_bound], time = t, format = TpmQuoteEvidence, inputs = [attest, sig, pcr_values, c, t, kem, pk])
 pub Result(Verified(TpmQuoteEvidence), VerifyError) tpm_verify_quote_activated_key_bound(List(UInt(8)) attest, List(UInt(8)) sig, List(List(UInt(8))) pcr_values, ChallengeRecord c, Verified(TpmAk) ak, EvidenceTime t, Int kem, List(Int) pk) {
     if (!hpke_kem_ok(kem) || !vf_pk_ok(kem, pk)) { return Err(Refused("tpm_verify_quote_activated_key_bound", "the attester's public key is empty or malformed for the KEM")); }
@@ -512,8 +555,7 @@ pub Result(Verified(TpmQuoteEvidence), VerifyError) tpm_verify_quote_activated_k
     return Ok(tk_make(k.e, ak, q_fresh() | q_key_bound() | tq_rp(c), c, kem, pk, t, "TpmQuoteEvidence"));
 }
 
-// A counter's value certified by an activated AK, fresh for the holder
-// of `c`.
+/// Verifies an NV counter certified by an activated AK, fresh for `c`.
 @primitive(verify, from = ak, gives = [fresh], time = t, format = TpmCounter, inputs = [attest, sig, c, t])
 pub Result(Verified(TpmCounter), VerifyError) tpm_verify_counter_activated(List(UInt(8)) attest, List(UInt(8)) sig, ChallengeRecord c, Verified(TpmAk) ak, EvidenceTime t) {
     PubKey key = tk_key(ak)?;

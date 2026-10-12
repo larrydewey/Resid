@@ -46,16 +46,28 @@ import "aesgcmg.resid";
 import "chachag.resid";
 import "ecdsa.resid";
 
+/// What a connection negotiated, fixing its key schedule and secured messages.
+/// `version` is the SPDM version byte (0x11 to 0x13); `hash` 1 SHA-256, 2
+/// SHA-384, else SHA-512; `aead` 1 AES-128-GCM, 4 ChaCha20-Poly1305, else
+/// AES-256-GCM; `dhe` 8 P-256, else P-384; `seq_bytes` the binding's count.
 pub type SpdmSuite = { Int version; Int hash; Int aead; Int dhe; Int seq_bytes; };
+/// The handshake secret and the requester's and responder's handshake secrets.
 pub type SpdmSecrets(B) = { List(B) hs; List(B) req; List(B) rsp; };
+/// The AEAD key and IV salt for each direction: requester to responder
+/// (`req_*`) and responder to requester (`rsp_*`).
 pub type SpdmKeys(B) = { List(B) req_key; List(B) req_iv; List(B) rsp_key; List(B) rsp_iv; };
+/// The requester's and responder's data secrets and the export master secret.
 pub type SpdmData(B) = { List(B) req; List(B) rsp; List(B) export; };
 
+/// The length in bytes of the suite's hash: 32, 48 or 64.
 pub Int sps_hlen(SpdmSuite s) { return if (s.hash == 1) { 32 } else if (s.hash == 2) { 48 } else { 64 }; }
 Int sps_klen(SpdmSuite s) { return if (s.aead == 1) { 16 } else { 32 }; }
 
 // ─── What a session publishes ───────────────────────────────────────
 
+/// How a session's byte type releases bytes as public: a sealed message,
+/// an opened message's payload, a verify-data MAC.
+/// At Int it is the identity; at secret bytes each is a declassification.
 behavior SpdmPublish(B) {
     List(Int) spdmp_sealed(List(B) ct);
     List(Int) spdmp_plain(List(B) pt);
@@ -90,6 +102,9 @@ SpdmPublish(Secret(UInt(8))) = { .spdmp_sealed = spdmp_sealed_secret, .spdmp_pla
 
 // ─── HMAC and HKDF over the suite's hash ────────────────────────────
 
+/// The key schedule's info encoding bin(`len`, `label`, `ctx`) for SPDM
+/// version byte `ver` (DSP0274 §10.13): `len` as two little-endian bytes,
+/// then "spdm1.N ", `label` and `ctx`.
 pub List(Int) spdm_bin(Int ver, Int len, Str label, List(Int) ctx) { return [len & 255, (len >> 8) & 255].concat(bytes_of(f"spdm1.{ver & 15} " + label)).concat(ctx); }
 
 @needs(Word(W, B), Word64(D, B))
@@ -120,8 +135,8 @@ List(Int) spdm_fill_bytes(Int v, Int n) { return if (n <= 0) { [] } else { [v].c
 
 Curve sps_curve(SpdmSuite s) { return if (s.dhe == 8) { P256 } else { P384 }; }
 
-// The requester's exchange data (X ‖ Y) for its ephemeral private key;
-// empty for a key out of range. Public by design.
+/// The requester's exchange data (X ‖ Y) for its ephemeral private key.
+/// `priv` is the key; empty for a key out of range. Public by design.
 @needs(P256Word(E, B), P384Word(G, B))
 pub List(Int) spdmg_exchange_data(SpdmSuite s, List(B) priv) {
     List(Int) pk = ec_public_keyg(sps_curve(s), priv);
@@ -129,8 +144,8 @@ pub List(Int) spdmg_exchange_data(SpdmSuite s, List(B) priv) {
     return if (pk.len() > 1) { pk[1..pk.len()] } else { none };
 }
 
-// The ECDHE secret with the device's exchange data; empty for a bad key
-// or point.
+/// The ECDHE secret of `priv` with the device's exchange data.
+/// `rsp_exchange` is X ‖ Y; empty for a bad key, length or point.
 @needs(P256Word(E, B), P384Word(G, B))
 pub List(B) spdmg_shared(SpdmSuite s, List(B) priv, List(Int) rsp_exchange) {
     Int want = if (s.dhe == 8) { 64 } else { 96 };
@@ -140,9 +155,9 @@ pub List(B) spdmg_shared(SpdmSuite s, List(B) priv, List(Int) rsp_exchange) {
 
 // ─── The key schedule ───────────────────────────────────────────────
 
-// The handshake secrets from the ECDHE secret (psk false) or the PSK, and
-// th1: the transcript hash through the signature (ECDHE) or through
-// PSK_EXCHANGE_RSP's context and opaque data (PSK).
+/// The handshake secrets from `ikm`, the ECDHE secret or (`psk` true) the PSK.
+/// `th1` is the transcript hash through the signature (ECDHE) or through
+/// PSK_EXCHANGE_RSP's context and opaque data (PSK).
 @needs(Word(W, B), Word64(D, B))
 pub SpdmSecrets(B) spdmg_handshake(SpdmSuite s, List(B) ikm, Bool psk, List(Int) th1) {
     Int h = sps_hlen(s);
@@ -157,9 +172,9 @@ List(B) spdmg_verify(SpdmSuite s, List(B) secret, List(Int) thash) {
     return spdmg_hmac(s, spdmg_expand(s, secret, sps_hlen(s), "finished", []), w_lift_bytes(thash, 0, hb));
 }
 
-// Whether the device's verify data (KEY_EXCHANGE_RSP, PSK_EXCHANGE_RSP,
-// FINISH_RSP in the clear) is the one the keys give over thash; compared
-// in constant time, one public bit.
+/// Whether the device's verify data is the one the keys give over `thash`.
+/// `verify_data` comes from KEY_EXCHANGE_RSP, PSK_EXCHANGE_RSP or FINISH_RSP
+/// in the clear; compared in constant time, one public bit.
 @needs(Word(W, B), Word64(D, B), CtSame(B))
 pub Bool spdmg_responder_ok(SpdmSuite s, SpdmSecrets(B) k, List(Int) thash, List(Int) verify_data) {
     if (verify_data.len() != sps_hlen(s)) { return false; }
@@ -167,7 +182,8 @@ pub Bool spdmg_responder_ok(SpdmSuite s, SpdmSecrets(B) k, List(Int) thash, List
     return ct_same(spdmg_verify(s, k.rsp, thash), w_lift_bytes(verify_data, 0, vb));
 }
 
-// The requester's verify data over thash (FINISH, PSK_FINISH): published.
+/// The requester's verify data over `thash` for FINISH or PSK_FINISH.
+/// Released through `SpdmPublish`.
 @needs(Word(W, B), Word64(D, B), SpdmPublish(B))
 pub List(Int) spdmg_requester_verify(SpdmSuite s, SpdmSecrets(B) k, List(Int) thash) { return spdmp_mac(spdmg_verify(s, k.req, thash)); }
 
@@ -177,12 +193,13 @@ SpdmKeys(B) spdmg_keys_of(SpdmSuite s, List(B) req, List(B) rsp) {
     return SpdmKeys {.req_key = spdmg_expand(s, req, kl, "key", []), .req_iv = spdmg_expand(s, req, 12, "iv", []), .rsp_key = spdmg_expand(s, rsp, kl, "key", []), .rsp_iv = spdmg_expand(s, rsp, 12, "iv", [])};
 }
 
-// The keys the handshake travels under when it is not in the clear.
+/// The keys the handshake travels under when it is not in the clear.
+/// Derived from the handshake secrets `k`.
 @needs(Word(W, B), Word64(D, B))
 pub SpdmKeys(B) spdmg_handshake_keys(SpdmSuite s, SpdmSecrets(B) k) { return spdmg_keys_of(s, k.req, k.rsp); }
 
-// The data secrets, from th2 (the transcript through FINISH_RSP or
-// PSK_FINISH_RSP).
+/// The data secrets and export master secret from the handshake secrets.
+/// `th2` is the transcript hash through FINISH_RSP or PSK_FINISH_RSP.
 @needs(Word(W, B), Word64(D, B))
 pub SpdmData(B) spdmg_data(SpdmSuite s, SpdmSecrets(B) k, List(Int) th2) {
     Int h = sps_hlen(s);
@@ -191,11 +208,13 @@ pub SpdmData(B) spdmg_data(SpdmSuite s, SpdmSecrets(B) k, List(Int) th2) {
     return SpdmData {.req = spdmg_expand(s, master, h, "req app data", th2), .rsp = spdmg_expand(s, master, h, "rsp app data", th2), .export = spdmg_expand(s, master, h, "exp master", th2)};
 }
 
+/// The keys application data travels under, from the data secrets `d`.
 @needs(Word(W, B), Word64(D, B))
 pub SpdmKeys(B) spdmg_data_keys(SpdmSuite s, SpdmData(B) d) { return spdmg_keys_of(s, d.req, d.rsp); }
 
-// A key update: the requester's data secret alone (UpdateKey) or both
-// (UpdateAllKeys).
+/// The data secrets after a key update.
+/// Updates the requester's secret alone (UpdateKey), or both when `both`
+/// (UpdateAllKeys); the export master secret is kept.
 @needs(Word(W, B), Word64(D, B))
 pub SpdmData(B) spdmg_update(SpdmSuite s, SpdmData(B) d, Bool both) {
     Int h = sps_hlen(s);
@@ -233,7 +252,9 @@ Option(List(B)) spdmg_aead_open(SpdmSuite s, List(B) key, List(B) iv, List(Int) 
     return aes_gcmg_decrypt_ivb(key, iv, ct, aad);
 }
 
-// An SPDM message sealed as message `seq` of the session.
+/// The SPDM message `app` sealed as message `seq` of the session.
+/// `key` and `iv` are the sending direction's key and IV salt; the
+/// ciphertext and tag are released through `SpdmPublish`.
 @needs(Word(W, B), Block128(X, W, B), Wide512(P, B), SpdmPublish(B))
 pub List(Int) spdmg_seal(SpdmSuite s, Int session_id, Int seq, List(B) key, List(B) iv, List(Int) app) {
     List(Int) hdr = spdm_le(session_id, 4).concat(spdm_le(seq, s.seq_bytes)).concat(spdm_le(2 + app.len() + 16, 2));
@@ -242,8 +263,8 @@ pub List(Int) spdmg_seal(SpdmSuite s, Int session_id, Int seq, List(B) key, List
     return hdr.concat(spdmp_sealed(sealed));
 }
 
-// The SPDM message in a secured message received as message `seq`, or
-// None when the session ID, sequence number, length or tag is wrong.
+/// The SPDM message in the secured message `msg` received as message `seq`.
+/// None when the session ID, sequence number, length or tag is wrong.
 @needs(Word(W, B), Block128(X, W, B), Wide512(P, B), CtSame(B), SpdmPublish(B))
 pub Option(List(Int)) spdmg_open(SpdmSuite s, Int session_id, Int seq, List(B) key, List(B) iv, List(Int) msg) {
     Int hl = 6 + s.seq_bytes;
@@ -263,22 +284,34 @@ Option(List(Int)) spdm_app(List(Int) pt) {
     return if (2 + n <= pt.len()) { Some(pt[2..2 + n]) } else { None };
 }
 
-// The session ID a secured message names.
+/// The session ID a secured message names.
+/// Returns -1 when `msg` is shorter than four bytes.
 pub Int spdm_secured_session_id(List(Int) msg) { return if (msg.len() >= 4) { spdm_le_at(msg, 0, 4) } else { 0 - 1 }; }
 
 // ─── The public copy ────────────────────────────────────────────────
 
+/// The requester's exchange data for `priv`: `spdmg_exchange_data` on public bytes.
 pub List(Int) spdm_exchange_data(SpdmSuite s, List(Int) priv) { return spdmg_exchange_data(s, priv); }
+/// The ECDHE secret: `spdmg_shared` on public bytes.
 pub List(Int) spdm_shared(SpdmSuite s, List(Int) priv, List(Int) rsp_exchange) { return spdmg_shared(s, priv, rsp_exchange); }
+/// The handshake secrets: `spdmg_handshake` on public bytes.
 pub SpdmSecrets(Int) spdm_handshake(SpdmSuite s, List(Int) ikm, Bool psk, List(Int) th1) { return spdmg_handshake(s, ikm, psk, th1); }
+/// Whether the device's verify data is right: `spdmg_responder_ok` on public bytes.
 pub Bool spdm_responder_ok(SpdmSuite s, SpdmSecrets(Int) k, List(Int) thash, List(Int) verify_data) { return spdmg_responder_ok(s, k, thash, verify_data); }
+/// The requester's verify data: `spdmg_requester_verify` on public bytes.
 pub List(Int) spdm_requester_verify(SpdmSuite s, SpdmSecrets(Int) k, List(Int) thash) { return spdmg_requester_verify(s, k, thash); }
-// The responder's verify data over thash, as a device computes it (for
-// known-answer tests and test responders).
+/// The responder's verify data over `thash`, as a device computes it.
+/// For known-answer tests and test responders.
 pub List(Int) spdm_responder_verify(SpdmSuite s, SpdmSecrets(Int) k, List(Int) thash) { return spdmg_verify(s, k.rsp, thash); }
+/// The handshake keys: `spdmg_handshake_keys` on public bytes.
 pub SpdmKeys(Int) spdm_handshake_keys(SpdmSuite s, SpdmSecrets(Int) k) { return spdmg_handshake_keys(s, k); }
+/// The data secrets: `spdmg_data` on public bytes.
 pub SpdmData(Int) spdm_data(SpdmSuite s, SpdmSecrets(Int) k, List(Int) th2) { return spdmg_data(s, k, th2); }
+/// The application data keys: `spdmg_data_keys` on public bytes.
 pub SpdmKeys(Int) spdm_data_keys(SpdmSuite s, SpdmData(Int) d) { return spdmg_data_keys(s, d); }
+/// The data secrets after a key update: `spdmg_update` on public bytes.
 pub SpdmData(Int) spdm_update(SpdmSuite s, SpdmData(Int) d, Bool both) { return spdmg_update(s, d, both); }
+/// A sealed secured message: `spdmg_seal` on public bytes.
 pub List(Int) spdm_seal(SpdmSuite s, Int session_id, Int seq, List(Int) key, List(Int) iv, List(Int) app) { return spdmg_seal(s, session_id, seq, key, iv, app); }
+/// An opened secured message, or None: `spdmg_open` on public bytes.
 pub Option(List(Int)) spdm_open(SpdmSuite s, Int session_id, Int seq, List(Int) key, List(Int) iv, List(Int) msg) { return spdmg_open(s, session_id, seq, key, iv, msg); }

@@ -2,7 +2,7 @@
   "name": "resid-lang",
   "displayName": "Resid Language Support",
   "description": "Syntax highlighting, snippets, bracket matching, language configuration, and a language server (diagnostics, hover, go to definition, symbols, completion) for the Resid language.",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "publisher": "resid",
   "license": "MIT",
   "engines": {

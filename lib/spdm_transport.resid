@@ -7,8 +7,8 @@
 // how many sequence-number bytes its secured messages carry: MCTP message
 // type 5 (SPDM) or 6 (secured) and 2 bytes; PCI DOE, vendor 1 type 1
 // (SPDM) or 2 (secured), the length in dwords and the payload padded to
-// one, 0 bytes; TCP, a 4-byte header (payload length LE2, binding version
-// 1, message type 5 or 6), 0 bytes.
+// one, 0 bytes; TCP, a 4-byte header (the length of what follows it, LE2,
+// binding version 1, message type 5 or 6), 0 bytes.
 //
 // The emulator's socket protocol: each side writes the command, the
 // transport type and the payload length (each a big-endian u32), then the
@@ -19,10 +19,16 @@
 
 import "crypto.resid";
 
+/// The transport binding an SPDM message travels over: MCTP, PCI DOE or TCP.
 pub type SpdmBinding = SpdmMctp | SpdmPciDoe | SpdmTcp;
 
+/// How many sequence-number bytes a secured message carries on binding `b`.
+/// 2 for MCTP, 0 for PCI DOE and TCP.
 pub Int spdm_binding_seq_bytes(SpdmBinding b) { return match b { SpdmMctp => 2, SpdmPciDoe => 0, SpdmTcp => 0, }; }
+/// The emulator socket's transport-type code for `b`.
+/// 1 for MCTP, 2 for PCI DOE, 3 for TCP.
 pub Int spdm_binding_socket_type(SpdmBinding b) { return match b { SpdmMctp => 1, SpdmPciDoe => 2, SpdmTcp => 3, }; }
+/// The binding's display name ("MCTP", "PCI DOE" or "TCP"), for messages.
 pub Str spdm_binding_name(SpdmBinding b) { return match b { SpdmMctp => "MCTP", SpdmPciDoe => "PCI DOE", SpdmTcp => "TCP", }; }
 
 List(Int) st_le(Int v, Int n) { return if (n <= 0) { [] } else { [v & 255].concat(st_le(v >> 8, n - 1)) }; }
@@ -31,7 +37,8 @@ List(Int) st_be(Int v, Int n) { return if (n <= 0) { [] } else { st_be(v >> 8, n
 Int st_be_at(List(Int) b, Int at, Int n) { return if (n <= 0) { 0 } else { (st_be_at(b, at, n - 1) << 8) | b[at + n - 1] }; }
 List(Int) st_zeros(Int n) { return st_le(0, n); }
 
-// A message in the binding's frame.
+/// `msg` wrapped in binding `b`'s frame, typed as secured when `secured`.
+/// A PCI DOE frame is padded with zero bytes to a whole dword.
 pub List(Int) spdm_frame(SpdmBinding b, Bool secured, List(Int) msg) {
     return match b {
         SpdmMctp => [if (secured) { 6 } else { 5 }].concat(msg),
@@ -46,11 +53,13 @@ List(Int) st_doe(Bool secured, List(Int) msg) {
     return [1, 0, if (secured) { 2 } else { 1 }, 0].concat(st_le(dw, 4)).concat(msg).concat(st_zeros(pad));
 }
 
-// A frame's message and whether it is secured. A DOE frame's padding is
-// dropped by the length SPDM gives inside (a secured message's own Length
-// field, or the caller's parser for a plain one).
+/// A frame's message and whether it is secured.
+/// A DOE frame's padding is cut from a secured message by its own Length
+/// field; a plain message keeps it (at most 3 zero bytes) for its parser.
 pub type SpdmFramed = { Bool secured; List(Int) msg; };
 
+/// The message inside frame `f` of binding `b`, and whether it is secured.
+/// Err, naming the binding, when the message type or length is wrong.
 pub Result(SpdmFramed, Str) spdm_unframe(SpdmBinding b, List(Int) f) {
     return match b {
         SpdmMctp => st_mctp(f),
@@ -91,9 +100,9 @@ Result(SpdmFramed, Str) st_untcp(List(Int) f) {
     return Ok(SpdmFramed {.secured = f[3] == 6, .msg = f[4..f.len()]});
 }
 
-// What a secured message carries inside: the SPDM message with the
-// binding's own header for MCTP (the message type) and TCP (the binding
-// header), bare for PCI DOE (as libspdm and DSP0275/DSP0287 do).
+/// What a secured message carries inside: the SPDM message with the
+/// binding's own header for MCTP (the message type) and TCP (the binding
+/// header), bare for PCI DOE (as libspdm and DSP0275/DSP0287 do).
 pub List(Int) spdm_inner(SpdmBinding b, List(Int) msg) {
     return match b {
         SpdmMctp => [5].concat(msg),
@@ -102,6 +111,8 @@ pub List(Int) spdm_inner(SpdmBinding b, List(Int) msg) {
     };
 }
 
+/// The SPDM message inside a secured message's application data `app`.
+/// The inverse of `spdm_inner`; Err when the inner header is not SPDM.
 pub Result(List(Int), Str) spdm_uninner(SpdmBinding b, List(Int) app) {
     return match b {
         SpdmMctp => if (app.len() >= 1 && app[0] == 5) { Ok(app[1..app.len()]) } else { Err("a secured MCTP message's inner type is not SPDM") },
@@ -110,13 +121,17 @@ pub Result(List(Int), Str) spdm_uninner(SpdmBinding b, List(Int) app) {
     };
 }
 
-// The zero padding a binding may leave after a plain message.
+/// The zero padding a binding may leave after a plain message.
+/// 3 bytes for PCI DOE, 0 for MCTP and TCP.
 pub Int spdm_binding_slack(SpdmBinding b) { return match b { SpdmMctp => 0, SpdmPciDoe => 3, SpdmTcp => 0, }; }
 
 // ─── The emulator's socket ──────────────────────────────────────────
 
+/// A connection to the DMTF emulator's socket, framing with `binding`.
 pub type SpdmEmu = { Int fd; SpdmBinding binding; };
 
+/// Connect to an emulator at `host`:`port`, framing every message with `b`.
+/// Sets a 60-second socket deadline; Err when nothing answers there.
 @requires(network(readonly))
 pub Result(SpdmEmu, Str) spdm_emu_connect(Str host, Int port, SpdmBinding b) {
     Int fd = resid_tcp_connect(host, port);
@@ -132,7 +147,9 @@ Result(Bool, Str) st_send(SpdmEmu e, Int command, List(Int) payload) {
     return Ok(true);
 }
 
-// One framed message there and one back: the response's message.
+/// Send `msg` framed to the emulator and return its unframed response.
+/// Err when the socket closes or times out, or the reply is not command 1,
+/// is over 1 MiB, is truncated or does not unframe.
 @requires(network(readonly))
 pub Result(SpdmFramed, Str) spdm_emu_xfer(SpdmEmu e, Bool secured, List(Int) msg) {
     Bool sent = st_send(e, 1, spdm_frame(e.binding, secured, msg))?;
@@ -145,7 +162,9 @@ pub Result(SpdmFramed, Str) spdm_emu_xfer(SpdmEmu e, Bool secured, List(Int) msg
     return spdm_unframe(e.binding, body);
 }
 
-// Ask the responder to stop, and close the socket.
+/// Ask the responder to stop, and close the socket.
+/// Its reply is read and discarded; true when the request was sent and the
+/// socket closed.
 @requires(network(readonly))
 pub Bool spdm_emu_shutdown(SpdmEmu e) {
     Bool ok = match (st_send(e, 65534, [])) { Ok(b) => b, Err(m) => false };
@@ -155,5 +174,6 @@ pub Bool spdm_emu_shutdown(SpdmEmu e) {
     return resid_tcp_close(e.fd) && ok;
 }
 
+/// Close the socket without stopping the responder; true on success.
 @requires(network(readonly))
 pub Bool spdm_emu_close(SpdmEmu e) { return resid_tcp_close(e.fd); }

@@ -14,6 +14,12 @@ assets = "src/assets,public"
 repository = "https://github.com/larrydewey/Resid"
 edit_base = "https://github.com/larrydewey/Resid/edit/master/website/"
 
+# The API reference is generated from the standard library's source: one
+# page per module under /api/, from its header and `///` doc comments.
+api = "../lib"
+api_dirs = ",dev,verify"
+api_source = "https://github.com/larrydewey/Resid/blob/master/lib/"
+
 # "topic|Label|link" starts a topic, "group|Label" a group inside it, and
 # "page|slug" a page, labelled by its own frontmatter title. An empty slug
 # is the book's home page.

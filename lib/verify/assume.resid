@@ -14,24 +14,31 @@
 import "core.resid";
 import "../crypto.resid";
 
+/// An application's declared assumption: its anchor id, pin and reason.
+/// Opaque outside `lib/verify/`; an @assumption function's body makes one.
 @opaque("*")
 pub type Assumption = { Str id; Str pin; Str reason; };
 
-// What an @assumption function's body names; the compiler rewrites it.
+/// The placeholder an @assumption function's body returns.
+/// The compiler rewrites it there into `assumption_make`; reached anywhere
+/// else, it aborts.
 pub Assumption assumption_pinned() {
     rt_assert(false, "assumption_pinned outside an @assumption function: the compiler rewrites it there");
     return assumption_make("||");
 }
 
-// meta: "name|sha256:<hex>|reason"; only the rewrite of an @assumption
-// body calls this (E0289).
+/// Builds an Assumption from the compiler's facts.
+/// `meta` is "name|sha256:<hex>|reason" (aborts otherwise); only the
+/// rewrite of an @assumption body calls this (E0289).
 pub Assumption assumption_make(Str meta) {
     List(Str) m = str_split(meta, "|");
     rt_assert(m.len() == 3, "assumption_make: malformed assumption facts");
     return Assumption {.id = "Assumed(" + m[0] + ")|" + m[1], .pin = m[1], .reason = m[2]};
 }
 
-// x, verified on the assumption's word when it is the pinned value.
+/// Returns `x` as Verified on the assumption's word, if it is the pinned value.
+/// Refused unless "sha256:" plus the hex SHA-256 of `x` equals the pin.
+/// Needs the `assume` capability; the result carries no qualifiers.
 @primitive(assume, assumption = a, inputs = [x])
 @requires(assume)
 pub Result(Verified(List(Int)), VerifyError) assume(List(Int) x, Assumption a) {

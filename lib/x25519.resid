@@ -11,25 +11,25 @@ import "x25519g.resid";
 // Kept for modules that reach the Ed25519 field helpers through this one.
 import "ed25519.resid";
 
-// Raw X25519 over 32-byte little-endian lists: k times u.
+/// Raw X25519 over 32-byte little-endian lists: k times u.
 pub List(Int) x25519(List(Int) k_bytes, List(Int) u_bytes) {
     return x25519g(k_bytes, u_bytes);
 }
 
-// The X25519 base point, u = 9.
+/// The X25519 base point, u = 9.
 pub List(Int) x25519_base() {
     return x25519g_base();
 }
 
-// The public key of a 32-byte private key; empty for another length.
+/// The public key of a 32-byte private key; empty for another length.
 pub List(Int) x25519_public(List(Int) priv) {
     return x25519g_public(priv);
 }
 
-// Diffie-Hellman (RFC 7748 §6.1): the shared secret, or empty when either
-// input is not 32 bytes or the result is all zeros (a low-order peer
-// point, which every protocol on top must refuse). Whether it was zero is
-// the one fact made public.
+/// Diffie-Hellman (RFC 7748 §6.1): the shared secret, or empty when either
+/// input is not 32 bytes or the result is all zeros (a low-order peer
+/// point, which every protocol on top must refuse). Whether it was zero is
+/// the one fact made public.
 pub List(Int) x25519_shared(List(Int) priv, List(Int) peer) {
     return x25519g_shared(priv, peer);
 }

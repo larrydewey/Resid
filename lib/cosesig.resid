@@ -1,6 +1,7 @@
 // cosesig.resid — COSE_Sign1 (RFC 9052) with every signature algorithm
-// the library verifies: ES256, ES384 (-7, -35), PS256/384/512 (-37..-39),
-// RS256/384/512 (-257..-259) and EdDSA (-8, Ed25519).
+// the library verifies: ES256, ES384, ES512 (-7, -35, -36), PS256/384/512
+// (-37..-39), RS256/384/512 (-257..-259) and EdDSA (-8, Ed25519); signing
+// is ES256 and ES384 only, and COSE_Key public keys are read too.
 //
 // lib/cose.resid keeps the narrow Ed25519 form the compiler's provenance
 // trailer uses; this module is for evidence from elsewhere -- an AWS
@@ -17,8 +18,8 @@ import "certverify.resid";
 
 // ─── CBOR, bounded ───────────────────────────────────────────────────
 
-// The position after the CBOR item at pos, or -1 for anything malformed,
-// truncated, indefinite-length, or nested deeper than `depth`.
+/// The position after the CBOR item at `pos`, or -1 for anything malformed,
+/// truncated, indefinite-length, or nested deeper than `depth`.
 pub Int cbor_skip(List(Int) b, Int pos, Int depth) {
     if (depth <= 0) { return 0 - 1; }
     CbeHead h = cbe_read_head(b, pos);
@@ -44,7 +45,8 @@ Int cbor_skip_n(List(Int) b, Int pos, Int n, Int depth) {
     return cbor_skip_n(b, next, n - 1, depth);
 }
 
-// An integer item at pos (major 0 or 1) as a value; ok = false otherwise.
+/// A CBOR integer item (major 0 or 1): its value and the position after it.
+/// `ok` is false when the item is not an integer.
 type CborInt = { Bool ok; Int v; Int pos; };
 
 CborInt cbor_int_at(List(Int) b, Int pos) {
@@ -53,8 +55,8 @@ CborInt cbor_int_at(List(Int) b, Int pos) {
     return CborInt {.ok = true, .v = if (h.major == 0) { h.val } else { 0 - 1 - h.val }, .pos = h.pos};
 }
 
-// The value of integer key `key` in the map at pos: its position, or -1
-// when absent; -2 when the map is malformed or has the key twice.
+/// The value of integer key `key` in the map at `pos`: its position, or -1
+/// when absent; -2 when the map is malformed or has the key twice.
 pub Int cbor_map_find(List(Int) b, Int pos, Int key) {
     CbeHead m = cbe_read_head(b, pos);
     if (!m.ok || m.major != 5 || m.val < 0 || m.val > (b.len() - m.pos) / 2) { return 0 - 2; }
@@ -75,16 +77,19 @@ Int cbor_map_scan(List(Int) b, Int pos, Int left, Int key, Int found) {
 
 // ─── COSE_Sign1 ──────────────────────────────────────────────────────
 
-// alg is the protected header's (0 when absent or not an integer).
+/// A parsed COSE_Sign1: its four parts, or `ok` false with a reason in `err`.
+/// `alg` is the protected header's (0 when absent or not an integer).
 pub type CoseMsg = { Bool ok; Str err; Int alg; List(Int) prot; List(Int) unprot; List(Int) payload; List(Int) sig; };
 
+/// A failed CoseMsg carrying the reason `err`.
 pub CoseMsg cose_msg_err(Str err) {
     return CoseMsg {.ok = false, .err = err, .alg = 0, .prot = [], .unprot = [], .payload = [], .sig = []};
 }
 
-// COSE_Sign1 = [protected bstr, unprotected map, payload bstr, signature
-// bstr], tagged 18 or not, and nothing after it. A detached (nil) payload
-// is refused: there is nothing here to attach it from.
+/// The COSE_Sign1 in `b`, parsed; on failure `ok` is false with a reason.
+/// Expects [protected bstr, unprotected map, payload bstr, signature bstr],
+/// tagged 18 or not, and nothing after it. A detached (nil) payload is
+/// refused: there is nothing here to attach it from.
 pub CoseMsg cose_sign1_read(List(Int) b) {
     CbeHead t = cbe_read_head(b, 0);
     if (!t.ok) { return cose_msg_err("cose: empty"); }
@@ -113,14 +118,16 @@ pub CoseMsg cose_sign1_read(List(Int) b) {
                     .unprot = b[prot.pos..uend], .payload = pay.bytes, .sig = sig.bytes};
 }
 
-// Sig_structure (RFC 9052 §4.4) with external AAD.
+/// The Sig_structure (RFC 9052 §4.4) to sign, context "Signature1".
+/// It covers `prot` (the serialized protected header), `external_aad` and
+/// `payload`.
 pub List(Int) cose_tbs(List(Int) prot, List(Int) external_aad, List(Int) payload) {
     List(Int) a = cbe_text("Signature1", cbe_array(4, []));
     return cbe_bytes(payload, cbe_bytes(external_aad, cbe_bytes(prot, a)));
 }
 
-// The verifier's view of a COSE algorithm, or kind 0. ECDSA signatures
-// are r || s; the curve must be the key's.
+/// The verifier's view of COSE algorithm `alg`, or kind 0 when unsupported.
+/// ECDSA signatures are r || s; PSS salts are the hash length.
 pub SigAlg cose_alg(Int alg) {
     if (alg == 0 - 7) { return SigAlg {.kind = sigalg_ecdsa(), .hash = Sha256, .mgf = Sha256, .salt = 0}; }
     if (alg == 0 - 35) { return SigAlg {.kind = sigalg_ecdsa(), .hash = Sha384, .mgf = Sha384, .salt = 0}; }
@@ -144,7 +151,9 @@ Bool cose_curve_ok(Int alg, PubKey key) {
     return true;
 }
 
-// Did `key` sign this COSE_Sign1 (with the given external AAD)?
+/// Whether `key` signed the COSE_Sign1 `m` with `external_aad`.
+/// False when `m` is not ok, the algorithm is unknown, or the key's type or
+/// curve does not match it (ES256 P-256, ES384 P-384, ES512 P-521).
 pub Bool cose_sign1_verify(CoseMsg m, PubKey key, List(Int) external_aad) {
     if (!m.ok || !cose_curve_ok(m.alg, key)) { return false; }
     SigAlg a = cose_alg(m.alg);
@@ -155,7 +164,8 @@ pub Bool cose_sign1_verify(CoseMsg m, PubKey key, List(Int) external_aad) {
     return sig_verify(a, key, tbs, m.sig);
 }
 
-// The payload of `bytes` when `key` signed it, else None.
+/// The payload of COSE_Sign1 `bytes` when `key` signed it, else None.
+/// None also when `bytes` does not parse.
 pub Option(List(Int)) cose_sign1_open(List(Int) bytes, PubKey key, List(Int) external_aad) {
     CoseMsg m = cose_sign1_read(bytes);
     return if (cose_sign1_verify(m, key, external_aad)) { Some(m.payload) } else { None };
@@ -163,10 +173,10 @@ pub Option(List(Int)) cose_sign1_open(List(Int) bytes, PubKey key, List(Int) ext
 
 // ─── Signing ─────────────────────────────────────────────────────────
 
-// A tagged COSE_Sign1 over payload with an ECDSA key (ES256 on P-256,
-// ES384 on P-384, RFC 6979 nonces) and an empty unprotected header; the
-// protected header is {1: alg} plus {4: kid} when kid is not empty.
-// Empty when the key is unusable.
+/// A tagged COSE_Sign1 over `payload`, signed with ECDSA private key `priv`.
+/// ES256 on P-256, ES384 on P-384 (RFC 6979 nonces); the unprotected header
+/// is empty and the protected one {1: alg}, plus {4: kid} when `kid` is not
+/// empty. Empty when the key or curve is unusable for signing.
 pub List(Int) cose_sign1_ecdsa(Curve c, List(Int) priv, List(Int) payload, List(Int) kid) {
     Int alg = if (curve_bytes(c) == 48) { 0 - 35 } else { 0 - 7 };
     List(Int) p1 = cbe_int(alg, cbe_uint(1, cbe_map(if (kid.len() > 0) { 2 } else { 1 }, [])));
@@ -180,8 +190,9 @@ pub List(Int) cose_sign1_ecdsa(Curve c, List(Int) priv, List(Int) payload, List(
 
 // ─── COSE_Key (RFC 9053 §7) ──────────────────────────────────────────
 
-// An EC2 (kty 2; crv 1 P-256, 2 P-384, 3 P-521; x, y), OKP (kty 1; crv 6
-// Ed25519; x) or RSA (kty 3; n, e) public key; kind 0 otherwise.
+/// The public key in COSE_Key `b` (RFC 9053 §7), or kind 0 when unusable.
+/// EC2 (kty 2; crv 1 P-256, 2 P-384, 3 P-521; x, y on the curve), OKP
+/// (kty 1; crv 6 Ed25519; x) or RSA (kty 3; n, e); trailing bytes refused.
 pub PubKey cose_key_public(List(Int) b) {
     if (cbor_skip(b, 0, 16) != b.len()) { return pubkey_none(); }
     Int kp = cbor_map_find(b, 0, 1);

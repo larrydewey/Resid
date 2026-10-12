@@ -29,7 +29,9 @@ Result(Bool, VerifyError) db_fresh(Verified(SpdmSession) s, Str who) {
     return Ok(true);
 }
 
-// SNP: REPORT_DATA is the session-bound value; fresh for the holder of c.
+/// Verifies an SNP report whose REPORT_DATA binds it to device session `s`.
+/// REPORT_DATA must be the session-bound value of challenge `c`; NotFresh
+/// when `s` is not fresh. The result rests on `root` and the session's anchors.
 @primitive(verify, anchor = root, with = s, gives = [fresh], time = t, format = SnpReport, kinds = [AmdVcek, AmdVlek], algorithms = [RsaPss4096Sha384, EcdsaP384Sha384], inputs = [report, c, col, t])
 pub Result(Verified(SnpReport), VerifyError) snp_verify_device_bound(List(UInt(8)) report, ChallengeRecord c, Anchor root, SnpCollateral col, EvidenceTime t, Verified(SpdmSession) s) {
     Bool ok = db_fresh(s, "snp_verify_device_bound")?;
@@ -39,7 +41,9 @@ pub Result(Verified(SnpReport), VerifyError) snp_verify_device_bound(List(UInt(8
     return Ok(db_join(vf_make(r, root, q_fresh() | db_rp(c), c, 0, none, none, t, "SnpReport"), s));
 }
 
-// TDX: REPORTDATA is the session-bound value; fresh for the holder of c.
+/// Verifies a TDX quote whose REPORTDATA binds it to device session `s`.
+/// REPORTDATA must be the session-bound value of challenge `c`; NotFresh
+/// when `s` is not fresh. The result rests on `root` and the session's anchors.
 @primitive(verify, anchor = root, with = s, gives = [fresh], time = t, format = TdxQuote, kinds = [IntelPck], algorithms = [EcdsaP256Sha256], inputs = [quote, c, t])
 pub Result(Verified(TdxQuote), VerifyError) tdx_verify_quote_device_bound(List(UInt(8)) quote, ChallengeRecord c, Anchor root, EvidenceTime t, Verified(SpdmSession) s) {
     Bool ok = db_fresh(s, "tdx_verify_quote_device_bound")?;
@@ -49,7 +53,9 @@ pub Result(Verified(TdxQuote), VerifyError) tdx_verify_quote_device_bound(List(U
     return Ok(db_join(vf_make(b, root, q_fresh() | db_rp(c), c, 0, none, none, t, "TdxQuote"), s));
 }
 
-// Nitro: the document's nonce is the session-bound value.
+/// Verifies a Nitro attestation document bound to device session `s`.
+/// The document's nonce must be the session-bound value of challenge `c`;
+/// NotFresh when `s` is not fresh.
 @primitive(verify, anchor = root, with = s, gives = [fresh], time = t, format = NsmDocument, kinds = [Nitro], algorithms = [EcdsaP384Sha384], inputs = [doc, c, t])
 pub Result(Verified(NsmDocument), VerifyError) nsm_verify_device_bound(List(UInt(8)) doc, ChallengeRecord c, Anchor root, EvidenceTime t, Verified(SpdmSession) s) {
     Bool ok = db_fresh(s, "nsm_verify_device_bound")?;
@@ -59,8 +65,9 @@ pub Result(Verified(NsmDocument), VerifyError) nsm_verify_device_bound(List(UInt
     return Ok(db_join(vf_make(d, root, q_fresh() | db_rp(c), c, 0, none, none, t, "NsmDocument"), s));
 }
 
-// CCA: the realm challenge is the session-bound value (issue a 64-byte
-// challenge).
+/// Verifies a CCA token under `cpak` bound to device session `s`.
+/// The realm challenge must be the session-bound value of challenge `c`
+/// (issue a 64-byte challenge); NotFresh when `s` is not fresh.
 @primitive(verify, anchor = cpak, with = s, gives = [fresh], time = t, format = CcaToken, kinds = [EndorsedKeys], inputs = [token, c, t])
 pub Result(Verified(CcaToken), VerifyError) cca_verify_device_bound(List(UInt(8)) token, ChallengeRecord c, Anchor cpak, EvidenceTime t, Verified(SpdmSession) s) {
     Bool ok = db_fresh(s, "cca_verify_device_bound")?;
@@ -70,8 +77,9 @@ pub Result(Verified(CcaToken), VerifyError) cca_verify_device_bound(List(UInt(8)
     return Ok(db_join(vf_make(k, cpak, q_fresh() | db_rp(c), c, 0, none, none, t, "CcaToken"), s));
 }
 
-// TPM: the quote's qualifying data is the session-bound value (issue a
-// 32-byte challenge), under a pinned AK.
+/// Verifies a TPM quote under a pinned AK bound to device session `s`.
+/// The quote's qualifying data must be the session-bound value of challenge
+/// `c` (issue a 32-byte challenge); NotFresh when `s` is not fresh.
 @primitive(verify, anchor = ak, with = s, gives = [fresh], time = t, format = TpmQuoteEvidence, kinds = [TpmAk], inputs = [attest, sig, pcr_values, c, t])
 pub Result(Verified(TpmQuoteEvidence), VerifyError) tpm_verify_quote_device_bound(List(UInt(8)) attest, List(UInt(8)) sig, List(List(UInt(8))) pcr_values, ChallengeRecord c, Anchor ak, EvidenceTime t, Verified(SpdmSession) s) {
     Bool ok = db_fresh(s, "tpm_verify_quote_device_bound")?;
@@ -81,7 +89,9 @@ pub Result(Verified(TpmQuoteEvidence), VerifyError) tpm_verify_quote_device_boun
     return Ok(db_join(vf_make(k.e, ak, q_fresh() | db_rp(c), c, 0, none, none, t, "TpmQuoteEvidence"), s));
 }
 
-// The same under an AK activated against its TPM's EK (verify/tpm.resid).
+/// Verifies a TPM quote bound to device session `s` under an activated AK.
+/// As `tpm_verify_quote_device_bound`, but `ak` is an AK proven against its
+/// TPM's EK by credential activation (verify/tpm.resid).
 @primitive(verify, from = ak, with = s, gives = [fresh], time = t, format = TpmQuoteEvidence, inputs = [attest, sig, pcr_values, c, t])
 pub Result(Verified(TpmQuoteEvidence), VerifyError) tpm_verify_quote_activated_device_bound(List(UInt(8)) attest, List(UInt(8)) sig, List(List(UInt(8))) pcr_values, ChallengeRecord c, Verified(TpmAk) ak, EvidenceTime t, Verified(SpdmSession) s) {
     Bool ok = db_fresh(s, "tpm_verify_quote_activated_device_bound")?;

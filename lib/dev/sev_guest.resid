@@ -12,24 +12,17 @@
 //
 // Everything here is a read, so this module fits under device(readonly);
 // SNP_GET_DERIVED_KEY, a write, is lib/dev/sev_guest_key.resid.
-// SNP_GET_EXT_REPORT (the report plus the host's certificate table) has no
-// descriptor yet: its certificate buffer is a pointer inside the request
-// struct, which the engine's Field kinds cannot place (uapi_sev_guest.resid
-// keeps that struct's layout and the request number under the matrix
-// check). The configfs report interface's auxblob carries the same
-// certificates.
+// SNP_GET_EXT_REPORT (the report plus the host's certificate table) is
+// lib/dev/sev_guest_ext.resid. The configfs report interface's auxblob
+// carries the same certificates.
 
 import "device.resid";
 import "uapi_sev_guest.resid";
 
-// The attestation report (struct attestation_report, 1184 bytes in this
-// version) for `report_data` (64 bytes, bound into the report) at VMPL
-// `vmpl` (0 to 3). Hardware-signed.
-//
-// Failures: Absent off an SNP guest, Denied when this user cannot open the
-// device, Kernel(errno) when the ioctl fails, Kernel(code) with a nonzero
-// exitinfo2 (firmware and VMM error codes) or response status, TooLong or
-// BadReply for a malformed reply.
+/// Returns the hardware-signed SNP attestation report for `report_data`.
+/// `report_data` is 64 bytes bound into the report; `vmpl` is 0 to 3.
+/// Err: BadInput for bad arguments, Absent off an SNP guest, Denied, Kernel
+/// (errno, nonzero exitinfo2 or status), TooLong or BadReply. device(readonly).
 @requires(device(readonly))
 pub Result(List(UInt(8)), DeviceError) snp_get_report(List(UInt(8)) report_data, Int vmpl) {
     Str name = "sev_guest.snp_get_report";
@@ -45,15 +38,14 @@ pub Result(List(UInt(8)), DeviceError) snp_get_report(List(UInt(8)) report_data,
     return sg_report(name, dv_out_bytes(outs, 0));
 }
 
-// The attestation report with its 64-byte report_data slot filled by the
-// device engine (PLAN-labels.md §6.3): a fresh runtime value by default,
-// an issued challenge record's value (spent before the request is sent and
-// bound to this reply, so a verifier accepts it only with this report), or
-// a value a verifier chose. The program passes no nonce.
-//
-//     SnpReport r = snp_report()?;                        // nothing to keep
-//     ChallengeRecord c = challenge_issue(64, bind);
-//     List(UInt(8)) v = snp_report(challenge = Issued(c))?;
+/// Returns the SNP attestation report with report_data filled from `challenge`.
+/// The device engine fills the 64-byte slot (PLAN-labels.md §6.3): a fresh
+/// runtime value by default, an issued record's value (spent and bound to
+/// this reply), or a verifier's. `vmpl` is 0 to 3. Errors as snp_get_report.
+///
+///     List(UInt(8)) r = snp_report()?;                    // nothing to keep
+///     ChallengeRecord c = challenge_issue(64, bind);
+///     List(UInt(8)) v = snp_report(challenge = Issued(c))?;
 @requires(device(readonly))
 pub Result(List(UInt(8)), DeviceError) snp_report(Challenge challenge = Runtime, Int vmpl = 0) {
     Str name = "sev_guest.snp_get_report";
@@ -69,7 +61,9 @@ pub Result(List(UInt(8)), DeviceError) snp_report(Challenge challenge = Runtime,
     return sg_report(name, dv_out_bytes(outs, 0));
 }
 
-// struct msg_report_resp: status, report_size, 24 reserved bytes, report.
+/// Extracts the report from a struct msg_report_resp buffer, if present.
+/// Layout: status, report_size, 24 reserved bytes, report. BadReply when
+/// `resp` is None.
 pub Result(List(UInt(8)), DeviceError) sg_report(Str name, Option(List(UInt(8))) resp) {
     return match (resp) {
         None => Err(BadReply(name, "no response buffer")),
@@ -77,6 +71,9 @@ pub Result(List(UInt(8)), DeviceError) sg_report(Str name, Option(List(UInt(8)))
     };
 }
 
+/// Extracts the report from a struct msg_report_resp buffer `r`.
+/// Err: BadReply under 32 bytes, Kernel(status) for a nonzero status,
+/// TooLong when report_size exceeds the buffer.
 pub Result(List(UInt(8)), DeviceError) sg_report_body(Str name, List(UInt(8)) r) {
     if (r.len() < 32) { return Err(BadReply(name, "short response")); }
     Int status = sg_u32(r, 0);
@@ -86,34 +83,39 @@ pub Result(List(UInt(8)), DeviceError) sg_report_body(Str name, List(UInt(8)) r)
     return Ok(r[32..32 + size]);
 }
 
-// exitinfo2: the firmware (low half) and VMM (high half) error word the
-// kernel copies back into the ioctl struct.
+/// Unwraps the ioctl's exitinfo2 output, or BadReply when it is missing.
+/// exitinfo2 is the firmware (low half) and VMM (high half) error word the
+/// kernel copies back into the ioctl struct.
 pub Result(Int, DeviceError) sg_exitinfo2(Str name, Option(Int) v) {
     return match (v) { None => Err(BadReply(name, "no exitinfo2")), Some(x) => Ok(x), };
 }
 
 // -- Bytes ----------------------------------------------------------------
 
+/// Encodes `v` as 4 bytes, little-endian.
 pub List(UInt(8)) sg_le32(Int v) { return sg_le(v, 4, ListBuf()); }
+/// Encodes `v` as 8 bytes, little-endian.
 pub List(UInt(8)) sg_le64(Int v) { return sg_le(v, 8, ListBuf()); }
 
-// The low `n` bytes of v, little endian.
+/// Appends the low `n` bytes of `v`, little-endian, to `acc` and finishes it.
 pub List(UInt(8)) sg_le(Int v, Int n, ListBuf(UInt(8)) acc) {
     if (n <= 0) { return acc.finish(); }
     return sg_le(v >> 8, n - 1, acc.push((UInt(8))(v & 255)));
 }
 
+/// Appends `n` zero bytes to `acc` and finishes it.
 pub List(UInt(8)) sg_zeros(Int n, ListBuf(UInt(8)) acc) {
     if (n <= 0) { return acc.finish(); }
     return sg_zeros(n - 1, acc.push((UInt(8))0));
 }
 
-// `bs` with `part` written over it from byte `at` (the caller keeps it
-// inside: at + part.len() <= bs.len()).
+/// Returns `bs` with `part` written over it from byte `at`.
+/// The caller keeps it inside: at + part.len() <= bs.len().
 pub List(UInt(8)) sg_put(List(UInt(8)) bs, Int at, List(UInt(8)) part) {
     return bs[0..at].concat(part).concat(bs[at + part.len()..bs.len()]);
 }
 
+/// Reads a little-endian 32-bit value from `r` at byte `at`.
 pub Int sg_u32(List(UInt(8)) r, Int at) {
     return (Int)r[at] | ((Int)r[at + 1] << 8) | ((Int)r[at + 2] << 16) | ((Int)r[at + 3] << 24);
 }

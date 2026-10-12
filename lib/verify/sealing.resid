@@ -8,7 +8,7 @@
 // record this program spent on its own device and bound to that very
 // reply (its own device's answer, not one relayed from another guest),
 // after the checks no policy turns off (no debugging, no migration
-// agent, the report's VMPL). The report's gate is consumed. The key is
+// agent), at the report's VMPL. The report's gate is consumed. The key is
 // accepted on the attesting principal's word: the anchor it rests on is
 // the report's (InGuest: the measured guest kernel).
 //
@@ -31,19 +31,21 @@ import "../dev/device.resid";
 import "../dev/sev_guest_key.resid";
 import "tpm.resid";
 
-// Which guest fields the key also mixes in (policy and measurement always).
+/// Which guest fields the key also mixes in (policy and measurement always).
 pub type SnpKeySelector = { Bool image_id; Bool family_id; Bool guest_svn; Bool tcb_version; };
 
-// SNP_GET_DERIVED_KEY's guest_field_select: policy (bit 0) and measurement
-// (bit 3) always.
+/// SNP_GET_DERIVED_KEY's guest_field_select: policy (bit 0) and measurement
+/// (bit 3) always.
 pub Int snp_field_select(SnpKeySelector s) {
     return 1 | 8 | (if (s.image_id) { 2 } else { 0 }) | (if (s.family_id) { 4 } else { 0 }) | (if (s.guest_svn) { 16 } else { 0 }) | (if (s.tcb_version) { 32 } else { 0 });
 }
 
+/// The guest's 32-byte sealing key (secret), with the launch measurement and
+/// the guest_field_select it was derived with; opaque outside lib/verify/.
 @opaque("*")
 pub type PlatformKey = { List(Secret(UInt(8))) key; List(Int) measurement; Int fields; };
 
-// The sealing key for this guest, on its own fresh report.
+/// The sealing key for this guest, on its own fresh report.
 @primitive(platform_key, from = report, gives = [], inputs = [sel])
 @requires(device, declassify)
 pub Result(Verified(PlatformKey), VerifyError) snp_platform_key(SnpKeySelector sel, Verified(SnpReport) report) {
@@ -63,18 +65,20 @@ pub Result(Verified(PlatformKey), VerifyError) snp_platform_key(SnpKeySelector s
     return Ok(Verified {.value = PlatformKey {.key = key, .measurement = chal_ints(r.measurement), .fields = fields}, .anchors = report.anchors, .quals = 0, .record = 0 - 1, .kem = 0, .pk = none, .chan = none, .time = report.time, .principal = report.principal, .format = "PlatformKey"});
 }
 
-// counter: the name of the TPM NV counter that guards the blob's version
-// (pinned when it was sealed; empty for none).
+/// A blob local_seal sealed: its version, the name of the TPM NV counter
+/// that guards that version (`counter`, pinned when it was sealed; empty for
+/// none), and the secret `value`.
 pub type LocalBlob = { Int version; List(Int) counter; List(Secret(UInt(8))) value; };
 
 List(Int) local_aad(List(Int) measurement) { return bytes_of("resid.local.v1").concat(measurement); }
 
 List(Int) local_u64(Int v) { return [(v >> 56) & 255, (v >> 48) & 255, (v >> 40) & 255, (v >> 32) & 255, (v >> 24) & 255, (v >> 16) & 255, (v >> 8) & 255, v & 255]; }
 
-// nonce (12 fresh bytes) ‖ AES-256-GCM(key, nonce, version ‖ counter
-// name length (2) ‖ counter name ‖ value), the measurement in the
-// associated data. The ciphertext is published. `counter` is the name of
-// the TPM NV counter that will guard the version (§8), or empty.
+/// Seals `value` under the platform key, returning the public blob.
+/// nonce (12 fresh bytes) ‖ AES-256-GCM(key, nonce, version ‖ counter
+/// name length (2) ‖ counter name ‖ value), the measurement in the
+/// associated data. The ciphertext is published. `counter` is the name of
+/// the TPM NV counter that will guard the version (§8), or empty.
 @requires(declassify)
 pub List(Int) local_seal(Verified(PlatformKey) k, Int version, List(Int) counter, List(Secret(UInt(8))) value) {
     List(Int) nonce = random_bytes(12);
@@ -89,7 +93,7 @@ List(Int) local_publish(List(Secret(UInt(8))) ct, Int i, ListBuf(Int) acc) {
     return local_publish(ct, i + 1, acc.push(ct_public((Int) declassify(ct[i], "data sealed under the platform key: AES-GCM ciphertext"))));
 }
 
-// What local_seal sealed under this key, with this measurement: Local.
+/// What local_seal sealed under this key, with this measurement: Local.
 @primitive(local, from = k, gives = [local], inputs = [blob])
 @requires(declassify)
 pub Result(Verified(LocalBlob), VerifyError) local_open(Verified(PlatformKey) k, List(Int) blob) {
@@ -117,10 +121,10 @@ Int local_version(List(Secret(UInt(8))) p, Int i, Int acc) {
     return local_version(p, i + 1, (acc << 8) | ct_public((Int) declassify(p[i], "a sealed blob's version number")));
 }
 
-// Local and fresh: the opened blob's version is the counter's, read fresh
-// from the counter the blob was sealed against. A rolled-back blob (an
-// older version) or another counter is refused. The result rests on both
-// the platform's and the TPM's anchors (one bound evidence set, §3.5).
+/// Local and fresh: the opened blob's version is the counter's, read fresh
+/// from the counter the blob was sealed against. A rolled-back blob (an
+/// older version) or another counter is refused. The result rests on both
+/// the platform's and the TPM's anchors (one bound evidence set, §3.5).
 @primitive(bind, from = opened, with = counter, gives = [local, fresh], inputs = [])
 pub Result(Verified(LocalBlob), VerifyError) bind_counter(Verified(LocalBlob) opened, Verified(TpmCounter) counter) {
     if ((opened.quals & q_local()) == 0) { return Err(Refused("bind_counter", "the blob is not Local")); }
@@ -130,12 +134,12 @@ pub Result(Verified(LocalBlob), VerifyError) bind_counter(Verified(LocalBlob) op
     return Ok(Verified {.value = opened.value, .anchors = opened.anchors.concat(counter.anchors), .quals = q_local() | q_fresh(), .record = counter.record, .kem = 0, .pk = opened.pk, .chan = opened.chan, .time = counter.time, .principal = opened.principal, .format = "LocalBlob"});
 }
 
-// The first seal (§8): no blob exists yet, and that is a distinct outcome
-// a decision accepts explicitly, never a missing blob read as empty. A
-// fresh reading of the counter at the value the deployment provisioned it
-// with (`initial`, the program's own constant) shows no version was ever
-// sealed against it. The result is the empty blob at that version, Local
-// and fresh, resting on the platform's and the TPM's anchors.
+/// The first seal (§8): no blob exists yet, and that is a distinct outcome
+/// a decision accepts explicitly, never a missing blob read as empty. A
+/// fresh reading of the counter at the value the deployment provisioned it
+/// with (`initial`, the program's own constant) shows no version was ever
+/// sealed against it. The result is the empty blob at that version, Local
+/// and fresh, resting on the platform's and the TPM's anchors.
 @primitive(bind, from = k, with = counter, gives = [local, fresh], inputs = [])
 pub Result(Verified(LocalBlob), VerifyError) first_seal(Verified(PlatformKey) k, Verified(TpmCounter) counter, Int initial) {
     if ((counter.quals & q_fresh()) == 0) { return Err(NotFresh("the counter reading is not fresh")); }

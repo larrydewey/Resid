@@ -477,18 +477,46 @@ def emit(mod, per, pin, source_label):
         w(f"// {lay['struct']}: {x[p + '.size']} bytes.")
         w(f"pub Int {p}_size() {{ return {x[p + '.size']}; }}")
         for mb in lay["members"]:
+            w(f"/// The byte offset of `{mb}` in {lay['struct']}.")
             w(f"pub Int {p}_{ident(mb)}_at() {{ return {x[p + '.' + mb + '.offset']}; }}")
+            w(f"/// The size in bytes of `{mb}` in {lay['struct']}.")
             w(f"pub Int {p}_{ident(mb)}_len() {{ return {x[p + '.' + mb + '.width']}; }}")
     for c in mod.get("const", []):
         w("")
-        w(f"// {c['name']}")
+        w(f"// The kernel's {c['name']}.")
         w(f"pub Int {ident(c['name'])}() {{ return {x['const.' + c['name']]}; }}")
     for c in mod.get("check", []):
         w("")
         nums = ", ".join(f"{ARCH_NAME[v]} 0x{per[v]['check.' + c['request']]:x}" for v, _, _ in TARGETS)
         for line in wrap(f"{c['request']} ({nums}) is checked across the kernel matrix but has no descriptor: {c['why']}.", 74):
             w("// " + line)
-    return "\n".join(out) + "\n"
+    return "\n".join(doc_comments(out)) + "\n"
+
+
+def doc_comments(lines):
+    """The comment block right above each `pub` declaration (above its
+    annotations) as `///` doc lines, as the hand-written modules write it."""
+    out = list(lines)
+    for i, l in enumerate(out):
+        if not l.startswith("pub "):
+            continue
+        j = i - 1
+        while j >= 0 and out[j].startswith("@"):
+            j -= 1
+        k = j
+        while k >= 0 and out[k].startswith("//"):
+            k -= 1
+        blk = list(range(k + 1, j + 1))
+        if not blk or any(out[b].startswith("///") for b in blk):
+            continue
+        ban = [b for b in blk if re.match(r"//\s*(─|=|-{2,}|\*)", out[b])]
+        if ban:
+            blk = [b for b in blk if b > ban[-1]]
+        while blk and out[blk[0]].strip() == "//":
+            blk = blk[1:]
+        for b in blk:
+            out[b] = "/" + out[b]
+    return out
 
 
 def emit_op(w, mod, op, per):

@@ -1,7 +1,8 @@
 // cose.resid — CBOR (RFC 8949, preferred serialization) and COSE
 // (RFC 9052): COSE_Sign1 with EdDSA (-8) and COSE_Encrypt0 with
 // ChaCha20-Poly1305 (24). Used by the driver's provenance trailer
-// (spec §33.1) and tools/resid-cose.resid.
+// (spec §33.1) and tools/resid-cose.resid. COSE_Sign1 with every other
+// algorithm is lib/cosesig.resid.
 
 import "crypto.resid";
 import "ed25519.resid";
@@ -11,14 +12,15 @@ import "chacha.resid";
 
 // ─── CBOR write side ────────────────────────────────────────────────
 
-// Big-endian bytes of v, `n` bytes long.
+/// Appends the low `n` bytes of `v` to `acc`, big-endian.
 pub List(Int) cbe_be(Int v, Int n, List(Int) acc) {
     if (n <= 0) { return acc; }
     Int sh = (n - 1) * 8;
     return cbe_be(v, n - 1, acc.concat([(v >> sh) & 255]));
 }
 
-// Head with the shortest argument encoding (RFC 8949 §4.2.1).
+/// Appends a CBOR head for major type `major` and argument `val` to `acc`.
+/// Uses the shortest argument encoding (RFC 8949 §4.2.1).
 pub List(Int) cbe_head(Int major, Int val, List(Int) acc) {
     Int m = major << 5;
     if (val <= 23) { return acc.concat([m | val]); }
@@ -27,32 +29,44 @@ pub List(Int) cbe_head(Int major, Int val, List(Int) acc) {
     if (val <= 4294967295) { return cbe_be(val, 4, acc.concat([m | 26])); }
     return cbe_be(val, 8, acc.concat([m | 27]));
 }
+/// Appends the unsigned integer `v` (major type 0) to `acc`.
 pub List(Int) cbe_uint(Int v, List(Int) acc) { return cbe_head(0, v, acc); }
+/// Appends the integer `n` to `acc`: major type 0 when non-negative, else 1.
 pub List(Int) cbe_int(Int n, List(Int) acc) {
     if (n >= 0) { return cbe_head(0, n, acc); }
     return cbe_head(1, (0 - n) - 1, acc);
 }
+/// Appends the byte string `b` (major type 2) to `acc`.
 pub List(Int) cbe_bytes(List(Int) b, List(Int) acc) {
     return cbe_head(2, b.len(), acc).concat(b);
 }
+/// Appends `s` as a UTF-8 text string (major type 3) to `acc`.
 pub List(Int) cbe_text(Str s, List(Int) acc) {
     List(Int) b = bytes_of(s);
     return cbe_head(3, b.len(), acc).concat(b);
 }
+/// Appends the head of an array of `n` items to `acc`; items follow.
 pub List(Int) cbe_array(Int n, List(Int) acc) { return cbe_head(4, n, acc); }
+/// Appends the head of a map of `n` pairs to `acc`; keys and values follow.
 pub List(Int) cbe_map(Int n, List(Int) acc) { return cbe_head(5, n, acc); }
+/// Appends tag `t` (major type 6) to `acc`; the tagged item follows.
 pub List(Int) cbe_tag(Int t, List(Int) acc) { return cbe_head(6, t, acc); }
 
 // ─── CBOR read side ─────────────────────────────────────────────────
 
-// A decoded head: major type, argument, position after it. ok is false
-// past the end or on an indefinite length.
+/// A decoded CBOR head: major type, argument, and the position after it.
+/// `ok` is false past the end, on an indefinite length or a reserved minor.
 type CbeHead = { Bool ok; Int major; Int val; Int pos; };
 
+/// Folds `n` bytes of `b` from `pos` into `acc`, big-endian.
+/// Does not bounds-check; callers check the length first.
 pub Int cbe_be_read(List(Int) b, Int pos, Int n, Int acc) {
     if (n <= 0) { return acc; }
     return cbe_be_read(b, pos + 1, n - 1, (acc << 8) | b[pos]);
 }
+/// Decodes the CBOR head at `pos` in `b`.
+/// Not ok when `pos` is out of range, the minor is 28-31, or the argument
+/// runs past the end.
 pub CbeHead cbe_read_head(List(Int) b, Int pos) {
     if (pos < 0 || pos >= b.len()) { return CbeHead {.ok = false, .major = 0, .val = 0, .pos = pos}; }
     Int byte = b[pos];
@@ -64,6 +78,7 @@ pub CbeHead cbe_read_head(List(Int) b, Int pos) {
     if (pos + n >= b.len()) { return CbeHead {.ok = false, .major = major, .val = 0, .pos = pos}; }
     return CbeHead {.ok = true, .major = major, .val = cbe_be_read(b, pos + 1, n, 0), .pos = pos + 1 + n};
 }
+/// Argument length in bytes for a head's `minor` value 24-27; 0 otherwise.
 pub Int cbe_arg_len(Int minor) {
     if (minor == 24) { return 1; }
     if (minor == 25) { return 2; }
@@ -72,9 +87,11 @@ pub Int cbe_arg_len(Int minor) {
     return 0;
 }
 
-// A byte or text string at pos, checked against its major type.
+/// A decoded CBOR byte or text string and the position after it.
 type CbeStr = { Bool ok; List(Int) bytes; Int pos; };
 
+/// Reads the string at `pos` in `b`, which must have major type `major`.
+/// Not ok on another major type, a bad head, or a length past the end.
 pub CbeStr cbe_read_str(List(Int) b, Int pos, Int major) {
     List(Int) empty = [];
     CbeHead h = cbe_read_head(b, pos);
@@ -83,22 +100,28 @@ pub CbeStr cbe_read_str(List(Int) b, Int pos, Int major) {
     return CbeStr {.ok = true, .bytes = slice_bytes(b, h.pos, end - 1), .pos = end};
 }
 
+/// Appends `b` from index `i` to `acc`, each byte as the character with
+/// that code; meant for ASCII.
 pub Str cbe_ascii(List(Int) b, Int i, Str acc) {
     if (i >= b.len()) { return acc; }
     return cbe_ascii(b, i + 1, acc + str_from_code(b[i]));
 }
 
+/// Value of the hex digit with code `c`; 0 for a non-hex character.
 pub Int cose_nibble(Int c) {
     if (c >= 48 && c <= 57) { return c - 48; }
     if (c >= 97 && c <= 102) { return c - 87; }
     if (c >= 65 && c <= 70) { return c - 55; }
     return 0;
 }
+/// Appends the bytes of hex text `s` from index `i` up to `n` to `acc`.
 pub List(Int) cose_hex_acc(Str s, Int i, Int n, List(Int) acc) {
     if (i + 1 >= n) { return acc; }
     Int v = cose_nibble(str_char_at(s, i)) * 16 + cose_nibble(str_char_at(s, i + 1));
     return cose_hex_acc(s, i + 2, n, acc.concat([v]));
 }
+/// Decodes hex text `s` to bytes, either case.
+/// Lenient: a trailing odd digit is dropped, a non-hex digit reads as 0.
 pub List(Int) cose_hex_decode(Str s) {
     List(Int) empty = [];
     return cose_hex_acc(s, 0, str_len(s), empty);
@@ -106,7 +129,8 @@ pub List(Int) cose_hex_decode(Str s) {
 
 // ─── COSE_Sign1 (tag 18) ────────────────────────────────────────────
 
-// Sig_structure (RFC 9052 §4.4): ["Signature1", protected, h'', payload].
+/// The Sig_structure that COSE_Sign1 signs (RFC 9052 §4.4).
+/// Encodes ["Signature1", `prot`, h'', `payload`]: no external AAD.
 pub List(Int) cose_sig_structure(List(Int) prot, List(Int) payload) {
     List(Int) a1 = cbe_array(4, []);
     List(Int) a2 = cbe_text("Signature1", a1);
@@ -114,16 +138,17 @@ pub List(Int) cose_sig_structure(List(Int) prot, List(Int) payload) {
     List(Int) a4 = cbe_bytes([], a3);
     return cbe_bytes(payload, a4);
 }
-// Protected header {1: -8, 4: kid}.
+/// The encoded protected header {1: -8, 4: `kid`}: EdDSA with a key id.
+/// `kid` is stored as a byte string of its UTF-8 bytes.
 pub List(Int) cose_sign1_protected(Str kid) {
     List(Int) a1 = cbe_map(2, []);
     List(Int) a2 = cbe_int(-8, cbe_uint(1, a1));
     return cbe_bytes(bytes_of(kid), cbe_uint(4, a2));
 }
-// COSE_Sign1 of payload under a 32-byte Ed25519 seed, generic over the
-// seed's byte type (lib/ed25519g.resid): List(Int) for a public seed, or
-// List(Secret(UInt(8))) for a secret one, which publishes the signature
-// and so needs @requires(declassify).
+/// Tagged COSE_Sign1 of `payload` (attached) signed with Ed25519 `seed`.
+/// `seed` is 32 bytes, public (List(Int)) or secret
+/// (List(Secret(UInt(8)))); a secret seed publishes the signature, so the
+/// caller needs @requires(declassify). `kid` goes in the protected header.
 @needs(Wide512(P, B), Word64(W, B), Publish(B))
 pub List(Int) cose_sign1(List(Int) payload, Str kid, List(B) seed) {
     List(Int) prot = cose_sign1_protected(kid);
@@ -133,19 +158,24 @@ pub List(Int) cose_sign1(List(Int) payload, Str kid, List(B) seed) {
     return cbe_bytes(sig, cbe_bytes(payload, o2));
 }
 
-// A parsed COSE_Sign1; kid comes from the protected header.
+/// A parsed, not yet verified COSE_Sign1; `err` says why when not `ok`.
+/// `kid` comes from the protected header, `prot` is its encoded bytes.
 type CoseSign1 = { Bool ok; Str err; Str kid; List(Int) prot; List(Int) payload; List(Int) sig; };
 
+/// A failed CoseSign1 carrying the message `err`.
 pub CoseSign1 cose_sign1_err(Str err) {
     List(Int) e = [];
     return CoseSign1 {.ok = false, .err = err, .kid = "", .prot = e, .payload = e, .sig = e};
 }
-// kid (label 4) from a protected-header map; "" when absent.
+/// The kid (label 4) of the encoded protected-header map `prot`.
+/// "" when absent, not a byte string, or the map is malformed.
 pub Str cose_kid_of(List(Int) prot) {
     CbeHead m = cbe_read_head(prot, 0);
     if (!m.ok || m.major != 5) { return ""; }
     return cose_kid_scan(prot, m.pos, m.val);
 }
+/// Scans `left` key/value pairs of a header map from `pos` for kid (label 4).
+/// "" when not found or on a malformed pair.
 pub Str cose_kid_scan(List(Int) prot, Int pos, Int left) {
     if (left <= 0) { return ""; }
     CbeHead k = cbe_read_head(prot, pos);
@@ -160,6 +190,9 @@ pub Str cose_kid_scan(List(Int) prot, Int pos, Int left) {
     Int next = if (v.major == 2 || v.major == 3) { v.pos + v.val } else { v.pos };
     return cose_kid_scan(prot, next, left - 1);
 }
+/// Parses a tagged (18) COSE_Sign1 without verifying it.
+/// Requires an empty unprotected map, an attached payload and a 64-byte
+/// signature; any other shape is not `ok`, with the reason in `err`.
 pub CoseSign1 cose_sign1_parse(List(Int) cose) {
     CbeHead t = cbe_read_head(cose, 0);
     if (!t.ok || t.major != 6 || t.val != 18) { return cose_sign1_err("cose: missing tag 18"); }
@@ -175,6 +208,8 @@ pub CoseSign1 cose_sign1_parse(List(Int) cose) {
     if (!sig.ok || sig.bytes.len() != 64) { return cose_sign1_err("cose: bad signature"); }
     return CoseSign1 {.ok = true, .err = "", .kid = cose_kid_of(prot.bytes), .prot = prot.bytes, .payload = pay.bytes, .sig = sig.bytes};
 }
+/// True when `c`'s signature verifies under the Ed25519 public key `pubk`.
+/// `pubk` is 32 bytes; the signature covers the Sig_structure.
 pub Bool cose_sign1_check(CoseSign1 c, List(Int) pubk) {
     return verify_sig_bytes(cose_sig_structure(c.prot, c.payload), c.sig, pubk);
 }
@@ -183,18 +218,26 @@ pub Bool cose_sign1_check(CoseSign1 c, List(Int) pubk) {
 // Nonces are SHA-256(domain ‖ key ‖ kid ‖ plaintext)[0..12]: builds
 // reproduce byte-for-byte and distinct payloads never share a nonce.
 
+/// The Enc_structure used as AEAD associated data (RFC 9052 §5.3).
+/// Encodes ["Encrypt0", `prot`, h'']: no external AAD.
 pub List(Int) cose_enc_structure(List(Int) prot) {
     List(Int) a1 = cbe_text("Encrypt0", cbe_array(3, []));
     return cbe_bytes([], cbe_bytes(prot, a1));
 }
+/// The encoded protected header {1: 24}: ChaCha20-Poly1305.
 pub List(Int) cose_encrypt0_protected() {
     return cbe_uint(24, cbe_uint(1, cbe_map(1, [])));
 }
+/// The deterministic 12-byte nonce for `pt` under `key` and `kid`.
+/// First 12 bytes of SHA-256 over a domain string, `key`, `kid` and `pt`.
 pub List(Int) cose_encrypt0_nonce(List(Int) key, Str kid, List(Int) pt) {
     List(Int) m1 = bytes_of("resid/cose/encrypt0/nonce").concat(key);
     List(Int) m2 = m1.concat(bytes_of(kid)).concat(pt);
     return slice_bytes(sha256_bytes(m2), 0, 11);
 }
+/// Tagged (16) COSE_Encrypt0 of `pt` under the ChaCha20-Poly1305 `key`.
+/// The nonce is deterministic (cose_encrypt0_nonce) and sent as the IV
+/// (label 5) in the unprotected header; `kid` only feeds the nonce.
 pub List(Int) cose_encrypt0_seal(List(Int) pt, List(Int) key, Str kid) {
     List(Int) nonce = cose_encrypt0_nonce(key, kid, pt);
     List(Int) prot = cose_encrypt0_protected();
@@ -204,16 +247,23 @@ pub List(Int) cose_encrypt0_seal(List(Int) pt, List(Int) key, Str kid) {
     return cbe_bytes(ct, o2);
 }
 
+/// The result of opening a COSE_Encrypt0; `err` says why when not `ok`.
 type CoseOpen = { Bool ok; Str err; List(Int) plaintext; };
 
+/// A failed CoseOpen carrying the message `err`.
 pub CoseOpen cose_open_err(Str err) {
     List(Int) e = [];
     return CoseOpen {.ok = false, .err = err, .plaintext = e};
 }
+/// True when `b` starts with CBOR tag 16 (COSE_Encrypt0).
 pub Bool cose_is_encrypt0(List(Int) b) {
     CbeHead t = cbe_read_head(b, 0);
     return t.ok && t.major == 6 && t.val == 16;
 }
+/// Decrypts the tagged COSE_Encrypt0 `blob` under the ChaCha20-Poly1305 `key`.
+/// The unprotected map must be exactly {5: 12-byte IV}; the protected
+/// header is authenticated but its contents are not checked. Not `ok` on a
+/// bad shape or a failed tag, with the reason in `err`.
 pub CoseOpen cose_encrypt0_open(List(Int) blob, List(Int) key) {
     CbeHead t = cbe_read_head(blob, 0);
     if (!t.ok || t.major != 6 || t.val != 16) { return cose_open_err("cose: missing tag 16"); }

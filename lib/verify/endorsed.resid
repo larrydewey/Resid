@@ -54,8 +54,12 @@ List(Int) en_le(Int v, Int n) { return if (n <= 0) { [] } else { [v & 255].conca
 
 // ─── SNP ────────────────────────────────────────────────────────────
 
+/// The CoRIM environment class of SNP evidence: vendor "AMD", model "SEV-SNP".
 pub CorimEnv snp_corim_env() { return corim_env("AMD", "SEV-SNP"); }
 
+/// The CoRIM claims of a verified SNP report, with the chip ID as instance.
+/// Covers the measurement, key digests, IDs, guest SVN, VMPL, the debug
+/// policy flag and the reported and committed TCB SVNs.
 pub List(CorimClaim) snp_claims(Verified(SnpReport) v) {
     SnpReport r = v.value;
     Str product = snp_product_of(v);
@@ -78,11 +82,13 @@ List(CorimMeas) en_tcb(Str p, TcbVersion t) {
     return [corim_svn_claim(en_k(p + ".fmc"), t.fmc), corim_svn_claim(en_k(p + ".bootloader"), t.bootloader), corim_svn_claim(en_k(p + ".tee"), t.tee), corim_svn_claim(en_k(p + ".snp"), t.snp), corim_svn_claim(en_k(p + ".microcode"), t.microcode)];
 }
 
-// The CoRIM applied to an SNP report, for a policy's own questions.
+/// The CoRIM applied to an SNP report, for a policy's own questions.
 pub CorimAcs snp_corim(Verified(SnpReport) v, Verified(CorimRefs) refs) { return corim_appraise(snp_claims(v), refs.value); }
 
-// The launch measurement the policy names or a reference value
-// corroborates; everything else as snp_appraise.
+/// Appraises an SNP report under `policy`, with CoRIM `refs` as endorser.
+/// The launch measurement must be one the policy names or one a reference
+/// value corroborates (else Err(Refused)); everything else as
+/// `snp_appraise`. The result's anchors include the endorser's.
 @primitive(appraise, from = v, policy = policy, ptype = SnpPolicy, with = refs)
 pub Result(Appraised(SnpReport), VerifyError) snp_appraise_endorsed(Verified(SnpReport) v, SnpPolicy policy, Verified(CorimRefs) refs) {
     CorimAcs a = snp_corim(v, refs);
@@ -95,8 +101,12 @@ pub Result(Appraised(SnpReport), VerifyError) snp_appraise_endorsed(Verified(Snp
 
 // ─── TDX ────────────────────────────────────────────────────────────
 
+/// The CoRIM environment class of TDX evidence: vendor "Intel", model "TDX".
 pub CorimEnv tdx_corim_env() { return corim_env("Intel", "TDX"); }
 
+/// The CoRIM claims of a verified TDX quote's TD body.
+/// Covers MRTD, RTMR0-3, MRSEAM (SHA-384 digests), the signer, config,
+/// owner, TCB SVN, XFAM and attribute values, and the debug attribute flag.
 pub List(CorimClaim) tdx_claims(Verified(TdxQuote) v) {
     TdQuoteBody b = v.value.body;
     Int attrs = (Int) b.td_attributes;
@@ -119,10 +129,13 @@ pub List(CorimClaim) tdx_claims(Verified(TdxQuote) v) {
     return corim_evidence(tdx_corim_env(), ms);
 }
 
+/// The CoRIM applied to a TDX quote, for a policy's own questions.
 pub CorimAcs tdx_corim(Verified(TdxQuote) v, Verified(CorimRefs) refs) { return corim_appraise(tdx_claims(v), refs.value); }
 
-// MRTD (and, when the policy names TDX modules, MRSEAM) the policy names
-// or a reference value corroborates; everything else as tdx_appraise.
+/// Appraises a TDX quote under `policy`, with CoRIM `refs` as endorser.
+/// MRTD must be one the policy names or a reference value corroborates
+/// (else Err(Refused)); a corroborated MRSEAM is added only when the policy
+/// names TDX modules. Everything else as `tdx_appraise`.
 @primitive(appraise, from = v, policy = policy, ptype = TdxPolicy, with = refs, anchor = root, kinds = [IntelPck], algorithms = [EcdsaP256Sha256], format = TdxQuote, inputs = [col, t])
 pub Result(Appraised(TdxQuote), VerifyError) tdx_appraise_endorsed(Verified(TdxQuote) v, TdxPolicy policy, TdxCollateral col, Anchor root, EvidenceTime t, Verified(CorimRefs) refs) {
     CorimAcs a = tdx_corim(v, refs);
@@ -137,12 +150,19 @@ pub Result(Appraised(TdxQuote), VerifyError) tdx_appraise_endorsed(Verified(TdxQ
 
 // ─── CCA ────────────────────────────────────────────────────────────
 
+/// The CoRIM environment class of a CCA realm: vendor "Arm", model "CCA realm".
 pub CorimEnv cca_realm_corim_env() { return corim_env("Arm", "CCA realm"); }
+/// The CoRIM environment class of a CCA platform: vendor "Arm", model
+/// "CCA platform".
 pub CorimEnv cca_platform_corim_env() { return corim_env("Arm", "CCA platform"); }
 
 // The named-information number of a CCA hash algorithm name.
 Int en_cca_alg(Str n) { return if (n == "sha-384") { 7 } else if (n == "sha-512") { 8 } else { 1 }; }
 
+/// The CoRIM claims of a verified CCA token, realm then platform.
+/// The realm gives RIM, REM0-3 and RPV; the platform, keyed by
+/// implementation and instance ID, gives lifecycle and each software
+/// component's digest and version.
 pub List(CorimClaim) cca_claims(Verified(CcaToken) v) {
     CcaToken k = v.value;
     Int ra = en_cca_alg(k.realm_hash_alg);
@@ -169,11 +189,13 @@ List(CorimMeas) en_sw(CcaToken k, Int i, List(CorimMeas) acc) {
     return en_sw(k, i + 1, acc.concat([corim_claim(en_k(c.kind), mv)]));
 }
 
+/// The CoRIM applied to a CCA token, for a policy's own questions.
 pub CorimAcs cca_corim(Verified(CcaToken) v, Verified(CorimRefs) refs) { return corim_appraise(cca_claims(v), refs.value); }
 
-// The realm initial measurement the policy names or a reference value
-// corroborates, and every platform software component corroborated;
-// everything else as cca_appraise.
+/// Appraises a CCA token under `policy`, with CoRIM `refs` as endorser.
+/// The RIM must be one the policy names or a reference value corroborates,
+/// and every platform software component must be corroborated (else
+/// Err(Refused)); everything else as `cca_appraise`.
 @primitive(appraise, from = v, policy = policy, ptype = CcaPolicy, with = refs)
 pub Result(Appraised(CcaToken), VerifyError) cca_appraise_endorsed(Verified(CcaToken) v, CcaPolicy policy, Verified(CorimRefs) refs) {
     CorimAcs a = cca_corim(v, refs);
@@ -197,7 +219,9 @@ Str en_sw_miss(CorimAcs a, List(CcaSwComponent) sw, Int i) {
 // The named-information number of SPDM's measurement hash.
 Int en_spdm_alg(Int mh) { return if (mh == 2) { 1 } else if (mh == 4) { 7 } else if (mh == 8) { 8 } else { 0 }; }
 
-// A device's blocks in the environment the caller names for it.
+/// The CoRIM claims of a device's SPDM measurement blocks, under `env`.
+/// Each block is keyed by its index: a digest by the negotiated hash, or
+/// a raw value when the block is raw or the hash is unknown.
 pub List(CorimClaim) spdm_claims(Verified(SpdmEvidence) v, CorimEnv env) { return corim_evidence(env, en_blocks(v.value, 0, [])); }
 
 List(CorimMeas) en_blocks(SpdmEvidence e, Int i, List(CorimMeas) acc) {
@@ -208,10 +232,13 @@ List(CorimMeas) en_blocks(SpdmEvidence e, Int i, List(CorimMeas) acc) {
     return en_blocks(e, i + 1, acc.concat([c]));
 }
 
+/// The CoRIM applied to SPDM evidence under `env`, for a policy's own
+/// questions.
 pub CorimAcs spdm_corim(Verified(SpdmEvidence) v, CorimEnv env, Verified(CorimRefs) refs) { return corim_appraise(spdm_claims(v, env), refs.value); }
 
-// Every measurement block corroborated by a reference value for the
-// device's environment `env`, and the policy's own entries.
+/// Appraises SPDM evidence, with CoRIM `refs` as endorser for `env`.
+/// Refuses no measurements or any block not corroborated; when the policy
+/// names measurements, `spdm_appraise` must accept them as well.
 @primitive(appraise, from = v, policy = policy, ptype = SpdmPolicy, with = refs)
 pub Result(Appraised(SpdmEvidence), VerifyError) spdm_appraise_endorsed(Verified(SpdmEvidence) v, SpdmPolicy policy, Verified(CorimRefs) refs, CorimEnv env) {
     if (v.value.measurements.len() == 0) { return Err(Refused("spdm_appraise_endorsed", "the device reported no measurement")); }
@@ -226,8 +253,12 @@ pub Result(Appraised(SpdmEvidence), VerifyError) spdm_appraise_endorsed(Verified
 
 // ─── TPM ────────────────────────────────────────────────────────────
 
+/// The CoRIM environment class of TPM evidence: vendor "TCG", model "TPM 2.0".
 pub CorimEnv tpm_corim_env() { return corim_env("TCG", "TPM 2.0"); }
 
+/// The CoRIM claims of a verified TPM quote.
+/// The quoted PCRs as SHA-256 registers by index, and the firmware version
+/// as 8 raw bytes.
 pub List(CorimClaim) tpm_claims(Verified(TpmQuoteEvidence) v) {
     TpmQuoteEvidence e = v.value;
     List(CorimMeas) ms = [corim_registers_claim(en_k("pcrs"), en_regs(e.pcr_index, e.pcr_values, 1, 0, [])), corim_raw_claim(en_k("firmware"), en_le(e.fw_hi, 4).concat(en_le(e.fw_lo, 4)))];
@@ -239,10 +270,13 @@ List(CorimRegister) en_regs(List(Int) idx, List(List(UInt(8))) vals, Int alg, In
     return en_regs(idx, vals, alg, i + 1, acc.concat([CorimRegister {.name = f"{idx[i]}", .digests = [CorimDigest {.alg = alg, .value = en_i(vals[i])}]}]));
 }
 
+/// The CoRIM applied to a TPM quote, for a policy's own questions.
 pub CorimAcs tpm_corim(Verified(TpmQuoteEvidence) v, Verified(CorimRefs) refs) { return corim_appraise(tpm_claims(v), refs.value); }
 
-// The quoted PCRs corroborated by a reference value (every register it
-// names), and the policy's own entries, if any.
+/// Appraises a TPM quote, with CoRIM `refs` as endorser.
+/// Refuses unless a reference value corroborates the quoted PCRs (every
+/// register it names); when the policy names PCRs, `tpm_appraise` must
+/// accept them as well.
 @primitive(appraise, from = v, policy = policy, ptype = TpmPolicy, with = refs)
 pub Result(Appraised(TpmQuoteEvidence), VerifyError) tpm_appraise_endorsed(Verified(TpmQuoteEvidence) v, TpmPolicy policy, Verified(CorimRefs) refs) {
     if (!corim_corroborated(tpm_corim(v, refs), tpm_corim_env(), en_k("pcrs"))) { return Err(Refused("tpm_appraise_endorsed", "no reference value corroborates the quoted PCRs")); }
@@ -255,8 +289,12 @@ pub Result(Appraised(TpmQuoteEvidence), VerifyError) tpm_appraise_endorsed(Verif
 
 // ─── Nitro ──────────────────────────────────────────────────────────
 
+/// The CoRIM environment class of Nitro evidence: vendor "AWS", model
+/// "Nitro Enclaves".
 pub CorimEnv nsm_corim_env() { return corim_env("AWS", "Nitro Enclaves"); }
 
+/// The CoRIM claims of a verified Nitro attestation document.
+/// The PCRs as SHA-384 registers by index, and the module ID as a name.
 pub List(CorimClaim) nsm_claims(Verified(NsmDocument) v) {
     NsmDocument d = v.value;
     CorimMeas name = corim_claim(en_k("module_id"), en_named(d.module_id));
@@ -273,11 +311,13 @@ List(CorimRegister) en_regs_i(List(Int) idx, List(List(Int)) vals, Int alg, Int 
     return en_regs_i(idx, vals, alg, i + 1, acc.concat([CorimRegister {.name = f"{idx[i]}", .digests = [CorimDigest {.alg = alg, .value = vals[i]}]}]));
 }
 
+/// The CoRIM applied to a Nitro document, for a policy's own questions.
 pub CorimAcs nsm_corim(Verified(NsmDocument) v, Verified(CorimRefs) refs) { return corim_appraise(nsm_claims(v), refs.value); }
 
-// The enclave's PCRs corroborated by a reference value (every register it
-// names), and the policy's own entries, if any; the debug-mode check as
-// nsm_appraise.
+/// Appraises a Nitro document, with CoRIM `refs` as endorser.
+/// Refuses unless a reference value corroborates the PCRs, or when PCR0 is
+/// all zeros (debug mode); when the policy names PCRs, `nsm_appraise` must
+/// accept them as well.
 @primitive(appraise, from = v, policy = policy, ptype = NsmPolicy, with = refs)
 pub Result(Appraised(NsmDocument), VerifyError) nsm_appraise_endorsed(Verified(NsmDocument) v, NsmPolicy policy, Verified(CorimRefs) refs) {
     if (!corim_corroborated(nsm_corim(v, refs), nsm_corim_env(), en_k("pcrs"))) { return Err(Refused("nsm_appraise_endorsed", "no reference value corroborates the enclave's PCRs")); }

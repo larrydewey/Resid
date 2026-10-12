@@ -8,12 +8,15 @@
 import "core.resid";
 import "snp.resid";
 
+/// AMD's Milan root key (ARK), as the anchor for VCEK-signed SEV-SNP reports.
 @anchor(kind = AmdVcek(Milan), principal = InGuest, formats = [SnpReport], source = "https://kdsintf.amd.com/vcek/v1/Milan/cert_chain", fingerprint = "sha384:2f1316273dade9b896875da0acb6bc1c0547d41320ad323cbfbef6570f0305a3e7f8398d0b44bd1f36075295cefcc0db", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [RsaPss4096Sha384, EcdsaP384Sha384], expires = "2045-10-22")
 pub Anchor amd_ark_milan() { return anchor_der(amd_ark_milan_der()); }
 
+/// AMD's Milan root key (ARK), as the anchor for VLEK-signed SEV-SNP reports.
 @anchor(kind = AmdVlek(Milan), principal = InGuest, formats = [SnpReport], source = "https://kdsintf.amd.com/vcek/v1/Milan/cert_chain", fingerprint = "sha384:2f1316273dade9b896875da0acb6bc1c0547d41320ad323cbfbef6570f0305a3e7f8398d0b44bd1f36075295cefcc0db", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [RsaPss4096Sha384, EcdsaP384Sha384], expires = "2045-10-22")
 pub Anchor amd_ark_milan_vlek() { return anchor_der(amd_ark_milan_der()); }
 
+/// The DER bytes of AMD's Milan ARK certificate.
 pub List(Int) amd_ark_milan_der() {
     return [
         48, 130, 6, 99, 48, 130, 4, 18, 160, 3, 2, 1, 2, 2, 3, 1, 0, 0, 48, 70, 6, 9, 42, 134,
@@ -88,12 +91,15 @@ pub List(Int) amd_ark_milan_der() {
     ];
 }
 
+/// AMD's Genoa root key (ARK), as the anchor for VCEK-signed SEV-SNP reports.
 @anchor(kind = AmdVcek(Genoa), principal = InGuest, formats = [SnpReport], source = "https://kdsintf.amd.com/vcek/v1/Genoa/cert_chain", fingerprint = "sha384:d1b7bcfe685d19e63ca792957371b619cee792db280c312e7a00433d506224d5953ad9d348d74b4e176fba1b6a616eac", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [RsaPss4096Sha384, EcdsaP384Sha384], expires = "2047-01-26")
 pub Anchor amd_ark_genoa() { return anchor_der(amd_ark_genoa_der()); }
 
+/// AMD's Genoa root key (ARK), as the anchor for VLEK-signed SEV-SNP reports.
 @anchor(kind = AmdVlek(Genoa), principal = InGuest, formats = [SnpReport], source = "https://kdsintf.amd.com/vcek/v1/Genoa/cert_chain", fingerprint = "sha384:d1b7bcfe685d19e63ca792957371b619cee792db280c312e7a00433d506224d5953ad9d348d74b4e176fba1b6a616eac", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [RsaPss4096Sha384, EcdsaP384Sha384], expires = "2047-01-26")
 pub Anchor amd_ark_genoa_vlek() { return anchor_der(amd_ark_genoa_der()); }
 
+/// The DER bytes of AMD's Genoa ARK certificate.
 pub List(Int) amd_ark_genoa_der() {
     return [
         48, 130, 6, 99, 48, 130, 4, 18, 160, 3, 2, 1, 2, 2, 3, 2, 0, 0, 48, 70, 6, 9, 42, 134,
@@ -168,12 +174,15 @@ pub List(Int) amd_ark_genoa_der() {
     ];
 }
 
+/// AMD's Turin root key (ARK), as the anchor for VCEK-signed SEV-SNP reports.
 @anchor(kind = AmdVcek(Turin), principal = InGuest, formats = [SnpReport], source = "https://kdsintf.amd.com/vcek/v1/Turin/cert_chain", fingerprint = "sha384:09da21f0e7d04ac7f1b04306ebc5d65a3c0ebec966170d22fe26c44efcce8be3ed298a80d10fcfa4131c01028fe536d8", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [RsaPss4096Sha384, EcdsaP384Sha384], expires = "2048-05-15")
 pub Anchor amd_ark_turin() { return anchor_der(amd_ark_turin_der()); }
 
+/// AMD's Turin root key (ARK), as the anchor for VLEK-signed SEV-SNP reports.
 @anchor(kind = AmdVlek(Turin), principal = InGuest, formats = [SnpReport], source = "https://kdsintf.amd.com/vcek/v1/Turin/cert_chain", fingerprint = "sha384:09da21f0e7d04ac7f1b04306ebc5d65a3c0ebec966170d22fe26c44efcce8be3ed298a80d10fcfa4131c01028fe536d8", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [RsaPss4096Sha384, EcdsaP384Sha384], expires = "2048-05-15")
 pub Anchor amd_ark_turin_vlek() { return anchor_der(amd_ark_turin_der()); }
 
+/// The DER bytes of AMD's Turin ARK certificate.
 pub List(Int) amd_ark_turin_der() {
     return [
         48, 130, 6, 99, 48, 130, 4, 18, 160, 3, 2, 1, 2, 2, 3, 3, 0, 0, 48, 70, 6, 9, 42, 134,

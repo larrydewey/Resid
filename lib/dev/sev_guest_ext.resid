@@ -29,9 +29,10 @@ import "sev_guest.resid";
 import "uapi_sev_guest.resid";
 import "uapi_sev_guest_ext.resid";
 
-// A report (as snp_get_report returns it) and the host's certificate
-// table (GUID-keyed entries ending with a zero entry, then zero bytes up
-// to the length the kernel was given).
+/// An SNP attestation report and the host's certificate table.
+/// `report` is as snp_get_report returns it; `certs` holds GUID-keyed
+/// entries ending with a zero entry, then zero bytes up to the length the
+/// kernel was given. The table is not signed: evidence only once verified.
 type SnpExtReport = { List(UInt(8)) report; List(UInt(8)) certs; };
 
 // The certificate buffer's first size (two pages) and largest (the
@@ -41,13 +42,10 @@ Int sg_ext_first() { return 8192; }
 Int sg_ext_max() { return 16384; }
 Int sg_page() { return 4096; }
 
-// The report for `report_data` (64 bytes) at VMPL `vmpl` (0 to 3), and
-// the certificate table. The report is hardware-signed, the table is not
-// (above).
-//
-// Failures: as snp_get_report's, plus TooLong when the host's table needs
-// more than 16 KiB, and Kernel(errno) for a failed ioctl (EINVAL included:
-// with the Errno field it is the kernel's answer, not Unsupported).
+/// Fetches an SNP attestation report with the host's certificate table.
+/// `report_data` is 64 bytes and `vmpl` 0 to 3, else BadInput. The report
+/// is hardware-signed, the table is not. Errors as snp_get_report's, plus
+/// TooLong past 16 KiB and Kernel(errno) for a failed ioctl, EINVAL included.
 @requires(device(readonly))
 pub Result(SnpExtReport, DeviceError) snp_get_ext_report(List(UInt(8)) report_data, Int vmpl) {
     Str name = "sev_guest.snp_get_ext_report";
@@ -83,13 +81,15 @@ Result(SnpExtReport, DeviceError) sg_ext_try(Str name, List(UInt(8)) report_data
     };
 }
 
+/// The number `v` from a device reply; BadReply naming `what` when absent.
 pub Result(Int, DeviceError) sg_ext_num(Str name, Option(Int) v, Str what) {
     return match (v) { None => Err(BadReply(name, "no " + what)), Some(x) => Ok(x), };
 }
 
-// After SNP_GUEST_VMM_ERR_INVALID_LEN with a buffer of `had` bytes: the
-// length to retry with, from the request struct the kernel wrote back --
-// once (`retried`), larger than before, whole pages, within the maximum.
+/// The certificate buffer length to retry with after INVALID_LEN.
+/// Read from the request struct the kernel wrote back (`back`) after a
+/// `had`-byte buffer. TooLong past 16 KiB; BadReply when already `retried`,
+/// not larger than `had`, or not whole 4 KiB pages.
 pub Result(Int, DeviceError) sg_ext_need(Str name, Int had, Bool retried, Option(List(UInt(8))) back) {
     List(UInt(8)) r = match (back) { None => [], Some(b) => b, };
     Int la = snp_ext_report_req_certs_len_at();

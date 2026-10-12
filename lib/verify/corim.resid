@@ -48,79 +48,98 @@ import "../instant.resid";
 
 // ─── The model ──────────────────────────────────────────────────────
 
-// An identifier and what kind it is: "oid", "uuid", "bytes", "ueid",
-// "key" (v the key's SubjectPublicKeyInfo, or a COSE_Key) or "" (none).
+/// An identifier and what kind it is: "oid", "uuid", "bytes", "ueid",
+/// "key" (v the key's SubjectPublicKeyInfo, or a COSE_Key) or "" (none).
 pub type CorimId = { Str kind; List(Int) v; };
 
-// class-map: absent fields are "" or -1.
+/// A CoMID class-map: class ID, vendor, model, layer and index.
+/// Absent text fields are "" and absent integers -1.
 pub type CorimClass = { CorimId id; Str vendor; Str model; Int layer; Int index; };
 
+/// An environment: a class, an instance and a group, each optional.
 pub type CorimEnv = { CorimClass class; CorimId instance; CorimId group; };
 
+/// A security version number: none, an exact value, or a minimum.
 pub type CorimSvn = SvnNone | SvnExact(Int) | SvnMin(Int);
 
-// alg: the named-information hash algorithm (1 SHA-256, 7 SHA-384,
-// 8 SHA-512, ...).
+/// A digest and its algorithm.
+/// `alg` is the named-information hash algorithm (1 SHA-256, 7 SHA-384,
+/// 8 SHA-512, ...).
 pub type CorimDigest = { Int alg; List(Int) value; };
 
-// A key: kind "pkix-key", "pkix-cert", "pkix-cert-path", "asn1der-cert",
-// "cose-key", "thumbprint", "cert-thumbprint", "cert-path-thumbprint" or
-// "bytes"; key the public key where the kind carries one; der the
-// SubjectPublicKeyInfo, certificate or COSE_Key bytes; thumb the digest of
-// a thumbprint kind.
+/// A key: kind "pkix-key", "pkix-cert", "pkix-cert-path", "asn1der-cert",
+/// "cose-key", "thumbprint", "cert-thumbprint", "cert-path-thumbprint" or
+/// "bytes"; key the public key where the kind carries one; der the
+/// SubjectPublicKeyInfo, certificate or COSE_Key bytes; thumb the digest of
+/// a thumbprint kind.
 pub type CorimKeyRef = { Str kind; PubKey key; List(Int) der; CorimDigest thumb; };
 
-// One integrity register: its name (an index as decimal, or text) and the
-// digests it holds.
+/// One integrity register: its name (an index as decimal, or text) and the
+/// digests it holds.
 pub type CorimRegister = { Str name; List(CorimDigest) digests; };
 
-// measurement-values-map. `present` has bit k set for each key k given:
-// 0 version, 1 svn, 2 digests, 3 flags, 4 raw value, 6 MAC, 7 IP,
-// 8 serial, 9 UEID, 10 UUID, 11 name, 13 keys, 14 registers, 15 range.
-// flags_known has bit i for each flag given, flags its value (0
-// is-configured, 1 is-secure, 2 is-recovery, 3 is-debug, 4
-// is-replay-protected, 5 is-integrity-protected, 6 is-runtime-meas, 7
-// is-immutable, 8 is-tcb, 9 is-confidentiality-protected). An integer
-// range is [range_min, range_max], each -1 for open, or the evidence's
-// value as both.
+/// A measurement-values-map: every value a measurement may state.
+/// `present` has bit k set for each key k given: 0 version, 1 svn, 2 digests, 3 flags, 4 raw value, 6 MAC, 7 IP,
+/// 8 serial, 9 UEID, 10 UUID, 11 name, 13 keys, 14 registers, 15 range.
+/// flags_known has bit i for each flag given, flags its value (0
+/// is-configured, 1 is-secure, 2 is-recovery, 3 is-debug, 4
+/// is-replay-protected, 5 is-integrity-protected, 6 is-runtime-meas, 7
+/// is-immutable, 8 is-tcb, 9 is-confidentiality-protected). An integer
+/// range is [range_min, range_max], each -1 for open, or the evidence's
+/// value as both.
 pub type CorimMval = { Int present; Str version; Str version_scheme; CorimSvn svn; List(CorimDigest) digests; Int flags_known; Int flags; List(Int) raw; List(Int) raw_mask; List(Int) mac; List(Int) ip; Str serial; List(Int) ueid; List(Int) uuid; Str name; List(CorimKeyRef) keys; List(CorimRegister) registers; Int range_min; Int range_max; Bool range_open_min; Bool range_open_max; };
 
+/// A measurement key: none, an integer, text, an OID or a UUID.
 pub type CorimMkey = MkNone | MkInt(Int) | MkText(Str) | MkOid(List(Int)) | MkUuid(List(Int));
 
+/// A measurement: its key, its values, and the keys that must have
+/// authorized it (empty for none).
 pub type CorimMeas = { CorimMkey mkey; CorimMval mval; List(CorimKeyRef) authorized_by; };
 
-// A reference triple, an endorsed triple or a stateful environment: an
-// environment and its measurements.
+/// A reference triple, an endorsed triple or a stateful environment: an
+/// environment and its measurements.
 pub type CorimTriple = { CorimEnv env; List(CorimMeas) meas; };
 
-// An identity or attest-key triple: the environment, its keys, and the
-// optional conditions (the measured element holding them, and who must
-// have authorized them).
+/// An identity or attest-key triple: the environment, its keys, and the
+/// optional conditions (the measured element holding them, and who must
+/// have authorized them).
 pub type CorimKeyTriple = { CorimEnv env; List(CorimKeyRef) keys; Bool conditional; CorimMkey cond_mkey; List(CorimKeyRef) cond_authorized_by; };
 
+/// A conditional endorsement: the endorsements apply when every condition
+/// matches.
 pub type CorimConditional = { List(CorimTriple) conditions; List(CorimTriple) endorsements; };
 
+/// One record of a conditional endorsement series: a selection and the
+/// measurements it adds.
 pub type CorimSeriesRecord = { List(CorimMeas) selection; List(CorimMeas) addition; };
+/// A conditional endorsement series: a condition and its records, tried
+/// in order.
 pub type CorimSeries = { CorimTriple condition; List(CorimSeriesRecord) series; };
 
-// valid_until: the CoRIM's not-after (Unix seconds, -1 none); expires:
-// the endorser anchor's; endorser: its SubjectPublicKeyInfo (for an
-// authorized-by condition).
+/// The contents of a CoRIM: its id, signer and profile, and every triple
+/// of its CoMIDs.
+/// `valid_until` is the CoRIM's not-after (Unix seconds, -1 none);
+/// `expires` the endorser anchor's; `endorser` its SubjectPublicKeyInfo
+/// (for an authorized-by condition).
 @signed(sig = signature, span = payload)
 pub type CorimRefs = { Str id; Str signer; Str profile; List(CorimTriple) reference; List(CorimTriple) endorsed; List(CorimKeyTriple) identity; List(CorimKeyTriple) attest_keys; List(CorimConditional) conditional; List(CorimSeries) series; Int valid_until; Str expires; List(Int) endorser; };
 
+/// The empty identifier: kind "" and no bytes.
 pub CorimId corim_id_none() { List(Int) none = []; return CorimId {.kind = "", .v = none}; }
+/// The empty class: no ID, vendor or model, layer and index -1.
 pub CorimClass corim_class_none() { return CorimClass {.id = corim_id_none(), .vendor = "", .model = "", .layer = 0 - 1, .index = 0 - 1}; }
 
-// An environment of a class named by vendor and model (either "" for
-// none): what the platform adapters build.
+/// An environment of a class named by vendor and model (either "" for
+/// none): what the platform adapters build.
 pub CorimEnv corim_env(Str vendor, Str model) {
     return CorimEnv {.class = CorimClass {.id = corim_id_none(), .vendor = vendor, .model = model, .layer = 0 - 1, .index = 0 - 1}, .instance = corim_id_none(), .group = corim_id_none()};
 }
 
-// The same with an instance ID (kind "ueid", "uuid" or "bytes").
+/// Environment `e` with its instance ID replaced.
+/// `kind` is "ueid", "uuid" or "bytes"; `v` the ID's bytes.
 pub CorimEnv corim_env_instance(CorimEnv e, Str kind, List(Int) v) { return CorimEnv {.class = e.class, .instance = CorimId {.kind = kind, .v = v}, .group = e.group}; }
 
+/// Measurement values that state nothing (`present` 0).
 pub CorimMval corim_mval_none() {
     List(Int) n = [];
     List(CorimDigest) nd = [];
@@ -130,43 +149,53 @@ pub CorimMval corim_mval_none() {
 }
 
 // Evidence measurements, one value each, for the platform adapters.
+
+/// An evidence measurement of one digest, `v` under algorithm `alg`.
 pub CorimMeas corim_digest_claim(CorimMkey k, Int alg, List(Int) v) {
     CorimMval m = corim_mval_none();
     return corim_claim(k, CorimMval {.present = 4, .version = m.version, .version_scheme = m.version_scheme, .svn = m.svn, .digests = [CorimDigest {.alg = alg, .value = v}], .flags_known = 0, .flags = 0, .raw = m.raw, .raw_mask = m.raw_mask, .mac = m.mac, .ip = m.ip, .serial = m.serial, .ueid = m.ueid, .uuid = m.uuid, .name = m.name, .keys = m.keys, .registers = m.registers, .range_min = 0, .range_max = 0, .range_open_min = true, .range_open_max = true});
 }
 
+/// An evidence measurement of a raw value `v`, without a mask.
 pub CorimMeas corim_raw_claim(CorimMkey k, List(Int) v) {
     CorimMval m = corim_mval_none();
     return corim_claim(k, CorimMval {.present = 16, .version = m.version, .version_scheme = m.version_scheme, .svn = m.svn, .digests = m.digests, .flags_known = 0, .flags = 0, .raw = v, .raw_mask = m.raw_mask, .mac = m.mac, .ip = m.ip, .serial = m.serial, .ueid = m.ueid, .uuid = m.uuid, .name = m.name, .keys = m.keys, .registers = m.registers, .range_min = 0, .range_max = 0, .range_open_min = true, .range_open_max = true});
 }
 
+/// An evidence measurement of an exact SVN.
 pub CorimMeas corim_svn_claim(CorimMkey k, Int svn) {
     CorimMval m = corim_mval_none();
     return corim_claim(k, CorimMval {.present = 2, .version = m.version, .version_scheme = m.version_scheme, .svn = SvnExact(svn), .digests = m.digests, .flags_known = 0, .flags = 0, .raw = m.raw, .raw_mask = m.raw_mask, .mac = m.mac, .ip = m.ip, .serial = m.serial, .ueid = m.ueid, .uuid = m.uuid, .name = m.name, .keys = m.keys, .registers = m.registers, .range_min = 0, .range_max = 0, .range_open_min = true, .range_open_max = true});
 }
 
+/// An evidence measurement of an integer `v`, as the closed range [v, v].
 pub CorimMeas corim_int_claim(CorimMkey k, Int v) {
     CorimMval m = corim_mval_none();
     return corim_claim(k, CorimMval {.present = 32768, .version = m.version, .version_scheme = m.version_scheme, .svn = m.svn, .digests = m.digests, .flags_known = 0, .flags = 0, .raw = m.raw, .raw_mask = m.raw_mask, .mac = m.mac, .ip = m.ip, .serial = m.serial, .ueid = m.ueid, .uuid = m.uuid, .name = m.name, .keys = m.keys, .registers = m.registers, .range_min = v, .range_max = v, .range_open_min = false, .range_open_max = false});
 }
 
-// Flags: `known` the flags the evidence states, `value` their values.
+/// An evidence measurement of operational flags.
+/// `known` has a bit for each flag the evidence states and `value` their
+/// values; bits of `value` outside `known` are dropped.
 pub CorimMeas corim_flags_claim(CorimMkey k, Int known, Int value) {
     CorimMval m = corim_mval_none();
     return corim_claim(k, CorimMval {.present = 8, .version = m.version, .version_scheme = m.version_scheme, .svn = m.svn, .digests = m.digests, .flags_known = known, .flags = value & known, .raw = m.raw, .raw_mask = m.raw_mask, .mac = m.mac, .ip = m.ip, .serial = m.serial, .ueid = m.ueid, .uuid = m.uuid, .name = m.name, .keys = m.keys, .registers = m.registers, .range_min = 0, .range_max = 0, .range_open_min = true, .range_open_max = true});
 }
 
+/// An evidence measurement of a version string, with no version scheme.
 pub CorimMeas corim_version_claim(CorimMkey k, Str version) {
     CorimMval m = corim_mval_none();
     return corim_claim(k, CorimMval {.present = 1, .version = version, .version_scheme = "", .svn = m.svn, .digests = m.digests, .flags_known = 0, .flags = 0, .raw = m.raw, .raw_mask = m.raw_mask, .mac = m.mac, .ip = m.ip, .serial = m.serial, .ueid = m.ueid, .uuid = m.uuid, .name = m.name, .keys = m.keys, .registers = m.registers, .range_min = 0, .range_max = 0, .range_open_min = true, .range_open_max = true});
 }
 
-// Integrity registers (PCRs, RTMRs): one register per name.
+/// An evidence measurement of integrity registers (PCRs, RTMRs).
+/// `regs` holds one register per name.
 pub CorimMeas corim_registers_claim(CorimMkey k, List(CorimRegister) regs) {
     CorimMval m = corim_mval_none();
     return corim_claim(k, CorimMval {.present = 16384, .version = m.version, .version_scheme = m.version_scheme, .svn = m.svn, .digests = m.digests, .flags_known = 0, .flags = 0, .raw = m.raw, .raw_mask = m.raw_mask, .mac = m.mac, .ip = m.ip, .serial = m.serial, .ueid = m.ueid, .uuid = m.uuid, .name = m.name, .keys = m.keys, .registers = regs, .range_min = 0, .range_max = 0, .range_open_min = true, .range_open_max = true});
 }
 
+/// A measurement of key `k` and values `v`, authorized by no key.
 pub CorimMeas corim_claim(CorimMkey k, CorimMval v) {
     List(CorimKeyRef) none = [];
     return CorimMeas {.mkey = k, .mval = v, .authorized_by = none};
@@ -174,6 +203,8 @@ pub CorimMeas corim_claim(CorimMkey k, CorimMval v) {
 
 // ─── CBOR, bounded ──────────────────────────────────────────────────
 
+/// A CBOR head read: whether it was of the wanted major type, the position
+/// after it, and its argument value.
 type CbR = { Bool ok; Int pos; Int val; };
 
 CbR cb_head(List(Int) b, Int pos, Int major) {
@@ -182,6 +213,8 @@ CbR cb_head(List(Int) b, Int pos, Int major) {
     return CbR {.ok = true, .pos = h.pos, .val = h.val};
 }
 
+/// A CBOR byte or text string read: whether it was read, its bytes, and the
+/// position after it.
 type CbS = { Bool ok; List(Int) v; Int pos; };
 
 CbS cb_str(List(Int) b, Int pos, Int major) {
@@ -191,8 +224,8 @@ CbS cb_str(List(Int) b, Int pos, Int major) {
 
 Int cb_skip(List(Int) b, Int pos) { return cbor_skip(b, pos, 16); }
 
-// Through any tags to the tagged item: the last tag (-1 none) and where
-// the item starts.
+/// An item read through any tags: the last tag (-1 none) and where the
+/// tagged item starts.
 type CbT = { Int tag; Int pos; };
 
 CbT cb_untag(List(Int) b, Int pos, Int tag, Int depth) {
@@ -275,7 +308,7 @@ Result(Bool, Str) cr_bool(List(Int) b, Int pos, Str what) {
 
 Bool cr_is_null(List(Int) b, Int pos) { return pos >= 0 && pos < b.len() && b[pos] == 246; }
 
-// An array of min to max items: where the first is and how many.
+/// A CBOR array read: where its first item is and how many items it has.
 type CrArr = { Int pos; Int n; };
 
 Result(CrArr, Str) cr_array(List(Int) b, Int pos, Int min, Int max, Str what) {
@@ -541,6 +574,8 @@ Result(CorimMval, Str) cr_mval(List(Int) b, Int pos) {
 
 Int cr_bit(Int p, Int k) { return if (p >= 0) { 1 << k } else { 0 }; }
 
+/// A version-map read: the version text and its scheme ("" when absent; an
+/// integer scheme as decimal text).
 type CrVer = { Str v; Str scheme; };
 
 // version-map: {0: version, 1: version scheme (an integer or text)}.
@@ -565,6 +600,8 @@ Result(CorimSvn, Str) cr_svn(List(Int) b, Int pos) {
     return Err(f"an SVN of tag {t.tag}");
 }
 
+/// A flags-map read as bit sets over flags 0-9: which flags are stated and
+/// which of those are true.
 type CrFlags = { Int known; Int value; };
 
 // flags-map: {0..9: bool}; other keys are extensions and skipped.
@@ -581,6 +618,7 @@ Result(CrFlags, Str) cr_flags_at(List(Int) b, Int m, Int i, CrFlags acc) {
     return cr_flags_at(b, m, i + 1, CrFlags {.known = acc.known | (1 << i), .value = acc.value | (if (v) { 1 << i } else { 0 })});
 }
 
+/// A raw value read: its bytes and its mask.
 type CrRaw = { List(Int) v; List(Int) mask; };
 
 // raw-value: bytes (560) or a masked raw value (563, [value, mask]); the
@@ -640,6 +678,7 @@ Result(List(CorimRegister), Str) cr_regs_at(List(Int) b, Int pos, Int left, List
     return cr_regs_at(b, cr_next(b, vp, "a register")?, left - 1, acc.concat([CorimRegister {.name = name, .digests = ds}]));
 }
 
+/// An integer range read: its bounds, and whether each end is open (null).
 type CrRange = { Int min; Int max; Bool open_min; Bool open_max; };
 
 // int-range: an integer, or tag 564 [min / null, max / null].
@@ -767,6 +806,10 @@ Str cr_cose_alg_name(Int alg) {
     return "";
 }
 
+/// Checks a signed CoRIM against an Endorser anchor and reads its contents.
+/// Err when the anchor is not an Endorser or has expired at `t`, the
+/// CoRIM is over 1 MiB or malformed, its algorithm is not one the anchor
+/// lists, the signature fails, or a validity period excludes `t`.
 @verify_internal
 pub Result(CorimRefs, VerifyError) corim_check(List(UInt(8)) corim, Anchor endorser, EvidenceTime t) {
     if (endorser.kind != "Endorser") { return Err(Refused("corim_verify", "the anchor is not an endorser (kind " + endorser.kind + ")")); }
@@ -791,9 +834,9 @@ pub Result(CorimRefs, VerifyError) corim_check(List(UInt(8)) corim, Anchor endor
     return Ok(CorimRefs {.id = r.id, .signer = mt.signer, .profile = r.profile, .reference = r.reference, .endorsed = r.endorsed, .identity = r.identity, .attest_keys = r.attest_keys, .conditional = r.conditional, .series = r.series, .valid_until = until, .expires = endorser.expires, .endorser = endorser.der});
 }
 
-// corim-meta: {0: signer {0: name}, 1: validity {0: not-before, 1:
-// not-after}} (times tag 1, Unix seconds). The signer's name and the
-// not-after, if the validity holds at t.
+/// The signer's name ("" absent) and not-after time (-1 absent) read from
+/// corim-meta: {0: signer {0: name}, 1: validity {0: not-before, 1:
+/// not-after}}, times tag 1 in Unix seconds.
 type CmMeta = { Str signer; Int not_after; };
 
 Result(CmMeta, VerifyError) corim_meta_check(List(Int) prot, Int pos, EvidenceTime t) {
@@ -809,6 +852,7 @@ Result(CmMeta, VerifyError) corim_meta_check(List(Int) prot, Int pos, EvidenceTi
     return Ok(CmMeta {.signer = if (nm.ok) { cb_ascii(nm.v) } else { "" }, .not_after = w.not_after});
 }
 
+/// A validity-map's not-after time in Unix seconds (-1 none).
 type CmValid = { Int not_after; };
 
 // validity-map {0: not-before, 1: not-after}, both tag-1 times: the
@@ -842,10 +886,10 @@ CorimRefs cr_empty() {
     return CorimRefs {.id = "", .signer = "", .profile = "", .reference = nt, .endorsed = nt, .identity = nk, .attest_keys = nk, .conditional = nc, .series = ns, .valid_until = 0 - 1, .expires = "", .endorser = none};
 }
 
-// corim-map: {0: id, 1: [+ tag], 2: dependent RIMs, 3: profile, 4:
-// rim-validity, 5: entities}.
-// The corim-map alone, with its rim-validity checked at `at`: nothing is
-// verified, so nothing here is evidence (corim_check is).
+/// Reads an unsigned corim-map (tag 501), checking its rim-validity at `at`.
+/// Nothing is verified, so the result is not evidence (`corim_check` is).
+/// The map is {0: id, 1: [+ tag], 2: dependent RIMs, 3: profile, 4:
+/// rim-validity, 5: entities}.
 pub Result(CorimRefs, VerifyError) corim_payload(List(Int) b, Instant at) {
     CbT tg = cb_untag(b, 0, 0 - 1, 0);
     if (tg.tag != 501) { return Err(BadLayout("the payload is not a corim-map (tag 501)")); }
@@ -921,9 +965,10 @@ Result(CorimRefs, Str) comid(List(Int) c, CorimRefs acc) {
 
 // ─── The primitive ──────────────────────────────────────────────────
 
-// Reference values and endorsements on the endorser's word. Not fresh: a
-// CoRIM is reusable by design; what makes a decision fresh is its
-// evidence.
+/// Verifies a signed CoRIM, giving its reference values and endorsements
+/// on the endorser's word.
+/// Not fresh: a CoRIM is reusable by design; what makes a decision fresh
+/// is its evidence. Fails as `corim_check` does.
 @primitive(verify, anchor = endorser, gives = [], time = t, format = CorimRefs, kinds = [Endorser], inputs = [corim, t])
 pub Result(Verified(CorimRefs), VerifyError) corim_verify(List(UInt(8)) corim, Anchor endorser, EvidenceTime t) {
     CorimRefs r = corim_check(corim, endorser, t)?;
@@ -935,7 +980,7 @@ pub Result(Verified(CorimRefs), VerifyError) corim_verify(List(UInt(8)) corim, A
 
 Bool cr_id_eq(CorimId a, CorimId b) { return a.kind == b.kind && eq_ints(a.v, b.v); }
 
-// Every field the reference environment states holds of the claim's.
+/// Every field the reference environment states holds of the claim's.
 pub Bool corim_env_matches(CorimEnv r, CorimEnv e) {
     CorimClass a = r.class;
     CorimClass b = e.class;
@@ -943,6 +988,7 @@ pub Bool corim_env_matches(CorimEnv r, CorimEnv e) {
     return cls && (r.instance.kind == "" || cr_id_eq(r.instance, e.instance)) && (r.group.kind == "" || cr_id_eq(r.group, e.group));
 }
 
+/// Are two measurement keys of the same kind and equal?
 pub Bool corim_mkey_eq(CorimMkey a, CorimMkey b) {
     return match (a) {
         MkNone => match (b) { MkNone => true, _ => false, },
@@ -953,10 +999,12 @@ pub Bool corim_mkey_eq(CorimMkey a, CorimMkey b) {
     };
 }
 
-// The measurement key matches and every value the reference states holds
-// of the claim's.
+/// The measurement key matches and every value the reference states holds
+/// of the claim's.
 pub Bool corim_meas_matches(CorimMeas r, CorimMeas e) { return corim_mkey_eq(r.mkey, e.mkey) && corim_mval_matches(r.mval, e.mval); }
 
+/// Does every value reference `r` states hold of claim `e`'s?
+/// Each value `r` states must also be present in `e`.
 pub Bool corim_mval_matches(CorimMval r, CorimMval e) {
     Int need = r.present;
     if ((need & e.present) != need) { return false; }
@@ -1020,10 +1068,10 @@ Bool cr_regs_ok(List(CorimRegister) r, List(CorimRegister) e, Int i) {
 
 Bool cr_reg_in(CorimRegister r, List(CorimRegister) e, Int j) { return j < e.len() && ((e[j].name == r.name && cr_digests_ok(r.digests, e[j].digests)) || cr_reg_in(r, e, j + 1)); }
 
-// Do two keys name the same public key? By the key itself where both
-// carry one (SubjectPublicKeyInfo, certificate or COSE_Key), else a
-// thumbprint against the other's SubjectPublicKeyInfo or certificate, or
-// bytes against bytes.
+/// Do two keys name the same public key? By the key itself where both
+/// carry one (SubjectPublicKeyInfo, certificate or COSE_Key), else a
+/// thumbprint against the other's SubjectPublicKeyInfo or certificate, or
+/// bytes against bytes.
 pub Bool corim_key_matches(CorimKeyRef a, CorimKeyRef b) {
     if (a.key.kind != 0 && b.key.kind != 0) { return corim_pub_eq(a.key, b.key); }
     if (a.kind == "bytes" || b.kind == "bytes") { return a.kind == b.kind && eq_ints(a.der, b.der); }
@@ -1050,6 +1098,9 @@ List(Int) cr_hash(Int alg, List(Int) m) {
     return [];
 }
 
+/// Are two public keys the same key?
+/// RSA compares modulus and exponent ignoring leading zeros; other kinds
+/// compare curve size and point.
 pub Bool corim_pub_eq(PubKey a, PubKey b) {
     if (a.kind != b.kind) { return false; }
     if (a.kind == pubkey_rsa()) { return eq_ints(cr_strip0(a.n), cr_strip0(b.n)) && eq_ints(cr_strip0(a.e), cr_strip0(b.e)); }
@@ -1060,15 +1111,17 @@ List(Int) cr_strip0(List(Int) v) { return if (v.len() > 1 && v[0] == 0) { cr_str
 
 // ─── Appraisal (draft-ietf-rats-corim §9) ───────────────────────────
 
-// One claim of the accepted claims set: its environment and measurement,
-// where it came from ("evidence", "endorsed" or a reference value's
-// corroboration) and, for evidence, whether a reference value
-// corroborated it.
+/// One claim of the accepted claims set: its environment and measurement,
+/// where it came from (`source` "evidence" or "endorsed") and, for
+/// evidence, whether a reference value corroborated it.
 pub type CorimClaim = { CorimEnv env; CorimMeas m; Str source; Bool corroborated; };
 
+/// The accepted claims set after appraisal.
+/// `applied` counts the triples that corroborated or added claims.
 pub type CorimAcs = { List(CorimClaim) claims; Int applied; };
 
-// Evidence claims: an environment and its measurements.
+/// The evidence claims for `ms` in `env`, one per measurement, none yet
+/// corroborated.
 pub List(CorimClaim) corim_evidence(CorimEnv env, List(CorimMeas) ms) { return cr_ev_at(env, ms, 0, []); }
 
 List(CorimClaim) cr_ev_at(CorimEnv env, List(CorimMeas) ms, Int i, List(CorimClaim) acc) {
@@ -1076,7 +1129,9 @@ List(CorimClaim) cr_ev_at(CorimEnv env, List(CorimMeas) ms, Int i, List(CorimCla
     return cr_ev_at(env, ms, i + 1, acc.concat([CorimClaim {.env = env, .m = ms[i], .source = "evidence", .corroborated = false}]));
 }
 
-// The CoRIM applied to the evidence's claims.
+/// Appraises the evidence's claims against the CoRIM (draft §9).
+/// Reference triples corroborate claims first; endorsements, conditional
+/// endorsements and series then add claims, for at most 8 rounds.
 pub CorimAcs corim_appraise(List(CorimClaim) evidence, CorimRefs r) {
     CorimAcs a0 = cr_refs_apply(CorimAcs {.claims = evidence, .applied = 0}, r.reference, 0);
     return cr_endorse_rounds(a0, r, 0);
@@ -1190,15 +1245,16 @@ CorimAcs cr_series_first(CorimAcs a, CorimSeries s, Int j) {
 
 // ─── Questions to the result ────────────────────────────────────────
 
-// Was the evidence's measurement with this key, in an environment
-// matching env, corroborated by a reference value?
+/// Was an evidence measurement with key `k`, in an environment matching
+/// `env`, corroborated by a reference value?
 pub Bool corim_corroborated(CorimAcs a, CorimEnv env, CorimMkey k) { return cr_corr_at(a.claims, env, k, 0); }
 
 Bool cr_corr_at(List(CorimClaim) cs, CorimEnv env, CorimMkey k, Int i) {
     return i < cs.len() && ((cs[i].source == "evidence" && cs[i].corroborated && corim_env_matches(env, cs[i].env) && corim_mkey_eq(k, cs[i].m.mkey)) || cr_corr_at(cs, env, k, i + 1));
 }
 
-// The evidence claims no reference value corroborated, by measurement key.
+/// The evidence claims no reference value corroborated, by measurement key.
+/// Each key is rendered by `corim_mkey_text`.
 pub List(Str) corim_uncorroborated(CorimAcs a) { return cr_unc_at(a.claims, 0, []); }
 
 List(Str) cr_unc_at(List(CorimClaim) cs, Int i, List(Str) acc) {
@@ -1207,16 +1263,18 @@ List(Str) cr_unc_at(List(CorimClaim) cs, Int i, List(Str) acc) {
     return cr_unc_at(cs, i + 1, if (bad) { acc.concat([corim_mkey_text(cs[i].m.mkey)]) } else { acc });
 }
 
+/// A measurement key as text: the integer or text itself, "oid:" or
+/// "uuid:" with hex, or "(no key)".
 pub Str corim_mkey_text(CorimMkey k) {
     return match (k) { MkNone => "(no key)", MkInt(x) => f"{x}", MkText(t) => t, MkOid(o) => "oid:" + hex_encode(o), MkUuid(u) => "uuid:" + hex_encode(u), };
 }
 
-// Does the set hold, in an environment matching env, a claim matching m
-// (from the evidence or an endorsement)? A policy asks for an endorsed
-// flag, version or SVN this way.
+/// Does the set hold, in an environment matching `env`, a claim matching
+/// `m` (from the evidence or an endorsement)? A policy asks for an endorsed
+/// flag, version or SVN this way.
 pub Bool corim_holds(CorimAcs a, CorimEnv env, CorimMeas m) { return cr_find(a.claims, env, m, 0, false, env, false) >= 0; }
 
-// The endorsed claims (what endorsements added).
+/// The endorsed claims (what endorsements added).
 pub List(CorimClaim) corim_endorsements(CorimAcs a) { return cr_src_at(a.claims, "endorsed", 0, []); }
 
 List(CorimClaim) cr_src_at(List(CorimClaim) cs, Str src, Int i, List(CorimClaim) acc) {
@@ -1226,8 +1284,8 @@ List(CorimClaim) cr_src_at(List(CorimClaim) cs, Str src, Int i, List(CorimClaim)
 
 // ─── A key's SubjectPublicKeyInfo ───────────────────────────────────
 
-// The DER SubjectPublicKeyInfo of a key that carries one (a PEM key, a
-// certificate's, a COSE_Key's), or [].
+/// The DER SubjectPublicKeyInfo of a key that carries one (a PEM key, a
+/// certificate's, a COSE_Key's), or [].
 pub List(Int) corim_key_spki(CorimKeyRef k) {
     if (k.kind == "pkix-key") { return k.der; }
     if (k.kind == "pkix-cert" || k.kind == "asn1der-cert" || k.kind == "pkix-cert-path") { return cr_spki_of(k); }

@@ -1,0 +1,15 @@
+import "certverify.resid";
+
+// DER lengths of 128 and more take the fewest octets after 0x80 + n.
+Int main() {
+    println(f"{der_long_len(128)} {der_long_len(200)} {der_long_len(255)}");
+    println(f"{der_long_len(256)} {der_long_len(300)} {der_long_len(65536)}");
+    List(Int) big = der_el(4, der_zeros(130, []));
+    println(f"{big.len()} {big[0..3]}");
+    return 0;
+}
+
+List(Int) der_zeros(Int n, List(Int) acc) {
+    if (n == 0) { return acc; }
+    return der_zeros(n - 1, acc.concat([0]));
+}

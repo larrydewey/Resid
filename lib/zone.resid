@@ -11,8 +11,9 @@
 // recorded transition -- so both are needed before a zone is complete.
 //
 // Reading the files is a separate, capability-gated step: zone_load and
-// friends need filesystem(readonly)), because the zone database is a file
-// and should use the existing grant rather than a privilege of its own.
+// zone_load_file need filesystem(readonly), because the zone database is a
+// file and should use the existing grant rather than a privilege of its
+// own; zone_load_system also needs environment(readonly) to read TZ.
 // Only reading the clock needs the `clock` capability, and that is
 // lib/clock.resid.
 //
@@ -29,47 +30,51 @@ import "calendar.resid";
 import "duration.resid";
 import "instant.resid";
 
-// One entry of a zone's local-time-type table: the offset east of UTC in
-// seconds, whether it is daylight saving, and which abbreviation applies.
+/// One entry of a zone's local-time-type table: the offset east of UTC in
+/// seconds, whether it is daylight saving, and which abbreviation applies.
 type ZoneType = { Int offset; Bool isdst; Int abbrev_index; };
 
-// One data block of a TZif file: the transitions in ascending order, the
-// type index each selects, the type table, and the abbreviation strings.
-// `time_size` is 4 for the 32-bit block and 8 for the 64-bit one.
+/// One data block of a TZif file: the transitions in ascending order, the
+/// type index each selects, the type table, and the abbreviation strings.
+/// `time_size` is 4 for the 32-bit block and 8 for the 64-bit one.
 type ZoneBlock = { List(Int) transitions; List(Int) type_index; List(ZoneType) types; List(Int) abbrev; Int time_size; };
 
-// A whole zone. `first` is the 32-bit block and `second` the 64-bit block
-// that v2 and later carry beside it; a v1 file leaves `second` without a
-// type table. `footer` is the raw POSIX TZ string those files end with,
-// and `footer_rule` the same string parsed, or None when it is not a rule
-// this module can act on (a bare name, say).
+/// A whole zone, as read from a TZif file or built from a POSIX TZ string.
+/// `first` is the 32-bit block and `second` the 64-bit block that v2 and
+/// later carry beside it; a v1 file leaves `second` empty. `footer` is the
+/// raw POSIX TZ string those files end with, and `footer_rule` the same
+/// string parsed, or None when it is not a rule this module can act on.
 type Zone = { Str name; ZoneBlock first; ZoneBlock second; Str footer; Option(PosixTz) footer_rule; };
 
-// What the clocks read at one moment: the offset east of UTC, whether it
-// is daylight saving, and the abbreviation ("CET", "EDT", ...). The
-// abbreviation can be "" for a zone that spells no name, in which case a
-// formatter should fall back to the numeric offset.
+/// What the clocks read at one moment: the offset east of UTC in seconds.
+/// It also says whether it is daylight saving, and gives the abbreviation
+/// ("CET", "EDT", ...), which can be "" for a zone that spells no name; a
+/// formatter should then fall back to the numeric offset.
 type Offset = { Int seconds; Bool isdst; Str abbrev; };
 
-// A zone read out of bytes or named, or the absence of one.
+/// A zone loaded from bytes, a file or a name (`Loaded`), or `BadZone`
+/// when it could not be read or parsed.
 type ZoneParse = Loaded(Zone) | BadZone;
 
-// The two instants an ambiguous local time maps to, earlier first.
+/// The two instants an ambiguous local time maps to, earlier first.
 type LocalPair = { Instant earlier; Instant later; };
 
-// The instants a wall-clock time maps to: exactly one normally, two when
-// the clocks went back, and none when they went forward across it.
+/// The instants a wall-clock time maps to: exactly one normally, two when
+/// the clocks went back, and none when they went forward across it.
 type LocalPick = Unique(Instant) | Ambiguous(LocalPair) | Nonexistent;
 
 // -- Bytes ---------------------------------------------------------------
 // Big-endian field readers. Each returns -1 for a read that would run
 // past the end, which the callers treat as malformed.
 
+/// The byte at index `i` of `b`, or -1 when `i` is outside it.
 pub Int tz_u8(List(Int) b, Int i) {
     if (i < 0 || i >= b.len()) { return -1; }
     return b[i];
 }
 
+/// The big-endian unsigned 16-bit value at `i`, or -1 when it runs past the
+/// end of `b`.
 pub Int tz_u16(List(Int) b, Int i) {
     Int a = tz_u8(b, i);
     Int c = tz_u8(b, i + 1);
@@ -77,6 +82,8 @@ pub Int tz_u16(List(Int) b, Int i) {
     return a * 256 + c;
 }
 
+/// The big-endian unsigned 32-bit value at `i`, or -1 when it runs past the
+/// end of `b`.
 pub Int tz_u32(List(Int) b, Int i) {
     Int a = tz_u16(b, i);
     Int c = tz_u16(b, i + 2);
@@ -85,6 +92,8 @@ pub Int tz_u32(List(Int) b, Int i) {
     return p + c;
 }
 
+/// The big-endian signed 32-bit value at `i`.
+/// A read past the end of `b` also gives -1, so callers check bounds first.
 pub Int tz_i32(List(Int) b, Int i) {
     Int v = tz_u32(b, i);
     if (v < 0) { return -1; }
@@ -92,11 +101,12 @@ pub Int tz_i32(List(Int) b, Int i) {
     return v;
 }
 
-// A signed 64-bit count, read only over the range a real transition time
-// occupies: |t| below 2^47 seconds is some 8900 years either side of the
-// epoch, which no tzdata comes near. Refusing more keeps every
-// intermediate in range instead of silently wrapping.
-pub pub Int tz_i64(List(Int) b, Int i) {
+/// The big-endian signed 64-bit value at `i`, limited to the range a real
+/// transition time occupies.
+/// |t| up to 2^47 seconds is some 4400 years either side of the epoch,
+/// which no tzdata comes near; a larger value, or a read past the end,
+/// gives -1, which keeps every intermediate in range instead of wrapping.
+pub Int tz_i64(List(Int) b, Int i) {
     Int hi = tz_u32(b, i);
     Int lo = tz_u32(b, i + 4);
     if (hi < 0 || lo < 0) { return -1; }
@@ -113,10 +123,12 @@ Bool neg = hi >= 2147483648;
 
 // -- The TZif header ----------------------------------------------------
 
-// The six counts that follow a 44-byte header.
+/// The six counts of a TZif header (RFC 8536 §3.1), in header order.
 type TzCounts = { Int isutcnt; Int isstdcnt; Int leapcnt; Int timecnt; Int typecnt; Int charcnt; };
 
-pub pub TzCounts tz_counts_at(List(Int) b, Int i) {
+/// The six counts of the TZif header that starts at `i`; a count past the
+/// end of `b` reads as -1.
+pub TzCounts tz_counts_at(List(Int) b, Int i) {
     return TzCounts {
         .isutcnt = tz_u32(b, i + 20),
         .isstdcnt = tz_u32(b, i + 24),
@@ -127,17 +139,19 @@ pub pub TzCounts tz_counts_at(List(Int) b, Int i) {
     };
 }
 
-// "TZif" read big-endian, which is what every TZif header starts with.
+/// The bytes "TZif" read as a big-endian 32-bit value, which every TZif
+/// header starts with.
 pub Int tz_magic() { return 1415211366; }
 
-// The version byte of a header at `i`, or -1 when it is not a TZif.
+/// The version byte of a header at `i`, or -1 when it is not a TZif.
 pub Int tz_version_at(List(Int) b, Int i) {
     if (tz_u32(b, i) != tz_magic()) { return -1; }
     return tz_u8(b, i + 4);
 }
 
-// Bytes a data block occupies for these counts.
-pub pub Int tz_block_size(TzCounts c, Int time_size) {
+/// The bytes a data block occupies after its header, for the counts `c`.
+/// `time_size` is 4 for the version 1 block and 8 for the 64-bit one.
+pub Int tz_block_size(TzCounts c, Int time_size) {
     Int times = c.timecnt * time_size;
     Int idx = times + c.timecnt;
     Int types = idx + c.typecnt * 6;
@@ -147,7 +161,9 @@ pub pub Int tz_block_size(TzCounts c, Int time_size) {
     return std + c.isutcnt;
 }
 
-pub pub Bool tz_counts_ok(TzCounts c) {
+/// Whether every count in `c` is non-negative and at least one local time
+/// type exists.
+pub Bool tz_counts_ok(TzCounts c) {
     if (c.timecnt < 0 || c.typecnt < 0 || c.charcnt < 0) { return false; }
     if (c.leapcnt < 0 || c.isstdcnt < 0 || c.isutcnt < 0) { return false; }
     // At least one type has to exist: something has to describe the times
@@ -155,12 +171,18 @@ pub pub Bool tz_counts_ok(TzCounts c) {
     return c.typecnt >= 1;
 }
 
+/// An empty data block of width `time_size`, standing for a block that is
+/// absent or malformed.
 pub ZoneBlock tz_empty_block(Int time_size) {
     return ZoneBlock {.transitions = [], .type_index = [], .types = [], .abbrev = [], .time_size = time_size};
 }
 
 // -- One data block -----------------------------------------------------
 
+/// The data block whose header starts at `hi`, with transition times
+/// `time_size` bytes wide.
+/// Invalid counts, or a block running past the end of `b`, give an empty
+/// block.
 pub ZoneBlock tz_block_at(List(Int) b, Int hi, Int time_size) {
     TzCounts c = tz_counts_at(b, hi);
     if (!tz_counts_ok(c)) { return tz_empty_block(time_size); }
@@ -212,10 +234,14 @@ List(ZoneType) tz_types(List(Int) b, Int p, Int n, Int i, ListBuf(ZoneType) acc)
 // -- Abbreviations ------------------------------------------------------
 // One run of NUL-terminated strings; an index picks one out of it.
 
-// A type's abbreviation index is an offset into the run of NUL-terminated
-// strings, so the name is just what follows at that offset.
+/// The abbreviation starting at offset `idx` in the NUL-terminated string
+/// run `chars`.
+/// It ends at the next NUL or the end of `chars`, and is "" when `idx` is
+/// past the end.
 pub Str tz_abbrev_at(List(Int) chars, Int idx) { return tz_abbrev_run(chars, idx, StrBuf()).finish(); }
 
+/// Appends to `b` the characters of `chars` from `i` up to the next NUL or
+/// the end.
 pub StrBuf tz_abbrev_run(List(Int) chars, Int i, StrBuf b) {
     Int n = chars.len();
     if (i >= n) { return b; }
@@ -230,17 +256,28 @@ pub StrBuf tz_abbrev_run(List(Int) chars, Int i, StrBuf b) {
 // every one is negated on the way in -- "GMT+5" is UTC-5, as everyone
 // expects it to be.
 
+/// One transition rule of a POSIX TZ string, with its local time of day in
+/// seconds (02:00 when the string gives none).
+/// `kind`: 0 = Mm.w.d (`month`, `week` 1-5 with 5 the last, weekday `day`
+/// 0 = Sunday), 1 = Jn (Julian `day`, never counting 29 February),
+/// 2 = n (zero-based `day` of year, counting it), 9 = invalid.
 type PosixRule = { Int kind; Int month; Int week; Int day; Int time; };
 
-// kind: 0 = Mm.w.d, 1 = Jn (Julian day, never counting 29 February),
-// 2 = n (zero-based day of year, counting it), 9 = invalid.
+/// A parsed POSIX TZ string: standard and daylight names and offsets in
+/// seconds east of UTC, and the start and end rules of daylight saving.
+/// `has_rule` is true only when both rules are present and valid.
 type PosixTz = { Str std; Int std_off; Str dst; Int dst_off; Bool has_dst; Bool has_rule; PosixRule start_rule; PosixRule end_rule; };
 
+/// Whether `c` is an ASCII letter.
 pub Bool posix_is_alpha(Int c) { return (c >= 65 && c <= 90) || (c >= 97 && c <= 122); }
 
+/// Whether `c` is an ASCII digit.
 pub Bool posix_is_digit(Int c) { return c >= 48 && c <= 57; }
 
-// A zone name: three or more letters, or anything inside angle brackets.
+/// The zone name at `i`: the run of letters there, or the text inside angle
+/// brackets.
+/// It is "" when `i` is past the end or holds neither; callers enforce the
+/// three-character minimum.
 pub Str posix_name_at(Str s, Int i) {
     Int n = str_len(s);
     if (i >= n) { return ""; }
@@ -257,6 +294,8 @@ StrBuf posix_letters(Str s, Int i, StrBuf b) {
     return posix_letters(s, i + 1, b.push_char(c));
 }
 
+/// Appends to `b` the characters of `s` from `i` up to the closing '>' or
+/// the end.
 pub StrBuf posix_quoted(Str s, Int i, StrBuf b) {
     Int n = str_len(s);
     if (i >= n) { return b; }
@@ -265,8 +304,9 @@ pub StrBuf posix_quoted(Str s, Int i, StrBuf b) {
     return posix_quoted(s, i + 1, b.push_char(c));
 }
 
-// Past a name: letters, or a quoted run.
-pub pub Int posix_after_name(Str s, Int i) {
+/// The index just past the name at `i`: its letters, or an angle-bracketed
+/// run with its closing '>'.
+pub Int posix_after_name(Str s, Int i) {
     Int n = str_len(s);
     if (i >= n) { return i; }
     Int c = str_char_at(s, i);
@@ -275,6 +315,8 @@ pub pub Int posix_after_name(Str s, Int i) {
     return posix_after_name(s, i + 1);
 }
 
+/// The index just past the first '>' at or after `i`, or the end of `s`
+/// when there is none.
 pub Int posix_skip_quoted(Str s, Int i) {
     Int n = str_len(s);
     if (i >= n) { return n; }
@@ -283,11 +325,13 @@ pub Int posix_skip_quoted(Str s, Int i) {
     return posix_skip_quoted(s, i + 1);
 }
 
-// Up to `want` digits from `i`, stopping at the first non-digit, and -1
-// when there is no digit at all -- so "EST5EDT" reads an hour of 5 while
-// a caller can still tell an absent field from a zero.
+/// The number in up to `want` digits from `i`, or -1 when there is no digit.
+/// Reading stops at the first non-digit, so "EST5EDT" reads an hour of 5
+/// while a caller can still tell an absent field from a zero.
 pub Int posix_digits(Str s, Int i, Int want) { return posix_digits_at(s, i, want, 0, 0); }
 
+/// The step behind posix_digits, with `got` digits read so far and `acc`
+/// their value.
 pub Int posix_digits_at(Str s, Int i, Int want, Int got, Int acc) {
     if (got >= want) { return acc; }
     Int n = str_len(s);
@@ -298,6 +342,7 @@ pub Int posix_digits_at(Str s, Int i, Int want, Int got, Int acc) {
     return posix_digits_at(s, i + 1, want, got + 1, step);
 }
 
+/// The index `i` when `s` has a ':' there, else -1.
 pub Int posix_at_colon(Str s, Int i) {
     Int n = str_len(s);
     if (i >= n) { return 0 - 1; }
@@ -305,14 +350,14 @@ pub Int posix_at_colon(Str s, Int i) {
     return if (c == 58) { i } else { 0 - 1 };
 }
 
-// What posix_parse_offset returns when there is no offset to read. It has
-// to be outside every valid offset, and the valid ones run from about -25
-// to +25 hours, because a plain -1 would collide with a perfectly good
-// west-of-Greenwich offset.
+/// What posix_parse_offset returns when there is no offset to read. It has
+/// to be outside every valid offset, and the valid ones run from about -25
+/// to +25 hours, because a plain -1 would collide with a perfectly good
+/// west-of-Greenwich offset.
 pub Int posix_no_offset() { return 0 - 1000000; }
 
-// A POSIX offset "[+|-]hh[:mm[:ss]]" as seconds east of UTC, or
-// posix_no_offset() when the text at `i` is not an offset.
+/// A POSIX offset "[+|-]hh[:mm[:ss]]" as seconds east of UTC, or
+/// posix_no_offset() when the text at `i` is not an offset.
 pub Int posix_parse_offset(Str s, Int i) {
     Int n = str_len(s);
     if (i >= n) { return posix_no_offset(); }
@@ -335,6 +380,8 @@ pub Int posix_parse_offset(Str s, Int i) {
     return 0 - west;
 }
 
+/// The index just past the offset at `i`: an optional sign, the hours, and
+/// up to two ':'-separated fields.
 pub Int posix_after_offset(Str s, Int i) {
     Int k = posix_skip_sign(s, i);
     Int a = posix_skip_digits(s, k);
@@ -346,6 +393,7 @@ pub Int posix_after_offset(Str s, Int i) {
     return posix_skip_digits(s, d + 1);
 }
 
+/// The index past an optional '+' or '-' at `i`.
 pub Int posix_skip_sign(Str s, Int i) {
     Int n = str_len(s);
     if (i >= n) { return i; }
@@ -353,6 +401,7 @@ pub Int posix_skip_sign(Str s, Int i) {
     return if (c == 45 || c == 43) { i + 1 } else { i };
 }
 
+/// The index of the first non-digit at or after `i`, or the end of `s`.
 pub Int posix_skip_digits(Str s, Int i) {
     Int n = str_len(s);
     if (i >= n) { return i; }
@@ -361,7 +410,8 @@ pub Int posix_skip_digits(Str s, Int i) {
     return posix_skip_digits(s, i + 1);
 }
 
-// Past one rule, stopping before the comma that starts the next one.
+/// The index past the run of rule characters (digits, '.', 'J' and 'M') at
+/// `i`, which stops before the comma of the next rule or a "/time".
 pub Int posix_after_rule(Str s, Int i) {
     Int n = str_len(s);
     if (i >= n) { return i; }
@@ -371,9 +421,13 @@ pub Int posix_after_rule(Str s, Int i) {
     return posix_after_rule(s, i + 1);
 }
 
+/// The invalid rule (kind 9), standing for a rule that is absent or does not
+/// parse.
 pub PosixRule posix_bad_rule() { return PosixRule {.kind = 9, .month = 0, .week = 0, .day = 0, .time = 0}; }
 
-// One transition rule with its optional "/time" local time.
+/// The transition rule at `i`, with its optional "/time" applied.
+/// Its kind is 9 when the text is not a rule; the time defaults to 02:00
+/// local.
 pub PosixRule posix_rule_at(Str s, Int i) {
     Int n = str_len(s);
     if (i >= n) { return posix_bad_rule(); }
@@ -382,17 +436,17 @@ pub PosixRule posix_rule_at(Str s, Int i) {
     return posix_rule_time(s, posix_rule_body_end(s, i), r);
 }
 
-// Past the rule itself, so the optional "/time" is looked for after it
-// rather than where the rule begins.
-// Past the rule body alone, which is where its optional "/time" begins.
+/// The index past the rule body at `i`, which is where its optional "/time"
+/// begins.
 pub Int posix_rule_body_end(Str s, Int i) {
     return posix_after_rule(s, posix_after_designator(s, i));
 }
 
-// Past the rule and its optional "/time".
+/// The index past the rule at `i` and its optional "/time".
 pub Int posix_rule_end(Str s, Int i) { return posix_skip_time(s, posix_rule_body_end(s, i)); }
 
-// Past a rule's optional "/hh[:mm[:ss]]" time, when one is there.
+/// The index past a "/hh[:mm[:ss]]" rule time at `i`, or `i` when there is
+/// none.
 pub Int posix_skip_time(Str s, Int i) {
     Int n = str_len(s);
     if (i >= n) { return i; }
@@ -407,8 +461,9 @@ pub Int posix_skip_time(Str s, Int i) {
     return posix_skip_digits(s, e + 1);
 }
 
-// Past the M that introduces an Mm.w.d rule, if there is one. A bare "n"
-// rule starts with its digit, so only a real M is stepped over.
+/// The index past the 'M' that introduces an Mm.w.d rule at `i`, or `i`
+/// when there is none.
+/// A bare "n" rule starts with its digit, so only a real M is stepped over.
 pub Int posix_after_designator(Str s, Int i) {
     Int n = str_len(s);
     if (i >= n) { return i; }
@@ -416,8 +471,9 @@ pub Int posix_after_designator(Str s, Int i) {
     return if (c == 77 || c == 109) { i + 1 } else { i };
 }
 
-// "Jn": day 1..365 of a year that never has a 29 February, so the count
-// starts at 1 March.
+/// The "Jn" rule at `i`, a day count that never includes 29 February.
+/// Invalid (kind 9) when no number of at least 1 follows the J; the upper
+/// bound of 365 is not checked.
 pub PosixRule posix_rule_julian(Str s, Int i) {
     Int d = posix_digits(s, i + 1, 3);
     if (d < 1) { return posix_bad_rule(); }
@@ -438,12 +494,15 @@ PosixRule posix_rule_mwd(Str s, Int i) {
     return PosixRule {.kind = 0, .month = m, .week = w, .day = d, .time = 7200};
 }
 
+/// The bare "n" rule at `i`: a zero-based day of the year, counting
+/// 29 February. Invalid (kind 9) when no digit is there.
 pub PosixRule posix_rule_n(Str s, Int i) {
     Int d = posix_digits(s, i, 3);
     if (d < 0) { return posix_bad_rule(); }
     return PosixRule {.kind = 2, .month = 0, .week = 0, .day = d, .time = 7200};
 }
 
+/// The index past a single '.' at `i`, or `i` when there is none.
 pub Int posix_skip_dots(Str s, Int i) {
     Int n = str_len(s);
     if (i >= n) { return i; }
@@ -471,7 +530,9 @@ PosixRule posix_rule_time(Str s, Int i, PosixRule r) {
     return PosixRule {.kind = r.kind, .month = r.month, .week = r.week, .day = r.day, .time = total};
 }
 
-// A whole POSIX TZ string, or None when it is not one.
+/// The whole POSIX TZ string `s` parsed, or None when it is not one.
+/// Offsets are stored as seconds east of UTC; a missing daylight offset is
+/// one hour ahead of standard.
 pub Option(PosixTz) posix_parse(Str s) {
     Int n = str_len(s);
     if (n == 0) { return None; }
@@ -529,6 +590,8 @@ PosixTz posix_tz(Str std, Int std_off, Str dst, Int dst_off, Bool has_dst, Posix
 // standard-time switch uses the standard offset and the daylight one uses
 // the daylight offset, which is why the offset is a parameter here.
 
+/// The local wall-clock moment rule `r` names in year `y`, in seconds since
+/// the epoch with no offset removed. An invalid rule gives 0.
 pub Int posix_rule_seconds(PosixRule r, Int y) {
     if (r.kind == 0) { return posix_mwd_seconds(r, y); }
     if (r.kind == 1) { return posix_julian_seconds(r, y); }
@@ -553,10 +616,12 @@ Int posix_mwd_seconds(PosixRule r, Int y) {
     return day * 86400 + r.time;
 }
 
-// Jn, counted from 1 March so 29 February never enters it.
+// Jn, 1 to 365 from 1 January; 29 February is never counted, so in a
+// leap year J60 is 1 March.
 Int posix_julian_seconds(PosixRule r, Int y) {
-    Int march = cal_days_from_civil(y, 3, 1);
-    Int z = march + r.day - 1;
+    Int jan1 = cal_days_from_civil(y, 1, 1);
+    Int skip = if (cal_is_leap(y) && r.day >= 60) { 1 } else { 0 };
+    Int z = jan1 + r.day - 1 + skip;
     return z * 86400 + r.time;
 }
 
@@ -567,37 +632,27 @@ Int posix_n_seconds(PosixRule r, Int y) {
     return z * 86400 + r.time;
 }
 
-// The two UTC instants that bracket one year of daylight saving, earlier
-// first. Works for both hemispheres: whichever transition comes first
-// starts daylight saving.
+/// The offset in force at UTC second `utc` under the POSIX rule `p`.
+/// Within the local year, daylight saving runs from the start rule to the
+/// end rule; when the start comes later in the year than the end (the
+/// southern hemisphere) it runs over the new year instead. Without a
+/// daylight name it is always standard.
 pub Offset posix_offset_at(PosixTz p, Int utc) {
     Offset std_off = Offset {.seconds = p.std_off, .isdst = false, .abbrev = p.std};
     if (!p.has_dst) { return std_off; }
     Int y = cal_civil_from_days(cal_floor_div(utc + p.std_off, 86400)).year;
-    Int lo = posix_span_lo(p, y);
-    Int hi = posix_span_hi(p, y);
-    Int y2 = if (utc >= hi) { y + 1 } else { if (utc < lo) { y - 1 } else { y } };
-    Int lo2 = if (y2 == y) { lo } else { posix_span_lo(p, y2) };
-    Int hi2 = if (y2 == y) { hi } else { posix_span_hi(p, y2) };
-    Bool in_dst = utc >= lo2 && utc < hi2;
-    if (!p.has_rule) { return if (in_dst) { Offset {.seconds = p.dst_off, .isdst = true, .abbrev = p.dst} } else { std_off }; }
+    Int start = posix_rule_seconds(p.start_rule, y) - p.std_off;
+    Int end = posix_rule_seconds(p.end_rule, y) - p.dst_off;
+    Bool in_dst = if (start <= end) { utc >= start && utc < end } else { utc >= start || utc < end };
     return if (in_dst) { Offset {.seconds = p.dst_off, .isdst = true, .abbrev = p.dst} } else { std_off };
-}
-
-Int posix_span_lo(PosixTz p, Int y) {
-    Int a = posix_rule_seconds(p.start_rule, y) - p.std_off;
-    Int b = posix_rule_seconds(p.end_rule, y) - p.dst_off;
-    return if (a <= b) { a } else { b };
-}
-
-Int posix_span_hi(PosixTz p, Int y) {
-    Int a = posix_rule_seconds(p.start_rule, y) - p.std_off;
-    Int b = posix_rule_seconds(p.end_rule, y) - p.dst_off;
-    return if (a <= b) { b } else { a };
 }
 
 // -- A whole TZif file --------------------------------------------------
 
+/// The zone in the TZif bytes `b` (RFC 8536), named `name`, or BadZone when
+/// they are not a valid TZif.
+/// Version 2 and later also give the 64-bit block and the POSIX footer. It
+/// is pure and needs no capability.
 pub ZoneParse zone_parse_tzif(List(Int) b, Str name) {
     Int version = tz_version_at(b, 0);
     if (version < 0) { return BadZone; }
@@ -637,8 +692,11 @@ Str tz_footer_scan(List(Int) b, Int i, StrBuf acc) {
 
 // -- Zones that need no file -------------------------------------------
 
+/// The UTC zone: offset zero, abbreviated "UTC".
 pub Zone zone_utc() { return zone_fixed("UTC", 0, "UTC"); }
 
+/// A zone named `name` that is always `offset` seconds east of UTC, under
+/// the abbreviation `abbrev`.
 pub Zone zone_fixed(Str name, Int offset, Str abbrev) {
     ZoneType t = ZoneType {.offset = offset, .isdst = false, .abbrev_index = 0};
     List(ZoneType) one = [t];
@@ -646,7 +704,7 @@ pub Zone zone_fixed(Str name, Int offset, Str abbrev) {
     return zone_make(name, b, tz_empty_block(8), "");
 }
 
-// A zone described only by a POSIX TZ string.
+/// A zone named `name` described only by the parsed POSIX TZ string `p`.
 pub Zone zone_from_posix(Str name, PosixTz p) {
     ZoneType st = ZoneType {.offset = p.std_off, .isdst = false, .abbrev_index = 0};
     ZoneType dt = ZoneType {.offset = p.dst_off, .isdst = true, .abbrev_index = str_len(p.std) + 1};
@@ -656,11 +714,11 @@ pub Zone zone_from_posix(Str name, PosixTz p) {
     return zone_with_rule(z, p);
 }
 
-// Attach a POSIX rule to a zone, so it resolves future instants the way a
-// file's footer does. The rule is kept as parsed rather than turned back
-// into text: the round trip would have to reproduce every field, and the
-// daylight offset and the rule times are exactly the fields a naive
-// re-spelling gets wrong.
+/// A copy of `z` with `p` as its footer rule, so it resolves future instants
+/// the way a file's footer does. The rule is kept as parsed rather than turned back
+/// into text: the round trip would have to reproduce every field, and the
+/// daylight offset and the rule times are exactly the fields a naive
+/// re-spelling gets wrong.
 pub Zone zone_with_rule(Zone z, PosixTz p) {
     return Zone {.name = z.name, .first = z.first, .second = z.second, .footer = z.footer, .footer_rule = Some(p)};
 }
@@ -678,8 +736,8 @@ List(Int) tz_abbrev_chars2(Str a, Str b) { return tz_abbrev_chars(a).concat(tz_a
 
 // -- Offsets ------------------------------------------------------------
 
-// The block that governs `utc`: the 64-bit one once it has taken over,
-// the 32-bit one before that.
+/// The block that governs `utc`: the 64-bit one once it has taken over,
+/// the 32-bit one before that.
 pub ZoneBlock zone_pick_block(Zone z, Int utc) {
     ZoneBlock w = z.second;
     if (w.transitions.len() > 0 && utc >= w.transitions[0]) { return w; }
@@ -689,10 +747,10 @@ pub ZoneBlock zone_pick_block(Zone z, Int utc) {
     return n;
 }
 
-// Whether the POSIX footer is what governs `utc`: past the last recorded
-// transition, or when there are none to speak of. A footer that is only a
-// name ("CET", which is all some v2 files write) says nothing about when
-// anything changes, so it does not govern anything.
+/// Whether the POSIX footer is what governs `utc`: past the last recorded
+/// transition, or when there are none to speak of. A footer that is only a
+/// name ("CET", which is all some v2 files write) says nothing about when
+/// anything changes, so it does not govern anything.
 pub Bool zone_footer_applies(Zone z, ZoneBlock b, Int utc) {
     if (!posix_is_some(z.footer_rule)) { return false; }
     if (b.transitions.len() == 0) { return true; }
@@ -700,7 +758,7 @@ pub Bool zone_footer_applies(Zone z, ZoneBlock b, Int utc) {
     return utc > last;
 }
 
-// Whether an Option carries a value.
+/// Whether `r` holds a parsed rule with a non-empty standard name.
 pub Bool posix_is_some(Option(PosixTz) r) {
     return match r {
         Some(p) => str_len(p.std) > 0,
@@ -708,7 +766,8 @@ pub Bool posix_is_some(Option(PosixTz) r) {
     };
 }
 
-// The largest transition at or before `utc`, or -1.
+/// The index of the last transition in the ascending `ts` at or before
+/// `utc`, or -1 when there is none.
 pub Int zone_find_transition(List(Int) ts, Int utc) { return zone_find_span(ts, 0, ts.len(), utc, 0 - 1); }
 
 Int zone_find_span(List(Int) ts, Int lo, Int hi, Int utc, Int found) {
@@ -718,8 +777,9 @@ Int zone_find_span(List(Int) ts, Int lo, Int hi, Int utc, Int found) {
     return zone_find_span(ts, lo, mid, utc, found);
 }
 
-// The type that describes times before the first transition: the first
-// one that is not daylight saving, else the first of all.
+/// The index of the type that describes times before the first transition:
+/// the first one that is not daylight saving.
+/// It is -1 when there are no types or every one is daylight saving.
 pub Int zone_default_type(List(ZoneType) types) {
     Int n = types.len();
     Int i = 0;
@@ -733,7 +793,8 @@ Int zone_default_scan(List(ZoneType) types, Int i, Int at) {
     return zone_default_scan(types, i + 1, at + 1);
 }
 
-// The offset the clocks read at UTC second `utc`.
+/// The offset the clocks read in `z` at UTC second `utc`.
+/// It is zero with an empty abbreviation when no type applies.
 pub Offset zone_offset_at(Zone z, Int utc) {
     ZoneBlock b = zone_pick_block(z, utc);
     if (zone_footer_applies(z, b, utc)) { return posix_footer_offset(z.footer_rule, utc); }
@@ -760,12 +821,13 @@ Offset zone_offset_of_type(Zone z, ZoneBlock b, Int ti) {
     return Offset {.seconds = t.offset, .isdst = t.isdst, .abbrev = tz_abbrev_at(b.abbrev, t.abbrev_index)};
 }
 
-// The offset, in seconds, without building the rest.
+/// The offset at UTC second `utc`, in seconds east of UTC, without the
+/// rest of the Offset.
 pub Int zone_offset_seconds(Zone z, Int utc) { return zone_offset_at(z, utc).seconds; }
 
-// Every distinct offset the zone uses, which is the finite set of
-// candidates for mapping a local time back to instants. Small -- a zone
-// has a handful of types -- so a plain list is the right shape.
+/// Every distinct offset the zone uses, which is the finite set of
+/// candidates for mapping a local time back to instants. Small -- a zone
+/// has a handful of types -- so a plain list is the right shape.
 pub List(Int) zone_offsets(Zone z) {
     List(Int) a = zone_block_offsets_list(z.first, []);
     List(Int) b = zone_block_offsets_list(z.second, a);
@@ -774,6 +836,8 @@ pub List(Int) zone_offsets(Zone z) {
 
 List(Int) zone_block_offsets_list(ZoneBlock b, List(Int) acc) { return zone_block_offsets_at(b.types, 0, acc); }
 
+/// The list `acc` extended with each offset of `types` from index `i` that
+/// it does not hold yet.
 pub List(Int) zone_block_offsets_at(List(ZoneType) types, Int i, List(Int) acc) {
     if (i >= types.len()) { return acc; }
     List(Int) a2 = add_unique(acc, types[i].offset);
@@ -796,10 +860,10 @@ List(Int) add_unique(List(Int) xs, Int v) { return if (xs.contains(v)) { xs } el
 
 // -- Local time to instants ---------------------------------------------
 
-// Which instants, if any, a wall-clock reading maps to. An instant `u`
-// shows the local time `u + offset` when the offset in force at `u` is
-// `offset`, so the test is exact rather than a search: every offset the
-// zone ever uses is tried, and the ones that check out are the answers.
+/// Which instants, if any, a wall-clock reading maps to. An instant `u`
+/// shows the local time `u + offset` when the offset in force at `u` is
+/// `offset`, so the test is exact rather than a search: every offset the
+/// zone ever uses is tried, and the ones that check out are the answers.
 pub LocalPick zone_local_pick(Zone z, Int local_seconds) {
     List(Int) ofs = zone_offsets(z);
     List(Int) good = zone_local_valid(z, ofs, local_seconds, 0, []);
@@ -819,20 +883,22 @@ List(Int) zone_local_valid(Zone z, List(Int) ofs, Int local_seconds, Int i, List
     return zone_local_valid(z, ofs, local_seconds, i + 1, a2);
 }
 
-// The wall-clock reading at `utc`, as a civil date and time in `z`.
+/// The wall-clock reading at the instant `i`, as a civil date and time in
+/// `z`.
 pub DateTime zone_to_local(Zone z, Instant i) {
     Offset o = zone_offset_at(z, i.seconds);
     return instant_to_utc(floor_to_instant(i.seconds + o.seconds, i.nanoseconds));
 }
 
+/// The wall-clock reading in `z` at UTC second `utc` plus `nanosecond`, as
+/// a civil date and time.
 pub DateTime zone_to_civil(Zone z, Int utc, Int nanosecond) {
     Offset o = zone_offset_at(z, utc);
     return instant_to_utc(floor_to_instant(utc + o.seconds, nanosecond));
 }
 
-// The UTC instant a wall-clock reading names, taking the earlier instant
-// when the clocks went back and reporting Nonexistent when they went
-// forward across it.
+/// The UTC instant a wall-clock reading names, taking the earlier instant
+/// when the clocks went back, or None when they went forward across it.
 pub Option(Instant) zone_local_first(Zone z, Int local_seconds) {
     LocalPick p = zone_local_pick(z, local_seconds);
     return match p {
@@ -848,6 +914,9 @@ pub Option(Instant) zone_local_first(Zone z, Int local_seconds) {
 // uses, no leading slash, no empty or dot components. A name that could
 // escape the directory is rejected, not sanitised.
 
+/// Whether `name` is a zone name safe to join to the zoneinfo directory.
+/// It must be 1 to 255 characters, with no leading or trailing '/', and
+/// every component allowed characters only and not empty, "." or "..".
 pub Bool zone_name_is_safe(Str name) {
     Int n = str_len(name);
     if (n == 0 || n > 255) { return false; }
@@ -858,12 +927,13 @@ pub Bool zone_name_is_safe(Str name) {
     return scan_name_at(name, 0, 0) == 0;
 }
 
-// The characters the IANA database actually uses in a name: letters,
-// digits, '_', '+', '-' and '.' within a component, '/' between them.
+/// The characters the IANA database actually uses in a name: letters,
+/// digits, '_', '+', '-' and '.' within a component, '/' between them.
 pub Bool zone_name_char_ok(Int c) { return posix_is_alpha(c) || posix_is_digit(c) || c == 95 || c == 43 || c == 45 || c == 46; }
 
-// Walk the components. A component is a run of allowed characters that is
-// neither empty nor "." or "..", and the name has to end on one.
+/// 0 when `s` from `i` is a sequence of valid '/'-separated components,
+/// else -1. A component is a run of allowed characters that is neither
+/// empty nor "." or ".."; `comps` counts those already read.
 pub Int scan_name_at(Str s, Int i, Int comps) {
     Int n = str_len(s);
     if (i >= n) { return if (comps == 0) { 0 - 1 } else { 0 }; }
@@ -877,6 +947,8 @@ pub Int scan_name_at(Str s, Int i, Int comps) {
     return scan_name_at(s, j + 1, comps + 1);
 }
 
+/// The index of the first character at or after `i` that a zone name may
+/// not use, or the end of `s`.
 pub Int scan_name_chars(Str s, Int i) {
     Int n = str_len(s);
     if (i >= n) { return i; }
@@ -885,17 +957,20 @@ pub Int scan_name_chars(Str s, Int i) {
     return scan_name_chars(s, i + 1);
 }
 
+/// The directory zone files are read from, "/usr/share/zoneinfo".
 pub Str zone_info_dir() { return "/usr/share/zoneinfo"; }
 
+/// The path of the system's local zone file, "/etc/localtime".
 pub Str zone_localtime_path() { return "/etc/localtime"; }
 
-// The zoneinfo path for `name`, or "" when the name is not safe.
+/// The zoneinfo path for `name`, or "" when the name is not safe.
 pub Str zone_path_of(Str name) {
     if (!zone_name_is_safe(name)) { return ""; }
     return zone_info_dir() + "/" + name;
 }
 
-// Read one zone file and parse it.
+/// The zone in the TZif file at `path`, or BadZone when the read comes back
+/// empty or the bytes do not parse. Needs `filesystem(readonly)`.
 @requires(filesystem(readonly))
 pub ZoneParse zone_load_file(Str path) {
     List(Int) bytes = filesystem.read_bytes(path);
@@ -903,7 +978,8 @@ pub ZoneParse zone_load_file(Str path) {
     return zone_parse_tzif(bytes, path);
 }
 
-// The zone named `name` under the zoneinfo directory.
+/// The zone named `name` under the zoneinfo directory, or BadZone when the
+/// name is not safe or the file cannot be loaded.
 @requires(filesystem(readonly))
 pub ZoneParse zone_load(Str name) {
     Str p = zone_path_of(name);
@@ -911,10 +987,9 @@ pub ZoneParse zone_load(Str name) {
     return zone_load_file(p);
 }
 
-// The zone this system is set to: the TZ variable when it names one, and
-// /etc/localtime otherwise. A TZ that is neither a zone name nor a POSIX
-// rule leaves the system's own idea of local time unavailable rather than
-// guessed at -- UTC is a real answer only when the system says so.
+/// The zone this system is set to: the TZ variable, else /etc/localtime.
+/// TZ (less a leading ':') is tried as a zone name, then as a POSIX rule,
+/// then /etc/localtime is read; BadZone when none works, never UTC.
 @requires(environment(readonly), filesystem(readonly))
 pub ZoneParse zone_load_system() {
     Str tz = environment.get("TZ");
@@ -925,8 +1000,8 @@ pub ZoneParse zone_load_system() {
     return posix_as_zone_parse(name, zone_localtime_path());
 }
 
-// A TZ variable that is a POSIX rule rather than a zone name, or the
-// localtime file when it is neither.
+/// The zone `text` describes as a POSIX rule, named "TZ", or the zone file
+/// at `fallback` when `text` is not one.
 @requires(environment(readonly), filesystem(readonly))
 pub ZoneParse posix_as_zone_parse(Str text, Str fallback) {
     Option(PosixTz) rule = posix_parse(text);
@@ -934,8 +1009,8 @@ pub ZoneParse posix_as_zone_parse(Str text, Str fallback) {
     return zone_load_file(fallback);
 }
 
-// The zone, or UTC when none could be read. Useful where a missing zone
-// should not stop a program; zone_load is there when it should.
+/// The system's zone, or UTC when none could be read. Useful where a missing zone
+/// should not stop a program; zone_load is there when it should.
 @requires(environment(readonly), filesystem(readonly))
 pub Zone zone_system_or_utc() {
     ZoneParse r = zone_load_system();

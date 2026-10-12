@@ -1,12 +1,15 @@
-// ─── lib/x509.res — x509 TBS structure walker (pure Resid) ───────────
-// Builds on lib/der.res. Input: a DER certificate as a zero-based byte
-// list (index 0 = first byte; positions are absolute). Extracts
-// tbsCertificate fields: serial, signature-alg OID, issuer/subject RDN
-// strings, validity times, and SPKI algorithm OID. No signature
-// verification.
+// ─── lib/x509.resid — X.509 certificate parsing (pure Resid) ──────────
+// Builds on lib/der.resid. Input: a DER certificate as a zero-based byte
+// list (positions are absolute). Two layers:
+//   - x509_parse: a strict parse into Cert (serial, issuer, subject,
+//     validity as epoch seconds, PubKey, extensions), with SigAlg,
+//     PubKey and Signed (also used for CRLs and OCSP responses), and
+//     cert_* extension queries (CA, key usage, EKU, SAN).
+//   - x509_* position walkers and string accessors over the raw bytes.
+// No signature verification here: sig_verify in lib/certverify.resid.
 //
-// Gotcha compliance: every function pub, definitions precede uses, no
-// inline arithmetic as call arguments (bind temps first).
+// Gotcha compliance: no inline arithmetic as call arguments (bind temps
+// first).
 
 import "der.resid";
 import "calendar.resid";
@@ -15,7 +18,8 @@ import "ecdsa.resid";
 
 // ─── Position helpers ────────────────────────────────────────────────
 
-// Index just past the element at pos. -1 on malformed input.
+/// Index just past the DER element at `pos` in `data`.
+/// Returns -1 when the element's header is malformed.
 pub Int x509_skip_tlv(List(Int) data, Int pos) {
     DerTlv t = der_next(data, pos);
     if (t.val_len < 0) { return -1; }
@@ -24,19 +28,20 @@ pub Int x509_skip_tlv(List(Int) data, Int pos) {
     return r;
 }
 
-// Position of the tbsCertificate element inside the outer Certificate
-// SEQUENCE.
+/// Position of the tbsCertificate element inside the outer Certificate
+/// SEQUENCE.
 pub Int x509_tbs_pos(List(Int) cert) {
     return der_content_pos(cert, 0);
 }
 
-// Start of the TBS field run: content of tbsCertificate.
+/// Position of the first field inside tbsCertificate's content.
 pub Int x509_body_pos(List(Int) cert) {
     Int tbs = x509_tbs_pos(cert);
     return der_content_pos(cert, tbs);
 }
 
-// Skip the optional [0] EXPLICIT version element at the head of TBS.
+/// Position of the first TBS field after the optional [0] EXPLICIT version.
+/// Any context-specific element at the head of TBS is taken as the version.
 pub Int x509_after_version(List(Int) cert) {
     Int body = x509_body_pos(cert);
     DerTlv t = der_next(cert, body);
@@ -46,30 +51,36 @@ pub Int x509_after_version(List(Int) cert) {
     return r;
 }
 
+/// Position of the serialNumber element in the TBS.
 pub Int x509_serial_pos(List(Int) cert) {
     return x509_after_version(cert);
 }
 
+/// Position of the TBS signature AlgorithmIdentifier element.
 pub Int x509_sigalg_pos(List(Int) cert) {
     Int p0 = x509_serial_pos(cert);
     return x509_skip_tlv(cert, p0);
 }
 
+/// Position of the issuer Name element in the TBS.
 pub Int x509_issuer_pos(List(Int) cert) {
     Int p0 = x509_sigalg_pos(cert);
     return x509_skip_tlv(cert, p0);
 }
 
+/// Position of the validity SEQUENCE in the TBS.
 pub Int x509_validity_pos(List(Int) cert) {
     Int p0 = x509_issuer_pos(cert);
     return x509_skip_tlv(cert, p0);
 }
 
+/// Position of the subject Name element in the TBS.
 pub Int x509_subject_pos(List(Int) cert) {
     Int p0 = x509_validity_pos(cert);
     return x509_skip_tlv(cert, p0);
 }
 
+/// Position of the subjectPublicKeyInfo element in the TBS.
 pub Int x509_spki_pos(List(Int) cert) {
     Int p0 = x509_subject_pos(cert);
     return x509_skip_tlv(cert, p0);
@@ -77,17 +88,21 @@ pub Int x509_spki_pos(List(Int) cert) {
 
 // ─── Field accessors ─────────────────────────────────────────────────
 
+/// The serial number as an Int, read with `der_int_value`.
+/// Long serials do not fit; use `x509_serial_bytes` to compare them.
 pub Int x509_serial(List(Int) cert) {
     Int p = x509_serial_pos(cert);
     return der_int_value(cert, p);
 }
 
+/// The dotted OID of the TBS signature algorithm.
 pub Str x509_sigalg_oid(List(Int) cert) {
     Int p = x509_sigalg_pos(cert);
     Int cs = der_content_pos(cert, p);
     return der_oid_str(cert, cs);
 }
 
+/// The dotted OID of the subject public key's algorithm.
 pub Str x509_spki_alg_oid(List(Int) cert) {
     Int sp = x509_spki_pos(cert);
     Int algseq = der_content_pos(cert, sp);
@@ -95,13 +110,14 @@ pub Str x509_spki_alg_oid(List(Int) cert) {
     return der_oid_str(cert, oidp);
 }
 
-// First UTCTime/GeneralizedTime inside the validity SEQUENCE.
+/// The notBefore time as its raw string, the first element of validity.
 pub Str x509_not_before(List(Int) cert) {
     Int vp = x509_validity_pos(cert);
     Int cs = der_content_pos(cert, vp);
     return der_str_value(cert, cs);
 }
 
+/// The notAfter time as its raw string, the second element of validity.
 pub Str x509_not_after(List(Int) cert) {
     Int vp = x509_validity_pos(cert);
     Int first = der_content_pos(cert, vp);
@@ -111,6 +127,7 @@ pub Str x509_not_after(List(Int) cert) {
 
 // ─── String decoding ─────────────────────────────────────────────────
 
+/// Appends bytes `i` through `n` of `c` to `acc`, one codepoint per byte.
 pub Str der_str_acc(List(Int) c, Int i, Int n, Str acc) {
     if (i > n) { return acc; }
     Int b = c[i];
@@ -119,7 +136,8 @@ pub Str der_str_acc(List(Int) c, Int i, Int n, Str acc) {
     return der_str_acc(c, ni, n, acc2);
 }
 
-// Decode a PrintableString/UTF8String/IA5String element's content.
+/// The content of the string element at `pos`, one codepoint per byte.
+/// Meant for PrintableString/IA5String; UTF-8 is not decoded.
 pub Str der_str_value(List(Int) data, Int pos) {
     List(Int) c = der_content(data, pos);
     Int n = c.len() - 1;
@@ -128,7 +146,8 @@ pub Str der_str_value(List(Int) data, Int pos) {
 
 // ─── Name rendering ──────────────────────────────────────────────────
 
-// Well-known OIDs → short names; unknown OIDs pass through as-is.
+/// The short attribute name for a well-known Name OID, such as "CN".
+/// Unknown OIDs are returned unchanged.
 pub Str oid_short(Str oid) {
     if (oid == "2.5.4.3") { return "CN"; }
     if (oid == "2.5.4.6") { return "C"; }
@@ -141,7 +160,8 @@ pub Str oid_short(Str oid) {
     return oid;
 }
 
-// Render one RDN: SET { SEQ { OID, value } } → "CN=Resid Test CA".
+/// Renders the RDN SET at `setpos` as "NAME=value", e.g. "CN=Resid Test CA".
+/// Only the first attribute of a multi-valued RDN is shown.
 pub Str x509_rdn_str(List(Int) data, Int setpos) {
     Int seqpos = der_content_pos(data, setpos);
     Int attrpos = der_content_pos(data, seqpos);
@@ -152,6 +172,7 @@ pub Str x509_rdn_str(List(Int) data, Int setpos) {
     return nm + "=" + val;
 }
 
+/// Appends the RDNs from `pos` up to `end` to `acc`, comma-separated.
 pub Str x509_name_acc(List(Int) data, Int pos, Int end, Str acc, Bool first) {
     if (pos < 0 || pos >= end) { return acc; }
     Str rdn = x509_rdn_str(data, pos);
@@ -160,7 +181,8 @@ pub Str x509_name_acc(List(Int) data, Int pos, Int end, Str acc, Bool first) {
     return x509_name_acc(data, np, end, joined, false);
 }
 
-// Name ::= SEQUENCE OF SET — render as comma-joined RDNs.
+/// Renders the Name element at `pos` as comma-joined RDNs.
+/// Returns "" when the element's header is malformed.
 pub Str x509_name_str(List(Int) data, Int pos) {
     DerTlv t = der_next(data, pos);
     if (t.val_len < 0) { return ""; }
@@ -169,11 +191,13 @@ pub Str x509_name_str(List(Int) data, Int pos) {
     return x509_name_acc(data, s, e, "", true);
 }
 
+/// The issuer Name rendered as comma-joined RDNs.
 pub Str x509_issuer_str(List(Int) cert) {
     Int p = x509_issuer_pos(cert);
     return x509_name_str(cert, p);
 }
 
+/// The subject Name rendered as comma-joined RDNs.
 pub Str x509_subject_str(List(Int) cert) {
     Int p = x509_subject_pos(cert);
     return x509_name_str(cert, p);
@@ -191,12 +215,13 @@ pub Str x509_subject_str(List(Int) cert) {
 // by counting elements: which of the two unique IDs is present varies,
 // and a certificate with neither is normal.
 
+/// Position just past the subjectPublicKeyInfo element.
 pub Int x509_after_spki(List(Int) cert) {
     Int p0 = x509_spki_pos(cert);
     return x509_skip_tlv(cert, p0);
 }
 
-// Position of the [3] EXPLICIT Extensions element, or -1.
+/// Position of the [3] EXPLICIT Extensions element, or -1.
 pub Int x509_exts_pos(List(Int) cert) {
     Int p = x509_after_spki(cert);
     DerTlv t = der_next(cert, p);
@@ -208,6 +233,7 @@ pub Int x509_exts_pos(List(Int) cert) {
     return 0 - 1;
 }
 
+/// Position just past the [3] Extensions element, or -1 when absent.
 pub Int x509_exts_end(List(Int) cert) {
     Int p = x509_exts_pos(cert);
     if (p < 0) { return 0 - 1; }
@@ -215,8 +241,8 @@ pub Int x509_exts_end(List(Int) cert) {
     return p + t.hdr_len + t.val_len;
 }
 
-// The first Extension element at or after `p` whose extnID is `oid`; -1
-// when there is none. Returns the element's position.
+/// The first Extension element at or after `p` whose extnID is `oid`; -1
+/// when there is none. Returns the element's position.
 pub Int x509_ext_find(List(Int) data, Int p, Int end, Str oid) {
     if (p >= end) { return 0 - 1; }
     DerTlv t = der_next(data, p);
@@ -231,7 +257,7 @@ pub Int x509_ext_find(List(Int) data, Int p, Int end, Str oid) {
     return x509_ext_find(data, nxt, end, oid);
 }
 
-// Content position of the named extension's extnValue OCTET STRING, or -1.
+/// Content position of the named extension's extnValue OCTET STRING, or -1.
 pub Int x509_ext_value_pos(List(Int) cert, Str oid) {
     Int end = x509_exts_end(cert);
     if (end < 0) { return 0 - 1; }
@@ -254,14 +280,14 @@ pub Int x509_ext_value_pos(List(Int) cert, Str oid) {
     return der_content_pos(cert, vp2);
 }
 
-// basicConstraints (2.5.29.19): is this certificate a CA?
-//
-//   BasicConstraints ::= SEQUENCE { cA BOOLEAN DEFAULT FALSE,
-//                                   pathLenConstraint INTEGER OPTIONAL }
-//
-// Absent means false, not "unknown": RFC 5280 gives cA a DEFAULT of FALSE,
-// so a certificate with no basicConstraints is not a CA, and treating the
-// absence as permission would let any leaf sign for anything.
+/// basicConstraints (2.5.29.19): is this certificate a CA?
+///
+///   BasicConstraints ::= SEQUENCE { cA BOOLEAN DEFAULT FALSE,
+///                                   pathLenConstraint INTEGER OPTIONAL }
+///
+/// Absent means false, not "unknown": RFC 5280 gives cA a DEFAULT of FALSE,
+/// so a certificate with no basicConstraints is not a CA, and treating the
+/// absence as permission would let any leaf sign for anything.
 pub Bool x509_is_ca(List(Int) cert) {
     return match x509_parse(cert) { Ok(c) => cert_is_ca(c), Err(e) => false };
 }
@@ -277,32 +303,30 @@ Int x509_bit_mask_at(Int shift) {
     return 2 * x509_bit_mask_at(shift - 1);
 }
 
-// keyUsage (2.5.29.15): does the BIT STRING have `bit` set? Bit 0 of the
-// first content byte is keyCertSign. Absent means "unrestricted", which
-// RFC 5280 permits, so this reports true when the extension is missing and
-// is only useful to a caller that also asked for the extension.
+/// Whether keyUsage (2.5.29.15) has `bit` set (5 = keyCertSign).
+/// Absent means unrestricted, as RFC 5280 permits, so a missing extension
+/// reports true; a certificate that fails `x509_parse` reports false.
 pub Bool x509_key_usage(List(Int) cert, Int bit) {
     return match x509_parse(cert) { Ok(c) => cert_key_usage(c, bit), Err(e) => false };
 }
 
-// extendedKeyUsage (2.5.29.37): is `oid` one of the purposes listed?
-//
-//   ExtKeyUsageSyntax ::= SEQUENCE SIZE (1..MAX) OF KeyPurposeId
-//
-// Absent reports false rather than true, the opposite of keyUsage above
-// and for a different reason. An absent keyUsage leaves a certificate
-// unrestricted, but a caller asking whether a certificate may do one
-// particular thing wants to see that thing written down: read as "any
-// purpose", an unmarked certificate would be authorised for everything,
-// and a certificate issued for one job would answer for another.
+/// extendedKeyUsage (2.5.29.37): is `oid` one of the purposes listed?
+///
+///   ExtKeyUsageSyntax ::= SEQUENCE SIZE (1..MAX) OF KeyPurposeId
+///
+/// Absent reports false rather than true, the opposite of keyUsage above
+/// and for a different reason. An absent keyUsage leaves a certificate
+/// unrestricted, but a caller asking whether a certificate may do one
+/// particular thing wants to see that thing written down: read as "any
+/// purpose", an unmarked certificate would be authorised for everything,
+/// and a certificate issued for one job would answer for another.
 pub Bool x509_eku_has(List(Int) cert, Str oid) {
     return match x509_parse(cert) { Ok(c) => cert_eku_has(c, oid), Err(e) => false };
 }
 
-// The signature bytes of a signatureValue BIT STRING, given the whole
-// TLV as it appears in a certificate or CRL. The content starts with the
-// unused-bits octet, which is not part of the signature, and a signature
-// of a size this code does not handle is refused rather than sliced.
+/// The first `want` signature bytes of a signatureValue BIT STRING `tlv`.
+/// The unused-bits octet is skipped. Returns empty when `tlv` is not a
+/// BIT STRING or holds fewer than `want` bytes.
 pub List(Int) x509_sig_bytes(List(Int) tlv, Int want) {
     DerTlv t = der_next(tlv, 0);
     if (t.val_len < 0) { return []; }
@@ -313,9 +337,9 @@ pub List(Int) x509_sig_bytes(List(Int) tlv, Int want) {
     return der_slice_seeded(tlv, start, stop);
 }
 
-// The serial number's DER content bytes. Serials are compared as these
-// rather than as numbers: a 20-byte serial does not fit an Int, and DER
-// requires the minimal encoding, so equal values are equal bytes.
+/// The serial number's DER content bytes. Serials are compared as these
+/// rather than as numbers: a 20-byte serial does not fit an Int, and DER
+/// requires the minimal encoding, so equal values are equal bytes.
 pub List(Int) x509_serial_bytes(List(Int) cert) {
     Int p = x509_serial_pos(cert);
     return der_content(cert, p);
@@ -323,8 +347,8 @@ pub List(Int) x509_serial_bytes(List(Int) cert) {
 
 // ─── Validity window ─────────────────────────────────────────────────
 
-// The digits of `s` from `i` to `last`, as a number; -1 when any of them
-// is not a digit.
+/// The digits of `s` from `i` to `last`, appended to `acc` as a number.
+/// Returns -1 when any of them is not a digit.
 pub Int time_digits(Str s, Int i, Int last, Int acc) {
     if (i > last) { return acc; }
     Int d = str_char_at(s, i) - 48;
@@ -332,14 +356,14 @@ pub Int time_digits(Str s, Int i, Int last, Int acc) {
     return time_digits(s, i + 1, last, acc * 10 + d);
 }
 
-// "YYMMDDHHMMSSZ" (UTCTime) or "YYYYMMDDHHMMSSZ" (GeneralizedTime) as
-// seconds since the epoch, through lib/calendar.resid: the same civil to
-// timeline arithmetic every other date in the language uses.
-//
-// A UTCTime's two-digit year is RFC 5280's sliding window: 00-49 means
-// 20xx, 50-99 means 19xx. A string of neither shape, with a zone other
-// than Z, or with a field out of range has no time: -1, which every
-// caller rejects rather than compares.
+/// "YYMMDDHHMMSSZ" (UTCTime) or "YYYYMMDDHHMMSSZ" (GeneralizedTime) as
+/// seconds since the epoch, through lib/calendar.resid: the same civil to
+/// timeline arithmetic every other date in the language uses.
+///
+/// A UTCTime's two-digit year is RFC 5280's sliding window: 00-49 means
+/// 20xx, 50-99 means 19xx. A string of neither shape, with a zone other
+/// than Z, or with a field out of range has no time: -1, which every
+/// caller rejects rather than compares.
 pub Int x509_time_to_unix(Str s) {
     Int n = str_len(s);
     if (n != 13 && n != 15) { return 0 - 1; }
@@ -366,25 +390,36 @@ pub Int x509_time_to_unix(Str s) {
 // CertificateVerify, COSE) dispatches on them: the hash a signature is
 // checked with is the one its algorithm names, never an assumed one.
 
-// kind: 0 unsupported, 1 ECDSA, 2 RSA PKCS#1 v1.5, 3 RSA-PSS, 4 Ed25519.
-// mgf and salt only mean something for PSS.
+/// A parsed signature algorithm: its kind, hash and PSS parameters.
+/// `kind`: 0 unsupported, 1 ECDSA, 2 RSA PKCS#1 v1.5, 3 RSA-PSS, 4 Ed25519.
+/// `mgf` and `salt` only mean something for PSS.
 pub type SigAlg = { Int kind; HashAlg hash; HashAlg mgf; Int salt; };
 
+/// The unsupported signature algorithm (kind 0), which every verifier refuses.
 pub SigAlg sigalg_none() { return SigAlg {.kind = 0, .hash = Sha256, .mgf = Sha256, .salt = 0}; }
+/// The SigAlg kind for ECDSA.
 pub Int sigalg_ecdsa() { return 1; }
+/// The SigAlg kind for RSA PKCS#1 v1.5.
 pub Int sigalg_pkcs1() { return 2; }
+/// The SigAlg kind for RSA-PSS.
 pub Int sigalg_pss() { return 3; }
+/// The SigAlg kind for Ed25519.
 pub Int sigalg_ed25519() { return 4; }
 
 SigAlg sa(Int kind, HashAlg h) { return SigAlg {.kind = kind, .hash = h, .mgf = h, .salt = hash_len(h)}; }
 
-// kind: 0 unusable, 1 EC (curve, point), 2 RSA (n, e), 3 Ed25519 (point).
-// pss_only marks an id-RSASSA-PSS key, which must not verify PKCS#1.
+/// A parsed public key from a SubjectPublicKeyInfo.
+/// `kind`: 0 unusable, 1 EC (curve, point), 2 RSA (n, e), 3 Ed25519 (point).
+/// `pss_only` marks an id-RSASSA-PSS key, which must not verify PKCS#1.
 pub type PubKey = { Int kind; Curve curve; List(Int) point; List(Int) n; List(Int) e; Bool pss_only; };
 
+/// The unusable public key (kind 0), returned for anything refused.
 pub PubKey pubkey_none() { return PubKey {.kind = 0, .curve = P256, .point = [], .n = [], .e = [], .pss_only = false}; }
+/// The PubKey kind for an EC key.
 pub Int pubkey_ec() { return 1; }
+/// The PubKey kind for an RSA key.
 pub Int pubkey_rsa() { return 2; }
+/// The PubKey kind for an Ed25519 key.
 pub Int pubkey_ed25519() { return 3; }
 
 // Whether the parameters after an algorithm OID are absent or NULL.
@@ -447,8 +482,9 @@ SigAlg alg_pss(List(Int) b, Der params) {
     };
 }
 
-// A signature AlgorithmIdentifier element. Anything not listed, a SHA-1
-// algorithm, or parameters where none belong is kind 0 (refused).
+/// Parses the signature AlgorithmIdentifier element `alg` of `b`.
+/// Anything not listed, a SHA-1 algorithm, or parameters where none belong
+/// is kind 0 (refused).
 pub SigAlg sigalg_parse(List(Int) b, Der alg) {
     if (!alg.ok || alg.tag != 48) { return sigalg_none(); }
     Der oid = der_child(b, alg);
@@ -485,9 +521,9 @@ PubKey rsa_key_parts(List(Int) k, Bool pss_only) {
     return PubKey {.kind = 2, .curve = P256, .point = [], .n = n.v, .e = e.v, .pss_only = pss_only};
 }
 
-// SubjectPublicKeyInfo ::= SEQUENCE { algorithm AlgorithmIdentifier,
-//                                     subjectPublicKey BIT STRING }
-// EC keys must name P-256, P-384 or P-521 and be a point on that curve.
+/// Parses the SubjectPublicKeyInfo element `spki` of `b` into a PubKey.
+/// EC keys must name P-256, P-384 or P-521 and be a point on that curve;
+/// RSA, RSA-PSS and Ed25519 are also read. Anything else is kind 0.
 pub PubKey spki_parse(List(Int) b, Der spki) {
     if (!spki.ok || spki.tag != 48) { return pubkey_none(); }
     Der alg = der_child(b, spki);
@@ -520,7 +556,7 @@ pub PubKey spki_parse(List(Int) b, Der spki) {
     return pubkey_none();
 }
 
-// A standalone DER SubjectPublicKeyInfo (as in a PEM "PUBLIC KEY").
+/// Parses a standalone DER SubjectPublicKeyInfo, as in a PEM "PUBLIC KEY".
 pub PubKey spki_parse_der(List(Int) der) { return spki_parse(der, der_top(der)); }
 
 // ─── Signed structures ───────────────────────────────────────────────
@@ -528,8 +564,13 @@ pub PubKey spki_parse_der(List(Int) der) { return spki_parse(der, der_top(der));
 // A certificate, a CRL and an OCSP BasicResponse are all
 //   SEQUENCE { tbs SEQUENCE, signatureAlgorithm, signature BIT STRING }
 
+/// The parts of a signed structure: encoded body, its element, the
+/// algorithm (parsed and encoded) and the signature bytes.
 pub type Signed = { List(Int) tbs; Der tbs_el; SigAlg alg; List(Int) alg_der; List(Int) sig; };
 
+/// Splits the signed SEQUENCE `outer` of `b` into its parts.
+/// Returns Err with a reason when the outer shape or BIT STRING is bad;
+/// an unsupported algorithm is not an error here (it parses as kind 0).
 pub Result(Signed, Str) signed_parse(List(Int) b, Der outer) {
     if (!outer.ok || outer.tag != 48) { return Err("not a SEQUENCE"); }
     Der tbs = der_child(b, outer);
@@ -544,10 +585,10 @@ pub Result(Signed, Str) signed_parse(List(Int) b, Der outer) {
 
 // ─── Certificates ────────────────────────────────────────────────────
 
-// Everything verification reads from a certificate, checked once.
-// issuer and subject are the Name elements as encoded; not_before and
-// not_after are seconds since the epoch; exts is the [3] element (ok =
-// false when there are none).
+/// Everything verification reads from a certificate, checked once.
+/// issuer and subject are the Name elements as encoded; not_before and
+/// not_after are seconds since the epoch; exts is the [3] element (ok =
+/// false when there are none).
 pub type Cert = {
     List(Int) der;
     Signed signed;
@@ -567,7 +608,7 @@ Str x509_time_str(List(Int) b, Der t) {
     return der_str_acc(b[t.start..t.next], 0, t.len - 1, "");
 }
 
-// A time element (UTCTime or GeneralizedTime) as seconds, or -1.
+/// A time element (UTCTime or GeneralizedTime) as seconds, or -1.
 pub Int x509_time_at(List(Int) b, Der t) {
     Str s = x509_time_str(b, t);
     if (s == "") { return 0 - 1; }
@@ -576,11 +617,11 @@ pub Int x509_time_at(List(Int) b, Der t) {
     return x509_time_to_unix(s);
 }
 
-// Parse a DER certificate strictly. Every structural error is an Err with
-// a reason; nothing here indexes outside the input. The inner signature
-// AlgorithmIdentifier must equal the outer one byte for byte (RFC 5280
-// §4.1.1.2), or a signature could be checked under an algorithm the CA
-// did not sign.
+/// Parse a DER certificate strictly. Every structural error is an Err with
+/// a reason; nothing here indexes outside the input. The inner signature
+/// AlgorithmIdentifier must equal the outer one byte for byte (RFC 5280
+/// §4.1.1.2), or a signature could be checked under an algorithm the CA
+/// did not sign.
 pub Result(Cert, Str) x509_parse(List(Int) der) {
     Der outer = der_top(der);
     if (!outer.ok) { return Err("not one DER element"); }
@@ -662,6 +703,7 @@ Bool x509_ext_scan(List(Int) b, Der e, Der seq, List(Str) seen) {
     return x509_ext_scan(b, der_sibling(b, e, seq), seq, seen.concat([o]));
 }
 
+/// Whether `a` and `b` have the same length and elements.
 pub Bool eq_list(List(Int) a, List(Int) b) {
     if (a.len() != b.len()) { return false; }
     return eq_list_at(a, b, 0);
@@ -675,10 +717,10 @@ Bool eq_list_at(List(Int) a, List(Int) b, Int i) {
 
 // ─── Extensions, on a parsed certificate ─────────────────────────────
 
-// The extnValue OCTET STRING element of the extension named `oid`, or a
-// Der with ok = false when the certificate has no such extension. The
-// extensions were checked well-formed (and free of duplicates) by
-// x509_parse, so the first match is the only one.
+/// The extnValue OCTET STRING element of the extension named `oid`, or a
+/// Der with ok = false when the certificate has no such extension. The
+/// extensions were checked well-formed (and free of duplicates) by
+/// x509_parse, so the first match is the only one.
 pub Der cert_ext(Cert c, Str oid) {
     if (!c.exts.ok) { return der_bad(); }
     Der seq = der_child(c.der, c.exts);
@@ -695,7 +737,7 @@ Der cert_ext_scan(List(Int) b, Der e, Der seq, Str oid) {
     return cert_ext_scan(b, der_sibling(b, e, seq), seq, oid);
 }
 
-// The single element an extension value holds, which must fill it.
+/// The single element an extension value holds, which must fill it.
 pub Der cert_ext_inner(Cert c, Str oid) {
     Der v = cert_ext(c, oid);
     if (!v.ok) { return der_bad(); }
@@ -704,9 +746,9 @@ pub Der cert_ext_inner(Cert c, Str oid) {
     return inner;
 }
 
-// basicConstraints cA (2.5.29.19). Absent means not a CA: RFC 5280 gives
-// cA a DEFAULT of FALSE, and treating absence as permission would let any
-// leaf sign for anything.
+/// basicConstraints cA (2.5.29.19). Absent means not a CA: RFC 5280 gives
+/// cA a DEFAULT of FALSE, and treating absence as permission would let any
+/// leaf sign for anything.
 pub Bool cert_is_ca(Cert c) {
     Der bc = cert_ext_inner(c, "2.5.29.19");
     if (!bc.ok || bc.tag != 48 || bc.len == 0) { return false; }
@@ -714,9 +756,9 @@ pub Bool cert_is_ca(Cert c) {
     return first.ok && first.tag == 1 && first.len == 1 && c.der[first.start] == 255;
 }
 
-// keyUsage (2.5.29.15) bit `bit` (0 = digitalSignature, 5 = keyCertSign).
-// Absent means unrestricted (RFC 5280 permits it); a present but
-// malformed one allows nothing.
+/// keyUsage (2.5.29.15) bit `bit` (0 = digitalSignature, 5 = keyCertSign).
+/// Absent means unrestricted (RFC 5280 permits it); a present but
+/// malformed one allows nothing.
 pub Bool cert_key_usage(Cert c, Int bit) {
     Der ku = cert_ext_inner(c, "2.5.29.15");
     if (!cert_ext(c, "2.5.29.15").ok) { return true; }
@@ -727,9 +769,9 @@ pub Bool cert_key_usage(Cert c, Int bit) {
     return (c.der[ku.start + byte] & x509_bit_mask(bit % 8)) != 0;
 }
 
-// extendedKeyUsage (2.5.29.37) lists `oid`. Absent is false: a caller
-// asking whether a certificate may do one particular thing wants to see
-// it written down.
+/// extendedKeyUsage (2.5.29.37) lists `oid`. Absent is false: a caller
+/// asking whether a certificate may do one particular thing wants to see
+/// it written down.
 pub Bool cert_eku_has(Cert c, Str oid) {
     Der eku = cert_ext_inner(c, "2.5.29.37");
     if (!eku.ok || eku.tag != 48) { return false; }
@@ -743,8 +785,8 @@ Bool cert_oid_in(List(Int) b, Der e, Der seq, Str oid) {
     return cert_oid_in(b, der_sibling(b, e, seq), seq, oid);
 }
 
-// The subjectAltName (2.5.29.17) entries of one GeneralName kind: tag
-// 130 dNSName, 135 iPAddress. Each is the raw value.
+/// The subjectAltName (2.5.29.17) entries of one GeneralName kind: tag
+/// 130 dNSName, 135 iPAddress. Each is the raw value.
 pub List(List(Int)) cert_san(Cert c, Int tag) {
     Der gns = cert_ext_inner(c, "2.5.29.17");
     List(List(Int)) none = [];

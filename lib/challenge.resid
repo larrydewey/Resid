@@ -18,11 +18,15 @@ import "word.resid";
 import "sha256g.resid";
 import "sha512g.resid";
 
+/// An issued challenge: its runtime handle, the secret nonce, the bind data
+/// and the derived value. Opaque outside this file and challenge_export.resid.
 @opaque("challenge_export.resid")
 pub type ChallengeRecord = { Int handle; List(UInt(8)) nonce; List(UInt(8)) bind; List(UInt(8)) value; };
 
-// A fresh n-byte challenge (32 <= n <= 64: a shorter one can be guessed
-// ahead) that stays acceptable for `lifetime` seconds.
+/// Issues a fresh `n`-byte challenge record bound to `bind`.
+/// `n` is 32 to 64 (a shorter one can be guessed ahead); the record stays
+/// acceptable for `lifetime` seconds (1 to one year). Aborts on a bad
+/// argument or when the runtime refuses the record.
 pub ChallengeRecord challenge_issue(Int n, List(UInt(8)) bind = [], Int lifetime = 300) {
     rt_assert(n >= 32 && n <= 64, "challenge_issue: a challenge is 32 to 64 bytes");
     rt_assert(lifetime > 0 && lifetime <= 31536000, "challenge_issue: the lifetime is 1 second to 1 year");
@@ -32,68 +36,79 @@ pub ChallengeRecord challenge_issue(Int n, List(UInt(8)) bind = [], Int lifetime
     return ChallengeRecord {.handle = h, .nonce = nonce, .bind = bind, .value = chal_value(nonce, bind, n)};
 }
 
+/// Returns the record's challenge value, the bytes sent in a request.
 pub List(UInt(8)) challenge_value(ChallengeRecord c) { return c.value; }
 
-// A value only this record's holder can compute, for an answer that must
-// not be predictable from what was sent (a TPM credential: the TPM has to
-// decrypt it to answer): SHA-256 over "resid.challenge.derive.v1", the
-// label, the record's nonce (never sent) and data, each with its length.
+/// Derives a 32-byte value only this record's holder can compute.
+/// For an answer that must not be predictable from what was sent (a TPM
+/// credential): SHA-256 over "resid.challenge.derive.v1", `label`, the
+/// record's nonce (never sent) and `data`, each with a 4-byte length.
 pub List(UInt(8)) challenge_derive(ChallengeRecord c, Str label, List(Int) data) {
     List(Int) l = bytes_of(label);
     List(Int) m = bytes_of("resid.challenge.derive.v1").concat(chal_u32(l.len())).concat(l).concat(chal_u32(c.nonce.len())).concat(chal_ints(c.nonce)).concat(chal_u32(data.len())).concat(data);
     return chal_bytes(sha256_bytes(m));
 }
 
-// How a request's challenge slot is filled (PLAN-labels.md §6.2): a fresh
-// runtime value nobody keeps, an issued record's value (spent by the
-// device engine before anything is sent, then bound to the reply), or a
-// value a verifier chose. Wrappers take `Challenge challenge = Runtime`.
+/// How a device request's challenge slot is filled (PLAN-labels.md §6.2).
+/// `Runtime`: a fresh runtime value nobody keeps; `Issued`: a record's value,
+/// spent by the device engine before sending, then bound to the reply;
+/// `Verbatim`: a value a verifier chose. Wrappers default to `Runtime`.
 pub type Challenge = Runtime | Issued(ChallengeRecord) | Verbatim(List(UInt(8)));
 
-// The value for a nonce and bind (recomputed on import, never trusted).
+/// Computes the `n`-byte challenge value for `nonce` and `bind`.
+/// SHA-512 over the tagged, length-prefixed inputs, truncated to `n`;
+/// recomputed on import, never trusted.
 pub List(UInt(8)) chal_value(List(UInt(8)) nonce, List(UInt(8)) bind, Int n) {
     List(Int) tag = bytes_of("resid.challenge.v1");
     List(Int) m = tag.concat(chal_u32(nonce.len())).concat(chal_ints(nonce)).concat(chal_u32(bind.len())).concat(chal_ints(bind));
     return chal_bytes(sha512_bytes(m)[0..n]);
 }
 
+/// Encodes `v` as 4 bytes, big-endian.
 pub List(Int) chal_u32(Int v) { return [(v >> 24) & 255, (v >> 16) & 255, (v >> 8) & 255, v & 255]; }
 
+/// Widens a byte list to a list of Ints.
 pub List(Int) chal_ints(List(UInt(8)) b) { return chal_ints_at(b, 0, ListBuf()); }
 List(Int) chal_ints_at(List(UInt(8)) b, Int i, ListBuf(Int) acc) { return if (i >= b.len()) { acc.finish() } else { chal_ints_at(b, i + 1, acc.push((Int) b[i])) }; }
 
+/// Narrows a list of Ints to bytes (each value cast to UInt(8)).
 pub List(UInt(8)) chal_bytes(List(Int) b) { return chal_bytes_at(b, 0, ListBuf()); }
 List(UInt(8)) chal_bytes_at(List(Int) b, Int i, ListBuf(UInt(8)) acc) { return if (i >= b.len()) { acc.finish() } else { chal_bytes_at(b, i + 1, acc.push((UInt(8)) b[i])) }; }
 
+/// Classifies each byte of `b` as secret.
 pub List(Secret(UInt(8))) chal_lift(List(UInt(8)) b) { return chal_lift_at(b, 0, ListBuf()); }
 List(Secret(UInt(8))) chal_lift_at(List(UInt(8)) b, Int i, ListBuf(Secret(UInt(8))) acc) { return if (i >= b.len()) { acc.finish() } else { chal_lift_at(b, i + 1, acc.push(classify(b[i]))) }; }
 
-// What spent a record: Some([descriptor SHA-256 ‖ evidence SHA-512]).
+/// Returns what spent the record, or None when it is not bound.
+/// The 96 bytes are the descriptor's SHA-256 then the evidence's SHA-512.
 pub Option(List(Int)) challenge_bound(ChallengeRecord c) {
     List(Int) b = resid_chal_bound(c.handle);
     return if (b.len() == 96) { Some(b) } else { None };
 }
 
-// Accept a record once (a verifier): Err names why not.
+/// Marks the record accepted, once, for a verifier.
+/// Err names why not: expired or evicted, or already accepted or exported.
 pub Result(Bool, Str) challenge_accept_mark(ChallengeRecord c) {
     Int r = resid_chal_mark(c.handle, 2);
     if (r == 0) { return Ok(true); }
     return Err(if (r == 2) { "challenge expired or evicted" } else { "challenge already accepted, or exported" });
 }
 
-// The record's state bits (2 spent, 4 accepted, 8 exported, 16 imported,
-// 32 bound, 64 decided), or -1 when it is gone or expired.
+/// Returns the record's state bits, or -1 when it is gone or expired.
+/// Bits: 2 spent, 4 accepted, 8 exported, 16 imported, 32 bound, 64 decided.
 @verify_internal
 pub Int challenge_state(ChallengeRecord c) { return challenge_state_h(c.handle); }
 
+/// Returns the state bits of the record with runtime `handle`, or -1.
 @verify_internal
 pub Int challenge_state_h(Int handle) {
     Int r = resid_chal_mark(handle, 5);
     return if (r >= 100) { r - 100 } else { 0 - 1 };
 }
 
-// Mark an accepted record decided, once (PLAN-attestation.md §6.3): a
-// release primitive does, so one gate releases once.
+/// Marks the accepted record with runtime `handle` decided, once.
+/// A release primitive calls it so one gate releases once
+/// (PLAN-attestation.md §6.3); Err when expired, released or not accepted.
 @verify_internal
 pub Result(Bool, Str) challenge_decide_mark(Int handle) {
     Int r = resid_chal_mark(handle, 4);

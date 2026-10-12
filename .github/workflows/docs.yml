@@ -73,6 +73,12 @@ jobs:
           cd ../resid-book
           ../resid/target/resid-manifest depmap resid.toml deps.txt
 
+      # The API reference is generated from the standard library's `///`
+      # comments; a declaration without one would be a page with a gap.
+      - name: Doc comments
+        working-directory: resid
+        run: python3 tools/check_doc_comments.py
+
       - name: Export the site
         working-directory: resid-book
         env:

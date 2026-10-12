@@ -19,13 +19,14 @@ import "device.resid";
 import "device_write.resid";
 import "uapi_nsm.resid";
 
-// The NSM's CBOR response to `request` (1 to NSM_REQUEST_MAX_SIZE bytes of
-// CBOR), at most NSM_RESPONSE_MAX_SIZE bytes. Signed only when it is an
-// attestation document (above).
-//
-// Failures: Absent outside a Nitro enclave, Denied without CAP_SYS_ADMIN
-// (the driver's rule for raw messages), Kernel(errno) when the request
-// fails, TooLong when the module answers more than the maximum.
+/// The NSM's CBOR response to `request` (1 to NSM_REQUEST_MAX_SIZE bytes of
+/// CBOR), at most NSM_RESPONSE_MAX_SIZE bytes. Signed only when it is an
+/// attestation document (above).
+///
+/// Failures: BadInput for an empty or oversized request, Absent outside a
+/// Nitro enclave, Denied without CAP_SYS_ADMIN (the driver's rule for raw
+/// messages), Kernel(errno) when the request fails, TooLong when the module
+/// answers more than the maximum, BadReply when no response buffer returns.
 @requires(device)
 pub Result(List(UInt(8)), DeviceError) nsm_request(List(UInt(8)) request) {
     Str name = "nsm.raw";

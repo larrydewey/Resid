@@ -1,14 +1,18 @@
 // --- lib/tlsmsg.resid - TLS 1.3 message framing in pure Resid -------
-// ClientHello construction, ServerHello parsing, handshake-message
-// flight walking, and Certificate / CertificateVerify / Finished
-// handling on top of lib/tls.resid's crypto core.
+// Both halves of the TLS 1.3 handshake's message layer, on top of
+// lib/tls.resid's crypto core. Client side: ClientHello construction,
+// ServerHello parsing, handshake-flight walking (`tm_*`), and the
+// Certificate / CertificateVerify / Finished checks. Server side
+// (`ts_*`): ClientHello parsing into `ClientHello`, extension lookup,
+// ALPN choice, and the ServerHello, EncryptedExtensions, Certificate,
+// CertificateVerify and Finished messages a server sends.
 //
-// ECDSA P-256 (0403) CertificateVerify signatures are verified with
-// lib/chain.resid's ec_cert_verify. RSA-PSS (0804) signatures are NOT
-// supported yet (lib/rsa.resid is PKCS#1v1.5 only) and report false.
+// CertificateVerify signatures are checked with lib/certverify.resid's
+// `sig_verify`: ECDSA P-256/P-384, Ed25519 and RSA-PSS (rsae and pss
+// key forms); the scheme must match the leaf's key (`tls_scheme_alg`).
+// Untrusted lengths are checked against the buffer, never trusted.
 //
-// All byte lists are zero-based; see lib/chacha.resid for the widening
-// gotcha (bind arithmetic temps before argument positions).
+// All byte lists are zero-based, one byte per Int.
 
 import "tls.resid";
 import "crypto.resid";
@@ -17,6 +21,8 @@ import "chain.resid";
 
 // -- handshake message walker ------------------------------------------
 
+/// The big-endian 24-bit value at `off` in `b`.
+/// Returns 0 when the three bytes do not all lie inside `b`.
 pub Int tm_u24_at(List(Int) b, Int off) {
     if (off < 0 || off + 2 > b.len() - 1) {
         return 0;
@@ -26,8 +32,10 @@ pub Int tm_u24_at(List(Int) b, Int off) {
     return p1 + p2 + b[off + 2];
 }
 
-// locate a Finished message (type 20, exactly 32-byte body); skips
-// false matches inside certificate payloads
+/// The offset of a Finished header (type 20, 32-byte body) in `payload`.
+/// With `k` > 0 the k-th (0-based) match scanning forward; with `k` = 0 the
+/// last match scanning backward. Returns -1 when there is none. Matches are
+/// byte patterns, not walked messages.
 pub Int tm_find_fin(List(Int) payload, Int k) {
     if (k > 0) {
         return tm_ff_acc(payload, 0, k);
@@ -36,6 +44,8 @@ pub Int tm_find_fin(List(Int) payload, Int k) {
     return tm_ff_back(payload, start);
 }
 
+/// Forward-scan helper of `tm_find_fin`: the `k`-th Finished match at or
+/// after `pos`, or -1.
 pub Int tm_ff_acc(List(Int) payload, Int pos, Int k) {
     if (pos + 36 > payload.len()) {
         return -1;
@@ -57,10 +67,10 @@ pub Int tm_ff_acc(List(Int) payload, Int pos, Int k) {
     return tm_ff_acc(payload, np2, k);
 }
 
-// start = index of a handshake message header; returns the start of the
-// next message, or -1 when the message there is truncated or the payload
-// is exhausted. (It used to return 0, which sent every walker back to the
-// first message: a peer that truncated its flight hung the reader.)
+/// The offset of the handshake message after the one whose header is at
+/// `start`.
+/// Returns -1 when that message is truncated or `start` is out of range, so
+/// a walker over a truncated flight stops instead of looping.
 pub Int tm_next(List(Int) payload, Int start) {
     if (start < 0 || start + 4 > payload.len()) {
         return -1;
@@ -75,12 +85,14 @@ pub Int tm_next(List(Int) payload, Int start) {
     return adv;
 }
 
+/// The handshake type byte at `start`, or -1 when `start` is out of range.
 pub Int tm_type_at(List(Int) payload, Int start) {
     if (start < 0 || start >= payload.len()) { return -1; }
     return payload[start];
 }
 
-// The body of the message at start, or empty when it is truncated.
+/// The body of the handshake message at `start`, without its header.
+/// Returns empty when the message is truncated.
 pub List(Int) tm_body(List(Int) payload, Int start) {
     if (tm_next(payload, start) < 0) { return []; }
     Int o1 = start + 1;
@@ -88,17 +100,20 @@ pub List(Int) tm_body(List(Int) payload, Int start) {
     return slice_seed(payload, adv0(start), mlen, []);
 }
 
+/// The offset of a message body: `start` plus the 4-byte header.
 pub Int adv0(Int start) {
     Int o4 = start + 4;
     return o4;
 }
 
-// find the k-th (0-based) handshake message of the given type; returns
-// its body, or an empty list when absent.
+/// The body of the `k`-th (0-based) handshake message of type `mtype`.
+/// Returns empty when there is no such message or it is truncated.
 pub List(Int) tm_find(List(Int) payload, Int mtype, Int k) {
     return tm_find_acc(payload, 0, mtype, k, []);
 }
 
+/// Walking helper of `tm_find`, starting at the message at `pos`; returns
+/// `acc` when the walk ends without a match.
 pub List(Int) tm_find_acc(List(Int) payload, Int pos, Int mtype, Int k, List(Int) acc) {
     if (pos < 0 || pos >= payload.len()) {
         return acc;
@@ -115,11 +130,13 @@ pub List(Int) tm_find_acc(List(Int) payload, Int pos, Int mtype, Int k, List(Int
     return tm_find_acc(payload, np, mtype, k, acc);
 }
 
-// find the payload index of the k-th message of the given type
+/// The header offset of the `k`-th (0-based) message of type `mtype`.
+/// Returns -1 when there is none.
 pub Int tm_find_pos(List(Int) payload, Int mtype, Int k) {
     return tm_fp_acc(payload, 0, mtype, k);
 }
 
+/// Walking helper of `tm_find_pos`, starting at the message at `pos`.
 pub Int tm_fp_acc(List(Int) payload, Int pos, Int mtype, Int k) {
     if (pos < 0 || pos >= payload.len()) {
         return -1;
@@ -136,7 +153,8 @@ pub Int tm_fp_acc(List(Int) payload, Int pos, Int mtype, Int k) {
     return tm_fp_acc(payload, np, mtype, k);
 }
 
-// full handshake message bytes (header included)
+/// The whole handshake message at `start`, header included.
+/// Returns empty when the message is truncated.
 pub List(Int) tm_full_msg(List(Int) payload, Int start) {
     if (tm_next(payload, start) < 0) { return []; }
     Int o1 = start + 1;
@@ -147,19 +165,22 @@ pub List(Int) tm_full_msg(List(Int) payload, Int start) {
 
 // -- ServerHello parsing ------------------------------------------------
 
-// legacy_random(32): type(1) len(3) version(2) random(32)
+/// The 32-byte random of a ServerHello message given with its header.
+/// The random sits after type (1), length (3) and legacy_version (2).
 pub List(Int) sh_random(List(Int) sh) {
     return slice_seed(sh, 6, 32, []);
 }
 
-// walk extensions for key_share (0033); server form: 0024 001d <share>
+/// The server's 32-byte x25519 key share from a ServerHello message.
+/// Found by scanning for the bytes 001d 0020, not by walking extensions;
+/// returns empty when absent.
 pub List(Int) sh_pubkey(List(Int) sh) {
     Int slen = sh.len();
     return sh_scan(sh, 0, slen);
 }
 
-// scan for the key_share extension marker 0033 0024 001d 0020 and
-// return the following 32-byte x25519 share
+/// The 32 bytes after the first 001d 0020 marker at or after `pos`.
+/// Returns empty when no marker leaves room for 32 bytes before `stop`.
 pub List(Int) sh_scan(List(Int) sh, Int pos, Int stop) {
     if (pos + 35 >= stop) {
         return slice_seed(sh, 0, 0, []);
@@ -189,6 +210,10 @@ pub List(Int) sh_scan(List(Int) sh, Int pos, Int stop) {
 // fixture and wrong for anything else. The RFC 8448 trace is now a test
 // fixture (tests/conformance/cases/tls13_framing_in_resid.resid).
 
+/// A TLS 1.3 ClientHello handshake message, header included.
+/// Offers TLS_AES_128_GCM_SHA256 only, with `share32` as the x25519 share,
+/// `sni` as server_name (out-of-range lengths become "localhost") and
+/// `alpn` as the offered protocols (no extension when empty).
 pub List(Int) tlsmsg_client_hello(Str sni, List(Str) alpn, List(Int) random32, List(Int) share32) {
     List(Int) exts = tls_client_exts(sni, alpn, share32);
     List(Int) sid = [0];
@@ -268,8 +293,9 @@ List(Int) ts_u16_list(List(Int) codes, Int i, List(Int) acc) {
 }
 // -- Certificate / CertificateVerify / Finished --------------------------
 
-// Certificate message body: u24 request-context len || u24 total len ||
-//   per-cert: u24 cert len || DER. Returns the first cert DER.
+/// The first certificate's DER from a Certificate message body.
+/// Assumes an empty request context; returns empty when the declared
+/// length runs past the body. `tm_cert_list` reads every entry.
 pub List(Int) tm_cert_der(List(Int) body) {
     // body: u8 context-len || u24 total || u24 cert-len || DER ...
     Int clen = tm_u24_at(body, 4);
@@ -277,20 +303,10 @@ pub List(Int) tm_cert_der(List(Int) body) {
     return slice_seed(body, 7, clen, []);
 }
 
-// Every certificate in a Certificate message, leaf first (RFC 8446 §4.4.2):
-//
-//   opaque certificate_request_context<0..2^8-1>;
-//   CertificateEntry certificate_list<0..2^24-1>;
-//   struct { opaque cert_data<1..2^24-1>; } CertificateEntry;
-//
-// `tm_cert_der` above returns only the first, which is all a
-// self-signed-or-directly-issued server needs. A server issued by an
-// intermediate sends the whole chain here, and a client that trusts only
-// roots needs every link of it -- so the intermediates are read out too and
-// handed to the trust store's chain walk rather than being discarded.
-//
-// The request context is normally empty but is length-prefixed, so it is
-// stepped over by its own declared length rather than assumed zero.
+/// Every certificate DER in a Certificate message body, leaf first.
+/// The request context is skipped by its declared length (RFC 8446
+/// §4.4.2). The walk stops at a truncated, zero-length or padded entry,
+/// so the result may be shorter than declared; empty for an empty body.
 pub List(List(Int)) tm_cert_list(List(Int) body) {
     if (body.len() == 0) {
         List(List(Int)) none = [];
@@ -326,14 +342,18 @@ List(List(Int)) tm_cert_list_acc(List(Int) body, Int p, Int end, List(List(Int))
     return tm_cert_list_acc(body, start + clen, end, acc.concat([der]));
 }
 
+/// Whether a CertificateVerify body names an ECDSA scheme.
+/// True for ecdsa_secp256r1_sha256 (0x0403) and ecdsa_secp384r1_sha384
+/// (0x0503); false for a body shorter than 2 bytes.
 pub Bool tm_is_ecdsa_cv(List(Int) cvbody) {
     if (cvbody.len() < 2) { return false; }
     Int alg = cvbody[0] * 256 + cvbody[1];
     return alg == 1027 || alg == 1283;
 }
 
-// The signature of a CertificateVerify body (alg u16, length u16, bytes),
-// or empty when the length disagrees with what is there.
+/// The signature bytes of a CertificateVerify body.
+/// The body is scheme (u16), length (u16), signature; returns empty when
+/// the length is zero or disagrees with the body.
 pub List(Int) tm_cv_sig(List(Int) cvbody) {
     if (cvbody.len() < 4) { return []; }
     Int slen = cvbody[2] * 256 + cvbody[3];
@@ -341,8 +361,8 @@ pub List(Int) tm_cv_sig(List(Int) cvbody) {
     return cvbody[4..];
 }
 
-// TLS 1.3 CertificateVerify signed content:
-//   64 x 0x20 || "TLS 1.3, server CertificateVerify" || 0x00 || TH
+/// `acc` followed by `n` space bytes (0x20).
+/// Despite the name, the bytes are spaces: the CertificateVerify padding.
 pub List(Int) tm_zeros(List(Int) acc, Int n) {
     if (n == 0) { return acc; }
     List(Int) acc2 = acc.concat([32]);
@@ -350,6 +370,9 @@ pub List(Int) tm_zeros(List(Int) acc, Int n) {
     return tm_zeros(acc2, nn);
 }
 
+/// The bytes a server CertificateVerify signs over `thash`.
+/// 64 spaces, "TLS 1.3, server CertificateVerify", a zero byte, then the
+/// transcript hash (RFC 8446 §4.4.3).
 pub List(Int) tm_cv_content(List(Int) thash) {
     List(Int) zeros64 = tm_zeros([], 64);
     List(Int) ctx = bytes_of("TLS 1.3, server CertificateVerify");
@@ -358,11 +381,10 @@ pub List(Int) tm_cv_content(List(Int) thash) {
     return sconcat(p2, thash);
 }
 
-// The signature algorithm a TLS 1.3 SignatureScheme names, for a key of
-// the given kind (RFC 8446 §4.2.3). ECDSA schemes fix the curve as well
-// as the hash; rsa_pss_rsae_* need an rsaEncryption key and
-// rsa_pss_pss_* an RSASSA-PSS one. PKCS#1 is not a CertificateVerify
-// scheme in TLS 1.3, so it is kind 0 here.
+/// The signature algorithm SignatureScheme `code` names for `key`.
+/// ECDSA schemes must match the key's curve, rsa_pss_rsae_* need an
+/// rsaEncryption key and rsa_pss_pss_* an RSASSA-PSS one (RFC 8446 §4.2.3).
+/// Any mismatch, and PKCS#1, gives `sigalg_none()`.
 pub SigAlg tls_scheme_alg(Int code, PubKey key) {
     Bool ec256 = key.kind == pubkey_ec() && curve_bytes(key.curve) == 32;
     Bool ec384 = key.kind == pubkey_ec() && curve_bytes(key.curve) == 48;
@@ -377,9 +399,9 @@ pub SigAlg tls_scheme_alg(Int code, PubKey key) {
     return sigalg_none();
 }
 
-// Verify a TLS 1.3 server CertificateVerify body against the transcript
-// hash and the leaf certificate: the scheme it names, the key the leaf
-// carries, nothing assumed.
+/// Whether a server CertificateVerify body verifies over `thash`.
+/// Uses the scheme the body names and the key in leaf `cert_der`; false
+/// for a malformed body, an unparsable leaf or a scheme the key cannot use.
 pub Bool tm_verify_cv(List(Int) cvbody, List(Int) cert_der, List(Int) thash) {
     List(Int) sig = tm_cv_sig(cvbody);
     if (sig.len() == 0) { return false; }
@@ -388,13 +410,15 @@ pub Bool tm_verify_cv(List(Int) cvbody, List(Int) cert_der, List(Int) thash) {
     return sig_verify(alg, key, tm_cv_content(thash), sig);
 }
 
-// reverse linear scan: Finished is the final handshake message of the
-// flight, so search from the end
+/// The offset of the last Finished header (type 20, 32-byte body).
+/// Scans backward from the end, since Finished closes the flight; returns
+/// -1 when there is none.
 pub Int tm_find_fin_last(List(Int) payload) {
     Int start = payload.len() - 36;
     return tm_ff_back(payload, start);
 }
 
+/// Backward-scan helper: the last Finished match at or before `pos`, or -1.
 pub Int tm_ff_back(List(Int) payload, Int pos) {
     if (pos < 0) {
         return -1;
@@ -422,9 +446,10 @@ pub Int tm_ff_back(List(Int) payload, Int pos) {
 // handshake messages as they went on the wire, and a field this parser
 // skips would then be missing from the hash.
 
-// What the server needs out of a ClientHello. `raw` is the message as
-// received, header included, for the transcript; `err` is 0 when the
-// hello is usable and one of the ts_err_* codes when it is not.
+/// What the server needs out of a ClientHello.
+/// `raw` is the message as received, header included, for the transcript;
+/// `share` is the client's x25519 key share; `err` is 0 when the hello is
+/// usable and one of the `ts_err_*` codes when it is not.
 type ClientHello = {
     List(Int) raw;
     List(Int) random32;
@@ -437,18 +462,26 @@ type ClientHello = {
     Int err;
 };
 
-// TLS_AES_128_GCM_SHA256 (0x1301): the one cipher suite this language
-// can protect a record with, so the one a server offers.
+/// TLS_AES_128_GCM_SHA256 (0x1301): the one cipher suite this language
+/// can protect a record with, so the one a server offers.
 pub Int ts_suite_aes128gcm() { return 4865; }
 
+/// ClientHello error code 0: the hello is usable.
 pub Int ts_err_ok() { return 0; }
+/// ClientHello error code 1: truncated or otherwise malformed.
 pub Int ts_err_short() { return 1; }
+/// ClientHello error code 2: legacy_version is not 0x0303.
 pub Int ts_err_legacy_version() { return 2; }
+/// ClientHello error code 3: no cipher suite in common.
 pub Int ts_err_no_suite() { return 3; }
+/// ClientHello error code 4: no usable 32-byte x25519 key share.
 pub Int ts_err_no_share() { return 4; }
+/// ClientHello error code 5: supported_versions does not offer TLS 1.3.
 pub Int ts_err_not_tls13() { return 5; }
+/// ClientHello error code 6: no signature_algorithms offered.
 pub Int ts_err_no_sigalg() { return 6; }
 
+/// A short English description of ClientHello error code `e`.
 pub Str ts_err_text(Int e) {
     if (e == ts_err_ok()) { return "ok"; }
     if (e == ts_err_short()) { return "client hello truncated"; }
@@ -474,11 +507,13 @@ Int ts_u24_len(List(Int) b, Int i) {
 
 // ─── ClientHello ──────────────────────────────────────────────────────
 
-// The extensions block as (type, start, len) triples walked one at a
-// time. `at` is the offset of the next extension.
+/// One extension found in a buffer: its type, value offset and value length.
+/// A `type` of -1 means not found.
 pub type Ext = { Int type; Int start; Int len; };
 
-// The extension of that type in `b[at..end)`, or a zero one when absent.
+/// The first extension of type `want` among those in `b[at..end)`.
+/// Returns one with `type` -1 when absent or when the walk meets an
+/// extension that overruns `end`.
 pub Ext ts_ext_find(List(Int) b, Int at, Int end, Int want) {
     return ts_ext_find_at(b, at, end, want, ts_ext_none());
 }
@@ -497,9 +532,9 @@ Ext ts_ext_find_at(List(Int) b, Int at, Int end, Int want, Ext acc) {
     return ts_ext_find_at(b, start + elen, end, want, acc);
 }
 
-// Parse a ClientHello handshake message (header included). Every field
-// is length-checked against what actually arrived: a hello that claims a
-// longer cipher-suite list than it sent must not be read past its end.
+/// Parse a ClientHello handshake message given with its header.
+/// Every field is length-checked against the bytes that arrived. The
+/// result's `err` is `ts_err_ok()` or a `ts_err_*` code; `raw` is `msg`.
 pub ClientHello ts_client_hello(List(Int) msg) {
     Int n = msg.len();
     // header(4) + legacy_version(2) + random(32) + session_id_len(1)
@@ -663,22 +698,19 @@ Str ts_ascii(List(Int) b, Int i, Int end, StrBuf acc) {
     return ts_ascii(b, i + 1, end, acc.push_char(b[i]));
 }
 
-// Does the client offer `code` among its cipher suites?
+/// Does the client offer `code` among its cipher suites?
 pub Bool ts_offers_suite(ClientHello ch, Int code) {
     return ts_u16_in(ch.suites, 0, code);
 }
 
-// Does the client offer `code` among its signature algorithms?
+/// Does the client offer `code` among its signature algorithms?
 pub Bool ts_offers_sigalg(ClientHello ch, Int code) {
     return ts_u16_in(ch.sigalgs, 0, code);
 }
 
-// The protocol the server selected, out of EncryptedExtensions. This is
-// the server's choice of one of the client's offers, not a list to pick
-// from: a client that offered h2 and http/1.1 and is answered with h2 has
-// been told to speak h2, and one that picks for itself here is a client
-// that will send h2 to a server that never agreed to it. Empty means the
-// server declined ALPN, which RFC 7301 allows.
+/// The ALPN protocol names in an EncryptedExtensions body.
+/// This is the server's selection, not a list to pick from. Empty means
+/// the server declined ALPN (RFC 7301) or the extension is malformed.
 pub List(Str) ts_ee_alpn(List(Int) ee) {
     List(Str) none = [];
     if (ee.len() < 2) { return none; }
@@ -692,9 +724,9 @@ pub List(Str) ts_ee_alpn(List(Int) ee) {
     return ts_alpn_scan(ee, e.start + 2, stop, none);
 }
 
-// The first protocol in `want` the client also offered, or "" when it
-// offered none of them. The server's order wins: this is a list of what
-// the server speaks, most preferred first (RFC 7301 §3.2).
+/// The first protocol in `want` the client also offered, or "" when it
+/// offered none of them. The server's order wins: this is a list of what
+/// the server speaks, most preferred first (RFC 7301 §3.2).
 pub Str ts_pick_alpn(List(Str) offered, List(Str) want) {
     return ts_pick_at(want, 0, offered);
 }
@@ -731,16 +763,15 @@ List(Int) ts_u16(Int v) {
     return empty.concat([hi, lo]);
 }
 
-// Handshake message: type || u24 length || body.
+/// A handshake message: type `mtype`, a u24 length, then `body`.
 pub List(Int) ts_message(Int mtype, List(Int) body) {
     return [mtype].concat(ts_u24(body.len())).concat(body);
 }
 
-// ServerHello with the client's session id echoed back and `share` as
-// this server's x25519 public key. The extensions are supported_versions
-// (TLS 1.3) and key_share; anything else the client offered that this
-// server does not implement is simply absent, which is how a peer learns
-// it was not negotiated.
+/// A ServerHello handshake message, header included.
+/// Echoes `session_id`, selects TLS_AES_128_GCM_SHA256, and carries only
+/// supported_versions (TLS 1.3) and key_share with `share` as the server's
+/// x25519 public key.
 pub List(Int) ts_server_hello(List(Int) session_id, List(Int) random32, List(Int) share) {
     List(Int) versions = ts_ext_bytes([], 43, ts_u16(772));
     List(Int) share_value = ts_u16(29).concat(ts_u16(32)).concat(share);
@@ -756,11 +787,9 @@ List(Int) ts_ext_bytes(List(Int) acc, Int etype, List(Int) value) {
     return acc.concat(ts_u16(etype)).concat(ts_u16(value.len())).concat(value);
 }
 
-// EncryptedExtensions carrying the protocol the server selected, or an
-// empty extension list when it declined ALPN (RFC 7301 §3.2 lets it).
-// Sending nothing while still recording a choice locally is worse than not
-// speaking ALPN at all: the client then has nothing to read and falls back
-// to what it hoped for.
+/// An EncryptedExtensions message carrying `alpn` as the selected protocol.
+/// When `alpn` is "" or longer than 255 bytes the extension list is empty,
+/// which declines ALPN (RFC 7301 §3.2).
 pub List(Int) ts_encrypted_extensions(Str alpn) {
     if (alpn == "") { return ts_message(8, ts_u16(0)); }
     List(Int) name = str_to_bytes(alpn);
@@ -769,7 +798,9 @@ pub List(Int) ts_encrypted_extensions(Str alpn) {
     return ts_message(8, ts_u16(4 + data.len()).concat(ts_ext_bytes([], 16, data)));
 }
 
-// Certificate: an empty request context, then the chain leaf first.
+/// A Certificate message with an empty request context and `chain`.
+/// `chain` holds DER certificates, leaf first; each entry gets an empty
+/// extensions vector.
 pub List(Int) ts_certificate(List(List(Int)) chain) {
     List(Int) entries = ts_cert_entries(chain, 0, []);
     List(Int) body = [0].concat(ts_u24(entries.len())).concat(entries);
@@ -787,15 +818,15 @@ List(Int) ts_cert_entries(List(List(Int)) chain, Int i, List(Int) acc) {
     return ts_cert_entries(chain, i + 1, acc.concat(entry));
 }
 
-// CertificateVerify: the signature algorithm, the signature, and the
-// content it covers (which the caller has already hashed).
+/// A CertificateVerify message: scheme `sigalg` and `signature`.
+/// The caller signs `ts_cv_server_content` itself; it is not included.
 pub List(Int) ts_certificate_verify(Int sigalg, List(Int) signature) {
     List(Int) body = ts_u16(sigalg).concat(ts_u16(signature.len())).concat(signature);
     return ts_message(15, body);
 }
 
-// The bytes a server CertificateVerify signs (RFC 8446 §4.4.3): 64
-// spaces, the context string, a zero byte, the transcript hash.
+/// The bytes a server CertificateVerify signs (RFC 8446 §4.4.3): 64
+/// spaces, the context string, a zero byte, the transcript hash.
 pub List(Int) ts_cv_server_content(List(Int) transcript_hash) {
     List(Int) zeros = tm_zeros([], 64);
     List(Int) ctx = bytes_of("TLS 1.3, server CertificateVerify");
@@ -804,8 +835,8 @@ pub List(Int) ts_cv_server_content(List(Int) transcript_hash) {
     return sconcat(p2, transcript_hash);
 }
 
-// Finished: the verify_data over `transcript_hash` with the handshake
-// traffic key.
+/// A Finished message: verify_data over `transcript_hash`.
+/// `handshake_key` is the sender's handshake traffic secret.
 pub List(Int) ts_finished(List(Int) handshake_key, List(Int) transcript_hash) {
     return ts_message(20, tls_finished(handshake_key, transcript_hash));
 }

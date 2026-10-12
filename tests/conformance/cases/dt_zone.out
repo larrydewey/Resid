@@ -57,6 +57,15 @@ us local ok OK
 us gap OK
 us fold OK
 us offsets OK
+au jan OK
+au jul OK
+au before end OK
+au at end OK
+au before start OK
+au at start OK
+au new year OK
+j60 before OK
+j60 at OK
 safe UTC OK
 safe area OK
 safe underscore OK

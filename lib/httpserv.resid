@@ -1,16 +1,18 @@
 // ─── lib/httpserv.resid — HTTP/1.1 server in pure Resid ─────────────────
 // Request parsing (Content-Length and chunked bodies, keep-alive), a
 // response writer, a path router and an accept loop. The runtime provides
-// only sockets: resid_tcp_listen / resid_tcp_listen_at, resid_tcp_accept_now,
-// resid_tcp_poll, resid_tcp_recv_some, resid_tcp_send_some,
-// resid_tcp_deadline, resid_tcp_shutdown and resid_tcp_close.
+// only sockets: resid_tcp_listen / resid_tcp_listen_at, resid_tcp_bound_port,
+// resid_tcp_accept_now, resid_tcp_poll, resid_tcp_recv_some,
+// resid_tcp_send_some, resid_tcp_deadline, resid_tcp_shutdown and
+// resid_tcp_close.
 //
 // The connection is a transport, not a file descriptor: `Session(S, C)`
 // from lib/wire.resid for the event loop, and `Wire(T)` for the blocking
 // `http_serve_conn`, with the TLS instances in lib/tlswire.resid. The
 // same handler serves both transports.
 //
-// Capabilities: everything here is `network(readonly)` — accepting and
+// Capabilities: everything here that touches a socket is
+// `network(readonly)` — accepting and
 // answering connections on a listener you already hold is reading from the
 // network — except `http_listen_at`, which exposes a port on an address
 // other machines can reach and so needs the full `network` grant.
@@ -30,54 +32,60 @@
 
 import "wire.resid";
 
-// A parsed request. `headers` keys are lower-cased; repeated fields are
-// joined with ", ". `ok` is false when the request was rejected, with
-// `status` the code the connection was answered with (400, 413, 431, 501, 505).
+/// A parsed request, as a handler receives it.
+/// `headers` keys are lower-cased; repeated fields are joined with ", ".
+/// `ok` is false when the request was rejected, with `status` the code the
+/// connection was answered with (400, 413, 431, 501, 505).
 type HttpRequest = {
     Str method; Str target; Str path; Str query; Str version;
     Map(Str, Str) headers; List(Int) body;
     Bool keep_alive; Bool ok; Int status;
 };
 
-// What a handler returns. `headers` are complete "Name: value" lines without
-// CRLF; Content-Length and Connection are added by the writer.
+/// A whole reply, as a handler returns it.
+/// `headers` are complete "Name: value" lines without CRLF; Content-Length
+/// and Connection are added by the writer.
 type HttpReply = { Int status; List(Str) headers; List(Int) body; };
 
-// Bounds a connection is held to. `request_ms` is how long a client has
-// to deliver each whole request, head and body, from when the server
-// starts waiting for it, and `reply_ms` how long it has to take each
-// reply; 0 leaves only the socket's 30 s per read or blocked send. So a
-// client that trickles bytes, idles between keep-alive requests, or never
-// reads cannot hold a worker. The handler's own time is not counted.
-// `open_max` is how many connections one accept loop holds at once; past
-// it, the one that has waited longest for its request is dropped to make
-// room, so connections that only wait cannot keep new ones out.
+/// The bounds a connection is held to; `http_limits` gives the defaults.
+/// `head_max` and `body_max` are byte limits (431 and 413 past them), and
+/// `requests_max` the requests answered on one connection. `request_ms` is
+/// how long a client has to deliver each whole request, head and body, from
+/// when the server starts waiting for it, and `reply_ms` how long it has to
+/// take each reply; 0 leaves only the socket's 30 s per read or blocked
+/// send. So a client that trickles bytes, idles between keep-alive
+/// requests, or never reads cannot hold a worker. The handler's own time is
+/// not counted. `open_max` is how many connections one accept loop holds at
+/// once; past it, the one that has waited longest for its request is
+/// dropped to make room, so connections that only wait cannot keep new
+/// ones out.
 type HttpLimits = { Int head_max; Int body_max; Int requests_max; Int request_ms; Int reply_ms; Int open_max; };
 
-// 64 KiB of head, 8 MiB of body, 1000 requests per connection, 30 s to
-// send each request, 60 s to take each reply, 1024 open connections.
+/// The default limits.
+/// 64 KiB of head, 8 MiB of body, 1000 requests per connection, 30 s to
+/// send each request, 60 s to take each reply, 1024 open connections.
 pub HttpLimits http_limits() {
     return HttpLimits { .head_max = 65536, .body_max = 8388608, .requests_max = 1000, .request_ms = 30000, .reply_ms = 60000, .open_max = 1024 };
 }
 
 // ─── Listening ──────────────────────────────────────────────────────────
 
-// A loopback listener on `port` (0 = any free port), or -1.
+/// A loopback listener on `port` (0 = any free port), or -1.
 @requires(network(readonly))
 pub Int http_listen(Int port) { return resid_tcp_listen(port); }
 
-// A listener on `host`:`port` where `host` is an interface address such
-// as "0.0.0.0", or -1. Exposing a port is a network write.
+/// A listener on `host`:`port` where `host` is an interface address such
+/// as "0.0.0.0", or -1. Exposing a port is a network write.
 @requires(network)
 pub Int http_listen_at(Str host, Int port) { return resid_tcp_listen_at(host, port); }
 
-// The port a listener bound, or -1.
+/// The port a listener bound, or -1.
 @requires(network(readonly))
 pub Int http_bound_port(Int lfd) { return resid_tcp_bound_port(lfd); }
 
 // ─── Bytes and text ─────────────────────────────────────────────────────
 
-// UTF-8 bytes of a Str.
+/// The UTF-8 bytes of `s`.
 pub List(Int) http_bytes(Str s) { return hs_enc_at(s, 0, str_len(s), ListBuf()); }
 
 List(Int) hs_enc_at(Str s, Int i, Int n, ListBuf(Int) acc) {
@@ -92,7 +100,8 @@ ListBuf(Int) hs_enc_cp(ListBuf(Int) b, Int c) {
     return b.push(240 | (c >> 18)).push(128 | ((c >> 12) & 63)).push(128 | ((c >> 6) & 63)).push(128 | (c & 63));
 }
 
-// Bytes [i, e) decoded as UTF-8; a malformed sequence decodes to U+FFFD.
+/// Bytes [`i`, `e`) of `b` decoded as UTF-8.
+/// Each malformed or truncated sequence's lead byte decodes to U+FFFD.
 pub Str http_text(List(Int) b, Int i, Int e) { return hs_dec_at(b, i, e, StrBuf()); }
 
 Str hs_dec_at(List(Int) b, Int i, Int e, StrBuf acc) {
@@ -138,13 +147,12 @@ Bool hs_match_at(List(Int) b, List(Int) pat, Int at, Int j, Int m) {
 
 // ─── Reading from the socket ────────────────────────────────────────────
 
-// A buffer of bytes read ahead of what has been consumed, and the
-// transport they came from: a TLS connection advances a record counter
-// and leaves record bytes buffered on the way, so the buffer has to carry
-// it or those bytes are lost. `eof` is set once the peer closed, the
-// receive timed out, or the transport could not make sense of what came
-// next -- a record that fails its tag ends the connection rather than
-// becoming request bytes.
+/// Bytes read ahead of what has been consumed, with the transport they
+/// came from: a TLS connection advances a record counter and leaves record
+/// bytes buffered on the way, so the buffer has to carry it or those bytes
+/// are lost. `eof` is set once the peer closed, the receive timed out, or
+/// the transport could not make sense of what came next -- a record that
+/// fails its tag ends the connection rather than becoming request bytes.
 type HsBuf(T) = { T conn; List(Int) data; Bool eof; };
 
 // Read until `b` holds at least `want` bytes, the peer is done, or the
@@ -162,11 +170,14 @@ HsBuf(T) hs_fill(HsBuf(T) b, Int want, Int cap) {
     return hs_fill(out, want, cap);
 }
 
+/// A buffer and where its head or line ends.
+/// `end` is the index of the terminator, -1 at EOF without one, -2 past
+/// the size bound.
+type HsHead(T) = { HsBuf(T) buf; Int end; };
+
 // Where the head ends (index of its CRLFCRLF), reading as needed. -1 at
 // EOF without one, -2 when the head would exceed `head_max`. `from` is
 // where the search resumes (nothing before it can hold the terminator).
-type HsHead(T) = { HsBuf(T) buf; Int end; };
-
 @requires(network(readonly))
 @needs(Wire(T))
 HsHead(T) hs_read_head(HsBuf(T) b, Int from, Int head_max) {
@@ -312,7 +323,7 @@ Bool hs_cl_agree(List(Str) cls, Int i, Str first) {
     return hs_cl_agree(cls, i + 1, first);
 }
 
-// A request with its body read, plus the bytes left over for the next one.
+/// A request with its body read, plus the bytes left over for the next one.
 type HsReq(T) = { HttpRequest req; HsBuf(T) rest; };
 
 @needs(Wire(T))
@@ -432,6 +443,7 @@ HsReq(T) hs_read_request(HsBuf(T) b0, HttpLimits lim) {
 
 // ─── Replies ────────────────────────────────────────────────────────────
 
+/// The standard reason phrase for status `code`, or "Unknown".
 pub Str http_reason(Int code) {
     if (code == 200) { return "OK"; }
     if (code == 201) { return "Created"; }
@@ -458,27 +470,27 @@ pub Str http_reason(Int code) {
     return "Unknown";
 }
 
-// A reply with a text body.
+/// A reply with `body` as UTF-8 and a Content-Type of `content_type`.
 pub HttpReply http_reply_text(Int status, Str content_type, Str body) {
     return HttpReply { .status = status, .headers = ["Content-Type: " + content_type], .body = http_bytes(body) };
 }
 
-// A reply with a byte body.
+/// A reply with the bytes `body` and a Content-Type of `content_type`.
 pub HttpReply http_reply_bytes(Int status, Str content_type, List(Int) body) {
     return HttpReply { .status = status, .headers = ["Content-Type: " + content_type], .body = body };
 }
 
-// A bodyless reply.
+/// A reply with no headers and no body.
 pub HttpReply http_reply_empty(Int status) {
     return HttpReply { .status = status, .headers = [], .body = [] };
 }
 
-// `reply` with one more header line.
+/// `reply` with one more header line.
 pub HttpReply http_with_header(HttpReply reply, Str name, Str value) {
     return HttpReply { .status = reply.status, .headers = reply.headers.concat([name + ": " + value]), .body = reply.body };
 }
 
-// The plain-text error page for a status.
+/// A plain-text page for `status`: the code and its reason phrase.
 pub HttpReply http_reply_status(Int status) {
     return http_reply_text(status, "text/plain; charset=utf-8", f"{status} " + http_reason(status) + "\n");
 }
@@ -488,8 +500,9 @@ Str hs_header_lines(List(Str) hs, Int i, StrBuf acc) {
     return hs_header_lines(hs, i + 1, acc.push(hs[i]).push("\r\n"));
 }
 
-// The wire bytes of a reply. A HEAD reply and a 204/304 carry no body;
-// Content-Length still names the body's length.
+/// The HTTP/1.1 wire bytes of `reply`, with Content-Length and Connection.
+/// `keep_alive` picks the Connection value. A HEAD reply (`head_only`) and
+/// a 1xx, 204 or 304 carry no body; Content-Length still names its length.
 pub List(Int) http_reply_wire(HttpReply reply, Bool keep_alive, Bool head_only) {
     Int n = reply.body.len();
     Str conn = if (keep_alive) { "keep-alive" } else { "close" };
@@ -500,7 +513,8 @@ pub List(Int) http_reply_wire(HttpReply reply, Bool keep_alive, Bool head_only) 
     return if (bodyless) { http_bytes(head) } else { http_bytes(head).concat(reply.body) };
 }
 
-// Write every byte of `b` through the connection's transport.
+/// Write every byte of `b` through the connection's transport.
+/// The result carries the advanced connection and whether it all went out.
 @requires(network(readonly))
 @needs(Wire(T))
 pub WireOut(T) http_send(T conn, List(Int) b) {
@@ -509,16 +523,17 @@ pub WireOut(T) http_send(T conn, List(Int) b) {
 
 // ─── Serving ────────────────────────────────────────────────────────────
 
-// End a connection through its transport: the reply is already out, so
-// what is left is to say goodbye without resetting the socket under it.
+/// End a connection through its transport: the reply is already out, so
+/// what is left is to say goodbye without resetting the socket under it.
 @requires(network(readonly))
 @needs(Wire(T))
 pub Bool http_close(T conn) {
     return wire_close(conn);
 }
 
-// Answer requests on one connection until it closes or a bound is hit.
-// Returns the number answered.
+/// Answer requests on one blocking connection until it closes or a bound
+/// is hit. Returns the number answered, refusals included. The connection
+/// is not closed here.
 @requires(network(readonly))
 @needs(Wire(T))
 pub Int http_serve_conn(T conn, HttpReply closure(HttpRequest) handler, HttpLimits lim) {
@@ -572,10 +587,11 @@ Int hs_serve_at(T conn, HttpReply closure(HttpRequest) handler, HttpLimits lim, 
 // so a request that arrives a byte at a time costs linear work, not
 // quadratic.
 
-// How far `inb` has been checked. `head_end` is the head's CRLFCRLF once
-// found; `end` where the request ends when its length is known; `cpos`
-// and `cstate` the chunk scanner (0 size line, 1 chunk data, 2 trailer);
-// `ready` once the request is whole or one the parser will refuse.
+/// How far a connection's input bytes have been checked for a whole request.
+/// `head_end` is the head's CRLFCRLF once found; `end` where the request
+/// ends when its length is known; `cpos` and `cstate` the chunk scanner
+/// (0 size line, 1 chunk data, 2 trailer); `ready` once the request is
+/// whole or one the parser will refuse.
 type HsFrame = { Int scan; Int head_end; Int end; Int cpos; Int cstate; Int total; Int lines; Bool ready; };
 
 HsFrame hs_frame_new() {
@@ -590,6 +606,7 @@ HsFrame hs_frame_chunk(HsFrame f, Int cpos, Int cstate, Int total, Int lines) {
     return HsFrame { .scan = f.scan, .head_end = f.head_end, .end = f.end, .cpos = cpos, .cstate = cstate, .total = total, .lines = lines, .ready = false };
 }
 
+/// The framing of request bytes `b`, resumed from `f`; used by the event loop.
 pub HsFrame hs_frame(List(Int) b, HsFrame f, HttpLimits lim) {
     if (f.ready) { return f; }
     Int n = b.len();
@@ -653,9 +670,9 @@ HsFrame hs_chunks(List(Int) b, HsFrame f, HttpLimits lim) {
     return hs_chunks(b, hs_frame_chunk(f, at + 2 + size + 2, 1, f.total + size, f.lines), lim);
 }
 
-// A request already in memory, read by the same parser as a socket: the
-// transport reports any read past the buffer as `starved`, which the
-// framing above should make impossible.
+/// The in-memory transport that lets the socket parser read a framed request.
+/// Any read past the buffer is reported as `starved`, which the framing
+/// above should make impossible.
 type HsMem = { Bool starved; };
 
 WireIn(HsMem) hs_mem_fill(HsMem m, List(Int) have, Int want, Int cap) {
@@ -676,22 +693,26 @@ Wire(HsMem) = { .wire_fill = hs_mem_fill, .wire_send = hs_mem_send, .wire_close 
 // still needs no clock. A stream ends when a step is `done` or the
 // client goes away.
 
-// One step of a stream. `wait_ms` <= 0 waits for nothing but the client.
+/// One step of a stream: bytes to send, the state to resume from, and the
+/// wait before the next step. `wait_ms` <= 0 waits for nothing but the
+/// client; `done` ends the stream after `out`.
 type HttpStep(K) = { K state; List(Int) out; Int wait_ms; Bool done; };
 
-// A streamed reply: its head, the first step and the function that makes
-// each step after it. No Content-Length: over HTTP/1.1 the body is
-// chunked, so the connection can be kept; over HTTP/1.0 it ends at close.
+/// A streamed reply: its head, the first step and the function that makes
+/// each step after it. No Content-Length: over HTTP/1.1 the body is
+/// chunked, so the connection can be kept; over HTTP/1.0 it ends at close.
 type HttpStream(K) = { Int status; List(Str) headers; HttpStep(K) first; HttpStep(K) closure(K) next; };
 
-// What a streaming handler returns.
+/// What a streaming handler returns: a whole reply or a stream.
+/// A HEAD request gets only a stream's head.
 type HttpOut(K) = Whole(HttpReply) | Stream(HttpStream(K));
 
-// A step that leaves the stream open, and one that ends it.
+/// A step that sends `out` and keeps the stream open, waiting `wait_ms`.
 pub HttpStep(K) http_step(K state, List(Int) out, Int wait_ms) {
     return HttpStep { .state = state, .out = out, .wait_ms = wait_ms, .done = false };
 }
 
+/// A step that sends `out` and ends the stream.
 pub HttpStep(K) http_step_end(K state, List(Int) out) {
     return HttpStep { .state = state, .out = out, .wait_ms = 0, .done = true };
 }
@@ -708,13 +729,13 @@ List(Int) hs_stream_head(HttpStream(K) s, Bool chunked, Bool keep) {
     return http_bytes(f"HTTP/1.1 {s.status} " + http_reason(s.status) + "\r\n" + hs_header_lines(s.headers, 0, StrBuf()) + te + conn + "\r\n");
 }
 
-// A stream in progress on a connection.
+/// A stream in progress on a connection.
 type HsLive(K) = { K state; HttpStep(K) closure(K) next; Int wait_ms; Bool chunked; Bool keep; };
 
-// One connection in the loop. `phase` 0 reads a request, 1 writes a
-// reply and then reads again, 2 writes the last reply, 3 drains after
-// a half-close, 4 is to be closed, 5 streams (`live`). `outb[out_at..]`
-// is still to send.
+/// One connection held by the event loop.
+/// `phase` 0 reads a request, 1 writes a reply and then reads again, 2
+/// writes the last reply, 3 drains after a half-close, 4 is to be closed,
+/// 5 streams (`live`). `outb[out_at..]` is still to send.
 type HsConn(S, K) = {
     Int fd; Int seq; S sess;
     List(Int) inb; HsFrame frame;
@@ -947,6 +968,8 @@ List(HsConn(S, K)) hs_ev_admit(List(HsConn(S, K)) cs, HsConn(S, K) c, HttpLimits
     return hs_ev_without(cs, old, 0, start).concat([c]);
 }
 
+/// What one round of accepting leaves: the connections, the count accepted
+/// so far, and whether the listener still works.
 type HsAccepted(S, K) = { List(HsConn(S, K)) conns; Int accepted; Bool open; };
 
 // Take what is waiting on the listener, up to `budget` at a time.
@@ -988,12 +1011,12 @@ Int hs_ev_loop(Int lfd, C conf, HttpOut(K) closure(HttpRequest) handler, HttpLim
     return hs_ev_loop(lfd, conf, handler, lim, max_conns, got.conns, got.accepted, got.open);
 }
 
-// Accept connections on the socket `lfd` and serve them all at once from
-// one event loop, through the session `C` configures, with a handler that
-// may stream; `max_conns` 0 means until the listener fails. Several loops
-// may share one listener, each in its own region: the kernel hands each
-// connection to one of them, and none of them blocks in accept. Returns
-// connections accepted.
+/// Accept connections on the socket `lfd` and serve them all at once from
+/// one event loop, through the session `C` configures, with a handler that
+/// may stream; `max_conns` 0 means until the listener fails. Several loops
+/// may share one listener, each in its own region: the kernel hands each
+/// connection to one of them, and none of them blocks in accept. Returns
+/// connections accepted.
 @needs(Session(S, C))
 @requires(network(readonly))
 pub Int http_stream_loop_where(Int lfd, C conf, HttpOut(K) closure(HttpRequest) handler, HttpLimits lim, Int max_conns) {
@@ -1001,13 +1024,16 @@ pub Int http_stream_loop_where(Int lfd, C conf, HttpOut(K) closure(HttpRequest) 
     return hs_ev_loop(lfd, conf, handler, lim, max_conns, none, 0, true);
 }
 
-// The same over plain connections.
+/// Serve plain connections on `lfd` from one event loop, streaming allowed.
+/// As `http_stream_loop_where` over plain TCP; returns connections accepted.
 @requires(network(readonly))
 pub Int http_stream_loop(Int lfd, HttpOut(K) closure(HttpRequest) handler, HttpLimits lim, Int max_conns) {
     return http_stream_loop_where(lfd, plain_cfg(), handler, lim, max_conns);
 }
 
-// The event loop with a handler that always answers whole.
+/// Serve connections on `lfd` through the session `conf` from one event loop.
+/// As `http_stream_loop_where`, with a handler that always answers whole;
+/// returns connections accepted.
 @needs(Session(S, C))
 @requires(network(readonly))
 pub Int http_accept_loop_where(Int lfd, C conf, HttpReply closure(HttpRequest) handler, HttpLimits lim, Int max_conns) {
@@ -1015,7 +1041,9 @@ pub Int http_accept_loop_where(Int lfd, C conf, HttpReply closure(HttpRequest) h
     return http_stream_loop_where(lfd, conf, whole, lim, max_conns);
 }
 
-// Accept plain connections and serve them.
+/// Serve plain connections on `lfd` from one event loop with `handler`.
+/// `max_conns` 0 means until the listener fails; returns connections
+/// accepted.
 @requires(network(readonly))
 pub Int http_accept_loop(Int lfd, HttpReply closure(HttpRequest) handler, HttpLimits lim, Int max_conns) {
     return http_accept_loop_where(lfd, plain_cfg(), handler, lim, max_conns);
@@ -1023,15 +1051,16 @@ pub Int http_accept_loop(Int lfd, HttpReply closure(HttpRequest) handler, HttpLi
 
 // ─── Request helpers ────────────────────────────────────────────────────
 
-// A header's value ("" when absent); `name` in any case.
+/// A header's value ("" when absent); `name` in any case.
 pub Str http_header(HttpRequest r, Str name) {
     return r.headers.get(str_to_lower(name)) else { "" };
 }
 
-// The request body as text.
+/// The request body decoded as UTF-8.
 pub Str http_body_text(HttpRequest r) { return http_text(r.body, 0, r.body.len()); }
 
-// Percent-decoding; `+` becomes a space when `form` is set.
+/// `s` percent-decoded and read as UTF-8; `+` becomes a space when `form`.
+/// A `%` not followed by two hex digits is kept as is.
 pub Str http_url_decode(Str s, Bool form) { return hs_dec_url(s, 0, str_len(s), form, ListBuf()); }
 
 Str hs_dec_url(Str s, Int i, Int n, Bool form, ListBuf(Int) acc) {
@@ -1048,7 +1077,8 @@ Str hs_dec_url(Str s, Int i, Int n, Bool form, ListBuf(Int) acc) {
     return hs_dec_url(s, i + 1, n, form, hs_enc_cp(acc, c));
 }
 
-// The first value of `name` in a query string ("" when absent).
+/// The first value of `name` in `query` ("" when absent).
+/// Keys and values are form-decoded.
 pub Str http_query_param(Str query, Str name) {
     return hs_query_at(str_split(query, "&"), 0, name);
 }
@@ -1066,8 +1096,8 @@ Str hs_query_at(List(Str) pairs, Int i, Str name) {
 
 // ─── Routing ────────────────────────────────────────────────────────────
 
-// Match `path` against `pattern`, where a segment `:name` captures one
-// path segment and a trailing `*` the rest. The captures by name, or None.
+/// Match `path` against `pattern`, where a segment `:name` captures one
+/// path segment and a trailing `*` the rest. The captures by name, or None.
 pub Option(Map(Str, Str)) http_route(Str pattern, Str path) {
     Map(Str, Str) none = {};
     return hs_route_at(str_split(pattern, "/"), str_split(path, "/"), 0, none);

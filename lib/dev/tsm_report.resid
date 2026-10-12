@@ -44,26 +44,28 @@ import "device.resid";
 
 // -- Descriptor ---------------------------------------------------------------
 
-// The maxima are each provider's largest, from the drivers: a TDX quote is
-// at most GET_QUOTE_BUF_SIZE (128 KiB) less its header; an SNP report fits
-// 4 KiB and its certificate table SEV_FW_BLOB_MAX_SIZE (16 KiB); an SVSM
-// manifest grows past 4 KiB only on a retry the SVSM asks for (64 KiB is
-// room). A CCA token is at most what the RMM says at RSI_ATTEST_TOKEN_INIT
-// (arm_cca_report_new allocates that much; the kernel sets no cap of its
-// own but TSM_REPORT_OUTBLOB_MAX): TF-RMM (git.trustedfirmware.org
-// TF-RMM/tf-rmm 2e198822, cmake/CommonConfigs.cmake, app/attestation/
-// rmm_stub/include/attest_defs.h) holds the token in RMM_CCA_TOKEN_BUFFER
-// pages of 4 KiB, 1 by default, so 128 KiB covers an RMM built with up to
-// 32; a larger token is Err(TooLong).
+/// The configfs report descriptor for /sys/kernel/config/tsm/report.
+/// The maxima are each provider's largest, from the drivers: a TDX quote is
+/// at most GET_QUOTE_BUF_SIZE (128 KiB) less its header; an SNP report fits
+/// 4 KiB and its certificate table SEV_FW_BLOB_MAX_SIZE (16 KiB); an SVSM
+/// manifest grows past 4 KiB only on a retry the SVSM asks for (64 KiB is
+/// room). A CCA token is at most what the RMM says at RSI_ATTEST_TOKEN_INIT
+/// (arm_cca_report_new allocates that much; the kernel sets no cap of its
+/// own but TSM_REPORT_OUTBLOB_MAX): TF-RMM (git.trustedfirmware.org
+/// TF-RMM/tf-rmm 2e198822, cmake/CommonConfigs.cmake, app/attestation/
+/// rmm_stub/include/attest_defs.h) holds the token in RMM_CCA_TOKEN_BUFFER
+/// pages of 4 KiB, 1 by default, so 128 KiB covers an RMM built with up to
+/// 32; a larger token is Err(TooLong).
 pub ConfigfsReport tsm_report_op() {
     return ConfigfsReport {.name = "tsm_report.report", .path = "/sys/kernel/config/tsm/report", .providers = ["sev_guest", "tdx_guest", "arm_cca_guest"], .max_inblob = 64, .max_outblob = 131072, .max_auxblob = 16384, .max_manifestblob = 65536, .write = false, .stability = Uapi};
 }
 
 // -- Platforms ------------------------------------------------------------------
 
+/// The confidential-computing platform a report came from.
 type TsmPlatform = SevSnp | IntelTdx | ArmCca;
 
-// The platform a provider name stands for.
+/// The platform a provider name stands for, or None for an unknown name.
 pub Option(TsmPlatform) tsm_platform(Str provider) {
     if (provider == "sev_guest") { return Some(SevSnp); }
     if (provider == "tdx_guest") { return Some(IntelTdx); }
@@ -71,11 +73,12 @@ pub Option(TsmPlatform) tsm_platform(Str provider) {
     return None;
 }
 
+/// The platform's display name, such as "AMD SEV-SNP".
 pub Str tsm_platform_text(TsmPlatform p) {
     return match (p) { SevSnp => "AMD SEV-SNP", IntelTdx => "Intel TDX", ArmCca => "Arm CCA", };
 }
 
-// What outblob holds on the platform.
+/// What outblob holds on the platform.
 pub Str tsm_outblob_text(TsmPlatform p) {
     return match (p) {
         SevSnp => "SNP attestation report (signed by the AMD secure processor)",
@@ -102,24 +105,34 @@ pub Str tsm_outblob_text(TsmPlatform p) {
 // service_provider "svsm" (Secure VM Service Module for SEV-SNP Guests
 // 1.00, section 7; configfs-tsm-report, service_guid and
 // service_manifest_version).
+
+/// The optional attributes of a report request besides `inblob`.
+/// -1 or "" leaves a field unwritten; all four have meaning only on SNP.
 type TsmOpts = { Int privlevel; Str service_provider; Str service_guid; Int service_manifest_version; };
 
+/// No options: every attribute left at the kernel's default.
 pub TsmOpts tsm_opts() { return TsmOpts {.privlevel = 0 - 1, .service_provider = "", .service_guid = "", .service_manifest_version = 0 - 1}; }
+/// A report at SNP privilege level `vmpl` (0 to 3), nothing else written.
 pub TsmOpts tsm_opts_vmpl(Int vmpl) { return TsmOpts {.privlevel = vmpl, .service_provider = "", .service_guid = "", .service_manifest_version = 0 - 1}; }
+/// A report from the SVSM covering all of its services.
 pub TsmOpts tsm_opts_svsm() { return TsmOpts {.privlevel = 0 - 1, .service_provider = "svsm", .service_guid = "", .service_manifest_version = 0 - 1}; }
 
-// One SVSM service, by GUID (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx), with
-// its manifest in `version` (-1 for the service's default).
+/// One SVSM service, by GUID (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx), with
+/// its manifest in `version` (-1 for the service's default).
 pub TsmOpts tsm_opts_svsm_service(Str guid, Int version) { return TsmOpts {.privlevel = 0 - 1, .service_provider = "svsm", .service_guid = guid, .service_manifest_version = version}; }
 
 // -- The report -----------------------------------------------------------------
 
-// One report. `outblob` is the evidence; `auxblob` and `manifestblob` are
-// empty when the provider has none.
+/// One report from the kernel's TSM, with its provider and platform.
+/// `outblob` is the evidence; `auxblob` and `manifestblob` are empty when
+/// the provider has none. `generation` is the kernel's unsigned counter.
 type TsmReport = { Str provider; TsmPlatform platform; List(UInt(8)) outblob; List(UInt(8)) auxblob; List(UInt(8)) manifestblob; Int generation; };
 
-// A report bound to `report_data` (64 bytes: put the verifier's nonce, or
-// a hash over it and anything else to bind, here).
+/// A report bound to `report_data` (64 bytes: put the verifier's nonce, or
+/// a hash over it and anything else to bind, here).
+/// Err(BadInput) for malformed `report_data` or `opts`; Err(Unsupported)
+/// when options were asked of a provider other than sev_guest.
+/// Needs device(readonly).
 @requires(device(readonly))
 pub Result(TsmReport, DeviceError) tsm_report_get(List(UInt(8)) report_data, TsmOpts opts) {
     Str name = "tsm_report.report";
@@ -135,8 +148,8 @@ pub Result(TsmReport, DeviceError) tsm_report_get(List(UInt(8)) report_data, Tsm
     return tsm_report_honoured(name, r, opts);
 }
 
-// A report asked for with a privlevel or a service provider is one only
-// sev_guest honours.
+/// `r` itself, or Err(Unsupported) when `opts` asked for a privlevel or an
+/// SVSM service and the provider is not sev_guest (only it honours them).
 pub Result(TsmReport, DeviceError) tsm_report_honoured(Str name, TsmReport r, TsmOpts opts) {
     Bool asked = opts.privlevel >= 0 || opts.service_provider != "" || opts.service_guid != "" || opts.service_manifest_version >= 0;
     Bool snp = match (r.platform) { SevSnp => true, IntelTdx => false, ArmCca => false, };
@@ -144,11 +157,11 @@ pub Result(TsmReport, DeviceError) tsm_report_honoured(Str name, TsmReport r, Ts
     return Ok(r);
 }
 
-// The engine's outputs -- outblob, auxblob, manifestblob, provider (its
-// text without the newline), generation -- as a TsmReport. The engine has
-// checked the lengths and that the provider is one the descriptor lists;
-// this checks it again (the text is printable ASCII naming a known
-// platform) and that there is a report at all.
+/// The engine's outputs -- outblob, auxblob, manifestblob, provider (its
+/// text without the newline), generation -- as a TsmReport. The engine has
+/// checked the lengths and that the provider is one the descriptor lists;
+/// this checks it again (the text is printable ASCII naming a known
+/// platform) and that there is a report at all.
 pub Result(TsmReport, DeviceError) tsm_report_decode(Str name, Option(List(UInt(8))) out, Option(List(UInt(8))) aux, Option(List(UInt(8))) man, Option(List(UInt(8))) prov, Option(Int) gen) {
     List(UInt(8)) o = ts_need(name, out, "outblob")?;
     List(UInt(8)) a = ts_need(name, aux, "auxblob")?;
@@ -165,7 +178,8 @@ Result(List(UInt(8)), DeviceError) ts_need(Str name, Option(List(UInt(8))) b, St
     return match (b) { Some(x) => Ok(x), None => Err(BadReply(name, "no " + what)), };
 }
 
-// A GUID's text: 36 characters, hex digits with dashes at 8, 13, 18, 23.
+/// True when `g` is GUID text: 36 characters, hex digits (either case)
+/// with dashes at 8, 13, 18 and 23.
 pub Bool ts_guid_text_ok(Str g) {
     if (str_len(g) != 36) { return false; }
     return ts_guid_chars(g, 0);
@@ -189,10 +203,6 @@ Option(Str) ts_ascii(List(UInt(8)) b, Int i, Str acc) {
 
 // -- SNP certificate table ------------------------------------------------------
 
-// One entry of the SNP extended report's certificate table (auxblob on
-// sev_guest): its GUID as text and the certificate's bytes (DER; PEM or
-// DER for the CRL, as the host supplied it).
-//
 // The GUID's 16 bytes are in RFC 4122 order (the text's hex digits in
 // sequence, no field swapped), as both the table's writers and its readers
 // lay it out: virtee/sev (github.com/virtee/sev a966d06d,
@@ -201,6 +211,10 @@ Option(Str) ts_ascii(List(UInt(8)) b, Int i, Str acc) {
 // copies the 16 bytes into a uuid.UUID). The kernel's struct
 // snp_msg_cert_entry (drivers/virt/coco/sev-guest/sev-guest.c) types it
 // guid_t but only tests it for null, so it fixes no order.
+
+/// One entry of the SNP extended report's certificate table (auxblob on
+/// sev_guest): its GUID as text and the certificate's bytes (DER; PEM or
+/// DER for the CRL, as the host supplied it).
 type SnpCert = { Str guid; List(UInt(8)) cert; };
 
 // The GUIDs of the certificate table: AMD's root key, the AMD SEV key, the
@@ -210,16 +224,23 @@ type SnpCert = { Str guid; List(UInt(8)) cert; };
 // so the strings are taken from two implementations that agree on them:
 // virtee/sev a966d06d (src/firmware/host/types/snp.rs, CertType: all
 // five) and google/go-sev-guest 9c5dffcd (abi/abi.go: all but the CRL).
+
+/// The certificate-table GUID of the AMD root key (ARK).
 pub Str snp_guid_ark() { return "c0b406a4-a803-4952-9743-3fb6014cd0ae"; }
+/// The certificate-table GUID of the AMD SEV key (ASK).
 pub Str snp_guid_ask() { return "4ab7b379-bbac-4fe4-a02f-05aef327c782"; }
+/// The certificate-table GUID of the chip's VCEK.
 pub Str snp_guid_vcek() { return "63da758d-e664-4564-adc5-f4b93be8accd"; }
+/// The certificate-table GUID of the VLEK.
 pub Str snp_guid_vlek() { return "a8074bc2-a25a-483e-aae6-39c045a0b8a1"; }
+/// The certificate-table GUID of the certificate revocation list.
 pub Str snp_guid_crl() { return "92f81bc3-5811-4d3d-97ff-d19f88dc67ea"; }
 
-// The table: entries of { guid_t guid; u32 offset; u32 length; }
-// (struct snp_msg_cert_entry, 24 bytes, little endian), offsets from the
-// table's start, ended by an all-zero entry (or the end of the buffer).
-// Total: an entry that points outside the table is Err, never an abort.
+/// The entries of an SNP certificate table, in order.
+/// The table: entries of { guid_t guid; u32 offset; u32 length; }
+/// (struct snp_msg_cert_entry, 24 bytes, little endian), offsets from the
+/// table's start, ended by an all-zero entry (or the end of the buffer).
+/// Total: an entry that points outside the table is Err, never an abort.
 pub Result(List(SnpCert), Str) tsm_snp_certs(List(UInt(8)) table) {
     return ts_certs(table, 0, []);
 }
@@ -258,7 +279,7 @@ Str ts_hex(List(UInt(8)) r, List(Int) idx, Int i, Str acc) {
     return ts_hex(r, idx, i + 1, acc + f"{(Int)r[idx[i]]:hex, zero, width 2}");
 }
 
-// The certificate a GUID names, when the table has it.
+/// The certificate a GUID names, when the table has it.
 pub Option(List(UInt(8))) tsm_snp_cert(List(SnpCert) certs, Str guid) {
     for (SnpCert c in certs) { if (c.guid == guid) { return Some(c.cert); } }
     return None;

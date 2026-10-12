@@ -36,10 +36,15 @@ import "sha512g.resid";
 
 // ─── Constants ───────────────────────────────────────────────────────
 
+/// The length of a field element or scalar in bytes (48).
 pub Int p384_bytes() { return 48; }
+/// The field prime p of NIST P-384 (secp384r1).
 pub UInt(832) p384_p() { return 39402006196394479212279040100143613805079739270465446667948293404245721771496870329047266088258938001861606973112319; }
+/// The order n of the base point of NIST P-384 (secp384r1).
 pub UInt(832) p384_n() { return 39402006196394479212279040100143613805079739270465446667946905279627659399113263569398956308152294913554433653942643; }
+/// The base point's x coordinate.
 pub UInt(832) p384_gx() { return 26247035095799689268623156744566981891852923491109213387815615900925518854738050089022388053975719786650872476732087; }
+/// The base point's y coordinate.
 pub UInt(832) p384_gy() { return 8325710961489029985546751289520108179287853048861315594709205902480503199884419224438643760392947333078086511627871; }
 // -p^-1 and -n^-1 mod R
 UInt(832) p384_pinv() { return 183479889321925461653251752109332205360611897149516305954304919627392402791262062194444675036228396293029889; }
@@ -64,9 +69,10 @@ UInt(832) p384_ones() { return 2863890391847496120441878393367483849072173917217
 UInt(832) p384_zero() { return 0; }
 
 // ─── Field words: public and secret ─────────────────────────────────
-// P384Word(F, B): the 832-bit operations the curve code needs. Arithmetic
-// wraps modulo 2^832; shift amounts and lifted constants are public.
 
+/// The 832-bit word operations the curve code needs, for public words
+/// (`UInt(832)`) and secret ones (`Secret(UInt(832))`). Arithmetic wraps
+/// modulo 2^832; shift amounts and lifted constants are public.
 behavior P384Word(F, B) {
     F p384w_add(F a, F b);
     F p384w_sub(F a, F b);
@@ -128,8 +134,8 @@ P384Word(Secret(UInt(832)), Secret(UInt(8))) = { .p384w_add = p384s_add, .p384w_
 
 // ─── Branch-free helpers ─────────────────────────────────────────────
 
-// 1 when v != 0, else 0 (v < 2^(832-1)): 0 - v has its top bit set
-// exactly when v is nonzero.
+/// 1 when v != 0, else 0 (v < 2^(832-1)): 0 - v has its top bit set
+/// exactly when v is nonzero.
 @needs(P384Word(F, B))
 pub F p384_nonzero(F v) {
     F z = p384w_lift(p384_zero());
@@ -162,22 +168,28 @@ F p384_mont(F a, F b, UInt(832) m, UInt(832) minv) {
 
 // ─── Field (mod p), Montgomery form ──────────────────────────────────
 
+/// The product of two field elements in Montgomery form.
 @needs(P384Word(F, B))
 pub F p384_fmul(F a, F b) { return p384_mont(a, b, p384_p(), p384_pinv()); }
+/// The square of a field element in Montgomery form.
 @needs(P384Word(F, B))
 pub F p384_fsq(F a) { return p384_mont(a, a, p384_p(), p384_pinv()); }
+/// The sum of two field elements mod p (constant-time reduction).
 @needs(P384Word(F, B))
 pub F p384_fadd(F a, F b) { return p384_csub(p384w_add(a, b), p384_p()); }
+/// The difference `a - b` mod p (constant-time reduction).
 @needs(P384Word(F, B))
 pub F p384_fsub(F a, F b) {
     F p = p384w_lift(p384_p());
     return p384_csub(p384w_sub(p384w_add(a, p), b), p384_p());
 }
+/// A field element (below p) converted into Montgomery form.
 @needs(P384Word(F, B))
 pub F p384_fto(F a) {
     F rr = p384w_lift(p384_rrp());
     return p384_fmul(a, rr);
 }
+/// A field element converted out of Montgomery form.
 @needs(P384Word(F, B))
 pub F p384_ffrom(F a) {
     F one = p384w_lift(1);
@@ -195,14 +207,14 @@ F p384_fpow(F a, UInt(832) e, Int i, F acc) {
     return p384_fpow(a, e, i - 1, r);
 }
 
-// 1/a (Fermat, a fixed public exponent); 0 maps to 0.
+/// 1/a (Fermat, a fixed public exponent); 0 maps to 0.
 @needs(P384Word(F, B))
 pub F p384_finv(F a) {
     F one = p384w_lift(p384_one());
     return p384_fpow(a, p384_pm2(), 383, one);
 }
 
-// A square root of a when one exists (check by squaring).
+/// A square root of a when one exists (check by squaring).
 @needs(P384Word(F, B))
 pub F p384_fsqrt(F a) {
     F one = p384w_lift(p384_one());
@@ -211,15 +223,19 @@ pub F p384_fsqrt(F a) {
 
 // ─── Scalars (mod n), Montgomery form ────────────────────────────────
 
+/// The product of two scalars mod n in Montgomery form.
 @needs(P384Word(F, B))
 pub F p384_smul(F a, F b) { return p384_mont(a, b, p384_n(), p384_ninv()); }
+/// The sum of two scalars mod n (constant-time reduction).
 @needs(P384Word(F, B))
 pub F p384_sadd(F a, F b) { return p384_csub(p384w_add(a, b), p384_n()); }
+/// A scalar (below n) converted into Montgomery form mod n.
 @needs(P384Word(F, B))
 pub F p384_sto(F a) {
     F rr = p384w_lift(p384_rrn());
     return p384_smul(a, rr);
 }
+/// A scalar converted out of Montgomery form mod n.
 @needs(P384Word(F, B))
 pub F p384_sfrom(F a) {
     F one = p384w_lift(1);
@@ -235,36 +251,38 @@ F p384_spow(F a, UInt(832) e, Int i, F acc) {
     return p384_spow(a, e, i - 1, r);
 }
 
-// 1/a mod n, both in Montgomery form (Fermat: a^(n-2), a fixed public
-// exponent, so the nonce's inverse takes the same steps for every nonce).
+/// 1/a mod n, both in Montgomery form (Fermat: a^(n-2), a fixed public
+/// exponent, so the nonce's inverse takes the same steps for every nonce).
 @needs(P384Word(F, B))
 pub F p384_sinv(F a) {
     F one = p384w_lift(1);
     return p384_spow(a, p384_nm2(), 383, p384_sto(one));
 }
 
-// A value below 2^384 reduced mod n (2^384 < 2n).
+/// A value below 2^384 reduced mod n (2^384 < 2n).
 @needs(P384Word(F, B))
 pub F p384_reduce_n(F v) { return p384_csub(v, p384_n()); }
 
 // ─── Points ──────────────────────────────────────────────────────────
 
-// Projective, Montgomery-form coordinates; Z = 0 is infinity.
+/// Projective, Montgomery-form coordinates; Z = 0 is infinity.
 pub type P384Pt(F) = { F x; F y; F z; };
 
-// Affine, ordinary integers, public; ok is false for infinity or a bad
-// encoding.
+/// Affine, ordinary integers, public; ok is false for infinity or a bad
+/// encoding.
 pub type P384Aff = { UInt(832) x; UInt(832) y; Bool ok; };
 
-// Affine at F; ok (whether the point is finite) is public.
+/// Affine at F; ok (whether the point is finite) is public.
 pub type P384Xy(F) = { F x; F y; Bool ok; };
 
+/// The point at infinity, in projective coordinates (Z = 0).
 @needs(P384Word(F, B))
 pub P384Pt(F) p384_inf() {
     F z = p384w_lift(0);
     F one = p384w_lift(p384_one());
     return P384Pt {.x = z, .y = one, .z = z};
 }
+/// The base point G, in projective Montgomery coordinates.
 @needs(P384Word(F, B))
 pub P384Pt(F) p384_gen() {
     F x = p384w_lift(p384_gxm());
@@ -273,7 +291,7 @@ pub P384Pt(F) p384_gen() {
     return P384Pt {.x = x, .y = y, .z = one};
 }
 
-// A public affine point entering the computation.
+/// A public affine point entering the computation.
 @needs(P384Word(F, B))
 pub P384Pt(F) p384_from_aff(P384Aff a) {
     F x = p384w_lift(a.x);
@@ -282,7 +300,7 @@ pub P384Pt(F) p384_from_aff(P384Aff a) {
     return P384Pt {.x = p384_fto(x), .y = p384_fto(y), .z = one};
 }
 
-// RCB16 algorithm 4: complete addition, a = -3.
+/// RCB16 algorithm 4: complete addition, a = -3.
 @needs(P384Word(F, B))
 pub P384Pt(F) p384_add(P384Pt(F) p, P384Pt(F) q) {
     F b = p384w_lift(p384_bm());
@@ -309,7 +327,7 @@ pub P384Pt(F) p384_add(P384Pt(F) p, P384Pt(F) q) {
     return P384Pt {.x = x3, .y = y3, .z = z3};
 }
 
-// RCB16 algorithm 6: doubling, a = -3.
+/// RCB16 algorithm 6: doubling, a = -3.
 @needs(P384Word(F, B))
 pub P384Pt(F) p384_dbl(P384Pt(F) p) {
     F b = p384w_lift(p384_bm());
@@ -353,15 +371,15 @@ P384Pt(F) p384_ladder(F k, Int i, P384Pt(F) r, P384Pt(F) p) {
     return p384_ladder(k, i - 1, p384_sel(p384w_mask(p384w_shr(k, i)), p384_add(d, p), d), p);
 }
 
-// k * p for k < 2^384: every bit costs one doubling and one addition.
+/// k * p for k < 2^384: every bit costs one doubling and one addition.
 @needs(P384Word(F, B))
 pub P384Pt(F) p384_mul(F k, P384Pt(F) p) {
     P384Pt(F) z = p384_inf();
     return p384_ladder(k, 383, z, p);
 }
 
-// Back to affine coordinates (no longer Montgomery form). Whether the
-// point is infinity is made public here: every caller rejects it.
+/// Back to affine coordinates (no longer Montgomery form). Whether the
+/// point is infinity is made public here: every caller rejects it.
 @needs(P384Word(F, B))
 pub P384Xy(F) p384_affine(P384Pt(F) p) {
     F zi = p384_finv(p.z);
@@ -377,9 +395,9 @@ F p384_be_acc(List(B) b, Int i, F acc) {
     return p384_be_acc(b, i + 1, p384w_or(p384w_shl(acc, 8), p384w_from_byte(b[i])));
 }
 
-// A big-endian unsigned integer of at most 48 bytes, public or secret
-// (more is refused by every caller before it gets here: this keeps only
-// the low bits).
+/// A big-endian unsigned integer of at most 48 bytes, public or secret
+/// (more is refused by every caller before it gets here: this keeps only
+/// the low bits).
 @needs(P384Word(F, B))
 pub F p384_load(List(B) b) {
     Int skip = if (b.len() > 48) { b.len() - 48 } else { 0 };
@@ -387,6 +405,7 @@ pub F p384_load(List(B) b) {
     return p384_be_acc(b[skip..], 0, z);
 }
 
+/// A public big-endian byte string as an integer (the last 48 bytes).
 pub UInt(832) p384_from_be(List(Int) b) {
     UInt(832) v = p384_load(b);
     return v;
@@ -398,19 +417,20 @@ ListBuf(B) p384_be_out(F v, Int j, ListBuf(B) acc) {
     return p384_be_out(v, j + 1, acc.push(p384w_byte(v, 8 * (48 - 1 - j))));
 }
 
-// v as exactly 48 big-endian bytes, public or secret.
+/// v as exactly 48 big-endian bytes, public or secret.
 @needs(P384Word(F, B))
 pub List(B) p384_store(F v) {
     ListBuf(B) acc = ListBuf();
     return p384_be_out(v, 0, acc).finish();
 }
 
+/// A public integer as exactly 48 big-endian bytes.
 pub List(Int) p384_to_be(UInt(832) v) {
     List(Int) b = p384_store(v);
     return b;
 }
 
-// Whether x, y < p is a point of the curve (ordinary integers).
+/// Whether x, y < p is a point of the curve (ordinary integers).
 pub Bool p384_on_curve(UInt(832) x, UInt(832) y) {
     if (x >= p384_p() || y >= p384_p()) { return false; }
     UInt(832) xm = p384_fto(x);
@@ -420,11 +440,12 @@ pub Bool p384_on_curve(UInt(832) x, UInt(832) y) {
     return p384_fsq(ym) == rhs;
 }
 
+/// The refused point: `ok` is false and the coordinates are zero.
 pub P384Aff p384_bad() { return P384Aff {.x = 0, .y = 0, .ok = false}; }
 
-// SEC 1 §2.3.4: 04 || X || Y, or 02/03 || X (compressed). Anything else,
-// a coordinate >= p, or a point off the curve is refused (ok = false).
-// There is no encoding of infinity: 00 is refused too.
+/// SEC 1 §2.3.4: 04 || X || Y, or 02/03 || X (compressed). Anything else,
+/// a coordinate >= p, or a point off the curve is refused (ok = false).
+/// There is no encoding of infinity: 00 is refused too.
 pub P384Aff p384_decode(List(Int) b) {
     if (b.len() == 1 + 2 * 48 && b[0] == 4) {
         UInt(832) x = p384_from_be(b[1..1 + 48]);
@@ -448,13 +469,13 @@ pub P384Aff p384_decode(List(Int) b) {
     return p384_bad();
 }
 
-// 04 || X || Y.
+/// 04 || X || Y.
 pub List(Int) p384_encode(P384Aff a) { return [4].concat(p384_to_be(a.x)).concat(p384_to_be(a.y)); }
 
 // ─── Keys ────────────────────────────────────────────────────────────
 
-// Whether d is a usable private scalar, 1 <= d < n. The answer is made
-// public: a caller rejects a bad key and that is not a secret.
+/// Whether d is a usable private scalar, 1 <= d < n. The answer is made
+/// public: a caller rejects a bad key and that is not a secret.
 @needs(P384Word(F, B))
 pub Bool p384_scalar_ok(F d) {
     F n = p384w_lift(p384_n());
@@ -463,8 +484,8 @@ pub Bool p384_scalar_ok(F d) {
     return p384w_open(p384w_and(below, p384_nonzero(d))) == 1;
 }
 
-// d * G as a public affine point (ok = false when d is not a usable
-// scalar). Publishing it is the point of a public key.
+/// d * G as a public affine point (ok = false when d is not a usable
+/// scalar). Publishing it is the point of a public key.
 @needs(P384Word(F, B))
 pub P384Aff p384_public(F d) {
     if (!p384_scalar_ok(d)) { return p384_bad(); }
@@ -473,9 +494,9 @@ pub P384Aff p384_public(F d) {
     return P384Aff {.x = p384w_open(a.x), .y = p384w_open(a.y), .ok = a.ok};
 }
 
-// The x-coordinate of d * Q (SEC 1 §3.3.1), 48 bytes, secret when d is;
-// empty when d is unusable, Q is not a valid point, or the product is
-// infinity.
+/// The x-coordinate of d * Q (SEC 1 §3.3.1), 48 bytes, secret when d is;
+/// empty when d is unusable, Q is not a valid point, or the product is
+/// infinity.
 @needs(P384Word(F, B))
 pub List(B) p384_ecdh(F d, P384Aff q) {
     ListBuf(B) eb = ListBuf();
@@ -489,17 +510,18 @@ pub List(B) p384_ecdh(F d, P384Aff q) {
 
 // ─── ECDSA (SEC 1 §4.1, FIPS 186-5) ─────────────────────────────────
 
+/// An ECDSA signature (r, s); `ok` is false for a refused one.
 pub type P384Sig = { Bool ok; UInt(832) r; UInt(832) s; };
 
-// The leftmost 384 bits of a digest as an integer mod n (SEC 1 §4.1.3
-// step 5; n has exactly 384 bits).
+/// The leftmost 384 bits of a digest as an integer mod n (SEC 1 §4.1.3
+/// step 5; n has exactly 384 bits).
 pub UInt(832) p384_bits2int(List(Int) digest) {
     List(Int) lead = if (digest.len() > 48) { digest[0..48] } else { digest };
     return p384_reduce_n(p384_from_be(lead));
 }
 
-// Verify (r, s) over a message digest under the public point q. Every
-// input is public: this runs on the public copy only.
+/// Verify (r, s) over a message digest under the public point q. Every
+/// input is public: this runs on the public copy only.
 pub Bool p384_verify_digest(List(Int) digest, UInt(832) r, UInt(832) s, P384Aff q) {
     if (!q.ok || !p384_on_curve(q.x, q.y)) { return false; }
     if (r == 0 || s == 0 || r >= p384_n() || s >= p384_n()) { return false; }
@@ -513,13 +535,14 @@ pub Bool p384_verify_digest(List(Int) digest, UInt(832) r, UInt(832) s, P384Aff 
     return p384_reduce_n(pt.x) == r;
 }
 
+/// The refused signature: `ok` is false and r and s are zero.
 pub P384Sig p384_sig_bad() { return P384Sig {.ok = false, .r = 0, .s = 0}; }
 
-// Sign a digest with private scalar d and nonce k (both secret at secret
-// types). r and s are published (p384w_open), and so is whether d and k
-// are usable. A k or d outside [1, n-1], or an r or s of zero, gives
-// ok = false: the caller draws another nonce. Prefer p384_sign_digest,
-// whose nonce is RFC 6979's.
+/// Sign a digest with private scalar d and nonce k (both secret at secret
+/// types). r and s are published (p384w_open), and so is whether d and k
+/// are usable. A k or d outside [1, n-1], or an r or s of zero, gives
+/// ok = false: the caller draws another nonce. Prefer p384_sign_digest,
+/// whose nonce is RFC 6979's.
 @needs(P384Word(F, B))
 pub P384Sig p384_sign_k(F d, List(Int) digest, F k) {
     if (!p384_scalar_ok(d) || !p384_scalar_ok(k)) { return p384_sig_bad(); }
@@ -582,7 +605,7 @@ F p384_drbg_k(HashAlg h, List(B) kk, List(B) v, Int tries) {
     return p384_drbg_k(h, kk2, p384_hmac(h, kk2, vlast), tries + 1);
 }
 
-// The RFC 6979 nonce for private key d and a digest made with h.
+/// The RFC 6979 nonce for private key d and a digest made with h.
 @needs(P384Word(F, B), Word(W, B), Word64(D, B))
 pub F p384_rfc6979_k(HashAlg h, F d, List(Int) digest) {
     Int hl = hash_len(h);
@@ -599,8 +622,8 @@ pub F p384_rfc6979_k(HashAlg h, F d, List(Int) digest) {
     return p384_drbg_k(h, k2, v2, 0);
 }
 
-// Sign a digest made with h, nonce from RFC 6979. SHA-1 is refused
-// (ok = false): no signature this library makes uses it.
+/// Sign a digest made with h, nonce from RFC 6979. SHA-1 is refused
+/// (ok = false): no signature this library makes uses it.
 @needs(P384Word(F, B), Word(W, B), Word64(D, B))
 pub P384Sig p384_sign_digest(HashAlg h, F d, List(Int) digest) {
     Bool sha1 = match h { Sha1 => true, _ => false };

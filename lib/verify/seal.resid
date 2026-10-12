@@ -16,15 +16,19 @@ import "../word.resid";
 import "../hpke.resid";
 import "../hpkeg.resid";
 
+/// Returns the HPKE suite of a release under KEM `kem`: the KEM's own
+/// HKDF (SHA-384 for KEM 17, else SHA-256) and AES-128-GCM.
 pub HpkeSuite seal_to_evidence_suite(Int kem) { return hpke_suite(kem, hpke_kem_kdf(kem), 1); }
+/// Returns the fixed HPKE info string of a release,
+/// "resid.seal_to_evidence.v1".
 pub List(Int) seal_to_evidence_info() { return bytes_of("resid.seal_to_evidence.v1"); }
 
-// Seal `value` to the key the gate attests. Refused unless the gate is
-// KeyBound to exactly (kem, pk); the gate's record is marked decided, so a
-// second release on one gate fails. Only a @decides function calls this
-// (E0287), and its every success return is this call on its gate. The
-// attester's key is checked against the evidence, and the sender key by
-// E-key (own or provisioned), so neither counts as a decision's input.
+/// Seals the secret `value` to the key the gate `e` attests, in HPKE Auth
+/// mode under the secret `sender` key. Refused unless the gate is KeyBound
+/// to exactly (`kem`, `pk`) and `sender` fits the KEM; the gate's record is
+/// marked decided, so a second release on one gate fails. Only a @decides
+/// function calls this (E0287), and its every success return is this call
+/// on its gate. Needs `declassify` to publish the ciphertext.
 @primitive(release = key_bound, gate = e, inputs = [kem, pk, sender])
 @requires(declassify)
 @key(sender, own, provisioned)
@@ -47,9 +51,10 @@ List(Int) seal_publish(List(Secret(UInt(8))) ct, Int i, ListBuf(Int) acc) {
     return seal_publish(ct, i + 1, acc.push(ct_public((Int) declassify(ct[i], "a release sealed to attested evidence: HPKE ciphertext"))));
 }
 
-// Open a release with the attester's own private key, accepted only when
-// the pinned releaser sealed it (Auth mode with the anchor's key as the
-// sender's). The result is the releaser's word, so it can key a primitive.
+/// Opens a release `msg` with the attester's own secret key `sk`, accepted
+/// only when the pinned releaser sealed it (Auth mode with the `sender`
+/// anchor's key, which must be a ReleaseSender for `kem`). The secret
+/// plaintext is Verified under that anchor, so it can key a primitive.
 @primitive(open, anchor = sender, kinds = [ReleaseSender])
 @requires(declassify)
 @key(sk, own)
@@ -65,10 +70,10 @@ pub Result(Verified(List(Secret(UInt(8)))), VerifyError) open_released(Int kem, 
     return Ok(Verified {.value = o.pt, .anchors = [sender.id], .quals = 0, .record = 0 - 1, .kem = kem, .pk = [], .chan = [], .time = Kernel, .principal = "", .format = ""});
 }
 
-// The sender's public key from the anchor's bytes: the raw public key
-// (X25519: 32 bytes; P-256/P-384: the uncompressed point) or a DER
-// SubjectPublicKeyInfo holding it (RFC 8410, RFC 5480), in which case the
-// BIT STRING's contents are its tail.
+/// Extracts the sender's public key for `kem` from the anchor bytes `der`.
+/// Accepts the raw key (X25519: 32 bytes; P-256/P-384: the uncompressed
+/// point) or a DER SubjectPublicKeyInfo ending in it (RFC 8410, RFC 5480);
+/// empty for an unknown KEM or anything else.
 pub List(Int) seal_sender_key(Int kem, List(Int) der) {
     Int n = if (kem == 32) { 32 } else if (kem == 16) { 65 } else if (kem == 17) { 97 } else { 0 };
     if (n == 0 || der.len() < n) { return []; }

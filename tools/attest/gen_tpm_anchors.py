@@ -128,10 +128,11 @@ def main(d):
             v = re.sub(r"[^A-Za-z0-9]", "", vendor)
             xs = [str(c) for c in der]
             rows = ",\n        ".join(", ".join(xs[i:i + 24]) for i in range(0, len(xs), 24))
-            out.append(f'''// {vendor}: {x["cn"] or f} ({x["kind"]}, until {x["not_after"]:%Y-%m-%d}{"" if x["self_issued"] else "; cross-certified, Windows trusts it as a root"}).
+            out.append(f'''/// {vendor}: {x["cn"] or f} ({x["kind"]}, until {x["not_after"]:%Y-%m-%d}{"" if x["self_issued"] else "; cross-certified, Windows trusts it as a root"}).
 @anchor(kind = TpmEk({v}), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab ({vendor}/RootCA/{f})", fingerprint = "sha256:{hashlib.sha256(der).hexdigest()}", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [{ALGS[x["kind"]]}], expires = "{min(x["not_after"], datetime.datetime(9999, 12, 31)):%Y-%m-%d}")
 pub Anchor {fn}() {{ return anchor_der({fn}_der()); }}
 
+/// The DER bytes of {vendor}'s {x["cn"] or f} certificate.
 pub List(Int) {fn}_der() {{
     return [
         {rows}

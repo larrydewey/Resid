@@ -94,10 +94,15 @@ import "sha512g.resid";
 
 // ─── Constants ───────────────────────────────────────────────────────
 
+/// The length of a field element or scalar in bytes (@KB@).
 pub Int @X@_bytes() { return @KB@; }
+/// The field prime p of @NAME@.
 pub UInt(@W@) @X@_p() { return @P@; }
+/// The order n of the base point of @NAME@.
 pub UInt(@W@) @X@_n() { return @N@; }
+/// The base point's x coordinate.
 pub UInt(@W@) @X@_gx() { return @GX@; }
+/// The base point's y coordinate.
 pub UInt(@W@) @X@_gy() { return @GY@; }
 // -p^-1 and -n^-1 mod R
 UInt(@W@) @X@_pinv() { return @PINV@; }
@@ -122,9 +127,10 @@ UInt(@W@) @X@_ones() { return @ONES@; }
 UInt(@W@) @X@_zero() { return 0; }
 
 // ─── Field words: public and secret ─────────────────────────────────
-// @BW@(F, B): the @W@-bit operations the curve code needs. Arithmetic
-// wraps modulo 2^@W@; shift amounts and lifted constants are public.
 
+/// The @W@-bit word operations the curve code needs, for public words
+/// (`UInt(@W@)`) and secret ones (`Secret(UInt(@W@))`). Arithmetic wraps
+/// modulo 2^@W@; shift amounts and lifted constants are public.
 behavior @BW@(F, B) {
     F @X@w_add(F a, F b);
     F @X@w_sub(F a, F b);
@@ -186,8 +192,8 @@ UInt(@W@) @X@s_open(Secret(UInt(@W@)) x) { return ct_public(declassify(x, "@NAME
 
 // ─── Branch-free helpers ─────────────────────────────────────────────
 
-// 1 when v != 0, else 0 (v < 2^(@W@-1)): 0 - v has its top bit set
-// exactly when v is nonzero.
+/// 1 when v != 0, else 0 (v < 2^(@W@-1)): 0 - v has its top bit set
+/// exactly when v is nonzero.
 @needs(@BW@(F, B))
 pub F @X@_nonzero(F v) {
     F z = @X@w_lift(@X@_zero());
@@ -220,22 +226,28 @@ F @X@_mont(F a, F b, UInt(@W@) m, UInt(@W@) minv) {
 
 // ─── Field (mod p), Montgomery form ──────────────────────────────────
 
+/// The product of two field elements in Montgomery form.
 @needs(@BW@(F, B))
 pub F @X@_fmul(F a, F b) { return @X@_mont(a, b, @X@_p(), @X@_pinv()); }
+/// The square of a field element in Montgomery form.
 @needs(@BW@(F, B))
 pub F @X@_fsq(F a) { return @X@_mont(a, a, @X@_p(), @X@_pinv()); }
+/// The sum of two field elements mod p (constant-time reduction).
 @needs(@BW@(F, B))
 pub F @X@_fadd(F a, F b) { return @X@_csub(@X@w_add(a, b), @X@_p()); }
+/// The difference `a - b` mod p (constant-time reduction).
 @needs(@BW@(F, B))
 pub F @X@_fsub(F a, F b) {
     F p = @X@w_lift(@X@_p());
     return @X@_csub(@X@w_sub(@X@w_add(a, p), b), @X@_p());
 }
+/// A field element (below p) converted into Montgomery form.
 @needs(@BW@(F, B))
 pub F @X@_fto(F a) {
     F rr = @X@w_lift(@X@_rrp());
     return @X@_fmul(a, rr);
 }
+/// A field element converted out of Montgomery form.
 @needs(@BW@(F, B))
 pub F @X@_ffrom(F a) {
     F one = @X@w_lift(1);
@@ -253,14 +265,14 @@ F @X@_fpow(F a, UInt(@W@) e, Int i, F acc) {
     return @X@_fpow(a, e, i - 1, r);
 }
 
-// 1/a (Fermat, a fixed public exponent); 0 maps to 0.
+/// 1/a (Fermat, a fixed public exponent); 0 maps to 0.
 @needs(@BW@(F, B))
 pub F @X@_finv(F a) {
     F one = @X@w_lift(@X@_one());
     return @X@_fpow(a, @X@_pm2(), @KM1@, one);
 }
 
-// A square root of a when one exists (check by squaring).
+/// A square root of a when one exists (check by squaring).
 @needs(@BW@(F, B))
 pub F @X@_fsqrt(F a) {
     F one = @X@w_lift(@X@_one());
@@ -269,15 +281,19 @@ pub F @X@_fsqrt(F a) {
 
 // ─── Scalars (mod n), Montgomery form ────────────────────────────────
 
+/// The product of two scalars mod n in Montgomery form.
 @needs(@BW@(F, B))
 pub F @X@_smul(F a, F b) { return @X@_mont(a, b, @X@_n(), @X@_ninv()); }
+/// The sum of two scalars mod n (constant-time reduction).
 @needs(@BW@(F, B))
 pub F @X@_sadd(F a, F b) { return @X@_csub(@X@w_add(a, b), @X@_n()); }
+/// A scalar (below n) converted into Montgomery form mod n.
 @needs(@BW@(F, B))
 pub F @X@_sto(F a) {
     F rr = @X@w_lift(@X@_rrn());
     return @X@_smul(a, rr);
 }
+/// A scalar converted out of Montgomery form mod n.
 @needs(@BW@(F, B))
 pub F @X@_sfrom(F a) {
     F one = @X@w_lift(1);
@@ -293,36 +309,38 @@ F @X@_spow(F a, UInt(@W@) e, Int i, F acc) {
     return @X@_spow(a, e, i - 1, r);
 }
 
-// 1/a mod n, both in Montgomery form (Fermat: a^(n-2), a fixed public
-// exponent, so the nonce's inverse takes the same steps for every nonce).
+/// 1/a mod n, both in Montgomery form (Fermat: a^(n-2), a fixed public
+/// exponent, so the nonce's inverse takes the same steps for every nonce).
 @needs(@BW@(F, B))
 pub F @X@_sinv(F a) {
     F one = @X@w_lift(1);
     return @X@_spow(a, @X@_nm2(), @KM1@, @X@_sto(one));
 }
 
-// A value below 2^@K@ reduced mod n (2^@K@ < 2n).
+/// A value below 2^@K@ reduced mod n (2^@K@ < 2n).
 @needs(@BW@(F, B))
 pub F @X@_reduce_n(F v) { return @X@_csub(v, @X@_n()); }
 
 // ─── Points ──────────────────────────────────────────────────────────
 
-// Projective, Montgomery-form coordinates; Z = 0 is infinity.
+/// Projective, Montgomery-form coordinates; Z = 0 is infinity.
 pub type @T@(F) = { F x; F y; F z; };
 
-// Affine, ordinary integers, public; ok is false for infinity or a bad
-// encoding.
+/// Affine, ordinary integers, public; ok is false for infinity or a bad
+/// encoding.
 pub type @A@ = { UInt(@W@) x; UInt(@W@) y; Bool ok; };
 
-// Affine at F; ok (whether the point is finite) is public.
+/// Affine at F; ok (whether the point is finite) is public.
 pub type @XY@(F) = { F x; F y; Bool ok; };
 
+/// The point at infinity, in projective coordinates (Z = 0).
 @needs(@BW@(F, B))
 pub @T@(F) @X@_inf() {
     F z = @X@w_lift(0);
     F one = @X@w_lift(@X@_one());
     return @T@ {.x = z, .y = one, .z = z};
 }
+/// The base point G, in projective Montgomery coordinates.
 @needs(@BW@(F, B))
 pub @T@(F) @X@_gen() {
     F x = @X@w_lift(@X@_gxm());
@@ -331,7 +349,7 @@ pub @T@(F) @X@_gen() {
     return @T@ {.x = x, .y = y, .z = one};
 }
 
-// A public affine point entering the computation.
+/// A public affine point entering the computation.
 @needs(@BW@(F, B))
 pub @T@(F) @X@_from_aff(@A@ a) {
     F x = @X@w_lift(a.x);
@@ -340,7 +358,7 @@ pub @T@(F) @X@_from_aff(@A@ a) {
     return @T@ {.x = @X@_fto(x), .y = @X@_fto(y), .z = one};
 }
 
-// RCB16 algorithm 4: complete addition, a = -3.
+/// RCB16 algorithm 4: complete addition, a = -3.
 @needs(@BW@(F, B))
 pub @T@(F) @X@_add(@T@(F) p, @T@(F) q) {
     F b = @X@w_lift(@X@_bm());
@@ -367,7 +385,7 @@ pub @T@(F) @X@_add(@T@(F) p, @T@(F) q) {
     return @T@ {.x = x3, .y = y3, .z = z3};
 }
 
-// RCB16 algorithm 6: doubling, a = -3.
+/// RCB16 algorithm 6: doubling, a = -3.
 @needs(@BW@(F, B))
 pub @T@(F) @X@_dbl(@T@(F) p) {
     F b = @X@w_lift(@X@_bm());
@@ -411,15 +429,15 @@ pub @T@(F) @X@_dbl(@T@(F) p) {
     return @X@_ladder(k, i - 1, @X@_sel(@X@w_mask(@X@w_shr(k, i)), @X@_add(d, p), d), p);
 }
 
-// k * p for k < 2^@K@: every bit costs one doubling and one addition.
+/// k * p for k < 2^@K@: every bit costs one doubling and one addition.
 @needs(@BW@(F, B))
 pub @T@(F) @X@_mul(F k, @T@(F) p) {
     @T@(F) z = @X@_inf();
     return @X@_ladder(k, @KM1@, z, p);
 }
 
-// Back to affine coordinates (no longer Montgomery form). Whether the
-// point is infinity is made public here: every caller rejects it.
+/// Back to affine coordinates (no longer Montgomery form). Whether the
+/// point is infinity is made public here: every caller rejects it.
 @needs(@BW@(F, B))
 pub @XY@(F) @X@_affine(@T@(F) p) {
     F zi = @X@_finv(p.z);
@@ -435,9 +453,9 @@ F @X@_be_acc(List(B) b, Int i, F acc) {
     return @X@_be_acc(b, i + 1, @X@w_or(@X@w_shl(acc, 8), @X@w_from_byte(b[i])));
 }
 
-// A big-endian unsigned integer of at most @KB@ bytes, public or secret
-// (more is refused by every caller before it gets here: this keeps only
-// the low bits).
+/// A big-endian unsigned integer of at most @KB@ bytes, public or secret
+/// (more is refused by every caller before it gets here: this keeps only
+/// the low bits).
 @needs(@BW@(F, B))
 pub F @X@_load(List(B) b) {
     Int skip = if (b.len() > @KB@) { b.len() - @KB@ } else { 0 };
@@ -445,6 +463,7 @@ pub F @X@_load(List(B) b) {
     return @X@_be_acc(b[skip..], 0, z);
 }
 
+/// A public big-endian byte string as an integer (the last @KB@ bytes).
 pub UInt(@W@) @X@_from_be(List(Int) b) {
     UInt(@W@) v = @X@_load(b);
     return v;
@@ -456,19 +475,20 @@ ListBuf(B) @X@_be_out(F v, Int j, ListBuf(B) acc) {
     return @X@_be_out(v, j + 1, acc.push(@X@w_byte(v, 8 * (@KB@ - 1 - j))));
 }
 
-// v as exactly @KB@ big-endian bytes, public or secret.
+/// v as exactly @KB@ big-endian bytes, public or secret.
 @needs(@BW@(F, B))
 pub List(B) @X@_store(F v) {
     ListBuf(B) acc = ListBuf();
     return @X@_be_out(v, 0, acc).finish();
 }
 
+/// A public integer as exactly @KB@ big-endian bytes.
 pub List(Int) @X@_to_be(UInt(@W@) v) {
     List(Int) b = @X@_store(v);
     return b;
 }
 
-// Whether x, y < p is a point of the curve (ordinary integers).
+/// Whether x, y < p is a point of the curve (ordinary integers).
 pub Bool @X@_on_curve(UInt(@W@) x, UInt(@W@) y) {
     if (x >= @X@_p() || y >= @X@_p()) { return false; }
     UInt(@W@) xm = @X@_fto(x);
@@ -478,11 +498,12 @@ pub Bool @X@_on_curve(UInt(@W@) x, UInt(@W@) y) {
     return @X@_fsq(ym) == rhs;
 }
 
+/// The refused point: `ok` is false and the coordinates are zero.
 pub @A@ @X@_bad() { return @A@ {.x = 0, .y = 0, .ok = false}; }
 
-// SEC 1 §2.3.4: 04 || X || Y, or 02/03 || X (compressed). Anything else,
-// a coordinate >= p, or a point off the curve is refused (ok = false).
-// There is no encoding of infinity: 00 is refused too.
+/// SEC 1 §2.3.4: 04 || X || Y, or 02/03 || X (compressed). Anything else,
+/// a coordinate >= p, or a point off the curve is refused (ok = false).
+/// There is no encoding of infinity: 00 is refused too.
 pub @A@ @X@_decode(List(Int) b) {
     if (b.len() == 1 + 2 * @KB@ && b[0] == 4) {
         UInt(@W@) x = @X@_from_be(b[1..1 + @KB@]);
@@ -506,13 +527,13 @@ pub @A@ @X@_decode(List(Int) b) {
     return @X@_bad();
 }
 
-// 04 || X || Y.
+/// 04 || X || Y.
 pub List(Int) @X@_encode(@A@ a) { return [4].concat(@X@_to_be(a.x)).concat(@X@_to_be(a.y)); }
 
 // ─── Keys ────────────────────────────────────────────────────────────
 
-// Whether d is a usable private scalar, 1 <= d < n. The answer is made
-// public: a caller rejects a bad key and that is not a secret.
+/// Whether d is a usable private scalar, 1 <= d < n. The answer is made
+/// public: a caller rejects a bad key and that is not a secret.
 @needs(@BW@(F, B))
 pub Bool @X@_scalar_ok(F d) {
     F n = @X@w_lift(@X@_n());
@@ -521,8 +542,8 @@ pub Bool @X@_scalar_ok(F d) {
     return @X@w_open(@X@w_and(below, @X@_nonzero(d))) == 1;
 }
 
-// d * G as a public affine point (ok = false when d is not a usable
-// scalar). Publishing it is the point of a public key.
+/// d * G as a public affine point (ok = false when d is not a usable
+/// scalar). Publishing it is the point of a public key.
 @needs(@BW@(F, B))
 pub @A@ @X@_public(F d) {
     if (!@X@_scalar_ok(d)) { return @X@_bad(); }
@@ -531,9 +552,9 @@ pub @A@ @X@_public(F d) {
     return @A@ {.x = @X@w_open(a.x), .y = @X@w_open(a.y), .ok = a.ok};
 }
 
-// The x-coordinate of d * Q (SEC 1 §3.3.1), @KB@ bytes, secret when d is;
-// empty when d is unusable, Q is not a valid point, or the product is
-// infinity.
+/// The x-coordinate of d * Q (SEC 1 §3.3.1), @KB@ bytes, secret when d is;
+/// empty when d is unusable, Q is not a valid point, or the product is
+/// infinity.
 @needs(@BW@(F, B))
 pub List(B) @X@_ecdh(F d, @A@ q) {
     ListBuf(B) eb = ListBuf();
@@ -547,17 +568,18 @@ pub List(B) @X@_ecdh(F d, @A@ q) {
 
 // ─── ECDSA (SEC 1 §4.1, FIPS 186-5) ─────────────────────────────────
 
+/// An ECDSA signature (r, s); `ok` is false for a refused one.
 pub type @S@ = { Bool ok; UInt(@W@) r; UInt(@W@) s; };
 
-// The leftmost @K@ bits of a digest as an integer mod n (SEC 1 §4.1.3
-// step 5; n has exactly @K@ bits).
+/// The leftmost @K@ bits of a digest as an integer mod n (SEC 1 §4.1.3
+/// step 5; n has exactly @K@ bits).
 pub UInt(@W@) @X@_bits2int(List(Int) digest) {
     List(Int) lead = if (digest.len() > @KB@) { digest[0..@KB@] } else { digest };
     return @X@_reduce_n(@X@_from_be(lead));
 }
 
-// Verify (r, s) over a message digest under the public point q. Every
-// input is public: this runs on the public copy only.
+/// Verify (r, s) over a message digest under the public point q. Every
+/// input is public: this runs on the public copy only.
 pub Bool @X@_verify_digest(List(Int) digest, UInt(@W@) r, UInt(@W@) s, @A@ q) {
     if (!q.ok || !@X@_on_curve(q.x, q.y)) { return false; }
     if (r == 0 || s == 0 || r >= @X@_n() || s >= @X@_n()) { return false; }
@@ -571,13 +593,14 @@ pub Bool @X@_verify_digest(List(Int) digest, UInt(@W@) r, UInt(@W@) s, @A@ q) {
     return @X@_reduce_n(pt.x) == r;
 }
 
+/// The refused signature: `ok` is false and r and s are zero.
 pub @S@ @X@_sig_bad() { return @S@ {.ok = false, .r = 0, .s = 0}; }
 
-// Sign a digest with private scalar d and nonce k (both secret at secret
-// types). r and s are published (@X@w_open), and so is whether d and k
-// are usable. A k or d outside [1, n-1], or an r or s of zero, gives
-// ok = false: the caller draws another nonce. Prefer @X@_sign_digest,
-// whose nonce is RFC 6979's.
+/// Sign a digest with private scalar d and nonce k (both secret at secret
+/// types). r and s are published (@X@w_open), and so is whether d and k
+/// are usable. A k or d outside [1, n-1], or an r or s of zero, gives
+/// ok = false: the caller draws another nonce. Prefer @X@_sign_digest,
+/// whose nonce is RFC 6979's.
 @needs(@BW@(F, B))
 pub @S@ @X@_sign_k(F d, List(Int) digest, F k) {
     if (!@X@_scalar_ok(d) || !@X@_scalar_ok(k)) { return @X@_sig_bad(); }
@@ -640,7 +663,7 @@ F @X@_drbg_k(HashAlg h, List(B) kk, List(B) v, Int tries) {
     return @X@_drbg_k(h, kk2, @X@_hmac(h, kk2, vlast), tries + 1);
 }
 
-// The RFC 6979 nonce for private key d and a digest made with h.
+/// The RFC 6979 nonce for private key d and a digest made with h.
 @needs(@BW@(F, B), Word(W, B), Word64(D, B))
 pub F @X@_rfc6979_k(HashAlg h, F d, List(Int) digest) {
     Int hl = hash_len(h);
@@ -657,8 +680,8 @@ pub F @X@_rfc6979_k(HashAlg h, F d, List(Int) digest) {
     return @X@_drbg_k(h, k2, v2, 0);
 }
 
-// Sign a digest made with h, nonce from RFC 6979. SHA-1 is refused
-// (ok = false): no signature this library makes uses it.
+/// Sign a digest made with h, nonce from RFC 6979. SHA-1 is refused
+/// (ok = false): no signature this library makes uses it.
 @needs(@BW@(F, B), Word(W, B), Word64(D, B))
 pub @S@ @X@_sign_digest(HashAlg h, F d, List(Int) digest) {
     Bool sha1 = match h { Sha1 => true, _ => false };

@@ -36,10 +36,15 @@ import "sha512g.resid";
 
 // ─── Constants ───────────────────────────────────────────────────────
 
+/// The length of a field element or scalar in bytes (66).
 pub Int p521_bytes() { return 66; }
+/// The field prime p of NIST P-521 (secp521r1).
 pub UInt(1088) p521_p() { return 6864797660130609714981900799081393217269435300143305409394463459185543183397656052122559640661454554977296311391480858037121987999716643812574028291115057151; }
+/// The order n of the base point of NIST P-521 (secp521r1).
 pub UInt(1088) p521_n() { return 6864797660130609714981900799081393217269435300143305409394463459185543183397655394245057746333217197532963996371363321113864768612440380340372808892707005449; }
+/// The base point's x coordinate.
 pub UInt(1088) p521_gx() { return 2661740802050217063228768716723360960729859168756973147706671368418802944996427808491545080627771902352094241225065558662157113545570916814161637315895999846; }
+/// The base point's y coordinate.
 pub UInt(1088) p521_gy() { return 3757180025770020463545507224491183603594455134769762486694567779615544477440556316691234405012945539562144444537289428522585666729196580810124344277578376784; }
 // -p^-1 and -n^-1 mod R
 UInt(1088) p521_pinv() { return 1; }
@@ -64,9 +69,10 @@ UInt(1088) p521_ones() { return 331615851818697717108728376064274115869993614973
 UInt(1088) p521_zero() { return 0; }
 
 // ─── Field words: public and secret ─────────────────────────────────
-// P521Word(F, B): the 1088-bit operations the curve code needs. Arithmetic
-// wraps modulo 2^1088; shift amounts and lifted constants are public.
 
+/// The 1088-bit word operations the curve code needs, for public words
+/// (`UInt(1088)`) and secret ones (`Secret(UInt(1088))`). Arithmetic wraps
+/// modulo 2^1088; shift amounts and lifted constants are public.
 behavior P521Word(F, B) {
     F p521w_add(F a, F b);
     F p521w_sub(F a, F b);
@@ -128,8 +134,8 @@ P521Word(Secret(UInt(1088)), Secret(UInt(8))) = { .p521w_add = p521s_add, .p521w
 
 // ─── Branch-free helpers ─────────────────────────────────────────────
 
-// 1 when v != 0, else 0 (v < 2^(1088-1)): 0 - v has its top bit set
-// exactly when v is nonzero.
+/// 1 when v != 0, else 0 (v < 2^(1088-1)): 0 - v has its top bit set
+/// exactly when v is nonzero.
 @needs(P521Word(F, B))
 pub F p521_nonzero(F v) {
     F z = p521w_lift(p521_zero());
@@ -162,22 +168,28 @@ F p521_mont(F a, F b, UInt(1088) m, UInt(1088) minv) {
 
 // ─── Field (mod p), Montgomery form ──────────────────────────────────
 
+/// The product of two field elements in Montgomery form.
 @needs(P521Word(F, B))
 pub F p521_fmul(F a, F b) { return p521_mont(a, b, p521_p(), p521_pinv()); }
+/// The square of a field element in Montgomery form.
 @needs(P521Word(F, B))
 pub F p521_fsq(F a) { return p521_mont(a, a, p521_p(), p521_pinv()); }
+/// The sum of two field elements mod p (constant-time reduction).
 @needs(P521Word(F, B))
 pub F p521_fadd(F a, F b) { return p521_csub(p521w_add(a, b), p521_p()); }
+/// The difference `a - b` mod p (constant-time reduction).
 @needs(P521Word(F, B))
 pub F p521_fsub(F a, F b) {
     F p = p521w_lift(p521_p());
     return p521_csub(p521w_sub(p521w_add(a, p), b), p521_p());
 }
+/// A field element (below p) converted into Montgomery form.
 @needs(P521Word(F, B))
 pub F p521_fto(F a) {
     F rr = p521w_lift(p521_rrp());
     return p521_fmul(a, rr);
 }
+/// A field element converted out of Montgomery form.
 @needs(P521Word(F, B))
 pub F p521_ffrom(F a) {
     F one = p521w_lift(1);
@@ -195,14 +207,14 @@ F p521_fpow(F a, UInt(1088) e, Int i, F acc) {
     return p521_fpow(a, e, i - 1, r);
 }
 
-// 1/a (Fermat, a fixed public exponent); 0 maps to 0.
+/// 1/a (Fermat, a fixed public exponent); 0 maps to 0.
 @needs(P521Word(F, B))
 pub F p521_finv(F a) {
     F one = p521w_lift(p521_one());
     return p521_fpow(a, p521_pm2(), 520, one);
 }
 
-// A square root of a when one exists (check by squaring).
+/// A square root of a when one exists (check by squaring).
 @needs(P521Word(F, B))
 pub F p521_fsqrt(F a) {
     F one = p521w_lift(p521_one());
@@ -211,15 +223,19 @@ pub F p521_fsqrt(F a) {
 
 // ─── Scalars (mod n), Montgomery form ────────────────────────────────
 
+/// The product of two scalars mod n in Montgomery form.
 @needs(P521Word(F, B))
 pub F p521_smul(F a, F b) { return p521_mont(a, b, p521_n(), p521_ninv()); }
+/// The sum of two scalars mod n (constant-time reduction).
 @needs(P521Word(F, B))
 pub F p521_sadd(F a, F b) { return p521_csub(p521w_add(a, b), p521_n()); }
+/// A scalar (below n) converted into Montgomery form mod n.
 @needs(P521Word(F, B))
 pub F p521_sto(F a) {
     F rr = p521w_lift(p521_rrn());
     return p521_smul(a, rr);
 }
+/// A scalar converted out of Montgomery form mod n.
 @needs(P521Word(F, B))
 pub F p521_sfrom(F a) {
     F one = p521w_lift(1);
@@ -235,36 +251,38 @@ F p521_spow(F a, UInt(1088) e, Int i, F acc) {
     return p521_spow(a, e, i - 1, r);
 }
 
-// 1/a mod n, both in Montgomery form (Fermat: a^(n-2), a fixed public
-// exponent, so the nonce's inverse takes the same steps for every nonce).
+/// 1/a mod n, both in Montgomery form (Fermat: a^(n-2), a fixed public
+/// exponent, so the nonce's inverse takes the same steps for every nonce).
 @needs(P521Word(F, B))
 pub F p521_sinv(F a) {
     F one = p521w_lift(1);
     return p521_spow(a, p521_nm2(), 520, p521_sto(one));
 }
 
-// A value below 2^521 reduced mod n (2^521 < 2n).
+/// A value below 2^521 reduced mod n (2^521 < 2n).
 @needs(P521Word(F, B))
 pub F p521_reduce_n(F v) { return p521_csub(v, p521_n()); }
 
 // ─── Points ──────────────────────────────────────────────────────────
 
-// Projective, Montgomery-form coordinates; Z = 0 is infinity.
+/// Projective, Montgomery-form coordinates; Z = 0 is infinity.
 pub type P521Pt(F) = { F x; F y; F z; };
 
-// Affine, ordinary integers, public; ok is false for infinity or a bad
-// encoding.
+/// Affine, ordinary integers, public; ok is false for infinity or a bad
+/// encoding.
 pub type P521Aff = { UInt(1088) x; UInt(1088) y; Bool ok; };
 
-// Affine at F; ok (whether the point is finite) is public.
+/// Affine at F; ok (whether the point is finite) is public.
 pub type P521Xy(F) = { F x; F y; Bool ok; };
 
+/// The point at infinity, in projective coordinates (Z = 0).
 @needs(P521Word(F, B))
 pub P521Pt(F) p521_inf() {
     F z = p521w_lift(0);
     F one = p521w_lift(p521_one());
     return P521Pt {.x = z, .y = one, .z = z};
 }
+/// The base point G, in projective Montgomery coordinates.
 @needs(P521Word(F, B))
 pub P521Pt(F) p521_gen() {
     F x = p521w_lift(p521_gxm());
@@ -273,7 +291,7 @@ pub P521Pt(F) p521_gen() {
     return P521Pt {.x = x, .y = y, .z = one};
 }
 
-// A public affine point entering the computation.
+/// A public affine point entering the computation.
 @needs(P521Word(F, B))
 pub P521Pt(F) p521_from_aff(P521Aff a) {
     F x = p521w_lift(a.x);
@@ -282,7 +300,7 @@ pub P521Pt(F) p521_from_aff(P521Aff a) {
     return P521Pt {.x = p521_fto(x), .y = p521_fto(y), .z = one};
 }
 
-// RCB16 algorithm 4: complete addition, a = -3.
+/// RCB16 algorithm 4: complete addition, a = -3.
 @needs(P521Word(F, B))
 pub P521Pt(F) p521_add(P521Pt(F) p, P521Pt(F) q) {
     F b = p521w_lift(p521_bm());
@@ -309,7 +327,7 @@ pub P521Pt(F) p521_add(P521Pt(F) p, P521Pt(F) q) {
     return P521Pt {.x = x3, .y = y3, .z = z3};
 }
 
-// RCB16 algorithm 6: doubling, a = -3.
+/// RCB16 algorithm 6: doubling, a = -3.
 @needs(P521Word(F, B))
 pub P521Pt(F) p521_dbl(P521Pt(F) p) {
     F b = p521w_lift(p521_bm());
@@ -353,15 +371,15 @@ P521Pt(F) p521_ladder(F k, Int i, P521Pt(F) r, P521Pt(F) p) {
     return p521_ladder(k, i - 1, p521_sel(p521w_mask(p521w_shr(k, i)), p521_add(d, p), d), p);
 }
 
-// k * p for k < 2^521: every bit costs one doubling and one addition.
+/// k * p for k < 2^521: every bit costs one doubling and one addition.
 @needs(P521Word(F, B))
 pub P521Pt(F) p521_mul(F k, P521Pt(F) p) {
     P521Pt(F) z = p521_inf();
     return p521_ladder(k, 520, z, p);
 }
 
-// Back to affine coordinates (no longer Montgomery form). Whether the
-// point is infinity is made public here: every caller rejects it.
+/// Back to affine coordinates (no longer Montgomery form). Whether the
+/// point is infinity is made public here: every caller rejects it.
 @needs(P521Word(F, B))
 pub P521Xy(F) p521_affine(P521Pt(F) p) {
     F zi = p521_finv(p.z);
@@ -377,9 +395,9 @@ F p521_be_acc(List(B) b, Int i, F acc) {
     return p521_be_acc(b, i + 1, p521w_or(p521w_shl(acc, 8), p521w_from_byte(b[i])));
 }
 
-// A big-endian unsigned integer of at most 66 bytes, public or secret
-// (more is refused by every caller before it gets here: this keeps only
-// the low bits).
+/// A big-endian unsigned integer of at most 66 bytes, public or secret
+/// (more is refused by every caller before it gets here: this keeps only
+/// the low bits).
 @needs(P521Word(F, B))
 pub F p521_load(List(B) b) {
     Int skip = if (b.len() > 66) { b.len() - 66 } else { 0 };
@@ -387,6 +405,7 @@ pub F p521_load(List(B) b) {
     return p521_be_acc(b[skip..], 0, z);
 }
 
+/// A public big-endian byte string as an integer (the last 66 bytes).
 pub UInt(1088) p521_from_be(List(Int) b) {
     UInt(1088) v = p521_load(b);
     return v;
@@ -398,19 +417,20 @@ ListBuf(B) p521_be_out(F v, Int j, ListBuf(B) acc) {
     return p521_be_out(v, j + 1, acc.push(p521w_byte(v, 8 * (66 - 1 - j))));
 }
 
-// v as exactly 66 big-endian bytes, public or secret.
+/// v as exactly 66 big-endian bytes, public or secret.
 @needs(P521Word(F, B))
 pub List(B) p521_store(F v) {
     ListBuf(B) acc = ListBuf();
     return p521_be_out(v, 0, acc).finish();
 }
 
+/// A public integer as exactly 66 big-endian bytes.
 pub List(Int) p521_to_be(UInt(1088) v) {
     List(Int) b = p521_store(v);
     return b;
 }
 
-// Whether x, y < p is a point of the curve (ordinary integers).
+/// Whether x, y < p is a point of the curve (ordinary integers).
 pub Bool p521_on_curve(UInt(1088) x, UInt(1088) y) {
     if (x >= p521_p() || y >= p521_p()) { return false; }
     UInt(1088) xm = p521_fto(x);
@@ -420,11 +440,12 @@ pub Bool p521_on_curve(UInt(1088) x, UInt(1088) y) {
     return p521_fsq(ym) == rhs;
 }
 
+/// The refused point: `ok` is false and the coordinates are zero.
 pub P521Aff p521_bad() { return P521Aff {.x = 0, .y = 0, .ok = false}; }
 
-// SEC 1 §2.3.4: 04 || X || Y, or 02/03 || X (compressed). Anything else,
-// a coordinate >= p, or a point off the curve is refused (ok = false).
-// There is no encoding of infinity: 00 is refused too.
+/// SEC 1 §2.3.4: 04 || X || Y, or 02/03 || X (compressed). Anything else,
+/// a coordinate >= p, or a point off the curve is refused (ok = false).
+/// There is no encoding of infinity: 00 is refused too.
 pub P521Aff p521_decode(List(Int) b) {
     if (b.len() == 1 + 2 * 66 && b[0] == 4) {
         UInt(1088) x = p521_from_be(b[1..1 + 66]);
@@ -448,13 +469,13 @@ pub P521Aff p521_decode(List(Int) b) {
     return p521_bad();
 }
 
-// 04 || X || Y.
+/// 04 || X || Y.
 pub List(Int) p521_encode(P521Aff a) { return [4].concat(p521_to_be(a.x)).concat(p521_to_be(a.y)); }
 
 // ─── Keys ────────────────────────────────────────────────────────────
 
-// Whether d is a usable private scalar, 1 <= d < n. The answer is made
-// public: a caller rejects a bad key and that is not a secret.
+/// Whether d is a usable private scalar, 1 <= d < n. The answer is made
+/// public: a caller rejects a bad key and that is not a secret.
 @needs(P521Word(F, B))
 pub Bool p521_scalar_ok(F d) {
     F n = p521w_lift(p521_n());
@@ -463,8 +484,8 @@ pub Bool p521_scalar_ok(F d) {
     return p521w_open(p521w_and(below, p521_nonzero(d))) == 1;
 }
 
-// d * G as a public affine point (ok = false when d is not a usable
-// scalar). Publishing it is the point of a public key.
+/// d * G as a public affine point (ok = false when d is not a usable
+/// scalar). Publishing it is the point of a public key.
 @needs(P521Word(F, B))
 pub P521Aff p521_public(F d) {
     if (!p521_scalar_ok(d)) { return p521_bad(); }
@@ -473,9 +494,9 @@ pub P521Aff p521_public(F d) {
     return P521Aff {.x = p521w_open(a.x), .y = p521w_open(a.y), .ok = a.ok};
 }
 
-// The x-coordinate of d * Q (SEC 1 §3.3.1), 66 bytes, secret when d is;
-// empty when d is unusable, Q is not a valid point, or the product is
-// infinity.
+/// The x-coordinate of d * Q (SEC 1 §3.3.1), 66 bytes, secret when d is;
+/// empty when d is unusable, Q is not a valid point, or the product is
+/// infinity.
 @needs(P521Word(F, B))
 pub List(B) p521_ecdh(F d, P521Aff q) {
     ListBuf(B) eb = ListBuf();
@@ -489,17 +510,18 @@ pub List(B) p521_ecdh(F d, P521Aff q) {
 
 // ─── ECDSA (SEC 1 §4.1, FIPS 186-5) ─────────────────────────────────
 
+/// An ECDSA signature (r, s); `ok` is false for a refused one.
 pub type P521Sig = { Bool ok; UInt(1088) r; UInt(1088) s; };
 
-// The leftmost 521 bits of a digest as an integer mod n (SEC 1 §4.1.3
-// step 5; n has exactly 521 bits).
+/// The leftmost 521 bits of a digest as an integer mod n (SEC 1 §4.1.3
+/// step 5; n has exactly 521 bits).
 pub UInt(1088) p521_bits2int(List(Int) digest) {
     List(Int) lead = if (digest.len() > 66) { digest[0..66] } else { digest };
     return p521_reduce_n(p521_from_be(lead));
 }
 
-// Verify (r, s) over a message digest under the public point q. Every
-// input is public: this runs on the public copy only.
+/// Verify (r, s) over a message digest under the public point q. Every
+/// input is public: this runs on the public copy only.
 pub Bool p521_verify_digest(List(Int) digest, UInt(1088) r, UInt(1088) s, P521Aff q) {
     if (!q.ok || !p521_on_curve(q.x, q.y)) { return false; }
     if (r == 0 || s == 0 || r >= p521_n() || s >= p521_n()) { return false; }
@@ -513,13 +535,14 @@ pub Bool p521_verify_digest(List(Int) digest, UInt(1088) r, UInt(1088) s, P521Af
     return p521_reduce_n(pt.x) == r;
 }
 
+/// The refused signature: `ok` is false and r and s are zero.
 pub P521Sig p521_sig_bad() { return P521Sig {.ok = false, .r = 0, .s = 0}; }
 
-// Sign a digest with private scalar d and nonce k (both secret at secret
-// types). r and s are published (p521w_open), and so is whether d and k
-// are usable. A k or d outside [1, n-1], or an r or s of zero, gives
-// ok = false: the caller draws another nonce. Prefer p521_sign_digest,
-// whose nonce is RFC 6979's.
+/// Sign a digest with private scalar d and nonce k (both secret at secret
+/// types). r and s are published (p521w_open), and so is whether d and k
+/// are usable. A k or d outside [1, n-1], or an r or s of zero, gives
+/// ok = false: the caller draws another nonce. Prefer p521_sign_digest,
+/// whose nonce is RFC 6979's.
 @needs(P521Word(F, B))
 pub P521Sig p521_sign_k(F d, List(Int) digest, F k) {
     if (!p521_scalar_ok(d) || !p521_scalar_ok(k)) { return p521_sig_bad(); }
@@ -582,7 +605,7 @@ F p521_drbg_k(HashAlg h, List(B) kk, List(B) v, Int tries) {
     return p521_drbg_k(h, kk2, p521_hmac(h, kk2, vlast), tries + 1);
 }
 
-// The RFC 6979 nonce for private key d and a digest made with h.
+/// The RFC 6979 nonce for private key d and a digest made with h.
 @needs(P521Word(F, B), Word(W, B), Word64(D, B))
 pub F p521_rfc6979_k(HashAlg h, F d, List(Int) digest) {
     Int hl = hash_len(h);
@@ -599,8 +622,8 @@ pub F p521_rfc6979_k(HashAlg h, F d, List(Int) digest) {
     return p521_drbg_k(h, k2, v2, 0);
 }
 
-// Sign a digest made with h, nonce from RFC 6979. SHA-1 is refused
-// (ok = false): no signature this library makes uses it.
+/// Sign a digest made with h, nonce from RFC 6979. SHA-1 is refused
+/// (ok = false): no signature this library makes uses it.
 @needs(P521Word(F, B), Word(W, B), Word64(D, B))
 pub P521Sig p521_sign_digest(HashAlg h, F d, List(Int) digest) {
     Bool sha1 = match h { Sha1 => true, _ => false };

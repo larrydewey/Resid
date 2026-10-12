@@ -9,13 +9,19 @@
 // endorsement, kept in memory the kernel can write. Publishing it is a
 // declassification only when the program chooses to send it.
 
+/// What the program saw: the running SHA-256 over every noted crossing,
+/// how many crossings were noted, and the log of the most recent ones.
 pub type Transcript = { List(UInt(8)) hash; Int count; List(TranscriptEntry) log; };
 
-// One crossing: the SHA-256 of the descriptor's name (first 8 bytes),
-// the direction (0 request, 1 reply), the challenge record's handle (all
-// ones for none), and the SHA-256 of the whole noted entry.
+/// One crossing: the SHA-256 of the descriptor's name (first 8 bytes),
+/// the direction (0 request, 1 reply), the challenge record's handle (all
+/// ones for none), and the SHA-256 of the whole noted entry.
 pub type TranscriptEntry = { List(UInt(8)) site; Int direction; Int record; List(UInt(8)) digest; };
 
+/// The transcript so far, read from the runtime.
+/// Returns an empty hash, a count of 0 and an empty log when the runtime
+/// has no transcript to give. Calling it turns transcripts on for the
+/// whole program.
 pub Transcript transcript() {
     List(Int) b = resid_tr_read();
     List(UInt(8)) none = [];

@@ -9,11 +9,12 @@
 import "crypto.resid";
 import "word.resid";
 
-// n fresh bytes for a key, secret from the start.
+/// `n` fresh random bytes for a key, secret from the start.
 @key_source(n)
 pub List(Secret(UInt(8))) random_secret(Int n) { return secret_bytes(random_bytes(n)); }
 
-// Drawing at a generic byte type B.
+/// Fresh random bytes at a generic byte type `B`: public bytes at `Int`,
+/// secret bytes (random_secret) at `Secret(UInt(8))`.
 behavior Random(B) {
     List(B) b_random(Int n);
 }
@@ -23,8 +24,10 @@ List(Int) rnd_public(Int n) { return random_bytes(n); }
 Random(Int) = rnd_public;
 Random(Secret(UInt(8))) = random_secret;
 
-// Whether the CPU source contributes to draws now: without it they rest on
-// the kernel alone (reported, never refused: PLAN-labels.md §5.2).
+/// Whether the CPU source contributes to draws: without it they rest on
+/// the kernel alone (reported, never refused: PLAN-labels.md §5.2).
 type RandomSource = KernelOnly | KernelAndCpu;
 
+/// Which sources feed random draws now: KernelAndCpu when the CPU source
+/// gives 8 bytes on a probe, else KernelOnly.
 pub RandomSource random_source() { return if (resid_random_cpu(8).len() == 8) { KernelAndCpu } else { KernelOnly }; }

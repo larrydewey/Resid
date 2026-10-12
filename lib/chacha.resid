@@ -10,38 +10,40 @@ import "crypto.resid";
 import "word.resid";
 import "chachag.resid";
 
-// The 64-byte keystream block for (key, counter, nonce).
+/// The 64-byte keystream block for (key, counter, nonce).
 pub List(Int) chacha_block(List(Int) key, Int counter, List(Int) nonce) {
     return chachag_block(key, counter, nonce);
 }
 
-// ChaCha20 XOR (encrypt = decrypt), starting at block `counter`.
+/// ChaCha20 XOR (encrypt = decrypt), starting at block `counter`.
 pub List(Int) chacha20_xor(List(Int) key, Int counter, List(Int) nonce, List(Int) data) {
     return chachag_xor(key, counter, nonce, data);
 }
 
-// Poly1305 MAC over msg with a 32-byte one-time key (r || s).
+/// Poly1305 MAC over msg with a 32-byte one-time key (r || s).
 pub List(Int) poly1305(List(Int) key, List(Int) msg) {
     return poly1305g(key, msg);
 }
 
-// AEAD seal: ciphertext || tag (16 bytes).
+/// AEAD seal (RFC 8439 §2.8): the ciphertext followed by the 16-byte tag.
 pub List(Int) chacha20poly1305_seal(List(Int) key, List(Int) nonce, List(Int) plaintext, List(Int) aad) {
     return chacha20poly1305g_seal(key, nonce, plaintext, aad);
 }
 
+/// True when `ct_and_tag` authenticates under `key`, `nonce` and `aad`.
+/// The plaintext is discarded; see `chacha20poly1305_decrypt`.
 pub Bool chacha20poly1305_open(List(Int) key, List(Int) nonce, List(Int) ct_and_tag, List(Int) aad) {
     return match chacha20poly1305_decrypt(key, nonce, ct_and_tag, aad) { Some(p) => true, None => false };
 }
 
-// The plaintext when the tag verifies (in constant time), None for a bad
-// tag, a key that is not 32 bytes, a nonce that is not 12, or an input
-// shorter than a tag. An empty plaintext is Some([]).
+/// The plaintext when the tag verifies (in constant time), None for a bad
+/// tag, a key that is not 32 bytes, a nonce that is not 12, or an input
+/// shorter than a tag. An empty plaintext is Some([]).
 pub Option(List(Int)) chacha20poly1305_decrypt(List(Int) key, List(Int) nonce, List(Int) ct_and_tag, List(Int) aad) {
     return chacha20poly1305g_decrypt(key, nonce, ct_and_tag, aad);
 }
 
-// The plaintext, or empty when the tag does not verify.
+/// The plaintext, or empty when the tag does not verify.
 pub List(Int) chacha20poly1305_open_bytes(List(Int) key, List(Int) nonce, List(Int) ct_and_tag, List(Int) aad) {
     return chacha20poly1305_decrypt(key, nonce, ct_and_tag, aad) else { [] };
 }

@@ -40,18 +40,19 @@
 
 import "device.resid";
 
-// The platform TSM's uevent attribute: present (with any contents) when a
-// TSM has registered. The kernel numbers TSMs from 0 (an IDA in
-// tsm-core.c), so a platform with any TSM has tsm0, except in the moment a
-// tsm0 is being removed.
+/// The descriptor for `/sys/class/tsm/tsm0/uevent`, present when a TSM has registered.
+/// Its contents do not matter. The kernel numbers TSMs from 0 (an IDA in
+/// tsm-core.c), so a platform with any TSM has tsm0, except in the moment a
+/// tsm0 is being removed.
 pub ReadAttr pci_tsm_tsm0_op() {
     return ReadAttr {.name = "pci_tsm.tsm0", .path = "/sys/class/tsm/tsm0/uevent", .max = 4096, .stability = AbiTesting};
 }
 
-// Whether the kernel has a platform TSM: Ok(false) when /sys/class/tsm/tsm0
-// is absent, Ok(true) when it is there, any other failure as itself. Only
-// once a TSM is present can a device's lack of a tsm/ directory be taken to
-// mean the device will never have one (sysfs-bus-pci, tsm/).
+/// Whether the kernel has a platform TSM.
+/// Ok(false) when /sys/class/tsm/tsm0 is absent, Ok(true) when it is
+/// there, any other failure as itself. Only
+/// once a TSM is present can a device's lack of a tsm/ directory be taken to
+/// mean the device will never have one (sysfs-bus-pci, tsm/).
 @requires(device(readonly))
 pub Result(Bool, DeviceError) pci_tsm_present() {
     return match (device.read_attr(pci_tsm_tsm0_op())) {
@@ -69,10 +70,10 @@ Result(Bool, DeviceError) pci_tsm_absent(DeviceError e) {
     };
 }
 
-// The text of a TSM name attribute (tsm/connect, tsm/bound): Some("tsmN")
-// or None for the empty line the kernel shows when there is none. Anything
-// else is Err: the kernel writes "tsm%d\n" or "\n" (drivers/pci/tsm.c,
-// connect_show, bound_show).
+/// Parses the bytes of a TSM name attribute (tsm/connect, tsm/bound).
+/// Gives Some("tsmN") without the newline, or None for the empty line the
+/// kernel shows when there is none. Anything else is Err: the kernel writes
+/// "tsm%d\n" or "\n" (drivers/pci/tsm.c, connect_show, bound_show).
 pub Result(Option(Str), Str) pci_tsm_name(List(UInt(8)) text) {
     Int n = text.len();
     if (n == 0 || text[n - 1] != 10) { return Err("no trailing newline"); }
@@ -95,14 +96,23 @@ Str pt_text(List(UInt(8)) b, Int i, Int end, Str acc) {
 // ─── Per-device attributes ──────────────────────────────────────────
 
 
+/// The descriptor for a PCI function's `vendor` attribute (stable ABI).
 pub PciAttr pci_vendor_op() { return PciAttr {.name = "pci_tsm.vendor", .rel = "vendor", .max = 16, .stability = Uapi}; }
+/// The descriptor for a PCI function's `device` attribute (stable ABI).
 pub PciAttr pci_device_op() { return PciAttr {.name = "pci_tsm.device", .rel = "device", .max = 16, .stability = Uapi}; }
+/// The descriptor for a PCI function's `class` attribute (stable ABI).
 pub PciAttr pci_class_op() { return PciAttr {.name = "pci_tsm.class", .rel = "class", .max = 16, .stability = Uapi}; }
+/// The descriptor for a PCI function's `authenticated` attribute.
 pub PciAttr pci_authenticated_op() { return PciAttr {.name = "pci_tsm.authenticated", .rel = "authenticated", .max = 16, .stability = AbiTesting}; }
+/// The descriptor for a PCI function's `tsm/connect` attribute.
 pub PciAttr pci_tsm_connect_op() { return PciAttr {.name = "pci_tsm.connect", .rel = "tsm/connect", .max = 32, .stability = AbiTesting}; }
+/// The descriptor for a PCI function's `tsm/bound` attribute.
 pub PciAttr pci_tsm_bound_op() { return PciAttr {.name = "pci_tsm.bound", .rel = "tsm/bound", .max = 32, .stability = AbiTesting}; }
+/// The descriptor for a PCI function's `tsm/dsm` attribute.
 pub PciAttr pci_tsm_dsm_op() { return PciAttr {.name = "pci_tsm.dsm", .rel = "tsm/dsm", .max = 32, .stability = AbiTesting}; }
+/// The descriptor for the DOE feature file of CMA/SPDM (`doe_features/0001:01`).
 pub PciAttr pci_doe_spdm_op() { return PciAttr {.name = "pci_tsm.doe_spdm", .rel = "doe_features/0001:01", .max = 64, .stability = AbiTesting}; }
+/// The descriptor for the DOE feature file of secured SPDM (`doe_features/0001:02`).
 pub PciAttr pci_doe_secured_spdm_op() { return PciAttr {.name = "pci_tsm.doe_secured_spdm", .rel = "doe_features/0001:02", .max = 64, .stability = AbiTesting}; }
 
 // One attribute's bytes (each wrapper calls the verb with its own
@@ -122,17 +132,23 @@ Result(Int, DeviceError) pt_hex(Str name, Result(List(DevOut), DeviceError) r) {
     return Ok(v);
 }
 
-// The function's PCI vendor ID (0x10de NVIDIA), device ID and class code.
+/// The PCI vendor ID of the function at `a` (0x10de for NVIDIA).
+/// Err(BadReply) when the attribute is not "0x" hex and a newline.
 @requires(device(readonly))
 pub Result(Int, DeviceError) pci_vendor(PciAddr a) { return pt_hex("pci_tsm.vendor", device.read_pci_attr(pci_vendor_op(), a)); }
+/// The PCI device ID of the function at `a`.
+/// Err(BadReply) when the attribute is not "0x" hex and a newline.
 @requires(device(readonly))
 pub Result(Int, DeviceError) pci_device_id(PciAddr a) { return pt_hex("pci_tsm.device", device.read_pci_attr(pci_device_op(), a)); }
+/// The PCI class code of the function at `a`.
+/// Err(BadReply) when the attribute is not "0x" hex and a newline.
 @requires(device(readonly))
 pub Result(Int, DeviceError) pci_class(PciAddr a) { return pt_hex("pci_tsm.class", device.read_pci_attr(pci_class_op(), a)); }
 
-// Whether the kernel (or the platform TSM) authenticated the device:
-// Ok(None) when the attribute is absent (the device or the TSM cannot
-// authenticate it), else its "0\n" or "1\n".
+/// Whether the kernel (or the platform TSM) authenticated the device at `a`.
+/// Ok(None) when the attribute is absent (the device or the TSM cannot
+/// authenticate it), else Some of its "0\n" or "1\n"; other text is
+/// Err(BadReply).
 @requires(device(readonly))
 pub Result(Option(Bool), DeviceError) pci_authenticated(PciAddr a) {
     return match (device.read_pci_attr(pci_authenticated_op(), a)) {
@@ -151,10 +167,12 @@ Result(Option(T), DeviceError) pt_none(DeviceError e) {
     return match (r) { Ok(b) => Ok(None), Err(x) => Err(x), };
 }
 
-// The TSM a device is connected to (tsm/connect) or bound through
-// (tsm/bound): Ok(None) for no tsm/ directory or no TSM.
+/// The name of the TSM the device at `a` is connected to (tsm/connect).
+/// Ok(None) for no tsm/ directory or no TSM; malformed text is Err(BadReply).
 @requires(device(readonly))
 pub Result(Option(Str), DeviceError) pci_tsm_connected(PciAddr a) { return pt_tsm("pci_tsm.connect", device.read_pci_attr(pci_tsm_connect_op(), a)); }
+/// The name of the TSM the device at `a` is bound through (tsm/bound).
+/// Ok(None) for no tsm/ directory or no TSM; malformed text is Err(BadReply).
 @requires(device(readonly))
 pub Result(Option(Str), DeviceError) pci_tsm_bound(PciAddr a) { return pt_tsm("pci_tsm.bound", device.read_pci_attr(pci_tsm_bound_op(), a)); }
 
@@ -169,9 +187,9 @@ Result(Option(Str), DeviceError) pt_tsm(Str name, Result(List(DevOut), DeviceErr
     };
 }
 
-// Whether the device offers CMA/SPDM (secured: also secured SPDM) over a
-// DOE mailbox, as the kernel's DOE discovery found: the feature's file is
-// there.
+/// Whether the device at `a` offers CMA/SPDM over a DOE mailbox.
+/// With `secured`, asks about secured SPDM instead. True when the kernel's
+/// DOE discovery created the feature's file, Ok(false) when it is absent.
 @requires(device(readonly))
 pub Result(Bool, DeviceError) pci_doe_spdm(PciAddr a, Bool secured) {
     Result(List(DevOut), DeviceError) r = if (secured) { device.read_pci_attr(pci_doe_secured_spdm_op(), a) } else { device.read_pci_attr(pci_doe_spdm_op(), a) };

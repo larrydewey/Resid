@@ -6,29 +6,42 @@ import "aesgcm.resid";
 // the lib convention: index 0 is a dummy seed; payload data starts at
 // index 1. All positions are 1-based data indices.
 //
-// Scope v1: frame header encode/decode, SETTINGS/DATA/HEADERS framing,
-// HPACK integer coding, static table, dynamic table, indexed and all
-// three literal representations. Huffman-coded string literals are out
-// of scope for v1 (flagged by hp_str_huffman).
+// Scope: frame header encode/decode, SETTINGS/DATA/HEADERS/CONTINUATION/
+// WINDOW_UPDATE framing, HPACK integer coding, static table, indexed and
+// all three literal representations, and Huffman-coded string literals
+// (RFC 7541 Appendix B). Header encoding is not provided. The dynamic
+// table never evicts: an encoder only refers to entries it has not
+// evicted, whose indices are unchanged by the older ones kept here.
 
+/// Returns the frame type code of DATA (0, RFC 7540 §6.1).
 pub Int h2_t_data() { return 0; }
+/// Returns the frame type code of HEADERS (1, RFC 7540 §6.2).
 pub Int h2_t_headers() { return 1; }
+/// Returns the frame type code of PRIORITY (2, RFC 7540 §6.3).
 pub Int h2_t_priority() { return 2; }
+/// Returns the frame type code of RST_STREAM (3, RFC 7540 §6.4).
 pub Int h2_t_rst_stream() { return 3; }
+/// Returns the frame type code of SETTINGS (4, RFC 7540 §6.5).
 pub Int h2_t_settings() { return 4; }
+/// Returns the frame type code of PUSH_PROMISE (5, RFC 7540 §6.6).
 pub Int h2_t_push_promise() { return 5; }
+/// Returns the frame type code of PING (6, RFC 7540 §6.7).
 pub Int h2_t_ping() { return 6; }
+/// Returns the frame type code of GOAWAY (7, RFC 7540 §6.8).
 pub Int h2_t_goaway() { return 7; }
+/// Returns the frame type code of WINDOW_UPDATE (8, RFC 7540 §6.9).
 pub Int h2_t_window_update() { return 8; }
+/// Returns the frame type code of CONTINUATION (9, RFC 7540 §6.10).
 pub Int h2_t_continuation() { return 9; }
 
-// One decoded HTTP/2 frame header.
-// length: payload length (0..16777215); stype: frame type; flags:
-// per-type flags byte; sid: stream id with the reserved bit masked off;
-// bad: true when the buffer is too short.
+/// One decoded HTTP/2 frame header (RFC 7540 §4.1).
+/// `length` is the payload length (0..16777215), `stype` the frame type,
+/// `flags` the per-type flags byte, `sid` the stream id with the reserved
+/// bit masked off; `bad` is true when the buffer is too short.
 type H2FrameHdr = { Int(64) length; Int(64) stype; Int(64) flags; Int(64) sid; Bool bad; };
 
-// u24 big-endian at pos.
+/// Returns the 24-bit big-endian integer in `b[pos..pos+2]`.
+/// No bounds check is made.
 pub Int h2_u24(List(Int) b, Int pos) {
     Int hi = b[pos] * 65536;
     Int mid = b[pos + 1] * 256;
@@ -36,7 +49,9 @@ pub Int h2_u24(List(Int) b, Int pos) {
     return hi + mid + lo;
 }
 
-// Decode the 9-octet frame header starting at pos.
+/// Decodes the 9-octet frame header starting at index `pos` of `b`.
+/// The reserved stream-id bit is masked off; `bad` is set (all fields 0)
+/// when fewer than 9 octets remain or `pos` is negative.
 pub H2FrameHdr h2_frame_hdr(List(Int) b, Int pos) {
     Int n = b.len() - 1;
     if (pos < 0 || pos + 8 > n) {
@@ -50,7 +65,8 @@ pub H2FrameHdr h2_frame_hdr(List(Int) b, Int pos) {
     return H2FrameHdr { .length = len, .stype = ty, .flags = fl, .sid = sid, .bad = false };
 }
 
-// Encode a frame header into a fresh list (9 data bytes).
+/// Encodes a frame header as a fresh 9-element list, 0-based with no seed.
+/// `length` must fit in 24 bits and `sid` in 32; nothing is masked.
 pub List(Int) h2_frame_hdr_enc(Int length, Int stype, Int flags, Int sid) {
     Int b2 = length / 65536;
     Int r1 = length - b2 * 65536;
@@ -65,13 +81,13 @@ pub List(Int) h2_frame_hdr_enc(Int length, Int stype, Int flags, Int sid) {
     return [b2, b1, b0, stype, flags, s3, s2, s1, s0];
 }
 
-// Concatenate two lists (seed dropped from the right operand).
+/// Returns `a` followed by every element of `b`, from index 0.
 pub List(Int) h2_cat(List(Int) a, List(Int) b) {
     // Append ALL of b's data bytes (0-based).
     return h2_cat_acc(b, 0, b.len() - 1, 0, a);
 }
 
-// Byte-for-byte der_slice_acc shape (proven against the codegen).
+/// Appends `data[i..stop]` (inclusive) to `acc`; `start` is unused.
 pub List(Int) h2_cat_acc(List(Int) data, Int start, Int stop, Int i, List(Int) acc) {
     if (i > stop) { return acc; }
     Int bv = data[i];
@@ -80,26 +96,29 @@ pub List(Int) h2_cat_acc(List(Int) data, Int start, Int stop, Int i, List(Int) a
     return h2_cat_acc(data, start, stop, ni, acc2);
 }
 
+/// `bv` followed by `rest`.
 pub List(Int) bv_join(Int bv, List(Int) rest) {
     List(Int) out = [];
     List(Int) out2 = out.concat([bv]);
     return lst_join_acc(out2, rest);
 }
 
+/// `acc` followed by `rest`.
 pub List(Int) lst_join_acc(List(Int) acc, List(Int) rest) {
     return lst_join_loop(acc, rest, 0);
 }
 
+/// `acc` followed by `rest[j..]`.
 pub List(Int) lst_join_loop(List(Int) acc, List(Int) rest, Int j) {
     Int remaining = rest.len() - j;
     if (remaining < 1) { return acc; }
     Int vj = rest[j];
     List(Int) acc2 = acc.concat([vj]);
     Int nj = j + 1;
-    return lst_join_loop(acc, rest, nj);
+    return lst_join_loop(acc2, rest, nj);
 }
 
-// Freshly named joiner for codegen-bug isolation.
+/// A fresh copy of `b[i..last]` (inclusive); empty when `i > last`.
 pub List(Int) h2_join(List(Int) b, Int i, Int last) {
     if (i > last) { List(Int) empty = []; return empty; }
     Int bv = b[i];
@@ -108,7 +127,8 @@ pub List(Int) h2_join(List(Int) b, Int i, Int last) {
 }
 
 
-// Wrap `payload` in a frame of the given type/flags/stream.
+/// Wraps `payload` in a frame of type `stype` with `flags` on stream `sid`.
+/// The length comes from `payload`; the result is 0-based with no seed.
 pub List(Int) h2_frame(Int stype, Int flags, Int sid, List(Int) payload) {
     Int len = payload.len();
     List(Int) hdr = h2_frame_hdr_enc(len, stype, flags, sid);
@@ -116,7 +136,7 @@ pub List(Int) h2_frame(Int stype, Int flags, Int sid, List(Int) payload) {
     return h2_cat_all(payload, 0, len - 1, 0, hdr);
 }
 
-// Appends b[start..last] onto acc (same proven recursion shape).
+/// Appends `b[i..last]` (inclusive) to `acc`; `start` is unused.
 pub List(Int) h2_cat_all(List(Int) b, Int start, Int last, Int i, List(Int) acc) {
     if (i > last) { return acc; }
     Int bv = b[i];
@@ -127,13 +147,16 @@ pub List(Int) h2_cat_all(List(Int) b, Int start, Int last, Int i, List(Int) acc)
 
 // ─── SETTINGS payload helpers ─────────────────────────────────────────
 
-// u16/u32 big-endian byte helpers (single-element lists, 0-based).
+// Big-endian octet encoders (0-based lists, no seed).
+
+/// Encodes `x` as two big-endian octets; `x` must fit in 16 bits.
 pub List(Int) h2_u16_bytes(Int x) {
     Int hi = x / 256;
     Int lo = x - hi * 256;
     return [hi, lo];
 }
 
+/// Encodes `x` as four big-endian octets; `x` must fit in 32 bits.
 pub List(Int) h2_u32_bytes(Int x) {
     Int b3 = x / 16777216;
     Int r = x - b3 * 16777216;
@@ -144,25 +167,28 @@ pub List(Int) h2_u32_bytes(Int x) {
     return [b3, b2, b1, b0];
 }
 
-// Number of settings pairs in a payload.
+/// Returns the number of complete 6-octet pairs in a SETTINGS `payload`.
+/// The payload is 0-based, with no seed.
 pub Int h2_settings_count(List(Int) payload) {
     Int n = payload.len();
     return n / 6;
 }
 
-// Setting id (u16) of pair k (0-based).
+/// Returns the 16-bit identifier of setting pair `k` (0-based) in `payload`.
 pub Int h2_setting_id(List(Int) payload, Int k) {
     Int off = k * 6;
     return payload[off] * 256 + payload[off + 1];
 }
 
-// Setting value (u32) of pair k (0-based).
+/// Returns the 32-bit value of setting pair `k` (0-based) in `payload`.
 pub Int h2_setting_value(List(Int) payload, Int k) {
     Int off = k * 6;
     return payload[off + 2] * 16777216 + payload[off + 3] * 65536 + payload[off + 4] * 256 + payload[off + 5];
 }
 
-// Build an empty (ACK-able) or populated SETTINGS payload.
+/// Builds a SETTINGS payload from `ids[k..]` and `vals[k..]`, six octets
+/// per pair. Start with `k` = 0; empty `ids` give the empty payload an ACK
+/// carries.
 pub List(Int) h2_settings_payload(List(Int) ids, List(Int) vals, Int k) {
     if (k >= ids.len()) { List(Int) empty = []; return empty; }
     Int id = ids[k];
@@ -175,9 +201,9 @@ pub List(Int) h2_settings_payload(List(Int) ids, List(Int) vals, Int k) {
 
 // ─── HPACK ────────────────────────────────────────────────────────────
 
-// Static table entry i (1..61): "name" or "name=value".
-// Returns the raw table string; callers split on the first '=' when a
-// value may be present. Use hp_static_has to test value presence.
+/// Returns HPACK static table entry `i` (1..61) as "name" or "name=value".
+/// Callers split on the first '=' (`hp_static_name`, `hp_static_val`);
+/// out of range gives "" (RFC 7541 Appendix A).
 pub Str hp_static(Int i) {
     if (i == 1) { return ":authority"; }
     if (i == 2) { return ":method=GET"; }
@@ -243,14 +269,16 @@ pub Str hp_static(Int i) {
     return "";
 }
 
-// True when static entry i carries a value (contains '=').
+/// Whether static table entry `i` (RFC 7541 Appendix A) carries a value:
+/// entries 2 to 14 and 16.
 pub Bool hp_static_has_val(Int i) {
-    if (i <= 14) { return true; }
+    if (i >= 2 && i <= 14) { return true; }
     if (i == 16) { return true; }
     return false;
 }
 
-// First index of codepoint c at or after i; -1 when absent.
+/// Returns the first index at or after `i` where `s` has codepoint `c`.
+/// Returns -1 when absent.
 pub Int h2_find_char(Str s, Int c, Int i) {
     Int n = str_len(s);
     if (i >= n) { return 0 - 1; }
@@ -258,30 +286,37 @@ pub Int h2_find_char(Str s, Int c, Int i) {
     return h2_find_char(s, c, i + 1);
 }
 
-// Name part of a static-table string.
+/// Returns the name part of table string `ent`: the text before the first
+/// '=', or all of `ent` when it has none.
 pub Str hp_static_name(Str ent) {
     Int eq = h2_find_char(ent, 61, 0);
     if (eq < 0) { return ent; }
     return str_slice(ent, 0, eq);
 }
 
-// Value part of a static-table string ("=" present only).
+/// Returns the value part of table string `ent`: the text after the first
+/// '=', or "" when it has none.
 pub Str hp_static_val(Str ent) {
     Int eq = h2_find_char(ent, 61, 0);
+    if (eq < 0) { return ""; }
     Int n = str_len(ent);
     return str_slice(ent, eq + 1, n);
 }
 
+/// Returns 2 to the power `k`; `k` must be non-negative.
 pub Int pow2(Int k) {
     if (k == 0) { return 1; }
     return 2 * pow2(k - 1);
 }
 
-// HPACK integer decoding per RFC 7541 C.1: prefix bits given by
-// pfxmask (e.g. 127 for 7-bit prefixes). Returns the decoded integer;
-// val_out via hp_int_val. bad=true on truncated input.
+/// A decoded HPACK integer (RFC 7541 §5.1): its value, the index of the
+/// last octet consumed (`next`), and `bad` on truncated or oversized input.
 type HpInt = { Int(64) val; Int(64) next; Bool bad; };
 
+/// Decodes an HPACK integer whose first octet `first` is at `pos` (RFC 7541
+/// §5.1); `pfxmask` holds the prefix bits, e.g. 127 for a 7-bit prefix.
+/// `next` is the index of the last octet consumed; `bad` is set on
+/// truncated input or more than 28 bits of continuation.
 pub HpInt hp_read_int(List(Int) b, Int pos, Int first, Int pfxmask) {
     Int v = first & pfxmask;
     if (v < pfxmask) {
@@ -291,6 +326,9 @@ pub HpInt hp_read_int(List(Int) b, Int pos, Int first, Int pfxmask) {
     return hp_int_cont(b, pos + 1, pfxmask, v, m);
 }
 
+/// Continues an HPACK integer at continuation octet `pos`, with `acc` the
+/// value so far and `m` the current bit shift.
+/// Sets `bad` on truncated input or when `m` passes 28.
 pub HpInt hp_int_cont(List(Int) b, Int pos, Int pfxmask, Int acc, Int m) {
     Int n = b.len() - 1;
     // Past 28 bits of continuation the value is no length any frame has
@@ -308,14 +346,14 @@ pub HpInt hp_int_cont(List(Int) b, Int pos, Int pfxmask, Int acc, Int m) {
     return hp_int_cont(b, pos + 1, pfxmask, step, nm);
 }
 
-// Raw octets [start..stop] (inclusive, layout) as a Str.
+/// Returns octets `b[start..stop]` (inclusive) as a string, one codepoint
+/// per octet.
 pub Str h2_bytes_str(List(Int) b, Int start, Int stop) {
     return h2_bs_acc(b, start, stop, start, str_sb_new());
 }
 
-// Rope-backed: append each octet as a codepoint to a chunked builder instead
-// of `acc + str_from_code(...)` (which re-allocates the whole string per
-// octet — O(n²) on decode-heavy headers).
+/// Appends octets `b[i..stop]` to builder `sb` as codepoints and finishes
+/// it; `start` is unused. The chunked builder keeps this linear in length.
 pub Str h2_bs_acc(List(Int) b, Int start, Int stop, Int i, Str sb) {
     if (i > stop) { return str_sb_finish(sb); }
     Str sb2 = str_sb_append_cp(sb, b[i]);
@@ -323,10 +361,13 @@ pub Str h2_bs_acc(List(Int) b, Int start, Int stop, Int i, Str sb) {
     return h2_bs_acc(b, start, stop, ni, sb2);
 }
 
-// HPACK string literal: H bit + length-int + raw octets. Non-Huffman
-// only in v1. Returns the decoded string.
+/// A decoded HPACK string literal (RFC 7541 §5.2): the string, the index
+/// after it (`next`), whether it was Huffman-coded, and `bad` on error.
 type HpStr = { Str s; Int(64) next; Bool huffman; Bool bad; };
 
+/// Decodes the HPACK string literal at `pos` (RFC 7541 §5.2).
+/// Huffman-coded strings are decoded and flagged in `huffman`; `next` is
+/// the index after the string; `bad` on truncation or a bad Huffman code.
 pub HpStr hp_read_str(List(Int) b, Int pos) {
     Int n = b.len() - 1;
     if (pos < 0 || pos > n) { return HpStr { .s = "", .next = pos, .huffman = false, .bad = true }; }
@@ -352,8 +393,9 @@ pub HpStr hp_read_str(List(Int) b, Int pos) {
 // Entries stored as "name=value" strings, newest first (index 62 maps
 // to element 0).
 
-// Lookup name+value through the combined space: static 1..61, dynamic
-// from 62 up. Returns the table string or "" when absent.
+/// Returns the table string for HPACK index `idx` in `dyn`'s combined space.
+/// Static entries are 1..61, dynamic ones 62 up (newest first); out of
+/// range gives "".
 pub Str hp_lookup(Int idx, List(Str) dyn) {
     if (idx >= 1 && idx <= 61) { return hp_static(idx); }
     Int di = idx - 62;
@@ -362,35 +404,38 @@ pub Str hp_lookup(Int idx, List(Str) dyn) {
     return dyn[di];
 }
 
-// Prepend a new entry to the dynamic table.
+/// Dynamic table `dyn` with `ent` inserted as its newest (first) entry.
+/// No size limit applies: entries are never evicted.
 pub List(Str) hp_insert(List(Str) dyn, Str ent) {
     List(Str) out = [ent];
     return h2_scat(out, dyn);
 }
 
-// Concatenate two Str lists (0-based).
+/// `a` followed by `b`.
 pub List(Str) h2_scat(List(Str) a, List(Str) b) {
     return h2_scat_acc(a, b, 0, b.len() - 1);
 }
 
-// Copies b[0..last]: both a and b are 0-based.
+/// `a` followed by `b[i..last]` (inclusive).
 pub List(Str) h2_scat_acc(List(Str) a, List(Str) b, Int i, Int last) {
     if (i > last) { return a; }
     List(Str) a2 = a.concat([b[i]]);
     Int ni = i + 1;
-    return h2_scat_acc(a, b, ni, last);
+    return h2_scat_acc(a2, b, ni, last);
 }
 
 // ─── Header block decoding ────────────────────────────────────────────
 
-// One decoded header field.
+/// One decoded header field: its name and value.
 type HpField = { Str name; Str value; };
 
-// Decoded header-list accumulator result.
+/// Result of decoding a header block: the fields so far, the index where
+/// decoding stopped (`next`), the updated dynamic table, and `bad` on error.
 type HpBlock = { List(HpField) fields; Int next; List(Str) dyn; Bool bad; };
 
-// Decode a complete header block starting at pos. `dyn` is the current
-// dynamic table (mutated by incremental-indexing literals).
+/// Decodes the HPACK header block `b[pos..end]`, appending fields to `accf`.
+/// `dyn` is the current dynamic table; the result carries the updated one.
+/// Size updates are accepted, not enforced; `bad` on malformed input.
 pub HpBlock hp_decode_block(List(Int) b, Int pos, Int end, List(Str) dyn, List(HpField) accf) {
     if (pos > end) {
         return HpBlock { .fields = accf, .next = pos, .dyn = dyn, .bad = false };
@@ -425,7 +470,9 @@ pub HpBlock hp_decode_block(List(Int) b, Int pos, Int end, List(Str) dyn, List(H
     return hp_literal(b, pos, end, dyn, accf, 15, first, false);
 }
 
-// Shared literal decoding (indexed-name or new-name variants).
+/// Decodes one literal field at `pos` (indexed or new name), then the rest
+/// of the block. `pfxmask` is the name-index prefix; `incidx` adds the
+/// field to the dynamic table.
 pub HpBlock hp_literal(List(Int) b, Int pos, Int end, List(Str) dyn, List(HpField) accf, Int pfxmask, Int first, Bool incidx) {
     HpInt ni = hp_read_int(b, pos, first, pfxmask);
     if (ni.bad) { return HpBlock { .fields = accf, .next = ni.next, .dyn = dyn, .bad = true }; }
@@ -445,7 +492,7 @@ pub HpBlock hp_literal(List(Int) b, Int pos, Int end, List(Str) dyn, List(HpFiel
     return hp_decode_block(b, vs.next, end, dyn2, fs);
 }
 
-// Insert into the dynamic table when incidx is set.
+/// Returns `dyn` with `ent` inserted when `incidx` is set, else `dyn`.
 pub List(Str) hp_maybe_insert(Bool incidx, List(Str) dyn, Str ent) {
     if (incidx) { return hp_insert(dyn, ent); }
     return dyn;
@@ -456,6 +503,8 @@ pub List(Str) hp_maybe_insert(Bool incidx, List(Str) dyn, Str ent) {
 // canonical decoder. EOS (symbol 256) inside a string is an error;
 // up-to-7 bits of 1-padding at the end is accepted.
 
+/// Returns the Huffman code of symbol `s` (0..256, 256 = EOS), right-aligned.
+/// Returns -1 for any other `s`.
 pub Int hp_huff_code(Int s) {
     if (s == 0) { return 8184; } if (s == 1) { return 8388568; } if (s == 2) { return 268435426; } if (s == 3) { return 268435427; } if (s == 4) { return 268435428; } if (s == 5) { return 268435429; }
     if (s == 6) { return 268435430; } if (s == 7) { return 268435431; } if (s == 8) { return 268435432; } if (s == 9) { return 16777194; } if (s == 10) { return 1073741820; } if (s == 11) { return 268435433; }
@@ -503,6 +552,8 @@ pub Int hp_huff_code(Int s) {
     return 0 - 1;
 }
 
+/// Returns the Huffman code length in bits of symbol `s` (0..256).
+/// Returns -1 for any other `s`.
 pub Int hp_huff_bits(Int s) {
     if (s == 0) { return 13; } if (s == 1) { return 23; } if (s == 2) { return 28; } if (s == 3) { return 28; } if (s == 4) { return 28; } if (s == 5) { return 28; }
     if (s == 6) { return 28; } if (s == 7) { return 28; } if (s == 8) { return 28; } if (s == 9) { return 24; } if (s == 10) { return 30; } if (s == 11) { return 28; }
@@ -551,11 +602,16 @@ pub Int hp_huff_bits(Int s) {
 }
 
 
+/// One decoded Huffman symbol: the symbol, the bit index after its code
+/// (`nextg`), and `bad` at end of input, on EOS, or with no matching code.
 type HuffState = { Int(64) sym; Int(64) nextg; Bool bad; };
 
+/// A Huffman-decoded string, the bit index where decoding stopped
+/// (`nextg`), and `bad` on an invalid code or padding.
 type HuffDec = { Str s; Int(64) nextg; Bool bad; };
 
-// Bit value at global bit position g; -1 past the end.
+/// Returns bit `g` of `b`, counted most significant first from `b[0]`.
+/// Returns -1 when `g` >= `gend`.
 pub Int hp_bit_at(List(Int) b, Int g, Int gend) {
     if (g >= gend) { return 0 - 1; }
     Int bytei = g / 8;
@@ -566,11 +622,14 @@ pub Int hp_bit_at(List(Int) b, Int g, Int gend) {
     return masked & 1;
 }
 
-// Find the symbol whose code has exactly L bits and value `code`.
+/// Returns the symbol whose code is exactly `l` bits with value `code`.
+/// Returns -1 when none matches.
 pub Int hp_huff_find(Int l, Int code) {
     return hp_huff_find_at(l, code, 0);
 }
 
+/// Searches symbols from `s` up for an `l`-bit code equal to `code`.
+/// Returns -1 when none matches.
 pub Int hp_huff_find_at(Int l, Int code, Int s) {
     if (s > 257) { return 0 - 1; }
     Bool lm = hp_huff_bits(s) == l;
@@ -579,7 +638,8 @@ pub Int hp_huff_find_at(Int l, Int code, Int s) {
     return hp_huff_find_at(l, code, s + 1);
 }
 
-// Decode one symbol starting at global bit g.
+/// Decodes one Huffman symbol starting at bit `g`; pass 0 for `len`, `acc`.
+/// `bad` is set at end of input, on EOS, or with no code in 30 bits.
 pub HuffState hp_huff_one(List(Int) b, Int g, Int gend, Int len, Int acc) {
     if (len >= 30) {
         return HuffState { .sym = 0, .nextg = g, .bad = true };
@@ -600,7 +660,7 @@ pub HuffState hp_huff_one(List(Int) b, Int g, Int gend, Int len, Int acc) {
     return hp_huff_one(b, g + 1, gend, l2, acc2);
 }
 
-// True when every bit in [g, gend) is set (EOS padding).
+/// Returns true when every bit in [`g`, `gend`) is 1, as EOS padding is.
 pub Bool hp_pad_ones(List(Int) b, Int g, Int gend) {
     if (g >= gend) { return true; }
     Int v = hp_bit_at(b, g, gend);
@@ -608,7 +668,8 @@ pub Bool hp_pad_ones(List(Int) b, Int g, Int gend) {
     return hp_pad_ones(b, g + 1, gend);
 }
 
-// Decode a whole Huffman string spanning [startbyte*8+startbit, gend).
+/// Decodes Huffman symbols in bits [`g`, `gend`) into builder `sb`.
+/// Under 8 trailing 1 bits are accepted as padding; else `bad` is set.
 pub HuffDec hp_huff_loop(List(Int) b, Int g, Int gend, Str sb) {
     Int rem = gend - g;
     if (rem == 0) {
@@ -633,7 +694,8 @@ pub HuffDec hp_huff_loop(List(Int) b, Int g, Int gend, Str sb) {
     return hp_huff_loop(b, st.nextg, gend, sb2);
 }
 
-// Entry point: Huffman-decode li.val bytes beginning at byte `p0`.
+/// Huffman-decodes `nbytes` octets of `b` from index `p0` (RFC 7541
+/// Appendix B).
 pub HuffDec hp_huff_str(List(Int) b, Int p0, Int nbytes) {
     Int gs = p0 * 8;
     Int ge = (p0 + nbytes) * 8;
@@ -642,26 +704,29 @@ pub HuffDec hp_huff_str(List(Int) b, Int p0, Int nbytes) {
 
 // ─── Flow control + large-header framing (RFC 7540 §6.9, §6.10) ──────
 
+/// Returns `a` when `c` is true, else `b`.
 pub Int h2_pick(Bool c, Int a, Int b) {
     if (c) { return a; }
     return b;
 }
 
-// WINDOW_UPDATE frame for `sid` (0 = connection) carrying increment.
+/// Builds a WINDOW_UPDATE frame for stream `sid` (0 = connection).
+/// `inc` is the window increment, unmasked.
 pub List(Int) h2_window_update_frame(Int sid, Int inc) {
     List(Int) pay = h2_u32_bytes(inc);
     return h2_frame(h2_t_window_update(), 0, sid, pay);
 }
 
-// HEADERS frame chain for header block `blk` on stream `sid`: the
-// block is split into ≤16384-octet pieces; the first piece rides in
-// the HEADERS frame (OR-ing extra_flags, e.g. 1 = END_STREAM), the
-// rest in CONTINUATION frames. END_HEADERS is set on the final frame
-// here — do NOT pass it via extra_flags.
+/// Builds HEADERS plus CONTINUATION frames for block `blk` on stream `sid`.
+/// Pieces are at most 16384 octets; `extra_flags` (e.g. 1 = END_STREAM)
+/// goes on the HEADERS frame only. END_HEADERS is set on the final frame
+/// here, so do not pass it in `extra_flags`.
 pub List(Int) h2_headers_cont_frames(Int sid, Int extra_flags, List(Int) blk) {
     return h2_hc_chunk(sid, extra_flags, blk, 0, true);
 }
 
+/// Builds the header frames for `blk` from index `i` on; `first` marks
+/// the HEADERS frame.
 pub List(Int) h2_hc_chunk(Int sid, Int extra_flags, List(Int) blk, Int i, Bool first) {
     Int n = blk.len();
     Int rem = n - i;
@@ -680,13 +745,13 @@ pub List(Int) h2_hc_chunk(Int sid, Int extra_flags, List(Int) blk, Int i, Bool f
     return h2_cat(f, h2_hc_chunk(sid, extra_flags, blk, ni, false));
 }
 
-// DATA frame chain for `payload` on stream `sid`; END_STREAM set on
-// the final frame when `end`. Frames stay under the 16384 default
-// max frame size.
+/// Builds DATA frames of at most 16384 octets for `payload` on stream `sid`.
+/// END_STREAM is set on the final frame when `end` is true.
 pub List(Int) h2_data_frames(Int sid, List(Int) payload, Bool end) {
     return h2_data_acc(sid, payload, end, 0);
 }
 
+/// Builds the DATA frames for `payload` from index `i` on.
 pub List(Int) h2_data_acc(Int sid, List(Int) payload, Bool end, Int i) {
     Int n = payload.len();
     Int rem = n - i;
@@ -702,8 +767,8 @@ pub List(Int) h2_data_acc(Int sid, List(Int) payload, Bool end, Int i) {
     return h2_cat(f, h2_data_acc(sid, payload, end, ni));
 }
 
-// Total DATA payload octets across frames in `buf` (walks frame
-// headers; used to size flow-control credit).
+/// Returns the total DATA payload octets of the frames in `buf[p..end]`.
+/// Walks frame headers; a truncated frame ends the count.
 pub Int h2_count_data(List(Int) buf, Int p, Int end) {
     if (p + 9 > end) { return 0; }
     H2FrameHdr h = h2_frame_hdr(buf, p);

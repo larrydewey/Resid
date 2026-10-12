@@ -14,21 +14,21 @@
 
 import "device.resid";
 
-// TDX_CMD_GET_REPORT0: REPORTDATA in, TDREPORT (subtype 0) out, both inside
-// struct tdx_report_req.
-//
-//     struct tdx_report_req   // 1088 bytes
-//         reportdata           offset    0,   64 bytes  Inline In
-//         tdreport             offset   64, 1024 bytes  Inline Out
-//     TDX_CMD_GET_REPORT0: x86-64 0xc4405401, aarch64 0xc4405401
+/// TDX_CMD_GET_REPORT0: REPORTDATA in, TDREPORT (subtype 0) out, both inside
+/// struct tdx_report_req.
+///
+///     struct tdx_report_req   // 1088 bytes
+///         reportdata           offset    0,   64 bytes  Inline In
+///         tdreport             offset   64, 1024 bytes  Inline Out
+///     TDX_CMD_GET_REPORT0: x86-64 0xc4405401, aarch64 0xc4405401
 pub IoctlOp tdx_get_report0_op() {
     return IoctlOp {.name = "tdx_guest.tdx_get_report0", .path = "/dev/tdx_guest", .requests = [Request {.arch = X86_64, .number = 3292550145}, Request {.arch = Aarch64, .number = 3292550145}], .size = 1088, .fields = [Inline(0, 64, In), Inline(64, 1024, Out)], .write = false, .version = Unversioned, .stability = Uapi};
 }
 
 // -- Layouts the wrappers fill and parse ----------------------------------
 
-// TDX_REPORTDATA_LEN
+/// The kernel's TDX_REPORTDATA_LEN.
 pub Int tdx_reportdata_len() { return 64; }
 
-// TDX_REPORT_LEN
+/// The kernel's TDX_REPORT_LEN.
 pub Int tdx_report_len() { return 1024; }

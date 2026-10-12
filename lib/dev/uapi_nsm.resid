@@ -14,24 +14,24 @@
 
 import "device.resid";
 
-// NSM_IOCTL_RAW: a CBOR request of at most NSM_REQUEST_MAX_SIZE bytes in, a
-// CBOR response of at most NSM_RESPONSE_MAX_SIZE out, each behind a struct
-// nsm_iovec. A write: a raw request can extend or lock a PCR.
-//
-//     struct nsm_raw   // 32 bytes
-//         request.addr         offset    0,    8 bytes  Buffer In, at most 4096 bytes, length in request.len
-//         request.len          offset    8,    8 bytes  Scalar In
-//         response.addr        offset   16,    8 bytes  Buffer Out, at most 12288 bytes, length in response.len
-//         response.len         offset   24,    8 bytes  Scalar InOut
-//     NSM_IOCTL_RAW: x86-64 0xc0200a00, aarch64 0xc0200a00
+/// NSM_IOCTL_RAW: a CBOR request of at most NSM_REQUEST_MAX_SIZE bytes in, a
+/// CBOR response of at most NSM_RESPONSE_MAX_SIZE out, each behind a struct
+/// nsm_iovec. A write: a raw request can extend or lock a PCR.
+///
+///     struct nsm_raw   // 32 bytes
+///         request.addr         offset    0,    8 bytes  Buffer In, at most 4096 bytes, length in request.len
+///         request.len          offset    8,    8 bytes  Scalar In
+///         response.addr        offset   16,    8 bytes  Buffer Out, at most 12288 bytes, length in response.len
+///         response.len         offset   24,    8 bytes  Scalar InOut
+///     NSM_IOCTL_RAW: x86-64 0xc0200a00, aarch64 0xc0200a00
 pub IoctlOp nsm_raw_op() {
     return IoctlOp {.name = "nsm.raw", .path = "/dev/nsm", .requests = [Request {.arch = X86_64, .number = 3223325184}, Request {.arch = Aarch64, .number = 3223325184}], .size = 32, .fields = [Buffer(0, 8, 4096, In, false), Scalar(8, 8, In), Buffer(16, 24, 12288, Out, false), Scalar(24, 8, InOut)], .write = true, .version = Unversioned, .stability = Uapi};
 }
 
 // -- Layouts the wrappers fill and parse ----------------------------------
 
-// NSM_REQUEST_MAX_SIZE
+/// The kernel's NSM_REQUEST_MAX_SIZE.
 pub Int nsm_request_max_size() { return 4096; }
 
-// NSM_RESPONSE_MAX_SIZE
+/// The kernel's NSM_RESPONSE_MAX_SIZE.
 pub Int nsm_response_max_size() { return 12288; }

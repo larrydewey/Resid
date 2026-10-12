@@ -144,6 +144,18 @@ issuer certificate specified" instead of reading it.
 `revoked_at` is asserted as the fixed literal 1735689600 rather than
 computed, so the test pins the instant rather than restating the fixture.
 
+### Several answers in one response
+
+`ocsp-two.der` answers for `srv.der` (serial `0x5000`) and `srv384.der`
+(`0x5002`), in that order, signed by `srvca` (whose key is committed), so
+a certificate whose SingleResponse is not the first is still found:
+
+    printf 'V\t<srv notAfter>\t\t5000\tunknown\t/CN=localhost\nV\t<srv384 notAfter>\t\t5002\tunknown\t/CN=localhost\n' > index.txt
+    echo 'unique_subject = no' > index.txt.attr
+    openssl ocsp -issuer srvca.pem -cert srv.pem -cert srv384.pem -reqout req.der -no_nonce
+    openssl ocsp -index index.txt -CA srvca.pem -rsigner srvca.pem -rkey srvca.key \
+        -reqin req.der -respout ocsp-two.der -no_nonce -ndays 36500
+
 ### The delegated responder
 
 `ocsp-delegated.der` is signed by `del.der` rather than by the issuer, and

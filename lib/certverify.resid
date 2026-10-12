@@ -18,6 +18,9 @@ import "ed25519.resid";
 
 // ─── Byte helpers ────────────────────────────────────────────────────
 
+/// Whether `a` and `b` hold the same value at every index from `i` through
+/// `last`. Indices are not bounds-checked here; the caller keeps them in
+/// range. Stops at the first difference, so it is not constant time.
 pub Bool eq_bytes_at(List(Int) a, List(Int) b, Int i, Int last) {
     if (i > last) { return true; }
     Int xa = a[i];
@@ -29,6 +32,9 @@ pub Bool eq_bytes_at(List(Int) a, List(Int) b, Int i, Int last) {
 
 
 
+/// Whether `a` and `b` have the same length and the same bytes.
+/// Stops at the first difference, so it is not constant time: public data
+/// only.
 pub Bool eq_bytes(List(Int) a, List(Int) b) {
     Int alen = a.len();
     Int blen = b.len();
@@ -38,8 +44,9 @@ pub Bool eq_bytes(List(Int) a, List(Int) b) {
 
 
 
-// Raw DER of a top-level certificate element by index
-// (0 = tbs, 1 = sigAlg, 2 = signature BIT STRING).
+/// The raw DER of certificate element `idx`, tag and length included.
+/// Indices are 0 = tbs, 1 = sigAlg, 2 = signature BIT STRING; `cur` is the
+/// position of element `j`, from which the walk steps forward to `idx`.
 pub List(Int) cert_elem_at(List(Int) cert, Int cur, Int j, Int idx) {
     if (j == idx) {
         DerTlv tv = der_next(cert, cur);
@@ -56,11 +63,11 @@ pub List(Int) cert_elem_at(List(Int) cert, Int cur, Int j, Int idx) {
 
 // ─── Signature verification ──────────────────────────────────────────
 
-// Did the holder of `key` sign `msg` under `alg`? `sig` is the signature
-// as its algorithm encodes it: DER Ecdsa-Sig-Value for ECDSA, the raw
-// k bytes for RSA, 64 bytes for Ed25519. A key that does not match the
-// algorithm (an EC key under an RSA algorithm, an RSA-PSS key under
-// PKCS#1) is a refusal, not a guess.
+/// Whether the holder of `key` signed `msg` under `alg`.
+/// `sig` is the signature as its algorithm encodes it: DER Ecdsa-Sig-Value for ECDSA, the raw
+/// k bytes for RSA, 64 bytes for Ed25519. A key that does not match the
+/// algorithm (an EC key under an RSA algorithm, an RSA-PSS key under
+/// PKCS#1) is a refusal, not a guess.
 pub Bool sig_verify(SigAlg alg, PubKey key, List(Int) msg, List(Int) sig) {
     if (alg.kind == sigalg_ecdsa() && key.kind == pubkey_ec()) {
         return ecdsa_verify(key.curve, alg.hash, key.point, msg, sig);
@@ -77,9 +84,10 @@ pub Bool sig_verify(SigAlg alg, PubKey key, List(Int) msg, List(Int) sig) {
     return false;
 }
 
-// Is the signed structure `der` (a certificate, a CRL, an OCSP
-// BasicResponse) signed by the key in certificate `issuer`? Both are
-// parsed strictly first; anything malformed is a refusal.
+/// Whether the signed structure `der` is signed by the key in `issuer`.
+/// `der` is a certificate, a CRL or an OCSP BasicResponse; `issuer` is a
+/// certificate. Both are parsed strictly first; anything malformed is a
+/// refusal (false).
 pub Bool x509_signed_by(List(Int) der, List(Int) issuer) {
     Result(Signed, Str) sg = signed_parse(der, der_top(der));
     Result(Cert, Str) ic = x509_parse(issuer);
@@ -89,9 +97,9 @@ pub Bool x509_signed_by(List(Int) der, List(Int) issuer) {
     };
 }
 
-// SPKI BIT STRING content, the unused-bits octet included (callers that
-// compare a key against a certificate strip it). Empty when the
-// certificate does not parse.
+/// The subjectPublicKey BIT STRING content of `cert`.
+/// The unused-bits octet is included (callers that compare a key against a
+/// certificate strip it). Empty when the field is not found as a BIT STRING.
 pub List(Int) cert_pubkey_bits(List(Int) cert) {
     Der outer = der_top(cert);
     Der tbs = der_child(cert, outer);
@@ -153,22 +161,31 @@ pub List(Int) cert_pubkey_bits(List(Int) cert) {
 // signed by anything else is not evidence.
 
 
+/// The dotted OID of SHA-1, the only CertID hash accepted.
 pub Str ocsp_oid_sha1_str() { return "1.3.14.3.2.26"; }
+/// The dotted OID of id-pkix-ocsp-basic, the only response type read.
 pub Str ocsp_oid_basic() { return "1.3.6.1.5.5.7.48.1.1"; }
+/// The dotted OID of id-kp-OCSPSigning, required of a delegated responder.
 pub Str ocsp_oid_ocsp_signing() { return "1.3.6.1.5.5.7.3.9"; }
 
+/// Status code 0: the responder says the certificate is good.
 pub Int ocsp_status_good() { return 0; }
+/// Status code 1: the responder says the certificate is revoked.
 pub Int ocsp_status_revoked() { return 1; }
+/// Status code 2: the responder does not know the certificate.
 pub Int ocsp_status_unknown() { return 2; }
-// Not about this certificate, or no usable response.
+/// Status code -1: no usable response about this certificate.
 pub Int ocsp_status_no_answer() { return 0 - 1; }
 
 // ─── position helpers ────────────────────────────────────────────────
 //
 // Each of these *names* a field; the ones below step over what they name.
 
+/// Position of responseStatus, the first field of the OCSPResponse `b`.
 pub Int ocsp_body_pos(List(Int) b) { return der_content_pos(b, 0); }
 
+/// Position just past responseStatus in the OCSPResponse `b`, or -1 when
+/// the envelope is malformed or the status does not fit in the buffer.
 pub Int ocsp_after_status(List(Int) b) {
     Int p = ocsp_body_pos(b);
     if (p < 0) { return 0 - 1; }
@@ -176,8 +193,9 @@ pub Int ocsp_after_status(List(Int) b) {
     return x509_skip_tlv(b, p);
 }
 
-// ResponseBytes, or -1 when there are none (which is legal and means the
-// responder declined to answer).
+/// Position of the [0] responseBytes field of the OCSPResponse `b`, or -1.
+/// -1 also when there are none, which is legal and means the responder
+/// declined to answer.
 pub Int ocsp_response_bytes_pos(List(Int) b) {
     Int p = ocsp_after_status(b);
     if (p < 0) { return 0 - 1; }
@@ -187,13 +205,14 @@ pub Int ocsp_response_bytes_pos(List(Int) b) {
     return 0 - 1;
 }
 
+/// Position of the responseType OID inside the responseBytes field at `p`.
 pub Int ocsp_rb_body(List(Int) b, Int p) {
     Int inside = der_content_pos(b, p);
     return der_content_pos(b, inside);
 }
 
-// Whether the element at `pos` is wholly inside the buffer. A truncated
-// or lying length is not evidence, and must not be indexed past.
+/// Whether the element at `pos` is wholly inside the buffer. A truncated
+/// or lying length is not evidence, and must not be indexed past.
 pub Bool ocsp_fits(List(Int) d, Int pos) {
     DerTlv t = der_next(d, pos);
     if (t.val_len < 0) { return false; }
@@ -202,7 +221,7 @@ pub Bool ocsp_fits(List(Int) d, Int pos) {
     return (c + t.val_len) <= d.len();
 }
 
-// The BasicOCSPResponse bytes, or [] when the response is not one.
+/// The BasicOCSPResponse bytes, or [] when the response is not one.
 pub List(Int) ocsp_basic(List(Int) b) {
     Int rb = ocsp_response_bytes_pos(b);
     if (rb < 0) { return []; }
@@ -215,13 +234,20 @@ pub List(Int) ocsp_basic(List(Int) b) {
 }
 
 // Field positions inside a BasicOCSPResponse.
+
+/// Position of tbsResponseData in the BasicOCSPResponse `b`.
 pub Int ocsp_tbs_pos(List(Int) b) { return der_content_pos(b, 0); }
+/// Position of the first field inside tbsResponseData of `b`.
 pub Int ocsp_basic_tbs_body(List(Int) b) { return der_content_pos(b, ocsp_tbs_pos(b)); }
+/// Position of signatureAlgorithm in the BasicOCSPResponse `b`.
 pub Int ocsp_basic_sigalg(List(Int) b) { return x509_skip_tlv(b, ocsp_tbs_pos(b)); }
+/// Position of the signature BIT STRING in the BasicOCSPResponse `b`.
 pub Int ocsp_basic_sig(List(Int) b) { return x509_skip_tlv(b, ocsp_basic_sigalg(b)); }
+/// Position just past the signature in the BasicOCSPResponse `b`.
 pub Int ocsp_basic_after_sig(List(Int) b) { return x509_skip_tlv(b, ocsp_basic_sig(b)); }
 
-// The `certs` SEQUENCE (a delegated responder's certificate), or -1.
+/// Position of the [0] `certs` field (a delegated responder's certificate)
+/// in the BasicOCSPResponse `b`, or -1 when it is absent.
 pub Int ocsp_basic_certs_pos(List(Int) b) {
     Int p = ocsp_basic_after_sig(b);
     DerTlv t = der_next(b, p);
@@ -230,6 +256,8 @@ pub Int ocsp_basic_certs_pos(List(Int) b) {
     return 0 - 1;
 }
 
+/// Position one past the end of the first certificate in the `certs` field
+/// at `p`, or -1 when that certificate's header is malformed.
 pub Int ocsp_certs_first(List(Int) b, Int p) {
     Int inner = der_content_pos(b, p);
     Int seqc = der_content_pos(b, inner);
@@ -238,15 +266,15 @@ pub Int ocsp_certs_first(List(Int) b, Int p) {
     return x509_skip_tlv(b, seqc);
 }
 
-// The delegated responder's own certificate out of `certs`, whole and
-// encoded as it appears in the response, so the chain walk can read it as
-// any other certificate. [] when the response names no responder, or the
-// one it names is not there in full.
-//
-// `certs [0] EXPLICIT SEQUENCE OF Certificate`, and the explicit tag wraps
-// the SEQUENCE OF rather than a certificate, so getting to the certificate
-// takes two steps in and ocsp_certs_first takes the other: it reports one
-// past the end of the first certificate.
+/// The delegated responder's own certificate out of `certs`, whole and
+/// encoded as it appears in the response, so the chain walk can read it as
+/// any other certificate. [] when the response names no responder, or the
+/// one it names is not there in full.
+///
+/// `certs [0] EXPLICIT SEQUENCE OF Certificate`, and the explicit tag wraps
+/// the SEQUENCE OF rather than a certificate, so getting to the certificate
+/// takes two steps in and ocsp_certs_first takes the other: it reports one
+/// past the end of the first certificate.
 pub List(Int) ocsp_delegate_cert(List(Int) d) {
     Int cp = ocsp_basic_certs_pos(d);
     if (cp < 0) { return []; }
@@ -264,11 +292,13 @@ pub List(Int) ocsp_delegate_cert(List(Int) d) {
 // Every offset below is into the BasicOCSPResponse bytes, not the
 // response envelope.
 
+/// Position of the first field inside ResponseData of `d`.
 pub Int ocsp_rd_body(List(Int) d) {
     return der_content_pos(d, ocsp_tbs_pos(d));
 }
 
-// responderID, skipping the optional version [0] ahead of it.
+/// Position of responderID, skipping the optional version [0] ahead of it.
+/// -1 when the first field's header is malformed.
 pub Int ocsp_rd_responder_id(List(Int) d) {
     Int p = ocsp_rd_body(d);
     DerTlv t = der_next(d, p);
@@ -277,34 +307,45 @@ pub Int ocsp_rd_responder_id(List(Int) d) {
     return p;
 }
 
+/// Position of producedAt in the ResponseData of `d`.
 pub Int ocsp_rd_produced_at(List(Int) d) {
     return x509_skip_tlv(d, ocsp_rd_responder_id(d));
 }
 
+/// Position of the `responses` SEQUENCE OF in the ResponseData of `d`.
 pub Int ocsp_rd_responses(List(Int) d) {
     return x509_skip_tlv(d, ocsp_rd_produced_at(d));
 }
 
-// One past the last SingleResponse.
+/// Position one past the `responses` field, after the last SingleResponse.
 pub Int ocsp_rd_end(List(Int) d) {
     return x509_skip_tlv(d, ocsp_rd_responses(d));
 }
 
-// ─── SingleResponse ──────────────────────────────────────────────────
-
-pub Int ocsp_sr_certid(List(Int) d, Int seq) {
-    return der_content_pos(d, der_content_pos(d, seq));
+/// Position of the first SingleResponse inside the `responses` list of `d`.
+pub Int ocsp_rd_first(List(Int) d) {
+    return der_content_pos(d, ocsp_rd_responses(d));
 }
 
+// ─── SingleResponse ──────────────────────────────────────────────────
+
+/// Position of the CertID that opens the SingleResponse at `seq`.
+pub Int ocsp_sr_certid(List(Int) d, Int seq) {
+    return der_content_pos(d, seq);
+}
+
+/// Position of certStatus, just past the CertID named by `seq`.
 pub Int ocsp_sr_status(List(Int) d, Int seq) {
     return x509_skip_tlv(d, ocsp_sr_certid(d, seq));
 }
 
+/// Position of thisUpdate, just past the certStatus named by `seq`.
 pub Int ocsp_sr_this_update(List(Int) d, Int seq) {
     return x509_skip_tlv(d, ocsp_sr_status(d, seq));
 }
 
-// The revocation time inside a revoked status, or -1.
+/// Position of the revocationTime inside a revoked [1] status, or -1 when
+/// the status is not revoked.
 pub Int ocsp_rev_time(List(Int) d, Int seq) {
     Int p = ocsp_sr_status(d, seq);
     DerTlv t = der_next(d, p);
@@ -312,8 +353,9 @@ pub Int ocsp_rev_time(List(Int) d, Int seq) {
     return der_content_pos(d, p);
 }
 
-// good is [0] primitive, revoked [1] constructed around a revocation
-// time, unknown [2] primitive. Anything else is not a status we know.
+/// The status code of the certStatus named by `seq`, or -1.
+/// Read from the context tag alone: [0] good, [1] revoked, [2] unknown.
+/// Any other tag or class, or a malformed header, is -1.
 pub Int ocsp_status_code(List(Int) d, Int seq) {
     Int p = ocsp_sr_status(d, seq);
     DerTlv t = der_next(d, p);
@@ -325,7 +367,9 @@ pub Int ocsp_status_code(List(Int) d, Int seq) {
     return 0 - 1;
 }
 
-// The SingleResponse naming exactly this CertID, or -1.
+/// Position of the first SingleResponse in [`i`, `end`) whose CertID
+/// content equals `want`, or -1. Callers pass ocsp_rd_first and
+/// ocsp_rd_end, so every SingleResponse of the response is compared.
 pub Int ocsp_find_sr(List(Int) d, List(Int) want, Int i, Int end) {
     if (i >= end) { return 0 - 1; }
     DerTlv t = der_next(d, i);
@@ -339,24 +383,28 @@ pub Int ocsp_find_sr(List(Int) d, List(Int) want, Int i, Int end) {
 // tbsResponseData is signed exactly as it appears, so it is re-encoded as
 // the tag/length/content it was read from rather than rebuilt.
 
+/// Whether the BasicOCSPResponse `d` is signed by the key in certificate
+/// `signer`.
 pub Bool ocsp_sig_ok(List(Int) d, List(Int) signer) {
     return x509_signed_by(d, signer);
 }
 
 // ─── Answering ───────────────────────────────────────────────────────
 
-// What the BasicOCSPResponse `d` says about `cert` under `issuer`, given
-// that its signature was made by `signer`.
-//
-// `signer` is the issuer for a response the CA signed itself, and the
-// responder's certificate for a delegated one. Nothing else differs: what
-// the response *claims* is about `issuer` either way, because that is the
-// certificate whose key the CertID hashes, and only the key that made the
-// signature changes.
+/// What the BasicOCSPResponse `d` says about `cert` under `issuer`, given
+/// that its signature was made by `signer`.
+/// `now` is a unix second. No_answer when the signature fails, no response
+/// matches, or `now` is outside thisUpdate..nextUpdate.
+///
+/// `signer` is the issuer for a response the CA signed itself, and the
+/// responder's certificate for a delegated one. Nothing else differs: what
+/// the response *claims* is about `issuer` either way, because that is the
+/// certificate whose key the CertID hashes, and only the key that made the
+/// signature changes.
 pub Int ocsp_answered(List(Int) d, List(Int) issuer, List(Int) cert, List(Int) signer, Int now) {
     if (!ocsp_sig_ok(d, signer)) { return ocsp_status_no_answer(); }
     List(Int) want = ocsp_certid_for(issuer, cert, []);
-    Int seq = ocsp_find_sr(d, want, ocsp_rd_responses(d), ocsp_rd_end(d));
+    Int seq = ocsp_find_sr(d, want, ocsp_rd_first(d), ocsp_rd_end(d));
     if (seq < 0) { return ocsp_status_no_answer(); }
     Int tu = x509_time_to_unix(der_str_value(d, ocsp_sr_this_update(d, seq)));
     if (tu == 0 - 1) { return ocsp_status_no_answer(); }
@@ -372,24 +420,24 @@ pub Int ocsp_answered(List(Int) d, List(Int) issuer, List(Int) cert, List(Int) s
     return st;
 }
 
-// What `resp` says about `cert` under `issuer` at unix second `now`,
-// counting only a response the issuer itself signed. Returns good,
-// revoked, unknown, or no_answer. A response that is not signed by the
-// issuer, is not about this certificate, or is outside its validity window
-// yields no_answer: no evidence is not a pass.
+/// What `resp` says about `cert` under `issuer` at unix second `now`,
+/// counting only a response the issuer itself signed. Returns good,
+/// revoked, unknown, or no_answer. A response that is not signed by the
+/// issuer, is not about this certificate, or is outside its validity window
+/// yields no_answer: no evidence is not a pass.
 pub Int ocsp_status_for(List(Int) issuer, List(Int) cert, List(Int) resp, Int now) {
     List(Int) d = ocsp_basic(resp);
     if (d.len() == 0) { return ocsp_status_no_answer(); }
     return ocsp_answered(d, issuer, cert, issuer, now);
 }
 
-// When `cert` was revoked, as a unix second, or -1. Only meaningful once
-// ocsp_status_for has reported revoked.
+/// When `cert` was revoked, as a unix second, or -1. Only meaningful once
+/// ocsp_status_for has reported revoked.
 pub Int ocsp_revoked_at(List(Int) issuer, List(Int) cert, List(Int) resp) {
     List(Int) d = ocsp_basic(resp);
     if (d.len() == 0) { return 0 - 1; }
     List(Int) want = ocsp_certid_for(issuer, cert, []);
-    Int seq = ocsp_find_sr(d, want, ocsp_rd_responses(d), ocsp_rd_end(d));
+    Int seq = ocsp_find_sr(d, want, ocsp_rd_first(d), ocsp_rd_end(d));
     if (seq < 0) { return 0 - 1; }
     Int rt = ocsp_rev_time(d, seq);
     if (rt < 0) { return 0 - 1; }
@@ -398,51 +446,59 @@ pub Int ocsp_revoked_at(List(Int) issuer, List(Int) cert, List(Int) resp) {
 
 // ─── Rebuilding DER, to compare against a CertID ─────────────────────
 
-// One element as it appears in an encoding: tag, the length in the fewest
-// octets DER allows, then the content.
+/// One element as it appears in an encoding: tag, the length in the fewest
+/// octets DER allows, then the content.
 pub List(Int) der_el(Int tag, List(Int) content) {
     Int len = content.len();
     List(Int) hdr = if (len < 128) { [len] } else { der_long_len(len) };
     return [tag].concat(hdr).concat(content);
 }
 
+/// A long-form length header for `len` (128 or more): 128 + n, then `len`
+/// in n big-endian octets, the fewest that hold it.
 pub List(Int) der_long_len(Int len) {
-    Int n = der_len_width(len, 1, 0);
+    Int n = der_len_width(len, 1, 1);
     return [128 + n].concat(der_long_len_len(len, 0, n, []));
 }
 
+/// `acc` followed by octets `i` through `n` - 1 of the low n octets of
+/// `len`, most significant first.
 pub List(Int) der_long_len_len(Int len, Int i, Int n, List(Int) acc) {
     if (i >= n) { return acc; }
     return der_long_len_len(len, i + 1, n, acc.concat([(len >> (8 * (n - i - 1))) & 255]));
 }
 
+/// `n` plus the count of octet positions from `i` up at which `len` is
+/// still nonzero; from (1, 1), the number of octets `len` needs.
 pub Int der_len_width(Int len, Int i, Int n) {
     if ((len >> (8 * i)) == 0) { return n; }
     return der_len_width(len, i + 1, n + 1);
 }
 
-// One element as bytes, tag and length included.
+/// The element at `pos` in `data` as bytes, tag and length included.
 pub List(Int) der_tlv_bytes(List(Int) data, Int pos) {
     DerTlv t = der_next(data, pos);
     Int c = der_content_pos(data, pos);
     return take_range(data, pos, c - pos, 0, []).concat(take_range(data, c, t.val_len, 0, []));
 }
 
+/// `acc` followed by `data[start + i]` through `data[start + n - 1]`.
 pub List(Int) take_range(List(Int) data, Int start, Int n, Int i, List(Int) acc) {
     if (i >= n) { return acc; }
     return take_range(data, start, n, i + 1, acc.concat([data[start + i]]));
 }
 
-// 1.3.14.3.2.26, SHA-1: the only hash RFC 6960 defines for CertID. The
-// first two arcs share one octet, 40*1+3 = 43.
+/// The content octets of the SHA-1 OID 1.3.14.3.2.26, the CertID hash.
+/// The first two arcs share one octet, 40*1+3 = 43.
 pub List(Int) ocsp_sha1_oid_octets() { return [43, 14, 3, 2, 26]; }
 
-// The CertID this client expects for `cert` under `issuer`, as the
-// content of the CertID SEQUENCE.
+/// The CertID this client expects for `cert` under `issuer`, as the
+/// content of the CertID SEQUENCE. SHA-1 name and key hashes; `seq` is
+/// appended after the serial (callers pass []).
 pub List(Int) ocsp_certid_for(List(Int) issuer, List(Int) cert, List(Int) seq) {
     // The issuer's subject Name, hashed as the whole DER element.
     List(Int) name_hash = sha1_bytes(der_tlv_bytes(issuer, x509_subject_pos(issuer)));
-    // RFC 6285: the key hash covers the subjectPublicKey BIT STRING
+    // RFC 6960 §4.1.1: the key hash covers the subjectPublicKey BIT STRING
     // contents with the unused-bits octet excluded. cert_pubkey_bits
     // keeps that octet, so drop it here.
     Int sp = x509_spki_pos(issuer);
@@ -462,8 +518,8 @@ pub List(Int) ocsp_certid_for(List(Int) issuer, List(Int) cert, List(Int) seq) {
         .concat(seq);
 }
 
-// The time inside nextUpdate ([0] EXPLICIT, after thisUpdate and within
-// the SingleResponse), or -1 when the responder left it out.
+/// The time inside nextUpdate ([0] EXPLICIT, after thisUpdate and within
+/// the SingleResponse), or -1 when the responder left it out.
 pub Int ocsp_sr_next_update(List(Int) d, Int seq) {
     DerTlv sr = der_next(d, seq);
     if (sr.val_len < 0) { return 0 - 1; }

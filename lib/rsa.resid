@@ -1,8 +1,10 @@
 // rsa.resid — RSA signature verification (RFC 8017): RSASSA-PKCS1-v1_5
-// and RSASSA-PSS, any modulus from 2048 to 16384 bits, SHA-256/384/512.
+// and RSASSA-PSS, any modulus from 2048 to 16384 bits, SHA-256/384/512,
+// plus RSAES-OAEP encryption to a public key (for TPM2_MakeCredential).
 //
-// Verification only: every value here is public (the key, the signature,
-// the message), so the arithmetic need not be constant-time. Numbers are
+// Public-key operations only, no private keys: every value here is treated
+// as public (the key, the signature, the message), so the arithmetic need
+// not be constant-time. Numbers are
 // little-endian lists of UInt(64) limbs; products are UInt(128). The
 // public operation is Montgomery exponentiation (CIOS), with R^2 mod n
 // and -1/n mod 2^64 computed once per key.
@@ -15,6 +17,7 @@ import "hash.resid";
 
 // ─── Limbs ───────────────────────────────────────────────────────────
 
+/// `v` as a UInt(64) limb, wrapping (two's complement for negatives).
 pub UInt(64) rsa_u64(Int v) { return wrapping_u64(v); }
 
 ListBuf(UInt(64)) rsa_zeros(Int n, ListBuf(UInt(64)) acc) {
@@ -22,7 +25,8 @@ ListBuf(UInt(64)) rsa_zeros(Int n, ListBuf(UInt(64)) acc) {
     return rsa_zeros(n - 1, acc.push((UInt(64)) 0));
 }
 
-// Big-endian bytes to s limbs (the bytes must fit).
+/// Converts big-endian bytes `b` to `s` little-endian limbs.
+/// Bytes beyond `s` limbs are dropped from the top; the caller sizes `s`.
 pub List(UInt(64)) rsa_from_be(List(Int) b, Int s) { return rsa_fbe(b, s, 0, ListBuf()); }
 
 List(UInt(64)) rsa_fbe(List(Int) b, Int s, Int k, ListBuf(UInt(64)) acc) {
@@ -38,7 +42,8 @@ UInt(64) rsa_limb(List(Int) b, Int from, Int j, UInt(64) acc) {
     return rsa_limb(b, from, j + 1, (acc << ((UInt(64)) 8)) | byte);
 }
 
-// s limbs to exactly k big-endian bytes.
+/// Converts limbs `x` to exactly `k` big-endian bytes.
+/// Higher bytes are truncated; missing limbs read as zero.
 pub List(Int) rsa_to_be(List(UInt(64)) x, Int k) { return rsa_tbe(x, k, 0, ListBuf()); }
 
 List(Int) rsa_tbe(List(UInt(64)) x, Int k, Int j, ListBuf(Int) acc) {
@@ -50,7 +55,8 @@ List(Int) rsa_tbe(List(UInt(64)) x, Int k, Int j, ListBuf(Int) acc) {
     return rsa_tbe(x, k, j + 1, acc.push(byte));
 }
 
-// Compare equal-length numbers from the top limb: -1, 0 or 1.
+/// Compares two numbers with the same limb count: -1, 0 or 1.
+/// The length of `a` is used; `b` must be at least as long.
 pub Int rsa_cmp(List(UInt(64)) a, List(UInt(64)) b) { return rsa_cmp_at(a, b, a.len() - 1); }
 
 Int rsa_cmp_at(List(UInt(64)) a, List(UInt(64)) b, Int i) {
@@ -130,7 +136,8 @@ List(UInt(64)) rsa_mont_rows(List(UInt(64)) a, List(UInt(64)) b, List(UInt(64)) 
     return rsa_mont_rows(a, b, n, ninv, i + 1, r[0..n.len() + 1]);
 }
 
-// a * b / R mod n, for a, b < n.
+/// Montgomery product: `a` * `b` / R mod `n`, for `a`, `b` < `n`.
+/// R is 2^(64s) for `s` limbs of `n`; `ninv` is -1/n mod 2^64.
 pub List(UInt(64)) rsa_mont(List(UInt(64)) a, List(UInt(64)) b, List(UInt(64)) n, UInt(64) ninv) {
     Int s = n.len();
     List(UInt(64)) t = rsa_mont_rows(a, b, n, ninv, 0, rsa_zeros(s + 1, ListBuf()).finish());
@@ -141,10 +148,12 @@ pub List(UInt(64)) rsa_mont(List(UInt(64)) a, List(UInt(64)) b, List(UInt(64)) n
 
 // ─── Public keys ─────────────────────────────────────────────────────
 
-// n and e as given, and what Montgomery needs: s limbs, -1/n mod 2^64,
-// R^2 mod n and R mod n (one, in Montgomery form).
+/// An RSA public key prepared for verification; `ok` is false if refused.
+/// Holds n and e as big-endian bytes, the bit and byte size, and what
+/// Montgomery needs: n as limbs, -1/n mod 2^64, R^2 mod n and R mod n.
 pub type RsaPub = { Bool ok; List(Int) nb; List(Int) eb; Int bits; Int k; List(UInt(64)) n; UInt(64) ninv; List(UInt(64)) rr; List(UInt(64)) one; };
 
+/// The refused key: `ok` false, every field empty or zero.
 pub RsaPub rsa_pub_bad() {
     List(UInt(64)) none = [];
     return RsaPub {.ok = false, .nb = [], .eb = [], .bits = 0, .k = 0, .n = none, .ninv = 0, .rr = none, .one = none};
@@ -160,14 +169,16 @@ Int rsa_bitlen(Int top, Int nbytes) {
     return rsa_bitlen(top / 2, nbytes) + 1;
 }
 
-// The smallest modulus accepted. Below 2048 bits RSA is not a signature
-// a verifier should rely on (NIST SP 800-131A).
+/// The smallest modulus size accepted, in bits (2048).
+/// Below 2048 bits RSA is not a signature a verifier should rely on
+/// (NIST SP 800-131A).
 pub Int rsa_min_bits() { return 2048; }
+/// The largest modulus size accepted, in bits (16384).
 pub Int rsa_max_bits() { return 16384; }
 
-// A public key from its modulus and exponent (big-endian, leading zeros
-// allowed). Refused: an even modulus, a size outside [2048, 16384] bits,
-// and an exponent that is even, below 3 or not below n.
+/// A public key from its modulus and exponent (big-endian, leading zeros
+/// allowed). Refused (`ok` false): an even modulus, a size outside
+/// [2048, 16384] bits, and an exponent that is even, below 3 or not below n.
 pub RsaPub rsa_pub(List(Int) n_be, List(Int) e_be) {
     List(Int) nb = rsa_strip(n_be, 0);
     List(Int) eb = rsa_strip(e_be, 0);
@@ -191,8 +202,9 @@ List(UInt(64)) rsa_dbl_n(List(UInt(64)) x, List(UInt(64)) n, Int times) {
     return rsa_dbl_n(rsa_dbl(x, n), n, times - 1);
 }
 
-// RSAPublicKey ::= SEQUENCE { modulus INTEGER, publicExponent INTEGER },
-// strict DER, nothing after it.
+/// A public key parsed from a DER RSAPublicKey (RFC 8017 §A.1.1).
+/// SEQUENCE { modulus INTEGER, publicExponent INTEGER } in strict DER;
+/// malformed input or a key `rsa_pub` refuses gives `ok` false.
 pub RsaPub rsa_pub_der(List(Int) der) {
     Der seq = der_top(der);
     if (!seq.ok || seq.tag != 48) { return rsa_pub_bad(); }
@@ -207,8 +219,9 @@ pub RsaPub rsa_pub_der(List(Int) der) {
 
 // ─── The public operation ────────────────────────────────────────────
 
-// sig^e mod n as k bytes, or empty when sig is not k bytes or not below
-// n (RFC 8017 §5.2.2: s + n must not verify as s).
+/// The RSA public operation: `sig`^e mod n as k bytes (RFC 8017 §5.2.2).
+/// Empty when the key is refused, `sig` is not k bytes, or `sig` is not
+/// below n (so s + n never verifies as s).
 pub List(Int) rsa_public_op(RsaPub key, List(Int) sig) {
     if (!key.ok || sig.len() != key.k) { return []; }
     Int s = key.n.len();
@@ -235,8 +248,8 @@ List(UInt(64)) rsa_pow_bits(RsaPub key, List(UInt(64)) xm, Int byte, Int bit, Li
 
 // ─── RSASSA-PKCS1-v1_5 (RFC 8017 §8.2.2) ────────────────────────────
 
-// DigestInfo DER prefix for each hash (RFC 8017 §9.2 note 1). SHA-1 is
-// not offered: no signature here is accepted over SHA-1.
+/// The DigestInfo DER prefix for hash `h` (RFC 8017 §9.2 note 1).
+/// Empty for SHA-1: no signature here is accepted over SHA-1.
 pub List(Int) rsa_digestinfo(HashAlg h) {
     return match h {
         Sha1 => [],
@@ -251,8 +264,9 @@ ListBuf(Int) rsa_fill(Int v, Int n, ListBuf(Int) acc) {
     return rsa_fill(v, n - 1, acc.push(v));
 }
 
-// EM = 00 01 FF..FF 00 || DigestInfo || H, k bytes; empty when k is too
-// short for eight bytes of padding.
+/// The PKCS#1 v1.5 encoded message 00 01 FF..FF 00 || DigestInfo || `digest`.
+/// It is `k` bytes; empty for SHA-1 or when `k` leaves fewer than eight
+/// bytes of padding.
 pub List(Int) rsa_pkcs1_em(HashAlg h, List(Int) digest, Int k) {
     List(Int) t = rsa_digestinfo(h).concat(digest);
     Int ps = k - 3 - t.len();
@@ -261,8 +275,9 @@ pub List(Int) rsa_pkcs1_em(HashAlg h, List(Int) digest, Int k) {
     return rsa_fill(255, ps, head.push(0).push(1)).push(0).finish().concat(t);
 }
 
-// Encode-and-compare: the only accepted EM is the one this side builds,
-// so no parser of the recovered block can be fooled.
+/// Whether `sig` is a valid RSASSA-PKCS1-v1_5 signature over `digest`.
+/// Encode-and-compare: the only accepted EM is the one this side builds,
+/// so no parser of the recovered block can be fooled.
 pub Bool rsa_pkcs1_verify_digest(HashAlg h, RsaPub key, List(Int) digest, List(Int) sig) {
     List(Int) em = rsa_public_op(key, sig);
     List(Int) want = rsa_pkcs1_em(h, digest, key.k);
@@ -270,6 +285,8 @@ pub Bool rsa_pkcs1_verify_digest(HashAlg h, RsaPub key, List(Int) digest, List(I
     return ct_equal(em, want);
 }
 
+/// Whether `sig` is a valid RSASSA-PKCS1-v1_5 signature over `msg`.
+/// `msg` is hashed with `h` first.
 pub Bool rsa_pkcs1_verify(HashAlg h, RsaPub key, List(Int) msg, List(Int) sig) {
     return rsa_pkcs1_verify_digest(h, key, hash_bytes(h, msg), sig);
 }
@@ -281,7 +298,7 @@ ListBuf(Int) rsa_cat(List(Int) b, Int i, ListBuf(Int) acc) {
     return rsa_cat(b, i + 1, acc.push(b[i]));
 }
 
-// MGF1 (RFC 8017 §B.2.1): `len` bytes of mask from seed.
+/// MGF1 (RFC 8017 §B.2.1): `len` bytes of mask from `seed` with hash `h`.
 pub List(Int) rsa_mgf1(HashAlg h, List(Int) seed, Int len) { return rsa_mgf1_at(h, seed, len, 0, ListBuf(), 0); }
 
 List(Int) rsa_mgf1_at(HashAlg h, List(Int) seed, Int len, Int c, ListBuf(Int) acc, Int have) {
@@ -309,9 +326,10 @@ Int rsa_first_nz(List(Int) b, Int i) {
     return rsa_first_nz(b, i + 1);
 }
 
-// Verify a PSS signature over a digest made with h, the mask made with
-// mgf, and a salt of slen bytes; slen = -1 accepts any salt length (the
-// "auto" of RFC 8017 §9.1.2 implementations: the 01 separator finds it).
+/// Whether `sig` is a valid RSASSA-PSS signature over digest `mhash`.
+/// `h` made the digest, `mgf` is MGF1's hash, `slen` the salt length in
+/// bytes; -1 accepts any salt length (the "auto" of RFC 8017 §9.1.2
+/// implementations: the 01 separator finds it).
 pub Bool rsa_pss_verify_digest(HashAlg h, HashAlg mgf, Int slen, RsaPub key, List(Int) mhash, List(Int) sig) {
     List(Int) m = rsa_public_op(key, sig);
     if (m.len() == 0) { return false; }
@@ -342,17 +360,20 @@ pub Bool rsa_pss_verify_digest(HashAlg h, HashAlg mgf, Int slen, RsaPub key, Lis
     return ct_equal(hash_bytes(h, mp), hh);
 }
 
+/// Whether `sig` is a valid RSASSA-PSS signature over `msg`.
+/// `msg` is hashed with `h`; `mgf` and `slen` as in `rsa_pss_verify_digest`.
 pub Bool rsa_pss_verify(HashAlg h, HashAlg mgf, Int slen, RsaPub key, List(Int) msg, List(Int) sig) {
     return rsa_pss_verify_digest(h, mgf, slen, key, hash_bytes(h, msg), sig);
 }
 
 // ─── RSAES-OAEP encryption (RFC 8017 §7.1.1) ────────────────────────
 
-// msg encrypted to `key` with hash h for the label's hash and MGF1, and
-// `seed` (h's length of the caller's random bytes); empty when msg is too
-// long for the key or the seed is not h's length. Public data only: the
-// one use here encrypts a fresh seed for a TPM's endorsement key
-// (TPM2_MakeCredential), which nothing else needs to know.
+/// `msg` encrypted to `key` with RSAES-OAEP (RFC 8017 §7.1.1).
+/// `h` hashes `label` and drives MGF1; `seed` is h's length of the caller's
+/// random bytes. Empty when the key is refused, `msg` is too long for the
+/// key or `seed` is not h's length. Public data only: the
+/// one use here encrypts a fresh seed for a TPM's endorsement key
+/// (TPM2_MakeCredential), which nothing else needs to know.
 pub List(Int) rsa_oaep_encrypt(HashAlg h, RsaPub key, List(Int) msg, List(Int) label, List(Int) seed) {
     Int hl = hash_len(h);
     Int k = key.k;

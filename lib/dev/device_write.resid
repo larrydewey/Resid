@@ -9,6 +9,9 @@
 
 import "device.resid";
 
+/// Runs a writing ioctl descriptor `op` with `args` in a device host.
+/// Returns its outputs, or Err (BadInput when the request cannot be built).
+/// Compiler-generated calls only; needs the full `device` grant.
 @descriptor(engine_ioctl_w)
 @requires(device)
 pub Result(List(DevOut), DeviceError) device_engine_ioctl_w(IoctlOp op, List(DevIn) args) {
@@ -19,6 +22,9 @@ pub Result(List(DevOut), DeviceError) device_engine_ioctl_w(IoctlOp op, List(Dev
     return dv_bound(op.name, fl, dv_tr_out(op.name, fl.handle, dv_answer(op.name, r, resid_device_call_w(r.req))));
 }
 
+/// Sends command `cmd` through a writing Transact descriptor `op`.
+/// Returns the response outputs, or Err (BadInput when the request cannot
+/// be built). Compiler-generated calls only; needs the full `device` grant.
 @descriptor(engine_transact_w)
 @requires(device)
 pub Result(List(DevOut), DeviceError) device_engine_transact_w(Transact op, List(UInt(8)) cmd) {
@@ -28,6 +34,9 @@ pub Result(List(DevOut), DeviceError) device_engine_transact_w(Transact op, List
     return dv_tr_out(op.name, 0 - 1, dv_answer(op.name, r, resid_device_call_w(r.req)));
 }
 
+/// Sends `cmds` in order on one open file through a writing Transact `op`.
+/// `links` carry 4-byte handles from one response into a later command.
+/// Returns the outputs, or Err; needs the full `device` grant.
 @descriptor(engine_transact_chain_w)
 @requires(device)
 pub Result(List(DevOut), DeviceError) device_engine_transact_chain_w(Transact op, List(List(UInt(8))) cmds, List(Int) links) {
@@ -37,6 +46,9 @@ pub Result(List(DevOut), DeviceError) device_engine_transact_chain_w(Transact op
     return dv_tr_out(op.name, 0 - 1, dv_answer(op.name, r, resid_device_call_w(r.req)));
 }
 
+/// Runs a writing configfs report descriptor `op` for the request `rq`.
+/// Returns the report outputs, or Err (BadInput when the request cannot be
+/// built). Compiler-generated calls only; needs the full `device` grant.
 @descriptor(engine_configfs_report_w)
 @requires(device)
 pub Result(List(DevOut), DeviceError) device_engine_configfs_report_w(ConfigfsReport op, ReportReq rq) {
@@ -46,6 +58,9 @@ pub Result(List(DevOut), DeviceError) device_engine_configfs_report_w(ConfigfsRe
     return dv_tr_out(op.name, 0 - 1, dv_answer(op.name, r, resid_device_call_w(r.req)));
 }
 
+/// Runs a writing Sequence descriptor `op` with `args` in a device host.
+/// Returns its outputs, or Err (BadInput when the request cannot be built).
+/// Compiler-generated calls only; needs the full `device` grant.
 @descriptor(engine_sequence_w)
 @requires(device)
 pub Result(List(DevOut), DeviceError) device_engine_sequence_w(Sequence op, List(DevIn) args) {

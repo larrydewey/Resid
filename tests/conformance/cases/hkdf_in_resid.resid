@@ -27,5 +27,7 @@ Int main() {
     List(Int) salt2 = rng_acc(0x60, 0xaf, []);
     List(Int) info2 = rng_acc(0xb0, 0xff, []);
     println(hex_encode(hkdf_expand(hkdf_extract(salt2, ikm2), info2, 82)));
+    // RFC 5869 §2.3: at most 255 blocks, 8160 bytes; more is refused.
+    println(f"{hkdf_expand(hkdf_extract(salt2, ikm2), info2, 8160).len()} {hkdf_expand(hkdf_extract(salt2, ikm2), info2, 8161).len()}");
     return 0;
 }

@@ -3,11 +3,12 @@
 // The vocabulary for reading and writing a connection, and the one
 // transport that needs no library: TCP.
 //
-// lib/httpserv.resid declares what its request loop asks of a connection
-// and runs on any answer; lib/tlswire.resid answers it with TLS on the
-// server side, lib/tlsclient.resid on the client side, and the plain
-// transport here. Keeping the declaration in its own module is what lets a
-// TLS *client* depend on it without dragging in the HTTP *server*.
+// This module declares what lib/httpserv.resid's request loop asks of a
+// connection (Wire, Accept, and Session for its event loop), and that loop
+// runs on any answer; lib/tlswire.resid answers it with TLS on the server
+// side, lib/tlsclient.resid on the client side, and the plain transport
+// here. Keeping the declaration in its own module is what lets a TLS
+// *client* depend on it without dragging in the HTTP *server*.
 //
 // Everything is `network(readonly)`: reading and writing on a socket the
 // caller already holds is reading from the network. Binding an address
@@ -21,16 +22,19 @@
 
 import "crypto.resid";
 
-// What a fill produced: the plaintext now available, and the transport
-// advanced past whatever it consumed to get it. A read is not a read on
-// every transport: a TLS connection answers with decrypted application
-// data and consumes records to produce it.
+/// What a fill produced: the plaintext now available and the advanced
+/// transport. The transport is advanced past whatever it consumed; on TLS
+/// that is records, answered with decrypted application data. `eof` is set
+/// when the peer is done.
 type WireIn(T) = { T conn; List(Int) data; Bool eof; };
 
-// What a send produced: the transport with its write side advanced, and
-// whether every byte went out.
+/// What a send produced: the transport with its write side advanced, and
+/// whether every byte went out.
 type WireOut(T) = { T conn; Bool ok; };
 
+/// A connection that can be read, written, closed and given a deadline.
+/// Each read and send returns the transport's new state, since a transport
+/// is immutable.
 behavior Wire(T) {
     // Add plaintext until `have` holds at least `want` bytes, the peer
     // is done, or the total would pass `cap`.
@@ -43,13 +47,15 @@ behavior Wire(T) {
     Bool wire_deadline(T w, Int ms);
 }
 
-// What an accepted socket became. `ok` is false when the transport could
-// not serve it -- a handshake that failed, say -- and `conn` is then
-// meaningless. A record rather than an `Option(T)`: narrowing an option
-// to its payload needs a value of `T` to fall back on, and a generic
-// function has none to offer.
+/// What an accepted socket became.
+/// `ok` is false when the transport could not serve it -- a handshake that
+/// failed, say -- and `conn` is then meaningless. A record rather than an
+/// `Option(T)`: narrowing an option needs a fallback `T`, and a generic
+/// function has none to offer.
 type Accepted(T) = { T conn; Bool ok; };
 
+/// Turning an accepted socket descriptor into a transport of type `T`
+/// under the configuration `C`.
 behavior Accept(T, C) {
     Accepted(T) wire_accept(C conf, Int fd);
 }
@@ -59,13 +65,17 @@ behavior Accept(T, C) {
 // arrived into plaintext and what is to be sent into bytes. Nothing in
 // one ever waits, so a connection that is waiting for its peer costs the
 // loop a descriptor, not a worker.
-//
-// `status` is 0 to go on (including "not enough yet"), 1 when the peer
-// has ended the connection cleanly, and 2 when it must end now; `out` is
-// sent either way -- a handshake flight, or the alert that refuses one.
+
+/// What a session made of arriving bytes: its new state, the plaintext
+/// they complete, and bytes to send. `status` is 0 to go on (including
+/// "not enough yet"), 1 when the peer ended cleanly, 2 when it must end
+/// now; `out` is sent either way -- a handshake flight, or an alert.
 type SessIn(S) = { S sess; List(Int) plain; List(Int) out; Int status; };
+/// What a session made of plaintext to send: its new state and the bytes.
 type SessOut(S) = { S sess; List(Int) out; };
 
+/// A transport as a non-blocking state machine over bytes, with state `S`
+/// and configuration `C`, for a server's event loop.
 behavior Session(S, C) {
     // The state of a freshly accepted connection.
     S sess_open(C conf);
@@ -82,10 +92,12 @@ behavior Session(S, C) {
 // The transport everything else is measured against, and the one a
 // plaintext HTTP server has always used.
 
-// The plain transport needs no configuration; the parameter is there so
-// every transport can share one accept behaviour.
+/// The plain transport's configuration, which is empty.
+/// The parameter is there so every transport can share one accept
+/// behaviour.
 type PlainCfg = { Bool none; };
 
+/// The plain transport's (empty) configuration.
 pub PlainCfg plain_cfg() {
     return PlainCfg { .none = true };
 }
@@ -158,7 +170,7 @@ Accepted(Int) plain_accept(PlainCfg conf, Int fd) {
 Wire(Int) = { .wire_fill = plain_fill, .wire_send = plain_send, .wire_close = plain_close, .wire_deadline = plain_deadline };
 Accept(Int, PlainCfg) = plain_accept;
 
-// The plain session: bytes are plaintext.
+/// The plain session state, which is empty: bytes are plaintext.
 type PlainSess = { Bool none; };
 
 PlainSess plain_sess_open(PlainCfg conf) { return PlainSess { .none = true }; }
@@ -176,8 +188,8 @@ List(Int) plain_sess_goodbye(PlainSess s) { return []; }
 
 Session(PlainSess, PlainCfg) = { .sess_open = plain_sess_open, .sess_input = plain_sess_input, .sess_output = plain_sess_output, .sess_goodbye = plain_sess_goodbye };
 
-// Connect to `host:port`, or -1. Loopback and anywhere else alike: the
-// caller decides what authority it needs to reach, not this verb.
+/// Connect to `host:port`, or -1. Loopback and anywhere else alike: the
+/// caller decides what authority it needs to reach, not this verb.
 @requires(network(readonly))
 pub Int wire_connect(Str host, Int port) {
     return resid_tcp_connect(host, port);

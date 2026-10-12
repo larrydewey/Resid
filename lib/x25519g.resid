@@ -175,9 +175,9 @@ List(B) xg_bytes(P x, Int i, ListBuf(B) acc) {
 
 // ── API ─────────────────────────────────────────────────────────────
 
-// Raw X25519: the 32-byte little-endian scalar k times the public
-// u-coordinate u (both 32 bytes; a shorter k aborts on the index, as
-// before). At secret types the result is secret.
+/// Raw X25519: the little-endian scalar `k` times the public u-coordinate `u`.
+/// Both are 32 bytes; a shorter `k` aborts on an index, and no all-zero
+/// check is made. At secret types the result is secret.
 @needs(Wide512(P, B))
 pub List(B) x25519g(List(B) k, List(Int) u) {
     P x1 = p_lift(xg_u(u));
@@ -188,16 +188,16 @@ pub List(B) x25519g(List(B) k, List(Int) u) {
     return xg_bytes(r, 0, acc);
 }
 
-// The X25519 base point, u = 9.
+/// The X25519 base point, u = 9.
 pub List(Int) x25519g_base() {
     return [9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 }
 
-// X25519Pub(B): a public key computed from a private one is public by
-// design. At public bytes it is the bytes; at secret bytes it is a
-// declassification, so the secret copy of x25519g_public needs the
-// declassify grant -- carried to every caller of the secret copy, and to
-// no caller of the public one.
+/// Publishes a public key computed from a private one, public by design.
+/// At public bytes it returns the bytes; at secret bytes it declassifies,
+/// so the secret copy of `x25519g_public` needs the `declassify` grant --
+/// carried to every caller of the secret copy, and to no caller of the
+/// public one.
 behavior X25519Pub(B) { List(Int) xg_publish(List(B) k); }
 
 List(Int) xg_publish_pub(List(Int) k) { return k; }
@@ -220,7 +220,8 @@ List(Int) xg_publish_secret(List(Secret(UInt(8))) k) {
 X25519Pub(Int) = xg_publish_pub;
 X25519Pub(Secret(UInt(8))) = xg_publish_secret;
 
-// The public key of a 32-byte private key; empty for another length.
+/// The public key of the 32-byte private key `priv`; empty for another length.
+/// At secret bytes the result is declassified through `X25519Pub(B)`.
 @needs(Wide512(P, B), X25519Pub(B))
 @one_way(priv)
 pub List(Int) x25519g_public(List(B) priv) {
@@ -235,11 +236,11 @@ List(B) xg_zeros(Int i, ListBuf(B) acc) {
     return xg_zeros(i + 1, acc.push(p_byte(zero, 0)));
 }
 
-// Diffie-Hellman (RFC 7748 §6.1): the shared secret, or empty when either
-// input is not 32 bytes or the result is all zeros (a low-order peer
-// point, which every protocol on top must refuse). Whether it was zero is
-// the one fact made public (CtSame(B)); at secret types the shared secret
-// stays secret.
+/// Diffie-Hellman (RFC 7748 §6.1): the shared secret, or empty when either
+/// input is not 32 bytes or the result is all zeros (a low-order peer
+/// point, which every protocol on top must refuse). Whether it was zero is
+/// the one fact made public (CtSame(B)); at secret types the shared secret
+/// stays secret.
 @needs(Wide512(P, B), CtSame(B))
 @agree(priv)
 pub List(B) x25519g_shared(List(B) priv, List(Int) peer) {

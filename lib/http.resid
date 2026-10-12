@@ -1,15 +1,20 @@
 import "crypto.resid";
 
-// ─── lib/http.res — HTTP/1.1 client in pure Resid (spec §32) ──────────
+// ─── lib/http.resid — HTTP/1.1 client in pure Resid (spec §32) ────────
 // All protocol logic is Resid; the runtime only provides raw TCP
-// externs (resid_tcp_connect/send/recv_all/close). HTTP/1.1 with
-// `Connection: close`: the response body ends when the peer closes.
-// Chunked transfer coding and TLS are out of scope for v1.
+// builtins (resid_tcp_connect/send/recv_all/recv_bin/deadline/close).
+// The v1 calls (http_get_raw and friends) send `Connection: close` and
+// read until the peer closes. The v2 calls (http_call, http_get) send
+// keep-alive and frame the body by Content-Length or chunked coding.
+// Plain http:// only: HTTPS is `lib/tlsclient.resid`'s tls_https_get.
 
+/// A parsed `http://` URL: host, port and path.
 type Url = { Str host; Int port; Str path; };
+/// A response: numeric status (0 on failure), raw header block, and body.
 type HttpResponse = { Int status; Str headers; Str body; };
 
-// Find the first occurrence of `sub` at or after `i`; -1 when absent.
+/// Index of the first occurrence of `sub` in `s` at or after `i`.
+/// Returns -1 when absent, and `i` itself when `sub` is empty.
 pub Int http_find_from(Str s, Str sub, Int i) {
     Int n = str_len(s);
     Int m = str_len(sub);
@@ -24,12 +29,13 @@ pub Int http_find_from(Str s, Str sub, Int i) {
     return http_find_from(s, sub, ni);
 }
 
-// First occurrence of `sub` anywhere in `s`; -1 when absent.
+/// Index of the first occurrence of `sub` in `s`; -1 when absent.
 pub Int http_find(Str s, Str sub) {
     return http_find_from(s, sub, 0);
 }
 
-// Join path segments back together after splitting the URL on "/".
+/// Join `segs[i]` through `segs[n]` (inclusive) onto `acc` with "/".
+/// Helper for http_parse_url.
 pub Str http_join_path(List(Str) segs, Int i, Int n, Str acc) {
     if (i > n) { return acc; }
     Str sep = if (acc == "") { "" } else { "/" };
@@ -38,8 +44,9 @@ pub Str http_join_path(List(Str) segs, Int i, Int n, Str acc) {
     return http_join_path(segs, ni, n, acc2);
 }
 
-// Parse "http://host[:port]/path" (default port 80, default path "/").
-// Returns port 0 on malformed input.
+/// Parse "http://host[:port]/path" into a Url (port 80, path "/" by default).
+/// The scheme is not checked: the first 7 characters are skipped. A URL
+/// shorter than 8 characters gives port 0 and an empty host and path.
 pub Url http_parse_url(Str url) {
     List(Str) parts = str_split(url, "//");
     if (str_len(url) < 8) { return Url { .host = "", .port = 0, .path = "" }; }
@@ -57,12 +64,13 @@ pub Url http_parse_url(Str url) {
     return Url { .host = host, .port = port, .path = path };
 }
 
-// How long one exchange may take, connect to last byte, so a server that
-// trickles its reply cannot hold the caller indefinitely.
+/// How long one exchange may take, connect to last byte, so a server that
+/// trickles its reply cannot hold the caller indefinitely.
 pub Int http_client_deadline_ms() { return 300000; }
 
-// Perform a GET; returns the full raw response. Empty string on any
-// transport failure (connect refused, send failed, ...).
+/// Perform a GET with `Connection: close` and return the raw response.
+/// Returns "" on a bad port or a connect or send failure; the exchange is
+/// bounded by http_client_deadline_ms.
 @requires(network)
 pub Str http_get_raw(Str url) {
     Url u = http_parse_url(url);
@@ -83,7 +91,8 @@ pub Str http_get_raw(Str url) {
     return resp;
 }
 
-// Split a raw response into status / headers / body.
+/// Split a raw response into status, header block and body.
+/// Status is 0 when `raw` is empty or has no status line.
 pub HttpResponse http_parse_response(Str raw) {
     if (raw == "") { return HttpResponse { .status = 0, .headers = "", .body = "" }; }
     List(Str) head_body = str_split(raw, "\r\n\r\n");
@@ -108,7 +117,8 @@ pub HttpResponse http_parse_response(Str raw) {
     return HttpResponse { .status = str_parse_int(code), .headers = head, .body = body };
 }
 
-// Convenience: GET and return just the body ("" on failure).
+/// GET `url` and return just the body.
+/// Returns "" on failure or any status other than 200.
 @requires(network)
 pub Str http_get_body(Str url) {
     HttpResponse r = http_parse_response(http_get_raw(url));
@@ -116,7 +126,7 @@ pub Str http_get_body(Str url) {
     return r.body;
 }
 
-// Convenience: GET and return just the numeric status code (0 on failure).
+/// GET `url` and return just the numeric status code (0 on failure).
 @requires(network)
 pub Int http_get_status(Str url) {
     HttpResponse r = http_parse_response(http_get_raw(url));
@@ -125,7 +135,7 @@ pub Int http_get_status(Str url) {
 
 // ─── HTTP/1.1 v2: keep-alive requests, Content-Length + chunked ──────
 
-// Read a single byte from fd as an Int code (0 - 1 on EOF).
+/// Read one byte from socket `fd`; -1 on end of stream or error.
 @requires(network)
 pub Int http_recv_byte(Int fd) {
     List(Int) one = resid_tcp_recv_bin(fd, 1);
@@ -133,7 +143,9 @@ pub Int http_recv_byte(Int fd) {
     return one[0];
 }
 
-// Accumulate bytes until `term` (a \r\n-terminated line end) seen.
+/// Append bytes from `fd` to `acc` up to and including a CRLF.
+/// Stops early at end of stream or after `depth` bytes. Helper for
+/// http_recv_line.
 @requires(network)
 pub Str http_recv_line_acc(Int fd, Str acc, Int depth) {
     if (depth <= 0) { return acc; }
@@ -152,12 +164,15 @@ pub Str http_recv_line_acc(Int fd, Str acc, Int depth) {
     return http_recv_line_acc(fd, acc2, d2);
 }
 
+/// Read one line from `fd`, including its CRLF, of at most 8192 bytes.
+/// A short or empty result means the stream ended.
 @requires(network)
 pub Str http_recv_line(Int fd) {
     return http_recv_line_acc(fd, "", 8192);
 }
 
-// Read exactly n body bytes.
+/// Append bytes from `fd` to `acc` until `got` reaches `n`.
+/// Stops early at end of stream. Helper for http_recv_count.
 @requires(network)
 pub Str http_recv_count_acc(Int fd, Int n, Int got, Str acc) {
     if (got >= n) { return acc; }
@@ -169,12 +184,15 @@ pub Str http_recv_count_acc(Int fd, Int n, Int got, Str acc) {
     return http_recv_count_acc(fd, n, g2, acc2);
 }
 
+/// Read `n` bytes from `fd`; fewer if the stream ends first.
 @requires(network)
 pub Str http_recv_count(Int fd, Int n) {
     return http_recv_count_acc(fd, n, 0, "");
 }
 
-// Build a request head with arbitrary headers appended.
+/// Build a request head ending in the blank line.
+/// `hostport` is the Host value, `conn` the Connection value, and `extra`
+/// further header lines, each already ending in CRLF.
 pub Str http_build_request(Str method, Str path, Str hostport, Str extra, Str conn) {
     Str r1 = method + " " + path + " HTTP/1.1\r\n";
     Str r2 = "Host: " + hostport + "\r\n";
@@ -182,8 +200,9 @@ pub Str http_build_request(Str method, Str path, Str hostport, Str extra, Str co
     return r1 + r2 + r3 + extra + "\r\n";
 }
 
-// Case-insensitive header lookup: returns the value after ':' trimmed,
-// or "" when absent. `head` is the full header block (no body).
+/// Find header `name` in `lines` from index `i`; helper for http_header_value.
+/// Case-insensitive; matches "name:" anywhere in a line, not only at its
+/// start. Returns the trimmed value, or "" when absent.
 pub Str http_header_value_acc(List(Str) lines, Int i, Str name) {
     Int n = lines.len();
     if (i >= n) { return ""; }
@@ -202,14 +221,17 @@ pub Str http_header_value_acc(List(Str) lines, Int i, Str name) {
     return http_header_value_acc(lines, ni, name);
 }
 
+/// Case-insensitive lookup of header `name` in the header block `head`.
+/// Returns the trimmed value of the first matching line, or "" when absent.
 pub Str http_header_value(Str head, Str name) {
     List(Str) lines = str_split(head, "\r\n");
     return http_header_value_acc(lines, 0, name);
 }
 
-// Chunked decoding: reads size-line/chunks straight off the socket.
-// `first` is the first chunk-size line already consumed by the caller
-// ("" when the chunked stream starts fresh).
+/// Decode a chunked body from `fd`, appending the chunk data to `acc`.
+/// `pending_line` is a chunk-size line the caller already read ("" to read
+/// it from the socket). Chunk extensions are ignored; trailers are read
+/// and discarded at the zero-size chunk.
 @requires(network)
 pub Str http_read_chunked_acc(Int fd, Str pending_line, Str acc) {
     Str line = if (pending_line == "") { http_recv_line(fd) } else { pending_line };
@@ -236,6 +258,8 @@ pub Str http_read_chunked_acc(Int fd, Str pending_line, Str acc) {
     return http_read_chunked_acc(fd, "", acc2);
 }
 
+/// Read and discard trailer lines from `fd` through the blank line.
+/// `line` is the first line already read; returns `acc` unchanged.
 @requires(network)
 pub Str http_drain_trailers(Int fd, Str line, Str acc) {
     Int l = str_len(line);
@@ -245,8 +269,9 @@ pub Str http_drain_trailers(Int fd, Str line, Str acc) {
     return http_drain_trailers(fd, nxt, acc);
 }
 
-// Read header lines until the blank CRLF line; returns the whole head
-// block including the terminating CRLF.
+/// Append header lines from `fd` to `acc` until the blank line.
+/// Each line keeps its CRLF; the blank line is consumed but not kept.
+/// Stops after `depth` lines. Helper for http_recv_head.
 @requires(network)
 pub Str http_recv_head_acc(Int fd, Str acc, Int depth) {
     if (depth <= 0) { return acc; }
@@ -259,13 +284,16 @@ pub Str http_recv_head_acc(Int fd, Str acc, Int depth) {
     return http_recv_head_acc(fd, acc2, d2);
 }
 
+/// Read a response head (status line and headers) of at most 256 lines.
+/// The terminating blank line is consumed but not included.
 @requires(network)
 pub Str http_recv_head(Int fd) {
     return http_recv_head_acc(fd, "", 256);
 }
 
-// Perform one HTTP/1.1 request on an open connection and consume the
-// response according to Content-Length / chunked / read-to-close.
+/// Send one keep-alive request on the open connection `fd` and read the reply.
+/// The body is framed by chunked coding or Content-Length; it is read to
+/// close only when no status could be parsed. Status 0 if the send fails.
 @requires(network)
 pub HttpResponse http_call(Int fd, Str method, Str path, Str hostport, Str extra) {
     Str req = http_build_request(method, path, hostport, extra, "keep-alive");
@@ -299,8 +327,9 @@ pub HttpResponse http_call(Int fd, Str method, Str path, Str hostport, Str extra
     return HttpResponse { .status = status, .headers = head, .body = body3 };
 }
 
-// One-shot GET (opens its own connection, Connection: close semantics
-// via read-to-close when no framing present).
+/// One GET of `path` from the host and `port` on a fresh connection.
+/// Runs http_call under http_client_deadline_ms, then closes the socket.
+/// Status 0 when the connect fails.
 @requires(network)
 pub HttpResponse http_get(Str hostport_url_parts_host, Int port, Str path) {
     Int fd = resid_tcp_connect(hostport_url_parts_host, port);
@@ -311,7 +340,7 @@ pub HttpResponse http_get(Str hostport_url_parts_host, Int port, Str path) {
     return r;
 }
 
-// Hex string -> Int (chunk-size lines are hexadecimal).
+/// Value of the ASCII hex digit with code `c`; 0 for any other character.
 pub Int http_hex_digit(Int c) {
     if (c >= 48 && c <= 57) { return c - 48; }
     if (c >= 97 && c <= 102) { return c - 87; }
@@ -319,6 +348,8 @@ pub Int http_hex_digit(Int c) {
     return 0;
 }
 
+/// Fold the hex digits of `s` from index `i` onto `acc` (chunk sizes).
+/// Non-hex characters count as 0 rather than failing.
 pub Int http_hex_val_acc(Str s, Int i, Int acc) {
     Int n = str_len(s);
     if (i >= n) { return acc; }

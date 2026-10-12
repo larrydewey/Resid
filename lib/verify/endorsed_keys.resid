@@ -24,16 +24,22 @@ import "../hash.resid";
 import "../x509.resid";
 import "../ecdsa.resid";
 
+/// A candidate key endorsed by a CoRIM, with the instance it is for.
+/// `a` is an anchor under the endorser's identity holding the key, and
+/// `instance_hex` the instance named by the triple, in lowercase hex.
 pub type EndorsedKey = { Anchor a; Str instance_hex; };
 
-// The candidates for `instance_hex` ("" any instance) from the attest-key
-// triples (identity triples when `identity`), as anchors of kind `kind`
-// for `format`; refused when there is none.
+/// Returns the attest-key candidates for `instance_hex` ("" any instance).
+/// Each is an anchor of kind `kind` for `format`. Refused, under the name
+/// `who`, when there is none; Stale when the CoRIM expired before `t`.
 @verify_internal
 pub Result(List(EndorsedKey), VerifyError) endorsed_keys(Verified(CorimRefs) keys, Str instance_hex, Str kind, Str format, Str principal, EvidenceTime t, Str who) {
     return endorsed_keys_of(keys, false, instance_hex, kind, format, principal, t, who);
 }
 
+/// Returns the key candidates as `endorsed_keys`, from either triple list.
+/// Reads the identity triples when `identity` is true, else the attest-key
+/// triples. Refused unless `keys` is exactly one endorser's CoRIM.
 @verify_internal
 pub Result(List(EndorsedKey), VerifyError) endorsed_keys_of(Verified(CorimRefs) keys, Bool identity, Str instance_hex, Str kind, Str format, Str principal, EvidenceTime t, Str who) {
     if (keys.anchors.len() != 1 || keys.format != "CorimRefs") { return Err(Refused(who, "the keys are not one endorser's CoRIM")); }
@@ -85,9 +91,10 @@ Anchor ek_anchor(List(Int) spki, PubKey pk, Verified(CorimRefs) keys, Str kind, 
     return Anchor {.id = keys.anchors[0], .kind = kind, .product = "", .principal = principal, .formats = [format], .algorithms = algs, .der = spki, .fingerprint = "sha256:" + hex_encode(sha256_bytes(spki)), .expires = keys.value.expires};
 }
 
-// An SPDM device's key (`dev`, its certificate's) endorsed by an
-// identity triple for `instance_hex`: the anchor to verify under, the
-// endorser's, listing every SPDM algorithm the key can sign with.
+/// Returns the anchor for an SPDM device whose key an identity triple endorses.
+/// `dev` is the device's certificate and `instance_hex` its instance, which
+/// must be given. The anchor carries the endorser's identity and lists
+/// every SPDM algorithm the key can sign with; Refused when no triple matches.
 @verify_internal
 pub Result(Anchor, VerifyError) endorsed_identity(Verified(CorimRefs) keys, Str instance_hex, Cert dev, EvidenceTime t, Str who) {
     if (keys.anchors.len() != 1 || keys.format != "CorimRefs") { return Err(Refused(who, "the keys are not one endorser's CoRIM")); }
@@ -117,8 +124,9 @@ List(Str) ek_spdm_algs(PubKey k) {
 
 List(Str) ek_suffix(Str p, List(Str) hs) { return [p + hs[0], p + hs[1], p + hs[2]]; }
 
-// Whether a failure under one candidate leaves the next to try: the key
-// did not sign, or signs with what the evidence does not use.
+/// Returns true when a failure under one candidate leaves the next to try.
+/// That is a BadSignature or Refused error: the key did not sign, or signs
+/// with an algorithm the evidence does not use.
 pub Bool endorsed_try_next(VerifyError e) {
     return match e { BadSignature(m) => true, Refused(w, m) => true, _ => false };
 }

@@ -28,24 +28,27 @@ import "aesgcm.resid";
 import "chacha.resid";
 import "hpkeg.resid";
 
-// The public key of sk, serialized (uncompressed point, or 32 bytes).
+/// Returns the serialized public key of `sk` under KEM `kem`.
+/// The uncompressed point for P-256/P-384, 32 bytes for X25519; empty for
+/// an unsupported KEM.
 pub List(Int) hpke_public_key(Int kem, List(Int) sk) { return hpkeg_public_key(kem, sk); }
 
+/// A key pair: `ok` is false when derivation failed.
 pub type HpkeKeyPair = { Bool ok; List(Int) sk; List(Int) pk; };
 
 HpkeKeyPair kp_of(HpkeKeyPairG(Int) g) { return HpkeKeyPair {.ok = g.ok, .sk = g.sk, .pk = g.pk}; }
 
-// DeriveKeyPair (§7.1.3): deterministic keys from input keying material,
-// for tests and for keys derived from a sealed secret.
+/// Derives a deterministic key pair from input keying material `ikm`
+/// (DeriveKeyPair, §7.1.3), for tests and keys derived from a sealed secret.
 pub HpkeKeyPair hpke_derive_keypair(Int kem, List(Int) ikm) { return kp_of(hpkeg_derive_keypair(kem, ikm)); }
 
-// A fresh key pair from the operating system's randomness.
+/// Generates a fresh key pair for `kem` from the runtime's randomness.
 pub HpkeKeyPair hpke_generate_keypair(Int kem) { return hpke_derive_keypair(kem, random_bytes(hpke_kem_nsk(kem))); }
 
 // ─── Key schedule (§5.1) ─────────────────────────────────────────────
 
-// A context: the AEAD key, the base nonce, the exporter secret and the
-// sequence number of the next message.
+/// An HPKE context: the AEAD key, the base nonce, the exporter secret and
+/// the sequence number of the next message; `ok` is false for a failed setup.
 pub type HpkeCtx = { Bool ok; HpkeSuite suite; List(Int) key; List(Int) base_nonce; List(Int) exporter; Int seq; };
 
 HpkeCtx ctx_of(HpkeCtxG(Int) g) {
@@ -56,77 +59,96 @@ HpkeCtxG(Int) ctx_g(HpkeCtx c) {
     return HpkeCtxG {.ok = c.ok, .suite = c.suite, .key = c.key, .base_nonce = c.base_nonce, .exporter = c.exporter, .seq = c.seq};
 }
 
+/// Returns a failed context (`ok` false, empty keys) for suite `s`.
 pub HpkeCtx hpke_ctx_bad(HpkeSuite s) { return HpkeCtx {.ok = false, .suite = s, .key = [], .base_nonce = [], .exporter = [], .seq = 0}; }
 
-// The result of setting up a sender: its context and the encapsulated key
-// to send alongside the ciphertext.
+/// The result of setting up a sender: its context and the encapsulated key
+/// to send alongside the ciphertext.
 pub type HpkeSender = { HpkeCtx ctx; List(Int) enc; };
 
-// Every sender setup (§5.1.2-5.1.4): mode from which of psk and skS are
-// given; ikmE pins the ephemeral key (tests), empty draws a fresh one.
+/// Sets up a sender in any mode (§5.1.2-5.1.4) to the public key `pkR`.
+/// The mode follows from which of `psk` and `skS` are non-empty; `ikmE`
+/// pins the ephemeral key (tests), empty draws a fresh one. A failed
+/// context for an unsupported suite or a failed Encap.
 pub HpkeSender hpke_setup_sender_full(HpkeSuite s, List(Int) pkR, List(Int) info, List(Int) psk, List(Int) psk_id, List(Int) skS, List(Int) ikmE) {
     HpkeSenderG(Int) g = hpkeg_setup_sender_full(s, pkR, info, psk, psk_id, skS, ikmE);
     return HpkeSender {.ctx = ctx_of(g.ctx), .enc = g.enc};
 }
 
+/// Sets up a receiver in any mode (§5.1.2-5.1.4) from `enc` and `skR`.
+/// The mode follows from which of `psk` and `pkS` are non-empty. A failed
+/// context for an unsupported suite or a failed Decap.
 pub HpkeCtx hpke_setup_receiver_full(HpkeSuite s, List(Int) enc, List(Int) skR, List(Int) info, List(Int) psk, List(Int) psk_id, List(Int) pkS) {
     return ctx_of(hpkeg_setup_receiver_full(s, enc, skR, info, psk, psk_id, pkS));
 }
 
-// Base mode (the common case).
+/// Sets up a sender to `pkR` in base mode with a fresh ephemeral key.
 pub HpkeSender hpke_setup_sender(HpkeSuite s, List(Int) pkR, List(Int) info) {
     return hpke_setup_sender_full(s, pkR, info, [], [], [], []);
 }
 
+/// Sets up a receiver in base mode from `enc` and the private key `skR`.
+/// A failed context on failure.
 pub HpkeCtx hpke_setup_receiver(HpkeSuite s, List(Int) enc, List(Int) skR, List(Int) info) {
     return hpke_setup_receiver_full(s, enc, skR, info, [], [], []);
 }
 
 // ─── Encryption (§5.2) and export (§5.3) ─────────────────────────────
 
-// The nonce for message number seq.
+/// Returns the AEAD nonce for message number `seq` (base nonce xor `seq`).
 pub List(Int) hpke_nonce(HpkeCtx c, Int seq) { return hpkeg_nonce(ctx_g(c), seq); }
 
-// The context with its sequence number set (to resume, or in tests).
+/// Returns the context with its sequence number set to `seq` (to resume,
+/// or in tests).
 pub HpkeCtx hpke_at_seq(HpkeCtx c, Int seq) {
     return HpkeCtx {.ok = c.ok, .suite = c.suite, .key = c.key, .base_nonce = c.base_nonce, .exporter = c.exporter, .seq = seq};
 }
 
+/// The result of a seal: the context for the next message and the
+/// ciphertext.
 pub type HpkeSealed = { HpkeCtx ctx; List(Int) ct; };
 
-// Seal the next message: ciphertext || tag, and the context to use for
-// the one after. Empty ct for a failed context or an export-only suite.
+/// Seals the next message: ciphertext || tag, and the context to use for
+/// the one after. Empty `ct` for a failed context or an export-only suite.
 pub HpkeSealed hpke_seal(HpkeCtx c, List(Int) aad, List(Int) pt) {
     HpkeSealedG(Int) g = hpkeg_seal(ctx_g(c), aad, pt);
     return HpkeSealed {.ctx = ctx_of(g.ctx), .ct = g.ct};
 }
 
+/// The result of an open: the context for the next message, whether the
+/// tag verified, and the plaintext.
 pub type HpkeOpened = { HpkeCtx ctx; Bool ok; List(Int) pt; };
 
-// Open the next message. On failure the sequence number does not move
-// (§5.2: the receiver's state is unchanged by a forgery).
+/// Opens the next message; `ok` is false for a bad tag, a failed context
+/// or an export-only suite. On failure the sequence number does not move
+/// (§5.2: the receiver's state is unchanged by a forgery).
 pub HpkeOpened hpke_open(HpkeCtx c, List(Int) aad, List(Int) ct) {
     HpkeOpenedG(Int) g = hpkeg_open(ctx_g(c), aad, ct);
     return HpkeOpened {.ctx = ctx_of(g.ctx), .ok = g.ok, .pt = g.pt};
 }
 
-// A secret of len bytes bound to the context and exporter_context.
+/// Exports a secret of `len` bytes bound to the context and
+/// `exporter_context` (§5.3). Empty for a failed context.
 pub List(Int) hpke_export(HpkeCtx c, List(Int) exporter_context, Int len) {
     return hpkeg_export(ctx_g(c), exporter_context, len);
 }
 
 // ─── Single-shot (§6) ────────────────────────────────────────────────
 
+/// A single-shot message: the encapsulated key and the ciphertext; `ok` is
+/// false when sealing failed.
 pub type HpkeMessage = { Bool ok; List(Int) enc; List(Int) ct; };
 
-// Seal one message to pkR in base mode.
+/// Seals one message to `pkR` in base mode with a fresh ephemeral key.
+/// `ok` is false when setup or sealing failed (or the suite is export-only).
 pub HpkeMessage hpke_seal_to(HpkeSuite s, List(Int) pkR, List(Int) info, List(Int) aad, List(Int) pt) {
     HpkeSender snd = hpke_setup_sender(s, pkR, info);
     HpkeSealed sealed = hpke_seal(snd.ctx, aad, pt);
     return HpkeMessage {.ok = sealed.ct.len() > 0, .enc = snd.enc, .ct = sealed.ct};
 }
 
-// Open one base-mode message with skR.
+/// Opens one base-mode message with the private key `skR`. None on any
+/// failure.
 pub Option(List(Int)) hpke_open_with(HpkeSuite s, List(Int) enc, List(Int) skR, List(Int) info, List(Int) aad, List(Int) ct) {
     HpkeOpened o = hpke_open(hpke_setup_receiver(s, enc, skR, info), aad, ct);
     return if (o.ok) { Some(o.pt) } else { None };

@@ -10,6 +10,10 @@
 // byte string or as [263, byte string]. Each token's claims are a map of
 // the documented keys, each once, with no trailing bytes; algorithms are
 // ES256 or ES384 with the matching curve.
+//
+// The CPAK may instead be a key a verified CoRIM endorses for the token's
+// instance ID (`cca_verify_endorsed*`); `cca_appraise` then applies a
+// `CcaPolicy` to the verified token.
 
 import "core.resid";
 import "../crypto.resid";
@@ -27,22 +31,30 @@ import "../dev/device.resid";
 import "corim.resid";
 import "endorsed_keys.resid";
 
+/// One software component of the platform token (claim 2399).
+/// `kind`, `version` and `hash_alg` are printable text (empty when absent);
+/// `measurement` (required) and `signer_id` are 32, 48 or 64 bytes.
 pub type CcaSwComponent = { Str kind; List(Int) measurement; Str version; List(Int) signer_id; Str hash_alg; };
 
-// Both tokens' claims, as signed. rpv is the realm personalization value
-// (chosen by whoever created the realm), challenge the realm's challenge.
+/// The realm and platform tokens' claims merged into one record, as signed.
+/// `rpv` is the realm personalization value (chosen by whoever created the
+/// realm), `challenge` the realm's challenge; `lifecycle` is -1 when absent.
 @signed(sig = cose, span = payload)
 pub type CcaToken = { List(Int) challenge; List(Int) rpv; List(Int) rim; List(List(Int)) rems; Str realm_hash_alg; List(Int) rak; Str rak_hash_alg; Str profile; List(Int) implementation_id; List(Int) instance_id; Int lifecycle; List(Int) config; List(CcaSwComponent) sw; Str verification_service; Str platform_hash_alg; };
 
-// A policy: the realm initial measurements accepted (one must match), the
-// REMs that must hold these values ("index=hex"), and the platform
-// implementation IDs accepted (empty: any).
+/// An appraisal policy for a verified CCA token.
+/// `rim_hex`: the realm initial measurements accepted (one must match; empty
+/// is refused). `rems_hex`: REMs that must hold these values ("index=hex",
+/// index 0..3). `implementation_ids_hex`: platform IDs accepted (empty: any).
 pub type CcaPolicy = { List(Str) rim_hex; List(Str) rems_hex; List(Str) implementation_ids_hex; };
 
+/// The device descriptors that may bind a CCA token to a spent challenge.
 pub List(Str) cca_descriptors() { return ["tsm_report.cca"]; }
 
 // ─── Strict CBOR ────────────────────────────────────────────────────
 
+/// Claim-parsing state: the token so far, an error (empty: none) and the
+/// keys already seen.
 type CcaR = { CcaToken t; Str err; List(Int) seen; };
 
 CcaToken cca_empty() {
@@ -54,7 +66,7 @@ CcaToken cca_empty() {
 
 Bool cca_has(List(Int) xs, Int x, Int i) { return i < xs.len() && (xs[i] == x || cca_has(xs, x, i + 1)); }
 
-// A COSE_Sign1 from the collection: a byte string, or [263, byte string].
+/// A COSE_Sign1 read from the collection: a byte string, or [263, byte string].
 type CcaPart = { Bool ok; List(Int) cose; Int pos; };
 
 CcaPart cca_part(List(Int) b, Int pos) {
@@ -71,6 +83,7 @@ CcaPart cca_part(List(Int) b, Int pos) {
     return CcaPart {.ok = s.ok, .cose = s.bytes, .pos = s.pos};
 }
 
+/// The platform and realm COSE_Sign1 messages of a collection, or `err`.
 type CcaColl = { List(Int) platform; List(Int) realm; Str err; };
 
 CcaColl cca_collection(List(Int) b) {
@@ -103,11 +116,13 @@ CcaR cca_claims(List(Int) b, Int pos, Int left, List(Int) keys, CcaR r) {
     return cca_claims(b, v.pos, left - 1, keys, CcaR {.t = v.t, .err = "", .seen = r.seen.concat([k.val])});
 }
 
+/// One claim value read: the updated token, the position after it, or `err`.
 type CcaV = { CcaToken t; Int pos; Str err; };
 
 CcaV cca_bad(CcaToken t, Str e) { return CcaV {.t = t, .pos = 0, .err = e}; }
 
-// A byte string of one of the given lengths ([] any up to 1024).
+/// A byte string read by `cca_bytes`; `ok` when its length is one of those
+/// asked ([] means any, up to 1024).
 type CcaB = { Bool ok; List(Int) v; Int pos; };
 
 CcaB cca_bytes(List(Int) b, Int pos, List(Int) lens) {
@@ -116,6 +131,8 @@ CcaB cca_bytes(List(Int) b, Int pos, List(Int) lens) {
     return CcaB {.ok = ok, .v = s.bytes, .pos = s.pos};
 }
 
+/// A text string read by `cca_text`; `ok` when printable ASCII, at most 256
+/// bytes.
 type CcaT = { Bool ok; Str v; Int pos; };
 
 CcaT cca_text(List(Int) b, Int pos) {
@@ -191,6 +208,7 @@ CcaToken cca_with_challenge(CcaToken t, List(Int) v) {
     return CcaToken {.challenge = v, .rpv = t.rpv, .rim = t.rim, .rems = t.rems, .realm_hash_alg = t.realm_hash_alg, .rak = t.rak, .rak_hash_alg = t.rak_hash_alg, .profile = t.profile, .implementation_id = t.implementation_id, .instance_id = t.instance_id, .lifecycle = t.lifecycle, .config = t.config, .sw = t.sw, .verification_service = t.verification_service, .platform_hash_alg = t.platform_hash_alg};
 }
 
+/// The four REMs read, each 32, 48 or 64 bytes, and the position after them.
 type CcaRems = { Bool ok; List(List(Int)) v; Int pos; };
 
 CcaRems cca_rems(List(Int) b, Int pos, Int left, List(List(Int)) acc) {
@@ -200,6 +218,7 @@ CcaRems cca_rems(List(Int) b, Int pos, Int left, List(List(Int)) acc) {
     return cca_rems(b, x.pos, left - 1, acc.concat([x.v]));
 }
 
+/// The software components read, the position after them, or `err`.
 type CcaSw = { List(CcaSwComponent) v; Int pos; Str err; };
 
 CcaSw cca_sw(List(Int) b, Int pos, Int left, List(CcaSwComponent) acc) {
@@ -213,6 +232,7 @@ CcaSw cca_sw(List(Int) b, Int pos, Int left, List(CcaSwComponent) acc) {
     return cca_sw(b, c.pos, left - 1, acc.concat([c.c]));
 }
 
+/// One software component's map read, the position after it, or `err`.
 type CcaSc = { CcaSwComponent c; Int pos; Str err; };
 
 CcaSc cca_sc(List(Int) b, Int pos, Int left, CcaSwComponent c, List(Int) seen) {
@@ -256,6 +276,10 @@ PubKey cca_ec_key(List(Int) point) {
     return PubKey {.kind = pubkey_ec(), .curve = c, .point = point, .n = [], .e = [], .pss_only = false};
 }
 
+/// Checks a CCA token's signatures and binding under `cpak`, without
+/// freshness. The anchor must be EndorsedKeys and unexpired at `t`; the RAK
+/// signs the realm token, the CPAK the platform token, whose challenge must
+/// be the RAK's hash. Returns the merged claims, else a VerifyError.
 @verify_internal
 pub Result(CcaToken, VerifyError) cca_check(List(UInt(8)) token, Anchor cpak, EvidenceTime t) {
     if (cpak.kind != "EndorsedKeys") { return Err(Refused("cca_verify", "the anchor is not an endorsed platform key (kind " + cpak.kind + ")")); }
@@ -283,13 +307,17 @@ pub Result(CcaToken, VerifyError) cca_check(List(UInt(8)) token, Anchor cpak, Ev
 
 Int cca_rp(ChallengeRecord c) { return if (c.bind.len() > 0) { q_rp_bound() } else { 0 }; }
 
+/// Checks that the realm challenge of `k` is `want` and accepts record `c`.
+/// `want` must be 64 bytes (NotFresh otherwise). Returns whether `c` was
+/// spent in a request, as `vf_bind_challenge` does.
 @verify_internal
 pub Result(Bool, VerifyError) cca_bind(CcaToken k, List(UInt(8)) want, ChallengeRecord c, List(UInt(8)) token) {
     if (want.len() != 64) { return Err(NotFresh("a CCA challenge is 64 bytes: issue one with challenge_issue(64)")); }
     return vf_bind_challenge(chal_bytes(k.challenge), want, c, token, cca_descriptors());
 }
 
-// Fresh for the holder of `c`: the realm challenge is challenge_value(c).
+/// Verifies a CCA token under the pinned CPAK `cpak`, fresh for `c`.
+/// The realm challenge must be `challenge_value(c)`.
 @primitive(verify, anchor = cpak, gives = [fresh], time = t, format = CcaToken, kinds = [EndorsedKeys], inputs = [token, c, t])
 pub Result(Verified(CcaToken), VerifyError) cca_verify(List(UInt(8)) token, ChallengeRecord c, Anchor cpak, EvidenceTime t) {
     CcaToken k = cca_check(token, cpak, t)?;
@@ -298,7 +326,9 @@ pub Result(Verified(CcaToken), VerifyError) cca_verify(List(UInt(8)) token, Chal
     return Ok(vf_make(k, cpak, q_fresh() | cca_rp(c), c, 0, none, none, t, "CcaToken"));
 }
 
-// Fresh and KeyBound(kem, pk).
+/// Verifies a CCA token under `cpak`, fresh and bound to the key `pk`.
+/// The realm challenge must bind `pk` for HPKE KEM `kem`; a malformed key is
+/// refused.
 @primitive(verify, anchor = cpak, gives = [fresh, key_bound], time = t, format = CcaToken, kinds = [EndorsedKeys], inputs = [token, c, t, kem, pk])
 pub Result(Verified(CcaToken), VerifyError) cca_verify_key_bound(List(UInt(8)) token, ChallengeRecord c, Anchor cpak, EvidenceTime t, Int kem, List(Int) pk) {
     if (!hpke_kem_ok(kem) || !vf_pk_ok(kem, pk)) { return Err(Refused("cca_verify_key_bound", "the attester's public key is empty or malformed for the KEM")); }
@@ -308,7 +338,8 @@ pub Result(Verified(CcaToken), VerifyError) cca_verify_key_bound(List(UInt(8)) t
     return Ok(vf_make(k, cpak, q_fresh() | q_key_bound() | cca_rp(c), c, kem, pk, none, t, "CcaToken"));
 }
 
-// Fresh and ChannelBound to the connection whose other end is e.
+/// Verifies a CCA token under `cpak`, fresh and bound to a channel.
+/// The channel is the connection whose other end is `e`; needs `declassify`.
 @primitive(verify, anchor = cpak, gives = [fresh, channel_bound], time = t, format = CcaToken, kinds = [EndorsedKeys], inputs = [token, c, t, e])
 @requires(declassify)
 pub Result(Verified(CcaToken), VerifyError) cca_verify_channel_bound(List(UInt(8)) token, ChallengeRecord c, Anchor cpak, EvidenceTime t, ChannelExporter e) {
@@ -319,7 +350,9 @@ pub Result(Verified(CcaToken), VerifyError) cca_verify_channel_bound(List(UInt(8
     return Ok(vf_make(k, cpak, q_fresh() | q_channel_bound() | cca_rp(c), c, 0, none, vf_channel_id(e), t, "CcaToken"));
 }
 
-// Delivered, for a record imported without a SpentStore.
+/// Verifies a CCA token under `cpak` as delivered, not fresh.
+/// For a record imported without a SpentStore: the realm challenge must
+/// equal `replayable_value(c)`.
 @primitive(verify, anchor = cpak, gives = [delivered], time = t, format = CcaToken, kinds = [EndorsedKeys], inputs = [token, c, t])
 pub Result(Verified(CcaToken), VerifyError) cca_verify_replayable(List(UInt(8)) token, ReplayableRecord c, Anchor cpak, EvidenceTime t) {
     CcaToken k = cca_check(token, cpak, t)?;
@@ -333,6 +366,7 @@ pub Result(Verified(CcaToken), VerifyError) cca_verify_replayable(List(UInt(8)) 
 // endorsed_keys.resid) for the token's own instance ID, not a pinned
 // anchor; the result rests on the CoRIM's endorser.
 
+/// A token checked under an endorsed key, and the anchor made of that key.
 type CcaHit = { CcaToken k; Anchor a; };
 
 Result(CcaHit, VerifyError) cca_endorsed_check(List(UInt(8)) token, Verified(CorimRefs) keys, EvidenceTime t) {
@@ -348,7 +382,8 @@ Result(CcaHit, VerifyError) cca_endorsed_at(List(UInt(8)) token, List(EndorsedKe
     };
 }
 
-// Fresh for the holder of `c`, under an endorsed CPAK.
+/// Verifies a CCA token under a CPAK endorsed by `keys`, fresh for `c`.
+/// The endorsed key must be for the token's own instance ID.
 @primitive(verify, from = keys, gives = [fresh], time = t, format = CcaToken, inputs = [token, c, t])
 pub Result(Verified(CcaToken), VerifyError) cca_verify_endorsed(List(UInt(8)) token, ChallengeRecord c, Verified(CorimRefs) keys, EvidenceTime t) {
     CcaHit h = cca_endorsed_check(token, keys, t)?;
@@ -357,7 +392,9 @@ pub Result(Verified(CcaToken), VerifyError) cca_verify_endorsed(List(UInt(8)) to
     return Ok(vf_make(h.k, h.a, q_fresh() | cca_rp(c), c, 0, none, none, t, "CcaToken"));
 }
 
-// Fresh and KeyBound(kem, pk), under an endorsed CPAK.
+/// Verifies a CCA token under a CPAK endorsed by `keys`, fresh and key-bound.
+/// The realm challenge must bind `pk` for HPKE KEM `kem`; a malformed key is
+/// refused.
 @primitive(verify, from = keys, gives = [fresh, key_bound], time = t, format = CcaToken, inputs = [token, c, t, kem, pk])
 pub Result(Verified(CcaToken), VerifyError) cca_verify_endorsed_key_bound(List(UInt(8)) token, ChallengeRecord c, Verified(CorimRefs) keys, EvidenceTime t, Int kem, List(Int) pk) {
     if (!hpke_kem_ok(kem) || !vf_pk_ok(kem, pk)) { return Err(Refused("cca_verify_endorsed_key_bound", "the attester's public key is empty or malformed for the KEM")); }
@@ -368,9 +405,10 @@ pub Result(Verified(CcaToken), VerifyError) cca_verify_endorsed_key_bound(List(U
 }
 
 // ─── Appraisal ──────────────────────────────────────────────────────
-// Mandatory: the platform's security lifecycle is "secured" (0x3000 to
-// 0x30FF). Then the policy's RIM (one must match), REMs and implementation
-// IDs.
+/// Appraises a verified CCA token against `policy`.
+/// Mandatory: the platform's security lifecycle is "secured" (0x3000 to
+/// 0x30FF). Then the policy's RIM (one must match), REMs and implementation
+/// IDs; any miss is Refused.
 @primitive(appraise, from = v, policy = policy, ptype = CcaPolicy)
 pub Result(Appraised(CcaToken), VerifyError) cca_appraise(Verified(CcaToken) v, CcaPolicy policy) {
     CcaToken k = v.value;

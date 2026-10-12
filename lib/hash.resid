@@ -10,15 +10,18 @@
 
 import "crypto.resid";
 
+/// A SHA-2 family hash (or SHA-1, for legacy fields only), named by value.
 pub type HashAlg = Sha1 | Sha256 | Sha384 | Sha512;
 
 // ─── SHA-384 (FIPS 180-4 §6.5): SHA-512 with its own IV, cut to 48 ──
 
+/// The SHA-384 initial hash value (FIPS 180-4 §5.3.4).
 pub W512 sha384_iv() {
     return W512 {.a = 14680500436340154072, .b = 7105036623409894663, .c = 10473403895298186519, .d = 1526699215303891257,
                  .e = 7436329637833083697, .f = 10282925794625328401, .g = 15784041429090275239, .h = 5167115440072839076};
 }
 
+/// The 48-byte SHA-384 digest of `msg`.
 pub List(Int) sha384_bytes(List(Int) msg) {
     Int n = msg.len();
     Int full = (n / 128) * 128;
@@ -30,6 +33,7 @@ pub List(Int) sha384_bytes(List(Int) msg) {
 
 // ─── Dispatch ───────────────────────────────────────────────────────
 
+/// The digest of `msg` under the hash `h`.
 pub List(Int) hash_bytes(HashAlg h, List(Int) msg) {
     return match h {
         Sha1 => sha1_bytes(msg),
@@ -39,23 +43,27 @@ pub List(Int) hash_bytes(HashAlg h, List(Int) msg) {
     };
 }
 
-// Digest length in bytes.
+/// The digest length of `h` in bytes.
 pub Int hash_len(HashAlg h) {
     return match h { Sha1 => 20, Sha256 => 32, Sha384 => 48, Sha512 => 64, };
 }
 
-// Compression block length in bytes (the HMAC key block).
+/// The compression block length of `h` in bytes (the HMAC key block).
 pub Int hash_block(HashAlg h) {
     return match h { Sha1 => 64, Sha256 => 64, Sha384 => 128, Sha512 => 128, };
 }
 
+/// The display name of `h`, such as "SHA-256".
 pub Str hash_name(HashAlg h) {
     return match h { Sha1 => "SHA-1", Sha256 => "SHA-256", Sha384 => "SHA-384", Sha512 => "SHA-512", };
 }
 
+/// True when `a` and `b` are the same hash.
+/// Compares digest lengths, which are distinct across the four algorithms.
 pub Bool hash_same(HashAlg a, HashAlg b) { return hash_len(a) == hash_len(b); }
 
-// The hash named by an AlgorithmIdentifier OID (NIST hashAlgs, and SHA-1).
+/// The hash named by an AlgorithmIdentifier OID (NIST hashAlgs, and SHA-1).
+/// `oid` is in dotted-decimal form; None for any other OID.
 pub Option(HashAlg) hash_from_oid(Str oid) {
     if (oid == "2.16.840.1.101.3.4.2.1") { return Some(Sha256); }
     if (oid == "2.16.840.1.101.3.4.2.2") { return Some(Sha384); }
@@ -64,6 +72,7 @@ pub Option(HashAlg) hash_from_oid(Str oid) {
     return None;
 }
 
+/// The dotted-decimal AlgorithmIdentifier OID of `h`.
 pub Str hash_oid(HashAlg h) {
     return match h {
         Sha1 => "1.3.14.3.2.26",
@@ -90,31 +99,37 @@ ListBuf(Int) hm_copy(List(Int) b, Int i, ListBuf(Int) acc) {
     return hm_copy(b, i + 1, acc.push(b[i]));
 }
 
-// The key padded (or first hashed) to one block.
+/// The HMAC key block: `key` zero-padded to one block of `h`, hashed first
+/// when longer than a block (RFC 2104 §2).
 pub List(Int) hmac_key_block(HashAlg h, List(Int) key) {
     Int bl = hash_block(h);
     List(Int) k = if (key.len() > bl) { hash_bytes(h, key) } else { key };
     return hm_zeros(bl - k.len(), hm_copy(k, 0, ListBuf())).finish();
 }
 
+/// HMAC of `msg` under `key` with the hash `h` (RFC 2104).
 pub List(Int) hmac_bytes(HashAlg h, List(Int) key, List(Int) msg) {
     List(Int) kb = hmac_key_block(h, key);
     List(Int) inner = hash_bytes(h, hm_copy(msg, 0, hm_pad(kb, 54, 0, ListBuf())).finish());
     return hash_bytes(h, hm_copy(inner, 0, hm_pad(kb, 92, 0, ListBuf())).finish());
 }
 
+/// HMAC-SHA-384 of `msg` under `key`.
 pub List(Int) hmac_sha384_bytes(List(Int) key, List(Int) msg) { return hmac_bytes(Sha384, key, msg); }
+/// HMAC-SHA-512 of `msg` under `key`.
 pub List(Int) hmac_sha512_bytes(List(Int) key, List(Int) msg) { return hmac_bytes(Sha512, key, msg); }
 
-// Constant-time MAC check: every byte is compared, lengths are public.
+/// True when `tag` is the HMAC of `msg` under `key` with the hash `h`.
+/// Constant-time: every byte is compared; lengths are public.
 pub Bool hmac_verify(HashAlg h, List(Int) key, List(Int) msg, List(Int) tag) {
     return ct_equal(hmac_bytes(h, key, msg), tag);
 }
 
 // ─── HKDF ───────────────────────────────────────────────────────────
 
-// An empty salt means HashLen zero bytes (RFC 5869 §2.2); HMAC pads a
-// short key with zeros anyway, so the two are the same key.
+/// HKDF-Extract: the pseudorandom key from `salt` and `ikm` (RFC 5869 §2.2).
+/// An empty salt means HashLen zero bytes (RFC 5869 §2.2); HMAC pads a
+/// short key with zeros anyway, so the two are the same key.
 pub List(Int) hkdf_extract_with(HashAlg h, List(Int) salt, List(Int) ikm) {
     return hmac_bytes(h, salt, ikm);
 }
@@ -126,12 +141,15 @@ ListBuf(Int) hk_expand(HashAlg h, List(Int) prk, List(Int) info, Int c, Int len,
     return hk_expand(h, prk, info, c + 1, len, ti, hm_copy(ti[0..take], 0, okm), have + take);
 }
 
-// OKM of `len` bytes; empty when len exceeds 255 * HashLen (RFC 5869 §2.3).
+/// HKDF-Expand: `len` bytes of output keying material from `prk` and `info`.
+/// Empty when `len` is negative or exceeds 255 * HashLen (RFC 5869 §2.3).
 pub List(Int) hkdf_expand_with(HashAlg h, List(Int) prk, List(Int) info, Int len) {
     if (len < 0 || len > 255 * hash_len(h)) { return []; }
     return hk_expand(h, prk, info, 1, len, [], ListBuf(), 0).finish();
 }
 
+/// HKDF (RFC 5869): extract with `salt` and `ikm`, then expand to `len` bytes.
+/// Empty when `len` is out of range, as for `hkdf_expand_with`.
 pub List(Int) hkdf_with(HashAlg h, List(Int) salt, List(Int) ikm, List(Int) info, Int len) {
     return hkdf_expand_with(h, hkdf_extract_with(h, salt, ikm), info, len);
 }

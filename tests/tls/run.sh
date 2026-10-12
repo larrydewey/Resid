@@ -163,6 +163,11 @@ REV="$(rev bad "$IN_WINDOW")"
 [ "$(revfield TRUSTED)" = false ] && ok || bad "a revoked certificate must not be trusted"
 [ "$(revfield TRUSTED-strict)" = false ] && ok || bad "a revoked certificate must not be trusted under revocation_required"
 
+# The same CRL as PEM: an `X509 CRL` block is read as a CRL.
+REV="$("$PROBE" "$W/crlstore" --revoke "$F/crl.pem" "$F/bad.der" localhost "" "$F/ca.der" "$IN_WINDOW" 2>&1)"
+[ "$(revfield covered)" = true ] && ok || bad "a PEM CRL should cover bad.der"
+[ "$(revfield TRUSTED)" = false ] && ok || bad "a certificate a PEM CRL revokes must not be trusted"
+
 # A CRL past its nextUpdate says what was true when it was issued and is
 # not used: relying on it is how a revoked certificate keeps working.
 REV="$(rev bad "$STALE")"
@@ -225,6 +230,14 @@ owant "ocsp revoked time" REVOKED_AT 1735689600
 # though it is genuine and signed by the same issuer.
 oprobe "$F/ocsp-good.der" "$F/ca.der" "$F/leaf.der"
 owant "ocsp other cert" STATUS -1
+
+# A response answers for several certificates, one SingleResponse each,
+# and the one asked about need not be first.
+oprobe "$F/ocsp-two.der" "$F/srvca.der" "$F/srv.der"
+owant "ocsp two responses, first" STATUS 0
+oprobe "$F/ocsp-two.der" "$F/srvca.der" "$F/srv384.der"
+owant "ocsp two responses, second" STATUS 0
+owant "ocsp two responses, store admits second" ACCEPT true
 
 # A signature that is not the issuer's is not evidence, so the good answer
 # inside it does not survive.

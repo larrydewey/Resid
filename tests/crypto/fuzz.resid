@@ -132,7 +132,7 @@ Int run_ocsp(List(Int) m, List(Int) issuer, List(Int) cert) {
 
 Int ocsp_inside(List(Int) d, List(Int) issuer, List(Int) cert) {
     List(Int) want = ocsp_certid_for(issuer, cert, []);
-    Int seq = ocsp_find_sr(d, want, ocsp_rd_responses(d), ocsp_rd_end(d));
+    Int seq = ocsp_find_sr(d, want, ocsp_rd_first(d), ocsp_rd_end(d));
     Int s0 = if (seq < 0) { ocsp_rd_responses(d) } else { seq };
     Int a = ocsp_status_code(d, s0) + ocsp_rev_time(d, s0) + ocsp_sr_next_update(d, s0) + ocsp_sr_this_update(d, s0);
     Int b = str_len(der_str_value(d, ocsp_sr_this_update(d, s0))) + str_len(der_str_value(d, ocsp_rd_produced_at(d)));

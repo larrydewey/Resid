@@ -34,15 +34,18 @@ import "../challenge.resid";
 import "../challenge_bind.resid";
 import "../challenge_export.resid";
 
-// What a verified KEY_EXCHANGE says. session_id is the responder's half
-// above the requester's (as DSP0277 numbers it); summary_type the
-// measurement summary asked for and summary its hash; mut_auth what the
-// device asked of the requester; responder_verify the ResponderVerifyData
-// the requester checks with the session keys (empty when the handshake
-// is in the clear); transcript TH1 with the signature, th its hash.
+/// What a verified KEY_EXCHANGE says. session_id is the responder's half
+/// above the requester's (as DSP0277 numbers it); summary_type the
+/// measurement summary asked for and summary its hash; mut_auth what the
+/// device asked of the requester; responder_verify the ResponderVerifyData
+/// the requester checks with the session keys (empty when the handshake
+/// is in the clear); transcript TH1 with the signature, th its hash.
 @signed(sig = signature, span = transcript)
 pub type SpdmSession = { Int version; Int asym; Int hash; Int dhe; Int aead; Int session_id; Int heartbeat; Int mut_auth; Int summary_type; List(Int) summary; List(Int) req_exchange; List(Int) rsp_exchange; Bool handshake_in_clear; List(Int) responder_verify; List(Int) transcript; List(Int) th; };
 
+/// The requester's record of a KEY_EXCHANGE: the negotiation, the chain as
+/// GET_CERTIFICATE returned it, OCSP responses, the DIGESTS response
+/// (needed on a multi-key connection), KEY_EXCHANGE and KEY_EXCHANGE_RSP.
 pub type SpdmSessionRecord = { List(List(UInt(8))) vca; List(UInt(8)) chain; List(List(UInt(8))) ocsp; List(UInt(8)) digests; List(UInt(8)) key_exchange; List(UInt(8)) key_exchange_rsp; };
 
 Result(T, VerifyError) ss_msg(Result(T, Str) r) { return match r { Ok(v) => Ok(v), Err(m) => Err(BadLayout(m)) }; }
@@ -50,8 +53,12 @@ List(List(Int)) ss_ints(List(List(UInt(8))) xs, Int i, List(List(Int)) acc) { re
 List(Int) ss_cat(List(List(Int)) xs, Int i, List(Int) acc) { return if (i >= xs.len()) { acc } else { ss_cat(xs, i + 1, acc.concat(xs[i])) }; }
 List(List(UInt(8))) ss_bytes(List(List(Int)) xs, Int i, List(List(UInt(8))) acc) { return if (i >= xs.len()) { acc } else { ss_bytes(xs, i + 1, acc.concat([chal_bytes(xs[i])])) }; }
 
+/// A checked key exchange: the session and the requester's random.
 type SsOk = { SpdmSession s; List(Int) random; };
 
+/// Checks a KEY_EXCHANGE record under `root` at `t`, without the challenge.
+/// Needs SPDM 1.1 or later with key exchange negotiated and a certificate
+/// slot; the responder's signature over TH1 must verify. Err on any failure.
 @verify_internal
 pub Result(SsOk, VerifyError) spdm_session_check(SpdmSessionRecord rec, Anchor root, EvidenceTime t) {
     if (root.kind != "NvidiaDevice" && root.kind != "DeviceIdentity") { return Err(Refused("spdm_session_verify", "the anchor is not a device identity root (kind " + root.kind + ")")); }
@@ -91,8 +98,9 @@ pub Result(SsOk, VerifyError) spdm_session_check(SpdmSessionRecord rec, Anchor r
 
 Int ss_rp(ChallengeRecord c) { return if (c.bind.len() > 0) { q_rp_bound() } else { 0 }; }
 
-// Fresh for the holder of `c`: the requester's random is
-// challenge_value(c), issued with challenge_issue(32).
+/// Verifies an SPDM key exchange under `root` as Fresh for `c`'s holder.
+/// The requester's random must be challenge_value(c), issued with
+/// challenge_issue(32). Err on any failed check.
 @primitive(verify, anchor = root, gives = [fresh], time = t, format = SpdmSession, kinds = [NvidiaDevice, DeviceIdentity], inputs = [rec, c, t])
 pub Result(Verified(SpdmSession), VerifyError) spdm_session_verify(SpdmSessionRecord rec, ChallengeRecord c, Anchor root, EvidenceTime t) {
     SsOk k = spdm_session_check(rec, root, t)?;
@@ -102,7 +110,9 @@ pub Result(Verified(SpdmSession), VerifyError) spdm_session_verify(SpdmSessionRe
     return Ok(vf_make(k.s, root, q_fresh() | ss_rp(c), c, 0, none, none, t, "SpdmSession"));
 }
 
-// Delivered, for a record imported without a SpentStore.
+/// Verifies an SPDM key exchange as Delivered only, not Fresh.
+/// For a record imported without a SpentStore: the requester's random must
+/// equal replayable_value(c), but nothing stops a replay.
 @primitive(verify, anchor = root, gives = [delivered], time = t, format = SpdmSession, kinds = [NvidiaDevice, DeviceIdentity], inputs = [rec, c, t])
 pub Result(Verified(SpdmSession), VerifyError) spdm_session_verify_replayable(SpdmSessionRecord rec, ReplayableRecord c, Anchor root, EvidenceTime t) {
     SsOk k = spdm_session_check(rec, root, t)?;
@@ -113,10 +123,10 @@ pub Result(Verified(SpdmSession), VerifyError) spdm_session_verify_replayable(Sp
 
 // ─── Measurements in the session ────────────────────────────────────
 
-// Whether the session's measurement summary is the one these measurement
-// blocks give (all of them, type 255; the immutable-ROM ones, type 1):
-// the measurements are the ones the device held when it keyed the
-// session.
+/// Returns whether the session's measurement summary hashes `e`'s blocks.
+/// Type 255 covers all blocks, type 1 the immutable-ROM ones; true means
+/// the measurements are the ones the device held when it keyed the
+/// session. Any other summary type gives false.
 pub Bool spdm_session_covers(SpdmSession s, SpdmEvidence e) {
     if ((s.summary_type != 255 && s.summary_type != 1) || s.summary.len() != spdm_hash_len(s.hash)) { return false; }
     return eq_list(spdm_hash(s.hash, ss_blocks(e.measurements, s.summary_type, 0, [])), s.summary);
