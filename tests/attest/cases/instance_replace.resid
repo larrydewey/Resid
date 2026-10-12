@@ -1,4 +1,5 @@
-import "verify/core.resid";
+import "verify/verifier.resid";
+import "evidence.resid";
 import "verify/seal.resid";
 import "random.resid";
 import "word.resid";

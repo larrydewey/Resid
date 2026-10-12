@@ -1049,7 +1049,7 @@ GT lw_match(LW w, Int id, List(Str) env, GT c) {
         Str glabm = f"L{sc.lbl + 1}";
         GT gc0 = GT {.pos = 0, .val = "", .ty = "", .cnt = 0, .err = "", .glines = sc.glines, .lines = q2, .tmp = sc.tmp + 2, .lbl = sc.lbl + 1, .tail = false};
         List(Str) phi0 = [];
-        return lw_arms_g(w, id, 1, env, sc, sumv_names_cg(w.fs.suv[sidx]), sum_payloads_cg(w.fs, sidx, sc.ty), g2, gc0, glabm, phi0);
+        return lw_arms_g(w, id, 1, env, sc, sumv_names_cg(w.fs.suv[sidx]), sum_payloads_cg(w.fs, sidx, sc.ty), g2, gc0, glabm, phi0, "");
     }
     if (w.g.ns[id].nk != 3) { return lw_gerr("match arms", c); }
     Str ety = if (is_opt) { opt_elem_cg(sc.ty) } else { res_elem_ok_cg(sc.ty) };
@@ -1133,7 +1133,10 @@ List(Str) lw_arm_env(List(Str) env, Kg g, Int a, List(Str) vals, List(Str) tys, 
     return lw_arm_env(if (nm == "_") { env } else { env_add(env, nm + ":" + vals[i] + ":" + tys[i]) }, g, a, vals, tys, i + 1);
 }
 
-GT lw_arms_g(LW w, Int id, Int i, List(Str) env, GT sc, List(Str) vnames, List(Str) vtypes, Str tagreg, GT c, Str labm, List(Str) philist) {
+// `aty` is the arms' type so far, unified arm by arm as an Option or
+// Result match's two arms are: `A(n) => Ok(n), B(m) => Err(m)` is a
+// Result(Int, Str), not the last arm's Result(_, Str).
+GT lw_arms_g(LW w, Int id, Int i, List(Str) env, GT sc, List(Str) vnames, List(Str) vtypes, Str tagreg, GT c, Str labm, List(Str) philist, Str aty) {
     Int n = w.g.ns[id].nk;
     if (i >= n) {
         GT deadc = lw_step(c, c.val, c.ty, c.lines.concat(["unreachable"]), c.tmp);
@@ -1147,7 +1150,7 @@ GT lw_arms_g(LW w, Int id, Int i, List(Str) env, GT sc, List(Str) vnames, List(S
         GT c1 = GT {.pos = 0, .val = "", .ty = "", .cnt = 0, .err = "", .glines = c.glines, .lines = c.lines.concat(["br label %" + bodyLab, bodyLab + ":"]), .tmp = c.tmp, .lbl = lb, .tail = false};
         GT body = lw_branch(w, lw_arm_body(w, a), env, c1);
         if (body.err != "") { return body; }
-        GT lastc = GT {.pos = 0, .val = body.val, .ty = body.ty, .cnt = 0, .err = "", .glines = body.glines, .lines = body.lines.concat(["br label %" + labm]), .tmp = body.tmp, .lbl = body.lbl, .tail = false};
+        GT lastc = GT {.pos = 0, .val = body.val, .ty = lw_arms_ty(aty, body.ty), .cnt = 0, .err = "", .glines = body.glines, .lines = body.lines.concat(["br label %" + labm]), .tmp = body.tmp, .lbl = body.lbl, .tail = false};
         return cg_match_finish2(lastc, labm, philist.concat([body.val + ":" + arm_exit_label_cg(body.lines, bodyLab)]));
     }
     Int vi = variant_index_at_cg(vnames, v, 0);
@@ -1168,11 +1171,19 @@ GT lw_arms_g(LW w, Int id, Int i, List(Str) env, GT sc, List(Str) vnames, List(S
     // The phi's predecessor is the block the arm ends in, not its entry.
     List(Str) ph = philist.concat([body.val + ":" + arm_exit_label_cg(body.lines, bodyLab)]);
     if (i + 1 >= n) {
-        GT lastc = GT {.pos = 0, .val = body.val, .ty = body.ty, .cnt = 0, .err = "", .glines = body.glines, .lines = y2.concat(["unreachable"]), .tmp = body.tmp, .lbl = body.lbl, .tail = false};
+        GT lastc = GT {.pos = 0, .val = body.val, .ty = lw_arms_ty(aty, body.ty), .cnt = 0, .err = "", .glines = body.glines, .lines = y2.concat(["unreachable"]), .tmp = body.tmp, .lbl = body.lbl, .tail = false};
         return cg_match_finish2(lastc, labm, ph);
     }
     GT c3 = GT {.pos = 0, .val = "", .ty = "", .cnt = 0, .err = "", .glines = body.glines, .lines = y2, .tmp = body.tmp, .lbl = body.lbl, .tail = false};
-    return lw_arms_g(w, id, i + 1, env, sc, vnames, vtypes, tagreg, c3, labm, ph);
+    return lw_arms_g(w, id, i + 1, env, sc, vnames, vtypes, tagreg, c3, labm, ph, lw_arms_ty(aty, body.ty));
+}
+
+// The arms' type with one more arm's: the first arm's, then unified (an
+// arm that does not unify keeps the type so far, as before).
+Str lw_arms_ty(Str aty, Str t) {
+    if (aty == "" || ty_same_cg(aty, t)) { return t; }
+    Str u = lw_elem_unify(aty, t);
+    return if (u == "") { t } else { u };
 }
 
 // cg_unary's cast `(T) e`.

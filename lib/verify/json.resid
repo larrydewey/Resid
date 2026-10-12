@@ -22,6 +22,7 @@ JsP js_fail(Str e, Int pos) { return JsP {.at = JsonAt {.v = JNull, .start = pos
 /// Parses the bytes `b` strictly as exactly one JSON value.
 /// Returns Err with the reason and byte position on any malformed input,
 /// trailing data, or text over 1 MiB.
+@verify_internal
 pub Result(JsonAt, Str) json_parse(List(Int) b) {
     if (b.len() > 1048576) { return Err("JSON text over 1 MiB"); }
     JsP p = js_value(b, js_ws(b, 0), 0);
@@ -125,6 +126,7 @@ Bool js_has(List(Str) ks, Str k, Int i) { return i < ks.len() && (ks[i] == k || 
 
 /// The value of member `k` of object `o`.
 /// None when `o` is not an object or has no such member.
+@verify_internal
 pub Option(JsonAt) json_get(JsonAt o, Str k) {
     return match (o.v) { JObj(ks, vs) => json_get_at(ks, vs, k, 0), JNull => None, JBool(b) => None, JNum(n) => None, JStr(s) => None, JArr(xs) => None };
 }
@@ -136,21 +138,29 @@ Option(JsonAt) json_get_at(List(Str) ks, List(JsonAt) vs, Str k, Int i) {
 }
 
 /// The string value of member `k` of `o`; Err if missing or not a string.
+@verify_internal
 pub Result(Str, Str) json_str(JsonAt o, Str k) { return match (json_get(o, k)) { Some(v) => js_as_str(v, k), None => Err("missing `" + k + "`") }; }
 /// The integer value of member `k` of `o`; Err if missing or not a number.
+@verify_internal
 pub Result(Int, Str) json_int(JsonAt o, Str k) { return match (json_get(o, k)) { Some(v) => js_as_int(v, k), None => Err("missing `" + k + "`") }; }
 /// The elements of array member `k` of `o`; Err if missing or not an array.
+@verify_internal
 pub Result(List(JsonAt), Str) json_arr(JsonAt o, Str k) { return match (json_get(o, k)) { Some(v) => js_as_arr(v, k), None => Err("missing `" + k + "`") }; }
 /// Object member `k` of `o`; Err if missing or not an object.
+@verify_internal
 pub Result(JsonAt, Str) json_obj(JsonAt o, Str k) { return match (json_get(o, k)) { Some(v) => js_as_obj(v, k), None => Err("missing `" + k + "`") }; }
 
 /// The string in `v`, or Err naming `k` if `v` is not a string.
+@verify_internal
 pub Result(Str, Str) js_as_str(JsonAt v, Str k) { return match (v.v) { JStr(s) => Ok(s), JNull => Err("`" + k + "` is not a string"), JBool(b) => Err("`" + k + "` is not a string"), JNum(n) => Err("`" + k + "` is not a string"), JArr(xs) => Err("`" + k + "` is not a string"), JObj(a, c) => Err("`" + k + "` is not a string") }; }
 /// The integer in `v`, or Err naming `k` if `v` is not a number.
+@verify_internal
 pub Result(Int, Str) js_as_int(JsonAt v, Str k) { return match (v.v) { JNum(n) => Ok(n), JNull => Err("`" + k + "` is not a number"), JBool(b) => Err("`" + k + "` is not a number"), JStr(s) => Err("`" + k + "` is not a number"), JArr(xs) => Err("`" + k + "` is not a number"), JObj(a, c) => Err("`" + k + "` is not a number") }; }
 /// The elements of `v`, or Err naming `k` if `v` is not an array.
+@verify_internal
 pub Result(List(JsonAt), Str) js_as_arr(JsonAt v, Str k) { return match (v.v) { JArr(xs) => Ok(xs), JNull => Err("`" + k + "` is not an array"), JBool(b) => Err("`" + k + "` is not an array"), JStr(s) => Err("`" + k + "` is not an array"), JNum(n) => Err("`" + k + "` is not an array"), JObj(a, c) => Err("`" + k + "` is not an array") }; }
 /// `v` itself if it is an object, or Err naming `k` otherwise.
+@verify_internal
 pub Result(JsonAt, Str) js_as_obj(JsonAt v, Str k) {
     Bool ok = match (v.v) { JObj(a, c) => true, JNull => false, JBool(b) => false, JStr(s) => false, JArr(xs) => false, JNum(n) => false };
     return if (ok) { Ok(v) } else { Err("`" + k + "` is not an object") };

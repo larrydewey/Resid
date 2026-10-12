@@ -1,0 +1,974 @@
+// cbor.resid — CBOR (RFC 8949) as a format for resid-serial.
+//
+// A CBOR encoder state is the bytes written so far, newest first, so every
+// write is O(1) and `cbor_bytes` reverses them once at the end. CBOR is
+// prefix-free, so compound values need no separators: a definite length
+// frames its parts, and the streamed string and bytes verbs write the
+// length they were promised up front.
+//
+// The decoder state is the input, the read position, and a stack of the
+// open containers, each holding the parts it has left (or -1 for an
+// indefinite one, whose end is a break byte). It is self-describing, so
+// read_peek, read_skip, read_variant_name and read_end all work: a Value,
+// an untagged enum or an unknown field can be decoded without knowing the
+// type in advance.
+//
+// Representation choices, all of which round-trip through this package:
+//
+//   struct          a map with the field names as text keys
+//   variant         a unit variant is its name as a text string, a variant
+//                   with a payload is a one-entry map {name: payload}
+//   option          None is null, Some(v) is v
+//   unit            null
+//   bytes           a byte string
+//   Int(128)        a bignum (tag 2 or 3) when it does not fit in 64 bits,
+//                   otherwise the plain major type 0 or 1
+//   Float           the shortest of half, single or double that reads back
+//                   exactly; NaN and infinity are rejected, since a float
+//                   field that cannot hold them has no CBOR spelling
+//   indefinite      written never (deterministic encoding), read always
+
+import "serial.resid";
+import "cbor_head.resid";
+import "cbor_floats.resid";
+
+// ─── The encoder ─────────────────────────────────────────────────────
+
+/// The bytes written so far, newest first.
+/// Every write prepends one cell and `cbor_bytes` reverses the chain once at
+/// the end.
+type CbOut = CoNil | CoCons(CoCell);
+/// One written byte and the bytes written before it.
+type CoCell = { CbOut next; Int b; };
+
+/// The CBOR encoder state: the bytes written so far, newest first.
+type CborEnc = { CbOut out; };
+
+/// A fresh encoder with nothing written.
+pub CborEnc cbor_encoder() { return CborEnc {.out = CoNil}; }
+
+/// The bytes written, oldest first.
+/// Consumes the state.
+pub List(Int) cbor_bytes(CborEnc e) { return cb_out_list(e.out, ListBuf()); }
+
+/// The bytes of `o` pushed onto `b`, then the finished list, oldest first.
+pub List(Int) cb_out_list(CbOut o, ListBuf(Int) b) {
+    return match o { CoNil => b.finish().reverse(), CoCons(c) => cb_out_list(c.next, b.push(c.b)) };
+}
+
+// Internal writes cannot fail, so they carry no Result: the verbs below
+// are the only place the format can report one.
+CborEnc ce_push(CborEnc e, Int b) {
+    CoCell c = CoCell {.next = e.out, .b = b};
+    return CborEnc {.out = CoCons(c)};
+}
+
+CborEnc ce_push_all(CborEnc e, List(Int) bs, Int i) {
+    if (i >= bs.len()) { return e; }
+    return ce_push_all(ce_push(e, bs[i]), bs, i + 1);
+}
+
+CborEnc ce_head(CborEnc e, Int major, UInt(64) arg) { return ce_push_all(e, cb_head(major, arg), 0); }
+
+// A text string carrying a string's own bytes: a struct field name, a map
+// key, or a string value.
+CborEnc ce_text(CborEnc e, Str key) {
+    List(Int) bytes = cb_str_bytes(key);
+    Int n = bytes.len();
+    return ce_push_all(ce_head(e, 3, (UInt(64))n), bytes, 0);
+}
+
+Result(CborEnc, SerialError) ce_unit(CborEnc e) { return Ok(ce_push(e, 0xF6)); }
+Result(CborEnc, SerialError) ce_bool(CborEnc e, Bool v) { return Ok(ce_push(e, if (v) { 0xF5 } else { 0xF4 })); }
+
+// A signed integer: major type 1 carries -1 - v, so a negative value is
+// its own negation minus one.
+Result(CborEnc, SerialError) ce_int(CborEnc e, Int v) {
+    if (v >= 0) { return Ok(ce_head(e, 0, (UInt(64))v)); }
+    return Ok(ce_head(e, 1, cb_clamp64(cb_neg_mag(v))));
+}
+
+/// -1 - v for a negative v, the major type 1 argument.
+/// The magnitude of the negation, minus one, in unsigned arithmetic.
+pub UInt(128) cb_neg_mag(Int v) {
+    Int(128) w = (Int(128))v;
+    return u128(i128(0) - w) - u128(1);
+}
+
+/// A 128-bit magnitude as a head argument, clamped to 64 bits.
+/// A head carries 64 bits, so a wider one is clamped here (the callers above
+/// route it to a bignum).
+pub UInt(64) cb_clamp64(UInt(128) u) {
+    if (u > u128(18446744073709551615)) { return u64(18446744073709551615); }
+    return (UInt(64))u;
+}
+
+Result(CborEnc, SerialError) ce_uint(CborEnc e, UInt(64) v) { return Ok(ce_head(e, 0, v)); }
+
+// 128-bit integers ride the plain heads while they fit and become a bignum
+// past that (RFC 8949 §3.4.3).
+Result(CborEnc, SerialError) ce_i128(CborEnc e, Int(128) v) {
+    if (v >= 0) {
+        UInt(128) u = u128(v);
+        if (u <= u128(18446744073709551615)) { return Ok(ce_head(e, 0, (UInt(64))u)); }
+        return Ok(ce_push_all(e, cb_bignum(false, u), 0));
+    }
+    UInt(128) mag = cb_mag128(v);
+    if (mag <= u128(18446744073709551615)) { return Ok(ce_head(e, 1, (UInt(64))mag)); }
+    return Ok(ce_push_all(e, cb_bignum(true, mag), 0));
+}
+
+/// -1 - v for a negative v, the major type 1 argument, at 128 bits.
+pub UInt(128) cb_mag128(Int(128) v) {
+    // -2^127 has no positive counterpart in Int(128), so its magnitude is
+    // spelled out rather than negated.
+    if (v == i128(0) - i128(170141183460469231731687303715884105727) - i128(1)) { return u128(170141183460469231731687303715884105727); }
+    UInt(128) abs = u128(i128(0) - v);
+    return abs - u128(1);
+}
+
+Result(CborEnc, SerialError) ce_u128(CborEnc e, UInt(128) v) {
+    if (v <= u128(18446744073709551615)) { return Ok(ce_head(e, 0, (UInt(64))v)); }
+    return Ok(ce_push_all(e, cb_bignum(false, v), 0));
+}
+
+// The shortest of half, single or double that reads back as the same value.
+Result(CborEnc, SerialError) ce_float(CborEnc e, Float v) {
+    if (cb_is_nan(v) || cb_is_inf(v)) { return Err(invalid_value(f"{v}", "a finite CBOR float")); }
+    if (cb_fits_f16(v)) { return Ok(ce_push_all(ce_push(e, 0xF9), cb_f16_bits(f16(v)), 0)); }
+    if (cb_fits_f32(v)) { return Ok(ce_push_all(ce_push(e, 0xFA), cb_f32_bits(f32(v)), 0)); }
+    return Ok(ce_push_all(ce_push(e, 0xFB), cb_f64_bits(v), 0));
+}
+
+Result(CborEnc, SerialError) ce_str(CborEnc e, Str v) { return Ok(ce_text(e, v)); }
+Result(CborEnc, SerialError) ce_bytes(CborEnc e, List(Int) v) { return Ok(ce_push_all(ce_head(e, 2, cb_len(v)), v, 0)); }
+
+// A streamed string was promised its byte length up front, so its head can
+// be written before the first code point.
+Result(CborEnc, SerialError) ce_str_begin(CborEnc e, Int chars, Int bytes) { return Ok(ce_head(e, 3, (UInt(64))bytes)); }
+Result(CborEnc, SerialError) ce_str_char(CborEnc e, Int cp) { return Ok(ce_push_all(e, cb_cp_bytes(cp), 0)); }
+Result(CborEnc, SerialError) ce_str_end(CborEnc e) { return Ok(e); }
+Result(CborEnc, SerialError) ce_bytes_begin(CborEnc e, Int len) { return Ok(ce_head(e, 2, (UInt(64))len)); }
+Result(CborEnc, SerialError) ce_byte(CborEnc e, Int b) { return Ok(ce_push(e, b)); }
+Result(CborEnc, SerialError) ce_bytes_end(CborEnc e) { return Ok(e); }
+
+// None is null and Some(v) is v: an option is the value itself.
+Result(CborEnc, SerialError) ce_none(CborEnc e) { return Ok(ce_push(e, 0xF6)); }
+Result(CborEnc, SerialError) ce_some(CborEnc e) { return Ok(e); }
+
+Result(CborEnc, SerialError) ce_seq_begin(CborEnc e, Int len) { return Ok(ce_head(e, 4, (UInt(64))len)); }
+Result(CborEnc, SerialError) ce_seq_elem(CborEnc e) { return Ok(e); }
+Result(CborEnc, SerialError) ce_seq_end(CborEnc e) { return Ok(e); }
+Result(CborEnc, SerialError) ce_map_begin(CborEnc e, Int len) { return Ok(ce_head(e, 5, (UInt(64))len)); }
+Result(CborEnc, SerialError) ce_map_key(CborEnc e) { return Ok(e); }
+Result(CborEnc, SerialError) ce_map_value(CborEnc e) { return Ok(e); }
+Result(CborEnc, SerialError) ce_map_end(CborEnc e) { return Ok(e); }
+
+// A struct is a map; its name is not stored, since the field names are.
+Result(CborEnc, SerialError) ce_struct_begin(CborEnc e, Str name, Int len) { return Ok(ce_head(e, 5, (UInt(64))len)); }
+Result(CborEnc, SerialError) ce_field(CborEnc e, Str key) { return Ok(ce_text(e, key)); }
+Result(CborEnc, SerialError) ce_struct_end(CborEnc e) { return Ok(e); }
+
+// A unit variant is its name; a variant with a payload is a one-entry map
+// keyed by it.
+Result(CborEnc, SerialError) ce_unit_variant(CborEnc e, Str enum_name, Int index, Str variant) { return Ok(ce_text(e, variant)); }
+Result(CborEnc, SerialError) ce_variant_begin(CborEnc e, Str enum_name, Int index, Str variant) { return Ok(ce_text(ce_head(e, 5, 1), variant)); }
+Result(CborEnc, SerialError) ce_variant_end(CborEnc e) { return Ok(e); }
+Bool ce_human(CborEnc e) { return false; }
+
+Encoder(CborEnc) = {
+    .write_unit = ce_unit, .write_bool = ce_bool, .write_int = ce_int, .write_uint = ce_uint,
+    .write_i128 = ce_i128, .write_u128 = ce_u128,
+    .write_float = ce_float, .write_str = ce_str, .write_bytes = ce_bytes, .write_none = ce_none,
+    .write_str_begin = ce_str_begin, .write_str_char = ce_str_char, .write_str_end = ce_str_end,
+    .write_bytes_begin = ce_bytes_begin, .write_byte = ce_byte, .write_bytes_end = ce_bytes_end,
+    .write_some = ce_some, .write_seq_begin = ce_seq_begin, .write_seq_elem = ce_seq_elem, .write_seq_end = ce_seq_end,
+    .write_map_begin = ce_map_begin, .write_map_key = ce_map_key, .write_map_value = ce_map_value, .write_map_end = ce_map_end,
+    .write_struct_begin = ce_struct_begin, .write_field = ce_field, .write_struct_end = ce_struct_end,
+    .write_unit_variant = ce_unit_variant, .write_variant_begin = ce_variant_begin, .write_variant_end = ce_variant_end,
+    .encodes_human_readable = ce_human
+};
+
+/// `x` encoded as CBOR bytes.
+/// An error when a value has no CBOR spelling, such as a NaN or infinite float.
+@needs(Encode(T, CborEnc))
+pub Result(List(Int), SerialError) to_cbor(T x) {
+    CborEnc e = encode(x, cbor_encoder())?;
+    return Ok(cbor_bytes(e));
+}
+
+/// `x` encoded as CBOR, as lowercase hex text.
+@needs(Encode(T, CborEnc))
+pub Result(Str, SerialError) to_cbor_hex(T x) {
+    CborEnc e = encode(x, cbor_encoder())?;
+    return Ok(cb_hex(cbor_bytes(e)));
+}
+
+// ─── The decoder ─────────────────────────────────────────────────────
+
+/// An open container and the parts it has left.
+/// Bytes for a string or a byte string, entries for an array or a map. -1
+/// means the length was indefinite and the container ends at a break byte.
+type CbFrame = CbArr(Int) | CbMap(Int) | CbStr(Int) | CbByt(Int);
+
+/// The CBOR decoder state: the input, the read position and the open containers.
+type CborDec = {
+    List(Int) in;
+    Int pos;
+    List(CbFrame) open;
+    Int payloads;      // variant maps whose payload is still to come
+    Int vmaps;         // variant maps still to be closed
+};
+
+/// A decoder reading `bs` from the start, with no container open.
+pub CborDec cbor_decoder(List(Int) bs) {
+    List(CbFrame) none = [];
+    return CborDec {.in = bs, .pos = 0, .open = none, .payloads = 0, .vmaps = 0};
+}
+
+CborDec cd_at(CborDec d, Int pos, List(CbFrame) open) { return CborDec {.in = d.in, .pos = pos, .open = open, .payloads = d.payloads, .vmaps = d.vmaps}; }
+
+CborDec cd_push(CborDec d, CbFrame f) { return cd_at(d, d.pos, d.open.concat([f])); }
+
+CborDec cd_pop(CborDec d) {
+    Int k = d.open.len();
+    if (k == 0) { return d; }
+    return cd_at(d, d.pos, d.open[0..k - 1]);
+}
+
+CborDec cd_take(CborDec d, Int n) { return cd_at(d, d.pos + n, d.open); }
+
+// The top frame with `n` in place of its count.
+CborDec cd_set_left(CborDec d, Int n) {
+    Int k = d.open.len();
+    if (k == 0) { return d; }
+    CbFrame f = d.open[k - 1];
+    CbFrame moved = match f {
+        CbArr(x) => CbArr(n),
+        CbMap(x) => CbMap(n),
+        CbStr(x) => CbStr(n),
+        CbByt(x) => CbByt(n)
+    };
+    return cd_at(d, d.pos, d.open[0..k - 1].concat([moved]));
+}
+
+/// How many parts the top frame has left, when it is the kind the caller expects.
+/// Kinds: 4 array, 5 map, 3 text string, 2 byte string. A plain value, since
+/// the count is not a failure: `ok` says whether the caller found the
+/// container it asked for.
+type CbLeft = { Int n; Bool ok; Str why; };
+
+CbLeft cb_miss(Str why) { return CbLeft {.n = 0, .ok = false, .why = why}; }
+
+CbLeft cd_left(CborDec d, Int kind) {
+    Int k = d.open.len();
+    if (k == 0) { return cb_miss("no container is open"); }
+    CbFrame f = d.open[k - 1];
+    return match f {
+        CbArr(x) => if (kind == 4) { CbLeft {.n = x, .ok = true, .why = ""} } else { cb_miss("no sequence is open") },
+        CbMap(x) => if (kind == 5) { CbLeft {.n = x, .ok = true, .why = ""} } else { cb_miss("no map is open") },
+        CbStr(x) => if (kind == 3) { CbLeft {.n = x, .ok = true, .why = ""} } else { cb_miss("no string is open") },
+        CbByt(x) => if (kind == 2) { CbLeft {.n = x, .ok = true, .why = ""} } else { cb_miss("no byte string is open") }
+    };
+}
+
+// The top frame's kind, 0 when nothing is open: for telling an open
+// container from a surrounding one.
+Int cd_top_kind(CborDec d) {
+    Int k = d.open.len();
+    if (k == 0) { return 0; }
+    CbFrame f = d.open[k - 1];
+    return match f {
+        CbArr(x) => 4,
+        CbMap(x) => 5,
+        CbStr(x) => 3,
+        CbByt(x) => 2
+    };
+}
+
+// ─── Heads, read ─────────────────────────────────────────────────────
+
+/// A head as it sits in the input.
+/// The major type, the additional information and the argument it carries.
+type CbHead = { Int mt; Int ai; UInt(64) arg; };
+
+// Reading a head never consumes it: the verb that knows the value reads
+// the head itself, so read_peek and read_option can look first.
+Result(CbHead, SerialError) cd_peek_head(CborDec d, Int at, Str what) {
+    if (at >= d.in.len()) { return Err(eof_error(what)); }
+    Int b0 = d.in[at];
+    Int mt = b0 >> 5;
+    Int ai = b0 & 31;
+    if (ai < 24) { return Ok(CbHead {.mt = mt, .ai = ai, .arg = u64(ai)}); }
+    if (ai == 31) { return Ok(CbHead {.mt = mt, .ai = 31, .arg = u64(0)}); }
+    if (mt == 7) { return Ok(CbHead {.mt = mt, .ai = ai, .arg = u64(0)}); }
+    Int n = cb_arg_width(ai);
+    if (at + n >= d.in.len()) { return Err(eof_error(what)); }
+    return Ok(CbHead {.mt = mt, .ai = ai, .arg = cb_arg_bytes(d.in, at + 1, n, u64(0))});
+}
+
+Int cb_arg_width(Int ai) { return if (ai == 24) { 1 } else { if (ai == 25) { 2 } else { if (ai == 26) { 4 } else { 8 } } }; }
+
+UInt(64) cb_arg_bytes(List(Int) bs, Int i, Int n, UInt(64) acc) {
+    if (n <= 0) { return acc; }
+    return cb_arg_bytes(bs, i + 1, n - 1, (acc << 8) | (UInt(64))bs[i]);
+}
+
+// The head at the read position, and the state just past it. A float's
+// payload is not part of its head: the float verbs read those bytes.
+Result(Parsed(CbHead, CborDec), SerialError) cd_read_head(CborDec d, Str what) {
+    Result(CbHead, SerialError) r = cd_peek_head(d, d.pos, what);
+    if (Err(e) = r) { return Err(e); }
+    return match r { Ok(h) => parsed(h, cd_at(d, d.pos + cb_head_len(h), d.open)), Err(e) => Err(e) };
+}
+
+Int cb_head_len(CbHead h) {
+    if (h.mt == 7) { return 1; }
+    if (h.ai == 31) { return 1; }
+    if (h.ai < 24) { return 1; }
+    if (h.ai == 24) { return 2; }
+    if (h.ai == 25) { return 3; }
+    if (h.ai == 26) { return 5; }
+    return 9;
+}
+
+// The break byte, seen without consuming it.
+Bool cb_at_break(CborDec d) { return d.pos < d.in.len() && d.in[d.pos] == 0xFF; }
+
+// An argument as a length: the bytes it promises, or -1 when they are not
+// there (which is a length of "indefinite" only when the head said so).
+Int cb_fit_arg(UInt(64) arg, CborDec d, Str what) {
+    Int n = (Int)arg;
+    if (n < 0 || d.pos + n > d.in.len()) { return -1; }
+    return n;
+}
+
+Str cb_head_name(CbHead h) {
+    if (h.mt == 0) { return "an unsigned integer"; }
+    if (h.mt == 1) { return "a negative integer"; }
+    if (h.mt == 2) { return "bytes"; }
+    if (h.mt == 3) { return "a string"; }
+    if (h.mt == 4) { return "a sequence"; }
+    if (h.mt == 5) { return "a map"; }
+    if (h.mt == 6) { return "a tag"; }
+    if (h.ai == 20 || h.ai == 21) { return "a boolean"; }
+    if (h.ai == 22 || h.ai == 23) { return "null"; }
+    if (h.ai == 25 || h.ai == 26 || h.ai == 27) { return "a float"; }
+    if (h.ai < 20) { return "a simple value"; }
+    return "a break";
+}
+
+// ─── Scalars ─────────────────────────────────────────────────────────
+
+Result(CborDec, SerialError) cd_unit(CborDec d) {
+    Parsed(CbHead, CborDec) h = cd_read_head(d, "null")?;
+    CbHead head = h.value;
+    if (head.mt != 7 || (head.ai >= 20 && head.ai != 22 && head.ai != 23)) { return Err(invalid_type("null", cb_head_name(head))); }
+    return Ok(h.rest);
+}
+
+Result(Parsed(Bool, CborDec), SerialError) cd_bool(CborDec d) {
+    Parsed(CbHead, CborDec) h = cd_read_head(d, "a boolean")?;
+    CbHead head = h.value;
+    if (head.mt != 7 || (head.ai != 20 && head.ai != 21)) { return Err(invalid_type("a boolean", cb_head_name(head))); }
+    return parsed(head.ai == 21, h.rest);
+}
+
+// Major types 0 and 1, plus the simple values 0..19, which CBOR counts as
+// integers.
+Result(Parsed(Int, CborDec), SerialError) cd_int(CborDec d) {
+    Parsed(CbHead, CborDec) h = cd_read_head(d, "an integer")?;
+    CbHead head = h.value;
+    if (head.mt == 7) {
+        if (head.ai > 19) { return Err(invalid_type("an integer", cb_head_name(head))); }
+        return parsed(head.ai, h.rest);
+    }
+    if (head.mt == 1) {
+        if (head.arg > u64(9223372036854775807)) { return Err(invalid_value(f"-{head.arg + u64(1)}", "an Int")); }
+        return parsed(0 - (Int)head.arg - 1, h.rest);
+    }
+    if (head.mt != 0) { return Err(invalid_type("an integer", cb_head_name(head))); }
+    if (head.arg > u64(9223372036854775807)) { return Err(invalid_value(f"{head.arg}", "an Int")); }
+    return parsed((Int)head.arg, h.rest);
+}
+
+Result(Parsed(UInt(64), CborDec), SerialError) cd_uint(CborDec d) {
+    Parsed(CbHead, CborDec) h = cd_read_head(d, "an unsigned integer")?;
+    CbHead head = h.value;
+    if (head.mt == 7) {
+        if (head.ai > 19) { return Err(invalid_type("an unsigned integer", cb_head_name(head))); }
+        return parsed((UInt(64))head.ai, h.rest);
+    }
+    if (head.mt != 0) { return Err(invalid_type("an unsigned integer", cb_head_name(head))); }
+    return parsed(head.arg, h.rest);
+}
+
+Result(Parsed(Int(128), CborDec), SerialError) cd_i128(CborDec d) {
+    Parsed(CbHead, CborDec) h = cd_read_head(d, "a 128-bit integer")?;
+    CbHead head = h.value;
+    if (head.mt == 0) { return parsed((Int(128))head.arg, h.rest); }
+    if (head.mt == 1) {
+        UInt(128) mag = u128(head.arg) + u128(1);
+        if (mag <= u128(9223372036854775807)) { return parsed(i128(0) - (Int(128))mag, h.rest); }
+        return cd_bignum_neg(h.rest);
+    }
+    if (head.mt == 6 && head.arg == 2) { return cd_bignum_pos(h.rest); }
+    if (head.mt == 6 && head.arg == 3) { return cd_bignum_neg(h.rest); }
+    return Err(invalid_type("a 128-bit integer", cb_head_name(head)));
+}
+
+Result(Parsed(UInt(128), CborDec), SerialError) cd_u128(CborDec d) {
+    Parsed(CbHead, CborDec) h = cd_read_head(d, "an unsigned 128-bit integer")?;
+    CbHead head = h.value;
+    if (head.mt == 0) { return parsed((UInt(128))head.arg, h.rest); }
+    if (head.mt == 6 && head.arg == 2) { return cd_bignum_u128(h.rest); }
+    return Err(invalid_type("an unsigned 128-bit integer", cb_head_name(head)));
+}
+
+Result(Parsed(UInt(128), CborDec), SerialError) cd_bignum_u128(CborDec d) { return cd_bignum(d); }
+
+Result(Parsed(Int(128), CborDec), SerialError) cd_bignum_pos(CborDec d) {
+    Result(Parsed(UInt(128), CborDec), SerialError) m = cd_bignum(d);
+    if (Err(e) = m) { return Err(e); }
+    return match m { Ok(u) => parsed((Int(128))u.value, u.rest), Err(e) => Err(e) };
+}
+
+Result(Parsed(Int(128), CborDec), SerialError) cd_bignum_neg(CborDec d) {
+    Result(Parsed(UInt(128), CborDec), SerialError) m = cd_bignum(d);
+    if (Err(e) = m) { return Err(e); }
+    return match m { Ok(u) => parsed(i128(0) - (Int(128))u.value - i128(1), u.rest), Err(e) => Err(e) };
+}
+
+// The byte string a tag 2 or 3 wraps, as a magnitude.
+Result(Parsed(UInt(128), CborDec), SerialError) cd_bignum(CborDec d) {
+    Parsed(List(Int), CborDec) bs = cd_bytes(d)?;
+    if (bs.value.len() > 16) { return Err(invalid_length(bs.value.len(), "a bignum of at most 16 bytes")); }
+    return parsed(cb_be_value(bs.value), bs.rest);
+}
+
+UInt(128) cb_be_value(List(Int) bs) { return cb_be_value_at(bs, 0, u128(0)); }
+
+UInt(128) cb_be_value_at(List(Int) bs, Int i, UInt(128) acc) {
+    if (i >= bs.len()) { return acc; }
+    return cb_be_value_at(bs, i + 1, (acc << 8) | (UInt(128))bs[i]);
+}
+
+Result(Parsed(Float, CborDec), SerialError) cd_float(CborDec d) {
+    Parsed(CbHead, CborDec) h = cd_read_head(d, "a float")?;
+    CbHead head = h.value;
+    CborDec rest = h.rest;
+    if (head.mt != 7) { return Err(invalid_type("a float", cb_head_name(head))); }
+    if (head.ai == 25) {
+        if (rest.pos + 2 > rest.in.len()) { return Err(eof_error("a half-precision float")); }
+        return parsed(cb_f16_from(rest.in, rest.pos), cd_take(rest, 2));
+    }
+    if (head.ai == 26) {
+        if (rest.pos + 4 > rest.in.len()) { return Err(eof_error("a single-precision float")); }
+        return parsed(cb_f32_from(rest.in, rest.pos), cd_take(rest, 4));
+    }
+    if (head.ai == 27) {
+        if (rest.pos + 8 > rest.in.len()) { return Err(eof_error("a double-precision float")); }
+        return parsed(cb_f64_from(rest.in, rest.pos), cd_take(rest, 8));
+    }
+    return Err(invalid_type("a float", cb_head_name(head)));
+}
+
+// ─── Strings and bytes ───────────────────────────────────────────────
+
+Result(Parsed(Str, CborDec), SerialError) cd_str(CborDec d) {
+    Parsed(CbHead, CborDec) h = cd_read_head(d, "a string")?;
+    CbHead head = h.value;
+    if (head.mt != 3) { return Err(invalid_type("a string", cb_head_name(head))); }
+    if (head.ai == 31) { return cd_str_chunks(h.rest, StrBuf()); }
+    Int len = cb_fit_arg(head.arg, h.rest, "a string");
+    if (len < 0) { return Err(eof_error("a string")); }
+    if (h.rest.pos + len > h.rest.in.len()) { return Err(eof_error("a string")); }
+    Result(Str, SerialError) r = cb_str_at(h.rest.in, h.rest.pos, h.rest.pos + len, "a string");
+    if (Err(e) = r) { return Err(e); }
+    return match r { Ok(s) => parsed(s, cd_take(h.rest, len)), Err(e) => Err(e) };
+}
+
+// An indefinite text string: its definite chunks in order.
+// An indefinite text string: its definite chunks in order. A builder cannot
+// cross an error, so every way out but the end gives it up first.
+Result(Parsed(Str, CborDec), SerialError) cd_str_chunks(CborDec d, StrBuf b) {
+    if (cb_at_break(d)) { return parsed(b.finish(), cd_take(d, 1)); }
+    Result(Parsed(CbHead, CborDec), SerialError) head = cd_read_head(d, "a string chunk");
+    if (Err(e) = head) {
+        Void gone = b.discard();
+        return Err(e);
+    }
+    if (Ok(h) = head) {
+        CbHead own = h.value;
+        if (own.mt != 3 || own.ai == 31) {
+            Void gone = b.discard();
+            return Err(syntax_error("a text string chunk must be a definite-length text string"));
+        }
+        Int len = cb_fit_arg(own.arg, h.rest, "a string chunk");
+        if (len < 0) {
+            Void gone = b.discard();
+            return Err(eof_error("a string chunk"));
+        }
+        Result(Str, SerialError) r = cb_str_at(h.rest.in, h.rest.pos, h.rest.pos + len, "a string chunk");
+        if (Err(e) = r) {
+            Void gone = b.discard();
+            return Err(e);
+        }
+        if (Ok(s) = r) { return cd_str_chunks(cd_take(h.rest, len), b.push(s)); }
+    }
+    Void gone = b.discard();
+    return Err(custom_error("unreachable"));
+
+}
+
+Result(Parsed(Int, CborDec), SerialError) cd_str_begin(CborDec d) {
+    Parsed(CbHead, CborDec) h = cd_read_head(d, "a string")?;
+    CbHead head = h.value;
+    if (head.mt != 3) { return Err(invalid_type("a string", cb_head_name(head))); }
+    if (head.ai == 31) {
+        return parsed(0 - 1, cd_push(h.rest, CbStr(0 - 1)));
+    }
+    Int len = cb_fit_arg(head.arg, h.rest, "a string");
+    if (len < 0) { return Err(eof_error("a string")); }
+    Result(Int, SerialError) chars = cb_cp_count(h.rest.in, h.rest.pos, h.rest.pos + len, "a string");
+    if (Err(e) = chars) { return Err(e); }
+    return match chars { Ok(n) => parsed(n, cd_push(h.rest, CbStr(len))), Err(e) => Err(e) };
+}
+
+// The next code point of the open string, or -1 at its end. A chunk of an
+// indefinite string becomes the top frame when the last one runs out.
+Result(Parsed(Int, CborDec), SerialError) cd_str_next(CborDec d) {
+    CbLeft left = cd_left(d, 3);
+    if (!left.ok) { return Err(custom_error(left.why)); }
+    Int n = left.n;
+    if (n >= 0) {
+        if (n == 0) { return cd_str_after(d); }
+        Result(CbCp, SerialError) r = cb_cp_at(d.in, d.pos, "a string");
+        if (Err(e) = r) { return Err(e); }
+        return match r { Ok(c) => parsed(c.cp, cd_set_left(cd_take(d, c.next - d.pos), n - (c.next - d.pos))), Err(e) => Err(e) };
+    }
+    return cd_str_chunk(d);
+}
+
+// A definite chunk ends: an indefinite string inside it continues, and a
+// string with no container under it is done.
+Result(Parsed(Int, CborDec), SerialError) cd_str_after(CborDec d) {
+    CborDec d1 = cd_pop(d);
+    if (cd_top_kind(d1) == 3) { return cd_str_next(d1); }
+    return parsed(0 - 1, d1);
+}
+
+// The next chunk of an indefinite string, or its end.
+Result(Parsed(Int, CborDec), SerialError) cd_str_chunk(CborDec d) {
+    if (cb_at_break(d)) { return parsed(0 - 1, cd_take(cd_pop(d), 1)); }
+    Parsed(CbChunk, CborDec) c = cd_chunk_head(d, 3, "a string chunk")?;
+    if (c.value.len == 0) { return cd_str_next(c.rest); }
+    return cd_str_next(cd_push(c.rest, CbStr(c.value.len)));
+}
+
+Result(Parsed(List(Int), CborDec), SerialError) cd_bytes(CborDec d) {
+    Parsed(CbHead, CborDec) h = cd_read_head(d, "bytes")?;
+    CbHead head = h.value;
+    if (head.mt != 2) { return Err(invalid_type("bytes", cb_head_name(head))); }
+    if (head.ai == 31) { return cd_byte_chunks(h.rest, []); }
+    Int len = cb_fit_arg(head.arg, h.rest, "bytes");
+    if (len < 0) { return Err(eof_error("bytes")); }
+    List(Int) bytes = h.rest.in[h.rest.pos..h.rest.pos + len];
+    return parsed(bytes, cd_take(h.rest, len));
+}
+
+Result(Parsed(List(Int), CborDec), SerialError) cd_byte_chunks(CborDec d, List(Int) acc) {
+    if (cb_at_break(d)) { return parsed(acc, cd_take(d, 1)); }
+    Parsed(CbChunk, CborDec) c = cd_chunk_head(d, 2, "a byte string chunk")?;
+    List(Int) part = c.rest.in[c.rest.pos..c.rest.pos + c.value.len];
+    return cd_byte_chunks(cd_take(c.rest, c.value.len), acc.concat(part));
+}
+
+Result(Parsed(Int, CborDec), SerialError) cd_bytes_begin(CborDec d) {
+    Parsed(CbHead, CborDec) h = cd_read_head(d, "bytes")?;
+    CbHead head = h.value;
+    if (head.mt != 2) { return Err(invalid_type("bytes", cb_head_name(head))); }
+    if (head.ai == 31) { return parsed(0 - 1, cd_push(h.rest, CbByt(0 - 1))); }
+    Int len = cb_fit_arg(head.arg, h.rest, "bytes");
+    if (len < 0) { return Err(eof_error("bytes")); }
+    return parsed(len, cd_push(h.rest, CbByt(len)));
+}
+
+Result(Parsed(Int, CborDec), SerialError) cd_bytes_next(CborDec d) {
+    CbLeft left = cd_left(d, 2);
+    if (!left.ok) { return Err(custom_error(left.why)); }
+    Int n = left.n;
+    if (n >= 0) {
+        if (n == 0) { return cd_bytes_after(d); }
+        if (d.pos >= d.in.len()) { return Err(eof_error("bytes")); }
+        return parsed(d.in[d.pos], cd_set_left(cd_take(d, 1), n - 1));
+    }
+    return cd_bytes_chunk(d);
+}
+
+Result(Parsed(Int, CborDec), SerialError) cd_bytes_after(CborDec d) {
+    CborDec d1 = cd_pop(d);
+    if (cd_top_kind(d1) == 2) { return cd_bytes_next(d1); }
+    return parsed(0 - 1, d1);
+}
+
+Result(Parsed(Int, CborDec), SerialError) cd_bytes_chunk(CborDec d) {
+    if (cb_at_break(d)) { return parsed(0 - 1, cd_take(cd_pop(d), 1)); }
+    Parsed(CbChunk, CborDec) c = cd_chunk_head(d, 2, "a byte string chunk")?;
+    if (c.value.len == 0) { return cd_bytes_next(c.rest); }
+    return cd_bytes_next(cd_push(c.rest, CbByt(c.value.len)));
+}
+
+// The head of the next chunk of an indefinite string or byte string, and
+// its length.
+Result(Parsed(CbChunk, CborDec), SerialError) cd_chunk_head(CborDec d, Int mt, Str what) {
+    Result(CbHead, SerialError) r = cd_peek_head(d, d.pos, what);
+    if (Err(e) = r) { return Err(e); }
+    return match r {
+        Ok(h) => if (h.mt != mt || h.ai == 31) {
+            Err(syntax_error(what + " must be a definite-length string"))
+        } else {
+            Int len = cb_fit_arg(h.arg, d, what);
+            if (len < 0) { Err(eof_error(what)) } else { parsed(CbChunk {.len = len}, cd_take(d, cb_head_len(h))) }
+        },
+        Err(e) => Err(e)
+    };
+}
+
+/// The byte length of one chunk of an indefinite string or byte string.
+type CbChunk = { Int len; };
+
+// ─── Options ─────────────────────────────────────────────────────────
+
+// null (or undefined) is None; anything else is Some, left unread.
+Result(Parsed(Bool, CborDec), SerialError) cd_option(CborDec d) {
+    Result(CbHead, SerialError) r = cd_peek_head(d, d.pos, "an option");
+    if (Err(e) = r) { return Err(e); }
+    return match r {
+        Ok(h) => if (h.mt == 7 && (h.ai == 22 || h.ai == 23)) { parsed(false, cd_take(d, 1)) } else { parsed(true, d) },
+        Err(e) => Err(e)
+    };
+}
+
+// ─── Sequences and maps ──────────────────────────────────────────────
+
+Result(Parsed(Int, CborDec), SerialError) cd_seq_begin(CborDec d) { return cd_container_begin(d, 4, "a sequence"); }
+
+Result(Parsed(Bool, CborDec), SerialError) cd_seq_next(CborDec d) {
+    CbLeft left = cd_left(d, 4);
+    if (!left.ok) { return Err(custom_error(left.why)); }
+    Int n = left.n;
+    if (n >= 0) {
+        if (n == 0) { return parsed(false, cd_pop(d)); }
+        return parsed(true, cd_set_left(d, n - 1));
+    }
+    return cd_indefinite_next(d);
+}
+
+Result(Parsed(Int, CborDec), SerialError) cd_map_begin(CborDec d) { return cd_container_begin(d, 5, "a map"); }
+
+Result(Parsed(Bool, CborDec), SerialError) cd_map_next(CborDec d) {
+    CbLeft left = cd_left(d, 5);
+    if (!left.ok) { return Err(custom_error(left.why)); }
+    Int n = left.n;
+    if (n >= 0) {
+        if (n == 0) { return parsed(false, cd_pop(d)); }
+        return parsed(true, cd_set_left(d, n - 1));
+    }
+    return cd_indefinite_next(d);
+}
+
+Result(CborDec, SerialError) cd_map_value(CborDec d) { return Ok(d); }
+
+// An indefinite container's next part, or the break that ends it.
+Result(Parsed(Bool, CborDec), SerialError) cd_indefinite_next(CborDec d) {
+    if (cb_at_break(d)) { return parsed(false, cd_take(cd_pop(d), 1)); }
+    return parsed(true, d);
+}
+
+// A definite length in entries, or -1 when the head said indefinite.
+Result(Parsed(Int, CborDec), SerialError) cd_container_begin(CborDec d, Int mt, Str what) {
+    Parsed(CbHead, CborDec) h = cd_read_head(d, what)?;
+    CbHead head = h.value;
+    if (head.mt != mt) { return Err(invalid_type(what, cb_head_name(head))); }
+    if (head.ai == 31) { return parsed(0 - 1, cd_push(h.rest, if (mt == 4) { CbArr(0 - 1) } else { CbMap(0 - 1) })); }
+    Int len = cb_fit_arg(head.arg, h.rest, what);
+    if (len < 0) { return Err(eof_error(what)); }
+    return parsed(len, cd_push(h.rest, if (mt == 4) { CbArr(len) } else { CbMap(len) }));
+}
+
+// ─── Structs ─────────────────────────────────────────────────────────
+
+Result(CborDec, SerialError) cd_struct_begin(CborDec d, Str name, List(Str) fields) {
+    Parsed(Int, CborDec) n = cd_container_begin(d, 5, "a struct")?;
+    return Ok(n.rest);
+}
+
+// The next field: its key, matched against the names the type knows.
+Result(Parsed(FieldKey, CborDec), SerialError) cd_field(CborDec d, List(Str) fields) {
+    CbLeft left = cd_left(d, 5);
+    if (!left.ok) { return Err(custom_error(left.why)); }
+    Int n = left.n;
+    if (n >= 0) {
+        if (n == 0) { return parsed(EndOfFields, cd_pop(d)); }
+        return cd_field_key(cd_set_left(d, n - 1), fields);
+    }
+    if (cb_at_break(d)) { return parsed(EndOfFields, cd_take(cd_pop(d), 1)); }
+    return cd_field_key(d, fields);
+}
+
+Result(Parsed(FieldKey, CborDec), SerialError) cd_field_key(CborDec d, List(Str) fields) {
+    Parsed(CbHead, CborDec) h = cd_read_head(d, "a field name")?;
+    CbHead head = h.value;
+    if (head.mt != 3 || head.ai == 31) { return Err(invalid_type("a field name", cb_head_name(head))); }
+    Int len = cb_fit_arg(head.arg, h.rest, "a field name");
+    if (len < 0) { return Err(eof_error("a field name")); }
+    Result(Str, SerialError) r = cb_str_at(h.rest.in, h.rest.pos, h.rest.pos + len, "a field name");
+    if (Err(e) = r) { return Err(e); }
+    return match r {
+        Ok(s) => parsed(if (name_index(fields, s) < 0) { UnknownField(s) } else { KnownField(name_index(fields, s)) }, cd_take(h.rest, len)),
+        Err(e) => Err(e)
+    };
+}
+
+// ─── Variants ────────────────────────────────────────────────────────
+
+// A unit variant is a text string; a variant with a payload is a
+// one-entry map keyed by the variant's name. Either way only the tag and
+// the name are read: the payload is the caller's to read next.
+Result(Parsed(Str, CborDec), SerialError) cd_variant_name_at(CborDec d) {
+    Parsed(CbHead, CborDec) h = cd_read_head(d, "an enum variant")?;
+    CbHead head = h.value;
+    // A semantic tag (RFC 8949 §5) is transparent here: the variant it
+    // wraps is the one that names itself.
+    if (head.mt == 6 && head.arg != 2 && head.arg != 3) { return cd_variant_name_at(h.rest); }
+    if (head.mt == 3) {
+        if (head.ai == 31) { return Err(unsupported("an indefinite variant name")); }
+        Int len = cb_fit_arg(head.arg, h.rest, "a variant name");
+        if (len < 0) { return Err(eof_error("a variant name")); }
+        Result(Str, SerialError) r = cb_str_at(h.rest.in, h.rest.pos, h.rest.pos + len, "a variant name");
+        if (Err(e) = r) { return Err(e); }
+        return match r { Ok(s) => parsed(s, cd_take(h.rest, len)), Err(e) => Err(e) };
+    }
+    if (head.mt != 5) { return Err(invalid_type("an enum variant", cb_head_name(head))); }
+    if (head.ai != 31 && head.arg == u64(0)) { return Err(syntax_error("a variant map has no name")); }
+    Int len = if (head.ai == 31) { 0 - 1 } else { cb_fit_arg(head.arg, h.rest, "a variant") };
+    if (len == 0 - 1 && head.ai != 31) { return Err(eof_error("a variant")); }
+    CborDec d1 = cd_push(h.rest, if (head.ai == 31) { CbMap(0 - 1) } else { CbMap(len) });
+    Parsed(FieldKey, CborDec) key = cd_field_key(d1, [])?;
+    // The key used one entry; the payload is the one the variant owes.
+    Int left = if (head.ai == 31) { 0 - 1 } else { len - 1 };
+    CborDec d2 = cd_set_left(key.rest, left);
+    return parsed(cb_field_name(key.value), cd_payloads(cd_vmaps(d2, d2.vmaps + 1), d2.payloads + 1));
+}
+
+// A variant map's key: an unknown field, since the caller gave no names.
+Str cb_field_name(FieldKey k) { return match k { UnknownField(n) => n, KnownField(i) => "", EndOfFields => "" }; }
+
+Result(Parsed(Int, CborDec), SerialError) cd_variant(CborDec d, Str enum_name, List(Str) variants) {
+    Parsed(Str, CborDec) n = cd_variant_name_at(d)?;
+    Int idx = name_index(variants, n.value);
+    if (idx < 0) { return Err(unknown_variant(n.value, variants)); }
+    return parsed(idx, n.rest);
+}
+
+Result(Parsed(VariantName, CborDec), SerialError) cd_variant_name(CborDec d) {
+    Parsed(Str, CborDec) n = cd_variant_name_at(d)?;
+    Bool payload = n.rest.payloads > 0;
+    return parsed(VariantName {.enum_name = "", .index = 0 - 1, .name = n.value, .has_payload = payload}, n.rest);
+}
+
+// The payload marker: the value follows, and the variant's map stays open
+// for read_variant_end to close.
+Result(CborDec, SerialError) cd_variant_payload(CborDec d) {
+    if (d.payloads < 1) { return Err(custom_error("read_variant_payload without a payload")); }
+    return Ok(cd_payloads(d, d.payloads - 1));
+}
+
+Result(CborDec, SerialError) cd_variant_unit(CborDec d) {
+    if (d.payloads > 0) { return Err(custom_error("read_variant_unit on a variant with a payload")); }
+    return Ok(d);
+}
+
+// Close a variant's map: nothing for a definite one that held exactly the
+// payload, the break for an indefinite one.
+Result(CborDec, SerialError) cd_variant_end(CborDec d) {
+    if (d.payloads > 0) { return Err(custom_error("read_variant_end before the payload")); }
+    if (d.vmaps < 1) { return Ok(d); }
+    CbLeft left = cd_left(d, 5);
+    if (!left.ok) { return Err(custom_error(left.why)); }
+    Int n = left.n;
+    if (n < 0) {
+        if (!cb_at_break(d)) { return Err(syntax_error("a variant map has more than one entry")); }
+        return Ok(cd_vmaps(cd_take(cd_pop(d), 1), d.vmaps - 1));
+    }
+    if (n != 0) { return Err(syntax_error("a variant map has more than one entry")); }
+    return Ok(cd_vmaps(cd_pop(d), d.vmaps - 1));
+}
+
+CborDec cd_payloads(CborDec d, Int n) { return CborDec {.in = d.in, .pos = d.pos, .open = d.open, .payloads = n, .vmaps = d.vmaps}; }
+
+CborDec cd_vmaps(CborDec d, Int n) { return CborDec {.in = d.in, .pos = d.pos, .open = d.open, .payloads = d.payloads, .vmaps = n}; }
+
+// ─── Untyped reads ───────────────────────────────────────────────────
+
+// What comes next, read without consuming: the shape a self-describing
+// format owes its reader.
+Result(Parsed(Peek, CborDec), SerialError) cd_peek(CborDec d) {
+    Result(CbHead, SerialError) r = cd_peek_head(d, d.pos, "a value");
+    if (Err(e) = r) { return Err(e); }
+    return match r { Ok(h) => parsed(cb_peek_kind(h), d), Err(e) => Err(e) };
+}
+
+// A tag decides: tags 2 and 3 are the bignums, any other tag a variant.
+Peek cb_peek_kind(CbHead head) {
+    if (head.mt == 0) { return PeekUInt; }
+    if (head.mt == 1) { return PeekInt; }
+    if (head.mt == 2) { return PeekBytes; }
+    if (head.mt == 3) { return PeekStr; }
+    if (head.mt == 4) { return PeekSeq; }
+    if (head.mt == 5) { return PeekMap; }
+    if (head.mt == 6) {
+        if (head.arg == 2) { return PeekU128; }
+        if (head.arg == 3) { return PeekI128; }
+        return PeekVariant;
+    }
+    if (head.ai == 20 || head.ai == 21) { return PeekBool; }
+    if (head.ai == 22 || head.ai == 23) { return PeekNone; }
+    if (head.ai == 25 || head.ai == 26 || head.ai == 27) { return PeekFloat; }
+    return PeekInt;
+}
+
+// Skip one value of any type, read with the same head rules.
+Result(CborDec, SerialError) cd_skip(CborDec d) { return cd_skip_at(d, "a value"); }
+
+Result(CborDec, SerialError) cd_skip_at(CborDec d, Str what) {
+    Parsed(CbHead, CborDec) h = cd_read_head(d, what)?;
+    CbHead head = h.value;
+    CborDec d1 = h.rest;
+    if (head.mt == 2 || head.mt == 3) {
+        if (head.ai == 31) { return cd_skip_chunks(d1, head.mt, what); }
+        Int len = cb_fit_arg(head.arg, d1, what);
+        if (len < 0) { return Err(eof_error(what)); }
+        return Ok(cd_take(d1, len));
+    }
+    if (head.mt == 4 || head.mt == 5) {
+        Int items = if (head.ai == 31) { 0 - 1 } else { cb_fit_arg(head.arg, d1, what) };
+        if (items == 0 - 1 && head.ai != 31) { return Err(eof_error(what)); }
+        Int each = if (head.mt == 5) { 2 } else { 1 };
+        return cd_skip_items(d1, items * each, head.mt);
+    }
+    if (head.mt == 6) { return cd_skip_at(d1, "a tagged value"); }
+    return Ok(d1);
+}
+
+Result(CborDec, SerialError) cd_skip_chunks(CborDec d, Int mt, Str what) {
+    if (cb_at_break(d)) { return Ok(cd_take(d, 1)); }
+    Parsed(CbHead, CborDec) h = cd_read_head(d, "a chunk")?;
+    CbHead head = h.value;
+    if (head.mt != mt || head.ai == 31) { return Err(invalid_type("a string chunk", cb_head_name(head))); }
+    Int len = cb_fit_arg(head.arg, h.rest, "a chunk");
+    if (len < 0) { return Err(eof_error("a chunk")); }
+    return cd_skip_chunks(cd_take(h.rest, len), mt, what);
+}
+
+// `n` items left, or -1 for an indefinite container's items.
+Result(CborDec, SerialError) cd_skip_items(CborDec d, Int n, Int mt) {
+    if (n == 0) { return Ok(d); }
+    Str what = if (mt == 5) { "a map entry" } else { "an array item" };
+    if (n > 0) { return cd_skip_items(cd_skip_at(d, what)?, n - 1, mt); }
+    if (cb_at_break(d)) { return Ok(cd_take(d, 1)); }
+    return cd_skip_items(cd_skip_at(d, what)?, 0 - 1, mt);
+}
+
+Result(CborDec, SerialError) cd_end(CborDec d) {
+    if (d.pos < d.in.len()) { return Err(trailing_input(f"{d.in.len() - d.pos} byte(s)")); }
+    return Ok(d);
+}
+
+Bool cd_human(CborDec d) { return false; }
+
+Decoder(CborDec) = {
+    .read_unit = cd_unit, .read_bool = cd_bool, .read_int = cd_int, .read_uint = cd_uint,
+    .read_i128 = cd_i128, .read_u128 = cd_u128,
+    .read_float = cd_float, .read_str = cd_str, .read_bytes = cd_bytes, .read_option = cd_option,
+    .read_str_begin = cd_str_begin, .read_str_next = cd_str_next, .read_bytes_begin = cd_bytes_begin, .read_bytes_next = cd_bytes_next,
+    .read_seq_begin = cd_seq_begin, .read_seq_next = cd_seq_next, .read_map_begin = cd_map_begin,
+    .read_map_next = cd_map_next, .read_map_value = cd_map_value, .read_struct_begin = cd_struct_begin,
+    .read_field = cd_field, .read_variant = cd_variant, .read_variant_name = cd_variant_name,
+    .read_variant_unit = cd_variant_unit, .read_variant_payload = cd_variant_payload,
+    .read_variant_end = cd_variant_end, .read_skip = cd_skip, .read_peek = cd_peek, .read_end = cd_end,
+    .decodes_human_readable = cd_human
+};
+
+// ─── Entry points ────────────────────────────────────────────────────
+
+/// The value of type `T` that CBOR bytes `bs` encode.
+/// An error on malformed input, a type mismatch, or bytes after the item.
+/// Indefinite lengths and any depth are read: check untrusted input with
+/// `cbor_well_formed` first.
+@needs(Decode(T, CborDec))
+pub Result(T, SerialError) from_cbor(List(Int) bs) { return decode_value(cbor_decoder(bs)); }
+
+/// The value of type `T` that CBOR given as hex text encodes.
+/// A syntax error when `hex` is not hex, then as `from_cbor`.
+@needs(Decode(T, CborDec))
+pub Result(T, SerialError) from_cbor_hex(Str hex) {
+    Result(List(Int), SerialError) r = cb_unhex(hex);
+    if (Err(e) = r) { return Err(e); }
+    return match r { Ok(bs) => from_cbor(bs), Err(e) => Err(e) };
+}
+
+/// `bs` as lowercase hex text, two digits per byte, for debugging.
+pub Str cbor_hex(List(Int) bs) { return cb_hex(bs); }
+// ─── Well-formedness, bounded ────────────────────────────────────────
+// For bytes from outside: one pass that decides, without building
+// anything, that the input is exactly one CBOR item of definite lengths,
+// nested no deeper than asked, every length inside the input. The decoder
+// above reads indefinite lengths and any depth; run this first on
+// untrusted input and the decoder then only meets a bounded, definite item.
+
+/// Whether `bs` is exactly one well-formed CBOR item, nested at most `depth`.
+/// Definite lengths only (an indefinite string, array or map is refused, as
+/// is a break byte), every argument in its shortest form or not, every
+/// length and count within the input, simple values 24-31 of the one-byte
+/// form refused (RFC 8949 §3.3), and nothing after the item.
+pub Bool cbor_well_formed(List(Int) bs, Int depth) { return depth > 0 && cbor_wf_item(bs, 0, depth) == bs.len(); }
+
+/// The position after the well-formed item at `pos`, or -1.
+/// `depth` bounds how many arrays, maps and tags may nest from here.
+pub Int cbor_wf_item(List(Int) bs, Int pos, Int depth) {
+    if (depth <= 0 || pos < 0 || pos >= bs.len()) { return 0 - 1; }
+    Int b0 = bs[pos];
+    Int mt = b0 >> 5;
+    Int ai = b0 & 31;
+    if (ai >= 28) { return 0 - 1; }
+    Int width = if (ai < 24) { 0 } else { cb_arg_width(ai) };
+    if (width > 0 && pos + width >= bs.len()) { return 0 - 1; }
+    // An argument over 2^63 - 1 is too large for any length here.
+    Bool huge = width == 8 && bs[pos + 1] >= 128;
+    Int arg = if (ai < 24) { ai } else if (huge) { 0 } else { cbor_wf_arg(bs, pos + 1, width, 0) };
+    Int next = pos + 1 + width;
+    if (mt == 0 || mt == 1) { return next; }
+    if (mt == 7) { return if (ai == 24 && arg < 32) { 0 - 1 } else { next }; }
+    if (huge) { return 0 - 1; }
+    if (mt == 2 || mt == 3) { return if (arg > bs.len() - next) { 0 - 1 } else { next + arg }; }
+    if (mt == 6) { return cbor_wf_item(bs, next, depth - 1); }
+    // Arrays and maps: every part takes at least a byte, so a count past
+    // what is left is refused before any part is walked.
+    Int parts = if (mt == 4) { arg } else { 2 * arg };
+    if (arg > bs.len() - next || parts > bs.len() - next) { return 0 - 1; }
+    return cbor_wf_parts(bs, next, parts, depth - 1);
+}
+
+/// The position after `n` well-formed items from `pos`, or -1.
+pub Int cbor_wf_parts(List(Int) bs, Int pos, Int n, Int depth) {
+    if (n <= 0) { return pos; }
+    Int e = cbor_wf_item(bs, pos, depth);
+    if (e < 0) { return 0 - 1; }
+    return cbor_wf_parts(bs, e, n - 1, depth);
+}
+
+/// The big-endian value of `n` bytes of `bs` from `i`, added to `acc`.
+/// For widths up to 8 whose top bit is clear; the caller checks the bounds.
+pub Int cbor_wf_arg(List(Int) bs, Int i, Int n, Int acc) { return if (n <= 0) { acc } else { cbor_wf_arg(bs, i + 1, n - 1, (acc << 8) | bs[i]) }; }

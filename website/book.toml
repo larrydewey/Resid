@@ -94,6 +94,8 @@ nav = [
     "page|tools/stdlib",
     "page|tools/providers",
     "page|tools/http-server",
+    "page|tools/serialization",
+    "page|tools/formats",
     "page|tools/editor",
     "page|tools/why-graph-debug",
     "page|tools/fmt-pkg",

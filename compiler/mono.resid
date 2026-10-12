@@ -19,7 +19,7 @@ type GA = { Kg g; Int unit; Str made; Bool changed; Str dv; };
 
 pub GMO gm_run(KP p, Str src, Str smap, Bool cols) {
     if (p.err != "") { return GMO {.kp = p, .c = gk_run_cols(p, src, smap, cols), .dv = ""}; }
-    return gm_round(p.g, p.id, src, smap, cols, 0, ",", "");
+    return gm_round(p.g, p.id, src, smap, cols, 0, ",", "", "", gk_newlines(src, 0, ListBuf()));
 }
 
 GMO gm_fail(Kg g, Int unit, Int st) {
@@ -27,9 +27,12 @@ GMO gm_fail(Kg g, Int unit, Int st) {
     return GMO {.kp = KP {.g = g, .id = unit, .pos = 0, .err = ""}, .c = GKC {.status = st, .ty = es, .def = ""}, .dv = ""};
 }
 
-GMO gm_round(Kg g, Int unit, Str src, Str smap, Bool cols, Int n, Str made, Str dv) {
-    GKR r = gk_analyze_m(g, unit, src, smap, cols, false);
+// A round after the first checks only the previous round's copies (`only`,
+// ",a,b,"); instantiation ends on a full round that asks for nothing.
+GMO gm_round(Kg g, Int unit, Str src, Str smap, Bool cols, Int n, Str made, Str dv, Str only, List(Int) nls) {
+    GKR r = gk_analyze_m(g, unit, src, smap, cols, false, only, nls);
     if (r.status != 0) { return gm_fail(g, unit, r.status); }
+    if (r.log.len() == 0 && only != "") { return gm_round(g, unit, src, smap, cols, n, made, dv, "", nls); }
     if (r.log.len() == 0) { return gm_final(g, unit, r, cols, src, dv); }
     if (n >= 40) {
         List(Str) f = str_split(r.log[0], "|");
@@ -38,9 +41,19 @@ GMO gm_round(Kg g, Int unit, Str src, Str smap, Bool cols, Int n, Str made, Str 
         return gm_fail(g, unit, 1);
     }
     GA a = gm_apply(g, unit, r.log, made, dv);
-    if (!a.changed) { return gm_final(g, unit, gk_analyze_m(g, unit, src, smap, cols, true), cols, src, dv); }
-    return gm_round(a.g, a.unit, src, smap, cols, n + 1, a.made, a.dv);
+    if (!a.changed && only != "") { return gm_round(g, unit, src, smap, cols, n, made, dv, "", nls); }
+    if (!a.changed) { return gm_final(g, unit, gk_analyze_m(g, unit, src, smap, cols, true, "", nls), cols, src, dv); }
+    return gm_round(a.g, a.unit, src, smap, cols, n + 1, a.made, a.dv, gm_new_names(str_split(a.made, ","), 0, rs_name_set(str_split(made, ","), 0, rs_noset()), StrBuf().push(",")), nls);
 }
+
+// The copies a round made: names in `now` that `before` lacks (",a,b,").
+Str gm_new_names(List(Str) now, Int i, Map(Str, Int) before, StrBuf acc) {
+    if (i >= now.len()) { return acc.finish(); }
+    Str e = now[i];
+    Bool add = e != "" && !str_starts_with(e, "B:") && !before.contains(e);
+    return gm_new_names(now, i + 1, before, if (add) { acc.push(e).push(",") } else { acc });
+}
+
 
 // The checked program without its generic declarations, with concrete
 // records, and its columns padded to the grown graph.
@@ -80,7 +93,7 @@ GA gm_apply(Kg g0, Int unit0, List(Str) log, Str made, Str dv0) {
     Map(Int, KN) edits = ops.repl;
     Kg g1 = if (edits.len() == 0) { ops.g } else { gm_edit(ops.g, edits) };
     List(Int) none = [];
-    GA a = gm_adds(g1, log, 0, made, none, dvx);
+    GA a = gm_adds(g1, gm_index(g1, 0, gm_ix0()), log, 0, made, none, dvx);
     Bool changed = edits.len() > 0 || a.unit > 0 || drop != ",";
     // Rewritten comparisons point at newer nodes: renumber so children
     // come before parents again (packing relies on it).
@@ -312,29 +325,53 @@ List(KN) gm_edit_at(List(KN) ns, Map(Int, KN) edits, Int i, ListBuf(KN) acc) {
 // are kept in `made` order through gm_new.
 type GN = { Kg g; List(Int) ids; Str made; };
 
-GA gm_adds(Kg g, List(Str) log, Int i, Str made, List(Int) ids, Str dv) {
+// The round's lookups, built once (new nodes only follow the old ones, so
+// the first fn of a name and the first sandbox holding a node stay first).
+type GIx = { Map(Str, Int) fns; Map(Int, Int) psb; };
+
+GIx gm_ix0() {
+    Map(Str, Int) f = {};
+    Map(Int, Int) p = {};
+    return GIx {.fns = f, .psb = p};
+}
+
+GIx gm_index(Kg g, Int i, GIx x) {
+    if (i >= kg_count(g)) { return x; }
+    Str k = g.ns[i].kind;
+    GIx x2 = if (k == "fn" && !x.fns.contains(g.ns[i].text)) { GIx {.fns = x.fns.insert(g.ns[i].text, i), .psb = x.psb} }
+        else { if (k == "sandbox") { GIx {.fns = x.fns, .psb = gm_index_sb(g, i, 0, x.psb)} } else { x } };
+    return gm_index(g, i + 1, x2);
+}
+
+Map(Int, Int) gm_index_sb(Kg g, Int sb, Int j, Map(Int, Int) m) {
+    if (j >= g.ns[sb].nk) { return m; }
+    Int d = kg_kid(g, sb, j);
+    return gm_index_sb(g, sb, j + 1, if (m.contains(d)) { m } else { m.insert(d, sb) });
+}
+
+GA gm_adds(Kg g, GIx ix, List(Str) log, Int i, Str made, List(Int) ids, Str dv) {
     if (i >= log.len()) { return GA {.g = g, .unit = ids.len(), .made = gm_ids_text(ids, 0, made), .changed = false, .dv = dv}; }
     List(Str) f = str_split(log[i], "|");
     if (f[0] == "I" && f.len() >= 5 && !str_contains(made, "," + f[2] + ",")) {
-        Int fnd = gm_fn_node(g, f[1], 0);
-        if (fnd < 0) { return gm_adds(g, log, i + 1, made, ids, dv); }
+        Int fnd = ix.fns.get(f[1]) else { -1 };
+        if (fnd < 0) { return gm_adds(g, ix, log, i + 1, made, ids, dv); }
         List(Str) vars = if (f[3] == "") { gk_nopts() } else { str_split(f[3], ",") };
         List(Str) vals = if (f[4] == "") { gk_nopts() } else { str_split(f[4], gm_rs()) };
         GU u = GU {.ok = true, .ps = vars, .vs = vals, .why = ""};
         Str use = if (f.len() >= 6) { str_join(f[5..f.len()], "|") } else { "" };
         Str label = f[1] + "(" + list_join(vals, 0, ", ", "") + (if (use == "") { "" } else { ", using " + use }) + ")";
         KP c = gm_clone(g, fnd, fnd, u, f[2], label, use);
-        KP w = gm_wrap(c.g, fnd, c.id);
-        return gm_adds(w.g, log, i + 1, made + f[2] + ",", ids.concat([w.id]), dv + f"{c.id},{fnd},instantiate;");
+        KP w = gm_wrap(c.g, ix.psb, fnd, c.id);
+        return gm_adds(w.g, ix, log, i + 1, made + f[2] + ",", ids.concat([w.id]), dv + f"{c.id},{fnd},instantiate;");
     }
     Str bkey = if (f[0] == "B" && f.len() >= 5) { "B:" + f[2] + "(" + gm_norm(f[3]) + ")" } else { "" };
     if (bkey != "" && !str_contains(made, "," + bkey + ",")) {
         Int n = str_parse_int(f[1]);
         List(Int) none = [];
         KP b = kg_add(g, "behavior", f[2], "@synth|" + f[3] + "|" + f[4], none, g.ns[n].sp, g.ns[n].ep);
-        return gm_adds(b.g, log, i + 1, made + bkey + ",", ids.concat([b.id]), dv + f"{b.id},{n},instantiate;");
+        return gm_adds(b.g, ix, log, i + 1, made + bkey + ",", ids.concat([b.id]), dv + f"{b.id},{n},instantiate;");
     }
-    return gm_adds(g, log, i + 1, made, ids, dv);
+    return gm_adds(g, ix, log, i + 1, made, ids, dv);
 }
 
 // New declaration ids ride at the end of `made` as "#id," entries.
@@ -370,31 +407,12 @@ List(Int) gm_kids(Kg g, Int id, Int i, ListBuf(Int) acc) {
 
 // A copy stays under the sandboxes its generic is declared in: each
 // enclosing sandbox is repeated around it, so its ceiling still applies.
-KP gm_wrap(Kg g, Int orig, Int copy) {
-    Int sb = gm_parent_sandbox(g, orig, 0);
+KP gm_wrap(Kg g, Map(Int, Int) psb, Int orig, Int copy) {
+    Int sb = psb.get(orig) else { -1 };
     if (sb < 0) { return KP {.g = g, .id = copy, .pos = 0, .err = ""}; }
     KN s = g.ns[sb];
     KP w = kg_add(g, "sandbox", s.text, s.aux, [copy], s.sp, s.ep);
-    return gm_wrap(w.g, sb, w.id);
-}
-
-Int gm_parent_sandbox(Kg g, Int d, Int i) {
-    if (i >= kg_count(g)) { return -1; }
-    if (g.ns[i].kind == "sandbox" && gm_has_kid(g, i, d, 0)) { return i; }
-    return gm_parent_sandbox(g, d, i + 1);
-}
-
-Bool gm_has_kid(Kg g, Int id, Int d, Int j) {
-    if (j >= g.ns[id].nk) { return false; }
-    if (kg_kid(g, id, j) == d) { return true; }
-    return gm_has_kid(g, id, d, j + 1);
-}
-
-// The fn declaration named `name`, or -1.
-Int gm_fn_node(Kg g, Str name, Int i) {
-    if (i >= kg_count(g)) { return -1; }
-    if (g.ns[i].kind == "fn" && g.ns[i].text == name) { return i; }
-    return gm_fn_node(g, name, i + 1);
+    return gm_wrap(w.g, psb, sb, w.id);
 }
 
 // A copy of the subtree at `id` with the type parameters substituted;

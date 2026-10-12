@@ -1,16 +1,372 @@
 ---
 title: Attestation
-description: Verified evidence, anchors, appraisal and decisions that say whose word they rest on.
+description: One verifier for every platform's evidence, trust sets, bindings, claims, policies, and decisions that say whose word they rest on.
 ---
 
-A program that acts on remote attestation evidence (an AMD SEV-SNP report,
-an Intel TDX quote, an AWS Nitro document, an Arm CCA token, a TPM quote
-or a GPU's SPDM measurements) checks it with the standard library's verifiers in `lib/verify/`,
-and marks the function that releases something with `@decides`. The
-compiler then checks that the release cannot happen without fresh,
-verified, appraised evidence from the anchors the decision names. The
-design is `PLAN-attestation.md` in the repository; this page describes
-what is implemented.
+A program that acts on remote attestation evidence verifies it with one
+call and appraises it with another, whatever the platform: an AMD SEV-SNP
+report, an Intel TDX quote, an Arm CCA token, an AWS Nitro Enclaves
+document, a TPM 2.0 quote or a device's SPDM measurements. It marks the
+function that releases something with `@decides`, and the compiler checks
+that the release cannot happen without fresh, verified, appraised evidence
+from the roots the decision names. The design is `PLAN-attestation.md` in
+the repository; this page describes what is implemented.
+
+## In one page
+
+The attester (`lib/attester.resid`) finds its platform and returns an
+evidence envelope; it never names the platform:
+
+```text
+@requires(device, declassify)
+Result(List(UInt(8)), DeviceError) answer(List(UInt(8)) challenge, List(Secret(UInt(8))) sk) {
+    List(UInt(8)) bound = challenge_with_key(challenge, 32, sk)?;    // bind our HPKE key
+    return attest(challenge = Verbatim(bound));
+}
+```
+
+The verifier (`lib/verify/verifier.resid`) checks it, whatever it is, and
+releases a key to the attested key alone:
+
+```text
+@policy
+Policy release_policy() {
+    return Policy {.measurements = ["5c1f…e0", "a7d3…19"],      // our image, built for SNP and for TDX
+                   .require = ["committed_tcb.snp>=8"],
+                   .allow = []};
+}
+
+@decides(accept = [vendor_roots], appraised = release_policy, identity = key_bound)
+@requires(declassify, clock(readonly))
+Result(HpkeMessage, VerifyError) release(List(UInt(8)) evidence, ChallengeRecord issued, List(Int) guest_pk,
+                                         List(Secret(UInt(8))) key, List(Secret(UInt(8))) sender) {
+    Verified(Claims) v = verify_evidence(evidence, issued, bind_key(32, guest_pk), vendor_roots(), kernel_time())?;
+    Appraised(Claims) a = appraise_evidence(v, release_policy())?;
+    return seal_to_evidence(a, 32, guest_pk, key, sender);
+}
+```
+
+`issued` is the record the verifier made with `challenge_issue(64)` and
+sent as `challenge_value(issued)`. Everything platform-specific -- the
+vendor's certificate chain and revocation, the report's layout, which
+field carries the challenge, the platform's own appraisal rules -- is the
+verifier's business.
+
+## Evidence
+
+Evidence travels as an envelope (`lib/evidence.resid`): an IETF RATS CMW
+(draft-ietf-rats-msg-wrap, CBOR form; `lib/cmw.resid`) collection with the
+platform's evidence under `evidence` and, optionally, a list of collateral
+under `collateral`. The platform is named by the evidence's media type
+(`mt_snp_report()`, `mt_tdx_quote()`, `mt_cca_token()`,
+`mt_nitro_document()`) or collection type (`ct_tpm_quote()`,
+`ct_spdm_measurements()`, `ct_spdm_challenge()`).
+
+Collateral is what builds the chain to a root: certificates
+(`mt_cert()`), CRLs (`mt_crl()`), PEM chains (`mt_pem_chain()`), Intel's
+signed TCB info and QE identity (`mt_json()`), OCSP responses
+(`mt_ocsp()`). Nothing in it is trusted for being there: the verifier uses
+an item only when it fits the chain it is checking, so anyone may add it.
+The attester includes what the platform hands it (an SNP report brings the
+host's certificate table); the verifier adds what it fetched or cached:
+
+```text
+List(UInt(8)) e2 = evidence_add_collateral(evidence, mt_crl(), amd_crl)?;
+```
+
+The library never touches the network for collateral; fetching it from
+AMD's KDS or Intel's PCS is the caller's job. Decoding is strict and
+bounded: one well-formed CBOR item of definite lengths, nested at most 12
+deep, at most 4 MiB and 64 collateral items, text labels each once.
+
+`attest(challenge)` tries the kernel's TSM report (SEV-SNP, TDX, CCA),
+then the Nitro Secure Module, then the TPM (PCRs 0 to 7, signed by its
+endorsement-hierarchy attestation key). The challenge is `Runtime` (a
+fresh value nobody keeps), `Verbatim(v)` (the verifier's value, 32 to 64
+bytes) or `Issued(c)` (this program's own record, spent before the request
+and bound to the reply, so the program can verify its own evidence; the
+NSM and the TPM take their challenge as request data, so `Issued` is
+`Unsupported` there). It needs the full `device` grant.
+
+## Trust sets
+
+What a verification may rest on is a `Trust`, made by an `@trust`
+function that names anchors and other trust sets:
+
+```text
+@trust(anchors = [amd_ark_genoa, amd_ark_genoa_vlek])
+Trust genoa_only() { return trust_anchors(); }
+
+@trust(include = [genoa_only, intel_roots])
+Trust ours() { return trust_anchors(); }
+```
+
+The compiler rewrites the body so the set holds exactly the anchors named
+(`E0281` for an `@trust` function of the wrong shape; `E0282` for a name
+that is not an `@anchor` function in `anchors` or an `@trust` function in
+`include`, or a set that includes itself). Nothing else builds a `Trust`
+(it is opaque), so the compiler knows every anchor a verification may
+rest on.
+
+`vendor_roots()` is every root this release carries: AMD's SEV-SNP roots
+(`amd_roots`: Milan, Genoa and Turin, VCEK and VLEK), Intel's SGX root
+(`intel_roots`), the AWS Nitro root (`aws_roots`) and NVIDIA's device
+identity CA (`nvidia_roots`). Arm CCA and TPM evidence is signed by keys
+of the deployment's own: pin one as an anchor (`kind = EndorsedKeys` for a
+CPAK, `TpmAk` for an AK), let a verified CoRIM endorse it
+(`trust_with_keys(tr, refs)`), or, for a TPM, prove it by credential
+activation (`trust_with_ak(tr, ak)`, below).
+
+A verifier tries the set's roots and keys of the platform's kinds in
+turn: a root whose chain the evidence does not use, or a key that did not
+sign it, leaves the next to try; evidence that fails under a root it does
+use is refused with that failure. A pure `@trust` set holding no anchor of
+a kind the primitive takes is `E0282`.
+
+## Bindings
+
+How the evidence carries the challenge:
+
+| Binding | The evidence carries | The result |
+|---|---|---|
+| `bind_fresh()` | `challenge_value(c)` | `Fresh` |
+| `bind_key(kem, pk)` | `challenge_with_key(value, kem, sk)` for the `sk` behind `pk` | `Fresh`, `KeyBound`: `seal_to_evidence` can release to `pk` |
+| `bind_channel(c, e)?` | `challenge_with_channel(value, e')` for the attester's end of this TLS connection | `Fresh`, `ChannelBound`: `seal_to_channel` can release on it |
+| `bind_device(s)?` | `challenge_session_value(value, th)` for a verified SPDM session `s` | `Fresh`, resting on the device's root too |
+
+A `Binding` is opaque and made only by these, and the compiler reads which
+one a verification used (directly or through a local binding); a binding
+it cannot see -- a parameter -- gives nothing, and a decision on it is
+refused (`E0285`). The challenge record is accepted once for the whole
+process; a record this program spent on its own device answers only for
+the reply that request returned. `verify_evidence_replayable(evidence, r,
+tr, t)` checks evidence against an imported `ReplayableRecord`: `Delivered`
+only, never enough for a decision.
+
+`t` is an `EvidenceTime`: `kernel_time()` reads the clock (source
+`Kernel`); nothing else outside `lib/verify/` can build one, so a program
+cannot pass a past time to make an expired certificate valid.
+
+## Claims
+
+`verify_evidence` returns `Verified(Claims)`: what the evidence says, in
+one shape for every platform.
+
+| Field | |
+|---|---|
+| `platform` | `AmdSnp`, `IntelTdxTd`, `ArmCcaRealm`, `AwsNitro`, `Tpm2`, `SpdmDevice` (`platform_name` gives "AMD SEV-SNP", ...) |
+| `measurements` | slot-named digests: the launch measurement and the rest |
+| `launch_slot` | which slot measures the launched image (`""` where none does) |
+| `debug` | the platform says the TEE can be debugged |
+| `values` | other claims the platform or the measured image vouches for, by name |
+| `host_values` | claims the host or the requester chose (signed, but chosen outside) |
+| `tcb_statuses` | the vendor collateral's TCB statuses (Intel's TCB and QE levels) |
+| `hardware_id` | the chip or instance, when the evidence or its endorsement names one |
+| `report_data` | what the attester bound (the challenge field) |
+| `corim` | the same claims as CoRIM claims, for appraisal against reference values |
+
+| Platform | Launch slot | Other slots | Claims (`values`) | Host-chosen (`host_values`) |
+|---|---|---|---|---|
+| SEV-SNP | `MEASUREMENT` | | `vmpl`, `guest_svn`, `policy`, `policy.migrate_ma`, `signing_key`, `committed_tcb.*`, `current_tcb.*`, `launch_tcb.*`, `report_id`, ... | `host_data`, `id_key_digest`, `author_key_digest`, `family_id`, `image_id`, `reported_tcb.*` |
+| TDX | `MRTD` | `RTMR0`-`RTMR3`, `MRSEAM` | `td_attributes`, `xfam`, `tee_tcb_svn`, `mrsignerseam`, `fmspc`, `pcesvn`, `qe_isvsvn`, ... | `mrconfigid`, `mrowner`, `mrownerconfig` |
+| CCA | `RIM` | `REM0`-`REM3`, `SW.<type>` per platform component | `implementation_id`, `instance_id`, `lifecycle`, `profile`, ... | `rpv` |
+| Nitro | `PCR0` | `PCR1`... | `module_id`, `timestamp` | `user_data`, `public_key` |
+| TPM | | `PCR0`-`PCR23` (SHA-256 bank) | `firmware`, `reset_count`, `restart_count`, `safe`, `instance` | |
+| SPDM | | `MEAS<index>` | `version`, `slot`, `MEAS<index>.type`, `instance` | `context` |
+
+Read them with `claims_measurement(c, slot)`, `claims_launch(c)`,
+`claims_number(c, name, fallback)`, `claims_bytes(c, name)` and, for the
+host's, `claims_host_bytes(c, name)`. Host-chosen claims, `report_data`
+and the raw evidence are External to a decision (below): a release cannot
+turn on them.
+
+## Appraisal
+
+`appraise_evidence(v, policy)` gives `Appraised(Claims)`. It first applies
+what no policy turns off: the evidence must not say the TEE can be
+debugged; the platform's own rules must hold (SEV-SNP: no migration agent
+unless allowed, VMPL 0 unless the policy requires a VMPL; TDX:
+SEPT_VE_DISABLE set; CCA: a secured lifecycle; Nitro: PCRs 0-2 present;
+SPDM: measurements present); and every vendor TCB status must be
+`UpToDate` or allowed. Then the policy, the same for every platform:
+
+```text
+type Policy = { List(Str) measurements; List(Str) require; List(Str) allow; };
+```
+
+- `measurements`: `"hex"` names an accepted launch measurement, `"SLOT=hex"`
+  an accepted value of a slot. The launch measurement must be one of the
+  bare entries when there are any; each slot named must hold one of the
+  values listed for it. At least one entry is required. One policy can
+  list the image's measurement on every platform it is built for.
+- `require`: `"name=hex"` (a bytes claim equals one listed), `"name==n"`
+  (a number equals one listed), `"name>=n"` (a number is at least n). A
+  claim the evidence does not carry fails.
+- `allow`: `"migration_agent"`, `"tcb_status=SWHardeningNeeded"` and the
+  other statuses Intel's collateral may give (`tcb_status_names()`);
+  anything else is refused.
+
+The policy argument is a direct call of a nullary `@policy` function
+(`E0283`), so the appraisal names a reviewed rule.
+
+## Endorsed reference values
+
+A reference value need not be a hash compiled into a policy: a signed
+CoRIM (draft-ietf-rats-corim; `lib/verify/corim.resid`) carries an
+endorser's word. `corim_verify(corim, tr, t)` checks it under an anchor
+of kind `Endorser` in `tr` (ECDSA P-256, P-384 or P-521, Ed25519,
+RSASSA-PSS or PKCS#1, as the anchor lists). Every triple is read:
+reference values, endorsed values, identity keys, attestation keys,
+conditional endorsements and series; every measurement value and key type
+the draft defines.
+
+`appraise_evidence_endorsed(v, policy, refs)` applies the CoRIM to the
+evidence's claims (draft §9) and then the policy: a corroborated launch
+measurement (SEV-SNP, TDX, CCA) counts as one the policy names; where a
+platform's measurements are registers or blocks (Nitro, TPM, SPDM) the
+CoRIM must corroborate them all, and the policy may then name none; a CCA
+platform's software components must all be corroborated. The result rests
+on the endorser as well, so the decision names it:
+
+```text
+@decides(accept = [vendor_roots, image_endorsers], require = [image_endorser],
+         appraised = release_policy, identity = key_bound)
+...
+    Verified(CorimRefs) refs = corim_verify(corim, image_endorsers(), kernel_time())?;
+    Verified(Claims) v = verify_evidence(evidence, issued, bind_key(32, pk), vendor_roots(), kernel_time())?;
+    Appraised(Claims) a = appraise_evidence_endorsed(v, release_policy(), refs)?;
+```
+
+`evidence_corim(v, refs)` returns the accepted claims set, which a policy
+queries with `corim_corroborated`, `corim_holds` and `corim_endorsements`.
+
+### Endorsed keys
+
+Attest-key triples endorse attestation keys and identity triples device
+keys, so a CCA platform's CPAK, a TPM's AK or an SPDM device's key need
+not be pinned: `trust_with_keys(tr, refs)` adds them to a trust set. A CCA
+token names its own instance, which must be the key's; a TPM quote or an
+SPDM transcript names none, so the instance is the endorsement's word
+(the `instance` claim and `hardware_id`), and when two endorsements of one
+key name different instances the verifier claims neither. A triple with
+conditions is used only when it names no measured element and, if it
+names who must have authorized the key, the endorser is among them.
+
+## Devices over SPDM
+
+SPDM 1.0 to 1.3 evidence (DMTF DSP0274) verifies under a device root:
+NVIDIA's Device Identity CA (`nvidia_roots`, kind `NvidiaDevice`) or any
+vendor's, declared as an anchor of kind `DeviceIdentity` whose product is
+`"Vendor:Model"` (the device class CoRIM reference values are matched
+against). Every signature algorithm SPDM defines that the library
+implements is accepted when the anchor lists it. Measurement evidence
+(`evidence_spdm_measurements(vca, certs, ocsp, before, request,
+response)`) is checked through the chain, a current good OCSP answer for
+every certificate below the root (NVIDIA's firmware alias leaf is exempt,
+as NVIDIA's verifier does it), the device's signature over the transcript
+and the challenge as the request's nonce; CHALLENGE evidence
+(`evidence_spdm_challenge`) proves the device's identity and carries no
+measurements to appraise.
+
+### Sessions
+
+`verify_session(evidence, c, tr, t)` verifies a KEY_EXCHANGE
+(`evidence_spdm_session(vca, chain, ocsp, digests, key_exchange,
+key_exchange_rsp)`, 1.1 to 1.3): `Verified(SpdmSession)`, with the suite,
+session ID, exchange values, the measurement summary, the
+ResponderVerifyData and `th`, the transcript hash through the device's
+signature. `session_covers(s, m)` says whether verified measurement
+evidence holds exactly what the session's summary covers. The guest that
+holds the session binds its own evidence to it with `bind_device(s)`; the
+result rests on both roots:
+
+```text
+@decides(accept = [vendor_roots], appraised = guest_policy, identity = none)
+...
+    Verified(SpdmSession) s = verify_session(session, gpu, vendor_roots(), t)?;
+    Binding b = bind_device(s)?;
+    Verified(Claims) r = verify_evidence(evidence, cpu, b, vendor_roots(), t)?;
+```
+
+### The requester
+
+`lib/spdm_requester.resid` is a whole SPDM 1.0-1.3 requester over a
+transport closure (`SpdmIo`): `spdm_connect`, `spdm_get_digests`,
+`spdm_get_certificate`, `spdm_challenge`, `spdm_get_measurements`,
+`spdm_start_session` (mutual authentication with and without encapsulated
+requests, the handshake encrypted or in the clear),
+`spdm_start_psk_session`, `spdm_heartbeat`, `spdm_key_update`,
+`spdm_session_measurements` and `spdm_end_session`; it answers BUSY,
+RESPONSE_NOT_READY and large responses (CHUNK_GET), and chunks large
+requests (CHUNK_SEND). Each step returns the bytes an evidence record
+needs. `lib/spdm_transport.resid` frames messages for MCTP, PCI DOE and
+DSP0287 TCP, secured (DSP0277) or not, and speaks the DMTF spdm-emu socket
+protocol; `tests/spdm/run.sh` runs the requester against spdm-emu.
+
+## What each platform checks
+
+- **SEV-SNP**: the chain from the ARK (ASK or ASVK, VCEK or VLEK,
+  RSASSA-PSS SHA-384) with the ARK's newest current CRL in the collateral
+  at or above the product's floor, the report's ECDSA P-384 signature, and
+  its claims against its signer: `SIGNING_KEY` the root's kind,
+  `REPORTED_TCB` the VCEK's TCB, `CHIP_ID` the VCEK's hardware ID, a VLEK's
+  CSP ID, the product and CPU family. At most four certificate pairs are
+  tried, however much collateral there is.
+- **TDX** (quotes 4 and 5): the PCK chain the quote carries to Intel's
+  root, the quoting enclave's report and its binding of the attestation
+  key, the quote's signature; Intel's collateral from the envelope (the
+  CRLs of the PCK's CA and the root, the TCB info for the platform's FMSPC
+  and the TD QE identity, each signed under the same root and not below
+  the evaluation floor) gives the platform's and the QE's TCB statuses.
+- **Arm CCA**: the realm token signed by the RAK it carries, the platform
+  token signed by the CPAK and bound to that RAK; the challenge in the
+  realm token (64 bytes).
+- **Nitro**: an ES384 COSE_Sign1 whose bundle starts at the root and
+  chains to the signing certificate; the challenge in `nonce`.
+- **TPM**: a TPM2_Quote by an AK in the trust set (pinned, endorsed or
+  activated), one SHA-256 bank whose digest covers the PCR values given;
+  the challenge in the qualifying data.
+- **SPDM**: above.
+
+## Platform-only features
+
+These have no other platform's equivalent and stay with their platform.
+
+### SEV-SNP sealing
+
+`lib/verify/sealing.resid`: `snp_platform_key(selector, v)` derives the
+guest's SNP sealing key from its own fresh SEV-SNP evidence (verified from
+`attest(Issued(c))`, so it is this program's own device's answer),
+always mixing in the guest policy and measurement; `local_seal(k,
+version, counter, value)` and `local_open(k, blob)` keep data only this
+measurement can open, and `local_open`'s result carries `Local`. A
+decision on it alone writes `identity = local, fresh = false` (an old blob
+opens as well as a new one) unless a TPM counter binds the version:
+`tpm_verify_counter(attest, sig, c, tr, t)` reads a TPM2_NV_Certify fresh,
+and `bind_counter(opened, counter)` gives a value that is `Local` and
+`Fresh` when the versions agree, resting on both. Before anything was
+sealed, `first_seal(k, counter, initial)` is the explicit outcome.
+
+### TPM attestation keys by credential activation
+
+An AK can be proven to live in the TPM a manufacturer certified, by
+TPM2_ActivateCredential against the TPM's endorsement key (TCG TPM 2.0
+Part 1 §24; the EK Credential Profile's low-range EKs). `tpm_ek_roots()`
+holds the 46 roots of Microsoft's TrustedTpm.cab (kind `TpmEk`).
+
+1. The attester reads its EK certificate and makes its EK and AK
+   (`tpm_ek_cert`, `tpm_ek_chain_certs`, `tpm_ek_ak` in `lib/dev/tpm.resid`).
+2. The verifier makes a credential for that EK certificate and the AK's
+   public area: `tpm_ak_challenge(ek_cert, ak_public, c)`, derived from the
+   challenge record's nonce, which is never sent.
+3. The attester's TPM releases it (`tpm_activate_credential`) only if it
+   holds the EK's private key and an object with that name.
+4. `tpm_verify_ak(ek_chain, crls, ak_public, activated, c, tpm_ek_roots(),
+   t)` checks the answer, the EK chain to a root in the set with a current
+   CRL for every certificate below it, tcg-kp-EKCertificate, and that the
+   AK is a restricted signing key fixed to its TPM.
+5. `trust_with_ak(tr, ak)` adds the AK to a trust set; quotes and counters
+   it signs verify under that set and rest on the EK root.
 
 ## Verified values
 
@@ -19,8 +375,8 @@ anchors it rests on, its qualifiers (`Fresh`, `KeyBound`, ...), and the
 challenge record whose mark it took. `Appraised(T)` is a `Verified(T)` that
 also passed an appraisal. Only the files of `lib/verify/` build either
 (`E0276`), and only functions marked `@primitive` there produce them
-(`E0280`), so a value of these types came out of a verifier. Fields stay
-readable: `v.value.measurement`.
+(`E0280`). The per-platform modules in `lib/verify/` are internal: their
+functions are `@verify_internal`, which a program cannot call (`E0280`).
 
 Every primitive fails with one sum:
 
@@ -43,344 +399,29 @@ pub Anchor amd_ark_genoa() { return anchor_der(amd_ark_genoa_der()); }
 
 The compiler rewrites the `anchor_der` call so the `Anchor` carries the
 annotation's facts, and the bytes are checked against the fingerprint
-when the anchor is first used. A primitive's anchor argument must be a call
-of an `@anchor` function, of a kind the primitive takes (`E0282`), so the
-compiler knows which anchor every verified value rests on. An anchor's
-identity is its function: a dependency declaring `kind = AmdVcek(...)`
-over its own root gains nothing, because a decision names the functions
-it accepts.
-
-`lib/verify/amd_anchors.resid` holds AMD's roots for Milan, Genoa and
-Turin, each as a VCEK and a VLEK anchor (`amd_ark_genoa`,
-`amd_ark_genoa_vlek`, ...).
-
-## SEV-SNP
-
-`lib/verify/snp.resid` declares the report as a layout type with each
-field's origin (`@measured`, `@firmware`, `@relayed`, `@host`) and four
-verifier forms:
-
-| Function | Gives |
-|---|---|
-| `snp_verify(report, c, root, col, t)` | `Fresh`: the report carries `challenge_value(c)` |
-| `snp_verify_key_bound(report, c, root, col, t, kem, pk)` | `Fresh`, `KeyBound(kem, pk)`: it carries `challenge_with_key(challenge_value(c), kem, sk)` for the `sk` behind `pk` |
-| `snp_verify_channel_bound(report, c, root, col, t, e)` | `Fresh`, `ChannelBound`: it carries `challenge_with_channel(challenge_value(c), e')` for the attester's end of this connection |
-| `snp_verify_replayable(report, r, root, col, t)` | `Delivered`, for a `ReplayableRecord`: never enough for a decision |
-
-Each checks the chain from the anchor (ARK, ASK or ASVK, VCEK or VLEK,
-RSASSA-PSS SHA-384, the ARK's current CRL), the report's ECDSA P-384
-signature, and that the report's claims match its signer: `SIGNING_KEY`
-the anchor's kind, `REPORTED_TCB` the VCEK's TCB, `CHIP_ID` the VCEK's
-hardware ID. The challenge record is marked accepted once for the whole
-process; a record this program spent on its own device answers only for
-the report that request returned.
-
-`t` is an `EvidenceTime`: `kernel_time()` reads the clock (source
-`Kernel`); nothing else outside `lib/verify/` can build one, so a program
-cannot pass a past time to make an expired certificate valid.
-
-`snp_appraise(v, policy)` applies the checks no policy turns off (no
-debugging, a migration agent only when the policy allows it, the report's
-own VMPL, the committed and reported TCB at least the floor) and then the
-policy's measurements, ID keys and host data. The policy argument must be a
-direct call of a nullary `@policy` function (`E0283`):
-
-```text
-@policy
-SnpPolicy release_policy() {
-    return SnpPolicy {.min_tcb = TcbVersion {.fmc = 0, .bootloader = 3, .tee = 0, .snp = 8, .microcode = 115},
-                      .measurements_hex = ["5c1f…e0"], .vmpl = 0, .allow_migration_agent = false,
-                      .id_key_digests_hex = [], .host_data_hex = []};
-}
-```
-
-## AWS Nitro Enclaves
-
-`lib/verify/nsm.resid` verifies an NSM attestation document (an ES384
-COSE_Sign1 over a CBOR map) whose certificate bundle starts at
-`aws_nitro_root()` (`lib/verify/aws_anchors.resid`): `nsm_verify`,
-`nsm_verify_key_bound`, `nsm_verify_channel_bound` and
-`nsm_verify_replayable`, with the challenge in `nonce`. `nsm_appraise(v,
-policy)` refuses a debug enclave (PCR0 all zeros) and checks the PCRs a
-`@policy` function's `NsmPolicy {.pcrs_hex = ["0=...", ...]}` names.
-
-## TPM 2.0
-
-`lib/verify/tpm.resid` verifies a TPM2_Quote under an attestation key the
-deployment pins as an anchor of kind `TpmAk` (its bytes are the AK's
-SubjectPublicKeyInfo): `tpm_verify_quote(attest, sig, pcr_values, c, ak,
-t)` and its key-bound and replayable forms. The challenge is the quote's
-qualifying data (issue a 32-byte one), and the PCR values given must be
-the ones the quote's digest covers. `tpm_appraise(v, policy)` checks the
-PCRs a `TpmPolicy` names. `tpm_verify_counter` verifies TPM2_NV_Certify of
-an 8-byte counter (sealing's rollback protection).
-
-### Attestation keys by credential activation
-
-An AK need not be pinned: it can be proven to live in the TPM a
-manufacturer certified, by TPM2_ActivateCredential against the TPM's
-endorsement key (TCG TPM 2.0 Part 1 §24, the EK Credential Profile's
-low-range EKs: RSA 2048 at NV 0x01C00002, ECC NIST P-256 at 0x01C0000A).
-The anchor is the manufacturer's EK root, of kind `TpmEk`;
-`lib/verify/tpm_anchors.resid` holds the 46 roots of Microsoft's
-TrustedTpm.cab (AMD, Atmel, Infineon, Intel, NationZ, Nuvoton, Qualcomm,
-STMicro; generated by `tools/attest/gen_tpm_anchors.py`).
-
-1. The attester reads its EK certificate and makes its EK and AK
-   (`tpm_ek_cert(ecc)`, `tpm_ek_chain_certs()`, `tpm_ek_ak(ecc)` in
-   `lib/dev/tpm.resid`): the AK is an ECC P-256 restricted signing key
-   fixed to the TPM, derived in the endorsement hierarchy, so the same
-   TPM makes the same AK every time and nothing persists.
-2. The verifier makes a credential for that EK certificate and the AK's
-   public area: `tpm_ak_challenge(ek_cert, ak_public, c)`. The credential
-   is derived from the challenge record's nonce, which is never sent, so
-   only a TPM that decrypts it can answer.
-3. The attester's TPM releases it (`tpm_activate_credential(ecc, blob,
-   secret)`) only if it holds the EK's private key and an object with
-   that name; it runs in one TPM session chain (`device.transact_chain`),
-   with the endorsement hierarchy's authorization (never a lockout count)
-   and a noDA AK.
-4. `tpm_verify_ak(ek_chain, crls, ak_public, activated, c, root, t)`
-   checks the answer, the EK certificate's chain to the root with a
-   current CRL for every certificate below it (revoked is refused,
-   unanswered is stale), tcg-kp-EKCertificate, and that the AK is a
-   restricted signing key fixed to its TPM: `Verified(TpmAk)`, with the
-   TPM's manufacturer, model and version from the certificate.
-5. Quotes and counters signed by that AK verify from it:
-   `tpm_verify_quote_activated(attest, sig, pcr_values, c, ak, t)`, its
-   key-bound form, `tpm_verify_counter_activated`. They rest on the EK
-   root, so a decision accepts the manufacturer's anchor:
-
-```text
-@decides(accept = [tpm_ek_infineon_optiga_tm_ecc_root_ca], appraised = boot_policy, identity = key_bound)
-...
-    Verified(TpmAk) ak = tpm_verify_ak(chain, crls, ak_public, activated, c1, tpm_ek_infineon_optiga_tm_ecc_root_ca(), t)?;
-    Verified(TpmQuoteEvidence) q = tpm_verify_quote_activated_key_bound(attest, sig, pcrs, c2, ak, t, 32, pk)?;
-```
-
-The verifier's side of TPM2_MakeCredential is `lib/tpm_credential.resid`
-(KDFa, KDFe, AES-128-CFB, HMAC, RSAES-OAEP), checked against the IBM TPM
-simulator's ActivateCredential in `tests/device`'s `tpm_simulator` case.
-
-## Intel TDX
-
-`lib/verify/tdx.resid` verifies quotes of versions 4 and 5 under Intel's
-SGX root (`intel_sgx_root()`, `lib/verify/intel_anchors.resid`): the PCK
-chain the quote carries, the quoting enclave's report and its binding of
-the attestation key, and the quote's signature; the challenge is
-REPORTDATA. `tdx_appraise(v, policy, collateral, root, t)` refuses a
-debuggable TD and one without SEPT_VE_DISABLE, checks Intel's collateral
-(the TCB info and QE identity PCS serves, signed under the same root, and
-the PCK CA's and root's CRLs):
-the platform's TCB status and the quoting enclave's must be `UpToDate`
-or listed in the policy's `accepted_statuses`; then the MRTD, RTMRs and
-TDX modules a `TdxPolicy` names.
-
-## Arm CCA
-
-`lib/verify/cca.resid` verifies a CCA token (the realm token, signed by
-the RAK it carries, and the platform token, signed by a CPAK the
-deployment pins as an anchor of kind `EndorsedKeys` and bound to that RAK)
-with the challenge in the realm token: `cca_verify` and its key-bound,
-channel-bound and replayable forms. `cca_appraise(v, policy)` requires a
-secured platform lifecycle and checks the realm initial measurement, REMs
-and platform implementation a `CcaPolicy` names.
-
-## Devices over SPDM
-
-`lib/verify/spdm.resid` verifies SPDM 1.0 to 1.3 evidence (DMTF DSP0274)
-under a device root: NVIDIA's Device Identity CA
-(`nvidia_device_root()`, `lib/verify/nvidia_anchors.resid`, kind
-`NvidiaDevice`) or any vendor's, declared as an anchor of kind
-`DeviceIdentity`. Every signature algorithm SPDM defines that the library
-implements is accepted when the anchor lists it (`EcdsaP256Sha384`,
-`RsaPss3072Sha256`, `Ed25519`, ...: ECDSA P-256, P-384 and P-521, RSASSA
-and RSAPSS at 2048, 3072 and 4096 bits, Ed25519, each with SHA-256, -384
-or -512). An `SpdmRecord` holds the negotiation (the six messages,
-GET_VERSION to ALGORITHMS, which 1.2 and later sign over), the device's
-certificates leaf first, OCSP responses, any unsigned GET_MEASUREMENTS
-exchanges before the signed one, and the signed request and response:
-
-- `spdm_verify(rec, c, root, t)` and its key-bound, channel-bound and
-  replayable forms: the chain to the root, a current good OCSP answer for
-  every certificate below it (NVIDIA's leaf, its firmware's alias key, is
-  exempt, as NVIDIA's verifier does it), the device's signature over the
-  transcript (from 1.2 with the signing context prefix), and the
-  challenge as the request's nonce. `spdm_appraise(v, policy)` checks the
-  measurement blocks an `SpdmPolicy` names.
-- `spdm_verify_challenge(rec, c, root, t)`: CHALLENGE / CHALLENGE_AUTH,
-  `Verified(SpdmIdentity)`.
-- `spdm_verify_endorsed(rec, c, keys, instance_hex, t)`: the device key
-  endorsed by a CoRIM identity triple instead of a chain (below).
-
-### Sessions
-
-`lib/verify/spdm_session.resid` verifies a KEY_EXCHANGE (1.1 to 1.3):
-`spdm_session_verify(rec, c, root, t)` over an `SpdmSessionRecord` (the
-negotiation, the chain as GET_CERTIFICATE returned it, its OCSP answers,
-the DIGESTS response for multi-key connections, KEY_EXCHANGE, whose
-random is the challenge, and KEY_EXCHANGE_RSP). The result,
-`Verified(SpdmSession)`, holds the suite, session ID, exchange values,
-the measurement summary, the ResponderVerifyData and `th`, the transcript
-hash through the device's signature. `spdm_session_covers(s, e)` says
-whether a verified MEASUREMENTS response holds exactly the measurements
-the session's all-measurements summary covers.
-
-The guest that holds the session binds its own evidence to it: its
-report carries `challenge_session_value(challenge_value(c), th)`
-(`lib/challenge_bind.resid`), checked by `snp_verify_device_bound`,
-`tdx_verify_quote_device_bound`, `nsm_verify_device_bound`,
-`cca_verify_device_bound`, `tpm_verify_quote_device_bound` and
-`tpm_verify_quote_activated_device_bound`
-(`lib/verify/device_bound.resid`) against a fresh session. The result
-rests on both anchors:
-
-```text
-@decides(accept = [amd_ark_genoa, nvidia_device_root], appraised = guest_policy, identity = none)
-...
-    Verified(SpdmSession) s = spdm_session_verify(rec, gpu, nvidia_device_root(), t)?;
-    Verified(SnpReport) r = snp_verify_device_bound(report, cpu, amd_ark_genoa(), col, t, s)?;
-```
-
-### The requester
-
-`lib/spdm_requester.resid` is a whole SPDM 1.0-1.3 requester over a
-transport closure (`SpdmIo`): `spdm_connect` (GET_VERSION,
-GET_CAPABILITIES, NEGOTIATE_ALGORITHMS, the 1.2 opaque-data format,
-multi-key), `spdm_get_digests`, `spdm_get_certificate`, `spdm_challenge`
-(with basic mutual authentication), `spdm_get_measurements`,
-`spdm_start_session` (KEY_EXCHANGE and FINISH, mutual authentication with
-and without encapsulated requests, the handshake encrypted or in the
-clear), `spdm_start_psk_session` (with and without context),
-`spdm_heartbeat`, `spdm_key_update`, `spdm_session_measurements` and
-`spdm_end_session`; it answers BUSY, RESPONSE_NOT_READY and large
-responses (CHUNK_GET), and chunks large requests (CHUNK_SEND). Each step
-returns the bytes a verifier's record needs. `lib/spdm_transport.resid`
-frames messages for MCTP, PCI DOE and DSP0287 TCP, secured (DSP0277) or
-not, and speaks the DMTF spdm-emu socket protocol (`spdm_emu_connect`,
-`@requires(network(readonly))`); `lib/spdm_session.resid` holds the key
-schedule and secured messages, generic over the byte type so session
-secrets stay `Secret`. `tests/spdm/run.sh` runs the requester against
-spdm-emu (22 configurations). The kernel's view of a PCI device
-(identity, DOE features, TSM connection) is `lib/dev/pci_tsm.resid`.
-
-## Endorsed reference values
-
-A reference value need not be a hash compiled into a policy: a signed
-CoRIM (draft-ietf-rats-corim; `lib/verify/corim.resid`) carries an
-endorser's word, and `corim_verify(corim, endorser, t)` checks it under an
-anchor of kind `Endorser` (ECDSA P-256, P-384 or P-521, Ed25519,
-RSASSA-PSS or PKCS#1, as the anchor lists). Every triple is read:
-reference values, endorsed values, identity keys, attestation keys,
-conditional endorsements and conditional endorsement series; every
-measurement value (version, SVN or minimum SVN, digests, flags, raw value
-with a mask, MAC and IP address, serial number, UEID, UUID, name, keys,
-integrity registers, integer ranges) and every key type (PEM keys and
-certificates, DER certificates, COSE_Keys, thumbprints, bytes).
-
-`corim_appraise(claims, refs)` applies a CoRIM to evidence given as
-claims (environment and measurements), as draft-ietf-rats-corim §9 does:
-a reference triple whose environment matches and all of whose
-measurements match corroborates the claims it matched; endorsed triples
-add their measurements; conditional endorsements add theirs when every
-condition holds; a series adds the addition of its first record whose
-selection matches. Each platform's claims come from
-`lib/verify/endorsed.resid` (`snp_claims`, `tdx_claims`, `cca_claims`,
-`spdm_claims(v, env)`, `tpm_claims`, `nsm_claims`; their measurement keys
-are listed in its header), and `snp_corim(v, refs)` and the like return
-the accepted claims set, which a policy queries with
-`corim_corroborated`, `corim_holds` and `corim_endorsements`.
-
-The endorsed appraisals (`snp_appraise_endorsed`,
-`tdx_appraise_endorsed`, `cca_appraise_endorsed`,
-`spdm_appraise_endorsed(v, policy, refs, env)`, `tpm_appraise_endorsed`,
-`nsm_appraise_endorsed`) accept what a reference value corroborates beside
-the policy's own values, and their result rests on the endorser as well,
-so the decision names it:
-
-```text
-@decides(accept = [amd_ark_genoa, image_endorser], require = [image_endorser],
-         appraised = release_policy, identity = key_bound)
-...
-    Verified(CorimRefs) refs = corim_verify(corim, image_endorser(), kernel_time())?;
-    Appraised(SnpReport) a = snp_appraise_endorsed(v, release_policy(), refs)?;
-```
-
-### Endorsed keys
-
-Attest-key triples endorse attestation keys, so a CCA platform's CPAK or a
-TPM's AK need not be pinned: `cca_verify_endorsed(token, c, keys, t)`
-accepts a platform token signed by a key endorsed for the token's own
-instance ID, `tpm_verify_quote_endorsed(attest, sig, pcr_values, c, keys,
-instance_hex, t)` a quote signed by a key endorsed for the instance the
-verifier names. Identity triples endorse device keys:
-`spdm_verify_endorsed(rec, c, keys, instance_hex, t)` accepts a device
-whose certificate's key one names (by the key, its certificate or a
-thumbprint). A triple with conditions is used only when it names no
-measured element and, if it names who must have authorized the key, the
-endorser is among them. The CoRIM's not-after and the endorser anchor's
-expiry bound the evidence time, and the result rests on the endorser:
-
-```text
-@decides(accept = [tpm_endorser], appraised = boot_policy, identity = key_bound)
-...
-    Verified(CorimRefs) keys = corim_verify(corim, tpm_endorser(), kernel_time())?;
-    Verified(TpmQuoteEvidence) v = tpm_verify_quote_endorsed_key_bound(a, s, pcrs, c, keys, instance, kernel_time(), 32, pk)?;
-```
-
-## Sealing to this measurement
-
-`lib/verify/sealing.resid`: `snp_platform_key(selector, report)` derives
-the guest's SNP sealing key from its own fresh report (one this program's
-own request returned), always mixing in the guest policy and measurement;
-`local_seal(k, version, counter, value)` and `local_open(k, blob)` keep data only
-this measurement can open, and `local_open`'s result carries `Local`. A
-decision on it alone writes `identity = local, fresh = false` (an old blob opens
-as well as a new one) unless a TPM counter binds the version: seal with
-the counter's NV name (`local_seal(k, version, counter_name, value)`),
-read the counter fresh with `tpm_verify_counter(attest, sig, c, ak, t)`
-(a TPM2_NV_Certify under a pinned AK), and `bind_counter(opened,
-counter)` gives a value that is `Local` and `Fresh` when the versions
-agree, resting on both anchors: a decision then writes `identity = local`
-and accepts both. Before anything was sealed, `first_seal(k, counter,
-initial)` is the explicit outcome: a fresh reading at the counter's
-provisioned initial value, never a missing blob read as empty.
-
-## Attestation results
-
-When a Resid program is the verifier, `ear_cwt(appraised, submod,
-policy, build, developer, t, key)` (`lib/verify/ear.resid`) hands the
-appraisal on as an EAR: a COSE_Sign1 (ES256) CWT carrying `ear.status`
-affirming and an AR4SI trustworthiness vector, signed with the verifier's
-own or provisioned P-256 key.
+when the anchor is first used. An anchor's identity is its function: a
+dependency declaring `kind = AmdVcek(...)` over its own root gains
+nothing, because a decision names the functions it accepts.
 
 ## Decisions
 
-```text
-@decides(accept = [amd_ark_genoa], appraised = release_policy, identity = key_bound)
-@requires(declassify, clock(readonly))
-pub Result(HpkeMessage, VerifyError) release(List(UInt(8)) report, ChallengeRecord issued,
-                                             SnpCollateral col, List(Int) guest_pk,
-                                             List(Secret(UInt(8))) key, List(Secret(UInt(8))) sender) {
-    Verified(SnpReport) v = snp_verify_key_bound(report, issued, amd_ark_genoa(), col, kernel_time(), 32, guest_pk)?;
-    Appraised(SnpReport) a = snp_appraise(v, release_policy())?;
-    return seal_to_evidence(a, 32, guest_pk, key, sender);
-}
-```
-
-The compiler checks:
+The compiler checks every `@decides` function:
 
 - **The gate.** Every success return is reached only through the `Ok` of
   a primitive call made in the body: after `?`, in a `match` arm for `Ok`,
   or in `if (Ok(x) = ...)`. A body that calls a verifier and ignores its
   result has no gate (`E0284`).
-- **Requirements** (`E0285`): the gate's anchors are all in `accept` and
-  include every one in `require`; with `appraised = P` it passed `P`
-  (`appraised` is required: write `appraised = none` to mean merely
-  verified); it is fresh (`fresh = false` accepts reusable evidence); it
-  carries an identity (`KeyBound`, `ChannelBound` or `Local`; `identity =
-  none` when the answer may go to anyone); with `time = not_kernel` its
-  certificates were not checked against the kernel clock.
+- **Requirements** (`E0285`): every anchor the gate may rest on is in
+  `accept` (which names `@anchor`, `@assumption` and `@trust` functions; a
+  trust set stands for its anchors), and it surely rests on every one in
+  `require` (a gate verified under a set of several rests on whichever
+  fits, so `require` needs a set of that one); with `appraised = P` it
+  passed `P` (`appraised = none` means merely verified); it is fresh
+  (`fresh = false` accepts reusable evidence); it carries an identity
+  (`KeyBound`, `ChannelBound` or `Local`; `identity = none` when the answer
+  may go to anyone); with `time = not_kernel` its certificates were not
+  checked against the kernel clock. A trust set or binding the compiler
+  cannot see makes the gate's anchors unknown, which is refused.
 - **Releases** (`E0287`): `seal_to_evidence` runs only inside a decision,
   and a `key_bound` decision's success return is that call on its gate. At
   run time it refuses evidence bound to another key, seals in HPKE Auth
@@ -395,15 +436,24 @@ The compiler checks:
   exporter, value)`, which refuses evidence bound to another connection;
   only `tlsserver_send_bound` / `tlsclient_send_bound` write the result,
   each on that connection alone.
-- A field of signed evidence that the requester or the host chose
-  (`@relayed`, `@host`, `report_data`, `host_data`, ...) is External when
-  read, so a decision cannot turn on it.
+- What the requester or the host chose in signed evidence (`host_values`,
+  `report_data`, the CoRIM view and the raw evidence) is External when
+  read, so a decision cannot turn on it. Field origins only ever get
+  stricter: a second `@layout_origins` declaration cannot launder a field.
 - `bind = "purpose"` requires the decision's challenge record to have
   been issued for that purpose (`challenge_issue(n, bind)`); a program
   that issues for several purposes names one on every decision (`E0293`).
 
 The attester opens a release with `open_released(kem, sk, msg, anchor)`,
 which accepts only a message the pinned `ReleaseSender` anchor sealed.
+
+## Attestation results
+
+When a Resid program is the verifier, `ear_cwt(appraised, submod,
+policy, build, developer, t, key)` (`lib/verify/ear.resid`) hands the
+appraisal on as an EAR: a COSE_Sign1 (ES256) CWT carrying `ear.status`
+affirming and an AR4SI trustworthiness vector, signed with the verifier's
+own or provisioned P-256 key.
 
 ## Assumptions
 
@@ -429,13 +479,7 @@ decided by outside data: a condition, an earlier `return`, `?`, `break` or
 builds and in any build of a program with a decision). Decisions on
 verified evidence do not count as outside data. The standard library's
 own publication sites are exempt, and so is a function marked
-`@robust_exempt(reason = "...")`, which `residc verify` lists:
-
-```text
-@robust_exempt(reason = "a password check discloses one bit on an outside guess")
-@requires(declassify)
-Bool check(Secret(Int) pw, Int guess) { ... }
-```
+`@robust_exempt(reason = "...")`, which `residc verify` lists.
 
 ## The transcript
 
@@ -456,5 +500,6 @@ A program that reaches `lib/verify/` compiles only against the files of
 compiler was released with (`compiler/verify_pins.resid`), and never with
 `-rt` or `-rtr` (`E0290`). `--verify-lib-dev` lifts this for work on the
 library; the provenance record says so. The record's `attest` array lists
-every anchor with its origin, every policy and every decision with its
-requirements, and `residc verify` prints them.
+every anchor with its origin, every trust set with its anchors, every
+policy and every decision with its requirements, and `residc verify`
+prints them.

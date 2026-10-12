@@ -1,4 +1,4 @@
-import "verify/core.resid";
+import "verify/verifier.resid";
 import "verify/snp.resid";
 import "verify/seal.resid";
 import "verify/testing.resid";
@@ -14,7 +14,7 @@ import "dev/device.resid";
 import "verify/spdm.resid";
 import "verify/spdm_session.resid";
 import "challenge_export.resid";
-import "verify/device_bound.resid";
+import "evidence.resid";
 import "spdm_msg.resid";
 import "spdm_session.resid";
 
@@ -24,7 +24,11 @@ Str fx() { return "fixtures/"; }
 List(UInt(8)) rd(Str p) { return chal_bytes(filesystem.read_bytes(fx() + p)); }
 
 @requires(filesystem(readonly))
-SnpCollateral col() { return SnpCollateral {.vcek_der = rd("test-vcek.der"), .ask_der = rd("test-ask.der"), .crl_der = rd("test-crl.der")}; }
+List(CmwRec) col() { return [collateral_item(mt_cert(), chal_ints(rd("test-vcek.der"))), collateral_item(mt_cert(), chal_ints(rd("test-ask.der"))), collateral_item(mt_crl(), chal_ints(rd("test-crl.der")))]; }
+
+// An SNP report as evidence, with the test chain.
+@requires(filesystem(readonly))
+List(UInt(8)) snp_env(List(UInt(8)) report) { return evidence_envelope(evidence_snp(chal_ints(report)), col()); }
 
 // A report carrying `value` in REPORT_DATA, signed with the test VCEK.
 @requires(filesystem(readonly))
@@ -102,8 +106,10 @@ List(Int) key_exchange_rsp(Int ver, List(List(Int)) v, List(Int) ke, Int mut, In
 SpdmSecrets(Int) dev_secrets(Int ver, List(Int) ke, List(Int) th1) { return spdm_handshake(suite(ver), spdm_shared(suite(ver), dev_priv(), ke[40..136]), false, th1); }
 
 @requires(filesystem(readonly))
-SpdmSessionRecord srec(Int ver, List(List(Int)) v, List(Int) ch, List(Int) ke, List(Int) rsp) {
-    return SpdmSessionRecord {.vca = bl(v, 0, []), .chain = chal_bytes(ch), .ocsp = ocsp(), .digests = [], .key_exchange = chal_bytes(ke), .key_exchange_rsp = chal_bytes(rsp)};
+List(UInt(8)) senv(Int ver, List(List(Int)) v, List(Int) ch, List(Int) ke, List(Int) rsp) {
+    List(CmwRec) none = [];
+    List(Int) nd = [];
+    return evidence_envelope(evidence_spdm_session(v, ch, [rdi("spdm-ocsp-leaf.der")], nd, ke, rsp), none);
 }
 
 // GET_MEASUREMENTS (all, signed, 1.3) for this nonce and the device's answer.
@@ -117,19 +123,20 @@ List(Int) meas_response(List(Int) req, Int m1) {
 }
 
 @requires(filesystem(readonly))
-SpdmRecord mrec(List(Int) req, List(Int) resp) { return SpdmRecord {.vca = bl(vca(19, 2), 0, []), .certs = [rd("spdm-leaf.der"), rd("spdm-root.der")], .ocsp = ocsp(), .before = [], .request = chal_bytes(req), .response = chal_bytes(resp)}; }
+List(UInt(8)) menv(List(Int) req, List(Int) resp) {
+    List(CmwRec) none = [];
+    List(List(Int)) nb = [];
+    return evidence_envelope(evidence_spdm_measurements(vca(19, 2), [rdi("spdm-leaf.der"), rdi("spdm-root.der")], [rdi("spdm-ocsp-leaf.der")], nb, req, resp), none);
+}
 
 // ─── The relying party ──────────────────────────────────────────────
 
 @policy
-SnpPolicy guest_policy() {
-    return SnpPolicy {.min_tcb = TcbVersion {.fmc = 0, .bootloader = 3, .tee = 0, .snp = 8, .microcode = 115},
-                      .measurements_hex = [hex_encode(sha384_bytes(bytes_of("resid test image")))], .vmpl = 0, .allow_migration_agent = false, .id_key_digests_hex = [], .host_data_hex = []};
-}
+Policy guest_policy() { return Policy {.measurements = [hex_encode(sha384_bytes(bytes_of("resid test image")))], .require = ["committed_tcb.snp>=8", "reported_tcb.snp>=8"], .allow = []}; }
 
 @requires(filesystem(readonly))
 Str session(Str what, Int ver, List(List(Int)) v, List(Int) ke, List(Int) rsp, List(Int) ch, ChallengeRecord c) {
-    return what + ": " + match (spdm_session_verify(srec(ver, v, ch, ke, rsp), c, test_device_root(), test_time(1791000000))) { Ok(s) => f"verified, SPDM 0x{s.value.version:hex}, session 0x{s.value.session_id:hex}", Err(e) => verify_error_text(e) };
+    return what + ": " + match (verify_session(senv(ver, v, ch, ke, rsp), c, test_device_roots(), test_time(1791000000))) { Ok(s) => f"verified, SPDM 0x{s.value.version:hex}, session 0x{s.value.session_id:hex}", Err(e) => verify_error_text(e) };
 }
 
 Bool is_some(Option(List(Int)) o) { return match o { Some(x) => true, None => false }; }
@@ -170,30 +177,35 @@ Str with_session(Verified(SpdmSession) s, List(Int) ke) {
     println("requester: " + requester(s.value, ke));
     ChallengeRecord cm = challenge_issue(32);
     List(Int) mr = meas_request(chal_ints(challenge_value(cm)));
-    println("measurements in the session: " + match (spdm_verify(mrec(mr, meas_response(mr, 5)), cm, test_device_root(), test_time(1791000000))) { Ok(m) => f"{spdm_session_covers(s.value, m.value)}", Err(e) => verify_error_text(e) });
+    println("measurements in the session: " + match (verify_evidence(menv(mr, meas_response(mr, 5)), cm, bind_fresh(), test_device_roots(), test_time(1791000000))) { Ok(m) => f"{session_covers(s, m)}", Err(e) => verify_error_text(e) });
     ChallengeRecord cm2 = challenge_issue(32);
     List(Int) mr2 = meas_request(chal_ints(challenge_value(cm2)));
-    println("other measurements: " + match (spdm_verify(mrec(mr2, meas_response(mr2, 6)), cm2, test_device_root(), test_time(1791000000))) { Ok(m) => f"{spdm_session_covers(s.value, m.value)}", Err(e) => verify_error_text(e) });
+    println("other measurements: " + match (verify_evidence(menv(mr2, meas_response(mr2, 6)), cm2, bind_fresh(), test_device_roots(), test_time(1791000000))) { Ok(m) => f"{session_covers(s, m)}", Err(e) => verify_error_text(e) });
     ChallengeRecord cc = challenge_issue(64);
-    println("SNP bound to the session: " + match (snp_verify_device_bound(report_for(challenge_session_value(challenge_value(cc), s.value.th)), cc, test_ark(), col(), test_time(1791000000), s)) { Ok(v) => match (snp_appraise(v, guest_policy())) { Ok(a) => f"appraised, {a.v.anchors.len()} anchors", Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) });
+    println("SNP bound to the session: " + match (bind_device(s)) {
+        Ok(b) => match (verify_evidence(snp_env(report_for(challenge_session_value(challenge_value(cc), s.value.th))), cc, b, test_snp_roots(), test_time(1791000000))) { Ok(v) => match (appraise_evidence(v, guest_policy())) { Ok(a) => f"appraised, {a.v.anchors.len()} anchors", Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) },
+        Err(e) => verify_error_text(e),
+    });
     ChallengeRecord cc2 = challenge_issue(64);
-    println("SNP with the plain challenge: " + match (snp_verify_device_bound(report_for(challenge_value(cc2)), cc2, test_ark(), col(), test_time(1791000000), s)) { Ok(v) => "VERIFIED", Err(e) => verify_error_text(e) });
+    println("SNP with the plain challenge: " + match (bind_device(s)) {
+        Ok(b) => match (verify_evidence(snp_env(report_for(challenge_value(cc2))), cc2, b, test_snp_roots(), test_time(1791000000))) { Ok(v) => "VERIFIED", Err(e) => verify_error_text(e) },
+        Err(e) => verify_error_text(e),
+    });
     return "";
 }
 
-@requires(filesystem(readonly))
 Str with_replayable(Verified(SpdmSession) s) {
-    ChallengeRecord cc = challenge_issue(64);
-    return "SNP bound to a replayable session: " + match (snp_verify_device_bound(report_for(challenge_session_value(challenge_value(cc), s.value.th)), cc, test_ark(), col(), test_time(1791000000), s)) { Ok(v) => "VERIFIED", Err(e) => verify_error_text(e) };
+    return "SNP bound to a replayable session: " + match (bind_device(s)) { Ok(b) => "BOUND", Err(e) => verify_error_text(e) };
 }
 
-// The guest, its GPU and its image decided at once: both anchors named.
-@decides(accept = [test_ark, test_device_root], appraised = guest_policy, identity = none)
+// The guest, its GPU and its image decided at once: both roots accepted.
+@decides(accept = [test_snp_roots, test_device_roots], appraised = guest_policy, identity = none)
 @requires(filesystem(readonly))
-Result(Int, VerifyError) admit(SpdmSessionRecord rec, ChallengeRecord gpu, ChallengeRecord cpu, List(UInt(8)) report) {
-    Verified(SpdmSession) s = spdm_session_verify(rec, gpu, test_device_root(), test_time(1791000000))?;
-    Verified(SnpReport) r = snp_verify_device_bound(report, cpu, test_ark(), col(), test_time(1791000000), s)?;
-    Appraised(SnpReport) a = snp_appraise(r, guest_policy())?;
+Result(Int, VerifyError) admit(List(UInt(8)) session, ChallengeRecord gpu, ChallengeRecord cpu, List(UInt(8)) evidence) {
+    Verified(SpdmSession) s = verify_session(session, gpu, test_device_roots(), test_time(1791000000))?;
+    Binding b = bind_device(s)?;
+    Verified(Claims) r = verify_evidence(evidence, cpu, b, test_snp_roots(), test_time(1791000000))?;
+    Appraised(Claims) a = appraise_evidence(r, guest_policy())?;
     return Ok(a.v.anchors.len());
 }
 
@@ -215,7 +227,7 @@ Int main() {
     ChallengeRecord c1 = challenge_issue(32);
     List(Int) ke1 = key_exchange(19, chal_ints(challenge_value(c1)));
     List(Int) rsp1 = key_exchange_rsp(19, vca(19, 2), ke1, 0, 5);
-    Str done = match (spdm_session_verify(srec(19, vca(19, 2), chain(), ke1, rsp1), c1, test_device_root(), test_time(1791000000))) { Ok(s) => with_session(s, ke1), Err(e) => verify_error_text(e) };
+    Str done = match (verify_session(senv(19, vca(19, 2), chain(), ke1, rsp1), c1, test_device_roots(), test_time(1791000000))) { Ok(s) => with_session(s, ke1), Err(e) => verify_error_text(e) };
     println(session("again", 19, vca(19, 2), ke1, rsp1, chain(), c1));
     ChallengeRecord c11 = challenge_issue(32);
     List(Int) ke11 = key_exchange(17, chal_ints(challenge_value(c11)));
@@ -236,7 +248,7 @@ Int main() {
     ExportKey xk = export_key(random_secret(32));
     List(UInt(8)) tok = match (challenge_export(c4, xk)) { Ok(t) => t, Err(e) => [] };
     println(match (challenge_import_unspent(tok, xk)) {
-        Ok(rr) => match (spdm_session_verify_replayable(srec(19, vca(19, 2), chain(), ke4, rsp4), rr, test_device_root(), test_time(1791000000))) { Ok(s) => with_replayable(s), Err(e) => verify_error_text(e) },
+        Ok(rr) => match (verify_session_replayable(senv(19, vca(19, 2), chain(), ke4, rsp4), rr, test_device_roots(), test_time(1791000000))) { Ok(s) => with_replayable(s), Err(e) => verify_error_text(e) },
         Err(e) => challenge_error_text(e),
     });
     ChallengeRecord g = challenge_issue(32);
@@ -245,6 +257,6 @@ Int main() {
     // The guest computes th from the same transcript.
     List(Int) th = sha384_bytes(flat(vca(19, 2), 0, []).concat(sha384_bytes(chain())).concat(ke5).concat(rsp5[0..rsp5.len() - 48]));
     ChallengeRecord cpu = challenge_issue(64);
-    println("decision: " + match (admit(srec(19, vca(19, 2), chain(), ke5, rsp5), g, cpu, report_for(challenge_session_value(challenge_value(cpu), th)))) { Ok(n) => f"admitted, {n} anchors", Err(e) => verify_error_text(e) });
+    println("decision: " + match (admit(senv(19, vca(19, 2), chain(), ke5, rsp5), g, cpu, snp_env(report_for(challenge_session_value(challenge_value(cpu), th))))) { Ok(n) => f"admitted, {n} anchors", Err(e) => verify_error_text(e) });
     return 0;
 }

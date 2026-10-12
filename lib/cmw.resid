@@ -1,0 +1,247 @@
+// cmw.resid — RATS Conceptual Message Wrappers (draft-ietf-rats-msg-wrap),
+// CBOR form: a record is the array [type, value] or [type, value, ind],
+// with the media type as text and the value as a byte string; a collection
+// is a map from labels to CMWs, with an optional "__cmwc_t" entry naming
+// the collection's type. Collections nest.
+//
+// Decoding is for bytes from outside, so it is strict and bounded: the
+// input is checked well formed first (cbor_well_formed: definite lengths,
+// nesting at most cmw_max_depth(), nothing after the item), then decoded,
+// then read as a CMW. Labels are text (the draft also allows unsigned
+// integers; this module refuses them), a label appears once, and media
+// types are printable ASCII. Every refusal is an Err naming what was
+// wrong, never an abort. Encoding is deterministic: a collection's
+// entries are written in the core deterministic order of RFC 8949 §4.2.1
+// (encoded keys compared bytewise), whatever order they were given in.
+
+import "cbor.resid";
+import "serial.resid";
+import "serial_value.resid";
+
+/// A CMW: one record, or a collection of labelled CMWs.
+pub type Cmw = CmwRecord(CmwRec) | CmwCollection(CmwColl);
+
+/// A CMW record: a media type, the message's bytes, and an indicator.
+/// `ind` is the draft's content indicator bitmap, -1 when absent.
+pub type CmwRec = { Str media_type; List(Int) value; Int ind; };
+
+/// One labelled member of a CMW collection.
+pub type CmwItem = { Str label; Cmw cmw; };
+
+/// A CMW collection: its type ("" when absent) and its labelled members.
+pub type CmwColl = { Str ctype; List(CmwItem) items; };
+
+/// The largest encoded CMW this module decodes, in bytes (4 MiB).
+pub Int cmw_max_bytes() { return 4194304; }
+/// The deepest CBOR nesting a decoded CMW may have.
+/// A record is one array; each collection adds a map around its members.
+pub Int cmw_max_depth() { return 12; }
+/// The most members one collection may have.
+pub Int cmw_max_items() { return 256; }
+
+/// A CMW record of `media_type` carrying `value`, with no indicator.
+pub Cmw cmw_record(Str media_type, List(Int) value) { return CmwRecord(CmwRec {.media_type = media_type, .value = value, .ind = 0 - 1}); }
+
+/// A CMW collection of type `ctype` ("" for none) with members `items`.
+pub Cmw cmw_collection(Str ctype, List(CmwItem) items) { return CmwCollection(CmwColl {.ctype = ctype, .items = items}); }
+
+/// A collection member: `cmw` under `label`.
+pub CmwItem cmw_item(Str label, Cmw cmw) { return CmwItem {.label = label, .cmw = cmw}; }
+
+/// The member of `c` labelled `label`, or None.
+pub Option(Cmw) cmw_get(CmwColl c, Str label) { return cmw_get_at(c.items, label, 0); }
+
+Option(Cmw) cmw_get_at(List(CmwItem) xs, Str label, Int i) {
+    if (i >= xs.len()) { return None; }
+    if (xs[i].label == label) { return Some(xs[i].cmw); }
+    return cmw_get_at(xs, label, i + 1);
+}
+
+// ─── Encoding ───────────────────────────────────────────────────────
+
+/// The CBOR encoding of `c`, deterministic (RFC 8949 §4.2.1).
+/// Aborts only on a value the CMW model cannot hold: an empty or
+/// non-ASCII media type, an empty label or one given twice, the label
+/// "__cmwc_t", or an indicator outside 0 to 2^32 - 1.
+pub List(Int) cmw_encode(Cmw c) {
+    Str bad = cmw_shape_err(c, 1);
+    rt_assert(bad == "", "cmw_encode: " + bad);
+    Result(List(Int), SerialError) r = to_cbor(cmw_value(c));
+    return match (r) { Ok(b) => b, Err(e) => cmw_never(error_text(e)) };
+}
+
+List(Int) cmw_never(Str why) {
+    rt_assert(false, "cmw_encode: " + why);
+    List(Int) none = [];
+    return none;
+}
+
+// Why `c` is not a CMW this module writes, or "".
+Str cmw_shape_err(Cmw c, Int depth) {
+    if (depth > cmw_max_depth()) { return "collections nest too deep"; }
+    return match c {
+        CmwRecord(r) => cmw_rec_err(r),
+        CmwCollection(k) => cmw_coll_err(k, depth),
+    };
+}
+
+Str cmw_rec_err(CmwRec r) {
+    if (!cmw_media_ok(r.media_type)) { return "the media type `" + r.media_type + "` is not 1 to 255 printable ASCII characters"; }
+    if (r.ind < 0 - 1 || r.ind > 4294967295) { return f"the indicator {r.ind} is not an unsigned 32-bit value"; }
+    return "";
+}
+
+Str cmw_coll_err(CmwColl k, Int depth) {
+    if (k.ctype != "" && !cmw_media_ok(k.ctype)) { return "the collection type is not printable ASCII"; }
+    if (k.items.len() > cmw_max_items()) { return f"a collection has at most {cmw_max_items()} members"; }
+    return cmw_items_err(k.items, 0, [], depth);
+}
+
+Str cmw_items_err(List(CmwItem) xs, Int i, List(Str) seen, Int depth) {
+    if (i >= xs.len()) { return ""; }
+    Str l = xs[i].label;
+    if (!cmw_label_ok(l)) { return "the label `" + l + "` is not 1 to 255 printable ASCII characters, or is reserved"; }
+    if (cmw_has(seen, l, 0)) { return "the label `" + l + "` appears twice"; }
+    Str e = cmw_shape_err(xs[i].cmw, depth + 1);
+    if (e != "") { return e; }
+    return cmw_items_err(xs, i + 1, seen.concat([l]), depth);
+}
+
+Bool cmw_has(List(Str) xs, Str x, Int i) { return i < xs.len() && (xs[i] == x || cmw_has(xs, x, i + 1)); }
+
+/// Whether `s` is 1 to 255 printable ASCII characters (32 to 126).
+pub Bool cmw_media_ok(Str s) { return str_len(s) > 0 && str_len(s) < 256 && cmw_printable(s, 0); }
+
+Bool cmw_label_ok(Str s) { return cmw_media_ok(s) && s != "__cmwc_t"; }
+
+Bool cmw_printable(Str s, Int i) {
+    if (i >= str_len(s)) { return true; }
+    Int ch = str_char_at(s, i);
+    return ch >= 32 && ch <= 126 && cmw_printable(s, i + 1);
+}
+
+// The Value tree whose CBOR is the CMW.
+Value cmw_value(Cmw c) {
+    return match c {
+        CmwRecord(r) => VSeq(if (r.ind < 0) { [VStr(r.media_type), VBytes(r.value)] } else { [VStr(r.media_type), VBytes(r.value), VInt(r.ind)] }),
+        CmwCollection(k) => VMap(cmw_sorted(cmw_entries(k), [])),
+    };
+}
+
+List(VEntry) cmw_entries(CmwColl k) {
+    List(VEntry) head = if (k.ctype == "") { [] } else { [ventry(VStr("__cmwc_t"), VStr(k.ctype))] };
+    return head.concat(cmw_member_entries(k.items, 0, []));
+}
+
+List(VEntry) cmw_member_entries(List(CmwItem) xs, Int i, List(VEntry) acc) {
+    if (i >= xs.len()) { return acc; }
+    return cmw_member_entries(xs, i + 1, acc.concat([ventry(VStr(xs[i].label), cmw_value(xs[i].cmw))]));
+}
+
+// Insertion by encoded key: text keys encode as their head then their
+// bytes, so the order is shorter first, then bytewise.
+List(VEntry) cmw_sorted(List(VEntry) es, List(VEntry) acc) {
+    if (es.len() == 0) { return acc; }
+    return cmw_sorted(es[1..es.len()], cmw_insert(acc, es[0], 0));
+}
+
+List(VEntry) cmw_insert(List(VEntry) xs, VEntry e, Int i) {
+    if (i >= xs.len() || cmw_key_lt(e, xs[i])) { return xs[0..i].concat([e]).concat(xs[i..xs.len()]); }
+    return cmw_insert(xs, e, i + 1);
+}
+
+Bool cmw_key_lt(VEntry a, VEntry b) {
+    List(Int) ka = cmw_text_bytes(a.key);
+    List(Int) kb = cmw_text_bytes(b.key);
+    if (ka.len() != kb.len()) { return ka.len() < kb.len(); }
+    return cmw_bytes_lt(ka, kb, 0);
+}
+
+List(Int) cmw_text_bytes(Value v) {
+    List(Int) none = [];
+    return match v { VStr(s) => cb_str_bytes(s), _ => none };
+}
+
+Bool cmw_bytes_lt(List(Int) a, List(Int) b, Int i) {
+    if (i >= a.len()) { return false; }
+    if (a[i] != b[i]) { return a[i] < b[i]; }
+    return cmw_bytes_lt(a, b, i + 1);
+}
+
+// ─── Decoding ───────────────────────────────────────────────────────
+
+/// The CMW encoded in `bs` (CBOR), or why it is not one.
+/// Refuses input over cmw_max_bytes(), anything not well formed or nested
+/// deeper than cmw_max_depth(), a record that is not [text, bytes] or
+/// [text, bytes, uint], a collection with a non-text or repeated label,
+/// over cmw_max_items() members, or an empty one.
+pub Result(Cmw, Str) cmw_decode(List(Int) bs) {
+    if (bs.len() == 0) { return Err("no CMW: empty input"); }
+    if (bs.len() > cmw_max_bytes()) { return Err(f"a CMW is at most {cmw_max_bytes()} bytes, got {bs.len()}"); }
+    if (!cmw_bytes_in_range(bs, 0)) { return Err("the input is not bytes"); }
+    if (!cbor_well_formed(bs, cmw_max_depth())) { return Err("not one well-formed CBOR item of definite lengths, nested at most " + f"{cmw_max_depth()} deep"); }
+    Result(Value, SerialError) dv = from_cbor(bs);
+    Value v = cmw_serial(dv)?;
+    return cmw_read(v, 1);
+}
+
+Bool cmw_bytes_in_range(List(Int) bs, Int i) { return i >= bs.len() || (bs[i] >= 0 && bs[i] <= 255 && cmw_bytes_in_range(bs, i + 1)); }
+
+Result(Cmw, Str) cmw_read(Value v, Int depth) {
+    if (depth > cmw_max_depth()) { return Err("collections nest too deep"); }
+    return match v {
+        VSeq(xs) => cmw_read_record(xs),
+        VMap(es) => cmw_read_collection(es, depth),
+        _ => Err("a CMW is an array (a record) or a map (a collection), got " + value_kind(v)),
+    };
+}
+
+Result(Cmw, Str) cmw_read_record(List(Value) xs) {
+    if (xs.len() != 2 && xs.len() != 3) { return Err(f"a CMW record has 2 or 3 elements, got {xs.len()}"); }
+    Str mt = cmw_text(xs[0], "a CMW record's type is not text (a content-format number is not read here)")?;
+    if (!cmw_media_ok(mt)) { return Err("a CMW record's media type is not 1 to 255 printable ASCII characters"); }
+    List(Int) val = cmw_bytes(xs[1], "a CMW record's value is not a byte string")?;
+    Int ind = if (xs.len() == 3) { cmw_uint(xs[2]) } else { 0 - 1 };
+    if (xs.len() == 3 && (ind < 0 || ind > 4294967295)) { return Err("a CMW record's indicator is not an unsigned 32-bit value"); }
+    return Ok(CmwRecord(CmwRec {.media_type = mt, .value = val, .ind = ind}));
+}
+
+// Text, or `why`.
+Result(Str, Str) cmw_text(Value v, Str why) { return match v { VStr(s) => Ok(s), _ => Err(why) }; }
+
+// Bytes, or `why`.
+Result(List(Int), Str) cmw_bytes(Value v, Str why) { return match v { VBytes(b) => Ok(b), _ => Err(why) }; }
+
+// A decoded value, or the decoder's error as text.
+Result(Value, Str) cmw_serial(Result(Value, SerialError) r) { return match r { Ok(x) => Ok(x), Err(e) => Err("CBOR: " + error_text(e)) }; }
+
+// An unsigned integer as an Int, or -1.
+Int cmw_uint(Value v) {
+    return match v {
+        VInt(n) => if (n >= 0) { n } else { 0 - 1 },
+        VUInt(u) => if (u <= (UInt(64)) 4294967295) { (Int) u } else { 0 - 1 },
+        _ => 0 - 1,
+    };
+}
+
+Result(Cmw, Str) cmw_read_collection(List(VEntry) es, Int depth) {
+    if (es.len() > cmw_max_items() + 1) { return Err(f"a CMW collection has at most {cmw_max_items()} members"); }
+    return cmw_read_entries(es, 0, "", [], [], depth);
+}
+
+Result(Cmw, Str) cmw_read_entries(List(VEntry) es, Int i, Str ctype, List(Str) seen, List(CmwItem) acc, Int depth) {
+    if (i >= es.len()) {
+        if (acc.len() == 0) { return Err("a CMW collection has no members"); }
+        return Ok(CmwCollection(CmwColl {.ctype = ctype, .items = acc}));
+    }
+    Str label = cmw_text(es[i].key, "a CMW collection label is not text (an integer label is not read here)")?;
+    if (cmw_has(seen, label, 0)) { return Err("the CMW collection label `" + label + "` appears twice"); }
+    if (label == "__cmwc_t") {
+        Str t = cmw_text(es[i].val, "a CMW collection's type is not text")?;
+        if (!cmw_media_ok(t)) { return Err("a CMW collection's type is not printable ASCII"); }
+        return cmw_read_entries(es, i + 1, t, seen.concat([label]), acc, depth);
+    }
+    if (!cmw_label_ok(label)) { return Err("a CMW collection label is not 1 to 255 printable ASCII characters"); }
+    Cmw m = cmw_read(es[i].val, depth + 1)?;
+    return cmw_read_entries(es, i + 1, ctype, seen.concat([label]), acc.concat([cmw_item(label, m)]), depth);
+}

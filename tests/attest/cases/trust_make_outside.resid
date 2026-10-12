@@ -1,0 +1,15 @@
+import "verify/verifier.resid";
+import "evidence.resid";
+import "verify/seal.resid";
+import "verify/testing.resid";
+import "challenge.resid";
+import "crypto.resid";
+import "hash.resid";
+import "hpke.resid";
+
+@policy
+Policy pol() { return Policy {.measurements = ["00"], .require = [], .allow = []}; }
+
+// Only an @trust function builds a trust set.
+Trust forged() { return trust_make([test_ark()], []); }
+Int main() { return 0; }

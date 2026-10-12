@@ -1,7 +1,8 @@
 // verify/nsm.resid — AWS Nitro Enclaves attestation documents
 // (PLAN-attestation.md §3.2, §4, §10): the NSM's COSE_Sign1 (ES384 only)
 // over a CBOR map, its certificate chain from the AWS root (the anchor),
-// the challenge in `nonce`, and the appraisal of the PCRs.
+// the challenge in `nonce`, and the platform's instance of
+// PlatformVerifier (verify/claims.resid). Internal to lib/verify/.
 //
 // The document is at most 16 KiB. The payload is parsed strictly: a map of
 // only the documented keys, each at most once, `module_id`, `digest`,
@@ -16,6 +17,10 @@
 // chosen by whoever asked the NSM, useful only through the challenge.
 
 import "core.resid";
+import "claims.resid";
+import "corim.resid";
+import "../cmw.resid";
+import "../evidence.resid";
 import "../crypto.resid";
 import "../hash.resid";
 import "../der.resid";
@@ -37,11 +42,6 @@ import "../dev/device.resid";
 /// `user_data` and `nonce` are empty when absent or null.
 @signed(sig = cose, span = payload)
 pub type NsmDocument = { Str module_id; Int timestamp; List(Int) pcr_index; List(List(Int)) pcrs; List(Int) certificate; List(List(Int)) cabundle; List(Int) public_key; List(Int) user_data; List(Int) nonce; };
-
-/// An appraisal policy: PCRs that must all hold the given values.
-/// Each entry of `pcrs_hex` is "index=hex" (e.g. "0=7d..."); the hex is
-/// compared case-insensitively.
-pub type NsmPolicy = { List(Str) pcrs_hex; };
 
 // ─── Strict CBOR ────────────────────────────────────────────────────
 
@@ -186,13 +186,13 @@ NsmO nsm_opt_bytes(List(Int) b, Int pos) {
 /// signed the document (ES384), all current at `t`. Freshness is not checked.
 @verify_internal
 pub Result(NsmDocument, VerifyError) nsm_check(List(UInt(8)) doc, Anchor root, EvidenceTime t) {
-    if (root.kind != "Nitro") { return Err(Refused("nsm_verify", "the anchor is not an AWS Nitro root (kind " + root.kind + ")")); }
-    if (!anchor_lists(root.algorithms, "EcdsaP384Sha384")) { return Err(Refused("nsm_verify", "the anchor does not list ECDSA P-384 SHA-384")); }
+    if (root.kind != "Nitro") { return Err(Refused("AWS Nitro Enclaves", "the anchor is not an AWS Nitro root (kind " + root.kind + ")")); }
+    if (!anchor_lists(root.algorithms, "EcdsaP384Sha384")) { return Err(Refused("AWS Nitro Enclaves", "the anchor does not list ECDSA P-384 SHA-384")); }
     if (anchor_expired(root, t)) { return Err(Stale("the anchor expired " + root.expires)); }
     if (doc.len() > 16384) { return Err(BadLayout("an NSM document is at most 16 KiB")); }
     CoseMsg m = cose_sign1_read(chal_ints(doc));
     if (!m.ok) { return Err(BadLayout(m.err)); }
-    if (m.alg != 0 - 35) { return Err(Refused("nsm_verify", "the document is not signed with ES384")); }
+    if (m.alg != 0 - 35) { return Err(Refused("AWS Nitro Enclaves", "the document is not signed with ES384")); }
     NsmDocument d = nsm_payload(m.payload)?;
     if (!eq_ints(d.cabundle[0], root.der)) { return Err(BadChain("the bundle does not start at the anchor's certificate")); }
     Cert top = nsm_cert(root.der, "root")?;
@@ -225,85 +225,8 @@ Bool nsm_signs_leaf(Cert c, Cert i, Instant now) {
     return sig_verify(c.signed.alg, i.key, c.signed.tbs, c.signed.sig);
 }
 
-/// Checks that the document's nonce is exactly `want` and binds it to `c`.
-/// Returns Ok(true) when the record was spent, Ok(false) otherwise, and
-/// NotFresh when the nonce does not match.
-@verify_internal
-pub Result(Bool, VerifyError) nsm_bind(NsmDocument d, List(UInt(8)) want, ChallengeRecord c) {
-    if (d.nonce.len() != want.len()) { return Err(NotFresh("the document's nonce is not this challenge")); }
-    Bool spent = vf_bind_challenge(chal_bytes(d.nonce), want, c, chal_bytes(d.nonce), nsm_descriptors())?;
-    return Ok(spent);
-}
-
-/// The device descriptors whose replies carry an NSM document.
-pub List(Str) nsm_descriptors() { return ["nsm.attestation"]; }
-
-Int nsm_rp(ChallengeRecord c) { return if (c.bind.len() > 0) { q_rp_bound() } else { 0 }; }
-
-/// Verifies an NSM document as Fresh for the holder of challenge `c`.
-/// The document's nonce must be `challenge_value(c)`; signature and chain
-/// are checked against `root` at `t` as in `nsm_check`.
-@primitive(verify, anchor = root, gives = [fresh], time = t, format = NsmDocument, kinds = [Nitro], algorithms = [EcdsaP384Sha384], inputs = [doc, c, t])
-pub Result(Verified(NsmDocument), VerifyError) nsm_verify(List(UInt(8)) doc, ChallengeRecord c, Anchor root, EvidenceTime t) {
-    NsmDocument d = nsm_check(doc, root, t)?;
-    Bool spent = nsm_bind(d, challenge_value(c), c)?;
-    List(Int) none = [];
-    return Ok(vf_make(d, root, q_fresh() | nsm_rp(c), c, 0, none, none, t, "NsmDocument"));
-}
-
-/// Verifies an NSM document as Fresh and KeyBound to the attester's key.
-/// The nonce must be the challenge value bound to HPKE KEM `kem` and public
-/// key `pk`; a KEM or key that is unknown or malformed is Refused.
-@primitive(verify, anchor = root, gives = [fresh, key_bound], time = t, format = NsmDocument, kinds = [Nitro], algorithms = [EcdsaP384Sha384], inputs = [doc, c, t, kem, pk])
-pub Result(Verified(NsmDocument), VerifyError) nsm_verify_key_bound(List(UInt(8)) doc, ChallengeRecord c, Anchor root, EvidenceTime t, Int kem, List(Int) pk) {
-    if (!hpke_kem_ok(kem) || !vf_pk_ok(kem, pk)) { return Err(Refused("nsm_verify_key_bound", "the attester's public key is empty or malformed for the KEM")); }
-    NsmDocument d = nsm_check(doc, root, t)?;
-    Bool spent = nsm_bind(d, challenge_key_value(challenge_value(c), kem, pk), c)?;
-    List(Int) none = [];
-    return Ok(vf_make(d, root, q_fresh() | q_key_bound() | nsm_rp(c), c, kem, pk, none, t, "NsmDocument"));
-}
-
-/// Verifies an NSM document as Fresh and ChannelBound to a connection.
-/// The nonce must be the challenge value bound to channel exporter `e`, the
-/// connection's other end; an exporter failure is Refused. Needs `declassify`.
-@primitive(verify, anchor = root, gives = [fresh, channel_bound], time = t, format = NsmDocument, kinds = [Nitro], algorithms = [EcdsaP384Sha384], inputs = [doc, c, t, e])
-@requires(declassify)
-pub Result(Verified(NsmDocument), VerifyError) nsm_verify_channel_bound(List(UInt(8)) doc, ChallengeRecord c, Anchor root, EvidenceTime t, ChannelExporter e) {
-    List(UInt(8)) want = match (challenge_with_channel(challenge_value(c), e)) { Ok(x) => Ok(x), Err(err) => Err(Refused("nsm_verify_channel_bound", device_error_text(err))) }?;
-    NsmDocument d = nsm_check(doc, root, t)?;
-    Bool spent = nsm_bind(d, want, c)?;
-    List(Int) none = [];
-    return Ok(vf_make(d, root, q_fresh() | q_channel_bound() | nsm_rp(c), c, 0, none, vf_channel_id(e), t, "NsmDocument"));
-}
-
-/// Verifies an NSM document as Delivered, for a record imported without a
-/// SpentStore. The nonce must equal the record's value; no freshness is
-/// claimed.
-@primitive(verify, anchor = root, gives = [delivered], time = t, format = NsmDocument, kinds = [Nitro], algorithms = [EcdsaP384Sha384], inputs = [doc, c, t])
-pub Result(Verified(NsmDocument), VerifyError) nsm_verify_replayable(List(UInt(8)) doc, ReplayableRecord c, Anchor root, EvidenceTime t) {
-    NsmDocument d = nsm_check(doc, root, t)?;
-    if (!eq_ints(d.nonce, chal_ints(replayable_value(c)))) { return Err(NotFresh("the document's nonce is not this challenge")); }
-    List(Int) none = [];
-    return Ok(Verified {.value = d, .anchors = [root.id], .quals = q_delivered(), .record = 0 - 1, .kem = 0, .pk = none, .chan = none, .time = t.source, .principal = root.principal, .format = "NsmDocument"});
-}
-
-// ─── Appraisal ──────────────────────────────────────────────────────
-
-/// Appraises a verified NSM document against `policy`.
-/// PCRs 0, 1 and 2 must be present and PCR0 not all zeros (a debug-mode
-/// enclave); the policy must name at least one PCR, and each must match.
-@primitive(appraise, from = v, policy = policy, ptype = NsmPolicy)
-pub Result(Appraised(NsmDocument), VerifyError) nsm_appraise(Verified(NsmDocument) v, NsmPolicy policy) {
-    NsmDocument d = v.value;
-    if (nsm_pcr(d, 0).len() == 0 || nsm_pcr(d, 1).len() == 0 || nsm_pcr(d, 2).len() == 0) { return Err(Refused("nsm_appraise", "PCRs 0, 1 and 2 are not all present")); }
-    if (nsm_zero(nsm_pcr(d, 0), 0)) { return Err(Refused("nsm_appraise", "PCR0 is all zeros: the enclave runs in debug mode")); }
-    if (policy.pcrs_hex.len() == 0) { return Err(Refused("nsm_appraise", "the policy names no PCR")); }
-    Str bad = nsm_policy_miss(d, policy.pcrs_hex, 0);
-    if (bad != "") { return Err(Refused("nsm_appraise", bad)); }
-    return Ok(Appraised {.v = v, .policy = "NsmPolicy"});
-}
-
 /// Returns the value of PCR `idx` in `d`, or an empty list when absent.
+@verify_internal
 pub List(Int) nsm_pcr(NsmDocument d, Int idx) { return nsm_pcr_at(d, idx, 0); }
 
 List(Int) nsm_pcr_at(NsmDocument d, Int idx, Int i) {
@@ -314,13 +237,84 @@ List(Int) nsm_pcr_at(NsmDocument d, Int idx, Int i) {
 }
 
 /// Whether every byte of `b` from index `i` on is zero (true when none).
+@verify_internal
 pub Bool nsm_zero(List(Int) b, Int i) { return i >= b.len() || (b[i] == 0 && nsm_zero(b, i + 1)); }
 
-Str nsm_policy_miss(NsmDocument d, List(Str) want, Int i) {
-    if (i >= want.len()) { return ""; }
-    List(Str) kv = str_split(want[i], "=");
-    if (kv.len() != 2 || !str_is_int(kv[0])) { return "the policy entry `" + want[i] + "` is not index=hex"; }
-    List(Int) got = nsm_pcr(d, str_parse_int(kv[0]));
-    if (got.len() == 0 || hex_encode(got) != str_to_lower(kv[1])) { return "PCR" + kv[0] + " is not the policy's"; }
-    return nsm_policy_miss(d, want, i + 1);
+/// The device descriptors whose replies carry an NSM document.
+@verify_internal
+pub List(Str) nsm_descriptors() { return ["nsm.attestation", "nsm.raw"]; }
+
+// ─── The platform (verify/claims.resid) ─────────────────────────────
+
+/// The marker type naming AWS Nitro Enclaves for PlatformVerifier.
+type NsmPlat = { Bool nsm; };
+
+/// The Nitro Enclaves marker.
+@verify_internal
+pub NsmPlat nsm_platform() { return NsmPlat {.nsm = true}; }
+
+Platform nsm_pv_platform(NsmPlat p) { return AwsNitro; }
+
+List(Cand) nsm_pv_candidates(NsmPlat p, Trust tr, Cmw ev, EvidenceTime t) { return trust_anchor_cands(tr, ["Nitro"]); }
+
+// A root fits a document whose bundle starts at its certificate.
+PfTry nsm_pv_check(NsmPlat p, Cmw ev, List(CmwRec) col, Cand k, EvidenceTime t) {
+    List(Int) doc = match (pf_record(ev, mt_nitro_document())) { Ok(x) => x, Err(e) => [] };
+    CoseMsg m = cose_sign1_read(doc);
+    List(Int) first = if (!m.ok || doc.len() > 16384) { [] } else { match (nsm_payload(m.payload)) { Ok(d) => if (d.cabundle.len() > 0) { d.cabundle[0] } else { [] }, Err(e) => [] } };
+    if (first.len() > 0 && !eq_ints(first, k.a.der)) { return PfSkip("the document's bundle starts at another root"); }
+    return pf_of(nsm_under(ev, k, t));
 }
+
+Result(PfChecked, VerifyError) nsm_under(Cmw ev, Cand k, EvidenceTime t) {
+    List(Int) db = pf_record(ev, mt_nitro_document())?;
+    List(UInt(8)) doc = chal_bytes(db);
+    NsmDocument d = nsm_check(doc, k.a, t)?;
+    return Ok(nsm_checked(doc, d));
+}
+
+// A PCR's hash algorithm by its length (SHA-256, -384 or -512).
+Int nsm_alg(List(Int) v) { return if (v.len() == 32) { 1 } else if (v.len() == 64) { 8 } else { 7 }; }
+
+List(Measurement) nsm_meas(NsmDocument d, Int i, List(Measurement) acc) {
+    if (i >= d.pcr_index.len()) { return acc; }
+    return nsm_meas(d, i + 1, acc.concat([measurement(f"PCR{d.pcr_index[i]}", nsm_alg(d.pcrs[i]), d.pcrs[i])]));
+}
+
+PfChecked nsm_checked(List(UInt(8)) doc, NsmDocument d) {
+    List(Int) pcr0 = nsm_pcr(d, 0);
+    // Whoever asked the NSM chose these (relayed): External to a decision.
+    List(ClaimValue) host = [claim_bytes("public_key", d.public_key), claim_bytes("user_data", d.user_data)];
+    List(ClaimValue) vs = [claim_bytes("module_id", bytes_of(d.module_id)), claim_number("timestamp", d.timestamp)];
+    List(Str) none = [];
+    Claims c = Claims {.platform = AwsNitro, .format = "NsmDocument", .launch_slot = "PCR0", .measurements = nsm_meas(d, 0, []), .debug = pcr0.len() > 0 && nsm_zero(pcr0, 0), .values = vs, .host_values = host, .tcb_statuses = none, .hardware_id = bytes_of(d.module_id), .report_data = d.nonce, .corim = nsm_corim_claims(d), .evidence = chal_ints(doc)};
+    return PfChecked {.claims = c, .relayed = chal_bytes(d.nonce), .exact = true, .want_len = 0 - 1, .bound = doc, .descs = nsm_descriptors(), .keyed_instance = false};
+}
+
+// The CoRIM environment class of Nitro evidence: vendor "AWS", model
+// "Nitro Enclaves".
+CorimEnv nsm_corim_env() { return corim_env("AWS", "Nitro Enclaves"); }
+
+// The CoRIM claims of a document: the PCRs as SHA-384 registers by index,
+// and the module ID as a name.
+List(CorimClaim) nsm_corim_claims(NsmDocument d) {
+    CorimMeas name = corim_claim(cl_k("module_id"), cl_named(d.module_id));
+    return corim_evidence(nsm_corim_env(), [corim_registers_claim(cl_k("pcrs"), cl_regs(d.pcr_index, d.pcrs, 7, 0, [])), name]);
+}
+
+// Beyond the generic checks: PCRs 0, 1 and 2 present.
+Result(Bool, VerifyError) nsm_pv_mandatory(NsmPlat p, Claims c, Policy pol) {
+    Bool all = nsm_present(c, "PCR0") && nsm_present(c, "PCR1") && nsm_present(c, "PCR2");
+    if (!all) { return Err(Refused("appraise_evidence", "PCRs 0, 1 and 2 are not all present")); }
+    return Ok(true);
+}
+
+Bool nsm_present(Claims c, Str s) { return match (claims_measurement(c, s)) { Some(x) => x.len() > 0, None => false }; }
+
+// The CoRIM must corroborate the PCRs; then the policy may name none.
+Result(PfEndorsed, VerifyError) nsm_pv_endorsed(NsmPlat p, Claims c, CorimAcs a, Policy pol) {
+    if (!corim_corroborated(a, nsm_corim_env(), cl_k("pcrs"))) { return Err(Refused("appraise_evidence", "no reference value corroborates the enclave's PCRs")); }
+    return Ok(PfEndorsed {.policy = pol, .satisfied = true});
+}
+
+PlatformVerifier(NsmPlat) = { .pv_platform = nsm_pv_platform, .pv_candidates = nsm_pv_candidates, .pv_check = nsm_pv_check, .pv_mandatory = nsm_pv_mandatory, .pv_endorsed = nsm_pv_endorsed };

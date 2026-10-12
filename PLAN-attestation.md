@@ -6,7 +6,12 @@ attestation (RATS) that device access does not need. Builds on
 PLAN-labels.md revision 3 ("labels" below) and on device
 access revision 3 for the platforms' channels.
 
-**Implementation status (2026-10-11).** Phases A1-A4 in large part, for
+**Implementation status (2026-10-12).** The API is platform-generic: one
+`attest`, one `verify_evidence` / `appraise_evidence` over an evidence
+envelope (RATS CMW), trust sets (`@trust`), bindings and one `Policy`; the
+§10 behaviors took the form of `PlatformVerifier(P)`
+(`lib/verify/claims.resid`) on the verifier's side and `attest()` on the
+attester's (reference page "Attestation"). Phases A1-A4 in large part, for
 SEV-SNP, TDX, AWS Nitro, Arm CCA, TPM 2.0 and SPDM devices, with CoRIM reference values (`lib/verify/`,
 `compiler/attest.resid`, `tests/attest/`, `SECURITY.md` "Attestation",
 reference page "Attestation"); A5 and A6 not started:

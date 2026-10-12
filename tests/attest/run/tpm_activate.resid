@@ -3,9 +3,10 @@
 // an AK's public area; the test plays the TPM's ActivateCredential with
 // the EK's private key (ECC: KDFe, KDFa, HMAC, AES-128-CFB, as TCG Part 1
 // §24 and tests/device/tpm-sim check against the IBM simulator); the
-// answer verifies to Verified(TpmAk), and quotes by that AK from it.
+// answer verifies to Verified(TpmAk), and quotes by that AK verify under
+// a trust set that holds it (trust_with_ak).
 
-import "verify/core.resid";
+import "verify/verifier.resid";
 import "verify/tpm.resid";
 import "verify/seal.resid";
 import "verify/testing.resid";
@@ -19,6 +20,7 @@ import "hash.resid";
 import "hpke.resid";
 import "hpkeg.resid";
 import "random.resid";
+import "evidence.resid";
 
 @requires(filesystem(readonly))
 List(Int) rd(Str p) { return filesystem.read_bytes("fixtures/" + p); }
@@ -27,8 +29,8 @@ List(Int) rd(Str p) { return filesystem.read_bytes("fixtures/" + p); }
 List(UInt(8)) rdb(Str p) { return chal_bytes(rd(p)); }
 
 List(Int) fill(Int v, Int n) { return if (n <= 0) { [] } else { [v].concat(fill(v, n - 1)) }; }
-List(Int) u16(Int v) { return [(v >> 8) & 255, v & 255]; }
-List(Int) u32(Int v) { return [(v >> 24) & 255, (v >> 16) & 255, (v >> 8) & 255, v & 255]; }
+List(Int) be_u16(Int v) { return [(v >> 8) & 255, v & 255]; }
+List(Int) be_u32(Int v) { return [(v >> 24) & 255, (v >> 16) & 255, (v >> 8) & 255, v & 255]; }
 Int be16(List(Int) b, Int at) { return if (at + 2 > b.len()) { 0 } else { b[at] * 256 + b[at + 1] }; }
 
 // The AK's TPMT_PUBLIC: ECC NIST P-256, nameAlg SHA-256, ECDSA SHA-256,
@@ -39,8 +41,8 @@ List(UInt(8)) ak_public(Int attrs) { return ak_public_of(rd("tpm-ak-d.bin"), att
 
 List(UInt(8)) ak_public_of(List(Int) d, Int attrs) {
     List(Int) q = ec_public_key(P256, d);
-    return chal_bytes(u16(35).concat(u16(11)).concat(u32(attrs)).concat(u16(0)).concat(u16(16)).concat(u16(24)).concat(u16(11)).concat(u16(3)).concat(u16(16))
-        .concat(u16(32)).concat(q[1..33]).concat(u16(32)).concat(q[33..65]));
+    return chal_bytes(be_u16(35).concat(be_u16(11)).concat(be_u32(attrs)).concat(be_u16(0)).concat(be_u16(16)).concat(be_u16(24)).concat(be_u16(11)).concat(be_u16(3)).concat(be_u16(16))
+        .concat(be_u16(32)).concat(q[1..33]).concat(be_u16(32)).concat(q[33..65]));
 }
 
 List(Int) ak_name(List(UInt(8)) p) { return [0, 11].concat(sha256_bytes(chal_ints(p))); }
@@ -93,7 +95,7 @@ Round round(List(UInt(8)) cert, List(UInt(8)) ak) {
 
 @requires(filesystem(readonly))
 Str ak_says(Str what, List(List(UInt(8))) ch, List(List(UInt(8))) cl, List(UInt(8)) ak, List(UInt(8)) answer, ChallengeRecord c) {
-    return says(what, tpm_verify_ak(ch, cl, ak, answer, c, test_tpm_ek(), test_time(1791000000)));
+    return says(what, tpm_verify_ak(ch, cl, ak, answer, c, test_tpm_ek_roots(), test_time(1791000000)));
 }
 
 Str says(Str what, Result(Verified(TpmAk), VerifyError) r) {
@@ -107,30 +109,35 @@ Str says(Str what, Result(Verified(TpmAk), VerifyError) r) {
 // qualifying data, and the AK's signature.
 List(Int) attest(List(Int) q) {
     List(Int) digest = sha256_bytes(fill(1, 32).concat(fill(2, 32)).concat(fill(3, 32)));
-    return u32(4283712327).concat(u16(32792)).concat(u16(34)).concat(fill(9, 34)).concat(u16(q.len())).concat(q)
-        .concat(u32(0)).concat(u32(1000)).concat(u32(3)).concat(u32(0)).concat([1]).concat(u32(1)).concat(u32(2))
-        .concat(u32(1)).concat(u16(11)).concat([3, 7, 0, 0]).concat(u16(32)).concat(digest);
+    return be_u32(4283712327).concat(be_u16(32792)).concat(be_u16(34)).concat(fill(9, 34)).concat(be_u16(q.len())).concat(q)
+        .concat(be_u32(0)).concat(be_u32(1000)).concat(be_u32(3)).concat(be_u32(0)).concat([1]).concat(be_u32(1)).concat(be_u32(2))
+        .concat(be_u32(1)).concat(be_u16(11)).concat([3, 7, 0, 0]).concat(be_u16(32)).concat(digest);
 }
 
 @requires(filesystem(readonly))
 List(UInt(8)) sig(List(Int) a) {
     List(Int) rs = ecdsa_sign_raw(P256, Sha256, rd("tpm-ak-d.bin"), a);
-    return chal_bytes(u16(24).concat(u16(11)).concat(u16(32)).concat(rs[0..32]).concat(u16(32)).concat(rs[32..64]));
+    return chal_bytes(be_u16(24).concat(be_u16(11)).concat(be_u16(32)).concat(rs[0..32]).concat(be_u16(32)).concat(rs[32..64]));
 }
 
 List(List(UInt(8))) pcrs() { return [chal_bytes(fill(1, 32)), chal_bytes(fill(2, 32)), chal_bytes(fill(3, 32))]; }
 
 @policy
-TpmPolicy boot_policy() { return TpmPolicy {.pcrs_hex = ["0=" + hex_encode(fill(1, 32)), "2=" + hex_encode(fill(3, 32))]}; }
+Policy boot_policy() { return Policy {.measurements = ["PCR0=" + hex_encode(fill(1, 32)), "PCR2=" + hex_encode(fill(3, 32))], .require = [], .allow = []}; }
+
+List(UInt(8)) env(List(Int) a, List(UInt(8)) s) {
+    List(CmwRec) none = [];
+    return evidence_envelope(evidence_tpm(a, chal_ints(s), [fill(1, 32), fill(2, 32), fill(3, 32)]), none);
+}
 
 // A key released to a guest whose quote, by an AK activated under the test
 // manufacturer's EK, meets the policy.
-@decides(accept = [test_tpm_ek], appraised = boot_policy, identity = key_bound)
+@decides(accept = [test_tpm_ek_roots], appraised = boot_policy, identity = key_bound)
 @requires(filesystem(readonly), declassify)
-Result(HpkeMessage, VerifyError) release(Round r, List(UInt(8)) a, List(UInt(8)) s, ChallengeRecord issued, List(Int) guest_pk, List(Secret(UInt(8))) key, List(Secret(UInt(8))) sender) {
-    Verified(TpmAk) ak = tpm_verify_ak(chain(), crls(), ak_public(328818), r.answer, r.c, test_tpm_ek(), test_time(1791000000))?;
-    Verified(TpmQuoteEvidence) v = tpm_verify_quote_activated_key_bound(a, s, pcrs(), issued, ak, test_time(1791000000), 32, guest_pk)?;
-    Appraised(TpmQuoteEvidence) ap = tpm_appraise(v, boot_policy())?;
+Result(HpkeMessage, VerifyError) release(Round r, List(UInt(8)) evidence, ChallengeRecord issued, List(Int) guest_pk, List(Secret(UInt(8))) key, List(Secret(UInt(8))) sender) {
+    Verified(TpmAk) ak = tpm_verify_ak(chain(), crls(), ak_public(328818), r.answer, r.c, test_tpm_ek_roots(), test_time(1791000000))?;
+    Verified(Claims) v = verify_evidence(evidence, issued, bind_key(32, guest_pk), trust_with_ak(test_tpm_ek_roots(), ak), test_time(1791000000))?;
+    Appraised(Claims) ap = appraise_evidence(v, boot_policy())?;
     return seal_to_evidence(ap, 32, guest_pk, key, sender);
 }
 
@@ -174,12 +181,12 @@ Int main() {
 
     // Quotes by the activated AK.
     Round r4 = round(ek, ak);
-    Result(Verified(TpmAk), VerifyError) vak = tpm_verify_ak(chain(), crls(), ak, r4.answer, r4.c, test_tpm_ek(), test_time(1791000000));
+    Result(Verified(TpmAk), VerifyError) vak = tpm_verify_ak(chain(), crls(), ak, r4.answer, r4.c, test_tpm_ek_roots(), test_time(1791000000));
     ChallengeRecord c5 = challenge_issue(32);
     List(Int) a5 = attest(chal_ints(challenge_value(c5)));
     println("quote: " + match (vak) {
-        Ok(v) => match (tpm_verify_quote_activated(chal_bytes(a5), sig(a5), pcrs(), c5, v, test_time(1791000000))) {
-            Ok(qv) => match (tpm_appraise(qv, boot_policy())) { Ok(x) => f"appraised, {x.v.value.pcr_index.len()} PCRs, fresh {verified_fresh(x.v)}, anchors {x.v.anchors.len()}", Err(e) => verify_error_text(e) },
+        Ok(v) => match (verify_evidence(env(a5, sig(a5)), c5, bind_fresh(), trust_with_ak(test_tpm_ek_roots(), v), test_time(1791000000))) {
+            Ok(qv) => match (appraise_evidence(qv, boot_policy())) { Ok(x) => f"appraised, {x.v.value.measurements.len()} PCRs, fresh {verified_fresh(x.v)}, anchors {x.v.anchors.len()}", Err(e) => verify_error_text(e) },
             Err(e) => verify_error_text(e),
         },
         Err(e) => verify_error_text(e),
@@ -187,9 +194,9 @@ Int main() {
     ChallengeRecord c6 = challenge_issue(32);
     List(Int) a6 = attest(chal_ints(challenge_value(c6)));
     List(Int) bad = ecdsa_sign_raw(P256, Sha256, rd("tpm-ek-ecc-d.bin"), a6);
-    List(UInt(8)) bad_sig = chal_bytes(u16(24).concat(u16(11)).concat(u16(32)).concat(bad[0..32]).concat(u16(32)).concat(bad[32..64]));
+    List(UInt(8)) bad_sig = chal_bytes(be_u16(24).concat(be_u16(11)).concat(be_u16(32)).concat(bad[0..32]).concat(be_u16(32)).concat(bad[32..64]));
     println("quote signed by another key: " + match (vak) {
-        Ok(v) => match (tpm_verify_quote_activated(chal_bytes(a6), bad_sig, pcrs(), c6, v, test_time(1791000000))) { Ok(qv) => "verified", Err(e) => verify_error_text(e) },
+        Ok(v) => match (verify_evidence(env(a6, bad_sig), c6, bind_fresh(), trust_with_ak(test_tpm_ek_roots(), v), test_time(1791000000))) { Ok(qv) => "verified", Err(e) => verify_error_text(e) },
         Err(e) => verify_error_text(e),
     });
 
@@ -200,7 +207,7 @@ Int main() {
     List(Int) bound = chal_ints(match (challenge_with_key(challenge_value(c7), 32, kp.sk)) { Ok(b) => b, Err(e) => [] });
     List(Int) a7 = attest(bound);
     List(Secret(UInt(8))) key = random_secret(32);
-    println(match (release(r7, chal_bytes(a7), sig(a7), c7, kp.pk, key, secret_bytes(rd("sender-sk.bin")))) {
+    println(match (release(r7, env(a7, sig(a7)), c7, kp.pk, key, secret_bytes(rd("sender-sk.bin")))) {
         Ok(m) => match (open_released(32, kp.sk, m, test_sender())) { Ok(v) => if (hex_encode(sec_pub(v.value, 0, ListBuf())) == hex_encode(sec_pub(key, 0, ListBuf()))) { "released and opened: same key" } else { "KEY DIFFERS" }, Err(e) => "open: " + verify_error_text(e) },
         Err(e) => "release: " + verify_error_text(e),
     });

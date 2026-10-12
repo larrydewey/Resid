@@ -210,9 +210,12 @@ type Sequence = { Str name; Str path; List(IoctlOp) steps; List(Link) links; Boo
 /// `privlevel` < 0, an empty `service_provider`, an empty `service_guid` and
 /// a `service_manifest_version` < 0 leave those attributes unwritten. A
 /// service GUID (36 characters, 8-4-4-4-12 hex digits) and a manifest
-/// version (a u32) qualify a service provider and need one.
+/// version (a u32) qualify a service provider and need one. When `fill`
+/// is true, the engine fills `inblob` (whose length is the slot's) from
+/// `challenge` as it fills an ioctl's challenge slot (PLAN-labels.md §6.2),
+/// and an issued record is bound to the outblob it answers with.
 @descriptor(report_req)
-type ReportReq = { List(UInt(8)) inblob; Int privlevel; Str service_provider; Str service_guid; Int service_manifest_version; };
+type ReportReq = { List(UInt(8)) inblob; Int privlevel; Str service_provider; Str service_guid; Int service_manifest_version; Bool fill; Challenge challenge; };
 
 // -- Values that cross ----------------------------------------------------
 
@@ -597,10 +600,22 @@ pub Result(List(DevOut), DeviceError) device_engine_read_pci_attr(PciAttr op, Pc
 @descriptor(engine_configfs_report)
 @requires(device(readonly))
 pub Result(List(DevOut), DeviceError) device_engine_configfs_report(ConfigfsReport op, ReportReq rq) {
-    DvReq r = dv_prep_configfs_report(op, rq);
+    List(DevIn) noin = [];
+    List(Int) noev = [];
+    Result(DvFill, DeviceError) fr = if (rq.fill) { dv_fill(op.name, [InChallenge(rq.inblob, 0, rq.inblob.len(), rq.challenge, [0])], 0, noin, -1, noev) } else { Ok(DvFill {.args = noin, .handle = 0 - 1, .ev = noev}) };
+    DvFill fl = fr?;
+    ReportReq rq2 = if (rq.fill) { ReportReq {.inblob = dv_filled_bytes(fl.args), .privlevel = rq.privlevel, .service_provider = rq.service_provider, .service_guid = rq.service_guid, .service_manifest_version = rq.service_manifest_version, .fill = false, .challenge = Runtime} } else { rq };
+    DvReq r = dv_prep_configfs_report(op, rq2);
     if (r.err != "") { return Err(BadInput(op.name, r.err)); }
-    Int _tr = dv_tr_req(op.name, 0 - 1, r.req);
-    return dv_tr_out(op.name, 0 - 1, dv_answer(op.name, r, resid_device_call(r.req)));
+    Int _tr = dv_tr_req(op.name, fl.handle, r.req);
+    return dv_bound(op.name, fl, dv_tr_out(op.name, fl.handle, dv_answer(op.name, r, resid_device_call(r.req))));
+}
+
+// The bytes of the one filled input.
+List(UInt(8)) dv_filled_bytes(List(DevIn) args) {
+    List(UInt(8)) none = [];
+    if (args.len() != 1) { return none; }
+    return match (args[0]) { InBytes(b) => b, InNum(v) => none, InChallenge(q, at, n, ch, e) => none };
 }
 
 /// Runs a Sequence in the isolated device host (the compiler's target for

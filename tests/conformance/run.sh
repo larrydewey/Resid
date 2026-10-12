@@ -62,7 +62,9 @@ trap 'rm -rf "$WORK"' EXIT
 run_case() {
     local name="$1" dir="$WORK/$1" src
     mkdir -p "$dir"
-    cp "$ROOT"/lib/*.resid "$dir"/ 2>/dev/null
+    # A case with a `.nolib` file imports the standard library from
+    # RESID_HOME, as a program outside the checkout does.
+    [ -f "$CASES/$name.nolib" ] || cp "$ROOT"/lib/*.resid "$dir"/ 2>/dev/null
     # Challenge records belong to the standard library's own file (E0277).
     rm -f "$dir/challenge.resid" "$dir/challenge_export.resid"
     cp "$CASES"/_*.resid "$dir"/ 2>/dev/null

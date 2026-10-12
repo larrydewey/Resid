@@ -7,12 +7,13 @@ test CoRIM, expired: stale: the CoRIM is not valid at this time
 SNP endorsed: appraised, 2 anchors; corroborated: measurement true host_data true reported_tcb.snp true vmpl true policy true guest_svn false; endorsed: is-secure true, certification true; 2 endorsements
 SNP other host data: corroborated: measurement false host_data false reported_tcb.snp false vmpl false policy false guest_svn false; endorsed: is-secure true, certification true; 2 endorsements
 TDX series: module 1.5 true, 9.9 false; another MRSEAM: 1.5 false, MRTD corroborated true
-SNP other image: refused (snp_appraise_endorsed): neither the policy nor a reference value names the launch measurement
+SNP other image: refused (appraise_evidence): neither the policy nor a reference value names the launch measurement
 CCA endorsed: appraised
 SPDM endorsed: appraised
-SPDM, another device class: refused (spdm_appraise_endorsed): measurement 1 is not endorsed
-SPDM under an identity triple: verified, endorser's: true; appraised
-SPDM, identity by thumbprint: verified, endorser's: true; appraised
-SPDM, an instance the CoRIM does not name: refused (spdm_verify_endorsed): the CoRIM endorses no identity key for instance 0149494949494949494949494949494949 that is this device's
-SPDM unendorsed block: refused (spdm_appraise_endorsed): measurement 1 is not endorsed
+SPDM, another device class: refused (appraise_evidence): measurement 1 is not endorsed
+SPDM under an identity triple: verified, endorser's: true, instance ; appraised
+SPDM, the policy requires that instance: verified, endorser's: true, instance ; refused (appraise_evidence): the evidence carries no claim instance
+SPDM, the policy requires another instance: verified, endorser's: true, instance ; refused (appraise_evidence): the evidence carries no claim instance
+SPDM unendorsed block: refused (appraise_evidence): measurement 1 is not endorsed
+test CoRIM under the other endorser only: bad signature: no endorser in the trust set signed this CoRIM
 released and opened: same key

@@ -1,17 +1,18 @@
-import "verify/core.resid";
-import "verify/tpm.resid";
-import "verify/corim.resid";
+import "verify/verifier.resid";
+import "evidence.resid";
 import "verify/testing.resid";
 import "challenge.resid";
 
 @policy
-TpmPolicy pol() { return TpmPolicy {.pcrs_hex = ["0=00"]}; }
+Policy pol() { return Policy {.measurements = ["PCR0=00"], .require = [], .allow = []}; }
+
 // The AK is the endorser's word: accepting the pinned AK does not cover it.
-@decides(accept = [test_tpm_ak], appraised = pol, identity = none)
-Result(Int, VerifyError) f(List(UInt(8)) a, List(UInt(8)) s, List(List(UInt(8))) vals, ChallengeRecord c, List(UInt(8)) corim) {
-    Verified(CorimRefs) keys = corim_verify(corim, test_endorser(), test_time(0))?;
-    Verified(TpmQuoteEvidence) v = tpm_verify_quote_endorsed(a, s, vals, c, keys, "aa", test_time(0))?;
-    Appraised(TpmQuoteEvidence) ap = tpm_appraise(v, pol())?;
+@decides(accept = [test_tpm_keys], appraised = pol, identity = none)
+Result(Int, VerifyError) f(List(UInt(8)) e, ChallengeRecord c, List(UInt(8)) corim) {
+    Verified(CorimRefs) keys = corim_verify(corim, test_endorsers(), test_time(0))?;
+    Verified(Claims) v = verify_evidence(e, c, bind_fresh(), trust_with_keys(test_tpm_keys(), keys), test_time(0))?;
+    Appraised(Claims) ap = appraise_evidence(v, pol())?;
     return Ok(1);
 }
+
 Int main() { return 0; }

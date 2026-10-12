@@ -1,0 +1,132 @@
+// seq.resid — iterating and building sequences without copies.
+//
+//   Indexed(C, T)   read a C's items in place, by position: a fixed list
+//                   or string is read where it lives, never copied to a
+//                   heap list first.
+//   Build(C, B, T)  make a C from items through its linear builder B:
+//                   ListBuf(T) for List(T), ListBuf(T, N) for List(T, N),
+//                   StrBuf(N) / BytesBuf(N) for Str(N) / Bytes(N). A
+//                   fixed-capacity builder reports overflow when it is
+//                   built, as an error value, not an abort.
+//
+// Strings iterate and build by code point (Int), byte strings by byte.
+
+// ─── Indexed ────────────────────────────────────────────────────────
+
+/// Read access to a C's items of type T by position, in place.
+/// `count` is the number of items; `item` is the one at index i, 0 <= i < count.
+behavior Indexed(C, T) {
+    Int count(C c);
+    T item(C c, Int i);
+}
+
+Int list_count(List(T) xs) { return xs.len(); }
+T list_item(List(T) xs, Int i) { return xs[i]; }
+Indexed(List(T), T) = { .count = list_count, .item = list_item };
+
+Int fixed_list_count(List(T, N) xs) { return xs.len(); }
+T fixed_list_item(List(T, N) xs, Int i) { return xs[i]; }
+Indexed(List(T, N), T) = { .count = fixed_list_count, .item = fixed_list_item };
+
+// Code points of a string. The runtime keeps a code point index per
+// string it reads, so reading the items in order is linear.
+Int text_count(Str s) { return str_len(s); }
+Int text_item(Str s, Int i) { return str_char_at(s, i); }
+Indexed(Str, Int) = { .count = text_count, .item = text_item };
+
+// A fixed string is read through its NUL-terminated view (spec §44.4).
+Int fixed_str_count(Str(N) s) { return str_len(s); }
+Int fixed_str_item(Str(N) s, Int i) { return str_char_at(s, i); }
+Indexed(Str(N), Int) = { .count = fixed_str_count, .item = fixed_str_item };
+
+Int fixed_bytes_count(Bytes(N) b) { return b.len(); }
+Int fixed_bytes_item(Bytes(N) b, Int i) { return b[i]; }
+Indexed(Bytes(N), Int) = { .count = fixed_bytes_count, .item = fixed_bytes_item };
+
+/// The UTF-8 length of an Indexed(C, Int) of code points.
+@needs(Indexed(C, Int))
+pub Int utf8_count(C c) { return utf8_count_at(c, 0, 0); }
+
+@needs(Indexed(C, Int))
+Int utf8_count_at(C c, Int i, Int acc) {
+    if (i >= count(c)) { return acc; }
+    return utf8_count_at(c, i + 1, acc + utf8_width(item(c, i)));
+}
+
+/// The UTF-8 length of one code point.
+pub Int utf8_width(Int cp) {
+    return if (cp < 128) { 1 } else { if (cp < 2048) { 2 } else { if (cp < 65536) { 3 } else { 4 } } };
+}
+
+/// Whether every item satisfies `p`, in order, stopping at the first
+/// that does not.
+@needs(Indexed(C, T))
+pub Bool all_items(C c, Bool closure(T) p) { return all_items_at(c, p, 0); }
+
+@needs(Indexed(C, T))
+Bool all_items_at(C c, Bool closure(T) p, Int i) {
+    if (i >= count(c)) { return true; }
+    return p(item(c, i)) && all_items_at(c, p, i + 1);
+}
+
+/// The items folded left to right with `f`, starting from `init`.
+@needs(Indexed(C, T))
+pub A fold_items(C c, A init, A closure(A, T) f) { return fold_items_at(c, f, 0, init); }
+
+@needs(Indexed(C, T))
+A fold_items_at(C c, A closure(A, T) f, Int i, A acc) {
+    if (i >= count(c)) { return acc; }
+    return fold_items_at(c, f, i + 1, f(acc, item(c, i)));
+}
+
+// ─── Build ──────────────────────────────────────────────────────────
+
+/// Construction of a C from items of type T through a linear builder B.
+/// `built` gives the value, or Err(the length the items asked for) when a
+/// fixed-capacity builder overflowed (that length is in bytes for Str(N)
+/// and Bytes(N), in elements for List(T, N)).
+behavior Build(C, B, T) {
+    B builder();
+    B add(B b, T x);
+    Result(C, Int) built(B b);
+}
+
+ListBuf(T) list_builder() { return ListBuf(); }
+ListBuf(T) list_add(ListBuf(T) b, T x) { return b.push(x); }
+Result(List(T), Int) list_built(ListBuf(T) b) { return Ok(b.finish()); }
+Build(List(T), ListBuf(T), T) = { .builder = list_builder, .add = list_add, .built = list_built };
+
+ListBuf(T, N) fixed_list_builder() { return ListBuf(); }
+ListBuf(T, N) fixed_list_add(ListBuf(T, N) b, T x) { return b.push(x); }
+Result(List(T, N), Int) fixed_list_built(ListBuf(T, N) b) { return b.try_finish(); }
+Build(List(T, N), ListBuf(T, N), T) = { .builder = fixed_list_builder, .add = fixed_list_add, .built = fixed_list_built };
+
+StrBuf str_builder() { return StrBuf(); }
+StrBuf str_add(StrBuf b, Int cp) { return b.push_char(cp); }
+Result(Str, Int) str_built(StrBuf b) { return Ok(b.finish()); }
+Build(Str, StrBuf, Int) = { .builder = str_builder, .add = str_add, .built = str_built };
+
+StrBuf(N) fixed_str_builder() { return StrBuf(); }
+StrBuf(N) fixed_str_add(StrBuf(N) b, Int cp) { return b.push_char(cp); }
+Result(Str(N), Int) fixed_str_built(StrBuf(N) b) { return b.try_finish(); }
+Build(Str(N), StrBuf(N), Int) = { .builder = fixed_str_builder, .add = fixed_str_add, .built = fixed_str_built };
+
+BytesBuf(N) fixed_bytes_builder() { return BytesBuf(); }
+BytesBuf(N) fixed_bytes_add(BytesBuf(N) b, Int x) { return b.push(x); }
+Result(Bytes(N), Int) fixed_bytes_built(BytesBuf(N) b) { return b.try_finish(); }
+Build(Bytes(N), BytesBuf(N), Int) = { .builder = fixed_bytes_builder, .add = fixed_bytes_add, .built = fixed_bytes_built };
+
+/// A C built from the items of any Indexed(D, T), in one pass.
+/// Copies between shapes (a List(T) into a List(T, N), a Str into a Str(N), ...);
+/// Err(length) when a fixed-capacity C overflows.
+@needs(Indexed(D, T), Build(C, B, T))
+pub Result(C, Int) build_from(D src) {
+    B b0 = builder();
+    return build_from_at(src, 0, b0);
+}
+
+@needs(Indexed(D, T), Build(C, B, T))
+Result(C, Int) build_from_at(D src, Int i, B acc) {
+    if (i >= count(src)) { return built(acc); }
+    return build_from_at(src, i + 1, add(acc, item(src, i)));
+}

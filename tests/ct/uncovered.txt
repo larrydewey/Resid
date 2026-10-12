@@ -32,10 +32,7 @@ lib/challenge_bind.resid chal_publish_as the declassifying loop of challenge_wit
 lib/challenge_export.resid challenge_import generic over SpentStore(S): the coverage reads the generic; its MemSpentStore copy runs in challenge-tokens
 lib/verify/core.resid vf_channel_id needs a ChannelExporter, which only a live handshake gives; its secret work is sha256g (sha256-secret) and the one-way publication vf_publish
 lib/verify/core.resid vf_publish publishes the SHA-256 of an exporter, a one-way image (declassify per byte, no branch)
-lib/verify/snp.resid snp_verify_channel_bound needs a live connection's ChannelExporter; its secret work is challenge_with_channel and vf_channel_id
-lib/verify/nsm.resid nsm_verify_channel_bound needs a live connection's ChannelExporter; as snp_verify_channel_bound
-lib/verify/cca.resid cca_verify_channel_bound needs a live connection's ChannelExporter; as snp_verify_channel_bound
-lib/verify/tdx.resid tdx_verify_quote_channel_bound needs a live connection's ChannelExporter; as snp_verify_channel_bound
+lib/verify/claims.resid bind_channel needs a live connection's ChannelExporter; its secret work is challenge_with_channel and vf_channel_id
 lib/verify/channel.resid seal_to_channel needs Appraised evidence bound to a live connection (tests/attest channel_broker runs it); it copies the secret value unread
 lib/verify/channel.resid ch_plain publishes a release on its TLS connection (declassify per byte, no branch); TLS encrypts it to the peer
 lib/verify/channel.resid tlsserver_send_bound socket I/O on a live connection; its secret work is ch_plain and the TLS record layer (tls-record-seal-secret)
@@ -52,7 +49,6 @@ lib/verify/sealing.resid first_seal builds an empty secret list from public fact
 lib/verify/seal.resid seal_to_evidence needs Appraised evidence (tests/attest key_broker); its secret work is hpkeg_setup_sender_full and hpkeg_seal (hpke-seal-secret) and seal_publish
 lib/verify/seal.resid seal_publish publishes HPKE ciphertext (declassify per byte, no branch)
 lib/verify/seal.resid open_released needs a release (tests/attest key_broker); its secret work is hpkeg_setup_receiver_full and hpkeg_open (hpke-open-secret), whose verdict is public
-lib/verify/spdm.resid spdm_verify_channel_bound needs a live connection's ChannelExporter; as snp_verify_channel_bound
 lib/dev/device.resid device_engine_read_pci_attr device I/O: the engine runs the device host; its secret outputs reach the program only through dv_answer
 lib/dev/device_write.resid device_engine_transact_chain_w device I/O: the writing engine; its secret outputs reach the program only through dv_answer
 lib/spdm_requester.resid spdm_connect transport I/O through the SpdmIo closure (GET_VERSION to ALGORITHMS); the requester's secret work is spdm_session's (spdm-session-secret) and the signing curves' (cases)

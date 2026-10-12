@@ -1,12 +1,19 @@
 // Mutation fuzz of the verifiers' own parsers (lib/verify/): SNP reports
 // and their collateral, TDX quotes, NSM documents, CCA tokens, TPM quotes
 // and EK chains, SPDM records (measurements, CHALLENGE and sessions),
-// CoRIMs and Intel's JSON. Each mutated input runs in a spawn region, so
+// CoRIMs and Intel's JSON; and the generic layer over them: CMW decoding,
+// whole evidence envelopes through verify_evidence (collateral selection
+// included) and the NSM answer the attester reads. Each mutated input
+// runs in a spawn region, so
 // an abort is caught and counted; any is a failure. The seeds are fixed,
 // so a failure reproduces (tests/crypto/fuzz.resid holds the same
 // mutator for lib/'s parsers).
 
-import "verify/core.resid";
+import "verify/verifier.resid";
+import "evidence.resid";
+import "cmw.resid";
+import "attester.resid";
+import "cose.resid";
 import "verify/testing.resid";
 import "verify/snp.resid";
 import "verify/tdx.resid";
@@ -84,7 +91,10 @@ Int run(Str kind, List(Int) m) {
     if (kind == "tpm") { return ok(test_tpm_check(u, u, [u], test_tpm_ak(), t)); }
     if (kind == "tpm-ek") { return ok(test_tpm_ak_check([u, rdb("tpm-ek-int.der")], [u, rdb("tpm-ek-int-crl.der")], u, test_tpm_ek(), t)); }
     if (kind == "corim") { return ok(test_corim_check(u, test_endorser(), t)); }
-    if (kind == "json") { return match (json_parse(m)) { Ok(j) => 1, Err(e) => 0, }; }
+    if (kind == "json") { return test_json_check(m); }
+    if (kind == "cmw") { return match (cmw_decode(m)) { Ok(c) => 1, Err(e) => 0, }; }
+    if (kind == "envelope") { return ok(verify_evidence(u, challenge_issue(64), bind_fresh(), test_roots(), t)); }
+    if (kind == "nsm-answer") { return match (at_nsm_envelope("nsm.raw", u)) { Ok(e) => 1, Err(e) => 0, }; }
     return spdm_kind(kind, u, t);
 }
 
@@ -116,7 +126,34 @@ Int crash(Str kind, Int i, Str msg, List(Int) input) {
 }
 
 @requires(filesystem(readonly))
-Str go(Str kind, Str seed, Int n, Int s) { return f"FUZZ {kind} crashes={fuzz(kind, rd(seed), 0, n, s, 0)}"; }
+Str go(Str kind, Str seed, Int n, Int s) { return go_on(kind, rd(seed), n, s); }
+
+@requires(filesystem(readonly))
+Str go_on(Str kind, List(Int) seed, Int n, Int s) { return f"FUZZ {kind} crashes={fuzz(kind, seed, 0, n, s, 0)}"; }
+
+// Envelopes of each platform's fixture evidence, with collateral.
+@requires(filesystem(readonly))
+List(Int) snp_envelope() { return chal_ints(evidence_envelope(evidence_snp(rd("report-template.bin")), [collateral_item(mt_cert(), rd("test-vcek.der")), collateral_item(mt_cert(), rd("test-ask.der")), collateral_item(mt_crl(), rd("test-crl.der"))])); }
+
+@requires(filesystem(readonly))
+List(Int) tdx_envelope() { return chal_ints(evidence_envelope(evidence_tdx(rd("tdx-quote-v4.bin")), [collateral_item(mt_json(), rd("tdx-tcb-info.json")), collateral_item(mt_pem_chain(), rd("tdx-tcb-chain.pem")), collateral_item(mt_json(), rd("tdx-qe-identity.json")), collateral_item(mt_crl(), rd("tdx-pck-crl.der")), collateral_item(mt_crl(), rd("tdx-root-crl.der"))])); }
+
+@requires(filesystem(readonly))
+List(Int) tpm_envelope() {
+    List(CmwRec) none = [];
+    return chal_ints(evidence_envelope(evidence_tpm(rd("tpm-ek-ecc.der")[0..120], rd("tpm-ek-ecc.der")[0..70], [fill(1, 32), fill(2, 32)]), none));
+}
+
+@requires(filesystem(readonly))
+List(Int) spdm_envelope() {
+    List(CmwRec) none = [];
+    List(List(Int)) nn = [];
+    return chal_ints(evidence_envelope(evidence_spdm_measurements(nn, [rd("spdm-leaf.der"), rd("spdm-root.der")], [rd("spdm-ocsp-leaf.der")], nn, [17, 224, 1, 255].concat(fill(1, 32)).concat([0]), rd("nvidia-h100-response.bin")), none));
+}
+
+// The NSM's answer to an Attestation request: {"Attestation": {"document": doc}}.
+@requires(filesystem(readonly))
+List(Int) nsm_answer() { return cbe_bytes(rd("aws-nitro-doc.bin"), cbe_text("document", cbe_map(1, cbe_text("Attestation", cbe_map(1, []))))); }
 
 @requires(filesystem(readonly))
 Int main() {
@@ -135,5 +172,11 @@ Int main() {
     println(go("spdm-vca", "nvidia-h100-request.bin", 100, 13));
     println(go("spdm-chal", "spdm-root.der", 100, 14));
     println(go("spdm-sess", "spdm-leaf.der", 100, 15));
+    println(go_on("cmw", snp_envelope(), 150, 16));
+    println(go_on("envelope", snp_envelope(), 150, 17));
+    println(go_on("envelope", tdx_envelope(), 100, 18));
+    println(go_on("envelope", tpm_envelope(), 100, 19));
+    println(go_on("envelope", spdm_envelope(), 100, 20));
+    println(go_on("nsm-answer", nsm_answer(), 150, 21));
     return 0;
 }

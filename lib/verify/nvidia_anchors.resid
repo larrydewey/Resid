@@ -6,6 +6,7 @@
 import "core.resid";
 import "spdm.resid";
 import "spdm_session.resid";
+import "claims.resid";
 
 /// NVIDIA's Device Identity CA, as the anchor for NVIDIA GPU SPDM evidence and sessions.
 @anchor(kind = NvidiaDevice(DeviceIdentityCa), principal = AboveKernel, formats = [SpdmEvidence, SpdmSession], source = "https://github.com/NVIDIA/nvtrust (guest_tools/gpu_verifiers/local_gpu_verifier/src/verifier/certs/verifier_device_root.pem)", fingerprint = "sha384:4cbb092410e5a795067c12a3726e9e4c7cc2971bbeba56593219beb598fb399b0d2f877f383edfc06d40e5abad07cc16", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [EcdsaP384Sha384], expires = "9999-12-31")
@@ -38,3 +39,7 @@ pub List(Int) nvidia_device_root_der() {
         108, 89, 149, 225, 156, 99, 9, 26, 248, 89, 116, 203, 20, 112, 74, 141, 183, 231, 120, 100, 129, 91, 0
     ];
 }
+
+/// NVIDIA's device identity CA, for its GPUs' SPDM evidence, as a trust set.
+@trust(anchors = [nvidia_device_root])
+pub Trust nvidia_roots() { return trust_anchors(); }

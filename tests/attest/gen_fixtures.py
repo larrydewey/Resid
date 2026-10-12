@@ -462,9 +462,13 @@ import "sealing.resid";
 import "cca.resid";
 import "spdm.resid";
 import "spdm_session.resid";
-import "device_bound.resid";
+import "claims.resid";
+import "verifier.resid";
+import "../evidence.resid";
+import "../cmw.resid";
 import "endorsed_keys.resid";
 import "corim.resid";
+import "json.resid";
 import "../word.resid";
 import "../instant.resid";
 import "../challenge.resid";
@@ -519,8 +523,11 @@ pub Str tdx_collateral_status(TdxQuote q, TdxCollateral c, Anchor root, Evidence
     return match (tdx_collateral_check(q, c, root, t)) {{ Ok(st) => "TCB " + st[0] + ", QE " + st[1], Err(e) => verify_error_text(e) }};
 }}
 
-@anchor(kind = DeviceIdentity(Test), principal = AboveKernel, formats = [SpdmEvidence, SpdmSession, SpdmIdentity], source = "tests/attest/gen_fixtures.py", fingerprint = "sha384:{hashlib.sha384(droot.public_bytes(serialization.Encoding.DER)).hexdigest()}", retrieved = "2026-10-11", reviewed_by = "tests", algorithms = [EcdsaP384Sha384], expires = "2039-12-31")
+@anchor(kind = DeviceIdentity(NVIDIA:Test GPU), principal = AboveKernel, formats = [SpdmEvidence, SpdmSession, SpdmIdentity], source = "tests/attest/gen_fixtures.py", fingerprint = "sha384:{hashlib.sha384(droot.public_bytes(serialization.Encoding.DER)).hexdigest()}", retrieved = "2026-10-11", reviewed_by = "tests", algorithms = [EcdsaP384Sha384], expires = "2039-12-31")
 pub Anchor test_device_root() {{ return anchor_der({ints(droot.public_bytes(serialization.Encoding.DER))}); }}
+
+@anchor(kind = DeviceIdentity(NVIDIA:Other GPU), principal = AboveKernel, formats = [SpdmEvidence, SpdmSession, SpdmIdentity], source = "tests/attest/gen_fixtures.py", fingerprint = "sha384:{hashlib.sha384(droot.public_bytes(serialization.Encoding.DER)).hexdigest()}", retrieved = "2026-10-11", reviewed_by = "tests", algorithms = [EcdsaP384Sha384], expires = "2039-12-31")
+pub Anchor test_device_root_other_gpu() {{ return anchor_der({ints(droot.public_bytes(serialization.Encoding.DER))}); }}
 
 {emu_anchors()}
 // SPDM records' chains and signatures alone, for captured and real ones
@@ -544,9 +551,38 @@ pub Anchor test_endorser() {{ return anchor_der({ints(end_spki)}); }}
 // A CoRIM's signature, validity and reference values alone.
 pub Result(CorimRefs, VerifyError) test_corim_check(List(UInt(8)) corim, Anchor endorser, EvidenceTime t) {{ return corim_check(corim, endorser, t); }}
 
+// The JSON parser alone (TDX collateral), for the fuzzer: 1 parsed, 0 refused.
+pub Int test_json_check(List(Int) b) {{ return match (json_parse(b)) {{ Ok(j) => 1, Err(e) => 0, }}; }}
+
 // The NSM document's chain and signature alone, for real documents whose
 // nonce carries no challenge of ours.
 pub Result(NsmDocument, VerifyError) test_nsm_check(List(UInt(8)) doc, Anchor root, EvidenceTime t) {{ return nsm_check(doc, root, t); }}
+
+// The test anchors as trust sets, for the flows.
+@trust(anchors = [test_ark, test_ark_vlek])
+pub Trust test_snp_roots() {{ return trust_anchors(); }}
+@trust(anchors = [test_sgx_root])
+pub Trust test_tdx_roots() {{ return trust_anchors(); }}
+@trust(anchors = [test_nitro_root])
+pub Trust test_nitro_roots() {{ return trust_anchors(); }}
+@trust(anchors = [test_cpak, test_rmm_cpak])
+pub Trust test_cca_keys() {{ return trust_anchors(); }}
+@trust(anchors = [test_tpm_ak])
+pub Trust test_tpm_keys() {{ return trust_anchors(); }}
+@trust(anchors = [test_tpm_ek])
+pub Trust test_tpm_ek_roots() {{ return trust_anchors(); }}
+@trust(anchors = [test_device_root_other_gpu])
+pub Trust test_other_gpu_roots() {{ return trust_anchors(); }}
+@trust(anchors = [test_device_root])
+pub Trust test_device_roots() {{ return trust_anchors(); }}
+@trust(anchors = [test_emu_ecp256, test_emu_ecp384, test_emu_ecp521, test_emu_rsa2048, test_emu_rsa3072, test_emu_ed25519])
+pub Trust test_emu_roots() {{ return trust_anchors(); }}
+@trust(anchors = [test_endorser])
+pub Trust test_endorsers() {{ return trust_anchors(); }}
+@trust(anchors = [test_acme_endorser])
+pub Trust test_acme_endorsers() {{ return trust_anchors(); }}
+@trust(include = [test_snp_roots, test_tdx_roots, test_nitro_roots, test_cca_keys, test_tpm_keys, test_device_roots])
+pub Trust test_roots() {{ return trust_anchors(); }}
 
 // A fixed time from the kernel's clock, as tests need one.
 pub EvidenceTime test_time(Int unix) {{ return EvidenceTime {{.at = instant_of_seconds(unix), .source = Kernel}}; }}

@@ -236,8 +236,28 @@ Int rs_wclose(Str t, Int i, Int n, Int d) {
 Map(Str, Int) rs_wslot(Kg g, Int c, Map(Str, Int) env) {
     Int t = if (g.ns[c].kind == "ty") { c } else { kg_kid(g, c, 0) };
     Str a = rs_warg(g.ns[t].text);
-    if (a == "") { return env; }
-    return env.insert(a, t);
+    Map(Str, Int) e2 = if (a == "") { env } else { env.insert(a, t) };
+    return rs_wnested(g.ns[t].text, t, 1, e2);
+}
+
+// Slots nested deeper in the type (`Result(Parsed(Int(N), F), E)` binds
+// N), each where no outer slot bound the letter already.
+Map(Str, Int) rs_wnested(Str s, Int t, Int i, Map(Str, Int) env) {
+    Int p = str_find_char(s, 40, i);
+    if (p < 0) { return env; }
+    Int b = rs_wident_start(s, p - 1);
+    Str a = if (b >= 0 && b < p) { rs_warg(str_slice(s, b, str_len(s))) } else { "" };
+    Map(Str, Int) e2 = if (a == "" || env.contains(a)) { env } else { env.insert(a, t) };
+    return rs_wnested(s, t, p + 1, e2);
+}
+
+// The start of the identifier ending at i (i itself when none).
+Int rs_wident_start(Str s, Int i) {
+    if (i < 0) { return 0; }
+    Int c = str_char_at(s, i);
+    Bool id = (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c == 95;
+    if (!id) { return i + 1; }
+    return rs_wident_start(s, i - 1);
 }
 
 // The width parameters of kids from..to (the trailing kid is the body).
@@ -251,7 +271,6 @@ Map(Str, Int) rs_wslots(Kg g, Int id, Int from, Map(Str, Int) env) {
 RS rs_decl(Kg g, RSG gl, Int d, RS r) {
     Str k = g.ns[d].kind;
     Int n = g.ns[d].nk;
-    if (k == "sandbox") { return rs_decls(g, gl, d, 0, r); }
     if (k == "fn") {
         RS r1 = rs_kids(g, gl, d, 0, n - 1, rs_noenv(), r);
         Map(Str, Int) env = rs_wslots(g, d, 0, rs_bind_kids(g, d, 1, n - 1, rs_noenv()));
@@ -265,16 +284,55 @@ RS rs_decl(Kg g, RSG gl, Int d, RS r) {
     return rs_kids(g, gl, d, 0, n, rs_noenv(), r);
 }
 
-RS rs_decls(Kg g, RSG gl, Int id, Int i, RS r) {
-    if (i >= g.ns[id].nk) { return r; }
-    return rs_decls(g, gl, id, i + 1, rs_decl(g, gl, kg_kid(g, id, i), r));
+// Each declaration resolves into its own RS, gathered into builders here:
+// the walk's loops then copy one declaration's state out, not the unit's.
+type RSB = { Int uses; Map(Int, Int) shadow; };
+
+// `only` (",a,b,") limits the walk to those functions, "" walks them all.
+RS rs_decls(Kg g, RSG gl, Int id, Int i, ListBuf(Int) ps, ListBuf(Int) us, RSB b, Str only, Map(Str, Int) oset) {
+    List(Int) none = [];
+    if (i >= g.ns[id].nk) { return RS {.pairs = ps.finish(), .def = none, .unres = us.finish(), .uses = b.uses, .shadow = b.shadow}; }
+    Int d = kg_kid(g, id, i);
+    Str k = g.ns[d].kind;
+    if (only != "" && k != "sandbox" && !(k == "fn" && oset.contains(g.ns[d].text))) { return rs_decls(g, gl, id, i + 1, ps, us, b, only, oset); }
+    RS r = if (k == "sandbox") { rs_decls(g, gl, d, 0, ListBuf(), ListBuf(), rs_nob(), only, oset) } else { rs_decl(g, gl, d, rs_empty()) };
+    RSB b2 = RSB {.uses = b.uses + r.uses, .shadow = rs_merge(b.shadow, r.shadow, r.shadow.keys(), 0)};
+    return rs_decls(g, gl, id, i + 1, rs_push_all(ps, r.pairs, 0), rs_push_all(us, r.unres, 0), b2, only, oset);
+}
+
+pub Map(Str, Int) rs_noset() {
+    Map(Str, Int) m = {};
+    return m;
+}
+
+pub Map(Str, Int) rs_name_set(List(Str) es, Int i, Map(Str, Int) m) {
+    if (i >= es.len()) { return m; }
+    return rs_name_set(es, i + 1, if (es[i] == "") { m } else { m.insert(es[i], 1) });
+}
+
+RSB rs_nob() {
+    Map(Int, Int) m = {};
+    return RSB {.uses = 0, .shadow = m};
+}
+
+ListBuf(Int) rs_push_all(ListBuf(Int) acc, List(Int) xs, Int i) {
+    if (i >= xs.len()) { return acc; }
+    return rs_push_all(acc.push(xs[i]), xs, i + 1);
+}
+
+Map(Int, Int) rs_merge(Map(Int, Int) m, Map(Int, Int) from, List(Int) ks, Int i) {
+    if (i >= ks.len()) { return m; }
+    return rs_merge(m.insert(ks[i], from.get(ks[i]) else { 0 }), from, ks, i + 1);
 }
 
 // Resolve a whole unit.
-pub RS kg_resolve(Kg g, Int unit) {
+pub RS kg_resolve(Kg g, Int unit) { return kg_resolve_only(g, unit, "", rs_noset()); }
+
+// Only the functions in `only` (",a,b,"): the rest have no def edges.
+pub RS kg_resolve_only(Kg g, Int unit, Str only, Map(Str, Int) oset) {
     Map(Str, Int) e = {};
     RSG gl = rs_globals(g, unit, 0, RSG {.fns = e, .tys = e, .vars = e});
-    RS r = rs_decls(g, gl, unit, 0, rs_empty());
+    RS r = rs_decls(g, gl, unit, 0, ListBuf(), ListBuf(), rs_nob(), only, oset);
     List(Int) none = [];
     List(Int) dense = rs_dense(sort(r.pairs), 0, 0, kg_count(g), ListBuf());
     return RS {.pairs = none, .def = dense, .unres = r.unres, .uses = r.uses, .shadow = r.shadow};

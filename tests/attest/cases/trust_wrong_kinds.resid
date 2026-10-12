@@ -1,0 +1,18 @@
+import "verify/verifier.resid";
+import "evidence.resid";
+import "verify/seal.resid";
+import "verify/testing.resid";
+import "challenge.resid";
+import "crypto.resid";
+import "hash.resid";
+import "hpke.resid";
+
+@policy
+Policy pol() { return Policy {.measurements = ["00"], .require = [], .allow = []}; }
+
+// A trust set holding no anchor of a kind verify_evidence takes.
+@trust(anchors = [test_sender])
+Trust senders() { return trust_anchors(); }
+@requires(clock(readonly))
+Result(Verified(Claims), VerifyError) f(List(UInt(8)) e, ChallengeRecord c) { return verify_evidence(e, c, bind_fresh(), senders(), kernel_time()); }
+Int main() { return 0; }

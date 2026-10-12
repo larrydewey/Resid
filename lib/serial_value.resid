@@ -1,0 +1,1282 @@
+// value.resid — a format-neutral Value tree over serial.resid.
+//
+// Value holds any data-model value (serde_value's role): decode into it
+// when the shape is not known in advance, build it by hand, inspect it,
+// then encode it anywhere. Three pieces:
+//
+//   Encode(Value, F) / Decode(Value, F)   a Value is itself encodable to
+//                                         any format, and decodable from any
+//                                         self-describing one (read_peek).
+//   to_value(x)                           a Value encoder: any Encode(T, _)
+//                                         type becomes a Value.
+//   from_value(v)                         a Value decoder: any Decode(T, _)
+//                                         type is read back out of a Value.
+//
+// Together they also serve as the reference format: T -> Value -> T
+// exercises every verb of both protocols.
+
+import "serial.resid";
+
+// ─── The tree ───────────────────────────────────────────────────────
+
+/// Any data-model value, as a format-neutral tree.
+/// Integers keep their width and signedness; maps keep entry order.
+type Value = VUnit | VBool(Bool) | VInt(Int) | VUInt(UInt(64)) | VI128(Int(128)) | VU128(UInt(128)) | VFloat(Float) | VStr(Str) | VBytes(List(Int)) | VNone | VSome(Value) | VSeq(List(Value)) | VMap(List(VEntry)) | VStruct(VRecord) | VUnitVariant(VTag) | VVariant(VPayload);
+
+/// A map entry; keys are any value, entries keep their order.
+type VEntry = { Value key; Value val; };
+/// A struct field: its name and value.
+type VField = { Str name; Value val; };
+/// A struct: its name ("" when the format did not say) and fields in order.
+type VRecord = { Str name; List(VField) fields; };
+/// A variant's identity.
+/// Enum name "" and index -1 when the format did not say.
+type VTag = { Str enum_name; Int index; Str name; };
+/// A variant with its payload.
+type VPayload = { VTag tag; Value payload; };
+
+/// A map entry of `key` and `val`.
+pub VEntry ventry(Value key, Value val) { return VEntry {.key = key, .val = val}; }
+
+/// A struct field named `name` holding `val`.
+pub VField vfield(Str name, Value val) { return VField {.name = name, .val = val}; }
+
+/// A struct Value named `name` with `fields` in order.
+pub Value vstruct(Str name, List(VField) fields) { return VStruct(VRecord {.name = name, .fields = fields}); }
+
+/// A variant tag of enum `enum_name`, position `index` and name `name`.
+pub VTag vtag(Str enum_name, Int index, Str name) { return VTag {.enum_name = enum_name, .index = index, .name = name}; }
+
+/// A newtype variant Value of `tag` carrying `payload`.
+pub Value vvariant(VTag tag, Value payload) { return VVariant(VPayload {.tag = tag, .payload = payload}); }
+
+/// What kind of value `v` is, in words, for error messages.
+pub Str value_kind(Value v) {
+    return match v {
+        VUnit => "unit", VBool(b) => "a boolean", VInt(i) => "an integer", VUInt(u) => "an unsigned integer",
+        VI128(w) => "a 128-bit integer", VU128(uw) => "an unsigned 128-bit integer", VFloat(f) => "a float", VStr(s) => "a string", VBytes(bs) => "bytes", VNone => "none", VSome(x) => "an option",
+        VSeq(xs) => "a sequence", VMap(es) => "a map", VStruct(r) => "a struct", VUnitVariant(t) => "a unit variant",
+        VVariant(p) => "a newtype variant"
+    };
+}
+
+// ─── Show and Eq ────────────────────────────────────────────────────
+
+/// Rust-debug-like text of `v`, as in `Point { x: 1, y: [2, 3] }`.
+pub Str show_value(Value v) {
+    return match v {
+        VUnit => "()", VBool(b) => f"{b}", VInt(i) => f"{i}", VUInt(u) => f"{u}u", VI128(w) => f"{w}i128",
+        VU128(uw) => f"{uw}u128", VFloat(f) => show_float(f),
+        VStr(s) => quote(s), VBytes(bs) => f"b{bs}", VNone => "None", VSome(x) => "Some(" + show_value(x) + ")",
+        VSeq(xs) => "[" + show_values(xs, 0, StrBuf()) + "]", VMap(es) => "{" + show_entries(es, 0, StrBuf()) + "}",
+        VStruct(r) => show_record(r), VUnitVariant(t) => show_tag(t), VVariant(p) => show_tag(p.tag) + "(" + show_value(p.payload) + ")"
+    };
+}
+Show(Value) = show_value;
+
+Str show_float(Float f) {
+    Str t = f"{f}";
+    return if (str_contains(t, ".") || str_contains(t, "n") || str_contains(t, "e")) { t } else { t + ".0" };
+}
+
+Str quote(Str s) { return "\"" + s + "\""; }
+
+Str show_tag(VTag t) { return if (t.enum_name == "") { t.name } else { t.enum_name + "::" + t.name }; }
+
+// The elements, joined into one builder rather than a fresh string each.
+Str show_values(List(Value) xs, Int i, StrBuf b) {
+    if (i >= xs.len()) { return b.finish(); }
+    Str sep = if (i == 0) { "" } else { ", " };
+    return show_values(xs, i + 1, b.push(sep).push(show_value(xs[i])));
+}
+
+Str show_entries(List(VEntry) es, Int i, StrBuf b) {
+    if (i >= es.len()) { return b.finish(); }
+    Str sep = if (i == 0) { "" } else { ", " };
+    StrBuf more = b.push(sep).push(show_value(es[i].key)).push(": ").push(show_value(es[i].val));
+    return show_entries(es, i + 1, more);
+}
+
+Str show_record(VRecord r) {
+    Str head = if (r.name == "") { "" } else { r.name + " " };
+    if (r.fields.len() == 0) { return head + "{}"; }
+    return head + "{ " + show_fields(r.fields, 0, StrBuf()) + " }";
+}
+
+Str show_fields(List(VField) fs, Int i, StrBuf b) {
+    if (i >= fs.len()) { return b.finish(); }
+    Str sep = if (i == 0) { "" } else { ", " };
+    StrBuf more = b.push(sep).push(fs[i].name).push(": ").push(show_value(fs[i].val));
+    return show_fields(fs, i + 1, more);
+}
+
+/// Structural equality of two Values.
+/// Struct and variant names compare only when both sides have one (a
+/// self-describing format may not keep them); integers compare by value.
+pub Bool value_eq(Value a, Value b) {
+    return match a {
+        VUnit => match b { VUnit => true, _ => false },
+        VBool(x) => match b { VBool(y) => x == y, _ => false },
+        VInt(x) => num_eq(a, b),
+        VUInt(x) => num_eq(a, b),
+        VI128(x) => num_eq(a, b),
+        VU128(x) => num_eq(a, b),
+        VFloat(x) => match b { VFloat(y) => x == y, _ => false },
+        VStr(x) => match b { VStr(y) => x == y, _ => false },
+        VBytes(x) => match b { VBytes(y) => ints_eq(x, y, 0), _ => false },
+        VNone => match b { VNone => true, _ => false },
+        VSome(x) => match b { VSome(y) => value_eq(x, y), _ => false },
+        VSeq(xs) => match b { VSeq(ys) => values_eq(xs, ys, 0), _ => false },
+        VMap(es) => match b { VMap(fs) => entries_eq(es, fs, 0), _ => false },
+        VStruct(r) => match b { VStruct(q) => record_eq(r, q), _ => false },
+        VUnitVariant(t) => match b { VUnitVariant(u) => tag_eq(t, u), _ => false },
+        VVariant(p) => match b { VVariant(q2) => tag_eq(p.tag, q2.tag) && value_eq(p.payload, q2.payload), _ => false }
+    };
+}
+Eq(Value) = value_eq;
+
+// Integers compare by value across width and signedness (a format may
+// not keep either).
+Bool num_eq(Value a, Value b) {
+    if (Some(x) = as_wide_int(a)) {
+        if (Some(y) = as_wide_int(b)) { return x == y; }
+        return false;
+    }
+    if (Some(ux) = as_wide_uint(a)) {
+        if (Some(uy) = as_wide_uint(b)) { return ux == uy; }
+    }
+    return false;
+}
+
+/// An integer Value as Int(128) when it fits.
+/// None for a non-integer or a UInt(128) above the Int(128) range.
+pub Option(Int(128)) as_wide_int(Value v) {
+    return match v {
+        VInt(i) => Some((Int(128))i),
+        VUInt(u) => Some((Int(128))u),
+        VI128(w) => Some(w),
+        VU128(uw) => if (uw <= u128(170141183460469231731687303715884105727)) { Some((Int(128))uw) } else { None },
+        _ => None
+    };
+}
+
+/// An integer Value as UInt(128) when it is not negative.
+/// None for a non-integer or a negative integer.
+pub Option(UInt(128)) as_wide_uint(Value v) {
+    return match v {
+        VInt(i) => if (i >= 0) { Some((UInt(128))i) } else { None },
+        VUInt(u) => Some((UInt(128))u),
+        VI128(w) => if (w >= i128(0)) { Some((UInt(128))w) } else { None },
+        VU128(uw) => Some(uw),
+        _ => None
+    };
+}
+
+Option(Str) as_str(Value v) { return match v { VStr(s) => Some(s), _ => None }; }
+
+Bool ints_eq(List(Int) a, List(Int) b, Int i) {
+    if (a.len() != b.len()) { return false; }
+    if (i >= a.len()) { return true; }
+    return a[i] == b[i] && ints_eq(a, b, i + 1);
+}
+
+Bool values_eq(List(Value) a, List(Value) b, Int i) {
+    if (a.len() != b.len()) { return false; }
+    if (i >= a.len()) { return true; }
+    return value_eq(a[i], b[i]) && values_eq(a, b, i + 1);
+}
+
+Bool entries_eq(List(VEntry) a, List(VEntry) b, Int i) {
+    if (a.len() != b.len()) { return false; }
+    if (i >= a.len()) { return true; }
+    return value_eq(a[i].key, b[i].key) && value_eq(a[i].val, b[i].val) && entries_eq(a, b, i + 1);
+}
+
+Bool record_eq(VRecord a, VRecord b) {
+    Bool names = a.name == "" || b.name == "" || a.name == b.name;
+    return names && fields_eq(a.fields, b.fields, 0);
+}
+
+Bool fields_eq(List(VField) a, List(VField) b, Int i) {
+    if (a.len() != b.len()) { return false; }
+    if (i >= a.len()) { return true; }
+    return a[i].name == b[i].name && value_eq(a[i].val, b[i].val) && fields_eq(a, b, i + 1);
+}
+
+Bool tag_eq(VTag a, VTag b) {
+    Bool enums = a.enum_name == "" || b.enum_name == "" || a.enum_name == b.enum_name;
+    return enums && a.name == b.name;
+}
+
+// ─── Lookups for hand-written decoding ──────────────────────────────
+
+/// A struct's (or string-keyed map's) field value by name.
+/// None when absent or when `v` is neither.
+pub Option(Value) value_field(Value v, Str name) {
+    return match v {
+        VStruct(r) => field_in(r.fields, name, 0),
+        VMap(es) => entry_in(es, name, 0),
+        _ => None
+    };
+}
+
+Option(Value) field_in(List(VField) fs, Str name, Int i) {
+    if (i >= fs.len()) { return None; }
+    if (fs[i].name == name) { return Some(fs[i].val); }
+    return field_in(fs, name, i + 1);
+}
+
+Option(Value) entry_in(List(VEntry) es, Str name, Int i) {
+    if (i >= es.len()) { return None; }
+    if (Some(k) = as_str(es[i].key)) {
+        if (k == name) { return Some(es[i].val); }
+    }
+    return entry_in(es, name, i + 1);
+}
+
+/// A required field of `v`, decoded: `Int x = get_field(v, "x")?;`.
+/// Errors with missing_field when absent; decode errors name the field.
+@needs(Decode(T, VDec))
+pub Result(T, SerialError) get_field(Value v, Str name) {
+    if (Some(f) = value_field(v, name)) {
+        Result(T, SerialError) r = from_value(f);
+        return at_field(r, name);
+    }
+    return Err(missing_field(name));
+}
+
+/// An optional field of `v`, decoded, or `fallback` when absent.
+@needs(Decode(T, VDec))
+pub Result(T, SerialError) get_field_or(Value v, Str name, T fallback) {
+    if (Some(f) = value_field(v, name)) {
+        Result(T, SerialError) r = from_value(f);
+        return at_field(r, name);
+    }
+    return Ok(fallback);
+}
+
+// ─── Encode(Value, F) and Decode(Value, F) ──────────────────────────
+
+@needs(Encoder(F))
+Result(F, SerialError) enc_value(Value v, F s) {
+    return match v {
+        VUnit => write_unit(s),
+        VBool(b) => write_bool(s, b),
+        VInt(i) => write_int(s, i),
+        VUInt(u) => write_uint(s, u),
+        VI128(w) => write_i128(s, w),
+        VU128(uw) => write_u128(s, uw),
+        VFloat(f) => write_float(s, f),
+        VStr(t) => write_str(s, t),
+        VBytes(bs) => write_bytes(s, bs),
+        VNone => write_none(s),
+        VSome(x) => enc_value_some(x, s),
+        VSeq(xs) => enc_value_seq(xs, s),
+        VMap(es) => enc_value_map(es, s),
+        VStruct(r) => enc_value_struct(r, s),
+        VUnitVariant(t) => write_unit_variant(s, t.enum_name, t.index, t.name),
+        VVariant(p) => enc_value_variant(p, s)
+    };
+}
+Encode(Value, F) = enc_value;
+
+@needs(Encoder(F))
+Result(F, SerialError) enc_value_some(Value x, F s) {
+    F s1 = write_some(s)?;
+    return enc_value(x, s1);
+}
+
+@needs(Encoder(F))
+Result(F, SerialError) enc_value_seq(List(Value) xs, F s) {
+    F s1 = write_seq_begin(s, xs.len())?;
+    F s2 = enc_value_elems(xs, 0, s1)?;
+    return write_seq_end(s2);
+}
+
+@needs(Encoder(F))
+Result(F, SerialError) enc_value_elems(List(Value) xs, Int i, F s) {
+    if (i >= xs.len()) { return Ok(s); }
+    F s1 = write_seq_elem(s)?;
+    F s2 = at_index(enc_value(xs[i], s1), i)?;
+    return enc_value_elems(xs, i + 1, s2);
+}
+
+@needs(Encoder(F))
+Result(F, SerialError) enc_value_map(List(VEntry) es, F s) {
+    F s1 = write_map_begin(s, es.len())?;
+    F s2 = enc_value_entries(es, 0, s1)?;
+    return write_map_end(s2);
+}
+
+@needs(Encoder(F))
+Result(F, SerialError) enc_value_entries(List(VEntry) es, Int i, F s) {
+    if (i >= es.len()) { return Ok(s); }
+    F s1 = write_map_key(s)?;
+    F s2 = enc_value(es[i].key, s1)?;
+    F s3 = write_map_value(s2)?;
+    F s4 = enc_value(es[i].val, s3)?;
+    return enc_value_entries(es, i + 1, s4);
+}
+
+@needs(Encoder(F))
+Result(F, SerialError) enc_value_struct(VRecord r, F s) {
+    F s1 = write_struct_begin(s, r.name, r.fields.len())?;
+    F s2 = enc_value_fields(r.fields, 0, s1)?;
+    return write_struct_end(s2);
+}
+
+@needs(Encoder(F))
+Result(F, SerialError) enc_value_fields(List(VField) fs, Int i, F s) {
+    if (i >= fs.len()) { return Ok(s); }
+    F s1 = write_field(s, fs[i].name)?;
+    F s2 = at_field(enc_value(fs[i].val, s1), fs[i].name)?;
+    return enc_value_fields(fs, i + 1, s2);
+}
+
+@needs(Encoder(F))
+Result(F, SerialError) enc_value_variant(VPayload p, F s) {
+    F s1 = write_variant_begin(s, p.tag.enum_name, p.tag.index, p.tag.name)?;
+    F s2 = at_variant(enc_value(p.payload, s1), p.tag.name)?;
+    return write_variant_end(s2);
+}
+
+// Decoding a Value asks the format what comes next, so it needs a
+// self-describing format (read_peek).
+@needs(Decoder(F))
+Result(Parsed(Value, F), SerialError) dec_value(F s) {
+    Parsed(Peek, F) pk = read_peek(s)?;
+    Peek kind = pk.value;
+    F s1 = pk.rest;
+    return match kind {
+        PeekUnit => dec_value_unit(s1),
+        PeekBool => dec_value_bool(s1),
+        PeekInt => dec_value_int(s1),
+        PeekUInt => dec_value_uint(s1),
+        PeekI128 => dec_value_i128(s1),
+        PeekU128 => dec_value_u128(s1),
+        PeekFloat => dec_value_float(s1),
+        PeekStr => dec_value_str(s1),
+        PeekBytes => dec_value_bytes(s1),
+        PeekNone => dec_value_option(s1),
+        PeekSome => dec_value_option(s1),
+        PeekSeq => dec_value_seq(s1),
+        PeekMap => dec_value_map(s1),
+        PeekStruct(name) => dec_value_struct(s1, name),
+        PeekVariant => dec_value_variant(s1)
+    };
+}
+Decode(Value, F) = dec_value;
+
+@needs(Decoder(F))
+Result(Parsed(Value, F), SerialError) dec_value_unit(F s) {
+    F s1 = read_unit(s)?;
+    return parsed(VUnit, s1);
+}
+
+@needs(Decoder(F))
+Result(Parsed(Value, F), SerialError) dec_value_bool(F s) {
+    Parsed(Bool, F) p = read_bool(s)?;
+    return parsed(VBool(p.value), p.rest);
+}
+
+@needs(Decoder(F))
+Result(Parsed(Value, F), SerialError) dec_value_int(F s) {
+    Parsed(Int, F) p = read_int(s)?;
+    return parsed(VInt(p.value), p.rest);
+}
+
+@needs(Decoder(F))
+Result(Parsed(Value, F), SerialError) dec_value_uint(F s) {
+    Parsed(UInt(64), F) p = read_uint(s)?;
+    return parsed(VUInt(p.value), p.rest);
+}
+
+@needs(Decoder(F))
+Result(Parsed(Value, F), SerialError) dec_value_i128(F s) {
+    Parsed(Int(128), F) p = read_i128(s)?;
+    return parsed(VI128(p.value), p.rest);
+}
+
+@needs(Decoder(F))
+Result(Parsed(Value, F), SerialError) dec_value_u128(F s) {
+    Parsed(UInt(128), F) p = read_u128(s)?;
+    return parsed(VU128(p.value), p.rest);
+}
+
+@needs(Decoder(F))
+Result(Parsed(Value, F), SerialError) dec_value_float(F s) {
+    Parsed(Float, F) p = read_float(s)?;
+    return parsed(VFloat(p.value), p.rest);
+}
+
+@needs(Decoder(F))
+Result(Parsed(Value, F), SerialError) dec_value_str(F s) {
+    Parsed(Str, F) p = read_str(s)?;
+    return parsed(VStr(p.value), p.rest);
+}
+
+@needs(Decoder(F))
+Result(Parsed(Value, F), SerialError) dec_value_bytes(F s) {
+    Parsed(List(Int), F) p = read_bytes(s)?;
+    return parsed(VBytes(p.value), p.rest);
+}
+
+@needs(Decoder(F))
+Result(Parsed(Value, F), SerialError) dec_value_option(F s) {
+    Parsed(Bool, F) tag = read_option(s)?;
+    if (!tag.value) { return parsed(VNone, tag.rest); }
+    Parsed(Value, F) p = dec_value(tag.rest)?;
+    return parsed(VSome(p.value), p.rest);
+}
+
+@needs(Decoder(F))
+Result(Parsed(Value, F), SerialError) dec_value_seq(F s) {
+    Parsed(Int, F) n = read_seq_begin(s)?;
+    List(Value) none = [];
+    return dec_value_elems(n.rest, 0, none);
+}
+
+@needs(Decoder(F))
+Result(Parsed(Value, F), SerialError) dec_value_elems(F s, Int i, List(Value) acc) {
+    Parsed(Bool, F) more = read_seq_next(s)?;
+    if (!more.value) { return parsed(VSeq(acc), more.rest); }
+    Parsed(Value, F) p = at_index(dec_value(more.rest), i)?;
+    return dec_value_elems(p.rest, i + 1, acc.concat([p.value]));
+}
+
+@needs(Decoder(F))
+Result(Parsed(Value, F), SerialError) dec_value_map(F s) {
+    Parsed(Int, F) n = read_map_begin(s)?;
+    List(VEntry) none = [];
+    return dec_value_entries(n.rest, none);
+}
+
+@needs(Decoder(F))
+Result(Parsed(Value, F), SerialError) dec_value_entries(F s, List(VEntry) acc) {
+    Parsed(Bool, F) more = read_map_next(s)?;
+    if (!more.value) { return parsed(VMap(acc), more.rest); }
+    Parsed(Value, F) k = dec_value(more.rest)?;
+    F s1 = read_map_value(k.rest)?;
+    Parsed(Value, F) v = at_key(dec_value(s1), show_value(k.value))?;
+    return dec_value_entries(v.rest, acc.concat([ventry(k.value, v.value)]));
+}
+
+// A struct read without knowing its fields: every field is "unknown" and
+// comes back with its name.
+@needs(Decoder(F))
+Result(Parsed(Value, F), SerialError) dec_value_struct(F s, Str sname) {
+    List(Str) known = [];
+    F s1 = read_struct_begin(s, sname, known)?;
+    List(VField) none = [];
+    return dec_value_fields(s1, sname, known, none);
+}
+
+@needs(Decoder(F))
+Result(Parsed(Value, F), SerialError) dec_value_fields(F s, Str sname, List(Str) known, List(VField) acc) {
+    Parsed(FieldKey, F) k = read_field(s, known)?;
+    FieldKey key = k.value;
+    return match key {
+        KnownField(i) => Err(custom_error("a field matched an empty field list")),
+        UnknownField(name) => dec_value_field(k.rest, sname, known, name, acc),
+        EndOfFields => parsed(vstruct(sname, acc), k.rest)
+    };
+}
+
+@needs(Decoder(F))
+Result(Parsed(Value, F), SerialError) dec_value_field(F s, Str sname, List(Str) known, Str name, List(VField) acc) {
+    Parsed(Value, F) v = at_field(dec_value(s), name)?;
+    return dec_value_fields(v.rest, sname, known, acc.concat([vfield(name, v.value)]));
+}
+
+// A variant read without knowing its enum: the format must name it.
+@needs(Decoder(F))
+Result(Parsed(Value, F), SerialError) dec_value_variant(F s) {
+    List(Str) known = [];
+    Parsed(VariantName, F) v = read_variant_name(s)?;
+    VTag tag = vtag(v.value.enum_name, v.value.index, v.value.name);
+    if (!v.value.has_payload) {
+        F s1 = read_variant_unit(v.rest)?;
+        return parsed(VUnitVariant(tag), s1);
+    }
+    F s2 = read_variant_payload(v.rest)?;
+    Parsed(Value, F) p = at_variant(dec_value(s2), tag.name)?;
+    F s3 = read_variant_end(p.rest)?;
+    return parsed(vvariant(tag, p.value), s3);
+}
+
+// ─── The Value encoder: to_value ────────────────────────────────────
+//
+// Encoder(VEnc) builds a Value. Open compounds sit on a stack of frames;
+// each finished value is added to the frame on top (or becomes a result
+// when the stack is empty). Parts are kept newest-first in cons chains, so
+// adding one is O(1), and reversed once when the compound closes.
+
+/// Values in a cons chain, newest first.
+type VChain = VcNil | VcCons(VcCell);
+/// One cell of a VChain.
+type VcCell = { Value head; VChain tail; };
+/// Struct fields in a cons chain, newest first.
+type FChain = FcNil | FcCons(FcCell);
+/// One cell of an FChain.
+type FcCell = { VField head; FChain tail; };
+/// Map entries in a cons chain, newest first.
+type EChain = EcNil | EcCons(EcCell);
+/// One cell of an EChain.
+type EcCell = { VEntry head; EChain tail; };
+
+/// An open map: its entries so far and a key awaiting its value.
+type VeMap = { EChain entries; Value key; Bool has_key; };
+/// An open struct: its name, fields so far and the field name awaiting a value.
+type VeStruct = { Str name; FChain fields; Str pending; };
+/// Code points or bytes streamed so far, newest first.
+type IChain = IcNil | IcCons(IcCell);
+/// One cell of an IChain.
+type IcCell = { Int head; IChain tail; };
+/// An open compound the Value encoder is building.
+type VeFrame = VfSeq(VChain) | VfMap(VeMap) | VfStruct(VeStruct) | VfVariant(VTag) | VfVariantDone(VPayload) | VfSome | VfStr(IChain) | VfBytes(IChain);
+/// The Value encoder's stack of open frames, innermost on top.
+type VeStack = VsNil | VsCons(VsCell);
+/// One cell of a VeStack.
+type VsCell = { VeFrame top; VeStack below; };
+
+/// The encoder state: open frames and finished top-level values.
+type VEnc = { VeStack stack; VChain out; };
+
+/// A fresh Value encoder with nothing open and no results.
+pub VEnc value_encoder() { return VEnc {.stack = VsNil, .out = VcNil}; }
+
+VChain vc_push(VChain c, Value v) { return VcCons(VcCell {.head = v, .tail = c}); }
+FChain fc_push(FChain c, VField v) { return FcCons(FcCell {.head = v, .tail = c}); }
+EChain ec_push(EChain c, VEntry v) { return EcCons(EcCell {.head = v, .tail = c}); }
+VeStack vs_push(VeStack s, VeFrame f) { return VsCons(VsCell {.top = f, .below = s}); }
+IChain ic_push(IChain c, Int x) { return IcCons(IcCell {.head = x, .tail = c}); }
+
+// The chain's items, oldest first.
+List(Int) ic_list(IChain c, ListBuf(Int) acc) {
+    return match c { IcNil => acc.finish().reverse(), IcCons(cell) => ic_list(cell.tail, acc.push(cell.head)) };
+}
+
+Str cps_str(List(Int) cps, Int i, StrBuf acc) {
+    if (i >= cps.len()) { return acc.finish(); }
+    return cps_str(cps, i + 1, acc.push_char(cps[i]));
+}
+
+List(Value) vc_list(VChain c, ListBuf(Value) acc) {
+    return match c { VcNil => acc.finish().reverse(), VcCons(cell) => vc_list(cell.tail, acc.push(cell.head)) };
+}
+List(VField) fc_list(FChain c, ListBuf(VField) acc) {
+    return match c { FcNil => acc.finish().reverse(), FcCons(cell) => fc_list(cell.tail, acc.push(cell.head)) };
+}
+List(VEntry) ec_list(EChain c, ListBuf(VEntry) acc) {
+    return match c { EcNil => acc.finish().reverse(), EcCons(cell) => ec_list(cell.tail, acc.push(cell.head)) };
+}
+
+VEnc ve_with(VEnc e, VeStack st) { return VEnc {.stack = st, .out = e.out}; }
+
+Result(VEnc, SerialError) ve_open(VEnc e, VeFrame f) { return Ok(ve_with(e, vs_push(e.stack, f))); }
+
+// Add a finished value to the top frame (or the results).
+Result(VEnc, SerialError) ve_emit(VEnc e, Value v) {
+    VeStack st = e.stack;
+    return match st {
+        VsNil => Ok(VEnc {.stack = VsNil, .out = vc_push(e.out, v)}),
+        VsCons(cell) => ve_emit_into(e, cell, v)
+    };
+}
+
+Result(VEnc, SerialError) ve_emit_into(VEnc e, VsCell cell, Value v) {
+    VeFrame top = cell.top;
+    return match top {
+        VfSeq(ch) => Ok(ve_with(e, vs_push(cell.below, VfSeq(vc_push(ch, v))))),
+        VfMap(m) => Ok(ve_with(e, vs_push(cell.below, VfMap(ve_map_add(m, v))))),
+        VfStruct(sf) => Ok(ve_with(e, vs_push(cell.below, VfStruct(VeStruct {.name = sf.name, .fields = fc_push(sf.fields, vfield(sf.pending, v)), .pending = ""})))),
+        VfVariant(tag) => Ok(ve_with(e, vs_push(cell.below, VfVariantDone(VPayload {.tag = tag, .payload = v})))),
+        VfVariantDone(p) => Err(custom_error("a variant took a second payload")),
+        VfSome => ve_emit(ve_with(e, cell.below), VSome(v)),
+        VfStr(sc) => Err(custom_error("a value inside a streamed string")),
+        VfBytes(bc) => Err(custom_error("a value inside streamed bytes"))
+    };
+}
+
+VeMap ve_map_add(VeMap m, Value v) {
+    if (!m.has_key) { return VeMap {.entries = m.entries, .key = v, .has_key = true}; }
+    return VeMap {.entries = ec_push(m.entries, ventry(m.key, v)), .key = VUnit, .has_key = false};
+}
+
+// Close the top frame and emit what it built.
+// Each end verb closes only its own opener.
+Result(VEnc, SerialError) ve_close(VEnc e, Str what) {
+    VeStack st = e.stack;
+    return match st {
+        VsNil => Err(custom_error(what + " with nothing open")),
+        VsCons(cell) => ve_close_checked(e, cell, what)
+    };
+}
+
+Result(VEnc, SerialError) ve_close_checked(VEnc e, VsCell cell, Str what) {
+    Str closer = ve_closer(cell.top);
+    if (closer != "" && closer != what) { return Err(custom_error(what + ", but the open value needs " + closer)); }
+    return ve_close_frame(ve_with(e, cell.below), cell.top, what);
+}
+
+// The end verb a frame needs ("" for an option, which its payload closes).
+Str ve_closer(VeFrame f) {
+    return match f {
+        VfSeq(ch) => "write_seq_end", VfMap(m) => "write_map_end", VfStruct(sf) => "write_struct_end",
+        VfVariant(t) => "write_variant_end", VfVariantDone(p) => "write_variant_end", VfSome => "",
+        VfStr(sc) => "write_str_end", VfBytes(bc) => "write_bytes_end"
+    };
+}
+
+Result(VEnc, SerialError) ve_close_frame(VEnc e, VeFrame f, Str what) {
+    ListBuf(Value) vb = ListBuf();
+    ListBuf(VField) fb = ListBuf();
+    ListBuf(VEntry) eb = ListBuf();
+    return match f {
+        VfSeq(ch) => ve_emit(ve_drop_bufs(e, fb, eb), VSeq(vc_list(ch, vb))),
+        VfMap(m) => ve_emit(ve_drop_bufs2(e, vb, fb), VMap(ec_list(m.entries, eb))),
+        VfStruct(sf) => ve_emit(ve_drop_bufs3(e, vb, eb), vstruct(sf.name, fc_list(sf.fields, fb))),
+        VfVariant(tag) => ve_fail(e, vb, fb, eb, what + ": the variant has no payload"),
+        VfVariantDone(p) => ve_emit(ve_drop_all(e, vb, fb, eb), VVariant(p)),
+        VfSome => ve_fail(e, vb, fb, eb, what + ": the option has no payload"),
+        VfStr(sc) => ve_emit(ve_drop_all(e, vb, fb, eb), VStr(cps_str(ic_list(sc, ListBuf()), 0, StrBuf()))),
+        VfBytes(bc) => ve_emit(ve_drop_all(e, vb, fb, eb), VBytes(ic_list(bc, ListBuf())))
+    };
+}
+
+// Unused builders still have to be consumed on every path.
+VEnc ve_drop_bufs(VEnc e, ListBuf(VField) fb, ListBuf(VEntry) eb) { List(VField) a = fb.finish(); List(VEntry) b = eb.finish(); return e; }
+VEnc ve_drop_bufs2(VEnc e, ListBuf(Value) vb, ListBuf(VField) fb) { List(Value) a = vb.finish(); List(VField) b = fb.finish(); return e; }
+VEnc ve_drop_bufs3(VEnc e, ListBuf(Value) vb, ListBuf(VEntry) eb) { List(Value) a = vb.finish(); List(VEntry) b = eb.finish(); return e; }
+VEnc ve_drop_all(VEnc e, ListBuf(Value) vb, ListBuf(VField) fb, ListBuf(VEntry) eb) {
+    List(Value) a = vb.finish();
+    List(VField) b = fb.finish();
+    List(VEntry) c = eb.finish();
+    return e;
+}
+Result(VEnc, SerialError) ve_fail(VEnc e, ListBuf(Value) vb, ListBuf(VField) fb, ListBuf(VEntry) eb, Str msg) {
+    VEnc e2 = ve_drop_all(e, vb, fb, eb);
+    return Err(custom_error(msg));
+}
+
+Result(VEnc, SerialError) ve_unit(VEnc e) { return ve_emit(e, VUnit); }
+Result(VEnc, SerialError) ve_bool(VEnc e, Bool v) { return ve_emit(e, VBool(v)); }
+Result(VEnc, SerialError) ve_int(VEnc e, Int v) { return ve_emit(e, VInt(v)); }
+Result(VEnc, SerialError) ve_uint(VEnc e, UInt(64) v) { return ve_emit(e, VUInt(v)); }
+Result(VEnc, SerialError) ve_i128(VEnc e, Int(128) v) { return ve_emit(e, VI128(v)); }
+Result(VEnc, SerialError) ve_u128(VEnc e, UInt(128) v) { return ve_emit(e, VU128(v)); }
+Result(VEnc, SerialError) ve_float(VEnc e, Float v) { return ve_emit(e, VFloat(v)); }
+Result(VEnc, SerialError) ve_str(VEnc e, Str v) { return ve_emit(e, VStr(v)); }
+Result(VEnc, SerialError) ve_bytes(VEnc e, List(Int) v) { return ve_emit(e, VBytes(v)); }
+Result(VEnc, SerialError) ve_none(VEnc e) { return ve_emit(e, VNone); }
+Result(VEnc, SerialError) ve_str_begin(VEnc e, Int chars, Int bytes) { return ve_open(e, VfStr(IcNil)); }
+Result(VEnc, SerialError) ve_str_char(VEnc e, Int cp) { return ve_stream_add(e, cp, true); }
+Result(VEnc, SerialError) ve_str_end(VEnc e) { return ve_close(e, "write_str_end"); }
+Result(VEnc, SerialError) ve_bytes_begin(VEnc e, Int len) { return ve_open(e, VfBytes(IcNil)); }
+Result(VEnc, SerialError) ve_byte(VEnc e, Int b) { return ve_stream_add(e, b, false); }
+Result(VEnc, SerialError) ve_bytes_end(VEnc e) { return ve_close(e, "write_bytes_end"); }
+
+// A code point or byte into the open streamed string or bytes.
+Result(VEnc, SerialError) ve_stream_add(VEnc e, Int x, Bool str) {
+    VeStack st = e.stack;
+    return match st {
+        VsNil => Err(custom_error(if (str) { "write_str_char outside a string" } else { "write_byte outside bytes" })),
+        VsCons(cell) => ve_stream_into(e, cell, x, str)
+    };
+}
+
+Result(VEnc, SerialError) ve_stream_into(VEnc e, VsCell cell, Int x, Bool str) {
+    VeFrame top = cell.top;
+    return match top {
+        VfStr(sc) => if (str) { Ok(ve_with(e, vs_push(cell.below, VfStr(ic_push(sc, x))))) } else { Err(custom_error("write_byte inside a string")) },
+        VfBytes(bc) => if (str) { Err(custom_error("write_str_char inside bytes")) } else { Ok(ve_with(e, vs_push(cell.below, VfBytes(ic_push(bc, x))))) },
+        _ => Err(custom_error(if (str) { "write_str_char outside a string" } else { "write_byte outside bytes" }))
+    };
+}
+Result(VEnc, SerialError) ve_some(VEnc e) { return ve_open(e, VfSome); }
+Result(VEnc, SerialError) ve_seq_begin(VEnc e, Int len) { return ve_open(e, VfSeq(VcNil)); }
+Result(VEnc, SerialError) ve_pass(VEnc e) { return Ok(e); }
+Result(VEnc, SerialError) ve_seq_end(VEnc e) { return ve_close(e, "write_seq_end"); }
+Result(VEnc, SerialError) ve_map_begin(VEnc e, Int len) { return ve_open(e, VfMap(VeMap {.entries = EcNil, .key = VUnit, .has_key = false})); }
+Result(VEnc, SerialError) ve_map_end(VEnc e) { return ve_close(e, "write_map_end"); }
+Result(VEnc, SerialError) ve_struct_begin(VEnc e, Str name, Int len) { return ve_open(e, VfStruct(VeStruct {.name = name, .fields = FcNil, .pending = ""})); }
+
+Result(VEnc, SerialError) ve_field(VEnc e, Str key) {
+    VeStack st = e.stack;
+    return match st {
+        VsNil => Err(custom_error("write_field outside a struct")),
+        VsCons(cell) => ve_field_in(e, cell, key)
+    };
+}
+
+Result(VEnc, SerialError) ve_field_in(VEnc e, VsCell cell, Str key) {
+    VeFrame top = cell.top;
+    return match top {
+        VfStruct(sf) => Ok(ve_with(e, vs_push(cell.below, VfStruct(VeStruct {.name = sf.name, .fields = sf.fields, .pending = key})))),
+        _ => Err(custom_error("write_field outside a struct"))
+    };
+}
+
+Result(VEnc, SerialError) ve_struct_end(VEnc e) { return ve_close(e, "write_struct_end"); }
+Result(VEnc, SerialError) ve_unit_variant(VEnc e, Str enum_name, Int index, Str variant) { return ve_emit(e, VUnitVariant(vtag(enum_name, index, variant))); }
+Result(VEnc, SerialError) ve_variant_begin(VEnc e, Str enum_name, Int index, Str variant) { return ve_open(e, VfVariant(vtag(enum_name, index, variant))); }
+Result(VEnc, SerialError) ve_variant_end(VEnc e) { return ve_close(e, "write_variant_end"); }
+Bool ve_human(VEnc e) { return true; }
+
+Encoder(VEnc) = {
+    .write_unit = ve_unit, .write_bool = ve_bool, .write_int = ve_int, .write_uint = ve_uint,
+    .write_i128 = ve_i128, .write_u128 = ve_u128,
+    .write_float = ve_float, .write_str = ve_str, .write_bytes = ve_bytes, .write_none = ve_none,
+    .write_str_begin = ve_str_begin, .write_str_char = ve_str_char, .write_str_end = ve_str_end,
+    .write_bytes_begin = ve_bytes_begin, .write_byte = ve_byte, .write_bytes_end = ve_bytes_end,
+    .write_some = ve_some, .write_seq_begin = ve_seq_begin, .write_seq_elem = ve_pass, .write_seq_end = ve_seq_end,
+    .write_map_begin = ve_map_begin, .write_map_key = ve_pass, .write_map_value = ve_pass, .write_map_end = ve_map_end,
+    .write_struct_begin = ve_struct_begin, .write_field = ve_field, .write_struct_end = ve_struct_end,
+    .write_unit_variant = ve_unit_variant, .write_variant_begin = ve_variant_begin, .write_variant_end = ve_variant_end,
+    .encodes_human_readable = ve_human
+};
+
+/// Any encodable value as a Value tree.
+/// Errors when the encoding leaves a compound open or yields other than one value.
+@needs(Encode(T, VEnc))
+pub Result(Value, SerialError) to_value(T x) {
+    VEnc e = encode(x, value_encoder())?;
+    return ve_result(e);
+}
+
+Result(Value, SerialError) ve_result(VEnc e) {
+    VeStack st = e.stack;
+    Bool open = match st { VsNil => false, _ => true };
+    if (open) { return Err(custom_error("encoding ended with a compound still open")); }
+    List(Value) vs = vc_list(e.out, ListBuf());
+    if (vs.len() != 1) { return Err(custom_error(f"encoding produced {vs.len()} values, expected 1")); }
+    return Ok(vs[0]);
+}
+
+// ─── The Value decoder: from_value ──────────────────────────────────
+//
+// Decoder(VDec) reads a Value. The state is a stack of tokens: values
+// still to read, plus end markers pushed when a compound is opened (its
+// parts go on the stack above its end marker, first part on top).
+
+/// A string being pulled code point by code point, and where it is.
+type StrAt = { Str s; Int i; };
+/// Bytes being pulled byte by byte, and where they are.
+type BytesAt = { List(Int) bs; Int i; };
+/// A Value decoder token: a value still to read, or a compound's marker.
+type VdTok = TkVal(Value) | TkSeqEnd | TkMapEnd | TkStructEnd | TkName(Str) | TkUnitMark | TkPayloadMark | TkVariantEnd | TkStrAt(StrAt) | TkBytesAt(BytesAt);
+/// The Value decoder's token stack, next token on top.
+type VdStack = TsNil | TsCons(TsCell);
+/// One cell of a VdStack.
+type TsCell = { VdTok top; VdStack below; };
+
+/// The decoder state: the tokens still to read.
+type VDec = { VdStack stack; };
+
+/// A Value decoder that reads `v`.
+pub VDec value_decoder(Value v) { return VDec {.stack = ts_push(TsNil, TkVal(v))}; }
+
+VdStack ts_push(VdStack s, VdTok t) { return TsCons(TsCell {.top = t, .below = s}); }
+
+VDec vd_push(VDec d, VdTok t) { return VDec {.stack = ts_push(d.stack, t)}; }
+
+Str tok_kind(VdTok t) {
+    return match t {
+        TkVal(v) => value_kind(v), TkSeqEnd => "the end of a sequence", TkMapEnd => "the end of a map",
+        TkStructEnd => "the end of a struct", TkName(n) => "a field name", TkUnitMark => "a unit variant",
+        TkPayloadMark => "a variant payload", TkVariantEnd => "the end of a variant",
+        TkStrAt(sa) => "the rest of a string", TkBytesAt(ba) => "the rest of some bytes"
+    };
+}
+
+/// The top token and the state below it.
+type VdPop = { VdTok tok; VDec rest; };
+
+Result(VdPop, SerialError) vd_pop(VDec d, Str expected) {
+    VdStack st = d.stack;
+    return match st {
+        TsNil => Err(eof_error(expected)),
+        TsCons(cell) => Ok(VdPop {.tok = cell.top, .rest = VDec {.stack = cell.below}})
+    };
+}
+
+// The next value token, or an invalid_type error naming what was there.
+Result(Parsed(Value, VDec), SerialError) vd_value(VDec d, Str expected) {
+    VdPop p = vd_pop(d, expected)?;
+    VdTok t = p.tok;
+    return match t {
+        TkVal(v) => parsed(v, p.rest),
+        _ => Err(invalid_type(expected, tok_kind(t)))
+    };
+}
+
+// Consume one marker token.
+Result(VDec, SerialError) vd_mark(VDec d, VdTok want, Str expected) {
+    VdPop p = vd_pop(d, expected)?;
+    Bool ok = tok_same(p.tok, want);
+    if (!ok) { return Err(invalid_type(expected, tok_kind(p.tok))); }
+    return Ok(p.rest);
+}
+
+Bool tok_same(VdTok a, VdTok b) { return tok_rank(a) == tok_rank(b); }
+
+Int tok_rank(VdTok t) {
+    return match t {
+        TkVal(v) => 0, TkSeqEnd => 1, TkMapEnd => 2, TkStructEnd => 3, TkName(n) => 4,
+        TkUnitMark => 5, TkPayloadMark => 6, TkVariantEnd => 7, TkStrAt(sa) => 8, TkBytesAt(ba) => 9
+    };
+}
+
+// Is the top token this marker? (without consuming it)
+Bool vd_at(VDec d, VdTok want) {
+    VdStack st = d.stack;
+    return match st { TsNil => false, TsCons(cell) => tok_same(cell.top, want) };
+}
+
+Result(VDec, SerialError) vd_unit(VDec d) {
+    Parsed(Value, VDec) p = vd_value(d, "unit")?;
+    Value v = p.value;
+    return match v { VUnit => Ok(p.rest), VNone => Ok(p.rest), _ => Err(invalid_type("unit", value_kind(v))) };
+}
+
+Result(Parsed(Bool, VDec), SerialError) vd_bool(VDec d) {
+    Parsed(Value, VDec) p = vd_value(d, "a boolean")?;
+    Value v = p.value;
+    return match v { VBool(b) => parsed(b, p.rest), _ => Err(invalid_type("a boolean", value_kind(v))) };
+}
+
+// Integers read across width and signedness when the value fits.
+Result(Parsed(Int, VDec), SerialError) vd_int(VDec d) {
+    Parsed(Value, VDec) p = vd_value(d, "an integer")?;
+    Value v = p.value;
+    if (Some(w) = as_wide_int(v)) {
+        if (w < i128(-9223372036854775808) || w > i128(9223372036854775807)) { return Err(invalid_value(f"{w}", "an Int")); }
+        return parsed((Int)w, p.rest);
+    }
+    return Err(vd_int_error(v, "an integer"));
+}
+
+// Why an integer read failed: out of range, or not an integer at all.
+SerialError vd_int_error(Value v, Str expected) {
+    if (Some(u) = as_wide_uint(v)) { return invalid_value(f"{u}", expected); }
+    return invalid_type(expected, value_kind(v));
+}
+
+Result(Parsed(UInt(64), VDec), SerialError) vd_uint(VDec d) {
+    Parsed(Value, VDec) p = vd_value(d, "an unsigned integer")?;
+    Value v = p.value;
+    if (Some(u) = as_wide_uint(v)) {
+        if (u > u128(18446744073709551615)) { return Err(invalid_value(f"{u}", "a UInt")); }
+        return parsed((UInt(64))u, p.rest);
+    }
+    if (Some(neg) = as_wide_int(v)) { return Err(invalid_value(f"{neg}", "a non-negative integer")); }
+    return Err(invalid_type("an unsigned integer", value_kind(v)));
+}
+
+Result(Parsed(Int(128), VDec), SerialError) vd_i128(VDec d) {
+    Parsed(Value, VDec) p = vd_value(d, "a 128-bit integer")?;
+    Value v = p.value;
+    if (Some(w) = as_wide_int(v)) { return parsed(w, p.rest); }
+    return Err(vd_int_error(v, "an Int(128)"));
+}
+
+Result(Parsed(UInt(128), VDec), SerialError) vd_u128(VDec d) {
+    Parsed(Value, VDec) p = vd_value(d, "an unsigned 128-bit integer")?;
+    Value v = p.value;
+    if (Some(u) = as_wide_uint(v)) { return parsed(u, p.rest); }
+    if (Some(neg) = as_wide_int(v)) { return Err(invalid_value(f"{neg}", "a non-negative integer")); }
+    return Err(invalid_type("an unsigned 128-bit integer", value_kind(v)));
+}
+
+Result(Parsed(Float, VDec), SerialError) vd_float(VDec d) {
+    Parsed(Value, VDec) p = vd_value(d, "a float")?;
+    Value v = p.value;
+    return match v {
+        VFloat(f) => parsed(f, p.rest),
+        VInt(i) => parsed((Float)i, p.rest),
+        VUInt(u) => parsed((Float)u, p.rest),
+        _ => Err(invalid_type("a float", value_kind(v)))
+    };
+}
+
+Result(Parsed(Str, VDec), SerialError) vd_str(VDec d) {
+    Parsed(Value, VDec) p = vd_value(d, "a string")?;
+    Value v = p.value;
+    return match v { VStr(s) => parsed(s, p.rest), _ => Err(invalid_type("a string", value_kind(v))) };
+}
+
+Result(Parsed(List(Int), VDec), SerialError) vd_bytes(VDec d) {
+    Parsed(Value, VDec) p = vd_value(d, "bytes")?;
+    Value v = p.value;
+    return match v {
+        VBytes(bs) => parsed(bs, p.rest),
+        VSeq(xs) => vd_bytes_from_seq(xs, 0, ListBuf(), p.rest),
+        _ => Err(invalid_type("bytes", value_kind(v)))
+    };
+}
+
+Result(Parsed(List(Int), VDec), SerialError) vd_bytes_from_seq(List(Value) xs, Int i, ListBuf(Int) acc, VDec rest) {
+    if (i >= xs.len()) { return parsed(acc.finish(), rest); }
+    Value x = xs[i];
+    Int(128) wide = as_wide_int(x) else { i128(-1) };
+    Int b = if (wide >= i128(0) && wide <= i128(255)) { (Int)wide } else { -1 };
+    if (b < 0 || b > 255) {
+        List(Int) dropped = acc.finish();
+        return Err(invalid_type("a byte", value_kind(x)));
+    }
+    return vd_bytes_from_seq(xs, i + 1, acc.push(b), rest);
+}
+
+// Pulling a string: begin leaves a cursor on top, each next reads the
+// code point there and moves on, -1 (and the cursor gone) at the end.
+Result(Parsed(Int, VDec), SerialError) vd_str_begin(VDec d) {
+    Parsed(Str, VDec) p = vd_str(d)?;
+    return parsed(str_len(p.value), vd_push(p.rest, TkStrAt(StrAt {.s = p.value, .i = 0})));
+}
+
+Result(Parsed(Int, VDec), SerialError) vd_str_next(VDec d) {
+    VdPop p = vd_pop(d, "the rest of a string")?;
+    VdTok t = p.tok;
+    return match t {
+        TkStrAt(sa) => if (sa.i < str_len(sa.s)) { parsed(str_char_at(sa.s, sa.i), vd_push(p.rest, TkStrAt(StrAt {.s = sa.s, .i = sa.i + 1}))) } else { parsed(-1, p.rest) },
+        _ => Err(invalid_type("the rest of a string", tok_kind(t)))
+    };
+}
+
+Result(Parsed(Int, VDec), SerialError) vd_bytes_begin(VDec d) {
+    Parsed(List(Int), VDec) p = vd_bytes(d)?;
+    return parsed(p.value.len(), vd_push(p.rest, TkBytesAt(BytesAt {.bs = p.value, .i = 0})));
+}
+
+Result(Parsed(Int, VDec), SerialError) vd_bytes_next(VDec d) {
+    VdPop p = vd_pop(d, "the rest of some bytes")?;
+    VdTok t = p.tok;
+    return match t {
+        TkBytesAt(ba) => if (ba.i < ba.bs.len()) { parsed(ba.bs[ba.i], vd_push(p.rest, TkBytesAt(BytesAt {.bs = ba.bs, .i = ba.i + 1}))) } else { parsed(-1, p.rest) },
+        _ => Err(invalid_type("the rest of some bytes", tok_kind(t)))
+    };
+}
+
+// None and unit read as absent; Some(x) as present with x next; any other
+// value as present and itself next (formats without an option wrapper).
+Result(Parsed(Bool, VDec), SerialError) vd_option(VDec d) {
+    Parsed(Value, VDec) p = vd_value(d, "an option")?;
+    Value v = p.value;
+    return match v {
+        VNone => parsed(false, p.rest),
+        VUnit => parsed(false, p.rest),
+        VSome(x) => parsed(true, vd_push(p.rest, TkVal(x))),
+        _ => parsed(true, vd_push(p.rest, TkVal(v)))
+    };
+}
+
+VDec vd_push_values(VDec d, List(Value) xs, Int i) {
+    if (i < 0) { return d; }
+    return vd_push_values(vd_push(d, TkVal(xs[i])), xs, i - 1);
+}
+
+VDec vd_push_entries(VDec d, List(VEntry) es, Int i) {
+    if (i < 0) { return d; }
+    return vd_push_entries(vd_push(vd_push(d, TkVal(es[i].val)), TkVal(es[i].key)), es, i - 1);
+}
+
+VDec vd_push_fields(VDec d, List(VField) fs, Int i) {
+    if (i < 0) { return d; }
+    return vd_push_fields(vd_push(vd_push(d, TkVal(fs[i].val)), TkName(fs[i].name)), fs, i - 1);
+}
+
+// String-keyed map entries read as struct fields.
+Result(VDec, SerialError) vd_push_map_fields(VDec d, List(VEntry) es, Int i) {
+    if (i < 0) { return Ok(d); }
+    if (Some(k) = as_str(es[i].key)) {
+        return vd_push_map_fields(vd_push(vd_push(d, TkVal(es[i].val)), TkName(k)), es, i - 1);
+    }
+    return Err(invalid_type("a string field name", value_kind(es[i].key)));
+}
+
+Result(Parsed(Int, VDec), SerialError) vd_seq_begin(VDec d) {
+    Parsed(Value, VDec) p = vd_value(d, "a sequence")?;
+    Value v = p.value;
+    return match v {
+        VSeq(xs) => parsed(xs.len(), vd_push_values(vd_push(p.rest, TkSeqEnd), xs, xs.len() - 1)),
+        _ => Err(invalid_type("a sequence", value_kind(v)))
+    };
+}
+
+Result(Parsed(Bool, VDec), SerialError) vd_seq_next(VDec d) {
+    if (vd_at(d, TkSeqEnd)) {
+        VDec d1 = vd_mark(d, TkSeqEnd, "the end of a sequence")?;
+        return parsed(false, d1);
+    }
+    return parsed(true, d);
+}
+
+Result(Parsed(Int, VDec), SerialError) vd_map_begin(VDec d) {
+    Parsed(Value, VDec) p = vd_value(d, "a map")?;
+    Value v = p.value;
+    return match v {
+        VMap(es) => parsed(es.len(), vd_push_entries(vd_push(p.rest, TkMapEnd), es, es.len() - 1)),
+        VStruct(r) => parsed(r.fields.len(), vd_push_entries(vd_push(p.rest, TkMapEnd), fields_as_entries(r.fields, 0, ListBuf()), r.fields.len() - 1)),
+        _ => Err(invalid_type("a map", value_kind(v)))
+    };
+}
+
+List(VEntry) fields_as_entries(List(VField) fs, Int i, ListBuf(VEntry) acc) {
+    if (i >= fs.len()) { return acc.finish(); }
+    return fields_as_entries(fs, i + 1, acc.push(ventry(VStr(fs[i].name), fs[i].val)));
+}
+
+Result(Parsed(Bool, VDec), SerialError) vd_map_next(VDec d) {
+    if (vd_at(d, TkMapEnd)) {
+        VDec d1 = vd_mark(d, TkMapEnd, "the end of a map")?;
+        return parsed(false, d1);
+    }
+    return parsed(true, d);
+}
+
+Result(VDec, SerialError) vd_pass(VDec d) { return Ok(d); }
+
+Result(VDec, SerialError) vd_struct_begin(VDec d, Str name, List(Str) fields) {
+    Parsed(Value, VDec) p = vd_value(d, "a struct")?;
+    Value v = p.value;
+    return match v {
+        VStruct(r) => Ok(vd_push_fields(vd_push(p.rest, TkStructEnd), r.fields, r.fields.len() - 1)),
+        VMap(es) => vd_push_map_fields(vd_push(p.rest, TkStructEnd), es, es.len() - 1),
+        _ => Err(invalid_type("struct " + name, value_kind(v)))
+    };
+}
+
+Result(Parsed(FieldKey, VDec), SerialError) vd_field(VDec d, List(Str) fields) {
+    VdPop p = vd_pop(d, "a field or the end of a struct")?;
+    VdTok t = p.tok;
+    return match t {
+        TkName(n) => parsed(field_key(fields, n), p.rest),
+        TkStructEnd => parsed(EndOfFields, p.rest),
+        _ => Err(invalid_type("a field", tok_kind(t)))
+    };
+}
+
+FieldKey field_key(List(Str) fields, Str n) {
+    Int i = name_index(fields, n);
+    return if (i >= 0) { KnownField(i) } else { UnknownField(n) };
+}
+
+// A variant is a tagged Value, a string (unit variant by name) or a map
+// with one string key (newtype variant, as self-describing formats write it).
+Result(Parsed(VariantName, VDec), SerialError) vd_variant_name(VDec d) {
+    Parsed(Value, VDec) p = vd_value(d, "an enum variant")?;
+    Value v = p.value;
+    return match v {
+        VUnitVariant(t) => parsed(variant_name(t.enum_name, t.index, t.name, false), vd_push(p.rest, TkUnitMark)),
+        VStr(s) => parsed(variant_name("", -1, s, false), vd_push(p.rest, TkUnitMark)),
+        VVariant(vp) => parsed(variant_name(vp.tag.enum_name, vp.tag.index, vp.tag.name, true), vd_push(vd_push(vd_push(p.rest, TkVariantEnd), TkVal(vp.payload)), TkPayloadMark)),
+        VMap(es) => vd_variant_map(es, p.rest),
+        _ => Err(invalid_type("an enum variant", value_kind(v)))
+    };
+}
+
+Result(Parsed(VariantName, VDec), SerialError) vd_variant_map(List(VEntry) es, VDec rest) {
+    if (es.len() != 1) { return Err(invalid_length(es.len(), "a map with one entry (a variant)")); }
+    if (Some(k) = as_str(es[0].key)) {
+        return parsed(variant_name("", -1, k, true), vd_push(vd_push(vd_push(rest, TkVariantEnd), TkVal(es[0].val)), TkPayloadMark));
+    }
+    return Err(invalid_type("a variant name", value_kind(es[0].key)));
+}
+
+Result(Parsed(Int, VDec), SerialError) vd_variant(VDec d, Str enum_name, List(Str) variants) {
+    Parsed(VariantName, VDec) p = vd_variant_name(d)?;
+    Int i = name_index(variants, p.value.name);
+    if (i < 0) { return Err(unknown_variant(p.value.name, variants)); }
+    return parsed(i, p.rest);
+}
+
+Result(VDec, SerialError) vd_variant_unit(VDec d) { return vd_mark(d, TkUnitMark, "a unit variant"); }
+Result(VDec, SerialError) vd_variant_payload(VDec d) { return vd_mark(d, TkPayloadMark, "a variant with a payload"); }
+Result(VDec, SerialError) vd_variant_end(VDec d) { return vd_mark(d, TkVariantEnd, "the end of a variant"); }
+
+Result(VDec, SerialError) vd_skip(VDec d) {
+    Parsed(Value, VDec) p = vd_value(d, "a value")?;
+    return Ok(p.rest);
+}
+
+Result(Parsed(Peek, VDec), SerialError) vd_peek(VDec d) {
+    VdStack st = d.stack;
+    return match st {
+        TsNil => Err(eof_error("a value")),
+        TsCons(cell) => vd_peek_tok(cell.top, d)
+    };
+}
+
+Result(Parsed(Peek, VDec), SerialError) vd_peek_tok(VdTok t, VDec d) {
+    return match t {
+        TkVal(v) => parsed(peek_of(v), d),
+        _ => Err(invalid_type("a value", tok_kind(t)))
+    };
+}
+
+Peek peek_of(Value v) {
+    return match v {
+        VUnit => PeekUnit, VBool(b) => PeekBool, VInt(i) => PeekInt, VUInt(u) => PeekUInt, VI128(w) => PeekI128,
+        VU128(uw) => PeekU128, VFloat(f) => PeekFloat,
+        VStr(s) => PeekStr, VBytes(bs) => PeekBytes, VNone => PeekNone, VSome(x) => PeekSome, VSeq(xs) => PeekSeq,
+        VMap(es) => PeekMap, VStruct(r) => PeekStruct(r.name), VUnitVariant(t) => PeekVariant, VVariant(p) => PeekVariant
+    };
+}
+
+Result(VDec, SerialError) vd_end(VDec d) {
+    VdStack st = d.stack;
+    return match st { TsNil => Ok(d), TsCons(cell) => Err(trailing_input(tok_kind(cell.top))) };
+}
+
+Bool vd_human(VDec d) { return true; }
+
+Decoder(VDec) = {
+    .read_unit = vd_unit, .read_bool = vd_bool, .read_int = vd_int, .read_uint = vd_uint,
+    .read_i128 = vd_i128, .read_u128 = vd_u128,
+    .read_float = vd_float, .read_str = vd_str, .read_bytes = vd_bytes, .read_option = vd_option,
+    .read_str_begin = vd_str_begin, .read_str_next = vd_str_next, .read_bytes_begin = vd_bytes_begin, .read_bytes_next = vd_bytes_next,
+    .read_seq_begin = vd_seq_begin, .read_seq_next = vd_seq_next, .read_map_begin = vd_map_begin,
+    .read_map_next = vd_map_next, .read_map_value = vd_pass, .read_struct_begin = vd_struct_begin,
+    .read_field = vd_field, .read_variant = vd_variant, .read_variant_name = vd_variant_name,
+    .read_variant_unit = vd_variant_unit, .read_variant_payload = vd_variant_payload,
+    .read_variant_end = vd_variant_end, .read_skip = vd_skip, .read_peek = vd_peek, .read_end = vd_end,
+    .decodes_human_readable = vd_human
+};
+
+/// Any decodable type read back out of a Value.
+@needs(Decode(T, VDec))
+pub Result(T, SerialError) from_value(Value v) { return decode_value(value_decoder(v)); }
+
+// ─── Helpers for generated code: flatten and enum representations ───
+//
+// These go through a Value, so decoding with them needs a self-describing
+// format (as serde's flatten, internally tagged, adjacently tagged and
+// untagged representations do).
+
+/// The fields of a struct (or string-keyed map) Value, for flattening.
+/// Inlines a flattened field into its parent; unit gives no fields, a
+/// non-string key or any other value is an error.
+pub Result(List(VField), SerialError) flatten_fields(Value v) {
+    return match v {
+        VStruct(r) => Ok(r.fields),
+        VMap(es) => entries_as_fields(es, 0, ListBuf()),
+        VUnit => Ok(no_fields()),
+        _ => Err(invalid_type("a struct or map to flatten", value_kind(v)))
+    };
+}
+
+List(VField) no_fields() {
+    List(VField) none = [];
+    return none;
+}
+
+Result(List(VField), SerialError) entries_as_fields(List(VEntry) es, Int i, ListBuf(VField) acc) {
+    if (i >= es.len()) { return Ok(acc.finish()); }
+    if (Some(k) = as_str(es[i].key)) { return entries_as_fields(es, i + 1, acc.push(vfield(k, es[i].val))); }
+    List(VField) dropped = acc.finish();
+    return Err(invalid_type("a string key", value_kind(es[i].key)));
+}
+
+/// A struct Value of the fields of `v` whose names are not in `names`.
+/// What is left for a flattened field once the parent took its own.
+pub Value without_fields(Value v, List(Str) names) {
+    List(VField) fs = flatten_fields(v) else { no_fields() };
+    return vstruct("", keep_fields(fs, names, 0, ListBuf()));
+}
+
+List(VField) keep_fields(List(VField) fs, List(Str) names, Int i, ListBuf(VField) acc) {
+    if (i >= fs.len()) { return acc.finish(); }
+    Bool known = name_index(names, fs[i].name) >= 0;
+    return keep_fields(fs, names, i + 1, if (known) { acc } else { acc.push(fs[i]) });
+}
+
+/// The value of the first of `names` (a field and its aliases) present in `v`.
+pub Option(Value) value_field_in(Value v, List(Str) names) { return value_field_in_at(v, names, 0); }
+
+Option(Value) value_field_in_at(Value v, List(Str) names, Int i) {
+    if (i >= names.len()) { return None; }
+    if (Some(f) = value_field(v, names[i])) { return Some(f); }
+    return value_field_in_at(v, names, i + 1);
+}
+
+/// A required field of `v` under its name or an alias, decoded.
+/// Like get_field over `names`; errors name the first.
+@needs(Decode(T, VDec))
+pub Result(T, SerialError) get_field_in(Value v, List(Str) names) {
+    if (Some(f) = value_field_in(v, names)) {
+        Result(T, SerialError) r = from_value(f);
+        return at_field(r, names[0]);
+    }
+    return Err(missing_field(names[0]));
+}
+
+/// An optional field of `v` under its name or an alias, decoded, or `fallback`.
+/// Like get_field_or over `names`; errors name the first.
+@needs(Decode(T, VDec))
+pub Result(T, SerialError) get_field_in_or(Value v, List(Str) names, T fallback) {
+    if (Some(f) = value_field_in(v, names)) {
+        Result(T, SerialError) r = from_value(f);
+        return at_field(r, names[0]);
+    }
+    return Ok(fallback);
+}
+
+/// Whether `v` is unit or none (a payload-less variant).
+pub Bool is_unit_value(Value v) { return match v { VUnit => true, VNone => true, _ => false }; }
+
+/// Writes a variant internally tagged: {tag: "Variant", ...payload fields}.
+/// A unit variant is the tag alone; a payload must be a struct or
+/// string-keyed map.
+@needs(Encoder(F))
+pub Result(F, SerialError) write_internally_tagged(F s, Str enum_name, Str tag, Str variant, Value payload) {
+    List(VField) fs = if (is_unit_value(payload)) { no_fields() } else { at_variant(flatten_fields(payload), variant)? };
+    List(VField) head = [vfield(tag, VStr(variant))];
+    return enc_value(vstruct(enum_name, head.concat(fs)), s);
+}
+
+/// The variant name a tag field holds, and the value without it.
+type TagSplit = { Str variant; Value rest; };
+
+/// Splits an internally tagged Value into its variant name and the other fields.
+/// Errors when the `tag` field is missing or not a string.
+pub Result(TagSplit, SerialError) split_internal_tag(Value v, Str tag) {
+    if (Some(t) = value_field(v, tag)) {
+        if (Some(name) = as_str(t)) {
+            List(Str) drop = [tag];
+            return Ok(TagSplit {.variant = name, .rest = without_fields(v, drop)});
+        }
+        return Err(invalid_type("a string tag `" + tag + "`", value_kind(t)));
+    }
+    return Err(missing_field(tag));
+}
+
+/// Writes a variant adjacently tagged: {tag: "Variant", content: payload}.
+/// A unit variant has no content field (write_adjacent_unit).
+@needs(Encoder(F), Encode(T, F))
+pub Result(F, SerialError) write_adjacent(F s, Str enum_name, Str tag, Str content, Str variant, T payload) {
+    F s1 = write_struct_begin(s, enum_name, 2)?;
+    F s2 = write_named(s1, tag, variant)?;
+    F s3 = write_named(s2, content, payload)?;
+    return write_struct_end(s3);
+}
+
+/// Writes a unit variant adjacently tagged: {tag: "Variant"}.
+@needs(Encoder(F))
+pub Result(F, SerialError) write_adjacent_unit(F s, Str enum_name, Str tag, Str variant) {
+    F s1 = write_struct_begin(s, enum_name, 1)?;
+    F s2 = write_named(s1, tag, variant)?;
+    return write_struct_end(s2);
+}
+
+/// Splits an adjacently tagged Value into its variant name and content.
+/// Content is unit when absent; errors when the `tag` field is missing or not a string.
+pub Result(TagSplit, SerialError) split_adjacent_tag(Value v, Str tag, Str content) {
+    if (Some(t) = value_field(v, tag)) {
+        if (Some(name) = as_str(t)) {
+            Value body = value_field(v, content) else { VUnit };
+            return Ok(TagSplit {.variant = name, .rest = body});
+        }
+        return Err(invalid_type("a string tag `" + tag + "`", value_kind(t)));
+    }
+    return Err(missing_field(tag));
+}

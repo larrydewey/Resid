@@ -1,4 +1,5 @@
-import "verify/core.resid";
+import "verify/verifier.resid";
+import "evidence.resid";
 import "verify/snp.resid";
 import "verify/ear.resid";
 import "verify/testing.resid";
@@ -26,11 +27,7 @@ List(UInt(8)) le72(List(Int) be) { return le_at(be, 47, ListBuf()).concat(zeros(
 List(UInt(8)) le_at(List(Int) be, Int i, ListBuf(UInt(8)) acc) { return if (i < 0) { acc.finish() } else { le_at(be, i - 1, acc.push((UInt(8)) be[i])) }; }
 
 @policy
-SnpPolicy release_policy() {
-    return SnpPolicy {.min_tcb = TcbVersion {.fmc = 0, .bootloader = 3, .tee = 0, .snp = 8, .microcode = 115},
-                      .measurements_hex = [hex_encode(sha384_bytes(bytes_of("resid test image")))],
-                      .vmpl = 0, .allow_migration_agent = false, .id_key_digests_hex = [], .host_data_hex = []};
-}
+Policy release_policy() { return Policy {.measurements = [hex_encode(sha384_bytes(bytes_of("resid test image")))], .require = ["committed_tcb.bootloader>=3", "committed_tcb.snp>=8", "committed_tcb.microcode>=115", "reported_tcb.bootloader>=3", "reported_tcb.snp>=8", "reported_tcb.microcode>=115"], .allow = []}; }
 
 Str describe(List(Int) cwt, List(Int) pub) {
     CoseMsg m = cose_sign1_read(cwt);
@@ -41,8 +38,9 @@ Str describe(List(Int) cwt, List(Int) pub) {
 @requires(filesystem(readonly), declassify)
 Int main() {
     ChallengeRecord c = challenge_issue(64);
-    SnpCollateral col = SnpCollateral {.vcek_der = rd("test-vcek.der"), .ask_der = rd("test-ask.der"), .crl_der = rd("test-crl.der")};
-    Result(Appraised(SnpReport), VerifyError) a = match (snp_verify(report_for(challenge_value(c)), c, test_ark(), col, test_time(1791000000))) { Ok(v) => snp_appraise(v, release_policy()), Err(e) => Err(e) };
+    List(CmwRec) col = [collateral_item(mt_cert(), chal_ints(rd("test-vcek.der"))), collateral_item(mt_cert(), chal_ints(rd("test-ask.der"))), collateral_item(mt_crl(), chal_ints(rd("test-crl.der")))];
+    List(UInt(8)) ev = evidence_envelope(evidence_snp(chal_ints(report_for(challenge_value(c)))), col);
+    Result(Appraised(Claims), VerifyError) a = match (verify_evidence(ev, c, bind_fresh(), test_snp_roots(), test_time(1791000000))) { Ok(v) => appraise_evidence(v, release_policy()), Err(e) => Err(e) };
     List(Secret(UInt(8))) key = random_secret(32);
     List(Int) pub = ec_public_keyg(P256, key);
     Str out = match (a) {

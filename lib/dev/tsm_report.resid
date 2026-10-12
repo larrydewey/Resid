@@ -142,11 +142,35 @@ pub Result(TsmReport, DeviceError) tsm_report_get(List(UInt(8)) report_data, Tsm
     if (opts.service_guid != "" && !ts_guid_text_ok(opts.service_guid)) { return Err(BadInput(name, "service_guid is xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")); }
     if (opts.service_manifest_version < 0 - 1 || opts.service_manifest_version > 4294967295) { return Err(BadInput(name, f"service_manifest_version is a u32 (or -1 for none), got {opts.service_manifest_version}")); }
     if ((opts.service_guid != "" || opts.service_manifest_version >= 0) && opts.service_provider == "") { return Err(BadInput(name, "service_guid and service_manifest_version need a service_provider")); }
-    ReportReq rq = ReportReq {.inblob = report_data, .privlevel = opts.privlevel, .service_provider = opts.service_provider, .service_guid = opts.service_guid, .service_manifest_version = opts.service_manifest_version};
+    ReportReq rq = ReportReq {.inblob = report_data, .privlevel = opts.privlevel, .service_provider = opts.service_provider, .service_guid = opts.service_guid, .service_manifest_version = opts.service_manifest_version, .fill = false, .challenge = Runtime};
     List(DevOut) outs = device.configfs_report(tsm_report_op(), rq)?;
     TsmReport r = tsm_report_decode(name, dv_out_bytes(outs, 0), dv_out_bytes(outs, 1), dv_out_bytes(outs, 2), dv_out_bytes(outs, 3), dv_out_num(outs, 4))?;
     return tsm_report_honoured(name, r, opts);
 }
+
+/// A report whose 64-byte inblob the device engine fills from `challenge`.
+/// Runtime: a fresh value nobody keeps; Issued(c): the record's value,
+/// spent before the request is sent and bound to the outblob that answers
+/// it (so this program can verify its own report under that record); or
+/// Verbatim(v): a verifier's value. A challenge shorter than 64 bytes is
+/// refused (the slot is the whole inblob). Errors as tsm_report_get.
+/// Needs device(readonly).
+@requires(device(readonly))
+pub Result(TsmReport, DeviceError) tsm_report(Challenge challenge, TsmOpts opts) {
+    Str name = "tsm_report.report";
+    if (opts.privlevel < 0 - 1 || opts.privlevel > 3) { return Err(BadInput(name, f"privlevel is 0 to 3 (or -1 for none), got {opts.privlevel}")); }
+    if (opts.service_provider != "" && opts.service_provider != "svsm") { return Err(BadInput(name, "service_provider is \"svsm\" or empty")); }
+    if (opts.service_guid != "" && !ts_guid_text_ok(opts.service_guid)) { return Err(BadInput(name, "service_guid is xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")); }
+    if (opts.service_manifest_version < 0 - 1 || opts.service_manifest_version > 4294967295) { return Err(BadInput(name, f"service_manifest_version is a u32 (or -1 for none), got {opts.service_manifest_version}")); }
+    if ((opts.service_guid != "" || opts.service_manifest_version >= 0) && opts.service_provider == "") { return Err(BadInput(name, "service_guid and service_manifest_version need a service_provider")); }
+    List(UInt(8)) slot = ts_zeros(64, ListBuf());
+    ReportReq rq = ReportReq {.inblob = slot, .privlevel = opts.privlevel, .service_provider = opts.service_provider, .service_guid = opts.service_guid, .service_manifest_version = opts.service_manifest_version, .fill = true, .challenge = challenge};
+    List(DevOut) outs = device.configfs_report(tsm_report_op(), rq)?;
+    TsmReport r = tsm_report_decode(name, dv_out_bytes(outs, 0), dv_out_bytes(outs, 1), dv_out_bytes(outs, 2), dv_out_bytes(outs, 3), dv_out_num(outs, 4))?;
+    return tsm_report_honoured(name, r, opts);
+}
+
+List(UInt(8)) ts_zeros(Int n, ListBuf(UInt(8)) acc) { return if (n <= 0) { acc.finish() } else { ts_zeros(n - 1, acc.push((UInt(8)) 0)) }; }
 
 /// `r` itself, or Err(Unsupported) when `opts` asked for a privlevel or an
 /// SVSM service and the provider is not sev_guest (only it honours them).

@@ -1,0 +1,22 @@
+import "verify/verifier.resid";
+import "evidence.resid";
+import "verify/seal.resid";
+import "verify/testing.resid";
+import "challenge.resid";
+import "crypto.resid";
+import "hash.resid";
+import "hpke.resid";
+
+@policy
+Policy pol() { return Policy {.measurements = ["00"], .require = [], .allow = []}; }
+
+// A decision that accepts only one platform names a narrower set.
+@trust(anchors = [test_ark])
+Trust vcek_only() { return trust_anchors(); }
+@decides(accept = [vcek_only], require = [test_ark], appraised = pol, identity = none)
+Result(Int, VerifyError) f(List(UInt(8)) e, ChallengeRecord c) {
+    Verified(Claims) v = verify_evidence(e, c, bind_fresh(), vcek_only(), test_time(0))?;
+    Appraised(Claims) a = appraise_evidence(v, pol())?;
+    return Ok(1);
+}
+Int main() { return 0; }

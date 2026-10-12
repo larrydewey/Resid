@@ -1,0 +1,10 @@
+{
+  "corim-id": "00000000-0000-0000-cca6-000000000000",
+  "entities": [
+    {
+      "name": "Veraison Project",
+      "roles": ["manifestCreator"]
+    }
+  ],
+  "profile": {"type": "uri", "value": "tag:arm.com,2025:cca_platform#1.0.0"}
+}

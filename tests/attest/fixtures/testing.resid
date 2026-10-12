@@ -12,9 +12,13 @@ import "sealing.resid";
 import "cca.resid";
 import "spdm.resid";
 import "spdm_session.resid";
-import "device_bound.resid";
+import "claims.resid";
+import "verifier.resid";
+import "../evidence.resid";
+import "../cmw.resid";
 import "endorsed_keys.resid";
 import "corim.resid";
+import "json.resid";
 import "../word.resid";
 import "../instant.resid";
 import "../challenge.resid";
@@ -69,8 +73,11 @@ pub Str tdx_collateral_status(TdxQuote q, TdxCollateral c, Anchor root, Evidence
     return match (tdx_collateral_check(q, c, root, t)) { Ok(st) => "TCB " + st[0] + ", QE " + st[1], Err(e) => verify_error_text(e) };
 }
 
-@anchor(kind = DeviceIdentity(Test), principal = AboveKernel, formats = [SpdmEvidence, SpdmSession, SpdmIdentity], source = "tests/attest/gen_fixtures.py", fingerprint = "sha384:2172ae4419fef2b0b2c424eb79842456352a993275a05eebed661863933594f9918dcbcfc75617de035648c96eefc838", retrieved = "2026-10-11", reviewed_by = "tests", algorithms = [EcdsaP384Sha384], expires = "2039-12-31")
+@anchor(kind = DeviceIdentity(NVIDIA:Test GPU), principal = AboveKernel, formats = [SpdmEvidence, SpdmSession, SpdmIdentity], source = "tests/attest/gen_fixtures.py", fingerprint = "sha384:2172ae4419fef2b0b2c424eb79842456352a993275a05eebed661863933594f9918dcbcfc75617de035648c96eefc838", retrieved = "2026-10-11", reviewed_by = "tests", algorithms = [EcdsaP384Sha384], expires = "2039-12-31")
 pub Anchor test_device_root() { return anchor_der([48, 130, 2, 19, 48, 130, 1, 153, 160, 3, 2, 1, 2, 2, 1, 31, 48, 10, 6, 8, 42, 134, 72, 206, 61, 4, 3, 3, 48, 98, 49, 20, 48, 18, 6, 3, 85, 4, 11, 12, 11, 69, 110, 103, 105, 110, 101, 101, 114, 105, 110, 103, 49, 11, 48, 9, 6, 3, 85, 4, 6, 19, 2, 85, 83, 49, 27, 48, 25, 6, 3, 85, 4, 10, 12, 18, 82, 101, 115, 105, 100, 32, 84, 101, 115, 116, 32, 68, 101, 118, 105, 99, 101, 115, 49, 32, 48, 30, 6, 3, 85, 4, 3, 12, 23, 84, 101, 115, 116, 32, 68, 101, 118, 105, 99, 101, 32, 73, 100, 101, 110, 116, 105, 116, 121, 32, 67, 65, 48, 30, 23, 13, 50, 52, 48, 49, 48, 49, 48, 48, 48, 48, 48, 48, 90, 23, 13, 52, 48, 48, 49, 48, 49, 48, 48, 48, 48, 48, 48, 90, 48, 98, 49, 20, 48, 18, 6, 3, 85, 4, 11, 12, 11, 69, 110, 103, 105, 110, 101, 101, 114, 105, 110, 103, 49, 11, 48, 9, 6, 3, 85, 4, 6, 19, 2, 85, 83, 49, 27, 48, 25, 6, 3, 85, 4, 10, 12, 18, 82, 101, 115, 105, 100, 32, 84, 101, 115, 116, 32, 68, 101, 118, 105, 99, 101, 115, 49, 32, 48, 30, 6, 3, 85, 4, 3, 12, 23, 84, 101, 115, 116, 32, 68, 101, 118, 105, 99, 101, 32, 73, 100, 101, 110, 116, 105, 116, 121, 32, 67, 65, 48, 118, 48, 16, 6, 7, 42, 134, 72, 206, 61, 2, 1, 6, 5, 43, 129, 4, 0, 34, 3, 98, 0, 4, 178, 229, 171, 56, 184, 81, 94, 108, 233, 175, 198, 192, 91, 96, 202, 239, 185, 152, 59, 237, 47, 151, 211, 90, 205, 199, 171, 123, 68, 57, 51, 176, 226, 229, 158, 205, 48, 223, 20, 142, 186, 233, 76, 135, 169, 170, 225, 164, 241, 43, 97, 53, 189, 42, 91, 111, 105, 49, 129, 20, 207, 55, 65, 103, 106, 158, 84, 250, 33, 97, 42, 146, 5, 77, 217, 51, 127, 148, 244, 111, 143, 188, 141, 186, 93, 49, 168, 183, 47, 201, 63, 199, 137, 249, 96, 66, 163, 35, 48, 33, 48, 15, 6, 3, 85, 29, 19, 1, 1, 255, 4, 5, 48, 3, 1, 1, 255, 48, 14, 6, 3, 85, 29, 15, 1, 1, 255, 4, 4, 3, 2, 1, 134, 48, 10, 6, 8, 42, 134, 72, 206, 61, 4, 3, 3, 3, 104, 0, 48, 101, 2, 49, 0, 243, 70, 245, 219, 166, 69, 4, 95, 87, 183, 93, 49, 129, 112, 55, 247, 36, 166, 8, 111, 4, 57, 9, 236, 48, 129, 179, 81, 79, 126, 148, 26, 30, 135, 225, 29, 221, 113, 89, 64, 48, 44, 243, 158, 17, 113, 19, 141, 2, 48, 11, 249, 12, 135, 249, 108, 25, 82, 95, 131, 224, 116, 24, 24, 176, 74, 40, 235, 19, 178, 138, 20, 123, 134, 25, 238, 42, 78, 77, 33, 14, 184, 237, 56, 13, 15, 189, 213, 141, 234, 44, 92, 174, 130, 25, 83, 189, 114]); }
+
+@anchor(kind = DeviceIdentity(NVIDIA:Other GPU), principal = AboveKernel, formats = [SpdmEvidence, SpdmSession, SpdmIdentity], source = "tests/attest/gen_fixtures.py", fingerprint = "sha384:2172ae4419fef2b0b2c424eb79842456352a993275a05eebed661863933594f9918dcbcfc75617de035648c96eefc838", retrieved = "2026-10-11", reviewed_by = "tests", algorithms = [EcdsaP384Sha384], expires = "2039-12-31")
+pub Anchor test_device_root_other_gpu() { return anchor_der([48, 130, 2, 19, 48, 130, 1, 153, 160, 3, 2, 1, 2, 2, 1, 31, 48, 10, 6, 8, 42, 134, 72, 206, 61, 4, 3, 3, 48, 98, 49, 20, 48, 18, 6, 3, 85, 4, 11, 12, 11, 69, 110, 103, 105, 110, 101, 101, 114, 105, 110, 103, 49, 11, 48, 9, 6, 3, 85, 4, 6, 19, 2, 85, 83, 49, 27, 48, 25, 6, 3, 85, 4, 10, 12, 18, 82, 101, 115, 105, 100, 32, 84, 101, 115, 116, 32, 68, 101, 118, 105, 99, 101, 115, 49, 32, 48, 30, 6, 3, 85, 4, 3, 12, 23, 84, 101, 115, 116, 32, 68, 101, 118, 105, 99, 101, 32, 73, 100, 101, 110, 116, 105, 116, 121, 32, 67, 65, 48, 30, 23, 13, 50, 52, 48, 49, 48, 49, 48, 48, 48, 48, 48, 48, 90, 23, 13, 52, 48, 48, 49, 48, 49, 48, 48, 48, 48, 48, 48, 90, 48, 98, 49, 20, 48, 18, 6, 3, 85, 4, 11, 12, 11, 69, 110, 103, 105, 110, 101, 101, 114, 105, 110, 103, 49, 11, 48, 9, 6, 3, 85, 4, 6, 19, 2, 85, 83, 49, 27, 48, 25, 6, 3, 85, 4, 10, 12, 18, 82, 101, 115, 105, 100, 32, 84, 101, 115, 116, 32, 68, 101, 118, 105, 99, 101, 115, 49, 32, 48, 30, 6, 3, 85, 4, 3, 12, 23, 84, 101, 115, 116, 32, 68, 101, 118, 105, 99, 101, 32, 73, 100, 101, 110, 116, 105, 116, 121, 32, 67, 65, 48, 118, 48, 16, 6, 7, 42, 134, 72, 206, 61, 2, 1, 6, 5, 43, 129, 4, 0, 34, 3, 98, 0, 4, 178, 229, 171, 56, 184, 81, 94, 108, 233, 175, 198, 192, 91, 96, 202, 239, 185, 152, 59, 237, 47, 151, 211, 90, 205, 199, 171, 123, 68, 57, 51, 176, 226, 229, 158, 205, 48, 223, 20, 142, 186, 233, 76, 135, 169, 170, 225, 164, 241, 43, 97, 53, 189, 42, 91, 111, 105, 49, 129, 20, 207, 55, 65, 103, 106, 158, 84, 250, 33, 97, 42, 146, 5, 77, 217, 51, 127, 148, 244, 111, 143, 188, 141, 186, 93, 49, 168, 183, 47, 201, 63, 199, 137, 249, 96, 66, 163, 35, 48, 33, 48, 15, 6, 3, 85, 29, 19, 1, 1, 255, 4, 5, 48, 3, 1, 1, 255, 48, 14, 6, 3, 85, 29, 15, 1, 1, 255, 4, 4, 3, 2, 1, 134, 48, 10, 6, 8, 42, 134, 72, 206, 61, 4, 3, 3, 3, 104, 0, 48, 101, 2, 49, 0, 243, 70, 245, 219, 166, 69, 4, 95, 87, 183, 93, 49, 129, 112, 55, 247, 36, 166, 8, 111, 4, 57, 9, 236, 48, 129, 179, 81, 79, 126, 148, 26, 30, 135, 225, 29, 221, 113, 89, 64, 48, 44, 243, 158, 17, 113, 19, 141, 2, 48, 11, 249, 12, 135, 249, 108, 25, 82, 95, 131, 224, 116, 24, 24, 176, 74, 40, 235, 19, 178, 138, 20, 123, 134, 25, 238, 42, 78, 77, 33, 14, 184, 237, 56, 13, 15, 189, 213, 141, 234, 44, 92, 174, 130, 25, 83, 189, 114]); }
 
 @anchor(kind = DeviceIdentity(EmuP256), principal = AboveKernel, formats = [SpdmEvidence, SpdmSession, SpdmIdentity], source = "DMTF spdm-emu sample keys (ecp256/ca.cert.der)", fingerprint = "sha384:a91441ca4ddd34e5b11f6fe0f0060fa2abdf29ea85d97cfa4481506371b25524977eabf22f09b293241365ed5dff9f28", retrieved = "2026-10-11", reviewed_by = "tests", algorithms = [EcdsaP256Sha256, EcdsaP256Sha384, EcdsaP256Sha512], expires = "2036-06-01")
 pub Anchor test_emu_ecp256() { return anchor_der([48, 130, 1, 151, 48, 130, 1, 61, 160, 3, 2, 1, 2, 2, 20, 56, 230, 45, 1, 246, 218, 164, 186, 35, 211, 81, 56, 13, 23, 212, 62, 248, 101, 37, 182, 48, 10, 6, 8, 42, 134, 72, 206, 61, 4, 3, 2, 48, 33, 49, 31, 48, 29, 6, 3, 85, 4, 3, 12, 22, 68, 77, 84, 70, 32, 108, 105, 98, 115, 112, 100, 109, 32, 69, 67, 80, 50, 53, 54, 32, 67, 65, 48, 30, 23, 13, 50, 54, 48, 54, 50, 51, 48, 50, 53, 56, 51, 57, 90, 23, 13, 51, 54, 48, 54, 50, 48, 48, 50, 53, 56, 51, 57, 90, 48, 33, 49, 31, 48, 29, 6, 3, 85, 4, 3, 12, 22, 68, 77, 84, 70, 32, 108, 105, 98, 115, 112, 100, 109, 32, 69, 67, 80, 50, 53, 54, 32, 67, 65, 48, 89, 48, 19, 6, 7, 42, 134, 72, 206, 61, 2, 1, 6, 8, 42, 134, 72, 206, 61, 3, 1, 7, 3, 66, 0, 4, 246, 255, 0, 182, 87, 111, 44, 164, 142, 10, 24, 108, 67, 184, 83, 151, 194, 93, 96, 102, 123, 73, 38, 181, 20, 44, 84, 219, 199, 225, 76, 83, 125, 233, 100, 151, 71, 44, 111, 51, 68, 101, 153, 0, 222, 107, 60, 178, 86, 45, 80, 145, 98, 254, 52, 59, 112, 107, 35, 29, 81, 78, 64, 16, 163, 83, 48, 81, 48, 29, 6, 3, 85, 29, 14, 4, 22, 4, 20, 199, 190, 202, 202, 158, 1, 163, 52, 19, 119, 248, 219, 54, 34, 210, 71, 237, 220, 55, 107, 48, 31, 6, 3, 85, 29, 35, 4, 24, 48, 22, 128, 20, 199, 190, 202, 202, 158, 1, 163, 52, 19, 119, 248, 219, 54, 34, 210, 71, 237, 220, 55, 107, 48, 15, 6, 3, 85, 29, 19, 1, 1, 255, 4, 5, 48, 3, 1, 1, 255, 48, 10, 6, 8, 42, 134, 72, 206, 61, 4, 3, 2, 3, 72, 0, 48, 69, 2, 33, 0, 197, 28, 98, 128, 80, 106, 107, 221, 74, 90, 11, 231, 85, 143, 187, 157, 32, 148, 109, 196, 145, 236, 128, 105, 198, 248, 99, 208, 217, 38, 55, 243, 2, 32, 65, 117, 201, 87, 80, 183, 118, 206, 198, 67, 39, 165, 39, 43, 147, 225, 60, 181, 119, 141, 43, 79, 26, 96, 171, 42, 138, 86, 118, 104, 12, 60]); }
@@ -111,9 +118,38 @@ pub Anchor test_endorser() { return anchor_der([48, 89, 48, 19, 6, 7, 42, 134, 7
 // A CoRIM's signature, validity and reference values alone.
 pub Result(CorimRefs, VerifyError) test_corim_check(List(UInt(8)) corim, Anchor endorser, EvidenceTime t) { return corim_check(corim, endorser, t); }
 
+// The JSON parser alone (TDX collateral), for the fuzzer: 1 parsed, 0 refused.
+pub Int test_json_check(List(Int) b) { return match (json_parse(b)) { Ok(j) => 1, Err(e) => 0, }; }
+
 // The NSM document's chain and signature alone, for real documents whose
 // nonce carries no challenge of ours.
 pub Result(NsmDocument, VerifyError) test_nsm_check(List(UInt(8)) doc, Anchor root, EvidenceTime t) { return nsm_check(doc, root, t); }
+
+// The test anchors as trust sets, for the flows.
+@trust(anchors = [test_ark, test_ark_vlek])
+pub Trust test_snp_roots() { return trust_anchors(); }
+@trust(anchors = [test_sgx_root])
+pub Trust test_tdx_roots() { return trust_anchors(); }
+@trust(anchors = [test_nitro_root])
+pub Trust test_nitro_roots() { return trust_anchors(); }
+@trust(anchors = [test_cpak, test_rmm_cpak])
+pub Trust test_cca_keys() { return trust_anchors(); }
+@trust(anchors = [test_tpm_ak])
+pub Trust test_tpm_keys() { return trust_anchors(); }
+@trust(anchors = [test_tpm_ek])
+pub Trust test_tpm_ek_roots() { return trust_anchors(); }
+@trust(anchors = [test_device_root_other_gpu])
+pub Trust test_other_gpu_roots() { return trust_anchors(); }
+@trust(anchors = [test_device_root])
+pub Trust test_device_roots() { return trust_anchors(); }
+@trust(anchors = [test_emu_ecp256, test_emu_ecp384, test_emu_ecp521, test_emu_rsa2048, test_emu_rsa3072, test_emu_ed25519])
+pub Trust test_emu_roots() { return trust_anchors(); }
+@trust(anchors = [test_endorser])
+pub Trust test_endorsers() { return trust_anchors(); }
+@trust(anchors = [test_acme_endorser])
+pub Trust test_acme_endorsers() { return trust_anchors(); }
+@trust(include = [test_snp_roots, test_tdx_roots, test_nitro_roots, test_cca_keys, test_tpm_keys, test_device_roots])
+pub Trust test_roots() { return trust_anchors(); }
 
 // A fixed time from the kernel's clock, as tests need one.
 pub EvidenceTime test_time(Int unix) { return EvidenceTime {.at = instant_of_seconds(unix), .source = Kernel}; }

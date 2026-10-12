@@ -1,0 +1,15 @@
+import "verify/verifier.resid";
+import "evidence.resid";
+import "verify/seal.resid";
+import "verify/testing.resid";
+import "challenge.resid";
+import "crypto.resid";
+import "hash.resid";
+import "hpke.resid";
+
+@policy
+Policy pol() { return Policy {.measurements = ["00"], .require = [], .allow = []}; }
+
+// Binding is opaque outside lib/verify/.
+Binding forged() { return Binding {.kind = 1, .kem = 32, .pk = [], .want = [], .chan = [], .record = 0, .th = [], .anchors = []}; }
+Int main() { return 0; }

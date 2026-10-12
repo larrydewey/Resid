@@ -1,4 +1,5 @@
-import "verify/core.resid";
+import "verify/verifier.resid";
+import "evidence.resid";
 import "verify/snp.resid";
 import "verify/seal.resid";
 import "verify/testing.resid";
@@ -18,7 +19,11 @@ Str fx() { return "fixtures/"; }
 List(UInt(8)) rd(Str p) { return chal_bytes(filesystem.read_bytes(fx() + p)); }
 
 @requires(filesystem(readonly))
-SnpCollateral col() { return SnpCollateral {.vcek_der = rd("test-vcek.der"), .ask_der = rd("test-ask.der"), .crl_der = rd("test-crl.der")}; }
+List(CmwRec) col() { return [collateral_item(mt_cert(), chal_ints(rd("test-vcek.der"))), collateral_item(mt_cert(), chal_ints(rd("test-ask.der"))), collateral_item(mt_crl(), chal_ints(rd("test-crl.der")))]; }
+
+// An SNP report as evidence, with the test chain.
+@requires(filesystem(readonly))
+List(UInt(8)) snp_env(List(UInt(8)) report) { return evidence_envelope(evidence_snp(chal_ints(report)), col()); }
 
 // A report carrying `value` in REPORT_DATA, signed with the test VCEK.
 @requires(filesystem(readonly))
@@ -46,17 +51,13 @@ List(UInt(8)) le_at(List(Int) be, Int i, ListBuf(UInt(8)) acc) { return if (i < 
 
 
 @policy
-SnpPolicy release_policy() {
-    return SnpPolicy {.min_tcb = TcbVersion {.fmc = 0, .bootloader = 3, .tee = 0, .snp = 8, .microcode = 115},
-                      .measurements_hex = [hex_encode(sha384_bytes(bytes_of("resid test image")))],
-                      .vmpl = 0, .allow_migration_agent = false, .id_key_digests_hex = [], .host_data_hex = []};
-}
+Policy release_policy() { return Policy {.measurements = [hex_encode(sha384_bytes(bytes_of("resid test image")))], .require = ["committed_tcb.bootloader>=3", "committed_tcb.snp>=8", "committed_tcb.microcode>=115", "reported_tcb.bootloader>=3", "reported_tcb.snp>=8", "reported_tcb.microcode>=115"], .allow = []}; }
 
 // Only records issued for the key broker satisfy this decision.
-@decides(accept = [test_ark], appraised = release_policy, identity = none, bind = "kbs")
-Result(Int, VerifyError) admit(List(UInt(8)) report, ChallengeRecord issued, SnpCollateral c) {
-    Verified(SnpReport) v = snp_verify(report, issued, test_ark(), c, test_time(1791000000))?;
-    Appraised(SnpReport) a = snp_appraise(v, release_policy())?;
+@decides(accept = [test_snp_roots], appraised = release_policy, identity = none, bind = "kbs")
+Result(Int, VerifyError) admit(List(UInt(8)) evidence, ChallengeRecord issued) {
+    Verified(Claims) v = verify_evidence(evidence, issued, bind_fresh(), test_snp_roots(), test_time(1791000000))?;
+    Appraised(Claims) a = appraise_evidence(v, release_policy())?;
     return Ok(1);
 }
 
@@ -64,7 +65,7 @@ Result(Int, VerifyError) admit(List(UInt(8)) report, ChallengeRecord issued, Snp
 Int main() {
     ChallengeRecord k = challenge_issue(64, chal_bytes(bytes_of("kbs")));
     ChallengeRecord l = challenge_issue(64, chal_bytes(bytes_of("license")));
-    println("kbs record: " + match (admit(report_for(challenge_value(k)), k, col())) { Ok(n) => "admitted", Err(e) => verify_error_text(e) });
-    println("license record: " + match (admit(report_for(challenge_value(l)), l, col())) { Ok(n) => "ADMITTED", Err(e) => verify_error_text(e) });
+    println("kbs record: " + match (admit(snp_env(report_for(challenge_value(k))), k)) { Ok(n) => "admitted", Err(e) => verify_error_text(e) });
+    println("license record: " + match (admit(snp_env(report_for(challenge_value(l))), l)) { Ok(n) => "ADMITTED", Err(e) => verify_error_text(e) });
     return 0;
 }

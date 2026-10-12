@@ -5485,6 +5485,136 @@ pub Str imp_unalias_fs(Str t, Int i, Int n, Str aliases, Str acc) {
     return imp_unalias_fs(t, e + 1, n, aliases, acc + "{" + hole + "}");
 }
 
+// ─── Name hygiene ───────────────────────────────────────────────
+// A library's call of a name it does not define is a builtin (`u64`,
+// `str_len`, ...). A program function of that name would capture it, so
+// the program's files spell theirs `__app__name` (declaration and uses
+// alike; the line count is kept, so the source map still holds). Library
+// files are the standard library's and the dependencies' (`depmap`).
+
+pub Str imp_hygiene(Str text, Str map, Str depmap) {
+    List(Str) roots = imp_lib_roots(str_split(depmap, "\n"), 0, []);
+    HySeg sg = imp_hy_segs(str_split(map, "\n"), 0, roots, [], []);
+    if (sg.starts.len() == 0) { return text; }
+    List(Str) lines = str_split(text, "\n");
+    HyText ht = imp_hy_split(lines, sg, 0, 0, StrBuf(), StrBuf());
+    List(Str) app = imp_decl_names_of(str_split(imp_fn_decls(ht.app, 0, 0, false, ""), ","), 0, []);
+    List(Str) cands = imp_hy_called(app, 0, ht.lib, []);
+    if (cands.len() == 0) { return text; }
+    List(Str) libdecl = imp_decl_names_of(str_split(imp_fn_decls(ht.lib, 0, 0, false, ""), ","), 0, []);
+    Str hidden = imp_hy_hidden(cands, 0, libdecl, ht.app, ",");
+    if (hidden == ",") { return text; }
+    return imp_hy_rename(lines, sg, 0, 0, hidden, StrBuf());
+}
+
+// The directories library files live under: the standard library's and
+// each dependency's (its root file's directory), each ending in "/".
+List(Str) imp_lib_roots(List(Str) ls, Int i, List(Str) acc) {
+    if (i >= ls.len()) { return acc; }
+    Str l = ls[i];
+    Str std = if (ck_str_starts_with(l, "@stdlib::")) { imp_normalize(str_slice(l, 9, str_len(l))) + "/" } else { "" };
+    Int sep = if (std == "" && !ck_str_starts_with(l, "@")) { imp_find_dcolon(l, 0) } else { 0 - 1 };
+    Str dp = if (sep > 0) { depmap_line_path(l, sep) } else { "" };
+    Str dep = if (dp == "") { "" } else { imp_normalize(imp_dir_of(dp, str_len(dp) - 1)) + "/" };
+    Str r = if (std != "") { std } else { dep };
+    return imp_lib_roots(ls, i + 1, if (r == "" || r == "./") { acc } else { acc.concat([r]) });
+}
+
+Bool imp_under(Str path, List(Str) roots, Int i) {
+    if (i >= roots.len()) { return false; }
+    return ck_str_starts_with(imp_normalize(path), roots[i]) || imp_under(path, roots, i + 1);
+}
+
+// The source map's segments: each one's first merged line and whether its
+// file is a library's.
+type HySeg = { List(Int) starts; List(Bool) lib; };
+
+HySeg imp_hy_segs(List(Str) es, Int i, List(Str) roots, List(Int) st, List(Bool) lb) {
+    if (i >= es.len()) { return HySeg {.starts = st, .lib = lb}; }
+    List(Str) f = str_split(es[i], " ");
+    if (f.len() < 3) { return imp_hy_segs(es, i + 1, roots, st, lb); }
+    Str p = str_slice(es[i], str_len(f[0]) + str_len(f[1]) + 2, str_len(es[i]));
+    return imp_hy_segs(es, i + 1, roots, st.concat([str_parse_int(f[0])]), lb.concat([imp_under(p, roots, 0)]));
+}
+
+// Whether merged line `ln` (1-based) is in a library segment; k is the
+// segment of the line before (lines only go forward).
+Int imp_hy_seg(HySeg sg, Int ln, Int k) {
+    if (k + 1 < sg.starts.len() && sg.starts[k + 1] <= ln) { return imp_hy_seg(sg, ln, k + 1); }
+    return k;
+}
+
+Bool imp_hy_lib(HySeg sg, Int k, Int ln) { return ln >= sg.starts[0] && sg.lib[k]; }
+
+type HyText = { Str app; Str lib; };
+
+HyText imp_hy_split(List(Str) lines, HySeg sg, Int i, Int k, StrBuf app, StrBuf lib) {
+    if (i >= lines.len()) { return HyText {.app = app.finish(), .lib = lib.finish()}; }
+    Int k2 = imp_hy_seg(sg, i + 1, k);
+    Bool isl = imp_hy_lib(sg, k2, i + 1);
+    return imp_hy_split(lines, sg, i + 1, k2, if (isl) { app } else { app.push(lines[i]).push("\n") }, if (isl) { lib.push(lines[i]).push("\n") } else { lib });
+}
+
+List(Str) imp_decl_names_of(List(Str) ds, Int i, List(Str) acc) {
+    if (i >= ds.len()) { return acc; }
+    Str d = ds[i];
+    Str nm = if (d == "") { "" } else { str_slice(d, 1, str_len(d)) };
+    return imp_decl_names_of(ds, i + 1, if (nm == "" || nm == "main") { acc } else { acc.concat([nm]) });
+}
+
+// The program's function names a library calls (`name(` after a
+// character that cannot end an identifier or a field access).
+List(Str) imp_hy_called(List(Str) ns, Int i, Str lib, List(Str) acc) {
+    if (i >= ns.len()) { return acc; }
+    return imp_hy_called(ns, i + 1, lib, if (imp_hy_calls(lib, ns[i] + "(", 0)) { acc.concat([ns[i]]) } else { acc });
+}
+
+Bool imp_hy_calls(Str s, Str pat, Int from) {
+    Int at = str_index_of(s, pat, from);
+    if (at < 0) { return false; }
+    Int c = if (at == 0) { 32 } else { str_char_at(s, at - 1) };
+    if (!is_alnum(c) && c != 95 && c != 46) { return true; }
+    return imp_hy_calls(s, pat, at + 1);
+}
+
+// Candidates no library defines and the program does not bind to a
+// native symbol (an @link function keeps its name).
+Str imp_hy_hidden(List(Str) cs, Int i, List(Str) libdecl, Str app, Str acc) {
+    if (i >= cs.len()) { return acc; }
+    Bool keep = imp_hy_has(libdecl, cs[i], 0) || imp_hy_linked(app, cs[i], 0);
+    return imp_hy_hidden(cs, i + 1, libdecl, app, if (keep) { acc } else { acc + cs[i] + "," });
+}
+
+Bool imp_hy_has(List(Str) xs, Str x, Int i) { return i < xs.len() && (xs[i] == x || imp_hy_has(xs, x, i + 1)); }
+
+Bool imp_hy_linked(Str app, Str name, Int from) {
+    Int at = str_index_of(app, "@link(", from);
+    if (at < 0) { return false; }
+    Int b = str_index_of(app, "{", at);
+    Str head = if (b < 0) { str_slice(app, at, str_len(app)) } else { str_slice(app, at, b) };
+    return imp_hy_calls(head, name + "(", 0) || imp_hy_linked(app, name, at + 1);
+}
+
+// The text with each program segment renamed (library segments kept).
+Str imp_hy_rename(List(Str) lines, HySeg sg, Int i, Int k, Str hidden, StrBuf out) {
+    if (i >= lines.len()) { return out.finish(); }
+    Int k2 = imp_hy_seg(sg, i + 1, k);
+    Bool isl = imp_hy_lib(sg, k2, i + 1);
+    Int j = imp_hy_run_end(lines, sg, i + 1, k2, isl);
+    Str chunk = str_join(lines[i..j], "\n");
+    Str done = if (isl) { chunk } else { str_sb_finish(imp_rename(chunk, 0, hidden, "__app__", str_sb_new(), 0, "")) };
+    StrBuf o2 = if (i == 0) { out.push(done) } else { out.push("\n").push(done) };
+    return imp_hy_rename(lines, sg, j, k2, hidden, o2);
+}
+
+// The end (exclusive) of the run of lines from i with the same kind.
+Int imp_hy_run_end(List(Str) lines, HySeg sg, Int i, Int k, Bool isl) {
+    if (i >= lines.len()) { return lines.len(); }
+    Int k2 = imp_hy_seg(sg, i + 1, k);
+    if (imp_hy_lib(sg, k2, i + 1) != isl) { return i; }
+    return imp_hy_run_end(lines, sg, i + 1, k2, isl);
+}
+
 // ─── Module visibility (spec §22) ───────────────────────────────
 // An imported file exposes its `pub` functions (or, for a selective
 // `import "f" (a, b);`, exactly the listed ones). Every other top-level
@@ -7755,15 +7885,19 @@ Str lit_range_err(Str text, Bool neg, Str ty) {
     Bool sg = signed_ty(ty);
     Bool zero = d == "0";
     Str shown = if (neg) { "-" + text } else { text };
-    Str msg = "integer literal " + shown + " does not fit the expected type " + ty;
-    if (!sg && neg && !zero) { return msg; }
+    if (!sg && neg && !zero) { return lit_range_msg(shown, ty); }
     // signed: v <= 2^(bits-1)-1 (or 2^(bits-1) when negated); unsigned: v < 2^bits
-    Str lim = if (sg) { dec_pow2(bits - 1, "1") } else { dec_pow2(bits, "1") };
+    Int k = if (sg) { bits - 1 } else { bits };
+    // Fewer digits than 2^k surely has (k * 0.30102 <= k * log10 2): fits.
+    if (str_len(d) < k * 30102 / 100000 + 1) { return ""; }
+    Str lim = dec_pow2(k, "1");
     Bool fits_pos = dec_lt(d, lim);
     Bool at_min = sg && neg && d == lim;
     if (fits_pos || at_min) { return ""; }
-    return msg;
+    return lit_range_msg(shown, ty);
 }
+
+Str lit_range_msg(Str shown, Str ty) { return "integer literal " + shown + " does not fit the expected type " + ty; }
 
 // ─── Function checking ──────────────────────────────────────────
 
@@ -8335,26 +8469,32 @@ Str spawn_call_check(Sigs fs, Str callee, Str parent) {
 // per callee, instead of an O(n) linear scan of every function's forward
 // edge list (with a fresh str_split each time) for every callee — that
 // was O(n) per callee, O(n^2) per round, O(rounds * n^2) total.
-Map(Str, Str) add_caller_edges_one(Map(Str, Str) m, Str caller_name, Str callee) {
-    Str existing = m.get(callee) else { "" };
-    Str updated = if (existing == "") { caller_name } else { existing + "," + caller_name };
-    return m.insert(callee, updated);
-}
-Map(Str, Str) add_caller_edges(Map(Str, Str) m, Str caller_name, List(Str) callees, Int k) {
-    if (k >= callees.len()) { return m; }
-    Map(Str, Str) m2 = add_caller_edges_one(m, caller_name, callees[k]);
-    Int k2 = k + 1;
-    return add_caller_edges(m2, caller_name, callees, k2);
-}
-Map(Str, Str) build_caller_index_at(Sigs fs, List(Str) edges, Int j, Map(Str, Str) m) {
-    if (j >= fs.names.len()) { return m; }
-    Map(Str, Str) m2 = add_caller_edges(m, fs.names[j], csv_split_or_empty(edges[j]), 0);
-    Int k = j + 1;
-    return build_caller_index_at(fs, edges, k, m2);
-}
+// Each edge becomes "callee\x1f<caller index, 9 digits>\x1fcaller"; sorted,
+// one callee's callers sit together in call-graph order, joined once.
 Map(Str, Str) build_caller_index(Sigs fs, List(Str) edges) {
     Map(Str, Str) empty = {"__EMPTY__": ""};
-    return build_caller_index_at(fs, edges, 0, empty);
+    List(Str) es = sort(caller_edge_keys(fs, edges, 0, ListBuf()));
+    return caller_groups(es, 0, "", StrBuf(), empty);
+}
+List(Str) caller_edge_keys(Sigs fs, List(Str) edges, Int j, ListBuf(Str) acc) {
+    if (j >= fs.names.len()) { return acc.finish(); }
+    Str ord = str_repeat("0", 9 - str_len(f"{j}")) + f"{j}";
+    return caller_edge_keys(fs, edges, j + 1, caller_edge_keys_one(csv_split_or_empty(edges[j]), 0, "\x1f" + ord + "\x1f" + fs.names[j], acc));
+}
+ListBuf(Str) caller_edge_keys_one(List(Str) callees, Int k, Str tail, ListBuf(Str) acc) {
+    if (k >= callees.len()) { return acc; }
+    return caller_edge_keys_one(callees, k + 1, tail, acc.push(callees[k] + tail));
+}
+Map(Str, Str) caller_groups(List(Str) es, Int i, Str cur, StrBuf b, Map(Str, Str) m) {
+    if (i >= es.len()) {
+        Str last = b.finish();
+        return if (i == 0) { m } else { m.insert(cur, last) };
+    }
+    List(Str) f = str_split(es[i], "\x1f");
+    if (i > 0 && f[0] == cur) { return caller_groups(es, i + 1, cur, b.push(",").push(f[2]), m); }
+    Str done = b.finish();
+    Map(Str, Str) m2 = if (i == 0) { m } else { m.insert(cur, done) };
+    return caller_groups(es, i + 1, f[0], StrBuf().push(f[2]), m2);
 }
 
 // §21.3 transitive attenuation: fold the effective ceilings of every
@@ -9679,7 +9819,9 @@ Int main() {
     // and serializers appended.
     // Anchors (compiler/attest.resid): each @anchor body's anchor_der
     // carries the annotation's facts.
-    LyR atr = at_expand(rra.text);
+    // Name hygiene: a program function named like a builtin captures no
+    // library call (imp_hygiene).
+    LyR atr = at_expand(imp_hygiene(rra.text, rra.map, depmap));
     LyR lyr0 = ly_expand(atr.text);
     LyR lyr = if (atr.err != "") { atr } else { lyr0 };
     Int lybad = if (lyr.err != "") { 1 } else { 0 };
@@ -9793,6 +9935,7 @@ Int main() {
     Str ivroot = op_std_root(["@stdroot::" + stdlib_dir()], 0);
     Bool ireach = ckp0.err == "" && ivroot != dv_no_std() && at_reaches_verify(str_split(rr.done, ";"), ivroot + "verify/", 0);
     Bool instbad = ireach && at_instances(ckp0.g, ckp0.id, rsrc, rr.map + gm_gs() + gm_pkg_lines(depmap0) + "@stdroot::" + stdlib_dir());
+    Bool trustbad = atcols && at_trust_pre(ckp0.g, ckp0.id, rsrc, rr.map + gm_gs() + gm_pkg_lines(depmap0) + "@stdroot::" + stdlib_dir());
     GMO gmo = gm_run(ckp0, rsrc, rr.map + gm_gs() + gm_pkg_lines(depmap0) + "@stdroot::" + stdlib_dir(), gart || atcols);
     KP ckp = gmo.kp;
     GKC ckc = gmo.c;
@@ -9808,7 +9951,7 @@ Int main() {
     // Attestation (compiler/attest.resid): anchors, primitives, policies
     // and decisions.
     Bool atbad = tc == 0 && at_run(ckp.g, ckp.id, ga_defs(ckc.def, 0, ListBuf()), rsrc, rr.map + gm_gs() + gm_pkg_lines(depmap0) + "@stdroot::" + stdlib_dir());
-    Bool lbbad = lbbad0 || atbad || instbad;
+    Bool lbbad = lbbad0 || atbad || instbad || trustbad;
     Str atrep = if (tc == 0) { at_report(ckp.g, ckp.id, rsrc, rr.map + gm_gs() + gm_pkg_lines(depmap0) + "@stdroot::" + stdlib_dir()) } else { "" };
     List(Str) ckpk = resid_list_str_persist_copy([if (tc != 0) { "" } else { gx_pack(ckp.g, ckp.id) }, ckc.def, f"{kg_count(ckp.g)}", gmo.dv, lbr.text, atrep]);
     List(Str) cktys = resid_list_str_persist_copy(ckc.ty);
@@ -9973,7 +10116,12 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     // Loops start on 64-byte boundaries: hot loops ran up to 15% apart with
     // the placement alone (32 was not enough for the regex scan loops).
     // Float reductions may vectorize only in source order (strict IEEE).
-    Str lto  =  if (olevel == "-O0") { "" } else { " -flto -fuse-ld=lld -Wl,-mllvm,-align-loops=64 -Wl,-mllvm,-force-ordered-reductions" };
+    // Code generation runs in 8 partitions after the whole-program
+    // optimization (a fixed count, so the binary is the same everywhere),
+    // except with native modules: partitions would scatter a module's code
+    // from between its section markers.
+    Str lparts = if (nkeep[0] == "") { " -Wl,--lto-partitions=8" } else { "" };
+    Str lto  =  if (olevel == "-O0") { "" } else { " -flto -fuse-ld=lld" + lparts + " -Wl,-mllvm,-align-loops=64 -Wl,-mllvm,-force-ordered-reductions" };
     // The Resid runtime's IR (runtime/rt/, lowered by boot.sh).
     Str rhome  =  environment.get("RESID_HOME");
     Str rtname  =  if (tgt_a64()) { "rt-aarch64.ll" } else { "rt.ll" };

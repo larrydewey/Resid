@@ -2,8 +2,8 @@
 // PLAN-attestation.md §10): a KEY_EXCHANGE the device answered and
 // signed with its identity key, so the session's keys are shared with that
 // device and no other; and the CPU's evidence bound to the session
-// (verify/device_bound.resid), so the device is the one the attested
-// guest holds the session with.
+// (bind_device), so the device is the one the attested guest holds the
+// session with.
 //
 // The record is the requester's (lib/spdm_requester.resid): the
 // negotiation (VCA), the certificate chain as GET_CERTIFICATE returned
@@ -23,6 +23,9 @@
 
 import "core.resid";
 import "spdm.resid";
+import "claims.resid";
+import "../cmw.resid";
+import "../evidence.resid";
 import "../crypto.resid";
 import "../hash.resid";
 import "../x509.resid";
@@ -61,7 +64,7 @@ type SsOk = { SpdmSession s; List(Int) random; };
 /// slot; the responder's signature over TH1 must verify. Err on any failure.
 @verify_internal
 pub Result(SsOk, VerifyError) spdm_session_check(SpdmSessionRecord rec, Anchor root, EvidenceTime t) {
-    if (root.kind != "NvidiaDevice" && root.kind != "DeviceIdentity") { return Err(Refused("spdm_session_verify", "the anchor is not a device identity root (kind " + root.kind + ")")); }
+    if (root.kind != "NvidiaDevice" && root.kind != "DeviceIdentity") { return Err(Refused("SPDM", "the anchor is not a device identity root (kind " + root.kind + ")")); }
     if (anchor_expired(root, t)) { return Err(Stale("the anchor expired " + root.expires)); }
     List(List(Int)) vca = ss_ints(rec.vca, 0, []);
     SpdmAlgs a = ss_msg(spdm_parse_vca(vca))?;
@@ -72,13 +75,13 @@ pub Result(SsOk, VerifyError) spdm_session_check(SpdmSessionRecord rec, Anchor r
     if (!eq_list(parsed.root_hash, spdm_hash(a.hash, root.der))) { return Err(BadChain("the chain's root hash is not the anchor's certificate")); }
     Cert leaf = sp_chain(ss_bytes(spdm_chain_leaf_first(parsed), 0, []), rec.ocsp, root, t)?;
     if (!spdm_key_fits(a.asym, leaf.key)) { return Err(BadChain("the device's key does not fit the negotiated signature algorithm")); }
-    if (!anchor_lists(root.algorithms, spdm_alg_name(a.asym, a.hash))) { return Err(Refused("spdm_session_verify", "the anchor does not list " + spdm_alg_name(a.asym, a.hash))); }
+    if (!anchor_lists(root.algorithms, spdm_alg_name(a.asym, a.hash))) { return Err(Refused("SPDM", "the anchor does not list " + spdm_alg_name(a.asym, a.hash))); }
     List(Int) k = chal_ints(rec.key_exchange);
     List(Int) r = chal_ints(rec.key_exchange_rsp);
     Int d = spdm_dhe_len(a.dhe);
     if (k.len() < 42 + d || k[0] != a.version || k[1] != 228) { return Err(BadLayout("the request is not a KEY_EXCHANGE of the negotiated version")); }
     if (k[2] != 0 && k[2] != 1 && k[2] != 255) { return Err(BadLayout("KEY_EXCHANGE asks for an unknown measurement summary")); }
-    if (k[3] > 7) { return Err(Refused("spdm_session_verify", "KEY_EXCHANGE names no certificate slot (a provisioned key is not a chain to an anchor)")); }
+    if (k[3] > 7) { return Err(Refused("SPDM", "KEY_EXCHANGE names no certificate slot (a provisioned key is not a chain to an anchor)")); }
     Int olen = spdm_le(k, 40 + d, 2);
     if (olen > 1024 || 42 + d + olen != k.len()) { return Err(BadLayout("KEY_EXCHANGE's opaque data does not end it")); }
     if (!ec_public_ok(spdm_dhe_curve(a.dhe), [4].concat(k[40..40 + d]))) { return Err(BadLayout("the requester's exchange data is not a point on the curve")); }
@@ -96,40 +99,93 @@ pub Result(SsOk, VerifyError) spdm_session_check(SpdmSessionRecord rec, Anchor r
     return Ok(SsOk {.s = s, .random = k[8..40]});
 }
 
-Int ss_rp(ChallengeRecord c) { return if (c.bind.len() > 0) { q_rp_bound() } else { 0 }; }
+/// The KEY_EXCHANGE record in envelope evidence.
+@verify_internal
+pub Result(SpdmSessionRecord, VerifyError) ss_record(Cmw ev) {
+    CmwColl k = pf_collection(ev, ct_spdm_session())?;
+    if (!ev_only(k, ["vca", "chain", "ocsp", "digests", "key_exchange", "key_exchange_rsp"])) { return Err(BadLayout("SPDM session evidence has members other than vca, chain, ocsp, digests, key_exchange and key_exchange_rsp")); }
+    List(List(Int)) vca = pf_layout(ev_member_list(k, "vca", 6))?;
+    List(Int) chain = pf_layout(ev_member(k, "chain"))?;
+    List(List(Int)) ocsp = pf_layout(ev_member_list(k, "ocsp", 8))?;
+    List(Int) dg = pf_layout(ev_member(k, "digests"))?;
+    List(Int) ke = pf_layout(ev_member(k, "key_exchange"))?;
+    List(Int) kr = pf_layout(ev_member(k, "key_exchange_rsp"))?;
+    return Ok(SpdmSessionRecord {.vca = ss_bytes(vca, 0, []), .chain = chal_bytes(chain), .ocsp = ss_bytes(ocsp, 0, []), .digests = chal_bytes(dg), .key_exchange = chal_bytes(ke), .key_exchange_rsp = chal_bytes(kr)});
+}
 
-/// Verifies an SPDM key exchange under `root` as Fresh for `c`'s holder.
-/// The requester's random must be challenge_value(c), issued with
-/// challenge_issue(32). Err on any failed check.
-@primitive(verify, anchor = root, gives = [fresh], time = t, format = SpdmSession, kinds = [NvidiaDevice, DeviceIdentity], inputs = [rec, c, t])
-pub Result(Verified(SpdmSession), VerifyError) spdm_session_verify(SpdmSessionRecord rec, ChallengeRecord c, Anchor root, EvidenceTime t) {
+// The device-identity root of `tr` the record's chain hashes to.
+Result(Anchor, VerifyError) ss_root(SpdmSessionRecord rec, Trust tr) {
+    List(Cand) cs = trust_anchor_cands(tr, ["NvidiaDevice", "DeviceIdentity"]);
+    if (cs.len() == 0) { return Err(Refused("verify_session", "the trust set holds no device identity root")); }
+    SpdmAlgs a = ss_msg(spdm_parse_vca(ss_ints(rec.vca, 0, [])))?;
+    SpdmChain parsed = ss_msg(spdm_parse_chain(chal_ints(rec.chain), a.hash))?;
+    return ss_root_at(cs, parsed.root_hash, a.hash, 0);
+}
+
+Result(Anchor, VerifyError) ss_root_at(List(Cand) cs, List(Int) h, Int hash, Int i) {
+    if (i >= cs.len()) { return Err(Refused("verify_session", "no device identity root in the trust set is this chain's")); }
+    if (eq_list(h, spdm_hash(hash, cs[i].a.der))) { return Ok(cs[i].a); }
+    return ss_root_at(cs, h, hash, i + 1);
+}
+
+/// Verifies an SPDM key exchange as Fresh for `c`'s holder, under `tr`.
+/// `evidence` is an envelope (lib/evidence.resid) whose evidence is the
+/// requester's KEY_EXCHANGE record (evidence_spdm_session); the chain must
+/// hash to a device identity root of `tr`, and the requester's random must
+/// be challenge_value(c), issued with challenge_issue(32). The result binds
+/// CPU evidence to the session (bind_device). Err on any failed check.
+@primitive(verify, trust = tr, gives = [fresh], time = t, kinds = [NvidiaDevice, DeviceIdentity], inputs = [evidence, c, t])
+pub Result(Verified(SpdmSession), VerifyError) verify_session(List(UInt(8)) evidence, ChallengeRecord c, Trust tr, EvidenceTime t) {
+    Envelope e = pf_layout(envelope_decode(evidence))?;
+    SpdmSessionRecord rec = ss_record(e.evidence)?;
+    Anchor root = ss_root(rec, tr)?;
     SsOk k = spdm_session_check(rec, root, t)?;
     if (challenge_value(c).len() != 32) { return Err(NotFresh("an SPDM random is 32 bytes: issue the challenge with challenge_issue(32)")); }
     Bool spent = vf_bind_challenge(chal_bytes(k.random), challenge_value(c), c, rec.key_exchange_rsp, spdm_descriptors())?;
     List(Int) none = [];
-    return Ok(vf_make(k.s, root, q_fresh() | ss_rp(c), c, 0, none, none, t, "SpdmSession"));
+    Int rp = if (c.bind.len() > 0) { q_rp_bound() } else { 0 };
+    return Ok(vf_make(k.s, root, q_fresh() | rp, c, 0, none, none, t, "SpdmSession"));
 }
 
 /// Verifies an SPDM key exchange as Delivered only, not Fresh.
 /// For a record imported without a SpentStore: the requester's random must
 /// equal replayable_value(c), but nothing stops a replay.
-@primitive(verify, anchor = root, gives = [delivered], time = t, format = SpdmSession, kinds = [NvidiaDevice, DeviceIdentity], inputs = [rec, c, t])
-pub Result(Verified(SpdmSession), VerifyError) spdm_session_verify_replayable(SpdmSessionRecord rec, ReplayableRecord c, Anchor root, EvidenceTime t) {
+@primitive(verify, trust = tr, gives = [delivered], time = t, kinds = [NvidiaDevice, DeviceIdentity], inputs = [evidence, c, t])
+pub Result(Verified(SpdmSession), VerifyError) verify_session_replayable(List(UInt(8)) evidence, ReplayableRecord c, Trust tr, EvidenceTime t) {
+    Envelope e = pf_layout(envelope_decode(evidence))?;
+    SpdmSessionRecord rec = ss_record(e.evidence)?;
+    Anchor root = ss_root(rec, tr)?;
     SsOk k = spdm_session_check(rec, root, t)?;
     if (!eq_list(k.random, chal_ints(replayable_value(c)))) { return Err(NotFresh("the requester's random is not this challenge")); }
     List(Int) none = [];
     return Ok(Verified {.value = k.s, .anchors = [root.id], .quals = q_delivered(), .record = 0 - 1, .kem = 0, .pk = none, .chan = none, .time = t.source, .principal = root.principal, .format = "SpdmSession"});
 }
 
+/// CPU evidence bound to the device session `s`: the evidence carries
+/// challenge_session_value(challenge_value(c), th) for the session's
+/// transcript hash th, so the device is the one the attested guest keyed
+/// the session with. The result rests on the session's anchors too, so a
+/// decision on it names the device's root in `accept`. Err when `s` is
+/// not fresh.
+@primitive(binding, from = s, gives = [], inputs = [s])
+pub Result(Binding, VerifyError) bind_device(Verified(SpdmSession) s) {
+    if (!verified_fresh(s)) { return Err(NotFresh("bind_device: the device session is not fresh")); }
+    return Ok(binding_session(s.value.th, s.anchors));
+}
+
 // ─── Measurements in the session ────────────────────────────────────
 
-/// Returns whether the session's measurement summary hashes `e`'s blocks.
+/// Whether the session's measurement summary hashes the device's blocks.
+/// `m` is the device's measurement evidence, verified (verify_evidence).
 /// Type 255 covers all blocks, type 1 the immutable-ROM ones; true means
 /// the measurements are the ones the device held when it keyed the
-/// session. Any other summary type gives false.
-pub Bool spdm_session_covers(SpdmSession s, SpdmEvidence e) {
-    if ((s.summary_type != 255 && s.summary_type != 1) || s.summary.len() != spdm_hash_len(s.hash)) { return false; }
-    return eq_list(spdm_hash(s.hash, ss_blocks(e.measurements, s.summary_type, 0, [])), s.summary);
+/// session. Any other summary type, or claims that are not SPDM
+/// measurements, give false.
+pub Bool session_covers(Verified(SpdmSession) s, Verified(Claims) m) {
+    SpdmSession x = s.value;
+    if (m.value.format != "SpdmEvidence") { return false; }
+    if ((x.summary_type != 255 && x.summary_type != 1) || x.summary.len() != spdm_hash_len(x.hash)) { return false; }
+    return eq_list(spdm_hash(x.hash, ss_blocks(sp_blocks_of(m.value), x.summary_type, 0, [])), x.summary);
 }
 
 List(Int) ss_blocks(List(SpdmMeasurement) ms, Int st, Int i, List(Int) acc) {

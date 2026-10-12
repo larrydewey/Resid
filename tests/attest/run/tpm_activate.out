@@ -8,7 +8,7 @@ intermediate revoked the EK: refused (tpm_verify_ak): certificate 0 of the EK ch
 no CRL for the EK: stale: no current CRL from its issuer covers certificate 0 of the EK chain
 the EK's CRL past nextUpdate: stale: no current CRL from its issuer covers certificate 0 of the EK chain
 no CRL for the intermediate: stale: no current CRL from its issuer covers certificate 1 of the EK chain
-without the intermediate: bad certificate chain: the EK certificate is not signed by the one above it, or one is not current
+without the intermediate: refused (tpm_verify_ak): no TPM manufacturer's root in the trust set issued this EK chain
 an EK certificate without tcg-kp-EKCertificate: bad certificate chain: the EK certificate does not name tcg-kp-EKCertificate
 an AK that also decrypts: refused (tpm_verify_ak): the AK is not a restricted signing key fixed to its TPM (attributes 0x70472)
 an unrestricted AK: refused (tpm_verify_ak): the AK is not a restricted signing key fixed to its TPM (attributes 0x40472)
@@ -17,5 +17,5 @@ then the round itself: AK of a id:54455354 ResidTestTPM (id:00010002), name of 3
 RSA EK credential: blob 68 bytes, secret 256 bytes
 a CA's P-384 key as EK: refused (tpm_ak_challenge): the EK is not RSA 2048 or ECC NIST P-256 (the low-range EK templates)
 quote: appraised, 3 PCRs, fresh true, anchors 1
-quote signed by another key: bad signature: the attestation key did not sign this, or with an algorithm the anchor does not list
+quote signed by another key: refused (verify_evidence): no root or key in the trust set fits this TPM 2.0 evidence (another key signed this quote)
 released and opened: same key

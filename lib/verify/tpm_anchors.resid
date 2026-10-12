@@ -10,6 +10,7 @@
 
 import "core.resid";
 import "tpm.resid";
+import "claims.resid";
 
 /// AMD: AMD Pluton Global Factory ICA (EcP384, until 2039-12-15; cross-certified, Windows trusts it as a root).
 @anchor(kind = TpmEk(AMD), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "Microsoft TrustedTpm.cab (AMD/RootCA/AMD-Pluton-Global-Factory-ICA.crt)", fingerprint = "sha256:593a1794f9e17476c7ad427d2908a97c451451c9e0939fdc80d5d662c232d401", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [EcdsaP384Sha384, EcdsaP384Sha256], expires = "2039-12-15")
@@ -2147,3 +2148,7 @@ pub List(Int) tpm_ek_stmicro_stsafe_rsa_root_ca_02_der() {
         76, 238, 20, 52, 74, 46, 219, 176, 244, 221
     ];
 }
+
+/// Every TPM manufacturer's EK root above, as one trust set (tpm_verify_ak).
+@trust(anchors = [tpm_ek_amd_pluton_global_factory_ica, tpm_ek_amd_root_ca, tpm_ek_amd_microsoft_pluton_root_ca_2021, tpm_ek_atmel_root_signing_module, tpm_ek_infineon_ifx_tpm_ek_root_ca, tpm_ek_infineon_ifx_rootca, tpm_ek_infineon_optiga_tm_ecc_root_ca, tpm_ek_infineon_optiga_tm_rsa_root_ca, tpm_ek_infineon_optiga_tm_ecc_root_ca_2, tpm_ek_infineon_optiga_tm_rsa_root_ca_2, tpm_ek_infineon_optigaeccrootca3, tpm_ek_infineon_optigarsarootca3, tpm_ek_intel_ekrootpublickey, tpm_ek_intel_odca_ca2_csme_intermediate, tpm_ek_intel_odca_ca2_osse_intermediate, tpm_ek_intel_ondie_ca_rootca_certificate, tpm_ek_nationz_ekrootca, tpm_ek_nationz_nseccrootca001, tpm_ek_nationz_nsrsarootca001, tpm_ek_nationz_nstpmeccrootca001, tpm_ek_nationz_nstpmrsarootca001, tpm_ek_nuvoton_npctxxxecc521rootca, tpm_ek_nuvoton_ntc_tpm_ek_root_ca_01, tpm_ek_nuvoton_ntc_tpm_ek_root_ca_02, tpm_ek_nuvoton_ntc_tpm_ek_root_ca_arsuf_01, tpm_ek_nuvoton_root_ca_1013, tpm_ek_nuvoton_root_ca_1014, tpm_ek_nuvoton_root_ca_1110, tpm_ek_nuvoton_root_ca_1111, tpm_ek_nuvoton_root_ca_1210, tpm_ek_nuvoton_root_ca_2010, tpm_ek_nuvoton_root_ca_2011, tpm_ek_nuvoton_root_ca_2012, tpm_ek_nuvoton_root_ca_2110, tpm_ek_nuvoton_root_ca_2111, tpm_ek_nuvoton_root_ca_2112, tpm_ek_nuvoton_root_ca_2210, tpm_ek_nuvoton_root_ca_2211, tpm_ek_qc_microsoft_tpm_root_certificate_authority_2014, tpm_ek_qc_qwes_prod_ek_provisioning_root, tpm_ek_stmicro_globalsign_trusted_computing_ca, tpm_ek_stmicro_globalsign_trusted_platform_module_ecc_root_ca, tpm_ek_stmicro_st_tpm_root_certificate, tpm_ek_stmicro_stm_tpm_ecc_root_ca_01, tpm_ek_stmicro_stsafe_ecc_root_ca_02, tpm_ek_stmicro_stsafe_rsa_root_ca_02])
+pub Trust tpm_ek_roots() { return trust_anchors(); }

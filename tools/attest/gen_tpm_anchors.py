@@ -150,8 +150,9 @@ pub List(Int) {fn}_der() {{
 ''' + "".join(f"//   {s}\n" for s in skipped) + '''
 import "core.resid";
 import "tpm.resid";
+import "claims.resid";
 
-''' + "\n".join(out))
+''' + "\n".join(out + ["/// Every TPM manufacturer's EK root above, as one trust set (tpm_verify_ak).\n@trust(anchors = [" + ", ".join(fn for fn, x, v in issued) + "])\npub Trust tpm_ek_roots() { return trust_anchors(); }\n"]))
 
     if len(sys.argv) > 2:
         write_tests(d, sys.argv[2], issued, today)

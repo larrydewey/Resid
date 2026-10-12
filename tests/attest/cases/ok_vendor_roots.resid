@@ -1,0 +1,21 @@
+import "verify/verifier.resid";
+import "evidence.resid";
+import "verify/seal.resid";
+import "verify/testing.resid";
+import "challenge.resid";
+import "crypto.resid";
+import "hash.resid";
+import "hpke.resid";
+
+@policy
+Policy pol() { return Policy {.measurements = ["00"], .require = [], .allow = []}; }
+
+// The vendor roots accepted whole.
+@decides(accept = [vendor_roots], appraised = pol, identity = none)
+@requires(clock(readonly))
+Result(Int, VerifyError) f(List(UInt(8)) e, ChallengeRecord c) {
+    Verified(Claims) v = verify_evidence(e, c, bind_fresh(), vendor_roots(), kernel_time())?;
+    Appraised(Claims) a = appraise_evidence(v, pol())?;
+    return Ok(1);
+}
+Int main() { return 0; }

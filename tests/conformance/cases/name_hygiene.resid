@@ -1,0 +1,16 @@
+// A program function named like a builtin (u64, str_len) keeps the
+// library's calls of that builtin: only the program's own calls reach it.
+import "cbor.resid";
+import "serial_value.resid";
+
+// The program's own u64 and str_len: the library's calls keep the builtins.
+List(Int) u64(Int v) { return [(v >> 8) & 255, v & 255]; }
+Int str_len(Str s) { return 99; }
+
+Int main() {
+    Result(List(Int), SerialError) r = to_cbor(VSeq([VInt(0 - 3), VStr("hi"), VInt(70000)]));
+    println(match (r) { Ok(b) => f"{b}", Err(e) => "err" });
+    Int n = str_len("x");
+    println(f"{u64(258)} {n}");
+    return 0;
+}

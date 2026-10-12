@@ -1,0 +1,29 @@
+// `?` on a match over a declared sum whose arms are Ok and Err: the
+// match's type is the arms' unified Result(Int, Str), not the last arm's
+// Result(_, Str) (lower.resid's lw_arms_g).
+type Shape = Square(Int) | Named(Str) | Nothing;
+
+Result(Int, Str) side(Shape s) {
+    Int x = match s { Square(n) => Ok(n), Named(m) => Err(m), Nothing => Err("nothing") }?;
+    return Ok(x * 2);
+}
+
+Result(Int, Str) side_wild(Shape s) {
+    Int x = match s { Square(n) => Ok(n), _ => Err("not a square") }?;
+    return Ok(x + 1);
+}
+
+Result(Str, Int) label(Shape s) {
+    Str t = match s { Named(m) => Ok(m), Square(n) => Err(n), Nothing => Err(0 - 1) }?;
+    return Ok(t + "!");
+}
+
+Int main() {
+    println(match (side(Square(21))) { Ok(v) => f"{v}", Err(e) => "err " + e });
+    println(match (side(Named("circle"))) { Ok(v) => f"{v}", Err(e) => "err " + e });
+    println(match (side_wild(Nothing)) { Ok(v) => f"{v}", Err(e) => "err " + e });
+    println(match (side_wild(Square(4))) { Ok(v) => f"{v}", Err(e) => "err " + e });
+    println(match (label(Named("hi"))) { Ok(v) => v, Err(e) => f"err {e}" });
+    println(match (label(Square(3))) { Ok(v) => v, Err(e) => f"err {e}" });
+    return 0;
+}

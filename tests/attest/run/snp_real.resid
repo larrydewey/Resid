@@ -1,4 +1,5 @@
-import "verify/core.resid";
+import "verify/verifier.resid";
+import "evidence.resid";
 import "verify/snp.resid";
 import "verify/amd_anchors.resid";
 import "verify/testing.resid";
@@ -20,5 +21,10 @@ Int main() {
     println(b);
     Str c = match (test_snp_check(rep, amd_ark_genoa(), col, t)) { Ok(r) => "genoa: accepted", Err(e) => verify_error_text(e) };
     println(c);
+    // Through the generic verifier under the vendor roots: the chain to
+    // AMD's Milan root holds, and the report carries no challenge of ours.
+    List(CmwRec) cl = [collateral_item(mt_cert(), chal_ints(rd(f + "gsg-vcek.der"))), collateral_item(mt_cert(), chal_ints(rd(f + "amd-ask-milan.der"))), collateral_item(mt_crl(), chal_ints(rd(f + "amd-milan.crl")))];
+    ChallengeRecord ch = challenge_issue(64);
+    println("vendor roots: " + match (verify_evidence(evidence_envelope(evidence_snp(chal_ints(rep)), cl), ch, bind_fresh(), vendor_roots(), t)) { Ok(v) => "ACCEPTED", Err(e) => verify_error_text(e) });
     return 0;
 }

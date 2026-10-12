@@ -1,0 +1,47 @@
+// RATS CMW over the vendored CBOR (lib/cmw.resid, lib/cbor.resid): a
+// round trip, deterministic member order, and each refusal of input from
+// outside: not well formed, indefinite, too deep, trailing bytes, a record
+// of the wrong shape, an integer label, a label given twice.
+import "cmw.resid";
+import "cbor.resid";
+import "evidence.resid";
+import "challenge.resid";
+
+Str dec(List(Int) b) { return match (cmw_decode(b)) { Ok(c) => "ok " + shape(c), Err(e) => "refused: " + e }; }
+
+Str shape(Cmw c) {
+    return match (c) {
+        CmwRecord(r) => "record " + r.media_type + f" ({r.value.len()} bytes)",
+        CmwCollection(k) => "collection " + k.ctype + f" of {k.items.len()}: " + labels(k.items, 0, ""),
+    };
+}
+
+Str labels(List(CmwItem) xs, Int i, Str acc) { return if (i >= xs.len()) { acc } else { labels(xs, i + 1, acc + (if (i == 0) { "" } else { " " }) + xs[i].label) }; }
+
+Int main() {
+    List(Int) rec = cmw_encode(cmw_record("application/x", [1, 2, 3]));
+    println(cbor_hex(rec));
+    println(dec(rec));
+    // Members are written in RFC 8949 §4.2.1 order whatever the order given.
+    List(Int) coll = cmw_encode(cmw_collection("tag:t", [cmw_item("zz", cmw_record("a/b", [9])), cmw_item("a", cmw_record("a/b", [8]))]));
+    println(cbor_hex(coll));
+    println(dec(coll));
+    println(dec([]));
+    println(dec([159, 255]));                       // an indefinite array
+    println(dec([129, 129, 129, 129, 129, 129, 129, 129, 129, 129, 129, 129, 129, 64])); // 13 deep
+    println(dec(rec.concat([0])));                  // trailing byte
+    println(dec([131, 97, 97, 65, 1, 97, 120]));     // three elements, the third not a uint
+    println(dec([130, 1, 65, 1]));                   // a content-format number as the type
+    println(dec([161, 1, 130, 97, 97, 64]));         // an integer label
+    println(dec([162, 97, 97, 130, 97, 97, 64, 97, 97, 130, 97, 97, 64])); // a label twice
+    println(dec([160]));                             // an empty collection
+    println(dec([91, 255, 255, 255, 255, 255, 255, 255, 255])); // a length past 2^63
+    println(f"well formed: {cbor_well_formed(rec, 4)} {cbor_well_formed([24, 5], 4)} {cbor_well_formed([248, 5], 4)} {cbor_well_formed([129, 129, 0], 1)}");
+    // The evidence envelope: evidence and collateral, then one more item.
+    List(CmwRec) col = [collateral_item(mt_crl(), [48, 0])];
+    List(UInt(8)) env = evidence_envelope(evidence_snp([1, 2]), col);
+    List(UInt(8)) env2 = match (evidence_add_collateral(env, mt_cert(), [(UInt(8)) 48, (UInt(8)) 1])) { Ok(x) => x, Err(e) => [] };
+    println(match (envelope_decode(env2)) { Ok(e) => shape(e.evidence) + f", {e.collateral.len()} collateral: " + e.collateral[0].media_type + " " + e.collateral[1].media_type, Err(m) => "refused: " + m });
+    println(match (envelope_decode(chal_bytes(rec))) { Ok(e) => "ENVELOPE", Err(m) => "refused: " + m });
+    return 0;
+}

@@ -1,4 +1,5 @@
-import "verify/core.resid";
+import "verify/verifier.resid";
+import "evidence.resid";
 import "verify/assume.resid";
 @assumption(reason = "trust me")
 Assumption enrolled() { return assumption_pinned(); }

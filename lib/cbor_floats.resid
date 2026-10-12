@@ -1,0 +1,198 @@
+import "cbor_head.resid";
+
+// floats.resid — IEEE-754 binary16/32/64 as CBOR carries them (RFC 8949
+// §3.3: major type 7, additional information 25, 26 and 27).
+//
+// Resid has no float-to-bits builtin, so the bit patterns are built from
+// the value's own arithmetic: scale into [1, 2) for the exponent field and
+// shift the fraction out a bit at a time, which is exact for a value that
+// is already a binary floating-point number (the only case where these are
+// used to encode). Decoding goes the other way: a mantissa scaled by a
+// power of two, plus one, times a power of two.
+
+/// 2^n, for any n the widths use (|n| <= 1074).
+pub Float cb_pow2(Int n) {
+    if (n >= 0) { return cb_pow2_up(n, 1.0); }
+    return cb_pow2_down(0 - n, 1.0);
+}
+
+/// `acc` doubled `n` times (the n >= 0 half of `cb_pow2`).
+pub Float cb_pow2_up(Int n, Float acc) {
+    if (n == 0) { return acc; }
+    return cb_pow2_up(n - 1, acc * 2.0);
+}
+
+/// `acc` halved `n` times (the negative-exponent half of `cb_pow2`).
+pub Float cb_pow2_down(Int n, Float acc) {
+    if (n == 0) { return acc; }
+    return cb_pow2_down(n - 1, acc / 2.0);
+}
+
+/// Whether `v` is NaN, the one value not equal to itself.
+pub Bool cb_is_nan(Float v) { return v != v; }
+
+/// Whether `v` is +infinity.
+/// +infinity: the only finite-looking value that does not shrink when halved.
+pub Bool cb_is_inf(Float v) { return !cb_is_nan(v) && v > 0.0 && v / 2.0 == v; }
+
+// ─── binary64 ────────────────────────────────────────────────────────
+
+/// The unbiased exponent e of a positive `a`: a = m × 2^e with 1 <= m < 2.
+pub Int cb_exp(Float a) {
+    if (a >= 1.0) { return cb_exp_up(a, 0); }
+    return cb_exp_down(a, 0);
+}
+
+/// `e` plus the halvings that bring `x` below 2 (`cb_exp` for x >= 1).
+pub Int cb_exp_up(Float x, Int e) {
+    if (x < 2.0) { return e; }
+    return cb_exp_up(x / 2.0, e + 1);
+}
+
+/// `e` minus the doublings that bring `x` to at least 1 (`cb_exp` for x < 1).
+pub Int cb_exp_down(Float x, Int e) {
+    if (x >= 1.0) { return e; }
+    return cb_exp_down(x * 2.0, e - 1);
+}
+
+/// The 52 fraction bits of m, where 0 <= m < 1 (one shift per bit).
+pub UInt(64) cb_frac52(Float m) { return cb_frac52_at(m, 52, u64(0)); }
+
+/// `acc` extended by the next `left` fraction bits of `m`, most significant first.
+pub UInt(64) cb_frac52_at(Float m, Int left, UInt(64) acc) {
+    if (left == 0) { return acc; }
+    Float x = m * 2.0;
+    if (x >= 1.0) { return cb_frac52_at(x - 1.0, left - 1, acc * u64(2) + u64(1)); }
+    return cb_frac52_at(x, left - 1, acc * u64(2));
+}
+
+/// The eight bytes of `v`, big-endian.
+pub List(Int) cb_be8(UInt(64) v) { return cb_rev(cb_be8_at(v, 8, []), 0, []); }
+
+/// `acc` followed by the low `n` bytes of `v`, least significant first.
+pub List(Int) cb_be8_at(UInt(64) v, Int n, List(Int) acc) {
+    if (n == 0) { return acc; }
+    UInt(64) q = v / u64(256);
+    return cb_be8_at(q, n - 1, acc.concat([(Int)(v - q * u64(256))]));
+}
+
+/// Eight bytes, big-endian: the CBOR form of a double.
+pub List(Int) cb_f64_bits(Float v) {
+    Bool neg = v < 0.0;
+    Float a = if (neg) { 0.0 - v } else { v };
+    if (a == 0.0) { return cb_be8(cb_sign_bits(neg)); }
+    Int e = cb_exp(a);
+    UInt(64) raw = ((UInt(64))(e + 1023) << 52) | cb_frac52(a / cb_pow2(e) - 1.0);
+    return cb_be8(raw | cb_sign_bits(neg));
+}
+
+/// The binary64 sign bit: bit 63 set when `neg`, else zero.
+pub UInt(64) cb_sign_bits(Bool neg) { return if (neg) { u64(0x8000000000000000) } else { u64(0) }; }
+
+/// A double from the eight big-endian bytes of `bs` at `i`.
+/// Infinity and NaN come back as themselves:
+/// they are not produced by encoding (see ce_float) but are readable.
+pub Float cb_f64_from(List(Int) bs, Int i) {
+    Float sign = if (bs[i] >= 128) { -1.0 } else { 1.0 };
+    Int e = ((bs[i] & 0x7F) << 4) | (bs[i + 1] >> 4);
+    Int m = ((bs[i + 1] & 0x0F) << 48) | (bs[i + 2] << 40) | (bs[i + 3] << 32) | (bs[i + 4] << 24) | (bs[i + 5] << 16) | (bs[i + 6] << 8) | bs[i + 7];
+    if (e == 0) { return sign * (Float)m * cb_pow2(0 - 1074); }
+    if (e == 2047) { return if (m == 0) { cb_inf(sign) } else { cb_nan() }; }
+    return sign * (1.0 + (Float)m * cb_pow2(0 - 52)) * cb_pow2(e - 1023);
+}
+
+/// Infinity with the sign of `sign`.
+pub Float cb_inf(Float sign) { Float z = 0.0; return sign * (1.0 / z); }
+
+/// A NaN, computed as 0/0.
+pub Float cb_nan() { Float z = 0.0; return z / z; }
+
+// ─── binary32 ────────────────────────────────────────────────────────
+
+/// The sign bit of a float, taken from its double form.
+/// `v < 0.0` alone misses negative zero.
+pub Bool cb_is_neg(Float v) { return cb_f64_bits(v)[0] >= 128; }
+
+/// Four bytes, big-endian: the CBOR form of a single.
+pub List(Int) cb_f32_bits(Float(32) v) {
+    Float wide = (Float)v;
+    Float a = if (cb_is_neg(wide)) { 0.0 - wide } else { wide };
+    if (a == 0.0) { return cb_f32_zeros(cb_is_neg(wide)); }
+    Int e = cb_exp(a);
+    UInt(64) mant = cb_frac_bits(a / cb_pow2(e) - 1.0, 23);
+    Int ex = e + 127;
+    return [cb_f32_high(ex, cb_is_neg(wide)), ((ex & 1) << 7) | ((Int)(mant >> 16) & 0x7F), (Int)((mant >> 8) & 0xFF), (Int)(mant & 0xFF)];
+}
+
+/// The first byte of a single: the sign and the biased exponent's high 7 bits.
+pub Int cb_f32_high(Int ex, Bool neg) { return (ex >> 1) | (if (neg) { 128 } else { 0 }); }
+
+/// The four bytes of a single zero, negative when `neg`.
+pub List(Int) cb_f32_zeros(Bool neg) { return [if (neg) { 128 } else { 0 }, 0, 0, 0]; }
+
+/// The first `width` fraction bits of m, where 0 <= m < 1 (23 for a single).
+pub UInt(64) cb_frac_bits(Float m, Int width) { return cb_frac_bits_at(m, width, u64(0)); }
+
+/// `acc` extended by the next `left` fraction bits of `m`, most significant first.
+pub UInt(64) cb_frac_bits_at(Float m, Int left, UInt(64) acc) {
+    if (left == 0) { return acc; }
+    Float x = m * 2.0;
+    if (x >= 1.0) { return cb_frac_bits_at(x - 1.0, left - 1, acc * u64(2) + u64(1)); }
+    return cb_frac_bits_at(x, left - 1, acc * u64(2));
+}
+
+/// A single, widened to a double, from the four big-endian bytes of `bs` at `i`.
+/// Infinity and NaN are read as themselves.
+pub Float cb_f32_from(List(Int) bs, Int i) {
+    Float sign = if (bs[i] >= 128) { -1.0 } else { 1.0 };
+    Int e = ((bs[i] & 0x7F) << 1) | (bs[i + 1] >> 7);
+    Int m = ((bs[i + 1] & 0x7F) << 16) | (bs[i + 2] << 8) | bs[i + 3];
+    if (e == 0) { return sign * (Float)m * cb_pow2(0 - 149); }
+    if (e == 255) { return if (m == 0) { cb_inf(sign) } else { cb_nan() }; }
+    return sign * (1.0 + (Float)m * cb_pow2(0 - 23)) * cb_pow2(e - 127);
+}
+
+// ─── binary16 ────────────────────────────────────────────────────────
+
+/// Two bytes, big-endian: the CBOR form of a half.
+/// A half is the double with the same value rounded to 10 fraction bits, so
+/// it comes out of the same decomposition: the same sign, the exponent 1008
+/// lower and the fraction 42 bits narrower.
+pub List(Int) cb_f16_bits(Float(16) v) {
+    Float wide = (Float)v;
+    Bool neg = cb_is_neg(wide);
+    Float a = if (neg) { 0.0 - wide } else { wide };
+    if (a == 0.0) { return [if (neg) { 128 } else { 0 }, 0]; }
+    Int e = cb_exp(a);
+    // Below 2^-14 a half is subnormal: no exponent field, the fraction
+    // alone, and a value that round-tripped here is an exact multiple of
+    // 2^-24.
+    if (e < 0 - 14) {
+        Int m = (Int)(a * cb_pow2(24));
+        return [((m >> 8) & 3) | (if (neg) { 128 } else { 0 }), m & 255];
+    }
+    Int mant = (Int)(cb_frac52(a / cb_pow2(e) - 1.0) >> 42);
+    return [(((e + 15) & 31) << 2) | ((mant >> 8) & 3) | (if (neg) { 128 } else { 0 }), mant & 255];
+}
+
+/// A half, widened to a double, from the two big-endian bytes of `bs` at `i`.
+/// Infinity and NaN are read as themselves.
+pub Float cb_f16_from(List(Int) bs, Int i) {
+    Float sign = if (bs[i] >= 128) { -1.0 } else { 1.0 };
+    Int e = (bs[i] >> 2) & 0x1F;
+    Int m = ((bs[i] & 3) << 8) | bs[i + 1];
+    if (e == 0) { return sign * (Float)m * cb_pow2(0 - 24); }
+    if (e == 31) { return if (m == 0) { cb_inf(sign) } else { cb_nan() }; }
+    return sign * (1.0 + (Float)m * cb_pow2(0 - 10)) * cb_pow2(e - 15);
+}
+
+// ─── Which width to write ────────────────────────────────────────────
+//
+// CBOR wants the shortest float that reads back exactly (RFC 8949 §4.1:
+// deterministic encoding), so each width is offered and checked.
+
+/// Whether `v` reads back exactly as a half.
+pub Bool cb_fits_f16(Float v) { return (Float)f16(v) == v; }
+
+/// Whether `v` reads back exactly as a single.
+pub Bool cb_fits_f32(Float v) { return (Float)f32(v) == v; }

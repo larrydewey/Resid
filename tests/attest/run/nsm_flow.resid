@@ -1,4 +1,4 @@
-import "verify/core.resid";
+import "verify/verifier.resid";
 import "verify/nsm.resid";
 import "verify/aws_anchors.resid";
 import "verify/seal.resid";
@@ -13,6 +13,8 @@ import "hash.resid";
 import "hpke.resid";
 import "hpkeg.resid";
 import "random.resid";
+import "evidence.resid";
+import "attester.resid";
 
 @requires(filesystem(readonly))
 List(Int) rd(Str p) { return filesystem.read_bytes("fixtures/" + p); }
@@ -40,13 +42,18 @@ List(UInt(8)) doc(List(Int) nonce, Int pcr0, Str extra) {
 }
 
 @policy
-NsmPolicy enclave_policy() { return NsmPolicy {.pcrs_hex = ["0=" + hex_encode(pcr(1)), "1=" + hex_encode(pcr(2)), "2=" + hex_encode(pcr(3))]}; }
+Policy enclave_policy() { return Policy {.measurements = [hex_encode(pcr(1)), "PCR1=" + hex_encode(pcr(2)), "PCR2=" + hex_encode(pcr(3))], .require = [], .allow = []}; }
 
-@decides(accept = [test_nitro_root], appraised = enclave_policy, identity = key_bound)
+List(UInt(8)) env(List(UInt(8)) d) {
+    List(CmwRec) none = [];
+    return evidence_envelope(evidence_nitro(chal_ints(d)), none);
+}
+
+@decides(accept = [test_nitro_roots], appraised = enclave_policy, identity = key_bound)
 @requires(declassify)
-Result(HpkeMessage, VerifyError) release(List(UInt(8)) d, ChallengeRecord issued, List(Int) guest_pk, List(Secret(UInt(8))) key, List(Secret(UInt(8))) sender) {
-    Verified(NsmDocument) v = nsm_verify_key_bound(d, issued, test_nitro_root(), test_time(1791000000), 32, guest_pk)?;
-    Appraised(NsmDocument) a = nsm_appraise(v, enclave_policy())?;
+Result(HpkeMessage, VerifyError) release(List(UInt(8)) evidence, ChallengeRecord issued, List(Int) guest_pk, List(Secret(UInt(8))) key, List(Secret(UInt(8))) sender) {
+    Verified(Claims) v = verify_evidence(evidence, issued, bind_key(32, guest_pk), test_nitro_roots(), test_time(1791000000))?;
+    Appraised(Claims) a = appraise_evidence(v, enclave_policy())?;
     return seal_to_evidence(a, 32, guest_pk, key, sender);
 }
 
@@ -60,9 +67,9 @@ Str check(Str what, List(UInt(8)) d, Anchor root, Int at) {
 
 @requires(filesystem(readonly))
 Str fresh(Str what, List(UInt(8)) d, ChallengeRecord c, Bool appraise) {
-    Result(Verified(NsmDocument), VerifyError) v = nsm_verify(d, c, test_nitro_root(), test_time(1791000000));
+    Result(Verified(Claims), VerifyError) v = verify_evidence(env(d), c, bind_fresh(), test_nitro_roots(), test_time(1791000000));
     Str s = match (v) {
-        Ok(x) => if (appraise) { match (nsm_appraise(x, enclave_policy())) { Ok(a) => "appraised", Err(e) => verify_error_text(e) } } else { f"fresh, quals {x.quals}" },
+        Ok(x) => if (appraise) { match (appraise_evidence(x, enclave_policy())) { Ok(a) => "appraised", Err(e) => verify_error_text(e) } } else { f"fresh, quals {x.quals}, " + platform_name(x.value.platform) + ", module " + cbe_ascii(claims_bytes(x.value, "module_id"), 0, "") },
         Err(e) => verify_error_text(e),
     };
     return what + ": " + s;
@@ -91,10 +98,18 @@ Int main() {
     ChallengeRecord c5 = challenge_issue(64);
     List(UInt(8)) bound = match (challenge_with_key(challenge_value(c5), 32, kp.sk)) { Ok(b) => b, Err(e) => [] };
     List(Secret(UInt(8))) key = random_secret(32);
-    Str r = match (release(doc(chal_ints(bound), 1, ""), c5, kp.pk, key, secret_bytes(rd("sender-sk.bin")))) {
+    Str r = match (release(env(doc(chal_ints(bound), 1, "")), c5, kp.pk, key, secret_bytes(rd("sender-sk.bin")))) {
         Ok(m) => match (open_released(32, kp.sk, m, test_sender())) { Ok(v) => if (hex_encode(sec_pub(v.value, 0, ListBuf())) == hex_encode(sec_pub(key, 0, ListBuf()))) { "released and opened: same key" } else { "KEY DIFFERS" }, Err(e) => "open: " + verify_error_text(e) },
         Err(e) => "release: " + verify_error_text(e),
     };
     println(r);
+    // The attester's side: the NSM request it sends, and the envelope it
+    // makes of the NSM's answer (no NSM here).
+    println("request: " + hex_encode(at_nsm_request([1, 2, 3])));
+    ChallengeRecord c6 = challenge_issue(64);
+    List(Int) answer = cbe_bytes(chal_ints(doc(chal_ints(challenge_value(c6)), 1, "")), cbe_text("document", cbe_map(1, cbe_text("Attestation", cbe_map(1, [])))));
+    println("answer: " + match (at_nsm_envelope("nsm.raw", chal_bytes(answer))) { Ok(e) => match (verify_evidence(e, c6, bind_fresh(), test_nitro_roots(), test_time(1791000000))) { Ok(v) => "verified, " + platform_name(v.value.platform), Err(err) => verify_error_text(err) }, Err(e) => device_error_text(e) });
+    println("error answer: " + match (at_nsm_envelope("nsm.raw", chal_bytes(cbe_text("InvalidArgument", cbe_text("Error", cbe_map(1, [])))))) { Ok(e) => "ENVELOPE", Err(e) => device_error_text(e) });
+    println("junk answer: " + match (at_nsm_envelope("nsm.raw", chal_bytes([255, 0, 1]))) { Ok(e) => "ENVELOPE", Err(e) => device_error_text(e) });
     return 0;
 }

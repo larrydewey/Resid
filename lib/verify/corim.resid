@@ -1,8 +1,9 @@
 // verify/corim.resid — endorsements and reference values (PLAN-attestation.md
 // §4): a signed CoRIM (draft-ietf-rats-corim: COSE_Sign1 over a corim-map,
 // tag 501, holding CoMIDs, tag 506) whose signer is an anchor of kind
-// Endorser, read into Verified(CorimRefs) resting on that anchor, and the
-// appraisal that applies it to evidence (corim_appraise).
+// Endorser, read into CorimRefs (corim_verify, in verify/claims.resid,
+// makes it Verified(CorimRefs) under a Trust), and the appraisal that
+// applies it to evidence (corim_appraise).
 //
 // Every triple of a CoMID is read: reference values (0), endorsed values
 // (1), identity keys (2), attestation keys (3), conditional endorsement
@@ -18,8 +19,8 @@
 // certificates, COSE_Keys, thumbprints and bytes.
 //
 // The appraisal (draft-ietf-rats-corim §9) starts from the evidence's
-// claims, as environment and measurement (each platform's adapter in
-// verify/endorsed.resid); a reference triple whose environment matches and
+// claims, as environment and measurement (each platform's own, in its
+// verify/ module); a reference triple whose environment matches and
 // all of whose measurements match corroborates the claims it matched;
 // endorsed triples whose environment the claims name add their
 // measurements; conditional endorsements add theirs when every condition
@@ -207,7 +208,7 @@ pub CorimMeas corim_claim(CorimMkey k, CorimMval v) {
 /// after it, and its argument value.
 type CbR = { Bool ok; Int pos; Int val; };
 
-CbR cb_head(List(Int) b, Int pos, Int major) {
+CbR cr_head(List(Int) b, Int pos, Int major) {
     CbeHead h = cbe_read_head(b, pos);
     if (!h.ok || h.major != major || h.val < 0) { return CbR {.ok = false, .pos = pos, .val = 0}; }
     return CbR {.ok = true, .pos = h.pos, .val = h.val};
@@ -240,7 +241,7 @@ Bool cb_has(List(Int) xs, Int x, Int i) { return i < xs.len() && (xs[i] == x || 
 
 // Every key of the map at pos appears once.
 Bool cm_keys_unique(List(Int) b, Int pos) {
-    CbR m = cb_head(b, pos, 5);
+    CbR m = cr_head(b, pos, 5);
     if (!m.ok || m.val > 4096) { return false; }
     return cm_uniq_at(b, m.pos, m.val, [], []);
 }
@@ -289,7 +290,7 @@ Result(List(Int), Str) cr_bytes(List(Int) b, Int pos, Int min, Int max, Str what
 }
 
 Result(Int, Str) cr_uint(List(Int) b, Int pos, Str what) {
-    CbR r = cb_head(b, pos, 0);
+    CbR r = cr_head(b, pos, 0);
     if (!r.ok) { return Err(what + " is not an unsigned integer"); }
     return Ok(r.val);
 }
@@ -312,7 +313,7 @@ Bool cr_is_null(List(Int) b, Int pos) { return pos >= 0 && pos < b.len() && b[po
 type CrArr = { Int pos; Int n; };
 
 Result(CrArr, Str) cr_array(List(Int) b, Int pos, Int min, Int max, Str what) {
-    CbR a = cb_head(b, pos, 4);
+    CbR a = cr_head(b, pos, 4);
     if (!a.ok || a.val < min || a.val > max) { return Err(what + f" is not an array of {min} to {max}"); }
     return Ok(CrArr {.pos = a.pos, .n = a.val});
 }
@@ -532,7 +533,7 @@ Result(List(CorimMeas), Str) cr_meas_at(List(Int) b, Int pos, Int left, List(Cor
 
 Result(CorimMval, Str) cr_mval(List(Int) b, Int pos) {
     Int m = cr_map(b, pos, "measurement values")?;
-    CbR mh = cb_head(b, pos, 5);
+    CbR mh = cr_head(b, pos, 5);
     if (mh.val == 0) { return Err("measurement values state nothing"); }
     CorimMval z = corim_mval_none();
     Int p0 = cr_field(b, m, 0, "a version")?;
@@ -664,7 +665,7 @@ Result(List(Int), Str) cr_tagged_bytes(List(Int) b, Int pos, Int tag, Int min, I
 // integrity-registers: {+ (uint / text) => digests}.
 Result(List(CorimRegister), Str) cr_registers(List(Int) b, Int pos) {
     Int m = cr_map(b, pos, "integrity registers")?;
-    CbR h = cb_head(b, m, 5);
+    CbR h = cr_head(b, m, 5);
     if (h.val < 1) { return Err("integrity registers name none"); }
     return cr_regs_at(b, h.pos, h.val, []);
 }
@@ -812,7 +813,7 @@ Str cr_cose_alg_name(Int alg) {
 /// lists, the signature fails, or a validity period excludes `t`.
 @verify_internal
 pub Result(CorimRefs, VerifyError) corim_check(List(UInt(8)) corim, Anchor endorser, EvidenceTime t) {
-    if (endorser.kind != "Endorser") { return Err(Refused("corim_verify", "the anchor is not an endorser (kind " + endorser.kind + ")")); }
+    if (endorser.kind != "Endorser") { return Err(Refused("CoRIM", "the anchor is not an endorser (kind " + endorser.kind + ")")); }
     if (anchor_expired(endorser, t)) { return Err(Stale("the anchor expired " + endorser.expires)); }
     List(Int) b = chal_ints(corim);
     if (b.len() > 1048576) { return Err(BadLayout("a CoRIM is at most 1 MiB")); }
@@ -822,7 +823,7 @@ pub Result(CorimRefs, VerifyError) corim_check(List(UInt(8)) corim, Anchor endor
     if (!m.ok) { return Err(BadLayout(m.err)); }
     PubKey key = spki_parse_der(endorser.der);
     Str an = cr_cose_alg_name(m.alg);
-    if (an == "" || !anchor_lists(endorser.algorithms, an)) { return Err(Refused("corim_verify", "the CoRIM's algorithm is not one the endorser's anchor lists")); }
+    if (an == "" || !anchor_lists(endorser.algorithms, an)) { return Err(Refused("CoRIM", "the CoRIM's algorithm is not one the endorser's anchor lists")); }
     if (!cose_sign1_verify(m, key, [])) { return Err(BadSignature("the endorser did not sign this CoRIM")); }
     Int ct = cbor_map_find(m.prot, 0, 3);
     CbS cts = if (ct >= 0) { cb_str(m.prot, ct, 3) } else { CbS {.ok = false, .v = [], .pos = 0} };
@@ -947,7 +948,7 @@ Result(CorimRefs, Str) comid(List(Int) c, CorimRefs acc) {
     Int p3 = cr_field(c, tm, 3, "attest-key triples")?;
     Int p8 = cr_field(c, tm, 8, "conditional endorsement series")?;
     Int p10 = cr_field(c, tm, 10, "conditional endorsements")?;
-    CbR th = cb_head(c, tm, 5);
+    CbR th = cr_head(c, tm, 5);
     if (th.val == 0) { return Err("a CoMID's triples are empty"); }
     List(CorimTriple) nt = [];
     List(CorimKeyTriple) nk = [];
@@ -961,19 +962,6 @@ Result(CorimRefs, Str) comid(List(Int) c, CorimRefs acc) {
         .conditional = acc.conditional.concat(if (p10 >= 0) { cr_conditionals(c, p10)? } else { nc }),
         .series = acc.series.concat(if (p8 >= 0) { cr_series_list(c, p8)? } else { ns }),
         .valid_until = acc.valid_until, .expires = acc.expires, .endorser = acc.endorser});
-}
-
-// ─── The primitive ──────────────────────────────────────────────────
-
-/// Verifies a signed CoRIM, giving its reference values and endorsements
-/// on the endorser's word.
-/// Not fresh: a CoRIM is reusable by design; what makes a decision fresh
-/// is its evidence. Fails as `corim_check` does.
-@primitive(verify, anchor = endorser, gives = [], time = t, format = CorimRefs, kinds = [Endorser], inputs = [corim, t])
-pub Result(Verified(CorimRefs), VerifyError) corim_verify(List(UInt(8)) corim, Anchor endorser, EvidenceTime t) {
-    CorimRefs r = corim_check(corim, endorser, t)?;
-    List(Int) none = [];
-    return Ok(Verified {.value = r, .anchors = [endorser.id], .quals = 0, .record = 0 - 1, .kem = 0, .pk = none, .chan = none, .time = t.source, .principal = "", .format = "CorimRefs"});
 }
 
 // ─── Matching ───────────────────────────────────────────────────────

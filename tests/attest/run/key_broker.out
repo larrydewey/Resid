@@ -2,5 +2,5 @@ released and opened: same key
 replay: not fresh: challenge already accepted, or exported
 other key: not fresh: the evidence does not carry this challenge
 other challenge: not fresh: the evidence does not carry this challenge
-plain: quals 1
-vlek root: refused (snp_verify): the report's SIGNING_KEY is 0, the anchor's kind AmdVlek
+plain: quals 1, AMD SEV-SNP
+vlek root: refused (verify_evidence): no root or key in the trust set fits this AMD SEV-SNP evidence (the report's SIGNING_KEY is not a AmdVlek root's)

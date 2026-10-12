@@ -1,0 +1,728 @@
+// verify/claims.resid — the platform-generic verifier's shared parts
+// (PLAN-attestation.md §2-§6, RFC 9334): what every platform's evidence
+// says once verified (Claims), the appraisal policy written once for all
+// platforms (Policy), the trust a verification rests on (Trust), how the
+// evidence is bound to its challenge (Binding), and the one pipeline every
+// platform goes through, written against the PlatformVerifier behavior.
+//
+// A platform is an instance of PlatformVerifier over a marker type (SnpPlat
+// in snp.resid, TdxPlat in tdx.resid, ...): where it finds candidate roots or
+// keys in a Trust, how it checks its evidence under one of them, what it
+// demands of every appraisal, and what a CoRIM's corroboration means for
+// it. Everything else -- trying candidates, binding the challenge, the
+// qualifiers, the policy -- is here, once. verify/verifier.resid matches
+// the envelope's evidence type to a platform, once, and calls in.
+//
+// The pipeline's steps, for every platform:
+//   1. decode the untrusted envelope (lib/evidence.resid), totally;
+//   2. find a root or key in the Trust that fits the evidence and check
+//      the chain and signature under it (pv_check), trying each in turn;
+//   3. check that the evidence carries the challenge as the Binding says,
+//      and accept the challenge record once (vf_bind_challenge);
+//   4. normalize what the evidence says to one Claims record.
+// Appraisal then applies the platform's mandatory checks and the Policy.
+
+import "core.resid";
+import "corim.resid";
+import "endorsed_keys.resid";
+import "../crypto.resid";
+import "../hash.resid";
+import "../hpkeg.resid";
+import "../tls.resid";
+import "../cmw.resid";
+import "../evidence.resid";
+import "../challenge.resid";
+import "../challenge_bind.resid";
+import "../challenge_export.resid";
+import "../dev/device.resid";
+
+// ─── Claims ─────────────────────────────────────────────────────────
+
+/// The platforms whose evidence the verifier reads.
+pub type Platform = AmdSnp | IntelTdxTd | ArmCcaRealm | AwsNitro | Tpm2 | SpdmDevice;
+
+/// The platform's display name, such as "AMD SEV-SNP".
+pub Str platform_name(Platform p) {
+    return match p {
+        AmdSnp => "AMD SEV-SNP",
+        IntelTdxTd => "Intel TDX",
+        ArmCcaRealm => "Arm CCA",
+        AwsNitro => "AWS Nitro Enclaves",
+        Tpm2 => "TPM 2.0",
+        SpdmDevice => "SPDM device",
+    };
+}
+
+/// One measured value: its slot, its hash algorithm and the value.
+/// `slot` names it the same way on every platform that has it ("MEASUREMENT",
+/// "MRTD", "RTMR0", "RIM", "REM0", "PCR7", "MEAS2", ...); `alg` is the
+/// named-information hash algorithm number (1 SHA-256, 7 SHA-384, 8
+/// SHA-512), 0 for a raw value.
+pub type Measurement = { Str slot; Int alg; List(Int) value; };
+
+/// One other named claim: bytes, or a number when `is_number`.
+pub type ClaimValue = { Str name; List(Int) bytes; Int number; Bool is_number; };
+
+/// What verified evidence says, in one shape for every platform.
+/// `launch_slot` names the measurement of the launched image ("" when the
+/// platform has none: a TPM, an SPDM device). `debug` is true when the
+/// platform says the TEE can be debugged (always refused by appraisal).
+/// `values` are the claims the platform or the measured image vouches for,
+/// `host_values` those the host or the requester chose (an SNP report's
+/// HOST_DATA, a TDX quote's MRCONFIGID, a Nitro document's user data):
+/// signed, but chosen outside, so External to a decision.
+/// `tcb_statuses` are the statuses the vendor's collateral gave (Intel's
+/// TCB and QE identity levels), each of which appraisal requires to be
+/// "UpToDate" unless the policy allows it. `hardware_id` identifies the
+/// chip or instance when the evidence names one. `report_data` is what the
+/// attester bound (the challenge field). `corim` is the same as CoRIM
+/// claims, for appraisal against reference values. `evidence` is the
+/// verified evidence's own bytes.
+@signed(sig = evidence, span = evidence)
+pub type Claims = { Platform platform; Str format; Str launch_slot; List(Measurement) measurements; Bool debug; List(ClaimValue) values; List(ClaimValue) host_values; List(Str) tcb_statuses; List(Int) hardware_id; List(Int) report_data; List(CorimClaim) corim; List(Int) evidence; };
+
+/// Who chose each field of Claims (PLAN-attestation.md §3.3), for the
+/// integrity labels: what the host or the requester chose -- host_values,
+/// report_data, and the CoRIM view and raw evidence that include them --
+/// is External, so it cannot decide a release (E0286); the platform's and
+/// the measured image's claims are not.
+@layout_origins(Claims:platform=firmware;format=firmware;launch_slot=firmware;measurements=measured;debug=firmware;values=firmware;host_values=host;tcb_statuses=firmware;hardware_id=firmware;report_data=relayed;corim=host;evidence=host)
+pub Int claims__origins() { return 0; }
+
+/// A measurement of `alg` in `slot`.
+pub Measurement measurement(Str slot, Int alg, List(Int) value) { return Measurement {.slot = slot, .alg = alg, .value = value}; }
+/// A claim of bytes named `name`.
+pub ClaimValue claim_bytes(Str name, List(Int) b) { return ClaimValue {.name = name, .bytes = b, .number = 0, .is_number = false}; }
+/// A claim of a number named `name`.
+pub ClaimValue claim_number(Str name, Int n) {
+    List(Int) none = [];
+    return ClaimValue {.name = name, .bytes = none, .number = n, .is_number = true};
+}
+
+/// The value in measurement slot `slot` of `c`, or None.
+pub Option(List(Int)) claims_measurement(Claims c, Str slot) { return cl_meas_at(c.measurements, slot, 0); }
+
+Option(List(Int)) cl_meas_at(List(Measurement) ms, Str slot, Int i) {
+    if (i >= ms.len()) { return None; }
+    if (ms[i].slot == slot) { return Some(ms[i].value); }
+    return cl_meas_at(ms, slot, i + 1);
+}
+
+/// The launch measurement of `c`, or None on a platform without one.
+pub Option(List(Int)) claims_launch(Claims c) {
+    if (c.launch_slot == "") { return None; }
+    return claims_measurement(c, c.launch_slot);
+}
+
+/// The claim named `name` of `c` the platform vouches for, or None.
+/// Host-chosen claims are claims_host_value's.
+pub Option(ClaimValue) claims_value(Claims c, Str name) { return cl_value_at(c.values, name, 0); }
+
+/// The host- or requester-chosen claim named `name` of `c`, or None.
+/// External to a decision (PLAN-attestation.md §3.3): a release cannot
+/// turn on it.
+pub Option(ClaimValue) claims_host_value(Claims c, Str name) { return cl_value_at(c.host_values, name, 0); }
+
+/// The bytes of the host- or requester-chosen claim `name`, or [].
+pub List(Int) claims_host_bytes(Claims c, Str name) {
+    List(Int) none = [];
+    return match (claims_host_value(c, name)) { Some(v) => if (v.is_number) { none } else { v.bytes }, None => none };
+}
+
+// Either kind, for the policy (inside the appraisal primitive).
+Option(ClaimValue) cl_any_value(Claims c, Str name) {
+    return match (cl_value_at(c.values, name, 0)) { Some(v) => Some(v), None => cl_value_at(c.host_values, name, 0) };
+}
+
+Option(ClaimValue) cl_value_at(List(ClaimValue) vs, Str name, Int i) {
+    if (i >= vs.len()) { return None; }
+    if (vs[i].name == name) { return Some(vs[i]); }
+    return cl_value_at(vs, name, i + 1);
+}
+
+/// The number named `name` of `c`, or `fallback` when absent or bytes.
+pub Int claims_number(Claims c, Str name, Int fallback) {
+    return match (claims_value(c, name)) { Some(v) => if (v.is_number) { v.number } else { fallback }, None => fallback };
+}
+
+/// The bytes named `name` of `c`, or [] when absent or a number.
+pub List(Int) claims_bytes(Claims c, Str name) {
+    List(Int) none = [];
+    return match (claims_value(c, name)) { Some(v) => if (v.is_number) { none } else { v.bytes }, None => none };
+}
+
+// ─── Trust ──────────────────────────────────────────────────────────
+// What a verification may rest on: anchors (roots and pinned keys, each
+// an @anchor function's), and keys a verified CoRIM endorses. Opaque:
+// only an @trust function (its body rewritten by the compiler into
+// trust_make with the anchors it lists) and trust_with_keys build one, so
+// the compiler knows every anchor a Trust holds.
+
+/// The roots and keys a verification may rest on.
+@opaque("*")
+pub type Trust = { List(Anchor) anchors; List(Verified(CorimRefs)) keys; };
+
+/// What an @trust function's body names; never called itself (E0281).
+pub Trust trust_anchors() {
+    rt_assert(false, "trust_anchors outside an @trust function: the compiler rewrites it there");
+    List(Anchor) none = [];
+    List(Trust) also = [];
+    return trust_make(none, also);
+}
+
+/// Builds a trust set from `anchors` and the sets `included`.
+/// Only the compiler's rewrite of an @trust body calls this (E0281).
+pub Trust trust_make(List(Anchor) anchors, List(Trust) included) {
+    List(Verified(CorimRefs)) none = [];
+    return tr_join(Trust {.anchors = anchors, .keys = none}, included, 0);
+}
+
+Trust tr_join(Trust acc, List(Trust) xs, Int i) {
+    if (i >= xs.len()) { return acc; }
+    return tr_join(Trust {.anchors = acc.anchors.concat(xs[i].anchors), .keys = acc.keys.concat(xs[i].keys)}, xs, i + 1);
+}
+
+/// `tr` and the keys the verified CoRIM `keys` endorses.
+/// A platform whose evidence a key signs (a CCA platform token's CPAK, a
+/// TPM's AK, an SPDM device's key) may then rest on the endorser: the
+/// result's anchors name the CoRIM's endorser, so a decision on it names
+/// the endorser's anchor in `accept`.
+@primitive(trust, from = tr, with = keys)
+pub Trust trust_with_keys(Trust tr, Verified(CorimRefs) keys) { return Trust {.anchors = tr.anchors, .keys = tr.keys.concat([keys])}; }
+
+/// `tr` with one more anchor; for verify/ files that hold an anchor made at
+/// run time (an activated TPM AK, verify/tpm.resid).
+@verify_internal
+pub Trust trust_add(Trust tr, Anchor a) { return Trust {.anchors = tr.anchors.concat([a]), .keys = tr.keys}; }
+
+/// The anchors of `tr` of any kind in `kinds`, as candidates.
+@verify_internal
+pub List(Cand) trust_anchor_cands(Trust tr, List(Str) kinds) { return tr_cands_at(tr.anchors, kinds, 0, []); }
+
+List(Cand) tr_cands_at(List(Anchor) xs, List(Str) kinds, Int i, List(Cand) acc) {
+    if (i >= xs.len()) { return acc; }
+    Bool take = anchor_lists(kinds, xs[i].kind);
+    return tr_cands_at(xs, kinds, i + 1, if (take) { acc.concat([Cand {.a = xs[i], .endorsed = false, .instance = "", .env = cl_env_none()}]) } else { acc });
+}
+
+/// The keys every CoRIM of `tr` endorses as attest keys of `kind`, for
+/// evidence of `format`, as candidates with the instance each is for.
+/// A CoRIM that endorses none adds none; one that expired before `t` none.
+@verify_internal
+pub List(Cand) trust_endorsed_cands(Trust tr, Str kind, Str format, Str principal, EvidenceTime t) { return tr_end_at(tr.keys, kind, format, principal, t, 0, []); }
+
+List(Cand) tr_end_at(List(Verified(CorimRefs)) ks, Str kind, Str format, Str principal, EvidenceTime t, Int i, List(Cand) acc) {
+    if (i >= ks.len()) { return acc; }
+    List(EndorsedKey) es = match (endorsed_keys(ks[i], "", kind, format, principal, t, "verify_evidence")) { Ok(x) => x, Err(e) => [] };
+    return tr_end_at(ks, kind, format, principal, t, i + 1, acc.concat(tr_end_cands(es, 0, [])));
+}
+
+List(Cand) tr_end_cands(List(EndorsedKey) es, Int i, List(Cand) acc) {
+    if (i >= es.len()) { return acc; }
+    return tr_end_cands(es, i + 1, acc.concat([Cand {.a = es[i].a, .endorsed = true, .instance = es[i].instance_hex, .env = cl_env_none()}]));
+}
+
+/// The verified CoRIMs `tr` holds, for a platform that matches its own
+/// evidence against them (an SPDM device's identity).
+@verify_internal
+pub List(Verified(CorimRefs)) trust_keys(Trust tr) { return tr.keys; }
+
+// ─── CoRIM ──────────────────────────────────────────────────────────
+
+/// Verifies a signed CoRIM, giving its reference values and endorsements
+/// on the word of an Endorser anchor in `tr`.
+/// Not fresh: a CoRIM is reusable by design; what makes a decision fresh
+/// is its evidence. Each Endorser anchor is tried; one whose key did not
+/// sign, or signs with another algorithm, leaves the next to try. Err when
+/// none signed, or as corim_check does under the one that did.
+@primitive(verify, trust = tr, gives = [], time = t, kinds = [Endorser], inputs = [corim, t])
+pub Result(Verified(CorimRefs), VerifyError) corim_verify(List(UInt(8)) corim, Trust tr, EvidenceTime t) {
+    List(Cand) cs = trust_anchor_cands(tr, ["Endorser"]);
+    if (cs.len() == 0) { return Err(Refused("corim_verify", "the trust set holds no endorser")); }
+    return cr_try(corim, cs, t, 0);
+}
+
+Result(Verified(CorimRefs), VerifyError) cr_try(List(UInt(8)) corim, List(Cand) cs, EvidenceTime t, Int i) {
+    if (i >= cs.len()) { return Err(BadSignature("no endorser in the trust set signed this CoRIM")); }
+    return match (corim_check(corim, cs[i].a, t)) {
+        Ok(r) => Ok(cr_verified(r, cs[i].a, t)),
+        Err(e) => if (cr_not_this_key(e)) { cr_try(corim, cs, t, i + 1) } else { Err(e) },
+    };
+}
+
+Bool cr_not_this_key(VerifyError e) {
+    return match e {
+        BadSignature(m) => m == "the endorser did not sign this CoRIM",
+        Refused(w, m) => m == "the CoRIM's algorithm is not one the endorser's anchor lists",
+        Stale(m) => str_starts_with(m, "the anchor expired"),
+        _ => false,
+    };
+}
+
+Verified(CorimRefs) cr_verified(CorimRefs r, Anchor a, EvidenceTime t) {
+    List(Int) none = [];
+    return Verified {.value = r, .anchors = [a.id], .quals = 0, .record = 0 - 1, .kem = 0, .pk = none, .chan = none, .time = t.source, .principal = "", .format = "CorimRefs"};
+}
+
+// ─── Binding ────────────────────────────────────────────────────────
+// How the evidence carries the challenge: the bare value (Fresh), bound
+// to the attester's HPKE key (KeyBound), to the TLS connection the
+// evidence arrives on (ChannelBound), or to a device session the attester
+// keyed (an SPDM session, verified first). Opaque: built only by the
+// bind_* functions, which the compiler reads to know the qualifiers and
+// anchors the result will carry.
+
+/// How the evidence carries its challenge; made by the bind_* functions.
+/// kind: 0 fresh, 1 key, 2 channel, 3 device session.
+@opaque("*")
+pub type Binding = { Int kind; Int kem; List(Int) pk; List(UInt(8)) want; List(Int) chan; Int record; List(Int) th; List(Str) anchors; };
+
+/// The evidence carries challenge_value(c) itself.
+@primitive(binding, gives = [])
+pub Binding bind_fresh() {
+    List(Int) none = [];
+    List(UInt(8)) nob = [];
+    List(Str) noa = [];
+    return Binding {.kind = 0, .kem = 0, .pk = none, .want = nob, .chan = none, .record = 0 - 1, .th = none, .anchors = noa};
+}
+
+/// The evidence carries the challenge bound to the attester's HPKE public
+/// key `pk` for KEM `kem` (challenge_with_key on the attester's side): the
+/// result is KeyBound, and seal_to_evidence can release to `pk`.
+@primitive(binding, gives = [key_bound], inputs = [kem, pk])
+pub Binding bind_key(Int kem, List(Int) pk) {
+    List(Int) none = [];
+    List(UInt(8)) nob = [];
+    List(Str) noa = [];
+    return Binding {.kind = 1, .kem = kem, .pk = pk, .want = nob, .chan = none, .record = 0 - 1, .th = none, .anchors = noa};
+}
+
+/// The evidence carries challenge `c` bound to the connection whose other
+/// end is `e` (challenge_with_channel on the attester's side): the result
+/// is ChannelBound, and seal_to_channel can release over that connection.
+/// Err when the connection has no exporter. Needs `declassify` (the
+/// exporter's one-way image is published).
+@primitive(binding, gives = [channel_bound], inputs = [c, e])
+@requires(declassify)
+pub Result(Binding, VerifyError) bind_channel(ChallengeRecord c, ChannelExporter e) {
+    List(UInt(8)) want = cl_channel_value(challenge_with_channel(challenge_value(c), e))?;
+    List(Int) none = [];
+    List(Str) noa = [];
+    return Ok(Binding {.kind = 2, .kem = 0, .pk = none, .want = want, .chan = vf_channel_id(e), .record = c.handle, .th = none, .anchors = noa});
+}
+
+Result(List(UInt(8)), VerifyError) cl_channel_value(Result(List(UInt(8)), DeviceError) r) { return match r { Ok(x) => Ok(x), Err(err) => Err(Refused("bind_channel", device_error_text(err))) }; }
+
+/// A device-session binding from a session's transcript hash and anchors.
+/// verify/verifier.resid's bind_device makes one from a verified session.
+@verify_internal
+pub Binding binding_session(List(Int) th, List(Str) anchors) {
+    List(Int) none = [];
+    List(UInt(8)) nob = [];
+    return Binding {.kind = 3, .kem = 0, .pk = none, .want = nob, .chan = none, .record = 0 - 1, .th = th, .anchors = anchors};
+}
+
+// The bytes the evidence's challenge field must hold under `b` for `c`.
+Result(List(UInt(8)), VerifyError) cl_want(Binding b, ChallengeRecord c) {
+    List(UInt(8)) v = challenge_value(c);
+    if (b.kind == 1) {
+        if (!hpke_kem_ok(b.kem) || !vf_pk_ok(b.kem, b.pk)) { return Err(Refused("verify_evidence", "the attester's public key is empty or malformed for the KEM")); }
+        return Ok(challenge_key_value(v, b.kem, b.pk));
+    }
+    if (b.kind == 2) {
+        if (b.record != c.handle) { return Err(Refused("verify_evidence", "the channel binding was made for another challenge record")); }
+        return Ok(b.want);
+    }
+    if (b.kind == 3) { return Ok(challenge_session_value(v, b.th)); }
+    return Ok(v);
+}
+
+Int cl_binding_quals(Binding b) { return if (b.kind == 1) { q_key_bound() } else if (b.kind == 2) { q_channel_bound() } else { 0 }; }
+
+// ─── The platform behavior ──────────────────────────────────────────
+
+/// A candidate root or key from a Trust: the anchor, whether a CoRIM
+/// endorses it (else it is pinned), the instance it is endorsed for
+/// (lowercase hex; "" for a pinned anchor) and the CoRIM environment the
+/// endorsement names (empty when none does).
+pub type Cand = { Anchor a; Bool endorsed; Str instance; CorimEnv env; };
+
+/// A CoRIM environment that states nothing.
+pub CorimEnv cl_env_none() { return CorimEnv {.class = corim_class_none(), .instance = corim_id_none(), .group = corim_id_none()}; }
+
+/// What a platform's check found: the claims, the field that carries the
+/// challenge (`relayed`), whether it must equal the bound value exactly
+/// (`exact`, else it may be longer and zero after it), the challenge
+/// length the platform takes (-1 any), the bytes a device engine bound a
+/// spent record to (`bound`), the descriptors that may have spent it, and
+/// whether the claims' instance is the endorsement's word alone
+/// (`keyed_instance`: the evidence itself names none).
+pub type PfChecked = { Claims claims; List(UInt(8)) relayed; Bool exact; Int want_len; List(UInt(8)) bound; List(Str) descs; Bool keyed_instance; };
+
+/// One candidate's outcome: the evidence checked under it (PfHit), the
+/// candidate does not fit this evidence (PfSkip: another may), or the
+/// evidence fails under a candidate that fits (PfFail: final).
+pub type PfTry = PfHit(PfChecked) | PfSkip(Str) | PfFail(VerifyError);
+
+/// What a CoRIM's corroboration gives an appraisal: the policy with the
+/// corroborated values added, and whether the evidence's measurements are
+/// already accounted for (so the policy may name none).
+pub type PfEndorsed = { Policy policy; Bool satisfied; };
+
+/// A platform's evidence as the generic verifier reads it.
+/// `P` is a marker type naming the platform.
+behavior PlatformVerifier(P) {
+    // The platform.
+    Platform pv_platform(P p);
+    // The roots and keys in `tr` that may have signed `ev`, in the order
+    // to try them.
+    List(Cand) pv_candidates(P p, Trust tr, Cmw ev, EvidenceTime t);
+    // The evidence checked under candidate `k` with collateral `col`:
+    // chain, revocation, signature and every check of the platform's own
+    // facts, but not the challenge.
+    PfTry pv_check(P p, Cmw ev, List(CmwRec) col, Cand k, EvidenceTime t);
+    // What every appraisal demands of this platform's claims beyond the
+    // generic checks (debug, policy, statuses).
+    Result(Bool, VerifyError) pv_mandatory(P p, Claims c, Policy pol);
+    // What corroboration by a CoRIM adds to `pol`, or why it is refused.
+    Result(PfEndorsed, VerifyError) pv_endorsed(P p, Claims c, CorimAcs a, Policy pol);
+}
+
+/// A checked candidate.
+type CandHit = { PfChecked k; Cand cand; };
+
+@needs(PlatformVerifier(P))
+Result(CandHit, VerifyError) cl_try(P p, Envelope e, List(Cand) cs, EvidenceTime t, Int i, Str why) {
+    if (i >= cs.len()) { return Err(Refused("verify_evidence", "no root or key in the trust set fits this " + platform_name(pv_platform(p)) + " evidence" + (if (why == "") { "" } else { " (" + why + ")" }))); }
+    return match (pv_check(p, e.evidence, e.collateral, cs[i], t)) {
+        PfHit(k) => Ok(CandHit {.k = k, .cand = cs[i]}),
+        PfSkip(m) => cl_try(p, e, cs, t, i + 1, if (why == "") { m } else { why }),
+        PfFail(err) => Err(err),
+    };
+}
+
+@needs(PlatformVerifier(P))
+Result(CandHit, VerifyError) cl_find(P p, Envelope e, Trust tr, EvidenceTime t) {
+    List(Cand) cs = pv_candidates(p, tr, e.evidence, t);
+    if (cs.len() == 0) { return Err(Refused("verify_evidence", "the trust set holds no root or key for " + platform_name(pv_platform(p)) + " evidence")); }
+    CandHit h = cl_try(p, e, cs, t, 0, "")?;
+    return Ok(if (h.k.keyed_instance && cl_ambiguous(h.cand, cs, 0)) { CandHit {.k = cl_no_instance(h.k), .cand = h.cand} } else { h });
+}
+
+// Another endorsement of the same key names another instance: the
+// evidence cannot say which of them made it.
+Bool cl_ambiguous(Cand k, List(Cand) cs, Int i) {
+    if (!k.endorsed || i >= cs.len()) { return false; }
+    Bool other = cs[i].endorsed && cs[i].instance != k.instance && eq_ints(cs[i].a.der, k.a.der);
+    return other || cl_ambiguous(k, cs, i + 1);
+}
+
+// The claims without an instance: no hardware ID, no "instance" claim.
+PfChecked cl_no_instance(PfChecked k) {
+    Claims c = k.claims;
+    List(Int) none = [];
+    Claims c2 = Claims {.platform = c.platform, .format = c.format, .launch_slot = c.launch_slot, .measurements = c.measurements, .debug = c.debug, .values = cl_without(c.values, "instance", 0, []), .host_values = c.host_values, .tcb_statuses = c.tcb_statuses, .hardware_id = none, .report_data = c.report_data, .corim = c.corim, .evidence = c.evidence};
+    return PfChecked {.claims = c2, .relayed = k.relayed, .exact = k.exact, .want_len = k.want_len, .bound = k.bound, .descs = k.descs, .keyed_instance = true};
+}
+
+List(ClaimValue) cl_without(List(ClaimValue) vs, Str name, Int i, List(ClaimValue) acc) {
+    if (i >= vs.len()) { return acc; }
+    return cl_without(vs, name, i + 1, if (vs[i].name == name) { acc } else { acc.concat([vs[i]]) });
+}
+
+/// Verifies envelope `e` as platform `p`'s evidence, fresh for `c`'s holder
+/// and bound as `b` says, under `tr` at `t`. The generic pipeline behind
+/// verify_evidence.
+@verify_internal
+@needs(PlatformVerifier(P))
+pub Result(Verified(Claims), VerifyError) cl_verify(P p, Envelope e, ChallengeRecord c, Binding b, Trust tr, EvidenceTime t) {
+    List(UInt(8)) want = cl_want(b, c)?;
+    CandHit h = cl_find(p, e, tr, t)?;
+    Bool spent = cl_bind(h.k, want, c)?;
+    Int rp = if (c.bind.len() > 0) { q_rp_bound() } else { 0 };
+    return Ok(Verified {.value = h.k.claims, .anchors = [h.cand.a.id].concat(b.anchors), .quals = q_fresh() | cl_binding_quals(b) | rp, .record = c.handle, .kem = b.kem, .pk = b.pk, .chan = b.chan, .time = t.source, .principal = h.cand.a.principal, .format = h.k.claims.format});
+}
+
+/// Verifies envelope `e` as platform `p`'s evidence for the imported
+/// replayable record `c`: Delivered, never Fresh, nothing accepted.
+@verify_internal
+@needs(PlatformVerifier(P))
+pub Result(Verified(Claims), VerifyError) cl_verify_replayable(P p, Envelope e, ReplayableRecord c, Trust tr, EvidenceTime t) {
+    CandHit h = cl_find(p, e, tr, t)?;
+    List(UInt(8)) want = replayable_value(c);
+    if (h.k.want_len >= 0 && want.len() != h.k.want_len) { return Err(NotFresh(f"this platform carries a {h.k.want_len}-byte challenge")); }
+    if (!cl_carries(h.k, want)) { return Err(NotFresh("the evidence does not carry this challenge")); }
+    List(Int) none = [];
+    return Ok(Verified {.value = h.k.claims, .anchors = [h.cand.a.id], .quals = q_delivered(), .record = 0 - 1, .kem = 0, .pk = none, .chan = none, .time = t.source, .principal = h.cand.a.principal, .format = h.k.claims.format});
+}
+
+// The field carries `want`: exactly, or followed only by zeros.
+Bool cl_carries(PfChecked k, List(UInt(8)) want) {
+    if (want.len() == 0 || want.len() > k.relayed.len()) { return false; }
+    if (k.exact && want.len() != k.relayed.len()) { return false; }
+    return eq_ints(chal_ints(k.relayed[0..want.len()]), chal_ints(want)) && cl_zero_from(k.relayed, want.len());
+}
+
+Bool cl_zero_from(List(UInt(8)) b, Int i) { return i >= b.len() || (b[i] == (UInt(8)) 0 && cl_zero_from(b, i + 1)); }
+
+Result(Bool, VerifyError) cl_bind(PfChecked k, List(UInt(8)) want, ChallengeRecord c) {
+    if (k.want_len >= 0 && want.len() != k.want_len) { return Err(NotFresh(f"this platform carries a {k.want_len}-byte challenge: issue it with challenge_issue({k.want_len})")); }
+    if (k.exact && k.relayed.len() != want.len()) { return Err(NotFresh("the evidence does not carry this challenge")); }
+    return vf_bind_challenge(k.relayed, want, c, k.bound, k.descs);
+}
+
+// ─── Policy ─────────────────────────────────────────────────────────
+
+/// An appraisal policy, the same for every platform.
+///
+/// `measurements`: "hex" names an accepted launch measurement (the
+/// platform's launch slot: SNP's MEASUREMENT, TDX's MRTD, CCA's RIM,
+/// Nitro's PCR0), and "SLOT=hex" an accepted value of a named slot. The
+/// launch measurement must be one of the bare entries when there are any;
+/// each slot named must hold one of the values listed for it. At least one
+/// entry is required (unless a CoRIM accounts for the measurements).
+///
+/// `require`: "name=hex" (a bytes claim equals one of the values listed
+/// for that name), "name==n" (a number equals one listed) and "name>=n"
+/// (a number is at least n; every floor must hold). A claim the evidence
+/// does not carry fails.
+///
+/// `allow`: relaxations of the platform's mandatory checks, by name:
+/// "migration_agent" (SNP: a guest policy that allows a migration agent)
+/// and "tcb_status=S" (a vendor TCB status S besides "UpToDate", such as
+/// "SWHardeningNeeded"). Any other entry is refused.
+pub type Policy = { List(Str) measurements; List(Str) require; List(Str) allow; };
+
+/// The TCB statuses Intel's collateral may give; "tcb_status=S" takes these.
+pub List(Str) tcb_status_names() { return ["UpToDate", "SWHardeningNeeded", "ConfigurationNeeded", "ConfigurationAndSWHardeningNeeded", "OutOfDate", "OutOfDateConfigurationNeeded", "Revoked"]; }
+
+/// Whether `pol` allows the relaxation `what`.
+pub Bool policy_allows(Policy pol, Str what) { return anchor_lists(pol.allow, what); }
+
+/// Appraises `v` as platform `p`'s claims under `pol`.
+/// The generic pipeline behind appraise_evidence: the debug claim, the
+/// platform's mandatory checks, the TCB statuses, then the policy.
+@verify_internal
+@needs(PlatformVerifier(P))
+pub Result(Appraised(Claims), VerifyError) cl_appraise(P p, Verified(Claims) v, Policy pol) {
+    Bool ok = cl_appraise_claims(p, v.value, pol, false, "the policy names no measurement")?;
+    return Ok(Appraised {.v = v, .policy = "Policy"});
+}
+
+/// Appraises `v` under `pol` with the CoRIM `refs` corroborating claims.
+/// The result rests on the evidence's anchors and the CoRIM endorser's.
+@verify_internal
+@needs(PlatformVerifier(P))
+pub Result(Appraised(Claims), VerifyError) cl_appraise_endorsed(P p, Verified(Claims) v, Policy pol, Verified(CorimRefs) refs) {
+    CorimAcs a = corim_appraise(v.value.corim, refs.value);
+    PfEndorsed en = pv_endorsed(p, v.value, a, pol)?;
+    Bool ok = cl_appraise_claims(p, v.value, en.policy, en.satisfied, "neither the policy nor a reference value names the launch measurement")?;
+    Verified(Claims) j = Verified {.value = v.value, .anchors = v.anchors.concat(refs.anchors), .quals = v.quals, .record = v.record, .kem = v.kem, .pk = v.pk, .chan = v.chan, .time = v.time, .principal = v.principal, .format = v.format};
+    return Ok(Appraised {.v = j, .policy = "Policy"});
+}
+
+@needs(PlatformVerifier(P))
+// none: the refusal when nothing names a measurement.
+Result(Bool, VerifyError) cl_appraise_claims(P p, Claims c, Policy pol, Bool satisfied, Str none) {
+    Str who = "appraise_evidence";
+    Str bad = cl_allow_bad(pol.allow, 0);
+    if (bad != "") { return Err(Refused(who, "the policy allows `" + bad + "`, which no platform defines")); }
+    if (c.debug) { return Err(Refused(who, "the " + platform_name(c.platform) + " evidence says the TEE can be debugged")); }
+    Bool m = pv_mandatory(p, c, pol)?;
+    Str st = cl_status_bad(c.tcb_statuses, pol, 0);
+    if (st != "") { return Err(Refused(who, "the TCB status is " + st + ", which the policy does not allow")); }
+    Bool ms = cl_measurements(c, pol.measurements, satisfied, none)?;
+    return cl_require(c, pol.require);
+}
+
+Str cl_allow_bad(List(Str) xs, Int i) {
+    if (i >= xs.len()) { return ""; }
+    Str x = xs[i];
+    Bool ok = x == "migration_agent" || (str_starts_with(x, "tcb_status=") && anchor_lists(tcb_status_names(), str_slice(x, 11, str_len(x))));
+    if (!ok) { return x; }
+    return cl_allow_bad(xs, i + 1);
+}
+
+Str cl_status_bad(List(Str) ss, Policy pol, Int i) {
+    if (i >= ss.len()) { return ""; }
+    if (ss[i] != "UpToDate" && !policy_allows(pol, "tcb_status=" + ss[i])) { return ss[i]; }
+    return cl_status_bad(ss, pol, i + 1);
+}
+
+/// One parsed policy entry: its name (a slot or claim, "" for the launch
+/// measurement), its operator ("=", "==" or ">="), and its value.
+type PolEntry = { Str name; Str op; Str value; };
+
+// "name>=n", "name==n", "name=hex", or (bare) "hex".
+Result(PolEntry, VerifyError) cl_entry(Str e, Bool bare_ok) {
+    Int ge = str_index_of(e, ">=", 0);
+    Int eq2 = str_index_of(e, "==", 0);
+    Int eq = str_index_of(e, "=", 0);
+    PolEntry p = if (ge > 0) { PolEntry {.name = str_slice(e, 0, ge), .op = ">=", .value = str_slice(e, ge + 2, str_len(e))} }
+        else if (eq2 > 0) { PolEntry {.name = str_slice(e, 0, eq2), .op = "==", .value = str_slice(e, eq2 + 2, str_len(e))} }
+        else if (eq > 0) { PolEntry {.name = str_slice(e, 0, eq), .op = "=", .value = str_to_lower(str_slice(e, eq + 1, str_len(e)))} }
+        else { PolEntry {.name = "", .op = "=", .value = str_to_lower(e)} };
+    if (p.name == "" && (!bare_ok || eq >= 0)) { return Err(Refused("appraise_evidence", "the policy entry `" + e + "` has no name")); }
+    if (p.op == "=" && (str_len(p.value) == 0 || str_len(p.value) % 2 != 0 || !cl_hex(p.value, 0))) { return Err(Refused("appraise_evidence", "the policy entry `" + e + "` is not hex")); }
+    if (p.op != "=" && (!str_is_int(p.value) || str_parse_int(p.value) < 0)) { return Err(Refused("appraise_evidence", "the policy entry `" + e + "` is not a number")); }
+    return Ok(p);
+}
+
+Bool cl_hex(Str s, Int i) {
+    if (i >= str_len(s)) { return true; }
+    Int ch = str_char_at(s, i);
+    return ((ch >= 48 && ch <= 57) || (ch >= 97 && ch <= 102)) && cl_hex(s, i + 1);
+}
+
+Result(List(PolEntry), VerifyError) cl_entries(List(Str) es, Bool bare_ok, Int i, List(PolEntry) acc) {
+    if (i >= es.len()) { return Ok(acc); }
+    PolEntry p = cl_entry(es[i], bare_ok)?;
+    return cl_entries(es, bare_ok, i + 1, acc.concat([p]));
+}
+
+// The measurements: the launch slot against the bare entries, each named
+// slot against its own.
+Result(Bool, VerifyError) cl_measurements(Claims c, List(Str) es, Bool satisfied, Str none) {
+    Str who = "appraise_evidence";
+    if (es.len() == 0 && !satisfied) { return Err(Refused(who, none)); }
+    List(PolEntry) ps = cl_entries(es, true, 0, [])?;
+    if (cl_op_bad(ps, 0) != "") { return Err(Refused(who, "a measurement entry is `SLOT=hex` or `hex`, not `" + cl_op_bad(ps, 0) + "`")); }
+    List(Str) launch = cl_values_named(ps, "", 0, []);
+    if (launch.len() > 0) {
+        if (c.launch_slot == "") { return Err(Refused(who, "the " + platform_name(c.platform) + " has no launch measurement: name the slots (SLOT=hex)")); }
+        List(Int) got = match (claims_launch(c)) { Some(x) => x, None => [] };
+        if (got.len() == 0 || !anchor_lists(launch, hex_encode(got))) { return Err(Refused(who, "the launch measurement (" + c.launch_slot + ") is not one the policy names")); }
+    }
+    return cl_slots(c, ps, cl_names(ps, 0, []), 0);
+}
+
+Str cl_op_bad(List(PolEntry) ps, Int i) {
+    if (i >= ps.len()) { return ""; }
+    if (ps[i].op != "=") { return ps[i].name + ps[i].op + ps[i].value; }
+    return cl_op_bad(ps, i + 1);
+}
+
+List(Str) cl_values_named(List(PolEntry) ps, Str name, Int i, List(Str) acc) {
+    if (i >= ps.len()) { return acc; }
+    return cl_values_named(ps, name, i + 1, if (ps[i].name == name && ps[i].op == "=") { acc.concat([ps[i].value]) } else { acc });
+}
+
+// The distinct non-empty names, in first-seen order.
+List(Str) cl_names(List(PolEntry) ps, Int i, List(Str) acc) {
+    if (i >= ps.len()) { return acc; }
+    Bool add = ps[i].name != "" && !anchor_lists(acc, ps[i].name);
+    return cl_names(ps, i + 1, if (add) { acc.concat([ps[i].name]) } else { acc });
+}
+
+Result(Bool, VerifyError) cl_slots(Claims c, List(PolEntry) ps, List(Str) names, Int i) {
+    if (i >= names.len()) { return Ok(true); }
+    List(Int) got = match (claims_measurement(c, names[i])) { Some(x) => x, None => [] };
+    if (got.len() == 0) { return Err(Refused("appraise_evidence", "the evidence has no measurement " + names[i])); }
+    if (!anchor_lists(cl_values_named(ps, names[i], 0, []), hex_encode(got))) { return Err(Refused("appraise_evidence", "measurement " + names[i] + " is not one the policy names")); }
+    return cl_slots(c, ps, names, i + 1);
+}
+
+// The required claims, by name: bytes equal to one listed; a number equal
+// to one listed ("==") and at least every floor (">=").
+Result(Bool, VerifyError) cl_require(Claims c, List(Str) es) {
+    List(PolEntry) ps = cl_entries(es, false, 0, [])?;
+    return cl_req_names(c, ps, cl_names(ps, 0, []), 0);
+}
+
+Result(Bool, VerifyError) cl_req_names(Claims c, List(PolEntry) ps, List(Str) names, Int i) {
+    if (i >= names.len()) { return Ok(true); }
+    Str n = names[i];
+    ClaimValue v = cl_need(cl_any_value(c, n), n)?;
+    List(Str) eqb = cl_values_named(ps, n, 0, []);
+    List(Str) eqn = cl_values_op(ps, n, "==", 0, []);
+    List(Str) ges = cl_values_op(ps, n, ">=", 0, []);
+    if (v.is_number && eqb.len() > 0) { return Err(Refused("appraise_evidence", n + " is a number: require it with == or >=")); }
+    if (!v.is_number && (eqn.len() > 0 || ges.len() > 0)) { return Err(Refused("appraise_evidence", n + " is bytes: require it with =hex")); }
+    if (eqb.len() > 0 && !anchor_lists(eqb, hex_encode(v.bytes))) { return Err(Refused("appraise_evidence", n + " is not one the policy names")); }
+    if (eqn.len() > 0 && !anchor_lists(eqn, f"{v.number}")) { return Err(Refused("appraise_evidence", n + f" is {v.number}, not one the policy names")); }
+    if (!cl_floors(v.number, ges, 0)) { return Err(Refused("appraise_evidence", n + f" is {v.number}, below the policy's floor")); }
+    return cl_req_names(c, ps, names, i + 1);
+}
+
+Result(ClaimValue, VerifyError) cl_need(Option(ClaimValue) o, Str n) { return match o { Some(x) => Ok(x), None => Err(Refused("appraise_evidence", "the evidence carries no claim " + n)) }; }
+
+List(Str) cl_values_op(List(PolEntry) ps, Str name, Str op, Int i, List(Str) acc) {
+    if (i >= ps.len()) { return acc; }
+    return cl_values_op(ps, name, op, i + 1, if (ps[i].name == name && ps[i].op == op) { acc.concat([f"{str_parse_int(ps[i].value)}"]) } else { acc });
+}
+
+Bool cl_floors(Int v, List(Str) fs, Int i) { return i >= fs.len() || (v >= str_parse_int(fs[i]) && cl_floors(v, fs, i + 1)); }
+
+/// Whether `pol` names a value for claim or slot `name` (any operator).
+pub Bool policy_names(List(Str) entries, Str name) { return pol_names_at(entries, name, 0); }
+
+Bool pol_names_at(List(Str) es, Str name, Int i) {
+    if (i >= es.len()) { return false; }
+    Str e = es[i];
+    Bool hit = str_starts_with(e, name + "=") || str_starts_with(e, name + ">=");
+    return hit || pol_names_at(es, name, i + 1);
+}
+
+/// `pol` with `entry` added to its measurements.
+pub Policy policy_with_measurement(Policy pol, Str entry) { return Policy {.measurements = pol.measurements.concat([entry]), .require = pol.require, .allow = pol.allow}; }
+
+// ─── CoRIM claims ───────────────────────────────────────────────────
+
+/// A text measurement key, as CoRIM claims use.
+pub CorimMkey cl_k(Str s) { return MkText(s); }
+
+/// `v` as `n` bytes, little-endian.
+pub List(Int) cl_le(Int v, Int n) { return if (n <= 0) { [] } else { [v & 255].concat(cl_le(v >> 8, n - 1)) }; }
+
+/// Registers named by index, one digest of `alg` each, from parallel lists.
+pub List(CorimRegister) cl_regs(List(Int) idx, List(List(Int)) vals, Int alg, Int i, List(CorimRegister) acc) {
+    if (i >= idx.len() || i >= vals.len()) { return acc; }
+    return cl_regs(idx, vals, alg, i + 1, acc.concat([CorimRegister {.name = f"{idx[i]}", .digests = [CorimDigest {.alg = alg, .value = vals[i]}]}]));
+}
+
+/// A measured value in CoRIM's name-only form (a module ID).
+pub CorimMval cl_named(Str n) {
+    CorimMval m = corim_mval_none();
+    return CorimMval {.present = 2048, .version = m.version, .version_scheme = m.version_scheme, .svn = m.svn, .digests = m.digests, .flags_known = 0, .flags = 0, .raw = m.raw, .raw_mask = m.raw_mask, .mac = m.mac, .ip = m.ip, .serial = m.serial, .ueid = m.ueid, .uuid = m.uuid, .name = n, .keys = m.keys, .registers = m.registers, .range_min = 0, .range_max = 0, .range_open_min = true, .range_open_max = true};
+}
+
+/// Whether every measurement claim of `a` in `env` was corroborated.
+/// False when there are none.
+pub Bool cl_all_corroborated(CorimAcs a) { return corim_uncorroborated(a).len() == 0 && a.claims.len() > 0; }
+
+// ─── Checks the platforms share ─────────────────────────────────────
+
+/// A PfTry from a Result: Ok is a hit, Err a final failure.
+pub PfTry pf_of(Result(PfChecked, VerifyError) r) { return match r { Ok(k) => PfHit(k), Err(e) => PfFail(e) }; }
+
+/// The envelope's evidence as a record of `media_type`, or why not.
+pub Result(List(Int), VerifyError) pf_record(Cmw ev, Str media_type) {
+    return match ev {
+        CmwRecord(r) => if (r.media_type == media_type) { Ok(r.value) } else { Err(BadLayout("the evidence is " + r.media_type + ", not " + media_type)) },
+        CmwCollection(k) => Err(BadLayout("the evidence is a collection, not a " + media_type + " record")),
+    };
+}
+
+/// Why the envelope's evidence is not a non-empty record of `media_type`.
+pub VerifyError pf_record_error(Cmw ev, Str media_type) {
+    return match (pf_record(ev, media_type)) { Ok(x) => BadLayout("the " + media_type + " evidence is empty"), Err(e) => e };
+}
+
+/// The envelope's evidence as a collection of type `ctype`, or why not.
+pub Result(CmwColl, VerifyError) pf_collection(Cmw ev, Str ctype) {
+    return match ev {
+        CmwCollection(k) => if (k.ctype == ctype) { Ok(k) } else { Err(BadLayout("the evidence is a collection of type " + k.ctype + ", not " + ctype)) },
+        CmwRecord(r) => Err(BadLayout("the evidence is a record, not a " + ctype + " collection")),
+    };
+}
+
+/// The collateral values of `media_type`, in order.
+pub List(List(Int)) pf_collateral(List(CmwRec) col, Str media_type) { return pf_col_at(col, media_type, 0, []); }
+
+List(List(Int)) pf_col_at(List(CmwRec) col, Str mt, Int i, List(List(Int)) acc) {
+    if (i >= col.len()) { return acc; }
+    return pf_col_at(col, mt, i + 1, if (col[i].media_type == mt) { acc.concat([col[i].value]) } else { acc });
+}
+
+/// Maps a string error to BadLayout.
+pub Result(T, VerifyError) pf_layout(Result(T, Str) r) { return match r { Ok(x) => Ok(x), Err(m) => Err(BadLayout(m)) }; }

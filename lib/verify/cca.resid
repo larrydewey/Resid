@@ -12,10 +12,14 @@
 // ES256 or ES384 with the matching curve.
 //
 // The CPAK may instead be a key a verified CoRIM endorses for the token's
-// instance ID (`cca_verify_endorsed*`); `cca_appraise` then applies a
-// `CcaPolicy` to the verified token.
+// instance ID (a Trust made with trust_with_keys). The platform's instance
+// of PlatformVerifier (verify/claims.resid) is at the end. Internal to
+// lib/verify/.
 
 import "core.resid";
+import "claims.resid";
+import "../cmw.resid";
+import "../evidence.resid";
 import "../crypto.resid";
 import "../hash.resid";
 import "../x509.resid";
@@ -42,14 +46,9 @@ pub type CcaSwComponent = { Str kind; List(Int) measurement; Str version; List(I
 @signed(sig = cose, span = payload)
 pub type CcaToken = { List(Int) challenge; List(Int) rpv; List(Int) rim; List(List(Int)) rems; Str realm_hash_alg; List(Int) rak; Str rak_hash_alg; Str profile; List(Int) implementation_id; List(Int) instance_id; Int lifecycle; List(Int) config; List(CcaSwComponent) sw; Str verification_service; Str platform_hash_alg; };
 
-/// An appraisal policy for a verified CCA token.
-/// `rim_hex`: the realm initial measurements accepted (one must match; empty
-/// is refused). `rems_hex`: REMs that must hold these values ("index=hex",
-/// index 0..3). `implementation_ids_hex`: platform IDs accepted (empty: any).
-pub type CcaPolicy = { List(Str) rim_hex; List(Str) rems_hex; List(Str) implementation_ids_hex; };
-
 /// The device descriptors that may bind a CCA token to a spent challenge.
-pub List(Str) cca_descriptors() { return ["tsm_report.cca"]; }
+@verify_internal
+pub List(Str) cca_descriptors() { return ["tsm_report.report"]; }
 
 // ─── Strict CBOR ────────────────────────────────────────────────────
 
@@ -282,7 +281,7 @@ PubKey cca_ec_key(List(Int) point) {
 /// be the RAK's hash. Returns the merged claims, else a VerifyError.
 @verify_internal
 pub Result(CcaToken, VerifyError) cca_check(List(UInt(8)) token, Anchor cpak, EvidenceTime t) {
-    if (cpak.kind != "EndorsedKeys") { return Err(Refused("cca_verify", "the anchor is not an endorsed platform key (kind " + cpak.kind + ")")); }
+    if (cpak.kind != "EndorsedKeys") { return Err(Refused("Arm CCA", "the anchor is not an endorsed platform key (kind " + cpak.kind + ")")); }
     if (anchor_expired(cpak, t)) { return Err(Stale("the anchor expired " + cpak.expires)); }
     if (token.len() > 16384) { return Err(BadLayout("a CCA token is at most 16 KiB")); }
     CcaColl col = cca_collection(chal_ints(token));
@@ -296,7 +295,7 @@ pub Result(CcaToken, VerifyError) cca_check(List(UInt(8)) token, Anchor cpak, Ev
     if (!cose_sign1_verify(rm, cca_ec_key(realm.rak), [])) { return Err(BadSignature("the RAK did not sign the realm token")); }
     PubKey pk = spki_parse_der(cpak.der);
     Str need = if (pk.kind == pubkey_ec() && curve_bytes(pk.curve) == 48) { "EcdsaP384Sha384" } else { "EcdsaP256Sha256" };
-    if (!anchor_lists(cpak.algorithms, need)) { return Err(Refused("cca_verify", "the anchor does not list " + need)); }
+    if (!anchor_lists(cpak.algorithms, need)) { return Err(Refused("Arm CCA", "the anchor does not list " + need)); }
     if (!cose_sign1_verify(pm, pk, [])) { return Err(BadSignature("the CPAK did not sign the platform token")); }
     CcaToken plat = cca_parse(pm.payload, cca_platform_keys(), "platform")?;
     List(Int) binder = cca_hash(realm.rak_hash_alg, realm.rak);
@@ -305,128 +304,123 @@ pub Result(CcaToken, VerifyError) cca_check(List(UInt(8)) token, Anchor cpak, Ev
     return Ok(CcaToken {.challenge = realm.challenge, .rpv = realm.rpv, .rim = realm.rim, .rems = realm.rems, .realm_hash_alg = realm.realm_hash_alg, .rak = realm.rak, .rak_hash_alg = realm.rak_hash_alg, .profile = plat.profile, .implementation_id = plat.implementation_id, .instance_id = plat.instance_id, .lifecycle = plat.lifecycle, .config = plat.config, .sw = plat.sw, .verification_service = plat.verification_service, .platform_hash_alg = plat.platform_hash_alg});
 }
 
-Int cca_rp(ChallengeRecord c) { return if (c.bind.len() > 0) { q_rp_bound() } else { 0 }; }
+// ─── The platform (verify/claims.resid) ─────────────────────────────
 
-/// Checks that the realm challenge of `k` is `want` and accepts record `c`.
-/// `want` must be 64 bytes (NotFresh otherwise). Returns whether `c` was
-/// spent in a request, as `vf_bind_challenge` does.
+/// The marker type naming Arm CCA for PlatformVerifier.
+type CcaPlat = { Bool cca; };
+
+/// The Arm CCA marker.
 @verify_internal
-pub Result(Bool, VerifyError) cca_bind(CcaToken k, List(UInt(8)) want, ChallengeRecord c, List(UInt(8)) token) {
-    if (want.len() != 64) { return Err(NotFresh("a CCA challenge is 64 bytes: issue one with challenge_issue(64)")); }
-    return vf_bind_challenge(chal_bytes(k.challenge), want, c, token, cca_descriptors());
+pub CcaPlat cca_platform() { return CcaPlat {.cca = true}; }
+
+Platform cca_pv_platform(CcaPlat p) { return ArmCcaRealm; }
+
+// Pinned CPAKs first, then keys a CoRIM endorses.
+List(Cand) cca_pv_candidates(CcaPlat p, Trust tr, Cmw ev, EvidenceTime t) {
+    return trust_anchor_cands(tr, ["EndorsedKeys"]).concat(trust_endorsed_cands(tr, "EndorsedKeys", "CcaToken", "", t));
 }
 
-/// Verifies a CCA token under the pinned CPAK `cpak`, fresh for `c`.
-/// The realm challenge must be `challenge_value(c)`.
-@primitive(verify, anchor = cpak, gives = [fresh], time = t, format = CcaToken, kinds = [EndorsedKeys], inputs = [token, c, t])
-pub Result(Verified(CcaToken), VerifyError) cca_verify(List(UInt(8)) token, ChallengeRecord c, Anchor cpak, EvidenceTime t) {
-    CcaToken k = cca_check(token, cpak, t)?;
-    Bool spent = cca_bind(k, challenge_value(c), c, token)?;
-    List(Int) none = [];
-    return Ok(vf_make(k, cpak, q_fresh() | cca_rp(c), c, 0, none, none, t, "CcaToken"));
-}
-
-/// Verifies a CCA token under `cpak`, fresh and bound to the key `pk`.
-/// The realm challenge must bind `pk` for HPKE KEM `kem`; a malformed key is
-/// refused.
-@primitive(verify, anchor = cpak, gives = [fresh, key_bound], time = t, format = CcaToken, kinds = [EndorsedKeys], inputs = [token, c, t, kem, pk])
-pub Result(Verified(CcaToken), VerifyError) cca_verify_key_bound(List(UInt(8)) token, ChallengeRecord c, Anchor cpak, EvidenceTime t, Int kem, List(Int) pk) {
-    if (!hpke_kem_ok(kem) || !vf_pk_ok(kem, pk)) { return Err(Refused("cca_verify_key_bound", "the attester's public key is empty or malformed for the KEM")); }
-    CcaToken k = cca_check(token, cpak, t)?;
-    Bool spent = cca_bind(k, challenge_key_value(challenge_value(c), kem, pk), c, token)?;
-    List(Int) none = [];
-    return Ok(vf_make(k, cpak, q_fresh() | q_key_bound() | cca_rp(c), c, kem, pk, none, t, "CcaToken"));
-}
-
-/// Verifies a CCA token under `cpak`, fresh and bound to a channel.
-/// The channel is the connection whose other end is `e`; needs `declassify`.
-@primitive(verify, anchor = cpak, gives = [fresh, channel_bound], time = t, format = CcaToken, kinds = [EndorsedKeys], inputs = [token, c, t, e])
-@requires(declassify)
-pub Result(Verified(CcaToken), VerifyError) cca_verify_channel_bound(List(UInt(8)) token, ChallengeRecord c, Anchor cpak, EvidenceTime t, ChannelExporter e) {
-    List(UInt(8)) want = match (challenge_with_channel(challenge_value(c), e)) { Ok(x) => Ok(x), Err(err) => Err(Refused("cca_verify_channel_bound", device_error_text(err))) }?;
-    CcaToken k = cca_check(token, cpak, t)?;
-    Bool spent = cca_bind(k, want, c, token)?;
-    List(Int) none = [];
-    return Ok(vf_make(k, cpak, q_fresh() | q_channel_bound() | cca_rp(c), c, 0, none, vf_channel_id(e), t, "CcaToken"));
-}
-
-/// Verifies a CCA token under `cpak` as delivered, not fresh.
-/// For a record imported without a SpentStore: the realm challenge must
-/// equal `replayable_value(c)`.
-@primitive(verify, anchor = cpak, gives = [delivered], time = t, format = CcaToken, kinds = [EndorsedKeys], inputs = [token, c, t])
-pub Result(Verified(CcaToken), VerifyError) cca_verify_replayable(List(UInt(8)) token, ReplayableRecord c, Anchor cpak, EvidenceTime t) {
-    CcaToken k = cca_check(token, cpak, t)?;
-    if (!eq_ints(k.challenge, chal_ints(replayable_value(c)))) { return Err(NotFresh("the realm challenge is not this challenge")); }
-    List(Int) none = [];
-    return Ok(Verified {.value = k, .anchors = [cpak.id], .quals = q_delivered(), .record = 0 - 1, .kem = 0, .pk = none, .chan = none, .time = t.source, .principal = cpak.principal, .format = "CcaToken"});
-}
-
-// ─── Under an endorsed key ──────────────────────────────────────────
-// The CPAK is a key a CoRIM endorses (an attest-key triple, verify/
-// endorsed_keys.resid) for the token's own instance ID, not a pinned
-// anchor; the result rests on the CoRIM's endorser.
-
-/// A token checked under an endorsed key, and the anchor made of that key.
-type CcaHit = { CcaToken k; Anchor a; };
-
-Result(CcaHit, VerifyError) cca_endorsed_check(List(UInt(8)) token, Verified(CorimRefs) keys, EvidenceTime t) {
-    List(EndorsedKey) ks = endorsed_keys(keys, "", "EndorsedKeys", "CcaToken", "", t, "cca_verify_endorsed")?;
-    return cca_endorsed_at(token, ks, t, 0);
-}
-
-Result(CcaHit, VerifyError) cca_endorsed_at(List(UInt(8)) token, List(EndorsedKey) ks, EvidenceTime t, Int i) {
-    if (i >= ks.len()) { return Err(BadSignature("no key the CoRIM endorses for the token's instance signed the platform token")); }
-    return match (cca_check(token, ks[i].a, t)) {
-        Ok(k) => if (hex_encode(k.instance_id) == ks[i].instance_hex) { Ok(CcaHit {.k = k, .a = ks[i].a}) } else { cca_endorsed_at(token, ks, t, i + 1) },
-        Err(e) => if (endorsed_try_next(e)) { cca_endorsed_at(token, ks, t, i + 1) } else { Err(e) },
+// A CPAK fits a token whose platform token it signed (and, when the key
+// is endorsed for an instance, whose instance ID is that one).
+PfTry cca_pv_check(CcaPlat p, Cmw ev, List(CmwRec) col, Cand k, EvidenceTime t) {
+    List(Int) tok = match (pf_record(ev, mt_cca_token())) { Ok(x) => x, Err(e) => [] };
+    if (tok.len() == 0) { return PfFail(pf_record_error(ev, mt_cca_token())); }
+    return match (cca_check(chal_bytes(tok), k.a, t)) {
+        Ok(x) => if (k.instance != "" && hex_encode(x.instance_id) != k.instance) { PfSkip("the key is endorsed for another instance") } else { PfHit(cca_checked(chal_bytes(tok), x)) },
+        Err(e) => if (cca_not_this_key(e)) { PfSkip(verify_error_text(e)) } else { PfFail(e) },
     };
 }
 
-/// Verifies a CCA token under a CPAK endorsed by `keys`, fresh for `c`.
-/// The endorsed key must be for the token's own instance ID.
-@primitive(verify, from = keys, gives = [fresh], time = t, format = CcaToken, inputs = [token, c, t])
-pub Result(Verified(CcaToken), VerifyError) cca_verify_endorsed(List(UInt(8)) token, ChallengeRecord c, Verified(CorimRefs) keys, EvidenceTime t) {
-    CcaHit h = cca_endorsed_check(token, keys, t)?;
-    Bool spent = cca_bind(h.k, challenge_value(c), c, token)?;
-    List(Int) none = [];
-    return Ok(vf_make(h.k, h.a, q_fresh() | cca_rp(c), c, 0, none, none, t, "CcaToken"));
+// The key did not sign, or signs with an algorithm the token does not use.
+Bool cca_not_this_key(VerifyError e) {
+    return match e {
+        BadSignature(m) => m == "the CPAK did not sign the platform token",
+        Refused(w, m) => str_starts_with(m, "the anchor does not list"),
+        _ => false,
+    };
 }
 
-/// Verifies a CCA token under a CPAK endorsed by `keys`, fresh and key-bound.
-/// The realm challenge must bind `pk` for HPKE KEM `kem`; a malformed key is
-/// refused.
-@primitive(verify, from = keys, gives = [fresh, key_bound], time = t, format = CcaToken, inputs = [token, c, t, kem, pk])
-pub Result(Verified(CcaToken), VerifyError) cca_verify_endorsed_key_bound(List(UInt(8)) token, ChallengeRecord c, Verified(CorimRefs) keys, EvidenceTime t, Int kem, List(Int) pk) {
-    if (!hpke_kem_ok(kem) || !vf_pk_ok(kem, pk)) { return Err(Refused("cca_verify_endorsed_key_bound", "the attester's public key is empty or malformed for the KEM")); }
-    CcaHit h = cca_endorsed_check(token, keys, t)?;
-    Bool spent = cca_bind(h.k, challenge_key_value(challenge_value(c), kem, pk), c, token)?;
-    List(Int) none = [];
-    return Ok(vf_make(h.k, h.a, q_fresh() | q_key_bound() | cca_rp(c), c, kem, pk, none, t, "CcaToken"));
+// A hash algorithm name as its named-information number.
+Int cca_alg(Str n) { return if (n == "sha-384") { 7 } else if (n == "sha-512") { 8 } else { 1 }; }
+
+PfChecked cca_checked(List(UInt(8)) token, CcaToken k) {
+    Int ra = cca_alg(k.realm_hash_alg);
+    List(Measurement) ms = [measurement("RIM", ra, k.rim)].concat(cca_rem_meas(k.rems, ra, 0, [])).concat(cca_sw_meas(k, 0, []));
+    // The realm personalization value: whoever created the realm chose it.
+    List(ClaimValue) host = [claim_bytes("rpv", k.rpv)];
+    List(ClaimValue) vs = [claim_bytes("implementation_id", k.implementation_id), claim_bytes("instance_id", k.instance_id), claim_bytes("profile", bytes_of(k.profile)), claim_bytes("rak", k.rak), claim_bytes("config", k.config), claim_bytes("verification_service", bytes_of(k.verification_service)), claim_number("lifecycle", k.lifecycle)];
+    List(Str) none = [];
+    Claims c = Claims {.platform = ArmCcaRealm, .format = "CcaToken", .launch_slot = "RIM", .measurements = ms, .debug = false, .values = vs, .host_values = host, .tcb_statuses = none, .hardware_id = k.instance_id, .report_data = k.challenge, .corim = cca_corim_claims(k), .evidence = chal_ints(token)};
+    return PfChecked {.claims = c, .relayed = chal_bytes(k.challenge), .exact = true, .want_len = 64, .bound = token, .descs = cca_descriptors(), .keyed_instance = false};
 }
 
-// ─── Appraisal ──────────────────────────────────────────────────────
-/// Appraises a verified CCA token against `policy`.
-/// Mandatory: the platform's security lifecycle is "secured" (0x3000 to
-/// 0x30FF). Then the policy's RIM (one must match), REMs and implementation
-/// IDs; any miss is Refused.
-@primitive(appraise, from = v, policy = policy, ptype = CcaPolicy)
-pub Result(Appraised(CcaToken), VerifyError) cca_appraise(Verified(CcaToken) v, CcaPolicy policy) {
-    CcaToken k = v.value;
-    if (k.lifecycle < 12288 || k.lifecycle > 12543) { return Err(Refused("cca_appraise", f"the platform's security lifecycle 0x{k.lifecycle:hex} is not secured")); }
-    if (policy.rim_hex.len() == 0) { return Err(Refused("cca_appraise", "the policy names no realm initial measurement")); }
-    if (!cca_hex_in(k.rim, policy.rim_hex, 0)) { return Err(Refused("cca_appraise", "the realm initial measurement is not one the policy names")); }
-    if (policy.implementation_ids_hex.len() > 0 && !cca_hex_in(k.implementation_id, policy.implementation_ids_hex, 0)) { return Err(Refused("cca_appraise", "the platform implementation is not one the policy names")); }
-    Str bad = cca_rem_miss(k, policy.rems_hex, 0);
-    if (bad != "") { return Err(Refused("cca_appraise", bad)); }
-    return Ok(Appraised {.v = v, .policy = "CcaPolicy"});
+List(Measurement) cca_rem_meas(List(List(Int)) rems, Int alg, Int i, List(Measurement) acc) {
+    if (i >= rems.len()) { return acc; }
+    return cca_rem_meas(rems, alg, i + 1, acc.concat([measurement(f"REM{i}", alg, rems[i])]));
 }
 
-Bool cca_hex_in(List(Int) b, List(Str) hs, Int i) { return i < hs.len() && (str_to_lower(hs[i]) == hex_encode(b) || cca_hex_in(b, hs, i + 1)); }
-
-Str cca_rem_miss(CcaToken k, List(Str) want, Int i) {
-    if (i >= want.len()) { return ""; }
-    List(Str) kv = str_split(want[i], "=");
-    if (kv.len() != 2 || !str_is_int(kv[0]) || str_parse_int(kv[0]) < 0 || str_parse_int(kv[0]) > 3) { return "the policy entry `" + want[i] + "` is not index=hex (0..3)"; }
-    if (hex_encode(k.rems[str_parse_int(kv[0])]) != str_to_lower(kv[1])) { return "REM" + kv[0] + " is not the policy's"; }
-    return cca_rem_miss(k, want, i + 1);
+List(Measurement) cca_sw_meas(CcaToken k, Int i, List(Measurement) acc) {
+    if (i >= k.sw.len()) { return acc; }
+    CcaSwComponent c = k.sw[i];
+    Int alg = cca_alg(if (c.hash_alg != "") { c.hash_alg } else { k.platform_hash_alg });
+    return cca_sw_meas(k, i + 1, acc.concat([measurement("SW." + c.kind, alg, c.measurement)]));
 }
+
+// The CoRIM environment classes of a CCA realm and platform.
+CorimEnv cca_realm_corim_env() { return corim_env("Arm", "CCA realm"); }
+CorimEnv cca_platform_corim_env() { return corim_env("Arm", "CCA platform"); }
+
+// The CoRIM claims, realm then platform: the realm gives RIM, REM0-3 and
+// RPV; the platform, keyed by implementation and instance ID, gives the
+// lifecycle and each software component's digest and version.
+List(CorimClaim) cca_corim_claims(CcaToken k) {
+    Int ra = cca_alg(k.realm_hash_alg);
+    List(CorimMeas) realm = [corim_digest_claim(cl_k("rim"), ra, k.rim), corim_raw_claim(cl_k("rpv"), k.rpv)].concat(cca_corim_rems(k.rems, ra, 0, []));
+    CorimEnv pe0 = cca_platform_corim_env();
+    CorimEnv pe = CorimEnv {.class = CorimClass {.id = CorimId {.kind = "bytes", .v = k.implementation_id}, .vendor = pe0.class.vendor, .model = pe0.class.model, .layer = 0 - 1, .index = 0 - 1}, .instance = CorimId {.kind = "ueid", .v = k.instance_id}, .group = corim_id_none()};
+    List(CorimMeas) plat = [corim_int_claim(cl_k("lifecycle"), k.lifecycle)].concat(cca_corim_sw(k, 0, []));
+    return corim_evidence(cca_realm_corim_env(), realm).concat(corim_evidence(pe, plat));
+}
+
+List(CorimMeas) cca_corim_rems(List(List(Int)) rems, Int alg, Int i, List(CorimMeas) acc) {
+    if (i >= rems.len()) { return acc; }
+    return cca_corim_rems(rems, alg, i + 1, acc.concat([corim_digest_claim(cl_k(f"rem{i}"), alg, rems[i])]));
+}
+
+// A software component: its digest and, when given, its version.
+List(CorimMeas) cca_corim_sw(CcaToken k, Int i, List(CorimMeas) acc) {
+    if (i >= k.sw.len()) { return acc; }
+    CcaSwComponent c = k.sw[i];
+    Int alg = cca_alg(if (c.hash_alg != "") { c.hash_alg } else { k.platform_hash_alg });
+    CorimMeas d = corim_digest_claim(cl_k(c.kind), alg, c.measurement);
+    CorimMval m = d.mval;
+    CorimMval mv = if (c.version == "") { m } else { CorimMval {.present = m.present | 1, .version = c.version, .version_scheme = "", .svn = m.svn, .digests = m.digests, .flags_known = 0, .flags = 0, .raw = m.raw, .raw_mask = m.raw_mask, .mac = m.mac, .ip = m.ip, .serial = m.serial, .ueid = m.ueid, .uuid = m.uuid, .name = m.name, .keys = m.keys, .registers = m.registers, .range_min = 0, .range_max = 0, .range_open_min = true, .range_open_max = true} };
+    return cca_corim_sw(k, i + 1, acc.concat([corim_claim(cl_k(c.kind), mv)]));
+}
+
+// Beyond the generic checks: the platform's security lifecycle is
+// "secured" (0x3000 to 0x30FF).
+Result(Bool, VerifyError) cca_pv_mandatory(CcaPlat p, Claims c, Policy pol) {
+    Int lc = claims_number(c, "lifecycle", 0 - 1);
+    if (lc < 12288 || lc > 12543) { return Err(Refused("appraise_evidence", f"the platform's security lifecycle 0x{lc:hex} is not secured")); }
+    return Ok(true);
+}
+
+// A corroborated RIM counts as named; every platform software component
+// must be corroborated.
+Result(PfEndorsed, VerifyError) cca_pv_endorsed(CcaPlat p, Claims c, CorimAcs a, Policy pol) {
+    Str bad = cca_sw_miss(a, c.measurements, 0);
+    if (bad != "") { return Err(Refused("appraise_evidence", bad)); }
+    Bool rim = corim_corroborated(a, cca_realm_corim_env(), cl_k("rim"));
+    List(Int) v = match (claims_measurement(c, "RIM")) { Some(x) => x, None => [] };
+    return Ok(PfEndorsed {.policy = if (rim) { policy_with_measurement(pol, hex_encode(v)) } else { pol }, .satisfied = false});
+}
+
+Str cca_sw_miss(CorimAcs a, List(Measurement) ms, Int i) {
+    if (i >= ms.len()) { return ""; }
+    Str s = ms[i].slot;
+    if (str_starts_with(s, "SW.") && !corim_corroborated(a, cca_platform_corim_env(), cl_k(str_slice(s, 3, str_len(s))))) { return "the platform's " + str_slice(s, 3, str_len(s)) + " measurement is not endorsed"; }
+    return cca_sw_miss(a, ms, i + 1);
+}
+
+PlatformVerifier(CcaPlat) = { .pv_platform = cca_pv_platform, .pv_candidates = cca_pv_candidates, .pv_check = cca_pv_check, .pv_mandatory = cca_pv_mandatory, .pv_endorsed = cca_pv_endorsed };

@@ -37,6 +37,10 @@
 // or a CoRIM (verify/corim.resid). Sessions are verify/spdm_session.resid.
 
 import "core.resid";
+import "claims.resid";
+import "../cmw.resid";
+import "../evidence.resid";
+import "../cose.resid";
 import "corim.resid";
 import "endorsed_keys.resid";
 import "../crypto.resid";
@@ -80,11 +84,8 @@ pub type SpdmRecord = { List(List(UInt(8))) vca; List(List(UInt(8))) certs; List
 /// CHALLENGE_AUTH.
 pub type SpdmChallengeRecord = { List(List(UInt(8))) vca; List(UInt(8)) chain; List(List(UInt(8))) ocsp; List(List(UInt(8))) b; List(UInt(8)) request; List(UInt(8)) response; };
 
-/// A policy: measurement blocks that must hold these values ("index=hex",
-/// every one of them).
-pub type SpdmPolicy = { List(Str) measurements_hex; };
-
 /// The descriptor names SPDM verifiers pass when binding a challenge.
+@verify_internal
 pub List(Str) spdm_descriptors() { return ["nvidia.spdm_measurements", "spdm.requester"]; }
 
 List(List(Int)) sp_ints(List(List(UInt(8))) xs, Int i, List(List(Int)) acc) { return if (i >= xs.len()) { acc } else { sp_ints(xs, i + 1, acc.concat([chal_ints(xs[i])])) }; }
@@ -141,7 +142,7 @@ Result(Cert, VerifyError) sp_cert(List(Int) der, Str what) {
 Result(Bool, VerifyError) sp_ocsp(List(List(Int)) chain, List(List(Int)) resps, Int i, EvidenceTime t) {
     if (i >= chain.len() - 1) { return Ok(true); }
     Int st = sp_ocsp_answer(chain[i + 1], chain[i], resps, 0, t);
-    if (st == ocsp_status_revoked()) { return Err(Refused("spdm_verify", f"certificate {i} of the device chain is revoked")); }
+    if (st == ocsp_status_revoked()) { return Err(Refused("SPDM", f"certificate {i} of the device chain is revoked")); }
     if (st != ocsp_status_good()) { return Err(Stale(f"no current OCSP answer says certificate {i} of the device chain is good")); }
     return sp_ocsp(chain, resps, i + 1, t);
 }
@@ -184,9 +185,9 @@ type SpOk = { SpdmEvidence e; List(Int) req_nonce; };
 /// the nonce is returned for the caller to bind. Err on any failure.
 @verify_internal
 pub Result(SpOk, VerifyError) spdm_check(SpdmRecord rec, Anchor root, EvidenceTime t) {
-    Bool ok = sp_anchor(root, t, "spdm_verify")?;
+    Bool ok = sp_anchor(root, t, "SPDM")?;
     Cert leaf = sp_chain(rec.certs, rec.ocsp, root, t)?;
-    return sp_check_leaf(rec, leaf, root, "spdm_verify");
+    return sp_check_leaf(rec, leaf, root, "SPDM");
 }
 
 // The record's signed GET_MEASUREMENTS under the device key `leaf`, with
@@ -230,103 +231,6 @@ List(SpdmMeasurement) sp_blocks(List(SpdmBlock) bs, Int i, List(SpdmMeasurement)
     return sp_blocks(bs, i + 1, acc.concat([SpdmMeasurement {.index = bs[i].index, .value_type = bs[i].value_type, .value = bs[i].value}]));
 }
 
-Int sp_rp(ChallengeRecord c) { return if (c.bind.len() > 0) { q_rp_bound() } else { 0 }; }
-
-// The requester nonce must be exactly the expected 32-byte value.
-Result(Bool, VerifyError) sp_bind(List(Int) nonce, List(UInt(8)) want, ChallengeRecord c, List(UInt(8)) response) {
-    if (want.len() != 32) { return Err(NotFresh("an SPDM nonce is 32 bytes: issue the challenge with challenge_issue(32)")); }
-    return vf_bind_challenge(chal_bytes(nonce), want, c, response, spdm_descriptors());
-}
-
-/// Verifies an SPDM measurement record under `root` as Fresh for `c`'s holder.
-/// The request's nonce must be challenge_value(c), a 32-byte challenge.
-/// Err on any failed check.
-@primitive(verify, anchor = root, gives = [fresh], time = t, format = SpdmEvidence, kinds = [NvidiaDevice, DeviceIdentity], inputs = [rec, c, t])
-pub Result(Verified(SpdmEvidence), VerifyError) spdm_verify(SpdmRecord rec, ChallengeRecord c, Anchor root, EvidenceTime t) {
-    SpOk k = spdm_check(rec, root, t)?;
-    Bool spent = sp_bind(k.req_nonce, challenge_value(c), c, rec.response)?;
-    List(Int) none = [];
-    return Ok(vf_make(k.e, root, q_fresh() | sp_rp(c), c, 0, none, none, t, "SpdmEvidence"));
-}
-
-/// Verifies an SPDM measurement record as Fresh and KeyBound(kem, pk).
-/// The nonce must be challenge_with_key(challenge_value(c), kem, sk) for the
-/// sk behind `pk`; a malformed `kem` or `pk` is refused.
-@primitive(verify, anchor = root, gives = [fresh, key_bound], time = t, format = SpdmEvidence, kinds = [NvidiaDevice, DeviceIdentity], inputs = [rec, c, t, kem, pk])
-pub Result(Verified(SpdmEvidence), VerifyError) spdm_verify_key_bound(SpdmRecord rec, ChallengeRecord c, Anchor root, EvidenceTime t, Int kem, List(Int) pk) {
-    if (!hpke_kem_ok(kem) || !vf_pk_ok(kem, pk)) { return Err(Refused("spdm_verify_key_bound", "the attester's public key is empty or malformed for the KEM")); }
-    SpOk k = spdm_check(rec, root, t)?;
-    Bool spent = sp_bind(k.req_nonce, challenge_key_value(challenge_value(c), kem, pk), c, rec.response)?;
-    List(Int) none = [];
-    return Ok(vf_make(k.e, root, q_fresh() | q_key_bound() | sp_rp(c), c, kem, pk, none, t, "SpdmEvidence"));
-}
-
-/// Verifies an SPDM measurement record as Fresh and ChannelBound.
-/// The nonce must be challenge_with_channel(challenge_value(c), `e`), tying
-/// it to the connection whose other end is `e`; needs `declassify`.
-@primitive(verify, anchor = root, gives = [fresh, channel_bound], time = t, format = SpdmEvidence, kinds = [NvidiaDevice, DeviceIdentity], inputs = [rec, c, t, e])
-@requires(declassify)
-pub Result(Verified(SpdmEvidence), VerifyError) spdm_verify_channel_bound(SpdmRecord rec, ChallengeRecord c, Anchor root, EvidenceTime t, ChannelExporter e) {
-    List(UInt(8)) want = match (challenge_with_channel(challenge_value(c), e)) { Ok(x) => Ok(x), Err(err) => Err(Refused("spdm_verify_channel_bound", device_error_text(err))) }?;
-    SpOk k = spdm_check(rec, root, t)?;
-    Bool spent = sp_bind(k.req_nonce, want, c, rec.response)?;
-    List(Int) none = [];
-    return Ok(vf_make(k.e, root, q_fresh() | q_channel_bound() | sp_rp(c), c, 0, none, vf_channel_id(e), t, "SpdmEvidence"));
-}
-
-// ─── Under an endorsed identity key ─────────────────────────────────
-// The device's key is one a CoRIM's identity triple endorses for the named
-// instance (verify/endorsed_keys.resid), not a chain to a pinned root: the
-// result rests on the CoRIM's endorser. Only the device certificate (the
-// record's first) is read, for its key and validity.
-
-Result(SpHit, VerifyError) sp_endorsed(SpdmRecord rec, Verified(CorimRefs) keys, Str instance_hex, EvidenceTime t) {
-    if (rec.certs.len() == 0) { return Err(BadChain("the record carries no device certificate")); }
-    Cert leaf = sp_cert(chal_ints(rec.certs[0]), "the device certificate")?;
-    if (!cert_valid_at(leaf, t.at)) { return Err(BadChain("the device certificate is not current")); }
-    Anchor a = endorsed_identity(keys, instance_hex, leaf, t, "spdm_verify_endorsed")?;
-    SpOk k = sp_check_leaf(rec, leaf, a, "spdm_verify_endorsed")?;
-    return Ok(SpHit {.k = k, .a = a});
-}
-
-/// A record checked under an endorsed key, and the anchor made for that key.
-type SpHit = { SpOk k; Anchor a; };
-
-/// Verifies an SPDM measurement record as Fresh under an endorsed device key.
-/// The key must be one `keys` endorses for `instance_hex`; the device
-/// certificate must be current at `t`; the nonce must be challenge_value(c).
-@primitive(verify, from = keys, gives = [fresh], time = t, format = SpdmEvidence, inputs = [rec, c, t, instance_hex])
-pub Result(Verified(SpdmEvidence), VerifyError) spdm_verify_endorsed(SpdmRecord rec, ChallengeRecord c, Verified(CorimRefs) keys, Str instance_hex, EvidenceTime t) {
-    SpHit h = sp_endorsed(rec, keys, instance_hex, t)?;
-    Bool spent = sp_bind(h.k.req_nonce, challenge_value(c), c, rec.response)?;
-    List(Int) none = [];
-    return Ok(vf_make(h.k.e, h.a, q_fresh() | sp_rp(c), c, 0, none, none, t, "SpdmEvidence"));
-}
-
-/// Verifies an SPDM measurement record as Fresh and KeyBound(kem, pk) under
-/// an endorsed device key.
-/// The key must be one `keys` endorses for `instance_hex`; the nonce must be
-/// challenge_with_key(challenge_value(c), kem, sk) for the sk behind `pk`.
-@primitive(verify, from = keys, gives = [fresh, key_bound], time = t, format = SpdmEvidence, inputs = [rec, c, t, instance_hex, kem, pk])
-pub Result(Verified(SpdmEvidence), VerifyError) spdm_verify_endorsed_key_bound(SpdmRecord rec, ChallengeRecord c, Verified(CorimRefs) keys, Str instance_hex, EvidenceTime t, Int kem, List(Int) pk) {
-    if (!hpke_kem_ok(kem) || !vf_pk_ok(kem, pk)) { return Err(Refused("spdm_verify_endorsed_key_bound", "the attester's public key is empty or malformed for the KEM")); }
-    SpHit h = sp_endorsed(rec, keys, instance_hex, t)?;
-    Bool spent = sp_bind(h.k.req_nonce, challenge_key_value(challenge_value(c), kem, pk), c, rec.response)?;
-    List(Int) none = [];
-    return Ok(vf_make(h.k.e, h.a, q_fresh() | q_key_bound() | sp_rp(c), c, kem, pk, none, t, "SpdmEvidence"));
-}
-
-/// Verifies an SPDM measurement record as Delivered only, not Fresh.
-/// For a record imported without a SpentStore: the nonce must equal
-/// replayable_value(c), but nothing stops a replay.
-@primitive(verify, anchor = root, gives = [delivered], time = t, format = SpdmEvidence, kinds = [NvidiaDevice, DeviceIdentity], inputs = [rec, c, t])
-pub Result(Verified(SpdmEvidence), VerifyError) spdm_verify_replayable(SpdmRecord rec, ReplayableRecord c, Anchor root, EvidenceTime t) {
-    SpOk k = spdm_check(rec, root, t)?;
-    if (!eq_list(k.req_nonce, chal_ints(replayable_value(c)))) { return Err(NotFresh("the requester nonce is not this challenge")); }
-    List(Int) none = [];
-    return Ok(Verified {.value = k.e, .anchors = [root.id], .quals = q_delivered(), .record = 0 - 1, .kem = 0, .pk = none, .chan = none, .time = t.source, .principal = root.principal, .format = "SpdmEvidence"});
-}
-
 // ─── CHALLENGE ──────────────────────────────────────────────────────
 
 /// A checked CHALLENGE record: the identity and the requester's nonce.
@@ -337,7 +241,7 @@ type SiOk = { SpdmIdentity id; List(Int) nonce; };
 /// certificate and CHALLENGE_AUTH must name this chain. Err on any failure.
 @verify_internal
 pub Result(SiOk, VerifyError) spdm_challenge_check(SpdmChallengeRecord rec, Anchor root, EvidenceTime t) {
-    Bool ok = sp_anchor(root, t, "spdm_verify_challenge")?;
+    Bool ok = sp_anchor(root, t, "SPDM")?;
     List(Int) req = chal_ints(rec.request);
     List(Int) resp = chal_ints(rec.response);
     if (req.len() < 36 || req[1] != 131) { return Err(BadLayout("the request is not CHALLENGE")); }
@@ -350,7 +254,7 @@ pub Result(SiOk, VerifyError) spdm_challenge_check(SpdmChallengeRecord rec, Anch
     if (!eq_list(parsed.root_hash, spdm_hash(a0.hash, root.der))) { return Err(BadChain("the chain's root hash is not the anchor's certificate")); }
     List(List(UInt(8))) certs = sp_bytes_list(spdm_chain_leaf_first(parsed), 0, []);
     Cert leaf = sp_chain(certs, rec.ocsp, root, t)?;
-    SpdmAlgs a = sp_algs(rec.vca, ver, leaf, root, "spdm_verify_challenge")?;
+    SpdmAlgs a = sp_algs(rec.vca, ver, leaf, root, "SPDM")?;
     Int slot = req[2] & 15;
     SpdmChallengeAuth au = sp_msg(spdm_parse_challenge_auth(resp, a, req[3], slot))?;
     if (au.len != resp.len()) { return Err(BadLayout("CHALLENGE_AUTH carries trailing bytes")); }
@@ -365,29 +269,8 @@ pub Result(SiOk, VerifyError) spdm_challenge_check(SpdmChallengeRecord rec, Anch
 
 List(List(UInt(8))) sp_bytes_list(List(List(Int)) xs, Int i, List(List(UInt(8))) acc) { return if (i >= xs.len()) { acc } else { sp_bytes_list(xs, i + 1, acc.concat([chal_bytes(xs[i])])) }; }
 
-/// Verifies an SPDM CHALLENGE record under `root` as Fresh for `c`'s holder.
-/// CHALLENGE's nonce must be challenge_value(c), a 32-byte challenge.
-@primitive(verify, anchor = root, gives = [fresh], time = t, format = SpdmIdentity, kinds = [NvidiaDevice, DeviceIdentity], inputs = [rec, c, t])
-pub Result(Verified(SpdmIdentity), VerifyError) spdm_verify_challenge(SpdmChallengeRecord rec, ChallengeRecord c, Anchor root, EvidenceTime t) {
-    SiOk k = spdm_challenge_check(rec, root, t)?;
-    Bool spent = sp_bind(k.nonce, challenge_value(c), c, rec.response)?;
-    List(Int) none = [];
-    return Ok(vf_make(k.id, root, q_fresh() | sp_rp(c), c, 0, none, none, t, "SpdmIdentity"));
-}
-
-// ─── Appraisal ──────────────────────────────────────────────────────
-/// Appraises verified SPDM evidence against a policy of measurement values.
-/// Every "index=hex" entry must match that block's value (hex compared in
-/// lower case); a policy naming no measurement is refused.
-@primitive(appraise, from = v, policy = policy, ptype = SpdmPolicy)
-pub Result(Appraised(SpdmEvidence), VerifyError) spdm_appraise(Verified(SpdmEvidence) v, SpdmPolicy policy) {
-    if (policy.measurements_hex.len() == 0) { return Err(Refused("spdm_appraise", "the policy names no measurement")); }
-    Str bad = sp_policy_miss(v.value, policy.measurements_hex, 0);
-    if (bad != "") { return Err(Refused("spdm_appraise", bad)); }
-    return Ok(Appraised {.v = v, .policy = "SpdmPolicy"});
-}
-
 /// The value of the measurement block numbered `index`, or [] when absent.
+@verify_internal
 pub List(Int) spdm_measurement(SpdmEvidence e, Int index) { return sp_value_at(e.measurements, index, 0); }
 
 List(Int) sp_value_at(List(SpdmMeasurement) ms, Int index, Int i) {
@@ -397,11 +280,225 @@ List(Int) sp_value_at(List(SpdmMeasurement) ms, Int index, Int i) {
     return sp_value_at(ms, index, i + 1);
 }
 
-Str sp_policy_miss(SpdmEvidence e, List(Str) want, Int i) {
-    if (i >= want.len()) { return ""; }
-    List(Str) kv = str_split(want[i], "=");
-    if (kv.len() != 2 || !str_is_int(kv[0])) { return "the policy entry `" + want[i] + "` is not index=hex"; }
-    List(Int) got = spdm_measurement(e, str_parse_int(kv[0]));
-    if (got.len() == 0 || hex_encode(got) != str_to_lower(kv[1])) { return "measurement " + kv[0] + " is not the policy's"; }
-    return sp_policy_miss(e, want, i + 1);
+// ─── The platform (verify/claims.resid) ─────────────────────────────
+
+/// The marker type naming SPDM device evidence for PlatformVerifier.
+type SpdmPlat = { Bool spdm; };
+
+/// The SPDM device marker.
+@verify_internal
+pub SpdmPlat spdm_platform() { return SpdmPlat {.spdm = true}; }
+
+Platform sp_pv_platform(SpdmPlat p) { return SpdmDevice; }
+
+/// A measurement record from envelope evidence.
+@verify_internal
+pub Result(SpdmRecord, VerifyError) sp_meas_record(Cmw ev) {
+    CmwColl k = pf_collection(ev, ct_spdm_measurements())?;
+    if (!ev_only(k, ["vca", "certs", "ocsp", "before", "request", "response"])) { return Err(BadLayout("SPDM measurement evidence has members other than vca, certs, ocsp, before, request and response")); }
+    List(List(Int)) vca = pf_layout(ev_member_list(k, "vca", 6))?;
+    List(List(Int)) certs = pf_layout(ev_member_list(k, "certs", 8))?;
+    List(List(Int)) ocsp = pf_layout(ev_member_list(k, "ocsp", 8))?;
+    List(List(Int)) before = pf_layout(ev_member_list(k, "before", 256))?;
+    List(Int) req = pf_layout(ev_member(k, "request"))?;
+    List(Int) rsp = pf_layout(ev_member(k, "response"))?;
+    return Ok(SpdmRecord {.vca = sp_bytes_list(vca, 0, []), .certs = sp_bytes_list(certs, 0, []), .ocsp = sp_bytes_list(ocsp, 0, []), .before = sp_bytes_list(before, 0, []), .request = chal_bytes(req), .response = chal_bytes(rsp)});
 }
+
+/// A CHALLENGE record from envelope evidence.
+@verify_internal
+pub Result(SpdmChallengeRecord, VerifyError) sp_chal_record(Cmw ev) {
+    CmwColl k = pf_collection(ev, ct_spdm_challenge())?;
+    if (!ev_only(k, ["vca", "chain", "ocsp", "b", "request", "response"])) { return Err(BadLayout("SPDM CHALLENGE evidence has members other than vca, chain, ocsp, b, request and response")); }
+    List(List(Int)) vca = pf_layout(ev_member_list(k, "vca", 6))?;
+    List(Int) chain = pf_layout(ev_member(k, "chain"))?;
+    List(List(Int)) ocsp = pf_layout(ev_member_list(k, "ocsp", 8))?;
+    List(List(Int)) b = pf_layout(ev_member_list(k, "b", 64))?;
+    List(Int) req = pf_layout(ev_member(k, "request"))?;
+    List(Int) rsp = pf_layout(ev_member(k, "response"))?;
+    return Ok(SpdmChallengeRecord {.vca = sp_bytes_list(vca, 0, []), .chain = chal_bytes(chain), .ocsp = sp_bytes_list(ocsp, 0, []), .b = sp_bytes_list(b, 0, []), .request = chal_bytes(req), .response = chal_bytes(rsp)});
+}
+
+Bool sp_is_challenge(Cmw ev) { return match ev { CmwCollection(k) => k.ctype == ct_spdm_challenge(), CmwRecord(r) => false }; }
+
+// The device's certificate, as the evidence gives it ([] when it gives
+// none that parses: the check then says why).
+List(Int) sp_leaf_der(Cmw ev) {
+    if (sp_is_challenge(ev)) {
+        SpdmChallengeRecord r = match (sp_chal_record(ev)) { Ok(x) => x, Err(e) => sp_no_chal() };
+        if (r.vca.len() == 0) { return []; }
+        SpdmAlgs a = match (spdm_parse_vca(sp_ints(r.vca, 0, []))) { Ok(x) => x, Err(e) => sp_no_algs() };
+        if (a.hash == 0) { return []; }
+        List(List(Int)) cs = match (spdm_parse_chain(chal_ints(r.chain), a.hash)) { Ok(x) => spdm_chain_leaf_first(x), Err(e) => [] };
+        return if (cs.len() == 0) { [] } else { cs[0] };
+    }
+    SpdmRecord r = match (sp_meas_record(ev)) { Ok(x) => x, Err(e) => sp_no_rec() };
+    return if (r.certs.len() == 0) { [] } else { chal_ints(r.certs[0]) };
+}
+
+SpdmRecord sp_no_rec() {
+    List(List(UInt(8))) nn = [];
+    List(UInt(8)) n = [];
+    return SpdmRecord {.vca = nn, .certs = nn, .ocsp = nn, .before = nn, .request = n, .response = n};
+}
+
+SpdmChallengeRecord sp_no_chal() {
+    List(List(UInt(8))) nn = [];
+    List(UInt(8)) n = [];
+    return SpdmChallengeRecord {.vca = nn, .chain = n, .ocsp = nn, .b = nn, .request = n, .response = n};
+}
+
+SpdmAlgs sp_no_algs() { return SpdmAlgs {.slack = 0, .version = 0, .flags = 0, .req_flags = 0, .ct_exponent = 0, .data_transfer_size = 0, .max_msg_size = 0, .meas_spec = 0, .meas_hash = 0, .asym = 0, .hash = 0, .dhe = 0, .aead = 0, .key_schedule = 0, .req_asym = 0, .opaque_fmt = 0, .multi_key = false}; }
+
+// The device's class, from a pinned root: its product as "Vendor:Model",
+// or as the model with NVIDIA as the vendor under an NvidiaDevice root.
+CorimEnv sp_anchor_env(Anchor a) {
+    Int c = str_index_of(a.product, ":", 0);
+    Str vendor = if (c >= 0) { str_slice(a.product, 0, c) } else if (a.kind == "NvidiaDevice") { "NVIDIA" } else { "" };
+    Str model = if (c >= 0) { str_slice(a.product, c + 1, str_len(a.product)) } else { a.product };
+    return corim_env(vendor, model);
+}
+
+// Pinned roots first, then device keys a CoRIM's identity triples endorse
+// (for measurement evidence: the device's own certificate is matched).
+List(Cand) sp_pv_candidates(SpdmPlat p, Trust tr, Cmw ev, EvidenceTime t) {
+    List(Cand) pinned = sp_with_env(trust_anchor_cands(tr, ["NvidiaDevice", "DeviceIdentity"]), 0, []);
+    List(Int) leaf = sp_leaf_der(ev);
+    if (leaf.len() == 0 || sp_is_challenge(ev)) { return pinned; }
+    return match (x509_parse(leaf)) { Ok(c) => pinned.concat(sp_endorsed_cands(trust_keys(tr), c, t, 0, [])), Err(e) => pinned };
+}
+
+List(Cand) sp_with_env(List(Cand) cs, Int i, List(Cand) acc) {
+    if (i >= cs.len()) { return acc; }
+    return sp_with_env(cs, i + 1, acc.concat([Cand {.a = cs[i].a, .endorsed = false, .instance = "", .env = sp_anchor_env(cs[i].a)}]));
+}
+
+List(Cand) sp_endorsed_cands(List(Verified(CorimRefs)) ks, Cert dev, EvidenceTime t, Int i, List(Cand) acc) {
+    if (i >= ks.len()) { return acc; }
+    return sp_endorsed_cands(ks, dev, t, i + 1, acc.concat(sp_dev_cands(endorsed_identities(ks[i], dev, t), 0, [])));
+}
+
+List(Cand) sp_dev_cands(List(EndorsedDevice) ds, Int i, List(Cand) acc) {
+    if (i >= ds.len()) { return acc; }
+    return sp_dev_cands(ds, i + 1, acc.concat([Cand {.a = ds[i].a, .endorsed = true, .instance = ds[i].instance_hex, .env = ds[i].env}]));
+}
+
+// A pinned root fits a chain that ends at it; an endorsed key fits the
+// device certificate it was found for.
+PfTry sp_pv_check(SpdmPlat p, Cmw ev, List(CmwRec) col, Cand k, EvidenceTime t) {
+    if (sp_is_challenge(ev)) {
+        if (k.endorsed) { return PfSkip("a CHALLENGE record verifies under a pinned root only"); }
+        return pf_of(sp_chal_under(ev, k, t));
+    }
+    if (!k.endorsed && !sp_chain_fits(ev, k.a)) { return PfSkip("the device chain ends at another root"); }
+    return pf_of(sp_meas_under(ev, k, t));
+}
+
+Bool sp_chain_fits(Cmw ev, Anchor root) {
+    SpdmRecord r = match (sp_meas_record(ev)) { Ok(x) => x, Err(e) => sp_no_rec() };
+    if (r.certs.len() == 0) { return true; }
+    List(Int) last = chal_ints(r.certs[r.certs.len() - 1]);
+    if (eq_list(last, root.der)) { return true; }
+    List(Int) issuer = match (x509_parse(last)) { Ok(c) => c.issuer, Err(e) => [] };
+    List(Int) subj = match (x509_parse(root.der)) { Ok(c) => c.subject, Err(e) => [] };
+    return issuer.len() == 0 || eq_list(issuer, subj);
+}
+
+Result(PfChecked, VerifyError) sp_meas_under(Cmw ev, Cand k, EvidenceTime t) {
+    SpdmRecord rec = sp_meas_record(ev)?;
+    SpOk ok = sp_meas_ok(rec, k, t)?;
+    SpdmEvidence e = ok.e;
+    CorimEnv env = k.env;
+    List(Int) hw = if (k.instance != "") { cose_hex_decode(k.instance) } else { [] };
+    List(ClaimValue) inst = if (k.instance != "") { [claim_bytes("instance", hw)] } else { [] };
+    List(ClaimValue) vs = [claim_number("version", e.version), claim_number("slot", e.slot), claim_number("asym", e.asym), claim_number("hash", e.hash), claim_number("meas_hash", e.meas_hash), claim_bytes("opaque", e.opaque)].concat(sp_type_claims(e.measurements, 0, [])).concat(inst);
+    // The requester chose the context: External to a decision.
+    List(ClaimValue) host = [claim_bytes("context", e.context)];
+    List(Str) none = [];
+    Claims c = Claims {.platform = SpdmDevice, .format = "SpdmEvidence", .launch_slot = "", .measurements = sp_meas_claims(e, 0, []), .debug = false, .values = vs, .host_values = host, .tcb_statuses = none, .hardware_id = hw, .report_data = ok.req_nonce, .corim = corim_evidence(env, sp_corim_blocks(e, 0, [])), .evidence = chal_ints(rec.response)};
+    return Ok(PfChecked {.claims = c, .relayed = chal_bytes(ok.req_nonce), .exact = true, .want_len = 32, .bound = rec.response, .descs = spdm_descriptors(), .keyed_instance = k.endorsed});
+}
+
+Result(SpOk, VerifyError) sp_meas_ok(SpdmRecord rec, Cand k, EvidenceTime t) {
+    if (!k.endorsed) { return spdm_check(rec, k.a, t); }
+    return sp_endorsed_check(rec, k, t);
+}
+
+// Each block's DMTF value type, as "MEAS<index>.type".
+List(ClaimValue) sp_type_claims(List(SpdmMeasurement) ms, Int i, List(ClaimValue) acc) {
+    if (i >= ms.len()) { return acc; }
+    return sp_type_claims(ms, i + 1, acc.concat([claim_number(f"MEAS{ms[i].index}.type", ms[i].value_type)]));
+}
+
+/// The measurement blocks of verified SPDM claims, as the device sent them.
+/// Rebuilt from the MEAS<index> slots and their value types, in order.
+@verify_internal
+pub List(SpdmMeasurement) sp_blocks_of(Claims c) { return sp_blocks_at(c, c.measurements, 0, []); }
+
+List(SpdmMeasurement) sp_blocks_at(Claims c, List(Measurement) ms, Int i, List(SpdmMeasurement) acc) {
+    if (i >= ms.len()) { return acc; }
+    Str s = ms[i].slot;
+    Int idx = if (str_starts_with(s, "MEAS")) { str_parse_int(str_slice(s, 4, str_len(s))) } else { 0 - 1 };
+    List(SpdmMeasurement) more = if (idx < 0) { [] } else { [SpdmMeasurement {.index = idx, .value_type = claims_number(c, s + ".type", 0), .value = ms[i].value}] };
+    return sp_blocks_at(c, ms, i + 1, acc.concat(more));
+}
+
+// Under an endorsed key: only the device certificate (the record's first)
+// is read, for its key and validity.
+Result(SpOk, VerifyError) sp_endorsed_check(SpdmRecord rec, Cand k, EvidenceTime t) {
+    if (rec.certs.len() == 0) { return Err(BadChain("the record carries no device certificate")); }
+    Cert leaf = sp_cert(chal_ints(rec.certs[0]), "the device certificate")?;
+    if (!cert_valid_at(leaf, t.at)) { return Err(BadChain("the device certificate is not current")); }
+    return sp_check_leaf(rec, leaf, k.a, "SPDM");
+}
+
+Result(PfChecked, VerifyError) sp_chal_under(Cmw ev, Cand k, EvidenceTime t) {
+    SpdmChallengeRecord rec = sp_chal_record(ev)?;
+    SiOk ok = spdm_challenge_check(rec, k.a, t)?;
+    SpdmIdentity id = ok.id;
+    List(ClaimValue) vs = [claim_number("version", id.version), claim_number("slot", id.slot), claim_number("asym", id.asym), claim_number("hash", id.hash), claim_number("summary_type", id.summary_type), claim_bytes("summary", id.summary), claim_bytes("opaque", id.opaque)];
+    List(ClaimValue) host = [claim_bytes("context", id.context)];
+    List(Str) none = [];
+    List(Measurement) nm = [];
+    List(Int) hw = [];
+    List(CorimClaim) nc = [];
+    Claims c = Claims {.platform = SpdmDevice, .format = "SpdmIdentity", .launch_slot = "", .measurements = nm, .debug = false, .values = vs, .host_values = host, .tcb_statuses = none, .hardware_id = hw, .report_data = ok.nonce, .corim = nc, .evidence = chal_ints(rec.response)};
+    return Ok(PfChecked {.claims = c, .relayed = chal_bytes(ok.nonce), .exact = true, .want_len = 32, .bound = rec.response, .descs = spdm_descriptors(), .keyed_instance = false});
+}
+
+// The named-information number of SPDM's measurement hash (0: unknown).
+Int sp_ni_alg(Int mh) { return if (mh == 2) { 1 } else if (mh == 4) { 7 } else if (mh == 8) { 8 } else { 0 }; }
+
+// A block is raw when its value type says so or the hash is unknown.
+List(Measurement) sp_meas_claims(SpdmEvidence e, Int i, List(Measurement) acc) {
+    if (i >= e.measurements.len()) { return acc; }
+    SpdmMeasurement m = e.measurements[i];
+    Bool raw = (m.value_type & 128) != 0 || sp_ni_alg(e.meas_hash) == 0;
+    return sp_meas_claims(e, i + 1, acc.concat([measurement(f"MEAS{m.index}", if (raw) { 0 } else { sp_ni_alg(e.meas_hash) }, m.value)]));
+}
+
+// Each block keyed by its index: a digest, or a raw value.
+List(CorimMeas) sp_corim_blocks(SpdmEvidence e, Int i, List(CorimMeas) acc) {
+    if (i >= e.measurements.len()) { return acc; }
+    SpdmMeasurement m = e.measurements[i];
+    Bool raw = (m.value_type & 128) != 0 || sp_ni_alg(e.meas_hash) == 0;
+    CorimMeas c = if (raw) { corim_raw_claim(MkInt(m.index), m.value) } else { corim_digest_claim(MkInt(m.index), sp_ni_alg(e.meas_hash), m.value) };
+    return sp_corim_blocks(e, i + 1, acc.concat([c]));
+}
+
+// Beyond the generic checks: measurements to appraise.
+Result(Bool, VerifyError) sp_pv_mandatory(SpdmPlat p, Claims c, Policy pol) {
+    if (c.format != "SpdmEvidence") { return Err(Refused("appraise_evidence", "SPDM CHALLENGE evidence proves the device's identity and carries no measurements to appraise")); }
+    if (c.measurements.len() == 0) { return Err(Refused("appraise_evidence", "the device reported no measurement")); }
+    return Ok(true);
+}
+
+// Every block must be corroborated; then the policy may name none.
+Result(PfEndorsed, VerifyError) sp_pv_endorsed(SpdmPlat p, Claims c, CorimAcs a, Policy pol) {
+    if (c.measurements.len() == 0) { return Err(Refused("appraise_evidence", "the device reported no measurement")); }
+    List(Str) un = corim_uncorroborated(a);
+    if (un.len() > 0) { return Err(Refused("appraise_evidence", "measurement " + un[0] + " is not endorsed")); }
+    return Ok(PfEndorsed {.policy = pol, .satisfied = true});
+}
+
+PlatformVerifier(SpdmPlat) = { .pv_platform = sp_pv_platform, .pv_candidates = sp_pv_candidates, .pv_check = sp_pv_check, .pv_mandatory = sp_pv_mandatory, .pv_endorsed = sp_pv_endorsed };

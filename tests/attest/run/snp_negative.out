@@ -1,19 +1,30 @@
 template: ACCEPTED
 revoked ASK: bad certificate chain: the ASK is revoked
-no CRL: stale: the ARK's CRL is missing, not current, or not signed by the ARK
+no CRL: stale: the collateral holds no current CRL signed by the Milan ARK
 old CRL: stale: the CRL's number 11 is below Milan's floor 12
-ARK as ASK: bad certificate chain: the ASK did not sign the VCEK, or one is not current
+old and new CRL: ACCEPTED
+ARK as ASK: bad certificate chain: the collateral holds no VCEK under the Milan ARK
+no ASK: refused (verify_evidence): no root or key in the trust set fits this AMD SEV-SNP evidence (the collateral holds no certificate the Milan ARK issued)
+no collateral: refused (verify_evidence): no root or key in the trust set fits this AMD SEV-SNP evidence (the collateral holds no certificate the Milan ARK issued)
 after expiry: stale: the anchor expired 2039-12-31
-reported TCB: refused (snp_verify): REPORTED_TCB is not the TCB the VCEK certifies
-chip id: refused (snp_verify): CHIP_ID is not the VCEK's hardware ID
-masked chip: refused (snp_verify): the report masks CHIP_ID, so it cannot be bound to the VCEK's chip
-VLEK signer: refused (snp_verify): the report's SIGNING_KEY is 1, the anchor's kind AmdVcek
+reported TCB: refused (AMD SEV-SNP): REPORTED_TCB is not the TCB the VCEK certifies
+chip id: refused (AMD SEV-SNP): CHIP_ID is not the VCEK's hardware ID
+masked chip: refused (AMD SEV-SNP): the report masks CHIP_ID, so it cannot be bound to the VCEK's chip
+VLEK signer: bad certificate chain: the VLEK names no cloud service provider (CSP_ID)
 version 4: bad layout: SnpReport: bad reply: version: version == 2 || version == 3 || version == 5
 appraise: ACCEPTED
-debug guest: refused (snp_appraise): the guest policy allows debugging
-migration agent: refused (snp_appraise): the guest policy allows a migration agent
-vmpl 1: refused (snp_appraise): the report is for VMPL 1, the policy 0
-old TCB: refused (snp_appraise): the committed TCB is below the policy's floor
-other image: refused (snp_appraise): the launch measurement is not one the policy names
+debug guest: refused (appraise_evidence): the AMD SEV-SNP evidence says the TEE can be debugged
+migration agent: refused (appraise_evidence): the guest policy allows a migration agent
+migration agent allowed: ACCEPTED
+vmpl 1: refused (appraise_evidence): the report is for VMPL 1, and the policy requires none (VMPL 0 is the default)
+vmpl 1 required: ACCEPTED
+old TCB: refused (appraise_evidence): committed_tcb.snp is 8, below the policy's floor
+other image: refused (appraise_evidence): the launch measurement (MEASUREMENT) is not one the policy names
+host data: refused (appraise_evidence): host_data is not one the policy names
+unknown allowance: refused (appraise_evidence): the policy allows `migration-agent`, which no platform defines
+no measurement: refused (appraise_evidence): the policy names no measurement
 twice: not fresh: this evidence already released, or was never accepted
 unspent own record: fresh
+raw report: bad layout: not one well-formed CBOR item of definite lengths, nested at most 12 deep
+unknown type: refused (verify_evidence): evidence of media type application/x-other is not one this verifier reads
+SNP under TDX roots: refused (verify_evidence): the trust set holds no root or key for AMD SEV-SNP evidence

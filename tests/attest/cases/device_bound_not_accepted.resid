@@ -1,20 +1,19 @@
-import "verify/core.resid";
-import "verify/snp.resid";
+import "verify/verifier.resid";
+import "evidence.resid";
 import "verify/testing.resid";
-import "verify/spdm_session.resid";
-import "verify/device_bound.resid";
 import "challenge.resid";
 
 @policy
-SnpPolicy pol() {
-    return SnpPolicy {.min_tcb = TcbVersion {.fmc = 0, .bootloader = 0, .tee = 0, .snp = 0, .microcode = 0}, .measurements_hex = ["00"], .vmpl = 0, .allow_migration_agent = false, .id_key_digests_hex = [], .host_data_hex = []};
-}
+Policy pol() { return Policy {.measurements = ["00"], .require = [], .allow = []}; }
+
 // The result rests on the device root too, which accept does not name.
-@decides(accept = [test_ark], appraised = pol, identity = none)
-Result(Int, VerifyError) f(SpdmSessionRecord rec, ChallengeRecord g, List(UInt(8)) r, ChallengeRecord c, SnpCollateral col) {
-    Verified(SpdmSession) s = spdm_session_verify(rec, g, test_device_root(), test_time(0))?;
-    Verified(SnpReport) v = snp_verify_device_bound(r, c, test_ark(), col, test_time(0), s)?;
-    Appraised(SnpReport) a = snp_appraise(v, pol())?;
+@decides(accept = [test_snp_roots], appraised = pol, identity = none)
+Result(Int, VerifyError) f(List(UInt(8)) session, ChallengeRecord g, List(UInt(8)) r, ChallengeRecord c) {
+    Verified(SpdmSession) s = verify_session(session, g, test_device_roots(), test_time(0))?;
+    Binding b = bind_device(s)?;
+    Verified(Claims) v = verify_evidence(r, c, b, test_snp_roots(), test_time(0))?;
+    Appraised(Claims) a = appraise_evidence(v, pol())?;
     return Ok(1);
 }
+
 Int main() { return 0; }

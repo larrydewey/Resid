@@ -82,7 +82,7 @@ if [ -z "$FILTER" ] || [[ "release" == *"$FILTER"* ]]; then
         pass=$((pass + 1)); echo "ok   release (key_broker)"
         # The provenance record lists the anchors, policy and decision.
         ( cd "$d" && "$COMPILER" verify key_broker --pub "$(cat "$KEYDIR/resid-ed25519.pub")" > verify.log 2>&1 )
-        if grep -q "attestation: anchor std:test_ark kind AmdVcek(Milan)" "$d/verify.log" && grep -q "attestation: decides app:release accept \[test_ark\]" "$d/verify.log" && grep -q "attestation: policy app:release_policy" "$d/verify.log" && grep -q "attestation: verify-lib-dev" "$d/verify.log"; then
+        if grep -q "attestation: anchor std:test_ark kind AmdVcek(Milan)" "$d/verify.log" && grep -q "attestation: decides app:release accept \[test_snp_roots\]" "$d/verify.log" && grep -q "attestation: trust std:test_snp_roots anchors \[test_ark, test_ark_vlek\]" "$d/verify.log" && grep -q "attestation: policy app:release_policy" "$d/verify.log" && grep -q "attestation: verify-lib-dev" "$d/verify.log"; then
             pass=$((pass + 1)); echo "ok   residc verify lists the decisions"
         else
             fail=$((fail + 1)); echo "FAIL residc verify lists the decisions"; grep "attestation\|verify:" "$d/verify.log" | head -8

@@ -1,4 +1,4 @@
-import "verify/core.resid";
+import "verify/verifier.resid";
 import "verify/tpm.resid";
 import "verify/seal.resid";
 import "verify/testing.resid";
@@ -10,13 +10,14 @@ import "hash.resid";
 import "hpke.resid";
 import "hpkeg.resid";
 import "random.resid";
+import "evidence.resid";
 
 @requires(filesystem(readonly))
 List(Int) rd(Str p) { return filesystem.read_bytes("fixtures/" + p); }
 
 List(Int) fill(Int v, Int n) { return if (n <= 0) { [] } else { [v].concat(fill(v, n - 1)) }; }
-List(Int) u16(Int v) { return [(v >> 8) & 255, v & 255]; }
-List(Int) u32(Int v) { return [(v >> 24) & 255, (v >> 16) & 255, (v >> 8) & 255, v & 255]; }
+List(Int) be_u16(Int v) { return [(v >> 8) & 255, v & 255]; }
+List(Int) be_u32(Int v) { return [(v >> 24) & 255, (v >> 16) & 255, (v >> 8) & 255, v & 255]; }
 
 List(List(UInt(8))) pcrs() { return [chal_bytes(fill(1, 32)), chal_bytes(fill(2, 32)), chal_bytes(fill(3, 32))]; }
 
@@ -24,34 +25,49 @@ List(List(UInt(8))) pcrs() { return [chal_bytes(fill(1, 32)), chal_bytes(fill(2,
 // qualifying data; `magic` and `ty` to forge.
 List(Int) attest(List(Int) q, Int magic, Int ty) {
     List(Int) digest = sha256_bytes(fill(1, 32).concat(fill(2, 32)).concat(fill(3, 32)));
-    return u32(magic).concat(u16(ty)).concat(u16(34)).concat(fill(9, 34)).concat(u16(q.len())).concat(q)
-        .concat(u32(0)).concat(u32(1000)).concat(u32(3)).concat(u32(0)).concat([1]).concat(u32(1)).concat(u32(2))
-        .concat(u32(1)).concat(u16(11)).concat([3, 7, 0, 0]).concat(u16(32)).concat(digest);
+    return be_u32(magic).concat(be_u16(ty)).concat(be_u16(34)).concat(fill(9, 34)).concat(be_u16(q.len())).concat(q)
+        .concat(be_u32(0)).concat(be_u32(1000)).concat(be_u32(3)).concat(be_u32(0)).concat([1]).concat(be_u32(1)).concat(be_u32(2))
+        .concat(be_u32(1)).concat(be_u16(11)).concat([3, 7, 0, 0]).concat(be_u16(32)).concat(digest);
 }
 
 @requires(filesystem(readonly))
 List(UInt(8)) sig(List(Int) a) {
     List(Int) rs = ecdsa_sign_raw(P256, Sha256, rd("tpm-ak-d.bin"), a);
-    return chal_bytes(u16(24).concat(u16(11)).concat(u16(32)).concat(rs[0..32]).concat(u16(32)).concat(rs[32..64]));
+    return chal_bytes(be_u16(24).concat(be_u16(11)).concat(be_u16(32)).concat(rs[0..32]).concat(be_u16(32)).concat(rs[32..64]));
 }
 
 @policy
-TpmPolicy boot_policy() { return TpmPolicy {.pcrs_hex = ["0=" + hex_encode(fill(1, 32)), "2=" + hex_encode(fill(3, 32))]}; }
+Policy boot_policy() { return Policy {.measurements = ["PCR0=" + hex_encode(fill(1, 32)), "PCR2=" + hex_encode(fill(3, 32))], .require = ["reset_count==3"], .allow = []}; }
 
-@decides(accept = [test_tpm_ak], appraised = boot_policy, identity = key_bound)
+@policy
+Policy launch_only() { return Policy {.measurements = [hex_encode(fill(1, 32))], .require = [], .allow = []}; }
+
+List(UInt(8)) env(List(Int) a, List(UInt(8)) s, List(List(UInt(8))) vals) {
+    List(CmwRec) none = [];
+    return evidence_envelope(evidence_tpm(a, chal_ints(s), ints_list(vals, 0, [])), none);
+}
+
+List(List(Int)) ints_list(List(List(UInt(8))) xs, Int i, List(List(Int)) acc) { return if (i >= xs.len()) { acc } else { ints_list(xs, i + 1, acc.concat([chal_ints(xs[i])])) }; }
+
+@decides(accept = [test_tpm_keys], appraised = boot_policy, identity = key_bound)
 @requires(declassify)
-Result(HpkeMessage, VerifyError) release(List(UInt(8)) a, List(UInt(8)) s, List(List(UInt(8))) vals, ChallengeRecord issued, List(Int) guest_pk, List(Secret(UInt(8))) key, List(Secret(UInt(8))) sender) {
-    Verified(TpmQuoteEvidence) v = tpm_verify_quote_key_bound(a, s, vals, issued, test_tpm_ak(), test_time(1791000000), 32, guest_pk)?;
-    Appraised(TpmQuoteEvidence) ap = tpm_appraise(v, boot_policy())?;
+Result(HpkeMessage, VerifyError) release(List(UInt(8)) evidence, ChallengeRecord issued, List(Int) guest_pk, List(Secret(UInt(8))) key, List(Secret(UInt(8))) sender) {
+    Verified(Claims) v = verify_evidence(evidence, issued, bind_key(32, guest_pk), test_tpm_keys(), test_time(1791000000))?;
+    Appraised(Claims) ap = appraise_evidence(v, boot_policy())?;
     return seal_to_evidence(ap, 32, guest_pk, key, sender);
 }
 
 @requires(filesystem(readonly))
 Str q(Str what, List(Int) a, List(UInt(8)) s, List(List(UInt(8))) vals, ChallengeRecord c) {
-    return what + ": " + match (tpm_verify_quote(chal_bytes(a), s, vals, c, test_tpm_ak(), test_time(1791000000))) {
-        Ok(v) => match (tpm_appraise(v, boot_policy())) { Ok(x) => f"appraised, {x.v.value.pcr_index.len()} PCRs, reset {x.v.value.reset_count}", Err(e) => verify_error_text(e) },
+    return what + ": " + match (verify_evidence(env(a, s, vals), c, bind_fresh(), test_tpm_keys(), test_time(1791000000))) {
+        Ok(v) => match (appraise_evidence(v, boot_policy())) { Ok(x) => f"appraised, {x.v.value.measurements.len()} PCRs, reset " + reset_of(x.v.value) + ", " + match (appraise_evidence(v, launch_only())) { Ok(y) => "LAUNCH ACCEPTED", Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) },
         Err(e) => verify_error_text(e),
     };
+}
+
+Str reset_of(Claims c) {
+    Int n = claims_number(c, "reset_count", 0 - 1);
+    return f"{n}";
 }
 
 @requires(declassify)
@@ -78,7 +94,7 @@ Int main() {
     List(Int) bound = chal_ints(match (challenge_with_key(challenge_value(c6), 32, kp.sk)) { Ok(b) => b, Err(e) => [] });
     List(Int) a6 = attest(bound, 4283712327, 32792);
     List(Secret(UInt(8))) key = random_secret(32);
-    Str r = match (release(chal_bytes(a6), sig(a6), pcrs(), c6, kp.pk, key, secret_bytes(rd("sender-sk.bin")))) {
+    Str r = match (release(env(a6, sig(a6), pcrs()), c6, kp.pk, key, secret_bytes(rd("sender-sk.bin")))) {
         Ok(m) => match (open_released(32, kp.sk, m, test_sender())) { Ok(v) => if (hex_encode(sec_pub(v.value, 0, ListBuf())) == hex_encode(sec_pub(key, 0, ListBuf()))) { "released and opened: same key" } else { "KEY DIFFERS" }, Err(e) => "open: " + verify_error_text(e) },
         Err(e) => "release: " + verify_error_text(e),
     };

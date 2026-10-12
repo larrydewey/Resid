@@ -1,0 +1,43 @@
+{
+  "tag-identity": {
+    "id": "43BBE37F-2E61-4B33-AED3-53CFF1428B16",
+    "version": 0
+  },
+  "triples": {
+    "reference-values": [
+      {
+        "environment": {
+          "class": {
+            "id": {
+              "type": "bytes",
+              "value": "Q0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQw=="
+            }
+          }
+        },
+        "measurements": [
+          {
+            "key": {
+              "type": "string",
+              "value": "cca.rim"
+            },
+            "value": {
+              "name": "RIM"
+            }
+          },
+          {
+            "key": {
+              "type": "string",
+              "value": "cca.rpv"
+            },
+            "value": {
+              "raw-value": {
+                "type": "bytes",
+                "value": "QURBREFEQURBREFEQURBREFEQURBREFEQURBREFEQURBREFEQURBREFEQURBREFEQURBREFEQURBREFEQURBRA=="
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

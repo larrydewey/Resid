@@ -1,0 +1,127 @@
+{
+  "tag-identity": {
+    "id": "43BBE37F-2E61-4B33-AED3-53CFF1428B16",
+    "version": 0
+  },
+  "triples": {
+    "reference-values": [
+      {
+        "environment": {
+          "class": {
+            "id": {
+              "type": "bytes",
+              "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+            }
+          },
+          "instance": {
+            "type": "ueid",
+            "value": "AQICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC"
+          }
+        },
+        "measurements": [
+          {
+            "key": {
+              "type": "string",
+              "value": "cca.software-component"
+            },
+            "value": {
+              "cryptokeys": [
+                {
+                  "type": "bytes",
+                  "value": "01234567890123456789012345678901"
+                }
+              ],
+              "digests": [
+                [1, "BwYFBAMCAQAPDg0MCwoJCBcWFRQTEhEQHx4dHBsaGRg"]
+              ],
+              "name": "BL",
+              "version": {
+                "value": "3.4.2",
+                "scheme": "semver"
+              }
+            }
+          },
+          {
+            "key": {
+              "type": "string",
+              "value": "cca.software-component"
+            },
+            "value": {
+              "cryptokeys": [
+                {
+                  "type": "bytes",
+                  "value": "01234567890123456789012345678901"
+                }
+              ],
+              "digests": [
+                [1, "CwYFBAMCAQAPDg0MCwoJCBcWFRQTEhEQHx4dHBsaGRg"]
+              ],
+              "name": "M1",
+              "version": {
+                "value": "1.2.0",
+                "scheme": "semver"
+              }
+            }
+          },
+          {
+            "key": {
+              "type": "string",
+              "value": "cca.software-component"
+            },
+            "value": {
+              "cryptokeys": [
+                {
+                  "type": "bytes",
+                  "value": "01234567890123456789012345678901"
+                }
+              ],
+              "digests": [
+                [1, "DwYFBAMCAQAPDg0MCwoJCBcWFRQTEhEQHx4dHBsaGRg"]
+              ],
+              "name": "M2",
+              "version": {
+                "value": "1.2.3",
+                "scheme": "semver"
+              }
+            }
+          },
+          {
+            "key": {
+              "type": "string",
+              "value": "cca.software-component"
+            },
+            "value": {
+              "cryptokeys": [
+                {
+                  "type": "bytes",
+                  "value": "01234567890123456789012345678901"
+                }
+              ],
+              "digests": [
+                [1, "EwYFBAMCAQAPDg0MCwoJCBcWFRQTEhEQHx4dHBsaGRg"]
+              ],
+              "name": "M3",
+              "version": {
+                "value": "1.0.0",
+                "scheme": "semver"
+              }
+            }
+          },
+          {
+            "key": {
+              "type": "string",
+              "value": "cca.platform-config"
+            },
+            "value": {
+              "raw-value": {
+                "type": "bytes",
+                "value": "AQID"
+              },
+              "raw-value-mask": "AQID"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

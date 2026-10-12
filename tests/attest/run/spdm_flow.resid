@@ -1,4 +1,4 @@
-import "verify/core.resid";
+import "verify/verifier.resid";
 import "verify/spdm.resid";
 import "verify/spdm_session.resid";
 import "verify/nvidia_anchors.resid";
@@ -14,6 +14,7 @@ import "hpkeg.resid";
 import "random.resid";
 import "cose.resid";
 import "spdm_msg.resid";
+import "evidence.resid";
 
 @requires(filesystem(readonly))
 List(Int) rd(Str p) { return filesystem.read_bytes("fixtures/" + p); }
@@ -160,21 +161,33 @@ List(Int) response(List(Int) req, Int m1) {
 @requires(filesystem(readonly))
 SpdmRecord fresh_rec(List(Int) req, List(Int) resp) { return SpdmRecord {.vca = vca13(), .certs = [rdb("spdm-leaf.der"), rdb("spdm-root.der")], .ocsp = [rdb("spdm-ocsp-leaf.der")], .before = [], .request = chal_bytes(req), .response = chal_bytes(resp)}; }
 
-@policy
-SpdmPolicy gpu_policy() { return SpdmPolicy {.measurements_hex = ["1=" + hex_encode(fill(5, 48)), "2=" + hex_encode(fill(7, 48))]}; }
+// The record as evidence.
+@requires(filesystem(readonly))
+List(UInt(8)) fresh_env(List(Int) req, List(Int) resp) {
+    List(CmwRec) none = [];
+    return evidence_envelope(evidence_spdm_measurements(ints(vca13(), 0, []), [rd("spdm-leaf.der"), rd("spdm-root.der")], [rd("spdm-ocsp-leaf.der")], [], req, resp), none);
+}
 
-@decides(accept = [test_device_root], appraised = gpu_policy, identity = key_bound)
+List(List(Int)) ints(List(List(UInt(8))) xs, Int i, List(List(Int)) acc) { return if (i >= xs.len()) { acc } else { ints(xs, i + 1, acc.concat([chal_ints(xs[i])])) }; }
+
+@policy
+Policy gpu_policy() { return Policy {.measurements = ["MEAS1=" + hex_encode(fill(5, 48)), "MEAS2=" + hex_encode(fill(7, 48))], .require = ["version==19"], .allow = []}; }
+
+@policy
+Policy launch_policy() { return Policy {.measurements = [hex_encode(fill(5, 48))], .require = [], .allow = []}; }
+
+@decides(accept = [test_device_roots], appraised = gpu_policy, identity = key_bound)
 @requires(declassify)
-Result(HpkeMessage, VerifyError) release(SpdmRecord rec, ChallengeRecord issued, List(Int) guest_pk, List(Secret(UInt(8))) key, List(Secret(UInt(8))) sender) {
-    Verified(SpdmEvidence) v = spdm_verify_key_bound(rec, issued, test_device_root(), test_time(1791000000), 32, guest_pk)?;
-    Appraised(SpdmEvidence) a = spdm_appraise(v, gpu_policy())?;
+Result(HpkeMessage, VerifyError) release(List(UInt(8)) evidence, ChallengeRecord issued, List(Int) guest_pk, List(Secret(UInt(8))) key, List(Secret(UInt(8))) sender) {
+    Verified(Claims) v = verify_evidence(evidence, issued, bind_key(32, guest_pk), test_device_roots(), test_time(1791000000))?;
+    Appraised(Claims) a = appraise_evidence(v, gpu_policy())?;
     return seal_to_evidence(a, 32, guest_pk, key, sender);
 }
 
 @requires(filesystem(readonly))
 Str fresh(Str what, List(Int) req, List(Int) resp, ChallengeRecord c) {
-    return what + ": " + match (spdm_verify(fresh_rec(req, resp), c, test_device_root(), test_time(1791000000))) {
-        Ok(v) => match (spdm_appraise(v, gpu_policy())) { Ok(a) => f"appraised, {a.v.value.measurements.len()} blocks", Err(e) => verify_error_text(e) },
+    return what + ": " + match (verify_evidence(fresh_env(req, resp), c, bind_fresh(), test_device_roots(), test_time(1791000000))) {
+        Ok(v) => match (appraise_evidence(v, gpu_policy())) { Ok(a) => f"appraised, {a.v.value.measurements.len()} blocks, " + platform_name(a.v.value.platform) + "; launch-only policy: " + match (appraise_evidence(v, launch_policy())) { Ok(x) => "ACCEPTED", Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) },
         Err(e) => verify_error_text(e),
     };
 }
@@ -213,12 +226,18 @@ Int main() {
     ChallengeRecord c3 = challenge_issue(32);
     List(Int) r3 = request(chal_ints(challenge_value(challenge_issue(32))));
     println(fresh("other challenge", r3, response(r3, 5), c3));
+    ChallengeRecord c4 = challenge_issue(64);
+    List(Int) r4 = request(chal_ints(challenge_value(c4))[0..32]);
+    println(fresh("a 64-byte challenge", r4, response(r4, 5), c4));
+    ChallengeRecord c6 = challenge_issue(32);
+    List(Int) r6 = request(chal_ints(challenge_value(c6)));
+    println("under the emulator's roots: " + match (verify_evidence(fresh_env(r6, response(r6, 5)), c6, bind_fresh(), test_emu_roots(), test_time(1791000000))) { Ok(v) => "ACCEPTED", Err(e) => verify_error_text(e) });
     HpkeKeyPairG(Secret(UInt(8))) kp = hpkeg_generate_keypair(32);
     ChallengeRecord c5 = challenge_issue(32);
     List(Int) bound = chal_ints(match (challenge_with_key(challenge_value(c5), 32, kp.sk)) { Ok(b) => b, Err(e) => [] });
     List(Int) r5 = request(bound);
     List(Secret(UInt(8))) key = random_secret(32);
-    Str r = match (release(fresh_rec(r5, response(r5, 5)), c5, kp.pk, key, secret_bytes(rd("sender-sk.bin")))) {
+    Str r = match (release(fresh_env(r5, response(r5, 5)), c5, kp.pk, key, secret_bytes(rd("sender-sk.bin")))) {
         Ok(m) => match (open_released(32, kp.sk, m, test_sender())) { Ok(v) => if (hex_encode(sec_pub(v.value, 0, ListBuf())) == hex_encode(sec_pub(key, 0, ListBuf()))) { "released and opened: same key" } else { "KEY DIFFERS" }, Err(e) => "open: " + verify_error_text(e) },
         Err(e) => "release: " + verify_error_text(e),
     };

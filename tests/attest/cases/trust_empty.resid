@@ -1,0 +1,16 @@
+import "verify/verifier.resid";
+import "evidence.resid";
+import "verify/seal.resid";
+import "verify/testing.resid";
+import "challenge.resid";
+import "crypto.resid";
+import "hash.resid";
+import "hpke.resid";
+
+@policy
+Policy pol() { return Policy {.measurements = ["00"], .require = [], .allow = []}; }
+
+// A trust set names something.
+@trust(anchors = [])
+Trust mine() { return trust_anchors(); }
+Int main() { return 0; }

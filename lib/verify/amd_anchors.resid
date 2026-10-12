@@ -7,6 +7,7 @@
 
 import "core.resid";
 import "snp.resid";
+import "claims.resid";
 
 /// AMD's Milan root key (ARK), as the anchor for VCEK-signed SEV-SNP reports.
 @anchor(kind = AmdVcek(Milan), principal = InGuest, formats = [SnpReport], source = "https://kdsintf.amd.com/vcek/v1/Milan/cert_chain", fingerprint = "sha384:2f1316273dade9b896875da0acb6bc1c0547d41320ad323cbfbef6570f0305a3e7f8398d0b44bd1f36075295cefcc0db", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [RsaPss4096Sha384, EcdsaP384Sha384], expires = "2045-10-22")
@@ -256,3 +257,6 @@ pub List(Int) amd_ark_turin_der() {
         206, 150, 156, 51, 1, 110, 176
     ];
 }
+/// Every AMD SEV-SNP root above, for VCEK- and VLEK-signed reports, as one trust set.
+@trust(anchors = [amd_ark_milan, amd_ark_milan_vlek, amd_ark_genoa, amd_ark_genoa_vlek, amd_ark_turin, amd_ark_turin_vlek])
+pub Trust amd_roots() { return trust_anchors(); }

@@ -33,7 +33,12 @@ Int main() {
 ```
 
 A missing device is a value, not an abort: `Err(Absent(name))`, so an
-attester can probe for its platform. Every failure is a `DeviceError`
+attester can probe for its platform; `attest(challenge)`
+(`lib/attester.resid`) does exactly that and returns evidence any
+platform's verifier reads (see [Attestation](/Resid/reference/attestation/)).
+`tsm_report(challenge, opts)` fills the report's 64-byte inblob from a
+`Challenge`, as the ioctl wrappers do: an issued record is spent before
+the request and bound to the outblob that answers it. Every failure is a `DeviceError`
 naming the descriptor: `Absent`, `Denied`, `Kernel(name, errno)`,
 `TooLong`, `GenerationChanged`, `Unsupported`, `Version`, `Overrun`,
 `UnknownDriver`, `BadInput`, `BadReply`, `Timeout`.
@@ -76,7 +81,7 @@ signature over it.
 | `snp_get_derived_key` | -- | the key (derived by the secure processor; secret, never evidence) |
 | `tdx_get_report0` | -- | the TDREPORT (MAC'd for this platform only: a quote over it is the evidence) |
 | `nsm_request` | an attestation document (COSE_Sign1 by the Nitro hypervisor's chain) | every other response |
-| `tsm_report_get` on `sev_guest` | `outblob`, the SNP report; under an SVSM the SVSM's report, which binds the nonce and `manifestblob` | `auxblob` (the host's certificate table: each certificate verifies through its own chain; `tsm_snp_certs` parses it), `manifestblob` on its own, `provider`, `generation` |
+| `tsm_report_get`, `tsm_report` on `sev_guest` | `outblob`, the SNP report; under an SVSM the SVSM's report, which binds the nonce and `manifestblob` | `auxblob` (the host's certificate table: each certificate verifies through its own chain; `tsm_snp_certs` parses it), `manifestblob` on its own, `provider`, `generation` |
 | `tsm_report_get` on `tdx_guest` | `outblob`, a TDX quote (the quoting enclave's key, certified through the PCK chain) | `provider`, `generation` |
 | `tsm_report_get` on `arm_cca_guest` | `outblob`, the CCA token (realm token by the RAK, platform token by the CPAK) | `provider`, `generation` |
 | `tpm_quote` | `attest` (by the attestation key; verify the AK through its certificate or the EK) | PCR values the quote does not cover |
@@ -84,7 +89,7 @@ signature over it.
 | `tpm_azure_hcl_report` | the SNP or TDX report inside it, whose report data hashes the runtime claims after it | the 32-byte header and the claims themselves; written at boot, so no nonce: freshness comes from a quote by the AK it binds |
 | `tpm_ek_cert`, `tpm_ek_chain_certs` | each certificate, by its issuer (verified by `tpm_verify_ak` to a manufacturer's root) | the index they were read from |
 | `tpm_ek_ak`, `tpm_activate_credential` | -- (the credential the TPM releases proves the AK; `tpm_verify_ak` checks it) | the public areas until `tpm_verify_ak` has checked the AK's against the credential |
-| `tpm_quote_ak` | `attest`, by the endorsement-hierarchy AK (verify it with `tpm_verify_quote_activated`) | PCR values the quote does not cover |
+| `tpm_quote_ak` | `attest`, by the endorsement-hierarchy AK (verify it under a trust set holding the AK proved by `tpm_verify_ak`: `trust_with_ak`) | PCR values the quote does not cover |
 | `pci_tsm_present`, `pci_vendor`, `pci_device_id`, `pci_class`, `pci_authenticated`, `pci_tsm_connected`, `pci_tsm_bound`, `pci_doe_spdm` | -- | all (the kernel's word; a device's own evidence comes over SPDM) |
 
 ### `tsm_report`

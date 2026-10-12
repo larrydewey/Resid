@@ -3,11 +3,15 @@ real, next day: bad certificate chain: cabundle[3] is not signed by the one befo
 real, tampered: bad signature: the certificate's key did not sign this document
 real, test root: bad certificate chain: the bundle does not start at the anchor's certificate
 real debug enclave: ok i-0a22e5c5f24d22174-enc0191ccebaf8feaba, 16 PCRs
-fresh: fresh, quals 1
+fresh: fresh, quals 1, AWS Nitro Enclaves, module test-enclave-0123
 again: not fresh: challenge already accepted, or exported
 appraise: appraised
-debug enclave: refused (nsm_appraise): PCR0 is all zeros: the enclave runs in debug mode
+debug enclave: refused (appraise_evidence): the AWS Nitro Enclaves evidence says the TEE can be debugged
 unknown field: bad layout: NSM document: unknown field `extra`
 repeated field: bad layout: NSM document: `digest` twice
 other nonce: not fresh: the evidence does not carry this challenge
 released and opened: same key
+request: a16b4174746573746174696f6ea369757365725f64617461f6656e6f6e6365430102036a7075626c69635f6b6579f6
+answer: verified, AWS Nitro Enclaves
+error answer: nsm.raw: bad reply: the NSM refused: InvalidArgument
+junk answer: nsm.raw: bad reply: the NSM's answer is not well-formed CBOR

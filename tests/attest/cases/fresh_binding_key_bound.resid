@@ -1,0 +1,21 @@
+import "verify/verifier.resid";
+import "evidence.resid";
+import "verify/seal.resid";
+import "verify/testing.resid";
+import "challenge.resid";
+import "crypto.resid";
+import "hash.resid";
+import "hpke.resid";
+
+@policy
+Policy pol() { return Policy {.measurements = ["00"], .require = [], .allow = []}; }
+
+// A decision that needs a key binding, given a fresh one.
+@decides(accept = [test_snp_roots], appraised = pol, identity = key_bound)
+@requires(declassify)
+Result(HpkeMessage, VerifyError) rel(List(UInt(8)) e, ChallengeRecord c, List(Int) pk, List(Secret(UInt(8))) key, List(Secret(UInt(8))) sender) {
+    Verified(Claims) v = verify_evidence(e, c, bind_fresh(), test_snp_roots(), test_time(0))?;
+    Appraised(Claims) a = appraise_evidence(v, pol())?;
+    return seal_to_evidence(a, 32, pk, key, sender);
+}
+Int main() { return 0; }

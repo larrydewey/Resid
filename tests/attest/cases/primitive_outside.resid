@@ -1,4 +1,5 @@
-import "verify/core.resid";
+import "verify/verifier.resid";
+import "evidence.resid";
 import "verify/snp.resid";
 import "verify/seal.resid";
 import "verify/testing.resid";
@@ -9,11 +10,9 @@ import "hash.resid";
 import "hpke.resid";
 
 @policy
-SnpPolicy pol() {
-    return SnpPolicy {.min_tcb = TcbVersion {.fmc = 0, .bootloader = 0, .tee = 0, .snp = 0, .microcode = 0}, .measurements_hex = ["00"], .vmpl = 0, .allow_migration_agent = false, .id_key_digests_hex = [], .host_data_hex = []};
-}
+Policy pol() { return Policy {.measurements = ["00"], .require = [], .allow = []}; }
 @policy
-SnpPolicy pol2() { return pol(); }
+Policy pol2() { return pol(); }
 
 @primitive(verify, anchor = root)
 Int mine(Anchor root) { return 0; }

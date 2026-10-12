@@ -1,0 +1,268 @@
+// evidence.resid — the evidence envelope: what an attester sends and a
+// verifier reads, for every platform alike (RFC 9334's Evidence, carried
+// as a RATS CMW, lib/cmw.resid). The envelope is a CMW collection of type
+// evidence_envelope_type() with two members:
+//
+//     "evidence"    the platform's evidence: a record (an SNP report, a TDX
+//                   quote, a CCA token, a Nitro attestation document) or a
+//                   collection of the parts a multi-message format needs (a
+//                   TPM quote, an SPDM transcript), each kind named by its
+//                   media type or collection type below
+//     "collateral"  optional: a collection of records "0", "1", ... holding
+//                   whatever the verifier may need to build the chain to a
+//                   root it trusts -- certificates, CRLs, Intel's signed
+//                   TCB info and QE identity and their issuer chains.
+//                   Nothing here is trusted for being here: the verifier
+//                   uses an item only when it fits the chain it is
+//                   checking, so anyone may add collateral, attester or
+//                   verifier (evidence_add_collateral).
+//
+// Nothing in this file is trusted or checked beyond its shape: it only
+// moves bytes. lib/attester.resid builds envelopes on a device; the
+// verifier (lib/verify/verifier.resid) reads them.
+
+import "cmw.resid";
+import "challenge.resid";
+
+// ─── Names ──────────────────────────────────────────────────────────
+
+/// The collection type of an evidence envelope.
+pub Str evidence_envelope_type() { return "tag:github.com/larrydewey/resid,2026:evidence-v1"; }
+
+/// The media type of an AMD SEV-SNP attestation report (1184 bytes).
+pub Str mt_snp_report() { return "application/vnd.resid.amd-sev-snp-report"; }
+/// The media type of an Intel TDX quote (version 4 or 5).
+pub Str mt_tdx_quote() { return "application/vnd.resid.intel-tdx-quote"; }
+/// The media type of an Arm CCA attestation token (the CCA-SSD profile's).
+pub Str mt_cca_token() { return "application/eat-collection; profile=\"http://arm.com/CCA-SSD/1.0.0\""; }
+/// The media type of an AWS Nitro Enclaves attestation document (COSE_Sign1).
+pub Str mt_nitro_document() { return "application/vnd.resid.aws-nitro-attestation-document"; }
+/// The collection type of a TPM 2.0 quote: members "attest" (TPMS_ATTEST),
+/// "signature" (TPMT_SIGNATURE) and "pcrs" (one record per selected PCR's
+/// SHA-256 value, "0", "1", ... in selection order).
+pub Str ct_tpm_quote() { return "tag:github.com/larrydewey/resid,2026:tpm2-quote"; }
+/// The collection type of an SPDM measurement transcript: members "vca",
+/// "certs", "ocsp", "before" (each a list collection), "request" and
+/// "response" (records).
+pub Str ct_spdm_measurements() { return "tag:github.com/larrydewey/resid,2026:spdm-measurements"; }
+/// The collection type of an SPDM CHALLENGE transcript: members "vca", "b",
+/// "ocsp" (list collections), "chain", "request" and "response" (records).
+pub Str ct_spdm_challenge() { return "tag:github.com/larrydewey/resid,2026:spdm-challenge"; }
+/// The collection type of an SPDM KEY_EXCHANGE transcript: members "vca",
+/// "ocsp" (list collections), "chain", "digests", "key_exchange" and
+/// "key_exchange_rsp" (records).
+pub Str ct_spdm_session() { return "tag:github.com/larrydewey/resid,2026:spdm-key-exchange"; }
+/// The collection type of a list: members "0", "1", ... in order.
+pub Str ct_list() { return "tag:github.com/larrydewey/resid,2026:list"; }
+/// The media type of one opaque message inside a list or transcript.
+pub Str mt_octets() { return "application/octet-stream"; }
+
+/// The media type of a DER X.509 certificate.
+pub Str mt_cert() { return "application/pkix-cert"; }
+/// The media type of a DER X.509 CRL.
+pub Str mt_crl() { return "application/pkix-crl"; }
+/// The media type of a PEM certificate chain.
+pub Str mt_pem_chain() { return "application/pem-certificate-chain"; }
+/// The media type of a JSON document (Intel's TCB info, QE identity).
+pub Str mt_json() { return "application/json"; }
+/// The media type of an OCSP response.
+pub Str mt_ocsp() { return "application/ocsp-response"; }
+
+/// The most collateral items one envelope may carry.
+pub Int evidence_max_collateral() { return 64; }
+
+// ─── The envelope ───────────────────────────────────────────────────
+
+/// An envelope's contents: the platform's evidence and the collateral.
+pub type Envelope = { Cmw evidence; List(CmwRec) collateral; };
+
+/// An envelope of `evidence` with no collateral.
+pub Envelope envelope_of(Cmw evidence) {
+    List(CmwRec) none = [];
+    return Envelope {.evidence = evidence, .collateral = none};
+}
+
+/// `e` with one more collateral item of `media_type`.
+pub Envelope envelope_with(Envelope e, Str media_type, List(Int) bytes) {
+    return Envelope {.evidence = e.evidence, .collateral = e.collateral.concat([CmwRec {.media_type = media_type, .value = bytes, .ind = 0 - 1}])};
+}
+
+/// The bytes of envelope `e`.
+/// Aborts when `e` holds more than evidence_max_collateral() items or a
+/// CMW cmw_encode refuses.
+pub List(UInt(8)) envelope_encode(Envelope e) {
+    rt_assert(e.collateral.len() <= evidence_max_collateral(), f"envelope_encode: at most {evidence_max_collateral()} collateral items");
+    List(CmwItem) base = [cmw_item("evidence", e.evidence)];
+    List(CmwItem) all = if (e.collateral.len() == 0) { base } else { base.concat([cmw_item("collateral", cmw_collection(ct_list(), ev_recs(e.collateral, 0, [])))]) };
+    return chal_bytes(cmw_encode(cmw_collection(evidence_envelope_type(), all)));
+}
+
+List(CmwItem) ev_recs(List(CmwRec) rs, Int i, List(CmwItem) acc) {
+    if (i >= rs.len()) { return acc; }
+    return ev_recs(rs, i + 1, acc.concat([cmw_item(f"{i}", CmwRecord(rs[i]))]));
+}
+
+/// The envelope in `bytes`, or why it is not one.
+/// The bytes must be a CMW collection of type evidence_envelope_type()
+/// with an "evidence" member and, optionally, a "collateral" list of
+/// records, at most evidence_max_collateral(); nothing else.
+pub Result(Envelope, Str) envelope_decode(List(UInt(8)) bytes) {
+    Cmw c = cmw_decode(chal_ints(bytes))?;
+    CmwColl k = ev_coll(c, "the evidence is not an envelope (a CMW collection)")?;
+    if (k.ctype != evidence_envelope_type()) { return Err("the CMW collection is not an evidence envelope (type " + k.ctype + ")"); }
+    Cmw ev = ev_some(cmw_get(k, "evidence"), "the envelope has no evidence")?;
+    Bool has_col = match (cmw_get(k, "collateral")) { Some(x) => true, None => false };
+    Int extra = if (has_col) { 2 } else { 1 };
+    if (k.items.len() != extra) { return Err("the envelope has members other than evidence and collateral"); }
+    List(CmwRec) col = ev_collateral(cmw_get(k, "collateral"))?;
+    return Ok(Envelope {.evidence = ev, .collateral = col});
+}
+
+// The collateral list, empty when absent.
+Result(List(CmwRec), Str) ev_collateral(Option(Cmw) o) {
+    return match o { None => Ok(ev_none()), Some(x) => ev_list_recs(x, evidence_max_collateral(), "collateral") };
+}
+
+// A collection, or `why`.
+Result(CmwColl, Str) ev_coll(Cmw c, Str why) { return match c { CmwCollection(x) => Ok(x), CmwRecord(r) => Err(why) }; }
+
+// A record, or `why`.
+Result(CmwRec, Str) ev_rec(Cmw c, Str why) { return match c { CmwRecord(x) => Ok(x), CmwCollection(k) => Err(why) }; }
+
+// The CMW present, or `why`.
+Result(Cmw, Str) ev_some(Option(Cmw) o, Str why) { return match o { Some(x) => Ok(x), None => Err(why) }; }
+
+List(CmwRec) ev_none() {
+    List(CmwRec) none = [];
+    return none;
+}
+
+/// `envelope` with one more collateral item, re-encoded.
+/// For a verifier adding what it fetched or cached: a certificate
+/// (mt_cert), a CRL (mt_crl), a PEM chain (mt_pem_chain), a JSON
+/// document (mt_json) or an OCSP response (mt_ocsp). Err when `envelope`
+/// is not one, is full, or the media type is not printable ASCII.
+pub Result(List(UInt(8)), Str) evidence_add_collateral(List(UInt(8)) envelope, Str media_type, List(UInt(8)) bytes) {
+    Envelope e = envelope_decode(envelope)?;
+    if (!cmw_media_ok(media_type)) { return Err("the media type is not 1 to 255 printable ASCII characters"); }
+    if (e.collateral.len() >= evidence_max_collateral()) { return Err(f"an envelope carries at most {evidence_max_collateral()} collateral items"); }
+    return Ok(envelope_encode(envelope_with(e, media_type, chal_ints(bytes))));
+}
+
+// ─── Lists ──────────────────────────────────────────────────────────
+
+/// A list collection of the records `xs` (each mt_octets()), "0", "1", ...
+pub Cmw cmw_list(List(List(Int)) xs) { return cmw_collection(ct_list(), ev_list_items(xs, 0, [])); }
+
+List(CmwItem) ev_list_items(List(List(Int)) xs, Int i, List(CmwItem) acc) {
+    if (i >= xs.len()) { return acc; }
+    return ev_list_items(xs, i + 1, acc.concat([cmw_item(f"{i}", cmw_record(mt_octets(), xs[i]))]));
+}
+
+/// The records of list collection `c`, in order, at most `max`.
+/// Err when `c` is not a list collection, a member is not a record, or the
+/// labels are not exactly "0" to "n-1" (in any order).
+pub Result(List(CmwRec), Str) ev_list_recs(Cmw c, Int max, Str what) {
+    CmwColl k = ev_coll(c, what + " is not a list collection")?;
+    if (k.ctype != ct_list()) { return Err(what + " is not a list collection"); }
+    if (k.items.len() > max) { return Err(what + f" has more than {max} items"); }
+    return ev_list_at(k, 0, [], what);
+}
+
+Result(List(CmwRec), Str) ev_list_at(CmwColl k, Int i, List(CmwRec) acc, Str what) {
+    if (i >= k.items.len()) { return Ok(acc); }
+    Cmw m = ev_some(cmw_get(k, f"{i}"), what + f" has no item {i}")?;
+    CmwRec r = ev_rec(m, what + f" item {i} is not a record")?;
+    return ev_list_at(k, i + 1, acc.concat([r]), what);
+}
+
+/// The values of list collection `c`, in order, at most `max`.
+pub Result(List(List(Int)), Str) ev_list_values(Cmw c, Int max, Str what) {
+    List(CmwRec) rs = ev_list_recs(c, max, what)?;
+    return Ok(ev_values(rs, 0, []));
+}
+
+List(List(Int)) ev_values(List(CmwRec) rs, Int i, List(List(Int)) acc) { return if (i >= rs.len()) { acc } else { ev_values(rs, i + 1, acc.concat([rs[i].value])) }; }
+
+/// The value of record member `label` of collection `k`.
+/// Err when absent or a collection.
+pub Result(List(Int), Str) ev_member(CmwColl k, Str label) {
+    Cmw m = ev_some(cmw_get(k, label), "no `" + label + "`")?;
+    return match m { CmwRecord(r) => Ok(r.value), CmwCollection(x) => Err("`" + label + "` is not a record") };
+}
+
+/// The list member `label` of collection `k`, at most `max` items.
+/// An absent member is the empty list (a CMW collection has at least one
+/// member, so the builders leave an empty list out); Err when it is not a
+/// list.
+pub Result(List(List(Int)), Str) ev_member_list(CmwColl k, Str label, Int max) {
+    List(List(Int)) none = [];
+    return match (cmw_get(k, label)) {
+        Some(c) => ev_list_values(c, max, "`" + label + "`"),
+        None => Ok(none),
+    };
+}
+
+/// True when every member of collection `k` is labelled from `labels`.
+/// A reader checks this before taking members, so evidence carrying
+/// anything it does not read is refused.
+pub Bool ev_only(CmwColl k, List(Str) labels) { return ev_only_at(k.items, labels, 0); }
+
+Bool ev_only_at(List(CmwItem) xs, List(Str) labels, Int i) {
+    if (i >= xs.len()) { return true; }
+    return ev_has(labels, xs[i].label, 0) && ev_only_at(xs, labels, i + 1);
+}
+
+Bool ev_has(List(Str) xs, Str x, Int i) { return i < xs.len() && (xs[i] == x || ev_has(xs, x, i + 1)); }
+
+// Member `label` holding list xs, or nothing for an empty list.
+List(CmwItem) ev_list_member(Str label, List(List(Int)) xs) {
+    List(CmwItem) none = [];
+    return if (xs.len() == 0) { none } else { [cmw_item(label, cmw_list(xs))] };
+}
+
+// ─── Building evidence ──────────────────────────────────────────────
+
+/// SNP evidence: the attestation report.
+pub Cmw evidence_snp(List(Int) report) { return cmw_record(mt_snp_report(), report); }
+/// TDX evidence: the quote.
+pub Cmw evidence_tdx(List(Int) quote) { return cmw_record(mt_tdx_quote(), quote); }
+/// CCA evidence: the attestation token.
+pub Cmw evidence_cca(List(Int) token) { return cmw_record(mt_cca_token(), token); }
+/// Nitro Enclaves evidence: the attestation document.
+pub Cmw evidence_nitro(List(Int) doc) { return cmw_record(mt_nitro_document(), doc); }
+
+/// TPM evidence: the quote's TPMS_ATTEST, its TPMT_SIGNATURE, and the
+/// selected PCRs' SHA-256 values in selection order.
+pub Cmw evidence_tpm(List(Int) attest, List(Int) signature, List(List(Int)) pcrs) {
+    return cmw_collection(ct_tpm_quote(), [cmw_item("attest", cmw_record(mt_octets(), attest)), cmw_item("signature", cmw_record(mt_octets(), signature))].concat(ev_list_member("pcrs", pcrs)));
+}
+
+/// SPDM measurement evidence, as the requester recorded it.
+/// `vca` the negotiation ([] for a 1.1 record without one); `certs` leaf
+/// first; `ocsp` one response per certificate below the root; `before`
+/// the unsigned exchanges the signature covers; the signed request and
+/// its response.
+pub Cmw evidence_spdm_measurements(List(List(Int)) vca, List(List(Int)) certs, List(List(Int)) ocsp, List(List(Int)) before, List(Int) request, List(Int) response) {
+    return cmw_collection(ct_spdm_measurements(), ev_list_member("vca", vca).concat(ev_list_member("certs", certs)).concat(ev_list_member("ocsp", ocsp)).concat(ev_list_member("before", before)).concat([cmw_item("request", cmw_record(mt_octets(), request)), cmw_item("response", cmw_record(mt_octets(), response))]));
+}
+
+/// SPDM CHALLENGE evidence: the negotiation, the chain as GET_CERTIFICATE
+/// returned it, OCSP responses, the exchanges since the negotiation, and
+/// CHALLENGE with its CHALLENGE_AUTH.
+pub Cmw evidence_spdm_challenge(List(List(Int)) vca, List(Int) chain, List(List(Int)) ocsp, List(List(Int)) b, List(Int) request, List(Int) response) {
+    return cmw_collection(ct_spdm_challenge(), ev_list_member("vca", vca).concat([cmw_item("chain", cmw_record(mt_octets(), chain))]).concat(ev_list_member("ocsp", ocsp)).concat(ev_list_member("b", b)).concat([cmw_item("request", cmw_record(mt_octets(), request)), cmw_item("response", cmw_record(mt_octets(), response))]));
+}
+
+/// SPDM KEY_EXCHANGE evidence: the negotiation, the chain, OCSP responses,
+/// the DIGESTS response when the session used multiple keys ([] when not),
+/// and KEY_EXCHANGE with its KEY_EXCHANGE_RSP.
+pub Cmw evidence_spdm_session(List(List(Int)) vca, List(Int) chain, List(List(Int)) ocsp, List(Int) digests, List(Int) key_exchange, List(Int) key_exchange_rsp) {
+    return cmw_collection(ct_spdm_session(), ev_list_member("vca", vca).concat(ev_list_member("ocsp", ocsp)).concat([cmw_item("chain", cmw_record(mt_octets(), chain)), cmw_item("digests", cmw_record(mt_octets(), digests)), cmw_item("key_exchange", cmw_record(mt_octets(), key_exchange)), cmw_item("key_exchange_rsp", cmw_record(mt_octets(), key_exchange_rsp))]));
+}
+
+/// The envelope bytes of `evidence` with `collateral` records.
+pub List(UInt(8)) evidence_envelope(Cmw evidence, List(CmwRec) collateral) { return envelope_encode(Envelope {.evidence = evidence, .collateral = collateral}); }
+
+/// A collateral record of `media_type`.
+pub CmwRec collateral_item(Str media_type, List(Int) bytes) { return CmwRec {.media_type = media_type, .value = bytes, .ind = 0 - 1}; }

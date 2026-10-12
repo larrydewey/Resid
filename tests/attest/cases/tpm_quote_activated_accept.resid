@@ -1,17 +1,19 @@
-// A quote verified from an activated AK rests on the EK root: a decision
-// that accepts only a pinned AK anchor does not take it.
-import "verify/core.resid";
+// A quote verified under an activated AK rests on the EK root: a decision
+// that accepts only a pinned AK does not take it.
+import "verify/verifier.resid";
+import "evidence.resid";
 import "verify/tpm.resid";
 import "verify/testing.resid";
 import "challenge.resid";
 
 @policy
-TpmPolicy pol() { return TpmPolicy {.pcrs_hex = ["0=00"]}; }
+Policy pol() { return Policy {.measurements = ["PCR0=00"], .require = [], .allow = []}; }
 
-@decides(accept = [test_tpm_ak], appraised = pol)
-Result(Appraised(TpmQuoteEvidence), VerifyError) f(List(List(UInt(8))) ch, List(List(UInt(8))) cl, List(UInt(8)) ak, List(UInt(8)) answer, ChallengeRecord c, List(UInt(8)) a, List(UInt(8)) s, ChallengeRecord c2) {
-    Verified(TpmAk) v = tpm_verify_ak(ch, cl, ak, answer, c, test_tpm_ek(), test_time(1791000000))?;
-    Verified(TpmQuoteEvidence) q = tpm_verify_quote_activated(a, s, [], c2, v, test_time(1791000000))?;
-    return tpm_appraise(q, pol());
+@decides(accept = [test_tpm_keys], appraised = pol, identity = none)
+Result(Appraised(Claims), VerifyError) f(List(List(UInt(8))) ch, List(List(UInt(8))) cl, List(UInt(8)) ak, List(UInt(8)) answer, ChallengeRecord c, List(UInt(8)) e, ChallengeRecord c2) {
+    Verified(TpmAk) v = tpm_verify_ak(ch, cl, ak, answer, c, test_tpm_ek_roots(), test_time(1791000000))?;
+    Verified(Claims) q = verify_evidence(e, c2, bind_fresh(), trust_with_ak(test_tpm_keys(), v), test_time(1791000000))?;
+    return appraise_evidence(q, pol());
 }
+
 Int main() { return 0; }

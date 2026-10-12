@@ -5,6 +5,7 @@
 
 import "core.resid";
 import "tdx.resid";
+import "claims.resid";
 
 /// Intel's SGX provisioning certification root CA, as the anchor for TDX quotes.
 @anchor(kind = IntelPck(SgxRoot), principal = InGuest, formats = [TdxQuote], source = "https://certificates.trustedservices.intel.com/Intel_SGX_Provisioning_Certification_RootCA.cer", fingerprint = "sha384:c00c26851a92d168cc1cc4c0720dcad05d25a630fdbeeed8b90020c968cd9f2556ea5c6aad1fdda31f8e18a52f9dfb4d", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [EcdsaP256Sha256], expires = "2049-12-31")
@@ -43,3 +44,7 @@ pub List(Int) intel_sgx_root_der() {
         80, 99, 157, 69, 14, 220, 190, 164, 87, 106, 162
     ];
 }
+
+/// Intel's SGX root, for TDX quotes, as a trust set.
+@trust(anchors = [intel_sgx_root])
+pub Trust intel_roots() { return trust_anchors(); }

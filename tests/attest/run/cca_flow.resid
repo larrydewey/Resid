@@ -1,4 +1,4 @@
-import "verify/core.resid";
+import "verify/verifier.resid";
 import "verify/cca.resid";
 import "verify/seal.resid";
 import "verify/testing.resid";
@@ -12,6 +12,7 @@ import "hash.resid";
 import "hpke.resid";
 import "hpkeg.resid";
 import "random.resid";
+import "evidence.resid";
 
 @requires(filesystem(readonly))
 List(Int) rd(Str p) { return filesystem.read_bytes("fixtures/" + p); }
@@ -50,20 +51,36 @@ List(UInt(8)) token(List(Int) challenge, Int lifecycle, Bool binder_ok) {
 }
 
 @policy
-CcaPolicy realm_policy() { return CcaPolicy {.rim_hex = [hex_encode(fill(5, 32))], .rems_hex = ["0=" + hex_encode(fill(6, 32))], .implementation_ids_hex = []}; }
+Policy realm_policy() { return Policy {.measurements = [hex_encode(fill(5, 32)), "REM0=" + hex_encode(fill(6, 32))], .require = [], .allow = []}; }
 
-@decides(accept = [test_cpak], appraised = realm_policy, identity = key_bound)
+@policy
+Policy platform_policy() { return Policy {.measurements = [hex_encode(fill(5, 32)), "SW.BL=" + hex_encode(fill(7, 32))], .require = ["implementation_id=" + hex_encode(fill(3, 32)), "lifecycle>=12288"], .allow = []}; }
+
+List(UInt(8)) env(List(UInt(8)) t) {
+    List(CmwRec) none = [];
+    return evidence_envelope(evidence_cca(chal_ints(t)), none);
+}
+
+// Only the TF-M sample's CPAK.
+@trust(anchors = [test_rmm_cpak])
+Trust tfm_only() { return trust_anchors(); }
+
+@decides(accept = [test_cca_keys], appraised = realm_policy, identity = key_bound)
 @requires(declassify)
-Result(HpkeMessage, VerifyError) release(List(UInt(8)) t, ChallengeRecord issued, List(Int) guest_pk, List(Secret(UInt(8))) key, List(Secret(UInt(8))) sender) {
-    Verified(CcaToken) v = cca_verify_key_bound(t, issued, test_cpak(), test_time(1791000000), 32, guest_pk)?;
-    Appraised(CcaToken) a = cca_appraise(v, realm_policy())?;
+Result(HpkeMessage, VerifyError) release(List(UInt(8)) evidence, ChallengeRecord issued, List(Int) guest_pk, List(Secret(UInt(8))) key, List(Secret(UInt(8))) sender) {
+    Verified(Claims) v = verify_evidence(evidence, issued, bind_key(32, guest_pk), test_cca_keys(), test_time(1791000000))?;
+    Appraised(Claims) a = appraise_evidence(v, realm_policy())?;
     return seal_to_evidence(a, 32, guest_pk, key, sender);
 }
 
 @requires(filesystem(readonly))
-Str fresh(Str what, List(UInt(8)) t, ChallengeRecord c) {
-    return what + ": " + match (cca_verify(t, c, test_cpak(), test_time(1791000000))) {
-        Ok(v) => match (cca_appraise(v, realm_policy())) { Ok(a) => f"appraised, {a.v.value.sw.len()} software component(s)", Err(e) => verify_error_text(e) },
+Str fresh(Str what, List(UInt(8)) t, ChallengeRecord c) { return fresh_under(what, t, c, false); }
+
+@requires(filesystem(readonly))
+Str fresh_under(Str what, List(UInt(8)) t, ChallengeRecord c, Bool tfm) {
+    Result(Verified(Claims), VerifyError) v = if (tfm) { verify_evidence(env(t), c, bind_fresh(), tfm_only(), test_time(1791000000)) } else { verify_evidence(env(t), c, bind_fresh(), test_cca_keys(), test_time(1791000000)) };
+    return what + ": " + match (v) {
+        Ok(x) => match (appraise_evidence(x, realm_policy())) { Ok(a) => "appraised, " + platform_name(a.v.value.platform) + match (appraise_evidence(x, platform_policy())) { Ok(b) => ", platform policy too", Err(e) => ", platform policy: " + verify_error_text(e) }, Err(e) => verify_error_text(e) },
         Err(e) => verify_error_text(e),
     };
 }
@@ -87,11 +104,15 @@ Int main() {
     println(fresh("platform bound to another realm", token(chal_ints(challenge_value(c3)), 12291, false), c3));
     ChallengeRecord c4 = challenge_issue(64);
     println(fresh("other challenge", token(chal_ints(challenge_value(challenge_issue(64))), 12291, true), c4));
+    ChallengeRecord c6 = challenge_issue(64);
+    println(fresh_under("under another CPAK only", token(chal_ints(challenge_value(c6)), 12291, true), c6, true));
+    ChallengeRecord c7 = challenge_issue(32);
+    println(fresh("a 32-byte challenge", token(chal_ints(challenge_value(c7)).concat(fill(0, 32)), 12291, true), c7));
     HpkeKeyPairG(Secret(UInt(8))) kp = hpkeg_generate_keypair(32);
     ChallengeRecord c5 = challenge_issue(64);
     List(Int) bound = chal_ints(match (challenge_with_key(challenge_value(c5), 32, kp.sk)) { Ok(b) => b, Err(e) => [] });
     List(Secret(UInt(8))) key = random_secret(32);
-    Str r = match (release(token(bound, 12291, true), c5, kp.pk, key, secret_bytes(rd("sender-sk.bin")))) {
+    Str r = match (release(env(token(bound, 12291, true)), c5, kp.pk, key, secret_bytes(rd("sender-sk.bin")))) {
         Ok(m) => match (open_released(32, kp.sk, m, test_sender())) { Ok(v) => if (hex_encode(sec_pub(v.value, 0, ListBuf())) == hex_encode(sec_pub(key, 0, ListBuf()))) { "released and opened: same key" } else { "KEY DIFFERS" }, Err(e) => "open: " + verify_error_text(e) },
         Err(e) => "release: " + verify_error_text(e),
     };

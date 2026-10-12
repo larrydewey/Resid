@@ -1,15 +1,16 @@
 // verify/endorsed_keys.resid — keys a CoRIM endorses (PLAN-attestation.md
-// §3.1, §4; verify/corim.resid), as anchors for the verifiers that take a
-// key rather than a chain: attest-key triples for the CCA platform
-// token's CPAK (cca_verify_endorsed) and a TPM's AK
-// (tpm_verify_quote_endorsed), identity triples for an SPDM device's key
-// (spdm_verify_endorsed). Each candidate is an Anchor whose identity is
-// the endorser's, so the evidence rests on the endorser's word and a
-// decision on it names the endorser in `accept`.
+// §3.1, §4; verify/corim.resid), as anchors for the platforms whose
+// evidence a key signs rather than a chain: attest-key triples for the CCA
+// platform token's CPAK and a TPM's AK, identity triples for an SPDM
+// device's key (a Trust made with trust_with_keys). Each candidate is an
+// Anchor whose identity is the endorser's, so the evidence rests on the
+// endorser's word and a decision on it names the endorser in `accept`.
 //
-// Only keys whose environment names an instance are candidates, and the
-// evidence must come from that instance: the CCA token's own instance ID,
-// or the instance a TPM or SPDM verifier names. A triple with conditions
+// Only keys whose environment names an instance are candidates. A CCA
+// token names its own instance, which must be the key's; a TPM quote and
+// an SPDM transcript name none, so the instance is the endorsement's word,
+// and when two endorsements of one key name different instances the
+// verifier claims neither (verify/claims.resid). A triple with conditions
 // is used only when the conditions name no measured element (this
 // verifier cannot tell which element holds a key) and, when they name
 // who must have authorized the key, the endorser is among them. Keys
@@ -91,25 +92,32 @@ Anchor ek_anchor(List(Int) spki, PubKey pk, Verified(CorimRefs) keys, Str kind, 
     return Anchor {.id = keys.anchors[0], .kind = kind, .product = "", .principal = principal, .formats = [format], .algorithms = algs, .der = spki, .fingerprint = "sha256:" + hex_encode(sha256_bytes(spki)), .expires = keys.value.expires};
 }
 
-/// Returns the anchor for an SPDM device whose key an identity triple endorses.
-/// `dev` is the device's certificate and `instance_hex` its instance, which
-/// must be given. The anchor carries the endorser's identity and lists
-/// every SPDM algorithm the key can sign with; Refused when no triple matches.
+/// An SPDM device key a CoRIM endorses: the anchor made of it, the
+/// instance it is endorsed for (lowercase hex) and the triple's environment.
+pub type EndorsedDevice = { Anchor a; Str instance_hex; CorimEnv env; };
+
+/// Every identity triple of `keys` that endorses the device certificate
+/// `dev`, each as an anchor with the instance and environment it names.
+/// The evidence does not say which device made it: an endorsement ties the
+/// key to an instance, and when two name different instances the verifier
+/// claims neither. Empty when none endorses it, or the CoRIM is not one
+/// endorser's or its validity ended before `t`.
 @verify_internal
-pub Result(Anchor, VerifyError) endorsed_identity(Verified(CorimRefs) keys, Str instance_hex, Cert dev, EvidenceTime t, Str who) {
-    if (keys.anchors.len() != 1 || keys.format != "CorimRefs") { return Err(Refused(who, "the keys are not one endorser's CoRIM")); }
-    if (keys.value.valid_until >= 0 && t.at.seconds > keys.value.valid_until) { return Err(Stale("the CoRIM's validity ended before the evidence time")); }
-    if (instance_hex == "") { return Err(Refused(who, "name the device's instance: the evidence does not say which device made it")); }
-    List(Int) none = [];
-    CorimKeyRef dk = CorimKeyRef {.kind = "asn1der-cert", .key = dev.key, .der = dev.der, .thumb = CorimDigest {.alg = 0, .value = none}};
-    if (!ek_identity_in(keys.value.identity, str_to_lower(instance_hex), dk, keys.value.endorser, 0)) { return Err(Refused(who, "the CoRIM endorses no identity key for instance " + instance_hex + " that is this device's")); }
-    return Ok(Anchor {.id = keys.anchors[0], .kind = "DeviceIdentity", .product = "", .principal = "AboveKernel", .formats = ["SpdmEvidence", "SpdmIdentity"], .algorithms = ek_spdm_algs(dev.key), .der = dev.spki, .fingerprint = "sha256:" + hex_encode(sha256_bytes(dev.spki)), .expires = keys.value.expires});
+pub List(EndorsedDevice) endorsed_identities(Verified(CorimRefs) keys, Cert dev, EvidenceTime t) {
+    List(EndorsedDevice) none = [];
+    if (keys.anchors.len() != 1 || keys.format != "CorimRefs") { return none; }
+    if (keys.value.valid_until >= 0 && t.at.seconds > keys.value.valid_until) { return none; }
+    List(Int) nv = [];
+    CorimKeyRef dk = CorimKeyRef {.kind = "asn1der-cert", .key = dev.key, .der = dev.der, .thumb = CorimDigest {.alg = 0, .value = nv}};
+    Anchor a = Anchor {.id = keys.anchors[0], .kind = "DeviceIdentity", .product = "", .principal = "AboveKernel", .formats = ["SpdmEvidence", "SpdmIdentity", "SpdmSession"], .algorithms = ek_spdm_algs(dev.key), .der = dev.spki, .fingerprint = "sha256:" + hex_encode(sha256_bytes(dev.spki)), .expires = keys.value.expires};
+    return ek_identities(keys.value.identity, dk, keys.value.endorser, a, 0, none);
 }
 
-Bool ek_identity_in(List(CorimKeyTriple) ts, Str inst, CorimKeyRef dk, List(Int) endorser, Int i) {
-    if (i >= ts.len()) { return false; }
-    Bool here = ek_instance(ts[i].env.instance) == inst && ek_conditions_ok(ts[i], endorser) && ek_auth_in(ts[i].keys, dk, 0);
-    return here || ek_identity_in(ts, inst, dk, endorser, i + 1);
+List(EndorsedDevice) ek_identities(List(CorimKeyTriple) ts, CorimKeyRef dk, List(Int) endorser, Anchor a, Int i, List(EndorsedDevice) acc) {
+    if (i >= ts.len()) { return acc; }
+    Str inst = ek_instance(ts[i].env.instance);
+    Bool here = inst != "" && ek_conditions_ok(ts[i], endorser) && ek_auth_in(ts[i].keys, dk, 0);
+    return ek_identities(ts, dk, endorser, a, i + 1, if (here) { acc.concat([EndorsedDevice {.a = a, .instance_hex = inst, .env = ts[i].env}]) } else { acc });
 }
 
 // Every SPDM algorithm name a key can sign under (lib/spdm_msg.resid's
@@ -123,10 +131,3 @@ List(Str) ek_spdm_algs(PubKey k) {
 }
 
 List(Str) ek_suffix(Str p, List(Str) hs) { return [p + hs[0], p + hs[1], p + hs[2]]; }
-
-/// Returns true when a failure under one candidate leaves the next to try.
-/// That is a BadSignature or Refused error: the key did not sign, or signs
-/// with an algorithm the evidence does not use.
-pub Bool endorsed_try_next(VerifyError e) {
-    return match e { BadSignature(m) => true, Refused(w, m) => true, _ => false };
-}

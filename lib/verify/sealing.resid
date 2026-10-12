@@ -22,6 +22,7 @@
 
 import "core.resid";
 import "snp.resid";
+import "claims.resid";
 import "../crypto.resid";
 import "../word.resid";
 import "../random.resid";
@@ -45,14 +46,18 @@ pub Int snp_field_select(SnpKeySelector s) {
 @opaque("*")
 pub type PlatformKey = { List(Secret(UInt(8))) key; List(Int) measurement; Int fields; };
 
-/// The sealing key for this guest, on its own fresh report.
+/// The SEV-SNP sealing key for this guest, on its own fresh report.
+/// `report` is verify_evidence's result for this guest's own SEV-SNP
+/// evidence, made with a record this program spent on its own device
+/// (attest(Issued(c))); any other evidence is refused. An SEV-SNP feature
+/// with no other platform's equivalent.
 @primitive(platform_key, from = report, gives = [], inputs = [sel])
 @requires(device, declassify)
-pub Result(Verified(PlatformKey), VerifyError) snp_platform_key(SnpKeySelector sel, Verified(SnpReport) report) {
+pub Result(Verified(PlatformKey), VerifyError) snp_platform_key(SnpKeySelector sel, Verified(Claims) report) {
     if ((report.quals & q_fresh()) == 0) { return Err(NotFresh("platform_key needs a fresh report")); }
     Int st = challenge_state_h(report.record);
     if (st < 0 || (st & 2) == 0 || (st & 32) == 0) { return Err(Refused("platform_key", "the report is not this program's own device's answer to a record it spent")); }
-    SnpReport r = report.value;
+    SnpReport r = snp_report_of(report.value)?;
     if (snp_policy_debug(r)) { return Err(Refused("platform_key", "the guest policy allows debugging")); }
     if (snp_policy_migrate_ma(r)) { return Err(Refused("platform_key", "the guest policy allows a migration agent (its root is not this key's)")); }
     vf_decide(report.record)?;

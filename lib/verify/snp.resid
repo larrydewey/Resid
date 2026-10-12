@@ -1,7 +1,9 @@
 // verify/snp.resid — AMD SEV-SNP attestation reports (PLAN-attestation.md
 // §3.2, §3.3, §4, §6): the report layout with each field's origin, the
-// VCEK/VLEK chain from an AMD root, signer-claim binding, the four
-// verifier forms and the appraisal.
+// VCEK/VLEK chain from an AMD root, signer-claim binding, and the
+// platform's instance of PlatformVerifier (verify/claims.resid). Internal
+// to lib/verify/: programs verify any platform's evidence through
+// verify/verifier.resid.
 //
 // The chain: the ARK (the anchor, RSA-4096, RSASSA-PSS SHA-384, self-
 // signed) signs the ASK (or, for VLEK, the ASVK), which signs the VCEK
@@ -18,6 +20,10 @@
 // CPUID_FAM_ID the product's family.
 
 import "core.resid";
+import "claims.resid";
+import "corim.resid";
+import "../cmw.resid";
+import "../evidence.resid";
 import "../crypto.resid";
 import "../hash.resid";
 import "../der.resid";
@@ -88,14 +94,9 @@ pub type SnpCollateral = { List(UInt(8)) vcek_der; List(UInt(8)) ask_der; List(U
 /// `fmc` exists only on Turin and is 0 for earlier products.
 pub type TcbVersion = { Int fmc; Int bootloader; Int tee; Int snp; Int microcode; };
 
-/// The appraisal policy for an SNP report, checked by `snp_appraise`.
-/// `min_tcb` is the floor for the committed and reported TCB, and
-/// `measurements_hex` must name at least one launch measurement. Empty
-/// `id_key_digests_hex` or `host_data_hex` lists leave that field unchecked.
-pub type SnpPolicy = { TcbVersion min_tcb; List(Str) measurements_hex; Int vmpl; Bool allow_migration_agent; List(Str) id_key_digests_hex; List(Str) host_data_hex; };
-
 /// Returns the device descriptors whose replies carry an SNP report.
-pub List(Str) snp_descriptors() { return ["sev_guest.snp_get_report"]; }
+@verify_internal
+pub List(Str) snp_descriptors() { return ["sev_guest.snp_get_report", "tsm_report.report"]; }
 
 // ─── TCB (§3.2 tcb_ge) ──────────────────────────────────────────────
 
@@ -103,6 +104,7 @@ pub List(Str) snp_descriptors() { return ["sev_guest.snp_get_report"]; }
 /// "Turin" reads fmc, bootloader, tee and snp from bytes 0-3; any other
 /// product reads bootloader and tee from bytes 0-1, snp from byte 6, and
 /// sets fmc to 0. Microcode is byte 7 in both.
+@verify_internal
 pub TcbVersion snp_tcb(Str product, Int v) {
     Int b0 = v & 255;
     Int b1 = (v >> 8) & 255;
@@ -116,23 +118,29 @@ pub TcbVersion snp_tcb(Str product, Int v) {
 
 /// Returns true when every component of `v` is at least that of `floor`.
 /// Patch levels are per component, so the packed word is never compared.
+@verify_internal
 pub Bool tcb_ge(TcbVersion v, TcbVersion floor) {
     return v.fmc >= floor.fmc && v.bootloader >= floor.bootloader && v.tee >= floor.tee && v.snp >= floor.snp && v.microcode >= floor.microcode;
 }
 
 /// Returns true when `a` and `b` have equal patch levels in every component.
+@verify_internal
 pub Bool tcb_eq(TcbVersion a, TcbVersion b) { return tcb_ge(a, b) && tcb_ge(b, a); }
 
 // ─── The report's own facts ─────────────────────────────────────────
 
 /// Returns the report's SIGNING_KEY field (flags bits 2-4).
 /// 0 means the VCEK signed it and 1 the VLEK.
+@verify_internal
 pub Int snp_signing_key(SnpReport r) { return ((Int) r.flags >> 2) & 7; }
 /// Returns true when the report masks its CHIP_ID (flags bit 1).
+@verify_internal
 pub Bool snp_chip_masked(SnpReport r) { return ((Int) r.flags & 2) != 0; }
 /// Returns true when the guest policy allows debugging (policy bit 19).
+@verify_internal
 pub Bool snp_policy_debug(SnpReport r) { return (((Int) r.policy >> 19) & 1) != 0; }
 /// Returns true when the guest policy allows a migration agent (bit 18).
+@verify_internal
 pub Bool snp_policy_migrate_ma(SnpReport r) { return (((Int) r.policy >> 18) & 1) != 0; }
 
 // The CPUID family a product's reports name (versions 3 and later).
@@ -147,14 +155,14 @@ Int snp_family(Str product) { return if (product == "Turin") { 26 } else { 25 };
 @verify_internal
 pub Result(SnpReport, VerifyError) snp_check(List(UInt(8)) report, Anchor root, SnpCollateral col, EvidenceTime t) {
     Bool vcek_kind = root.kind == "AmdVcek";
-    if (!vcek_kind && root.kind != "AmdVlek") { return Err(Refused("snp_verify", "the anchor is not an AMD VCEK or VLEK root (kind " + root.kind + ")")); }
-    if (!anchor_lists(root.algorithms, "RsaPss4096Sha384") || !anchor_lists(root.algorithms, "EcdsaP384Sha384")) { return Err(Refused("snp_verify", "the anchor does not list RSASSA-PSS SHA-384 and ECDSA P-384 SHA-384")); }
+    if (!vcek_kind && root.kind != "AmdVlek") { return Err(Refused("AMD SEV-SNP", "the anchor is not an AMD VCEK or VLEK root (kind " + root.kind + ")")); }
+    if (!anchor_lists(root.algorithms, "RsaPss4096Sha384") || !anchor_lists(root.algorithms, "EcdsaP384Sha384")) { return Err(Refused("AMD SEV-SNP", "the anchor does not list RSASSA-PSS SHA-384 and ECDSA P-384 SHA-384")); }
     if (anchor_expired(root, t)) { return Err(Stale("the anchor expired " + root.expires)); }
     if (report.len() != 1184) { return Err(BadLayout(f"an SNP report is 1184 bytes, got {report.len()}")); }
     SnpReport r = snp_parse(report)?;
     Int sk = snp_signing_key(r);
-    if (sk != (if (vcek_kind) { 0 } else { 1 })) { return Err(Refused("snp_verify", f"the report's SIGNING_KEY is {sk}, the anchor's kind " + root.kind)); }
-    if (r.version >= (UInt(32)) 3 && (Int) r.cpuid_fam_id != snp_family(root.product)) { return Err(Refused("snp_verify", f"the report's CPUID family {r.cpuid_fam_id} is not " + root.product + "'s")); }
+    if (sk != (if (vcek_kind) { 0 } else { 1 })) { return Err(Refused("AMD SEV-SNP", f"the report's SIGNING_KEY is {sk}, the anchor's kind " + root.kind)); }
+    if (r.version >= (UInt(32)) 3 && (Int) r.cpuid_fam_id != snp_family(root.product)) { return Err(Refused("AMD SEV-SNP", f"the report's CPUID family {r.cpuid_fam_id} is not " + root.product + "'s")); }
     Cert ark = snp_cert(root.der, "ARK")?;
     Cert ask = snp_cert(chal_ints(col.ask_der), "ASK")?;
     Cert vcek = snp_cert(chal_ints(col.vcek_der), "VCEK")?;
@@ -208,6 +216,7 @@ List(Int) snp_be_at(List(UInt(8)) le, Int i, ListBuf(Int) acc) { return if (i < 
 /// A CRL older than one already seen is refused whatever the clock says.
 /// The numbers are those AMD's KDS served on 2026-10-11, raised with each
 /// release.
+@verify_internal
 pub Int snp_crl_floor(Str product) {
     if (product == "Milan") { return 12; }
     if (product == "Genoa") { return 11; }
@@ -218,6 +227,7 @@ pub Int snp_crl_floor(Str product) {
 /// Returns the CRL Number extension (2.5.29.20) of `crl`, or -1 if absent.
 /// Walks TBSCertList's [0] extensions element by element; it does not check
 /// the signature, so call it only on a CRL already verified.
+@verify_internal
 pub Int snp_crl_number(List(Int) crl) {
     Der outer = der_top(crl);
     Der tbs = der_child(crl, outer);
@@ -263,111 +273,237 @@ Int snp_spl(Cert c, Str tail) {
 Result(Bool, VerifyError) snp_claims(SnpReport r, Cert vcek, Anchor root, Bool vcek_kind) {
     Der pn = cert_ext_inner(vcek, snp_oid("2"));
     Str pname = if (pn.ok && pn.tag == 22) { der_str_value(vcek.der, pn.pos) } else { "" };
-    if (!str_starts_with(pname, root.product)) { return Err(Refused("snp_verify", "the VCEK's product " + pname + " is not the anchor's " + root.product)); }
+    if (!str_starts_with(pname, root.product)) { return Err(Refused("AMD SEV-SNP", "the VCEK's product " + pname + " is not the anchor's " + root.product)); }
     TcbVersion rep = snp_tcb(root.product, (Int) r.reported_tcb);
     Int fmc = snp_spl(vcek, "3.9");
     TcbVersion cert = TcbVersion {.fmc = if (fmc < 0) { 0 } else { fmc }, .bootloader = snp_spl(vcek, "3.1"), .tee = snp_spl(vcek, "3.2"), .snp = snp_spl(vcek, "3.3"), .microcode = snp_spl(vcek, "3.8")};
     if (cert.bootloader < 0 || cert.tee < 0 || cert.snp < 0 || cert.microcode < 0) { return Err(BadChain("the VCEK does not certify a TCB")); }
-    if (!tcb_eq(rep, cert)) { return Err(Refused("snp_verify", "REPORTED_TCB is not the TCB the VCEK certifies")); }
-    if (!vcek_kind) { return Ok(true); }
-    if (snp_chip_masked(r)) { return Err(Refused("snp_verify", "the report masks CHIP_ID, so it cannot be bound to the VCEK's chip")); }
+    if (!tcb_eq(rep, cert)) { return Err(Refused("AMD SEV-SNP", "REPORTED_TCB is not the TCB the VCEK certifies")); }
+    // A VLEK names the cloud provider it was issued to (CSP_ID) where a
+    // VCEK names its chip: a leaf without one is no VLEK.
+    if (!vcek_kind) { return if (cert_ext(vcek, snp_oid("5")).ok) { Ok(true) } else { Err(BadChain("the VLEK names no cloud service provider (CSP_ID)")) }; }
+    if (snp_chip_masked(r)) { return Err(Refused("AMD SEV-SNP", "the report masks CHIP_ID, so it cannot be bound to the VCEK's chip")); }
     Der hw = cert_ext(vcek, snp_oid("4"));
     if (!hw.ok) { return Err(BadChain("the VCEK has no hardware ID")); }
     List(Int) hwid = der_value(vcek.der, hw);
     List(Int) chip = chal_ints(r.chip_id);
-    if (hwid.len() == 0 || hwid.len() > 64 || !eq_ints(chip[0..hwid.len()], hwid) || !snp_zero_from(chip, hwid.len())) { return Err(Refused("snp_verify", "CHIP_ID is not the VCEK's hardware ID")); }
+    if (hwid.len() == 0 || hwid.len() > 64 || !eq_ints(chip[0..hwid.len()], hwid) || !snp_zero_from(chip, hwid.len())) { return Err(Refused("AMD SEV-SNP", "CHIP_ID is not the VCEK's hardware ID")); }
     return Ok(true);
 }
 
 Bool snp_zero_from(List(Int) b, Int i) { return i >= b.len() || (b[i] == 0 && snp_zero_from(b, i + 1)); }
 
-// ─── The verifier forms (§3.2, §6.1) ────────────────────────────────
+// ─── The platform (verify/claims.resid) ─────────────────────────────
 
-Int snp_rp(ChallengeRecord c) { return if (c.bind.len() > 0) { q_rp_bound() } else { 0 }; }
+/// The marker type naming AMD SEV-SNP for PlatformVerifier.
+type SnpPlat = { Bool snp; };
 
-/// Verifies an SNP report as fresh for the holder of challenge `c`.
-/// The report data must carry challenge_value(c), and the challenge is
-/// spent; otherwise checks as `snp_check`.
-@primitive(verify, anchor = root, gives = [fresh], time = t, format = SnpReport, kinds = [AmdVcek, AmdVlek], algorithms = [RsaPss4096Sha384, EcdsaP384Sha384], inputs = [report, c, col, t])
-pub Result(Verified(SnpReport), VerifyError) snp_verify(List(UInt(8)) report, ChallengeRecord c, Anchor root, SnpCollateral col, EvidenceTime t) {
-    SnpReport r = snp_check(report, root, col, t)?;
-    Bool spent = vf_bind_challenge(r.report_data, challenge_value(c), c, report, snp_descriptors())?;
-    List(Int) none = [];
-    return Ok(vf_make(r, root, q_fresh() | snp_rp(c), c, 0, none, none, t, "SnpReport"));
+/// The SEV-SNP marker.
+@verify_internal
+pub SnpPlat snp_platform() { return SnpPlat {.snp = true}; }
+
+Platform snp_pv_platform(SnpPlat p) { return AmdSnp; }
+
+List(Cand) snp_pv_candidates(SnpPlat p, Trust tr, Cmw ev, EvidenceTime t) { return trust_anchor_cands(tr, ["AmdVcek", "AmdVlek"]); }
+
+// A candidate ARK fits a report whose SIGNING_KEY is its kind's (VCEK or
+// VLEK) when the collateral holds a CA certificate it issued (the ASK or
+// ASVK). The leaf is a certificate that CA issued; the CRL the newest
+// current one the ARK signed. At most four (CA, leaf) pairs are tried, so
+// a flood of look-alike certificates costs four chain checks, not more.
+PfTry snp_pv_check(SnpPlat p, Cmw ev, List(CmwRec) col, Cand k, EvidenceTime t) {
+    Str miss = snp_fit(ev, col, k);
+    if (miss != "") { return PfSkip(miss); }
+    return pf_of(snp_under(ev, col, k, t));
 }
 
-/// Verifies an SNP report as fresh and bound to the attester's key `pk`.
-/// The report must carry challenge_with_key(challenge_value(c), kem, sk)
-/// for the sk behind `pk`; a malformed `kem` or `pk` is refused.
-@primitive(verify, anchor = root, gives = [fresh, key_bound], time = t, format = SnpReport, kinds = [AmdVcek, AmdVlek], algorithms = [RsaPss4096Sha384, EcdsaP384Sha384], inputs = [report, c, col, t, kem, pk])
-pub Result(Verified(SnpReport), VerifyError) snp_verify_key_bound(List(UInt(8)) report, ChallengeRecord c, Anchor root, SnpCollateral col, EvidenceTime t, Int kem, List(Int) pk) {
-    if (!hpke_kem_ok(kem) || !vf_pk_ok(kem, pk)) { return Err(Refused("snp_verify_key_bound", "the attester's public key is empty or malformed for the KEM")); }
-    SnpReport r = snp_check(report, root, col, t)?;
-    Bool spent = vf_bind_challenge(r.report_data, challenge_key_value(challenge_value(c), kem, pk), c, report, snp_descriptors())?;
-    List(Int) none = [];
-    return Ok(vf_make(r, root, q_fresh() | q_key_bound() | snp_rp(c), c, kem, pk, none, t, "SnpReport"));
+// Why candidate `k` does not fit, or "" (also when the evidence is
+// malformed: the check then says how).
+Str snp_fit(Cmw ev, List(CmwRec) col, Cand k) {
+    List(Int) rep = match (pf_record(ev, mt_snp_report())) { Ok(x) => x, Err(e) => [] };
+    if (rep.len() != 1184) { return ""; }
+    Int sk = match (snp_parse(chal_bytes(rep))) { Ok(r) => snp_signing_key(r), Err(e) => 0 - 1 };
+    if (sk < 0) { return ""; }
+    if (sk != (if (k.a.kind == "AmdVcek") { 0 } else { 1 })) { return "the report's SIGNING_KEY is not a " + k.a.kind + " root's"; }
+    List(Int) subj = match (x509_parse(k.a.der)) { Ok(c) => c.subject, Err(e) => [] };
+    if (subj.len() == 0) { return ""; }
+    if (snp_issued(pf_collateral(col, mt_cert()), subj, true, 0, []).len() == 0) { return "the collateral holds no certificate the " + k.a.product + " ARK issued"; }
+    return "";
 }
 
-/// Verifies an SNP report as fresh and bound to the channel of `e`.
-/// The report must carry challenge_with_channel(challenge_value(c), e')
-/// for the attester's end e' of the connection whose other end is `e`.
-/// Needs the `declassify` capability.
-@primitive(verify, anchor = root, gives = [fresh, channel_bound], time = t, format = SnpReport, kinds = [AmdVcek, AmdVlek], algorithms = [RsaPss4096Sha384, EcdsaP384Sha384], inputs = [report, c, col, t, e])
-@requires(declassify)
-pub Result(Verified(SnpReport), VerifyError) snp_verify_channel_bound(List(UInt(8)) report, ChallengeRecord c, Anchor root, SnpCollateral col, EvidenceTime t, ChannelExporter e) {
-    List(UInt(8)) want = match (challenge_with_channel(challenge_value(c), e)) { Ok(x) => Ok(x), Err(err) => Err(Refused("snp_verify_channel_bound", device_error_text(err))) }?;
-    SnpReport r = snp_check(report, root, col, t)?;
-    Bool spent = vf_bind_challenge(r.report_data, want, c, report, snp_descriptors())?;
-    List(Int) none = [];
-    return Ok(vf_make(r, root, q_fresh() | q_channel_bound() | snp_rp(c), c, 0, none, vf_channel_id(e), t, "SnpReport"));
+Result(PfChecked, VerifyError) snp_under(Cmw ev, List(CmwRec) col, Cand k, EvidenceTime t) {
+    List(Int) rep = pf_record(ev, mt_snp_report())?;
+    if (rep.len() != 1184) { return Err(BadLayout(f"an SNP report is 1184 bytes, got {rep.len()}")); }
+    if (anchor_expired(k.a, t)) { return Err(Stale("the anchor expired " + k.a.expires)); }
+    List(UInt(8)) report = chal_bytes(rep);
+    SnpReport r = snp_parse(report)?;
+    Cert ark = snp_cert(k.a.der, "ARK")?;
+    List(Int) crl = snp_best_crl(pf_collateral(col, mt_crl()), ark.der, t, 0, [], 0 - 1);
+    if (crl.len() == 0) { return Err(Stale("the collateral holds no current CRL signed by the " + k.a.product + " ARK")); }
+    List(Cert) certs = snp_certs_of(pf_collateral(col, mt_cert()), 0, []);
+    List(Cert) cas = snp_cas(certs, ark, t, 0, []);
+    List(List(Int)) pairs = snp_pairs(certs, cas, r, k.a, t);
+    if (pairs.len() == 0) { return Err(BadChain("the collateral holds no " + (if (k.a.kind == "AmdVcek") { "VCEK" } else { "VLEK" }) + " under the " + k.a.product + " ARK")); }
+    SnpReport checked = snp_try_pairs(report, k.a, pairs, crl, t, 0)?;
+    return Ok(snp_checked(report, checked, k.a.product));
 }
 
-/// Verifies an SNP report against an imported replayable record `c`.
-/// Gives only Delivered: a record imported without a SpentStore may be
-/// replayed within its lifetime, so this never satisfies a decision (§6.1).
-@primitive(verify, anchor = root, gives = [delivered], time = t, format = SnpReport, kinds = [AmdVcek, AmdVlek], algorithms = [RsaPss4096Sha384, EcdsaP384Sha384], inputs = [report, c, col, t])
-pub Result(Verified(SnpReport), VerifyError) snp_verify_replayable(List(UInt(8)) report, ReplayableRecord c, Anchor root, SnpCollateral col, EvidenceTime t) {
-    SnpReport r = snp_check(report, root, col, t)?;
-    List(UInt(8)) want = replayable_value(c);
-    if (!eq_ints(chal_ints(r.report_data[0..want.len()]), chal_ints(want)) || !snp_zero_from(chal_ints(r.report_data), want.len())) { return Err(NotFresh("the evidence does not carry this challenge")); }
-    List(Int) none = [];
-    return Ok(Verified {.value = r, .anchors = [root.id], .quals = q_delivered(), .record = 0 - 1, .kem = 0, .pk = none, .chan = none, .time = t.source, .principal = root.principal, .format = "SnpReport"});
+// The certificates of `certs` whose issuer is `name`: CAs when `ca`,
+// else leaves; at most 4. By name only, for the fit test.
+List(List(Int)) snp_issued(List(List(Int)) certs, List(Int) name, Bool ca, Int i, List(List(Int)) acc) {
+    if (i >= certs.len() || acc.len() >= 4) { return acc; }
+    Bool hit = match (x509_parse(certs[i])) { Ok(c) => eq_list(c.issuer, name) && cert_is_ca(c) == ca, Err(e) => false };
+    return snp_issued(certs, name, ca, i + 1, if (hit) { acc.concat([certs[i]]) } else { acc });
 }
 
-// ─── Appraisal (§4) ─────────────────────────────────────────────────
-/// Appraises a verified SNP report against `policy`.
-/// Mandatory checks no policy turns off: DEBUG clear, the migration agent
-/// only where the policy allows it, the report's own VMPL, the report
-/// version and signature algorithm (the layout's checks), the committed
-/// and the reported TCB both at least the floor. Then the policy's
-/// measurements (one must match), ID key digests and host data (when
-/// listed). The policy argument is a direct call of a @policy function
-/// (E0283), which names it.
-@primitive(appraise, from = v, policy = policy, ptype = SnpPolicy)
-pub Result(Appraised(SnpReport), VerifyError) snp_appraise(Verified(SnpReport) v, SnpPolicy policy) {
-    SnpReport r = v.value;
-    Str product = snp_product_of(v);
-    if (snp_policy_debug(r)) { return Err(Refused("snp_appraise", "the guest policy allows debugging")); }
-    if (snp_policy_migrate_ma(r) && !policy.allow_migration_agent) { return Err(Refused("snp_appraise", "the guest policy allows a migration agent")); }
-    if ((Int) r.vmpl != policy.vmpl) { return Err(Refused("snp_appraise", f"the report is for VMPL {r.vmpl}, the policy {policy.vmpl}")); }
-    if (!tcb_ge(snp_tcb(product, (Int) r.committed_tcb), policy.min_tcb)) { return Err(Refused("snp_appraise", "the committed TCB is below the policy's floor")); }
-    if (!tcb_ge(snp_tcb(product, (Int) r.reported_tcb), policy.min_tcb)) { return Err(Refused("snp_appraise", "the reported TCB is below the policy's floor")); }
-    if (policy.measurements_hex.len() == 0) { return Err(Refused("snp_appraise", "the policy names no measurement")); }
-    if (!snp_hex_in(r.measurement, policy.measurements_hex)) { return Err(Refused("snp_appraise", "the launch measurement is not one the policy names")); }
-    if (policy.id_key_digests_hex.len() > 0 && !snp_hex_in(r.id_key_digest, policy.id_key_digests_hex)) { return Err(Refused("snp_appraise", "the ID key is not one the policy names")); }
-    if (policy.host_data_hex.len() > 0 && !snp_hex_in(r.host_data, policy.host_data_hex)) { return Err(Refused("snp_appraise", "HOST_DATA is not one the policy names")); }
-    return Ok(Appraised {.v = v, .policy = "SnpPolicy"});
+// The collateral certificates that parse.
+List(Cert) snp_certs_of(List(List(Int)) ds, Int i, List(Cert) acc) {
+    if (i >= ds.len()) { return acc; }
+    return snp_certs_of(ds, i + 1, match (x509_parse(ds[i])) { Ok(c) => acc.concat([c]), Err(e) => acc });
 }
 
-/// Returns "Turin" when the report shows family 1Ah (version 3 or later).
-/// Otherwise returns "", the TCB layout Milan and Genoa share.
-pub Str snp_product_of(Verified(SnpReport) v) {
-    return if (v.value.version >= (UInt(32)) 3 && (Int) v.value.cpuid_fam_id == 26) { "Turin" } else { "" };
+// The CAs the ARK signed, current at `t` (the ASK or ASVK): a certificate
+// only named for one costs no more than its check.
+List(Cert) snp_cas(List(Cert) cs, Cert ark, EvidenceTime t, Int i, List(Cert) acc) {
+    if (i >= cs.len()) { return acc; }
+    Bool hit = cert_is_ca(cs[i]) && eq_list(cs[i].issuer, ark.subject) && chain_verify_parsed(cs[i], ark, t.at);
+    return snp_cas(cs, ark, t, i + 1, if (hit) { acc.concat([cs[i]]) } else { acc });
 }
 
-Bool snp_hex_in(List(UInt(8)) b, List(Str) hs) {
-    Str h = hex_encode(chal_ints(b));
-    return snp_hex_at(h, hs, 0);
+// [CA, leaf, CA, leaf, ...]: each leaf a current certificate a CA of
+// `cas` signed, those whose claims fit the report (its TCB, chip and
+// product, snp_claims) first; at most 4 pairs. A flood of certificates
+// the ARK's CA did sign for other chips cannot push this chip's out.
+List(List(Int)) snp_pairs(List(Cert) certs, List(Cert) cas, SnpReport r, Anchor root, EvidenceTime t) {
+    List(List(Int)) all = snp_pairs_at(certs, cas, t, 0, []);
+    List(List(Int)) good = snp_fitting(all, r, root, 0, []);
+    List(List(Int)) rest = snp_unfitting(all, r, root, 0, []);
+    List(List(Int)) both = good.concat(rest);
+    return both[0..min(8, both.len())];
 }
 
-Bool snp_hex_at(Str h, List(Str) hs, Int i) { return i < hs.len() && (str_to_lower(hs[i]) == h || snp_hex_at(h, hs, i + 1)); }
+List(List(Int)) snp_pairs_at(List(Cert) certs, List(Cert) cas, EvidenceTime t, Int i, List(List(Int)) acc) {
+    if (i >= cas.len()) { return acc; }
+    return snp_pairs_at(certs, cas, t, i + 1, snp_leaves(certs, cas[i], t, 0, acc));
+}
+
+List(List(Int)) snp_leaves(List(Cert) certs, Cert ca, EvidenceTime t, Int i, List(List(Int)) acc) {
+    if (i >= certs.len()) { return acc; }
+    Bool hit = !cert_is_ca(certs[i]) && eq_list(certs[i].issuer, ca.subject) && snp_signs_leaf(certs[i], ca, t.at);
+    return snp_leaves(certs, ca, t, i + 1, if (hit) { acc.concat([ca.der, certs[i].der]) } else { acc });
+}
+
+Bool snp_pair_fits(List(Int) leaf, SnpReport r, Anchor root) {
+    return match (x509_parse(leaf)) { Ok(c) => match (snp_claims(r, c, root, root.kind == "AmdVcek")) { Ok(b) => true, Err(e) => false }, Err(e) => false };
+}
+
+List(List(Int)) snp_fitting(List(List(Int)) ps, SnpReport r, Anchor root, Int i, List(List(Int)) acc) {
+    if (i + 1 >= ps.len()) { return acc; }
+    return snp_fitting(ps, r, root, i + 2, if (snp_pair_fits(ps[i + 1], r, root)) { acc.concat([ps[i], ps[i + 1]]) } else { acc });
+}
+
+List(List(Int)) snp_unfitting(List(List(Int)) ps, SnpReport r, Anchor root, Int i, List(List(Int)) acc) {
+    if (i + 1 >= ps.len()) { return acc; }
+    return snp_unfitting(ps, r, root, i + 2, if (snp_pair_fits(ps[i + 1], r, root)) { acc } else { acc.concat([ps[i], ps[i + 1]]) });
+}
+
+// The current CRL `issuer` signed with the highest CRL number, or [].
+List(Int) snp_best_crl(List(List(Int)) crls, List(Int) issuer, EvidenceTime t, Int i, List(Int) best, Int bestno) {
+    if (i >= crls.len()) { return best; }
+    Bool ok = crl_usable(crls[i], issuer, t.at);
+    Int no = if (ok) { snp_crl_number(crls[i]) } else { 0 - 1 };
+    Bool better = ok && (best.len() == 0 || no > bestno);
+    return snp_best_crl(crls, issuer, t, i + 1, if (better) { crls[i] } else { best }, if (better) { no } else { bestno });
+}
+
+// The first pair under which the report checks; else the first pair's error.
+Result(SnpReport, VerifyError) snp_try_pairs(List(UInt(8)) report, Anchor root, List(List(Int)) pairs, List(Int) crl, EvidenceTime t, Int i) {
+    SnpCollateral col = SnpCollateral {.vcek_der = chal_bytes(pairs[i + 1]), .ask_der = chal_bytes(pairs[i]), .crl_der = chal_bytes(crl)};
+    Result(SnpReport, VerifyError) r = snp_check(report, root, col, t);
+    if (i + 2 >= pairs.len()) { return r; }
+    return match r { Ok(x) => Ok(x), Err(e) => snp_or_first(e, snp_try_pairs(report, root, pairs, crl, t, i + 2)) };
+}
+
+Result(SnpReport, VerifyError) snp_or_first(VerifyError first, Result(SnpReport, VerifyError) later) { return match later { Ok(x) => Ok(x), Err(e) => Err(first) }; }
+
+// What a checked report says, as PfChecked.
+PfChecked snp_checked(List(UInt(8)) report, SnpReport r, Str product) {
+    Bool ma = snp_policy_migrate_ma(r);
+    // What the host chose (the layout's @host fields): External to a decision.
+    List(ClaimValue) host = [
+        claim_bytes("host_data", chal_ints(r.host_data)), claim_bytes("id_key_digest", chal_ints(r.id_key_digest)),
+        claim_bytes("author_key_digest", chal_ints(r.author_key_digest)), claim_bytes("family_id", chal_ints(r.family_id)),
+        claim_bytes("image_id", chal_ints(r.image_id))
+    ].concat(snp_tcb_claims("reported_tcb", snp_tcb(product, (Int) r.reported_tcb)));
+    List(ClaimValue) vs = [
+        claim_bytes("report_id", chal_ints(r.report_id)), claim_bytes("report_id_ma", chal_ints(r.report_id_ma)),
+        claim_number("version", (Int) r.version), claim_number("guest_svn", (Int) r.guest_svn), claim_number("policy", (Int) r.policy),
+        claim_number("policy.migrate_ma", if (ma) { 1 } else { 0 }), claim_number("vmpl", (Int) r.vmpl), claim_number("signing_key", snp_signing_key(r)),
+        claim_number("platform_info", (Int) r.platform_info), claim_number("cpuid_fam_id", (Int) r.cpuid_fam_id),
+        claim_number("cpuid_mod_id", (Int) r.cpuid_mod_id), claim_number("cpuid_step", (Int) r.cpuid_step)
+    ];
+    List(ClaimValue) tcbs = snp_tcb_claims("committed_tcb", snp_tcb(product, (Int) r.committed_tcb)).concat(snp_tcb_claims("current_tcb", snp_tcb(product, (Int) r.current_tcb))).concat(snp_tcb_claims("launch_tcb", snp_tcb(product, (Int) r.launch_tcb)));
+    List(Str) none = [];
+    Claims c = Claims {.platform = AmdSnp, .format = "SnpReport", .launch_slot = "MEASUREMENT", .measurements = [measurement("MEASUREMENT", 7, chal_ints(r.measurement))], .debug = snp_policy_debug(r), .values = vs.concat(tcbs), .host_values = host, .tcb_statuses = none, .hardware_id = chal_ints(r.chip_id), .report_data = chal_ints(r.report_data), .corim = snp_corim_claims(r, product), .evidence = chal_ints(report)};
+    return PfChecked {.claims = c, .relayed = r.report_data, .exact = false, .want_len = 0 - 1, .bound = report, .descs = snp_descriptors(), .keyed_instance = false};
+}
+
+List(ClaimValue) snp_tcb_claims(Str p, TcbVersion t) {
+    return [claim_number(p + ".fmc", t.fmc), claim_number(p + ".bootloader", t.bootloader), claim_number(p + ".tee", t.tee), claim_number(p + ".snp", t.snp), claim_number(p + ".microcode", t.microcode)];
+}
+
+// The CoRIM environment class of SNP evidence: vendor "AMD", model "SEV-SNP".
+CorimEnv snp_corim_env() { return corim_env("AMD", "SEV-SNP"); }
+
+// The CoRIM claims of a report, with the chip ID as the instance:
+// measurement, key digests, IDs, guest SVN, VMPL, the debug policy flag
+// and the reported and committed TCB SVNs.
+List(CorimClaim) snp_corim_claims(SnpReport r, Str product) {
+    CorimEnv env = corim_env_instance(snp_corim_env(), "bytes", chal_ints(r.chip_id));
+    List(CorimMeas) ms = [
+        corim_digest_claim(cl_k("measurement"), 7, chal_ints(r.measurement)),
+        corim_raw_claim(cl_k("host_data"), chal_ints(r.host_data)),
+        corim_raw_claim(cl_k("id_key_digest"), chal_ints(r.id_key_digest)),
+        corim_raw_claim(cl_k("author_key_digest"), chal_ints(r.author_key_digest)),
+        corim_raw_claim(cl_k("family_id"), chal_ints(r.family_id)),
+        corim_raw_claim(cl_k("image_id"), chal_ints(r.image_id)),
+        corim_svn_claim(cl_k("guest_svn"), (Int) r.guest_svn),
+        corim_int_claim(cl_k("vmpl"), (Int) r.vmpl),
+        corim_flags_claim(cl_k("policy"), 8, if (snp_policy_debug(r)) { 8 } else { 0 })
+    ];
+    return corim_evidence(env, ms.concat(snp_corim_tcb("reported_tcb", snp_tcb(product, (Int) r.reported_tcb))).concat(snp_corim_tcb("committed_tcb", snp_tcb(product, (Int) r.committed_tcb))));
+}
+
+List(CorimMeas) snp_corim_tcb(Str p, TcbVersion t) {
+    return [corim_svn_claim(cl_k(p + ".fmc"), t.fmc), corim_svn_claim(cl_k(p + ".bootloader"), t.bootloader), corim_svn_claim(cl_k(p + ".tee"), t.tee), corim_svn_claim(cl_k(p + ".snp"), t.snp), corim_svn_claim(cl_k(p + ".microcode"), t.microcode)];
+}
+
+// Beyond the generic checks: a guest policy that allows a migration agent
+// only where the policy allows it, and VMPL 0 unless the policy requires
+// a VMPL itself.
+Result(Bool, VerifyError) snp_pv_mandatory(SnpPlat p, Claims c, Policy pol) {
+    if (claims_number(c, "policy.migrate_ma", 1) != 0 && !policy_allows(pol, "migration_agent")) { return Err(Refused("appraise_evidence", "the guest policy allows a migration agent")); }
+    Int vmpl = claims_number(c, "vmpl", 0 - 1);
+    if (!policy_names(pol.require, "vmpl") && vmpl != 0) { return Err(Refused("appraise_evidence", f"the report is for VMPL {vmpl}, and the policy requires none (VMPL 0 is the default)")); }
+    return Ok(true);
+}
+
+// A corroborated launch measurement counts as named.
+Result(PfEndorsed, VerifyError) snp_pv_endorsed(SnpPlat p, Claims c, CorimAcs a, Policy pol) {
+    Bool corr = corim_corroborated(a, snp_corim_env(), cl_k("measurement"));
+    Policy p2 = if (corr) { policy_with_measurement(pol, hex_encode(claims_bytes_m(c, "MEASUREMENT"))) } else { pol };
+    return Ok(PfEndorsed {.policy = p2, .satisfied = false});
+}
+
+List(Int) claims_bytes_m(Claims c, Str slot) { return match (claims_measurement(c, slot)) { Some(x) => x, None => [] }; }
+
+PlatformVerifier(SnpPlat) = { .pv_platform = snp_pv_platform, .pv_candidates = snp_pv_candidates, .pv_check = snp_pv_check, .pv_mandatory = snp_pv_mandatory, .pv_endorsed = snp_pv_endorsed };
+
+/// The SNP report a verified SEV-SNP claims record holds, re-read.
+/// For SNP-only features on verified evidence (verify/sealing.resid's
+/// platform key); Err when `c` is not SEV-SNP evidence.
+@verify_internal
+pub Result(SnpReport, VerifyError) snp_report_of(Claims c) {
+    if (c.format != "SnpReport" || c.evidence.len() != 1184) { return Err(Refused("snp_report_of", "the evidence is not an SEV-SNP report")); }
+    return snp_parse(chal_bytes(c.evidence));
+}

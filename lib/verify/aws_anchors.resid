@@ -5,6 +5,7 @@
 
 import "core.resid";
 import "nsm.resid";
+import "claims.resid";
 
 /// The AWS Nitro Enclaves root certificate (G1), as the anchor for NSM attestation documents.
 @anchor(kind = Nitro(G1), principal = InGuest, formats = [NsmDocument], source = "https://aws-nitro-enclaves.amazonaws.com/AWS_NitroEnclaves_Root-G1.zip", fingerprint = "sha384:0a2a94444eaed2a0a584ec419284e645777bc81864268d33104d1c9796e824fbdc49a7b4d94ddc0b5a98ccb9e0cde50d", retrieved = "2026-10-11", reviewed_by = "Larry Dewey", algorithms = [EcdsaP384Sha384], expires = "2049-10-28")
@@ -38,3 +39,7 @@ pub List(Int) aws_nitro_root_der() {
         35, 2, 243, 223, 246
     ];
 }
+
+/// The AWS Nitro root, for Nitro Enclaves documents, as a trust set.
+@trust(anchors = [aws_nitro_root])
+pub Trust aws_roots() { return trust_anchors(); }

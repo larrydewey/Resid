@@ -1,0 +1,20 @@
+import "verify/verifier.resid";
+import "evidence.resid";
+import "verify/seal.resid";
+import "verify/testing.resid";
+import "challenge.resid";
+import "crypto.resid";
+import "hash.resid";
+import "hpke.resid";
+
+@policy
+Policy pol() { return Policy {.measurements = ["00"], .require = [], .allow = []}; }
+
+// A trust set that is a parameter: the decision cannot know its anchors.
+@decides(accept = [test_snp_roots], appraised = pol, identity = none)
+Result(Int, VerifyError) f(List(UInt(8)) e, ChallengeRecord c, Trust tr) {
+    Verified(Claims) v = verify_evidence(e, c, bind_fresh(), tr, test_time(0))?;
+    Appraised(Claims) a = appraise_evidence(v, pol())?;
+    return Ok(1);
+}
+Int main() { return 0; }

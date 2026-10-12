@@ -1,4 +1,4 @@
-import "verify/core.resid";
+import "verify/verifier.resid";
 import "verify/snp.resid";
 import "verify/seal.resid";
 import "verify/testing.resid";
@@ -12,7 +12,7 @@ import "hpkeg.resid";
 import "random.resid";
 import "dev/device.resid";
 import "verify/corim.resid";
-import "verify/endorsed.resid";
+import "evidence.resid";
 import "verify/cca.resid";
 import "verify/spdm.resid";
 import "cose.resid";
@@ -61,8 +61,8 @@ List(UInt(8)) token(List(Int) challenge, Int lifecycle, Bool binder_ok, Str cpak
     return chal_bytes(cbe_bytes(rcose, cbe_uint(44241, cbe_bytes(pcose, cbe_uint(44234, cbe_map(2, cbe_tag(399, [])))))));
 }
 
-List(Int) u16(Int v) { return [(v >> 8) & 255, v & 255]; }
-List(Int) u32(Int v) { return [(v >> 24) & 255, (v >> 16) & 255, (v >> 8) & 255, v & 255]; }
+List(Int) be_u16(Int v) { return [(v >> 8) & 255, v & 255]; }
+List(Int) be_u32(Int v) { return [(v >> 24) & 255, (v >> 16) & 255, (v >> 8) & 255, v & 255]; }
 
 List(List(UInt(8))) pcrs() { return [chal_bytes(fill(1, 32)), chal_bytes(fill(2, 32)), chal_bytes(fill(3, 32))]; }
 
@@ -70,28 +70,41 @@ List(List(UInt(8))) pcrs() { return [chal_bytes(fill(1, 32)), chal_bytes(fill(2,
 // qualifying data, and the test AK's signature over it.
 List(Int) attest(List(Int) q) {
     List(Int) digest = sha256_bytes(fill(1, 32).concat(fill(2, 32)).concat(fill(3, 32)));
-    return u32(4283712327).concat(u16(32792)).concat(u16(34)).concat(fill(9, 34)).concat(u16(q.len())).concat(q)
-        .concat(u32(0)).concat(u32(1000)).concat(u32(3)).concat(u32(0)).concat([1]).concat(u32(1)).concat(u32(2))
-        .concat(u32(1)).concat(u16(11)).concat([3, 7, 0, 0]).concat(u16(32)).concat(digest);
+    return be_u32(4283712327).concat(be_u16(32792)).concat(be_u16(34)).concat(fill(9, 34)).concat(be_u16(q.len())).concat(q)
+        .concat(be_u32(0)).concat(be_u32(1000)).concat(be_u32(3)).concat(be_u32(0)).concat([1]).concat(be_u32(1)).concat(be_u32(2))
+        .concat(be_u32(1)).concat(be_u16(11)).concat([3, 7, 0, 0]).concat(be_u16(32)).concat(digest);
 }
 
 @requires(filesystem(readonly))
 List(UInt(8)) qsig(List(Int) a) {
     List(Int) rs = ecdsa_sign_raw(P256, Sha256, rdi("tpm-ak-d.bin"), a);
-    return chal_bytes(u16(24).concat(u16(11)).concat(u16(32)).concat(rs[0..32]).concat(u16(32)).concat(rs[32..64]));
+    return chal_bytes(be_u16(24).concat(be_u16(11)).concat(be_u16(32)).concat(rs[0..32]).concat(be_u16(32)).concat(rs[32..64]));
 }
 
 @policy
-TpmPolicy boot_policy() { return TpmPolicy {.pcrs_hex = ["0=" + hex_encode(fill(1, 32))]}; }
+Policy boot_policy() { return Policy {.measurements = ["PCR0=" + hex_encode(fill(1, 32))], .require = [], .allow = []}; }
+
+@policy
+Policy instance_a() { return Policy {.measurements = ["PCR0=" + hex_encode(fill(1, 32))], .require = ["instance=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], .allow = []}; }
+
+List(UInt(8)) tpm_env(List(Int) a, List(UInt(8)) s) {
+    List(CmwRec) none = [];
+    return evidence_envelope(evidence_tpm(a, chal_ints(s), [fill(1, 32), fill(2, 32), fill(3, 32)]), none);
+}
+
+List(UInt(8)) cca_env(List(UInt(8)) t) {
+    List(CmwRec) none = [];
+    return evidence_envelope(evidence_cca(chal_ints(t)), none);
+}
 
 // The AK is the endorser's word, not a key compiled in: the decision
 // names the endorser.
-@decides(accept = [test_endorser], appraised = boot_policy, identity = key_bound)
+@decides(accept = [test_endorsers], appraised = boot_policy, identity = key_bound)
 @requires(declassify)
-Result(HpkeMessage, VerifyError) release(List(UInt(8)) a, List(UInt(8)) s, ChallengeRecord issued, List(Int) guest_pk, List(UInt(8)) corim, List(Secret(UInt(8))) key, List(Secret(UInt(8))) sender) {
-    Verified(CorimRefs) keys = corim_verify(corim, test_endorser(), test_time(1791000000))?;
-    Verified(TpmQuoteEvidence) v = tpm_verify_quote_endorsed_key_bound(a, s, pcrs(), issued, keys, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", test_time(1791000000), 32, guest_pk)?;
-    Appraised(TpmQuoteEvidence) ap = tpm_appraise(v, boot_policy())?;
+Result(HpkeMessage, VerifyError) release(List(UInt(8)) evidence, ChallengeRecord issued, List(Int) guest_pk, List(UInt(8)) corim, List(Secret(UInt(8))) key, List(Secret(UInt(8))) sender) {
+    Verified(CorimRefs) keys = corim_verify(corim, test_endorsers(), test_time(1791000000))?;
+    Verified(Claims) v = verify_evidence(evidence, issued, bind_key(32, guest_pk), trust_with_keys(test_endorsers(), keys), test_time(1791000000))?;
+    Appraised(Claims) ap = appraise_evidence(v, boot_policy())?;
     return seal_to_evidence(ap, 32, guest_pk, key, sender);
 }
 
@@ -108,14 +121,18 @@ Str keys_of(CorimRefs r, Int i) {
 @requires(filesystem(readonly))
 Str cca(Str what, Verified(CorimRefs) keys, Str cpak, Int at) {
     ChallengeRecord c = challenge_issue(64);
-    return what + ": " + match (cca_verify_endorsed(token(chal_ints(challenge_value(c)), 12291, true, cpak), c, keys, test_time(at))) { Ok(v) => f"verified, {v.anchors.len()} anchor, endorser's: {v.anchors[0] == test_endorser().id}", Err(e) => verify_error_text(e) };
+    return what + ": " + match (verify_evidence(cca_env(token(chal_ints(challenge_value(c)), 12291, true, cpak)), c, bind_fresh(), trust_with_keys(test_endorsers(), keys), test_time(at))) { Ok(v) => f"verified, {v.anchors.len()} anchor, endorser's: {v.anchors[0] == test_endorser().id}, instance " + hex_encode(v.value.hardware_id), Err(e) => verify_error_text(e) };
 }
 
+// A quote by the test AK, which the CoRIM endorses for several instances.
 @requires(filesystem(readonly))
-Str tpm(Str what, Verified(CorimRefs) keys, Str inst) {
+Str tpm(Str what, Verified(CorimRefs) keys, Bool want_a) {
     ChallengeRecord c = challenge_issue(32);
     List(Int) a = attest(chal_ints(challenge_value(c)));
-    return what + ": " + match (tpm_verify_quote_endorsed(chal_bytes(a), qsig(a), pcrs(), c, keys, inst, test_time(1791000000))) { Ok(v) => match (tpm_appraise(v, boot_policy())) { Ok(x) => "appraised", Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) };
+    return what + ": " + match (verify_evidence(tpm_env(a, qsig(a)), c, bind_fresh(), trust_with_keys(test_endorsers(), keys), test_time(1791000000))) {
+        Ok(v) => "instance " + (if (v.value.hardware_id.len() == 0) { "(none)" } else { hex_encode(v.value.hardware_id) }) + "; " + match (if (want_a) { appraise_evidence(v, instance_a()) } else { appraise_evidence(v, boot_policy()) }) { Ok(x) => "appraised", Err(e) => verify_error_text(e) },
+        Err(e) => verify_error_text(e),
+    };
 }
 
 @requires(filesystem(readonly))
@@ -124,24 +141,22 @@ Str with_keys(Verified(CorimRefs) keys) {
     println(cca("CCA, endorsed CPAK", keys, "cca-cpak-d.bin", 1791000000));
     println(cca("CCA, key endorsed for another instance", keys, "cca-other-d.bin", 1791000000));
     println(cca("CCA, after the CoRIM's not-after", keys, "cca-cpak-d.bin", 2300000000));
-    println(tpm("TPM, endorsed AK", keys, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"));
-    println(tpm("TPM, conditioned on a measured element", keys, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"));
-    println(tpm("TPM, a COSE_Key authorized by the endorser", keys, "cccccccccccccccccccccccccccccccc"));
-    println(tpm("TPM, authorized by another key only", keys, "dddddddddddddddddddddddddddddddd"));
-    println(tpm("TPM, no instance named", keys, ""));
+    println(tpm("TPM, endorsed AK", keys, false));
+    println(tpm("TPM, the policy requires instance aaaa...", keys, true));
     return "";
 }
 
 @requires(filesystem(readonly), declassify)
 Int main() {
-    Str unused = match (corim_verify(rd("corim-keys.cbor"), test_endorser(), test_time(1791000000))) { Ok(keys) => with_keys(keys), Err(e) => verify_error_text(e) };
-    println("reference CoRIM: " + match (corim_verify(rd("corim-endorsed.cbor"), test_endorser(), test_time(1791000000))) { Ok(r) => match (cca_verify_endorsed(token(fill(1, 64), 12291, true, "cca-cpak-d.bin"), challenge_issue(64), r, test_time(1791000000))) { Ok(v) => "VERIFIED", Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) });
+    Str unused = match (corim_verify(rd("corim-keys.cbor"), test_endorsers(), test_time(1791000000))) { Ok(keys) => with_keys(keys), Err(e) => verify_error_text(e) };
+    ChallengeRecord cr = challenge_issue(64);
+    println("reference CoRIM: " + match (corim_verify(rd("corim-endorsed.cbor"), test_endorsers(), test_time(1791000000))) { Ok(r) => match (verify_evidence(cca_env(token(chal_ints(challenge_value(cr)), 12291, true, "cca-cpak-d.bin")), cr, bind_fresh(), trust_with_keys(test_endorsers(), r), test_time(1791000000))) { Ok(v) => "VERIFIED", Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) });
     HpkeKeyPairG(Secret(UInt(8))) kp = hpkeg_generate_keypair(32);
     ChallengeRecord c6 = challenge_issue(32);
     List(Int) bound = chal_ints(match (challenge_with_key(challenge_value(c6), 32, kp.sk)) { Ok(b) => b, Err(e) => [] });
     List(Int) a = attest(bound);
     List(Secret(UInt(8))) key = random_secret(32);
-    Str r = match (release(chal_bytes(a), qsig(a), c6, kp.pk, rd("corim-keys.cbor"), key, secret_bytes(chal_ints(rd("sender-sk.bin"))))) {
+    Str r = match (release(tpm_env(a, qsig(a)), c6, kp.pk, rd("corim-keys.cbor"), key, secret_bytes(chal_ints(rd("sender-sk.bin"))))) {
         Ok(m) => match (open_released(32, kp.sk, m, test_sender())) { Ok(v) => if (hex_encode(sec_pub(v.value, 0, ListBuf())) == hex_encode(sec_pub(key, 0, ListBuf()))) { "released and opened: same key" } else { "KEY DIFFERS" }, Err(e) => "open: " + verify_error_text(e) },
         Err(e) => "release: " + verify_error_text(e),
     };

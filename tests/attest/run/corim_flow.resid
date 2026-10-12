@@ -1,4 +1,4 @@
-import "verify/core.resid";
+import "verify/verifier.resid";
 import "verify/snp.resid";
 import "verify/seal.resid";
 import "verify/testing.resid";
@@ -12,7 +12,7 @@ import "hpkeg.resid";
 import "random.resid";
 import "dev/device.resid";
 import "verify/corim.resid";
-import "verify/endorsed.resid";
+import "evidence.resid";
 import "verify/cca.resid";
 import "verify/spdm.resid";
 import "cose.resid";
@@ -24,7 +24,15 @@ Str fx() { return "fixtures/"; }
 List(UInt(8)) rd(Str p) { return chal_bytes(filesystem.read_bytes(fx() + p)); }
 
 @requires(filesystem(readonly))
-SnpCollateral col() { return SnpCollateral {.vcek_der = rd("test-vcek.der"), .ask_der = rd("test-ask.der"), .crl_der = rd("test-crl.der")}; }
+List(CmwRec) col() { return [collateral_item(mt_cert(), chal_ints(rd("test-vcek.der"))), collateral_item(mt_cert(), chal_ints(rd("test-ask.der"))), collateral_item(mt_crl(), chal_ints(rd("test-crl.der")))]; }
+
+@requires(filesystem(readonly))
+List(UInt(8)) snp_env(List(UInt(8)) report) { return evidence_envelope(evidence_snp(chal_ints(report)), col()); }
+
+List(UInt(8)) cca_env(List(UInt(8)) t) {
+    List(CmwRec) none = [];
+    return evidence_envelope(evidence_cca(chal_ints(t)), none);
+}
 
 // A report carrying `value` in REPORT_DATA, signed with the test VCEK.
 @requires(filesystem(readonly))
@@ -104,30 +112,34 @@ List(Int) response(List(Int) req, Int m1) {
 
 
 // A 1.1 transcript without its negotiation (the P-384 profile), with the
-// device certificate's OCSP response.
+// device certificate's OCSP response, as evidence.
 @requires(filesystem(readonly))
-SpdmRecord spdm_rec(List(Int) req, List(Int) resp) { return SpdmRecord {.vca = [], .certs = [rd("spdm-leaf.der"), rd("spdm-root.der")], .ocsp = [rd("spdm-ocsp-leaf.der")], .before = [], .request = chal_bytes(req), .response = chal_bytes(resp)}; }
-
-@policy
-SnpPolicy endorsed_snp() {
-    return SnpPolicy {.min_tcb = TcbVersion {.fmc = 0, .bootloader = 3, .tee = 0, .snp = 8, .microcode = 115},
-                      .measurements_hex = [], .vmpl = 0, .allow_migration_agent = false, .id_key_digests_hex = [], .host_data_hex = []};
+List(UInt(8)) spdm_env(List(Int) req, List(Int) resp) {
+    List(CmwRec) none = [];
+    List(List(Int)) nn = [];
+    return evidence_envelope(evidence_spdm_measurements(nn, [rdi("spdm-leaf.der"), rdi("spdm-root.der")], [rdi("spdm-ocsp-leaf.der")], nn, req, resp), none);
 }
 
 @policy
-CcaPolicy endorsed_realm() { return CcaPolicy {.rim_hex = [], .rems_hex = [], .implementation_ids_hex = []}; }
+Policy endorsed_snp() { return Policy {.measurements = [], .require = ["committed_tcb.bootloader>=3", "committed_tcb.snp>=8", "committed_tcb.microcode>=115"], .allow = []}; }
 
 @policy
-SpdmPolicy endorsed_gpu() { return SpdmPolicy {.measurements_hex = []}; }
+Policy endorsed_any() { return Policy {.measurements = [], .require = [], .allow = []}; }
+
+@policy
+Policy instance_47() { return Policy {.measurements = [], .require = ["instance=0147474747474747474747474747474747"], .allow = []}; }
+
+@policy
+Policy instance_49() { return Policy {.measurements = [], .require = ["instance=0149494949494949494949494949494949"], .allow = []}; }
 
 // The guest's image is the endorser's word, not a hash compiled in: the
-// decision names both anchors.
-@decides(accept = [test_ark, test_endorser], require = [test_endorser], appraised = endorsed_snp, identity = key_bound)
+// decision names both, and requires the endorser.
+@decides(accept = [test_snp_roots, test_endorsers], require = [test_endorser], appraised = endorsed_snp, identity = key_bound)
 @requires(declassify)
-Result(HpkeMessage, VerifyError) release(List(UInt(8)) report, ChallengeRecord issued, SnpCollateral cl, List(Int) guest_pk, List(UInt(8)) corim, List(Secret(UInt(8))) key, List(Secret(UInt(8))) sender) {
-    Verified(CorimRefs) refs = corim_verify(corim, test_endorser(), test_time(1791000000))?;
-    Verified(SnpReport) v = snp_verify_key_bound(report, issued, test_ark(), cl, test_time(1791000000), 32, guest_pk)?;
-    Appraised(SnpReport) a = snp_appraise_endorsed(v, endorsed_snp(), refs)?;
+Result(HpkeMessage, VerifyError) release(List(UInt(8)) evidence, ChallengeRecord issued, List(Int) guest_pk, List(UInt(8)) corim, List(Secret(UInt(8))) key, List(Secret(UInt(8))) sender) {
+    Verified(CorimRefs) refs = corim_verify(corim, test_endorsers(), test_time(1791000000))?;
+    Verified(Claims) v = verify_evidence(evidence, issued, bind_key(32, guest_pk), test_snp_roots(), test_time(1791000000))?;
+    Appraised(Claims) a = appraise_evidence_endorsed(v, endorsed_snp(), refs)?;
     return seal_to_evidence(a, 32, guest_pk, key, sender);
 }
 
@@ -143,9 +155,9 @@ Str counts(CorimRefs v) {
 CorimEnv gpu_env() { return corim_env("NVIDIA", "Test GPU"); }
 
 // What the CoRIM says of an SNP report beyond the measurement.
-Str snp_acs(Verified(SnpReport) v, Verified(CorimRefs) refs) {
-    CorimAcs a = snp_corim(v, refs);
-    CorimEnv e = snp_corim_env();
+Str snp_acs(Verified(Claims) v, Verified(CorimRefs) refs) {
+    CorimAcs a = evidence_corim(v, refs);
+    CorimEnv e = corim_env("AMD", "SEV-SNP");
     Bool secure = corim_holds(a, e, corim_flags_claim(MkText("platform"), 2, 2));
     Bool cert = corim_holds(a, e, corim_claim(MkText("certification"), named("Resid test certification")));
     return "corroborated:" + corr(a, e, ["measurement", "host_data", "reported_tcb.snp", "vmpl", "policy", "guest_svn"], 0, "") + f"; endorsed: is-secure {secure}, certification {cert}; {corim_endorsements(a).len()} endorsements";
@@ -166,7 +178,7 @@ CorimMval named(Str n) {
 // with the endorsed MRTD and an all-zero MRSEAM, then another MRSEAM.
 Str tdx_series(Verified(CorimRefs) refs) {
     List(Int) mrtd = sha384_bytes(bytes_of("resid test td"));
-    CorimEnv e = tdx_corim_env();
+    CorimEnv e = corim_env("Intel", "TDX");
     CorimAcs a = corim_appraise(corim_evidence(e, [corim_digest_claim(MkText("mrtd"), 7, mrtd), corim_digest_claim(MkText("mrseam"), 7, fill(0, 48))]), refs.value);
     CorimAcs b = corim_appraise(corim_evidence(e, [corim_digest_claim(MkText("mrtd"), 7, mrtd), corim_digest_claim(MkText("mrseam"), 7, fill(1, 48))]), refs.value);
     Bool a15 = corim_holds(a, e, corim_version_claim(MkText("tdx_module"), "1.5"));
@@ -176,14 +188,25 @@ Str tdx_series(Verified(CorimRefs) refs) {
     return f"module 1.5 {a15}, 9.9 {a99}; another MRSEAM: 1.5 {b15}, MRTD corroborated {mt}";
 }
 
+// SPDM evidence verified under a device key the CoRIM's identity triples
+// endorse, appraised under `which` (0: any, 1: instance 47, 2: 49).
 @requires(filesystem(readonly))
-Str spdm_identity(Verified(CorimRefs) refs, Str inst) {
+Str spdm_identity(Verified(CorimRefs) refs, Int which) {
     ChallengeRecord c = challenge_issue(32);
     List(Int) r = request(chal_ints(challenge_value(c)));
-    return match (spdm_verify_endorsed(spdm_rec(r, response(r, 5)), c, refs, inst, test_time(1791000000))) {
-        Ok(v) => f"verified, endorser's: {v.anchors[0] == test_endorser().id}; " + match (spdm_appraise_endorsed(v, endorsed_gpu(), refs, gpu_env())) { Ok(a) => "appraised", Err(e) => verify_error_text(e) },
+    return match (verify_evidence(spdm_env(r, response(r, 5)), c, bind_fresh(), trust_with_keys(test_endorsers(), refs), test_time(1791000000))) {
+        Ok(v) => f"verified, endorser's: {v.anchors[0] == test_endorser().id}, instance " + hex_encode(v.value.hardware_id) + "; " + match (if (which == 1) { appraise_evidence_endorsed(v, instance_47(), refs) } else if (which == 2) { appraise_evidence_endorsed(v, instance_49(), refs) } else { appraise_evidence_endorsed(v, endorsed_any(), refs) }) { Ok(a) => "appraised", Err(e) => verify_error_text(e) },
         Err(e) => verify_error_text(e),
     };
+}
+
+// SPDM evidence under a pinned root whose device class is `other`'s.
+@requires(filesystem(readonly))
+Str spdm_pinned(Verified(CorimRefs) refs, Int m1, Bool other) {
+    ChallengeRecord c = challenge_issue(32);
+    List(Int) r = request(chal_ints(challenge_value(c)));
+    Result(Verified(Claims), VerifyError) v = if (other) { verify_evidence(spdm_env(r, response(r, m1)), c, bind_fresh(), test_other_gpu_roots(), test_time(1791000000)) } else { verify_evidence(spdm_env(r, response(r, m1)), c, bind_fresh(), test_device_roots(), test_time(1791000000)) };
+    return match (v) { Ok(x) => match (appraise_evidence_endorsed(x, endorsed_any(), refs)) { Ok(a) => "appraised", Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) };
 }
 
 @requires(declassify)
@@ -192,28 +215,22 @@ List(Int) sec_pub(List(Secret(UInt(8))) k, Int i, ListBuf(Int) acc) { return if 
 @requires(filesystem(readonly))
 Str with_refs(Verified(CorimRefs) refs) {
     ChallengeRecord c1 = challenge_issue(64);
-    println("SNP endorsed: " + match (snp_verify(report_for(challenge_value(c1)), c1, test_ark(), col(), test_time(1791000000))) { Ok(v) => match (snp_appraise_endorsed(v, endorsed_snp(), refs)) { Ok(a) => f"appraised, {a.v.anchors.len()} anchors; " + snp_acs(v, refs), Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) });
+    println("SNP endorsed: " + match (verify_evidence(snp_env(report_for(challenge_value(c1))), c1, bind_fresh(), test_snp_roots(), test_time(1791000000))) { Ok(v) => match (appraise_evidence_endorsed(v, endorsed_snp(), refs)) { Ok(a) => f"appraised, {a.v.anchors.len()} anchors; " + snp_acs(v, refs), Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) });
     ChallengeRecord c2 = challenge_issue(64);
     ChallengeRecord c1b = challenge_issue(64);
     // A reference triple applies whole: one measurement off, none of its
     // claims is corroborated (the endorsements still apply).
-    println("SNP other host data: " + match (snp_verify(report_from(patched(192, [(UInt(8)) 1]), challenge_value(c1b)), c1b, test_ark(), col(), test_time(1791000000))) { Ok(v) => snp_acs(v, refs), Err(e) => verify_error_text(e) });
+    println("SNP other host data: " + match (verify_evidence(snp_env(report_from(patched(192, [(UInt(8)) 1]), challenge_value(c1b))), c1b, bind_fresh(), test_snp_roots(), test_time(1791000000))) { Ok(v) => snp_acs(v, refs), Err(e) => verify_error_text(e) });
     println("TDX series: " + tdx_series(refs));
-    println("SNP other image: " + match (snp_verify(report_from(patched(144, [(UInt(8)) 1]), challenge_value(c2)), c2, test_ark(), col(), test_time(1791000000))) { Ok(v) => match (snp_appraise_endorsed(v, endorsed_snp(), refs)) { Ok(a) => "APPRAISED", Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) });
+    println("SNP other image: " + match (verify_evidence(snp_env(report_from(patched(144, [(UInt(8)) 1]), challenge_value(c2))), c2, bind_fresh(), test_snp_roots(), test_time(1791000000))) { Ok(v) => match (appraise_evidence_endorsed(v, endorsed_snp(), refs)) { Ok(a) => "APPRAISED", Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) });
     ChallengeRecord c3 = challenge_issue(64);
-    println("CCA endorsed: " + match (cca_verify(token(chal_ints(challenge_value(c3)), 12291, true), c3, test_cpak(), test_time(1791000000))) { Ok(v) => match (cca_appraise_endorsed(v, endorsed_realm(), refs)) { Ok(a) => "appraised", Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) });
-    ChallengeRecord c4 = challenge_issue(32);
-    List(Int) r4 = request(chal_ints(challenge_value(c4)));
-    println("SPDM endorsed: " + match (spdm_verify(spdm_rec(r4, response(r4, 5)), c4, test_device_root(), test_time(1791000000))) { Ok(v) => match (spdm_appraise_endorsed(v, endorsed_gpu(), refs, gpu_env())) { Ok(a) => "appraised", Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) });
-    ChallengeRecord c4b = challenge_issue(32);
-    List(Int) r4b = request(chal_ints(challenge_value(c4b)));
-    println("SPDM, another device class: " + match (spdm_verify(spdm_rec(r4b, response(r4b, 5)), c4b, test_device_root(), test_time(1791000000))) { Ok(v) => match (spdm_appraise_endorsed(v, endorsed_gpu(), refs, corim_env("NVIDIA", "Other GPU"))) { Ok(a) => "APPRAISED", Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) });
-    println("SPDM under an identity triple: " + spdm_identity(refs, "0147474747474747474747474747474747"));
-    println("SPDM, identity by thumbprint: " + spdm_identity(refs, "0148484848484848484848484848484848"));
-    println("SPDM, an instance the CoRIM does not name: " + spdm_identity(refs, "0149494949494949494949494949494949"));
-    ChallengeRecord c5 = challenge_issue(32);
-    List(Int) r5 = request(chal_ints(challenge_value(c5)));
-    println("SPDM unendorsed block: " + match (spdm_verify(spdm_rec(r5, response(r5, 6)), c5, test_device_root(), test_time(1791000000))) { Ok(v) => match (spdm_appraise_endorsed(v, endorsed_gpu(), refs, gpu_env())) { Ok(a) => "APPRAISED", Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) });
+    println("CCA endorsed: " + match (verify_evidence(cca_env(token(chal_ints(challenge_value(c3)), 12291, true)), c3, bind_fresh(), test_cca_keys(), test_time(1791000000))) { Ok(v) => match (appraise_evidence_endorsed(v, endorsed_any(), refs)) { Ok(a) => "appraised", Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) });
+    println("SPDM endorsed: " + spdm_pinned(refs, 5, false));
+    println("SPDM, another device class: " + spdm_pinned(refs, 5, true));
+    println("SPDM under an identity triple: " + spdm_identity(refs, 0));
+    println("SPDM, the policy requires that instance: " + spdm_identity(refs, 1));
+    println("SPDM, the policy requires another instance: " + spdm_identity(refs, 2));
+    println("SPDM unendorsed block: " + spdm_pinned(refs, 6, false));
     return "";
 }
 
@@ -226,12 +243,13 @@ Int main() {
     println("veraison, tampered: " + match (test_corim_check(vb[0..200].concat([vb[200] ^ (UInt(8)) 1]).concat(vb[201..vb.len()]), test_acme_endorser(), test_time(1720000000))) { Ok(v) => "ACCEPTED", Err(e) => verify_error_text(e) });
     println(corim_at("test CoRIM", "corim-endorsed.cbor", test_endorser(), 1791000000));
     println(corim_at("test CoRIM, expired", "corim-expired.cbor", test_endorser(), 1791000000));
-    Str done = match (corim_verify(rd("corim-endorsed.cbor"), test_endorser(), test_time(1791000000))) { Ok(refs) => with_refs(refs), Err(e) => verify_error_text(e) };
+    Str done = match (corim_verify(rd("corim-endorsed.cbor"), test_endorsers(), test_time(1791000000))) { Ok(refs) => with_refs(refs), Err(e) => verify_error_text(e) };
+    println("test CoRIM under the other endorser only: " + match (corim_verify(rd("corim-endorsed.cbor"), test_acme_endorsers(), test_time(1791000000))) { Ok(r) => "ACCEPTED", Err(e) => verify_error_text(e) });
     HpkeKeyPairG(Secret(UInt(8))) kp = hpkeg_generate_keypair(32);
     ChallengeRecord c6 = challenge_issue(64);
     List(UInt(8)) bound = match (challenge_with_key(challenge_value(c6), 32, kp.sk)) { Ok(b) => b, Err(e) => [] };
     List(Secret(UInt(8))) key = random_secret(32);
-    Str r = match (release(report_for(bound), c6, col(), kp.pk, rd("corim-endorsed.cbor"), key, secret_bytes(chal_ints(rd("sender-sk.bin"))))) {
+    Str r = match (release(snp_env(report_for(bound)), c6, kp.pk, rd("corim-endorsed.cbor"), key, secret_bytes(chal_ints(rd("sender-sk.bin"))))) {
         Ok(m) => match (open_released(32, kp.sk, m, test_sender())) { Ok(v) => if (hex_encode(sec_pub(v.value, 0, ListBuf())) == hex_encode(sec_pub(key, 0, ListBuf()))) { "released and opened: same key" } else { "KEY DIFFERS" }, Err(e) => "open: " + verify_error_text(e) },
         Err(e) => "release: " + verify_error_text(e),
     };

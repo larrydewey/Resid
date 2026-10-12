@@ -685,11 +685,16 @@ Int lb_struct_named(Kg g, Int unit, Str n, Int i) {
     return lb_struct_named(g, unit, n, i + 1);
 }
 
+// Two declarations for one field keep the more external origin: a later
+// @layout_origins can only make a field External, never launder one.
 Map(Int, Str) lb_field_origins(Kg g, Int st, Int i, List(Str) ents, Map(Int, Str) acc) {
     if (i >= g.ns[st].nk) { return acc; }
     Int f = kg_kid(g, st, i);
-    Str o = lb_origin_of(ents, g.ns[f].text, 0);
-    return lb_field_origins(g, st, i + 1, ents, acc.insert(f, if (o == "") { "relayed" } else { o }));
+    Str o0 = lb_origin_of(ents, g.ns[f].text, 0);
+    Str o = if (o0 == "") { "relayed" } else { o0 };
+    Str old = acc.get(f) else { "" };
+    Bool keep = old == "relayed" || old == "host";
+    return lb_field_origins(g, st, i + 1, ents, if (keep) { acc } else { acc.insert(f, o) });
 }
 
 Str lb_origin_of(List(Str) ents, Str f, Int i) {

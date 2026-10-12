@@ -65,7 +65,12 @@ aGk=
 | `regex.resid` | regular expressions in linear time (RE2 syntax and semantics, no backtracking): `regex_compile`, `regex_find`, `regex_captures`, `regex_find_all`, `regex_count`, `regex_replace_all`, `regex_split`, named groups (see below) |
 | `testing.resid` | test cases registered as data (`test_case`, `property_case`, `run_tests`) |
 | `dev/` | device modules for the `device` provider: `sev_guest`, `sev_guest_key`, `sev_guest_ext`, `tdx_guest`, `nsm`, `tsm_report`, `tpm`/`tpm_wire`, `pci_tsm` (see [Device access](/Resid/reference/devices/)) |
-| `verify/` | attestation verifiers for SNP, TDX, Nitro, CCA, TPM, SPDM and CoRIM, with the vendors' anchors (see [Attestation](/Resid/reference/attestation/)) |
+| `serial.resid`, `serial_value.resid`, `serial_seq.resid` | the serialization framework: `Encoder`/`Decoder` (what a format reads and writes), `Encode`/`Decode` (how a type maps onto them), `SerialError`, and `Value`, a format-neutral tree (see [Serialization](/Resid/tools/serialization/)) |
+| `cbor.resid`, `cbor_head.resid`, `cbor_floats.resid` | CBOR (RFC 8949) as a format: `to_cbor`, `from_cbor`, deterministic encoding, and `cbor_well_formed` to bound untrusted input first |
+| `cmw.resid` | RATS Conceptual Message Wrappers (CBOR): `cmw_encode`, `cmw_decode`, records and collections, strict and bounded |
+| `evidence.resid` | the attestation evidence envelope every platform's evidence travels in, and its collateral (`evidence_add_collateral`) |
+| `attester.resid` | `attest(challenge)`: this machine's attestation evidence, whatever its platform (TSM report, Nitro, TPM) |
+| `verify/` | the attestation verifier: `verify_evidence` and `appraise_evidence` for SNP, TDX, Nitro, CCA, TPM and SPDM evidence, trust sets with the vendors' roots, CoRIM (see [Attestation](/Resid/reference/attestation/)) |
 
 ## Cryptography
 

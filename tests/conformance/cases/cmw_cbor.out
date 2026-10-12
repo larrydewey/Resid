@@ -1,0 +1,17 @@
+826d6170706c69636174696f6e2f7843010203
+ok record application/x (3 bytes)
+a361618263612f624108627a7a8263612f624109685f5f636d77635f74657461673a74
+ok collection tag:t of 2: a zz
+refused: no CMW: empty input
+refused: not one well-formed CBOR item of definite lengths, nested at most 12 deep
+refused: not one well-formed CBOR item of definite lengths, nested at most 12 deep
+refused: not one well-formed CBOR item of definite lengths, nested at most 12 deep
+refused: a CMW record's indicator is not an unsigned 32-bit value
+refused: a CMW record's type is not text (a content-format number is not read here)
+refused: a CMW collection label is not text (an integer label is not read here)
+refused: the CMW collection label `a` appears twice
+refused: a CMW collection has no members
+refused: not one well-formed CBOR item of definite lengths, nested at most 12 deep
+well formed: true true false false
+record application/vnd.resid.amd-sev-snp-report (2 bytes), 2 collateral: application/pkix-crl application/pkix-cert
+refused: the evidence is not an envelope (a CMW collection)

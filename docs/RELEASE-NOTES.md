@@ -5,6 +5,36 @@ reference is generated from that documentation.
 
 ## Highlights
 
+- **One attestation API for every platform.** A program no longer names
+  the platform it attests on or verifies. The attester calls
+  `attest(challenge)` (`lib/attester.resid`), which finds the kernel's
+  TSM report (SEV-SNP, TDX, CCA), the Nitro Secure Module or the TPM and
+  returns an evidence envelope: a RATS CMW (`lib/cmw.resid`,
+  `lib/evidence.resid`) carrying the evidence and any collateral. The
+  verifier calls `verify_evidence(evidence, challenge, binding, trust,
+  time)` and `appraise_evidence(verified, policy)`
+  (`lib/verify/verifier.resid`), which read the platform from the
+  envelope and match it once to the platform's instance of the
+  `PlatformVerifier` behavior. What every verification shares is written
+  once (`lib/verify/claims.resid`): normalized `Claims` (slot-named
+  measurements, named claims, the host's choices kept apart), one
+  `Policy` (measurements, required claims, allowances), trust sets made
+  by `@trust` functions (`vendor_roots()`: AMD, Intel, AWS and NVIDIA),
+  and bindings (`bind_fresh`, `bind_key`, `bind_channel`, `bind_device`).
+  The compiler reads trust sets and bindings for `@decides`: `accept` may
+  name a trust set, `require` holds only for a gate that surely rests on
+  the anchor, and an unseen trust set or binding is refused. The
+  per-platform entry points (`snp_verify_key_bound`, `tdx_appraise`, ...;
+  about fifty) are gone from the public API; the platform modules are
+  internal. Features only one platform has stay with it: the SEV-SNP
+  sealing key, TPM AK activation and NV counters, SPDM sessions.
+- **Serialization in the standard library.** The resid-serial framework
+  (`lib/serial.resid`, `serial_value.resid`, `serial_seq.resid`) and
+  resid-cbor (`lib/cbor.resid` and its helpers) are vendored, with
+  `cbor_well_formed` to bound untrusted input before decoding. New pages:
+  Serialization and Formats (JSON, MessagePack, BSON, TOML and YAML as
+  packages).
+
 - **Doc comments on the whole standard library.** Every declaration a
   program can import from `lib/`, `lib/dev/` and `lib/verify/` (2,737: each
   `pub` function, and every `type` and `behavior`, which are visible
@@ -21,6 +51,35 @@ reference is generated from that documentation.
   family. The pages are searched and exported like the hand-written ones.
 
 ## Fixes
+
+- **Compile time**: a program reaching the attestation verifiers took
+  minutes to compile, and the compiler's own build almost five. The
+  resolver copied all its state at every node (its loops carried a
+  growing list), instantiation re-checked the whole program each round,
+  and several lookups scanned every node. Each declaration now resolves
+  on its own, a round after the first checks only the copies the previous
+  round made (instantiation still ends on a full round), and the lookups
+  are indexed; the link generates code in 8 partitions. An attestation
+  case compiles in under 3s (was over 7 min), the self-compile in 34s.
+- **Name hygiene**: a program function named like a builtin (`u64`,
+  `str_len`, ...) also captured the standard library's calls of that
+  builtin. The program's files now spell such a function privately, so
+  library code keeps the builtin (`imp_hygiene`).
+- **`@trust` naming the wrong kind of function** was reported as a type
+  mismatch; it is E0282 again, checked before type checking.
+- **`?` on a match over a declared sum** whose arms are `Ok` and `Err`
+  failed in code generation ("cannot unwrap Result(_, E)") although it
+  type-checked: the match took the last arm's type. Its arms' types are
+  now unified (`lw_arms_g` in `compiler/lower.resid`).
+- **Field origins could be laundered**: a second `@layout_origins`
+  declaration for a type replaced the first, so a program could re-declare
+  a host-chosen field of signed evidence as measured. Origins now only
+  ever get stricter (`lb_field_origins`).
+- **A VLEK's certificate was not told from a VCEK's**: under a VLEK root a
+  leaf must now name its cloud service provider (CSP_ID).
+- **The configfs TSM report could not carry an issued challenge record**:
+  its engine now fills the 64-byte slot from a `Challenge` and binds the
+  record to the outblob, as the ioctl engines do.
 
 Writing the documentation meant reading every function, which turned up
 these:

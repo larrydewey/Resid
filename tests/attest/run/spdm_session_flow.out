@@ -8,8 +8,8 @@ again: not fresh: challenge already accepted, or exported
 SPDM 1.1: verified, SPDM 0x11, session 0xfffe0001
 tampered: bad signature: the device did not sign this key exchange
 other negotiation: bad signature: the device did not sign this key exchange
-chain under another root: bad certificate chain: the chain's root hash is not the anchor's certificate
+chain under another root: refused (verify_session): no device identity root in the trust set is this chain's
 mutual authentication asked: verified, SPDM 0x13, session 0xfffe0001
 other challenge: not fresh: the evidence does not carry this challenge
-SNP bound to a replayable session: not fresh: snp_verify_device_bound: the device session is not fresh
+SNP bound to a replayable session: not fresh: bind_device: the device session is not fresh
 decision: admitted, 2 anchors

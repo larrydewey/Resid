@@ -1,4 +1,5 @@
-import "verify/core.resid";
+import "verify/verifier.resid";
+import "evidence.resid";
 import "verify/snp.resid";
 import "verify/seal.resid";
 import "verify/testing.resid";
@@ -9,15 +10,13 @@ import "hash.resid";
 import "hpke.resid";
 
 @policy
-SnpPolicy pol() {
-    return SnpPolicy {.min_tcb = TcbVersion {.fmc = 0, .bootloader = 0, .tee = 0, .snp = 0, .microcode = 0}, .measurements_hex = ["00"], .vmpl = 0, .allow_migration_agent = false, .id_key_digests_hex = [], .host_data_hex = []};
-}
+Policy pol() { return Policy {.measurements = ["00"], .require = [], .allow = []}; }
 @policy
-SnpPolicy pol2() { return pol(); }
-@decides(accept = [test_ark], appraised = pol, identity = none)
-Result(Int, VerifyError) f(List(UInt(8)) r, ChallengeRecord c, SnpCollateral col) {
-    Verified(SnpReport) v = snp_verify(r, c, test_ark(), col, test_time(0))?;
-    Appraised(SnpReport) a = snp_appraise(v, pol())?;
+Policy pol2() { return pol(); }
+@decides(accept = [test_snp_roots], appraised = pol, identity = none)
+Result(Int, VerifyError) f(List(UInt(8)) r, ChallengeRecord c) {
+    Verified(Claims) v = verify_evidence(r, c, bind_fresh(), test_snp_roots(), test_time(0))?;
+    Appraised(Claims) a = appraise_evidence(v, pol())?;
     return Ok(1);
 }
 Int main() {

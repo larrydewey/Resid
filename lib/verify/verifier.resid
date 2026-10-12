@@ -1,0 +1,178 @@
+// verify/verifier.resid — verifying and appraising attestation evidence
+// from any platform (RFC 9334's Verifier; PLAN-attestation.md). One call
+// verifies whatever the attester sent -- an AMD SEV-SNP report, an Intel
+// TDX quote, an Arm CCA token, an AWS Nitro Enclaves document, a TPM 2.0
+// quote or an SPDM device's measurements -- and one call appraises it:
+//
+//     Trust tr = vendor_roots();
+//     Verified(Claims) v = verify_evidence(evidence, issued, bind_key(32, pk), tr, kernel_time())?;
+//     Appraised(Claims) a = appraise_evidence(v, my_policy())?;
+//
+// `evidence` is the envelope lib/attester.resid's attest() makes (a RATS
+// CMW, lib/evidence.resid); the platform is read from it and matched
+// once, here, to its instance of PlatformVerifier (verify/claims.resid).
+// The caller names what it trusts (a Trust: vendor_roots(), or its own
+// @trust set), how the evidence carries the challenge (a Binding:
+// bind_fresh, bind_key, bind_channel, bind_device) and the appraisal
+// policy (a Policy, written once for every platform); the platform's own
+// checks -- its chain, its signature, its mandatory appraisal rules -- are
+// the verifier's business. The compiler reads the Trust and the Binding to
+// know which anchors a result rests on and which qualifiers it has, so a
+// @decides gate is checked the same way for every platform.
+//
+// Platform-only features with no generic form stay with their platform:
+// the SEV-SNP derived key (verify/sealing.resid), TPM AK activation and NV
+// counters (verify/tpm.resid), SPDM sessions (verify/spdm_session.resid).
+
+import "core.resid";
+import "claims.resid";
+import "corim.resid";
+import "snp.resid";
+import "tdx.resid";
+import "nsm.resid";
+import "cca.resid";
+import "tpm.resid";
+import "spdm.resid";
+import "spdm_session.resid";
+import "amd_anchors.resid";
+import "intel_anchors.resid";
+import "aws_anchors.resid";
+import "nvidia_anchors.resid";
+import "tpm_anchors.resid";
+import "../cmw.resid";
+import "../evidence.resid";
+import "../challenge.resid";
+import "../challenge_export.resid";
+
+// ─── Trust ──────────────────────────────────────────────────────────
+
+/// Every vendor root this release carries: AMD's SEV-SNP roots (VCEK and
+/// VLEK, every product), Intel's SGX root (TDX), the AWS Nitro root and
+/// NVIDIA's device identity CA.
+/// Arm CCA and TPM evidence need keys of the deployment's own (a pinned
+/// anchor, or a CoRIM's endorsement through trust_with_keys); a TPM AK can
+/// also be proved against the manufacturers' EK roots (tpm_ek_roots,
+/// tpm_verify_ak, trust_with_ak). A decision that accepts this set names
+/// `vendor_roots` in its `accept`; one that wants fewer platforms names a
+/// narrower @trust set of its own.
+@trust(include = [amd_roots, intel_roots, aws_roots, nvidia_roots])
+pub Trust vendor_roots() { return trust_anchors(); }
+
+// ─── Verifying ──────────────────────────────────────────────────────
+
+// The platform the envelope's evidence is for.
+Result(Platform, VerifyError) vr_platform(Cmw ev) {
+    return match ev {
+        CmwRecord(r) => vr_record_platform(r.media_type),
+        CmwCollection(k) => vr_collection_platform(k.ctype),
+    };
+}
+
+Result(Platform, VerifyError) vr_record_platform(Str mt) {
+    if (mt == mt_snp_report()) { return Ok(AmdSnp); }
+    if (mt == mt_tdx_quote()) { return Ok(IntelTdxTd); }
+    if (mt == mt_cca_token()) { return Ok(ArmCcaRealm); }
+    if (mt == mt_nitro_document()) { return Ok(AwsNitro); }
+    return Err(Refused("verify_evidence", "evidence of media type " + mt + " is not one this verifier reads"));
+}
+
+Result(Platform, VerifyError) vr_collection_platform(Str ct) {
+    if (ct == ct_tpm_quote()) { return Ok(Tpm2); }
+    if (ct == ct_spdm_measurements() || ct == ct_spdm_challenge()) { return Ok(SpdmDevice); }
+    if (ct == ct_spdm_session()) { return Err(Refused("verify_evidence", "an SPDM key exchange is a session: verify it with verify_session")); }
+    return Err(Refused("verify_evidence", "evidence of collection type " + ct + " is not one this verifier reads"));
+}
+
+/// Verifies attestation evidence from any platform, fresh for `c`'s holder.
+/// `evidence` is an envelope (lib/evidence.resid; attest() makes one). The
+/// platform is read from it; the evidence must chain to a root, or be
+/// signed by a key, that `tr` holds (with whatever collateral the envelope
+/// carries) and carry challenge `c` as `b` says: bind_fresh() the bare
+/// value, bind_key(kem, pk) bound to the attester's HPKE key (the result
+/// is KeyBound), bind_channel(c, e) bound to this TLS connection
+/// (ChannelBound), bind_device(s) bound to a verified device session (the
+/// result also rests on the device's root). The record is accepted once:
+/// the same evidence verifies once. The result's anchors are the root or
+/// key it rests on; its value is the evidence's claims, the same shape
+/// for every platform (verify/claims.resid's Claims). Err on any failure,
+/// naming it; never an abort.
+@primitive(verify, trust = tr, binding = b, gives = [fresh], time = t, kinds = [AmdVcek, AmdVlek, IntelPck, Nitro, EndorsedKeys, TpmAk, NvidiaDevice, DeviceIdentity], inputs = [evidence, c, b, t])
+pub Result(Verified(Claims), VerifyError) verify_evidence(List(UInt(8)) evidence, ChallengeRecord c, Binding b, Trust tr, EvidenceTime t) {
+    Envelope e = pf_layout(envelope_decode(evidence))?;
+    Platform p = vr_platform(e.evidence)?;
+    return match p {
+        AmdSnp => cl_verify(snp_platform(), e, c, b, tr, t),
+        IntelTdxTd => cl_verify(tdx_platform(), e, c, b, tr, t),
+        ArmCcaRealm => cl_verify(cca_platform(), e, c, b, tr, t),
+        AwsNitro => cl_verify(nsm_platform(), e, c, b, tr, t),
+        Tpm2 => cl_verify(tpm_platform(), e, c, b, tr, t),
+        SpdmDevice => cl_verify(spdm_platform(), e, c, b, tr, t),
+    };
+}
+
+/// Verifies evidence against an imported replayable record `c`.
+/// Gives only Delivered: a record imported without a SpentStore
+/// (lib/challenge_export.resid) may be replayed within its lifetime, so
+/// the result never satisfies a decision. Otherwise as verify_evidence
+/// with bind_fresh().
+@primitive(verify, trust = tr, gives = [delivered], time = t, kinds = [AmdVcek, AmdVlek, IntelPck, Nitro, EndorsedKeys, TpmAk, NvidiaDevice, DeviceIdentity], inputs = [evidence, c, t])
+pub Result(Verified(Claims), VerifyError) verify_evidence_replayable(List(UInt(8)) evidence, ReplayableRecord c, Trust tr, EvidenceTime t) {
+    Envelope e = pf_layout(envelope_decode(evidence))?;
+    Platform p = vr_platform(e.evidence)?;
+    return match p {
+        AmdSnp => cl_verify_replayable(snp_platform(), e, c, tr, t),
+        IntelTdxTd => cl_verify_replayable(tdx_platform(), e, c, tr, t),
+        ArmCcaRealm => cl_verify_replayable(cca_platform(), e, c, tr, t),
+        AwsNitro => cl_verify_replayable(nsm_platform(), e, c, tr, t),
+        Tpm2 => cl_verify_replayable(tpm_platform(), e, c, tr, t),
+        SpdmDevice => cl_verify_replayable(spdm_platform(), e, c, tr, t),
+    };
+}
+
+// ─── Appraising ─────────────────────────────────────────────────────
+
+/// Appraises verified evidence from any platform against `policy`.
+/// First what no policy turns off: the evidence must not say the TEE can
+/// be debugged, the platform's mandatory rules must hold (SEV-SNP: no
+/// migration agent unless allowed, VMPL 0 unless the policy requires a
+/// VMPL; TDX: SEPT_VE_DISABLE set; CCA: a secured lifecycle; Nitro: PCRs
+/// 0-2 present; SPDM: measurements present), and every vendor TCB status
+/// must be "UpToDate" or allowed. Then the policy (verify/claims.resid's
+/// Policy): its measurements, its required claims. The policy argument is
+/// a direct call of a @policy function (E0283), which names it.
+@primitive(appraise, from = v, policy = policy, ptype = Policy)
+pub Result(Appraised(Claims), VerifyError) appraise_evidence(Verified(Claims) v, Policy policy) {
+    return match (v.value.platform) {
+        AmdSnp => cl_appraise(snp_platform(), v, policy),
+        IntelTdxTd => cl_appraise(tdx_platform(), v, policy),
+        ArmCcaRealm => cl_appraise(cca_platform(), v, policy),
+        AwsNitro => cl_appraise(nsm_platform(), v, policy),
+        Tpm2 => cl_appraise(tpm_platform(), v, policy),
+        SpdmDevice => cl_appraise(spdm_platform(), v, policy),
+    };
+}
+
+/// Appraises verified evidence against `policy` and a verified CoRIM.
+/// The CoRIM's reference values corroborate claims: a corroborated launch
+/// measurement (SEV-SNP, TDX, CCA) counts as one the policy names; where a
+/// platform's measurements are registers or blocks (Nitro, TPM, SPDM), the
+/// CoRIM must corroborate them all, and the policy may then name none;
+/// a CCA platform's software components must all be corroborated. Then as
+/// appraise_evidence. The result rests on the evidence's anchors and the
+/// CoRIM endorser's, so a decision on it names both in `accept`.
+@primitive(appraise, from = v, policy = policy, ptype = Policy, with = refs)
+pub Result(Appraised(Claims), VerifyError) appraise_evidence_endorsed(Verified(Claims) v, Policy policy, Verified(CorimRefs) refs) {
+    return match (v.value.platform) {
+        AmdSnp => cl_appraise_endorsed(snp_platform(), v, policy, refs),
+        IntelTdxTd => cl_appraise_endorsed(tdx_platform(), v, policy, refs),
+        ArmCcaRealm => cl_appraise_endorsed(cca_platform(), v, policy, refs),
+        AwsNitro => cl_appraise_endorsed(nsm_platform(), v, policy, refs),
+        Tpm2 => cl_appraise_endorsed(tpm_platform(), v, policy, refs),
+        SpdmDevice => cl_appraise_endorsed(spdm_platform(), v, policy, refs),
+    };
+}
+
+/// The CoRIM applied to verified evidence, for a policy's own questions.
+/// Which claims a reference value corroborated, and what endorsements
+/// added (verify/corim.resid's CorimAcs).
+pub CorimAcs evidence_corim(Verified(Claims) v, Verified(CorimRefs) refs) { return corim_appraise(v.value.corim, refs.value); }

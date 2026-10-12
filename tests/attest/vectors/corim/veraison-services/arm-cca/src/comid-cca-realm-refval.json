@@ -1,0 +1,89 @@
+{
+  "tag-identity": {
+    "id": "43BBE37F-2E61-4B33-AED3-53CFF1428B16",
+    "version": 0
+  },
+  "triples": {
+    "reference-values": [
+      {
+        "environment": {
+          "class": {
+            "id": {
+              "type": "bytes",
+              "value": "Q0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQw=="
+            }
+          }
+        },
+        "measurements": [
+          {
+            "key": {
+              "type": "string",
+              "value": "cca.rim"
+            },
+            "value": {
+              "digests": [
+                [8, "Q0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQw"]
+              ]
+            }
+          },
+          {
+            "key": {
+              "type": "string",
+              "value": "cca.rem0"
+            },
+            "value": {
+              "digests": [
+                [8, "Q0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQw"]
+              ]
+            }
+          },
+          {
+            "key": {
+              "type": "string",
+              "value": "cca.rem1"
+            },
+            "value": {
+              "digests": [
+                [8, "Q0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQw"]
+              ]
+            }
+          },
+          {
+            "key": {
+              "type": "string",
+              "value": "cca.rem2"
+            },
+            "value": {
+              "digests": [
+                [8, "Q0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQw"]
+              ]
+            }
+          },
+          {
+            "key": {
+              "type": "string",
+              "value": "cca.rem3"
+            },
+            "value": {
+              "digests": [
+                [8, "Q0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQw"]
+              ]
+            }
+          },
+          {
+            "key": {
+              "type": "string",
+              "value": "cca.rpv"
+            },
+            "value": {
+              "raw-value": {
+                "type": "bytes",
+                "value": "QURBREFEQURBREFEQURBREFEQURBREFEQURBREFEQURBREFEQURBREFEQURBREFEQURBREFEQURBREFEQURBRA=="
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,184 @@
+// attester.resid — collecting attestation evidence on whatever platform
+// this program runs on (RFC 9334's Attester). One call:
+//
+//     List(UInt(8)) evidence = attest(challenge = Verbatim(value))?;
+//
+// finds the platform -- the kernel's TSM report (AMD SEV-SNP, Intel TDX,
+// Arm CCA), else the AWS Nitro Secure Module, else the TPM -- asks it for
+// evidence carrying the challenge, and returns the evidence envelope
+// (lib/evidence.resid, a RATS CMW) a verifier reads with verify_evidence
+// (lib/verify/verifier.resid), whatever the platform. The program never
+// names the platform.
+//
+// What travels with the evidence: an SEV-SNP report brings the
+// certificates the host put in its certificate table (VCEK or VLEK, ASK,
+// ARK, and the CRL when the host gave it as DER) as collateral; anything
+// missing -- AMD's CRL, Intel's TCB info and QE identity -- the verifier
+// adds from its own cache or the vendor's service
+// (evidence_add_collateral). A TPM quote covers PCRs 0 to 7 of the SHA-256
+// bank, signed by the TPM's endorsement-hierarchy attestation key, which
+// the verifier trusts once it has proved it (tpm_verify_ak).
+//
+// The challenge: Runtime (a fresh value nobody keeps), Verbatim(v) (a
+// verifier's value, 32 to 64 bytes; challenge_with_key or
+// challenge_with_channel bind it to a key or a connection), or Issued(c)
+// (this program's own record, spent before the request and bound to the
+// reply, for verifying its own evidence). A TSM report takes any of them;
+// the NSM and the TPM are reached through raw requests that carry the
+// challenge as data, so Issued is Unsupported there. Nothing here is
+// trusted: the evidence is what the hardware signed, checked by the
+// verifier.
+//
+// Needs the full `device` grant: the NSM's raw request and the TPM's
+// commands are writes to the device (they could extend a PCR).
+
+import "evidence.resid";
+import "cmw.resid";
+import "cbor.resid";
+import "serial.resid";
+import "serial_value.resid";
+import "challenge.resid";
+import "random.resid";
+import "dev/device.resid";
+import "dev/tsm_report.resid";
+import "dev/nsm.resid";
+import "dev/tpm.resid";
+import "dev/tpm_wire.resid";
+
+/// Collects attestation evidence from this machine's platform, as an
+/// evidence envelope carrying `challenge`.
+/// Tries the kernel's TSM report, then the Nitro Secure Module, then the
+/// TPM; the first present answers. Err(Absent) when none is; any other
+/// error is the platform's (Denied, Kernel, BadReply, ...), or
+/// Unsupported for an Issued challenge on the NSM or the TPM.
+@requires(device)
+pub Result(List(UInt(8)), DeviceError) attest(Challenge challenge = Runtime) {
+    return match (tsm_report(challenge, tsm_opts())) {
+        Ok(r) => Ok(at_tsm_envelope(r)),
+        Err(e) => if (at_absent(e)) { at_nsm(challenge) } else { Err(e) },
+    };
+}
+
+// Absent and an unknown provider both mean "not this interface".
+Bool at_absent(DeviceError e) { return match e { Absent(n) => true, UnknownDriver(n, w) => true, _ => false }; }
+
+// ─── The TSM report ─────────────────────────────────────────────────
+
+/// The envelope of a TSM report: SEV-SNP with its certificate table as
+/// collateral, a TDX quote, or a CCA token.
+pub List(UInt(8)) at_tsm_envelope(TsmReport r) {
+    List(Int) out = chal_ints(r.outblob);
+    return match (r.platform) {
+        SevSnp => evidence_envelope(evidence_snp(out), at_snp_collateral(r.auxblob)),
+        IntelTdx => evidence_envelope(evidence_tdx(out), at_none()),
+        ArmCca => evidence_envelope(evidence_cca(out), at_none()),
+    };
+}
+
+List(CmwRec) at_none() {
+    List(CmwRec) none = [];
+    return none;
+}
+
+/// The collateral an SEV-SNP certificate table carries: each certificate
+/// (DER) and a DER CRL. A table that does not parse, or a PEM CRL, adds
+/// nothing: the verifier then needs that collateral from elsewhere.
+pub List(CmwRec) at_snp_collateral(List(UInt(8)) table) {
+    List(SnpCert) cs = match (tsm_snp_certs(table)) { Ok(x) => x, Err(e) => [] };
+    return at_certs(cs, 0, []);
+}
+
+List(CmwRec) at_certs(List(SnpCert) cs, Int i, List(CmwRec) acc) {
+    if (i >= cs.len() || acc.len() >= evidence_max_collateral()) { return acc; }
+    SnpCert c = cs[i];
+    Bool der = c.cert.len() > 0 && c.cert[0] == (UInt(8)) 48;
+    Bool crl = c.guid == snp_guid_crl();
+    Bool known = crl || c.guid == snp_guid_ark() || c.guid == snp_guid_ask() || c.guid == snp_guid_vcek() || c.guid == snp_guid_vlek();
+    List(CmwRec) more = if (der && known) { [collateral_item(if (crl) { mt_crl() } else { mt_cert() }, chal_ints(c.cert))] } else { [] };
+    return at_certs(cs, i + 1, acc.concat(more));
+}
+
+// ─── The Nitro Secure Module ────────────────────────────────────────
+
+// The nonce a raw request carries: a fresh value, or the verifier's.
+Result(List(Int), DeviceError) at_nonce(Str name, Challenge ch) {
+    return match ch {
+        Runtime => Ok(random_bytes(32)),
+        Verbatim(v) => if (v.len() >= 32 && v.len() <= 64) { Ok(chal_ints(v)) } else { Err(BadInput(name, "a challenge is 32 to 64 bytes")) },
+        Issued(c) => Err(Unsupported(name)),
+    };
+}
+
+@requires(device)
+Result(List(UInt(8)), DeviceError) at_nsm(Challenge ch) {
+    Str name = "nsm.raw";
+    List(Int) nonce = at_nonce(name, ch)?;
+    return match (nsm_request(chal_bytes(at_nsm_request(nonce)))) {
+        Ok(resp) => at_nsm_envelope(name, resp),
+        Err(e) => if (at_absent(e)) { at_tpm(ch) } else { Err(e) },
+    };
+}
+
+/// The NSM API's Attestation request for `nonce`, as CBOR:
+/// {"Attestation": {"user_data": null, "nonce": nonce, "public_key": null}}.
+pub List(Int) at_nsm_request(List(Int) nonce) {
+    Value body = VMap([ventry(VStr("user_data"), VNone), ventry(VStr("nonce"), VBytes(nonce)), ventry(VStr("public_key"), VNone)]);
+    Result(List(Int), SerialError) r = to_cbor(VMap([ventry(VStr("Attestation"), body)]));
+    return match (r) { Ok(b) => b, Err(e) => [] };
+}
+
+/// The envelope of the NSM's answer to an Attestation request.
+/// The answer is {"Attestation": {"document": bytes}}, or {"Error": name},
+/// which is Err(BadReply) naming it; anything else is Err(BadReply).
+pub Result(List(UInt(8)), DeviceError) at_nsm_envelope(Str name, List(UInt(8)) resp) {
+    List(Int) b = chal_ints(resp);
+    if (!cbor_well_formed(b, 8)) { return Err(BadReply(name, "the NSM's answer is not well-formed CBOR")); }
+    Result(Value, SerialError) dv = from_cbor(b);
+    Value v = at_serial(name, dv)?;
+    List(VEntry) top = at_map(name, v)?;
+    if (top.len() != 1) { return Err(BadReply(name, "the NSM's answer is not one response")); }
+    Str kind = match (top[0].key) { VStr(s) => s, _ => "" };
+    if (kind == "Error") { return Err(BadReply(name, "the NSM refused: " + match (top[0].val) { VStr(s) => s, _ => "an error" })); }
+    if (kind != "Attestation") { return Err(BadReply(name, "the NSM answered " + kind + ", not Attestation")); }
+    List(Int) doc = at_need(name, at_member_bytes(top[0].val, "document"))?;
+    return Ok(evidence_envelope(evidence_nitro(doc), at_none()));
+}
+
+Result(Value, DeviceError) at_serial(Str name, Result(Value, SerialError) r) { return match r { Ok(x) => Ok(x), Err(e) => Err(BadReply(name, "the NSM's answer: " + error_text(e))) }; }
+
+Result(List(Int), DeviceError) at_need(Str name, Option(List(Int)) o) { return match o { Some(d) => Ok(d), None => Err(BadReply(name, "the NSM's attestation has no document")) }; }
+
+Result(List(VEntry), DeviceError) at_map(Str name, Value v) { return match v { VMap(es) => Ok(es), _ => Err(BadReply(name, "the NSM's answer is not a map")) }; }
+
+Option(List(Int)) at_member_bytes(Value m, Str key) {
+    return match m { VMap(es) => at_member_at(es, key, 0), _ => None };
+}
+
+Option(List(Int)) at_member_at(List(VEntry) es, Str key, Int i) {
+    if (i >= es.len()) { return None; }
+    Bool hit = match (es[i].key) { VStr(s) => s == key, _ => false };
+    if (hit) { return match (es[i].val) { VBytes(b) => Some(b), _ => None }; }
+    return at_member_at(es, key, i + 1);
+}
+
+// ─── The TPM ────────────────────────────────────────────────────────
+
+/// The PCRs a TPM quote covers: 0 to 7 of the SHA-256 bank (the boot chain).
+pub List(Int) attest_tpm_pcrs() { return [0, 1, 2, 3, 4, 5, 6, 7]; }
+
+@requires(device)
+Result(List(UInt(8)), DeviceError) at_tpm(Challenge ch) {
+    Str name = "tpm.tpmrm0";
+    List(Int) nonce = at_nonce(name, ch)?;
+    List(PcrSel) sel = [pcr_sel(11, attest_tpm_pcrs())];
+    TpmQuote q = at_tpm_err(tpm_quote_ak(chal_bytes(nonce), sel))?;
+    PcrRead pr = at_tpm_err(tpm_pcr_read(sel))?;
+    if (pr.digests.len() != attest_tpm_pcrs().len()) { return Err(BadReply(name, "the TPM did not read every PCR the quote covers")); }
+    return Ok(evidence_envelope(evidence_tpm(chal_ints(q.attest), chal_ints(q.sig_raw), at_ints_list(pr.digests, 0, [])), at_none()));
+}
+
+Result(T, DeviceError) at_tpm_err(Result(T, TpmError) r) {
+    return match r { Ok(x) => Ok(x), Err(e) => Err(match e { TpmDev(d) => d, _ => BadReply("tpm.tpmrm0", tpm_error_text(e)) }) };
+}
+
+List(List(Int)) at_ints_list(List(List(UInt(8))) xs, Int i, List(List(Int)) acc) { return if (i >= xs.len()) { acc } else { at_ints_list(xs, i + 1, acc.concat([chal_ints(xs[i])])) }; }

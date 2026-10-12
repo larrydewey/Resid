@@ -1,0 +1,21 @@
+import "verify/verifier.resid";
+import "evidence.resid";
+import "verify/seal.resid";
+import "verify/testing.resid";
+import "challenge.resid";
+import "crypto.resid";
+import "hash.resid";
+import "hpke.resid";
+
+@policy
+Policy pol() { return Policy {.measurements = ["00"], .require = [], .allow = []}; }
+
+// Verified under every test root, accepting only the SNP ones: the gate
+// may rest on another platform's root.
+@decides(accept = [test_snp_roots], appraised = pol, identity = none)
+Result(Int, VerifyError) f(List(UInt(8)) e, ChallengeRecord c) {
+    Verified(Claims) v = verify_evidence(e, c, bind_fresh(), test_roots(), test_time(0))?;
+    Appraised(Claims) a = appraise_evidence(v, pol())?;
+    return Ok(1);
+}
+Int main() { return 0; }

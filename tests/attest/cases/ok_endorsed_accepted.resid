@@ -1,4 +1,5 @@
-import "verify/core.resid";
+import "verify/verifier.resid";
+import "evidence.resid";
 import "verify/snp.resid";
 import "verify/seal.resid";
 import "verify/testing.resid";
@@ -9,18 +10,15 @@ import "hash.resid";
 import "hpke.resid";
 
 @policy
-SnpPolicy pol() {
-    return SnpPolicy {.min_tcb = TcbVersion {.fmc = 0, .bootloader = 0, .tee = 0, .snp = 0, .microcode = 0}, .measurements_hex = ["00"], .vmpl = 0, .allow_migration_agent = false, .id_key_digests_hex = [], .host_data_hex = []};
-}
+Policy pol() { return Policy {.measurements = ["00"], .require = [], .allow = []}; }
 @policy
-SnpPolicy pol2() { return pol(); }
+Policy pol2() { return pol(); }
 import "verify/corim.resid";
-import "verify/endorsed.resid";
-@decides(accept = [test_ark, test_endorser], appraised = pol, identity = none)
-Result(Int, VerifyError) f(List(UInt(8)) r, ChallengeRecord c, SnpCollateral col, List(UInt(8)) corim) {
-    Verified(CorimRefs) refs = corim_verify(corim, test_endorser(), test_time(0))?;
-    Verified(SnpReport) v = snp_verify(r, c, test_ark(), col, test_time(0))?;
-    Appraised(SnpReport) a = snp_appraise_endorsed(v, pol(), refs)?;
+@decides(accept = [test_snp_roots, test_endorsers], appraised = pol, identity = none)
+Result(Int, VerifyError) f(List(UInt(8)) r, ChallengeRecord c, List(UInt(8)) corim) {
+    Verified(CorimRefs) refs = corim_verify(corim, test_endorsers(), test_time(0))?;
+    Verified(Claims) v = verify_evidence(r, c, bind_fresh(), test_snp_roots(), test_time(0))?;
+    Appraised(Claims) a = appraise_evidence_endorsed(v, pol(), refs)?;
     return Ok(1);
 }
 Int main() { return 0; }
