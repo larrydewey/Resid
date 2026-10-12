@@ -105,8 +105,8 @@ printf '%s\n' "$rt" | grep -q '^roundtrip: 0 failed' || { [ "$nf" != 0 ] || { ec
 
 # ── parsers under mutation ───────────────────────────────────────────
 # Every parser that reads untrusted bytes, on mutated certificates, CRLs,
-# OCSP responses, keys, signatures, COSE, TLS messages, PEM and HTTP/2
-# frames with HPACK blocks: an abort
+# OCSP responses, keys, signatures, COSE, TLS messages, PEM, HTTP/2
+# frames with HPACK blocks, SPDM messages, TPM responses and CoRIMs: an abort
 # (caught per input by fuzz.resid) or a hang (the timeout) is a failure.
 # The rng seeds are fixed, so a failure reproduces.
 (cd "$ROOT" && "$COMPILER" tests/crypto/fuzz.resid ${RESID_TARGET:+--target $RESID_TARGET} -o "$W/fuzz") > "$W/build.log" 2>&1 || {
@@ -144,6 +144,14 @@ fz pem "$F/root.pem" "$N" 47
 fz pem "$F/srv.key" "$N" 48
 fz hpack "$SD/hpack-huff.bin" "$N" 61
 fz hpack "$SD/hpack-raw.bin" "$N" 62
+fz spdm "$SD/spdm-meas.bin" "$N" 71
+fz spdm "$SD/spdm-algs.bin" "$N" 72
+fz spdm "$SD/spdm-kex.bin" "$N" 73
+fz spdm "$SD/spdm-chal.bin" "$N" 74
+fz tpm "$SD/tpm-create.bin" "$N" 75
+fz tpm "$SD/tpm-public.bin" "$N" 76
+fz corim "$SD/corim-payload.bin" "$N" 77
+fz corim "$SD/corim-keys-payload.bin" "$N" 78
 
 echo "crypto: $pass passed, $fail failed ($files vector files)"
 [ "$fail" -eq 0 ]

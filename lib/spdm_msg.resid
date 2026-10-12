@@ -5,12 +5,14 @@
 // The requester (lib/spdm_requester.resid) and the verifiers
 // (lib/verify/spdm.resid, lib/verify/spdm_session.resid) share it.
 //
-// Algorithms a peer may choose: ECDSA P-256 and P-384, RSASSA and RSAPSS
-// at 2048, 3072 and 4096 bits, Ed25519; SHA-256, SHA-384 and SHA-512;
-// ECDHE on P-256 and P-384; AES-128-GCM, AES-256-GCM and
-// ChaCha20-Poly1305; the SPDM key schedule. Anything else (P-521, Ed448,
-// SM2/SM3/SM4, FFDHE, SHA-3, the post-quantum algorithms of 1.4) is
-// refused at negotiation: the standard library has no implementation.
+// Algorithms a peer may choose: ECDSA P-256, P-384 and P-521 (a responder
+// signing; a requester signs with P-256, P-384 or Ed25519), RSASSA and
+// RSAPSS at 2048, 3072 and 4096 bits, Ed25519; SHA-256, SHA-384 and
+// SHA-512; ECDHE on P-256 and P-384; AES-128-GCM, AES-256-GCM and
+// ChaCha20-Poly1305; the SPDM key schedule. Anything else (ECDHE on
+// P-521, Ed448, SM2/SM3/SM4, FFDHE, SHA-3, the post-quantum algorithms of
+// 1.4) is refused at negotiation: the standard library has no
+// implementation.
 //
 // Every decoder checks the version against the connection's, the
 // response code, and every length against the message's own, and refuses
@@ -97,6 +99,7 @@ pub Int spdm_asym_ecdsa_p256() { return 16; }
 pub Int spdm_asym_rsassa_4096() { return 32; }
 pub Int spdm_asym_rsapss_4096() { return 64; }
 pub Int spdm_asym_ecdsa_p384() { return 128; }
+pub Int spdm_asym_ecdsa_p521() { return 256; }
 pub Int spdm_asym_ed25519() { return 1024; }
 pub Int spdm_hash_sha256() { return 1; }
 pub Int spdm_hash_sha384() { return 2; }
@@ -108,7 +111,7 @@ pub Int spdm_aead_aes256gcm() { return 2; }
 pub Int spdm_aead_chacha20poly1305() { return 4; }
 
 // What this library implements, as masks.
-pub Int spdm_asym_supported() { return 1 | 2 | 4 | 8 | 16 | 32 | 64 | 128 | 1024; }
+pub Int spdm_asym_supported() { return 1 | 2 | 4 | 8 | 16 | 32 | 64 | 128 | 256 | 1024; }
 pub Int spdm_hash_supported() { return 1 | 2 | 4; }
 pub Int spdm_dhe_supported() { return 8 | 16; }
 pub Int spdm_aead_supported() { return 1 | 2 | 4; }
@@ -125,6 +128,7 @@ pub Int spdm_sig_len(Int a) {
     if (a == 32 || a == 64) { return 512; }
     if (a == 16) { return 64; }
     if (a == 128) { return 96; }
+    if (a == 256) { return 132; }
     if (a == 1024) { return 64; }
     return 0;
 }
@@ -586,6 +590,7 @@ pub Bool spdm_sig_ok(Int ver, Int asym, Int hash, Str context, PubKey key, List(
     HashAlg h = spdm_hash_alg(hash);
     if (asym == 16) { return ecdsa_verify_raw(P256, h, key.point, m, sig); }
     if (asym == 128) { return ecdsa_verify_raw(P384, h, key.point, m, sig); }
+    if (asym == 256) { return ecdsa_verify_raw(P521, h, key.point, m, sig); }
     if (asym == 1024) { return sig_verify(SigAlg {.kind = sigalg_ed25519(), .hash = h, .mgf = h, .salt = 0}, key, m, sig); }
     Bool pss = asym == 2 || asym == 8 || asym == 64;
     SigAlg alg = SigAlg {.kind = if (pss) { sigalg_pss() } else { sigalg_pkcs1() }, .hash = h, .mgf = h, .salt = hash_len(h)};
@@ -596,6 +601,7 @@ pub Bool spdm_sig_ok(Int ver, Int asym, Int hash, Str context, PubKey key, List(
 pub Bool spdm_key_fits(Int asym, PubKey key) {
     if (asym == 16) { return key.kind == pubkey_ec() && curve_bytes(key.curve) == 32; }
     if (asym == 128) { return key.kind == pubkey_ec() && curve_bytes(key.curve) == 48; }
+    if (asym == 256) { return key.kind == pubkey_ec() && curve_bytes(key.curve) == 66; }
     if (asym == 1024) { return key.kind == pubkey_ed25519(); }
     return key.kind == pubkey_rsa() && spdm_rsa_bits(key) == spdm_sig_len(asym) * 8;
 }
@@ -610,6 +616,7 @@ pub Str spdm_alg_name(Int asym, Int hash) {
     if (asym == 1024) { return "Ed25519"; }
     if (asym == 16) { return "EcdsaP256" + h; }
     if (asym == 128) { return "EcdsaP384" + h; }
+    if (asym == 256) { return "EcdsaP521" + h; }
     Str fam = if (asym == 2 || asym == 8 || asym == 64) { "RsaPss" } else { "RsaSsa" };
     return fam + f"{spdm_sig_len(asym) * 8}" + h;
 }

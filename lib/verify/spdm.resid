@@ -34,6 +34,8 @@
 // or a CoRIM (verify/corim.resid). Sessions are verify/spdm_session.resid.
 
 import "core.resid";
+import "corim.resid";
+import "endorsed_keys.resid";
 import "../crypto.resid";
 import "../hash.resid";
 import "../x509.resid";
@@ -174,14 +176,20 @@ type SpOk = { SpdmEvidence e; List(Int) req_nonce; };
 @verify_internal
 pub Result(SpOk, VerifyError) spdm_check(SpdmRecord rec, Anchor root, EvidenceTime t) {
     Bool ok = sp_anchor(root, t, "spdm_verify")?;
+    Cert leaf = sp_chain(rec.certs, rec.ocsp, root, t)?;
+    return sp_check_leaf(rec, leaf, root, "spdm_verify");
+}
+
+// The record's signed GET_MEASUREMENTS under the device key `leaf`, with
+// the algorithms anchor `a` lists.
+Result(SpOk, VerifyError) sp_check_leaf(SpdmRecord rec, Cert leaf, Anchor a0, Str who) {
     List(Int) req = chal_ints(rec.request);
     List(Int) resp = chal_ints(rec.response);
     if (req.len() < 36 || req.len() > 45 || req[1] != 224 || (req[2] & 1) != 1) { return Err(BadLayout("the request is not a GET_MEASUREMENTS asking for a signature")); }
     Int ver = req[0];
     Int want = if (ver == 16) { 36 } else if (ver <= 18) { 37 } else { 45 };
     if (req.len() != want) { return Err(BadLayout("the GET_MEASUREMENTS request has the wrong length for its version")); }
-    Cert leaf = sp_chain(rec.certs, rec.ocsp, root, t)?;
-    SpdmAlgs a = sp_algs(rec.vca, ver, leaf, root, "spdm_verify")?;
+    SpdmAlgs a = sp_algs(rec.vca, ver, leaf, a0, who)?;
     List(List(Int)) before = sp_ints(rec.before, 0, []);
     Bool bok = sp_before(before, a, 0)?;
     SpdmMeasurements ms = sp_msg(spdm_parse_measurements(resp, a, true))?;
@@ -250,6 +258,42 @@ pub Result(Verified(SpdmEvidence), VerifyError) spdm_verify_channel_bound(SpdmRe
     Bool spent = sp_bind(k.req_nonce, want, c, rec.response)?;
     List(Int) none = [];
     return Ok(vf_make(k.e, root, q_fresh() | q_channel_bound() | sp_rp(c), c, 0, none, vf_channel_id(e), t, "SpdmEvidence"));
+}
+
+// ─── Under an endorsed identity key ─────────────────────────────────
+// The device's key is one a CoRIM's identity triple endorses for the named
+// instance (verify/endorsed_keys.resid), not a chain to a pinned root: the
+// result rests on the CoRIM's endorser. Only the device certificate (the
+// record's first) is read, for its key and validity.
+
+Result(SpHit, VerifyError) sp_endorsed(SpdmRecord rec, Verified(CorimRefs) keys, Str instance_hex, EvidenceTime t) {
+    if (rec.certs.len() == 0) { return Err(BadChain("the record carries no device certificate")); }
+    Cert leaf = sp_cert(chal_ints(rec.certs[0]), "the device certificate")?;
+    if (!cert_valid_at(leaf, t.at)) { return Err(BadChain("the device certificate is not current")); }
+    Anchor a = endorsed_identity(keys, instance_hex, leaf, t, "spdm_verify_endorsed")?;
+    SpOk k = sp_check_leaf(rec, leaf, a, "spdm_verify_endorsed")?;
+    return Ok(SpHit {.k = k, .a = a});
+}
+
+type SpHit = { SpOk k; Anchor a; };
+
+// Fresh for the holder of `c`, under a device key endorsed for the instance.
+@primitive(verify, from = keys, gives = [fresh], time = t, format = SpdmEvidence, inputs = [rec, c, t, instance_hex])
+pub Result(Verified(SpdmEvidence), VerifyError) spdm_verify_endorsed(SpdmRecord rec, ChallengeRecord c, Verified(CorimRefs) keys, Str instance_hex, EvidenceTime t) {
+    SpHit h = sp_endorsed(rec, keys, instance_hex, t)?;
+    Bool spent = sp_bind(h.k.req_nonce, challenge_value(c), c, rec.response)?;
+    List(Int) none = [];
+    return Ok(vf_make(h.k.e, h.a, q_fresh() | sp_rp(c), c, 0, none, none, t, "SpdmEvidence"));
+}
+
+// Fresh and KeyBound(kem, pk), under a device key endorsed for the instance.
+@primitive(verify, from = keys, gives = [fresh, key_bound], time = t, format = SpdmEvidence, inputs = [rec, c, t, instance_hex, kem, pk])
+pub Result(Verified(SpdmEvidence), VerifyError) spdm_verify_endorsed_key_bound(SpdmRecord rec, ChallengeRecord c, Verified(CorimRefs) keys, Str instance_hex, EvidenceTime t, Int kem, List(Int) pk) {
+    if (!hpke_kem_ok(kem) || !vf_pk_ok(kem, pk)) { return Err(Refused("spdm_verify_endorsed_key_bound", "the attester's public key is empty or malformed for the KEM")); }
+    SpHit h = sp_endorsed(rec, keys, instance_hex, t)?;
+    Bool spent = sp_bind(h.k.req_nonce, challenge_key_value(challenge_value(c), kem, pk), c, rec.response)?;
+    List(Int) none = [];
+    return Ok(vf_make(h.k.e, h.a, q_fresh() | q_key_bound() | sp_rp(c), c, kem, pk, none, t, "SpdmEvidence"));
 }
 
 // Delivered, for a record imported without a SpentStore.

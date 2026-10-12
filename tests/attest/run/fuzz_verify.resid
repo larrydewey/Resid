@@ -1,0 +1,139 @@
+// Mutation fuzz of the verifiers' own parsers (lib/verify/): SNP reports
+// and their collateral, TDX quotes, NSM documents, CCA tokens, TPM quotes
+// and EK chains, SPDM records (measurements, CHALLENGE and sessions),
+// CoRIMs and Intel's JSON. Each mutated input runs in a spawn region, so
+// an abort is caught and counted; any is a failure. The seeds are fixed,
+// so a failure reproduces (tests/crypto/fuzz.resid holds the same
+// mutator for lib/'s parsers).
+
+import "verify/core.resid";
+import "verify/testing.resid";
+import "verify/snp.resid";
+import "verify/tdx.resid";
+import "verify/nsm.resid";
+import "verify/cca.resid";
+import "verify/tpm.resid";
+import "verify/spdm.resid";
+import "verify/spdm_session.resid";
+import "verify/corim.resid";
+import "verify/json.resid";
+import "verify/aws_anchors.resid";
+import "verify/intel_anchors.resid";
+import "challenge.resid";
+
+Int rng_next(Int s) {
+    Int a = s ^ (s << 13);
+    Int b = a ^ ((a >> 7) & 144115188075855871);
+    return b ^ (b << 17);
+}
+
+Int rng_pick(Int s, Int n) { return if (n <= 0) { 0 } else { ((s >> 3) & 4611686018427387903) % n }; }
+
+List(Int) interesting() { return [0, 1, 2, 3, 4, 5, 6, 48, 127, 128, 129, 130, 131, 132, 133, 160, 163, 255]; }
+
+type Mut = { List(Int) b; Int s; };
+
+Mut mutate_once(List(Int) b, Int s0) {
+    Int s1 = rng_next(s0);
+    Int s2 = rng_next(s1);
+    Int s3 = rng_next(s2);
+    Int n = b.len();
+    Int op = rng_pick(s1, 8);
+    if (n == 0) { return Mut {.b = [rng_pick(s2, 256)], .s = s3}; }
+    Int at = rng_pick(s2, n);
+    if (op == 0) { return Mut {.b = b.with(at, b[at] ^ (1 << rng_pick(s3, 8))), .s = s3}; }
+    if (op == 1) { return Mut {.b = b.with(at, interesting()[rng_pick(s3, interesting().len())]), .s = s3}; }
+    if (op == 2) { return Mut {.b = b[0..at], .s = s3}; }
+    if (op == 3) {
+        Int len = 1 + rng_pick(s3, min(32, n - at));
+        return Mut {.b = b[0..at].concat(b[at + len..]), .s = s3};
+    }
+    if (op == 4) {
+        Int len = 1 + rng_pick(s3, min(64, n - at));
+        return Mut {.b = b[0..at + len].concat(b[at..at + len]).concat(b[at + len..]), .s = s3};
+    }
+    if (op == 5) { return Mut {.b = b[0..at].concat([rng_pick(s3, 256), rng_pick(rng_next(s3), 256)]).concat(b[at..]), .s = rng_next(s3)}; }
+    if (op == 6) { return Mut {.b = b.with(if (at + 1 < n) { at + 1 } else { at }, interesting()[rng_pick(s3, interesting().len())]), .s = s3}; }
+    return Mut {.b = b.with(at, rng_pick(s3, 256)), .s = s3};
+}
+
+Mut mutate(List(Int) b, Int s, Int times) {
+    if (times <= 0) { return Mut {.b = b, .s = s}; }
+    Mut m = mutate_once(b, s);
+    return mutate(m.b, m.s, times - 1);
+}
+
+@requires(filesystem(readonly))
+List(Int) rd(Str p) { return filesystem.read_bytes("fixtures/" + p); }
+
+@requires(filesystem(readonly))
+List(UInt(8)) rdb(Str p) { return chal_bytes(rd(p)); }
+
+Int ok(Result(T, VerifyError) r) { return match (r) { Ok(x) => 1, Err(e) => 0, }; }
+
+// The parsers of one kind on one mutated input.
+@requires(filesystem(readonly))
+Int run(Str kind, List(Int) m) {
+    List(UInt(8)) u = chal_bytes(m);
+    EvidenceTime t = test_time(1791000000);
+    if (kind == "snp") { return ok(test_snp_check(u, test_ark(), SnpCollateral {.vcek_der = rdb("test-vcek.der"), .ask_der = rdb("test-ask.der"), .crl_der = rdb("test-crl.der")}, t)); }
+    if (kind == "snp-vcek") { return ok(test_snp_check(rdb("report-template.bin"), test_ark(), SnpCollateral {.vcek_der = u, .ask_der = rdb("test-ask.der"), .crl_der = u}, t)); }
+    if (kind == "tdx") { return ok(test_tdx_check(u, intel_sgx_root(), test_time(1688173200))); }
+    if (kind == "nsm") { return ok(test_nsm_check(u, aws_nitro_root(), test_time(1730000000))); }
+    if (kind == "cca") { return ok(test_cca_check(u, test_rmm_cpak(), t)); }
+    if (kind == "tpm") { return ok(test_tpm_check(u, u, [u], test_tpm_ak(), t)); }
+    if (kind == "tpm-ek") { return ok(test_tpm_ak_check([u, rdb("tpm-ek-int.der")], [u, rdb("tpm-ek-int-crl.der")], u, test_tpm_ek(), t)); }
+    if (kind == "corim") { return ok(test_corim_check(u, test_endorser(), t)); }
+    if (kind == "json") { return match (json_parse(m)) { Ok(j) => 1, Err(e) => 0, }; }
+    return spdm_kind(kind, u, t);
+}
+
+@requires(filesystem(readonly))
+Int spdm_kind(Str kind, List(UInt(8)) u, EvidenceTime t) {
+    List(UInt(8)) none = [];
+    List(List(UInt(8))) vca = [];
+    if (kind == "spdm-meas") { return ok(test_spdm_check(SpdmRecord {.vca = vca, .certs = [rdb("spdm-leaf.der"), rdb("spdm-root.der")], .ocsp = [rdb("spdm-ocsp-leaf.der")], .before = [], .request = chal_bytes([17, 224, 1, 255].concat(fill(1, 32)).concat([0])), .response = u}, test_device_root(), t)); }
+    if (kind == "spdm-vca") { return ok(test_spdm_check(SpdmRecord {.vca = [u, u, u, u, u, u], .certs = [rdb("spdm-leaf.der")], .ocsp = [], .before = [u, u], .request = u, .response = u}, test_device_root(), t)); }
+    if (kind == "spdm-chal") { return ok(test_spdm_challenge_check(SpdmChallengeRecord {.vca = [u, u, u, u, u, u], .chain = u, .ocsp = [u], .b = [u], .request = u, .response = u}, test_device_root(), t)); }
+    return ok(test_spdm_session_check(SpdmSessionRecord {.vca = [u, u, u, u, u, u], .chain = u, .ocsp = [], .digests = u, .key_exchange = u, .key_exchange_rsp = u}, test_device_root(), t));
+}
+
+List(Int) fill(Int v, Int n) { return if (n <= 0) { [] } else { [v].concat(fill(v, n - 1)) }; }
+
+@requires(filesystem(readonly))
+Int fuzz(Str kind, List(Int) seed, Int i, Int n, Int s, Int crashes) {
+    if (i >= n) { return crashes; }
+    Mut m = mutate(seed, rng_next(s), 1 + rng_pick(s, 4));
+    List(Int) input = m.b;
+    Result(Int, RegionError) r = spawn (filesystem(readonly)) { return run(kind, input); };
+    Int c = match (r) { Ok(v) => 0, Err(e) => crash(kind, i, e.message, input) };
+    return fuzz(kind, seed, i + 1, n, rng_next(m.s), crashes + c);
+}
+
+Int crash(Str kind, Int i, Str msg, List(Int) input) {
+    println(f"CRASH {kind} iter={i} " + msg + " input=" + hex_encode(input[0..min(128, input.len())]));
+    return 1;
+}
+
+@requires(filesystem(readonly))
+Str go(Str kind, Str seed, Int n, Int s) { return f"FUZZ {kind} crashes={fuzz(kind, rd(seed), 0, n, s, 0)}"; }
+
+@requires(filesystem(readonly))
+Int main() {
+    println(go("snp", "report-template.bin", 150, 1));
+    println(go("snp-vcek", "test-vcek.der", 150, 2));
+    println(go("tdx", "tdx-quote-v4.bin", 150, 3));
+    println(go("tdx", "tdx-quote-v5.bin", 100, 4));
+    println(go("nsm", "aws-nitro-doc.bin", 150, 5));
+    println(go("cca", "cca-tfm-token.bin", 150, 6));
+    println(go("tpm", "tpm-ek-ecc.der", 100, 7));
+    println(go("tpm-ek", "tpm-ek-ecc.der", 150, 8));
+    println(go("corim", "corim-endorsed.cbor", 150, 9));
+    println(go("corim", "veraison-signed-good-corim.cbor", 150, 10));
+    println(go("json", "intel-tcb-info.json", 150, 11));
+    println(go("spdm-meas", "nvidia-h100-response.bin", 150, 12));
+    println(go("spdm-vca", "nvidia-h100-request.bin", 100, 13));
+    println(go("spdm-chal", "spdm-root.der", 100, 14));
+    println(go("spdm-sess", "spdm-leaf.der", 100, 15));
+    return 0;
+}

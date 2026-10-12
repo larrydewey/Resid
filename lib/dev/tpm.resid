@@ -169,6 +169,82 @@ pub Result(TpmQuote, TpmError) tpm_quote(Int ak_handle, List(UInt(8)) nonce, Lis
     return tpm_quote_via(lambda(c) { tpm_send(c) }, ak_handle, nonce, sel);
 }
 
+// Commands in one chain on one open file (sessions and transient objects
+// live until it closes), handles linked from earlier responses into later
+// commands (lib/dev/tpm_wire.resid's tpm_chain_via, device.transact_chain).
+@requires(device)
+Result(List(List(UInt(8))), TpmError) tpm_chain(List(List(UInt(8))) cmds, List(Int) links) {
+    return match (device.transact_chain(tpm_op(), cmds, links)) {
+        Err(e) => Err(TpmDev(e)),
+        Ok(outs) => tpm_outs(outs, 0, []),
+    };
+}
+
+Result(List(List(UInt(8))), TpmError) tpm_outs(List(DevOut) outs, Int i, List(List(UInt(8))) acc) {
+    if (i >= outs.len()) { return Ok(acc); }
+    return match (dv_out_bytes(outs, i)) {
+        None => Err(TpmDev(BadReply("tpm.tpmrm0", "no response buffer"))),
+        Some(r) => tpm_outs(outs, i + 1, acc.concat([r])),
+    };
+}
+
+// The endorsement key (RSA or ECC, the TCG default template) and the
+// attestation key this TPM derives (tpm_wire.resid's tpm_ak_template):
+// their public areas and names, for a verifier's TPM2_MakeCredential. The
+// keys are made and flushed; nothing persists.
+@requires(device)
+pub Result(TpmKeys, TpmError) tpm_ek_ak(Bool ecc) {
+    return tpm_ek_ak_via(lambda(cs, ls) { tpm_chain(cs, ls) }, ecc);
+}
+
+// The EK certificate the manufacturer wrote for the low-range EK (TCG EK
+// Credential Profile: RSA 2048 at NV 0x01C00002, ECC NIST P-256 at
+// 0x01C0000A), read by the owner with the empty password (a hierarchy's
+// authorization, never a lockout count). DER, as the verifier's
+// tpm_ak_challenge and tpm_verify_ak take it.
+@requires(device)
+pub Result(List(UInt(8)), TpmError) tpm_ek_cert(Bool ecc) {
+    return tpm_nv_read_all(tpm_rh_owner(), if (ecc) { 0x01C0000A } else { 0x01C00002 });
+}
+
+// The certificates of the EK's chain the manufacturer stored in the TPM
+// (TCG EK Credential Profile 2.5: NV indices 0x01C00100 to 0x01C001FF, each
+// one or more DER certificates back to back), in index order; empty when
+// it stored none (the verifier then fetches them by the certificate's
+// authority information access). Read by the owner, like the EK
+// certificate.
+@requires(device)
+pub Result(List(List(UInt(8))), TpmError) tpm_ek_chain_certs() {
+    List(Int) hs = tpm_handles(0x01C00100, 256)?;
+    return tpm_ek_chain_at(hs, 0, []);
+}
+
+@requires(device)
+Result(List(List(UInt(8))), TpmError) tpm_ek_chain_at(List(Int) hs, Int i, List(List(UInt(8))) acc) {
+    if (i >= hs.len() || hs[i] > 0x01C001FF) { return Ok(acc); }
+    List(UInt(8)) b = tpm_nv_read_all(tpm_rh_owner(), hs[i])?;
+    return tpm_ek_chain_at(hs, i + 1, acc.concat(tpm_der_split(b, 0, [])?));
+}
+
+// TPM2_ActivateCredential of a verifier's credential (tpm_credential.resid's
+// TpmCredential: blob and secret) for this TPM's EK and AK: the credential
+// back, which proves to the verifier that the AK is in the TPM whose EK it
+// sealed to. The endorsement hierarchy's password must be empty (a
+// permanent handle: a wrong one is an error, never a lockout count); the
+// AK has noDA.
+@requires(device)
+pub Result(List(UInt(8)), TpmError) tpm_activate_credential(Bool ecc, List(UInt(8)) blob, List(UInt(8)) secret) {
+    List(UInt(8)) nonce = tpm_get_random(32)?;
+    return tpm_activate_credential_via(lambda(cs, ls) { tpm_chain(cs, ls) }, ecc, nonce, blob, secret);
+}
+
+// TPM2_Quote by this TPM's endorsement-hierarchy AK (the one activated):
+// the PCRs `sel` selects, `nonce` the qualifying data (at most 64 bytes).
+@requires(device)
+pub Result(TpmQuote, TpmError) tpm_quote_ak(List(UInt(8)) nonce, List(PcrSel) sel) {
+    return tpm_quote_ak_via(lambda(cs, ls) { tpm_chain(cs, ls) }, nonce, sel);
+}
+
 // Azure confidential VMs: the paravisor's report from NV index 0x01400001,
 // read with owner authorization. It is written once at boot by the HCL, not
 // made for this call, so it carries no nonce: freshness comes from a quote

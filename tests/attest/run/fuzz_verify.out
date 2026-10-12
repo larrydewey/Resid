@@ -1,0 +1,15 @@
+FUZZ snp crashes=0
+FUZZ snp-vcek crashes=0
+FUZZ tdx crashes=0
+FUZZ tdx crashes=0
+FUZZ nsm crashes=0
+FUZZ cca crashes=0
+FUZZ tpm crashes=0
+FUZZ tpm-ek crashes=0
+FUZZ corim crashes=0
+FUZZ corim crashes=0
+FUZZ json crashes=0
+FUZZ spdm-meas crashes=0
+FUZZ spdm-vca crashes=0
+FUZZ spdm-chal crashes=0
+FUZZ spdm-sess crashes=0

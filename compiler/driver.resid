@@ -8260,7 +8260,7 @@ Bool is_prov_verb(Str fam, Str v) {
 }
 
 // The generic device verbs (spec §49); each takes a descriptor from lib/dev/.
-Bool dev_verb(Str v) { return v == "ioctl" || v == "transact" || v == "configfs_report" || v == "read_attr" || v == "sequence"; }
+Bool dev_verb(Str v) { return v == "ioctl" || v == "transact" || v == "configfs_report" || v == "read_attr" || v == "read_pci_attr" || v == "transact_chain" || v == "sequence"; }
 
 Str first_missing_family_at(List(Str) fams, Str ceiling, Int i) {
     if (i >= fams.len()) { return ""; }

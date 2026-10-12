@@ -133,7 +133,57 @@ Result(HpkeMessage, VerifyError) release(List(UInt(8)) report, ChallengeRecord i
 
 @requires(filesystem(readonly))
 Str corim_at(Str what, Str f, Anchor a, Int at) {
-    return what + ": " + match (test_corim_check(rd(f), a, test_time(at))) { Ok(v) => f"ok, id " + v.id + f", {v.refs.len()} reference values, signer " + v.signer, Err(e) => verify_error_text(e) };
+    return what + ": " + match (test_corim_check(rd(f), a, test_time(at))) { Ok(v) => "ok, id " + v.id + ", " + counts(v) + ", signer " + v.signer + (if (v.profile != "") { ", profile " + v.profile } else { "" }), Err(e) => verify_error_text(e) };
+}
+
+Str counts(CorimRefs v) {
+    return f"{v.reference.len()} reference, {v.endorsed.len()} endorsed, {v.identity.len()} identity, {v.attest_keys.len()} attest-key, {v.conditional.len()} conditional, {v.series.len()} series";
+}
+
+CorimEnv gpu_env() { return corim_env("NVIDIA", "Test GPU"); }
+
+// What the CoRIM says of an SNP report beyond the measurement.
+Str snp_acs(Verified(SnpReport) v, Verified(CorimRefs) refs) {
+    CorimAcs a = snp_corim(v, refs);
+    CorimEnv e = snp_corim_env();
+    Bool secure = corim_holds(a, e, corim_flags_claim(MkText("platform"), 2, 2));
+    Bool cert = corim_holds(a, e, corim_claim(MkText("certification"), named("Resid test certification")));
+    return "corroborated:" + corr(a, e, ["measurement", "host_data", "reported_tcb.snp", "vmpl", "policy", "guest_svn"], 0, "") + f"; endorsed: is-secure {secure}, certification {cert}; {corim_endorsements(a).len()} endorsements";
+}
+
+Str corr(CorimAcs a, CorimEnv e, List(Str) ks, Int i, Str acc) {
+    if (i >= ks.len()) { return acc; }
+    Bool c = corim_corroborated(a, e, MkText(ks[i]));
+    return corr(a, e, ks, i + 1, acc + " " + ks[i] + f" {c}");
+}
+
+CorimMval named(Str n) {
+    CorimMval m = corim_mval_none();
+    return CorimMval {.present = 2048, .version = m.version, .version_scheme = m.version_scheme, .svn = m.svn, .digests = m.digests, .flags_known = 0, .flags = 0, .raw = m.raw, .raw_mask = m.raw_mask, .mac = m.mac, .ip = m.ip, .serial = m.serial, .ueid = m.ueid, .uuid = m.uuid, .name = n, .keys = m.keys, .registers = m.registers, .range_min = 0, .range_max = 0, .range_open_min = true, .range_open_max = true};
+}
+
+// The series picks the TDX module's version by MRSEAM: claims of a TD
+// with the endorsed MRTD and an all-zero MRSEAM, then another MRSEAM.
+Str tdx_series(Verified(CorimRefs) refs) {
+    List(Int) mrtd = sha384_bytes(bytes_of("resid test td"));
+    CorimEnv e = tdx_corim_env();
+    CorimAcs a = corim_appraise(corim_evidence(e, [corim_digest_claim(MkText("mrtd"), 7, mrtd), corim_digest_claim(MkText("mrseam"), 7, fill(0, 48))]), refs.value);
+    CorimAcs b = corim_appraise(corim_evidence(e, [corim_digest_claim(MkText("mrtd"), 7, mrtd), corim_digest_claim(MkText("mrseam"), 7, fill(1, 48))]), refs.value);
+    Bool a15 = corim_holds(a, e, corim_version_claim(MkText("tdx_module"), "1.5"));
+    Bool a99 = corim_holds(a, e, corim_version_claim(MkText("tdx_module"), "9.9"));
+    Bool b15 = corim_holds(b, e, corim_version_claim(MkText("tdx_module"), "1.5"));
+    Bool mt = corim_corroborated(a, e, MkText("mrtd"));
+    return f"module 1.5 {a15}, 9.9 {a99}; another MRSEAM: 1.5 {b15}, MRTD corroborated {mt}";
+}
+
+@requires(filesystem(readonly))
+Str spdm_identity(Verified(CorimRefs) refs, Str inst) {
+    ChallengeRecord c = challenge_issue(32);
+    List(Int) r = request(chal_ints(challenge_value(c)));
+    return match (spdm_verify_endorsed(spdm_rec(r, response(r, 5)), c, refs, inst, test_time(1791000000))) {
+        Ok(v) => f"verified, endorser's: {v.anchors[0] == test_endorser().id}; " + match (spdm_appraise_endorsed(v, endorsed_gpu(), refs, gpu_env())) { Ok(a) => "appraised", Err(e) => verify_error_text(e) },
+        Err(e) => verify_error_text(e),
+    };
 }
 
 @requires(declassify)
@@ -142,17 +192,28 @@ List(Int) sec_pub(List(Secret(UInt(8))) k, Int i, ListBuf(Int) acc) { return if 
 @requires(filesystem(readonly))
 Str with_refs(Verified(CorimRefs) refs) {
     ChallengeRecord c1 = challenge_issue(64);
-    println("SNP endorsed: " + match (snp_verify(report_for(challenge_value(c1)), c1, test_ark(), col(), test_time(1791000000))) { Ok(v) => match (snp_appraise_endorsed(v, endorsed_snp(), refs)) { Ok(a) => f"appraised, {a.v.anchors.len()} anchors", Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) });
+    println("SNP endorsed: " + match (snp_verify(report_for(challenge_value(c1)), c1, test_ark(), col(), test_time(1791000000))) { Ok(v) => match (snp_appraise_endorsed(v, endorsed_snp(), refs)) { Ok(a) => f"appraised, {a.v.anchors.len()} anchors; " + snp_acs(v, refs), Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) });
     ChallengeRecord c2 = challenge_issue(64);
+    ChallengeRecord c1b = challenge_issue(64);
+    // A reference triple applies whole: one measurement off, none of its
+    // claims is corroborated (the endorsements still apply).
+    println("SNP other host data: " + match (snp_verify(report_from(patched(192, [(UInt(8)) 1]), challenge_value(c1b)), c1b, test_ark(), col(), test_time(1791000000))) { Ok(v) => snp_acs(v, refs), Err(e) => verify_error_text(e) });
+    println("TDX series: " + tdx_series(refs));
     println("SNP other image: " + match (snp_verify(report_from(patched(144, [(UInt(8)) 1]), challenge_value(c2)), c2, test_ark(), col(), test_time(1791000000))) { Ok(v) => match (snp_appraise_endorsed(v, endorsed_snp(), refs)) { Ok(a) => "APPRAISED", Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) });
     ChallengeRecord c3 = challenge_issue(64);
     println("CCA endorsed: " + match (cca_verify(token(chal_ints(challenge_value(c3)), 12291, true), c3, test_cpak(), test_time(1791000000))) { Ok(v) => match (cca_appraise_endorsed(v, endorsed_realm(), refs)) { Ok(a) => "appraised", Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) });
     ChallengeRecord c4 = challenge_issue(32);
     List(Int) r4 = request(chal_ints(challenge_value(c4)));
-    println("SPDM endorsed: " + match (spdm_verify(spdm_rec(r4, response(r4, 5)), c4, test_device_root(), test_time(1791000000))) { Ok(v) => match (spdm_appraise_endorsed(v, endorsed_gpu(), refs)) { Ok(a) => "appraised", Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) });
+    println("SPDM endorsed: " + match (spdm_verify(spdm_rec(r4, response(r4, 5)), c4, test_device_root(), test_time(1791000000))) { Ok(v) => match (spdm_appraise_endorsed(v, endorsed_gpu(), refs, gpu_env())) { Ok(a) => "appraised", Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) });
+    ChallengeRecord c4b = challenge_issue(32);
+    List(Int) r4b = request(chal_ints(challenge_value(c4b)));
+    println("SPDM, another device class: " + match (spdm_verify(spdm_rec(r4b, response(r4b, 5)), c4b, test_device_root(), test_time(1791000000))) { Ok(v) => match (spdm_appraise_endorsed(v, endorsed_gpu(), refs, corim_env("NVIDIA", "Other GPU"))) { Ok(a) => "APPRAISED", Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) });
+    println("SPDM under an identity triple: " + spdm_identity(refs, "0147474747474747474747474747474747"));
+    println("SPDM, identity by thumbprint: " + spdm_identity(refs, "0148484848484848484848484848484848"));
+    println("SPDM, an instance the CoRIM does not name: " + spdm_identity(refs, "0149494949494949494949494949494949"));
     ChallengeRecord c5 = challenge_issue(32);
     List(Int) r5 = request(chal_ints(challenge_value(c5)));
-    println("SPDM unendorsed block: " + match (spdm_verify(spdm_rec(r5, response(r5, 6)), c5, test_device_root(), test_time(1791000000))) { Ok(v) => match (spdm_appraise_endorsed(v, endorsed_gpu(), refs)) { Ok(a) => "APPRAISED", Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) });
+    println("SPDM unendorsed block: " + match (spdm_verify(spdm_rec(r5, response(r5, 6)), c5, test_device_root(), test_time(1791000000))) { Ok(v) => match (spdm_appraise_endorsed(v, endorsed_gpu(), refs, gpu_env())) { Ok(a) => "APPRAISED", Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) });
     return "";
 }
 

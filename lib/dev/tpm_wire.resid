@@ -844,3 +844,327 @@ test "generated layout parsers agree with the hand parsers" {
     expect(tw_oracle_run(rt tw_oracle_seeds(), 0, 0)).toEqual(0);
     expect(tw_oracle_gen([0, 2, 170, 187])).toEqual("ok [170, 187] 4 | err");
 }
+
+// -- Keys of the endorsement hierarchy and credential activation ---------------
+// What remote attestation needs beyond a quote: the endorsement key (EK)
+// the manufacturer certified, an attestation key (AK) in the same TPM, and
+// TPM2_ActivateCredential, by which the TPM proves the two are together
+// (TCG TPM 2.0 Part 1, "Credential Protection"; Part 3, Tables 151, 164,
+// 11, 125, 192). Both keys are primary objects of the endorsement
+// hierarchy, so the same TPM derives the same keys from the same templates
+// every time: the EK from the TCG EK Credential Profile's default
+// templates (2.x, L-1 RSA 2048 and L-2 ECC NIST P-256: AES-128-CFB, the
+// PolicySecret(TPM_RH_ENDORSEMENT) policy, a zero unique field), the AK a
+// restricted ECDSA P-256 SHA-256 signing key with noDA and no policy.
+//
+// The resource manager flushes a file's transient objects and sessions
+// when it closes, so the commands that use them go in one chain on one
+// file (device.transact_chain; tpm_chain_via over a transport), the
+// handles the TPM gives copied into the later commands by links.
+
+pub Int tpm_cc_create_primary() { return 305; }        // 0x131
+pub Int tpm_cc_start_auth_session() { return 374; }    // 0x176
+pub Int tpm_cc_policy_secret() { return 337; }         // 0x151
+pub Int tpm_cc_activate_credential() { return 327; }   // 0x147
+pub Int tpm_cc_flush_context() { return 357; }         // 0x165
+pub Int tpm_rh_endorsement() { return 1073741835; }    // 0x4000000B
+pub Int tpm_rh_null() { return 1073741831; }           // 0x40000007
+pub Int tpm_alg_rsa() { return 1; }
+pub Int tpm_alg_ecc() { return 35; }                   // 0x23
+pub Int tpm_alg_aes() { return 6; }
+pub Int tpm_alg_cfb() { return 67; }                   // 0x43
+pub Int tpm_ecc_nist_p256() { return 3; }
+
+// objectAttributes bits (Part 2, Table 31).
+pub Int tpma_fixed_tpm() { return 2; }
+pub Int tpma_fixed_parent() { return 16; }
+pub Int tpma_sensitive_data_origin() { return 32; }
+pub Int tpma_user_with_auth() { return 64; }
+pub Int tpma_admin_with_policy() { return 128; }
+pub Int tpma_restricted() { return 65536; }
+pub Int tpma_decrypt() { return 131072; }
+pub Int tpma_sign() { return 262144; }
+
+// The EK templates' policy: PolicySecret(TPM_RH_ENDORSEMENT), SHA-256.
+pub List(UInt(8)) tpm_ek_policy() { return tw_hex8([131, 113, 151, 103, 68, 132, 179, 248, 26, 144, 204, 141, 70, 165, 215, 36, 253, 82, 215, 110, 6, 82, 11, 100, 242, 161, 218, 27, 51, 20, 105, 170]); }
+
+List(UInt(8)) tw_hex8(List(Int) xs) { return tw_u8s(xs, 0, ListBuf()); }
+List(UInt(8)) tw_u8s(List(Int) xs, Int i, ListBuf(UInt(8)) acc) { return if (i >= xs.len()) { acc.finish() } else { tw_u8s(xs, i + 1, acc.push((UInt(8))(xs[i] & 255))) }; }
+
+// The EK template: RSA (L-1) or ECC (L-2).
+pub List(UInt(8)) tpm_ek_template(Bool ecc) {
+    Int attrs = tpma_fixed_tpm() | tpma_fixed_parent() | tpma_sensitive_data_origin() | tpma_admin_with_policy() | tpma_restricted() | tpma_decrypt();
+    List(UInt(8)) head = tw_be(if (ecc) { tpm_alg_ecc() } else { tpm_alg_rsa() }, 2).concat(tw_be(tpm_alg_sha256(), 2)).concat(tw_be(attrs, 4)).concat(tw_2b(tpm_ek_policy()));
+    List(UInt(8)) sym = tw_be(tpm_alg_aes(), 2).concat(tw_be(128, 2)).concat(tw_be(tpm_alg_cfb(), 2));
+    if (ecc) { return head.concat(sym).concat(tw_be(tpm_alg_null(), 2)).concat(tw_be(tpm_ecc_nist_p256(), 2)).concat(tw_be(tpm_alg_null(), 2)).concat(tw_2b(tw_zeros(32, ListBuf()))).concat(tw_2b(tw_zeros(32, ListBuf()))); }
+    return head.concat(sym).concat(tw_be(tpm_alg_null(), 2)).concat(tw_be(2048, 2)).concat(tw_be(0, 4)).concat(tw_2b(tw_zeros(256, ListBuf())));
+}
+
+// The AK template: a restricted ECDSA P-256 SHA-256 signing key, noDA, its
+// password empty, no policy.
+pub List(UInt(8)) tpm_ak_template() {
+    Int attrs = tpma_fixed_tpm() | tpma_fixed_parent() | tpma_sensitive_data_origin() | tpma_user_with_auth() | tpma_object_no_da() | tpma_restricted() | tpma_sign();
+    return tw_be(tpm_alg_ecc(), 2).concat(tw_be(tpm_alg_sha256(), 2)).concat(tw_be(attrs, 4)).concat(tw_be(0, 2))
+        .concat(tw_be(tpm_alg_null(), 2)).concat(tw_be(tpm_alg_ecdsa(), 2)).concat(tw_be(tpm_alg_sha256(), 2)).concat(tw_be(tpm_ecc_nist_p256(), 2)).concat(tw_be(tpm_alg_null(), 2))
+        .concat(tw_be(0, 2)).concat(tw_be(0, 2));
+}
+
+// TPM2_CreatePrimary (Part 3, Table 164): a primary object of `hierarchy`
+// from `template` (a TPMT_PUBLIC), the password session (empty), an empty
+// sensitive area, no outside info, no creation PCRs.
+pub Result(List(UInt(8)), TpmError) tpm2_create_primary_cmd(Int hierarchy, List(UInt(8)) template) {
+    if (!tw_u32_ok(hierarchy) || template.len() > 1024) { return Err(TpmArg("a hierarchy and a template of at most 1024 bytes")); }
+    List(UInt(8)) params = tw_2b(tw_be(0, 2).concat(tw_be(0, 2))).concat(tw_2b(template)).concat(tw_be(0, 2)).concat(tw_be(0, 4));
+    return Ok(tw_command(tpm_cc_create_primary(), [hierarchy], tw_pw_auth(), params));
+}
+
+// TPM2_StartAuthSession (Part 3, Table 11): an unbound, unsalted policy
+// session hashing with SHA-256, the caller's nonce (16 to 32 bytes).
+pub Result(List(UInt(8)), TpmError) tpm2_start_auth_session_cmd(List(UInt(8)) nonce) {
+    if (nonce.len() < 16 || nonce.len() > 32) { return Err(TpmArg("a caller nonce of 16 to 32 bytes")); }
+    List(UInt(8)) params = tw_2b(nonce).concat(tw_be(0, 2)).concat([(UInt(8))1]).concat(tw_be(tpm_alg_null(), 2)).concat(tw_be(tpm_alg_sha256(), 2));
+    return Ok(tw_command(tpm_cc_start_auth_session(), [tpm_rh_null(), tpm_rh_null()], [], params));
+}
+
+// TPM2_PolicySecret (Part 3, Table 125): authHandle's authorization (the
+// password session, empty) into policySession, no nonce, cpHash or
+// policyRef, no expiration.
+pub Result(List(UInt(8)), TpmError) tpm2_policy_secret_cmd(Int auth_handle, Int session) {
+    if (!tw_u32_ok(auth_handle) || !tw_u32_ok(session)) { return Err(TpmArg("handles are u32")); }
+    List(UInt(8)) params = tw_be(0, 2).concat(tw_be(0, 2)).concat(tw_be(0, 2)).concat(tw_be(0, 4));
+    return Ok(tw_command(tpm_cc_policy_secret(), [auth_handle, session], tw_pw_auth(), params));
+}
+
+// TPM2_ActivateCredential (Part 3, Table 151): activateHandle (the AK, the
+// password session) and keyHandle (the EK, the policy session `session`),
+// credentialBlob, secret.
+pub Result(List(UInt(8)), TpmError) tpm2_activate_credential_cmd(Int ak, Int ek, Int session, List(UInt(8)) blob, List(UInt(8)) secret) {
+    if (!tw_u32_ok(ak) || !tw_u32_ok(ek) || !tw_u32_ok(session)) { return Err(TpmArg("handles are u32")); }
+    if (blob.len() > 1024 || secret.len() > 1024) { return Err(TpmArg("a credential and secret of at most 1024 bytes")); }
+    List(UInt(8)) policy = tw_be(session, 4).concat(tw_be(0, 2)).concat([(UInt(8))0]).concat(tw_be(0, 2));
+    return Ok(tw_command(tpm_cc_activate_credential(), [ak, ek], tw_pw_auth().concat(policy), tw_2b(blob).concat(tw_2b(secret))));
+}
+
+// TPM2_FlushContext (Part 3, Table 192): flushHandle is a parameter.
+pub Result(List(UInt(8)), TpmError) tpm2_flush_context_cmd(Int handle) {
+    if (!tw_u32_ok(handle)) { return Err(TpmArg("a handle is u32")); }
+    return Ok(tw_command(tpm_cc_flush_context(), [], [], tw_be(handle, 4)));
+}
+
+// The offsets the links copy between: a response's first handle (10), a
+// command's first and second handles (10, 14), and in ActivateCredential
+// the policy session's handle in the authorization area (after two handles,
+// the area's size and the 9-byte password session: 31).
+pub Int tpm_off_handle() { return 10; }
+pub Int tpm_off_handle2() { return 14; }
+pub Int tpm_off_activate_session() { return 31; }
+
+// The response's parameters after `handles` handles, with `sessions`
+// authorization responses (each nonce, attributes, hmac) after them.
+pub Result(TwAt, TpmError) tpm_resp_params_n(List(UInt(8)) r, Int handles, Int sessions) {
+    if (sessions <= 1) { return tpm_resp_params(r, handles, sessions == 1); }
+    TwAt all = TwAt {.r = r, .at = 0, .end = r.len()};
+    if (r.len() < 10) { return Err(TpmBad("a response shorter than its header")); }
+    TwNum tag = tw_num(all, 2, "tag")?;
+    TwNum size = tw_num(tag.next, 4, "responseSize")?;
+    TwNum rc = tw_num(size.next, 4, "responseCode")?;
+    if (size.v != r.len()) { return Err(TpmBad(f"responseSize {size.v}, {r.len()} bytes read")); }
+    if (rc.v != 0) { return Err(TpmRc(rc.v)); }
+    if (tag.v != tpm_st_sessions()) { return Err(TpmBad(f"tag 0x{tag.v:hex}, expected sessions")); }
+    if (r.len() < 14 + 4 * handles) { return Err(TpmBad("handles: short")); }
+    TwNum ps = tw_num(tw_skip(rc.next, 4 * handles), 4, "parameterSize")?;
+    if (ps.v > ps.next.end - ps.next.at) { return Err(TpmBad(f"parameterSize {ps.v} past the response")); }
+    Int pend = ps.next.at + ps.v;
+    TwAt done = tw_auths(TwAt {.r = r, .at = pend, .end = r.len()}, sessions)?;
+    _ = tw_done(done, "auth area")?;
+    return Ok(TwAt {.r = r, .at = ps.next.at, .end = pend});
+}
+
+Result(TwAt, TpmError) tw_auths(TwAt p, Int n) {
+    if (n <= 0) { return Ok(p); }
+    TwBytes nonce = tw_take_2b(p, 64, "auth nonce")?;
+    TwNum attrs = tw_num(nonce.next, 1, "auth attributes")?;
+    TwBytes hmac = tw_take_2b(attrs.next, 64, "auth hmac")?;
+    return tw_auths(hmac.next, n - 1);
+}
+
+// A response's first handle.
+pub Result(Int, TpmError) tpm_resp_handle(List(UInt(8)) r) {
+    if (r.len() < 14) { return Err(TpmBad("no handle in the response")); }
+    return Ok(tw_be_val(r, 10, 4, 0));
+}
+
+// What TPM2_CreatePrimary made: its transient handle, its public area (a
+// TPMT_PUBLIC) and its name.
+type TpmCreated = { Int handle; List(UInt(8)) public_area; List(UInt(8)) name; };
+
+pub Result(TpmCreated, TpmError) tpm2_create_primary_resp(List(UInt(8)) r) {
+    TwAt p = tpm_resp_params(r, 1, true)?;
+    Int h = tpm_resp_handle(r)?;
+    TwBytes outp = tw_take_2b(p, 1024, "outPublic")?;
+    TwBytes cd = tw_take_2b(outp.next, 1024, "creationData")?;
+    TwBytes ch = tw_take_2b(cd.next, 64, "creationHash")?;
+    TwNum tt = tw_num(ch.next, 2, "creationTicket tag")?;
+    TwNum th = tw_num(tt.next, 4, "creationTicket hierarchy")?;
+    TwBytes td = tw_take_2b(th.next, 64, "creationTicket digest")?;
+    TwBytes name = tw_take_2b(td.next, 68, "name")?;
+    _ = tw_done(name.next, "CreatePrimary")?;
+    return Ok(TpmCreated {.handle = h, .public_area = outp.v, .name = name.v});
+}
+
+// TPM2_ActivateCredential's response: certInfo, the credential recovered.
+pub Result(List(UInt(8)), TpmError) tpm2_activate_credential_resp(List(UInt(8)) r) {
+    TwAt p = tpm_resp_params_n(r, 0, 2)?;
+    TwBytes ci = tw_take_2b(p, 64, "certInfo")?;
+    _ = tw_done(ci.next, "ActivateCredential")?;
+    return Ok(ci.v);
+}
+
+// A response with no parameters (PolicySecret's are checked only for an
+// error; FlushContext has none).
+pub Result(Bool, TpmError) tpm_resp_ok(List(UInt(8)) r, Bool sessions) {
+    TwAt p = tpm_resp_params(r, 0, sessions)?;
+    return Ok(true);
+}
+
+// -- A public area -----------------------------------------------------------
+
+// A TPMT_PUBLIC (Part 2, Table 225) as far as a verifier needs: its type,
+// nameAlg, objectAttributes, authPolicy, the scheme and curve or key size,
+// and the public key (an RSA modulus and exponent, or an ECC point).
+type TpmPubKey = { Int type_alg; Int name_alg; Int attributes; List(UInt(8)) auth_policy; Int sym_alg; Int scheme; Int scheme_hash; Int curve; Int key_bits; Int exponent; List(UInt(8)) rsa_n; List(UInt(8)) ecc_x; List(UInt(8)) ecc_y; };
+
+pub Result(TpmPubKey, TpmError) tpm_public_parse(List(UInt(8)) a) {
+    TwAt p = TwAt {.r = a, .at = 0, .end = a.len()};
+    TwNum ty = tw_num(p, 2, "type")?;
+    TwNum na = tw_num(ty.next, 2, "nameAlg")?;
+    TwNum at = tw_num(na.next, 4, "objectAttributes")?;
+    TwBytes pol = tw_take_2b(at.next, 64, "authPolicy")?;
+    TwNum sym = tw_num(pol.next, 2, "symmetric")?;
+    TwAt q = if (sym.v == tpm_alg_null()) { sym.next } else { tw_skip(sym.next, 4) };
+    TwNum sch = tw_num(q, 2, "scheme")?;
+    Bool has_hash = sch.v != tpm_alg_null();
+    TwNum sh = if (has_hash) { tw_num(sch.next, 2, "scheme hash")? } else { TwNum {.v = 0, .next = sch.next} };
+    if (ty.v == tpm_alg_rsa()) {
+        TwNum bits = tw_num(sh.next, 2, "keyBits")?;
+        TwNum ex = tw_num(bits.next, 4, "exponent")?;
+        TwBytes n = tw_take_2b(ex.next, 512, "modulus")?;
+        _ = tw_done(n.next, "TPMT_PUBLIC")?;
+        List(UInt(8)) none = [];
+        return Ok(TpmPubKey {.type_alg = ty.v, .name_alg = na.v, .attributes = at.v, .auth_policy = pol.v, .sym_alg = sym.v, .scheme = sch.v, .scheme_hash = sh.v, .curve = 0, .key_bits = bits.v, .exponent = if (ex.v == 0) { 65537 } else { ex.v }, .rsa_n = n.v, .ecc_x = none, .ecc_y = none});
+    }
+    if (ty.v == tpm_alg_ecc()) {
+        TwNum cv = tw_num(sh.next, 2, "curveID")?;
+        TwNum kdf = tw_num(cv.next, 2, "kdf")?;
+        TwAt k2 = if (kdf.v == tpm_alg_null()) { kdf.next } else { tw_skip(kdf.next, 2) };
+        TwBytes x = tw_take_2b(k2, 66, "x")?;
+        TwBytes y = tw_take_2b(x.next, 66, "y")?;
+        _ = tw_done(y.next, "TPMT_PUBLIC")?;
+        List(UInt(8)) none = [];
+        return Ok(TpmPubKey {.type_alg = ty.v, .name_alg = na.v, .attributes = at.v, .auth_policy = pol.v, .sym_alg = sym.v, .scheme = sch.v, .scheme_hash = sh.v, .curve = cv.v, .key_bits = 0, .exponent = 0, .rsa_n = none, .ecc_x = x.v, .ecc_y = y.v});
+    }
+    return Err(TpmBad(f"key type 0x{ty.v:hex}"));
+}
+
+// -- Chains ------------------------------------------------------------------
+
+// Commands run in order over one connection, each patched by its links
+// (quadruples: from step, offset in its response, to step, offset in its
+// command) before it is sent: what device.transact_chain does in the
+// device host, here over a transport `send` (the simulator). A link past
+// its response (an earlier command failed) ends the chain there, the rest
+// of the responses empty, as in the host.
+pub Result(List(List(UInt(8))), TpmError) tpm_chain_via(Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send, List(List(UInt(8))) cmds, List(Int) links) {
+    return tw_chain_at(send, cmds, links, 0, []);
+}
+
+Result(List(List(UInt(8))), TpmError) tw_chain_at(Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send, List(List(UInt(8))) cmds, List(Int) links, Int i, List(List(UInt(8))) got) {
+    if (i >= cmds.len()) { return Ok(got); }
+    List(UInt(8)) none = [];
+    List(UInt(8)) c = tw_patch(cmds[i], links, got, i, 0) else { none };
+    if (c.len() == 0) { return Ok(tw_empties(got, cmds.len())); }
+    List(UInt(8)) r = send(c)?;
+    return tw_chain_at(send, cmds, links, i + 1, got.concat([r]));
+}
+
+List(List(UInt(8))) tw_empties(List(List(UInt(8))) got, Int n) {
+    List(UInt(8)) none = [];
+    return if (got.len() >= n) { got } else { tw_empties(got.concat([none]), n) };
+}
+
+Result(List(UInt(8)), TpmError) tw_patch(List(UInt(8)) c, List(Int) l, List(List(UInt(8))) got, Int i, Int k) {
+    if (k + 3 >= l.len()) { return Ok(c); }
+    if (l[k + 2] != i) { return tw_patch(c, l, got, i, k + 4); }
+    Int fr = l[k];
+    Int fo = l[k + 1];
+    Int to = l[k + 3];
+    if (fr >= got.len() || fo + 4 > got[fr].len() || to + 4 > c.len()) { return Err(TpmBad("a link past its response or command")); }
+    List(UInt(8)) c2 = c[0..to].concat(got[fr][fo..fo + 4]).concat(c[to + 4..c.len()]);
+    return tw_patch(c2, l, got, i, k + 4);
+}
+
+// The two keys this TPM derives for the templates: the EK (RSA or ECC) and
+// the AK, made and flushed in one chain.
+type TpmKeys = { TpmCreated ek; TpmCreated ak; };
+
+pub Result(TpmKeys, TpmError) tpm_ek_ak_via(Result(List(List(UInt(8))), TpmError) closure(List(List(UInt(8))), List(Int)) chain, Bool ecc) {
+    List(UInt(8)) c0 = tpm2_create_primary_cmd(tpm_rh_endorsement(), tpm_ek_template(ecc))?;
+    List(UInt(8)) c1 = tpm2_create_primary_cmd(tpm_rh_endorsement(), tpm_ak_template())?;
+    List(UInt(8)) f = tpm2_flush_context_cmd(0)?;
+    List(List(UInt(8))) rs = chain([c0, c1, f, f], [0, 10, 2, 10, 1, 10, 3, 10])?;
+    TpmCreated ek = tpm2_create_primary_resp(rs[0])?;
+    TpmCreated ak = tpm2_create_primary_resp(rs[1])?;
+    return Ok(TpmKeys {.ek = ek, .ak = ak});
+}
+
+// TPM2_ActivateCredential of (blob, secret) made for this TPM's EK and AK:
+// EK, AK, a policy session satisfied by PolicySecret(TPM_RH_ENDORSEMENT)
+// with the empty endorsement password, then ActivateCredential, then
+// the three flushed. The credential recovered.
+pub Result(List(UInt(8)), TpmError) tpm_activate_credential_via(Result(List(List(UInt(8))), TpmError) closure(List(List(UInt(8))), List(Int)) chain, Bool ecc, List(UInt(8)) nonce, List(UInt(8)) blob, List(UInt(8)) secret) {
+    List(UInt(8)) c0 = tpm2_create_primary_cmd(tpm_rh_endorsement(), tpm_ek_template(ecc))?;
+    List(UInt(8)) c1 = tpm2_create_primary_cmd(tpm_rh_endorsement(), tpm_ak_template())?;
+    List(UInt(8)) c2 = tpm2_start_auth_session_cmd(nonce)?;
+    List(UInt(8)) c3 = tpm2_policy_secret_cmd(tpm_rh_endorsement(), 0)?;
+    List(UInt(8)) c4 = tpm2_activate_credential_cmd(0, 0, 0, blob, secret)?;
+    List(UInt(8)) f = tpm2_flush_context_cmd(0)?;
+    // Handles: EK (0), AK (1), the session (2) into PolicySecret (3), into
+    // ActivateCredential (4) as AK, EK and its policy session, and into the
+    // flushes (5, 6, 7).
+    List(Int) links = [2, 10, 3, 14, 1, 10, 4, 10, 0, 10, 4, 14, 2, 10, 4, 31, 2, 10, 5, 10, 1, 10, 6, 10, 0, 10, 7, 10];
+    List(List(UInt(8))) rs = chain([c0, c1, c2, c3, c4, f, f, f], links)?;
+    TpmCreated ek = tpm2_create_primary_resp(rs[0])?;
+    TpmCreated ak = tpm2_create_primary_resp(rs[1])?;
+    Int sess = tpm_resp_handle(rs[2])?;
+    Bool ps = tpm_resp_ok(rs[3], true)?;
+    return tpm2_activate_credential_resp(rs[4]);
+}
+
+// TPM2_Quote by the endorsement-hierarchy AK (made, used, flushed in one
+// chain): the PCRs `sel` selects, `nonce` the qualifying data.
+pub Result(TpmQuote, TpmError) tpm_quote_ak_via(Result(List(List(UInt(8))), TpmError) closure(List(List(UInt(8))), List(Int)) chain, List(UInt(8)) nonce, List(PcrSel) sel) {
+    List(UInt(8)) c0 = tpm2_create_primary_cmd(tpm_rh_endorsement(), tpm_ak_template())?;
+    List(UInt(8)) c1 = tpm2_quote_cmd(0, nonce, sel)?;
+    List(UInt(8)) f = tpm2_flush_context_cmd(0)?;
+    List(List(UInt(8))) rs = chain([c0, c1, f], [0, 10, 1, 10, 0, 10, 2, 10])?;
+    TpmCreated ak = tpm2_create_primary_resp(rs[0])?;
+    return tpm2_quote_resp(rs[1]);
+}
+
+// -- EK certificates -----------------------------------------------------------
+
+// Back-to-back DER SEQUENCEs; trailing zero padding (some TPMs pad the
+// index) is ignored.
+pub Result(List(List(UInt(8))), TpmError) tpm_der_split(List(UInt(8)) b, Int at, List(List(UInt(8))) acc) {
+    if (at >= b.len() || b[at] == (UInt(8)) 0) { return Ok(acc); }
+    if (b[at] != (UInt(8)) 48 || at + 2 > b.len()) { return Err(TpmBad("an EK chain index holds something other than certificates")); }
+    Int l0 = (Int) b[at + 1];
+    Int nl = if (l0 < 128) { 0 } else { l0 - 128 };
+    if (nl > 3 || at + 2 + nl > b.len()) { return Err(TpmBad("an EK chain certificate's length")); }
+    Int len = if (l0 < 128) { l0 } else { tpm_be_n(b, at + 2, nl, 0) };
+    Int end = at + 2 + nl + len;
+    if (end > b.len()) { return Err(TpmBad("an EK chain certificate runs past its index")); }
+    return tpm_der_split(b, end, acc.concat([b[at..end]]));
+}
+
+Int tpm_be_n(List(UInt(8)) b, Int at, Int n, Int acc) { return if (n <= 0) { acc } else { tpm_be_n(b, at + 1, n - 1, (acc << 8) | (Int) b[at]) }; }

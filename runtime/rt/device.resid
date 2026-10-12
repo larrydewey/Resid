@@ -189,7 +189,8 @@ Int rd_take(Int r, Int n) {
 }
 
 // A parsed request, 40 words:
-//    0 kind (1 ioctl, 2 transact, 3 read_attr, 4 configfs_report, 5 sequence)
+//    0 kind (1 ioctl, 2 transact, 3 read_attr, 4 configfs_report, 5 sequence,
+//      6 transact chain)
 //    1 write   2 name   3 name length   4 path (NUL-terminated)   5 path length
 //    6 steps   7 step records            8 links  9 link words (5 each)
 //   10..14 the kind's own: transact max_command, max_response, secret,
@@ -202,7 +203,8 @@ Int rd_take(Int r, Int n) {
 //   26 input slots  27 slot words (number?, max, secret)
 //   28 why it is refused (0: it is not)   29 secret outputs   31 allocations
 //   32 service_guid  33 its length (0: none)  34 service_manifest_version
-//      (-1: none)
+//      (-1: none)   35 a chain's commands  36 their words (address, length)
+//   37 a chain's links  38 their words (from, offset, to, offset)
 //
 // A step (an ioctl), 16 words: 0 the request number for this target,
 // 1 size, 2 fields, 3 field words (8 each: kind 0 Scalar / 1 Inline /
@@ -274,7 +276,7 @@ Int pq_parse_r(Int d, Int r, Int n) {
     Int path = pq_alloc(d, pl + 1);
     _ = mcopy(path, pp, pl);
     _ = dset(d, 4, path) + dset(d, 5, pl);
-    Bool ok = if (kind == 1) { pq_ioctl(d, r) } else if (kind == 2) { pq_transact(d, r) } else if (kind == 3) { pq_attr(d, r) } else if (kind == 4) { pq_report(d, r) } else if (kind == 5) { pq_seq(d, r) } else { false };
+    Bool ok = if (kind == 1) { pq_ioctl(d, r) } else if (kind == 2) { pq_transact(d, r) } else if (kind == 3) { pq_attr(d, r) } else if (kind == 4) { pq_report(d, r) } else if (kind == 5) { pq_seq(d, r) } else if (kind == 6) { pq_tchain(d, r) } else { false };
     if (!ok || rd_bad(r)) { return 3; }
     if ((kind == 1 || kind == 5) && !pq_args(d, r)) { return 4; }
     if (rd_bad(r) || ld64(r + 16) != n) { return 5; }
@@ -402,6 +404,60 @@ Bool pq_transact(Int d, Int r) {
     return !rd_bad(r);
 }
 
+// A transact chain: max_command, max_response, the commands (u32 length,
+// bytes), the links (u8 from, u32 offset, u8 to, u32 offset).
+Bool pq_tchain(Int d, Int r) {
+    _ = dset(d, 10, rd_u(r, 4)) + dset(d, 11, rd_u(r, 4)) + dset(d, 12, 0);
+    Int n = rd_u(r, 1);
+    if (n < 1 || n > 16) { return false; }
+    Int cs = pq_alloc(d, n * 16 + 8);
+    _ = pq_tcmds(r, cs, 0, n);
+    Int nl = rd_u(r, 1);
+    if (nl > 32) { return false; }
+    Int ls = pq_alloc(d, nl * 32 + 8);
+    _ = pq_tlinks(r, ls, 0, nl);
+    _ = dset(d, 35, n) + dset(d, 36, cs) + dset(d, 37, nl) + dset(d, 38, ls);
+    return !rd_bad(r);
+}
+
+Int pq_tcmds(Int r, Int cs, Int i, Int n) {
+    if (i >= n) { return 0; }
+    Int l = rd_u(r, 4);
+    Int p = rd_take(r, l);
+    _ = st64(cs + i * 16, p) + st64(cs + i * 16 + 8, l);
+    return pq_tcmds(r, cs, i + 1, n);
+}
+
+Int pq_tlinks(Int r, Int ls, Int i, Int n) {
+    if (i >= n) { return 0; }
+    _ = st64(ls + i * 32, rd_u(r, 1)) + st64(ls + i * 32 + 8, rd_u(r, 4)) + st64(ls + i * 32 + 16, rd_u(r, 1)) + st64(ls + i * 32 + 24, rd_u(r, 4));
+    return pq_tlinks(r, ls, i + 1, n);
+}
+
+// The chain's commands fit max_command, and each link goes from an
+// earlier response (within max_response) into a later command.
+Int pq_tchain_err(Int d) {
+    if (dget(d, 1) != 1) { return 19; }
+    if (!pq_max_ok(dget(d, 10)) || !pq_max_ok(dget(d, 11))) { return 14; }
+    if (!pq_tcmds_ok(d, 0, dget(d, 35))) { return 14; }
+    return if (pq_tlinks_ok(d, 0, dget(d, 37))) { 0 } else { 40 };
+}
+
+Bool pq_tcmds_ok(Int d, Int i, Int n) {
+    if (i >= n) { return true; }
+    Int l = ld64(dget(d, 36) + i * 16 + 8);
+    return l >= 1 && l <= dget(d, 10) && pq_tcmds_ok(d, i + 1, n);
+}
+
+Bool pq_tlinks_ok(Int d, Int i, Int n) {
+    if (i >= n) { return true; }
+    Int e = dget(d, 38) + i * 32;
+    Int fr = ld64(e);
+    Int to = ld64(e + 16);
+    Bool ok = fr < to && to < dget(d, 35) && ld64(e + 8) + 4 <= dget(d, 11) && ld64(e + 24) + 4 <= ld64(dget(d, 36) + to * 16 + 8);
+    return ok && pq_tlinks_ok(d, i + 1, n);
+}
+
 Bool pq_attr(Int d, Int r) {
     _ = dset(d, 10, rd_u(r, 4));
     return !rd_bad(r);
@@ -476,6 +532,10 @@ Int pq_check(Int d) {
     if (kind == 2 && (!pq_max_ok(dget(d, 10)) || !pq_max_ok(dget(d, 11)) || dget(d, 12) > 1 || dget(d, 14) > dget(d, 10))) { return 14; }
     // A Transact writes its command to the device: never under a read.
     if (kind == 2 && wr != 1) { return 19; }
+    if (kind == 6) {
+        Int te = pq_tchain_err(d);
+        if (te != 0) { return te; }
+    }
     if (kind == 3 && !pq_max_ok(dget(d, 10))) { return 15; }
     if (kind == 4) {
         Int pe = pq_report_err(d);
@@ -801,12 +861,13 @@ Bool pq_is_len(Int s, Int o, Int i, Int n) {
 // and the number of secret outputs (word 29).
 Int pq_slots(Int d) {
     Int kind = dget(d, 0);
-    Int nmax = if (kind == 1 || kind == 5) { pq_fields_total(d, 0, dget(d, 6), 0) } else { 5 };
+    Int nmax = if (kind == 1 || kind == 5) { pq_fields_total(d, 0, dget(d, 6), 0) } else if (kind == 6) { dget(d, 35) + 1 } else { 5 };
     Int outs = pq_alloc(d, nmax * 24 + 8);
     Int ins = pq_alloc(d, nmax * 24 + 8);
     _ = dset(d, 25, outs) + dset(d, 27, ins);
     if (kind == 2) { _ = dset(d, 24, pq_slot(outs, 0, 0, dget(d, 11), dget(d, 12))); }
     if (kind == 3) { _ = dset(d, 24, pq_slot(outs, 0, 0, dget(d, 10), 0)); }
+    if (kind == 6) { _ = dset(d, 24, pq_tslots(outs, 0, dget(d, 35), dget(d, 11))); }
     if (kind == 4) {
         _ = pq_slot(outs, 0, 0, dget(d, 11), 0) + pq_slot(outs, 1, 0, dget(d, 12), 0) + pq_slot(outs, 2, 0, dget(d, 13), 0);
         _ = pq_slot(outs, 3, 0, 256, 0) + pq_slot(outs, 4, 1, 8, 0);
@@ -819,6 +880,8 @@ Int pq_slots(Int d) {
     }
     return dset(d, 29, pq_secrets(outs, 0, dget(d, 24), 0));
 }
+
+Int pq_tslots(Int outs, Int i, Int n, Int mr) { return if (i >= n) { n } else { pq_slot(outs, i, 0, mr, 0) * 0 + pq_tslots(outs, i + 1, n, mr) }; }
 
 Int pq_fields_total(Int d, Int i, Int n, Int acc) {
     if (i >= n) { return acc + 1; }
@@ -1186,6 +1249,7 @@ Int dh_main(Int argv, Int envp, Int mode, Int root) {
     if (mode == 14) { return native_child_exit(42); }                                                       // self-test: a bad exit
     Int kind = dget(d, 0);
     if (kind == 2) { return dh_transact(h, d); }
+    if (kind == 6) { return dh_tchain(h, d); }
     if (kind == 3) { return dh_attr(h, d); }
     if (kind == 4) {
         // The entry's name: 16 random bytes from the parent, which removes
@@ -1782,6 +1846,75 @@ Int dh_transact(Int h, Int d) {
     if (r > mr || !dh_canaries(h, 0)) { return dh_fail(h, 8, 0); }
     _ = gput(h, 0, 1) + gput(h, 1, 4) + gout(h, resp, r, dget(d, 12));
     return dh_reply(h);
+}
+
+// A transact chain: the commands in order on one open file, each patched
+// by its links from the earlier responses, each response one read of at
+// most max_response bytes into its own slice of one region.
+Int dh_tchain(Int h, Int d) {
+    Int fd = dh_open_dev(dget(d, 4), 2);   // O_RDWR: commands are written
+    if (fd < 0) { return dh_fail_errno(h, fd, false); }
+    if (!dh_is_chr(fd)) { return dh_fail(h, 6, 0); }
+    _ = dset(h, 7, fd);
+    Int n = dget(d, 35);
+    Int mr = dget(d, 11);
+    if (!dh_regions(h, 4)) { return native_child_exit(125); }
+    Int cmd = dh_region(h, dget(d, 10), 0);
+    Int resp = dh_region(h, n * mr, 0);
+    Int lens = xmalloc(n * 8 + 8);
+    if (cmd == 0 || resp == 0 || lens == 0 || !dh_bufs(h, d)) { return native_child_exit(125); }
+    _ = dh_rule(h, resid_raw_nr(1), 1, fd, 0) + dh_rule(h, resid_raw_nr(0), 1, fd, 0);
+    if (!dh_lock(h)) { return native_child_exit(126); }
+    Int st = dh_tsteps(h, d, fd, cmd, resp, lens, 0, n, mr);
+    _ = dh_after_op(h);
+    if (st == 1) { return dh_fail(h, 8, 0); }
+    if (st < 0) { return dh_fail_errno(h, st, false); }
+    if (!dh_canaries(h, 0)) { return dh_fail(h, 8, 0); }
+    _ = gput(h, 0, 1) + gput(h, n, 4);
+    return dh_touts(h, resp, lens, 0, n, mr);
+}
+
+// Steps i..n: 0, 1 on a response too long, or -errno. A link reaching
+// past its response (an earlier command failed) ends the chain there, the
+// rest of the responses empty, so the caller sees the failing response.
+Int dh_tsteps(Int h, Int d, Int fd, Int cmd, Int resp, Int lens, Int i, Int n, Int mr) {
+    if (i >= n) { return 0; }
+    Int ce = dget(d, 36) + i * 16;
+    Int cl = ld64(ce + 8);
+    _ = mcopy(cmd, ld64(ce), cl);
+    if (!dh_tpatch(d, cmd, resp, lens, i, mr, 0, dget(d, 37))) { return dh_tempty(lens, i, n); }
+    Int w = dh_write_all(fd, cmd, 0, cl);
+    if (w < 0) { return w; }
+    Int r = sc(0, fd, resp + i * mr, mr);
+    if (r < 0) { return r; }
+    if (r > mr) { return 1; }
+    _ = st64(lens + i * 8, r);
+    return dh_tsteps(h, d, fd, cmd, resp, lens, i + 1, n, mr);
+}
+
+Int dh_tempty(Int lens, Int i, Int n) {
+    if (i >= n) { return 0; }
+    _ = st64(lens + i * 8, 0);
+    return dh_tempty(lens, i + 1, n);
+}
+
+// The links into step i: 4 bytes each from an earlier response, which
+// must reach that far.
+Bool dh_tpatch(Int d, Int cmd, Int resp, Int lens, Int i, Int mr, Int k, Int nl) {
+    if (k >= nl) { return true; }
+    Int e = dget(d, 38) + k * 32;
+    if (ld64(e + 16) != i) { return dh_tpatch(d, cmd, resp, lens, i, mr, k + 1, nl); }
+    Int fr = ld64(e);
+    Int fo = ld64(e + 8);
+    if (fo + 4 > ld64(lens + fr * 8)) { return false; }
+    _ = mcopy(cmd + ld64(e + 24), resp + fr * mr + fo, 4);
+    return dh_tpatch(d, cmd, resp, lens, i, mr, k + 1, nl);
+}
+
+Int dh_touts(Int h, Int resp, Int lens, Int i, Int n, Int mr) {
+    if (i >= n) { return dh_reply(h); }
+    _ = gout(h, resp + i * mr, ld64(lens + i * 8), 0);
+    return dh_touts(h, resp, lens, i + 1, n, mr);
 }
 
 // Write n bytes from p + i; n, or -errno.

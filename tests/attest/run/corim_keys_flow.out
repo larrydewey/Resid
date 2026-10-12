@@ -1,9 +1,11 @@
-keys: CCA platform/010909090909090909090909090909090909090909090909090909090909090909 CCA platform/010404040404040404040404040404040404040404040404040404040404040404 Test/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+keys: CCA platform/010909090909090909090909090909090909090909090909090909090909090909:pkix-key CCA platform/010404040404040404040404040404040404040404040404040404040404040404:pkix-key Test/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:pkix-key Test/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:pkix-key (conditional) Test/cccccccccccccccccccccccccccccccc:cose-key (conditional) Test/dddddddddddddddddddddddddddddddd:pkix-key (conditional)
 CCA, endorsed CPAK: verified, 1 anchor, endorser's: true
 CCA, key endorsed for another instance: bad signature: no key the CoRIM endorses for the token's instance signed the platform token
 CCA, after the CoRIM's not-after: stale: the CoRIM's validity ended before the evidence time
 TPM, endorsed AK: appraised
-TPM, conditioned key only: refused (tpm_verify_quote_endorsed): the CoRIM endorses no attestation key for instance bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+TPM, conditioned on a measured element: refused (tpm_verify_quote_endorsed): the CoRIM endorses no attestation key for instance bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+TPM, a COSE_Key authorized by the endorser: appraised
+TPM, authorized by another key only: refused (tpm_verify_quote_endorsed): the CoRIM endorses no attestation key for instance dddddddddddddddddddddddddddddddd
 TPM, no instance named: refused (tpm_verify_quote_endorsed): name the TPM's instance: a quote does not say which TPM made it
 reference CoRIM: refused (cca_verify_endorsed): the CoRIM endorses no attestation key for an instance
 released and opened: same key

@@ -28,6 +28,15 @@ pub Result(List(DevOut), DeviceError) device_engine_transact_w(Transact op, List
     return dv_tr_out(op.name, 0 - 1, dv_answer(op.name, r, resid_device_call_w(r.req)));
 }
 
+@descriptor(engine_transact_chain_w)
+@requires(device)
+pub Result(List(DevOut), DeviceError) device_engine_transact_chain_w(Transact op, List(List(UInt(8))) cmds, List(Int) links) {
+    DvReq r = dv_prep_transact_chain(op, cmds, links);
+    if (r.err != "") { return Err(BadInput(op.name, r.err)); }
+    Int _tr = dv_tr_req(op.name, 0 - 1, r.req);
+    return dv_tr_out(op.name, 0 - 1, dv_answer(op.name, r, resid_device_call_w(r.req)));
+}
+
 @descriptor(engine_configfs_report_w)
 @requires(device)
 pub Result(List(DevOut), DeviceError) device_engine_configfs_report_w(ConfigfsReport op, ReportReq rq) {

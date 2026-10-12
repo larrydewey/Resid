@@ -1,0 +1,11 @@
+// tpm_verify_ak verifies under a manufacturer's EK root (kind TpmEk): an
+// attestation key's own anchor is refused at compile time.
+import "verify/core.resid";
+import "verify/tpm.resid";
+import "verify/testing.resid";
+import "challenge.resid";
+
+Result(Verified(TpmAk), VerifyError) f(List(List(UInt(8))) ch, List(List(UInt(8))) cl, List(UInt(8)) ak, List(UInt(8)) answer, ChallengeRecord c) {
+    return tpm_verify_ak(ch, cl, ak, answer, c, test_tpm_ak(), test_time(1791000000));
+}
+Int main() { return 0; }

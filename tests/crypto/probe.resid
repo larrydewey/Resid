@@ -44,7 +44,7 @@ HashAlg hash_named(Str s) {
     return Sha256;
 }
 
-Curve curve_named(Str s) { return if (s == "p384") { P384 } else { P256 }; }
+Curve curve_named(Str s) { return if (s == "p384") { P384 } else if (s == "p521") { P521 } else { P256 }; }
 
 // ─── One test ────────────────────────────────────────────────────────
 

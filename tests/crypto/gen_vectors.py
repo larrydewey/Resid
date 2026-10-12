@@ -6,8 +6,8 @@ Usage: tests/crypto/gen_vectors.py <dir-of-wycheproof-json> [commit]
 
 The same directory may hold hpke.json, the RFC 9180 vectors from
 https://github.com/cfrg/draft-irtf-cfrg-hpke (test-vectors.json); they go
-to vectors/hpke_rfc9180.txt (P-256 and X25519 suites; P-521 and X448 are
-not implemented).
+to vectors/hpke_rfc9180.txt (P-256 and X25519 suites; P-521 ECDH and X448
+are not implemented).
 
 The JSON comes from https://github.com/C2SP/wycheproof (testvectors_v1,
 Apache-2.0). The converted files are committed so the suite needs neither
@@ -24,7 +24,7 @@ import os
 import sys
 
 HASH = {"SHA-1": "sha1", "SHA-256": "sha256", "SHA-384": "sha384", "SHA-512": "sha512"}
-CURVE = {"secp256r1": "p256", "secp384r1": "p384"}
+CURVE = {"secp256r1": "p256", "secp384r1": "p384", "secp521r1": "p521"}
 
 FILES = [
     # name, kind
@@ -33,10 +33,12 @@ FILES = [
     ("ecdsa_secp384r1_sha256_test", "ecdsa"),
     ("ecdsa_secp384r1_sha384_test", "ecdsa"),
     ("ecdsa_secp384r1_sha512_test", "ecdsa"),
+    ("ecdsa_secp521r1_sha512_test", "ecdsa"),
     ("ecdsa_secp256r1_sha256_p1363_test", "ecdsa"),
     ("ecdsa_secp256r1_sha512_p1363_test", "ecdsa"),
     ("ecdsa_secp384r1_sha384_p1363_test", "ecdsa"),
     ("ecdsa_secp384r1_sha512_p1363_test", "ecdsa"),
+    ("ecdsa_secp521r1_sha512_p1363_test", "ecdsa"),
     ("ecdh_secp256r1_ecpoint_test", "ecdh"),
     ("ecdh_secp384r1_ecpoint_test", "ecdh"),
     ("ecdh_secp256r1_test", "ecdh"),

@@ -5633,15 +5633,15 @@ Str dv_role_at(Kg g, Str tag, Int i) {
 
 // device.<m>(...): the descriptor of its kind, then the inputs.
 GKT dv_gk_verb(GK k, Int id, Str m) {
-    if (!dev_verb(m)) { return gterr(k, "unknown provider method device." + m + " (the device verbs are ioctl, transact, configfs_report, read_attr and sequence)", id); }
-    Str dt = dv_role_ty(k.g, m);
+    if (!dev_verb(m)) { return gterr(k, "unknown provider method device." + m + " (the device verbs are ioctl, transact, transact_chain, configfs_report, read_attr, read_pci_attr and sequence)", id); }
+    Str dt = dv_role_ty(k.g, if (m == "transact_chain") { "transact" } else { m });
     Str outt = dv_role_ty(k.g, "out");
     Str errt = dv_role_ty(k.g, "error");
     if (dt == "" || outt == "" || errt == "") { return gterr(k, "E0260: device." + m + " takes a descriptor from lib/dev/: import a device module (for example dev/sev_guest.resid)", id); }
-    Int want = if (m == "read_attr") { 1 } else { 2 };
+    Int want = if (m == "read_attr") { 1 } else if (m == "transact_chain") { 3 } else { 2 };
     Int na = k.g.ns[id].nk - 1;
     if (na != want) { return gterr(k, f"device.{m} takes {want} argument(s), got {na}", id); }
-    Str second = if (m == "ioctl" || m == "sequence") { "List(" + dv_role_ty(k.g, "in") + ")" } else if (m == "transact") { "List(UInt(8))" } else if (m == "configfs_report") { dv_role_ty(k.g, "report_req") } else { "" };
+    Str second = if (m == "ioctl" || m == "sequence") { "List(" + dv_role_ty(k.g, "in") + ")" } else if (m == "transact") { "List(UInt(8))" } else if (m == "transact_chain") { "List(List(UInt(8)))" } else if (m == "configfs_report") { dv_role_ty(k.g, "report_req") } else if (m == "read_pci_attr") { dv_role_ty(k.g, "pci_addr") } else { "" };
     GKT d = gk_expr(k, gk_kid(k, id, 1), dt);
     if (d.err != "") { return d; }
     if (!ty_same(d.ty, dt)) { return gterr(d.k, "E0260: device." + m + " takes a descriptor of type " + dt + " from lib/dev/, got " + d.ty, id); }
@@ -5650,15 +5650,20 @@ GKT dv_gk_verb(GK k, Int id, Str m) {
     if (a.err != "") { return a; }
     if (str_contains(a.ty, "Secret(")) { return gterr(a.k, "E0255: device." + m + " takes public inputs, got " + a.ty + "; declassify the secret first", id); }
     if (!ty_same(a.ty, second) && !params_accept(second, a.ty, 1)) { return gterr(a.k, "device." + m + " expects (" + dt + ", " + second + "), got (" + d.ty + ", " + a.ty + ")", id); }
-    return gt(a.k, "Result(List(" + outt + "), " + errt + ")", id);
+    if (want == 2) { return gt(a.k, "Result(List(" + outt + "), " + errt + ")", id); }
+    GKT l = gk_expr(a.k, gk_kid(a.k, id, 3), "List(Int)");
+    if (l.err != "") { return l; }
+    if (!ty_same(l.ty, "List(Int)")) { return gterr(l.k, "device." + m + " takes its links as List(Int), got " + l.ty, id); }
+    return gt(l.k, "Result(List(" + outt + "), " + errt + ")", id);
 }
 
-// Does this device verb call write? read_attr never does; otherwise the
+// Does this device verb call write? read_attr and read_pci_attr never
+// do; otherwise the
 // descriptor's `write` decides, read before reduction from the literal the
 // argument names. Anything else counts as a write: a read-only grant then
 // covers only a descriptor whose `.write = false` is written down.
 Bool dv_writes(GK k, Int id) {
-    if (k.g.ns[id].text == "read_attr") { return false; }
+    if (k.g.ns[id].text == "read_attr" || k.g.ns[id].text == "read_pci_attr") { return false; }
     if (k.g.ns[id].nk < 2) { return true; }
     Int lit = dv_lit_of(k, kg_kid(k.g, id, 1));
     return lit < 0 || dv_finit_text(k.g, lit, "write", 0) != "false";
@@ -5712,7 +5717,7 @@ pub Str dv_no_std() { return "\x01/dev/"; }
 
 // The descriptor kinds a program may not write a literal of.
 Bool dv_kind_tag(Str aux) {
-    return str_contains(aux, "@descriptor(ioctl)") || str_contains(aux, "@descriptor(transact)") || str_contains(aux, "@descriptor(read_attr)") || str_contains(aux, "@descriptor(configfs_report)") || str_contains(aux, "@descriptor(sequence)");
+    return str_contains(aux, "@descriptor(ioctl)") || str_contains(aux, "@descriptor(transact)") || str_contains(aux, "@descriptor(read_attr)") || str_contains(aux, "@descriptor(read_pci_attr)") || str_contains(aux, "@descriptor(configfs_report)") || str_contains(aux, "@descriptor(sequence)");
 }
 
 // E0260 at node `id`: what is wrong, or "". `inlib`: the node is in

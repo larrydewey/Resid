@@ -1,0 +1,36 @@
+// transact_chain (spec §49): commands in order on one open file, each
+// patched by 4-byte links from earlier responses; a link past its response
+// (an earlier command failed) ends the chain, the rest of the responses
+// empty.
+import "dev/fx_device_transact_chain.resid";
+
+Str says(Result(List(DevOut), DeviceError) r) {
+    return match (r) {
+        Ok(o) => f"{o.len()} responses: " + lens(o, 0, ""),
+        Err(e) => device_error_text(e),
+    };
+}
+
+Str lens(List(DevOut) o, Int i, Str acc) {
+    if (i >= o.len()) { return acc; }
+    Int n = match (dv_out_bytes(o, i)) { Some(bs) => bs.len(), None => 0 - 1, };
+    return lens(o, i + 1, acc + (if (i > 0) { " " } else { "" }) + f"{n}");
+}
+
+@requires(device)
+Int main() {
+    List(UInt(8)) c = [(UInt(8))1, 2, 3, 4, 5, 6, 7, 8];
+    println(says(device.transact_chain(fx_zero(), [c, c, c], [0, 0, 1, 4, 1, 8, 2, 0])));
+    println(says(device.transact_chain(fx_zero(), [c], [])));
+    println(says(device.transact_chain(fx_null(), [c, c, c], [0, 0, 1, 4])));
+    println(says(device.transact_chain(fx_null(), [c, c], [])));
+    println(says(device.transact_chain(fx_zero(), [c, c], [1, 0, 0, 0])));
+    println(says(device.transact_chain(fx_zero(), [c, c], [0, 0, 1, 6])));
+    println(says(device.transact_chain(fx_zero(), [c, c], [0, 14, 1, 0])));
+    println(says(device.transact_chain(fx_zero(), [c, c], [0, 0, 1])));
+    List(UInt(8)) long = [(UInt(8))0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    println(says(device.transact_chain(fx_zero(), [c, long], [])));
+    List(List(UInt(8))) none = [];
+    println(says(device.transact_chain(fx_zero(), none, [])));
+    return 0;
+}

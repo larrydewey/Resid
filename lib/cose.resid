@@ -78,9 +78,8 @@ type CbeStr = { Bool ok; List(Int) bytes; Int pos; };
 pub CbeStr cbe_read_str(List(Int) b, Int pos, Int major) {
     List(Int) empty = [];
     CbeHead h = cbe_read_head(b, pos);
-    if (!h.ok || h.major != major || h.val < 0) { return CbeStr {.ok = false, .bytes = empty, .pos = pos}; }
+    if (!h.ok || h.major != major || h.val < 0 || h.val > b.len() - h.pos) { return CbeStr {.ok = false, .bytes = empty, .pos = pos}; }
     Int end = h.pos + h.val;
-    if (end > b.len()) { return CbeStr {.ok = false, .bytes = empty, .pos = pos}; }
     return CbeStr {.ok = true, .bytes = slice_bytes(b, h.pos, end - 1), .pos = end};
 }
 
@@ -157,6 +156,7 @@ pub Str cose_kid_scan(List(Int) prot, Int pos, Int left) {
         CbeStr s = cbe_read_str(prot, k.pos, 2);
         return cbe_ascii(s.bytes, 0, "");
     }
+    if ((v.major == 2 || v.major == 3) && (v.val < 0 || v.val > prot.len() - v.pos)) { return ""; }
     Int next = if (v.major == 2 || v.major == 3) { v.pos + v.val } else { v.pos };
     return cose_kid_scan(prot, next, left - 1);
 }

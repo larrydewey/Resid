@@ -25,14 +25,15 @@ pub Int cbor_skip(List(Int) b, Int pos, Int depth) {
     if (!h.ok) { return 0 - 1; }
     if (h.major == 0 || h.major == 1 || h.major == 7) { return h.pos; }
     if (h.major == 2 || h.major == 3) {
-        if (h.val < 0 || h.pos + h.val > b.len()) { return 0 - 1; }
+        if (h.val < 0 || h.val > b.len() - h.pos) { return 0 - 1; }
         return h.pos + h.val;
     }
     if (h.major == 6) { return cbor_skip(b, h.pos, depth - 1); }
     // Every array element needs at least a byte; a count beyond what is
     // left is a lie, refused before walking it.
+    if (h.val < 0 || h.val > b.len() - h.pos) { return 0 - 1; }
     Int count = if (h.major == 4) { h.val } else { 2 * h.val };
-    if (h.val < 0 || count > b.len() - h.pos) { return 0 - 1; }
+    if (count > b.len() - h.pos) { return 0 - 1; }
     return cbor_skip_n(b, h.pos, count, depth - 1);
 }
 
@@ -56,7 +57,7 @@ CborInt cbor_int_at(List(Int) b, Int pos) {
 // when absent; -2 when the map is malformed or has the key twice.
 pub Int cbor_map_find(List(Int) b, Int pos, Int key) {
     CbeHead m = cbe_read_head(b, pos);
-    if (!m.ok || m.major != 5 || m.val < 0 || 2 * m.val > b.len() - m.pos) { return 0 - 2; }
+    if (!m.ok || m.major != 5 || m.val < 0 || m.val > (b.len() - m.pos) / 2) { return 0 - 2; }
     return cbor_map_scan(b, m.pos, m.val, key, 0 - 1);
 }
 
@@ -123,6 +124,7 @@ pub List(Int) cose_tbs(List(Int) prot, List(Int) external_aad, List(Int) payload
 pub SigAlg cose_alg(Int alg) {
     if (alg == 0 - 7) { return SigAlg {.kind = sigalg_ecdsa(), .hash = Sha256, .mgf = Sha256, .salt = 0}; }
     if (alg == 0 - 35) { return SigAlg {.kind = sigalg_ecdsa(), .hash = Sha384, .mgf = Sha384, .salt = 0}; }
+    if (alg == 0 - 36) { return SigAlg {.kind = sigalg_ecdsa(), .hash = Sha512, .mgf = Sha512, .salt = 0}; }
     if (alg == 0 - 8) { return SigAlg {.kind = sigalg_ed25519(), .hash = Sha512, .mgf = Sha512, .salt = 0}; }
     if (alg == 0 - 37) { return SigAlg {.kind = sigalg_pss(), .hash = Sha256, .mgf = Sha256, .salt = 32}; }
     if (alg == 0 - 38) { return SigAlg {.kind = sigalg_pss(), .hash = Sha384, .mgf = Sha384, .salt = 48}; }
@@ -133,11 +135,12 @@ pub SigAlg cose_alg(Int alg) {
     return sigalg_none();
 }
 
-// ES256 names P-256 and ES384 P-384 (RFC 9053 §2.1 recommends the pairing;
+// ES256 names P-256, ES384 P-384 and ES512 P-521 (RFC 9053 §2.1 recommends the pairing;
 // RFC 8152 implementations enforce it, and an attestation verifier should).
 Bool cose_curve_ok(Int alg, PubKey key) {
     if (alg == 0 - 7) { return key.kind == pubkey_ec() && curve_bytes(key.curve) == 32; }
     if (alg == 0 - 35) { return key.kind == pubkey_ec() && curve_bytes(key.curve) == 48; }
+    if (alg == 0 - 36) { return key.kind == pubkey_ec() && curve_bytes(key.curve) == 66; }
     return true;
 }
 
@@ -177,7 +180,7 @@ pub List(Int) cose_sign1_ecdsa(Curve c, List(Int) priv, List(Int) payload, List(
 
 // ─── COSE_Key (RFC 9053 §7) ──────────────────────────────────────────
 
-// An EC2 (kty 2; crv 1 P-256, 2 P-384; x, y), OKP (kty 1; crv 6
+// An EC2 (kty 2; crv 1 P-256, 2 P-384, 3 P-521; x, y), OKP (kty 1; crv 6
 // Ed25519; x) or RSA (kty 3; n, e) public key; kind 0 otherwise.
 pub PubKey cose_key_public(List(Int) b) {
     if (cbor_skip(b, 0, 16) != b.len()) { return pubkey_none(); }
@@ -189,8 +192,8 @@ pub PubKey cose_key_public(List(Int) b) {
         CborInt crv = cbor_int_at(b, cbor_map_find(b, 0, 0 - 1));
         List(Int) x = cose_key_bytes(b, 0 - 2);
         List(Int) y = cose_key_bytes(b, 0 - 3);
-        Curve c = if (crv.ok && crv.v == 2) { P384 } else { P256 };
-        if (!crv.ok || (crv.v != 1 && crv.v != 2) || x.len() != curve_bytes(c) || y.len() != curve_bytes(c)) { return pubkey_none(); }
+        Curve c = if (crv.ok && crv.v == 2) { P384 } else if (crv.ok && crv.v == 3) { P521 } else { P256 };
+        if (!crv.ok || crv.v < 1 || crv.v > 3 || x.len() != curve_bytes(c) || y.len() != curve_bytes(c)) { return pubkey_none(); }
         List(Int) pt = [4].concat(x).concat(y);
         if (!ec_public_ok(c, pt)) { return pubkey_none(); }
         return PubKey {.kind = pubkey_ec(), .curve = c, .point = pt, .n = [], .e = [], .pss_only = false};

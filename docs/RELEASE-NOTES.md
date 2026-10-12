@@ -1,8 +1,7 @@
-# Resid: notes for the next release (after v0.2.0)
+# Resid v0.3.0
 
-A draft for the release body, from v0.2.0 to the merge of
-`ioctl-device-access` into master. Each item's guarantees, with the tests
-that check them, are in `SECURITY.md`.
+From v0.2.0 to the merge of `attest-complete` into master. Each item's
+guarantees, with the tests that check them, are in `SECURITY.md`.
 
 ## Highlights
 
@@ -31,11 +30,32 @@ that check them, are in `SECURITY.md`.
 - **Attestation** (`PLAN-attestation.md`, A1-A4): `lib/verify/` turns
   evidence into `Verified(T)`. It covers SEV-SNP (VCEK and VLEK, AMD
   CRLs), TDX (with Intel's collateral), AWS Nitro, Arm CCA, TPM 2.0
-  quotes and NV counters, and NVIDIA GPUs over SPDM 1.1. SPDM 1.1 also
-  gets sessions, with the requester's key schedule and secured messages
-  in `lib/spdm_session.resid`. SNP and TDX evidence can be bound to a GPU
-  session, and signed CoRIMs supply reference values and endorsed
-  attestation keys. `@anchor`, `@policy` and `@decides` let the compiler
+  quotes and NV counters, and SPDM devices. SNP, TDX, Nitro, CCA and TPM
+  evidence can be bound to a device's SPDM session.
+- **SPDM 1.0-1.3, whole** (DSP0274, DSP0277): verifiers for measurements,
+  CHALLENGE and KEY_EXCHANGE at every version, under NVIDIA's Device
+  Identity CA or any vendor's device root, with every implemented
+  algorithm (ECDSA P-256/P-384/P-521, RSASSA and RSAPSS 2048-4096,
+  Ed25519; SHA-256/384/512) and OCSP for every certificate below the
+  anchor (NVIDIA's real H100 chain and OCSP answers verify). A whole
+  requester (`lib/spdm_requester.resid`): negotiation with the 1.2 opaque
+  format and multi-key, certificates, CHALLENGE with basic mutual
+  authentication, measurements, sessions with mutual authentication
+  (encapsulated or not), PSK, heartbeat, key update, chunking both ways,
+  over MCTP, PCI DOE and TCP (`lib/spdm_transport.resid`), interoperating
+  with DMTF's spdm-emu in 22 configurations (`tests/spdm/run.sh`).
+- **TPM attestation keys by credential activation**: an AK proven to live
+  in a TPM a manufacturer certified, by TPM2_ActivateCredential against
+  its EK, under the 46 EK roots of Microsoft's TrustedTpm.cab (generated
+  anchors), with the EK chain's CRLs required. TPM2_MakeCredential in
+  Resid (`lib/tpm_credential.resid`, RSA and ECC EKs) is checked against
+  the IBM TPM simulator; the device side runs as one chain of commands on
+  one open file (`device.transact_chain`).
+- **CoRIM, whole** (draft-ietf-rats-corim): every triple (reference,
+  endorsed, identity, attest-key, conditional endorsement and series),
+  every measurement value and key type, and the appraisal of §9 over each
+  platform's claims; endorsed appraisals for all six platforms, endorsed
+  keys for CCA, TPM and SPDM devices. `@anchor`, `@policy` and `@decides` let the compiler
   check every release: whose word the evidence rests on, which policy
   appraised it, that it is fresh, and that the secret is sealed to the
   attested key or channel (E0280-E0294). Other parts: HPKE releases,
@@ -48,9 +68,20 @@ that check them, are in `SECURITY.md`.
   integers to 2^1023 at compile time.
 - **Native modules** (`@link`, spec §47) run confined per call, and the
   `display` capability adds a Unix window-server transport.
-- **Cryptography** — P-384, SHA-384, RSA verification, HPKE, COSE, strict
-  X.509 parsing fuzzed by mutation, SHA-256/512 on the CPU's SHA
-  instructions.
+- **Cryptography** — P-384, SHA-384, RSA verification and RSAES-OAEP
+  encryption, P-521 ECDSA verification (Wycheproof), HPKE, COSE (ES512
+  too), strict X.509 parsing fuzzed by mutation, SHA-256/512 on the CPU's
+  SHA instructions. OCSP responses past their nextUpdate are now refused.
+- **PCI devices**: a PCI function's sysfs attributes (identity, DOE
+  features, TSM connection) by a typed address, `device.read_pci_attr`.
+
+## Fixes
+
+- The CBOR readers (`lib/cose.resid`, `lib/cosesig.resid`) no longer
+  overflow on a length or count near 2^63 (found by the new fuzz cases).
+- `ocsp_sr_next_update` never found a SingleResponse's nextUpdate, so an
+  OCSP answer past it was accepted (TLS and device chains); it reads the
+  [0] after thisUpdate now.
 
 ## Tooling
 
@@ -63,8 +94,10 @@ that check them, are in `SECURITY.md`.
 
 ## Tests
 
-Self-hosted suites: conformance (573), graph (919), attestation (73),
-constant time (71 cases), TLS (140), packages (109), provenance (76),
-devices (57), runtime (24), reduce (29), labels (13), LSP (20), HTTP (3)
-and ledger (27). `./boot.sh` reaches a byte-identical
-self-compile fixed point from the committed seed.
+Self-hosted suites: conformance (573), graph (924), attestation (78),
+constant time (72 cases), TLS (140), cryptography (13,843 checks),
+packages (109), provenance (76), devices (61, with the IBM TPM
+simulator), SPDM interoperability (22, with DMTF's spdm-emu), runtime
+(24), reduce (29), device generator (18), labels (13), LSP (20), HTTP (3)
+and ledger (27). `./boot.sh` reaches a byte-identical self-compile fixed
+point from the committed seed.

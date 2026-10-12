@@ -1,0 +1,10 @@
+3 responses: 16 16 16
+1 responses: 16
+3 responses: 0 0 0
+2 responses: 0 0
+fx.zero: bad input: link 0 is not from an earlier command to a later one
+fx.zero: bad input: link 0 is outside its response or command
+fx.zero: bad input: link 0 is outside its response or command
+fx.zero: bad input: links of 3 numbers, not quadruples
+fx.zero: bad input: command 1 of 17 bytes, 1 to 16
+fx.zero: bad input: 0 commands, 1 to 16

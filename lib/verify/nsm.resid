@@ -208,7 +208,8 @@ Bool nsm_signs_leaf(Cert c, Cert i, Instant now) {
 }
 
 // The relayed nonce must be exactly the expected value.
-Result(Bool, VerifyError) nsm_bind(NsmDocument d, List(UInt(8)) want, ChallengeRecord c) {
+@verify_internal
+pub Result(Bool, VerifyError) nsm_bind(NsmDocument d, List(UInt(8)) want, ChallengeRecord c) {
     if (d.nonce.len() != want.len()) { return Err(NotFresh("the document's nonce is not this challenge")); }
     Bool spent = vf_bind_challenge(chal_bytes(d.nonce), want, c, chal_bytes(d.nonce), nsm_descriptors())?;
     return Ok(spent);
@@ -282,7 +283,7 @@ List(Int) nsm_pcr_at(NsmDocument d, Int idx, Int i) {
     return nsm_pcr_at(d, idx, i + 1);
 }
 
-Bool nsm_zero(List(Int) b, Int i) { return i >= b.len() || (b[i] == 0 && nsm_zero(b, i + 1)); }
+pub Bool nsm_zero(List(Int) b, Int i) { return i >= b.len() || (b[i] == 0 && nsm_zero(b, i + 1)); }
 
 Str nsm_policy_miss(NsmDocument d, List(Str) want, Int i) {
     if (i >= want.len()) { return ""; }

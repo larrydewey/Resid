@@ -20,6 +20,7 @@
 import "dev/tpm_wire.resid";
 import "ecdsa.resid";
 import "hash.resid";
+import "tpm_credential.resid";
 
 // -- The simulator's TCP protocol (ibmswtpm2 src/TcpServerPosix.c) --------
 // Platform port: a u32 signal (1 power on, 11 NV on), answered by a u32 0.
@@ -199,6 +200,64 @@ Result(List(Secret(UInt(8))), TpmError) send_sim_secret(Int fd, List(UInt(8)) cm
     return match (send_sim(fd, cmd)) { Ok(r) => Ok(secret_split(classify(r))), Err(e) => Err(e), };
 }
 
+// The endorsement keys' credential round: EK and AK from the TCG templates,
+// a credential made for them in Resid (tpm_credential.resid), recovered
+// by the TPM's ActivateCredential; then one made for another AK's name and
+// one with a flipped bit, which the TPM must refuse; then a quote by that AK.
+@requires(network(readonly))
+Str credential_round(Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send, Bool ecc) {
+    Str kind = if (ecc) { "ECC" } else { "RSA" };
+    return match (cred_round(send, ecc)) { Ok(t) => kind + " " + t, Err(e) => kind + ": " + tpm_error_text(e), };
+}
+
+@requires(network(readonly))
+Result(Str, TpmError) cred_round(Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send, Bool ecc) {
+    Result(List(List(UInt(8))), TpmError) closure(List(List(UInt(8))), List(Int)) chain = lambda(cs, ls) { tpm_chain_via(send, cs, ls) };
+    TpmKeys ks = tpm_ek_ak_via(chain, ecc)?;
+    TpmPubKey ek = tpm_public_parse(ks.ek.public_area)?;
+    TpmPubKey ak = tpm_public_parse(ks.ak.public_area)?;
+    List(Int) name = ints(ks.ak.name, 0, ListBuf());
+    TpmCredential c = make_cred(ek, ecc, name, seq(32, 5));
+    Str got = activate(chain, ecc, c);
+    List(Int) other = name[0..name.len() - 1].concat([name[name.len() - 1] ^ 1]);
+    Str wrong = activate(chain, ecc, make_cred(ek, ecc, other, seq(32, 5)));
+    List(Int) flipped = c.blob[0..10].concat([c.blob[10] ^ 1]).concat(c.blob[11..]);
+    Str tamper = activate(chain, ecc, TpmCredential {.blob = flipped, .secret = c.secret});
+    List(Int) point = [4].concat(ints(ak.ecc_x, 0, ListBuf())).concat(ints(ak.ecc_y, 0, ListBuf()));
+    List(UInt(8)) nonce = hx(seq(32, 9));
+    List(PcrSel) sel = [pcr_sel(tpm_alg_sha256(), [0, 1, 7])];
+    PcrRead pr = tpm_pcr_read_via(send, sel)?;
+    TpmQuote q = tpm_quote_ak_via(chain, nonce, sel)?;
+    TpmKeys k2 = tpm_ek_ak_via(chain, ecc)?;
+    Bool same_keys = same(ints(k2.ak.name, 0, ListBuf()), name, 0) && same(ints(k2.ek.name, 0, ListBuf()), ints(ks.ek.name, 0, ListBuf()), 0);
+    return Ok(f"EK type 0x{ek.type_alg:hex}, AK attributes 0x{ak.attributes:hex}, same keys again {same_keys}; activated: {got}; for another AK: {wrong}; tampered: {tamper}; AK quote: {quote_check(q, nonce, point, cat_digests(pr.digests, 0, []))}");
+}
+
+@requires(network(readonly))
+Bool flush(Result(List(UInt(8)), TpmError) closure(List(UInt(8))) send, Int h) {
+    return match (tpm2_flush_context_cmd(h)) { Ok(c) => match (send(c)) { Ok(r) => rc_of(r) == 0, Err(e) => false, }, Err(e) => false, };
+}
+
+// n bytes of a pattern keyed by k.
+List(Int) seq(Int n, Int k) { return seq_at(n, k, 0, ListBuf()); }
+List(Int) seq_at(Int n, Int k, Int i, ListBuf(Int) acc) {
+    if (i >= n) { return acc.finish(); }
+    return seq_at(n, k, i + 1, acc.push((i * 7 + 3 + k * 13) & 255));
+}
+
+TpmCredential make_cred(TpmPubKey ek, Bool ecc, List(Int) name, List(Int) cred) {
+    if (ecc) { return tpm_make_credential_ecc_with(ints(ek.ecc_x, 0, ListBuf()), ints(ek.ecc_y, 0, ListBuf()), name, cred, seq(32, 1)); }
+    return tpm_make_credential_rsa_with(ints(ek.rsa_n, 0, ListBuf()), be(if (ek.exponent == 0) { 65537 } else { ek.exponent }, 3), name, cred, seq(32, 2), seq(32, 3));
+}
+
+@requires(network(readonly))
+Str activate(Result(List(List(UInt(8))), TpmError) closure(List(List(UInt(8))), List(Int)) chain, Bool ecc, TpmCredential c) {
+    return match (tpm_activate_credential_via(chain, ecc, hx(seq(16, 4)), hx(c.blob), hx(c.secret))) {
+        Ok(b) => f"{b.len()} bytes, the credential {same(ints(b, 0, ListBuf()), seq(32, 5), 0)}",
+        Err(e) => tpm_error_text(e),
+    };
+}
+
 @requires(network(readonly), args, declassify)
 Int main() {
     Int port = str_parse_int(args.get(1));
@@ -268,6 +327,11 @@ Int main() {
     // What the wrappers spared the TPM: the empty password fails
     // (TPM_RC_AUTH_FAIL, session 1) and the count goes up.
     println(f"raw NV_Read by its own auth, empty password: rc 0x{raw(fd, nv_read_raw(da_idx, 8)):hex}");
+    println(f"lockout counter {lockout_count(send)}");
+    // The simulator holds three transient objects: flush the earlier keys.
+    println(f"flushed {flush(send, ak)} {flush(send, ak_pol)} {flush(send, ak_adm)}");
+    println(credential_round(send, true));
+    println(credential_round(send, false));
     println(f"lockout counter {lockout_count(send)}");
     _ = resid_tcp_close(fd);
     return 0;

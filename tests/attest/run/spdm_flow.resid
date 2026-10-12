@@ -69,7 +69,7 @@ SpdmSessionRecord sess_rec(Rec r, List(List(UInt(8))) ocsp) {
 List(List(UInt(8))) emu_ocsp(Str d) { return [rdb("spdm-emu/" + d + "-ocsp-inter.der"), rdb("spdm-emu/" + d + "-ocsp-leaf.der")]; }
 
 Anchor emu_anchor(Str d) {
-    return if (d == "ecp256") { test_emu_ecp256() } else if (d == "ecp384") { test_emu_ecp384() } else if (d == "rsa2048") { test_emu_rsa2048() } else if (d == "rsa3072") { test_emu_rsa3072() } else { test_emu_ed25519() };
+    return if (d == "ecp256") { test_emu_ecp256() } else if (d == "ecp384") { test_emu_ecp384() } else if (d == "ecp521") { test_emu_ecp521() } else if (d == "rsa2048") { test_emu_rsa2048() } else if (d == "rsa3072") { test_emu_rsa3072() } else { test_emu_ed25519() };
 }
 
 Str alg_of(SpdmEvidence e) { return spdm_alg_name(e.asym, e.hash); }
@@ -201,6 +201,7 @@ Int main() {
     println(emu("v12-rsapss2048", "rsa2048", true));
     println(emu("v13-p256", "ecp256", true));
     println(emu("v13-ed25519", "ed25519", true));
+    println(emu("v13-p521", "ecp521", true));
     Str n = emu_negative();
     ChallengeRecord c1 = challenge_issue(32);
     List(Int) r1 = request(chal_ints(challenge_value(c1)));

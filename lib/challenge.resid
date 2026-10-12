@@ -34,6 +34,16 @@ pub ChallengeRecord challenge_issue(Int n, List(UInt(8)) bind = [], Int lifetime
 
 pub List(UInt(8)) challenge_value(ChallengeRecord c) { return c.value; }
 
+// A value only this record's holder can compute, for an answer that must
+// not be predictable from what was sent (a TPM credential: the TPM has to
+// decrypt it to answer): SHA-256 over "resid.challenge.derive.v1", the
+// label, the record's nonce (never sent) and data, each with its length.
+pub List(UInt(8)) challenge_derive(ChallengeRecord c, Str label, List(Int) data) {
+    List(Int) l = bytes_of(label);
+    List(Int) m = bytes_of("resid.challenge.derive.v1").concat(chal_u32(l.len())).concat(l).concat(chal_u32(c.nonce.len())).concat(chal_ints(c.nonce)).concat(chal_u32(data.len())).concat(data);
+    return chal_bytes(sha256_bytes(m));
+}
+
 // How a request's challenge slot is filled (PLAN-labels.md §6.2): a fresh
 // runtime value nobody keeps, an issued record's value (spent by the
 // device engine before anything is sent, then bound to the reply), or a

@@ -345,3 +345,22 @@ pub Bool rsa_pss_verify_digest(HashAlg h, HashAlg mgf, Int slen, RsaPub key, Lis
 pub Bool rsa_pss_verify(HashAlg h, HashAlg mgf, Int slen, RsaPub key, List(Int) msg, List(Int) sig) {
     return rsa_pss_verify_digest(h, mgf, slen, key, hash_bytes(h, msg), sig);
 }
+
+// ─── RSAES-OAEP encryption (RFC 8017 §7.1.1) ────────────────────────
+
+// msg encrypted to `key` with hash h for the label's hash and MGF1, and
+// `seed` (h's length of the caller's random bytes); empty when msg is too
+// long for the key or the seed is not h's length. Public data only: the
+// one use here encrypts a fresh seed for a TPM's endorsement key
+// (TPM2_MakeCredential), which nothing else needs to know.
+pub List(Int) rsa_oaep_encrypt(HashAlg h, RsaPub key, List(Int) msg, List(Int) label, List(Int) seed) {
+    Int hl = hash_len(h);
+    Int k = key.k;
+    if (!key.ok || seed.len() != hl || msg.len() > k - 2 * hl - 2) { return []; }
+    List(Int) db = hash_bytes(h, label).concat(rsa_zero_bytes(k - msg.len() - 2 * hl - 2)).concat([1]).concat(msg);
+    List(Int) masked_db = rsa_xor(db, rsa_mgf1(h, seed, k - hl - 1), 0, ListBuf()).finish();
+    List(Int) masked_seed = rsa_xor(seed, rsa_mgf1(h, masked_db, hl), 0, ListBuf()).finish();
+    return rsa_public_op(key, [0].concat(masked_seed).concat(masked_db));
+}
+
+List(Int) rsa_zero_bytes(Int n) { return if (n <= 0) { [] } else { [0].concat(rsa_zero_bytes(n - 1)) }; }

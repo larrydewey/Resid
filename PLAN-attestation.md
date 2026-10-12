@@ -39,7 +39,14 @@ reference page "Attestation"); A5 and A6 not started:
   root; a real document from blocky/nitrite's tests verifies) and TPM 2.0
   quotes under a pinned AK (`lib/verify/tpm.resid`, kind `TpmAk`), each
   with its plain, key-bound and replayable forms (NSM also channel-bound)
-  and an appraisal (A4 in part).
+  and an appraisal (A4 in part). A TPM's AK can instead be proven by
+  credential activation against its EK under a manufacturer's EK root
+  (kind `TpmEk`; `tpm_ak_challenge`, `tpm_verify_ak`,
+  `tpm_verify_quote_activated`, `tpm_verify_counter_activated`; the 46
+  roots of Microsoft's TrustedTpm.cab in `tpm_anchors.resid`, generated;
+  TPM2_MakeCredential in `lib/tpm_credential.resid`, checked against the
+  IBM simulator; the device side in `lib/dev/tpm.resid` over
+  `device.transact_chain`), with the EK chain's CRLs required.
 - `seal_to_channel` and the bound TLS sends (`lib/verify/channel.resid`);
   a channel is named by the SHA-256 of its exporter.
 - Field origins in the labels: relayed and host fields of `@signed` layout
@@ -56,23 +63,31 @@ reference page "Attestation"); A5 and A6 not started:
   CRLs (Intel's real ones verify).
 - CCA tokens (`lib/verify/cca.resid`; the TF-M test token verifies under
   veraison's CPAK), with the CPAK pinned as an `EndorsedKeys` anchor.
-- SPDM 1.1 device measurements (`lib/verify/spdm.resid`,
-  `nvidia_anchors.resid`; NVIDIA's sample H100 report verifies under the
-  real Device Identity CA), and SPDM 1.1 sessions
-  (`lib/verify/spdm_session.resid`: the signed KEY_EXCHANGE, the
-  measurements its summary covers; `lib/spdm_session.resid`: the
-  requester's key schedule and secured messages, generic over secret
-  bytes), with SNP and TDX evidence bound to a session
-  (`lib/verify/device_bound.resid`). Not yet: later SPDM versions, mutual
-  authentication, a transport for the requester, NSM and CCA bound to a
-  session, OCSP.
+- SPDM 1.0-1.3 (`lib/verify/spdm.resid`, `nvidia_anchors.resid`;
+  NVIDIA's sample H100 report verifies under the real Device Identity CA
+  with NVIDIA's real OCSP answers; DMTF spdm-emu captures verify under
+  their roots, kind `DeviceIdentity`): measurements, CHALLENGE, and
+  sessions (`lib/verify/spdm_session.resid`: the signed KEY_EXCHANGE, the
+  measurements its summary covers), every implemented algorithm, OCSP for
+  every certificate below the anchor; a whole requester
+  (`lib/spdm_requester.resid`, `lib/spdm_transport.resid`: MCTP, PCI DOE,
+  TCP, the spdm-emu socket; mutual authentication, PSK, key update,
+  heartbeat, chunking, multi-key; `tests/spdm/run.sh`), with SNP, TDX,
+  NSM, CCA and TPM evidence bound to a session
+  (`lib/verify/device_bound.resid`). Not yet: SPDM 1.4, a kernel
+  interface to a TDISP device's transcript.
 - Endorsed reference values (A2): signed CoRIMs under an `Endorser` anchor
   (`lib/verify/corim.resid`; veraison's signed CoRIM verifies) and the
   endorsed appraisals of SNP, TDX, CCA and SPDM (`lib/verify/endorsed.resid`),
   whose result rests on the endorser too; attest-key triples endorse a CCA
   CPAK or TPM AK in place of a pinned key (`lib/verify/endorsed_keys.resid`,
-  `cca_verify_endorsed`, `tpm_verify_quote_endorsed`). Not yet:
-  endorsed-value triples, conditioned attest keys.
+  `cca_verify_endorsed`, `tpm_verify_quote_endorsed`), identity triples an
+  SPDM device's key (`spdm_verify_endorsed`). Every triple kind, key type
+  and measurement value is read, and `corim_appraise` applies them as
+  draft-ietf-rats-corim §9 does (reference values corroborate, endorsed
+  values, conditional endorsements and series add), over each platform's
+  claims (`*_claims`, `*_corim`), TPM and Nitro included. Not yet: keys
+  conditioned on a measured element.
 - Rollback (§8): `tpm_verify_counter` (TPM2_NV_Certify of a counter
   under a pinned AK), `bind_counter` (a local decision can be fresh) and
   `first_seal` (the explicit first-seal outcome);

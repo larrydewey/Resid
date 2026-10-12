@@ -11,6 +11,7 @@ v12-rsassa3072: measurements ok (SPDM 0x12, RsaSsa3072Sha256, 8 blocks); challen
 v12-rsapss2048: measurements ok (SPDM 0x12, RsaPss2048Sha512, 8 blocks); challenge ok (summary 64 bytes); session ok (mutual authentication 0)
 v13-p256: measurements ok (SPDM 0x13, EcdsaP256Sha256, 8 blocks); challenge ok (summary 32 bytes); session ok (mutual authentication 0)
 v13-ed25519: measurements ok (SPDM 0x13, Ed25519, 8 blocks); challenge ok (summary 48 bytes); session ok (mutual authentication 0)
+v13-p521: measurements ok (SPDM 0x13, EcdsaP521Sha512, 8 blocks); challenge ok (summary 64 bytes); session ok (mutual authentication 0)
 revoked leaf: refused (spdm_verify): certificate 0 of the device chain is revoked
 no OCSP for the intermediate: stale: no current OCSP answer says certificate 1 of the device chain is good
 after the OCSP responses' nextUpdate: stale: no current OCSP answer says certificate 0 of the device chain is good

@@ -1,0 +1,176 @@
+== v10-mctp-p384
+version 0x10 asym 0x80 hash 2 dhe 0x0 aead 0 req_asym 0x0 opaque 1 multi-key false
+chain read, 1655 bytes
+challenge verified
+signed measurements verified, 8 blocks
+done
+== v11-mctp-p384
+version 0x11 asym 0x80 hash 2 dhe 0x10 aead 2 req_asym 0x0 opaque 1 multi-key false
+chain read, 1655 bytes
+challenge verified
+signed measurements verified, 8 blocks
+session established (mutual authentication 0, secured messages 1.2)
+heartbeat acknowledged
+key updated
+all keys updated
+measurements in the session verified
+session ended
+done
+== v12-doe-rsassa3072
+version 0x12 asym 0x4 hash 1 dhe 0x8 aead 1 req_asym 0x0 opaque 2 multi-key false
+chain read, 3778 bytes
+challenge verified
+signed measurements verified, 8 blocks
+session established (mutual authentication 0, secured messages 1.2)
+heartbeat acknowledged
+key updated
+all keys updated
+measurements in the session verified
+session ended
+done
+== v12-tcp-rsapss2048
+version 0x12 asym 0x2 hash 2 dhe 0x10 aead 4 req_asym 0x0 opaque 2 multi-key false
+chain read, 3666 bytes
+challenge verified
+signed measurements verified, 8 blocks
+session established (mutual authentication 0, secured messages 1.2)
+heartbeat acknowledged
+key updated
+all keys updated
+measurements in the session verified
+session ended
+done
+== v12-mctp-rsassa4096
+version 0x12 asym 0x20 hash 4 dhe 0x10 aead 2 req_asym 0x0 opaque 2 multi-key false
+chain read, 3938 bytes
+challenge verified
+signed measurements verified, 8 blocks
+done
+== v12-mctp-rsapss4096
+version 0x12 asym 0x40 hash 4 dhe 0x10 aead 2 req_asym 0x0 opaque 2 multi-key false
+chain read, 3938 bytes
+challenge verified
+signed measurements verified, 8 blocks
+done
+== v12-clear
+version 0x12 asym 0x80 hash 2 dhe 0x10 aead 2 req_asym 0x0 opaque 2 multi-key false
+chain read, 1655 bytes
+challenge verified
+signed measurements verified, 8 blocks
+session established (mutual authentication 0, secured messages 1.2)
+heartbeat acknowledged
+key updated
+all keys updated
+measurements in the session verified
+session ended
+done
+== v13-mctp-p256
+version 0x13 asym 0x10 hash 1 dhe 0x8 aead 1 req_asym 0x0 opaque 2 multi-key false
+chain read, 1454 bytes
+challenge verified
+signed measurements verified, 8 blocks
+session established (mutual authentication 0, secured messages 1.2)
+heartbeat acknowledged
+key updated
+all keys updated
+measurements in the session verified
+session ended
+done
+== v13-doe-ed25519
+version 0x13 asym 0x400 hash 4 dhe 0x10 aead 2 req_asym 0x0 opaque 2 multi-key false
+chain read, 1302 bytes
+challenge verified
+signed measurements verified, 8 blocks
+session established (mutual authentication 0, secured messages 1.2)
+heartbeat acknowledged
+key updated
+all keys updated
+measurements in the session verified
+session ended
+done
+== v13-tcp-p521
+version 0x13 asym 0x100 hash 4 dhe 0x10 aead 2 req_asym 0x0 opaque 2 multi-key false
+chain read, 1893 bytes
+challenge verified
+signed measurements verified, 8 blocks
+session established (mutual authentication 0, secured messages 1.2)
+heartbeat acknowledged
+key updated
+all keys updated
+measurements in the session verified
+session ended
+done
+== v12-psk
+version 0x12 asym 0x80 hash 2 dhe 0x10 aead 2 req_asym 0x0 opaque 2 multi-key false
+PSK session established
+heartbeat acknowledged
+key updated
+session ended
+done
+== v13-psk-ctx
+version 0x13 asym 0x80 hash 2 dhe 0x10 aead 2 req_asym 0x0 opaque 2 multi-key false
+PSK session established
+heartbeat acknowledged
+all keys updated
+session ended
+done
+== v12-mut-wo-encap
+version 0x12 asym 0x80 hash 2 dhe 0x10 aead 2 req_asym 0x10 opaque 2 multi-key false
+session established (mutual authentication 1, secured messages 1.2)
+heartbeat acknowledged
+session ended
+done
+== v12-mut-w-encap
+version 0x12 asym 0x80 hash 2 dhe 0x10 aead 2 req_asym 0x80 opaque 2 multi-key false
+session established (mutual authentication 2, secured messages 1.2)
+session ended
+done
+== v13-mut-digests
+version 0x13 asym 0x80 hash 2 dhe 0x10 aead 2 req_asym 0x400 opaque 2 multi-key false
+session established (mutual authentication 4, secured messages 1.2)
+session ended
+done
+== v12-basic-mut
+version 0x12 asym 0x80 hash 2 dhe 0x10 aead 2 req_asym 0x10 opaque 2 multi-key false
+chain read, 1655 bytes
+challenge verified
+done
+== v11-basic-mut
+version 0x11 asym 0x80 hash 2 dhe 0x10 aead 2 req_asym 0x80 opaque 1 multi-key false
+chain read, 1655 bytes
+challenge verified
+done
+== v13-multi-key
+version 0x13 asym 0x80 hash 2 dhe 0x10 aead 2 req_asym 0x0 opaque 2 multi-key true
+chain read, 1655 bytes
+challenge verified
+signed measurements verified, 8 blocks
+session established (mutual authentication 0, secured messages 1.2)
+session ended
+done
+== v12-secver10
+version 0x12 asym 0x80 hash 2 dhe 0x10 aead 2 req_asym 0x0 opaque 2 multi-key false
+session established (mutual authentication 0, secured messages 1.0)
+heartbeat acknowledged
+session ended
+done
+== v13-secver11
+version 0x13 asym 0x80 hash 2 dhe 0x10 aead 2 req_asym 0x0 opaque 2 multi-key false
+session established (mutual authentication 0, secured messages 1.1)
+heartbeat acknowledged
+session ended
+done
+== v13-chunk
+version 0x13 asym 0x80 hash 2 dhe 0x10 aead 2 req_asym 0x0 opaque 2 multi-key false
+chain read, 1655 bytes
+challenge verified
+signed measurements verified, 8 blocks
+session established (mutual authentication 0, secured messages 1.2)
+session ended
+done
+== versions-negotiated
+version 0x12 asym 0x80 hash 2 dhe 0x10 aead 2 req_asym 0x0 opaque 2 multi-key false
+chain read, 1655 bytes
+challenge verified
+signed measurements verified, 8 blocks
+done

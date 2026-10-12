@@ -138,13 +138,13 @@ Bool at_alg_ok(Str a) {
 }
 
 // SPDM's signature algorithm and hash, named together (lib/spdm_msg.resid's
-// spdm_alg_name): Ecdsa{P256,P384}, RsaSsa{2048,3072,4096} or
+// spdm_alg_name): Ecdsa{P256,P384,P521}, RsaSsa{2048,3072,4096} or
 // RsaPss{2048,3072,4096}, then Sha{256,384,512}.
 Bool at_spdm_alg(Str a) {
     Bool h = str_ends_with(a, "Sha256") || str_ends_with(a, "Sha384") || str_ends_with(a, "Sha512");
     if (!h || str_len(a) < 7) { return false; }
     Str f = str_slice(a, 0, str_len(a) - 6);
-    return f == "EcdsaP256" || f == "EcdsaP384" || f == "RsaSsa2048" || f == "RsaSsa3072" || f == "RsaSsa4096" || f == "RsaPss2048" || f == "RsaPss3072" || f == "RsaPss4096";
+    return f == "EcdsaP256" || f == "EcdsaP384" || f == "EcdsaP521" || f == "RsaSsa2048" || f == "RsaSsa3072" || f == "RsaSsa4096" || f == "RsaPss2048" || f == "RsaPss3072" || f == "RsaPss4096";
 }
 
 // "K(product)" or "K": kind and product.

@@ -41,7 +41,7 @@ def respond(c, issuer, ikey, status=ocsp.OCSPCertStatus.GOOD):
     alg = None if isinstance(ikey, (ed25519.Ed25519PrivateKey, ed448.Ed448PrivateKey)) else hashes.SHA256()
     return b.sign(ikey, alg).public_bytes(serialization.Encoding.DER)
 
-for d in ["ecp256", "ecp384", "rsa2048", "rsa3072", "ed25519"]:
+for d in ["ecp256", "ecp384", "ecp521", "rsa2048", "rsa3072", "ed25519"]:
     ca, inter, leaf = cert(f"{B}/{d}/ca.cert.der"), cert(f"{B}/{d}/inter.cert.der"), cert(f"{B}/{d}/end_responder.cert.der")
     cak, ik = key(f"{B}/{d}/ca.key"), key(f"{B}/{d}/inter.key")
     open(f"{D}/{d}-ca.der", "wb").write(ca.public_bytes(serialization.Encoding.DER))

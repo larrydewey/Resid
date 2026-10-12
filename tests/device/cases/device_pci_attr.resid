@@ -1,0 +1,26 @@
+// PciAttr (spec §49): a PCI function's attributes by its address, a
+// PciAddr of integers the engine checks and formats; the path under the
+// device's directory is the descriptor's.
+import "dev/pci_tsm.resid";
+
+Str num(Result(Int, DeviceError) r, Str what) { return match (r) { Ok(v) => what + f" read ({v > 0 || v == 0})", Err(e) => device_error_text(e) }; }
+
+Str opt_bool(Result(Option(Bool), DeviceError) r) { return match (r) { Ok(o) => match (o) { Some(b) => f"authenticated {b}", None => "no authenticated attribute" }, Err(e) => device_error_text(e) }; }
+
+Str opt_str(Result(Option(Str), DeviceError) r) { return match (r) { Ok(o) => match (o) { Some(s) => "connected to " + s, None => "no TSM connection" }, Err(e) => device_error_text(e) }; }
+
+Str addr(Option(PciAddr) a) { return match (a) { Some(x) => pci_addr_text(x), None => "not an address" }; }
+
+@requires(device(readonly))
+Int main() {
+    PciAddr a = PciAddr {.domain = 0, .bus = 0, .device = 0, .function = 0};
+    println(num(pci_vendor(a), "vendor"));
+    println(num(pci_class(a), "class"));
+    println(opt_bool(pci_authenticated(a)));
+    println(opt_str(pci_tsm_connected(a)));
+    println(f"secured SPDM over DOE: {match (pci_doe_spdm(a, true)) { Ok(b) => b, Err(e) => false }}");
+    println(num(pci_vendor(PciAddr {.domain = 0, .bus = 255, .device = 31, .function = 7}), "vendor"));
+    println(num(pci_vendor(PciAddr {.domain = 0, .bus = 256, .device = 0, .function = 0}), "vendor"));
+    println(addr(pci_addr_parse("0000:3b:00.1")) + " " + addr(pci_addr_parse("00:1f.3")) + " " + addr(pci_addr_parse("0000:00:20.0")) + " " + addr(pci_addr_parse("0000:00:00.0/../x")));
+    return 0;
+}
