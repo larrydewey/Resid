@@ -10,7 +10,10 @@ description: Core types, records, sums, generic sums, constraint types and alias
 `Map(K, V)`; `Set(T)`; `Option(T)`; `Result(T, E)`; `RegionError`;
 `SourceLoc`; the builders `StrBuf` and `ListBuf(T)`; closure types
 `R closure(P1, P2)`; and the fixed-capacity `Str(N)`, `Bytes(N)` and
-`List(T, N)` ([Fixed capacity](/Resid/reference/fixed-capacity/)).
+`List(T, N)` ([Fixed capacity](/Resid/reference/fixed-capacity/));
+vectors `Vec(T, N)` ([Vectors](/Resid/reference/vectors/)); `Secret(T)`
+([Secret values](/Resid/reference/secrets/)); and layout types over
+bytes ([Layouts](/Resid/reference/layouts/)).
 
 All values are immutable and have no observable identity. Only *handles*
 (for example an open `File`) carry identity; they are runtime resources

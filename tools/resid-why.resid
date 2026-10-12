@@ -7,7 +7,7 @@
 /// by direct comparison) and explains why each residual remains.
 ///
 /// Usage:
-///   residc tools/resid-why.resid run -- <artifact> [symbol] [--kind K]
+///   ./resid-why <artifact> [symbol] [--kind K]
 ///     [--file F] [--max N] [--json] [--summary] [--help]
 ///
 /// Scope trim vs. the Rust original: malformed/truncated CBOR input is not

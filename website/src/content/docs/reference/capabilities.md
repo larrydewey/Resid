@@ -27,6 +27,7 @@ therefore enters a program only at `main` or a `test` block.
 | `display` | the display builtins (`resid_disp_*`): the window-server connection, its bytes and descriptors, shared memory and waiting (no modes) |
 | `native_<m>` | calls into [native module](/Resid/reference/native-modules/) `m` (no modes) |
 | `declassify` | `declassify(s, "reason")`: publishing a [secret value](/Resid/reference/secrets/) (no modes); each call is recorded on the graph with its reason |
+| `provision` | `provisioned_key(k, "reason")`: relying on a key someone provisioned, which they therefore know ([integrity labels](/Resid/reference/labels/)); recorded as `provision.<reason>` (no modes) |
 | `assume` | `assume(x, assumption())` in `lib/verify/assume.resid`: relying on an [assumption](/Resid/reference/attestation/) instead of evidence (no modes) |
 
 Printing, reading stdin and OS randomness need no capability.
@@ -44,7 +45,7 @@ or mode is an error (`E0213`).
 accepting, sending and receiving. Binding a listener other machines can
 reach (`resid_tcp_listen_at`, `http_listen_at`) is the one network write.
 
-`display`, `declassify` and `native_<m>` have no modes at all:
+`display`, `declassify`, `provision`, `assume` and `native_<m>` have no modes at all:
 `display(readonly)` is refused, like `native_m(readonly)` and
 `declassify(readonly)`. A display descriptor is a socket, so
 `resid_disp_poll` waits on one under `display` alone; waiting on display

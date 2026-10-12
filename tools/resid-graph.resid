@@ -22,9 +22,9 @@
 /// exactly mirroring the Rust version's `callees.retain(|c|
 /// defined.contains(c))`.
 ///
-/// Usage: residc tools/resid-graph.resid run -- <file.resid> [--dot]
-///        residc tools/resid-graph.resid run -- <artifact> --node ID [--depth N]
-///        residc tools/resid-graph.resid run -- <artifact> --check
+/// Usage: ./resid-graph <file.resid> [--dot]
+///        ./resid-graph <artifact> --node ID [--depth N]
+///        ./resid-graph <artifact> --check
 ///
 /// The second form reads the knowledge-graph artifact
 /// `<artifact>.resid-graph.cbor` (spec §34) and prints, as DOT, the nodes

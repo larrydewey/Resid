@@ -10,7 +10,7 @@
 ///   tail   = existing driver.resid driver section (pick_opt + main) with
 ///            the declare-header list refreshed from codegen.resid's main
 ///
-/// Run: residc tools/merge_driver.resid run
+/// Run: residc tools/merge_driver.resid -o merge_driver && ./merge_driver
 
 // ─── Character classification ──────────────────────────────────
 

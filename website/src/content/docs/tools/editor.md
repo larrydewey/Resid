@@ -47,5 +47,4 @@ editor's unsaved buffer. It provides:
 Any editor with an LSP client can use it: configure the command
 `residc lsp` for `.resid` files. Each request is handled in its own
 memory arena and open documents live in memory files, so the server's
-memory stays flat over a long session; checking the compiler's own 8,000
-lines takes under half a second.
+memory stays flat over a long session.

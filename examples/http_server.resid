@@ -1,7 +1,7 @@
 // An HTTP/1.1 server on lib/httpserv.resid: a few routes, static files
 // from a directory, and N worker regions sharing one listener.
 //
-//   residc examples/http_server.resid run -- [--port N] [--public]
+//   ./http_server [--port N] [--public]
 //       [--workers N] [--root DIR] [--conns N] [--port-file F]
 //
 // `--public` binds 0.0.0.0 instead of loopback. That is the one thing here

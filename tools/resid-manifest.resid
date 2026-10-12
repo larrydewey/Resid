@@ -13,12 +13,12 @@
 /// this file's own test fixtures) use trailing comments.
 ///
 /// Usage:
-///   residc tools/resid-manifest.resid run -- <resid.toml>
-///   residc tools/resid-manifest.resid run -- lock <resid.lock>
-///   residc tools/resid-manifest.resid run -- deps <resid.toml>
-///   residc tools/resid-manifest.resid run -- depmap <resid.toml> <out>
-///   residc tools/resid-manifest.resid run -- build <resid.toml> <driver-binary> [extra C file]
-///   residc tools/resid-manifest.resid run -- test <resid.toml> <driver-binary> [extra C file]
+///   ./resid-manifest <resid.toml>
+///   ./resid-manifest lock <resid.lock>
+///   ./resid-manifest deps <resid.toml>
+///   ./resid-manifest depmap <resid.toml> <out>
+///   ./resid-manifest build <resid.toml> <driver-binary> [extra C file]
+///   ./resid-manifest test <resid.toml> <driver-binary> [extra C file]
 ///
 /// `deps` resolves this manifest's `[dependencies.*]` transitively —
 /// both `path =` (local directory) and `version =` (fetched from the

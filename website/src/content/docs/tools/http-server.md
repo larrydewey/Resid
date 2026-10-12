@@ -66,7 +66,8 @@ command-line options, several workers, static files under a root
 directory, and `--public` to listen on every interface.
 
 ```sh
-residc examples/http_server.resid run -- --port 8080 --workers 4 --root site/
+residc examples/http_server.resid -o http_server
+./http_server --port 8080 --workers 4 --root site/
 curl http://127.0.0.1:8080/hello/resid
 ```
 
@@ -243,7 +244,7 @@ HttpReply handle(HttpRequest r) {
     return http_reply_text(200, "text/plain; charset=utf-8", "hello over tls\n");
 }
 
-@requires(args, filesystem(readonly), network(readonly), declassify)
+@requires(args, filesystem(readonly), network(readonly), declassify, provision)
 Int main() {
     Option(ServerKey) maybe_key = tls_key_load("server.key");
     Str err = match maybe_key { Some(k) => "", None => "cannot read the key" };
@@ -259,13 +260,14 @@ Int main() {
 static files and worker regions:
 
 ```
-residc examples/https_server.resid run -- --cert server.pem --key server.key \
+residc examples/https_server.resid -o https_server
+./https_server --cert server.pem --key server.key \
     [--alpn http/1.1] [--port N] [--public] [--workers N] [--root DIR] [--conns N]
 ```
 
 | Function | What it does |
 |---|---|
-| `tls_key_load(path)` | PKCS#8 or SEC1, PEM or DER, Ed25519 or ECDSA P-256; `None` for anything else, including an unsupported curve |
+| `tls_key_load(path)` | PKCS#8 or SEC1, PEM or DER, Ed25519 or ECDSA P-256 or P-384; `None` for anything else, including an unsupported curve |
 | `tls_chain_load(path)` | the chain to present, leaf first: a PEM bundle or one DER certificate |
 | `tls_key_cert_matches(key, leaf)` | whether the certificate carries the key, checked at startup |
 | `tls_key_sign(key, content)` | a DER `ECDSA-Sig-Value` or 64 Ed25519 bytes |
@@ -286,7 +288,10 @@ the authority to read a private key just because it serves. Serving, and
 TLS secret are `Secret` values ([secret values](/Resid/reference/secrets/)),
 and the handshake and record layer publish what goes on the wire (the key
 share, the signature, ciphertext) and hand up what a record decrypts to.
-A `spawn` that serves lists it too.
+A `spawn` that serves lists it too. Loading the key also needs
+`provision`: a key read from a file is a provisioned key, known to
+whoever provisioned it, and the program says it relies on that
+([integrity labels](/Resid/reference/labels/)).
 
 ## Not included
 

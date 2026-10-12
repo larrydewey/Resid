@@ -15,7 +15,10 @@ Each node has an id (deterministic: source order, then reduction order), a
 kind, a type, a knowledge state, a value when known, ordered operand
 edges, the effects it may perform, the capabilities it requires, its
 provenance (a source span, a provider result or a derivation), its doc
-comments, and a content hash over kind, type and operands.
+comments, and a content hash over kind, type and operands. In debug and
+check builds a node also carries its [integrity label](/Resid/reference/labels/):
+whether its value was computed from the program's own data or acquired
+from outside, and through which path.
 
 | State | Meaning |
 |---|---|
@@ -42,7 +45,9 @@ function node.
 Reduction adds nodes and never deletes one reachable from source. Each
 result has a derive edge to what it replaced, labelled with its rule
 (`fold`, `known`, `beta`, `eval`, `select`, `unwrap`, `interpolate`,
-`concat`, `specialize`, `comptime`, `accumulate`, `rebuild`). A node left
+`concat`, `specialize`, `comptime`, `accumulate`, `rebuild`; `instantiate`
+for a generic function's copy at concrete types and `replaces` for a
+behavior instance replaced by a higher-level one). A node left
 residual records why: `unknown(dep)`, `effect(e)`, `capability(c)`,
 `annotated` (`rt`), `budget(kind)`, `loop`, `whistle`.
 

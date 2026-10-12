@@ -29,7 +29,7 @@ Int main() {
 ## resid-why
 
 `resid-why <artifact> [symbol] [--at FILE:LINE] [--node ID] [--summary]
-[--kind K] [--file F] [--max N] [--json]`
+[--kind K] [--file F] [--max N] [--label NAME|FILE:LINE] [--json]`
 
 ```text
 $ resid-why demo square
@@ -46,7 +46,9 @@ $ resid-why demo --at demo.resid:5
 
 The call on line 5 was replaced by the constant 144 (rule `beta`); the one
 on line 7 stayed residual because its argument depends on `n`, which comes
-from `args`. `--summary` counts residual notes by kind.
+from `args`. `--summary` counts residual notes by kind. `--label` shows a
+value's [integrity label](/Resid/reference/labels/) and, for one that came
+from outside, the path by which the outside data reached it.
 
 A generic function shows the copies made for its types, and an instance
 replaced by a higher-level one shows what replaced it:
@@ -79,6 +81,7 @@ commands walk the artifact and the binary's DWARF: `info`, `node ID`,
 `at FILE:LINE`, `sym NAME`, `kids ID`, `lowered [FN]`, `pc ADDR`, `check`.
 Live commands run the program under its own ptrace backend (or gdb with
 `backend gdb`): `break FILE:LINE|FN`, `run [ARGS]`, `stops N`, `step N`.
+`resid-debug` runs on x86-64 Linux only.
 
 ```text
 $ resid-debug demo -ex "break demo.resid:8" -ex run

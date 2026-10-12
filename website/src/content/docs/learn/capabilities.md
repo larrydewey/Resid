@@ -49,13 +49,17 @@ capabilities.
 | Family | Grants |
 |---|---|
 | `filesystem` | the `filesystem.*` provider: `read_all`, `write_all`, `read_bytes`, `write_bytes`, `append_bytes`, `write_secret`, `exists`, `is_dir`, `list_dir`, `create_dir`, `sha256`, `open` / `read_handle` / `close` |
-| `environment` | `environment.get(name)` |
+| `environment` | `environment.get(name)`, `environment.has(name)` |
 | `args` | `args.count()`, `args.get(i)` |
 | `process` | `process.run(cmd)` and the native debugger builtins |
 | `network` | the TCP builtins |
 | `terminal` | the terminal builtins (`resid_term_*`) and `lib/readline.resid` |
 | `clock` | `clock.now_ns()`, `clock.now_sec()`, `clock.monotonic_ns()`, `clock.sleep_ns(n)` and `lib/clock.resid` |
 | `display` | the display builtins (`resid_disp_*`): connecting to a window server, bytes and descriptors on it, shared memory, waiting |
+| `device` | the `device` provider: kernel devices, through descriptors from `lib/dev/` ([device access](/Resid/reference/devices/)) |
+| `declassify` | `declassify(s, "reason")`: publishing a [secret value](/Resid/reference/secrets/) |
+| `provision`, `assume` | relying on a provisioned key, or on an assumption instead of evidence |
+| `native_<m>` | calling [native module](/Resid/learn/native/) `m` |
 
 A family can be narrowed with a mode: `filesystem(readonly)` covers the
 reading verbs only; a write needs `filesystem` or `filesystem(readwrite)`.
@@ -66,7 +70,8 @@ connecting out and everything a server does on a loopback listener; only
 binding an address other machines can reach needs the full `network`, so a
 server's worker regions can run with `network(readonly)`.
 
-`display` takes no mode: a program that draws a window and reads from it is
+`display`, `declassify`, `provision`, `assume` and `native_<m>` take no mode.
+`display` in particular: a program that draws a window and reads from it is
 either given the display or given nothing. It reaches only this machine's own
 session — a `DISPLAY` naming another host is refused — and a shared memory
 buffer is a handle, never a pointer into the program.

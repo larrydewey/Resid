@@ -5,7 +5,7 @@ description: The compiler's commands, options, profiles, outputs and environment
 
 ```text
 residc <file.resid> [-o out] [--profile release|debug|check] [-O0|-O1|-O2|-O3|-Os|-Oz] [--target x86_64|aarch64]
-residc test <file.resid> [--filter REGEX] [--format pretty|tap|json]
+residc test [<file.resid>] [--root DIR] [--filter REGEX] [--format pretty|tap|json]
 residc keygen [dir]
 residc verify <binary> [--pub HEX] [--anchored] [--sources DIR]
 residc lsp
@@ -75,11 +75,13 @@ directly. What differs on AArch64:
 | `--dump-graph PATH` | write the parsed graph |
 | `-depmap PATH` | a dependency map from `resid-manifest` |
 | `-native M=PATH.ll` | the artifact of [native module](/Resid/reference/native-modules/) `M` (repeatable) |
+| `--verify-lib-dev` | build a program that reaches `lib/verify/` against a standard library or runtime other than the one this `residc` was released with (otherwise E0290); recorded in the provenance |
 
 ## Commands
 
 - `residc test` builds the file's `test` blocks into a test binary and runs
-  it ([Testing](/Resid/learn/testing/)).
+  it; with no file it runs every `*_test.resid` under `--root` (default `.`)
+  ([Testing](/Resid/learn/testing/)).
 - `residc keygen [dir]` writes an Ed25519 key pair (`resid-ed25519.key`,
   readable only by its owner, and `.pub`), by default in `keys/`.
 - `residc verify <binary>` checks the provenance signature, the code hash
@@ -94,10 +96,13 @@ directly. What differs on AArch64:
 
 | Variable | |
 |---|---|
-| `RESID_HOME` | the directory holding `rt.ll` and `rt-aarch64.ll` (the runtime); the standard library is at `$RESID_HOME/../../lib` |
+| `RESID_HOME` | the directory holding `rt.ll` and `rt-aarch64.ll` (the runtime); the standard library is at `$RESID_HOME/lib` in an install, else `$RESID_HOME/../../lib`; the install's signing key and keyring are in `$RESID_HOME/keys` |
 | `RESID_AARCH64_BUILTINS` | compiler-rt's AArch64 builtins archive, for `--target aarch64` (else `$RESID_HOME/aarch64/libclang_rt.builtins.a`) |
-| `RESID_SIGNING_KEY` | the signing key for release builds (else `keys/resid-ed25519.key`) |
+| `RESID_SIGNING_KEY` | the signing key for release builds (else `keys/resid-ed25519.key`, then `$RESID_HOME/keys/resid-ed25519.key`) |
+| `RESID_PROV_ENCRYPT`, `RESID_PROV_KEY` | `RESID_PROV_ENCRYPT=1` conceals the provenance payload under `RESID_PROV_KEY`, which `verify` then needs |
+| `RESID_VERIFY_PUB` | a supplied verification key, as `--pub` |
 | `RESID_MEM_LIMIT` | the compiler's memory budget in MB (default 4096); one compile-time evaluation may meter a quarter of it |
+| `RESID_TEST_FILTER`, `RESID_TEST_FORMAT` | the test binary's `--filter` and `--format` |
 | `RESID_STACK_MB` | the stack of a program's main thread in MB (default 1024); for the compiler, how deep compile-time evaluation may nest before E0902 |
 
 The compiler needs `clang` and `lld` (LLVM 22+) to link.

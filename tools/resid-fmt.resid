@@ -34,7 +34,7 @@
 /// would be mis-parsed as a parenthesized expression instead. Any of
 /// these hit a clear parse error rather than silently mis-formatting.
 ///
-/// Usage: residc tools/resid-fmt.resid run -- <file> [-w | --check]
+/// Usage: ./resid-fmt <file> [-w | --check]
 
 // ─── Lexer (self-contained copy, extended to surface `///` doc comments
 // as a "doc" token kind instead of silently discarding them like ordinary

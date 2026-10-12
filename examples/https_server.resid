@@ -3,7 +3,7 @@
 // encrypted and the server authenticated by a certificate the client can
 // check.
 //
-//   residc examples/https_server.resid run -- --cert FILE --key FILE
+//   ./https_server --cert FILE --key FILE
 //       [--port N] [--public] [--workers N] [--root DIR] [--conns N]
 //       [--port-file F] [--alpn LIST]
 //

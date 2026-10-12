@@ -2,10 +2,10 @@
 /// COSE_Sign1 (tag 18, EdDSA) and COSE_Encrypt0 (tag 16, ChaCha20-Poly1305).
 ///
 /// Usage:
-///   residc tools/resid-cose.resid run -- sign1 <payload> <kid> <keyfile> <out>
-///   residc tools/resid-cose.resid run -- verify1 <cose> <pubkey-hex>
-///   residc tools/resid-cose.resid run -- encrypt0 <payload> <kid> <keyhex> <out>
-///   residc tools/resid-cose.resid run -- decrypt0 <blob> <keyhex>
+///   ./resid-cose sign1 <payload> <kid> <keyfile> <out>
+///   ./resid-cose verify1 <cose> <pubkey-hex>
+///   ./resid-cose encrypt0 <payload> <kid> <keyhex> <out>
+///   ./resid-cose decrypt0 <blob> <keyhex>
 ///
 /// `<keyfile>` holds a hex Ed25519 seed (trailing newline allowed).
 /// verify1 and decrypt0 print the payload as text.

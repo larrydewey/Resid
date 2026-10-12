@@ -82,6 +82,7 @@ network]`.
 | `E0410` | a vector's lane type or lane count is not allowed |
 | `E0411` | a vector type nested inside another type, or a vector captured by a lambda or `spawn` |
 | `E0412` | a vector literal, `splat` or `lanes` without a vector slot to take its type from |
+| `E0413` | an f-string hole's format spec that does not fit the value's type (`hex` on a Float, `precision` on an Int, `trim` on anything but a Dec), or two specs that do not go together ([strings](/Resid/learn/strings/#f-strings)) |
 | `E0901` | `known(x)` on a residual value |
 | `E0902` | compile-time evaluation nests deeper than the compiler's stack (raise `RESID_STACK_MB`, or bound the reduction with `--reduce-budget`) |
 | `E0903` | a call of an `@fold` function has an argument that is not known, does not reduce, or runs out of memory or depth |

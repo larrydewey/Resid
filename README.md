@@ -92,7 +92,8 @@ Int main() {
 
 ## Quick start
 
-Requirements: Linux on x86-64, LLVM 22+ (`clang`, `lld`), `git`, `bash`.
+Requirements: Linux on x86-64 or AArch64, LLVM 22+ (`clang`, `lld`), `git`, `bash`.
+Binaries can also be cross-built for AArch64 Linux and Android (`--target aarch64`).
 
 ```sh
 git clone https://github.com/larrydewey/Resid.git
@@ -106,7 +107,7 @@ residc hello.resid -o hello --profile debug # or: residc keygen, then release bu
 | Command | |
 |---|---|
 | `residc app.resid -o app [--profile release\|debug\|check]` | build (release builds are signed) |
-| `residc test app.resid` | run the file's `test` blocks |
+| `residc test app.resid` | run the file's `test` blocks (no file: every `*_test.resid`) |
 | `residc keygen` / `residc verify app` | signing keys / check a binary's provenance |
 | `residc lsp` | the language server (the VS Code extension in `editors/vscode` uses it) |
 
@@ -133,16 +134,21 @@ guarantees and the tests behind each; `PROGRESS.md` is the build log.
 ```text
 compiler/     the compiler, in Resid (driver.resid is the entry; lsp.resid the language server)
 runtime/rt/   the runtime, in Resid (lowered to build/boot/rt.ll)
-lib/          the standard library: crypto, Ed25519, X25519, P-256, RSA, AES-GCM,
-              ChaCha20-Poly1305, DER/X.509, TLS 1.3, an HTTP/1.1 client and server,
-              HTTP/2 framing, CBOR/COSE, DWARF,
-              and date and time (calendar, spans, instants, IANA zones, strftime, clock)
-tools/        resid-why, resid-graph, resid-debug, resid-fmt, resid-pkg, resid-manifest, resid-ctcover
-tests/        conformance, reduction, provenance, runtime, graph, package, TLS, HTTP and LSP suites
+lib/          the standard library: SHA-2, HMAC/HKDF, Ed25519, X25519, P-256/P-384/P-521,
+              RSA, AES-GCM, ChaCha20-Poly1305, HPKE, COSE, DER/X.509 with CRLs and OCSP,
+              a TLS 1.3 client and server, an HTTP/1.1 client and server, HTTP/2 framing,
+              an SPDM requester, regular expressions, readline, DWARF, and date and
+              time (calendar, spans, instants, IANA zones, strftime, clock)
+lib/dev/      device modules: SEV-SNP, TDX, Nitro, the configfs TSM report, TPM 2.0, PCI TSM
+lib/verify/   attestation verifiers: SNP, TDX, Nitro, CCA, TPM, SPDM, CoRIM
+tools/        resid-why, resid-graph, resid-debug, resid-fmt, resid-pkg, resid-manifest,
+              resid-fetch, resid-cose, resid-ctcover, resid-devgen
+tests/        conformance, reduction, provenance, runtime, graph, package, TLS, HTTP, LSP,
+              crypto, constant-time, device, attestation, SPDM, labels, regex and ledger suites
 examples/     complete programs: a settlement ledger (the crown example), an
               HTTP server, TLS and HTTP/2 clients, a lexer and parser
 bench/suite/  the cross-language benchmark suite
-website/      the documentation site (Astro Starlight)
+website/      the documentation content, served by resid-book (website/serve.sh)
 editors/      the VS Code extension
 build/boot/   the committed seed (seed.ll) and runtime IR; boot.sh checks the fixed point
 ```

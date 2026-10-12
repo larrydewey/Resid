@@ -46,6 +46,7 @@ answer to "what time is it" is knowledge the program does not have. See
 | Call | Returns | Family |
 |---|---|---|
 | `environment.get(name)` | the value, or `""` | `environment` |
+| `environment.has(name)` | `Bool`: the variable is set, even to `""` | `environment` |
 | `args.count()`, `args.get(i)` | the command line; `args.get(0)` is the program | `args` |
 | `process.run(cmd)` | the exit status | `process` (a write) |
 
@@ -90,6 +91,33 @@ these builtins.
 `terminal(readonly)` grants the queries only. The runtime restores the
 terminal when `main` returns and on an uncaught abort. `lib/readline.resid`
 is built on these builtins.
+
+## device
+
+| Verb | Does | Mode |
+|---|---|---|
+| `device.ioctl(d, ...)` | one ioctl on the descriptor's device file | read, or write when the descriptor says so |
+| `device.transact(d, cmd)` | one command and its response (a TPM) | as above |
+| `device.transact_chain(d, cmds)` | up to 16 commands on one open file, handles linked between them | as above |
+| `device.configfs_report(d, ...)` | a configfs-tsm attestation report | as above |
+| `device.read_attr(d)`, `device.read_pci_attr(d, addr)` | a sysfs attribute, of a PCI function for the second | read |
+| `device.sequence(d, ...)` | a fixed sequence of the operations above | as above |
+
+`d` is a descriptor from the standard library's `lib/dev/`, never one a
+program writes itself (`E0260`); the compiler checks it and records it in
+the provenance record, and each call runs in a fresh, confined device host.
+Programs normally call the typed wrappers in `lib/dev/` (`sev_guest`,
+`tdx_guest`, `nsm`, `tsm_report`, `tpm`, `pci_tsm`) instead. See
+[Device access](/Resid/reference/devices/).
+
+## Other families
+
+`display` (the window-server builtins `resid_disp_*`), `declassify`
+(publishing a [secret](/Resid/reference/secrets/)), `provision` (relying on
+a provisioned key), `assume` (relying on an assumption instead of evidence)
+and `native_<m>` (calling [native module](/Resid/reference/native-modules/)
+`m`) are families without providers: each gates builtins or library calls,
+and none has modes. See [Capabilities](/Resid/reference/capabilities/).
 
 ## Not capabilities
 

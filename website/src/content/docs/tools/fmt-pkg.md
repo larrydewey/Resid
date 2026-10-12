@@ -85,7 +85,7 @@ manifest. It is required: with no trust store nothing is trusted, so an
 plaintext. The server must present a certificate for the url's host that
 chains to `ca`.
 
-Nothing is trusted because it came over TLS: `resid build` still checks
+Nothing is trusted because it came over TLS: `resid-manifest build` still checks
 the index against `pubkey` and every archive against its hash, exactly as
 for a registry on disk. TLS only proves which server the bytes came from.
 
@@ -93,7 +93,8 @@ for a registry on disk. TLS only proves which server the bytes came from.
 into a directory:
 
 ```
-residc tools/resid-fetch.resid run -- [--timeout SECONDS] \
+residc tools/resid-fetch.resid -o resid-fetch
+./resid-fetch [--timeout SECONDS] \
     https://registry.example:8443 ca.pem pkg/index.resid-idx reg/pkg/index.resid-idx
 ```
 
@@ -161,8 +162,8 @@ searched.
 | `resid-pkg index verify <registry> <pubkey-hex>` | check the index signature, as a consumer will |
 
 `serve` is the publish side of the same artifact layout a `[registry] url`
-reads, and it is deliberately small: loopback only, `GET` and `HEAD`, no
-directory listing, and no request path may name a file outside the
+reads, and it is deliberately small: loopback only, `GET` and `HEAD`
+(and `PUT` only with `--upload`), no directory listing, and no request path may name a file outside the
 registry directory. `--port 0` (the default) binds an ephemeral port and
 reports it, so `--port-file` is enough for a script to learn where to
 point a client.
@@ -217,6 +218,7 @@ both a `path` (its working copy, beside a checkout) and a `version`; in the
 published copy the path is not there, so `resid-manifest build` takes
 resid-serial from the registry too, verifies both against the signed index,
 and pins both in `resid.lock`.
+
 Over HTTPS, give `upload` the trust store: `--ca <PEM bundle or directory>`.
 Storage goes through a `RegStore(T)` behavior (`store_get`, `store_has`,
 `store_put`), with a directory as the shipped instance, so another backend
@@ -229,5 +231,5 @@ covers the whole file and there is no per-row signature to keep in step.
 
 A dependency is accepted only when its hash is listed by a trusted
 registry's signed index or its signature verifies under a pinned or
-keyring key, and when its archive names the requested package and
-version; see [Security](/Resid/tools/security/).
+keyring key (with `require_signatures`, only the signature counts), and
+when its archive names the requested package and version; see [Security](/Resid/tools/security/).
