@@ -1,108 +1,122 @@
-// verify/spdm.resid — device measurements over SPDM (PLAN-attestation.md
-// §3.2 verify_signed_transcript, spdm_verify; §10 NVIDIA): a GET_MEASUREMENTS
-// request with the requester's nonce and the signed MEASUREMENTS response,
-// the device certificate chain from the anchor (NVIDIA's Device Identity
-// CA for its GPUs), and the challenge as the requester nonce.
+// verify/spdm.resid — device evidence over SPDM (DSP0274 1.0 to 1.3;
+// PLAN-attestation.md §3.2, §10): signed measurements (GET_MEASUREMENTS)
+// and device authentication (CHALLENGE), under a device identity anchor
+// (NVIDIA's Device Identity CA for its GPUs, kind NvidiaDevice; any other
+// SPDM device's root, kind DeviceIdentity), with the challenge as the
+// requester's nonce.
 //
-// SPDM 1.1 (what NVIDIA's Hopper GPUs speak): the signature is ECDSA P-384
-// SHA-384 (r ‖ s, 96 bytes) over the request and the response up to the
-// signature (L1). Later versions sign a prefixed hash over the whole
-// negotiation and are refused here. The response is parsed exactly: the
-// measurement record holds the block count it states, each block a DMTF
-// measurement (type, size, value) filling its block, then the responder
-// nonce, opaque data (at most 1024 bytes) and the signature, to the end.
+// A record carries what the requester saw (lib/spdm_requester.resid
+// records it): the six negotiation messages (VCA), the device's
+// certificates from the leaf to the anchor's certificate with an OCSP
+// response for each below the anchor, and the exchanges the signature
+// covers. Checked, in order: the negotiation decodes exactly and settled
+// on algorithms this library implements; the request is what it says (a
+// signed GET_MEASUREMENTS, a CHALLENGE) at that version; the response
+// decodes exactly; each certificate is signed by the next and current at
+// the evidence time, every one but the leaf a CA with keyCertSign, and
+// each below the anchor answered good by OCSP at that time (by its issuer
+// or a responder it delegated to; under an NvidiaDevice anchor the leaf,
+// the firmware's alias certificate, has no responder and is exempt); the leaf's key fits the negotiated
+// algorithm, which the anchor lists (spdm_alg_name); the leaf signed the
+// transcript DSP0274 defines for the version (1.2 on: the signing context
+// and the transcript's hash). Then the nonce is the challenge.
 //
-// Sessions (KEY_EXCHANGE, and the CPU's evidence bound to one) are
-// verify/spdm_session.resid. Not covered: OCSP for the device
-// certificates, and NVIDIA's RIMs (XML, refused in the standard library);
-// reference values come from a policy or a CoRIM (verify/corim.resid).
+// Transcripts: measurements sign L1 = (1.2 on: VCA) ‖ every unsigned
+// GET_MEASUREMENTS and response since the last signed one ‖ the signed
+// request ‖ its response up to the signature; CHALLENGE signs M1 = VCA ‖
+// the digests and certificates read since ‖ CHALLENGE ‖ CHALLENGE_AUTH up
+// to the signature.
+//
+// SPDM 1.0 and 1.1 do not sign the negotiation. A 1.1 record may come
+// without it (NVIDIA's GPU attestation reports do): its algorithms are
+// then the leaf key's, ECDSA P-384 with SHA-384 or P-256 with SHA-256.
+// NVIDIA's RIMs (XML) are not read: reference values come from a policy
+// or a CoRIM (verify/corim.resid). Sessions are verify/spdm_session.resid.
 
 import "core.resid";
 import "../crypto.resid";
 import "../hash.resid";
 import "../x509.resid";
+import "../der.resid";
 import "../ecdsa.resid";
 import "../certverify.resid";
 import "../chain.resid";
 import "../instant.resid";
 import "../tls.resid";
+import "../spdm_msg.resid";
 import "../challenge.resid";
 import "../challenge_bind.resid";
 import "../challenge_export.resid";
 import "../dev/device.resid";
 
-// One DMTF measurement block: its index, the DMTF value type, the value.
+// One DMTF measurement block: its index, the DMTF value type (bit 7: a
+// raw bit stream rather than a digest), the value.
 pub type SpdmMeasurement = { Int index; Int value_type; List(Int) value; };
 
-// What a verified MEASUREMENTS response says.
+// What a verified MEASUREMENTS response says, and how it was signed.
 @signed(sig = signature, span = l1)
-pub type SpdmEvidence = { Int version; List(SpdmMeasurement) measurements; List(Int) responder_nonce; List(Int) opaque; };
+pub type SpdmEvidence = { Int version; Int asym; Int hash; Int meas_hash; Int slot; List(SpdmMeasurement) measurements; List(Int) responder_nonce; List(Int) opaque; List(Int) context; };
+
+// What a verified CHALLENGE_AUTH says: the slot, the measurement summary
+// asked for (0 none, 1 TCB, 255 all) and its hash, opaque data, context.
+@signed(sig = signature, span = m1)
+pub type SpdmIdentity = { Int version; Int asym; Int hash; Int slot; Int summary_type; List(Int) summary; List(Int) opaque; List(Int) context; };
+
+// The requester's record of a measurement exchange: vca ([] for a 1.1
+// record without one), certs (leaf first, the anchor's certificate last
+// or left out), ocsp (one response per certificate below the anchor, any
+// order), before (the unsigned requests and responses the signature
+// covers, in order), and the signed request and its response.
+pub type SpdmRecord = { List(List(UInt(8))) vca; List(List(UInt(8))) certs; List(List(UInt(8))) ocsp; List(List(UInt(8))) before; List(UInt(8)) request; List(UInt(8)) response; };
+
+// The record of a CHALLENGE: the negotiation, the certificate chain as
+// GET_CERTIFICATE returned it, OCSP responses, the digest and certificate
+// requests and responses since the negotiation (in order), CHALLENGE and
+// CHALLENGE_AUTH.
+pub type SpdmChallengeRecord = { List(List(UInt(8))) vca; List(UInt(8)) chain; List(List(UInt(8))) ocsp; List(List(UInt(8))) b; List(UInt(8)) request; List(UInt(8)) response; };
 
 // A policy: measurement blocks that must hold these values ("index=hex",
 // every one of them).
 pub type SpdmPolicy = { List(Str) measurements_hex; };
 
-pub List(Str) spdm_descriptors() { return ["nvidia.spdm_measurements"]; }
+pub List(Str) spdm_descriptors() { return ["nvidia.spdm_measurements", "spdm.requester"]; }
 
-Int sp_le(List(Int) b, Int at, Int n) { return if (n <= 0) { 0 } else { b[at] | (sp_le(b, at + 1, n - 1) << 8) }; }
+List(List(Int)) sp_ints(List(List(UInt(8))) xs, Int i, List(List(Int)) acc) { return if (i >= xs.len()) { acc } else { sp_ints(xs, i + 1, acc.concat([chal_ints(xs[i])])) }; }
+List(Int) sp_cat(List(List(Int)) xs, Int i, List(Int) acc) { return if (i >= xs.len()) { acc } else { sp_cat(xs, i + 1, acc.concat(xs[i])) }; }
 
-// ─── Parsing ────────────────────────────────────────────────────────
+Result(T, VerifyError) sp_msg(Result(T, Str) r) { return match r { Ok(v) => Ok(v), Err(m) => Err(BadLayout(m)) }; }
 
-type SpParsed = { SpdmEvidence e; List(Int) req_nonce; };
+// ─── The device's certificates ──────────────────────────────────────
 
-Result(SpParsed, VerifyError) sp_parse(List(Int) req, List(Int) resp) {
-    if (req.len() != 37) { return Err(BadLayout("an SPDM 1.1 GET_MEASUREMENTS request is 37 bytes")); }
-    if (req[0] != 17) { return Err(Refused("spdm_verify", f"SPDM version 0x{req[0]:hex} (1.1 only)")); }
-    if (req[1] != 224 || (req[2] & 1) != 1) { return Err(BadLayout("the request is not GET_MEASUREMENTS asking for a signature")); }
-    if (resp.len() < 8 + 32 + 2 + 96 || resp.len() > 65536) { return Err(BadLayout("short or oversized MEASUREMENTS response")); }
-    if (resp[0] != req[0] || resp[1] != 96) { return Err(BadLayout("the response is not MEASUREMENTS of the request's version")); }
-    Int nblocks = resp[4];
-    Int rlen = sp_le(resp, 5, 3);
-    Int after = 8 + rlen;
-    if (after + 32 + 2 + 96 > resp.len()) { return Err(BadLayout("the measurement record overruns the response")); }
-    SpBlocks bl = sp_blocks(resp, 8, after, [])?;
-    if (bl.v.len() != nblocks) { return Err(BadLayout(f"the record holds {bl.v.len()} blocks, the header says {nblocks}")); }
-    Int olen = sp_le(resp, after + 32, 2);
-    if (olen > 1024 || after + 34 + olen + 96 != resp.len()) { return Err(BadLayout("the opaque data and signature do not end the response")); }
-    return Ok(SpParsed {.e = SpdmEvidence {.version = resp[0], .measurements = bl.v, .responder_nonce = resp[after..after + 32], .opaque = resp[after + 34..after + 34 + olen]}, .req_nonce = req[4..36]});
+// The anchor and the kinds of root SPDM evidence takes.
+Result(Bool, VerifyError) sp_anchor(Anchor root, EvidenceTime t, Str who) {
+    if (root.kind != "NvidiaDevice" && root.kind != "DeviceIdentity") { return Err(Refused(who, "the anchor is not a device identity root (kind " + root.kind + ")")); }
+    if (anchor_expired(root, t)) { return Err(Stale("the anchor expired " + root.expires)); }
+    return Ok(true);
 }
 
-type SpBlocks = { List(SpdmMeasurement) v; };
-
-// Blocks from at up to end, each filling itself exactly.
-Result(SpBlocks, VerifyError) sp_blocks(List(Int) b, Int at, Int end, List(SpdmMeasurement) acc) {
-    if (at == end) { return Ok(SpBlocks {.v = acc}); }
-    if (at + 4 > end) { return Err(BadLayout("a measurement block is truncated")); }
-    Int idx = b[at];
-    Int spec = b[at + 1];
-    Int size = sp_le(b, at + 2, 2);
-    if (spec != 1) { return Err(BadLayout("a measurement block is not a DMTF measurement")); }
-    if (size < 3 || at + 4 + size > end) { return Err(BadLayout("a measurement block overruns the record")); }
-    Int vt = b[at + 4];
-    Int vs = sp_le(b, at + 5, 2);
-    if (3 + vs != size) { return Err(BadLayout("a DMTF measurement does not fill its block")); }
-    if (sp_has_index(acc, idx, 0)) { return Err(BadLayout(f"measurement index {idx} twice")); }
-    return sp_blocks(b, at + 4 + size, end, acc.concat([SpdmMeasurement {.index = idx, .value_type = vt, .value = b[at + 7..at + 7 + vs]}]));
-}
-
-Bool sp_has_index(List(SpdmMeasurement) ms, Int i, Int k) { return k < ms.len() && (ms[k].index == i || sp_has_index(ms, i, k + 1)); }
-
-// ─── Verification ───────────────────────────────────────────────────
-
-// The chain is the device's leaf first and the anchor's certificate last;
-// each certificate is signed by the next at the evidence time, every one
-// but the leaf a CA. Shared with verify/spdm_session.resid.
+// The chain is the device's leaf first and the anchor's certificate last
+// (appended when left out); each certificate is signed by the next at the
+// evidence time, every one but the leaf a CA; each below the anchor has a
+// good OCSP answer. Returns the leaf.
 @verify_internal
-pub Result(Cert, VerifyError) sp_chain(List(List(UInt(8))) chain, Anchor root, EvidenceTime t) {
-    if (chain.len() < 2 || chain.len() > 8) { return Err(BadChain("the device chain is 2 to 8 certificates")); }
-    if (!eq_ints(chal_ints(chain[chain.len() - 1]), root.der)) { return Err(BadChain("the device chain does not end at the anchor's certificate")); }
+pub Result(Cert, VerifyError) sp_chain(List(List(UInt(8))) given, List(List(UInt(8))) ocsp, Anchor root, EvidenceTime t) {
+    List(List(Int)) g = sp_ints(given, 0, []);
+    if (g.len() == 0 || g.len() > 8) { return Err(BadChain("the device chain is 1 to 8 certificates")); }
+    List(List(Int)) chain = if (eq_list(g[g.len() - 1], root.der)) { g } else { g.concat([root.der]) };
     Cert top = sp_cert(root.der, "root")?;
     if (!chain_verify_parsed(top, top, t.at)) { return Err(BadChain("the root is not a current self-signed CA")); }
-    return sp_link(chain, chain.len() - 2, top, t);
+    Cert leaf = sp_link(chain, chain.len() - 2, top, t)?;
+    // NVIDIA's leaf is the GPU firmware's alias key, certified by the
+    // device's own key: no responder answers for it (NVIDIA's verifier
+    // skips it too). Every other certificate below the anchor is checked.
+    Int from = if (root.kind == "NvidiaDevice" && chain.len() > 2) { 1 } else { 0 };
+    Bool ok = sp_ocsp(chain, sp_ints(ocsp, 0, []), from, t)?;
+    return Ok(leaf);
 }
 
-Result(Cert, VerifyError) sp_link(List(List(UInt(8))) chain, Int i, Cert issuer, EvidenceTime t) {
-    Cert c = sp_cert(chal_ints(chain[i]), f"certificate {i}")?;
+Result(Cert, VerifyError) sp_link(List(List(Int)) chain, Int i, Cert issuer, EvidenceTime t) {
+    Cert c = sp_cert(chain[i], f"certificate {i}")?;
     if (i == 0) {
         if (!eq_list(c.issuer, issuer.subject) || !cert_valid_at(c, t.at) || !cert_valid_at(issuer, t.at) || !cert_is_ca(issuer) || !cert_key_usage(issuer, 5) || !sig_verify(c.signed.alg, issuer.key, c.signed.tbs, c.signed.sig)) { return Err(BadChain("the device's certificate is not signed by the one above it, or one is not current")); }
         return Ok(c);
@@ -115,68 +129,179 @@ Result(Cert, VerifyError) sp_cert(List(Int) der, Str what) {
     return match (x509_parse(der)) { Ok(c) => Ok(c), Err(e) => Err(BadChain(what + ": " + e)) };
 }
 
+// Every certificate below the anchor (index i, issued by i + 1) answered
+// good by one of the responses, at the evidence time.
+Result(Bool, VerifyError) sp_ocsp(List(List(Int)) chain, List(List(Int)) resps, Int i, EvidenceTime t) {
+    if (i >= chain.len() - 1) { return Ok(true); }
+    Int st = sp_ocsp_answer(chain[i + 1], chain[i], resps, 0, t);
+    if (st == ocsp_status_revoked()) { return Err(Refused("spdm_verify", f"certificate {i} of the device chain is revoked")); }
+    if (st != ocsp_status_good()) { return Err(Stale(f"no current OCSP answer says certificate {i} of the device chain is good")); }
+    return sp_ocsp(chain, resps, i + 1, t);
+}
+
+// The first answer a response gives about cert (good, revoked, unknown),
+// or no_answer.
+Int sp_ocsp_answer(List(Int) issuer, List(Int) cert, List(List(Int)) resps, Int j, EvidenceTime t) {
+    if (j >= resps.len()) { return ocsp_status_no_answer(); }
+    Int st = ocsp_status_with_delegate(issuer, cert, resps[j], t.at);
+    if (st != ocsp_status_no_answer()) { return st; }
+    return sp_ocsp_answer(issuer, cert, resps, j + 1, t);
+}
+
+// The negotiated algorithms (from the record's VCA, or for a 1.1 record
+// without one, the leaf key's fixed profile), the leaf's key fitting
+// them, and the anchor listing them.
+Result(SpdmAlgs, VerifyError) sp_algs(List(List(UInt(8))) vca, Int ver, Cert leaf, Anchor root, Str who) {
+    SpdmAlgs a = if (vca.len() > 0) { sp_msg(spdm_parse_vca(sp_ints(vca, 0, [])))? } else { sp_profile(ver, leaf)? };
+    if (a.version != ver) { return Err(BadLayout(f"the request's version 0x{ver:hex} is not the negotiated 0x{a.version:hex}")); }
+    if (!spdm_key_fits(a.asym, leaf.key)) { return Err(BadChain("the device's key does not fit the negotiated signature algorithm")); }
+    if (!anchor_lists(root.algorithms, spdm_alg_name(a.asym, a.hash))) { return Err(Refused(who, "the anchor does not list " + spdm_alg_name(a.asym, a.hash))); }
+    return Ok(a);
+}
+
+Result(SpdmAlgs, VerifyError) sp_profile(Int ver, Cert leaf) {
+    if (ver > 17) { return Err(BadLayout("an SPDM 1.2 or later record needs its negotiation: the signature covers it")); }
+    Bool p384 = leaf.key.kind == pubkey_ec() && curve_bytes(leaf.key.curve) == 48;
+    Bool p256 = leaf.key.kind == pubkey_ec() && curve_bytes(leaf.key.curve) == 32;
+    if (!p384 && !p256) { return Err(BadLayout("a record without its negotiation needs an ECDSA P-256 or P-384 device key")); }
+    return Ok(SpdmAlgs {.slack = 0, .version = ver, .flags = 16, .req_flags = 0, .ct_exponent = 0, .data_transfer_size = 0, .max_msg_size = 0, .meas_spec = 1, .meas_hash = if (p384) { 4 } else { 2 }, .asym = if (p384) { 128 } else { 16 }, .hash = if (p384) { 2 } else { 1 }, .dhe = 0, .aead = 0, .key_schedule = 0, .req_asym = 0, .opaque_fmt = 0, .multi_key = false});
+}
+
+// ─── Measurements ───────────────────────────────────────────────────
+
 type SpOk = { SpdmEvidence e; List(Int) req_nonce; };
 
 @verify_internal
-pub Result(SpOk, VerifyError) spdm_check(List(UInt(8)) request, List(UInt(8)) response, List(List(UInt(8))) chain, Anchor root, EvidenceTime t) {
-    if (root.kind != "NvidiaDevice") { return Err(Refused("spdm_verify", "the anchor is not a device identity root (kind " + root.kind + ")")); }
-    if (!anchor_lists(root.algorithms, "EcdsaP384Sha384")) { return Err(Refused("spdm_verify", "the anchor does not list ECDSA P-384 SHA-384")); }
-    if (anchor_expired(root, t)) { return Err(Stale("the anchor expired " + root.expires)); }
-    List(Int) req = chal_ints(request);
-    List(Int) resp = chal_ints(response);
-    SpParsed p = sp_parse(req, resp)?;
-    Cert leaf = sp_chain(chain, root, t)?;
-    if (leaf.key.kind != pubkey_ec() || curve_bytes(leaf.key.curve) != 48) { return Err(BadChain("the device key is not P-384")); }
-    if (!ecdsa_verify_raw(P384, Sha384, leaf.key.point, req.concat(resp[0..resp.len() - 96]), resp[resp.len() - 96..resp.len()])) { return Err(BadSignature("the device did not sign this transcript")); }
-    return Ok(SpOk {.e = p.e, .req_nonce = p.req_nonce});
+pub Result(SpOk, VerifyError) spdm_check(SpdmRecord rec, Anchor root, EvidenceTime t) {
+    Bool ok = sp_anchor(root, t, "spdm_verify")?;
+    List(Int) req = chal_ints(rec.request);
+    List(Int) resp = chal_ints(rec.response);
+    if (req.len() < 36 || req.len() > 45 || req[1] != 224 || (req[2] & 1) != 1) { return Err(BadLayout("the request is not a GET_MEASUREMENTS asking for a signature")); }
+    Int ver = req[0];
+    Int want = if (ver == 16) { 36 } else if (ver <= 18) { 37 } else { 45 };
+    if (req.len() != want) { return Err(BadLayout("the GET_MEASUREMENTS request has the wrong length for its version")); }
+    Cert leaf = sp_chain(rec.certs, rec.ocsp, root, t)?;
+    SpdmAlgs a = sp_algs(rec.vca, ver, leaf, root, "spdm_verify")?;
+    List(List(Int)) before = sp_ints(rec.before, 0, []);
+    Bool bok = sp_before(before, a, 0)?;
+    SpdmMeasurements ms = sp_msg(spdm_parse_measurements(resp, a, true))?;
+    if (ms.len != resp.len()) { return Err(BadLayout("the response carries trailing bytes")); }
+    Int slot = if (ver >= 17) { req[36] & 15 } else { 0 };
+    if (ms.slot != slot) { return Err(BadLayout("the response names another certificate slot")); }
+    List(Int) ctx = if (ver >= 19) { req[37..45] } else { [] };
+    if (!eq_list(ms.context, ctx)) { return Err(BadLayout("the response carries another requester context")); }
+    List(Int) l1 = (if (ver >= 18) { sp_cat(sp_ints(rec.vca, 0, []), 0, []) } else { [] }).concat(sp_cat(before, 0, [])).concat(req).concat(resp[0..ms.sig_at]);
+    if (!spdm_sig_ok(ver, a.asym, a.hash, spdm_ctx_measurements(), leaf.key, l1, resp[ms.sig_at..resp.len()])) { return Err(BadSignature("the device did not sign this transcript")); }
+    SpdmEvidence e = SpdmEvidence {.version = ver, .asym = a.asym, .hash = a.hash, .meas_hash = a.meas_hash, .slot = slot, .measurements = sp_blocks(ms.blocks, 0, []), .responder_nonce = ms.nonce, .opaque = ms.opaque, .context = ms.context};
+    return Ok(SpOk {.e = e, .req_nonce = req[4..36]});
+}
+
+// The unsigned exchanges before the signed one: request, response,
+// request, response..., each an unsigned GET_MEASUREMENTS and its answer.
+Result(Bool, VerifyError) sp_before(List(List(Int)) b, SpdmAlgs a, Int i) {
+    if (i == b.len()) { return Ok(true); }
+    if (i + 1 >= b.len() || b.len() > 512) { return Err(BadLayout("the unsigned exchanges are not request and response pairs")); }
+    List(Int) q = b[i];
+    if (q.len() < 4 || q[0] != a.version || q[1] != 224 || (q[2] & 1) != 0) { return Err(BadLayout("an exchange before the signed one is not an unsigned GET_MEASUREMENTS")); }
+    SpdmMeasurements m = sp_msg(spdm_parse_measurements(b[i + 1], a, false))?;
+    if (m.len != b[i + 1].len()) { return Err(BadLayout("an unsigned response carries trailing bytes")); }
+    return sp_before(b, a, i + 2);
+}
+
+List(SpdmMeasurement) sp_blocks(List(SpdmBlock) bs, Int i, List(SpdmMeasurement) acc) {
+    if (i >= bs.len()) { return acc; }
+    return sp_blocks(bs, i + 1, acc.concat([SpdmMeasurement {.index = bs[i].index, .value_type = bs[i].value_type, .value = bs[i].value}]));
 }
 
 Int sp_rp(ChallengeRecord c) { return if (c.bind.len() > 0) { q_rp_bound() } else { 0 }; }
 
 // The requester nonce must be exactly the expected 32-byte value.
-Result(Bool, VerifyError) sp_bind(SpOk k, List(UInt(8)) want, ChallengeRecord c, List(UInt(8)) response) {
+Result(Bool, VerifyError) sp_bind(List(Int) nonce, List(UInt(8)) want, ChallengeRecord c, List(UInt(8)) response) {
     if (want.len() != 32) { return Err(NotFresh("an SPDM nonce is 32 bytes: issue the challenge with challenge_issue(32)")); }
-    return vf_bind_challenge(chal_bytes(k.req_nonce), want, c, response, spdm_descriptors());
+    return vf_bind_challenge(chal_bytes(nonce), want, c, response, spdm_descriptors());
 }
 
 // Fresh for the holder of `c`: the request's nonce is challenge_value(c).
-@primitive(verify, anchor = root, gives = [fresh], time = t, format = SpdmEvidence, kinds = [NvidiaDevice], algorithms = [EcdsaP384Sha384], inputs = [request, response, chain, c, t])
-pub Result(Verified(SpdmEvidence), VerifyError) spdm_verify(List(UInt(8)) request, List(UInt(8)) response, List(List(UInt(8))) chain, ChallengeRecord c, Anchor root, EvidenceTime t) {
-    SpOk k = spdm_check(request, response, chain, root, t)?;
-    Bool spent = sp_bind(k, challenge_value(c), c, response)?;
+@primitive(verify, anchor = root, gives = [fresh], time = t, format = SpdmEvidence, kinds = [NvidiaDevice, DeviceIdentity], inputs = [rec, c, t])
+pub Result(Verified(SpdmEvidence), VerifyError) spdm_verify(SpdmRecord rec, ChallengeRecord c, Anchor root, EvidenceTime t) {
+    SpOk k = spdm_check(rec, root, t)?;
+    Bool spent = sp_bind(k.req_nonce, challenge_value(c), c, rec.response)?;
     List(Int) none = [];
     return Ok(vf_make(k.e, root, q_fresh() | sp_rp(c), c, 0, none, none, t, "SpdmEvidence"));
 }
 
 // Fresh and KeyBound(kem, pk): the nonce is
 // challenge_with_key(challenge_value(c), kem, sk) for the sk behind pk.
-@primitive(verify, anchor = root, gives = [fresh, key_bound], time = t, format = SpdmEvidence, kinds = [NvidiaDevice], algorithms = [EcdsaP384Sha384], inputs = [request, response, chain, c, t, kem, pk])
-pub Result(Verified(SpdmEvidence), VerifyError) spdm_verify_key_bound(List(UInt(8)) request, List(UInt(8)) response, List(List(UInt(8))) chain, ChallengeRecord c, Anchor root, EvidenceTime t, Int kem, List(Int) pk) {
+@primitive(verify, anchor = root, gives = [fresh, key_bound], time = t, format = SpdmEvidence, kinds = [NvidiaDevice, DeviceIdentity], inputs = [rec, c, t, kem, pk])
+pub Result(Verified(SpdmEvidence), VerifyError) spdm_verify_key_bound(SpdmRecord rec, ChallengeRecord c, Anchor root, EvidenceTime t, Int kem, List(Int) pk) {
     if (!hpke_kem_ok(kem) || !vf_pk_ok(kem, pk)) { return Err(Refused("spdm_verify_key_bound", "the attester's public key is empty or malformed for the KEM")); }
-    SpOk k = spdm_check(request, response, chain, root, t)?;
-    Bool spent = sp_bind(k, challenge_key_value(challenge_value(c), kem, pk), c, response)?;
+    SpOk k = spdm_check(rec, root, t)?;
+    Bool spent = sp_bind(k.req_nonce, challenge_key_value(challenge_value(c), kem, pk), c, rec.response)?;
     List(Int) none = [];
     return Ok(vf_make(k.e, root, q_fresh() | q_key_bound() | sp_rp(c), c, kem, pk, none, t, "SpdmEvidence"));
 }
 
 // Fresh and ChannelBound to the connection whose other end is e.
-@primitive(verify, anchor = root, gives = [fresh, channel_bound], time = t, format = SpdmEvidence, kinds = [NvidiaDevice], algorithms = [EcdsaP384Sha384], inputs = [request, response, chain, c, t, e])
+@primitive(verify, anchor = root, gives = [fresh, channel_bound], time = t, format = SpdmEvidence, kinds = [NvidiaDevice, DeviceIdentity], inputs = [rec, c, t, e])
 @requires(declassify)
-pub Result(Verified(SpdmEvidence), VerifyError) spdm_verify_channel_bound(List(UInt(8)) request, List(UInt(8)) response, List(List(UInt(8))) chain, ChallengeRecord c, Anchor root, EvidenceTime t, ChannelExporter e) {
+pub Result(Verified(SpdmEvidence), VerifyError) spdm_verify_channel_bound(SpdmRecord rec, ChallengeRecord c, Anchor root, EvidenceTime t, ChannelExporter e) {
     List(UInt(8)) want = match (challenge_with_channel(challenge_value(c), e)) { Ok(x) => Ok(x), Err(err) => Err(Refused("spdm_verify_channel_bound", device_error_text(err))) }?;
-    SpOk k = spdm_check(request, response, chain, root, t)?;
-    Bool spent = sp_bind(k, want, c, response)?;
+    SpOk k = spdm_check(rec, root, t)?;
+    Bool spent = sp_bind(k.req_nonce, want, c, rec.response)?;
     List(Int) none = [];
     return Ok(vf_make(k.e, root, q_fresh() | q_channel_bound() | sp_rp(c), c, 0, none, vf_channel_id(e), t, "SpdmEvidence"));
 }
 
 // Delivered, for a record imported without a SpentStore.
-@primitive(verify, anchor = root, gives = [delivered], time = t, format = SpdmEvidence, kinds = [NvidiaDevice], algorithms = [EcdsaP384Sha384], inputs = [request, response, chain, c, t])
-pub Result(Verified(SpdmEvidence), VerifyError) spdm_verify_replayable(List(UInt(8)) request, List(UInt(8)) response, List(List(UInt(8))) chain, ReplayableRecord c, Anchor root, EvidenceTime t) {
-    SpOk k = spdm_check(request, response, chain, root, t)?;
-    if (!eq_ints(k.req_nonce, chal_ints(replayable_value(c)))) { return Err(NotFresh("the requester nonce is not this challenge")); }
+@primitive(verify, anchor = root, gives = [delivered], time = t, format = SpdmEvidence, kinds = [NvidiaDevice, DeviceIdentity], inputs = [rec, c, t])
+pub Result(Verified(SpdmEvidence), VerifyError) spdm_verify_replayable(SpdmRecord rec, ReplayableRecord c, Anchor root, EvidenceTime t) {
+    SpOk k = spdm_check(rec, root, t)?;
+    if (!eq_list(k.req_nonce, chal_ints(replayable_value(c)))) { return Err(NotFresh("the requester nonce is not this challenge")); }
     List(Int) none = [];
     return Ok(Verified {.value = k.e, .anchors = [root.id], .quals = q_delivered(), .record = 0 - 1, .kem = 0, .pk = none, .chan = none, .time = t.source, .principal = root.principal, .format = "SpdmEvidence"});
+}
+
+// ─── CHALLENGE ──────────────────────────────────────────────────────
+
+type SiOk = { SpdmIdentity id; List(Int) nonce; };
+
+@verify_internal
+pub Result(SiOk, VerifyError) spdm_challenge_check(SpdmChallengeRecord rec, Anchor root, EvidenceTime t) {
+    Bool ok = sp_anchor(root, t, "spdm_verify_challenge")?;
+    List(Int) req = chal_ints(rec.request);
+    List(Int) resp = chal_ints(rec.response);
+    if (req.len() < 36 || req[1] != 131) { return Err(BadLayout("the request is not CHALLENGE")); }
+    Int ver = req[0];
+    if (req.len() != (if (ver >= 19) { 44 } else { 36 })) { return Err(BadLayout("CHALLENGE has the wrong length for its version")); }
+    if (rec.vca.len() == 0) { return Err(BadLayout("a CHALLENGE record needs its negotiation")); }
+    List(Int) ch = chal_ints(rec.chain);
+    SpdmAlgs a0 = sp_msg(spdm_parse_vca(sp_ints(rec.vca, 0, [])))?;
+    SpdmChain parsed = sp_msg(spdm_parse_chain(ch, a0.hash))?;
+    if (!eq_list(parsed.root_hash, spdm_hash(a0.hash, root.der))) { return Err(BadChain("the chain's root hash is not the anchor's certificate")); }
+    List(List(UInt(8))) certs = sp_bytes_list(spdm_chain_leaf_first(parsed), 0, []);
+    Cert leaf = sp_chain(certs, rec.ocsp, root, t)?;
+    SpdmAlgs a = sp_algs(rec.vca, ver, leaf, root, "spdm_verify_challenge")?;
+    Int slot = req[2] & 15;
+    SpdmChallengeAuth au = sp_msg(spdm_parse_challenge_auth(resp, a, req[3], slot))?;
+    if (au.len != resp.len()) { return Err(BadLayout("CHALLENGE_AUTH carries trailing bytes")); }
+    if (!eq_list(au.cert_chain_hash, spdm_hash(a.hash, ch))) { return Err(BadChain("CHALLENGE_AUTH names another certificate chain")); }
+    List(Int) ctx = if (ver >= 19) { req[36..44] } else { [] };
+    if (!eq_list(au.context, ctx)) { return Err(BadLayout("CHALLENGE_AUTH carries another requester context")); }
+    List(Int) m1 = sp_cat(sp_ints(rec.vca, 0, []), 0, []).concat(sp_cat(sp_ints(rec.b, 0, []), 0, [])).concat(req).concat(resp[0..au.sig_at]);
+    if (!spdm_sig_ok(ver, a.asym, a.hash, spdm_ctx_challenge_auth(), leaf.key, m1, resp[au.sig_at..resp.len()])) { return Err(BadSignature("the device did not sign this transcript")); }
+    SpdmIdentity id = SpdmIdentity {.version = ver, .asym = a.asym, .hash = a.hash, .slot = slot, .summary_type = req[3], .summary = au.summary, .opaque = au.opaque, .context = au.context};
+    return Ok(SiOk {.id = id, .nonce = req[4..36]});
+}
+
+List(List(UInt(8))) sp_bytes_list(List(List(Int)) xs, Int i, List(List(UInt(8))) acc) { return if (i >= xs.len()) { acc } else { sp_bytes_list(xs, i + 1, acc.concat([chal_bytes(xs[i])])) }; }
+
+// Fresh for the holder of `c`: CHALLENGE's nonce is challenge_value(c).
+@primitive(verify, anchor = root, gives = [fresh], time = t, format = SpdmIdentity, kinds = [NvidiaDevice, DeviceIdentity], inputs = [rec, c, t])
+pub Result(Verified(SpdmIdentity), VerifyError) spdm_verify_challenge(SpdmChallengeRecord rec, ChallengeRecord c, Anchor root, EvidenceTime t) {
+    SiOk k = spdm_challenge_check(rec, root, t)?;
+    Bool spent = sp_bind(k.nonce, challenge_value(c), c, rec.response)?;
+    List(Int) none = [];
+    return Ok(vf_make(k.id, root, q_fresh() | sp_rp(c), c, 0, none, none, t, "SpdmIdentity"));
 }
 
 // ─── Appraisal ──────────────────────────────────────────────────────

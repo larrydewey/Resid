@@ -1,0 +1,159 @@
+// spdm_transport.resid — how SPDM messages travel: the MCTP (DSP0275),
+// PCI DOE (PCIe 6 §6.30, CMA) and TCP (DSP0287) bindings, and a client of
+// the DMTF emulator's socket protocol (spdm-emu, DMTF's reference
+// responder), over which every binding can be run end to end.
+//
+// A binding frames a message and says whether it is secured (DSP0277) and
+// how many sequence-number bytes its secured messages carry: MCTP message
+// type 5 (SPDM) or 6 (secured) and 2 bytes; PCI DOE, vendor 1 type 1
+// (SPDM) or 2 (secured), the length in dwords and the payload padded to
+// one, 0 bytes; TCP, a 4-byte header (payload length LE2, binding version
+// 1, message type 5 or 6), 0 bytes.
+//
+// The emulator's socket protocol: each side writes the command, the
+// transport type and the payload length (each a big-endian u32), then the
+// payload. Command 1 carries a framed message, 0xFFFE shuts the responder
+// down. Linux has no user interface to a device's SPDM responder (the
+// kernel and the platform TSM run it), so the emulator is how a program
+// reaches one here; lib/dev/pci_tsm.resid reads what the kernel reports.
+
+import "crypto.resid";
+
+pub type SpdmBinding = SpdmMctp | SpdmPciDoe | SpdmTcp;
+
+pub Int spdm_binding_seq_bytes(SpdmBinding b) { return match b { SpdmMctp => 2, SpdmPciDoe => 0, SpdmTcp => 0, }; }
+pub Int spdm_binding_socket_type(SpdmBinding b) { return match b { SpdmMctp => 1, SpdmPciDoe => 2, SpdmTcp => 3, }; }
+pub Str spdm_binding_name(SpdmBinding b) { return match b { SpdmMctp => "MCTP", SpdmPciDoe => "PCI DOE", SpdmTcp => "TCP", }; }
+
+List(Int) st_le(Int v, Int n) { return if (n <= 0) { [] } else { [v & 255].concat(st_le(v >> 8, n - 1)) }; }
+Int st_le_at(List(Int) b, Int at, Int n) { return if (n <= 0) { 0 } else { b[at] | (st_le_at(b, at + 1, n - 1) << 8) }; }
+List(Int) st_be(Int v, Int n) { return if (n <= 0) { [] } else { st_be(v >> 8, n - 1).concat([v & 255]) }; }
+Int st_be_at(List(Int) b, Int at, Int n) { return if (n <= 0) { 0 } else { (st_be_at(b, at, n - 1) << 8) | b[at + n - 1] }; }
+List(Int) st_zeros(Int n) { return st_le(0, n); }
+
+// A message in the binding's frame.
+pub List(Int) spdm_frame(SpdmBinding b, Bool secured, List(Int) msg) {
+    return match b {
+        SpdmMctp => [if (secured) { 6 } else { 5 }].concat(msg),
+        SpdmPciDoe => st_doe(secured, msg),
+        SpdmTcp => st_le(msg.len() + 2, 2).concat([1, if (secured) { 6 } else { 5 }]).concat(msg),
+    };
+}
+
+List(Int) st_doe(Bool secured, List(Int) msg) {
+    Int pad = (4 - msg.len() % 4) % 4;
+    Int dw = 2 + (msg.len() + pad) / 4;
+    return [1, 0, if (secured) { 2 } else { 1 }, 0].concat(st_le(dw, 4)).concat(msg).concat(st_zeros(pad));
+}
+
+// A frame's message and whether it is secured. A DOE frame's padding is
+// dropped by the length SPDM gives inside (a secured message's own Length
+// field, or the caller's parser for a plain one).
+pub type SpdmFramed = { Bool secured; List(Int) msg; };
+
+pub Result(SpdmFramed, Str) spdm_unframe(SpdmBinding b, List(Int) f) {
+    return match b {
+        SpdmMctp => st_mctp(f),
+        SpdmPciDoe => st_undoe(f),
+        SpdmTcp => st_untcp(f),
+    };
+}
+
+Result(SpdmFramed, Str) st_mctp(List(Int) f) {
+    if (f.len() < 2 || (f[0] != 5 && f[0] != 6)) { return Err("MCTP: not an SPDM message type"); }
+    return Ok(SpdmFramed {.secured = f[0] == 6, .msg = f[1..f.len()]});
+}
+
+Result(SpdmFramed, Str) st_undoe(List(Int) f) {
+    if (f.len() < 12 || f[0] != 1 || f[1] != 0 || (f[2] != 1 && f[2] != 2)) { return Err("PCI DOE: not a CMA/SPDM data object"); }
+    Int dw = st_le_at(f, 4, 4) & 262143;
+    if (dw * 4 != f.len()) { return Err("PCI DOE: the length is not the object's"); }
+    List(Int) m = f[8..f.len()];
+    return Ok(SpdmFramed {.secured = f[2] == 2, .msg = if (f[2] == 2) { st_secured_len(m) } else { st_plain_len(m) }});
+}
+
+// A secured message's own length (header and Length field), so the
+// dword padding goes.
+List(Int) st_secured_len(List(Int) m) {
+    if (m.len() < 6) { return m; }
+    Int n = 6 + st_le_at(m, 4, 2);
+    return if (n <= m.len()) { m[0..n] } else { m };
+}
+
+// A plain message keeps its padding (at most 3 zero bytes); SPDM
+// responses state their lengths, and the decoders refuse trailing bytes,
+// so the requester strips them by the message's own structure.
+List(Int) st_plain_len(List(Int) m) { return m; }
+
+Result(SpdmFramed, Str) st_untcp(List(Int) f) {
+    if (f.len() < 5 || f[2] != 1 || (f[3] != 5 && f[3] != 6)) { return Err("TCP: not an SPDM message"); }
+    if (st_le_at(f, 0, 2) != f.len() - 2) { return Err("TCP: the payload length is not the frame's"); }
+    return Ok(SpdmFramed {.secured = f[3] == 6, .msg = f[4..f.len()]});
+}
+
+// What a secured message carries inside: the SPDM message with the
+// binding's own header for MCTP (the message type) and TCP (the binding
+// header), bare for PCI DOE (as libspdm and DSP0275/DSP0287 do).
+pub List(Int) spdm_inner(SpdmBinding b, List(Int) msg) {
+    return match b {
+        SpdmMctp => [5].concat(msg),
+        SpdmPciDoe => msg,
+        SpdmTcp => st_le(msg.len() + 2, 2).concat([1, 5]).concat(msg),
+    };
+}
+
+pub Result(List(Int), Str) spdm_uninner(SpdmBinding b, List(Int) app) {
+    return match b {
+        SpdmMctp => if (app.len() >= 1 && app[0] == 5) { Ok(app[1..app.len()]) } else { Err("a secured MCTP message's inner type is not SPDM") },
+        SpdmPciDoe => Ok(app),
+        SpdmTcp => if (app.len() >= 4 && app[2] == 1 && app[3] == 5 && st_le_at(app, 0, 2) == app.len() - 2) { Ok(app[4..app.len()]) } else { Err("a secured TCP message's inner header is not SPDM") },
+    };
+}
+
+// The zero padding a binding may leave after a plain message.
+pub Int spdm_binding_slack(SpdmBinding b) { return match b { SpdmMctp => 0, SpdmPciDoe => 3, SpdmTcp => 0, }; }
+
+// ─── The emulator's socket ──────────────────────────────────────────
+
+pub type SpdmEmu = { Int fd; SpdmBinding binding; };
+
+@requires(network(readonly))
+pub Result(SpdmEmu, Str) spdm_emu_connect(Str host, Int port, SpdmBinding b) {
+    Int fd = resid_tcp_connect(host, port);
+    if (fd < 0) { return Err(f"no SPDM responder at {host}:{port}"); }
+    Bool dl = resid_tcp_deadline(fd, 60000);
+    return Ok(SpdmEmu {.fd = fd, .binding = b});
+}
+
+@requires(network(readonly))
+Result(Bool, Str) st_send(SpdmEmu e, Int command, List(Int) payload) {
+    List(Int) m = st_be(command, 4).concat(st_be(spdm_binding_socket_type(e.binding), 4)).concat(st_be(payload.len(), 4)).concat(payload);
+    if (!resid_tcp_send_bin(e.fd, m)) { return Err("the SPDM responder's socket closed"); }
+    return Ok(true);
+}
+
+// One framed message there and one back: the response's message.
+@requires(network(readonly))
+pub Result(SpdmFramed, Str) spdm_emu_xfer(SpdmEmu e, Bool secured, List(Int) msg) {
+    Bool sent = st_send(e, 1, spdm_frame(e.binding, secured, msg))?;
+    List(Int) h = resid_tcp_recv_bin(e.fd, 12);
+    if (h.len() != 12) { return Err("the SPDM responder closed or timed out"); }
+    Int n = st_be_at(h, 8, 4);
+    if (st_be_at(h, 0, 4) != 1 || n > 1048576) { return Err(f"the SPDM responder answered command 0x{st_be_at(h, 0, 4):hex}"); }
+    List(Int) body = if (n > 0) { resid_tcp_recv_bin(e.fd, n) } else { [] };
+    if (body.len() != n) { return Err("the SPDM responder's answer is truncated"); }
+    return spdm_unframe(e.binding, body);
+}
+
+// Ask the responder to stop, and close the socket.
+@requires(network(readonly))
+pub Bool spdm_emu_shutdown(SpdmEmu e) {
+    Bool ok = match (st_send(e, 65534, [])) { Ok(b) => b, Err(m) => false };
+    List(Int) h = resid_tcp_recv_bin(e.fd, 12);
+    Int n = if (h.len() == 12) { st_be_at(h, 8, 4) } else { 0 };
+    List(Int) rest = if (n > 0 && n < 65536) { resid_tcp_recv_bin(e.fd, n) } else { [] };
+    return resid_tcp_close(e.fd) && ok;
+}
+
+@requires(network(readonly))
+pub Bool spdm_emu_close(SpdmEmu e) { return resid_tcp_close(e.fd); }

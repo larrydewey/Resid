@@ -128,13 +128,23 @@ Str at_unquote(Str v) {
 // Kinds of anchor, and whether a kind names hardware (its principal is
 // then required).
 Bool at_kind_ok(Str k) {
-    return k == "AmdVcek" || k == "AmdVlek" || k == "IntelPck" || k == "NvidiaDevice" || k == "Nitro" || k == "TpmEk" || k == "TpmAk" || k == "EndorsedKeys" || k == "Endorser" || k == "ReleaseSender" || k == "RelyingParty" || k == "CertificateAuthority";
+    return k == "AmdVcek" || k == "AmdVlek" || k == "IntelPck" || k == "NvidiaDevice" || k == "DeviceIdentity" || k == "Nitro" || k == "TpmEk" || k == "TpmAk" || k == "EndorsedKeys" || k == "Endorser" || k == "ReleaseSender" || k == "RelyingParty" || k == "CertificateAuthority";
 }
 
-Bool at_kind_hw(Str k) { return k == "AmdVcek" || k == "AmdVlek" || k == "IntelPck" || k == "NvidiaDevice" || k == "Nitro" || k == "TpmEk" || k == "TpmAk"; }
+Bool at_kind_hw(Str k) { return k == "AmdVcek" || k == "AmdVlek" || k == "IntelPck" || k == "NvidiaDevice" || k == "DeviceIdentity" || k == "Nitro" || k == "TpmEk" || k == "TpmAk"; }
 
 Bool at_alg_ok(Str a) {
-    return a == "RsaPss4096Sha384" || a == "RsaPssSha256" || a == "RsaPkcs1Sha256" || a == "RsaSsaSha256" || a == "EcdsaP256Sha256" || a == "EcdsaP384Sha384" || a == "Ed25519" || a == "DhkemX25519" || a == "DhkemP256" || a == "DhkemP384";
+    return a == "RsaPss4096Sha384" || a == "RsaPssSha256" || a == "RsaPkcs1Sha256" || a == "RsaSsaSha256" || a == "EcdsaP256Sha256" || a == "EcdsaP384Sha384" || a == "Ed25519" || a == "DhkemX25519" || a == "DhkemP256" || a == "DhkemP384" || at_spdm_alg(a);
+}
+
+// SPDM's signature algorithm and hash, named together (lib/spdm_msg.resid's
+// spdm_alg_name): Ecdsa{P256,P384}, RsaSsa{2048,3072,4096} or
+// RsaPss{2048,3072,4096}, then Sha{256,384,512}.
+Bool at_spdm_alg(Str a) {
+    Bool h = str_ends_with(a, "Sha256") || str_ends_with(a, "Sha384") || str_ends_with(a, "Sha512");
+    if (!h || str_len(a) < 7) { return false; }
+    Str f = str_slice(a, 0, str_len(a) - 6);
+    return f == "EcdsaP256" || f == "EcdsaP384" || f == "RsaSsa2048" || f == "RsaSsa3072" || f == "RsaSsa4096" || f == "RsaPss2048" || f == "RsaPss3072" || f == "RsaPss4096";
 }
 
 // "K(product)" or "K": kind and product.

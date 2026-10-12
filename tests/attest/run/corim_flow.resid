@@ -103,6 +103,11 @@ List(Int) response(List(Int) req, Int m1) {
 }
 
 
+// A 1.1 transcript without its negotiation (the P-384 profile), with the
+// device certificate's OCSP response.
+@requires(filesystem(readonly))
+SpdmRecord spdm_rec(List(Int) req, List(Int) resp) { return SpdmRecord {.vca = [], .certs = [rd("spdm-leaf.der"), rd("spdm-root.der")], .ocsp = [rd("spdm-ocsp-leaf.der")], .before = [], .request = chal_bytes(req), .response = chal_bytes(resp)}; }
+
 @policy
 SnpPolicy endorsed_snp() {
     return SnpPolicy {.min_tcb = TcbVersion {.fmc = 0, .bootloader = 3, .tee = 0, .snp = 8, .microcode = 115},
@@ -144,11 +149,10 @@ Str with_refs(Verified(CorimRefs) refs) {
     println("CCA endorsed: " + match (cca_verify(token(chal_ints(challenge_value(c3)), 12291, true), c3, test_cpak(), test_time(1791000000))) { Ok(v) => match (cca_appraise_endorsed(v, endorsed_realm(), refs)) { Ok(a) => "appraised", Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) });
     ChallengeRecord c4 = challenge_issue(32);
     List(Int) r4 = request(chal_ints(challenge_value(c4)));
-    List(List(UInt(8))) chain = [rd("spdm-leaf.der"), rd("spdm-root.der")];
-    println("SPDM endorsed: " + match (spdm_verify(chal_bytes(r4), chal_bytes(response(r4, 5)), chain, c4, test_device_root(), test_time(1791000000))) { Ok(v) => match (spdm_appraise_endorsed(v, endorsed_gpu(), refs)) { Ok(a) => "appraised", Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) });
+    println("SPDM endorsed: " + match (spdm_verify(spdm_rec(r4, response(r4, 5)), c4, test_device_root(), test_time(1791000000))) { Ok(v) => match (spdm_appraise_endorsed(v, endorsed_gpu(), refs)) { Ok(a) => "appraised", Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) });
     ChallengeRecord c5 = challenge_issue(32);
     List(Int) r5 = request(chal_ints(challenge_value(c5)));
-    println("SPDM unendorsed block: " + match (spdm_verify(chal_bytes(r5), chal_bytes(response(r5, 6)), chain, c5, test_device_root(), test_time(1791000000))) { Ok(v) => match (spdm_appraise_endorsed(v, endorsed_gpu(), refs)) { Ok(a) => "APPRAISED", Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) });
+    println("SPDM unendorsed block: " + match (spdm_verify(spdm_rec(r5, response(r5, 6)), c5, test_device_root(), test_time(1791000000))) { Ok(v) => match (spdm_appraise_endorsed(v, endorsed_gpu(), refs)) { Ok(a) => "APPRAISED", Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) });
     return "";
 }
 

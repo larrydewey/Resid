@@ -1,0 +1,708 @@
+// spdm_requester.resid — an SPDM requester (DSP0274 1.0 to 1.3, DSP0277
+// secured messages) over any transport: the version, capability and
+// algorithm negotiation, digests and certificate chains, CHALLENGE,
+// GET_MEASUREMENTS in and out of a session, sessions by key exchange
+// (with mutual authentication, plain or through encapsulated requests)
+// or by pre-shared key, KEY_UPDATE, HEARTBEAT and END_SESSION, chunked
+// messages both ways, and the error responses a responder may give
+// (Busy, ResponseNotReady, LargeResponse).
+//
+// It checks what it is answered: every response decodes strictly
+// (lib/spdm_msg.resid), every signature is checked against the chain the
+// slot's digest names, and every session's verify data in constant time.
+// What it returns is the device's word over the transport; a relying
+// party elsewhere verifies the transcripts it records under an anchor
+// (lib/verify/spdm.resid, lib/verify/spdm_session.resid), which this file
+// does not do: a chain here is checked against its digest, not trusted.
+//
+// The transport is a closure that sends one message (secured or not) and
+// returns the one that answers it: lib/spdm_transport.resid's
+// spdm_emu_xfer, or anything else with that shape. Secrets (the ephemeral
+// key, a PSK, the requester's signing key and everything derived) are
+// List(Secret(UInt(8))), so every caller needs @requires(declassify) for
+// what a session publishes (lib/spdm_session.resid's SpdmPublish).
+
+import "crypto.resid";
+import "hash.resid";
+import "random.resid";
+import "x509.resid";
+import "der.resid";
+import "ecdsa.resid";
+import "ed25519g.resid";
+import "word.resid";
+import "spdm_msg.resid";
+import "spdm_session.resid";
+import "spdm_transport.resid";
+
+// ─── Configuration and state ────────────────────────────────────────
+
+pub type SpdmIo = { Result(SpdmFramed, Str) closure(Bool, List(Int)) xfer; SpdmBinding binding; };
+
+// versions: those we speak (0x10..0x13); flags: our capabilities; dts and
+// max_size: the largest message we take whole and assembled; my_chains:
+// our certificate chains by slot, each the DER certificates from the
+// root's side concatenated (GET_CERTIFICATE's format is built with the
+// negotiated hash), with
+// my_key and my_asym (ECDSA P-256/P-384 or Ed25519) for mutual
+// authentication; psk and psk_hint for PSK sessions.
+pub type SpdmConfig = { List(Int) versions; Int flags; Int ct_exponent; Int dts; Int max_size; Bool multi_key; List(List(Int)) my_chains; List(Secret(UInt(8))) my_key; Int my_asym; List(Secret(UInt(8))) psk; List(Int) psk_hint; };
+
+// The connection: what was negotiated, the transcript pieces DSP0274's
+// signatures cover (VCA; B, the digests and certificates since; D, the
+// DIGESTS of a multi-key connection; M, the unsigned measurements since
+// the last signed one), and each slot's chain once read.
+pub type SpdmConn = { SpdmIo io; SpdmConfig cfg; SpdmAlgs a; List(List(Int)) vca; List(List(Int)) b; List(Int) d; List(List(Int)) m; List(List(Int)) chains; List(List(Int)) digests; };
+
+pub type SpdmGot(T) = { SpdmConn c; T v; };
+
+// A session: its suite, ID, keys and sequence numbers, the transcript
+// through its handshake, whether it is established, and the measurements
+// asked inside it since the last signed one.
+pub type SpdmSess = { SpdmSuite s; Int sid; Bool psk; Bool established; SpdmSecrets(Secret(UInt(8))) hs; SpdmData(Secret(UInt(8))) data; SpdmKeys(Secret(UInt(8))) keys; Int req_seq; Int rsp_seq; List(Int) th; Int heartbeat; Int slot; Int mut_auth; Int summary_type; List(Int) summary; Int sec_version; List(List(Int)) m; };
+
+pub type SpdmSessGot(T) = { SpdmConn c; SpdmSess s; T v; };
+
+// The configuration a requester with no certificate of its own uses:
+// every version, certificates, challenge, measurements, sessions of both
+// kinds, encapsulation, heartbeat, key update, chunking.
+pub SpdmConfig spdm_default_config() {
+    List(List(Int)) none = [];
+    List(Secret(UInt(8))) nk = [];
+    // CERT CHAL ENCRYPT MAC KEY_EX PSK(requester) ENCAP HBEAT KEY_UPD HANDSHAKE_IN_CLEAR CHUNK
+    Int fl = 2 | 4 | 64 | 128 | 512 | 1024 | 4096 | 8192 | 16384 | 32768 | 131072;
+    return SpdmConfig {.versions = [16, 17, 18, 19], .flags = fl, .ct_exponent = 20, .dts = 4096, .max_size = 1048576, .multi_key = false, .my_chains = none, .my_key = nk, .my_asym = 0, .psk = nk, .psk_hint = []};
+}
+
+// The same with a certificate chain and key for mutual authentication.
+pub SpdmConfig spdm_config_with_identity(SpdmConfig c, List(Int) chain, List(Secret(UInt(8))) key, Int asym) {
+    return SpdmConfig {.versions = c.versions, .flags = c.flags | 256, .ct_exponent = c.ct_exponent, .dts = c.dts, .max_size = c.max_size, .multi_key = c.multi_key, .my_chains = [chain], .my_key = key, .my_asym = asym, .psk = c.psk, .psk_hint = c.psk_hint};
+}
+
+pub SpdmConfig spdm_config_with_psk(SpdmConfig c, List(Secret(UInt(8))) psk, List(Int) hint) {
+    return SpdmConfig {.versions = c.versions, .flags = c.flags, .ct_exponent = c.ct_exponent, .dts = c.dts, .max_size = c.max_size, .multi_key = c.multi_key, .my_chains = c.my_chains, .my_key = c.my_key, .my_asym = c.my_asym, .psk = psk, .psk_hint = hint};
+}
+
+// Our data transfer size (from 42) and largest assembled message.
+pub SpdmConfig spdm_config_transfer(SpdmConfig c, Int dts, Int max_size) {
+    return SpdmConfig {.versions = c.versions, .flags = c.flags, .ct_exponent = c.ct_exponent, .dts = dts, .max_size = max_size, .multi_key = c.multi_key, .my_chains = c.my_chains, .my_key = c.my_key, .my_asym = c.my_asym, .psk = c.psk, .psk_hint = c.psk_hint};
+}
+
+// Ask for the responder's multi-key connection (1.3).
+pub SpdmConfig spdm_config_multi_key(SpdmConfig c) {
+    return SpdmConfig {.versions = c.versions, .flags = c.flags, .ct_exponent = c.ct_exponent, .dts = c.dts, .max_size = c.max_size, .multi_key = true, .my_chains = c.my_chains, .my_key = c.my_key, .my_asym = c.my_asym, .psk = c.psk, .psk_hint = c.psk_hint};
+}
+
+pub SpdmConfig spdm_config_versions(SpdmConfig c, List(Int) versions) {
+    return SpdmConfig {.versions = versions, .flags = c.flags, .ct_exponent = c.ct_exponent, .dts = c.dts, .max_size = c.max_size, .multi_key = c.multi_key, .my_chains = c.my_chains, .my_key = c.my_key, .my_asym = c.my_asym, .psk = c.psk, .psk_hint = c.psk_hint};
+}
+
+List(Int) rq_flat(List(List(Int)) xs) { return rq_flat_at(xs, 0, []); }
+List(Int) rq_flat_at(List(List(Int)) xs, Int i, List(Int) acc) { return if (i >= xs.len()) { acc } else { rq_flat_at(xs, i + 1, acc.concat(xs[i])) }; }
+
+SpdmConn rq_with(SpdmConn c, List(List(Int)) b, List(Int) d, List(List(Int)) m) { return SpdmConn {.io = c.io, .cfg = c.cfg, .a = c.a, .vca = c.vca, .b = b, .d = d, .m = m, .chains = c.chains, .digests = c.digests}; }
+
+// ─── One exchange ───────────────────────────────────────────────────
+
+// The link a message travels: in the clear, or sealed under a session's
+// keys at the given sequence numbers.
+type RqLink = { Bool secured; SpdmSuite s; Int sid; SpdmKeys(Secret(UInt(8))) keys; Int req_seq; Int rsp_seq; };
+
+type RqGot = { RqLink l; List(Int) r; };
+
+RqLink rq_clear(SpdmConn c) {
+    List(Secret(UInt(8))) nk = [];
+    return RqLink {.secured = false, .s = SpdmSuite {.version = 16, .hash = 2, .aead = 2, .dhe = 16, .seq_bytes = 0}, .sid = 0, .keys = SpdmKeys {.req_key = nk, .req_iv = nk, .rsp_key = nk, .rsp_iv = nk}, .req_seq = 0, .rsp_seq = 0};
+}
+
+RqLink rq_link_of(SpdmSess s) { return RqLink {.secured = true, .s = s.s, .sid = s.sid, .keys = s.keys, .req_seq = s.req_seq, .rsp_seq = s.rsp_seq}; }
+
+SpdmSess rq_sess_seq(SpdmSess s, RqLink l) { return SpdmSess {.s = s.s, .sid = s.sid, .psk = s.psk, .established = s.established, .hs = s.hs, .data = s.data, .keys = s.keys, .req_seq = l.req_seq, .rsp_seq = l.rsp_seq, .th = s.th, .heartbeat = s.heartbeat, .slot = s.slot, .mut_auth = s.mut_auth, .summary_type = s.summary_type, .summary = s.summary, .sec_version = s.sec_version, .m = s.m}; }
+
+// One message there and its answer back, sealed or not.
+@requires(declassify)
+Result(RqGot, Str) rq_raw(SpdmConn c, RqLink l, List(Int) msg) {
+    if (!l.secured) {
+        SpdmFramed f = (c.io.xfer)(false, msg)?;
+        if (f.secured) { return Err("the device answered a plain request with a secured message"); }
+        return Ok(RqGot {.l = l, .r = f.msg});
+    }
+    List(Int) sealed = spdmg_seal(l.s, l.sid, l.req_seq, l.keys.req_key, l.keys.req_iv, spdm_inner(c.io.binding, msg));
+    SpdmFramed f = (c.io.xfer)(true, sealed)?;
+    if (!f.secured) { return Err("the device answered a secured request in the clear"); }
+    List(Int) app = match (spdmg_open(l.s, l.sid, l.rsp_seq, l.keys.rsp_key, l.keys.rsp_iv, f.msg)) { Some(p) => Ok(p), None => Err("a secured response does not open under the session's keys") }?;
+    List(Int) opened = spdm_uninner(c.io.binding, app)?;
+    RqLink l2 = RqLink {.secured = true, .s = l.s, .sid = l.sid, .keys = l.keys, .req_seq = l.req_seq + 1, .rsp_seq = l.rsp_seq + 1};
+    return Ok(RqGot {.l = l2, .r = opened});
+}
+
+// A request and its response, through the error responses a responder
+// may give before answering: Busy (retried), ResponseNotReady (asked again
+// with RESPOND_IF_READY), LargeResponse (read with CHUNK_GET); a request
+// larger than the responder's data transfer size goes by CHUNK_SEND.
+@requires(declassify)
+Result(RqGot, Str) rq_xfer(SpdmConn c, RqLink l, List(Int) req) {
+    Bool chunk = c.a.version >= 18 && c.a.data_transfer_size > 0 && req.len() > c.a.data_transfer_size;
+    RqGot g = if (chunk) { rq_chunk_send(c, l, req, 0, 0)? } else { rq_raw(c, l, req)? };
+    return rq_settle(c, g.l, req, g.r, 0);
+}
+
+@requires(declassify)
+Result(RqGot, Str) rq_settle(SpdmConn c, RqLink l, List(Int) req, List(Int) r, Int tries) {
+    if (!spdm_is_error(r)) { return Ok(RqGot {.l = l, .r = r}); }
+    SpdmErr e = spdm_error(r);
+    if (tries >= 16) { return Err("the device stayed busy (" + spdm_error_name(e.code) + ")"); }
+    if (e.code == 3) {
+        RqGot g = rq_raw(c, l, req)?;
+        return rq_settle(c, g.l, req, g.r, tries + 1);
+    }
+    if (e.code == 66 && e.ext.len() >= 4) {
+        RqGot g = rq_raw(c, l, spdmq_respond_if_ready(c.a.version, e.ext[1], e.ext[2]))?;
+        return rq_settle(c, g.l, req, g.r, tries + 1);
+    }
+    if (e.code == 15 && e.ext.len() >= 1) { return rq_chunk_get(c, l, e.ext[0], 0, [], 0 - 1); }
+    return Ok(RqGot {.l = l, .r = r});
+}
+
+// CHUNK_SEND, chunk by chunk; the last chunk's ACK carries the response.
+@requires(declassify)
+Result(RqGot, Str) rq_chunk_send(SpdmConn c, RqLink l, List(Int) req, Int at, Int seq) {
+    // header 12 bytes, and the total on the first
+    Int room = c.a.data_transfer_size - 12 - (if (seq == 0) { 4 } else { 0 });
+    if (room <= 0) { return Err("the device's data transfer size leaves no room for a chunk"); }
+    Int n = if (req.len() - at < room) { req.len() - at } else { room };
+    Bool last = at + n == req.len();
+    RqGot g = rq_raw(c, l, spdmq_chunk_send(c.a.version, 0, seq, last, req.len(), req[at..at + n]))?;
+    if (spdm_is_error(g.r)) { return Ok(g); }
+    if (g.r.len() < 6 || g.r[1] != spdm_rsp_chunk_send_ack() || spdm_le(g.r, 4, 2) != seq) { return Err("CHUNK_SEND_ACK is not for this chunk"); }
+    // An early error, or the last chunk: the response follows.
+    if ((g.r[2] & 1) != 0 || last) { return Ok(RqGot {.l = g.l, .r = g.r[6..g.r.len()]}); }
+    return rq_chunk_send(c, g.l, req, at + n, seq + 1);
+}
+
+// CHUNK_GET until the last chunk; the pieces are the large response.
+@requires(declassify)
+Result(RqGot, Str) rq_chunk_get(SpdmConn c, RqLink l, Int handle, Int seq, List(Int) acc, Int total) {
+    if (seq > 65535 || acc.len() > c.cfg.max_size) { return Err("a chunked response past our largest message"); }
+    RqGot g = rq_raw(c, l, spdmq_chunk_get(c.a.version, handle, seq))?;
+    List(Int) r = g.r;
+    if (spdm_is_error(r)) { return Err("CHUNK_GET: the device answered " + spdm_error_name(r[2])); }
+    Int hl = if (seq == 0) { 16 } else { 12 };
+    if (r.len() < hl || r[1] != spdm_rsp_chunk_response() || r[3] != handle || spdm_le(r, 4, 2) != seq) { return Err("CHUNK_RESPONSE is not this chunk"); }
+    Int size = spdm_le(r, 8, 4);
+    Int t = if (seq == 0) { spdm_le(r, 12, 4) } else { total };
+    if (hl + size > r.len() || t > c.cfg.max_size) { return Err("CHUNK_RESPONSE overruns itself"); }
+    List(Int) acc2 = acc.concat(r[hl..hl + size]);
+    if ((r[2] & 1) != 0) {
+        if (acc2.len() != t) { return Err("the chunks do not add up to the large response"); }
+        return Ok(RqGot {.l = g.l, .r = acc2});
+    }
+    return rq_chunk_get(c, g.l, handle, seq + 1, acc2, t);
+}
+
+// Out of a session.
+@requires(declassify)
+Result(List(Int), Str) rq(SpdmConn c, List(Int) req) {
+    RqGot g = rq_xfer(c, rq_clear(c), req)?;
+    return Ok(g.r);
+}
+
+// ─── Negotiation ────────────────────────────────────────────────────
+
+// GET_VERSION through ALGORITHMS, at the highest version both speak.
+@requires(declassify)
+pub Result(SpdmConn, Str) spdm_connect(SpdmIo io, SpdmConfig cfg) {
+    List(List(Int)) none = [];
+    SpdmAlgs a0 = SpdmAlgs {.slack = spdm_binding_slack(io.binding), .version = 16, .flags = 0, .req_flags = cfg.flags, .ct_exponent = 0, .data_transfer_size = 0, .max_msg_size = 0, .meas_spec = 0, .meas_hash = 0, .asym = 0, .hash = 0, .dhe = 0, .aead = 0, .key_schedule = 0, .req_asym = 0, .opaque_fmt = 0, .multi_key = false};
+    SpdmConn c0 = SpdmConn {.io = io, .cfg = cfg, .a = a0, .vca = [], .b = [], .d = [], .m = [], .chains = none, .digests = none};
+    List(Int) gv = spdmq_get_version();
+    List(Int) vr = rq(c0, gv)?;
+    SpdmVersions vs = spdm_parse_version(vr, spdm_binding_slack(io.binding))?;
+    Int ver = spdm_pick_version(vs.versions, cfg.versions);
+    if (ver == 0) { return Err("the device speaks no SPDM version we do"); }
+    Int myflags = rq_flags_for(cfg.flags, ver);
+    List(Int) gc = spdmq_get_capabilities(ver, cfg.ct_exponent, myflags, cfg.dts, cfg.max_size);
+    SpdmConn c1 = SpdmConn {.io = io, .cfg = cfg, .a = SpdmAlgs {.slack = spdm_binding_slack(io.binding), .version = ver, .flags = 0, .req_flags = myflags, .ct_exponent = 0, .data_transfer_size = 0, .max_msg_size = 0, .meas_spec = 0, .meas_hash = 0, .asym = 0, .hash = 0, .dhe = 0, .aead = 0, .key_schedule = 0, .req_asym = 0, .opaque_fmt = 0, .multi_key = false}, .vca = [], .b = [], .d = [], .m = [], .chains = none, .digests = none};
+    List(Int) cr = rq(c1, gc)?;
+    SpdmCaps caps = spdm_parse_capabilities(cr, ver, spdm_binding_slack(io.binding))?;
+    List(Int) na = spdmq_negotiate_algorithms(ver, cfg.multi_key);
+    List(Int) ar = rq(c1, na)?;
+    SpdmAlgs a = spdm_parse_algorithms(ar, ver, caps, myflags, spdm_binding_slack(io.binding), cfg.multi_key)?;
+    if (a.req_asym != 0 && !spdm_one_of(a.req_asym, 16 | 128 | 1024)) { return Err("ALGORITHMS: a requester signature algorithm we did not offer"); }
+    List(List(Int)) vca = [gv, vr[0..vs.len], gc, cr[0..caps.len], na, ar[0..spdm_le(ar, 4, 2)]];
+    return Ok(SpdmConn {.io = io, .cfg = cfg, .a = a, .vca = vca, .b = [], .d = [], .m = [], .chains = rq_slots(8), .digests = rq_slots(8)});
+}
+
+List(List(Int)) rq_slots(Int n) { return if (n <= 0) { [] } else { rq_slots(n - 1).concat([[]]) }; }
+
+Bool rq_needs_sessions(SpdmAlgs a) { return (a.flags & (512 | 3072)) != 0 && (a.req_flags & (512 | 3072)) != 0; }
+
+// Our flags as the version allows them (1.0 has none, 1.1 no chunking).
+Int rq_flags_for(Int f, Int ver) {
+    if (ver == 16) { return 0; }
+    if (ver == 17) { return f & 131071; }
+    return f;
+}
+
+// ─── Digests and certificates ───────────────────────────────────────
+
+@requires(declassify)
+pub Result(SpdmGot(SpdmDigests), Str) spdm_get_digests(SpdmConn c) {
+    if (!spdm_has(c.a, spdm_cap_cert())) { return Err("the device has no certificates"); }
+    List(Int) q = spdmq_get_digests(c.a.version);
+    List(Int) r = rq(c, q)?;
+    SpdmDigests d = spdm_parse_digests(r, c.a)?;
+    List(Int) exact = r[0..d.len];
+    SpdmConn c2 = SpdmConn {.io = c.io, .cfg = c.cfg, .a = c.a, .vca = c.vca, .b = c.b.concat([q, exact]), .d = if (c.a.multi_key) { exact } else { c.d }, .m = c.m, .chains = c.chains, .digests = rq_put_digests(d, 0, 0, c.digests)};
+    return Ok(SpdmGot {.c = c2, .v = d});
+}
+
+// Each provisioned slot's digest, in slot order.
+List(List(Int)) rq_put_digests(SpdmDigests d, Int slot, Int k, List(List(Int)) acc) {
+    if (slot >= 8) { return acc; }
+    Bool has = ((d.provisioned >> slot) & 1) == 1;
+    List(List(Int)) acc2 = if (has && k < d.digests.len()) { rq_set(acc, slot, d.digests[k]) } else { acc };
+    return rq_put_digests(d, slot + 1, if (has) { k + 1 } else { k }, acc2);
+}
+
+List(List(Int)) rq_set(List(List(Int)) xs, Int i, List(Int) v) { return xs[0..i].concat([v]).concat(xs[i + 1..xs.len()]); }
+
+// A slot's certificate chain, portion by portion; its hash must be the
+// slot's digest (when one was read).
+@requires(declassify)
+pub Result(SpdmGot(List(Int)), Str) spdm_get_certificate(SpdmConn c, Int slot) {
+    if (slot < 0 || slot > 7) { return Err("a certificate slot is 0 to 7"); }
+    SpdmGot(List(Int)) g = rq_cert_from(c, slot, 0, [])?;
+    List(Int) dg = c.digests[slot];
+    if (dg.len() > 0 && !eq_list(spdm_hash(c.a.hash, g.v), dg)) { return Err(f"slot {slot}'s chain is not the one its digest names"); }
+    SpdmChain ch = spdm_parse_chain(g.v, c.a.hash)?;
+    SpdmConn c2 = SpdmConn {.io = g.c.io, .cfg = g.c.cfg, .a = g.c.a, .vca = g.c.vca, .b = g.c.b, .d = g.c.d, .m = g.c.m, .chains = rq_set(g.c.chains, slot, g.v), .digests = rq_set(g.c.digests, slot, spdm_hash(c.a.hash, g.v))};
+    return Ok(SpdmGot {.c = c2, .v = g.v});
+}
+
+@requires(declassify)
+Result(SpdmGot(List(Int)), Str) rq_cert_from(SpdmConn c, Int slot, Int off, List(Int) acc) {
+    if (acc.len() > 65535) { return Err("a certificate chain past 64 KiB"); }
+    Int dts = c.a.data_transfer_size;
+    Int want = if (dts > 0 && dts - 8 < 1024) { dts - 8 } else { 1024 };
+    List(Int) q = spdmq_get_certificate(c.a.version, slot, off, want);
+    List(Int) r = rq(c, q)?;
+    SpdmCertPortion p = spdm_parse_certificate(r, c.a, slot)?;
+    List(Int) acc2 = acc.concat(p.portion);
+    SpdmConn c2 = rq_with(c, c.b.concat([q, r[0..p.len]]), c.d, c.m);
+    if (p.remainder == 0) { return Ok(SpdmGot {.c = c2, .v = acc2}); }
+    return rq_cert_from(c2, slot, off + p.portion.len(), acc2);
+}
+
+// The leaf's public key of a slot's chain (its last certificate).
+Result(PubKey, Str) rq_leaf_key(SpdmConn c, Int slot) {
+    List(Int) chain = c.chains[slot];
+    if (chain.len() == 0) { return Err(f"slot {slot}'s chain has not been read"); }
+    SpdmChain ch = spdm_parse_chain(chain, c.a.hash)?;
+    List(Int) leaf = ch.certs[ch.certs.len() - 1];
+    Cert cert = match (x509_parse(leaf)) { Ok(x) => Ok(x), Err(e) => Err("the device's leaf certificate: " + e) }?;
+    if (!spdm_key_fits(c.a.asym, cert.key)) { return Err("the device's key does not fit the negotiated signature algorithm"); }
+    return Ok(cert.key);
+}
+
+// ─── CHALLENGE ──────────────────────────────────────────────────────
+
+// What a CHALLENGE proved: the response, and the transcript its signature
+// covers (M1: VCA, the digests and certificates read since, CHALLENGE,
+// CHALLENGE_AUTH up to the signature) with the signature.
+pub type SpdmChallenged = { SpdmChallengeAuth auth; List(List(Int)) b; List(Int) request; List(Int) response; List(Int) signed; List(Int) signature; };
+
+@requires(declassify)
+pub Result(SpdmGot(SpdmChallenged), Str) spdm_challenge(SpdmConn c, Int slot, Int summary, List(Int) nonce, List(Int) context) {
+    if (!spdm_has(c.a, spdm_cap_chal())) { return Err("the device does not take CHALLENGE"); }
+    if (nonce.len() != 32 || (c.a.version >= 19 && context.len() != 8)) { return Err("a CHALLENGE nonce is 32 bytes and, from 1.3, its context 8"); }
+    PubKey key = rq_leaf_key(c, slot)?;
+    List(Int) q = spdmq_challenge(c.a.version, slot, summary, nonce, context);
+    List(Int) r = rq(c, q)?;
+    SpdmChallengeAuth au = spdm_parse_challenge_auth(r, c.a, summary, slot)?;
+    if (!eq_list(au.cert_chain_hash, c.digests[slot])) { return Err("CHALLENGE_AUTH names another certificate chain"); }
+    if (c.a.version >= 19 && !eq_list(au.context, context)) { return Err("CHALLENGE_AUTH carries another requester context"); }
+    List(Int) signed = rq_flat(c.vca).concat(rq_flat(c.b)).concat(q).concat(r[0..au.sig_at]);
+    List(Int) sig = r[au.sig_at..au.len];
+    if (!spdm_sig_ok(c.a.version, c.a.asym, c.a.hash, spdm_ctx_challenge_auth(), key, signed, sig)) { return Err("CHALLENGE_AUTH: the device did not sign this transcript"); }
+    // Basic mutual authentication: the device asks to challenge us back.
+    Bool basic = (r[2] & 128) != 0;
+    if (basic && (c.cfg.my_chains.len() == 0 || c.cfg.my_key.len() == 0)) { return Err("CHALLENGE_AUTH asks for mutual authentication and we have no certificate"); }
+    RqEncap done = if (basic) { rq_encap_run(c, RqEncap {.l = rq_clear(c), .mb = [], .mc = []}, 2)? } else { RqEncap {.l = rq_clear(c), .mb = [], .mc = []} };
+    return Ok(SpdmGot {.c = rq_with(c, [], c.d, c.m), .v = SpdmChallenged {.auth = au, .b = c.b, .request = q, .response = r[0..au.len], .signed = signed, .signature = sig}});
+}
+
+// ─── Measurements ───────────────────────────────────────────────────
+
+// What a GET_MEASUREMENTS returned; for a signed one the transcript its
+// signature covers (L1: from 1.2 VCA, then every request and response
+// since the last signed one) and the signature.
+pub type SpdmMeasured = { SpdmMeasurements meas; List(List(Int)) before; List(Int) request; List(Int) response; List(Int) signed; List(Int) signature; };
+
+@requires(declassify)
+pub Result(SpdmGot(SpdmMeasured), Str) spdm_get_measurements(SpdmConn c, Int op, Bool signed, Bool raw, Int slot, List(Int) nonce, List(Int) context) {
+    Bool can = spdm_has(c.a, spdm_cap_meas_sig()) || (!signed && spdm_has(c.a, spdm_cap_meas_no_sig()));
+    if (!can) { return Err("the device gives no measurements of that kind"); }
+    if ((signed && nonce.len() != 32) || (c.a.version >= 19 && context.len() != 8)) { return Err("a measurement nonce is 32 bytes and, from 1.3, its context 8"); }
+    List(Int) q = spdmq_get_measurements(c.a.version, signed, raw, op, nonce, slot, context);
+    List(Int) r = rq(c, q)?;
+    SpdmMeasurements ms = spdm_parse_measurements(r, c.a, signed)?;
+    List(Int) exact = r[0..ms.len];
+    if (!signed) { return Ok(SpdmGot {.c = rq_with(c, c.b, c.d, c.m.concat([q, exact])), .v = SpdmMeasured {.meas = ms, .before = c.m, .request = q, .response = exact, .signed = [], .signature = []}}); }
+    PubKey key = rq_leaf_key(c, slot)?;
+    List(Int) l1 = (if (c.a.version >= 18) { rq_flat(c.vca) } else { [] }).concat(rq_flat(c.m)).concat(q).concat(r[0..ms.sig_at]);
+    List(Int) sig = r[ms.sig_at..ms.len];
+    if (!spdm_sig_ok(c.a.version, c.a.asym, c.a.hash, spdm_ctx_measurements(), key, l1, sig)) { return Err("MEASUREMENTS: the device did not sign this transcript"); }
+    return Ok(SpdmGot {.c = rq_with(c, c.b, c.d, []), .v = SpdmMeasured {.meas = ms, .before = c.m, .request = q, .response = exact, .signed = l1, .signature = sig}});
+}
+
+// ─── Sessions by key exchange ───────────────────────────────────────
+
+// What a key exchange proved, for a verifier elsewhere: the negotiation,
+// the chain, KEY_EXCHANGE and its response, and the transcript and
+// signature.
+pub type SpdmKeyExchanged = { List(Int) digests; List(Int) request; List(Int) response; List(Int) signed; List(Int) signature; };
+
+// KEY_EXCHANGE on `slot` (its chain read first) with `random` (32 bytes:
+// the challenge, for a verifier), then FINISH, mutual authentication as
+// the device asks. Returns the established session.
+@requires(declassify)
+pub Result(SpdmSessGot(SpdmKeyExchanged), Str) spdm_start_session(SpdmConn c, Int slot, Int summary, Int policy, List(Int) random) {
+    if (!(spdm_has(c.a, spdm_cap_key_ex()) && (c.a.req_flags & 512) != 0)) { return Err("the device or we have no key exchange"); }
+    if (random.len() != 32) { return Err("the requester's random is 32 bytes"); }
+    PubKey key = rq_leaf_key(c, slot)?;
+    SpdmSuite s = SpdmSuite {.version = c.a.version, .hash = c.a.hash, .aead = c.a.aead, .dhe = c.a.dhe, .seq_bytes = spdm_binding_seq_bytes(c.io.binding)};
+    List(Secret(UInt(8))) priv = rq_ephemeral(s, 0)?;
+    List(Int) mine = spdmg_exchange_data(s, priv);
+    Int req_sid = 65535 - (random[0] & 15);
+    List(Int) q = spdmq_key_exchange(c.a.version, summary, slot, req_sid, policy, random, mine, rq_opaque_offer(c));
+    List(Int) r = rq(c, q)?;
+    Bool clear = (c.a.flags & 32768) != 0 && (c.a.req_flags & 32768) != 0;
+    SpdmKeyExRsp kr = spdm_parse_key_exchange_rsp(r, c.a, summary, clear)?;
+    Int secver = rq_selected(c, kr.opaque);
+    if (secver == 0) { return Err("KEY_EXCHANGE_RSP selects no secured-message version"); }
+    List(Int) ct = spdm_hash(c.a.hash, c.chains[slot]);
+    List(Int) head = rq_flat(c.vca).concat(if (c.a.multi_key) { c.d } else { [] }).concat(ct).concat(q);
+    List(Int) signed = head.concat(r[0..kr.sig_at]);
+    List(Int) sig = r[kr.sig_at..kr.sig_at + spdm_sig_len(c.a.asym)];
+    if (!spdm_sig_ok(c.a.version, c.a.asym, c.a.hash, spdm_ctx_key_exchange_rsp(), key, signed, sig)) { return Err("KEY_EXCHANGE_RSP: the device did not sign this exchange"); }
+    List(Int) th1 = spdm_hash(c.a.hash, signed.concat(sig));
+    List(Secret(UInt(8))) shared = spdmg_shared(s, priv, kr.exchange);
+    if (shared.len() == 0) { return Err("no ECDHE secret with the device's exchange data"); }
+    SpdmSecrets(Secret(UInt(8))) hs = spdmg_handshake(s, shared, false, th1);
+    if (!clear && !spdmg_responder_ok(s, hs, th1, kr.verify)) { return Err("KEY_EXCHANGE_RSP: the verify data is not this session's"); }
+    List(Int) k_all = signed.concat(sig).concat(kr.verify);
+    SpdmData(Secret(UInt(8))) nd = SpdmData {.req = [], .rsp = [], .export = []};
+    SpdmSess sess0 = SpdmSess {.s = s, .sid = req_sid | (kr.sid << 16), .psk = false, .established = false, .hs = hs, .data = nd, .keys = spdmg_handshake_keys(s, hs), .req_seq = 0, .rsp_seq = 0, .th = k_all, .heartbeat = kr.heartbeat, .slot = slot, .mut_auth = kr.mut_auth, .summary_type = summary, .summary = kr.summary, .sec_version = secver, .m = []};
+    SpdmSess sess1 = if (kr.mut_auth == 2 || kr.mut_auth == 4) { rq_encap(c, sess0, kr.mut_auth)? } else { sess0 };
+    if (kr.mut_auth != 0 && kr.mut_auth != 1 && kr.mut_auth != 2 && kr.mut_auth != 4) { return Err("KEY_EXCHANGE_RSP asks for an unknown kind of mutual authentication"); }
+    SpdmSess done = rq_finish(c, sess1, clear, kr.req_slot & 15)?;
+    return Ok(SpdmSessGot {.c = c, .s = done, .v = SpdmKeyExchanged {.digests = if (c.a.multi_key) { c.d } else { [] }, .request = q, .response = r[0..kr.len], .signed = signed, .signature = sig}});
+}
+
+// The layout of the secured-message version elements: format 1 from 1.2
+// (whatever ALGORITHMS selected, as libspdm writes and reads them), the
+// DSP0277 general format before.
+Int rq_opaque_fmt(SpdmConn c) { return if (c.a.version >= 18) { 2 } else { 1 }; }
+
+// Our offer: none when 1.2+ negotiated no opaque format (the responder
+// then uses its default secured-message version, which we take as 1.0).
+List(Int) rq_opaque_offer(SpdmConn c) { return if (c.a.version >= 18 && c.a.opaque_fmt == 0) { [] } else { spdm_opaque_supported_versions(rq_opaque_fmt(c)) }; }
+Int rq_selected(SpdmConn c, List(Int) opaque) { return if (c.a.version >= 18 && c.a.opaque_fmt == 0 && opaque.len() == 0) { 16 } else { spdm_opaque_selected_version(opaque, rq_opaque_fmt(c)) }; }
+
+// A fresh ephemeral key in range.
+@requires(declassify)
+Result(List(Secret(UInt(8))), Str) rq_ephemeral(SpdmSuite s, Int tries) {
+    List(Secret(UInt(8))) k = random_secret(if (s.dhe == 8) { 32 } else { 48 });
+    if (spdmg_exchange_data(s, k).len() > 0) { return Ok(k); }
+    if (tries > 16) { return Err("no ephemeral key in range"); }
+    return rq_ephemeral(s, tries + 1);
+}
+
+// FINISH, signed when mutual authentication was asked; its response's
+// verify data checked when the handshake is in the clear; then the data
+// keys from TH2.
+@requires(declassify)
+Result(SpdmSess, Str) rq_finish(SpdmConn c, SpdmSess s, Bool clear, Int req_slot) {
+    Bool mut = s.mut_auth != 0;
+    if (mut && (c.cfg.my_chains.len() == 0 || c.cfg.my_key.len() == 0)) { return Err("the device asks for mutual authentication and we have no certificate"); }
+    Int myslot = if (req_slot < c.cfg.my_chains.len()) { req_slot } else { 0 };
+    List(Int) cm = if (mut) { spdm_hash(c.a.hash, rq_my_chain(c, myslot)) } else { [] };
+    List(Int) head = spdmq_finish_head(c.a.version, mut, myslot);
+    List(Int) th_sig = s.th.concat(cm).concat(head);
+    List(Int) sig = if (mut) { rq_sign(c, spdm_signed_message(c.a.version, c.a.hash, spdm_ctx_finish(), th_sig))? } else { [] };
+    List(Int) th_mac = th_sig.concat(sig);
+    List(Int) verify = spdmg_requester_verify(s.s, s.hs, spdm_hash(c.a.hash, th_mac));
+    List(Int) fin = head.concat(sig).concat(verify);
+    RqLink l = if (clear) { rq_clear(c) } else { rq_link_of(s) };
+    RqGot g = rq_xfer(c, l, fin)?;
+    Int vl = if (clear) { spdm_hash_len(c.a.hash) } else { 0 };
+    Bool ok = sm_ok(spdm_check_head(g.r, c.a, 101, 4 + vl, "FINISH_RSP"))?;
+    List(Int) frsp = g.r[0..4 + vl];
+    List(Int) th_f = s.th.concat(cm).concat(fin);
+    if (clear && !spdmg_responder_ok(s.s, s.hs, spdm_hash(c.a.hash, th_f.concat(g.r[0..4])), frsp[4..4 + vl])) { return Err("FINISH_RSP: the verify data is not this session's"); }
+    List(Int) th2 = th_f.concat(frsp);
+    SpdmData(Secret(UInt(8))) data = spdmg_data(s.s, s.hs, spdm_hash(c.a.hash, th2));
+    return Ok(SpdmSess {.s = s.s, .sid = s.sid, .psk = false, .established = true, .hs = s.hs, .data = data, .keys = spdmg_data_keys(s.s, data), .req_seq = 0, .rsp_seq = 0, .th = th2, .heartbeat = s.heartbeat, .slot = s.slot, .mut_auth = s.mut_auth, .summary_type = s.summary_type, .summary = s.summary, .sec_version = s.sec_version, .m = []});
+}
+
+Result(Bool, Str) sm_ok(Result(Bool, Str) r) { return r; }
+
+// A response's head: not an error, this code and version, and at least
+// `min` bytes followed only by the binding's padding.
+pub Result(Bool, Str) spdm_check_head(List(Int) r, SpdmAlgs a, Int code, Int len, Str what) {
+    if (spdm_is_error(r)) { return Err(what + ": the device answered " + spdm_error_name(r[2])); }
+    if (r.len() < len || r[1] != code || r[0] != a.version) { return Err(what + " is not the response asked for"); }
+    if (r.len() - len > a.slack || !rq_zero_from(r, len)) { return Err(what + " has trailing bytes"); }
+    return Ok(true);
+}
+
+Bool rq_zero_from(List(Int) r, Int i) { return i >= r.len() || (r[i] == 0 && rq_zero_from(r, i + 1)); }
+
+// Our signature with the configured key over a message (already in its
+// signing form): ECDSA r ‖ s or Ed25519.
+@requires(declassify)
+Result(List(Int), Str) rq_sign(SpdmConn c, List(Int) m) {
+    Int asym = c.cfg.my_asym;
+    if (asym != c.a.req_asym) { return Err("our key's algorithm is not the one negotiated for the requester"); }
+    HashAlg h = spdm_hash_alg(c.a.hash);
+    List(Int) sig = if (asym == 16) { ecdsag_sign_raw(P256, h, c.cfg.my_key, m) } else if (asym == 128) { ecdsag_sign_raw(P384, h, c.cfg.my_key, m) } else if (asym == 1024) { ed25519g_sign(c.cfg.my_key, m) } else { [] };
+    if (sig.len() != spdm_sig_len(asym)) { return Err("our key could not sign"); }
+    return Ok(sig);
+}
+
+// ─── Encapsulated requests (mutual authentication) ──────────────────
+
+// The device's requests to us: GET_DIGESTS and GET_CERTIFICATE (our
+// chains), and out of a session CHALLENGE (we answer CHALLENGE_AUTH signed
+// with our key over VCA, the encapsulated digests and certificates, and
+// the encapsulated CHALLENGE and our answer up to the signature). A flow
+// starts with GET_ENCAPSULATED_REQUEST, or in a key exchange (mut_auth 4)
+// with an implied GET_DIGESTS, and ends when the device's acknowledgement
+// carries no further request.
+type RqEncap = { RqLink l; List(Int) mb; List(Int) mc; };
+
+@requires(declassify)
+Result(SpdmSess, Str) rq_encap(SpdmConn c, SpdmSess s, Int mode) {
+    RqEncap e = rq_encap_run(c, RqEncap {.l = rq_link_of(s), .mb = [], .mc = []}, mode)?;
+    return Ok(rq_sess_seq(s, e.l));
+}
+
+@requires(declassify)
+Result(RqEncap, Str) rq_encap_run(SpdmConn c, RqEncap e, Int mode) {
+    if ((c.a.flags & 4096) == 0 || (c.a.req_flags & 4096) == 0) { return Err("mutual authentication by encapsulated requests needs ENCAP on both sides"); }
+    if (mode == 4) {
+        RqAns a = rq_encap_answer(c, e, spdmq_get_digests(c.a.version))?;
+        return rq_encap_deliver(c, a.e, 0, a.answer, 0);
+    }
+    RqGot g = rq_xfer(c, e.l, spdmq_get_encapsulated_request(c.a.version))?;
+    if (spdm_is_error(g.r)) { return Err("GET_ENCAPSULATED_REQUEST: the device answered " + spdm_error_name(g.r[2])); }
+    if (g.r.len() < 8 || g.r[1] != 106) { return Err("ENCAPSULATED_REQUEST is not what the device answered"); }
+    RqAns a = rq_encap_answer(c, RqEncap {.l = g.l, .mb = e.mb, .mc = e.mc}, g.r[4..g.r.len()])?;
+    return rq_encap_deliver(c, a.e, g.r[2], a.answer, 0);
+}
+
+@requires(declassify)
+Result(RqEncap, Str) rq_encap_deliver(SpdmConn c, RqEncap e, Int id, List(Int) answer, Int n) {
+    if (n > 64) { return Err("too many encapsulated requests"); }
+    RqGot g = rq_xfer(c, e.l, spdmq_deliver_encapsulated_response(c.a.version, id, answer))?;
+    RqEncap e2 = RqEncap {.l = g.l, .mb = e.mb, .mc = e.mc};
+    List(Int) r = g.r;
+    if (spdm_is_error(r)) { return Err("DELIVER_ENCAPSULATED_RESPONSE: the device answered " + spdm_error_name(r[2])); }
+    if (r.len() < 4 || r[1] != 107) { return Err("ENCAPSULATED_RESPONSE_ACK is not what the device answered"); }
+    Int at = if (c.a.version >= 18) { 8 } else { 4 };
+    if (r.len() < at) { return Err("ENCAPSULATED_RESPONSE_ACK is short"); }
+    if (r[3] == 0 || r[3] == 2) { return Ok(e2); }
+    if (r[3] != 1) { return Err("ENCAPSULATED_RESPONSE_ACK: an unknown payload type"); }
+    RqAns a = rq_encap_answer(c, e2, r[at..r.len()])?;
+    return rq_encap_deliver(c, a.e, r[2], a.answer, n + 1);
+}
+
+type RqAns = { RqEncap e; List(Int) answer; };
+
+// Our answer to one encapsulated request, and the transcript it extends.
+@requires(declassify)
+Result(RqAns, Str) rq_encap_answer(SpdmConn c, RqEncap e, List(Int) req) {
+    Int ver = c.a.version;
+    if (req.len() < 4 || req[0] != ver) { return Ok(RqAns {.e = e, .answer = [ver, 127, 65, 0]}); }
+    if (req[1] == 129) {
+        Int n = c.cfg.my_chains.len();
+        Int mask = (1 << n) - 1;
+        List(Int) ans = [ver, 1, if (ver >= 19) { mask } else { 0 }, mask].concat(rq_my_digests(c, 0, []));
+        return Ok(RqAns {.e = rq_mut_b(e, req[0..4].concat(ans)), .answer = ans});
+    }
+    if (req[1] == 130 && req.len() >= 8) {
+        Int slot = req[2] & 15;
+        if (slot >= c.cfg.my_chains.len()) { return Ok(RqAns {.e = e, .answer = [ver, 127, 1, 0]}); }
+        List(Int) ch = rq_my_chain(c, slot);
+        Int off = spdm_le(req, 4, 2);
+        Int ln = spdm_le(req, 6, 2);
+        if (off >= ch.len()) { return Ok(RqAns {.e = e, .answer = [ver, 127, 1, 0]}); }
+        Int n = if (off + ln > ch.len()) { ch.len() - off } else { ln };
+        List(Int) ans = [ver, 2, slot, 0].concat(spdm_le_bytes(n, 2)).concat(spdm_le_bytes(ch.len() - off - n, 2)).concat(ch[off..off + n]);
+        return Ok(RqAns {.e = rq_mut_b(e, req[0..8].concat(ans)), .answer = ans});
+    }
+    if (req[1] == 131 && !e.l.secured) { return rq_encap_challenge(c, e, req); }
+    // UnsupportedRequest, naming the request.
+    return Ok(RqAns {.e = e, .answer = [ver, 127, 7, req[1]]});
+}
+
+List(Int) rq_my_digests(SpdmConn c, Int i, List(Int) acc) { return if (i >= c.cfg.my_chains.len()) { acc } else { rq_my_digests(c, i + 1, acc.concat(spdm_hash(c.a.hash, rq_my_chain(c, i)))) }; }
+
+// Our chain in slot i, in GET_CERTIFICATE's format under the connection's
+// hash: length, reserved, the root certificate's hash, the certificates.
+List(Int) rq_my_chain(SpdmConn c, Int i) {
+    List(Int) bundle = c.cfg.my_chains[i];
+    Der root = der_tag_at(bundle, 0, bundle.len(), 48);
+    if (!root.ok) { return []; }
+    List(Int) body = spdm_hash(c.a.hash, bundle[0..root.next]).concat(bundle);
+    return spdm_le_bytes(4 + body.len(), 2).concat([0, 0]).concat(body);
+}
+
+RqEncap rq_mut_b(RqEncap e, List(Int) m) { return RqEncap {.l = e.l, .mb = e.mb.concat(m), .mc = e.mc}; }
+
+// CHALLENGE_AUTH to the device's CHALLENGE (no measurement summary: a
+// requester has no measurements; no opaque data; from 1.3 the device's
+// context echoed).
+@requires(declassify)
+Result(RqAns, Str) rq_encap_challenge(SpdmConn c, RqEncap e, List(Int) req) {
+    Int ver = c.a.version;
+    Int cx = if (ver >= 19) { 8 } else { 0 };
+    if (req.len() != 36 + cx || req[3] != 0) { return Ok(RqAns {.e = e, .answer = [ver, 127, 1, 0]}); }
+    Int slot = req[2];
+    if (slot >= c.cfg.my_chains.len()) { return Ok(RqAns {.e = e, .answer = [ver, 127, 1, 0]}); }
+    Int mask = (1 << c.cfg.my_chains.len()) - 1;
+    List(Int) head = [ver, 3, slot & 15, mask].concat(spdm_hash(c.a.hash, rq_my_chain(c, slot))).concat(random_bytes(32)).concat([0, 0]).concat(req[36..36 + cx]);
+    List(Int) mc = e.mc.concat(req).concat(head);
+    // VCA is part of it only above 1.1 (as libspdm signs it).
+    List(Int) a = if (ver >= 18) { rq_flat(c.vca) } else { [] };
+    List(Int) sig = rq_sign(c, spdm_signed_message(ver, c.a.hash, spdm_ctx_mut_challenge_auth(), a.concat(e.mb).concat(mc)))?;
+    return Ok(RqAns {.e = RqEncap {.l = e.l, .mb = e.mb, .mc = mc}, .answer = head.concat(sig)});
+}
+
+// ─── Sessions by pre-shared key ─────────────────────────────────────
+
+// PSK_EXCHANGE with our PSK hint and a fresh context, then PSK_FINISH
+// unless the device has no context to finish with.
+@requires(declassify)
+pub Result(SpdmSessGot(List(Int)), Str) spdm_start_psk_session(SpdmConn c, Int summary, Int policy) {
+    if ((c.a.flags & 3072) == 0 || (c.a.req_flags & 1024) == 0) { return Err("the device or we have no PSK sessions"); }
+    if (c.cfg.psk.len() == 0) { return Err("no pre-shared key configured"); }
+    SpdmSuite s = SpdmSuite {.version = c.a.version, .hash = c.a.hash, .aead = c.a.aead, .dhe = c.a.dhe, .seq_bytes = spdm_binding_seq_bytes(c.io.binding)};
+    List(Int) ctx = random_bytes(spdm_hash_len(c.a.hash));
+    Int req_sid = 65520 + (ctx[0] & 15);
+    List(Int) q = spdmq_psk_exchange(c.a.version, summary, req_sid, policy, c.cfg.psk_hint, ctx, rq_opaque_offer(c));
+    List(Int) r = rq(c, q)?;
+    SpdmPskExRsp pr = spdm_parse_psk_exchange_rsp(r, c.a, summary)?;
+    Int secver = rq_selected(c, pr.opaque);
+    if (secver == 0) { return Err("PSK_EXCHANGE_RSP selects no secured-message version"); }
+    Bool with_context = (c.a.flags & 2048) != 0;
+    if (with_context && pr.context.len() == 0) { return Err("PSK_EXCHANGE_RSP: no responder context"); }
+    List(Int) k_head = rq_flat(c.vca).concat(q).concat(r[0..pr.verify_at]);
+    List(Int) th1 = spdm_hash(c.a.hash, k_head);
+    SpdmSecrets(Secret(UInt(8))) hs = spdmg_handshake(s, c.cfg.psk, true, th1);
+    if (!spdmg_responder_ok(s, hs, th1, pr.verify)) { return Err("PSK_EXCHANGE_RSP: the verify data is not this pre-shared key's"); }
+    List(Int) k_all = k_head.concat(pr.verify);
+    SpdmData(Secret(UInt(8))) nd = SpdmData {.req = [], .rsp = [], .export = []};
+    SpdmSess s0 = SpdmSess {.s = s, .sid = req_sid | (pr.sid << 16), .psk = true, .established = false, .hs = hs, .data = nd, .keys = spdmg_handshake_keys(s, hs), .req_seq = 0, .rsp_seq = 0, .th = k_all, .heartbeat = pr.heartbeat, .slot = 0 - 1, .mut_auth = 0, .summary_type = summary, .summary = pr.summary, .sec_version = secver, .m = []};
+    if (!with_context) {
+        SpdmData(Secret(UInt(8))) d0 = spdmg_data(s, hs, spdm_hash(c.a.hash, k_all));
+        return Ok(SpdmSessGot {.c = c, .s = rq_established(s0, d0, k_all), .v = ctx});
+    }
+    List(Int) head = spdmq_psk_finish_head(c.a.version);
+    List(Int) fin = head.concat(spdmg_requester_verify(s, hs, spdm_hash(c.a.hash, k_all.concat(head))));
+    RqGot g = rq_xfer(c, rq_link_of(s0), fin)?;
+    Bool ok = spdm_check_head(g.r, c.a, 103, 4, "PSK_FINISH_RSP")?;
+    List(Int) th2 = k_all.concat(fin).concat(g.r[0..4]);
+    SpdmData(Secret(UInt(8))) d = spdmg_data(s, hs, spdm_hash(c.a.hash, th2));
+    return Ok(SpdmSessGot {.c = c, .s = rq_established(s0, d, th2), .v = ctx});
+}
+
+SpdmSess rq_established(SpdmSess s, SpdmData(Secret(UInt(8))) d, List(Int) th) {
+    return SpdmSess {.s = s.s, .sid = s.sid, .psk = s.psk, .established = true, .hs = s.hs, .data = d, .keys = spdmg_data_keys(s.s, d), .req_seq = 0, .rsp_seq = 0, .th = th, .heartbeat = s.heartbeat, .slot = s.slot, .mut_auth = s.mut_auth, .summary_type = s.summary_type, .summary = s.summary, .sec_version = s.sec_version, .m = []};
+}
+
+// ─── In a session ───────────────────────────────────────────────────
+
+// Any request in the session and its response.
+@requires(declassify)
+pub Result(SpdmSessGot(List(Int)), Str) spdm_session_request(SpdmConn c, SpdmSess s, List(Int) req) {
+    if (!s.established) { return Err("the session is not established"); }
+    RqGot g = rq_xfer(c, rq_link_of(s), req)?;
+    return Ok(SpdmSessGot {.c = c, .s = rq_sess_seq(s, g.l), .v = g.r});
+}
+
+@requires(declassify)
+pub Result(SpdmSess, Str) spdm_heartbeat(SpdmConn c, SpdmSess s) {
+    if ((c.a.flags & 8192) == 0) { return Err("the device has no heartbeat"); }
+    SpdmSessGot(List(Int)) g = spdm_session_request(c, s, spdmq_heartbeat(c.a.version))?;
+    Bool ok = spdm_parse_ack(g.v, c.a, 104, 0 - 1, 0 - 1, "HEARTBEAT_ACK")?;
+    return Ok(g.s);
+}
+
+// KEY_UPDATE: UpdateKey (ours) or UpdateAllKeys (both), then VerifyNewKey
+// under the new keys. The request goes under the old keys; the
+// acknowledgement of UpdateKey comes under the device's unchanged key.
+@requires(declassify)
+pub Result(SpdmSess, Str) spdm_key_update(SpdmConn c, SpdmSess s, Bool all) {
+    if ((c.a.flags & 16384) == 0) { return Err("the device has no key update"); }
+    Int op = if (all) { 2 } else { 1 };
+    Int tag = random_bytes(1)[0];
+    RqLink l = rq_link_of(s);
+    List(Int) sealed = spdmg_seal(s.s, s.sid, l.req_seq, l.keys.req_key, l.keys.req_iv, spdm_inner(c.io.binding, spdmq_key_update(c.a.version, op, tag)));
+    SpdmFramed f = (c.io.xfer)(true, sealed)?;
+    SpdmData(Secret(UInt(8))) d2 = spdmg_update(s.s, s.data, all);
+    SpdmKeys(Secret(UInt(8))) k2 = spdmg_data_keys(s.s, d2);
+    // The acknowledgement: under the device's new key for UpdateAllKeys.
+    List(Secret(UInt(8))) rk = if (all) { k2.rsp_key } else { s.keys.rsp_key };
+    List(Secret(UInt(8))) riv = if (all) { k2.rsp_iv } else { s.keys.rsp_iv };
+    Int rseq = if (all) { 0 } else { l.rsp_seq };
+    List(Int) app = match (spdmg_open(s.s, s.sid, rseq, rk, riv, f.msg)) { Some(p) => Ok(p), None => Err("KEY_UPDATE_ACK does not open") }?;
+    List(Int) ack = spdm_uninner(c.io.binding, app)?;
+    Bool ok = spdm_parse_ack(ack, c.a, 105, op, tag, "KEY_UPDATE_ACK")?;
+    SpdmKeys(Secret(UInt(8))) keys = SpdmKeys {.req_key = k2.req_key, .req_iv = k2.req_iv, .rsp_key = rk, .rsp_iv = riv};
+    SpdmSess s2 = SpdmSess {.s = s.s, .sid = s.sid, .psk = s.psk, .established = true, .hs = s.hs, .data = d2, .keys = keys, .req_seq = 0, .rsp_seq = rseq + 1, .th = s.th, .heartbeat = s.heartbeat, .slot = s.slot, .mut_auth = s.mut_auth, .summary_type = s.summary_type, .summary = s.summary, .sec_version = s.sec_version, .m = s.m};
+    Int tag2 = random_bytes(1)[0];
+    SpdmSessGot(List(Int)) g = spdm_session_request(c, s2, spdmq_key_update(c.a.version, 3, tag2))?;
+    Bool ok2 = spdm_parse_ack(g.v, c.a, 105, 3, tag2, "KEY_UPDATE_ACK (VerifyNewKey)")?;
+    return Ok(g.s);
+}
+
+@requires(declassify)
+pub Result(Bool, Str) spdm_end_session(SpdmConn c, SpdmSess s) {
+    SpdmSessGot(List(Int)) g = spdm_session_request(c, s, spdmq_end_session(c.a.version, false))?;
+    return spdm_parse_ack(g.v, c.a, 108, 0 - 1, 0 - 1, "END_SESSION_ACK");
+}
+
+// GET_MEASUREMENTS inside the session (the transcript of a signed one is
+// the session's own measurements since the last signed one).
+@requires(declassify)
+pub Result(SpdmSessGot(SpdmMeasured), Str) spdm_session_measurements(SpdmConn c, SpdmSess s, Int op, Bool signed, Bool raw, Int slot, List(Int) nonce, List(Int) context) {
+    if ((signed && nonce.len() != 32) || (c.a.version >= 19 && context.len() != 8)) { return Err("a measurement nonce is 32 bytes and, from 1.3, its context 8"); }
+    List(Int) q = spdmq_get_measurements(c.a.version, signed, raw, op, nonce, slot, context);
+    SpdmSessGot(List(Int)) g = spdm_session_request(c, s, q)?;
+    SpdmMeasurements ms = spdm_parse_measurements(g.v, c.a, signed)?;
+    List(Int) exact = g.v[0..ms.len];
+    if (!signed) {
+        SpdmSess s2 = rq_sess_m(g.s, g.s.m.concat([q, exact]));
+        return Ok(SpdmSessGot {.c = c, .s = s2, .v = SpdmMeasured {.meas = ms, .before = g.s.m, .request = q, .response = exact, .signed = [], .signature = []}});
+    }
+    PubKey key = rq_leaf_key(c, slot)?;
+    List(Int) l1 = (if (c.a.version >= 18) { rq_flat(c.vca) } else { [] }).concat(rq_flat(g.s.m)).concat(q).concat(g.v[0..ms.sig_at]);
+    List(Int) sig = g.v[ms.sig_at..ms.len];
+    if (!spdm_sig_ok(c.a.version, c.a.asym, c.a.hash, spdm_ctx_measurements(), key, l1, sig)) { return Err("MEASUREMENTS: the device did not sign this transcript"); }
+    return Ok(SpdmSessGot {.c = c, .s = rq_sess_m(g.s, []), .v = SpdmMeasured {.meas = ms, .before = g.s.m, .request = q, .response = exact, .signed = l1, .signature = sig}});
+}
+
+SpdmSess rq_sess_m(SpdmSess s, List(List(Int)) m) { return SpdmSess {.s = s.s, .sid = s.sid, .psk = s.psk, .established = s.established, .hs = s.hs, .data = s.data, .keys = s.keys, .req_seq = s.req_seq, .rsp_seq = s.rsp_seq, .th = s.th, .heartbeat = s.heartbeat, .slot = s.slot, .mut_auth = s.mut_auth, .summary_type = s.summary_type, .summary = s.summary, .sec_version = s.sec_version, .m = m}; }
+
+// The records a verifier takes, as bytes (lib/verify/spdm.resid's
+// SpdmRecord and friends are built from these).
+pub List(List(UInt(8))) spdm_bytes_list(List(List(Int)) xs) { return rq_bl(xs, 0, []); }
+List(List(UInt(8))) rq_bl(List(List(Int)) xs, Int i, List(List(UInt(8))) acc) { return if (i >= xs.len()) { acc } else { rq_bl(xs, i + 1, acc.concat([rq_bytes(xs[i], 0, ListBuf())])) }; }
+pub List(UInt(8)) spdm_bytes(List(Int) xs) { return rq_bytes(xs, 0, ListBuf()); }
+List(UInt(8)) rq_bytes(List(Int) xs, Int i, ListBuf(UInt(8)) acc) { return if (i >= xs.len()) { acc.finish() } else { rq_bytes(xs, i + 1, acc.push((UInt(8)) xs[i])) }; }
+
+// The session's handshake transcript hash (TH1 with the signature), what
+// a guest commits to in its CPU evidence (lib/challenge_bind.resid's
+// challenge_session_value).
+pub List(Int) spdm_session_th(SpdmConn c, SpdmKeyExchanged k) { return spdm_hash(c.a.hash, k.signed.concat(k.signature)); }

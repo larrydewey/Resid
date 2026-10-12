@@ -1,5 +1,6 @@
 import "verify/core.resid";
 import "verify/spdm.resid";
+import "verify/spdm_session.resid";
 import "verify/nvidia_anchors.resid";
 import "verify/seal.resid";
 import "verify/testing.resid";
@@ -11,47 +12,168 @@ import "hash.resid";
 import "hpke.resid";
 import "hpkeg.resid";
 import "random.resid";
+import "cose.resid";
+import "spdm_msg.resid";
 
 @requires(filesystem(readonly))
 List(Int) rd(Str p) { return filesystem.read_bytes("fixtures/" + p); }
+@requires(filesystem(readonly))
+List(UInt(8)) rdb(Str p) { return chal_bytes(rd(p)); }
 
 List(Int) fill(Int v, Int n) { return if (n <= 0) { [] } else { [v].concat(fill(v, n - 1)) }; }
 List(Int) le(Int v, Int n) { return if (n <= 0) { [] } else { [v & 255].concat(le(v >> 8, n - 1)) }; }
+List(List(UInt(8))) bl(List(List(Int)) xs, Int i, List(List(UInt(8))) acc) { return if (i >= xs.len()) { acc } else { bl(xs, i + 1, acc.concat([chal_bytes(xs[i])])) }; }
+
+Str err_or(Result(T, VerifyError) r, Str ok) { return match r { Ok(v) => ok, Err(e) => verify_error_text(e) }; }
+
+// ─── Records captured from DMTF's spdm-emu ──────────────────────────
+// (tests/attest/gen_spdm_fixtures.py: this repository's requester against
+// spdm_responder_emu; one "name hex" line per message.)
+
+type Rec = { List(Str) names; List(List(Int)) vals; };
 
 @requires(filesystem(readonly))
-List(List(UInt(8))) h100_chain() { return [chal_bytes(rd("nvidia-h100-chain0.der")), chal_bytes(rd("nvidia-h100-chain1.der")), chal_bytes(rd("nvidia-h100-chain2.der")), chal_bytes(rd("nvidia-h100-chain3.der")), chal_bytes(rd("nvidia-h100-chain4.der"))]; }
+Rec rec_of(Str name) { return rec_lines(str_split(filesystem.read_all("fixtures/spdm-emu/" + name + ".rec"), "\n"), 0, Rec {.names = [], .vals = []}); }
+
+Rec rec_lines(List(Str) ls, Int i, Rec acc) {
+    if (i >= ls.len()) { return acc; }
+    List(Str) p = str_split(ls[i], " ");
+    if (p.len() < 1 || p[0] == "") { return rec_lines(ls, i + 1, acc); }
+    List(Int) v = if (p.len() > 1) { cose_hex_decode(p[1]) } else { [] };
+    return rec_lines(ls, i + 1, Rec {.names = acc.names.concat([p[0]]), .vals = acc.vals.concat([v])});
+}
+
+List(List(Int)) all(Rec r, Str n) { return all_at(r, n, 0, []); }
+List(List(Int)) all_at(Rec r, Str n, Int i, List(List(Int)) acc) { return if (i >= r.names.len()) { acc } else { all_at(r, n, i + 1, if (r.names[i] == n) { acc.concat([r.vals[i]]) } else { acc }) }; }
+List(Int) one(Rec r, Str n) { List(List(Int)) a = all(r, n); return if (a.len() > 0) { a[0] } else { [] }; }
+
+Int rec_hash(Rec r) { return match (spdm_parse_vca(all(r, "vca"))) { Ok(a) => a.hash, Err(m) => 2 }; }
+
+List(List(UInt(8))) leaf_first(Rec r) {
+    return match (spdm_parse_chain(one(r, "chain"), rec_hash(r))) { Ok(c) => bl(spdm_chain_leaf_first(c), 0, []), Err(m) => [] };
+}
+
+SpdmRecord meas_rec(Rec r, List(List(UInt(8))) ocsp) {
+    return SpdmRecord {.vca = bl(all(r, "vca"), 0, []), .certs = leaf_first(r), .ocsp = ocsp, .before = bl(all(r, "meas_before"), 0, []), .request = chal_bytes(one(r, "meas_req")), .response = chal_bytes(one(r, "meas_rsp"))};
+}
+
+SpdmChallengeRecord chal_rec(Rec r, List(List(UInt(8))) ocsp) {
+    return SpdmChallengeRecord {.vca = bl(all(r, "vca"), 0, []), .chain = chal_bytes(one(r, "chain")), .ocsp = ocsp, .b = bl(all(r, "chal_b"), 0, []), .request = chal_bytes(one(r, "chal_req")), .response = chal_bytes(one(r, "chal_rsp"))};
+}
+
+SpdmSessionRecord sess_rec(Rec r, List(List(UInt(8))) ocsp) {
+    return SpdmSessionRecord {.vca = bl(all(r, "vca"), 0, []), .chain = chal_bytes(one(r, "sess_chain")), .ocsp = ocsp, .digests = chal_bytes(one(r, "sess_digests")), .key_exchange = chal_bytes(one(r, "sess_ke")), .key_exchange_rsp = chal_bytes(one(r, "sess_ke_rsp"))};
+}
 
 @requires(filesystem(readonly))
-List(List(UInt(8))) test_chain() { return [chal_bytes(rd("spdm-leaf.der")), chal_bytes(rd("spdm-root.der"))]; }
+List(List(UInt(8))) emu_ocsp(Str d) { return [rdb("spdm-emu/" + d + "-ocsp-inter.der"), rdb("spdm-emu/" + d + "-ocsp-leaf.der")]; }
 
-// A GET_MEASUREMENTS request for this nonce.
-List(Int) request(List(Int) nonce) { return [17, 224, 1, 255].concat(nonce).concat([0]); }
+Anchor emu_anchor(Str d) {
+    return if (d == "ecp256") { test_emu_ecp256() } else if (d == "ecp384") { test_emu_ecp384() } else if (d == "rsa2048") { test_emu_rsa2048() } else if (d == "rsa3072") { test_emu_rsa3072() } else { test_emu_ed25519() };
+}
 
-// Two measurement blocks (indices 1 and 2, 48-byte digests), signed by the
-// test device over request ‖ response.
+Str alg_of(SpdmEvidence e) { return spdm_alg_name(e.asym, e.hash); }
+
+@requires(filesystem(readonly))
+Str emu(Str name, Str d, Bool sessions) {
+    Rec r = rec_of(name);
+    List(List(UInt(8))) oc = emu_ocsp(d);
+    EvidenceTime t = test_time(1791000000);
+    Str m = match (test_spdm_check(meas_rec(r, oc), emu_anchor(d), t)) { Ok(e) => f"measurements ok (SPDM 0x{e.version:hex}, {alg_of(e)}, {e.measurements.len()} blocks)", Err(e) => verify_error_text(e) };
+    Str c = match (test_spdm_challenge_check(chal_rec(r, oc), emu_anchor(d), t)) { Ok(i) => f"challenge ok (summary {i.summary.len()} bytes)", Err(e) => verify_error_text(e) };
+    Str s = if (sessions) { match (test_spdm_session_check(sess_rec(r, oc), emu_anchor(d), t)) { Ok(x) => f"session ok (mutual authentication {x.mut_auth})", Err(e) => verify_error_text(e) } } else { "no sessions in 1.0" };
+    return name + ": " + m + "; " + c + "; " + s;
+}
+
+List(Int) flip(List(Int) b, Int at) { return b[0..at].concat([b[at] ^ 1]).concat(b[at + 1..b.len()]); }
+
+@requires(filesystem(readonly))
+Str emu_negative() {
+    Rec r = rec_of("v13-p256");
+    EvidenceTime t = test_time(1791000000);
+    Anchor a = test_emu_ecp256();
+    SpdmRecord ok = meas_rec(r, emu_ocsp("ecp256"));
+    SpdmRecord revoked = SpdmRecord {.vca = ok.vca, .certs = ok.certs, .ocsp = [rdb("spdm-emu/ecp256-ocsp-inter.der"), rdb("spdm-emu/ecp256-ocsp-leaf-revoked.der")], .before = ok.before, .request = ok.request, .response = ok.response};
+    SpdmRecord no_ocsp = SpdmRecord {.vca = ok.vca, .certs = ok.certs, .ocsp = [rdb("spdm-emu/ecp256-ocsp-leaf.der")], .before = ok.before, .request = ok.request, .response = ok.response};
+    List(Int) rsp = chal_ints(ok.response);
+    SpdmRecord tampered = SpdmRecord {.vca = ok.vca, .certs = ok.certs, .ocsp = ok.ocsp, .before = ok.before, .request = ok.request, .response = chal_bytes(flip(rsp, 20))};
+    List(List(Int)) vca = all(r, "vca");
+    SpdmRecord other_vca = SpdmRecord {.vca = bl(vca[0..2].concat([flip(vca[2], 5)]).concat(vca[3..6]), 0, []), .certs = ok.certs, .ocsp = ok.ocsp, .before = ok.before, .request = ok.request, .response = ok.response};
+    println("revoked leaf: " + err_or(test_spdm_check(revoked, a, t), "ACCEPTED"));
+    println("no OCSP for the intermediate: " + err_or(test_spdm_check(no_ocsp, a, t), "ACCEPTED"));
+    println("after the OCSP responses' nextUpdate: " + err_or(test_spdm_check(ok, a, test_time(1840000000)), "ACCEPTED"));
+    println("tampered response: " + err_or(test_spdm_check(tampered, a, t), "ACCEPTED"));
+    println("another negotiation (1.3 signs it): " + err_or(test_spdm_check(other_vca, a, t), "ACCEPTED"));
+    println("another device's root: " + err_or(test_spdm_check(ok, test_emu_ecp384(), t), "ACCEPTED"));
+    SpdmSessionRecord sr = sess_rec(r, emu_ocsp("ecp256"));
+    SpdmSessionRecord no_d = SpdmSessionRecord {.vca = sr.vca, .chain = sr.chain, .ocsp = sr.ocsp, .digests = [], .key_exchange = sr.key_exchange, .key_exchange_rsp = sr.key_exchange_rsp};
+    println("multi-key session without its DIGESTS: " + err_or(test_spdm_session_check(no_d, a, t), "ACCEPTED"));
+    Rec r11 = rec_of("v11-p384");
+    SpdmRecord m11 = meas_rec(r11, emu_ocsp("ecp384"));
+    List(List(Int)) v11 = all(r11, "vca");
+    SpdmRecord m11v = SpdmRecord {.vca = bl(v11[0..2].concat([flip(v11[2], 9)]).concat(v11[3..6]), 0, []), .certs = m11.certs, .ocsp = m11.ocsp, .before = m11.before, .request = m11.request, .response = m11.response};
+    println("1.1 measurements with another negotiation (unsigned in 1.1): " + err_or(test_spdm_check(m11v, test_emu_ecp384(), test_time(1791000000)), "ok"));
+    SpdmSessionRecord s11 = sess_rec(r11, emu_ocsp("ecp384"));
+    SpdmSessionRecord s11v = SpdmSessionRecord {.vca = m11v.vca, .chain = s11.chain, .ocsp = s11.ocsp, .digests = s11.digests, .key_exchange = s11.key_exchange, .key_exchange_rsp = s11.key_exchange_rsp};
+    println("1.1 session with another negotiation (TH1 covers it): " + err_or(test_spdm_session_check(s11v, test_emu_ecp384(), test_time(1791000000)), "ACCEPTED"));
+    return "";
+}
+
+// ─── NVIDIA's H100 sample (SPDM 1.1 without its negotiation) ────────
+
+@requires(filesystem(readonly))
+List(List(UInt(8))) h100_chain() { return [rdb("nvidia-h100-chain0.der"), rdb("nvidia-h100-chain1.der"), rdb("nvidia-h100-chain2.der"), rdb("nvidia-h100-chain3.der"), rdb("nvidia-h100-chain4.der")]; }
+
+@requires(filesystem(readonly))
+List(List(UInt(8))) h100_ocsp() { return [rdb("nvidia-h100-ocsp1.der"), rdb("nvidia-h100-ocsp2.der"), rdb("nvidia-h100-ocsp3.der")]; }
+
+@requires(filesystem(readonly))
+SpdmRecord h100(List(UInt(8)) req, List(UInt(8)) resp, List(List(UInt(8))) ocsp) { return SpdmRecord {.vca = [], .certs = h100_chain(), .ocsp = ocsp, .before = [], .request = req, .response = resp}; }
+
+// ─── Fresh evidence from a test device (SPDM 1.3, ECDSA P-384) ──────
+
+// The negotiation a 1.3 device answers: P-384, SHA-384, measurements.
+List(List(UInt(8))) vca13() {
+    List(Int) na = spdmq_negotiate_algorithms(19, false);
+    List(Int) structs = [2, 32].concat(le(16, 2)).concat([3, 32]).concat(le(2, 2)).concat([4, 32]).concat(le(0, 2)).concat([5, 32]).concat(le(1, 2));
+    List(Int) al = [1, 2].concat(le(4, 4)).concat(le(128, 4)).concat(le(2, 4)).concat(fill(0, 12)).concat([0, 0, 0, 0]).concat(structs);
+    return bl([spdmq_get_version(), [16, 4, 0, 0, 0, 1, 0, 19], spdmq_get_capabilities(19, 20, 2 | 4 | 64 | 128 | 512, 4096, 65536), [19, 97, 0, 0, 0, 12, 0, 0].concat(le(2 | 4 | 16 | 64 | 128 | 512, 4)).concat(le(4096, 4)).concat(le(65536, 4)), na, [19, 99, 4, 0].concat(le(6 + al.len(), 2)).concat(al)], 0, []);
+}
+
+List(Int) flat(List(List(UInt(8))) xs, Int i, List(Int) acc) { return if (i >= xs.len()) { acc } else { flat(xs, i + 1, acc.concat(chal_ints(xs[i]))) }; }
+
+// A GET_MEASUREMENTS (all, signed) for this nonce and context.
+List(Int) request(List(Int) nonce) { return spdmq_get_measurements(19, true, false, 255, nonce, 0, fill(9, 8)); }
+
+// Two blocks, signed by the test device over VCA ‖ request ‖ response
+// under the 1.3 signing context.
 @requires(filesystem(readonly))
 List(Int) response(List(Int) req, Int m1) {
     List(Int) b1 = [1, 1].concat(le(51, 2)).concat([1]).concat(le(48, 2)).concat(fill(m1, 48));
     List(Int) b2 = [2, 1].concat(le(51, 2)).concat([1]).concat(le(48, 2)).concat(fill(7, 48));
     List(Int) rec = b1.concat(b2);
-    List(Int) body = [17, 96, 0, 0, 2].concat(le(rec.len(), 3)).concat(rec).concat(fill(3, 32)).concat(le(4, 2)).concat([1, 2, 3, 4]);
-    return body.concat(ecdsa_sign_raw(P384, Sha384, rd("spdm-leaf-d.bin"), req.concat(body)));
+    List(Int) body = [19, 96, 0, 0, 2].concat(le(rec.len(), 3)).concat(rec).concat(fill(3, 32)).concat(le(0, 2)).concat(fill(9, 8));
+    List(Int) m = spdm_signed_message(19, 2, spdm_ctx_measurements(), flat(vca13(), 0, []).concat(req).concat(body));
+    return body.concat(ecdsa_sign_raw(P384, Sha384, rd("spdm-leaf-d.bin"), m));
 }
+
+@requires(filesystem(readonly))
+SpdmRecord fresh_rec(List(Int) req, List(Int) resp) { return SpdmRecord {.vca = vca13(), .certs = [rdb("spdm-leaf.der"), rdb("spdm-root.der")], .ocsp = [rdb("spdm-ocsp-leaf.der")], .before = [], .request = chal_bytes(req), .response = chal_bytes(resp)}; }
 
 @policy
 SpdmPolicy gpu_policy() { return SpdmPolicy {.measurements_hex = ["1=" + hex_encode(fill(5, 48)), "2=" + hex_encode(fill(7, 48))]}; }
 
 @decides(accept = [test_device_root], appraised = gpu_policy, identity = key_bound)
 @requires(declassify)
-Result(HpkeMessage, VerifyError) release(List(UInt(8)) req, List(UInt(8)) resp, List(List(UInt(8))) chain, ChallengeRecord issued, List(Int) guest_pk, List(Secret(UInt(8))) key, List(Secret(UInt(8))) sender) {
-    Verified(SpdmEvidence) v = spdm_verify_key_bound(req, resp, chain, issued, test_device_root(), test_time(1791000000), 32, guest_pk)?;
+Result(HpkeMessage, VerifyError) release(SpdmRecord rec, ChallengeRecord issued, List(Int) guest_pk, List(Secret(UInt(8))) key, List(Secret(UInt(8))) sender) {
+    Verified(SpdmEvidence) v = spdm_verify_key_bound(rec, issued, test_device_root(), test_time(1791000000), 32, guest_pk)?;
     Appraised(SpdmEvidence) a = spdm_appraise(v, gpu_policy())?;
     return seal_to_evidence(a, 32, guest_pk, key, sender);
 }
 
 @requires(filesystem(readonly))
 Str fresh(Str what, List(Int) req, List(Int) resp, ChallengeRecord c) {
-    return what + ": " + match (spdm_verify(chal_bytes(req), chal_bytes(resp), test_chain(), c, test_device_root(), test_time(1791000000))) {
+    return what + ": " + match (spdm_verify(fresh_rec(req, resp), c, test_device_root(), test_time(1791000000))) {
         Ok(v) => match (spdm_appraise(v, gpu_policy())) { Ok(a) => f"appraised, {a.v.value.measurements.len()} blocks", Err(e) => verify_error_text(e) },
         Err(e) => verify_error_text(e),
     };
@@ -62,13 +184,24 @@ List(Int) sec_pub(List(Secret(UInt(8))) k, Int i, ListBuf(Int) acc) { return if 
 
 @requires(filesystem(readonly), declassify)
 Int main() {
-    List(UInt(8)) hreq = chal_bytes(rd("nvidia-h100-request.bin"));
-    List(UInt(8)) hresp = chal_bytes(rd("nvidia-h100-response.bin"));
-    println("H100: " + match (test_spdm_check(hreq, hresp, h100_chain(), nvidia_device_root(), test_time(1791000000))) { Ok(e) => f"ok, SPDM 0x{e.version:hex}, {e.measurements.len()} blocks, {e.opaque.len()} opaque bytes", Err(e) => verify_error_text(e) });
+    List(UInt(8)) hreq = rdb("nvidia-h100-request.bin");
+    List(UInt(8)) hresp = rdb("nvidia-h100-response.bin");
+    EvidenceTime th = test_time(1791784800);
+    println("H100: " + match (test_spdm_check(h100(hreq, hresp, h100_ocsp()), nvidia_device_root(), th)) { Ok(e) => f"ok, SPDM 0x{e.version:hex}, {alg_of(e)}, {e.measurements.len()} blocks, {e.opaque.len()} opaque bytes", Err(e) => verify_error_text(e) });
+    println("H100, no OCSP: " + err_or(test_spdm_check(h100(hreq, hresp, []), nvidia_device_root(), th), "ACCEPTED"));
+    println("H100, before NVIDIA's OCSP answers were issued: " + err_or(test_spdm_check(h100(hreq, hresp, h100_ocsp()), nvidia_device_root(), test_time(1791000000)), "ACCEPTED"));
     List(Int) hr = chal_ints(hresp);
-    println("H100, tampered: " + match (test_spdm_check(hreq, chal_bytes(hr[0..100].concat([hr[100] ^ 1]).concat(hr[101..hr.len()])), h100_chain(), nvidia_device_root(), test_time(1791000000))) { Ok(e) => "ACCEPTED", Err(e) => verify_error_text(e) });
-    println("H100, other nonce: " + match (test_spdm_check(chal_bytes([17, 224, 1, 255].concat(fill(1, 32)).concat([0])), hresp, h100_chain(), nvidia_device_root(), test_time(1791000000))) { Ok(e) => "ACCEPTED", Err(e) => verify_error_text(e) });
-    println("H100, test root: " + match (test_spdm_check(hreq, hresp, h100_chain(), test_device_root(), test_time(1791000000))) { Ok(e) => "ACCEPTED", Err(e) => verify_error_text(e) });
+    println("H100, tampered: " + err_or(test_spdm_check(h100(hreq, chal_bytes(flip(hr, 100)), h100_ocsp()), nvidia_device_root(), th), "ACCEPTED"));
+    println("H100, other nonce: " + err_or(test_spdm_check(h100(chal_bytes([17, 224, 1, 255].concat(fill(1, 32)).concat([0])), hresp, h100_ocsp()), nvidia_device_root(), th), "ACCEPTED"));
+    println("H100, test root: " + err_or(test_spdm_check(h100(hreq, hresp, h100_ocsp()), test_device_root(), th), "ACCEPTED"));
+    println(emu("v10-p384", "ecp384", false));
+    println(emu("v11-p384", "ecp384", true));
+    println(emu("v12-p384-clear", "ecp384", true));
+    println(emu("v12-rsassa3072", "rsa3072", true));
+    println(emu("v12-rsapss2048", "rsa2048", true));
+    println(emu("v13-p256", "ecp256", true));
+    println(emu("v13-ed25519", "ed25519", true));
+    Str n = emu_negative();
     ChallengeRecord c1 = challenge_issue(32);
     List(Int) r1 = request(chal_ints(challenge_value(c1)));
     println(fresh("fresh", r1, response(r1, 5), c1));
@@ -84,7 +217,7 @@ Int main() {
     List(Int) bound = chal_ints(match (challenge_with_key(challenge_value(c5), 32, kp.sk)) { Ok(b) => b, Err(e) => [] });
     List(Int) r5 = request(bound);
     List(Secret(UInt(8))) key = random_secret(32);
-    Str r = match (release(chal_bytes(r5), chal_bytes(response(r5, 5)), test_chain(), c5, kp.pk, key, secret_bytes(rd("sender-sk.bin")))) {
+    Str r = match (release(fresh_rec(r5, response(r5, 5)), c5, kp.pk, key, secret_bytes(rd("sender-sk.bin")))) {
         Ok(m) => match (open_released(32, kp.sk, m, test_sender())) { Ok(v) => if (hex_encode(sec_pub(v.value, 0, ListBuf())) == hex_encode(sec_pub(key, 0, ListBuf()))) { "released and opened: same key" } else { "KEY DIFFERS" }, Err(e) => "open: " + verify_error_text(e) },
         Err(e) => "release: " + verify_error_text(e),
     };

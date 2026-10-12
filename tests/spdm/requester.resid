@@ -1,0 +1,161 @@
+// The SPDM requester against DMTF's spdm-emu responder (tests/spdm/run.sh):
+// one connection with the flows named on the command line, printing what
+// each established. Arguments: binding (mctp, doe, tcp), port, versions
+// (hex, comma-separated), flows (comma-separated: digests, cert,
+// challenge, meas, unsigned, sess, hb, ku, kua, smeas, psk, end), and an
+// identity directory and asym (for mutual authentication) or "-".
+import "spdm_msg.resid";
+import "spdm_session.resid";
+import "spdm_transport.resid";
+import "spdm_requester.resid";
+import "tlskey.resid";
+import "random.resid";
+import "crypto.resid";
+import "hash.resid";
+
+Result(T, Str) at(Str what, Result(T, Str) r) { return match r { Ok(v) => Ok(v), Err(m) => Err(what + ": " + m) }; }
+
+Bool has(List(Str) xs, Str x) { return has_at(xs, x, 0); }
+Bool has_at(List(Str) xs, Str x, Int i) { return i < xs.len() && (xs[i] == x || has_at(xs, x, i + 1)); }
+
+List(Int) hexes(List(Str) xs, Int i, List(Int) acc) { return if (i >= xs.len()) { acc } else { hexes(xs, i + 1, acc.concat([16 * str_parse_int(str_slice(xs[i], 0, 1)) + str_parse_int(str_slice(xs[i], 1, 2))])) }; }
+
+List(Int) le(Int v, Int n) { return if (n <= 0) { [] } else { [v & 255].concat(le(v >> 8, n - 1)) }; }
+
+// A DER bundle (root first) in GET_CERTIFICATE's format under `hash`.
+List(Int) spdm_chain_of(List(Int) bundle, Int hash) {
+    Int rootlen = der_total(bundle);
+    List(Int) root = bundle[0..rootlen];
+    List(Int) body = spdm_hash(hash, root).concat(bundle);
+    return le(4 + body.len(), 2).concat([0, 0]).concat(body);
+}
+
+Int der_total(List(Int) b) {
+    Int l0 = b[1];
+    if (l0 < 128) { return 2 + l0; }
+    Int n = l0 - 128;
+    return 2 + n + be(b, 2, n);
+}
+Int be(List(Int) b, Int at, Int n) { return if (n <= 0) { 0 } else { (be(b, at, n - 1) << 8) | b[at + n - 1] }; }
+
+// Records for verifier fixtures: "name hex" lines appended to `out`.
+@requires(filesystem)
+Bool rec(Str out, Str name, List(Int) b) {
+    if (out == "-") { return true; }
+    return filesystem.append_bytes(out, bytes_of(name + " " + hex_encode(b) + "\n"));
+}
+
+@requires(filesystem)
+Bool recs(Str out, Str name, List(List(Int)) xs, Int i) {
+    if (i >= xs.len()) { return true; }
+    Bool a = rec(out, name, xs[i]);
+    return recs(out, name, xs, i + 1);
+}
+
+Str algs_line(SpdmAlgs a) { return f"version 0x{a.version:hex} asym 0x{a.asym:hex} hash {a.hash} dhe 0x{a.dhe:hex} aead {a.aead} req_asym 0x{a.req_asym:hex} opaque {a.opaque_fmt} multi-key {a.multi_key}"; }
+
+@requires(network(readonly), declassify, filesystem, provision)
+Result(Str, Str) run(SpdmEmu e, List(Int) versions, List(Str) flows, Str ident, Str asym, Str out) {
+    Result(SpdmFramed, Str) closure(Bool, List(Int)) x = lambda(sec, m) { spdm_emu_xfer(e, sec, m) };
+    SpdmIo io = SpdmIo {.xfer = x, .binding = e.binding};
+    SpdmConfig base = spdm_config_with_psk(spdm_config_versions(spdm_default_config(), versions), secret_bytes(bytes_of("TestPskData").concat([0])), bytes_of("TestPskHint").concat([0]));
+    SpdmConfig b1 = if (has(flows, "multikey")) { spdm_config_multi_key(base) } else { base };
+    SpdmConfig b2 = if (has(flows, "small")) { spdm_config_transfer(b1, 64, 1048576) } else { b1 };
+    SpdmConfig cfg = if (ident == "-") { b2 } else { with_ident(b2, ident, asym) };
+    SpdmConn c = at("connect", spdm_connect(io, cfg))?;
+    println(algs_line(c.a));
+    Bool r0 = recs(out, "vca", c.vca, 0);
+    SpdmConn c1 = if (has(flows, "digests") || has(flows, "cert")) { conn_of(at("digests", spdm_get_digests(c)))? } else { c };
+    SpdmConn c2 = if (has(flows, "cert")) { conn_of(at("certificate", spdm_get_certificate(c1, 0)))? } else { c1 };
+    if (has(flows, "cert")) { println(f"chain read, {c2.chains[0].len()} bytes"); }
+    Bool r1 = if (has(flows, "cert")) { rec(out, "chain", c2.chains[0]) } else { true };
+    List(Int) ctx = if (c.a.version >= 19) { random_bytes(8) } else { [] };
+    SpdmConn c3 = if (has(flows, "challenge")) { challenge(c2, ctx, out)? } else { c2 };
+    SpdmConn c4 = if (has(flows, "unsigned")) { conn_of(at("unsigned measurements", spdm_get_measurements(c3, 1, false, false, 0, [], ctx)))? } else { c3 };
+    SpdmConn c5 = if (has(flows, "meas")) { measure(c4, ctx, out)? } else { c4 };
+    Str s = if (has(flows, "sess")) { session(c5, flows, ctx, out)? } else { "" };
+    Str p = if (has(flows, "psk")) { psk(c5, flows, ctx)? } else { "" };
+    return Ok("done");
+}
+
+@requires(declassify, filesystem)
+Result(SpdmConn, Str) challenge(SpdmConn c, List(Int) ctx, Str out) {
+    SpdmGot(SpdmChallenged) g = at("challenge", spdm_challenge(c, 0, 255, random_bytes(32), ctx))?;
+    println("challenge verified");
+    Bool r = recs(out, "chal_b", g.v.b, 0) && rec(out, "chal_req", g.v.request) && rec(out, "chal_rsp", g.v.response);
+    return Ok(g.c);
+}
+
+@requires(declassify, filesystem)
+Result(SpdmConn, Str) measure(SpdmConn c, List(Int) ctx, Str out) {
+    SpdmGot(SpdmMeasured) m = at("measurements", spdm_get_measurements(c, 255, true, false, 0, random_bytes(32), ctx))?;
+    println(f"signed measurements verified, {m.v.meas.blocks.len()} blocks");
+    Bool r = recs(out, "meas_before", m.v.before, 0) && rec(out, "meas_req", m.v.request) && rec(out, "meas_rsp", m.v.response);
+    return Ok(m.c);
+}
+
+SpdmMeasured empty_measured() {
+    List(SpdmBlock) nb = [];
+    List(Int) none = [];
+    return SpdmMeasured {.meas = SpdmMeasurements {.len = 0, .count = 0, .slot = 0, .content_changed = 0, .blocks = nb, .nonce = none, .opaque = none, .context = none, .sig_at = 0}, .before = [], .request = none, .response = none, .signed = none, .signature = none};
+}
+
+Result(SpdmConn, Str) conn_of(Result(SpdmGot(T), Str) r) { return match r { Ok(g) => Ok(g.c), Err(m) => Err(m) }; }
+Result(SpdmSess, Str) sess_of(Result(SpdmSessGot(T), Str) r) { return match r { Ok(g) => Ok(g.s), Err(m) => Err(m) }; }
+
+@requires(declassify)
+Result(Str, Str) in_session(SpdmConn c, SpdmSess s0, List(Str) flows, List(Int) ctx) {
+    SpdmSess s1 = if (has(flows, "hb")) { at("heartbeat", spdm_heartbeat(c, s0))? } else { s0 };
+    if (has(flows, "hb")) { println("heartbeat acknowledged"); }
+    SpdmSess s2 = if (has(flows, "ku")) { at("key update", spdm_key_update(c, s1, false))? } else { s1 };
+    if (has(flows, "ku")) { println("key updated"); }
+    SpdmSess s3 = if (has(flows, "kua")) { at("key update all", spdm_key_update(c, s2, true))? } else { s2 };
+    if (has(flows, "kua")) { println("all keys updated"); }
+    SpdmSess s4 = if (has(flows, "smeas")) { sess_of(at("session measurements", spdm_session_measurements(c, s3, 255, true, false, 0, random_bytes(32), ctx)))? } else { s3 };
+    if (has(flows, "smeas")) { println("measurements in the session verified"); }
+    Bool e = if (has(flows, "end")) { at("end session", spdm_end_session(c, s4))? } else { true };
+    if (has(flows, "end")) { println("session ended"); }
+    return Ok("");
+}
+
+@requires(declassify, filesystem)
+Result(Str, Str) session(SpdmConn c, List(Str) flows, List(Int) ctx, Str out) {
+    SpdmGot(SpdmDigests) d = at("digests", spdm_get_digests(c))?;
+    SpdmGot(List(Int)) ch = at("certificate", spdm_get_certificate(d.c, 0))?;
+    SpdmSessGot(SpdmKeyExchanged) g = at("key exchange", spdm_start_session(ch.c, 0, 255, 0, random_bytes(32)))?;
+    Bool r = rec(out, "sess_chain", ch.v) && rec(out, "sess_digests", g.v.digests) && rec(out, "sess_ke", g.v.request) && rec(out, "sess_ke_rsp", g.v.response);
+    println(f"session established (mutual authentication {g.s.mut_auth}, secured messages 1.{g.s.sec_version & 15})");
+    return in_session(g.c, g.s, flows, ctx);
+}
+
+@requires(declassify)
+Result(Str, Str) psk(SpdmConn c, List(Str) flows, List(Int) ctx) {
+    SpdmSessGot(List(Int)) g = at("psk exchange", spdm_start_psk_session(c, 0, 0))?;
+    println("PSK session established");
+    return in_session(g.c, g.s, flows, ctx);
+}
+
+@requires(filesystem(readonly), declassify, provision)
+SpdmConfig with_ident(SpdmConfig base, Str dir, Str asym) {
+    List(Int) bundle = filesystem.read_bytes(dir + "/bundle_requester.certchain.der");
+    Int a = if (asym == "p256") { 16 } else if (asym == "p384") { 128 } else { 1024 };
+    Int h = if (asym == "p256") { 1 } else { 2 };
+    List(Secret(UInt(8))) key = match (tls_key_parse(filesystem.read_bytes(dir + "/end_requester.key"))) {
+        Some(k) => match k { EcKey(d) => d, Ec384Key(d) => d, EdKey(d) => d, },
+        None => [],
+    };
+    return spdm_config_with_identity(base, bundle, key, a);
+}
+
+@requires(network(readonly), declassify, filesystem, args, provision)
+Int main() {
+    SpdmBinding b = if (args.get(1) == "doe") { SpdmPciDoe } else if (args.get(1) == "tcp") { SpdmTcp } else { SpdmMctp };
+    List(Int) versions = hexes(str_split(args.get(3), ","), 0, []);
+    List(Str) flows = str_split(args.get(4), ",");
+    Str r = match (spdm_emu_connect("127.0.0.1", str_parse_int(args.get(2)), b)) {
+        Ok(e) => match (run(e, versions, flows, args.get(5), args.get(6), if (args.count() > 7) { args.get(7) } else { "-" })) { Ok(m) => m, Err(m) => "FAIL " + m } + if (spdm_emu_shutdown(e)) { "" } else { "" },
+        Err(m) => "FAIL " + m,
+    };
+    println(r);
+    return 0;
+}

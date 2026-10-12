@@ -1,24 +1,25 @@
-// verify/spdm_session.resid — SPDM 1.1 sessions (DSP0274 1.1 §10.6,
-// PLAN-attestation.md §10 NVIDIA): a KEY_EXCHANGE the device answered and
+// verify/spdm_session.resid — SPDM sessions (DSP0274 1.1 to 1.3,
+// PLAN-attestation.md §10): a KEY_EXCHANGE the device answered and
 // signed with its identity key, so the session's keys are shared with that
-// device and no other; and the CPU's evidence bound to the session, so the
-// GPU is the one the attested guest holds the session with.
+// device and no other; and the CPU's evidence bound to the session
+// (verify/device_bound.resid), so the device is the one the attested
+// guest holds the session with.
 //
-// The responder's signature covers the negotiation (VCA: GET_VERSION,
-// VERSION, GET_CAPABILITIES, CAPABILITIES, NEGOTIATE_ALGORITHMS,
-// ALGORITHMS), the SHA-384 of the certificate chain as GET_CERTIFICATE
-// returned it, KEY_EXCHANGE, and KEY_EXCHANGE_RSP up to the signature
-// (TH1). The negotiation must have chosen ECDSA P-384, SHA-384, ECDHE
-// secp384r1, AES-256-GCM and the SPDM key schedule; mutual authentication
-// and a provisioned public key (slot 0xFF) are refused. The requester's
-// random is the challenge (32 bytes).
+// The record is the requester's (lib/spdm_requester.resid): the
+// negotiation (VCA), the certificate chain as GET_CERTIFICATE returned
+// it and OCSP responses for it, the DIGESTS response on a multi-key
+// connection (1.3), KEY_EXCHANGE and KEY_EXCHANGE_RSP. The responder's
+// signature covers TH1 = VCA ‖ (multi-key: DIGESTS) ‖ the chain's hash ‖
+// KEY_EXCHANGE ‖ KEY_EXCHANGE_RSP up to the signature (1.2 on: under the
+// signing context, over its hash). The negotiation must have settled on
+// algorithms this library implements, which the anchor lists; the chain
+// is checked as for measurements (verify/spdm.resid's sp_chain, OCSP
+// included); the requester's random is the challenge (32 bytes). A PSK
+// session has no signature and is no evidence of the device.
 //
-// The session's transcript hash th (SHA-384 of TH1 with the signature) is
-// what the guest commits to: its CPU evidence carries
-// challenge_session_value(challenge_value(c), th) (lib/challenge_bind.resid),
-// checked by snp_verify_device_bound and tdx_verify_quote_device_bound
-// (verify/device_bound.resid). The requester's own half (key schedule,
-// FINISH, secured messages) is lib/spdm_session.resid.
+// The session's transcript hash th (TH1 with the signature, under the
+// negotiated hash) is what the guest commits to: its CPU evidence carries
+// challenge_session_value(challenge_value(c), th) (lib/challenge_bind.resid).
 
 import "core.resid";
 import "spdm.resid";
@@ -28,184 +29,104 @@ import "../x509.resid";
 import "../der.resid";
 import "../ecdsa.resid";
 import "../certverify.resid";
+import "../spdm_msg.resid";
 import "../challenge.resid";
 import "../challenge_bind.resid";
+import "../challenge_export.resid";
 
 // What a verified KEY_EXCHANGE says. session_id is the responder's half
 // above the requester's (as DSP0277 numbers it); summary_type the
-// measurement summary asked for (0 none, 1 TCB, 255 all) and
-// measurement_summary its hash; responder_verify the ResponderVerifyData
-// the requester checks with the session keys (empty when the handshake is
-// in the clear); transcript TH1 with the signature, th its SHA-384.
+// measurement summary asked for and summary its hash; mut_auth what the
+// device asked of the requester; responder_verify the ResponderVerifyData
+// the requester checks with the session keys (empty when the handshake
+// is in the clear); transcript TH1 with the signature, th its hash.
 @signed(sig = signature, span = transcript)
-pub type SpdmSession = { Int session_id; Int heartbeat; Int summary_type; List(Int) measurement_summary; List(Int) req_exchange; List(Int) rsp_exchange; Bool handshake_in_clear; List(Int) responder_verify; List(Int) transcript; List(Int) th; };
+pub type SpdmSession = { Int version; Int asym; Int hash; Int dhe; Int aead; Int session_id; Int heartbeat; Int mut_auth; Int summary_type; List(Int) summary; List(Int) req_exchange; List(Int) rsp_exchange; Bool handshake_in_clear; List(Int) responder_verify; List(Int) transcript; List(Int) th; };
 
-Int ss_le(List(Int) b, Int at, Int n) { return if (n <= 0) { 0 } else { b[at] | (ss_le(b, at + 1, n - 1) << 8) }; }
+pub type SpdmSessionRecord = { List(List(UInt(8))) vca; List(UInt(8)) chain; List(List(UInt(8))) ocsp; List(UInt(8)) digests; List(UInt(8)) key_exchange; List(UInt(8)) key_exchange_rsp; };
 
-// ─── The negotiation (VCA) ──────────────────────────────────────────
-
-type SsVca = { Bool clear; List(Int) bytes; };
-
-Result(SsVca, VerifyError) ss_vca(List(List(UInt(8))) vca) {
-    if (vca.len() != 6) { return Err(BadLayout("the negotiation is six messages: GET_VERSION to ALGORITHMS")); }
-    List(Int) gv = chal_ints(vca[0]);
-    List(Int) v = chal_ints(vca[1]);
-    List(Int) gc = chal_ints(vca[2]);
-    List(Int) cp = chal_ints(vca[3]);
-    List(Int) na = chal_ints(vca[4]);
-    List(Int) al = chal_ints(vca[5]);
-    if (gv.len() != 4 || gv[0] != 16 || gv[1] != 132) { return Err(BadLayout("the first message is not GET_VERSION")); }
-    if (v.len() < 6 || v[0] != 16 || v[1] != 4 || v.len() != 6 + 2 * v[5] || !ss_lists_11(v, 6)) { return Err(BadLayout("VERSION is malformed or does not offer 1.1")); }
-    if (gc.len() != 12 || gc[0] != 17 || gc[1] != 225) { return Err(BadLayout("GET_CAPABILITIES is not a 1.1 request")); }
-    if (cp.len() != 12 || cp[0] != 17 || cp[1] != 97) { return Err(BadLayout("CAPABILITIES is not a 1.1 response")); }
-    Int rf = ss_le(cp, 8, 4);
-    Int qf = ss_le(gc, 8, 4);
-    // CERT_CAP, ENCRYPT_CAP, MAC_CAP, KEY_EX_CAP; never MUT_AUTH asked of us.
-    if ((rf & 2) == 0 || (rf & 64) == 0 || (rf & 128) == 0 || (rf & 512) == 0) { return Err(Refused("spdm_session_verify", "the device does not offer certificates, encryption, MAC and key exchange")); }
-    if (na.len() < 32 || na[0] != 17 || na[1] != 227 || ss_le(na, 4, 2) != na.len()) { return Err(BadLayout("NEGOTIATE_ALGORITHMS is malformed")); }
-    if (al.len() < 36 || al[0] != 17 || al[1] != 99 || ss_le(al, 4, 2) != al.len()) { return Err(BadLayout("ALGORITHMS is malformed")); }
-    if (ss_le(al, 12, 4) != 128 || ss_le(al, 16, 4) != 2) { return Err(Refused("spdm_session_verify", "the device did not choose ECDSA P-384 with SHA-384")); }
-    Int ext = 36 + 4 * (al[32] + al[33]);
-    SsAlgs a = ss_structs(al, ext, al[2], SsAlgs {.dhe = 0, .aead = 0, .ks = 0, .ok = true});
-    if (!a.ok) { return Err(BadLayout("ALGORITHMS' structures do not fill it")); }
-    if (a.dhe != 16 || a.aead != 2 || a.ks != 1) { return Err(Refused("spdm_session_verify", "the device did not choose ECDHE secp384r1, AES-256-GCM and the SPDM key schedule")); }
-    List(Int) all = gv.concat(v).concat(gc).concat(cp).concat(na).concat(al);
-    return Ok(SsVca {.clear = (rf & qf & 32768) != 0, .bytes = all});
-}
-
-Bool ss_lists_11(List(Int) v, Int at) { return at + 1 < v.len() && (v[at + 1] == 17 || ss_lists_11(v, at + 2)); }
-
-type SsAlgs = { Int dhe; Int aead; Int ks; Bool ok; };
-
-// n structures [type, count (fixed 2 << 4 | external), supported LE2,
-// external 4 each] from at to the end exactly; each type once.
-SsAlgs ss_structs(List(Int) b, Int at, Int n, SsAlgs acc) {
-    if (n == 0) { return SsAlgs {.dhe = acc.dhe, .aead = acc.aead, .ks = acc.ks, .ok = acc.ok && at == b.len()}; }
-    if (at + 4 > b.len() || (b[at + 1] >> 4) != 2) { return SsAlgs {.dhe = 0, .aead = 0, .ks = 0, .ok = false}; }
-    Int ty = b[at];
-    Int v = ss_le(b, at + 2, 2);
-    Int next = at + 4 + 4 * (b[at + 1] & 15);
-    Bool twice = (ty == 2 && acc.dhe != 0) || (ty == 3 && acc.aead != 0) || (ty == 5 && acc.ks != 0);
-    if (twice || next > b.len()) { return SsAlgs {.dhe = 0, .aead = 0, .ks = 0, .ok = false}; }
-    return ss_structs(b, next, n - 1, SsAlgs {.dhe = if (ty == 2) { v } else { acc.dhe }, .aead = if (ty == 3) { v } else { acc.aead }, .ks = if (ty == 5) { v } else { acc.ks }, .ok = true});
-}
-
-// ─── The certificate chain (GET_CERTIFICATE's format) ───────────────
-// Length (LE2, the whole chain), reserved (2), RootHash (SHA-384 of the
-// root certificate), then DER certificates, the root's side first. The
-// root is the anchor: its hash must be RootHash, and the first
-// certificate is the anchor's or one it signed.
-
-Result(List(List(UInt(8))), VerifyError) ss_chain(List(Int) b, Anchor root) {
-    if (b.len() < 52 || b.len() > 65535 || ss_le(b, 0, 2) != b.len()) { return Err(BadLayout("the certificate chain's length is not its own")); }
-    if (!eq_ints(b[4..52], sha384_bytes(root.der))) { return Err(BadChain("the chain's root hash is not the anchor's certificate")); }
-    List(List(UInt(8))) certs = ss_certs(b, 52, [])?;
-    if (certs.len() == 0 || certs.len() > 8) { return Err(BadChain("the device chain is 1 to 8 certificates")); }
-    // Leaf first, the anchor's certificate last (sp_chain's order).
-    List(List(UInt(8))) up = ss_rev(certs, certs.len() - 1, []);
-    return Ok(if (eq_ints(chal_ints(certs[0]), root.der)) { up } else { up.concat([chal_bytes(root.der)]) });
-}
-
-Result(List(List(UInt(8))), VerifyError) ss_certs(List(Int) b, Int at, List(List(UInt(8))) acc) {
-    if (at == b.len()) { return Ok(acc); }
-    if (acc.len() >= 8) { return Err(BadChain("more than 8 certificates")); }
-    Der d = der_tag_at(b, at, b.len(), 48);
-    if (!d.ok || d.next <= at) { return Err(BadLayout("the chain holds bytes that are not a certificate")); }
-    return ss_certs(b, d.next, acc.concat([chal_bytes(b[at..d.next])]));
-}
-
-List(List(UInt(8))) ss_rev(List(List(UInt(8))) xs, Int i, List(List(UInt(8))) acc) { return if (i < 0) { acc } else { ss_rev(xs, i - 1, acc.concat([xs[i]])) }; }
-
-// ─── KEY_EXCHANGE and its response ──────────────────────────────────
-
-type SsKe = { List(Int) random; List(Int) exchange; Int summary_type; Int req_sid; };
-
-Result(SsKe, VerifyError) ss_ke(List(Int) k) {
-    if (k.len() < 138 || k[0] != 17 || k[1] != 228) { return Err(BadLayout("the request is not an SPDM 1.1 KEY_EXCHANGE")); }
-    if (k[2] != 0 && k[2] != 1 && k[2] != 255) { return Err(BadLayout("KEY_EXCHANGE asks for an unknown measurement summary")); }
-    if (k[3] > 7) { return Err(Refused("spdm_session_verify", "KEY_EXCHANGE names no certificate slot (a provisioned key is not a chain to an anchor)")); }
-    Int olen = ss_le(k, 136, 2);
-    if (olen > 1024 || 138 + olen != k.len()) { return Err(BadLayout("KEY_EXCHANGE's opaque data does not end it")); }
-    if (!ec_public_ok(P384, [4].concat(k[40..136]))) { return Err(BadLayout("the requester's exchange data is not a P-384 point")); }
-    return Ok(SsKe {.random = k[8..40], .exchange = k[40..136], .summary_type = k[2], .req_sid = ss_le(k, 4, 2)});
-}
-
-type SsRsp = { Int sid; Int heartbeat; List(Int) exchange; List(Int) summary; Int sig_at; List(Int) verify; };
-
-Result(SsRsp, VerifyError) ss_rsp(List(Int) r, Int summary_type, Bool clear) {
-    Int hl = if (summary_type == 0) { 0 } else { 48 };
-    Int vl = if (clear) { 0 } else { 48 };
-    if (r.len() < 136 + hl + 2 + 96 + vl || r[0] != 17 || r[1] != 100) { return Err(BadLayout("the response is not an SPDM 1.1 KEY_EXCHANGE_RSP")); }
-    if (r[6] != 0) { return Err(Refused("spdm_session_verify", "the device asks for mutual authentication")); }
-    Int olen = ss_le(r, 136 + hl, 2);
-    Int sig_at = 136 + hl + 2 + olen;
-    if (olen > 1024 || sig_at + 96 + vl != r.len()) { return Err(BadLayout("KEY_EXCHANGE_RSP's opaque data, signature and verify data do not end it")); }
-    if (!ec_public_ok(P384, [4].concat(r[40..136]))) { return Err(BadLayout("the device's exchange data is not a P-384 point")); }
-    return Ok(SsRsp {.sid = ss_le(r, 4, 2), .heartbeat = r[2], .exchange = r[40..136], .summary = r[136..136 + hl], .sig_at = sig_at, .verify = r[sig_at + 96..r.len()]});
-}
-
-// ─── Verification ───────────────────────────────────────────────────
+Result(T, VerifyError) ss_msg(Result(T, Str) r) { return match r { Ok(v) => Ok(v), Err(m) => Err(BadLayout(m)) }; }
+List(List(Int)) ss_ints(List(List(UInt(8))) xs, Int i, List(List(Int)) acc) { return if (i >= xs.len()) { acc } else { ss_ints(xs, i + 1, acc.concat([chal_ints(xs[i])])) }; }
+List(Int) ss_cat(List(List(Int)) xs, Int i, List(Int) acc) { return if (i >= xs.len()) { acc } else { ss_cat(xs, i + 1, acc.concat(xs[i])) }; }
+List(List(UInt(8))) ss_bytes(List(List(Int)) xs, Int i, List(List(UInt(8))) acc) { return if (i >= xs.len()) { acc } else { ss_bytes(xs, i + 1, acc.concat([chal_bytes(xs[i])])) }; }
 
 type SsOk = { SpdmSession s; List(Int) random; };
 
 @verify_internal
-pub Result(SsOk, VerifyError) spdm_session_check(List(List(UInt(8))) vca, List(UInt(8)) chain, List(UInt(8)) key_exchange, List(UInt(8)) key_exchange_rsp, Anchor root, EvidenceTime t) {
-    if (root.kind != "NvidiaDevice") { return Err(Refused("spdm_session_verify", "the anchor is not a device identity root (kind " + root.kind + ")")); }
-    if (!anchor_lists(root.algorithms, "EcdsaP384Sha384")) { return Err(Refused("spdm_session_verify", "the anchor does not list ECDSA P-384 SHA-384")); }
+pub Result(SsOk, VerifyError) spdm_session_check(SpdmSessionRecord rec, Anchor root, EvidenceTime t) {
+    if (root.kind != "NvidiaDevice" && root.kind != "DeviceIdentity") { return Err(Refused("spdm_session_verify", "the anchor is not a device identity root (kind " + root.kind + ")")); }
     if (anchor_expired(root, t)) { return Err(Stale("the anchor expired " + root.expires)); }
-    SsVca a = ss_vca(vca)?;
-    List(Int) cb = chal_ints(chain);
-    List(List(UInt(8))) certs = ss_chain(cb, root)?;
-    Cert leaf = sp_chain(certs, root, t)?;
-    if (leaf.key.kind != pubkey_ec() || curve_bytes(leaf.key.curve) != 48) { return Err(BadChain("the device key is not P-384")); }
-    List(Int) k = chal_ints(key_exchange);
-    List(Int) r = chal_ints(key_exchange_rsp);
-    SsKe ke = ss_ke(k)?;
-    SsRsp rsp = ss_rsp(r, ke.summary_type, a.clear)?;
-    List(Int) signed = a.bytes.concat(sha384_bytes(cb)).concat(k).concat(r[0..rsp.sig_at]);
-    List(Int) sig = r[rsp.sig_at..rsp.sig_at + 96];
-    if (!ecdsa_verify_raw(P384, Sha384, leaf.key.point, signed, sig)) { return Err(BadSignature("the device did not sign this key exchange")); }
+    List(List(Int)) vca = ss_ints(rec.vca, 0, []);
+    SpdmAlgs a = ss_msg(spdm_parse_vca(vca))?;
+    if (a.version < 17) { return Err(BadLayout("SPDM 1.0 has no sessions")); }
+    if (!spdm_has(a, spdm_cap_key_ex()) || (a.req_flags & 512) == 0) { return Err(BadLayout("the negotiation has no key exchange")); }
+    List(Int) ch = chal_ints(rec.chain);
+    SpdmChain parsed = ss_msg(spdm_parse_chain(ch, a.hash))?;
+    if (!eq_list(parsed.root_hash, spdm_hash(a.hash, root.der))) { return Err(BadChain("the chain's root hash is not the anchor's certificate")); }
+    Cert leaf = sp_chain(ss_bytes(spdm_chain_leaf_first(parsed), 0, []), rec.ocsp, root, t)?;
+    if (!spdm_key_fits(a.asym, leaf.key)) { return Err(BadChain("the device's key does not fit the negotiated signature algorithm")); }
+    if (!anchor_lists(root.algorithms, spdm_alg_name(a.asym, a.hash))) { return Err(Refused("spdm_session_verify", "the anchor does not list " + spdm_alg_name(a.asym, a.hash))); }
+    List(Int) k = chal_ints(rec.key_exchange);
+    List(Int) r = chal_ints(rec.key_exchange_rsp);
+    Int d = spdm_dhe_len(a.dhe);
+    if (k.len() < 42 + d || k[0] != a.version || k[1] != 228) { return Err(BadLayout("the request is not a KEY_EXCHANGE of the negotiated version")); }
+    if (k[2] != 0 && k[2] != 1 && k[2] != 255) { return Err(BadLayout("KEY_EXCHANGE asks for an unknown measurement summary")); }
+    if (k[3] > 7) { return Err(Refused("spdm_session_verify", "KEY_EXCHANGE names no certificate slot (a provisioned key is not a chain to an anchor)")); }
+    Int olen = spdm_le(k, 40 + d, 2);
+    if (olen > 1024 || 42 + d + olen != k.len()) { return Err(BadLayout("KEY_EXCHANGE's opaque data does not end it")); }
+    if (!ec_public_ok(spdm_dhe_curve(a.dhe), [4].concat(k[40..40 + d]))) { return Err(BadLayout("the requester's exchange data is not a point on the curve")); }
+    Bool clear = (a.flags & 32768) != 0 && (a.req_flags & 32768) != 0;
+    SpdmKeyExRsp kr = ss_msg(spdm_parse_key_exchange_rsp(r, a, k[2], clear))?;
+    if (kr.len != r.len()) { return Err(BadLayout("KEY_EXCHANGE_RSP carries trailing bytes")); }
+    List(Int) dg = chal_ints(rec.digests);
+    if (a.multi_key && dg.len() == 0) { return Err(BadLayout("a multi-key connection's key exchange covers its DIGESTS; the record has none")); }
+    List(Int) dpart = if (a.multi_key) { dg } else { [] };
+    List(Int) signed = ss_cat(vca, 0, []).concat(dpart).concat(spdm_hash(a.hash, ch)).concat(k).concat(r[0..kr.sig_at]);
+    List(Int) sig = r[kr.sig_at..kr.sig_at + spdm_sig_len(a.asym)];
+    if (!spdm_sig_ok(a.version, a.asym, a.hash, spdm_ctx_key_exchange_rsp(), leaf.key, signed, sig)) { return Err(BadSignature("the device did not sign this key exchange")); }
     List(Int) tr = signed.concat(sig);
-    SpdmSession s = SpdmSession {.session_id = ke.req_sid | (rsp.sid << 16), .heartbeat = rsp.heartbeat, .summary_type = ke.summary_type, .measurement_summary = rsp.summary, .req_exchange = ke.exchange, .rsp_exchange = rsp.exchange, .handshake_in_clear = a.clear, .responder_verify = rsp.verify, .transcript = tr, .th = sha384_bytes(tr)};
-    return Ok(SsOk {.s = s, .random = ke.random});
+    SpdmSession s = SpdmSession {.version = a.version, .asym = a.asym, .hash = a.hash, .dhe = a.dhe, .aead = a.aead, .session_id = spdm_le(k, 4, 2) | (kr.sid << 16), .heartbeat = kr.heartbeat, .mut_auth = kr.mut_auth, .summary_type = k[2], .summary = kr.summary, .req_exchange = k[40..40 + d], .rsp_exchange = kr.exchange, .handshake_in_clear = clear, .responder_verify = kr.verify, .transcript = tr, .th = spdm_hash(a.hash, tr)};
+    return Ok(SsOk {.s = s, .random = k[8..40]});
 }
 
 Int ss_rp(ChallengeRecord c) { return if (c.bind.len() > 0) { q_rp_bound() } else { 0 }; }
 
 // Fresh for the holder of `c`: the requester's random is
 // challenge_value(c), issued with challenge_issue(32).
-@primitive(verify, anchor = root, gives = [fresh], time = t, format = SpdmSession, kinds = [NvidiaDevice], algorithms = [EcdsaP384Sha384], inputs = [vca, chain, key_exchange, key_exchange_rsp, c, t])
-pub Result(Verified(SpdmSession), VerifyError) spdm_session_verify(List(List(UInt(8))) vca, List(UInt(8)) chain, List(UInt(8)) key_exchange, List(UInt(8)) key_exchange_rsp, ChallengeRecord c, Anchor root, EvidenceTime t) {
-    SsOk k = spdm_session_check(vca, chain, key_exchange, key_exchange_rsp, root, t)?;
+@primitive(verify, anchor = root, gives = [fresh], time = t, format = SpdmSession, kinds = [NvidiaDevice, DeviceIdentity], inputs = [rec, c, t])
+pub Result(Verified(SpdmSession), VerifyError) spdm_session_verify(SpdmSessionRecord rec, ChallengeRecord c, Anchor root, EvidenceTime t) {
+    SsOk k = spdm_session_check(rec, root, t)?;
     if (challenge_value(c).len() != 32) { return Err(NotFresh("an SPDM random is 32 bytes: issue the challenge with challenge_issue(32)")); }
-    Bool spent = vf_bind_challenge(chal_bytes(k.random), challenge_value(c), c, key_exchange_rsp, spdm_descriptors())?;
+    Bool spent = vf_bind_challenge(chal_bytes(k.random), challenge_value(c), c, rec.key_exchange_rsp, spdm_descriptors())?;
     List(Int) none = [];
     return Ok(vf_make(k.s, root, q_fresh() | ss_rp(c), c, 0, none, none, t, "SpdmSession"));
 }
 
 // Delivered, for a record imported without a SpentStore.
-@primitive(verify, anchor = root, gives = [delivered], time = t, format = SpdmSession, kinds = [NvidiaDevice], algorithms = [EcdsaP384Sha384], inputs = [vca, chain, key_exchange, key_exchange_rsp, c, t])
-pub Result(Verified(SpdmSession), VerifyError) spdm_session_verify_replayable(List(List(UInt(8))) vca, List(UInt(8)) chain, List(UInt(8)) key_exchange, List(UInt(8)) key_exchange_rsp, ReplayableRecord c, Anchor root, EvidenceTime t) {
-    SsOk k = spdm_session_check(vca, chain, key_exchange, key_exchange_rsp, root, t)?;
-    if (!eq_ints(k.random, chal_ints(replayable_value(c)))) { return Err(NotFresh("the requester's random is not this challenge")); }
+@primitive(verify, anchor = root, gives = [delivered], time = t, format = SpdmSession, kinds = [NvidiaDevice, DeviceIdentity], inputs = [rec, c, t])
+pub Result(Verified(SpdmSession), VerifyError) spdm_session_verify_replayable(SpdmSessionRecord rec, ReplayableRecord c, Anchor root, EvidenceTime t) {
+    SsOk k = spdm_session_check(rec, root, t)?;
+    if (!eq_list(k.random, chal_ints(replayable_value(c)))) { return Err(NotFresh("the requester's random is not this challenge")); }
     List(Int) none = [];
     return Ok(Verified {.value = k.s, .anchors = [root.id], .quals = q_delivered(), .record = 0 - 1, .kem = 0, .pk = none, .chan = none, .time = t.source, .principal = root.principal, .format = "SpdmSession"});
 }
 
 // ─── Measurements in the session ────────────────────────────────────
 
-// Whether the session's measurement summary (all measurements, type 255)
-// is the SHA-384 of these measurement blocks, in their order: the
-// measurements are the ones the device held when it keyed the session.
+// Whether the session's measurement summary is the one these measurement
+// blocks give (all of them, type 255; the immutable-ROM ones, type 1):
+// the measurements are the ones the device held when it keyed the
+// session.
 pub Bool spdm_session_covers(SpdmSession s, SpdmEvidence e) {
-    if (s.summary_type != 255 || s.measurement_summary.len() != 48) { return false; }
-    return eq_ints(sha384_bytes(ss_blocks(e.measurements, 0, [])), s.measurement_summary);
+    if ((s.summary_type != 255 && s.summary_type != 1) || s.summary.len() != spdm_hash_len(s.hash)) { return false; }
+    return eq_list(spdm_hash(s.hash, ss_blocks(e.measurements, s.summary_type, 0, [])), s.summary);
 }
 
-List(Int) ss_blocks(List(SpdmMeasurement) ms, Int i, List(Int) acc) {
+List(Int) ss_blocks(List(SpdmMeasurement) ms, Int st, Int i, List(Int) acc) {
     if (i >= ms.len()) { return acc; }
+    Bool take = st == 255 || (ms[i].value_type & 127) == 0;
     Int vs = ms[i].value.len();
     Int size = 3 + vs;
     List(Int) blk = [ms[i].index, 1, size & 255, (size >> 8) & 255, ms[i].value_type, vs & 255, (vs >> 8) & 255].concat(ms[i].value);
-    return ss_blocks(ms, i + 1, acc.concat(blk));
+    return ss_blocks(ms, st, i + 1, if (take) { acc.concat(blk) } else { acc });
 }

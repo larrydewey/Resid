@@ -462,11 +462,15 @@ pub List(Int) ocsp_certid_for(List(Int) issuer, List(Int) cert, List(Int) seq) {
         .concat(seq);
 }
 
-// The nextUpdate [0] element, or -1 when the responder left it out.
+// The time inside nextUpdate ([0] EXPLICIT, after thisUpdate and within
+// the SingleResponse), or -1 when the responder left it out.
 pub Int ocsp_sr_next_update(List(Int) d, Int seq) {
-    Int p = ocsp_sr_this_update(d, seq);
-    DerTlv t = der_next(d, p);
-    if (t.val_len < 0) { return 0 - 1; }
-    if (t.cls == 2 && (t.tag & 31) == 0) { return p; }
-    return 0 - 1;
+    DerTlv sr = der_next(d, seq);
+    if (sr.val_len < 0) { return 0 - 1; }
+    Int end = seq + sr.hdr_len + sr.val_len;
+    Int q = x509_skip_tlv(d, ocsp_sr_this_update(d, seq));
+    if (q < 0 || q >= end) { return 0 - 1; }
+    DerTlv t = der_next(d, q);
+    if (t.val_len < 0 || t.cls != 2 || (t.tag & 31) != 0) { return 0 - 1; }
+    return der_content_pos(d, q);
 }

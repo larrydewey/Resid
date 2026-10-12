@@ -1,7 +1,25 @@
-H100: ok, SPDM 0x11, 64 blocks, 422 opaque bytes
+H100: ok, SPDM 0x11, EcdsaP384Sha384, 64 blocks, 422 opaque bytes
+H100, no OCSP: stale: no current OCSP answer says certificate 1 of the device chain is good
+H100, before NVIDIA's OCSP answers were issued: stale: no current OCSP answer says certificate 1 of the device chain is good
 H100, tampered: bad signature: the device did not sign this transcript
 H100, other nonce: bad signature: the device did not sign this transcript
-H100, test root: bad certificate chain: the device chain does not end at the anchor's certificate
+H100, test root: bad certificate chain: certificate 4 is not signed by the one above it, or one is not current
+v10-p384: measurements ok (SPDM 0x10, EcdsaP384Sha384, 8 blocks); challenge ok (summary 48 bytes); no sessions in 1.0
+v11-p384: measurements ok (SPDM 0x11, EcdsaP384Sha384, 8 blocks); challenge ok (summary 48 bytes); session ok (mutual authentication 0)
+v12-p384-clear: measurements ok (SPDM 0x12, EcdsaP384Sha384, 8 blocks); challenge ok (summary 48 bytes); session ok (mutual authentication 0)
+v12-rsassa3072: measurements ok (SPDM 0x12, RsaSsa3072Sha256, 8 blocks); challenge ok (summary 32 bytes); session ok (mutual authentication 0)
+v12-rsapss2048: measurements ok (SPDM 0x12, RsaPss2048Sha512, 8 blocks); challenge ok (summary 64 bytes); session ok (mutual authentication 0)
+v13-p256: measurements ok (SPDM 0x13, EcdsaP256Sha256, 8 blocks); challenge ok (summary 32 bytes); session ok (mutual authentication 0)
+v13-ed25519: measurements ok (SPDM 0x13, Ed25519, 8 blocks); challenge ok (summary 48 bytes); session ok (mutual authentication 0)
+revoked leaf: refused (spdm_verify): certificate 0 of the device chain is revoked
+no OCSP for the intermediate: stale: no current OCSP answer says certificate 1 of the device chain is good
+after the OCSP responses' nextUpdate: stale: no current OCSP answer says certificate 0 of the device chain is good
+tampered response: bad signature: the device did not sign this transcript
+another negotiation (1.3 signs it): bad signature: the device did not sign this transcript
+another device's root: bad certificate chain: certificate 2 is not signed by the one above it, or one is not current
+multi-key session without its DIGESTS: bad layout: a multi-key connection's key exchange covers its DIGESTS; the record has none
+1.1 measurements with another negotiation (unsigned in 1.1): ok
+1.1 session with another negotiation (TH1 covers it): bad signature: the device did not sign this key exchange
 fresh: appraised, 2 blocks
 again: not fresh: challenge already accepted, or exported
 other measurement: refused (spdm_appraise): measurement 1 is not the policy's

@@ -42,7 +42,7 @@ import "certverify.resid";
 // EcKey's payload is the 32-byte big-endian P-256 scalar, Ec384Key's the
 // 48-byte P-384 one, EdKey's the 32-byte seed. A key this language cannot
 // sign with parses into none of them.
-type ServerKey = EcKey(List(Secret(UInt(8)))) | Ec384Key(List(Secret(UInt(8)))) | EdKey(List(Secret(UInt(8))));
+pub type ServerKey = EcKey(List(Secret(UInt(8)))) | Ec384Key(List(Secret(UInt(8)))) | EdKey(List(Secret(UInt(8))));
 
 // The TLS SignatureScheme code point (RFC 8446 §4.2.3) this key signs
 // with: 0x0403 ecdsa_secp256r1_sha256, 0x0503 ecdsa_secp384r1_sha384,

@@ -323,6 +323,16 @@ w("cca-rak-pub.bin", rak_pub)
 w("spdm-root.der", droot.public_bytes(serialization.Encoding.DER))
 w("spdm-leaf.der", dleaf.public_bytes(serialization.Encoding.DER))
 w("spdm-leaf-d.bin", dleaf_k.private_numbers().private_value.to_bytes(48, "big"))
+from cryptography.x509 import ocsp as xocsp
+def dev_ocsp(status):
+    b = xocsp.OCSPResponseBuilder().add_response(cert=dleaf, issuer=droot, algorithm=hashes.SHA1(), cert_status=status,
+        this_update=datetime.datetime(2026, 1, 1), next_update=datetime.datetime(2028, 1, 1),
+        revocation_time=datetime.datetime(2026, 1, 1) if status == xocsp.OCSPCertStatus.REVOKED else None,
+        revocation_reason=x509.ReasonFlags.key_compromise if status == xocsp.OCSPCertStatus.REVOKED else None,
+    ).responder_id(xocsp.OCSPResponderEncoding.HASH, droot)
+    return b.sign(droot_k, hashes.SHA384()).public_bytes(serialization.Encoding.DER)
+w("spdm-ocsp-leaf.der", dev_ocsp(xocsp.OCSPCertStatus.GOOD))
+w("spdm-ocsp-leaf-revoked.der", dev_ocsp(xocsp.OCSPCertStatus.REVOKED))
 w("corim-endorsed.cbor", corim_ok)
 w("corim-expired.cbor", corim_expired)
 w("corim-keys.cbor", corim_keys)
@@ -330,6 +340,22 @@ w("cca-other-d.bin", other_k.private_numbers().private_value.to_bytes(48, "big")
 
 def ints(b):
     return "[" + ", ".join(str(x) for x in b) + "]"
+
+# DMTF spdm-emu's sample CAs (tests/attest/gen_spdm_fixtures.py), one
+# anchor each, listing the algorithms the captured transcripts use.
+EMU = {"ecp256": ("EmuP256", "EcdsaP256Sha256, EcdsaP256Sha384, EcdsaP256Sha512"),
+       "ecp384": ("EmuP384", "EcdsaP384Sha256, EcdsaP384Sha384, EcdsaP384Sha512"),
+       "rsa2048": ("EmuRsa2048", "RsaSsa2048Sha256, RsaSsa2048Sha384, RsaSsa2048Sha512, RsaPss2048Sha256, RsaPss2048Sha384, RsaPss2048Sha512"),
+       "rsa3072": ("EmuRsa3072", "RsaSsa3072Sha256, RsaSsa3072Sha384, RsaSsa3072Sha512, RsaPss3072Sha256, RsaPss3072Sha384, RsaPss3072Sha512"),
+       "ed25519": ("EmuEd25519", "Ed25519")}
+def emu_anchors():
+    out = []
+    for d, (name, algs) in EMU.items():
+        der = open(os.path.join(D, "spdm-emu", d + "-ca.der"), "rb").read()
+        out.append(f'''@anchor(kind = DeviceIdentity({name}), principal = AboveKernel, formats = [SpdmEvidence, SpdmSession, SpdmIdentity], source = "DMTF spdm-emu sample keys ({d}/ca.cert.der)", fingerprint = "sha384:{hashlib.sha384(der).hexdigest()}", retrieved = "2026-10-11", reviewed_by = "tests", algorithms = [{algs}], expires = "2036-06-01")
+pub Anchor test_emu_{d}() {{ return anchor_der({ints(der)}); }}
+''')
+    return "\n".join(out)
 
 ark_der = ark.public_bytes(serialization.Encoding.DER)
 nroot_der = nroot.public_bytes(serialization.Encoding.DER)
@@ -396,12 +422,20 @@ pub Str tdx_collateral_status(TdxQuote q, TdxCollateral c, Anchor root, Evidence
     return match (tdx_collateral_check(q, c, root, t)) {{ Ok(st) => "TCB " + st[0] + ", QE " + st[1], Err(e) => verify_error_text(e) }};
 }}
 
-@anchor(kind = NvidiaDevice(Test), principal = AboveKernel, formats = [SpdmEvidence, SpdmSession], source = "tests/attest/gen_fixtures.py", fingerprint = "sha384:{hashlib.sha384(droot.public_bytes(serialization.Encoding.DER)).hexdigest()}", retrieved = "2026-10-11", reviewed_by = "tests", algorithms = [EcdsaP384Sha384], expires = "2039-12-31")
+@anchor(kind = DeviceIdentity(Test), principal = AboveKernel, formats = [SpdmEvidence, SpdmSession, SpdmIdentity], source = "tests/attest/gen_fixtures.py", fingerprint = "sha384:{hashlib.sha384(droot.public_bytes(serialization.Encoding.DER)).hexdigest()}", retrieved = "2026-10-11", reviewed_by = "tests", algorithms = [EcdsaP384Sha384], expires = "2039-12-31")
 pub Anchor test_device_root() {{ return anchor_der({ints(droot.public_bytes(serialization.Encoding.DER))}); }}
 
-// An SPDM transcript's chain and signature alone, for real reports.
-pub Result(SpdmEvidence, VerifyError) test_spdm_check(List(UInt(8)) request, List(UInt(8)) response, List(List(UInt(8))) chain, Anchor root, EvidenceTime t) {{
-    return match (spdm_check(request, response, chain, root, t)) {{ Ok(k) => Ok(k.e), Err(e) => Err(e) }};
+{emu_anchors()}
+// SPDM records' chains and signatures alone, for captured and real ones
+// whose nonces carry no challenge of ours.
+pub Result(SpdmEvidence, VerifyError) test_spdm_check(SpdmRecord rec, Anchor root, EvidenceTime t) {{
+    return match (spdm_check(rec, root, t)) {{ Ok(k) => Ok(k.e), Err(e) => Err(e) }};
+}}
+pub Result(SpdmIdentity, VerifyError) test_spdm_challenge_check(SpdmChallengeRecord rec, Anchor root, EvidenceTime t) {{
+    return match (spdm_challenge_check(rec, root, t)) {{ Ok(k) => Ok(k.id), Err(e) => Err(e) }};
+}}
+pub Result(SpdmSession, VerifyError) test_spdm_session_check(SpdmSessionRecord rec, Anchor root, EvidenceTime t) {{
+    return match (spdm_session_check(rec, root, t)) {{ Ok(k) => Ok(k.s), Err(e) => Err(e) }};
 }}
 
 @anchor(kind = Endorser(Acme), formats = [CorimRefs], source = "veraison/corim testcases/src/ec-p256.jwk", fingerprint = "sha256:{hashlib.sha256(acme_spki).hexdigest()}", retrieved = "2026-10-11", reviewed_by = "tests", algorithms = [EcdsaP256Sha256], expires = "2039-12-31")

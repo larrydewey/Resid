@@ -1,0 +1,640 @@
+// spdm_msg.resid — SPDM messages (DMTF DSP0274 1.0 to 1.3): the
+// negotiated algorithms, an encoder for every request a requester sends,
+// a total decoder for every response it reads, the signing contexts and
+// the one signature check every SPDM verifier uses. Pure: no capability.
+// The requester (lib/spdm_requester.resid) and the verifiers
+// (lib/verify/spdm.resid, lib/verify/spdm_session.resid) share it.
+//
+// Algorithms a peer may choose: ECDSA P-256 and P-384, RSASSA and RSAPSS
+// at 2048, 3072 and 4096 bits, Ed25519; SHA-256, SHA-384 and SHA-512;
+// ECDHE on P-256 and P-384; AES-128-GCM, AES-256-GCM and
+// ChaCha20-Poly1305; the SPDM key schedule. Anything else (P-521, Ed448,
+// SM2/SM3/SM4, FFDHE, SHA-3, the post-quantum algorithms of 1.4) is
+// refused at negotiation: the standard library has no implementation.
+//
+// Every decoder checks the version against the connection's, the
+// response code, and every length against the message's own, and refuses
+// trailing bytes.
+
+import "crypto.resid";
+import "hash.resid";
+import "x509.resid";
+import "der.resid";
+import "ecdsa.resid";
+import "certverify.resid";
+import "ed25519.resid";
+
+// ─── Codes ──────────────────────────────────────────────────────────
+
+pub Int spdm_req_get_version() { return 132; }
+pub Int spdm_req_get_capabilities() { return 225; }
+pub Int spdm_req_negotiate_algorithms() { return 227; }
+pub Int spdm_req_get_digests() { return 129; }
+pub Int spdm_req_get_certificate() { return 130; }
+pub Int spdm_req_challenge() { return 131; }
+pub Int spdm_req_get_measurements() { return 224; }
+pub Int spdm_req_key_exchange() { return 228; }
+pub Int spdm_req_finish() { return 229; }
+pub Int spdm_req_psk_exchange() { return 230; }
+pub Int spdm_req_psk_finish() { return 231; }
+pub Int spdm_req_heartbeat() { return 232; }
+pub Int spdm_req_key_update() { return 233; }
+pub Int spdm_req_get_encapsulated_request() { return 234; }
+pub Int spdm_req_deliver_encapsulated_response() { return 235; }
+pub Int spdm_req_end_session() { return 236; }
+pub Int spdm_req_respond_if_ready() { return 255; }
+pub Int spdm_req_chunk_send() { return 133; }
+pub Int spdm_req_chunk_get() { return 134; }
+
+pub Int spdm_rsp_digests() { return 1; }
+pub Int spdm_rsp_certificate() { return 2; }
+pub Int spdm_rsp_challenge_auth() { return 3; }
+pub Int spdm_rsp_version() { return 4; }
+pub Int spdm_rsp_chunk_send_ack() { return 5; }
+pub Int spdm_rsp_chunk_response() { return 6; }
+pub Int spdm_rsp_measurements() { return 96; }
+pub Int spdm_rsp_capabilities() { return 97; }
+pub Int spdm_rsp_algorithms() { return 99; }
+pub Int spdm_rsp_key_exchange_rsp() { return 100; }
+pub Int spdm_rsp_finish_rsp() { return 101; }
+pub Int spdm_rsp_psk_exchange_rsp() { return 102; }
+pub Int spdm_rsp_psk_finish_rsp() { return 103; }
+pub Int spdm_rsp_heartbeat_ack() { return 104; }
+pub Int spdm_rsp_key_update_ack() { return 105; }
+pub Int spdm_rsp_encapsulated_request() { return 106; }
+pub Int spdm_rsp_encapsulated_response_ack() { return 107; }
+pub Int spdm_rsp_end_session_ack() { return 108; }
+pub Int spdm_rsp_error() { return 127; }
+
+// Capability flags (the responder's; the requester's share the bits it
+// has).
+pub Int spdm_cap_cache() { return 1; }
+pub Int spdm_cap_cert() { return 2; }
+pub Int spdm_cap_chal() { return 4; }
+pub Int spdm_cap_meas_no_sig() { return 8; }
+pub Int spdm_cap_meas_sig() { return 16; }
+pub Int spdm_cap_meas_fresh() { return 32; }
+pub Int spdm_cap_encrypt() { return 64; }
+pub Int spdm_cap_mac() { return 128; }
+pub Int spdm_cap_mut_auth() { return 256; }
+pub Int spdm_cap_key_ex() { return 512; }
+pub Int spdm_cap_psk() { return 3072; }
+pub Int spdm_cap_psk_with_context() { return 2048; }
+pub Int spdm_cap_encap() { return 4096; }
+pub Int spdm_cap_hbeat() { return 8192; }
+pub Int spdm_cap_key_upd() { return 16384; }
+pub Int spdm_cap_handshake_in_clear() { return 32768; }
+pub Int spdm_cap_pub_key_id() { return 65536; }
+pub Int spdm_cap_chunk() { return 131072; }
+pub Int spdm_cap_multi_key() { return 201326592; }
+
+// Algorithms (the bits of DSP0274's tables).
+pub Int spdm_asym_rsassa_2048() { return 1; }
+pub Int spdm_asym_rsapss_2048() { return 2; }
+pub Int spdm_asym_rsassa_3072() { return 4; }
+pub Int spdm_asym_rsapss_3072() { return 8; }
+pub Int spdm_asym_ecdsa_p256() { return 16; }
+pub Int spdm_asym_rsassa_4096() { return 32; }
+pub Int spdm_asym_rsapss_4096() { return 64; }
+pub Int spdm_asym_ecdsa_p384() { return 128; }
+pub Int spdm_asym_ed25519() { return 1024; }
+pub Int spdm_hash_sha256() { return 1; }
+pub Int spdm_hash_sha384() { return 2; }
+pub Int spdm_hash_sha512() { return 4; }
+pub Int spdm_dhe_secp256r1() { return 8; }
+pub Int spdm_dhe_secp384r1() { return 16; }
+pub Int spdm_aead_aes128gcm() { return 1; }
+pub Int spdm_aead_aes256gcm() { return 2; }
+pub Int spdm_aead_chacha20poly1305() { return 4; }
+
+// What this library implements, as masks.
+pub Int spdm_asym_supported() { return 1 | 2 | 4 | 8 | 16 | 32 | 64 | 128 | 1024; }
+pub Int spdm_hash_supported() { return 1 | 2 | 4; }
+pub Int spdm_dhe_supported() { return 8 | 16; }
+pub Int spdm_aead_supported() { return 1 | 2 | 4; }
+// RAW_BIT_STREAM, SHA-256, SHA-384, SHA-512.
+pub Int spdm_meas_hash_supported() { return 1 | 2 | 4 | 8; }
+
+pub Int spdm_hash_len(Int h) { return if (h == 1) { 32 } else if (h == 2) { 48 } else if (h == 4) { 64 } else { 0 }; }
+pub HashAlg spdm_hash_alg(Int h) { return if (h == 1) { Sha256 } else if (h == 2) { Sha384 } else { Sha512 }; }
+pub List(Int) spdm_hash(Int h, List(Int) m) { return hash_bytes(spdm_hash_alg(h), m); }
+
+pub Int spdm_sig_len(Int a) {
+    if (a == 1 || a == 2) { return 256; }
+    if (a == 4 || a == 8) { return 384; }
+    if (a == 32 || a == 64) { return 512; }
+    if (a == 16) { return 64; }
+    if (a == 128) { return 96; }
+    if (a == 1024) { return 64; }
+    return 0;
+}
+
+// The DHE exchange data: X ‖ Y of the curve.
+pub Int spdm_dhe_len(Int d) { return if (d == 8) { 64 } else if (d == 16) { 96 } else { 0 }; }
+pub Curve spdm_dhe_curve(Int d) { return if (d == 8) { P256 } else { P384 }; }
+pub Int spdm_aead_key_len(Int a) { return if (a == 1) { 16 } else { 32 }; }
+
+// Exactly one bit of `want` set, and it in `mask`.
+pub Bool spdm_one_of(Int v, Int mask) { return v != 0 && (v & (v - 1)) == 0 && (v & mask) == v; }
+
+// ─── Byte helpers ───────────────────────────────────────────────────
+
+pub Int spdm_le(List(Int) b, Int at, Int n) { return if (n <= 0) { 0 } else { b[at] | (spdm_le(b, at + 1, n - 1) << 8) }; }
+pub List(Int) spdm_le_bytes(Int v, Int n) { return if (n <= 0) { [] } else { [v & 255].concat(spdm_le_bytes(v >> 8, n - 1)) }; }
+List(Int) sm_zeros(Int n) { return spdm_le_bytes(0, n); }
+
+// ─── The negotiated connection ──────────────────────────────────────
+
+// slack: the zero padding a binding may add after a message (PCI DOE 3,
+// else 0); version: 0x10..0x13; flags: the responder's capabilities, req_flags
+// ours; asym/hash/dhe/aead/key_schedule/req_asym/meas_hash: the selected
+// algorithm bits; opaque_fmt: 0 none, 1 the DSP0277 general format of 1.0
+// and 1.1, 2 format 1 of 1.2; multi_key: the responder's multi-key
+// connection; data_transfer_size and max_msg_size: the responder's (1.2).
+pub type SpdmAlgs = { Int slack; Int version; Int flags; Int req_flags; Int ct_exponent; Int data_transfer_size; Int max_msg_size; Int meas_spec; Int meas_hash; Int asym; Int hash; Int dhe; Int aead; Int key_schedule; Int req_asym; Int opaque_fmt; Bool multi_key; };
+
+pub Bool spdm_has(SpdmAlgs a, Int cap) { return (a.flags & cap) == cap; }
+
+// ─── Requests ───────────────────────────────────────────────────────
+
+pub List(Int) spdmq_get_version() { return [16, 132, 0, 0]; }
+
+// GET_CAPABILITIES for `ver`: our flags, CT exponent, and from 1.2 the
+// largest message we take whole and in total.
+pub List(Int) spdmq_get_capabilities(Int ver, Int ct_exp, Int flags, Int dts, Int max_size) {
+    if (ver == 16) { return [16, 225, 0, 0]; }
+    List(Int) b = [ver, 225, 0, 0, 0, ct_exp, 0, 0].concat(spdm_le_bytes(flags, 4));
+    return if (ver >= 18) { b.concat(spdm_le_bytes(dts, 4)).concat(spdm_le_bytes(max_size, 4)) } else { b };
+}
+
+// NEGOTIATE_ALGORITHMS offering everything above, the DMTF measurement
+// specification, and from 1.2 opaque format 1 (and in 1.3 the responder's
+// multi-key connection when `multi_key`).
+pub List(Int) spdmq_negotiate_algorithms(Int ver, Bool multi_key) {
+    List(Int) structs = if (ver >= 17) {
+        [2, 32].concat(spdm_le_bytes(spdm_dhe_supported(), 2))
+            .concat([3, 32]).concat(spdm_le_bytes(spdm_aead_supported(), 2))
+            .concat([4, 32]).concat(spdm_le_bytes(if (ver >= 18) { 16 | 128 | 1024 } else { 16 | 128 }, 2))
+            .concat([5, 32]).concat(spdm_le_bytes(1, 2))
+    } else { [] };
+    Int nstructs = if (ver >= 17) { 4 } else { 0 };
+    Int other = if (ver >= 18) { 2 | (if (ver >= 19 && multi_key) { 16 } else { 0 }) } else { 0 };
+    Int asyms = if (ver >= 18) { spdm_asym_supported() } else { spdm_asym_supported() & 511 };
+    List(Int) body = [1, other].concat(spdm_le_bytes(asyms, 4)).concat(spdm_le_bytes(spdm_hash_supported(), 4)).concat(sm_zeros(12)).concat([0, 0, 0, 0]).concat(structs);
+    return [ver, 227, nstructs, 0].concat(spdm_le_bytes(6 + body.len(), 2)).concat(body);
+}
+
+pub List(Int) spdmq_get_digests(Int ver) { return [ver, 129, 0, 0]; }
+
+pub List(Int) spdmq_get_certificate(Int ver, Int slot, Int offset, Int len) { return [ver, 130, slot & 15, 0].concat(spdm_le_bytes(offset, 2)).concat(spdm_le_bytes(len, 2)); }
+
+// CHALLENGE: summary 0 none, 1 TCB, 255 all; a 32-byte nonce; from 1.3 an
+// 8-byte requester context.
+pub List(Int) spdmq_challenge(Int ver, Int slot, Int summary, List(Int) nonce, List(Int) context) {
+    List(Int) b = [ver, 131, slot, summary].concat(nonce);
+    return if (ver >= 19) { b.concat(context) } else { b };
+}
+
+// GET_MEASUREMENTS: `op` 0 the count, 1-254 one block, 255 all; signed
+// with a 32-byte nonce and (from 1.1) a slot; from 1.3 a context.
+pub List(Int) spdmq_get_measurements(Int ver, Bool signed, Bool raw, Int op, List(Int) nonce, Int slot, List(Int) context) {
+    Int attrs = (if (signed) { 1 } else { 0 }) | (if (raw && ver >= 18) { 2 } else { 0 });
+    List(Int) h = [ver, 224, attrs, op];
+    if (!signed) { return if (ver >= 19) { h.concat(context) } else { h }; }
+    List(Int) b = if (ver >= 17) { h.concat(nonce).concat([slot & 15]) } else { h.concat(nonce) };
+    return if (ver >= 19) { b.concat(context) } else { b };
+}
+
+// The secured-message versions we offer (DSP0277 1.0, 1.1 and 1.2), as
+// KEY_EXCHANGE or PSK_EXCHANGE opaque data in the connection's format.
+pub List(Int) spdm_opaque_supported_versions(Int fmt) {
+    List(Int) el = [1, 1, 3, 0, 16, 0, 17, 0, 18];
+    List(Int) elem = [0, 0].concat(spdm_le_bytes(el.len(), 2)).concat(el);
+    List(Int) padded = elem.concat(sm_zeros((4 - elem.len() % 4) % 4));
+    if (fmt == 2) { return [1, 0, 0, 0].concat(padded); }
+    if (fmt == 1) { return [70, 84, 77, 68, 1, 1, 0, 0].concat(padded); }
+    return [];
+}
+
+pub List(Int) spdmq_key_exchange(Int ver, Int summary, Int slot, Int req_sid, Int policy, List(Int) random, List(Int) exchange, List(Int) opaque) {
+    return [ver, 228, summary, slot].concat(spdm_le_bytes(req_sid, 2)).concat([if (ver >= 18) { policy } else { 0 }, 0]).concat(random).concat(exchange).concat(spdm_le_bytes(opaque.len(), 2)).concat(opaque);
+}
+
+pub List(Int) spdmq_finish_head(Int ver, Bool signed, Int req_slot) { return [ver, 229, if (signed) { 1 } else { 0 }, if (signed) { req_slot } else { 0 }]; }
+
+pub List(Int) spdmq_psk_exchange(Int ver, Int summary, Int req_sid, Int policy, List(Int) hint, List(Int) context, List(Int) opaque) {
+    return [ver, 230, summary, if (ver >= 18) { policy } else { 0 }].concat(spdm_le_bytes(req_sid, 2)).concat(spdm_le_bytes(hint.len(), 2)).concat(spdm_le_bytes(context.len(), 2)).concat(spdm_le_bytes(opaque.len(), 2)).concat(hint).concat(context).concat(opaque);
+}
+
+pub List(Int) spdmq_psk_finish_head(Int ver) { return [ver, 231, 0, 0]; }
+pub List(Int) spdmq_heartbeat(Int ver) { return [ver, 232, 0, 0]; }
+// op 1 UpdateKey, 2 UpdateAllKeys, 3 VerifyNewKey.
+pub List(Int) spdmq_key_update(Int ver, Int op, Int tag) { return [ver, 233, op, tag & 255]; }
+pub List(Int) spdmq_end_session(Int ver, Bool clear_state) { return [ver, 236, if (clear_state) { 1 } else { 0 }, 0]; }
+pub List(Int) spdmq_get_encapsulated_request(Int ver) { return [ver, 234, 0, 0]; }
+pub List(Int) spdmq_deliver_encapsulated_response(Int ver, Int request_id, List(Int) response) { return [ver, 235, request_id & 255, 0].concat(response); }
+pub List(Int) spdmq_respond_if_ready(Int ver, Int code, Int token) { return [ver, 255, code, token]; }
+pub List(Int) spdmq_chunk_get(Int ver, Int handle, Int seq) { return [ver, 134, 0, handle].concat(spdm_le_bytes(seq, 2)); }
+
+// CHUNK_SEND of chunk `seq` of a message of `total` bytes; the first
+// carries the total, the last says so.
+pub List(Int) spdmq_chunk_send(Int ver, Int handle, Int seq, Bool last, Int total, List(Int) chunk) {
+    List(Int) size = if (seq == 0) { spdm_le_bytes(total, 4) } else { [] };
+    return [ver, 133, if (last) { 1 } else { 0 }, handle].concat(spdm_le_bytes(seq, 2)).concat([0, 0]).concat(spdm_le_bytes(chunk.len(), 4)).concat(size).concat(chunk);
+}
+
+// ─── Responses ──────────────────────────────────────────────────────
+
+// ERROR: the code, its data, and the extended data. Codes: 1
+// InvalidRequest, 3 Busy, 4 UnexpectedRequest, 5 Unspecified, 6
+// DecryptError, 7 UnsupportedRequest, 8 RequestInFlight, 9
+// InvalidResponseCode, 10 SessionLimitExceeded, 11 SessionRequired, 12
+// ResetRequired, 13 ResponseTooLarge, 14 RequestTooLarge, 15
+// LargeResponse, 16 MessageLost, 65 VersionMismatch, 66 ResponseNotReady,
+// 67 RequestResynch.
+pub type SpdmErr = { Int code; Int data; List(Int) ext; };
+
+pub Bool spdm_is_error(List(Int) r) { return r.len() >= 4 && r[1] == 127; }
+pub SpdmErr spdm_error(List(Int) r) { return SpdmErr {.code = r[2], .data = r[3], .ext = r[4..r.len()]}; }
+
+pub Str spdm_error_name(Int code) {
+    List(Str) names = ["", "InvalidRequest", "", "Busy", "UnexpectedRequest", "Unspecified", "DecryptError", "UnsupportedRequest", "RequestInFlight", "InvalidResponseCode", "SessionLimitExceeded", "SessionRequired", "ResetRequired", "ResponseTooLarge", "RequestTooLarge", "LargeResponse", "MessageLost", "InvalidPolicy"];
+    if (code >= 0 && code < names.len() && names[code] != "") { return names[code]; }
+    if (code == 65) { return "VersionMismatch"; }
+    if (code == 66) { return "ResponseNotReady"; }
+    if (code == 67) { return "RequestResynch"; }
+    if (code == 68) { return "OperationFailed"; }
+    if (code == 255) { return "VendorDefined"; }
+    return f"error 0x{code:hex}";
+}
+
+// A message whose structure ends at `end`, followed by at most `slack`
+// zero bytes.
+Bool sm_fits(List(Int) r, Int end, Int slack) { return end <= r.len() && r.len() - end <= slack && sm_zero_from(r, end); }
+Bool sm_zero_from(List(Int) r, Int i) { return i >= r.len() || (r[i] == 0 && sm_zero_from(r, i + 1)); }
+
+Result(Bool, Str) sm_head(List(Int) r, Int ver, Int code, Int min, Str what) {
+    if (spdm_is_error(r)) { return Err(what + ": the device answered " + spdm_error_name(r[2])); }
+    if (r.len() < min) { return Err(what + " is short"); }
+    if (r[1] != code) { return Err(what + f": response code 0x{r[1]:hex}"); }
+    if (ver != 0 && r[0] != ver) { return Err(what + f": version 0x{r[0]:hex}, the connection's is 0x{ver:hex}"); }
+    return Ok(true);
+}
+
+// VERSION: the versions offered, as 0x10..0x14, and its length.
+pub type SpdmVersions = { List(Int) versions; Int len; };
+
+pub Result(SpdmVersions, Str) spdm_parse_version(List(Int) r, Int slack) {
+    Bool ok = sm_head(r, 16, 4, 6, "VERSION")?;
+    Int end = 6 + 2 * r[5];
+    if (!sm_fits(r, end, slack) || r[5] == 0) { return Err("VERSION: the entry count is not its length"); }
+    return Ok(SpdmVersions {.versions = sm_versions(r[0..end], 6, []), .len = end});
+}
+
+List(Int) sm_versions(List(Int) r, Int at, List(Int) acc) { return if (at + 1 >= r.len()) { acc } else { sm_versions(r, at + 2, acc.concat([r[at + 1]])) }; }
+
+// The highest version both offer, of 1.0 to 1.3, or 0.
+pub Int spdm_pick_version(List(Int) theirs, List(Int) ours) { return sm_pick(theirs, ours, 0, 0); }
+Int sm_pick(List(Int) t, List(Int) o, Int i, Int best) {
+    if (i >= t.len()) { return best; }
+    Bool both = sm_in(o, t[i], 0);
+    return sm_pick(t, o, i + 1, if (both && t[i] > best) { t[i] } else { best });
+}
+Bool sm_in(List(Int) xs, Int x, Int i) { return i < xs.len() && (xs[i] == x || sm_in(xs, x, i + 1)); }
+
+// CAPABILITIES: CT exponent, flags, and from 1.2 the two sizes. Flag
+// combinations DSP0274 forbids are refused.
+pub type SpdmCaps = { Int ct_exponent; Int flags; Int dts; Int max_size; Int len; };
+
+pub Result(SpdmCaps, Str) spdm_parse_capabilities(List(Int) r, Int ver, Int slack) {
+    Int want = if (ver == 16) { 12 } else if (ver == 17) { 12 } else { 20 };
+    Bool ok = sm_head(r, ver, 97, want, "CAPABILITIES")?;
+    // 1.3 may append a supported-algorithms block (param1 bit 0), only when asked.
+    if (!sm_fits(r, want, slack)) { return Err("CAPABILITIES has the wrong length"); }
+    Int fl = spdm_le(r, 8, 4);
+    Int dts = if (ver >= 18) { spdm_le(r, 12, 4) } else { 0 };
+    Int mx = if (ver >= 18) { spdm_le(r, 16, 4) } else { 0 };
+    if (ver >= 18 && (dts < 42 || mx < dts)) { return Err("CAPABILITIES: a data transfer size below 42, or above the largest message"); }
+    // MEAS_CAP both bits, PSK both bits, and a key exchange without
+    // encryption or MAC are malformed.
+    if ((fl & 24) == 24 || (fl & 3072) == 3072) { return Err("CAPABILITIES: a reserved capability combination"); }
+    if ((fl & 512) != 0 && (fl & 192) == 0) { return Err("CAPABILITIES: key exchange without encryption or MAC"); }
+    return Ok(SpdmCaps {.ct_exponent = r[5], .flags = fl, .dts = dts, .max_size = mx, .len = want});
+}
+
+// ALGORITHMS: one choice of each, within what we offered. The responder's
+// multi-key connection (1.3) is its capability MULTI_KEY_CAP_ONLY, or
+// MULTI_KEY_CAP_NEG when we asked for it.
+pub Result(SpdmAlgs, Str) spdm_parse_algorithms(List(Int) rp, Int ver, SpdmCaps caps, Int req_flags, Int slack, Bool asked_multi) {
+    Bool ok = sm_head(rp, ver, 99, 36, "ALGORITHMS")?;
+    Int end = spdm_le(rp, 4, 2);
+    if (end < 36 || !sm_fits(rp, end, slack)) { return Err("ALGORITHMS: its length field is not its length"); }
+    List(Int) r = rp[0..end];
+    Int ext = 36 + 4 * (r[32] + r[33]);
+    if (ext > r.len() || r[32] != 0 || r[33] != 0) { return Err("ALGORITHMS: an extended algorithm (none was offered)"); }
+    SmTables t = sm_tables(r, ext, if (ver >= 17) { r[2] } else { 0 }, SmTables {.dhe = 0, .aead = 0, .req_asym = 0, .ks = 0, .seen = 0, .ok = true});
+    if (!t.ok) { return Err("ALGORITHMS: its structure tables do not fill it, or repeat a type"); }
+    Int asym = spdm_le(r, 12, 4);
+    Int hash = spdm_le(r, 16, 4);
+    Int mhash = spdm_le(r, 8, 4);
+    Int other = r[7];
+    Bool needs_sig = (caps.flags & (2 | 4 | 16 | 512)) != 0;
+    if (needs_sig && !spdm_one_of(asym, spdm_asym_supported())) { return Err("ALGORITHMS: the signature algorithm is not one we offered"); }
+    if (!spdm_one_of(hash, spdm_hash_supported())) { return Err("ALGORITHMS: the hash is not one we offered"); }
+    if ((caps.flags & 24) != 0 && !(r[6] == 1 && spdm_one_of(mhash, spdm_meas_hash_supported()))) { return Err("ALGORITHMS: no DMTF measurement specification or measurement hash we know"); }
+    Bool sessions = (caps.flags & (512 | 3072)) != 0 && (req_flags & (512 | 3072)) != 0;
+    if (sessions && !(spdm_one_of(t.aead, spdm_aead_supported()) && t.ks == 1)) { return Err("ALGORITHMS: no AEAD and key schedule we offered"); }
+    if ((caps.flags & 512) != 0 && (req_flags & 512) != 0 && !spdm_one_of(t.dhe, spdm_dhe_supported())) { return Err("ALGORITHMS: no DHE group we offered"); }
+    Int fmt = if (ver >= 18) { other & 15 } else { 1 };
+    if (ver >= 18 && fmt != 0 && fmt != 2) { return Err("ALGORITHMS: an opaque data format we did not offer"); }
+    return Ok(SpdmAlgs {.slack = slack, .version = ver, .flags = caps.flags, .req_flags = req_flags, .ct_exponent = caps.ct_exponent, .data_transfer_size = caps.dts, .max_msg_size = caps.max_size, .meas_spec = r[6], .meas_hash = mhash, .asym = asym, .hash = hash, .dhe = t.dhe, .aead = t.aead, .key_schedule = t.ks, .req_asym = t.req_asym, .opaque_fmt = fmt, .multi_key = ver >= 19 && ((caps.flags & 67108864) != 0 || ((caps.flags & 134217728) != 0 && asked_multi))});
+}
+
+type SmTables = { Int dhe; Int aead; Int req_asym; Int ks; Int seen; Bool ok; };
+
+SmTables sm_tables(List(Int) b, Int at, Int n, SmTables acc) {
+    if (!acc.ok) { return acc; }
+    if (n == 0) { return SmTables {.dhe = acc.dhe, .aead = acc.aead, .req_asym = acc.req_asym, .ks = acc.ks, .seen = acc.seen, .ok = at == b.len()}; }
+    SmTables bad = SmTables {.dhe = 0, .aead = 0, .req_asym = 0, .ks = 0, .seen = 0, .ok = false};
+    if (at + 2 > b.len()) { return bad; }
+    Int ty = b[at];
+    Int fixed = b[at + 1] >> 4;
+    Int next = at + 2 + fixed + 4 * (b[at + 1] & 15);
+    if (fixed != 2 || next > b.len() || ty < 2 || ty > 5 || (acc.seen & (1 << ty)) != 0 || (b[at + 1] & 15) != 0) { return bad; }
+    Int v = spdm_le(b, at + 2, 2);
+    return sm_tables(b, next, n - 1, SmTables {.dhe = if (ty == 2) { v } else { acc.dhe }, .aead = if (ty == 3) { v } else { acc.aead }, .req_asym = if (ty == 4) { v } else { acc.req_asym }, .ks = if (ty == 5) { v } else { acc.ks }, .seen = acc.seen | (1 << ty), .ok = true});
+}
+
+// DIGESTS: the slots provisioned and one digest each; with a multi-key
+// connection (1.3) the key pair IDs, certificate infos and key usages.
+pub type SpdmDigests = { Int len; Int supported; Int provisioned; List(List(Int)) digests; List(Int) key_pair_ids; List(Int) cert_infos; List(Int) key_usages; };
+
+pub Result(SpdmDigests, Str) spdm_parse_digests(List(Int) r, SpdmAlgs a) {
+    Bool ok = sm_head(r, a.version, 1, 4, "DIGESTS")?;
+    Int slots = sm_bits(r[3], 0, 0);
+    Int h = spdm_hash_len(a.hash);
+    Int extra = if (a.multi_key) { slots * 4 } else { 0 };
+    if (!sm_fits(r, 4 + slots * h + extra, a.slack)) { return Err("DIGESTS: the slot mask and the digests disagree"); }
+    List(List(Int)) ds = sm_chunks(r, 4, h, slots, []);
+    Int at = 4 + slots * h;
+    List(Int) none = [];
+    return Ok(SpdmDigests {.len = 4 + slots * h + extra, .supported = if (a.version >= 19) { r[2] } else { r[3] }, .provisioned = r[3], .digests = ds,
+        .key_pair_ids = if (a.multi_key) { r[at..at + slots] } else { none },
+        .cert_infos = if (a.multi_key) { r[at + slots..at + 2 * slots] } else { none },
+        .key_usages = if (a.multi_key) { sm_u16s(r, at + 2 * slots, slots, []) } else { none }});
+}
+
+Int sm_bits(Int v, Int i, Int n) { return if (i >= 8) { n } else { sm_bits(v, i + 1, n + ((v >> i) & 1)) }; }
+List(List(Int)) sm_chunks(List(Int) b, Int at, Int size, Int n, List(List(Int)) acc) { return if (n <= 0) { acc } else { sm_chunks(b, at + size, size, n - 1, acc.concat([b[at..at + size]])) }; }
+List(Int) sm_u16s(List(Int) b, Int at, Int n, List(Int) acc) { return if (n <= 0) { acc } else { sm_u16s(b, at + 2, n - 1, acc.concat([spdm_le(b, at, 2)])) }; }
+
+// CERTIFICATE: one portion and what remains.
+pub type SpdmCertPortion = { Int len; Int slot; List(Int) portion; Int remainder; };
+
+pub Result(SpdmCertPortion, Str) spdm_parse_certificate(List(Int) r, SpdmAlgs a, Int slot) {
+    Bool ok = sm_head(r, a.version, 2, 8, "CERTIFICATE")?;
+    Int pl = spdm_le(r, 4, 2);
+    if ((r[2] & 15) != slot) { return Err("CERTIFICATE: another slot"); }
+    if (!sm_fits(r, 8 + pl, a.slack) || pl == 0) { return Err("CERTIFICATE: the portion length is not its length"); }
+    return Ok(SpdmCertPortion {.len = 8 + pl, .slot = slot, .portion = r[8..8 + pl], .remainder = spdm_le(r, 6, 2)});
+}
+
+// A certificate chain in GET_CERTIFICATE's format: length (LE2), reserved
+// (2), the root's hash, DER certificates from the root's side.
+pub type SpdmChain = { List(Int) root_hash; List(List(Int)) certs; };
+
+pub Result(SpdmChain, Str) spdm_parse_chain(List(Int) b, Int hash) {
+    Int h = spdm_hash_len(hash);
+    if (b.len() < 4 + h || b.len() > 65535 || spdm_le(b, 0, 2) != b.len()) { return Err("the certificate chain's length is not its own"); }
+    List(List(Int)) cs = sm_certs(b, 4 + h, [])?;
+    if (cs.len() == 0) { return Err("the certificate chain holds no certificate"); }
+    return Ok(SpdmChain {.root_hash = b[4..4 + h], .certs = cs});
+}
+
+Result(List(List(Int)), Str) sm_certs(List(Int) b, Int at, List(List(Int)) acc) {
+    if (at == b.len()) { return Ok(acc); }
+    if (acc.len() >= 16) { return Err("more than 16 certificates in a chain"); }
+    Der d = der_tag_at(b, at, b.len(), 48);
+    if (!d.ok || d.next <= at) { return Err("the chain holds bytes that are not a certificate"); }
+    return sm_certs(b, d.next, acc.concat([b[at..d.next]]));
+}
+
+// CHALLENGE_AUTH: what it binds and where its signature starts.
+pub type SpdmChallengeAuth = { Int len; Int slot; Int slot_mask; List(Int) cert_chain_hash; List(Int) nonce; List(Int) summary; List(Int) opaque; List(Int) context; Int sig_at; };
+
+pub Result(SpdmChallengeAuth, Str) spdm_parse_challenge_auth(List(Int) r, SpdmAlgs a, Int summary_type, Int slot) {
+    Bool ok = sm_head(r, a.version, 3, 4, "CHALLENGE_AUTH")?;
+    Int h = spdm_hash_len(a.hash);
+    Int sl = if (summary_type == 0) { 0 } else { h };
+    Int cx = if (a.version >= 19) { 8 } else { 0 };
+    Int at = 4 + h + 32 + sl;
+    if (r.len() < at + 2) { return Err("CHALLENGE_AUTH is short"); }
+    Int olen = spdm_le(r, at, 2);
+    Int sig_at = at + 2 + olen + cx;
+    if (olen > 1024 || !sm_fits(r, sig_at + spdm_sig_len(a.asym), a.slack)) { return Err("CHALLENGE_AUTH: its opaque data, context and signature do not end it"); }
+    if ((r[2] & 15) != (slot & 15)) { return Err("CHALLENGE_AUTH: another slot"); }
+    return Ok(SpdmChallengeAuth {.len = sig_at + spdm_sig_len(a.asym), .slot = r[2] & 15, .slot_mask = r[3], .cert_chain_hash = r[4..4 + h], .nonce = r[4 + h..36 + h], .summary = r[36 + h..at], .opaque = r[at + 2..at + 2 + olen], .context = r[at + 2 + olen..sig_at], .sig_at = sig_at});
+}
+
+// MEASUREMENTS: the blocks (each a DMTF measurement filling itself, an
+// index once), the nonce, opaque data, context, and the signature's start
+// (the length when unsigned).
+pub type SpdmBlock = { Int index; Int spec; Int value_type; List(Int) value; List(Int) raw; };
+pub type SpdmMeasurements = { Int len; Int count; Int slot; Int content_changed; List(SpdmBlock) blocks; List(Int) nonce; List(Int) opaque; List(Int) context; Int sig_at; };
+
+pub Result(SpdmMeasurements, Str) spdm_parse_measurements(List(Int) r, SpdmAlgs a, Bool signed) {
+    Bool ok = sm_head(r, a.version, 96, 8, "MEASUREMENTS")?;
+    Int nb = r[4];
+    Int rl = spdm_le(r, 5, 3);
+    Int after = 8 + rl;
+    Int cx = if (a.version >= 19) { 8 } else { 0 };
+    Int nonce = 32;
+    if (after + nonce + 2 > r.len()) { return Err("MEASUREMENTS: the record overruns the response"); }
+    List(SpdmBlock) bl = sm_blocks(r, 8, after, [])?;
+    if (bl.len() != nb) { return Err(f"MEASUREMENTS: the record holds {bl.len()} blocks, the header says {nb}"); }
+    Int olen = spdm_le(r, after + nonce, 2);
+    Int sig_at = after + nonce + 2 + olen + cx;
+    Int sl = if (signed) { spdm_sig_len(a.asym) } else { 0 };
+    if (olen > 1024 || !sm_fits(r, sig_at + sl, a.slack)) { return Err("MEASUREMENTS: its opaque data, context and signature do not end it"); }
+    return Ok(SpdmMeasurements {.len = sig_at + sl, .count = r[2], .slot = r[3] & 15, .content_changed = (r[3] >> 4) & 3, .blocks = bl, .nonce = r[after..after + nonce], .opaque = r[after + nonce + 2..after + nonce + 2 + olen], .context = r[after + nonce + 2 + olen..sig_at], .sig_at = sig_at});
+}
+
+Result(List(SpdmBlock), Str) sm_blocks(List(Int) b, Int at, Int end, List(SpdmBlock) acc) {
+    if (at == end) { return Ok(acc); }
+    if (at + 4 > end) { return Err("a measurement block is truncated"); }
+    Int idx = b[at];
+    Int spec = b[at + 1];
+    Int size = spdm_le(b, at + 2, 2);
+    if (at + 4 + size > end) { return Err("a measurement block overruns the record"); }
+    if (spec != 1) { return Err("a measurement block is not a DMTF measurement"); }
+    if (size < 3 || 3 + spdm_le(b, at + 5, 2) != size) { return Err("a DMTF measurement does not fill its block"); }
+    if (sm_has_index(acc, idx, 0)) { return Err(f"measurement index {idx} twice"); }
+    SpdmBlock blk = SpdmBlock {.index = idx, .spec = spec, .value_type = b[at + 4], .value = b[at + 7..at + 4 + size], .raw = b[at..at + 4 + size]};
+    return sm_blocks(b, at + 4 + size, end, acc.concat([blk]));
+}
+
+Bool sm_has_index(List(SpdmBlock) bs, Int i, Int k) { return k < bs.len() && (bs[k].index == i || sm_has_index(bs, i, k + 1)); }
+
+// The measurement summary DSP0274 defines over blocks: the hash of every
+// block (all, 255), or only the immutable-ROM ones (TCB, 1), in order.
+pub List(Int) spdm_summary(Int hash, Int summary_type, List(SpdmBlock) bs) { return spdm_hash(hash, sm_summary_bytes(bs, summary_type, 0, [])); }
+
+List(Int) sm_summary_bytes(List(SpdmBlock) bs, Int t, Int i, List(Int) acc) {
+    if (i >= bs.len()) { return acc; }
+    Bool take = t == 255 || (bs[i].value_type & 127) == 0;
+    return sm_summary_bytes(bs, t, i + 1, if (take) { acc.concat(bs[i].raw) } else { acc });
+}
+
+// KEY_EXCHANGE_RSP.
+pub type SpdmKeyExRsp = { Int len; Int sid; Int heartbeat; Int mut_auth; Int req_slot; List(Int) random; List(Int) exchange; List(Int) summary; List(Int) opaque; Int sig_at; List(Int) verify; };
+
+pub Result(SpdmKeyExRsp, Str) spdm_parse_key_exchange_rsp(List(Int) r, SpdmAlgs a, Int summary_type, Bool clear) {
+    Bool ok = sm_head(r, a.version, 100, 8, "KEY_EXCHANGE_RSP")?;
+    Int d = spdm_dhe_len(a.dhe);
+    Int h = spdm_hash_len(a.hash);
+    Int sl = if (summary_type == 0) { 0 } else { h };
+    Int vl = if (clear) { 0 } else { h };
+    Int at = 40 + d + sl;
+    if (r.len() < at + 2) { return Err("KEY_EXCHANGE_RSP is short"); }
+    Int olen = spdm_le(r, at, 2);
+    Int sig_at = at + 2 + olen;
+    Int end = sig_at + spdm_sig_len(a.asym) + vl;
+    if (olen > 1024 || !sm_fits(r, end, a.slack)) { return Err("KEY_EXCHANGE_RSP: its opaque data, signature and verify data do not end it"); }
+    if (!ec_public_ok(spdm_dhe_curve(a.dhe), [4].concat(r[40..40 + d]))) { return Err("KEY_EXCHANGE_RSP: the exchange data is not a point on the curve"); }
+    return Ok(SpdmKeyExRsp {.len = end, .sid = spdm_le(r, 4, 2), .heartbeat = r[2], .mut_auth = r[6], .req_slot = r[7], .random = r[8..40], .exchange = r[40..40 + d], .summary = r[40 + d..at], .opaque = r[at + 2..sig_at], .sig_at = sig_at, .verify = r[sig_at + spdm_sig_len(a.asym)..end]});
+}
+
+// PSK_EXCHANGE_RSP.
+pub type SpdmPskExRsp = { Int len; Int sid; Int heartbeat; List(Int) summary; List(Int) context; List(Int) opaque; List(Int) verify; Int verify_at; };
+
+pub Result(SpdmPskExRsp, Str) spdm_parse_psk_exchange_rsp(List(Int) r, SpdmAlgs a, Int summary_type) {
+    Bool ok = sm_head(r, a.version, 102, 12, "PSK_EXCHANGE_RSP")?;
+    Int h = spdm_hash_len(a.hash);
+    Int sl = if (summary_type == 0) { 0 } else { h };
+    Int cl = spdm_le(r, 8, 2);
+    Int ol = spdm_le(r, 10, 2);
+    Int va = 12 + sl + cl + ol;
+    if (ol > 1024 || !sm_fits(r, va + h, a.slack)) { return Err("PSK_EXCHANGE_RSP: its fields do not fill it"); }
+    return Ok(SpdmPskExRsp {.len = va + h, .sid = spdm_le(r, 4, 2), .heartbeat = r[2], .summary = r[12..12 + sl], .context = r[12 + sl..12 + sl + cl], .opaque = r[12 + sl + cl..va], .verify = r[va..va + h], .verify_at = va});
+}
+
+// A bare acknowledgement: code and, for KEY_UPDATE_ACK, the echoed
+// operation and tag.
+pub Result(Bool, Str) spdm_parse_ack(List(Int) r, SpdmAlgs a, Int code, Int p1, Int p2, Str what) {
+    Bool ok = sm_head(r, a.version, code, 4, what)?;
+    if (!sm_fits(r, 4, a.slack)) { return Err(what + " has trailing bytes"); }
+    if ((p1 >= 0 && r[2] != p1) || (p2 >= 0 && r[3] != p2)) { return Err(what + ": the operation or tag is not the request's"); }
+    return Ok(true);
+}
+
+// ─── Opaque data ────────────────────────────────────────────────────
+
+// The secured-message version the responder selected in its opaque data
+// (KEY_EXCHANGE_RSP, PSK_EXCHANGE_RSP), as 0x10..0x12; 0 when it selected
+// none (refused by the requester).
+pub Int spdm_opaque_selected_version(List(Int) o, Int fmt) {
+    Int at = if (fmt == 2) { 4 } else { 8 };
+    if (o.len() < at + 4) { return 0; }
+    if (fmt == 1 && spdm_le(o, 0, 4) != 1145918534) { return 0; }
+    Int n = if (fmt == 2) { o[0] } else { o[5] };
+    return sm_find_sel(o, at, n);
+}
+
+Int sm_find_sel(List(Int) o, Int at, Int n) {
+    if (n <= 0 || at + 4 > o.len()) { return 0; }
+    Int vl = o[at + 1];
+    Int dp = at + 2 + vl;
+    if (dp + 2 > o.len()) { return 0; }
+    Int dl = spdm_le(o, dp, 2);
+    Int data = dp + 2;
+    if (data + dl > o.len()) { return 0; }
+    Int next = data + dl + (4 - (2 + vl + 2 + dl) % 4) % 4;
+    Bool sel = o[at] == 0 && dl == 4 && o[data] == 1 && o[data + 1] == 0;
+    if (sel) { return o[data + 3]; }
+    return sm_find_sel(o, next, n - 1);
+}
+
+// ─── Signatures ─────────────────────────────────────────────────────
+
+// The 1.2+ signing context: "dmtf-spdm-v1.N.*" four times, then the
+// operation's context string right-aligned in 36 bytes.
+pub List(Int) spdm_signing_prefix(Int ver, Str context) {
+    Str one = f"dmtf-spdm-v1.{ver & 15}.*";
+    List(Int) p = bytes_of(one + one + one + one);
+    List(Int) c = bytes_of(context);
+    return p.concat(sm_zeros(36 - c.len())).concat(c);
+}
+
+pub Str spdm_ctx_challenge_auth() { return "responder-challenge_auth signing"; }
+pub Str spdm_ctx_mut_challenge_auth() { return "requester-challenge_auth signing"; }
+pub Str spdm_ctx_measurements() { return "responder-measurements signing"; }
+pub Str spdm_ctx_key_exchange_rsp() { return "responder-key_exchange_rsp signing"; }
+pub Str spdm_ctx_finish() { return "requester-finish signing"; }
+
+// What a signer signs for `data` (a transcript): the transcript itself
+// before 1.2, the signing context and the transcript's hash from 1.2.
+pub List(Int) spdm_signed_message(Int ver, Int hash, Str context, List(Int) data) {
+    return if (ver >= 18) { spdm_signing_prefix(ver, context).concat(spdm_hash(hash, data)) } else { data };
+}
+
+// Did the key sign `data` under `asym`/`hash` for this version and
+// context? ECDSA r ‖ s big-endian; RSASSA PKCS#1 v1.5; RSAPSS with a salt
+// the hash's length; Ed25519 over the message itself.
+pub Bool spdm_sig_ok(Int ver, Int asym, Int hash, Str context, PubKey key, List(Int) data, List(Int) sig) {
+    if (sig.len() != spdm_sig_len(asym) || !spdm_key_fits(asym, key)) { return false; }
+    List(Int) m = spdm_signed_message(ver, hash, context, data);
+    HashAlg h = spdm_hash_alg(hash);
+    if (asym == 16) { return ecdsa_verify_raw(P256, h, key.point, m, sig); }
+    if (asym == 128) { return ecdsa_verify_raw(P384, h, key.point, m, sig); }
+    if (asym == 1024) { return sig_verify(SigAlg {.kind = sigalg_ed25519(), .hash = h, .mgf = h, .salt = 0}, key, m, sig); }
+    Bool pss = asym == 2 || asym == 8 || asym == 64;
+    SigAlg alg = SigAlg {.kind = if (pss) { sigalg_pss() } else { sigalg_pkcs1() }, .hash = h, .mgf = h, .salt = hash_len(h)};
+    return sig_verify(alg, key, m, sig);
+}
+
+// Whether a certificate key fits the negotiated signature algorithm.
+pub Bool spdm_key_fits(Int asym, PubKey key) {
+    if (asym == 16) { return key.kind == pubkey_ec() && curve_bytes(key.curve) == 32; }
+    if (asym == 128) { return key.kind == pubkey_ec() && curve_bytes(key.curve) == 48; }
+    if (asym == 1024) { return key.kind == pubkey_ed25519(); }
+    return key.kind == pubkey_rsa() && spdm_rsa_bits(key) == spdm_sig_len(asym) * 8;
+}
+
+Int spdm_rsa_bits(PubKey k) { return if (k.n.len() > 0 && k.n[0] == 0) { (k.n.len() - 1) * 8 } else { k.n.len() * 8 }; }
+
+// The name an anchor lists for a negotiated signature algorithm and hash
+// (compiler/attest.resid's at_spdm_alg): Ed25519 alone, else the
+// algorithm and key size, then the hash.
+pub Str spdm_alg_name(Int asym, Int hash) {
+    Str h = if (hash == 1) { "Sha256" } else if (hash == 2) { "Sha384" } else { "Sha512" };
+    if (asym == 1024) { return "Ed25519"; }
+    if (asym == 16) { return "EcdsaP256" + h; }
+    if (asym == 128) { return "EcdsaP384" + h; }
+    Str fam = if (asym == 2 || asym == 8 || asym == 64) { "RsaPss" } else { "RsaSsa" };
+    return fam + f"{spdm_sig_len(asym) * 8}" + h;
+}
+
+// A negotiation record (the six VCA messages, exact): the algorithms it
+// settled, decoded the way the requester did.
+pub Result(SpdmAlgs, Str) spdm_parse_vca(List(List(Int)) vca) {
+    if (vca.len() != 6) { return Err("the negotiation is six messages, GET_VERSION to ALGORITHMS"); }
+    if (!eq_list(vca[0], [16, 132, 0, 0])) { return Err("the negotiation does not start with GET_VERSION"); }
+    SpdmVersions vs = spdm_parse_version(vca[1], 0)?;
+    List(Int) gc = vca[2];
+    if (gc.len() < 4 || gc[1] != 225 || !sm_in(vs.versions, gc[0], 0)) { return Err("GET_CAPABILITIES is not at an offered version"); }
+    Int ver = gc[0];
+    Int want = if (ver == 16) { 4 } else if (ver == 17) { 12 } else { 20 };
+    if (gc.len() != want) { return Err("GET_CAPABILITIES has the wrong length"); }
+    Int req_flags = if (ver >= 17) { spdm_le(gc, 8, 4) } else { 0 };
+    SpdmCaps caps = spdm_parse_capabilities(vca[3], ver, 0)?;
+    List(Int) na = vca[4];
+    if (na.len() < 32 || na[0] != ver || na[1] != 227 || spdm_le(na, 4, 2) != na.len()) { return Err("NEGOTIATE_ALGORITHMS is malformed"); }
+    Bool asked_multi = ver >= 19 && (na[7] & 16) != 0;
+    SpdmAlgs a = spdm_parse_algorithms(vca[5], ver, caps, req_flags, 0, asked_multi)?;
+    if (vca[3].len() != caps.len || vca[5].len() != spdm_le(vca[5], 4, 2) || vca[1].len() != vs.len) { return Err("the negotiation's messages carry trailing bytes"); }
+    return Ok(a);
+}
+
+// The certificates of a chain in GET_CERTIFICATE's format, leaf first.
+pub List(List(Int)) spdm_chain_leaf_first(SpdmChain c) { return sm_rev(c.certs, c.certs.len() - 1, []); }
+List(List(Int)) sm_rev(List(List(Int)) xs, Int i, List(List(Int)) acc) { return if (i < 0) { acc } else { sm_rev(xs, i - 1, acc.concat([xs[i]])) }; }
