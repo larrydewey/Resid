@@ -98,7 +98,12 @@ Result(HpkeMessage, VerifyError) release(List(UInt(8)) a, List(UInt(8)) s, Chall
 @requires(declassify)
 List(Int) sec_pub(List(Secret(UInt(8))) k, Int i, ListBuf(Int) acc) { return if (i >= k.len()) { acc.finish() } else { sec_pub(k, i + 1, acc.push((Int) declassify(k[i], "test output"))) }; }
 
-Str keys_of(CorimRefs r, Int i) { return if (i >= r.keys.len()) { "" } else { " " + r.keys[i].model + "/" + r.keys[i].instance_hex + keys_of(r, i + 1) }; }
+Str keys_of(CorimRefs r, Int i) {
+    if (i >= r.attest_keys.len()) { return ""; }
+    CorimKeyTriple t = r.attest_keys[i];
+    Str cond = if (t.conditional) { " (conditional)" } else { "" };
+    return " " + t.env.class.model + "/" + hex_encode(t.env.instance.v) + ":" + t.keys[0].kind + cond + keys_of(r, i + 1);
+}
 
 @requires(filesystem(readonly))
 Str cca(Str what, Verified(CorimRefs) keys, Str cpak, Int at) {
@@ -120,7 +125,9 @@ Str with_keys(Verified(CorimRefs) keys) {
     println(cca("CCA, key endorsed for another instance", keys, "cca-other-d.bin", 1791000000));
     println(cca("CCA, after the CoRIM's not-after", keys, "cca-cpak-d.bin", 2300000000));
     println(tpm("TPM, endorsed AK", keys, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"));
-    println(tpm("TPM, conditioned key only", keys, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"));
+    println(tpm("TPM, conditioned on a measured element", keys, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"));
+    println(tpm("TPM, a COSE_Key authorized by the endorser", keys, "cccccccccccccccccccccccccccccccc"));
+    println(tpm("TPM, authorized by another key only", keys, "dddddddddddddddddddddddddddddddd"));
     println(tpm("TPM, no instance named", keys, ""));
     return "";
 }

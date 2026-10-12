@@ -52,7 +52,7 @@ marked secret ([secret values](/Resid/reference/secrets/)); never as
 | `dev/tsm_report.resid` | `tsm_report.report` (the configfs report: SNP, TDX, Arm CCA) | `device(readonly)` |
 | `dev/tpm.resid` | `tpm.tpmrm0` (TPM 2.0 commands on `/dev/tpmrm0`; private to the module) | `device` (a Transact writes) |
 | `dev/tpm_wire.resid` | none: TPM 2.0 command encoders and response decoders, pure | none |
-| `dev/pci_tsm.resid` | `pci_tsm.tsm0` (whether the kernel has a platform TSM) | `device(readonly)` |
+| `dev/pci_tsm.resid` | `pci_tsm.tsm0` (whether the kernel has a platform TSM); per-device PCI attributes (`pci_tsm.vendor`, `.device`, `.class`, `.authenticated`, `.connect`, `.bound`, `.dsm`, `.doe_spdm`, `.doe_secured_spdm`) | `device(readonly)` |
 
 Each wrapper's comment says whether what it returns is signed by hardware
 (and so verified downstream, where a corrupted reply fails) or is only the
@@ -82,7 +82,10 @@ signature over it.
 | `tpm_quote` | `attest` (by the attestation key; verify the AK through its certificate or the EK) | PCR values the quote does not cover |
 | `tpm_pcr_read`, `tpm_nv_read`, `tpm_nv_read_all`, `tpm_nv_read_secret`, `tpm_read_public`, `tpm_nv_read_public`, `tpm_get_capability`, `tpm_get_random` | -- | all (an EK or AK certificate read from NV is signed by its issuer, not by the read) |
 | `tpm_azure_hcl_report` | the SNP or TDX report inside it, whose report data hashes the runtime claims after it | the 32-byte header and the claims themselves; written at boot, so no nonce: freshness comes from a quote by the AK it binds |
-| `pci_tsm_present` | -- | all |
+| `tpm_ek_cert`, `tpm_ek_chain_certs` | each certificate, by its issuer (verified by `tpm_verify_ak` to a manufacturer's root) | the index they were read from |
+| `tpm_ek_ak`, `tpm_activate_credential` | -- (the credential the TPM releases proves the AK; `tpm_verify_ak` checks it) | the public areas until `tpm_verify_ak` has checked the AK's against the credential |
+| `tpm_quote_ak` | `attest`, by the endorsement-hierarchy AK (verify it with `tpm_verify_quote_activated`) | PCR values the quote does not cover |
+| `pci_tsm_present`, `pci_vendor`, `pci_device_id`, `pci_class`, `pci_authenticated`, `pci_tsm_connected`, `pci_tsm_bound`, `pci_doe_spdm` | -- | all (the kernel's word; a device's own evidence comes over SPDM) |
 
 ### `tsm_report`
 
@@ -126,8 +129,15 @@ The wrappers build one TPM 2.0 command each, send it to `/dev/tpmrm0`
 call's own) and decode the response: `tpm_get_capability`,
 `tpm_properties`, `tpm_handles`, `tpm_get_random`, `tpm_pcr_read`,
 `tpm_read_public`, `tpm_nv_read_public`, `tpm_nv_read`, `tpm_nv_read_all`,
-`tpm_nv_read_secret`, `tpm_quote` (with an existing attestation key) and
-`tpm_azure_hcl_report`. Errors are `TpmError`: `TpmDev(DeviceError)`,
+`tpm_nv_read_secret`, `tpm_quote` (with an existing attestation key),
+`tpm_azure_hcl_report`, and for credential activation (the attestation
+reference's "Attestation keys by credential activation"): `tpm_ek_cert(ecc)`
+and `tpm_ek_chain_certs()` (the EK certificate and the chain the
+manufacturer stored at NV 0x01C00100 onward), `tpm_ek_ak(ecc)` (the EK
+from the TCG default template and an ECC P-256 restricted signing AK with
+noDA, both primaries of the endorsement hierarchy, made and flushed),
+`tpm_activate_credential(ecc, blob, secret)` and `tpm_quote_ak(nonce,
+sel)`. Errors are `TpmError`: `TpmDev(DeviceError)`,
 `TpmRc(code)`, `TpmBad(why)` for a response that does not parse,
 `TpmArg(why)` for an argument a command cannot carry or a read the
 wrapper refuses.
@@ -151,10 +161,20 @@ policy (the usual AK) is quoted: if it had a non-empty authValue, that
 Quote would count, which no public area shows (`tpm_nv_read_da_ok`,
 `tpm_quote_key_ok`).
 
-Each wrapper is `dev/tpm_wire.resid`'s `tpm_*_via(send, ...)` over
-`/dev/tpmrm0`; `tests/device` runs the same functions against the IBM TPM
-simulator over TCP (quote signatures verified) when
-`RESID_TPM_SIMULATOR` is set.
+The last three run several commands on one open file
+(`device.transact_chain`), since the resource manager flushes a file's
+transient objects and sessions when it closes: TPM2_CreatePrimary twice,
+TPM2_StartAuthSession, TPM2_PolicySecret on the endorsement hierarchy,
+TPM2_ActivateCredential, and TPM2_FlushContext of each, the handles each
+response gives patched into the commands after it. A command that fails
+ends the chain, its response the TPM's error.
+
+Each wrapper is `dev/tpm_wire.resid`'s `tpm_*_via(send, ...)` (or
+`tpm_*_via(chain, ...)` over `tpm_chain_via`) over `/dev/tpmrm0`;
+`tests/device` runs the same functions against the IBM TPM simulator over
+TCP (quote signatures verified, credentials made by
+`lib/tpm_credential.resid` activated for RSA and ECC EKs, and refused for
+another AK or a tampered blob) when `RESID_TPM_SIMULATOR` is set.
 
 All need the full `device` grant. A Transact writes its command, and the
 kernel sees only bytes: a "read-only" TPM descriptor would still pass
@@ -176,13 +196,19 @@ templates (`0x01C10000`-`0x01C10003`), and Azure's HCL report
 ### `pci_tsm`
 
 `pci_tsm_present()` says whether the kernel has a platform TSM
-(`/sys/class/tsm/tsm0`). The per-device attributes (`tsm/connect`,
-`tsm/bound`, `tsm/dsm`, `authenticated`) live under a PCI address, which
-is run-time data, while a descriptor's path is known at compile time, so
-they are not reachable yet (`PLAN-device-access.md` has the proposal);
-`pci_tsm_name` parses their text. The kernel exposes no TDISP evidence
-(measurements, certificates, interface reports) in sysfs yet. All of it is
-`abi-testing`.
+(`/sys/class/tsm/tsm0`). A device's own attributes live under its PCI
+address, which is run-time data: they are `PciAttr` descriptors, whose
+path under the device's directory is fixed at compile time (one or two
+components of `[a-z0-9_:]`, `E0263`), read with `device.read_pci_attr(op,
+addr)` for a `PciAddr` the engine checks and formats
+(`/sys/bus/pci/devices/DDDD:BB:DD.F/<rel>`; `pci_addr_parse` reads that
+form). The wrappers: `pci_vendor`, `pci_device_id`, `pci_class` (stable
+ABI), `pci_authenticated` (`None` when absent), `pci_tsm_connected` and
+`pci_tsm_bound` (the TSM's name, `None` for none), and `pci_doe_spdm(addr,
+secured)` (whether the kernel's DOE discovery found CMA/SPDM, or secured
+SPDM, on the device). The kernel runs the device's SPDM itself and exposes
+no transcript, so evidence comes from `lib/spdm_requester.resid` over a
+transport the program has. The TSM attributes are `abi-testing`.
 
 ## Modes
 
@@ -207,7 +233,7 @@ called `device` is refused.
 
 ## The generic verbs
 
-Device modules are written over five verbs, each giving
+Device modules are written over seven verbs, each giving
 `Result(List(DevOut), DeviceError)`:
 
 | Verb | Descriptor | Inputs |
@@ -216,6 +242,8 @@ Device modules are written over five verbs, each giving
 | `device.transact(op, cmd)` | `Transact`: command and response maxima | `List(UInt(8))` |
 | `device.configfs_report(op, req)` | `ConfigfsReport`: entry path, accepted providers, blob maxima | `ReportReq` |
 | `device.read_attr(op)` | `ReadAttr`: attribute path and maximum | none |
+| `device.read_pci_attr(op, addr)` | `PciAttr`: attribute path under a PCI device and maximum | `PciAddr` (domain, bus, device, function) |
+| `device.transact_chain(op, cmds, links)` | `Transact` (not secret): command and response maxima | `List(List(UInt(8)))` (1 to 16 commands), `List(Int)` links: quadruples (from step, offset in its response, to step, offset in its command), each 4 bytes copied before the later command is sent |
 | `device.sequence(op, args)` | `Sequence`: ioctl steps on one file, with links | `List(DevIn)` |
 
 An `IoctlOp`'s fields are `Scalar(offset, width, dir)`,

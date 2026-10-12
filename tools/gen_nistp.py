@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Generate lib/p256.resid and lib/p384.resid from one template.
+"""Generate lib/p256.resid, lib/p384.resid and lib/p521.resid from one
+template.
 
-Both curves share every line of their arithmetic; only the width, the
+The curves share every line of their arithmetic; only the width, the
 prime, the order and the constants differ. Edit the template here and
 rerun (python3 tools/gen_nistp.py); never edit the generated files.
 
@@ -34,6 +35,15 @@ CURVES = {
         gx=0x6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296,
         gy=0x4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5,
         name="NIST P-256 (secp256r1)",
+    ),
+    "p521": dict(
+        K=521, W=1088, T="P521Pt", A="P521Aff", S="P521Sig", BW="P521Word", XY="P521Xy",
+        p=2**521 - 1,
+        n=0x01fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffa51868783bf2f966b7fcc0148f709a5d03bb5c9b8899c47aebb6fb71e91386409,
+        b=0x0051953eb9618e1c9a1f929a21a0b68540eea2da725b99b315f3b8b489918ef109e156193951ec7e937b1652c0bd3bb1bf073573df883d2c34f1ef451fd46b503f00,
+        gx=0x00c6858e06b70404e9cd9e3ecb662395b4429c648139053fb521f828af606b4d3dbaa14b5e77efe75928fe1dc127a2ffa8de3348b3c1856a429bf97e7e31c2e5bd66,
+        gy=0x011839296a789a3bc0045c8a5fb42c7d1bd998f54449579b446817afbd17273e662c97ee72995ef42640c550b9013fad0761353c7086a272c24088be94769fd16650,
+        name="NIST P-521 (secp521r1)",
     ),
     "p384": dict(
         K=384, W=832, T="P384Pt", A="P384Aff", S="P384Sig", BW="P384Word", XY="P384Xy",
@@ -621,7 +631,7 @@ List(B) @X@_drbg_t(HashAlg h, List(B) kk, List(B) v, List(B) t) {
 @needs(@BW@(F, B), Word(W, B), Word64(D, B))
 F @X@_drbg_k(HashAlg h, List(B) kk, List(B) v, Int tries) {
     List(B) t = @X@_drbg_t(h, kk, v, v[0..0]);
-    F k = @X@_load(t[0..@KB@]);
+    F k = @KLOAD@;
     if (@X@_scalar_ok(k) || tries > 64) { return k; }
     // T is whole HMAC blocks, so its last block is the V drawn last (h.3).
     List(B) vlast = t[t.len() - hash_len(h)..];
@@ -667,13 +677,14 @@ def render(x, c):
     K, W = c["K"], c["W"]
     p, n = c["p"], c["n"]
     R = 2 ** K
-    assert p % 4 == 3 and K % 8 == 0 and n.bit_length() == K
+    assert p % 4 == 3 and n.bit_length() == K
+    KB = (K + 7) // 8
     # t + q*m < 2^(2K+1) and the guard bit K+8 must fit below the top bit.
     assert 2 * K + 2 < W and W % 64 == 0
     vals = {
         "@X@": x, "@T@": c["T"], "@A@": c["A"], "@S@": c["S"], "@NAME@": c["name"],
         "@BW@": c["BW"], "@XY@": c["XY"],
-        "@W@": str(W), "@K@": str(K), "@KB@": str(K // 8), "@KM1@": str(K - 1),
+        "@W@": str(W), "@K@": str(K), "@KB@": str(KB), "@KM1@": str(K - 1),
         "@K8@": str(K + 8), "@WM1@": str(W - 1),
         "@P@": str(p), "@N@": str(n), "@GX@": str(c["gx"]), "@GY@": str(c["gy"]),
         "@PINV@": str((-mod_inv(p, R)) % R), "@NINV@": str((-mod_inv(n, R)) % R),
@@ -683,6 +694,8 @@ def render(x, c):
         "@PM2@": str(p - 2), "@NM2@": str(n - 2), "@PSQ@": str((p + 1) // 4),
         "@RMASK@": str(R - 1), "@GUARD@": str(2 ** (K + 8)), "@GMASK@": str(2 ** (K + 8) - 1),
         "@ONES@": str(2 ** W - 1),
+        # RFC 6979 bits2int of T (rlen = KB bytes): its leftmost K bits.
+        "@KLOAD@": "@X@_load(t[0..@KB@])" if KB * 8 == K else f"@X@w_shr(@X@_load(t[0..@KB@]), {KB * 8 - K})",
     }
     out = TEMPLATE
     # longest tokens first so @K@ does not eat @KB@ etc.

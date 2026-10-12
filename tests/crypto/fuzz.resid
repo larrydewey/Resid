@@ -1,6 +1,8 @@
 // fuzz.resid — mutation fuzzing of every parser that reads untrusted
 // bytes: DER, X.509 (strict and positional), CRLs, OCSP responses, keys,
-// signatures, CBOR/COSE and TLS handshake messages.
+// signatures, CBOR/COSE, TLS handshake messages, SPDM messages and
+// transport frames, TPM responses and public areas, and CoRIMs (parsed,
+// then applied to their own reference values as evidence).
 //
 //   fuzz <kind> <seed-file> <iterations> <rng-seed> [<extra-file>...]
 //
@@ -15,14 +17,19 @@
 // The extra files are the other inputs a parser needs (an issuer for a
 // child, a certificate for a CRL). Exit status 1 when anything crashed.
 
-import "../../lib/chain.resid";
-import "../../lib/instant.resid";
-import "../../lib/tlskey.resid";
-import "../../lib/tlsmsg.resid";
-import "../../lib/cosesig.resid";
-import "../../lib/hpke.resid";
-import "../../lib/rsa.resid";
-import "../../lib/h2.resid";
+import "chain.resid";
+import "instant.resid";
+import "tlskey.resid";
+import "tlsmsg.resid";
+import "cosesig.resid";
+import "hpke.resid";
+import "rsa.resid";
+import "h2.resid";
+import "spdm_msg.resid";
+import "spdm_transport.resid";
+import "dev/tpm_wire.resid";
+import "verify/core.resid";
+import "verify/corim.resid";
 
 // ─── Randomness: xorshift64*, deterministic from the seed ───────────
 
@@ -209,8 +216,57 @@ Int run_hpack(List(Int) m) {
     return blk.fields.len() + bit(blk.bad) + bit(h.bad) + h2_count_data(m, 0, m.len() - 1) + sid;
 }
 
+// SPDM: every response decoder at two negotiated profiles, the chain,
+// the negotiation record and the transport frames.
+Int run_spdm(List(Int) m) {
+    SpdmAlgs a12 = SpdmAlgs {.slack = 3, .version = 18, .flags = 1047734, .req_flags = 0, .ct_exponent = 0, .data_transfer_size = 4096, .max_msg_size = 65536, .meas_spec = 1, .meas_hash = 4, .asym = 128, .hash = 2, .dhe = 16, .aead = 2, .key_schedule = 1, .req_asym = 16, .opaque_fmt = 2, .multi_key = false};
+    SpdmAlgs a13 = SpdmAlgs {.slack = 0, .version = 19, .flags = 1047734, .req_flags = 0, .ct_exponent = 0, .data_transfer_size = 4096, .max_msg_size = 65536, .meas_spec = 1, .meas_hash = 2, .asym = 16, .hash = 1, .dhe = 8, .aead = 1, .key_schedule = 1, .req_asym = 0, .opaque_fmt = 2, .multi_key = true};
+    SpdmCaps caps = SpdmCaps {.ct_exponent = 0, .flags = 1047734, .dts = 4096, .max_size = 65536, .len = 20};
+    Int a = rb(spdm_parse_version(m, 3)) + rb(spdm_parse_capabilities(m, 18, 0)) + rb(spdm_parse_algorithms(m, 19, caps, 0, 0, true)) + rb(spdm_parse_algorithms(m, 17, caps, 0, 3, false));
+    Int b = rb(spdm_parse_digests(m, a12)) + rb(spdm_parse_certificate(m, a13, 0)) + rb(spdm_parse_chain(m, 2)) + rb(spdm_parse_challenge_auth(m, a12, 255, 0)) + rb(spdm_parse_challenge_auth(m, a13, 1, 1));
+    Int c = rb(spdm_parse_measurements(m, a12, true)) + rb(spdm_parse_measurements(m, a13, false)) + rb(spdm_parse_key_exchange_rsp(m, a12, 0, true)) + rb(spdm_parse_key_exchange_rsp(m, a13, 1, false)) + rb(spdm_parse_psk_exchange_rsp(m, a13, 255));
+    Int d = rb(spdm_parse_ack(m, a12, 105, 0, 0, "ack")) + rb(spdm_parse_vca([m, m, m, m, m, m])) + rb(spdm_unframe(SpdmMctp, m)) + rb(spdm_unframe(SpdmPciDoe, m)) + rb(spdm_unframe(SpdmTcp, m)) + rb(spdm_uninner(SpdmMctp, m)) + rb(spdm_uninner(SpdmTcp, m));
+    return a + b + c + d;
+}
+
+Int rb(Result(T, E) r) { return match r { Ok(x) => 1, Err(e) => 0 }; }
+
+// TPM: every response decoder and the public-area reader.
+Int run_tpm(List(Int) m) {
+    List(UInt(8)) u = tb(m, 0, ListBuf());
+    Int a = rb(tpm_public_parse(u)) + rb(tpm2_create_primary_resp(u)) + rb(tpm2_activate_credential_resp(u)) + rb(tpm2_quote_resp(u)) + rb(tpm_attest_quote(u));
+    Int b = rb(tpm2_get_capability_resp(u)) + rb(tpm2_get_random_resp(u)) + rb(tpm2_pcr_read_resp(u)) + rb(tpm2_read_public_resp(u)) + rb(tpm2_nv_read_public_resp(u)) + rb(tpm2_nv_read_resp(u));
+    Int c = rb(tpm_der_split(u, 0, []));
+    return a + b + c;
+}
+
+List(UInt(8)) tb(List(Int) b, Int i, ListBuf(UInt(8)) acc) { return if (i >= b.len()) { acc.finish() } else { tb(b, i + 1, acc.push((UInt(8)) (b[i] & 255))) }; }
+
+// CoRIM: the corim-map, then its own reference values applied to their
+// measurements as evidence (the matching and endorsement code).
+Int run_corim(List(Int) m) {
+    return match (corim_payload(m, instant_of_seconds(1791000000))) {
+        Ok(r) => corim_self(r),
+        Err(e) => 0,
+    };
+}
+
+Int corim_self(CorimRefs r) {
+    List(CorimClaim) ev = corim_as_claims(r.reference, 0, []);
+    CorimAcs a = corim_appraise(ev, r);
+    return a.claims.len() + corim_uncorroborated(a).len() + corim_endorsements(a).len();
+}
+
+List(CorimClaim) corim_as_claims(List(CorimTriple) ts, Int i, List(CorimClaim) acc) {
+    if (i >= ts.len()) { return acc; }
+    return corim_as_claims(ts, i + 1, acc.concat(corim_evidence(ts[i].env, ts[i].meas)));
+}
+
 @requires(declassify, provision)
 Int exercise(Str kind, List(Int) m, List(Int) x1, List(Int) x2) {
+    if (kind == "spdm") { return run_spdm(m); }
+    if (kind == "tpm") { return run_tpm(m); }
+    if (kind == "corim") { return run_corim(m); }
     if (kind == "hpack") { return run_hpack(m); }
     if (kind == "cert") { return run_cert(m, x1); }
     if (kind == "crl") { return run_crl(m, x1, x2); }

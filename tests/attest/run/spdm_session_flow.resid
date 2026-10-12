@@ -15,6 +15,7 @@ import "verify/spdm.resid";
 import "verify/spdm_session.resid";
 import "challenge_export.resid";
 import "verify/device_bound.resid";
+import "spdm_msg.resid";
 import "spdm_session.resid";
 
 Str fx() { return "fixtures/"; }
@@ -29,13 +30,6 @@ SnpCollateral col() { return SnpCollateral {.vcek_der = rd("test-vcek.der"), .as
 @requires(filesystem(readonly))
 List(UInt(8)) report_for(List(UInt(8)) value) { return report_from(rd("report-template.bin"), value); }
 
-// The template with bytes [at, at + b.len()) replaced.
-@requires(filesystem(readonly))
-List(UInt(8)) patched(Int at, List(UInt(8)) b) {
-    List(UInt(8)) t = rd("report-template.bin");
-    return t[0..at].concat(b).concat(t[at + b.len()..t.len()]);
-}
-
 @requires(filesystem(readonly))
 List(UInt(8)) report_from(List(UInt(8)) t, List(UInt(8)) value) {
     List(UInt(8)) rdata = value.concat(zeros(64 - value.len()));
@@ -48,28 +42,25 @@ List(UInt(8)) zeros(Int n) { return if (n <= 0) { [] } else { [(UInt(8)) 0].conc
 List(UInt(8)) le72(List(Int) be) { return le_at(be, 47, ListBuf()).concat(zeros(24)); }
 List(UInt(8)) le_at(List(Int) be, Int i, ListBuf(UInt(8)) acc) { return if (i < 0) { acc.finish() } else { le_at(be, i - 1, acc.push((UInt(8)) be[i])) }; }
 
-
 @requires(filesystem(readonly))
 List(Int) rdi(Str p) { return filesystem.read_bytes("fixtures/" + p); }
 
 List(Int) fill(Int v, Int n) { return if (n <= 0) { [] } else { [v].concat(fill(v, n - 1)) }; }
 List(Int) le(Int v, Int n) { return if (n <= 0) { [] } else { [v & 255].concat(le(v >> 8, n - 1)) }; }
+List(List(UInt(8))) bl(List(List(Int)) xs, Int i, List(List(UInt(8))) acc) { return if (i >= xs.len()) { acc } else { bl(xs, i + 1, acc.concat([chal_bytes(xs[i])])) }; }
+List(Int) flat(List(List(Int)) xs, Int i, List(Int) acc) { return if (i >= xs.len()) { acc } else { flat(xs, i + 1, acc.concat(xs[i])) }; }
 
-// ─── The device's side, played here ─────────────────────────────────
+// ─── The device's side, played here (ECDSA P-384, SHA-384, P-384 ECDHE) ─
 
-// The negotiation: SPDM 1.1, ECDSA P-384, SHA-384, ECDHE secp384r1,
-// AES-`aead`-GCM (2 = 256), the SPDM key schedule.
-List(Int) algs(Int aead) { return [2, 32].concat(le(16, 2)).concat([3, 32]).concat(le(aead, 2)).concat([4, 32]).concat(le(128, 2)).concat([5, 32]).concat(le(1, 2)); }
-
-List(List(UInt(8))) vca(Int aead) {
-    List(Int) na = [1, 0].concat(le(128, 4)).concat(le(2, 4)).concat(fill(0, 12)).concat([0, 0, 0, 0]).concat(algs(2));
-    List(Int) al = [1, 0].concat(le(4, 4)).concat(le(128, 4)).concat(le(2, 4)).concat(fill(0, 12)).concat([0, 0, 0, 0]).concat(algs(aead));
-    return [chal_bytes([16, 132, 0, 0]), chal_bytes([16, 4, 0, 0, 0, 2, 0, 16, 0, 17]),
-            chal_bytes([17, 225, 0, 0, 0, 0, 0, 0].concat(le(704, 4))), chal_bytes([17, 97, 0, 0, 0, 12, 0, 0].concat(le(722, 4))),
-            chal_bytes([17, 227, 4, 0].concat(le(4 + na.len() + 2, 2)).concat(na)), chal_bytes([17, 99, 4, 0].concat(le(4 + al.len() + 2, 2)).concat(al))];
+// The negotiation at `ver`: AES-`aead`-GCM (2 = 256), the SPDM key
+// schedule; mutual authentication offered (256) when `mut`.
+List(List(Int)) vca(Int ver, Int aead) {
+    List(Int) structs = [2, 32].concat(le(16, 2)).concat([3, 32]).concat(le(aead, 2)).concat([4, 32]).concat(le(0, 2)).concat([5, 32]).concat(le(1, 2));
+    List(Int) al = [1, if (ver >= 18) { 2 } else { 0 }].concat(le(4, 4)).concat(le(128, 4)).concat(le(2, 4)).concat(fill(0, 12)).concat([0, 0, 0, 0]).concat(structs);
+    Int fl = 2 | 4 | 16 | 64 | 128 | 512;
+    List(Int) caps = [ver, 97, 0, 0, 0, 12, 0, 0].concat(le(fl, 4)).concat(if (ver >= 18) { le(4096, 4).concat(le(65536, 4)) } else { [] });
+    return [spdmq_get_version(), [16, 4, 0, 0, 0, 2, 0, 17, 0, 19], spdmq_get_capabilities(ver, 20, 64 | 128 | 512, 4096, 65536), caps, spdmq_negotiate_algorithms(ver, false), [ver, 99, 4, 0].concat(le(6 + al.len(), 2)).concat(al)];
 }
-
-List(Int) cat(List(List(UInt(8))) ms, Int i) { return if (i >= ms.len()) { [] } else { chal_ints(ms[i]).concat(cat(ms, i + 1)) }; }
 
 // GET_CERTIFICATE's chain: length, reserved, the root's hash, root, leaf.
 @requires(filesystem(readonly))
@@ -81,6 +72,11 @@ List(Int) chain_with(List(Int) root_hash) {
 @requires(filesystem(readonly))
 List(Int) chain() { return chain_with(sha384_bytes(rdi("spdm-root.der"))); }
 
+@requires(filesystem(readonly))
+List(List(UInt(8))) ocsp() { return [rd("spdm-ocsp-leaf.der")]; }
+
+SpdmSuite suite(Int ver) { return SpdmSuite {.version = ver, .hash = 2, .aead = 2, .dhe = 16, .seq_bytes = 0}; }
+
 List(Int) req_priv() { return [7].concat(fill(1, 47)); }
 List(Int) dev_priv() { return [9].concat(fill(2, 47)); }
 
@@ -90,33 +86,38 @@ List(Int) blocks(Int m1) {
         .concat([2, 1].concat(le(51, 2)).concat([1]).concat(le(48, 2)).concat(fill(7, 48)));
 }
 
-List(Int) key_exchange(List(Int) random) { return spdm_key_exchange(255, 0, 1, random, spdmg_exchange_data(req_priv()), []); }
-
-// The ResponderVerifyData: HMAC under the finished key over th1.
-List(Int) verify_data(SpdmSecrets(Int) s, List(Int) th1) { return hmac_sha384_bytes(hmac_sha384_bytes(s.rsp, spdm_bin(48, "finished", []).concat([1]))[0..48], th1); }
+List(Int) key_exchange(Int ver, List(Int) random) { return spdmq_key_exchange(ver, 255, 0, 1, 0, random, spdm_exchange_data(suite(ver), req_priv()), spdm_opaque_supported_versions(if (ver >= 18) { 2 } else { 1 })); }
 
 // KEY_EXCHANGE_RSP for this request: `mut` asks for mutual auth, `m1` the
 // first block's value; signed by the test device's key.
 @requires(filesystem(readonly))
-List(Int) key_exchange_rsp(List(List(UInt(8))) v, List(Int) ke, Int mut, Int m1) {
-    List(Int) head = [17, 100, 0, 0].concat(le(65534, 2)).concat([mut, 0]).concat(fill(6, 32)).concat(spdmg_exchange_data(dev_priv())).concat(sha384_bytes(blocks(m1))).concat(le(0, 2));
-    List(Int) signed = cat(v, 0).concat(sha384_bytes(chain())).concat(ke).concat(head);
-    List(Int) sig = ecdsa_sign_raw(P384, Sha384, rdi("spdm-leaf-d.bin"), signed);
+List(Int) key_exchange_rsp(Int ver, List(List(Int)) v, List(Int) ke, Int mut, Int m1) {
+    List(Int) head = [ver, 100, 0, 0].concat(le(65534, 2)).concat([mut, 0]).concat(fill(6, 32)).concat(spdm_exchange_data(suite(ver), dev_priv())).concat(sha384_bytes(blocks(m1))).concat(le(0, 2));
+    List(Int) signed = flat(v, 0, []).concat(sha384_bytes(chain())).concat(ke).concat(head);
+    List(Int) sig = ecdsa_sign_raw(P384, Sha384, rdi("spdm-leaf-d.bin"), spdm_signed_message(ver, 2, spdm_ctx_key_exchange_rsp(), signed));
     List(Int) th1 = sha384_bytes(signed.concat(sig));
-    return head.concat(sig).concat(verify_data(dev_secrets(ke, th1), th1));
+    return head.concat(sig).concat(spdm_responder_verify(suite(ver), dev_secrets(ver, ke, th1), th1));
 }
 
-SpdmSecrets(Int) dev_secrets(List(Int) ke, List(Int) th1) { return spdm_handshake(spdmg_shared(dev_priv(), ke[40..136]), th1); }
+SpdmSecrets(Int) dev_secrets(Int ver, List(Int) ke, List(Int) th1) { return spdm_handshake(suite(ver), spdm_shared(suite(ver), dev_priv(), ke[40..136]), false, th1); }
 
-// GET_MEASUREMENTS (all, signed) for this nonce and the device's answer.
-List(Int) meas_request(List(Int) nonce) { return [17, 224, 1, 255].concat(nonce).concat([0]); }
+@requires(filesystem(readonly))
+SpdmSessionRecord srec(Int ver, List(List(Int)) v, List(Int) ch, List(Int) ke, List(Int) rsp) {
+    return SpdmSessionRecord {.vca = bl(v, 0, []), .chain = chal_bytes(ch), .ocsp = ocsp(), .digests = [], .key_exchange = chal_bytes(ke), .key_exchange_rsp = chal_bytes(rsp)};
+}
+
+// GET_MEASUREMENTS (all, signed, 1.3) for this nonce and the device's answer.
+List(Int) meas_request(List(Int) nonce) { return spdmq_get_measurements(19, true, false, 255, nonce, 0, fill(9, 8)); }
 
 @requires(filesystem(readonly))
 List(Int) meas_response(List(Int) req, Int m1) {
     List(Int) rec = blocks(m1);
-    List(Int) body = [17, 96, 0, 0, 2].concat(le(rec.len(), 3)).concat(rec).concat(fill(3, 32)).concat(le(0, 2));
-    return body.concat(ecdsa_sign_raw(P384, Sha384, rdi("spdm-leaf-d.bin"), req.concat(body)));
+    List(Int) body = [19, 96, 0, 0, 2].concat(le(rec.len(), 3)).concat(rec).concat(fill(3, 32)).concat(le(0, 2)).concat(fill(9, 8));
+    return body.concat(ecdsa_sign_raw(P384, Sha384, rdi("spdm-leaf-d.bin"), spdm_signed_message(19, 2, spdm_ctx_measurements(), flat(vca(19, 2), 0, []).concat(req).concat(body))));
 }
+
+@requires(filesystem(readonly))
+SpdmRecord mrec(List(Int) req, List(Int) resp) { return SpdmRecord {.vca = bl(vca(19, 2), 0, []), .certs = [rd("spdm-leaf.der"), rd("spdm-root.der")], .ocsp = ocsp(), .before = [], .request = chal_bytes(req), .response = chal_bytes(resp)}; }
 
 // ─── The relying party ──────────────────────────────────────────────
 
@@ -127,39 +128,40 @@ SnpPolicy guest_policy() {
 }
 
 @requires(filesystem(readonly))
-Str session(Str what, List(List(UInt(8))) v, List(Int) ke, List(Int) rsp, List(Int) ch, ChallengeRecord c) {
-    return what + ": " + match (spdm_session_verify(v, chal_bytes(ch), chal_bytes(ke), chal_bytes(rsp), c, test_device_root(), test_time(1791000000))) { Ok(s) => f"verified, session 0x{s.value.session_id:hex}", Err(e) => verify_error_text(e) };
+Str session(Str what, Int ver, List(List(Int)) v, List(Int) ke, List(Int) rsp, List(Int) ch, ChallengeRecord c) {
+    return what + ": " + match (spdm_session_verify(srec(ver, v, ch, ke, rsp), c, test_device_root(), test_time(1791000000))) { Ok(s) => f"verified, SPDM 0x{s.value.version:hex}, session 0x{s.value.session_id:hex}", Err(e) => verify_error_text(e) };
 }
 
 Bool is_some(Option(List(Int)) o) { return match o { Some(x) => true, None => false }; }
 
-// The requester's half: check the device's verify data, FINISH under the
+// The requester's half (1.3): the device's verify data, FINISH under the
 // handshake keys, the data keys from TH2, and one request and answer.
 @requires(filesystem(readonly))
 Str requester(SpdmSession s, List(Int) ke) {
-    SpdmSecrets(Int) mine = spdm_handshake(spdmg_shared(req_priv(), s.rsp_exchange), s.th);
-    if (!spdm_responder_ok(mine, s.th, s.responder_verify)) { return "ResponderVerifyData refused"; }
-    List(Int) fin = spdm_finish(mine, spdm_finish_hash(s.transcript, s.responder_verify));
-    SpdmKeys(Int) hk = spdm_handshake_keys(mine);
-    SpdmSecrets(Int) dev = dev_secrets(ke, s.th);
-    SpdmKeys(Int) dk = spdm_handshake_keys(dev);
-    List(Int) sealed = spdm_seal(s.session_id, 0, hk.req_key, hk.req_iv, fin);
-    Option(List(Int)) got = spdm_open(s.session_id, 0, dk.req_key, dk.req_iv, sealed);
-    Bool fin_ok = match got { Some(m) => hex_encode(m) == hex_encode(spdm_finish(dev, spdm_finish_hash(s.transcript, s.responder_verify))), None => false };
-    List(Int) frsp = [17, 101, 0, 0];
-    Option(List(Int)) back = spdm_open(s.session_id, 0, hk.rsp_key, hk.rsp_iv, spdm_seal(s.session_id, 0, dk.rsp_key, dk.rsp_iv, frsp));
-    List(Int) th2 = spdm_th2(s.transcript, s.responder_verify, fin, frsp);
-    SpdmKeys(Int) mk = spdm_data_keys(mine, th2);
-    SpdmKeys(Int) dmk = spdm_data_keys(dev, th2);
+    SpdmSuite su = suite(19);
+    SpdmSecrets(Int) mine = spdm_handshake(su, spdm_shared(su, req_priv(), s.rsp_exchange), false, s.th);
+    if (!spdm_responder_ok(su, mine, s.th, s.responder_verify)) { return "ResponderVerifyData refused"; }
+    List(Int) head = spdmq_finish_head(19, false, 0);
+    List(Int) fin = head.concat(spdm_requester_verify(su, mine, sha384_bytes(s.transcript.concat(s.responder_verify).concat(head))));
+    SpdmKeys(Int) hk = spdm_handshake_keys(su, mine);
+    SpdmSecrets(Int) dev = dev_secrets(19, ke, s.th);
+    SpdmKeys(Int) dk = spdm_handshake_keys(su, dev);
+    Option(List(Int)) got = spdm_open(su, s.session_id, 0, dk.req_key, dk.req_iv, spdm_seal(su, s.session_id, 0, hk.req_key, hk.req_iv, fin));
+    Bool fin_ok = match got { Some(m) => hex_encode(m) == hex_encode(head.concat(spdm_requester_verify(su, dev, sha384_bytes(s.transcript.concat(s.responder_verify).concat(head))))), None => false };
+    List(Int) frsp = [19, 101, 0, 0];
+    Option(List(Int)) back = spdm_open(su, s.session_id, 0, hk.rsp_key, hk.rsp_iv, spdm_seal(su, s.session_id, 0, dk.rsp_key, dk.rsp_iv, frsp));
+    List(Int) th2 = sha384_bytes(s.transcript.concat(s.responder_verify).concat(fin).concat(frsp));
+    SpdmKeys(Int) mk = spdm_data_keys(su, spdm_data(su, mine, th2));
+    SpdmKeys(Int) dmk = spdm_data_keys(su, spdm_data(su, dev, th2));
     List(Int) q = meas_request(fill(4, 32));
-    Option(List(Int)) q_at_dev = spdm_open(s.session_id, 0, dmk.req_key, dmk.req_iv, spdm_seal(s.session_id, 0, mk.req_key, mk.req_iv, q));
-    List(Int) answer = spdm_seal(s.session_id, 0, dmk.rsp_key, dmk.rsp_iv, [17, 96, 0, 0]);
-    Option(List(Int)) a_here = spdm_open(s.session_id, 0, mk.rsp_key, mk.rsp_iv, answer);
-    Option(List(Int)) a_seq1 = spdm_open(s.session_id, 1, mk.rsp_key, mk.rsp_iv, answer);
-    Option(List(Int)) a_tamper = spdm_open(s.session_id, 0, mk.rsp_key, mk.rsp_iv, answer[0..10].concat([answer[10] ^ 1]).concat(answer[11..answer.len()]));
-    Option(List(Int)) a_hs = spdm_open(s.session_id, 0, hk.rsp_key, hk.rsp_iv, answer);
+    Option(List(Int)) q_at_dev = spdm_open(su, s.session_id, 0, dmk.req_key, dmk.req_iv, spdm_seal(su, s.session_id, 0, mk.req_key, mk.req_iv, q));
+    List(Int) answer = spdm_seal(su, s.session_id, 0, dmk.rsp_key, dmk.rsp_iv, [19, 96, 0, 0]);
+    Option(List(Int)) a_here = spdm_open(su, s.session_id, 0, mk.rsp_key, mk.rsp_iv, answer);
+    Option(List(Int)) a_seq1 = spdm_open(su, s.session_id, 1, mk.rsp_key, mk.rsp_iv, answer);
+    Option(List(Int)) a_tamper = spdm_open(su, s.session_id, 0, mk.rsp_key, mk.rsp_iv, answer[0..10].concat([answer[10] ^ 1]).concat(answer[11..answer.len()]));
+    Option(List(Int)) a_hs = spdm_open(su, s.session_id, 0, hk.rsp_key, hk.rsp_iv, answer);
     Bool q_ok = match q_at_dev { Some(m) => hex_encode(m) == hex_encode(q), None => false };
-    Bool a_ok = match a_here { Some(m) => hex_encode(m) == "11600000", None => false };
+    Bool a_ok = match a_here { Some(m) => hex_encode(m) == "13600000", None => false };
     return f"FINISH accepted by the device {fin_ok}, FINISH_RSP {is_some(back)}, request delivered {q_ok}, answer {a_ok}, answer as message 1 {is_some(a_seq1)}, tampered {is_some(a_tamper)}, under the handshake keys {is_some(a_hs)}";
 }
 
@@ -168,11 +170,10 @@ Str with_session(Verified(SpdmSession) s, List(Int) ke) {
     println("requester: " + requester(s.value, ke));
     ChallengeRecord cm = challenge_issue(32);
     List(Int) mr = meas_request(chal_ints(challenge_value(cm)));
-    List(List(UInt(8))) certs = [rd("spdm-leaf.der"), rd("spdm-root.der")];
-    println("measurements in the session: " + match (spdm_verify(chal_bytes(mr), chal_bytes(meas_response(mr, 5)), certs, cm, test_device_root(), test_time(1791000000))) { Ok(m) => f"{spdm_session_covers(s.value, m.value)}", Err(e) => verify_error_text(e) });
+    println("measurements in the session: " + match (spdm_verify(mrec(mr, meas_response(mr, 5)), cm, test_device_root(), test_time(1791000000))) { Ok(m) => f"{spdm_session_covers(s.value, m.value)}", Err(e) => verify_error_text(e) });
     ChallengeRecord cm2 = challenge_issue(32);
     List(Int) mr2 = meas_request(chal_ints(challenge_value(cm2)));
-    println("other measurements: " + match (spdm_verify(chal_bytes(mr2), chal_bytes(meas_response(mr2, 6)), certs, cm2, test_device_root(), test_time(1791000000))) { Ok(m) => f"{spdm_session_covers(s.value, m.value)}", Err(e) => verify_error_text(e) });
+    println("other measurements: " + match (spdm_verify(mrec(mr2, meas_response(mr2, 6)), cm2, test_device_root(), test_time(1791000000))) { Ok(m) => f"{spdm_session_covers(s.value, m.value)}", Err(e) => verify_error_text(e) });
     ChallengeRecord cc = challenge_issue(64);
     println("SNP bound to the session: " + match (snp_verify_device_bound(report_for(challenge_session_value(challenge_value(cc), s.value.th)), cc, test_ark(), col(), test_time(1791000000), s)) { Ok(v) => match (snp_appraise(v, guest_policy())) { Ok(a) => f"appraised, {a.v.anchors.len()} anchors", Err(e) => verify_error_text(e) }, Err(e) => verify_error_text(e) });
     ChallengeRecord cc2 = challenge_issue(64);
@@ -189,57 +190,61 @@ Str with_replayable(Verified(SpdmSession) s) {
 // The guest, its GPU and its image decided at once: both anchors named.
 @decides(accept = [test_ark, test_device_root], appraised = guest_policy, identity = none)
 @requires(filesystem(readonly))
-Result(Int, VerifyError) admit(List(List(UInt(8))) v, List(Int) ke, List(Int) rsp, ChallengeRecord gpu, ChallengeRecord cpu, List(UInt(8)) report) {
-    Verified(SpdmSession) s = spdm_session_verify(v, chal_bytes(chain()), chal_bytes(ke), chal_bytes(rsp), gpu, test_device_root(), test_time(1791000000))?;
+Result(Int, VerifyError) admit(SpdmSessionRecord rec, ChallengeRecord gpu, ChallengeRecord cpu, List(UInt(8)) report) {
+    Verified(SpdmSession) s = spdm_session_verify(rec, gpu, test_device_root(), test_time(1791000000))?;
     Verified(SnpReport) r = snp_verify_device_bound(report, cpu, test_ark(), col(), test_time(1791000000), s)?;
     Appraised(SnpReport) a = snp_appraise(r, guest_policy())?;
     return Ok(a.v.anchors.len());
 }
 
-// The requester's key schedule against fixed inputs (checked against an
-// independent Python model of libspdm's): a sealed request.
+// The requester's key schedule against fixed inputs (SPDM 1.1, checked
+// against an independent Python model of libspdm's): a sealed request.
 Str known_answer() {
-    List(Int) shared = spdmg_shared(req_priv(), spdmg_exchange_data(dev_priv()));
-    SpdmSecrets(Int) s = spdm_handshake(shared, sha384_bytes([1]));
-    SpdmKeys(Int) hk = spdm_handshake_keys(s);
-    SpdmKeys(Int) dk = spdm_data_keys(s, sha384_bytes([2]));
-    return hex_encode(spdm_seal(7, 3, hk.req_key, hk.req_iv, [17, 229, 0, 0])) + " " + hex_encode(spdm_seal(7, 0, dk.rsp_key, dk.rsp_iv, [17, 96])) + " " + hex_encode(spdm_finish(s, sha384_bytes([3])));
+    SpdmSuite su = suite(17);
+    List(Int) shared = spdm_shared(su, req_priv(), spdm_exchange_data(su, dev_priv()));
+    SpdmSecrets(Int) s = spdm_handshake(su, shared, false, sha384_bytes([1]));
+    SpdmKeys(Int) hk = spdm_handshake_keys(su, s);
+    SpdmKeys(Int) dk = spdm_data_keys(su, spdm_data(su, s, sha384_bytes([2])));
+    List(Int) fin = [17, 229, 0, 0].concat(spdm_requester_verify(su, s, sha384_bytes([3])));
+    return hex_encode(spdm_seal(su, 7, 3, hk.req_key, hk.req_iv, [17, 229, 0, 0])) + " " + hex_encode(spdm_seal(su, 7, 0, dk.rsp_key, dk.rsp_iv, [17, 96])) + " " + hex_encode(fin);
 }
 
 @requires(filesystem(readonly), clock(readonly), declassify)
 Int main() {
     println("known answer: " + known_answer());
     ChallengeRecord c1 = challenge_issue(32);
-    List(Int) ke1 = key_exchange(chal_ints(challenge_value(c1)));
-    List(Int) rsp1 = key_exchange_rsp(vca(2), ke1, 0, 5);
-    Str done = match (spdm_session_verify(vca(2), chal_bytes(chain()), chal_bytes(ke1), chal_bytes(rsp1), c1, test_device_root(), test_time(1791000000))) { Ok(s) => with_session(s, ke1), Err(e) => verify_error_text(e) };
-    println(session("again", vca(2), ke1, rsp1, chain(), c1));
+    List(Int) ke1 = key_exchange(19, chal_ints(challenge_value(c1)));
+    List(Int) rsp1 = key_exchange_rsp(19, vca(19, 2), ke1, 0, 5);
+    Str done = match (spdm_session_verify(srec(19, vca(19, 2), chain(), ke1, rsp1), c1, test_device_root(), test_time(1791000000))) { Ok(s) => with_session(s, ke1), Err(e) => verify_error_text(e) };
+    println(session("again", 19, vca(19, 2), ke1, rsp1, chain(), c1));
+    ChallengeRecord c11 = challenge_issue(32);
+    List(Int) ke11 = key_exchange(17, chal_ints(challenge_value(c11)));
+    println(session("SPDM 1.1", 17, vca(17, 2), ke11, key_exchange_rsp(17, vca(17, 2), ke11, 0, 5), chain(), c11));
     ChallengeRecord c2 = challenge_issue(32);
-    List(Int) ke2 = key_exchange(chal_ints(challenge_value(c2)));
-    List(Int) rsp2 = key_exchange_rsp(vca(2), ke2, 0, 5);
-    println(session("tampered", vca(2), ke2, rsp2[0..10].concat([rsp2[10] ^ 1]).concat(rsp2[11..rsp2.len()]), chain(), c2));
-    println(session("other negotiation", vca(1), ke2, rsp2, chain(), c2));
-    println(session("chain under another root", vca(2), ke2, rsp2, chain_with(fill(0, 48)), c2));
-    println(session("mutual authentication asked", vca(2), ke2, key_exchange_rsp(vca(2), ke2, 1, 5), chain(), c2));
-    println(session("AES-128 negotiated", vca(1), ke2, key_exchange_rsp(vca(1), ke2, 0, 5), chain(), c2));
+    List(Int) ke2 = key_exchange(19, chal_ints(challenge_value(c2)));
+    List(Int) rsp2 = key_exchange_rsp(19, vca(19, 2), ke2, 0, 5);
+    println(session("tampered", 19, vca(19, 2), ke2, rsp2[0..10].concat([rsp2[10] ^ 1]).concat(rsp2[11..rsp2.len()]), chain(), c2));
+    println(session("other negotiation", 19, vca(19, 1), ke2, rsp2, chain(), c2));
+    println(session("chain under another root", 19, vca(19, 2), ke2, rsp2, chain_with(fill(0, 48)), c2));
+    println(session("mutual authentication asked", 19, vca(19, 2), ke2, key_exchange_rsp(19, vca(19, 2), ke2, 1, 5), chain(), c2));
     ChallengeRecord c3 = challenge_issue(32);
-    List(Int) ke3 = key_exchange(fill(1, 32));
-    println(session("other challenge", vca(2), ke3, key_exchange_rsp(vca(2), ke3, 0, 5), chain(), c3));
+    List(Int) ke3 = key_exchange(19, fill(1, 32));
+    println(session("other challenge", 19, vca(19, 2), ke3, key_exchange_rsp(19, vca(19, 2), ke3, 0, 5), chain(), c3));
     ChallengeRecord c4 = challenge_issue(32);
-    List(Int) ke4 = key_exchange(chal_ints(challenge_value(c4)));
-    List(Int) rsp4 = key_exchange_rsp(vca(2), ke4, 0, 5);
+    List(Int) ke4 = key_exchange(19, chal_ints(challenge_value(c4)));
+    List(Int) rsp4 = key_exchange_rsp(19, vca(19, 2), ke4, 0, 5);
     ExportKey xk = export_key(random_secret(32));
     List(UInt(8)) tok = match (challenge_export(c4, xk)) { Ok(t) => t, Err(e) => [] };
     println(match (challenge_import_unspent(tok, xk)) {
-        Ok(rr) => match (spdm_session_verify_replayable(vca(2), chal_bytes(chain()), chal_bytes(ke4), chal_bytes(rsp4), rr, test_device_root(), test_time(1791000000))) { Ok(s) => with_replayable(s), Err(e) => verify_error_text(e) },
+        Ok(rr) => match (spdm_session_verify_replayable(srec(19, vca(19, 2), chain(), ke4, rsp4), rr, test_device_root(), test_time(1791000000))) { Ok(s) => with_replayable(s), Err(e) => verify_error_text(e) },
         Err(e) => challenge_error_text(e),
     });
     ChallengeRecord g = challenge_issue(32);
-    List(Int) ke5 = key_exchange(chal_ints(challenge_value(g)));
-    List(Int) rsp5 = key_exchange_rsp(vca(2), ke5, 0, 5);
+    List(Int) ke5 = key_exchange(19, chal_ints(challenge_value(g)));
+    List(Int) rsp5 = key_exchange_rsp(19, vca(19, 2), ke5, 0, 5);
     // The guest computes th from the same transcript.
-    List(Int) th = sha384_bytes(cat(vca(2), 0).concat(sha384_bytes(chain())).concat(ke5).concat(rsp5[0..rsp5.len() - 48]));
+    List(Int) th = sha384_bytes(flat(vca(19, 2), 0, []).concat(sha384_bytes(chain())).concat(ke5).concat(rsp5[0..rsp5.len() - 48]));
     ChallengeRecord cpu = challenge_issue(64);
-    println("decision: " + match (admit(vca(2), ke5, rsp5, g, cpu, report_for(challenge_session_value(challenge_value(cpu), th)))) { Ok(n) => f"admitted, {n} anchors", Err(e) => verify_error_text(e) });
+    println("decision: " + match (admit(srec(19, vca(19, 2), chain(), ke5, rsp5), g, cpu, report_for(challenge_session_value(challenge_value(cpu), th)))) { Ok(n) => f"admitted, {n} anchors", Err(e) => verify_error_text(e) });
     return 0;
 }

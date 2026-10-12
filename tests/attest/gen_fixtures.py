@@ -234,6 +234,46 @@ dleaf = (x509.CertificateBuilder().subject_name(name("Test GPU FMC LF")).issuer_
                                       crl_sign=False, encipher_only=False, decipher_only=False), critical=True)
          .sign(droot_k, hashes.SHA384()))
 
+
+# A test TPM manufacturer's EK PKI (TCG EK Credential Profile): a root and
+# an intermediate CA (P-384), EK certificates for an ECC P-256 EK (whose
+# private key the test uses to play the TPM's ActivateCredential) and an
+# RSA 2048 EK, with an empty subject, a critical subjectAltName naming the
+# TPM, and tcg-kp-EKCertificate; one without that EKU; and CRLs.
+from cryptography.x509.oid import ExtendedKeyUsageOID
+tek_root_k = ec.generate_private_key(ec.SECP384R1())
+tek_int_k = ec.generate_private_key(ec.SECP384R1())
+tek_root = ec_ca(name("Test TPM EK Root CA"), name("Test TPM EK Root CA"), tek_root_k, tek_root_k, 41)
+tek_int = ec_ca(name("Test TPM EK Intermediate CA"), name("Test TPM EK Root CA"), tek_int_k, tek_root_k, 42)
+tek_ecc_k = ec.generate_private_key(ec.SECP256R1())
+tek_rsa_k = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+def tcg_san():
+    attrs = x509.Name([x509.RelativeDistinguishedName([
+        x509.NameAttribute(ObjectIdentifier("2.23.133.2.1"), "id:54455354"),
+        x509.NameAttribute(ObjectIdentifier("2.23.133.2.2"), "ResidTestTPM"),
+        x509.NameAttribute(ObjectIdentifier("2.23.133.2.3"), "id:00010002")])])
+    return x509.SubjectAlternativeName([x509.DirectoryName(attrs)])
+def ek_cert(key, serial, eku=True, ecc=True):
+    b = (x509.CertificateBuilder().subject_name(x509.Name([])).issuer_name(name("Test TPM EK Intermediate CA"))
+         .public_key(key.public_key()).serial_number(serial).not_valid_before(NB).not_valid_after(NA)
+         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+         .add_extension(tcg_san(), critical=True)
+         .add_extension(x509.KeyUsage(digital_signature=False, content_commitment=False, key_encipherment=not ecc,
+                                      data_encipherment=False, key_agreement=ecc, key_cert_sign=False,
+                                      crl_sign=False, encipher_only=False, decipher_only=False), critical=True))
+    if eku:
+        b = b.add_extension(x509.ExtendedKeyUsage([ObjectIdentifier("2.23.133.8.1")]), critical=False)
+    return b.sign(tek_int_k, hashes.SHA256())
+tek_ecc = ek_cert(tek_ecc_k, 43)
+tek_rsa = ek_cert(tek_rsa_k, 44, ecc=False)
+tek_noeku = ek_cert(tek_ecc_k, 45, eku=False)
+def tek_crl(signer_k, issuer, revoked, this, nxt):
+    b = x509.CertificateRevocationListBuilder().issuer_name(issuer).last_update(this).next_update(nxt)
+    for sn in revoked:
+        b = b.add_revoked_certificate(x509.RevokedCertificateBuilder().serial_number(sn).revocation_date(this).build())
+    return b.sign(signer_k, hashes.SHA384()).public_bytes(serialization.Encoding.DER)
+T0, T1, TOLD = datetime.datetime(2026, 1, 1), datetime.datetime(2027, 1, 1), datetime.datetime(2026, 6, 1)
+
 # CoRIM: veraison's test signer (corim/testcases/src/ec-p256.jwk), and a
 # test endorser signing a CoRIM that endorses the test platforms'
 # measurements.
@@ -246,41 +286,79 @@ acme_spki = acme_pub.public_bytes(serialization.Encoding.DER, serialization.Publ
 end_k = ec.generate_private_key(ec.SECP256R1())
 end_spki = end_k.public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
 def corim(triples, not_before, not_after, keys=None):
-    comid = {1: {0: "resid-test-comid"}, 4: ({0: triples} if keys is None else {3: keys})}
-    payload = cbor2.dumps(cbor2.CBORTag(501, {0: "resid-test-corim", 1: [cbor2.CBORTag(506, cbor2.dumps(comid))]}))
+    comid = {1: {0: "resid-test-comid"}, 4: (triples if keys is None else {3: keys})}
+    payload = cbor2.dumps(cbor2.CBORTag(501, {0: "resid-test-corim", 1: [cbor2.CBORTag(506, cbor2.dumps(comid))],
+                                              3: cbor2.CBORTag(32, "tag:resid.dev,2026:test"), 4: {1: cbor2.CBORTag(1, not_after)}}))
     meta = cbor2.dumps({0: {0: "Resid test endorser"}, 1: {0: cbor2.CBORTag(1, not_before), 1: cbor2.CBORTag(1, not_after)}})
     prot = cbor2.dumps({1: -7, 3: "application/rim+cbor", 8: meta})
     r_, s_ = dds2(end_k.sign(cbor2.dumps(["Signature1", prot, b"", payload]), ec.ECDSA(hashes.SHA256())))
     return cbor2.dumps(cbor2.CBORTag(18, [prot, {}, payload, r_.to_bytes(32, "big") + s_.to_bytes(32, "big")]))
-def env(vendor, model):
-    return {0: {1: vendor, 2: model}}
-def meas(key, digest, alg):
-    m = {1: {2: [[alg, digest]]}}
+def env(vendor, model, cid=None, inst=None):
+    c = {1: vendor, 2: model}
+    if cid is not None:
+        c[0] = cbor2.CBORTag(560, cid)
+    e = {0: c}
+    if inst is not None:
+        e[1] = inst
+    return e
+def meas(key, mval):
+    m = {1: mval}
     if key is not None:
         m[0] = key
     return m
-endorsed = [
-    [env("AMD", "SEV-SNP"), [meas(None, hashlib.sha384(b"resid test image").digest(), 8)]],
-    [env("Intel", "TDX"), [meas(None, hashlib.sha384(b"resid test td").digest(), 8)]],
-    [env("Arm", "CCA realm"), [meas(None, bytes([5] * 32), 1)]],
-    [env("Arm", "CCA platform"), [meas("BL", bytes([7] * 32), 1)]],
-    [env("NVIDIA", "Test GPU"), [meas(1, bytes([5] * 48), 8), meas(2, bytes([7] * 48), 8)]],
-]
+def dg(alg, v):
+    return {2: [[alg, v]]}
+img = hashlib.sha384(b"resid test image").digest()
+tdimg = hashlib.sha384(b"resid test td").digest()
+gpu_ueid = bytes([1] + [0x47] * 16)
+def spki_of(der):
+    return x509.load_der_x509_certificate(der).public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+dleaf_der = dleaf.public_bytes(serialization.Encoding.DER)
+# Reference values (0), endorsed values (1), identity keys (2), a
+# conditional endorsement (10) and a series (8): every measurement value
+# kind the appraisal compares, with the digests under the named-information
+# algorithm numbers (1 SHA-256, 7 SHA-384).
+endorsed = {
+    0: [
+        [env("AMD", "SEV-SNP"), [meas("measurement", dg(7, img)), meas("reported_tcb.snp", {1: cbor2.CBORTag(553, 8)}),
+                                 meas("host_data", {4: cbor2.CBORTag(563, [bytes(32), bytes([0xff] + [0] * 31)])}),
+                                 meas("vmpl", {15: cbor2.CBORTag(564, [0, 0])}), meas("policy", {3: {3: False}})]],
+        [env("Intel", "TDX"), [meas("mrtd", dg(7, tdimg))]],
+        [env("Arm", "CCA realm"), [meas("rim", dg(1, bytes([5] * 32)))]],
+        [env("Arm", "CCA platform", cid=bytes([3] * 32)), [meas("BL", {0: {0: "1.0"}, 2: [[1, bytes([7] * 32)]]})]],
+        [env("NVIDIA", "Test GPU"), [meas(1, dg(7, bytes([5] * 48))), meas(2, dg(7, bytes([7] * 48)))]],
+        [env("TCG", "TPM 2.0"), [meas("pcrs", {14: {0: [[1, bytes([1] * 32)]], 2: [[1, bytes([3] * 32)]]}})]],
+    ],
+    1: [[env("AMD", "SEV-SNP"), [meas("platform", {3: {1: True, 3: False}})]]],
+    2: [[env("NVIDIA", "Test GPU", inst=cbor2.CBORTag(550, gpu_ueid)), [cbor2.CBORTag(562, dleaf_der)]],
+        [env("NVIDIA", "Test GPU", inst=cbor2.CBORTag(550, bytes([1] + [0x48] * 16))), [cbor2.CBORTag(557, [1, hashlib.sha256(spki_of(dleaf_der)).digest()])]]],
+    10: [[[[env("AMD", "SEV-SNP"), [meas("measurement", dg(7, img))]]],
+          [[env("AMD", "SEV-SNP"), [meas("certification", {11: "Resid test certification"})]]]]],
+    8: [[[env("Intel", "TDX"), [meas("mrtd", dg(7, tdimg))]],
+         [[[meas("mrseam", dg(7, bytes([0x99] * 48)))], [meas("tdx_module", {0: {0: "9.9"}})]],
+          [[meas("mrseam", dg(7, bytes(48)))], [meas("tdx_module", {0: {0: "1.5"}})]]]]],
+}
 corim_ok = corim(endorsed, 1704067200, 2208988800)
 # Attest-key triples: the test CPAK for the test token's instance (01 04*32),
-# the test TPM AK for instance aa*16, a key under a condition (never
-# taken), and a CCA key endorsed for another instance.
+# the test TPM AK for instance aa*16, a key under a measured-element
+# condition (never taken), a CCA key endorsed for another instance, the AK
+# as a COSE_Key authorized by the endorser itself (taken), and authorized
+# by another key only (not taken).
 def pem(spki):
     return serialization.load_der_public_key(spki).public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo).decode()
 other_k = ec.generate_private_key(ec.SECP384R1())
 other_spki = other_k.public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
 def kenv(vendor, model, inst):
     return {0: {1: vendor, 2: model}, 1: cbor2.CBORTag(550, inst)}
+akn = ak_k.public_key().public_numbers()
+ak_cose = {1: 2, -1: 1, -2: akn.x.to_bytes(32, "big"), -3: akn.y.to_bytes(32, "big")}
 key_triples = [
     [kenv("Arm", "CCA platform", bytes([1] + [9] * 32)), [cbor2.CBORTag(554, pem(other_spki))]],
     [kenv("Arm", "CCA platform", bytes([1] + [4] * 32)), [cbor2.CBORTag(554, pem(cpak_spki))]],
     [kenv("TPM", "Test", bytes([0xaa] * 16)), [cbor2.CBORTag(554, pem(ak_spki))]],
     [kenv("TPM", "Test", bytes([0xbb] * 16)), [cbor2.CBORTag(554, pem(ak_spki))], {0: "only when measured"}],
+    [kenv("TPM", "Test", bytes([0xcc] * 16)), [cbor2.CBORTag(558, ak_cose)], {1: [cbor2.CBORTag(554, pem(end_spki))]}],
+    [kenv("TPM", "Test", bytes([0xdd] * 16)), [cbor2.CBORTag(554, pem(ak_spki))], {1: [cbor2.CBORTag(554, pem(other_spki))]}],
 ]
 corim_keys = corim(None, 1704067200, 2208988800, key_triples)
 corim_expired = corim(endorsed, 1577836800, 1609459200)
@@ -323,6 +401,26 @@ w("cca-rak-pub.bin", rak_pub)
 w("spdm-root.der", droot.public_bytes(serialization.Encoding.DER))
 w("spdm-leaf.der", dleaf.public_bytes(serialization.Encoding.DER))
 w("spdm-leaf-d.bin", dleaf_k.private_numbers().private_value.to_bytes(48, "big"))
+from cryptography.x509 import ocsp as xocsp
+def dev_ocsp(status):
+    b = xocsp.OCSPResponseBuilder().add_response(cert=dleaf, issuer=droot, algorithm=hashes.SHA1(), cert_status=status,
+        this_update=datetime.datetime(2026, 1, 1), next_update=datetime.datetime(2028, 1, 1),
+        revocation_time=datetime.datetime(2026, 1, 1) if status == xocsp.OCSPCertStatus.REVOKED else None,
+        revocation_reason=x509.ReasonFlags.key_compromise if status == xocsp.OCSPCertStatus.REVOKED else None,
+    ).responder_id(xocsp.OCSPResponderEncoding.HASH, droot)
+    return b.sign(droot_k, hashes.SHA384()).public_bytes(serialization.Encoding.DER)
+w("spdm-ocsp-leaf.der", dev_ocsp(xocsp.OCSPCertStatus.GOOD))
+w("spdm-ocsp-leaf-revoked.der", dev_ocsp(xocsp.OCSPCertStatus.REVOKED))
+w("tpm-ek-root.der", tek_root.public_bytes(serialization.Encoding.DER))
+w("tpm-ek-int.der", tek_int.public_bytes(serialization.Encoding.DER))
+w("tpm-ek-ecc.der", tek_ecc.public_bytes(serialization.Encoding.DER))
+w("tpm-ek-rsa.der", tek_rsa.public_bytes(serialization.Encoding.DER))
+w("tpm-ek-noeku.der", tek_noeku.public_bytes(serialization.Encoding.DER))
+w("tpm-ek-ecc-d.bin", tek_ecc_k.private_numbers().private_value.to_bytes(32, "big"))
+w("tpm-ek-root-crl.der", tek_crl(tek_root_k, name("Test TPM EK Root CA"), [], T0, T1))
+w("tpm-ek-int-crl.der", tek_crl(tek_int_k, name("Test TPM EK Intermediate CA"), [], T0, T1))
+w("tpm-ek-int-crl-revoked.der", tek_crl(tek_int_k, name("Test TPM EK Intermediate CA"), [43], T0, T1))
+w("tpm-ek-int-crl-old.der", tek_crl(tek_int_k, name("Test TPM EK Intermediate CA"), [], datetime.datetime(2025, 1, 1), TOLD))
 w("corim-endorsed.cbor", corim_ok)
 w("corim-expired.cbor", corim_expired)
 w("corim-keys.cbor", corim_keys)
@@ -330,6 +428,23 @@ w("cca-other-d.bin", other_k.private_numbers().private_value.to_bytes(48, "big")
 
 def ints(b):
     return "[" + ", ".join(str(x) for x in b) + "]"
+
+# DMTF spdm-emu's sample CAs (tests/attest/gen_spdm_fixtures.py), one
+# anchor each, listing the algorithms the captured transcripts use.
+EMU = {"ecp256": ("EmuP256", "EcdsaP256Sha256, EcdsaP256Sha384, EcdsaP256Sha512"),
+       "ecp384": ("EmuP384", "EcdsaP384Sha256, EcdsaP384Sha384, EcdsaP384Sha512"),
+       "ecp521": ("EmuP521", "EcdsaP521Sha256, EcdsaP521Sha384, EcdsaP521Sha512"),
+       "rsa2048": ("EmuRsa2048", "RsaSsa2048Sha256, RsaSsa2048Sha384, RsaSsa2048Sha512, RsaPss2048Sha256, RsaPss2048Sha384, RsaPss2048Sha512"),
+       "rsa3072": ("EmuRsa3072", "RsaSsa3072Sha256, RsaSsa3072Sha384, RsaSsa3072Sha512, RsaPss3072Sha256, RsaPss3072Sha384, RsaPss3072Sha512"),
+       "ed25519": ("EmuEd25519", "Ed25519")}
+def emu_anchors():
+    out = []
+    for d, (name, algs) in EMU.items():
+        der = open(os.path.join(D, "spdm-emu", d + "-ca.der"), "rb").read()
+        out.append(f'''@anchor(kind = DeviceIdentity({name}), principal = AboveKernel, formats = [SpdmEvidence, SpdmSession, SpdmIdentity], source = "DMTF spdm-emu sample keys ({d}/ca.cert.der)", fingerprint = "sha384:{hashlib.sha384(der).hexdigest()}", retrieved = "2026-10-11", reviewed_by = "tests", algorithms = [{algs}], expires = "2036-06-01")
+pub Anchor test_emu_{d}() {{ return anchor_der({ints(der)}); }}
+''')
+    return "\n".join(out)
 
 ark_der = ark.public_bytes(serialization.Encoding.DER)
 nroot_der = nroot.public_bytes(serialization.Encoding.DER)
@@ -352,6 +467,7 @@ import "endorsed_keys.resid";
 import "corim.resid";
 import "../word.resid";
 import "../instant.resid";
+import "../challenge.resid";
 
 @anchor(kind = AmdVcek(Milan), principal = InGuest, formats = [SnpReport], source = "tests/attest/gen_fixtures.py", fingerprint = "sha384:{hashlib.sha384(ark_der).hexdigest()}", retrieved = "2026-10-11", reviewed_by = "tests", algorithms = [RsaPss4096Sha384, EcdsaP384Sha384], expires = "2039-12-31")
 pub Anchor test_ark() {{ return anchor_der(test_ark_der()); }}
@@ -370,8 +486,15 @@ pub Anchor test_nitro_root() {{ return anchor_der({ints(nroot_der)}); }}
 @anchor(kind = TpmAk(Test), principal = InGuest, formats = [TpmQuoteEvidence, TpmCounter], source = "tests/attest/gen_fixtures.py", fingerprint = "sha256:{hashlib.sha256(ak_spki).hexdigest()}", retrieved = "2026-10-11", reviewed_by = "tests", algorithms = [EcdsaP256Sha256], expires = "2039-12-31")
 pub Anchor test_tpm_ak() {{ return anchor_der({ints(ak_spki)}); }}
 
+@anchor(kind = TpmEk(Test), principal = InGuest, formats = [TpmAk, TpmQuoteEvidence, TpmCounter], source = "tests/attest/gen_fixtures.py", fingerprint = "sha384:{hashlib.sha384(tek_root.public_bytes(serialization.Encoding.DER)).hexdigest()}", retrieved = "2026-10-11", reviewed_by = "tests", algorithms = [EcdsaP384Sha384, EcdsaP384Sha256], expires = "2039-12-31")
+pub Anchor test_tpm_ek() {{ return anchor_der({ints(tek_root.public_bytes(serialization.Encoding.DER))}); }}
+
 @anchor(kind = IntelPck(Test), principal = InGuest, formats = [TdxQuote], source = "tests/attest/gen_fixtures.py", fingerprint = "sha384:{hashlib.sha384(iroot.public_bytes(serialization.Encoding.DER)).hexdigest()}", retrieved = "2026-10-11", reviewed_by = "tests", algorithms = [EcdsaP256Sha256], expires = "2039-12-31")
 pub Anchor test_sgx_root() {{ return anchor_der({ints(iroot.public_bytes(serialization.Encoding.DER))}); }}
+
+// The TPM checks alone, for the parsers' mutation fuzz.
+pub Result(TpmQuoteEvidence, VerifyError) test_tpm_check(List(UInt(8)) attest, List(UInt(8)) sig, List(List(UInt(8))) pcrs, Anchor ak, EvidenceTime t) {{ return match (tpm_check(attest, sig, pcrs, ak, t)) {{ Ok(k) => Ok(k.e), Err(e) => Err(e) }}; }}
+pub Result(TpmAk, VerifyError) test_tpm_ak_check(List(List(UInt(8))) chain, List(List(UInt(8))) crls, List(UInt(8)) ak, Anchor root, EvidenceTime t) {{ return match (tpm_ak_check(chain, crls, ak, challenge_issue(32), root, t)) {{ Ok(k) => Ok(k.ak), Err(e) => Err(e) }}; }}
 
 // A TDX quote's chain and signatures alone, for real quotes.
 pub Result(TdxQuote, VerifyError) test_tdx_check(List(UInt(8)) quote, Anchor root, EvidenceTime t) {{ return tdx_check(quote, root, t); }}
@@ -396,12 +519,20 @@ pub Str tdx_collateral_status(TdxQuote q, TdxCollateral c, Anchor root, Evidence
     return match (tdx_collateral_check(q, c, root, t)) {{ Ok(st) => "TCB " + st[0] + ", QE " + st[1], Err(e) => verify_error_text(e) }};
 }}
 
-@anchor(kind = NvidiaDevice(Test), principal = AboveKernel, formats = [SpdmEvidence, SpdmSession], source = "tests/attest/gen_fixtures.py", fingerprint = "sha384:{hashlib.sha384(droot.public_bytes(serialization.Encoding.DER)).hexdigest()}", retrieved = "2026-10-11", reviewed_by = "tests", algorithms = [EcdsaP384Sha384], expires = "2039-12-31")
+@anchor(kind = DeviceIdentity(Test), principal = AboveKernel, formats = [SpdmEvidence, SpdmSession, SpdmIdentity], source = "tests/attest/gen_fixtures.py", fingerprint = "sha384:{hashlib.sha384(droot.public_bytes(serialization.Encoding.DER)).hexdigest()}", retrieved = "2026-10-11", reviewed_by = "tests", algorithms = [EcdsaP384Sha384], expires = "2039-12-31")
 pub Anchor test_device_root() {{ return anchor_der({ints(droot.public_bytes(serialization.Encoding.DER))}); }}
 
-// An SPDM transcript's chain and signature alone, for real reports.
-pub Result(SpdmEvidence, VerifyError) test_spdm_check(List(UInt(8)) request, List(UInt(8)) response, List(List(UInt(8))) chain, Anchor root, EvidenceTime t) {{
-    return match (spdm_check(request, response, chain, root, t)) {{ Ok(k) => Ok(k.e), Err(e) => Err(e) }};
+{emu_anchors()}
+// SPDM records' chains and signatures alone, for captured and real ones
+// whose nonces carry no challenge of ours.
+pub Result(SpdmEvidence, VerifyError) test_spdm_check(SpdmRecord rec, Anchor root, EvidenceTime t) {{
+    return match (spdm_check(rec, root, t)) {{ Ok(k) => Ok(k.e), Err(e) => Err(e) }};
+}}
+pub Result(SpdmIdentity, VerifyError) test_spdm_challenge_check(SpdmChallengeRecord rec, Anchor root, EvidenceTime t) {{
+    return match (spdm_challenge_check(rec, root, t)) {{ Ok(k) => Ok(k.id), Err(e) => Err(e) }};
+}}
+pub Result(SpdmSession, VerifyError) test_spdm_session_check(SpdmSessionRecord rec, Anchor root, EvidenceTime t) {{
+    return match (spdm_session_check(rec, root, t)) {{ Ok(k) => Ok(k.s), Err(e) => Err(e) }};
 }}
 
 @anchor(kind = Endorser(Acme), formats = [CorimRefs], source = "veraison/corim testcases/src/ec-p256.jwk", fingerprint = "sha256:{hashlib.sha256(acme_spki).hexdigest()}", retrieved = "2026-10-11", reviewed_by = "tests", algorithms = [EcdsaP256Sha256], expires = "2039-12-31")

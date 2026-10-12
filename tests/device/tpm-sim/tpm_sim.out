@@ -28,3 +28,7 @@ lockout counter 0
 NV_Read by owner 16 bytes, same as written true
 raw NV_Read by its own auth, empty password: rc 0x98e
 lockout counter 1
+flushed true true true
+ECC EK type 0x23, AK attributes 0x50472, same keys again true; activated: 32 bytes, the credential true; for another AK: tpm: response code 0x1df; tampered: tpm: response code 0x1df; AK quote: nonce true, pcr digest true, signature verifies true, over other bytes false
+RSA EK type 0x1, AK attributes 0x50472, same keys again true; activated: 32 bytes, the credential true; for another AK: tpm: response code 0x1df; tampered: tpm: response code 0x1df; AK quote: nonce true, pcr digest true, signature verifies true, over other bytes false
+lockout counter 1

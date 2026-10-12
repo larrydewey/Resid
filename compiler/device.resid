@@ -193,7 +193,7 @@ DvRun dv_check_all(Kg g, List(Int) calls, Int i, Map(Str, Int) vs, Bool a64, Str
         dv_diag_at("E0262", "the descriptor of device." + verb + " is not known after reduction: it must be a value the compiler computes, built only from literals (a descriptor from lib/dev/, not one chosen or computed at run time; spec Laws 1 and 5)", g, a, src, smap);
         return dv_check_all(g, calls, i + 1, vs, a64, src, smap, DvRun {.bad = true, .ds = acc.ds.concat([dv_none()])});
     }
-    Str want = dv_role_ty(g, verb);
+    Str want = dv_role_ty(g, if (verb == "transact_chain") { "transact" } else { verb });
     Str got = dv_lit_type(g, a);
     if (want == "" || got != want) {
         dv_diag_at("E0260", "device." + verb + " takes a descriptor of type " + (if (want == "") { "?" } else { want }) + " declared in the standard library's lib/dev/, got a `" + got + "` value; a record of another type with the same fields is not a descriptor", g, a, src, smap);
@@ -315,14 +315,17 @@ DvD dv_parse(Kg g, Int a, Str verb) {
     Int st = dv_struct(g, a);
     if (st < 0) { return dv_err(DvD {.kind = verb, .name = "", .path = "", .ra = [], .rn = [], .size = 0, .fk = [], .fo = [], .fl = [], .fd = [], .fa = [], .fm = [], .fs = [], .fp = [], .write = "", .vo = 0, .vw = 0, .vv = 0, .stab = "", .maxs = [], .provs = [], .steps = [], .links = [], .err = ""}, "the descriptor is not a record literal"); }
     Str name = dv_strv(g, dv_fld(g, st, "name", 0));
-    Str path = dv_strv(g, dv_fld(g, st, "path", 0));
-    Str write = if (verb == "read_attr") { "false" } else { dv_boolv(g, dv_fld(g, st, "write", 0)) };
+    // A PciAttr names a path under each PCI device's directory; the
+    // address is run-time data (a PciAddr of integers the engine formats).
+    Str rel = if (verb == "read_pci_attr") { dv_strv(g, dv_fld(g, st, "rel", 0)) } else { "" };
+    Str path = if (verb == "read_pci_attr") { if (rel == "\x01") { rel } else { "/sys/bus/pci/devices/*/" + rel } } else { dv_strv(g, dv_fld(g, st, "path", 0)) };
+    Str write = if (verb == "read_attr" || verb == "read_pci_attr") { "false" } else { dv_boolv(g, dv_fld(g, st, "write", 0)) };
     Str stab = dv_stab_of(g, st);
     DvD base = DvD {.kind = verb, .name = if (name == "\x01") { "" } else { name }, .path = if (path == "\x01") { "" } else { path }, .ra = [], .rn = [], .size = 0, .fk = [], .fo = [], .fl = [], .fd = [], .fa = [], .fm = [], .fs = [], .fp = [], .write = write, .vo = 0, .vw = 0, .vv = 0, .stab = stab, .maxs = [], .provs = [], .steps = [], .links = [], .err = ""};
     DvD b1 = if (name == "\x01") { dv_err(base, "`name` is not a string literal") } else if (path == "\x01") { dv_err(base, "`path` is not a string literal") } else if (write == "") { dv_err(base, "`write` is not a Bool literal") } else if (stab == "") { dv_err(base, "`stability` is not Uapi, AbiTesting or OutOfTree") } else { base };
     if (verb == "ioctl") { return dv_parse_ioctl(g, st, b1); }
     if (verb == "sequence") { return dv_parse_seq(g, st, b1); }
-    List(Int) mx = if (verb == "transact") { [dv_ifld(g, st, "max_command"), dv_ifld(g, st, "max_response")] } else if (verb == "read_attr") { [dv_ifld(g, st, "max")] } else { [dv_ifld(g, st, "max_inblob"), dv_ifld(g, st, "max_outblob"), dv_ifld(g, st, "max_auxblob"), dv_ifld(g, st, "max_manifestblob")] };
+    List(Int) mx = if (verb == "transact" || verb == "transact_chain") { [dv_ifld(g, st, "max_command"), dv_ifld(g, st, "max_response")] } else if (verb == "read_attr" || verb == "read_pci_attr") { [dv_ifld(g, st, "max")] } else { [dv_ifld(g, st, "max_inblob"), dv_ifld(g, st, "max_outblob"), dv_ifld(g, st, "max_auxblob"), dv_ifld(g, st, "max_manifestblob")] };
     List(Str) provs = if (verb == "configfs_report") { dv_strs(g, dv_items(g, dv_fld(g, st, "providers", 0)), 0, ListBuf()) } else { [] };
     return DvD {.kind = b1.kind, .name = b1.name, .path = b1.path, .ra = [], .rn = [], .size = 0, .fk = [], .fo = [], .fl = [], .fd = [], .fa = [], .fm = [], .fs = [], .fp = [], .write = b1.write, .vo = 0, .vw = 0, .vv = 0, .stab = b1.stab, .maxs = mx, .provs = provs, .steps = [], .links = [], .err = b1.err};
 }
@@ -454,6 +457,10 @@ Str dv_check(DvD d, Bool a64) {
     if (ne != "") { return "E0263: " + ne; }
     Str pe = dv_path_err(d.path);
     if (pe != "") { return "E0263: " + pe; }
+    if (d.kind == "read_pci_attr") {
+        Str re = dv_rel_err(str_slice(d.path, 23, str_len(d.path)));
+        if (re != "") { return "E0263: " + re; }
+    }
     if (d.kind == "ioctl") { return dv_check_ioctl(d, a64); }
     if (d.kind == "sequence") { return dv_check_seq(d, a64); }
     if (d.kind == "configfs_report") {
@@ -462,7 +469,7 @@ Str dv_check(DvD d, Bool a64) {
         if (d.provs.contains("\x01") || d.provs.contains("")) { return "E0263: every provider is a non-empty string literal"; }
     }
     // A Transact writes its command to the device, whatever it reads back.
-    if (d.kind == "transact" && d.write != "true") { return "E0263: a Transact writes its command to the device, so it is a write: `write = true` (device(readonly) never covers one)"; }
+    if ((d.kind == "transact" || d.kind == "transact_chain") && d.write != "true") { return "E0263: a Transact writes its command to the device, so it is a write: `write = true` (device(readonly) never covers one)"; }
     return dv_maxs_err(d.maxs, 0, d.kind);
 }
 
@@ -491,6 +498,23 @@ Str dv_path_err(Str p) {
     if (str_contains(p, "..")) { return "the path `" + p + "` contains `..`"; }
     if (str_contains(p, "//") || str_ends_with(p, "/")) { return "the path `" + p + "` is not a plain file path"; }
     return "";
+}
+
+// A PciAttr's path under the device's directory: one or two components
+// of [a-z0-9_:], so no address text and no traversal comes from it.
+Str dv_rel_err(Str r) {
+    List(Str) cs = str_split(r, "/");
+    if (r == "" || cs.len() > 2) { return "a PciAttr's `rel` is one or two path components, got `" + r + "`"; }
+    if (!dv_rel_ok(cs, 0)) { return "a PciAttr's `rel` is made of [a-z0-9_:] components, got `" + r + "`"; }
+    return "";
+}
+
+Bool dv_rel_ok(List(Str) cs, Int i) { return i >= cs.len() || (cs[i] != "" && dv_rel_chars(cs[i], 0) && dv_rel_ok(cs, i + 1)); }
+Bool dv_rel_chars(Str s, Int i) {
+    if (i >= str_len(s)) { return true; }
+    Int c = str_char_at(s, i);
+    Bool ok = (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c == 95 || c == 58;
+    return ok && dv_rel_chars(s, i + 1);
 }
 
 Str dv_target(Bool a64) { return if (a64) { "aarch64" } else { "x86-64" }; }

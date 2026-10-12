@@ -1,0 +1,4 @@
+// Fixture for e0263_pci_rel: a PciAttr whose path leaves the device's directory (installed as lib/dev/fx_e0263_pci_rel.resid).
+import "device.resid";
+
+pub PciAttr fx_up() { return PciAttr {.name = "fx.up", .rel = "../vendor", .max = 16, .stability = Uapi}; }

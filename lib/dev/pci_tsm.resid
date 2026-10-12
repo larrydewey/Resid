@@ -21,11 +21,18 @@
 // measurements, its certificate chain, the TDI report) is not yet a
 // kernel ABI, so there is no descriptor for it.
 //
-// Only the first line is reachable today. The per-device attributes live
-// under a PCI address (<BDF>) that is run-time data, and a descriptor's
-// path must be known at compile time (E0262): the engine has no way to put
-// a run-time component into a path. PLAN-device-access.md (phase 5,
-// pci_tsm) proposes the narrowest engine change that would allow it.
+// The per-device attributes live under a PCI address that is run-time
+// data: they are PciAttr descriptors (lib/dev/device.resid), whose path
+// under the device's directory is fixed at compile time (E0263) and whose
+// address is a PciAddr of integers the engine checks and formats
+// (device.read_pci_attr). Beside the TSM entries, the device's identity
+// (vendor, device, class: stable ABI) and its DOE features
+// (doe_features/0001:01 when it speaks CMA/SPDM over DOE, 0001:02 when it
+// speaks secured SPDM) say which device a requester is talking to and
+// whether the kernel sees SPDM on it. The kernel runs the device's SPDM
+// itself (or the platform TSM does): there is no user interface to its
+// transcript, so a requester elsewhere (lib/spdm_requester.resid) supplies
+// the evidence.
 //
 // Nothing here is signed: these are the kernel's statements about the
 // connection, to be confirmed by the device's own signed evidence once
@@ -83,4 +90,90 @@ Bool pt_digits(List(UInt(8)) b, Int i, Int end) {
 Str pt_text(List(UInt(8)) b, Int i, Int end, Str acc) {
     if (i >= end) { return acc; }
     return pt_text(b, i + 1, end, acc + str_from_code((Int)b[i]));
+}
+
+// ─── Per-device attributes ──────────────────────────────────────────
+
+
+pub PciAttr pci_vendor_op() { return PciAttr {.name = "pci_tsm.vendor", .rel = "vendor", .max = 16, .stability = Uapi}; }
+pub PciAttr pci_device_op() { return PciAttr {.name = "pci_tsm.device", .rel = "device", .max = 16, .stability = Uapi}; }
+pub PciAttr pci_class_op() { return PciAttr {.name = "pci_tsm.class", .rel = "class", .max = 16, .stability = Uapi}; }
+pub PciAttr pci_authenticated_op() { return PciAttr {.name = "pci_tsm.authenticated", .rel = "authenticated", .max = 16, .stability = AbiTesting}; }
+pub PciAttr pci_tsm_connect_op() { return PciAttr {.name = "pci_tsm.connect", .rel = "tsm/connect", .max = 32, .stability = AbiTesting}; }
+pub PciAttr pci_tsm_bound_op() { return PciAttr {.name = "pci_tsm.bound", .rel = "tsm/bound", .max = 32, .stability = AbiTesting}; }
+pub PciAttr pci_tsm_dsm_op() { return PciAttr {.name = "pci_tsm.dsm", .rel = "tsm/dsm", .max = 32, .stability = AbiTesting}; }
+pub PciAttr pci_doe_spdm_op() { return PciAttr {.name = "pci_tsm.doe_spdm", .rel = "doe_features/0001:01", .max = 64, .stability = AbiTesting}; }
+pub PciAttr pci_doe_secured_spdm_op() { return PciAttr {.name = "pci_tsm.doe_secured_spdm", .rel = "doe_features/0001:02", .max = 64, .stability = AbiTesting}; }
+
+// One attribute's bytes (each wrapper calls the verb with its own
+// descriptor: a descriptor through a parameter is not known, E0262).
+Result(List(UInt(8)), DeviceError) pt_bytes(Str name, Result(List(DevOut), DeviceError) r) {
+    List(DevOut) outs = r?;
+    return match (outs[0]) { OutBytes(b) => Ok(b), OutNum(v) => Err(BadReply(name, "not bytes")), OutSecret(b) => Err(BadReply(name, "a secret")), };
+}
+
+// A "0x%04x\n" attribute (vendor, device) or "0x%06x\n" (class) as a number.
+Result(Int, DeviceError) pt_hex(Str name, Result(List(DevOut), DeviceError) r) {
+    List(UInt(8)) b = pt_bytes(name, r)?;
+    Int n = b.len();
+    if (n < 4 || b[0] != 48 || b[1] != 120 || b[n - 1] != 10) { return Err(BadReply(name, "not 0x-hex and a newline")); }
+    Int v = dv_hex(pt_text(b, 2, n - 1, ""), 0, 0);
+    if (v < 0) { return Err(BadReply(name, "not 0x-hex and a newline")); }
+    return Ok(v);
+}
+
+// The function's PCI vendor ID (0x10de NVIDIA), device ID and class code.
+@requires(device(readonly))
+pub Result(Int, DeviceError) pci_vendor(PciAddr a) { return pt_hex("pci_tsm.vendor", device.read_pci_attr(pci_vendor_op(), a)); }
+@requires(device(readonly))
+pub Result(Int, DeviceError) pci_device_id(PciAddr a) { return pt_hex("pci_tsm.device", device.read_pci_attr(pci_device_op(), a)); }
+@requires(device(readonly))
+pub Result(Int, DeviceError) pci_class(PciAddr a) { return pt_hex("pci_tsm.class", device.read_pci_attr(pci_class_op(), a)); }
+
+// Whether the kernel (or the platform TSM) authenticated the device:
+// Ok(None) when the attribute is absent (the device or the TSM cannot
+// authenticate it), else its "0\n" or "1\n".
+@requires(device(readonly))
+pub Result(Option(Bool), DeviceError) pci_authenticated(PciAddr a) {
+    return match (device.read_pci_attr(pci_authenticated_op(), a)) {
+        Ok(outs) => match (outs[0]) { OutBytes(b) => pt_bool(b), OutNum(v) => Err(BadReply("pci_tsm.authenticated", "not bytes")), OutSecret(b) => Err(BadReply("pci_tsm.authenticated", "a secret")), },
+        Err(e) => pt_none(e),
+    };
+}
+
+Result(Option(Bool), DeviceError) pt_bool(List(UInt(8)) b) {
+    if (b.len() != 2 || b[1] != 10 || (b[0] != 48 && b[0] != 49)) { return Err(BadReply("pci_tsm.authenticated", "not 0 or 1 and a newline")); }
+    return Ok(Some(b[0] == 49));
+}
+
+Result(Option(T), DeviceError) pt_none(DeviceError e) {
+    Result(Bool, DeviceError) r = pci_tsm_absent(e);
+    return match (r) { Ok(b) => Ok(None), Err(x) => Err(x), };
+}
+
+// The TSM a device is connected to (tsm/connect) or bound through
+// (tsm/bound): Ok(None) for no tsm/ directory or no TSM.
+@requires(device(readonly))
+pub Result(Option(Str), DeviceError) pci_tsm_connected(PciAddr a) { return pt_tsm("pci_tsm.connect", device.read_pci_attr(pci_tsm_connect_op(), a)); }
+@requires(device(readonly))
+pub Result(Option(Str), DeviceError) pci_tsm_bound(PciAddr a) { return pt_tsm("pci_tsm.bound", device.read_pci_attr(pci_tsm_bound_op(), a)); }
+
+Result(Option(Str), DeviceError) pt_tsm(Str name, Result(List(DevOut), DeviceError) r) {
+    return match (r) {
+        Ok(outs) => match (outs[0]) {
+            OutBytes(b) => match (pci_tsm_name(b)) { Ok(n) => Ok(n), Err(w) => Err(BadReply(name, w)), },
+            OutNum(v) => Err(BadReply(name, "not bytes")),
+            OutSecret(b) => Err(BadReply(name, "a secret")),
+        },
+        Err(e) => pt_none(e),
+    };
+}
+
+// Whether the device offers CMA/SPDM (secured: also secured SPDM) over a
+// DOE mailbox, as the kernel's DOE discovery found: the feature's file is
+// there.
+@requires(device(readonly))
+pub Result(Bool, DeviceError) pci_doe_spdm(PciAddr a, Bool secured) {
+    Result(List(DevOut), DeviceError) r = if (secured) { device.read_pci_attr(pci_doe_secured_spdm_op(), a) } else { device.read_pci_attr(pci_doe_spdm_op(), a) };
+    return match (r) { Ok(outs) => Ok(true), Err(e) => pci_tsm_absent(e), };
 }

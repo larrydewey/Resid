@@ -1,0 +1,12 @@
+// Fixture for device_transact_chain: /dev/zero answers every command with zeros, /dev/null with nothing (installed as lib/dev/fx_device_transact_chain.resid).
+import "device.resid";
+import "device_write.resid";
+
+pub Transact fx_zero() {
+    return Transact {.name = "fx.zero", .path = "/dev/zero", .max_command = 16, .max_response = 16, .secret = false, .write = true, .stability = Uapi};
+}
+
+pub Transact fx_null() {
+    return Transact {.name = "fx.null", .path = "/dev/null", .max_command = 16, .max_response = 16, .secret = false, .write = true, .stability = Uapi};
+}
+

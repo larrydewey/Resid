@@ -1,0 +1,8 @@
+vendor read (true)
+class read (true)
+no authenticated attribute
+no TSM connection
+secured SPDM over DOE: false
+pci_tsm.vendor: device absent
+pci_tsm.vendor: bad input: the PCI address is out of range
+0000:3b:00.1 0000:00:1f.3 not an address not an address

@@ -14,8 +14,11 @@
 //
 //     device.ioctl(IoctlOp, List(DevIn))               -> Result(List(DevOut), DeviceError)
 //     device.transact(Transact, List(UInt(8)))         -> Result(List(DevOut), DeviceError)
+//     device.transact_chain(Transact, List(List(UInt(8))), List(Int))
+//                                                      -> Result(List(DevOut), DeviceError)
 //     device.configfs_report(ConfigfsReport, ReportReq)-> Result(List(DevOut), DeviceError)
 //     device.read_attr(ReadAttr)                       -> Result(List(DevOut), DeviceError)
+//     device.read_pci_attr(PciAttr, PciAddr)           -> Result(List(DevOut), DeviceError)
 //     device.sequence(Sequence, List(DevIn))           -> Result(List(DevOut), DeviceError)
 //
 // Each verb is a provider call of the `device` family: @requires(device) or,
@@ -120,6 +123,50 @@ type Transact = { Str name; Str path; Int max_command; Int max_response; Bool se
 // A read-only attribute file (sysfs), at most `max` bytes.
 @descriptor(read_attr)
 type ReadAttr = { Str name; Str path; Int max; Stability stability; };
+
+// A read-only attribute of a PCI device: `rel` under the device's sysfs
+// directory, one or two components of [a-z0-9_:] (E0263), at most `max`
+// bytes. Which device is run-time data, a PciAddr the engine checks and
+// formats; no path text comes from the program.
+@descriptor(read_pci_attr)
+type PciAttr = { Str name; Str rel; Int max; Stability stability; };
+
+// A PCI function's address: domain (0 to 0xffffffff), bus (0-255),
+// device (0-31), function (0-7).
+@descriptor(pci_addr)
+pub type PciAddr = { Int domain; Int bus; Int device; Int function; };
+
+pub Bool pci_addr_ok(PciAddr a) { return a.domain >= 0 && a.domain <= 4294967295 && a.bus >= 0 && a.bus <= 255 && a.device >= 0 && a.device <= 31 && a.function >= 0 && a.function <= 7; }
+
+// "dddd:bb:dd.f", the kernel's name for the function (lower-case hex).
+pub Str pci_addr_text(PciAddr a) { return f"{a.domain:hex, zero, width 4}:{a.bus:hex, zero, width 2}:{a.device:hex, zero, width 2}.{a.function:hex}"; }
+
+// "dddd:bb:dd.f" (or "bb:dd.f", domain 0) read back; None for anything
+// else.
+pub Option(PciAddr) pci_addr_parse(Str s) {
+    List(Str) p = str_split(s, ":");
+    if (p.len() < 2 || p.len() > 3) { return None; }
+    Str dom = if (p.len() == 3) { p[0] } else { "0" };
+    List(Str) df = str_split(p[p.len() - 1], ".");
+    if (df.len() != 2) { return None; }
+    Int d0 = dv_hex(dom, 0, 0);
+    Int b0 = dv_hex(p[p.len() - 2], 0, 0);
+    Int de = dv_hex(df[0], 0, 0);
+    Int fn = dv_hex(df[1], 0, 0);
+    PciAddr a = PciAddr {.domain = d0, .bus = b0, .device = de, .function = fn};
+    Bool sizes = str_len(dom) <= 8 && str_len(p[p.len() - 2]) <= 2 && str_len(df[0]) <= 2 && str_len(df[1]) == 1;
+    return if (sizes && d0 >= 0 && b0 >= 0 && de >= 0 && fn >= 0 && pci_addr_ok(a)) { Some(a) } else { None };
+}
+
+// Hex digits as a number; -1 for an empty string or another character.
+pub Int dv_hex(Str s, Int i, Int acc) {
+    if (str_len(s) == 0) { return 0 - 1; }
+    if (i >= str_len(s)) { return acc; }
+    Int c = str_char_at(s, i);
+    Int v = if (c >= 48 && c <= 57) { c - 48 } else if (c >= 97 && c <= 102) { c - 87 } else if (c >= 65 && c <= 70) { c - 55 } else { 0 - 1 };
+    if (v < 0) { return 0 - 1; }
+    return dv_hex(s, i + 1, acc * 16 + v);
+}
 
 // The configfs report interface (/sys/kernel/config/tsm/report): a fresh
 // entry, `inblob` (and `privlevel`, `service_provider`, `service_guid`,
@@ -240,6 +287,48 @@ pub DvReq dv_prep_transact(Transact op, List(UInt(8)) cmd) {
     ListBuf(Int) b = dv_u(dv_u(dv_head(ListBuf(), 2, op.write, op.name, op.path), op.max_command, 4), op.max_response, 4);
     return DvReq {.err = "", .req = dv_bytes(dv_u(b, dv_bool(op.secret), 1), cmd).finish(), .outs = [DvSlot {.num = false, .max = op.max_response, .secret = op.secret}]};
 }
+
+// Commands written and their responses read on one open file (the TPM
+// resource manager flushes a file's sessions and transient objects when it
+// closes), each command up to max_command bytes; `links` are quadruples
+// (from step, offset in its response, to step, offset in its command):
+// 4 bytes copied from an earlier response into a later command before it
+// is sent (a handle the TPM gave). At most 16 commands and 32 links. One
+// output per command: its response.
+pub DvReq dv_prep_transact_chain(Transact op, List(List(UInt(8))) cmds, List(Int) links) {
+    if (cmds.len() < 1 || cmds.len() > 16) { return dv_bad(f"{cmds.len()} commands, 1 to 16"); }
+    if (op.secret) { return dv_bad("a chain's responses are public: no secret Transact"); }
+    if (links.len() % 4 != 0) { return dv_bad(f"links of {links.len()} numbers, not quadruples"); }
+    if (links.len() > 128) { return dv_bad("links are at most 32 quadruples"); }
+    Str bad = dv_chain_err(op, cmds, links, 0);
+    if (bad != "") { return dv_bad(bad); }
+    ListBuf(Int) b = dv_u(dv_u(dv_head(ListBuf(), 6, op.write, op.name, op.path), op.max_command, 4), op.max_response, 4);
+    ListBuf(Int) b2 = dv_chain_cmds(dv_u(b, cmds.len(), 1), cmds, 0);
+    ListBuf(Int) b3 = dv_chain_links(dv_u(b2, links.len() / 4, 1), links, 0);
+    return DvReq {.err = "", .req = b3.finish(), .outs = dv_chain_outs(op.max_response, cmds.len(), [])};
+}
+
+Str dv_chain_err(Transact op, List(List(UInt(8))) cmds, List(Int) links, Int i) {
+    if (i < cmds.len()) { return if (cmds[i].len() > op.max_command || cmds[i].len() == 0) { f"command {i} of {cmds[i].len()} bytes, 1 to {op.max_command}" } else { dv_chain_err(op, cmds, links, i + 1) }; }
+    Int k = i - cmds.len();
+    if (k * 4 >= links.len()) { return ""; }
+    Int fr = links[k * 4];
+    Int fo = links[k * 4 + 1];
+    Int to = links[k * 4 + 2];
+    Int too = links[k * 4 + 3];
+    if (fr < 0 || fr >= to || to >= cmds.len()) { return f"link {k} is not from an earlier command to a later one"; }
+    if (fo < 0 || fo + 4 > op.max_response || too < 0 || too + 4 > cmds[to].len()) { return f"link {k} is outside its response or command"; }
+    return dv_chain_err(op, cmds, links, i + 1);
+}
+
+ListBuf(Int) dv_chain_cmds(ListBuf(Int) b, List(List(UInt(8))) cmds, Int i) { return if (i >= cmds.len()) { b } else { dv_chain_cmds(dv_bytes(b, cmds[i]), cmds, i + 1) }; }
+
+ListBuf(Int) dv_chain_links(ListBuf(Int) b, List(Int) l, Int i) {
+    if (i >= l.len()) { return b; }
+    return dv_chain_links(dv_u(dv_u(dv_u(dv_u(b, l[i], 1), l[i + 1], 4), l[i + 2], 1), l[i + 3], 4), l, i + 4);
+}
+
+List(DvSlot) dv_chain_outs(Int mr, Int n, List(DvSlot) acc) { return if (n <= 0) { acc } else { dv_chain_outs(mr, n - 1, acc.concat([DvSlot {.num = false, .max = mr, .secret = false}])) }; }
 
 pub DvReq dv_prep_configfs_report(ConfigfsReport op, ReportReq rq) {
     if (rq.inblob.len() > op.max_inblob) { return dv_bad(f"inblob of {rq.inblob.len()} bytes, at most {op.max_inblob}"); }
@@ -442,6 +531,17 @@ pub Result(List(DevOut), DeviceError) device_engine_read_attr(ReadAttr op) {
     return dv_tr_out(op.name, 0 - 1, dv_reply(op.name, [DvSlot {.num = false, .max = op.max, .secret = false}], resid_device_call(req)));
 }
 
+// The attribute `rel` of the PCI function at `a`.
+@descriptor(engine_read_pci_attr)
+@requires(device(readonly))
+pub Result(List(DevOut), DeviceError) device_engine_read_pci_attr(PciAttr op, PciAddr a) {
+    if (!pci_addr_ok(a)) { return Err(BadInput(op.name, "the PCI address is out of range")); }
+    Str path = "/sys/bus/pci/devices/" + pci_addr_text(a) + "/" + op.rel;
+    List(Int) req = dv_u(dv_head(ListBuf(), 3, false, op.name, path), op.max, 4).finish();
+    Int _tr = dv_tr_req(op.name, 0 - 1, req);
+    return dv_tr_out(op.name, 0 - 1, dv_reply(op.name, [DvSlot {.num = false, .max = op.max, .secret = false}], resid_device_call(req)));
+}
+
 @descriptor(engine_configfs_report)
 @requires(device(readonly))
 pub Result(List(DevOut), DeviceError) device_engine_configfs_report(ConfigfsReport op, ReportReq rq) {
@@ -553,7 +653,7 @@ Bool dv_fits(Int v, Int width) {
 // -- Serialization ----------------------------------------------------------
 // Little endian throughout. The request is
 //   "RDV" 1, kind (1 ioctl, 2 transact, 3 read_attr, 4 configfs_report,
-//   5 sequence), write, name, path (u16 length, bytes), then the kind's own
+//   5 sequence, 6 transact chain), write, name, path (u16 length, bytes), then the kind's own
 //   part and the inputs (u8 count; tag 0 + 8-byte integer, or tag 1 + u32
 //   length + bytes). An ioctl's part: u8 request count, each u8 arch + u32
 //   number; u32 size; u8 field count, each field a tag and its words --

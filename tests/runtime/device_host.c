@@ -117,6 +117,15 @@ static void req_zero(Req* r, int secret) {
     u(r, 3, 4); u(r, 1, 1); u(r, 2, 1); u(r, 3, 1);
 }
 
+/* A chain of two 8-byte commands on /dev/zero, the second patched at
+ * offset `to` from the first response's offset `fo`. */
+static void req_zchain(Req* r, int write, int fr, int fo, int to, int clen) {
+    head(r, 6, write, "fx.zero", "/dev/zero");
+    u(r, 16, 4); u(r, 16, 4); u(r, 2, 1);
+    for (int i = 0; i < 2; i++) { u(r, clen, 4); for (int j = 0; j < clen; j++) u(r, j + 1, 1); }
+    u(r, 1, 1); u(r, fr, 1); u(r, fo, 4); u(r, 1, 1); u(r, to, 4);
+}
+
 static void req_attr(Req* r) {
     head(r, 3, 0, "fx.cpu_online", "/sys/devices/system/cpu/online");
     u(r, 256, 4);
@@ -663,6 +672,27 @@ int main(int argc, char** argv, char** envp) {
     q.b[5] = 0;
     r = reply(resid_device_call_w(list_of(&q)));
     check("device_transact_read_refused", code(&r) == 10 && value(&r) == 19);
+    /* Transact chains: one on /dev/zero; refused as a read, with a link
+     * not forward, outside its response or its command, and with an
+     * empty command. */
+    req_zchain(&q, 1, 0, 0, 4, 8);
+    r = reply(resid_device_call_w(list_of(&q)));
+    check("device_chain_zero", code(&r) == 0);
+    req_zchain(&q, 0, 0, 0, 4, 8);
+    r = reply(resid_device_call_w(list_of(&q)));
+    check("device_chain_read_refused", code(&r) == 10 && value(&r) == 19);
+    req_zchain(&q, 1, 1, 0, 4, 8);
+    r = reply(resid_device_call_w(list_of(&q)));
+    check("device_chain_backward_link_refused", code(&r) == 10 && value(&r) == 40);
+    req_zchain(&q, 1, 0, 13, 4, 8);
+    r = reply(resid_device_call_w(list_of(&q)));
+    check("device_chain_link_past_response_refused", code(&r) == 10 && value(&r) == 40);
+    req_zchain(&q, 1, 0, 0, 5, 8);
+    r = reply(resid_device_call_w(list_of(&q)));
+    check("device_chain_link_past_command_refused", code(&r) == 10 && value(&r) == 40);
+    req_zchain(&q, 1, 0, 0, 0, 0);
+    r = reply(resid_device_call_w(list_of(&q)));
+    check("device_chain_empty_command_refused", code(&r) == 10 && value(&r) == 14);
     /* A length field too narrow for its buffer's maximum (one byte for
      * 256), and one length field for two buffers. */
     req_lenfield(&q, 4, 0);

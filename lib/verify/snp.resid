@@ -331,7 +331,7 @@ pub Result(Appraised(SnpReport), VerifyError) snp_appraise(Verified(SnpReport) v
 
 // The product line where the TCB layout differs (Turin, family 1Ah, from
 // report version 3); "" for Milan and Genoa, which share theirs.
-Str snp_product_of(Verified(SnpReport) v) {
+pub Str snp_product_of(Verified(SnpReport) v) {
     return if (v.value.version >= (UInt(32)) 3 && (Int) v.value.cpuid_fam_id == 26) { "Turin" } else { "" };
 }
 

@@ -53,3 +53,24 @@ lib/verify/seal.resid seal_to_evidence needs Appraised evidence (tests/attest ke
 lib/verify/seal.resid seal_publish publishes HPKE ciphertext (declassify per byte, no branch)
 lib/verify/seal.resid open_released needs a release (tests/attest key_broker); its secret work is hpkeg_setup_receiver_full and hpkeg_open (hpke-open-secret), whose verdict is public
 lib/verify/spdm.resid spdm_verify_channel_bound needs a live connection's ChannelExporter; as snp_verify_channel_bound
+lib/dev/device.resid device_engine_read_pci_attr device I/O: the engine runs the device host; its secret outputs reach the program only through dv_answer
+lib/dev/device_write.resid device_engine_transact_chain_w device I/O: the writing engine; its secret outputs reach the program only through dv_answer
+lib/spdm_requester.resid spdm_connect transport I/O through the SpdmIo closure (GET_VERSION to ALGORITHMS); the requester's secret work is spdm_session's (spdm-session-secret) and the signing curves' (cases)
+lib/spdm_requester.resid spdm_get_digests transport I/O through the SpdmIo closure; nothing secret is computed, the connection's config (its key) is carried
+lib/spdm_requester.resid spdm_get_certificate transport I/O through the SpdmIo closure; nothing secret is computed, the connection's config (its key) is carried
+lib/spdm_requester.resid spdm_challenge transport I/O through the SpdmIo closure; its encapsulated answers sign with ecdsag/ed25519g (cases)
+lib/spdm_requester.resid spdm_get_measurements transport I/O through the SpdmIo closure; nothing secret is computed, the connection's config (its key) is carried
+lib/spdm_requester.resid spdm_start_session transport I/O through the SpdmIo closure; its key schedule and FINISH are spdm_session's (spdm-session-secret)
+lib/spdm_requester.resid spdm_start_psk_session transport I/O through the SpdmIo closure; its PSK key schedule is spdm_session's (spdm-session-secret)
+lib/spdm_requester.resid spdm_session_request transport I/O through the SpdmIo closure; seal and open are spdm_session's (spdm-session-secret)
+lib/spdm_requester.resid spdm_heartbeat transport I/O through the SpdmIo closure; as spdm_session_request
+lib/spdm_requester.resid spdm_key_update transport I/O through the SpdmIo closure; the key update is spdmg_update (spdm-session-secret)
+lib/spdm_requester.resid spdm_end_session transport I/O through the SpdmIo closure; as spdm_session_request
+lib/spdm_requester.resid spdm_session_measurements transport I/O through the SpdmIo closure; as spdm_session_request
+lib/spdm_requester.resid spdm_session_th a hash of public transcript bytes; the connection (its key) is only carried
+lib/spdm_requester.resid spdm_default_config a constructor: no key yet
+lib/spdm_requester.resid spdm_config_with_identity a constructor: it stores the requester's key and computes nothing
+lib/spdm_requester.resid spdm_config_with_psk a constructor: it stores the PSK and computes nothing
+lib/spdm_requester.resid spdm_config_transfer a constructor over a config holding a key; computes nothing secret
+lib/spdm_requester.resid spdm_config_versions a constructor over a config holding a key; computes nothing secret
+lib/spdm_requester.resid spdm_config_multi_key a constructor over a config holding a key; computes nothing secret

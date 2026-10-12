@@ -73,12 +73,16 @@ Int main() {
   `declassify(x, "reason")`; the cryptography and TLS run on secret bytes
   and are checked constant-time under valgrind.
 - **Devices without ioctls.** The `device` capability reaches kernel
-  devices (SEV-SNP, TDX, Nitro, TPM, the configfs TSM report) only through
+  devices (SEV-SNP, TDX, Nitro, TPM, the configfs TSM report, PCI devices'
+  attributes) only through
   descriptors the standard library declares and the compiler checks; each
   call runs in a confined host process.
 - **Attestation the compiler checks.** `lib/verify/` verifies SEV-SNP,
-  TDX, Nitro, Arm CCA, TPM and NVIDIA GPU (SPDM) evidence and signed
-  CoRIMs. A `@decides` function releases a secret only when the compiler
+  TDX, Nitro, Arm CCA, TPM (with attestation keys proven against the
+  manufacturer's EK) and SPDM 1.0-1.3 device evidence (with OCSP), and
+  applies signed CoRIMs' reference values and endorsements; a whole SPDM
+  requester speaks to devices over MCTP, PCI DOE and TCP. A `@decides`
+  function releases a secret only when the compiler
   can see the evidence rests on the anchors it accepts, was appraised
   under its policy, is fresh, and is bound to the key the secret is
   sealed to.

@@ -1,0 +1,46 @@
+tpm_ek_amd_pluton_global_factory_ica: certifies AMD Pluton Per-Product Factory FIPS-EKICA DFID00B20F00.crt
+tpm_ek_amd_root_ca: no current intermediate in the cab
+tpm_ek_amd_microsoft_pluton_root_ca_2021: certifies Microsoft Pluton Policy CA A.cer
+tpm_ek_atmel_root_signing_module: certifies Atmel Signing Module 01.der
+tpm_ek_infineon_ifx_tpm_ek_root_ca: does NOT certify IFX_TPM_EK_Intermediate_CA_02.crt
+tpm_ek_infineon_ifx_rootca: no current intermediate in the cab
+tpm_ek_infineon_optiga_tm_ecc_root_ca: certifies Infineon-OPTIGA-ECC-Manufacturing-CA_036-Issued_by_RootCA.crt-C-v01_00-EN.crt
+tpm_ek_infineon_optiga_tm_rsa_root_ca: certifies Infineon OPTIGA(TM) RSA Manufacturing CA 029_Issued_by_RootCA.crt
+tpm_ek_infineon_optiga_tm_ecc_root_ca_2: certifies Infineon_OPTIGA(TM)_TPM_2.0_ECC_CA_054.crt
+tpm_ek_infineon_optiga_tm_rsa_root_ca_2: certifies Infineon_OPTIGA(TM)_TPM_2.0_RSA_CA_054.crt
+tpm_ek_infineon_optigaeccrootca3: certifies OptigaEccMfrCA053.crt
+tpm_ek_infineon_optigarsarootca3: certifies OptigaRsaMfrCA053.crt
+tpm_ek_intel_ekrootpublickey: certifies BXTEPIDA0PROD_EK_Platform_Public_Key.cer
+tpm_ek_intel_odca_ca2_csme_intermediate: certifies ADL_PROD_00002226_ODCA_CA2.cer
+tpm_ek_intel_odca_ca2_osse_intermediate: certifies LNL_00003642_NZ_ODCA_CA2.cer
+tpm_ek_intel_ondie_ca_rootca_certificate: does NOT certify OnDie_CA_CSME_Intermediate.cer
+tpm_ek_nationz_ekrootca: certifies EkMfrCA001.crt
+tpm_ek_nationz_nseccrootca001: certifies NSEccEkCA001.crt
+tpm_ek_nationz_nsrsarootca001: certifies NSRsaEkCA001.crt
+tpm_ek_nationz_nstpmeccrootca001: certifies NSTPMEccEkCA001.crt
+tpm_ek_nationz_nstpmrsarootca001: certifies NSTPMRsaEkCA001.crt
+tpm_ek_nuvoton_npctxxxecc521rootca: certifies NPCTxxxECC384LeafCA012110.cer
+tpm_ek_nuvoton_ntc_tpm_ek_root_ca_01: no current intermediate in the cab
+tpm_ek_nuvoton_ntc_tpm_ek_root_ca_02: no current intermediate in the cab
+tpm_ek_nuvoton_ntc_tpm_ek_root_ca_arsuf_01: no current intermediate in the cab
+tpm_ek_nuvoton_root_ca_1013: no current intermediate in the cab
+tpm_ek_nuvoton_root_ca_1014: no current intermediate in the cab
+tpm_ek_nuvoton_root_ca_1110: no current intermediate in the cab
+tpm_ek_nuvoton_root_ca_1111: no current intermediate in the cab
+tpm_ek_nuvoton_root_ca_1210: no current intermediate in the cab
+tpm_ek_nuvoton_root_ca_2010: no current intermediate in the cab
+tpm_ek_nuvoton_root_ca_2011: no current intermediate in the cab
+tpm_ek_nuvoton_root_ca_2012: no current intermediate in the cab
+tpm_ek_nuvoton_root_ca_2110: no current intermediate in the cab
+tpm_ek_nuvoton_root_ca_2111: no current intermediate in the cab
+tpm_ek_nuvoton_root_ca_2112: no current intermediate in the cab
+tpm_ek_nuvoton_root_ca_2210: no current intermediate in the cab
+tpm_ek_nuvoton_root_ca_2211: no current intermediate in the cab
+tpm_ek_qc_microsoft_tpm_root_certificate_authority_2014: certifies Microsoft TPM Endorsement Key Service.cer
+tpm_ek_qc_qwes_prod_ek_provisioning_root: certifies qcom_4.0.0.1.cer
+tpm_ek_stmicro_globalsign_trusted_computing_ca: no current intermediate in the cab
+tpm_ek_stmicro_globalsign_trusted_platform_module_ecc_root_ca: no current intermediate in the cab
+tpm_ek_stmicro_st_tpm_root_certificate: certifies STM TPM EK Intermediate CA 01.crt
+tpm_ek_stmicro_stm_tpm_ecc_root_ca_01: certifies STM TPM ECC Intermediate CA 01.crt
+tpm_ek_stmicro_stsafe_ecc_root_ca_02: certifies STSAFE TPM ECC384 Intermediate CA 10.crt
+tpm_ek_stmicro_stsafe_rsa_root_ca_02: certifies STSAFE TPM EK Intermediate CA 10.crt

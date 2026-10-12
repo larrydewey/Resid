@@ -1,15 +1,21 @@
-// verify/endorsed_keys.resid — attestation keys a CoRIM endorses
-// (PLAN-attestation.md §3.1, §4: attest-key triples, verify/corim.resid),
-// as anchors for the verifiers that take a key rather than a chain: the
-// CCA platform token's CPAK (cca_verify_endorsed) and a TPM's AK
-// (tpm_verify_quote_endorsed). Each candidate is an Anchor whose identity
-// is the endorser's, so the evidence rests on the endorser's word and a
+// verify/endorsed_keys.resid — keys a CoRIM endorses (PLAN-attestation.md
+// §3.1, §4; verify/corim.resid), as anchors for the verifiers that take a
+// key rather than a chain: attest-key triples for the CCA platform
+// token's CPAK (cca_verify_endorsed) and a TPM's AK
+// (tpm_verify_quote_endorsed), identity triples for an SPDM device's key
+// (spdm_verify_endorsed). Each candidate is an Anchor whose identity is
+// the endorser's, so the evidence rests on the endorser's word and a
 // decision on it names the endorser in `accept`.
 //
 // Only keys whose environment names an instance are candidates, and the
 // evidence must come from that instance: the CCA token's own instance ID,
-// or the instance a TPM verifier names. The CoRIM's not-after and the
-// endorser anchor's expiry bound the evidence time.
+// or the instance a TPM or SPDM verifier names. A triple with conditions
+// is used only when the conditions name no measured element (this
+// verifier cannot tell which element holds a key) and, when they name
+// who must have authorized the key, the endorser is among them. Keys
+// given only as a thumbprint or bytes carry no key to verify with and are
+// not candidates. The CoRIM's not-after and the endorser anchor's expiry
+// bound the evidence time.
 
 import "core.resid";
 import "corim.resid";
@@ -20,32 +26,96 @@ import "../ecdsa.resid";
 
 pub type EndorsedKey = { Anchor a; Str instance_hex; };
 
-// The candidates for `instance_hex` ("" any instance), as anchors of kind
-// `kind` for `format`; refused when there is none.
+// The candidates for `instance_hex` ("" any instance) from the attest-key
+// triples (identity triples when `identity`), as anchors of kind `kind`
+// for `format`; refused when there is none.
 @verify_internal
 pub Result(List(EndorsedKey), VerifyError) endorsed_keys(Verified(CorimRefs) keys, Str instance_hex, Str kind, Str format, Str principal, EvidenceTime t, Str who) {
+    return endorsed_keys_of(keys, false, instance_hex, kind, format, principal, t, who);
+}
+
+@verify_internal
+pub Result(List(EndorsedKey), VerifyError) endorsed_keys_of(Verified(CorimRefs) keys, Bool identity, Str instance_hex, Str kind, Str format, Str principal, EvidenceTime t, Str who) {
     if (keys.anchors.len() != 1 || keys.format != "CorimRefs") { return Err(Refused(who, "the keys are not one endorser's CoRIM")); }
     if (keys.value.valid_until >= 0 && t.at.seconds > keys.value.valid_until) { return Err(Stale("the CoRIM's validity ended before the evidence time")); }
-    List(EndorsedKey) c = ek_pick(keys, str_to_lower(instance_hex), kind, format, principal, 0, []);
-    if (c.len() == 0) { return Err(Refused(who, "the CoRIM endorses no attestation key for " + (if (instance_hex == "") { "an instance" } else { "instance " + instance_hex }))); }
+    List(CorimKeyTriple) ts = if (identity) { keys.value.identity } else { keys.value.attest_keys };
+    List(EndorsedKey) c = ek_triples(keys, ts, str_to_lower(instance_hex), kind, format, principal, 0, []);
+    if (c.len() == 0) { return Err(Refused(who, "the CoRIM endorses no " + (if (identity) { "identity" } else { "attestation" }) + " key for " + (if (instance_hex == "") { "an instance" } else { "instance " + instance_hex }))); }
     return Ok(c);
 }
 
-List(EndorsedKey) ek_pick(Verified(CorimRefs) keys, Str inst, Str kind, Str format, Str principal, Int i, List(EndorsedKey) acc) {
-    List(CorimKey) ks = keys.value.keys;
+List(EndorsedKey) ek_triples(Verified(CorimRefs) keys, List(CorimKeyTriple) ts, Str inst, Str kind, Str format, Str principal, Int i, List(EndorsedKey) acc) {
+    if (i >= ts.len()) { return acc; }
+    CorimKeyTriple t = ts[i];
+    Str ih = ek_instance(t.env.instance);
+    Bool take = ih != "" && (inst == "" || ih == inst) && ek_conditions_ok(t, keys.value.endorser);
+    List(EndorsedKey) acc2 = if (take) { ek_keys(keys, t.keys, ih, kind, format, principal, 0, acc) } else { acc };
+    return ek_triples(keys, ts, inst, kind, format, principal, i + 1, acc2);
+}
+
+// A UEID, UUID or bytes instance as hex; "" for none or a key.
+Str ek_instance(CorimId id) { return if (id.kind == "ueid" || id.kind == "uuid" || id.kind == "bytes") { hex_encode(id.v) } else { "" }; }
+
+Bool ek_conditions_ok(CorimKeyTriple t, List(Int) endorser) {
+    if (!t.conditional) { return true; }
+    Bool no_element = match (t.cond_mkey) { MkNone => true, _ => false, };
+    if (!no_element) { return false; }
+    if (t.cond_authorized_by.len() == 0) { return true; }
+    PubKey e = spki_parse_der(endorser);
+    List(Int) none = [];
+    CorimKeyRef ek = CorimKeyRef {.kind = "pkix-key", .key = e, .der = endorser, .thumb = CorimDigest {.alg = 0, .value = none}};
+    return e.kind != 0 && ek_auth_in(t.cond_authorized_by, ek, 0);
+}
+
+Bool ek_auth_in(List(CorimKeyRef) ks, CorimKeyRef e, Int i) { return i < ks.len() && (corim_key_matches(ks[i], e) || ek_auth_in(ks, e, i + 1)); }
+
+List(EndorsedKey) ek_keys(Verified(CorimRefs) keys, List(CorimKeyRef) ks, Str inst, Str kind, Str format, Str principal, Int i, List(EndorsedKey) acc) {
     if (i >= ks.len()) { return acc; }
-    Bool take = ks[i].instance_hex != "" && (inst == "" || ks[i].instance_hex == inst);
-    List(EndorsedKey) acc2 = if (take) { acc.concat([EndorsedKey {.a = ek_anchor(ks[i], keys, kind, format, principal), .instance_hex = ks[i].instance_hex}]) } else { acc };
-    return ek_pick(keys, inst, kind, format, principal, i + 1, acc2);
+    List(Int) spki = corim_key_spki(ks[i]);
+    PubKey pk = spki_parse_der(spki);
+    Bool usable = spki.len() > 0 && (pk.kind == pubkey_ec() || pk.kind == pubkey_rsa() || pk.kind == pubkey_ed25519());
+    List(EndorsedKey) acc2 = if (usable) { acc.concat([EndorsedKey {.a = ek_anchor(spki, pk, keys, kind, format, principal), .instance_hex = inst}]) } else { acc };
+    return ek_keys(keys, ks, inst, kind, format, principal, i + 1, acc2);
 }
 
 // The algorithms a key allows: ECDSA on its curve with the matching hash,
-// or RSASSA-PKCS1 SHA-256 (a TPM's RSA AK).
-Anchor ek_anchor(CorimKey k, Verified(CorimRefs) keys, Str kind, Str format, Str principal) {
-    PubKey pk = spki_parse_der(k.spki);
-    List(Str) algs = if (pk.kind == pubkey_rsa()) { ["RsaSsaSha256"] } else if (curve_bytes(pk.curve) == 48) { ["EcdsaP384Sha384"] } else { ["EcdsaP256Sha256"] };
-    return Anchor {.id = keys.anchors[0], .kind = kind, .product = "", .principal = principal, .formats = [format], .algorithms = algs, .der = k.spki, .fingerprint = "sha256:" + hex_encode(sha256_bytes(k.spki)), .expires = keys.value.expires};
+// RSASSA-PKCS1 SHA-256 (a TPM's RSA AK), or Ed25519.
+Anchor ek_anchor(List(Int) spki, PubKey pk, Verified(CorimRefs) keys, Str kind, Str format, Str principal) {
+    List(Str) algs = if (pk.kind == pubkey_rsa()) { ["RsaSsaSha256"] } else if (pk.kind == pubkey_ed25519()) { ["Ed25519"] } else if (curve_bytes(pk.curve) == 66) { ["EcdsaP521Sha512"] } else if (curve_bytes(pk.curve) == 48) { ["EcdsaP384Sha384"] } else { ["EcdsaP256Sha256"] };
+    return Anchor {.id = keys.anchors[0], .kind = kind, .product = "", .principal = principal, .formats = [format], .algorithms = algs, .der = spki, .fingerprint = "sha256:" + hex_encode(sha256_bytes(spki)), .expires = keys.value.expires};
 }
+
+// An SPDM device's key (`dev`, its certificate's) endorsed by an
+// identity triple for `instance_hex`: the anchor to verify under, the
+// endorser's, listing every SPDM algorithm the key can sign with.
+@verify_internal
+pub Result(Anchor, VerifyError) endorsed_identity(Verified(CorimRefs) keys, Str instance_hex, Cert dev, EvidenceTime t, Str who) {
+    if (keys.anchors.len() != 1 || keys.format != "CorimRefs") { return Err(Refused(who, "the keys are not one endorser's CoRIM")); }
+    if (keys.value.valid_until >= 0 && t.at.seconds > keys.value.valid_until) { return Err(Stale("the CoRIM's validity ended before the evidence time")); }
+    if (instance_hex == "") { return Err(Refused(who, "name the device's instance: the evidence does not say which device made it")); }
+    List(Int) none = [];
+    CorimKeyRef dk = CorimKeyRef {.kind = "asn1der-cert", .key = dev.key, .der = dev.der, .thumb = CorimDigest {.alg = 0, .value = none}};
+    if (!ek_identity_in(keys.value.identity, str_to_lower(instance_hex), dk, keys.value.endorser, 0)) { return Err(Refused(who, "the CoRIM endorses no identity key for instance " + instance_hex + " that is this device's")); }
+    return Ok(Anchor {.id = keys.anchors[0], .kind = "DeviceIdentity", .product = "", .principal = "AboveKernel", .formats = ["SpdmEvidence", "SpdmIdentity"], .algorithms = ek_spdm_algs(dev.key), .der = dev.spki, .fingerprint = "sha256:" + hex_encode(sha256_bytes(dev.spki)), .expires = keys.value.expires});
+}
+
+Bool ek_identity_in(List(CorimKeyTriple) ts, Str inst, CorimKeyRef dk, List(Int) endorser, Int i) {
+    if (i >= ts.len()) { return false; }
+    Bool here = ek_instance(ts[i].env.instance) == inst && ek_conditions_ok(ts[i], endorser) && ek_auth_in(ts[i].keys, dk, 0);
+    return here || ek_identity_in(ts, inst, dk, endorser, i + 1);
+}
+
+// Every SPDM algorithm name a key can sign under (lib/spdm_msg.resid's
+// spdm_alg_name).
+List(Str) ek_spdm_algs(PubKey k) {
+    List(Str) hs = ["Sha256", "Sha384", "Sha512"];
+    if (k.kind == pubkey_ed25519()) { return ["Ed25519"]; }
+    if (k.kind == pubkey_ec()) { return ek_suffix(if (curve_bytes(k.curve) == 32) { "EcdsaP256" } else if (curve_bytes(k.curve) == 48) { "EcdsaP384" } else { "EcdsaP521" }, hs); }
+    Int bits = (if (k.n.len() > 0 && k.n[0] == 0) { k.n.len() - 1 } else { k.n.len() }) * 8;
+    return ek_suffix(f"RsaSsa{bits}", hs).concat(ek_suffix(f"RsaPss{bits}", hs));
+}
+
+List(Str) ek_suffix(Str p, List(Str) hs) { return [p + hs[0], p + hs[1], p + hs[2]]; }
 
 // Whether a failure under one candidate leaves the next to try: the key
 // did not sign, or signs with what the evidence does not use.

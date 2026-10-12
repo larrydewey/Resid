@@ -283,7 +283,8 @@ pub Result(CcaToken, VerifyError) cca_check(List(UInt(8)) token, Anchor cpak, Ev
 
 Int cca_rp(ChallengeRecord c) { return if (c.bind.len() > 0) { q_rp_bound() } else { 0 }; }
 
-Result(Bool, VerifyError) cca_bind(CcaToken k, List(UInt(8)) want, ChallengeRecord c, List(UInt(8)) token) {
+@verify_internal
+pub Result(Bool, VerifyError) cca_bind(CcaToken k, List(UInt(8)) want, ChallengeRecord c, List(UInt(8)) token) {
     if (want.len() != 64) { return Err(NotFresh("a CCA challenge is 64 bytes: issue one with challenge_issue(64)")); }
     return vf_bind_challenge(chal_bytes(k.challenge), want, c, token, cca_descriptors());
 }

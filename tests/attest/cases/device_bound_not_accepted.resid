@@ -11,8 +11,8 @@ SnpPolicy pol() {
 }
 // The result rests on the device root too, which accept does not name.
 @decides(accept = [test_ark], appraised = pol, identity = none)
-Result(Int, VerifyError) f(List(List(UInt(8))) vca, List(UInt(8)) ch, List(UInt(8)) ke, List(UInt(8)) rsp, ChallengeRecord g, List(UInt(8)) r, ChallengeRecord c, SnpCollateral col) {
-    Verified(SpdmSession) s = spdm_session_verify(vca, ch, ke, rsp, g, test_device_root(), test_time(0))?;
+Result(Int, VerifyError) f(SpdmSessionRecord rec, ChallengeRecord g, List(UInt(8)) r, ChallengeRecord c, SnpCollateral col) {
+    Verified(SpdmSession) s = spdm_session_verify(rec, g, test_device_root(), test_time(0))?;
     Verified(SnpReport) v = snp_verify_device_bound(r, c, test_ark(), col, test_time(0), s)?;
     Appraised(SnpReport) a = snp_appraise(v, pol())?;
     return Ok(1);

@@ -1,7 +1,11 @@
-// ecdsa.resid — ECDSA and ECDH over NIST P-256 and P-384, by curve name.
+// ecdsa.resid — ECDSA and ECDH over NIST P-256 and P-384, and ECDSA
+// verification over P-521, by curve name.
 //
-// The arithmetic lives in lib/p256.resid and lib/p384.resid (generated
-// from one template by tools/gen_nistp.py); this module is the byte-level
+// The arithmetic lives in lib/p256.resid, lib/p384.resid and
+// lib/p521.resid (generated from one template by tools/gen_nistp.py).
+// P-521 is verification only, for the certificate authorities that sign
+// with it (TPM manufacturers' EK roots): signing, ECDH and key derivation
+// refuse it, so no secret code runs on it. This module is the byte-level
 // surface: SEC 1 public keys, signatures in DER (X.509, TLS, CMS) or as
 // r || s (COSE, JWS, IEEE P1363), RFC 6979 signing, and ECDH.
 //
@@ -22,20 +26,22 @@ import "hash.resid";
 import "word.resid";
 import "p256.resid";
 import "p384.resid";
+import "p521.resid";
 
-pub type Curve = P256 | P384;
+pub type Curve = P256 | P384 | P521;
 
-pub Int curve_bytes(Curve c) { return match c { P256 => 32, P384 => 48, }; }
-pub Str curve_name(Curve c) { return match c { P256 => "P-256", P384 => "P-384", }; }
+pub Int curve_bytes(Curve c) { return match c { P256 => 32, P384 => 48, P521 => 66, }; }
+pub Str curve_name(Curve c) { return match c { P256 => "P-256", P384 => "P-384", P521 => "P-521", }; }
 
 // The namedCurve OID of an id-ecPublicKey SubjectPublicKeyInfo.
 pub Option(Curve) curve_from_oid(Str oid) {
     if (oid == "1.2.840.10045.3.1.7") { return Some(P256); }
     if (oid == "1.3.132.0.34") { return Some(P384); }
+    if (oid == "1.3.132.0.35") { return Some(P521); }
     return None;
 }
 
-pub Str curve_oid(Curve c) { return match c { P256 => "1.2.840.10045.3.1.7", P384 => "1.3.132.0.34", }; }
+pub Str curve_oid(Curve c) { return match c { P256 => "1.2.840.10045.3.1.7", P384 => "1.3.132.0.34", P521 => "1.3.132.0.35", }; }
 
 // ─── Signature encodings ─────────────────────────────────────────────
 
@@ -139,7 +145,7 @@ pub List(Int) ecdsa_raw_of(Curve c, EcSig s) {
 
 // Whether `pub` is a valid SEC 1 encoding of a point on curve c.
 pub Bool ec_public_ok(Curve c, List(Int) pubkey) {
-    return match c { P256 => p256_decode(pubkey).ok, P384 => p384_decode(pubkey).ok, };
+    return match c { P256 => p256_decode(pubkey).ok, P384 => p384_decode(pubkey).ok, P521 => p521_decode(pubkey).ok, };
 }
 
 // A private scalar given as big-endian bytes: no longer than the curve
@@ -170,6 +176,7 @@ pub List(Int) ec_public_keyg(Curve c, List(B) priv) {
     return match c {
         P256 => ec_pub256(priv),
         P384 => ec_pub384(priv),
+        P521 => [],
     };
 }
 
@@ -192,7 +199,8 @@ List(Int) ec_enc384(P384Aff a) { return if (a.ok) { p384_encode(a) } else { [] }
 
 // A fresh private key from the operating system's randomness: the first
 // candidate in [1, n-1] (for both curves almost always the first draw).
-pub List(Int) ec_generate(Curve c) { return ec_gen_try(c, 0); }
+// Empty for P-521 (verification only).
+pub List(Int) ec_generate(Curve c) { return match c { P521 => [], _ => ec_gen_try(c, 0), }; }
 
 List(Int) ec_gen_try(Curve c, Int tries) {
     List(Int) cand = random_bytes(curve_bytes(c));
@@ -212,6 +220,7 @@ pub List(B) ecdhg(Curve c, List(B) priv, List(Int) peer) {
     return match c {
         P256 => ec_ecdh256(priv, peer),
         P384 => ec_ecdh384(priv, peer),
+        P521 => none,
     };
 }
 
@@ -241,6 +250,7 @@ pub Bool ecdsa_verify_digest(Curve c, List(Int) pubkey, List(Int) digest, EcSig 
     return match c {
         P256 => p256_verify_digest(digest, p256_from_be(sig.r), p256_from_be(sig.s), p256_decode(pubkey)),
         P384 => p384_verify_digest(digest, p384_from_be(sig.r), p384_from_be(sig.s), p384_decode(pubkey)),
+        P521 => p521_verify_digest(digest, p521_from_be(sig.r), p521_from_be(sig.s), p521_decode(pubkey)),
     };
 }
 
@@ -265,6 +275,7 @@ pub EcSig ecdsag_sign_digest(Curve c, HashAlg h, List(B) priv, List(Int) digest)
     return match c {
         P256 => ec_sign256(h, priv, digest),
         P384 => ec_sign384(h, priv, digest),
+        P521 => ec_sig_bad(),
     };
 }
 
@@ -320,6 +331,7 @@ pub EcSig ecdsag_sign_digest_k(Curve c, List(B) priv, List(Int) digest, List(B) 
     return match c {
         P256 => ec_sign256_k(priv, digest, k),
         P384 => ec_sign384_k(priv, digest, k),
+        P521 => ec_sig_bad(),
     };
 }
 
@@ -349,6 +361,7 @@ pub EcSig ecdsa_low_s(Curve c, EcSig sig) {
     List(Int) s2 = match c {
         P256 => ec_low256(p256_from_be(sig.s)),
         P384 => ec_low384(p384_from_be(sig.s)),
+        P521 => ec_low521(p521_from_be(sig.s)),
     };
     return EcSig {.ok = true, .r = sig.r, .s = ec_strip(s2, 0)};
 }
@@ -360,4 +373,8 @@ List(Int) ec_low256(UInt(576) s) {
 List(Int) ec_low384(UInt(832) s) {
     UInt(832) n = p384_n();
     return p384_to_be(if (s > n >> 1) { n - s } else { s });
+}
+List(Int) ec_low521(UInt(1088) s) {
+    UInt(1088) n = p521_n();
+    return p521_to_be(if (s > n >> 1) { n - s } else { s });
 }

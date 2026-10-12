@@ -1,0 +1,8 @@
+// E0263: a PciAttr's `rel` is one or two components of [a-z0-9_:].
+import "dev/fx_e0263_pci_rel.resid";
+
+@requires(device(readonly))
+Int main() {
+    Result(List(DevOut), DeviceError) r = device.read_pci_attr(fx_up(), PciAddr {.domain = 0, .bus = 0, .device = 0, .function = 0});
+    return 0;
+}
