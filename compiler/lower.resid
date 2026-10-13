@@ -5749,6 +5749,7 @@ LOC lo_ce(Kg g, Int id, LV lov, LOP lop) {
     if (k == "call" && lop.lin.contains(t)) { return lo_ce_call(g, u, 0, lov, lop, -1, lo_cfail(), -1); }
     if (k == "struct" && !lov.whole) { return lo_ce_fields(g, u, 0, lov, lop, false, lo_cfail()); }
     if (k == "ifx") { return lo_ce_ifx(g, u, lov, lop); }
+    if (k == "match") { return lo_ce_match(g, u, lov, lop); }
     // A tracked field of a consuming call's struct result continues the
     // chain (`rb_put(s.map, k, v).t`).
     if (k == "field" && g.ns[u].nk > 0) {
@@ -5772,6 +5773,23 @@ LOC lo_ce_ifx(Kg g, Int u, LV lov, LOP lop) {
     LOC b = if (g.ns[el].kind == "ifx") { lo_ce_ifx(g, el, lov, lop) } else { lo_ce_arm(g, el, lov, lop) };
     if (!b.ok) { return b; }
     return LOC {.ok = true, .mut = a.mut || b.mut, .ce = a.ce.concat(b.ce), .bare = false};
+}
+
+// A match consumes V as an if-expression does: its scrutinee only reads
+// V, and each arm's body consumes V, only reads it, or does not name it.
+LOC lo_ce_match(Kg g, Int u, LV lov, LOP lop) {
+    if (!lo_rd(g, kg_kid(g, u, 0), lov, lop)) { return lo_cfail(); }
+    return lo_ce_arms(g, u, 1, lov, lop, LOC {.ok = true, .mut = false, .ce = [], .bare = false});
+}
+
+LOC lo_ce_arms(Kg g, Int u, Int i, LV lov, LOP lop, LOC acc) {
+    if (i >= g.ns[u].nk) { return acc; }
+    Int arm = kg_kid(g, u, i);
+    // A pattern name equal to V's would hide it in the body.
+    if (lo_has_name(g, arm, lov.v, 0)) { return lo_cfail(); }
+    LOC a = lo_ce_arm(g, kg_kid(g, arm, g.ns[arm].nk - 1), lov, lop);
+    if (!a.ok) { return a; }
+    return lo_ce_arms(g, u, i + 1, lov, lop, LOC {.ok = true, .mut = acc.mut || a.mut, .ce = acc.ce.concat(a.ce), .bare = false});
 }
 
 // One branch: a block's bindings may only read V; its value consumes V or

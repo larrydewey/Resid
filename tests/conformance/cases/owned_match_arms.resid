@@ -1,0 +1,48 @@
+// A match whose arms consume a linear value (lower.resid lo_ce_match):
+// the arms update it in place, while parts read through the scrutinee's
+// pattern and copies kept elsewhere keep their old contents.
+
+type Stack = Node(Int, Stack) | Bottom;
+type Piles = { Stack a; Stack b; List(Int) log; Int moves; };
+
+Piles set_a(Piles p, Stack s) { return Piles {.a = s, .b = p.b, .log = p.log, .moves = p.moves}; }
+Piles set_b(Piles p, Stack s) { return Piles {.a = p.a, .b = s, .log = p.log, .moves = p.moves}; }
+Piles note(Piles p, Int v) { return Piles {.a = p.a, .b = p.b, .log = p.log.with(0, v), .moves = p.moves}; }
+
+// Moves the top of a onto b; `rest` is a part of p read by the pattern.
+Piles shift(Piles p) {
+    Stack top = p.a;
+    Piles moved = match top {
+        Node(v, rest) => note(set_b(set_a(p, rest), Node(v, p.b)), v),
+        Bottom => p
+    };
+    return Piles {.a = moved.a, .b = moved.b, .log = moved.log, .moves = moved.moves + 1};
+}
+
+Int depth(Stack s) {
+    return match s { Node(_, r) => 1 + depth(r), Bottom => 0 };
+}
+
+Int top_of(Stack s) {
+    return match s { Node(v, _) => v, Bottom => -1 };
+}
+
+Piles shifts(Piles p, Int n) {
+    if (n <= 0) { return p; }
+    return shifts(shift(p), n - 1);
+}
+
+@requires(args)
+Int main() {
+    Stack s = Node(rt 3, Node(2, Node(1, Bottom)));
+    Piles p0 = Piles {.a = s, .b = Bottom, .log = [0], .moves = 0};
+    Piles kept = p0;
+    Piles p1 = shift(p0);
+    // The copy taken before the update still sees the old piles.
+    println(f"kept: a={depth(kept.a)} b={depth(kept.b)} log={kept.log[0]} moves={kept.moves}");
+    println(f"p1: a={depth(p1.a)} b={depth(p1.b)} top_b={top_of(p1.b)} log={p1.log[0]} moves={p1.moves}");
+    Piles p3 = shifts(p1, 3);
+    println(f"p3: a={depth(p3.a)} b={depth(p3.b)} top_b={top_of(p3.b)} log={p3.log[0]} moves={p3.moves}");
+    println(f"p1 again: a={depth(p1.a)} b={depth(p1.b)} log={p1.log[0]} moves={p1.moves}");
+    return 0;
+}

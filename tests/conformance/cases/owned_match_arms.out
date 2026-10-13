@@ -1,0 +1,4 @@
+kept: a=3 b=0 log=0 moves=0
+p1: a=2 b=1 top_b=3 log=3 moves=1
+p3: a=0 b=3 top_b=1 log=1 moves=4
+p1 again: a=2 b=1 log=3 moves=1
