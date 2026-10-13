@@ -1,32 +1,43 @@
 # Resid Language Support for VS Code
 
 Syntax highlighting, snippets, language configuration, and a **language server** (`residc lsp`) for the
-[Resid](../../../resid_specification.txt) language (v3.x).
+[Resid](https://github.com/larrydewey/Resid) language.
 
 ## Features
 
 - **TextMate grammar** (`source.resid`) covering:
   - `//`, `/* */` comments and `///` / `/** */` doc comments
-  - Keywords: `if/else/while/for/in/match/return/break/continue/with/spawn/sandbox/import/pub/type/as/rt`
+  - Keywords: `if/else/while/for/in/match/return/break/continue/with/spawn/sandbox/lambda`,
+    declarations `type/behavior/test/pub/import/as/rt`, and the `using =` argument
   - First-class numeric types `Int(8..512)`, `UInt(...)`, `Float(16..128)`, `Dec(N)`, `ISize/USize`
   - Fixed-capacity stack types `Str(N)`, `Bytes(N)`, `List(T, N)` (spec §44)
-  - Core types `Str Bytes Bool Option Result List Map Set RegionError SourceLoc`
+  - Core types `Str Bytes Bool Option Result List Map Set StrBuf ListBuf Secret RegionError SourceLoc`,
+    the variants `Some None Ok Err`, and user types
   - Conversion helpers `i8…i512`, `u8…u512`, `f16…f128`, `dN`, `isize`, `usize`
   - Built-ins: `assert`, `rt_assert`, `known`, `rt_known`, `comptime_print`, `todo`,
-    `unimplemented`, `wrapping_*` / `saturating_*`, `str_*`
-  - Annotations `@requires(...)`, `@residual`, capability names
-    (`filesystem(readonly)`, `network`, `clock(readonly)`, …)
+    `unimplemented`, `wrapping_*` / `saturating_*` / `checked_*`, `str_*`,
+    `secret` / `classify` / `secret_split` / `secret_join`, `ct_hide` / `ct_public`
+  - Annotations (`@requires(...)`, `@needs`, `@trust`, ...) and the capability
+    families with their modes (`filesystem(readonly)`, `network`, `clock(readonly)`,
+    `declassify`, `display`, `random`, `native_<m>`, ...)
   - Literals: hex/octal/binary ints, floats, decimal `m`-suffix literals, char,
     string, raw `r"…"`, byte `b"…"`, interpolated `f"…{expr}"` with its format
     spec (`{n:group}`, `{f:precision 2}`, `{s:fill '.', center}`) and the
-    `{{` / `}}` brace escapes
+    `{{` / `}}` brace escapes; the escapes `\n \t \r \0 \\ \" \' \xHH`,
+    any other marked invalid
   - Ranges `..` / `..=`, `#location`, discard `_ = …`
-- **Snippets**: functions, bindings, residual bindings, type definitions,
-  match, if-let, for-in, `with` handles, `spawn` regions, sandboxes, imports.
+- **Snippets**: functions, `main`, bindings, residual bindings, product, sum and
+  constrained types, behaviors and their instances, match, if/else, loops,
+  lambdas, `spawn` regions, sandboxes, inline tests, imports.
 - **Language configuration**: bracket matching/auto-closing, comment toggling,
   folding markers.
 - **Language server (`residc lsp`)**: diagnostics, hover, go to definition,
   document symbols and completion
+
+Vim, Neovim and Emacs support live in their own repositories:
+[resid-vim](https://github.com/larrydewey/resid-vim),
+[resid-nvim](https://github.com/larrydewey/resid-nvim) and
+[resid-mode](https://github.com/larrydewey/resid-mode).
 
 ## Language server
 

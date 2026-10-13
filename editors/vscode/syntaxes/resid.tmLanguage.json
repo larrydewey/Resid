@@ -3,26 +3,69 @@
   "name": "Resid",
   "scopeName": "source.resid",
   "patterns": [
-    { "include": "#comments" },
-    { "include": "#module-decl" },
-    { "include": "#annotations" },
-    { "include": "#type-def" },
-    { "include": "#behavior-def" },
-    { "include": "#function-def" },
-    { "include": "#control-keywords" },
-    { "include": "#declaration-keywords" },
-    { "include": "#constants" },
-    { "include": "#numeric-type" },
-    { "include": "#conversion-helpers" },
-    { "include": "#builtin-functions" },
-    { "include": "#core-types" },
-    { "include": "#capability-name" },
-    { "include": "#strings" },
-    { "include": "#numbers" },
-    { "include": "#location" },
-    { "include": "#ranges" },
-    { "include": "#operators" },
-    { "include": "#punctuation" }
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#module-decl"
+    },
+    {
+      "include": "#annotations"
+    },
+    {
+      "include": "#type-def"
+    },
+    {
+      "include": "#behavior-def"
+    },
+    {
+      "include": "#function-def"
+    },
+    {
+      "include": "#control-keywords"
+    },
+    {
+      "include": "#declaration-keywords"
+    },
+    {
+      "include": "#constants"
+    },
+    {
+      "include": "#numeric-type"
+    },
+    {
+      "include": "#conversion-helpers"
+    },
+    {
+      "include": "#builtin-functions"
+    },
+    {
+      "include": "#core-types"
+    },
+    {
+      "include": "#capability-name"
+    },
+    {
+      "include": "#user-types"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#location"
+    },
+    {
+      "include": "#ranges"
+    },
+    {
+      "include": "#operators"
+    },
+    {
+      "include": "#punctuation"
+    }
   ],
   "repository": {
     "comments": {
@@ -31,14 +74,19 @@
           "name": "comment.line.documentation.triple-slash.resid",
           "match": "^///.*$",
           "captures": {
-            "0": { "patterns": [{ "include": "#doc-comment-content" }] }
+            "0": {
+              "patterns": [
+                {
+                  "include": "#doc-comment-content"
+                }
+              ]
+            }
           }
         },
         {
           "name": "comment.block.documentation.resid",
           "begin": "/\\*\\*",
-          "end": "\\*/",
-          "name": "comment.block.documentation.resid"
+          "end": "\\*/"
         },
         {
           "name": "comment.block.resid",
@@ -56,7 +104,9 @@
         {
           "name": "markup.heading.resid",
           "match": "(?<=///)\\s*(\\S.*):\\s*$",
-          "captures": { "1": {} }
+          "captures": {
+            "1": {}
+          }
         },
         {
           "name": "markup.inline.raw.string.resid",
@@ -73,11 +123,21 @@
         {
           "name": "meta.import.resid",
           "begin": "\\b(import)\\b",
-          "beginCaptures": { "1": { "name": "keyword.control.import.resid" } },
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.control.import.resid"
+            }
+          },
           "end": ";",
-          "endCaptures": { "0": { "name": "punctuation.terminator.statement.resid" } },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.terminator.statement.resid"
+            }
+          },
           "patterns": [
-            { "include": "#strings" },
+            {
+              "include": "#strings"
+            },
             {
               "name": "keyword.control.import.as.resid",
               "match": "\\b(as)\\b"
@@ -86,19 +146,33 @@
               "name": "variable.other.module.resid",
               "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
             },
-            { "include": "#annotations" },
-            { "include": "#punctuation" },
-            { "include": "#capability-name" }
+            {
+              "include": "#annotations"
+            },
+            {
+              "include": "#punctuation"
+            },
+            {
+              "include": "#capability-name"
+            }
           ]
         },
         {
           "name": "meta.sandbox.resid",
           "begin": "\\b(sandbox)\\s*(?=\\()",
-          "beginCaptures": { "1": { "name": "keyword.control.sandbox.resid" } },
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.control.sandbox.resid"
+            }
+          },
           "end": "\\)",
           "patterns": [
-            { "include": "#capability-name" },
-            { "include": "#punctuation" }
+            {
+              "include": "#capability-name"
+            },
+            {
+              "include": "#punctuation"
+            }
           ]
         }
       ]
@@ -108,12 +182,22 @@
         {
           "name": "meta.annotation.requires.resid",
           "begin": "(@residual|@requires)\\s*(?=\\()",
-          "beginCaptures": { "1": { "name": "storage.modifier.annotation.resid" } },
+          "beginCaptures": {
+            "1": {
+              "name": "storage.modifier.annotation.resid"
+            }
+          },
           "end": "\\)",
           "patterns": [
-            { "include": "#capability-name" },
-            { "include": "#strings" },
-            { "include": "#punctuation" }
+            {
+              "include": "#capability-name"
+            },
+            {
+              "include": "#strings"
+            },
+            {
+              "include": "#punctuation"
+            }
           ]
         },
         {
@@ -128,8 +212,12 @@
           "name": "meta.type.definition.resid",
           "match": "\\b(type)\\s+([A-Z][a-zA-Z0-9_]*)\\b",
           "captures": {
-            "1": { "name": "keyword.declaration.type.resid" },
-            "2": { "name": "entity.name.type.resid" }
+            "1": {
+              "name": "keyword.declaration.type.resid"
+            },
+            "2": {
+              "name": "entity.name.type.resid"
+            }
           }
         }
       ]
@@ -138,9 +226,14 @@
       "patterns": [
         {
           "name": "meta.behavior.definition.resid",
-          "match": "\\b(Eq|Ord|Hash|Serialize|Allocator|Reverse)\\s*\\(",
+          "match": "\\b(behavior)\\s+([A-Z][A-Za-z0-9_]*)\\b",
           "captures": {
-            "1": { "name": "support.class.behavior.resid" }
+            "1": {
+              "name": "keyword.declaration.behavior.resid"
+            },
+            "2": {
+              "name": "entity.name.type.behavior.resid"
+            }
           }
         },
         {
@@ -155,18 +248,40 @@
           "name": "meta.function.definition.resid",
           "begin": "(?<!\\w)(?:\\b(pub)\\s+)?([A-Z][A-Za-z0-9_]*(?:\\([^)]*\\))?)(?:\\s*\\[[^\\]]*\\])?\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\()",
           "beginCaptures": {
-            "1": { "name": "keyword.declaration.resid" },
-            "2": { "patterns": [{ "include": "#types-inner" }] },
-            "3": { "name": "entity.name.function.definition.resid" }
+            "1": {
+              "name": "keyword.declaration.resid"
+            },
+            "2": {
+              "patterns": [
+                {
+                  "include": "#types-inner"
+                }
+              ]
+            },
+            "3": {
+              "name": "entity.name.function.definition.resid"
+            }
           },
           "end": "(?<=\\))\\s*(?=[{;=])",
           "patterns": [
-            { "include": "#types-inner" },
-            { "include": "#parameter-names" },
-            { "include": "#strings" },
-            { "include": "#numbers" },
-            { "include": "#operators" },
-            { "include": "#punctuation" }
+            {
+              "include": "#types-inner"
+            },
+            {
+              "include": "#parameter-names"
+            },
+            {
+              "include": "#strings"
+            },
+            {
+              "include": "#numbers"
+            },
+            {
+              "include": "#operators"
+            },
+            {
+              "include": "#punctuation"
+            }
           ]
         }
       ]
@@ -181,8 +296,12 @@
     },
     "types-inner": {
       "patterns": [
-        { "include": "#numeric-type" },
-        { "include": "#core-types" },
+        {
+          "include": "#numeric-type"
+        },
+        {
+          "include": "#core-types"
+        },
         {
           "name": "support.type.resid",
           "match": "\\b[A-Z][a-zA-Z0-9_]*\\b"
@@ -194,7 +313,11 @@
         {
           "name": "support.type.numeric.resid",
           "match": "\\b(?:Int|UInt|Float|Dec)(?=\\s*\\()",
-          "captures": { "0": { "name": "support.type.numeric.generic.resid" } }
+          "captures": {
+            "0": {
+              "name": "support.type.numeric.generic.resid"
+            }
+          }
         },
         {
           "name": "support.type.numeric.width.resid",
@@ -203,18 +326,22 @@
         {
           "name": "support.type.numeric.alias.resid",
           "match": "\\b(?:ISize|USize)\\b"
+        },
+        {
+          "name": "support.type.numeric.resid",
+          "match": "\\b(?:Int|UInt|Float|Dec)\\b"
         }
       ]
     },
     "core-types": {
       "name": "support.type.core.resid",
-      "match": "\\b(?:Str|Bytes|Bool|Option|Result|List|Map|Set|RegionError|SourceLoc)\\b"
+      "match": "\\b(?:Str|Bytes|Bool|Option|Result|List|Map|Set|StrBuf|ListBuf|Secret|RegionError|SourceLoc)\\b"
     },
     "control-keywords": {
       "patterns": [
         {
           "name": "keyword.control.flow.resid",
-          "match": "\\b(?:if|else|while|for|in|return|break|continue|match|with|spawn)\\b"
+          "match": "\\b(?:if|else|while|for|in|return|break|continue|match|with|spawn|sandbox|lambda)\\b"
         }
       ]
     },
@@ -222,7 +349,7 @@
       "patterns": [
         {
           "name": "keyword.declaration.resid",
-          "match": "\\b(?:type|pub|import|as|rt)\\b"
+          "match": "\\b(?:type|behavior|test|pub|import|as|rt)\\b"
         },
         {
           "name": "keyword.operator.elvis.resid",
@@ -235,6 +362,10 @@
         {
           "name": "constant.language.resid",
           "match": "\\b(?:true|false|null)\\b"
+        },
+        {
+          "name": "support.constant.variant.resid",
+          "match": "\\b(?:Some|None|Ok|Err)\\b"
         },
         {
           "name": "variable.language.discard.resid",
@@ -250,11 +381,11 @@
       "patterns": [
         {
           "name": "support.function.builtin.assertion.resid",
-          "match": "\\b(?:assert|rt_assert|known|rt_known|comptime_print|todo|unimplemented)\\b(?=\\s*\\()"
+          "match": "\\b(?:assert|rt_assert|known|rt_known|comptime_print|todo|unimplemented|ct_hide|ct_public|secret|classify|secret_split|secret_join)\\b(?=\\s*\\()"
         },
         {
           "name": "support.function.builtin.checked.resid",
-          "match": "\\b(?:wrapping_[a-z0-9_]+|saturating_[a-z0-9_]+)\\b"
+          "match": "\\b(?:wrapping_[a-z0-9_]+|saturating_[a-z0-9_]+|checked_[a-z0-9_]+)\\b"
         },
         {
           "name": "support.function.builtin.io.resid",
@@ -270,12 +401,16 @@
       "patterns": [
         {
           "name": "entity.other.capability.resid",
-          "match": "\\b(filesystem|environment|git|args|process|network|terminal|clock|device)(?=\\s*[(,)])",
-          "captures": { "1": { "name": "entity.other.capability.name.resid" } }
+          "match": "\\b(filesystem|environment|git|args|process|network|random|terminal|clock|device|display|declassify|provision|assume|native_[A-Za-z0-9_]+)(?=\\s*[(,)])",
+          "captures": {
+            "1": {
+              "name": "entity.other.capability.name.resid"
+            }
+          }
         },
         {
           "name": "string.unquoted.capability.mode.resid",
-          "match": "(?<=\\()(?:readonly|writeonly|readwrite|admin)(?=\\))"
+          "match": "(?<=\\()(?:readonly|readwrite)(?=\\))"
         }
       ]
     },
@@ -284,9 +419,17 @@
         {
           "name": "string.interpolated.fstring.resid",
           "begin": "f\"",
-          "beginCaptures": { "0": { "name": "string.interpolated.prefix.resid" } },
+          "beginCaptures": {
+            "0": {
+              "name": "string.interpolated.prefix.resid"
+            }
+          },
           "end": "\"",
           "patterns": [
+            {
+              "name": "constant.character.escape.brace.resid",
+              "match": "\\{\\{|\\}\\}"
+            },
             {
               "name": "meta.template.expression.resid",
               "begin": "\\{",
@@ -311,9 +454,15 @@
                     }
                   ]
                 },
-                { "include": "#numbers" },
-                { "include": "#operators" },
-                { "include": "#punctuation" },
+                {
+                  "include": "#numbers"
+                },
+                {
+                  "include": "#operators"
+                },
+                {
+                  "include": "#punctuation"
+                },
                 {
                   "name": "variable.other.readwrite.resid",
                   "match": "[a-zA-Z_][a-zA-Z0-9_.]*"
@@ -322,11 +471,11 @@
             },
             {
               "name": "constant.character.escape.resid",
-              "match": "\\\\."
+              "match": "\\\\(?:[ntr0\\\\\"']|x[0-9A-Fa-f]{2})"
             },
             {
-              "name": "constant.character.escape.brace.resid",
-              "match": "\\{\\{|\\}\\}"
+              "name": "invalid.illegal.escape.resid",
+              "match": "\\\\."
             }
           ]
         },
@@ -340,7 +489,14 @@
           "begin": "b\"",
           "end": "\"",
           "patterns": [
-            { "name": "constant.character.escape.resid", "match": "\\\\." }
+            {
+              "name": "constant.character.escape.resid",
+              "match": "\\\\(?:[ntr0\\\\\"']|x[0-9A-Fa-f]{2})"
+            },
+            {
+              "name": "invalid.illegal.escape.resid",
+              "match": "\\\\."
+            }
           ]
         },
         {
@@ -348,7 +504,14 @@
           "begin": "\"",
           "end": "\"",
           "patterns": [
-            { "name": "constant.character.escape.resid", "match": "\\\\." }
+            {
+              "name": "constant.character.escape.resid",
+              "match": "\\\\(?:[ntr0\\\\\"']|x[0-9A-Fa-f]{2})"
+            },
+            {
+              "name": "invalid.illegal.escape.resid",
+              "match": "\\\\."
+            }
           ]
         },
         {
@@ -356,7 +519,14 @@
           "begin": "'",
           "end": "'",
           "patterns": [
-            { "name": "constant.character.escape.resid", "match": "\\\\." }
+            {
+              "name": "constant.character.escape.resid",
+              "match": "\\\\(?:[ntr0\\\\\"']|x[0-9A-Fa-f]{2})"
+            },
+            {
+              "name": "invalid.illegal.escape.resid",
+              "match": "\\\\."
+            }
           ]
         }
       ]
@@ -468,6 +638,10 @@
           "match": ":"
         }
       ]
+    },
+    "user-types": {
+      "name": "entity.name.type.resid",
+      "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
     }
   }
 }

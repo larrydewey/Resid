@@ -1,37 +1,47 @@
 {
   "Function": {
     "prefix": "fn",
-    "body": ["${1:Ret} ${2:name}(${3:Type arg}) {", "\t$0", "}"],
+    "body": ["${1:Int} ${2:name}(${3:Int x}) {", "\t$0", "}"],
     "description": "Function definition"
+  },
+  "Public function": {
+    "prefix": "pfn",
+    "body": ["/// ${4:Summary.}", "pub ${1:Int} ${2:name}(${3:Int x}) {", "\t$0", "}"],
+    "description": "Documented public function"
   },
   "Main entry point": {
     "prefix": "main",
     "body": ["Int main() {", "\t$0", "\treturn 0;", "}"],
     "description": "Int main() entry point"
   },
+  "Requires capability": {
+    "prefix": "requires",
+    "body": ["@requires(${1:filesystem(readonly)})"],
+    "description": "Capability requirement annotation"
+  },
+  "Needs behavior": {
+    "prefix": "needs",
+    "body": ["@needs(${1:Ord}(${2:T}))"],
+    "description": "Behaviors a generic body uses"
+  },
   "Binding": {
     "prefix": "let",
-    "body": ["${1:Type} ${2:x} = $0;"],
+    "body": ["${1:Int} ${2:x} = $0;"],
     "description": "Immutable binding"
   },
   "Residual binding": {
     "prefix": "rlet",
-    "body": ["${1:Type} ${2:x} = rt $0;"],
+    "body": ["${1:Int} ${2:x} = rt $0;"],
     "description": "Residual binding (rt expression)"
-  },
-  "Annotated residual": {
-    "prefix": "residual",
-    "body": ["@residual ${1:Type} ${2:y} = $0;"],
-    "description": "@residual binding"
   },
   "Product type": {
     "prefix": "tstruct",
-    "body": ["type ${1:Point} = { ${2:x}: Int, ${3:y}: Int };"],
+    "body": ["type ${1:Point} = { ${2:Int} ${3:x}; ${4:Int} ${5:y}; };"],
     "description": "Product type"
   },
   "Sum type": {
     "prefix": "tenum",
-    "body": ["type ${1:Option}(${2:T}) = ${3:Some}(${2:T}) | ${4:None};"],
+    "body": ["type ${1:Shape} = ${2:Circle}(${3:Int}) | ${4:Empty};"],
     "description": "Sum type"
   },
   "Constrained type": {
@@ -39,47 +49,49 @@
     "body": ["type ${1:Positive} = ${2:Int}[value > 0];"],
     "description": "Constraint type with predicate"
   },
+  "Behavior": {
+    "prefix": "behavior",
+    "body": ["behavior ${1:Name}(${2:T}) {", "\t${3:Int} ${4:op}(${2:T} a);", "}"],
+    "description": "Behavior declaration"
+  },
+  "Behavior instance": {
+    "prefix": "inst",
+    "body": ["${1:Show}(${2:Type}) = ${3:fn_name};"],
+    "description": "Name the function a behavior uses for a type"
+  },
   "Match expression": {
     "prefix": "match",
-    "body": [
-      "match ${1:expr} {",
-      "\t${2:Some(x)} => $3,",
-      "\t${4,None} => $5$0",
-      "}"
-    ],
+    "body": ["match ${1:expr} {", "\t${2:Some(x)} => $3,", "\t${4:None} => $5", "}"],
     "description": "Pattern match"
   },
   "If statement": {
     "prefix": "if",
-    "body": ["if (${1:cond}) {", "\t$0", "}"]
+    "body": ["if (${1:cond}) {", "\t$0", "}"],
+    "description": "if statement"
   },
-  "If-let": {
-    "prefix": "iflet",
-    "body": ["if (${1:Some(x)} = ${2:opt}) {", "\t$0", "}"],
-    "description": "if (pattern = expr)"
+  "If-else expression": {
+    "prefix": "ife",
+    "body": ["if (${1:cond}) { ${2:a} } else { ${3:b} }"],
+    "description": "if-else expression"
   },
   "While loop": {
     "prefix": "while",
-    "body": ["while (${1:cond}) {", "\t$0", "}"]
+    "body": ["while (${1:cond}) {", "\t$0", "}"],
+    "description": "while loop"
   },
   "For-in loop": {
-    "prefix": "forin",
-    "body": ["for (${1:Type} ${2:x} in ${3:xs}) {", "\t$0", "}"],
+    "prefix": "for",
+    "body": ["for (${1:Int} ${2:x} in ${3:xs}) {", "\t$0", "}"],
     "description": "for-in loop"
   },
-  "With handle": {
-    "prefix": "with",
-    "body": ["with (${1:Type} ${2:h} = ${3:expr}) {", "\t$0", "}"],
-    "description": "Scoped handle binding"
+  "Lambda": {
+    "prefix": "lambda",
+    "body": ["lambda(${1:x}) { $0 }"],
+    "description": "Closure"
   },
   "Spawn region": {
     "prefix": "spawn",
-    "body": [
-      "${1:Result(T, RegionError)} r = spawn (${2:cap}) {",
-      "\t$0",
-      "\treturn value;",
-      "};"
-    ],
+    "body": ["Result(${1:Int}, RegionError) ${2:r} = spawn (${3}) {", "\t$0", "\treturn ${4:value};", "};"],
     "description": "Structured concurrency region"
   },
   "Sandbox block": {
@@ -87,40 +99,40 @@
     "body": ["sandbox (${1:filesystem(readonly)}) {", "\t$0", "}"],
     "description": "Capability sandbox"
   },
+  "Test": {
+    "prefix": "test",
+    "body": ["test \"${1:name}\" {", "\t$0", "}"],
+    "description": "Inline test"
+  },
   "Import": {
     "prefix": "import",
-    "body": ["import \"${1:file}.resid\";$0"],
+    "body": ["import \"${1:file}.resid\";"],
     "description": "Module import"
   },
   "Named import": {
     "prefix": "importn",
-    "body": ["import \"${1:file}.resid\" (${2:a, b});$0"],
+    "body": ["import \"${1:file}.resid\" (${2:a, b});"],
     "description": "Import selected names"
   },
   "Aliased import": {
     "prefix": "importas",
-    "body": ["import \"${1:file}.resid\" as ${2:M};$0"],
+    "body": ["import \"${1:file}.resid\" as ${2:M};"],
     "description": "Import with alias"
   },
   "Attenuated import": {
     "prefix": "importreq",
-    "body": [
-      "import \"${1:file}.resid\" @requires(${2:filesystem(readonly)});$0"
-    ],
-    "description": "Import with capability annotation"
-  },
-  "Requires capability": {
-    "prefix": "requires",
-    "body": ["@requires($0)"],
-    "description": "Capability requirement annotation"
+    "body": ["import \"${1:file}.resid\" @requires(${2:filesystem(readonly)});"],
+    "description": "Import under a capability ceiling"
   },
   "Assert": {
     "prefix": "assert",
-    "body": ["assert($1, \"$2\");$0"]
+    "body": ["assert(${1:cond}, \"${2:message}\");"],
+    "description": "Compile-time assertion"
   },
   "Runtime assert": {
     "prefix": "rt_assert",
-    "body": ["rt_assert($1, \"$2\");$0"]
+    "body": ["rt_assert(${1:cond}, \"${2:message}\");"],
+    "description": "Runtime assertion"
   },
   "Doc comment": {
     "prefix": "doc",
@@ -129,7 +141,7 @@
   },
   "F-string": {
     "prefix": "fstr",
-    "body": ["f\"$1\""],
+    "body": ["f\"${1}{${2:x}}\""],
     "description": "Interpolated string"
   }
 }
