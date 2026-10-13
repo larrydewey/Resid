@@ -18,6 +18,9 @@ Str shape(Cmw c) {
 
 Str labels(List(CmwItem) xs, Int i, Str acc) { return if (i >= xs.len()) { acc } else { labels(xs, i + 1, acc + (if (i == 0) { "" } else { " " }) + xs[i].label) }; }
 
+// A record under n - 1 nested collections: n CMW levels.
+Cmw nest(Int n) { return if (n <= 1) { cmw_record("a/b", [7]) } else { cmw_collection("", [cmw_item("in", nest(n - 1))]) }; }
+
 Int main() {
     List(Int) rec = cmw_encode(cmw_record("application/x", [1, 2, 3]));
     println(cbor_hex(rec));
@@ -37,6 +40,9 @@ Int main() {
     println(dec([160]));                             // an empty collection
     println(dec([91, 255, 255, 255, 255, 255, 255, 255, 255])); // a length past 2^63
     println(f"well formed: {cbor_well_formed(rec, 4)} {cbor_well_formed([24, 5], 4)} {cbor_well_formed([248, 5], 4)} {cbor_well_formed([129, 129, 0], 1)}");
+    // As deep as cmw_encode writes is as deep as cmw_decode reads.
+    println(dec(cmw_encode(nest(cmw_max_depth()))));
+    println(f"depth counts containers: {cbor_well_formed([0], 0)} {cbor_well_formed([129, 0], 0)} {cbor_well_formed([129, 0], 1)} {cbor_well_formed([129, 129, 0], 2)}");
     // The evidence envelope: evidence and collateral, then one more item.
     List(CmwRec) col = [collateral_item(mt_crl(), [48, 0])];
     List(UInt(8)) env = evidence_envelope(evidence_snp([1, 2]), col);

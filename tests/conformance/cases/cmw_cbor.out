@@ -13,5 +13,7 @@ refused: the CMW collection label `a` appears twice
 refused: a CMW collection has no members
 refused: not one well-formed CBOR item of definite lengths, nested at most 12 deep
 well formed: true true false false
+ok collection  of 1: in
+depth counts containers: true false true true
 record application/vnd.resid.amd-sev-snp-report (2 bytes), 2 collateral: application/pkix-crl application/pkix-cert
 refused: the evidence is not an envelope (a CMW collection)

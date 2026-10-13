@@ -318108,7 +318108,7 @@ entry:
 @.s164469 = private unnamed_addr constant [78 x i8] c"aesgcm.resid=f25cd95aa7f8a9c5471cafdfd25ed7341610c47985f6ce63fd50de1c21b43c85\00"
 @.s164470 = private unnamed_addr constant [79 x i8] c"aesgcmg.resid=9105acdda7e867f4d09f7b8e0a39e051ad1e203cd58124acf79b223b51a1a85d\00"
 @.s164471 = private unnamed_addr constant [80 x i8] c"calendar.resid=7f7ec06dc16c6f85b60da8d74d3044801a660756601aaf6f8881ff622ddc4f4e\00"
-@.s164472 = private unnamed_addr constant [76 x i8] c"cbor.resid=ecc4467ebf158c503c0f9a042b527496f649006c52eeaaa51edb001baf9b0fbf\00"
+@.s164472 = private unnamed_addr constant [76 x i8] c"cbor.resid=4b0cf443234cd16cdcae0d54794fcb014d33428beed594ce7544de5232d5ecd7\00"
 @.s164473 = private unnamed_addr constant [83 x i8] c"cbor_floats.resid=db678bc011ba575cdfe387cd8b27ef9631273879b3a32a2e263352cd41f3d9a8\00"
 @.s164474 = private unnamed_addr constant [81 x i8] c"cbor_head.resid=de8bbf656c52bd25ebeadb7bf56f5ad9e67590d4ddb77a6588012a30b40222e5\00"
 @.s164475 = private unnamed_addr constant [82 x i8] c"certverify.resid=83bb5dfed6a9ab7478b0524182844ee9fc188dac3045da9667869dc553a410a0\00"
