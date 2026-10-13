@@ -16,8 +16,8 @@
 type Account = Cash | Checking | Savings | Fees | Revenue;
 
 // `Show(Account)` names how an account is written. Once the instance is in
-// scope, `f"{a}"` and `f"{a:>10}"` use it, and so does every generic that
-// needs Show(T).
+// scope, `f"{a}"` and `f"{a:10, right}"` use it, and so does every generic
+// that needs Show(T).
 pub Str acct_name(Account a) {
     return match a {
         Cash => "cash",
@@ -140,6 +140,7 @@ pub Dec(4) escrow_fee(Dec(4) amt, Int klass) {
 test "display and order are behaviors, not fields" {
     expect(acct_name(Fees)).toEqual("fees");
     expect(f"{Savings}").toEqual("savings");
+    expect(f"[{Savings:10, right}]").toEqual("[   savings]");
     expect(f"{sort([Fees, Cash, Savings])}").toEqual("[cash, savings, fees]");
     expect(acct_rank(acct_least(Revenue, Checking))).toEqual(1);
 }
