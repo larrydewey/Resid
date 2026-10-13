@@ -611,9 +611,26 @@ pub Int rt_char_at_n(Int s, Int i, Int n) {
     return char_at_slow(s, i);
 }
 
-// Half-open substring by codepoint index, clamped.
+// Half-open substring by codepoint index, clamped. Of a string known all
+// ASCII (the two fast entries) offsets are bytes, and one character is a
+// static string: no allocation.
 @export("str_slice", "ptr(ptr,i64,i64)")
+@inline
 pub Int rt_str_slice(Int s, Int start0, Int end0) {
+    Int st = idx_state();
+    Int n = if (s == ld64(st + 24)) { ld64(st + 32) } else { if (s == ld64(st + 40)) { ld64(st + 48) } else { 0 } };
+    if (ult(start0, n) && end0 == start0 + 1) { return str_one(ld8(s + start0)); }
+    return str_slice_slow(s, start0, end0);
+}
+
+// The one-character string of ASCII byte c (1..127), in static memory.
+pub Int str_one(Int c) {
+    Int p = resid_raw_global("str_one", 256) + c * 2;
+    return st8(p, c) * 0 + p;
+}
+
+@noinline
+Int str_slice_slow(Int s, Int start0, Int end0) {
     Int sl = idx_slot(s);
     Int len = sl_len(sl);
     Int a0 = if (start0 < 0) { 0 } else { start0 };

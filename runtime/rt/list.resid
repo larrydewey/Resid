@@ -36,6 +36,7 @@ pub Int rt_box_new(Int tag, Int count, Int src, Int ty) {
 
 // resid_box_new without the copy: the caller fills the slots.
 @export("resid_box_alloc", "ptr(i64,i64,ptr)")
+@inline
 pub Int rt_box_alloc(Int tag, Int count, Int ty) { return box_hdr(tag, count, ty); }
 
 @export("resid_box_tag", "i64(ptr)")
@@ -370,8 +371,14 @@ pub Int rt_range_list_incl(Int lo, Int hi) {
 }
 
 @export("resid_assert", "void(i8,ptr)")
+@inline
 pub Int rt_assert(Int ok, Int msg) {
     if (ok != 0) { return 0; }
+    return assert_fail(msg);
+}
+
+@noinline
+Int assert_fail(Int msg) {
     Int sb = rt_sb_new();
     _ = sb_lit(sb, resid_raw_addr("assertion failed"));
     _ = if (msg != 0) { sb_lit(sb, resid_raw_addr(": ")) + sb_lit(sb, msg) } else { 0 };

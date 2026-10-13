@@ -355,7 +355,14 @@ pub Int rt_sc_depth_x() { return ag(4); }
 pub Int rt_sc_depth_set_x(Int d) { return as_(4, d); }
 
 // Made in the innermost scope region.
-pub Bool young(Int p) { return ag(4) != 0 && region_of(p) == ld64(rec_at(ag(4) - 1)); }
+pub Bool young(Int p) {
+    Int d = ag(4);
+    if (d == 0) { return false; }
+    Int r = rec_at(d - 1);
+    // The innermost region's top page run, when it is the current one.
+    if (ag(10) == r && ult(p - ag(5), ag(7) - ag(5))) { return true; }
+    return region_of(p) == ld64(r);
+}
 
 @export("resid_rt_scope_alloc", "ptr(i64)")
 pub Int rt_scope_alloc_x(Int n) { return scope_alloc(n); }
@@ -475,7 +482,7 @@ Int imm_off() { return 18295873486192640; }
 Int imm_min() { return 0 - 18014398509481984; }
 Int imm_max() { return 18014398509481983; }
 
-Int interned() { return resid_raw_global("box_interned", 96); }
+pub Int interned() { return resid_raw_global("box_interned", 96); }
 
 Int intern_init() {
     Int g = interned();

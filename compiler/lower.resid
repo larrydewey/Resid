@@ -3591,13 +3591,12 @@ GT lw_box_one(GT p, Str ty, Str tag, Funcs fs) {
     Int t1 = hb.tmp + 1;
     Int t2 = hb.tmp + 2;
     Int t3 = hb.tmp + 3;
-    Str sa = f"%t{t1}";
     Str gi = f"%t{t2}";
     Str reg = f"%t{t3}";
     Str body = esc_ll(ty, 0, "");
     Str tsym = f"@.oty{t1}";
     List(Str) gl2 = hb.glines.concat([tsym + f" = private unnamed_addr constant [{ll_bytes(body, 0, 0) + 1} x i8] c\"" + body + "\\00\""]);
-    List(Str) l4 = hb.lines.concat([sa + " = alloca [1 x ptr]", gi + " = getelementptr [1 x ptr], ptr " + sa + ", i32 0, i32 0", "store ptr " + hb.val + ", ptr " + gi, reg + " = call ptr @resid_box_new(i64 " + tag + ", i64 1, ptr " + sa + ", ptr " + tsym + ")"]);
+    List(Str) l4 = hb.lines.concat([reg + " = call ptr @resid_box_alloc(i64 " + tag + ", i64 1, ptr " + tsym + ")", gi + " = getelementptr {i32, i32, ptr}, ptr " + reg + ", i32 1", "store ptr " + hb.val + ", ptr " + gi]);
     return GT {.pos = 0, .val = reg, .ty = ty, .cnt = 0, .err = "", .glines = gl2, .lines = l4, .tmp = t3, .lbl = p.lbl, .tail = false};
 }
 
@@ -3694,16 +3693,15 @@ GT lw_box_n(LVP ps, Str ty, Str vidx, Funcs fs) {
         List(Str) gl3 = gl2.concat([nb + " = private constant {i32, i32, ptr} {i32 " + vidx + ", i32 0, ptr " + tsym + "}, align 16"]);
         return GT {.pos = 0, .val = nb, .ty = ty, .cnt = 0, .err = "", .glines = gl3, .lines = ps.g.lines, .tmp = t1, .lbl = ps.g.lbl, .tail = false};
     }
-    List(Str) pre = [sa + f" = alloca [{np} x ptr]", gi + f" = getelementptr [{np} x ptr], ptr " + sa + ", i32 0, i32 0"];
+    // The box first, then a store per slot (no stack array to copy from).
+    List(Str) pre = [sa + f" = call ptr @resid_box_alloc(i64 {vidx}, i64 {np}, ptr " + tsym + ")", gi + " = getelementptr {i32, i32, ptr}, ptr " + sa + ", i32 1"];
     LBS b = lw_box_slots(np, sa, gi, t2, ps.vals, 0, pre);
-    Int tn = b.tmp + 1;
-    Str reg = f"%t{tn}";
-    List(Str) l4 = ps.g.lines.concat(b.lines).concat([reg + f" = call ptr @resid_box_new(i64 {vidx}, i64 {np}, ptr " + sa + ", ptr " + tsym + ")"]);
-    return GT {.pos = 0, .val = reg, .ty = ty, .cnt = 0, .err = "", .glines = gl2, .lines = l4, .tmp = tn, .lbl = ps.g.lbl, .tail = false};
+    List(Str) l4 = ps.g.lines.concat(b.lines);
+    return GT {.pos = 0, .val = sa, .ty = ty, .cnt = 0, .err = "", .glines = gl2, .lines = l4, .tmp = b.tmp, .lbl = ps.g.lbl, .tail = false};
 }
 
-// The alloca, its base pointer, and one store per payload value in
-// order. `t` is the running temp counter; each slot takes one.
+// The box's slot base, and one store per payload value in order. `t` is
+// the running temp counter; each slot takes one.
 type LBS = { List(Str) lines; Int tmp; };
 
 LBS lw_box_slots(Int np, Str sa, Str gi, Int t, List(Str) vals, Int i, List(Str) acc) {

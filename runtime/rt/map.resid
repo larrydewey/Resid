@@ -1894,10 +1894,16 @@ Int with_shared(Int l, Int i, Int v) {
 @export("resid_list_with", "ptr(ptr,i8,i64,ptr)")
 @inline
 pub Int rt_list_with(Int l, Int owned, Int i, Int v) {
-    if (owned != 0 && ltransient(l) && ult(i, lcount(l)) && box_interned(v)) {
+    if (owned != 0 && ltransient(l) && ult(i, lcount(l)) && word_static(v)) {
         return st64(lroot(l) + 24 + i * 8, v) * 0 + l;
     }
     return list_with_slow(l, owned, i, v);
+}
+
+// box_interned, the static boxes (False, True, 0.0) tested first.
+Bool word_static(Int v) {
+    Int g = interned();
+    return (!ult(v, g) && ult(v, g + 65)) || box_imm(v) || box_fimm(v);
 }
 
 @noinline
