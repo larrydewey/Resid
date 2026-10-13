@@ -1,0 +1,407 @@
+// AWFY DeltaBlue: incremental constraint solver (chain and projection
+// tests, size = inner iterations). Variables and constraints live in
+// indexed lists in the planner state; references are indices, -1 is null.
+// Constraint kinds: 0 edit, 1 stay (unary), 2 equality, 3 scale (binary).
+// Strengths are their arithmetic values (REQUIRED -800 ... WEAKEST 10000);
+// direction: 0 none, 1 forward, 2 backward. Vectors used as queues are
+// lists read from a head index (removeFirst).
+
+type Var = { Int value; List(Int) cons; Int det; Int mark; Int walk; Bool stay; };
+type Con = { Int kind; Int str; Int v1; Int v2; Int scale; Int offset; Int dir; Bool sat; };
+type Db = { List(Var) vs; List(Con) cs; Int mark; Int r; };
+
+Int required() { return 0 - 800; }
+Int preferred() { return 0 - 400; }
+Int strong_default() { return 0 - 200; }
+Int default_str() { return 0; }
+Int weakest() { return 10000; }
+
+// ---- field updates ---------------------------------------------------
+
+Var var_with(Var v, Int value, Int det, Int mark, Int walk, Bool stay) {
+    return Var {.value = value, .cons = v.cons, .det = det, .mark = mark, .walk = walk, .stay = stay};
+}
+
+Db set_var(Db d, Int i, Var v) { return Db {.vs = d.vs.with(i, v), .cs = d.cs, .mark = d.mark, .r = d.r}; }
+
+Db set_value(Db d, Int i, Int value) {
+    Var v = d.vs[i];
+    return set_var(d, i, var_with(v, value, v.det, v.mark, v.walk, v.stay));
+}
+
+Db set_mark(Db d, Int i, Int mark) {
+    Var v = d.vs[i];
+    return set_var(d, i, var_with(v, v.value, v.det, mark, v.walk, v.stay));
+}
+
+Db set_det(Db d, Int i, Int det) {
+    Var v = d.vs[i];
+    return set_var(d, i, var_with(v, v.value, det, v.mark, v.walk, v.stay));
+}
+
+Con con_with(Con c, Int dir, Bool sat) {
+    return Con {.kind = c.kind, .str = c.str, .v1 = c.v1, .v2 = c.v2, .scale = c.scale, .offset = c.offset, .dir = dir, .sat = sat};
+}
+
+Db set_con(Db d, Int i, Con c) { return Db {.vs = d.vs, .cs = d.cs.with(i, c), .mark = d.mark, .r = d.r}; }
+
+Db with_r(Db d, Int r) { return Db {.vs = d.vs, .cs = d.cs, .mark = d.mark, .r = r}; }
+
+// ---- constraint queries -----------------------------------------------
+
+Bool unary(Con c) { return c.kind <= 1; }
+Bool is_input(Con c) { return c.kind == 0; }
+Bool satisfied(Con c) { return if (unary(c)) { c.sat } else { c.dir != 0 }; }
+Int output(Con c) { return if (unary(c)) { c.v1 } else { if (c.dir == 1) { c.v2 } else { c.v1 } }; }
+Int input(Con c) { return if (c.dir == 1) { c.v1 } else { c.v2 }; }
+
+// ---- graph -------------------------------------------------------------
+
+Db add_to_var(Db d, Int vi, Int ci) {
+    Var v = d.vs[vi];
+    return set_var(d, vi, Var {.value = v.value, .cons = v.cons.concat([ci]), .det = v.det, .mark = v.mark, .walk = v.walk, .stay = v.stay});
+}
+
+List(Int) without(List(Int) xs, Int x, Int i, ListBuf(Int) acc) {
+    if (i >= xs.len()) { return acc.finish(); }
+    return without(xs, x, i + 1, if (xs[i] == x) { acc } else { acc.push(xs[i]) });
+}
+
+Db remove_from_var(Db d, Int vi, Int ci) {
+    if (vi < 0) { return d; }
+    Var v = d.vs[vi];
+    ListBuf(Int) e = ListBuf();
+    Int det = if (v.det == ci) { 0 - 1 } else { v.det };
+    return set_var(d, vi, Var {.value = v.value, .cons = without(v.cons, ci, 0, e), .det = det, .mark = v.mark, .walk = v.walk, .stay = v.stay});
+}
+
+Db add_to_graph(Db d, Int ci) {
+    Con c = d.cs[ci];
+    Db d1 = add_to_var(d, c.v1, ci);
+    Db d2 = if (unary(c)) { d1 } else { add_to_var(d1, c.v2, ci) };
+    Db d3 = if (c.kind == 3) { add_to_var(add_to_var(d2, c.scale, ci), c.offset, ci) } else { d2 };
+    return set_con(d3, ci, con_with(c, 0, false));
+}
+
+Db remove_from_graph(Db d, Int ci) {
+    Con c = d.cs[ci];
+    Db d1 = remove_from_var(d, c.v1, ci);
+    Db d2 = if (unary(c)) { d1 } else { remove_from_var(d1, c.v2, ci) };
+    Db d3 = if (c.kind == 3) { remove_from_var(remove_from_var(d2, c.scale, ci), c.offset, ci) } else { d2 };
+    return set_con(d3, ci, con_with(c, 0, false));
+}
+
+Db mark_unsatisfied(Db d, Int ci) { return set_con(d, ci, con_with(d.cs[ci], 0, false)); }
+
+Db choose_method(Db d, Int ci, Int mark) {
+    Con c = d.cs[ci];
+    if (unary(c)) {
+        Var o = d.vs[c.v1];
+        return set_con(d, ci, con_with(c, c.dir, o.mark != mark && c.str < o.walk));
+    }
+    Var a = d.vs[c.v1];
+    Var b = d.vs[c.v2];
+    Int dir = if (a.mark == mark) {
+        if (b.mark != mark && c.str < b.walk) { 1 } else { 0 }
+    } else { if (b.mark == mark) {
+        if (a.mark != mark && c.str < a.walk) { 2 } else { 0 }
+    } else { if (a.walk > b.walk) {
+        if (c.str < a.walk) { 2 } else { 0 }
+    } else {
+        if (c.str < b.walk) { 1 } else { 0 }
+    } } };
+    return set_con(d, ci, con_with(c, dir, c.sat));
+}
+
+Db execute(Db d, Int ci) {
+    Con c = d.cs[ci];
+    if (c.kind == 2) {
+        return if (c.dir == 1) { set_value(d, c.v2, d.vs[c.v1].value) } else { set_value(d, c.v1, d.vs[c.v2].value) };
+    }
+    if (c.kind == 3) {
+        Int sc = d.vs[c.scale].value;
+        Int of = d.vs[c.offset].value;
+        return if (c.dir == 1) { set_value(d, c.v2, d.vs[c.v1].value * sc + of) } else { set_value(d, c.v1, (d.vs[c.v2].value - of) / sc) };
+    }
+    return d;
+}
+
+Db recalculate(Db d, Int ci) {
+    Con c = d.cs[ci];
+    if (unary(c)) {
+        Var o = d.vs[c.v1];
+        Bool stay = !is_input(c);
+        Db d1 = set_var(d, c.v1, var_with(o, o.value, o.det, o.mark, c.str, stay));
+        return if (stay) { execute(d1, ci) } else { d1 };
+    }
+    Int ii = input(c);
+    Int oi = output(c);
+    Var iv = d.vs[ii];
+    Var ov = d.vs[oi];
+    Bool stay0 = iv.stay;
+    Bool stay = if (c.kind == 3) { stay0 && d.vs[c.scale].stay && d.vs[c.offset].stay } else { stay0 };
+    Db d1 = set_var(d, oi, var_with(ov, ov.value, ov.det, ov.mark, max(c.str, iv.walk), stay));
+    return if (stay) { execute(d1, ci) } else { d1 };
+}
+
+Bool inputs_known(Db d, Con c, Int mark) {
+    if (unary(c)) { return true; }
+    Var v = d.vs[input(c)];
+    return v.mark == mark || v.stay || v.det < 0;
+}
+
+Db inputs_mark(Db d, Con c, Int mark) {
+    if (unary(c)) { return d; }
+    Db d1 = set_mark(d, input(c), mark);
+    return if (c.kind == 3) { set_mark(set_mark(d1, c.scale, mark), c.offset, mark) } else { d1 };
+}
+
+// ---- planner ------------------------------------------------------------
+
+Db new_mark(Db d) { return Db {.vs = d.vs, .cs = d.cs, .mark = d.mark + 1, .r = d.r}; }
+
+// Constraints consuming v that are satisfied and not v's determining one.
+List(Int) consuming(Db d, Int vi, List(Int) todo) {
+    Var v = d.vs[vi];
+    return consuming_at(d, v.cons, v.det, 0, todo);
+}
+
+List(Int) consuming_at(Db d, List(Int) cons, Int det, Int i, List(Int) todo) {
+    if (i >= cons.len()) { return todo; }
+    Int c = cons[i];
+    Bool add = c != det && satisfied(d.cs[c]);
+    return consuming_at(d, cons, det, i + 1, if (add) { todo.concat([c]) } else { todo });
+}
+
+// addPropagate: r = 1 when it succeeded.
+Db add_propagate(Db d, Int c, Int mark, List(Int) todo, Int h) {
+    if (h >= todo.len()) { return with_r(d, 1); }
+    Int x = todo[h];
+    Int out = output(d.cs[x]);
+    if (d.vs[out].mark == mark) { return with_r(incremental_remove(d, c), 0); }
+    Db d1 = recalculate(d, x);
+    return add_propagate(d1, c, mark, consuming(d1, output(d1.cs[x]), todo), h + 1);
+}
+
+// satisfy: r = the overridden constraint, or -1.
+Db satisfy(Db d0, Int ci, Int mark) {
+    Db d = choose_method(d0, ci, mark);
+    Con c = d.cs[ci];
+    if (!satisfied(c)) {
+        rt_assert(c.str != required(), "Could not satisfy a required constraint");
+        return with_r(d, 0 - 1);
+    }
+    Db d1 = inputs_mark(d, c, mark);
+    Int out = output(c);
+    Int ov = d1.vs[out].det;
+    Db d2 = if (ov >= 0) { mark_unsatisfied(d1, ov) } else { d1 };
+    Db d3 = set_det(d2, out, ci);
+    List(Int) start = [ci];
+    Db d4 = add_propagate(d3, ci, mark, start, 0);
+    rt_assert(d4.r == 1, "Cycle encountered");
+    return with_r(set_mark(d4, out, mark), ov);
+}
+
+Db incremental_add(Db d, Int ci) {
+    Db d1 = new_mark(d);
+    Int mark = d1.mark;
+    return add_overridden(satisfy(d1, ci, mark), mark);
+}
+
+Db add_overridden(Db d, Int mark) {
+    if (d.r < 0) { return d; }
+    return add_overridden(satisfy(d, d.r, mark), mark);
+}
+
+Db incremental_remove(Db d, Int ci) {
+    Int out = output(d.cs[ci]);
+    Db d1 = remove_from_graph(mark_unsatisfied(d, ci), ci);
+    Walk w = remove_propagate_from(d1, out);
+    return add_all(w.d, w.unsat, 0);
+}
+
+Db add_all(Db d, List(Int) cs, Int i) {
+    if (i >= cs.len()) { return d; }
+    return add_all(incremental_add(d, cs[i]), cs, i + 1);
+}
+
+type Walk = { Db d; List(Int) unsat; };
+type RpS = { Db d; List(Int) todo; };
+
+// removePropagateFrom. Vector.sort in the reference implements no swap,
+// so it only handles lists already in order; so does this.
+Walk remove_propagate_from(Db d, Int out) {
+    Var v = d.vs[out];
+    Db d1 = set_var(d, out, var_with(v, v.value, 0 - 1, v.mark, weakest(), true));
+    List(Int) todo = [out];
+    List(Int) un = [];
+    Walk w = rp_loop(d1, todo, 0, un);
+    Int n = w.unsat.len();
+    rt_assert(n <= 1 || (n == 2 && w.d.cs[w.unsat[0]].str < w.d.cs[w.unsat[1]].str), "Vector.sort: swap not implemented");
+    return w;
+}
+
+Walk rp_loop(Db d, List(Int) todo, Int h, List(Int) unsat) {
+    if (h >= todo.len()) { return Walk {.d = d, .unsat = unsat}; }
+    Var v = d.vs[todo[h]];
+    List(Int) un2 = unsat_of(d, v.cons, 0, unsat);
+    RpS s = rp_cons(d, v.cons, v.det, 0, todo);
+    return rp_loop(s.d, s.todo, h + 1, un2);
+}
+
+List(Int) unsat_of(Db d, List(Int) cons, Int i, List(Int) acc) {
+    if (i >= cons.len()) { return acc; }
+    Int c = cons[i];
+    return unsat_of(d, cons, i + 1, if (satisfied(d.cs[c])) { acc } else { acc.concat([c]) });
+}
+
+RpS rp_cons(Db d, List(Int) cons, Int det, Int i, List(Int) todo) {
+    if (i >= cons.len()) { return RpS {.d = d, .todo = todo}; }
+    Int c = cons[i];
+    if (c != det && satisfied(d.cs[c])) {
+        Db d1 = recalculate(d, c);
+        return rp_cons(d1, cons, det, i + 1, todo.concat([output(d1.cs[c])]));
+    }
+    return rp_cons(d, cons, det, i + 1, todo);
+}
+
+// ---- building -----------------------------------------------------------
+
+Db new_var(Db d, Int value) {
+    List(Int) none = [];
+    Var v = Var {.value = value, .cons = none, .det = 0 - 1, .mark = 0, .walk = weakest(), .stay = true};
+    Int at = d.vs.len();
+    return Db {.vs = d.vs.concat([v]), .cs = d.cs, .mark = d.mark, .r = at};
+}
+
+Db new_con(Db d, Int kind, Int str, Int v1, Int v2, Int scale, Int offset) {
+    Int ci = d.cs.len();
+    Con c = Con {.kind = kind, .str = str, .v1 = v1, .v2 = v2, .scale = scale, .offset = offset, .dir = 0, .sat = false};
+    Db d1 = Db {.vs = d.vs, .cs = d.cs.concat([c]), .mark = d.mark, .r = d.r};
+    return with_r(incremental_add(add_to_graph(d1, ci), ci), ci);
+}
+
+Db destroy(Db d, Int ci) {
+    Db d1 = if (satisfied(d.cs[ci])) { incremental_remove(d, ci) } else { d };
+    return remove_from_graph(d1, ci);
+}
+
+type Pl = { Db d; List(Int) plan; };
+
+Pl make_plan(Db d, List(Int) sources) {
+    Db d1 = new_mark(d);
+    List(Int) empty = [];
+    return plan_loop(d1, d1.mark, sources, 0, empty);
+}
+
+Pl plan_loop(Db d, Int mark, List(Int) todo, Int h, List(Int) plan) {
+    if (h >= todo.len()) { return Pl {.d = d, .plan = plan}; }
+    Int c = todo[h];
+    Con cc = d.cs[c];
+    Int out = output(cc);
+    if (d.vs[out].mark != mark && inputs_known(d, cc, mark)) {
+        Db d2 = set_mark(d, out, mark);
+        return plan_loop(d2, mark, consuming(d2, out, todo), h + 1, plan.concat([c]));
+    }
+    return plan_loop(d, mark, todo, h + 1, plan);
+}
+
+Pl extract_plan(Db d, Int edit) {
+    Con c = d.cs[edit];
+    List(Int) sources = if (is_input(c) && satisfied(c)) { [edit] } else { [] };
+    return make_plan(d, sources);
+}
+
+Db run_plan(Db d, List(Int) plan, Int i) {
+    if (i >= plan.len()) { return d; }
+    return run_plan(execute(d, plan[i]), plan, i + 1);
+}
+
+Db repeat_plan(Db d, Int var, Int value, List(Int) plan, Int k) {
+    if (k >= 10) { return d; }
+    return repeat_plan(run_plan(set_value(d, var, value), plan, 0), var, value, plan, k + 1);
+}
+
+Db change(Db d, Int var, Int value) {
+    Db d1 = new_con(d, 0, preferred(), var, 0 - 1, 0 - 1, 0 - 1);
+    Int edit = d1.r;
+    Pl p = extract_plan(d1, edit);
+    return destroy(repeat_plan(p.d, var, value, p.plan, 0), edit);
+}
+
+// ---- tests ----------------------------------------------------------------
+
+Db empty_db() {
+    List(Var) vs = [];
+    List(Con) cs = [];
+    return Db {.vs = vs, .cs = cs, .mark = 1, .r = 0};
+}
+
+Db add_vars(Db d, Int k) {
+    if (k <= 0) { return d; }
+    return add_vars(new_var(d, 0), k - 1);
+}
+
+Db add_chain(Db d, Int i, Int n) {
+    if (i >= n) { return d; }
+    return add_chain(new_con(d, 2, required(), i, i + 1, 0 - 1, 0 - 1), i + 1, n);
+}
+
+Db chain_run(Db d, List(Int) plan, Int n, Int i) {
+    if (i >= 100) { return d; }
+    Db d1 = run_plan(set_value(d, 0, i), plan, 0);
+    rt_assert(d1.vs[n].value == i, "Chain test failed!");
+    return chain_run(d1, plan, n, i + 1);
+}
+
+Bool chain_test(Int n) {
+    Db d0 = add_chain(add_vars(empty_db(), n + 1), 0, n);
+    Db d1 = new_con(d0, 1, strong_default(), n, 0 - 1, 0 - 1, 0 - 1);
+    Db d2 = new_con(d1, 0, preferred(), 0, 0 - 1, 0 - 1, 0 - 1);
+    Int edit = d2.r;
+    Pl p = extract_plan(d2, edit);
+    Db d3 = chain_run(p.d, p.plan, n, 0);
+    Db d4 = destroy(d3, edit);
+    return d4.vs.len() == n + 1;
+}
+
+type Proj = { Db d; List(Int) dests; Int src; Int dst; };
+
+Proj add_projections(Db d, Int scale, Int offset, Int i, Int n, List(Int) dests, Int src, Int dst) {
+    if (i > n) { return Proj {.d = d, .dests = dests, .src = src, .dst = dst}; }
+    Db d1 = new_var(d, i);
+    Int s = d1.r;
+    Db d2 = new_var(d1, i);
+    Int t = d2.r;
+    Db d3 = new_con(d2, 1, default_str(), s, 0 - 1, 0 - 1, 0 - 1);
+    Db d4 = new_con(d3, 3, required(), s, t, scale, offset);
+    return add_projections(d4, scale, offset, i + 1, n, dests.concat([t]), s, t);
+}
+
+Bool dests_ok(Db d, List(Int) dests, Int i, Int n, Int base) {
+    if (i >= n - 1) { return true; }
+    rt_assert(d.vs[dests[i]].value == (i + 1) * 5 + base, "Projection test 3/4 failed!");
+    return dests_ok(d, dests, i + 1, n, base);
+}
+
+Bool projection_test(Int n) {
+    Db d0 = new_var(empty_db(), 10);
+    Int scale = d0.r;
+    Db d1 = new_var(d0, 1000);
+    Int offset = d1.r;
+    List(Int) none = [];
+    Proj p = add_projections(d1, scale, offset, 1, n, none, 0 - 1, 0 - 1);
+    Db d2 = change(p.d, p.src, 17);
+    rt_assert(d2.vs[p.dst].value == 1170, "Projection test 1 failed!");
+    Db d3 = change(d2, p.dst, 1050);
+    rt_assert(d3.vs[p.src].value == 5, "Projection test 2 failed!");
+    Db d4 = change(d3, scale, 5);
+    Bool ok3 = dests_ok(d4, p.dests, 0, n, 1000);
+    Db d5 = change(d4, offset, 2000);
+    return ok3 && dests_ok(d5, p.dests, 0, n, 2000);
+}
+
+/// Runs DeltaBlue's chain and projection tests at size `inner`.
+pub Bool deltablue_inner(Int inner) {
+    return chain_test(inner) && projection_test(inner);
+}

@@ -1,0 +1,399 @@
+// AWFY Havlak: loop recognition (Havlak's algorithm) on a synthetic
+// control-flow graph. Blocks, union-find nodes and loops are indexed
+// lists in threaded state; references are indices, -1 is null. The
+// block-number dictionary is a Map(Int, Int) keyed by block name; sets
+// of the reference are lists with a membership test before each add.
+
+type Blk = { List(Int) ins; List(Int) outs; Bool present; };
+type Cfg = { List(Blk) blocks; Int start; List(Int) edges; };
+type Loop = { List(Int) blocks; List(Int) children; Int parent; Int header; Bool red; Bool is_root; Int nesting; Int counter; Int depth; };
+type Lsg = { List(Loop) loops; Int counter; };
+type Uf = { Int parent; Int bb; Int loop; Int dfs; };
+type Hf = { List(List(Int)) nbp; List(List(Int)) bp; Map(Int, Int) number; List(Int) header; List(Int) ty; List(Int) last; List(Uf) nodes; Lsg lsg; };
+
+Int unvisited() { return 2147483647; }
+// BasicBlockClass
+Int bb_nonheader() { return 1; }
+Int bb_reducible() { return 2; }
+Int bb_self() { return 3; }
+Int bb_irreducible() { return 4; }
+Int bb_dead() { return 5; }
+
+// ---- control-flow graph ----------------------------------------------------
+
+Blk no_blk() {
+    List(Int) e = [];
+    return Blk {.ins = e, .outs = e, .present = false};
+}
+
+List(Blk) grow(List(Blk) bs, Int n) {
+    if (bs.len() >= n) { return bs; }
+    return grow(bs.concat([no_blk()]), n);
+}
+
+Cfg create_node(Cfg g, Int name) {
+    List(Blk) bs0 = grow(g.blocks, name + 1);
+    Bool exists = bs0[name].present;
+    List(Int) e = [];
+    List(Blk) bs = if (exists) { bs0 } else { bs0.with(name, Blk {.ins = e, .outs = e, .present = true}) };
+    Int start = if (bs.len() == 1) { name } else { g.start };
+    return Cfg {.blocks = bs, .start = start, .edges = g.edges};
+}
+
+Cfg add_edge(Cfg g0, Int from, Int to) {
+    Cfg g = create_node(create_node(g0, from), to);
+    Blk f = g.blocks[from];
+    List(Blk) b1 = g.blocks.with(from, Blk {.ins = f.ins, .outs = f.outs.concat([to]), .present = true});
+    Blk t = b1[to];
+    List(Blk) b2 = b1.with(to, Blk {.ins = t.ins.concat([from]), .outs = t.outs, .present = true});
+    return Cfg {.blocks = b2, .start = g.start, .edges = g.edges.concat([from, to])};
+}
+
+type Gn = { Cfg g; Int n; };
+
+Gn build_diamond(Cfg g, Int bb0) {
+    Cfg g1 = add_edge(add_edge(add_edge(add_edge(g, bb0, bb0 + 1), bb0, bb0 + 2), bb0 + 1, bb0 + 3), bb0 + 2, bb0 + 3);
+    return Gn {.g = g1, .n = bb0 + 3};
+}
+
+Gn build_straight(Cfg g, Int start, Int n, Int i) {
+    if (i >= n) { return Gn {.g = g, .n = start + n}; }
+    return build_straight(add_edge(g, start + i, start + i + 1), start, n, i + 1);
+}
+
+Gn build_base_loop(Cfg g, Int from) {
+    Gn header = build_straight(g, from, 1, 0);
+    Gn d1 = build_diamond(header.g, header.n);
+    Gn d11 = build_straight(d1.g, d1.n, 1, 0);
+    Gn d2 = build_diamond(d11.g, d11.n);
+    Gn footer = build_straight(d2.g, d2.n, 1, 0);
+    Cfg g2 = add_edge(add_edge(add_edge(footer.g, d2.n, d11.n), d1.n, header.n), footer.n, from);
+    return build_straight(g2, footer.n, 1, 0);
+}
+
+// ---- loop structure graph ---------------------------------------------------
+
+Loop new_loop(Int bb, Bool red, Int counter) {
+    List(Int) e = [];
+    List(Int) blocks = if (bb >= 0) { [bb] } else { e };
+    return Loop {.blocks = blocks, .children = e, .parent = 0 - 1, .header = bb, .red = red, .is_root = false, .nesting = 0, .counter = counter, .depth = 0};
+}
+
+Lsg new_lsg() {
+    Loop r = new_loop(0 - 1, true, 0);
+    Loop root = Loop {.blocks = r.blocks, .children = r.children, .parent = 0 - 1, .header = 0 - 1, .red = true, .is_root = true, .nesting = 0, .counter = 0, .depth = 0};
+    return Lsg {.loops = [root], .counter = 1};
+}
+
+Loop loop_with(Loop l, List(Int) blocks, List(Int) children, Int parent, Bool is_root, Int nesting, Int depth) {
+    return Loop {.blocks = blocks, .children = children, .parent = parent, .header = l.header, .red = l.red, .is_root = is_root, .nesting = nesting, .counter = l.counter, .depth = depth};
+}
+
+List(Int) set_add(List(Int) s, Int x) { return if (s.contains(x)) { s } else { s.concat([x]) }; }
+
+// SimpleLoop.setParent: parent set, and this loop added to its children.
+Lsg set_parent(Lsg s, Int loop, Int parent) {
+    Loop l = s.loops[loop];
+    List(Loop) l1 = s.loops.with(loop, loop_with(l, l.blocks, l.children, parent, l.is_root, l.nesting, l.depth));
+    Loop p = l1[parent];
+    List(Loop) l2 = l1.with(parent, loop_with(p, p.blocks, set_add(p.children, loop), p.parent, p.is_root, p.nesting, p.depth));
+    return Lsg {.loops = l2, .counter = s.counter};
+}
+
+Lsg add_node(Lsg s, Int loop, Int bb) {
+    Loop l = s.loops[loop];
+    return Lsg {.loops = s.loops.with(loop, loop_with(l, set_add(l.blocks, bb), l.children, l.parent, l.is_root, l.nesting, l.depth)), .counter = s.counter};
+}
+
+Lsg parent_orphans(Lsg s, Int i) {
+    if (i >= s.loops.len()) { return s; }
+    Loop l = s.loops[i];
+    return parent_orphans(if (!l.is_root && l.parent < 0) { set_parent(s, i, 0) } else { s }, i + 1);
+}
+
+Lsg nesting_rec(Lsg s, Int loop, Int depth) {
+    Loop l = s.loops[loop];
+    Lsg s1 = Lsg {.loops = s.loops.with(loop, loop_with(l, l.blocks, l.children, l.parent, l.is_root, l.nesting, depth)), .counter = s.counter};
+    return nesting_kids(s1, loop, l.children, 0, depth);
+}
+
+Lsg nesting_kids(Lsg s, Int loop, List(Int) kids, Int i, Int depth) {
+    if (i >= kids.len()) { return s; }
+    Lsg s1 = nesting_rec(s, kids[i], depth + 1);
+    Loop l = s1.loops[loop];
+    Int lvl = max(l.nesting, 1 + s1.loops[kids[i]].nesting);
+    Loop l2 = loop_with(l, l.blocks, l.children, l.parent, l.is_root || lvl == 0, lvl, l.depth);
+    return nesting_kids(Lsg {.loops = s1.loops.with(loop, l2), .counter = s1.counter}, loop, kids, i + 1, depth);
+}
+
+Lsg calculate_nesting(Lsg s) { return nesting_rec(parent_orphans(s, 0), 0, 0); }
+
+// ---- Havlak's loop finder -------------------------------------------------------
+
+Bool is_ancestor(Hf h, Int w, Int v) { return w <= v && v <= h.last[w]; }
+
+Hf with_nodes(Hf h, List(Uf) nodes) {
+    return Hf {.nbp = h.nbp, .bp = h.bp, .number = h.number, .header = h.header, .ty = h.ty, .last = h.last, .nodes = nodes, .lsg = h.lsg};
+}
+
+Hf with_ty(Hf h, Int w, Int t) {
+    return Hf {.nbp = h.nbp, .bp = h.bp, .number = h.number, .header = h.header, .ty = h.ty.with(w, t), .last = h.last, .nodes = h.nodes, .lsg = h.lsg};
+}
+
+Hf do_dfs(Hf h, Cfg g, Int bb, Int current) {
+    List(Uf) nodes = h.nodes.with(current, Uf {.parent = current, .bb = bb, .loop = 0 - 1, .dfs = current});
+    Hf h1 = Hf {.nbp = h.nbp, .bp = h.bp, .number = h.number.insert(bb, current), .header = h.header, .ty = h.ty, .last = h.last, .nodes = nodes, .lsg = h.lsg};
+    return dfs_outs(h1, g, g.blocks[bb].outs, 0, current, current);
+}
+
+// Walks the out-edges; `last` is the highest number given so far.
+Hf dfs_outs(Hf h, Cfg g, List(Int) outs, Int i, Int current, Int last_id) {
+    if (i >= outs.len()) {
+        return Hf {.nbp = h.nbp, .bp = h.bp, .number = h.number, .header = h.header, .ty = h.ty, .last = h.last.with(current, last_id), .nodes = h.nodes, .lsg = h.lsg};
+    }
+    Int target = outs[i];
+    if ((h.number.get(target) else { unvisited() }) == unvisited()) {
+        Hf h1 = do_dfs(h, g, target, last_id + 1);
+        return dfs_outs(h1, g, outs, i + 1, current, h1.last[last_id + 1]);
+    }
+    return dfs_outs(h, g, outs, i + 1, current, last_id);
+}
+
+Map(Int, Int) mark_unvisited(Map(Int, Int) m, Int i, Int n) {
+    if (i >= n) { return m; }
+    return mark_unvisited(m.insert(i, unvisited()), i + 1, n);
+}
+
+Hf process_edges(Hf h, List(Int) ins, Int i, Int w) {
+    if (i >= ins.len()) { return h; }
+    Int v = h.number.get(ins[i]) else { unvisited() };
+    if (v == unvisited()) { return process_edges(h, ins, i + 1, w); }
+    if (is_ancestor(h, w, v)) {
+        Hf h1 = Hf {.nbp = h.nbp, .bp = h.bp.with(w, h.bp[w].concat([v])), .number = h.number, .header = h.header, .ty = h.ty, .last = h.last, .nodes = h.nodes, .lsg = h.lsg};
+        return process_edges(h1, ins, i + 1, w);
+    }
+    Hf h2 = Hf {.nbp = h.nbp.with(w, set_add(h.nbp[w], v)), .bp = h.bp, .number = h.number, .header = h.header, .ty = h.ty, .last = h.last, .nodes = h.nodes, .lsg = h.lsg};
+    return process_edges(h2, ins, i + 1, w);
+}
+
+Hf identify_edges(Hf h, Cfg g, Int w, Int size) {
+    if (w >= size) { return h; }
+    Int bb = h.nodes[w].bb;
+    Hf h1 = Hf {.nbp = h.nbp, .bp = h.bp, .number = h.number, .header = h.header.with(w, 0), .ty = h.ty.with(w, if (bb < 0) { bb_dead() } else { bb_nonheader() }), .last = h.last, .nodes = h.nodes, .lsg = h.lsg};
+    Hf h2 = if (bb < 0 || g.blocks[bb].ins.len() == 0) { h1 } else { process_edges(h1, g.blocks[bb].ins, 0, w) };
+    return identify_edges(h2, g, w + 1, size);
+}
+
+// UnionFindNode.findSet: nodes on the path whose parent is not a root are
+// pointed at the starting node's own parent (as the reference does).
+type Fs = { List(Uf) nodes; Int root; };
+
+Fs find_set(List(Uf) nodes, Int start) {
+    List(Int) none = [];
+    return fs_walk(nodes, start, start, none);
+}
+
+Fs fs_walk(List(Uf) nodes, Int start, Int node, List(Int) list) {
+    Int p = nodes[node].parent;
+    if (node == p) { return Fs {.nodes = fs_relink(nodes, list, 0, nodes[start].parent), .root = node}; }
+    List(Int) l2 = if (p != nodes[p].parent) { list.concat([node]) } else { list };
+    return fs_walk(nodes, start, p, l2);
+}
+
+List(Uf) fs_relink(List(Uf) nodes, List(Int) list, Int i, Int to) {
+    if (i >= list.len()) { return nodes; }
+    Uf u = nodes[list[i]];
+    return fs_relink(nodes.with(list[i], Uf {.parent = to, .bb = u.bb, .loop = u.loop, .dfs = u.dfs}), list, i + 1, to);
+}
+
+type Pool = { Hf h; List(Int) pool; List(Int) work; };
+
+Pool step_d(Pool p, List(Int) bps, Int i, Int w) {
+    if (i >= bps.len()) { return p; }
+    Int v = bps[i];
+    if (v != w) {
+        Hf h = p.h;
+        Fs f = find_set(h.nodes, v);
+        return step_d(Pool {.h = with_nodes(h, f.nodes), .pool = p.pool.concat([f.root]), .work = p.work}, bps, i + 1, w);
+    }
+    return step_d(Pool {.h = with_ty(p.h, w, bb_self()), .pool = p.pool, .work = p.work}, bps, i + 1, w);
+}
+
+// stepEProcessNonBackPreds over nbp[x], reading its length every step (an
+// add to nbp[w] while x == w is seen by the walk, as in the reference).
+Pool step_e(Pool p, Int w, Int x, Int i) {
+    if (i >= p.h.nbp[x].len()) { return p; }
+    Int iter = p.h.nbp[x][i];
+    Hf h0 = p.h;
+    Fs f = find_set(h0.nodes, iter);
+    Hf h = with_nodes(h0, f.nodes);
+    Int yd = f.root;
+    if (!is_ancestor(h, w, yd)) {
+        Hf h1 = with_ty(h, w, bb_irreducible());
+        Hf h2 = Hf {.nbp = h1.nbp.with(w, set_add(h1.nbp[w], yd)), .bp = h1.bp, .number = h1.number, .header = h1.header, .ty = h1.ty, .last = h1.last, .nodes = h1.nodes, .lsg = h1.lsg};
+        return step_e(Pool {.h = h2, .pool = p.pool, .work = p.work}, w, x, i + 1);
+    }
+    if (yd != w && !p.pool.contains(yd)) {
+        return step_e(Pool {.h = h, .pool = p.pool.concat([yd]), .work = p.work.concat([yd])}, w, x, i + 1);
+    }
+    return step_e(Pool {.h = h, .pool = p.pool, .work = p.work}, w, x, i + 1);
+}
+
+// The work list from head index k; false when a node has too many preds.
+type Wr = { Pool p; Bool ok; };
+
+Wr work_loop(Pool p, Int w, Int k) {
+    if (k >= p.work.len()) { return Wr {.p = p, .ok = true}; }
+    Int x = p.work[k];
+    if (p.h.nbp[x].len() > 32 * 1024) { return Wr {.p = p, .ok = false}; }
+    return work_loop(step_e(p, w, x, 0), w, k + 1);
+}
+
+Hf set_loop_attrs(Hf h0, Int w, List(Int) pool, Int loop) {
+    Uf nw = h0.nodes[w];
+    List(Uf) ns = h0.nodes.with(w, Uf {.parent = nw.parent, .bb = nw.bb, .loop = loop, .dfs = nw.dfs});
+    Hf h = with_nodes(h0, ns);
+    return attrs_each(h, w, pool, 0, loop);
+}
+
+Hf attrs_each(Hf h, Int w, List(Int) pool, Int i, Int loop) {
+    if (i >= pool.len()) { return h; }
+    Int n = pool[i];
+    Uf u = h.nodes[n];
+    List(Uf) nodes = h.nodes.with(n, Uf {.parent = w, .bb = u.bb, .loop = u.loop, .dfs = u.dfs});
+    Lsg s = if (u.loop >= 0) { set_parent(h.lsg, u.loop, loop) } else { add_node(h.lsg, loop, u.bb) };
+    Hf h1 = Hf {.nbp = h.nbp, .bp = h.bp, .number = h.number, .header = h.header.with(n, w), .ty = h.ty, .last = h.last, .nodes = nodes, .lsg = s};
+    return attrs_each(h1, w, pool, i + 1, loop);
+}
+
+// findLoops' main loop over w = size-1 down to 0; ok false = an early return.
+Wr find_main(Hf h, Int w) {
+    List(Int) none = [];
+    if (w < 0) { return Wr {.p = Pool {.h = h, .pool = none, .work = none}, .ok = true}; }
+    Int bb = h.nodes[w].bb;
+    if (bb < 0) { return find_main(h, w - 1); }
+    List(Int) bps = h.bp[w];
+    Pool p0 = step_d(Pool {.h = h, .pool = none, .work = none}, bps, 0, w);
+    // The work list starts as a copy of the node pool (workList in the reference).
+    ListBuf(Int) wb = ListBuf();
+    List(Int) work = copy_ints(p0.pool, 0, wb);
+    Pool p1 = Pool {.h = if (p0.pool.len() != 0) { with_ty(p0.h, w, bb_reducible()) } else { p0.h }, .pool = p0.pool, .work = work};
+    Wr r = work_loop(p1, w, 0);
+    if (!r.ok) { return r; }
+    Pool p = r.p;
+    Hf ph = p.h;
+    Int t = ph.ty[w];
+    if (p.pool.len() > 0 || t == bb_self()) {
+        Lsg s = ph.lsg;
+        Int loop = s.loops.len();
+        Int counter = s.counter;
+        Lsg s2 = Lsg {.loops = s.loops.concat([new_loop(bb, t != bb_irreducible(), counter)]), .counter = counter + 1};
+        Hf h2 = Hf {.nbp = ph.nbp, .bp = ph.bp, .number = ph.number, .header = ph.header, .ty = ph.ty, .last = ph.last, .nodes = ph.nodes, .lsg = s2};
+        return find_main(set_loop_attrs(h2, w, p.pool, loop), w - 1);
+    }
+    return find_main(ph, w - 1);
+}
+
+List(Int) copy_ints(List(Int) xs, Int i, ListBuf(Int) acc) {
+    if (i >= xs.len()) { return acc.finish(); }
+    return copy_ints(xs, i + 1, acc.push(xs[i]));
+}
+
+List(T) fill(Int n, T v, ListBuf(T) acc) {
+    if (n <= 0) { return acc.finish(); }
+    return fill(n - 1, v, acc.push(v));
+}
+
+Lsg find_loops(Cfg g, Lsg lsg) {
+    if (g.start < 0) { return lsg; }
+    Int size = g.blocks.len();
+    ListBuf(List(Int)) e1 = ListBuf();
+    ListBuf(List(Int)) e2 = ListBuf();
+    ListBuf(Int) e3 = ListBuf();
+    ListBuf(Int) e4 = ListBuf();
+    ListBuf(Int) e5 = ListBuf();
+    ListBuf(Uf) e6 = ListBuf();
+    List(Int) none = [];
+    Map(Int, Int) num0 = {};
+    Hf h0 = Hf {.nbp = fill(size, none, e1), .bp = fill(size, none, e2), .number = mark_unvisited(num0, 0, size),
+                .header = fill(size, 0, e3), .ty = fill(size, 0, e4), .last = fill(size, 0, e5),
+                .nodes = fill(size, Uf {.parent = 0 - 1, .bb = 0 - 1, .loop = 0 - 1, .dfs = 0}, e6), .lsg = lsg};
+    Hf h1 = do_dfs(h0, g, g.start, 0);
+    Hf h2 = identify_edges(h1, g, 0, size);
+    Hf h3 = Hf {.nbp = h2.nbp, .bp = h2.bp, .number = h2.number, .header = h2.header.with(0, 0), .ty = h2.ty, .last = h2.last, .nodes = h2.nodes, .lsg = h2.lsg};
+    Wr r = find_main(h3, size - 1);
+    Pool p = r.p;
+    Hf hh = p.h;
+    return hh.lsg;
+}
+
+// ---- LoopTesterApp ---------------------------------------------------------------
+
+Cfg construct_simple(Cfg g) {
+    Gn b = build_base_loop(create_node(g, 0), 0);
+    Cfg g1 = b.g;
+    return add_edge(create_node(g1, 1), 0, 2);
+}
+
+Lsg add_dummy_loops(Cfg g, Lsg lsg, Int k) {
+    if (k <= 0) { return lsg; }
+    return add_dummy_loops(g, find_loops(g, lsg), k - 1);
+}
+
+Gn base_loops(Cfg g, Int n, Int j, Int count) {
+    if (j >= count) { return Gn {.g = g, .n = n}; }
+    Gn b = build_base_loop(g, n);
+    return base_loops(b.g, b.n, j + 1, count);
+}
+
+Gn pparloops(Cfg g, Int n, Int i, Int count, Int pppar) {
+    if (i >= count) { return Gn {.g = g, .n = n}; }
+    Int top = n;
+    Gn s1 = build_straight(g, n, 1, 0);
+    Gn s2 = base_loops(s1.g, s1.n, 0, pppar);
+    Gn bottom = build_straight(s2.g, s2.n, 1, 0);
+    return pparloops(add_edge(bottom.g, s2.n, top), bottom.n, i + 1, count, pppar);
+}
+
+Gn construct_cfg(Cfg g, Int n, Int t, Int par, Int ppar, Int pppar) {
+    if (t >= par) { return Gn {.g = g, .n = n}; }
+    Cfg g1 = add_edge(create_node(g, n + 1), 2, n + 1);
+    Gn p = pparloops(g1, n + 1, 0, ppar, pppar);
+    return construct_cfg(add_edge(p.g, p.n, 1), p.n, t + 1, par, ppar, pppar);
+}
+
+// The reference discards these results; their loop counts are summed so
+// no compiler can drop the work.
+Int find_fresh(Cfg g, Int k, Int total) {
+    if (k <= 0) { return total; }
+    Lsg s = find_loops(g, new_lsg());
+    return find_fresh(g, k - 1, total + s.loops.len());
+}
+
+List(Int) app_main(Int dummy, Int iterations, Int par, Int ppar, Int pppar) {
+    List(Blk) bs = [];
+    List(Int) es = [];
+    Cfg g0 = create_node(Cfg {.blocks = bs, .start = 0 - 1, .edges = es}, 0);
+    Cfg g1 = construct_simple(g0);
+    Lsg lsg0 = add_dummy_loops(g1, new_lsg(), dummy);
+    Gn c = construct_cfg(g1, 2, 0, par, ppar, pppar);
+    Cfg g2 = c.g;
+    Lsg lsg1 = find_loops(g2, lsg0);
+    Int extra = find_fresh(g2, iterations, 0);
+    rt_assert(extra > 0 || iterations == 0, "findLoops found nothing");
+    Lsg lsg2 = calculate_nesting(lsg1);
+    return [lsg2.loops.len(), g2.blocks.len()];
+}
+
+/// Runs Havlak with `inner` dummy loop searches, verifying both counts.
+pub Bool havlak_inner(Int inner) {
+    List(Int) r = app_main(inner, rt 50, rt 10, rt 10, rt 5);
+    if (inner == 15000) { return r[0] == 46602 && r[1] == 5213; }
+    if (inner == 1500) { return r[0] == 6102 && r[1] == 5213; }
+    if (inner == 150) { return r[0] == 2052 && r[1] == 5213; }
+    if (inner == 15) { return r[0] == 1647 && r[1] == 5213; }
+    if (inner == 1) { return r[0] == 1605 && r[1] == 5213; }
+    println(f"No verification result for {inner} found");
+    println(f"Result is: {r[0]}, {r[1]}");
+    return false;
+}

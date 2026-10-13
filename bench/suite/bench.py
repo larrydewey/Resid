@@ -61,12 +61,28 @@ SIZE_ARG = {
     "pidigits": {"official": "10000", "small": "2000"},
     "regex-redux": {"official": "0", "small": "0"},
 }
+# Guard sizes: values no program was tuned for, within the constraints the
+# best programs state (even spectral-norm N, mandelbrot N a multiple of 8,
+# pidigits N a multiple of 10). A cell whose output at a
+# guard size disagrees with the C reference at that size computes from a
+# constant, not from its input (the "nothing folded" check of CONTRACT.md).
+GUARD = {
+    "nbody": "1234567", "fannkuch-redux": "9", "spectral-norm": "778",
+    "mandelbrot": "1232", "binary-trees": "15", "fasta": "1234567",
+    "k-nucleotide": "0", "reverse-complement": "0", "pidigits": "1230",
+    "regex-redux": "0",
+}
+for _b, _v in GUARD.items():
+    SIZE_ARG[_b]["guard"] = _v
 # bench -> {size: fasta N used to generate the stdin input}
 STDIN_N = {
     "k-nucleotide": {"official": "25000000", "small": "2500000"},
     "reverse-complement": {"official": "25000000", "small": "2500000"},
     "regex-redux": {"official": "5000000", "small": "500000"},
 }
+STDIN_N["k-nucleotide"]["guard"] = "1234567"
+STDIN_N["reverse-complement"]["guard"] = "1234567"
+STDIN_N["regex-redux"]["guard"] = "345679"
 REF_TRACK, REF_LANG = "st", "c"
 
 SOURCE_EXTS = {".resid", ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".hh", ".rs",
@@ -712,6 +728,8 @@ def cmd_run(args, size=None):
     policy = parse_policy(args.mem_policy)
     mem_bytes = int(args.mem_limit_gb * (1 << 30)) if args.mem_limit_gb > 0 else 0
     timeout = args.timeout or (1800 if size == "official" else 300)
+    if size == "guard":
+        args.runs = 1
     all_cpus = sorted(os.sched_getaffinity(0))
     memrun = memrun_path(args.results)
     log_dir = os.path.join(args.results, "logs")
@@ -1746,6 +1764,30 @@ def cmd_report(args):
       "after the runs).")
     W("")
 
+    gv = guard_verdicts(runs)
+    if gv:
+        W("### Guard run (nothing folded)")
+        W("")
+        W("Each cell ran once more at guard sizes no program was tuned for (" +
+          ", ".join(f"`{b}` {GUARD[b] if GUARD[b] != '0' else 'fasta N=' + STDIN_N[b]['guard']}"
+                    for b in BENCHES) +
+          "), and its output was compared with the C reference at the same size. A program "
+          "that computed its answer at build time from a constant size would fail here; so "
+          "does a program with a bug the official sizes do not reach, which is what every "
+          "failure below turned out to be (see the cell notes).")
+        W("")
+        for track in TRACKS:
+            W(f"**{track}, guard**")
+            W("")
+            W(matrix(track, "official", lambda a: {"ok": "pass", "reference": "ref", "mismatch": "FAIL",
+                                                   "no-reference": "no ref", "n/a": "error"}.get(
+                gv.get((a["track"], a["bench"], a["lang"])), DASH)))
+            W("")
+        fails = sorted(k for k, v in gv.items() if v == "mismatch")
+        W(f"Guard failures: {len(fails)}" + (": " + ", ".join(f"`{t}/{b}/{l}`" for t, b, l in fails)
+                                             if fails else "."))
+        W("")
+
     # ---------------- appendix
     W("## Appendix: cell notes and provenance")
     W("")
@@ -1843,6 +1885,20 @@ def cmd_report(args):
 # ----------------------------------------------------------------------------
 # CLI
 
+def cmd_guard(args):
+    args.runs = 1
+    cmd_run(args, "guard")
+
+
+def guard_verdicts(runs):
+    """(track, bench, lang) -> verdict of the latest guard batch."""
+    out = {}
+    for (track, bench, lang, size), batch in latest_batches(runs).items():
+        if size == "guard" and batch:
+            out[(track, bench, lang)] = batch[-1].get("verdict")
+    return out
+
+
 def cmd_all(args):
     cmd_env(args)
     cmd_build(args)
@@ -1886,7 +1942,10 @@ def main(argv=None):
     p = sub.add_parser("run")
     filters(p)
     runopts(p)
-    p.add_argument("--size", choices=SIZES, default="small")
+    p.add_argument("--size", choices=SIZES + ["guard"], default="small")
+    p = sub.add_parser("guard", help="run every cell once at the guard sizes")
+    filters(p)
+    runopts(p)
     sub.add_parser("report")
     p = sub.add_parser("all")
     filters(p)
@@ -1911,7 +1970,7 @@ def main(argv=None):
     args.git_commit = git_commit()
     os.makedirs(args.results, exist_ok=True)
     {"env": cmd_env, "build": cmd_build, "inputs": cmd_inputs, "run": cmd_run,
-     "report": cmd_report, "all": cmd_all}[args.cmd](args)
+     "report": cmd_report, "all": cmd_all, "guard": cmd_guard}[args.cmd](args)
 
 
 if __name__ == "__main__":

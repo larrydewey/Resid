@@ -1,0 +1,23 @@
+// A struct handed over whole to a function that may reuse its record must
+// not be read afterwards from its old record: here `step` rebuilds a `Gt`
+// (a candidate for record reuse) and the caller reads `c.val` and
+// `c.n` after the call. Both reads must see the old values.
+
+type Gt = { Str val; List(Str) lines; Int n; };
+
+Gt step(Gt c, Str val, List(Str) lines) {
+    return Gt {.val = val, .lines = lines, .n = c.n + 1};
+}
+
+Gt wrap(Gt c) {
+    Gt m = step(c, c.val + "!", c.lines.concat(["x"]));
+    return Gt {.val = m.val + "|" + c.val, .lines = m.lines, .n = m.n * 10 + c.n};
+}
+
+@requires(args)
+Int main() {
+    Gt c = Gt {.val = f"v{args.count()}", .lines = ["a"], .n = args.count()};
+    Gt r = wrap(wrap(c));
+    println(f"{r.val} {r.lines} {r.n}");
+    return 0;
+}

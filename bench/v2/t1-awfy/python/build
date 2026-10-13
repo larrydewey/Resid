@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Upstream Python port, unchanged; CPython.
+set -euo pipefail
+mkdir -p out

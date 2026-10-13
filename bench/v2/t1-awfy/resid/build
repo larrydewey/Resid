@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Resid AWFY harness, two modes: runtime (inputs `rt`, the headline) and
+# as-written (every `rt ` removed, so reduction may fold what it can).
+set -euo pipefail
+HERE="$(pwd)"
+ROOT="${RESID_ROOT:-$(git rev-parse --show-toplevel)}"
+RC="${RESIDC:-$ROOT/build/boot/stage2.bin}"
+PROFILE="${PROFILE:-portable}"
+FLAGS=$([ "$PROFILE" = native ] && echo "-O3 -march=native" || echo "-O2")
+mkdir -p out out/aw
+(cd "$ROOT" && "$RC" "$HERE/harness.resid" -o "$HERE/out/harness" $FLAGS >/dev/null)
+for f in *.resid; do sed -E 's/\brt ([0-9("-])/\1/g' "$f" > "out/aw/$f"; done
+(cd "$ROOT" && "$RC" "$HERE/out/aw/harness.resid" -o "$HERE/out/harness-aw" $FLAGS >/dev/null)

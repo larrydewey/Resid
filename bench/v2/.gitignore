@@ -1,0 +1,3 @@
+out/
+results/*.tmp
+.zig-cache/

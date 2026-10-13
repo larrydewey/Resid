@@ -1,0 +1,103 @@
+// fdlibm sin and cos (k_sin.c, k_cos.c, e_rem_pio2.c medium path, s_sin.c,
+// s_cos.c), as Java's StrictMath computes them. See fdlibm_consts.resid.
+import "fdlibm_consts.resid";
+
+Float fd_abs(Float x) { return if (x < 0.0) { 0.0 - x } else { x }; }
+
+Float k_sin(Float x, Float y, Bool iy) {
+    if (fd_abs(x) < fd_t_tiny() && (Int)x == 0) { return x; }
+    Float z = x * x;
+    Float v = z * x;
+    Float r = fd_S2() + z * (fd_S3() + z * (fd_S4() + z * (fd_S5() + z * fd_S6())));
+    if (!iy) { return x + v * (fd_S1() + z * r); }
+    return x - ((z * (0.5 * y - v * r) - y) - v * fd_S1());
+}
+
+// The double whose high word is that of |x| minus 0x00200000, low word 0:
+// |x| / 4 with its mantissa cut to the high word's 20 bits.
+Float qx_of(Float ax) {
+    Float q = ax * 0.25;
+    Float ulp = if (q >= 0.125) { 0.00000011920928955078125 } else { 0.000000059604644775390625 };
+    return (Float)((Int)(q / ulp)) * ulp;
+}
+
+Float k_cos(Float x, Float y) {
+    Float ax = fd_abs(x);
+    if (ax < fd_t_tiny() && (Int)x == 0) { return 1.0; }
+    Float z = x * x;
+    Float r = z * (fd_C1() + z * (fd_C2() + z * (fd_C3() + z * (fd_C4() + z * (fd_C5() + z * fd_C6())))));
+    if (ax < fd_t_cos_small()) { return 1.0 - (0.5 * z - (z * r - x * y)); }
+    Float qx = if (ax >= fd_t_cos_big()) { 0.28125 } else { qx_of(ax) };
+    Float hz = 0.5 * z - qx;
+    Float a = 1.0 - qx;
+    return a - (hz - (z * r - x * y));
+}
+
+type Red = { Int n; Float y0; Float y1; };
+
+// The binary exponent of a > 0 (frexp's e - 1).
+Int expo(Float a, Int e) {
+    if (a >= 2.0) { return expo(a * 0.5, e + 1); }
+    if (a < 1.0) { return expo(a * 2.0, e - 1); }
+    return e;
+}
+
+Red rem_pio2(Float x) {
+    Float ax = fd_abs(x);
+    Bool neg = x < 0.0;
+    if (ax < fd_t_3pio4()) {
+        Bool near = ax >= fd_t_pio2_hw_lo() && ax < fd_t_pio2_hw_hi();
+        Float z0 = ax - fd_pio2_1();
+        Float z = if (near) { z0 - fd_pio2_2() } else { z0 };
+        Float t = if (near) { fd_pio2_2t() } else { fd_pio2_1t() };
+        Float y0 = z - t;
+        Float y1 = (z - y0) - t;
+        return if (neg) { Red {.n = 0 - 1, .y0 = 0.0 - y0, .y1 = 0.0 - y1} } else { Red {.n = 1, .y0 = y0, .y1 = y1} };
+    }
+    rt_assert(ax < fd_t_medium(), "fdlibm: argument beyond the medium range");
+    Int n = (Int)(ax * fd_invpio2() + 0.5);
+    Float fn = (Float)n;
+    Float r = ax - fn * fd_pio2_1();
+    Float w = fn * fd_pio2_1t();
+    Bool quick = n < 32 && !(ax >= fd_npio2_lo()[n - 1] && ax < fd_npio2_hi()[n - 1]);
+    Red red = if (quick) { Red {.n = n, .y0 = r - w, .y1 = (r - (r - w)) - w} } else { rem_more(ax, fn, r, w, n) };
+    return if (neg) { Red {.n = 0 - red.n, .y0 = 0.0 - red.y0, .y1 = 0.0 - red.y1} } else { red };
+}
+
+Red rem_more(Float ax, Float fn, Float r, Float w, Int n) {
+    Int j = expo(ax, 0);
+    Float y0 = r - w;
+    if (j - expo(fd_abs(y0), 0) <= 16) { return Red {.n = n, .y0 = y0, .y1 = (r - y0) - w}; }
+    Float w2 = fn * fd_pio2_2();
+    Float r2 = r - w2;
+    Float w3 = fn * fd_pio2_2t() - ((r - r2) - w2);
+    Float y2 = r2 - w3;
+    if (j - expo(fd_abs(y2), 0) <= 49) { return Red {.n = n, .y0 = y2, .y1 = (r2 - y2) - w3}; }
+    Float w4 = fn * fd_pio2_3();
+    Float r3 = r2 - w4;
+    Float w5 = fn * fd_pio2_3t() - ((r2 - r3) - w4);
+    Float y3 = r3 - w5;
+    return Red {.n = n, .y0 = y3, .y1 = (r3 - y3) - w5};
+}
+
+/// Sine, as fdlibm (StrictMath.sin) computes it.
+pub Float fd_sin(Float x) {
+    if (fd_abs(x) < fd_t_pio4()) { return k_sin(x, 0.0, false); }
+    Red r = rem_pio2(x);
+    Int q = r.n & 3;
+    if (q == 0) { return k_sin(r.y0, r.y1, true); }
+    if (q == 1) { return k_cos(r.y0, r.y1); }
+    if (q == 2) { return 0.0 - k_sin(r.y0, r.y1, true); }
+    return 0.0 - k_cos(r.y0, r.y1);
+}
+
+/// Cosine, as fdlibm (StrictMath.cos) computes it.
+pub Float fd_cos(Float x) {
+    if (fd_abs(x) < fd_t_pio4()) { return k_cos(x, 0.0); }
+    Red r = rem_pio2(x);
+    Int q = r.n & 3;
+    if (q == 0) { return k_cos(r.y0, r.y1); }
+    if (q == 1) { return 0.0 - k_sin(r.y0, r.y1, true); }
+    if (q == 2) { return 0.0 - k_cos(r.y0, r.y1); }
+    return k_sin(r.y0, r.y1, true);
+}

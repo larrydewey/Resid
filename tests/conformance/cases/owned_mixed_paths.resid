@@ -1,0 +1,61 @@
+// Linear ownership per path (lower.resid lo_item): a struct handed over
+// whole on one path and updated field by field on another, nested records
+// (`Px.b : Bx`), and lists of records updated in place. Every older version
+// that is still read afterwards must keep its contents.
+
+type Bx = { List(Int) xs; List(Bool) fl; Int n; };
+type Px = { Bool ok; Bx b; };
+type Pt = { Int x; Int y; };
+
+Px step(Bx b, Int k) {
+    if (k == 0) { return Px {.ok = false, .b = b}; }
+    if (k == 1) { return step(b, 0); }
+    Bx b1 = Bx {.xs = b.xs.with(0, k), .fl = b.fl.with(1, false), .n = b.n + 1};
+    if (k > 5) { return Px {.ok = true, .b = b1}; }
+    Px p = step(b1, k + 1);
+    if (p.ok) { return p; }
+    return Px {.ok = false, .b = Bx {.xs = p.b.xs.with(2, 99), .fl = p.b.fl, .n = p.b.n}};
+}
+
+Bx keep(Bx b) { return b; }
+
+// Whole on one path, per field on the other, both returning a Px.
+Px poke(Bx b, Int k) {
+    if (k < 0) { return Px {.ok = false, .b = keep(b)}; }
+    return Px {.ok = true, .b = Bx {.xs = b.xs.with(1, 77), .fl = b.fl.with(0, false), .n = b.n + k}};
+}
+
+List(Pt) shift(List(Pt) ps, Int i) {
+    if (i >= ps.len()) { return ps; }
+    Pt p = ps[i];
+    return shift(ps.with(i, Pt {.x = p.x + 1, .y = p.y * 2}), i + 1);
+}
+
+Int sum_x(List(Pt) ps, Int i, Int acc) {
+    if (i >= ps.len()) { return acc; }
+    return sum_x(ps, i + 1, acc + ps[i].x + ps[i].y);
+}
+
+@requires(args)
+Int main() {
+    Int k0 = args.count() + 1;
+    Bx b0 = Bx {.xs = [1, 2, 3], .fl = [true, true, true], .n = 0};
+    Px p = step(b0, k0);
+    // b0 is read after the call: it must be unchanged.
+    println(f"{b0.xs} {b0.fl} {b0.n}");
+    println(f"{p.ok} {p.b.xs} {p.b.fl} {p.b.n}");
+    Bx kept = keep(p.b);
+    Px q = step(kept, k0 + 1);
+    println(f"{kept.xs} {q.b.xs} {q.b.n}");
+    Px z = poke(kept, k0);
+    Px z2 = poke(z.b, 0 - k0);
+    println(f"{kept.xs} {kept.fl} {z.b.xs} {z.b.fl} {z2.b.xs} {z2.ok}");
+    Px r = step(b0, 1);
+    println(f"{r.ok} {r.b.xs}");
+    List(Pt) pts = [Pt {.x = 1, .y = 1}, Pt {.x = 2, .y = 2}];
+    List(Pt) moved = shift(pts, 0);
+    println(f"{sum_x(pts, 0, 0)} {sum_x(moved, 0, 0)}");
+    List(Pt) again = shift(shift(moved, 0), 0);
+    println(f"{sum_x(moved, 0, 0)} {sum_x(again, 0, 0)}");
+    return 0;
+}

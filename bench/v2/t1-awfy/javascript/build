@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Upstream JavaScript port, unchanged; run by node.
+set -euo pipefail
+mkdir -p out

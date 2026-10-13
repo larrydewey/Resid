@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Upstream Java port, unchanged; HotSpot defaults.
+set -euo pipefail
+mkdir -p out
+javac -nowarn -d out $(find ../upstream/Java/src -name '*.java')

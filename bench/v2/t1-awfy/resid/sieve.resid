@@ -1,0 +1,30 @@
+// AWFY Sieve: primes up to 5000 with a flag array.
+
+List(Bool) clear(List(Bool) flags, Int k, Int i, Int size) {
+    if (k > size) { return flags; }
+    return clear(flags.with(k - 1, false), k + i, i, size);
+}
+
+Int sieve(List(Bool) flags, Int i, Int size, Int count) {
+    if (i > size) { return count; }
+    if (flags[i - 1]) { return sieve(clear(flags, i + i, i, size), i + 1, size, count + 1); }
+    return sieve(flags, i + 1, size, count);
+}
+
+List(Bool) trues(Int i, Int n, ListBuf(Bool) acc) {
+    if (i >= n) { return acc.finish(); }
+    return trues(i + 1, n, acc.push(true));
+}
+
+Int benchmark() {
+    Int size = rt 5000;
+    return sieve(trues(0, size, ListBuf()), 2, size, 0);
+}
+
+/// Runs Sieve `inner` times, verifying each result.
+pub Bool sieve_inner(Int inner) {
+    for (Int i in 0..inner) {
+        if (benchmark() != 669) { return false; }
+    }
+    return true;
+}

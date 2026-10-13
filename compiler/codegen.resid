@@ -2975,10 +2975,8 @@ GT cg_none_con(Str ty, Int pos, Int n, GT c) {
     Str tsym = f"@.oty{n}";
     Str g = tsym + f" = private unnamed_addr constant [{n1} x i8] c\"" + body + "\\00\"";
     List(Str) gg0 = c.glines;
-    List(Str) gl2 = gg0.concat([g]);
-    List(Str) l0 = c.lines;
-    List(Str) l1 = l0.concat([reg + " = call ptr @resid_box_new(i64 2, i64 0, ptr null, ptr " + tsym + ")"]);
-    return GT {.pos = pos, .val = reg, .ty = ty, .cnt = 0, .err = "", .glines = gl2, .lines = l1, .tmp = t1, .lbl = c.lbl, .tail = false};
+    List(Str) gl2 = gg0.concat([g, nbox_global(tsym, "2")]);
+    return GT {.pos = pos, .val = nbox_name(tsym), .ty = ty, .cnt = 0, .err = "", .glines = gl2, .lines = c.lines, .tmp = t1, .lbl = c.lbl, .tail = false};
 }
 
 // General sum-type variant constructors (spec §12): same tagged-box shape
@@ -3004,6 +3002,14 @@ Str oty_global(Str tsym, Str sumty) {
     return tsym + f" = private unnamed_addr constant [{n1} x i8] c\"" + body + "\\00\"";
 }
 
+// A variant without payload is one immutable box: a private constant
+// beside its type string, never an allocation (lw_box_n does the same).
+Str nbox_global(Str tsym, Str vidx) {
+    return "@.nbox" + str_slice(tsym, 5, str_len(tsym)) + " = private constant {i32, i32, ptr} {i32 " + vidx + ", i32 0, ptr " + tsym + "}, align 16";
+}
+
+Str nbox_name(Str tsym) { return "@.nbox" + str_slice(tsym, 5, str_len(tsym)); }
+
 // No-payload: bare `VariantName` (no parens, no argument).
 GT cg_variant_unit_con(Str sumty, Int vidx, Int pos, Int n, GT c) {
     Int t1 = c.tmp + 1;
@@ -3014,10 +3020,8 @@ GT cg_variant_unit_con(Str sumty, Int vidx, Int pos, Int n, GT c) {
     Str tsym = f"@.oty{n}";
     Str g = tsym + f" = private unnamed_addr constant [{n1} x i8] c\"" + body + "\\00\"";
     List(Str) gg0 = c.glines;
-    List(Str) gl2 = gg0.concat([g]);
-    List(Str) l0 = c.lines;
-    List(Str) l1 = l0.concat([reg + f" = call ptr @resid_box_new(i64 {vidx}, i64 0, ptr null, ptr " + tsym + ")"]);
-    return GT {.pos = pos, .val = reg, .ty = sumty, .cnt = 0, .err = "", .glines = gl2, .lines = l1, .tmp = t1, .lbl = c.lbl, .tail = false};
+    List(Str) gl2 = gg0.concat([g, nbox_global(tsym, f"{vidx}")]);
+    return GT {.pos = pos, .val = nbox_name(tsym), .ty = sumty, .cnt = 0, .err = "", .glines = gl2, .lines = c.lines, .tmp = t1, .lbl = c.lbl, .tail = false};
 }
 
 // ─── Comptime test discovery (SPEC-testing.md §1.1, §4) ─────────────

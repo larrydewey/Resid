@@ -1,0 +1,7 @@
+[1, 2, 3] [true, true, true] 0
+true [6, 2, 3] [true, false, true] 5
+[6, 2, 3] [6, 2, 3] 9
+[6, 2, 3] [true, false, true] [6, 77, 3] [false, false, true] [6, 77, 3] false
+false [1, 2, 3]
+6 11
+11 33

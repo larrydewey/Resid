@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# C# port of AWFY (this suite): .NET Release build, RyuJIT with its defaults
+# (tiered compilation and dynamic PGO).
+set -euo pipefail
+export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
+mkdir -p out
+dotnet build -c Release -o out -nologo -v quiet

@@ -1,0 +1,450 @@
+// AWFY CD: aircraft collision detection over red-black trees (size =
+// number of aircraft = inner iterations). The generic RedBlackTree keeps
+// its nodes in a list with index links (-1 = null) and parent pointers,
+// as the reference does; keys compare through Ord. Vectors are lists.
+import "fdlibm.resid";
+
+type V3 = { Float x; Float y; Float z; };
+type V2 = { Float x; Float y; };
+type Aircraft = { Int cs; V3 pos; };
+type Motion = { Int cs; V3 p1; V3 p2; };
+type Collision = { Int a; Int b; V3 pos; };
+
+V3 v3_plus(V3 a, V3 b) { return V3 {.x = a.x + b.x, .y = a.y + b.y, .z = a.z + b.z}; }
+V3 v3_minus(V3 a, V3 b) { return V3 {.x = a.x - b.x, .y = a.y - b.y, .z = a.z - b.z}; }
+Float v3_dot(V3 a, V3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+Float v3_sqmag(V3 a) { return v3_dot(a, a); }
+V3 v3_times(V3 a, Float k) { return V3 {.x = a.x * k, .y = a.y * k, .z = a.z * k}; }
+V2 v2_plus(V2 a, V2 b) { return V2 {.x = a.x + b.x, .y = a.y + b.y}; }
+V2 v2_minus(V2 a, V2 b) { return V2 {.x = a.x - b.x, .y = a.y - b.y}; }
+
+Int cmp_num(Float a, Float b) {
+    if (a == b) { return 0; }
+    if (a < b) { return 0 - 1; }
+    if (a > b) { return 1; }
+    if (a == a) { return 1; }
+    return 0 - 1;
+}
+
+Int v2_compare(V2 a, V2 b) {
+    Int r = cmp_num(a.x, b.x);
+    return if (r != 0) { r } else { cmp_num(a.y, b.y) };
+}
+V2 v2_least(V2 a, V2 b) { return if (v2_compare(a, b) <= 0) { a } else { b }; }
+V2 v2_greatest(V2 a, V2 b) { return if (v2_compare(a, b) >= 0) { a } else { b }; }
+Ord(V2) = { .compare = v2_compare, .least = v2_least, .greatest = v2_greatest };
+
+// ---- red-black tree ---------------------------------------------------------
+
+type RbNode(K, V) = { K key; V value; Int left; Int right; Int parent; Bool red; };
+type Rbt(K, V) = { List(RbNode(K, V)) ns; Int root; };
+type Put(K, V) = { Rbt(K, V) t; Option(V) old; Int z; };
+
+Rbt(K, V) rb_new() {
+    List(RbNode(K, V)) ns = [];
+    return Rbt {.ns = ns, .root = 0 - 1};
+}
+
+Bool is_red(Rbt(K, V) t, Int i) { return i >= 0 && t.ns[i].red; }
+
+Rbt(K, V) rb_node(Rbt(K, V) t, Int i, Int l, Int r, Int p, Bool red) {
+    RbNode(K, V) n = t.ns[i];
+    return Rbt {.ns = t.ns.with(i, RbNode {.key = n.key, .value = n.value, .left = l, .right = r, .parent = p, .red = red}), .root = t.root};
+}
+
+Rbt(K, V) set_left(Rbt(K, V) t, Int i, Int v) { RbNode(K, V) n = t.ns[i]; return rb_node(t, i, v, n.right, n.parent, n.red); }
+Rbt(K, V) set_right(Rbt(K, V) t, Int i, Int v) { RbNode(K, V) n = t.ns[i]; return rb_node(t, i, n.left, v, n.parent, n.red); }
+Rbt(K, V) set_parent(Rbt(K, V) t, Int i, Int v) { RbNode(K, V) n = t.ns[i]; return rb_node(t, i, n.left, n.right, v, n.red); }
+Rbt(K, V) set_red(Rbt(K, V) t, Int i, Bool v) { RbNode(K, V) n = t.ns[i]; return rb_node(t, i, n.left, n.right, n.parent, v); }
+Rbt(K, V) set_root(Rbt(K, V) t, Int r) { return Rbt {.ns = t.ns, .root = r}; }
+
+Int tree_minimum(Rbt(K, V) t, Int x) {
+    Int l = t.ns[x].left;
+    if (l < 0) { return x; }
+    return tree_minimum(t, l);
+}
+
+Int successor(Rbt(K, V) t, Int x) {
+    Int r = t.ns[x].right;
+    if (r >= 0) { return tree_minimum(t, r); }
+    return succ_up(t, x, t.ns[x].parent);
+}
+
+Int succ_up(Rbt(K, V) t, Int x, Int y) {
+    if (y >= 0 && x == t.ns[y].right) { return succ_up(t, y, t.ns[y].parent); }
+    return y;
+}
+
+@needs(Ord(K))
+Int find_node(Rbt(K, V) t, K key, Int cur) {
+    if (cur < 0) { return cur; }
+    Int c = compare(key, t.ns[cur].key);
+    if (c == 0) { return cur; }
+    return find_node(t, key, if (c < 0) { t.ns[cur].left } else { t.ns[cur].right });
+}
+
+@needs(Ord(K))
+Option(V) rb_get(Rbt(K, V) t, K key) {
+    Int n = find_node(t, key, t.root);
+    if (n < 0) { return None; }
+    return Some(t.ns[n].value);
+}
+
+// leftRotate / rightRotate, with parent links.
+Rbt(K, V) left_rotate(Rbt(K, V) t0, Int x) {
+    Int y = t0.ns[x].right;
+    Int yl = t0.ns[y].left;
+    Rbt(K, V) t1 = set_right(t0, x, yl);
+    Rbt(K, V) t2 = if (yl >= 0) { set_parent(t1, yl, x) } else { t1 };
+    Int xp = t2.ns[x].parent;
+    Rbt(K, V) t3 = set_parent(t2, y, xp);
+    Rbt(K, V) t4 = if (xp < 0) { set_root(t3, y) } else { if (x == t3.ns[xp].left) { set_left(t3, xp, y) } else { set_right(t3, xp, y) } };
+    return set_parent(set_left(t4, y, x), x, y);
+}
+
+Rbt(K, V) right_rotate(Rbt(K, V) t0, Int y) {
+    Int x = t0.ns[y].left;
+    Int xr = t0.ns[x].right;
+    Rbt(K, V) t1 = set_left(t0, y, xr);
+    Rbt(K, V) t2 = if (xr >= 0) { set_parent(t1, xr, y) } else { t1 };
+    Int yp = t2.ns[y].parent;
+    Rbt(K, V) t3 = set_parent(t2, x, yp);
+    Rbt(K, V) t4 = if (yp < 0) { set_root(t3, x) } else { if (y == t3.ns[yp].left) { set_left(t3, yp, x) } else { set_right(t3, yp, x) } };
+    return set_parent(set_right(t4, x, y), y, x);
+}
+
+@needs(Ord(K))
+Put(K, V) tree_insert(Rbt(K, V) t, K key, V value, Int y, Int x) {
+    if (x >= 0) {
+        RbNode(K, V) n = t.ns[x];
+        Int c = compare(key, n.key);
+        if (c < 0) { return tree_insert(t, key, value, x, n.left); }
+        if (c > 0) { return tree_insert(t, key, value, x, n.right); }
+        V old = n.value;
+        Rbt(K, V) t2 = Rbt {.ns = t.ns.with(x, RbNode {.key = n.key, .value = value, .left = n.left, .right = n.right, .parent = n.parent, .red = n.red}), .root = t.root};
+        return Put {.t = t2, .old = Some(old), .z = 0 - 1};
+    }
+    Int z = t.ns.len();
+    RbNode(K, V) zn = RbNode {.key = key, .value = value, .left = 0 - 1, .right = 0 - 1, .parent = y, .red = true};
+    Rbt(K, V) t1 = Rbt {.ns = t.ns.concat([zn]), .root = t.root};
+    Rbt(K, V) t2 = if (y < 0) { set_root(t1, z) } else { if (compare(key, t1.ns[y].key) < 0) { set_left(t1, y, z) } else { set_right(t1, y, z) } };
+    return Put {.t = t2, .old = None, .z = z};
+}
+
+Rbt(K, V) put_fix(Rbt(K, V) t, Int x) {
+    if (x == t.root || !is_red(t, t.ns[x].parent)) { return t; }
+    Int xp = t.ns[x].parent;
+    Int xpp = t.ns[xp].parent;
+    if (xp == t.ns[xpp].left) {
+        Int y = t.ns[xpp].right;
+        if (is_red(t, y)) {
+            return put_fix(set_red(set_red(set_red(t, xp, false), y, false), xpp, true), xpp);
+        }
+        Int x2 = if (x == t.ns[xp].right) { xp } else { x };
+        Rbt(K, V) t1 = if (x == t.ns[xp].right) { left_rotate(t, xp) } else { t };
+        Int p2 = t1.ns[x2].parent;
+        Int pp2 = t1.ns[p2].parent;
+        return put_fix(right_rotate(set_red(set_red(t1, p2, false), pp2, true), pp2), x2);
+    }
+    Int y = t.ns[xpp].left;
+    if (is_red(t, y)) {
+        return put_fix(set_red(set_red(set_red(t, xp, false), y, false), xpp, true), xpp);
+    }
+    Int x2 = if (x == t.ns[xp].left) { xp } else { x };
+    Rbt(K, V) t1 = if (x == t.ns[xp].left) { right_rotate(t, xp) } else { t };
+    Int p2 = t1.ns[x2].parent;
+    Int pp2 = t1.ns[p2].parent;
+    return put_fix(left_rotate(set_red(set_red(t1, p2, false), pp2, true), pp2), x2);
+}
+
+// put: the tree, and the value the key had (None when it is new).
+@needs(Ord(K))
+Put(K, V) rb_put(Rbt(K, V) t, K key, V value) {
+    Put(K, V) ins = tree_insert(t, key, value, 0 - 1, t.root);
+    if (ins.z < 0) { return ins; }
+    Rbt(K, V) t2 = put_fix(ins.t, ins.z);
+    return Put {.t = set_red(t2, t2.root, false), .old = None, .z = ins.z};
+}
+
+Rbt(K, V) remove_fixup(Rbt(K, V) t, Int x, Int xp) {
+    if (x == t.root || is_red(t, x)) {
+        return if (x >= 0) { set_red(t, x, false) } else { t };
+    }
+    if (x == t.ns[xp].left) {
+        Int w0 = t.ns[xp].right;
+        Rbt(K, V) t1 = if (is_red(t, w0)) { left_rotate(set_red(set_red(t, w0, false), xp, true), xp) } else { t };
+        Int w = t1.ns[xp].right;
+        if (!is_red(t1, t1.ns[w].left) && !is_red(t1, t1.ns[w].right)) {
+            return remove_fixup(set_red(t1, w, true), xp, t1.ns[xp].parent);
+        }
+        Rbt(K, V) t2 = if (!is_red(t1, t1.ns[w].right)) { right_rotate(set_red(set_red(t1, t1.ns[w].left, false), w, true), w) } else { t1 };
+        Int w2 = t2.ns[xp].right;
+        Rbt(K, V) t3 = set_red(set_red(t2, w2, t2.ns[xp].red), xp, false);
+        Int wr = t3.ns[w2].right;
+        Rbt(K, V) t4 = if (wr >= 0) { set_red(t3, wr, false) } else { t3 };
+        Rbt(K, V) t5 = left_rotate(t4, xp);
+        return remove_fixup(t5, t5.root, t5.ns[t5.root].parent);
+    }
+    Int w0 = t.ns[xp].left;
+    Rbt(K, V) t1 = if (is_red(t, w0)) { right_rotate(set_red(set_red(t, w0, false), xp, true), xp) } else { t };
+    Int w = t1.ns[xp].left;
+    if (!is_red(t1, t1.ns[w].right) && !is_red(t1, t1.ns[w].left)) {
+        return remove_fixup(set_red(t1, w, true), xp, t1.ns[xp].parent);
+    }
+    Rbt(K, V) t2 = if (!is_red(t1, t1.ns[w].left)) { left_rotate(set_red(set_red(t1, t1.ns[w].right, false), w, true), w) } else { t1 };
+    Int w2 = t2.ns[xp].left;
+    Rbt(K, V) t3 = set_red(set_red(t2, w2, t2.ns[xp].red), xp, false);
+    Int wl = t3.ns[w2].left;
+    Rbt(K, V) t4 = if (wl >= 0) { set_red(t3, wl, false) } else { t3 };
+    Rbt(K, V) t5 = right_rotate(t4, xp);
+    return remove_fixup(t5, t5.root, t5.ns[t5.root].parent);
+}
+
+@needs(Ord(K))
+Rbt(K, V) rb_remove(Rbt(K, V) t0, K key) {
+    Int z = find_node(t0, key, t0.root);
+    if (z < 0) { return t0; }
+    RbNode(K, V) zn = t0.ns[z];
+    Int y = if (zn.left < 0 || zn.right < 0) { z } else { successor(t0, z) };
+    RbNode(K, V) yn = t0.ns[y];
+    Int x = if (yn.left >= 0) { yn.left } else { yn.right };
+    Rbt(K, V) t1 = if (x >= 0) { set_parent(t0, x, yn.parent) } else { t0 };
+    Int xp = yn.parent;
+    Rbt(K, V) t2 = if (yn.parent < 0) { set_root(t1, x) } else { if (y == t1.ns[yn.parent].left) { set_left(t1, yn.parent, x) } else { set_right(t1, yn.parent, x) } };
+    if (y == z) { return if (!yn.red) { remove_fixup(t2, x, xp) } else { t2 }; }
+    Rbt(K, V) t3 = if (!yn.red) { remove_fixup(t2, x, xp) } else { t2 };
+    RbNode(K, V) z2 = t3.ns[z];
+    Rbt(K, V) t4 = rb_node(t3, y, z2.left, z2.right, z2.parent, z2.red);
+    Rbt(K, V) t5 = if (z2.left >= 0) { set_parent(t4, z2.left, y) } else { t4 };
+    Rbt(K, V) t6 = if (z2.right >= 0) { set_parent(t5, z2.right, y) } else { t5 };
+    if (z2.parent >= 0) {
+        return if (t6.ns[z2.parent].left == z) { set_left(t6, z2.parent, y) } else { set_right(t6, z2.parent, y) };
+    }
+    return set_root(t6, y);
+}
+
+// The keys in order (forEach over entries).
+List(K) rb_keys(Rbt(K, V) t) {
+    List(K) none = [];
+    if (t.root < 0) { return none; }
+    return keys_from(t, tree_minimum(t, t.root), none);
+}
+
+List(K) keys_from(Rbt(K, V) t, Int cur, List(K) acc) {
+    if (cur < 0) { return acc; }
+    return keys_from(t, successor(t, cur), acc.concat([t.ns[cur].key]));
+}
+
+List(V) rb_values(Rbt(K, V) t) {
+    List(V) none = [];
+    if (t.root < 0) { return none; }
+    return values_from(t, tree_minimum(t, t.root), none);
+}
+
+List(V) values_from(Rbt(K, V) t, Int cur, List(V) acc) {
+    if (cur < 0) { return acc; }
+    return values_from(t, successor(t, cur), acc.concat([t.ns[cur].value]));
+}
+
+// ---- collision detection ------------------------------------------------------
+
+Float voxel() { return 2.0; }
+
+Bool is_in_voxel(V2 v, Motion m) {
+    if (v.x > 1000.0 || v.x < 0.0 || v.y > 1000.0 || v.y < 0.0) { return false; }
+    V3 init = m.p1;
+    V3 fin = m.p2;
+    Float vs = voxel();
+    Float r = 1.0 / 2.0;
+    Float vx = v.x;
+    Float x0 = init.x;
+    Float xv = fin.x - init.x;
+    Float vy = v.y;
+    Float y0 = init.y;
+    Float yv = fin.y - init.y;
+    Float lx0 = (vx - r - x0) / xv;
+    Float hx0 = (vx + vs + r - x0) / xv;
+    Float low_x = if (xv < 0.0) { hx0 } else { lx0 };
+    Float high_x = if (xv < 0.0) { lx0 } else { hx0 };
+    Float ly0 = (vy - r - y0) / yv;
+    Float hy0 = (vy + vs + r - y0) / yv;
+    Float low_y = if (yv < 0.0) { hy0 } else { ly0 };
+    Float high_y = if (yv < 0.0) { ly0 } else { hy0 };
+    return ((xv == 0.0 && vx <= x0 + r && x0 - r <= vx + vs) ||
+            (low_x <= 1.0 && 1.0 <= high_x) || (low_x <= 0.0 && 0.0 <= high_x) ||
+            (0.0 <= low_x && high_x <= 1.0)) &&
+           ((yv == 0.0 && vy <= y0 + r && y0 - r <= vy + vs) ||
+            ((low_y <= 1.0 && 1.0 <= high_y) || (low_y <= 0.0 && 0.0 <= high_y) ||
+             (0.0 <= low_y && high_y <= 1.0))) &&
+           (xv == 0.0 || yv == 0.0 ||
+            (low_y <= high_x && high_x <= high_y) ||
+            (low_y <= low_x && low_x <= high_y) ||
+            (low_x <= low_y && high_y <= high_x));
+}
+
+type Vox = { Rbt(V2, List(Motion)) map; Rbt(V2, Bool) seen; };
+
+Vox put_into_map(Vox s, V2 v, Motion m) {
+    Option(List(Motion)) cur = rb_get(s.map, v);
+    List(Motion) none = [];
+    List(Motion) arr = cur else { none };
+    return Vox {.map = rb_put(s.map, v, arr.concat([m])).t, .seen = s.seen};
+}
+
+Vox recurse(Vox s, V2 next, Motion m) {
+    if (!is_in_voxel(next, m)) { return s; }
+    Put(V2, Bool) p = rb_put(s.seen, next, true);
+    Bool was = p.old else { false };
+    if (was) { return Vox {.map = s.map, .seen = p.t}; }
+    V2 h = V2 {.x = voxel(), .y = 0.0};
+    V2 v = V2 {.x = 0.0, .y = voxel()};
+    Vox s1 = put_into_map(Vox {.map = s.map, .seen = p.t}, next, m);
+    Vox s2 = recurse(s1, v2_minus(next, h), m);
+    Vox s3 = recurse(s2, v2_plus(next, h), m);
+    Vox s4 = recurse(s3, v2_minus(next, v), m);
+    Vox s5 = recurse(s4, v2_plus(next, v), m);
+    Vox s6 = recurse(s5, v2_minus(v2_minus(next, h), v), m);
+    Vox s7 = recurse(s6, v2_plus(v2_minus(next, h), v), m);
+    Vox s8 = recurse(s7, v2_minus(v2_plus(next, h), v), m);
+    return recurse(s8, v2_plus(v2_plus(next, h), v), m);
+}
+
+V2 voxel_hash(V3 p) {
+    Int xdiv = (Int)(p.x / voxel());
+    Int ydiv = (Int)(p.y / voxel());
+    Float x0 = voxel() * (Float)xdiv;
+    Float y0 = voxel() * (Float)ydiv;
+    Float x = if (p.x < 0.0) { x0 - voxel() } else { x0 };
+    Float y = if (p.y < 0.0) { y0 - voxel() } else { y0 };
+    return V2 {.x = x, .y = y};
+}
+
+Rbt(V2, List(Motion)) draw_all(Rbt(V2, List(Motion)) map, List(Motion) motions, Int i) {
+    if (i >= motions.len()) { return map; }
+    Motion m = motions[i];
+    Rbt(V2, Bool) seen = rb_new();
+    Vox s = recurse(Vox {.map = map, .seen = seen}, voxel_hash(m.p1), m);
+    return draw_all(s.map, motions, i + 1);
+}
+
+List(List(Motion)) reduce_collision_set(List(Motion) motions) {
+    Rbt(V2, List(Motion)) map0 = rb_new();
+    Rbt(V2, List(Motion)) map = draw_all(map0, motions, 0);
+    List(List(Motion)) none = [];
+    return keep_multi(rb_values(map), 0, none);
+}
+
+List(List(Motion)) keep_multi(List(List(Motion)) vs, Int i, List(List(Motion)) acc) {
+    if (i >= vs.len()) { return acc; }
+    return keep_multi(vs, i + 1, if (vs[i].len() > 1) { acc.concat([vs[i]]) } else { acc });
+}
+
+Option(V3) find_intersection(Motion a, Motion b) {
+    V3 init1 = a.p1;
+    V3 init2 = b.p1;
+    V3 vec1 = v3_minus(a.p2, a.p1);
+    V3 vec2 = v3_minus(b.p2, b.p1);
+    Float radius = 1.0;
+    Float aa = v3_sqmag(v3_minus(vec2, vec1));
+    if (aa != 0.0) {
+        Float bb = 2.0 * v3_dot(v3_minus(init1, init2), v3_minus(vec1, vec2));
+        Float cc = (0.0 - radius) * radius + v3_sqmag(v3_minus(init2, init1));
+        Float discr = bb * bb - 4.0 * aa * cc;
+        if (discr < 0.0) { return None; }
+        Float v1 = ((0.0 - bb) - sqrt(discr)) / (2.0 * aa);
+        Float v2 = ((0.0 - bb) + sqrt(discr)) / (2.0 * aa);
+        if (v1 <= v2 && ((v1 <= 1.0 && 1.0 <= v2) || (v1 <= 0.0 && 0.0 <= v2) || (0.0 <= v1 && v2 <= 1.0))) {
+            Float v = if (v1 <= 0.0) { 0.0 } else { v1 };
+            V3 r1 = v3_plus(init1, v3_times(vec1, v));
+            V3 r2 = v3_plus(init2, v3_times(vec2, v));
+            V3 res = v3_times(v3_plus(r1, r2), 0.5);
+            if (res.x >= 0.0 && res.x <= 1000.0 && res.y >= 0.0 && res.y <= 1000.0 && res.z >= 0.0 && res.z <= 10.0) {
+                return Some(res);
+            }
+        }
+        return None;
+    }
+    Float dist = sqrt(v3_sqmag(v3_minus(init2, init1)));
+    if (dist <= radius) { return Some(v3_times(v3_plus(init1, init2), 0.5)); }
+    return None;
+}
+
+List(Collision) pairs(List(Motion) red, Int i, Int j, List(Collision) acc) {
+    if (i >= red.len()) { return acc; }
+    if (j >= red.len()) { return pairs(red, i + 1, i + 2, acc); }
+    Motion m1 = red[i];
+    Motion m2 = red[j];
+    List(Collision) acc2 = match find_intersection(m1, m2) {
+        Some(p) => acc.concat([Collision {.a = m1.cs, .b = m2.cs, .pos = p}]),
+        None => acc
+    };
+    return pairs(red, i, j + 1, acc2);
+}
+
+List(Collision) all_pairs(List(List(Motion)) all, Int k, List(Collision) acc) {
+    if (k >= all.len()) { return acc; }
+    return all_pairs(all, k + 1, pairs(all[k], 0, 1, acc));
+}
+
+type Det = { Rbt(Int, V3) state; Int count; };
+type Fr = { Rbt(Int, V3) state; Rbt(Int, Bool) seen; List(Motion) motions; };
+
+Fr frame_loop(List(Aircraft) frame, Int i, Fr f) {
+    if (i >= frame.len()) { return f; }
+    Aircraft a = frame[i];
+    Put(Int, V3) p = rb_put(f.state, a.cs, a.pos);
+    V3 old = p.old else { a.pos };
+    Rbt(Int, Bool) seen = rb_put(f.seen, a.cs, true).t;
+    return frame_loop(frame, i + 1, Fr {.state = p.t, .seen = seen, .motions = f.motions.concat([Motion {.cs = a.cs, .p1 = old, .p2 = a.pos}])});
+}
+
+Rbt(Int, V3) remove_unseen(Rbt(Int, V3) state, Rbt(Int, Bool) seen, List(Int) keys, Int i) {
+    if (i >= keys.len()) { return state; }
+    Bool s = rb_get(seen, keys[i]) else { false };
+    return remove_unseen(if (s) { state } else { rb_remove(state, keys[i]) }, seen, keys, i + 1);
+}
+
+Det handle_new_frame(Det d, List(Aircraft) frame) {
+    Rbt(Int, Bool) seen0 = rb_new();
+    List(Motion) none = [];
+    Fr f = frame_loop(frame, 0, Fr {.state = d.state, .seen = seen0, .motions = none});
+    List(Int) keys = rb_keys(f.state);
+    Rbt(Int, V3) state = remove_unseen(f.state, f.seen, keys, 0);
+    List(Collision) c0 = [];
+    List(Collision) cs = all_pairs(reduce_collision_set(f.motions), 0, c0);
+    return Det {.state = state, .count = d.count + cs.len()};
+}
+
+List(Aircraft) simulate(Int n, Float time, Int i, List(Aircraft) acc) {
+    if (i >= n) { return acc; }
+    Aircraft a = Aircraft {.cs = i, .pos = V3 {.x = time, .y = fd_cos(time) * 2.0 + (Float)(i * 3), .z = 10.0}};
+    Aircraft b = Aircraft {.cs = i + 1, .pos = V3 {.x = time, .y = fd_sin(time) * 2.0 + (Float)(i * 3), .z = 10.0}};
+    return simulate(n, time, i + 2, acc.concat([a, b]));
+}
+
+Det frames(Int n, Int i, Det d) {
+    if (i >= 200) { return d; }
+    Float time = (Float)i / 10.0;
+    List(Aircraft) none = [];
+    return frames(n, i + 1, handle_new_frame(d, simulate(n, time, 0, none)));
+}
+
+Int benchmark(Int n) {
+    Rbt(Int, V3) st = rb_new();
+    return frames(n, 0, Det {.state = st, .count = 0}).count;
+}
+
+/// Runs CD with `inner` aircraft, verifying the collision count.
+pub Bool cd_inner(Int inner) {
+    Int c = benchmark(inner);
+    if (inner == 1000) { return c == 14484; }
+    if (inner == 500) { return c == 14484; }
+    if (inner == 250) { return c == 10830; }
+    if (inner == 200) { return c == 8655; }
+    if (inner == 100) { return c == 4305; }
+    if (inner == 10) { return c == 390; }
+    if (inner == 2) { return c == 42; }
+    println(f"No verification result for {inner} found");
+    println(f"Result is: {c}");
+    return false;
+}

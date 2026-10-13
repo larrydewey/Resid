@@ -1635,11 +1635,16 @@ Int move_items(Int n, Int c, Int i, Int cap, Int level, Int ek, Int ctx) {
     return move_items(n, c, i + 1, cap, level, ek, ctx);
 }
 
+// A loop's compaction adopts a transient list whose buffer is older than
+// the loop: a transient is reachable only from its owner, here the loop's
+// carried state, so it moves into the loop's new region once and later
+// stores into it need no move (bar_keep). Other moves leave it in place.
 Int list_move(Int l, Int ek, Int ctx) {
     if (l == 0) { return l; }
     Int root = lroot(l);
     Int n = lcount(l);
-    Int nroot = if (lshift(l) == 0 - 1 && root != 0) { flat_move(root, n, ek, ctx) } else { if (root != 0) { pvec_move(root, lshift(l), ek, ctx) } else { root } };
+    Bool adopt = root != 0 && ltransient(l) && ld64(resid_raw_tls("rg_compact", 8)) != 0 && !mv_src(ctx, root);
+    Int nroot = if (adopt) { flat_copy(root, n, ek, ctx) } else { if (lshift(l) == 0 - 1 && root != 0) { flat_move(root, n, ek, ctx) } else { if (root != 0) { pvec_move(root, lshift(l), ek, ctx) } else { root } } };
     if (nroot == root && !mv_src(ctx, l)) { return l; }
     Int out = mv_alloc(ctx, 32);
     _ = mcopy(out, l, 32);
@@ -1656,7 +1661,12 @@ Int flat_move(Int f, Int n, Int ek, Int ctx) {
         _ = mv_done(move_elems(f, f, kept, n, ek, mv_into(region_of(f))));
         return st64(f + 16, n) * 0 + f;
     }
-    // Same capacity: the next appends still fit in place.
+    return flat_copy(f, n, ek, ctx);
+}
+
+// A copy of flat buffer f in the move's destination, its elements moved.
+// Same capacity: the next appends still fit in place.
+Int flat_copy(Int f, Int n, Int ek, Int ctx) {
     Int cap = if (ld64(f + 8) > n) { ld64(f + 8) } else { max(n, 1) };
     Int g = mv_alloc(ctx, 24 + cap * 8);
     _ = st64(g, n) + st64(g + 8, cap) + st64(g + 16, n);
@@ -1878,21 +1888,85 @@ Int with_shared(Int l, Int i, Int v) {
     return set_list(list_hdr(), n, sh, root, ltype(t));
 }
 
+// Fast path, inlined into the caller: an owned update of a transient list
+// with a value that needs no move (an immediate or an interned scalar) is
+// one store.
 @export("resid_list_with", "ptr(ptr,i8,i64,ptr)")
+@inline
 pub Int rt_list_with(Int l, Int owned, Int i, Int v) {
+    if (owned != 0 && ltransient(l) && ult(i, lcount(l)) && box_interned(v)) {
+        return st64(lroot(l) + 24 + i * 8, v) * 0 + l;
+    }
+    return list_with_slow(l, owned, i, v);
+}
+
+@noinline
+Int list_with_slow(Int l, Int owned, Int i, Int v) {
     Int n = lcount(l);
     if (!ult(i, n)) { return rt_index_abort(i, n, 0); }
+    if (owned != 0 && no_thaw(l)) { return mark_frozen(with_shared(l, i, v)); }
     Int t = if (owned == 0 || ltransient(l)) { l } else { with_fresh(l, 0) };
     if (owned == 0) { return with_shared(l, i, v); }
     Int f = lroot(t);
     return st64(f + 24 + i * 8, bar_keep(f, v)) * 0 + t;
 }
 
+// An owned update of a list of records (ek: the element type's mover,
+// resid.rec.evac.T): in place like a list of scalars, a record younger
+// than the buffer moved into the buffer's region first.
+@export("resid_list_with_f", "ptr(ptr,i8,i64,ptr,ptr)")
+@inline
+pub Int rt_list_with_f(Int l, Int owned, Int i, Int v, Int ek) {
+    if (owned != 0 && ltransient(l) && ult(i, lcount(l))) {
+        Int f = lroot(l);
+        return st64(f + 24 + i * 8, bar_keep_f(f, v, ek)) * 0 + l;
+    }
+    return list_with_f_slow(l, owned, i, v, ek);
+}
+
+// Thawing a frozen list (with_fresh) copies it whole. A list frozen once
+// before (header word 3 set by rt_list_freeze) is likely to be frozen
+// again before the copy pays off (a parser's node list, thawed and
+// refrozen by every call), so a large one takes the persistent path, and
+// that result stays marked. A fresh list (a builder's, a literal) thaws.
+Int fresh_max() { return 256; }
+
+Bool no_thaw(Int l) { return !ltransient(l) && lcount(l) > fresh_max() && ld32(l + 12) == 1; }
+
+Int mark_frozen(Int l) { return st32(l + 12, 1) * 0 + l; }
+
+@noinline
+Int list_with_f_slow(Int l, Int owned, Int i, Int v, Int ek) {
+    Int n = lcount(l);
+    if (!ult(i, n)) { return rt_index_abort(i, n, 0); }
+    if (owned != 0 && no_thaw(l)) { return mark_frozen(with_shared(l, i, v)); }
+    if (owned == 0) { return with_shared(l, i, v); }
+    Int t = if (ltransient(l)) { l } else { with_fresh(l, 0) };
+    Int f = lroot(t);
+    return st64(f + 24 + i * 8, bar_keep_f(f, v, ek)) * 0 + t;
+}
+
+// bar_keep for a record: same region or older stays, else moved by ek.
+@inline
+Int bar_keep_f(Int obj, Int v, Int ek) {
+    // One page belongs to one region (or none).
+    Int base = rg_base_now();
+    if (((v - base) >> 20) == ((obj - base) >> 20)) { return v; }
+    Int rv = region_of(v);
+    Int ro = region_of(obj);
+    if (rv == 0 || (ro != 0 && rv <= ro)) { return v; }
+    return bar_move_f(ro, v, ek);
+}
+
+@noinline
+Int bar_move_f(Int ro, Int v, Int ek) { return mv_done(resid_raw_call2(ek, v, mv_into(ro))); }
+
 // xs.concat(ys) on an owned list: appended in place to a transient,
 // doubling its buffer when full.
 @export("resid_list_concat_own", "ptr(ptr,i8,ptr)")
 pub Int rt_list_concat_own(Int a, Int owned, Int b) {
     Int m = lcount(b);
+    if (owned != 0 && no_thaw(a)) { return mark_frozen(rt_list_concat(a, b)); }
     if (owned == 0) { return rt_list_concat(a, b); }
     if (m == 0) { return a; }
     Int n = lcount(a);
@@ -1913,6 +1987,28 @@ Int with_grow(Int t, Int f0, Int n, Int need) {
     return st64(t + 16, f) * 0 + f;
 }
 
+// rt_list_concat_own for a list of records (ek: the element mover).
+@export("resid_list_concat_own_f", "ptr(ptr,i8,ptr,ptr)")
+pub Int rt_list_concat_own_f(Int a, Int owned, Int b, Int ek) {
+    Int m = lcount(b);
+    if (owned != 0 && no_thaw(a)) { return mark_frozen(rt_list_concat(a, b)); }
+    if (owned == 0) { return rt_list_concat(a, b); }
+    if (m == 0) { return a; }
+    Int n = lcount(a);
+    Int t = if (ltransient(a)) { a } else { with_fresh(a, max(m, n)) };
+    Int f0 = lroot(t);
+    Int f = if (n + m <= ld64(f0 + 8)) { f0 } else { with_grow(t, f0, n, n + m) };
+    _ = cat_fill_f(f, b, n, 0, m, ek);
+    _ = st64(f, n + m) + st64(f + 16, n + m);
+    return st64(t, n + m) * 0 + t;
+}
+
+Int cat_fill_f(Int f, Int b, Int n, Int j, Int m, Int ek) {
+    if (j >= m) { return 0; }
+    _ = st64(f + 24 + (n + j) * 8, bar_keep_f(f, list_at(b, j), ek));
+    return cat_fill_f(f, b, n, j + 1, m, ek);
+}
+
 Int cat_fill(Int f, Int b, Int n, Int j, Int m) {
     if (j >= m) { return 0; }
     _ = st64(f + 24 + (n + j) * 8, bar_keep(f, list_at(b, j)));
@@ -1923,6 +2019,6 @@ Int cat_fill(Int f, Int b, Int n, Int j, Int m) {
 @export("resid_list_freeze", "ptr(ptr)")
 @inline
 pub Int rt_list_freeze(Int l) {
-    _ = if (l != 0 && ltransient(l)) { st32(l + 8, 0 - 1) } else { 0 };
+    _ = if (l != 0 && ltransient(l)) { st32(l + 8, 0 - 1) + st32(l + 12, 1) } else { 0 };
     return l;
 }

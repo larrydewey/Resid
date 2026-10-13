@@ -117,6 +117,7 @@ Int futex_wait0(Int addr) {
 // pooled worker loads the parent's string lengths (and resets them after):
 // a region run inline on the parent must not keep them.
 Int run_job(Int a) {
+    _ = id_block_reset();
     _ = str_fast_load(a + 40);
     _ = st64(a + 16, spawn_entry(a));
     _ = str_index_reset();

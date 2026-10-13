@@ -1,0 +1,58 @@
+// AWFY Queens: eight queens by backtracking, ten times per benchmark.
+
+type Board = { List(Bool) rows; List(Bool) maxs; List(Bool) mins; List(Int) queen_rows; };
+type Placed = { Bool ok; Board b; };
+
+Bool get_rc(Board b, Int r, Int c) {
+    return b.rows[r] && b.maxs[c + r] && b.mins[c - r + 7];
+}
+
+Board set_rc(Board b, Int r, Int c, Bool v) {
+    return Board {.rows = b.rows.with(r, v), .maxs = b.maxs.with(c + r, v),
+                  .mins = b.mins.with(c - r + 7, v), .queen_rows = b.queen_rows};
+}
+
+Placed place_queen(Int c, Int r, Board b) {
+    if (r >= 8) { return Placed {.ok = false, .b = b}; }
+    if (!get_rc(b, r, c)) { return place_queen(c, r + 1, b); }
+    Board b1 = Board {.rows = b.rows, .maxs = b.maxs, .mins = b.mins,
+                      .queen_rows = b.queen_rows.with(r, c)};
+    Board b2 = set_rc(b1, r, c, false);
+    if (c == 7) { return Placed {.ok = true, .b = b2}; }
+    Placed p = place_queen(c + 1, 0, b2);
+    if (p.ok) { return p; }
+    return place_queen(c, r + 1, set_rc(p.b, r, c, true));
+}
+
+Bool queens(Int n) {
+    Board b = Board {.rows = list_fill(n, true), .maxs = list_fill(2 * n, true),
+                     .mins = list_fill(2 * n, true), .queen_rows = list_fill(n, -1)};
+    return place_queen(0, 0, b).ok;
+}
+
+List(T) list_fill(Int n, T v) {
+    ListBuf(T) e = ListBuf();
+    return fill_loop(0, n, v, e);
+}
+
+List(T) fill_loop(Int i, Int n, T v, ListBuf(T) acc) {
+    if (i >= n) { return acc.finish(); }
+    return fill_loop(i + 1, n, v, acc.push(v));
+}
+
+Bool benchmark() {
+    return run(0, rt 8, true);
+}
+
+Bool run(Int i, Int n, Bool acc) {
+    if (i >= 10) { return acc; }
+    return run(i + 1, n, acc && queens(n));
+}
+
+/// Runs Queens `inner` times, verifying each result.
+pub Bool queens_inner(Int inner) {
+    for (Int i in 0..inner) {
+        if (!benchmark()) { return false; }
+    }
+    return true;
+}

@@ -1,0 +1,36 @@
+// AWFY Storage: build a depth-7 tree of arrays, leaves of random length.
+import "som.resid";
+
+type Tree = Node(List(Tree)) | Leaf(List(Int));
+type Built = { Tree t; Int seed; Int count; };
+
+List(Int) zeros(Int i, Int n, ListBuf(Int) acc) {
+    if (i >= n) { return acc.finish(); }
+    return zeros(i + 1, n, acc.push(0));
+}
+
+Built build(Int depth, Int seed, Int count) {
+    if (depth == 1) {
+        Int s = rnd_next(seed);
+        return Built {.t = Leaf(zeros(0, s % 10 + 1, ListBuf())), .seed = s, .count = count + 1};
+    }
+    return children(0, depth, seed, count + 1, ListBuf());
+}
+
+Built children(Int i, Int depth, Int seed, Int count, ListBuf(Tree) acc) {
+    if (i >= 4) { return Built {.t = Node(acc.finish()), .seed = seed, .count = count}; }
+    Built c = build(depth - 1, seed, count);
+    return children(i + 1, depth, c.seed, c.count, acc.push(c.t));
+}
+
+Int benchmark() {
+    return build(rt 7, rnd_seed(), 0).count;
+}
+
+/// Runs Storage `inner` times, verifying each result.
+pub Bool storage_inner(Int inner) {
+    for (Int i in 0..inner) {
+        if (benchmark() != 5461) { return false; }
+    }
+    return true;
+}

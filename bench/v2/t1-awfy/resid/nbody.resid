@@ -1,0 +1,107 @@
+// AWFY NBody: five bodies as a list of records; steps = inner iterations.
+
+type Body = { Float x; Float y; Float z; Float vx; Float vy; Float vz; Float mass; };
+
+Float pi() { return 3.141592653589793; }
+Float solar_mass() { return 4.0 * pi() * pi(); }
+Float days_per_year() { return 365.24; }
+
+Body body(Float x, Float y, Float z, Float vx, Float vy, Float vz, Float mass) {
+    return Body {.x = x, .y = y, .z = z, .vx = vx * days_per_year(), .vy = vy * days_per_year(),
+                 .vz = vz * days_per_year(), .mass = mass * solar_mass()};
+}
+
+List(Body) create_bodies() {
+    List(Body) bodies = [
+        body(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0),
+        body(4.84143144246472090, -1.16032004402742839, -0.103622044471123109,
+             0.00166007664274403694, 0.00769901118419740425, -0.0000690460016972063023,
+             0.000954791938424326609),
+        body(8.34336671824457987, 4.12479856412430479, -0.403523417114321381,
+             -0.00276742510726862411, 0.00499852801234917238, 0.0000230417297573763929,
+             0.000285885980666130812),
+        body(12.8943695621391310, -15.1111514016986312, -0.223307578892655734,
+             0.00296460137564761618, 0.00237847173959480950, -0.0000296589568540237556,
+             0.0000436624404335156298),
+        body(15.3796971148509165, -25.9193146099879641, 0.179258772950371181,
+             0.00268067772490389322, 0.00162824170038242295, -0.0000951592254519715870,
+             0.0000515138902046611451)];
+    Float px = momentum(bodies, 0, 0.0, 0);
+    Float py = momentum(bodies, 0, 0.0, 1);
+    Float pz = momentum(bodies, 0, 0.0, 2);
+    Body s = bodies[0];
+    return bodies.with(0, Body {.x = s.x, .y = s.y, .z = s.z, .vx = 0.0 - (px / solar_mass()),
+                                .vy = 0.0 - (py / solar_mass()), .vz = 0.0 - (pz / solar_mass()),
+                                .mass = s.mass});
+}
+
+Float momentum(List(Body) bs, Int i, Float acc, Int axis) {
+    if (i >= bs.len()) { return acc; }
+    Body b = bs[i];
+    Float v = if (axis == 0) { b.vx } else { if (axis == 1) { b.vy } else { b.vz } };
+    return momentum(bs, i + 1, acc + v * b.mass, axis);
+}
+
+List(Body) pairs(List(Body) bs, Int i, Int j, Float dt) {
+    if (i >= bs.len()) { return bs; }
+    if (j >= bs.len()) { return pairs(bs, i + 1, i + 2, dt); }
+    Body a = bs[i];
+    Body b = bs[j];
+    Float dx = a.x - b.x;
+    Float dy = a.y - b.y;
+    Float dz = a.z - b.z;
+    Float d2 = dx * dx + dy * dy + dz * dz;
+    Float dist = sqrt(d2);
+    Float mag = dt / (d2 * dist);
+    Body a2 = Body {.x = a.x, .y = a.y, .z = a.z, .vx = a.vx - (dx * b.mass * mag),
+                    .vy = a.vy - (dy * b.mass * mag), .vz = a.vz - (dz * b.mass * mag), .mass = a.mass};
+    Body b2 = Body {.x = b.x, .y = b.y, .z = b.z, .vx = b.vx + (dx * a2.mass * mag),
+                    .vy = b.vy + (dy * a2.mass * mag), .vz = b.vz + (dz * a2.mass * mag), .mass = b.mass};
+    return pairs(bs.with(i, a2).with(j, b2), i, j + 1, dt);
+}
+
+List(Body) moves(List(Body) bs, Int i, Float dt) {
+    if (i >= bs.len()) { return bs; }
+    Body b = bs[i];
+    Body b2 = Body {.x = b.x + dt * b.vx, .y = b.y + dt * b.vy, .z = b.z + dt * b.vz,
+                    .vx = b.vx, .vy = b.vy, .vz = b.vz, .mass = b.mass};
+    return moves(bs.with(i, b2), i + 1, dt);
+}
+
+List(Body) advance(List(Body) bs, Float dt) { return moves(pairs(bs, 0, 1, dt), 0, dt); }
+
+Float energy(List(Body) bs, Int i, Int j, Float e) {
+    if (i >= bs.len()) { return e; }
+    Body a = bs[i];
+    if (j == i + 1) {
+        Float e1 = e + 0.5 * a.mass * (a.vx * a.vx + a.vy * a.vy + a.vz * a.vz);
+        return energy_pairs(bs, i, j, e1);
+    }
+    return energy_pairs(bs, i, j, e);
+}
+
+Float energy_pairs(List(Body) bs, Int i, Int j, Float e) {
+    if (j >= bs.len()) { return energy(bs, i + 1, i + 2, e); }
+    Body a = bs[i];
+    Body b = bs[j];
+    Float dx = a.x - b.x;
+    Float dy = a.y - b.y;
+    Float dz = a.z - b.z;
+    Float dist = sqrt(dx * dx + dy * dy + dz * dz);
+    return energy_pairs(bs, i, j + 1, e - (a.mass * b.mass) / dist);
+}
+
+List(Body) steps(List(Body) bs, Int n) {
+    if (n <= 0) { return bs; }
+    return steps(advance(bs, 0.01), n - 1);
+}
+
+/// Runs NBody for `inner` steps, verifying the energy for 250000 and 1.
+pub Bool nbody_inner(Int inner) {
+    Float e = energy(steps(create_bodies(), inner), 0, 1, 0.0);
+    if (inner == 250000) { return e == -0.1690859889909308; }
+    if (inner == 1) { return e == -0.16907495402506745; }
+    println(f"No verification result for {inner} found");
+    println(f"Result is: {e}");
+    return false;
+}

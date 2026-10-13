@@ -1,0 +1,34 @@
+// AWFY Mandelbrot: XOR of the packed escape bits; size = inner iterations.
+
+Int escape(Float cr, Float ci, Float zrzr, Float zi, Float zizi, Int z) {
+    if (z >= 50) { return 0; }
+    Float zr = zrzr - zizi + cr;
+    Float zi2 = 2.0 * zr * zi + ci;
+    Float zrzr2 = zr * zr;
+    Float zizi2 = zi2 * zi2;
+    if (zrzr2 + zizi2 > 4.0) { return 1; }
+    return escape(cr, ci, zrzr2, zi2, zizi2, z + 1);
+}
+
+Int pixels(Int size, Int x, Int y, Int sum, Int acc, Int bits) {
+    if (y >= size) { return sum; }
+    if (x >= size) { return pixels(size, 0, y + 1, sum, acc, bits); }
+    Float ci = (2.0 * (Float)y / (Float)size) - 1.0;
+    Float cr = (2.0 * (Float)x / (Float)size) - 1.5;
+    Int a = (acc << 1) + escape(cr, ci, 0.0, 0.0, 0.0, 0);
+    Int b = bits + 1;
+    if (b == 8) { return pixels(size, x + 1, y, sum ^ a, 0, 0); }
+    if (x == size - 1) { return pixels(size, x + 1, y, sum ^ (a << (8 - b)), 0, 0); }
+    return pixels(size, x + 1, y, sum, a, b);
+}
+
+/// Runs Mandelbrot at size `inner`, verifying the result for 500, 750 and 1.
+pub Bool mandelbrot_inner(Int inner) {
+    Int r = pixels(inner, 0, 0, 0, 0, 0);
+    if (inner == 500) { return r == 191; }
+    if (inner == 750) { return r == 50; }
+    if (inner == 1) { return r == 128; }
+    println(f"No verification result for {inner} found");
+    println(f"Result is: {r}");
+    return false;
+}

@@ -1,0 +1,36 @@
+// AWFY Permute: count the recursive calls of a swap-based permutation.
+
+type St = { Int count; List(Int) v; };
+
+St swap(St s, Int i, Int j) {
+    Int a = s.v[i];
+    Int b = s.v[j];
+    return St {.count = s.count, .v = s.v.with(i, b).with(j, a)};
+}
+
+St permute(Int n, St s0) {
+    St s = St {.count = s0.count + 1, .v = s0.v};
+    if (n == 0) { return s; }
+    Int n1 = n - 1;
+    return permute_loop(n1, n1, permute(n1, s));
+}
+
+St permute_loop(Int n1, Int i, St s) {
+    if (i < 0) { return s; }
+    St s2 = swap(permute(n1, swap(s, n1, i)), n1, i);
+    return permute_loop(n1, i - 1, s2);
+}
+
+Int benchmark() {
+    Int n = rt 6;
+    List(Int) v = [0, 0, 0, 0, 0, 0];
+    return permute(n, St {.count = 0, .v = v}).count;
+}
+
+/// Runs Permute `inner` times, verifying each result.
+pub Bool permute_inner(Int inner) {
+    for (Int i in 0..inner) {
+        if (benchmark() != 8660) { return false; }
+    }
+    return true;
+}

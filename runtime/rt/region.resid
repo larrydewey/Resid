@@ -83,6 +83,9 @@ Int rg_reserve(Int n) {
 // A run in use is in a core dump; a free one is not.
 Int rg_dump(Int p, Int k, Bool on) { return resid_raw_syscall(28, p, (1 << k) * rg_page(), if (on) { 17 } else { 16 }, 0, 0, 0); }
 
+// The range's base, 0 before the first region.
+pub Int rg_base_now() { return ld64(rg_g()); }
+
 // The id of the live region holding p, or 0 (the heap, a frame, static
 // data, or a freed page).
 pub Int region_of(Int p) {
@@ -172,7 +175,26 @@ pub Int pages_free(Int p, Int n, Int bump) {
 
 // ─── Region records ────────────────────────────────────────────────────
 
-pub Int new_region_id() { return resid_raw_fetch_add(rg_g() + 184, 1) + 1; }
+// Ids come from per-thread blocks of the process-wide counter, so a push
+// costs no atomic: unique across threads, increasing on each thread (a
+// new block lies past every id handed out so far). A pooled worker starts
+// each job on a fresh block (id_block_reset), so its regions are younger
+// than any region its parent held when it spawned.
+pub Int new_region_id() {
+    Int t = resid_raw_tls("rg_ids", 16);
+    Int n = ld64(t);
+    if (n != 0 && n < ld64(t + 8)) { return st64(t, n + 1) * 0 + n; }
+    return id_block(t);
+}
+
+@noinline
+Int id_block(Int t) {
+    Int b = resid_raw_fetch_add(rg_g() + 184, 4096) + 1;
+    _ = st64(t + 8, b + 4096);
+    return st64(t, b + 1) * 0 + b;
+}
+
+pub Int id_block_reset() { return st64(resid_raw_tls("rg_ids", 16), 0); }
 
 pub Int rec_init(Int r, Int id) {
     _ = st64(r, id) + st64(r + 8, 0) + st64(r + 16, 0) + st64(r + 24, 0);
@@ -269,16 +291,34 @@ pub Int mv_done(Int v) {
 // caller a mostly empty page. An exit to depth 0, where no region can
 // take pages, copies the result out. Values older than L never move:
 // they cannot point into L.
+//
+// L is lazy: while the caller's region R is not due for compaction (by
+// rt_loop_due's measure, so R keeps its bound), the loop runs in R and
+// pushes L only at a back edge that finds R due (nothing points into a
+// region pushed then, as at entry). A short loop so costs no push, pop or copy;
+// R's own compaction, or its pop, takes the garbage. At depth 0 L is
+// pushed at entry. The handle is the depth L takes: pushed iff depth > l.
 
 @export("resid_loop_enter", "i64()")
-pub Int rt_loop_enter() { return rt_scope_push(); }
+pub Int rt_loop_enter() {
+    Int d = ag_scope_depth();
+    if (d == 0 || lazy_full(rec_at(d - 1))) { return rt_scope_push(); }
+    return d;
+}
+
+Bool lazy_full(Int r) { return ld64(r + 32) > 2 * ld64(r + 40) + 2; }
 
 @export("resid_loop_due", "i1(i64)")
 @inline
 pub Bool rt_loop_due(Int l) {
+    if (ag_scope_depth() == l) { return lazy_full(rec_at(l - 1)) && lazy_push(); }
     Int r = rec_at(l);
     return ld64(r + 32) > 2 * ld64(r + 40) + 2;
 }
+
+// L taken at a back edge: nothing to move yet.
+@noinline
+Bool lazy_push() { return rt_scope_push() < 0; }
 
 // Step 1: the context moving L's values into a new detached region;
 // step 2: L's pages freed and the new region in its place.
@@ -289,8 +329,11 @@ pub Int rt_loop_move(Int l, Int step) {
     if (step == 1) {
         _ = rec_save(r);
         _ = rec_init(nr, new_region_id());
+        // The carried values move now (list_move adopts transient lists).
+        _ = st64(resid_raw_tls("rg_compact", 8), 1);
         return mv_ctx(resid_raw_tls("rg_mv_loop", 24), ld64(r), ld64(r), nr);
     }
+    _ = st64(resid_raw_tls("rg_compact", 8), 0);
     _ = pages_free(ld64(r + 8), 0, rec_bump(r));
     _ = mcopy(r, nr, 64);
     _ = st64(r + 40, ld64(nr + 32)) + st64(r + 48, 0);
@@ -300,11 +343,20 @@ pub Int rt_loop_move(Int l, Int step) {
 
 // Step 1: L's pages handed to the caller's region, with an empty move
 // context (nothing left to copy); for a small L, or at depth 0, the
-// context copying the result over. Step 2: L popped.
+// context copying the result over. Step 2: L popped. A loop that never
+// took L: its values are already in place, and the context is null (the
+// caller then skips the move).
 @export("resid_loop_exit", "ptr(i64,i64)")
+@inline
 pub Int rt_loop_exit(Int l, Int step) {
-    Int r = rec_at(l);
+    if (ag_scope_depth() == l) { return 0; }
+    return loop_exit_slow(l, step);
+}
+
+@noinline
+Int loop_exit_slow(Int l, Int step) {
     if (step == 2) { return rt_scope_pop(l) * 0; }
+    Int r = rec_at(l);
     _ = rec_save(r);
     Int c = resid_raw_tls("rg_mv_loop", 24);
     if (l == 0) { return mv_ctx(c, ld64(r), ld64(r), 0); }

@@ -1,4 +1,10 @@
 {
+  "1234567": {
+    "bytes": 12551510,
+    "generator": "st/fasta/c",
+    "generator_sha256": "42498795f97df3694b2de230112c1cb0de22149a4398cd76b7b2410e2a1cdeba",
+    "sha256": "07b60c27bdb0692f8b5e548bb7f90f36988db4211ffe7ddf666c4151e2e5d4e5"
+  },
   "2500000": {
     "bytes": 25416745,
     "generator": "st/fasta/c",
@@ -10,6 +16,12 @@
     "generator": "st/fasta/c",
     "generator_sha256": "42498795f97df3694b2de230112c1cb0de22149a4398cd76b7b2410e2a1cdeba",
     "sha256": "3fcf4f78104c8a65ef210fe1d469f4e473456c791225f2f1f9114f4986aa09fa"
+  },
+  "345679": {
+    "bytes": 3514481,
+    "generator": "st/fasta/c",
+    "generator_sha256": "42498795f97df3694b2de230112c1cb0de22149a4398cd76b7b2410e2a1cdeba",
+    "sha256": "26fb42dd712f3e9c1401305b2a187828f6142c141861b9ccb6eb66f7eccabb84"
   },
   "500000": {
     "bytes": 5083411,

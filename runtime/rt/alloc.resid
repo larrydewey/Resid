@@ -194,8 +194,14 @@ pub Int rt_scope_push() {
 }
 
 @export("resid_scope_pop", "void(i64)")
+@inline
 pub Int rt_scope_pop(Int d) {
     if (d < 0 || d >= ag(4)) { return 0; }
+    return scope_pop_slow(d);
+}
+
+@noinline
+Int scope_pop_slow(Int d) {
     _ = rec_save(rec_at(ag(4) - 1));
     Int freed = pop_regions(ag(4) - 1, d, 0);
     _ = as_(4, d);
@@ -374,9 +380,11 @@ pub Int rt_rec_new(Int size, Int unique) {
 // Only a record of the current region is rewritten: an older one would
 // then hold values a region pop frees.
 @export("resid_rec_reuse", "ptr(ptr,i64)")
+@inline
 pub Int rt_rec_reuse(Int old, Int size) {
     if (ld64(old - 8) == (rec_tag() | (size << 1) | 1) && (ag(4) == 0 || young(old))) { return old; }
-    return rt_rec_new(size, 1);
+    Int h = rt_gmalloc(size + 8);
+    return st64(h, rec_tag() | (size << 1) | 1) * 0 + h + 8;
 }
 
 @export("resid_rec_share", "void(ptr)")
@@ -502,10 +510,16 @@ Int scalar_box(Int ty, Int payload_size) {
 }
 
 @export("resid_box_i64", "ptr(i64)")
+@inline
 pub Int rt_box_i64(Int v) {
     // imm_min <= v <= imm_max, read off the top bits only (a secret
     // byte's low bits must not steer it; see box_imm in show.resid).
     if (ult(ct_hide(v >> 54) + 1, 2)) { return v + imm_off(); }
+    return box_i64_slow(v);
+}
+
+@noinline
+Int box_i64_slow(Int v) {
     Int b = scalar_box(resid_raw_addr("i64"), 8);
     return st64(b + 24, v) * 0 + b;
 }

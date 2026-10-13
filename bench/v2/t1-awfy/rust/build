@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Rust port of AWFY (this suite). portable: -C opt-level=3; native: plus
+# -C target-cpu=native -C codegen-units=1 (as the CLBG suite's best track).
+set -euo pipefail
+PROFILE="${PROFILE:-portable}"
+EXTRA=$([ "$PROFILE" = native ] && echo "-C target-cpu=native -C codegen-units=1" || echo "")
+mkdir -p out
+rustc --edition 2021 -C opt-level=3 $EXTRA -o out/harness src/main.rs

@@ -1,0 +1,45 @@
+// AWFY List: Takeuchi-style tail over singly linked lists.
+
+type Elem = Cons(Int, Elem) | Nil;
+
+Elem make_list(Int n) {
+    if (n == 0) { return Nil; }
+    return Cons(n, make_list(n - 1));
+}
+
+Int length(Elem e) {
+    return match e { Cons(_, next) => 1 + length(next), Nil => 0 };
+}
+
+Elem next_of(Elem e) {
+    return match e { Cons(_, next) => next, Nil => Nil };
+}
+
+Bool is_nil(Elem e) {
+    return match e { Cons(_, _) => false, Nil => true };
+}
+
+Bool is_shorter_than(Elem x, Elem y) {
+    if (is_nil(y)) { return false; }
+    if (is_nil(x)) { return true; }
+    return is_shorter_than(next_of(x), next_of(y));
+}
+
+Elem tail(Elem x, Elem y, Elem z) {
+    if (is_shorter_than(y, x)) {
+        return tail(tail(next_of(x), y, z), tail(next_of(y), z, x), tail(next_of(z), x, y));
+    }
+    return z;
+}
+
+Int benchmark() {
+    return length(tail(make_list(rt 15), make_list(rt 10), make_list(rt 6)));
+}
+
+/// Runs List `inner` times, verifying each result.
+pub Bool list_inner(Int inner) {
+    for (Int i in 0..inner) {
+        if (benchmark() != 10) { return false; }
+    }
+    return true;
+}

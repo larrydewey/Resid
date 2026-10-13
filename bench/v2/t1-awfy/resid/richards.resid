@@ -1,0 +1,249 @@
+// AWFY Richards: an operating-system task scheduler simulation.
+// The object graph lives in indexed lists threaded through the scheduler
+// state: packets in `pk`, task control blocks in `ts` (index = identity);
+// links are indices, -1 is NO_WORK / NO_TASK. A task's function is a
+// dispatch on its kind (0 idler, 1 worker, 2 handler, 3 device) over the
+// data record fields `a`/`b` (idler: control, count; worker: destination,
+// count; handler: workIn, deviceIn; device: pending).
+
+type Pkt = { Int link; Int ident; Int kind; Int datum; List(Int) data; };
+type Tcb = { Int link; Int ident; Int prio; Int input; Bool pending; Bool waiting; Bool holding; Int fkind; Int a; Int b; };
+type Rs = { List(Pkt) pk; List(Tcb) ts; Int head; Int cur; Int cur_id; Int qpc; Int hold; Int next; };
+
+Int no_work() { return 0 - 1; }
+
+// ---- packets --------------------------------------------------------
+
+Pkt pkt(Pkt x, Int link, Int ident, Int datum, List(Int) data) {
+    return Pkt {.link = link, .ident = ident, .kind = x.kind, .datum = datum, .data = data};
+}
+
+List(Pkt) set_link(List(Pkt) pk, Int p, Int l) {
+    Pkt x = pk[p];
+    return pk.with(p, pkt(x, l, x.ident, x.datum, x.data));
+}
+
+Int last_of(List(Pkt) pk, Int m) {
+    Int l = pk[m].link;
+    if (l == no_work()) { return m; }
+    return last_of(pk, l);
+}
+
+// RBObject.append: the packets with `packet` at the end of the queue.
+List(Pkt) append_pk(List(Pkt) pk, Int packet, Int head) {
+    List(Pkt) pk1 = set_link(pk, packet, no_work());
+    if (head == no_work()) { return pk1; }
+    Int last = last_of(pk1, head);
+    return set_link(pk1, last, packet);
+}
+
+Int append_head(Int packet, Int head) { return if (head == no_work()) { packet } else { head }; }
+
+// ---- task control blocks ---------------------------------------------
+
+Tcb tcb(Tcb t, Int input, Bool p, Bool w, Bool h, Int a, Int b) {
+    return Tcb {.link = t.link, .ident = t.ident, .prio = t.prio, .input = input, .pending = p,
+                .waiting = w, .holding = h, .fkind = t.fkind, .a = a, .b = b};
+}
+
+Bool holding_or_waiting(Tcb t) { return t.holding || (!t.pending && t.waiting); }
+Bool waiting_with_packet(Tcb t) { return t.pending && t.waiting && !t.holding; }
+
+Rs with_ts(Rs s, List(Tcb) ts, Int next) {
+    return Rs {.pk = s.pk, .ts = ts, .head = s.head, .cur = s.cur, .cur_id = s.cur_id,
+               .qpc = s.qpc, .hold = s.hold, .next = next};
+}
+
+Rs with_pk(Rs s, List(Pkt) pk) {
+    return Rs {.pk = pk, .ts = s.ts, .head = s.head, .cur = s.cur, .cur_id = s.cur_id,
+               .qpc = s.qpc, .hold = s.hold, .next = s.next};
+}
+
+// ---- scheduler operations (each sets `next`) ------------------------
+
+Rs hold_self(Rs s) {
+    Tcb t = s.ts[s.cur];
+    Tcb t2 = tcb(t, t.input, t.pending, t.waiting, true, t.a, t.b);
+    return Rs {.pk = s.pk, .ts = s.ts.with(s.cur, t2), .head = s.head, .cur = s.cur, .cur_id = s.cur_id,
+               .qpc = s.qpc, .hold = s.hold + 1, .next = t.link};
+}
+
+Rs mark_waiting(Rs s) {
+    Tcb t = s.ts[s.cur];
+    return with_ts(s, s.ts.with(s.cur, tcb(t, t.input, t.pending, true, t.holding, t.a, t.b)), s.cur);
+}
+
+Rs release(Rs s, Int id) {
+    Tcb t = s.ts[id];
+    Int next = if (t.prio > s.ts[s.cur].prio) { id } else { s.cur };
+    return with_ts(s, s.ts.with(id, tcb(t, t.input, t.pending, t.waiting, false, t.a, t.b)), next);
+}
+
+Rs add_input(Rs s, Int tid, Int packet, Int old) {
+    Tcb t = s.ts[tid];
+    if (t.input == no_work()) {
+        Int next = if (t.prio > s.ts[old].prio) { tid } else { old };
+        return with_ts(s, s.ts.with(tid, tcb(t, packet, true, t.waiting, t.holding, t.a, t.b)), next);
+    }
+    Rs s2 = with_pk(s, append_pk(s.pk, packet, t.input));
+    return with_ts(s2, s2.ts, old);
+}
+
+Rs queue_packet(Rs s, Int packet) {
+    Pkt p = s.pk[packet];
+    Int tid = p.ident;
+    List(Pkt) pk2 = s.pk.with(packet, pkt(p, no_work(), s.cur_id, p.datum, p.data));
+    Rs s2 = Rs {.pk = pk2, .ts = s.ts, .head = s.head, .cur = s.cur, .cur_id = s.cur_id,
+                .qpc = s.qpc + 1, .hold = s.hold, .next = s.next};
+    return add_input(s2, tid, packet, s.cur);
+}
+
+Rs set_ab(Rs s, Int a, Int b) {
+    Tcb t = s.ts[s.cur];
+    return with_ts(s, s.ts.with(s.cur, tcb(t, t.input, t.pending, t.waiting, t.holding, a, b)), s.next);
+}
+
+// ---- task functions -------------------------------------------------
+
+Rs device_fn(Rs s, Int work) {
+    Tcb t = s.ts[s.cur];
+    if (work == no_work()) {
+        if (t.a == no_work()) { return mark_waiting(s); }
+        return queue_packet(set_ab(s, no_work(), t.b), t.a);
+    }
+    return hold_self(set_ab(s, work, t.b));
+}
+
+Rs handler_fn(Rs s0, Int work) {
+    Tcb t0 = s0.ts[s0.cur];
+    Rs s = if (work == no_work()) { s0 } else {
+        if (s0.pk[work].kind == 1) {
+            set_ab(with_pk(s0, append_pk(s0.pk, work, t0.a)), append_head(work, t0.a), t0.b)
+        } else {
+            set_ab(with_pk(s0, append_pk(s0.pk, work, t0.b)), t0.a, append_head(work, t0.b))
+        }
+    };
+    Tcb t = s.ts[s.cur];
+    Int wp = t.a;
+    if (wp == no_work()) { return mark_waiting(s); }
+    Pkt w = s.pk[wp];
+    Int count = w.datum;
+    if (count >= 4) { return queue_packet(set_ab(s, w.link, t.b), wp); }
+    Int dp = t.b;
+    if (dp == no_work()) { return mark_waiting(s); }
+    Pkt d = s.pk[dp];
+    Rs s2 = set_ab(s, t.a, d.link);
+    List(Pkt) pk2 = s2.pk.with(dp, pkt(d, d.link, d.ident, w.data[count], d.data));
+    List(Pkt) pk3 = pk2.with(wp, pkt(w, w.link, w.ident, count + 1, w.data));
+    return queue_packet(with_pk(s2, pk3), dp);
+}
+
+Rs idle_fn(Rs s, Int work) {
+    Tcb t = s.ts[s.cur];
+    Int count = t.b - 1;
+    if (count == 0) { return hold_self(set_ab(s, t.a, count)); }
+    if ((t.a & 1) == 0) { return release(set_ab(s, t.a / 2, count), 4); }
+    return release(set_ab(s, (t.a / 2) ^ 53256, count), 5);
+}
+
+List(Int) fill_data(List(Int) data, Int i, Int count) {
+    if (i >= 4) { return data; }
+    return fill_data(data.with(i, 65 + count - 1), i + 1, count);
+}
+
+Int next_count(Int c) { return if (c + 1 > 26) { 1 } else { c + 1 }; }
+
+Rs worker_fn(Rs s, Int work) {
+    if (work == no_work()) { return mark_waiting(s); }
+    Tcb t = s.ts[s.cur];
+    Int dest = if (t.a == 2) { 3 } else { 2 };
+    Int c1 = next_count(t.b);
+    Int c2 = next_count(c1);
+    Int c3 = next_count(c2);
+    Int c4 = next_count(c3);
+    Pkt w = s.pk[work];
+    List(Int) data = w.data.with(0, 65 + c1 - 1).with(1, 65 + c2 - 1).with(2, 65 + c3 - 1).with(3, 65 + c4 - 1);
+    Rs s2 = set_ab(s, dest, c4);
+    return queue_packet(with_pk(s2, s2.pk.with(work, pkt(w, w.link, dest, 0, data))), work);
+}
+
+Rs run_fn(Rs s, Int kind, Int work) {
+    if (kind == 0) { return idle_fn(s, work); }
+    if (kind == 1) { return worker_fn(s, work); }
+    if (kind == 2) { return handler_fn(s, work); }
+    return device_fn(s, work);
+}
+
+Rs run_task(Rs s) {
+    Tcb t = s.ts[s.cur];
+    if (waiting_with_packet(t)) {
+        Int msg = t.input;
+        Int input = s.pk[msg].link;
+        Tcb t2 = if (input == no_work()) { tcb(t, input, false, false, false, t.a, t.b) } else { tcb(t, input, true, false, false, t.a, t.b) };
+        return run_fn(with_ts(s, s.ts.with(s.cur, t2), s.next), t.fkind, msg);
+    }
+    return run_fn(s, t.fkind, no_work());
+}
+
+Rs schedule(Rs s) {
+    if (s.cur == no_work()) { return s; }
+    Tcb t = s.ts[s.cur];
+    if (holding_or_waiting(t)) {
+        return schedule(Rs {.pk = s.pk, .ts = s.ts, .head = s.head, .cur = t.link, .cur_id = s.cur_id,
+                            .qpc = s.qpc, .hold = s.hold, .next = s.next});
+    }
+    Rs s2 = run_task(Rs {.pk = s.pk, .ts = s.ts, .head = s.head, .cur = s.cur, .cur_id = t.ident,
+                         .qpc = s.qpc, .hold = s.hold, .next = s.next});
+    return schedule(Rs {.pk = s2.pk, .ts = s2.ts, .head = s2.head, .cur = s2.next, .cur_id = s2.cur_id,
+                        .qpc = s2.qpc, .hold = s2.hold, .next = s2.next});
+}
+
+// ---- setup ----------------------------------------------------------
+
+Rs create_packet(Rs s, Int link, Int ident, Int kind) {
+    Pkt p = Pkt {.link = link, .ident = ident, .kind = kind, .datum = 0, .data = [0, 0, 0, 0]};
+    Int at = s.pk.len();
+    return Rs {.pk = s.pk.concat([p]), .ts = s.ts, .head = s.head, .cur = s.cur, .cur_id = s.cur_id,
+               .qpc = s.qpc, .hold = s.hold, .next = at};
+}
+
+// state: 0 running, 1 waiting, 2 waiting with packet.
+Rs create_task(Rs s, Int ident, Int prio, Int work, Int state, Int kind, Int a, Int b) {
+    Tcb t = Tcb {.link = s.head, .ident = ident, .prio = prio, .input = work, .pending = state == 2,
+                 .waiting = state >= 1, .holding = false, .fkind = kind, .a = a, .b = b};
+    return Rs {.pk = s.pk, .ts = s.ts.with(ident, t), .head = ident, .cur = s.cur, .cur_id = s.cur_id,
+               .qpc = s.qpc, .hold = s.hold, .next = s.next};
+}
+
+Bool benchmark() {
+    Int nw = no_work();
+    Tcb z = Tcb {.link = nw, .ident = 0, .prio = 0, .input = nw, .pending = false, .waiting = false,
+                 .holding = false, .fkind = 0, .a = 0, .b = 0};
+    List(Pkt) pk0 = [];
+    Rs s0 = Rs {.pk = pk0, .ts = [z, z, z, z, z, z], .head = nw, .cur = nw, .cur_id = 0, .qpc = 0, .hold = 0, .next = nw};
+    Rs s1 = create_task(s0, 0, 0, nw, 0, 0, 1, rt 10000);
+    Rs w1 = create_packet(s1, nw, 1, 1);
+    Rs w2 = create_packet(w1, w1.next, 1, 1);
+    Rs s2 = create_task(w2, 1, 1000, w2.next, 2, 1, 2, 0);
+    Rs a1 = create_packet(s2, nw, 4, 0);
+    Rs a2 = create_packet(a1, a1.next, 4, 0);
+    Rs a3 = create_packet(a2, a2.next, 4, 0);
+    Rs s3 = create_task(a3, 2, 2000, a3.next, 2, 2, nw, nw);
+    Rs b1 = create_packet(s3, nw, 5, 0);
+    Rs b2 = create_packet(b1, b1.next, 5, 0);
+    Rs b3 = create_packet(b2, b2.next, 5, 0);
+    Rs s4 = create_task(b3, 3, 3000, b3.next, 2, 2, nw, nw);
+    Rs s5 = create_task(s4, 4, 4000, nw, 1, 3, nw, 0);
+    Rs s6 = create_task(s5, 5, 5000, nw, 1, 3, nw, 0);
+    Rs done = schedule(Rs {.pk = s6.pk, .ts = s6.ts, .head = s6.head, .cur = s6.head, .cur_id = s6.cur_id,
+                           .qpc = s6.qpc, .hold = s6.hold, .next = s6.next});
+    return done.qpc == 23246 && done.hold == 9297;
+}
+
+/// Runs Richards `inner` times, verifying each result.
+pub Bool richards_inner(Int inner) {
+    for (Int i in 0..inner) {
+        if (!benchmark()) { return false; }
+    }
+    return true;
+}

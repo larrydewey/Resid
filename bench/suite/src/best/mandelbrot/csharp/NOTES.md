@@ -14,3 +14,7 @@ Benchmarks Game "fastest" page. Program text copied verbatim into Program.cs.
   `Directory.Build.props` keeps obj/ and bin/ under out/. Runs the apphost `./out/<name>`.
 - Program characteristics: multithreaded, Vector512 (System.Runtime.Intrinsics) SIMD.
 
+
+Guard run (N = 1232): output differs from the reference from byte 129 on.
+The official and small sizes match; the difference at other sizes comes from
+this program's vectorised arithmetic and is reported as a guard failure.

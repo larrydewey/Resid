@@ -1,0 +1,59 @@
+// AWFY Bounce: 100 balls bounce 50 times in a 500x500 box.
+import "som.resid";
+
+type Ball = { Int x; Int y; Int xv; Int yv; };
+
+Int ball_count() { return rt 100; }
+
+ListBuf(Ball) make_balls(Int i, Int n, Int seed, ListBuf(Ball) acc) {
+    if (i >= n) { return acc; }
+    Int s1 = rnd_next(seed);
+    Int s2 = rnd_next(s1);
+    Int s3 = rnd_next(s2);
+    Int s4 = rnd_next(s3);
+    Ball b = Ball {.x = s1 % 500, .y = s2 % 500, .xv = (s3 % 300) - 150, .yv = (s4 % 300) - 150};
+    return make_balls(i + 1, n, s4, acc.push(b));
+}
+
+// The moved ball; whether it bounced is recomputed from the move by `bounced`.
+Ball bounce(Ball b) {
+    Int x0 = b.x + b.xv;
+    Int y0 = b.y + b.yv;
+    Int xv1 = if (x0 > 500) { 0 - abs(b.xv) } else { b.xv };
+    Int x1 = if (x0 > 500) { 500 } else { x0 };
+    Int xv2 = if (x1 < 0) { abs(xv1) } else { xv1 };
+    Int x2 = if (x1 < 0) { 0 } else { x1 };
+    Int yv1 = if (y0 > 500) { 0 - abs(b.yv) } else { b.yv };
+    Int y1 = if (y0 > 500) { 500 } else { y0 };
+    Int yv2 = if (y1 < 0) { abs(yv1) } else { yv1 };
+    Int y2 = if (y1 < 0) { 0 } else { y1 };
+    return Ball {.x = x2, .y = y2, .xv = xv2, .yv = yv2};
+}
+
+Bool bounced(Ball b) {
+    Int x0 = b.x + b.xv;
+    Int y0 = b.y + b.yv;
+    return x0 > 500 || x0 < 0 || y0 > 500 || y0 < 0;
+}
+
+Int sweep(List(Ball) balls, Int i, Int round, Int count) {
+    if (round >= 50) { return count; }
+    if (i >= balls.len()) { return sweep(balls, 0, round + 1, count); }
+    Ball b = balls[i];
+    Int c2 = if (bounced(b)) { count + 1 } else { count };
+    return sweep(balls.with(i, bounce(b)), i + 1, round, c2);
+}
+
+Int benchmark() {
+    ListBuf(Ball) e = ListBuf();
+    List(Ball) balls = make_balls(0, ball_count(), rnd_seed(), e).finish();
+    return sweep(balls, 0, 0, 0);
+}
+
+/// Runs Bounce `inner` times, verifying each result.
+pub Bool bounce_inner(Int inner) {
+    for (Int i in 0..inner) {
+        if (benchmark() != 1331) { return false; }
+    }
+    return true;
+}

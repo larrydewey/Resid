@@ -1,0 +1,8 @@
+// Shared pieces of the Are We Fast Yet core library (som/*.java).
+// Random is a value: next() returns the new seed, which is also the number.
+
+/// Advances the AWFY linear congruential generator.
+pub Int rnd_next(Int seed) { return ((seed * 1309) + 13849) & 65535; }
+
+/// The generator's starting seed, residual so no benchmark folds at build time.
+pub Int rnd_seed() { return rt 74755; }

@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Upstream C++ port, unchanged. portable: clang++ -O2; native: upstream's
+# own flags (-O3 -flto -march=native).
+set -euo pipefail
+SRC=../upstream/C++/src
+PROFILE="${PROFILE:-portable}"
+OPT=$([ "$PROFILE" = native ] && echo "-O3 -flto -march=native" || echo "-O2")
+mkdir -p out
+clang++ $OPT -ffp-contract=off -std=c++17 $SRC/harness.cpp $SRC/deltablue.cpp $SRC/memory/object_tracker.cpp $SRC/richards.cpp -o out/harness

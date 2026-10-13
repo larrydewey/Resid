@@ -1,0 +1,72 @@
+{
+  "c/portable": {
+    "log": "",
+    "ok": true,
+    "out_bytes": 121184,
+    "seconds": 1.13,
+    "time": "2026-10-13T04:06:08Z"
+  },
+  "cpp/portable": {
+    "log": "",
+    "ok": true,
+    "out_bytes": 243840,
+    "seconds": 2.08,
+    "time": "2026-10-13T04:06:10Z"
+  },
+  "csharp/portable": {
+    "log": "\nBuild succeeded.\n    0 Warning(s)\n    0 Error(s)\n\nTime Elapsed 00:00:00.55\n",
+    "ok": true,
+    "out_bytes": 196624,
+    "seconds": 0.67,
+    "time": "2026-10-13T04:06:21Z"
+  },
+  "go/portable": {
+    "log": "",
+    "ok": true,
+    "out_bytes": 2671889,
+    "seconds": 0.03,
+    "time": "2026-10-13T04:06:11Z"
+  },
+  "java/portable": {
+    "log": "",
+    "ok": true,
+    "out_bytes": 0,
+    "seconds": 0.54,
+    "time": "2026-10-13T04:06:20Z"
+  },
+  "javascript/portable": {
+    "log": "",
+    "ok": true,
+    "out_bytes": 0,
+    "seconds": 0.0,
+    "time": "2026-10-13T04:06:21Z"
+  },
+  "python/portable": {
+    "log": "",
+    "ok": true,
+    "out_bytes": 0,
+    "seconds": 0.0,
+    "time": "2026-10-13T04:06:21Z"
+  },
+  "resid/portable": {
+    "log": "",
+    "ok": true,
+    "out_bytes": 956377,
+    "seconds": 13.59,
+    "time": "2026-10-13T04:06:07Z"
+  },
+  "rust/portable": {
+    "log": "",
+    "ok": true,
+    "out_bytes": 4743664,
+    "seconds": 0.42,
+    "time": "2026-10-13T04:06:11Z"
+  },
+  "zig/portable": {
+    "log": "",
+    "ok": true,
+    "out_bytes": 4392112,
+    "seconds": 9.13,
+    "time": "2026-10-13T04:06:20Z"
+  }
+}

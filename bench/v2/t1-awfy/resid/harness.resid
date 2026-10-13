@@ -1,0 +1,67 @@
+// Are We Fast Yet harness: `harness <Benchmark> [outer [inner]]`.
+// Same output lines as the reference harnesses (Run.java), timed with the
+// monotonic clock in microseconds.
+import "clock.resid";
+import "bounce.resid";
+import "cd.resid";
+import "deltablue.resid";
+import "havlak.resid";
+import "json.resid";
+import "list.resid";
+import "mandelbrot.resid";
+import "nbody.resid";
+import "permute.resid";
+import "queens.resid";
+import "richards.resid";
+import "sieve.resid";
+import "storage.resid";
+import "towers.resid";
+
+Bool run_one(Str name, Int inner) {
+    if (name == "Bounce") { return bounce_inner(inner); }
+    if (name == "CD") { return cd_inner(inner); }
+    if (name == "DeltaBlue") { return deltablue_inner(inner); }
+    if (name == "Havlak") { return havlak_inner(inner); }
+    if (name == "Json") { return json_inner(inner); }
+    if (name == "List") { return list_inner(inner); }
+    if (name == "Mandelbrot") { return mandelbrot_inner(inner); }
+    if (name == "NBody") { return nbody_inner(inner); }
+    if (name == "Permute") { return permute_inner(inner); }
+    if (name == "Queens") { return queens_inner(inner); }
+    if (name == "Richards") { return richards_inner(inner); }
+    if (name == "Sieve") { return sieve_inner(inner); }
+    if (name == "Storage") { return storage_inner(inner); }
+    if (name == "Towers") { return towers_inner(inner); }
+    rt_assert(false, f"No benchmark found with the name: {name}");
+    return false;
+}
+
+@requires(clock(readonly))
+Int outer_loop(Str name, Int i, Int outer, Int inner, Int total) {
+    if (i >= outer) { return total; }
+    Int t0 = clock_monotonic_ns();
+    if (!run_one(name, inner)) {
+        rt_assert(false, "Benchmark failed with incorrect result");
+        return total;
+    }
+    Int us = (clock_monotonic_ns() - t0) / 1000;
+    println(f"{name}: iterations=1 runtime: {us}us");
+    return outer_loop(name, i + 1, outer, inner, total + us);
+}
+
+@requires(args, clock(readonly))
+Int main() {
+    if (args.count() < 2) {
+        println("harness benchmark [num-iterations [inner-iter]]");
+        return 1;
+    }
+    Str name = args.get(1);
+    Int outer = if (args.count() > 2) { str_parse_int(args.get(2)) } else { 1 };
+    Int inner = if (args.count() > 3) { str_parse_int(args.get(3)) } else { 1 };
+    println(f"Starting {name} benchmark ...");
+    Int total = outer_loop(name, 0, outer, inner, 0);
+    println(f"{name}: iterations={outer} average: {total / outer}us total: {total}us");
+    println("");
+    println(f"Total Runtime: {total}us");
+    return 0;
+}

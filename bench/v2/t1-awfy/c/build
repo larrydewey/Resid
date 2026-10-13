@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Rochus Keller's C port of AWFY, unchanged (../upstream/C-rochus).
+# As its README says: C99, gcc with -fpermissive. portable: -O2; native: -O3 -flto -march=native.
+set -euo pipefail
+SRC=../upstream/C-rochus
+PROFILE="${PROFILE:-portable}"
+OPT=$([ "$PROFILE" = native ] && echo "-O3 -flto -march=native" || echo "-O2")
+mkdir -p out
+gcc $OPT -std=c99 -fpermissive -w -ffp-contract=off -I$SRC $SRC/*.c $SRC/som/*.c -lm -o out/harness

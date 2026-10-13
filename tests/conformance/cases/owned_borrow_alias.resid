@@ -1,0 +1,50 @@
+// A call that only reads a linear value borrows it unless its result can
+// hold part of it (lower.resid cf_fix). Each `peek_*` returns a part of
+// its argument in a different way; the argument is updated in place
+// afterwards, and the part read before must keep its old contents.
+
+type Bag = { List(Int) xs; List(Int) ys; Int n; };
+type Hold = { List(Int) l; Int k; };
+
+List(Int) peek_direct(Bag b) { return b.xs; }
+Hold peek_rec(Bag b) { return Hold {.l = b.xs, .k = 1}; }
+List(Int) peek_if(Bag b, Int k) { return if (k > 0) { b.xs } else { b.ys }; }
+List(Int) peek_block(Bag b) {
+    List(Int) t = b.xs;
+    return t;
+}
+List(Int) peek_rec_loop(Bag b, Int i, List(Int) acc) {
+    if (i >= 2) { return b.xs; }
+    return peek_rec_loop(b, i + 1, acc);
+}
+// Only builds from `acc`: a real borrow of `b`.
+List(Int) count_into(Bag b, Int i, List(Int) acc) {
+    if (i >= b.xs.len()) { return acc; }
+    return count_into(b, i + 1, acc.concat([b.xs[i] * 10]));
+}
+
+Bag bump(Bag b) {
+    return Bag {.xs = b.xs.with(0, b.xs[0] + 100), .ys = b.ys.with(0, b.ys[0] + 100), .n = b.n};
+}
+
+Bag run(Bag b, Int k) {
+    List(Int) a = peek_direct(b);
+    Hold h = peek_rec(b);
+    List(Int) c = peek_if(b, k);
+    List(Int) d = peek_block(b);
+    List(Int) e0 = [];
+    List(Int) e = peek_rec_loop(b, 0, e0);
+    List(Int) f = count_into(b, 0, e0);
+    Bag b2 = bump(b);
+    println(f"{a} {h.l} {c} {d} {e} {f} {b2.xs} {b2.ys}");
+    return if (k > 1) { bump(b2) } else { b2 };
+}
+
+@requires(args)
+Int main() {
+    Int k = args.count();
+    Bag b = Bag {.xs = [1, 2, 3], .ys = [7, 8], .n = k};
+    Bag r = run(run(b, k), k + 1);
+    println(f"{r.xs} {r.ys} {b.xs}");
+    return 0;
+}
