@@ -1865,6 +1865,11 @@ Int with_fresh(Int l, Int extra) {
     return set_list(list_hdr(), n, 0 - 2, f, ltype(l));
 }
 
+// with_fresh for a list of header records: the frozen source may have
+// other holders, so its records are shared before the copy is updated in
+// place.
+Int with_fresh_f(Int l, Int extra) { return with_fresh(rt_list_share_f(l), extra); }
+
 Int with_fill(Int l, Int f, Int i, Int n) {
     if (i >= n) { return 0; }
     _ = st64(f + 24 + i * 8, list_at(l, i));
@@ -1900,10 +1905,42 @@ pub Int rt_list_with(Int l, Int owned, Int i, Int v) {
     return list_with_slow(l, owned, i, v);
 }
 
-// box_interned, the static boxes (False, True, 0.0) tested first.
+// box_interned, the static boxes (False, True, 0.0) tested first (as an
+// offset, so a static box known at compile time folds).
 Bool word_static(Int v) {
-    Int g = interned();
-    return (!ult(v, g) && ult(v, g + 65)) || box_imm(v) || box_fimm(v);
+    return ult(v - interned(), 65) || box_imm(v) || box_fimm(v);
+}
+
+// The same update with the scalar unboxed: the compiler emits these for
+// List(Int), List(Bool) and List(Float), so one range test replaces the
+// box and the word_static test.
+@export("resid_list_with_i64", "ptr(ptr,i8,i64,i64)")
+@inline
+pub Int rt_list_with_i64(Int l, Int owned, Int i, Int v) {
+    if (owned != 0 && ltransient(l) && ult(i, lcount(l)) && ult(ct_hide(v >> 54) + 1, 2)) {
+        return st64(lroot(l) + 24 + i * 8, v + imm_off()) * 0 + l;
+    }
+    return list_with_slow(l, owned, i, rt_box_i64(v));
+}
+
+@export("resid_list_with_bool", "ptr(ptr,i8,i64,i8)")
+@inline
+pub Int rt_list_with_bool(Int l, Int owned, Int i, Int v0) {
+    Int v = sx8(v0) & 1;
+    if (owned != 0 && ltransient(l) && ult(i, lcount(l))) {
+        return st64(lroot(l) + 24 + i * 8, interned() + v * 32) * 0 + l;
+    }
+    return list_with_slow(l, owned, i, interned() + v * 32);
+}
+
+@export("resid_list_with_f64", "ptr(ptr,i8,i64,double)")
+@inline
+pub Int rt_list_with_f64(Int l, Int owned, Int i, Float v) {
+    Int bits = resid_raw_f64_bits(v);
+    if (owned != 0 && ltransient(l) && ult(i, lcount(l)) && !ult(bits, 72057594037927936)) {
+        return st64(lroot(l) + 24 + i * 8, bits) * 0 + l;
+    }
+    return list_with_slow(l, owned, i, rt_box_f64(v));
 }
 
 @noinline
@@ -1928,6 +1965,39 @@ pub Int rt_list_with_f(Int l, Int owned, Int i, Int v, Int ek) {
         return st64(f + 24 + i * 8, bar_keep_f(f, v, ek)) * 0 + l;
     }
     return list_with_f_slow(l, owned, i, v, ek);
+}
+
+// rt_list_with_f for a list of header records (lw_hdr_elem): a copy of
+// the list shares the records it holds (with_fresh_f), as they may be
+// unique in a transient list.
+@export("resid_list_with_fh", "ptr(ptr,i8,i64,ptr,ptr)")
+@inline
+pub Int rt_list_with_fh(Int l, Int owned, Int i, Int v, Int ek) {
+    if (owned != 0 && ltransient(l) && ult(i, lcount(l))) {
+        Int f = lroot(l);
+        return st64(f + 24 + i * 8, bar_keep_f(f, v, ek)) * 0 + l;
+    }
+    return list_with_fh_slow(l, owned, i, v, ek);
+}
+
+@noinline
+Int list_with_fh_slow(Int l, Int owned, Int i, Int v, Int ek) {
+    Int n = lcount(l);
+    if (!ult(i, n)) { return rt_index_abort(i, n, 0); }
+    if (owned != 0 && no_thaw(l)) { return mark_frozen(with_shared(l, i, v)); }
+    if (owned == 0) { return with_shared(l, i, v); }
+    Int t = if (ltransient(l)) { l } else { with_fresh_f(l, 0) };
+    Int f = lroot(t);
+    return st64(f + 24 + i * 8, bar_keep_f(f, v, ek)) * 0 + t;
+}
+
+// The write-back of a borrowed element (lo_borrows): usually the record
+// read by resid_list_get_own, rewritten in place and already in its slot.
+@export("resid_list_with_fb", "ptr(ptr,i8,i64,ptr,ptr)")
+@inline
+pub Int rt_list_with_fb(Int l, Int owned, Int i, Int v, Int ek) {
+    if (owned != 0 && ltransient(l) && ult(i, lcount(l)) && ld64(lroot(l) + 24 + i * 8) == v) { return l; }
+    return rt_list_with_fh(l, owned, i, v, ek);
 }
 
 // Thawing a frozen list (with_fresh) copies it whole. A list frozen once
@@ -2005,6 +2075,23 @@ pub Int rt_list_concat_own_f(Int a, Int owned, Int b, Int ek) {
     Int f0 = lroot(t);
     Int f = if (n + m <= ld64(f0 + 8)) { f0 } else { with_grow(t, f0, n, n + m) };
     _ = cat_fill_f(f, b, n, 0, m, ek);
+    _ = st64(f, n + m) + st64(f + 16, n + m);
+    return st64(t, n + m) * 0 + t;
+}
+
+// rt_list_concat_own_f for a list of header records: b keeps its records,
+// so they are shared as the transient takes them (a copy of a shares too).
+@export("resid_list_concat_own_fh", "ptr(ptr,i8,ptr,ptr)")
+pub Int rt_list_concat_own_fh(Int a, Int owned, Int b, Int ek) {
+    Int m = lcount(b);
+    if (owned != 0 && no_thaw(a)) { return mark_frozen(rt_list_concat(a, rt_list_share_f(b))); }
+    if (owned == 0) { return rt_list_concat(a, rt_list_share_f(b)); }
+    if (m == 0) { return a; }
+    Int n = lcount(a);
+    Int t = if (ltransient(a)) { a } else { with_fresh_f(a, max(m, n)) };
+    Int f0 = lroot(t);
+    Int f = if (n + m <= ld64(f0 + 8)) { f0 } else { with_grow(t, f0, n, n + m) };
+    _ = cat_fill_f(f, rt_list_share_f(b), n, 0, m, ek);
     _ = st64(f, n + m) + st64(f + 16, n + m);
     return st64(t, n + m) * 0 + t;
 }

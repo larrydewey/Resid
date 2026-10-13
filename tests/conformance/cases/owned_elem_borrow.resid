@@ -1,0 +1,127 @@
+// A record read out of a list and written back at the same index is
+// rewritten in place (lo_borrows, resid_list_get_own). Every other read
+// shares the record, so each case below prints what value semantics say.
+
+type Pt = { Int a; Int b; };
+type Pair = { List(Pt) l; Int k; };
+
+Pt bump(Pt p, Int a) { return Pt {.a = a, .b = p.b}; }
+
+List(Pt) mk(Int n, Int i, ListBuf(Pt) acc) {
+    if (i >= n) { return acc.finish(); }
+    return mk(n, i + 1, acc.push(Pt {.a = i, .b = i * 10}));
+}
+
+Str fmt(List(Pt) xs) { return fmt_from(xs, 0, ""); }
+Str fmt_from(List(Pt) xs, Int i, Str acc) {
+    if (i >= xs.len()) { return acc; }
+    return fmt_from(xs, i + 1, acc + f"{xs[i].a}/{xs[i].b} ");
+}
+
+// The borrow: read at i, written back at i.
+List(Pt) same(List(Pt) xs, Int i) {
+    Pt t = xs[i];
+    return xs.with(i, bump(t, 100));
+}
+
+// Written back at another index: xs[i] keeps its value.
+List(Pt) other(List(Pt) xs, Int i, Int j) {
+    Pt t = xs[i];
+    return xs.with(j, bump(t, 200));
+}
+
+// A second read of the same element keeps the old record.
+Str twice(List(Pt) xs, Int i) {
+    Pt t = xs[i];
+    Pt u = xs[i];
+    List(Pt) ys = xs.with(i, bump(t, 300));
+    return f"{u.a} {ys[i].a}";
+}
+
+// A slice taken before holds the old records.
+Str sliced(List(Pt) xs, Int i) {
+    List(Pt) ys = xs[0..2];
+    List(Pt) zs = same(xs, i);
+    return fmt(ys) + "| " + fmt(zs);
+}
+
+// The list read after the chain consumed the record: the old value.
+Str chain(List(Pt) xs, Int i) {
+    Pt t = xs[i];
+    Pt t2 = bump(t, 400);
+    Int old = xs[i].a;
+    List(Pt) ys = xs.with(i, t2);
+    return f"{old} {ys[i].a}";
+}
+
+// A retired chain local read after the write-back: the old value.
+Str retired(List(Pt) xs, Int i) {
+    Pt t = xs[i];
+    Pt t2 = bump(t, 500);
+    List(Pt) ys = xs.with(i, t2);
+    return f"{t.a} {ys[i].a}";
+}
+
+// A literal field read after the write-back field: the old value.
+Pair fieldorder(List(Pt) xs, Int i) {
+    Pt t = xs[i];
+    return Pair {.l = xs.with(i, bump(t, 600)), .k = t.a};
+}
+
+// The list read between the borrow and the chain's consumption: fine.
+List(Pt) between(List(Pt) xs, Int i, Int j) {
+    Pt t = xs[i];
+    Int m = xs[j].a;
+    return xs.with(i, bump(t, m + 1000));
+}
+
+// Written back on one path only.
+List(Pt) branchy(List(Pt) xs, Int i, Bool c) {
+    Pt t = xs[i];
+    if (c) { return xs.with(i, bump(t, 700)); }
+    return xs;
+}
+
+// Appended into a transient list: the source keeps its records.
+Str appended(List(Pt) xs, List(Pt) zs, Int i) {
+    List(Pt) ys = zs.concat(xs);
+    List(Pt) ws = same(ys, i + zs.len());
+    return fmt(xs) + "| " + fmt(ws);
+}
+
+// One record in two slots.
+Str dup(Pt p) {
+    List(Pt) xs = [p, p];
+    List(Pt) ys = same(xs, 0);
+    return fmt(ys);
+}
+
+// A second holder of the list value sees no rewrite.
+Str held(List(Pt) base, Int i) {
+    List(Pt) xs = base.with(0, Pt {.a = 9, .b = 9});
+    List(Pt) keep = xs;
+    List(Pt) ys = same(xs, i);
+    return fmt(keep) + "| " + fmt(ys);
+}
+
+@requires(args)
+Int main() {
+    Int n = rt 4;
+    Int i = rt 1;
+    println(fmt(same(mk(n, 0, ListBuf()), i)));
+    println(fmt(other(mk(n, 0, ListBuf()), i, 2)));
+    println(twice(mk(n, 0, ListBuf()), i));
+    println(sliced(mk(n, 0, ListBuf()), i));
+    println(chain(mk(n, 0, ListBuf()), i));
+    println(retired(mk(n, 0, ListBuf()), i));
+    Pair pr = fieldorder(mk(n, 0, ListBuf()), i);
+    println(f"{fmt(pr.l)}| {pr.k}");
+    println(fmt(between(mk(n, 0, ListBuf()), i, 3)));
+    println(fmt(branchy(mk(n, 0, ListBuf()), i, args.count() > 0)));
+    println(fmt(branchy(mk(n, 0, ListBuf()), i, args.count() > 5)));
+    println(appended(mk(n, 0, ListBuf()), mk(2, 0, ListBuf()), i));
+    println(dup(Pt {.a = 7, .b = 8}));
+    println(held(mk(n, 0, ListBuf()), 0));
+    println(fmt(same(same(same(mk(n, 0, ListBuf()), i), i), 0)));
+    return 0;
+}

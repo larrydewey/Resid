@@ -20,17 +20,17 @@
 // innermost region's top page, bump and end are kept in the allocator
 // words 5-7 for the inline fast path.
 
-Int rg_page() { return 1048576; }
+pub Int rg_page() { return 1048576; }
 
 // Pages in the reserved range: 256 GB of address space where the system
 // grants it, else the largest of 64, 16, 4 or 1 GB that it does (valgrind
 // and tight overcommit limits refuse the first).
-Int rg_pages() { return ld64(rg_g() + 192); }
+pub Int rg_pages() { return ld64(rg_g() + 192); }
 
 // Process-wide words: 0 the range's base, 1 the next untouched page, 2 the
 // page table, 3 a lock, 4-22 the free runs of 2^k pages, 23 the last id,
 // 24 the range's size in pages.
-Int rg_g() { return resid_raw_global("rt_regions", 200); }
+pub Int rg_g() { return resid_raw_global("rt_regions", 200); }
 
 Int rg_lock() {
     if (resid_raw_cas(rg_g() + 24, 0, 1)) { return 0; }
@@ -337,7 +337,7 @@ pub Int rt_loop_move(Int l, Int step) {
     _ = pages_free(ld64(r + 8), 0, rec_bump(r));
     _ = mcopy(r, nr, 64);
     _ = st64(r + 40, ld64(nr + 32)) + st64(r + 48, 0);
-    _ = rec_load(r);
+    _ = rec_load(r) + yid_sync();   // r carries a new id
     return str_index_scope_popped() * 0;
 }
 

@@ -243,6 +243,38 @@ pub Int rt_list_get(Int l, Int i) {
 @export("resid_list_get_nc", "ptr(ptr,i64)")
 pub Int rt_list_get_nc(Int l, Int i) { return list_at(l, i); }
 
+// A header record read from a list has a second referrer from here: its
+// unique bit is cleared (resid_rec_share), so no literal reuses it in
+// place. rt_list_get_own is the read the compiler proved is written back
+// at the same index of the same list before any other use of the list
+// (lo_borrows): the record stays unique while the list is transient (its
+// only holder is the owner's chain), so the write-back may rewrite it.
+@export("resid_list_get_sh", "ptr(ptr,i64)")
+@inline
+pub Int rt_list_get_sh(Int l, Int i) {
+    Int p = rt_list_get(l, i);
+    return rec_share_hdr(p) * 0 + p;
+}
+
+@export("resid_list_get_own", "ptr(ptr,i64)")
+@inline
+pub Int rt_list_get_own(Int l, Int i) {
+    Int p = rt_list_get(l, i);
+    _ = if (ltransient(l)) { 0 } else { rec_share_hdr(p) };
+    return p;
+}
+
+// Every header record of a list shared: its elements got a second holder
+// (a slice, a list appended into a transient).
+@export("resid_list_share_f", "ptr(ptr)")
+pub Int rt_list_share_f(Int l) { return share_elems(l, 0, lcount(l)) * 0 + l; }
+
+Int share_elems(Int l, Int i, Int n) {
+    if (i >= n) { return 0; }
+    _ = rec_share_hdr(list_at(l, i));
+    return share_elems(l, i + 1, n);
+}
+
 // List views: a loop reads a flat list's slots and count once at entry
 // (count 0 when it is a trie), then an element is a compare and a load.
 @export("resid_list_vdata", "ptr(ptr)")

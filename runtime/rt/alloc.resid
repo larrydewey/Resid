@@ -15,11 +15,13 @@
 // 3 mark, 4 scope depth, 5 the innermost region's top page, 6 its bump
 // pointer, 7 its end, 8 region records, 9 their capacity, 10 the current
 // region's record (the innermost, or the one region_use made current),
-// 11 the region_use save stack. A thread's exit runs scope_thread_exit
-// (resid_start's thread_main).
+// 11 the region_use save stack, 12 spare, 13 the young id: the innermost
+// region's id while it is the current region, 0 at depth 0, else -1
+// (yid_sync, at every change of words 4 and 10). A thread's exit runs
+// scope_thread_exit (resid_start's thread_main).
 // An arena is {head, current, prev}; its chunks {cap, used, next, data}.
 
-Int ast() { return resid_raw_tls("rt_alloc", 104); }
+Int ast() { return resid_raw_tls("rt_alloc", 112); }
 Int ag(Int i) { return ld64(ast() + i * 8); }
 Int as_(Int i, Int v) { return st64(ast() + i * 8, v); }
 
@@ -76,6 +78,15 @@ pub Int cur_region() { return ag(10); }
 
 // The current region's top page, bump and end, emptied.
 pub Int top_clear() { return as_(5, 0) + as_(6, 0) + as_(7, 0); }
+
+// Word 13, the young id (young_fast): kept in step at every change of
+// words 4 and 10.
+pub Int yid_sync() {
+    Int d = ag(4);
+    if (d == 0) { return as_(13, 0); }
+    Int r = rec_at(d - 1);
+    return as_(13, if (ag(10) == r) { ld64(r) } else { 0 - 1 });
+}
 
 // A heap string of n bytes (plus NUL) made inside an arena goes with the
 // arena: copied into it, the heap block freed.
@@ -189,8 +200,8 @@ pub Int rt_scope_push() {
     _ = if (d == ag(9)) { marks_grow() } else { 0 };
     _ = if (d > 0) { rec_save(rec_at(d - 1)) } else { 0 };
     _ = rec_init(rec_at(d), new_region_id());
-    _ = as_(5, 0) + as_(6, 0) + as_(7, 0) + as_(10, rec_at(d));
-    return as_(4, d + 1) * 0 + d;
+    _ = as_(10, rec_at(d)) + as_(4, d + 1) + yid_sync();
+    return top_clear() * 0 + d;
 }
 
 @export("resid_scope_pop", "void(i64)")
@@ -205,7 +216,8 @@ Int scope_pop_slow(Int d) {
     _ = rec_save(rec_at(ag(4) - 1));
     Int freed = pop_regions(ag(4) - 1, d, 0);
     _ = as_(4, d);
-    _ = if (d > 0) { rec_load(rec_at(d - 1)) + as_(10, rec_at(d - 1)) } else { as_(5, 0) + as_(6, 0) + as_(7, 0) + as_(10, 0) };
+    _ = if (d > 0) { as_(10, rec_at(d - 1)) + rec_load(rec_at(d - 1)) } else { as_(10, 0) + top_clear() };
+    _ = yid_sync();
     // A pointer-keyed string cache entry may name freed region memory.
     return if (freed > 0) { str_index_scope_popped() } else { 0 };
 }
@@ -250,9 +262,9 @@ pub Int region_use(Int obj) {
     _ = use_push();
     if (ag(4) == 0 || young(obj)) { return 0; }
     Int r = rec_of(region_of(obj));
-    if (r == 0) { return as_(0, 0) + as_(1, 0) + as_(4, 0); }
+    if (r == 0) { return as_(0, 0) + as_(1, 0) + as_(4, 0) + yid_sync(); }
     _ = rec_save(ag(10));
-    return as_(10, r) + rec_load(r);
+    return as_(10, r) + rec_load(r) + yid_sync();
 }
 
 // No change until region_done (a use that needs none, kept paired).
@@ -260,7 +272,7 @@ pub Int region_same() { return use_push(); }
 
 // Plain heap memory until region_done: what is made lives as long as the
 // program (a constant's cache).
-pub Int heap_use() { return use_push() + as_(0, 0) + as_(1, 0) + as_(4, 0); }
+pub Int heap_use() { return use_push() + as_(0, 0) + as_(1, 0) + as_(4, 0) + yid_sync(); }
 
 Int use_push() {
     Int u = use_stack();
@@ -290,7 +302,7 @@ pub Int region_done() {
     Bool switched = ag(10) != cur;
     _ = if (switched) { rec_save(ag(10)) } else { 0 };
     _ = as_(0, ld64(e)) + as_(1, ld64(e + 8)) + as_(4, ld64(e + 16)) + as_(10, cur);
-    return if (switched) { rec_load(cur) } else { 0 };
+    return (if (switched) { rec_load(cur) } else { 0 }) + yid_sync();
 }
 
 // ─── The allocators ────────────────────────────────────────────────────
@@ -336,9 +348,9 @@ Int alloc_slow(Int size) {
 @export("resid_rt_outer_alloc", "ptr(i64)")
 pub Int rt_outer_alloc(Int n) {
     Int d = ag(4);
-    _ = as_(4, 0);
+    _ = as_(4, 0) + yid_sync();
     Int p = rt_alloc_x(n);
-    return as_(4, d) * 0 + p;
+    return (as_(4, d) + yid_sync()) * 0 + p;
 }
 
 @export("resid_mem_mark", "i64()")
@@ -352,7 +364,7 @@ pub Int rt_mem_since_mark() { return ag(2) - ag(3); }
 pub Int rt_sc_depth_x() { return ag(4); }
 
 @export("resid_rt_sc_depth_set", "void(i64)")
-pub Int rt_sc_depth_set_x(Int d) { return as_(4, d); }
+pub Int rt_sc_depth_set_x(Int d) { return as_(4, d) + yid_sync(); }
 
 // Made in the innermost scope region.
 pub Bool young(Int p) {
@@ -389,16 +401,45 @@ pub Int rt_rec_new(Int size, Int unique) {
 @export("resid_rec_reuse", "ptr(ptr,i64)")
 @inline
 pub Int rt_rec_reuse(Int old, Int size) {
-    if (ld64(old - 8) == (rec_tag() | (size << 1) | 1) && (ag(4) == 0 || young(old))) { return old; }
+    if (ld64(old - 8) == (rec_tag() | (size << 1) | 1) && young_fast(old)) { return old; }
     Int h = rt_gmalloc(size + 8);
     return st64(h, rec_tag() | (size << 1) | 1) * 0 + h + 8;
 }
 
+// young(p) with the innermost region's id precomputed (word 13): one
+// page-table read.
+Bool young_fast(Int p) {
+    Int yid = ag(13);
+    if (yid == 0) { return true; }
+    Int off = p - ld64(rg_g());
+    return ult(off, rg_pages() * rg_page()) && ld64(ld64(rg_g() + 16) + (off >> 20) * 8) == yid;
+}
+
 @export("resid_rec_share", "void(ptr)")
+@inline
 pub Int rt_rec_share(Int rec) {
     Int v = ld64(rec - 8);
     if ((v >> 32) == 1380303070 && (v & 1) != 0) { return st64(rec - 8, v & (0 - 2)); }
     return 0;
+}
+
+// The same for a record known to carry a header (an element of a typed
+// list of header records): no tag test.
+@inline
+pub Int rec_share_hdr(Int rec) {
+    Int v = ld64(rec - 8);
+    if ((v & 1) != 0) { return st64(rec - 8, v & (0 - 2)); }
+    return 0;
+}
+
+// rt_rec_reuse for a record whose fields are all scalars: it holds no
+// pointer, so a record of any region may be rewritten.
+@export("resid_rec_reuse_sc", "ptr(ptr,i64)")
+@inline
+pub Int rt_rec_reuse_sc(Int old, Int size) {
+    if (ld64(old - 8) == (rec_tag() | (size << 1) | 1)) { return old; }
+    Int h = rt_gmalloc(size + 8);
+    return st64(h, rec_tag() | (size << 1) | 1) * 0 + h + 8;
 }
 
 // ─── Copies that outlive a region ──────────────────────────────────────
@@ -478,13 +519,14 @@ pub Int rt_list_const_ptr(Int cache, Int n, Int data, Int ty) { return const_lis
 // (checked at startup, resid_run_main). False, True and 0.0 are three
 // static boxes, set up on first use.
 
-Int imm_off() { return 18295873486192640; }
+pub Int imm_off() { return 18295873486192640; }
 Int imm_min() { return 0 - 18014398509481984; }
 Int imm_max() { return 18014398509481983; }
 
 pub Int interned() { return resid_raw_global("box_interned", 96); }
 
-Int intern_init() {
+// Set up once by resid_start, before any thread.
+pub Int intern_init() {
     Int g = interned();
     _ = intern_one(g, resid_raw_addr("bool"), 0);
     _ = intern_one(g + 32, resid_raw_addr("bool"), 1);
@@ -495,11 +537,6 @@ Int intern_init() {
 Int intern_one(Int b, Int ty, Int payload) {
     _ = st32(b, 0 - 1) + st32(b + 4, 1) + st64(b + 16, b + 24) + st64(b + 24, payload);
     return st64(b + 8, ty);
-}
-
-Int interned_ready() {
-    Int g = interned();
-    return if (ld64(g + 72) == 0) { intern_init() } else { g };
 }
 
 pub Bool box_interned(Int p) {
@@ -538,7 +575,7 @@ pub Int rt_unbox_i64(Int p) { return unbox_word(p); }
 pub Int rt_box_f64(Float v) {
     Int bits = resid_raw_f64_bits(v);
     if (!ult(bits, 72057594037927936)) { return bits; }
-    if (bits == 0) { return interned_ready() + 64; }
+    if (bits == 0) { return interned() + 64; }
     Int b = scalar_box(resid_raw_addr("f64"), 8);
     return st64(b + 24, bits) * 0 + b;
 }
@@ -549,7 +586,7 @@ pub Float rt_unbox_f64(Int p) { return unbox_float(p); }
 @export("resid_box_bool", "ptr(i8)")
 pub Int rt_box_bool(Int v0) {
     Int v = sx8(v0);
-    if (v == 0 || v == 1) { return interned_ready() + v * 32; }
+    if (v == 0 || v == 1) { return interned() + v * 32; }
     Int b = scalar_box(resid_raw_addr("bool"), 1);
     return st8(b + 24, v) * 0 + b;
 }

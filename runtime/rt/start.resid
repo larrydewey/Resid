@@ -35,6 +35,7 @@ pub Int rt_start(Int sp, Int dyn) {
     _ = st64(pagesz_w(), auxv_get(auxv, 6));   // AT_PAGESZ
     _ = st64(secure_w(), auxv_get(auxv, 23) + 1);   // AT_SECURE, plus one
     _ = sigchld_default_at(resid_raw_global("rt_sigchld", 64));   // one thread yet: a global buffer
+    _ = intern_init();
     Int tp = tls_block();
     return resid_raw_tp_set(tp);
 }
