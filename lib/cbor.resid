@@ -929,17 +929,16 @@ pub Str cbor_hex(List(Int) bs) { return cb_hex(bs); }
 // untrusted input and the decoder then only meets a bounded, definite item.
 
 /// Whether `bs` is exactly one well-formed CBOR item, nested at most `depth`.
-/// `depth` counts arrays, maps and tags: a scalar takes none, `[1]` one.
 /// Definite lengths only (an indefinite string, array or map is refused, as
 /// is a break byte), every argument in its shortest form or not, every
 /// length and count within the input, simple values 24-31 of the one-byte
 /// form refused (RFC 8949 §3.3), and nothing after the item.
-pub Bool cbor_well_formed(List(Int) bs, Int depth) { return depth >= 0 && cbor_wf_item(bs, 0, depth) == bs.len(); }
+pub Bool cbor_well_formed(List(Int) bs, Int depth) { return depth > 0 && cbor_wf_item(bs, 0, depth) == bs.len(); }
 
 /// The position after the well-formed item at `pos`, or -1.
 /// `depth` bounds how many arrays, maps and tags may nest from here.
 pub Int cbor_wf_item(List(Int) bs, Int pos, Int depth) {
-    if (pos < 0 || pos >= bs.len()) { return 0 - 1; }
+    if (depth <= 0 || pos < 0 || pos >= bs.len()) { return 0 - 1; }
     Int b0 = bs[pos];
     Int mt = b0 >> 5;
     Int ai = b0 & 31;
@@ -954,7 +953,6 @@ pub Int cbor_wf_item(List(Int) bs, Int pos, Int depth) {
     if (mt == 7) { return if (ai == 24 && arg < 32) { 0 - 1 } else { next }; }
     if (huge) { return 0 - 1; }
     if (mt == 2 || mt == 3) { return if (arg > bs.len() - next) { 0 - 1 } else { next + arg }; }
-    if (depth <= 0) { return 0 - 1; }
     if (mt == 6) { return cbor_wf_item(bs, next, depth - 1); }
     // Arrays and maps: every part takes at least a byte, so a count past
     // what is left is refused before any part is walked.
