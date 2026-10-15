@@ -30,11 +30,17 @@
 Int disp_fds() { return resid_raw_global("rt_disp_fds", 256); }
 Int fdq_cap() { return 30; }
 
+// Store the descriptor and raise the count, or `fdq_pop` sees an empty
+// ring and answers -1 for a descriptor the kernel really did pass.
 Int fdq_push(Int fd) {
     Int q = disp_fds();
     if (ld64(q + 8) >= fdq_cap()) { _ = fdq_take_all(q); }
     Int n = ld64(q + 8);
-    return st64(q + 16 + n * 8, fd) * 0 + ld64(q + 8);
+    Int tail0 = ld64(q) + n;
+    Int tail = if (tail0 >= fdq_cap()) { tail0 - fdq_cap() } else { tail0 };
+    _ = st64(q + 16 + tail + 8, fd);
+    _ = st64(q + 8, n + 1);
+    return n + 1;
 }
 
 // The oldest queued descriptor, or -1 when none is waiting.
@@ -86,7 +92,7 @@ Int sa_path(Int p, Int n) {
     if (n <= 0 || n > 107) { return 0 - 1; }
     Int sa = sa_buf();
     _ = resid_raw_fill(sa, 0, 112);
-    _ = st32(sa, 1);                                        // AF_UNIX, a u16 at 0
+    _ = st8(sa, 1) + st8(sa + 1, 0);                                        // AF_UNIX, a u16 at 0
     _ = mcopy(sa + 2, p, n);
     _ = st8(sa + 2 + n, 0);
     return sa;
@@ -97,7 +103,7 @@ Int sa_abstract(Int p, Int n) {
     if (n <= 0 || n > 107) { return 0 - 1; }
     Int sa = sa_buf();
     _ = resid_raw_fill(sa, 0, 112);
-    _ = st32(sa, 1);
+    _ = st8(sa, 1) + st8(a + 1, 0);
     _ = mcopy(sa + 3, p, n);
     return sa;
 }
@@ -138,7 +144,10 @@ pub Int rt_disp_connect() {
     Int rt = c_getenv(resid_raw_addr("XDG_RUNTIME_DIR"));
     if (rt != 0 && ld8(rt) != 0) {
         Int sa = sa_under(rt, wd);
-        if (sa >= 0) { return unix_connect(sa); }
+        if (sa >= 0) {
+            Int wfd = unix_connect(sa);
+            if (wfd >= 0) { return wfd; }
+        }
     }
     Int dpy = c_getenv(resid_raw_addr("DISPLAY"));
     if (dpy == 0 || ld8(dpy) == 0) { return 0 - 1; }
@@ -176,9 +185,12 @@ Int x11_connect(Int dpy) {
     Int dn = e - num;
     if (dn <= 0 || dn > 3 || !disp_screen_ok(e)) { return 0 - 1; }
     Int buf = path_buf();
-    _ = mcopy(buf, resid_raw_addr("/tmp/.X11-unix/X"), 15);
-    _ = mcopy(buf + 15, num, dn);
-    return unix_connect(sa_path(buf, 15 + dn));
+    // "/tmp/.X11-unix/X" is sixteen characters: the trailing `X` is part
+    // of the name. Copying fifteen opened "/tmp/.X11-unix/<n>", which no
+    // server has, so every DISPLAY connection failed with ENOENT.
+    _ = mcopy(buf, resid_raw_addr("/tmp/.X11-unix/X"), 16);
+    _ = mcopy(buf + 16, num, dn);
+    return unix_connect(sa_path(buf, 16 + dn));
 }
 
 // What may follow the display number: nothing, or `.` and a screen number.
