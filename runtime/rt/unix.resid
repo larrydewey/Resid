@@ -103,7 +103,7 @@ Int sa_abstract(Int p, Int n) {
     if (n <= 0 || n > 107) { return 0 - 1; }
     Int sa = sa_buf();
     _ = resid_raw_fill(sa, 0, 112);
-    _ = st8(sa, 1) + st8(a + 1, 0);
+    _ = st8(sa, 1) + st8(sa + 1, 0);
     _ = mcopy(sa + 3, p, n);
     return sa;
 }
