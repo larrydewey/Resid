@@ -1,0 +1,46 @@
+// cggmp_tweak.resid — Symbolon's hidden additive tweak on a CGGMP21 key.
+//
+// The designated party adds tau to its own scalar share; every party adds
+// tau*G to that party's public share commitment.  The public point reveals
+// nothing about tau under the discrete-log assumption, and the signers keep
+// signing with the ordinary CGGMP21 rounds.  tau must never enter a
+// transcript, a proof statement, or a log message.
+
+import "cggmp.resid";
+import "cggmp_curve.resid";
+
+List(CgPublicCfg) cg_tweak_publics(List(CgPublicCfg) ps, Int designated, CvPt delta_g, Int i, List(CgPublicCfg) acc) {
+    if (i >= ps.len()) { return acc; }
+    CgPublicCfg p = ps[i];
+    CgPublicCfg q = if (p.id == designated) { CgPublicCfg {.id = p.id, .ecdsa = cv_add(p.ecdsa, delta_g), .elgamal = p.elgamal, .n = p.n, .ped = p.ped} } else { p };
+    return cg_tweak_publics(ps, designated, delta_g, i + 1, acc.concat([q]));
+}
+
+// The CGGMP context scales each share by its Lagrange coefficient.  To move
+// the aggregate key by tau, the designated party's raw share moves by
+// tau / lambda_designated, so the weighted move is exactly tau.
+List(UInt(64)) cg_tweak_delta(List(Int) ids, Int designated, List(UInt(64)) tau) {
+    return sc_nat_mul(tau, sc_nat_inv(cg_lagrange(ids, designated)));
+}
+
+CgConfig cg_tweak_config_public(CgConfig cfg, List(Int) ids, Int designated, CvPt tau_g) {
+    CvPt delta_g = cv_mul(sc_nat_inv(cg_lagrange(ids, designated)), tau_g);
+    return CgConfig {.id = cfg.id, .threshold = cfg.threshold, .ecdsa = cfg.ecdsa, .elgamal = cfg.elgamal, .p = cfg.p, .q = cfg.q, .rid = cfg.rid, .chain_key = cfg.chain_key, .public = cg_tweak_publics(cfg.public, designated, delta_g, 0, [])};
+}
+
+CgConfig cg_tweak_config_secret(CgConfig cfg, List(Int) ids, Int designated, List(UInt(64)) tau) {
+    List(UInt(64)) delta = cg_tweak_delta(ids, designated, tau);
+    return CgConfig {.id = cfg.id, .threshold = cfg.threshold, .ecdsa = if (cfg.id == designated) { sc_nat_add(cfg.ecdsa, delta) } else { cfg.ecdsa }, .elgamal = cfg.elgamal, .p = cfg.p, .q = cfg.q, .rid = cfg.rid, .chain_key = cfg.chain_key, .public = cg_tweak_publics(cfg.public, designated, cv_mul_base(delta), 0, [])};
+}
+
+// The designated party builds its session with tau added to its own share.
+pub Option(CgCtx) cg_ctx_tweaked_secret(CgConfig cfg, List(Int) ids, Int designated, List(UInt(64)) tau, List(Int) session_id, List(Int) digest, List(Int) seed) {
+    if (cg_index(ids, designated, 0) < 0) { return None; }
+    return cg_ctx(cg_tweak_config_secret(cfg, ids, designated, tau), ids, session_id, digest, seed);
+}
+
+// Every other party uses only the public tau*G, never tau itself.
+pub Option(CgCtx) cg_ctx_tweaked_public(CgConfig cfg, List(Int) ids, Int designated, CvPt tau_g, List(Int) session_id, List(Int) digest, List(Int) seed) {
+    if (cg_index(ids, designated, 0) < 0) { return None; }
+    return cg_ctx(cg_tweak_config_public(cfg, ids, designated, tau_g), ids, session_id, digest, seed);
+}

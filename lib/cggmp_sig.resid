@@ -1,0 +1,101 @@
+// cggmp_sig.resid — the online half of CGGMP21 signing, on a presignature:
+// signature shares, their assembly into an ECDSA signature, and the check of
+// each share against the presignature's public values (Taurus pkg/ecdsa).
+//
+// A presignature of party j holds R = k^-1 G (public), per-party public points
+// RBar_j = k_j k^-1 G and S_j = chi_j R, and the secrets k_j and chi_j with
+// sum k_j = k and sum chi_j = k x. The signature share on a message m is
+// sigma_j = m k_j + r chi_j (r = x coordinate of R), and sum sigma_j = s.
+
+import "cggmp_curve.resid";
+
+pub type CgPresig = {
+    List(Int) id;                 // the presignature identifier (32 bytes)
+    CvPt r;
+    List(Int) ids;                // the signers
+    List(CvPt) rbar;              // per signer, in the order of `ids`
+    List(CvPt) s;                 // per signer
+    List(UInt(64)) kshare;
+    List(UInt(64)) chi;
+};
+
+/// The message digest as a scalar: its leftmost 256 bits, reduced mod n
+/// (Taurus's curve.FromHash for a 256-bit order).
+pub List(UInt(64)) cg_msg_scalar(List(Int) digest) {
+    List(Int) lead = if (digest.len() > 32) { bn_slice_int(digest, 0, 32) } else { digest };
+    return sc_of_bytes(lead);
+}
+
+/// r, the x coordinate of R as a scalar.
+pub List(UInt(64)) cg_r(CvPt rr) { return cv_x_scalar(rr); }
+
+/// sigma_j = m k_j + r chi_j.
+pub List(UInt(64)) cg_sigma(CgPresig p, List(Int) digest) {
+    return sc_nat_add(sc_nat_mul(cg_msg_scalar(digest), p.kshare), sc_nat_mul(cg_r(p.r), p.chi));
+}
+
+/// The sum of the signature shares (mod n): the s of the signature.
+pub List(UInt(64)) cg_s_of(List(List(UInt(64))) shares, Int i, List(UInt(64)) acc) {
+    if (i >= shares.len()) { return acc; }
+    return cg_s_of(shares, i + 1, sc_nat_add(acc, shares[i]));
+}
+
+/// Whether (R, s) is a valid signature on `digest` under X (Taurus's
+/// Signature.Verify: s^-1 (m G + r X) = R).
+pub Bool cg_verify(CvPt x, List(Int) digest, CvPt rr, List(UInt(64)) s) {
+    List(UInt(64)) r = cg_r(rr);
+    if (r.len() == 0 || s.len() == 0) { return false; }
+    List(UInt(64)) m = cg_msg_scalar(digest);
+    CvPt sum = cv_add(cv_mul_base(m), cv_mul(r, x));
+    return cv_eq(cv_mul(sc_nat_inv(s), sum), rr);
+}
+
+// The public point of signer `id` in a list ordered like `ids`.
+CvPt cg_point_of(List(Int) ids, List(CvPt) pts, Int id, Int i) {
+    if (i >= ids.len()) { return cv_inf(); }
+    if (ids[i] == id) { return pts[i]; }
+    return cg_point_of(ids, pts, id, i + 1);
+}
+
+/// Whether the share sigma of signer `id` is consistent with the
+/// presignature: sigma R = m RBar_id + r S_id.
+pub Bool cg_share_ok(CgPresig p, Int id, List(UInt(64)) sigma, List(Int) digest) {
+    CvPt rj = cg_point_of(p.ids, p.rbar, id, 0);
+    CvPt sj = cg_point_of(p.ids, p.s, id, 0);
+    if (rj.inf || sj.inf || sigma.len() == 0) { return false; }
+    CvPt lhs = cv_mul(sigma, p.r);
+    CvPt rhs = cv_add(cv_mul(cg_msg_scalar(digest), rj), cv_mul(cg_r(p.r), sj));
+    return cv_eq(lhs, rhs);
+}
+
+/// The signers whose shares are inconsistent with the presignature.
+pub List(Int) cg_bad_shares(CgPresig p, List(Int) from, List(List(UInt(64))) shares, List(Int) digest) {
+    return cg_bad_at(p, from, shares, digest, 0, ListBuf());
+}
+
+List(Int) cg_bad_at(CgPresig p, List(Int) from, List(List(UInt(64))) shares, List(Int) digest, Int i, ListBuf(Int) acc) {
+    if (i >= from.len()) { return acc.finish(); }
+    return cg_bad_at(p, from, shares, digest, i + 1, if (cg_share_ok(p, from[i], shares[i], digest)) { acc } else { acc.push(from[i]) });
+}
+
+/// Basic validity of a presignature (Taurus's Validate): no identity points,
+/// non-zero shares.
+pub Bool cg_presig_ok(CgPresig p) {
+    if (p.r.inf || p.rbar.len() != p.s.len() || p.rbar.len() != p.ids.len()) { return false; }
+    if (p.kshare.len() == 0 || p.chi.len() == 0) { return false; }
+    return cg_pts_finite(p.rbar, 0) && cg_pts_finite(p.s, 0);
+}
+
+Bool cg_pts_finite(List(CvPt) pts, Int i) {
+    if (i >= pts.len()) { return true; }
+    if (pts[i].inf) { return false; }
+    return cg_pts_finite(pts, i + 1);
+}
+
+// ─── Standard ECDSA ─────────────────────────────────────────────
+
+/// The standard ECDSA pair (r, s) of a signature (R, s): r = x(R) mod n.
+/// (Taurus does not normalize s to the low half; neither does ECDSA.)
+pub List(Int) cg_sig_raw(CvPt rr, List(UInt(64)) s) {
+    return bn_to_be(cg_r(rr), 32).concat(bn_to_be(s, 32));
+}

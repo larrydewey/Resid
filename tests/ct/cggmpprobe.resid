@@ -1,0 +1,101 @@
+// CGGMP secret constant-time cases (isolated to avoid over-specialization).
+
+import "word.resid";
+import "crypto.resid";
+import "cggmp_secret_scalar.resid";
+import "cggmp_secret_paillier.resid";
+import "cggmp_secret_types.resid";
+import "cggmp_secret_config.resid";
+import "cggmp_secret_protocol.resid";
+
+List(Int) key32() { return [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31]; }
+
+List(Int) mark(List(Int) b, Int i, ListBuf(Int) acc) {
+    if (i >= b.len()) { return acc.finish(); }
+    return mark(b, i + 1, acc.push(ct_secret(b[i]) & 255));
+}
+
+List(Secret(UInt(8))) sec(List(Int) b) { return secret_bytes(mark(b, 0, ListBuf())); }
+
+@requires(declassify)
+Int ct_case_cggmp_secret_scalar() {
+    Secret(UInt(576)) a = classify((UInt(576)) 5);
+    Secret(UInt(576)) b = classify((UInt(576)) 7);
+    Secret(UInt(576)) s = cggmp_secret_scalar_add(a, b);
+    Secret(UInt(576)) m = cggmp_secret_scalar_mul(a, b);
+    Secret(UInt(576)) i = cggmp_secret_scalar_inv(m);
+    Secret(UInt(576)) l = cggmp_secret_scalar_lift((UInt(576)) 9);
+    UInt(576) out = ct_public(declassify(s, "CT probe output: CGGMP secret scalar arithmetic"));
+    UInt(576) out2 = ct_public(declassify(m, "CT probe output: CGGMP secret scalar multiplication"));
+    UInt(576) out3 = ct_public(declassify(i, "CT probe output: CGGMP secret scalar inversion"));
+    UInt(576) out4 = ct_public(declassify(l, "CT probe output: CGGMP secret scalar lift"));
+    println(f"cggmp-secret-scalar {out} {out2} {out3} {out4}");
+    return 0;
+}
+
+@requires(declassify)
+Int ct_case_cggmp_secret_paillier() {
+    UInt(2048) n = 3233;
+    UInt(2048) n2 = 10452289;
+    UInt(64) ninv = 9637040130063542431;
+    UInt(64) n2inv = 5737276472071810367;
+    UInt(2048) r2 = 205;
+    UInt(2048) r2_2 = 8050375;
+    UInt(2048) one_mont = 1720;
+    UInt(2048) one_mont_2 = 2753003;
+    Secret(UInt(2048)) m = classify((UInt(2048)) 7);
+    Secret(UInt(2048)) rho = classify((UInt(2048)) 11);
+    Secret(UInt(2048)) c = csp_paillier_encrypt(m, rho, n, n2, ninv, n2inv, r2, r2_2, one_mont, one_mont_2);
+    Secret(UInt(2048)) p = csp_paillier_decrypt_lambda(c, classify((UInt(2048)) 780), classify((UInt(2048)) 1173), n, n2, ninv, n2inv, r2, r2_2, one_mont, one_mont_2);
+    Secret(UInt(2048)) bitmask = csp_exp_bit_mask(classify((UInt(2048)) 1), 0);
+    UInt(2048) out = ct_public(declassify(p, "CT probe output: CGGMP secret Paillier plaintext"));
+    UInt(2048) bout = ct_public(declassify(bitmask, "CT probe output: CGGMP secret exponent mask"));
+    println(f"cggmp-secret-paillier {out} {bout}");
+    return 0;
+}
+
+@requires(declassify)
+Int ct_case_cggmp_secret_material() {
+    CgSecretMaterial m = cggmp_secret_material(sec(key32()), sec(key32()), sec(key32()), sec(key32()), sec(key32()), sec(key32()), sec(key32()), sec(key32()));
+    println(f"cggmp-secret-material {m.ecdsa_share.len()}");
+    return 0;
+}
+
+@requires(declassify)
+Int ct_case_cggmp_secret_config() {
+    CgSecretMaterial m = cggmp_secret_material(sec(key32()), sec(key32()), sec(key32()), sec(key32()), sec(key32()), sec(key32()), sec(key32()), sec(key32()));
+    CgSecretMaterial t = cggmp_secret_material_tweak(m, classify((UInt(576)) 5));
+    UInt(576) out = ct_public(declassify(csc_scalar_from_bytes(t.ecdsa_share), "CT probe output: CGGMP secret material tweak"));
+    Secret(UInt(2048)) p = cggmp_secret_paillier_p(t);
+    Secret(UInt(2048)) q = cggmp_secret_paillier_q(t);
+    Secret(UInt(2048)) lam = cggmp_secret_paillier_lambda(t);
+    Secret(UInt(2048)) lam_inv = cggmp_secret_paillier_lambda_inv(t);
+    List(Secret(UInt(8))) bytes = csc_to_bytes32(csc_from_bytes(sec(key32())));
+    UInt(2048) pv = ct_public(declassify(p, "CT probe output: CGGMP secret Paillier prime"));
+    UInt(2048) qv = ct_public(declassify(q, "CT probe output: CGGMP secret Paillier prime"));
+    UInt(2048) lv = ct_public(declassify(lam, "CT probe output: CGGMP secret Paillier lambda"));
+    UInt(2048) liv = ct_public(declassify(lam_inv, "CT probe output: CGGMP secret Paillier lambda inverse"));
+    println(f"cggmp-secret-config {out} {pv} {qv} {lv} {liv} {bytes.len()}");
+    return 0;
+}
+
+@requires(declassify)
+Int ct_case_cggmp_secret_protocol() {
+    CgSecretMaterial m = cggmp_secret_material(sec(key32()), sec(key32()), sec(key32()), sec(key32()), sec(key32()), sec(key32()), sec(key32()), sec(key32()));
+    CgSecretCtx c = cggmp_secret_ctx_new(1, [1, 2], 1, m, [], [9], [1], [2]);
+    CgSecretCtx t = cggmp_secret_ctx_tweak(c, classify((UInt(576)) 5));
+    UInt(576) out = ct_public(declassify(csc_scalar_from_bytes(t.material.ecdsa_share), "CT probe output: CGGMP secret context tweak"));
+    println(f"cggmp-secret-protocol {out}");
+    return 0;
+}
+
+@requires(args, declassify, filesystem(readonly), network(readonly), clock(readonly), provision)
+Int main() {
+    Str c = args.get(1);
+    if (c == "cggmp-secret-scalar") { return ct_case_cggmp_secret_scalar(); }
+    if (c == "cggmp-secret-paillier") { return ct_case_cggmp_secret_paillier(); }
+    if (c == "cggmp-secret-material") { return ct_case_cggmp_secret_material(); }
+    if (c == "cggmp-secret-config") { return ct_case_cggmp_secret_config(); }
+    if (c == "cggmp-secret-protocol") { return ct_case_cggmp_secret_protocol(); }
+    return 1;
+}

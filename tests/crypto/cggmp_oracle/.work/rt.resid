@@ -1,0 +1,36 @@
+import "../../../../lib/bignum.resid";
+import "../../../../lib/cose.resid";
+
+// A verification-like Bool computation with heavy temporaries.
+Bool heavy(List(UInt(64)) m, Int i) {
+    List(UInt(64)) a = bn_modexp([5 + u64(i)], bn_sub(m, [3]), m);
+    List(UInt(64)) b = bn_modexp(a, bn_sub(m, [5]), m);
+    return b.len() > 0;
+}
+
+// The condition is not a scalar binding.
+List(UInt(64)) viaif(List(UInt(64)) m, Int i) {
+    if (!heavy(m, i)) { return []; }
+    return [u64(i)];
+}
+
+// The Bool is bound first.
+List(UInt(64)) viabind(List(UInt(64)) m, Int i) {
+    Bool ok = heavy(m, i);
+    if (!ok) { return []; }
+    return [u64(i)];
+}
+
+List(List(UInt(64))) loop(Str which, List(UInt(64)) m, Int i, Int n, ListBuf(List(UInt(64))) acc) {
+    if (i >= n) { return acc.finish(); }
+    List(UInt(64)) v = if (which == "if") { viaif(m, i) } else { viabind(m, i) };
+    return loop(which, m, i + 1, n, acc.push(v));
+}
+
+Int run(Str which, List(UInt(64)) m, Int n) {
+    ListBuf(List(UInt(64))) b = ListBuf();
+    return loop(which, m, 0, n, b).len();
+}
+
+@requires(args)
+Int main() { return run(args.get(2), bn_from_be(cose_hex_decode(args.get(1))), str_parse_int(args.get(3))) % 200; }

@@ -62,8 +62,9 @@ Int main() {
   reduction. A verb reads as a method on its receiver (`c.area()`), and one
   that takes no argument takes its type from the receiver (`x.max()`).
 - **Self-hosted, no C.** The compiler is written in Resid and compiles
-  itself in about a second; the runtime is Resid too, and binaries are
-  static executables with no C library.
+  itself to a byte-identical fixed point from the committed seed (about 34s:
+  the compiler's own passes ~12s, clang's LTO link the rest); the runtime is
+  Resid too, and binaries are static executables with no C library.
 - **Native modules without native risk.** `@link("m")` calls code
   compiled from C or any other LLVM language. Each call runs in a fresh
   process the kernel confines to computation, so native code holds no

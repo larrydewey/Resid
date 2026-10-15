@@ -1,0 +1,43 @@
+import "../../../../lib/cggmp_keygen.resid";
+import "../../../../lib/cose.resid";
+
+KgCtx ctx(Int id, List(UInt(64)) p, List(UInt(64)) q) {
+    return KgCtx {.self = id, .ids = [1, 2, 3], .threshold = 1, .prev = [], .session_id = [1], .seed = cg_rng([7, id], "x", 32), .primes = [p, q]};
+}
+
+Int fail(CgFail e) { println("FAIL " + e.why); return 1; }
+
+@requires(args)
+Int main() {
+    Result(Kg1, CgFail) a = kg_start(ctx(1, bn_from_be(cose_hex_decode(args.get(1))), bn_from_be(cose_hex_decode(args.get(2)))));
+    Result(Kg1, CgFail) b = kg_start(ctx(2, bn_from_be(cose_hex_decode(args.get(3))), bn_from_be(cose_hex_decode(args.get(4)))));
+    Result(Kg1, CgFail) c = kg_start(ctx(3, bn_from_be(cose_hex_decode(args.get(5))), bn_from_be(cose_hex_decode(args.get(6)))));
+    return match a { Err(e) => fail(e), Ok(sa) => match b { Err(e) => fail(e), Ok(sb) => match c { Err(e) => fail(e), Ok(sc) => s2(sa, sb, sc) } } };
+}
+
+Int s2(Kg1 a, Kg1 b, Kg1 c) {
+    List(CgMsg) all = a.out.concat(b.out).concat(c.out);
+    Result(Kg2, CgFail) ra = kg_r2(a, all);
+    Result(Kg2, CgFail) rb = kg_r2(b, all);
+    Result(Kg2, CgFail) rc = kg_r2(c, all);
+    return match ra { Err(e) => fail(e), Ok(sa) => match rb { Err(e) => fail(e), Ok(sb) => match rc { Err(e) => fail(e), Ok(sc) => s3(sa, sb, sc) } } };
+}
+
+Int s3(Kg2 a, Kg2 b, Kg2 c) {
+    println("r2 ok");
+    List(CgMsg) all = a.out.concat(b.out).concat(c.out);
+    Result(Kg3, CgFail) ra = kg_r3(a, all);
+    println("r3 party 1 ok");
+    Result(Kg3, CgFail) rb = kg_r3(b, all);
+    println("r3 party 2 ok");
+    Result(Kg3, CgFail) rc = kg_r3(c, all);
+    println("r3 party 3 ok");
+    return match ra { Err(e) => fail(e), Ok(sa) => match rb { Err(e) => fail(e), Ok(sb) => match rc { Err(e) => fail(e), Ok(sc) => s4(sa, sb, sc) } } };
+}
+
+Int s4(Kg3 a, Kg3 b, Kg3 c) {
+    List(CgMsg) all = a.out.concat(b.out).concat(c.out);
+    Result(Kg4, CgFail) ra = kg_r4(a, all);
+    println("r4 party 1 ok");
+    return match ra { Err(e) => fail(e), Ok(sa) => 0 };
+}

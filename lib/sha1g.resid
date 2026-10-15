@@ -1,0 +1,150 @@
+// sha1g.resid — SHA-1 (FIPS 180-4) and HMAC-SHA-1 (RFC 2104) generic over
+// lib/word.resid's Word(W, B): one implementation for public data (W = B = Int)
+// and secret data (Secret(UInt(32)) words, Secret(UInt(8)) bytes), written
+// the way lib/sha256g.resid is. The secret copy is checked by the compiler:
+// no branch, index or comparison depends on the message or the key.
+//
+// SHA-1 is broken for collision resistance. It is here only because RFC 4226
+// HOTP and RFC 6238 TOTP, as deployed, are HMAC-SHA-1, and a TOTP seed must
+// stay a secret. Do not use it as a hash for new designs.
+//
+// Messages are byte lists, List(B); the digest is 20 bytes. Lengths are public.
+
+import "word.resid";
+
+// The round function and constant for round i (FIPS 180-4 §4.1.1, §4.2.1).
+// i is public, so these branch on it.
+@needs(Word(W, B))
+W s1_f(Int i, W b, W c, W d) {
+    if (i < 20) { return w_xor(w_and(b, c), w_and(w_not(b), d)); }
+    if (i < 40) { return w_xor(w_xor(b, c), d); }
+    if (i < 60) { return w_xor(w_xor(w_and(b, c), w_and(b, d)), w_and(c, d)); }
+    return w_xor(w_xor(b, c), d);
+}
+
+Int s1_k(Int i) {
+    if (i < 20) { return 1518500249; }
+    if (i < 40) { return 1859775393; }
+    if (i < 60) { return 2400959708; }
+    return 3395469782;
+}
+
+@needs(Word(W, B))
+W s1_rotl(W x, Int n) { return w_rotr(x, 32 - n); }
+
+@needs(Word(W, B))
+W s1_word_at(List(B) m, Int base, Int j) {
+    Int off = base + j * 4;
+    return w_or(w_or(w_shl(w_from_byte(m[off]), 24), w_shl(w_from_byte(m[off + 1]), 16)), w_or(w_shl(w_from_byte(m[off + 2]), 8), w_from_byte(m[off + 3])));
+}
+
+// W[i] for i >= 16 is rotl1(W[i-3] ^ W[i-8] ^ W[i-14] ^ W[i-16]); the window
+// w0..w15 holds W[i-16]..W[i-1].
+@needs(Word(W, B))
+W s1_sched(List(B) m, Int base, Int i, W w0, W w2, W w8, W w13) {
+    if (i < 16) { return s1_word_at(m, base, i); }
+    return s1_rotl(w_xor(w_xor(w13, w8), w_xor(w2, w0)), 1);
+}
+
+@needs(Word(W, B))
+List(W) s1_blk(List(B) m, Int base, Int i, List(W) h0, W a, W b, W c, W d, W e, W w0, W w1, W w2, W w3, W w4, W w5, W w6, W w7, W w8, W w9, W w10, W w11, W w12, W w13, W w14, W w15) {
+    if (i >= 80) {
+        return [w_add(h0[0], a), w_add(h0[1], b), w_add(h0[2], c), w_add(h0[3], d), w_add(h0[4], e)];
+    }
+    W wi = s1_sched(m, base, i, w0, w2, w8, w13);
+    W t = w_add(w_addk(w_add(w_add(s1_rotl(a, 5), s1_f(i, b, c, d)), e), s1_k(i)), wi);
+    return s1_blk(m, base, i + 1, h0, t, a, s1_rotl(b, 30), c, d, w1, w2, w3, w4, w5, w6, w7, w8, w9, w10, w11, w12, w13, w14, w15, wi);
+}
+
+/// Runs the compression function on the 64-byte block at `base` of `m`,
+/// returning the new five-word state from the state `h`.
+@needs(Word(W, B))
+pub List(W) sha1g_block(List(B) m, Int base, List(W) h) {
+    W z = w_lift(0);
+    Int m32 = 4294967295;
+    return s1_blk(m, base, 0, h, w_andk(h[0], m32), w_andk(h[1], m32), w_andk(h[2], m32), w_andk(h[3], m32), w_andk(h[4], m32), z, z, z, z, z, z, z, z, z, z, z, z, z, z, z, z);
+}
+
+/// Compresses each 64-byte block of `m` from `pos` up to `total` into `h`.
+@needs(Word(W, B))
+pub List(W) sha1g_blocks(List(B) m, Int pos, Int total, List(W) h) {
+    if (pos >= total) { return h; }
+    return sha1g_blocks(m, pos + 64, total, sha1g_block(m, pos, h));
+}
+
+/// The SHA-1 initial hash value (FIPS 180-4 §5.3.1).
+pub List(Int) sha1g_iv() { return [1732584193, 4023233417, 2562383102, 271733878, 3285377520]; }
+
+// Same padding as SHA-256: 0x80, zeros, 64-bit big-endian bit length.
+pub List(Int) sha1g_pad(Int len) {
+    Int total = ((len + 9 + 63) / 64) * 64;
+    return s1_pad_at(len, total - len - 9, 0, ListBuf()).finish();
+}
+
+ListBuf(Int) s1_pad_at(Int len, Int zeros, Int i, ListBuf(Int) acc) {
+    if (i == 0) { return s1_pad_at(len, zeros, 1, acc.push(128)); }
+    if (i <= zeros) { return s1_pad_at(len, zeros, i + 1, acc.push(0)); }
+    if (i <= zeros + 8) {
+        Int sh = (zeros + 8 - i) * 8;
+        return s1_pad_at(len, zeros, i + 1, acc.push(((len * 8) >> sh) & 255));
+    }
+    return acc;
+}
+
+@needs(Word(W, B))
+List(W) s1_lift_words(List(Int) ws, Int i, ListBuf(W) acc) {
+    if (i >= ws.len()) { return acc.finish(); }
+    W w = w_lift(ws[i]);
+    return s1_lift_words(ws, i + 1, acc.push(w));
+}
+
+@needs(Word(W, B))
+List(B) s1_digest_bytes(List(W) h, Int i, ListBuf(B) acc) {
+    if (i >= 20) { return acc.finish(); }
+    return s1_digest_bytes(h, i + 1, acc.push(w_byte(h[i / 4], 24 - (i % 4) * 8)));
+}
+
+/// The 20-byte SHA-1 digest of `msg`, public or secret.
+@needs(Word(W, B))
+@key_from(msg)
+pub List(B) sha1g(List(B) msg) {
+    ListBuf(B) b1 = ListBuf();
+    ListBuf(W) b2 = ListBuf();
+    ListBuf(B) b3 = ListBuf();
+    List(B) padded = msg.concat(w_lift_bytes(sha1g_pad(msg.len()), 0, b1));
+    List(W) h = sha1g_blocks(padded, 0, padded.len(), s1_lift_words(sha1g_iv(), 0, b2));
+    return s1_digest_bytes(h, 0, b3);
+}
+
+// ─── HMAC-SHA-1 (RFC 2104) ───────────────────────────────────────
+
+@needs(Word(W, B))
+List(B) s1_xor_pad(List(B) kb, Int x, Int i, ListBuf(B) acc) {
+    if (i >= kb.len()) { return acc.finish(); }
+    return s1_xor_pad(kb, x, i + 1, acc.push(b_xork(kb[i], x)));
+}
+
+List(Int) s1_zeros(Int n, Int i, ListBuf(Int) acc) {
+    if (i >= n) { return acc.finish(); }
+    return s1_zeros(n, i + 1, acc.push(0));
+}
+
+@needs(Word(W, B))
+List(B) s1_key_block(List(B) key) {
+    List(B) k = if (key.len() > 64) { sha1g(key) } else { key };
+    ListBuf(B) zb = ListBuf();
+    return k.concat(w_lift_bytes(s1_zeros(64 - k.len(), 0, ListBuf()), 0, zb));
+}
+
+/// HMAC-SHA-1 of `msg` under `key`; 20 bytes. A key longer than 64 bytes is
+/// hashed first. At secret types the key, every intermediate and the output
+/// stay secret.
+@needs(Word(W, B))
+@key_from(key, msg)
+pub List(B) hmac1g(List(B) key, List(B) msg) {
+    List(B) kb = s1_key_block(key);
+    ListBuf(B) ib = ListBuf();
+    ListBuf(B) ob = ListBuf();
+    List(B) inner = sha1g(s1_xor_pad(kb, 54, 0, ib).concat(msg));
+    return sha1g(s1_xor_pad(kb, 92, 0, ob).concat(inner));
+}

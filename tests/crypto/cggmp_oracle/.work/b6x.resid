@@ -1,0 +1,9 @@
+import "lib2/cggmp_zk.resid";
+import "lib2/cose.resid";
+@requires(args)
+Int main() {
+    List(UInt(64)) p = bn_from_be(cose_hex_decode(args.get(1)));
+    List(UInt(64)) q = bn_from_be(cose_hex_decode(args.get(2)));
+    List(Int) rnd = cose_hex_decode(args.get(3));
+    return match mod_prove(p, q, tr_new(), rnd) { None => 2, Some(m) => m.responses.len() };
+}

@@ -1,0 +1,80 @@
+// shamir.resid — Shamir secret sharing and Feldman commitments over the
+// P-256 scalar field (public values). The caller supplies the polynomial's
+// random coefficients, so the module itself draws no randomness.
+//
+// Party ids are small positive integers (1 to 255); the share of party i is
+// f(i), where f(z) = a0 + a1 z + ... + a(t-1) z^(t-1) and a0 is the secret.
+
+import "p256ops.resid";
+
+// Scalars held in lists are UInt(256): the runtime boxes a wide integer put
+// in a list only up to 512 bits, and UInt(576), the width the P-256 code
+// computes in, has no box. Every value here is below n < 2^256.
+
+/// f(x) for the coefficients a0, a1, ... (Horner's rule, mod n).
+pub UInt(576) sh_eval(List(UInt(256)) coeffs, UInt(576) x) {
+    return sh_horner(coeffs, x, coeffs.len() - 1, 0);
+}
+
+UInt(576) sh_horner(List(UInt(256)) c, UInt(576) x, Int i, UInt(576) acc) {
+    if (i < 0) { return acc; }
+    return sh_horner(c, x, i - 1, sc_add(sc_mul(acc, x), (UInt(576)) c[i]));
+}
+
+/// The shares f(1) .. f(n) of the secret c[0].
+pub List(UInt(256)) sh_split(List(UInt(256)) coeffs, Int parties) {
+    return sh_split_at(coeffs, parties, 1, ListBuf());
+}
+
+List(UInt(256)) sh_split_at(List(UInt(256)) c, Int n, Int i, ListBuf(UInt(256)) acc) {
+    if (i > n) { return acc.finish(); }
+    return sh_split_at(c, n, i + 1, acc.push((UInt(256)) sh_eval(c, (UInt(576)) i)));
+}
+
+/// The Feldman commitments a_j G, one per coefficient.
+pub List(P256Aff) sh_commit(List(UInt(256)) coeffs) { return sh_commit_at(coeffs, 0, ListBuf()); }
+
+List(P256Aff) sh_commit_at(List(UInt(256)) c, Int i, ListBuf(P256Aff) acc) {
+    if (i >= c.len()) { return acc.finish(); }
+    return sh_commit_at(c, i + 1, acc.push(pt_mul_base((UInt(576)) c[i])));
+}
+
+// The commitment to f(x): the sum over j of x^j A_j.
+P256Aff sh_commit_eval(List(P256Aff) a, UInt(576) x, Int j, UInt(576) pow, P256Aff acc) {
+    if (j >= a.len()) { return acc; }
+    return sh_commit_eval(a, x, j + 1, sc_mul(pow, x), pt_add(acc, pt_mul(pow, a[j])));
+}
+
+/// Whether `share` is the share of party `id` under the commitments.
+pub Bool sh_verify(UInt(256) share, Int id, List(P256Aff) commitments) {
+    return pt_eq(pt_mul_base((UInt(576)) share), sh_commit_eval(commitments, (UInt(576)) id, 0, 1, p256_bad()));
+}
+
+/// The Lagrange coefficient at 0 of party `i` for the parties `ids`:
+/// the product over j != i of j / (j - i), mod n.
+pub UInt(256) sh_lagrange0(List(Int) ids, Int i) { return (UInt(256)) sh_lag(ids, i, 0, 1); }
+
+UInt(576) sh_lag(List(Int) ids, Int i, Int k, UInt(576) acc) {
+    if (k >= ids.len()) { return acc; }
+    Int j = ids[k];
+    if (j == i) { return sh_lag(ids, i, k + 1, acc); }
+    UInt(576) num = (UInt(576)) j;
+    UInt(576) den = if (j > i) { (UInt(576)) (j - i) } else { sc_neg((UInt(576)) (i - j)) };
+    return sh_lag(ids, i, k + 1, sc_mul(acc, sc_mul(num, sc_inv(den))));
+}
+
+/// The secret from the shares of the parties `ids` (the same order).
+pub UInt(256) sh_reconstruct(List(Int) ids, List(UInt(256)) shares) {
+    return sh_rec(ids, shares, 0, 0);
+}
+
+UInt(256) sh_rec(List(Int) ids, List(UInt(256)) shares, Int k, UInt(576) acc) {
+    if (k >= ids.len()) { return (UInt(256)) acc; }
+    return sh_rec(ids, shares, k + 1, sc_add(acc, (UInt(576)) sh_to_additive(ids, ids[k], shares[k])));
+}
+
+/// The additive share of party `i` among the parties `ids`: the shares so
+/// converted sum to the secret (SPEC 6.2, signing by a subset).
+pub UInt(256) sh_to_additive(List(Int) ids, Int i, UInt(256) share) {
+    return (UInt(256)) sc_mul(sh_lagrange0(ids, i), (UInt(576)) share);
+}

@@ -1,9 +1,16 @@
 # A Resid GUI Library — Implementation Plan
 
-**Status: NOT STARTED.** This is for a fresh session. Read `AGENTS.md`,
-`PLAN-native-modules.md`, spec §45 (builders), §46 (vectors), §47 (native
-modules), and `website/src/content/docs/reference/native-modules.md`
-first.
+**Status: G1 DONE, G2 NOT STARTED** (updated 2026-10-13). The `display`
+family, the Unix-socket transport with descriptor passing and the shared-memory
+handle all landed — see §2, which now records what shipped rather than what to
+build. Read `AGENTS.md`, `PLAN-native-modules.md`, spec §45 (builders), §46
+(vectors), §47 (native modules), and
+`website/src/content/docs/reference/native-modules.md` first.
+
+**v1 backend: X11** (was Wayland in the first revision of this plan; the
+decision was reversed on 2026-10-06, see `../resid-gui/README.md` and the
+`gui_run_x11` call in `../resid-gui/src/gui.resid`). Wayland is v2 behind the
+same `Backend(W)` behavior. §3 is rewritten accordingly.
 
 **Goal**: a GUI library for Resid that is *Resid-shaped*: values and pure
 functions, no ambient authority, compile-time reduction of whatever is
@@ -35,7 +42,7 @@ native modules do the heavy pure computation:
       │ update(Model, Event)                                ▼
       │                                       raster (pure Resid, Vec SIMD)
       │                                                     │
- events ◄── Wayland client (Resid, `display` capability) ◄──┘ shm buffer
+ events ◄── X11 client (Resid, `display` capability) ◄──┘ shm buffer
                      │
  assets: font bytes ─► native_font  (stb_truetype) ─► glyph atlas value
          image bytes ─► native_image (stb_image)    ─► pixels value
@@ -45,108 +52,131 @@ native modules do the heavy pure computation:
 
 | Question | Decision | Why |
 |---|---|---|
-| Display protocol | **Wayland** client, speaking the wire protocol directly in Resid. X11 is later work (§8), not v1. | Wayland is small (32-bit words over a Unix socket) and uses fd-passed shared memory, so presenting needs no extension. It is the current Linux desktop. |
+| Display protocol | **X11** client, speaking the wire protocol directly in Resid, frames up through MIT-SHM. Wayland is v2 (§8), behind the same `Backend(W)`. | X11 needs no generated binding layer and no XML: a client that renders everything itself uses a small fixed set of requests, object ids and a connection setup handshake. Xlibre ships the server, `Xfbdev` and `Xnest` for testing. |
 | Rendering | **CPU software rasterizer in pure Resid** into a shared-memory buffer, using `Vec(T, N)` lanes (§46) for spans. No GPU in v1. | A GPU needs a persistent device context and ioctls; native modules cannot hold either. CPU rendering of UI at 60 Hz is well within reach with SIMD spans and damage tracking. |
 | Architecture | **Elm-style**: `init() -> M`, `update(M, Event) -> M`, `view(M) -> Widget`, expressed as a behavior `App(M)`. | Immutable values and pure functions are the language. Equal views give equal display lists, so damage tracking is value comparison. |
 | Mutable pixels | A **linear builder** `Canvas` (like §45 `BytesBuf`): each draw op consumes the canvas and returns it; `finish()` yields the frame. | Spec §4 allows mutation only in handles, and §45 makes in-place writes legal and unobservable through linearity. No new mutable value type. |
-| Capability | New family **`display`** (mode-less in v1), for connecting to the compositor, creating windows, receiving input and the clipboard. Assets add `filesystem(readonly)` for font and image files, and `native_font` / `native_image`. | Law 14: a GUI program says it touches the display. A library that only computes layouts needs nothing. |
+| Capability | `display` (mode-less), for connecting to the server, creating windows, receiving input and the clipboard. Assets add `filesystem(readonly)` for font and image files, and `native_font` / `native_image`. | Law 14: a GUI program says it touches the display. A library that only computes layouts needs nothing. |
 | Where the code lives | Sibling repository **`../resid-gui`** (packages `resid-gui`, `resid-gui-font`, `resid-gui-image`), like `../resid-datastar`. The runtime and compiler additions (§2) live in this repo. | `@link` is refused in `lib/` (E0232). The native packages pin their `.ll` artifacts by SHA-256. |
 | Text shaping | Kerning and UTF-8, left-to-right, no complex scripts in v1. | HarfBuzz needs libc++. Complex shaping is §8 future work. |
-| Keyboard layout | v1: evdev keycodes through a built-in US layout. v2: parse the XKB keymap text the compositor sends (pure Resid). | libxkbcommon needs libc. The keymap parser is pure text processing, a good fit for Resid later. |
+| Keyboard layout | v1: evdev keycodes through a built-in US layout. v2: parse the XKB keymap text the server sends (pure Resid). | libxkbcommon needs libc. The keymap parser is pure text processing, a good fit for Resid later. |
 
-## 2. Core additions in this repository
+## 2. Core additions in this repository — DONE (G1)
 
-Each new runtime builtin follows `AGENTS.md`: the `@export` in
-`runtime/rt/`, the type in `typecheck.resid` and `codegen.resid`, the
-`declare` in the driver tail's `hdr_core`, `ls_builtins` in
-`compiler/lsp.resid`; then `python3 tools/merge_driver.py` and a reseed.
-A new provider verb the compiler itself uses needs the two-step bootstrap,
-but none of these are used by the compiler.
-
-### 2.1 The `display` family
-
-- Add `display` to `gk_unknown_family`, `gk_builtin_family` (prefix
-  `resid_disp_`), `provider_family_of_line`, the spec §20 family table,
-  `SECURITY.md`, and the website capability table.
-- Mode-less in v1 (`display(readonly)` refused, as for `native_*`).
-  Reconsider modes only if the clipboard needs a read-only grant.
-
-### 2.2 Unix sockets with descriptor passing (`runtime/rt/unix.resid`)
+**Everything in this section shipped.** `runtime/rt/unix.resid` holds the
+whole display transport; the compiler, spec and tests are wired. The
+signatures below are the ones that actually exist (`ls_builtins` in
+`compiler/lsp.resid` is the authority), not the ones this plan first
+proposed — bytes are `List(Int)`, and a socket pair helper was added that
+the plan did not anticipate.
 
 | Builtin | Meaning |
 |---|---|
-| `resid_disp_connect() -> Int` | connect to `$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY` (default `wayland-0`), or to `WAYLAND_SOCKET` when set; `-1` on failure. Reads the environment itself, so the program needs `display`, not `environment`. |
-| `resid_disp_send(fd, Bytes data, Int len, Int pass_fd) -> Bool` | `sendmsg`, with one `SCM_RIGHTS` fd when `pass_fd >= 0` |
-| `resid_disp_recv(fd, Int max) -> Bytes` and `resid_disp_recv_fd() -> Int` | `recvmsg`, keeping received fds in a per-connection queue; Wayland sends fds for keymaps and the like |
-| `resid_disp_close(fd)` | close |
-
-Polling reuses `resid_tcp_poll` (it takes plain fds). Add a test that it
-accepts a Unix socket fd.
-
-### 2.3 Shared-memory buffers: a `Surface` handle
-
-`memfd_create` + `ftruncate` + `mmap(MAP_SHARED)` are runtime internals.
-Expose them only as a **handle** (spec §4, §16):
-
-| Builtin | Meaning |
-|---|---|
+| `resid_disp_connect() -> Int` | connect to `$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY` (default `wayland-0`), or to `WAYLAND_SOCKET`; `-1` on failure. Reads the environment itself, so a program needs `display`, not `environment`. |
+| `resid_disp_pair() -> List(Int)` | a connected Unix socket pair `[a, b]`, empty on failure. Added beyond the plan; what the transport test and the fake server run on. |
+| `resid_disp_send(Int fd, List(Int) data, Int pass_fd) -> Bool` | `sendmsg`, with one `SCM_RIGHTS` descriptor when `pass_fd >= 0` |
+| `resid_disp_recv(Int fd, Int max) -> List(Int)` | one `recvmsg`; bytes only |
+| `resid_disp_recv_fd() -> Int` | a descriptor a receive queued, `-1` when none |
+| `resid_disp_poll(List(Int) fds, List(Int) wants, Int ms) -> List(Int)` | `1` read `2` write `4` deadline passed `8` bad — plain fds, so `resid_tcp_poll` would do the same job |
+| `resid_disp_close(Int fd) -> Bool` | close |
 | `resid_disp_shm_new(Int bytes) -> Int` | a handle: memfd, size, mapping |
-| `resid_disp_shm_fd(h) -> Int` | the fd to pass in `wl_shm.create_pool` |
-| `resid_disp_shm_put(h, Int off, Bytes(N) px, Int len)` | copy a finished frame (or a damaged band of it) into the mapping |
-| `resid_disp_shm_free(h)` | unmap and close |
+| `resid_disp_shm_fd(Int h) -> Int` | the descriptor to pass (MIT-SHM `ShmAttachFd` for X11) |
+| `resid_disp_shm_put(Int h, Int off, List(Int) px, Int len) -> Bool` | copy a finished frame, or a damaged band, into the mapping |
+| `resid_disp_shm_free(Int h) -> Bool` | unmap and close |
 
 The program never sees a pointer. A frame is a Resid value; presenting
-copies it into the handle. Measure this copy at 1920×1080×4 (8 MiB). If
-it costs more than 2 ms, add `resid_disp_shm_put_rows` for damaged bands
-only (planned, see §5.5).
+copies it into the handle. Still to measure: the copy at 1920×1080×4
+(8 MiB). If it costs more than 2 ms, add `resid_disp_shm_put_rows` for
+damaged bands only (§5.5).
 
-### 2.4 Tests (this repository)
+Wiring, all present: `display` in `gk_unknown_family`'s sibling check
+(`compiler/gcheck.resid`), the `resid_disp_` prefix in `gk_builtin_family`
+and `provider_family_of_line`, the `@resid_disp_` classification in
+`compiler/codegen.resid`, `compiler/labels.resid`, `ls_builtins` in
+`compiler/lsp.resid`, the `declare`s and `check_builtin` cases in the
+driver tail, and spec §20 (mode-less; `display(readonly)` is refused).
+Tests: `tests/runtime/display.resid` (socketpair round trip with descriptor
+passing, plus a refusal when no display is named) and the conformance
+cases `display_transport`, `err_display_ungranted`,
+`err_display_readonly`, `lambda_caps_sandbox_dropped_ui`.
 
-`tests/runtime`: Unix socketpair round trip with fd passing; shm handle
-write/read back through a second mapping; `display` E0219 cases in
-conformance (`err_display_ungranted`, `display_readonly_refused`).
+A new runtime builtin still follows `AGENTS.md`: the `@export` in
+`runtime/rt/`, the type in `typecheck.resid` and `codegen.resid`, the
+`declare` in the driver tail, `ls_builtins` in `compiler/lsp.resid`; then
+`python3 tools/merge_driver.py` and a reseed. A new provider verb the
+compiler itself uses needs the two-step bootstrap, but none of these are
+used by the compiler.
 
-## 3. The Wayland client (`resid-gui/src/wl/`)
+## 3. The X11 client (`resid-gui/src/x11/`)
 
-### 3.1 Wire format
+### 3.1 Connection setup
 
-Messages are `[object id u32][size<<16 | opcode u32][args…]`, little-endian,
-with args 32-bit aligned: `int`, `uint`, `fixed` (24.8), `string` (u32
-length incl. NUL, padded), `object`, `new_id`, `array`, and `fd` (out of
-band). Implement `wl_wire.resid`: an encoder into `ListBuf(Int)` bytes and
-a decoder over a received `Bytes`, both pure and unit-tested with recorded
-byte sequences.
+X11 has no object ids and no registry: a fixed handshake, then requests.
+1. `resid_disp_connect()`; fail closed with a clear error if there is no
+   server (no DISPLAY, or `~/.Xauthority` unreadable).
+2. Read the first reply: success byte, then the release number, the
+   resource-id base/mask, the motion-buffer size, the vendor length and
+   string, and the pixmap formats. Everything the client needs to allocate
+   ids or match a visual comes from here, so decode it once into a value.
+3. Authorization: read the `XAUTHORITY` cookie (an X11 family/name/address/
+   number quadruple with 16 bytes of data), then the `Setup` request
+   carrying the cookie's name and data. `filesystem(readonly)` covers the
+   cookie file, or the cookie can arrive over the inherited descriptor.
+4. Big-requests: ask for `BIG-REQUESTS` first, so a large blit or a long
+   string is one request instead of a 256 KB chain. Confirm from
+   `SetWindowAttributes`' `max-request-length` or the extension's reply.
 
-### 3.2 Protocol bindings: generated, not hand-written
+### 3.2 Requests: opcode plus data, not generated bindings
 
-`tools/wl_gen.resid` (in `resid-gui`) reads the protocol XML (`wayland.xml`,
-`xdg-shell.xml`, vendored with their licenses) using a small pure-Resid XML
-reader, and writes Resid source: one type per interface, request encoders
-and event decoders as a sum type per interface. Commit the generated
-files. The generator's output is checked by a test that regenerates and
-compares.
+`src/x11/wire.resid`: an encoder into `ListBuf(Int)` bytes and a decoder
+over a received `List(Int)`, both pure, with the fixed opcode table as a
+value. v1 needs a small, fixed set, each with one hand-written encoder and
+decoder:
 
-Interfaces for v1: `wl_display`, `wl_registry`, `wl_callback`,
-`wl_compositor`, `wl_surface`, `wl_shm`, `wl_shm_pool`, `wl_buffer`,
-`wl_seat`, `wl_pointer`, `wl_keyboard`, `wl_output`, `xdg_wm_base`,
-`xdg_surface`, `xdg_toplevel`. Later: `wp_fractional_scale_v1`,
-`wp_viewporter`, `wl_data_device` (clipboard), `zwp_text_input_v3` (IME).
+| Request | Use |
+|---|---|
+| `QueryExtension` | ask for MIT-SHM, and later XInput2 |
+| `CreateWindow`, `ChangeWindowAttributes`, `MapWindow` | the one top-level window |
+| `CreateGC`, `ChangeGC` | one graphics context per depth |
+| `PutImage` / `ShmPutImage` | present a finished band |
+| `CopyArea` | the damaged rectangles |
+| `GetImage` | read back for golden-image comparison |
+| `InternAtom`, `ChangeProperty` | WM_NAME, WM_PROTOCOLS |
+| Events: `KeyPress`, `KeyRelease`, `ButtonPress/Release`, `MotionNotify`, `Expose`, `ConfigureNotify`, `ClientMessage` | input |
 
-### 3.3 Connection state
+`PutImage` in 24-bit-per-pixel chunks rather than 32 keeps the byte layout
+simple; the frame is composited in memory first either way.
 
-The connection is a value: next object id, the id→interface table, the
-globals, the pending fd queue. Each step consumes and returns it
-(`WlConn`), like `lib/httpserv.resid`'s session state machines. The only
-handle-held state is the socket fd and the shm `Surface`s.
+### 3.3 Frames: MIT-SHM
 
-### 3.4 Testing without a compositor
+`ShmAttachFd` carries `resid_disp_shm_fd(h)`; the reply gives the segment
+id; then `ShmPutImage` names the segment and a rectangle in it, so no
+bytes cross the socket at all. With no SHM extension the client falls back
+to `PutImage` over the socket. Segments are created once at the size of one
+frame and reused, so §2's per-call copy is the only cost.
 
-A fake compositor in Resid (`tests/fake_compositor.resid`) speaks enough
-of the server side over a socketpair to accept a client: registry,
-compositor, shm, xdg_wm_base, a seat with a pointer and keyboard. It can
-inject input events and checksum committed buffers. When `weston` is
-installed, also run against `weston --backend=headless`
-(skip otherwise, like `tests/tls` with `openssl`).
+### 3.4 Connection state
+
+The connection is a value: next resource id inside the server's mask, the
+setup reply's parsed fields, the event queue, the atom cache. Each step
+consumes and returns it (`XConn`), like `lib/httpserv.resid`'s session
+state machines. The only handle-held state is the socket fd and the shm
+handles.
+
+### 3.5 Testing without a server
+
+A fake X server in Resid (`tests/fake_server.resid`) speaks the setup
+handshake and enough of the request stream to accept a client: window
+creation, MIT-SHM attach, one `ShmPutImage`, and the event stream. It can
+inject scripted input and checksum the shared memory the client wrote.
+When `Xephyr`, `Xnest` or `Xfbdev` is installed, also run against a real
+server (skip otherwise, like `tests/tls` with `openssl`).
+
+### 3.6 Wayland, later
+
+The same `Backend(W)` gets a second implementation over §2's existing
+verbs: the Wayland wire codec, `tools/wl_gen.resid` generating bindings
+from vendored protocol XML, `WlConn` object ids and a fake compositor.
 
 ## 4. Rendering (`resid-gui/src/gfx/`)
 
@@ -291,13 +321,13 @@ Each phase ends with its tests green, documentation, and a commit.
 | Phase | Work | Exit criterion |
 |---|---|---|
 | G0 | Spikes: shm copy cost at 1080p; pure-Resid span fill throughput with `Vec`; one stb_truetype build passing E0237; the stack cost of a 16 MiB fixed argument on the main thread and in a `spawn` region | numbers recorded in this file; rasterizer gate decided |
-| G1 | §2: `display` family, Unix sockets with fd passing, shm `Surface` handle, tests, reseed, spec §20 and SECURITY.md rows | `tests/runtime` and conformance green |
-| G2 | §3: wire codec, XML generator, generated bindings, fake compositor | the client shows a solid-color window in the fake compositor and in weston headless |
+| G1 | **DONE (2026-10-13)** — see §2, which records what shipped | `tests/runtime` and conformance green |
+| G2 | §3: X11 setup handshake and auth, wire codec, MIT-SHM, connection state, fake server | a solid-color window in the fake server and against Xephyr/Xnest/Xfbdev |
 | G3 | §4: Canvas, display lists, golden-image tests (PNG via a tiny pure-Resid encoder, compared by SHA-256), performance gate | goldens stable; 1080p frame ≤ 4 ms |
 | G4 | §5.1, §5.5: font package, atlas, text layout, bitmap fallback | text goldens; malicious-font fuzz yields `Err` |
-| G5 | §6: App behavior, widgets, layout, input, focus, event loop | counter and todo examples run under weston headless with scripted input |
+| G5 | §6: App behavior, widgets, layout, input, focus, event loop | counter and todo examples run against a real X server with scripted input |
 | G6 | §5.2: image package | image viewer example; fuzz |
-| G7 | Damage tracking, double buffering, timers, HiDPI (`wp_fractional_scale`) | idle CPU ≈ 0; a blinking caret redraws only its box |
+| G7 | Damage tracking, double buffering, timers, HiDPI | idle CPU ≈ 0; a blinking caret redraws only its box |
 | G8 | Documentation: a Learn chapter ("Your first window"), a Reference page per module, `SECURITY.md` rows, examples in `../resid-gui/examples/` | doc examples compile under `tools/check_doc_examples.py` |
 
 ## 8. Out of scope for v1 (and why)
@@ -305,8 +335,9 @@ Each phase ends with its tests green, documentation, and a commit.
 - **GPU rendering**: needs a device context that outlives a call. A future
   design would be a `gpu` capability with Resid-side DRM/Vulkan ioctls,
   not a native module.
-- **X11, macOS, Windows**: the runtime is Linux-only and libc-free. X11
-  would be a second backend behind the same `Surface` interface.
+- **Wayland, macOS, Windows**: the runtime is Linux-only and libc-free.
+  Wayland is v2 (§3.6); macOS and Windows would each be a backend behind
+  the same `Surface` interface.
 - **Complex text shaping, bidi, IME, accessibility (AT-SPI over D-Bus)**:
   each is a project of its own. They are listed so the widget model
   leaves room for them: text runs carry a script/direction field from v1.
@@ -318,7 +349,7 @@ Each phase ends with its tests green, documentation, and a commit.
 - `lib/` and `tools/` stay free of `@link`; native code lives only in the
   `resid-gui-font` and `resid-gui-image` packages, and their artifacts
   are pinned by SHA-256.
-- Data from the compositor is untrusted input: every decoder
+- Data from the server is untrusted input: every decoder
   bounds-checks sizes, object ids and opcodes, and a malformed message
   ends the connection with an error, never an out-of-range access.
 - Font and image bytes are untrusted input to native code. The process

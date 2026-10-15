@@ -1,0 +1,105 @@
+// cggmp_hash.resid — the Fiat-Shamir transcript of the CGGMP21 proofs.
+//
+// A transcript is the list of framed items written so far (each a byte
+// list); writing appends one, so forking is keeping the old value. An item
+// is framed as
+//
+//     "(" || u64be(len domain) || domain || u64be(len data) || data || ")"
+//
+// as in Taurus multi-party-sig's pkg/hash, so every piece is separated from
+// the others by a domain and a length. The transcript starts with the bytes
+// of "CMP-BLAKE". The output stream is SHA-256 in counter mode: block i is
+// SHA-256(SHA-256(all bytes) || be32(i)). (Taurus uses a BLAKE3 sponge; the
+// oracle this code is tested against has the same framing with this SHA-256
+// stream in its place.)
+
+import "crypto.resid";
+import "bignum.resid";
+
+/// A transcript: its items in order.
+pub type Transcript = { List(List(Int)) items; };
+
+/// A new transcript.
+pub Transcript tr_new() { return Transcript {.items = [bytes_of("CMP-BLAKE")]}; }
+
+List(Int) tr_u64be(Int n) { return [0, 0, 0, 0, (n >> 24) & 255, (n >> 16) & 255, (n >> 8) & 255, n & 255]; }
+
+List(Int) tr_frame(Str domain, List(Int) data) {
+    List(Int) d = bytes_of(domain);
+    ListBuf(Int) b = ListBuf();
+    ListBuf(Int) b1 = tr_cat(b.push(40), tr_u64be(d.len()));
+    ListBuf(Int) b2 = tr_cat(b1, d);
+    ListBuf(Int) b3 = tr_cat(b2, tr_u64be(data.len()));
+    ListBuf(Int) b4 = tr_cat(b3, data);
+    return b4.push(41).finish();
+}
+
+ListBuf(Int) tr_cat(ListBuf(Int) acc, List(Int) xs) { return tr_cat_at(acc, xs, 0); }
+
+ListBuf(Int) tr_cat_at(ListBuf(Int) acc, List(Int) xs, Int i) {
+    if (i >= xs.len()) { return acc; }
+    return tr_cat_at(acc.push(xs[i]), xs, i + 1);
+}
+
+/// `t` with one item of domain `domain` and bytes `data` appended.
+pub Transcript tr_item(Transcript t, Str domain, List(Int) data) {
+    return Transcript {.items = t.items.concat([tr_frame(domain, data)])};
+}
+
+/// A byte string, as Taurus writes a []byte.
+pub Transcript tr_bytes(Transcript t, List(Int) b) { return tr_item(t, "[]byte", b); }
+
+/// A natural number, as Taurus writes a *big.Int: the Gob encoding, a
+/// version byte 0x02 followed by the big-endian magnitude.
+pub Transcript tr_nat(Transcript t, List(UInt(64)) x) {
+    return tr_item(t, "big.Int", [2].concat(bn_to_be(x, 0)));
+}
+
+/// A modulus, as Taurus writes a *saferith.Modulus: its big-endian bytes.
+pub Transcript tr_modulus(Transcript t, List(UInt(64)) n) {
+    return tr_item(t, "*saferith.Modulus", bn_to_be(n, 0));
+}
+
+List(Int) tr_flat(List(List(Int)) items, Int i, ListBuf(Int) acc) {
+    if (i >= items.len()) { return acc.finish(); }
+    return tr_flat(items, i + 1, tr_cat(acc, items[i]));
+}
+
+/// SHA-256 of everything written, the seed of the output stream.
+pub List(Int) tr_seed(Transcript t) { return sha256_bytes(tr_flat(t.items, 0, ListBuf())); }
+
+/// Output bytes [from, from + n) of the stream for `seed`.
+pub List(Int) tr_stream(List(Int) seed, Int from, Int n) {
+    return tr_stream_at(seed, from, n, from / 32, ListBuf());
+}
+
+List(Int) tr_stream_at(List(Int) seed, Int from, Int n, Int block, ListBuf(Int) acc) {
+    if (block * 32 >= from + n) { return acc.finish(); }
+    List(Int) b = sha256_bytes(seed.concat([(block >> 24) & 255, (block >> 16) & 255, (block >> 8) & 255, block & 255]));
+    return tr_stream_at(seed, from, n, block + 1, tr_cat_range(acc, b, block * 32, from, from + n));
+}
+
+// The bytes of block `b` (starting at stream position `pos`) that fall in
+// [lo, hi).
+ListBuf(Int) tr_cat_range(ListBuf(Int) acc, List(Int) b, Int pos, Int lo, Int hi) {
+    return tr_cat_range_at(acc, b, pos, lo, hi, 0);
+}
+
+ListBuf(Int) tr_cat_range_at(ListBuf(Int) acc, List(Int) b, Int pos, Int lo, Int hi, Int i) {
+    if (i >= b.len()) { return acc; }
+    Int p = pos + i;
+    return tr_cat_range_at(if (p >= lo && p < hi) { acc.push(b[i]) } else { acc }, b, pos, lo, hi, i + 1);
+}
+
+/// A uniform element of [0, n) read from the stream starting at byte
+/// position `pos` the way Taurus's sample.ModN does: successive chunks of
+/// ceil(bits / 8) bytes, the first below n taken. Returns the element and the
+/// position after the chunk used.
+pub type TrSample = { List(UInt(64)) value; Int next; };
+
+pub TrSample tr_sample_modn(List(Int) seed, Int pos, List(UInt(64)) n) {
+    Int nb = (bn_bit_len(n) + 7) / 8;
+    List(UInt(64)) x = bn_from_be(tr_stream(seed, pos, nb));
+    if (bn_cmp(x, n) < 0) { return TrSample {.value = x, .next = pos + nb}; }
+    return tr_sample_modn(seed, pos + nb, n);
+}

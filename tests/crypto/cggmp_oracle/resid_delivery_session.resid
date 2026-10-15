@@ -1,0 +1,146 @@
+// Runs a whole CGGMP21 presign-and-sign session of several parties in one
+// process with the Resid implementation, from a dealer-made configuration,
+// and prints the result as JSON for the Python checker (session.py).
+//
+//   resid_session <config> <signers, comma separated> <digest hex> <seed hex>
+//
+// The config holds lines "name hex". For party i: X<i> (its Shamir share of the
+// root key), E<i> (ElGamal secret), P<i> Q<i> (Paillier primes), XP<i> (public
+// share, compressed), EP<i> (ElGamal public, compressed), NH<i> S<i> T<i>
+// (Pedersen parameters); and T (threshold), N (number of parties).
+import "../../../lib/cggmp_harness.resid";
+import "../../../lib/cggmp_delivery.resid";
+import "../../../lib/cose.resid";
+import "../../../lib/crypto.resid";
+
+Str h(List(UInt(64)) x) { return hex_encode(bn_to_be(x, 32)); }
+
+@requires(filesystem(readonly))
+Str kv(Str path, Str key) { return kv_find(str_split(filesystem.read_all(path), "\n"), key, 0); }
+
+Str kv_find(List(Str) lines, Str key, Int i) {
+    if (i >= lines.len()) { return ""; }
+    List(Str) parts = str_split(str_trim(lines[i]), " ");
+    if (parts.len() == 2 && parts[0] == key) { return parts[1]; }
+    return kv_find(lines, key, i + 1);
+}
+
+@requires(filesystem(readonly))
+List(UInt(64)) nat(Str path, Str key) { return bn_from_be(cose_hex_decode(kv(path, key))); }
+
+@requires(filesystem(readonly))
+CvPt pt(Str path, Str key) { return match cv_dec(cose_hex_decode(kv(path, key))) { Some(p) => p, None => cv_inf() }; }
+
+@requires(filesystem(readonly))
+CgPublicCfg pub_of(Str path, Int i) {
+    return CgPublicCfg {
+        .id = i, .ecdsa = pt(path, f"XP{i}"), .elgamal = pt(path, f"EP{i}"), .n = bn_mul(nat(path, f"P{i}"), nat(path, f"Q{i}")),
+        .ped = Pedersen {.n = nat(path, f"NH{i}"), .s = nat(path, f"S{i}"), .t = nat(path, f"T{i}")} };
+}
+
+@requires(filesystem(readonly))
+List(CgPublicCfg) pubs(Str path, Int n, Int i, ListBuf(CgPublicCfg) acc) {
+    if (i > n) { return acc.finish(); }
+    return pubs(path, n, i + 1, acc.push(pub_of(path, i)));
+}
+
+@requires(filesystem(readonly))
+CgConfig cfg_of(Str path, Int i, Int t, List(CgPublicCfg) ps) {
+    return CgConfig {
+        .id = i, .threshold = t, .ecdsa = nat(path, f"X{i}"), .elgamal = nat(path, f"E{i}"),
+        .p = nat(path, f"P{i}"), .q = nat(path, f"Q{i}"), .rid = [], .chain_key = [], .public = ps };
+}
+
+List(Int) parse_ids(List(Str) parts, Int i, ListBuf(Int) acc) {
+    if (i >= parts.len()) { return acc.finish(); }
+    return parse_ids(parts, i + 1, acc.push(str_parse_int(parts[i])));
+}
+
+@requires(filesystem(readonly))
+Option(List(CgCtx)) ctxs(Str path, List(CgPublicCfg) ps, Int t, List(Int) ids, List(Int) digest, List(Int) seed, Int i, ListBuf(CgCtx) acc) {
+    if (i >= ids.len()) { return Some(acc.finish()); }
+    CgConfig cfg = cfg_of(path, ids[i], t, ps);
+    return match cg_ctx(cfg, ids, bytes_of("session-1"), digest, cg_rng(seed, f"party/{ids[i]}", 32)) {
+        None => ctxs_drop(acc),
+        Some(c) => ctxs(path, ps, t, ids, digest, seed, i + 1, acc.push(c))
+    };
+}
+
+Option(List(CgCtx)) ctxs_drop(ListBuf(CgCtx) acc) {
+    _ = acc.finish();
+    return None;
+}
+
+@requires(args, filesystem(readonly))
+Int main() {
+    Str path = args.get(1);
+    List(Int) ids = parse_ids(str_split(args.get(2), ","), 0, ListBuf());
+    List(Int) digest = cose_hex_decode(args.get(3));
+    List(Int) seed = cose_hex_decode(args.get(4));
+    Int n = str_parse_int(kv(path, "N"));
+    Int t = str_parse_int(kv(path, "T"));
+    List(CgPublicCfg) ps = pubs(path, n, 1, ListBuf());
+    return match ctxs(path, ps, t, ids, digest, seed, 0, ListBuf()) {
+        None => bad("signers are not a valid subset"),
+        Some(cs) => if (args.count() > 7) { run_forged(cs, str_parse_int(args.get(5)), str_parse_int(args.get(6)), str_parse_int(args.get(7))) } else { run(cs) }
+    };
+}
+
+Int bad(Str why) { println("{\"error\":\"" + why + "\"}"); return 1; }
+
+Int bad_fail(CgFail e) {
+    println("{\"error\":\"" + e.why + "\",\"culprits\":[" + join_ints(e.culprits, 0, "") + "]}");
+    return 1;
+}
+
+Str join_ints(List(Int) xs, Int i, Str acc) {
+    if (i >= xs.len()) { return acc; }
+    return join_ints(xs, i + 1, acc + (if (i > 0) { "," } else { "" }) + f"{xs[i]}");
+}
+
+Int run_forged(List(CgCtx) cs, Int round, Int victim, Int other) {
+    return match cgh_presign_forged(cs, round, victim, other) {
+        Err(e) => bad_fail(e),
+        Ok(_) => bad("forged messages were accepted")
+    };
+}
+
+Result(CgSig, CgFail) deliver_all(List(CgCtx) cs, List(PsDone) ds, List(CgMsg) msgs, Int initiator, Int i, Option(CgSig) acc) {
+    if (i >= cs.len()) { return match acc { None => Err(cg_fail("no initiator signature", [])), Some(s) => Ok(s) }; }
+    CgCtx c = cs[i];
+    List(CgMsg) routed = cggmp_initiator_only(msgs, c.self, initiator);
+    if (c.self != initiator) {
+        if (!cggmp_no_sig_for_peer(routed)) { return Err(cg_fail("a peer received a signature share", [c.self])); }
+        return deliver_all(cs, ds, msgs, initiator, i + 1, acc);
+    }
+    return match cggmp_initiator_finish(c, ds[i].presig, routed, initiator) {
+        Ok(sig) => deliver_all(cs, ds, msgs, initiator, i + 1, Some(sig)),
+        Err(e) => Err(e)
+    };
+}
+
+Int run(List(CgCtx) cs) {
+    return match cgh_presign(cs) {
+        Err(e) => bad(e.why),
+        Ok(ds) => match deliver_all(cs, ds, cgh_flat7(ds), cs[0].self, 0, None) {
+            Err(e) => bad_fail(e),
+            Ok(sig) => print_sig(cs[0], sig)
+        }
+    };
+}
+
+Int print_sig(CgCtx c, CgSig sig) {
+    println("{\"pubkey\":\"" + hex_encode(cv_enc(c.pubkey)) + "\",\"signature\":{\"r\":\"" + h(cg_r(sig.r)) + "\",\"s\":\"" + h(sig.s) + "\"}}");
+    return 0;
+}
+
+Int print_sigs(List(CgCtx) cs, List(CgSig) sigs) {
+    println("{\"pubkey\":\"" + hex_encode(cv_enc(cs[0].pubkey)) + "\",\"signatures\":[" + join_sigs(sigs, 0, "") + "]}");
+    return 0;
+}
+
+Str join_sigs(List(CgSig) xs, Int i, Str acc) {
+    if (i >= xs.len()) { return acc; }
+    Str one = "{\"r\":\"" + h(cg_r(xs[i].r)) + "\",\"s\":\"" + h(xs[i].s) + "\"}";
+    return join_sigs(xs, i + 1, acc + (if (i > 0) { "," } else { "" }) + one);
+}

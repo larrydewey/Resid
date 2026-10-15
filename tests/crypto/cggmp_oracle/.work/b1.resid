@@ -1,0 +1,12 @@
+import "../../../../lib/cggmp_keygen.resid";
+import "../../../../lib/cose.resid";
+Int main() {
+    KgCtx c = KgCtx {.self = 1, .ids = [1, 2, 3], .threshold = 1, .prev = [], .session_id = [1], .seed = cg_rng([7], "x", 32), .primes = []};
+    ListBuf(List(UInt(64))) b0 = ListBuf();
+    List(List(UInt(64))) co = kg_coeffs(c, 0, b0);
+    println(f"coeffs {co.len()}");
+    ListBuf(CvPt) b1 = ListBuf();
+    List(CvPt) v = kg_commit_coeffs(co, 0, b1);
+    println(f"vss {v.len()}");
+    return 0;
+}

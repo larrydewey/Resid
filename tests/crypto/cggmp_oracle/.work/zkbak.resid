@@ -1,0 +1,276 @@
+// cggmp_zk.resid — the zero-knowledge proofs of CGGMP21 (Canetti, Gennaro,
+// Goldfeder, Makriyannis, Peled; ePrint 2021/060), over public values and in
+// variable time. Written against the statements in Taurus multi-party-sig
+// (pkg/zk/*) and tested against it, in both directions, through an oracle
+// whose transcript hash is SHA-256 (tests/crypto/cggmp_oracle).
+//
+// Provers draw their randomness from a byte stream the caller supplies, so
+// they are deterministic and testable; a prover returns None if the stream
+// runs out. Every verifier takes the transcript so far (the session and party
+// identifiers a protocol writes before it), and a proof is bound to it.
+
+import "bignum.resid";
+import "cggmp_hash.resid";
+import "crypto.resid";
+
+/// The number of repetitions of the cut-and-choose proofs (statistical
+/// parameter, 80).
+pub Int zk_stat() { return 80; }
+
+/// Pedersen commitment parameters: N = pq, s = t^lam (mod N).
+pub type Pedersen = { List(UInt(64)) n; List(UInt(64)) s; List(UInt(64)) t; };
+
+// x in [1, n - 1] and coprime to n.
+pub Bool zk_valid_mod_n(List(UInt(64)) x, List(UInt(64)) n) {
+    if (x.len() == 0 || bn_cmp(x, n) >= 0) { return false; }
+    return bn_cmp(bn_gcd(x, n), [1]) == 0;
+}
+
+/// Pedersen parameters are valid when s and t are units mod N and differ.
+pub Bool pedersen_valid(Pedersen p) {
+    return zk_valid_mod_n(p.s, p.n) && zk_valid_mod_n(p.t, p.n) && bn_cmp(p.s, p.t) != 0;
+}
+
+/// The Pedersen parameters, written to a transcript as Taurus does: N, S and
+/// T, each as 256 big-endian bytes (2048-bit moduli).
+pub Transcript tr_pedersen(Transcript t, Pedersen p) {
+    return tr_item(t, "Pedersen Parameters", bn_to_be(p.n, 256).concat(bn_to_be(p.s, 256)).concat(bn_to_be(p.t, 256)));
+}
+
+// ─── Random draws from a caller-supplied stream ─────────────────
+
+pub type ZkDraw = { List(UInt(64)) value; Int next; };
+
+// A uniform element of [0, n): successive chunks of ceil(bits/8) bytes of
+// `rnd`, the first below n; None when `rnd` runs out.
+pub Option(ZkDraw) zk_draw_below(List(Int) rnd, Int pos, List(UInt(64)) n) {
+    Int nb = (bn_bit_len(n) + 7) / 8;
+    if (pos + nb > rnd.len()) { return None; }
+    List(UInt(64)) x = bn_from_be(bn_slice_int(rnd, pos, nb));
+    if (bn_cmp(x, n) < 0) { return Some(ZkDraw {.value = x, .next = pos + nb}); }
+    return zk_draw_below(rnd, pos + nb, n);
+}
+
+// ─── Pedersen parameters proof (prm) ────────────────────────────
+//
+// For N, s, t with s = t^lam (mod N), the prover knows lam and
+// phi(N). Repeating 80 times: A_i = t^{a_i} for a_i in Z_phi; challenge bit
+// e_i; z_i = a_i + e_i lam mod phi; the verifier checks
+// t^{z_i} = A_i s^{e_i} (mod N).
+
+pub type PrmProof = { List(List(UInt(64))) as; List(List(UInt(64))) zs; };
+
+Transcript prm_transcript(Transcript tr, Pedersen ped, List(List(UInt(64))) as, Int i) {
+    if (i >= as.len()) { return tr; }
+    return prm_transcript(tr_nat(tr, as[i]), ped, as, i + 1);
+}
+
+// e_i = low bit of byte i of the stream after the parameters and the A's.
+List(Int) prm_challenge(Transcript tr, Pedersen ped, List(List(UInt(64))) as) {
+    List(Int) bytes = tr_stream(tr_seed(prm_transcript(tr_pedersen(tr, ped), ped, as, 0)), 0, zk_stat());
+    return bytes;
+}
+
+Bool prm_check_all(BnMont c, Pedersen ped, PrmProof pf, List(Int) es, Int i) {
+    if (i >= zk_stat()) { return true; }
+    List(UInt(64)) a = pf.as[i];
+    List(UInt(64)) z = pf.zs[i];
+    if (!zk_valid_mod_n(a, ped.n) || !zk_valid_mod_n(z, ped.n)) { return false; }
+    if (bn_cmp(a, [1]) == 0) { return false; }
+    List(UInt(64)) lhs = bn_modexp_mont(c, ped.t, z);
+    List(UInt(64)) rhs = if ((es[i] & 1) == 1) { bn_modmul(a, ped.s, ped.n) } else { a };
+    if (bn_cmp(lhs, rhs) != 0) { return false; }
+    return prm_check_all(c, ped, pf, es, i + 1);
+}
+
+/// Whether `pf` proves that the prover knows lam with s = t^lam mod N
+/// for these parameters, bound to the transcript `tr`.
+pub Bool prm_verify(Pedersen ped, PrmProof pf, Transcript tr) {
+    if (pf.as.len() != zk_stat() || pf.zs.len() != zk_stat()) { return false; }
+    if (!bn_is_odd(ped.n) || !pedersen_valid(ped)) { return false; }
+    return prm_check_all(bn_mont_new(ped.n), ped, pf, prm_challenge(tr, ped, pf.as), 0);
+}
+
+Option(List(List(UInt(64)))) prm_draw_as(List(Int) rnd, Int pos, List(UInt(64)) phi, Int i, ListBuf(List(UInt(64))) acc) {
+    if (i >= zk_stat()) { return Some(acc.finish()); }
+    return match zk_draw_below(rnd, pos, phi) {
+        None => zk_drop(acc),
+        Some(d) => prm_draw_as(rnd, d.next, phi, i + 1, acc.push(d.value))
+    };
+}
+
+// The stream ran out: the builder is finished and discarded.
+Option(List(List(UInt(64)))) zk_drop(ListBuf(List(UInt(64))) acc) {
+    _ = acc.finish();
+    return None;
+}
+
+List(List(UInt(64))) prm_powers(BnMont c, List(UInt(64)) t, List(List(UInt(64))) ex, Int i, ListBuf(List(UInt(64))) acc) {
+    if (i >= ex.len()) { return acc.finish(); }
+    return prm_powers(c, t, ex, i + 1, acc.push(bn_modexp_mont(c, t, ex[i])));
+}
+
+List(List(UInt(64))) prm_responses(List(List(UInt(64))) a_exp, List(Int) es, List(UInt(64)) lam, List(UInt(64)) phi, Int i, ListBuf(List(UInt(64))) acc) {
+    if (i >= a_exp.len()) { return acc.finish(); }
+    List(UInt(64)) z = if ((es[i] & 1) == 1) { bn_modadd(a_exp[i], bn_mod(lam, phi), phi) } else { a_exp[i] };
+    return prm_responses(a_exp, es, lam, phi, i + 1, acc.push(z));
+}
+
+/// A proof for the parameters `ped` with s = t^lam mod N, phi = phi(N),
+/// bound to `tr`; randomness from `rnd` (None if it runs out).
+pub Option(PrmProof) prm_prove(List(UInt(64)) lam, List(UInt(64)) phi, Pedersen ped, Transcript tr, List(Int) rnd) {
+    return match prm_draw_as(rnd, 0, phi, 0, ListBuf()) {
+        None => None,
+        Some(a_exp) => Some(prm_finish(lam, phi, ped, tr, a_exp))
+    };
+}
+
+PrmProof prm_finish(List(UInt(64)) lam, List(UInt(64)) phi, Pedersen ped, Transcript tr, List(List(UInt(64))) a_exp) {
+    List(List(UInt(64))) as = prm_powers(bn_mont_new(ped.n), ped.t, a_exp, 0, ListBuf());
+    List(Int) es = prm_challenge(tr, ped, as);
+    return PrmProof {.as = as, .zs = prm_responses(a_exp, es, lam, phi, 0, ListBuf())};
+}
+
+// ─── Paillier-Blum modulus proof (mod) ──────────────────────────
+//
+// N = p q with p, q primes, both 3 mod 4. The prover publishes w with
+// Jacobi(w / N) = -1. For each of 80 challenges y_i in Z_N it answers
+// (a_i, b_i, x_i, z_i): z_i = y_i^(N^-1 mod phi) mod N, and x_i = y'^(1/4)
+// where y' = (-1)^a w^b y is a quadratic residue mod p and mod q. The
+// verifier checks z^N = y and x^4 = y' (mod N).
+
+pub type ModResponse = { Bool a; Bool b; List(UInt(64)) x; List(UInt(64)) z; };
+
+pub type ModProof = { List(UInt(64)) w; List(ModResponse) responses; };
+
+// The 80 challenges y_i: sample_modn from the stream after N and w.
+List(List(UInt(64))) mod_challenges(Transcript tr, List(UInt(64)) n, List(UInt(64)) w) {
+    List(Int) seed = tr_seed(tr_nat(tr_modulus(tr, n), w));
+    return mod_ys(seed, n, 0, 0, ListBuf());
+}
+
+List(List(UInt(64))) mod_ys(List(Int) seed, List(UInt(64)) n, Int pos, Int i, ListBuf(List(UInt(64))) acc) {
+    if (i >= zk_stat()) { return acc.finish(); }
+    TrSample s = tr_sample_modn(seed, pos, n);
+    return mod_ys(seed, n, s.next, i + 1, acc.push(s.value));
+}
+
+Bool mod_response_ok(BnMont c, List(UInt(64)) w, List(UInt(64)) y, ModResponse r) {
+    if (!zk_valid_mod_n(r.x, c.n) || !zk_valid_mod_n(r.z, c.n)) { return false; }
+    if (bn_cmp(bn_modexp_mont(c, r.z, c.n), bn_mod(y, c.n)) != 0) { return false; }
+    List(UInt(64)) x2 = bn_modmul(r.x, r.x, c.n);
+    List(UInt(64)) x4 = bn_modmul(x2, x2, c.n);
+    List(UInt(64)) neg = if (r.a) { bn_modsub([], bn_mod(y, c.n), c.n) } else { bn_mod(y, c.n) };
+    List(UInt(64)) yp = if (r.b) { bn_modmul(neg, w, c.n) } else { neg };
+    return bn_cmp(x4, yp) == 0;
+}
+
+Bool mod_check_all(BnMont c, ModProof pf, List(List(UInt(64))) ys, Int i) {
+    if (i >= zk_stat()) { return true; }
+    if (!mod_response_ok(c, pf.w, ys[i], pf.responses[i])) { return false; }
+    return mod_check_all(c, pf, ys, i + 1);
+}
+
+/// Whether `pf` proves that N is a product of two primes that are both 3 mod
+/// 4 (a Paillier-Blum modulus), bound to `tr`.
+pub Bool mod_verify(List(UInt(64)) n, ModProof pf, Transcript tr) {
+    if (pf.responses.len() != zk_stat()) { return false; }
+    if (!bn_is_odd(n) || bn_cmp(n, [1]) <= 0) { return false; }
+    // N must not be prime.
+    if (bn_miller_rabin(n, bn_mr_bases())) { return false; }
+    if (bn_jacobi(pf.w, n) != -1) { return false; }
+    if (!zk_valid_mod_n(pf.w, n)) { return false; }
+    return mod_check_all(bn_mont_new(n), pf, mod_challenges(tr, n, pf.w), 0);
+}
+
+// y is a quadratic residue mod p and mod q, with the exponents (p-1)/2 and
+// (q-1)/2 given.
+Bool mod_is_qr(List(UInt(64)) y, List(UInt(64)) p, List(UInt(64)) q, List(UInt(64)) ph, List(UInt(64)) qh) {
+    return bn_cmp(bn_modexp(bn_mod(y, p), ph, p), [1]) == 0 && bn_cmp(bn_modexp(bn_mod(y, q), qh, q), [1]) == 0;
+}
+
+// (a, b, y') with y' = (-1)^a w^b y a quadratic residue (Taurus
+// makeQuadraticResidue): try y, -y, -w y, w y in that order.
+pub type ModQr = { Bool a; Bool b; List(UInt(64)) y; };
+
+ModQr mod_make_qr(List(UInt(64)) y, List(UInt(64)) w, List(UInt(64)) n, List(UInt(64)) p, List(UInt(64)) q, List(UInt(64)) ph, List(UInt(64)) qh) {
+    List(UInt(64)) o0 = bn_mod(y, n);
+    if (mod_is_qr(o0, p, q, ph, qh)) { return ModQr {.a = false, .b = false, .y = o0}; }
+    List(UInt(64)) o1 = bn_modsub([], o0, n);
+    if (mod_is_qr(o1, p, q, ph, qh)) { return ModQr {.a = true, .b = false, .y = o1}; }
+    List(UInt(64)) o2 = bn_modmul(o1, w, n);
+    if (mod_is_qr(o2, p, q, ph, qh)) { return ModQr {.a = true, .b = true, .y = o2}; }
+    return ModQr {.a = false, .b = true, .y = bn_modsub([], o2, n)};
+}
+
+// A w with Jacobi(w / N) = -1, drawn as Taurus's QNR sampler does: a chunk of
+// 256 bytes reduced mod N, retried until the Jacobi symbol is -1.
+Option(ZkDraw) mod_draw_qnr(List(Int) rnd, Int pos, List(UInt(64)) n) {
+    if (pos + 256 > rnd.len()) { return None; }
+    List(UInt(64)) w = bn_mod(bn_from_be(bn_slice_int(rnd, pos, 256)), n);
+    if (bn_jacobi(w, n) == -1) { return Some(ZkDraw {.value = w, .next = pos + 256}); }
+    return mod_draw_qnr(rnd, pos + 256, n);
+}
+
+List(ModResponse) mod_responses(List(UInt(64)) w, List(UInt(64)) n, List(UInt(64)) p, List(UInt(64)) q, List(UInt(64)) ph, List(UInt(64)) qh, List(UInt(64)) e, List(UInt(64)) ninv, List(List(UInt(64))) ys, Int i, ListBuf(ModResponse) acc) {
+    if (i >= ys.len()) { return acc.finish(); }
+    List(UInt(64)) y = ys[i];
+    ModQr qr = mod_make_qr(y, w, n, p, q, ph, qh);
+    ModResponse r = ModResponse {
+        .a = qr.a, .b = qr.b, .x = bn_modexp(qr.y, e, n), .z = bn_modexp(y, ninv, n) };
+    return mod_responses(w, n, p, q, ph, qh, e, ninv, ys, i + 1, acc.push(r));
+}
+
+/// A proof for N = p q (p, q primes, both 3 mod 4), bound to `tr`;
+/// randomness from `rnd` (None if it runs out).
+pub Option(ModProof) mod_prove(List(UInt(64)) p, List(UInt(64)) q, Transcript tr, List(Int) rnd) {
+    List(UInt(64)) n = bn_mul(p, q);
+    return match mod_draw_qnr(rnd, 0, n) {
+        None => None,
+        Some(d) => Some(mod_prove_with(p, q, n, d.value, tr))
+    };
+}
+
+ModProof mod_prove_with(List(UInt(64)) p, List(UInt(64)) q, List(UInt(64)) n, List(UInt(64)) w, Transcript tr) {
+    List(UInt(64)) phi = bn_mul(bn_sub(p, [1]), bn_sub(q, [1]));
+    // e = ((phi + 4) / 8)^2 mod phi, with (qr^e)^4 = qr.
+    List(UInt(64)) e1 = bn_shr(bn_add(phi, [4]), 3);
+    List(UInt(64)) e = bn_modmul(e1, e1, phi);
+    List(UInt(64)) ninv = match bn_modinv(n, phi) { Some(v) => v, None => [] };
+    List(List(UInt(64))) ys = mod_challenges(tr, n, w);
+    return ModProof {
+        .w = w,
+        .responses = mod_responses(w, n, p, q, bn_shr(p, 1), bn_shr(q, 1), e, ninv, ys, 0, ListBuf()) };
+}
+
+// ─── Generating Pedersen parameters ─────────────────────────────
+
+/// Pedersen parameters with their secrets: lam and phi = phi(N).
+pub type PedersenKey = { Pedersen ped; List(UInt(64)) lam; List(UInt(64)) phi; };
+
+// A unit mod n drawn from `rnd`: the first chunk below n and coprime to it.
+pub Option(ZkDraw) zk_draw_unit(List(Int) rnd, Int pos, List(UInt(64)) n) {
+    return match zk_draw_below(rnd, pos, n) {
+        None => None,
+        Some(d) => if (zk_valid_mod_n(d.value, n)) { Some(d) } else { zk_draw_unit(rnd, d.next, n) }
+    };
+}
+
+/// Parameters for N = p q, as Taurus generates them: lam in Z_phi, t = tau^2
+/// for a unit tau, s = t^lam. None if `rnd` runs out.
+pub Option(PedersenKey) pedersen_generate(List(UInt(64)) p, List(UInt(64)) q, List(Int) rnd) {
+    List(UInt(64)) n = bn_mul(p, q);
+    List(UInt(64)) phi = bn_mul(bn_sub(p, [1]), bn_sub(q, [1]));
+    return match zk_draw_below(rnd, 0, phi) {
+        None => None,
+        Some(l) => match zk_draw_unit(rnd, l.next, n) {
+            None => None,
+            Some(tau) => Some(pedersen_from(n, phi, l.value, tau.value))
+        }
+    };
+}
+
+PedersenKey pedersen_from(List(UInt(64)) n, List(UInt(64)) phi, List(UInt(64)) lam, List(UInt(64)) tau) {
+    List(UInt(64)) t = bn_modmul(tau, tau, n);
+    return PedersenKey {.ped = Pedersen {.n = n, .s = bn_modexp(t, lam, n), .t = t}, .lam = lam, .phi = phi};
+}

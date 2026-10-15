@@ -7,7 +7,7 @@ again [7, 8]
 shm yes
 put true
 send fd true
-with fd [1] false
+with fd [1] true
 none left true
 past end false
 negative false

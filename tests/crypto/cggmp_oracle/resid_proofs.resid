@@ -1,0 +1,362 @@
+// Makes CGGMP21 proofs with the Resid code and prints them as JSON in the
+// format of the Go oracle (genvec), for the oracle to verify.
+//
+//   resid_proofs <kind> <file>
+//
+// <file> holds lines "name hex" (hex values, no spaces). Kinds: aux, fac, enc, affg, affp, logstar, encelg, elog, log, sch, nth.
+import "../../../lib/cggmp.resid";
+import "../../../lib/cose.resid";
+import "../../../lib/crypto.resid";
+
+Str h(List(UInt(64)) x) { return hex_encode(bn_to_be(x, 0)); }
+
+Str hz(BnInt a) { return (if (a.neg) { "-" } else { "" }) + hex_encode(bn_to_be(a.mag, 0)); }
+
+@requires(filesystem(readonly))
+Str kv(Str path, Str key) { return kv_find(str_split(filesystem.read_all(path), "\n"), key, 0); }
+
+Str kv_find(List(Str) lines, Str key, Int i) {
+    if (i >= lines.len()) { return ""; }
+    List(Str) parts = str_split(str_trim(lines[i]), " ");
+    if (parts.len() == 2 && parts[0] == key) { return parts[1]; }
+    return kv_find(lines, key, i + 1);
+}
+
+@requires(filesystem(readonly))
+List(UInt(64)) nat(Str path, Str key) { return bn_from_be(cose_hex_decode(kv(path, key))); }
+
+@requires(filesystem(readonly))
+List(Int) bytes(Str path, Str key) { return cose_hex_decode(kv(path, key)); }
+
+@requires(filesystem(readonly))
+Pedersen aux(Str path) { return Pedersen {.n = nat(path, "NHAT"), .s = nat(path, "S"), .t = nat(path, "T")}; }
+
+@requires(args, filesystem(readonly))
+Int main() {
+    Str kind = args.get(1);
+    Str path = args.get(2);
+    if (kind == "aux") { return auxgen(path); }
+    if (kind == "fac") { return fac(path); }
+    if (kind == "enc") { return enc(path); }
+    if (kind == "affg") { return affg(path); }
+    if (kind == "affp") { return affp(path); }
+    if (kind == "logstar") { return logstar(path); }
+    if (kind == "encelg") { return encelg(path); }
+    if (kind == "elog") { return elog(path); }
+    if (kind == "log") { return logp(path); }
+    if (kind == "sch") { return sch(path); }
+    if (kind == "nth") { return nth(path); }
+    println("unknown kind");
+    return 2;
+}
+
+@requires(filesystem(readonly))
+Int fac(Str path) {
+    List(UInt(64)) p = nat(path, "P");
+    List(UInt(64)) q = nat(path, "Q");
+    Pedersen a = aux(path);
+    return match fac_prove(p, q, a, tr_new(), bytes(path, "RND")) {
+        None => fail(),
+        Some(f) => print_fac(bn_mul(p, q), a, f)
+    };
+}
+
+@requires(filesystem(readonly))
+Int auxgen(Str path) {
+    return match pedersen_generate(nat(path, "P"), nat(path, "Q"), bytes(path, "RND")) {
+        None => fail(),
+        Some(k) => print_aux(k.ped)
+    };
+}
+
+Int print_aux(Pedersen a) {
+    println("{\"N\":\"" + h(a.n) + "\",\"S\":\"" + h(a.s) + "\",\"T\":\"" + h(a.t) + "\"}");
+    return 0;
+}
+
+Int fail() { println("error: random stream too short"); return 1; }
+
+Int print_fac(List(UInt(64)) n, Pedersen a, FacProof f) {
+    println("{\"N\":\"" + h(n) + "\",\"Nhat\":\"" + h(a.n) + "\",\"S\":\"" + h(a.s) + "\",\"T\":\"" + h(a.t) + "\",");
+    println("\"P\":\"" + h(f.p) + "\",\"Q\":\"" + h(f.q) + "\",\"A\":\"" + h(f.a) + "\",\"B\":\"" + h(f.b) + "\",\"Tc\":\"" + h(f.t) + "\",");
+    println("\"Sigma\":\"" + hz(f.sigma) + "\",\"Z1\":\"" + hz(f.z1) + "\",\"Z2\":\"" + hz(f.z2) + "\",\"W1\":\"" + hz(f.w1) + "\",\"W2\":\"" + hz(f.w2) + "\",\"V\":\"" + hz(f.v) + "\"}");
+    return 0;
+}
+
+@requires(filesystem(readonly))
+Int enc(Str path) {
+    List(UInt(64)) p = nat(path, "P");
+    List(UInt(64)) q = nat(path, "Q");
+    PaillierPub pk = paillier_pub(bn_mul(p, q));
+    Pedersen a = aux(path);
+    List(Int) rnd = bytes(path, "RND");
+    // k in +-2^l and a nonce rho, from the first part of the stream.
+    return match zk_draw_pm(rnd, 0, zk_l()) {
+        None => fail(),
+        Some(kd) => match zk_draw_unit(rnd, kd.next, pk.n) {
+            None => fail(),
+            Some(rho) => enc_go(pk, a, kd.value, rho.value, bytes(path, "RND2"))
+        }
+    };
+}
+
+Int enc_go(PaillierPub pk, Pedersen a, BnInt k, List(UInt(64)) rho, List(Int) rnd2) {
+    List(UInt(64)) kct = pa_enc(pk, k, rho);
+    return match enc_prove(a, pk, kct, k, rho, tr_new(), rnd2) {
+        None => fail(),
+        Some(e) => print_enc(pk, a, kct, e)
+    };
+}
+
+Int print_enc(PaillierPub pk, Pedersen a, List(UInt(64)) kct, EncProof e) {
+    println("{\"N\":\"" + h(pk.n) + "\",\"Nhat\":\"" + h(a.n) + "\",\"S\":\"" + h(a.s) + "\",\"T\":\"" + h(a.t) + "\",\"K\":\"" + h(kct) + "\",");
+    println("\"CS\":\"" + h(e.s) + "\",\"CA\":\"" + h(e.a) + "\",\"CC\":\"" + h(e.c) + "\",\"Z1\":\"" + hz(e.z1) + "\",\"Z2\":\"" + h(e.z2) + "\",\"Z3\":\"" + hz(e.z3) + "\"}");
+    return 0;
+}
+
+// ─── The other proofs ───────────────────────────────────────────
+//
+// Each builds its public data from the random stream RND (the way the
+// protocol does) and proves with RND2. Keys: P, Q (prover), VP, VQ (the
+// verifier, whose Pedersen parameters NHAT, S, T are the auxiliary ones).
+
+Str hp(CvPt p) { return hex_encode(cv_enc(p)); }
+
+Str hs(List(UInt(64)) x) { return hex_encode(bn_to_be(x, 32)); }
+
+// A draw of a signed sample, or a failure value.
+BnInt must_pm(List(Int) rnd, Int pos, Int bits) {
+    return match zk_draw_pm(rnd, pos, bits) { Some(d) => d.value, None => zi_zero() };
+}
+
+// A random plaintext or share (+-2^bits) and the position after it.
+Int after(Int pos, Int bits) { return pos + bits / 8 + 1; }
+
+List(UInt(64)) must_unit(List(Int) rnd, Int pos, List(UInt(64)) n) {
+    return match zk_draw_unit(rnd, pos, n) { Some(d) => d.value, None => [] };
+}
+
+Int unit_next(List(Int) rnd, Int pos, List(UInt(64)) n) {
+    return match zk_draw_unit(rnd, pos, n) { Some(d) => d.next, None => pos };
+}
+
+List(UInt(64)) must_sc(List(Int) rnd, Int pos) {
+    return sc_of_bytes(bn_slice_int(rnd, pos, 32));
+}
+
+@requires(filesystem(readonly))
+Int affg(Str path) {
+    PaillierPub pp = paillier_pub(bn_mul(nat(path, "P"), nat(path, "Q")));
+    PaillierPub vp = paillier_pub(bn_mul(nat(path, "VP"), nat(path, "VQ")));
+    Pedersen a = aux(path);
+    List(Int) r = bytes(path, "RND");
+    // the receiver's share k, the sender's x, the mask beta, and the nonces of
+    // Kv, F (prover key) and D (verifier key)
+    BnInt k = must_pm(r, 0, zk_l());
+    BnInt x = must_pm(r, after(0, zk_l()), zk_l());
+    BnInt beta_neg = must_pm(r, after(after(0, zk_l()), zk_l()), zk_lprime());
+    Int p0 = after(after(after(0, zk_l()), zk_l()), zk_lprime());
+    List(UInt(64)) rk = must_unit(r, p0, vp.n);
+    Int p1 = unit_next(r, p0, vp.n);
+    List(UInt(64)) rf = must_unit(r, p1, pp.n);
+    Int p2 = unit_next(r, p1, pp.n);
+    List(UInt(64)) rd = must_unit(r, p2, vp.n);
+    List(UInt(64)) kv = pa_enc(vp, k, rk);
+    List(UInt(64)) f = pa_enc(pp, beta_neg, rf);
+    List(UInt(64)) d = pa_ct_add(vp, pa_enc(vp, beta_neg, rd), pa_ct_mul(vp, kv, x));
+    CvPt xp = cv_mul_base(sc_of_zi(x));
+    AffgPublic pub = AffgPublic {.kv = kv, .dv = d, .fp = f, .xp = xp, .prover = pp, .verifier = vp, .aux = a};
+    return match affg_prove(pub, AffgSecret {.x = x, .y = beta_neg, .s = rd, .r = rf}, tr_new(), bytes(path, "RND2")) {
+        None => fail(),
+        Some(pf) => print_affg(pub, pf)
+    };
+}
+
+Int print_affg(AffgPublic p, AffgProof f) {
+    println("{\"NP\":\"" + h(p.prover.n) + "\",\"NV\":\"" + h(p.verifier.n) + "\",\"Nhat\":\"" + h(p.aux.n) + "\",\"S\":\"" + h(p.aux.s) + "\",\"T\":\"" + h(p.aux.t) + "\",");
+    println("\"Kv\":\"" + h(p.kv) + "\",\"Dv\":\"" + h(p.dv) + "\",\"Fp\":\"" + h(p.fp) + "\",\"Xp\":\"" + hp(p.xp) + "\",");
+    println("\"A\":\"" + h(f.a) + "\",\"Bx\":\"" + hp(f.bx) + "\",\"By\":\"" + h(f.by) + "\",\"E\":\"" + h(f.e) + "\",\"SS\":\"" + h(f.s) + "\",\"F\":\"" + h(f.f) + "\",\"TT\":\"" + h(f.t) + "\",");
+    println("\"Z1\":\"" + hz(f.z1) + "\",\"Z2\":\"" + hz(f.z2) + "\",\"Z3\":\"" + hz(f.z3) + "\",\"Z4\":\"" + hz(f.z4) + "\",\"W\":\"" + h(f.w) + "\",\"Wy\":\"" + h(f.wy) + "\"}");
+    return 0;
+}
+
+@requires(filesystem(readonly))
+Int affp(Str path) {
+    PaillierPub pp = paillier_pub(bn_mul(nat(path, "P"), nat(path, "Q")));
+    PaillierPub vp = paillier_pub(bn_mul(nat(path, "VP"), nat(path, "VQ")));
+    Pedersen a = aux(path);
+    List(Int) r = bytes(path, "RND");
+    BnInt k = must_pm(r, 0, zk_l());
+    BnInt x = must_pm(r, after(0, zk_l()), zk_l());
+    BnInt beta_neg = must_pm(r, after(after(0, zk_l()), zk_l()), zk_lprime());
+    Int p0 = after(after(after(0, zk_l()), zk_l()), zk_lprime());
+    List(UInt(64)) rk = must_unit(r, p0, vp.n);
+    Int p1 = unit_next(r, p0, vp.n);
+    List(UInt(64)) rf = must_unit(r, p1, pp.n);
+    Int p2 = unit_next(r, p1, pp.n);
+    List(UInt(64)) rd = must_unit(r, p2, vp.n);
+    Int p3 = unit_next(r, p2, vp.n);
+    List(UInt(64)) rx = must_unit(r, p3, pp.n);
+    List(UInt(64)) kv = pa_enc(vp, k, rk);
+    List(UInt(64)) f = pa_enc(pp, beta_neg, rf);
+    List(UInt(64)) d = pa_ct_add(vp, pa_enc(vp, beta_neg, rd), pa_ct_mul(vp, kv, x));
+    List(UInt(64)) xp = pa_enc(pp, x, rx);
+    AffpPublic pub = AffpPublic {.kv = kv, .dv = d, .fp = f, .xp = xp, .prover = pp, .verifier = vp, .aux = a};
+    return match affp_prove(pub, AffpSecret {.x = x, .y = beta_neg, .s = rd, .rx = rx, .r = rf}, tr_new(), bytes(path, "RND2")) {
+        None => fail(),
+        Some(pf) => print_affp(pub, pf)
+    };
+}
+
+Int print_affp(AffpPublic p, AffpProof f) {
+    println("{\"NP\":\"" + h(p.prover.n) + "\",\"NV\":\"" + h(p.verifier.n) + "\",\"Nhat\":\"" + h(p.aux.n) + "\",\"S\":\"" + h(p.aux.s) + "\",\"T\":\"" + h(p.aux.t) + "\",");
+    println("\"Kv\":\"" + h(p.kv) + "\",\"Dv\":\"" + h(p.dv) + "\",\"Fp\":\"" + h(p.fp) + "\",\"Xp\":\"" + h(p.xp) + "\",");
+    println("\"A\":\"" + h(f.a) + "\",\"Bx\":\"" + h(f.bx) + "\",\"By\":\"" + h(f.by) + "\",\"E\":\"" + h(f.e) + "\",\"SS\":\"" + h(f.s) + "\",\"F\":\"" + h(f.f) + "\",\"TT\":\"" + h(f.t) + "\",");
+    println("\"Z1\":\"" + hz(f.z1) + "\",\"Z2\":\"" + hz(f.z2) + "\",\"Z3\":\"" + hz(f.z3) + "\",\"Z4\":\"" + hz(f.z4) + "\",\"W\":\"" + h(f.w) + "\",\"Wx\":\"" + h(f.wx) + "\",\"Wy\":\"" + h(f.wy) + "\"}");
+    return 0;
+}
+
+@requires(filesystem(readonly))
+Int logstar(Str path) {
+    PaillierPub pp = paillier_pub(bn_mul(nat(path, "P"), nat(path, "Q")));
+    Pedersen a = aux(path);
+    List(Int) r = bytes(path, "RND");
+    BnInt x = must_pm(r, 0, zk_l());
+    List(UInt(64)) rho = must_unit(r, after(0, zk_l()), pp.n);
+    CvPt g = cv_mul_base(must_sc(r, after(0, zk_l()) + 600));
+    List(UInt(64)) c = pa_enc(pp, x, rho);
+    CvPt xp = cv_mul(sc_of_zi(x), g);
+    LogstarPublic pub = LogstarPublic {.c = c, .x = xp, .g = g, .prover = pp, .aux = a};
+    return match logstar_prove(pub, x, rho, tr_new(), bytes(path, "RND2")) {
+        None => fail(),
+        Some(pf) => print_logstar(pub, pf)
+    };
+}
+
+Int print_logstar(LogstarPublic p, LogstarProof f) {
+    println("{\"N\":\"" + h(p.prover.n) + "\",\"Nhat\":\"" + h(p.aux.n) + "\",\"S\":\"" + h(p.aux.s) + "\",\"T\":\"" + h(p.aux.t) + "\",");
+    println("\"C\":\"" + h(p.c) + "\",\"X\":\"" + hp(p.x) + "\",\"G\":\"" + hp(p.g) + "\",");
+    println("\"CS\":\"" + h(f.s) + "\",\"A\":\"" + h(f.a) + "\",\"Y\":\"" + hp(f.y) + "\",\"D\":\"" + h(f.d) + "\",\"Z1\":\"" + hz(f.z1) + "\",\"Z2\":\"" + h(f.z2) + "\",\"Z3\":\"" + hz(f.z3) + "\"}");
+    return 0;
+}
+
+@requires(filesystem(readonly))
+Int encelg(Str path) {
+    PaillierPub pp = paillier_pub(bn_mul(nat(path, "P"), nat(path, "Q")));
+    Pedersen a = aux(path);
+    List(Int) r = bytes(path, "RND");
+    List(UInt(64)) asec = must_sc(r, 0);
+    List(UInt(64)) kscalar = must_sc(r, 32);
+    List(UInt(64)) nonce = must_sc(r, 64);
+    List(UInt(64)) rho = must_unit(r, 96, pp.n);
+    CvPt apub = cv_mul_base(asec);
+    BnInt k = sc_to_zi(kscalar);
+    List(UInt(64)) c = pa_enc(pp, k, rho);
+    CvPt el = cv_mul_base(nonce);
+    CvPt em = cv_add(cv_mul_base(kscalar), cv_mul(nonce, apub));
+    EncelgPublic pub = EncelgPublic {.c = c, .a = apub, .b = el, .x = em, .prover = pp, .aux = a};
+    return match encelg_prove(pub, k, rho, nonce, tr_new(), bytes(path, "RND2")) {
+        None => fail(),
+        Some(pf) => print_encelg(pub, pf)
+    };
+}
+
+Int print_encelg(EncelgPublic p, EncelgProof f) {
+    println("{\"N\":\"" + h(p.prover.n) + "\",\"Nhat\":\"" + h(p.aux.n) + "\",\"S\":\"" + h(p.aux.s) + "\",\"T\":\"" + h(p.aux.t) + "\",");
+    println("\"C\":\"" + h(p.c) + "\",\"A\":\"" + hp(p.a) + "\",\"B\":\"" + hp(p.b) + "\",\"X\":\"" + hp(p.x) + "\",");
+    println("\"CS\":\"" + h(f.s) + "\",\"D\":\"" + h(f.d) + "\",\"Y\":\"" + hp(f.y) + "\",\"Z\":\"" + hp(f.z) + "\",\"TT\":\"" + h(f.t) + "\",");
+    println("\"Z1\":\"" + hz(f.z1) + "\",\"W\":\"" + hs(f.w) + "\",\"Z2\":\"" + h(f.z2) + "\",\"Z3\":\"" + hz(f.z3) + "\"}");
+    return 0;
+}
+
+@requires(filesystem(readonly))
+Int elog(Str path) {
+    List(Int) r = bytes(path, "RND");
+    List(UInt(64)) x = must_sc(r, 0);
+    CvPt xp = cv_mul_base(x);
+    CvPt base = cv_mul_base(must_sc(r, 32));
+    List(UInt(64)) y = must_sc(r, 64);
+    List(UInt(64)) lam = must_sc(r, 96);
+    CvPt el = cv_mul_base(lam);
+    CvPt em = cv_add(cv_mul_base(y), cv_mul(lam, xp));
+    CvPt yp = cv_mul(y, base);
+    ElogPublic pub = ElogPublic {.el = el, .em = em, .x = xp, .base = base, .y = yp};
+    return match elog_prove(pub, y, lam, tr_new(), bytes(path, "RND2")) {
+        None => fail(),
+        Some(pf) => print_elog(pub, pf)
+    };
+}
+
+Int print_elog(ElogPublic p, ElogProof f) {
+    println("{\"EL\":\"" + hp(p.el) + "\",\"EM\":\"" + hp(p.em) + "\",\"X\":\"" + hp(p.x) + "\",\"Base\":\"" + hp(p.base) + "\",\"Y\":\"" + hp(p.y) + "\",");
+    println("\"A\":\"" + hp(f.a) + "\",\"N\":\"" + hp(f.n) + "\",\"B\":\"" + hp(f.b) + "\",\"Z\":\"" + hs(f.z) + "\",\"U\":\"" + hs(f.u) + "\"}");
+    return 0;
+}
+
+@requires(filesystem(readonly))
+Int logp(Str path) {
+    List(Int) r = bytes(path, "RND");
+    List(UInt(64)) a = must_sc(r, 0);
+    List(UInt(64)) b = must_sc(r, 32);
+    CvPt h2 = cv_mul_base(b);
+    LogPublic pub = LogPublic {.h = h2, .x = cv_mul_base(a), .y = cv_mul(a, h2)};
+    return match log_prove(pub, a, b, tr_new(), bytes(path, "RND2")) {
+        None => fail(),
+        Some(pf) => print_log(pub, pf)
+    };
+}
+
+Int print_log(LogPublic p, LogProof f) {
+    println("{\"H\":\"" + hp(p.h) + "\",\"X\":\"" + hp(p.x) + "\",\"Y\":\"" + hp(p.y) + "\",\"A\":\"" + hp(f.a) + "\",\"B\":\"" + hp(f.b) + "\",\"C\":\"" + hp(f.c) + "\",\"Z1\":\"" + hs(f.z1) + "\",\"Z2\":\"" + hs(f.z2) + "\"}");
+    return 0;
+}
+
+@requires(filesystem(readonly))
+Int sch(Str path) {
+    List(Int) r = bytes(path, "RND");
+    List(UInt(64)) x = must_sc(r, 0);
+    CvPt g = cv_mul_base(must_sc(r, 32));
+    CvPt xp = cv_mul(x, g);
+    return match sch_prove(xp, g, x, tr_new(), bytes(path, "RND2")) {
+        None => fail(),
+        Some(pf) => print_sch(xp, g, pf)
+    };
+}
+
+Int print_sch(CvPt x, CvPt g, SchProof f) {
+    println("{\"X\":\"" + hp(x) + "\",\"G\":\"" + hp(g) + "\",\"C\":\"" + hp(f.c) + "\",\"Z\":\"" + hs(f.z) + "\"}");
+    return 0;
+}
+
+// A ciphertext of a random signed plaintext, opened with the secret key
+// (plaintext, hidden nonce, proof of knowledge of the nonce).
+@requires(filesystem(readonly))
+Int nth(Str path) {
+    List(UInt(64)) p = nat(path, "P");
+    List(UInt(64)) q = nat(path, "Q");
+    PaillierPub pk = paillier_pub(bn_mul(p, q));
+    List(Int) rnd = bytes(path, "RND");
+    return match zk_draw_pm(rnd, 0, zk_l() + zk_eps()) {
+        None => fail(),
+        Some(md) => match zk_draw_unit(rnd, md.next, pk.n) {
+            None => fail(),
+            Some(rho) => nth_go(p, q, pk, md.value, rho.value, bytes(path, "RND2"))
+        }
+    };
+}
+
+Int nth_go(List(UInt(64)) p, List(UInt(64)) q, PaillierPub pk, BnInt m, List(UInt(64)) rho, List(Int) rnd2) {
+    List(UInt(64)) c = pa_enc(pk, m, rho);
+    return match paillier_sec(p, q) {
+        None => fail(),
+        Some(sec) => match cg_open(sec, pk, c, tr_new(), rnd2) {
+            None => fail(),
+            Some(o) => print_nth(pk, c, o)
+        }
+    };
+}
+
+Int print_nth(PaillierPub pk, List(UInt(64)) c, CgOpen o) {
+    println("{\"N\":\"" + h(pk.n) + "\",\"C\":\"" + h(c) + "\",\"M\":\"" + hz(o.plain) + "\",\"R\":\"" + h(o.hidden) + "\",\"A\":\"" + h(o.proof.a) + "\",\"Z\":\"" + h(o.proof.z) + "\"}");
+    return 0;
+}

@@ -1,0 +1,16 @@
+import "../../../../lib/bignum.resid";
+import "../../../../lib/cose.resid";
+
+Int loop(List(UInt(64)) base, List(UInt(64)) e, List(UInt(64)) m, Int i, Int acc) {
+    if (i <= 0) { return acc; }
+    List(UInt(64)) r = bn_modexp(base, e, m);
+    return loop(base, e, m, i - 1, acc + bn_bit_len(r));
+}
+
+@requires(args)
+Int main() {
+    List(UInt(64)) m = bn_from_be(cose_hex_decode(args.get(1)));
+    List(UInt(64)) e = bn_sub(m, [3]);
+    Int n = str_parse_int(args.get(2));
+    return loop([5], e, m, n, 0) % 200;
+}

@@ -1,0 +1,41 @@
+// lib/cggmp_tweak.resid: the designated party's hidden additive tweak.
+
+import "../../lib/cggmp_tweak.resid";
+import "../../lib/cose.resid";
+import "../../lib/crypto.resid";
+
+List(UInt(64)) nat(Str hex) { return bn_from_be(cose_hex_decode(hex)); }
+Str hp(CvPt p) { return hex_encode(cv_enc(p)); }
+
+test "the designated party and the others agree on the tweaked public key" {
+    PaillierSec sec = paillier_sec(nat("c7a0a26d66491aa191e208dacad5e78e23c25b4ba562ef4b3b221ff8145257be0fa8ed3d39a016c37525162e12a61ebadecb27eb243f3a34fc42d1d0b9166d8fdcb4e7811efe5f11ad35501c444f9d0675e9af4a0ceceadda6b85f5875aa5704ec6ec283301faa4bf44de4b5ec0fa15447042f413cf862f1978ffebc030cd8b3"), nat("c701021e91631cbcb4777dbcb122eae89fd1c3c3bff6621ecefd132929afbbdc64468d3fddfd3cb4c7a4f5c8c014916f8a3eb850e8d38089f9e5f58922ccbdd12912e610192914bd7d841f86e12a53d30a70f41290f85a11639f5c4f45d11ed12ea3d76ed22012dbe8b73a90fa3bea819dcc99b2a7378dc48019b415561cfe17")) else { PaillierSec {.p = [], .q = [], .phi = [], .phi_inv = []} };
+    PaillierPub pub = paillier_pub(bn_mul(sec.p, sec.q));
+    Pedersen ped = Pedersen {.n = pub.n, .s = nat("08"), .t = nat("02")};
+    CgPublicCfg p1 = CgPublicCfg {.id = 1, .ecdsa = cv_mul_base(nat("07")), .elgamal = cv_inf(), .n = pub.n, .ped = ped};
+    CgPublicCfg p2 = CgPublicCfg {.id = 2, .ecdsa = cv_mul_base(nat("08")), .elgamal = cv_inf(), .n = pub.n, .ped = ped};
+    CgConfig c1 = CgConfig {.id = 1, .threshold = 1, .ecdsa = nat("07"), .elgamal = nat("03"), .p = sec.p, .q = sec.q, .rid = [], .chain_key = [], .public = [p1, p2]};
+    CgConfig c2 = CgConfig {.id = 2, .threshold = 1, .ecdsa = nat("08"), .elgamal = nat("05"), .p = sec.p, .q = sec.q, .rid = [], .chain_key = [], .public = [p1, p2]};
+    List(UInt(64)) tau = nat("05");
+    CvPt tau_g = cv_mul_base(tau);
+    Option(CgCtx) plain1 = cg_ctx(c1, [1, 2], [9], [1], [2]);
+    Option(CgCtx) plain2 = cg_ctx(c2, [1, 2], [9], [1], [2]);
+    Option(CgCtx) tw1 = cg_ctx_tweaked_secret(c1, [1, 2], 1, tau, [9], [1], [2]);
+    Option(CgCtx) tw2 = cg_ctx_tweaked_public(c2, [1, 2], 1, tau_g, [9], [1], [2]);
+    CgCtx a = tw1 else { CgCtx {.self = 1, .ids = [], .pubs = [], .x = [], .elg = [], .psec = PaillierSec {.p = [], .q = [], .phi = [], .phi_inv = []}, .pubkey = cv_inf(), .base = tr_new(), .seed = [], .digest = []} };
+    CgCtx b = tw2 else { CgCtx {.self = 2, .ids = [], .pubs = [], .x = [], .elg = [], .psec = PaillierSec {.p = [], .q = [], .phi = [], .phi_inv = []}, .pubkey = cv_inf(), .base = tr_new(), .seed = [], .digest = []} };
+    CgCtx z = plain1 else { CgCtx {.self = 1, .ids = [], .pubs = [], .x = [], .elg = [], .psec = PaillierSec {.p = [], .q = [], .phi = [], .phi_inv = []}, .pubkey = cv_inf(), .base = tr_new(), .seed = [], .digest = []} };
+    expect(hp(a.pubkey)).toEqual(hp(b.pubkey));
+    expect(hp(a.pubkey)).toEqual(hp(cv_add(z.pubkey, tau_g)));
+}
+
+test "a session that omits the designated party is refused" {
+    PaillierSec sec = paillier_sec(nat("c7a0a26d66491aa191e208dacad5e78e23c25b4ba562ef4b3b221ff8145257be0fa8ed3d39a016c37525162e12a61ebadecb27eb243f3a34fc42d1d0b9166d8fdcb4e7811efe5f11ad35501c444f9d0675e9af4a0ceceadda6b85f5875aa5704ec6ec283301faa4bf44de4b5ec0fa15447042f413cf862f1978ffebc030cd8b3"), nat("c701021e91631cbcb4777dbcb122eae89fd1c3c3bff6621ecefd132929afbbdc64468d3fddfd3cb4c7a4f5c8c014916f8a3eb850e8d38089f9e5f58922ccbdd12912e610192914bd7d841f86e12a53d30a70f41290f85a11639f5c4f45d11ed12ea3d76ed22012dbe8b73a90fa3bea819dcc99b2a7378dc48019b415561cfe17")) else { PaillierSec {.p = [], .q = [], .phi = [], .phi_inv = []} };
+    PaillierPub pub = paillier_pub(bn_mul(sec.p, sec.q));
+    Pedersen ped = Pedersen {.n = pub.n, .s = nat("08"), .t = nat("02")};
+    CgPublicCfg p1 = CgPublicCfg {.id = 1, .ecdsa = cv_mul_base(nat("07")), .elgamal = cv_inf(), .n = pub.n, .ped = ped};
+    CgPublicCfg p2 = CgPublicCfg {.id = 2, .ecdsa = cv_mul_base(nat("08")), .elgamal = cv_inf(), .n = pub.n, .ped = ped};
+    CgConfig c2 = CgConfig {.id = 2, .threshold = 0, .ecdsa = nat("08"), .elgamal = nat("05"), .p = sec.p, .q = sec.q, .rid = [], .chain_key = [], .public = [p1, p2]};
+    Option(CgCtx) o = cg_ctx_tweaked_public(c2, [2], 1, cv_mul_base(nat("05")), [9], [1], [2]);
+    Bool refused = match o { None => true, Some(_) => false };
+    expect(refused).toBeTrue();
+}

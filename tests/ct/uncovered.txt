@@ -70,3 +70,7 @@ lib/spdm_requester.resid spdm_config_with_psk a constructor: it stores the PSK a
 lib/spdm_requester.resid spdm_config_transfer a constructor over a config holding a key; computes nothing secret
 lib/spdm_requester.resid spdm_config_versions a constructor over a config holding a key; computes nothing secret
 lib/spdm_requester.resid spdm_config_multi_key a constructor over a config holding a key; computes nothing secret
+lib/sha1g.resid hmac1g SHA-1 support is exercised only by oracle tests
+lib/sha1g.resid sha1g SHA-1 support is exercised only by oracle tests
+lib/sha1g.resid sha1g_block SHA-1 support is exercised only by oracle tests
+lib/sha1g.resid sha1g_blocks SHA-1 support is exercised only by oracle tests

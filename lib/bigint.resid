@@ -1,0 +1,74 @@
+// bigint.resid — signed arbitrary-precision integers (public values), on top
+// of lib/bignum.resid. A BnInt is a sign and a magnitude; zero is never
+// negative. Written for the zero-knowledge proofs of threshold ECDSA, whose
+// responses are signed (z = alpha + e k with e, k, alpha of either sign).
+
+import "bignum.resid";
+
+pub type BnInt = { Bool neg; List(UInt(64)) mag; };
+
+/// The integer with sign `neg` and magnitude `mag` (zero is made positive).
+pub BnInt zi_make(Bool neg, List(UInt(64)) mag) {
+    return BnInt {.neg = neg && mag.len() > 0, .mag = mag};
+}
+
+pub BnInt zi_from_nat(List(UInt(64)) x) { return BnInt {.neg = false, .mag = x}; }
+
+pub BnInt zi_zero() { return BnInt {.neg = false, .mag = []}; }
+
+pub Bool zi_is_zero(BnInt a) { return a.mag.len() == 0; }
+
+pub BnInt zi_neg(BnInt a) { return zi_make(!a.neg, a.mag); }
+
+pub BnInt zi_abs(BnInt a) { return BnInt {.neg = false, .mag = a.mag}; }
+
+/// The integer `v` (any Int).
+pub BnInt zi_from_int(Int v) {
+    if (v >= 0) { return zi_from_nat(bn_from_u64(u64(v))); }
+    return zi_make(true, bn_from_u64(u64(0 - v)));
+}
+
+pub BnInt zi_add(BnInt a, BnInt b) {
+    if (a.neg == b.neg) { return zi_make(a.neg, bn_add(a.mag, b.mag)); }
+    if (bn_cmp(a.mag, b.mag) >= 0) { return zi_make(a.neg, bn_sub(a.mag, b.mag)); }
+    return zi_make(b.neg, bn_sub(b.mag, a.mag));
+}
+
+pub BnInt zi_sub(BnInt a, BnInt b) { return zi_add(a, zi_neg(b)); }
+
+pub BnInt zi_mul(BnInt a, BnInt b) { return zi_make(a.neg != b.neg, bn_mul(a.mag, b.mag)); }
+
+/// -1, 0 or 1.
+pub Int zi_cmp(BnInt a, BnInt b) {
+    if (a.neg != b.neg) { return if (a.neg) { -1 } else { 1 }; }
+    Int c = bn_cmp(a.mag, b.mag);
+    return if (a.neg) { 0 - c } else { c };
+}
+
+/// The number of bits of the magnitude.
+pub Int zi_bit_len(BnInt a) { return bn_bit_len(a.mag); }
+
+/// a mod m, in [0, m).
+pub List(UInt(64)) zi_mod(BnInt a, List(UInt(64)) m) {
+    List(UInt(64)) r = bn_mod(a.mag, m);
+    if (!a.neg || r.len() == 0) { return r; }
+    return bn_sub(m, r);
+}
+
+/// base^exp mod m for a signed exponent: a negative exponent is the inverse
+/// of base^|exp|. base must be a unit mod m when exp < 0 (the result is
+/// empty, zero, if it is not).
+pub List(UInt(64)) zi_modexp(List(UInt(64)) base, BnInt exp, List(UInt(64)) m) {
+    List(UInt(64)) y = bn_modexp(base, exp.mag, m);
+    if (!exp.neg) { return y; }
+    return match bn_modinv(y, m) { Some(v) => v, None => [] };
+}
+
+/// The magnitude of `bytes` (big-endian) with the sign taken from `neg`.
+pub BnInt zi_from_be(Bool neg, List(Int) bytes) { return zi_make(neg, bn_from_be(bytes)); }
+
+/// A signed integer as a byte string: 0x00 or 0x01 (negative), then the
+/// big-endian magnitude padded to `width` bytes.
+pub List(Int) zi_to_be(BnInt a, Int width) {
+    return [if (a.neg) { 1 } else { 0 }].concat(bn_to_be(a.mag, width));
+}

@@ -622,5 +622,9 @@ Not guaranteed:
 links it, rebuilds the compiler from source twice and requires all three
 IR outputs to be byte-identical, so the seed is exactly what the source
 compiles to under itself. This does not rule out a seed that reproduces
-itself while miscompiling (the "trusting trust" problem): no independent
-second compiler of the current source is maintained.
+itself while miscompiling (the "trusting trust" problem). No independent
+second *compiler* of the current source is maintained; the independent
+interpreter [resid-ddc](https://github.com/larrydewey/resid-ddc) has
+reproduced the seed and the runtime IR byte for byte by diverse
+double-compiling, but it lives outside this repository and no suite here
+reruns it.

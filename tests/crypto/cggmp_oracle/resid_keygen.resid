@@ -1,0 +1,157 @@
+// Key generation, signing and refresh with the Resid implementation, one stage
+// per process (a stage holds every party's state at once, which is a lot of
+// memory; a real party holds only its own). Configurations travel between
+// stages as hex lines "cfg <id> <hex>" (see lib/cggmp_store.resid).
+//
+//   resid_keygen keygen  <primes file> <n> <t> <seed hex>
+//   resid_keygen sign    <config file> <signers> <digest hex> <seed hex>
+//   resid_keygen refresh <primes file> <config file> <seed hex>
+//
+// The primes file holds lines "P<i> hex" and "Q<i> hex" (Paillier primes made
+// by the Taurus oracle: generating safe primes in a test is slow).
+import "../../../lib/cggmp_harness.resid";
+import "../../../lib/cggmp_store.resid";
+import "../../../lib/cose.resid";
+import "../../../lib/crypto.resid";
+
+Str h(List(UInt(64)) x) { return hex_encode(bn_to_be(x, 32)); }
+
+@requires(filesystem(readonly))
+Str kv(Str path, Str key) { return kv_find(str_split(filesystem.read_all(path), "\n"), key, 0); }
+
+Str kv_find(List(Str) lines, Str key, Int i) {
+    if (i >= lines.len()) { return ""; }
+    List(Str) parts = str_split(str_trim(lines[i]), " ");
+    if (parts.len() == 2 && parts[0] == key) { return parts[1]; }
+    return kv_find(lines, key, i + 1);
+}
+
+@requires(filesystem(readonly))
+List(UInt(64)) nat(Str path, Str key) { return bn_from_be(cose_hex_decode(kv(path, key))); }
+
+List(Int) range_ids(Int i, Int n, ListBuf(Int) acc) {
+    if (i > n) { return acc.finish(); }
+    return range_ids(i + 1, n, acc.push(i));
+}
+
+List(Int) parse_ids(List(Str) parts, Int i, ListBuf(Int) acc) {
+    if (i >= parts.len()) { return acc.finish(); }
+    return parse_ids(parts, i + 1, acc.push(str_parse_int(parts[i])));
+}
+
+Int bad(Str why) { println("error: " + why); return 1; }
+
+@requires(filesystem(readonly))
+List(KgCtx) kg_ctxs(Str path, List(Int) ids, Int t, List(CgConfig) prev, List(Int) seed, Str label, Int i, ListBuf(KgCtx) acc) {
+    if (i >= ids.len()) { return acc.finish(); }
+    Int id = ids[i];
+    List(CgConfig) pv = if (prev.len() > 0) { [prev[i]] } else { [] };
+    KgCtx c = KgCtx {
+        .self = id, .ids = ids, .threshold = t, .prev = pv, .session_id = bytes_of(label),
+        .seed = cg_rng(seed, f"{label}/party/{id}", 32), .primes = [nat(path, f"P{id}"), nat(path, f"Q{id}")] };
+    return kg_ctxs(path, ids, t, prev, seed, label, i + 1, acc.push(c));
+}
+
+// Configurations from "cfg <id> <hex>" lines, in the order of the file.
+@requires(filesystem(readonly))
+List(CgConfig) load_cfgs(Str path) {
+    return load_lines(str_split(filesystem.read_all(path), "\n"), 0, ListBuf());
+}
+
+List(CgConfig) load_lines(List(Str) lines, Int i, ListBuf(CgConfig) acc) {
+    if (i >= lines.len()) { return acc.finish(); }
+    List(Str) parts = str_split(str_trim(lines[i]), " ");
+    if (parts.len() == 3 && parts[0] == "cfg") {
+        return match cg_cfg_decode(cose_hex_decode(parts[2])) {
+            Some(c) => load_lines(lines, i + 1, acc.push(c)),
+            None => load_lines(lines, i + 1, acc)
+        };
+    }
+    return load_lines(lines, i + 1, acc);
+}
+
+Int print_cfgs(List(CgConfig) cfgs, Int i) {
+    if (i >= cfgs.len()) { return 0; }
+    println("cfg " + f"{cfgs[i].id}" + " " + hex_encode(cg_cfg_encode(cfgs[i])));
+    return print_cfgs(cfgs, i + 1);
+}
+
+CvPt sum_scaled(CgConfig cfg, List(Int) ids, Int i, CvPt acc) {
+    if (i >= ids.len()) { return acc; }
+    return sum_scaled(cfg, ids, i + 1, cv_add(acc, cv_mul(cg_lagrange(ids, ids[i]), cg_cfg_pub(cfg.public, ids[i], 0).ecdsa)));
+}
+
+List(CgCtx) sign_ctxs(List(CgConfig) cfgs, List(Int) signers, List(Int) digest, List(Int) seed, Int i, ListBuf(CgCtx) acc) {
+    if (i >= signers.len()) { return acc.finish(); }
+    CgConfig cfg = find_cfg(cfgs, signers[i], 0);
+    return match cg_ctx(cfg, signers, bytes_of("sign"), digest, cg_rng(seed, f"sign/party/{cfg.id}", 32)) {
+        Some(c) => sign_ctxs(cfgs, signers, digest, seed, i + 1, acc.push(c)),
+        None => sign_ctxs(cfgs, signers, digest, seed, i + 1, acc)
+    };
+}
+
+CgConfig find_cfg(List(CgConfig) cfgs, Int id, Int i) {
+    if (i >= cfgs.len()) { return cfgs[0]; }
+    if (cfgs[i].id == id) { return cfgs[i]; }
+    return find_cfg(cfgs, id, i + 1);
+}
+
+@requires(args, filesystem(readonly))
+Int main() {
+    Str mode = args.get(1);
+    if (mode == "keygen") { return do_keygen(); }
+    if (mode == "sign") { return do_sign(); }
+    if (mode == "refresh") { return do_refresh(); }
+    return bad("unknown mode");
+}
+
+@requires(args, filesystem(readonly))
+Int do_keygen() {
+    Str path = args.get(2);
+    Int n = str_parse_int(args.get(3));
+    Int t = str_parse_int(args.get(4));
+    List(Int) seed = cose_hex_decode(args.get(5));
+    List(Int) ids = range_ids(1, n, ListBuf());
+    return match cgh_keygen(kg_ctxs(path, ids, t, [], seed, "keygen", 0, ListBuf())) {
+        Err(e) => bad("keygen: " + e.why),
+        Ok(cfgs) => print_cfgs(cfgs, 0)
+    };
+}
+
+@requires(args, filesystem(readonly))
+Int do_refresh() {
+    Str path = args.get(2);
+    List(CgConfig) old = load_cfgs(args.get(3));
+    List(Int) seed = cose_hex_decode(args.get(4));
+    List(Int) ids = ids_of(old, 0, ListBuf());
+    return match cgh_keygen(kg_ctxs(path, ids, old[0].threshold, old, seed, "refresh", 0, ListBuf())) {
+        Err(e) => bad("refresh: " + e.why),
+        Ok(cfgs) => print_cfgs(cfgs, 0)
+    };
+}
+
+List(Int) ids_of(List(CgConfig) cs, Int i, ListBuf(Int) acc) {
+    if (i >= cs.len()) { return acc.finish(); }
+    return ids_of(cs, i + 1, acc.push(cs[i].id));
+}
+
+@requires(args, filesystem(readonly))
+Int do_sign() {
+    List(CgConfig) cfgs = load_cfgs(args.get(2));
+    List(Int) signers = parse_ids(str_split(args.get(3), ","), 0, ListBuf());
+    List(Int) digest = cose_hex_decode(args.get(4));
+    List(Int) seed = cose_hex_decode(args.get(5));
+    List(CgCtx) cs = sign_ctxs(cfgs, signers, digest, seed, 0, ListBuf());
+    return match cgh_presign(cs) {
+        Err(e) => bad("presign: " + e.why),
+        Ok(ds) => match cgh_sign(cs, ds) {
+            Err(e) => bad("sign: " + e.why),
+            Ok(sigs) => print_sig(cs[0], sigs[0])
+        }
+    };
+}
+
+Int print_sig(CgCtx c, CgSig s) {
+    println("{\"pubkey\":\"" + hex_encode(cv_enc(c.pubkey)) + "\",\"r\":\"" + h(cg_r(s.r)) + "\",\"s\":\"" + h(s.s) + "\"}");
+    return 0;
+}

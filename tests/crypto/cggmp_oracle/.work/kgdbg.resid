@@ -1,0 +1,394 @@
+// cggmp_keygen.resid — CGGMP21 key generation and refresh, five rounds, as
+// pure state transitions (see lib/cggmp.resid for the conventions).
+//
+// Every party shares a random polynomial of degree `threshold` with Feldman
+// commitments (key generation) or a polynomial with constant term zero
+// (refresh), sends each other party its share encrypted under that party's
+// fresh Paillier key, and proves knowledge of the shares and the key
+// material: Paillier-Blum modulus (mod), Pedersen parameters (prm), no small
+// factors (fac), and a Schnorr proof of the resulting share. Port of Taurus
+// protocols/cmp/keygen.
+
+import "/home/larry/git/larry/resid/lib/cggmp.resid";
+
+pub type KgCtx = {
+    Int self; List(Int) ids; Int threshold;
+    List(CgConfig) prev;                    // empty for key generation, one config for a refresh
+    List(Int) session_id; List(Int) seed;
+    List(List(UInt(64))) primes;            // the Paillier primes, or empty to generate them (slow)
+};
+
+pub Transcript kg_session(KgCtx c) {
+    Transcript t0 = tr_item(tr_new(), "Session ID", c.session_id);
+    Transcript t1 = tr_item(tr_item(t0, "Protocol ID", bytes_of(if (c.prev.len() > 0) { "cmp/refresh" } else { "cmp/keygen" })), "Group Name", bytes_of("P-256"));
+    return tr_item(tr_item(t1, "Party IDs", c.ids), "Threshold", bytes_of(f"{c.threshold}"));
+}
+
+Transcript kg_tr(Transcript base, Int id) { return tr_item(base, "ID", bytes_of(f"{id}")); }
+
+// ─── Helpers ────────────────────────────────────────────────────
+
+// The polynomial with the given coefficients at x = id (mod n).
+List(UInt(64)) kg_eval(List(List(UInt(64))) coeffs, Int id) { return kg_horner(coeffs, bn_from_u64(u64(id)), coeffs.len() - 1, []); }
+
+List(UInt(64)) kg_horner(List(List(UInt(64))) c, List(UInt(64)) x, Int i, List(UInt(64)) acc) {
+    if (i < 0) { return acc; }
+    return kg_horner(c, x, i - 1, sc_nat_add(sc_nat_mul(acc, x), c[i]));
+}
+
+// The sum of the points A_k x^k (the polynomial in the exponent at x = id).
+CvPt kg_eval_exp(List(CvPt) a, Int id) { return kg_eval_exp_at(a, bn_from_u64(u64(id)), 0, [1], cv_inf()); }
+
+CvPt kg_eval_exp_at(List(CvPt) a, List(UInt(64)) x, Int k, List(UInt(64)) pow, CvPt acc) {
+    if (k >= a.len()) { return acc; }
+    return kg_eval_exp_at(a, x, k + 1, sc_nat_mul(pow, x), cv_add(acc, cv_mul(pow, a[k])));
+}
+
+List(CvPt) kg_commit_coeffs(List(List(UInt(64))) coeffs, Int i, ListBuf(CvPt) acc) {
+    if (i >= coeffs.len()) { return acc.finish(); }
+    return kg_commit_coeffs(coeffs, i + 1, acc.push(cv_mul_base(coeffs[i])));
+}
+
+List(Int) kg_enc_pts(List(CvPt) a, Int i, List(Int) acc) {
+    if (i >= a.len()) { return acc; }
+    return kg_enc_pts(a, i + 1, acc.concat(cv_enc(a[i])));
+}
+
+// The items a party commits to in round 1 (and reveals in round 2).
+Transcript kg_commit_tr(Transcript tr, List(Int) rid, List(Int) chain, List(CvPt) vss, CvPt sch, CvPt elg, List(UInt(64)) n, List(UInt(64)) s, List(UInt(64)) t, List(Int) decommit) {
+    Transcript t1 = tr_item(tr_item(tr, "RID", rid), "RID", chain);
+    Transcript t2 = tr_item(tr_item(t1, "Exponent", kg_enc_pts(vss, 0, [])), "Schnorr Commitment", cv_enc(sch));
+    Transcript t3 = tr_modulus(tr_point(t2, elg), n);
+    return tr_item(tr_nat_w(tr_nat_w(t3, s, 256), t, 256), "Decommitment", decommit);
+}
+
+List(Int) kg_commit(Transcript tr, List(Int) rid, List(Int) chain, List(CvPt) vss, CvPt sch, CvPt elg, List(UInt(64)) n, List(UInt(64)) s, List(UInt(64)) t, List(Int) decommit) {
+    return tr_stream(tr_seed(kg_commit_tr(tr, rid, chain, vss, sch, elg, n, s, t, decommit)), 0, 64);
+}
+
+// ─── Round 1 ────────────────────────────────────────────────────
+
+pub type Kg1 = {
+    KgCtx ctx; Transcript base;
+    List(List(UInt(64))) coeffs;            // the sharing polynomial (index 0 is the constant)
+    List(UInt(64)) p; List(UInt(64)) q; PaillierSec psec; PaillierPub ppub;
+    List(UInt(64)) ped_lam; Pedersen ped;
+    List(UInt(64)) elg; CvPt elg_pub;
+    List(UInt(64)) sch_a; CvPt sch_c;
+    List(Int) rid; List(Int) chain; List(Int) decommit; List(Int) commit;
+    List(CvPt) vss;
+    List(CgMsg) out;
+};
+
+List(List(UInt(64))) kg_coeffs(KgCtx c, Int i, ListBuf(List(UInt(64))) acc) {
+    if (i > c.threshold) { return acc.finish(); }
+    List(UInt(64)) v = if (i == 0 && c.prev.len() > 0) { [] } else { cg_scalar(c.seed, f"kg/coeff/{i}") };
+    return kg_coeffs(c, i + 1, acc.push(v));
+}
+
+List(List(UInt(64))) kg_primes(KgCtx c) {
+    if (c.primes.len() == 2) { return c.primes; }
+    Option(List(UInt(64))) p = bn_safe_prime_stream(cg_rng(c.seed, "kg/p", 128 * 600), 1024);
+    Option(List(UInt(64))) q = bn_safe_prime_stream(cg_rng(c.seed, "kg/q", 128 * 600), 1024);
+    return match p {
+        Some(pp) => match q { Some(qq) => [pp, qq], None => [] },
+        None => []
+    };
+}
+
+pub Result(Kg1, CgFail) kg_start(KgCtx c) {
+    List(List(UInt(64))) pq = kg_primes(c);
+    if (pq.len() != 2) { return Err(cg_fail("no Paillier primes", [])); }
+    PaillierSec psec = match paillier_sec(pq[0], pq[1]) { Some(s) => s, None => PaillierSec {.p = [], .q = [], .phi = [], .phi_inv = []} };
+    PaillierPub ppub = paillier_pub(bn_mul(pq[0], pq[1]));
+    Option(PedersenKey) pk = pedersen_generate(pq[0], pq[1], cg_rng(c.seed, "kg/ped", 2048));
+    return match pk {
+        None => Err(cg_fail("randomness exhausted", [])),
+        Some(k) => Ok(kg_start_with(c, pq[0], pq[1], psec, ppub, k))
+    };
+}
+
+Kg1 kg_start_with(KgCtx c, List(UInt(64)) p, List(UInt(64)) q, PaillierSec psec, PaillierPub ppub, PedersenKey pk) {
+    Transcript base = kg_session(c);
+    List(List(UInt(64))) coeffs = kg_coeffs(c, 0, ListBuf());
+    List(UInt(64)) e = cg_scalar(c.seed, "kg/elg");
+    CvPt elg_pub = cv_mul_base(e);
+    List(UInt(64)) a = cg_scalar(c.seed, "kg/sch");
+    CvPt sch_c = cv_mul_base(a);
+    List(Int) rid = cg_rng(c.seed, "kg/rid", 32);
+    List(Int) chain = cg_rng(c.seed, "kg/chain", 32);
+    List(Int) dec = cg_rng(c.seed, "kg/dec", 32);
+    List(CvPt) vss = kg_commit_coeffs(coeffs, 0, ListBuf());
+    List(Int) commit = kg_commit(kg_tr(base, c.self), rid, chain, vss, sch_c, elg_pub, ppub.n, pk.ped.s, pk.ped.t, dec);
+    return Kg1 {
+        .ctx = c, .base = base, .coeffs = coeffs, .p = p, .q = q, .psec = psec, .ppub = ppub, .ped_lam = pk.lam, .ped = pk.ped,
+        .elg = e, .elg_pub = elg_pub, .sch_a = a, .sch_c = sch_c, .rid = rid, .chain = chain, .decommit = dec, .commit = commit, .vss = vss,
+        .out = [cg_bc(c.self, KgB2(commit))] };
+}
+
+// ─── Round 2: collect the commitments, reveal ───────────────────
+
+pub type Kg2 = { Kg1 prev; Map(Int, List(Int)) commits; List(CgMsg) out; };
+
+Result(Map(Int, List(Int)), CgFail) kg2_all(Kg1 s, List(CgMsg) in, List(Int) others, Int i, Map(Int, List(Int)) acc) {
+    if (i >= others.len()) { return Ok(acc); }
+    Int j = others[i];
+    return match ex_kb2(in, j, s.ctx.self, true, 0) {
+        None => Err(cg_fail("missing commitment", [j])),
+        Some(c) => if (c.len() != 64 || !cg_nonzero(c, 0)) { Err(cg_fail("bad commitment", [j])) } else { kg2_all(s, in, others, i + 1, acc.insert(j, c)) }
+    };
+}
+
+pub Result(Kg2, CgFail) kg_r2(Kg1 s, List(CgMsg) in) {
+    ListBuf(Int) ob = ListBuf();
+    List(Int) others = cg_others(s.ctx.ids, s.ctx.self, 0, ob);
+    Map(Int, List(Int)) cm = kg2_all(s, in, others, 0, {s.ctx.self: s.commit})?;
+    KgB3R b = KgB3R {
+        .rid = s.rid, .chain_key = s.chain, .vss = s.vss, .sch_commit = s.sch_c, .elgamal = s.elg_pub,
+        .n = s.ppub.n, .s = s.ped.s, .t = s.ped.t, .decommit = s.decommit };
+    return Ok(Kg2 {.prev = s, .commits = cm, .out = [cg_bc(s.ctx.self, KgB3(b))]});
+}
+
+// ─── Round 3: verify the reveals; prove the key material ────────
+
+pub type Kg3Peer = { KgB3R b; PaillierPub pail; Pedersen ped; };
+
+pub type Kg3 = {
+    Kg2 prev;
+    Map(Int, Kg3Peer) peers;
+    List(Int) rid; List(Int) chain; Transcript base3;
+    List(CgMsg) out;
+};
+
+Bool kg_valid_n(List(UInt(64)) n) { return bn_bit_len(n) == 2048 && bn_is_odd(n); }
+
+Result(Kg3Peer, CgFail) kg3_peer(Kg2 s, List(CgMsg) in, Int j) {
+    KgCtx c = s.prev.ctx;
+    return match ex_kb3(in, j, c.self, true, 0) {
+        None => Err(cg_fail("missing reveal", [j])),
+        Some(b) => kg3_check(s, c, j, b)
+    };
+}
+
+Result(Kg3Peer, CgFail) kg3_check(Kg2 s, KgCtx c, Int j, KgB3R b) {
+    if (b.rid.len() != 32 || !cg_nonzero(b.rid, 0) || b.chain_key.len() != 32 || !cg_nonzero(b.chain_key, 0)) { return Err(cg_fail("bad rid or chain key", [j])); }
+    if (b.decommit.len() != 32 || !cg_nonzero(b.decommit, 0)) { return Err(cg_fail("bad decommitment", [j])); }
+    if (b.vss.len() != c.threshold + 1 || b.sch_commit.inf || b.elgamal.inf) { return Err(cg_fail("bad polynomial, commitment or ElGamal key", [j])); }
+    // The constant term is the identity exactly in a refresh.
+    if (b.vss[0].inf != (c.prev.len() > 0)) { return Err(cg_fail("the sharing polynomial has the wrong constant term", [j])); }
+    if (!kg_valid_n(b.n)) { return Err(cg_fail("bad Paillier modulus", [j])); }
+    Pedersen ped = Pedersen {.n = b.n, .s = b.s, .t = b.t};
+    if (!pedersen_valid(ped)) { return Err(cg_fail("bad Pedersen parameters", [j])); }
+    List(Int) want = s.commits[j] else { [] };
+    if (!cg_bytes_eq(kg_commit(kg_tr(s.prev.base, j), b.rid, b.chain_key, b.vss, b.sch_commit, b.elgamal, b.n, b.s, b.t, b.decommit), want)) {
+        return Err(cg_fail("failed to decommit", [j]));
+    }
+    return Ok(Kg3Peer {.b = b, .pail = paillier_pub(b.n), .ped = ped});
+}
+
+Result(Map(Int, Kg3Peer), CgFail) kg3_all(Kg2 s, List(CgMsg) in, List(Int) others, Int i, Map(Int, Kg3Peer) acc) {
+    if (i >= others.len()) { return Ok(acc); }
+    Kg3Peer p = kg3_peer(s, in, others[i])?;
+    return kg3_all(s, in, others, i + 1, acc.insert(others[i], p));
+}
+
+List(Int) kg_xor_all(List(Int) ids, Map(Int, Kg3Peer) peers, Bool chain, List(Int) mine, Int self, Int i, List(Int) acc) {
+    if (i >= ids.len()) { return acc; }
+    Option(Kg3Peer) op = peers.get(ids[i]);
+    List(Int) v = if (ids[i] == self) { mine } else {
+        match op { Some(p) => if (chain) { p.b.chain_key } else { p.b.rid }, None => mine }
+    };
+    return kg_xor_all(ids, peers, chain, mine, self, i + 1, cg_xor(acc, v, 0, ListBuf()));
+}
+
+pub Result(Kg3, CgFail) kg_r3(Kg2 s, List(CgMsg) in) {
+    Kg1 s1 = s.prev;
+    KgCtx c = s1.ctx;
+    ListBuf(Int) ob = ListBuf();
+    List(Int) others = cg_others(c.ids, c.self, 0, ob);
+    KgB3R me = KgB3R {.rid = s1.rid, .chain_key = s1.chain, .vss = s1.vss, .sch_commit = s1.sch_c, .elgamal = s1.elg_pub,
+                      .n = s1.ppub.n, .s = s1.ped.s, .t = s1.ped.t, .decommit = s1.decommit};
+    println("r3: start");
+    Map(Int, Kg3Peer) peers = kg3_all(s, in, others, 0, {c.self: Kg3Peer {.b = me, .pail = s1.ppub, .ped = s1.ped}})?;
+    println("r3: peers ok");
+    List(Int) rid = kg_xor_all(c.ids, peers, false, s1.rid, c.self, 0, cg_zero32());
+    List(Int) chain = if (c.prev.len() > 0) { c.prev[0].chain_key } else { kg_xor_all(c.ids, peers, true, s1.chain, c.self, 0, cg_zero32()) };
+    println("r3: rid ok");
+    Transcript base3 = tr_item(s1.base, "RID", rid);
+    Transcript tr = kg_tr(base3, c.self);
+    Option(ModProof) md = mod_prove(s1.p, s1.q, tr, cg_rng(c.seed, "kg/mod", 256 * 96));
+    println("r3: mod done");
+    Option(PrmProof) prm = prm_prove(s1.ped_lam, s1.psec.phi, s1.ped, tr, cg_rng(c.seed, "kg/prm", 256 * 400));
+    println("r3: proofs made");
+    return match md {
+        None => Err(cg_fail("randomness exhausted (mod)", [])),
+        Some(m) => match prm {
+            None => Err(cg_fail("randomness exhausted (prm)", [])),
+            Some(pr) => Ok(Kg3 {
+                .prev = s, .peers = peers, .rid = rid, .chain = chain, .base3 = base3,
+                .out = kg3_msgs(s1, peers, others, base3, 0, kg_first(c.self, m, pr)) })
+        }
+    };
+}
+
+// To each other party: its share of our polynomial, encrypted under its key,
+// and a fac proof against its Pedersen parameters.
+List(CgMsg) kg3_msgs(Kg1 s1, Map(Int, Kg3Peer) peers, List(Int) others, Transcript base3, Int i, ListBuf(CgMsg) acc) {
+    if (i >= others.len()) { return acc.finish(); }
+    KgCtx c = s1.ctx;
+    Int j = others[i];
+    Kg3Peer pj = peers[j] else { Kg3Peer {.b = KgB3R {.rid = [], .chain_key = [], .vss = [], .sch_commit = cv_inf(), .elgamal = cv_inf(), .n = [], .s = [], .t = [], .decommit = []}, .pail = s1.ppub, .ped = s1.ped} };
+    List(UInt(64)) share = kg_eval(s1.coeffs, j);
+    List(UInt(64)) ct = pa_enc(pj.pail, sc_to_zi(share), cg_unit(c.seed, f"kg/shnonce/{j}", pj.pail.n));
+    Option(FacProof) fac = fac_prove(s1.p, s1.q, pj.ped, kg_tr(base3, c.self), cg_rng(c.seed, f"kg/fac/{j}", 4 * 4300));
+    return match fac {
+        None => kg3_msgs(s1, peers, others, base3, i + 1, acc),
+        Some(f) => kg3_msgs(s1, peers, others, base3, i + 1, acc.push(cg_to(c.self, j, KgM4(KgM4R {.share = ct, .fac = f}))))
+    };
+}
+
+ListBuf(CgMsg) kg_first(Int self, ModProof m, PrmProof pr) {
+    ListBuf(CgMsg) b = ListBuf();
+    return b.push(cg_bc(self, KgB4(KgB4R {.md = m, .prm = pr})));
+}
+
+// ─── Round 4: verify the proofs and shares; derive the new share ─
+
+pub type Kg4 = {
+    Kg3 prev;
+    CgConfig cfg;                           // the updated configuration
+    Transcript base4;
+    List(CgMsg) out;
+};
+
+// Verifies party j's broadcast (mod, prm) and the message to us (fac, share).
+// Returns the decrypted share of j's polynomial at our id.
+Result(List(UInt(64)), CgFail) kg4_peer(Kg3 s, List(CgMsg) in, Int j) {
+    Kg1 s1 = s.prev.prev;
+    KgCtx c = s1.ctx;
+    Kg3Peer pj = s.peers[j] else { Kg3Peer {.b = KgB3R {.rid = [], .chain_key = [], .vss = [], .sch_commit = cv_inf(), .elgamal = cv_inf(), .n = [], .s = [], .t = [], .decommit = []}, .pail = s1.ppub, .ped = s1.ped} };
+    return match ex_kb4(in, j, c.self, true, 0) {
+        None => Err(cg_fail("missing mod and prm proofs", [j])),
+        Some(b4) => match ex_km4(in, j, c.self, false, 0) {
+            None => Err(cg_fail("missing share message", [j])),
+            Some(m4) => kg4_check(s, s1, c, j, pj, b4, m4)
+        }
+    };
+}
+
+Result(List(UInt(64)), CgFail) kg4_check(Kg3 s, Kg1 s1, KgCtx c, Int j, Kg3Peer pj, KgB4R b4, KgM4R m4) {
+    Transcript trj = kg_tr(s.base3, j);
+    if (!mod_verify(pj.pail.n, b4.md, trj)) { return Err(cg_fail("mod proof failed", [j])); }
+    if (!prm_verify(pj.ped, b4.prm, trj)) { return Err(cg_fail("prm proof failed", [j])); }
+    if (!pa_ct_ok(s1.ppub, m4.share)) { return Err(cg_fail("invalid share ciphertext", [j])); }
+    if (!fac_verify(pj.pail.n, s1.ped, m4.fac, trj)) { return Err(cg_fail("fac proof failed", [j])); }
+    return match cg_dec(s1.psec, s1.ppub, m4.share) {
+        None => Err(cg_fail("failed to decrypt the share", [j])),
+        Some(d) => kg4_share(c, j, pj, d)
+    };
+}
+
+Result(List(UInt(64)), CgFail) kg4_share(KgCtx c, Int j, Kg3Peer pj, BnInt d) {
+    // The decrypted value must be a scalar in [0, n), and must match the
+    // polynomial j committed to.
+    if (d.neg || bn_cmp(d.mag, cv_n()) >= 0) { return Err(cg_fail("decrypted share is not in range", [j])); }
+    List(UInt(64)) share = d.mag;
+    if (!cv_eq(cv_mul_base(share), kg_eval_exp(pj.b.vss, c.self))) { return Err(cg_fail("failed to validate the VSS share", [j])); }
+    return Ok(share);
+}
+
+Result(List(UInt(64)), CgFail) kg4_shares(Kg3 s, List(CgMsg) in, List(Int) others, Int i, List(UInt(64)) acc) {
+    if (i >= others.len()) { return Ok(acc); }
+    List(UInt(64)) sh = kg4_peer(s, in, others[i])?;
+    return kg4_shares(s, in, others, i + 1, sc_nat_add(acc, sh));
+}
+
+// The public polynomial: the pointwise sum of everyone's commitments.
+List(CvPt) kg_sum_polys(List(Int) ids, Map(Int, Kg3Peer) peers, Int k, Int len, ListBuf(CvPt) acc) {
+    if (k >= len) { return acc.finish(); }
+    return kg_sum_polys(ids, peers, k + 1, len, acc.push(kg_sum_coeff(ids, peers, k, 0, cv_inf())));
+}
+
+CvPt kg_sum_coeff(List(Int) ids, Map(Int, Kg3Peer) peers, Int k, Int i, CvPt acc) {
+    if (i >= ids.len()) { return acc; }
+    Option(Kg3Peer) op = peers.get(ids[i]);
+    CvPt v = match op { Some(p) => p.b.vss[k], None => cv_inf() };
+    return kg_sum_coeff(ids, peers, k, i + 1, cv_add(acc, v));
+}
+
+List(CgPublicCfg) kg_public(KgCtx c, Map(Int, Kg3Peer) peers, List(CvPt) poly, Int i, ListBuf(CgPublicCfg) acc) {
+    if (i >= c.ids.len()) { return acc.finish(); }
+    Int j = c.ids[i];
+    Kg3Peer pj = peers[j] else { peers[c.self] else { Kg3Peer {.b = KgB3R {.rid = [], .chain_key = [], .vss = [], .sch_commit = cv_inf(), .elgamal = cv_inf(), .n = [], .s = [], .t = [], .decommit = []}, .pail = paillier_pub([3]), .ped = Pedersen {.n = [], .s = [], .t = []}} } };
+    CvPt share_pt = kg_eval_exp(poly, j);
+    CvPt prev_pt = if (c.prev.len() > 0) { cg_cfg_pub(c.prev[0].public, j, 0).ecdsa } else { cv_inf() };
+    return kg_public(c, peers, poly, i + 1, acc.push(CgPublicCfg {
+        .id = j, .ecdsa = cv_add(share_pt, prev_pt), .elgamal = pj.b.elgamal, .n = pj.pail.n, .ped = pj.ped }));
+}
+
+
+// A party's configuration written to a transcript (what Taurus's Config.WriteTo
+// covers: threshold, party ids, rid, and every party's public data).
+Transcript kg_config_tr(Transcript tr, CgConfig cfg, List(Int) ids) {
+    Transcript t0 = tr_item(tr_item(tr_item(tr, "Threshold", bytes_of(f"{cfg.threshold}")), "Party IDs", ids), "RID", cfg.rid);
+    return tr_item(t0, "CMP Config", kg_config_bytes(cfg.public, 0, []));
+}
+
+List(Int) kg_config_bytes(List(CgPublicCfg) ps, Int i, List(Int) acc) {
+    if (i >= ps.len()) { return acc; }
+    CgPublicCfg p = ps[i];
+    List(Int) one = cv_enc(p.ecdsa).concat(cv_enc(p.elgamal)).concat(bn_to_be(p.n, 0)).concat(bn_to_be(p.ped.n, 256)).concat(bn_to_be(p.ped.s, 256)).concat(bn_to_be(p.ped.t, 256));
+    return kg_config_bytes(ps, i + 1, acc.concat(one));
+}
+
+pub Result(Kg4, CgFail) kg_r4(Kg3 s, List(CgMsg) in) {
+    Kg1 s1 = s.prev.prev;
+    KgCtx c = s1.ctx;
+    ListBuf(Int) ob = ListBuf();
+    List(Int) others = cg_others(c.ids, c.self, 0, ob);
+    // Our own share of our own polynomial, then everyone else's.
+    List(UInt(64)) own = kg_eval(s1.coeffs, c.self);
+    List(UInt(64)) sum = kg4_shares(s, in, others, 0, own)?;
+    List(UInt(64)) prev_x = if (c.prev.len() > 0) { c.prev[0].ecdsa } else { [] };
+    List(UInt(64)) secret = sc_nat_add(prev_x, sum);
+    List(CvPt) poly = kg_sum_polys(c.ids, s.peers, 0, c.threshold + 1, ListBuf());
+    List(CgPublicCfg) pubs = kg_public(c, s.peers, poly, 0, ListBuf());
+    CgConfig cfg = CgConfig {
+        .id = c.self, .threshold = c.threshold, .ecdsa = secret, .elgamal = s1.elg, .p = s1.p, .q = s1.q,
+        .rid = s.rid, .chain_key = s.chain, .public = pubs };
+    Transcript base4 = kg_config_tr(s.base3, cfg, c.ids);
+    CgPublicCfg me = cg_cfg_pub(pubs, c.self, 0);
+    List(UInt(64)) z = sch_respond(me.ecdsa, cv_g(), s1.sch_c, s1.sch_a, secret, kg_tr(base4, c.self));
+    return Ok(Kg4 {.prev = s, .cfg = cfg, .base4 = base4, .out = [cg_bc(c.self, KgB5(z))]});
+}
+
+// ─── Round 5: verify the Schnorr proofs; the new configuration ──
+
+pub Result(CgConfig, CgFail) kg_r5(Kg4 s, List(CgMsg) in) {
+    Kg3 s3 = s.prev;
+    KgCtx c = s3.prev.prev.ctx;
+    ListBuf(Int) ob = ListBuf();
+    List(Int) others = cg_others(c.ids, c.self, 0, ob);
+    return match kg5_check(s, s3, c, in, others, 0) {
+        Some(f) => Err(f),
+        None => Ok(s.cfg)
+    };
+}
+
+Option(CgFail) kg5_check(Kg4 s, Kg3 s3, KgCtx c, List(CgMsg) in, List(Int) others, Int i) {
+    if (i >= others.len()) { return None; }
+    Int j = others[i];
+    Option(List(UInt(64))) oz = ex_kb5(in, j, c.self, true, 0);
+    return match oz {
+        None => Some(cg_fail("missing Schnorr response", [j])),
+        Some(z) => kg5_verify(s, s3, c, in, others, i, j, z)
+    };
+}
+
+Option(CgFail) kg5_verify(Kg4 s, Kg3 s3, KgCtx c, List(CgMsg) in, List(Int) others, Int i, Int j, List(UInt(64)) z) {
+    Kg3Peer pj = s3.peers[j] else { s3.peers[c.self] else { Kg3Peer {.b = KgB3R {.rid = [], .chain_key = [], .vss = [], .sch_commit = cv_inf(), .elgamal = cv_inf(), .n = [], .s = [], .t = [], .decommit = []}, .pail = paillier_pub([3]), .ped = Pedersen {.n = [], .s = [], .t = []}} } };
+    CgPublicCfg pub = cg_cfg_pub(s.cfg.public, j, 0);
+    SchProof pf = SchProof {.c = pj.b.sch_commit, .z = z};
+    if (!sch_verify(pub.ecdsa, cv_g(), pf, kg_tr(s.base4, j))) { return Some(cg_fail("Schnorr proof for the new share failed", [j])); }
+    return kg5_check(s, s3, c, in, others, i + 1);
+}

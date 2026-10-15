@@ -1,0 +1,53 @@
+// paillier.resid — the Paillier cryptosystem (public values; variable time).
+//
+// N = p q, encryption C = (1 + N)^m * rho^N mod N^2, decryption
+// m = L(C^phi mod N^2) * phi^-1 mod N with L(x) = (x - 1) / N and
+// phi = (p - 1)(q - 1). Homomorphic: C1 * C2 encrypts m1 + m2, C^k encrypts
+// k m (all mod N). This is the arithmetic CGGMP21 uses; its security needs
+// N to be a product of two safe primes, which key generation (not here) and
+// the zero-knowledge proofs of the protocol establish.
+
+import "bignum.resid";
+
+pub type PaillierPub = { List(UInt(64)) n; List(UInt(64)) n2; BnMont mont2; };
+
+pub type PaillierSec = { List(UInt(64)) p; List(UInt(64)) q; List(UInt(64)) phi; List(UInt(64)) phi_inv; };
+
+/// The public key for the modulus `n`.
+pub PaillierPub paillier_pub(List(UInt(64)) n) {
+    List(UInt(64)) n2 = bn_mul(n, n);
+    return PaillierPub {.n = n, .n2 = n2, .mont2 = bn_mont_new(n2)};
+}
+
+/// The secret key for the primes `p` and `q` (distinct, odd, gcd(pq, phi) = 1).
+pub Option(PaillierSec) paillier_sec(List(UInt(64)) p, List(UInt(64)) q) {
+    List(UInt(64)) phi = bn_mul(bn_sub(p, [1]), bn_sub(q, [1]));
+    return match bn_modinv(phi, bn_mul(p, q)) {
+        Some(inv) => Some(PaillierSec {.p = p, .q = q, .phi = phi, .phi_inv = inv}),
+        None => None
+    };
+}
+
+/// Encrypts m (< N) with randomness rho (a unit mod N).
+pub List(UInt(64)) paillier_enc(PaillierPub k, List(UInt(64)) m, List(UInt(64)) rho) {
+    List(UInt(64)) gm = bn_mod(bn_add([1], bn_mul(m, k.n)), k.n2);
+    List(UInt(64)) rn = bn_modexp_mont(k.mont2, bn_mod(rho, k.n2), k.n);
+    return bn_mod(bn_mul(gm, rn), k.n2);
+}
+
+/// Decrypts c.
+pub List(UInt(64)) paillier_dec(PaillierSec s, PaillierPub k, List(UInt(64)) c) {
+    List(UInt(64)) u = bn_modexp_mont(k.mont2, bn_mod(c, k.n2), s.phi);
+    List(UInt(64)) l = bn_divmod(bn_sub(u, [1]), k.n).q;
+    return bn_modmul(l, s.phi_inv, k.n);
+}
+
+/// The encryption of m1 + m2 from the encryptions of m1 and m2.
+pub List(UInt(64)) paillier_add(PaillierPub k, List(UInt(64)) c1, List(UInt(64)) c2) {
+    return bn_mod(bn_mul(c1, c2), k.n2);
+}
+
+/// The encryption of k m from the encryption of m.
+pub List(UInt(64)) paillier_mul(PaillierPub k, List(UInt(64)) c, List(UInt(64)) scalar) {
+    return bn_modexp_mont(k.mont2, bn_mod(c, k.n2), scalar);
+}

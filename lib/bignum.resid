@@ -1,0 +1,760 @@
+// bignum.resid — arbitrary-precision unsigned integers (public values).
+//
+// A natural number is a List(UInt(64)) of limbs, least significant first,
+// with no zero limb at the top: zero is the empty list. Every function takes
+// and returns that normalized form. These are variable-time operations on
+// public data (moduli, public keys, proof values). Secret-dependent work
+// needs a constant-time design of its own and is not done here.
+//
+// Written for Paillier and the zero-knowledge proofs of threshold ECDSA
+// (2048- to 4096-bit moduli), and checked against Python's int.
+
+pub UInt(64) bn_mask() { return 18446744073709551615; }
+
+UInt(128) bn_base() { return 18446744073709551616; }
+
+// ─── Normal form, comparison, bytes ─────────────────────────────
+
+Int bn_top(List(UInt(64)) x, Int n) {
+    if (n <= 0) { return 0; }
+    if (x[n - 1] != 0) { return n; }
+    return bn_top(x, n - 1);
+}
+
+/// `x` without leading (most significant) zero limbs.
+pub List(UInt(64)) bn_trim(List(UInt(64)) x) {
+    Int n = bn_top(x, x.len());
+    if (n == x.len()) { return x; }
+    return bn_take(x, n, 0, ListBuf());
+}
+
+List(UInt(64)) bn_take(List(UInt(64)) x, Int n, Int i, ListBuf(UInt(64)) acc) {
+    if (i >= n) { return acc.finish(); }
+    return bn_take(x, n, i + 1, acc.push(x[i]));
+}
+
+pub List(UInt(64)) bn_zero() { return []; }
+pub List(UInt(64)) bn_one() { return [1]; }
+
+/// The natural number `v`.
+pub List(UInt(64)) bn_from_u64(UInt(64) v) { if (v == 0) { return []; } return [v]; }
+
+pub Bool bn_is_zero(List(UInt(64)) x) { return x.len() == 0; }
+
+pub Bool bn_is_odd(List(UInt(64)) x) { return x.len() > 0 && (x[0] & 1) == 1; }
+
+/// -1, 0 or 1 as `a` is below, equal to or above `b`.
+pub Int bn_cmp(List(UInt(64)) a, List(UInt(64)) b) {
+    if (a.len() != b.len()) { return if (a.len() < b.len()) { -1 } else { 1 }; }
+    return bn_cmp_at(a, b, a.len() - 1);
+}
+
+Int bn_cmp_at(List(UInt(64)) a, List(UInt(64)) b, Int i) {
+    if (i < 0) { return 0; }
+    if (a[i] != b[i]) { return if (a[i] < b[i]) { -1 } else { 1 }; }
+    return bn_cmp_at(a, b, i - 1);
+}
+
+/// The big-endian bytes of a natural number written in `bytes` bytes or more:
+/// minimal when `bytes` is 0, zero-padded on the left otherwise.
+pub List(Int) bn_to_be(List(UInt(64)) x, Int bytes) {
+    Int need = (bn_bit_len(x) + 7) / 8;
+    Int n = if (bytes > need) { bytes } else { need };
+    return bn_be_at(x, n, 0, ListBuf());
+}
+
+List(Int) bn_be_at(List(UInt(64)) x, Int n, Int i, ListBuf(Int) acc) {
+    if (i >= n) { return acc.finish(); }
+    Int k = n - 1 - i;
+    Int limb = k / 8;
+    Int b = if (limb >= x.len()) { 0 } else { (Int)((x[limb] >> u64((k % 8) * 8)) & 255) };
+    return bn_be_at(x, n, i + 1, acc.push(b));
+}
+
+/// The natural number whose big-endian bytes are `b`.
+pub List(UInt(64)) bn_from_be(List(Int) b) {
+    Int limbs = (b.len() + 7) / 8;
+    return bn_trim(bn_from_be_at(b, limbs, 0, ListBuf()));
+}
+
+List(UInt(64)) bn_from_be_at(List(Int) b, Int limbs, Int i, ListBuf(UInt(64)) acc) {
+    if (i >= limbs) { return acc.finish(); }
+    return bn_from_be_at(b, limbs, i + 1, acc.push(bn_limb_be(b, i, 0, 0)));
+}
+
+// Limb i counted from the least significant end of the byte string.
+UInt(64) bn_limb_be(List(Int) b, Int i, Int j, UInt(64) acc) {
+    if (j >= 8) { return acc; }
+    Int k = b.len() - 1 - (i * 8 + j);
+    UInt(64) byte = if (k < 0) { 0 } else { u64(b[k] & 255) };
+    return bn_limb_be(b, i, j + 1, acc | (byte << u64(j * 8)));
+}
+
+// ─── Bits and shifts ────────────────────────────────────────────
+
+Int bn_limb_bits(UInt(64) v, Int n) {
+    if (v == 0) { return n; }
+    return bn_limb_bits(v >> 1, n + 1);
+}
+
+/// The number of bits of `x` (0 for zero).
+pub Int bn_bit_len(List(UInt(64)) x) {
+    if (x.len() == 0) { return 0; }
+    return (x.len() - 1) * 64 + bn_limb_bits(x[x.len() - 1], 0);
+}
+
+/// Bit `i` of `x`, 0 or 1.
+pub Int bn_bit(List(UInt(64)) x, Int i) {
+    Int limb = i / 64;
+    if (i < 0 || limb >= x.len()) { return 0; }
+    return (Int)((x[limb] >> u64(i % 64)) & 1);
+}
+
+/// `x` shifted left by `n` bits.
+pub List(UInt(64)) bn_shl(List(UInt(64)) x, Int n) {
+    if (x.len() == 0) { return []; }
+    Int limbs = n / 64;
+    Int bits = n % 64;
+    return bn_trim(bn_shl_at(x, limbs, bits, 0, x.len() + limbs + 1, ListBuf()));
+}
+
+List(UInt(64)) bn_shl_at(List(UInt(64)) x, Int limbs, Int bits, Int i, Int total, ListBuf(UInt(64)) acc) {
+    if (i >= total) { return acc.finish(); }
+    UInt(64) cur = bn_get(x, i - limbs);
+    UInt(64) lower = bn_get(x, i - limbs - 1);
+    UInt(64) v = if (bits == 0) { cur } else { (cur << u64(bits)) | (lower >> u64(64 - bits)) };
+    return bn_shl_at(x, limbs, bits, i + 1, total, acc.push(v));
+}
+
+UInt(64) bn_get(List(UInt(64)) x, Int i) {
+    if (i < 0 || i >= x.len()) { return 0; }
+    return x[i];
+}
+
+/// `x` shifted right by `n` bits.
+pub List(UInt(64)) bn_shr(List(UInt(64)) x, Int n) {
+    Int limbs = n / 64;
+    Int bits = n % 64;
+    if (limbs >= x.len()) { return []; }
+    return bn_trim(bn_shr_at(x, limbs, bits, 0, x.len() - limbs, ListBuf()));
+}
+
+List(UInt(64)) bn_shr_at(List(UInt(64)) x, Int limbs, Int bits, Int i, Int total, ListBuf(UInt(64)) acc) {
+    if (i >= total) { return acc.finish(); }
+    UInt(64) cur = bn_get(x, i + limbs);
+    UInt(64) upper = bn_get(x, i + limbs + 1);
+    UInt(64) v = if (bits == 0) { cur } else { (cur >> u64(bits)) | (upper << u64(64 - bits)) };
+    return bn_shr_at(x, limbs, bits, i + 1, total, acc.push(v));
+}
+
+// ─── Addition and subtraction ───────────────────────────────────
+
+/// a + b
+pub List(UInt(64)) bn_add(List(UInt(64)) a, List(UInt(64)) b) {
+    Int n = if (a.len() > b.len()) { a.len() } else { b.len() };
+    return bn_add_at(a, b, 0, n, 0, ListBuf());
+}
+
+List(UInt(64)) bn_add_at(List(UInt(64)) a, List(UInt(64)) b, Int i, Int n, UInt(64) carry, ListBuf(UInt(64)) acc) {
+    if (i >= n) { return if (carry == 0) { acc.finish() } else { acc.push(carry).finish() }; }
+    UInt(128) s = (UInt(128)) bn_get(a, i) + (UInt(128)) bn_get(b, i) + (UInt(128)) carry;
+    return bn_add_at(a, b, i + 1, n, (UInt(64)) (s >> 64), acc.push(wrapping_u64(s)));
+}
+
+/// a - b, for a >= b (aborts otherwise).
+pub List(UInt(64)) bn_sub(List(UInt(64)) a, List(UInt(64)) b) {
+    assert(bn_cmp(a, b) >= 0, "bn_sub: a < b");
+    return bn_trim(bn_sub_at(a, b, 0, a.len(), 0, ListBuf()));
+}
+
+List(UInt(64)) bn_sub_at(List(UInt(64)) a, List(UInt(64)) b, Int i, Int n, UInt(64) borrow, ListBuf(UInt(64)) acc) {
+    if (i >= n) { return acc.finish(); }
+    UInt(128) d = bn_base() + (UInt(128)) bn_get(a, i) - (UInt(128)) bn_get(b, i) - (UInt(128)) borrow;
+    UInt(64) nb = if ((d >> 64) == 0) { 1 } else { 0 };
+    return bn_sub_at(a, b, i + 1, n, nb, acc.push(wrapping_u64(d)));
+}
+
+// ─── Multiplication (column by column) ──────────────────────────
+
+/// a * b
+pub List(UInt(64)) bn_mul(List(UInt(64)) a, List(UInt(64)) b) {
+    if (a.len() == 0 || b.len() == 0) { return []; }
+    return bn_trim(bn_mul_cols(a, b, 0, a.len() + b.len(), 0, ListBuf()));
+}
+
+// Column k holds the sum of a[i] * b[k - i]; `carry` is what the lower
+// columns left above 64 bits.
+List(UInt(64)) bn_mul_cols(List(UInt(64)) a, List(UInt(64)) b, Int k, Int total, UInt(256) carry, ListBuf(UInt(64)) acc) {
+    if (k >= total) { return acc.finish(); }
+    Int lo = if (k - b.len() + 1 > 0) { k - b.len() + 1 } else { 0 };
+    Int hi = if (k < a.len() - 1) { k } else { a.len() - 1 };
+    UInt(256) s = bn_col(a, b, k, lo, hi, carry);
+    return bn_mul_cols(a, b, k + 1, total, s >> 64, acc.push(wrapping_u64(s)));
+}
+
+UInt(256) bn_col(List(UInt(64)) a, List(UInt(64)) b, Int k, Int i, Int hi, UInt(256) acc) {
+    if (i > hi) { return acc; }
+    UInt(128) p = (UInt(128)) a[i] * (UInt(128)) b[k - i];
+    return bn_col(a, b, k, i + 1, hi, acc + (UInt(256)) p);
+}
+
+// ─── Division (Knuth, Algorithm D) ──────────────────────────────
+
+pub type BnDiv = { List(UInt(64)) q; List(UInt(64)) r; };
+
+/// Quotient and remainder of a by b (b nonzero).
+pub BnDiv bn_divmod(List(UInt(64)) a, List(UInt(64)) b) {
+    assert(b.len() > 0, "bn_divmod: division by zero");
+    if (bn_cmp(a, b) < 0) { return BnDiv {.q = [], .r = a}; }
+    if (b.len() == 1) { return bn_divmod_short(a, b[0]); }
+    Int s = 64 - bn_limb_bits(b[b.len() - 1], 0);
+    List(UInt(64)) v = bn_shl(b, s);
+    List(UInt(64)) u0 = bn_shl(a, s);
+    // u gets one extra top limb (zero when the shift did not make one).
+    List(UInt(64)) u = if (u0.len() == a.len()) { u0.concat([0]) } else { u0 };
+    Int n = v.len();
+    Int m = u.len() - n - 1;
+    BnDivState st = bn_div_loop(u, v, n, m, ListBuf());
+    return BnDiv {.q = bn_trim(st.q), .r = bn_shr(bn_trim(bn_take(st.u, n, 0, ListBuf())), s)};
+}
+
+type BnDivState = { List(UInt(64)) u; List(UInt(64)) q; };
+
+// Quotient limbs are produced from the top, so they are collected in reverse.
+BnDivState bn_div_loop(List(UInt(64)) u, List(UInt(64)) v, Int n, Int m, ListBuf(UInt(64)) qrev) {
+    BnDivState fin = bn_div_step(u, v, n, m, m, qrev);
+    return fin;
+}
+
+BnDivState bn_div_step(List(UInt(64)) u, List(UInt(64)) v, Int n, Int m, Int j, ListBuf(UInt(64)) qrev) {
+    if (j < 0) { return BnDivState {.u = u, .q = bn_reverse(qrev.finish())}; }
+    UInt(128) top = ((UInt(128)) u[j + n] << 64) | (UInt(128)) u[j + n - 1];
+    UInt(128) vt = (UInt(128)) v[n - 1];
+    UInt(128) qhat0 = top / vt;
+    UInt(128) rhat0 = top - qhat0 * vt;
+    UInt(128) qhat = bn_qfix(qhat0, rhat0, vt, (UInt(128)) v[n - 2], (UInt(128)) u[j + n - 2]);
+    BnMulSub ms = bn_mulsub(u, v, qhat, j, 0, 0, 0, n);
+    List(UInt(64)) u1 = ms.u;
+    // Subtracting qhat * v went negative: qhat was one too big; add v back.
+    List(UInt(64)) u2 = if (ms.borrow == 0) { u1 } else { bn_addback(u1, v, j, 0, 0, n) };
+    UInt(64) qd = if (ms.borrow == 0) { (UInt(64)) qhat } else { (UInt(64)) (qhat - 1) };
+    return bn_div_step(u2, v, n, m, j - 1, qrev.push(qd));
+}
+
+List(UInt(64)) bn_reverse(List(UInt(64)) x) { return bn_rev_at(x, x.len() - 1, ListBuf()); }
+
+List(UInt(64)) bn_rev_at(List(UInt(64)) x, Int i, ListBuf(UInt(64)) acc) {
+    if (i < 0) { return acc.finish(); }
+    return bn_rev_at(x, i - 1, acc.push(x[i]));
+}
+
+// Reduces qhat while qhat >= 2^64 or qhat * v[n-2] > rhat * 2^64 + u[j+n-2].
+UInt(128) bn_qfix(UInt(128) qhat, UInt(128) rhat, UInt(128) vt, UInt(128) v2, UInt(128) u2) {
+    if (qhat >= bn_base() || (rhat < bn_base() && qhat * v2 > ((rhat << 64) | u2))) {
+        UInt(128) r2 = rhat + vt;
+        if (r2 >= bn_base()) { return qhat - 1; }
+        return bn_qfix(qhat - 1, r2, vt, v2, u2);
+    }
+    return qhat;
+}
+
+type BnMulSub = { List(UInt(64)) u; UInt(64) borrow; };
+
+// u[j..j+n] -= qhat * v, returning the borrow out of the top limb.
+BnMulSub bn_mulsub(List(UInt(64)) u, List(UInt(64)) v, UInt(128) qhat, Int j, Int i, UInt(128) carry, UInt(64) borrow, Int n) {
+    if (i >= n) {
+        UInt(128) tdiff = bn_base() + (UInt(128)) u[j + n] - carry - (UInt(128)) borrow;
+        UInt(64) fb = if ((tdiff >> 64) == 0) { 1 } else { 0 };
+        return BnMulSub {.u = u.with(j + n, wrapping_u64(tdiff)), .borrow = fb};
+    }
+    UInt(128) p = qhat * (UInt(128)) v[i] + carry;
+    UInt(128) plo = p & (bn_base() - 1);
+    UInt(128) d = bn_base() + (UInt(128)) u[j + i] - plo - (UInt(128)) borrow;
+    UInt(64) nb = if ((d >> 64) == 0) { 1 } else { 0 };
+    return bn_mulsub(u.with(j + i, wrapping_u64(d)), v, qhat, j, i + 1, p >> 64, nb, n);
+}
+
+List(UInt(64)) bn_addback(List(UInt(64)) u, List(UInt(64)) v, Int j, Int i, UInt(64) carry, Int n) {
+    if (i >= n) { return u.with(j + n, wrapping_u64((UInt(128)) u[j + n] + (UInt(128)) carry)); }
+    UInt(128) s = (UInt(128)) u[j + i] + (UInt(128)) v[i] + (UInt(128)) carry;
+    return bn_addback(u.with(j + i, wrapping_u64(s)), v, j, i + 1, (UInt(64)) (s >> 64), n);
+}
+
+BnDiv bn_divmod_short(List(UInt(64)) a, UInt(64) d) {
+    return bn_short_at(a, d, a.len() - 1, 0, ListBuf());
+}
+
+BnDiv bn_short_at(List(UInt(64)) a, UInt(64) d, Int i, UInt(128) rem, ListBuf(UInt(64)) qrev) {
+    if (i < 0) { return BnDiv {.q = bn_trim(bn_reverse(qrev.finish())), .r = bn_from_u64((UInt(64)) rem)}; }
+    UInt(128) cur = (rem << 64) | (UInt(128)) a[i];
+    UInt(128) dd = (UInt(128)) d;
+    return bn_short_at(a, d, i - 1, cur - (cur / dd) * dd, qrev.push((UInt(64)) (cur / dd)));
+}
+
+/// a mod m
+pub List(UInt(64)) bn_mod(List(UInt(64)) a, List(UInt(64)) m) { return bn_divmod(a, m).r; }
+
+/// (a + b) mod m, for a, b < m
+pub List(UInt(64)) bn_modadd(List(UInt(64)) a, List(UInt(64)) b, List(UInt(64)) m) {
+    List(UInt(64)) s = bn_add(a, b);
+    return if (bn_cmp(s, m) >= 0) { bn_sub(s, m) } else { s };
+}
+
+/// (a - b) mod m, for a, b < m
+pub List(UInt(64)) bn_modsub(List(UInt(64)) a, List(UInt(64)) b, List(UInt(64)) m) {
+    return if (bn_cmp(a, b) >= 0) { bn_sub(a, b) } else { bn_sub(bn_add(a, m), b) };
+}
+
+/// (a * b) mod m
+pub List(UInt(64)) bn_modmul(List(UInt(64)) a, List(UInt(64)) b, List(UInt(64)) m) {
+    return bn_mod(bn_mul(a, b), m);
+}
+
+// ─── GCD and inverse ────────────────────────────────────────────
+
+/// The greatest common divisor.
+pub List(UInt(64)) bn_gcd(List(UInt(64)) a, List(UInt(64)) b) {
+    if (b.len() == 0) { return a; }
+    return bn_gcd(b, bn_mod(a, b));
+}
+
+/// The inverse of a modulo m (m > 1), or None when gcd(a, m) != 1.
+pub Option(List(UInt(64))) bn_modinv(List(UInt(64)) a, List(UInt(64)) m) {
+    List(UInt(64)) a0 = bn_mod(a, m);
+    if (a0.len() == 0) { return None; }
+    // Odd moduli up to 4096 bits: binary extended GCD on wide integers, which
+    // allocates nothing (the Euclid below leaves ~20 MB of garbage per call).
+    if (bn_is_odd(m) && m.len() <= 64 && bn_cmp(m, [1]) > 0) {
+        UInt(4224) mw = bw_of(m, m.len() - 1, 0);
+        UInt(4224) r = bw_inv(bw_of(a0, a0.len() - 1, 0), mw, 1, 0, mw);
+        if (r == 0) { return None; }
+        return Some(bw_to(r, m.len(), 0, ListBuf()));
+    }
+    return bn_inv_loop(m, a0, [], [1], m);
+}
+
+// Extended Euclid on (r0, r1) tracking t0, t1 modulo m, all kept in [0, m).
+Option(List(UInt(64))) bn_inv_loop(List(UInt(64)) r0, List(UInt(64)) r1, List(UInt(64)) t0, List(UInt(64)) t1, List(UInt(64)) m) {
+    if (r1.len() == 0) {
+        if (bn_cmp(r0, [1]) != 0) { return None; }
+        return Some(t0);
+    }
+    BnDiv d = bn_divmod(r0, r1);
+    List(UInt(64)) qt = bn_modmul(d.q, t1, m);
+    return bn_inv_loop(r1, d.r, t1, bn_modsub(t0, qt, m), m);
+}
+
+// ─── Montgomery modular exponentiation (odd modulus) ────────────
+
+/// Precomputed values for arithmetic modulo an odd n of k limbs, R = 2^(64k).
+pub type BnMont = { List(UInt(64)) n; Int k; List(UInt(64)) np; List(UInt(64)) rr; };
+
+// n' = -n^-1 mod R, by Newton's iteration x <- x (2 - n x), which doubles
+// the number of correct bits each round.
+List(UInt(64)) bn_neg_inv(List(UInt(64)) n, Int k) {
+    List(UInt(64)) inv = bn_newton(n, k, [1], 1);
+    return bn_low(bn_sub(bn_shl([1], 64 * k), bn_low(inv, k)), k);
+}
+
+List(UInt(64)) bn_newton(List(UInt(64)) n, Int k, List(UInt(64)) x, Int bits) {
+    if (bits >= 64 * k) { return x; }
+    // x <- x * (2 - n * x) mod R
+    List(UInt(64)) nx = bn_low(bn_mul(n, x), k);
+    List(UInt(64)) two_minus = bn_low(bn_sub(bn_add(bn_shl([1], 64 * k), [2]), nx), k);
+    return bn_newton(n, k, bn_low(bn_mul(x, two_minus), k), bits * 2);
+}
+
+// x mod 2^(64 k)
+List(UInt(64)) bn_low(List(UInt(64)) x, Int k) {
+    if (x.len() <= k) { return x; }
+    return bn_trim(bn_take(x, k, 0, ListBuf()));
+}
+
+/// Montgomery context for the odd modulus `n` (n > 1).
+pub BnMont bn_mont_new(List(UInt(64)) n) {
+    assert(bn_is_odd(n) && bn_cmp(n, [1]) > 0, "bn_mont_new: modulus must be odd and above 1");
+    Int k = n.len();
+    List(UInt(64)) r2 = bn_mod(bn_shl([1], 128 * k), n);
+    return BnMont {.n = n, .k = k, .np = bn_neg_inv(n, k), .rr = r2};
+}
+
+// REDC: t R^-1 mod n for t < n R.
+List(UInt(64)) bn_redc(BnMont c, List(UInt(64)) t) {
+    List(UInt(64)) m = bn_low(bn_mul(bn_low(t, c.k), c.np), c.k);
+    List(UInt(64)) u = bn_shr(bn_add(t, bn_mul(m, c.n)), 64 * c.k);
+    return if (bn_cmp(u, c.n) >= 0) { bn_sub(u, c.n) } else { u };
+}
+
+List(UInt(64)) bn_mont_mul(BnMont c, List(UInt(64)) a, List(UInt(64)) b) { return bn_redc(c, bn_mul(a, b)); }
+
+/// base^exp mod n, for the odd modulus of `c`; base < n.
+///
+/// Moduli up to 4096 bits take the native path (bn_native_exp): the whole
+/// exponentiation runs on wide fixed-width integers held in scalars, so it
+/// allocates no lists. That matters: a list-based exponentiation leaves
+/// about 48 MB of garbage per 2048-bit exponent alive for as long as its
+/// result is, which made proofs and protocol states cost gigabytes.
+pub List(UInt(64)) bn_modexp_mont(BnMont c, List(UInt(64)) base, List(UInt(64)) exp) {
+    if (exp.len() == 0) { return bn_mod([1], c.n); }
+    if (c.k <= 32) { return bn_native_exp(base, exp, c.n, c.k * 64); }
+    if (c.k <= 64) { return bn_native_exp(base, exp, c.n, c.k * 64); }
+    return bn_modexp_lists(c, base, exp);
+}
+
+List(UInt(64)) bn_modexp_lists(BnMont c, List(UInt(64)) base, List(UInt(64)) exp) {
+    List(UInt(64)) bm = bn_mont_mul(c, base, c.rr);
+    List(UInt(64)) one = bn_mont_mul(c, [1], c.rr);
+    List(UInt(64)) acc = bn_exp_bits(c, bm, exp, bn_bit_len(exp) - 1, one);
+    return bn_redc(c, acc);
+}
+
+// Left-to-right square-and-multiply from bit i down to 0.
+List(UInt(64)) bn_exp_bits(BnMont c, List(UInt(64)) bm, List(UInt(64)) exp, Int i, List(UInt(64)) acc) {
+    if (i < 0) { return acc; }
+    List(UInt(64)) sq = bn_mont_mul(c, acc, acc);
+    List(UInt(64)) nx = if (bn_bit(exp, i) == 1) { bn_mont_mul(c, sq, bm) } else { sq };
+    return bn_exp_bits(c, bm, exp, i - 1, nx);
+}
+
+/// base^exp mod m for any modulus m > 1.
+pub List(UInt(64)) bn_modexp(List(UInt(64)) base, List(UInt(64)) exp, List(UInt(64)) m) {
+    // Up to 4096 bits no context is built: the native path needs none.
+    if (bn_is_odd(m) && m.len() <= 64 && bn_cmp(m, [1]) > 0) {
+        if (exp.len() == 0) { return bn_mod([1], m); }
+        return bn_native_exp(bn_mod(base, m), exp, m, m.len() * 64);
+    }
+    if (bn_is_odd(m)) { return bn_modexp_mont(bn_mont_new(m), bn_mod(base, m), exp); }
+    return bn_modexp_plain(bn_mod(base, m), exp, m, bn_bit_len(exp) - 1, bn_mod([1], m));
+}
+
+List(UInt(64)) bn_modexp_plain(List(UInt(64)) base, List(UInt(64)) exp, List(UInt(64)) m, Int i, List(UInt(64)) acc) {
+    if (i < 0) { return acc; }
+    List(UInt(64)) sq = bn_modmul(acc, acc, m);
+    return bn_modexp_plain(base, exp, m, i - 1, if (bn_bit(exp, i) == 1) { bn_modmul(sq, base, m) } else { sq });
+}
+
+// ─── Primality (Miller-Rabin) ───────────────────────────────────
+
+/// Whether n passes Miller-Rabin for every witness in `witnesses` (each in
+/// [2, n-2]). Composite n passes one random witness with probability at most
+/// 1/4, so 40 random witnesses give 2^-80. n must be odd and above 3.
+pub Bool bn_miller_rabin(List(UInt(64)) n, List(List(UInt(64))) witnesses) {
+    BnMont c = bn_mont_new(n);
+    List(UInt(64)) nm1 = bn_sub(n, [1]);
+    Int s = bn_trailing_zeros(nm1, 0);
+    List(UInt(64)) d = bn_shr(nm1, s);
+    return bn_mr_each(c, nm1, d, s, witnesses, 0);
+}
+
+Int bn_trailing_zeros(List(UInt(64)) x, Int i) {
+    if (bn_bit(x, i) == 1 || i > bn_bit_len(x)) { return i; }
+    return bn_trailing_zeros(x, i + 1);
+}
+
+Bool bn_mr_each(BnMont c, List(UInt(64)) nm1, List(UInt(64)) d, Int s, List(List(UInt(64))) ws, Int i) {
+    if (i >= ws.len()) { return true; }
+    if (!bn_mr_witness(c, nm1, d, s, ws[i])) { return false; }
+    return bn_mr_each(c, nm1, d, s, ws, i + 1);
+}
+
+Bool bn_mr_witness(BnMont c, List(UInt(64)) nm1, List(UInt(64)) d, Int s, List(UInt(64)) a) {
+    List(UInt(64)) x = bn_modexp_mont(c, bn_mod(a, c.n), d);
+    if (bn_cmp(x, [1]) == 0 || bn_cmp(x, nm1) == 0) { return true; }
+    return bn_mr_square(c, nm1, x, s - 1);
+}
+
+Bool bn_mr_square(BnMont c, List(UInt(64)) nm1, List(UInt(64)) x, Int left) {
+    if (left <= 0) { return false; }
+    List(UInt(64)) y = bn_modmul(x, x, c.n);
+    if (bn_cmp(y, nm1) == 0) { return true; }
+    if (bn_cmp(y, [1]) == 0) { return false; }
+    return bn_mr_square(c, nm1, y, left - 1);
+}
+
+// ─── Safe primes ────────────────────────────────────────────────
+
+/// The odd primes from 3 up to `limit`.
+pub List(Int) bn_small_primes(Int limit) { return bn_sp_from(limit, 3, ListBuf()); }
+
+List(Int) bn_sp_from(Int limit, Int n, ListBuf(Int) acc) {
+    if (n > limit) { return acc.finish(); }
+    ListBuf(Int) next = if (bn_sp_is_prime(n, 3)) { acc.push(n) } else { acc };
+    return bn_sp_from(limit, n + 2, next);
+}
+
+Bool bn_sp_is_prime(Int n, Int d) {
+    if (d * d > n) { return true; }
+    if (n % d == 0) { return false; }
+    return bn_sp_is_prime(n, d + 2);
+}
+
+Int bn_safe_window() { return 2048; }
+
+/// A safe prime p = 2q + 1 of exactly `bits` bits (q prime), searched from a
+/// starting point read from `rnd`, which must hold at least (bits + 6) / 8
+/// bytes (the bytes are consumed from the front). Returns None when the
+/// window of 2048 candidates holds none; the caller then draws fresh bytes.
+///
+/// q starts at a random odd number whose top two bits are set, so p has
+/// `bits` bits. Candidates q0 + 2i are screened by the odd primes below 2000
+/// (for q and for p), then must pass Miller-Rabin to base 2 and finally to
+/// the first twelve primes as bases. p is 3 mod 4, as a Blum prime needs.
+/// `bits` is at least 16.
+pub Option(List(UInt(64))) bn_safe_prime(List(Int) rnd, Int bits) {
+    Int nb = (bits - 1 + 7) / 8;
+    List(UInt(64)) x = bn_from_be(bn_take_int(rnd, nb, 0, ListBuf()));
+    // q has bits - 1 bits: keep the low bits - 1, set the top two and bit 0.
+    List(UInt(64)) low = bn_sub(bn_shl([1], bits - 1), [1]);
+    List(UInt(64)) masked = bn_and(x, low);
+    List(UInt(64)) q0 = bn_or(bn_or(masked, bn_shl([3], bits - 3)), [1]);
+    List(Int) primes = bn_small_primes(2000);
+    List(Int) res = bn_residues(q0, primes, 0, ListBuf());
+    return bn_safe_search(q0, primes, res, 0);
+}
+
+List(Int) bn_take_int(List(Int) x, Int n, Int i, ListBuf(Int) acc) {
+    if (i >= n) { return acc.finish(); }
+    return bn_take_int(x, n, i + 1, acc.push(x[i]));
+}
+
+List(Int) bn_residues(List(UInt(64)) q0, List(Int) primes, Int i, ListBuf(Int) acc) {
+    if (i >= primes.len()) { return acc.finish(); }
+    List(UInt(64)) r = bn_mod(q0, [u64(primes[i])]);
+    return bn_residues(q0, primes, i + 1, acc.push(if (r.len() == 0) { 0 } else { (Int) r[0] }));
+}
+
+// Whether q0 + 2 i and 2 (q0 + 2 i) + 1 are both free of the small primes.
+Bool bn_sieve_ok(List(Int) primes, List(Int) res, Int i, Int k) {
+    if (k >= primes.len()) { return true; }
+    Int s = primes[k];
+    Int rq = (res[k] + 2 * i) % s;
+    Int rp = (2 * rq + 1) % s;
+    if (rq == 0 || rp == 0) { return false; }
+    return bn_sieve_ok(primes, res, i, k + 1);
+}
+
+pub List(List(UInt(64))) bn_mr_bases() {
+    return [[2], [3], [5], [7], [11], [13], [17], [19], [23], [29], [31], [37]];
+}
+
+Option(List(UInt(64))) bn_safe_search(List(UInt(64)) q0, List(Int) primes, List(Int) res, Int i) {
+    if (i >= bn_safe_window()) { return None; }
+    if (bn_sieve_ok(primes, res, i, 0)) {
+        List(UInt(64)) q = bn_add(q0, [u64(2 * i)]);
+        List(UInt(64)) p = bn_add(bn_shl(q, 1), [1]);
+        if (bn_miller_rabin(q, [[2]]) && bn_miller_rabin(p, [[2]])
+            && bn_miller_rabin(q, bn_mr_bases()) && bn_miller_rabin(p, bn_mr_bases())) {
+            return Some(p);
+        }
+    }
+    return bn_safe_search(q0, primes, res, i + 1);
+}
+
+/// a AND b
+pub List(UInt(64)) bn_and(List(UInt(64)) a, List(UInt(64)) b) {
+    Int n = if (a.len() < b.len()) { a.len() } else { b.len() };
+    return bn_trim(bn_and_at(a, b, 0, n, ListBuf()));
+}
+
+List(UInt(64)) bn_and_at(List(UInt(64)) a, List(UInt(64)) b, Int i, Int n, ListBuf(UInt(64)) acc) {
+    if (i >= n) { return acc.finish(); }
+    return bn_and_at(a, b, i + 1, n, acc.push(a[i] & b[i]));
+}
+
+/// a OR b
+pub List(UInt(64)) bn_or(List(UInt(64)) a, List(UInt(64)) b) {
+    Int n = if (a.len() > b.len()) { a.len() } else { b.len() };
+    return bn_or_at(a, b, 0, n, ListBuf());
+}
+
+List(UInt(64)) bn_or_at(List(UInt(64)) a, List(UInt(64)) b, Int i, Int n, ListBuf(UInt(64)) acc) {
+    if (i >= n) { return acc.finish(); }
+    return bn_or_at(a, b, i + 1, n, acc.push(bn_get(a, i) | bn_get(b, i)));
+}
+
+/// The first safe prime of `bits` bits found by `bn_safe_prime` over
+/// successive chunks of `rnd` (each (bits + 6) / 8 bytes), or None when the
+/// stream runs out. A stream of 100 chunks is ample for 1024 bits.
+pub Option(List(UInt(64))) bn_safe_prime_stream(List(Int) rnd, Int bits) {
+    Int nb = (bits - 1 + 7) / 8;
+    return bn_sps_from(rnd, bits, nb, 0);
+}
+
+Option(List(UInt(64))) bn_sps_from(List(Int) rnd, Int bits, Int nb, Int off) {
+    if (off + nb > rnd.len()) { return None; }
+    Option(List(UInt(64))) found = bn_safe_prime(bn_slice_int(rnd, off, nb), bits);
+    return match found {
+        Some(p) => Some(p),
+        None => bn_sps_from(rnd, bits, nb, off + nb)
+    };
+}
+
+pub List(Int) bn_slice_int(List(Int) x, Int from, Int n) {
+    return bn_slice_at(x, from, n, 0, ListBuf());
+}
+
+List(Int) bn_slice_at(List(Int) x, Int from, Int n, Int i, ListBuf(Int) acc) {
+    if (i >= n) { return acc.finish(); }
+    return bn_slice_at(x, from, n, i + 1, acc.push(x[from + i]));
+}
+
+// ─── Jacobi symbol ──────────────────────────────────────────────
+
+/// The Jacobi symbol (a / n) for odd n > 0: 0, 1 or -1.
+pub Int bn_jacobi(List(UInt(64)) a, List(UInt(64)) n) {
+    return bn_jac(bn_mod(a, n), n, 1);
+}
+
+Int bn_jac(List(UInt(64)) a, List(UInt(64)) n, Int t) {
+    if (a.len() == 0) { return if (bn_cmp(n, [1]) == 0) { t } else { 0 }; }
+    if (!bn_is_odd(a)) {
+        // (2 / n) = -1 when n = 3 or 5 mod 8.
+        UInt(64) r = n[0] & 7;
+        Int t2 = if (r == 3 || r == 5) { 0 - t } else { t };
+        return bn_jac(bn_shr(a, 1), n, t2);
+    }
+    // Reciprocity: swap, flipping the sign when both are 3 mod 4.
+    Int t3 = if ((a[0] & 3) == 3 && (n[0] & 3) == 3) { 0 - t } else { t };
+    return bn_jac(bn_mod(n, a), a, t3);
+}
+
+
+// ─── Native Montgomery exponentiation (no heap) ─────────────────
+//
+// Numbers of up to 4096 bits live in UInt(4224) scalars. Moduli of up to 2048
+// bits use one 2048-bit limb (R = 2^2048), larger ones two (R = 2^4096), with
+// word-by-word (CIOS) Montgomery multiplication.
+
+UInt(4224) bw_mask() { return ((UInt(4224)) 1 << 2048) - 1; }
+
+UInt(4224) bw_of(List(UInt(64)) x, Int i, UInt(4224) acc) {
+    if (i < 0) { return acc; }
+    return bw_of(x, i - 1, (acc << 64) | (UInt(4224)) x[i]);
+}
+
+List(UInt(64)) bw_to(UInt(4224) v, Int limbs, Int i, ListBuf(UInt(64)) acc) {
+    if (i >= limbs) { return bn_trim(acc.finish()); }
+    UInt(4224) sh = v >> (UInt(4224)) (64 * i);
+    return bw_to(v, limbs, i + 1, acc.push(wrapping_u64(sh & 18446744073709551615)));
+}
+
+// -n^-1 mod 2^2048 for odd n, by Newton's iteration x <- x (2 - n x).
+UInt(4224) bw_ninv(UInt(4224) n) {
+    UInt(4224) mask = bw_mask();
+    UInt(4224) x = bw_newton(n & mask, n & mask, 0, mask);
+    return (((UInt(4224)) 1 << 2048) - x) & mask;
+}
+
+UInt(4224) bw_newton(UInt(4224) n, UInt(4224) x, Int i, UInt(4224) mask) {
+    if (i >= 10) { return x; }
+    UInt(4224) nx = wrapping_umul(n, x) & mask;
+    UInt(4224) two_minus = (((UInt(4224)) 1 << 2048) + 2 - nx) & mask;
+    return bw_newton(n, wrapping_umul(x, two_minus) & mask, i + 1, mask);
+}
+
+// x * 2^count mod n, by repeated doubling.
+UInt(4224) bw_double(UInt(4224) x, UInt(4224) n, Int count) {
+    if (count <= 0) { return x; }
+    UInt(4224) d = x << 1;
+    return bw_double(if (d >= n) { d - n } else { d }, n, count - 1);
+}
+
+// Montgomery product for a modulus of at most 2048 bits (R = 2^2048).
+UInt(4224) bw_mm1(UInt(4224) a, UInt(4224) b, UInt(4224) n, UInt(4224) ninv) {
+    UInt(4224) mask = bw_mask();
+    UInt(4224) t = a * b;
+    UInt(4224) m = wrapping_umul(t & mask, ninv) & mask;
+    UInt(4224) u = (t + m * n) >> 2048;
+    return if (u >= n) { u - n } else { u };
+}
+
+// Montgomery product for a modulus of at most 4096 bits (R = 2^4096), two
+// 2048-bit words.
+UInt(4224) bw_mm2(UInt(4224) a, UInt(4224) b, UInt(4224) n, UInt(4224) ninv) {
+    UInt(4224) mask = bw_mask();
+    UInt(4224) a0 = a & mask; UInt(4224) a1 = a >> 2048;
+    UInt(4224) b0 = b & mask; UInt(4224) b1 = b >> 2048;
+    UInt(4224) n0 = n & mask; UInt(4224) n1 = n >> 2048;
+    UInt(4224) s1 = a0 * b0;
+    UInt(4224) t0 = s1 & mask; UInt(4224) c1 = s1 >> 2048;
+    UInt(4224) s2 = a1 * b0 + c1;
+    UInt(4224) t1 = s2 & mask; UInt(4224) t2 = s2 >> 2048;
+    UInt(4224) m1 = wrapping_umul(t0, ninv) & mask;
+    UInt(4224) s3 = t0 + m1 * n0;
+    UInt(4224) c3 = s3 >> 2048;
+    UInt(4224) s4 = t1 + m1 * n1 + c3;
+    UInt(4224) u0 = s4 & mask; UInt(4224) c4 = s4 >> 2048;
+    UInt(4224) s5 = t2 + c4;
+    UInt(4224) u1 = s5 & mask; UInt(4224) u2 = s5 >> 2048;
+    UInt(4224) s6 = u0 + a0 * b1;
+    UInt(4224) w0 = s6 & mask; UInt(4224) c6 = s6 >> 2048;
+    UInt(4224) s7 = u1 + a1 * b1 + c6;
+    UInt(4224) w1 = s7 & mask; UInt(4224) c7 = s7 >> 2048;
+    UInt(4224) s8 = u2 + c7;
+    UInt(4224) w2 = s8 & mask; UInt(4224) w3 = s8 >> 2048;
+    UInt(4224) m2 = wrapping_umul(w0, ninv) & mask;
+    UInt(4224) s9 = w0 + m2 * n0;
+    UInt(4224) c9 = s9 >> 2048;
+    UInt(4224) s10 = w1 + m2 * n1 + c9;
+    UInt(4224) v0 = s10 & mask; UInt(4224) c10 = s10 >> 2048;
+    UInt(4224) s11 = w2 + c10;
+    UInt(4224) v1 = s11 & mask; UInt(4224) c11 = s11 >> 2048;
+    UInt(4224) v2 = w3 + c11;
+    UInt(4224) r = v0 | (v1 << 2048);
+    // The true value is r + v2 2^4096 (v2 is 0 or 1) and is below 2n.
+    UInt(4224) top = (UInt(4224)) 1 << 4096;
+    return if (v2 != 0) { (r + top) - n } else { if (r >= n) { r - n } else { r } };
+}
+
+UInt(4224) bw_mul(Bool two, UInt(4224) a, UInt(4224) b, UInt(4224) n, UInt(4224) ninv) {
+    return if (two) { bw_mm2(a, b, n, ninv) } else { bw_mm1(a, b, n, ninv) };
+}
+
+UInt(4224) bw_exp(Bool two, UInt(4224) bm, List(UInt(64)) exp, Int i, UInt(4224) n, UInt(4224) ninv, UInt(4224) acc) {
+    if (i < 0) { return acc; }
+    UInt(4224) sq = bw_mul(two, acc, acc, n, ninv);
+    UInt(4224) nx = if (bn_bit(exp, i) == 1) { bw_mul(two, sq, bm, n, ninv) } else { sq };
+    return bw_exp(two, bm, exp, i - 1, n, ninv, nx);
+}
+
+// base^exp mod m for an odd m of at most 4096 bits; base < m; `bits` is the
+// size class (64 times the limb count of m).
+List(UInt(64)) bn_native_exp(List(UInt(64)) base, List(UInt(64)) exp, List(UInt(64)) m, Int bits) {
+    Bool two = bits > 2048;
+    Int rbits = if (two) { 4096 } else { 2048 };
+    UInt(4224) n = bw_of(m, m.len() - 1, 0);
+    UInt(4224) ninv = bw_ninv(n);
+    // R mod n and R^2 mod n by doubling 1.
+    UInt(4224) r1 = bw_double(1, n, rbits);
+    UInt(4224) r2 = bw_double(r1, n, rbits);
+    UInt(4224) bm = bw_mul(two, bw_of(base, base.len() - 1, 0), r2, n, ninv);
+    UInt(4224) acc = bw_exp(two, bm, exp, bn_bit_len(exp) - 1, n, ninv, r1);
+    UInt(4224) out = bw_mul(two, acc, 1, n, ninv);
+    return bw_to(out, m.len(), 0, ListBuf());
+}
+
+
+// Halves x mod m for odd m (x < m): x/2 if even, (x + m)/2 otherwise.
+UInt(4224) bw_half(UInt(4224) x, UInt(4224) m) {
+    return if ((x & 1) == 0) { x >> 1 } else { (x + m) >> 1 };
+}
+
+UInt(4224) bw_sub_mod(UInt(4224) x, UInt(4224) y, UInt(4224) m) {
+    return if (x >= y) { x - y } else { x + m - y };
+}
+
+// Binary extended GCD: invariants u = x1 * a and v = x2 * a (mod m). Returns
+// the inverse, or 0 when gcd(a, m) != 1.
+UInt(4224) bw_inv(UInt(4224) u, UInt(4224) v0, UInt(4224) x1, UInt(4224) x2, UInt(4224) m) {
+    return bw_inv_loop(u, m, x1, 0, m);
+}
+
+UInt(4224) bw_inv_loop(UInt(4224) u, UInt(4224) v, UInt(4224) x1, UInt(4224) x2, UInt(4224) m) {
+    if (u == 0 || v == 0) { return 0; }
+    if (u == 1) { return x1; }
+    if (v == 1) { return x2; }
+    if ((u & 1) == 0) { return bw_inv_loop(u >> 1, v, bw_half(x1, m), x2, m); }
+    if ((v & 1) == 0) { return bw_inv_loop(u, v >> 1, x1, bw_half(x2, m), m); }
+    if (u >= v) { return bw_inv_loop(u - v, v, bw_sub_mod(x1, x2, m), x2, m); }
+    return bw_inv_loop(u, v - u, x1, bw_sub_mod(x2, x1, m), m);
+}

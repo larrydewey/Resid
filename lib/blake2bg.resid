@@ -1,0 +1,211 @@
+// blake2bg.resid — BLAKE2b (RFC 7693), unkeyed, generic over lib/word.resid's
+// Word64(W, B): one implementation for public bytes (W = UInt(64), B = Int)
+// and secret bytes (Secret(UInt(64)), Secret(UInt(8))). Messages and digests
+// are byte lists, List(B); the lengths are public.
+//
+// The sixteen-word work vector is a record, not a list, because a 64-bit
+// secret word is never stored in a list (E0258); the message words are read
+// from the block on demand. Needs lib/sha512g.resid only for the IV, which
+// BLAKE2b shares with SHA-512.
+
+import "word.resid";
+import "sha512g.resid";
+
+pub type V16(W) = { W v0; W v1; W v2; W v3; W v4; W v5; W v6; W v7; W v8; W v9; W v10; W v11; W v12; W v13; W v14; W v15; };
+
+/// The eight-word BLAKE2b chaining value.
+pub type B8(W) = { W a; W b; W c; W d; W e; W f; W g; W h; };
+
+// Message word schedule (RFC 7693 §2.7); rounds 10 and 11 reuse rows 0 and 1.
+List(Int) b2_sigma(Int r) {
+    List(List(Int)) s = [
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+        [14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3],
+        [11, 8, 12, 0, 5, 2, 15, 13, 10, 14, 3, 6, 7, 1, 9, 4],
+        [7, 9, 3, 1, 13, 12, 11, 14, 2, 6, 5, 10, 4, 0, 15, 8],
+        [9, 0, 5, 7, 2, 4, 10, 15, 14, 1, 11, 12, 6, 8, 3, 13],
+        [2, 12, 6, 10, 0, 11, 8, 3, 4, 13, 7, 5, 15, 14, 1, 9],
+        [12, 5, 1, 15, 14, 13, 4, 10, 0, 7, 6, 3, 9, 2, 8, 11],
+        [13, 11, 7, 14, 12, 1, 3, 9, 5, 0, 15, 4, 8, 6, 2, 10],
+        [6, 15, 14, 9, 11, 3, 0, 8, 12, 2, 13, 7, 1, 4, 10, 5],
+        [10, 2, 8, 4, 7, 6, 1, 5, 15, 11, 9, 14, 3, 12, 13, 0]
+    ];
+    return s[r % 10];
+}
+
+// The little-endian word at byte offset `off` of `m`, built from the top byte down.
+@needs(Word64(W, B))
+W b2_word(List(B) m, Int off, Int j, W acc) {
+    if (j < 0) { return acc; }
+    W high = d_lift((UInt(64)) 18446744073709551360);
+    W shifted = d_and(d_rotr(acc, 56), high);
+    return b2_word(m, off, j - 1, d_xor(shifted, d_from_byte(m[off + j])));
+}
+
+@needs(Word64(W, B))
+W b2_m(List(B) blk, Int base, Int i) {
+    W zero = d_lift((UInt(64)) 0);
+    return b2_word(blk, base + i * 8, 7, zero);
+}
+
+@needs(Word64(W, B))
+pub W b2_get(V16(W) v, Int i) {
+    if (i == 0) { return v.v0; } if (i == 1) { return v.v1; } if (i == 2) { return v.v2; } if (i == 3) { return v.v3; }
+    if (i == 4) { return v.v4; } if (i == 5) { return v.v5; } if (i == 6) { return v.v6; } if (i == 7) { return v.v7; }
+    if (i == 8) { return v.v8; } if (i == 9) { return v.v9; } if (i == 10) { return v.v10; } if (i == 11) { return v.v11; }
+    if (i == 12) { return v.v12; } if (i == 13) { return v.v13; } if (i == 14) { return v.v14; }
+    return v.v15;
+}
+
+// The record with word `i` replaced; i is public.
+@needs(Word64(W, B))
+pub V16(W) b2_set(V16(W) v, Int i, W w) {
+    return V16 {
+        .v0 = if (i == 0) { w } else { v.v0 }, .v1 = if (i == 1) { w } else { v.v1 },
+        .v2 = if (i == 2) { w } else { v.v2 }, .v3 = if (i == 3) { w } else { v.v3 },
+        .v4 = if (i == 4) { w } else { v.v4 }, .v5 = if (i == 5) { w } else { v.v5 },
+        .v6 = if (i == 6) { w } else { v.v6 }, .v7 = if (i == 7) { w } else { v.v7 },
+        .v8 = if (i == 8) { w } else { v.v8 }, .v9 = if (i == 9) { w } else { v.v9 },
+        .v10 = if (i == 10) { w } else { v.v10 }, .v11 = if (i == 11) { w } else { v.v11 },
+        .v12 = if (i == 12) { w } else { v.v12 }, .v13 = if (i == 13) { w } else { v.v13 },
+        .v14 = if (i == 14) { w } else { v.v14 }, .v15 = if (i == 15) { w } else { v.v15 } };
+}
+
+// The mixing function G (RFC 7693 §3.1) on words a, b, c, d of v.
+@needs(Word64(W, B))
+V16(W) b2_g(V16(W) v, Int a, Int b, Int c, Int d, W x, W y) {
+    W va = b2_get(v, a); W vb = b2_get(v, b); W vc = b2_get(v, c); W vd = b2_get(v, d);
+    W a1 = d_add(d_add(va, vb), x);
+    W d1 = d_rotr(d_xor(vd, a1), 32);
+    W c1 = d_add(vc, d1);
+    W b1 = d_rotr(d_xor(vb, c1), 24);
+    W a2 = d_add(d_add(a1, b1), y);
+    W d2 = d_rotr(d_xor(d1, a2), 16);
+    W c2 = d_add(c1, d2);
+    W b2 = d_rotr(d_xor(b1, c2), 63);
+    return b2_set(b2_set(b2_set(b2_set(v, a, a2), b, b2), c, c2), d, d2);
+}
+
+@needs(Word64(W, B))
+V16(W) b2_round(V16(W) v, List(B) blk, Int base, Int r) {
+    List(Int) s = b2_sigma(r);
+    V16(W) v1 = b2_g(v, 0, 4, 8, 12, b2_m(blk, base, s[0]), b2_m(blk, base, s[1]));
+    V16(W) v2 = b2_g(v1, 1, 5, 9, 13, b2_m(blk, base, s[2]), b2_m(blk, base, s[3]));
+    V16(W) v3 = b2_g(v2, 2, 6, 10, 14, b2_m(blk, base, s[4]), b2_m(blk, base, s[5]));
+    V16(W) v4 = b2_g(v3, 3, 7, 11, 15, b2_m(blk, base, s[6]), b2_m(blk, base, s[7]));
+    V16(W) v5 = b2_g(v4, 0, 5, 10, 15, b2_m(blk, base, s[8]), b2_m(blk, base, s[9]));
+    V16(W) v6 = b2_g(v5, 1, 6, 11, 12, b2_m(blk, base, s[10]), b2_m(blk, base, s[11]));
+    V16(W) v7 = b2_g(v6, 2, 7, 8, 13, b2_m(blk, base, s[12]), b2_m(blk, base, s[13]));
+    return b2_g(v7, 3, 4, 9, 14, b2_m(blk, base, s[14]), b2_m(blk, base, s[15]));
+}
+
+@needs(Word64(W, B))
+V16(W) b2_rounds(V16(W) v, List(B) blk, Int base, Int r) {
+    if (r >= 12) { return v; }
+    return b2_rounds(b2_round(v, blk, base, r), blk, base, r + 1);
+}
+
+@needs(Word64(W, B))
+B8(W) b2_lift_iv(List(UInt(64)) iv) {
+    return B8 {.a = d_lift(iv[0]), .b = d_lift(iv[1]), .c = d_lift(iv[2]), .d = d_lift(iv[3]), .e = d_lift(iv[4]), .f = d_lift(iv[5]), .g = d_lift(iv[6]), .h = d_lift(iv[7])};
+}
+
+/// Compresses the 128-byte block at `base` of `blk` into `h`. `t` is the
+/// number of message bytes counted so far including this block (below 2^63),
+/// `last` marks the final block.
+@needs(Word64(W, B))
+pub B8(W) blake2b_compress(B8(W) h, List(B) blk, Int base, Int t, Bool last) {
+    B8(W) iv = b2_lift_iv(sha512g_iv());
+    W tw = d_lift(wrapping_u64(t));
+    W fin = d_lift(if (last) { (UInt(64)) 18446744073709551615 } else { (UInt(64)) 0 });
+    V16(W) v0 = V16 {
+        .v0 = h.a, .v1 = h.b, .v2 = h.c, .v3 = h.d, .v4 = h.e, .v5 = h.f, .v6 = h.g, .v7 = h.h,
+        .v8 = iv.a, .v9 = iv.b, .v10 = iv.c, .v11 = iv.d,
+        .v12 = d_xor(iv.e, tw), .v13 = iv.f, .v14 = d_xor(iv.g, fin), .v15 = iv.h };
+    V16(W) v = b2_rounds(v0, blk, base, 0);
+    return B8 {
+        .a = d_xor(d_xor(h.a, v.v0), v.v8), .b = d_xor(d_xor(h.b, v.v1), v.v9),
+        .c = d_xor(d_xor(h.c, v.v2), v.v10), .d = d_xor(d_xor(h.d, v.v3), v.v11),
+        .e = d_xor(d_xor(h.e, v.v4), v.v12), .f = d_xor(d_xor(h.f, v.v5), v.v13),
+        .g = d_xor(d_xor(h.g, v.v6), v.v14), .h = d_xor(d_xor(h.h, v.v7), v.v15) };
+}
+
+// The message padded with zeros to a multiple of 128 bytes (a final block is
+// always present, even for an empty message).
+@needs(Word64(W, B))
+List(B) b2_pad(List(B) msg) {
+    Int n = msg.len();
+    Int blocks = if (n == 0) { 1 } else { (n + 127) / 128 };
+    ListBuf(B) zb = ListBuf();
+    return b2_join(msg, b2_zeros(blocks * 128 - n, 0, zb));
+}
+
+// msg followed by the padding, through a builder (see lib/argon2g.resid a2_join).
+@needs(Word64(W, B))
+List(B) b2_join(List(B) a, List(B) b) {
+    ListBuf(B) bb = ListBuf();
+    return b2_push(b, 0, b2_push(a, 0, bb)).finish();
+}
+
+@needs(Word64(W, B))
+ListBuf(B) b2_push(List(B) xs, Int i, ListBuf(B) acc) {
+    if (i >= xs.len()) { return acc; }
+    return b2_push(xs, i + 1, acc.push(xs[i]));
+}
+
+@needs(Word64(W, B))
+List(B) b2_zeros(Int n, Int i, ListBuf(B) acc) {
+    if (i >= n) { return acc.finish(); }
+    W z = d_lift((UInt(64)) 0);
+    return b2_zeros(n, i + 1, acc.push(d_byte(z, 0)));
+}
+
+@needs(Word64(W, B))
+B8(W) b2_blocks(B8(W) h, List(B) padded, Int msg_len, Int pos) {
+    Int total = padded.len();
+    if (pos + 128 >= total) {
+        return blake2b_compress(h, padded, pos, msg_len, true);
+    }
+    return b2_blocks(blake2b_compress(h, padded, pos, pos + 128, false), padded, msg_len, pos + 128);
+}
+
+@needs(Word64(W, B))
+List(B) b2_out(B8(W) h, Int outlen, Int i, ListBuf(B) acc) {
+    if (i >= outlen) { return acc.finish(); }
+    W w = if (i < 8) { h.a } else { if (i < 16) { h.b } else { if (i < 24) { h.c } else { if (i < 32) { h.d } else {
+          if (i < 40) { h.e } else { if (i < 48) { h.f } else { if (i < 56) { h.g } else { h.h } } } } } } };
+    return b2_out(h, outlen, i + 1, acc.push(d_byte(w, (i % 8) * 8)));
+}
+
+/// BLAKE2b with a digest of `outlen` bytes (1 to 64), unkeyed.
+@needs(Word64(W, B))
+@key_from(msg)
+pub List(B) blake2bg(List(B) msg, Int outlen) {
+    B8(W) iv = b2_lift_iv(sha512g_iv());
+    // Parameter block: digest length, key length 0, fanout 1, depth 1.
+    W param = d_lift(wrapping_u64(16842752 + outlen));
+    B8(W) h0 = B8 {.a = d_xor(iv.a, param), .b = iv.b, .c = iv.c, .d = iv.d, .e = iv.e, .f = iv.f, .g = iv.g, .h = iv.h};
+    List(B) padded = b2_pad(msg);
+    B8(W) h = b2_blocks(h0, padded, msg.len(), 0);
+    ListBuf(B) ob = ListBuf();
+    return b2_out(h, outlen, 0, ob);
+}
+
+/// The little-endian 64-bit word at byte offset `off` of `blk`.
+@needs(Word64(W, B))
+pub W blake2b_load(List(B) blk, Int off) {
+    W zero = d_lift((UInt(64)) 0);
+    return b2_word(blk, off, 7, zero);
+}
+
+/// `w` as eight little-endian bytes appended to `acc`.
+@needs(Word64(W, B))
+pub ListBuf(B) blake2b_store(W w, ListBuf(B) acc) {
+    return b2_store_at(w, 0, acc);
+}
+
+@needs(Word64(W, B))
+ListBuf(B) b2_store_at(W w, Int i, ListBuf(B) acc) {
+    if (i >= 8) { return acc; }
+    return b2_store_at(w, i + 1, acc.push(d_byte(w, i * 8)));
+}

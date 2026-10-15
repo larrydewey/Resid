@@ -1,0 +1,55 @@
+// Makes a prm and a mod proof with the Resid code for the primes p, q and the
+// three random streams (all hex arguments: for the parameters, the prm proof
+// and the mod proof) and prints them as JSON, for the Go oracle to verify:
+//   resid_prove <p> <q> <file> <file> <file>   (each file holds hex)
+import "../../../lib/cggmp_zk.resid";
+import "../../../lib/cose.resid";
+import "../../../lib/crypto.resid";
+
+@requires(filesystem(readonly))
+List(Int) stream(Str path) { return cose_hex_decode(str_trim(filesystem.read_all(path))); }
+
+Str h(List(UInt(64)) x) { return hex_encode(bn_to_be(x, 0)); }
+
+Str join(List(List(UInt(64))) xs, Int i, Str acc) {
+    if (i >= xs.len()) { return acc; }
+    return join(xs, i + 1, acc + (if (i > 0) { "," } else { "" }) + "\"" + h(xs[i]) + "\"");
+}
+
+Str responses(List(ModResponse) rs, Int i, Str acc) {
+    if (i >= rs.len()) { return acc; }
+    ModResponse r = rs[i];
+    Str one = "{\"A\":" + (if (r.a) { "true" } else { "false" }) + ",\"B\":" + (if (r.b) { "true" } else { "false" }) + ",\"X\":\"" + h(r.x) + "\",\"Z\":\"" + h(r.z) + "\"}";
+    return responses(rs, i + 1, acc + (if (i > 0) { "," } else { "" }) + one);
+}
+
+@requires(args, filesystem(readonly))
+Int main() {
+    List(UInt(64)) p = bn_from_be(cose_hex_decode(args.get(1)));
+    List(UInt(64)) q = bn_from_be(cose_hex_decode(args.get(2)));
+    Option(PedersenKey) pk = pedersen_generate(p, q, stream(args.get(3)));
+    return match pk {
+        None => fail(),
+        Some(k) => emit(p, q, k, stream(args.get(4)), stream(args.get(5)))
+    };
+}
+
+Int emit(List(UInt(64)) p, List(UInt(64)) q, PedersenKey k, List(Int) rnd_prm, List(Int) rnd_mod) {
+    Option(PrmProof) prm = prm_prove(k.lam, k.phi, k.ped, tr_new(), rnd_prm);
+    Option(ModProof) md = mod_prove(p, q, tr_new(), rnd_mod);
+    return match prm {
+        None => fail(),
+        Some(pp) => match md {
+            None => fail(),
+            Some(mp) => print_both(k, pp, mp)
+        }
+    };
+}
+
+Int fail() { println("error: a random stream was too short"); return 1; }
+
+Int print_both(PedersenKey k, PrmProof pp, ModProof mp) {
+    println("{\"prm\":{\"N\":\"" + h(k.ped.n) + "\",\"S\":\"" + h(k.ped.s) + "\",\"T\":\"" + h(k.ped.t) + "\",\"As\":[" + join(pp.as, 0, "") + "],\"Zs\":[" + join(pp.zs, 0, "") + "]},");
+    println("\"mod\":{\"N\":\"" + h(k.ped.n) + "\",\"W\":\"" + h(mp.w) + "\",\"Responses\":[" + responses(mp.responses, 0, "") + "]}}");
+    return 0;
+}

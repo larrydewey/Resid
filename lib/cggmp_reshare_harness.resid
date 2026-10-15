@@ -1,0 +1,49 @@
+// cggmp_reshare_harness.resid — run every old dealer and every new party of
+// a re-share in one process.  For tests and tools only; a deployment runs the
+// dealer and new-party states on separate devices and routes the RshD1 and
+// complaint messages itself.
+
+import "cggmp_reshare.resid";
+
+// A new party in the harness keeps its secret key locally; only `pail` would
+// be published in a real announcement.
+pub type RshHarnessPeer = { Int id; PaillierPub pail; PaillierSec sec; };
+
+pub type RshHarness = {
+    List(Int) old_ids; List(Int) new_ids;
+    List(List(UInt(64))) old_shares;
+    List(List(List(UInt(64)))) randoms;
+    List(RshHarnessPeer) peers;
+    List(Int) seed;
+};
+
+pub List(RshNewPeer) rsh_harness_publics(List(RshHarnessPeer) peers, Int i, List(RshNewPeer) acc) {
+    if (i >= peers.len()) { return acc; }
+    return rsh_harness_publics(peers, i + 1, acc.concat([RshNewPeer {.id = peers[i].id, .pail = peers[i].pail}]));
+}
+
+pub List(RshD1) rsh_harness_dealers(RshHarness h, List(RshNewPeer) pubs, Int i, List(RshD1) acc) {
+    if (i >= h.old_ids.len()) { return acc; }
+    RshD1 d = rsh_d1(h.old_ids[i], h.old_ids, h.old_shares[i], h.randoms[i], pubs, h.seed);
+    return rsh_harness_dealers(h, pubs, i + 1, acc.concat([d]));
+}
+
+Result(RshHarnessPeer, Int) rsh_harness_find(List(RshHarnessPeer) peers, Int id, Int i) {
+    if (i >= peers.len()) { return Err(0); }
+    if (peers[i].id == id) { return Ok(peers[i]); }
+    return rsh_harness_find(peers, id, i + 1);
+}
+
+pub Result(List(List(UInt(64))), Int) rsh_harness_new(RshHarness h, List(RshD1) dealers, Int i, List(List(UInt(64))) acc) {
+    if (i >= h.new_ids.len()) { return Ok(acc); }
+    RshHarnessPeer peer = rsh_harness_find(h.peers, h.new_ids[i], 0)?;
+    List(UInt(64)) share = rsh_assemble_of(dealers, h.new_ids[i], peer.sec, peer.pail)?;
+    return rsh_harness_new(h, dealers, i + 1, acc.concat([share]));
+}
+
+// Run round 1 for all dealers, then assemble every new party's share.
+pub Result(List(List(UInt(64))), Int) rsh_harness_run(RshHarness h) {
+    List(RshNewPeer) pubs = rsh_harness_publics(h.peers, 0, []);
+    List(RshD1) dealers = rsh_harness_dealers(h, pubs, 0, []);
+    return rsh_harness_new(h, dealers, 0, []);
+}

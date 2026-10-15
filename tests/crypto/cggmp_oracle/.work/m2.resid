@@ -1,0 +1,55 @@
+import "../../../../lib/bignum.resid";
+import "../../../../lib/cose.resid";
+
+List(UInt(64)) one_spawn(List(UInt(64)) base, List(UInt(64)) e, List(UInt(64)) m) {
+    Result(List(UInt(64)), RegionError) r = spawn () { return bn_modexp(base, e, m); };
+    return match r { Ok(v) => v, Err(x) => [] };
+}
+
+List(List(UInt(64))) loop_spawn(List(UInt(64)) base, List(UInt(64)) e, List(UInt(64)) m, Int i, ListBuf(List(UInt(64))) acc) {
+    if (i <= 0) { return acc.finish(); }
+    return loop_spawn(base, e, m, i - 1, acc.push(one_spawn(base, e, m)));
+}
+
+Int run_spawn(List(UInt(64)) e, List(UInt(64)) m, Int n) {
+    ListBuf(List(UInt(64))) b = ListBuf();
+    return loop_spawn([5], e, m, n, b).len();
+}
+
+List(List(UInt(64))) loop_cc(List(UInt(64)) base, List(UInt(64)) e, List(UInt(64)) m, Int i, List(List(UInt(64))) acc) {
+    if (i <= 0) { return acc; }
+    return loop_cc(base, e, m, i - 1, acc.concat([bn_modexp(base, e, m)]));
+}
+
+Int run_cc(List(UInt(64)) e, List(UInt(64)) m, Int n) { return loop_cc([5], e, m, n, []).len(); }
+
+type Resp = { Bool a; List(UInt(64)) x; };
+
+List(Resp) loop_rec(List(UInt(64)) base, List(UInt(64)) e, List(UInt(64)) m, Int i, ListBuf(Resp) acc) {
+    if (i <= 0) { return acc.finish(); }
+    return loop_rec(base, e, m, i - 1, acc.push(Resp {.a = true, .x = bn_modexp(base, e, m)}));
+}
+
+List(List(UInt(64))) loop_list(List(UInt(64)) base, List(UInt(64)) e, List(UInt(64)) m, Int i, ListBuf(List(UInt(64))) acc) {
+    if (i <= 0) { return acc.finish(); }
+    return loop_list(base, e, m, i - 1, acc.push(bn_modexp(base, e, m)));
+}
+
+Int run_rec(List(UInt(64)) e, List(UInt(64)) m, Int n) {
+    ListBuf(Resp) b = ListBuf();
+    return loop_rec([5], e, m, n, b).len();
+}
+
+Int run_list(List(UInt(64)) e, List(UInt(64)) m, Int n) {
+    ListBuf(List(UInt(64))) b = ListBuf();
+    return loop_list([5], e, m, n, b).len();
+}
+
+@requires(args)
+Int main() {
+    List(UInt(64)) m = bn_from_be(cose_hex_decode(args.get(1)));
+    List(UInt(64)) e = bn_sub(m, [3]);
+    Int n = str_parse_int(args.get(2));
+    Int r = if (args.get(3) == "rec") { run_rec(e, m, n) } else { if (args.get(3) == "cc") { run_cc(e, m, n) } else { if (args.get(3) == "spawn") { run_spawn(e, m, n) } else { run_list(e, m, n) } } };
+    return r % 200;
+}

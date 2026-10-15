@@ -1,0 +1,1268 @@
+// cggmp.resid — CGGMP21 threshold ECDSA over P-256: presigning, signing,
+// key generation and refresh, as pure state transitions. Port of Taurus
+// multi-party-sig's protocols/cmp (the version with ElGamal commitments and
+// identifiable abort), over the proofs of cggmp_proofs.resid.
+//
+// A party runs a protocol as a sequence of rounds. Each round is a function
+// from the previous round's state and the messages received in that round to
+// the next state, which carries the messages to send. No network, clock or
+// randomness is touched: randomness is derived from a per-session seed with
+// labels, so a round is deterministic and testable. Public values, variable
+// time. Party ids are small positive integers; ids are the Shamir x-values.
+//
+// Messages that fail verification do not abort the transition: the round
+// returns Err naming the parties at fault.
+
+import "cggmp_sig.resid";
+import "cggmp_proofs.resid";
+import "cggmp_hash.resid";
+import "crypto.resid";
+
+// ─── Errors ─────────────────────────────────────────────────────
+
+/// A protocol failure: what failed, and the parties that caused it.
+pub type CgFail = { Str why; List(Int) culprits; };
+
+pub CgFail cg_fail(Str why, List(Int) culprits) { return CgFail {.why = why, .culprits = culprits}; }
+
+// ─── Randomness ─────────────────────────────────────────────────
+
+/// `n` bytes derived from the session seed and a label (SHA-256 counter mode).
+pub List(Int) cg_rng(List(Int) seed, Str label, Int n) {
+    return tr_stream(sha256_bytes(seed.concat(bytes_of(label))), 0, n);
+}
+
+// A signed sample of `bits` bits for the label.
+pub BnInt cg_pm(List(Int) seed, Str label, Int bits) {
+    return zk_pm_of(cg_rng(seed, label, bits / 8 + 1), bits);
+}
+
+// A scalar for the label.
+pub List(UInt(64)) cg_scalar(List(Int) seed, Str label) {
+    return sc_of_bytes(cg_rng(seed, label, 32));
+}
+
+// A unit mod n for the label (rejection sampling over a long derived stream).
+pub List(UInt(64)) cg_unit(List(Int) seed, Str label, List(UInt(64)) n) {
+    Int width = (bn_bit_len(n) + 7) / 8;
+    List(Int) stream = cg_rng(seed, label, width * 8);
+    return match zk_draw_unit(stream, 0, n) { Some(d) => d.value, None => bn_one() };
+}
+
+// ─── Ids and per-signer lists ───────────────────────────────────
+
+pub Int cg_index(List(Int) ids, Int id, Int i) {
+    if (i >= ids.len()) { return -1; }
+    if (ids[i] == id) { return i; }
+    return cg_index(ids, id, i + 1);
+}
+
+pub List(Int) cg_others(List(Int) ids, Int self, Int i, ListBuf(Int) acc) {
+    if (i >= ids.len()) { return acc.finish(); }
+    return cg_others(ids, self, i + 1, if (ids[i] == self) { acc } else { acc.push(ids[i]) });
+}
+
+/// The Lagrange coefficient at 0 of `j` over the party ids `ids` (scalars
+/// mod n): the product over i != j of i / (i - j).
+pub List(UInt(64)) cg_lagrange(List(Int) ids, Int j) { return cg_lag(ids, j, 0, [1]); }
+
+List(UInt(64)) cg_lag(List(Int) ids, Int j, Int k, List(UInt(64)) acc) {
+    if (k >= ids.len()) { return acc; }
+    Int i = ids[k];
+    if (i == j) { return cg_lag(ids, j, k + 1, acc); }
+    List(UInt(64)) num = bn_from_u64(u64(i));
+    List(UInt(64)) den = if (i > j) { bn_from_u64(u64(i - j)) } else { sc_nat_neg(bn_from_u64(u64(j - i))) };
+    return cg_lag(ids, j, k + 1, sc_nat_mul(acc, sc_nat_mul(num, sc_nat_inv(den))));
+}
+
+// ─── Paillier decryption with symmetric range ───────────────────
+
+/// Decrypts c to the plaintext in +-(N-1)/2, or None for an invalid
+/// ciphertext (Taurus's SecretKey.Dec).
+pub Option(BnInt) cg_dec(PaillierSec sec, PaillierPub pk, List(UInt(64)) c) {
+    if (!pa_ct_ok(pk, c)) { return None; }
+    List(UInt(64)) m = paillier_dec(sec, pk, c);
+    if (bn_cmp(m, bn_shr(pk.n, 1)) > 0) { return Some(zi_make(true, bn_sub(pk.n, m))); }
+    return Some(zi_from_nat(m));
+}
+
+// ─── Opening a ciphertext (identifiable abort) ──────────────────
+
+/// What an abort reveals about a ciphertext c: the plaintext, the hidden
+/// nonce R = rho^N = c (1 + N)^-plain mod N^2, and a proof of knowledge of
+/// rho (Taurus's abortNth).
+pub type CgOpen = { BnInt plain; List(UInt(64)) hidden; NthProof proof; };
+
+/// Opens c with the secret key; `rnd` is the stream the proof's nonce comes from.
+pub Option(CgOpen) cg_open(PaillierSec sec, PaillierPub pk, List(UInt(64)) c, Transcript tr, List(Int) rnd) {
+    return match cg_dec(sec, pk, c) {
+        None => None,
+        Some(m) => cg_open_with(sec, pk, c, m, tr, rnd)
+    };
+}
+
+Option(CgOpen) cg_open_with(PaillierSec sec, PaillierPub pk, List(UInt(64)) c, BnInt m, Transcript tr, List(Int) rnd) {
+    List(UInt(64)) hidden = bn_modmul(c, pa_gm(pk, zi_neg(m)), pk.n2);
+    // rho = hidden^(N^-1 mod phi) mod N
+    return match bn_modinv(pk.n, sec.phi) {
+        None => None,
+        Some(ninv) => cg_open_proof(pk, m, hidden, bn_modexp(bn_mod(hidden, pk.n), ninv, pk.n), tr, rnd)
+    };
+}
+
+Option(CgOpen) cg_open_proof(PaillierPub pk, BnInt m, List(UInt(64)) hidden, List(UInt(64)) rho, Transcript tr, List(Int) rnd) {
+    return match nth_prove(pk, hidden, rho, tr, rnd) {
+        None => None,
+        Some(pf) => Some(CgOpen {.plain = m, .hidden = hidden, .proof = pf})
+    };
+}
+
+/// Whether `o` shows that c encrypts o.plain.
+pub Bool cg_open_ok(PaillierPub pk, List(UInt(64)) c, CgOpen o, Transcript tr) {
+    if (!pa_ct_ok(pk, o.hidden) || !pa_msg_ok(pk, o.plain)) { return false; }
+    List(UInt(64)) rebuilt = bn_modmul(pa_enc(pk, o.plain, [1]), o.hidden, pk.n2);
+    if (bn_cmp(rebuilt, c) != 0) { return false; }
+    return nth_verify(pk, o.hidden, o.proof, tr);
+}
+
+// ─── The signing context ────────────────────────────────────────
+
+/// What a party knows about a signer: its (Lagrange-scaled) public ECDSA
+/// share, ElGamal public key, Paillier key and Pedersen parameters.
+pub type CgPub = { Int id; CvPt ecdsa; CvPt elgamal; PaillierPub pail; Pedersen ped; };
+
+/// A party's static view of one signing session.
+pub type CgCtx = {
+    Int self;
+    List(Int) ids;                // the signers, ascending
+    List(CgPub) pubs;             // aligned with ids
+    List(UInt(64)) x;             // self's secret ECDSA share times its Lagrange coefficient
+    List(UInt(64)) elg;           // self's ElGamal secret
+    PaillierSec psec;
+    CvPt pubkey;                  // the public key: the sum of the scaled shares
+    Transcript base;              // the session transcript
+    List(Int) seed;               // randomness seed (secret)
+    List(Int) digest;             // the message digest (empty when presigning only)
+};
+
+pub CgPub cg_pub_of(CgCtx c, Int id) { return c.pubs[cg_index(c.ids, id, 0)]; }
+
+/// The transcript a prover (or the verifier of that prover's proofs) uses:
+/// the session transcript with the prover's id.
+pub Transcript cg_tr_for(CgCtx c, Int id) { return tr_item(c.base, "ID", bytes_of(f"{id}")); }
+
+// ─── Multiplicative-to-additive conversion (Taurus internal/mta) ─
+
+/// What the sender of one MtA produces: its share beta of a b, the ciphertext
+/// D of a b + y under the receiver's key, F = Enc_sender(y), and the secrets
+/// for the proof.
+pub type CgMta = { BnInt beta; List(UInt(64)) d; List(UInt(64)) f; List(UInt(64)) s; List(UInt(64)) r; BnInt y; };
+
+pub CgMta cg_mta(PaillierPub sender, PaillierPub receiver, List(UInt(64)) recv_ct, BnInt a, List(Int) seed, Str label) {
+    BnInt y = cg_pm(seed, label + "/y", zk_lprime());
+    List(UInt(64)) r = cg_unit(seed, label + "/r", sender.n);
+    List(UInt(64)) s = cg_unit(seed, label + "/s", receiver.n);
+    List(UInt(64)) f = pa_enc(sender, y, r);
+    List(UInt(64)) d = pa_ct_add(receiver, pa_enc(receiver, y, s), pa_ct_mul(receiver, recv_ct, a));
+    return CgMta {.beta = zi_neg(y), .d = d, .f = f, .s = s, .r = r, .y = y};
+}
+
+// ─── Messages ───────────────────────────────────────────────────
+
+pub type PsB2R = { List(UInt(64)) k; List(UInt(64)) g; CvPt zl; CvPt zm; List(Int) commit; };
+pub type PsB3R = { List(List(UInt(64))) delta_d; List(List(UInt(64))) chi_d; };   // per other party, in ascending id order
+pub type PsM3R = { List(UInt(64)) delta_f; AffpProof delta_proof; List(UInt(64)) chi_f; AffgProof chi_proof; };
+pub type PsB4R = { List(UInt(64)) delta_share; CvPt chi_l; CvPt chi_m; };
+pub type PsB6R = { CvPt big_delta; ElogProof proof; };
+pub type PsB7R = { CvPt s; ElogProof proof; List(Int) decommit; List(Int) presig_id; };
+
+/// The abort-1 broadcast (a failed Delta check): the sender's Gamma share, an
+/// opening of its K, and an opening of each D addressed to it (per other party, ascending id order).
+pub type PsA1R = { List(UInt(64)) gamma; CgOpen k; List(CgOpen) d; };
+
+/// The abort-2 broadcast (a failed S check): the sender's ElGamal-nonce image\n/// with a proof, an opening of its K, and an opening of each Chi D addressed to it.
+pub type PsA2R = { CvPt yhat; LogProof yproof; CgOpen k; List(CgOpen) chi; };
+
+pub type KgB3R = {
+    List(Int) rid; List(Int) chain_key; List(CvPt) vss; CvPt sch_commit; CvPt elgamal;
+    List(UInt(64)) n; List(UInt(64)) s; List(UInt(64)) t; List(Int) decommit;
+};
+pub type KgB4R = { ModProof md; PrmProof prm; };
+pub type KgM4R = { List(UInt(64)) share; FacProof fac; };
+
+pub type CgBody =
+    KgB2(List(Int))
+  | KgB3(KgB3R)
+  | KgB4(KgB4R)
+  | KgM4(KgM4R)
+  | KgB5(List(UInt(64)))
+  | PsB2(PsB2R)
+  | PsM2(EncelgProof)
+  | PsB3(PsB3R)
+  | PsM3(PsM3R)
+  | PsB4(PsB4R)
+  | PsB5(CvPt)
+  | PsM5(LogstarProof)
+  | PsB6(PsB6R)
+  | PsB7(PsB7R)
+  | PsA1(PsA1R)
+  | PsA2(PsA2R)
+  | SgB(List(UInt(64)));
+
+/// A message: `to` is the recipient's id, 0 for a broadcast.
+pub type CgMsg = { Int from; Int to; CgBody body; };
+
+pub CgMsg cg_bc(Int from, CgBody b) { return CgMsg {.from = from, .to = 0, .body = b}; }
+
+pub CgMsg cg_to(Int from, Int to, CgBody b) { return CgMsg {.from = from, .to = to, .body = b}; }
+
+// A message from `from`, a broadcast or sent to `me`, selected by `want`.
+Bool cg_sel(CgMsg m, Int from, Int me, Bool broadcast) {
+    return m.from == from && (if (broadcast) { m.to == 0 } else { m.to == me });
+}
+
+Option(List(Int)) kb2_of(CgMsg m) { CgBody bd = m.body; return match bd { KgB2(b) => Some(b), _ => None }; }
+Option(KgB3R) kb3_of(CgMsg m) { CgBody bd = m.body; return match bd { KgB3(b) => Some(b), _ => None }; }
+Option(KgB4R) kb4_of(CgMsg m) { CgBody bd = m.body; return match bd { KgB4(b) => Some(b), _ => None }; }
+Option(KgM4R) km4_of(CgMsg m) { CgBody bd = m.body; return match bd { KgM4(b) => Some(b), _ => None }; }
+Option(List(UInt(64))) kb5_of(CgMsg m) { CgBody bd = m.body; return match bd { KgB5(b) => Some(b), _ => None }; }
+Option(PsB2R) b2_of(CgMsg m) { CgBody bd = m.body; return match bd { PsB2(b) => Some(b), _ => None }; }
+Option(EncelgProof) m2_of(CgMsg m) { CgBody bd = m.body; return match bd { PsM2(b) => Some(b), _ => None }; }
+Option(PsB3R) b3_of(CgMsg m) { CgBody bd = m.body; return match bd { PsB3(b) => Some(b), _ => None }; }
+Option(PsM3R) m3_of(CgMsg m) { CgBody bd = m.body; return match bd { PsM3(b) => Some(b), _ => None }; }
+Option(PsB4R) b4_of(CgMsg m) { CgBody bd = m.body; return match bd { PsB4(b) => Some(b), _ => None }; }
+Option(CvPt) b5_of(CgMsg m) { CgBody bd = m.body; return match bd { PsB5(b) => Some(b), _ => None }; }
+Option(LogstarProof) m5_of(CgMsg m) { CgBody bd = m.body; return match bd { PsM5(b) => Some(b), _ => None }; }
+Option(PsB6R) b6_of(CgMsg m) { CgBody bd = m.body; return match bd { PsB6(b) => Some(b), _ => None }; }
+Option(PsB7R) b7_of(CgMsg m) { CgBody bd = m.body; return match bd { PsB7(b) => Some(b), _ => None }; }
+Option(PsA1R) a1_of(CgMsg m) { CgBody bd = m.body; return match bd { PsA1(b) => Some(b), _ => None }; }
+Option(PsA2R) a2_of(CgMsg m) { CgBody bd = m.body; return match bd { PsA2(b) => Some(b), _ => None }; }
+Option(List(UInt(64))) sg_of(CgMsg m) { CgBody bd = m.body; return match bd { SgB(b) => Some(b), _ => None }; }
+
+pub Option(List(Int)) ex_kb2(List(CgMsg) in, Int from, Int me, Bool bc, Int i) {
+    if (i >= in.len()) { return None; }
+    if (cg_sel(in[i], from, me, bc)) { return match kb2_of(in[i]) { Some(b) => Some(b), None => ex_kb2(in, from, me, bc, i + 1) }; }
+    return ex_kb2(in, from, me, bc, i + 1);
+}
+
+pub Option(KgB3R) ex_kb3(List(CgMsg) in, Int from, Int me, Bool bc, Int i) {
+    if (i >= in.len()) { return None; }
+    if (cg_sel(in[i], from, me, bc)) { return match kb3_of(in[i]) { Some(b) => Some(b), None => ex_kb3(in, from, me, bc, i + 1) }; }
+    return ex_kb3(in, from, me, bc, i + 1);
+}
+
+pub Option(KgB4R) ex_kb4(List(CgMsg) in, Int from, Int me, Bool bc, Int i) {
+    if (i >= in.len()) { return None; }
+    if (cg_sel(in[i], from, me, bc)) { return match kb4_of(in[i]) { Some(b) => Some(b), None => ex_kb4(in, from, me, bc, i + 1) }; }
+    return ex_kb4(in, from, me, bc, i + 1);
+}
+
+pub Option(KgM4R) ex_km4(List(CgMsg) in, Int from, Int me, Bool bc, Int i) {
+    if (i >= in.len()) { return None; }
+    if (cg_sel(in[i], from, me, bc)) { return match km4_of(in[i]) { Some(b) => Some(b), None => ex_km4(in, from, me, bc, i + 1) }; }
+    return ex_km4(in, from, me, bc, i + 1);
+}
+
+pub Option(List(UInt(64))) ex_kb5(List(CgMsg) in, Int from, Int me, Bool bc, Int i) {
+    if (i >= in.len()) { return None; }
+    if (cg_sel(in[i], from, me, bc)) { return match kb5_of(in[i]) { Some(b) => Some(b), None => ex_kb5(in, from, me, bc, i + 1) }; }
+    return ex_kb5(in, from, me, bc, i + 1);
+}
+
+pub Option(PsB2R) ex_b2(List(CgMsg) in, Int from, Int me, Bool bc, Int i) {
+    if (i >= in.len()) { return None; }
+    if (cg_sel(in[i], from, me, bc)) { return match b2_of(in[i]) { Some(b) => Some(b), None => ex_b2(in, from, me, bc, i + 1) }; }
+    return ex_b2(in, from, me, bc, i + 1);
+}
+
+pub Option(EncelgProof) ex_m2(List(CgMsg) in, Int from, Int me, Bool bc, Int i) {
+    if (i >= in.len()) { return None; }
+    if (cg_sel(in[i], from, me, bc)) { return match m2_of(in[i]) { Some(b) => Some(b), None => ex_m2(in, from, me, bc, i + 1) }; }
+    return ex_m2(in, from, me, bc, i + 1);
+}
+
+pub Option(PsB3R) ex_b3(List(CgMsg) in, Int from, Int me, Bool bc, Int i) {
+    if (i >= in.len()) { return None; }
+    if (cg_sel(in[i], from, me, bc)) { return match b3_of(in[i]) { Some(b) => Some(b), None => ex_b3(in, from, me, bc, i + 1) }; }
+    return ex_b3(in, from, me, bc, i + 1);
+}
+
+pub Option(PsM3R) ex_m3(List(CgMsg) in, Int from, Int me, Bool bc, Int i) {
+    if (i >= in.len()) { return None; }
+    if (cg_sel(in[i], from, me, bc)) { return match m3_of(in[i]) { Some(b) => Some(b), None => ex_m3(in, from, me, bc, i + 1) }; }
+    return ex_m3(in, from, me, bc, i + 1);
+}
+
+pub Option(PsB4R) ex_b4(List(CgMsg) in, Int from, Int me, Bool bc, Int i) {
+    if (i >= in.len()) { return None; }
+    if (cg_sel(in[i], from, me, bc)) { return match b4_of(in[i]) { Some(b) => Some(b), None => ex_b4(in, from, me, bc, i + 1) }; }
+    return ex_b4(in, from, me, bc, i + 1);
+}
+
+pub Option(CvPt) ex_b5(List(CgMsg) in, Int from, Int me, Bool bc, Int i) {
+    if (i >= in.len()) { return None; }
+    if (cg_sel(in[i], from, me, bc)) { return match b5_of(in[i]) { Some(b) => Some(b), None => ex_b5(in, from, me, bc, i + 1) }; }
+    return ex_b5(in, from, me, bc, i + 1);
+}
+
+pub Option(LogstarProof) ex_m5(List(CgMsg) in, Int from, Int me, Bool bc, Int i) {
+    if (i >= in.len()) { return None; }
+    if (cg_sel(in[i], from, me, bc)) { return match m5_of(in[i]) { Some(b) => Some(b), None => ex_m5(in, from, me, bc, i + 1) }; }
+    return ex_m5(in, from, me, bc, i + 1);
+}
+
+pub Option(PsB6R) ex_b6(List(CgMsg) in, Int from, Int me, Bool bc, Int i) {
+    if (i >= in.len()) { return None; }
+    if (cg_sel(in[i], from, me, bc)) { return match b6_of(in[i]) { Some(b) => Some(b), None => ex_b6(in, from, me, bc, i + 1) }; }
+    return ex_b6(in, from, me, bc, i + 1);
+}
+
+pub Option(PsB7R) ex_b7(List(CgMsg) in, Int from, Int me, Bool bc, Int i) {
+    if (i >= in.len()) { return None; }
+    if (cg_sel(in[i], from, me, bc)) { return match b7_of(in[i]) { Some(b) => Some(b), None => ex_b7(in, from, me, bc, i + 1) }; }
+    return ex_b7(in, from, me, bc, i + 1);
+}
+
+pub Option(PsA1R) ex_a1(List(CgMsg) in, Int from, Int me, Bool bc, Int i) {
+    if (i >= in.len()) { return None; }
+    if (cg_sel(in[i], from, me, bc)) { return match a1_of(in[i]) { Some(b) => Some(b), None => ex_a1(in, from, me, bc, i + 1) }; }
+    return ex_a1(in, from, me, bc, i + 1);
+}
+
+pub Option(PsA2R) ex_a2(List(CgMsg) in, Int from, Int me, Bool bc, Int i) {
+    if (i >= in.len()) { return None; }
+    if (cg_sel(in[i], from, me, bc)) { return match a2_of(in[i]) { Some(b) => Some(b), None => ex_a2(in, from, me, bc, i + 1) }; }
+    return ex_a2(in, from, me, bc, i + 1);
+}
+
+pub Option(List(UInt(64))) ex_sg(List(CgMsg) in, Int from, Int me, Bool bc, Int i) {
+    if (i >= in.len()) { return None; }
+    if (cg_sel(in[i], from, me, bc)) { return match sg_of(in[i]) { Some(b) => Some(b), None => ex_sg(in, from, me, bc, i + 1) }; }
+    return ex_sg(in, from, me, bc, i + 1);
+}
+
+// ─── Commitments (Taurus hash.Commit) ───────────────────────────
+
+/// Commit(items): the first 64 bytes of the stream of the transcript with the
+/// RID and then the decommitment appended.
+pub List(Int) cg_commit(Transcript tr, List(Int) rid, List(Int) decommit) {
+    Transcript t1 = tr_item(tr_item(tr, "RID", rid), "Decommitment", decommit);
+    return tr_stream(tr_seed(t1), 0, 64);
+}
+
+pub Bool cg_bytes_eq(List(Int) a, List(Int) b) {
+    if (a.len() != b.len()) { return false; }
+    return cg_bytes_eq_at(a, b, 0);
+}
+
+Bool cg_bytes_eq_at(List(Int) a, List(Int) b, Int i) {
+    if (i >= a.len()) { return true; }
+    if (a[i] != b[i]) { return false; }
+    return cg_bytes_eq_at(a, b, i + 1);
+}
+
+pub Bool cg_nonzero(List(Int) b, Int i) {
+    if (i >= b.len()) { return false; }
+    if (b[i] != 0) { return true; }
+    return cg_nonzero(b, i + 1);
+}
+
+// ─── Presigning: round 1 (start) ────────────────────────────────
+
+pub type Ps1 = {
+    CgCtx ctx;
+    List(UInt(64)) gamma; List(UInt(64)) kshare;
+    List(UInt(64)) g_nonce; List(UInt(64)) k_nonce; List(UInt(64)) elg_nonce;
+    List(Int) pre_id; List(Int) decommit;
+    List(UInt(64)) k_ct; List(UInt(64)) g_ct; CvPt zl; CvPt zm; List(Int) commit;
+    List(CgMsg) out;
+};
+
+pub PaillierPub cg_self_pail(CgCtx c) { return cg_pub_of(c, c.self).pail; }
+
+pub Ps1 ps_start(CgCtx c) {
+    PaillierPub pk = cg_self_pail(c);
+    List(UInt(64)) gamma = cg_scalar(c.seed, "ps/gamma");
+    List(UInt(64)) kshare = cg_scalar(c.seed, "ps/k");
+    List(UInt(64)) gn = cg_unit(c.seed, "ps/gn", pk.n);
+    List(UInt(64)) kn = cg_unit(c.seed, "ps/kn", pk.n);
+    List(UInt(64)) en = cg_scalar(c.seed, "ps/en");
+    List(UInt(64)) kct = pa_enc(pk, sc_to_zi(kshare), kn);
+    List(UInt(64)) gct = pa_enc(pk, sc_to_zi(gamma), gn);
+    CvPt zl = cv_mul_base(en);
+    CvPt zm = cv_add(cv_mul_base(kshare), cv_mul(en, cg_pub_of(c, c.self).elgamal));
+    List(Int) pre_id = cg_rng(c.seed, "ps/id", 32);
+    List(Int) decommit = cg_rng(c.seed, "ps/dec", 32);
+    List(Int) commit = cg_commit(cg_tr_for(c, c.self), pre_id, decommit);
+    ListBuf(CgMsg) b0 = ListBuf();
+    ListBuf(Int) b1 = ListBuf();
+    List(CgMsg) out = ps1_msgs(c, kct, gct, zl, zm, commit, kshare, kn, en, cg_others(c.ids, c.self, 0, b1), 0,
+                               b0.push(cg_bc(c.self, PsB2(PsB2R {.k = kct, .g = gct, .zl = zl, .zm = zm, .commit = commit}))));
+    return Ps1 {
+        .ctx = c, .gamma = gamma, .kshare = kshare, .g_nonce = gn, .k_nonce = kn, .elg_nonce = en,
+        .pre_id = pre_id, .decommit = decommit, .k_ct = kct, .g_ct = gct, .zl = zl, .zm = zm, .commit = commit, .out = out };
+}
+
+// One enc-elg proof for K to each other party (verified with that party's
+// Pedersen parameters).
+List(CgMsg) ps1_msgs(CgCtx c, List(UInt(64)) kct, List(UInt(64)) gct, CvPt zl, CvPt zm, List(Int) commit, List(UInt(64)) kshare, List(UInt(64)) kn, List(UInt(64)) en, List(Int) others, Int i, ListBuf(CgMsg) acc) {
+    if (i >= others.len()) { return acc.finish(); }
+    Int j = others[i];
+    CgPub me = cg_pub_of(c, c.self);
+    EncelgPublic pub = EncelgPublic {.c = kct, .a = me.elgamal, .b = zl, .x = zm, .prover = me.pail, .aux = cg_pub_of(c, j).ped};
+    Option(EncelgProof) pf = encelg_prove(pub, sc_to_zi(kshare), kn, en, cg_tr_for(c, c.self), cg_rng(c.seed, f"ps/encelg/{j}", 4 * 2400));
+    CgMsg m = match pf {
+        Some(p) => cg_to(c.self, j, PsM2(p)),
+        None => cg_bc(c.self, SgB([]))
+    };
+    return ps1_msgs(c, kct, gct, zl, zm, commit, kshare, kn, en, others, i + 1, acc.push(m));
+}
+
+// ─── Round 2: verify round 1, run the MtAs ──────────────────────
+
+pub type P2Peer = { List(UInt(64)) k; List(UInt(64)) g; CvPt zl; CvPt zm; List(Int) commit; };
+
+pub type Ps2 = {
+    Ps1 prev;
+    Map(Int, P2Peer) peers;                    // round-1 broadcasts, self included
+    Map(Int, BnInt) delta_beta; Map(Int, BnInt) chi_beta;   // our MtA shares, per other party
+    Map(Int, List(UInt(64))) delta_d; Map(Int, List(UInt(64))) chi_d;   // our D ciphertexts for each other party
+    List(CgMsg) out;
+};
+
+Result(P2Peer, CgFail) ps2_peer(Ps1 s, List(CgMsg) in, Int j) {
+    CgCtx c = s.ctx;
+    Option(PsB2R) ob = ex_b2(in, j, c.self, true, 0);
+    Option(EncelgProof) op = ex_m2(in, j, c.self, false, 0);
+    return match ob {
+        None => Err(cg_fail("missing round-1 broadcast", [j])),
+        Some(b) => match op {
+            None => Err(cg_fail("missing enc-elg proof", [j])),
+            Some(pf) => ps2_check(c, j, b, pf)
+        }
+    };
+}
+
+Result(P2Peer, CgFail) ps2_check(CgCtx c, Int j, PsB2R b, EncelgProof pf) {
+    CgPub pj = cg_pub_of(c, j);
+    if (!pa_ct_ok(pj.pail, b.k) || !pa_ct_ok(pj.pail, b.g) || b.zl.inf || b.zm.inf) {
+        return Err(cg_fail("invalid ciphertext or ElGamal point", [j]));
+    }
+    if (b.commit.len() != 64 || !cg_nonzero(b.commit, 0)) { return Err(cg_fail("bad commitment", [j])); }
+    EncelgPublic pub = EncelgPublic {.c = b.k, .a = pj.elgamal, .b = b.zl, .x = b.zm, .prover = pj.pail, .aux = cg_pub_of(c, c.self).ped};
+    if (!encelg_verify(pub, pf, cg_tr_for(c, j))) { return Err(cg_fail("enc-elg proof for K failed", [j])); }
+    return Ok(P2Peer {.k = b.k, .g = b.g, .zl = b.zl, .zm = b.zm, .commit = b.commit});
+}
+
+Result(Map(Int, P2Peer), CgFail) ps2_all(Ps1 s, List(CgMsg) in, List(Int) others, Int i, Map(Int, P2Peer) acc) {
+    if (i >= others.len()) { return Ok(acc); }
+    P2Peer p = ps2_peer(s, in, others[i])?;
+    return ps2_all(s, in, others, i + 1, acc.insert(others[i], p));
+}
+
+pub Result(Ps2, CgFail) ps_r2(Ps1 s, List(CgMsg) in) {
+    CgCtx c = s.ctx;
+    ListBuf(Int) ob = ListBuf();
+    List(Int) others = cg_others(c.ids, c.self, 0, ob);
+    P2Peer me = P2Peer {.k = s.k_ct, .g = s.g_ct, .zl = s.zl, .zm = s.zm, .commit = s.commit};
+    Map(Int, P2Peer) peers = ps2_all(s, in, others, 0, {c.self: me})?;
+    Map(Int, BnInt) db = {};
+    Map(Int, BnInt) cb = {};
+    Map(Int, List(UInt(64))) dd = {};
+    Map(Int, List(UInt(64))) cd = {};
+    ListBuf(CgMsg) mb = ListBuf();
+    Ps2Acc acc = ps2_mta(s, peers, others, 0, Ps2Acc {.db = db, .cb = cb, .dd = dd, .cd = cd, .msgs = mb.finish()});
+    List(CgMsg) out = acc.msgs.concat([cg_bc(c.self, PsB3(PsB3R {.delta_d = ps2_ds(acc.dd, others, 0, ListBuf()), .chi_d = ps2_ds(acc.cd, others, 0, ListBuf())}))]);
+    return Ok(Ps2 {.prev = s, .peers = peers, .delta_beta = acc.db, .chi_beta = acc.cb, .delta_d = acc.dd, .chi_d = acc.cd, .out = out});
+}
+
+List(List(UInt(64))) ps2_ds(Map(Int, List(UInt(64))) m, List(Int) others, Int i, ListBuf(List(UInt(64))) acc) {
+    if (i >= others.len()) { return acc.finish(); }
+    return ps2_ds(m, others, i + 1, acc.push(m[others[i]] else { [] }));
+}
+
+pub type Ps2Acc = {
+    Map(Int, BnInt) db; Map(Int, BnInt) cb;
+    Map(Int, List(UInt(64))) dd; Map(Int, List(UInt(64))) cd;
+    List(CgMsg) msgs;
+};
+
+// For each other party j: the Delta MtA (gamma times K_j, with the aff-p
+// proof against our encryption G of gamma) and the Chi MtA (our ECDSA share
+// times K_j, with the aff-g proof against our public share).
+Ps2Acc ps2_mta(Ps1 s, Map(Int, P2Peer) peers, List(Int) others, Int i, Ps2Acc acc) {
+    if (i >= others.len()) { return acc; }
+    CgCtx c = s.ctx;
+    Int j = others[i];
+    CgPub me = cg_pub_of(c, c.self);
+    CgPub pj = cg_pub_of(c, j);
+    List(UInt(64)) kj = (peers[j] else { P2Peer {.k = [], .g = [], .zl = cv_inf(), .zm = cv_inf(), .commit = []} }).k;
+    CgMta dm = cg_mta(me.pail, pj.pail, kj, sc_to_zi(s.gamma), c.seed, f"ps/mta-d/{j}");
+    CgMta xm = cg_mta(me.pail, pj.pail, kj, sc_to_zi(c.x), c.seed, f"ps/mta-x/{j}");
+    AffpPublic dpub = AffpPublic {.kv = kj, .dv = dm.d, .fp = dm.f, .xp = s.g_ct, .prover = me.pail, .verifier = pj.pail, .aux = pj.ped};
+    AffpSecret dsec = AffpSecret {.x = sc_to_zi(s.gamma), .y = dm.y, .s = dm.s, .rx = s.g_nonce, .r = dm.r};
+    AffgPublic xpub = AffgPublic {.kv = kj, .dv = xm.d, .fp = xm.f, .xp = me.ecdsa, .prover = me.pail, .verifier = pj.pail, .aux = pj.ped};
+    AffgSecret xsec = AffgSecret {.x = sc_to_zi(c.x), .y = xm.y, .s = xm.s, .r = xm.r};
+    Transcript tr = cg_tr_for(c, c.self);
+    Option(AffpProof) dp = affp_prove(dpub, dsec, tr, cg_rng(c.seed, f"ps/affp/{j}", 4 * 4300));
+    Option(AffgProof) xp = affg_prove(xpub, xsec, tr, cg_rng(c.seed, f"ps/affg/{j}", 4 * 4300));
+    return match dp {
+        None => acc,
+        Some(dpf) => match xp {
+            None => acc,
+            Some(xpf) => ps2_mta(s, peers, others, i + 1, Ps2Acc {
+                .db = acc.db.insert(j, dm.beta), .cb = acc.cb.insert(j, xm.beta),
+                .dd = acc.dd.insert(j, dm.d), .cd = acc.cd.insert(j, xm.d),
+                .msgs = acc.msgs.concat([cg_to(c.self, j, PsM3(PsM3R {.delta_f = dm.f, .delta_proof = dpf, .chi_f = xm.f, .chi_proof = xpf}))]) })
+        }
+    };
+}
+
+// ─── Round 3: verify round 2, finish the MtAs ───────────────────
+
+pub type P3Peer = { List(List(UInt(64))) delta_d; List(List(UInt(64))) chi_d; PsM3R m; };
+
+pub type Ps3 = {
+    Ps2 prev;
+    Map(Int, P3Peer) peers;                    // round-2 messages from each other party
+    List(UInt(64)) delta_share; List(UInt(64)) chi_share;   // scalars mod n
+    Map(Int, BnInt) delta_alpha; Map(Int, BnInt) chi_alpha;
+    List(UInt(64)) chi_nonce; CvPt chi_l; CvPt chi_m;
+    List(CgMsg) out;
+};
+
+// The D ciphertext that party `from` addressed to `to` in its broadcast
+// (its list covers every party but itself, ascending).
+List(UInt(64)) ps3_d_for(List(Int) ids, Int from, Int to, List(List(UInt(64))) ds) {
+    Int pos = ps3_pos(ids, from, to, 0, 0);
+    return if (pos < 0 || pos >= ds.len()) { [] } else { ds[pos] };
+}
+
+// Position of `to` among ids with `from` removed.
+Int ps3_pos(List(Int) ids, Int from, Int to, Int i, Int count) {
+    if (i >= ids.len()) { return -1; }
+    if (ids[i] == from) { return ps3_pos(ids, from, to, i + 1, count); }
+    if (ids[i] == to) { return count; }
+    return ps3_pos(ids, from, to, i + 1, count + 1);
+}
+
+Result(P3Peer, CgFail) ps3_peer(Ps2 s, List(CgMsg) in, Int j) {
+    CgCtx c = s.prev.ctx;
+    Option(PsB3R) ob = ex_b3(in, j, c.self, true, 0);
+    Option(PsM3R) om = ex_m3(in, j, c.self, false, 0);
+    return match ob {
+        None => Err(cg_fail("missing round-2 broadcast", [j])),
+        Some(b) => match om {
+            None => Err(cg_fail("missing MtA message", [j])),
+            Some(m) => ps3_check(s, c, j, b, m)
+        }
+    };
+}
+
+Result(P3Peer, CgFail) ps3_check(Ps2 s, CgCtx c, Int j, PsB3R b, PsM3R m) {
+    // Every D addressed to a party is a valid ciphertext under that party's key.
+    Bool cts_ok = ps3_cts_ok(c, j, b, cg_others(c.ids, j, 0, ListBuf()), 0);
+    if (!cts_ok || b.delta_d.len() != c.ids.len() - 1 || b.chi_d.len() != c.ids.len() - 1) { return Err(cg_fail("received invalid ciphertext", [j])); }
+    CgPub me = cg_pub_of(c, c.self);
+    CgPub pj = cg_pub_of(c, j);
+    P2Peer pr = s.peers[j] else { P2Peer {.k = [], .g = [], .zl = cv_inf(), .zm = cv_inf(), .commit = []} };
+    P2Peer mine = s.peers[c.self] else { pr };
+    List(UInt(64)) dd = ps3_d_for(c.ids, j, c.self, b.delta_d);
+    List(UInt(64)) cd = ps3_d_for(c.ids, j, c.self, b.chi_d);
+    AffpPublic dpub = AffpPublic {.kv = mine.k, .dv = dd, .fp = m.delta_f, .xp = pr.g, .prover = pj.pail, .verifier = me.pail, .aux = me.ped};
+    if (!affp_verify(dpub, m.delta_proof, cg_tr_for(c, j))) { return Err(cg_fail("aff-p proof for the Delta MtA failed", [j])); }
+    AffgPublic xpub = AffgPublic {.kv = mine.k, .dv = cd, .fp = m.chi_f, .xp = pj.ecdsa, .prover = pj.pail, .verifier = me.pail, .aux = me.ped};
+    if (!affg_verify(xpub, m.chi_proof, cg_tr_for(c, j))) { return Err(cg_fail("aff-g proof for the Chi MtA failed", [j])); }
+    return Ok(P3Peer {.delta_d = b.delta_d, .chi_d = b.chi_d, .m = m});
+}
+
+Bool ps3_cts_ok(CgCtx c, Int from, PsB3R b, List(Int) targets, Int i) {
+    if (i >= targets.len()) { return true; }
+    CgPub pt = cg_pub_of(c, targets[i]);
+    List(UInt(64)) dd = ps3_d_for(c.ids, from, targets[i], b.delta_d);
+    List(UInt(64)) cd = ps3_d_for(c.ids, from, targets[i], b.chi_d);
+    if (!pa_ct_ok(pt.pail, dd) || !pa_ct_ok(pt.pail, cd)) { return false; }
+    return ps3_cts_ok(c, from, b, targets, i + 1);
+}
+
+Result(Map(Int, P3Peer), CgFail) ps3_all(Ps2 s, List(CgMsg) in, List(Int) others, Int i, Map(Int, P3Peer) acc) {
+    if (i >= others.len()) { return Ok(acc); }
+    P3Peer p = ps3_peer(s, in, others[i])?;
+    return ps3_all(s, in, others, i + 1, acc.insert(others[i], p));
+}
+
+pub type Ps3Sums = { BnInt delta; BnInt chi; Map(Int, BnInt) da; Map(Int, BnInt) ca; };
+
+Result(Ps3Sums, CgFail) ps3_sums(Ps2 s, Map(Int, P3Peer) peers, List(Int) others, Int i, Ps3Sums acc) {
+    if (i >= others.len()) { return Ok(acc); }
+    CgCtx c = s.prev.ctx;
+    Int j = others[i];
+    CgPub me = cg_pub_of(c, c.self);
+    P3Peer p = peers[j] else { P3Peer {.delta_d = [], .chi_d = [], .m = PsM3R {.delta_f = [], .delta_proof = AffpProof {.a = [], .bx = [], .by = [], .e = [], .s = [], .f = [], .t = [], .z1 = zi_zero(), .z2 = zi_zero(), .z3 = zi_zero(), .z4 = zi_zero(), .w = [], .wx = [], .wy = []}, .chi_f = [], .chi_proof = AffgProof {.a = [], .bx = cv_inf(), .by = [], .e = [], .s = [], .f = [], .t = [], .z1 = zi_zero(), .z2 = zi_zero(), .z3 = zi_zero(), .z4 = zi_zero(), .w = [], .wy = []}}} };
+    Option(BnInt) da = cg_dec(c.psec, me.pail, ps3_d_for(c.ids, j, c.self, p.delta_d));
+    Option(BnInt) ca = cg_dec(c.psec, me.pail, ps3_d_for(c.ids, j, c.self, p.chi_d));
+    return match da {
+        None => Err(cg_fail("failed to decrypt the Delta MtA share", [j])),
+        Some(a) => match ca {
+            None => Err(cg_fail("failed to decrypt the Chi MtA share", [j])),
+            Some(b) => ps3_sums(s, peers, others, i + 1, Ps3Sums {
+                .delta = zi_add(zi_add(acc.delta, a), s.delta_beta[j] else { zi_zero() }),
+                .chi = zi_add(zi_add(acc.chi, b), s.chi_beta[j] else { zi_zero() }),
+                .da = acc.da.insert(j, a), .ca = acc.ca.insert(j, b) })
+        }
+    };
+}
+
+pub Result(Ps3, CgFail) ps_r3(Ps2 s, List(CgMsg) in) {
+    Ps1 s1 = s.prev;
+    CgCtx c = s1.ctx;
+    ListBuf(Int) ob = ListBuf();
+    List(Int) others = cg_others(c.ids, c.self, 0, ob);
+    Map(Int, P3Peer) peers = ps3_all(s, in, others, 0, {})?;
+    BnInt delta0 = zi_mul(sc_to_zi(s1.gamma), sc_to_zi(s1.kshare));
+    BnInt chi0 = zi_mul(sc_to_zi(c.x), sc_to_zi(s1.kshare));
+    Ps3Sums sums = ps3_sums(s, peers, others, 0, Ps3Sums {.delta = delta0, .chi = chi0, .da = {}, .ca = {}})?;
+    List(UInt(64)) delta_share = sc_of_zi(sums.delta);
+    List(UInt(64)) chi_share = sc_of_zi(sums.chi);
+    List(UInt(64)) cn = cg_scalar(c.seed, "ps/chi-nonce");
+    CvPt chi_l = cv_mul_base(cn);
+    CvPt chi_m = cv_add(cv_mul_base(chi_share), cv_mul(cn, cg_pub_of(c, c.self).elgamal));
+    List(CgMsg) out = [cg_bc(c.self, PsB4(PsB4R {.delta_share = delta_share, .chi_l = chi_l, .chi_m = chi_m}))];
+    return Ok(Ps3 {.prev = s, .peers = peers, .delta_share = delta_share, .chi_share = chi_share,
+                   .delta_alpha = sums.da, .chi_alpha = sums.ca, .chi_nonce = cn, .chi_l = chi_l, .chi_m = chi_m, .out = out});
+}
+
+// ─── Round 4: verify round 3; commit to Gamma ───────────────────
+
+pub type Ps4 = {
+    Ps3 prev;
+    Map(Int, PsB4R) b4;                        // every party's round-3 broadcast, self included
+    CvPt big_gamma;
+    List(CgMsg) out;
+};
+
+Result(Map(Int, PsB4R), CgFail) ps4_all(Ps3 s, List(CgMsg) in, List(Int) others, Int i, Map(Int, PsB4R) acc) {
+    if (i >= others.len()) { return Ok(acc); }
+    Int j = others[i];
+    CgCtx c = s.prev.prev.ctx;
+    Option(PsB4R) ob = ex_b4(in, j, c.self, true, 0);
+    return match ob {
+        None => Err(cg_fail("missing round-3 broadcast", [j])),
+        Some(b) => if (b.delta_share.len() == 0 || b.chi_l.inf || b.chi_m.inf) { Err(cg_fail("invalid round-3 broadcast", [j])) }
+                   else { ps4_all(s, in, others, i + 1, acc.insert(j, b)) }
+    };
+}
+
+pub Result(Ps4, CgFail) ps_r4(Ps3 s, List(CgMsg) in) {
+    Ps1 s1 = s.prev.prev;
+    CgCtx c = s1.ctx;
+    ListBuf(Int) ob = ListBuf();
+    List(Int) others = cg_others(c.ids, c.self, 0, ob);
+    PsB4R mine = PsB4R {.delta_share = s.delta_share, .chi_l = s.chi_l, .chi_m = s.chi_m};
+    Map(Int, PsB4R) b4 = ps4_all(s, in, others, 0, {c.self: mine})?;
+    CvPt big_gamma = cv_mul_base(s1.gamma);
+    ListBuf(CgMsg) mb = ListBuf();
+    List(CgMsg) out = ps4_proofs(s, big_gamma, others, 0, mb.push(cg_bc(c.self, PsB5(big_gamma))));
+    return Ok(Ps4 {.prev = s, .b4 = b4, .big_gamma = big_gamma, .out = out});
+}
+
+List(CgMsg) ps4_proofs(Ps3 s, CvPt big_gamma, List(Int) others, Int i, ListBuf(CgMsg) acc) {
+    if (i >= others.len()) { return acc.finish(); }
+    Ps1 s1 = s.prev.prev;
+    CgCtx c = s1.ctx;
+    Int j = others[i];
+    CgPub me = cg_pub_of(c, c.self);
+    LogstarPublic pub = LogstarPublic {.c = s1.g_ct, .x = big_gamma, .g = cv_g(), .prover = me.pail, .aux = cg_pub_of(c, j).ped};
+    Option(LogstarProof) pf = logstar_prove(pub, sc_to_zi(s1.gamma), s1.g_nonce, cg_tr_for(c, c.self), cg_rng(c.seed, f"ps/logstar/{j}", 4 * 1500));
+    return match pf {
+        None => ps4_proofs(s, big_gamma, others, i + 1, acc),
+        Some(p) => ps4_proofs(s, big_gamma, others, i + 1, acc.push(cg_to(c.self, j, PsM5(p))))
+    };
+}
+
+// ─── Round 5: verify round 4; prove the Delta share ─────────────
+
+pub type Ps5 = {
+    Ps4 prev;
+    Map(Int, CvPt) big_gammas;                 // every party's Gamma share
+    CvPt gamma;                                // the sum
+    CvPt big_delta;                            // our share k_i Gamma
+    List(CgMsg) out;
+};
+
+Result(Map(Int, CvPt), CgFail) ps5_all(Ps4 s, List(CgMsg) in, List(Int) others, Int i, Map(Int, CvPt) acc) {
+    if (i >= others.len()) { return Ok(acc); }
+    Int j = others[i];
+    Ps1 s1 = s.prev.prev.prev;
+    CgCtx c = s1.ctx;
+    Option(CvPt) og = ex_b5(in, j, c.self, true, 0);
+    Option(LogstarProof) op = ex_m5(in, j, c.self, false, 0);
+    return match og {
+        None => Err(cg_fail("missing Gamma share", [j])),
+        Some(g) => match op {
+            None => Err(cg_fail("missing log* proof", [j])),
+            Some(pf) => ps5_check(s, c, j, g, pf, others, i, acc, in)
+        }
+    };
+}
+
+Result(Map(Int, CvPt), CgFail) ps5_check(Ps4 s, CgCtx c, Int j, CvPt g, LogstarProof pf, List(Int) others, Int i, Map(Int, CvPt) acc, List(CgMsg) in) {
+    if (g.inf) { return Err(cg_fail("Gamma share is the identity", [j])); }
+    P2Peer pj = s.prev.prev.peers[j] else { P2Peer {.k = [], .g = [], .zl = cv_inf(), .zm = cv_inf(), .commit = []} };
+    LogstarPublic pub = LogstarPublic {.c = pj.g, .x = g, .g = cv_g(), .prover = cg_pub_of(c, j).pail, .aux = cg_pub_of(c, c.self).ped};
+    if (!logstar_verify(pub, pf, cg_tr_for(c, j))) { return Err(cg_fail("log* proof for Gamma failed", [j])); }
+    return ps5_all(s, in, others, i + 1, acc.insert(j, g));
+}
+
+CvPt ps_sum_pts(List(Int) ids, Map(Int, CvPt) m, Int i, CvPt acc) {
+    if (i >= ids.len()) { return acc; }
+    return ps_sum_pts(ids, m, i + 1, cv_add(acc, m[ids[i]] else { cv_inf() }));
+}
+
+pub Result(Ps5, CgFail) ps_r5(Ps4 s, List(CgMsg) in) {
+    Ps1 s1 = s.prev.prev.prev;
+    CgCtx c = s1.ctx;
+    ListBuf(Int) ob = ListBuf();
+    List(Int) others = cg_others(c.ids, c.self, 0, ob);
+    Map(Int, CvPt) gs = ps5_all(s, in, others, 0, {c.self: s.big_gamma})?;
+    CvPt gamma = ps_sum_pts(c.ids, gs, 0, cv_inf());
+    CvPt big_delta = cv_mul(s1.kshare, gamma);
+    CgPub me = cg_pub_of(c, c.self);
+    ElogPublic pub = ElogPublic {.el = s1.zl, .em = s1.zm, .x = me.elgamal, .base = gamma, .y = big_delta};
+    Option(ElogProof) pf = elog_prove(pub, s1.kshare, s1.elg_nonce, cg_tr_for(c, c.self), cg_rng(c.seed, "ps/elog-k", 256));
+    return match pf {
+        None => Err(cg_fail("randomness exhausted", [])),
+        Some(p) => Ok(Ps5 {.prev = s, .big_gammas = gs, .gamma = gamma, .big_delta = big_delta,
+                            .out = [cg_bc(c.self, PsB6(PsB6R {.big_delta = big_delta, .proof = p}))]})
+    };
+}
+
+// ─── Round 6: verify round 5; compute R, prove S ────────────────
+
+pub type Ps6 = {
+    Ps5 prev;
+    Map(Int, CvPt) big_deltas;
+    List(UInt(64)) delta; List(UInt(64)) delta_inv;
+    CvPt r; CvPt s_pt;
+    Map(Int, CvPt) rbar;
+    List(CgMsg) out;
+};
+
+Result(Map(Int, CvPt), CgFail) ps6_all(Ps5 s, List(CgMsg) in, List(Int) others, Int i, Map(Int, CvPt) acc) {
+    if (i >= others.len()) { return Ok(acc); }
+    Int j = others[i];
+    Ps1 s1 = s.prev.prev.prev.prev;
+    CgCtx c = s1.ctx;
+    Option(PsB6R) ob = ex_b6(in, j, c.self, true, 0);
+    return match ob {
+        None => Err(cg_fail("missing round-5 broadcast", [j])),
+        Some(b) => ps6_check(s, c, j, b, others, i, acc, in)
+    };
+}
+
+Result(Map(Int, CvPt), CgFail) ps6_check(Ps5 s, CgCtx c, Int j, PsB6R b, List(Int) others, Int i, Map(Int, CvPt) acc, List(CgMsg) in) {
+    if (b.big_delta.inf) { return Err(cg_fail("Delta share is the identity", [j])); }
+    P2Peer pj = s.prev.prev.prev.peers[j] else { P2Peer {.k = [], .g = [], .zl = cv_inf(), .zm = cv_inf(), .commit = []} };
+    ElogPublic pub = ElogPublic {.el = pj.zl, .em = pj.zm, .x = cg_pub_of(c, j).elgamal, .base = s.gamma, .y = b.big_delta};
+    if (!elog_verify(pub, b.proof, cg_tr_for(c, j))) { return Err(cg_fail("elog proof for the Delta share failed", [j])); }
+    return ps6_all(s, in, others, i + 1, acc.insert(j, b.big_delta));
+}
+
+pub Result(Ps6, CgFail) ps_r6(Ps5 s, List(CgMsg) in) {
+    Ps1 s1 = s.prev.prev.prev.prev;
+    Ps3 s3 = s.prev.prev;
+    CgCtx c = s1.ctx;
+    ListBuf(Int) ob = ListBuf();
+    List(Int) others = cg_others(c.ids, c.self, 0, ob);
+    Map(Int, CvPt) bd = ps6_all(s, in, others, 0, {c.self: s.big_delta})?;
+    // Delta = the sum of the Delta shares, everyone's.
+    List(UInt(64)) delta = ps6_sum_scalars(c.ids, s.prev.b4, 0, []);
+    List(UInt(64)) dinv = sc_nat_inv(delta);
+    if (dinv.len() == 0) { return Err(cg_fail("Delta is zero", [])); }
+    CvPt r = cv_mul(dinv, s.gamma);
+    // The Delta shares must add up: sum of the points equals Delta G.
+    CvPt actual = ps_sum_pts(c.ids, bd, 0, cv_inf());
+    if (!cv_eq(actual, cv_mul_base(delta))) { return Err(cg_fail("Delta shares are inconsistent", [])); }
+    CvPt sp = cv_mul(s3.chi_share, r);
+    CgPub me = cg_pub_of(c, c.self);
+    ElogPublic pub = ElogPublic {.el = s3.chi_l, .em = s3.chi_m, .x = me.elgamal, .base = r, .y = sp};
+    Option(ElogProof) pf = elog_prove(pub, s3.chi_share, s3.chi_nonce, cg_tr_for(c, c.self), cg_rng(c.seed, "ps/elog-chi", 256));
+    return match pf {
+        None => Err(cg_fail("randomness exhausted", [])),
+        Some(p) => Ok(Ps6 {.prev = s, .big_deltas = bd, .delta = delta, .delta_inv = dinv, .r = r, .s_pt = sp,
+                            .rbar = ps6_rbar(c.ids, bd, dinv, 0, {}),
+                            .out = [cg_bc(c.self, PsB7(PsB7R {.s = sp, .proof = p, .decommit = s1.decommit, .presig_id = s1.pre_id}))]})
+    };
+}
+
+List(UInt(64)) ps6_sum_scalars(List(Int) ids, Map(Int, PsB4R) b4, Int i, List(UInt(64)) acc) {
+    if (i >= ids.len()) { return acc; }
+    PsB4R b = b4[ids[i]] else { PsB4R {.delta_share = [], .chi_l = cv_inf(), .chi_m = cv_inf()} };
+    return ps6_sum_scalars(ids, b4, i + 1, sc_nat_add(acc, b.delta_share));
+}
+
+Map(Int, CvPt) ps6_rbar(List(Int) ids, Map(Int, CvPt) bd, List(UInt(64)) dinv, Int i, Map(Int, CvPt) acc) {
+    if (i >= ids.len()) { return acc; }
+    return ps6_rbar(ids, bd, dinv, i + 1, acc.insert(ids[i], cv_mul(dinv, bd[ids[i]] else { cv_inf() })));
+}
+
+// ─── Round 7: verify round 6; finish the presignature ───────────
+
+pub type PsDone = { CgPresig presig; List(CgMsg) out; };
+
+List(Int) cg_xor_ids(List(List(Int)) ids, Int i, List(Int) acc) {
+    if (i >= ids.len()) { return acc; }
+    return cg_xor_ids(ids, i + 1, cg_xor(acc, ids[i], 0, ListBuf()));
+}
+
+pub List(Int) cg_xor(List(Int) a, List(Int) b, Int i, ListBuf(Int) acc) {
+    if (i >= a.len()) { return acc.finish(); }
+    return cg_xor(a, b, i + 1, acc.push(a[i] ^ b[i]));
+}
+
+Result(Map(Int, PsB7R), CgFail) ps7_all(Ps6 s, List(CgMsg) in, List(Int) others, Int i, Map(Int, PsB7R) acc) {
+    if (i >= others.len()) { return Ok(acc); }
+    Int j = others[i];
+    Ps1 s1 = s.prev.prev.prev.prev.prev;
+    CgCtx c = s1.ctx;
+    Option(PsB7R) ob = ex_b7(in, j, c.self, true, 0);
+    return match ob {
+        None => Err(cg_fail("missing round-6 broadcast", [j])),
+        Some(b) => ps7_check(s, c, j, b, others, i, acc, in)
+    };
+}
+
+Result(Map(Int, PsB7R), CgFail) ps7_check(Ps6 s, CgCtx c, Int j, PsB7R b, List(Int) others, Int i, Map(Int, PsB7R) acc, List(CgMsg) in) {
+    Ps2 s2 = s.prev.prev.prev.prev;
+    Ps4 s4 = s.prev.prev;
+    if (b.s.inf) { return Err(cg_fail("S share is the identity", [j])); }
+    if (b.decommit.len() != 32 || !cg_nonzero(b.decommit, 0) || b.presig_id.len() != 32 || !cg_nonzero(b.presig_id, 0)) {
+        return Err(cg_fail("bad decommitment or presignature id", [j]));
+    }
+    P2Peer pj = s2.peers[j] else { P2Peer {.k = [], .g = [], .zl = cv_inf(), .zm = cv_inf(), .commit = []} };
+    if (!cg_bytes_eq(cg_commit(cg_tr_for(c, j), b.presig_id, b.decommit), pj.commit)) {
+        return Err(cg_fail("failed to decommit the presignature id", [j]));
+    }
+    PsB4R b4 = s4.b4[j] else { PsB4R {.delta_share = [], .chi_l = cv_inf(), .chi_m = cv_inf()} };
+    ElogPublic pub = ElogPublic {.el = b4.chi_l, .em = b4.chi_m, .x = cg_pub_of(c, j).elgamal, .base = s.r, .y = b.s};
+    if (!elog_verify(pub, b.proof, cg_tr_for(c, j))) { return Err(cg_fail("elog proof for S failed", [j])); }
+    return ps7_all(s, in, others, i + 1, acc.insert(j, b));
+}
+
+List(CvPt) ps7_pts(List(Int) ids, Map(Int, PsB7R) bs, CvPt mine, Int self, Int i, ListBuf(CvPt) acc) {
+    if (i >= ids.len()) { return acc.finish(); }
+    CvPt p = if (ids[i] == self) { mine } else { (bs[ids[i]] else { PsB7R {.s = cv_inf(), .proof = ElogProof {.a = cv_inf(), .n = cv_inf(), .b = cv_inf(), .z = [], .u = []}, .decommit = [], .presig_id = []} }).s };
+    return ps7_pts(ids, bs, mine, self, i + 1, acc.push(p));
+}
+
+List(CvPt) ps7_rbars(List(Int) ids, Map(Int, CvPt) rb, Int i, ListBuf(CvPt) acc) {
+    if (i >= ids.len()) { return acc.finish(); }
+    return ps7_rbars(ids, rb, i + 1, acc.push(rb[ids[i]] else { cv_inf() }));
+}
+
+List(List(Int)) ps7_ids(List(Int) ids, Map(Int, PsB7R) bs, List(Int) mine, Int self, Int i, ListBuf(List(Int)) acc) {
+    if (i >= ids.len()) { return acc.finish(); }
+    List(Int) p = if (ids[i] == self) { mine } else { (bs[ids[i]] else { PsB7R {.s = cv_inf(), .proof = ElogProof {.a = cv_inf(), .n = cv_inf(), .b = cv_inf(), .z = [], .u = []}, .decommit = [], .presig_id = bytes_of("")} }).presig_id };
+    return ps7_ids(ids, bs, mine, self, i + 1, acc.push(p));
+}
+
+pub Result(PsDone, CgFail) ps_r7(Ps6 s, List(CgMsg) in) {
+    Ps1 s1 = s.prev.prev.prev.prev.prev;
+    Ps3 s3 = s.prev.prev.prev;
+    CgCtx c = s1.ctx;
+    ListBuf(Int) ob = ListBuf();
+    List(Int) others = cg_others(c.ids, c.self, 0, ob);
+    PsB7R mine = PsB7R {.s = s.s_pt, .proof = ElogProof {.a = cv_inf(), .n = cv_inf(), .b = cv_inf(), .z = [], .u = []}, .decommit = s1.decommit, .presig_id = s1.pre_id};
+    Map(Int, PsB7R) bs = ps7_all(s, in, others, 0, {})?;
+    List(CvPt) spts = ps7_pts(c.ids, bs, s.s_pt, c.self, 0, ListBuf());
+    CvPt total = ps7_sum(spts, 0, cv_inf());
+    if (!cv_eq(total, c.pubkey)) { return Err(cg_fail("the S shares do not add up to the public key", [])); }
+    List(Int) pid = cg_xor_ids(ps7_ids(c.ids, bs, s1.pre_id, c.self, 0, ListBuf()), 0, cg_zero32());
+    CgPresig pre = CgPresig {.id = pid, .r = s.r, .ids = c.ids, .rbar = ps7_rbars(c.ids, s.rbar, 0, ListBuf()), .s = spts, .kshare = s1.kshare, .chi = s3.chi_share};
+    List(CgMsg) out = if (c.digest.len() > 0) { [cg_bc(c.self, SgB(cg_sigma(pre, c.digest)))] } else { [] };
+    return Ok(PsDone {.presig = pre, .out = out});
+}
+
+CvPt ps7_sum(List(CvPt) pts, Int i, CvPt acc) {
+    if (i >= pts.len()) { return acc; }
+    return ps7_sum(pts, i + 1, cv_add(acc, pts[i]));
+}
+
+pub List(Int) cg_zero32() { return bn_to_be([], 32); }
+
+// ─── Signing ────────────────────────────────────────────────────
+
+/// Combines the signature shares (ours and the others') into a signature,
+/// checking it under the public key. On failure, names the parties whose
+/// shares are inconsistent with the presignature.
+pub type CgSig = { CvPt r; List(UInt(64)) s; };
+
+pub Result(CgSig, CgFail) sg_finish(CgCtx c, CgPresig pre, List(CgMsg) in) {
+    List(Int) ids = c.ids;
+    List(List(UInt(64))) shares = sg_collect(c, pre, in, ids, 0, ListBuf());
+    List(UInt(64)) s = cg_s_of(shares, 0, []);
+    if (cg_verify(c.pubkey, c.digest, pre.r, s)) { return Ok(CgSig {.r = pre.r, .s = s}); }
+    return Err(cg_fail("signature failed to verify", cg_bad_shares(pre, ids, shares, c.digest)));
+}
+
+List(List(UInt(64))) sg_collect(CgCtx c, CgPresig pre, List(CgMsg) in, List(Int) ids, Int i, ListBuf(List(UInt(64))) acc) {
+    if (i >= ids.len()) { return acc.finish(); }
+    List(UInt(64)) sh = if (ids[i] == c.self) { cg_sigma(pre, c.digest) } else { match ex_sg(in, ids[i], c.self, true, 0) { Some(v) => v, None => [] } };
+    return sg_collect(c, pre, in, ids, i + 1, acc.push(sh));
+}
+
+// ─── Long-term configuration and session setup ──────────────────
+
+/// What every party knows about party `id` after key generation.
+//@ serial
+pub type CgPublicCfg = { Int id; CvPt ecdsa; CvPt elgamal; List(UInt(64)) n; Pedersen ped; };
+
+/// A party's configuration: its secret share and key material, and the public
+/// data of every party. `threshold` is the degree of the sharing polynomial:
+/// threshold + 1 parties sign.
+//@ serial
+pub type CgConfig = {
+    Int id; Int threshold;
+    List(UInt(64)) ecdsa;             // the secret share of the root key
+    List(UInt(64)) elgamal;           // the ElGamal secret
+    List(UInt(64)) p; List(UInt(64)) q;   // the Paillier primes
+    List(Int) rid; List(Int) chain_key;
+    List(CgPublicCfg) public;
+};
+
+pub CgPublicCfg cg_cfg_pub(List(CgPublicCfg) ps, Int id, Int i) {
+    if (i >= ps.len()) { return CgPublicCfg {.id = 0, .ecdsa = cv_inf(), .elgamal = cv_inf(), .n = [], .ped = Pedersen {.n = [], .s = [], .t = []}}; }
+    if (ps[i].id == id) { return ps[i]; }
+    return cg_cfg_pub(ps, id, i + 1);
+}
+
+Bool cg_ids_valid(List(Int) ids, Int i) {
+    if (i >= ids.len()) { return true; }
+    if (ids[i] <= 0 || ids[i] > 255) { return false; }
+    if (i > 0 && ids[i] <= ids[i - 1]) { return false; }
+    return cg_ids_valid(ids, i + 1);
+}
+
+Bool cg_all_known(CgConfig cfg, List(Int) ids, Int i) {
+    if (i >= ids.len()) { return true; }
+    if (cg_cfg_pub(cfg.public, ids[i], 0).id != ids[i]) { return false; }
+    return cg_all_known(cfg, ids, i + 1);
+}
+
+// The session transcript: session id, protocol id, group, the signers, the
+// threshold, and the message being signed.
+Transcript cg_session(List(Int) session_id, Str protocol, List(Int) ids, Int threshold, List(Int) digest) {
+    Transcript t0 = tr_item(tr_new(), "Session ID", session_id);
+    Transcript t1 = tr_item(tr_item(t0, "Protocol ID", bytes_of(protocol)), "Group Name", bytes_of("P-256"));
+    Transcript t2 = tr_item(tr_item(t1, "Party IDs", ids), "Threshold", bytes_of(f"{threshold}"));
+    return tr_item(t2, "SigningMessage", digest);
+}
+
+List(CgPub) cg_scaled_pubs(CgConfig cfg, List(Int) ids, Int i, ListBuf(CgPub) acc) {
+    if (i >= ids.len()) { return acc.finish(); }
+    CgPublicCfg p = cg_cfg_pub(cfg.public, ids[i], 0);
+    CgPub q = CgPub {
+        .id = p.id, .ecdsa = cv_mul(cg_lagrange(ids, p.id), p.ecdsa), .elgamal = p.elgamal,
+        .pail = paillier_pub(p.n), .ped = p.ped };
+    return cg_scaled_pubs(cfg, ids, i + 1, acc.push(q));
+}
+
+CvPt cg_sum_ecdsa(List(CgPub) ps, Int i, CvPt acc) {
+    if (i >= ps.len()) { return acc; }
+    return cg_sum_ecdsa(ps, i + 1, cv_add(acc, ps[i].ecdsa));
+}
+
+/// The context of a signing session among `ids` (ascending), or None when the
+/// signers are not a valid subset for this configuration. `digest` is the
+/// 32-byte message digest (empty to presign only); `seed` is the secret
+/// randomness seed for the session.
+pub Option(CgCtx) cg_ctx(CgConfig cfg, List(Int) ids, List(Int) session_id, List(Int) digest, List(Int) seed) {
+    if (!cg_ids_valid(ids, 0) || cg_index(ids, cfg.id, 0) < 0) { return None; }
+    if (ids.len() < cfg.threshold + 1 || !cg_all_known(cfg, ids, 0)) { return None; }
+    List(CgPub) pubs = cg_scaled_pubs(cfg, ids, 0, ListBuf());
+    List(UInt(64)) lam = cg_lagrange(ids, cfg.id);
+    PaillierSec ps = match paillier_sec(cfg.p, cfg.q) {
+        Some(s) => s,
+        None => PaillierSec {.p = [], .q = [], .phi = [], .phi_inv = []}
+    };
+    return Some(CgCtx {
+        .self = cfg.id, .ids = ids, .pubs = pubs, .x = sc_nat_mul(lam, cfg.ecdsa), .elg = cfg.elgamal, .psec = ps,
+        .pubkey = cg_sum_ecdsa(pubs, 0, cv_inf()),
+        .base = cg_session(session_id, if (digest.len() > 0) { "cmp/presign-full" } else { "cmp/presign-offline" }, ids, cfg.threshold, digest),
+        .seed = seed, .digest = digest });
+}
+
+// ─── Identifiable abort 1: the Delta shares do not add up ───────
+//
+// Every party reveals its Gamma share and k (safe: this presignature is
+// discarded) and opens the Delta MtA ciphertexts addressed to it, with
+// proofs against the ciphertexts everyone saw. From the openings each
+// party's Delta share is recomputed and compared with the one it broadcast.
+
+pub type PsAb1 = { Ps5 prev; PsA1R mine; List(CgMsg) out; };
+
+P3Peer ps3_none() {
+    return P3Peer {.delta_d = [], .chi_d = [], .m = PsM3R {.delta_f = [], .delta_proof = AffpProof {.a = [], .bx = [], .by = [], .e = [], .s = [], .f = [], .t = [], .z1 = zi_zero(), .z2 = zi_zero(), .z3 = zi_zero(), .z4 = zi_zero(), .w = [], .wx = [], .wy = []}, .chi_f = [], .chi_proof = AffgProof {.a = [], .bx = cv_inf(), .by = [], .e = [], .s = [], .f = [], .t = [], .z1 = zi_zero(), .z2 = zi_zero(), .z3 = zi_zero(), .z4 = zi_zero(), .w = [], .wy = []}}};
+}
+
+// The Delta ciphertext `from` sent to `to`, as party `s` saw it.
+List(UInt(64)) a1_d_ct(Ps5 s, Int from, Int to) {
+    CgCtx c = s.prev.prev.prev.prev.ctx;
+    Ps2 s2 = s.prev.prev.prev;
+    if (from == c.self) { return s2.delta_d[to] else { [] }; }
+    P3Peer p = s.prev.prev.peers[from] else { ps3_none() };
+    return ps3_d_for(c.ids, from, to, p.delta_d);
+}
+
+Result(List(CgOpen), CgFail) a1_opens(Ps5 s, List(Int) others, Int i, ListBuf(CgOpen) acc) {
+    if (i >= others.len()) { return Ok(acc.finish()); }
+    CgCtx c = s.prev.prev.prev.prev.ctx;
+    Int l = others[i];
+    Option(CgOpen) o = cg_open(c.psec, cg_pub_of(c, c.self).pail, a1_d_ct(s, l, c.self), cg_tr_for(c, c.self), cg_rng(c.seed, f"ps/abort1/d/{l}", 4 * 1200));
+    return match o {
+        None => a1_fail(acc),
+        Some(x) => a1_opens(s, others, i + 1, acc.push(x))
+    };
+}
+
+Result(List(CgOpen), CgFail) a1_fail(ListBuf(CgOpen) acc) {
+    _ = acc.finish();
+    return Err(cg_fail("cannot open a Delta MtA ciphertext", []));
+}
+
+/// Starts the abort: the broadcast revealing what is needed to find the party whose Delta share is wrong.
+pub Result(PsAb1, CgFail) ps_abort1(Ps5 s) {
+    Ps1 s1 = s.prev.prev.prev.prev;
+    CgCtx c = s1.ctx;
+    ListBuf(Int) ob = ListBuf();
+    List(Int) others = cg_others(c.ids, c.self, 0, ob);
+    Option(CgOpen) ko = cg_open(c.psec, cg_pub_of(c, c.self).pail, s1.k_ct, cg_tr_for(c, c.self), cg_rng(c.seed, "ps/abort1/k", 4 * 1200));
+    return match ko {
+        None => Err(cg_fail("cannot open K", [])),
+        Some(k) => a1_start(s, s1, c, others, k)
+    };
+}
+
+Result(PsAb1, CgFail) a1_start(Ps5 s, Ps1 s1, CgCtx c, List(Int) others, CgOpen k) {
+    List(CgOpen) ds = a1_opens(s, others, 0, ListBuf())?;
+    PsA1R mine = PsA1R {.gamma = s1.gamma, .k = k, .d = ds};
+    return Ok(PsAb1 {.prev = s, .mine = mine, .out = [cg_bc(c.self, PsA1(mine))]});
+}
+
+// Checks party j's abort message against what everyone saw: its K, its Gamma share and the D ciphertexts addressed to it.
+Result(PsA1R, CgFail) a1_check(Ps5 s, List(CgMsg) in, Int j) {
+    CgCtx c = s.prev.prev.prev.prev.ctx;
+    return match ex_a1(in, j, c.self, true, 0) {
+        None => Err(cg_fail("missing abort-1 broadcast", [j])),
+        Some(m) => a1_check_msg(s, c, j, m)
+    };
+}
+
+Result(PsA1R, CgFail) a1_check_msg(Ps5 s, CgCtx c, Int j, PsA1R m) {
+    CgPub pj = cg_pub_of(c, j);
+    List(Int) js_others = cg_others(c.ids, j, 0, ListBuf());
+    if (m.d.len() != js_others.len()) { return Err(cg_fail("wrong number of openings", [j])); }
+    P2Peer p2 = s.prev.prev.prev.peers[j] else { P2Peer {.k = [], .g = [], .zl = cv_inf(), .zm = cv_inf(), .commit = []} };
+    if (!cg_open_ok(pj.pail, p2.k, m.k, cg_tr_for(c, j))) { return Err(cg_fail("opening of K failed", [j])); }
+    CvPt bg = s.big_gammas[j] else { cv_inf() };
+    if (!cv_eq(cv_mul_base(m.gamma), bg)) { return Err(cg_fail("Gamma share does not match", [j])); }
+    return if (a1_ds_ok(s, c, j, m, js_others, 0)) { Ok(m) } else { Err(cg_fail("opening of a Delta MtA ciphertext failed", [j])) };
+}
+
+Bool a1_ds_ok(Ps5 s, CgCtx c, Int j, PsA1R m, List(Int) js_others, Int i) {
+    if (i >= js_others.len()) { return true; }
+    Int l = js_others[i];
+    if (!cg_open_ok(cg_pub_of(c, j).pail, a1_d_ct(s, l, j), m.d[i], cg_tr_for(c, j))) { return false; }
+    return a1_ds_ok(s, c, j, m, js_others, i + 1);
+}
+
+Result(Map(Int, PsA1R), CgFail) a1_all(Ps5 s, PsAb1 mine, List(CgMsg) in, List(Int) ids, Int i, Map(Int, PsA1R) acc) {
+    if (i >= ids.len()) { return Ok(acc); }
+    CgCtx c = s.prev.prev.prev.prev.ctx;
+    if (ids[i] == c.self) { return a1_all(s, mine, in, ids, i + 1, acc.insert(ids[i], mine.mine)); }
+    PsA1R m = a1_check(s, in, ids[i])?;
+    return a1_all(s, mine, in, ids, i + 1, acc.insert(ids[i], m));
+}
+
+// delta_j = k_j gamma_j + sum over l != j of (alpha_jl + k_l gamma_j - alpha_lj),
+// where alpha_jl is j's opening of the D from l, and alpha_lj l's opening of the D from j.
+BnInt a1_delta(CgCtx c, Map(Int, PsA1R) ms, Int j, Int i, BnInt acc) {
+    if (i >= c.ids.len()) { return acc; }
+    Int l = c.ids[i];
+    if (l == j) { return a1_delta(c, ms, j, i + 1, acc); }
+    PsA1R mj = ms[j] else { a1_none() };
+    PsA1R ml = ms[l] else { a1_none() };
+    BnInt a_jl = a1_plain(mj, ps3_pos(c.ids, j, l, 0, 0));
+    BnInt a_lj = a1_plain(ml, ps3_pos(c.ids, l, j, 0, 0));
+    BnInt step = zi_sub(zi_add(zi_add(acc, a_jl), zi_mul(ml.k.plain, sc_to_zi(mj.gamma))), a_lj);
+    return a1_delta(c, ms, j, i + 1, step);
+}
+
+BnInt a1_plain(PsA1R m, Int pos) { return if (pos < 0 || pos >= m.d.len()) { zi_zero() } else { m.d[pos].plain }; }
+
+PsA1R a1_none() {
+    return PsA1R {.gamma = [], .k = CgOpen {.plain = zi_zero(), .hidden = [], .proof = NthProof {.a = [], .z = []}}, .d = []};
+}
+
+List(Int) a1_culprits(Ps5 s, Map(Int, PsA1R) ms, List(Int) others, Int i, ListBuf(Int) acc) {
+    if (i >= others.len()) { return acc.finish(); }
+    CgCtx c = s.prev.prev.prev.prev.ctx;
+    Int j = others[i];
+    PsA1R mj = ms[j] else { a1_none() };
+    BnInt d = a1_delta(c, ms, j, 0, zi_mul(mj.k.plain, sc_to_zi(mj.gamma)));
+    PsB4R b = s.prev.b4[j] else { PsB4R {.delta_share = [], .chi_l = cv_inf(), .chi_m = cv_inf()} };
+    return a1_culprits(s, ms, others, i + 1, if (bn_cmp(sc_of_zi(d), b.delta_share) == 0) { acc } else { acc.push(j) });
+}
+
+/// Finishes the abort from every party's abort-1 broadcast: the failure,
+/// naming the parties whose openings do not check or whose Delta share is not
+/// what their own openings give.
+pub CgFail ps_abort1_blame(PsAb1 a, List(CgMsg) in) {
+    Ps5 s = a.prev;
+    CgCtx c = s.prev.prev.prev.prev.ctx;
+    ListBuf(Int) ob = ListBuf();
+    List(Int) others = cg_others(c.ids, c.self, 0, ob);
+    return match a1_all(s, a, in, c.ids, 0, {}) {
+        Err(e) => e,
+        Ok(ms) => cg_fail("Delta shares are inconsistent", a1_culprits(s, ms, others, 0, ListBuf()))
+    };
+}
+
+// ─── Identifiable abort 2: the S shares do not add up to the key ─
+//
+// Every party opens the Chi MtA ciphertexts addressed to it and its K, and
+// reveals the image Y-hat = b Y of the ElGamal nonce b it committed its Chi
+// share with. Chi_j's commitment M_j = chi_j G + b_j Y_j must equal what the
+// openings give: Y-hat_j + k_j X_j + sum over l != j of
+// (alpha_jl G + k_l X_j - alpha_lj G).
+
+pub type PsAb2 = { Ps6 prev; PsA2R mine; List(CgMsg) out; };
+
+List(UInt(64)) a2_chi_ct(Ps6 s, Int from, Int to) {
+    CgCtx c = s.prev.prev.prev.prev.prev.ctx;
+    Ps2 s2 = s.prev.prev.prev.prev;
+    if (from == c.self) { return s2.chi_d[to] else { [] }; }
+    P3Peer p = s.prev.prev.prev.peers[from] else { ps3_none() };
+    return ps3_d_for(c.ids, from, to, p.chi_d);
+}
+
+Result(List(CgOpen), CgFail) a2_opens(Ps6 s, List(Int) others, Int i, ListBuf(CgOpen) acc) {
+    if (i >= others.len()) { return Ok(acc.finish()); }
+    CgCtx c = s.prev.prev.prev.prev.prev.ctx;
+    Int l = others[i];
+    Option(CgOpen) o = cg_open(c.psec, cg_pub_of(c, c.self).pail, a2_chi_ct(s, l, c.self), cg_tr_for(c, c.self), cg_rng(c.seed, f"ps/abort2/d/{l}", 4 * 1200));
+    return match o {
+        None => a2_fail(acc),
+        Some(x) => a2_opens(s, others, i + 1, acc.push(x))
+    };
+}
+
+Result(List(CgOpen), CgFail) a2_fail(ListBuf(CgOpen) acc) {
+    _ = acc.finish();
+    return Err(cg_fail("cannot open a Chi MtA ciphertext", []));
+}
+
+/// Starts the abort 2: the broadcast revealing what is needed to find the party whose Chi share is wrong.
+pub Result(PsAb2, CgFail) ps_abort2(Ps6 s) {
+    Ps1 s1 = s.prev.prev.prev.prev.prev;
+    Ps3 s3 = s.prev.prev.prev;
+    CgCtx c = s1.ctx;
+    ListBuf(Int) ob = ListBuf();
+    List(Int) others = cg_others(c.ids, c.self, 0, ob);
+    Option(CgOpen) ko = cg_open(c.psec, cg_pub_of(c, c.self).pail, s1.k_ct, cg_tr_for(c, c.self), cg_rng(c.seed, "ps/abort2/k", 4 * 1200));
+    CvPt yhat = cv_mul(s3.chi_nonce, cg_pub_of(c, c.self).elgamal);
+    LogPublic pub = LogPublic {.h = s3.chi_l, .x = cg_pub_of(c, c.self).elgamal, .y = yhat};
+    Option(LogProof) yp = log_prove(pub, c.elg, s3.chi_nonce, cg_tr_for(c, c.self), cg_rng(c.seed, "ps/abort2/log", 256));
+    return match ko {
+        None => Err(cg_fail("cannot open K", [])),
+        Some(k) => match yp {
+            None => Err(cg_fail("randomness exhausted", [])),
+            Some(p) => a2_start(s, c, others, k, yhat, p)
+        }
+    };
+}
+
+Result(PsAb2, CgFail) a2_start(Ps6 s, CgCtx c, List(Int) others, CgOpen k, CvPt yhat, LogProof yp) {
+    List(CgOpen) ds = a2_opens(s, others, 0, ListBuf())?;
+    PsA2R mine = PsA2R {.yhat = yhat, .yproof = yp, .k = k, .chi = ds};
+    return Ok(PsAb2 {.prev = s, .mine = mine, .out = [cg_bc(c.self, PsA2(mine))]});
+}
+
+Result(PsA2R, CgFail) a2_check(Ps6 s, List(CgMsg) in, Int j) {
+    CgCtx c = s.prev.prev.prev.prev.prev.ctx;
+    return match ex_a2(in, j, c.self, true, 0) {
+        None => Err(cg_fail("missing abort-2 broadcast", [j])),
+        Some(m) => a2_check_msg(s, c, j, m)
+    };
+}
+
+Result(PsA2R, CgFail) a2_check_msg(Ps6 s, CgCtx c, Int j, PsA2R m) {
+    CgPub pj = cg_pub_of(c, j);
+    List(Int) js_others = cg_others(c.ids, j, 0, ListBuf());
+    if (m.chi.len() != js_others.len()) { return Err(cg_fail("wrong number of openings", [j])); }
+    PsB4R b4 = s.prev.prev.b4[j] else { PsB4R {.delta_share = [], .chi_l = cv_inf(), .chi_m = cv_inf()} };
+    if (!log_verify(LogPublic {.h = b4.chi_l, .x = pj.elgamal, .y = m.yhat}, m.yproof, cg_tr_for(c, j))) { return Err(cg_fail("proof for Y-hat failed", [j])); }
+    P2Peer p2 = s.prev.prev.prev.prev.peers[j] else { P2Peer {.k = [], .g = [], .zl = cv_inf(), .zm = cv_inf(), .commit = []} };
+    if (!cg_open_ok(pj.pail, p2.k, m.k, cg_tr_for(c, j))) { return Err(cg_fail("opening of K failed", [j])); }
+    return if (a2_ds_ok(s, c, j, m, js_others, 0)) { Ok(m) } else { Err(cg_fail("opening of a Chi MtA ciphertext failed", [j])) };
+}
+
+Bool a2_ds_ok(Ps6 s, CgCtx c, Int j, PsA2R m, List(Int) js_others, Int i) {
+    if (i >= js_others.len()) { return true; }
+    Int l = js_others[i];
+    if (!cg_open_ok(cg_pub_of(c, j).pail, a2_chi_ct(s, l, j), m.chi[i], cg_tr_for(c, j))) { return false; }
+    return a2_ds_ok(s, c, j, m, js_others, i + 1);
+}
+
+Result(Map(Int, PsA2R), CgFail) a2_all(Ps6 s, PsAb2 mine, List(CgMsg) in, List(Int) ids, Int i, Map(Int, PsA2R) acc) {
+    if (i >= ids.len()) { return Ok(acc); }
+    CgCtx c = s.prev.prev.prev.prev.prev.ctx;
+    if (ids[i] == c.self) { return a2_all(s, mine, in, ids, i + 1, acc.insert(ids[i], mine.mine)); }
+    PsA2R m = a2_check(s, in, ids[i])?;
+    return a2_all(s, mine, in, ids, i + 1, acc.insert(ids[i], m));
+}
+
+PsA2R a2_none() {
+    return PsA2R {.yhat = cv_inf(), .yproof = LogProof {.a = cv_inf(), .b = cv_inf(), .c = cv_inf(), .z1 = [], .z2 = []}, .k = CgOpen {.plain = zi_zero(), .hidden = [], .proof = NthProof {.a = [], .z = []}}, .chi = []};
+}
+
+BnInt a2_plain(PsA2R m, Int pos) { return if (pos < 0 || pos >= m.chi.len()) { zi_zero() } else { m.chi[pos].plain }; }
+
+// (the sum of every k, the sum over l != j of alpha_jl - alpha_lj)
+pub type A2Sums = { BnInt k; BnInt a; };
+
+A2Sums a2_sums(CgCtx c, Map(Int, PsA2R) ms, Int j, Int i, A2Sums acc) {
+    if (i >= c.ids.len()) { return acc; }
+    Int l = c.ids[i];
+    PsA2R ml = ms[l] else { a2_none() };
+    if (l == j) { return a2_sums(c, ms, j, i + 1, A2Sums {.k = zi_add(acc.k, ml.k.plain), .a = acc.a}); }
+    PsA2R mj = ms[j] else { a2_none() };
+    BnInt a_jl = a2_plain(mj, ps3_pos(c.ids, j, l, 0, 0));
+    BnInt a_lj = a2_plain(ml, ps3_pos(c.ids, l, j, 0, 0));
+    return a2_sums(c, ms, j, i + 1, A2Sums {.k = zi_add(acc.k, ml.k.plain), .a = zi_add(acc.a, zi_sub(a_jl, a_lj))});
+}
+
+List(Int) a2_culprits(Ps6 s, Map(Int, PsA2R) ms, List(Int) others, Int i, ListBuf(Int) acc) {
+    if (i >= others.len()) { return acc.finish(); }
+    CgCtx c = s.prev.prev.prev.prev.prev.ctx;
+    Int j = others[i];
+    PsA2R mj = ms[j] else { a2_none() };
+    A2Sums sm = a2_sums(c, ms, j, 0, A2Sums {.k = zi_zero(), .a = zi_zero()});
+    CvPt m = cv_add(cv_add(mj.yhat, cv_mul(sc_of_zi(sm.k), cg_pub_of(c, j).ecdsa)), cv_mul_base(sc_of_zi(sm.a)));
+    PsB4R b = s.prev.prev.b4[j] else { PsB4R {.delta_share = [], .chi_l = cv_inf(), .chi_m = cv_inf()} };
+    return a2_culprits(s, ms, others, i + 1, if (cv_eq(m, b.chi_m)) { acc } else { acc.push(j) });
+}
+
+/// Finishes abort 2 from every party's abort-2 broadcast: the failure naming
+/// the parties whose openings do not check or whose Chi commitment is not
+/// what their own openings give.
+pub CgFail ps_abort2_blame(PsAb2 a, List(CgMsg) in) {
+    Ps6 s = a.prev;
+    CgCtx c = s.prev.prev.prev.prev.prev.ctx;
+    ListBuf(Int) ob = ListBuf();
+    List(Int) others = cg_others(c.ids, c.self, 0, ob);
+    return match a2_all(s, a, in, c.ids, 0, {}) {
+        Err(e) => e,
+        Ok(ms) => cg_fail("the S shares do not add up to the public key", a2_culprits(s, ms, others, 0, ListBuf()))
+    };
+}

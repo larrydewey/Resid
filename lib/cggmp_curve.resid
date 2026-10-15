@@ -1,0 +1,124 @@
+// cggmp_curve.resid — P-256 points and scalars for the CGGMP21 protocol, held
+// as natural numbers (List(UInt(64))) so that protocol records and message
+// lists never hold a wide fixed-width integer. Public values; variable time.
+// Conversions to p256.resid's UInt(576) happen inside each operation.
+//
+// A scalar is a natural number below n. A point is affine; `inf` marks the
+// identity. The transcript encoding follows the Taurus oracle's P-256 curve:
+// 33 bytes compressed (02 or 03, then x), 33 zero bytes for the identity;
+// domains "*curve.P256Point" and "*curve.P256Scalar".
+
+import "bignum.resid";
+import "bigint.resid";
+import "p256ops.resid";
+import "cggmp_hash.resid";
+
+//@ serial
+pub type CvPt = { Bool inf; List(UInt(64)) x; List(UInt(64)) y; };
+
+/// The group order n.
+pub List(UInt(64)) cv_n() { return bn_from_be(p256_to_be(p256_n())); }
+
+/// The field prime p.
+pub List(UInt(64)) cv_p() { return bn_from_be(p256_to_be(p256_p())); }
+
+pub CvPt cv_inf() { return CvPt {.inf = true, .x = [], .y = []}; }
+
+UInt(576) cv_u(List(UInt(64)) x) { return p256_from_be(bn_to_be(x, 32)); }
+
+List(UInt(64)) cv_nat(UInt(576) v) { return bn_from_be(p256_to_be(v)); }
+
+P256Aff cv_aff(CvPt p) {
+    if (p.inf) { return p256_bad(); }
+    return P256Aff {.x = cv_u(p.x), .y = cv_u(p.y), .ok = true};
+}
+
+CvPt cv_of(P256Aff a) {
+    if (!a.ok) { return cv_inf(); }
+    return CvPt {.inf = false, .x = cv_nat(a.x), .y = cv_nat(a.y)};
+}
+
+/// The base point G.
+pub CvPt cv_g() { return cv_of(pt_mul_base(1)); }
+
+/// k G for a scalar k (reduced mod n first).
+pub CvPt cv_mul_base(List(UInt(64)) k) {
+    List(UInt(64)) r = bn_mod(k, cv_n());
+    if (r.len() == 0) { return cv_inf(); }
+    return cv_of(pt_mul_base(cv_u(r)));
+}
+
+/// k P for a scalar k (reduced mod n first).
+pub CvPt cv_mul(List(UInt(64)) k, CvPt p) {
+    List(UInt(64)) r = bn_mod(k, cv_n());
+    if (r.len() == 0 || p.inf) { return cv_inf(); }
+    return cv_of(pt_mul(cv_u(r), cv_aff(p)));
+}
+
+pub CvPt cv_add(CvPt a, CvPt b) { return cv_of(pt_add(cv_aff(a), cv_aff(b))); }
+
+pub CvPt cv_neg(CvPt a) { return cv_of(pt_neg(cv_aff(a))); }
+
+pub CvPt cv_sub(CvPt a, CvPt b) { return cv_add(a, cv_neg(b)); }
+
+pub Bool cv_eq(CvPt a, CvPt b) { return pt_eq(cv_aff(a), cv_aff(b)); }
+
+/// The 33-byte compressed encoding (33 zero bytes for the identity).
+pub List(Int) cv_enc(CvPt p) {
+    if (p.inf) { return bn_to_be([], 33); }
+    return [2 + bn_bit(p.y, 0)].concat(bn_to_be(p.x, 32));
+}
+
+/// The point of a 33-byte compressed encoding; None when invalid.
+pub Option(CvPt) cv_dec(List(Int) b) {
+    if (b.len() != 33) { return None; }
+    if (b[0] == 0) { return Some(cv_inf()); }
+    if (b[0] != 2 && b[0] != 3) { return None; }
+    List(UInt(64)) x = bn_from_be(bn_slice_int(b, 1, 32));
+    List(UInt(64)) p = cv_p();
+    if (bn_cmp(x, p) >= 0) { return None; }
+    // y^2 = x^3 - 3x + b; p = 3 mod 4, so y = rhs^((p+1)/4).
+    List(UInt(64)) bcoef = bn_from_be(p256_to_be(cv_b()));
+    List(UInt(64)) x3 = bn_modmul(bn_modmul(x, x, p), x, p);
+    List(UInt(64)) rhs = bn_modadd(bn_modsub(x3, bn_modmul([3], x, p), p), bcoef, p);
+    List(UInt(64)) y = bn_modexp(rhs, bn_shr(bn_add(p, [1]), 2), p);
+    if (bn_cmp(bn_modmul(y, y, p), rhs) != 0) { return None; }
+    List(UInt(64)) y2 = if (bn_bit(y, 0) == (Int)(b[0] - 2)) { y } else { bn_sub(p, y) };
+    return Some(CvPt {.inf = false, .x = x, .y = y2});
+}
+
+// The curve constant b of y^2 = x^3 - 3x + b.
+UInt(576) cv_b() { return 41058363725152142129326129780047268409114441015993725554835256314039467401291; }
+
+// ─── Scalars ────────────────────────────────────────────────────
+
+pub List(UInt(64)) sc_nat_add(List(UInt(64)) a, List(UInt(64)) b) { return bn_modadd(bn_mod(a, cv_n()), bn_mod(b, cv_n()), cv_n()); }
+
+pub List(UInt(64)) sc_nat_sub(List(UInt(64)) a, List(UInt(64)) b) { return bn_modsub(bn_mod(a, cv_n()), bn_mod(b, cv_n()), cv_n()); }
+
+pub List(UInt(64)) sc_nat_mul(List(UInt(64)) a, List(UInt(64)) b) { return bn_modmul(a, b, cv_n()); }
+
+pub List(UInt(64)) sc_nat_neg(List(UInt(64)) a) { return bn_modsub([], bn_mod(a, cv_n()), cv_n()); }
+
+/// 1/a mod n (empty for a = 0).
+pub List(UInt(64)) sc_nat_inv(List(UInt(64)) a) {
+    return match bn_modinv(a, cv_n()) { Some(v) => v, None => [] };
+}
+
+/// A signed integer reduced mod n.
+pub List(UInt(64)) sc_of_zi(BnInt a) { return zi_mod(a, cv_n()); }
+
+/// The scalar as a signed integer (non-negative).
+pub BnInt sc_to_zi(List(UInt(64)) a) { return zi_from_nat(a); }
+
+/// 32 bytes read from a stream, reduced mod n (Taurus's sample.Scalar).
+pub List(UInt(64)) sc_of_bytes(List(Int) b) { return bn_mod(bn_from_be(b), cv_n()); }
+
+/// The x coordinate of a point as a scalar (empty for the identity).
+pub List(UInt(64)) cv_x_scalar(CvPt p) { return if (p.inf) { [] } else { bn_mod(p.x, cv_n()) }; }
+
+// ─── Transcript ─────────────────────────────────────────────────
+
+pub Transcript tr_point(Transcript t, CvPt p) { return tr_item(t, "*curve.P256Point", cv_enc(p)); }
+
+pub Transcript tr_scalar(Transcript t, List(UInt(64)) s) { return tr_item(t, "*curve.P256Scalar", bn_to_be(s, 32)); }

@@ -1,0 +1,30 @@
+// lib/cggmp_delivery.resid: signature shares never reach a non-initiator.
+
+import "../../lib/cggmp_delivery.resid";
+import "../../lib/cose.resid";
+import "../../lib/crypto.resid";
+
+test "signature shares are routed only to the initiator" {
+    List(CgMsg) msgs = [cg_bc(1, SgB([1, 2, 3])), cg_bc(2, SgB([4, 5, 6]))];
+    List(CgMsg) initiator = cggmp_initiator_only(msgs, 1, 1);
+    List(CgMsg) peer = cggmp_initiator_only(msgs, 2, 1);
+    expect(initiator.len()).toEqual(2);
+    expect(peer.len()).toEqual(0);
+    expect(cggmp_no_sig_for_peer(peer)).toBeTrue();
+    expect(cggmp_sg_count(initiator, 0)).toEqual(2);
+}
+
+test "non-signature bodies are relayed to every party" {
+    CgBody b = PsB5(cv_inf());
+    List(CgMsg) msgs = [cg_to(1, 2, b)];
+    List(CgMsg) peer = cggmp_initiator_only(msgs, 2, 1);
+    expect(peer.len()).toEqual(1);
+    expect(cggmp_no_sig_for_peer(peer)).toBeTrue();
+}
+
+test "only the initiator may call the finishing API" {
+    CgCtx peer = CgCtx {.self = 2, .ids = [], .pubs = [], .x = [], .elg = [], .psec = PaillierSec {.p = [], .q = [], .phi = [], .phi_inv = []}, .pubkey = cv_inf(), .base = tr_new(), .seed = [], .digest = []};
+    CgPresig pre = CgPresig {.id = [], .r = cv_inf(), .ids = [], .rbar = [], .s = [], .kshare = [], .chi = []};
+    Bool refused = match cggmp_initiator_finish(peer, pre, [], 1) { Ok(_) => false, Err(e) => e.culprits.len() == 1 };
+    expect(refused).toBeTrue();
+}

@@ -1,0 +1,613 @@
+// cggmp_proofs.resid — more zero-knowledge proofs of CGGMP21: no small
+// factors (fac), Paillier encryption in range (enc), and the others the
+// protocol uses. Port of Taurus multi-party-sig (pkg/zk/*); public values,
+// variable time. See lib/cggmp_zk.resid for the conventions.
+
+import "cggmp_prim.resid";
+import "cggmp_hash.resid";
+import "cggmp_curve.resid";
+
+// Draws a list of signed samples, one per entry of `bits`, from `rnd`.
+Option(List(BnInt)) zp_draws(List(Int) rnd, Int pos, List(Int) bits, Int i, ListBuf(BnInt) acc) {
+    if (i >= bits.len()) { return Some(acc.finish()); }
+    return match zk_draw_pm(rnd, pos, bits[i]) {
+        None => zp_drop(acc),
+        Some(d) => zp_draws(rnd, d.next, bits, i + 1, acc.push(d.value))
+    };
+}
+
+Option(List(BnInt)) zp_drop(ListBuf(BnInt) acc) {
+    _ = acc.finish();
+    return None;
+}
+
+// ─── No small factors (fac) ─────────────────────────────────────
+//
+// For the prover's N = p q and the verifier's Pedersen parameters, p and q
+// are each below 2^(l+epsilon) sqrt(N) (so neither is small).
+
+pub type FacProof = {
+    List(UInt(64)) p; List(UInt(64)) q; List(UInt(64)) a; List(UInt(64)) b; List(UInt(64)) t;
+    BnInt sigma; BnInt z1; BnInt z2; BnInt w1; BnInt w2; BnInt v;
+};
+
+// e = IntervalL of the stream after N, Aux, P, Q, A, B, T.
+BnInt fac_challenge(Transcript tr, List(UInt(64)) n, Pedersen aux, List(UInt(64)) p, List(UInt(64)) q, List(UInt(64)) a, List(UInt(64)) b, List(UInt(64)) t) {
+    Transcript t1 = tr_pedersen(tr_modulus(tr, n), aux);
+    Transcript t2 = tr_nat_w(tr_nat_w(tr_nat_w(tr_nat_w(tr_nat_w(t1, p, 256), q, 256), a, 256), b, 256), t, 256);
+    return zk_stream_pm(tr_seed(t2), 0, zk_l()).value;
+}
+
+/// Whether `pf` proves that the factors of N are not small, bound to `tr`.
+pub Bool fac_verify(List(UInt(64)) n, Pedersen aux, FacProof pf, Transcript tr) {
+    if (!pedersen_valid(aux)) { return false; }
+    BnInt e = fac_challenge(tr, n, aux, pf.p, pf.q, pf.a, pf.b, pf.t);
+    if (!ped_verify(aux, pf.z1, pf.w1, e, pf.a, pf.p)) { return false; }
+    if (!ped_verify(aux, pf.z2, pf.w2, e, pf.b, pf.q)) { return false; }
+    // R = s^N t^sigma; Q^z1 t^v = R^e T.
+    List(UInt(64)) r = bn_modmul(bn_modexp(aux.s, n, aux.n), zi_modexp(aux.t, pf.sigma, aux.n), aux.n);
+    List(UInt(64)) lhs = bn_modmul(zi_modexp(pf.q, pf.z1, aux.n), zi_modexp(aux.t, pf.v, aux.n), aux.n);
+    List(UInt(64)) rhs = bn_modmul(zi_modexp(r, e, aux.n), pf.t, aux.n);
+    if (bn_cmp(lhs, rhs) != 0) { return false; }
+    // |z1|, |z2| within 2^(1 + l + epsilon + 1024).
+    Int bound = 1 + zk_l() + zk_eps() + zk_bits_n() / 2;
+    return zi_bit_len(pf.z1) <= bound && zi_bit_len(pf.z2) <= bound;
+}
+
+/// A proof for N = p q against the verifier's `aux`, bound to `tr`.
+pub Option(FacProof) fac_prove(List(UInt(64)) p, List(UInt(64)) q, Pedersen aux, Transcript tr, List(Int) rnd) {
+    Int rootn = zk_l() + zk_eps() + zk_bits_n() / 2;
+    Int ln = zk_l() + zk_bits_n();
+    // alpha, beta, mu, nu, sigma, r, x, y
+    List(Int) bits = [rootn, rootn, ln, ln, zk_l() + 2 * zk_bits_n(), zk_l() + zk_eps() + 2 * zk_bits_n(), zk_l() + zk_eps() + zk_bits_n(), zk_l() + zk_eps() + zk_bits_n()];
+    return match zp_draws(rnd, 0, bits, 0, ListBuf()) {
+        None => None,
+        Some(d) => Some(fac_prove_with(p, q, aux, tr, d))
+    };
+}
+
+FacProof fac_prove_with(List(UInt(64)) p, List(UInt(64)) q, Pedersen aux, Transcript tr, List(BnInt) d) {
+    BnInt alpha = d[0]; BnInt beta = d[1]; BnInt mu = d[2]; BnInt nu = d[3];
+    BnInt sigma = d[4]; BnInt r = d[5]; BnInt x = d[6]; BnInt y = d[7];
+    BnInt pi = zi_from_nat(p);
+    BnInt qi = zi_from_nat(q);
+    List(UInt(64)) cp = ped_commit(aux, pi, mu);
+    List(UInt(64)) cq = ped_commit(aux, qi, nu);
+    List(UInt(64)) ca = ped_commit(aux, alpha, x);
+    List(UInt(64)) cb = ped_commit(aux, beta, y);
+    List(UInt(64)) ct = bn_modmul(zi_modexp(cq, alpha, aux.n), zi_modexp(aux.t, r, aux.n), aux.n);
+    BnInt e = fac_challenge(tr, bn_mul(p, q), aux, cp, cq, ca, cb, ct);
+    BnInt sigma_hat = zi_add(zi_neg(zi_mul(nu, pi)), sigma);
+    return FacProof {
+        .p = cp, .q = cq, .a = ca, .b = cb, .t = ct, .sigma = sigma,
+        .z1 = zi_add(alpha, zi_mul(e, pi)), .z2 = zi_add(beta, zi_mul(e, qi)),
+        .w1 = zi_add(x, zi_mul(e, mu)), .w2 = zi_add(y, zi_mul(e, nu)),
+        .v = zi_add(r, zi_mul(e, sigma_hat)) };
+}
+
+// ─── Paillier encryption in range (enc) ─────────────────────────
+//
+// K = Enc_N(k; rho) with k in +-2^l: the prover knows such k and rho.
+
+pub type EncProof = {
+    List(UInt(64)) s; List(UInt(64)) a; List(UInt(64)) c;   // commitments S, A (a ciphertext), C
+    BnInt z1; List(UInt(64)) z2; BnInt z3;
+};
+
+BnInt enc_challenge(Transcript tr, Pedersen aux, PaillierPub pk, List(UInt(64)) k, List(UInt(64)) s, List(UInt(64)) a, List(UInt(64)) c) {
+    Transcript t1 = tr_ciphertext(tr_paillier(tr_pedersen(tr, aux), pk), k);
+    Transcript t2 = tr_nat_w(tr_ciphertext(tr_nat_w(t1, s, 256), a), c, 256);
+    return zk_stream_pm(tr_seed(t2), 0, zk_l()).value;
+}
+
+/// Whether `pf` proves that ciphertext `k` under `pk` encrypts a value in
+/// +-2^l, bound to `tr`.
+pub Bool enc_verify(Pedersen aux, PaillierPub pk, List(UInt(64)) k, EncProof pf, Transcript tr) {
+    if (!pedersen_valid(aux)) { return false; }
+    if (!pa_ct_ok(pk, pf.a) || !zk_valid_mod_n(pf.z2, pk.n)) { return false; }
+    if (zi_bit_len(pf.z1) > zk_l() + zk_eps()) { return false; }
+    BnInt e = enc_challenge(tr, aux, pk, k, pf.s, pf.a, pf.c);
+    if (!ped_verify(aux, pf.z1, pf.z3, e, pf.c, pf.s)) { return false; }
+    if (!pa_msg_ok(pk, pf.z1)) { return false; }
+    List(UInt(64)) lhs = pa_enc(pk, pf.z1, pf.z2);
+    List(UInt(64)) rhs = pa_ct_add(pk, pa_ct_mul(pk, k, e), pf.a);
+    return bn_cmp(lhs, rhs) == 0;
+}
+
+/// A proof that `k_ct` = Enc(k; rho), for the plaintext k and nonce rho.
+pub Option(EncProof) enc_prove(Pedersen aux, PaillierPub pk, List(UInt(64)) k_ct, BnInt k, List(UInt(64)) rho, Transcript tr, List(Int) rnd) {
+    // alpha, mu, gamma, then the nonce r (a unit mod N) from the rest of the stream.
+    List(Int) bits = [zk_l() + zk_eps(), zk_l() + zk_bits_n(), zk_l() + zk_eps() + zk_bits_n()];
+    return match zp_draws(rnd, 0, bits, 0, ListBuf()) {
+        None => None,
+        Some(d) => match zk_draw_unit(rnd, enc_used(bits, 0, 0), pk.n) {
+            None => None,
+            Some(r) => Some(enc_prove_with(aux, pk, k_ct, k, rho, tr, d, r.value))
+        }
+    };
+}
+
+// Bytes the samples of `bits` use from the stream.
+pub Int enc_used(List(Int) bits, Int i, Int acc) {
+    if (i >= bits.len()) { return acc; }
+    return enc_used(bits, i + 1, acc + bits[i] / 8 + 1);
+}
+
+EncProof enc_prove_with(Pedersen aux, PaillierPub pk, List(UInt(64)) k_ct, BnInt k, List(UInt(64)) rho, Transcript tr, List(BnInt) d, List(UInt(64)) r) {
+    BnInt alpha = d[0]; BnInt mu = d[1]; BnInt gamma = d[2];
+    List(UInt(64)) a = pa_enc(pk, alpha, r);
+    List(UInt(64)) s = ped_commit(aux, k, mu);
+    List(UInt(64)) c = ped_commit(aux, alpha, gamma);
+    BnInt e = enc_challenge(tr, aux, pk, k_ct, s, a, c);
+    return EncProof {
+        .s = s, .a = a, .c = c,
+        .z1 = zi_add(alpha, zi_mul(e, k)),
+        .z2 = bn_modmul(zi_modexp(rho, e, pk.n), r, pk.n),
+        .z3 = zi_add(gamma, zi_mul(e, mu)) };
+}
+
+// ─── Shared helpers ─────────────────────────────────────────────
+
+// e as an integer in +-2^256, read from the transcript stream (Taurus's
+// IntervalScalar for a 256-bit group).
+BnInt zp_e_int(Transcript t) { return zk_stream_pm(tr_seed(t), 0, zk_l()).value; }
+
+// e as a scalar: 32 stream bytes reduced mod n (Taurus's sample.Scalar).
+List(UInt(64)) zp_e_scalar(Transcript t) { return sc_of_bytes(tr_stream(tr_seed(t), 0, 32)); }
+
+// A scalar drawn from `rnd` at `pos` (32 bytes reduced mod n).
+pub type ZpSc = { List(UInt(64)) value; Int next; };
+
+Option(ZpSc) zp_draw_scalar(List(Int) rnd, Int pos) {
+    if (pos + 32 > rnd.len()) { return None; }
+    return Some(ZpSc {.value = sc_of_bytes(bn_slice_int(rnd, pos, 32)), .next = pos + 32});
+}
+
+// Several units mod the given moduli, drawn in order.
+Option(List(List(UInt(64)))) zp_units(List(Int) rnd, Int pos, List(List(UInt(64))) mods, Int i, ListBuf(List(UInt(64))) acc) {
+    if (i >= mods.len()) { return Some(acc.finish()); }
+    return match zk_draw_unit(rnd, pos, mods[i]) {
+        None => zp_drop_n(acc),
+        Some(d) => zp_units(rnd, d.next, mods, i + 1, acc.push(d.value))
+    };
+}
+
+Option(List(List(UInt(64)))) zp_drop_n(ListBuf(List(UInt(64))) acc) {
+    _ = acc.finish();
+    return None;
+}
+
+// How many stream bytes `zp_draws` uses for these sizes.
+Int zp_used(List(Int) bits) { return enc_used(bits, 0, 0); }
+
+Bool zp_in(BnInt z, Int bits) { return zi_bit_len(z) <= bits; }
+
+Int zp_leps() { return zk_l() + zk_eps(); }
+
+Int zp_lpeps() { return zk_lprime() + zk_eps(); }
+
+Int zp_ln() { return zk_l() + zk_bits_n(); }
+
+Int zp_lepsn() { return zk_l() + zk_eps() + zk_bits_n(); }
+
+// Transcript writers for an ElGamal ciphertext and a Schnorr commitment.
+pub Transcript tr_elgamal(Transcript t, CvPt l, CvPt m) { return tr_item(t, "ElGamal Ciphertext", cv_enc(l).concat(cv_enc(m))); }
+
+pub Transcript tr_schnorr_commitment(Transcript t, CvPt c) { return tr_item(t, "Schnorr Commitment", cv_enc(c)); }
+
+// ─── Affine operation with a group commitment (aff-g) ───────────
+//
+// Dv = (x ⊙ Kv) ⊕ Enc_verifier(y; s) and Fp = Enc_prover(y; r), with
+// Xp = x G, x in +-2^l and y in +-2^l'.
+
+pub type AffgPublic = {
+    List(UInt(64)) kv; List(UInt(64)) dv; List(UInt(64)) fp; CvPt xp;
+    PaillierPub prover; PaillierPub verifier; Pedersen aux;
+};
+
+pub type AffgProof = {
+    List(UInt(64)) a; CvPt bx; List(UInt(64)) by;
+    List(UInt(64)) e; List(UInt(64)) s; List(UInt(64)) f; List(UInt(64)) t;
+    BnInt z1; BnInt z2; BnInt z3; BnInt z4; List(UInt(64)) w; List(UInt(64)) wy;
+};
+
+BnInt affg_challenge(Transcript tr, AffgPublic p, List(UInt(64)) a, CvPt bx, List(UInt(64)) by, List(UInt(64)) e, List(UInt(64)) s, List(UInt(64)) f, List(UInt(64)) t) {
+    Transcript t1 = tr_ciphertext(tr_paillier(tr_paillier(tr_pedersen(tr, p.aux), p.prover), p.verifier), p.kv);
+    Transcript t2 = tr_point(tr_ciphertext(tr_ciphertext(t1, p.dv), p.fp), p.xp);
+    Transcript t3 = tr_ciphertext(tr_point(tr_ciphertext(t2, a), bx), by);
+    Transcript t4 = tr_nat_w(tr_nat_w(tr_nat_w(tr_nat_w(t3, e, 256), s, 256), f, 256), t, 256);
+    return zp_e_int(t4);
+}
+
+pub Bool affg_verify(AffgPublic p, AffgProof pf, Transcript tr) {
+    if (!pedersen_valid(p.aux)) { return false; }
+    if (!pa_ct_ok(p.verifier, pf.a) || !pa_ct_ok(p.prover, pf.by)) { return false; }
+    if (!zk_valid_mod_n(pf.wy, p.prover.n) || !zk_valid_mod_n(pf.w, p.verifier.n) || pf.bx.inf) { return false; }
+    if (!zp_in(pf.z1, zp_leps()) || !zp_in(pf.z2, zp_lpeps())) { return false; }
+    BnInt e = affg_challenge(tr, p, pf.a, pf.bx, pf.by, pf.e, pf.s, pf.f, pf.t);
+    if (!ped_verify(p.aux, pf.z1, pf.z3, e, pf.e, pf.s)) { return false; }
+    if (!ped_verify(p.aux, pf.z2, pf.z4, e, pf.f, pf.t)) { return false; }
+    // Enc_v(z2; w) ⊕ (z1 ⊙ Kv) = (e ⊙ Dv) ⊕ A
+    List(UInt(64)) lhs1 = pa_ct_add(p.verifier, pa_enc(p.verifier, pf.z2, pf.w), pa_ct_mul(p.verifier, p.kv, pf.z1));
+    List(UInt(64)) rhs1 = pa_ct_add(p.verifier, pa_ct_mul(p.verifier, p.dv, e), pf.a);
+    if (bn_cmp(lhs1, rhs1) != 0) { return false; }
+    // z1 G = e Xp + Bx
+    CvPt lhs2 = cv_mul_base(sc_of_zi(pf.z1));
+    CvPt rhs2 = cv_add(cv_mul(sc_of_zi(e), p.xp), pf.bx);
+    if (!cv_eq(lhs2, rhs2)) { return false; }
+    // Enc_p(z2; wy) = (e ⊙ Fp) ⊕ By
+    List(UInt(64)) lhs3 = pa_enc(p.prover, pf.z2, pf.wy);
+    List(UInt(64)) rhs3 = pa_ct_add(p.prover, pa_ct_mul(p.prover, p.fp, e), pf.by);
+    return bn_cmp(lhs3, rhs3) == 0;
+}
+
+/// Secrets of the prover: x, y, the nonce s of Dv's encryption of y and the
+/// nonce r of Fp.
+pub type AffgSecret = { BnInt x; BnInt y; List(UInt(64)) s; List(UInt(64)) r; };
+
+pub Option(AffgProof) affg_prove(AffgPublic p, AffgSecret sec, Transcript tr, List(Int) rnd) {
+    // alpha, beta, gamma, m, delta, mu, then units rho (verifier N) and rhoY (prover N).
+    List(Int) bits = [zp_leps(), zp_lpeps(), zp_lepsn(), zp_ln(), zp_lepsn(), zp_ln()];
+    return match zp_draws(rnd, 0, bits, 0, ListBuf()) {
+        None => None,
+        Some(d) => match zp_units(rnd, zp_used(bits), [p.verifier.n, p.prover.n], 0, ListBuf()) {
+            None => None,
+            Some(u) => Some(affg_with(p, sec, tr, d, u[0], u[1]))
+        }
+    };
+}
+
+AffgProof affg_with(AffgPublic p, AffgSecret sec, Transcript tr, List(BnInt) d, List(UInt(64)) rho, List(UInt(64)) rho_y) {
+    BnInt alpha = d[0]; BnInt beta = d[1]; BnInt gamma = d[2]; BnInt m = d[3]; BnInt delta = d[4]; BnInt mu = d[5];
+    List(UInt(64)) a = pa_ct_add(p.verifier, pa_enc(p.verifier, beta, rho), pa_ct_mul(p.verifier, p.kv, alpha));
+    CvPt bx = cv_mul_base(sc_of_zi(alpha));
+    List(UInt(64)) by = pa_enc(p.prover, beta, rho_y);
+    List(UInt(64)) ce = ped_commit(p.aux, alpha, gamma);
+    List(UInt(64)) cs = ped_commit(p.aux, sec.x, m);
+    List(UInt(64)) cf = ped_commit(p.aux, beta, delta);
+    List(UInt(64)) ct = ped_commit(p.aux, sec.y, mu);
+    BnInt e = affg_challenge(tr, p, a, bx, by, ce, cs, cf, ct);
+    return AffgProof {
+        .a = a, .bx = bx, .by = by, .e = ce, .s = cs, .f = cf, .t = ct,
+        .z1 = zi_add(alpha, zi_mul(e, sec.x)), .z2 = zi_add(beta, zi_mul(e, sec.y)),
+        .z3 = zi_add(gamma, zi_mul(e, m)), .z4 = zi_add(delta, zi_mul(e, mu)),
+        .w = bn_modmul(zi_modexp(sec.s, e, p.verifier.n), rho, p.verifier.n),
+        .wy = bn_modmul(zi_modexp(sec.r, e, p.prover.n), rho_y, p.prover.n) };
+}
+
+// ─── Affine operation with a Paillier commitment (aff-p) ────────
+//
+// As aff-g, but x is committed as a Paillier ciphertext Xp under the
+// prover's key instead of a group element.
+
+pub type AffpPublic = {
+    List(UInt(64)) kv; List(UInt(64)) dv; List(UInt(64)) fp; List(UInt(64)) xp;
+    PaillierPub prover; PaillierPub verifier; Pedersen aux;
+};
+
+pub type AffpProof = {
+    List(UInt(64)) a; List(UInt(64)) bx; List(UInt(64)) by;
+    List(UInt(64)) e; List(UInt(64)) s; List(UInt(64)) f; List(UInt(64)) t;
+    BnInt z1; BnInt z2; BnInt z3; BnInt z4; List(UInt(64)) w; List(UInt(64)) wx; List(UInt(64)) wy;
+};
+
+BnInt affp_challenge(Transcript tr, AffpPublic p, List(UInt(64)) a, List(UInt(64)) bx, List(UInt(64)) by, List(UInt(64)) e, List(UInt(64)) s, List(UInt(64)) f, List(UInt(64)) t) {
+    Transcript t1 = tr_ciphertext(tr_paillier(tr_paillier(tr_pedersen(tr, p.aux), p.prover), p.verifier), p.kv);
+    Transcript t2 = tr_ciphertext(tr_ciphertext(tr_ciphertext(t1, p.dv), p.fp), p.xp);
+    Transcript t3 = tr_ciphertext(tr_ciphertext(tr_ciphertext(t2, a), bx), by);
+    Transcript t4 = tr_nat_w(tr_nat_w(tr_nat_w(tr_nat_w(t3, e, 256), s, 256), f, 256), t, 256);
+    return zp_e_int(t4);
+}
+
+pub Bool affp_verify(AffpPublic p, AffpProof pf, Transcript tr) {
+    if (!pa_ct_ok(p.verifier, pf.a) || !pa_ct_ok(p.prover, pf.bx) || !pa_ct_ok(p.prover, pf.by)) { return false; }
+    if (!zk_valid_mod_n(pf.wx, p.prover.n) || !zk_valid_mod_n(pf.wy, p.prover.n) || !zk_valid_mod_n(pf.w, p.verifier.n)) { return false; }
+    if (!zp_in(pf.z1, zp_leps()) || !zp_in(pf.z2, zp_lpeps())) { return false; }
+    BnInt e = affp_challenge(tr, p, pf.a, pf.bx, pf.by, pf.e, pf.s, pf.f, pf.t);
+    List(UInt(64)) lhs1 = pa_ct_add(p.verifier, pa_enc(p.verifier, pf.z2, pf.w), pa_ct_mul(p.verifier, p.kv, pf.z1));
+    List(UInt(64)) rhs1 = pa_ct_add(p.verifier, pa_ct_mul(p.verifier, p.dv, e), pf.a);
+    if (bn_cmp(lhs1, rhs1) != 0) { return false; }
+    List(UInt(64)) lhs2 = pa_enc(p.prover, pf.z1, pf.wx);
+    List(UInt(64)) rhs2 = pa_ct_add(p.prover, pa_ct_mul(p.prover, p.xp, e), pf.bx);
+    if (bn_cmp(lhs2, rhs2) != 0) { return false; }
+    List(UInt(64)) lhs3 = pa_enc(p.prover, pf.z2, pf.wy);
+    List(UInt(64)) rhs3 = pa_ct_add(p.prover, pa_ct_mul(p.prover, p.fp, e), pf.by);
+    if (bn_cmp(lhs3, rhs3) != 0) { return false; }
+    return ped_verify(p.aux, pf.z1, pf.z3, e, pf.e, pf.s) && ped_verify(p.aux, pf.z2, pf.z4, e, pf.f, pf.t);
+}
+
+/// Secrets: x, y, the nonce s of Dv's encryption, rx the nonce of Xp, r the nonce of Fp.
+pub type AffpSecret = { BnInt x; BnInt y; List(UInt(64)) s; List(UInt(64)) rx; List(UInt(64)) r; };
+
+pub Option(AffpProof) affp_prove(AffpPublic p, AffpSecret sec, Transcript tr, List(Int) rnd) {
+    List(Int) bits = [zp_leps(), zp_lpeps(), zp_lepsn(), zp_ln(), zp_lepsn(), zp_ln()];
+    return match zp_draws(rnd, 0, bits, 0, ListBuf()) {
+        None => None,
+        Some(d) => match zp_units(rnd, zp_used(bits), [p.verifier.n, p.prover.n, p.prover.n], 0, ListBuf()) {
+            None => None,
+            Some(u) => Some(affp_with(p, sec, tr, d, u[0], u[1], u[2]))
+        }
+    };
+}
+
+AffpProof affp_with(AffpPublic p, AffpSecret sec, Transcript tr, List(BnInt) d, List(UInt(64)) rho, List(UInt(64)) rho_x, List(UInt(64)) rho_y) {
+    BnInt alpha = d[0]; BnInt beta = d[1]; BnInt gamma = d[2]; BnInt m = d[3]; BnInt delta = d[4]; BnInt mu = d[5];
+    List(UInt(64)) a = pa_ct_add(p.verifier, pa_enc(p.verifier, beta, rho), pa_ct_mul(p.verifier, p.kv, alpha));
+    List(UInt(64)) bx = pa_enc(p.prover, alpha, rho_x);
+    List(UInt(64)) by = pa_enc(p.prover, beta, rho_y);
+    List(UInt(64)) ce = ped_commit(p.aux, alpha, gamma);
+    List(UInt(64)) cs = ped_commit(p.aux, sec.x, m);
+    List(UInt(64)) cf = ped_commit(p.aux, beta, delta);
+    List(UInt(64)) ct = ped_commit(p.aux, sec.y, mu);
+    BnInt e = affp_challenge(tr, p, a, bx, by, ce, cs, cf, ct);
+    return AffpProof {
+        .a = a, .bx = bx, .by = by, .e = ce, .s = cs, .f = cf, .t = ct,
+        .z1 = zi_add(alpha, zi_mul(e, sec.x)), .z2 = zi_add(beta, zi_mul(e, sec.y)),
+        .z3 = zi_add(gamma, zi_mul(e, m)), .z4 = zi_add(delta, zi_mul(e, mu)),
+        .w = bn_modmul(zi_modexp(sec.s, e, p.verifier.n), rho, p.verifier.n),
+        .wx = bn_modmul(zi_modexp(sec.rx, e, p.prover.n), rho_x, p.prover.n),
+        .wy = bn_modmul(zi_modexp(sec.r, e, p.prover.n), rho_y, p.prover.n) };
+}
+
+// ─── Paillier encryption of a discrete log (log*) ───────────────
+//
+// C = Enc(x; rho) and X = x G (G a given base), with x in +-2^l.
+
+pub type LogstarPublic = { List(UInt(64)) c; CvPt x; CvPt g; PaillierPub prover; Pedersen aux; };
+
+pub type LogstarProof = {
+    List(UInt(64)) s; List(UInt(64)) a; CvPt y; List(UInt(64)) d;
+    BnInt z1; List(UInt(64)) z2; BnInt z3;
+};
+
+BnInt logstar_challenge(Transcript tr, LogstarPublic p, List(UInt(64)) s, List(UInt(64)) a, CvPt y, List(UInt(64)) d) {
+    Transcript t1 = tr_point(tr_point(tr_ciphertext(tr_paillier(tr_pedersen(tr, p.aux), p.prover), p.c), p.x), p.g);
+    Transcript t2 = tr_nat_w(tr_point(tr_ciphertext(tr_nat_w(t1, s, 256), a), y), d, 256);
+    return zp_e_int(t2);
+}
+
+pub Bool logstar_verify(LogstarPublic p, LogstarProof pf, Transcript tr) {
+    if (!pa_ct_ok(p.prover, pf.a) || pf.y.inf || !zk_valid_mod_n(pf.z2, p.prover.n)) { return false; }
+    if (!zp_in(pf.z1, zp_leps())) { return false; }
+    BnInt e = logstar_challenge(tr, p, pf.s, pf.a, pf.y, pf.d);
+    if (!ped_verify(p.aux, pf.z1, pf.z3, e, pf.d, pf.s)) { return false; }
+    List(UInt(64)) lhs = pa_enc(p.prover, pf.z1, pf.z2);
+    List(UInt(64)) rhs = pa_ct_add(p.prover, pa_ct_mul(p.prover, p.c, e), pf.a);
+    if (bn_cmp(lhs, rhs) != 0) { return false; }
+    return cv_eq(cv_mul(sc_of_zi(pf.z1), p.g), cv_add(cv_mul(sc_of_zi(e), p.x), pf.y));
+}
+
+pub Option(LogstarProof) logstar_prove(LogstarPublic p, BnInt x, List(UInt(64)) rho, Transcript tr, List(Int) rnd) {
+    List(Int) bits = [zp_leps(), zp_ln(), zp_lepsn()];
+    return match zp_draws(rnd, 0, bits, 0, ListBuf()) {
+        None => None,
+        Some(d) => match zk_draw_unit(rnd, zp_used(bits), p.prover.n) {
+            None => None,
+            Some(r) => Some(logstar_with(p, x, rho, tr, d, r.value))
+        }
+    };
+}
+
+LogstarProof logstar_with(LogstarPublic p, BnInt x, List(UInt(64)) rho, Transcript tr, List(BnInt) d, List(UInt(64)) r) {
+    BnInt alpha = d[0]; BnInt mu = d[1]; BnInt gamma = d[2];
+    List(UInt(64)) a = pa_enc(p.prover, alpha, r);
+    CvPt y = cv_mul(sc_of_zi(alpha), p.g);
+    List(UInt(64)) cs = ped_commit(p.aux, x, mu);
+    List(UInt(64)) cd = ped_commit(p.aux, alpha, gamma);
+    BnInt e = logstar_challenge(tr, p, cs, a, y, cd);
+    return LogstarProof {
+        .s = cs, .a = a, .y = y, .d = cd,
+        .z1 = zi_add(alpha, zi_mul(e, x)),
+        .z2 = bn_modmul(zi_modexp(rho, e, p.prover.n), r, p.prover.n),
+        .z3 = zi_add(gamma, zi_mul(e, mu)) };
+}
+
+// ─── Paillier encryption of an ElGamal-encrypted value (enc-elg) ─
+
+pub type EncelgPublic = { List(UInt(64)) c; CvPt a; CvPt b; CvPt x; PaillierPub prover; Pedersen aux; };
+
+pub type EncelgProof = {
+    List(UInt(64)) s; List(UInt(64)) d; CvPt y; CvPt z; List(UInt(64)) t;
+    BnInt z1; List(UInt(64)) w; List(UInt(64)) z2; BnInt z3;
+};
+
+BnInt encelg_challenge(Transcript tr, EncelgPublic p, List(UInt(64)) s, List(UInt(64)) d, CvPt y, CvPt z, List(UInt(64)) t) {
+    Transcript t1 = tr_point(tr_point(tr_point(tr_ciphertext(tr_paillier(tr_pedersen(tr, p.aux), p.prover), p.c), p.a), p.b), p.x);
+    Transcript t2 = tr_nat_w(tr_point(tr_point(tr_ciphertext(tr_nat_w(t1, s, 256), d), y), z), t, 256);
+    return zp_e_int(t2);
+}
+
+pub Bool encelg_verify(EncelgPublic p, EncelgProof pf, Transcript tr) {
+    if (!pa_ct_ok(p.prover, pf.d) || pf.w.len() == 0 || pf.y.inf || pf.z.inf || !zk_valid_mod_n(pf.z2, p.prover.n)) { return false; }
+    if (!zp_in(pf.z1, zp_leps())) { return false; }
+    BnInt e = encelg_challenge(tr, p, pf.s, pf.d, pf.y, pf.z, pf.t);
+    List(UInt(64)) es = sc_of_zi(e);
+    List(UInt(64)) lhs1 = pa_enc(p.prover, pf.z1, pf.z2);
+    List(UInt(64)) rhs1 = pa_ct_add(p.prover, pa_ct_mul(p.prover, p.c, e), pf.d);
+    if (bn_cmp(lhs1, rhs1) != 0) { return false; }
+    // z1 G + w A = e X + Y
+    CvPt lhs2 = cv_add(cv_mul_base(sc_of_zi(pf.z1)), cv_mul(pf.w, p.a));
+    if (!cv_eq(lhs2, cv_add(cv_mul(es, p.x), pf.y))) { return false; }
+    // w G = e B + Z
+    if (!cv_eq(cv_mul_base(pf.w), cv_add(cv_mul(es, p.b), pf.z))) { return false; }
+    return ped_verify(p.aux, pf.z1, pf.z3, e, pf.t, pf.s);
+}
+
+/// Secrets: x, the Paillier nonce rho, and the ElGamal nonce b (B = b G).
+pub Option(EncelgProof) encelg_prove(EncelgPublic p, BnInt x, List(UInt(64)) rho, List(UInt(64)) b, Transcript tr, List(Int) rnd) {
+    // alpha, mu, gamma; then the scalar beta, then the unit r.
+    List(Int) bits = [zp_leps(), zp_ln(), zp_lepsn()];
+    return match zp_draws(rnd, 0, bits, 0, ListBuf()) {
+        None => None,
+        Some(d) => match zp_draw_scalar(rnd, zp_used(bits)) {
+            None => None,
+            Some(beta) => match zk_draw_unit(rnd, beta.next, p.prover.n) {
+                None => None,
+                Some(r) => Some(encelg_with(p, x, rho, b, tr, d, beta.value, r.value))
+            }
+        }
+    };
+}
+
+EncelgProof encelg_with(EncelgPublic p, BnInt x, List(UInt(64)) rho, List(UInt(64)) b, Transcript tr, List(BnInt) d, List(UInt(64)) beta, List(UInt(64)) r) {
+    BnInt alpha = d[0]; BnInt mu = d[1]; BnInt gamma = d[2];
+    List(UInt(64)) cs = ped_commit(p.aux, x, mu);
+    List(UInt(64)) cd = pa_enc(p.prover, alpha, r);
+    CvPt y = cv_add(cv_mul(beta, p.a), cv_mul_base(sc_of_zi(alpha)));
+    CvPt z = cv_mul_base(beta);
+    List(UInt(64)) ct = ped_commit(p.aux, alpha, gamma);
+    BnInt e = encelg_challenge(tr, p, cs, cd, y, z, ct);
+    return EncelgProof {
+        .s = cs, .d = cd, .y = y, .z = z, .t = ct,
+        .z1 = zi_add(alpha, zi_mul(e, x)),
+        .w = sc_nat_add(sc_nat_mul(sc_of_zi(e), b), beta),
+        .z2 = bn_modmul(zi_modexp(rho, e, p.prover.n), r, p.prover.n),
+        .z3 = zi_add(gamma, zi_mul(e, mu)) };
+}
+
+// ─── ElGamal ciphertext opening to a discrete log (elog) ────────
+//
+// E = (L, M) = (lambda G, y G + lambda X), and Y = y H.
+
+pub type ElogPublic = { CvPt el; CvPt em; CvPt x; CvPt base; CvPt y; };
+
+pub type ElogProof = { CvPt a; CvPt n; CvPt b; List(UInt(64)) z; List(UInt(64)) u; };
+
+List(UInt(64)) elog_challenge(Transcript tr, ElogPublic p, CvPt a, CvPt n, CvPt b) {
+    Transcript t1 = tr_point(tr_point(tr_point(tr_elgamal(tr, p.el, p.em), p.x), p.y), p.base);
+    return zp_e_scalar(tr_point(tr_point(tr_point(t1, a), n), b));
+}
+
+pub Bool elog_verify(ElogPublic p, ElogProof pf, Transcript tr) {
+    if (pf.a.inf || pf.n.inf || pf.b.inf || pf.z.len() == 0 || pf.u.len() == 0) { return false; }
+    List(UInt(64)) e = elog_challenge(tr, p, pf.a, pf.n, pf.b);
+    if (!cv_eq(cv_mul_base(pf.z), cv_add(cv_mul(e, p.el), pf.a))) { return false; }
+    if (!cv_eq(cv_add(cv_mul_base(pf.u), cv_mul(pf.z, p.x)), cv_add(cv_mul(e, p.em), pf.n))) { return false; }
+    return cv_eq(cv_mul(pf.u, p.base), cv_add(cv_mul(e, p.y), pf.b));
+}
+
+/// Secrets: y and lambda.
+pub Option(ElogProof) elog_prove(ElogPublic p, List(UInt(64)) y, List(UInt(64)) lam, Transcript tr, List(Int) rnd) {
+    return match zp_draw_scalar(rnd, 0) {
+        None => None,
+        Some(alpha) => match zp_draw_scalar(rnd, alpha.next) {
+            None => None,
+            Some(m) => Some(elog_with(p, y, lam, tr, alpha.value, m.value))
+        }
+    };
+}
+
+ElogProof elog_with(ElogPublic p, List(UInt(64)) y, List(UInt(64)) lam, Transcript tr, List(UInt(64)) alpha, List(UInt(64)) m) {
+    CvPt a = cv_mul_base(alpha);
+    CvPt n = cv_add(cv_mul_base(m), cv_mul(alpha, p.x));
+    CvPt b = cv_mul(m, p.base);
+    List(UInt(64)) e = elog_challenge(tr, p, a, n, b);
+    return ElogProof {.a = a, .n = n, .b = b, .z = sc_nat_add(sc_nat_mul(e, lam), alpha), .u = sc_nat_add(sc_nat_mul(e, y), m)};
+}
+
+// ─── Equality of discrete logs (log) ────────────────────────────
+
+pub type LogPublic = { CvPt h; CvPt x; CvPt y; };
+
+pub type LogProof = { CvPt a; CvPt b; CvPt c; List(UInt(64)) z1; List(UInt(64)) z2; };
+
+List(UInt(64)) log_challenge(Transcript tr, LogPublic p, CvPt a, CvPt b, CvPt c) {
+    return zp_e_scalar(tr_point(tr_point(tr_point(tr_point(tr_point(tr_point(tr, p.h), p.x), p.y), a), b), c));
+}
+
+pub Bool log_verify(LogPublic p, LogProof pf, Transcript tr) {
+    if (pf.a.inf || pf.b.inf || pf.c.inf || pf.z1.len() == 0 || pf.z2.len() == 0) { return false; }
+    List(UInt(64)) e = log_challenge(tr, p, pf.a, pf.b, pf.c);
+    if (!cv_eq(cv_mul_base(pf.z1), cv_add(cv_mul(e, p.x), pf.a))) { return false; }
+    if (!cv_eq(cv_mul(pf.z1, p.h), cv_add(cv_mul(e, p.y), pf.b))) { return false; }
+    return cv_eq(cv_mul_base(pf.z2), cv_add(cv_mul(e, p.h), pf.c));
+}
+
+/// Secrets a and b with X = a G, Y = a H, H = b G.
+pub Option(LogProof) log_prove(LogPublic p, List(UInt(64)) a, List(UInt(64)) b, Transcript tr, List(Int) rnd) {
+    return match zp_draw_scalar(rnd, 0) {
+        None => None,
+        Some(alpha) => match zp_draw_scalar(rnd, alpha.next) {
+            None => None,
+            Some(beta) => Some(log_with(p, a, b, tr, alpha.value, beta.value))
+        }
+    };
+}
+
+LogProof log_with(LogPublic p, List(UInt(64)) a, List(UInt(64)) b, Transcript tr, List(UInt(64)) alpha, List(UInt(64)) beta) {
+    CvPt ca = cv_mul_base(alpha);
+    CvPt cb = cv_mul(alpha, p.h);
+    CvPt cc = cv_mul_base(beta);
+    List(UInt(64)) e = log_challenge(tr, p, ca, cb, cc);
+    return LogProof {.a = ca, .b = cb, .c = cc, .z1 = sc_nat_add(sc_nat_mul(e, a), alpha), .z2 = sc_nat_add(sc_nat_mul(e, b), beta)};
+}
+
+// ─── Schnorr proof of knowledge (sch) ───────────────────────────
+//
+// For X = x G' (G' a base point): commitment C = a G', response z = e x + a.
+
+pub type SchProof = { CvPt c; List(UInt(64)) z; };
+
+List(UInt(64)) sch_challenge(Transcript tr, CvPt c, CvPt x, CvPt g) {
+    // Taurus writes commitment.C, the point itself, not the Commitment type.
+    return zp_e_scalar(tr_point(tr_point(tr_point(tr, c), x), g));
+}
+
+pub Bool sch_verify(CvPt x, CvPt g, SchProof pf, Transcript tr) {
+    if (pf.c.inf || pf.z.len() == 0 || x.inf) { return false; }
+    List(UInt(64)) e = sch_challenge(tr, pf.c, x, g);
+    return cv_eq(cv_mul(pf.z, g), cv_add(cv_mul(e, x), pf.c));
+}
+
+/// The commitment of a proof from the random scalar a (drawn first so that a
+/// protocol can send the commitment before the response).
+pub CvPt sch_commit(List(UInt(64)) a, CvPt g) { return cv_mul(a, g); }
+
+/// The response for the secret x and the random scalar a with commitment c.
+pub List(UInt(64)) sch_respond(CvPt x_pub, CvPt g, CvPt c, List(UInt(64)) a, List(UInt(64)) x, Transcript tr) {
+    return sc_nat_add(sc_nat_mul(sch_challenge(tr, c, x_pub, g), x), a);
+}
+
+/// A whole proof: the secret x for X = x G', randomness from `rnd`.
+pub Option(SchProof) sch_prove(CvPt x_pub, CvPt g, List(UInt(64)) x, Transcript tr, List(Int) rnd) {
+    return match zp_draw_scalar(rnd, 0) {
+        None => None,
+        Some(a) => Some(SchProof {.c = sch_commit(a.value, g), .z = sch_respond(x_pub, g, sch_commit(a.value, g), a.value, x, tr)})
+    };
+}
+
+// ─── Knowledge of an N-th root (nth) ────────────────────────────
+//
+// R = rho^N mod N^2: the prover knows rho. Used with a decrypted ciphertext to
+// show that the revealed plaintext is the right one (R = c (1 + N)^-m).
+
+pub type NthProof = { List(UInt(64)) a; List(UInt(64)) z; };
+
+BnInt nth_challenge(Transcript tr, PaillierPub pk, List(UInt(64)) r, List(UInt(64)) a) {
+    Transcript t = tr_nat_w(tr_nat_w(tr_paillier(tr, pk), r, 512), a, 512);
+    return zk_stream_pm(tr_seed(t), 0, zk_l()).value;
+}
+
+/// Whether `pf` proves knowledge of rho with `r` = rho^N mod N^2, bound to `tr`.
+pub Bool nth_verify(PaillierPub pk, List(UInt(64)) r, NthProof pf, Transcript tr) {
+    if (!zk_valid_mod_n(pf.z, pk.n) || !pa_ct_ok(pk, pf.a)) { return false; }
+    BnInt e = nth_challenge(tr, pk, r, pf.a);
+    List(UInt(64)) lhs = pa_enc(pk, zi_zero(), pf.z);
+    List(UInt(64)) rhs = pa_ct_add(pk, pa_ct_mul(pk, r, e), pf.a);
+    return bn_cmp(lhs, rhs) == 0;
+}
+
+/// A proof of knowledge of `rho` for r = rho^N mod N^2. `rnd` is the byte
+/// stream the nonce (a unit mod N) is drawn from.
+pub Option(NthProof) nth_prove(PaillierPub pk, List(UInt(64)) r, List(UInt(64)) rho, Transcript tr, List(Int) rnd) {
+    return match zk_draw_unit(rnd, 0, pk.n) {
+        None => None,
+        Some(al) => Some(nth_prove_with(pk, r, rho, tr, al.value))
+    };
+}
+
+NthProof nth_prove_with(PaillierPub pk, List(UInt(64)) r, List(UInt(64)) rho, Transcript tr, List(UInt(64)) alpha) {
+    List(UInt(64)) a = pa_enc(pk, zi_zero(), alpha);
+    BnInt e = nth_challenge(tr, pk, r, a);
+    return NthProof {.a = a, .z = bn_modmul(zi_modexp(rho, e, pk.n), alpha, pk.n)};
+}

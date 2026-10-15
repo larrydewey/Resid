@@ -26,7 +26,11 @@ Int main() {
     println(f"send fd {resid_disp_send(a, [1], sfd)}");
     List(Int) two = resid_disp_recv(b, 64);
     Int rfd = resid_disp_recv_fd();
-    println(f"with fd {two} {rfd == sfd}");
+    // SCM_RIGHTS delivers a *new* descriptor number in the receiving
+    // process, so this checks that one arrived, not that it matches. It
+    // caught a queue that stored descriptors without counting them, which
+    // answered -1 for a descriptor the kernel really had passed.
+    println(f"with fd {two} {rfd >= 0}");
     println(f"none left {resid_disp_recv_fd() == 0 - 1}");
 
     // Ranges outside the mapping are refused, not written.

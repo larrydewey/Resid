@@ -1,0 +1,95 @@
+// cggmp_prim.resid — the arithmetic the CGGMP21 proofs and protocol share:
+// protocol parameters, Paillier with signed plaintexts and ciphertext
+// operations, Pedersen commitments with signed exponents, the interval
+// samplers, and transcript writers for Paillier keys and ciphertexts. Public
+// values, variable time. The conventions follow Taurus multi-party-sig
+// (pkg/paillier, pkg/pedersen, pkg/math/sample, internal/params).
+
+import "bigint.resid";
+import "paillier.resid";
+import "cggmp_hash.resid";
+import "cggmp_zk.resid";
+
+// internal/params
+pub Int zk_l() { return 256; }
+pub Int zk_lprime() { return 1280; }
+pub Int zk_eps() { return 512; }
+pub Int zk_bits_n() { return 2048; }
+
+// ─── Interval samplers ──────────────────────────────────────────
+
+/// An integer in [-2^bits, 2^bits] read from `buf` (bits / 8 + 1 bytes): the
+/// low bit of the first byte is the sign, the rest the magnitude (Taurus's
+/// sampleNeg). `bits` is a multiple of 8.
+pub BnInt zk_pm_of(List(Int) buf, Int bits) {
+    Bool neg = (buf[0] & 1) == 1;
+    return zi_make(neg, bn_from_be(bn_slice_int(buf, 1, bits / 8)));
+}
+
+/// The sample of `bits` bits from the stream `rnd` at `pos`; None past its end.
+pub type ZkPm = { BnInt value; Int next; };
+
+pub Option(ZkPm) zk_draw_pm(List(Int) rnd, Int pos, Int bits) {
+    Int n = bits / 8 + 1;
+    if (pos + n > rnd.len()) { return None; }
+    return Some(ZkPm {.value = zk_pm_of(bn_slice_int(rnd, pos, n), bits), .next = pos + n});
+}
+
+/// The sample of `bits` bits read from a transcript stream.
+pub ZkPm zk_stream_pm(List(Int) seed, Int pos, Int bits) {
+    Int n = bits / 8 + 1;
+    return ZkPm {.value = zk_pm_of(tr_stream(seed, pos, n), bits), .next = pos + n};
+}
+
+// ─── Paillier with signed plaintexts ────────────────────────────
+
+/// (N + 1)^m mod N^2 = 1 + m N for any integer m.
+pub List(UInt(64)) pa_gm(PaillierPub k, BnInt m) {
+    return zi_mod(zi_add(zi_from_nat([1]), zi_mul(m, zi_from_nat(k.n))), k.n2);
+}
+
+/// The ciphertext of m (|m| <= (N - 1) / 2) with nonce rho: (N+1)^m rho^N mod N^2.
+pub List(UInt(64)) pa_enc(PaillierPub k, BnInt m, List(UInt(64)) rho) {
+    List(UInt(64)) rn = bn_modexp_mont(k.mont2, bn_mod(rho, k.n2), k.n);
+    return bn_mod(bn_mul(pa_gm(k, m), rn), k.n2);
+}
+
+/// Whether |m| <= (N - 1) / 2.
+pub Bool pa_msg_ok(PaillierPub k, BnInt m) { return bn_cmp(m.mag, bn_shr(k.n, 1)) <= 0; }
+
+/// A ciphertext is valid when it is a unit mod N^2 below N^2.
+pub Bool pa_ct_ok(PaillierPub k, List(UInt(64)) c) {
+    if (c.len() == 0 || bn_cmp(c, k.n2) >= 0) { return false; }
+    return bn_cmp(bn_gcd(c, k.n2), [1]) == 0;
+}
+
+/// c1 + c2 (the product of the ciphertexts mod N^2).
+pub List(UInt(64)) pa_ct_add(PaillierPub k, List(UInt(64)) a, List(UInt(64)) b) { return bn_modmul(a, b, k.n2); }
+
+/// k times the plaintext of c (c^k mod N^2, k signed).
+pub List(UInt(64)) pa_ct_mul(PaillierPub k, List(UInt(64)) c, BnInt s) { return zi_modexp(c, s, k.n2); }
+
+/// A Paillier public key as Taurus writes it to a transcript.
+pub Transcript tr_paillier(Transcript t, PaillierPub k) { return tr_item(t, "Paillier PublicKey", bn_to_be(k.n, 0)); }
+
+/// A ciphertext as Taurus writes it: 512 bytes (2 x 2048 bits).
+pub Transcript tr_ciphertext(Transcript t, List(UInt(64)) c) { return tr_item(t, "Paillier Ciphertext", bn_to_be(c, 512)); }
+
+/// A natural number as Taurus writes a *saferith.Nat: its big-endian bytes at
+/// the announced width (`width` bytes).
+pub Transcript tr_nat_w(Transcript t, List(UInt(64)) x, Int width) { return tr_item(t, "*saferith.Nat", bn_to_be(x, width)); }
+
+// ─── Pedersen commitments with signed exponents ─────────────────
+
+/// s^x t^y mod N.
+pub List(UInt(64)) ped_commit(Pedersen p, BnInt x, BnInt y) {
+    return bn_modmul(zi_modexp(p.s, x, p.n), zi_modexp(p.t, y, p.n), p.n);
+}
+
+/// Whether s^a t^b = S T^e (mod N), for S and T units mod N.
+pub Bool ped_verify(Pedersen p, BnInt a, BnInt b, BnInt e, List(UInt(64)) s_in, List(UInt(64)) t_in) {
+    if (!zk_valid_mod_n(s_in, p.n) || !zk_valid_mod_n(t_in, p.n)) { return false; }
+    List(UInt(64)) lhs = ped_commit(p, a, b);
+    List(UInt(64)) rhs = bn_modmul(s_in, zi_modexp(t_in, e, p.n), p.n);
+    return bn_cmp(lhs, rhs) == 0;
+}

@@ -1,0 +1,92 @@
+// Re-share an existing CGGMP21 3-of-3 sharing to a new party set, in one
+// process, and print the new shares and the joint public key.  The Python
+// oracle reshare.py checks the output and then runs a full presign/sign
+// session with the new shares.
+//
+//   resid_reshare <old-config> <seed-hex>
+//
+// The config supplies X1..X3 (the old shares), P4/Q4..P6/Q6 (the new
+// parties' Paillier primes), and T (the new sharing degree).
+
+import "../../../lib/cggmp_reshare_harness.resid";
+import "../../../lib/cose.resid";
+import "../../../lib/crypto.resid";
+
+Str kv_find(List(Str) lines, Str key, Int i) {
+    if (i >= lines.len()) { return ""; }
+    List(Str) parts = str_split(str_trim(lines[i]), " ");
+    if (parts.len() == 2 && parts[0] == key) { return parts[1]; }
+    return kv_find(lines, key, i + 1);
+}
+
+@requires(filesystem(readonly))
+Str kv(Str path, Str key) { return kv_find(str_split(filesystem.read_all(path), "\n"), key, 0); }
+
+@requires(filesystem(readonly))
+List(UInt(64)) nat(Str path, Str key) { return bn_from_be(cose_hex_decode(kv(path, key))); }
+
+List(UInt(64)) rsh_rand(List(Int) seed, Str label) { return bn_mod(bn_from_be(cg_rng(seed, label, 32)), cv_n()); }
+
+List(List(UInt(64))) rsh_random_poly(List(Int) seed, Int dealer, Int degree, Int i, List(List(UInt(64))) acc) {
+    if (i >= degree) { return acc; }
+    List(UInt(64)) c = if (i == 0) { bn_from_u64(0) } else { rsh_rand(seed, f"reshare/{dealer}/{i}") };
+    return rsh_random_poly(seed, dealer, degree, i + 1, acc.concat([c]));
+}
+
+List(List(List(UInt(64)))) rsh_randoms(List(Int) seed, List(Int) dealers, Int degree, Int i, List(List(List(UInt(64)))) acc) {
+    if (i >= dealers.len()) { return acc; }
+    return rsh_randoms(seed, dealers, degree, i + 1, acc.concat([rsh_random_poly(seed, dealers[i], degree, 0, [])]));
+}
+
+@requires(filesystem(readonly))
+List(RshHarnessPeer) rsh_peers(Str path, Int i, List(RshHarnessPeer) acc) {
+    if (i >= 3) { return acc; }
+    Int id = i + 4;
+    List(UInt(64)) p = nat(path, f"P{id}");
+    List(UInt(64)) q = nat(path, f"Q{id}");
+    PaillierSec sec = paillier_sec(p, q) else { PaillierSec {.p = [], .q = [], .phi = [], .phi_inv = []} };
+    return rsh_peers(path, i + 1, acc.concat([RshHarnessPeer {.id = id, .pail = paillier_pub(bn_mul(p, q)), .sec = sec}]));
+}
+
+@requires(filesystem(readonly))
+List(List(UInt(64))) rsh_old_shares(Str path, Int i, List(List(UInt(64))) acc) {
+    if (i >= 4) { return acc; }
+    return rsh_old_shares(path, i + 1, acc.concat([nat(path, f"X{i}")]));
+}
+
+Str join_shares(List(List(UInt(64))) shares, List(Int) ids, Int i, Str acc) {
+    if (i >= shares.len()) { return acc; }
+    Str one = f"\"{ids[i]}\":\"{hex_encode(bn_to_be(shares[i], 32))}\"";
+    return join_shares(shares, ids, i + 1, acc + (if (i > 0) { "," } else { "" }) + one);
+}
+
+Int print_shares(List(List(UInt(64))) shares) {
+    println("{\"pubkey\":\"" + hex_encode(cv_enc(cv_mul_base(rsh_root([4, 5, 6], shares)))) + "\",\"shares\":{" + join_shares(shares, [4, 5, 6], 0, "") + "}}");
+    return 0;
+}
+
+Int print_err() {
+    println("{\"error\":\"re-share refused\"}");
+    return 0;
+}
+
+@requires(args, filesystem(readonly))
+Int main() {
+    Str path = args.get(1);
+    List(Int) seed = cose_hex_decode(args.get(2));
+    Int degree = str_parse_int(kv(path, "T"));
+    List(List(UInt(64))) old_shares = rsh_old_shares(path, 1, []);
+    List(List(List(UInt(64)))) randoms = rsh_randoms(seed, [1, 2, 3], degree + 1, 0, []);
+    List(RshHarnessPeer) peers = rsh_peers(path, 0, []);
+    RshHarness h = RshHarness {
+        .old_ids = [1, 2, 3],
+        .new_ids = [4, 5, 6],
+        .old_shares = old_shares,
+        .randoms = randoms,
+        .peers = peers,
+        .seed = seed };
+    return match rsh_harness_run(h) {
+        Ok(shares) => print_shares(shares),
+        Err(_) => print_err()
+    };
+}

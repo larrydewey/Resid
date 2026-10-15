@@ -1,0 +1,65 @@
+import "../../../../lib/cggmp_proofs.resid";
+import "../../../../lib/cggmp.resid";
+import "../../../../lib/cose.resid";
+
+List(Int) rnd(Str label, Int n) { return cg_rng([9], label, n); }
+
+@requires(args)
+Int main() {
+    List(UInt(64)) p = bn_from_be(cose_hex_decode(args.get(1)));
+    List(UInt(64)) q = bn_from_be(cose_hex_decode(args.get(2)));
+    Str which = args.get(3);
+    Int reps = str_parse_int(args.get(4));
+    Option(PedersenKey) pk = pedersen_generate(p, q, rnd("ped", 2048));
+    return match pk { None => 99, Some(k) => work(which, reps, p, q, k) };
+}
+
+Int work(Str which, Int reps, List(UInt(64)) p, List(UInt(64)) q, PedersenKey k) {
+    PaillierPub pub = paillier_pub(bn_mul(p, q));
+    ListBuf(List(UInt(64))) b = ListBuf();
+    List(List(UInt(64))) out = loop(which, reps, 0, p, q, k, pub, b);
+    return out.len() % 200;
+}
+
+List(List(UInt(64))) loop(Str which, Int reps, Int i, List(UInt(64)) p, List(UInt(64)) q, PedersenKey k, PaillierPub pub, ListBuf(List(UInt(64))) acc) {
+    if (i >= reps) { return acc.finish(); }
+    BnInt x = zi_from_nat(bn_from_u64(u64(1000 + i)));
+    List(UInt(64)) v = one(which, i, p, q, k, pub, x);
+    return loop(which, reps, i + 1, p, q, k, pub, acc.push(v));
+}
+
+List(UInt(64)) one(Str which, Int i, List(UInt(64)) p, List(UInt(64)) q, PedersenKey k, PaillierPub pub, BnInt x) {
+    if (which == "bigcommit") {
+        BnInt a = cg_pm([3], f"a{i}", 1800);
+        BnInt b = cg_pm([3], f"b{i}", 2300);
+        return ped_commit(k.ped, a, b);
+    }
+    if (which == "bigmul") {
+        BnInt a = cg_pm([3], f"a{i}", 1800);
+        BnInt b = cg_pm([3], f"b{i}", 2300);
+        return zi_add(zi_mul(a, b), a).mag;
+    }
+    if (which == "pexp") {
+        BnInt e = zi_abs(cg_pm([3], f"e{i}", 4800));
+        return zi_modexp(bn_from_u64(7), e, k.ped.n);
+    }
+    if (which == "inv2") {
+        BnInt e = zi_abs(cg_pm([3], f"e{i}", 2000));
+        List(UInt(64)) y = bn_mod(e.mag, k.ped.n);
+        return match bn_modinv(y, k.ped.n) { Some(v) => v, None => [] };
+    }
+    if (which == "tmodexp") {
+        BnInt e = cg_pm([3], f"e{i}", 4800);
+        return zi_modexp(bn_from_u64(7), e, k.ped.n);
+    }
+    if (which == "commit") { return ped_commit(k.ped, x, zi_from_nat(bn_from_u64(u64(77 + i)))); }
+    if (which == "enc") { return pa_enc(pub, x, bn_from_u64(u64(12345 + i))); }
+    if (which == "ctmul") { return pa_ct_mul(pub, pa_enc(pub, x, [7]), x); }
+    if (which == "prm") {
+        return match prm_prove(k.lam, k.phi, k.ped, tr_new(), rnd(f"prm{i}", 256 * 100)) { Some(pf) => pf.zs[0], None => [] };
+    }
+    if (which == "fac") {
+        return match fac_prove(p, q, k.ped, tr_new(), rnd(f"fac{i}", 4 * 4300)) { Some(pf) => pf.p, None => [] };
+    }
+    return [];
+}

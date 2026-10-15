@@ -1,0 +1,44 @@
+import "../../../../lib/cggmp_keygen.resid";
+import "../../../../lib/cose.resid";
+
+KgCtx ctx(Int id, List(UInt(64)) p, List(UInt(64)) q) {
+    return KgCtx {.self = id, .ids = [1, 2], .threshold = 1, .prev = [], .session_id = [1], .seed = cg_rng([7, id], "x", 32), .primes = [p, q]};
+}
+
+@requires(args)
+Int main() {
+    List(UInt(64)) p1 = bn_from_be(cose_hex_decode(args.get(1)));
+    List(UInt(64)) q1 = bn_from_be(cose_hex_decode(args.get(2)));
+    List(UInt(64)) p2 = bn_from_be(cose_hex_decode(args.get(3)));
+    List(UInt(64)) q2 = bn_from_be(cose_hex_decode(args.get(4)));
+    Result(Kg1, CgFail) a = kg_start(ctx(1, p1, q1));
+    Result(Kg1, CgFail) b = kg_start(ctx(2, p2, q2));
+    return match a { Err(e) => 90, Ok(sa) => match b { Err(e) => 91, Ok(sb) => step2(sa, sb) } };
+}
+
+Int step2(Kg1 a, Kg1 b) {
+    println("r1 ok");
+    List(CgMsg) all = a.out.concat(b.out);
+    Result(Kg2, CgFail) ra = kg_r2(a, all);
+    Result(Kg2, CgFail) rb = kg_r2(b, all);
+    return match ra { Err(e) => fail(e), Ok(sa) => match rb { Err(e) => fail(e), Ok(sb) => step3(sa, sb) } };
+}
+
+Int fail(CgFail e) { println("FAIL " + e.why); return 1; }
+
+Int step3(Kg2 a, Kg2 b) {
+    println("r2 ok");
+    List(CgMsg) all = a.out.concat(b.out);
+    Result(Kg3, CgFail) ra = kg_r3(a, all);
+    Result(Kg3, CgFail) rb = kg_r3(b, all);
+    return match ra { Err(e) => fail(e), Ok(sa) => match rb { Err(e) => fail(e), Ok(sb) => step4(sa, sb) } };
+}
+
+Int step4(Kg3 a, Kg3 b) {
+    println("r3 ok (both)");
+    List(CgMsg) all = a.out.concat(b.out);
+    Result(Kg4, CgFail) ra = kg_r4(a, all);
+    return match ra { Err(e) => fail(e), Ok(sa) => done(sa) };
+}
+
+Int done(Kg4 a) { println("r4 ok (one party)"); return 0; }

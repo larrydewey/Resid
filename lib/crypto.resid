@@ -57,22 +57,36 @@ pub Int k_at(Int i) {
 
 // ─── Message bytes and padding ──────────────────────────────────
 
-/// Appends the code points of `msg` from index `i` on to `acc`.
-/// Exact bytes only for ASCII text.
-pub List(Int) msg_bytes(Str msg, Int i, List(Int) acc) {
-    if (i >= str_len(msg)) {
-        return acc;
-    }
-    Int cp = str_char_at(msg, i);
-    List(Int) acc2 = acc.concat([cp]);
-    Int ni = i + 1;
-    return msg_bytes(msg, ni, acc2);
+/// Appends the UTF-8 bytes of code point `cp` to the builder `acc`.
+pub ListBuf(Int) utf8_push_cp(Int cp, ListBuf(Int) acc) {
+    if (cp < 128) { return acc.push(cp); }
+    if (cp < 2048) { return acc.push(192 | (cp >> 6)).push(128 | (cp & 63)); }
+    if (cp < 65536) { return acc.push(224 | (cp >> 12)).push(128 | ((cp >> 6) & 63)).push(128 | (cp & 63)); }
+    return acc.push(240 | (cp >> 18)).push(128 | ((cp >> 12) & 63)).push(128 | ((cp >> 6) & 63)).push(128 | (cp & 63));
 }
 
-/// The code points of `msg` as a list, one element per character.
-/// Exact bytes only for ASCII text.
+/// The UTF-8 bytes of `msg` from code point index `i` on, pushed onto `acc`.
+pub List(Int) utf8_run(Str msg, Int i, ListBuf(Int) acc) {
+    if (i >= str_len(msg)) { return acc.finish(); }
+    return utf8_run(msg, i + 1, utf8_push_cp(str_char_at(msg, i), acc));
+}
+
+/// Appends the UTF-8 bytes of `msg` from code point index `i` on to `acc`.
+pub List(Int) msg_bytes(Str msg, Int i, List(Int) acc) {
+    return acc.concat(utf8_run(msg, i, ListBuf()));
+}
+
+/// The UTF-8 encoding of `msg` as a list of bytes (RFC 3629): one byte per
+/// ASCII character, two to four for the others. Exact for any text.
 pub List(Int) bytes_of(Str msg) {
-    return msg_bytes(msg, 0, []);
+    return utf8_run(msg, 0, ListBuf());
+}
+
+/// Whether every code point of `msg` from index `i` on is ASCII.
+pub Bool str_is_ascii(Str msg, Int i) {
+    if (i >= str_len(msg)) { return true; }
+    if (str_char_at(msg, i) >= 128) { return false; }
+    return str_is_ascii(msg, i + 1);
 }
 
 /// Appends `count` elements of `b` starting at `start` to `acc`.
@@ -388,7 +402,7 @@ pub Str hex_state(List(Int) h, Int i, Str acc) {
 // ─── Public entry point ─────────────────────────────────────────
 
 // ─── Streaming string digest ────────────────────────────────────
-// `bytes_of` materializes one list element per character, so hashing a
+// `bytes_of` materializes one list element per byte, so hashing a
 // large string costs one recursion frame and one persistent-vector push
 // per byte: a multi-hundred-KB message (e.g. the bootstrap compiler
 // source) overflows the stack before it ever reaches the first block.
@@ -551,9 +565,16 @@ pub List(Int) pad_tail(List(Int) tail, Int total_len) {
     return length_bytes(bits, 7, p2);
 }
 
-/// SHA-256 of `msg` as 64 lowercase hex characters.
-/// Each character is hashed as one byte, so this is exact only for ASCII.
+/// SHA-256 of the UTF-8 bytes of `msg` as 64 lowercase hex characters.
+/// ASCII text streams its blocks straight out of the string; any other text
+/// goes through `bytes_of`, so the digest is the same as
+/// `sha256_bytes(bytes_of(msg))` for every string.
 pub Str sha256(Str msg) {
+    if (!str_is_ascii(msg, 0)) { return hex_encode(sha256_bytes(bytes_of(msg))); }
+    return sha256_ascii(msg);
+}
+
+Str sha256_ascii(Str msg) {
     List(Int) h0 = [
         1779033703, -1150833019, 1013904242, -1521486534,
         1359893119, -1694144372, 528734635, 1541459225

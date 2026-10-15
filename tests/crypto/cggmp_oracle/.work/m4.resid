@@ -1,0 +1,64 @@
+import "../../../../lib/bignum.resid";
+import "../../../../lib/cose.resid";
+
+// Montgomery arithmetic for a 2048-bit odd modulus on native wide integers:
+// no heap allocation, so no garbage.
+UInt(4224) mmul(UInt(4224) a, UInt(4224) b, UInt(4224) n, UInt(4224) np) {
+    UInt(4224) mask = ((UInt(4224)) 1 << 2048) - 1;
+    UInt(4224) t = a * b;
+    UInt(4224) m = wrapping_umul(t & mask, np) & mask;
+    UInt(4224) u = (t + m * n) >> 2048;
+    return if (u >= n) { u - n } else { u };
+}
+
+UInt(4224) mexp(UInt(4224) bm, UInt(4224) e, UInt(4224) n, UInt(4224) np, UInt(4224) acc, Int i) {
+    if (i < 0) { return acc; }
+    UInt(4224) sq = mmul(acc, acc, n, np);
+    UInt(4224) nx = if (((e >> (UInt(4224)) i) & 1) == 1) { mmul(sq, bm, n, np) } else { sq };
+    return mexp(bm, e, n, np, nx, i - 1);
+}
+
+UInt(4224) to_wide(List(UInt(64)) x) { return to_wide_at(x, x.len() - 1, 0); }
+
+UInt(4224) to_wide_at(List(UInt(64)) x, Int i, UInt(4224) acc) {
+    if (i < 0) { return acc; }
+    return to_wide_at(x, i - 1, (acc << 64) | (UInt(4224)) x[i]);
+}
+
+List(UInt(64)) of_wide(UInt(4224) v, Int limbs, Int i, ListBuf(UInt(64)) acc) {
+    if (i >= limbs) { return bn_trim(acc.finish()); }
+    return of_wide(v, limbs, i + 1, acc.push(wrapping_u64((v >> (UInt(4224)) (64 * i)) & 18446744073709551615)));
+}
+
+UInt(4224) modexp_native(List(UInt(64)) base, List(UInt(64)) exp, List(UInt(64)) m) {
+    BnMont c = bn_mont_new(m);
+    UInt(4224) n = to_wide(m);
+    UInt(4224) np = to_wide(c.np);
+    UInt(4224) bm = mmul(to_wide(base), to_wide(c.rr), n, np);
+    UInt(4224) one = mmul(1, to_wide(c.rr), n, np);
+    UInt(4224) acc = mexp(bm, to_wide(exp), n, np, one, bn_bit_len(exp) - 1);
+    return mmul(acc, 1, n, np);
+}
+
+List(List(UInt(64))) loop(List(UInt(64)) base, List(UInt(64)) e, List(UInt(64)) m, Int i, ListBuf(List(UInt(64))) acc) {
+    if (i <= 0) { return acc.finish(); }
+    return loop(base, e, m, i - 1, acc.push(of_wide(modexp_native(base, e, m), 32, 0, ListBuf())));
+}
+
+Int run(List(UInt(64)) e, List(UInt(64)) m, Int n) {
+    ListBuf(List(UInt(64))) b = ListBuf();
+    return loop([5], e, m, n, b).len();
+}
+
+@requires(args)
+Int main() {
+    List(UInt(64)) m = bn_from_be(cose_hex_decode(args.get(1)));
+    List(UInt(64)) e = bn_sub(m, [3]);
+    Int n = str_parse_int(args.get(2));
+    if (args.get(3) == "check") {
+        List(UInt(64)) a = of_wide(modexp_native([5], e, m), 32, 0, ListBuf());
+        println(if (bn_cmp(a, bn_modexp([5], e, m)) == 0) { "same" } else { "DIFFERENT" });
+        return 0;
+    }
+    return run(e, m, n) % 200;
+}

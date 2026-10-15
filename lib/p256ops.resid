@@ -1,0 +1,82 @@
+// p256ops.resid — P-256 scalar and group operations on public values, for
+// protocols (threshold signing, zero-knowledge proofs) that compute with
+// scalars mod n and points. Scalars are plain integers in [0, n) as
+// UInt(576); points are P256Aff, where ok = false is the point at infinity.
+//
+// These wrap lib/p256.resid, so they inherit its checked arithmetic. They
+// are for public values. The secret-typed copies of the same arithmetic are
+// p256.resid's own generic functions.
+
+import "p256.resid";
+import "bignum.resid";
+
+/// The group order n.
+pub UInt(576) sc_n() { return p256_n(); }
+
+/// (a + b) mod n, for a, b < n.
+pub UInt(576) sc_add(UInt(576) a, UInt(576) b) { return p256_sfrom(p256_sadd(p256_sto(a), p256_sto(b))); }
+
+/// -a mod n.
+pub UInt(576) sc_neg(UInt(576) a) { return if (a == 0) { 0 } else { p256_n() - a }; }
+
+/// (a - b) mod n.
+pub UInt(576) sc_sub(UInt(576) a, UInt(576) b) { return sc_add(a, sc_neg(b)); }
+
+/// (a * b) mod n.
+pub UInt(576) sc_mul(UInt(576) a, UInt(576) b) { return p256_sfrom(p256_smul(p256_sto(a), p256_sto(b))); }
+
+/// 1/a mod n, for a != 0.
+pub UInt(576) sc_inv(UInt(576) a) { return p256_sfrom(p256_sinv(p256_sto(a))); }
+
+/// An integer of any length (big-endian bytes) reduced mod n.
+pub UInt(576) sc_from_be(List(Int) b) {
+    List(UInt(64)) r = bn_mod(bn_from_be(b), bn_from_be(p256_to_be(p256_n())));
+    return p256_from_be(bn_to_be(r, 32));
+}
+
+/// A scalar as 32 big-endian bytes.
+pub List(Int) sc_to_be(UInt(576) a) { return p256_to_be(a); }
+
+/// k * G; infinity when k = 0.
+pub P256Aff pt_mul_base(UInt(576) k) {
+    if (k == 0) { return p256_bad(); }
+    return p256_public(k);
+}
+
+/// k * P; infinity when k = 0 or P is infinity.
+pub P256Aff pt_mul(UInt(576) k, P256Aff p) {
+    if (!p.ok || k == 0) { return p256_bad(); }
+    P256Pt(UInt(576)) pp = p256_from_aff(p);
+    P256Pt(UInt(576)) kp = p256_mul(k, pp);
+    P256Xy(UInt(576)) r = p256_affine(kp);
+    return P256Aff {.x = r.x, .y = r.y, .ok = r.ok};
+}
+
+/// P + Q.
+pub P256Aff pt_add(P256Aff p, P256Aff q) {
+    if (!p.ok) { return q; }
+    if (!q.ok) { return p; }
+    P256Pt(UInt(576)) pp = p256_from_aff(p);
+    P256Pt(UInt(576)) qq = p256_from_aff(q);
+    P256Pt(UInt(576)) sum = p256_add(pp, qq);
+    P256Xy(UInt(576)) r = p256_affine(sum);
+    return P256Aff {.x = r.x, .y = r.y, .ok = r.ok};
+}
+
+/// -P.
+pub P256Aff pt_neg(P256Aff p) {
+    if (!p.ok) { return p; }
+    return P256Aff {.x = p.x, .y = if (p.y == 0) { 0 } else { p256_p() - p.y }, .ok = true};
+}
+
+/// Whether P and Q are the same point (two infinities are equal).
+pub Bool pt_eq(P256Aff p, P256Aff q) {
+    if (!p.ok || !q.ok) { return !p.ok && !q.ok; }
+    return p.x == q.x && p.y == q.y;
+}
+
+/// P as 65 bytes (04 || x || y); empty for infinity.
+pub List(Int) pt_enc(P256Aff p) { return if (p.ok) { p256_encode(p) } else { [] }; }
+
+/// The point of 65 uncompressed bytes (ok = false when invalid).
+pub P256Aff pt_dec(List(Int) b) { return p256_decode(b); }

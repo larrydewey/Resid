@@ -1,0 +1,207 @@
+// lib/cggmp_reshare.resid: re-share 3-of-3 to a disjoint new party set,
+// preserving the joint root key X.
+
+import "../../lib/cggmp_reshare.resid";
+import "../../lib/cose.resid";
+import "../../lib/crypto.resid";
+
+List(UInt(64)) nat(Str hex) { return bn_from_be(cose_hex_decode(hex)); }
+Str hx(List(UInt(64)) x) { return hex_encode(bn_to_be(x, 32)); }
+Str he(CvPt p) { return hex_encode(cv_enc(p)); }
+
+test "reshare preserves the root key across a disjoint new party set" {
+    List(Int) old_ids = [1, 2, 3];
+    List(List(UInt(64))) old_shares = [
+        nat("2222222218111110222222221811111022222222181111102222222218111110"),
+        nat("320fedcb9f765431320fedcb9f765431320fedcb9f765431320fedcb9f765431"),
+        nat("41fdb97526db975241fdb97526db975241fdb97526db975241fdb97526db9752"),
+    ];
+    List(List(List(UInt(64)))) polys = [
+        [nat("00"), nat("11111112111111101111111111111111542a166369f9728c1d57464e14adebbf"), nat("2222223c222222082222222222222228f2acac7f29bc08a161438a54801057ce")],
+        [nat("00"), nat("33333334333333323333333333333333764c38858c1b94ae3f79687036d00de1"), nat("0000001dffffffe20000000000000007dcee9fa66b3b6c6b703a3d266c61a064")],
+        [nat("00"), nat("55555556555555545555555555555555986e5aa7ae3db6d0619b8a9258f23003"), nat("2222224422222200222222222222222b0b74d711f0ff1479c375343c9cf72d3e")],
+    ];
+    List(List(UInt(64))) new_shares = [
+        rsh_new_share_of(old_shares, old_ids, 4, polys),
+        rsh_new_share_of(old_shares, old_ids, 5, polys),
+        rsh_new_share_of(old_shares, old_ids, 6, polys),
+    ];
+    Str root_old = hx(rsh_root(old_ids, old_shares));
+    Str root_new = hx(rsh_root([4, 5, 6], new_shares));
+    expect(root_old).toEqual("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef");
+    expect(root_new).toEqual(root_old);
+}
+
+test "every new subset of the required size reconstructs the same key" {
+    List(Int) old_ids = [1, 2, 3];
+    List(List(UInt(64))) old_shares = [
+        nat("2222222218111110222222221811111022222222181111102222222218111110"),
+        nat("320fedcb9f765431320fedcb9f765431320fedcb9f765431320fedcb9f765431"),
+        nat("41fdb97526db975241fdb97526db975241fdb97526db975241fdb97526db9752"),
+    ];
+    List(List(List(UInt(64)))) polys = [
+        [nat("00"), nat("11111112111111101111111111111111542a166369f9728c1d57464e14adebbf")],
+        [nat("00"), nat("33333334333333323333333333333333764c38858c1b94ae3f79687036d00de1")],
+        [nat("00"), nat("55555556555555545555555555555555986e5aa7ae3db6d0619b8a9258f23003")],
+    ];
+    List(List(UInt(64))) new_shares = [
+        rsh_new_share_of(old_shares, old_ids, 4, polys),
+        rsh_new_share_of(old_shares, old_ids, 5, polys),
+        rsh_new_share_of(old_shares, old_ids, 6, polys),
+    ];
+    expect(hx(rsh_root([4, 5], [new_shares[0], new_shares[1]]))).toEqual("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef");
+    expect(hx(rsh_root([4, 6], [new_shares[0], new_shares[2]]))).toEqual("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef");
+    expect(hx(rsh_root([5, 6], [new_shares[1], new_shares[2]]))).toEqual("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef");
+}
+
+test "dealer polynomials commit to a root-preserving public polynomial" {
+    List(Int) old_ids = [1, 2, 3];
+    List(List(UInt(64))) old_shares = [
+        nat("2222222218111110222222221811111022222222181111102222222218111110"),
+        nat("320fedcb9f765431320fedcb9f765431320fedcb9f765431320fedcb9f765431"),
+        nat("41fdb97526db975241fdb97526db975241fdb97526db975241fdb97526db9752"),
+    ];
+    List(List(List(UInt(64)))) randoms = [
+        [nat("00"), nat("11111112111111101111111111111111542a166369f9728c1d57464e14adebbf"), nat("2222223c222222082222222222222228f2acac7f29bc08a161438a54801057ce")],
+        [nat("00"), nat("33333334333333323333333333333333764c38858c1b94ae3f79687036d00de1"), nat("0000001dffffffe20000000000000007dcee9fa66b3b6c6b703a3d266c61a064")],
+        [nat("00"), nat("55555556555555545555555555555555986e5aa7ae3db6d0619b8a9258f23003"), nat("2222224422222200222222222222222b0b74d711f0ff1479c375343c9cf72d3e")],
+    ];
+    List(List(UInt(64))) combined = rsh_new_share_polys(old_shares, old_ids, 4, randoms, 0, [nat("00")]);
+    expect(hx(rsh_eval_poly(combined, 0))).toEqual(hx(rsh_root(old_ids, old_shares)));
+    expect(he(rsh_commit_poly2(combined)[0])).toEqual(he(cv_mul_base(rsh_root(old_ids, old_shares))));
+    expect(hx(rsh_eval_poly(combined, 4))).toEqual(hx(rsh_new_share_from_polys(old_shares, old_ids, 4, randoms)));
+}
+
+test "Feldman verification names the offending dealer" {
+    List(Int) old_ids = [1, 2, 3];
+    List(List(UInt(64))) old_shares = [
+        nat("2222222218111110222222221811111022222222181111102222222218111110"),
+        nat("320fedcb9f765431320fedcb9f765431320fedcb9f765431320fedcb9f765431"),
+        nat("41fdb97526db975241fdb97526db975241fdb97526db975241fdb97526db9752"),
+    ];
+    List(List(List(UInt(64)))) randoms = [
+        [nat("00"), nat("11111112111111101111111111111111542a166369f9728c1d57464e14adebbf"), nat("2222223c222222082222222222222228f2acac7f29bc08a161438a54801057ce")],
+        [nat("00"), nat("33333334333333323333333333333333764c38858c1b94ae3f79687036d00de1"), nat("0000001dffffffe20000000000000007dcee9fa66b3b6c6b703a3d266c61a064")],
+        [nat("00"), nat("55555556555555545555555555555555986e5aa7ae3db6d0619b8a9258f23003"), nat("2222224422222200222222222222222b0b74d711f0ff1479c375343c9cf72d3e")],
+    ];
+    List(List(UInt(64))) dp0 = rsh_dealer_poly(old_shares[0], old_ids, 1, randoms[0]);
+    List(List(UInt(64))) dp1 = rsh_dealer_poly(old_shares[1], old_ids, 2, randoms[1]);
+    List(List(UInt(64))) dp2 = rsh_dealer_poly(old_shares[2], old_ids, 3, randoms[2]);
+    List(List(CvPt)) commits = [rsh_commit_poly2(dp0), rsh_commit_poly2(dp1), rsh_commit_poly2(dp2)];
+    List(List(List(UInt(64)))) tampered = [dp0, rsh_poly_add2(dp1, [nat("00"), nat("01")]), dp2];
+    expect(rsh_new_share_checked_of(old_shares, old_ids, 4, tampered, commits)).toEqual(Err(2));
+}
+
+test "an encrypted contribution is checked against the Feldman commitment" {
+    PaillierSec sec = paillier_sec(nat("3d"), nat("35")) else { PaillierSec {.p = [], .q = [], .phi = [], .phi_inv = []} };
+    PaillierPub pk = paillier_pub(bn_mul(nat("3d"), nat("35")));
+    List(UInt(64)) share = nat("07");
+    List(CvPt) commits = [cv_mul_base(nat("07"))];
+    List(UInt(64)) ct = rsh_enc_share(pk, share, nat("02"));
+    Bool ok = match rsh_decrypt_verified(sec, pk, ct, commits, 1, 42) { Ok(v) => hx(v) == hx(share), Err(_) => false };
+    Bool bad = match rsh_decrypt_verified(sec, pk, rsh_enc_share(pk, nat("08"), nat("02")), commits, 1, 42) { Ok(_) => false, Err(x) => x == 42 };
+    expect(ok).toBeTrue();
+    expect(bad).toBeTrue();
+}
+
+test "encrypted re-share round sums verified contributions" {
+    List(Int) old_ids = [1, 2];
+    List(List(UInt(64))) old_shares = [nat("07"), nat("09")];
+    List(List(List(UInt(64)))) randoms = [[nat("00"), nat("01")], [nat("00"), nat("02")]];
+    List(List(List(UInt(64)))) dealer_polys = [
+        rsh_dealer_poly(old_shares[0], old_ids, 1, randoms[0]),
+        rsh_dealer_poly(old_shares[1], old_ids, 2, randoms[1]),
+    ];
+    List(List(CvPt)) commits = [rsh_commit_poly2(dealer_polys[0]), rsh_commit_poly2(dealer_polys[1])];
+    PaillierSec sec = paillier_sec(nat("3d"), nat("35")) else { PaillierSec {.p = [], .q = [], .phi = [], .phi_inv = []} };
+    PaillierPub pub = paillier_pub(bn_mul(nat("3d"), nat("35")));
+    Bool ok = match rsh_share_encrypted_of(old_ids, dealer_polys, commits, 1, sec, pub, [1, 2, 3]) {
+        Ok(v) => hx(v) == hx(sc_nat_add(rsh_eval_poly(dealer_polys[0], 1), rsh_eval_poly(dealer_polys[1], 1))),
+        Err(_) => false
+    };
+    expect(ok).toBeTrue();
+    List(List(CvPt)) bad = [rsh_commit_poly2(rsh_poly_add2(dealer_polys[0], [nat("00"), nat("01")])), commits[1]];
+    Bool refused = match rsh_share_encrypted_of(old_ids, dealer_polys, bad, 1, sec, pub, [1, 2, 3]) {
+        Ok(_) => false,
+        Err(x) => x == 1
+    };
+    expect(refused).toBeTrue();
+}
+
+test "round-1 dealer message carries commitments and an encrypted part" {
+    RshNewPeer peer = RshNewPeer {.id = 1, .pail = paillier_pub(bn_mul(nat("3d"), nat("35")))};
+    RshD1 d = rsh_d1(1, [1, 2], nat("07"), [nat("00"), nat("01")], [peer], [9, 9, 9]);
+    PaillierSec sec = paillier_sec(nat("3d"), nat("35")) else { PaillierSec {.p = [], .q = [], .phi = [], .phi_inv = []} };
+    Bool ok = match rsh_decrypt_verified(sec, peer.pail, d.parts[0].ct, d.commits, 1, 1) {
+        Ok(v) => hx(v) == hx(rsh_eval_poly(rsh_dealer_poly(nat("07"), [1, 2], 1, [nat("00"), nat("01")]), 1)),
+        Err(_) => false
+    };
+    expect(ok).toBeTrue();
+    expect(d.dealer).toEqual(1);
+    expect(d.parts.len()).toEqual(1);
+    expect(d.parts[0].to).toEqual(1);
+    expect(d.commits.len()).toEqual(2);
+}
+
+test "a re-share part proves knowledge of its Paillier nonce" {
+    PaillierPub pk = paillier_pub(bn_mul(nat("3d"), nat("35")));
+    List(UInt(64)) share = nat("07");
+    List(UInt(64)) rho = cg_unit([4, 5, 6], "test", pk.n);
+    Transcript tr = tr_new();
+    Option(RshProofPart) po = rsh_prove_part(pk, 1, share, rho, tr, [7, 7, 7]);
+    RshProofPart p = po else { RshProofPart {.to = 1, .ct = [], .proof = NthProof {.a = [], .z = []}} };
+    expect(rsh_verify_part(pk, share, p, tr)).toBeTrue();
+    expect(rsh_verify_part(pk, nat("08"), p, tr)).toBeFalse();
+}
+
+test "a new party assembles its share from all dealer round-1 messages" {
+    PaillierPub pub = paillier_pub(bn_mul(nat("3d"), nat("35")));
+    RshNewPeer peer = RshNewPeer {.id = 1, .pail = pub};
+    RshD1 d1 = rsh_d1(1, [1, 2], nat("07"), [nat("00"), nat("01")], [peer], [1, 1, 1]);
+    RshD1 d2 = rsh_d1(2, [1, 2], nat("09"), [nat("00"), nat("02")], [peer], [2, 2, 2]);
+    PaillierSec sec = paillier_sec(nat("3d"), nat("35")) else { PaillierSec {.p = [], .q = [], .phi = [], .phi_inv = []} };
+    List(List(UInt(64))) expected = [
+        rsh_eval_poly(rsh_dealer_poly(nat("07"), [1, 2], 1, [nat("00"), nat("01")]), 1),
+        rsh_eval_poly(rsh_dealer_poly(nat("09"), [1, 2], 2, [nat("00"), nat("02")]), 1),
+    ];
+    Bool ok = match rsh_assemble_of([d1, d2], 1, sec, pub) { Ok(v) => hx(v) == hx(sc_nat_add(expected[0], expected[1])), Err(_) => false };
+    expect(ok).toBeTrue();
+}
+
+test "duplicate parts from one dealer are refused" {
+    PaillierPub pub = paillier_pub(bn_mul(nat("3d"), nat("35")));
+    RshNewPeer peer = RshNewPeer {.id = 1, .pail = pub};
+    RshD1 d = rsh_d1(1, [1, 2], nat("07"), [nat("00"), nat("01")], [peer], [1, 1, 1]);
+    RshD1 bad = RshD1 {.dealer = 1, .commits = d.commits, .parts = d.parts.concat([d.parts[0]])};
+    PaillierSec sec = paillier_sec(nat("3d"), nat("35")) else { PaillierSec {.p = [], .q = [], .phi = [], .phi_inv = []} };
+    Bool refused = match rsh_assemble_of([bad], 1, sec, pub) { Ok(_) => false, Err(x) => x == 1 };
+    expect(refused).toBeTrue();
+}
+
+test "a new party announces its Paillier and Pedersen parameters with proofs" {
+    PaillierSec sec = paillier_sec(nat("c7a0a26d66491aa191e208dacad5e78e23c25b4ba562ef4b3b221ff8145257be0fa8ed3d39a016c37525162e12a61ebadecb27eb243f3a34fc42d1d0b9166d8fdcb4e7811efe5f11ad35501c444f9d0675e9af4a0ceceadda6b85f5875aa5704ec6ec283301faa4bf44de4b5ec0fa15447042f413cf862f1978ffebc030cd8b3"), nat("c701021e91631cbcb4777dbcb122eae89fd1c3c3bff6621ecefd132929afbbdc64468d3fddfd3cb4c7a4f5c8c014916f8a3eb850e8d38089f9e5f58922ccbdd12912e610192914bd7d841f86e12a53d30a70f41290f85a11639f5c4f45d11ed12ea3d76ed22012dbe8b73a90fa3bea819dcc99b2a7378dc48019b415561cfe17")) else { PaillierSec {.p = [], .q = [], .phi = [], .phi_inv = []} };
+    PaillierPub pub = paillier_pub(bn_mul(sec.p, sec.q));
+    Pedersen ped = Pedersen {.n = pub.n, .s = nat("08"), .t = nat("02")};
+    Transcript tr = tr_new();
+    Option(RshAnn) oa = rsh_announce(1, sec, ped, nat("03"), tr, cg_rng([1, 2, 3], "ann", 1000000));
+    RshAnn a = oa else { RshAnn {.id = 1, .pail = pub, .ped = ped, .modp = ModProof {.w = [], .responses = []}, .prm = PrmProof {.as = [], .zs = []} } };
+    expect(mod_verify(a.pail.n, a.modp, tr)).toBeTrue();
+    expect(prm_verify(a.ped, a.prm, tr)).toBeTrue();
+    expect(rsh_announce_ok(a, tr)).toBeTrue();
+    Transcript other = tr_item(tr, "other", [1]);
+    expect(rsh_announce_ok(a, other)).toBeFalse();
+}
+
+test "an invalid encrypted part carries an identifiable complaint" {
+    PaillierSec sec = paillier_sec(nat("3d"), nat("35")) else { PaillierSec {.p = [], .q = [], .phi = [], .phi_inv = []} };
+    PaillierPub pk = paillier_pub(bn_mul(nat("3d"), nat("35")));
+    List(UInt(64)) ct = rsh_enc_share(pk, nat("08"), nat("02"));
+    Transcript tr = tr_new();
+    Option(CgOpen) oo = cg_open(sec, pk, ct, tr, [3, 3, 3]);
+    CgOpen o = oo else { CgOpen {.plain = zi_zero(), .hidden = [], .proof = NthProof {.a = [], .z = []}} };
+    expect(rsh_open_verify(pk, ct, o, tr)).toBeTrue();
+    expect(rsh_open_shows_bad(pk, ct, o, [cv_mul_base(nat("07"))], 1, tr)).toBeTrue();
+    expect(rsh_open_shows_bad(pk, ct, o, [cv_mul_base(nat("08"))], 1, tr)).toBeFalse();
+    RshComplaint c = RshComplaint {.against = 5, .by = 1, .ct = ct, .open = o};
+    expect(rsh_open_shows_bad(pk, c.ct, c.open, [cv_mul_base(nat("07"))], 1, tr)).toBeTrue();
+}

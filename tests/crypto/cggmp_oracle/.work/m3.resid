@@ -1,0 +1,87 @@
+import "../../../../lib/bignum.resid";
+import "../../../../lib/cose.resid";
+
+// CIOS Montgomery multiplication on a working array updated in place.
+UInt(64) lo64(UInt(128) v) { return wrapping_u64(v); }
+UInt(64) hi64(UInt(128) v) { return (UInt(64)) (v >> 64); }
+
+List(UInt(64)) zeros(Int n, Int i, ListBuf(UInt(64)) acc) {
+    if (i >= n) { return acc.finish(); }
+    return zeros(n, i + 1, acc.push(0));
+}
+
+UInt(64) limb(List(UInt(64)) x, Int i) { return if (i < x.len()) { x[i] } else { 0 }; }
+
+// t += ai * b (k limbs), carrying into t[k], t[k+1].
+List(UInt(64)) addmul(List(UInt(64)) t, List(UInt(64)) b, UInt(64) ai, Int k, Int j, UInt(64) carry) {
+    if (j >= k) {
+        UInt(128) s = (UInt(128)) t[k] + (UInt(128)) carry;
+        return t.with(k, lo64(s)).with(k + 1, t[k + 1] + hi64(s));
+    }
+    UInt(128) s = (UInt(128)) t[j] + (UInt(128)) ai * (UInt(128)) limb(b, j) + (UInt(128)) carry;
+    return addmul(t.with(j, lo64(s)), b, ai, k, j + 1, hi64(s));
+}
+
+// t = (t + m * n) >> 64.
+List(UInt(64)) redc_step(List(UInt(64)) t, List(UInt(64)) n, UInt(64) m, Int k, Int j, UInt(64) carry) {
+    if (j >= k) {
+        UInt(128) s = (UInt(128)) t[k] + (UInt(128)) carry;
+        return t.with(k - 1, lo64(s)).with(k, t[k + 1] + hi64(s)).with(k + 1, 0);
+    }
+    UInt(128) s = (UInt(128)) t[j] + (UInt(128)) m * (UInt(128)) n[j] + (UInt(128)) carry;
+    // the j = 0 low word vanishes; the others shift down one limb
+    List(UInt(64)) t2 = if (j == 0) { t } else { t.with(j - 1, lo64(s)) };
+    return redc_step(t2, n, m, k, j + 1, hi64(s));
+}
+
+List(UInt(64)) cios(List(UInt(64)) a, List(UInt(64)) b, List(UInt(64)) n, UInt(64) n0, Int k, Int i, List(UInt(64)) t) {
+    if (i >= k) { return t; }
+    List(UInt(64)) t1 = addmul(t, b, limb(a, i), k, 0, 0);
+    UInt(64) m = wrapping_umul(t1[0], n0);
+    return cios(a, b, n, n0, k, i + 1, redc_step(t1, n, m, k, 0, 0));
+}
+
+List(UInt(64)) mont_mul2(BnMont c, List(UInt(64)) a, List(UInt(64)) b) {
+    List(UInt(64)) t = cios(a, b, c.n, c.np[0], c.k, 0, zeros(c.k + 2, 0, ListBuf()));
+    List(UInt(64)) r = bn_trim(t);
+    return if (bn_cmp(r, c.n) >= 0) { bn_sub(r, c.n) } else { r };
+}
+
+List(UInt(64)) exp_bits(BnMont c, List(UInt(64)) bm, List(UInt(64)) exp, Int i, List(UInt(64)) acc) {
+    if (i < 0) { return acc; }
+    List(UInt(64)) sq = mont_mul2(c, acc, acc);
+    List(UInt(64)) nx = if (bn_bit(exp, i) == 1) { mont_mul2(c, sq, bm) } else { sq };
+    return exp_bits(c, bm, exp, i - 1, nx);
+}
+
+List(UInt(64)) modexp2(List(UInt(64)) base, List(UInt(64)) exp, List(UInt(64)) m) {
+    BnMont c = bn_mont_new(m);
+    List(UInt(64)) bm = mont_mul2(c, base, c.rr);
+    List(UInt(64)) one = mont_mul2(c, [1], c.rr);
+    List(UInt(64)) acc = exp_bits(c, bm, exp, bn_bit_len(exp) - 1, one);
+    return mont_mul2(c, acc, [1]);
+}
+
+List(List(UInt(64))) loop(List(UInt(64)) base, List(UInt(64)) e, List(UInt(64)) m, Int i, ListBuf(List(UInt(64))) acc) {
+    if (i <= 0) { return acc.finish(); }
+    return loop(base, e, m, i - 1, acc.push(modexp2(base, e, m)));
+}
+
+Int run(List(UInt(64)) e, List(UInt(64)) m, Int n) {
+    ListBuf(List(UInt(64))) b = ListBuf();
+    return loop([5], e, m, n, b).len();
+}
+
+@requires(args)
+Int main() {
+    List(UInt(64)) m = bn_from_be(cose_hex_decode(args.get(1)));
+    List(UInt(64)) e = bn_sub(m, [3]);
+    Int n = str_parse_int(args.get(2));
+    if (args.get(3) == "check") {
+        println(hex_check(modexp2([5], e, m), bn_modexp([5], e, m)));
+        return 0;
+    }
+    return run(e, m, n) % 200;
+}
+
+Str hex_check(List(UInt(64)) a, List(UInt(64)) b) { return if (bn_cmp(a, b) == 0) { "same" } else { "DIFFERENT" }; }

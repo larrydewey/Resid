@@ -1,0 +1,213 @@
+package curve
+
+// ORACLE ADDITION (Symbolon): NIST P-256 as a curve.Curve, so that the
+// CGGMP21 proofs and protocol can be run over the curve Symbolon uses. It is
+// written for testing against the Resid implementation (math/big, variable
+// time, no care taken for secrets) and is not for any other use.
+
+import (
+	"crypto/elliptic"
+	"errors"
+	"fmt"
+	"math/big"
+
+	"github.com/cronokirby/saferith"
+)
+
+var p256 = elliptic.P256()
+var p256N = p256.Params().N
+var p256P = p256.Params().P
+
+var p256OrderNat = new(saferith.Nat).SetBig(p256N, 256)
+var p256Order = saferith.ModulusFromNat(p256OrderNat)
+
+type P256 struct{}
+
+func (P256) NewPoint() Point { return &P256Point{inf: true, x: new(big.Int), y: new(big.Int)} }
+func (P256) NewBasePoint() Point {
+	return &P256Point{x: new(big.Int).Set(p256.Params().Gx), y: new(big.Int).Set(p256.Params().Gy)}
+}
+func (P256) NewScalar() Scalar        { return &P256Scalar{v: new(big.Int)} }
+func (P256) Name() string             { return "P-256" }
+func (P256) ScalarBits() int          { return 256 }
+func (P256) SafeScalarBytes() int     { return 32 }
+func (P256) Order() *saferith.Modulus { return p256Order }
+
+type P256Scalar struct{ v *big.Int }
+
+func p256CastScalar(s Scalar) *P256Scalar {
+	out, ok := s.(*P256Scalar)
+	if !ok {
+		panic(fmt.Sprintf("not a P256Scalar: %v", s))
+	}
+	return out
+}
+
+func (*P256Scalar) Curve() Curve { return P256{} }
+
+func (s *P256Scalar) MarshalBinary() ([]byte, error) {
+	out := make([]byte, 32)
+	s.v.FillBytes(out)
+	return out, nil
+}
+
+func (s *P256Scalar) UnmarshalBinary(data []byte) error {
+	if len(data) != 32 {
+		return fmt.Errorf("invalid length for P-256 scalar: %d", len(data))
+	}
+	v := new(big.Int).SetBytes(data)
+	if v.Cmp(p256N) >= 0 {
+		return errors.New("P-256 scalar out of range")
+	}
+	s.v = v
+	return nil
+}
+
+func (s *P256Scalar) Add(t Scalar) Scalar {
+	s.v = new(big.Int).Mod(new(big.Int).Add(s.v, p256CastScalar(t).v), p256N)
+	return s
+}
+func (s *P256Scalar) Sub(t Scalar) Scalar {
+	s.v = new(big.Int).Mod(new(big.Int).Sub(s.v, p256CastScalar(t).v), p256N)
+	return s
+}
+func (s *P256Scalar) Negate() Scalar {
+	s.v = new(big.Int).Mod(new(big.Int).Neg(s.v), p256N)
+	return s
+}
+func (s *P256Scalar) Mul(t Scalar) Scalar {
+	s.v = new(big.Int).Mod(new(big.Int).Mul(s.v, p256CastScalar(t).v), p256N)
+	return s
+}
+func (s *P256Scalar) Invert() Scalar {
+	s.v = new(big.Int).ModInverse(s.v, p256N)
+	return s
+}
+func (s *P256Scalar) Equal(t Scalar) bool { return s.v.Cmp(p256CastScalar(t).v) == 0 }
+func (s *P256Scalar) IsZero() bool        { return s.v.Sign() == 0 }
+func (s *P256Scalar) Set(t Scalar) Scalar {
+	s.v = new(big.Int).Set(p256CastScalar(t).v)
+	return s
+}
+func (s *P256Scalar) SetNat(x *saferith.Nat) Scalar {
+	s.v = new(big.Int).Mod(x.Big(), p256N)
+	return s
+}
+func (s *P256Scalar) IsOverHalfOrder() bool {
+	return s.v.Cmp(new(big.Int).Rsh(p256N, 1)) > 0
+}
+func (s *P256Scalar) Act(p Point) Point {
+	pt := p256CastPoint(p)
+	if pt.inf || s.v.Sign() == 0 {
+		return P256{}.NewPoint()
+	}
+	x, y := p256.ScalarMult(pt.x, pt.y, s.v.FillBytes(make([]byte, 32)))
+	return p256FromXY(x, y)
+}
+func (s *P256Scalar) ActOnBase() Point {
+	if s.v.Sign() == 0 {
+		return P256{}.NewPoint()
+	}
+	x, y := p256.ScalarBaseMult(s.v.FillBytes(make([]byte, 32)))
+	return p256FromXY(x, y)
+}
+
+type P256Point struct {
+	inf  bool
+	x, y *big.Int
+}
+
+func p256FromXY(x, y *big.Int) *P256Point {
+	if x.Sign() == 0 && y.Sign() == 0 {
+		return &P256Point{inf: true, x: new(big.Int), y: new(big.Int)}
+	}
+	return &P256Point{x: x, y: y}
+}
+
+func p256CastPoint(p Point) *P256Point {
+	out, ok := p.(*P256Point)
+	if !ok {
+		panic(fmt.Sprintf("not a P256Point: %v", p))
+	}
+	return out
+}
+
+func (*P256Point) Curve() Curve { return P256{} }
+
+func (p *P256Point) MarshalBinary() ([]byte, error) {
+	out := make([]byte, 33)
+	if p.inf {
+		return out, nil
+	}
+	out[0] = byte(p.y.Bit(0)) + 2
+	p.x.FillBytes(out[1:])
+	return out, nil
+}
+
+func (p *P256Point) UnmarshalBinary(data []byte) error {
+	if len(data) != 33 {
+		return fmt.Errorf("invalid length for P-256 point: %d", len(data))
+	}
+	if data[0] == 0 {
+		*p = *P256{}.NewPoint().(*P256Point)
+		return nil
+	}
+	if data[0] != 2 && data[0] != 3 {
+		return errors.New("bad P-256 point prefix")
+	}
+	x := new(big.Int).SetBytes(data[1:])
+	if x.Cmp(p256P) >= 0 {
+		return errors.New("P-256 x out of range")
+	}
+	// y^2 = x^3 - 3x + b
+	y2 := new(big.Int).Mul(x, x)
+	y2.Mul(y2, x)
+	y2.Sub(y2, new(big.Int).Mul(big.NewInt(3), x))
+	y2.Add(y2, p256.Params().B)
+	y2.Mod(y2, p256P)
+	y := new(big.Int).ModSqrt(y2, p256P)
+	if y == nil {
+		return errors.New("P-256 x not on curve")
+	}
+	if byte(y.Bit(0)) != data[0]-2 {
+		y.Sub(p256P, y)
+	}
+	p.inf, p.x, p.y = false, x, y
+	return nil
+}
+
+func (p *P256Point) Add(q Point) Point {
+	o := p256CastPoint(q)
+	if p.inf {
+		return &P256Point{inf: o.inf, x: new(big.Int).Set(o.x), y: new(big.Int).Set(o.y)}
+	}
+	if o.inf {
+		return &P256Point{x: new(big.Int).Set(p.x), y: new(big.Int).Set(p.y)}
+	}
+	if p.x.Cmp(o.x) == 0 && p.y.Cmp(o.y) != 0 {
+		return P256{}.NewPoint()
+	}
+	x, y := p256.Add(p.x, p.y, o.x, o.y)
+	return p256FromXY(x, y)
+}
+func (p *P256Point) Sub(q Point) Point { return p.Add(q.Negate()) }
+func (p *P256Point) Negate() Point {
+	if p.inf {
+		return P256{}.NewPoint()
+	}
+	return &P256Point{x: new(big.Int).Set(p.x), y: new(big.Int).Sub(p256P, p.y)}
+}
+func (p *P256Point) Equal(q Point) bool {
+	o := p256CastPoint(q)
+	if p.inf || o.inf {
+		return p.inf == o.inf
+	}
+	return p.x.Cmp(o.x) == 0 && p.y.Cmp(o.y) == 0
+}
+func (p *P256Point) IsIdentity() bool { return p == nil || p.inf }
+func (p *P256Point) XScalar() Scalar {
+	if p.inf {
+		return nil
+	}
+	return &P256Scalar{v: new(big.Int).Mod(p.x, p256N)}
+}

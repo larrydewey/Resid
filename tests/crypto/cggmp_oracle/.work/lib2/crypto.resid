@@ -1,0 +1,1900 @@
+// crypto.resid — hashing, MACs, KDFs, encodings and randomness in pure Resid.
+//
+// SHA-256 (FIPS 180-4; on SHA-NI / ARMv8 SHA2 when the CPU has them, else
+// software rounds), SHA-512 (on ARMv8.2 SHA512 when present) and SHA-1,
+// HMAC-SHA256, PBKDF2-HMAC-SHA256, HKDF-SHA256, constant-time equality (public and secret, spec §48), hex and
+// base64 (RFC 4648), and fresh public random bytes. String digests read
+// each character as a byte; the byte-level functions take List(Int) bytes.
+//
+// 32-bit semantics come from masking with 0xFFFFFFFF after each add.
+
+import "sha256g.resid";
+import "word.resid";
+
+// ─── Bit helpers ────────────────────────────────────────────────
+
+/// The low 32 bits of `x`, as a non-negative Int.
+pub Int mask32(Int x) {
+    return x & 4294967295;
+}
+
+/// Rotate the 32-bit word `x` right by `n` bits (0 < `n` < 32).
+pub Int rotr(Int x, Int n) {
+    Int r = (x >> n) | (x << (32 - n));
+    return r & 4294967295;
+}
+
+/// Bitwise complement of the 32-bit word `x`, kept to 32 bits.
+pub Int not32(Int x) {
+    return (x ^ 4294967295) & 4294967295;
+}
+
+// ─── Round constants (FIPS 180-4 §4.2.2) ────────────────────────
+
+/// SHA-256 round constant K[`i`] for `i` in 0..63 (FIPS 180-4 §4.2.2).
+/// Values with the top bit set are stored as negative Ints.
+pub Int k_at(Int i) {
+        List(Int) ks = [
+        1116352408, 1899447441, -1245643825, -373957723,
+        961987163, 1508970993, -1841331548, -1424204075,
+        -670586216, 310598401, 607225278, 1426881987,
+        1925078388, -2132889090, -1680079193, -1046744716,
+        -459576895, -272742522, 264347078, 604807628,
+        770255983, 1249150122, 1555081692, 1996064986,
+        -1740746414, -1473132947, -1341970488, -1084653625,
+        -958395405, -710438585, 113926993, 338241895,
+        666307205, 773529912, 1294757372, 1396182291,
+        1695183700, 1986661051, -2117940946, -1838011259,
+        -1564481375, -1474664885, -1035236496, -949202525,
+        -778901479, -694614492, -200395387, 275423344,
+        430227734, 506948616, 659060556, 883997877,
+        958139571, 1322822218, 1537002063, 1747873779,
+        1955562222, 2024104815, -2067236844, -1933114872,
+        -1866530822, -1538233109, -1090935817, -965641998
+    ];
+    return ks[i];
+}
+
+// ─── Message bytes and padding ──────────────────────────────────
+
+/// Appends the UTF-8 bytes of code point `cp` to the builder `acc`.
+pub ListBuf(Int) utf8_push_cp(Int cp, ListBuf(Int) acc) {
+    if (cp < 128) { return acc.push(cp); }
+    if (cp < 2048) { return acc.push(192 | (cp >> 6)).push(128 | (cp & 63)); }
+    if (cp < 65536) { return acc.push(224 | (cp >> 12)).push(128 | ((cp >> 6) & 63)).push(128 | (cp & 63)); }
+    return acc.push(240 | (cp >> 18)).push(128 | ((cp >> 12) & 63)).push(128 | ((cp >> 6) & 63)).push(128 | (cp & 63));
+}
+
+/// The UTF-8 bytes of `msg` from code point index `i` on, pushed onto `acc`.
+pub List(Int) utf8_run(Str msg, Int i, ListBuf(Int) acc) {
+    if (i >= str_len(msg)) { return acc.finish(); }
+    return utf8_run(msg, i + 1, utf8_push_cp(str_char_at(msg, i), acc));
+}
+
+/// Appends the UTF-8 bytes of `msg` from code point index `i` on to `acc`.
+pub List(Int) msg_bytes(Str msg, Int i, List(Int) acc) {
+    return acc.concat(utf8_run(msg, i, ListBuf()));
+}
+
+/// The UTF-8 encoding of `msg` as a list of bytes (RFC 3629): one byte per
+/// ASCII character, two to four for the others. Exact for any text.
+pub List(Int) bytes_of(Str msg) {
+    return utf8_run(msg, 0, ListBuf());
+}
+
+/// Whether every code point of `msg` from index `i` on is ASCII.
+pub Bool str_is_ascii(Str msg, Int i) {
+    if (i >= str_len(msg)) { return true; }
+    if (str_char_at(msg, i) >= 128) { return false; }
+    return str_is_ascii(msg, i + 1);
+}
+
+/// Appends `count` elements of `b` starting at `start` to `acc`.
+pub List(Int) slice_seed(List(Int) b, Int start, Int count, List(Int) acc) {
+    if (count <= 0) { return acc; }
+    Int v = b[start];
+    List(Int) acc2 = acc.concat([v]);
+    Int ns = start + 1;
+    Int nc = count - 1;
+    return slice_seed(b, ns, nc, acc2);
+}
+
+/// Appends `count` zeros to `acc` (none when `count` <= 0).
+pub List(Int) zeros_l(List(Int) acc, Int count) {
+    if (count <= 0) { return acc; }
+    List(Int) acc2 = acc.concat([0]);
+    Int c2 = count - 1;
+    return zeros_l(acc2, c2);
+}
+
+/// Appends bytes `shift` down to 0 of `bits` to `acc`, most significant
+/// first; `shift` = 7 gives the 64-bit big-endian length field.
+pub List(Int) length_bytes(Int bits, Int shift, List(Int) acc) {
+    if (shift < 0) {
+        return acc;
+    }
+    Int sh = shift * 8;
+    Int byte = (bits >> sh) & 255;
+    List(Int) acc2 = acc.concat([byte]);
+    Int ns = shift - 1;
+    return length_bytes(bits, ns, acc2);
+}
+
+/// `msg` with SHA-256 padding: 0x80, zeros, and the 64-bit bit length,
+/// to a multiple of 64 bytes (FIPS 180-4 §5.1.1).
+pub List(Int) pad_bytes(List(Int) msg) {
+    Int l = msg.len();
+    List(Int) p = msg.concat([128]);
+    Int l9 = l + 9;
+    Int blocks = (l9 + 63) / 64;
+    Int total = blocks * 64;
+    Int zcount = total - l9;
+    List(Int) p2 = zeros_l(p, zcount);
+    Int bits = l * 8;
+    return length_bytes(bits, 7, p2);
+}
+
+// ─── Block words ────────────────────────────────────────────────
+
+/// Appends big-endian 32-bit words `j`..15 of the 64-byte block at byte
+/// offset `base` in `m` to `acc`.
+pub List(Int) bw_acc(List(Int) m, Int base, Int j, List(Int) acc) {
+    if (j >= 16) { return acc; }
+    Int off = base + (j * 4);
+    Int b0 = m[off];
+    Int b1 = m[off + 1];
+    Int b2 = m[off + 2];
+    Int b3 = m[off + 3];
+    Int sh0 = b0 << 24;
+    Int sh1 = b1 << 16;
+    Int sh2 = b2 << 8;
+    Int or01 = sh0 | sh1;
+    Int or012 = or01 | sh2;
+    Int wv = (or012 | b3) & 4294967295;
+    List(Int) acc2 = acc.concat([wv]);
+    Int nj = j + 1;
+    return bw_acc(m, base, nj, acc2);
+}
+
+/// The 16 big-endian 32-bit words of the 64-byte block at `base` in `m`.
+pub List(Int) block_words(List(Int) m, Int base) {
+    return bw_acc(m, base, 0, []);
+}
+
+/// Extends the SHA-256 message schedule `w` (words 0..`i`-1) to 64 words.
+pub List(Int) ext_w(List(Int) w, Int i) {
+    if (i >= 64) { return w; }
+    Int wm15 = w[i - 15];
+    Int r7 = rotr(wm15, 7);
+    Int r17 = rotr(wm15, 18);
+    Int sr3 = wm15 >> 3;
+    Int x1 = r7 ^ r17;
+    Int s0 = x1 ^ sr3;
+    Int wm2 = w[i - 2];
+    Int ra = rotr(wm2, 17);
+    Int rb = rotr(wm2, 19);
+    Int sr10 = wm2 >> 10;
+    Int x2 = ra ^ rb;
+    Int s1v = x2 ^ sr10;
+    Int t1 = w[i - 16] + s0;
+    Int t2 = w[i - 7] + s1v;
+    Int raw = t1 + t2;
+    Int nv = raw & 4294967295;
+    List(Int) w2 = w.concat([nv]);
+    Int ni = i + 1;
+    return ext_w(w2, ni);
+}
+
+// ─── Working-state updates ──────────────────────────────────────
+
+/// `val` when `i` is `idx`, else `xs[i]`.
+pub Int pick(List(Int) xs, Int idx, Int val, Int i) {
+    if (i == idx) { return val; }
+    return xs[i];
+}
+
+/// Elements 0..`i` of `xs`, with the one at `idx` replaced by `val`.
+pub List(Int) ls_build(List(Int) xs, Int idx, Int val, Int i) {
+    if (i > 0) {
+        Int pi = i - 1;
+        List(Int) prev = ls_build(xs, idx, val, pi);
+        Int v = pick(xs, idx, val, i);
+        List(Int) head = [v];
+        return prev.concat(head);
+    }
+    Int v0 = pick(xs, idx, val, 0);
+    return [v0];
+}
+
+/// A copy of the non-empty list `xs` with element `idx` set to `val`.
+pub List(Int) ls_set(List(Int) xs, Int idx, Int val) {
+    Int last = xs.len() - 1;
+    return ls_build(xs, idx, val, last);
+}
+
+/// The SHA-256 choice function Ch(`e`, `f`, `g`) on 32-bit words.
+pub Int ch_of(Int e, Int f, Int g) {
+    Int ne = not32(e);
+    Int ef = e & f;
+    Int ng = ne & g;
+    return ef ^ ng;
+}
+
+/// One SHA-256 round `i` on the 8-word working state `hv` with schedule `w`.
+pub List(Int) sha_round(List(Int) hv, List(Int) w, Int i) {
+    Int a = hv[0];
+    Int b = hv[1];
+    Int c = hv[2];
+    Int d = hv[3];
+    Int e = hv[4];
+    Int f = hv[5];
+    Int g = hv[6];
+    Int hh = hv[7];
+    Int wi = w[i];
+    Int kk = k_at(i);
+    Int re6 = rotr(e, 6);
+    Int re11 = rotr(e, 11);
+    Int re25 = rotr(e, 25);
+    Int x1 = re6 ^ re11;
+    Int s1v = x1 ^ re25;
+    Int chv = ch_of(e, f, g);
+    Int hps1 = hh + s1v;
+    Int t1a = hps1 + chv;
+    Int t1b = t1a + kk;
+    Int t1c = t1b + wi;
+    Int t1 = t1c & 4294967295;
+    Int ra2 = rotr(a, 2);
+    Int ra13 = rotr(a, 13);
+    Int ra22 = rotr(a, 22);
+    Int x3 = ra2 ^ ra13;
+    Int s0v = x3 ^ ra22;
+    Int ab = a & b;
+    Int ac = a & c;
+    Int bc = b & c;
+    Int mjraw = ab ^ ac;
+    Int mj = mjraw ^ bc;
+    Int t2raw = s0v + mj;
+    Int t2 = t2raw & 4294967295;
+    Int na_raw = t1 + t2;
+    Int na = na_raw & 4294967295;
+    Int nd_raw = d + t1;
+    Int nd = nd_raw & 4294967295;
+    // One fresh 8-word state per round. (A chain of eight ls_set calls here
+    // allocated ~20x more per round, which dominated the memory cost of
+    // hashing large inputs such as the compiler's own source.)
+    return [na, a, b, c, nd, e, f, g];
+}
+
+/// SHA-256 rounds `i`..63 on the working state `hv` with schedule `w`.
+pub List(Int) sha_rounds(List(Int) hv, List(Int) w, Int i) {
+    if (i >= 64) { return hv; }
+    List(Int) hv2 = sha_round(hv, w, i);
+    Int ni = i + 1;
+    return sha_rounds(hv2, w, ni);
+}
+
+// ─── Compression over all blocks ────────────────────────────────
+
+/// `h[i] + hv[i]` modulo 2^32.
+pub Int add_w(List(Int) h, List(Int) hv, Int i) {
+    Int raw = h[i] + hv[i];
+    return raw & 4294967295;
+}
+
+/// The word-wise sum of the 8-word states `h` and `hv` modulo 2^32.
+/// `i` is ignored.
+pub List(Int) add_h(List(Int) h, List(Int) hv, Int i) {
+    return [add_w(h, hv, 0), add_w(h, hv, 1), add_w(h, hv, 2), add_w(h, hv, 3),
+            add_w(h, hv, 4), add_w(h, hv, 5), add_w(h, hv, 6), add_w(h, hv, 7)];
+}
+
+/// The SHA-256 state `h` after the 64-byte block at `base` in `m`, in
+/// software. Runs lib/sha256g.resid's generic block function at public
+/// words, the same code secret hashing is checked in.
+pub List(Int) digest_block(List(Int) m, Int base, List(Int) h) { return sha256g_block(m, base, h); }
+
+/// Big-endian 32-bit word `j` of the block at byte offset `base` in `m`.
+/// Only the low 8 bits of each element are used.
+pub Int word_at_list(List(Int) m, Int base, Int j) {
+    Int off = base + j * 4;
+    return (((m[off] & 255) << 24) | ((m[off + 1] & 255) << 16) | ((m[off + 2] & 255) << 8) | (m[off + 3] & 255)) & 4294967295;
+}
+
+/// The SHA-256 state `h` after the 64-byte blocks of `m` in [`pos`,
+/// `total`), on the CPU's SHA instructions when available, else software.
+pub List(Int) digest_blocks(List(Int) m, Int pos, Int total, List(Int) h) {
+    if (pos >= total) { return h; }
+    if (resid_cpu_has_sha256()) { return sha_hw_blocks(m, pos, total, sha_hw_state(h, 0, (UInt(256)) 0)); }
+    List(Int) h2 = digest_block(m, pos, h);
+    Int npos = pos + 64;
+    return digest_blocks(m, npos, total, h2);
+}
+
+// ─── SHA-256 on the CPU's SHA instructions (SHA-NI, ARMv8 SHA2) ──
+// The state and block as wide integers, word i at bits [32i, 32i + 32).
+
+/// Packs words `i`..7 of the SHA-256 state `h` into `acc`, word i at bits
+/// [32i, 32i + 32).
+pub UInt(256) sha_hw_state(List(Int) h, Int i, UInt(256) acc) {
+    if (i >= 8) { return acc; }
+    return sha_hw_state(h, i + 1, acc | (((UInt(256)) (h[i] & 4294967295)) << ((UInt(256)) (32 * i))));
+}
+
+/// Unpacks 32-bit words `i`..7 of the packed state `s` onto `acc`; the
+/// inverse of `sha_hw_state`.
+pub List(Int) sha_hw_words(UInt(256) s, Int i, ListBuf(Int) acc) {
+    if (i >= 8) { return acc.finish(); }
+    return sha_hw_words(s, i + 1, acc.push(wrapping_i64((s >> ((UInt(256)) (32 * i))) & ((UInt(256)) 4294967295))));
+}
+
+/// Packs big-endian words `i`..15 of the block at `base` in `m` into `acc`,
+/// word i at bits [32i, 32i + 32).
+pub UInt(512) sha_hw_block(List(Int) m, Int base, Int i, UInt(512) acc) {
+    if (i >= 16) { return acc; }
+    return sha_hw_block(m, base, i + 1, acc | (((UInt(512)) word_at_list(m, base, i)) << ((UInt(512)) (32 * i))));
+}
+
+/// `sha_hw_block` reading the block from a `Str` at byte offset `base`.
+pub UInt(512) sha_hw_block_str(Str m, Int base, Int i, UInt(512) acc) {
+    if (i >= 16) { return acc; }
+    return sha_hw_block_str(m, base, i + 1, acc | (((UInt(512)) word_at_str(m, base, i)) << ((UInt(512)) (32 * i))));
+}
+
+/// Compresses the 64-byte blocks of `m` in [`pos`, `total`) into the packed
+/// state `s` on the CPU's SHA instructions; returns the 8-word state.
+pub List(Int) sha_hw_blocks(List(Int) m, Int pos, Int total, UInt(256) s) {
+    if (pos >= total) { return sha_hw_words(s, 0, ListBuf()); }
+    return sha_hw_blocks(m, pos + 64, total, sha256_compress_hw(s, sha_hw_block(m, pos, 0, (UInt(512)) 0)));
+}
+
+/// `sha_hw_blocks` reading the blocks from a `Str`.
+pub List(Int) sha_hw_blocks_str(Str m, Int pos, Int total, UInt(256) s) {
+    if (pos >= total) { return sha_hw_words(s, 0, ListBuf()); }
+    return sha_hw_blocks_str(m, pos + 64, total, sha256_compress_hw(s, sha_hw_block_str(m, pos, 0, (UInt(512)) 0)));
+}
+
+// ─── Hex output ─────────────────────────────────────────────────
+
+/// The lowercase hex character for the digit `d` (0..15).
+pub Str hex_digit(Int d) {
+    if (d < 10) {
+        Int c = d + 48;
+        return str_from_code(c);
+    }
+    Int c87 = d + 87;
+    return str_from_code(c87);
+}
+
+/// Two lowercase hex characters for the byte `b` (0..255).
+pub Str hex_byte(Int b) {
+    Int hi = b >> 4;
+    Str hs = hex_digit(hi);
+    Int lo = b & 15;
+    Str ls = hex_digit(lo);
+    return hs + ls;
+}
+
+/// Eight lowercase hex characters for the 32-bit word `wv`, big-endian.
+pub Str hex_word(Int wv) {
+    Int b3 = wv >> 24;
+    Str p3 = hex_byte(b3);
+    Int q2 = wv & 16711680;
+    Int b2 = q2 >> 16;
+    Str p2s = hex_byte(b2);
+    Str p2 = p3 + p2s;
+    Int q1 = wv & 65280;
+    Int b1 = q1 >> 8;
+    Str p1s = hex_byte(b1);
+    Str p1 = p2 + p1s;
+    Int b0 = wv & 255;
+    Str p0s = hex_byte(b0);
+    return p1 + p0s;
+}
+
+/// Appends the hex of 32-bit words `i`..7 of `h` to `acc`.
+pub Str hex_state(List(Int) h, Int i, Str acc) {
+    if (i >= 8) { return acc; }
+    Str part = acc + hex_word(h[i]);
+    Int ni = i + 1;
+    return hex_state(h, ni, part);
+}
+
+// ─── Public entry point ─────────────────────────────────────────
+
+// ─── Streaming string digest ────────────────────────────────────
+// `bytes_of` materializes one list element per byte, so hashing a
+// large string costs one recursion frame and one persistent-vector push
+// per byte: a multi-hundred-KB message (e.g. the bootstrap compiler
+// source) overflows the stack before it ever reaches the first block.
+// The helpers below read each 64-byte block straight out of the `Str`,
+// so only the final partial block is ever materialized as a list.
+
+/// Same word packing as `bw_acc`, reading bytes from a `Str` instead of a
+/// `List(Int)`. `base` is a byte offset into `msg`.
+pub List(Int) bw_acc_str(Str msg, Int base, Int j, List(Int) acc) {
+    if (j >= 16) { return acc; }
+    Int off = base + (j * 4);
+    Int b0 = str_char_at(msg, off);
+    Int b1 = str_char_at(msg, off + 1);
+    Int b2 = str_char_at(msg, off + 2);
+    Int b3 = str_char_at(msg, off + 3);
+    Int sh0 = b0 << 24;
+    Int sh1 = b1 << 16;
+    Int sh2 = b2 << 8;
+    Int or01 = sh0 | sh1;
+    Int or012 = or01 | sh2;
+    Int wv = (or012 | b3) & 4294967295;
+    List(Int) acc2 = acc.concat([wv]);
+    Int nj = j + 1;
+    return bw_acc_str(msg, base, nj, acc2);
+}
+
+/// Big-endian 32-bit word `j` of the 64-byte block at byte offset `base`.
+pub Int word_at_str(Str msg, Int base, Int j) {
+    Int off = base + (j * 4);
+    Int b0 = str_char_at(msg, off);
+    Int b1 = str_char_at(msg, off + 1);
+    Int b2 = str_char_at(msg, off + 2);
+    Int b3 = str_char_at(msg, off + 3);
+    Int sh0 = b0 << 24;
+    Int sh1 = b1 << 16;
+    Int sh2 = b2 << 8;
+    Int or01 = sh0 | sh1;
+    Int or012 = or01 | sh2;
+    return (or012 | b3) & 4294967295;
+}
+
+/// SHA-256 small sigma0 of the 32-bit word `x` (FIPS 180-4 §4.1.2).
+pub Int ssig0(Int x) {
+    Int a = rotr(x, 7);
+    Int b = rotr(x, 18);
+    Int c = x >> 3;
+    return (a ^ b) ^ c;
+}
+
+/// SHA-256 small sigma1 of the 32-bit word `x` (FIPS 180-4 §4.1.2).
+pub Int ssig1(Int x) {
+    Int a = rotr(x, 17);
+    Int b = rotr(x, 19);
+    Int c = x >> 10;
+    return (a ^ b) ^ c;
+}
+
+/// SHA-256 big Sigma0 of the 32-bit word `x` (FIPS 180-4 §4.1.2).
+pub Int bsig0(Int x) {
+    Int a = rotr(x, 2);
+    Int b = rotr(x, 13);
+    Int c = rotr(x, 22);
+    return (a ^ b) ^ c;
+}
+
+/// SHA-256 big Sigma1 of the 32-bit word `x` (FIPS 180-4 §4.1.2).
+pub Int bsig1(Int x) {
+    Int a = rotr(x, 6);
+    Int b = rotr(x, 11);
+    Int c = rotr(x, 25);
+    return (a ^ b) ^ c;
+}
+
+/// The SHA-256 majority function Maj(`a`, `b`, `c`).
+pub Int maj_of(Int a, Int b, Int c) {
+    Int ab = a & b;
+    Int ac = a & c;
+    Int bc = b & c;
+    return (ab ^ ac) ^ bc;
+}
+
+/// SHA-256 schedule word W[`i`] for the block at `base` in `msg`.
+/// `w0`, `w1`, `w9`, `w14` are W[i-16], W[i-15], W[i-7], W[i-2]; unused
+/// while `i` < 16, where the word comes straight from the block.
+pub Int sched_w(Str msg, Int base, Int i, Int w0, Int w1, Int w9, Int w14) {
+    if (i < 16) { return word_at_str(msg, base, i); }
+    Int s = ssig1(w14) + w9;
+    Int t = ssig0(w1) + w0;
+    return (s + t) & 4294967295;
+}
+
+/// All 64 rounds of one block with the working state (a..h) and the
+/// 16-word message-schedule window carried in scalar parameters: no list is
+/// built per round or per schedule word, only the final state. (Rebuilding
+/// an 8-element state list per round and growing a 64-word schedule list
+/// per block made hashing a large input allocate tens of kilobytes per
+/// block.)
+pub List(Int) sha_blk(Str msg, Int base, Int i, List(Int) h0, Int a, Int b, Int c, Int d, Int e, Int f, Int g, Int h, Int w0, Int w1, Int w2, Int w3, Int w4, Int w5, Int w6, Int w7, Int w8, Int w9, Int w10, Int w11, Int w12, Int w13, Int w14, Int w15) {
+    if (i >= 64) {
+        Int r0 = (h0[0] + a) & 4294967295;
+        Int r1 = (h0[1] + b) & 4294967295;
+        Int r2 = (h0[2] + c) & 4294967295;
+        Int r3 = (h0[3] + d) & 4294967295;
+        Int r4 = (h0[4] + e) & 4294967295;
+        Int r5 = (h0[5] + f) & 4294967295;
+        Int r6 = (h0[6] + g) & 4294967295;
+        Int r7 = (h0[7] + h) & 4294967295;
+        return [r0, r1, r2, r3, r4, r5, r6, r7];
+    }
+    Int wi = sched_w(msg, base, i, w0, w1, w9, w14);
+    Int t1a = h + bsig1(e);
+    Int t1b = t1a + ch_of(e, f, g);
+    Int t1c = t1b + k_at(i);
+    Int t1 = (t1c + wi) & 4294967295;
+    Int t2 = (bsig0(a) + maj_of(a, b, c)) & 4294967295;
+    Int na = (t1 + t2) & 4294967295;
+    Int nd = (d + t1) & 4294967295;
+    Int ni = i + 1;
+    return sha_blk(msg, base, ni, h0, na, a, b, c, nd, e, f, g, w1, w2, w3, w4, w5, w6, w7, w8, w9, w10, w11, w12, w13, w14, w15, wi);
+}
+
+/// The SHA-256 state `h` after the 64-byte block at byte offset `base` in
+/// `msg`, in software.
+pub List(Int) digest_block_str(Str msg, Int base, List(Int) h) {
+    return sha_blk(msg, base, 0, h, h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+}
+
+/// The SHA-256 state `h` after the 64-byte blocks of `msg` in [`pos`,
+/// `total`), on the CPU's SHA instructions when available.
+pub List(Int) digest_blocks_str(Str msg, Int pos, Int total, List(Int) h) {
+    if (pos >= total) { return h; }
+    if (resid_cpu_has_sha256()) { return sha_hw_blocks_str(msg, pos, total, sha_hw_state(h, 0, (UInt(256)) 0)); }
+    List(Int) h2 = digest_block_str(msg, pos, h);
+    Int npos = pos + 64;
+    return digest_blocks_str(msg, npos, total, h2);
+}
+
+/// Bytes of `msg` in [i, end) as a list. Only ever called for the final
+/// partial block, so its recursion depth is at most 63.
+pub List(Int) str_bytes_range(Str msg, Int i, Int end, List(Int) acc) {
+    if (i >= end) { return acc; }
+    Int cp = str_char_at(msg, i);
+    List(Int) acc2 = acc.concat([cp]);
+    Int ni = i + 1;
+    return str_bytes_range(msg, ni, end, acc2);
+}
+
+/// `pad_bytes` for a trailing fragment: the 0x80 marker, zero fill and
+/// block sizing follow the fragment's own length, but the length suffix
+/// must encode the length of the WHOLE message, not just the fragment.
+pub List(Int) pad_tail(List(Int) tail, Int total_len) {
+    Int l = tail.len();
+    List(Int) p = tail.concat([128]);
+    Int l9 = l + 9;
+    Int blocks = (l9 + 63) / 64;
+    Int total = blocks * 64;
+    Int zcount = total - l9;
+    List(Int) p2 = zeros_l(p, zcount);
+    Int bits = total_len * 8;
+    return length_bytes(bits, 7, p2);
+}
+
+/// SHA-256 of the UTF-8 bytes of `msg` as 64 lowercase hex characters.
+/// ASCII text streams its blocks straight out of the string; any other text
+/// goes through `bytes_of`, so the digest is the same as
+/// `sha256_bytes(bytes_of(msg))` for every string.
+pub Str sha256(Str msg) {
+    if (!str_is_ascii(msg, 0)) { return hex_encode(sha256_bytes(bytes_of(msg))); }
+    return sha256_ascii(msg);
+}
+
+Str sha256_ascii(Str msg) {
+    List(Int) h0 = [
+        1779033703, -1150833019, 1013904242, -1521486534,
+        1359893119, -1694144372, 528734635, 1541459225
+    ];
+    Int n = str_len(msg);
+    Int nblocks = n / 64;
+    Int full = nblocks * 64;
+    List(Int) h1 = digest_blocks_str(msg, 0, full, h0);
+    List(Int) tail = str_bytes_range(msg, full, n, []);
+    List(Int) padded = pad_tail(tail, n);
+    Int ptotal = padded.len();
+    List(Int) hd = digest_blocks(padded, 0, ptotal, h1);
+    return hex_state(hd, 0, "");
+}
+
+// ─── Byte-level digest core (v2) ────────────────────────────────
+// Lists can hold zero bytes, unlike Str.
+
+/// Byte `bi` (0 = most significant) of the 32-bit word `words[wi]`.
+pub Int word_byte(List(Int) words, Int wi, Int bi) {
+    Int sh = (3 - bi) * 8;
+    Int b = (words[wi] >> sh) & 255;
+    return b;
+}
+
+/// Appends bytes `bi`..3 of `words[wi]`, big-endian, to `acc`.
+pub List(Int) wtb_inner(List(Int) words, Int wi, Int bi, List(Int) acc) {
+    if (bi > 3) { return acc; }
+    Int b = word_byte(words, wi, bi);
+    List(Int) acc2 = acc.concat([b]);
+    Int nbi = bi + 1;
+    return wtb_inner(words, wi, nbi, acc2);
+}
+
+/// Appends words `wi`..7 of `words` as big-endian bytes to `acc`.
+pub List(Int) wtb_outer(List(Int) words, Int wi, List(Int) acc) {
+    if (wi > 7) { return acc; }
+    List(Int) acc2 = wtb_inner(words, wi, 0, acc);
+    Int nwi = wi + 1;
+    return wtb_outer(words, nwi, acc2);
+}
+
+/// Eight 32-bit words → 32 big-endian bytes.
+pub List(Int) words_to_bytes(List(Int) words) {
+    return wtb_outer(words, 0, []);
+}
+
+/// SHA-256 over a byte list; returns the 32-byte digest as a List(Int).
+pub List(Int) sha256_bytes(List(Int) msg) {
+    List(Int) h0 = [
+        1779033703, -1150833019, 1013904242, -1521486534,
+        1359893119, -1694144372, 528734635, 1541459225,
+    ];
+    // Whole blocks straight from msg; only the tail is padded.
+    Int n = msg.len();
+    Int full = (n / 64) * 64;
+    List(Int) h1 = digest_blocks(msg, 0, full, h0);
+    List(Int) padded = pad_tail(msg[full..], n);
+    return words_to_bytes(digest_blocks(padded, 0, padded.len(), h1));
+}
+
+/// Appends the hex of `bytes` in [`i`, `end`) to `acc`.
+pub Str hex_range(List(Int) bytes, Int i, Int end, Str acc) {
+    if (i >= end) { return acc; }
+    Str part = acc + hex_byte(bytes[i]);
+    Int ni = i + 1;
+    return hex_range(bytes, ni, end, part);
+}
+
+/// `bytes` as lowercase hex, two characters per byte.
+pub Str hex_encode(List(Int) bytes) {
+    Int end = bytes.len();
+    return hex_range(bytes, 0, end, "");
+}
+
+// ─── HMAC-SHA256 (RFC 2104) ─────────────────────────────────────
+
+// Concatenate two lists.
+List(Int) sc_acc(List(Int) a, List(Int) b, Int i, List(Int) acc) {
+    if (i >= b.len()) { return acc; }
+    List(Int) acc2 = acc.concat([b[i]]);
+    Int ni = i + 1;
+    return sc_acc(a, b, ni, acc2);
+}
+
+/// `a` followed by `b`.
+pub List(Int) sconcat(List(Int) a, List(Int) b) {
+    return a.concat(b);
+}
+
+/// `a[i]`, or 0 when `i` is past the end.
+pub Int byte_at_or0(List(Int) a, Int i) {
+    if (i < a.len()) { return a[i]; }
+    return 0;
+}
+
+/// Appends `(a[k] ^ b[k]) & 255` for k from `i` to the end of `b` to `acc`;
+/// a missing `a[k]` counts as 0.
+pub List(Int) xor_lists(List(Int) a, List(Int) b, Int i, List(Int) acc) {
+    if (i >= b.len()) { return acc; }
+    Int av = byte_at_or0(a, i);
+    Int x = (av ^ b[i]) & 255;
+    List(Int) acc2 = acc.concat([x]);
+    Int ni = i + 1;
+    return xor_lists(a, b, ni, acc2);
+}
+
+/// The HMAC-SHA256 key block: `key`, or its SHA-256 if longer than 64
+/// bytes, zero-padded to 64 bytes (RFC 2104).
+pub List(Int) key_block(List(Int) key) {
+    Int klen = key.len();
+    if (klen > 64) {
+        List(Int) hk = sha256_bytes(key);
+        Int padn = 64 - hk.len();
+        List(Int) zeros = zeros_l([], padn);
+        return sconcat(hk, zeros);
+    }
+    Int padn = 64 - klen;
+    List(Int) zeros = zeros_l([], padn);
+    return sconcat(key, zeros);
+}
+
+/// Appends each byte of `block` from `i` on, XORed with the HMAC ipad
+/// 0x36, to `acc`.
+pub List(Int) map_ipad(List(Int) block, Int i, List(Int) acc) {
+    if (i >= block.len()) { return acc; }
+    Int v = block[i];
+    Int x = (v ^ 54) & 255;
+    List(Int) acc2 = acc.concat([x]);
+    Int ni = i + 1;
+    return map_ipad(block, ni, acc2);
+}
+
+/// Appends each byte of `block` from `i` on, XORed with the HMAC opad
+/// 0x5c, to `acc`.
+pub List(Int) map_opad(List(Int) block, Int i, List(Int) acc) {
+    if (i >= block.len()) { return acc; }
+    Int v = block[i];
+    Int x = (v ^ 92) & 255;
+    List(Int) acc2 = acc.concat([x]);
+    Int ni = i + 1;
+    return map_opad(block, ni, acc2);
+}
+
+/// HMAC-SHA256 over byte lists; returns the 32-byte MAC.
+pub List(Int) hmac_sha256_bytes(List(Int) key, List(Int) msg) {
+    List(Int) kb = key_block(key);
+    List(Int) ipad_b = map_ipad(kb, 0, []);
+    List(Int) opad_b = map_opad(kb, 0, []);
+    List(Int) inner_input = sconcat(ipad_b, msg);
+    List(Int) inner = sha256_bytes(inner_input);
+    List(Int) outer_input = sconcat(opad_b, inner);
+    return sha256_bytes(outer_input);
+}
+
+
+// ─── Constant-time equality ─────────────────────────────────────
+// Accumulates the OR of every byte XOR so all byte positions influence
+// the final comparison identically. Length mismatch returns false
+// immediately (length is not treated as secret).
+
+/// Whether the public byte lists `a` and `b` are equal, comparing every
+/// byte without an early exit. A length mismatch returns false at once.
+pub Bool ct_equal(List(Int) a, List(Int) b) {
+    if (a.len() != b.len()) { return false; }
+    // Every byte is compared; only the verdict is made public.
+    Int d = ct_acc(a, b, 0, 0);
+    return ct_public(d) == 0;
+}
+
+/// `acc` ORed with `a[k] ^ b[k]` for every k from `i` to the end of `a`;
+/// `b` must be at least as long.
+pub Int ct_acc(List(Int) a, List(Int) b, Int i, Int acc) {
+    if (i >= a.len()) { return acc; }
+    Int x = a[i] ^ b[i];
+    Int acc2 = acc | x;
+    Int ni = i + 1;
+    return ct_acc(a, b, ni, acc2);
+}
+
+// ─── Secret equality (spec §48) ─────────────────────────────────
+// ct_eq compares two secret byte lists without a branch on their bytes:
+// every position is folded into one secret word, which is reduced to a
+// single bit before that bit, and only it, is published. Publishing it is
+// a declassification, so ct_eq needs the grant. Lengths are public.
+
+/// Whether the secret byte lists `a` and `b` are equal, with no branch on
+/// their bytes; only the one-bit verdict is declassified. Lengths are
+/// public: a mismatch returns false at once.
+@requires(declassify)
+pub Bool ct_eq(Secret(List(UInt(8))) a, Secret(List(UInt(8))) b) {
+    if (a.len() != b.len()) { return false; }
+    if (a.len() == 0) { return true; }
+    Secret(UInt(8)) d = ct_eq_acc(a, b, 1, a[0] ^ b[0]);
+    // d is 0 exactly when the lists are equal; as a 32-bit word, d | -d has
+    // its top bit set otherwise, so the shift leaves 0 or 1.
+    Secret(UInt(32)) w = wrapping_u32(d);
+    Secret(UInt(32)) bit = (w | wrapping_usub((UInt(32)) 0, w)) >> (UInt(32)) 31;
+    // ct_public: the verdict is public by design, so a constant-time check
+    // under valgrind (tests/ct) sees it as defined from here on.
+    return ct_public(declassify(bit, "ct_eq verdict")) == (UInt(32)) 0;
+}
+
+Secret(UInt(8)) ct_eq_acc(Secret(List(UInt(8))) a, Secret(List(UInt(8))) b, Int i, Secret(UInt(8)) acc) {
+    if (i >= a.len()) { return acc; }
+    return ct_eq_acc(a, b, i + 1, acc | (a[i] ^ b[i]));
+}
+
+/// Constant-time equality of two byte lists `List(B)`, for generic code over
+/// lib/word.resid's byte types. At public bytes it is ct_equal; at secret
+/// bytes it is ct_eq, which publishes one bit and so needs the declassify
+/// grant -- carried to every caller of the secret copy, and to no caller of
+/// the public one.
+behavior CtSame(B) { Bool ct_same(List(B) a, List(B) b); }
+
+Bool ct_same_pub(List(Int) a, List(Int) b) { return ct_equal(a, b); }
+
+@requires(declassify)
+Bool ct_same_secret(List(Secret(UInt(8))) a, List(Secret(UInt(8))) b) { return ct_eq(secret_join(a), secret_join(b)); }
+
+CtSame(Int) = ct_same_pub;
+CtSame(Secret(UInt(8))) = ct_same_secret;
+
+// ─── Base64 (RFC 4648 standard alphabet, padded) ────────────────
+
+/// The base64 alphabet character for the sextet `v` (0..63).
+pub Str b64_char(Int v) {
+    if (v < 26) {
+        Int c = v + 65;
+        return str_from_code(c);
+    }
+    if (v < 52) {
+        Int c26 = v + 71;
+        return str_from_code(c26);
+    }
+    if (v < 62) {
+        Int c52 = v - 4;
+        return str_from_code(c52);
+    }
+    if (v == 62) { return "+"; }
+    return "/";
+}
+
+/// `bytes` as padded base64 in the standard alphabet (RFC 4648 §4).
+pub Str base64_encode(List(Int) bytes) {
+    return b64_enc(bytes, 0, bytes.len(), StrBuf()).finish();
+}
+
+// The alphabet's code point for v (0..63).
+Int b64_code(Int v) {
+    if (v < 26) { return v + 65; }
+    if (v < 52) { return v + 71; }
+    if (v < 62) { return v - 4; }
+    return if (v == 62) { 43 } else { 47 };
+}
+
+/// Appends the base64 of `bytes` in [`i`, `end`) to `acc`: three bytes
+/// (fewer at the end, padded with `=`) per four characters.
+pub StrBuf b64_enc(List(Int) bytes, Int i, Int end, StrBuf acc) {
+    if (i >= end) { return acc; }
+    Int rem = end - i;
+    Int b1 = if (rem > 1) { bytes[i + 1] } else { 0 };
+    Int b2 = if (rem > 2) { bytes[i + 2] } else { 0 };
+    Int n = (bytes[i] << 16) | (b1 << 8) | b2;
+    StrBuf a = acc.push_char(b64_code((n >> 18) & 63)).push_char(b64_code((n >> 12) & 63));
+    StrBuf b = a.push_char(if (rem > 1) { b64_code((n >> 6) & 63) } else { 61 });
+    StrBuf c = b.push_char(if (rem > 2) { b64_code(n & 63) } else { 61 });
+    return b64_enc(bytes, i + 3, end, c);
+}
+
+// ─── Base64 decoding (RFC 4648 standard alphabet) ────────────────────
+//
+// The mirror of base64_encode, and strict on purpose: this is how a PEM
+// file's body becomes bytes, so anything that is not the alphabet is
+// refused rather than skipped. A decoder that silently drops a character
+// it does not recognise turns a corrupted certificate into a *different*
+// certificate, and the caller cannot tell the difference.
+//
+// One implementation, generic over lib/word.resid's Word(W, B), so a
+// private key's PEM body decodes at secret bytes (Secret(UInt(32)) words,
+// Secret(UInt(8)) bytes) and base64_decode is the public copy at Int.
+// The character class of each input byte is computed with masks, never a
+// table indexed by the character or a branch on it; an invalid character
+// sets a bit in a running flag, and only that flag is published, once,
+// through CtSame(B) (at secret bytes a declassification, so the secret
+// copy needs @requires(declassify)). Lengths and padding are public: the
+// caller strips whitespace and the '=' padding at public positions and
+// passes the pad count.
+
+/// 1 when lo <= c <= hi, else 0, as a word; c is a byte (0..255), lo and hi
+/// public. c - lo and hi - c, taken modulo 2^32, have bit 31 set exactly
+/// when c is outside the range.
+@needs(Word(W, B))
+pub W b64g_in(W c, Int lo, Int hi) {
+    W below = w_addk(c, 0 - lo);
+    W above = w_addk(w_not(c), hi + 1);
+    W out = w_andk(w_shr(w_or(below, above), 31), 1);
+    return w_xork(out, 1);
+}
+
+// All ones when `bit` is 1, zero when it is 0 (the two's complement -bit).
+@needs(Word(W, B))
+W b64g_mask(W bit) { return w_addk(w_not(bit), 1); }
+
+/// One character's 6-bit value in bits 0..5, and bit 8 set when the
+/// character is not in the alphabet ('=' included: padding is the
+/// caller's, at public positions).
+@needs(Word(W, B))
+pub W b64g_sextet(W c) {
+    W up = b64g_in(c, 65, 90);        // A-Z -> 0..25
+    W lo = b64g_in(c, 97, 122);       // a-z -> 26..51
+    W dg = b64g_in(c, 48, 57);        // 0-9 -> 52..61
+    W pl = b64g_in(c, 43, 43);        // +   -> 62
+    W sl = b64g_in(c, 47, 47);        // /   -> 63
+    W v1 = w_or(w_and(b64g_mask(up), w_addk(c, 0 - 65)), w_and(b64g_mask(lo), w_addk(c, 0 - 71)));
+    W v2 = w_or(w_and(b64g_mask(dg), w_addk(c, 4)), w_or(w_andk(b64g_mask(pl), 62), w_andk(b64g_mask(sl), 63)));
+    W ok = w_or(w_or(up, lo), w_or(dg, w_or(pl, sl)));
+    return w_or(w_andk(w_or(v1, v2), 63), w_shl(w_xork(ok, 1), 8));
+}
+
+// The 24-bit number a group of four sextets spells (fewer at the end are
+// zero), with bit 24 set when any of them was not in the alphabet.
+@needs(Word(W, B))
+W b64g_join(W s0, W s1, W s2, W s3) {
+    W hi = w_or(w_shl(w_andk(s0, 63), 18), w_shl(w_andk(s1, 63), 12));
+    W lo = w_or(w_shl(w_andk(s2, 63), 6), w_andk(s3, 63));
+    W bad = w_shl(w_shr(w_andk(w_or(w_or(s0, s1), w_or(s2, s3)), 256), 8), 24);
+    return w_or(w_or(hi, lo), bad);
+}
+
+// The sextet of character i; past the end (a short final group) an 'A',
+// which is value 0 and valid. i is public.
+@needs(Word(W, B))
+W b64g_at(List(B) q, Int i) {
+    if (i >= q.len()) {
+        W a = w_lift(65);
+        return b64g_sextet(a);
+    }
+    B b = q[i];
+    W c = w_from_byte(b);
+    return b64g_sextet(c);
+}
+
+// Groups of four characters from i on, three bytes each (two for a
+// three-character tail, one for a two-character one); `bad` collects the
+// invalid flags in bit 24.
+@needs(Word(W, B), CtSame(B))
+List(B) b64g_groups(List(B) q, Int i, W bad, ListBuf(B) acc) {
+    Int n = q.len();
+    if (i >= n) { return b64g_finish(acc.finish(), bad); }
+    W g = b64g_join(b64g_at(q, i), b64g_at(q, i + 1), b64g_at(q, i + 2), b64g_at(q, i + 3));
+    Int rem = n - i;
+    ListBuf(B) a1 = acc.push(w_byte(g, 16));
+    ListBuf(B) a2 = if (rem > 2) { a1.push(w_byte(g, 8)) } else { a1 };
+    ListBuf(B) a3 = if (rem > 3) { a2.push(w_byte(g, 0)) } else { a2 };
+    W bad2 = w_or(bad, w_andk(g, 16777216));
+    return b64g_groups(q, i + 4, bad2, a3);
+}
+
+// The one published fact: whether every character was in the alphabet.
+@needs(Word(W, B), CtSame(B))
+List(B) b64g_finish(List(B) out, W bad) {
+    B flag = w_byte(bad, 24);
+    B zero = b_lift(0);
+    List(B) none = [];
+    if (!ct_same([flag], [zero])) { return none; }
+    return out;
+}
+
+/// Decode base64 characters `q` (whitespace and the '=' padding already
+/// removed, at public positions) followed by `pads` padding characters.
+/// [] for anything not well-formed: an empty body, a length no padded
+/// body has (one character over a group, or padding that does not finish
+/// the last group), or a character outside the alphabet ('=' among them).
+/// Non-zero bits under the padding are ignored, as base64_decode always
+/// has.
+@needs(Word(W, B), CtSame(B))
+pub List(B) base64g_decode(List(B) q, Int pads) {
+    Int n = q.len();
+    Int r = n % 4;
+    Bool shape = n > 0 && ((r == 0 && pads == 0) || (r == 2 && pads == 2) || (r == 3 && pads == 1));
+    List(B) none = [];
+    if (!shape) { return none; }
+    W zero = w_lift(0);
+    ListBuf(B) out = ListBuf();
+    return b64g_groups(q, 0, zero, out);
+}
+
+/// The public copy over text: whitespace out (a wrapped PEM body is full of
+/// it), up to two trailing '=' counted as padding, everything else kept --
+/// a character beyond ASCII as NUL, which the alphabet refuses. Returns []
+/// for anything not well-formed base64, because a partial decode of a
+/// certificate is never what the caller wanted -- an empty result is a
+/// rejection the caller can act on, where a short one is a different
+/// certificate nobody asked for.
+pub List(Int) base64_decode(Str s) {
+    List(Int) q = b64_strip(s, 0, str_len(s), ListBuf());
+    Int pads = b64_pads(q, q.len(), 0);
+    return base64g_decode(q[0..q.len() - pads], pads);
+}
+
+Bool b64_is_space(Int c) {
+    if (c == 32 || c == 9 || c == 10 || c == 13) { return true; }
+    return false;
+}
+
+List(Int) b64_strip(Str s, Int i, Int n, ListBuf(Int) acc) {
+    if (i >= n) { return acc.finish(); }
+    Int c = str_char_at(s, i);
+    ListBuf(Int) acc2 = if (b64_is_space(c)) { acc } else { acc.push(if (c > 127 || c < 0) { 0 } else { c }) };
+    return b64_strip(s, i + 1, n, acc2);
+}
+
+// Trailing '=' characters, at most two (a third is a character of the
+// body, and refused there).
+Int b64_pads(List(Int) q, Int n, Int k) {
+    if (k >= 2 || n - k <= 0) { return k; }
+    if (q[n - k - 1] != 61) { return k; }
+    return b64_pads(q, n, k + 1);
+}
+
+// ─── PBKDF2-HMAC-SHA256 (RFC 2898 §5.2) ────────────────────────
+// Single output block per call: dklen implicitly 32 bytes.
+
+/// PBKDF2's F loop: XORs `remaining` further HMAC iterates of `u_prev`
+/// under `pass` into `acc`.
+pub List(Int) pbkdf2_f(List(Int) u_prev, List(Int) pass, Int remaining, List(Int) acc) {
+    if (remaining <= 0) { return acc; }
+    List(Int) u = hmac_sha256_bytes(pass, u_prev);
+    List(Int) acc2 = pbkdf2_xor_acc(acc, u, 0);
+    Int rem2 = remaining - 1;
+    return pbkdf2_f(u, pass, rem2, acc2);
+}
+
+/// `acc` with `u[k]` XORed into each position k from `i` to the end of `u`.
+pub List(Int) pbkdf2_xor_acc(List(Int) acc, List(Int) u, Int i) {
+    if (i >= u.len()) { return acc; }
+    Int nv = (acc[i] ^ u[i]) & 255;
+    List(Int) acc2 = ls_set(acc, i, nv);
+    Int ni = i + 1;
+    return pbkdf2_xor_acc(acc2, u, ni);
+}
+
+/// PBKDF2-HMAC-SHA256 output block number `block_index` (from 1) for
+/// password `pass`, `salt` and `iters` iterations (at least 1): 32 bytes.
+pub List(Int) pbkdf2_hmac_sha256(List(Int) pass, List(Int) salt, Int iters, Int block_index) {
+    Int b3 = block_index & 255;
+    Int b2 = (block_index >> 8) & 255;
+    Int b1 = (block_index >> 16) & 255;
+    Int b0 = (block_index >> 24) & 255;
+    List(Int) idx_raw = [b0, b1, b2, b3];
+    List(Int) idx = idx_raw;
+    List(Int) salt_idx = sconcat(salt, idx);
+    List(Int) u1 = hmac_sha256_bytes(pass, salt_idx);
+    Int rem = iters - 1;
+    return pbkdf2_f(u1, pass, rem, u1);
+}
+
+// ─── HKDF (RFC 5869), HMAC-SHA256 ────────────────────────────────
+// Extract: PRK = HMAC-Hash(salt, IKM). Expand: T(i) =
+// HMAC(PRK, T(i-1) | info | i), OKM = first L bytes of T(1)|..|T(n).
+
+
+/// HKDF-Extract with SHA-256: the 32-byte PRK, HMAC(`salt`, `ikm`).
+pub List(Int) hkdf_extract(List(Int) salt, List(Int) ikm) {
+    return hmac_sha256_bytes(salt, ikm);
+}
+
+/// The number of 32-byte HMAC blocks needed for `len` output bytes.
+pub Int hkdf_rounds(Int len) {
+    Int q = len / 32;
+    if (len % 32 != 0) {
+        Int q1 = q + 1;
+        return q1;
+    }
+    return q;
+}
+
+/// Appends HKDF-Expand blocks T(`c`)..T(`n`) to `okm`, where `t` is
+/// T(`c` - 1).
+pub List(Int) hkdf_exp_acc(List(Int) prk, List(Int) info, Int c, Int n, List(Int) t, List(Int) okm) {
+    if (c > n) { return okm; }
+    List(Int) inp = sconcat(t, info);
+    List(Int) inp2 = inp.concat([c]);
+    List(Int) ti = hmac_sha256_bytes(prk, inp2);
+    List(Int) okm2 = sconcat(okm, ti);
+    Int nc = c + 1;
+    return hkdf_exp_acc(prk, info, nc, n, ti, okm2);
+}
+
+/// HKDF-Expand with SHA-256: `len` bytes from `prk` and `info`
+/// (RFC 5869 §2.3). Empty when `len` is negative or exceeds 255 * 32.
+pub List(Int) hkdf_expand(List(Int) prk, List(Int) info, Int len) {
+    if (len < 0 || len > 8160) { return []; }
+    Int n = hkdf_rounds(len);
+    return hkdf_take(hkdf_exp_acc(prk, info, 1, n, [], []), 0, len, []);
+}
+
+/// Appends `okm` elements from `i` up to `len` to `acc`.
+pub List(Int) hkdf_take(List(Int) okm, Int i, Int len, List(Int) acc) {
+    if (i >= len) { return acc; }
+    Int b = okm[i];
+    List(Int) acc2 = acc.concat([b]);
+    Int ni = i + 1;
+    return hkdf_take(okm, ni, len, acc2);
+}
+
+/// HKDF-SHA256 in one call: extract from `salt` and `ikm`, then expand
+/// `len` bytes with `info`.
+pub List(Int) hkdf_sha256(List(Int) salt, List(Int) ikm, List(Int) info, Int len) {
+    List(Int) prk = hkdf_extract(salt, ikm);
+    return hkdf_expand(prk, info, len);
+}
+
+// ─── Secure randomness (PLAN-labels.md §6.6) ────────────────────
+// Every 64-byte block is one fresh draw: SHA-512 over u32be(32) ‖ k ‖
+// u32be(len c) ‖ c, where k is 32 bytes of getrandom (blocking, no
+// fallback) and c is 32 bytes of the CPU source (RDSEED, RNDR) or nothing
+// when there is none. Either source alone suffices and neither can cancel
+// the other; nothing is kept between draws.
+
+/// n fresh bytes. Public: fresh enough for nonces and challenges, never a
+/// key (keys draw through random_secret, lib/random.resid). A process whose
+/// getrandom fails stops here rather than use unseeded bytes.
+@fresh_source(n)
+pub List(Int) random_bytes(Int n) {
+    if (n <= 0) { return []; }
+    return rand_blocks(n, []);
+}
+
+List(Int) rand_blocks(Int n, List(Int) acc) {
+    if (acc.len() >= n) { return acc[0..n]; }
+    return rand_blocks(n, acc.concat(rand_block()));
+}
+
+List(Int) rand_block() {
+    List(Int) k = resid_random_os(32);
+    rt_assert(k.len() == 32, "random: getrandom failed, and there is no randomness without it");
+    List(Int) c = resid_random_cpu(32);
+    return sha512_bytes(rand_u32(32).concat(k).concat(rand_u32(c.len())).concat(c));
+}
+
+List(Int) rand_u32(Int v) { return [(v >> 24) & 255, (v >> 16) & 255, (v >> 8) & 255, v & 255]; }
+
+/// `nbytes` fresh public random bytes as lowercase hex.
+pub Str random_hex(Int nbytes) {
+    return hex_encode(random_bytes(nbytes));
+}
+
+// ─── SHA-512 (FIPS 180-4 §6.4) — 32-bit limb pairs ─────────────
+// A 64-bit word is a pair [hi, lo] of 32-bit limbs.
+
+/// The 64-bit word with 32-bit limbs `hi` and `lo`, as the pair [hi, lo].
+pub List(Int) w64(Int hi, Int lo) {
+    Int him = hi & 4294967295;
+    Int lom = lo & 4294967295;
+    return [him, lom];
+}
+
+/// The high 32-bit limb of the pair `x`.
+pub Int w64_hi(List(Int) x) {
+    return x[0];
+}
+
+/// The low 32-bit limb of the pair `x`.
+pub Int w64_lo(List(Int) x) {
+    return x[1];
+}
+
+/// `a + b` modulo 2^64 on limb pairs.
+pub List(Int) w64_add(List(Int) a, List(Int) b) {
+    Int al = w64_lo(a);
+    Int bl = w64_lo(b);
+    Int loraw = al + bl;
+    Int lo = loraw & 4294967295;
+    Int carry = loraw >> 32;
+    Int hi = (w64_hi(a) + w64_hi(b)) + carry;
+    return w64(hi, lo);
+}
+/// Bitwise XOR of the limb pairs `a` and `b`.
+pub List(Int) w64_xor(List(Int) a, List(Int) b) {
+    return w64(w64_hi(a) ^ w64_hi(b), w64_lo(a) ^ w64_lo(b));
+}
+
+/// Bitwise AND of the limb pairs `a` and `b`.
+pub List(Int) w64_and(List(Int) a, List(Int) b) {
+    return w64(w64_hi(a) & w64_hi(b), w64_lo(a) & w64_lo(b));
+}
+
+/// Bitwise complement of the limb pair `a`.
+pub List(Int) w64_not(List(Int) a) {
+    Int hi = (w64_hi(a) ^ 4294967295) & 4294967295;
+    Int lo = (w64_lo(a) ^ 4294967295) & 4294967295;
+    return w64(hi, lo);
+}
+
+/// The pair `lo32` with its high limb cleared.
+pub List(Int) w64_zext(List(Int) lo32) {
+    return w64(0, w64_lo(lo32));
+}
+
+/// Rotate right by n < 32.
+pub List(Int) w64_rotr_small(List(Int) x, Int n) {
+    Int hi = w64_hi(x);
+    Int lo = w64_lo(x);
+    Int inv = 32 - n;
+    Int nh_raw = (hi >> n) | (lo << inv);
+    Int nl_raw = (lo >> n) | (hi << inv);
+    return w64(nh_raw, nl_raw);
+}
+
+/// Rotate the limb pair `x` right by `n` (0 <= `n` < 64).
+pub List(Int) w64_rotr(List(Int) x, Int n) {
+    if (n == 0) { return x; }
+    if (n == 32) {
+        return w64(w64_lo(x), w64_hi(x));
+    }
+    if (n > 32) {
+        Int nn = n - 32;
+        List(Int) swapped = w64(w64_lo(x), w64_hi(x));
+        return w64_rotr_small(swapped, nn);
+    }
+    return w64_rotr_small(x, n);
+}
+
+/// Logical shift right by n < 32 (result fits: high half shifts in zeros).
+pub List(Int) w64_shr_small(List(Int) x, Int n) {
+    Int hi = w64_hi(x);
+    Int lo = w64_lo(x);
+    Int inv = 32 - n;
+    Int nl_raw = (lo >> n) | (hi << inv);
+    Int nh_raw = hi >> n;
+    return w64(nh_raw, nl_raw);
+}
+
+/// Logical shift of the limb pair `x` right by `n` (0 <= `n` < 64).
+pub List(Int) w64_shr(List(Int) x, Int n) {
+    if (n == 0) { return x; }
+    if (n >= 32) {
+        Int rest = n - 32;
+        return w64(0, w64_hi(x) >> rest);
+    }
+    return w64_shr_small(x, n);
+}
+
+/// SHA-512 round constant K[`i`] (0..79) as a limb pair
+/// (FIPS 180-4 §4.2.3).
+pub List(Int) k512_limb_at(Int i) {
+    List(Int) ks = [
+        1116352408, 3609767458, 1899447441, 602891725,
+        3049323471, 3964484399, 3921009573, 2173295548,
+        961987163, 4081628472, 1508970993, 3053834265,
+        2453635748, 2937671579, 2870763221, 3664609560,
+        3624381080, 2734883394, 310598401, 1164996542,
+        607225278, 1323610764, 1426881987, 3590304994,
+        1925078388, 4068182383, 2162078206, 991336113,
+        2614888103, 633803317, 3248222580, 3479774868,
+        3835390401, 2666613458, 4022224774, 944711139,
+        264347078, 2341262773, 604807628, 2007800933,
+        770255983, 1495990901, 1249150122, 1856431235,
+        1555081692, 3175218132, 1996064986, 2198950837,
+        2554220882, 3999719339, 2821834349, 766784016,
+        2952996808, 2566594879, 3210313671, 3203337956,
+        3336571891, 1034457026, 3584528711, 2466948901,
+        113926993, 3758326383, 338241895, 168717936,
+        666307205, 1188179964, 773529912, 1546045734,
+        1294757372, 1522805485, 1396182291, 2643833823,
+        1695183700, 2343527390, 1986661051, 1014477480,
+        2177026350, 1206759142, 2456956037, 344077627,
+        2730485921, 1290863460, 2820302411, 3158454273,
+        3259730800, 3505952657, 3345764771, 106217008,
+        3516065817, 3606008344, 3600352804, 1432725776,
+        4094571909, 1467031594, 275423344, 851169720,
+        430227734, 3100823752, 506948616, 1363258195,
+        659060556, 3750685593, 883997877, 3785050280,
+        958139571, 3318307427, 1322822218, 3812723403,
+        1537002063, 2003034995, 1747873779, 3602036899,
+        1955562222, 1575990012, 2024104815, 1125592928,
+        2227730452, 2716904306, 2361852424, 442776044,
+        2428436474, 593698344, 2756734187, 3733110249,
+        3204031479, 2999351573, 3329325298, 3815920427,
+        3391569614, 3928383900, 3515267271, 566280711,
+        3940187606, 3454069534, 4118630271, 4000239992,
+        116418474, 1914138554, 174292421, 2731055270,
+        289380356, 3203993006, 460393269, 320620315,
+        685471733, 587496836, 852142971, 1086792851,
+        1017036298, 365543100, 1126000580, 2618297676,
+        1288033470, 3409855158, 1501505948, 4234509866,
+        1607167915, 987167468, 1816402316, 1246189591,
+    ];
+    Int hi = ks[i * 2];
+    Int lo = ks[(i * 2) + 1];
+    return w64(hi, lo);
+}
+
+// ─── SHA-512 padding and message words ─────────────────────────
+
+/// The SHA-512 initial hash value as 16 limbs: the eight high limbs, then
+/// the eight low limbs (not interleaved; see `state512_init`).
+pub List(Int) h512_state() {
+    List(Int) his = [
+        1779033703,
+        3144134277,
+        1013904242,
+        2773480762,
+        1359893119,
+        2600822924,
+        528734635,
+        1541459225,
+    ];
+    List(Int) los = [
+        4089235720,
+        2227873595,
+        4271175723,
+        1595750129,
+        2917565137,
+        725511199,
+        4215389547,
+        327033209,
+    ];
+    return his.concat(los);
+}
+
+/// Appends `his[k]`, `los[k]` for k from `i` to 7 to `acc`, interleaving
+/// two limb lists into the flat pair layout.
+pub List(Int) h512_seed(List(Int) acc, List(Int) his, List(Int) los, Int i) {
+    if (i >= 8) { return acc; }
+    Int hi = his[i];
+    Int lo = los[i];
+    List(Int) acc2 = acc.concat([hi]);
+    List(Int) acc3 = acc2.concat([lo]);
+    Int ni = i + 1;
+    return h512_seed(acc3, his, los, ni);
+}
+
+/// `msg` with SHA-512 padding: 0x80, zeros, and the 128-bit bit length,
+/// to a multiple of 128 bytes (FIPS 180-4 §5.1.2).
+pub List(Int) pad512(List(Int) msg) {
+    Int l = msg.len();
+    List(Int) p = msg.concat([128]);
+    Int l17 = l + 17;
+    Int blocks = (l17 + 127) / 128;
+    Int total = blocks * 128;
+    Int zc = total - l17;
+    List(Int) p2 = zeros_l(p, zc);
+    Int bits = l * 8;
+    return len512_bytes(p2, bits, 15);
+}
+
+/// Shift right by any count (x86 shifts wrap the count mod 64, so step down).
+pub Int shr_big(Int v, Int s) {
+    if (s <= 63) { return v >> s; }
+    Int half = v >> 32;
+    Int rest = s - 32;
+    return shr_big(half, rest);
+}
+
+/// Appends bytes `shift` down to 0 of `bits` to `acc`, most significant
+/// first; `shift` = 15 gives the 128-bit length field.
+pub List(Int) len512_bytes(List(Int) acc, Int bits, Int shift) {
+    if (shift < 0) { return acc; }
+    Int sh = shift * 8;
+    Int byte = shr_big(bits, sh) & 255;
+    List(Int) acc2 = acc.concat([byte]);
+    Int ns = shift - 1;
+    return len512_bytes(acc2, bits, ns);
+}
+
+/// Word i (big-endian, 8 bytes at real offset base+i*8) as a pair.
+pub List(Int) mw512(List(Int) m, Int base, Int i) {
+    Int off = base + (i * 8);
+    Int b0 = m[off];
+    Int o1 = off + 1;
+    Int b1 = m[o1];
+    Int o2 = off + 2;
+    Int b2 = m[o2];
+    Int o3 = off + 3;
+    Int b3 = m[o3];
+    Int o4 = off + 4;
+    Int b4 = m[o4];
+    Int o5 = off + 5;
+    Int b5 = m[o5];
+    Int o6 = off + 6;
+    Int b6 = m[o6];
+    Int o7 = off + 7;
+    Int b7 = m[o7];
+    Int s0 = b0 << 24;
+    Int s1v = b1 << 16;
+    Int s2v = b2 << 8;
+    Int hiraw = ((s0 | s1v) | s2v) | b3;
+    Int hi = hiraw & 4294967295;
+    Int s4 = b4 << 24;
+    Int s5 = b5 << 16;
+    Int s6 = b6 << 8;
+    Int loraw = ((s4 | s5) | s6) | b7;
+    Int lo = loraw & 4294967295;
+    return [hi, lo];
+}
+
+/// Flat limb list: [w0hi, w0lo, w1hi, w1lo, ...] for words 0..15.
+pub List(Int) mw512_acc(List(Int) m, Int base, Int i, List(Int) acc) {
+    if (i >= 16) { return acc; }
+    List(Int) pair = mw512(m, base, i);
+    List(Int) acc2 = acc.concat(pair);
+    Int ni = i + 1;
+    return mw512_acc(m, base, ni, acc2);
+}
+
+/// The 16 message words of the 128-byte block at `base` in `m`, as flat
+/// limbs.
+pub List(Int) msg_words512(List(Int) m, Int base) {
+    return mw512_acc(m, base, 0, []);
+}
+
+/// The high limb of word `i` in the flat limb list `flat` (index 2i).
+pub Int fw_hi(List(Int) flat, Int i) {
+    Int idx = i * 2;
+    return flat[idx];
+}
+
+/// The low limb of word `i` in the flat limb list `flat` (index 2i + 1).
+pub Int fw_lo(List(Int) flat, Int i) {
+    Int idx = i * 2 + 1;
+    return flat[idx];
+}
+
+/// Word `i` of the flat limb list `flat` as a limb pair.
+pub List(Int) fw_pair(List(Int) flat, Int i) {
+    return w64(fw_hi(flat, i), fw_lo(flat, i));
+}
+
+
+/// The choice function Ch(`e`, `f`, `g`) on one 32-bit limb; identical
+/// to `ch_of`.
+pub Int ch64_of(Int e, Int f, Int g) {
+    Int ne = not32(e);
+    Int ef = e & f;
+    Int ng = ne & g;
+    return ef ^ ng;
+}
+
+/// Two lowercase hex characters for the low 8 bits of `bytes[i]`.
+pub Str hex_byte_at(List(Int) bytes, Int i) {
+    Int b = bytes[i] & 255;
+    Str hs = hex_digit((b >> 4) & 15);
+    Str ls = hex_digit(b & 15);
+    return hs + ls;
+}
+
+/// SHA-512 small sigma0 of the limb pair `x` (FIPS 180-4 §4.1.3).
+pub List(Int) sig0(List(Int) x) {
+    List(Int) r1 = w64_rotr(x, 1);
+    List(Int) r8 = w64_rotr(x, 8);
+    List(Int) s7v = w64_shr(x, 7);
+    List(Int) x1 = w64_xor(r1, r8);
+    return w64_xor(x1, s7v);
+}
+
+/// SHA-512 small sigma1 of the limb pair `x` (FIPS 180-4 §4.1.3).
+pub List(Int) sig1(List(Int) x) {
+    List(Int) r19 = w64_rotr(x, 19);
+    List(Int) r61 = w64_rotr(x, 61);
+    List(Int) s6v = w64_shr(x, 6);
+    List(Int) x1 = w64_xor(r19, r61);
+    return w64_xor(x1, s6v);
+}
+
+/// SHA-512 big Sigma0 of the limb pair `x` (FIPS 180-4 §4.1.3).
+pub List(Int) big_sig0(List(Int) x) {
+    List(Int) r28 = w64_rotr(x, 28);
+    List(Int) r34 = w64_rotr(x, 34);
+    List(Int) r39 = w64_rotr(x, 39);
+    List(Int) x1 = w64_xor(r28, r34);
+    return w64_xor(x1, r39);
+}
+
+/// SHA-512 big Sigma1 of the limb pair `x` (FIPS 180-4 §4.1.3).
+pub List(Int) big_sig1(List(Int) x) {
+    List(Int) r14 = w64_rotr(x, 14);
+    List(Int) r18 = w64_rotr(x, 18);
+    List(Int) r41 = w64_rotr(x, 41);
+    List(Int) x1 = w64_xor(r14, r18);
+    return w64_xor(x1, r41);
+}
+
+/// The majority function Maj(`a`, `b`, `c`) on limb pairs.
+pub List(Int) maj64(List(Int) a, List(Int) b, List(Int) c) {
+    List(Int) ab = w64_and(a, b);
+    List(Int) ac = w64_and(a, c);
+    List(Int) bc = w64_and(b, c);
+    List(Int) x1 = w64_xor(ab, ac);
+    return w64_xor(x1, bc);
+}
+
+/// Extends the flat-limb SHA-512 schedule `w` (words 0..`i`-1) to `count`
+/// words.
+pub List(Int) ext512_flat(List(Int) w, Int i, Int count) {
+    if (i >= count) { return w; }
+
+    Int im15 = i - 15;
+    List(Int) wm15 = fw_pair(w, im15);
+    List(Int) s0v = sig0(wm15);
+    Int im2 = i - 2;
+    List(Int) wm2 = fw_pair(w, im2);
+    List(Int) s1v = sig1(wm2);
+    Int im16 = i - 16;
+    List(Int) wa16 = fw_pair(w, im16);
+    Int im7 = i - 7;
+    List(Int) wa7 = fw_pair(w, im7);
+    List(Int) t1 = w64_add(wa16, s0v);
+    List(Int) t2 = w64_add(wa7, s1v);
+    List(Int) nw = w64_add(t1, t2);
+    List(Int) hi1 = [w64_hi(nw)];
+    List(Int) lo1 = [w64_lo(nw)];
+    List(Int) acc2 = w.concat(hi1);
+    List(Int) acc3 = acc2.concat(lo1);
+    Int ni = i + 1;
+    List(Int) rec = ext512_flat(acc3, ni, count);
+    return rec;
+}
+
+/// The SHA-512 initial hash value as 16 flat limbs, [hi, lo] per word.
+pub List(Int) state512_init() {
+    List(Int) iv_limbs = [
+        1779033703,
+        4089235720,
+        3144134277,
+        2227873595,
+        1013904242,
+        4271175723,
+        2773480762,
+        1595750129,
+        1359893119,
+        2917565137,
+        2600822924,
+        725511199,
+        528734635,
+        4215389547,
+        1541459225,
+        327033209,
+    ];
+    return iv_limbs;
+}
+
+/// The flat state `st` with word `word_idx` replaced by the limb `pair`.
+pub List(Int) st_set(List(Int) st, Int word_idx, List(Int) pair) {
+    Int hi_i = word_idx * 2;
+    Int lo_i = hi_i + 1;
+    List(Int) s1 = ls_set(st, hi_i, w64_hi(pair));
+    List(Int) s2 = ls_set(s1, lo_i, w64_lo(pair));
+    return s2;
+}
+
+/// The high limb of word `word_idx` in the flat state `st`.
+pub Int st_hi(List(Int) st, Int word_idx) {
+    Int hi_i = word_idx * 2;
+    return st[hi_i];
+}
+
+/// The low limb of word `word_idx` in the flat state `st`.
+pub Int st_lo(List(Int) st, Int word_idx) {
+    Int lo_i = word_idx * 2 + 1;
+    return st[lo_i];
+}
+
+/// One SHA-512 round `i` on the flat-limb working state `st` with
+/// schedule `w`.
+pub List(Int) sha512_round_flat(List(Int) st, List(Int) w, Int i) {
+    List(Int) a = fw_pair(st, 0);
+    List(Int) b = fw_pair(st, 1);
+    List(Int) c = fw_pair(st, 2);
+    List(Int) d = fw_pair(st, 3);
+    List(Int) e = fw_pair(st, 4);
+    List(Int) f = fw_pair(st, 5);
+    List(Int) g = fw_pair(st, 6);
+    List(Int) hh = fw_pair(st, 7);
+    List(Int) wi = fw_pair(w, i);
+    List(Int) kk = k512_limb_at(i);
+    List(Int) bs1 = big_sig1(e);
+    List(Int) not_e = w64_not(e);
+    List(Int) ef = w64_and(e, f);
+    List(Int) ng = w64_and(not_e, g);
+    List(Int) chv = w64_xor(ef, ng);
+    List(Int) ta = w64_add(hh, bs1);
+    List(Int) tb = w64_add(ta, chv);
+    List(Int) tc = w64_add(tb, kk);
+    List(Int) td = w64_add(tc, wi);
+    List(Int) t1 = td;
+    List(Int) bs0 = big_sig0(a);
+    List(Int) mjv = maj64(a, b, c);
+    List(Int) t2 = w64_add(bs0, mjv);
+    List(Int) na = w64_add(t1, t2);
+    List(Int) nd = w64_add(d, t1);
+    // Build the next state directly (see sha_round for why).
+    return [na[0], na[1], a[0], a[1], b[0], b[1], c[0], c[1],
+            nd[0], nd[1], e[0], e[1], f[0], f[1], g[0], g[1]];
+}
+
+/// SHA-512 rounds `i`..79 on the flat-limb working state `st`.
+pub List(Int) sha512_rounds_flat(List(Int) st, List(Int) w, Int i) {
+    if (i >= 80) { return st; }
+    List(Int) st2 = sha512_round_flat(st, w, i);
+    Int ni = i + 1;
+    return sha512_rounds_flat(st2, w, ni);
+}
+
+/// Word `i` of the flat states `h` and `hv` added modulo 2^64, as a pair.
+pub List(Int) add_st_word(List(Int) h, List(Int) hv, Int i) {
+    Int hi_i = i * 2;
+    Int lo_i = hi_i + 1;
+    List(Int) hp = w64(h[hi_i], h[lo_i]);
+    List(Int) hv_p = w64(hv[hi_i], hv[lo_i]);
+    return w64_add(hp, hv_p);
+}
+
+/// Appends the sums of words `i`..7 of `h` and `hv` to `acc`.
+pub List(Int) add_st_acc(List(Int) h, List(Int) hv, Int i, List(Int) acc) {
+    if (i >= 8) { return acc; }
+    Int ni = i + 1;
+    return add_st_acc(h, hv, ni, acc.concat(add_st_word(h, hv, i)));
+}
+
+/// The word-wise sum of the flat states `h` and `hv` from word `i` on.
+pub List(Int) add_st(List(Int) h, List(Int) hv, Int i) {
+    return add_st_acc(h, hv, i, []);
+}
+
+/// The flat-limb SHA-512 state `st` after the 128-byte block at `base`
+/// in `m`.
+pub List(Int) digest_block512f(List(Int) m, Int base, List(Int) st) {
+    List(Int) w16 = msg_words512(m, base);
+    List(Int) w = ext512_flat(w16, 16, 80);
+    List(Int) hv = sha512_rounds_flat(st, w, 0);
+    List(Int) r = add_st(st, hv, 0);
+    return r;
+}
+
+/// The flat-limb SHA-512 state `st` after the 128-byte blocks of `m` in
+/// [`pos`, `total`).
+pub List(Int) digest_blocks512f(List(Int) m, Int pos, Int total, List(Int) st) {
+    if (pos >= total) { return st; }
+    List(Int) st2 = digest_block512f(m, pos, st);
+    Int npos = pos + 128;
+    return digest_blocks512f(m, npos, total, st2);
+}
+
+/// Appends the hex of `bytes` in [`i`, `end`] to `acc`; unlike
+/// `hex_range`, `end` is inclusive.
+pub Str hex_range_b(List(Int) bytes, Int i, Int end, Str acc) {
+    if (i > end) { return acc; }
+    Str pair = hex_byte_at(bytes, i);
+    Str acc2 = acc + pair;
+    Int ni = i + 1;
+    return hex_range_b(bytes, ni, end, acc2);
+}
+
+
+// ─── SHA-512 on UInt(64) words ───────────────────────────────────
+// The state and the 16-word schedule window as scalar UInt(64)
+// parameters, additions wrapping mod 2^64: no list per round.
+
+/// Rotate `x` right by `n` bits (0 < `n` < 64).
+pub UInt(64) r64(UInt(64) x, Int n) { return (x >> ((UInt(64)) n)) | (x << ((UInt(64)) (64 - n))); }
+/// SHA-512 big Sigma0 of `x`.
+pub UInt(64) bs0_64(UInt(64) x) { return r64(x, 28) ^ r64(x, 34) ^ r64(x, 39); }
+/// SHA-512 big Sigma1 of `x`.
+pub UInt(64) bs1_64(UInt(64) x) { return r64(x, 14) ^ r64(x, 18) ^ r64(x, 41); }
+/// SHA-512 small sigma0 of `x`.
+pub UInt(64) ss0_64(UInt(64) x) { return r64(x, 1) ^ r64(x, 8) ^ (x >> ((UInt(64)) 7)); }
+/// SHA-512 small sigma1 of `x`.
+pub UInt(64) ss1_64(UInt(64) x) { return r64(x, 19) ^ r64(x, 61) ^ (x >> ((UInt(64)) 6)); }
+
+/// SHA-512 round constant K[`i`] (0..79) as a 64-bit word.
+pub UInt(64) k512_u(Int i) {
+    List(Int) k = k512_limb_at(i);
+    return (((UInt(64)) k[0]) << ((UInt(64)) 32)) | ((UInt(64)) k[1]);
+}
+
+/// Big-endian 64-bit word `j` of the block at byte offset `base` in `m`.
+pub UInt(64) word64_at(List(Int) m, Int base, Int j) { return w64_bytes(m, base + j * 8, 0, (UInt(64)) 0); }
+
+/// Shifts bytes `off` + `k` .. `off` + 7 of `m` (low 8 bits each) into
+/// `acc`, big-endian.
+pub UInt(64) w64_bytes(List(Int) m, Int off, Int k, UInt(64) acc) {
+    if (k >= 8) { return acc; }
+    return w64_bytes(m, off, k + 1, (acc << ((UInt(64)) 8)) | wrapping_u64(m[off + k] & 255));
+}
+
+/// SHA-512 schedule word W[`i`] for the block at `base` in `m`.
+/// `w0`, `w1`, `w9`, `w14` are W[i-16], W[i-15], W[i-7], W[i-2]; unused
+/// while `i` < 16.
+pub UInt(64) sched64(List(Int) m, Int base, Int i, UInt(64) w0, UInt(64) w1, UInt(64) w9, UInt(64) w14) {
+    if (i < 16) { return word64_at(m, base, i); }
+    return wrapping_uadd(wrapping_uadd(ss1_64(w14), w9), wrapping_uadd(ss0_64(w1), w0));
+}
+
+/// The SHA-512 working state. A record rather than a List(UInt(64)): a
+/// list boxes a word of 2^54 or more, so a state held in one would
+/// allocate, or not, depending on secret values (tests/ct).
+pub type W512 = { UInt(64) a; UInt(64) b; UInt(64) c; UInt(64) d; UInt(64) e; UInt(64) f; UInt(64) g; UInt(64) h; };
+
+/// The SHA-512 state `h0` after the 128-byte block at `base` in `m`,
+/// running rounds `i`..79 with working state `a`..`h` and the schedule
+/// window `w0`..`w15` in scalar parameters.
+pub W512 sha512_blk(List(Int) m, Int base, Int i, W512 h0, UInt(64) a, UInt(64) b, UInt(64) c, UInt(64) d, UInt(64) e, UInt(64) f, UInt(64) g, UInt(64) h, UInt(64) w0, UInt(64) w1, UInt(64) w2, UInt(64) w3, UInt(64) w4, UInt(64) w5, UInt(64) w6, UInt(64) w7, UInt(64) w8, UInt(64) w9, UInt(64) w10, UInt(64) w11, UInt(64) w12, UInt(64) w13, UInt(64) w14, UInt(64) w15) {
+    if (i >= 80) {
+        return W512 {.a = wrapping_uadd(h0.a, a), .b = wrapping_uadd(h0.b, b), .c = wrapping_uadd(h0.c, c), .d = wrapping_uadd(h0.d, d),
+                     .e = wrapping_uadd(h0.e, e), .f = wrapping_uadd(h0.f, f), .g = wrapping_uadd(h0.g, g), .h = wrapping_uadd(h0.h, h)};
+    }
+    UInt(64) wi = sched64(m, base, i, w0, w1, w9, w14);
+    UInt(64) ch = (e & f) ^ (~e & g);
+    UInt(64) t1 = wrapping_uadd(wrapping_uadd(wrapping_uadd(h, bs1_64(e)), wrapping_uadd(ch, k512_u(i))), wi);
+    UInt(64) t2 = wrapping_uadd(bs0_64(a), (a & b) ^ (a & c) ^ (b & c));
+    return sha512_blk(m, base, i + 1, h0, wrapping_uadd(t1, t2), a, b, c, wrapping_uadd(d, t1), e, f, g, w1, w2, w3, w4, w5, w6, w7, w8, w9, w10, w11, w12, w13, w14, w15, wi);
+}
+
+/// The SHA-512 state `h` after the 128-byte blocks of `m` in [`pos`,
+/// `total`), on ARMv8.2 SHA512 instructions when available.
+pub W512 sha512_blocks(List(Int) m, Int pos, Int total, W512 h) {
+    if (pos >= total) { return h; }
+    if (resid_cpu_has_sha512()) { return sha512_hw_blocks(m, pos, total, sha512_hw_state(h)); }
+    UInt(64) z = 0;
+    return sha512_blocks(m, pos + 128, total, sha512_blk(m, pos, 0, h, h.a, h.b, h.c, h.d, h.e, h.f, h.g, h.h, z, z, z, z, z, z, z, z, z, z, z, z, z, z, z, z));
+}
+
+/// The state `h` packed for the SHA512 instructions, word i at bits
+/// [64i, 64i + 64).
+pub UInt(512) sha512_hw_state(W512 h) {
+    UInt(512) lo = ((UInt(512)) h.a) | (((UInt(512)) h.b) << ((UInt(512)) 64)) | (((UInt(512)) h.c) << ((UInt(512)) 128)) | (((UInt(512)) h.d) << ((UInt(512)) 192));
+    return lo | (((UInt(512)) h.e) << ((UInt(512)) 256)) | (((UInt(512)) h.f) << ((UInt(512)) 320)) | (((UInt(512)) h.g) << ((UInt(512)) 384)) | (((UInt(512)) h.h) << ((UInt(512)) 448));
+}
+
+/// Word `i` of the packed SHA-512 state `s`.
+pub UInt(64) sha512_hw_word(UInt(512) s, Int i) { return (UInt(64)) ((s >> ((UInt(512)) (64 * i))) & ((UInt(512)) 18446744073709551615)); }
+
+/// Packs big-endian 64-bit words `i`..7 of the 64 bytes at `base` in `m`
+/// into `acc`, word i at bits [64i, 64i + 64).
+pub UInt(512) sha512_hw_block(List(Int) m, Int base, Int i, UInt(512) acc) {
+    if (i >= 8) { return acc; }
+    UInt(64) w = (((UInt(64)) word_at_list(m, base, 2 * i)) << ((UInt(64)) 32)) | ((UInt(64)) word_at_list(m, base, 2 * i + 1));
+    return sha512_hw_block(m, base, i + 1, acc | (((UInt(512)) w) << ((UInt(512)) (64 * i))));
+}
+
+/// Compresses the 128-byte blocks of `m` in [`pos`, `total`) into the
+/// packed state `s` on the SHA512 instructions; returns the state.
+pub W512 sha512_hw_blocks(List(Int) m, Int pos, Int total, UInt(512) s) {
+    if (pos >= total) { return W512 {.a = sha512_hw_word(s, 0), .b = sha512_hw_word(s, 1), .c = sha512_hw_word(s, 2), .d = sha512_hw_word(s, 3), .e = sha512_hw_word(s, 4), .f = sha512_hw_word(s, 5), .g = sha512_hw_word(s, 6), .h = sha512_hw_word(s, 7)}; }
+    return sha512_hw_blocks(m, pos + 128, total, sha512_compress_hw(s, sha512_hw_block(m, pos, 0, (UInt(512)) 0), sha512_hw_block(m, pos + 64, 0, (UInt(512)) 0)));
+}
+
+/// The SHA-512 initial hash value.
+pub W512 sha512_iv() {
+    List(Int) l = state512_init();
+    return W512 {.a = w64u(l, 0), .b = w64u(l, 1), .c = w64u(l, 2), .d = w64u(l, 3), .e = w64u(l, 4), .f = w64u(l, 5), .g = w64u(l, 6), .h = w64u(l, 7)};
+}
+
+/// Word `i` of the flat limb list `limbs` as a 64-bit word.
+pub UInt(64) w64u(List(Int) limbs, Int i) { return (((UInt(64)) limbs[2 * i]) << ((UInt(64)) 32)) | ((UInt(64)) limbs[2 * i + 1]); }
+
+/// Pushes bytes `k`..7 of `v`, big-endian, onto `acc`.
+pub ListBuf(Int) be64_push(UInt(64) v, Int k, ListBuf(Int) acc) {
+    if (k >= 8) { return acc; }
+    return be64_push(v, k + 1, acc.push(wrapping_i64((v >> ((UInt(64)) (56 - k * 8))) & ((UInt(64)) 255))));
+}
+
+/// The state `h` as 64 big-endian bytes appended to `acc`; `i` is ignored.
+pub List(Int) words64_bytes(W512 h, Int i, ListBuf(Int) acc) {
+    ListBuf(Int) a1 = be64_push(h.d, 0, be64_push(h.c, 0, be64_push(h.b, 0, be64_push(h.a, 0, acc))));
+    return be64_push(h.h, 0, be64_push(h.g, 0, be64_push(h.f, 0, be64_push(h.e, 0, a1)))).finish();
+}
+
+/// SHA-512 of a byte list; returns the 64-byte digest as a List(Int).
+/// Whole blocks straight from msg; only the tail is padded.
+pub List(Int) sha512_bytes(List(Int) msg) {
+    Int n = msg.len();
+    Int full = (n / 128) * 128;
+    W512 h1 = sha512_blocks(msg, 0, full, sha512_iv());
+    List(Int) tail = pad512_tail(msg[full..], n);
+    return words64_bytes(sha512_blocks(tail, 0, tail.len(), h1), 0, ListBuf());
+}
+
+/// `pad512` for a trailing fragment `tail`: the length suffix encodes
+/// `total_len`, the length of the whole message.
+pub List(Int) pad512_tail(List(Int) tail, Int total_len) {
+    Int l = tail.len();
+    Int blocks = (l + 17 + 127) / 128;
+    List(Int) p2 = zeros_l(tail.concat([128]), blocks * 128 - l - 17);
+    return len512_bytes(p2, total_len * 8, 15);
+}
+
+
+/// Appends limbs `i`..15 of `st` as big-endian 32-bit bytes to `acc`.
+pub List(Int) limb_bytes_acc(List(Int) st, Int i, List(Int) acc) {
+    if (i >= 16) { return acc; }
+    Int vraw = st[i];
+    Int v = vraw & 4294967295;
+    Int b0 = (v >> 24) & 255;
+    Int b1 = (v >> 16) & 255;
+    Int b2 = (v >> 8) & 255;
+    Int b3 = v & 255;
+    List(Int) acc1 = acc.concat([b0]);
+    List(Int) acc2 = acc1.concat([b1]);
+    List(Int) acc3 = acc2.concat([b2]);
+    List(Int) acc4 = acc3.concat([b3]);
+    Int ni = i + 1;
+    return limb_bytes_acc(st, ni, acc4);
+}
+
+/// The 16 limbs of `st` as 64 big-endian bytes (bytes, not hex despite
+/// the name). `seed_unused` is ignored.
+pub List(Int) limbs_to_hex_bytes(List(Int) st, Int seed_unused) {
+    return limb_bytes_acc(st, 0, []);
+}
+
+// ─── SHA-1 (FIPS 180-4 §6.1) ───────────────────────────────────────
+//
+// SHA-1 is here for one reason, and it is not a hash choice: RFC 6960
+// defines an OCSP CertID's issuerNameHash and issuerKeyHash as SHA-1
+// digests, so a client checking whether a stapled OCSP response is about
+// the certificate it just validated has to compute them the way the
+// responder did.
+//
+// It is not used anywhere a collision would reach. Both values sit inside
+// the structure the responder signed, so pointing them at a different
+// issuer invalidates the signature rather than passing it, and nothing
+// else in this file calls it.
+//
+// Everything here indexes lists directly rather than walking them through
+// accessors. The first version of this did not, and every bug it had was
+// in the accessors rather than in the algorithm.
+
+Int u32mask(Int v) { return v & 4294967295; }
+
+// Rotate a 32-bit word left. Int is 64 bits, so n <= 31 cannot overflow.
+Int sha1_rol(Int v, Int n) {
+    Int lo = u32mask(v << n);
+    Int hi = u32mask(v) >> (32 - n);
+    return u32mask(lo | hi);
+}
+
+// Word i of the block at `base`, big-endian.
+Int sha1_word(List(Int) block, Int base, Int i) {
+    Int off = base + i * 4;
+    Int a0 = block[off];
+    Int a1 = a0 * 256 + block[off + 1];
+    Int a2 = a1 * 256 + block[off + 2];
+    return a2 * 256 + block[off + 3];
+}
+
+List(Int) sha1_words16(List(Int) block, Int base, Int i, List(Int) acc) {
+    if (i >= 16) { return acc; }
+    return sha1_words16(block, base, i + 1, acc.concat([sha1_word(block, base, i)]));
+}
+
+// w[16..79] = rol(w[i-3] ^ w[i-8] ^ w[i-14] ^ w[i-16], 1), where `acc`
+// already holds w[0..i-1].
+List(Int) sha1_expand(Int i, List(Int) acc) {
+    if (i >= 80) { return acc; }
+    Int v = u32mask(acc[i - 3] ^ acc[i - 8] ^ acc[i - 14] ^ acc[i - 16]);
+    return sha1_expand(i + 1, acc.concat([sha1_rol(v, 1)]));
+}
+
+Int sha1_f(Int r, Int b, Int c, Int d) {
+    Bool t1 = r < 20;
+    Bool t2 = r >= 20 && r < 40;
+    Bool t3 = r >= 40 && r < 60;
+    // ~b is (2^32 - 1) - b; b + (2^32 - 1) wraps round to b - 1 instead.
+    if (t1) { return u32mask((b & c) | (u32mask(4294967295 - b) & d)); }
+    if (t2) { return u32mask(b ^ c ^ d); }
+    if (t3) { return u32mask((b & c) | (b & d) | (c & d)); }
+    return u32mask(b ^ c ^ d);
+}
+
+Int sha1_k(Int r) {
+    Bool t1 = r < 20;
+    Bool t2 = r >= 20 && r < 40;
+    Bool t3 = r >= 40 && r < 60;
+    if (t1) { return 1518500249; }   // 5a827999
+    if (t2) { return 1859775393; }   // 6ed9eba1
+    if (t3) { return 2400959708; }   // 8f1bbcdc
+    return 3395469782;               // ca62c1d6
+}
+
+// 80 rounds. T = rol(a,5) + f(b,c,d) + e + k + W[r], then the words shift.
+List(Int) sha1_rounds(List(Int) w, Int r, Int a, Int b, Int c, Int d, Int e) {
+    if (r >= 80) { return [a, b, c, d, e]; }
+    Int t = u32mask(sha1_rol(a, 5) + sha1_f(r, b, c, d) + e + sha1_k(r) + w[r]);
+    Int nb = sha1_rol(b, 30);
+    return sha1_rounds(w, r + 1, t, a, nb, c, d);
+}
+
+// h = h + compress(h) over one 64-byte block.
+List(Int) sha1_step(List(Int) padded, Int base, List(Int) h) {
+    List(Int) w80 = sha1_expand(16, sha1_words16(padded, base, 0, []));
+    List(Int) st = sha1_rounds(w80, 0, h[0], h[1], h[2], h[3], h[4]);
+    return [u32mask(h[0] + st[0]), u32mask(h[1] + st[1]), u32mask(h[2] + st[2]), u32mask(h[3] + st[3]), u32mask(h[4] + st[4])];
+}
+
+List(Int) sha1_blocks(List(Int) padded, Int base, Int nblocks, List(Int) h, Int i) {
+    if (i >= nblocks) { return h; }
+    return sha1_blocks(padded, base + 64, nblocks, sha1_step(padded, base, h), i + 1);
+}
+
+List(Int) sha1_be_bytes(List(Int) words, Int i, List(Int) acc) {
+    if (i >= 5) { return acc; }
+    Int v = words[i];
+    Int b0 = u32mask(v >> 24);
+    Int b1 = u32mask(v >> 16) & 255;
+    Int b2 = u32mask(v >> 8) & 255;
+    Int b3 = v & 255;
+    return sha1_be_bytes(words, i + 1, acc.concat([b0, b1, b2, b3]));
+}
+
+/// SHA-1 over a byte list; the 20-byte digest as a List(Int).
+///
+/// The padding is pad_bytes': SHA-1 and SHA-256 share the 64-byte block and
+/// the 64-bit length field, differing only in the compression function.
+pub List(Int) sha1_bytes(List(Int) msg) {
+    List(Int) h = [1732584193, 4023233417, 2562383102, 271733878, 3285377520];
+    List(Int) padded = pad_bytes(msg);
+    List(Int) hd = sha1_blocks(padded, 0, padded.len() / 64, h, 0);
+    return sha1_be_bytes(hd, 0, []);
+}

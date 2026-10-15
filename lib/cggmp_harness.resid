@@ -1,0 +1,250 @@
+// cggmp_harness.resid — runs every party of a CGGMP21 session in one process,
+// routing each round's messages to all parties (each party selects the ones
+// addressed to it). For tests and for tools that hold all parties' shares
+// (never for a real deployment, where each party runs on its own device).
+
+import "cggmp.resid";
+import "cggmp_keygen.resid";
+
+List(CgMsg) cgh_flat(List(List(CgMsg)) outs, Int i, ListBuf(CgMsg) acc) {
+    if (i >= outs.len()) { return acc.finish(); }
+    return cgh_flat(outs, i + 1, cgh_cat(acc, outs[i], 0));
+}
+
+ListBuf(CgMsg) cgh_cat(ListBuf(CgMsg) acc, List(CgMsg) xs, Int i) {
+    if (i >= xs.len()) { return acc; }
+    return cgh_cat(acc.push(xs[i]), xs, i + 1);
+}
+
+List(Ps1) cgh_starts(List(CgCtx) cs, Int i, ListBuf(Ps1) acc) {
+    if (i >= cs.len()) { return acc.finish(); }
+    return cgh_starts(cs, i + 1, acc.push(ps_start(cs[i])));
+}
+
+List(List(CgMsg)) cgh_outs1(List(Ps1) ss, Int i, ListBuf(List(CgMsg)) acc) {
+    if (i >= ss.len()) { return acc.finish(); }
+    return cgh_outs1(ss, i + 1, acc.push(ss[i].out));
+}
+
+Result(List(Ps2), CgFail) cgh_r2(List(Ps1) ss, List(CgMsg) in, Int i, ListBuf(Ps2) acc) {
+    if (i >= ss.len()) { return Ok(acc.finish()); }
+    Ps2 s = ps_r2(ss[i], in)?;
+    return cgh_r2(ss, in, i + 1, acc.push(s));
+}
+
+Result(List(Ps3), CgFail) cgh_r3(List(Ps2) ss, List(CgMsg) in, Int i, ListBuf(Ps3) acc) {
+    if (i >= ss.len()) { return Ok(acc.finish()); }
+    Ps3 s = ps_r3(ss[i], in)?;
+    return cgh_r3(ss, in, i + 1, acc.push(s));
+}
+
+Result(List(Ps4), CgFail) cgh_r4(List(Ps3) ss, List(CgMsg) in, Int i, ListBuf(Ps4) acc) {
+    if (i >= ss.len()) { return Ok(acc.finish()); }
+    Ps4 s = ps_r4(ss[i], in)?;
+    return cgh_r4(ss, in, i + 1, acc.push(s));
+}
+
+Result(List(Ps5), CgFail) cgh_r5(List(Ps4) ss, List(CgMsg) in, Int i, ListBuf(Ps5) acc) {
+    if (i >= ss.len()) { return Ok(acc.finish()); }
+    Ps5 s = ps_r5(ss[i], in)?;
+    return cgh_r5(ss, in, i + 1, acc.push(s));
+}
+
+Result(List(Ps6), CgFail) cgh_r6(List(Ps5) ss, List(CgMsg) in, Int i, ListBuf(Ps6) acc) {
+    if (i >= ss.len()) { return Ok(acc.finish()); }
+    Ps6 s = ps_r6(ss[i], in)?;
+    return cgh_r6(ss, in, i + 1, acc.push(s));
+}
+
+Result(List(PsDone), CgFail) cgh_r7(List(Ps6) ss, List(CgMsg) in, Int i, ListBuf(PsDone) acc) {
+    if (i >= ss.len()) { return Ok(acc.finish()); }
+    PsDone s = ps_r7(ss[i], in)?;
+    return cgh_r7(ss, in, i + 1, acc.push(s));
+}
+
+List(List(CgMsg)) cgh_outs2(List(Ps2) ss, Int i, ListBuf(List(CgMsg)) acc) {
+    if (i >= ss.len()) { return acc.finish(); }
+    return cgh_outs2(ss, i + 1, acc.push(ss[i].out));
+}
+List(List(CgMsg)) cgh_outs3(List(Ps3) ss, Int i, ListBuf(List(CgMsg)) acc) {
+    if (i >= ss.len()) { return acc.finish(); }
+    return cgh_outs3(ss, i + 1, acc.push(ss[i].out));
+}
+List(List(CgMsg)) cgh_outs4(List(Ps4) ss, Int i, ListBuf(List(CgMsg)) acc) {
+    if (i >= ss.len()) { return acc.finish(); }
+    return cgh_outs4(ss, i + 1, acc.push(ss[i].out));
+}
+List(List(CgMsg)) cgh_outs5(List(Ps5) ss, Int i, ListBuf(List(CgMsg)) acc) {
+    if (i >= ss.len()) { return acc.finish(); }
+    return cgh_outs5(ss, i + 1, acc.push(ss[i].out));
+}
+List(List(CgMsg)) cgh_outs6(List(Ps6) ss, Int i, ListBuf(List(CgMsg)) acc) {
+    if (i >= ss.len()) { return acc.finish(); }
+    return cgh_outs6(ss, i + 1, acc.push(ss[i].out));
+}
+List(List(CgMsg)) cgh_outs7(List(PsDone) ss, Int i, ListBuf(List(CgMsg)) acc) {
+    if (i >= ss.len()) { return acc.finish(); }
+    return cgh_outs7(ss, i + 1, acc.push(ss[i].out));
+}
+
+// ─── Identifiable abort of the Delta check ─────────────────────
+
+Result(List(PsAb1), CgFail) cgh_ab1(List(Ps5) ss, Int i, ListBuf(PsAb1) acc) {
+    if (i >= ss.len()) { return Ok(acc.finish()); }
+    PsAb1 a = ps_abort1(ss[i])?;
+    return cgh_ab1(ss, i + 1, acc.push(a));
+}
+
+List(List(CgMsg)) cgh_outs_ab1(List(PsAb1) ss, Int i, ListBuf(List(CgMsg)) acc) {
+    if (i >= ss.len()) { return acc.finish(); }
+    return cgh_outs_ab1(ss, i + 1, acc.push(ss[i].out));
+}
+
+// Every party's culprits, merged (a cheater is not among its own).
+List(Int) cgh_merge(List(PsAb1) ss, List(CgMsg) in, Int i, List(Int) acc) {
+    if (i >= ss.len()) { return acc; }
+    CgFail f = ps_abort1_blame(ss[i], in);
+    return cgh_merge(ss, in, i + 1, cgh_union(acc, f.culprits, 0));
+}
+
+List(Int) cgh_union(List(Int) acc, List(Int) xs, Int i) {
+    if (i >= xs.len()) { return acc; }
+    return cgh_union(if (cgh_has(acc, xs[i], 0)) { acc } else { acc.concat([xs[i]]) }, xs, i + 1);
+}
+
+Bool cgh_has(List(Int) xs, Int v, Int i) {
+    if (i >= xs.len()) { return false; }
+    if (xs[i] == v) { return true; }
+    return cgh_has(xs, v, i + 1);
+}
+
+CgFail cgh_blame1(List(Ps5) ss) {
+    return match cgh_ab1(ss, 0, ListBuf()) {
+        Err(e) => e,
+        Ok(abs) => cg_fail("Delta shares are inconsistent", cgh_merge(abs, cgh_flat(cgh_outs_ab1(abs, 0, ListBuf()), 0, ListBuf()), 0, []))
+    };
+}
+
+// Round 6, naming the culprits when the Delta shares do not add up.
+Result(List(Ps6), CgFail) cgh_r6b(List(Ps5) ss, List(CgMsg) in) {
+    return match cgh_r6(ss, in, 0, ListBuf()) {
+        Ok(v) => Ok(v),
+        Err(e) => if (e.culprits.len() == 0 && e.why == "Delta shares are inconsistent") { Err(cgh_blame1(ss)) } else { Err(e) }
+    };
+}
+
+/// Runs the presigning of all parties (the contexts) and returns each
+/// party's PsDone (its presignature and, if a digest is set, its signature
+/// share message).
+pub Result(List(PsDone), CgFail) cgh_presign(List(CgCtx) ctxs) {
+    List(Ps1) s1 = cgh_starts(ctxs, 0, ListBuf());
+    List(Ps2) s2 = cgh_r2(s1, cgh_flat(cgh_outs1(s1, 0, ListBuf()), 0, ListBuf()), 0, ListBuf())?;
+    List(Ps3) s3 = cgh_r3(s2, cgh_flat(cgh_outs2(s2, 0, ListBuf()), 0, ListBuf()), 0, ListBuf())?;
+    List(Ps4) s4 = cgh_r4(s3, cgh_flat(cgh_outs3(s3, 0, ListBuf()), 0, ListBuf()), 0, ListBuf())?;
+    List(Ps5) s5 = cgh_r5(s4, cgh_flat(cgh_outs4(s4, 0, ListBuf()), 0, ListBuf()), 0, ListBuf())?;
+    List(Ps6) s6 = cgh_r6b(s5, cgh_flat(cgh_outs5(s5, 0, ListBuf()), 0, ListBuf()))?;
+    return cgh_r7(s6, cgh_flat(cgh_outs6(s6, 0, ListBuf()), 0, ListBuf()), 0, ListBuf());
+}
+
+// ─── Misbehaving party (for tests of identifiable abort) ───────────
+
+List(CgMsg) cgh_forge(List(CgMsg) all, Int victim, Int other, Int i, ListBuf(CgMsg) acc) {
+    if (i >= all.len()) { return acc.finish(); }
+    CgMsg m = all[i];
+    // The victim's messages are replaced by the other party's, relabelled as
+    // the victim's: their proofs are bound to the other party's identity.
+    ListBuf(CgMsg) next = if (m.from == victim) { acc } else if (m.from == other) { acc.push(CgMsg {.from = victim, .to = m.to, .body = m.body}).push(m) } else { acc.push(m) };
+    return cgh_forge(all, victim, other, i + 1, next);
+}
+
+List(CgMsg) cgh_pick(List(CgMsg) all, Int round, Int at, Int victim, Int other) {
+    return if (round == at) { cgh_forge(all, victim, other, 0, ListBuf()) } else { all };
+}
+
+/// Presigning in which, at message round `round` (1 to 6), the messages of
+/// `victim` are replaced by forged ones copied from `other`. Returns the
+/// failure the honest parties raise.
+pub Result(List(PsDone), CgFail) cgh_presign_forged(List(CgCtx) ctxs, Int round, Int victim, Int other) {
+    List(Ps1) s1 = cgh_starts(ctxs, 0, ListBuf());
+    List(Ps2) s2 = cgh_r2(s1, cgh_pick(cgh_flat(cgh_outs1(s1, 0, ListBuf()), 0, ListBuf()), round, 1, victim, other), 0, ListBuf())?;
+    List(Ps3) s3 = cgh_r3(s2, cgh_pick(cgh_flat(cgh_outs2(s2, 0, ListBuf()), 0, ListBuf()), round, 2, victim, other), 0, ListBuf())?;
+    List(Ps4) s4 = cgh_r4(s3, cgh_pick(cgh_flat(cgh_outs3(s3, 0, ListBuf()), 0, ListBuf()), round, 3, victim, other), 0, ListBuf())?;
+    List(Ps5) s5 = cgh_r5(s4, cgh_pick(cgh_flat(cgh_outs4(s4, 0, ListBuf()), 0, ListBuf()), round, 4, victim, other), 0, ListBuf())?;
+    List(Ps6) s6 = cgh_r6b(s5, cgh_pick(cgh_flat(cgh_outs5(s5, 0, ListBuf()), 0, ListBuf()), round, 5, victim, other))?;
+    return cgh_r7(s6, cgh_pick(cgh_flat(cgh_outs6(s6, 0, ListBuf()), 0, ListBuf()), round, 6, victim, other), 0, ListBuf());
+}
+
+Result(List(CgSig), CgFail) cgh_sign_all(List(CgCtx) ctxs, List(PsDone) ds, List(CgMsg) in, Int i, ListBuf(CgSig) acc) {
+    if (i >= ctxs.len()) { return Ok(acc.finish()); }
+    CgSig s = sg_finish(ctxs[i], ds[i].presig, in)?;
+    return cgh_sign_all(ctxs, ds, in, i + 1, acc.push(s));
+}
+
+/// The final signature messages every party assembled from a finished
+/// presigning session (used by the initiator-only delivery layer).
+pub List(CgMsg) cgh_flat7(List(PsDone) ds) {
+    return cgh_flat(cgh_outs7(ds, 0, ListBuf()), 0, ListBuf());
+}
+
+/// The final signatures every party assembles from a finished presigning
+/// session whose contexts carried a digest.
+pub Result(List(CgSig), CgFail) cgh_sign(List(CgCtx) ctxs, List(PsDone) ds) {
+    return cgh_sign_all(ctxs, ds, cgh_flat(cgh_outs7(ds, 0, ListBuf()), 0, ListBuf()), 0, ListBuf());
+}
+
+
+// ─── Key generation and refresh ─────────────────────────────────
+
+Result(List(Kg1), CgFail) cgh_kg_starts(List(KgCtx) cs, Int i, ListBuf(Kg1) acc) {
+    if (i >= cs.len()) { return Ok(acc.finish()); }
+    Kg1 s = kg_start(cs[i])?;
+    return cgh_kg_starts(cs, i + 1, acc.push(s));
+}
+
+List(List(CgMsg)) cgh_kg_o1(List(Kg1) ss, Int i, ListBuf(List(CgMsg)) acc) {
+    if (i >= ss.len()) { return acc.finish(); }
+    return cgh_kg_o1(ss, i + 1, acc.push(ss[i].out));
+}
+List(List(CgMsg)) cgh_kg_o2(List(Kg2) ss, Int i, ListBuf(List(CgMsg)) acc) {
+    if (i >= ss.len()) { return acc.finish(); }
+    return cgh_kg_o2(ss, i + 1, acc.push(ss[i].out));
+}
+List(List(CgMsg)) cgh_kg_o3(List(Kg3) ss, Int i, ListBuf(List(CgMsg)) acc) {
+    if (i >= ss.len()) { return acc.finish(); }
+    return cgh_kg_o3(ss, i + 1, acc.push(ss[i].out));
+}
+List(List(CgMsg)) cgh_kg_o4(List(Kg4) ss, Int i, ListBuf(List(CgMsg)) acc) {
+    if (i >= ss.len()) { return acc.finish(); }
+    return cgh_kg_o4(ss, i + 1, acc.push(ss[i].out));
+}
+
+Result(List(Kg2), CgFail) cgh_kg_r2(List(Kg1) ss, List(CgMsg) in, Int i, ListBuf(Kg2) acc) {
+    if (i >= ss.len()) { return Ok(acc.finish()); }
+    Kg2 s = kg_r2(ss[i], in)?;
+    return cgh_kg_r2(ss, in, i + 1, acc.push(s));
+}
+Result(List(Kg3), CgFail) cgh_kg_r3(List(Kg2) ss, List(CgMsg) in, Int i, ListBuf(Kg3) acc) {
+    if (i >= ss.len()) { return Ok(acc.finish()); }
+    Kg3 s = kg_r3(ss[i], in)?;
+    return cgh_kg_r3(ss, in, i + 1, acc.push(s));
+}
+Result(List(Kg4), CgFail) cgh_kg_r4(List(Kg3) ss, List(CgMsg) in, Int i, ListBuf(Kg4) acc) {
+    if (i >= ss.len()) { return Ok(acc.finish()); }
+    Kg4 s = kg_r4(ss[i], in)?;
+    return cgh_kg_r4(ss, in, i + 1, acc.push(s));
+}
+Result(List(CgConfig), CgFail) cgh_kg_r5(List(Kg4) ss, List(CgMsg) in, Int i, ListBuf(CgConfig) acc) {
+    if (i >= ss.len()) { return Ok(acc.finish()); }
+    CgConfig s = kg_r5(ss[i], in)?;
+    return cgh_kg_r5(ss, in, i + 1, acc.push(s));
+}
+
+/// Runs key generation (or, with contexts carrying a previous configuration,
+/// a refresh) for all parties; returns each party's new configuration.
+pub Result(List(CgConfig), CgFail) cgh_keygen(List(KgCtx) ctxs) {
+    List(Kg1) s1 = cgh_kg_starts(ctxs, 0, ListBuf())?;
+    List(Kg2) s2 = cgh_kg_r2(s1, cgh_flat(cgh_kg_o1(s1, 0, ListBuf()), 0, ListBuf()), 0, ListBuf())?;
+    List(Kg3) s3 = cgh_kg_r3(s2, cgh_flat(cgh_kg_o2(s2, 0, ListBuf()), 0, ListBuf()), 0, ListBuf())?;
+    List(Kg4) s4 = cgh_kg_r4(s3, cgh_flat(cgh_kg_o3(s3, 0, ListBuf()), 0, ListBuf()), 0, ListBuf())?;
+    return cgh_kg_r5(s4, cgh_flat(cgh_kg_o4(s4, 0, ListBuf()), 0, ListBuf()), 0, ListBuf());
+}

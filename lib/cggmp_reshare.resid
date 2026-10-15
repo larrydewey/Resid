@@ -1,0 +1,423 @@
+// cggmp_reshare.resid — CGGMP21 re-share of an existing key to a new party
+// set, preserving the joint ECDSA key X. Scalar-level core for one old party:
+// it contributes, for new party `new_id`, its Lagrange-weighted share of X
+// plus a fresh polynomial term with zero constant (so the sum over old parties
+// keeps X and removes their old shares from the new polynomial).
+
+import "cggmp.resid";
+import "cggmp_hash.resid";
+import "cggmp_curve.resid";
+
+// The Lagrange basis coefficient of self at x over ids:
+//   prod_{k != self} (x - k) / (self - k)  mod n.
+List(UInt(64)) rsh_lag_at(List(Int) ids, List(UInt(64)) x, Int self, Int k, List(UInt(64)) acc) {
+    if (k >= ids.len()) { return acc; }
+    Int j = ids[k];
+    if (j == self) { return rsh_lag_at(ids, x, self, k + 1, acc); }
+    List(UInt(64)) num = if (bn_cmp(x, bn_from_u64(u64(j))) >= 0) { bn_sub(x, bn_from_u64(u64(j))) } else { sc_nat_neg(bn_sub(bn_from_u64(u64(j)), x)) };
+    List(UInt(64)) den = if (self > j) { bn_from_u64(u64(self - j)) } else { sc_nat_neg(bn_from_u64(u64(j - self))) };
+    return rsh_lag_at(ids, x, self, k + 1, sc_nat_mul(acc, sc_nat_mul(num, sc_nat_inv(den))));
+}
+
+// Evaluate coeffs[0] + coeffs[1]*x + ... mod n, with the usual conventions.
+pub List(UInt(64)) rsh_poly_eval(List(List(UInt(64))) coeffs, List(UInt(64)) x, Int k, List(UInt(64)) pow, List(UInt(64)) acc) {
+    if (k >= coeffs.len()) { return acc; }
+    List(UInt(64)) term = sc_nat_mul(pow, coeffs[k]);
+    return rsh_poly_eval(coeffs, x, k + 1, sc_nat_mul(pow, x), sc_nat_add(acc, term));
+}
+
+// An old party's contribution to new party new_id's share:
+//   lambda_self(new_id) * old_share  +  h_self(new_id)
+// with h_self a polynomial whose constant term is zero.  Summing this over
+// the old quorum interpolates the old polynomial at new_id and adds a
+// zero-constant polynomial, so the new sharing keeps the same X.
+//
+// random_coeffs[0] MUST be 0; that is the caller's invariant.
+pub List(UInt(64)) rsh_contribution(
+    List(UInt(64)) old_share,
+    List(Int) old_ids,
+    Int self_id,
+    Int new_id,
+    List(List(UInt(64))) random_coeffs
+) {
+    List(UInt(64)) lam = rsh_lag_at(old_ids, bn_from_u64(u64(new_id)), self_id, 0, [1]);
+    List(UInt(64)) base = sc_nat_mul(lam, old_share);
+    List(UInt(64)) hpow = rsh_poly_eval(random_coeffs, bn_from_u64(u64(new_id)), 0, [1], []);
+    return sc_nat_add(base, hpow);
+}
+
+// The sum of every old party's contribution to the new share of new_id.
+// `polys[i]` belongs to old_ids[i]; each must have a zero constant term.
+pub List(UInt(64)) rsh_new_share(
+    List(List(UInt(64))) old_shares,
+    List(Int) old_ids,
+    Int new_id,
+    List(List(List(UInt(64)))) polys,
+    Int i,
+    List(UInt(64)) acc
+) {
+    if (i >= old_ids.len()) { return acc; }
+    List(UInt(64)) one = rsh_contribution(old_shares[i], old_ids, old_ids[i], new_id, polys[i]);
+    return rsh_new_share(old_shares, old_ids, new_id, polys, i + 1, sc_nat_add(acc, one));
+}
+
+pub List(UInt(64)) rsh_new_share_of(
+    List(List(UInt(64))) old_shares,
+    List(Int) old_ids,
+    Int new_id,
+    List(List(List(UInt(64)))) polys
+) {
+    return rsh_new_share(old_shares, old_ids, new_id, polys, 0, [0]);
+}
+
+// Root key reconstructed by Lagrange interpolation at 0 over ids/shares.
+pub List(UInt(64)) rsh_reconstruct(List(Int) ids, List(List(UInt(64))) shares, Int i, List(UInt(64)) acc) {
+    if (i >= ids.len()) { return acc; }
+    List(UInt(64)) part = sc_nat_mul(cg_lagrange(ids, ids[i]), shares[i]);
+    return rsh_reconstruct(ids, shares, i + 1, sc_nat_add(acc, part));
+}
+
+pub List(UInt(64)) rsh_root(List(Int) ids, List(List(UInt(64))) shares) {
+    return rsh_reconstruct(ids, shares, 0, [0]);
+}
+
+// ─── Dealer's polynomial in the new sharing ─────────────────────
+
+// Coefficient j of a*b: sum over i of a[i] * b[j-i].
+List(UInt(64)) rsh_poly_coef(List(List(UInt(64))) a, List(List(UInt(64))) b, Int j, Int i, List(UInt(64)) acc) {
+    if (i >= a.len()) { return acc; }
+    Int k = j - i;
+    if (k < 0 || k >= b.len()) { return rsh_poly_coef(a, b, j, i + 1, acc); }
+    return rsh_poly_coef(a, b, j, i + 1, sc_nat_add(acc, sc_nat_mul(a[i], b[k])));
+}
+
+List(List(UInt(64))) rsh_poly_mul(List(List(UInt(64))) a, List(List(UInt(64))) b, Int j, List(List(UInt(64))) acc) {
+    if (j >= a.len() + b.len() - 1) { return acc; }
+    List(UInt(64)) c = rsh_poly_coef(a, b, j, 0, bn_from_u64(0));
+    return rsh_poly_mul(a, b, j + 1, acc.concat([c]));
+}
+
+pub List(List(UInt(64))) rsh_poly_mul2(List(List(UInt(64))) a, List(List(UInt(64))) b) {
+    return rsh_poly_mul(a, b, 0, []);
+}
+
+// The coefficients of the Lagrange basis polynomial L_self(x) over ids,
+// low to high.
+List(List(UInt(64))) rsh_lag_poly_step(List(Int) ids, Int self, Int k, List(List(UInt(64))) acc) {
+    if (k >= ids.len()) { return acc; }
+    Int j = ids[k];
+    if (j == self) { return rsh_lag_poly_step(ids, self, k + 1, acc); }
+    List(UInt(64)) inv = sc_nat_inv(if (self > j) { bn_from_u64(u64(self - j)) } else { sc_nat_neg(bn_from_u64(u64(j - self))) });
+    List(List(UInt(64))) factor = [sc_nat_mul(sc_nat_neg(bn_from_u64(u64(j))), inv), inv];
+    return rsh_lag_poly_step(ids, self, k + 1, rsh_poly_mul2(acc, factor));
+}
+
+pub List(List(UInt(64))) rsh_lagrange_poly(List(Int) ids, Int self) {
+    return rsh_lag_poly_step(ids, self, 0, [bn_from_u64(1)]);
+}
+
+// Add two polynomials of equal or different length.
+List(List(UInt(64))) rsh_poly_add(List(List(UInt(64))) a, List(List(UInt(64))) b, Int k, List(List(UInt(64))) acc) {
+    if (k >= a.len() && k >= b.len()) { return acc; }
+    List(UInt(64)) av = if (k < a.len()) { a[k] } else { bn_from_u64(0) };
+    List(UInt(64)) bv = if (k < b.len()) { b[k] } else { bn_from_u64(0) };
+    return rsh_poly_add(a, b, k + 1, acc.concat([sc_nat_add(av, bv)]));
+}
+
+pub List(List(UInt(64))) rsh_poly_add2(List(List(UInt(64))) a, List(List(UInt(64))) b) {
+    return rsh_poly_add(a, b, 0, []);
+}
+
+List(List(UInt(64))) rsh_scale_poly(List(List(UInt(64))) coeffs, List(UInt(64)) s, Int k, List(List(UInt(64))) acc) {
+    if (k >= coeffs.len()) { return acc; }
+    return rsh_scale_poly(coeffs, s, k + 1, acc.concat([sc_nat_mul(coeffs[k], s)]));
+}
+
+pub List(List(UInt(64))) rsh_scale_poly2(List(List(UInt(64))) coeffs, List(UInt(64)) s) {
+    return rsh_scale_poly(coeffs, s, 0, []);
+}
+
+// The polynomial an old dealer contributes to the new sharing:
+//   old_share * L_self(x) + random_coeffs(x)
+// evaluated at any new id.  The sum over the old quorum is f(x) + h(x),
+// where f is the old sharing polynomial and h has zero constant, so X is kept.
+//
+// random_coeffs[0] MUST be 0; the caller's invariant.
+pub List(List(UInt(64))) rsh_dealer_poly(
+    List(UInt(64)) old_share,
+    List(Int) old_ids,
+    Int self_id,
+    List(List(UInt(64))) random_coeffs
+) {
+    List(List(UInt(64))) base = rsh_scale_poly2(rsh_lagrange_poly(old_ids, self_id), old_share);
+    return rsh_poly_add2(base, random_coeffs);
+}
+
+pub List(UInt(64)) rsh_eval_poly(List(List(UInt(64))) coeffs, Int x) {
+    return rsh_poly_eval(coeffs, bn_from_u64(u64(x)), 0, [1], []);
+}
+
+// Feldman evaluation of a commitment list at x: sum k * id^k * commit[k].
+CvPt rsh_commit_eval(List(CvPt) commits, List(UInt(64)) x, Int k, List(UInt(64)) pow, CvPt acc) {
+    if (k >= commits.len()) { return acc; }
+    CvPt term = cv_mul(pow, commits[k]);
+    return rsh_commit_eval(commits, x, k + 1, sc_nat_mul(pow, x), cv_add(acc, term));
+}
+
+pub CvPt rsh_commit_eval_at(List(CvPt) commits, Int x) {
+    return rsh_commit_eval(commits, bn_from_u64(u64(x)), 0, [1], cv_inf());
+}
+
+// Whether a share at new_id matches its Feldman commitment polynomial.
+pub Bool rsh_share_ok(List(UInt(64)) share, List(CvPt) commits, Int new_id) {
+    return cv_eq(cv_mul_base(share), rsh_commit_eval_at(commits, new_id));
+}
+
+// Verify each dealer's contribution and sum the good ones.  Err is the
+// offending old party id; the caller names the cheater and aborts.
+pub Result(List(UInt(64)), Int) rsh_new_share_checked(
+    List(List(UInt(64))) old_shares,
+    List(Int) old_ids,
+    Int new_id,
+    List(List(List(UInt(64)))) dealer_polys,
+    List(List(CvPt)) dealer_commits,
+    Int i,
+    List(UInt(64)) acc
+) {
+    if (i >= old_ids.len()) { return Ok(acc); }
+    List(UInt(64)) one = rsh_eval_poly(dealer_polys[i], new_id);
+    if (!rsh_share_ok(one, dealer_commits[i], new_id)) { return Err(old_ids[i]); }
+    return rsh_new_share_checked(old_shares, old_ids, new_id, dealer_polys, dealer_commits, i + 1, sc_nat_add(acc, one));
+}
+
+// ─── Identifiable abort over an encrypted part ──────────────────
+
+// What a complaining new party broadcasts when a dealer's part does not open
+// to the committed polynomial: the ciphertext, its plaintext and hidden nonce
+// image rho^N, and a proof of knowledge of rho.
+pub type RshComplaint = { Int against; Int by; List(UInt(64)) ct; CgOpen open; };
+
+pub Bool rsh_open_verify(PaillierPub pk, List(UInt(64)) ct, CgOpen o, Transcript tr) {
+    if (!pa_ct_ok(pk, ct) || o.plain.neg || bn_cmp(o.plain.mag, cv_n()) >= 0) { return false; }
+    List(UInt(64)) hidden = bn_modmul(ct, pa_gm(pk, zi_neg(o.plain)), pk.n2);
+    return bn_cmp(hidden, o.hidden) == 0 && nth_verify(pk, o.hidden, o.proof, tr);
+}
+
+// True when the opened part is a valid opening but contradicts the dealer's
+// commitment, which is the evidence that names that dealer.
+pub Bool rsh_open_shows_bad(PaillierPub pk, List(UInt(64)) ct, CgOpen o, List(CvPt) commits, Int new_id, Transcript tr) {
+    if (!rsh_open_verify(pk, ct, o, tr)) { return false; }
+    return !rsh_share_ok(o.plain.mag, commits, new_id);
+}
+
+pub Result(List(UInt(64)), Int) rsh_new_share_checked_of(
+    List(List(UInt(64))) old_shares,
+    List(Int) old_ids,
+    Int new_id,
+    List(List(List(UInt(64)))) dealer_polys,
+    List(List(CvPt)) dealer_commits
+) {
+    return rsh_new_share_checked(old_shares, old_ids, new_id, dealer_polys, dealer_commits, 0, bn_from_u64(0));
+}
+
+// ─── Encrypted transport of a dealer's contribution ──────────────
+
+// Encrypt a contribution under the recipient new party's Paillier key.
+pub List(UInt(64)) rsh_enc_share(PaillierPub pk, List(UInt(64)) share, List(UInt(64)) rho) {
+    return pa_enc(pk, sc_to_zi(share), rho);
+}
+
+// Decrypt, range-check, and check against the recipient's Feldman commitment.
+// Err is the offending dealer id.
+pub Result(List(UInt(64)), Int) rsh_decrypt_verified(
+    PaillierSec sec, PaillierPub pk, List(UInt(64)) ct, List(CvPt) commits, Int new_id, Int dealer_id
+) {
+    if (!pa_ct_ok(pk, ct)) { return Err(dealer_id); }
+    return match cg_dec(sec, pk, ct) {
+        None => Err(dealer_id),
+        Some(d) => rsh_check_plain(d, commits, new_id, dealer_id)
+    };
+}
+
+Result(List(UInt(64)), Int) rsh_check_plain(BnInt d, List(CvPt) commits, Int new_id, Int dealer_id) {
+    if (d.neg || bn_cmp(d.mag, cv_n()) >= 0) { return Err(dealer_id); }
+    if (!rsh_share_ok(d.mag, commits, new_id)) { return Err(dealer_id); }
+    return Ok(d.mag);
+}
+
+// ─── Re-share round 1 message shapes ─────────────────────────────
+
+// A new party's Paillier key.  A real deployment receives only `pail`; the
+// secret key is held locally and never travels in a message.
+pub type RshNewPeer = { Int id; PaillierPub pail; };
+
+// One dealer's broadcast (Feldman commitments) and its encrypted parts.
+pub type RshPart = { Int to; List(UInt(64)) ct; };
+pub type RshProofPart = { Int to; List(UInt(64)) ct; NthProof proof; };
+pub type RshD1 = { Int dealer; List(CvPt) commits; List(RshPart) parts; };
+
+// A new party's published Paillier and Pedersen parameters with the proofs
+// that its Paillier modulus is a product of safe primes and that the Pedersen
+// parameters are well formed.
+pub type RshAnn = { Int id; PaillierPub pail; Pedersen ped; ModProof modp; PrmProof prm; };
+
+pub Option(RshAnn) rsh_announce(Int id, PaillierSec sec, Pedersen ped, List(UInt(64)) ped_lam, Transcript tr, List(Int) rnd) {
+    PaillierPub pail = paillier_pub(bn_mul(sec.p, sec.q));
+    ModProof md = mod_prove(sec.p, sec.q, tr, cg_rng(rnd, "rsh/mod", 256 * 96))?;
+    PrmProof pr = prm_prove(ped_lam, sec.phi, ped, tr, cg_rng(rnd, "rsh/prm", 256 * 400))?;
+    return Some(RshAnn {.id = id, .pail = pail, .ped = ped, .modp = md, .prm = pr});
+}
+
+pub Bool rsh_announce_ok(RshAnn a, Transcript tr) {
+    return mod_verify(a.pail.n, a.modp, tr) && prm_verify(a.ped, a.prm, tr);
+}
+
+// Prove knowledge of the Paillier nonce for one encrypted contribution.
+pub Option(RshProofPart) rsh_prove_part(PaillierPub pk, Int to, List(UInt(64)) share, List(UInt(64)) rho, Transcript tr, List(Int) rnd) {
+    List(UInt(64)) ct = rsh_enc_share(pk, share, rho);
+    List(UInt(64)) hidden = bn_modmul(ct, pa_gm(pk, zi_neg(sc_to_zi(share))), pk.n2);
+    return match nth_prove(pk, hidden, rho, tr, rnd) {
+        None => None,
+        Some(pf) => Some(RshProofPart {.to = to, .ct = ct, .proof = pf})
+    };
+}
+
+pub Bool rsh_verify_part(PaillierPub pk, List(UInt(64)) share, RshProofPart p, Transcript tr) {
+    if (!pa_ct_ok(pk, p.ct)) { return false; }
+    List(UInt(64)) hidden = bn_modmul(p.ct, pa_gm(pk, zi_neg(sc_to_zi(share))), pk.n2);
+    return nth_verify(pk, hidden, p.proof, tr);
+}
+
+// Dealer `dealer_id` broadcasts its polynomial commitments and sends each
+// new party an encrypted share contribution.  The peer list is the new set.
+pub RshD1 rsh_d1(
+    Int dealer_id,
+    List(Int) old_ids,
+    List(UInt(64)) old_share,
+    List(List(UInt(64))) randoms,
+    List(RshNewPeer) new_peers,
+    List(Int) seed
+) {
+    List(List(UInt(64))) poly = rsh_dealer_poly(old_share, old_ids, dealer_id, randoms);
+    List(CvPt) commits = rsh_commit_poly2(poly);
+    List(RshPart) parts = rsh_d1_parts(dealer_id, poly, new_peers, seed, 0, []);
+    return RshD1 {.dealer = dealer_id, .commits = commits, .parts = parts};
+}
+
+List(RshPart) rsh_d1_parts(Int dealer_id, List(List(UInt(64))) poly, List(RshNewPeer) peers, List(Int) seed, Int i, List(RshPart) acc) {
+    if (i >= peers.len()) { return acc; }
+    RshNewPeer peer = peers[i];
+    List(UInt(64)) share = rsh_eval_poly(poly, peer.id);
+    List(UInt(64)) ct = rsh_enc_share(peer.pail, share, cg_unit(seed, f"rsh/d1/{dealer_id}/{peer.id}", peer.pail.n));
+    return rsh_d1_parts(dealer_id, poly, peers, seed, i + 1, acc.concat([RshPart {.to = peer.id, .ct = ct}]));
+}
+
+Option(RshPart) rsh_find_part(List(RshPart) parts, Int to, Int i) {
+    if (i >= parts.len()) { return None; }
+    if (parts[i].to == to) { return Some(parts[i]); }
+    return rsh_find_part(parts, to, i + 1);
+}
+
+Int rsh_count_parts(List(RshPart) parts, Int to, Int i) {
+    if (i >= parts.len()) { return 0; }
+    return rsh_count_parts(parts, to, i + 1) + (if (parts[i].to == to) { 1 } else { 0 });
+}
+
+Result(List(UInt(64)), Int) rsh_require_part(Option(RshPart) po, Int dealer_id) {
+    return match po {
+        None => Err(dealer_id),
+        Some(p) => Ok(p.ct)
+    };
+}
+
+// A new party assembles its share from every old dealer's round-1 message.
+pub Result(List(UInt(64)), Int) rsh_assemble(
+    List(RshD1) dealers,
+    Int new_id,
+    PaillierSec sec,
+    PaillierPub pub,
+    Int i,
+    List(UInt(64)) acc
+) {
+    if (i >= dealers.len()) { return Ok(acc); }
+    RshD1 d = dealers[i];
+    if (rsh_count_parts(d.parts, new_id, 0) != 1) { return Err(d.dealer); }
+    List(UInt(64)) ct = rsh_require_part(rsh_find_part(d.parts, new_id, 0), d.dealer)?;
+    List(UInt(64)) one = rsh_decrypt_verified(sec, pub, ct, d.commits, new_id, d.dealer)?;
+    return rsh_assemble(dealers, new_id, sec, pub, i + 1, sc_nat_add(acc, one));
+}
+
+pub Result(List(UInt(64)), Int) rsh_assemble_of(
+    List(RshD1) dealers,
+    Int new_id,
+    PaillierSec sec,
+    PaillierPub pub
+) {
+    return rsh_assemble(dealers, new_id, sec, pub, 0, bn_from_u64(0));
+}
+
+// Encrypt each dealer's contribution to one new party under its Paillier key,
+// decrypt, verify against the dealer's Feldman commitment, and sum.  This is
+// the transport step of a single re-share round; the caller owns the message
+// routing and any proofs-of-knowledge the deployment requires.
+pub Result(List(UInt(64)), Int) rsh_share_encrypted(
+    List(Int) dealer_ids,
+    List(List(List(UInt(64)))) dealer_polys,
+    List(List(CvPt)) dealer_commits,
+    Int new_id,
+    PaillierSec sec,
+    PaillierPub pub,
+    List(Int) seed,
+    Int i,
+    List(UInt(64)) acc
+) {
+    if (i >= dealer_ids.len()) { return Ok(acc); }
+    List(UInt(64)) one = rsh_eval_poly(dealer_polys[i], new_id);
+    List(UInt(64)) ct = rsh_enc_share(pub, one, cg_unit(seed, f"rsh/share/{new_id}/{dealer_ids[i]}", pub.n));
+    List(UInt(64)) got = rsh_decrypt_verified(sec, pub, ct, dealer_commits[i], new_id, dealer_ids[i])?;
+    return rsh_share_encrypted(dealer_ids, dealer_polys, dealer_commits, new_id, sec, pub, seed, i + 1, sc_nat_add(acc, got));
+}
+
+pub Result(List(UInt(64)), Int) rsh_share_encrypted_of(
+    List(Int) dealer_ids,
+    List(List(List(UInt(64)))) dealer_polys,
+    List(List(CvPt)) dealer_commits,
+    Int new_id,
+    PaillierSec sec,
+    PaillierPub pub,
+    List(Int) seed
+) {
+    return rsh_share_encrypted(dealer_ids, dealer_polys, dealer_commits, new_id, sec, pub, seed, 0, bn_from_u64(0));
+}
+
+// Feldman commitment of a polynomial: G raised to each coefficient.
+pub List(CvPt) rsh_commit_poly(List(List(UInt(64))) coeffs, Int k, List(CvPt) acc) {
+    if (k >= coeffs.len()) { return acc; }
+    return rsh_commit_poly(coeffs, k + 1, acc.concat([cv_mul_base(coeffs[k])]));
+}
+
+pub List(CvPt) rsh_commit_poly2(List(List(UInt(64))) coeffs) {
+    return rsh_commit_poly(coeffs, 0, []);
+}
+
+pub List(List(UInt(64))) rsh_new_share_polys(
+    List(List(UInt(64))) old_shares,
+    List(Int) old_ids,
+    Int new_id,
+    List(List(List(UInt(64)))) randoms,
+    Int i,
+    List(List(UInt(64))) acc
+) {
+    if (i >= old_ids.len()) { return acc; }
+    List(List(UInt(64))) dp = rsh_dealer_poly(old_shares[i], old_ids, old_ids[i], randoms[i]);
+    return rsh_new_share_polys(old_shares, old_ids, new_id, randoms, i + 1, rsh_poly_add2(acc, dp));
+}
+
+pub List(UInt(64)) rsh_new_share_from_polys(
+    List(List(UInt(64))) old_shares,
+    List(Int) old_ids,
+    Int new_id,
+    List(List(List(UInt(64)))) randoms
+) {
+    return rsh_eval_poly(rsh_new_share_polys(old_shares, old_ids, new_id, randoms, 0, [bn_from_u64(0)]), new_id);
+}

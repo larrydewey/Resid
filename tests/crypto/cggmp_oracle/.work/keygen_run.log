@@ -1,0 +1,5 @@
+keygen degree 1 among 3, signers [1, 2]: both signatures verify under the group key (OpenSSL); key unchanged by refresh: True; configurations changed: True
+
+real	1m48.402s
+user	1m47.745s
+sys	0m0.411s

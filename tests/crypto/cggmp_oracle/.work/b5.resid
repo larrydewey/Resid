@@ -1,0 +1,7 @@
+import "../../../../lib/cggmp.resid";
+@requires(args)
+Int main() {
+    Int size = str_parse_int(args.get(1));
+    List(Int) r = cg_rng([7], "x", size);
+    return r.len() % 256;
+}

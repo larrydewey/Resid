@@ -1,0 +1,79 @@
+diff --git i/pkg/hash/hash.go w/pkg/hash/hash.go
+index 0881d1a..e2c9bac 100644
+--- i/pkg/hash/hash.go
++++ w/pkg/hash/hash.go
+@@ -8,10 +8,11 @@ import (
+ 	"fmt"
+ 	"io"
+ 	"math/big"
++	"os"
+ 	"reflect"
+ 
++	"crypto/sha256"
+ 	"github.com/taurusgroup/multi-party-sig/internal/params"
+-	"github.com/zeebo/blake3"
+ )
+ 
+ const DigestLengthBytes = params.SecBytes * 2 // 64
+@@ -20,14 +21,58 @@ const DigestLengthBytes = params.SecBytes * 2 // 64
+ //
+ // Internally, this is a wrapper around sha3.ShakeHash, but any hash function with
+ // an easily extendable output would work as well.
++//
++// ORACLE PATCH (Symbolon): the BLAKE3 sponge is replaced by SHA-256. The
++// transcript is buffered, and the output stream is SHA-256(SHA-256(buf) ||
++// be32(i)) for i = 0, 1, 2, ... so that the Resid implementation can compute
++// the same bytes with SHA-256 alone. The framing of every item is unchanged.
+ type Hash struct {
+-	h *blake3.Hasher
++	h *sha256Buf
++}
++
++type sha256Buf struct{ buf []byte }
++
++func (b *sha256Buf) Write(p []byte) (int, error) { b.buf = append(b.buf, p...); return len(p), nil }
++func (b *sha256Buf) WriteString(s string) (int, error) {
++	b.buf = append(b.buf, s...)
++	return len(s), nil
++}
++func (b *sha256Buf) Clone() *sha256Buf { return &sha256Buf{buf: append([]byte(nil), b.buf...)} }
++func (b *sha256Buf) Digest() io.Reader {
++	if os.Getenv("GENVEC_DEBUG") != "" {
++		fmt.Fprintf(os.Stderr, "TRANSCRIPT %x\n", b.buf)
++	}
++	sum := sha256.Sum256(b.buf)
++	return &sha256Stream{sum: sum}
++}
++
++type sha256Stream struct {
++	sum   [32]byte
++	ctr   uint32
++	block []byte
++}
++
++func (r *sha256Stream) Read(p []byte) (int, error) {
++	n := 0
++	for n < len(p) {
++		if len(r.block) == 0 {
++			var c [4]byte
++			binary.BigEndian.PutUint32(c[:], r.ctr)
++			r.ctr++
++			d := sha256.Sum256(append(append([]byte(nil), r.sum[:]...), c[:]...))
++			r.block = d[:]
++		}
++		k := copy(p[n:], r.block)
++		r.block = r.block[k:]
++		n += k
++	}
++	return n, nil
+ }
+ 
+ // New creates a Hash struct where the internal hash function is initialized with "CMP-BLAKE".
+ func New(initialData ...WriterToWithDomain) *Hash {
+-	hash := &Hash{h: blake3.New()}
+-	_, _ = hash.h.WriteString("CMP-BLAKE")
++	hash := &Hash{h: &sha256Buf{}}
++	_, _ = hash.h.WriteString("CMP-BLAKE") // domain string kept as is
+ 	for _, d := range initialData {
+ 		_ = hash.WriteAny(d)
+ 	}

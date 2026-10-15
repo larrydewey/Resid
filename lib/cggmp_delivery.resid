@@ -1,0 +1,44 @@
+// cggmp_delivery.resid — deliver the final ECDSA signature only to the
+// session initiator.  CGGMP21's round 7 broadcasts each party's s share so
+// that every party can assemble and verify the signature.  Symbolon's cosigner
+// must not learn the signature, so the routing layer keeps SgB messages on the
+// initiator's input and drops them from every other party's input.  The
+// initiator alone calls sg_finish; peers receive no final (r, s).
+
+import "cggmp.resid";
+
+Option(List(UInt(64))) cggmp_sig_of(CgMsg m) {
+    CgBody bd = m.body;
+    return match bd { SgB(v) => Some(v), _ => None };
+}
+
+pub Int cggmp_sg_count(List(CgMsg) msgs, Int i) {
+    if (i >= msgs.len()) { return 0; }
+    return cggmp_sg_count(msgs, i + 1) + match cggmp_sig_of(msgs[i]) { Some(_) => 1, None => 0 };
+}
+
+List(CgMsg) cggmp_initiator_route(List(CgMsg) msgs, Int self, Int initiator, Int i, List(CgMsg) acc) {
+    if (i >= msgs.len()) { return acc; }
+    Bool is_sig = match cggmp_sig_of(msgs[i]) { Some(_) => true, None => false };
+    List(CgMsg) next = if (is_sig && self != initiator) { acc } else { acc.concat([msgs[i]]) };
+    return cggmp_initiator_route(msgs, self, initiator, i + 1, next);
+}
+
+// Keep SgB only when `self` is the initiator; every other body is relayed.
+pub List(CgMsg) cggmp_initiator_only(List(CgMsg) msgs, Int self, Int initiator) {
+    return cggmp_initiator_route(msgs, self, initiator, 0, []);
+}
+
+// A defensive check for callers that must prove they dropped every signature
+// share from a non-initiator's input.
+pub Bool cggmp_no_sig_for_peer(List(CgMsg) msgs) {
+    return cggmp_sg_count(msgs, 0) == 0;
+}
+
+// Enforce the delivery rule at the API boundary: only the initiator may run
+// sg_finish.  Peers still run their protocol rounds, but receive no final
+// signature and no signature shares.
+pub Result(CgSig, CgFail) cggmp_initiator_finish(CgCtx c, CgPresig pre, List(CgMsg) in, Int initiator) {
+    if (c.self != initiator) { return Err(cg_fail("only the initiator assembles the signature", [c.self])); }
+    return sg_finish(c, pre, cggmp_initiator_only(in, c.self, initiator));
+}

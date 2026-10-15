@@ -1,0 +1,31 @@
+import "../../../../lib/bignum.resid";
+import "../../../../lib/cose.resid";
+
+List(UInt(64)) op(Str which, List(UInt(64)) a, List(UInt(64)) b, List(UInt(64)) m, Int i) {
+    List(UInt(64)) x = bn_mod(bn_mul(bn_add(a, [u64(i + 1)]), bn_add(b, [u64(7 * i + 3)])), m);
+    if (which == "mul") { return bn_mul(x, b); }
+    if (which == "mod") { return bn_mod(bn_mul(x, b), m); }
+    if (which == "modmul") { return bn_modmul(x, b, m); }
+    if (which == "inv") { return match bn_modinv(x, m) { Some(v) => v, None => [] }; }
+    if (which == "gcd") { return bn_gcd(x, m); }
+    if (which == "shr") { return bn_shr(bn_mul(x, b), 100); }
+    return x;
+}
+
+List(List(UInt(64))) loop(Str which, List(UInt(64)) a, List(UInt(64)) b, List(UInt(64)) m, Int i, Int n, ListBuf(List(UInt(64))) acc) {
+    if (i >= n) { return acc.finish(); }
+    return loop(which, a, b, m, i + 1, n, acc.push(op(which, a, b, m, i)));
+}
+
+Int run(Str which, List(UInt(64)) a, List(UInt(64)) b, List(UInt(64)) m, Int n) {
+    ListBuf(List(UInt(64))) bb = ListBuf();
+    return loop(which, a, b, m, 0, n, bb).len();
+}
+
+@requires(args)
+Int main() {
+    List(UInt(64)) m = bn_from_be(cose_hex_decode(args.get(1)));
+    List(UInt(64)) a = bn_sub(m, [12345]);
+    List(UInt(64)) b = bn_sub(m, [999]);
+    return run(args.get(2), a, b, m, str_parse_int(args.get(3))) % 200;
+}

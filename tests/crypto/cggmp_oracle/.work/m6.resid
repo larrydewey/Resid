@@ -1,0 +1,43 @@
+import "../../../../lib/bignum.resid";
+import "../../../../lib/cose.resid";
+
+// Montgomery multiplication of 4096-bit numbers held in UInt(4224) scalars,
+// with two 2048-bit limbs and CIOS: no heap, so no garbage.
+UInt(4224) lim() { return ((UInt(4224)) 1 << 2048) - 1; }
+
+UInt(4224) mm2(UInt(4224) a, UInt(4224) b, UInt(4224) n, UInt(4224) ninv) {
+    UInt(4224) mask = lim();
+    UInt(4224) a0 = a & mask; UInt(4224) a1 = a >> 2048;
+    UInt(4224) b0 = b & mask; UInt(4224) b1 = b >> 2048;
+    UInt(4224) n0 = n & mask; UInt(4224) n1 = n >> 2048;
+    // word b0
+    UInt(4224) s1 = a0 * b0;
+    UInt(4224) t0 = s1 & mask; UInt(4224) c1 = s1 >> 2048;
+    UInt(4224) s2 = a1 * b0 + c1;
+    UInt(4224) t1 = s2 & mask; UInt(4224) t2 = s2 >> 2048;
+    UInt(4224) m1 = wrapping_umul(t0, ninv) & mask;
+    UInt(4224) s3 = t0 + m1 * n0;
+    UInt(4224) c3 = s3 >> 2048;
+    UInt(4224) s4 = t1 + m1 * n1 + c3;
+    UInt(4224) u0 = s4 & mask; UInt(4224) c4 = s4 >> 2048;
+    UInt(4224) s5 = t2 + c4;
+    UInt(4224) u1 = s5 & mask; UInt(4224) u2 = s5 >> 2048;
+    // word b1
+    UInt(4224) s6 = u0 + a0 * b1;
+    UInt(4224) w0 = s6 & mask; UInt(4224) c6 = s6 >> 2048;
+    UInt(4224) s7 = u1 + a1 * b1 + c6;
+    UInt(4224) w1 = s7 & mask; UInt(4224) c7 = s7 >> 2048;
+    UInt(4224) s8 = u2 + c7;
+    UInt(4224) w2 = s8 & mask; UInt(4224) w3 = s8 >> 2048;
+    UInt(4224) m2 = wrapping_umul(w0, ninv) & mask;
+    UInt(4224) s9 = w0 + m2 * n0;
+    UInt(4224) c9 = s9 >> 2048;
+    UInt(4224) s10 = w1 + m2 * n1 + c9;
+    UInt(4224) v0 = s10 & mask; UInt(4224) c10 = s10 >> 2048;
+    UInt(4224) s11 = w2 + c10;
+    UInt(4224) v1 = s11 & mask; UInt(4224) c11 = s11 >> 2048;
+    UInt(4224) v2 = w3 + c11;
+    UInt(4224) r = v0 | (v1 << 2048);
+    return if (v2 != 0 || r >= n) { r - n } else { r };
+}
+Int main() { UInt(4224) x = mm2((UInt(4224)) rt 7, (UInt(4224)) rt 9, (UInt(4224)) rt 11, (UInt(4224)) rt 13); println(f"{x % 1000}"); return 0; }

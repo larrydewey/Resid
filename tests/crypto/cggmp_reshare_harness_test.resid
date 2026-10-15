@@ -1,0 +1,46 @@
+// lib/cggmp_reshare_harness.resid: one-process re-share of a shared key.
+
+import "../../lib/cggmp_reshare_harness.resid";
+import "../../lib/cose.resid";
+import "../../lib/crypto.resid";
+
+List(UInt(64)) nat(Str hex) { return bn_from_be(cose_hex_decode(hex)); }
+Str hx(List(UInt(64)) x) { return hex_encode(bn_to_be(x, 32)); }
+
+Bool harness_ok(Result(List(List(UInt(64))), Int) r, List(Int) new_ids, List(List(UInt(64))) old_shares) {
+    return match r {
+        Ok(shares) => hx(rsh_root(new_ids, shares)) == hx(rsh_root([1, 2], old_shares)),
+        Err(_) => false
+    };
+}
+
+test "harness re-shares a small key" {
+    PaillierSec sec = paillier_sec(nat("3d"), nat("35")) else { PaillierSec {.p = [], .q = [], .phi = [], .phi_inv = []} };
+    PaillierPub pub = paillier_pub(bn_mul(nat("3d"), nat("35")));
+    RshHarnessPeer p1 = RshHarnessPeer {.id = 1, .pail = pub, .sec = sec};
+    RshHarnessPeer p2 = RshHarnessPeer {.id = 2, .pail = pub, .sec = sec};
+    RshHarness h = RshHarness {.old_ids = [1, 2], .new_ids = [1, 2], .old_shares = [nat("07"), nat("09")], .randoms = [[nat("00"), nat("01")], [nat("00"), nat("02")]], .peers = [p1, p2], .seed = [4, 4, 4]};
+    expect(harness_ok(rsh_harness_run(h), [1, 2], [nat("07"), nat("09")])).toBeTrue();
+}
+
+test "harness dealer construction matches direct assembly" {
+    PaillierSec sec = paillier_sec(nat("3d"), nat("35")) else { PaillierSec {.p = [], .q = [], .phi = [], .phi_inv = []} };
+    PaillierPub pub = paillier_pub(bn_mul(nat("3d"), nat("35")));
+    RshHarnessPeer p1 = RshHarnessPeer {.id = 1, .pail = pub, .sec = sec};
+    RshHarness h = RshHarness {.old_ids = [1, 2], .new_ids = [1], .old_shares = [nat("07"), nat("09")], .randoms = [[nat("00"), nat("01")], [nat("00"), nat("02")]], .peers = [p1], .seed = [4, 4, 4]};
+    List(RshNewPeer) pubs = rsh_harness_publics(h.peers, 0, []);
+    List(RshD1) dealers = rsh_harness_dealers(h, pubs, 0, []);
+    Bool ok = match rsh_assemble_of(dealers, 1, sec, pub) { Ok(_) => true, Err(_) => false };
+    expect(ok).toBeTrue();
+}
+
+test "harness new-party loop assembles" {
+    PaillierSec sec = paillier_sec(nat("3d"), nat("35")) else { PaillierSec {.p = [], .q = [], .phi = [], .phi_inv = []} };
+    PaillierPub pub = paillier_pub(bn_mul(nat("3d"), nat("35")));
+    RshHarnessPeer p1 = RshHarnessPeer {.id = 1, .pail = pub, .sec = sec};
+    RshHarness h = RshHarness {.old_ids = [1, 2], .new_ids = [1], .old_shares = [nat("07"), nat("09")], .randoms = [[nat("00"), nat("01")], [nat("00"), nat("02")]], .peers = [p1], .seed = [4, 4, 4]};
+    List(RshNewPeer) pubs = rsh_harness_publics(h.peers, 0, []);
+    List(RshD1) dealers = rsh_harness_dealers(h, pubs, 0, []);
+    Bool ok = match rsh_harness_new(h, dealers, 0, []) { Ok(_) => true, Err(_) => false };
+    expect(ok).toBeTrue();
+}
