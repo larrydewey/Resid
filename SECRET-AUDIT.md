@@ -31,11 +31,14 @@ every operation stays `Secret` and the module has no declassification.
 provides the real `Secret(UInt(576))` P-256 scalar path (add, multiply,
 inverse, lift) with no declassification. The existing `CgConfig` remains a
 test/oracle shape until the protocol is refactored to consume this type.
-`lib/cggmp_secret_paillier.resid` provides a real masked `Secret(UInt(2048))`
-Paillier path (Montgomery multiply/exponent, secret division, encrypt and
-lambda decryption) with no declassification; it supports N up to 1024 bits.
-Neither is wired into the CGGMP protocol yet, whose remaining secret material
-is Paillier for 2048-bit N and the protocol state.
+`lib/cggmp_secret_paillier.resid` provides a real masked Paillier path over N
+up to 2048 bits with Secret(UInt(2048)) plaintexts and Secret(UInt(4096))
+ciphertexts (Montgomery multiply/exponent, secret division, encrypt and lambda
+decryption) with no declassification.
+Secret Paillier now covers N up to 2048 bits with masked Secret(UInt(4096))
+ciphertext arithmetic; its reference and CT cases pass.  It is still not wired
+into the CGGMP protocol, whose remaining secret-material work is the protocol
+state and proof statements.
 
 `declassify` is allowed only at an explicitly named publication boundary. No
 `declassify` occurs in `lib/cggmp*.resid`. No wrapper is permitted to turn a

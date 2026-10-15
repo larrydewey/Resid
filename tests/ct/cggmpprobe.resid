@@ -40,12 +40,12 @@ Int ct_case_cggmp_secret_paillier() {
     UInt(64) ninv = 9637040130063542431;
     UInt(64) n2inv = 5737276472071810367;
     UInt(2048) r2 = 205;
-    UInt(2048) r2_2 = 8050375;
+    UInt(4096) r2_2 = 8140690;
     UInt(2048) one_mont = 1720;
-    UInt(2048) one_mont_2 = 2753003;
+    UInt(4096) one_mont_2 = 8050375;
     Secret(UInt(2048)) m = classify((UInt(2048)) 7);
     Secret(UInt(2048)) rho = classify((UInt(2048)) 11);
-    Secret(UInt(2048)) c = csp_paillier_encrypt(m, rho, n, n2, ninv, n2inv, r2, r2_2, one_mont, one_mont_2);
+    Secret(UInt(4096)) c = csp_paillier_encrypt(m, rho, n, n2, ninv, n2inv, r2, r2_2, one_mont, one_mont_2);
     Secret(UInt(2048)) p = csp_paillier_decrypt_lambda(c, classify((UInt(2048)) 780), classify((UInt(2048)) 1173), n, n2, ninv, n2inv, r2, r2_2, one_mont, one_mont_2);
     Secret(UInt(2048)) bitmask = csp_exp_bit_mask(classify((UInt(2048)) 1), 0);
     UInt(2048) out = ct_public(declassify(p, "CT probe output: CGGMP secret Paillier plaintext"));
