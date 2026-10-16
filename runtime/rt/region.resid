@@ -139,8 +139,8 @@ Int run_take(Int k) {
     _ = rg_unlock();
     if (p == 0 && !fresh) { return rt_abort("region address space exhausted"); }
     _ = mem_take((1 << k) * rg_page());
-    return if (p != 0) { p } else { base + at * rg_page() };
-}
+    _ = if (fresh && secret_mode()) { resid_raw_mlock(base + at * rg_page(), (1 << k) * rg_page()) } else { 0 };
+    return if (p != 0) { p } else { base + at * rg_page() }; }
 
 // `bump` is the bump pointer of the region the page belonged to: on the
 // page that holds it, nothing above it was ever allocated.

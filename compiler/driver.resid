@@ -8816,7 +8816,7 @@ Str graph_hash_esc(Str hex, Int i, StrBuf acc) {
 // whether the verify closure was pinned (compiler/attest.resid), one text
 // per line.
 @requires(filesystem(readonly))
-List(Int) prov_payload(Str out, Str profile, Str done, List(Int) code, List(Int) notes, List(Int) graph, Str grant, List(Int) comp, Str native, Str reduce, Str devices, Str nasm, Str attest) {
+List(Int) prov_payload(Str out, Str profile, Str done, List(Int) code, List(Int) notes, List(Int) graph, Str grant, List(Int) comp, Str native, Str reduce, Str devices, Str nasm, Str attest, Str caps, Str declass) {
     List(Str) paths = str_split(done, ";");
     List(Str) gs = if (grant == "") { [] } else { str_split(grant, ",") };
     // `native`: "module=sha256hex;..." for each linked native module (§47).
@@ -8834,7 +8834,7 @@ List(Int) prov_payload(Str out, Str profile, Str done, List(Int) code, List(Int)
     Int aopt = if (nas.len() > 0) { 1 } else { 0 };
     List(Str) ats = if (attest == "") { [] } else { str_split(attest, "\n") };
     Int topt = if (ats.len() > 0) { 1 } else { 0 };
-    List(Int) m0 = cbe_map(6 + nopt + gopt + copt + vopt + ropt + dopt + aopt + topt, []);
+    List(Int) m0 = cbe_map(8 + nopt + gopt + copt + vopt + ropt + dopt + aopt + topt, []);
     List(Int) m1 = cbe_bytes(code, cbe_text("code", m0));
     List(Int) m2 = prov_texts(gs, 0, cbe_array(gs.len(), cbe_text("grant", m1)));
     List(Int) m3 = if (gopt == 1) { cbe_bytes(graph, cbe_text("graph", m2)) } else { m2 };
@@ -8844,7 +8844,11 @@ List(Int) prov_payload(Str out, Str profile, Str done, List(Int) code, List(Int)
     List(Int) m5a = cbe_text(out, cbe_text("output", m4));
     List(Int) m5b = if (ropt == 1) { cbe_text(reduce, cbe_text("reduce", m5a)) } else { m5a };
     List(Int) m5 = if (dopt == 1) { prov_devices(dvs, 0, cbe_array(dvs.len(), cbe_text("devices", m5b))) } else { m5b };
-    List(Int) m6 = cbe_text(profile, cbe_text("profile", m5));
+    Int copt2 = if (caps != "") { 1 } else { 0 };
+    List(Int) m5c = if (copt2 == 1) { cbe_text(caps, cbe_text("capabilities", m5)) } else { m5 };
+    Int dopt2 = if (declass != "") { 1 } else { 0 };
+    List(Int) m5d = if (dopt2 == 1) { cbe_text(declass, cbe_text("declass", m5c)) } else { m5c };
+    List(Int) m6 = cbe_text(profile, cbe_text("profile", m5d));
     List(Int) m7 = cbe_array(prov_count_paths(paths, 0, 0), cbe_text("sources", m6));
     List(Int) m8 = prov_sources(paths, 0, m7);
     List(Int) m9 = if (copt == 1) { cbe_bytes(comp, cbe_text("compiler", m8)) } else { m8 };
@@ -8947,6 +8951,53 @@ Str prov_grant_at(Kg g, Int root, Int i, Int n) {
     return prov_grant_at(g, root, i + 1, n);
 }
 
+// Per-entry-point capability sets for exported functions (for §17.4 verifier-constrained release).
+Str prov_caps(Kg g, Int root, Funcs fs) {
+    Str caps = prov_caps_at(fs, 0, "");
+    return caps;
+}
+
+Str prov_caps_at(Funcs fs, Int i, Str acc) {
+    if (i >= fs.names.len()) { return acc; }
+    Str name = fs.names[i];
+    Str req = if (i < fs.reqs.len()) { fs.reqs[i] } else { "" };
+    // Only include exported (public) functions (those with @requires)
+    Str acc2 = if (req != "") { acc + name + "=" + req + "\n" } else { acc };
+    return prov_caps_at(fs, i + 1, acc2);
+}
+
+// Declassification points: list of "function=reason" lines.
+// Declassification points: list of "function=reason" lines.
+Str prov_declass(Kg g, Int root) {
+    return prov_declass_at(g, root, 0, "");
+}
+
+Str prov_declass_at(Kg g, Int root, Int i, Str acc) {
+    Int n = g.ns[root].nk;
+    if (i >= n) { return acc; }
+    Int d = kg_kid(g, root, i);
+    Str kind = g.ns[d].kind;
+    Str aux = g.ns[d].aux;
+    if (kind == "fn") {
+        Int at = str_find(aux, "declassify");
+        if (at >= 0) {
+            Int lp = str_find_char(aux, 40, at);
+            Int rp = if (lp >= 0) { str_find_char(aux, 41, lp) } else { -1 };
+            if (lp >= 0 && rp >= 0 && rp > lp) {
+                Str reason = str_slice(aux, lp + 1, rp);
+                return prov_declass_at(g, root, i + 1, acc + g.ns[d].text + "=" + reason + "
+");
+            } else {
+                return prov_declass_at(g, root, i + 1, acc + g.ns[d].text + "=declassify
+");
+            }
+        }
+    }
+    return prov_declass_at(g, root, i + 1, acc);
+}
+
+
+
 Str prov_grant_of(Str pre) {
     Int at = str_find(pre, "@requires");
     if (at < 0) { return ""; }
@@ -8974,7 +9025,7 @@ List(Int) prov_u32(Int v) {
 // and the signature are computed by the secret copy of lib/ed25519g.resid
 // and published (declassified) by it, which is the declassify grant here.
 @requires(filesystem, environment, declassify)
-Int write_provenance(Str out, Str profile, Str done, Str grant, Str native, Str reduce, Str devices, Str nasm, Str attest) {
+Int write_provenance(Str out, Str profile, Str done, Str grant, Str native, Str reduce, Str devices, Str nasm, Str attest, Str caps, Str declass) {
     Str kpath = prov_key_path();
     if (kpath == "") {
         println("note: provenance: unsigned " + profile + " build (no signing key)");
@@ -8988,7 +9039,7 @@ Int write_provenance(Str out, Str profile, Str done, Str grant, Str native, Str 
     List(Int) code = filesystem.sha256(out);
     List(Int) notes = prov_file_hash(out + ".resid-notes.cbor");
     List(Int) graph = prov_file_hash(out + ".resid-graph.cbor");
-    List(Int) map = prov_payload(out, profile, done, code, notes, graph, grant, prov_self_hash(), native, reduce, devices, nasm, attest);
+    List(Int) map = prov_payload(out, profile, done, code, notes, graph, grant, prov_self_hash(), native, reduce, devices, nasm, attest, caps, declass);
     Str ekey = environment.get("RESID_PROV_KEY");
     Bool conceal = environment.get("RESID_PROV_ENCRYPT") == "1";
     if (conceal && ekey == "") {
@@ -10055,6 +10106,10 @@ Int main() {
     Funcs fs = lw_sigs(lkp.g, lkp.id);
     // main's declared authority, for the provenance record's `grant`.
     List(Str) grk = resid_list_str_persist_copy([prov_grant(lkp.g, lkp.id)]);
+    // Per-entry-point capability sets (for verifier-constrained release, §17.4)
+    List(Str) capk = resid_list_str_persist_copy([prov_caps(lkp.g, lkp.id, fs)]);
+    // Declassification points (for verifier-constrained release, §17.4)
+    List(Str) deck = resid_list_str_persist_copy([prov_declass(lkp.g, lkp.id)]);
     if (testmode && fn_index(fs, "main") >= 0) {
         println("test error: " + path + " defines main(); a test file's entry point is generated");
         return 2;
@@ -10170,7 +10225,7 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     Int _prov_in = resid_bulk_push();
     // Notes are a projection of the residual graph (gart.resid).
     Int nrc  =  write_graph_notes(out, ga_notes(gx_unpack(gpk[2]), gpk[4], rsrc, rr.map, path));
-    Int prc  =  write_provenance(out, profile, rr.done, grk[0], nkeep[1], redrec, dvkeep[0], nkeep[2], attest_rec);
+    Int prc  =  write_provenance(out, profile, rr.done, grk[0], nkeep[1], redrec, dvkeep[0], nkeep[2], attest_rec, capk[0], deck[0]);
     Int _prov_out = resid_bulk_pop();
     return prc;
 }

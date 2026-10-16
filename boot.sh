@@ -80,9 +80,9 @@ build_rt() { # build_rt <compiler> <out-base> [target]: runtime IR to <out-base>
     # timeout, not the compiler).
     local rc=0
     local log="${2}.log"
-    timeout 600 "$1" "$RT_SRC" --runtime-module ${3:+--target "$3"} -o "$2" > "$log" 2>&1 || rc=$?
+    timeout 7200 "$1" "$RT_SRC" --runtime-module ${3:+--target "$3"} -o "$2" > "$log" 2>&1 || rc=$?
     if [ "$rc" -ne 0 ]; then
-        [ "$rc" -eq 124 ] && echo "  (no exit after 600s — raise the timeout in build_rt)" >&2
+        [ "$rc" -eq 124 ] && echo "  (no exit after 900s — raise the timeout in build_rt)" >&2
         tail -40 "$log" >&2
         die "runtime module failed to compile (exit ${rc}, full log: ${log})"
     fi

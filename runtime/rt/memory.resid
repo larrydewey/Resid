@@ -1,0 +1,11 @@
+// runtime/rt/memory.resid — mlock/munlock for secret memory (G15).
+
+@requires(device)
+pub Int resid_mlock(Int p, Int n) {
+    if (n <= 0) { return 0; }
+    return resid_raw_syscall(150, p, n, 0, 0, 0, 0); }
+
+@requires(device)
+pub Int resid_munlock(Int p, Int n) {
+    if (n <= 0) { return 0; }
+    return resid_raw_syscall(151, p, n, 0, 0, 0, 0); }

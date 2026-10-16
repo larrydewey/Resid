@@ -82,7 +82,16 @@ Int ct_case_cggmp_secret_config() {
 @requires(declassify)
 Int ct_case_cggmp_secret_protocol() {
     CgSecretMaterial m = cggmp_secret_material(sec(key32()), sec(key32()), sec(key32()), sec(key32()), sec(key32()), sec(key32()), sec(key32()), sec(key32()));
-    CgSecretCtx c = cggmp_secret_ctx_new(1, [1, 2], 1, m, [], [9], [1], [2]);
+    CgSecretCtx c = cggmp_secret_ctx_new(
+        1,
+        [1, 2],
+        1,
+        m,
+        [],
+        secret_bytes(mark([9], 0, ListBuf())),
+        secret_bytes(mark([1], 0, ListBuf())),
+        secret_bytes(mark([2], 0, ListBuf()))
+    );
     CgSecretCtx t = cggmp_secret_ctx_tweak(c, classify((UInt(576)) 5));
     UInt(576) out = ct_public(declassify(csc_scalar_from_bytes(t.material.ecdsa_share), "CT probe output: CGGMP secret context tweak"));
     println(f"cggmp-secret-protocol {out}");

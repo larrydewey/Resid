@@ -10,6 +10,7 @@ import "floattext.resid";
 import "proc.resid";
 import "start.resid";
 import "mem.resid";
+import "memory.resid";
 import "io.resid";
 import "arith.resid";
 import "regex.resid";
