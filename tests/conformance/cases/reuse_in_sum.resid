@@ -1,0 +1,38 @@
+// A literal passed to a constructor may not take a parameter's record and
+// stay unique: `s1` below is matched again after its payload went through
+// st_add and st_end, which must not rewrite s1's record in place.
+
+type Enc = { List(Int) toks; List(Int) pend; Int mode; };
+
+Result(Enc, Str) st_begin(Enc e) {
+    if (e.mode != 0) { return Err("inside"); }
+    List(Int) np = [];
+    return Ok(Enc {.toks = e.toks, .pend = np, .mode = 1});
+}
+
+Result(Enc, Str) st_add(Enc e, Int x) {
+    if (e.mode != 1) { return Err("outside"); }
+    return Ok(Enc {.toks = e.toks, .pend = e.pend.concat([x]), .mode = 1});
+}
+
+Result(Enc, Str) st_end(Enc e) {
+    if (e.mode != 1) { return Err("outside"); }
+    List(Int) np = [];
+    return Ok(Enc {.toks = e.toks.concat([7]), .pend = np, .mode = 0});
+}
+
+Str shw(Result(Enc, Str) r) { return match r { Ok(e) => f"ok {e.mode} {e.toks.len()} {e.pend.len()}", Err(x) => x }; }
+
+@requires(args)
+Int main() {
+    List(Int) none = [];
+    Enc z = Enc {.toks = none, .pend = none, .mode = str_len(args.get(0)) * 0};
+    Result(Enc, Str) s1 = st_begin(z);
+    Result(Enc, Str) s2 = match s1 { Ok(e) => st_add(e, 104), Err(x) => Err(x) };
+    Result(Enc, Str) s3 = match s2 { Ok(e) => st_add(e, 233), Err(x) => Err(x) };
+    Result(Enc, Str) s4 = match s3 { Ok(e) => st_end(e), Err(x) => Err(x) };
+    println(shw(s4));
+    Result(Enc, Str) m2 = match s1 { Ok(e) => st_begin(e), Err(x) => Err(x) };
+    println(shw(s1) + " | " + shw(m2) + " | " + shw(s2));
+    return 0;
+}

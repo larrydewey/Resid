@@ -23,6 +23,7 @@ import "crypto.resid";
 /// A protocol failure: what failed, and the parties that caused it.
 pub type CgFail = { Str why; List(Int) culprits; };
 
+/// Makes a failure with reason `why` blaming `culprits`.
 pub CgFail cg_fail(Str why, List(Int) culprits) { return CgFail {.why = why, .culprits = culprits}; }
 
 // ─── Randomness ─────────────────────────────────────────────────
@@ -32,17 +33,18 @@ pub List(Int) cg_rng(List(Int) seed, Str label, Int n) {
     return tr_stream(sha256_bytes(seed.concat(bytes_of(label))), 0, n);
 }
 
-// A signed sample of `bits` bits for the label.
+/// A signed sample of `bits` bits derived from the session seed and the label.
 pub BnInt cg_pm(List(Int) seed, Str label, Int bits) {
     return zk_pm_of(cg_rng(seed, label, bits / 8 + 1), bits);
 }
 
-// A scalar for the label.
+/// A scalar mod n derived from the session seed and the label.
 pub List(UInt(64)) cg_scalar(List(Int) seed, Str label) {
     return sc_of_bytes(cg_rng(seed, label, 32));
 }
 
-// A unit mod n for the label (rejection sampling over a long derived stream).
+/// A unit mod `n` for the label (rejection sampling over a long derived stream).
+/// Falls back to 1 if the stream runs out.
 pub List(UInt(64)) cg_unit(List(Int) seed, Str label, List(UInt(64)) n) {
     Int width = (bn_bit_len(n) + 7) / 8;
     List(Int) stream = cg_rng(seed, label, width * 8);
@@ -51,12 +53,14 @@ pub List(UInt(64)) cg_unit(List(Int) seed, Str label, List(UInt(64)) n) {
 
 // ─── Ids and per-signer lists ───────────────────────────────────
 
+/// The position of `id` in `ids`, searching from index `i`, or -1 when absent.
 pub Int cg_index(List(Int) ids, Int id, Int i) {
     if (i >= ids.len()) { return -1; }
     if (ids[i] == id) { return i; }
     return cg_index(ids, id, i + 1);
 }
 
+/// The ids in `ids` from index `i` on other than `self`, appended to `acc`.
 pub List(Int) cg_others(List(Int) ids, Int self, Int i, ListBuf(Int) acc) {
     if (i >= ids.len()) { return acc.finish(); }
     return cg_others(ids, self, i + 1, if (ids[i] == self) { acc } else { acc.push(ids[i]) });
@@ -145,6 +149,7 @@ pub type CgCtx = {
     List(Int) digest;             // the message digest (empty when presigning only)
 };
 
+/// The public data of signer `id` in the context; `id` must be one of the signers.
 pub CgPub cg_pub_of(CgCtx c, Int id) { return c.pubs[cg_index(c.ids, id, 0)]; }
 
 /// The transcript a prover (or the verifier of that prover's proofs) uses:
@@ -158,6 +163,8 @@ pub Transcript cg_tr_for(CgCtx c, Int id) { return tr_item(c.base, "ID", bytes_o
 /// for the proof.
 pub type CgMta = { BnInt beta; List(UInt(64)) d; List(UInt(64)) f; List(UInt(64)) s; List(UInt(64)) r; BnInt y; };
 
+/// Runs the sender's side of one MtA for secret `a` against the receiver's ciphertext `recv_ct`.
+/// Its nonces come from `seed` under `label`.
 pub CgMta cg_mta(PaillierPub sender, PaillierPub receiver, List(UInt(64)) recv_ct, BnInt a, List(Int) seed, Str label) {
     BnInt y = cg_pm(seed, label + "/y", zk_lprime());
     List(UInt(64)) r = cg_unit(seed, label + "/r", sender.n);
@@ -169,11 +176,17 @@ pub CgMta cg_mta(PaillierPub sender, PaillierPub receiver, List(UInt(64)) recv_c
 
 // ─── Messages ───────────────────────────────────────────────────
 
+/// The presigning round-1 broadcast: K = Enc(k), G = Enc(gamma), the ElGamal commitment (zl, zm) to k, and the presignature-id commitment.
 pub type PsB2R = { List(UInt(64)) k; List(UInt(64)) g; CvPt zl; CvPt zm; List(Int) commit; };
+/// The presigning round-2 broadcast: the Delta and Chi MtA D ciphertexts.
 pub type PsB3R = { List(List(UInt(64))) delta_d; List(List(UInt(64))) chi_d; };   // per other party, in ascending id order
+/// The presigning round-2 message to one party: the F ciphertexts of both MtAs with their aff-p and aff-g proofs.
 pub type PsM3R = { List(UInt(64)) delta_f; AffpProof delta_proof; List(UInt(64)) chi_f; AffgProof chi_proof; };
+/// The presigning round-3 broadcast: the Delta share and the ElGamal commitment (chi_l, chi_m) to the Chi share.
 pub type PsB4R = { List(UInt(64)) delta_share; CvPt chi_l; CvPt chi_m; };
+/// The presigning round-5 broadcast: the Delta share point k Gamma with its elog proof.
 pub type PsB6R = { CvPt big_delta; ElogProof proof; };
+/// The presigning round-6 broadcast: the S share chi R with its elog proof, the decommitment and the presignature id.
 pub type PsB7R = { CvPt s; ElogProof proof; List(Int) decommit; List(Int) presig_id; };
 
 /// The abort-1 broadcast (a failed Delta check): the sender's Gamma share, an
@@ -183,13 +196,19 @@ pub type PsA1R = { List(UInt(64)) gamma; CgOpen k; List(CgOpen) d; };
 /// The abort-2 broadcast (a failed S check): the sender's ElGamal-nonce image\n/// with a proof, an opening of its K, and an opening of each Chi D addressed to it.
 pub type PsA2R = { CvPt yhat; LogProof yproof; CgOpen k; List(CgOpen) chi; };
 
+/// A key-generation broadcast: rid, chain key, VSS commitments, Schnorr commitment, ElGamal key, Paillier modulus `n`,
+/// Pedersen `s` and `t`, and the decommitment.
 pub type KgB3R = {
     List(Int) rid; List(Int) chain_key; List(CvPt) vss; CvPt sch_commit; CvPt elgamal;
     List(UInt(64)) n; List(UInt(64)) s; List(UInt(64)) t; List(Int) decommit;
 };
+/// A key-generation broadcast: the Paillier-Blum modulus proof and the Pedersen parameter proof.
 pub type KgB4R = { ModProof md; PrmProof prm; };
+/// A key-generation message to one party: its secret share and a factor proof for our Paillier modulus.
 pub type KgM4R = { List(UInt(64)) share; FacProof fac; };
 
+/// The body of a protocol message, one variant per message kind.
+/// `Kg*` are key generation, `Ps*` presigning, `PsA*` the abort broadcasts, `SgB` a signature share.
 pub type CgBody =
     KgB2(List(Int))
   | KgB3(KgB3R)
@@ -212,8 +231,10 @@ pub type CgBody =
 /// A message: `to` is the recipient's id, 0 for a broadcast.
 pub type CgMsg = { Int from; Int to; CgBody body; };
 
+/// A broadcast message with body `b` from `from`.
 pub CgMsg cg_bc(Int from, CgBody b) { return CgMsg {.from = from, .to = 0, .body = b}; }
 
+/// A message with body `b` from `from` addressed to party `to`.
 pub CgMsg cg_to(Int from, Int to, CgBody b) { return CgMsg {.from = from, .to = to, .body = b}; }
 
 // A message from `from`, a broadcast or sent to `me`, selected by `want`.
@@ -239,102 +260,119 @@ Option(PsA1R) a1_of(CgMsg m) { CgBody bd = m.body; return match bd { PsA1(b) => 
 Option(PsA2R) a2_of(CgMsg m) { CgBody bd = m.body; return match bd { PsA2(b) => Some(b), _ => None }; }
 Option(List(UInt(64))) sg_of(CgMsg m) { CgBody bd = m.body; return match bd { SgB(b) => Some(b), _ => None }; }
 
+/// The first `KgB2` body in `in` from index `i` sent by `from`: a broadcast when `bc`, else one addressed to `me`.
 pub Option(List(Int)) ex_kb2(List(CgMsg) in, Int from, Int me, Bool bc, Int i) {
     if (i >= in.len()) { return None; }
     if (cg_sel(in[i], from, me, bc)) { return match kb2_of(in[i]) { Some(b) => Some(b), None => ex_kb2(in, from, me, bc, i + 1) }; }
     return ex_kb2(in, from, me, bc, i + 1);
 }
 
+/// The first `KgB3` body in `in` from index `i` sent by `from`: a broadcast when `bc`, else one addressed to `me`.
 pub Option(KgB3R) ex_kb3(List(CgMsg) in, Int from, Int me, Bool bc, Int i) {
     if (i >= in.len()) { return None; }
     if (cg_sel(in[i], from, me, bc)) { return match kb3_of(in[i]) { Some(b) => Some(b), None => ex_kb3(in, from, me, bc, i + 1) }; }
     return ex_kb3(in, from, me, bc, i + 1);
 }
 
+/// The first `KgB4` body in `in` from index `i` sent by `from`: a broadcast when `bc`, else one addressed to `me`.
 pub Option(KgB4R) ex_kb4(List(CgMsg) in, Int from, Int me, Bool bc, Int i) {
     if (i >= in.len()) { return None; }
     if (cg_sel(in[i], from, me, bc)) { return match kb4_of(in[i]) { Some(b) => Some(b), None => ex_kb4(in, from, me, bc, i + 1) }; }
     return ex_kb4(in, from, me, bc, i + 1);
 }
 
+/// The first `KgM4` body in `in` from index `i` sent by `from`: a broadcast when `bc`, else one addressed to `me`.
 pub Option(KgM4R) ex_km4(List(CgMsg) in, Int from, Int me, Bool bc, Int i) {
     if (i >= in.len()) { return None; }
     if (cg_sel(in[i], from, me, bc)) { return match km4_of(in[i]) { Some(b) => Some(b), None => ex_km4(in, from, me, bc, i + 1) }; }
     return ex_km4(in, from, me, bc, i + 1);
 }
 
+/// The first `KgB5` body in `in` from index `i` sent by `from`: a broadcast when `bc`, else one addressed to `me`.
 pub Option(List(UInt(64))) ex_kb5(List(CgMsg) in, Int from, Int me, Bool bc, Int i) {
     if (i >= in.len()) { return None; }
     if (cg_sel(in[i], from, me, bc)) { return match kb5_of(in[i]) { Some(b) => Some(b), None => ex_kb5(in, from, me, bc, i + 1) }; }
     return ex_kb5(in, from, me, bc, i + 1);
 }
 
+/// The first `PsB2` body in `in` from index `i` sent by `from`: a broadcast when `bc`, else one addressed to `me`.
 pub Option(PsB2R) ex_b2(List(CgMsg) in, Int from, Int me, Bool bc, Int i) {
     if (i >= in.len()) { return None; }
     if (cg_sel(in[i], from, me, bc)) { return match b2_of(in[i]) { Some(b) => Some(b), None => ex_b2(in, from, me, bc, i + 1) }; }
     return ex_b2(in, from, me, bc, i + 1);
 }
 
+/// The first `PsM2` body in `in` from index `i` sent by `from`: a broadcast when `bc`, else one addressed to `me`.
 pub Option(EncelgProof) ex_m2(List(CgMsg) in, Int from, Int me, Bool bc, Int i) {
     if (i >= in.len()) { return None; }
     if (cg_sel(in[i], from, me, bc)) { return match m2_of(in[i]) { Some(b) => Some(b), None => ex_m2(in, from, me, bc, i + 1) }; }
     return ex_m2(in, from, me, bc, i + 1);
 }
 
+/// The first `PsB3` body in `in` from index `i` sent by `from`: a broadcast when `bc`, else one addressed to `me`.
 pub Option(PsB3R) ex_b3(List(CgMsg) in, Int from, Int me, Bool bc, Int i) {
     if (i >= in.len()) { return None; }
     if (cg_sel(in[i], from, me, bc)) { return match b3_of(in[i]) { Some(b) => Some(b), None => ex_b3(in, from, me, bc, i + 1) }; }
     return ex_b3(in, from, me, bc, i + 1);
 }
 
+/// The first `PsM3` body in `in` from index `i` sent by `from`: a broadcast when `bc`, else one addressed to `me`.
 pub Option(PsM3R) ex_m3(List(CgMsg) in, Int from, Int me, Bool bc, Int i) {
     if (i >= in.len()) { return None; }
     if (cg_sel(in[i], from, me, bc)) { return match m3_of(in[i]) { Some(b) => Some(b), None => ex_m3(in, from, me, bc, i + 1) }; }
     return ex_m3(in, from, me, bc, i + 1);
 }
 
+/// The first `PsB4` body in `in` from index `i` sent by `from`: a broadcast when `bc`, else one addressed to `me`.
 pub Option(PsB4R) ex_b4(List(CgMsg) in, Int from, Int me, Bool bc, Int i) {
     if (i >= in.len()) { return None; }
     if (cg_sel(in[i], from, me, bc)) { return match b4_of(in[i]) { Some(b) => Some(b), None => ex_b4(in, from, me, bc, i + 1) }; }
     return ex_b4(in, from, me, bc, i + 1);
 }
 
+/// The first `PsB5` body in `in` from index `i` sent by `from`: a broadcast when `bc`, else one addressed to `me`.
 pub Option(CvPt) ex_b5(List(CgMsg) in, Int from, Int me, Bool bc, Int i) {
     if (i >= in.len()) { return None; }
     if (cg_sel(in[i], from, me, bc)) { return match b5_of(in[i]) { Some(b) => Some(b), None => ex_b5(in, from, me, bc, i + 1) }; }
     return ex_b5(in, from, me, bc, i + 1);
 }
 
+/// The first `PsM5` body in `in` from index `i` sent by `from`: a broadcast when `bc`, else one addressed to `me`.
 pub Option(LogstarProof) ex_m5(List(CgMsg) in, Int from, Int me, Bool bc, Int i) {
     if (i >= in.len()) { return None; }
     if (cg_sel(in[i], from, me, bc)) { return match m5_of(in[i]) { Some(b) => Some(b), None => ex_m5(in, from, me, bc, i + 1) }; }
     return ex_m5(in, from, me, bc, i + 1);
 }
 
+/// The first `PsB6` body in `in` from index `i` sent by `from`: a broadcast when `bc`, else one addressed to `me`.
 pub Option(PsB6R) ex_b6(List(CgMsg) in, Int from, Int me, Bool bc, Int i) {
     if (i >= in.len()) { return None; }
     if (cg_sel(in[i], from, me, bc)) { return match b6_of(in[i]) { Some(b) => Some(b), None => ex_b6(in, from, me, bc, i + 1) }; }
     return ex_b6(in, from, me, bc, i + 1);
 }
 
+/// The first `PsB7` body in `in` from index `i` sent by `from`: a broadcast when `bc`, else one addressed to `me`.
 pub Option(PsB7R) ex_b7(List(CgMsg) in, Int from, Int me, Bool bc, Int i) {
     if (i >= in.len()) { return None; }
     if (cg_sel(in[i], from, me, bc)) { return match b7_of(in[i]) { Some(b) => Some(b), None => ex_b7(in, from, me, bc, i + 1) }; }
     return ex_b7(in, from, me, bc, i + 1);
 }
 
+/// The first `PsA1` body in `in` from index `i` sent by `from`: a broadcast when `bc`, else one addressed to `me`.
 pub Option(PsA1R) ex_a1(List(CgMsg) in, Int from, Int me, Bool bc, Int i) {
     if (i >= in.len()) { return None; }
     if (cg_sel(in[i], from, me, bc)) { return match a1_of(in[i]) { Some(b) => Some(b), None => ex_a1(in, from, me, bc, i + 1) }; }
     return ex_a1(in, from, me, bc, i + 1);
 }
 
+/// The first `PsA2` body in `in` from index `i` sent by `from`: a broadcast when `bc`, else one addressed to `me`.
 pub Option(PsA2R) ex_a2(List(CgMsg) in, Int from, Int me, Bool bc, Int i) {
     if (i >= in.len()) { return None; }
     if (cg_sel(in[i], from, me, bc)) { return match a2_of(in[i]) { Some(b) => Some(b), None => ex_a2(in, from, me, bc, i + 1) }; }
     return ex_a2(in, from, me, bc, i + 1);
 }
 
+/// The first `SgB` body in `in` from index `i` sent by `from`: a broadcast when `bc`, else one addressed to `me`.
 pub Option(List(UInt(64))) ex_sg(List(CgMsg) in, Int from, Int me, Bool bc, Int i) {
     if (i >= in.len()) { return None; }
     if (cg_sel(in[i], from, me, bc)) { return match sg_of(in[i]) { Some(b) => Some(b), None => ex_sg(in, from, me, bc, i + 1) }; }
@@ -350,6 +388,7 @@ pub List(Int) cg_commit(Transcript tr, List(Int) rid, List(Int) decommit) {
     return tr_stream(tr_seed(t1), 0, 64);
 }
 
+/// Whether byte lists `a` and `b` are equal (variable time).
 pub Bool cg_bytes_eq(List(Int) a, List(Int) b) {
     if (a.len() != b.len()) { return false; }
     return cg_bytes_eq_at(a, b, 0);
@@ -361,6 +400,7 @@ Bool cg_bytes_eq_at(List(Int) a, List(Int) b, Int i) {
     return cg_bytes_eq_at(a, b, i + 1);
 }
 
+/// Whether any byte of `b` from index `i` on is nonzero.
 pub Bool cg_nonzero(List(Int) b, Int i) {
     if (i >= b.len()) { return false; }
     if (b[i] != 0) { return true; }
@@ -369,6 +409,7 @@ pub Bool cg_nonzero(List(Int) b, Int i) {
 
 // ─── Presigning: round 1 (start) ────────────────────────────────
 
+/// Presigning state after round 1: the secret k and gamma, their Paillier and ElGamal nonces, the presignature id and decommitment, and what was broadcast.
 pub type Ps1 = {
     CgCtx ctx;
     List(UInt(64)) gamma; List(UInt(64)) kshare;
@@ -378,8 +419,11 @@ pub type Ps1 = {
     List(CgMsg) out;
 };
 
+/// The context's own Paillier public key.
 pub PaillierPub cg_self_pail(CgCtx c) { return cg_pub_of(c, c.self).pail; }
 
+/// Presigning round 1: draws k and gamma, encrypts them as K and G, commits to k with ElGamal and to a presignature id.
+/// The messages are a broadcast plus an enc-elg proof for K to each other party.
 pub Ps1 ps_start(CgCtx c) {
     PaillierPub pk = cg_self_pail(c);
     List(UInt(64)) gamma = cg_scalar(c.seed, "ps/gamma");
@@ -420,8 +464,10 @@ List(CgMsg) ps1_msgs(CgCtx c, List(UInt(64)) kct, List(UInt(64)) gct, CvPt zl, C
 
 // ─── Round 2: verify round 1, run the MtAs ──────────────────────
 
+/// One party's round-1 broadcast as kept: K, G, the ElGamal commitment (zl, zm) and the presignature-id commitment.
 pub type P2Peer = { List(UInt(64)) k; List(UInt(64)) g; CvPt zl; CvPt zm; List(Int) commit; };
 
+/// Presigning state after round 2: every round-1 broadcast and our MtA shares and ciphertexts per other party.
 pub type Ps2 = {
     Ps1 prev;
     Map(Int, P2Peer) peers;                    // round-1 broadcasts, self included
@@ -460,6 +506,7 @@ Result(Map(Int, P2Peer), CgFail) ps2_all(Ps1 s, List(CgMsg) in, List(Int) others
     return ps2_all(s, in, others, i + 1, acc.insert(others[i], p));
 }
 
+/// Presigning round 2: verifies the round-1 broadcasts and enc-elg proofs, then runs the Delta and Chi MtAs with each other party.
 pub Result(Ps2, CgFail) ps_r2(Ps1 s, List(CgMsg) in) {
     CgCtx c = s.ctx;
     ListBuf(Int) ob = ListBuf();
@@ -481,6 +528,7 @@ List(List(UInt(64))) ps2_ds(Map(Int, List(UInt(64))) m, List(Int) others, Int i,
     return ps2_ds(m, others, i + 1, acc.push(m[others[i]] else { [] }));
 }
 
+/// Accumulator of round 2's MtAs: the beta shares and D ciphertexts per other party, and the messages so far.
 pub type Ps2Acc = {
     Map(Int, BnInt) db; Map(Int, BnInt) cb;
     Map(Int, List(UInt(64))) dd; Map(Int, List(UInt(64))) cd;
@@ -520,8 +568,10 @@ Ps2Acc ps2_mta(Ps1 s, Map(Int, P2Peer) peers, List(Int) others, Int i, Ps2Acc ac
 
 // ─── Round 3: verify round 2, finish the MtAs ───────────────────
 
+/// What round 3 keeps from one other party: its broadcast D ciphertexts and its MtA message to us.
 pub type P3Peer = { List(List(UInt(64))) delta_d; List(List(UInt(64))) chi_d; PsM3R m; };
 
+/// Presigning state after round 3: the round-2 messages, our Delta and Chi shares, the decrypted alphas, and the Chi ElGamal commitment.
 pub type Ps3 = {
     Ps2 prev;
     Map(Int, P3Peer) peers;                    // round-2 messages from each other party
@@ -591,6 +641,7 @@ Result(Map(Int, P3Peer), CgFail) ps3_all(Ps2 s, List(CgMsg) in, List(Int) others
     return ps3_all(s, in, others, i + 1, acc.insert(others[i], p));
 }
 
+/// Running sums of round 3: the Delta and Chi shares so far, and the decrypted alpha per other party.
 pub type Ps3Sums = { BnInt delta; BnInt chi; Map(Int, BnInt) da; Map(Int, BnInt) ca; };
 
 Result(Ps3Sums, CgFail) ps3_sums(Ps2 s, Map(Int, P3Peer) peers, List(Int) others, Int i, Ps3Sums acc) {
@@ -613,6 +664,7 @@ Result(Ps3Sums, CgFail) ps3_sums(Ps2 s, Map(Int, P3Peer) peers, List(Int) others
     };
 }
 
+/// Presigning round 3: verifies the round-2 messages, decrypts the MtA shares, and broadcasts our Delta share and Chi commitment.
 pub Result(Ps3, CgFail) ps_r3(Ps2 s, List(CgMsg) in) {
     Ps1 s1 = s.prev;
     CgCtx c = s1.ctx;
@@ -634,6 +686,7 @@ pub Result(Ps3, CgFail) ps_r3(Ps2 s, List(CgMsg) in) {
 
 // ─── Round 4: verify round 3; commit to Gamma ───────────────────
 
+/// Presigning state after round 4: every round-3 broadcast and our Gamma share point.
 pub type Ps4 = {
     Ps3 prev;
     Map(Int, PsB4R) b4;                        // every party's round-3 broadcast, self included
@@ -653,6 +706,7 @@ Result(Map(Int, PsB4R), CgFail) ps4_all(Ps3 s, List(CgMsg) in, List(Int) others,
     };
 }
 
+/// Presigning round 4: checks the round-3 broadcasts, then broadcasts our Gamma share with a log* proof to each other party.
 pub Result(Ps4, CgFail) ps_r4(Ps3 s, List(CgMsg) in) {
     Ps1 s1 = s.prev.prev;
     CgCtx c = s1.ctx;
@@ -682,6 +736,7 @@ List(CgMsg) ps4_proofs(Ps3 s, CvPt big_gamma, List(Int) others, Int i, ListBuf(C
 
 // ─── Round 5: verify round 4; prove the Delta share ─────────────
 
+/// Presigning state after round 5: every Gamma share, their sum, and our Delta share point.
 pub type Ps5 = {
     Ps4 prev;
     Map(Int, CvPt) big_gammas;                 // every party's Gamma share
@@ -719,6 +774,7 @@ CvPt ps_sum_pts(List(Int) ids, Map(Int, CvPt) m, Int i, CvPt acc) {
     return ps_sum_pts(ids, m, i + 1, cv_add(acc, m[ids[i]] else { cv_inf() }));
 }
 
+/// Presigning round 5: verifies the Gamma shares with their log* proofs, sums Gamma, and proves our Delta share k Gamma.
 pub Result(Ps5, CgFail) ps_r5(Ps4 s, List(CgMsg) in) {
     Ps1 s1 = s.prev.prev.prev;
     CgCtx c = s1.ctx;
@@ -739,6 +795,7 @@ pub Result(Ps5, CgFail) ps_r5(Ps4 s, List(CgMsg) in) {
 
 // ─── Round 6: verify round 5; compute R, prove S ────────────────
 
+/// Presigning state after round 6: every Delta share point, Delta and its inverse, R, our S share, and each party's Delta share point times Delta^-1.
 pub type Ps6 = {
     Ps5 prev;
     Map(Int, CvPt) big_deltas;
@@ -768,6 +825,8 @@ Result(Map(Int, CvPt), CgFail) ps6_check(Ps5 s, CgCtx c, Int j, PsB6R b, List(In
     return ps6_all(s, in, others, i + 1, acc.insert(j, b.big_delta));
 }
 
+/// Presigning round 6: verifies the round-5 broadcasts, computes Delta and R = Delta^-1 Gamma, and proves our S share.
+/// Fails when Delta is zero or the Delta share points do not add up to Delta G.
 pub Result(Ps6, CgFail) ps_r6(Ps5 s, List(CgMsg) in) {
     Ps1 s1 = s.prev.prev.prev.prev;
     Ps3 s3 = s.prev.prev;
@@ -808,6 +867,7 @@ Map(Int, CvPt) ps6_rbar(List(Int) ids, Map(Int, CvPt) bd, List(UInt(64)) dinv, I
 
 // ─── Round 7: verify round 6; finish the presignature ───────────
 
+/// The end of presigning: the presignature and the messages to send.
 pub type PsDone = { CgPresig presig; List(CgMsg) out; };
 
 List(Int) cg_xor_ids(List(List(Int)) ids, Int i, List(Int) acc) {
@@ -815,6 +875,7 @@ List(Int) cg_xor_ids(List(List(Int)) ids, Int i, List(Int) acc) {
     return cg_xor_ids(ids, i + 1, cg_xor(acc, ids[i], 0, ListBuf()));
 }
 
+/// The bytewise XOR of `a` and `b` from index `i`, appended to `acc`; `b` must be at least as long as `a`.
 pub List(Int) cg_xor(List(Int) a, List(Int) b, Int i, ListBuf(Int) acc) {
     if (i >= a.len()) { return acc.finish(); }
     return cg_xor(a, b, i + 1, acc.push(a[i] ^ b[i]));
@@ -866,6 +927,8 @@ List(List(Int)) ps7_ids(List(Int) ids, Map(Int, PsB7R) bs, List(Int) mine, Int s
     return ps7_ids(ids, bs, mine, self, i + 1, acc.push(p));
 }
 
+/// Presigning round 7: verifies the round-6 broadcasts and finishes the presignature.
+/// Fails unless the S shares add up to the public key; emits our signature share when the context has a digest.
 pub Result(PsDone, CgFail) ps_r7(Ps6 s, List(CgMsg) in) {
     Ps1 s1 = s.prev.prev.prev.prev.prev;
     Ps3 s3 = s.prev.prev.prev;
@@ -888,6 +951,7 @@ CvPt ps7_sum(List(CvPt) pts, Int i, CvPt acc) {
     return ps7_sum(pts, i + 1, cv_add(acc, pts[i]));
 }
 
+/// Thirty-two zero bytes.
 pub List(Int) cg_zero32() { return bn_to_be([], 32); }
 
 // ─── Signing ────────────────────────────────────────────────────
@@ -897,6 +961,9 @@ pub List(Int) cg_zero32() { return bn_to_be([], 32); }
 /// shares are inconsistent with the presignature.
 pub type CgSig = { CvPt r; List(UInt(64)) s; };
 
+/// Combines the signature shares (ours and the others') into a signature,
+/// checking it under the public key. On failure, names the parties whose
+/// shares are inconsistent with the presignature.
 pub Result(CgSig, CgFail) sg_finish(CgCtx c, CgPresig pre, List(CgMsg) in) {
     List(Int) ids = c.ids;
     List(List(UInt(64))) shares = sg_collect(c, pre, in, ids, 0, ListBuf());
@@ -913,14 +980,14 @@ List(List(UInt(64))) sg_collect(CgCtx c, CgPresig pre, List(CgMsg) in, List(Int)
 
 // ─── Long-term configuration and session setup ──────────────────
 
-/// What every party knows about party `id` after key generation.
 //@ serial
+/// What every party knows about party `id` after key generation.
 pub type CgPublicCfg = { Int id; CvPt ecdsa; CvPt elgamal; List(UInt(64)) n; Pedersen ped; };
 
+//@ serial
 /// A party's configuration: its secret share and key material, and the public
 /// data of every party. `threshold` is the degree of the sharing polynomial:
 /// threshold + 1 parties sign.
-//@ serial
 pub type CgConfig = {
     Int id; Int threshold;
     List(UInt(64)) ecdsa;             // the secret share of the root key
@@ -930,6 +997,8 @@ pub type CgConfig = {
     List(CgPublicCfg) public;
 };
 
+/// Finds party `id`'s public configuration in `ps`, searching from index `i`.
+/// Returns an entry with id 0 and empty fields when there is none.
 pub CgPublicCfg cg_cfg_pub(List(CgPublicCfg) ps, Int id, Int i) {
     if (i >= ps.len()) { return CgPublicCfg {.id = 0, .ecdsa = cv_inf(), .elgamal = cv_inf(), .n = [], .ped = Pedersen {.n = [], .s = [], .t = []}}; }
     if (ps[i].id == id) { return ps[i]; }
@@ -999,6 +1068,7 @@ pub Option(CgCtx) cg_ctx(CgConfig cfg, List(Int) ids, List(Int) session_id, List
 // proofs against the ciphertexts everyone saw. From the openings each
 // party's Delta share is recomputed and compared with the one it broadcast.
 
+/// The state of abort 1: the round-5 state, our abort-1 broadcast, and the messages to send.
 pub type PsAb1 = { Ps5 prev; PsA1R mine; List(CgMsg) out; };
 
 P3Peer ps3_none() {
@@ -1136,6 +1206,7 @@ pub CgFail ps_abort1_blame(PsAb1 a, List(CgMsg) in) {
 // openings give: Y-hat_j + k_j X_j + sum over l != j of
 // (alpha_jl G + k_l X_j - alpha_lj G).
 
+/// The state of abort 2: the round-6 state, our abort-2 broadcast, and the messages to send.
 pub type PsAb2 = { Ps6 prev; PsA2R mine; List(CgMsg) out; };
 
 List(UInt(64)) a2_chi_ct(Ps6 s, Int from, Int to) {
@@ -1228,7 +1299,8 @@ PsA2R a2_none() {
 
 BnInt a2_plain(PsA2R m, Int pos) { return if (pos < 0 || pos >= m.chi.len()) { zi_zero() } else { m.chi[pos].plain }; }
 
-// (the sum of every k, the sum over l != j of alpha_jl - alpha_lj)
+/// Abort-2 sums for one party j: the sum of every opened k, and the sum over
+/// l != j of alpha_jl - alpha_lj.
 pub type A2Sums = { BnInt k; BnInt a; };
 
 A2Sums a2_sums(CgCtx c, Map(Int, PsA2R) ms, Int j, Int i, A2Sums acc) {

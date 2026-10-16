@@ -1,0 +1,104 @@
+// Borrowed element reads (lo_borrows) of records with a list field: the
+// record is rewritten in place, its list field frozen at the write-back.
+// Every case prints what value semantics say.
+
+type Pk = { Int a; List(Int) d; };
+
+Pk set_a(Pk p, Int a) { return Pk {.a = a, .d = p.d}; }
+Pk set_d(Pk p, List(Int) d) { return Pk {.a = p.a, .d = d}; }
+
+List(Pk) mk(Int n, Int i, ListBuf(Pk) acc) {
+    if (i >= n) { return acc.finish(); }
+    return mk(n, i + 1, acc.push(Pk {.a = i, .d = [i, i * 10]}));
+}
+
+Str fmt(List(Pk) xs) { return fmt_from(xs, 0, ""); }
+Str fmt_from(List(Pk) xs, Int i, Str acc) {
+    if (i >= xs.len()) { return acc; }
+    return fmt_from(xs, i + 1, acc + f"{xs[i].a}:{xs[i].d[0]},{xs[i].d[1]} ");
+}
+
+List(Pk) same(List(Pk) xs, Int i) {
+    Pk t = xs[i];
+    return xs.with(i, set_a(t, t.a + 100));
+}
+
+// A new list in the field (the element's own list grown in the chain).
+List(Pk) newd(List(Pk) xs, Int i) {
+    Pk t = xs[i];
+    List(Int) d = t.d.with(0, 77);
+    return xs.with(i, set_d(t, d));
+}
+
+// One record in two slots.
+Str dup(Pk p) {
+    List(Pk) xs = [p, p];
+    return fmt(same(xs, 0));
+}
+
+// Two records sharing one list: a new list for one leaves the other's.
+Str shared_list(List(Int) d) {
+    List(Pk) xs = [Pk {.a = 1, .d = d}, Pk {.a = 2, .d = d}];
+    return fmt(newd(xs, 0)) + "| " + fmt(xs);
+}
+
+// A slice taken before holds the old records.
+Str sliced(List(Pk) xs, Int i) {
+    List(Pk) ys = xs[0..2];
+    List(Pk) zs = newd(same(xs, i), i);
+    return fmt(ys) + "| " + fmt(zs);
+}
+
+// A record read out and kept, then its slot rewritten.
+Str kept(List(Pk) xs, Int i) {
+    Pk k = xs[i];
+    List(Pk) ys = newd(same(xs, i), i);
+    return f"{k.a}:{k.d[0]} | " + fmt(ys);
+}
+
+// The field list read out and kept, then the slot rewritten.
+Str kept_list(List(Pk) xs, Int i) {
+    List(Int) d = xs[i].d;
+    List(Pk) ys = newd(xs, i);
+    List(Int) d2 = d.with(1, 55);
+    return f"{d[0]},{d[1]} {d2[1]} | " + fmt(ys);
+}
+
+// Fields read after the chain consumed the record.
+Str late(List(Pk) xs, Int i) {
+    Pk t = xs[i];
+    Pk t2 = set_a(t, 900);
+    List(Pk) ys = xs.with(i, t2);
+    return f"{t.a} {t.d[1]} | " + fmt(ys);
+}
+
+// Many rounds in a loop region: old records rewritten, new lists stored.
+List(Pk) rounds(List(Pk) xs, Int k) {
+    if (k == 0) { return xs; }
+    List(Pk) ys = newd(same(xs, k % 3), k % 3);
+    return rounds(ys, k - 1);
+}
+
+// A second holder of the list value sees no rewrite.
+Str held(List(Pk) base, Int i) {
+    List(Pk) xs = base.with(0, Pk {.a = 9, .d = [9, 9]});
+    List(Pk) keep = xs;
+    List(Pk) ys = newd(same(xs, i), i);
+    return fmt(keep) + "| " + fmt(ys);
+}
+
+Int main() {
+    Int n = rt 3;
+    Int i = rt 1;
+    println(fmt(same(mk(n, 0, ListBuf()), i)));
+    println(fmt(newd(mk(n, 0, ListBuf()), i)));
+    println(dup(Pk {.a = 7, .d = [7, 8]}));
+    println(shared_list([rt 4, 5]));
+    println(sliced(mk(n, 0, ListBuf()), i));
+    println(kept(mk(n, 0, ListBuf()), i));
+    println(kept_list(mk(n, 0, ListBuf()), i));
+    println(late(mk(n, 0, ListBuf()), i));
+    println(fmt(rounds(mk(n, 0, ListBuf()), rt 1000)));
+    println(held(mk(n, 0, ListBuf()), 0));
+    return 0;
+}

@@ -14,6 +14,7 @@ import "p256ops.resid";
 import "cggmp_hash.resid";
 
 //@ serial
+/// An affine P-256 point with natural-number coordinates; `inf` marks the identity.
 pub type CvPt = { Bool inf; List(UInt(64)) x; List(UInt(64)) y; };
 
 /// The group order n.
@@ -22,6 +23,7 @@ pub List(UInt(64)) cv_n() { return bn_from_be(p256_to_be(p256_n())); }
 /// The field prime p.
 pub List(UInt(64)) cv_p() { return bn_from_be(p256_to_be(p256_p())); }
 
+/// The identity point (point at infinity).
 pub CvPt cv_inf() { return CvPt {.inf = true, .x = [], .y = []}; }
 
 UInt(576) cv_u(List(UInt(64)) x) { return p256_from_be(bn_to_be(x, 32)); }
@@ -55,12 +57,16 @@ pub CvPt cv_mul(List(UInt(64)) k, CvPt p) {
     return cv_of(pt_mul(cv_u(r), cv_aff(p)));
 }
 
+/// Adds two points.
 pub CvPt cv_add(CvPt a, CvPt b) { return cv_of(pt_add(cv_aff(a), cv_aff(b))); }
 
+/// Negates a point.
 pub CvPt cv_neg(CvPt a) { return cv_of(pt_neg(cv_aff(a))); }
 
+/// Subtracts point `b` from point `a`.
 pub CvPt cv_sub(CvPt a, CvPt b) { return cv_add(a, cv_neg(b)); }
 
+/// Whether two points are equal.
 pub Bool cv_eq(CvPt a, CvPt b) { return pt_eq(cv_aff(a), cv_aff(b)); }
 
 /// The 33-byte compressed encoding (33 zero bytes for the identity).
@@ -92,12 +98,16 @@ UInt(576) cv_b() { return 410583637251521421293261297800472684091144410159937255
 
 // ─── Scalars ────────────────────────────────────────────────────
 
+/// Adds two scalars mod n, reducing both first.
 pub List(UInt(64)) sc_nat_add(List(UInt(64)) a, List(UInt(64)) b) { return bn_modadd(bn_mod(a, cv_n()), bn_mod(b, cv_n()), cv_n()); }
 
+/// Subtracts `b` from `a` mod n, reducing both first.
 pub List(UInt(64)) sc_nat_sub(List(UInt(64)) a, List(UInt(64)) b) { return bn_modsub(bn_mod(a, cv_n()), bn_mod(b, cv_n()), cv_n()); }
 
+/// Multiplies two scalars mod n.
 pub List(UInt(64)) sc_nat_mul(List(UInt(64)) a, List(UInt(64)) b) { return bn_modmul(a, b, cv_n()); }
 
+/// Negates a scalar mod n.
 pub List(UInt(64)) sc_nat_neg(List(UInt(64)) a) { return bn_modsub([], bn_mod(a, cv_n()), cv_n()); }
 
 /// 1/a mod n (empty for a = 0).
@@ -119,6 +129,8 @@ pub List(UInt(64)) cv_x_scalar(CvPt p) { return if (p.inf) { [] } else { bn_mod(
 
 // ─── Transcript ─────────────────────────────────────────────────
 
+/// Appends a point's 33-byte encoding to a transcript under the domain "*curve.P256Point".
 pub Transcript tr_point(Transcript t, CvPt p) { return tr_item(t, "*curve.P256Point", cv_enc(p)); }
 
+/// Appends a scalar as 32 big-endian bytes to a transcript under the domain "*curve.P256Scalar".
 pub Transcript tr_scalar(Transcript t, List(UInt(64)) s) { return tr_item(t, "*curve.P256Scalar", bn_to_be(s, 32)); }

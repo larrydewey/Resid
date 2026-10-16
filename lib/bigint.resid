@@ -5,6 +5,8 @@
 
 import "bignum.resid";
 
+/// A signed big integer: a sign `neg` and a natural-number magnitude `mag`.
+/// Zero is never negative.
 pub type BnInt = { Bool neg; List(UInt(64)) mag; };
 
 /// The integer with sign `neg` and magnitude `mag` (zero is made positive).
@@ -12,14 +14,19 @@ pub BnInt zi_make(Bool neg, List(UInt(64)) mag) {
     return BnInt {.neg = neg && mag.len() > 0, .mag = mag};
 }
 
+/// The non-negative integer with magnitude `x`.
 pub BnInt zi_from_nat(List(UInt(64)) x) { return BnInt {.neg = false, .mag = x}; }
 
+/// The integer zero.
 pub BnInt zi_zero() { return BnInt {.neg = false, .mag = []}; }
 
+/// Whether `a` is zero.
 pub Bool zi_is_zero(BnInt a) { return a.mag.len() == 0; }
 
+/// The negation of `a` (zero stays positive).
 pub BnInt zi_neg(BnInt a) { return zi_make(!a.neg, a.mag); }
 
+/// The absolute value of `a`.
 pub BnInt zi_abs(BnInt a) { return BnInt {.neg = false, .mag = a.mag}; }
 
 /// The integer `v` (any Int).
@@ -28,14 +35,17 @@ pub BnInt zi_from_int(Int v) {
     return zi_make(true, bn_from_u64(u64(0 - v)));
 }
 
+/// Adds two signed big integers.
 pub BnInt zi_add(BnInt a, BnInt b) {
     if (a.neg == b.neg) { return zi_make(a.neg, bn_add(a.mag, b.mag)); }
     if (bn_cmp(a.mag, b.mag) >= 0) { return zi_make(a.neg, bn_sub(a.mag, b.mag)); }
     return zi_make(b.neg, bn_sub(b.mag, a.mag));
 }
 
+/// Subtracts `b` from `a`.
 pub BnInt zi_sub(BnInt a, BnInt b) { return zi_add(a, zi_neg(b)); }
 
+/// Multiplies two signed big integers.
 pub BnInt zi_mul(BnInt a, BnInt b) { return zi_make(a.neg != b.neg, bn_mul(a.mag, b.mag)); }
 
 /// -1, 0 or 1.

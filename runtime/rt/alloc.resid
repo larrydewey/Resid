@@ -442,6 +442,17 @@ pub Int rt_rec_reuse_sc(Int old, Int size) {
     return st64(h, rec_tag() | (size << 1) | 1) * 0 + h + 8;
 }
 
+// rt_rec_reuse for a literal that stores back the same pointer in every
+// pointer field (`same`, computed by the caller): nothing younger enters
+// the record, so, as with scalars, a record of any region may be rewritten.
+@export("resid_rec_reuse_eq", "ptr(ptr,i64,i8)")
+@inline
+pub Int rt_rec_reuse_eq(Int old, Int size, Int same) {
+    if (ld64(old - 8) == (rec_tag() | (size << 1) | 1) && (same != 0 || young_fast(old))) { return old; }
+    Int h = rt_gmalloc(size + 8);
+    return st64(h, rec_tag() | (size << 1) | 1) * 0 + h + 8;
+}
+
 // ─── Copies that outlive a region ──────────────────────────────────────
 
 // A List(Str) copied, structure and strings, into the enclosing arena (or

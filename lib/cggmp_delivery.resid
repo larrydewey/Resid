@@ -12,6 +12,7 @@ Option(List(UInt(64))) cggmp_sig_of(CgMsg m) {
     return match bd { SgB(v) => Some(v), _ => None };
 }
 
+/// Counts the signature-share (SgB) messages in `msgs` from index `i` onward.
 pub Int cggmp_sg_count(List(CgMsg) msgs, Int i) {
     if (i >= msgs.len()) { return 0; }
     return cggmp_sg_count(msgs, i + 1) + match cggmp_sig_of(msgs[i]) { Some(_) => 1, None => 0 };
@@ -24,20 +25,22 @@ List(CgMsg) cggmp_initiator_route(List(CgMsg) msgs, Int self, Int initiator, Int
     return cggmp_initiator_route(msgs, self, initiator, i + 1, next);
 }
 
-// Keep SgB only when `self` is the initiator; every other body is relayed.
+/// Filters `msgs` for party `self`, keeping signature shares only for `initiator`.
+/// SgB messages are kept only when `self` is the initiator; every other body is relayed.
 pub List(CgMsg) cggmp_initiator_only(List(CgMsg) msgs, Int self, Int initiator) {
     return cggmp_initiator_route(msgs, self, initiator, 0, []);
 }
 
-// A defensive check for callers that must prove they dropped every signature
-// share from a non-initiator's input.
+/// Returns true when `msgs` holds no signature-share (SgB) message.
+/// A defensive check for callers that must prove they dropped every signature
+/// share from a non-initiator's input.
 pub Bool cggmp_no_sig_for_peer(List(CgMsg) msgs) {
     return cggmp_sg_count(msgs, 0) == 0;
 }
 
-// Enforce the delivery rule at the API boundary: only the initiator may run
-// sg_finish.  Peers still run their protocol rounds, but receive no final
-// signature and no signature shares.
+/// Assembles the final signature from `in`, refusing unless `c.self` is `initiator`.
+/// Enforces the delivery rule at the API boundary: peers still run their rounds
+/// but receive no final signature and no signature shares.
 pub Result(CgSig, CgFail) cggmp_initiator_finish(CgCtx c, CgPresig pre, List(CgMsg) in, Int initiator) {
     if (c.self != initiator) { return Err(cg_fail("only the initiator assembles the signature", [c.self])); }
     return sg_finish(c, pre, cggmp_initiator_only(in, c.self, initiator));

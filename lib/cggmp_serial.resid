@@ -2,8 +2,10 @@
 import "cggmp.resid";
 import "./serial.resid";
 
-// ── CgPublicCfg (line 855)
+// ── CgPublicCfg (line 985)
+/// The serialized field names of `CgPublicCfg`, in declaration order.
 pub List(Str) derive_cg_public_cfg_names() { return ["id", "ecdsa", "elgamal", "n", "ped"]; }
+/// Encodes a `CgPublicCfg` through the encoder `s`.
 @needs(Encoder(F))
 pub Result(F, SerialError) derive_cg_public_cfg_encode(CgPublicCfg v, F s) {
     Int n = 5;
@@ -16,6 +18,7 @@ pub Result(F, SerialError) derive_cg_public_cfg_encode(CgPublicCfg v, F s) {
     return write_struct_end(s5);
 }
 Encode(CgPublicCfg, F) = derive_cg_public_cfg_encode;
+/// Decodes a `CgPublicCfg` from the decoder `s`, with the input left over.
 @needs(Decoder(F))
 pub Result(Parsed(CgPublicCfg, F), SerialError) derive_cg_public_cfg_decode(F s) {
     F s0 = read_struct_begin(s, "CgPublicCfg", derive_cg_public_cfg_names())?;
@@ -49,8 +52,10 @@ Result(Parsed(CgPublicCfg, F), SerialError) derive_cg_public_cfg_done(F s, Optio
 }
 Decode(CgPublicCfg, F) = derive_cg_public_cfg_decode;
 
-// ── CgConfig (line 861)
+// ── CgConfig (line 991)
+/// The serialized field names of `CgConfig`, in declaration order.
 pub List(Str) derive_cg_config_names() { return ["id", "threshold", "ecdsa", "elgamal", "p", "q", "rid", "chain_key", "public"]; }
+/// Encodes a `CgConfig` through the encoder `s`.
 @needs(Encoder(F))
 pub Result(F, SerialError) derive_cg_config_encode(CgConfig v, F s) {
     Int n = 9;
@@ -67,6 +72,7 @@ pub Result(F, SerialError) derive_cg_config_encode(CgConfig v, F s) {
     return write_struct_end(s9);
 }
 Encode(CgConfig, F) = derive_cg_config_encode;
+/// Decodes a `CgConfig` from the decoder `s`, with the input left over.
 @needs(Decoder(F))
 pub Result(Parsed(CgConfig, F), SerialError) derive_cg_config_decode(F s) {
     F s0 = read_struct_begin(s, "CgConfig", derive_cg_config_names())?;

@@ -26,6 +26,7 @@ Option(List(BnInt)) zp_drop(ListBuf(BnInt) acc) {
 // For the prover's N = p q and the verifier's Pedersen parameters, p and q
 // are each below 2^(l+epsilon) sqrt(N) (so neither is small).
 
+/// A no-small-factors proof: commitments P, Q, A, B, T, sigma and responses z1, z2, w1, w2, v.
 pub type FacProof = {
     List(UInt(64)) p; List(UInt(64)) q; List(UInt(64)) a; List(UInt(64)) b; List(UInt(64)) t;
     BnInt sigma; BnInt z1; BnInt z2; BnInt w1; BnInt w2; BnInt v;
@@ -89,6 +90,7 @@ FacProof fac_prove_with(List(UInt(64)) p, List(UInt(64)) q, Pedersen aux, Transc
 //
 // K = Enc_N(k; rho) with k in +-2^l: the prover knows such k and rho.
 
+/// An enc proof: commitments S, A (a ciphertext), C and responses z1, z2, z3.
 pub type EncProof = {
     List(UInt(64)) s; List(UInt(64)) a; List(UInt(64)) c;   // commitments S, A (a ciphertext), C
     BnInt z1; List(UInt(64)) z2; BnInt z3;
@@ -127,7 +129,7 @@ pub Option(EncProof) enc_prove(Pedersen aux, PaillierPub pk, List(UInt(64)) k_ct
     };
 }
 
-// Bytes the samples of `bits` use from the stream.
+/// Returns the stream bytes the samples of `bits` use, from index `i` on, added to `acc`.
 pub Int enc_used(List(Int) bits, Int i, Int acc) {
     if (i >= bits.len()) { return acc; }
     return enc_used(bits, i + 1, acc + bits[i] / 8 + 1);
@@ -155,7 +157,8 @@ BnInt zp_e_int(Transcript t) { return zk_stream_pm(tr_seed(t), 0, zk_l()).value;
 // e as a scalar: 32 stream bytes reduced mod n (Taurus's sample.Scalar).
 List(UInt(64)) zp_e_scalar(Transcript t) { return sc_of_bytes(tr_stream(tr_seed(t), 0, 32)); }
 
-// A scalar drawn from `rnd` at `pos` (32 bytes reduced mod n).
+/// A scalar drawn from a random byte stream, with the position after it.
+/// The scalar is 32 bytes reduced mod the group order n.
 pub type ZpSc = { List(UInt(64)) value; Int next; };
 
 Option(ZpSc) zp_draw_scalar(List(Int) rnd, Int pos) {
@@ -190,9 +193,10 @@ Int zp_ln() { return zk_l() + zk_bits_n(); }
 
 Int zp_lepsn() { return zk_l() + zk_eps() + zk_bits_n(); }
 
-// Transcript writers for an ElGamal ciphertext and a Schnorr commitment.
+/// Writes the ElGamal ciphertext (`l`, `m`) to transcript `t`.
 pub Transcript tr_elgamal(Transcript t, CvPt l, CvPt m) { return tr_item(t, "ElGamal Ciphertext", cv_enc(l).concat(cv_enc(m))); }
 
+/// Writes the Schnorr commitment point `c` to transcript `t`.
 pub Transcript tr_schnorr_commitment(Transcript t, CvPt c) { return tr_item(t, "Schnorr Commitment", cv_enc(c)); }
 
 // ─── Affine operation with a group commitment (aff-g) ───────────
@@ -200,11 +204,13 @@ pub Transcript tr_schnorr_commitment(Transcript t, CvPt c) { return tr_item(t, "
 // Dv = (x ⊙ Kv) ⊕ Enc_verifier(y; s) and Fp = Enc_prover(y; r), with
 // Xp = x G, x in +-2^l and y in +-2^l'.
 
+/// Public values of aff-g: ciphertexts Kv, Dv, Fp, point Xp, both Paillier keys and `aux`.
 pub type AffgPublic = {
     List(UInt(64)) kv; List(UInt(64)) dv; List(UInt(64)) fp; CvPt xp;
     PaillierPub prover; PaillierPub verifier; Pedersen aux;
 };
 
+/// An aff-g proof: commitments A, Bx, By, E, S, F, T and responses z1-z4, w, wy.
 pub type AffgProof = {
     List(UInt(64)) a; CvPt bx; List(UInt(64)) by;
     List(UInt(64)) e; List(UInt(64)) s; List(UInt(64)) f; List(UInt(64)) t;
@@ -219,6 +225,7 @@ BnInt affg_challenge(Transcript tr, AffgPublic p, List(UInt(64)) a, CvPt bx, Lis
     return zp_e_int(t4);
 }
 
+/// Whether `pf` proves the aff-g relation for `p`, bound to `tr`.
 pub Bool affg_verify(AffgPublic p, AffgProof pf, Transcript tr) {
     if (!pedersen_valid(p.aux)) { return false; }
     if (!pa_ct_ok(p.verifier, pf.a) || !pa_ct_ok(p.prover, pf.by)) { return false; }
@@ -245,6 +252,8 @@ pub Bool affg_verify(AffgPublic p, AffgProof pf, Transcript tr) {
 /// nonce r of Fp.
 pub type AffgSecret = { BnInt x; BnInt y; List(UInt(64)) s; List(UInt(64)) r; };
 
+/// A proof for `p` from the secrets `sec`, with randomness from `rnd`.
+/// Returns None when `rnd` is too short.
 pub Option(AffgProof) affg_prove(AffgPublic p, AffgSecret sec, Transcript tr, List(Int) rnd) {
     // alpha, beta, gamma, m, delta, mu, then units rho (verifier N) and rhoY (prover N).
     List(Int) bits = [zp_leps(), zp_lpeps(), zp_lepsn(), zp_ln(), zp_lepsn(), zp_ln()];
@@ -280,11 +289,13 @@ AffgProof affg_with(AffgPublic p, AffgSecret sec, Transcript tr, List(BnInt) d, 
 // As aff-g, but x is committed as a Paillier ciphertext Xp under the
 // prover's key instead of a group element.
 
+/// Public values of aff-p: ciphertexts Kv, Dv, Fp, Xp, both Paillier keys and `aux`.
 pub type AffpPublic = {
     List(UInt(64)) kv; List(UInt(64)) dv; List(UInt(64)) fp; List(UInt(64)) xp;
     PaillierPub prover; PaillierPub verifier; Pedersen aux;
 };
 
+/// An aff-p proof: commitments A, Bx, By, E, S, F, T and responses z1-z4, w, wx, wy.
 pub type AffpProof = {
     List(UInt(64)) a; List(UInt(64)) bx; List(UInt(64)) by;
     List(UInt(64)) e; List(UInt(64)) s; List(UInt(64)) f; List(UInt(64)) t;
@@ -299,6 +310,7 @@ BnInt affp_challenge(Transcript tr, AffpPublic p, List(UInt(64)) a, List(UInt(64
     return zp_e_int(t4);
 }
 
+/// Whether `pf` proves the aff-p relation for `p`, bound to `tr`.
 pub Bool affp_verify(AffpPublic p, AffpProof pf, Transcript tr) {
     if (!pa_ct_ok(p.verifier, pf.a) || !pa_ct_ok(p.prover, pf.bx) || !pa_ct_ok(p.prover, pf.by)) { return false; }
     if (!zk_valid_mod_n(pf.wx, p.prover.n) || !zk_valid_mod_n(pf.wy, p.prover.n) || !zk_valid_mod_n(pf.w, p.verifier.n)) { return false; }
@@ -319,6 +331,8 @@ pub Bool affp_verify(AffpPublic p, AffpProof pf, Transcript tr) {
 /// Secrets: x, y, the nonce s of Dv's encryption, rx the nonce of Xp, r the nonce of Fp.
 pub type AffpSecret = { BnInt x; BnInt y; List(UInt(64)) s; List(UInt(64)) rx; List(UInt(64)) r; };
 
+/// A proof for `p` from the secrets `sec`, with randomness from `rnd`.
+/// Returns None when `rnd` is too short.
 pub Option(AffpProof) affp_prove(AffpPublic p, AffpSecret sec, Transcript tr, List(Int) rnd) {
     List(Int) bits = [zp_leps(), zp_lpeps(), zp_lepsn(), zp_ln(), zp_lepsn(), zp_ln()];
     return match zp_draws(rnd, 0, bits, 0, ListBuf()) {
@@ -353,8 +367,10 @@ AffpProof affp_with(AffpPublic p, AffpSecret sec, Transcript tr, List(BnInt) d, 
 //
 // C = Enc(x; rho) and X = x G (G a given base), with x in +-2^l.
 
+/// Public values of the log* proof: ciphertext C, point X, base G, the prover's key and `aux`.
 pub type LogstarPublic = { List(UInt(64)) c; CvPt x; CvPt g; PaillierPub prover; Pedersen aux; };
 
+/// A log* proof: commitments S, A, Y, D and responses z1, z2, z3.
 pub type LogstarProof = {
     List(UInt(64)) s; List(UInt(64)) a; CvPt y; List(UInt(64)) d;
     BnInt z1; List(UInt(64)) z2; BnInt z3;
@@ -366,6 +382,7 @@ BnInt logstar_challenge(Transcript tr, LogstarPublic p, List(UInt(64)) s, List(U
     return zp_e_int(t2);
 }
 
+/// Whether `pf` proves that C encrypts the discrete log of X to base G, bound to `tr`.
 pub Bool logstar_verify(LogstarPublic p, LogstarProof pf, Transcript tr) {
     if (!pa_ct_ok(p.prover, pf.a) || pf.y.inf || !zk_valid_mod_n(pf.z2, p.prover.n)) { return false; }
     if (!zp_in(pf.z1, zp_leps())) { return false; }
@@ -377,6 +394,8 @@ pub Bool logstar_verify(LogstarPublic p, LogstarProof pf, Transcript tr) {
     return cv_eq(cv_mul(sc_of_zi(pf.z1), p.g), cv_add(cv_mul(sc_of_zi(e), p.x), pf.y));
 }
 
+/// A proof that `p.c` = Enc(`x`; `rho`) and X = `x` G, with randomness from `rnd`.
+/// Returns None when `rnd` is too short.
 pub Option(LogstarProof) logstar_prove(LogstarPublic p, BnInt x, List(UInt(64)) rho, Transcript tr, List(Int) rnd) {
     List(Int) bits = [zp_leps(), zp_ln(), zp_lepsn()];
     return match zp_draws(rnd, 0, bits, 0, ListBuf()) {
@@ -404,8 +423,10 @@ LogstarProof logstar_with(LogstarPublic p, BnInt x, List(UInt(64)) rho, Transcri
 
 // ─── Paillier encryption of an ElGamal-encrypted value (enc-elg) ─
 
+/// Public values of the enc-elg proof: ciphertext C, points A, B, X, the prover's key and `aux`.
 pub type EncelgPublic = { List(UInt(64)) c; CvPt a; CvPt b; CvPt x; PaillierPub prover; Pedersen aux; };
 
+/// An enc-elg proof: commitments S, D, Y, Z, T and responses z1, w, z2, z3.
 pub type EncelgProof = {
     List(UInt(64)) s; List(UInt(64)) d; CvPt y; CvPt z; List(UInt(64)) t;
     BnInt z1; List(UInt(64)) w; List(UInt(64)) z2; BnInt z3;
@@ -417,6 +438,8 @@ BnInt encelg_challenge(Transcript tr, EncelgPublic p, List(UInt(64)) s, List(UIn
     return zp_e_int(t2);
 }
 
+/// Whether `pf` proves that Paillier ciphertext C and ElGamal pair (A, B, X) hide the same x, bound to `tr`.
+/// Also checks x is in +-2^(l+epsilon).
 pub Bool encelg_verify(EncelgPublic p, EncelgProof pf, Transcript tr) {
     if (!pa_ct_ok(p.prover, pf.d) || pf.w.len() == 0 || pf.y.inf || pf.z.inf || !zk_valid_mod_n(pf.z2, p.prover.n)) { return false; }
     if (!zp_in(pf.z1, zp_leps())) { return false; }
@@ -469,8 +492,10 @@ EncelgProof encelg_with(EncelgPublic p, BnInt x, List(UInt(64)) rho, List(UInt(6
 //
 // E = (L, M) = (lambda G, y G + lambda X), and Y = y H.
 
+/// Public values of the elog proof: the ciphertext (L, M), the key X, the base H and Y.
 pub type ElogPublic = { CvPt el; CvPt em; CvPt x; CvPt base; CvPt y; };
 
+/// An elog proof: commitment points A, N, B and scalar responses z, u.
 pub type ElogProof = { CvPt a; CvPt n; CvPt b; List(UInt(64)) z; List(UInt(64)) u; };
 
 List(UInt(64)) elog_challenge(Transcript tr, ElogPublic p, CvPt a, CvPt n, CvPt b) {
@@ -478,6 +503,7 @@ List(UInt(64)) elog_challenge(Transcript tr, ElogPublic p, CvPt a, CvPt n, CvPt 
     return zp_e_scalar(tr_point(tr_point(tr_point(t1, a), n), b));
 }
 
+/// Whether `pf` proves that ElGamal ciphertext (L, M) opens to y with Y = y H, bound to `tr`.
 pub Bool elog_verify(ElogPublic p, ElogProof pf, Transcript tr) {
     if (pf.a.inf || pf.n.inf || pf.b.inf || pf.z.len() == 0 || pf.u.len() == 0) { return false; }
     List(UInt(64)) e = elog_challenge(tr, p, pf.a, pf.n, pf.b);
@@ -507,14 +533,18 @@ ElogProof elog_with(ElogPublic p, List(UInt(64)) y, List(UInt(64)) lam, Transcri
 
 // ─── Equality of discrete logs (log) ────────────────────────────
 
+/// Public points of the log proof: the second base H and X = a G, Y = a H.
 pub type LogPublic = { CvPt h; CvPt x; CvPt y; };
 
+/// An equal-discrete-log proof: commitments A, B, C and scalar responses z1, z2.
 pub type LogProof = { CvPt a; CvPt b; CvPt c; List(UInt(64)) z1; List(UInt(64)) z2; };
 
 List(UInt(64)) log_challenge(Transcript tr, LogPublic p, CvPt a, CvPt b, CvPt c) {
     return zp_e_scalar(tr_point(tr_point(tr_point(tr_point(tr_point(tr_point(tr, p.h), p.x), p.y), a), b), c));
 }
 
+/// Whether `pf` proves that X = a G and Y = a H share one discrete log, bound to `tr`.
+/// It also proves knowledge of b with H = b G.
 pub Bool log_verify(LogPublic p, LogProof pf, Transcript tr) {
     if (pf.a.inf || pf.b.inf || pf.c.inf || pf.z1.len() == 0 || pf.z2.len() == 0) { return false; }
     List(UInt(64)) e = log_challenge(tr, p, pf.a, pf.b, pf.c);
@@ -546,6 +576,7 @@ LogProof log_with(LogPublic p, List(UInt(64)) a, List(UInt(64)) b, Transcript tr
 //
 // For X = x G' (G' a base point): commitment C = a G', response z = e x + a.
 
+/// A Schnorr proof: the commitment point `c` and the scalar response `z`.
 pub type SchProof = { CvPt c; List(UInt(64)) z; };
 
 List(UInt(64)) sch_challenge(Transcript tr, CvPt c, CvPt x, CvPt g) {
@@ -553,6 +584,7 @@ List(UInt(64)) sch_challenge(Transcript tr, CvPt c, CvPt x, CvPt g) {
     return zp_e_scalar(tr_point(tr_point(tr_point(tr, c), x), g));
 }
 
+/// Whether `pf` proves knowledge of x with `x` = x `g`, bound to `tr`.
 pub Bool sch_verify(CvPt x, CvPt g, SchProof pf, Transcript tr) {
     if (pf.c.inf || pf.z.len() == 0 || x.inf) { return false; }
     List(UInt(64)) e = sch_challenge(tr, pf.c, x, g);
@@ -581,6 +613,7 @@ pub Option(SchProof) sch_prove(CvPt x_pub, CvPt g, List(UInt(64)) x, Transcript 
 // R = rho^N mod N^2: the prover knows rho. Used with a decrypted ciphertext to
 // show that the revealed plaintext is the right one (R = c (1 + N)^-m).
 
+/// An N-th root proof: the commitment `a` = Enc(0; alpha) and the response `z`.
 pub type NthProof = { List(UInt(64)) a; List(UInt(64)) z; };
 
 BnInt nth_challenge(Transcript tr, PaillierPub pk, List(UInt(64)) r, List(UInt(64)) a) {

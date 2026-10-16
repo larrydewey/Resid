@@ -2,8 +2,10 @@
 import "cggmp_curve.resid";
 import "./serial.resid";
 
-// ── CvPt (line 17)
+// ── CvPt (line 18)
+/// The serialized field names of `CvPt`, in declaration order.
 pub List(Str) derive_cv_pt_names() { return ["inf", "x", "y"]; }
+/// Encodes a `CvPt` through the encoder `s`.
 @needs(Encoder(F))
 pub Result(F, SerialError) derive_cv_pt_encode(CvPt v, F s) {
     Int n = 3;
@@ -14,6 +16,7 @@ pub Result(F, SerialError) derive_cv_pt_encode(CvPt v, F s) {
     return write_struct_end(s3);
 }
 Encode(CvPt, F) = derive_cv_pt_encode;
+/// Decodes a `CvPt` from the decoder `s`, with the input left over.
 @needs(Decoder(F))
 pub Result(Parsed(CvPt, F), SerialError) derive_cv_pt_decode(F s) {
     F s0 = read_struct_begin(s, "CvPt", derive_cv_pt_names())?;

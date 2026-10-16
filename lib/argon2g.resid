@@ -16,8 +16,8 @@
 import "word.resid";
 import "blake2bg.resid";
 
-// What Argon2 needs beyond Word64: the 32x32->64 multiply of BlaMka, and
-// publishing the previous block's first word for data-dependent addressing.
+/// What Argon2 needs beyond Word64 from a word type `W` over bytes `B`.
+/// The 32x32->64 multiply of BlaMka, and publishing the previous block's first word for data-dependent addressing.
 behavior Argon2Aux(W, B) {
     W a_mul32(W a, W b);                   // (a mod 2^32) * (b mod 2^32), a 64-bit word
     List(Int) a_publish8(List(B) xs);      // the first 8 bytes, public
@@ -278,7 +278,7 @@ List(List(B)) a2_fill_idx(List(List(B)) mem, Int p, Int q, Int seglen, Int t, In
     List(B) prev = if (j == 0) { mem[lane * q + q - 1] } else { mem[lane * q + j - 1] };
     Bool independent = pass == 0 && slice < 2;
     // The address block is regenerated every 128 entries.
-    List(Int) addr2 = if (independent && (idx % 128 == 0 || idx == 2 && pass == 0 && slice == 0 && addr.len() == 0)) {
+    List(Int) addr2 = if (independent && (idx % 128 == 0 || (idx == 2 && pass == 0 && slice == 0 && addr.len() == 0))) {
         a2_addr_block(pass, lane, slice, p * q, t, idx / 128 + 1)
     } else { addr };
     UInt(64) jw = if (independent) {

@@ -11,6 +11,8 @@
 import "word.resid";
 import "sha512g.resid";
 
+/// The sixteen-word BLAKE2b work vector, held as a record of words.
+/// A record rather than a list, since a secret 64-bit word may not sit in a list.
 pub type V16(W) = { W v0; W v1; W v2; W v3; W v4; W v5; W v6; W v7; W v8; W v9; W v10; W v11; W v12; W v13; W v14; W v15; };
 
 /// The eight-word BLAKE2b chaining value.
@@ -48,6 +50,8 @@ W b2_m(List(B) blk, Int base, Int i) {
     return b2_word(blk, base + i * 8, 7, zero);
 }
 
+/// Returns word `i` (0 to 15, public) of the work vector `v`.
+/// Any index above 15 reads word 15.
 @needs(Word64(W, B))
 pub W b2_get(V16(W) v, Int i) {
     if (i == 0) { return v.v0; } if (i == 1) { return v.v1; } if (i == 2) { return v.v2; } if (i == 3) { return v.v3; }
@@ -57,7 +61,8 @@ pub W b2_get(V16(W) v, Int i) {
     return v.v15;
 }
 
-// The record with word `i` replaced; i is public.
+/// Returns the work vector `v` with word `i` replaced by `w`.
+/// `i` is public; out-of-range indices change nothing.
 @needs(Word64(W, B))
 pub V16(W) b2_set(V16(W) v, Int i, W w) {
     return V16 {

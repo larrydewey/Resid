@@ -104,6 +104,26 @@ Str held(List(Pt) base, Int i) {
     return fmt(keep) + "| " + fmt(ys);
 }
 
+// Fields read after the chain consumed the record: read at the borrow
+// (lo_snap), so the old values.
+Str late(List(Pt) xs, Int i) {
+    Pt t = xs[i];
+    Pt t2 = bump(t, 800);
+    List(Pt) ys = xs.with(i, t2);
+    return f"{t.a} {t.b} {ys[i].a}";
+}
+
+// Consumed in a branch, read after it there; the other path returns the
+// list as it was.
+List(Pt) escape(List(Pt) xs, Int i, Bool c) {
+    Pt t = xs[i];
+    if (c) {
+        Pt t2 = bump(t, 900);
+        return xs.with(i, bump(t2, t.a + 900));
+    }
+    return xs;
+}
+
 @requires(args)
 Int main() {
     Int n = rt 4;
@@ -123,5 +143,8 @@ Int main() {
     println(dup(Pt {.a = 7, .b = 8}));
     println(held(mk(n, 0, ListBuf()), 0));
     println(fmt(same(same(same(mk(n, 0, ListBuf()), i), i), 0)));
+    println(late(mk(n, 0, ListBuf()), i));
+    println(fmt(escape(mk(n, 0, ListBuf()), i, args.count() > 0)));
+    println(fmt(escape(mk(n, 0, ListBuf()), i, args.count() > 5)));
     return 0;
 }

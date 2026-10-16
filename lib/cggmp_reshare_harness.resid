@@ -5,10 +5,12 @@
 
 import "cggmp_reshare.resid";
 
-// A new party in the harness keeps its secret key locally; only `pail` would
-// be published in a real announcement.
+/// A new party in the harness: its id and Paillier key pair.
+/// The harness keeps the secret key locally; only `pail` would be published
+/// in a real announcement.
 pub type RshHarnessPeer = { Int id; PaillierPub pail; PaillierSec sec; };
 
+/// The inputs of a harness re-share: old and new party ids, old shares, per-dealer randomness, new peers and seed.
 pub type RshHarness = {
     List(Int) old_ids; List(Int) new_ids;
     List(List(UInt(64))) old_shares;
@@ -17,11 +19,13 @@ pub type RshHarness = {
     List(Int) seed;
 };
 
+/// Appends to `acc` the public part (id and Paillier public key) of each peer from index `i` on.
 pub List(RshNewPeer) rsh_harness_publics(List(RshHarnessPeer) peers, Int i, List(RshNewPeer) acc) {
     if (i >= peers.len()) { return acc; }
     return rsh_harness_publics(peers, i + 1, acc.concat([RshNewPeer {.id = peers[i].id, .pail = peers[i].pail}]));
 }
 
+/// Runs round 1 (`rsh_d1`) for each old dealer from index `i` on, appending its message to `acc`.
 pub List(RshD1) rsh_harness_dealers(RshHarness h, List(RshNewPeer) pubs, Int i, List(RshD1) acc) {
     if (i >= h.old_ids.len()) { return acc; }
     RshD1 d = rsh_d1(h.old_ids[i], h.old_ids, h.old_shares[i], h.randoms[i], pubs, h.seed);
@@ -34,6 +38,8 @@ Result(RshHarnessPeer, Int) rsh_harness_find(List(RshHarnessPeer) peers, Int id,
     return rsh_harness_find(peers, id, i + 1);
 }
 
+/// Assembles the share of each new party from index `i` on out of the dealers' messages, appending to `acc`.
+/// Fails with Err(0) when a new id has no peer, or with the assembly's error.
 pub Result(List(List(UInt(64))), Int) rsh_harness_new(RshHarness h, List(RshD1) dealers, Int i, List(List(UInt(64))) acc) {
     if (i >= h.new_ids.len()) { return Ok(acc); }
     RshHarnessPeer peer = rsh_harness_find(h.peers, h.new_ids[i], 0)?;
@@ -41,7 +47,7 @@ pub Result(List(List(UInt(64))), Int) rsh_harness_new(RshHarness h, List(RshD1) 
     return rsh_harness_new(h, dealers, i + 1, acc.concat([share]));
 }
 
-// Run round 1 for all dealers, then assemble every new party's share.
+/// Runs round 1 for all dealers, then assembles every new party's share.
 pub Result(List(List(UInt(64))), Int) rsh_harness_run(RshHarness h) {
     List(RshNewPeer) pubs = rsh_harness_publics(h.peers, 0, []);
     List(RshD1) dealers = rsh_harness_dealers(h, pubs, 0, []);

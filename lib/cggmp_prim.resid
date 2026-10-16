@@ -10,10 +10,13 @@ import "paillier.resid";
 import "cggmp_hash.resid";
 import "cggmp_zk.resid";
 
-// internal/params
+/// The range parameter L in bits (256), as in Taurus internal/params.
 pub Int zk_l() { return 256; }
+/// The range parameter L' in bits (1280), as in Taurus internal/params.
 pub Int zk_lprime() { return 1280; }
+/// The slack parameter epsilon in bits (512), as in Taurus internal/params.
 pub Int zk_eps() { return 512; }
+/// The Paillier modulus size N in bits (2048), as in Taurus internal/params.
 pub Int zk_bits_n() { return 2048; }
 
 // ─── Interval samplers ──────────────────────────────────────────
@@ -29,6 +32,8 @@ pub BnInt zk_pm_of(List(Int) buf, Int bits) {
 /// The sample of `bits` bits from the stream `rnd` at `pos`; None past its end.
 pub type ZkPm = { BnInt value; Int next; };
 
+/// Draws a signed sample of `bits` bits from `rnd` at byte offset `pos`.
+/// Consumes bits / 8 + 1 bytes; returns None when `rnd` has too few left.
 pub Option(ZkPm) zk_draw_pm(List(Int) rnd, Int pos, Int bits) {
     Int n = bits / 8 + 1;
     if (pos + n > rnd.len()) { return None; }

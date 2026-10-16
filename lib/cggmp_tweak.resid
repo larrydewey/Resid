@@ -33,13 +33,15 @@ CgConfig cg_tweak_config_secret(CgConfig cfg, List(Int) ids, Int designated, Lis
     return CgConfig {.id = cfg.id, .threshold = cfg.threshold, .ecdsa = if (cfg.id == designated) { sc_nat_add(cfg.ecdsa, delta) } else { cfg.ecdsa }, .elgamal = cfg.elgamal, .p = cfg.p, .q = cfg.q, .rid = cfg.rid, .chain_key = cfg.chain_key, .public = cg_tweak_publics(cfg.public, designated, cv_mul_base(delta), 0, [])};
 }
 
-// The designated party builds its session with tau added to its own share.
+/// The tweaked session context for the designated party, from the secret tweak `tau`.
+/// The designated party builds its session with tau added to its own share.
 pub Option(CgCtx) cg_ctx_tweaked_secret(CgConfig cfg, List(Int) ids, Int designated, List(UInt(64)) tau, List(Int) session_id, List(Int) digest, List(Int) seed) {
     if (cg_index(ids, designated, 0) < 0) { return None; }
     return cg_ctx(cg_tweak_config_secret(cfg, ids, designated, tau), ids, session_id, digest, seed);
 }
 
-// Every other party uses only the public tau*G, never tau itself.
+/// The tweaked session context for every party but the designated one.
+/// Every other party uses only the public tau*G, never tau itself.
 pub Option(CgCtx) cg_ctx_tweaked_public(CgConfig cfg, List(Int) ids, Int designated, CvPt tau_g, List(Int) session_id, List(Int) digest, List(Int) seed) {
     if (cg_index(ids, designated, 0) < 0) { return None; }
     return cg_ctx(cg_tweak_config_public(cfg, ids, designated, tau_g), ids, session_id, digest, seed);

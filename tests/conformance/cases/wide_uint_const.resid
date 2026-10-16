@@ -1,0 +1,14 @@
+// Constants and shift counts on UInt(8192) and Int(4096): the range check of a
+// wide constant once built 2^8192 one bit at a time and ran out of memory.
+
+UInt(8192) top(UInt(8192) d) { return d >> 4095; }
+UInt(8192) high() { return ((UInt(8192)) 1) << 8191; }
+
+Int main() {
+    UInt(8192) ones = wrapping_usub((UInt(8192)) 0, (UInt(8192)) 1);
+    UInt(8192) t = top(ones);
+    println(f"{t == (ones >> 4095)} {top(high())}");
+    Int(4096) n = (Int(4096)) -12345678901234567890123456789;
+    println(f"{n}");
+    return 0;
+}

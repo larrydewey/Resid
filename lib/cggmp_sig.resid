@@ -9,6 +9,7 @@
 
 import "cggmp_curve.resid";
 
+/// A CGGMP presignature: the nonce point and each signer's shares of it.
 pub type CgPresig = {
     List(Int) id;                 // the presignature identifier (32 bytes)
     CvPt r;

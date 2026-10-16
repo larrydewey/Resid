@@ -139,7 +139,7 @@ Int run_take(Int k) {
     _ = rg_unlock();
     if (p == 0 && !fresh) { return rt_abort("region address space exhausted"); }
     _ = mem_take((1 << k) * rg_page());
-    _ = if (fresh && secret_mode()) { resid_raw_mlock(base + at * rg_page(), (1 << k) * rg_page()) } else { 0 };
+    _ = if (fresh && secret_mode()) { resid_raw_syscall(149, base + at * rg_page(), (1 << k) * rg_page(), 0, 0, 0, 0) } else { 0 };
     return if (p != 0) { p } else { base + at * rg_page() }; }
 
 // `bump` is the bump pointer of the region the page belonged to: on the
@@ -155,7 +155,11 @@ Int pages_give(Int p, Int k, Int bump) {
     Int used = if (bump > p && bump <= p + rg_page()) { bump - p } else { rg_page() };
     _ = if (cache && secret_mode()) { resid_raw_fill(p, 0, used) } else { 0 };
     if (cache) { return st64(p, ld64(c)) + st64(c, p) + st64(c + 8, ld64(c + 8) + 1); }
-    _ = resid_raw_syscall(28, p, (1 << k) * rg_page(), 4, 0, 0, 0);   // MADV_DONTNEED
+    // Secret mode locks its runs (run_take), and MADV_DONTNEED leaves a
+    // locked page as it is: zeroed here instead, up to the bump.
+    Int size = (1 << k) * rg_page();
+    _ = if (secret_mode()) { resid_raw_fill(p, 0, if (bump > p && bump <= p + size) { bump - p } else { size }) } else { 0 };
+    _ = resid_raw_syscall(28, p, size, 4, 0, 0, 0);   // MADV_DONTNEED
     _ = rg_dump(p, k, false);
     _ = mem_give((1 << k) * rg_page());
     Int head = rg_g() + 32 + k * 8;

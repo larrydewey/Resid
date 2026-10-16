@@ -254,9 +254,20 @@ GT lw_struct(LW w, Int id, List(Str) env, GT c) {
         if (fv.g.err != "") { return fv.g; }
         Int t1 = fv.g.tmp + 1;
         Str reg = f"%t{t1}";
-        // A record of scalars holds no pointer: rewritten at any age.
-        Str rfn = if (lw_all_scalar(w, fields)) { "@resid_rec_reuse_sc" } else { "@resid_rec_reuse" };
-        List(Str) ls = lw_fstores(reg, fv.st, 0, fv.g.lines.concat([reg + " = call ptr " + rfn + "(ptr " + srcreg + ", i64 " + size + ")"]));
+        // A record of scalars holds no pointer: rewritten at any age; so is
+        // one whose pointer fields all get back what they hold.
+        if (lw_all_scalar(w, fields)) {
+            List(Str) ls = lw_fstores(reg, fv.st, 0, fv.g.lines.concat([reg + " = call ptr @resid_rec_reuse_sc(ptr " + srcreg + ", i64 " + size + ")"]));
+            return GT {.pos = 0, .val = reg, .ty = sname, .cnt = 0, .err = "", .glines = fv.g.glines, .lines = ls, .tmp = t1, .lbl = fv.g.lbl, .tail = false};
+        }
+        // More compares than lw_eq_max() grow a small constructor past
+        // LLVM's inline threshold (AWFY Queens' set_rc): those keep the
+        // young test alone.
+        LSQ q = lw_same_ptrs(srcreg, reg, fv.st, 0, LSQ {.lines = [], .val = "", .n = 0});
+        Str sqv = if (q.n == 0 && q.val == "") { "1" } else { q.val };
+        Str rcall = if (q.n > lw_eq_max()) { "@resid_rec_reuse(ptr " + srcreg + ", i64 " + size + ")" } else { "@resid_rec_reuse_eq(ptr " + srcreg + ", i64 " + size + ", i8 " + sqv + ")" };
+        List(Str) ql = if (q.n > lw_eq_max()) { [] } else { q.lines };
+        List(Str) ls = lw_fstores(reg, fv.st, 0, fv.g.lines.concat(ql).concat([reg + " = call ptr " + rcall]));
         return GT {.pos = 0, .val = reg, .ty = sname, .cnt = 0, .err = "", .glines = fv.g.glines, .lines = ls, .tmp = t1, .lbl = fv.g.lbl, .tail = false};
     }
     Int t1 = c.tmp + 1;
@@ -266,6 +277,30 @@ GT lw_struct(LW w, Int id, List(Str) env, GT c) {
     LSF fv = lw_finits(w, id, 0, fields, reg, env, LSF {.g = lw_step(c, reg, sname, c.lines.concat([alloc]), t1), .st = []});
     if (fv.g.err != "") { return fv.g; }
     return GT {.pos = 0, .val = reg, .ty = sname, .cnt = 0, .err = "", .glines = fv.g.glines, .lines = fv.g.lines, .tmp = fv.g.tmp, .lbl = fv.g.lbl, .tail = false};
+}
+
+// Whether a reusing literal stores back, in every pointer field, the
+// pointer the source record holds there: an i8 (`val`), "0" when a field
+// may hold a pointer that cannot be compared (an inline fixed value).
+type LSQ = { List(Str) lines; Str val; Int n; };
+
+Int lw_eq_max() { return 3; }
+
+LSQ lw_same_ptrs(Str src, Str reg, List(Str) st, Int i, LSQ acc) {
+    if (i >= st.len()) { return if (acc.n == 0 || acc.val == "0") { acc } else { LSQ {.lines = acc.lines.concat([reg + ".sq = zext i1 " + acc.val + " to i8"]), .val = reg + ".sq", .n = acc.n} }; }
+    if (acc.val == "0") { return acc; }
+    List(Str) p = str_split(st[i], "|");
+    Str ty = p[1];
+    if (ty == "i64" || ty == "i32" || ty == "i16" || ty == "i8" || ty == "i1" || ty == "double" || ty == "float") { return lw_same_ptrs(src, reg, st, i + 1, acc); }
+    if (ty != "ptr") { return LSQ {.lines = [], .val = "0", .n = acc.n}; }
+    Str b = reg + f".sq{acc.n}";
+    Int off = str_parse_int(p[0]) * 8;
+    List(Str) ga = if (off == 0) { [] } else { [b + "a = getelementptr i8, ptr " + src + f", i64 {off}"] };
+    Str at = if (off == 0) { src } else { b + "a" };
+    List(Str) l1 = ga.concat([b + "o = load ptr, ptr " + at + ", align 8", b + " = icmp eq ptr " + b + "o, " + p[2]]);
+    List(Str) l2 = if (acc.n == 0) { l1 } else { l1.concat([b + "m = and i1 " + acc.val + ", " + b]) };
+    Str v = if (acc.n == 0) { b } else { b + "m" };
+    return lw_same_ptrs(src, reg, st, i + 1, LSQ {.lines = acc.lines.concat(l2), .val = v, .n = acc.n + 1});
 }
 
 // Whether every field of a struct (its fields string) is a scalar.
@@ -3501,6 +3536,9 @@ GT lo_freeze(LW w, Int id, GT v) {
 
 Str lo_freeze_name(Str t) { return "\"resid.rec.freeze." + t + "\""; }
 
+// Its tracked fields only: the record keeps its unique bit.
+Str lo_freezef_name(Str t) { return "\"resid.rec.freezef." + t + "\""; }
+
 // `resid.rec.freeze.T` for each struct type with tracked fields: its
 // record shared (when it has a header), each list or map field frozen,
 // each struct field frozen by its own type's function.
@@ -3509,7 +3547,9 @@ List(Str) lo_freeze_fns(Funcs fs, LOP lo, Int i, List(Str) acc) {
     Str t = fs.stn[i];
     List(Str) mfs = lo_mfs(lo, t);
     Bool ok = struct_index(fs, t) == i && mfs.len() > 0;
-    return lo_freeze_fns(fs, lo, i + 1, if (ok) { acc.concat(lo_freeze_def(fs, lo, t, fs.stf[i], mfs)) } else { acc });
+    List(Str) a1 = if (ok) { acc.concat(lo_freeze_def(fs, lo, t, fs.stf[i], mfs)) } else { acc };
+    List(Str) a2 = if (ok && lo.hdr.contains(t)) { a1.concat(["define internal void @" + lo_freezef_name(t) + "(ptr %v) {", "entry:"]).concat(lo_freeze_def_fields(fs, lo, t, fs.stf[i], mfs, 0, [])).concat(["ret void", "}"]) } else { a1 };
+    return lo_freeze_fns(fs, lo, i + 1, a2);
 }
 
 List(Str) lo_freeze_def(Funcs fs, LOP lo, Str t, Str fields, List(Str) mfs) {
@@ -4365,10 +4405,16 @@ GT lw_list_with(LW w, Int id, GT base, List(Str) env) {
         List(Str) ls2 = xv.lines.concat(cvl).concat([reg + " = call ptr @resid_list_with_" + sk + "(ptr " + base.val + ", i8 " + own + ", i64 " + ix.val + ", " + at + " " + ex + ")"]);
         return GT {.pos = 0, .val = reg, .ty = base.ty, .cnt = 0, .err = "", .glines = xv.glines, .lines = ls2, .tmp = t2, .lbl = xv.lbl, .tail = false};
     }
+    // A record that stays unique in the list (a consumed chain, or a
+    // borrowed element's write-back) still has its tracked fields frozen.
+    Str sety = strip_owned_cg(ety);
+    Int vn = lo_unparen(w.g, lw_kid(w, id, 2));
+    Bool ff = ek != "" && w.lo.lists && w.lo.hdr.contains(sety) && lo_mfs(w.lo, sety).len() > 0 && (lo_is(w, id, 4) || lo_is(w, vn, 1));
+    List(Str) ffl = if (ff) { ["call void @" + lo_freezef_name(sety) + "(ptr " + boxed + ")"] } else { [] };
     // The write-back of a borrowed element (lo_borrows, flag bit 4).
     Str wf = if (lo_is(w, id, 4)) { "@resid_list_with_fb(ptr " } else { if (lw_hdr_elem(w, ety)) { "@resid_list_with_fh(ptr " } else { "@resid_list_with_f(ptr " } };
     Str call = if (ek != "") { wf + base.val + ", i8 " + own + ", i64 " + ix.val + ", ptr " + boxed + ", ptr @" + ek + ")" } else { "@resid_list_with(ptr " + base.val + ", i8 " + own + ", i64 " + ix.val + ", ptr " + boxed + ")" };
-    List(Str) ls = xv.lines.concat(bl).concat([reg + " = call ptr " + call]);
+    List(Str) ls = xv.lines.concat(bl).concat(ffl).concat([reg + " = call ptr " + call]);
     return GT {.pos = 0, .val = reg, .ty = base.ty, .cnt = 0, .err = "", .glines = xv.glines, .lines = ls, .tmp = t2, .lbl = xv.lbl, .tail = false};
 }
 
@@ -4851,8 +4897,9 @@ PG lw_fn_body(LW w0, Int d, PG g) {
     Str defline = if (is_main) { "define i32 @resid_user_main() " + abi_attrs() + " {" } else { "define " + link + ll_ty(rbase) + " @" + name + "(" + pd + ")" + fattr + " " + abi_attrs() + " {" };
     List(Str) nl = lw_param_names(w1, d, 1, n - 1, ListBuf());
     // Ownership: the node flags and record reuses the body's lowering reads.
-    LOF lf = lo_fn_flags(w1.g, d, w1.lo, fs);
-    LW w = LW {.g = w1.g, .fs = w1.fs, .base = w1.base, .rg = w1.rg, .dbg = w1.dbg, .df = w1.df, .rf = w1.rf, .facts = w1.facts, .lo = w1.lo, .lof = lf.fl, .lor = lf.ro, .want = ""};
+    Kg sg = if (w1.lo.lists && !lg_closure(w1.g, lw_kid(w1, d, n - 1))) { lo_snap(w1.g, lw_kid(w1, d, n - 1), 0, w1.lo, fs) } else { w1.g };
+    LOF lf = lo_fn_flags(sg, d, w1.lo, fs);
+    LW w = LW {.g = sg, .fs = w1.fs, .base = w1.base, .rg = w1.rg, .dbg = w1.dbg, .df = w1.df, .rf = w1.rf, .facts = w1.facts, .lo = w1.lo, .lof = lf.fl, .lor = lf.ro, .want = ""};
     List(Str) dl2 = [defline, "entry:"];
     Int fi = fn_index(fs, name);
     Str ceiling = if (fi >= 0) { fs.ceils[fi] } else { "" };
@@ -5964,12 +6011,14 @@ LOC lo_anon(Kg g, Int id, LOP lop) {
     return lo_cfail();
 }
 
-// A struct item with no tracked fields (its record holds scalars and
-// strings): consumed by a `with` value, it keeps its unique header bit.
-Bool lo_plain_item(LV lov) { return (lov.f == "\x01" || lov.f == "\x02") && lov.mfs.len() == 0; }
+// A struct item, or one of its tracked fields: consumed by a `with`
+// value, the record keeps its unique header bit (the store freezes its
+// tracked fields, lw_list_with).
+Bool lo_plain_item(LV lov) { return lov.f == "\x01" || lov.f == "\x02" || (lov.f != "" && !lov.whole && lov.mfs.len() > 0); }
 
-// A struct type whose records carry a header and hold no tracked field.
-Bool lo_plain(LOP lop, Str ty) { return lop.hdr.contains(ty) && lo_mfs(lop, ty).len() == 0; }
+// A struct type whose records carry a header: a list of them may hold a
+// unique record (resid_list_get_sh/get_own, with_fh/with_fb).
+Bool lo_plain(LOP lop, Str ty) { return lop.hdr.contains(ty); }
 
 // The value `xs.with(i, v)` stores, when it is an anonymous chain ending
 // in a plain struct (a literal, or a call result): its nodes, which the
@@ -6193,9 +6242,16 @@ Str lo_rl(Kg g, Int id, Str acc) {
     if (k == "lambda" || k == "spawn") { return acc; }
     Str a2 = if (k == "ret" && g.ns[id].nk > 0) {
         Int u = lo_unparen(g, kg_kid(g, id, 0));
-        if (g.ns[u].kind == "struct") { acc + g.ns[u].text + "," } else { acc }
+        if (g.ns[u].kind == "struct") { acc + g.ns[u].text + "," } else { if (g.ns[u].kind == "call") { lo_rl_args(g, u, 0, acc) } else { acc } }
     } else { acc };
     return lo_rl_kids(g, id, 0, a2);
+}
+
+// `return f(T {..})`: its literal arguments' types (lo_arg_reuse).
+Str lo_rl_args(Kg g, Int c, Int i, Str acc) {
+    if (i >= g.ns[c].nk) { return acc; }
+    Int a = lo_unparen(g, kg_kid(g, c, i));
+    return lo_rl_args(g, c, i + 1, if (g.ns[a].kind == "struct") { acc + g.ns[a].text + "," } else { acc });
 }
 
 Str lo_rl_kids(Kg g, Int id, Int i, Str acc) {
@@ -6602,7 +6658,7 @@ LOW lo_locals(Kg g, Int blk, Int i, Str rl, LOP lop, Funcs fs, LOW acc) {
     Str k = g.ns[s].kind;
     Bool tb = (k == "bind" || k == "rbind") && lo_tracked(lop, lo_bind_ty(g, s, fs));
     LOW a1 = if (!tb) { acc } else { if (lin_has_int(acc.chained, s, 0)) { lo_chained_cand(g, blk, i, s, rl, lop, fs, acc) } else { lo_local(g, blk, i, s, rl, lop, fs, acc) } };
-    LOW a2 = if (k == "ret") { lo_ret_reuse(g, s, acc.reuse, a1) } else { if (k == "if") { lo_locals_if(g, s, rl, lop, fs, a1) } else { if (k == "while") { lo_nested(g, kg_kid(g, s, 1), rl, lop, fs, a1) } else { if (k == "for") { lo_nested(g, kg_kid(g, s, 2), rl, lop, fs, a1) } else { if (k == "block") { lo_nested(g, s, rl, lop, fs, a1) } else { a1 } } } } };
+    LOW a2 = if (k == "ret") { lo_ret_reuse(g, s, acc.reuse, lop, a1) } else { if (k == "if") { lo_locals_if(g, s, rl, lop, fs, a1) } else { if (k == "while") { lo_nested(g, kg_kid(g, s, 1), rl, lop, fs, a1) } else { if (k == "for") { lo_nested(g, kg_kid(g, s, 2), rl, lop, fs, a1) } else { if (k == "block") { lo_nested(g, s, rl, lop, fs, a1) } else { a1 } } } } };
     return lo_locals(g, blk, i + 1, rl, lop, fs, a2);
 }
 
@@ -6612,13 +6668,40 @@ LOW lo_nested(Kg g, Int blk, Str rl, LOP lop, Funcs fs, LOW acc) {
     return LOW {.fl = r.fl, .chained = r.chained, .reuse = acc.reuse, .ro = r.ro};
 }
 
-LOW lo_ret_reuse(Kg g, Int s, List(Str) cands, LOW acc) {
+LOW lo_ret_reuse(Kg g, Int s, List(Str) cands, LOP lop, LOW acc) {
     if (g.ns[s].nk == 0) { return acc; }
     Int u = lo_unparen(g, kg_kid(g, s, 0));
+    if (g.ns[u].kind == "call") { return lo_arg_reuse(g, u, 0, cands, lop, acc); }
     if (g.ns[u].kind != "struct") { return acc; }
     Str v = lo_cand(cands, strip_owned_cg(g.ns[u].text), 0);
     if (v == "") { return acc; }
     return LOW {.fl = acc.fl, .chained = acc.chained, .reuse = acc.reuse, .ro = acc.ro.insert(u, v)};
+}
+
+// `return f(.., T {..}, ..)`: the literal is the last use of the
+// variable whose record it takes when no other argument mentions it. Only
+// for a linear parameter of f: a record kept in a sum (`Ok(T {..})`) or a
+// field must not stay unique, or a later match would rewrite it in place.
+LOW lo_arg_reuse(Kg g, Int c, Int i, List(Str) cands, LOP lop, LOW acc) {
+    if (i >= g.ns[c].nk) { return acc; }
+    Int a = lo_unparen(g, kg_kid(g, c, i));
+    if (g.ns[a].kind != "struct" || !lo_bit(lop.lin, g.ns[c].text, i)) { return lo_arg_reuse(g, c, i + 1, cands, lop, acc); }
+    Str v = lo_cand(cands, strip_owned_cg(g.ns[a].text), 0);
+    if (v == "" || lo_other_args(g, c, 0, i, v)) { return lo_arg_reuse(g, c, i + 1, cands, lop, acc); }
+    LOW a2 = LOW {.fl = acc.fl, .chained = acc.chained, .reuse = acc.reuse, .ro = acc.ro.insert(a, v)};
+    return lo_arg_reuse(g, c, i + 1, lo_drop_cand(cands, v, 0, []), lop, a2);
+}
+
+Bool lo_other_args(Kg g, Int c, Int i, Int skip, Str v) {
+    if (i >= g.ns[c].nk) { return false; }
+    if (i != skip && lo_has(g, kg_kid(g, c, i), lo_alias(v))) { return true; }
+    return lo_other_args(g, c, i + 1, skip, v);
+}
+
+List(Str) lo_drop_cand(List(Str) cs, Str v, Int i, List(Str) acc) {
+    if (i >= cs.len()) { return acc; }
+    List(Str) a2 = if (str_split(cs[i], ":")[0] == v) { acc } else { acc.concat([cs[i]]) };
+    return lo_drop_cand(cs, v, i + 1, a2);
 }
 
 Str lo_cand(List(Str) cs, Str ty, Int i) {
@@ -6768,6 +6851,365 @@ Bool lo_pure_kids(Kg g, Int id, Int i) {
     return lo_pure_kids(g, id, i + 1);
 }
 
+// ─── Snapshot reads ─────────────────────────────────────────────────
+// A borrow candidate `T t = xs[i]` whose fields are read after a statement
+// that hands t over whole is not linear, so lo_borrow_bind refuses it. Each
+// such `t.f` becomes a local bound right after t (`F t\x03f = t.f;`): with
+// no mutation the record reads the same there, and t's late mentions are
+// then whole. The hoist is always sound; the borrow analysis still decides.
+Kg lo_snap(Kg g, Int blk, Int i, LOP lop, Funcs fs) {
+    if (i >= g.ns[blk].nk) { return g; }
+    Int s = kg_kid(g, blk, i);
+    Str k = g.ns[s].kind;
+    Kg g1 = if (k == "bind") { lo_snap_bind(g, blk, i, s, lop, fs) } else { g };
+    Kg g2 = if (k == "if") { lo_snap_if(g1, s, lop, fs) } else { if (k == "while") { lo_snap(g1, kg_kid(g1, s, 1), 0, lop, fs) } else { if (k == "for") { lo_snap(g1, kg_kid(g1, s, 2), 0, lop, fs) } else { if (k == "block") { lo_snap(g1, s, 0, lop, fs) } else { g1 } } } };
+    return lo_snap(g2, blk, i + 1, lop, fs);
+}
+
+Kg lo_snap_if(Kg g, Int s, LOP lop, Funcs fs) {
+    Kg g1 = lo_snap(g, kg_kid(g, s, 1), 0, lop, fs);
+    if (g1.ns[s].nk < 3) { return g1; }
+    Int el = kg_kid(g1, s, 2);
+    if (g1.ns[el].kind == "if") { return lo_snap_if(g1, el, lop, fs); }
+    return lo_snap(g1, el, 0, lop, fs);
+}
+
+Kg lo_snap_bind(Kg g, Int blk, Int i, Int s, LOP lop, Funcs fs) {
+    Int e = lo_unparen(g, kg_kid(g, s, g.ns[s].nk - 1));
+    if (g.ns[e].kind != "index" || g.ns[e].nk < 2) { return g; }
+    Str ty = strip_owned_cg(lo_bind_ty(g, s, fs));
+    if (!lop.lists || !lo_plain(lop, ty)) { return g; }
+    if (!lo_bpath(g, lo_unparen(g, kg_kid(g, e, 0))) || !lo_pure(g, kg_kid(g, e, 1))) { return g; }
+    List(Int) rs = lo_snap_reads(g, blk, i + 1, g.ns[s].text);
+    if (rs.len() == 0) { return g; }
+    return lo_snap_apply(g, blk, i, s, ty, rs, 0, [], lop);
+}
+
+// `t.f` itself.
+Bool lo_snap_fr(Kg g, Int id, Str t) {
+    if (g.ns[id].kind != "field" || g.ns[id].nk == 0) { return false; }
+    Int b = lo_unparen(g, kg_kid(g, id, 0));
+    return g.ns[b].kind == "ref" && g.ns[b].text == t;
+}
+
+// A mention of t other than a field read.
+Bool lo_snap_whole(Kg g, Int id, Str t) {
+    if (lo_snap_fr(g, id, t)) { return false; }
+    if (lo_here(g, id, t)) { return true; }
+    return lo_snap_whole_kids(g, id, 0, t);
+}
+
+Bool lo_snap_whole_kids(Kg g, Int id, Int i, Str t) {
+    if (i >= g.ns[id].nk) { return false; }
+    if (lo_snap_whole(g, kg_kid(g, id, i), t)) { return true; }
+    return lo_snap_whole_kids(g, id, i + 1, t);
+}
+
+// The field reads of t that follow its first whole mention in a block:
+// every one in the statements after it, and inside it those that follow
+// a whole mention in one of its branches.
+List(Int) lo_snap_reads(Kg g, Int blk, Int i, Str t) {
+    if (i >= g.ns[blk].nk) { return []; }
+    Int s = kg_kid(g, blk, i);
+    if (!lo_snap_whole(g, s, t)) { return lo_snap_reads(g, blk, i + 1, t); }
+    return lo_snap_inner(g, s, t).concat(lo_snap_tail(g, blk, i + 1, t));
+}
+
+List(Int) lo_snap_inner(Kg g, Int s, Str t) {
+    Str k = g.ns[s].kind;
+    if (k == "block") { return lo_snap_reads(g, s, 0, t); }
+    if (k != "if") { return []; }
+    List(Int) a = lo_snap_reads(g, kg_kid(g, s, 1), 0, t);
+    if (g.ns[s].nk < 3) { return a; }
+    Int el = kg_kid(g, s, 2);
+    return a.concat(if (g.ns[el].kind == "if") { lo_snap_inner(g, el, t) } else { lo_snap_reads(g, el, 0, t) });
+}
+
+List(Int) lo_snap_tail(Kg g, Int blk, Int i, Str t) {
+    if (i >= g.ns[blk].nk) { return []; }
+    return lo_snap_frs(g, kg_kid(g, blk, i), t).concat(lo_snap_tail(g, blk, i + 1, t));
+}
+
+// Every `t.f` in a subtree, outside closures.
+List(Int) lo_snap_frs(Kg g, Int id, Str t) {
+    Str k = g.ns[id].kind;
+    if (k == "lambda" || k == "spawn") { return []; }
+    if (lo_snap_fr(g, id, t)) { return [id]; }
+    return lo_snap_frs_kids(g, id, 0, t);
+}
+
+List(Int) lo_snap_frs_kids(Kg g, Int id, Int i, Str t) {
+    if (i >= g.ns[id].nk) { return []; }
+    return lo_snap_frs(g, kg_kid(g, id, i), t).concat(lo_snap_frs_kids(g, id, i + 1, t));
+}
+
+// Each read becomes a ref to `t\x03f`; then one bind per field goes in
+// right after t's.
+Kg lo_snap_apply(Kg g, Int blk, Int i, Int s, Str ty, List(Int) rs, Int j, List(Str) fds, LOP lop) {
+    if (j >= rs.len()) { return lo_snap_binds(g, blk, i, s, ty, fds, 0, [], lop); }
+    Int id = rs[j];
+    KN n = g.ns[id];
+    Str f = n.text;
+    if (!lop.ft.contains(ty + "." + f)) { return lo_snap_apply(g, blk, i, s, ty, rs, j + 1, fds, lop); }
+    Str nm = g.ns[s].text + "\x03" + f;
+    KN r = KN {.kind = "ref", .text = nm, .aux = "", .a0 = n.a0, .nk = 0, .sp = n.sp, .ep = n.ep, .kc = kg_kcx("ref", nm, "")};
+    Kg g1 = Kg {.ns = g.ns.with(id, r), .kids = g.kids, .docs = g.docs};
+    List(Str) fds1 = if (lo_has_str(fds, f, 0)) { fds } else { fds.concat([f]) };
+    return lo_snap_apply(g1, blk, i, s, ty, rs, j + 1, fds1, lop);
+}
+
+Kg lo_snap_binds(Kg g, Int blk, Int i, Int s, Str ty, List(Str) fds, Int j, List(Int) bs, LOP lop) {
+    if (j >= fds.len()) {
+        if (bs.len() == 0) { return g; }
+        KN b = g.ns[blk];
+        List(Int) old = g.kids[b.a0..b.a0 + b.nk];
+        List(Int) nk = old[0..i + 1].concat(bs).concat(old[i + 1..b.nk]);
+        KN b2 = KN {.kind = b.kind, .text = b.text, .aux = b.aux, .a0 = g.kids.len(), .nk = nk.len(), .sp = b.sp, .ep = b.ep, .kc = b.kc};
+        return Kg {.ns = g.ns.with(blk, b2), .kids = g.kids.concat(nk), .docs = g.docs};
+    }
+    Str t = g.ns[s].text;
+    Int sp = g.ns[s].sp;
+    Int ep = g.ns[s].ep;
+    List(Int) none = [];
+    KP ty1 = kg_add(g, "ty", lop.ft.get(ty + "." + fds[j]) else { "" }, "", none, sp, ep);
+    KP rf = kg_add(ty1.g, "ref", t, "", none, sp, ep);
+    KP fd = kg_add(rf.g, "field", fds[j], "", [rf.id], sp, ep);
+    KP bd = kg_add(fd.g, "bind", t + "\x03" + fds[j], "", [ty1.id, fd.id], sp, ep);
+    return lo_snap_binds(bd.g, blk, i, s, ty, fds, j + 1, bs.concat([bd.id]), lop);
+}
+
+// ─── Inlining one-line helpers ───────────────────────────────────────
+// `return f(..)` and `T x = f(..);` where f's body is one `return e` built
+// from plain expressions: the call becomes e with f's parameters replaced,
+// so the ownership analysis sees through helpers like DeltaBlue's
+// `set_var(d, i, v)` (a read of d.vs[i] and its write-back then sit in one
+// function). An argument that is not a name of pointer type (a scalar
+// that may widen, a literal, any other expression) is bound first, in
+// argument order, to a fresh local of the parameter's type: arguments
+// are still evaluated once each, left to right, before the body.
+
+Kg lo_inline_prog(Kg g, Int unit, Funcs fs) {
+    List(Int) ds = lo_top_fns(g, unit, 0, ListBuf()).finish();
+    Map(Str, Int) none = {};
+    Map(Str, Int) tiny = lo_tiny_fns(g, ds, 0, fs, none);
+    if (tiny.keys().len() == 0) { return g; }
+    return lo_inl_fns(g, ds, 0, tiny, fs);
+}
+
+// Functions outside sandboxes (whose bodies run under a ceiling).
+ListBuf(Int) lo_top_fns(Kg g, Int id, Int i, ListBuf(Int) acc) {
+    if (i >= g.ns[id].nk) { return acc; }
+    Int d = kg_kid(g, id, i);
+    return lo_top_fns(g, id, i + 1, if (g.ns[d].kind == "fn") { acc.push(d) } else { acc });
+}
+
+Map(Str, Int) lo_tiny_fns(Kg g, List(Int) ds, Int i, Funcs fs, Map(Str, Int) acc) {
+    if (i >= ds.len()) { return acc; }
+    Int d = ds[i];
+    return lo_tiny_fns(g, ds, i + 1, fs, if (lo_tiny(g, d, fs)) { acc.insert(g.ns[d].text, d) } else { acc });
+}
+
+Bool lo_tiny(Kg g, Int d, Funcs fs) {
+    KN n = g.ns[d];
+    if (n.nk < 2 || str_contains(n.aux, "@") || n.text == "main") { return false; }
+    Int fi = fn_index(fs, n.text);
+    if (fi < 0 || fs.ceils[fi] != "") { return false; }
+    Int body = kg_kid(g, d, n.nk - 1);
+    if (g.ns[body].kind != "block" || g.ns[body].nk != 1) { return false; }
+    Int r = kg_kid(g, body, 0);
+    if (g.ns[r].kind != "ret" || g.ns[r].nk != 1) { return false; }
+    List(Str) ps = lo_pnames(g, d, 1, n.nk - 1, []);
+    return lo_inl_size(g, kg_kid(g, r, 0), ps, n.text, 0) > 0;
+}
+
+List(Str) lo_pnames(Kg g, Int d, Int i, Int n, List(Str) acc) {
+    if (i >= n) { return acc; }
+    return lo_pnames(g, d, i + 1, n, acc.concat([g.ns[kg_kid(g, d, i)].text]));
+}
+
+// The node count of a body expression that may be copied (at most 40),
+// or 0: only plain expression kinds, names only of parameters, no call
+// of f itself or of a parameter.
+Int lo_inl_size(Kg g, Int id, List(Str) ps, Str f, Int acc) {
+    if (acc < 0 || acc > 40) { return 0; }
+    KN n = g.ns[id];
+    Str k = n.kind;
+    Bool ok = k == "lit" || k == "ty" || k == "call" || k == "mcall" || k == "field" || k == "index" || k == "struct" || k == "finit" || k == "bin" || k == "un" || k == "paren" || k == "cast" || k == "tern";
+    if (k == "ref") { return if (lo_has_str(ps, n.text, 0)) { acc + 1 } else { 0 }; }
+    if (!ok || (k == "call" && (n.text == f || lo_has_str(ps, n.text, 0)))) { return 0; }
+    return lo_inl_size_kids(g, id, 0, ps, f, acc + 1);
+}
+
+Int lo_inl_size_kids(Kg g, Int id, Int i, List(Str) ps, Str f, Int acc) {
+    if (i >= g.ns[id].nk) { return acc; }
+    Int a = lo_inl_size(g, kg_kid(g, id, i), ps, f, acc);
+    if (a == 0) { return 0; }
+    return lo_inl_size_kids(g, id, i + 1, ps, f, a);
+}
+
+Kg lo_inl_fns(Kg g, List(Int) ds, Int i, Map(Str, Int) tiny, Funcs fs) {
+    if (i >= ds.len()) { return g; }
+    Int d = ds[i];
+    Int body = kg_kid(g, d, g.ns[d].nk - 1);
+    Kg g1 = if (lg_closure(g, body)) { g } else { lo_inl_blk(g, body, 0, d, g.ns[d].text, tiny, fs) };
+    return lo_inl_fns(g1, ds, i + 1, tiny, fs);
+}
+
+Kg lo_inl_blk(Kg g, Int blk, Int i, Int cd, Str cur, Map(Str, Int) tiny, Funcs fs) {
+    if (i >= g.ns[blk].nk) { return g; }
+    Int s = kg_kid(g, blk, i);
+    Str k = g.ns[s].kind;
+    if (k == "if") {
+        Kg g1 = lo_inl_blk(g, kg_kid(g, s, 1), 0, cd, cur, tiny, fs);
+        Kg g2 = if (g1.ns[s].nk > 2) { lo_inl_else(g1, kg_kid(g1, s, 2), cd, cur, tiny, fs) } else { g1 };
+        return lo_inl_blk(g2, blk, i + 1, cd, cur, tiny, fs);
+    }
+    if (k == "while") { return lo_inl_blk(lo_inl_blk(g, kg_kid(g, s, 1), 0, cd, cur, tiny, fs), blk, i + 1, cd, cur, tiny, fs); }
+    if (k == "for") { return lo_inl_blk(lo_inl_blk(g, kg_kid(g, s, 2), 0, cd, cur, tiny, fs), blk, i + 1, cd, cur, tiny, fs); }
+    if (k == "block") { return lo_inl_blk(lo_inl_blk(g, s, 0, cd, cur, tiny, fs), blk, i + 1, cd, cur, tiny, fs); }
+    Int c = if (k == "ret" && g.ns[s].nk == 1) { kg_kid(g, s, 0) } else { if (k == "bind" && g.ns[s].nk == 2) { kg_kid(g, s, 1) } else { -1 } };
+    if (c < 0 || g.ns[c].kind != "call" || g.ns[c].text == cur) { return lo_inl_blk(g, blk, i + 1, cd, cur, tiny, fs); }
+    Int f = tiny.get(g.ns[c].text) else { -1 };
+    if (f < 0 || g.ns[f].nk - 2 != g.ns[c].nk || !lo_one_ret(g, f) || lo_calls_name(g, f, cur)) { return lo_inl_blk(g, blk, i + 1, cd, cur, tiny, fs); }
+    // A record literal reuses a dead record only when returned (lo_ret_reuse):
+    // bound to a local, the helper's own reuse of its argument would be lost.
+    if (k == "bind" && lo_ret_struct(g, f)) { return lo_inl_blk(g, blk, i + 1, cd, cur, tiny, fs); }
+    LIN r = lo_inl_call(g, f, c, cd, fs);
+    KN sn = r.g.ns[s];
+    List(Int) sk = if (k == "ret") { [r.root] } else { [kg_kid(r.g, s, 0), r.root] };
+    KP ns = kg_add(r.g, sn.kind, sn.text, sn.aux, sk, sn.sp, sn.ep);
+    KN b = ns.g.ns[blk];
+    List(Int) old = ns.g.kids[b.a0..b.a0 + b.nk];
+    List(Int) nk = old[0..i].concat(r.hoist).concat([ns.id]).concat(old[i + 1..b.nk]);
+    KN b2 = KN {.kind = b.kind, .text = b.text, .aux = b.aux, .a0 = ns.g.kids.len(), .nk = nk.len(), .sp = b.sp, .ep = b.ep, .kc = b.kc};
+    Kg g3 = Kg {.ns = ns.g.ns.with(blk, b2), .kids = ns.g.kids.concat(nk), .docs = ns.g.docs};
+    return lo_inl_blk(g3, blk, i + 1 + r.hoist.len(), cd, cur, tiny, fs);
+}
+
+Kg lo_inl_else(Kg g, Int el, Int cd, Str cur, Map(Str, Int) tiny, Funcs fs) {
+    if (g.ns[el].kind == "if") {
+        Kg g1 = lo_inl_blk(g, kg_kid(g, el, 1), 0, cd, cur, tiny, fs);
+        return if (g1.ns[el].nk > 2) { lo_inl_else(g1, kg_kid(g1, el, 2), cd, cur, tiny, fs) } else { g1 };
+    }
+    return lo_inl_blk(g, el, 0, cd, cur, tiny, fs);
+}
+
+// Whether caller cd declares `name` (a parameter or a bind anywhere in
+// its body) with type text ty and with no other type: a scalar argument
+// that needs no widening, so its name stands in for the parameter.
+Bool lo_same_decl(Kg g, Int cd, Str name, Str ty) {
+    Int np = g.ns[cd].nk - 2;
+    Int pc = lo_pdecl(g, cd, 1, np + 1, name, ty, 0);
+    if (pc < 0) { return false; }
+    Int bc = lo_bdecl(g, kg_kid(g, cd, np + 1), name, ty, pc);
+    return bc > 0;
+}
+
+// Matching declarations counted, or -1 on one of another type.
+Int lo_pdecl(Kg g, Int cd, Int i, Int n, Str name, Str ty, Int acc) {
+    if (i >= n || acc < 0) { return acc; }
+    Int p = kg_kid(g, cd, i);
+    Int a = if (g.ns[p].text != name) { acc } else { if (g.ns[kg_kid(g, p, 0)].text == ty) { acc + 1 } else { -1 } };
+    return lo_pdecl(g, cd, i + 1, n, name, ty, a);
+}
+
+Int lo_bdecl(Kg g, Int id, Str name, Str ty, Int acc) {
+    if (acc < 0) { return acc; }
+    KN n = g.ns[id];
+    Bool decl = (n.kind == "bind" || n.kind == "rbind") && n.text == name;
+    Int a = if (!decl) { acc } else { if (n.nk == 2 && g.ns[kg_kid(g, id, 0)].text == ty) { acc + 1 } else { -1 } };
+    Bool other = (n.kind == "letpat" || n.kind == "pat" || n.kind == "lparam" || n.kind == "for") && n.text == name;
+    return lo_bdecl_kids(g, id, 0, name, ty, if (other) { -1 } else { a });
+}
+
+Int lo_bdecl_kids(Kg g, Int id, Int i, Str name, Str ty, Int acc) {
+    if (i >= g.ns[id].nk || acc < 0) { return acc; }
+    return lo_bdecl_kids(g, id, i + 1, name, ty, lo_bdecl(g, kg_kid(g, id, i), name, ty, acc));
+}
+
+// Whether f's body is still one `return e` (inlining into f itself may
+// have put binds before it).
+Bool lo_one_ret(Kg g, Int f) {
+    Int body = kg_kid(g, f, g.ns[f].nk - 1);
+    return g.ns[body].nk == 1 && g.ns[kg_kid(g, body, 0)].kind == "ret";
+}
+
+Bool lo_ret_struct(Kg g, Int f) {
+    Int r = kg_kid(g, kg_kid(g, f, g.ns[f].nk - 1), 0);
+    return g.ns[lo_unparen(g, kg_kid(g, r, 0))].kind == "struct";
+}
+
+// Whether f's body calls `name` (inlining it there would make a self call).
+Bool lo_calls_name(Kg g, Int id, Str name) {
+    if (g.ns[id].kind == "call" && g.ns[id].text == name) { return true; }
+    return lo_calls_name_kids(g, id, 0, name);
+}
+
+Bool lo_calls_name_kids(Kg g, Int id, Int i, Str name) {
+    if (i >= g.ns[id].nk) { return false; }
+    if (lo_calls_name(g, kg_kid(g, id, i), name)) { return true; }
+    return lo_calls_name_kids(g, id, i + 1, name);
+}
+
+// The grown graph, the binds that go before the statement, and the copied
+// body expression that replaces the call. Nothing is rewritten in place:
+// the reducer's residual shares nodes between a function's specialized
+// copies.
+type LIN = { Kg g; List(Int) hoist; Int root; };
+
+LIN lo_inl_call(Kg g, Int f, Int c, Int cur, Funcs fs) {
+    Int np = g.ns[f].nk - 2;
+    LIA a = lo_inl_args(g, f, c, cur, 0, np, fs, LIA {.g = g, .names = [], .hoist = []});
+    Int body = kg_kid(a.g, f, np + 1);
+    Int e = kg_kid(a.g, kg_kid(a.g, body, 0), 0);
+    List(Str) ps = lo_pnames(a.g, f, 1, np + 1, []);
+    KP cp = lo_inl_copy(a.g, e, ps, a.names, g.ns[c].sp, g.ns[c].ep);
+    return LIN {.g = cp.g, .hoist = a.hoist, .root = cp.id};
+}
+
+// Each parameter's replacement name, and the binds made for arguments
+// that are not names of pointer type.
+type LIA = { Kg g; List(Str) names; List(Int) hoist; };
+
+LIA lo_inl_args(Kg g, Int f, Int c, Int cur, Int i, Int np, Funcs fs, LIA acc) {
+    if (i >= np) { return acc; }
+    Int a = kg_kid(acc.g, c, i);
+    Int pn = kg_kid(acc.g, f, i + 1);
+    Str pty = acc.g.ns[kg_kid(acc.g, pn, 0)].text;
+    Bool ptr = ll_ty(ct_base_of(fs.ctn, fs.ctb, strip_owned_cg(pty))) == "ptr";
+    if (acc.g.ns[a].kind == "ref" && (ptr || lo_same_decl(acc.g, cur, acc.g.ns[a].text, pty))) {
+        return lo_inl_args(g, f, c, cur, i + 1, np, fs, LIA {.g = acc.g, .names = acc.names.concat([acc.g.ns[a].text]), .hoist = acc.hoist});
+    }
+    Str nm = f"\x04{c}_{i}";
+    Int sp = acc.g.ns[c].sp;
+    Int ep = acc.g.ns[c].ep;
+    List(Int) none = [];
+    KP ty = kg_add(acc.g, "ty", pty, "", none, sp, ep);
+    KP bd = kg_add(ty.g, "bind", nm, "", [ty.id, a], sp, ep);
+    return lo_inl_args(g, f, c, cur, i + 1, np, fs, LIA {.g = bd.g, .names = acc.names.concat([nm]), .hoist = acc.hoist.concat([bd.id])});
+}
+
+// A copy of body expression id, each parameter ref renamed.
+KP lo_inl_copy(Kg g, Int id, List(Str) ps, List(Str) names, Int sp, Int ep) {
+    KN n = g.ns[id];
+    List(Int) none = [];
+    if (n.kind == "ref") { return kg_add(g, "ref", names[lo_str_at(ps, n.text, 0)], n.aux, none, sp, ep); }
+    KL ks = lo_inl_copy_kids(g, id, 0, ps, names, sp, ep, KL {.g = g, .ids = [], .pos = 0, .err = ""});
+    return kg_add(ks.g, n.kind, n.text, n.aux, ks.ids, sp, ep);
+}
+
+KL lo_inl_copy_kids(Kg g, Int id, Int i, List(Str) ps, List(Str) names, Int sp, Int ep, KL acc) {
+    if (i >= g.ns[id].nk) { return acc; }
+    KP k = lo_inl_copy(acc.g, kg_kid(acc.g, id, i), ps, names, sp, ep);
+    return lo_inl_copy_kids(g, id, i + 1, ps, names, sp, ep, KL {.g = k.g, .ids = acc.ids.concat([k.id]), .pos = 0, .err = ""});
+}
+
+Int lo_str_at(List(Str) xs, Str s, Int i) {
+    if (i >= xs.len()) { return -1; }
+    if (xs[i] == s) { return i; }
+    return lo_str_at(xs, s, i + 1);
+}
+
 // Every path from statement j on: the chain's locals (`al`, linear each)
 // are read, or bound on into another linear T local (`consumed` from then
 // on: the record may have been rewritten), until the write-back; xs is
@@ -6804,6 +7246,9 @@ BS lo_bscan(Kg g, Int blk, Int j, LV lx, List(Str) al, Bool consumed, Str ty, In
         return lo_bscan(g, blk, j + 1, lx, al.concat([g.ns[s].text]), true, ty, ix, lop, fs, fl);
     }
     if (!ma) {
+        // A return handing xs on before the chain was consumed ends the
+        // path with the element as read, and nothing mentions the chain.
+        if (!consumed && k == "ret") { return bs_none(); }
         if (consumed || !lo_rd(g, s, lx, lop)) { return bs_fail(); }
         return lo_bscan(g, blk, j + 1, lx, al, consumed, ty, ix, lop, fs, fl);
     }
@@ -6994,7 +7439,8 @@ PG lw_decls(LW w, Int id, Int i, PG acc) {
 }
 
 // Lower the reducer's residual graph.
-pub PG lw_program(Kg g, Int unit, Funcs fs, PG g0, Bool dbg, GAF df, Bool facts) {
+pub PG lw_program(Kg g0g, Int unit, Funcs fs, PG g0, Bool dbg, GAF df, Bool facts) {
+    Kg g = if (dbg || resid_rtmod() || !lo_uses_with(g0g, 0)) { g0g } else { lo_inline_prog(g0g, unit, fs) };
     LOP lo = lo_program(g, unit, fs);
     LW w = LW {.g = g, .fs = fs, .base = 0, .rg = true, .dbg = dbg, .df = df, .rf = lr_nof(), .facts = facts, .lo = lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = ""};
     PG r0 = lw_decls(w, unit, 0, g0);

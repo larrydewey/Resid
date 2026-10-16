@@ -3,7 +3,9 @@ import "cggmp_zk.resid";
 import "./serial.resid";
 
 // ── Pedersen (line 22)
+/// The serialized field names of `Pedersen`, in declaration order.
 pub List(Str) derive_pedersen_names() { return ["n", "s", "t"]; }
+/// Encodes a `Pedersen` through the encoder `s`.
 @needs(Encoder(F))
 pub Result(F, SerialError) derive_pedersen_encode(Pedersen v, F s) {
     Int n = 3;
@@ -14,6 +16,7 @@ pub Result(F, SerialError) derive_pedersen_encode(Pedersen v, F s) {
     return write_struct_end(s3);
 }
 Encode(Pedersen, F) = derive_pedersen_encode;
+/// Decodes a `Pedersen` from the decoder `s`, with the input left over.
 @needs(Decoder(F))
 pub Result(Parsed(Pedersen, F), SerialError) derive_pedersen_decode(F s) {
     F s0 = read_struct_begin(s, "Pedersen", derive_pedersen_names())?;

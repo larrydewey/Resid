@@ -9,8 +9,10 @@
 
 import "bignum.resid";
 
+/// A Paillier public key: the modulus `n`, `n`^2 and its Montgomery context.
 pub type PaillierPub = { List(UInt(64)) n; List(UInt(64)) n2; BnMont mont2; };
 
+/// A Paillier secret key: the primes `p` and `q`, phi(n) and phi's inverse mod `n`.
 pub type PaillierSec = { List(UInt(64)) p; List(UInt(64)) q; List(UInt(64)) phi; List(UInt(64)) phi_inv; };
 
 /// The public key for the modulus `n`.

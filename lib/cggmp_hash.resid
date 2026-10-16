@@ -97,6 +97,8 @@ ListBuf(Int) tr_cat_range_at(ListBuf(Int) acc, List(Int) b, Int pos, Int lo, Int
 /// position after the chunk used.
 pub type TrSample = { List(UInt(64)) value; Int next; };
 
+/// Samples a value below `n` from the transcript stream of `seed` at byte `pos`.
+/// Draws byte-length-of-`n` chunks and rejects any not below `n`.
 pub TrSample tr_sample_modn(List(Int) seed, Int pos, List(UInt(64)) n) {
     Int nb = (bn_bit_len(n) + 7) / 8;
     List(UInt(64)) x = bn_from_be(tr_stream(seed, pos, nb));

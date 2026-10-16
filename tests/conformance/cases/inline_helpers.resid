@@ -1,0 +1,35 @@
+// One-line helpers inlined before the ownership analysis (lo_inline_prog):
+// arguments are still evaluated once each, left to right, before the body;
+// a narrower integer argument still widens; nested helpers, unused
+// parameters and a record the caller keeps behave as calls do.
+
+type Var = { Int value; List(Int) cons; };
+type Db = { List(Var) vs; Int r; };
+
+Int say(Int x) { println(f"arg {x}"); return x; }
+Int pick(Int a, Int b, Int c) { return b * 100 + a; }
+Int wide(Int a) { return a + 300; }
+Int twice(Int a) { return pick(a, a, 0); }
+Var var_with(Var v, Int value) { return Var {.value = value, .cons = v.cons}; }
+Db set_var(Db d, Int i, Var v) { return Db {.vs = d.vs.with(i, v), .r = d.r}; }
+Db set_value(Db d, Int i, Int value) {
+    Var v = d.vs[i];
+    return set_var(d, i, var_with(v, value));
+}
+
+@requires(args)
+Int main() {
+    Int z = str_len(args.get(0)) * 0;
+    Int p = pick(say(1 + z), say(2 + z), say(3 + z));
+    println(f"pick {p}");
+    UInt(8) small = 250;
+    Int w = wide(small);
+    println(f"wide {w} twice {twice(7 + z)}");
+    List(Int) none = [];
+    Var a = Var {.value = z, .cons = none};
+    Db d = Db {.vs = [a, a], .r = 0};
+    Db d2 = set_value(set_value(d, 1, 5), 0, 7);
+    Db d3 = set_value(d2, 1, 9);
+    println(f"{d.vs[0].value} {d.vs[1].value} | {d2.vs[0].value} {d2.vs[1].value} | {d3.vs[0].value} {d3.vs[1].value}");
+    return 0;
+}

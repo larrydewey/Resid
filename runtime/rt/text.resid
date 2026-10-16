@@ -12,8 +12,17 @@ pub Int rt_str_concat(Int a, Int b) {
     return p;
 }
 
+// Inline: the same pointer, or a different first byte (a parser's
+// one-character tests), decides without a call.
 @export("resid_str_eq", "i8(ptr,ptr)")
-pub Int rt_str_eq(Int a, Int b) { return if (c_strcmp(a, b) == 0) { 1 } else { 0 }; }
+@inline
+pub Int rt_str_eq(Int a, Int b) {
+    if (a == b) { return 1; }
+    Int c = ld8(a);
+    if (c != ld8(b)) { return 0; }
+    if (c == 0) { return 1; }
+    return if (c_strcmp(a + 1, b + 1) == 0) { 1 } else { 0 };
+}
 
 // ─── In-place string accumulators (resid_sacc_*) ──────────────────────
 // A NUL-terminated buffer preceded by an {arena, len, cap} header; the

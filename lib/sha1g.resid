@@ -75,7 +75,8 @@ pub List(W) sha1g_blocks(List(B) m, Int pos, Int total, List(W) h) {
 /// The SHA-1 initial hash value (FIPS 180-4 §5.3.1).
 pub List(Int) sha1g_iv() { return [1732584193, 4023233417, 2562383102, 271733878, 3285377520]; }
 
-// Same padding as SHA-256: 0x80, zeros, 64-bit big-endian bit length.
+/// The SHA-1 padding for a message of `len` bytes.
+/// Same as SHA-256: 0x80, zeros, then the 64-bit big-endian bit length.
 pub List(Int) sha1g_pad(Int len) {
     Int total = ((len + 9 + 63) / 64) * 64;
     return s1_pad_at(len, total - len - 9, 0, ListBuf()).finish();

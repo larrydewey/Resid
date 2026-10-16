@@ -17,11 +17,11 @@ import "crypto.resid";
 /// parameter, 80).
 pub Int zk_stat() { return 80; }
 
-/// Pedersen commitment parameters: N = pq, s = t^lam (mod N).
 //@ serial
+/// Holds Pedersen commitment parameters: N = pq, s = t^lam (mod N).
 pub type Pedersen = { List(UInt(64)) n; List(UInt(64)) s; List(UInt(64)) t; };
 
-// x in [1, n - 1] and coprime to n.
+/// Whether `x` is in [1, `n` - 1] and coprime to `n`.
 pub Bool zk_valid_mod_n(List(UInt(64)) x, List(UInt(64)) n) {
     if (x.len() == 0 || bn_cmp(x, n) >= 0) { return false; }
     return bn_cmp(bn_gcd(x, n), [1]) == 0;
@@ -40,10 +40,11 @@ pub Transcript tr_pedersen(Transcript t, Pedersen p) {
 
 // ─── Random draws from a caller-supplied stream ─────────────────
 
+/// Holds a drawn value and the stream position just after it.
 pub type ZkDraw = { List(UInt(64)) value; Int next; };
 
-// A uniform element of [0, n): successive chunks of ceil(bits/8) bytes of
-// `rnd`, the first below n; None when `rnd` runs out.
+/// Draws a uniform element of [0, `n`) from `rnd` starting at `pos`.
+/// Takes successive chunks of ceil(bits/8) bytes, the first below `n`; None when `rnd` runs out.
 pub Option(ZkDraw) zk_draw_below(List(Int) rnd, Int pos, List(UInt(64)) n) {
     Int nb = (bn_bit_len(n) + 7) / 8;
     if (pos + nb > rnd.len()) { return None; }
@@ -59,6 +60,7 @@ pub Option(ZkDraw) zk_draw_below(List(Int) rnd, Int pos, List(UInt(64)) n) {
 // e_i; z_i = a_i + e_i lam mod phi; the verifier checks
 // t^{z_i} = A_i s^{e_i} (mod N).
 
+/// Holds a Pedersen parameters proof: the 80 commitments A_i (`as`) and responses z_i (`zs`).
 pub type PrmProof = { List(List(UInt(64))) as; List(List(UInt(64))) zs; };
 
 Transcript prm_transcript(Transcript tr, Pedersen ped, List(List(UInt(64))) as, Int i) {
@@ -140,8 +142,10 @@ PrmProof prm_finish(List(UInt(64)) lam, List(UInt(64)) phi, Pedersen ped, Transc
 // where y' = (-1)^a w^b y is a quadratic residue mod p and mod q. The
 // verifier checks z^N = y and x^4 = y' (mod N).
 
+/// Holds one answer of the modulus proof: the flags `a`, `b`, the fourth root `x` and the N-th root `z`.
 pub type ModResponse = { Bool a; Bool b; List(UInt(64)) x; List(UInt(64)) z; };
 
+/// Holds a Paillier-Blum modulus proof: the non-residue `w` and 80 responses.
 pub type ModProof = { List(UInt(64)) w; List(ModResponse) responses; };
 
 // The 80 challenges y_i: sample_modn from the stream after N and w.
@@ -190,8 +194,8 @@ Bool mod_is_qr(List(UInt(64)) y, List(UInt(64)) p, List(UInt(64)) q, List(UInt(6
     return bn_cmp(bn_modexp(bn_mod(y, p), ph, p), [1]) == 0 && bn_cmp(bn_modexp(bn_mod(y, q), qh, q), [1]) == 0;
 }
 
-// (a, b, y') with y' = (-1)^a w^b y a quadratic residue (Taurus
-// makeQuadraticResidue): try y, -y, -w y, w y in that order.
+/// Holds (a, b, y') with y' = (-1)^a w^b y a quadratic residue mod N.
+/// As Taurus makeQuadraticResidue: tries y, -y, -w y, w y in that order.
 pub type ModQr = { Bool a; Bool b; List(UInt(64)) y; };
 
 ModQr mod_make_qr(List(UInt(64)) y, List(UInt(64)) w, List(UInt(64)) n, List(UInt(64)) p, List(UInt(64)) q, List(UInt(64)) ph, List(UInt(64)) qh) {
@@ -249,7 +253,8 @@ ModProof mod_prove_with(List(UInt(64)) p, List(UInt(64)) q, List(UInt(64)) n, Li
 /// Pedersen parameters with their secrets: lam and phi = phi(N).
 pub type PedersenKey = { Pedersen ped; List(UInt(64)) lam; List(UInt(64)) phi; };
 
-// A unit mod n drawn from `rnd`: the first chunk below n and coprime to it.
+/// Draws a unit mod `n` from `rnd` starting at `pos`.
+/// The first chunk below `n` and coprime to it; None when `rnd` runs out.
 pub Option(ZkDraw) zk_draw_unit(List(Int) rnd, Int pos, List(UInt(64)) n) {
     return match zk_draw_below(rnd, pos, n) {
         None => None,

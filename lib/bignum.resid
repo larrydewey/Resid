@@ -9,6 +9,7 @@
 // Written for Paillier and the zero-knowledge proofs of threshold ECDSA
 // (2048- to 4096-bit moduli), and checked against Python's int.
 
+/// The largest limb value, 2^64 - 1.
 pub UInt(64) bn_mask() { return 18446744073709551615; }
 
 UInt(128) bn_base() { return 18446744073709551616; }
@@ -33,14 +34,18 @@ List(UInt(64)) bn_take(List(UInt(64)) x, Int n, Int i, ListBuf(UInt(64)) acc) {
     return bn_take(x, n, i + 1, acc.push(x[i]));
 }
 
+/// The natural number zero, an empty list.
 pub List(UInt(64)) bn_zero() { return []; }
+/// The natural number one.
 pub List(UInt(64)) bn_one() { return [1]; }
 
 /// The natural number `v`.
 pub List(UInt(64)) bn_from_u64(UInt(64) v) { if (v == 0) { return []; } return [v]; }
 
+/// Whether `x` is zero (the empty list).
 pub Bool bn_is_zero(List(UInt(64)) x) { return x.len() == 0; }
 
+/// Whether `x` is odd.
 pub Bool bn_is_odd(List(UInt(64)) x) { return x.len() > 0 && (x[0] & 1) == 1; }
 
 /// -1, 0 or 1 as `a` is below, equal to or above `b`.
@@ -200,6 +205,7 @@ UInt(256) bn_col(List(UInt(64)) a, List(UInt(64)) b, Int k, Int i, Int hi, UInt(
 
 // ─── Division (Knuth, Algorithm D) ──────────────────────────────
 
+/// A quotient `q` and remainder `r` of natural numbers.
 pub type BnDiv = { List(UInt(64)) q; List(UInt(64)) r; };
 
 /// Quotient and remainder of a by b (b nonzero).
@@ -218,6 +224,7 @@ pub BnDiv bn_divmod(List(UInt(64)) a, List(UInt(64)) b) {
     return BnDiv {.q = bn_trim(st.q), .r = bn_shr(bn_trim(bn_take(st.u, n, 0, ListBuf())), s)};
 }
 
+/// The working remainder limbs and quotient limbs of a long division.
 type BnDivState = { List(UInt(64)) u; List(UInt(64)) q; };
 
 // Quotient limbs are produced from the top, so they are collected in reverse.
@@ -258,6 +265,7 @@ UInt(128) bn_qfix(UInt(128) qhat, UInt(128) rhat, UInt(128) vt, UInt(128) v2, UI
     return qhat;
 }
 
+/// The limbs left by a multiply-subtract step and the borrow out of its top limb.
 type BnMulSub = { List(UInt(64)) u; UInt(64) borrow; };
 
 // u[j..j+n] -= qhat * v, returning the borrow out of the top limb.
@@ -533,6 +541,7 @@ Bool bn_sieve_ok(List(Int) primes, List(Int) res, Int i, Int k) {
     return bn_sieve_ok(primes, res, i, k + 1);
 }
 
+/// The first twelve primes, 2 to 37, as Miller-Rabin witnesses.
 pub List(List(UInt(64))) bn_mr_bases() {
     return [[2], [3], [5], [7], [11], [13], [17], [19], [23], [29], [31], [37]];
 }
@@ -589,6 +598,7 @@ Option(List(UInt(64))) bn_sps_from(List(Int) rnd, Int bits, Int nb, Int off) {
     };
 }
 
+/// The `n` elements of `x` starting at index `from`.
 pub List(Int) bn_slice_int(List(Int) x, Int from, Int n) {
     return bn_slice_at(x, from, n, 0, ListBuf());
 }

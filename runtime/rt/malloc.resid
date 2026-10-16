@@ -46,7 +46,7 @@ pub Int sys_mmap(Int n) {
     Int p = resid_raw_syscall(9, 0, n, 3, 34, 0 - 1, 0);   // RW, PRIVATE|ANON
     if (p < 0 && p > 0 - 4096) { return 0; }
     _ = if (secret_mode()) { resid_raw_syscall(28, p, n, 16, 0, 0, 0) } else { 0 };   // MADV_DONTDUMP
-    _ = if (secret_mode()) { resid_raw_mlock(p, n) } else { 0 };
+    _ = if (secret_mode()) { resid_raw_syscall(149, p, n, 0, 0, 0, 0) } else { 0 };
     return p;
 }
 

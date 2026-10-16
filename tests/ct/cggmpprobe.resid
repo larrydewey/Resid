@@ -71,11 +71,13 @@ Int ct_case_cggmp_secret_config() {
     Secret(UInt(2048)) lam = cggmp_secret_paillier_lambda(t);
     Secret(UInt(2048)) lam_inv = cggmp_secret_paillier_lambda_inv(t);
     List(Secret(UInt(8))) bytes = csc_to_bytes32(csc_from_bytes(sec(key32())));
+    List(CgPublicCfg) none = [];
+    CgSecretConfig cfg = cggmp_secret_config(1, 1, sec(key32()), sec(key32()), sec(key32()), sec(key32()), sec(key32()), sec(key32()), none);
     UInt(2048) pv = ct_public(declassify(p, "CT probe output: CGGMP secret Paillier prime"));
     UInt(2048) qv = ct_public(declassify(q, "CT probe output: CGGMP secret Paillier prime"));
     UInt(2048) lv = ct_public(declassify(lam, "CT probe output: CGGMP secret Paillier lambda"));
     UInt(2048) liv = ct_public(declassify(lam_inv, "CT probe output: CGGMP secret Paillier lambda inverse"));
-    println(f"cggmp-secret-config {out} {pv} {qv} {lv} {liv} {bytes.len()}");
+    println(f"cggmp-secret-config {out} {pv} {qv} {lv} {liv} {bytes.len()} {cfg.ecdsa.len()}");
     return 0;
 }
 
