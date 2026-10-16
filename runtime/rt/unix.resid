@@ -38,7 +38,7 @@ Int fdq_push(Int fd) {
     Int n = ld64(q + 8);
     Int tail0 = ld64(q) + n;
     Int tail = if (tail0 >= fdq_cap()) { tail0 - fdq_cap() } else { tail0 };
-    _ = st64(q + 16 + tail + 8, fd);
+    _ = st64(q + 16 + tail * 8, fd);
     _ = st64(q + 8, n + 1);
     return n + 1;
 }
@@ -52,8 +52,18 @@ Int fdq_pop() {
     Int fd = ld64(q + 16 + head * 8);
     _ = st64(q, if (head + 1 >= fdq_cap()) { 0 } else { head + 1 });
     _ = st64(q + 8, n - 1);
+    _ = rx_mark(fd, 1);
     return fd;
 }
+
+// Which descriptors the program was handed by `resid_disp_recv_fd`: one
+// byte per descriptor below rx_cap. Only these may be read with
+// `resid_disp_fd_read`, so the display grant reads what the window server
+// sent and never a file or socket the program reached some other way.
+Int rx_fds() { return resid_raw_global("rt_disp_rx", 4096); }
+Int rx_cap() { return 4096; }
+Int rx_mark(Int fd, Int v) { return if (fd >= 0 && fd < rx_cap()) { st8(rx_fds() + fd, v) } else { 0 }; }
+Bool rx_has(Int fd) { return fd >= 0 && fd < rx_cap() && ld8(rx_fds() + fd) == 1; }
 
 // Close and forget everything queued: a message the caller never read
 // must not leak its descriptors. The count is returned for the tests.
@@ -67,9 +77,12 @@ Int fdq_take_all(Int q) {
     return n;
 }
 
+// The `n` queued descriptors from the head, which wraps at the ring's end.
 Int fdq_close_at(Int q, Int i, Int n) {
     if (i >= n) { return 0; }
-    _ = sys_close(ld64(q + 16 + i * 8));
+    Int at0 = ld64(q) + i;
+    Int at = if (at0 >= fdq_cap()) { at0 - fdq_cap() } else { at0 };
+    _ = sys_close(ld64(q + 16 + at * 8));
     return fdq_close_at(q, i + 1, n);
 }
 
@@ -130,25 +143,37 @@ Int unix_connect(Int sa) {
     return fd;
 }
 
-// A connected display socket, or -1.
+// A connected display socket, or -1: Wayland when the environment names a
+// compositor that answers, else the X server DISPLAY names.
 //
 // XDG_RUNTIME_DIR has no default: a Wayland socket outside it would be a
 // guess, and a guess here is how a program ends up talking to whatever
 // else created that file.
 @export("resid_disp_connect", "i64()")
 pub Int rt_disp_connect() {
+    Int wfd = rt_disp_connect_wayland();
+    return if (wfd >= 0) { wfd } else { rt_disp_connect_x11() };
+}
+
+// The Wayland compositor alone: WAYLAND_SOCKET, else WAYLAND_DISPLAY
+// (default `wayland-0`) under XDG_RUNTIME_DIR, else -1. A program that
+// speaks one protocol asks for it by name, so it never finds itself
+// talking the other protocol to a socket it did not choose.
+@export("resid_disp_connect_wayland", "i64()")
+pub Int rt_disp_connect_wayland() {
     Int inh = c_getenv(resid_raw_addr("WAYLAND_SOCKET"));
     if (inh != 0) { return disp_inherited(inh); }
     Int wd0 = c_getenv(resid_raw_addr("WAYLAND_DISPLAY"));
     Int wd = if (wd0 == 0) { resid_raw_addr("wayland-0") } else { wd0 };
     Int rt = c_getenv(resid_raw_addr("XDG_RUNTIME_DIR"));
-    if (rt != 0 && ld8(rt) != 0) {
-        Int sa = sa_under(rt, wd);
-        if (sa >= 0) {
-            Int wfd = unix_connect(sa);
-            if (wfd >= 0) { return wfd; }
-        }
-    }
+    if (rt == 0 || ld8(rt) == 0) { return 0 - 1; }
+    Int sa = sa_under(rt, wd);
+    return if (sa >= 0) { unix_connect(sa) } else { 0 - 1 };
+}
+
+// The X server DISPLAY names alone, or -1.
+@export("resid_disp_connect_x11", "i64()")
+pub Int rt_disp_connect_x11() {
     Int dpy = c_getenv(resid_raw_addr("DISPLAY"));
     if (dpy == 0 || ld8(dpy) == 0) { return 0 - 1; }
     return x11_connect(dpy);
@@ -333,6 +358,142 @@ pub Int rt_disp_recv_fd() { return fdq_pop(); }
 
 @export("resid_disp_close", "i8(i64)")
 pub Int rt_disp_close(Int fd) { return if (fd >= 0 && disp_sock_ok(fd)) { if (sys_close(fd) == 0) { 1 } else { 0 } } else { 0 }; }
+
+// The contents of a descriptor the window server sent (a Wayland keymap),
+// from its start, at most `max` bytes (capped at 16 MB), and the
+// descriptor closed: a received descriptor is read once. Empty, and
+// nothing closed, for a descriptor `resid_disp_recv_fd` did not hand out;
+// `max` 0 only closes it.
+@export("resid_disp_fd_read", "ptr(i64,i64)")
+pub Int rt_disp_fd_read(Int fd, Int max0) {
+    if (!rx_has(fd)) { return xempty(); }
+    _ = rx_mark(fd, 0);
+    Int max = clamp(max0, 0, 16777216);
+    if (max <= 0) { return xempty() + sys_close(fd) * 0; }
+    Int buf = xmalloc(max);
+    Int n = pread_all(fd, buf, 0, max);
+    _ = sys_close(fd);
+    Int out = disp_bytes_list(buf, n);
+    _ = c_free(buf);
+    return out;
+}
+
+// Bytes from offset `at` until `max`, end of file or an error.
+Int pread_all(Int fd, Int buf, Int at, Int max) {
+    if (at >= max) { return at; }
+    Int r = resid_raw_syscall(17, fd, buf + at, max - at, at, 0, 0);   // pread64
+    return if (r > 0) { pread_all(fd, buf, at + r, max) } else { at };
+}
+
+// The first `n` bytes at `buf` as a List(Int).
+Int disp_bytes_list(Int buf, Int n) {
+    Int slots = xmalloc(if (n > 0) { n * 8 } else { 8 });
+    _ = disp_byte_boxes(buf, slots, 0, n);
+    Int out = c_list_new(n, slots, resid_raw_addr("List"));
+    _ = c_free(slots);
+    return out;
+}
+
+// ─── X11 authorization ────────────────────────────────────────────────
+// An X server that is not open to every local user wants the
+// MIT-MAGIC-COOKIE-1 its session wrote to the authority file. The file is
+// the one XAUTHORITY names, else ~/.Xauthority; nothing else is read, and
+// what comes back is the cookie for this machine and DISPLAY's number,
+// the way libXau picks it.
+
+// The 16-byte cookie for DISPLAY, or an empty list when the file, the
+// entry or DISPLAY is missing (the server may need none).
+@export("resid_disp_x11_auth", "ptr()")
+pub Int rt_disp_x11_auth() {
+    Int dpy = c_getenv(resid_raw_addr("DISPLAY"));
+    if (dpy == 0 || ld8(dpy) == 0) { return xempty(); }
+    Int path = xauth_path();
+    if (path == 0) { return xempty(); }
+    Int fd = sys_open(path, o_rdonly(), 0);
+    if (fd < 0) { return xempty(); }
+    Int cap = 65536;
+    Int buf = xmalloc(cap);
+    Int n = pread_all(fd, buf, 0, cap);
+    _ = sys_close(fd);
+    Int host = xauth_host();
+    Int num = xauth_number(dpy);
+    Int at = xauth_find(buf, n, 0, host, num);
+    Int out = if (at >= 0) { disp_bytes_list(buf + at + 2, xa_u16(buf + at)) } else { xempty() };
+    _ = c_free(buf);
+    return out;
+}
+
+// XAUTHORITY, else $HOME/.Xauthority, else 0.
+Int xauth_path() {
+    Int xa = c_getenv(resid_raw_addr("XAUTHORITY"));
+    if (xa != 0 && ld8(xa) != 0) { return xa; }
+    Int home = c_getenv(resid_raw_addr("HOME"));
+    if (home == 0 || ld8(home) == 0) { return 0; }
+    Int hn = c_strlen(home);
+    if (hn + 13 > 255) { return 0; }
+    Int buf = path_buf();
+    _ = mcopy(buf, home, hn);
+    _ = mcopy(buf + hn, resid_raw_addr("/.Xauthority"), 12);
+    _ = st8(buf + hn + 12, 0);
+    return buf;
+}
+
+// This machine's name (uname's nodename), NUL-terminated.
+Int xauth_host() {
+    Int u = resid_raw_tls("disp_uname", 390);
+    _ = resid_raw_fill(u, 0, 390);
+    _ = resid_raw_syscall(63, u, 0, 0, 0, 0, 0);
+    return u + 65;
+}
+
+// The display number in DISPLAY as a NUL-terminated string, or 0 for
+// `@name` (no number: any entry's number matches).
+Int xauth_number(Int dpy) {
+    Int p = if (c_strncmp(dpy, resid_raw_addr("unix:"), 5) == 0) { dpy + 5 } else { dpy };
+    if (ld8(p) == 64) { return 0; }
+    Int colon = c_strchr(p, 58);
+    if (colon == 0) { return 0; }
+    Int num = colon + 1;
+    Int dn = disp_digits(num) - num;
+    Int buf = resid_raw_tls("disp_xnum", 8);
+    Int k = if (dn > 7) { 7 } else { dn };
+    _ = mcopy(buf, num, k);
+    _ = st8(buf + k, 0);
+    return buf;
+}
+
+Int xa_u16(Int p) { return ld8(p) * 256 + ld8(p + 1); }
+
+// Do the `n` bytes at `p` equal the NUL-terminated `s`?
+Bool xa_is(Int p, Int n, Int s) { return c_strlen(s) == n && (n == 0 || c_strncmp(p, s, n) == 0); }
+
+// The offset of the matching entry's data field (its length, then the
+// cookie), or -1. An entry is family (2 bytes, big-endian), then address,
+// number, name and data, each a 2-byte length and its bytes. A truncated
+// entry ends the search.
+Int xauth_find(Int buf, Int n, Int at, Int host, Int num) {
+    if (at + 2 > n) { return 0 - 1; }
+    Int fam = xa_u16(buf + at);
+    Int a = at + 2;
+    if (a + 2 > n) { return 0 - 1; }
+    Int al = xa_u16(buf + a);
+    Int b = a + 2 + al;
+    if (b + 2 > n) { return 0 - 1; }
+    Int bl = xa_u16(buf + b);
+    Int c = b + 2 + bl;
+    if (c + 2 > n) { return 0 - 1; }
+    Int cl = xa_u16(buf + c);
+    Int d = c + 2 + cl;
+    if (d + 2 > n) { return 0 - 1; }
+    Int dl = xa_u16(buf + d);
+    Int next = d + 2 + dl;
+    if (next > n) { return 0 - 1; }
+    Bool fam_ok = fam == 65535 || (fam == 256 && xa_is(buf + a + 2, al, host));
+    Bool num_ok = num == 0 || bl == 0 || xa_is(buf + b + 2, bl, num);
+    Bool name_ok = xa_is(buf + c + 2, cl, resid_raw_addr("MIT-MAGIC-COOKIE-1"));
+    if (fam_ok && num_ok && name_ok && dl == 16) { return d; }
+    return xauth_find(buf, n, next, host, num);
+}
 
 // ─── Shared memory ────────────────────────────────────────────────────
 // A memfd, sized, mapped MAP_SHARED: the descriptor goes to the window

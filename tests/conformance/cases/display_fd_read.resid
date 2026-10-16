@@ -1,0 +1,23 @@
+// A descriptor the window server sends (a Wayland keymap) is read once
+// with `resid_disp_fd_read` and closed. Only a descriptor
+// `resid_disp_recv_fd` handed out can be read: stdin, a socket or a
+// descriptor already read gives nothing.
+@requires(display)
+Int main() {
+    List(Int) p = resid_disp_pair();
+    if (p.len() != 2) { return 1; }
+    Int a = p[0];
+    Int b = p[1];
+    Int h = resid_disp_shm_new(16);
+    if (!resid_disp_shm_put(h, 0, [107, 101, 121, 115, 0], 5)) { return 1; }
+    if (!resid_disp_send(a, [1], resid_disp_shm_fd(h))) { return 1; }
+    _ = resid_disp_shm_free(h);
+    List(Int) got = resid_disp_recv(b, 8);
+    Int rfd = resid_disp_recv_fd();
+    List(Int) text = resid_disp_fd_read(rfd, 4);
+    println(f"{got} {text}");
+    println(f"{resid_disp_fd_read(rfd, 4)} {resid_disp_fd_read(0, 4)} {resid_disp_fd_read(b, 4)}");
+    _ = resid_disp_close(a);
+    _ = resid_disp_close(b);
+    return 0;
+}
