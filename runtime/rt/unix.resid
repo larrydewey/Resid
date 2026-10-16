@@ -539,6 +539,35 @@ pub Int rt_disp_shm_put(Int h, Int off, Int l, Int len0) {
     return 1;
 }
 
+// `n` pixels of `px`, from element `first` on, at byte `off` inside the
+// mapping: each element's low 32 bits, little-endian, so a List(UInt(32))
+// of ARGB words lands as the ARGB32 a window server reads. One pass over a
+// flat list's slots, where shm_put takes a list element per byte. False
+// when the handle is not one of ours, the range of elements is not in the
+// list, or the bytes would run past the mapping's end.
+@export("resid_disp_shm_put32", "i8(i64,i64,ptr,i64,i64)")
+pub Int rt_disp_shm_put32(Int h, Int off, Int l, Int first, Int n) {
+    if (!shm_ok(h) || off < 0 || first < 0 || n < 0) { return 0; }
+    if (first + n > c_list_len(l)) { return 0; }
+    if (off + n * 4 > ld64(h + 16)) { return 0; }
+    if (n == 0) { return 1; }
+    Int dst = ld64(h + 24) + off;
+    _ = if (lshift(l) == 0 - 1 && lraw(l)) { put32_slots(dst, lroot(l) + 24 + first * 8, 0, n) } else { put32_list(dst, l, first, 0, n) };
+    return 1;
+}
+
+Int put32_slots(Int dst, Int src, Int i, Int n) {
+    if (i >= n) { return 0; }
+    _ = st32(dst + i * 4, ld64(src + i * 8));
+    return put32_slots(dst, src, i + 1, n);
+}
+
+Int put32_list(Int dst, Int l, Int first, Int i, Int n) {
+    if (i >= n) { return 0; }
+    _ = st32(dst + i * 4, slot_int(l, c_list_get(l, first + i)));
+    return put32_list(dst, l, first, i + 1, n);
+}
+
 // Unmap and close. The handle is dead afterwards; using it again is
 // refused, not undefined.
 @export("resid_disp_shm_free", "i8(i64)")

@@ -140,6 +140,21 @@ pub Int pool_main(Int w) {
 // known string lengths (str_fast_save)}. The child starts at once; the
 // parent waits for it on the result's first use and, at the latest, before
 // leaving the scope that bound it (spec §19: completion is structured).
+// A spawn region's thread stack in MB: 256 by default, RESID_SPAWN_STACK_MB
+// overrides (8 to 1048576). Fixed-capacity values live inline in their
+// frame (spec §44), so a region that calls a native module with a 16 MB
+// argument holds the argument, its answer and the buffers that built
+// them on this stack: decoding an image in a region takes about 112 MB.
+// The stack is reserved, not committed: pages the region never touches
+// cost address space, not memory. A worker keeps its stack between
+// regions, so the size is read when a worker starts.
+Int spawn_stack_mb() {
+    Int env = c_getenv(resid_raw_addr("RESID_SPAWN_STACK_MB"));
+    if (env == 0 || ld8(env) == 0 || !is_int(env)) { return 256; }
+    Int v = rt_str_parse_int(env);
+    return if (v >= 8 && v <= 1048576) { v } else { 256 };
+}
+
 @export("resid_spawn_start", "ptr(ptr,ptr)")
 pub Int rt_spawn_start(Int worker, Int captures) {
     // Lazily loaded process state is loaded here, before any child can race.
@@ -160,7 +175,7 @@ pub Int rt_spawn_start(Int worker, Int captures) {
     }
     Int w = xmalloc(24);
     _ = st64(w, 0) + st64(w + 8, a) + st64(w + 16, 0);
-    Int t = thread_spawn(resid_raw_fn("pool_main"), w, 8388608);
+    Int t = thread_spawn(resid_raw_fn("pool_main"), w, spawn_stack_mb() * 1048576);
     // No thread (resources exhausted): run the region here, now.
     _ = if (t == 0) { c_free(w) + st64(a + 16, spawn_entry(a)) + st64(a + 32, 1) } else { 0 };
     return a;

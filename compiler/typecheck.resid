@@ -3091,6 +3091,10 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (builtin_args(argtys, "Int,Int,List(Int),Int")) { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_disp_shm_put expects (Int, Int, List(Int), Int), got (" + argtys + ")"};
     }
+    if (name == "resid_disp_shm_put32") {
+        if (builtin_args(argtys, "Int,Int,List(UInt(32)),Int,Int")) { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_disp_shm_put32 expects (Int, Int, List(UInt(32)), Int, Int), got (" + argtys + ")"};
+    }
     if (name == "resid_disp_shm_free") {
         if (argtys == "Int") { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_disp_shm_free expects (Int), got (" + argtys + ")"};

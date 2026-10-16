@@ -104,5 +104,6 @@ directly. What differs on AArch64:
 | `RESID_MEM_LIMIT` | the compiler's memory budget in MB (default 4096); one compile-time evaluation may meter a quarter of it |
 | `RESID_TEST_FILTER`, `RESID_TEST_FORMAT` | the test binary's `--filter` and `--format` |
 | `RESID_STACK_MB` | the stack of a program's main thread in MB (default 1024); for the compiler, how deep compile-time evaluation may nest before E0902 |
+| `RESID_SPAWN_STACK_MB` | the stack of each `spawn` region's thread in MB (default 256, at least 8); a region that passes large fixed-capacity values (a 16 MB `Bytes` to a native module) needs room for them |
 
 The compiler needs `clang` and `lld` (LLVM 22+) to link.

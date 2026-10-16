@@ -1224,6 +1224,13 @@ Rules:
   - Nested spawn permitted.
   - Scheduler implementation-defined.
   - Work may run in parallel; completion is structured.
+  - A child runs on a thread stack of its own, 256 MB
+    unless RESID_SPAWN_STACK_MB says otherwise (8 at
+    least). A fixed-capacity value lives inline in its
+    frame (§44), so a region that passes large ones (a
+    native module's 16 MB Bytes, §47) needs room for
+    them: a stack overflow is a fault of the process,
+    not the region's Err.
 
 
 ==================================================
