@@ -28,6 +28,7 @@ pub Int rt_list_contains_str(Int l, Int v) { return if (list_has(l, 2, v, 0, c_l
 
 @export("list_reverse_ints", "ptr(ptr)")
 pub Int rt_list_reverse(Int l) {
+    if (rec_words(ltype(l)) > 0) { return rec_reorder(l, 0); }
     Int n = c_list_len(l);
     Int items = c_list_to_array(l);
     _ = rev_at(items, 0, n - 1);
@@ -156,5 +157,52 @@ pub Int rt_list_sort_floats(Int l) { return sorted_copy(l, if (lraw(l)) { 7 } el
 pub Int rt_list_sort_strs(Int l) { return sorted_copy(l, 2, 0); }
 
 @export("list_sort_by", "ptr(ptr,ptr)")
-pub Int rt_list_sort_by(Int l, Int cmp) { return sorted_copy(l, 3, cmp); }
+pub Int rt_list_sort_by(Int l, Int cmp) { return if (rec_words(ltype(l)) > 0) { rec_reorder(l, cmp) } else { sorted_copy(l, 3, cmp) }; }
+
+// A list of inline records reversed (cmp 0) or sorted by comparator cmp:
+// an array of pointers into a snapshot is ordered, then gathered.
+Int rec_reorder(Int l, Int cmp) {
+    Int w = rec_words(ltype(l));
+    Int n = lcount(l) / w;
+    if (n == 0) { return l; }
+    Int snap = rec_snapshot(l);
+    Int ps = xmalloc(n * 8);
+    _ = rec_ptrs(ps, snap, w, 0, n);
+    Int scratch = xmalloc(n * 8);
+    Int ord = if (cmp != 0) { merge_sort(3, cmp, ps, scratch, n, 1) } else { rev_at(ps, 0, n - 1) * 0 + ps };
+    Int words = xmalloc(n * w * 8);
+    _ = rec_gather(words, ord, w, 0, n);
+    Int out = c_list_new(n * w, words, ltype(l));
+    _ = c_free(ps) + c_free(scratch) + c_free(words) + c_free(snap);
+    return out;
+}
+
+// The words of a list of inline records, copied with every header not
+// unique: user code given an element (a comparator, a formatter) reads
+// it, and no literal there rewrites it.
+pub Int rec_snapshot(Int l) {
+    Int w = rec_words(ltype(l));
+    Int n = lcount(l);
+    Int snap = xmalloc(max(n, 1) * 8);
+    _ = mcopy(snap, lroot(l) + 24, n * 8);
+    return rec_unshare(snap, w, 0, n / w) * 0 + snap;
+}
+
+Int rec_unshare(Int d, Int w, Int i, Int n) {
+    if (i >= n) { return 0; }
+    _ = st64(d + i * w * 8, rec_hdr(w) - 1);
+    return rec_unshare(d, w, i + 1, n);
+}
+
+Int rec_ptrs(Int ps, Int d, Int w, Int i, Int n) {
+    if (i >= n) { return 0; }
+    _ = st64(ps + i * 8, d + i * w * 8 + 8);
+    return rec_ptrs(ps, d, w, i + 1, n);
+}
+
+Int rec_gather(Int d, Int ps, Int w, Int i, Int n) {
+    if (i >= n) { return 0; }
+    _ = rec_put(d + i * w * 8, ld64(ps + i * 8), w);
+    return rec_gather(d, ps, w, i + 1, n);
+}
 

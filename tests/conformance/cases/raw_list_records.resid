@@ -1,0 +1,64 @@
+// Lists of plain records store them inline (typed storage): literals,
+// index, field reads, with, concat, slices, reverse, sort, for-in,
+// builders, map values, nested lists, spawn results and show.
+type Pt = { Int x; Float y; Bool on; UInt(8) b; };
+type Wrap = { List(Pt) ps; Int n; };
+
+Pt mk(Int i) { return Pt {.x = i, .y = (Float)i / 4.0, .on = i % 2 == 0, .b = (UInt(8))((i * 3) % 256)}; }
+
+List(Pt) build(Int i, Int n, List(Pt) acc) {
+    if (i >= n) { return acc; }
+    return build(i + 1, n, acc.concat([mk(i)]));
+}
+
+List(Pt) bump(List(Pt) ps, Int i) {
+    if (i >= ps.len()) { return ps; }
+    Pt p = ps[i];
+    return bump(ps.with(i, Pt {.x = p.x + 100, .y = p.y * 2.0, .on = !p.on, .b = p.b}), i + 1);
+}
+
+Int by_x_desc(Pt a, Pt b) { return b.x - a.x; }
+
+Int sumx(List(Pt) ps, Int i, Int acc) {
+    if (i >= ps.len()) { return acc; }
+    return sumx(ps, i + 1, acc + ps[i].x);
+}
+
+Int main() {
+    List(Pt) a = [mk(1), mk(2), mk(3)];
+    println(f"{a.len()} {a[1].x} {a[2].y} {a[0].on} {a[2].b}");
+    println(f"{a}");
+    List(Pt) b = build(0, 100, []);
+    println(f"{b.len()} {b[99].x} {b[50].y} {sumx(b, 0, 0)}");
+    List(Pt) c = bump(b, 0);
+    println(f"{c[99].x} {b[99].x} {c[7].on} {b[7].on}");
+    List(Pt) d = b.with(5, mk(77));
+    println(f"{d[5].x} {b[5].x}");
+    List(Pt) s = b[10..13];
+    println(f"{s.len()} {s[0].x} {s[2].x} {b[98..].len()} {b[..2].len()}");
+    List(Pt) r = a.reverse();
+    println(f"{r[0].x} {r[2].x}");
+    List(Pt) so = sort(a, using = by_x_desc);
+    println(f"{so[0].x} {so[2].x}");
+    Pt whole = b[42];
+    println(f"{whole.x} {whole.y}");
+    for (Pt q in a) { println(f"q {q.x} {q.b}"); }
+    ListBuf(Pt) lb = ListBuf();
+    List(Pt) lbs = lb.push(mk(9)).push(mk(10)).finish();
+    println(f"{lbs.len()} {lbs[1].x}");
+    Map(Str, Pt) m = {"k": mk(5), "j": mk(6)};
+    List(Pt) mv = m.values();
+    println(f"{mv.len()} {mv[0].x + mv[1].x}");
+    Map(Str, List(Pt)) ml = {"a": a};
+    List(Pt) mla = ml.get("a") else { [] };
+    println(f"{mla[2].x}");
+    Wrap w = Wrap {.ps = a.concat(b[0..2]), .n = 1};
+    println(f"{w.ps.len()} {w.ps[4].x}");
+    Result(List(Pt), RegionError) sp = spawn () { return build(0, 70, []); };
+    List(Pt) sv = sp else { [] };
+    println(f"{sv.len()} {sv[69].x}");
+    List(Pt) e = [];
+    List(Pt) e2 = e.concat([mk(4)]);
+    println(f"{e2.len()} {e2[0].x} {e.len()}");
+    return 0;
+}

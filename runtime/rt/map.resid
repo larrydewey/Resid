@@ -1954,6 +1954,45 @@ pub Int rt_list_set_w(Int l, Int owned, Int i, Int w) {
     return list_set_slow(l, owned, i, w);
 }
 
+// xs.with(i, r) on a list of inline records of w words: r's fields copied
+// into element i (in place on an owned transient list; nothing to copy
+// when r is that element, rewritten in place).
+@export("resid_list_set_rec", "ptr(ptr,i8,i64,ptr,i64)")
+@inline
+pub Int rt_list_set_rec(Int l, Int owned, Int i, Int r, Int w) {
+    if (owned != 0 && ltransient(l) && ult(i, lcount(l) / w)) {
+        Int d = lroot(l) + 32 + i * w * 8;
+        return (if (d != r) { mcopy(d, r, (w - 1) * 8) } else { 0 }) * 0 + l;
+    }
+    return list_set_rec_slow(l, owned, i, r, w);
+}
+
+// The write-back of a borrowed element (lo_borrows, flag 4): owned, at
+// the index the borrow checked, the list unchanged since.
+@export("resid_list_set_rec_wb", "ptr(ptr,i64,ptr,i64)")
+@inline
+pub Int rt_list_set_rec_wb(Int l, Int i, Int r, Int w) {
+    if (ltransient(l)) {
+        Int d = lroot(l) + 32 + i * w * 8;
+        return (if (d != r) { mcopy(d, r, (w - 1) * 8) } else { 0 }) * 0 + l;
+    }
+    return list_set_rec_slow(l, 1, i, r, w);
+}
+
+@noinline
+Int list_set_rec_slow(Int l, Int owned, Int i, Int r, Int w) {
+    Int n = lcount(l) / w;
+    if (!ult(i, n)) { return rt_index_abort(i, n, 0); }
+    // A record list is always flat: a shared one is copied whole.
+    Bool keep = owned != 0 && !no_thaw(l);
+    Int t = if (keep && ltransient(l)) { l } else { with_fresh(l, 0) };
+    _ = mcopy(lroot(t) + 32 + i * w * 8, r, (w - 1) * 8);
+    if (keep) { return t; }
+    // A persistent copy: not transient (with_shared's shape).
+    _ = st32(t + 8, 0 - 1);
+    return if (owned != 0) { mark_frozen(t) } else { t };
+}
+
 @noinline
 Int list_set_slow(Int l, Int owned, Int i, Int w) {
     Int n = lcount(l);

@@ -148,7 +148,9 @@ Int sb_strs(Int sb, Int l, Int i, Int n) {
 pub Int rt_list_show_clo(Int l, Int clo) {
     Int sb = rt_sb_new();
     _ = sb_lit(sb, resid_raw_addr("["));
-    _ = if (l != 0) { sb_clo(sb, l, clo, 0, ld64(l)) } else { 0 };
+    Int w = if (l != 0) { rec_words(ltype(l)) } else { 0 };
+    Int snap = if (w > 0) { rec_snapshot(l) } else { 0 };
+    _ = if (w > 0) { sb_clo_rec(sb, snap, clo, w, 0, ld64(l) / w) + c_free(snap) } else { if (l != 0) { sb_clo(sb, l, clo, 0, ld64(l)) } else { 0 } };
     _ = sb_lit(sb, resid_raw_addr("]"));
     return rt_sb_finish(sb);
 }
@@ -158,6 +160,15 @@ Int sb_clo(Int sb, Int l, Int clo, Int i, Int n) {
     _ = if (i > 0) { sb_lit(sb, resid_raw_addr(", ")) } else { 0 };
     _ = sb_lit(sb, resid_raw_call2(ld64(clo), clo, slot_box(l, c_list_get(l, i))));
     return sb_clo(sb, l, clo, i + 1, n);
+}
+
+// Inline records: the closure gets each element's fields in a snapshot
+// (rec_snapshot).
+Int sb_clo_rec(Int sb, Int snap, Int clo, Int w, Int i, Int n) {
+    if (i >= n) { return 0; }
+    _ = if (i > 0) { sb_lit(sb, resid_raw_addr(", ")) } else { 0 };
+    _ = sb_lit(sb, resid_raw_call2(ld64(clo), clo, snap + i * w * 8 + 8));
+    return sb_clo_rec(sb, snap, clo, w, i + 1, n);
 }
 
 // s in double quotes, with ", \ and control characters escaped.
