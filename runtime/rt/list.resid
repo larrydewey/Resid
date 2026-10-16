@@ -20,7 +20,7 @@
 // ─── Composite boxes ───────────────────────────────────────────────────
 
 Int box_hdr(Int tag, Int count, Int ty) {
-    Int n = if (count > 0) { count } else { 0 };
+    Int n = if (count > 0) { count & 65535 } else { 0 };
     Int v = ralloc(16 + n * 8);
     _ = st32(v, tag);
     _ = st32(v + 4, count);
@@ -685,7 +685,7 @@ pub Int rt_list_free(Int l) {
 Int free_slots(Int v, Int i, Int n, Bool deep) {
     if (i >= n) { return 0; }
     Int s = ld64(v + 16 + i * 8);
-    _ = if (s != 0 && c_box_interned(s) == 0) { c_free(s) } else { 0 };
+    _ = if (s != 0 && box_rawk(v, i) == 0 && c_box_interned(s) == 0) { c_free(s) } else { 0 };
     return free_slots(v, i + 1, n, deep);
 }
 

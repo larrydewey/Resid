@@ -1,0 +1,43 @@
+// Scalar payloads of a declared sum are stored raw (typed storage):
+// every width, generic sums, recursion, show, expect and map values.
+type Pile = Disk(Int, Pile) | Empty;
+type Mix = Many(Int(8), UInt(64), Float, Float(32), Bool, Int) | Few(Bool) | Zero;
+type Box2(T) = Two(T, Int) | NoneYet;
+
+Int depth(Pile p, Int acc) { return match p { Disk(_, rest) => depth(rest, acc + 1), Empty => acc }; }
+Int total(Pile p, Int acc) { return match p { Disk(s, rest) => total(rest, acc + s), Empty => acc }; }
+Pile build(Int n, Pile acc) { if (n == 0) { return acc; } return build(n - 1, Disk(n * 1000000000000000, acc)); }
+
+Str mix_s(Mix m) {
+    return match m {
+        Many(a, b, c, d, e, f) => f"{a} {b} {c} {d} {e} {f}",
+        Few(x) => f"few {x}",
+        Zero => "zero"
+    };
+}
+
+Int two(Box2(Int) b) { return match b { Two(x, y) => x * 100 + y, NoneYet => -1 }; }
+
+Int main() {
+    Pile p = build(20, Empty);
+    println(f"{depth(p, 0)} {total(p, 0)}");
+    Int(8) neg = -7;
+    Float(32) q = 0.5;
+    Mix m = Many(neg, 18446744073709551615, -2.25, q, true, -9223372036854775807 - 1);
+    println(mix_s(m));
+    println(mix_s(Few(false)));
+    println(mix_s(Zero));
+    println(f"{m}");
+    println(f"{p}");
+    Box2(Int) b = Two(4, 2);
+    println(f"{two(b)} {two(NoneYet)}");
+    List(Pile) ps = [Disk(1, Empty), Disk(2, Disk(3, Empty))];
+    println(f"{total(ps[1], 0)} {ps}");
+    Map(Str, Mix) mp = {"a": Few(true)};
+    Mix got = mp.get("a") else { Zero };
+    println(mix_s(got));
+    expect(Few(true)).toBe(Few(true));
+    expect(Disk(5, Empty)).toBe(Disk(5, Empty));
+    println("ok");
+    return 0;
+}

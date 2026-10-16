@@ -13,7 +13,21 @@ pub Bool box_fimm(Int p) { return ((ct_hide(p >> 48) >> 8) & 255) != 0; }
 pub Int imm_val(Int p) { return p - 18295873486192640; }
 pub Int sx32(Int v) { return (v << 32) >> 32; }
 pub Int box_tag(Int p) { return sx32(ld32(p)); }
-pub Int box_count(Int p) { return sx32(ld32(p + 4)); }
+// The count word's low half is the slot count; bits 16 up hold 2 bits per
+// slot of a user sum's payload: its raw kind (W1, sum_raw_kinds in the
+// compiler), 0 a tagged word.
+pub Int box_count(Int p) { return ld32(p + 4) & 65535; }
+pub Int box_rawk(Int p, Int i) { return if (i < 8) { (ld32(p + 4) >> (16 + 2 * i)) & 3 } else { 0 }; }
+
+// Slot i as a tagged word (a raw payload boxed by its kind).
+pub Int box_slot_tagged(Int p, Int i) {
+    Int k = box_rawk(p, i);
+    Int w = box_slot(p, i);
+    if (k == 0) { return w; }
+    if (k == 2) { return c_box_f64(resid_raw_bits_f64(w)); }
+    if (k == 3) { return interned() + (w & 1) * 32; }
+    return c_box_i64(w);
+}
 pub Int box_type(Int p) { return ld64(p + 8); }
 pub Int box_slot(Int p, Int i) { return ld64(p + 16 + i * 8); }
 
@@ -79,7 +93,7 @@ Int sb_elem(Int sb, Int p) {
 Int sb_slots(Int sb, Int p, Int i, Int n) {
     if (i >= n) { return 0; }
     _ = if (i > 0) { sb_lit(sb, resid_raw_addr(", ")) } else { 0 };
-    _ = sb_elem(sb, box_slot(p, i));
+    _ = sb_elem(sb, box_slot_tagged(p, i));
     return sb_slots(sb, p, i + 1, n);
 }
 
@@ -108,7 +122,7 @@ pub Int rt_to_string(Int p) {
         return rt_sb_finish(sb);
     }
     if (tag == 1 && box_count(p) == 1 && box_slot(p, 0) != 0) {
-        Int inner = box_slot(p, 0);
+        Int inner = box_slot_tagged(p, 0);
         Int k = scalar_kind(inner);
         Int sb = rt_sb_new();
         _ = sb_lit(sb, if (k != 0) { resid_raw_addr("Some(") } else { resid_raw_addr("Some<") });

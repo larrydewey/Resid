@@ -1393,6 +1393,53 @@ Int sum_inline_fields(Funcs fs, Str sumty, Int vidx) {
     return struct_nfields(stfl[si]);
 }
 
+// The raw slot kinds of variant vidx's payload positions (typed storage,
+// W1), decided from the declaration alone so every construction and match
+// agree: lst_raw's kinds (1 an integer of at most 64 bits, 2 a Float, 3 a
+// Bool) hold the value itself, 0 a tagged word. Only the first 8
+// positions, and not in a sum that reuses Option's or Result's variant
+// names (their unwrapping reads tagged slots).
+List(Int) sum_raw_kinds(Funcs fs, Str sumty, Int vidx) {
+    Int sidx = sumtype_index_cg(fs, sumty);
+    if (sidx < 0 || vidx < 0) { return []; }
+    List(Str) vn = sumv_names_cg(fs.suv[sidx]);
+    if (sum_names_builtin(vn, 0)) { return []; }
+    List(Str) vt = sumv_types_cg(fs.suv[sidx]);
+    if (vidx >= vt.len()) { return []; }
+    return sum_raw_at(fs, sum_payload_of_cg(vt[vidx]), 0, []);
+}
+
+Bool sum_names_builtin(List(Str) vn, Int i) {
+    if (i >= vn.len()) { return false; }
+    Str n = vn[i];
+    if (n == "Some" || n == "None" || n == "Ok" || n == "Err") { return true; }
+    return sum_names_builtin(vn, i + 1);
+}
+
+List(Int) sum_raw_at(Funcs fs, List(Str) pays, Int i, List(Int) acc) {
+    if (i >= pays.len()) { return acc; }
+    Int k = if (i < 8) { lst_raw(ct_base_of(fs.ctn, fs.ctb, pays[i])) } else { 0 };
+    return sum_raw_at(fs, pays, i + 1, acc.concat([k]));
+}
+
+// The kinds as the box's count word carries them: 2 bits per position
+// from bit 16 (resid_box_alloc's `count`, box_rawk in runtime/rt/show.resid).
+Int sum_raw_mask(List(Int) ks, Int i, Int acc) {
+    if (i >= ks.len()) { return acc; }
+    return sum_raw_mask(ks, i + 1, acc + (ks[i] << (16 + 2 * i)));
+}
+
+// A raw payload slot read back as its declared type.
+GT cg_match_payload_raw(GT sc, Str ety, Int slot, GT c) {
+    Int t1 = c.tmp + 1;
+    Str p1 = f"%t{t1}";
+    Str p2 = f"%t{t1 + 1}";
+    Str p3 = f"%t{t1 + 2}";
+    List(Str) z = c.lines.concat([p1 + " = getelementptr {i32, i32, ptr}, ptr " + sc.val + ", i32 1", p2 + f" = getelementptr ptr, ptr " + p1 + f", i32 {slot}", p3 + " = load ptr, ptr " + p2]);
+    Int tr = t1 + 3;
+    return GT {.pos = sc.pos, .val = lst_read_reg(ety, p3, tr), .ty = ety, .cnt = 0, .err = "", .glines = c.glines, .lines = lst_read_lines(ety, p3, tr, z), .tmp = tr + 1, .lbl = c.lbl, .tail = false};
+}
+
 // ─── Environment: List(Str) of "name:val:ty" entries ───────────
 
 // ─── scalar scopes ───────────────────────────────────────────────────

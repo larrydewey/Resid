@@ -1179,18 +1179,18 @@ LWP lw_arm_payloads(LW w, GT sc, List(Str) pays, Int vi, GT c) {
         if (p.err != "") { return LWP {.g = c, .vals = none, .tys = none, .err = p.err}; }
         return LWP {.g = p, .vals = [p.val], .tys = pays, .err = ""};
     }
-    return lw_arm_slot(w, sc, pays, 0, c, ListBuf(), ListBuf());
+    return lw_arm_slot(w, sc, pays, sum_raw_kinds(w.fs, sc.ty, vi), 0, c, ListBuf(), ListBuf());
 }
 
-LWP lw_arm_slot(LW w, GT sc, List(Str) pays, Int i, GT c, ListBuf(Str) vals, ListBuf(Str) tys) {
+LWP lw_arm_slot(LW w, GT sc, List(Str) pays, List(Int) rk, Int i, GT c, ListBuf(Str) vals, ListBuf(Str) tys) {
     if (i >= pays.len()) { return LWP {.g = c, .vals = vals.finish(), .tys = tys.finish(), .err = ""}; }
-    GT p = cg_match_payload(sc, pays[i], i, c);
+    GT p = if (i < rk.len() && rk[i] > 0) { gt_retype(cg_match_payload_raw(sc, ct_base_of(w.fs.ctn, w.fs.ctb, pays[i]), i, c), pays[i]) } else { cg_match_payload(sc, pays[i], i, c) };
     if (p.err != "") {
         List(Str) dv = vals.finish();
         List(Str) dt = tys.finish();
         return LWP {.g = c, .vals = dv, .tys = dt, .err = p.err};
     }
-    return lw_arm_slot(w, sc, pays, i + 1, p, vals.push(p.val), tys.push(pays[i]));
+    return lw_arm_slot(w, sc, pays, rk, i + 1, p, vals.push(p.val), tys.push(pays[i]));
 }
 
 // Bind an arm's pattern names to its payload slots, in order. A name of
@@ -3810,11 +3810,12 @@ GT lw_variant_con(LW w, Int id, Str sumty, Int vidx, List(Str) env, GT c) {
     // A payload of a generic sum under the wanted arguments.
     Int wsx = sumtype_index_cg(w.fs, w.want);
     List(Str) wps = if (wsx >= 0 && lw_label(w.want) == lw_label(sumty)) { sum_variant_pays_cg(w.fs, wsx, vidx, w.want) } else { [] };
-    LVP ps = lw_variant_parts(w, id, pays, wps, 0, env, c, ListBuf(), ListBuf());
-    if (ps.err != "") { return lw_gerr(ps.err, c); }
     Int nif = sum_inline_fields(w.fs, sumty, vidx);
+    List(Int) rk = if (nif >= 0) { [] } else { sum_raw_kinds(w.fs, sumty, vidx) };
+    LVP ps = lw_variant_parts(w, id, pays, wps, rk, 0, env, c, ListBuf(), ListBuf());
+    if (ps.err != "") { return lw_gerr(ps.err, c); }
     if (nif >= 0) { return cg_variant_con_inline("", 0, ps.g, 0, sumty, vidx, nif); }
-    return lw_box_n(ps, sumty, f"{vidx}", w.fs);
+    return lw_box_n(ps, sumty, f"{vidx}", sum_raw_mask(rk, 0, 0), w.fs);
 }
 
 // The declared payload positions of variant `vidx` of `sumty`.
@@ -3841,7 +3842,7 @@ List(Str) sum_variant_pays_cg(Funcs fs, Int sidx, Int vidx, Str want) {
 // right so their evaluation order is the source order.
 type LVP = { GT g; List(Str) vals; List(Str) tys; Str err; };
 
-LVP lw_variant_parts(LW w, Int id, List(Str) pays, List(Str) wps, Int i, List(Str) env, GT c, ListBuf(Str) vals, ListBuf(Str) tys) {
+LVP lw_variant_parts(LW w, Int id, List(Str) pays, List(Str) wps, List(Int) rk, Int i, List(Str) env, GT c, ListBuf(Str) vals, ListBuf(Str) tys) {
     if (i >= pays.len()) { return LVP {.g = c, .vals = vals.finish(), .tys = tys.finish(), .err = ""}; }
     Str want = if (i < wps.len()) { wps[i] } else { "" };
     GT p = lw_part(w, lw_kid(w, id, i), want, env, c);
@@ -3850,18 +3851,23 @@ LVP lw_variant_parts(LW w, Int id, List(Str) pays, List(Str) wps, Int i, List(St
         List(Str) dt = tys.finish();
         return LVP {.g = p, .vals = dv, .tys = dt, .err = p.err};
     }
-    GT hb = box_heap_("", p, env, w.fs);
+    // A raw slot (sum_raw_kinds) holds the value's word, as its declared type.
+    Bool raw = i < rk.len() && rk[i] > 0;
+    Str pb = ct_base_of(w.fs.ctn, w.fs.ctb, pays[i]);
+    GT pr = if (raw) { lw_adopt(p, pb) } else { p };
+    Int tb = pr.tmp + 1;
+    GT hb = if (raw) { lw_step(pr, lst_box_reg(pb, pr.val, tb), pays[i], pr.lines.concat(lst_box_lines(pb, pr.val, tb)), tb + 3) } else { box_heap_("", p, env, w.fs) };
     if (hb.err != "") {
         List(Str) dv = vals.finish();
         List(Str) dt = tys.finish();
         return LVP {.g = hb, .vals = dv, .tys = dt, .err = hb.err};
     }
-    return lw_variant_parts(w, id, pays, wps, i + 1, env, hb, vals.push(hb.val), tys.push(pays[i]));
+    return lw_variant_parts(w, id, pays, wps, rk, i + 1, env, hb, vals.push(hb.val), tys.push(pays[i]));
 }
 
 // The tagged box of `n` payload slots: one alloca, a store per value in
 // payload order, then the box that owns them.
-GT lw_box_n(LVP ps, Str ty, Str vidx, Funcs fs) {
+GT lw_box_n(LVP ps, Str ty, Str vidx, Int rmask, Funcs fs) {
     Int np = ps.vals.len();
     Int t1 = ps.g.tmp + 1;
     Int t2 = ps.g.tmp + 2;
@@ -3878,7 +3884,7 @@ GT lw_box_n(LVP ps, Str ty, Str vidx, Funcs fs) {
         return GT {.pos = 0, .val = nb, .ty = ty, .cnt = 0, .err = "", .glines = gl3, .lines = ps.g.lines, .tmp = t1, .lbl = ps.g.lbl, .tail = false};
     }
     // The box first, then a store per slot (no stack array to copy from).
-    List(Str) pre = [sa + f" = call ptr @resid_box_alloc(i64 {vidx}, i64 {np}, ptr " + tsym + ")", gi + " = getelementptr {i32, i32, ptr}, ptr " + sa + ", i32 1"];
+    List(Str) pre = [sa + f" = call ptr @resid_box_alloc(i64 {vidx}, i64 {np + rmask}, ptr " + tsym + ")", gi + " = getelementptr {i32, i32, ptr}, ptr " + sa + ", i32 1"];
     LBS b = lw_box_slots(np, sa, gi, t2, ps.vals, 0, pre);
     List(Str) l4 = ps.g.lines.concat(b.lines);
     return GT {.pos = 0, .val = sa, .ty = ty, .cnt = 0, .err = "", .glines = gl2, .lines = l4, .tmp = b.tmp, .lbl = ps.g.lbl, .tail = false};
