@@ -1,0 +1,42 @@
+// A list literal stores its declared element type wherever that type is
+// known (typed storage reads slots as it): a binding, field, argument,
+// return, variant payload, map value, nested list, concat argument and if
+// arm, with elements that fold to values past 2^62 or that are narrower
+// than the element type.
+type Shape = Pts(List(Int(128))) | Nil;
+type Wrap = { List(UInt(64)) us; Map(Str, List(Int(128))) m; List(Int) xs; };
+
+List(Int) ret() { return [5, -9223372036854775807 - 1]; }
+Int second(List(Int) xs) { return xs[1]; }
+Int(128) wide(List(Int(128)) xs) { return xs[1]; }
+UInt(64) first_u(List(UInt(64)) xs) { return xs[0]; }
+Int(128) pick(Shape s) { return match (s) { Pts(xs) => xs[1], Nil => (Int(128))0 }; }
+
+Int main() {
+    List(Int) b = [5, -4611686018427387903 - 1];
+    println(f"{b[1]} {ret()[1]} {second([5, -9223372036854775807 - 1])}");
+    List(Int(128)) a = [1, 2];
+    println(f"{a[0]} {wide([3, 4])} {first_u([9])}");
+    Option(List(Int(128))) o = Some([1, 2]);
+    List(Int(128)) ov = o else { [] };
+    println(f"{ov[1]} {pick(Pts([3, 4]))}");
+    Wrap w = Wrap {.us = [18446744073709551615, 9223372036854775807], .m = {"k": [5, 6]}, .xs = [5, -9223372036854775807 - 1]};
+    List(Int(128)) mk = w.m.get("k") else { [] };
+    println(f"{w.us[0]} {w.us[1]} {mk[1]} {w.xs[1]}");
+    List(Int(128)) c = a.concat([10]);
+    List(Int) cc = [1].concat([5, -9223372036854775807 - 1]);
+    println(f"{c[2]} {cc[2]}");
+    List(List(Int)) n = [[5, -4611686018427387903 - 1]];
+    List(List(Int(128))) n2 = [[7, 8]];
+    println(f"{n[0][1]} {n2[0][1]}");
+    Map(Str, List(Int(128))) mm = {};
+    Map(Str, List(Int(128))) mm2 = mm.insert("z", [11, 12]);
+    List(Int(128)) zz = mm2.get("z") else { [] };
+    println(f"{zz[1]}");
+    List(Int) t = if (ov.len() > 1) { [5, -9223372036854775807 - 1] } else { [1] };
+    List(Int(128)) t2 = if (ov.len() > 5) { a } else { [3] };
+    println(f"{t[1]} {t2[0]}");
+    Set(Int(128)) st = {7, 8};
+    println(f"{st.contains(8)}");
+    return 0;
+}

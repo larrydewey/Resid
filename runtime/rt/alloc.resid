@@ -506,9 +506,10 @@ Int const_list(Int cache, Int n, Int data, Int ty, Int kind) {
     return st64(cache, list) * 0 + list;
 }
 
+// Kinds 3 and 4: raw Int and Bool slots (W1), the type word their kind.
 Int const_boxes(Int boxes, Int data, Int i, Int n, Int kind) {
     if (i >= n) { return 0; }
-    Int b = if (kind == 0) { rt_box_i64(ld64(data + i * 8)) } else { rt_box_bool(if (ld8(data + i) != 0) { 1 } else { 0 }) };
+    Int b = if (kind == 3) { ld64(data + i * 8) } else { if (kind == 4) { if (ld8(data + i) != 0) { 1 } else { 0 } } else { if (kind == 0) { rt_box_i64(ld64(data + i * 8)) } else { rt_box_bool(if (ld8(data + i) != 0) { 1 } else { 0 }) } } };
     _ = st64(boxes + i * 8, b);
     return const_boxes(boxes, data, i + 1, n, kind);
 }
@@ -518,6 +519,12 @@ pub Int rt_list_const_i64(Int cache, Int n, Int data, Int ty) { return const_lis
 
 @export("resid_list_const_bool", "ptr(ptr,i64,ptr,ptr)")
 pub Int rt_list_const_bool(Int cache, Int n, Int data, Int ty) { return const_list(cache, n, data, ty, 1); }
+
+@export("resid_list_const_i64r", "ptr(ptr,i64,ptr)")
+pub Int rt_list_const_i64r(Int cache, Int n, Int data) { return const_list(cache, n, data, 1, 3); }
+
+@export("resid_list_const_boolr", "ptr(ptr,i64,ptr)")
+pub Int rt_list_const_boolr(Int cache, Int n, Int data) { return const_list(cache, n, data, 3, 4); }
 
 // Elements are pointers to static data (string literals).
 @export("resid_list_const_ptr", "ptr(ptr,i64,ptr,ptr)")

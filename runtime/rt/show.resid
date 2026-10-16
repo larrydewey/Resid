@@ -86,7 +86,7 @@ Int sb_slots(Int sb, Int p, Int i, Int n) {
 Int sb_items(Int sb, Int l, Int i, Int n) {
     if (i >= n) { return 0; }
     _ = if (i > 0) { sb_lit(sb, resid_raw_addr(", ")) } else { 0 };
-    _ = sb_elem(sb, c_list_get(l, i));
+    _ = sb_elem(sb, slot_box(l, c_list_get(l, i)));
     return sb_items(sb, l, i + 1, n);
 }
 
@@ -156,7 +156,7 @@ pub Int rt_list_show_clo(Int l, Int clo) {
 Int sb_clo(Int sb, Int l, Int clo, Int i, Int n) {
     if (i >= n) { return 0; }
     _ = if (i > 0) { sb_lit(sb, resid_raw_addr(", ")) } else { 0 };
-    _ = sb_lit(sb, resid_raw_call2(ld64(clo), clo, c_list_get(l, i)));
+    _ = sb_lit(sb, resid_raw_call2(ld64(clo), clo, slot_box(l, c_list_get(l, i))));
     return sb_clo(sb, l, clo, i + 1, n);
 }
 

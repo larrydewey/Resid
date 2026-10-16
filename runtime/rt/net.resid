@@ -387,8 +387,8 @@ pub Int rt_tcp_poll(Int fl, Int wl, Int ms) {
 
 Int poll_fill(Int fl, Int wl, Int pf, Int i, Int n) {
     if (i >= n) { return 0; }
-    Int fd = unbox_word(c_list_get(fl, i));
-    Int w = if (i < c_list_len(wl)) { unbox_word(c_list_get(wl, i)) } else { 1 };
+    Int fd = slot_int(fl, c_list_get(fl, i));
+    Int w = if (i < c_list_len(wl)) { slot_int(wl, c_list_get(wl, i)) } else { 1 };
     Int ev = (if ((w & 1) != 0) { 1 } else { 0 }) | (if ((w & 2) != 0) { 4 } else { 0 });  // POLLIN, POLLOUT
     _ = st32(pf + i * 8, fd);
     _ = st32(pf + i * 8 + 4, ev);
@@ -398,7 +398,7 @@ Int poll_fill(Int fl, Int wl, Int pf, Int i, Int n) {
 // The earliest deadline among the descriptors, 0 when none has one.
 Int poll_nearest(Int fl, Int i, Int n, Int best) {
     if (i >= n) { return best; }
-    Int d = dl_get(unbox_word(c_list_get(fl, i)));
+    Int d = dl_get(slot_int(fl, c_list_get(fl, i)));
     Int b2 = if (d != 0 && (best == 0 || d < best)) { d } else { best };
     return poll_nearest(fl, i + 1, n, b2);
 }
@@ -406,7 +406,7 @@ Int poll_nearest(Int fl, Int i, Int n, Int best) {
 Int poll_read(Int fl, Int pf, Int slots, Int i, Int n, Int now) {
     if (i >= n) { return 0; }
     Int rev = (ld32(pf + i * 8 + 4) >> 16) & 65535;
-    Int d = dl_get(unbox_word(c_list_get(fl, i)));
+    Int d = dl_get(slot_int(fl, c_list_get(fl, i)));
     Int r = (if ((rev & 25) != 0) { 1 } else { 0 })        // POLLIN, POLLERR, POLLHUP
         | (if ((rev & 12) != 0) { 2 } else { 0 })           // POLLOUT, POLLERR
         | (if (d != 0 && d <= now) { 4 } else { 0 })
@@ -693,7 +693,7 @@ pub Int rt_tcp_send_bin(Int fd, Int l) {
 
 pub Int bytes_of(Int l, Int buf, Int i, Int n) {
     if (i >= n) { return 0; }
-    _ = st8(buf + i, unbox_word(c_list_get(l, i)) & 255);
+    _ = st8(buf + i, slot_int(l, c_list_get(l, i)) & 255);
     return bytes_of(l, buf, i + 1, n);
 }
 

@@ -994,5 +994,5 @@ pub Int rt_str_from_codepoints(Int l) {
 
 Int cps_out(Int l, Int buf, Int k, Int i, Int n) {
     if (i >= n) { return k; }
-    return cps_out(l, buf, k + utf8_encode(unbox_word(rt_list_get(l, i)), buf + k), i + 1, n);
+    return cps_out(l, buf, k + utf8_encode(slot_int(l, rt_list_get(l, i)), buf + k), i + 1, n);
 }

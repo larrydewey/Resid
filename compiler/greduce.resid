@@ -346,6 +346,9 @@ SV sem_lit(KN n) {
         if (k <= 18) { return sv_of(rd_itoa(rd_atoi(text)), "Int"); }
         Int(2048) x = rd_w(text);
         if (!rd_carried(x)) { return sv_no(); }
+        // A value that fits Int is typed Int, as the checker types it: a
+        // fold must not change its node's type.
+        if (rd_wfits(x, "Int(64)")) { return sv_of(rd_wtoa(x), "Int"); }
         return sv_of(rd_wtoa(x), if (rd_wfits(x, "Int(128)")) { "Int(128)" } else { "Int(1024)" });
     }
     if (n.aux == "str") {

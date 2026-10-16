@@ -65,6 +65,73 @@ pub Bool ltransient(Int l) { return sx32(ld32(l + 8)) == 0 - 2; }
 pub Int lroot(Int l) { return ld64(l + 16); }
 pub Int ltype(Int l) { return ld64(l + 24); }
 
+// A type word below 8 is a raw slot kind (typed storage, W1): the
+// slots hold the values themselves, 1 an integer of at most 64 bits, 2 a
+// Float's bits, 3 a Bool (0/1). Any other word (a type string, or 0 while
+// unknown) means tagged words: immediates, boxes and pointers.
+pub Bool raw_kind(Int t) { return ult(t - 1, 7); }
+pub Bool lraw(Int l) { return raw_kind(ltype(l)); }
+
+// The type of a list made from a and b: an empty list's kind may be
+// unknown (`[]` without a type), so the other one's is taken.
+pub Int lty2(Int a, Int b) { return if (lcount(a) == 0 && !raw_kind(ltype(a))) { ltype(b) } else { ltype(a) }; }
+
+// Slot word w of list l as a tagged word (a raw slot boxed by its kind),
+// for the runtime's generic readers (show, compare, sort).
+pub Int slot_box(Int l, Int w) {
+    Int k = ltype(l);
+    if (!raw_kind(k)) { return w; }
+    if (k == 2) { return c_box_f64(resid_raw_bits_f64(w)); }
+    if (k == 3) { return interned() + (w & 1) * 32; }
+    return c_box_i64(w);
+}
+
+// Slot word w of list l as an integer.
+pub Int slot_int(Int l, Int w) { return if (lraw(l)) { w } else { unbox_word(w) }; }
+
+// A list of tagged words as raw slots of kind k (W1): the compiler applies
+// it to a list the runtime made with tagged words (bytes read, map keys).
+@export("resid_list_rawify", "ptr(ptr,i64)")
+pub Int rt_list_rawify(Int l, Int k) {
+    if (l == 0 || lraw(l)) { return l; }
+    Int n = lcount(l);
+    if (n == 0) { return set_list(list_hdr(), 0, 0, 0, k); }
+    Int items = rt_list_to_array(l);
+    _ = raw_fill(items, 0, n, k);
+    Int out = rt_list_new(n, items, k);
+    return c_free(items) * 0 + out;
+}
+
+// b with a's slot representation, so a concatenation never mixes raw and
+// tagged slots; an empty a without a kind takes b's.
+pub Int cat_like(Int a, Int b) {
+    if (lcount(b) == 0 || (lcount(a) == 0 && !lraw(a))) { return b; }
+    Bool ra = lraw(a);
+    if (ra == lraw(b)) { return b; }
+    return if (ra) { rt_list_rawify(b, ltype(a)) } else { list_boxify(b) };
+}
+
+Int list_boxify(Int l) {
+    Int n = lcount(l);
+    Int items = rt_list_to_array(l);
+    _ = box_fill(l, items, 0, n);
+    Int out = rt_list_new(n, items, 0);
+    return c_free(items) * 0 + out;
+}
+
+Int box_fill(Int l, Int a, Int i, Int n) {
+    if (i >= n) { return 0; }
+    _ = st64(a + i * 8, slot_box(l, ld64(a + i * 8)));
+    return box_fill(l, a, i + 1, n);
+}
+
+Int raw_fill(Int a, Int i, Int n, Int k) {
+    if (i >= n) { return 0; }
+    Int w = ld64(a + i * 8);
+    _ = st64(a + i * 8, if (k == 2) { resid_raw_f64_bits(unbox_float(w)) } else { if (k == 3) { ld8(w + 24) & 1 } else { unbox_word(w) } });
+    return raw_fill(a, i + 1, n, k);
+}
+
 pub Int set_list(Int l, Int count, Int shift, Int root, Int ty) {
     _ = st64(l, count);
     _ = st32(l + 8, shift);
@@ -313,10 +380,15 @@ Int array_from_trie(Int l, Int out, Int i, Int n) {
 
 // Concatenate: push every element of b onto a.
 @export("resid_list_concat", "ptr(ptr,ptr)")
-pub Int rt_list_concat(Int a, Int b) {
+pub Int rt_list_concat(Int a, Int b0) {
+    Int b = cat_like(a, b0);
     Int m = lcount(b);
     if (m == 0) { return a; }
-    if (m == 1) { return pvec_push(a, list_at(b, 0)); }
+    Int out = if (m == 1) { pvec_push(a, list_at(b, 0)) } else { cat_slots(a, b, m) };
+    return if (lcount(a) == 0) { st64(out + 24, lty2(a, b)) * 0 + out } else { out };
+}
+
+Int cat_slots(Int a, Int b, Int m) {
     if (lshift(b) == 0 - 1) { return pvec_append_into(0, a, lroot(b) + 24, m); }
     Int flat = rt_list_to_array(b);
     Int out = pvec_append_into(0, a, flat, m);
@@ -327,11 +399,22 @@ pub Int rt_list_concat(Int a, Int b) {
 @export("resid_list_push", "ptr(ptr,ptr)")
 pub Int rt_list_push(Int a, Int elem) { return pvec_push(a, elem); }
 
+// The same for raw slots of kind k: an empty list takes the kind.
+@export("resid_list_push_k", "ptr(ptr,ptr,i64)")
+pub Int rt_list_push_k(Int a, Int elem, Int k) {
+    Int out = pvec_push(a, elem);
+    return if (lcount(a) == 0) { st64(out + 24, k) * 0 + out } else { out };
+}
+
 // ─── ListBuf(T) (spec §45): appended in place; the checker keeps each
 // builder value used once. ────────────────────────────────────────────
 
 @export("resid_listbuf_new", "ptr()")
 pub Int rt_listbuf_new() { return set_list(list_hdr(), 0, 0 - 1, 0, 0); }
+
+// A builder of raw slots of kind k (its moves before finish copy them).
+@export("resid_listbuf_new_k", "ptr(i64)")
+pub Int rt_listbuf_new_k(Int k) { return set_list(list_hdr(), 0, 0 - 1, 0, k); }
 
 @export("resid_listbuf_push", "ptr(ptr,ptr)")
 pub Int rt_listbuf_push(Int l, Int elem) {
@@ -380,19 +463,25 @@ Int slice_fill(Int l, Int flat, Int lo, Int i, Int n) {
 
 // lo..hi (hi exclusive) as a List(Int).
 @export("resid_range_list", "ptr(i64,i64)")
-pub Int rt_range_list(Int lo, Int hi) {
+pub Int rt_range_list(Int lo, Int hi) { return range_list_k(lo, hi, 0); }
+
+// The same with raw slots (kind 1).
+@export("resid_range_list_r", "ptr(i64,i64)")
+pub Int rt_range_list_r(Int lo, Int hi) { return range_list_k(lo, hi, 1); }
+
+Int range_list_k(Int lo, Int hi, Int raw) {
     Int n = if (hi > lo) { hi - lo } else { 0 };   // unsigned: may pass INT64_MAX
     if (n < 0 || n > 1152921504606846975) { return rt_abort("range too large to materialize"); }
     Int flat = xmalloc(max(n, 1) * 8);
-    _ = range_fill(flat, lo, 0, n);
-    Int out = rt_list_new(n, flat, resid_raw_addr("List(Int(64))"));
+    _ = range_fill(flat, lo, 0, n, raw != 0);
+    Int out = rt_list_new(n, flat, if (raw != 0) { 1 } else { resid_raw_addr("List(Int(64))") });
     return c_free(flat) * 0 + out;
 }
 
-Int range_fill(Int flat, Int lo, Int i, Int n) {
+Int range_fill(Int flat, Int lo, Int i, Int n, Bool raw) {
     if (i >= n) { return 0; }
-    _ = st64(flat + i * 8, c_box_i64(lo + i));
-    return range_fill(flat, lo, i + 1, n);
+    _ = st64(flat + i * 8, if (raw) { lo + i } else { c_box_i64(lo + i) });
+    return range_fill(flat, lo, i + 1, n, raw);
 }
 
 // lo..=hi: hi + 1 would wrap at the top of Int.
@@ -400,6 +489,12 @@ Int range_fill(Int flat, Int lo, Int i, Int n) {
 pub Int rt_range_list_incl(Int lo, Int hi) {
     if (hi == 9223372036854775807) { return rt_abort("range too large to materialize"); }
     return rt_range_list(lo, hi + 1);
+}
+
+@export("resid_range_list_incl_r", "ptr(i64,i64)")
+pub Int rt_range_list_incl_r(Int lo, Int hi) {
+    if (hi == 9223372036854775807) { return rt_abort("range too large to materialize"); }
+    return range_list_k(lo, hi + 1, 1);
 }
 
 @export("resid_assert", "void(i8,ptr)")
@@ -472,24 +567,24 @@ pub Int rt_growbuf_finish(Int g, Int ty) {
 
 Int box_free_shallow(Int p) { return if (c_box_interned(p) != 0) { 0 } else { c_free(p) }; }
 
-Int free_node(Int node, Int shift) {
+Int free_node(Int node, Int shift, Bool raw) {
     if (node == 0) { return 0; }
-    _ = free_kids(node, shift, 0, ld64(node));
+    _ = free_kids(node, shift, 0, ld64(node), raw);
     return c_free(node);
 }
 
-Int free_kids(Int node, Int shift, Int i, Int n) {
+Int free_kids(Int node, Int shift, Int i, Int n, Bool raw) {
     if (i >= n) { return 0; }
     Int s = ld64(node + 8 + i * 8);
-    _ = if (shift == 0) { if (s != 0) { box_free_shallow(s) } else { 0 } } else { free_node(s, shift - 5) };
-    return free_kids(node, shift, i + 1, n);
+    _ = if (shift == 0) { if (s != 0 && !raw) { box_free_shallow(s) } else { 0 } } else { free_node(s, shift - 5, raw) };
+    return free_kids(node, shift, i + 1, n, raw);
 }
 
 // A flat buffer may be shared by several headers: only the header goes.
 @export("resid_list_free", "void(ptr)")
 pub Int rt_list_free(Int l) {
     if (l == 0) { return 0; }
-    _ = if (lroot(l) != 0 && lshift(l) != 0 - 1) { free_node(lroot(l), lshift(l)) } else { 0 };
+    _ = if (lroot(l) != 0 && lshift(l) != 0 - 1) { free_node(lroot(l), lshift(l), lraw(l)) } else { 0 };
     return c_free(l);
 }
 

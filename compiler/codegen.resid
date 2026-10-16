@@ -966,7 +966,7 @@ List(Str) hdr_map_typed() {
 // Runtime declarations added after the long hdr_core lists; both mains
 // append these.
 List(Str) hdr_extra() {
-    return ["declare ptr @resid_decp_from_str(ptr, i64)", "declare ptr @resid_decp_from_i64(i64, i64)", "declare ptr @resid_decp_round(ptr, i64)", "declare ptr @resid_decp_add(ptr, ptr, i64)", "declare ptr @resid_decp_sub(ptr, ptr, i64)", "declare ptr @resid_decp_mul(ptr, ptr, i64)", "declare ptr @resid_decp_div(ptr, ptr, i64)", "declare ptr @resid_decp_neg(ptr)", "declare i64 @resid_decp_cmp(ptr, ptr)", "declare ptr @resid_decp_to_str(ptr, i8)", "declare i64 @resid_decp_to_i64(ptr)", "declare double @resid_decp_to_f64(ptr)", "declare void @resid_handle_release(ptr)", "declare ptr @resid_spawn(ptr, ptr)", "declare ptr @resid_spawn_start(ptr, ptr)", "declare ptr @resid_spawn_wait(ptr)", "declare ptr @resid_ok_box(ptr)", "declare ptr @resid_sacc_from(ptr)", "declare ptr @resid_sacc_append(ptr, ptr)", "declare ptr @resid_sacc_append_int(ptr, i64)", "declare ptr @resid_gmalloc(i64)", "declare void @resid_gfree(ptr)", "declare i64 @resid_bulk_push()", "declare i64 @resid_bulk_pop()", "declare i64 @resid_mem_mark()", "declare i64 @resid_mem_since_mark()", "declare i64 @resid_stack_left()", "declare i64 @str_index_of(ptr, ptr, i64)", "declare ptr @str_sha256(ptr)", "declare i8 @resid_fs_write_hex(ptr, ptr)", "declare i8 @resid_fs_append_hex(ptr, ptr)", "declare ptr @resid_decp_persist(ptr)", "declare i64 @resid_scope_push()", "declare void @resid_scope_pop(i64)", "declare i1 @resid_sb_print(ptr, i8)", "declare i8 @resid_print_bytes(ptr)", "declare ptr @resid_box_alloc(i64, i64, ptr)", "declare ptr @resid_sb2_push(ptr, ptr, ptr)", "declare ptr @resid_sb2_push_cp(ptr, ptr, i64)", "declare ptr @resid_sb2_finish(ptr, ptr)", "declare ptr @resid_sb2_lim()", "declare i1 @resid_sb2_print(ptr, ptr, i8)", "declare void @resid_sb2_discard(ptr, ptr)", "declare ptr @resid_fsb_push(ptr, i64, ptr)", "declare ptr @resid_fsb_push_cp(ptr, i64, i64)", "declare ptr @resid_fbb_push(ptr, i64, i64)", "declare void @resid_fb_overflow(i64, i64)", "declare ptr @resid_bytes_show(ptr, i64)", "declare ptr @resid_map_format_t(ptr, i8, i8, ptr, ptr)", "declare ptr @resid_set_format_t(ptr, i8, ptr)", "declare ptr @resid_list_show_t(ptr, i8)", "declare ptr @resid_fmt_radix(ptr, i64)", "declare ptr @resid_fmt_group(ptr)", "declare ptr @resid_fmt_case(ptr, i64)", "declare ptr @resid_fmt_sign(ptr, i64)", "declare ptr @resid_fmt_pad(ptr, i64)", "declare ptr @resid_fmt_style(double, i64)", "declare void @resid_fb_underfill(i64, i64)", "declare i64 @resid_str_ascii_len(ptr)", "declare i64 @resid_char_at_n(ptr, i64, i64)", "declare double @llvm.sqrt.f64(double)", "declare i64 @resid_disp_connect()", "declare ptr @resid_disp_pair()", "declare i8 @resid_disp_send(i64, ptr, i64)", "declare ptr @resid_disp_recv(i64, i64)", "declare ptr @resid_disp_poll(ptr, ptr, i64)", "declare i64 @resid_disp_recv_fd()", "declare i8 @resid_disp_close(i64)", "declare i64 @resid_disp_shm_new(i64)", "declare i64 @resid_disp_shm_fd(i64)", "declare i8 @resid_disp_shm_put(i64, i64, ptr, i64)", "declare i8 @resid_disp_shm_free(i64)", "declare i64 @resid_disp_connect_wayland()", "declare i64 @resid_disp_connect_x11()", "declare ptr @resid_disp_fd_read(i64, i64)", "declare ptr @resid_disp_x11_auth()", "declare ptr @resid_dbg_dump(i64, i64)"];
+    return ["declare ptr @resid_list_set_w(ptr, i8, i64, i64)", "declare ptr @resid_list_push_k(ptr, ptr, i64)", "declare ptr @resid_listbuf_new_k(i64)", "declare ptr @resid_list_rawify(ptr, i64)", "declare ptr @resid_list_const_i64r(ptr, i64, ptr)", "declare ptr @resid_list_const_boolr(ptr, i64, ptr)", "declare ptr @resid_range_list_r(i64, i64)", "declare ptr @resid_range_list_incl_r(i64, i64)", "declare ptr @resid_decp_from_str(ptr, i64)", "declare ptr @resid_decp_from_i64(i64, i64)", "declare ptr @resid_decp_round(ptr, i64)", "declare ptr @resid_decp_add(ptr, ptr, i64)", "declare ptr @resid_decp_sub(ptr, ptr, i64)", "declare ptr @resid_decp_mul(ptr, ptr, i64)", "declare ptr @resid_decp_div(ptr, ptr, i64)", "declare ptr @resid_decp_neg(ptr)", "declare i64 @resid_decp_cmp(ptr, ptr)", "declare ptr @resid_decp_to_str(ptr, i8)", "declare i64 @resid_decp_to_i64(ptr)", "declare double @resid_decp_to_f64(ptr)", "declare void @resid_handle_release(ptr)", "declare ptr @resid_spawn(ptr, ptr)", "declare ptr @resid_spawn_start(ptr, ptr)", "declare ptr @resid_spawn_wait(ptr)", "declare ptr @resid_ok_box(ptr)", "declare ptr @resid_sacc_from(ptr)", "declare ptr @resid_sacc_append(ptr, ptr)", "declare ptr @resid_sacc_append_int(ptr, i64)", "declare ptr @resid_gmalloc(i64)", "declare void @resid_gfree(ptr)", "declare i64 @resid_bulk_push()", "declare i64 @resid_bulk_pop()", "declare i64 @resid_mem_mark()", "declare i64 @resid_mem_since_mark()", "declare i64 @resid_stack_left()", "declare i64 @str_index_of(ptr, ptr, i64)", "declare ptr @str_sha256(ptr)", "declare i8 @resid_fs_write_hex(ptr, ptr)", "declare i8 @resid_fs_append_hex(ptr, ptr)", "declare ptr @resid_decp_persist(ptr)", "declare i64 @resid_scope_push()", "declare void @resid_scope_pop(i64)", "declare i1 @resid_sb_print(ptr, i8)", "declare i8 @resid_print_bytes(ptr)", "declare ptr @resid_box_alloc(i64, i64, ptr)", "declare ptr @resid_sb2_push(ptr, ptr, ptr)", "declare ptr @resid_sb2_push_cp(ptr, ptr, i64)", "declare ptr @resid_sb2_finish(ptr, ptr)", "declare ptr @resid_sb2_lim()", "declare i1 @resid_sb2_print(ptr, ptr, i8)", "declare void @resid_sb2_discard(ptr, ptr)", "declare ptr @resid_fsb_push(ptr, i64, ptr)", "declare ptr @resid_fsb_push_cp(ptr, i64, i64)", "declare ptr @resid_fbb_push(ptr, i64, i64)", "declare void @resid_fb_overflow(i64, i64)", "declare ptr @resid_bytes_show(ptr, i64)", "declare ptr @resid_map_format_t(ptr, i8, i8, ptr, ptr)", "declare ptr @resid_set_format_t(ptr, i8, ptr)", "declare ptr @resid_list_show_t(ptr, i8)", "declare ptr @resid_fmt_radix(ptr, i64)", "declare ptr @resid_fmt_group(ptr)", "declare ptr @resid_fmt_case(ptr, i64)", "declare ptr @resid_fmt_sign(ptr, i64)", "declare ptr @resid_fmt_pad(ptr, i64)", "declare ptr @resid_fmt_style(double, i64)", "declare void @resid_fb_underfill(i64, i64)", "declare i64 @resid_str_ascii_len(ptr)", "declare i64 @resid_char_at_n(ptr, i64, i64)", "declare double @llvm.sqrt.f64(double)", "declare i64 @resid_disp_connect()", "declare ptr @resid_disp_pair()", "declare i8 @resid_disp_send(i64, ptr, i64)", "declare ptr @resid_disp_recv(i64, i64)", "declare ptr @resid_disp_poll(ptr, ptr, i64)", "declare i64 @resid_disp_recv_fd()", "declare i8 @resid_disp_close(i64)", "declare i64 @resid_disp_shm_new(i64)", "declare i64 @resid_disp_shm_fd(i64)", "declare i8 @resid_disp_shm_put(i64, i64, ptr, i64)", "declare i8 @resid_disp_shm_free(i64)", "declare i64 @resid_disp_connect_wayland()", "declare i64 @resid_disp_connect_x11()", "declare ptr @resid_disp_fd_read(i64, i64)", "declare ptr @resid_disp_x11_auth()", "declare ptr @resid_dbg_dump(i64, i64)"];
 }
 
 Bool is_dec_cg(Str t) {
@@ -3672,7 +3672,7 @@ GT cg_box_fixed_list(GT inner, Str ety, Int n, GT c) {
     List(Str) l2 = fxbox_stores(arrty, inner.val, ety, sla, 0, n, tb0, l1);
     Int outt = tb0 + n * 5;
     Str reg = f"%t{outt}";
-    List(Str) l3 = l2.concat([reg + f" = call ptr @resid_list_new(i64 {n}, ptr " + sla + ", ptr " + tsym + ")"]);
+    List(Str) l3 = l2.concat([reg + f" = call ptr @resid_list_new(i64 {n}, ptr " + sla + ", ptr " + lst_tyword(ety, tsym) + ")"]);
     return GT {.pos = inner.pos, .val = reg, .ty = "List(" + ety + ")", .cnt = 0, .err = "", .glines = g1, .lines = l3, .tmp = outt, .lbl = inner.lbl, .tail = false};
 }
 
@@ -3681,6 +3681,40 @@ GT cg_box_fixed_list(GT inner, Str ety, Int n, GT c) {
 // (resid_box_* for scalars, raw char*/ptr for composite). These helpers
 // produce the IR that boxes a value for store, or unboxes a slot on read,
 // mirroring the Rust pipeline's box_scalar / unbox_slot.
+
+// The raw slot kind of a list element type (W1; raw_kind in
+// runtime/rt/list.resid): 1 an integer of at most 64 bits, 2 a Float, 3 a
+// Bool, whose slots hold the value itself; 0 a tagged word.
+Int lst_raw(Str ety0) {
+    // A secret element is stored as its declassified type's slot.
+    Str ety = sec_inner(strip_owned_cg(ety0));
+    if (is_fixed_type(ety)) { return 0; }
+    if (ety == "Bool") { return 3; }
+    if (ety == "Float" || str_has_prefix_cg(ety, "Float(")) { return 2; }
+    if (int_fam(ety) && ll_width_of(ety) <= 64) { return 1; }
+    return 0;
+}
+
+// The type word of a new List(ety): its raw kind, else the type string.
+Str lst_tyword(Str ety, Str tsym) {
+    Int k = lst_raw(ety);
+    return if (k > 0) { f"inttoptr (i64 {k} to ptr)" } else { tsym };
+}
+
+// A raw element value as its slot word (an i64 register %t{tb}w).
+List(Str) lst_word_lines(Str ety, Str ev, Int tb) {
+    Str r = f"%t{tb}";
+    Int k = lst_raw(ety);
+    if (k == 3) { return [r + "w = zext i1 " + ev + " to i64"]; }
+    if (k == 2) {
+        Str lt = ll_ty(ety);
+        if (lt != "double") { return [r + "e = fpext " + lt + " " + ev + " to double", r + "w = bitcast double " + r + "e to i64"]; }
+        return [r + "w = bitcast double " + ev + " to i64"];
+    }
+    if (ll_width_of(ety) == 64) { return [r + "w = add i64 " + ev + ", 0"]; }
+    Str op = if (ll_is_signed(ety)) { "sext" } else { "zext" };
+    return [r + "w = " + op + " " + ll_ty(ety) + " " + ev + " to i64"];
+}
 
 // Register holding the boxed (heap) form of a literal element value. Scalars
 // go through a resid_box_* call into %t{tb}; pointers pass through as-is.
@@ -3694,6 +3728,8 @@ Str lst_box_reg(Str ety, Str ev, Int tb) {
 // IR lines computing the boxed form of a literal element into %t{tb}.
 List(Str) lst_box_lines(Str ety, Str ev, Int tb) {
     Str r = f"%t{tb}";
+    if (lst_raw(ety) == 1 && ll_width_of(ety) == 64) { return [r + " = inttoptr i64 " + ev + " to ptr"]; }
+    if (lst_raw(ety) > 0) { return lst_word_lines(ety, ev, tb).concat([r + " = inttoptr i64 " + r + "w to ptr"]); }
     if (is_fixed_type(ety)) { return fx_copy_lines(r, ev, ety); }
     if (ety == "Bool") {
         Str z = f"%t{tb + 1}";
@@ -3731,6 +3767,18 @@ Str lst_read_reg(Str ety, Str slot, Int tr) {
 // IR lines unboxing a list slot into %t{tr} as the element value.
 List(Str) lst_read_lines(Str ety, Str slot, Int tr, List(Str) acc) {
     Str r = f"%t{tr}";
+    Int rk = lst_raw(ety);
+    if (rk == 1 && ll_width_of(ety) == 64) { return acc.concat([r + " = ptrtoint ptr " + slot + " to i64"]); }
+    if (rk > 0) {
+        List(Str) a1 = acc.concat([r + "w = ptrtoint ptr " + slot + " to i64"]);
+        if (rk == 3) { return a1.concat([r + " = trunc i64 " + r + "w to i1"]); }
+        if (rk == 2) {
+            Str lt = ll_ty(ety);
+            if (lt != "double") { return a1.concat([r + "d = bitcast i64 " + r + "w to double", r + " = fptrunc double " + r + "d to " + lt]); }
+            return a1.concat([r + " = bitcast i64 " + r + "w to double"]);
+        }
+        return a1.concat([r + " = trunc i64 " + r + "w to " + ll_ty(ety)]);
+    }
     if (ety == "Bool") {
         Str z = f"%t{tr + 1}";
         return acc.concat([z + " = call i8 @resid_unbox_bool(ptr " + slot + ")", r + " = trunc i8 " + z + " to i1"]);
@@ -3992,9 +4040,10 @@ GT lst_emit_const(Str kind, Str ety, Int n, List(Str) vals, Int pos, GT c) {
     List(Str) g3 = g2.concat([data + " = private unnamed_addr constant " + arr + " [" + lst_const_elems(kind, vals, 0, "") + "]"]);
     Int t2 = t1 + 1;
     Str reg = f"%t{t2}";
-    Str fn = if (kind == "int") { "@resid_list_const_i64" } else if (kind == "str") { "@resid_list_const_ptr" } else { "@resid_list_const_bool" };
+    Str fn = if (kind == "int") { "@resid_list_const_i64r" } else if (kind == "str") { "@resid_list_const_ptr" } else { "@resid_list_const_boolr" };
+    Str tyarg = if (kind == "str") { ", ptr " + tsym } else { "" };
     List(Str) l0 = c.lines;
-    List(Str) l1 = l0.concat([reg + " = call ptr " + fn + "(ptr " + cache + f", i64 {n}, ptr " + data + ", ptr " + tsym + ")"]);
+    List(Str) l1 = l0.concat([reg + " = call ptr " + fn + "(ptr " + cache + f", i64 {n}, ptr " + data + tyarg + ")"]);
     return GT {.pos = pos, .val = reg, .ty = "List(" + ety + ")", .cnt = 0, .err = "", .glines = g3, .lines = l1, .tmp = t2, .lbl = c.lbl, .tail = false};
 }
 
@@ -4016,7 +4065,7 @@ GT lst_emit(Str ety, Int n, List(Str) vals, Int pos, GT c) {
     List(Str) l2 = lst_stores(vals, sla, ety, 0, n, tb0, l1);
     Int outt = tb0 + n * 3;
     Str reg = f"%t{outt}";
-    List(Str) l3 = l2.concat([reg + f" = call ptr @resid_list_new(i64 {n}, ptr " + sla + ", ptr " + tsym + ")"]);
+    List(Str) l3 = l2.concat([reg + f" = call ptr @resid_list_new(i64 {n}, ptr " + sla + ", ptr " + lst_tyword(ety, tsym) + ")"]);
     return GT {.pos = pos, .val = reg, .ty = "List(" + ety + ")", .cnt = 0, .err = "", .glines = gl2, .lines = l3, .tmp = outt, .lbl = c.lbl, .tail = false};
 }
 
@@ -5072,6 +5121,18 @@ Str cmp_read(Str src, Str dst, Str pty) {
     Str d = "%" + dst;
     if (pty == "Str" || str_has_prefix_cg(pty, "List(") || str_has_prefix_cg(pty, "Map(") || str_has_prefix_cg(pty, "Set(") || str_has_prefix_cg(pty, "Option(") || str_has_prefix_cg(pty, "Result(") || str_has_prefix_cg(pty, "Sum(")) {
         return "  " + d + " = bitcast ptr " + s + " to ptr\n";
+    }
+    // Slots of a raw list (lst_raw) hold the values.
+    if (lst_raw(pty) > 0) {
+        Str rw = "%" + dst + "r";
+        Str h = "  " + rw + " = ptrtoint ptr " + s + " to i64\n";
+        if (pty == "Bool") { return h + "  " + d + " = trunc i64 " + rw + " to i1\n"; }
+        if (lst_raw(pty) == 2) {
+            if (ll_ty(pty) != "double") { return h + "  " + d + "d = bitcast i64 " + rw + " to double\n  " + d + " = fptrunc double " + d + "d to " + ll_ty(pty) + "\n"; }
+            return h + "  " + d + " = bitcast i64 " + rw + " to double\n";
+        }
+        if (ll_width_of(pty) == 64) { return h + "  " + d + " = add i64 " + rw + ", 0\n"; }
+        return h + "  " + d + " = trunc i64 " + rw + " to " + ll_ty(pty) + "\n";
     }
     if (pty == "Bool") {
         Str raw = "%" + dst + "b";

@@ -948,7 +948,7 @@ Int pq_cap_at(Int sl, Int i, Int n, Int acc) {
 // the kind), or -1 when the request is too short to carry one.
 Int dev_write_byte(Int req) {
     if (req == 0 || c_list_len(req) < 6) { return 0 - 1; }
-    return c_unbox_i64(c_list_get(req, 5));
+    return slot_int(req, c_list_get(req, 5));
 }
 
 // The read entry: the force-time guard checked only `device` (a read-only
@@ -983,7 +983,7 @@ Int dp_call(Int req) {
 // The request's elements as bytes; false when one is not a byte.
 Bool dp_bytes(Int l, Int buf, Int i, Int n) {
     if (i >= n) { return true; }
-    Int v = c_unbox_i64(c_list_get(l, i));
+    Int v = slot_int(l, c_list_get(l, i));
     if (v < 0 || v > 255) { return false; }
     _ = st8(buf + i, v);
     return dp_bytes(l, buf, i + 1, n);

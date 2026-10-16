@@ -289,7 +289,7 @@ pub Int rt_disp_send(Int fd, Int l, Int pass_fd) {
 
 Int disp_bytes_of(Int l, Int buf, Int i, Int n) {
     if (i >= n) { return 0; }
-    _ = st8(buf + i, unbox_word(c_list_get(l, i)) & 255);
+    _ = st8(buf + i, slot_int(l, c_list_get(l, i)) & 255);
     return disp_bytes_of(l, buf, i + 1, n);
 }
 

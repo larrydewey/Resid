@@ -1169,7 +1169,7 @@ pub Int rt_map_list_push(Int m, Int owned, Int kk, Int kb, Int elem, Int dflt) {
         Int h = if (at != 0) { ld64(at) } else { 0 };
         if (h != 0 && ld32(h + 12) == mown(m)) {
             Int one = resid_raw_tls("map_one_elem", 8);
-            _ = st64(one, bar_keep(h, elem));
+            _ = st64(one, if (lraw(h)) { elem } else { bar_keep(h, elem) });
             _ = pvec_append_into(h, h, one, 1);
             return m;
         }
@@ -1547,7 +1547,7 @@ pub Int rt_list_show_t(Int l, Int k) {
 Int sb_list_t(Int sb, Int l, Int i, Int n, Int k) {
     if (i >= n) { return 0; }
     _ = if (i > 0) { sb_lit(sb, resid_raw_addr(", ")) } else { 0 };
-    _ = sb_kind_entry(sb, c_list_get(l, i), k, 0);
+    _ = sb_kind_entry(sb, slot_box(l, c_list_get(l, i)), k, 0);
     return sb_list_t(sb, l, i + 1, n, k);
 }
 
@@ -1582,7 +1582,8 @@ Int sb_elems_t(Int sb, Int ks, Int i, Int n, Int k, Int clo) {
 
 // ek: the element mover, 0 for elem_move (words and strings), else a
 // compiled function that moves one element (a record) with the context.
-Int keep_elem(Int it, Int ek, Int ctx) { return if (ek == 0) { elem_move(it, ctx) } else { resid_raw_call2(ek, it, ctx) }; }
+// ek 1: raw slots (lraw), which are values and stay as they are.
+Int keep_elem(Int it, Int ek, Int ctx) { return if (ek == 0) { elem_move(it, ctx) } else { if (ek == 1) { it } else { resid_raw_call2(ek, it, ctx) } }; }
 
 // A list element (a scalar box or a string).
 Int elem_move(Int p, Int ctx) {
@@ -1639,8 +1640,9 @@ Int move_items(Int n, Int c, Int i, Int cap, Int level, Int ek, Int ctx) {
 // the loop: a transient is reachable only from its owner, here the loop's
 // carried state, so it moves into the loop's new region once and later
 // stores into it need no move (bar_keep). Other moves leave it in place.
-Int list_move(Int l, Int ek, Int ctx) {
+Int list_move(Int l, Int ek0, Int ctx) {
     if (l == 0) { return l; }
+    Int ek = if (lraw(l)) { 1 } else { ek0 };
     Int root = lroot(l);
     Int n = lcount(l);
     Bool adopt = root != 0 && ltransient(l) && ld64(resid_raw_tls("rg_compact", 8)) != 0 && !mv_src(ctx, root);
@@ -1674,6 +1676,7 @@ Int flat_copy(Int f, Int n, Int ek, Int ctx) {
 }
 
 Int move_elems(Int f, Int g, Int i, Int n, Int ek, Int ctx) {
+    if (ek == 1) { return if (f != g && n > i) { mcopy(g + 24 + i * 8, f + 24 + i * 8, (n - i) * 8) } else { 0 }; }
     if (i >= n) { return 0; }
     _ = st64(g + 24 + i * 8, keep_elem(ld64(f + 24 + i * 8), ek, ctx));
     return move_elems(f, g, i + 1, n, ek, ctx);
@@ -1943,6 +1946,24 @@ pub Int rt_list_with_f64(Int l, Int owned, Int i, Float v) {
     return list_with_slow(l, owned, i, rt_box_f64(v));
 }
 
+// xs.with(i, v) on a list of raw slots (W1): w is the value's word.
+@export("resid_list_set_w", "ptr(ptr,i8,i64,i64)")
+@inline
+pub Int rt_list_set_w(Int l, Int owned, Int i, Int w) {
+    if (owned != 0 && ltransient(l) && ult(i, lcount(l))) { return st64(lroot(l) + 24 + i * 8, w) * 0 + l; }
+    return list_set_slow(l, owned, i, w);
+}
+
+@noinline
+Int list_set_slow(Int l, Int owned, Int i, Int w) {
+    Int n = lcount(l);
+    if (!ult(i, n)) { return rt_index_abort(i, n, 0); }
+    if (owned != 0 && no_thaw(l)) { return mark_frozen(with_shared(l, i, w)); }
+    if (owned == 0) { return with_shared(l, i, w); }
+    Int t = if (ltransient(l)) { l } else { with_fresh(l, 0) };
+    return st64(lroot(t) + 24 + i * 8, w) * 0 + t;
+}
+
 @noinline
 Int list_with_slow(Int l, Int owned, Int i, Int v) {
     Int n = lcount(l);
@@ -2040,18 +2061,32 @@ Int bar_move_f(Int ro, Int v, Int ek) { return mv_done(resid_raw_call2(ek, v, mv
 // xs.concat(ys) on an owned list: appended in place to a transient,
 // doubling its buffer when full.
 @export("resid_list_concat_own", "ptr(ptr,i8,ptr)")
-pub Int rt_list_concat_own(Int a, Int owned, Int b) {
+pub Int rt_list_concat_own(Int a, Int owned, Int b0) {
+    Int b = cat_like(a, b0);
     Int m = lcount(b);
     if (owned != 0 && no_thaw(a)) { return mark_frozen(rt_list_concat(a, b)); }
     if (owned == 0) { return rt_list_concat(a, b); }
     if (m == 0) { return a; }
     Int n = lcount(a);
     Int t = if (ltransient(a)) { a } else { with_fresh(a, max(m, n)) };
+    _ = if (n == 0) { st64(t + 24, lty2(a, b)) } else { 0 };
     Int f0 = lroot(t);
     Int f = if (n + m <= ld64(f0 + 8)) { f0 } else { with_grow(t, f0, n, n + m) };
-    _ = cat_fill(f, b, n, 0, m);
+    _ = if (lraw(t)) { cat_raw(f, b, n, m) } else { cat_fill(f, b, n, 0, m) };
     _ = st64(f, n + m) + st64(f + 16, n + m);
     return st64(t, n + m) * 0 + t;
+}
+
+// Raw slots are values: no barrier.
+Int cat_raw(Int f, Int b, Int n, Int m) {
+    if (lshift(b) == 0 - 1) { return mcopy(f + 24 + n * 8, lroot(b) + 24, m * 8); }
+    return cat_raw_t(f, b, n, 0, m);
+}
+
+Int cat_raw_t(Int f, Int b, Int n, Int j, Int m) {
+    if (j >= m) { return 0; }
+    _ = st64(f + 24 + (n + j) * 8, list_at(b, j));
+    return cat_raw_t(f, b, n, j + 1, m);
 }
 
 // A larger buffer for transient t, in t's region.
