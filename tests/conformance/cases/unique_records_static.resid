@@ -1,0 +1,108 @@
+// Records the compiler proves unique (W2 stage 1) are rewritten in place
+// with no header test, and a function some of whose calls hand it unique
+// records gets a copy for those calls (stage 1b); everything else keeps
+// the runtime test. Each shape below gives another value a reference to
+// a record, or not, and must print what value semantics give.
+type Pt = { Int x; Int y; List(Int) t; };
+type St = { List(Int) xs; Int n; };
+
+Pt bump(Pt p) { return Pt {.x = p.x + 1, .y = p.y, .t = p.t}; }
+Pt bump_twice(Pt p) { return bump(bump(p)); }
+Int px(Pt p) { return p.x; }
+Pt keep_or(Pt p, Bool c, Pt q) { return if (c) { p } else { q }; }
+St step(St s, Int v) { return St {.xs = s.xs.with(0, v), .n = s.n + 1}; }
+Pt pick(List(Pt) ps, Int i) { return ps[i]; }
+Pt via_fn(Pt p, Pt closure(Pt) f) { return f(p); }
+Pt bumpv(Pt p) { return Pt {.x = p.x + 2, .y = p.y, .t = p.t}; }
+Pt mk(Int x, List(Int) t) { return Pt {.x = x, .y = 0, .t = t}; }
+
+Pt run(Pt p, Int k) {
+    if (k == 0) { return p; }
+    return run(bump(p), k - 1);
+}
+
+// The same name bound in two blocks.
+Pt dup(Int c, Pt src) {
+    if (c > 0) { Pt x = Pt {.x = 1, .y = 1, .t = src.t}; return bump(x); }
+    Pt x = src;
+    return bump(x);
+}
+
+// Two holders: the record is read after the call.
+Str t_holders(Int z, List(Int) e) {
+    Pt a = mk(z, e);
+    Pt b = bump(a);
+    return f"holders {a.x} {b.x}";
+}
+
+// A chain of fresh records, and one only read before it is handed on.
+Str t_chain(Int z, List(Int) e) {
+    Pt c = bump_twice(mk(z, e));
+    Pt d = mk(z + 10, e);
+    Int dx = px(d);
+    Pt d2 = bump(d);
+    return f"chain {c.x} {dx} {d2.x}";
+}
+
+// Kept in a sum, then handed on.
+Str t_sum(Int z, List(Int) e) {
+    Pt f = mk(z + 20, e);
+    Option(Pt) of = Some(f);
+    Pt f2 = bump(f);
+    Int f3 = match of { Some(q) => q.x, None => -1 };
+    return f"sum {f2.x} {f3}";
+}
+
+// In a list.
+Str t_list(Int z, List(Int) e) {
+    Pt g = mk(z + 30, e);
+    List(Pt) gl = [g, g];
+    Pt g2 = bump(pick(gl, 0));
+    return f"list {g2.x} {gl[0].x} {gl[1].x} {g.x}";
+}
+
+// Captured, and called from a closure.
+Str t_closure(Int z, List(Int) e) {
+    Pt h = mk(z + 40, e);
+    Int closure(Int) hx = lambda(k) { h.x + k };
+    Pt h2 = bump(h);
+    Pt i = mk(z + 50, e);
+    Pt i2 = via_fn(i, lambda(q) { bumpv(q) });
+    Pt i3 = bumpv(mk(z + 55, e));
+    return f"closure {h2.x} {hx(0)} {i2.x} {i.x} {i3.x}";
+}
+
+// Branches, names, a loop.
+Str t_flow(Int z, List(Int) e) {
+    Pt p1 = mk(z + 60, e);
+    Pt q1 = mk(z + 70, e);
+    Pt k1 = bump(keep_or(p1, z == 0, q1));
+    Pt m1 = mk(z + 80, e);
+    Pt m2 = if (z == 0) { m1 } else { mk(1, e) };
+    Pt m3 = bump(m2);
+    Pt s0 = mk(z + 90, e);
+    Pt s1 = dup(z, s0);
+    Pt r = run(mk(z, e), 1000 + z);
+    return f"flow {k1.x} {p1.x} {q1.x} {m3.x} {m1.x} {s1.x} {s0.x} {r.x}";
+}
+
+// A list field updated through the record.
+Str t_field(Int z) {
+    St st = St {.xs = [z, z], .n = 0};
+    St st2 = step(step(St {.xs = [z, z], .n = 0}, 7), 8);
+    St st3 = step(st, 9);
+    return f"field {st2.xs[0]} {st2.n} {st3.xs[0]} {st.xs[0]} {st.n}";
+}
+
+Int main() {
+    Int z = rt 0;
+    List(Int) e = [];
+    println(t_holders(z, e));
+    println(t_chain(z, e));
+    println(t_sum(z, e));
+    println(t_list(z, e));
+    println(t_closure(z, e));
+    println(t_flow(z, e));
+    println(t_field(z));
+    return 0;
+}

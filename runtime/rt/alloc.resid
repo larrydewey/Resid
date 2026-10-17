@@ -453,6 +453,16 @@ pub Int rt_rec_reuse_eq(Int old, Int size, Int same) {
     return st64(h, rec_tag() | (size << 1) | 1) * 0 + h + 8;
 }
 
+// rt_rec_reuse_eq for a record the compiler proved unique (W2): no
+// header test, only the region test when a pointer field changes.
+@export("resid_rec_reuse_ny", "ptr(ptr,i64,i8)")
+@inline
+pub Int rt_rec_reuse_ny(Int old, Int size, Int same) {
+    if (same != 0 || young_fast(old)) { return old; }
+    Int h = rt_gmalloc(size + 8);
+    return st64(h, rec_tag() | (size << 1) | 1) * 0 + h + 8;
+}
+
 // ─── Copies that outlive a region ──────────────────────────────────────
 
 // A List(Str) copied, structure and strings, into the enclosing arena (or
