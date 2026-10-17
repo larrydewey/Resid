@@ -1,0 +1,39 @@
+// A record kept unique in a list (a consumed chain stored by `with`)
+// still has its tracked fields frozen, mover or not: reading or copying
+// the list shares the outer record alone, so a nested record left unique
+// would let a reusing literal rewrite it in place under another holder.
+type Box = { Map(Int, Int) m; Int tag; };
+type Outer3 = { Box inner; List(List(Int)) nest; Int k; };
+
+Box same_bump(Box b) { return Box {.m = b.m, .tag = b.tag + 1}; }
+Outer3 step3(Outer3 o) { return Outer3 {.inner = o.inner, .nest = o.nest, .k = o.k + 1}; }
+
+List(Outer3) mk(Int z) {
+    List(List(Int)) none = [];
+    List(Outer3) e = [Outer3 {.inner = Box {.m = {}, .tag = 5}, .nest = none, .k = 9}, Outer3 {.inner = Box {.m = {}, .tag = 6}, .nest = none, .k = 8}];
+    return e.with(1, Outer3 {.inner = Box {.m = {}, .tag = z}, .nest = none, .k = 1});
+}
+
+Int main() {
+    Int z = rt 0;
+    List(List(Int)) none = [];
+    // Read out of the list, then the nested record reused.
+    List(Outer3) e = [Outer3 {.inner = Box {.m = {}, .tag = 5}, .nest = none, .k = 9}];
+    List(Outer3) xs = e.with(0, Outer3 {.inner = Box {.m = {}, .tag = z}, .nest = none, .k = 1});
+    Outer3 q = xs[0];
+    Int a = same_bump(q.inner).tag;
+    println(f"read {a} {xs[0].inner.tag} {q.k} {step3(q).k}");
+    // The nested record taken straight from the element.
+    Int a2 = same_bump(xs[0].inner).tag;
+    println(f"direct {a2} {xs[0].inner.tag}");
+    // Through a sum.
+    Option(Outer3) p = Some(xs[0]);
+    Int a3 = match p { Some(r) => same_bump(r.inner).tag, None => -1 };
+    println(f"sum {a3} {xs[0].inner.tag}");
+    // A copy of the list shares the element.
+    List(Outer3) us = mk(z);
+    List(Outer3) ys = us.with(0, Outer3 {.inner = Box {.m = {}, .tag = 7}, .nest = none, .k = 2});
+    Int a4 = same_bump(ys[1].inner).tag;
+    println(f"copy {a4} {us[1].inner.tag} {step3(ys[0]).k}");
+    return 0;
+}

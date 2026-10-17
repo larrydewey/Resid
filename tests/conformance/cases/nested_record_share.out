@@ -1,0 +1,4 @@
+read 1 0 1 2
+direct 1 0
+sum 1 0
+copy 1 0 3

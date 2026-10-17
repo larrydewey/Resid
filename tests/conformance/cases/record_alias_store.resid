@@ -1,0 +1,56 @@
+// Shapes where one record had two holders and a reusing literal rewrote
+// it under one of them: the same record passed to a parameter the callee
+// only reads and to one it consumes, in one call; and a struct stored in
+// a list (through a variable, or with no header of its own) keeping a
+// unique record in a tracked field.
+type Pt = { Int x; List(Int) t; };
+type In = { List(Int) m; Int tag; };
+type Out = { In inner; Int k; };
+type Out2 = { In inner; Int k; };
+
+Pt bump(Pt p) { return Pt {.x = p.x + 1, .t = p.t}; }
+Int both(Pt p, Pt q) {
+    Pt r = bump(q);
+    return p.x * 100 + r.x;
+}
+In bump_in(In s) { return In {.m = s.m, .tag = s.tag + 1}; }
+Out step(Out o) { return Out {.inner = o.inner, .k = o.k + 1}; }
+
+Str t_both(Int z) {
+    Int s = both(Pt {.x = z + 1, .t = []}, Pt {.x = z + 1, .t = []});
+    Pt a = Pt {.x = z + 5, .t = []};
+    Int s2 = both(a, a);
+    return f"both {s} {s2}";
+}
+
+// A header record stored through a variable.
+Str t_var(Int z) {
+    List(Int) none = [];
+    List(Out) xs = [Out {.inner = In {.m = none, .tag = 5}, .k = 9}];
+    Out o = Out {.inner = In {.m = none, .tag = z}, .k = 1};
+    List(Out) ys = xs.with(0, o);
+    In i = ys[0].inner;
+    In j = bump_in(i);
+    Out q = ys[0];
+    In i2 = bump_in(q.inner);
+    return f"var {ys[0].inner.tag} {i.tag} {j.tag} {i2.tag} {step(q).k}";
+}
+
+// A struct with no header stored through a variable.
+Str t_nohdr(Int z) {
+    List(Int) none = [];
+    List(Out2) xs = [Out2 {.inner = In {.m = none, .tag = 5}, .k = 9}];
+    Out2 o = Out2 {.inner = In {.m = none, .tag = z}, .k = 1};
+    List(Out2) ys = xs.with(0, o);
+    In i = ys[0].inner;
+    In j = bump_in(i);
+    return f"nohdr {ys[0].inner.tag} {i.tag} {j.tag}";
+}
+
+Int main() {
+    Int z = rt 0;
+    println(t_both(z));
+    println(t_var(z));
+    println(t_nohdr(z));
+    return 0;
+}

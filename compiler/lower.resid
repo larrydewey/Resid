@@ -4549,12 +4549,15 @@ GT lw_list_with(LW w, Int id, GT base, List(Str) env) {
         List(Str) ls2 = xv.lines.concat(cvl).concat([reg + " = call ptr @resid_list_with_" + sk + "(ptr " + base.val + ", i8 " + own + ", i64 " + ix.val + ", " + at + " " + ex + ")"]);
         return GT {.pos = 0, .val = reg, .ty = base.ty, .cnt = 0, .err = "", .glines = xv.glines, .lines = ls2, .tmp = t2, .lbl = xv.lbl, .tail = false};
     }
-    // A record that stays unique in the list (a consumed chain, or a
-    // borrowed element's write-back) still has its tracked fields frozen.
+    // A struct stored in the list has its tracked fields frozen, whatever
+    // its type's mover or header and whether the value is a fresh chain
+    // or a variable bound to one: a list copy or read shares the record
+    // alone, so a nested record must not stay unique under it. A header
+    // record keeps its own unique bit (freezef); others have none.
     Str sety = strip_owned_cg(ety);
-    Int vn = lo_unparen(w.g, lw_kid(w, id, 2));
-    Bool ff = ek != "" && w.lo.lists && w.lo.hdr.contains(sety) && lo_mfs(w.lo, sety).len() > 0 && (lo_is(w, id, 4) || lo_is(w, vn, 1));
-    List(Str) ffl = if (ff) { ["call void @" + lo_freezef_name(sety) + "(ptr " + boxed + ")"] } else { [] };
+    Bool ff = w.lo.lists && lo_mfs(w.lo, sety).len() > 0;
+    Str ffn = if (w.lo.hdr.contains(sety)) { lo_freezef_name(sety) } else { lo_freeze_name(sety) };
+    List(Str) ffl = if (ff) { ["call void @" + ffn + "(ptr " + boxed + ")"] } else { [] };
     // The write-back of a borrowed element (lo_borrows, flag bit 4).
     Str wf = if (lo_is(w, id, 4)) { "@resid_list_with_fb(ptr " } else { if (lw_hdr_elem(w, ety)) { "@resid_list_with_fh(ptr " } else { "@resid_list_with_f(ptr " } };
     Str call = if (ek != "") { wf + base.val + ", i8 " + own + ", i64 " + ix.val + ", ptr " + boxed + ", ptr @" + ek + ")" } else { "@resid_list_with(ptr " + base.val + ", i8 " + own + ", i64 " + ix.val + ", ptr " + boxed + ")" };
@@ -6958,7 +6961,7 @@ LOC lo_ce(Kg g, Int id, LV lov, LOP lop) {
         if (!lo_args_after(g, u, 1, lov, b.bare, lop)) { return lo_cfail(); }
         return LOC {.ok = true, .mut = true, .ce = b.ce.concat(lo_with_val_ce(g, u, lop)).concat([u]), .bare = false};
     }
-    if (k == "call" && lop.lin.contains(t)) { return lo_ce_call(g, u, 0, lov, lop, -1, lo_cfail(), -1); }
+    if (k == "call" && lop.lin.contains(t)) { return lo_ce_call(g, u, 0, lov, lop, -1, lo_cfail(), -1, false); }
     if (k == "struct" && !lov.whole) { return lo_ce_fields(g, u, 0, lov, lop, false, lo_cfail()); }
     if (k == "ifx") { return lo_ce_ifx(g, u, lov, lop); }
     if (k == "match") { return lo_ce_match(g, u, lov, lop); }
@@ -7035,20 +7038,24 @@ Bool lo_args_after(Kg g, Int c, Int i, LV lov, Bool bare, LOP lop) {
 
 // Arguments of a call: exactly one consumes V, at a linear parameter;
 // reads after it are allowed only while it is the bare item.
-LOC lo_ce_call(Kg g, Int c, Int i, LV lov, LOP lop, Int j, LOC child, Int last_rd) {
+// held: an argument passes V to a parameter the callee only borrows. The
+// callee holds that while it runs, so V consumed by another argument of
+// the same call would be rewritten under it.
+LOC lo_ce_call(Kg g, Int c, Int i, LV lov, LOP lop, Int j, LOC child, Int last_rd, Bool held) {
     Str f = g.ns[c].text;
     if (i >= g.ns[c].nk) {
-        if (j < 0) { return lo_cfail(); }
+        if (j < 0 || held) { return lo_cfail(); }
         if (last_rd > j && !child.bare) { return lo_cfail(); }
         return LOC {.ok = true, .mut = child.mut || lo_bit(lop.mut, f, j), .ce = child.ce.concat([c]), .bare = false};
     }
     Int a = kg_kid(g, c, i);
-    if (!lo_has(g, a, lov) || lo_skip_arg(g, c, i, lov, lop)) { return lo_ce_call(g, c, i + 1, lov, lop, j, child, last_rd); }
-    if ((lo_argref(g, a, lov) && lo_borrow(lop, f, i)) || lo_rd(g, a, lov, lop)) { return lo_ce_call(g, c, i + 1, lov, lop, j, child, i); }
+    if (!lo_has(g, a, lov) || lo_skip_arg(g, c, i, lov, lop)) { return lo_ce_call(g, c, i + 1, lov, lop, j, child, last_rd, held); }
+    Bool br = lo_argref(g, a, lov) && lo_borrow(lop, f, i);
+    if (br || lo_rd(g, a, lov, lop)) { return lo_ce_call(g, c, i + 1, lov, lop, j, child, i, held || br); }
     if (j >= 0 || !lo_bit(lop.lin, f, i)) { return lo_cfail(); }
     LOC ch = lo_ce(g, a, lov, lop);
     if (!ch.ok) { return ch; }
-    return lo_ce_call(g, c, i + 1, lov, lop, i, ch, last_rd);
+    return lo_ce_call(g, c, i + 1, lov, lop, i, ch, last_rd, held);
 }
 
 // A struct literal's fields (run in order): exactly one consumes V, and
