@@ -5089,7 +5089,9 @@ PG lw_fn_body(LW w0, Int d, PG g) {
     // iteration's allocations when the next one starts (lr_region).
     Str rev = lr_ret_evac(w.fs, rbase);
     Bool region = tco_ok && lw_find_line(fn_lines0, "tco.head:", 1) >= 0 && lr_region_ok(w, d, fn_lines0, tyl, rev);
-    List(Str) fn_lines = if (region) { lr_region(fn_lines0, lr_evac_tys(w.fs, tyl, 0, []), rev) } else { fn_lines0 };
+    List(Str) fn_lines_r = if (region) { lr_region(fn_lines0, lr_evac_tys(w.fs, tyl, 0, []), rev) } else { fn_lines0 };
+    // A loop updating an owned list in place gets an unchecked copy (W3).
+    List(Str) fn_lines = if (tco_ok && !resid_rtmod() && !w.dbg) { ol_apply(fn_lines0, fn_lines_r, tyl) } else { fn_lines_r };
     List(Str) own0 = fn_lines.concat(["}"]);
     LDG dg0 = if (w.dbg) { lw_dbg_fn(w, d, name, own0, g.pos, tyl) } else { LDG {.lines = own0, .meta = nil_list(), .next = g.pos} };
     List(Str) wrap = if (split) { pp1.lines.concat(["%sb.r = call " + ll_ty(rbase) + " @" + bname + "(" + pd + ")", "call void @resid_cap_leave()", "ret " + ll_ty(rbase) + " %sb.r", "}"]) } else { nil_list() };
@@ -5294,6 +5296,963 @@ ListBuf(Str) lsv_lines(List(Str) ls, Int i, Str reg, Str k1, Str k2, ListBuf(Str
     Str via = "@resid_list_get_v(ptr " + reg + ", ";
     Str l2 = if (hit) { str_replace(str_replace(str_slice(l, 0, str_len(l) - 1), k1, via), k2, via) + ", ptr " + reg + ".ld, i64 " + reg + ".ln)" } else { l };
     return lsv_lines(ls, i + 1, reg, k1, k2, acc.push(l2));
+}
+
+// ─── Versioned list loops (W3) ─────────────────────────────────────────
+// A tail-recursive loop that updates an owned list in place (every `with`
+// owned, the list carried back through its own updates and otherwise only
+// read, measured or returned) gets a second copy of its body. The loop
+// head enters the copy when each such list is transient (each list it
+// only reads, flat): the copy reads root and count once, so an element
+// access is a bounds test on registers and a load or store, with no
+// transient test and no header reload. Its back edges stay in the copy;
+// a loop region's compaction goes back to the checked head, whose guard
+// picks the copy again for the moved list.
+
+type OL = { Str reg; Bool ok; Bool wrote; Bool borrow; Map(Str, Int) fam; Int n; };
+
+// pre: the function before loop regions (the analysis), ls: after.
+List(Str) ol_apply(List(Str) pre, List(Str) ls, List(Str) tyl) {
+    Int h = lw_find_line(ls, "tco.head:", 1);
+    Int h0 = lw_find_line(pre, "tco.head:", 1);
+    if (h < 0 || h0 < 0 || !ol_writes(pre, h0) || ol_unsafe(ls, 0)) { return ls; }
+    Int b0 = lw_after_phis(pre, h0 + 1);
+    // Every walker below takes a head phi's first incoming as the entry's.
+    if (b0 <= h0 + 1 || ol_phi_labels(pre[h0 + 1])[0] != "entry" || ol_phi_labels(ls[h + 1])[0] != "entry") { return ls; }
+    List(OL) e0 = [];
+    List(OL) vs = ol_lists(pre, h0 + 1, h0 + 1, b0, tyl, e0);
+    if (!ol_any_wrote(vs, 0)) { return ls; }
+    ORF r = orf_analyze(pre, h0, b0, ol_fams(vs, 0, "", {"%none": -1}));
+    // Header reloads alone do not pay for a second copy of the loop (it
+    // shifts LLVM's inlining around it): some check must be proven away.
+    if (r.zs.keys().len() == 0 && r.inb.keys().len() == 0) { return ls; }
+    return ol_emit(ls, h, lw_after_phis(ls, h + 1), vs, r);
+}
+
+Bool ol_writes(List(Str) f, Int i) {
+    if (i >= f.len()) { return false; }
+    Str l = f[i];
+    if (str_contains(l, "@resid_list_set_w(ptr %") || str_contains(l, "@resid_list_set_rec(ptr %") || str_contains(l, "@resid_list_set_rec_wb(ptr %")) { return true; }
+    return ol_writes(f, i + 1);
+}
+
+// Text the renaming cannot see through.
+Bool ol_unsafe(List(Str) f, Int i) {
+    if (i >= f.len()) { return false; }
+    Str l = f[i];
+    if (str_contains(l, "!dbg") || str_contains(l, " asm ") || str_contains(l, "musttail") || str_contains(l, "%\"") || str_contains(l, "%ol.")) { return true; }
+    return ol_unsafe(f, i + 1);
+}
+
+Bool ol_any_wrote(List(OL) vs, Int i) {
+    if (i >= vs.len()) { return false; }
+    return vs[i].wrote || ol_any_wrote(vs, i + 1);
+}
+
+// Each list parameter whose uses all qualify.
+List(OL) ol_lists(List(Str) f, Int i, Int h1, Int b, List(Str) tyl, List(OL) acc) {
+    if (i >= b) { return acc; }
+    Str l = f[i];
+    Str reg = str_slice(l, 0, str_find_char(l, 32, 0));
+    Int j = str_parse_int(str_slice(reg, 2, str_len(reg)));
+    Bool lst = j >= 0 && j < tyl.len() && str_has_prefix(tyl[j], "List(") && str_starts_with(l, reg + " = phi ptr ");
+    if (!lst) { return ol_lists(f, i + 1, h1, b, tyl, acc); }
+    Map(Str, Int) m0 = {};
+    OL v0 = ol_grow(f, b, OL {.reg = reg, .ok = true, .wrote = false, .borrow = false, .fam = m0.insert(reg, 1), .n = 1}, 0);
+    OL v1 = ol_check(f, b, v0);
+    Bool ok = v1.ok && ol_heads_ok(f, h1, b, v1);
+    return ol_lists(f, i + 1, h1, b, tyl, if (ok) { acc.concat([v1]) } else { acc });
+}
+
+// The head's phis: the list's own comes back as a member on every back
+// edge; no other phi takes a member.
+Bool ol_heads_ok(List(Str) f, Int i, Int b, OL v) {
+    if (i >= b) { return true; }
+    Str l = f[i];
+    Str reg = str_slice(l, 0, str_find_char(l, 32, 0));
+    List(Str) ins = ol_phi_vals(l);
+    Bool ok = if (reg == v.reg) { ol_all_in(ins, 1, v.fam) } else { !ol_some_in(ins, 0, v.fam) };
+    return ok && ol_heads_ok(f, i + 1, b, v);
+}
+
+// A phi's incoming values, in order.
+List(Str) ol_phi_vals(Str l) {
+    List(Str) parts = str_split(l, "[ ");
+    return ol_phi_vals_at(parts, 1, []);
+}
+
+List(Str) ol_phi_vals_at(List(Str) parts, Int k, List(Str) acc) {
+    if (k >= parts.len()) { return acc; }
+    Str p = parts[k];
+    return ol_phi_vals_at(parts, k + 1, acc.concat([str_slice(p, 0, str_find_char(p, 44, 0))]));
+}
+
+Bool ol_all_in(List(Str) xs, Int i, Map(Str, Int) m) {
+    if (i >= xs.len()) { return true; }
+    return m.contains(xs[i]) && ol_all_in(xs, i + 1, m);
+}
+
+Bool ol_some_in(List(Str) xs, Int i, Map(Str, Int) m) {
+    if (i >= xs.len()) { return false; }
+    return m.contains(xs[i]) || ol_some_in(xs, i + 1, m);
+}
+
+// The register a line defines, or "".
+Str ol_dst(Str l) {
+    if (!str_starts_with(l, "%")) { return ""; }
+    Int e = str_index_of(l, " = ", 0);
+    return if (e > 0) { str_slice(l, 0, e) } else { "" };
+}
+
+Str ol_rhs(Str l) {
+    Int e = str_index_of(l, " = ", 0);
+    return if (str_starts_with(l, "%") && e > 0) { str_slice(l, e + 3, str_len(l)) } else { l };
+}
+
+// Members: the list, each update of a member, each phi of members only,
+// to a fixed point (a phi may name a member defined further down).
+OL ol_grow(List(Str) f, Int b, OL v, Int round) {
+    OL g = ol_grow1(f, b, v);
+    if (g.n == v.n || round > 8) { return g; }
+    return ol_grow(f, b, g, round + 1);
+}
+
+OL ol_grow1(List(Str) f, Int i, OL v) {
+    if (i >= f.len()) { return v; }
+    Str l = f[i];
+    Str d = ol_dst(l);
+    Bool add = d != "" && !v.fam.contains(d) && ol_joins(ol_rhs(l), v.fam);
+    OL v2 = if (add) { OL {.reg = v.reg, .ok = v.ok, .wrote = v.wrote, .borrow = v.borrow, .fam = v.fam.insert(d, 1), .n = v.n + 1} } else { v };
+    return ol_grow1(f, i + 1, v2);
+}
+
+Bool ol_joins(Str rhs, Map(Str, Int) fam) {
+    if (str_starts_with(rhs, "phi ptr ")) { return ol_all_in(ol_phi_vals(rhs), 0, fam); }
+    Str m = ol_first_arg(rhs);
+    if (m == "" || !fam.contains(m)) { return false; }
+    return str_starts_with(rhs, "call ptr @resid_list_set_w(ptr " + m + ", i8 1, ") || str_starts_with(rhs, "call ptr @resid_list_set_rec(ptr " + m + ", i8 1, ") || str_starts_with(rhs, "call ptr @resid_list_set_rec_wb(ptr " + m + ", ");
+}
+
+// `call T @f(ptr %x, ...`: %x, else "".
+Str ol_first_arg(Str rhs) {
+    if (!str_starts_with(rhs, "call ")) { return ""; }
+    Int a = str_index_of(rhs, "(ptr %", 0);
+    if (a < 0) { return ""; }
+    Int e = vl_reg_end(rhs, a + 6, str_len(rhs));
+    return str_slice(rhs, a + 5, e);
+}
+
+// Registers named in a line.
+List(Str) ol_regs(Str l, Int i, Int n, List(Str) acc) {
+    Int c = str_index_of(l, "%", i);
+    if (c < 0) { return acc; }
+    Int j = vl_reg_end(l, c + 1, n);
+    return ol_regs(l, j, n, acc.concat([str_slice(l, c, j)]));
+}
+
+Int ol_count_in(List(Str) xs, Int i, Map(Str, Int) m) {
+    if (i >= xs.len()) { return 0; }
+    return (if (m.contains(xs[i])) { 1 } else { 0 }) + ol_count_in(xs, i + 1, m);
+}
+
+// Every line naming a member is one of the forms the copy rewrites, a
+// phi of members, or a return of one.
+OL ol_check(List(Str) f, Int i, OL v) {
+    if (!v.ok || i >= f.len()) { return v; }
+    Str l = f[i];
+    if (!str_contains(l, "%")) { return ol_check(f, i + 1, v); }
+    List(Str) rs = ol_regs(l, 0, str_len(l), []);
+    Str d = ol_dst(l);
+    Int k = ol_count_in(rs, 0, v.fam) - (if (d != "" && v.fam.contains(d)) { 1 } else { 0 });
+    if (k == 0) { return ol_check(f, i + 1, v); }
+    Str rhs = ol_rhs(l);
+    if (str_starts_with(rhs, "phi ptr ")) {
+        Bool ok = v.fam.contains(d) && ol_all_in(ol_phi_vals(rhs), 0, v.fam);
+        return ol_check(f, i + 1, if (ok) { v } else { ol_bad(v) });
+    }
+    if (k != 1) { return ol_bad(v); }
+    if (str_starts_with(l, "ret ptr ") && v.fam.contains(str_slice(l, 8, str_len(l)))) { return ol_check(f, i + 1, v); }
+    Str m = ol_first_arg(rhs);
+    if (d == "" || m == "" || !v.fam.contains(m)) { return ol_bad(v); }
+    Str a = "(ptr " + m + ", ";
+    Bool rd = str_starts_with(rhs, "call ptr @resid_list_get" + a) || rhs == "call i64 @resid_list_len(ptr " + m + ")" || str_starts_with(rhs, "call ptr @resid_list_rec_at" + a);
+    Bool wr = str_starts_with(rhs, "call ptr @resid_list_set_w" + a + "i8 1, ") || str_starts_with(rhs, "call ptr @resid_list_set_rec" + a + "i8 1, ");
+    Bool bw = str_starts_with(rhs, "call ptr @resid_list_rec_borrow" + a) || str_starts_with(rhs, "call ptr @resid_list_set_rec_wb" + a);
+    if (!rd && !wr && !bw) { return ol_bad(v); }
+    OL v2 = OL {.reg = v.reg, .ok = true, .wrote = v.wrote || wr || str_contains(rhs, "_wb("), .borrow = v.borrow || bw, .fam = v.fam, .n = v.n};
+    return ol_check(f, i + 1, v2);
+}
+
+OL ol_bad(OL v) { return OL {.reg = v.reg, .ok = false, .wrote = v.wrote, .borrow = v.borrow, .fam = v.fam, .n = v.n}; }
+
+// ─── The copy ──────────────────────────────────────────────────────────
+
+List(Str) ol_emit(List(Str) ls, Int h, Int b, List(OL) vs, ORF r) {
+    // Everything defined from the head on is renamed in the copy.
+    Map(Str, Int) e0 = {};
+    Map(Str, Int) ds = ol_defs(ls, h, e0);
+    // Back edges through a loop region's compaction: "<lab>.k" whose
+    // "<lab>.c" block exists.
+    List(Str) phis = ls[h + 1..b];
+    List(Str) rk = ol_region_edges(ls, ol_phi_labels(phis[0]), 1, []);
+    List(Str) slow_phis = ol_slow_phis(phis, 0, rk, ds, []);
+    List(Str) guard = ol_tests(vs, 0, []).concat(ol_counts(vs, 0, [])).concat(r.lines).concat(ol_and(ol_conds(vs.len(), 0, []).concat(r.conds), 1, ""));
+    List(Str) pre = ol_pre(vs, 0, []);
+    List(Str) fast_phis = ol_fast_phis(phis, 0, ds, []);
+    ListBuf(Str) o0 = ol_push(ls, 0, h + 1, ListBuf());
+    ListBuf(Str) o1 = ol_push(slow_phis.concat(guard).concat(["ol.pre:"]).concat(pre).concat(["br label %tco.head.ol", "ol.slow:"]), 0, -1, o0);
+    ListBuf(Str) o2 = ol_slow(ls, b, o1);
+    ListBuf(Str) o3 = ol_push(["tco.head.ol:"].concat(fast_phis), 0, -1, o2);
+    Map(Str, Int) fam = ol_fams(vs, 0, ".ol", {"%none": -1});
+    return ol_fast(ls, b, ds, fam, rk, r, "", o3).finish();
+}
+
+ListBuf(Str) ol_push(List(Str) xs, Int i, Int e, ListBuf(Str) acc) {
+    Int stop = if (e < 0) { xs.len() } else { e };
+    if (i >= stop) { return acc; }
+    return ol_push(xs, i + 1, e, acc.push(xs[i]));
+}
+
+Map(Str, Int) ol_defs(List(Str) ls, Int i, Map(Str, Int) acc) {
+    if (i >= ls.len()) { return acc; }
+    Str l = ls[i];
+    Bool lab = str_ends_with(l, ":") && !str_contains(l, " ");
+    Str d = if (lab) { "%" + str_slice(l, 0, str_len(l) - 1) } else { ol_dst(l) };
+    return ol_defs(ls, i + 1, if (d != "") { acc.insert(d, 1) } else { acc });
+}
+
+// Each member of list K -> K, its name suffixed by sfx.
+Map(Str, Int) ol_fams(List(OL) vs, Int k, Str sfx, Map(Str, Int) acc) {
+    if (k >= vs.len()) { return acc; }
+    return ol_fams(vs, k + 1, sfx, ol_fam_put(vs[k].fam.keys(), 0, k, sfx, acc));
+}
+
+Map(Str, Int) ol_fam_put(List(Str) ms, Int i, Int k, Str sfx, Map(Str, Int) acc) {
+    if (i >= ms.len()) { return acc; }
+    return ol_fam_put(ms, i + 1, k, sfx, acc.insert(ms[i] + sfx, k));
+}
+
+// The copy's name for each renamed register or label.
+Str ol_ren(Str l, Map(Str, Int) ds) { return ol_ren_at(l, 0, str_len(l), ds, str_sb_new()); }
+
+Str ol_ren_at(Str l, Int i, Int n, Map(Str, Int) ds, Str sb) {
+    if (i >= n) { return str_sb_finish(sb); }
+    Int c = str_index_of(l, "%", i);
+    if (c < 0) { return str_sb_finish(str_sb_append_slice(sb, l, i, n)); }
+    Int j = vl_reg_end(l, c + 1, n);
+    Str r = str_slice(l, c, j);
+    Str sb2 = str_sb_append(str_sb_append_slice(sb, l, i, c), if (ds.contains(r)) { r + ".ol" } else { r });
+    return ol_ren_at(l, j, n, ds, sb2);
+}
+
+// A phi's incoming labels, in order (without `%`).
+List(Str) ol_phi_labels(Str l) {
+    List(Str) parts = str_split(l, "[ ");
+    return ol_phi_labels_at(parts, 1, []);
+}
+
+List(Str) ol_phi_labels_at(List(Str) parts, Int k, List(Str) acc) {
+    if (k >= parts.len()) { return acc; }
+    Str p = parts[k];
+    Int c = str_index_of(p, ", %", 0);
+    Int e = str_index_of(p, " ]", c);
+    return ol_phi_labels_at(parts, k + 1, acc.concat([str_slice(p, c + 3, e)]));
+}
+
+List(Str) ol_region_edges(List(Str) ls, List(Str) labs, Int i, List(Str) acc) {
+    if (i >= labs.len()) { return acc; }
+    Str lab = labs[i];
+    Bool r = str_ends_with(lab, ".k") && lw_find_line(ls, str_slice(lab, 0, str_len(lab) - 2) + ".c:", 0) >= 0;
+    return ol_region_edges(ls, labs, i + 1, if (r) { acc.concat([str_slice(lab, 0, str_len(lab) - 2)]) } else { acc });
+}
+
+// The head's phis, each also taking the copy's compactions: a moved
+// value (`%pJ.ev.<lab>` here) as the copy moved it, any other renamed.
+List(Str) ol_slow_phis(List(Str) phis, Int i, List(Str) rk, Map(Str, Int) ds, List(Str) acc) {
+    if (i >= phis.len()) { return acc; }
+    Str l = phis[i];
+    Str reg = str_slice(l, 0, str_find_char(l, 32, 0));
+    List(Str) vals = ol_phi_vals(l);
+    List(Str) labs = ol_phi_labels(l);
+    Str l2 = l + ol_slow_ins(reg, vals, labs, rk, 0, ds, "");
+    return ol_slow_phis(phis, i + 1, rk, ds, acc.concat([l2]));
+}
+
+Str ol_slow_ins(Str reg, List(Str) vals, List(Str) labs, List(Str) rk, Int j, Map(Str, Int) ds, Str acc) {
+    if (j >= rk.len()) { return acc; }
+    Str base = rk[j];
+    Int at = vl_index(labs, base + ".k", 0);
+    Str v = if (at >= 0) { vals[at] } else { "undef" };
+    Str mv = if (v == reg + ".ev." + base) { reg + ".e." + base + ".ol" } else { ol_ren(v, ds) };
+    return ol_slow_ins(reg, vals, labs, rk, j + 1, ds, acc + ", [ " + mv + ", %" + base + ".c.ol ]");
+}
+
+// The copy's head phis: from the guard, the head's values; from each back
+// edge, its renamed value.
+List(Str) ol_fast_phis(List(Str) phis, Int i, Map(Str, Int) ds, List(Str) acc) {
+    if (i >= phis.len()) { return acc; }
+    Str l = phis[i];
+    Str reg = str_slice(l, 0, str_find_char(l, 32, 0));
+    Int ty0 = str_index_of(l, " = phi ", 0) + 7;
+    Str ty = str_slice(l, ty0, str_index_of(l, " [", ty0));
+    List(Str) vals = ol_phi_vals(l);
+    List(Str) labs = ol_phi_labels(l);
+    Str l2 = reg + ".ol = phi " + ty + " [ " + reg + ", %ol.pre ]" + ol_fast_ins(vals, labs, 1, ds, "");
+    return ol_fast_phis(phis, i + 1, ds, acc.concat([l2]));
+}
+
+Str ol_fast_ins(List(Str) vals, List(Str) labs, Int j, Map(Str, Int) ds, Str acc) {
+    if (j >= vals.len()) { return acc; }
+    return ol_fast_ins(vals, labs, j + 1, ds, acc + ", [ " + ol_ren(vals[j], ds) + ", %" + labs[j] + ".ol ]");
+}
+
+// The guard: each updated or borrowed list transient (shift word -2),
+// each other flat (-1 or -2); %ol.cK.
+List(Str) ol_tests(List(OL) vs, Int k, List(Str) acc) {
+    if (k >= vs.len()) { return acc; }
+    OL v = vs[k];
+    Str w = f"%ol.w{k}";
+    Str hd = f"%ol.h{k}";
+    Str c = f"%ol.c{k}";
+    Str test = if (v.wrote || v.borrow) { c + " = icmp eq i32 " + hd + ", -2" } else { c + " = icmp slt i32 " + hd + ", 0" };
+    return ol_tests(vs, k + 1, acc.concat([w + " = getelementptr i8, ptr " + v.reg + ", i64 8", hd + " = load i32, ptr " + w, test]));
+}
+
+// Each list's count, %ol.nK (the copy's too).
+List(Str) ol_counts(List(OL) vs, Int k, List(Str) acc) {
+    if (k >= vs.len()) { return acc; }
+    return ol_counts(vs, k + 1, acc.concat([f"%ol.n{k} = load i64, ptr " + vs[k].reg]));
+}
+
+List(Str) ol_conds(Int n, Int k, List(Str) acc) {
+    if (k >= n) { return acc; }
+    return ol_conds(n, k + 1, acc.concat([f"%ol.c{k}"]));
+}
+
+// The conditions and-ed, then the branch.
+List(Str) ol_and(List(Str) cs, Int i, Str acc) {
+    Str cur = if (i == 1) { cs[0] } else { acc };
+    if (i >= cs.len()) { return ["br i1 " + cur + ", label %ol.pre, label %ol.slow"]; }
+    Str a = f"%ol.a{i}";
+    return [a + " = and i1 " + cur + ", " + cs[i]].concat(ol_and(cs, i + 1, a));
+}
+
+// The root, read once: %ol.sK the first slot.
+List(Str) ol_pre(List(OL) vs, Int k, List(Str) acc) {
+    if (k >= vs.len()) { return acc; }
+    Str r = vs[k].reg;
+    List(Str) ls = [f"%ol.q{k} = getelementptr i8, ptr " + r + ", i64 16", f"%ol.r{k} = load ptr, ptr %ol.q{k}", f"%ol.s{k} = getelementptr i8, ptr %ol.r{k}, i64 24"];
+    return ol_pre(vs, k + 1, acc.concat(ls));
+}
+
+// The checked body: a phi that came from the head now comes from ol.slow.
+ListBuf(Str) ol_slow(List(Str) ls, Int i, ListBuf(Str) acc) {
+    if (i >= ls.len()) { return acc; }
+    Str l = ls[i];
+    Str l2 = if (str_contains(l, " = phi ") && str_contains(l, ", %tco.head ]")) { str_replace(l, ", %tco.head ]", ", %ol.slow ]") } else { l };
+    return ol_slow(ls, i + 1, acc.push(l2));
+}
+
+// The copy, renamed, with the members' accesses on the registers read at
+// the guard. `cur` is the block being copied.
+ListBuf(Str) ol_fast(List(Str) ls, Int i, Map(Str, Int) ds, Map(Str, Int) fam, List(Str) rk, ORF rf, Str cur, ListBuf(Str) acc) {
+    if (i >= ls.len()) { return acc; }
+    Str l = ls[i];
+    Bool lab = str_ends_with(l, ":") && !str_contains(l, " ");
+    if (lab) { return ol_fast(ls, i + 1, ds, fam, rk, rf, str_slice(l, 0, str_len(l) - 1), acc.push(str_slice(l, 0, str_len(l) - 1) + ".ol:")); }
+    // An overflow check the range facts prove.
+    Str ock = "call void @resid_overflow_check(i8 ";
+    if (str_starts_with(l, ock) && rf.zs.contains(str_slice(l, str_len(ock), str_len(l) - 1))) { return ol_fast(ls, i + 1, ds, fam, rk, rf, cur, acc); }
+    Str r = ol_ren(l, ds);
+    // A compaction in the copy goes back to the checked head; its join
+    // keeps only the edge that did not compact.
+    Bool comp = str_ends_with(cur, ".c") && rk.contains(str_slice(cur, 0, str_len(cur) - 2));
+    if (comp && str_starts_with(l, "br label %")) { return ol_fast(ls, i + 1, ds, fam, rk, rf, cur, acc.push("br label %tco.head")); }
+    Bool join = str_ends_with(cur, ".k") && rk.contains(str_slice(cur, 0, str_len(cur) - 2));
+    if (join && str_contains(r, " = phi ")) { return ol_fast(ls, i + 1, ds, fam, rk, rf, cur, acc.push(ol_drop_in(r, "%" + str_slice(cur, 0, str_len(cur) - 2) + ".c.ol"))); }
+    Str d0 = ol_dst(l);
+    return ol_fast(ls, i + 1, ds, fam, rk, rf, cur, ol_push(ol_op(r, fam, d0 != "" && rf.inb.contains(d0)), 0, -1, acc));
+}
+
+// A phi without its incoming edge from label `lab`.
+Str ol_drop_in(Str l, Str lab) {
+    List(Str) parts = str_split(l, "[ ");
+    return ol_drop_at(parts, 1, lab, parts[0], true);
+}
+
+Str ol_drop_at(List(Str) parts, Int k, Str lab, Str acc, Bool first) {
+    if (k >= parts.len()) { return acc; }
+    Str p = str_trim(parts[k]);
+    Str q = if (str_ends_with(p, ",")) { str_slice(p, 0, str_len(p) - 1) } else { p };
+    if (str_contains(q, ", " + lab + " ]")) { return ol_drop_at(parts, k + 1, lab, acc, first); }
+    return ol_drop_at(parts, k + 1, lab, acc + (if (first) { "" } else { ", " }) + "[ " + q, false);
+}
+
+// One renamed line of the copy, its member access rewritten (inb: its
+// index is proven in bounds, so no check).
+List(Str) ol_op(Str l, Map(Str, Int) fam, Bool inb) {
+    List(Str) xs = ol_op0(l, fam);
+    return if (inb) { ol_no_check(xs, 0, []) } else { xs };
+}
+
+List(Str) ol_no_check(List(Str) xs, Int i, List(Str) acc) {
+    if (i >= xs.len()) { return acc; }
+    return ol_no_check(xs, i + 1, if (str_starts_with(xs[i], "call void @resid_ol_check(")) { acc } else { acc.concat([xs[i]]) });
+}
+
+List(Str) ol_op0(Str l, Map(Str, Int) fam) {
+    Str d = ol_dst(l);
+    Str rhs = ol_rhs(l);
+    Str m = ol_first_arg(rhs);
+    if (d == "" || m == "" || !fam.contains(m)) { return [l]; }
+    Int k = fam.get(m) else { 0 };
+    Str s = f"%ol.s{k}";
+    Str n = f"%ol.n{k}";
+    List(Str) a = ol_args(rhs);
+    Str alias = d + " = getelementptr i8, ptr " + m + ", i64 0";
+    if (str_starts_with(rhs, "call i64 @resid_list_len(")) { return [d + " = add i64 " + n + ", 0"]; }
+    if (str_starts_with(rhs, "call ptr @resid_list_get(") && a.len() == 2) {
+        return ["call void @resid_ol_check(" + a[1] + ", i64 " + n + ")", d + ".a = getelementptr i64, ptr " + s + ", " + a[1], d + " = load ptr, ptr " + d + ".a"];
+    }
+    if (str_starts_with(rhs, "call ptr @resid_list_set_w(") && a.len() == 4) {
+        Str w = str_slice(a[3], 4, str_len(a[3]));
+        return ["call void @resid_ol_check(" + a[2] + ", i64 " + n + ")", d + ".a = getelementptr i64, ptr " + s + ", " + a[2], "store i64 " + w + ", ptr " + d + ".a", alias];
+    }
+    Bool at = str_starts_with(rhs, "call ptr @resid_list_rec_at(") && a.len() == 3;
+    Bool bo = str_starts_with(rhs, "call ptr @resid_list_rec_borrow(") && a.len() == 4;
+    if (at || bo) {
+        Str w = str_slice(a[2], 4, str_len(a[2]));
+        return [d + ".n = sdiv i64 " + n + ", " + w, "call void @resid_ol_check(" + a[1] + ", i64 " + d + ".n)"].concat(ol_elem(d, d, s, a[1], w));
+    }
+    if (str_starts_with(rhs, "call ptr @resid_list_set_rec_wb(") && a.len() == 4) {
+        Str w = str_slice(a[3], 4, str_len(a[3]));
+        if (!vl_is_int_lit(w)) { return [l]; }
+        return ol_elem(d + ".p", d, s, a[1], w).concat(["call void @resid_ol_put(ptr " + d + ".p, " + a[2] + f", i64 {(str_parse_int(w) - 1) * 8})", alias]);
+    }
+    if (str_starts_with(rhs, "call ptr @resid_list_set_rec(") && a.len() == 5) {
+        Str w = str_slice(a[4], 4, str_len(a[4]));
+        if (!vl_is_int_lit(w)) { return [l]; }
+        List(Str) chk = [d + ".n = sdiv i64 " + n + ", " + w, "call void @resid_ol_check(" + a[2] + ", i64 " + d + ".n)"];
+        return chk.concat(ol_elem(d + ".p", d, s, a[2], w)).concat(["call void @resid_ol_put(ptr " + d + ".p, " + a[3] + f", i64 {(str_parse_int(w) - 1) * 8})", alias]);
+    }
+    return [l];
+}
+
+// Record element `ix` (typed "i64 I") of w words: its fields, into `out`.
+List(Str) ol_elem(Str out, Str d, Str s, Str ix, Str w) {
+    return [d + ".w = mul i64 " + str_slice(ix, 4, str_len(ix)) + ", " + w, d + ".q = getelementptr i64, ptr " + s + ", i64 " + d + ".w", out + " = getelementptr i8, ptr " + d + ".q, i64 8"];
+}
+
+// A call's arguments as typed operands ("ptr %x", "i64 3", ...).
+List(Str) ol_args(Str rhs) {
+    Int a = str_index_of(rhs, "(", 0);
+    if (a < 0 || !str_ends_with(rhs, ")")) { return []; }
+    return str_split(str_slice(rhs, a + 1, str_len(rhs) - 1), ", ");
+}
+
+// ─── Range facts in the copy ───────────────────────────────────────────
+// An integer parameter P of the loop has a lower bound when every back
+// edge passes P, P + S (S a literal or invariant at least 0), Q + c for
+// another bounded Q, or a literal, each at least the bound; the guard
+// checks it of P's value at the head. An exit test `P > B` (or >=, or <,
+// <= exiting on false) with B invariant (a literal, an invariant
+// parameter or a list's count over w) bounds P from above in each block
+// its staying edge dominates. Under those, the copy drops the overflow
+// checks of P - c and of P + S, and the bounds check of an element at
+// P + c, each with the guard condition that proves it.
+
+// lines/conds: the guard's; zs: overflow checks dropped (their i8
+// operand); inb: accesses whose bounds check is dropped.
+type ORF = { List(Str) lines; List(Str) conds; Map(Str, Int) zs; Map(Str, Int) inb; Int n; };
+// P <= B + off where the block is not in reach; k >= 0: B is list k's
+// count over w.
+type OFT = { Str p; Str b; Int k; Int w; Int off; Map(Str, Int) reach; };
+type OA = { Str p; Int c; };
+// Lower bounds, and the parameters found to have none.
+type OLW = { Map(Str, Int) low; Map(Str, Int) bad; };
+
+Int orf_max() { return 9223372036854775807; }
+Int orf_min() { return 0 - 9223372036854775807 - 1; }
+
+ORF orf_none() {
+    Map(Str, Int) e = {};
+    return ORF {.lines = [], .conds = [], .zs = e, .inb = e, .n = 0};
+}
+
+// fam: the members of the copy's lists (unrenamed) -> list index.
+ORF orf_analyze(List(Str) f, Int h0, Int b0, Map(Str, Int) fam) {
+    Map(Str, Str) d0 = {};
+    Map(Str, Str) defs = orf_defs(f, h0, d0);
+    List(Str) phis = f[h0 + 1..b0];
+    Map(Str, Int) e0 = {};
+    Map(Str, Int) inv = orf_invs(phis, 0, e0);
+    Map(Str, List(Str)) s0 = {};
+    Map(Str, List(Str)) succ = orf_succs(f, h0, "", s0);
+    List(OFT) facts = orf_tests(f, b0, defs, inv, phis, fam, succ, []);
+    // Lower bounds the uses need, then those that hold by induction.
+    Map(Str, Int) need = orf_needs(f, b0, "tco.head", defs, phis, fam, facts, e0);
+    if (need.keys().len() == 0 && facts.len() == 0) { return orf_none(); }
+    Map(Str, Int) low = orf_lows(phis, defs, inv, OLW {.low = need, .bad = e0}, 0);
+    ORF r0 = orf_guard_lows(low.keys(), 0, low, phis, defs, inv, orf_none());
+    return orf_uses(f, b0, "tco.head", defs, inv, low, fam, facts, phis, r0);
+}
+
+// Register -> its defining right-hand side, from the head on.
+Map(Str, Str) orf_defs(List(Str) f, Int i, Map(Str, Str) acc) {
+    if (i >= f.len()) { return acc; }
+    Str d = ol_dst(f[i]);
+    return orf_defs(f, i + 1, if (d != "") { acc.insert(d, ol_rhs(f[i])) } else { acc });
+}
+
+// Head phis passed back unchanged on every back edge.
+Map(Str, Int) orf_invs(List(Str) phis, Int i, Map(Str, Int) acc) {
+    if (i >= phis.len()) { return acc; }
+    Str l = phis[i];
+    Str reg = str_slice(l, 0, str_find_char(l, 32, 0));
+    List(Str) vals = ol_phi_vals(l);
+    Bool same = orf_all_eq(vals, 1, reg);
+    return orf_invs(phis, i + 1, if (same) { acc.insert(reg, 1) } else { acc });
+}
+
+Bool orf_all_eq(List(Str) xs, Int i, Str x) {
+    if (i >= xs.len()) { return true; }
+    return xs[i] == x && orf_all_eq(xs, i + 1, x);
+}
+
+Bool orf_lit(Str x) { return vl_is_int_lit(x) && str_len(x) < 12; }
+
+// An index or operand as P + c with P a head phi of type i64.
+OA orf_affine(Str x, Map(Str, Str) defs, List(Str) phis) {
+    OA none = OA {.p = "", .c = 0};
+    if (orf_is_phi64(x, phis)) { return OA {.p = x, .c = 0}; }
+    Str r = defs.get(x) else { "" };
+    if (str_starts_with(r, "add nsw i64 ") || str_starts_with(r, "sub nsw i64 ")) {
+        List(Str) ab = vl_two(str_slice(r, 12, str_len(r)));
+        Int sg = if (str_starts_with(r, "sub")) { 0 - 1 } else { 1 };
+        if (ab.len() == 2 && orf_is_phi64(ab[0], phis) && orf_lit(ab[1])) { return OA {.p = ab[0], .c = sg * str_parse_int(ab[1])}; }
+        if (ab.len() == 2 && sg == 1 && orf_is_phi64(ab[1], phis) && orf_lit(ab[0])) { return OA {.p = ab[1], .c = str_parse_int(ab[0])}; }
+        return none;
+    }
+    if (!str_starts_with(r, "extractvalue {i64, i1} ") || !str_ends_with(r, ", 0")) { return none; }
+    Str t = str_slice(r, 23, str_len(r) - 3);
+    List(Str) ov = orf_ovf_ops(defs.get(t) else { "" });
+    if (ov.len() != 3) { return none; }
+    Int sg = if (ov[0] == "ssub") { 0 - 1 } else { 1 };
+    if (orf_is_phi64(ov[1], phis) && orf_lit(ov[2])) { return OA {.p = ov[1], .c = sg * str_parse_int(ov[2])}; }
+    if (sg == 1 && orf_is_phi64(ov[2], phis) && orf_lit(ov[1])) { return OA {.p = ov[2], .c = str_parse_int(ov[1])}; }
+    return none;
+}
+
+// `call {i64, i1} @llvm.sadd.with.overflow.i64(i64 A, i64 B)`: ["sadd", A, B].
+List(Str) orf_ovf_ops(Str r) {
+    Str sa = "call {i64, i1} @llvm.sadd.with.overflow.i64(i64 ";
+    Str su = "call {i64, i1} @llvm.ssub.with.overflow.i64(i64 ";
+    Str k = if (str_starts_with(r, sa)) { "sadd" } else { if (str_starts_with(r, su)) { "ssub" } else { "" } };
+    if (k == "" || !str_ends_with(r, ")")) { return []; }
+    List(Str) ab = str_split(str_slice(r, str_len(sa), str_len(r) - 1), ", i64 ");
+    return if (ab.len() == 2) { [k, ab[0], ab[1]] } else { [] };
+}
+
+Bool orf_is_phi64(Str x, List(Str) phis) { return str_starts_with(x, "%p") && orf_phi_line(x, phis, 0) >= 0; }
+
+Int orf_phi_line(Str x, List(Str) phis, Int i) {
+    if (i >= phis.len()) { return -1; }
+    if (str_starts_with(phis[i], x + " = phi i64 ")) { return i; }
+    return orf_phi_line(x, phis, i + 1);
+}
+
+Map(Str, Int) orf_need(Map(Str, Int) m, Str p, Int lo) {
+    Int old = m.get(p) else { orf_min() };
+    return if (lo > old || !m.contains(p)) { m.insert(p, if (lo > old) { lo } else { old }) } else { m };
+}
+
+// What the uses need: an index P + c under an upper bound needs P >= -c;
+// P - c (checked) needs P >= MIN + c.
+Map(Str, Int) orf_needs(List(Str) f, Int i, Str cur, Map(Str, Str) defs, List(Str) phis, Map(Str, Int) fam, List(OFT) facts, Map(Str, Int) acc) {
+    if (i >= f.len()) { return acc; }
+    Str l = f[i];
+    if (str_ends_with(l, ":") && !str_contains(l, " ")) { return orf_needs(f, i + 1, str_slice(l, 0, str_len(l) - 1), defs, phis, fam, facts, acc); }
+    Str rhs = ol_rhs(l);
+    Str ix = orf_index(rhs, fam);
+    OA a = if (ix != "") { orf_affine(ix, defs, phis) } else { OA {.p = "", .c = 0} };
+    Bool up = a.p != "" && orf_fact(facts, 0, a.p, cur).p != "";
+    Map(Str, Int) a1 = if (up) { orf_need(acc, a.p, 0 - a.c) } else { acc };
+    List(Str) ov = orf_ovf_ops(rhs);
+    Bool sub = ov.len() == 3 && ov[0] == "ssub" && orf_is_phi64(ov[1], phis) && orf_lit(ov[2]) && str_parse_int(ov[2]) >= 0;
+    Map(Str, Int) a2 = if (sub) { orf_need(a1, ov[1], orf_min() + str_parse_int(ov[2])) } else { a1 };
+    return orf_needs(f, i + 1, cur, defs, phis, fam, facts, a2);
+}
+
+// The index operand of a checked access to a member, or "".
+Str orf_index(Str rhs, Map(Str, Int) fam) {
+    Str m = ol_first_arg(rhs);
+    if (m == "" || !fam.contains(m)) { return ""; }
+    List(Str) a = ol_args(rhs);
+    Str t = if (str_starts_with(rhs, "call ptr @resid_list_get(") && a.len() == 2) { a[1] } else {
+        if ((str_starts_with(rhs, "call ptr @resid_list_set_w(") && a.len() == 4) || (str_starts_with(rhs, "call ptr @resid_list_set_rec(") && a.len() == 5)) { a[2] } else {
+            if ((str_starts_with(rhs, "call ptr @resid_list_rec_at(") && a.len() == 3) || (str_starts_with(rhs, "call ptr @resid_list_rec_borrow(") && a.len() == 4)) { a[1] } else { "" } } };
+    return if (str_starts_with(t, "i64 ")) { str_slice(t, 4, str_len(t)) } else { "" };
+}
+
+// The bounds that hold by induction: each back edge passes P, P + S
+// (S >= 0), Q + c with low(Q) + c >= low(P), or a literal >= low(P).
+// A parameter without one is dropped (and so is any whose bound rests on
+// it), to a fixed point; none at all if that does not settle.
+Map(Str, Int) orf_lows(List(Str) phis, Map(Str, Str) defs, Map(Str, Int) inv, OLW w, Int round) {
+    OLW w2 = orf_lows1(w.low.keys(), 0, phis, defs, inv, w);
+    if (orf_sig(w2.low) == orf_sig(w.low)) { return w2.low; }
+    if (round > 16) { Map(Str, Int) e = {}; return e; }
+    return orf_lows(phis, defs, inv, w2, round + 1);
+}
+
+Str orf_sig(Map(Str, Int) m) { return orf_sig_at(m.keys(), 0, m, ""); }
+
+Str orf_sig_at(List(Str) ks, Int i, Map(Str, Int) m, Str acc) {
+    if (i >= ks.len()) { return acc; }
+    return orf_sig_at(ks, i + 1, m, acc + ks[i] + f"={m.get(ks[i]) else { 0 }};");
+}
+
+OLW orf_lows1(List(Str) ps, Int i, List(Str) phis, Map(Str, Str) defs, Map(Str, Int) inv, OLW acc) {
+    if (i >= ps.len()) { return acc; }
+    Str p = ps[i];
+    Int at = orf_phi_line(p, phis, 0);
+    List(Str) vals = if (at >= 0) { ol_phi_vals(phis[at]) } else { [] };
+    OLW a2 = if (vals.len() == 0) { orf_fail(acc, p) } else { orf_backs(p, vals, 1, defs, inv, phis, acc) };
+    return orf_lows1(ps, i + 1, phis, defs, inv, a2);
+}
+
+OLW orf_fail(OLW w, Str p) { return OLW {.low = w.low.remove(p), .bad = w.bad.insert(p, 1)}; }
+
+// acc with p's bound kept (and what it needs of others added), or p failed.
+OLW orf_backs(Str p, List(Str) vals, Int j, Map(Str, Str) defs, Map(Str, Int) inv, List(Str) phis, OLW acc) {
+    if (acc.bad.contains(p) || !acc.low.contains(p)) { return acc; }
+    if (j >= vals.len()) { return acc; }
+    Int lp = acc.low.get(p) else { 0 };
+    Str v = vals[j];
+    if (v == p || orf_step(v, p, defs, inv) != "") { return orf_backs(p, vals, j + 1, defs, inv, phis, acc); }
+    if (orf_lit(v)) { return if (str_parse_int(v) >= lp) { orf_backs(p, vals, j + 1, defs, inv, phis, acc) } else { orf_fail(acc, p) }; }
+    OA a = orf_affine(v, defs, phis);
+    if (a.p == "" || acc.bad.contains(a.p)) { return orf_fail(acc, p); }
+    if (a.p == p) { return if (a.c >= 0) { orf_backs(p, vals, j + 1, defs, inv, phis, acc) } else { orf_fail(acc, p) }; }
+    // Q + c: Q needs lp - c.
+    if (a.c < 0 && lp > orf_max() + a.c) { return orf_fail(acc, p); }
+    Int need = if (a.c > 0 && lp < orf_min() + a.c) { orf_min() } else { lp - a.c };
+    OLW a2 = OLW {.low = orf_need(acc.low, a.p, need), .bad = acc.bad};
+    return orf_backs(p, vals, j + 1, defs, inv, phis, a2);
+}
+
+// v = P + S with S an invariant parameter: S, else "".
+Str orf_step(Str v, Str p, Map(Str, Str) defs, Map(Str, Int) inv) {
+    Str r = defs.get(v) else { "" };
+    Str s0 = if (str_starts_with(r, "add nsw i64 ")) { r } else {
+        if (str_starts_with(r, "extractvalue {i64, i1} ") && str_ends_with(r, ", 0")) { defs.get(str_slice(r, 23, str_len(r) - 3)) else { "" } } else { "" } };
+    List(Str) ov = if (str_starts_with(s0, "add nsw i64 ")) { ["sadd"].concat(vl_two(str_slice(s0, 12, str_len(s0)))) } else { orf_ovf_ops(s0) };
+    if (ov.len() != 3 || ov[0] != "sadd") { return ""; }
+    if (ov[1] == p && inv.contains(ov[2])) { return ov[2]; }
+    if (ov[2] == p && inv.contains(ov[1])) { return ov[1]; }
+    return "";
+}
+
+// Successor labels of each block from the head on (back edges to the
+// head left out).
+Map(Str, List(Str)) orf_succs(List(Str) f, Int i, Str cur, Map(Str, List(Str)) acc) {
+    if (i >= f.len()) { return acc; }
+    Str l = f[i];
+    if (str_ends_with(l, ":") && !str_contains(l, " ")) { return orf_succs(f, i + 1, str_slice(l, 0, str_len(l) - 1), acc); }
+    Bool term = str_starts_with(l, "br ") || str_starts_with(l, "switch ") || str_starts_with(l, "ret") || l == "unreachable";
+    return orf_succs(f, i + 1, cur, if (term) { acc.insert(cur, orf_labels(l, 0, [])) } else { acc });
+}
+
+List(Str) orf_labels(Str l, Int i, List(Str) acc) {
+    Int c = str_index_of(l, "label %", i);
+    if (c < 0) { return acc; }
+    Int e = vl_reg_end(l, c + 7, str_len(l));
+    Str lab = str_slice(l, c + 7, e);
+    return orf_labels(l, e, if (lab == "tco.head") { acc } else { acc.concat([lab]) });
+}
+
+// Blocks reachable from the head without entering `avoid`.
+Map(Str, Int) orf_reach(Map(Str, List(Str)) succ, List(Str) todo, Int i, Str avoid, Map(Str, Int) seen) {
+    if (i >= todo.len()) { return seen; }
+    Str b = todo[i];
+    if (b == avoid || seen.contains(b)) { return orf_reach(succ, todo, i + 1, avoid, seen); }
+    List(Str) nx = succ.get(b) else { [] };
+    return orf_reach(succ, todo.concat(nx), i + 1, avoid, seen.insert(b, 1));
+}
+
+// Exit tests on a bounded parameter.
+List(OFT) orf_tests(List(Str) f, Int i, Map(Str, Str) defs, Map(Str, Int) inv, List(Str) phis, Map(Str, Int) fam, Map(Str, List(Str)) succ, List(OFT) acc) {
+    if (i + 1 >= f.len()) { return acc; }
+    Str l = f[i];
+    Str c = ol_dst(l);
+    Str rhs = ol_rhs(l);
+    if (c == "" || !str_starts_with(rhs, "icmp ") || !str_starts_with(f[i + 1], "br i1 " + c + ", label %")) { return orf_tests(f, i + 1, defs, inv, phis, fam, succ, acc); }
+    List(Str) w = str_split(str_replace(rhs, ",", ""), " ");
+    List(Str) bw = str_split(str_replace(f[i + 1], ",", ""), " ");
+    if (w.len() != 5 || w[2] != "i64" || bw.len() != 7 || !orf_is_phi64(w[3], phis)) { return orf_tests(f, i + 1, defs, inv, phis, fam, succ, acc); }
+    Str pr = w[1];
+    Str tl = str_slice(bw[4], 1, str_len(bw[4]));
+    Str fl = str_slice(bw[6], 1, str_len(bw[6]));
+    Bool on_true = pr == "sgt" || pr == "sge";
+    Bool on_false = pr == "slt" || pr == "sle";
+    Str ex = if (on_true) { tl } else { fl };
+    Str stay = if (on_true) { fl } else { tl };
+    Int off = if (pr == "sge" || pr == "slt") { 0 - 1 } else { 0 };
+    OFT b = orf_bound(w[4], defs, inv, fam);
+    // The staying block has the test as its only way in.
+    Bool ok = (on_true || on_false) && b.b != "" && orf_ret_block(f, ex) && ex != stay && orf_preds(succ, succ.keys(), 0, stay) == 1;
+    if (!ok) { return orf_tests(f, i + 1, defs, inv, phis, fam, succ, acc); }
+    Map(Str, Int) e0 = {};
+    Map(Str, Int) rs = orf_reach(succ, ["tco.head"], 0, stay, e0);
+    OFT t = OFT {.p = w[3], .b = b.b, .k = b.k, .w = b.w, .off = off, .reach = rs};
+    return orf_tests(f, i + 1, defs, inv, phis, fam, succ, acc.concat([t]));
+}
+
+// A bound: a literal, an invariant parameter, or a member's length
+// (over a literal w).
+OFT orf_bound(Str x, Map(Str, Str) defs, Map(Str, Int) inv, Map(Str, Int) fam) {
+    Map(Str, Int) e = {};
+    OFT none = OFT {.p = "", .b = "", .k = 0 - 1, .w = 1, .off = 0, .reach = e};
+    if (orf_lit(x) || inv.contains(x)) { return OFT {.p = "", .b = x, .k = 0 - 1, .w = 1, .off = 0, .reach = e}; }
+    Str r = defs.get(x) else { "" };
+    Str len = if (str_starts_with(r, "sdiv i64 ")) { vl_two(str_slice(r, 9, str_len(r)))[0] } else { x };
+    Str wl = if (str_starts_with(r, "sdiv i64 ")) { vl_two(str_slice(r, 9, str_len(r)))[1] } else { "1" };
+    Str lr = defs.get(len) else { "" };
+    Str m = ol_first_arg(lr);
+    if (!orf_lit(wl) || str_parse_int(wl) < 1 || m == "" || !fam.contains(m) || lr != "call i64 @resid_list_len(ptr " + m + ")") { return none; }
+    return OFT {.p = "", .b = "n", .k = fam.get(m) else { 0 }, .w = str_parse_int(wl), .off = 0, .reach = e};
+}
+
+// How many edges enter block s.
+Int orf_preds(Map(Str, List(Str)) succ, List(Str) bs, Int i, Str s) {
+    if (i >= bs.len()) { return 0; }
+    List(Str) nx = succ.get(bs[i]) else { [] };
+    return orf_count(nx, 0, s) + orf_preds(succ, bs, i + 1, s);
+}
+
+Int orf_count(List(Str) xs, Int i, Str x) {
+    if (i >= xs.len()) { return 0; }
+    return (if (xs[i] == x) { 1 } else { 0 }) + orf_count(xs, i + 1, x);
+}
+
+// Block `lab` is a single return.
+Bool orf_ret_block(List(Str) f, Str lab) {
+    Int at = lw_find_line(f, lab + ":", 0);
+    return at >= 0 && at + 1 < f.len() && str_starts_with(f[at + 1], "ret ");
+}
+
+ORF orf_add(ORF r, List(Str) lines, Str cond) {
+    return ORF {.lines = r.lines.concat(lines), .conds = r.conds.concat([cond]), .zs = r.zs, .inb = r.inb, .n = r.n + 1};
+}
+
+Str orf_g(ORF r) { return f"%ol.g{r.n}"; }
+
+// The guard's lower bounds, and S >= 0 for each step parameter.
+ORF orf_guard_lows(List(Str) ps, Int i, Map(Str, Int) low, List(Str) phis, Map(Str, Str) defs, Map(Str, Int) inv, ORF r) {
+    if (i >= ps.len()) { return r; }
+    Str p = ps[i];
+    Int lo = low.get(p) else { 0 };
+    ORF r1 = if (lo > orf_min()) { orf_add(r, [orf_g(r) + " = icmp sge i64 " + p + f", {lo}"], orf_g(r)) } else { r };
+    Int at = orf_phi_line(p, phis, 0);
+    List(Str) vals = if (at >= 0) { ol_phi_vals(phis[at]) } else { [] };
+    return orf_guard_lows(ps, i + 1, low, phis, defs, inv, orf_guard_steps(p, vals, 1, defs, inv, r1));
+}
+
+ORF orf_guard_steps(Str p, List(Str) vals, Int j, Map(Str, Str) defs, Map(Str, Int) inv, ORF r) {
+    if (j >= vals.len()) { return r; }
+    Str s = orf_step(vals[j], p, defs, inv);
+    ORF r1 = if (s != "") { orf_add(r, [orf_g(r) + " = icmp sge i64 " + s + ", 0"], orf_g(r)) } else { r };
+    return orf_guard_steps(p, vals, j + 1, defs, inv, r1);
+}
+
+// The fact on p that holds in block b, if any (p == "" in the result
+// when none).
+OFT orf_fact(List(OFT) facts, Int i, Str p, Str b) {
+    if (i >= facts.len()) { Map(Str, Int) e = {}; return OFT {.p = "", .b = "", .k = 0 - 1, .w = 1, .off = 0, .reach = e}; }
+    OFT t = facts[i];
+    if (t.p == p && !t.reach.contains(b)) { return t; }
+    return orf_fact(facts, i + 1, p, b);
+}
+
+// A fact's bound as a guard operand (with the lines computing it).
+List(Str) orf_bound_val(OFT t, Str g) {
+    if (t.k < 0) { return [t.b]; }
+    if (t.w == 1) { return [f"%ol.n{t.k}"]; }
+    return [g + ".b", g + f".b = sdiv i64 %ol.n{t.k}, {t.w}"];
+}
+
+ORF orf_uses(List(Str) f, Int i, Str cur, Map(Str, Str) defs, Map(Str, Int) inv, Map(Str, Int) low, Map(Str, Int) fam, List(OFT) facts, List(Str) phis, ORF r) {
+    if (i >= f.len()) { return r; }
+    Str l = f[i];
+    if (str_ends_with(l, ":") && !str_contains(l, " ")) { return orf_uses(f, i + 1, str_slice(l, 0, str_len(l) - 1), defs, inv, low, fam, facts, phis, r); }
+    Str d = ol_dst(l);
+    Str rhs = ol_rhs(l);
+    ORF r1 = orf_use_ovf(d, rhs, cur, f, defs, inv, low, facts, phis, r);
+    ORF r2 = orf_use_index(d, rhs, cur, defs, low, fam, facts, phis, r1);
+    return orf_uses(f, i + 1, cur, defs, inv, low, fam, facts, phis, r2);
+}
+
+// A checked P - c (c >= 0, P bounded below by MIN + c) or P + Y (Y a
+// literal or invariant >= 0, P bounded above with B + Y in range): its
+// overflow check goes.
+ORF orf_use_ovf(Str d, Str rhs, Str cur, List(Str) f, Map(Str, Str) defs, Map(Str, Int) inv, Map(Str, Int) low, List(OFT) facts, List(Str) phis, ORF r) {
+    List(Str) ov = orf_ovf_ops(rhs);
+    if (ov.len() != 3 || d == "") { return r; }
+    Str z = orf_zext_of(f, d);
+    if (z == "") { return r; }
+    if (ov[0] == "ssub") {
+        Bool ok = low.contains(ov[1]) && orf_lit(ov[2]) && str_parse_int(ov[2]) >= 0 && (low.get(ov[1]) else { orf_min() }) >= orf_min() + str_parse_int(ov[2]);
+        return if (ok) { orf_drop_z(r, z) } else { r };
+    }
+    Bool first = orf_is_phi64(ov[1], phis) && orf_fact(facts, 0, ov[1], cur).p != "";
+    Str p = if (first) { ov[1] } else { ov[2] };
+    Str y = if (first) { ov[2] } else { ov[1] };
+    OFT t = orf_fact(facts, 0, p, cur);
+    Bool yl = orf_lit(y) && str_parse_int(y) >= 0;
+    if (t.p == "" || (!yl && !inv.contains(y))) { return r; }
+    // B + off + y <= MAX: checked as B + y not overflowing (off <= 0),
+    // with y >= 0.
+    Str g = orf_g(r);
+    List(Str) bv = orf_bound_val(t, g);
+    List(Str) ls = bv[1..bv.len()].concat([g + ".o = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 " + bv[0] + ", i64 " + y + ")", g + ".v = extractvalue {i64, i1} " + g + ".o, 1", g + " = xor i1 " + g + ".v, true"]);
+    ORF r1 = orf_add(r, ls, g);
+    ORF r2 = if (yl) { r1 } else { orf_add(r1, [orf_g(r1) + " = icmp sge i64 " + y + ", 0"], orf_g(r1)) };
+    return orf_drop_z(r2, z);
+}
+
+ORF orf_drop_z(ORF r, Str z) { return ORF {.lines = r.lines, .conds = r.conds, .zs = r.zs.insert(z, 1), .inb = r.inb, .n = r.n}; }
+
+// The i8 operand of t's overflow check: `%f = extractvalue {i64, i1} t, 1`,
+// `%z = zext i1 %f to i8`, `call void @resid_overflow_check(i8 %z)`.
+Str orf_zext_of(List(Str) f, Str t) {
+    Str fl = orf_def_line(f, "extractvalue {i64, i1} " + t + ", 1", 0);
+    if (fl == "") { return ""; }
+    Str z = orf_def_line(f, "zext i1 " + fl + " to i8", 0);
+    if (z == "" || lw_find_line(f, "call void @resid_overflow_check(i8 " + z + ")", 0) < 0) { return ""; }
+    return z;
+}
+
+// The register defined as `rhs`, or "".
+Str orf_def_line(List(Str) f, Str rhs, Int i) {
+    if (i >= f.len()) { return ""; }
+    if (str_ends_with(f[i], " = " + rhs) && ol_rhs(f[i]) == rhs) { return ol_dst(f[i]); }
+    return orf_def_line(f, rhs, i + 1);
+}
+
+// An access at P + c in a block where P <= B + off: in bounds when the
+// guard has low(P) + c >= 0 and B + off + c < count / w.
+ORF orf_use_index(Str d, Str rhs, Str cur, Map(Str, Str) defs, Map(Str, Int) low, Map(Str, Int) fam, List(OFT) facts, List(Str) phis, ORF r) {
+    Str ix = orf_index(rhs, fam);
+    if (ix == "" || d == "") { return r; }
+    OA a = orf_affine(ix, defs, phis);
+    if (a.p == "" || !low.contains(a.p) || (low.get(a.p) else { orf_min() }) < 0 - a.c) { return r; }
+    OFT t = orf_fact(facts, 0, a.p, cur);
+    if (t.p == "") { return r; }
+    Int k = fam.get(ol_first_arg(rhs)) else { 0 };
+    List(Str) a3 = ol_args(rhs);
+    Bool rec = str_contains(rhs, "@resid_list_rec_") || str_contains(rhs, "@resid_list_set_rec(");
+    Str wa = a3[a3.len() - 1 - (if (str_contains(rhs, "_borrow(")) { 1 } else { 0 })];
+    Str wl = if (rec) { str_slice(wa, 4, str_len(wa)) } else { "1" };
+    if (!orf_lit(wl)) { return r; }
+    Str g = orf_g(r);
+    List(Str) bv = orf_bound_val(t, g);
+    Str cnt = if (wl == "1") { f"%ol.n{k}" } else { g + ".c" };
+    List(Str) cl = if (wl == "1") { [] } else { [g + f".c = sdiv i64 %ol.n{k}, " + wl] };
+    List(Str) ls = bv[1..bv.len()].concat(cl).concat([g + ".e = sub i64 " + cnt + f", {t.off + a.c}", g + " = icmp slt i64 " + bv[0] + ", " + g + ".e"]);
+    ORF r1 = orf_add(r, ls, g);
+    return ORF {.lines = r1.lines, .conds = r1.conds, .zs = r1.zs, .inb = r1.inb.insert(d, 1), .n = r1.n};
+}
+
+// The copy can cost more than it saves: a function of this module called
+// only from the loop body loses LLVM's single-call inlining once both
+// copies call it.
+// Such a loop keeps its checked body alone (the guard branch goes to it,
+// and the copy and the edges from the copy's compactions are dropped).
+pub List(Str) ol_module(List(Str) ls) {
+    if (lw_find_line(ls, "tco.head.ol:", 0) < 0) { return ls; }
+    Map(Str, Int) e0 = {};
+    Map(Str, Int) calls = ol_calls(ls, 0, ls.len(), e0);
+    Map(Str, Int) mine = ol_defined(ls, 0, e0);
+    return ol_walk(ls, calls, mine, 0, ListBuf()).finish();
+}
+
+// The functions this module defines.
+Map(Str, Int) ol_defined(List(Str) ls, Int i, Map(Str, Int) acc) {
+    if (i >= ls.len()) { return acc; }
+    Str l = ls[i];
+    Str n = if (str_starts_with(l, "define ")) { vl_fn_name(l) } else { "" };
+    return ol_defined(ls, i + 1, if (n != "") { acc.insert(n, 1) } else { acc });
+}
+
+// Call sites per callee in lines [i, e).
+Map(Str, Int) ol_calls(List(Str) ls, Int i, Int e, Map(Str, Int) acc) {
+    if (i >= e) { return acc; }
+    Str c = ol_callee(ls[i]);
+    return ol_calls(ls, i + 1, e, if (c == "") { acc } else { acc.insert(c, (acc.get(c) else { 0 }) + 1) });
+}
+
+// The function a line calls directly, or "".
+Str ol_callee(Str l) {
+    Int c = str_index_of(l, "call ", 0);
+    if (c < 0) { return ""; }
+    Int a = str_index_of(l, "@", c);
+    Int p = if (a > 0) { str_index_of(l, "(", a) } else { -1 };
+    if (p < 0 || str_contains(str_slice(l, c, a), "%")) { return ""; }
+    return str_slice(l, a + 1, p);
+}
+
+ListBuf(Str) ol_walk(List(Str) ls, Map(Str, Int) calls, Map(Str, Int) defd, Int i, ListBuf(Str) acc) {
+    if (i >= ls.len()) { return acc; }
+    Str l = ls[i];
+    if (!str_starts_with(l, "define ") || str_contains(l, "\n")) { return ol_walk(ls, calls, defd, i + 1, acc.push(l)); }
+    Int e = vl_fn_end(ls, i + 1);
+    Int c = ol_find(ls, "tco.head.ol:", i, e);
+    if (c < 0) { return ol_walk(ls, calls, defd, e, ol_push(ls, i, e, acc)); }
+    Map(Str, Int) e0 = {};
+    Map(Str, Int) mine = ol_calls(ls, c, e, e0);
+    Bool keep = ol_keep(mine.keys(), 0, mine, calls, defd);
+    ListBuf(Str) a2 = if (keep) { ol_push(ls, i, e, acc) } else { ol_revert(ls, i, c, false, acc) };
+    return ol_walk(ls, calls, defd, e, a2);
+}
+
+Int ol_find(List(Str) ls, Str l, Int i, Int e) {
+    if (i >= e) { return -1; }
+    if (ls[i] == l) { return i; }
+    return ol_find(ls, l, i + 1, e);
+}
+
+// No function of this module the copy calls is called only once besides.
+Bool ol_keep(List(Str) cs, Int i, Map(Str, Int) mine, Map(Str, Int) calls, Map(Str, Int) defd) {
+    if (i >= cs.len()) { return true; }
+    Str c = cs[i];
+    Bool lone = defd.contains(c) && (calls.get(c) else { 0 }) - (mine.get(c) else { 0 }) == 1;
+    return !lone && ol_keep(cs, i + 1, mine, calls, defd);
+}
+
+// The checked function without its copy: lines [i, c) less the block
+// ol.pre, the guard branching to the checked body.
+ListBuf(Str) ol_revert(List(Str) ls, Int i, Int c, Bool skip, ListBuf(Str) acc) {
+    if (i >= c) { return acc; }
+    Str l = ls[i];
+    if (l == "ol.pre:") { return ol_revert(ls, i + 1, c, true, acc); }
+    if (skip) { return ol_revert(ls, i + 1, c, l != "br label %tco.head.ol", acc); }
+    if (str_ends_with(l, ", label %ol.pre, label %ol.slow")) { return ol_revert(ls, i + 1, c, false, acc.push("br label %ol.slow")); }
+    Str l2 = if (str_contains(l, " = phi ") && str_contains(l, ".c.ol ]")) { ol_drop_copy_in(l) } else { l };
+    return ol_revert(ls, i + 1, c, false, acc.push(l2));
+}
+
+// A phi without its incoming edges from the copy's compactions.
+Str ol_drop_copy_in(Str l) {
+    List(Str) parts = str_split(l, "[ ");
+    return ol_drop_copy_at(parts, 1, parts[0], true);
+}
+
+Str ol_drop_copy_at(List(Str) parts, Int k, Str acc, Bool first) {
+    if (k >= parts.len()) { return acc; }
+    Str p = str_trim(parts[k]);
+    Str q = if (str_ends_with(p, ",")) { str_slice(p, 0, str_len(p) - 1) } else { p };
+    if (str_ends_with(q, ".c.ol ]")) { return ol_drop_copy_at(parts, k + 1, acc, first); }
+    return ol_drop_copy_at(parts, k + 1, acc + (if (first) { "" } else { ", " }) + "[ " + q, false);
 }
 
 // Every incoming value after the entry's is the phi itself.
@@ -7768,7 +8727,7 @@ pub PG lw_program(Kg g0g, Int unit, Funcs fs, PG g0, Bool dbg, GAF df, Bool fact
     PG r = PG {.pos = r0.pos, .err = r0.err, .glines = r0.glines, .hlines = r0.hlines, .lines = r0.lines.concat(rfs).concat(ffs), .tmp = r0.tmp, .lbl = r0.lbl};
     PG r1 = r;
     if (r1.err != "" || dbg || resid_rtmod()) { return r1; }
-    return PG {.pos = r1.pos, .err = r1.err, .glines = r1.glines, .hlines = r1.hlines, .lines = vl_module(r1.lines), .tmp = r1.tmp, .lbl = r1.lbl};
+    return PG {.pos = r1.pos, .err = r1.err, .glines = r1.glines, .hlines = r1.hlines, .lines = vl_module(ol_module(r1.lines)), .tmp = r1.tmp, .lbl = r1.lbl};
 }
 
 // ─── Signatures from the graph ──────────────────────────────────────

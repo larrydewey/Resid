@@ -1,0 +1,105 @@
+// A tail-recursive loop that updates an owned list in place runs an
+// unchecked copy of its body when the list is transient at the loop head
+// (the checked loop otherwise), and range facts on its integer parameters
+// drop the overflow and bounds checks they prove (W3). Each shape here
+// must give what the checked loop gives.
+type Pt = { Int x; Int v; };
+
+// The sieve's stride loop: index k - 1, step i, exit on k > size.
+List(Bool) clear(List(Bool) flags, Int k, Int i, Int size) {
+    if (k > size) { return flags; }
+    return clear(flags.with(k - 1, false), k + i, i, size);
+}
+
+Int primes(List(Bool) fs, Int i, Int acc) {
+    if (i >= fs.len()) { return acc; }
+    Int a2 = if (fs[i] && i >= 1) { acc + 1 } else { acc };
+    List(Bool) f2 = if (fs[i] && i >= 1) { clear(fs, 2 * (i + 1), i + 1, fs.len()) } else { fs };
+    return primes(f2, i + 1, a2);
+}
+
+List(Bool) trues(Int n) {
+    ListBuf(Bool) b = ListBuf();
+    return fill(0, n, b);
+}
+
+List(Bool) fill(Int i, Int n, ListBuf(Bool) b) {
+    if (i >= n) { return b.finish(); }
+    return fill(i + 1, n, b.push(true));
+}
+
+// Counting down: no range fact, so no copy (the checked loop alone).
+List(Int) down(List(Int) xs, Int i) {
+    if (i < 0) { return xs; }
+    return down(xs.with(i, xs[i] * 2 + i), i - 1);
+}
+
+// Records borrowed and written back, with an allocation per step so the
+// loop region compacts; the round exit is a tail call, so no range fact
+// and no copy.
+List(Pt) step(List(Pt) ps, Int i, Int round, Int rounds) {
+    if (round >= rounds) { return ps; }
+    if (i >= ps.len()) { return step(ps, 0, round + 1, rounds); }
+    Pt p = ps[i];
+    Str junk = f"{p.x}-{round}-{i}";
+    return step(ps.with(i, Pt {.x = p.x + str_len(junk) % 3, .v = p.v + 1}), i + 1, round, rounds);
+}
+
+// One pass with range facts and an allocation per step: the loop region
+// compacts inside the copy, which goes back through the checked head.
+List(Pt) pass(List(Pt) ps, Int i) {
+    if (i >= ps.len()) { return ps; }
+    Pt p = ps[i];
+    Str junk = f"{p.x}-{p.v}-{i}";
+    return pass(ps.with(i, Pt {.x = p.x + str_len(junk), .v = p.v + i % 7}), i + 1);
+}
+
+// The n-body shape: j restarts at i + 1 on the outer step.
+List(Pt) pairs(List(Pt) ps, Int i, Int j) {
+    if (i >= ps.len()) { return ps; }
+    if (j >= ps.len()) { return pairs(ps, i + 1, i + 2); }
+    Pt a = ps[i];
+    Pt b = ps[j];
+    return pairs(ps.with(i, Pt {.x = a.x + b.v, .v = a.v}).with(j, Pt {.x = b.x, .v = b.v + 1}), i, j + 1);
+}
+
+List(Pt) mkps(Int i, Int n, List(Pt) acc) {
+    if (i >= n) { return acc; }
+    return mkps(i + 1, n, acc.concat([Pt {.x = i, .v = i * 10}]));
+}
+
+Int sumx(List(Pt) ps, Int i, Int acc) {
+    if (i >= ps.len()) { return acc; }
+    return sumx(ps, i + 1, acc + ps[i].x * 3 + ps[i].v);
+}
+
+Int isum(List(Int) xs, Int i, Int acc) {
+    if (i >= xs.len()) { return acc; }
+    return isum(xs, i + 1, acc + xs[i]);
+}
+
+Int main() {
+    Int n = rt 5000;
+    println(f"primes {primes(trues(n), 0, 0)}");
+    // A list the caller keeps: the loop works on a copy, the original is unchanged.
+    List(Bool) keep = trues(rt 40);
+    List(Bool) cl = clear(keep, 4, 2, 40);
+    println(f"keep {keep[3]} {cl[3]} {cl[4]} {cl.len()}");
+    // Bound past the list: the guard fails and the checked loop runs (no abort: it stops early).
+    List(Bool) short = clear(trues(rt 10), 2, 3, 8);
+    println(f"short {short[1]} {short[4]} {short[7]} {short[2]}");
+    List(Int) xs = [1, 2, 3, 4, 5, 6, 7, 8];
+    List(Int) ys = down(xs, rt 7);
+    println(f"down {isum(ys, 0, 0)} {isum(xs, 0, 0)} {ys[0]} {ys[7]}");
+    List(Pt) ps = mkps(0, rt 300, []);
+    List(Pt) s = step(ps, 0, 0, rt 200);
+    println(f"step {sumx(s, 0, 0)} {sumx(ps, 0, 0)} {s[299].v}");
+    List(Pt) big = pass(mkps(0, rt 50000, []), 0);
+    println(f"pass {sumx(big, 0, 0)} {big[49999].x} {big[123].v}");
+    List(Pt) q = pairs(mkps(0, rt 40, []), 0, 1);
+    println(f"pairs {sumx(q, 0, 0)} {q[0].x} {q[39].v}");
+    // Negative start: the lower-bound guard fails, the checked loop runs.
+    List(Int) zs = [5, 6, 7];
+    println(f"neg {down(zs, rt 2)[2]}");
+    return 0;
+}

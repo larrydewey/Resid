@@ -1979,6 +1979,17 @@ pub Int rt_list_set_rec_wb(Int l, Int i, Int r, Int w) {
     return list_set_rec_slow(l, 1, i, r, w);
 }
 
+// A versioned loop (W3, ol_apply in lower.resid) reads a transient
+// list's root and count once at its head: an element index is checked
+// against that count, and a record store skips the copy onto itself.
+@export("resid_ol_check", "void(i64,i64)")
+@inline
+pub Int rt_ol_check(Int i, Int n) { return if (ult(i, n)) { 0 } else { rt_index_abort(i, n, 0) }; }
+
+@export("resid_ol_put", "void(ptr,ptr,i64)")
+@inline
+pub Int rt_ol_put(Int d, Int r, Int n) { return if (d != r) { mcopy(d, r, n) } else { 0 }; }
+
 @noinline
 Int list_set_rec_slow(Int l, Int owned, Int i, Int r, Int w) {
     Int n = lcount(l) / w;

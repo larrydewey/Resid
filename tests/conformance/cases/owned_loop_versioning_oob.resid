@@ -1,0 +1,16 @@
+// A versioned loop (W3) indexing past the list's end inside its unchecked
+// copy: the write at i is proven in bounds, the one at i * 2 has no range
+// fact and keeps its check, so it aborts at the same element, with the
+// same message, as the checked loop.
+List(Int) mark(List(Int) xs, Int i) {
+    if (i >= xs.len()) { return xs; }
+    return mark(xs.with(i, i + 1).with(i * 2, 9), i + 1);
+}
+
+Int main() {
+    List(Int) xs = [0, 0, 0, 0, 0];
+    println("start");
+    List(Int) ys = mark(xs, rt 0);
+    println(f"{ys[0]}");
+    return 0;
+}
