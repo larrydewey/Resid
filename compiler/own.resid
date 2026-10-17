@@ -15,8 +15,8 @@
 // alias entry "P|L" says the value's subpath P may point into location L.
 
 // Type facts computed once: the struct names, and "T.f" -> field type.
-type OT = { Map(Str, Int) sts; Map(Str, Str) fty; };
-type OX = { Kg g; Funcs fs; Int fnode; Str fname; Map(Int, Map(Str, Int)) after; Map(Int, Int) inl; Map(Str, Str) reads; Map(Str, Str) writes; OT t; };
+type OT = { Map(Str, Int) sts; Map(Str, Str) fty; Map(Str, Int) fidx; };
+type OX = { Kg g; Funcs fs; Int fnode; Str fname; Map(Int, Map(Int, Map(Str, Int))) after; Map(Int, Int) inl; Map(Int, Str) reads; Map(Int, Str) writes; OT t; };
 
 // Resolution: use node -> binder, binder -> type.
 type ORS = { Map(Int, Int) def; Map(Int, Str) bty; };
@@ -28,15 +28,25 @@ type OEv = { Int node; Str kind; Int b; Str path; Str cal; Int arg; Int call; };
 
 // Forward pass state: alias sets per binder, owned binders, events.
 // rok/rents: whether every return so far is owned, and what they alias.
-type OF = { Map(Int, List(Str)) al; Map(Int, Int) own; List(OEv) ev; Map(Int, Str) why; Bool rok; List(Str) rents; };
+// rev: root binder -> the binders whose alias entries name a location of
+// it, so a write's judge visits only the live binders that can reach it.
+type OF = { Map(Int, List(Str)) al; Map(Int, Int) own; List(OEv) ev; Map(Int, Str) why; Bool rok; List(Str) rents; Map(Int, Map(Int, Int)) rev; };
 
-// Backward pass: the live uses ("b|path") after each event node.
-// Snapshots keep the live map itself: persistent, so a snapshot shares it.
-type OL = { Map(Str, Int) live; Map(Int, Map(Str, Int)) after; };
+// Backward pass: the live uses after each event node, by binder: binder ->
+// its live use keys ("path", "path@tag"). Snapshots keep the live map
+// itself: persistent, so a snapshot shares it.
+type OL = { Map(Int, Map(Str, Int)) live; Map(Int, Map(Int, Map(Str, Int))) after; };
+
+Map(Int, Map(Str, Int)) ow_nols() {
+    Map(Int, Map(Str, Int)) m = {};
+    return m;
+}
 
 // Program-wide summaries: written parameters ("f#i"), owned parameters,
 // fresh results.
-type OS = { Map(Str, Int) need; Map(Str, Int) pown; Map(Str, Int) fresh; Map(Str, Int) keeps; Map(Str, Str) reads; Map(Str, Str) writes; };
+// Keys: a parameter is fk = function index * 1024 + position (ow_fk), a
+// function (fresh) its index.
+type OS = { Map(Int, Int) need; Map(Int, Int) pown; Map(Int, Int) fresh; Map(Int, Int) keeps; Map(Int, Str) reads; Map(Int, Str) writes; };
 
 Map(Str, Int) ow_nosm() {
     Map(Str, Int) m = {};
@@ -68,7 +78,7 @@ Bool ow_tracked(Funcs fs, Str t) {
 OT ow_types(Funcs fs, Int i, OT acc) {
     if (i >= fs.stn.len()) { return acc; }
     Str t = fs.stn[i];
-    OT a2 = OT {.sts = acc.sts.insert(t, 1), .fty = ow_types_fields(fs, t, str_split(fs.stf[i], ","), 0, acc.fty)};
+    OT a2 = OT {.sts = acc.sts.insert(t, 1), .fty = ow_types_fields(fs, t, str_split(fs.stf[i], ","), 0, acc.fty), .fidx = acc.fidx};
     return ow_types_n(fs, i, a2);
 }
 
@@ -84,6 +94,72 @@ Map(Str, Str) ow_types_fields(Funcs fs, Str t, List(Str) ents, Int j, Map(Str, S
 
 Map(Str, Str) ow_types_fields_n(Funcs fs, Str t, List(Str) ents, Int j, Map(Str, Str) acc) { return ow_types_fields(fs, t, ents, j + 1, acc); }
 
+// Function name -> index in fs (the first, as fn_index finds it).
+Map(Str, Int) ow_fidx(Funcs fs, Int i, Map(Str, Int) acc) {
+    if (i >= fs.names.len()) { return acc; }
+    return ow_fidx_n(fs, i, if (acc.contains(fs.names[i])) { acc } else { acc.insert(fs.names[i], i) });
+}
+
+Map(Str, Int) ow_fidx_n(Funcs fs, Int i, Map(Str, Int) acc) { return ow_fidx(fs, i + 1, acc); }
+
+Int ow_fi(OX x, Str f) { return x.t.fidx.get(f) else { -1 }; }
+
+// A parameter's key: function index * 1024 + position; -1 for a name that
+// is no user function.
+Int ow_fk(OX x, Str f, Int i) {
+    Int fi = ow_fi(x, f);
+    return if (fi < 0) { -1 } else { fi * 1024 + i };
+}
+
+Map(Int, Str) ow_nois() {
+    Map(Int, Str) m = {};
+    return m;
+}
+
+Map(Int, Str) ow_iput_all(Map(Int, Str) m, Map(Int, Str) from, List(Int) ks, Int i) {
+    if (i >= ks.len()) { return m; }
+    return ow_iput_all_n(m.insert(ks[i], from.get(ks[i]) else { "" }), from, ks, i);
+}
+
+Map(Int, Str) ow_iput_all_n(Map(Int, Str) m, Map(Int, Str) from, List(Int) ks, Int i) { return ow_iput_all(m, from, ks, i + 1); }
+
+Map(Int, Str) ow_ijoin(Map(Int, Str) m, Map(Int, Str) from, List(Int) ks, Int i) {
+    if (i >= ks.len()) { return m; }
+    Str v = from.get(ks[i]) else { "," };
+    Str old = m.get(ks[i]) else { "," };
+    return ow_ijoin_n(m.insert(ks[i], ow_rd_merge(old, v)), from, ks, i);
+}
+
+Map(Int, Str) ow_ijoin_n(Map(Int, Str) m, Map(Int, Str) from, List(Int) ks, Int i) { return ow_ijoin(m, from, ks, i + 1); }
+
+Map(Int, Int) ow_idrop(Map(Int, Int) m, List(Int) ks, Map(Int, Int) bad, Int i) {
+    if (i >= ks.len()) { return m; }
+    return ow_idrop_n(if (bad.contains(ks[i])) { m.remove(ks[i]) } else { m }, ks, bad, i);
+}
+
+Map(Int, Int) ow_idrop_n(Map(Int, Int) m, List(Int) ks, Map(Int, Int) bad, Int i) { return ow_idrop(m, ks, bad, i + 1); }
+
+Map(Int, Int) ow_iminus(Map(Int, Int) a, Map(Int, Int) b) { return ow_idrop(a, a.keys(), b, 0); }
+
+Str ow_ikeys(List(Int) ks, Int i, Str acc) {
+    if (i >= ks.len()) { return acc; }
+    return ow_ikeys_n(ks, i, acc + f"{ks[i]},");
+}
+
+Str ow_ikeys_n(List(Int) ks, Int i, Str acc) { return ow_ikeys(ks, i + 1, acc); }
+
+Str ow_imsig(Map(Int, Str) m, List(Int) ks, Int i, Str acc) {
+    if (i >= ks.len()) { return acc; }
+    return ow_imsig_n(m, ks, i, acc + f"{ks[i]}=" + (m.get(ks[i]) else { "" }) + " ");
+}
+
+Str ow_imsig_n(Map(Int, Str) m, List(Int) ks, Int i, Str acc) { return ow_imsig(m, ks, i + 1, acc); }
+
+Str ow_ret_tyx(OX x, Str f) {
+    Int i = ow_fi(x, f);
+    return if (i < 0) { "" } else { ow_base(x.fs, x.fs.rets[i]) };
+}
+
 // ow_tracked through the cached struct names.
 Bool ow_trk(OX x, Str t) {
     if (t == "") { return false; }
@@ -97,11 +173,6 @@ Str ow_field_ty(Funcs fs, Str t, Str f) {
 }
 
 Str ow_elem_ty(Funcs fs, Str t) { return if (ow_is_list(t)) { ow_base(fs, elem_type(t)) } else { "" }; }
-
-Str ow_ret_ty(Funcs fs, Str f) {
-    Int i = fn_index(fs, f);
-    return if (i < 0) { "" } else { ow_base(fs, fs.rets[i]) };
-}
 
 // ─── Resolution ─────────────────────────────────────────────────────
 
@@ -444,13 +515,25 @@ type OV = { List(Str) es; Bool owned; OF f; };
 
 OV ow_ov(List(Str) es, Bool owned, OF f) { return OV {.es = es, .owned = owned, .f = f}; }
 
-OF ow_ev_add(OF f, OEv e) { return OF {.al = f.al, .own = f.own, .ev = f.ev.concat([e]), .why = f.why, .rok = f.rok, .rents = f.rents}; }
+OF ow_ev_add(OF f, OEv e) { return OF {.al = f.al, .own = f.own, .ev = f.ev.concat([e]), .why = f.why, .rok = f.rok, .rents = f.rents, .rev = f.rev}; }
 
-OF ow_ret_add(OV v) { return OF {.al = v.f.al, .own = v.f.own, .ev = v.f.ev, .why = v.f.why, .rok = v.f.rok && v.owned, .rents = v.f.rents.concat(v.es)}; }
+OF ow_ret_add(OV v) { return OF {.al = v.f.al, .own = v.f.own, .ev = v.f.ev, .why = v.f.why, .rok = v.f.rok && v.owned, .rents = v.f.rents.concat(v.es), .rev = v.f.rev}; }
 
 OF ow_set_al(OF f, Int b, List(Str) es, Bool owned, Str why) {
-    return OF {.al = f.al.insert(b, es), .own = if (owned) { f.own.insert(b, 1) } else { f.own }, .ev = f.ev, .why = if (owned) { f.why } else { f.why.insert(b, why) }, .rok = f.rok, .rents = f.rents};
+    return OF {.al = f.al.insert(b, es), .own = if (owned) { f.own.insert(b, 1) } else { f.own }, .ev = f.ev, .why = if (owned) { f.why } else { f.why.insert(b, why) }, .rok = f.rok, .rents = f.rents, .rev = ow_rev_add(f.rev, es, b, 0)};
 }
+
+Map(Int, Map(Int, Int)) ow_rev_add(Map(Int, Map(Int, Int)) rv, List(Str) es, Int b, Int i) {
+    if (i >= es.len()) { return rv; }
+    Int root = ow_loc_root(ow_ent_l(es[i]));
+    Map(Int, Int) cur = rv.get(root) else { ow_noim() };
+    return ow_rev_add_n(rv.insert(root, cur.insert(b, 1)), es, b, i);
+}
+
+Map(Int, Map(Int, Int)) ow_rev_add_n(Map(Int, Map(Int, Int)) rv, List(Str) es, Int b, Int i) { return ow_rev_add(rv, es, b, i + 1); }
+
+// The root binder of a location.
+Int ow_loc_root(Str l) { return str_parse_int(str_slice(l, 0, ow_root_end(l, 0))); }
 
 OV ow_val(OX x, ORS r, OS s, Int id, OF f) {
     Str k = x.g.ns[id].kind;
@@ -609,10 +692,10 @@ OV ow_list_n(OX x, ORS r, OS s, Int id, Int i, OV acc) { return ow_list(x, r, s,
 // argument (keeps, conservatively) unless the callee's result is fresh.
 OV ow_call(OX x, ORS r, OS s, Int id, OF f) {
     Str cal = x.g.ns[id].text;
-    Bool user = fn_index(x.fs, cal) >= 0;
+    Bool user = ow_fi(x, cal) >= 0;
     OV a = ow_args(x, r, s, id, 0, cal, user, ow_ov([], true, f));
-    Bool fr = user && s.fresh.contains(cal);
-    Bool tr = ow_trk(x, ow_ret_ty(x.fs, cal));
+    Bool fr = user && s.fresh.contains(ow_fi(x, cal));
+    Bool tr = ow_trk(x, ow_ret_tyx(x, cal));
     if (!user || !tr) { return ow_ov([], false, a.f); }
     return ow_ov(a.es, fr && a.owned, a.f);
 }
@@ -621,7 +704,8 @@ OV ow_args(OX x, ORS r, OS s, Int id, Int i, Str cal, Bool user, OV acc) {
     if (i >= x.g.ns[id].nk) { return acc; }
     Int e = kg_kid(x.g, id, i);
     OP p = ow_path(x, r, e);
-    Bool w = user && p.b >= 0 && ow_trk(x, p.ty) && (s.need.contains(cal + f"#{i}") || s.writes.contains(cal + f"#{i}"));
+    Int fk = ow_fk(x, cal, i);
+    Bool w = user && p.b >= 0 && ow_trk(x, p.ty) && (s.need.contains(fk) || s.writes.contains(fk));
     OV v0 = ow_val(x, r, s, e, acc.f);
     Bool tp = user && p.b >= 0 && ow_trk(x, p.ty);
     OEv ae = OEv {.node = e, .kind = "move", .b = p.b, .path = p.path, .cal = cal, .arg = i, .call = id};
@@ -630,14 +714,14 @@ OV ow_args(OX x, ORS r, OS s, Int id, Int i, Str cal, Bool user, OV acc) {
     // A fresh temporary handed to a writer: nothing else holds its top
     // object; its children may be aliased, so only a callee that writes
     // the top object alone (or a value with no aliases) qualifies.
-    Bool wr = user && (s.need.contains(cal + f"#{i}") || s.writes.contains(cal + f"#{i}"));
-    Str ws = s.writes.get(cal + f"#{i}") else { "*" };
+    Bool wr = user && (s.need.contains(fk) || s.writes.contains(fk));
+    Str ws = s.writes.get(fk) else { "*" };
     Bool fresh_ok = wr && p.b < 0 && v.owned && ow_trk(x, ow_arg_ty(x, cal, i)) && (v.es.len() == 0 || ws == ",^,");
     OF f1 = if (fresh_ok) { ow_ev_add(v.f, OEv {.node = e, .kind = "argfresh", .b = -1, .path = "", .cal = cal, .arg = i, .call = id}) } else { v.f };
     OF f2 = if (w) { ow_ev_add(f1, OEv {.node = e, .kind = "arg", .b = p.b, .path = p.path, .cal = cal, .arg = i, .call = id}) } else { f1 };
     // The result holds what the callee keeps: those arguments must be
     // moved for it to be owned.
-    Bool kept = user && s.keeps.contains(cal + f"#{i}");
+    Bool kept = user && s.keeps.contains(fk);
     List(Str) kes = if (!user || kept) { v.es } else { [] };
     return ow_args_n(x, r, s, id, i, cal, user, ow_ov(acc.es.concat(kes), acc.owned && (!kept || v.owned), f2));
 }
@@ -646,14 +730,14 @@ OV ow_args_n(OX x, ORS r, OS s, Int id, Int i, Str cal, Bool user, OV acc) { ret
 
 // The declared type of parameter i of f.
 Str ow_arg_ty(OX x, Str f, Int i) {
-    Int fi = fn_index(x.fs, f);
+    Int fi = ow_fi(x, f);
     if (fi < 0) { return ""; }
     List(Str) ts = split_rest_depth(x.fs.pts[fi], ", ");
     return if (i < ts.len()) { ow_base(x.fs, str_trim(ts[i])) } else { "" };
 }
 
 Str ow_path_ty(OX x, ORS r, Int id) {
-    if (x.g.ns[id].kind == "call") { return ow_ret_ty(x.fs, x.g.ns[id].text); }
+    if (x.g.ns[id].kind == "call") { return ow_ret_tyx(x, x.g.ns[id].text); }
     OP p = ow_path(x, r, id);
     return p.ty;
 }
@@ -727,7 +811,33 @@ OF ow_stmt(OX x, ORS r, OS s, Int st, OF f) {
 // as cycles here: a use inside a for/while body counts as live at every
 // point of the body (the body is walked twice).
 
-OL ow_live_add(OL l, Str key) { return if (key == "") { l } else { OL {.live = l.live.insert(key, 1), .after = l.after} }; }
+OL ow_live_add(OL l, Str key) {
+    if (key == "") { return l; }
+    Int bar = str_index_of(key, "|", 0);
+    Int b = str_parse_int(str_slice(key, 0, bar));
+    Str rest = str_slice(key, bar + 1, str_len(key));
+    Map(Str, Int) cur = l.live.get(b) else { ow_nosm() };
+    return OL {.live = l.live.insert(b, cur.insert(rest, 1)), .after = l.after};
+}
+
+// A live set without one key.
+Map(Int, Map(Str, Int)) ow_live_del(Map(Int, Map(Str, Int)) m, Str key) {
+    Int bar = str_index_of(key, "|", 0);
+    Int b = str_parse_int(str_slice(key, 0, bar));
+    Map(Str, Int) cur = m.get(b) else { ow_nosm() };
+    Map(Str, Int) c2 = cur.remove(str_slice(key, bar + 1, str_len(key)));
+    return if (c2.keys().len() == 0) { m.remove(b) } else { m.insert(b, c2) };
+}
+
+Map(Int, Map(Str, Int)) ow_ls_union(Map(Int, Map(Str, Int)) a, Map(Int, Map(Str, Int)) b, List(Int) ks, Int i) {
+    if (i >= ks.len()) { return a; }
+    Map(Str, Int) x = b.get(ks[i]) else { ow_nosm() };
+    Map(Str, Int) cur = a.get(ks[i]) else { ow_nosm() };
+    Map(Str, Int) u = if (cur.keys().len() == 0) { x } else { ow_union(cur, x.keys(), 0) };
+    return ow_ls_union_n(a.insert(ks[i], u), b, ks, i);
+}
+
+Map(Int, Map(Str, Int)) ow_ls_union_n(Map(Int, Map(Str, Int)) a, Map(Int, Map(Str, Int)) b, List(Int) ks, Int i) { return ow_ls_union(a, b, ks, i + 1); }
 
 OL ow_live_snap(OL l, Int node) { return OL {.live = l.live, .after = l.after.insert(node, l.live)}; }
 
@@ -759,11 +869,11 @@ OL ow_lv(OX x, ORS r, Map(Int, Int) evn, Int id, OL l) {
     }
     if (k == "bexpr" || k == "block") { return ow_lv_stmts(x, r, evn, id, x.g.ns[id].nk - 1, l0); }
     if (k == "ret") {
-        OL lz = OL {.live = ow_nosm(), .after = l0.after};
+        OL lz = OL {.live = ow_nols(), .after = l0.after};
         return if (x.g.ns[id].nk > 0) { ow_lv(x, r, evn, kg_kid(x.g, id, 0), lz) } else { lz };
     }
     if (k == "bind" || k == "rbind") {
-        OL ld = OL {.live = ow_drop_b(l0.live, id), .after = l0.after};
+        OL ld = OL {.live = l0.live.remove(id), .after = l0.after};
         return ow_lv(x, r, evn, kg_kid(x.g, id, x.g.ns[id].nk - 1), ld);
     }
     if (k == "if") {
@@ -797,52 +907,58 @@ Str ow_use_key(OX x, OP p) {
 // runs: its key is live there, tagged with the callee and position
 // ("@f#j", "@-" elsewhere), so a later write can see it.
 OL ow_lv_args(OX x, ORS r, Map(Int, Int) evn, Int id, List(Int) ks, Int i, OL l) {
+    List(Str) pks = ow_pend_keys(x, r, id, ks, 0, ListBuf());
+    // Operand i runs with operands 0..i-1 pending: all but the last are
+    // added once, and each is dropped before its own operand runs.
+    OL l0 = ow_pend_add(pks, 0, ks.len() - 1, l);
+    return ow_lv_ops(x, r, evn, id, ks, pks, i, l0);
+}
+
+OL ow_lv_ops(OX x, ORS r, Map(Int, Int) evn, Int id, List(Int) ks, List(Str) pks, Int i, OL l) {
     if (i < 0) { return l; }
-    OL l1 = ow_pend_add(x, r, id, ks, 0, i, l);
     Str tk = ow_arg_key(x, r, id, ks[i], i);
-    OL l2 = if (i == 0 && ow_with_key(x, r, id) != "") { ow_with_recv(x, r, evn, id, l1) } else { if (tk != "") { ow_arg_use(x, r, evn, ks[i], tk, l1) } else { ow_lv(x, r, evn, ks[i], l1) } };
-    // The pending keys hold only while operand i runs.
-    OL l3 = OL {.live = ow_pend_drop(x, r, id, ks, 0, i, l2.live), .after = l2.after};
-    return ow_lv_args_n(x, r, evn, id, ks, i, l3);
+    OL l2 = if (i == 0 && ow_with_key(x, r, id) != "") { ow_with_recv(x, r, evn, id, l) } else { if (tk != "") { ow_arg_use(x, r, evn, ks[i], tk, l) } else { ow_lv(x, r, evn, ks[i], l) } };
+    OL l3 = if (i >= 1 && pks[i - 1] != "") { OL {.live = ow_live_del(l2.live, pks[i - 1]), .after = l2.after} } else { l2 };
+    return ow_lv_ops_n(x, r, evn, id, ks, pks, i, l3);
 }
 
-OL ow_lv_args_n(OX x, ORS r, Map(Int, Int) evn, Int id, List(Int) ks, Int i, OL l) { return ow_lv_args(x, r, evn, id, ks, i - 1, l); }
+OL ow_lv_ops_n(OX x, ORS r, Map(Int, Int) evn, Int id, List(Int) ks, List(Str) pks, Int i, OL l) { return ow_lv_ops(x, r, evn, id, ks, pks, i - 1, l); }
 
-OL ow_pend_add(OX x, ORS r, Int id, List(Int) ks, Int j, Int n, OL l) {
+List(Str) ow_pend_keys(OX x, ORS r, Int id, List(Int) ks, Int j, ListBuf(Str) acc) {
+    if (j >= ks.len()) { return acc.finish(); }
+    return ow_pend_keys_n(x, r, id, ks, j, acc.push(ow_pend_key(x, r, id, ks[j], j)));
+}
+
+List(Str) ow_pend_keys_n(OX x, ORS r, Int id, List(Int) ks, Int j, ListBuf(Str) acc) { return ow_pend_keys(x, r, id, ks, j + 1, acc); }
+
+OL ow_pend_add(List(Str) pks, Int j, Int n, OL l) {
     if (j >= n) { return l; }
-    Str key = ow_pend_key(x, r, id, ks[j], j);
-    return ow_pend_add_n(x, r, id, ks, j, n, if (key == "") { l } else { ow_live_add(l, key) });
+    return ow_pend_add_n(pks, j, n, if (pks[j] == "") { l } else { ow_live_add(l, pks[j]) });
 }
 
-Map(Str, Int) ow_pend_drop(OX x, ORS r, Int id, List(Int) ks, Int j, Int n, Map(Str, Int) m) {
-    if (j >= n) { return m; }
-    Str key = ow_pend_key(x, r, id, ks[j], j);
-    return ow_pend_drop_n(x, r, id, ks, j, n, if (key == "") { m } else { m.remove(key) });
-}
-
-Map(Str, Int) ow_pend_drop_n(OX x, ORS r, Int id, List(Int) ks, Int j, Int n, Map(Str, Int) m) { return ow_pend_drop(x, r, id, ks, j + 1, n, m); }
-
-OL ow_pend_add_n(OX x, ORS r, Int id, List(Int) ks, Int j, Int n, OL l) { return ow_pend_add(x, r, id, ks, j + 1, n, l); }
+OL ow_pend_add_n(List(Str) pks, Int j, Int n, OL l) { return ow_pend_add(pks, j + 1, n, l); }
 
 Str ow_pend_key(OX x, ORS r, Int id, Int kid, Int j) {
     Int e = if (x.g.ns[kid].kind == "finit") { kg_kid(x.g, kid, x.g.ns[kid].nk - 1) } else { kid };
     OP p = ow_path(x, r, e);
     if (p.b < 0 || !ow_trk(x, p.ty)) { return ""; }
     Str cal = x.g.ns[id].text;
-    Bool user = x.g.ns[id].kind == "call" && fn_index(x.fs, cal) >= 0;
+    Bool user = x.g.ns[id].kind == "call" && ow_fi(x, cal) >= 0;
     Str wk = if (j == 0) { ow_with_key(x, r, id) } else { "" };
     Str path = if (wk != "") { p.path + "[!" + wk + "]" } else { p.path };
-    return f"{p.b}|" + path + "@" + (if (user) { cal + f"#{j}" } else { "-" });
+    // The call node makes the key unique, so dropping it after its operand
+    // never removes an equal key of another call.
+    return f"{p.b}|" + path + "@" + (if (user) { f"{ow_fk(x, cal, j)}" } else { "-" }) + f"%{id}.{j}";
 }
 
 // A tracked path passed to a user function: its use is tagged with the
 // callee and position, so a write to a field the callee never reads (a
 // hole) does not conflict with it.
 Str ow_arg_key(OX x, ORS r, Int id, Int kid, Int j) {
-    if (x.g.ns[id].kind != "call" || fn_index(x.fs, x.g.ns[id].text) < 0) { return ""; }
+    if (x.g.ns[id].kind != "call" || ow_fi(x, x.g.ns[id].text) < 0) { return ""; }
     OP p = ow_path(x, r, kid);
     if (p.b < 0 || !ow_trk(x, p.ty)) { return ""; }
-    return f"{p.b}|" + p.path + "@" + x.g.ns[id].text + f"#{j}";
+    return f"{p.b}|" + p.path + "@" + f"{ow_fk(x, x.g.ns[id].text, j)}";
 }
 
 OL ow_arg_use(OX x, ORS r, Map(Int, Int) evn, Int kid, Str key, OL l) {
@@ -893,7 +1009,7 @@ OL ow_lv_union(OX x, ORS r, Map(Int, Int) evn, Int id, Int i, OL out, OL acc) {
 OL ow_lv_union_n(OX x, ORS r, Map(Int, Int) evn, Int id, Int i, OL out, OL acc) { return ow_lv_union(x, r, evn, id, i + 1, out, acc); }
 
 // a's snapshots, a's live set plus b's.
-OL ow_merge(OL a, OL b) { return OL {.live = ow_union(a.live, b.live.keys(), 0), .after = a.after}; }
+OL ow_merge(OL a, OL b) { return OL {.live = ow_ls_union(a.live, b.live, b.live.keys(), 0), .after = a.after}; }
 
 Map(Str, Int) ow_union(Map(Str, Int) m, List(Str) ks, Int i) {
     if (i >= ks.len()) { return m; }
@@ -901,17 +1017,6 @@ Map(Str, Int) ow_union(Map(Str, Int) m, List(Str) ks, Int i) {
 }
 
 Map(Str, Int) ow_union_n(Map(Str, Int) m, List(Str) ks, Int i) { return ow_union(m, ks, i + 1); }
-
-// A binding kills every live use of its binder.
-Map(Str, Int) ow_drop_b(Map(Str, Int) m, Int b) { return ow_drop_keys(m, m.keys(), f"{b}|", 0); }
-
-Map(Str, Int) ow_drop_keys(Map(Str, Int) m, List(Str) ks, Str pre, Int i) {
-    if (i >= ks.len()) { return m; }
-    Map(Str, Int) m2 = if (str_has_prefix(ks[i], pre)) { m.remove(ks[i]) } else { m };
-    return ow_drop_keys_n(m2, ks, pre, i);
-}
-
-Map(Str, Int) ow_drop_keys_n(Map(Str, Int) m, List(Str) ks, Str pre, Int i) { return ow_drop_keys(m, ks, pre, i + 1); }
 
 // A closure keeps every outer binder it mentions alive (whole).
 OL ow_lv_caps(OX x, ORS r, Int id, OL l) {
@@ -941,19 +1046,51 @@ Str ow_rule(OX x, OF f, Int node, Int b, Str q) {
 
 Str ow_rule_e(OX x, OF f, OEv e) {
     if (!f.own.contains(e.b)) { return "not-owned:" + ow_bname(x, e.b) + "(" + (f.why.get(e.b) else { "param" }) + ")"; }
-    List(Str) after = (x.after.get(e.node) else { ow_nosm() }).keys();
-    Map(Str, Int) ca = if (e.call >= 0) { x.after.get(e.call) else { ow_nosm() } } else { ow_nosm() };
-    return ow_judge_live(x, f, e, after, ca, ow_mem(f, e.b, e.path), 0);
+    Map(Int, Map(Str, Int)) after = x.after.get(e.node) else { ow_nols() };
+    Map(Int, Map(Str, Int)) ca = if (e.call >= 0) { x.after.get(e.call) else { ow_nols() } } else { ow_nols() };
+    List(Str) wmem = ow_mem(f, e.b, e.path);
+    // Only binders that can reach a written location: the roots of the
+    // written locations, the binders aliasing them, and the root itself.
+    Map(Int, Int) cands = ow_cands(f, wmem, 0, ow_noim().insert(e.b, 1));
+    return ow_judge_cands(x, f, e, after, ca, wmem, cands.keys(), 0);
 }
 
-Str ow_judge_live(OX x, OF f, OEv e, List(Str) after, Map(Str, Int) ca, List(Str) wmem, Int i) {
+Map(Int, Int) ow_cands(OF f, List(Str) wmem, Int i, Map(Int, Int) acc) {
+    if (i >= wmem.len()) { return acc; }
+    Int root = ow_loc_root(wmem[i]);
+    Map(Int, Int) a1 = acc.insert(root, 1);
+    Map(Int, Int) rv = f.rev.get(root) else { ow_noim() };
+    return ow_cands_n(f, wmem, i, ow_imerge(a1, rv.keys(), 0));
+}
+
+Map(Int, Int) ow_cands_n(OF f, List(Str) wmem, Int i, Map(Int, Int) acc) { return ow_cands(f, wmem, i + 1, acc); }
+
+Map(Int, Int) ow_imerge(Map(Int, Int) m, List(Int) ks, Int i) {
+    if (i >= ks.len()) { return m; }
+    return ow_imerge_n(m.insert(ks[i], 1), ks, i);
+}
+
+Map(Int, Int) ow_imerge_n(Map(Int, Int) m, List(Int) ks, Int i) { return ow_imerge(m, ks, i + 1); }
+
+Str ow_judge_cands(OX x, OF f, OEv e, Map(Int, Map(Str, Int)) after, Map(Int, Map(Str, Int)) ca, List(Str) wmem, List(Int) cs, Int i) {
+    if (i >= cs.len()) { return ""; }
+    Map(Str, Int) keys = after.get(cs[i]) else { ow_nosm() };
+    Str w = if (keys.keys().len() == 0) { "" } else { ow_judge_live(x, f, e, cs[i], keys.keys(), ca.get(cs[i]) else { ow_nosm() }, wmem, 0) };
+    if (w != "") { return w; }
+    return ow_judge_cands_n(x, f, e, after, ca, wmem, cs, i);
+}
+
+Str ow_judge_cands_n(OX x, OF f, OEv e, Map(Int, Map(Str, Int)) after, Map(Int, Map(Str, Int)) ca, List(Str) wmem, List(Int) cs, Int i) { return ow_judge_cands(x, f, e, after, ca, wmem, cs, i + 1); }
+
+// The live keys of binder b after the write; ca: b's keys after the call.
+Str ow_judge_live(OX x, OF f, OEv e, Int b, List(Str) after, Map(Str, Int) ca, List(Str) wmem, Int i) {
     if (i >= after.len()) { return ""; }
-    Str key = after[i];
-    Int bar = str_index_of(key, "|", 0);
-    Int b = str_parse_int(str_slice(key, 0, bar));
-    Str rest = str_slice(key, bar + 1, str_len(key));
+    Str rest = after[i];
+    Str key = rest;
     Int at = str_index_of(rest, "@", 0);
-    Str tag = if (at >= 0) { str_slice(rest, at + 1, str_len(rest)) } else { "" };
+    Str tag0 = if (at >= 0) { str_slice(rest, at + 1, str_len(rest)) } else { "" };
+    Int pc = str_index_of(tag0, "%", 0);
+    Str tag = if (pc >= 0) { str_slice(tag0, 0, pc) } else { tag0 };
     Str q0 = if (at >= 0) { str_slice(rest, 0, at) } else { rest };
     Bool hs = str_has_suffix(q0, "#s");
     Str q = if (hs) { str_slice(q0, 0, str_len(q0) - 2) } else { q0 };
@@ -963,15 +1100,15 @@ Str ow_judge_live(OX x, OF f, OEv e, List(Str) after, Map(Str, Int) ca, List(Str
     // hole) does not see it either.
     // A use of the root in a later operand of the same call runs before
     // the callee: it conflicts only when the callee reads that field.
-    Bool same = e.call >= 0 && self && !ca.contains(key);
-    Bool skip = hs || (self && tag != "" && ow_hole(x, tag, q, e.path)) || (same && ow_hole(x, e.cal + f"#{e.arg}", e.path, q));
-    Str ws = if (e.kind == "arg") { x.writes.get(e.cal + f"#{e.arg}") else { "*" } } else { "*" };
+    Bool same = e.call >= 0 && self && !ca.contains(rest);
+    Bool skip = hs || (self && tag != "" && ow_hole(x, tag, q, e.path)) || (same && ow_hole(x, f"{ow_fk(x, e.cal, e.arg)}", e.path, q));
+    Str ws = if (e.kind == "arg") { x.writes.get(ow_fk(x, e.cal, e.arg)) else { "*" } } else { "*" };
     // Another binder handed (pending or as an argument) to a callee that
     // never reads the field the write lies under.
     List(Str) wm2 = if (!self && tag != "" && tag != "-") { ow_wm_not_hole(x, tag, ow_loc(b, q), wmem, 0, ListBuf()) } else { wmem };
     Bool hit = if (skip) { false } else { if (self) { ow_overlap(q, e.path) } else { if (e.kind == "arg") { ow_any_disturbs(ow_mem(f, b, q), wm2, ws, 0) } else { if (e.kind == "move") { ow_any_overlap(ow_mem(f, b, q), wm2, 0) } else { ow_any_hits(x, ow_mem(f, b, q), wm2, 0) } } } };
     if (hit) { return (if (self) { "live-self:" } else { "alias:" }) + ow_bname(x, b) + q; }
-    return ow_judge_live_n(x, f, e, after, ca, wmem, i);
+    return ow_judge_live_n(x, f, e, b, after, ca, wmem, i);
 }
 
 // The written locations not hidden from a holder at loc by a hole of its
@@ -992,11 +1129,11 @@ Bool ow_hole(OX x, Str tag, Str q, Str w) {
     Str d = str_slice(w, str_len(q), str_len(w));
     if (!str_has_prefix(d, ".")) { return false; }
     Str fld = str_slice(d, 1, ow_name_end(d, 1));
-    Str rd = x.reads.get(tag) else { "*" };
+    Str rd = x.reads.get(str_parse_int(tag)) else { "*" };
     return rd != "*" && !str_contains(rd, "," + fld + ",");
 }
 
-Str ow_judge_live_n(OX x, OF f, OEv e, List(Str) after, Map(Str, Int) ca, List(Str) wmem, Int i) { return ow_judge_live(x, f, e, after, ca, wmem, i + 1); }
+Str ow_judge_live_n(OX x, OF f, OEv e, Int b, List(Str) after, Map(Str, Int) ca, List(Str) wmem, Int i) { return ow_judge_live(x, f, e, b, after, ca, wmem, i + 1); }
 
 // A shallow write (a rebuild, a with) rewrites one object: it conflicts
 // with an alias of that object or of an ancestor, not with one of an
@@ -1035,15 +1172,15 @@ type OFn = { OX x; ORS r; OF f; OL l; };
 type OPre = { Int fnode; ORS r; OL l; Map(Int, Int) inl; List(Str) calls; OT t; Bool has; };
 
 OPre ow_prep(Kg g, Funcs fs, OT ot, Int fnode) {
-    Map(Int, Map(Str, Int)) af0 = {};
+    Map(Int, Map(Int, Map(Str, Int))) af0 = {};
     Int body = kg_kid(g, fnode, g.ns[fnode].nk - 1);
     Map(Int, Int) inl = ow_inloop(g, body, false, ow_noim());
-    OX x0 = OX {.g = g, .fs = fs, .fnode = fnode, .fname = g.ns[fnode].text, .after = af0, .inl = inl, .reads = ow_noss(), .writes = ow_noss(), .t = ot};
+    OX x0 = OX {.g = g, .fs = fs, .fnode = fnode, .fname = g.ns[fnode].text, .after = af0, .inl = inl, .reads = ow_nois(), .writes = ow_nois(), .t = ot};
     Map(Int, Int) d0 = {};
     Map(Int, Str) t0 = {};
     ORS r = or_params(x0, 0, ow_nosm(), ORS {.def = d0, .bty = t0});
-    OL l = ow_lv(x0, r, ow_noim(), body, OL {.live = ow_nosm(), .after = af0});
-    return OPre {.fnode = fnode, .r = r, .l = OL {.live = ow_nosm(), .after = l.after}, .inl = inl, .calls = ow_calls(g, fs, body, ListBuf()).finish(), .t = ot, .has = ow_trk(x0, ow_base(fs, g.ns[kg_kid(g, fnode, 0)].text)) || ow_any_trk(x0, r.bty, r.bty.keys(), 0)};
+    OL l = ow_lv(x0, r, ow_noim(), body, OL {.live = ow_nols(), .after = af0});
+    return OPre {.fnode = fnode, .r = r, .l = OL {.live = ow_nols(), .after = l.after}, .inl = inl, .calls = ow_calls(g, fs, body, ListBuf()).finish(), .t = ot, .has = ow_trk(x0, ow_base(fs, g.ns[kg_kid(g, fnode, 0)].text)) || ow_any_trk(x0, r.bty, r.bty.keys(), 0)};
 }
 
 Bool ow_any_trk(OX x, Map(Int, Str) bty, List(Int) ks, Int i) {
@@ -1056,7 +1193,7 @@ Bool ow_any_trk_n(OX x, Map(Int, Str) bty, List(Int) ks, Int i) { return ow_any_
 
 // The user functions a body calls by name.
 ListBuf(Str) ow_calls(Kg g, Funcs fs, Int id, ListBuf(Str) acc) {
-    ListBuf(Str) a1 = if (g.ns[id].kind == "call" && fn_index(fs, g.ns[id].text) >= 0) { acc.push(g.ns[id].text) } else { acc };
+    ListBuf(Str) a1 = if (g.ns[id].kc == 4) { acc.push(g.ns[id].text) } else { acc };
     return ow_calls_kids(g, fs, id, 0, a1);
 }
 
@@ -1084,7 +1221,8 @@ OFn ow_fn(Kg g, Funcs fs, OS s, OPre pr) {
     Map(Int, List(Str)) a0 = {};
     List(OEv) e0 = [];
     Map(Int, Str) w0 = {};
-    OF f0 = ow_params_own(x, s, ow_param_ids(g, fnode, 0, ListBuf()), 0, OF {.al = a0, .own = ow_noim(), .ev = e0, .why = w0, .rok = true, .rents = []});
+    Map(Int, Map(Int, Int)) rv0 = {};
+    OF f0 = ow_params_own(x, s, ow_param_ids(g, fnode, 0, ListBuf()), 0, OF {.al = a0, .own = ow_noim(), .ev = e0, .why = w0, .rok = true, .rents = [], .rev = rv0});
     OF f = ow_stmt(x, r, s, body, f0);
     return OFn {.x = x, .r = r, .f = f, .l = l};
 }
@@ -1107,18 +1245,11 @@ Map(Int, Int) ow_inloop_kids_n(Kg g, Int id, Int i, Bool inside, Map(Int, Int) a
 
 OF ow_params_own(OX x, OS s, List(Int) ps, Int i, OF f) {
     if (i >= ps.len()) { return f; }
-    Bool o = s.pown.contains(x.fname + f"#{i}");
+    Bool o = s.pown.contains(ow_fk(x, x.fname, i));
     return ow_params_own_n(x, s, ps, i, ow_set_al(f, ps[i], [], o, "param-shared"));
 }
 
 OF ow_params_own_n(OX x, OS s, List(Int) ps, Int i, OF f) { return ow_params_own(x, s, ps, i + 1, f); }
-
-Map(Int, Int) ow_ev_nodes(List(OEv) ev, Int i, Map(Int, Int) m) {
-    if (i >= ev.len()) { return m; }
-    return ow_ev_nodes_n(ev, i, m.insert(ev[i].node, 1));
-}
-
-Map(Int, Int) ow_ev_nodes_n(List(OEv) ev, Int i, Map(Int, Int) m) { return ow_ev_nodes(ev, i + 1, m); }
 
 // ─── The program ────────────────────────────────────────────────────
 
@@ -1141,27 +1272,6 @@ ListBuf(Int) ow_fns_in(Kg g, Int id, Int i, ListBuf(Int) acc) {
 
 ListBuf(Int) ow_fns_in_n(Kg g, Int id, Int i, ListBuf(Int) acc) { return ow_fns_in(g, id, i + 1, acc); }
 
-// Summaries to a fixed point: need (least: a parameter is written when
-// some write candidate in its function has it as root), pown (greatest:
-// every call site passes an owned value the write rule allows) and fresh
-// (greatest: every return is an owned value with no alias).
-// `own`: false while the field summaries (need, keeps, reads, writes)
-// settle with every parameter owned and every result fresh; true for the
-// rounds that then let ownership fall.
-OS ow_round(Kg g, Funcs fs, List(OPre) fns, OS s, Bool own) {
-    List(OFn) rs = ow_all(g, fs, s, fns, 0, ListBuf());
-    Map(Str, Int) need = ow_need(rs, 0, s.need);
-    Map(Str, Int) bad = if (own) { ow_bad_sites(rs, 0, ow_nosm()) } else { ow_nosm() };
-    // A parameter keeps an owned instance while some call site passes an
-    // owned argument the write rule allows (§3.5); the others call the
-    // shared instance.
-    Map(Str, Int) good = if (own) { ow_good_sites(rs, 0, ow_nosm()) } else { ow_nosm() };
-    Map(Str, Int) pown = ow_drop_bad(s.pown, s.pown.keys(), ow_minus(bad, good), 0);
-    Map(Str, Int) fresh = if (own) { ow_fresh_keep(g, fs, s, rs, 0, s.fresh) } else { s.fresh };
-    Map(Str, Str) e0 = {};
-    return OS {.need = need, .pown = pown, .fresh = fresh, .keeps = ow_keeps(rs, s, 0, ow_nosm()), .reads = ow_reads_all(rs, s, 0, e0), .writes = ow_writes_all(rs, s, 0, e0)};
-}
-
 List(OFn) ow_all(Kg g, Funcs fs, OS s, List(OPre) fns, Int i, ListBuf(OFn) acc) {
     if (i >= fns.len()) { return acc.finish(); }
     return ow_all_n(g, fs, s, fns, i, acc.push(ow_fn(g, fs, s, fns[i])));
@@ -1169,20 +1279,13 @@ List(OFn) ow_all(Kg g, Funcs fs, OS s, List(OPre) fns, Int i, ListBuf(OFn) acc) 
 
 List(OFn) ow_all_n(Kg g, Funcs fs, OS s, List(OPre) fns, Int i, ListBuf(OFn) acc) { return ow_all(g, fs, s, fns, i + 1, acc); }
 
-Map(Str, Int) ow_need(List(OFn) rs, Int i, Map(Str, Int) acc) {
-    if (i >= rs.len()) { return acc; }
-    return ow_need_n(rs, i, ow_need_fn(rs[i], ow_param_ids(rs[i].x.g, rs[i].x.fnode, 0, ListBuf()), 0, acc));
-}
-
-Map(Str, Int) ow_need_n(List(OFn) rs, Int i, Map(Str, Int) acc) { return ow_need(rs, i + 1, acc); }
-
-Map(Str, Int) ow_need_fn(OFn o, List(Int) ps, Int i, Map(Str, Int) acc) {
+Map(Int, Int) ow_need_fn(OFn o, List(Int) ps, Int i, Map(Int, Int) acc) {
     if (i >= ps.len()) { return acc; }
     Bool w = ow_has_ev_b(o.f.ev, ps[i], 0);
-    return ow_need_fn_n(o, ps, i, if (w) { acc.insert(o.x.fname + f"#{i}", 1) } else { acc });
+    return ow_need_fn_n(o, ps, i, if (w) { acc.insert(ow_fk(o.x, o.x.fname, i), 1) } else { acc });
 }
 
-Map(Str, Int) ow_need_fn_n(OFn o, List(Int) ps, Int i, Map(Str, Int) acc) { return ow_need_fn(o, ps, i + 1, acc); }
+Map(Int, Int) ow_need_fn_n(OFn o, List(Int) ps, Int i, Map(Int, Int) acc) { return ow_need_fn(o, ps, i + 1, acc); }
 
 Bool ow_has_ev_b(List(OEv) ev, Int b, Int i) {
     if (i >= ev.len()) { return false; }
@@ -1192,63 +1295,28 @@ Bool ow_has_ev_b(List(OEv) ev, Int b, Int i) {
 
 Bool ow_has_ev_b_n(List(OEv) ev, Int b, Int i) { return ow_has_ev_b(ev, b, i + 1); }
 
-// Call sites whose argument the write rule refuses: "callee#i".
-Map(Str, Int) ow_bad_sites(List(OFn) rs, Int i, Map(Str, Int) acc) {
-    if (i >= rs.len()) { return acc; }
-    return ow_bad_sites_n(rs, i, ow_bad_fn(rs[i], 0, acc));
-}
-
-Map(Str, Int) ow_bad_sites_n(List(OFn) rs, Int i, Map(Str, Int) acc) { return ow_bad_sites(rs, i + 1, acc); }
-
-Map(Str, Int) ow_bad_fn(OFn o, Int i, Map(Str, Int) acc) {
+Map(Int, Int) ow_bad_fn(OFn o, Int i, Map(Int, Int) acc) {
     if (i >= o.f.ev.len()) { return acc; }
     OEv e = o.f.ev[i];
     Bool bad = e.kind == "arg" && ow_judge(o.x, o.r, o.f, o.l, e) != "";
-    return ow_bad_fn_n(o, i, if (bad) { acc.insert(e.cal + f"#{e.arg}", 1) } else { acc });
+    return ow_bad_fn_n(o, i, if (bad) { acc.insert(ow_fk(o.x, e.cal, e.arg), 1) } else { acc });
 }
 
-Map(Str, Int) ow_bad_fn_n(OFn o, Int i, Map(Str, Int) acc) { return ow_bad_fn(o, i + 1, acc); }
+Map(Int, Int) ow_bad_fn_n(OFn o, Int i, Map(Int, Int) acc) { return ow_bad_fn(o, i + 1, acc); }
 
-Map(Str, Int) ow_good_sites(List(OFn) rs, Int i, Map(Str, Int) acc) {
-    if (i >= rs.len()) { return acc; }
-    return ow_good_sites_n(rs, i, ow_good_fn(rs[i], 0, acc));
-}
-
-Map(Str, Int) ow_good_sites_n(List(OFn) rs, Int i, Map(Str, Int) acc) { return ow_good_sites(rs, i + 1, acc); }
-
-Map(Str, Int) ow_good_fn(OFn o, Int i, Map(Str, Int) acc) {
+Map(Int, Int) ow_good_fn(OFn o, Int i, Map(Int, Int) acc) {
     if (i >= o.f.ev.len()) { return acc; }
     OEv e = o.f.ev[i];
     Bool good = (e.kind == "arg" || e.kind == "argfresh") && ow_judge(o.x, o.r, o.f, o.l, e) == "";
-    return ow_good_fn_n(o, i, if (good) { acc.insert(e.cal + f"#{e.arg}", 1) } else { acc });
+    return ow_good_fn_n(o, i, if (good) { acc.insert(ow_fk(o.x, e.cal, e.arg), 1) } else { acc });
 }
 
-Map(Str, Int) ow_good_fn_n(OFn o, Int i, Map(Str, Int) acc) { return ow_good_fn(o, i + 1, acc); }
-
-Map(Str, Int) ow_minus(Map(Str, Int) a, Map(Str, Int) b) { return ow_drop_bad(a, a.keys(), b, 0); }
-
-Map(Str, Int) ow_drop_bad(Map(Str, Int) m, List(Str) ks, Map(Str, Int) bad, Int i) {
-    if (i >= ks.len()) { return m; }
-    return ow_drop_bad_n(if (bad.contains(ks[i])) { m.remove(ks[i]) } else { m }, ks, bad, i);
-}
-
-Map(Str, Int) ow_drop_bad_n(Map(Str, Int) m, List(Str) ks, Map(Str, Int) bad, Int i) { return ow_drop_bad(m, ks, bad, i + 1); }
+Map(Int, Int) ow_good_fn_n(OFn o, Int i, Map(Int, Int) acc) { return ow_good_fn(o, i + 1, acc); }
 
 // fresh: kept while every `return e` of the function is owned and points
 // into nothing but the function's parameters; keeps: the parameters a
 // returned value points into.
 type ORT = { Bool ok; List(Str) ents; };
-
-Map(Str, Int) ow_fresh_keep(Kg g, Funcs fs, OS s, List(OFn) rs, Int i, Map(Str, Int) acc) {
-    if (i >= rs.len()) { return acc; }
-    OFn o = rs[i];
-    ORT t = ow_rets(o, s, kg_kid(g, o.x.fnode, g.ns[o.x.fnode].nk - 1), ORT {.ok = true, .ents = []});
-    List(Int) ps = ow_param_ids(g, o.x.fnode, 0, ListBuf());
-    Bool ok = t.ok && ow_ents_in(t.ents, ps, 0);
-    return ow_fresh_keep_n(g, fs, s, rs, i, if (ok) { acc } else { acc.remove(o.x.fname) });
-}
-
-Map(Str, Int) ow_fresh_keep_n(Kg g, Funcs fs, OS s, List(OFn) rs, Int i, Map(Str, Int) acc) { return ow_fresh_keep(g, fs, s, rs, i + 1, acc); }
 
 // Every entry's location is rooted at one of the parameters.
 Bool ow_ents_in(List(Str) es, List(Int) ps, Int i) {
@@ -1268,23 +1336,13 @@ Bool ow_loc_in(Str l, List(Int) ps, Int i) {
 
 Bool ow_loc_in_n(Str l, List(Int) ps, Int i) { return ow_loc_in(l, ps, i + 1); }
 
-Map(Str, Int) ow_keeps(List(OFn) rs, OS s, Int i, Map(Str, Int) acc) {
-    if (i >= rs.len()) { return acc; }
-    OFn o = rs[i];
-    ORT t = ow_rets(o, s, kg_kid(o.x.g, o.x.fnode, o.x.g.ns[o.x.fnode].nk - 1), ORT {.ok = true, .ents = []});
-    List(Int) ps = ow_param_ids(o.x.g, o.x.fnode, 0, ListBuf());
-    return ow_keeps_n(rs, s, i, ow_keeps_ps(o.x.fname, t.ents, ps, 0, acc));
-}
-
-Map(Str, Int) ow_keeps_n(List(OFn) rs, OS s, Int i, Map(Str, Int) acc) { return ow_keeps(rs, s, i + 1, acc); }
-
-Map(Str, Int) ow_keeps_ps(Str fname, List(Str) es, List(Int) ps, Int i, Map(Str, Int) acc) {
+Map(Int, Int) ow_keeps_ps(Int fk0, List(Str) es, List(Int) ps, Int i, Map(Int, Int) acc) {
     if (i >= ps.len()) { return acc; }
     Bool k = ow_loc_any(es, ps[i], 0);
-    return ow_keeps_ps_n(fname, es, ps, i, if (k) { acc.insert(fname + f"#{i}", 1) } else { acc });
+    return ow_keeps_ps_n(fk0, es, ps, i, if (k) { acc.insert(fk0 + i, 1) } else { acc });
 }
 
-Map(Str, Int) ow_keeps_ps_n(Str fname, List(Str) es, List(Int) ps, Int i, Map(Str, Int) acc) { return ow_keeps_ps(fname, es, ps, i + 1, acc); }
+Map(Int, Int) ow_keeps_ps_n(Int fk0, List(Str) es, List(Int) ps, Int i, Map(Int, Int) acc) { return ow_keeps_ps(fk0, es, ps, i + 1, acc); }
 
 Bool ow_loc_any(List(Str) es, Int p, Int i) {
     if (i >= es.len()) { return false; }
@@ -1314,33 +1372,29 @@ ORT ow_rets_kids_n(OFn o, OS s, Int id, Int i, ORT acc) { return ow_rets_kids(o,
 
 // Initial summaries: every tracked parameter owned, every function with a
 // tracked result fresh, nothing written.
-OS ow_init(Kg g, Funcs fs, List(Int) fns, Int i, OS s) {
+OS ow_init(Kg g, Funcs fs, OT ot, List(Int) fns, Int i, OS s) {
     if (i >= fns.len()) { return s; }
     Int f = fns[i];
-    Str name = g.ns[f].text;
-    Map(Str, Int) pw = ow_init_params(g, fs, f, name, ow_param_ids(g, f, 0, ListBuf()), 0, s.pown);
+    Int fi = ot.fidx.get(g.ns[f].text) else { -1 };
+    Map(Int, Int) pw = if (fi < 0) { s.pown } else { ow_init_params(g, fs, f, fi * 1024, ow_param_ids(g, f, 0, ListBuf()), 0, s.pown) };
     Bool tr = ow_tracked(fs, ow_base(fs, g.ns[kg_kid(g, f, 0)].text));
-    OS s2 = OS {.need = s.need, .pown = pw, .fresh = if (tr && ow_entry_ok(g, f)) { s.fresh.insert(name, 1) } else { s.fresh }, .keeps = s.keeps, .reads = s.reads, .writes = s.writes};
-    return ow_init_n(g, fs, fns, i, s2);
+    OS s2 = OS {.need = s.need, .pown = pw, .fresh = if (tr && ow_entry_ok(g, f) && fi >= 0) { s.fresh.insert(fi, 1) } else { s.fresh }, .keeps = s.keeps, .reads = s.reads, .writes = s.writes};
+    return ow_init_n(g, fs, ot, fns, i, s2);
 }
 
-OS ow_init_n(Kg g, Funcs fs, List(Int) fns, Int i, OS s) { return ow_init(g, fs, fns, i + 1, s); }
+OS ow_init_n(Kg g, Funcs fs, OT ot, List(Int) fns, Int i, OS s) { return ow_init(g, fs, ot, fns, i + 1, s); }
 
 // Functions whose callers are not all visible: main, exported ones.
 Bool ow_entry_ok(Kg g, Int f) { return g.ns[f].text != "main" && !str_contains(g.ns[f].aux, "@export"); }
 
-Map(Str, Int) ow_init_params(Kg g, Funcs fs, Int f, Str name, List(Int) ps, Int i, Map(Str, Int) acc) {
+Map(Int, Int) ow_init_params(Kg g, Funcs fs, Int f, Int fk0, List(Int) ps, Int i, Map(Int, Int) acc) {
     if (i >= ps.len()) { return acc; }
     Str ty = ow_base(fs, g.ns[kg_kid(g, ps[i], 0)].text);
     Bool ok = ow_tracked(fs, ty) && ow_entry_ok(g, f);
-    return ow_init_params_n(g, fs, f, name, ps, i, if (ok) { acc.insert(name + f"#{i}", 1) } else { acc });
+    return ow_init_params_n(g, fs, f, fk0, ps, i, if (ok) { acc.insert(fk0 + i, 1) } else { acc });
 }
 
-Map(Str, Int) ow_init_params_n(Kg g, Funcs fs, Int f, Str name, List(Int) ps, Int i, Map(Str, Int) acc) { return ow_init_params(g, fs, f, name, ps, i + 1, acc); }
-
-// Functions referenced as values (not only called by name) keep no
-// owned parameters: their call sites are not all visible.
-Map(Str, Int) ow_refd(Kg g, ORS r0, Int i, Map(Str, Int) acc) { return acc; }
+Map(Int, Int) ow_init_params_n(Kg g, Funcs fs, Int f, Int fk0, List(Int) ps, Int i, Map(Int, Int) acc) { return ow_init_params(g, fs, f, fk0, ps, i + 1, acc); }
 
 // ─── Incremental rounds ─────────────────────────────────────────────
 // A function's summaries depend only on its own body, its own entry in
@@ -1348,34 +1402,38 @@ Map(Str, Int) ow_refd(Kg g, ORS r0, Int i, Map(Str, Int) acc) { return acc; }
 // callees changed (or whose pown entry did), and the program-wide maps are
 // reassembled from the per-function pieces.
 
-type OFS = { Map(Str, Int) need; Map(Str, Int) keeps; Bool fok; Map(Str, Str) reads; Map(Str, Str) writes; Map(Str, Int) bad; Map(Str, Int) good; Str sig; };
+type OFS = { Map(Int, Int) need; Map(Int, Int) keeps; Bool fok; Map(Int, Str) reads; Map(Int, Str) writes; Map(Int, Int) bad; Map(Int, Int) good; Str sig; };
 
 OFS ow_fsum(OFn o, OS s, Bool own) {
     Kg g = o.x.g;
     List(Int) ps = ow_param_ids(g, o.x.fnode, 0, ListBuf());
     ORT t = ORT {.ok = o.f.rok, .ents = o.f.rents};
-    Map(Str, Int) need = ow_need_fn(o, ps, 0, ow_nosm());
-    Map(Str, Int) keeps = ow_keeps_ps(o.x.fname, t.ents, ps, 0, ow_nosm());
+    Map(Int, Int) need = ow_need_fn(o, ps, 0, ow_noim());
+    Map(Int, Int) keeps = ow_keeps_ps(ow_fk(o.x, o.x.fname, 0), t.ents, ps, 0, ow_noim());
     Bool fok = t.ok && ow_ents_in(t.ents, ps, 0);
-    Map(Str, Str) rd = ow_reads_ps(o, s, ps, 0, ow_noss());
-    Map(Str, Str) wr = ow_writes_ps(o, s, ps, 0, ow_noss());
-    Map(Str, Int) bad = ow_bad_fn(o, 0, ow_nosm());
-    Map(Str, Int) good = ow_good_fn(o, 0, ow_nosm());
-    Str sig = str_join(need.keys(), ",") + ";" + str_join(keeps.keys(), ",") + ";" + (if (fok) { "f" } else { "-" }) + ";" + ow_msig(rd, rd.keys(), 0, "") + ";" + ow_msig(wr, wr.keys(), 0, "") + ";" + str_join(bad.keys(), ",") + ";" + str_join(good.keys(), ",");
+    Map(Int, Str) rd = ow_reads_ps(o, s, ps, 0, ow_nois());
+    Map(Int, Str) wr = ow_writes_ps(o, s, ps, 0, ow_nois());
+    Map(Int, Int) bad = ow_bad_fn(o, 0, ow_noim());
+    Map(Int, Int) good = ow_good_fn(o, 0, ow_noim());
+    Str sig = ow_fsig(need, keeps, fok, rd, wr, bad, good);
     return OFS {.need = need, .keeps = keeps, .fok = fok, .reads = rd, .writes = wr, .bad = bad, .good = good, .sig = sig};
 }
 
 // A piece joined with its previous round's: need, keeps, reads, writes
 // and bad sites only grow, fresh only falls, so the rounds converge.
 OFS ow_fjoin(OFS a, OFS b) {
-    Map(Str, Int) need = ow_union(a.need, b.need.keys(), 0);
-    Map(Str, Int) keeps = ow_union(a.keeps, b.keeps.keys(), 0);
-    Map(Str, Str) rd = ow_join_ss(a.reads, b.reads, b.reads.keys(), 0);
-    Map(Str, Str) wr = ow_join_ss(a.writes, b.writes, b.writes.keys(), 0);
-    Map(Str, Int) bad = ow_union(a.bad, b.bad.keys(), 0);
+    Map(Int, Int) need = ow_imerge(a.need, b.need.keys(), 0);
+    Map(Int, Int) keeps = ow_imerge(a.keeps, b.keeps.keys(), 0);
+    Map(Int, Str) rd = ow_ijoin(a.reads, b.reads, b.reads.keys(), 0);
+    Map(Int, Str) wr = ow_ijoin(a.writes, b.writes, b.writes.keys(), 0);
+    Map(Int, Int) bad = ow_imerge(a.bad, b.bad.keys(), 0);
     Bool fok = a.fok && b.fok;
-    Str sig = str_join(need.keys(), ",") + ";" + str_join(keeps.keys(), ",") + ";" + (if (fok) { "f" } else { "-" }) + ";" + ow_msig(rd, rd.keys(), 0, "") + ";" + ow_msig(wr, wr.keys(), 0, "") + ";" + str_join(bad.keys(), ",") + ";" + str_join(b.good.keys(), ",");
+    Str sig = ow_fsig(need, keeps, fok, rd, wr, bad, b.good);
     return OFS {.need = need, .keeps = keeps, .fok = fok, .reads = rd, .writes = wr, .bad = bad, .good = b.good, .sig = sig};
+}
+
+Str ow_fsig(Map(Int, Int) need, Map(Int, Int) keeps, Bool fok, Map(Int, Str) rd, Map(Int, Str) wr, Map(Int, Int) bad, Map(Int, Int) good) {
+    return ow_ikeys(need.keys(), 0, "") + ";" + ow_ikeys(keeps.keys(), 0, "") + ";" + (if (fok) { "f" } else { "-" }) + ";" + ow_imsig(rd, rd.keys(), 0, "") + ";" + ow_imsig(wr, wr.keys(), 0, "") + ";" + ow_ikeys(bad.keys(), 0, "") + ";" + ow_ikeys(good.keys(), 0, "");
 }
 
 Map(Str, Str) ow_join_ss(Map(Str, Str) m, Map(Str, Str) from, List(Str) ks, Int i) {
@@ -1394,18 +1452,18 @@ Str ow_msig(Map(Str, Str) m, List(Str) ks, Int i, Str acc) {
 
 Str ow_msig_n(Map(Str, Str) m, List(Str) ks, Int i, Str acc) { return ow_msig(m, ks, i + 1, acc); }
 
-type OIS = { OS s; List(OFS) sums; Int rounds; Int work; };
+type OIS = { OS s; Map(Int, OFS) sums; Int rounds; Int work; };
 
 // ─── Sweeps in callee-first order ──────────────────────────────────
 // Each function's new piece is merged into the summaries at once, so a
 // caller later in the same sweep already sees it; a sweep repeats only
 // for callers that came before a callee that changed (recursion).
 
-type OGS = { OS s; List(OFS) sums; Map(Int, Int) dirty; Int work; };
+type OGS = { OS s; Map(Int, OFS) sums; Map(Int, Int) dirty; Int work; };
 
 OFS ow_nofs() {
-    Map(Str, Int) e = {};
-    Map(Str, Str) e2 = {};
+    Map(Int, Int) e = {};
+    Map(Int, Str) e2 = {};
     return OFS {.need = e, .keeps = e, .fok = true, .reads = e2, .writes = e2, .bad = e, .good = e, .sig = "#none"};
 }
 
@@ -1453,22 +1511,23 @@ OGS ow_sweep(Kg g, Funcs fs, List(OPre) prs, Map(Str, List(Int)) callers, List(I
     if (j >= order.len()) { return st; }
     Int i = order[j];
     if (!st.dirty.contains(i)) { return ow_sweep_n(g, fs, prs, callers, order, j, own, st); }
-    OFS old = st.sums[i];
-    OFS p0 = if (prs[i].has) { ow_fsum(ow_fn(g, fs, st.s, prs[i]), st.s, own) } else { OFS {.need = ow_nosm(), .keeps = ow_nosm(), .fok = true, .reads = ow_noss(), .writes = ow_noss(), .bad = ow_nosm(), .good = ow_nosm(), .sig = ""} };
+    OFS old = st.sums.get(i) else { ow_nofs() };
+    OFS p0 = if (prs[i].has) { ow_fsum(ow_fn(g, fs, st.s, prs[i]), st.s, own) } else { OFS {.need = ow_noim(), .keeps = ow_noim(), .fok = true, .reads = ow_nois(), .writes = ow_nois(), .bad = ow_noim(), .good = ow_noim(), .sig = ""} };
     OFS p = if (old.sig == "#none") { p0 } else { ow_fjoin(old, p0) };
     Str name = g.ns[prs[i].fnode].text;
-    OS s2 = ow_merge_piece(st.s, name, p, own);
-    Bool ch = old.sig != p.sig || st.s.fresh.contains(name) != s2.fresh.contains(name);
+    Int fi = prs[i].t.fidx.get(name) else { -1 };
+    OS s2 = ow_merge_piece(st.s, fi, p, own);
+    Bool ch = old.sig != p.sig || st.s.fresh.contains(fi) != s2.fresh.contains(fi);
     Map(Int, Int) d0 = st.dirty.remove(i);
     Map(Int, Int) d2 = if (ch) { ow_mark(d0, callers.get(name) else { [] }, 0) } else { d0 };
-    OGS st2 = OGS {.s = s2, .sums = st.sums.with(i, p), .dirty = d2, .work = st.work + 1};
+    OGS st2 = OGS {.s = s2, .sums = st.sums.insert(i, p), .dirty = d2, .work = st.work + 1};
     return ow_sweep_n(g, fs, prs, callers, order, j, own, st2);
 }
 
 OGS ow_sweep_n(Kg g, Funcs fs, List(OPre) prs, Map(Str, List(Int)) callers, List(Int) order, Int j, Bool own, OGS st) { return ow_sweep(g, fs, prs, callers, order, j + 1, own, st); }
 
-OS ow_merge_piece(OS s, Str name, OFS p, Bool own) {
-    return OS {.need = ow_union(s.need, p.need.keys(), 0), .pown = s.pown, .fresh = if (own && !p.fok) { s.fresh.remove(name) } else { s.fresh }, .keeps = ow_union(s.keeps, p.keeps.keys(), 0), .reads = ow_put_all(s.reads, p.reads, p.reads.keys(), 0), .writes = ow_put_all(s.writes, p.writes, p.writes.keys(), 0)};
+OS ow_merge_piece(OS s, Int fi, OFS p, Bool own) {
+    return OS {.need = ow_imerge(s.need, p.need.keys(), 0), .pown = s.pown, .fresh = if (own && !p.fok) { s.fresh.remove(fi) } else { s.fresh }, .keeps = ow_imerge(s.keeps, p.keeps.keys(), 0), .reads = ow_iput_all(s.reads, p.reads, p.reads.keys(), 0), .writes = ow_iput_all(s.writes, p.writes, p.writes.keys(), 0)};
 }
 
 // Sweeps until no function is dirty; with ownership on, then pown falls
@@ -1478,16 +1537,16 @@ OGS ow_sweeps(Kg g, Funcs fs, List(OPre) prs, Map(Str, List(Int)) callers, Map(S
     if (s1.dirty.keys().len() > 0 && n < 64) { return ow_sweeps_n(g, fs, prs, callers, idx, order, own, s1, n); }
     if (!own) { return s1; }
     OS s2 = ow_assemble_pown(s1.s, s1.sums);
-    Map(Int, Int) d = ow_dirty_pown(idx, s1.s.pown, s1.s.pown.keys(), s2.pown, 0, ow_noim());
+    Map(Int, Int) d = ow_dirty_pown(ow_f2p(g, prs, 0, ow_noim()), s1.s.pown, s1.s.pown.keys(), s2.pown, 0, ow_noim());
     if (d.keys().len() == 0 || n >= 64) { return OGS {.s = s2, .sums = s1.sums, .dirty = d, .work = s1.work}; }
     return ow_sweeps_n(g, fs, prs, callers, idx, order, own, OGS {.s = s2, .sums = s1.sums, .dirty = d, .work = s1.work}, n);
 }
 
 OGS ow_sweeps_n(Kg g, Funcs fs, List(OPre) prs, Map(Str, List(Int)) callers, Map(Str, Int) idx, List(Int) order, Bool own, OGS st, Int n) { return ow_sweeps(g, fs, prs, callers, idx, order, own, st, n + 1); }
 
-OS ow_assemble_pown(OS s, List(OFS) sums) {
-    OS z = ow_asm_at(sums, 0, s, ow_nosm(), ow_nosm());
-    Map(Str, Int) pown = ow_drop_bad(s.pown, s.pown.keys(), ow_minus(z.pown, z.fresh), 0);
+OS ow_assemble_pown(OS s, Map(Int, OFS) sums) {
+    OS z = ow_asm_at(sums, sums.keys(), 0, s, ow_noim(), ow_noim());
+    Map(Int, Int) pown = ow_idrop(s.pown, s.pown.keys(), ow_iminus(z.pown, z.fresh), 0);
     return OS {.need = s.need, .pown = pown, .fresh = s.fresh, .keeps = s.keeps, .reads = s.reads, .writes = s.writes};
 }
 
@@ -1498,44 +1557,25 @@ Map(Int, Int) ow_all_idx(Int n, Int i, Map(Int, Int) acc) {
 
 Map(Int, Int) ow_all_idx_n(Int n, Int i, Map(Int, Int) acc) { return ow_all_idx(n, i + 1, acc); }
 
-OIS ow_inc(Kg g, Funcs fs, List(OPre) prs, Map(Str, List(Int)) callers, Map(Str, Int) idx, OS s, List(OFS) sums, Map(Int, Int) dirty, Int n, Bool own, Int work) {
-    List(OFS) sums2 = ow_resum(g, fs, prs, s, sums, dirty, own, 0, ListBuf());
-    OS s2 = ow_assemble(g, prs, s, sums2, own);
-    Map(Int, Int) d2 = ow_dirty(g, prs, callers, idx, s, s2, sums, sums2, 0, ow_noim());
-    Int w2 = work + (if (sums.len() == 0) { prs.len() } else { dirty.keys().len() });
-    if (d2.keys().len() == 0 || n >= 64) { return OIS {.s = s2, .sums = sums2, .rounds = n + 1, .work = w2}; }
-    return ow_inc_n(g, fs, prs, callers, idx, s2, sums2, d2, n, own, w2);
-}
-
-OIS ow_inc_n(Kg g, Funcs fs, List(OPre) prs, Map(Str, List(Int)) callers, Map(Str, Int) idx, OS s, List(OFS) sums, Map(Int, Int) dirty, Int n, Bool own, Int work) { return ow_inc(g, fs, prs, callers, idx, s, sums, dirty, n + 1, own, work); }
-
-List(OFS) ow_resum(Kg g, Funcs fs, List(OPre) prs, OS s, List(OFS) sums, Map(Int, Int) dirty, Bool own, Int i, ListBuf(OFS) acc) {
-    if (i >= prs.len()) { return acc.finish(); }
-    OFS f = if (i >= sums.len()) { ow_fsum(ow_fn(g, fs, s, prs[i]), s, own) } else { if (dirty.contains(i)) { ow_fjoin(sums[i], ow_fsum(ow_fn(g, fs, s, prs[i]), s, own)) } else { sums[i] } };
-    return ow_resum_n(g, fs, prs, s, sums, dirty, own, i, acc.push(f));
-}
-
-List(OFS) ow_resum_n(Kg g, Funcs fs, List(OPre) prs, OS s, List(OFS) sums, Map(Int, Int) dirty, Bool own, Int i, ListBuf(OFS) acc) { return ow_resum(g, fs, prs, s, sums, dirty, own, i + 1, acc); }
-
-// The program-wide maps from the pieces; pown and fresh only fall.
-OS ow_assemble(Kg g, List(OPre) prs, OS s, List(OFS) sums, Bool own) {
-    OS z = ow_asm_at(sums, 0, OS {.need = s.need, .pown = ow_nosm(), .fresh = ow_nosm(), .keeps = ow_nosm(), .reads = ow_noss(), .writes = ow_noss()}, ow_nosm(), ow_nosm());
-    Map(Str, Int) bad = z.pown;
-    Map(Str, Int) good = z.fresh;
-    Map(Str, Int) pown = if (own) { ow_drop_bad(s.pown, s.pown.keys(), ow_minus(bad, good), 0) } else { s.pown };
-    Map(Str, Int) fresh = if (own) { ow_fresh_fall(g, prs, sums, 0, s.fresh) } else { s.fresh };
-    return OS {.need = z.need, .pown = pown, .fresh = fresh, .keeps = z.keeps, .reads = z.reads, .writes = z.writes};
-}
-
 // Folds the pieces; bad and good ride in pown and fresh of the result.
-OS ow_asm_at(List(OFS) sums, Int i, OS a, Map(Str, Int) bad, Map(Str, Int) good) {
-    if (i >= sums.len()) { return OS {.need = a.need, .pown = bad, .fresh = good, .keeps = a.keeps, .reads = a.reads, .writes = a.writes}; }
-    OFS f = sums[i];
-    OS a2 = OS {.need = ow_union(a.need, f.need.keys(), 0), .pown = a.pown, .fresh = a.fresh, .keeps = ow_union(a.keeps, f.keeps.keys(), 0), .reads = ow_put_all(a.reads, f.reads, f.reads.keys(), 0), .writes = ow_put_all(a.writes, f.writes, f.writes.keys(), 0)};
-    return ow_asm_at_n(sums, i, a2, ow_union(bad, f.bad.keys(), 0), ow_union(good, f.good.keys(), 0));
+// Folds the pieces' bad and good call sites (carried in pown and fresh of
+// the result).
+OS ow_asm_at(Map(Int, OFS) sums, List(Int) ks, Int i, OS a, Map(Int, Int) bad, Map(Int, Int) good) {
+    if (i >= ks.len()) { return OS {.need = a.need, .pown = bad, .fresh = good, .keeps = a.keeps, .reads = a.reads, .writes = a.writes}; }
+    OFS f = sums.get(ks[i]) else { ow_nofs() };
+    return ow_asm_at_n(sums, ks, i, a, ow_imerge(bad, f.bad.keys(), 0), ow_imerge(good, f.good.keys(), 0));
 }
 
-OS ow_asm_at_n(List(OFS) sums, Int i, OS a, Map(Str, Int) bad, Map(Str, Int) good) { return ow_asm_at(sums, i + 1, a, bad, good); }
+OS ow_asm_at_n(Map(Int, OFS) sums, List(Int) ks, Int i, OS a, Map(Int, Int) bad, Map(Int, Int) good) { return ow_asm_at(sums, ks, i + 1, a, bad, good); }
+
+// Function index -> position in prs.
+Map(Int, Int) ow_f2p(Kg g, List(OPre) prs, Int i, Map(Int, Int) acc) {
+    if (i >= prs.len()) { return acc; }
+    Int fi = prs[i].t.fidx.get(g.ns[prs[i].fnode].text) else { -1 };
+    return ow_f2p_n(g, prs, i, if (fi >= 0) { acc.insert(fi, i) } else { acc });
+}
+
+Map(Int, Int) ow_f2p_n(Kg g, List(OPre) prs, Int i, Map(Int, Int) acc) { return ow_f2p(g, prs, i + 1, acc); }
 
 Map(Str, Str) ow_put_all(Map(Str, Str) m, Map(Str, Str) from, List(Str) ks, Int i) {
     if (i >= ks.len()) { return m; }
@@ -1544,26 +1584,6 @@ Map(Str, Str) ow_put_all(Map(Str, Str) m, Map(Str, Str) from, List(Str) ks, Int 
 
 Map(Str, Str) ow_put_all_n(Map(Str, Str) m, Map(Str, Str) from, List(Str) ks, Int i) { return ow_put_all(m, from, ks, i + 1); }
 
-Map(Str, Int) ow_fresh_fall(Kg g, List(OPre) prs, List(OFS) sums, Int i, Map(Str, Int) acc) {
-    if (i >= prs.len()) { return acc; }
-    Str name = g.ns[prs[i].fnode].text;
-    return ow_fresh_fall_n(g, prs, sums, i, if (sums[i].fok) { acc } else { acc.remove(name) });
-}
-
-Map(Str, Int) ow_fresh_fall_n(Kg g, List(OPre) prs, List(OFS) sums, Int i, Map(Str, Int) acc) { return ow_fresh_fall(g, prs, sums, i + 1, acc); }
-
-// Next round's work: callers of a function whose piece or fresh entry
-// changed, and every function whose own pown entries changed.
-Map(Int, Int) ow_dirty(Kg g, List(OPre) prs, Map(Str, List(Int)) callers, Map(Str, Int) idx, OS s, OS s2, List(OFS) sums, List(OFS) sums2, Int i, Map(Int, Int) acc) {
-    if (i >= prs.len()) { return ow_dirty_pown(idx, s.pown, s.pown.keys(), s2.pown, 0, acc); }
-    Str name = g.ns[prs[i].fnode].text;
-    Bool ch = i >= sums.len() || sums[i].sig != sums2[i].sig || s.fresh.contains(name) != s2.fresh.contains(name);
-    Map(Int, Int) a2 = if (ch) { ow_mark(acc, callers.get(name) else { [] }, 0) } else { acc };
-    return ow_dirty_n(g, prs, callers, idx, s, s2, sums, sums2, i, a2);
-}
-
-Map(Int, Int) ow_dirty_n(Kg g, List(OPre) prs, Map(Str, List(Int)) callers, Map(Str, Int) idx, OS s, OS s2, List(OFS) sums, List(OFS) sums2, Int i, Map(Int, Int) acc) { return ow_dirty(g, prs, callers, idx, s, s2, sums, sums2, i + 1, acc); }
-
 Map(Int, Int) ow_mark(Map(Int, Int) m, List(Int) xs, Int i) {
     if (i >= xs.len()) { return m; }
     return ow_mark_n(m.insert(xs[i], 1), xs, i);
@@ -1571,16 +1591,15 @@ Map(Int, Int) ow_mark(Map(Int, Int) m, List(Int) xs, Int i) {
 
 Map(Int, Int) ow_mark_n(Map(Int, Int) m, List(Int) xs, Int i) { return ow_mark(m, xs, i + 1); }
 
-Map(Int, Int) ow_dirty_pown(Map(Str, Int) idx, Map(Str, Int) old, List(Str) ks, Map(Str, Int) now, Int i, Map(Int, Int) acc) {
+Map(Int, Int) ow_dirty_pown(Map(Int, Int) f2p, Map(Int, Int) old, List(Int) ks, Map(Int, Int) now, Int i, Map(Int, Int) acc) {
     if (i >= ks.len()) { return acc; }
-    Str k = ks[i];
-    Int h = str_index_of(k, "#", 0);
-    Int fi = if (h > 0) { idx.get(str_slice(k, 0, h)) else { -1 } } else { -1 };
-    Map(Int, Int) a2 = if (!now.contains(k) && fi >= 0) { acc.insert(fi, 1) } else { acc };
-    return ow_dirty_pown_n(idx, old, ks, now, i, a2);
+    Int k = ks[i];
+    Int pi = f2p.get(k / 1024) else { -1 };
+    Map(Int, Int) a2 = if (!now.contains(k) && pi >= 0) { acc.insert(pi, 1) } else { acc };
+    return ow_dirty_pown_n(f2p, old, ks, now, i, a2);
 }
 
-Map(Int, Int) ow_dirty_pown_n(Map(Str, Int) idx, Map(Str, Int) old, List(Str) ks, Map(Str, Int) now, Int i, Map(Int, Int) acc) { return ow_dirty_pown(idx, old, ks, now, i + 1, acc); }
+Map(Int, Int) ow_dirty_pown_n(Map(Int, Int) f2p, Map(Int, Int) old, List(Int) ks, Map(Int, Int) now, Int i, Map(Int, Int) acc) { return ow_dirty_pown(f2p, old, ks, now, i + 1, acc); }
 
 Map(Str, List(Int)) ow_callers(List(OPre) prs, Int i, Map(Str, List(Int)) acc) {
     if (i >= prs.len()) { return acc; }
@@ -1605,75 +1624,72 @@ Map(Str, Int) ow_index(Kg g, List(OPre) prs, Int i, Map(Str, Int) acc) {
 
 Map(Str, Int) ow_index_n(Kg g, List(OPre) prs, Int i, Map(Str, Int) acc) { return ow_index(g, prs, i + 1, acc); }
 
-OS ow_fix(Kg g, Funcs fs, List(OPre) fns, OS s, Int n, Bool own) {
-    OS s2 = ow_round(g, fs, fns, s, own);
-    Bool same = s2.need.keys().len() == s.need.keys().len() && s2.pown.keys().len() == s.pown.keys().len() && s2.fresh.keys().len() == s.fresh.keys().len() && s2.keeps.keys().len() == s.keeps.keys().len() && ow_sig(s2.reads, s2.reads.keys(), 0, 0) == ow_sig(s.reads, s.reads.keys(), 0, 0) && ow_sig(s2.writes, s2.writes.keys(), 0, 0) == ow_sig(s.writes, s.writes.keys(), 0, 0);
-    if (same || n >= 64) { return OS {.need = s2.need, .pown = s2.pown.insert(if (own) { "#rounds-own" } else { "#rounds-sum" }, n + 1), .fresh = s2.fresh, .keeps = s2.keeps, .reads = s2.reads, .writes = s2.writes}; }
-    return ow_fix_n(g, fs, fns, s2, n, own);
-}
-
-OS ow_fix_n(Kg g, Funcs fs, List(OPre) fns, OS s, Int n, Bool own) { return ow_fix(g, fs, fns, s, n + 1, own); }
-
 // ─── Fields each parameter is read at ──────────────────────────────
 // reads["f#i"]: ",a,b," the first fields f's body (or a callee it hands
 // the parameter to) reads from parameter i, "*" when it uses it whole.
 // A field not listed is a hole: a caller may pass the parameter with that
 // field taken out.
 
-Int ow_sig(Map(Str, Str) m, List(Str) ks, Int i, Int acc) {
-    if (i >= ks.len()) { return acc; }
-    return ow_sig_n(m, ks, i, acc + 1 + str_len(m.get(ks[i]) else { "" }));
-}
-
-Int ow_sig_n(Map(Str, Str) m, List(Str) ks, Int i, Int acc) { return ow_sig(m, ks, i + 1, acc); }
-
-Map(Str, Str) ow_reads_all(List(OFn) rs, OS s, Int i, Map(Str, Str) acc) {
-    if (i >= rs.len()) { return acc; }
-    OFn o = rs[i];
-    List(Int) ps = ow_param_ids(o.x.g, o.x.fnode, 0, ListBuf());
-    return ow_reads_all_n(rs, s, i, ow_reads_ps(o, s, ps, 0, acc));
-}
-
-Map(Str, Str) ow_reads_all_n(List(OFn) rs, OS s, Int i, Map(Str, Str) acc) { return ow_reads_all(rs, s, i + 1, acc); }
-
-Map(Str, Str) ow_reads_ps(OFn o, OS s, List(Int) ps, Int i, Map(Str, Str) acc) {
-    if (i >= ps.len()) { return acc; }
+// One walk of the body for every parameter at once.
+Map(Int, Str) ow_reads_ps(OFn o, OS s, List(Int) ps, Int i, Map(Int, Str) acc) {
     Int body = kg_kid(o.x.g, o.x.fnode, o.x.g.ns[o.x.fnode].nk - 1);
-    Str rd = if (ow_entry_ok(o.x.g, o.x.fnode)) { ow_rd(o, s, body, ps[i], ",") } else { "*" };
-    return ow_reads_ps_n(o, s, ps, i, acc.insert(o.x.fname + f"#{i}", rd));
+    Map(Int, Int) pix = ow_pix(ps, 0, ow_noim());
+    Map(Int, Str) none = {};
+    Map(Int, Str) rd = if (ow_entry_ok(o.x.g, o.x.fnode)) { ow_rdm(o, s, body, pix, none) } else { none };
+    return ow_reads_put(o, ps, 0, rd, acc);
 }
 
-Map(Str, Str) ow_reads_ps_n(OFn o, OS s, List(Int) ps, Int i, Map(Str, Str) acc) { return ow_reads_ps(o, s, ps, i + 1, acc); }
+Map(Int, Int) ow_pix(List(Int) ps, Int i, Map(Int, Int) acc) {
+    if (i >= ps.len()) { return acc; }
+    return ow_pix_n(ps, i, acc.insert(ps[i], i));
+}
 
-Str ow_rd(OFn o, OS s, Int id, Int p, Str acc) {
-    if (acc == "*") { return acc; }
+Map(Int, Int) ow_pix_n(List(Int) ps, Int i, Map(Int, Int) acc) { return ow_pix(ps, i + 1, acc); }
+
+Map(Int, Str) ow_reads_put(OFn o, List(Int) ps, Int i, Map(Int, Str) rd, Map(Int, Str) acc) {
+    if (i >= ps.len()) { return acc; }
+    Str v = if (ow_entry_ok(o.x.g, o.x.fnode)) { rd.get(ps[i]) else { "," } } else { "*" };
+    return ow_reads_put_n(o, ps, i, rd, acc.insert(ow_fk(o.x, o.x.fname, i), v));
+}
+
+Map(Int, Str) ow_reads_put_n(OFn o, List(Int) ps, Int i, Map(Int, Str) rd, Map(Int, Str) acc) { return ow_reads_put(o, ps, i + 1, rd, acc); }
+
+// ow_rd for every parameter (pix: parameter binder -> index).
+Map(Int, Str) ow_rdm(OFn o, OS s, Int id, Map(Int, Int) pix, Map(Int, Str) acc) {
     Kg g = o.x.g;
     OP pp = ow_path(o.x, o.r, id);
     if (pp.b >= 0) {
-        Str a1 = if (pp.b != p) { acc } else { if (pp.path == "") { "*" } else { ow_rd_add(acc, str_slice(pp.path, 1, ow_name_end(pp.path, 1))) } };
-        return ow_rd_list(o, s, pp.idx, 0, p, a1);
+        Map(Int, Str) a1 = if (!pix.contains(pp.b)) { acc } else { acc.insert(pp.b, if (pp.path == "") { "*" } else { ow_rd_add(acc.get(pp.b) else { "," }, str_slice(pp.path, 1, ow_name_end(pp.path, 1))) }) };
+        return ow_rdm_list(o, s, pp.idx, 0, pix, a1);
     }
-    if (g.ns[id].kind == "call" && fn_index(o.x.fs, g.ns[id].text) >= 0) { return ow_rd_args(o, s, id, 0, p, acc); }
-    return ow_rd_list(o, s, ow_kid_list(g, id, 0, ListBuf()), 0, p, acc);
+    if (g.ns[id].kc == 4 && ow_fi(o.x, g.ns[id].text) >= 0) { return ow_rdm_args(o, s, id, 0, pix, acc); }
+    return ow_rdm_kids(o, s, id, 0, pix, acc);
 }
 
-Str ow_rd_list(OFn o, OS s, List(Int) ids, Int i, Int p, Str acc) {
+Map(Int, Str) ow_rdm_kids(OFn o, OS s, Int id, Int i, Map(Int, Int) pix, Map(Int, Str) acc) {
+    if (i >= o.x.g.ns[id].nk) { return acc; }
+    return ow_rdm_kids_n(o, s, id, i, pix, ow_rdm(o, s, kg_kid(o.x.g, id, i), pix, acc));
+}
+
+Map(Int, Str) ow_rdm_kids_n(OFn o, OS s, Int id, Int i, Map(Int, Int) pix, Map(Int, Str) acc) { return ow_rdm_kids(o, s, id, i + 1, pix, acc); }
+
+Map(Int, Str) ow_rdm_list(OFn o, OS s, List(Int) ids, Int i, Map(Int, Int) pix, Map(Int, Str) acc) {
     if (i >= ids.len()) { return acc; }
-    return ow_rd_list_n(o, s, ids, i, p, ow_rd(o, s, ids[i], p, acc));
+    return ow_rdm_list_n(o, s, ids, i, pix, ow_rdm(o, s, ids[i], pix, acc));
 }
 
-Str ow_rd_list_n(OFn o, OS s, List(Int) ids, Int i, Int p, Str acc) { return ow_rd_list(o, s, ids, i + 1, p, acc); }
+Map(Int, Str) ow_rdm_list_n(OFn o, OS s, List(Int) ids, Int i, Map(Int, Int) pix, Map(Int, Str) acc) { return ow_rdm_list(o, s, ids, i + 1, pix, acc); }
 
-Str ow_rd_args(OFn o, OS s, Int id, Int i, Int p, Str acc) {
+Map(Int, Str) ow_rdm_args(OFn o, OS s, Int id, Int i, Map(Int, Int) pix, Map(Int, Str) acc) {
     if (i >= o.x.g.ns[id].nk) { return acc; }
     Int e = kg_kid(o.x.g, id, i);
     OP pp = ow_path(o.x, o.r, e);
-    Bool whole = pp.b == p && pp.path == "";
-    Str a1 = if (whole) { ow_rd_merge(acc, s.reads.get(o.x.g.ns[id].text + f"#{i}") else { "," }) } else { ow_rd(o, s, e, p, acc) };
-    return ow_rd_args_n(o, s, id, i, p, a1);
+    Bool whole = pp.b >= 0 && pix.contains(pp.b) && pp.path == "";
+    Map(Int, Str) a1 = if (whole) { acc.insert(pp.b, ow_rd_merge(acc.get(pp.b) else { "," }, s.reads.get(ow_fk(o.x, o.x.g.ns[id].text, i)) else { "," })) } else { ow_rdm(o, s, e, pix, acc) };
+    return ow_rdm_args_n(o, s, id, i, pix, a1);
 }
 
-Str ow_rd_args_n(OFn o, OS s, Int id, Int i, Int p, Str acc) { return ow_rd_args(o, s, id, i + 1, p, acc); }
+Map(Int, Str) ow_rdm_args_n(OFn o, OS s, Int id, Int i, Map(Int, Int) pix, Map(Int, Str) acc) { return ow_rdm_args(o, s, id, i + 1, pix, acc); }
 
 Str ow_rd_add(Str acc, Str f) { return if (acc == "*" || str_contains(acc, "," + f + ",")) { acc } else { acc + f + "," }; }
 
@@ -1695,27 +1711,18 @@ Str ow_rd_merge_at_n(Str a, List(Str) fs, Int i) { return ow_rd_merge_at(a, fs, 
 // may be written; "*" for everything. A callee's writes decide which
 // aliases of an argument it can disturb.
 
-Map(Str, Str) ow_writes_all(List(OFn) rs, OS s, Int i, Map(Str, Str) acc) {
-    if (i >= rs.len()) { return acc; }
-    OFn o = rs[i];
-    List(Int) ps = ow_param_ids(o.x.g, o.x.fnode, 0, ListBuf());
-    return ow_writes_all_n(rs, s, i, ow_writes_ps(o, s, ps, 0, acc));
-}
-
-Map(Str, Str) ow_writes_all_n(List(OFn) rs, OS s, Int i, Map(Str, Str) acc) { return ow_writes_all(rs, s, i + 1, acc); }
-
-Map(Str, Str) ow_writes_ps(OFn o, OS s, List(Int) ps, Int i, Map(Str, Str) acc) {
+Map(Int, Str) ow_writes_ps(OFn o, OS s, List(Int) ps, Int i, Map(Int, Str) acc) {
     if (i >= ps.len()) { return acc; }
     Str w = ow_wr_evs(o, s, ps[i], 0, ",");
-    return ow_writes_ps_n(o, s, ps, i, if (w == ",") { acc } else { acc.insert(o.x.fname + f"#{i}", w) });
+    return ow_writes_ps_n(o, s, ps, i, if (w == ",") { acc } else { acc.insert(ow_fk(o.x, o.x.fname, i), w) });
 }
 
-Map(Str, Str) ow_writes_ps_n(OFn o, OS s, List(Int) ps, Int i, Map(Str, Str) acc) { return ow_writes_ps(o, s, ps, i + 1, acc); }
+Map(Int, Str) ow_writes_ps_n(OFn o, OS s, List(Int) ps, Int i, Map(Int, Str) acc) { return ow_writes_ps(o, s, ps, i + 1, acc); }
 
 Str ow_wr_evs(OFn o, OS s, Int p, Int i, Str acc) {
     if (i >= o.f.ev.len() || acc == "*") { return acc; }
     OEv e = o.f.ev[i];
-    Str a1 = if (e.b != p) { acc } else { if (e.path == "") { if (e.kind == "arg") { ow_rd_merge(acc, s.writes.get(e.cal + f"#{e.arg}") else { "," }) } else { ow_rd_add(acc, "^") } } else { ow_rd_add(acc, str_slice(e.path, 1, ow_name_end(e.path, 1))) } };
+    Str a1 = if (e.b != p) { acc } else { if (e.path == "") { if (e.kind == "arg") { ow_rd_merge(acc, s.writes.get(ow_fk(o.x, e.cal, e.arg)) else { "," }) } else { ow_rd_add(acc, "^") } } else { ow_rd_add(acc, str_slice(e.path, 1, ow_name_end(e.path, 1))) } };
     return ow_wr_evs_n(o, s, p, i, a1);
 }
 
@@ -1759,10 +1766,10 @@ pub Str own_report(Kg g, Int unit, Funcs fs) { return own_report_m(g, unit, fs, 
 pub Str own_report_m(Kg g, Int unit, Funcs fs, Int mode) {
     if (mode == 0) { return "own-none\n"; }
     List(Int) fns = ow_fns(g, unit, 0, ListBuf());
-    OS s0 = ow_init(g, fs, fns, 0, OS {.need = ow_nosm(), .pown = ow_nosm(), .fresh = ow_nosm(), .keeps = ow_nosm(), .reads = ow_noss(), .writes = ow_noss()});
     Map(Str, Int) st0 = {};
     Map(Str, Str) ft0 = {};
-    OT ot = ow_types(fs, 0, OT {.sts = st0, .fty = ft0});
+    OT ot = ow_types(fs, 0, OT {.sts = st0, .fty = ft0, .fidx = ow_fidx(fs, 0, ow_nosm())});
+    OS s0 = ow_init(g, fs, ot, fns, 0, OS {.need = ow_noim(), .pown = ow_noim(), .fresh = ow_noim(), .keeps = ow_noim(), .reads = ow_nois(), .writes = ow_nois()});
     List(OPre) prs = ow_preps(g, fs, ot, fns, 0, ListBuf());
     if (mode == 1) { return f"own-prep {prs.len()}\n"; }
     Map(Str, List(Int)) cl0 = {};
@@ -1773,8 +1780,9 @@ pub Str own_report_m(Kg g, Int unit, Funcs fs, Int mode) {
     Map(Int, Int) alld = ow_all_idx(prs.len(), 0, ow_noim());
     // One phase: pown falls only after the sweeps settle the summaries, so
     // no call site is judged against unsettled field summaries.
-    OGS ga = OGS {.s = s0, .sums = [], .dirty = alld, .work = 0};
-    OGS gb = ow_sweeps(g, fs, prs, callers, idx, order, true, OGS {.s = s0, .sums = ow_nofs_list(prs.len(), 0, ListBuf()), .dirty = alld, .work = 0}, 0);
+    Map(Int, OFS) none = {};
+    OGS ga = OGS {.s = s0, .sums = none, .dirty = alld, .work = 0};
+    OGS gb = ow_sweeps(g, fs, prs, callers, idx, order, true, OGS {.s = s0, .sums = none, .dirty = alld, .work = 0}, 0);
     OIS a = OIS {.s = ga.s, .sums = ga.sums, .rounds = 0, .work = ga.work};
     OIS b = OIS {.s = gb.s, .sums = gb.sums, .rounds = 0, .work = gb.work};
     OS s = b.s;
@@ -1793,7 +1801,7 @@ Str ow_rep_fresh(List(OFn) rs, OS s, Int i, Str sb) {
     Bool tr = ow_trk(o.x, ow_base(o.x.fs, o.x.g.ns[kg_kid(o.x.g, o.x.fnode, 0)].text));
     ORT t = ow_rets(o, s, kg_kid(o.x.g, o.x.fnode, o.x.g.ns[o.x.fnode].nk - 1), ORT {.ok = true, .ents = []});
     Str why = if (!t.ok) { "a return not owned" } else { "returns alias " + str_join(t.ents, " ") };
-    Str sb2 = if (tr && !s.fresh.contains(o.x.fname)) { str_sb_append(sb, "own-stale " + o.x.fname + " " + why + "\n") } else { sb };
+    Str sb2 = if (tr && !s.fresh.contains(ow_fi(o.x, o.x.fname))) { str_sb_append(sb, "own-stale " + o.x.fname + " " + why + "\n") } else { sb };
     return ow_rep_fresh_n(rs, s, i, sb2);
 }
 
