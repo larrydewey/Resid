@@ -1,10 +1,10 @@
 # A Resid GUI Library — Implementation Plan
 
-**Status: G0-G2 and G4-G8 DONE; G3's performance gate NOT MET** (updated
+**Status: G0-G8 DONE** (updated
 2026-10-16). `../resid-gui` runs on Wayland and X11 with every v1 widget,
 TrueType text, images, damage tracking and HiDPI; its suite (45 files)
-is green. What is left is the 4 ms full-frame gate (§4.1, numbers in §7.1)
-and running G2 against Xephyr, Xnest or Xfbdev (it ran against the fake
+is green, and a full 1080p frame takes 1.9 to 2.1 ms against the 4 ms gate
+(§4.1, numbers in §7.1). What is left is running G2 against Xephyr, Xnest or Xfbdev (it ran against the fake
 server and Xwayland). Wayland, v2 below, shipped too. §2 records what G1
 shipped. Read `AGENTS.md`, `PLAN-native-modules.md`, spec §45 (builders), §46
 (vectors), §47 (native modules), and
@@ -325,10 +325,10 @@ Each phase ends with its tests green, documentation, and a commit.
 |---|---|---|
 | Phase | Work | Exit criterion | Status |
 |---|---|---|---|
-| G0 | Spikes: shm copy cost at 1080p; pure-Resid span fill throughput with `Vec`; one stb_truetype build passing E0237; the stack cost of a 16 MiB fixed argument on the main thread and in a `spawn` region | numbers recorded in this file; rasterizer gate decided | **DONE**: §7.1. The gate needs a bulk span write (§4.1's fallback), not decided yet |
+| G0 | Spikes: shm copy cost at 1080p; pure-Resid span fill throughput with `Vec`; one stb_truetype build passing E0237; the stack cost of a 16 MiB fixed argument on the main thread and in a `spawn` region | numbers recorded in this file; rasterizer gate decided | **DONE**: §7.1. The bulk span write §4.1 foresaw is the list methods `xs.fill(from, n, x)` and `xs.grow(n, x)` (spec §17) |
 | G1 | see §2, which records what shipped | `tests/runtime` and conformance green | **DONE** (2026-10-13) |
 | G2 | §3: X11 setup handshake and auth, wire codec, MIT-SHM, connection state, fake server | a solid-color window in the fake server and against Xephyr/Xnest/Xfbdev | **DONE** against the fake server and Xwayland (MIT-SHM, `MIT-MAGIC-COOKIE-1`); Xephyr, Xnest and Xfbdev not tried |
-| G3 | §4: Canvas, display lists, golden-image tests (PNG via a tiny pure-Resid encoder, compared by SHA-256), performance gate | goldens stable; 1080p frame ≤ 4 ms | goldens stable; **gate NOT MET**: a full 1080p frame is 20 ms (§7.1); an ordinary frame redraws its damage in microseconds |
+| G3 | §4: Canvas, display lists, golden-image tests (PNG via a tiny pure-Resid encoder, compared by SHA-256), performance gate | goldens stable; 1080p frame ≤ 4 ms | **DONE**: goldens stable; a full 1080p frame is 1.9 to 2.1 ms (§7.1) against the 4 ms gate; an ordinary frame redraws its damage in microseconds |
 | G4 | §5.1, §5.5: font package, atlas, text layout, bitmap fallback | text goldens; malicious-font fuzz yields `Err` | **DONE**: `../resid-gui/tests/evil.sh` (10 attacks, each an `Err`; 7 lying answers refused), `native/fuzz/run.sh` |
 | G5 | §6: App behavior, widgets, layout, input, focus, event loop | counter and todo examples run against a real X server with scripted input | **DONE** (Xwayland, XTEST input; Hyprland with a virtual pointer and `wtype`) |
 | G6 | §5.2: image package | image viewer example; fuzz | **DONE** (`examples/image_viewer.resid`; fuzzed) |
@@ -344,19 +344,33 @@ AMD Ryzen AI 7 PRO 350, Linux 7.2, 2026-10-16; `../resid-gui/bench/`.
 | Copying a 1920x1080 frame into shared memory | 15.7 ms with `resid_disp_shm_put` (a list element per byte); 2.2 ms with `resid_disp_shm_put32` (an element per pixel) |
 | Pure-Resid span fill, one `with` per pixel into a canvas the compiler proved owned | about 4.3 ns a pixel: 8.7 to 9.7 ms for a whole 1080p frame |
 | Building a 1080p canvas (`ListBuf` push per pixel) | 8.3 to 8.9 ms |
+| Building a 1080p canvas with `xs.grow(n, x)` (spec §17) | 0.3 to 0.8 ms (16 MB of slots written by 8 KiB copies) |
+| A full-frame fill, one `xs.fill(from, n, x)` per row into an owned canvas | about 0.3 ms; the 736 ops' fills (118% of a frame's area) 0.6 ms on top of the canvas |
 | stb_truetype and stb_image, built freestanding | both pass E0237 unmodified (`native/build.sh`) |
 | A 16 MiB fixed argument | fine on the main thread (1 GiB stack); faulted in a `spawn` region on the old 8 MiB worker stack; a region that decodes an image needs about 112 MB, so workers now reserve 256 MB (`RESID_SPAWN_STACK_MB`) |
-| A whole 1920x1080 frame of 736 draw ops (45 rows of controls) | 65.3 ms with a byte per list element; 20.1 ms with a word per pixel (paint 0.1, rasterize 17.7, upload 2.2) |
+| A whole 1920x1080 frame of 736 draw ops (45 rows of controls) | 65.3 ms with a byte per list element; 20.1 ms with a word per pixel (paint 0.1, rasterize 17.7, upload 2.2); 5.1 ms with `grow` and `fill` (paint 0.0, rasterize 4.5, upload 0.5); 1.9 to 2.1 ms with the font table built once per string (paint 0.0, rasterize 1.3 to 1.5, upload 0.5) |
 | A caret blink | 1 to 2 µs, one 1x16 rectangle |
 | Idle | 0 CPU ticks in 10 s (counter), 1 (todo) |
 
-The rasterizer's cost is per list element, not per byte of work: `Vec`
+The rasterizer's cost was per list element, not per byte of work: `Vec`
 lanes cannot be stored into a list (§46: a vector cannot appear inside a
-List), so a span is still one `with` per pixel. Meeting the gate needs a
-bulk write, as §4.1 foresaw: a list method that fills `n` elements from
-`i` with one value under the same ownership proof as `with`, and one
-that builds a list of `n` copies of a value. Either is a language
-addition (spec §17) and is not decided.
+List), so a span was one `with` per pixel. The bulk write §4.1 foresaw is
+now two list methods (spec §17): `xs.fill(from, n, x)` replaces a run in
+place under the same ownership proof as `with`, and `xs.grow(n, x)`
+appends `n` copies, so `canvas_new`, `canvas_filled` and `fill_rows` in
+`../resid-gui/src/gfx/canvas.resid` cost a store per pixel. That took the
+full frame from 20.1 ms to 5.1 ms. Of the 4.5 ms rasterization left, fills
+were 0.6 ms and the canvas 0.3 ms; text was 4.0 ms for 1150 characters of
+the built-in font, because `glyph_row` (`src/gfx/font.resid`) rebuilt the
+1520-entry `font_data()` list (eight `concat`s) for every glyph row it read,
+about 18,400 times a frame. `render_text_scaled` now builds the table once
+per string and passes it down to `glyph_row_in`, which took the frame to
+1.9 to 2.1 ms (rasterize 1.3 to 1.5) and met the gate with goldens
+unchanged. Writing each run of a glyph row's set bits with one `fill`
+instead of a `with` per pixel measured the same, so the per-pixel writes
+stay. The upload
+measured 0.5 ms in this run, against 2.2 ms before; nothing in it changed,
+so take the range as 0.5 to 2.2 ms.
 
 ## 8. Out of scope for v1 (and why)
 

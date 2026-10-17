@@ -617,11 +617,13 @@ EkE ek_mcall(EkC c, Int id, EkT t) {
     EkA b = if (av.vs.len() > 0) { av.vs[0] } else { ek_none() };
     EkA a1 = if (av.vs.len() > 1) { av.vs[1] } else { ek_none() };
     // Moving bytes keeps them: concatenation, pushing onto a builder, its
-    // finish, `with`.
+    // finish, `with`, `fill` and `grow`.
     if (m == "concat" && av.vs.len() == 2) { return eke(ek_cat(ek_touch(b), ek_touch(a1), av.t), av.t); }
     if (m == "push" && av.vs.len() == 2) { return eke(ek_nonempty(ek_cat(ek_touch(b), ek_touch(a1), av.t)), av.t); }
     if (m == "finish" || m == "freeze") { return eke(b, av.t); }
     if (m == "with" && av.vs.len() == 3) { return eke(ek_nonempty(ek_cat(ek_touch(b), ek_touch(av.vs[2]), av.t)), av.t); }
+    if (m == "fill" && av.vs.len() == 4) { return eke(ek_nonempty(ek_cat(ek_touch(b), ek_touch(av.vs[3]), av.t)), av.t); }
+    if (m == "grow" && av.vs.len() == 3) { return eke(ek_nonempty(ek_cat(ek_touch(b), ek_touch(av.vs[2]), av.t)), av.t); }
     return eke(ek_none(), av.t);
 }
 

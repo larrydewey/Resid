@@ -2667,6 +2667,8 @@ GKM gk_mcall_r(GK k0, Int id, Str exp) {
     }
     // xs.with(i, x): xs with element i replaced (spec §17, §44.3).
     if (m == "with" && str_has_prefix(bt, "List(")) { return gkm(gk_list_with(k, id, bt, na), true); }
+    // xs.fill(from, n, x) and xs.grow(n, x): a run of one value (spec §17).
+    if ((m == "fill" || m == "grow") && str_has_prefix(bt, "List(")) { return gkm(gk_list_run(k, id, bt, m, na), true); }
     if (m == "concat") {
         if (!str_has_prefix(bt, "List(") || is_list_fixed(bt)) { return gkm(gterr(k, ".concat() joins two lists, got " + bt + "; use + for text", id), false); }
         GKT a = gk_marg_as(k, id, 0, bt);
@@ -2711,6 +2713,33 @@ GKT gk_list_with(GK k, Int id, Str bt, Int na) {
     if (x.err != "") { return x; }
     if (!ty_same(x.ty, et)) { return gterr(x.k, ".with value mismatch: list has element " + et + ", found " + x.ty, id); }
     return gt(x.k, bt, id);
+}
+
+// xs.fill(from, n, x) (n elements from `from` replaced by x) and
+// xs.grow(n, x) (n copies of x appended): heap lists of integers up to 64
+// bits, Float, Bool or Str, the elements the runtime stores one word each.
+GKT gk_list_run(GK k, Int id, Str bt, Str m, Int na) {
+    Int want = if (m == "fill") { 3 } else { 2 };
+    Str sig = if (m == "fill") { ".fill(from, n, x)" } else { ".grow(n, x)" };
+    if (na != want) { return gterr(k, sig + f" takes {want} arguments", id); }
+    if (is_list_fixed(bt)) { return gterr(k, sig + " needs a heap list, got " + bt, id); }
+    Str et = str_slice(bt, 5, str_len(bt) - 1);
+    if (!gk_run_elem(et)) { return gterr(k, sig + " needs a list of integers up to 64 bits, Float, Bool or Str, got " + bt, id); }
+    GKT a = gk_expr(k, gk_kid(k, id, 1), "Int");
+    if (a.err != "") { return a; }
+    if (!is_int_ty(a.ty)) { return gterr(a.k, "." + m + " count and index must be integers, got " + a.ty, id); }
+    GKT b = if (want == 3) { gk_expr(a.k, gk_kid(k, id, 2), "Int") } else { a };
+    if (b.err != "") { return b; }
+    if (!is_int_ty(b.ty)) { return gterr(b.k, "." + m + " count and index must be integers, got " + b.ty, id); }
+    GKT x = gk_marg_as(b.k, id, want - 1, et);
+    if (x.err != "") { return x; }
+    if (!ty_same(x.ty, et)) { return gterr(x.k, "." + m + " value mismatch: list has element " + et + ", found " + x.ty, id); }
+    return gt(x.k, bt, id);
+}
+
+Bool gk_run_elem(Str et) {
+    Str t = num_norm(et);
+    return list_rep(et) != "" || t == "Bool" || str_has_prefix(t, "Float(");
 }
 
 // List verbs, by element representation: a word (integers up to 64 bits),
