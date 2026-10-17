@@ -1,0 +1,15 @@
+// The stride loop of a versioned loop (W3) overflowing: k + i past the
+// largest Int aborts as in the checked loop (the guard's range condition
+// on size + i fails, so the checks stay).
+List(Bool) clear(List(Bool) flags, Int k, Int i, Int size) {
+    if (k > size) { return flags; }
+    return clear(flags.with(k - 1, false), k + i, i, size);
+}
+
+Int main() {
+    List(Bool) fs = [true, true, true];
+    println("start");
+    List(Bool) r = clear(fs, 1, rt 9223372036854775807, 9223372036854775807);
+    println(f"{r[0]}");
+    return 0;
+}

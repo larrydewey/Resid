@@ -1,0 +1,59 @@
+// A record copied out of an inline list stays valid wherever it goes:
+// returned, stored in a map or an Option, captured, passed to a tail
+// call, rewritten in place by a borrowed write-back.
+type Pq = { Int x; Int y; };
+
+Pq ident(Pq p) { return p; }
+Pq moved(Pq p) { return Pq {.x = p.x + 1, .y = p.y}; }
+Int sumxy(Pq p) { return p.x + p.y; }
+Int deep(Pq p, Int n) { return if (n == 0) { sumxy(p) } else { deep(p, n - 1) }; }
+Int tailp(Pq p, Int n) { if (n == 0) { return p.x; } return tailp(p, n - 1); }
+List(Pq) keep(Pq p) { return [p, p]; }
+Map(Str, Pq) stash(Map(Str, Pq) m, Pq p) { return m.insert("k", p); }
+Option(Pq) wrap(Pq p) { return Some(p); }
+
+Pq pick(List(Pq) ps, Int i) {
+    Pq a = ps[i];
+    return a;
+}
+
+Int closure_use(List(Pq) ps) {
+    Pq a = ps[0];
+    Int closure(Int) f = lambda(k) { a.x + k };
+    return f(1);
+}
+
+List(Pq) bump_all(List(Pq) ps, Int i) {
+    if (i >= ps.len()) { return ps; }
+    Pq a = ps[i];
+    Pq b = moved(a);
+    return bump_all(ps.with(i, b), i + 1);
+}
+
+Int main() {
+    List(Pq) ps = [Pq {.x = 1, .y = 2}, Pq {.x = 3, .y = 4}, Pq {.x = 5, .y = 6}];
+    Pq r = pick(ps, 1);
+    Pq i1 = ident(ps[2]);
+    Pq m1 = moved(ps[0]);
+    println(f"{r.x} {i1.x} {m1.x} {sumxy(ps[1])} {deep(ps[2], 3)} {tailp(ps[1], 5)}");
+    List(Pq) k = keep(ps[0]);
+    Map(Str, Pq) mm = {};
+    Map(Str, Pq) m2 = stash(mm, ps[1]);
+    Pq got = m2.get("k") else { Pq {.x = 0, .y = 0} };
+    Option(Pq) op = wrap(ps[2]);
+    Pq ov = op else { Pq {.x = 0, .y = 0} };
+    println(f"{k[1].y} {got.y} {ov.y} {closure_use(ps)}");
+    List(Pq) q = bump_all(ps, 0);
+    println(f"{q} {ps}");
+    for (Pq e in ps) {
+        Map(Str, Pq) m3 = stash(mm, e);
+        Pq g3 = m3.get("k") else { e };
+        println(f"{g3.x + e.y}");
+    }
+    List(Pq) acc = [];
+    List(Pq) ac2 = acc.concat([ps[0]]).concat([ident(ps[1])]);
+    Pq lit = Pq {.x = 9, .y = 8};
+    List(Pq) withlit = ps.with(1, lit).with(2, Pq {.x = 7, .y = 7});
+    println(f"{ac2} {withlit} {lit.x}");
+    return 0;
+}

@@ -20,7 +20,7 @@
 // ─── Composite boxes ───────────────────────────────────────────────────
 
 Int box_hdr(Int tag, Int count, Int ty) {
-    Int n = if (count > 0) { count } else { 0 };
+    Int n = if (count > 0) { count & 65535 } else { 0 };
     Int v = ralloc(16 + n * 8);
     _ = st32(v, tag);
     _ = st32(v + 4, count);
@@ -67,10 +67,18 @@ pub Int ltype(Int l) { return ld64(l + 24); }
 
 // A type word below 8 is a raw slot kind (typed storage, W1): the
 // slots hold the values themselves, 1 an integer of at most 64 bits, 2 a
-// Float's bits, 3 a Bool (0/1). Any other word (a type string, or 0 while
-// unknown) means tagged words: immediates, boxes and pointers.
-pub Bool raw_kind(Int t) { return ult(t - 1, 7); }
+// Float's bits, 3 a Bool (0/1). A word in [16, 80) is a list of inline
+// records of w = t - 16 words each: a record header (rec_hdr, unique) and
+// the fields after it. Its count is in words and it is always flat, so an
+// element's words are contiguous; a pointer to one is its fields. Any other
+// word (a type string, or 0 while unknown) means tagged words: immediates,
+// boxes and pointers.
+pub Bool raw_kind(Int t) { return ult(t - 1, 7) || ult(t - 16, 64); }
 pub Bool lraw(Int l) { return raw_kind(ltype(l)); }
+pub Int rec_words(Int t) { return if (ult(t - 16, 64)) { t - 16 } else { 0 }; }
+// The header of an inline record of w words: unique, so a borrowed
+// element is rewritten in place (resid_list_rec_borrow).
+pub Int rec_hdr(Int w) { return rec_tag() | ((w - 1) * 16) | 1; }
 
 // The type of a list made from a and b: an empty list's kind may be
 // unknown (`[]` without a type), so the other one's is taken.
@@ -100,6 +108,31 @@ pub Int rt_list_rawify(Int l, Int k) {
     _ = raw_fill(items, 0, n, k);
     Int out = rt_list_new(n, items, k);
     return c_free(items) * 0 + out;
+}
+
+// A list of record pointers the runtime made (map values) as inline
+// records of w words.
+@export("resid_list_inline", "ptr(ptr,i64)")
+pub Int rt_list_inline(Int l, Int w) {
+    if (l == 0 || rec_words(ltype(l)) > 0) { return l; }
+    Int n = lcount(l);
+    if (n == 0) { return set_list(list_hdr(), 0, 0, 0, 16 + w); }
+    Int words = xmalloc(n * w * 8);
+    _ = inline_fill(l, words, w, 0, n);
+    Int out = rt_list_new(n * w, words, 16 + w);
+    return c_free(words) * 0 + out;
+}
+
+Int inline_fill(Int l, Int d, Int w, Int i, Int n) {
+    if (i >= n) { return 0; }
+    _ = rec_put(d + i * w * 8, list_at(l, i), w);
+    return inline_fill(l, d, w, i + 1, n);
+}
+
+// An element's w words at d: the header, then the fields at r.
+pub Int rec_put(Int d, Int r, Int w) {
+    _ = st64(d, rec_hdr(w));
+    return mcopy(d + 8, r, (w - 1) * 8);
 }
 
 // b with a's slot representation, so a concatenation never mixes raw and
@@ -208,7 +241,7 @@ Int append_core(Int into, Int v, Int elems, Int m) {
         // the buffer's region (flat_move in map.resid).
         Bool tip = f != 0 && !ltransient(v) && n + m <= ld64(f + 8) && resid_raw_cas(f, n, n + m);
         if (tip) { return flat_fill(into, v, f, f, n, elems, m); }
-        if (f == 0 || ld64(f) == n || n <= 64) {
+        if (f == 0 || ld64(f) == n || n <= 64 || rec_words(ltype(v)) > 0) {
             // Empty, full tip, or a small branch: copy, doubling so a run of
             // appends stays amortized O(1); a fresh build is exact-size.
             Int dst = flat_new(if (f != 0) { (n + m) * 2 } else { n + m });
@@ -334,7 +367,7 @@ pub Int rt_list_get_own(Int l, Int i) {
 // Every header record of a list shared: its elements got a second holder
 // (a slice, a list appended into a transient).
 @export("resid_list_share_f", "ptr(ptr)")
-pub Int rt_list_share_f(Int l) { return share_elems(l, 0, lcount(l)) * 0 + l; }
+pub Int rt_list_share_f(Int l) { return if (lraw(l)) { l } else { share_elems(l, 0, lcount(l)) * 0 + l }; }
 
 Int share_elems(Int l, Int i, Int n) {
     if (i >= n) { return 0; }
@@ -406,6 +439,49 @@ pub Int rt_list_push_k(Int a, Int elem, Int k) {
     return if (lcount(a) == 0) { st64(out + 24, k) * 0 + out } else { out };
 }
 
+// Element i of a list of inline records of w words: a pointer to its
+// fields (an index out of range aborts with the element count). The
+// count divides as the compiler's `len()` does, so a loop bounded by the
+// length drops the check.
+@export("resid_list_rec_at", "ptr(ptr,i64,i64)")
+@inline
+pub Int rt_list_rec_at(Int l, Int i, Int w) {
+    Int n = lcount(l) / w;
+    if (ult(i, n)) { return lroot(l) + 32 + i * w * 8; }
+    return rt_index_abort(i, n, 0);
+}
+
+// A borrowed element (lo_borrows: written back at the same index before
+// any other use of the list, and only read until then): its own fields
+// when the list is transient, whose unique header lets a literal rewrite
+// it in place; else a copy in `frame` (a frame record of the caller's).
+@export("resid_list_rec_borrow", "ptr(ptr,i64,i64,ptr)")
+@inline
+pub Int rt_list_rec_borrow(Int l, Int i, Int w, Int frame) {
+    Int p = rt_list_rec_at(l, i, w);
+    if (ltransient(l)) { return p; }
+    _ = st64(frame - 8, rec_hdr(w));
+    return mcopy(frame, p, (w - 1) * 8) * 0 + frame;
+}
+
+// xs.concat([r]) for inline records: r's fields appended as an element.
+@export("resid_list_push_rec", "ptr(ptr,ptr,i64)")
+pub Int rt_list_push_rec(Int a, Int r, Int w) {
+    Int one = resid_raw_tls("rec_one", 512);
+    _ = rec_put(one, r, w);
+    Int out = pvec_append_into(0, a, one, w);
+    return if (lcount(a) == 0) { st64(out + 24, 16 + w) * 0 + out } else { out };
+}
+
+// xs[lo..hi] of inline records: clamped in elements, copied in words.
+@export("resid_list_slice_rec", "ptr(ptr,i64,i64,i64)")
+pub Int rt_list_slice_rec(Int l, Int lo0, Int hi0, Int s) {
+    Int lo = max(lo0, 0);
+    Int hi = min(hi0, lcount(l) / s);
+    if (hi <= lo) { return set_list(list_hdr(), 0, 0, 0, ltype(l)); }
+    return rt_list_new((hi - lo) * s, lroot(l) + 24 + lo * s * 8, ltype(l));
+}
+
 // ─── ListBuf(T) (spec §45): appended in place; the checker keeps each
 // builder value used once. ────────────────────────────────────────────
 
@@ -424,6 +500,24 @@ pub Int rt_listbuf_push(Int l, Int elem) {
     _ = st64(f + 24 + n * 8, elem);
     _ = st64(l, n + 1);
     return st64(f, n + 1) * 0 + l;
+}
+
+// An inline record of w words pushed (the builder's slots are words).
+@export("resid_listbuf_push_rec", "ptr(ptr,ptr,i64)")
+pub Int rt_listbuf_push_rec(Int l, Int r, Int w) {
+    Int n = lcount(l);
+    Int f0 = lroot(l);
+    Int f = if (f0 == 0 || n + w > ld64(f0 + 8)) { lb_grow_to(l, f0, n, n + w) } else { f0 };
+    _ = rec_put(f + 24 + n * 8, r, w);
+    _ = st64(l, n + w);
+    return st64(f, n + w) * 0 + l;
+}
+
+@cold
+Int lb_grow_to(Int l, Int f, Int n, Int need) {
+    Int nf = flat_new(max(need, n * 2));
+    _ = if (n > 0) { mcopy(nf + 24, f + 24, n * 8) } else { 0 };
+    return st64(l + 16, nf) * 0 + nf;
 }
 
 @cold
@@ -591,7 +685,7 @@ pub Int rt_list_free(Int l) {
 Int free_slots(Int v, Int i, Int n, Bool deep) {
     if (i >= n) { return 0; }
     Int s = ld64(v + 16 + i * 8);
-    _ = if (s != 0 && c_box_interned(s) == 0) { c_free(s) } else { 0 };
+    _ = if (s != 0 && box_rawk(v, i) == 0 && c_box_interned(s) == 0) { c_free(s) } else { 0 };
     return free_slots(v, i + 1, n, deep);
 }
 

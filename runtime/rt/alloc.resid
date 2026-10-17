@@ -387,7 +387,7 @@ pub Int rt_in_arenas_x(Int p) { return rt_arena_contains_x(p); }
 // while the compiler's ownership analysis proved one referrer; a returned
 // literal may then take over a dead unique record (resid_rec_reuse).
 
-Int rec_tag() { return 1380303070 << 32; }   // 0x5245C0DE
+pub Int rec_tag() { return 1380303070 << 32; }   // 0x5245C0DE
 
 @export("resid_rec_new", "ptr(i64,i8)")
 pub Int rt_rec_new(Int size, Int unique) {
