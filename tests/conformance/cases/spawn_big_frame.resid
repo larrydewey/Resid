@@ -1,0 +1,19 @@
+// A spawn region runs on a thread stack large enough for big
+// fixed-capacity values (§19, §44): here a 16 MB Bytes, built in the region
+// and passed by value twice, as a native module's argument would be. On an
+// 8 MB stack this faulted the process.
+Int peek(Bytes(16777216) b, Int i) { return b[i]; }
+
+Int relay(Bytes(16777216) b) { return peek(b, 0) + peek(b, 16777215); }
+
+Int main() {
+    Int v = rt 7;
+    Result(Int, RegionError) r = spawn () {
+        BytesBuf(16777216) bb = BytesBuf();
+        Bytes(16777216) b = bb.push(v).push(v + 1).finish();
+        return relay(b) + peek(b, 1);
+    };
+    Int got = r else { 0 - 1 };
+    println(f"{got}");
+    return 0;
+}

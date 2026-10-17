@@ -1378,6 +1378,7 @@ GT lw_mcall(LW w, Int id, List(Str) env, GT c) {
     if (m == "len") { return lw_rt1(base, "i64", "@resid_list_len(ptr " + base.val + ")", "Int"); }
     if (m == "with" && is_list_fixed(base.ty)) { return lw_fixed_with(w, id, base, env); }
     if (m == "with" && str_has_prefix_cg(strip_owned_cg(base.ty), "List(")) { return lw_list_with(w, id, base, env); }
+    if ((m == "fill" || m == "grow") && str_has_prefix_cg(strip_owned_cg(base.ty), "List(")) { return lw_list_run(w, id, base, m, env); }
     Bool crec = m == "concat" && lst_rec(w.fs, elem_type(strip_owned_cg(base.ty))) > 0;
     if (m == "concat" && lo_is(w, id, 1) && (lw_list_keepable(elem_type(strip_owned_cg(base.ty))) || crec)) {
         GT oarg = lw_marg_as(w, id, 0, base.ty, env, base);
@@ -4579,6 +4580,43 @@ GT lw_list_with(LW w, Int id, GT base, List(Str) env) {
     return GT {.pos = 0, .val = reg, .ty = base.ty, .cnt = 0, .err = "", .glines = xv.glines, .lines = ls, .tmp = t2, .lbl = xv.lbl, .tail = false};
 }
 
+// xs.fill(from, n, x) and xs.grow(n, x) (spec §17): one value stored n
+// times by resid_list_fill(_w) / resid_list_grow(_w), the value's slot
+// word for raw slots (W1), else its boxed word. A fill is in place when
+// the update is owned (as lw_list_with); a grow always makes a new buffer.
+// gk_list_run admits only element types the runtime can move.
+GT lw_list_run(LW w, Int id, GT base, Str m, List(Str) env) {
+    Str ety = elem_type(strip_owned_cg(base.ty));
+    Bool fill = m == "fill";
+    GT a = lw_run_int(w, lw_kid(w, id, 1), env, base);
+    if (a.err != "") { return a; }
+    GT b = if (fill) { lw_run_int(w, lw_kid(w, id, 2), env, a) } else { a };
+    if (b.err != "") { return b; }
+    GT xv = lw_expr_as(w, lw_kid(w, id, if (fill) { 3 } else { 2 }), ety, env, b);
+    if (xv.err != "") { return xv; }
+    Int tb = xv.tmp + 1;
+    Int t2 = tb + 3;
+    Str reg = f"%t{t2}";
+    Int rk = lst_raw(ety);
+    Bool w64 = rk == 1 && ll_width_of(ety) == 64;
+    List(Str) vl = if (rk > 0) { if (w64) { [] } else { lst_word_lines(ety, xv.val, tb) } } else { lst_box_lines(ety, xv.val, tb) };
+    Str wv = if (rk > 0) { if (w64) { "i64 " + xv.val } else { f"i64 %t{tb}w" } } else { "ptr " + (if (vl.len() > 0) { f"%t{tb}" } else { xv.val }) };
+    Str sfx = if (rk > 0) { "_w" } else { "" };
+    Str own = if (lo_is(w, id, 1) && lw_list_keepable(ety)) { "1" } else { "0" };
+    Str fc = "@resid_list_fill" + sfx + "(ptr " + base.val + ", i8 " + own + ", i64 " + a.val + ", i64 " + b.val + ", " + wv + ")";
+    Str gc = "@resid_list_grow" + sfx + "(ptr " + base.val + ", i64 " + a.val + ", " + wv + f", i64 {rk})";
+    Str call = if (fill) { fc } else { gc };
+    List(Str) ls = xv.lines.concat(vl).concat([reg + " = call ptr " + call]);
+    return GT {.pos = 0, .val = reg, .ty = base.ty, .cnt = 0, .err = "", .glines = xv.glines, .lines = ls, .tmp = t2, .lbl = xv.lbl, .tail = false};
+}
+
+// An integer argument as an i64.
+GT lw_run_int(LW w, Int n, List(Str) env, GT c) {
+    GT v = lw_expr(w, n, env, c);
+    if (v.err != "") { return v; }
+    return pick_widen(num_norm_cg(v.ty) != "Int(64)", v, "Int(64)");
+}
+
 // The unboxed update entry for a scalar element type: "i64" (an integer
 // of at most 64 bits), "bool", "f64" (Float), else "".
 Str lw_with_scalar(Str ety) {
@@ -5195,7 +5233,7 @@ Bool lr_call_allocs(LW w, Str f, Str l) {
     // An owned list update writes in place (its first copy is moved out of
     // the region at the back edge like any carried list); a freeze writes
     // nothing.
-    if (f == "resid_list_with" || f == "resid_list_with_f" || f == "resid_list_with_fh" || f == "resid_list_with_fb" || f == "resid_list_with_i64" || f == "resid_list_with_bool" || f == "resid_list_with_f64" || f == "resid_list_set_w" || f == "resid_list_concat_own" || f == "resid_list_concat_own_f" || f == "resid_list_concat_own_fh") { return !str_contains(l, ", i8 1,"); }
+    if (f == "resid_list_with" || f == "resid_list_with_f" || f == "resid_list_with_fh" || f == "resid_list_with_fb" || f == "resid_list_with_i64" || f == "resid_list_with_bool" || f == "resid_list_with_f64" || f == "resid_list_set_w" || f == "resid_list_fill" || f == "resid_list_fill_w" || f == "resid_list_concat_own" || f == "resid_list_concat_own_f" || f == "resid_list_concat_own_fh") { return !str_contains(l, ", i8 1,"); }
     if (f == "resid_list_freeze") { return false; }
     // Appending a scalar to a list builds what the loop carries on (moved
     // out at the back edge anyway), not garbage.
@@ -7044,8 +7082,9 @@ Bool lo_rd_kids_upto(Kg g, Int id, Int i, Int n, LV lov, LOP lop) {
     return lo_rd_kids_upto(g, id, i + 1, n, lov, lop);
 }
 
-// A consuming update: Map/Set insert and remove, List with and concat.
-Bool lo_step(Str m) { return m == "insert" || m == "remove" || m == "with" || m == "concat"; }
+// A consuming update: Map/Set insert and remove, List with, concat, fill
+// and grow.
+Bool lo_step(Str m) { return m == "insert" || m == "remove" || m == "with" || m == "concat" || m == "fill" || m == "grow"; }
 
 Bool lo_args_after(Kg g, Int c, Int i, LV lov, Bool bare, LOP lop) {
     if (i >= g.ns[c].nk) { return true; }
@@ -8523,10 +8562,10 @@ Bool lo_skip_arg(Kg g, Int c, Int i, LV lov, LOP lop) {
     return !str_contains(us[i], "," + lov.f + ",");
 }
 
-// Whether any node is a `.with` call.
+// Whether any node is a `.with` or `.fill` call.
 Bool lo_uses_with(Kg g, Int i) {
     if (i >= g.ns.len()) { return false; }
-    if (g.ns[i].kind == "mcall" && g.ns[i].text == "with") { return true; }
+    if (g.ns[i].kind == "mcall" && (g.ns[i].text == "with" || g.ns[i].text == "fill")) { return true; }
     return lo_uses_with(g, i + 1);
 }
 

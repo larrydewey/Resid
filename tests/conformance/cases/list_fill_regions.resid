@@ -1,0 +1,22 @@
+// Values a loop iteration allocates (strings, integers beyond the
+// immediate range) and stores with an in-place fill outlive the
+// iteration's region (as list_with_regions for `with`).
+List(Str) tags(List(Str) xs, Int i, Int n) {
+    if (i >= n) { return xs; }
+    Str s = f"v{i}-" + str_repeat("x", i % 5);
+    return tags(xs.fill(i % (xs.len() - 1), 2, s), i + 1, n);
+}
+
+List(Int) bigs(List(Int) xs, Int i, Int n) {
+    if (i >= n) { return xs; }
+    return bigs(xs.fill(i % 2, 2, (i % 50) * 100000000000000000 + 7), i + 1, n);
+}
+
+Int main() {
+    List(Str) e = [];
+    List(Str) t = tags(e.grow(rt 3, ""), 0, 20000);
+    println(f"{t}");
+    List(Int) b = bigs(rt [0, 0, 0], 0, 20001);
+    println(f"{b}");
+    return 0;
+}

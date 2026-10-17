@@ -56,6 +56,30 @@ The index is checked like `xs[i]`. When the old list is never read again
 (here `zs` is, so the first update copies it), the compiler replaces the
 element where it is, as it does for a map's `insert`.
 
+`xs.fill(from, n, x)` replaces the `n` elements from index `from` with `x`,
+and `xs.grow(n, x)` appends `n` copies of `x`. They work on lists of
+integers (up to 64 bits), `Float`, `Bool` and `Str`, and cost one store per
+element, so a run of equal values (a row of pixels, a cleared buffer) needs
+no loop of `with`:
+
+```resid
+Int main() {
+    List(Int) none = [];
+    List(Int) row = none.grow(8, 0);
+    List(Int) mid = row.fill(2, 4, 7);
+    println(f"{row} {mid}");
+    return 0;
+}
+```
+
+```text title="Output"
+[0, 0, 0, 0, 0, 0, 0, 0] [0, 0, 7, 7, 7, 7, 0, 0]
+```
+
+The range is checked: `from + n` past the end, or a negative `from` or
+`n`, aborts like an out-of-range index. A fill is in place when `with`
+would be.
+
 ## Maps
 
 ```resid

@@ -1,0 +1,57 @@
+// xs.fill(from, n, x) and xs.grow(n, x) (spec §17): the old list is
+// unchanged, a fill chained through a loop is in place, element types
+// that are raw words (integers of each width, Float, Bool) and strings,
+// a large list taking the persistent path first, an empty or out-of-the-
+// way run, grow on an empty typed list, and values known at compile time.
+List(UInt(32)) rows(List(UInt(32)) px, Int w, Int y, Int h, UInt(32) v) {
+    if (y >= h) { return px; }
+    return rows(px.fill(y * w + 1, w - 2, v), w, y + 1, h, v + 1);
+}
+
+List(Str) tags(List(Str) xs, Int i, Int n) {
+    if (i >= n) { return xs; }
+    Str s = f"t{i}-" + str_repeat("x", i % 3);
+    return tags(xs.fill(i % (xs.len() - 1), 2, s), i + 1, n);
+}
+
+ListBuf(Int) iota(Int i, Int n, ListBuf(Int) acc) {
+    if (i >= n) { return acc; }
+    return iota(i + 1, n, acc.push(i));
+}
+
+Int sum(List(Int) xs, Int i, Int acc) {
+    if (i >= xs.len()) { return acc; }
+    return sum(xs, i + 1, acc + xs[i]);
+}
+
+Int main() {
+    List(Int) a = [1, 2, 3, 4, 5];
+    List(Int) b = a.fill(1, 3, 0);
+    println(f"{a} {b} {a.fill(0, 0, 9)} {a.fill(5, 0, 9)} {a.fill(0, 5, 7)}");
+    List(UInt(32)) none = [];
+    List(UInt(32)) px = none.grow(rt 4 * 3, (UInt(32))4278190080);
+    List(UInt(32)) px2 = rows(px, 4, 0, 3, 1);
+    println(f"{px2} {px.len()}");
+    List(UInt(8)) bs = [1, 2, 3];
+    println(f"{bs.fill(rt 1, rt 2, 255)} {bs.grow(rt 2, 7)}");
+    List(Int(16)) ns = [5, 6];
+    println(f"{ns.fill(0, 1, (Int(16))-300)} {ns.grow(1, (Int(16))-1)}");
+    List(Float) fl = [1.5, 2.5, 3.5];
+    println(f"{fl.fill(rt 1, 2, 0.25)} {fl.grow(rt 1, -2.0)} {fl}");
+    List(Bool) bl = [true, false];
+    println(f"{bl.fill(rt 0, 2, false)} {bl.grow(rt 3, true)}");
+    List(Str) ss = ["a", "b", "c"];
+    List(Str) t = tags(rt ["", "", ""], 0, 50);
+    List(Str) s2 = ss.fill(rt 1, 1, "z");
+    List(Str) s3 = ss.grow(rt 1, "d");
+    println(f"{t} {s2} {s3} {ss}");
+    List(Int) big = iota(0, rt 1000, ListBuf()).finish();
+    List(Int) big2 = big.with(10, 0).with(20, 0);
+    List(Int) big3 = big2.fill(100, 800, 1);
+    println(f"{sum(big, 0, 0)} {sum(big2, 0, 0)} {sum(big3, 0, 0)} {big3[99]} {big3[100]} {big3[899]} {big3[900]}");
+    List(Int) g = big.grow(rt 24, 3);
+    println(f"{g.len()} {g[999]} {g[1000]} {g[1023]} {sum(g, 0, 0)} {big.len()}");
+    List(Int) e = [];
+    println(f"{e.grow(rt 0, 1)} {e.grow(rt 3, 2)} {e.grow(3, 2).fill(1, 1, 5)}");
+    return 0;
+}

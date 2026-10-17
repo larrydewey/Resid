@@ -1052,6 +1052,24 @@ SV sem_mcall(GXT ft, Str name, Str bv, Str bty, List(Str) vs, List(Str) ts) {
         if (wi < 0 || wi >= items.len() || rd_coerce_v(ts[1], et, vs[1]) == "") { return sv_no(); }
         return sv_scan(rd_enc(items[0..wi].concat([vs[1]]).concat(items[wi + 1..items.len()])), bty, sc);
     }
+    // A run of one value, while the result stays small; a range out of
+    // bounds aborts at run time.
+    if (name == "fill") {
+        if (n != 3 || !rd_is_int_ty(rd_norm_ty(ts[0])) || !rd_is_int_ty(rd_norm_ty(ts[1])) || !rd_small(vs[0]) || !rd_small(vs[1])) { return sv_no(); }
+        List(Str) items = rd_dec(bv);
+        Int fr = rd_atoi(vs[0]);
+        Int fc = rd_atoi(vs[1]);
+        if (fr < 0 || fc < 0 || fc > items.len() - fr || rd_coerce_v(ts[2], et, vs[2]) == "") { return sv_no(); }
+        List(Str) run = gx_copies(vs[2], fc, ListBuf());
+        return sv_scan(rd_enc(items[0..fr].concat(run).concat(items[fr + fc..items.len()])), bty, sc);
+    }
+    if (name == "grow") {
+        if (n != 2 || !rd_is_int_ty(rd_norm_ty(ts[0])) || !rd_small(vs[0])) { return sv_no(); }
+        Int gc = rd_atoi(vs[0]);
+        if (gc < 0 || gc > 4096 || rd_coerce_v(ts[1], et, vs[1]) == "") { return sv_no(); }
+        List(Str) run = gx_copies(vs[1], gc, ListBuf());
+        return sv_scan(rd_enc(rd_dec(bv).concat(run)), bty, sc + gc * str_len(vs[1]));
+    }
     // A user function of the name is called instead (lw_mcall).
     if (ft.fidx.get(name) else { -1 } >= 0) { return sv_no(); }
     if (name == "reverse" && n == 0) { return sv_scan(rd_enc(gx_rev(rd_dec(bv), rd_count(bv) - 1, ListBuf())), bty, sc); }
@@ -1069,6 +1087,12 @@ SV sem_mcall(GXT ft, Str name, Str bv, Str bty, List(Str) vs, List(Str) ts) {
         return if (rd_wfits(tot, "Int")) { sv_scan(rd_wtoa(tot), "Int", sc) } else { sv_no() };
     }
     return sv_no();
+}
+
+// n copies of v.
+List(Str) gx_copies(Str v, Int n, ListBuf(Str) acc) {
+    if (n <= 0) { return acc.finish(); }
+    return gx_copies(v, n - 1, acc.push(v));
 }
 
 // `b[x]` on a known list (an index out of range aborts at run time) or

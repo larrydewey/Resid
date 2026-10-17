@@ -1,0 +1,7 @@
+// xs.fill and xs.grow store one word per element: a list of lists (or
+// records, maps, options) is refused, as is a fixed-capacity list.
+Int main() {
+    List(List(Int)) xss = [[1], [2]];
+    List(List(Int)) yss = xss.fill(0, 2, [3]);
+    return yss.len();
+}

@@ -1,0 +1,38 @@
+// xs.fill and xs.grow check their range like xs[i] (spec §17): inside a
+// spawn region the abort is the region's Err, outside it ends the program.
+Int filled(Int from, Int n) {
+    List(Int) xs = [1, 2, 3];
+    List(Int) ys = xs.fill(from, n, 0);
+    return ys.len();
+}
+
+Int grown(Int n) {
+    List(Int) xs = [1, 2, 3];
+    return xs.grow(n, 0).len();
+}
+
+Str outcome(Result(Int, RegionError) r) {
+    return match r { Ok(n) => f"ok {n}", Err(e) => "err: " + e.message };
+}
+
+Int main() {
+    Result(Int, RegionError) r1 = spawn () { return filled(rt 0, 3); };
+    println(outcome(r1));
+    Result(Int, RegionError) r2 = spawn () { return filled(rt 3, 0); };
+    println(outcome(r2));
+    Result(Int, RegionError) r3 = spawn () { return filled(rt 2, 2); };
+    println(outcome(r3));
+    Result(Int, RegionError) r4 = spawn () { return filled(rt 4, 0); };
+    println(outcome(r4));
+    Result(Int, RegionError) r5 = spawn () { return filled(rt -1, 1); };
+    println(outcome(r5));
+    Result(Int, RegionError) r6 = spawn () { return filled(rt 1, -1); };
+    println(outcome(r6));
+    Result(Int, RegionError) r7 = spawn () { return grown(rt -2); };
+    println(outcome(r7));
+    List(UInt(32)) px = [];
+    List(UInt(32)) big = px.grow(rt 6, 9);
+    println(f"{big}");
+    println(f"{big.fill(rt 5, rt 2, 1)}");
+    return 0;
+}

@@ -1159,6 +1159,31 @@ as for a Map's `insert`), the element may be replaced where
 it is; otherwise the result is a new list sharing what it can
 with xs. Neither is observable.
 
+  xs.fill(from, n, x)    xs.grow(n, x)
+
+`xs.fill(from, n, x)` is xs with the n elements from index
+`from` replaced by x; `xs.grow(n, x)` is xs followed by n
+copies of x. As for `with`, xs is unchanged, x has the
+element type of xs, from and n are integers, and the result
+has the type of xs. The range is checked: unless
+0 <= from <= xs.len() and 0 <= n <= xs.len() - from, a fill
+aborts as an out-of-range xs[i] does (resid_index_abort),
+naming `from` when it lies outside 0..xs.len(), else
+`from + n`; a negative n aborts a grow, naming n. Inside a
+spawn region the abort is the region's Err (§19). A fill or
+grow of 0 elements is xs.
+
+Both apply to heap lists whose elements are integers of at
+most 64 bits, Float, Bool or Str (a compile-time error on
+any other list, and on a List(T, N)). A fill is in place
+under the same condition as `with`; otherwise it copies xs
+once. A grow makes a new list. They exist so that a run of
+equal elements (a span of pixels, a cleared buffer) costs a
+store per element rather than a call per element; `fill`,
+`grow` and `with` are methods of every heap list, so a
+function of the same name is not reached through
+`xs.fill(...)` or `xs.grow(...)`.
+
 Access to a fixed-capacity value is bounds-checked against its
 declared capacity and aborts identically on an out-of-range
 index (§44.3).
@@ -1224,6 +1249,13 @@ Rules:
   - Nested spawn permitted.
   - Scheduler implementation-defined.
   - Work may run in parallel; completion is structured.
+  - A child runs on a thread stack of its own, 256 MB
+    unless RESID_SPAWN_STACK_MB says otherwise (8 at
+    least). A fixed-capacity value lives inline in its
+    frame (§44), so a region that passes large ones (a
+    native module's 16 MB Bytes, §47) needs room for
+    them: a stack overflow is a fault of the process,
+    not the region's Err.
 
 
 ==================================================
@@ -2667,6 +2699,11 @@ standard library's lib/dev/ declares; E0260-E0264. The
 provenance record lists the descriptors a binary reaches
 (§34), and a manifest may bound a dependency to named
 descriptors (§21.1, `devices = [...]`).
+
+v3.13: `xs.fill(from, n, x)` and `xs.grow(n, x)` on heap
+lists of word-sized elements (§17): a run of one value
+replaced or appended, checked like `xs[i]`; a fill is in
+place when `with` would be.
 
 
 ==================================================

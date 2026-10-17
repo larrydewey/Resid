@@ -2014,6 +2014,72 @@ Int list_set_slow(Int l, Int owned, Int i, Int w) {
     return st64(lroot(t) + 24 + i * 8, w) * 0 + t;
 }
 
+// xs.fill(from, n, x) (spec §17): slots from..from+n hold x's word (w on
+// raw slots, W1). Owned and transient, the slots are written in place;
+// otherwise the list is copied once into a fresh transient and filled.
+@export("resid_list_fill_w", "ptr(ptr,i8,i64,i64,i64)")
+pub Int rt_list_fill_w(Int l, Int owned, Int from, Int n, Int w) {
+    Int t = fill_target(l, owned, from, n);
+    return words_fill(lroot(t) + 24 + from * 8, n, w) * 0 + t;
+}
+
+// The same on tagged slots: v is moved into the buffer's region once
+// (bar_keep), then stored n times.
+@export("resid_list_fill", "ptr(ptr,i8,i64,i64,ptr)")
+pub Int rt_list_fill(Int l, Int owned, Int from, Int n, Int v) {
+    Int t = fill_target(l, owned, from, n);
+    if (n == 0) { return t; }
+    Int f = lroot(t);
+    return words_fill(f + 24 + from * 8, n, bar_keep(f, v)) * 0 + t;
+}
+
+// The list a fill of n slots from `from` writes into, after the range
+// check: 0 <= from <= len and 0 <= n <= len - from, else the abort of an
+// out-of-range index (from, or from + n).
+Int fill_target(Int l, Int owned, Int from, Int n) {
+    Int c = lcount(l);
+    if (from < 0 || from > c) { return rt_index_abort(from, c, 0); }
+    if (n < 0 || n > c - from) { return rt_index_abort(from + n, c, 0); }
+    if (n == 0 || (owned != 0 && ltransient(l))) { return l; }
+    return with_fresh(l, 0);
+}
+
+// xs.grow(n, x): a new transient list of xs's elements then n copies of
+// w. k is the raw slot kind of the element type (0 for tagged words); an
+// empty list may not know its kind yet (`[]`), so it takes k.
+@export("resid_list_grow_w", "ptr(ptr,i64,i64,i64)")
+pub Int rt_list_grow_w(Int l, Int n, Int w, Int k) { return list_grow(l, n, w, k); }
+
+@export("resid_list_grow", "ptr(ptr,i64,ptr,i64)")
+pub Int rt_list_grow(Int l, Int n, Int v, Int k) { return list_grow(l, n, v, k); }
+
+Int list_grow(Int l, Int n, Int w, Int k) {
+    Int c = lcount(l);
+    if (n < 0) { return rt_index_abort(n, c, 0); }
+    if (n == 0) { return l; }
+    Int t = with_fresh(l, n);
+    Int f = lroot(t);
+    _ = words_fill(f + 24 + c * 8, n, w);
+    _ = st64(f, c + n) + st64(f + 16, c + n) + st64(t, c + n);
+    return if (c == 0 && k != 0) { st64(t + 24, k) * 0 + t } else { t };
+}
+
+// n words at p, all w: the first stored, then doubled by copies of at
+// most 8 KiB, each read from cache.
+Int words_fill(Int p, Int n, Int w) {
+    if (n <= 0) { return 0; }
+    _ = st64(p, w);
+    return words_dup(p, 1, n);
+}
+
+Int words_dup(Int p, Int have, Int n) {
+    if (have >= n) { return 0; }
+    Int k0 = if (have < 1024) { have } else { 1024 };
+    Int k = if (k0 < n - have) { k0 } else { n - have };
+    _ = mcopy(p + have * 8, p, k * 8);
+    return words_dup(p, have + k, n);
+}
+
 @noinline
 Int list_with_slow(Int l, Int owned, Int i, Int v) {
     Int n = lcount(l);

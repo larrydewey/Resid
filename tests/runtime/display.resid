@@ -33,6 +33,18 @@ Int main() {
     println(f"with fd {two} {rfd >= 0}");
     println(f"none left {resid_disp_recv_fd() == 0 - 1}");
 
+    // Pixels go in as 32-bit words, little-endian, from any element of the
+    // list on; the mapping read back through a received descriptor shows
+    // them after the bytes put before.
+    List(UInt(32)) px = [(UInt(32))287454020, (UInt(32))2864434397, (UInt(32))16909060];
+    println(f"put32 {resid_disp_shm_put32(h, 8, px, 1, 2)}");
+    _ = resid_disp_send(a, [2], sfd);
+    _ = resid_disp_recv(b, 64);
+    println(f"pixels {resid_disp_fd_read(resid_disp_recv_fd(), 16)}");
+    println(f"put32 past end {resid_disp_shm_put32(h, 4092, px, 0, 2)}");
+    println(f"put32 past list {resid_disp_shm_put32(h, 0, px, 2, 2)}");
+    println(f"put32 negative {resid_disp_shm_put32(h, 0, px, 0 - 1, 1)}");
+
     // Ranges outside the mapping are refused, not written.
     println(f"past end {resid_disp_shm_put(h, 4090, [1, 2, 3, 4, 5, 6, 7, 8, 9], 9)}");
     println(f"negative {resid_disp_shm_put(h, 0 - 1, [1], 1)}");

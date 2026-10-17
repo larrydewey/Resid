@@ -1,0 +1,8 @@
+ok 3
+ok 3
+err: list index out of bounds: index 4, length 3
+err: list index out of bounds: index 4, length 3
+err: list index out of bounds: index -1, length 3
+err: list index out of bounds: index 0, length 3
+err: list index out of bounds: index -2, length 3
+[9, 9, 9, 9, 9, 9]
