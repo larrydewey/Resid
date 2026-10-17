@@ -818,9 +818,12 @@ Each item: the attack, then what stops it.
 8. **Untrusted packages.** No annotation means no claim a package can lie
    about. A package's code is analyzed like any other code, and the
    checker runs on it.
-9. **Kill switch.** `--ownership=off` lowers everything through the
-   shared path (today's code minus `su_*`). A non-default setting is the
-   provenance record's `ownership` key, like `reduce`.
+9. **No user switch.** Ownership is not optional. `--ownership on|off`
+   exists only while phase 2 is built (default off, so the default
+   output stays the committed compiler's until the checker and the
+   differential suite are green). The default then turns on and the flag
+   is removed; if a developer switch is kept for bisecting a miscompile,
+   it is hidden and recorded in the provenance record.
 10. **Pins.** The runtime changes (§5 thaw functions, §6.2 push-time
     moves) change `rt.ll`, so `tools/attest/verify_pins.py --write` and a
     rebuild are part of each runtime phase. Inference and checker are
@@ -998,6 +1001,47 @@ Audit of today's protocol (§9): sum payloads holding header records,
 each with a rebuild through the copy, all give the value-semantics answer
 on the committed compiler. Not exhaustive: `sort`, `to_array` and
 spawn captures are still to check.
+
+**Phase 2 integration (design, 2026-10-17).** How the analysis reaches
+lowering without a second source of truth:
+
+- *Same graph.* Lowering's per-function graph is `lo_snap`'s copy of the
+  inlined graph (`lw_fn_body`, `sg`). `lo_snap` rewrites nodes in place
+  (`g.ns.with(id, ..)`) and appends hoisted binds, so every node id the
+  analysis saw keeps its identity. Verdicts are therefore keyed by node
+  id of the inlined graph and read directly in `lw_fn_body`.
+- *Switch.* `--ownership on|off` (default off until the checker exists
+  and the differential suite is green). With it off, lowering is
+  byte-identical to today. A non-default value is recorded in provenance.
+- *Strict verdicts for lowering.* The report's verdicts assume two things
+  lowering does not yet do: per-ownership instances (a parameter owned
+  because *some* caller passes it owned) and hoisting every scalar field
+  read above a write. Lowering consumes a strict variant: a parameter is
+  owned only when *every* call site passes an owned value the write rule
+  allows, and a later scalar read of the written object or an alias is a
+  conflict unless `lo_snap` already hoisted it.
+- *Representation facts the analysis must mirror*, or it would call a
+  shared object fresh:
+  - a list literal whose elements are all constants of `Int`, `Str` or
+    `Bool` is built once and cached by the runtime (`lst_emit_const`,
+    `resid_list_const_*`): shared, never fresh;
+  - sum boxes may be emitted as constants by the reducer (`const_boxes`):
+    no sum is written in place before §6.4 is built;
+  - an inline record read from a list is a frame copy (flag 16) or the
+    slot itself (flag 8). The slot is an alias of the list element, which
+    the analysis already models. The frame copy is a fresh object, which
+    the analysis conservatively treats as an alias.
+- *First consumer: record rebuilds.* For a struct literal whose strict
+  verdict is in place with source binder `b`, lowering adds the literal
+  to `lor` (source name) and `b` to `suv`, which takes `lw_struct`'s
+  existing static path (`stat`): stores into the source record with no
+  header test, and the region test (`resid_rec_reuse_ny`) when a pointer
+  field changes, so I2 still holds dynamically. A binder whose name is
+  bound more than once in the function (`su_dupmap`) is skipped, since
+  `suv` and `lor` are keyed by name.
+- *Order.* Rebuilds (measurable on Richards, Towers, Json, Queens), then
+  `--own-assert` and the differential suite, then the checker, then
+  owned list writes, instances, thaw, and the default turned on.
 
 **Phase 2: checker, instances, owned lowering of records and lists (about
 2 weeks).**

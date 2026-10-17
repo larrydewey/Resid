@@ -18,7 +18,8 @@
 // want: the type the node being lowered must have, when that matters to
 // its parts (set by lw_expr_as for branches, container literals and
 // constructors holding fixed-capacity values; "" otherwise).
-type LW = { Kg g; Funcs fs; Int base; Bool rg; Bool dbg; GAF df; Map(Int, Str) rf; Bool facts; LOP lo; Map(Int, Int) lof; Map(Int, Str) lor; Str want; Map(Str, Int) suv; };
+// own: the ownership verdicts (own_rebuilds), by fn node then literal.
+type LW = { Kg g; Funcs fs; Int base; Bool rg; Bool dbg; GAF df; Map(Int, Str) rf; Bool facts; LOP lo; Map(Int, Int) lof; Map(Int, Str) lor; Str want; Map(Str, Int) suv; Map(Int, Map(Int, Str)) own; };
 
 Str lw_unsup(Str what) { return "unsupported: " + what; }
 Bool lw_is_unsup(Str err) { return str_starts_with(err, "unsupported"); }
@@ -469,7 +470,7 @@ GT lw_part(LW w, Int id, Str pw, List(Str) env, GT c) {
     return lw_expr_as(w0, id, pw, env, c);
 }
 
-LW lw_wanting(LW w, Str want) { return LW {.g = w.g, .fs = w.fs, .base = w.base, .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof, .lor = w.lor, .want = want, .suv = w.suv}; }
+LW lw_wanting(LW w, Str want) { return LW {.g = w.g, .fs = w.fs, .base = w.base, .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof, .lor = w.lor, .want = want, .suv = w.suv, .own = w.own}; }
 
 // A branch body: for the wanted type when one is set (not for what the
 // body contains).
@@ -950,7 +951,7 @@ GT lw_show_nested(LW w, GT v, List(Str) env) {
 GT lw_src_lambda(LW w, Str src, Str fnty, GT c, List(Str) env) {
     KP e = kg_expr(src, kg_empty(), 0);
     if (e.err != "") { return gt_err(e.err, c); }
-    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0 - 4000000000 - c.tmp * 64, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars()};
+    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0 - 4000000000 - c.tmp * 64, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = lw_noown()};
     return lw_lambda(ws, e.id, fnty, env, c);
 }
 
@@ -958,7 +959,7 @@ GT lw_src_lambda(LW w, Str src, Str fnty, GT c, List(Str) env) {
 GT lw_src_expr(LW w, Str src, Str name, GT v, List(Str) env) {
     KP e = kg_expr(src, kg_empty(), 0);
     if (e.err != "") { return gt_err(e.err, v); }
-    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars()};
+    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = lw_noown()};
     return lw_expr(ws, e.id, env_add(env, name + ":" + v.val + ":" + v.ty), v);
 }
 
@@ -967,7 +968,7 @@ GT lw_src_call(LW w, Str f, GT v, List(Str) env) {
     Str tmpn = f"__sh{v.tmp}";
     KP e = kg_expr(f + "(" + tmpn + ")", kg_empty(), 0);
     if (e.err != "") { return gt_err(e.err, v); }
-    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars()};
+    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = lw_noown()};
     return lw_expr(ws, e.id, env_add(env, tmpn + ":" + v.val + ":" + v.ty), v);
 }
 
@@ -1072,7 +1073,7 @@ GT lw_minmax(LW w, Int id, Str n, List(Str) env, GT c) {
     };
     KP e = kg_expr(src, kg_empty(), 0);
     if (e.err != "") { return gt_err(e.err, c); }
-    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars()};
+    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = lw_noown()};
     return lw_expr(ws, e.id, a.env, a.g);
 }
 
@@ -5076,7 +5077,7 @@ PG lw_fn_body(LW w0, Int d, PG g) {
     Int n = w0.g.ns[d].nk;
     Str rty = lw_text(w0, lw_kid(w0, d, 0));
     Int _arena_in = resid_arena_push();
-    LW w1 = if (w0.facts) { LW {.g = w0.g, .fs = w0.fs, .base = w0.base, .rg = w0.rg, .dbg = w0.dbg, .df = w0.df, .rf = lr_facts_kept(w0.g, d), .facts = true, .lo = w0.lo, .lof = w0.lof, .lor = w0.lor, .want = "", .suv = w0.suv} } else { w0 };
+    LW w1 = if (w0.facts) { LW {.g = w0.g, .fs = w0.fs, .base = w0.base, .rg = w0.rg, .dbg = w0.dbg, .df = w0.df, .rf = lr_facts_kept(w0.g, d), .facts = true, .lo = w0.lo, .lof = w0.lof, .lor = w0.lor, .want = "", .suv = w0.suv, .own = w0.own} } else { w0 };
     Str rbase = ct_base_of(fs.ctn, fs.ctb, rty);
     Str name = lw_text(w1, d);
     Bool is_main = name == "main";
@@ -5102,8 +5103,13 @@ PG lw_fn_body(LW w0, Int d, PG g) {
     Kg sg = if (cached) { csf.g } else { if (w1.lo.lists && !lg_closure(w1.g, lw_kid(w1, d, n - 1))) { lo_snap(w1.g, lw_kid(w1, d, n - 1), 0, w1.lo, fs) } else { w1.g } };
     LOF lf = if (cached) { csf.lf } else { lo_fn_flags(sg, d, w1.lo, fs) };
     Map(Str, Int) sdup = if (cached) { csf.dup } else { su_dupmap(sg, d) };
-    Map(Str, Int) suv = su_vars(SUC {.g = sg, .fs = fs, .lop = w1.lo, .p = w1.lo.su, .fl = lf.fl, .ro = lf.ro, .suv = su_novars(), .dup = su_novars()}, d, sdup);
-    LW w = LW {.g = sg, .fs = w1.fs, .base = w1.base, .rg = w1.rg, .dbg = w1.dbg, .df = w1.df, .rf = w1.rf, .facts = w1.facts, .lo = w1.lo, .lof = lf.fl, .lor = lf.ro, .want = "", .suv = suv};
+    Map(Str, Int) suv0 = su_vars(SUC {.g = sg, .fs = fs, .lop = w1.lo, .p = w1.lo.su, .fl = lf.fl, .ro = lf.ro, .suv = su_novars(), .dup = su_novars()}, d, sdup);
+    // Ownership (--ownership): a literal the analysis rebuilds in place
+    // reuses its source's record statically, as an SU source does.
+    Map(Int, Str) ow = w1.own.get(d) else { lw_noro() };
+    Map(Int, Str) ro = lw_own_ro(ow, ow.keys(), 0, sdup, lf.ro);
+    Map(Str, Int) suv = lw_own_suv(ow, ow.keys(), 0, sdup, suv0);
+    LW w = LW {.g = sg, .fs = w1.fs, .base = w1.base, .rg = w1.rg, .dbg = w1.dbg, .df = w1.df, .rf = w1.rf, .facts = w1.facts, .lo = w1.lo, .lof = lf.fl, .lor = ro, .want = "", .suv = suv, .own = w1.own};
     List(Str) dl2 = [defline, "entry:"];
     Int fi = fn_index(fs, name);
     Str ceiling = if (fi >= 0) { fs.ceils[fi] } else { "" };
@@ -6698,7 +6704,7 @@ GT lw_struct_ts(LW w, GT v, Str fields, List(Str) env) {
     Str src = "\"" + lw_label(v.ty) + " { \"" + lw_fields_src(tmpn, fields, 0, "") + " + \" }\"";
     KP e = kg_expr(src, kg_empty(), 0);
     if (e.err != "") { return gt_err(e.err, v); }
-    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars()};
+    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = lw_noown()};
     GT r = lw_expr(ws, e.id, env2, v);
     if (r.err != "") { return r; }
     return GT {.pos = 0, .val = r.val, .ty = "Str", .cnt = 0, .err = "", .glines = r.glines, .lines = r.lines, .tmp = r.tmp, .lbl = r.lbl, .tail = false};
@@ -8160,7 +8166,7 @@ Int su_fn_node(Kg g, Int unit, Int i, Str h) {
 PG su_lower_clones(LW w, List(Int) ids, Int i, PG acc) {
     if (acc.err != "" || i >= ids.len()) { return acc; }
     Int off = (1000 + i) * 1000000000;
-    LW wf = LW {.g = w.g, .fs = w.fs, .base = w.base - off, .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof, .lor = w.lor, .want = "", .suv = w.suv};
+    LW wf = LW {.g = w.g, .fs = w.fs, .base = w.base - off, .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof, .lor = w.lor, .want = "", .suv = w.suv, .own = w.own};
     return su_lower_clones(w, ids, i + 1, lw_fn(wf, ids[i], acc));
 }
 
@@ -9402,12 +9408,12 @@ PG lw_decls(LW w, Int id, Int i, PG acc) {
     Int d = kg_kid(w.g, id, i);
     Str kind = w.g.ns[d].kind;
     if (kind == "sandbox") {
-        LW wi = LW {.g = w.g, .fs = w.fs, .base = str_parse_int(w.g.ns[d].text), .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof, .lor = w.lor, .want = "", .suv = w.suv};
+        LW wi = LW {.g = w.g, .fs = w.fs, .base = str_parse_int(w.g.ns[d].text), .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof, .lor = w.lor, .want = "", .suv = w.suv, .own = w.own};
         return lw_decls(w, id, i + 1, lw_decls(wi, d, 0, acc));
     }
     if (kind != "fn") { return lw_decls(w, id, i + 1, acc); }
     Int off = if (w.rg) { lw_spec_off(w.g.ns[d].text) } else { 0 };
-    LW wf = LW {.g = w.g, .fs = w.fs, .base = w.base - off, .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof, .lor = w.lor, .want = "", .suv = w.suv};
+    LW wf = LW {.g = w.g, .fs = w.fs, .base = w.base - off, .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof, .lor = w.lor, .want = "", .suv = w.suv, .own = w.own};
     return lw_decls(w, id, i + 1, lw_fn(wf, d, acc));
 }
 
@@ -9417,16 +9423,47 @@ pub Kg lw_inlined(Kg g0g, Int unit, Funcs fs, Bool dbg) {
     return if (dbg || resid_rtmod() || !lo_uses_with(g0g, 0)) { g0g } else { lo_inline_prog(g0g, unit, fs) };
 }
 
-// Lower the reducer's residual graph, already through lw_inlined.
-pub PG lw_program(Kg g, Int unit, Funcs fs, PG g0, Bool dbg, GAF df, Bool facts) {
+pub Map(Int, Map(Int, Str)) lw_noown() {
+    Map(Int, Map(Int, Str)) m = {};
+    return m;
+}
+
+Map(Int, Str) lw_noro() {
+    Map(Int, Str) m = {};
+    return m;
+}
+
+// The ownership rebuilds of one function as reuse sources (names bound
+// more than once are left out: lor and suv are keyed by name).
+Map(Int, Str) lw_own_ro(Map(Int, Str) ow, List(Int) ks, Int i, Map(Str, Int) dup, Map(Int, Str) acc) {
+    if (i >= ks.len()) { return acc; }
+    Str nm = ow.get(ks[i]) else { "" };
+    Bool ok = nm != "" && !dup.contains(nm);
+    return lw_own_ro_n(ow, ks, i, dup, if (ok) { acc.insert(ks[i], nm) } else { acc });
+}
+
+Map(Int, Str) lw_own_ro_n(Map(Int, Str) ow, List(Int) ks, Int i, Map(Str, Int) dup, Map(Int, Str) acc) { return lw_own_ro(ow, ks, i + 1, dup, acc); }
+
+Map(Str, Int) lw_own_suv(Map(Int, Str) ow, List(Int) ks, Int i, Map(Str, Int) dup, Map(Str, Int) acc) {
+    if (i >= ks.len()) { return acc; }
+    Str nm = ow.get(ks[i]) else { "" };
+    Bool ok = nm != "" && !dup.contains(nm);
+    return lw_own_suv_n(ow, ks, i, dup, if (ok) { acc.insert(nm, 1) } else { acc });
+}
+
+Map(Str, Int) lw_own_suv_n(Map(Int, Str) ow, List(Int) ks, Int i, Map(Str, Int) dup, Map(Str, Int) acc) { return lw_own_suv(ow, ks, i + 1, dup, acc); }
+
+// Lower the reducer's residual graph, already through lw_inlined; own:
+// the ownership verdicts (empty unless --ownership on).
+pub PG lw_program(Kg g, Int unit, Funcs fs, PG g0, Bool dbg, GAF df, Bool facts, Map(Int, Map(Int, Str)) own) {
     LOP lo0 = lo_program(g, unit, fs);
     // Copies of functions with more SU parameters (W2, stage 1b).
     SPX sx = su_clones(g, unit, fs, lo0, lo0.su.spec.keys(), 0, SPX {.g = g, .fs = fs, .lo = lo0, .ids = []});
     LOP lo = sx.lo;
     // The originals lower on g, whose node ids their cached snapshot
     // graphs share; the copies on g with their fn nodes added.
-    LW w = LW {.g = g, .fs = sx.fs, .base = 0, .rg = true, .dbg = dbg, .df = df, .rf = lr_nof(), .facts = facts, .lo = lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars()};
-    LW wc = LW {.g = sx.g, .fs = sx.fs, .base = 0, .rg = true, .dbg = dbg, .df = df, .rf = lr_nof(), .facts = facts, .lo = lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars()};
+    LW w = LW {.g = g, .fs = sx.fs, .base = 0, .rg = true, .dbg = dbg, .df = df, .rf = lr_nof(), .facts = facts, .lo = lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = own};
+    LW wc = LW {.g = sx.g, .fs = sx.fs, .base = 0, .rg = true, .dbg = dbg, .df = df, .rf = lr_nof(), .facts = facts, .lo = lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = own};
     PG r0 = su_lower_clones(wc, sx.ids, 0, lw_decls(w, unit, 0, g0));
     // Record moves for loop regions (lr_move): only where none are inside.
     List(Str) rfs = if (r0.err != "" || resid_rtmod()) { [] } else { lr_rec_fns(fs, lo.hdr, 0, []) };

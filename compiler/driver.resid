@@ -10332,7 +10332,10 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     Bool gdbg = profile == "debug";
     GAF gdf = if (gdbg) { ga_fileinfo(rsrc, rr.map, path) } else { ga_fileinfo("", "", path) };
     PG g0 = PG {.pos = if (gdbg) { 1000 } else { 0 }, .err = "", .glines = [], .hlines = [], .lines = header, .tmp = 0, .lbl = 0};
-    PG res = lw_program(lgi, lkp.id, fs, g0, gdbg, gdf, !pick_flag(argc, "--no-facts"));
+    // --ownership on: the ownership analysis decides in-place record
+    // rebuilds (PLAN-ownership-ir.md, phase 2); off by default.
+    Map(Int, Map(Int, Str)) owt = if (pick_opt(argc, "--ownership", "off") == "on" && !resid_rtmod()) { own_rebuilds(lgi, lkp.id, fs) } else { lw_noown() };
+    PG res = lw_program(lgi, lkp.id, fs, g0, gdbg, gdf, !pick_flag(argc, "--no-facts"), owt);
     if (res.err != "") {
         println("codegen error: " + res.err + f" @ {res.pos}");
         return 1;
