@@ -8839,6 +8839,7 @@ import "layout.resid";
 import "ekey.resid";
 import "attest.resid";
 import "verify_pins.resid";
+import "own.resid";
 
 // ─── `<out>.resid-notes.cbor` sidecar (spec §27/§34) ───────────────
 // Byte-exact with the Rust pipeline's `resid_notes`/`resid_cache::cbor`
@@ -10297,6 +10298,16 @@ Int main() {
         Bool dumped = filesystem.write_all(dump_path, kg_print(lkp.g, lkp.id));
     }
     Funcs fs = lw_sigs(lkp.g, lkp.id);
+    // Ownership inference report (PLAN-ownership-ir.md, phase 1).
+    // The one-return inliner's graph, which lowering and the ownership
+    // report share.
+    Kg lgi = lw_inlined(lkp.g, lkp.id, fs, profile == "debug");
+    Str own_path = pick_opt(argc, "--own-report", "");
+    if (own_path != "") {
+        Kg og = lgi;
+        Int omode = str_parse_int(pick_opt(argc, "--own-mode", "3"));
+        Bool ow = filesystem.write_all(own_path, own_report_m(og, lkp.id, fs, omode));
+    }
     // main's declared authority, for the provenance record's `grant`.
     List(Str) grk = resid_list_str_persist_copy([prov_grant(lkp.g, lkp.id)]);
     // Per-entry-point capability sets (for verifier-constrained release, §17.4)
@@ -10321,7 +10332,7 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     Bool gdbg = profile == "debug";
     GAF gdf = if (gdbg) { ga_fileinfo(rsrc, rr.map, path) } else { ga_fileinfo("", "", path) };
     PG g0 = PG {.pos = if (gdbg) { 1000 } else { 0 }, .err = "", .glines = [], .hlines = [], .lines = header, .tmp = 0, .lbl = 0};
-    PG res = lw_program(lkp.g, lkp.id, fs, g0, gdbg, gdf, !pick_flag(argc, "--no-facts"));
+    PG res = lw_program(lgi, lkp.id, fs, g0, gdbg, gdf, !pick_flag(argc, "--no-facts"));
     if (res.err != "") {
         println("codegen error: " + res.err + f" @ {res.pos}");
         return 1;

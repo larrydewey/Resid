@@ -9411,9 +9411,14 @@ PG lw_decls(LW w, Int id, Int i, PG acc) {
     return lw_decls(w, id, i + 1, lw_fn(wf, d, acc));
 }
 
-// Lower the reducer's residual graph.
-pub PG lw_program(Kg g0g, Int unit, Funcs fs, PG g0, Bool dbg, GAF df, Bool facts) {
-    Kg g = if (dbg || resid_rtmod() || !lo_uses_with(g0g, 0)) { g0g } else { lo_inline_prog(g0g, unit, fs) };
+// The residual graph as lowering sees it, after the one-return inliner
+// (the ownership report's input, own.resid).
+pub Kg lw_inlined(Kg g0g, Int unit, Funcs fs, Bool dbg) {
+    return if (dbg || resid_rtmod() || !lo_uses_with(g0g, 0)) { g0g } else { lo_inline_prog(g0g, unit, fs) };
+}
+
+// Lower the reducer's residual graph, already through lw_inlined.
+pub PG lw_program(Kg g, Int unit, Funcs fs, PG g0, Bool dbg, GAF df, Bool facts) {
     LOP lo0 = lo_program(g, unit, fs);
     // Copies of functions with more SU parameters (W2, stage 1b).
     SPX sx = su_clones(g, unit, fs, lo0, lo0.su.spec.keys(), 0, SPX {.g = g, .fs = fs, .lo = lo0, .ids = []});
