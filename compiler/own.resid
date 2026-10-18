@@ -957,10 +957,15 @@ OL ow_lv(OX x, ORS r, Map(Int, Int) evn, Int id, OL l) {
         OL l1 = ow_live_add(l0, ow_use_key(x, p));
         return ow_lv_list(x, r, evn, p.idx, p.idx.len() - 1, l1);
     }
+    // A rebuilding literal writes its source: before it, the source is
+    // used whole (not a read that could be hoisted).
+    Int rsrc = if (k == "struct") { ow_rebuild_src(x, r, id, 0) } else { -1 };
+    OL lrb = if (rsrc >= 0) { ow_live_add(l0, f"{rsrc}|") } else { l0 };
     if ((k == "call" || k == "mcall" || k == "struct" || k == "list") && x.g.ns[id].nk > 1) {
         List(Int) ks = ow_kid_list(x.g, id, 0, ListBuf());
-        return ow_lv_args(x, r, evn, id, ks, ks.len() - 1, l0);
+        return ow_lv_args(x, r, evn, id, ks, ks.len() - 1, lrb);
     }
+    if (rsrc >= 0) { return ow_lv_list(x, r, evn, ow_kid_list(x.g, id, 0, ListBuf()), x.g.ns[id].nk - 1, lrb); }
     if (k == "ifx" || k == "tern" || k == "match") {
         OL lb = ow_lv_union(x, r, evn, id, 1, l0, l0);
         return ow_lv(x, r, evn, kg_kid(x.g, id, 0), lb);

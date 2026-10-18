@@ -258,7 +258,11 @@ GT lw_struct(LW w, Int id, List(Str) env, GT c) {
     if (si < 0) { return gt_err("unknown struct " + sname, c); }
     Str fields = w.fs.stf[si];
     Str size = f"{struct_nfields(fields) * 8}";
-    Str src = w.lor.get(id) else { "" };
+    // An ownership rebuild's source is marked "\x01": its result may be
+    // shared, so it is marked so unless the literal starts a chain.
+    Str src0 = w.lor.get(id) else { "" };
+    Bool orb = str_starts_with(src0, "\x01");
+    Str src = if (orb) { str_slice(src0, 1, str_len(src0)) } else { src0 };
     Str srcreg = if (src == "") { "" } else { cg_env_val(env_lookup(env, src)) };
     if (srcreg != "") {
         LSF fv = lw_finits(w, id, 0, fields, "", env, LSF {.g = c, .st = []});
@@ -268,10 +272,10 @@ GT lw_struct(LW w, Int id, List(Str) env, GT c) {
         // A record of scalars holds no pointer: rewritten at any age; so is
         // one whose pointer fields all get back what they hold.
         // A statically unique source (W2): its header test would pass.
-        Bool stat = w.suv.contains(src);
+        Bool stat = orb || w.suv.contains(src);
         if (lw_all_scalar(w, fields)) {
             Str take = if (stat) { reg + " = getelementptr i8, ptr " + srcreg + ", i64 0" } else { reg + " = call ptr @resid_rec_reuse_sc(ptr " + srcreg + ", i64 " + size + ")" };
-            List(Str) ls = lw_fstores(reg, fv.st, 0, fv.g.lines.concat([take]));
+            List(Str) ls = lw_fstores(reg, fv.st, 0, fv.g.lines.concat([take])).concat(lw_orb_share(w, id, sname, orb, reg));
             return GT {.pos = 0, .val = reg, .ty = sname, .cnt = 0, .err = "", .glines = fv.g.glines, .lines = ls, .tmp = t1, .lbl = fv.g.lbl, .tail = false};
         }
         // More compares than lw_eq_max() grow a small constructor past
@@ -285,7 +289,7 @@ GT lw_struct(LW w, Int id, List(Str) env, GT c) {
         // pointer field gets back what it holds).
         Str sv = if (q.n > lw_eq_max()) { "0" } else { sqv };
         Str take = if (!stat) { reg + " = call ptr " + rcall } else { if (sv == "1") { reg + " = getelementptr i8, ptr " + srcreg + ", i64 0" } else { reg + " = call ptr @resid_rec_reuse_ny(ptr " + srcreg + ", i64 " + size + ", i8 " + sv + ")" } };
-        List(Str) ls = lw_fstores(reg, fv.st, 0, fv.g.lines.concat(ql).concat([take]));
+        List(Str) ls = lw_fstores(reg, fv.st, 0, fv.g.lines.concat(ql).concat([take])).concat(lw_orb_share(w, id, sname, orb, reg));
         return GT {.pos = 0, .val = reg, .ty = sname, .cnt = 0, .err = "", .glines = fv.g.glines, .lines = ls, .tmp = t1, .lbl = fv.g.lbl, .tail = false};
     }
     Int t1 = c.tmp + 1;
@@ -298,6 +302,12 @@ GT lw_struct(LW w, Int id, List(Str) env, GT c) {
     LSF fv = lw_finits(w, id, 0, fields, reg, env, LSF {.g = lw_step(c, reg, sname, c.lines.concat(al), t1), .st = []});
     if (fv.g.err != "") { return fv.g; }
     return GT {.pos = 0, .val = reg, .ty = sname, .cnt = 0, .err = "", .glines = fv.g.glines, .lines = fv.g.lines, .tmp = fv.g.tmp, .lbl = fv.g.lbl, .tail = false};
+}
+
+// After an ownership rebuild: the shared mark a fresh literal would get.
+List(Str) lw_orb_share(LW w, Int id, Str sname, Bool orb, Str reg) {
+    if (!orb || lo_is(w, id, 1) || !w.lo.hdr.contains(strip_owned_cg(sname))) { return []; }
+    return ["call void @resid_rec_share(ptr " + reg + ")"];
 }
 
 // Whether a reusing literal stores back, in every pointer field, the
@@ -5114,12 +5124,11 @@ PG lw_fn_body(LW w0, Int d, PG g) {
     Kg sg = if (cached) { csf.g } else { if (w1.lo.lists && !lg_closure(w1.g, lw_kid(w1, d, n - 1))) { lo_snap(w1.g, lw_kid(w1, d, n - 1), 0, w1.lo, fs) } else { w1.g } };
     LOF lf = if (cached) { csf.lf } else { lo_fn_flags(sg, d, w1.lo, fs) };
     Map(Str, Int) sdup = if (cached) { csf.dup } else { su_dupmap(sg, d) };
-    Map(Str, Int) suv0 = su_vars(SUC {.g = sg, .fs = fs, .lop = w1.lo, .p = w1.lo.su, .fl = lf.fl, .ro = lf.ro, .suv = su_novars(), .dup = su_novars()}, d, sdup);
+    Map(Str, Int) suv = su_vars(SUC {.g = sg, .fs = fs, .lop = w1.lo, .p = w1.lo.su, .fl = lf.fl, .ro = lf.ro, .suv = su_novars(), .dup = su_novars()}, d, sdup);
     // Ownership (--ownership): a literal the analysis rebuilds in place
     // reuses its source's record statically, as an SU source does.
     Map(Int, Str) ow = w1.own.get(d) else { lw_noro() };
     Map(Int, Str) ro = lw_own_ro(ow, ow.keys(), 0, sdup, lf.ro);
-    Map(Str, Int) suv = lw_own_suv(ow, ow.keys(), 0, sdup, suv0);
     // With ownership on, every parameter and statement binder of a record
     // type, named once, has its scalar fields loaded where it is bound.
     Map(Str, Int) hz = if (w1.own.keys().len() > 0) { lw_hz_params(w1, d, 1, n - 1, sdup, lw_hz_binds(sg, fs, lw_kid(w1, d, n - 1), sdup, su_novars())) } else { su_novars() };
@@ -9528,19 +9537,10 @@ Map(Int, Str) lw_own_ro(Map(Int, Str) ow, List(Int) ks, Int i, Map(Str, Int) dup
     if (i >= ks.len()) { return acc; }
     Str nm = ow.get(ks[i]) else { "" };
     Bool ok = nm != "" && !dup.contains(nm);
-    return lw_own_ro_n(ow, ks, i, dup, if (ok) { acc.insert(ks[i], nm) } else { acc });
+    return lw_own_ro_n(ow, ks, i, dup, if (ok) { acc.insert(ks[i], "\x01" + nm) } else { acc });
 }
 
 Map(Int, Str) lw_own_ro_n(Map(Int, Str) ow, List(Int) ks, Int i, Map(Str, Int) dup, Map(Int, Str) acc) { return lw_own_ro(ow, ks, i + 1, dup, acc); }
-
-Map(Str, Int) lw_own_suv(Map(Int, Str) ow, List(Int) ks, Int i, Map(Str, Int) dup, Map(Str, Int) acc) {
-    if (i >= ks.len()) { return acc; }
-    Str nm = ow.get(ks[i]) else { "" };
-    Bool ok = nm != "" && !dup.contains(nm);
-    return lw_own_suv_n(ow, ks, i, dup, if (ok) { acc.insert(nm, 1) } else { acc });
-}
-
-Map(Str, Int) lw_own_suv_n(Map(Int, Str) ow, List(Int) ks, Int i, Map(Str, Int) dup, Map(Str, Int) acc) { return lw_own_suv(ow, ks, i + 1, dup, acc); }
 
 // Lower the reducer's residual graph, already through lw_inlined; own:
 // the ownership verdicts (empty unless --ownership on).
