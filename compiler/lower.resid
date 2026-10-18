@@ -19,7 +19,9 @@
 // its parts (set by lw_expr_as for branches, container literals and
 // constructors holding fixed-capacity values; "" otherwise).
 // own: the ownership verdicts (own_rebuilds), by fn node then literal.
-type LW = { Kg g; Funcs fs; Int base; Bool rg; Bool dbg; GAF df; Map(Int, Str) rf; Bool facts; LOP lo; Map(Int, Int) lof; Map(Int, Str) lor; Str want; Map(Str, Int) suv; Map(Int, Map(Int, Str)) own; };
+// hz: record binders whose scalar fields are read from loads at the
+// binding (ownership: a later in-place write must not change them).
+type LW = { Kg g; Funcs fs; Int base; Bool rg; Bool dbg; GAF df; Map(Int, Str) rf; Bool facts; LOP lo; Map(Int, Int) lof; Map(Int, Str) lor; Str want; Map(Str, Int) suv; Map(Int, Map(Int, Str)) own; Map(Str, Int) hz; };
 
 Str lw_unsup(Str what) { return "unsupported: " + what; }
 Bool lw_is_unsup(Str err) { return str_starts_with(err, "unsupported"); }
@@ -470,7 +472,7 @@ GT lw_part(LW w, Int id, Str pw, List(Str) env, GT c) {
     return lw_expr_as(w0, id, pw, env, c);
 }
 
-LW lw_wanting(LW w, Str want) { return LW {.g = w.g, .fs = w.fs, .base = w.base, .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof, .lor = w.lor, .want = want, .suv = w.suv, .own = w.own}; }
+LW lw_wanting(LW w, Str want) { return LW {.g = w.g, .fs = w.fs, .base = w.base, .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof, .lor = w.lor, .want = want, .suv = w.suv, .own = w.own, .hz = w.hz}; }
 
 // A branch body: for the wanted type when one is set (not for what the
 // body contains).
@@ -951,7 +953,7 @@ GT lw_show_nested(LW w, GT v, List(Str) env) {
 GT lw_src_lambda(LW w, Str src, Str fnty, GT c, List(Str) env) {
     KP e = kg_expr(src, kg_empty(), 0);
     if (e.err != "") { return gt_err(e.err, c); }
-    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0 - 4000000000 - c.tmp * 64, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = lw_noown()};
+    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0 - 4000000000 - c.tmp * 64, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = lw_noown(), .hz = su_novars()};
     return lw_lambda(ws, e.id, fnty, env, c);
 }
 
@@ -959,7 +961,7 @@ GT lw_src_lambda(LW w, Str src, Str fnty, GT c, List(Str) env) {
 GT lw_src_expr(LW w, Str src, Str name, GT v, List(Str) env) {
     KP e = kg_expr(src, kg_empty(), 0);
     if (e.err != "") { return gt_err(e.err, v); }
-    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = lw_noown()};
+    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = lw_noown(), .hz = su_novars()};
     return lw_expr(ws, e.id, env_add(env, name + ":" + v.val + ":" + v.ty), v);
 }
 
@@ -968,7 +970,7 @@ GT lw_src_call(LW w, Str f, GT v, List(Str) env) {
     Str tmpn = f"__sh{v.tmp}";
     KP e = kg_expr(f + "(" + tmpn + ")", kg_empty(), 0);
     if (e.err != "") { return gt_err(e.err, v); }
-    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = lw_noown()};
+    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = lw_noown(), .hz = su_novars()};
     return lw_expr(ws, e.id, env_add(env, tmpn + ":" + v.val + ":" + v.ty), v);
 }
 
@@ -1073,7 +1075,7 @@ GT lw_minmax(LW w, Int id, Str n, List(Str) env, GT c) {
     };
     KP e = kg_expr(src, kg_empty(), 0);
     if (e.err != "") { return gt_err(e.err, c); }
-    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = lw_noown()};
+    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = lw_noown(), .hz = su_novars()};
     return lw_expr(ws, e.id, a.env, a.g);
 }
 
@@ -1292,7 +1294,14 @@ GT lw_step(GT c, Str val, Str ty, List(Str) lines, Int tmp) {
 
 // A struct field load.
 GT lw_field(LW w, Int id, List(Str) env, GT c) {
-    GT base = lw_expr(w, lw_kid(w, id, 0), env, c);
+    Int b0 = lw_kid(w, id, 0);
+    Str hn = if (lw_kind(w, b0) == "ref" && w.hz.contains(lw_text(w, b0))) { env_lookup(env, lw_text(w, b0) + "\x04" + lw_text(w, id)) } else { "" };
+    if (hn != "") {
+        Int c1 = str_find_char(hn, 58, 0);
+        Int c2 = str_find_char(hn, 58, c1 + 1);
+        return lw_with(c, str_slice(hn, c1 + 1, c2), str_slice(hn, c2 + 1, str_len_1(hn)), c.lines, c.tmp);
+    }
+    GT base = lw_expr(w, b0, env, c);
     if (base.err != "") { return base; }
     return lw_field_of(w, base, lw_text(w, id));
 }
@@ -4273,7 +4282,7 @@ ST lw_for(LW w, Int id, List(Str) env, Bool in_main, ST g) {
 ST lw_stmt(LW w, Int id, List(Str) env, Bool in_main, ST g) {
     Str k = lw_kind(w, id);
     if (k == "ret") { return lw_ret(w, id, env, in_main, g); }
-    if (k == "bind" || k == "rbind") { return lw_bind(w, id, env, g); }
+    if (k == "bind" || k == "rbind") { return lw_hz_load(w, lw_text(w, id), lw_bind(w, id, env, g)); }
     if (k == "estmt" || k == "discard") {
         GT v = lw_expr(w, lw_kid(w, id, 0), env, gt_of_st(g));
         if (v.err != "") { return st_err(v.err, g); }
@@ -5077,7 +5086,7 @@ PG lw_fn_body(LW w0, Int d, PG g) {
     Int n = w0.g.ns[d].nk;
     Str rty = lw_text(w0, lw_kid(w0, d, 0));
     Int _arena_in = resid_arena_push();
-    LW w1 = if (w0.facts) { LW {.g = w0.g, .fs = w0.fs, .base = w0.base, .rg = w0.rg, .dbg = w0.dbg, .df = w0.df, .rf = lr_facts_kept(w0.g, d), .facts = true, .lo = w0.lo, .lof = w0.lof, .lor = w0.lor, .want = "", .suv = w0.suv, .own = w0.own} } else { w0 };
+    LW w1 = if (w0.facts) { LW {.g = w0.g, .fs = w0.fs, .base = w0.base, .rg = w0.rg, .dbg = w0.dbg, .df = w0.df, .rf = lr_facts_kept(w0.g, d), .facts = true, .lo = w0.lo, .lof = w0.lof, .lor = w0.lor, .want = "", .suv = w0.suv, .own = w0.own, .hz = w0.hz} } else { w0 };
     Str rbase = ct_base_of(fs.ctn, fs.ctb, rty);
     Str name = lw_text(w1, d);
     Bool is_main = name == "main";
@@ -5109,7 +5118,10 @@ PG lw_fn_body(LW w0, Int d, PG g) {
     Map(Int, Str) ow = w1.own.get(d) else { lw_noro() };
     Map(Int, Str) ro = lw_own_ro(ow, ow.keys(), 0, sdup, lf.ro);
     Map(Str, Int) suv = lw_own_suv(ow, ow.keys(), 0, sdup, suv0);
-    LW w = LW {.g = sg, .fs = w1.fs, .base = w1.base, .rg = w1.rg, .dbg = w1.dbg, .df = w1.df, .rf = w1.rf, .facts = w1.facts, .lo = w1.lo, .lof = lf.fl, .lor = ro, .want = "", .suv = suv, .own = w1.own};
+    // With ownership on, every parameter and statement binder of a record
+    // type, named once, has its scalar fields loaded where it is bound.
+    Map(Str, Int) hz = if (w1.own.keys().len() > 0) { lw_hz_params(w1, d, 1, n - 1, sdup, lw_hz_binds(sg, fs, lw_kid(w1, d, n - 1), sdup, su_novars())) } else { su_novars() };
+    LW w = LW {.g = sg, .fs = w1.fs, .base = w1.base, .rg = w1.rg, .dbg = w1.dbg, .df = w1.df, .rf = w1.rf, .facts = w1.facts, .lo = w1.lo, .lof = lf.fl, .lor = ro, .want = "", .suv = suv, .own = w1.own, .hz = hz};
     List(Str) dl2 = [defline, "entry:"];
     Int fi = fn_index(fs, name);
     Str ceiling = if (fi >= 0) { fs.ceils[fi] } else { "" };
@@ -5118,8 +5130,9 @@ PG lw_fn_body(LW w0, Int d, PG g) {
     CapPP pp1 = cap_maybe_prologue(sandboxed, caps, CapPP {.lines = dl2, .glines = nil_list(), .n = 0});
     EnvBuild eb = build_env_with_growbuf(nl, tyl, fs.growable, name, pp1.lines, 0, nil_list());
     Int body_start = eb.lines.len();
-    ST gb = ST {.pos = 0, .dead = false, .err = "", .env = eb.env, .glines = pp1.glines, .hlines = g.hlines, .lines = eb.lines, .tmp = g.tmp, .lbl = g.lbl, .rety = rbase};
-    ST body = lw_block(w, lw_kid(w, d, n - 1), eb.env, is_main, gb);
+    ST gb0 = ST {.pos = 0, .dead = false, .err = "", .env = eb.env, .glines = pp1.glines, .hlines = g.hlines, .lines = eb.lines, .tmp = g.tmp, .lbl = g.lbl, .rety = rbase};
+    ST gb = lw_hz_load_params(w, d, 1, n - 1, gb0);
+    ST body = lw_block(w, lw_kid(w, d, n - 1), gb.env, is_main, gb);
     if (body.err != "") {
         Str err0 = body.err;
         List(Str) ek = resid_list_str_persist_copy([err0]);
@@ -6704,7 +6717,7 @@ GT lw_struct_ts(LW w, GT v, Str fields, List(Str) env) {
     Str src = "\"" + lw_label(v.ty) + " { \"" + lw_fields_src(tmpn, fields, 0, "") + " + \" }\"";
     KP e = kg_expr(src, kg_empty(), 0);
     if (e.err != "") { return gt_err(e.err, v); }
-    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = lw_noown()};
+    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = lw_noown(), .hz = su_novars()};
     GT r = lw_expr(ws, e.id, env2, v);
     if (r.err != "") { return r; }
     return GT {.pos = 0, .val = r.val, .ty = "Str", .cnt = 0, .err = "", .glines = r.glines, .lines = r.lines, .tmp = r.tmp, .lbl = r.lbl, .tail = false};
@@ -7746,7 +7759,7 @@ Map(Str, Int) su_vars(SUC c0, Int d, Map(Str, Int) dup) {
     return su_locals(c1, body, 0).suv;
 }
 
-Map(Str, Int) su_dupmap(Kg g, Int d) {
+pub Map(Str, Int) su_dupmap(Kg g, Int d) {
     Int np = g.ns[d].nk - 2;
     Map(Str, Int) n0 = su_pcount(g, d, 0, np, su_novars());
     Map(Str, Int) n1 = su_bcount(g, kg_kid(g, d, np + 1), n0);
@@ -8166,7 +8179,7 @@ Int su_fn_node(Kg g, Int unit, Int i, Str h) {
 PG su_lower_clones(LW w, List(Int) ids, Int i, PG acc) {
     if (acc.err != "" || i >= ids.len()) { return acc; }
     Int off = (1000 + i) * 1000000000;
-    LW wf = LW {.g = w.g, .fs = w.fs, .base = w.base - off, .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof, .lor = w.lor, .want = "", .suv = w.suv, .own = w.own};
+    LW wf = LW {.g = w.g, .fs = w.fs, .base = w.base - off, .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof, .lor = w.lor, .want = "", .suv = w.suv, .own = w.own, .hz = w.hz};
     return su_lower_clones(w, ids, i + 1, lw_fn(wf, ids[i], acc));
 }
 
@@ -9408,12 +9421,12 @@ PG lw_decls(LW w, Int id, Int i, PG acc) {
     Int d = kg_kid(w.g, id, i);
     Str kind = w.g.ns[d].kind;
     if (kind == "sandbox") {
-        LW wi = LW {.g = w.g, .fs = w.fs, .base = str_parse_int(w.g.ns[d].text), .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof, .lor = w.lor, .want = "", .suv = w.suv, .own = w.own};
+        LW wi = LW {.g = w.g, .fs = w.fs, .base = str_parse_int(w.g.ns[d].text), .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof, .lor = w.lor, .want = "", .suv = w.suv, .own = w.own, .hz = w.hz};
         return lw_decls(w, id, i + 1, lw_decls(wi, d, 0, acc));
     }
     if (kind != "fn") { return lw_decls(w, id, i + 1, acc); }
     Int off = if (w.rg) { lw_spec_off(w.g.ns[d].text) } else { 0 };
-    LW wf = LW {.g = w.g, .fs = w.fs, .base = w.base - off, .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof, .lor = w.lor, .want = "", .suv = w.suv, .own = w.own};
+    LW wf = LW {.g = w.g, .fs = w.fs, .base = w.base - off, .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof, .lor = w.lor, .want = "", .suv = w.suv, .own = w.own, .hz = w.hz};
     return lw_decls(w, id, i + 1, lw_fn(wf, d, acc));
 }
 
@@ -9421,6 +9434,78 @@ PG lw_decls(LW w, Int id, Int i, PG acc) {
 // (the ownership report's input, own.resid).
 pub Kg lw_inlined(Kg g0g, Int unit, Funcs fs, Bool dbg) {
     return if (dbg || resid_rtmod() || !lo_uses_with(g0g, 0)) { g0g } else { lo_inline_prog(g0g, unit, fs) };
+}
+
+// The binders lw_hz loads: parameters of a record type (not a generic or
+// fixed type), and statement binders in the body, each named once.
+Map(Str, Int) lw_hz_params(LW w, Int d, Int i, Int n, Map(Str, Int) dup, Map(Str, Int) acc) {
+    if (i >= n) { return acc; }
+    Int p = lw_kid(w, d, i);
+    Str nm = lw_text(w, p);
+    Str ty = strip_owned_cg(ct_base_of(w.fs.ctn, w.fs.ctb, lw_text(w, lw_kid(w, p, 0))));
+    Bool ok = w.g.ns[p].kind == "param" && !dup.contains(nm) && struct_index(w.fs, ty) >= 0;
+    return lw_hz_params_n(w, d, i, n, dup, if (ok) { acc.insert(nm, 1) } else { acc });
+}
+
+Map(Str, Int) lw_hz_params_n(LW w, Int d, Int i, Int n, Map(Str, Int) dup, Map(Str, Int) acc) { return lw_hz_params(w, d, i + 1, n, dup, acc); }
+
+Map(Str, Int) lw_hz_binds(Kg g, Funcs fs, Int id, Map(Str, Int) dup, Map(Str, Int) acc) {
+    Str k = g.ns[id].kind;
+    if (k == "lambda" || k == "spawn") { return acc; }
+    Bool b = (k == "bind" || k == "rbind") && g.ns[id].nk > 0 && !dup.contains(g.ns[id].text) && struct_index(fs, strip_owned_cg(ct_base_of(fs.ctn, fs.ctb, g.ns[kg_kid(g, id, 0)].text))) >= 0;
+    return lw_hz_binds_kids(g, fs, id, 0, dup, if (b) { acc.insert(g.ns[id].text, 1) } else { acc });
+}
+
+Map(Str, Int) lw_hz_binds_kids(Kg g, Funcs fs, Int id, Int i, Map(Str, Int) dup, Map(Str, Int) acc) {
+    if (i >= g.ns[id].nk) { return acc; }
+    return lw_hz_binds_kids_n(g, fs, id, i, dup, lw_hz_binds(g, fs, kg_kid(g, id, i), dup, acc));
+}
+
+Map(Str, Int) lw_hz_binds_kids_n(Kg g, Funcs fs, Int id, Int i, Map(Str, Int) dup, Map(Str, Int) acc) { return lw_hz_binds_kids(g, fs, id, i + 1, dup, acc); }
+
+ST lw_hz_load_params(LW w, Int d, Int i, Int n, ST g) {
+    if (i >= n) { return g; }
+    Int p = lw_kid(w, d, i);
+    ST g2 = if (w.g.ns[p].kind == "param") { lw_hz_load(w, lw_text(w, p), g) } else { g };
+    return lw_hz_load_params_n(w, d, i, n, g2);
+}
+
+ST lw_hz_load_params_n(LW w, Int d, Int i, Int n, ST g) { return lw_hz_load_params(w, d, i + 1, n, g); }
+
+// Binder nm just bound: each scalar field loaded into `nm\x04f`.
+ST lw_hz_load(LW w, Str nm, ST g) {
+    if (g.err != "" || !w.hz.contains(nm)) { return g; }
+    Str ent = env_lookup(g.env, nm);
+    if (ent == "") { return g; }
+    Int c1 = str_find_char(ent, 58, 0);
+    Int c2 = str_find_char(ent, 58, c1 + 1);
+    Str ty = strip_owned_cg(str_slice(ent, c2 + 1, str_len_1(ent)));
+    Int si = struct_index(w.fs, ty);
+    if (si < 0) { return g; }
+    return lw_hz_fields(w, nm, str_slice(ent, c1 + 1, c2), ty, str_split(w.fs.stf[si], ","), 0, g);
+}
+
+ST lw_hz_fields(LW w, Str nm, Str reg, Str ty, List(Str) ents, Int j, ST g) {
+    if (j >= ents.len() || g.err != "") { return g; }
+    Int co = str_index_of(ents[j], ":", 0);
+    Str f = if (co > 0) { str_slice(ents[j], 0, co) } else { "" };
+    Str fty = if (f == "") { "" } else { field_ty(w.fs.stf[struct_index(w.fs, ty)], f) };
+    // Every field the ownership analysis does not track (ow_trk): scalars,
+    // strings, sums; records, lists and maps are written in place instead.
+    Str fb = strip_owned_cg(ct_base_of(w.fs.ctn, w.fs.ctb, fty));
+    Bool scal = f != "" && fty != "" && struct_index(w.fs, fb) < 0 && !lo_is_list(fb) && !lin_is_mapset(fb);
+    ST g2 = if (scal) { lw_hz_one(w, nm, reg, ty, f, g) } else { g };
+    return lw_hz_fields_n(w, nm, reg, ty, ents, j, g2);
+}
+
+ST lw_hz_fields_n(LW w, Str nm, Str reg, Str ty, List(Str) ents, Int j, ST g) { return lw_hz_fields(w, nm, reg, ty, ents, j + 1, g); }
+
+ST lw_hz_one(LW w, Str nm, Str reg, Str ty, Str f, ST g) {
+    GT base = lw_with(gt_of_st(g), reg, ty, g.lines, g.tmp);
+    GT v = lw_field_of(w, base, f);
+    if (v.err != "") { return g; }
+    ST g2 = st_of_gt(v, g, g.env);
+    return ST {.pos = g2.pos, .dead = g2.dead, .err = "", .env = env_add(g2.env, nm + "\x04" + f + ":" + v.val + ":" + v.ty), .glines = g2.glines, .hlines = g2.hlines, .lines = g2.lines, .tmp = g2.tmp, .lbl = g2.lbl, .rety = g2.rety};
 }
 
 pub Map(Int, Map(Int, Str)) lw_noown() {
@@ -9462,8 +9547,8 @@ pub PG lw_program(Kg g, Int unit, Funcs fs, PG g0, Bool dbg, GAF df, Bool facts,
     LOP lo = sx.lo;
     // The originals lower on g, whose node ids their cached snapshot
     // graphs share; the copies on g with their fn nodes added.
-    LW w = LW {.g = g, .fs = sx.fs, .base = 0, .rg = true, .dbg = dbg, .df = df, .rf = lr_nof(), .facts = facts, .lo = lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = own};
-    LW wc = LW {.g = sx.g, .fs = sx.fs, .base = 0, .rg = true, .dbg = dbg, .df = df, .rf = lr_nof(), .facts = facts, .lo = lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = own};
+    LW w = LW {.g = g, .fs = sx.fs, .base = 0, .rg = true, .dbg = dbg, .df = df, .rf = lr_nof(), .facts = facts, .lo = lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = own, .hz = su_novars()};
+    LW wc = LW {.g = sx.g, .fs = sx.fs, .base = 0, .rg = true, .dbg = dbg, .df = df, .rf = lr_nof(), .facts = facts, .lo = lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = own, .hz = su_novars()};
     PG r0 = su_lower_clones(wc, sx.ids, 0, lw_decls(w, unit, 0, g0));
     // Record moves for loop regions (lr_move): only where none are inside.
     List(Str) rfs = if (r0.err != "" || resid_rtmod()) { [] } else { lr_rec_fns(fs, lo.hdr, 0, []) };
