@@ -957,10 +957,10 @@ OL ow_lv(OX x, ORS r, Map(Int, Int) evn, Int id, OL l) {
         OL l1 = ow_live_add(l0, ow_use_key(x, p));
         return ow_lv_list(x, r, evn, p.idx, p.idx.len() - 1, l1);
     }
-    // A rebuilding literal writes its source: before it, the source is
-    // used whole (not a read that could be hoisted).
+    // A rebuilding literal rewrites its source's record: before it, that
+    // record is used (#r), though its scalar reads may be hoisted.
     Int rsrc = if (k == "struct") { ow_rebuild_src(x, r, id, 0) } else { -1 };
-    OL lrb = if (rsrc >= 0) { ow_live_add(l0, f"{rsrc}|") } else { l0 };
+    OL lrb = if (rsrc >= 0) { ow_live_add(l0, f"{rsrc}|#r") } else { l0 };
     if ((k == "call" || k == "mcall" || k == "struct" || k == "list") && x.g.ns[id].nk > 1) {
         List(Int) ks = ow_kid_list(x.g, id, 0, ListBuf());
         return ow_lv_args(x, r, evn, id, ks, ks.len() - 1, lrb);
@@ -1232,9 +1232,26 @@ Str ow_judge_live(OX x, OF f, OEv e, Int b, List(Str) after, Map(Str, Int) ca, L
     // Another binder handed (pending or as an argument) to a callee that
     // never reads the field the write lies under.
     List(Str) wm2 = if (!self && tag != "" && tag != "-") { ow_wm_not_hole(x, tag, ow_loc(b, q), wmem, 0, ListBuf()) } else { wmem };
-    Bool hit = if (skip) { false } else { if (self) { ow_overlap(q, e.path) } else { if (e.kind == "arg") { ow_any_disturbs(ow_mem(f, b, q), wm2, ws, 0) } else { if (e.kind == "move") { ow_any_overlap(ow_mem(f, b, q), wm2, 0) } else { ow_any_hits(x, ow_mem_pre(f, b, q, 0, ListBuf()), wm2, 0) } } } };
+    // The root record alone (#r): a write of that object or above it.
+    Bool hit = if (q == "#r") { if (self) { e.path == "" } else { ow_root_hit(ow_mem(f, b, ""), wm2, 0) } } else { if (skip) { false } else { if (self) { ow_overlap(q, e.path) } else { if (e.kind == "arg") { ow_any_disturbs(ow_mem(f, b, q), wm2, ws, 0) } else { if (e.kind == "move") { ow_any_overlap(ow_mem(f, b, q), wm2, 0) } else { ow_any_hits(x, ow_mem_pre(f, b, q, 0, ListBuf()), wm2, 0) } } } } };
     if (hit) { return (if (self) { "live-self:" } else { "alias:" }) + ow_bname(x, b) + q; }
     return ow_judge_live_n(x, f, e, b, after, ca, wmem, i);
+}
+
+// Whether a written location is one of the objects ls, or above one.
+Bool ow_root_hit(List(Str) ls, List(Str) ws, Int i) {
+    if (i >= ls.len()) { return false; }
+    if (ow_root_hit_one(ls[i], ws, 0)) { return true; }
+    return ow_root_hit_n(ls, ws, i);
+}
+
+Bool ow_root_hit_n(List(Str) ls, List(Str) ws, Int i) { return ow_root_hit(ls, ws, i + 1); }
+
+Bool ow_root_hit_one(Str l, List(Str) ws, Int i) {
+    if (i >= ws.len()) { return false; }
+    Int rl = ow_rel(l, ws[i]);
+    if (rl == 0 || rl == 2 || rl == 3) { return true; }
+    return ow_root_hit_one(l, ws, i + 1);
 }
 
 // The written locations not hidden from a holder at loc by a hole of its
