@@ -10306,7 +10306,11 @@ Int main() {
     if (own_path != "") {
         Kg og = lgi;
         Int omode = str_parse_int(pick_opt(argc, "--own-mode", "3"));
-        Bool ow = filesystem.write_all(own_path, own_report_m(og, lkp.id, fs, omode));
+        // Mode 5: the strict verdicts with owned instances, as lowered.
+        List(Str) omx5 = if (omode == 5) { own_mixed(og, lkp.id, fs) } else { [] };
+        Kg og5 = own_add_clones(og, lkp.id, omx5);
+        Str rep = if (omode == 5) { own_report_i(og5, lkp.id, if (omx5.len() > 0) { lw_sigs(og5, lkp.id) } else { fs }, omx5) } else { own_report_m(og, lkp.id, fs, omode) };
+        Bool ow = filesystem.write_all(own_path, rep);
     }
     // main's declared authority, for the provenance record's `grant`.
     List(Str) grk = resid_list_str_persist_copy([prov_grant(lkp.g, lkp.id)]);
@@ -10337,11 +10341,18 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     // The analysis runs in an arena of its own; only its verdicts, as
     // text, outlive it.
     Bool own_on = pick_opt(argc, "--ownership", "off") == "on" && !resid_rtmod();
+    // First the functions worth an owned instance (f__o), which are
+    // cloned; then the verdicts, with calls routed to the instances.
+    Int _om_in = if (own_on) { resid_bulk_push() } else { 0 };
+    List(Str) omx = if (own_on) { resid_list_str_persist_copy(own_mixed(lgi, lkp.id, fs)) } else { [] };
+    Int _om_out = if (own_on) { resid_bulk_pop() } else { 0 };
+    Kg lgo = own_add_clones(lgi, lkp.id, omx);
+    Funcs fso = if (omx.len() > 0) { lw_sigs(lgo, lkp.id) } else { fs };
     Int _ow_in = if (own_on) { resid_bulk_push() } else { 0 };
-    List(Str) owl = if (own_on) { resid_list_str_persist_copy(own_rebuild_lines(lgi, lkp.id, fs)) } else { [] };
+    List(Str) owl = if (own_on) { resid_list_str_persist_copy(own_rebuild_lines_i(lgo, lkp.id, fso, omx)) } else { [] };
     Int _ow_out = if (own_on) { resid_bulk_pop() } else { 0 };
     Map(Int, Map(Int, Str)) owt = if (own_on) { own_parse_lines(owl, 0, lw_noown()) } else { lw_noown() };
-    PG res = lw_program(lgi, lkp.id, fs, g0, gdbg, gdf, !pick_flag(argc, "--no-facts"), owt);
+    PG res = lw_program(lgo, lkp.id, fso, g0, gdbg, gdf, !pick_flag(argc, "--no-facts"), owt);
     if (res.err != "") {
         println("codegen error: " + res.err + f" @ {res.pos}");
         return 1;

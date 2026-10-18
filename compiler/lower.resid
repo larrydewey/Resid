@@ -21,7 +21,7 @@
 // own: the ownership verdicts (own_rebuilds), by fn node then literal.
 // hz: record binders whose scalar fields are read from loads at the
 // binding (ownership: a later in-place write must not change them).
-type LW = { Kg g; Funcs fs; Int base; Bool rg; Bool dbg; GAF df; Map(Int, Str) rf; Bool facts; LOP lo; Map(Int, Int) lof; Map(Int, Str) lor; Str want; Map(Str, Int) suv; Map(Int, Map(Int, Str)) own; Map(Str, Int) hz; };
+type LW = { Kg g; Funcs fs; Int base; Bool rg; Bool dbg; GAF df; Map(Int, Str) rf; Bool facts; LOP lo; Map(Int, Int) lof; Map(Int, Str) lor; Str want; Map(Str, Int) suv; Map(Int, Map(Int, Str)) own; Map(Str, Int) hz; Map(Int, Str) ocall; };
 
 Str lw_unsup(Str what) { return "unsupported: " + what; }
 Bool lw_is_unsup(Str err) { return str_starts_with(err, "unsupported"); }
@@ -472,7 +472,7 @@ GT lw_part(LW w, Int id, Str pw, List(Str) env, GT c) {
     return lw_expr_as(w0, id, pw, env, c);
 }
 
-LW lw_wanting(LW w, Str want) { return LW {.g = w.g, .fs = w.fs, .base = w.base, .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof, .lor = w.lor, .want = want, .suv = w.suv, .own = w.own, .hz = w.hz}; }
+LW lw_wanting(LW w, Str want) { return LW {.g = w.g, .fs = w.fs, .base = w.base, .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof, .lor = w.lor, .want = want, .suv = w.suv, .own = w.own, .hz = w.hz, .ocall = w.ocall}; }
 
 // A branch body: for the wanted type when one is set (not for what the
 // body contains).
@@ -953,7 +953,7 @@ GT lw_show_nested(LW w, GT v, List(Str) env) {
 GT lw_src_lambda(LW w, Str src, Str fnty, GT c, List(Str) env) {
     KP e = kg_expr(src, kg_empty(), 0);
     if (e.err != "") { return gt_err(e.err, c); }
-    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0 - 4000000000 - c.tmp * 64, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = lw_noown(), .hz = su_novars()};
+    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0 - 4000000000 - c.tmp * 64, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = lw_noown(), .hz = su_novars(), .ocall = lw_noro()};
     return lw_lambda(ws, e.id, fnty, env, c);
 }
 
@@ -961,7 +961,7 @@ GT lw_src_lambda(LW w, Str src, Str fnty, GT c, List(Str) env) {
 GT lw_src_expr(LW w, Str src, Str name, GT v, List(Str) env) {
     KP e = kg_expr(src, kg_empty(), 0);
     if (e.err != "") { return gt_err(e.err, v); }
-    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = lw_noown(), .hz = su_novars()};
+    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = lw_noown(), .hz = su_novars(), .ocall = lw_noro()};
     return lw_expr(ws, e.id, env_add(env, name + ":" + v.val + ":" + v.ty), v);
 }
 
@@ -970,7 +970,7 @@ GT lw_src_call(LW w, Str f, GT v, List(Str) env) {
     Str tmpn = f"__sh{v.tmp}";
     KP e = kg_expr(f + "(" + tmpn + ")", kg_empty(), 0);
     if (e.err != "") { return gt_err(e.err, v); }
-    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = lw_noown(), .hz = su_novars()};
+    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = lw_noown(), .hz = su_novars(), .ocall = lw_noro()};
     return lw_expr(ws, e.id, env_add(env, tmpn + ":" + v.val + ":" + v.ty), v);
 }
 
@@ -1075,7 +1075,7 @@ GT lw_minmax(LW w, Int id, Str n, List(Str) env, GT c) {
     };
     KP e = kg_expr(src, kg_empty(), 0);
     if (e.err != "") { return gt_err(e.err, c); }
-    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = lw_noown(), .hz = su_novars()};
+    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = lw_noown(), .hz = su_novars(), .ocall = lw_noro()};
     return lw_expr(ws, e.id, a.env, a.g);
 }
 
@@ -3288,7 +3288,9 @@ GT lw_call(LW w, Int id, List(Str) env, GT c) {
     Int t1 = fa.tmp + 1;
     Str reg = f"%t{t1}";
     // The copy assuming SU parameters, when the arguments are (stage 1b).
-    Str callee = su_callee(w, id, n);
+    // An owned instance (`n__o`) when the ownership analysis routed this
+    // call there.
+    Str callee = w.ocall.get(id) else { su_callee(w, id, n) };
     return lo_freeze(w, id, GT {.pos = 0, .val = reg, .ty = rraw, .cnt = a.cnt, .err = "", .glines = a.glines, .lines = a.lines.concat(fa.lines).concat([reg + " = call " + ll_ty(rraw) + " @" + callee + "(" + fx_args(fa.arg, a.val) + ")"]), .tmp = t1, .lbl = a.lbl, .tail = fa.tail});
 }
 
@@ -5086,7 +5088,7 @@ PG lw_fn_body(LW w0, Int d, PG g) {
     Int n = w0.g.ns[d].nk;
     Str rty = lw_text(w0, lw_kid(w0, d, 0));
     Int _arena_in = resid_arena_push();
-    LW w1 = if (w0.facts) { LW {.g = w0.g, .fs = w0.fs, .base = w0.base, .rg = w0.rg, .dbg = w0.dbg, .df = w0.df, .rf = lr_facts_kept(w0.g, d), .facts = true, .lo = w0.lo, .lof = w0.lof, .lor = w0.lor, .want = "", .suv = w0.suv, .own = w0.own, .hz = w0.hz} } else { w0 };
+    LW w1 = if (w0.facts) { LW {.g = w0.g, .fs = w0.fs, .base = w0.base, .rg = w0.rg, .dbg = w0.dbg, .df = w0.df, .rf = lr_facts_kept(w0.g, d), .facts = true, .lo = w0.lo, .lof = w0.lof, .lor = w0.lor, .want = "", .suv = w0.suv, .own = w0.own, .hz = w0.hz, .ocall = w0.ocall} } else { w0 };
     Str rbase = ct_base_of(fs.ctn, fs.ctb, rty);
     Str name = lw_text(w1, d);
     Bool is_main = name == "main";
@@ -5121,7 +5123,7 @@ PG lw_fn_body(LW w0, Int d, PG g) {
     // With ownership on, every parameter and statement binder of a record
     // type, named once, has its scalar fields loaded where it is bound.
     Map(Str, Int) hz = if (w1.own.keys().len() > 0) { lw_hz_params(w1, d, 1, n - 1, sdup, lw_hz_binds(sg, fs, lw_kid(w1, d, n - 1), sdup, su_novars())) } else { su_novars() };
-    LW w = LW {.g = sg, .fs = w1.fs, .base = w1.base, .rg = w1.rg, .dbg = w1.dbg, .df = w1.df, .rf = w1.rf, .facts = w1.facts, .lo = w1.lo, .lof = lf.fl, .lor = ro, .want = "", .suv = suv, .own = w1.own, .hz = hz};
+    LW w = LW {.g = sg, .fs = w1.fs, .base = w1.base, .rg = w1.rg, .dbg = w1.dbg, .df = w1.df, .rf = w1.rf, .facts = w1.facts, .lo = w1.lo, .lof = lf.fl, .lor = ro, .want = "", .suv = suv, .own = w1.own, .hz = hz, .ocall = w1.own.get(0 - 1 - d) else { lw_noro() }};
     List(Str) dl2 = [defline, "entry:"];
     Int fi = fn_index(fs, name);
     Str ceiling = if (fi >= 0) { fs.ceils[fi] } else { "" };
@@ -6717,7 +6719,7 @@ GT lw_struct_ts(LW w, GT v, Str fields, List(Str) env) {
     Str src = "\"" + lw_label(v.ty) + " { \"" + lw_fields_src(tmpn, fields, 0, "") + " + \" }\"";
     KP e = kg_expr(src, kg_empty(), 0);
     if (e.err != "") { return gt_err(e.err, v); }
-    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = lw_noown(), .hz = su_novars()};
+    LW ws = LW {.g = e.g, .fs = w.fs, .base = 0, .rg = false, .dbg = false, .df = w.df, .rf = lr_nof(), .facts = false, .lo = w.lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = lw_noown(), .hz = su_novars(), .ocall = lw_noro()};
     GT r = lw_expr(ws, e.id, env2, v);
     if (r.err != "") { return r; }
     return GT {.pos = 0, .val = r.val, .ty = "Str", .cnt = 0, .err = "", .glines = r.glines, .lines = r.lines, .tmp = r.tmp, .lbl = r.lbl, .tail = false};
@@ -8179,7 +8181,7 @@ Int su_fn_node(Kg g, Int unit, Int i, Str h) {
 PG su_lower_clones(LW w, List(Int) ids, Int i, PG acc) {
     if (acc.err != "" || i >= ids.len()) { return acc; }
     Int off = (1000 + i) * 1000000000;
-    LW wf = LW {.g = w.g, .fs = w.fs, .base = w.base - off, .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof, .lor = w.lor, .want = "", .suv = w.suv, .own = w.own, .hz = w.hz};
+    LW wf = LW {.g = w.g, .fs = w.fs, .base = w.base - off, .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof, .lor = w.lor, .want = "", .suv = w.suv, .own = w.own, .hz = w.hz, .ocall = w.ocall};
     return su_lower_clones(w, ids, i + 1, lw_fn(wf, ids[i], acc));
 }
 
@@ -9404,9 +9406,11 @@ Bool lo_is(LW w, Int id, Int bit) { return ((w.lof.get(id) else { 0 }) & bit) !=
 // In a residual graph, symbols numbered by position in a specialized
 // function `f__rsN` are offset by N * 10^9, apart from its original's.
 Int lw_spec_off(Str name) {
+    // An ownership clone (`f__o`) shares f's nodes: its own band.
+    Int ob = if (str_has_suffix(name, "__o")) { 3000000000000 } else { 0 };
     Int at = str_index_of(name, "__rs", 0);
-    if (at < 0) { return 0; }
-    return lw_digits(name, at + 4, 0) * 1000000000;
+    if (at < 0) { return ob; }
+    return ob + lw_digits(name, at + 4, 0) * 1000000000;
 }
 
 Int lw_digits(Str s, Int i, Int acc) {
@@ -9421,12 +9425,12 @@ PG lw_decls(LW w, Int id, Int i, PG acc) {
     Int d = kg_kid(w.g, id, i);
     Str kind = w.g.ns[d].kind;
     if (kind == "sandbox") {
-        LW wi = LW {.g = w.g, .fs = w.fs, .base = str_parse_int(w.g.ns[d].text), .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof, .lor = w.lor, .want = "", .suv = w.suv, .own = w.own, .hz = w.hz};
+        LW wi = LW {.g = w.g, .fs = w.fs, .base = str_parse_int(w.g.ns[d].text), .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof, .lor = w.lor, .want = "", .suv = w.suv, .own = w.own, .hz = w.hz, .ocall = w.ocall};
         return lw_decls(w, id, i + 1, lw_decls(wi, d, 0, acc));
     }
     if (kind != "fn") { return lw_decls(w, id, i + 1, acc); }
     Int off = if (w.rg) { lw_spec_off(w.g.ns[d].text) } else { 0 };
-    LW wf = LW {.g = w.g, .fs = w.fs, .base = w.base - off, .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof, .lor = w.lor, .want = "", .suv = w.suv, .own = w.own, .hz = w.hz};
+    LW wf = LW {.g = w.g, .fs = w.fs, .base = w.base - off, .rg = w.rg, .dbg = w.dbg, .df = w.df, .rf = w.rf, .facts = w.facts, .lo = w.lo, .lof = w.lof, .lor = w.lor, .want = "", .suv = w.suv, .own = w.own, .hz = w.hz, .ocall = w.ocall};
     return lw_decls(w, id, i + 1, lw_fn(wf, d, acc));
 }
 
@@ -9547,8 +9551,8 @@ pub PG lw_program(Kg g, Int unit, Funcs fs, PG g0, Bool dbg, GAF df, Bool facts,
     LOP lo = sx.lo;
     // The originals lower on g, whose node ids their cached snapshot
     // graphs share; the copies on g with their fn nodes added.
-    LW w = LW {.g = g, .fs = sx.fs, .base = 0, .rg = true, .dbg = dbg, .df = df, .rf = lr_nof(), .facts = facts, .lo = lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = own, .hz = su_novars()};
-    LW wc = LW {.g = sx.g, .fs = sx.fs, .base = 0, .rg = true, .dbg = dbg, .df = df, .rf = lr_nof(), .facts = facts, .lo = lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = own, .hz = su_novars()};
+    LW w = LW {.g = g, .fs = sx.fs, .base = 0, .rg = true, .dbg = dbg, .df = df, .rf = lr_nof(), .facts = facts, .lo = lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = own, .hz = su_novars(), .ocall = lw_noro()};
+    LW wc = LW {.g = sx.g, .fs = sx.fs, .base = 0, .rg = true, .dbg = dbg, .df = df, .rf = lr_nof(), .facts = facts, .lo = lo, .lof = lo_nofl(), .lor = lo_nomap_is(), .want = "", .suv = su_novars(), .own = own, .hz = su_novars(), .ocall = lw_noro()};
     PG r0 = su_lower_clones(wc, sx.ids, 0, lw_decls(w, unit, 0, g0));
     // Record moves for loop regions (lr_move): only where none are inside.
     List(Str) rfs = if (r0.err != "" || resid_rtmod()) { [] } else { lr_rec_fns(fs, lo.hdr, 0, []) };
