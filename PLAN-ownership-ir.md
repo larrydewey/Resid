@@ -1085,10 +1085,26 @@ order-dependent, but it stays sound. AWFY is unchanged. The analysis
 takes 35% fewer instructions (110 G to 71 G), and the compiler process 8%
 fewer. It is still well above the 0.5 s gate:
 `str_char_at`/slices and string-keyed maps are about two thirds of it.
+The second run now starts from the first run's final state
+(`own_mixed_w`, `own_rebuild_lines_w`):
+- the first run's summaries and parameter verdicts carry over;
+- only the clones and the callers of cloned functions start dirty.
+
+Summaries only grow and owned parameters only fall, and both runs check
+every call site until nothing changes. So the warm run stops at a
+fixpoint of the same rules. The warm run is also more precise: it skips
+the cold run's joins from transient rounds, and routes 491 calls to
+owned instances in the compiler instead of 448. AWFY is unchanged, and
+the differential fuzz passes 3000/3000.
+
+In total the analysis does about 60% fewer instructions than at the
+start of this work (110 G to 44 G).
+
 The remaining plan:
+- Carry each function's rebuild lines in its piece, which drops the final
+  re-analysis pass (`ow_rb_lines`).
 - Integer paths and entries: interned steps, and keys built at
   preparation.
-- One analysis run instead of two.
 
 **Phase 3: home regions (about 1.5 weeks).**
 - Deliverable: §6.2 home facts in the inference and checker; the spine

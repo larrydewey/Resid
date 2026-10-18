@@ -2231,12 +2231,27 @@ Map(Str, Str) ow_inst_map_n(List(Str) ns, Int i, Map(Str, Str) acc) { return ow_
 // The functions worth an owned instance: a writing parameter some call
 // site passes an owned argument and some other does not. Only functions
 // declared at the unit's top level (not in a sandbox) are cloned.
-pub List(Str) own_mixed(Kg g, Int unit, Funcs fs) {
+// With the run's final state after the names, for own_rebuild_lines_w:
+// line 0 the names (space-separated), then per
+// function "U i name" and its piece's lines (ow_fs_ser), then "P k" for
+// each owned parameter. Text, so it crosses the analysis's arena.
+pub List(Str) own_mixed_w(Kg g, Int unit, Funcs fs) {
     OWR w = ow_run_s(g, unit, fs, true, ow_noss());
     OS z = ow_asm_at(w.sums, w.sums.keys(), 0, w.s, ow_noim(), ow_noim());
     Map(Int, Int) top = ow_top_fns(g, unit, 0, ow_noim());
-    return ow_mixed_names(fs, g, top, z.fresh.keys(), z.pown, 0, ow_nosm(), ListBuf());
+    List(Str) names = ow_mixed_names(fs, g, top, z.fresh.keys(), z.pown, 0, ow_nosm(), ListBuf());
+    ListBuf(Str) b0 = ListBuf();
+    ListBuf(Str) b1 = ow_ser_sums(g, w.prs, w.sums, 0, b0.push(str_join(names, " ")));
+    return ow_ser_i(b1, "P", w.s.pown.keys(), 0).finish();
 }
+
+ListBuf(Str) ow_ser_sums(Kg g, List(OPre) prs, Map(Int, OFS) sums, Int i, ListBuf(Str) acc) {
+    if (i >= prs.len()) { return acc; }
+    ListBuf(Str) a1 = if (sums.contains(i)) { ow_push_all(acc.push(f"U {i} " + g.ns[prs[i].fnode].text), ow_fs_ser(sums.get(i) else { ow_nofs() }), 0) } else { acc };
+    return ow_ser_sums_n(g, prs, sums, i, a1);
+}
+
+ListBuf(Str) ow_ser_sums_n(Kg g, List(OPre) prs, Map(Int, OFS) sums, Int i, ListBuf(Str) acc) { return ow_ser_sums(g, prs, sums, i + 1, acc); }
 
 Map(Int, Int) ow_top_fns(Kg g, Int unit, Int i, Map(Int, Int) acc) {
     if (i >= g.ns[unit].nk) { return acc; }
@@ -2404,9 +2419,128 @@ OWR ow_run_s(Kg g, Int unit, Funcs fs, Bool strict, Map(Str, Str) inst) {
     return OWR {.s = gb.s, .rs = nors, .fns = fns.len(), .work = gb.work, .log = gb.log, .prs = prs, .sums = gb.sums};
 }
 
-// The strict report with owned instances (names: the cloned functions).
-pub Str own_report_i(Kg g, Int unit, Funcs fs, List(Str) names) {
-    OWR w0 = ow_run_s(g, unit, fs, true, ow_inst_map(names, 0, ow_noss()));
+// own_rebuild_lines_i started from the first run's state (own_mixed_w's
+// lines, fs0 its signatures): the summaries and owned parameters carry
+// over, and only the clones and the callers of the cloned functions start
+// dirty. Summaries only grow and owned parameters only fall, so the sweeps
+// settle at a fixpoint of the same rules. Falls back to a cold run when a
+// function's index moved.
+pub List(Str) own_rebuild_lines_w(Kg g, Int unit, Funcs fs, Funcs fs0, List(Str) names, List(Str) st) {
+    OWR w = ow_run_2(g, unit, fs, fs0, names, st);
+    return ow_rb_lines(g, fs, w.s, w.prs, 0, ListBuf());
+}
+
+OWR ow_run_2(Kg g, Int unit, Funcs fs, Funcs fs0, List(Str) names, List(Str) st) {
+    Map(Str, Str) inst = ow_inst_map(names, 0, ow_noss());
+    Bool same = ow_prefix_same(fs.names, fs0.names, 0);
+    return if (same) { ow_run_warm(g, unit, fs, inst, fs0.names.len(), names, st) } else { ow_run_s(g, unit, fs, true, inst) };
+}
+
+Bool ow_prefix_same(List(Str) a, List(Str) b, Int i) {
+    if (i >= b.len()) { return b.len() <= a.len(); }
+    if (i >= a.len() || a[i] != b[i]) { return false; }
+    return ow_prefix_same_n(a, b, i);
+}
+
+Bool ow_prefix_same_n(List(Str) a, List(Str) b, Int i) { return ow_prefix_same(a, b, i + 1); }
+
+OWR ow_run_warm(Kg g, Int unit, Funcs fs, Map(Str, Str) inst, Int n0, List(Str) names, List(Str) st) {
+    List(Int) fns = ow_fns(g, unit, 0, ListBuf());
+    Map(Str, Int) st0 = {};
+    Map(Str, Str) ft0 = {};
+    OT ot = ow_types(fs, 0, OT {.sts = st0, .fty = ft0, .fidx = ow_fidx(fs, 0, ow_nosm()), .strict = true, .inst = inst});
+    List(OPre) prs = ow_preps(g, fs, ot, fns, 0, ListBuf());
+    Map(Str, Int) blind = ow_blind_all(g, ot, prs, 0, ow_nosm());
+    OS si = ow_init(g, fs, ot, blind, fns, 0, OS {.need = ow_noim(), .pown = ow_noim(), .fresh = ow_noim(), .keeps = ow_nois(), .reads = ow_nois(), .writes = ow_nois()});
+    Map(Str, List(Int)) cl0 = {};
+    Map(Str, List(Int)) callers = ow_callers(prs, 0, cl0);
+    Map(Str, Int) idx = ow_index(g, prs, 0, ow_nosm());
+    OOR oo = ow_order_all(prs, idx, 0, OOR {.seen = ow_noim(), .fin = ow_noim(), .k = 0});
+    List(Int) order = ow_order_list(oo.fin, 0, oo.k, ListBuf());
+    OWS ws = ow_warm_de(g, prs, st, 1, OWS {.sums = ow_nosums(), .pown = ow_noim(), .ok = true, .cur = -1, .f = ow_nofs_e()});
+    if (!ws.ok) { return ow_run_s(g, unit, fs, true, inst); }
+    // Original parameters keep the first run's verdict; a clone's start
+    // owned, as in a cold run.
+    Map(Int, Int) pown = ow_pown_warm(si.pown, si.pown.keys(), ws.pown, n0, 0);
+    OS s1 = ow_merge_all(g, prs, ws.sums, ws.sums.keys(), 0, OS {.need = si.need, .pown = pown, .fresh = si.fresh, .keeps = si.keeps, .reads = si.reads, .writes = si.writes});
+    Map(Int, Int) d0 = ow_clone_idx(prs, ws.sums, 0, ow_noim());
+    Map(Int, Int) dirty = ow_mark_names(callers, names, 0, d0);
+    OGS gb = ow_sweeps(g, fs, prs, callers, idx, ow_sccs(g, prs, callers, order), true, OGS {.s = s1, .sums = ws.sums, .dirty = dirty, .work = 0, .log = ""}, 0);
+    List(OFn) nors = [];
+    return OWR {.s = gb.s, .rs = nors, .fns = fns.len(), .work = gb.work, .log = gb.log, .prs = prs, .sums = gb.sums};
+}
+
+Map(Int, OFS) ow_nosums() {
+    Map(Int, OFS) m = {};
+    return m;
+}
+
+// Decoding the first run's state: cur is the function whose lines follow.
+type OWS = { Map(Int, OFS) sums; Map(Int, Int) pown; Bool ok; Int cur; OFS f; };
+
+OWS ow_warm_de(Kg g, List(OPre) prs, List(Str) st, Int i, OWS w) {
+    if (i >= st.len() || !w.ok) { return ow_warm_flush(w); }
+    Str l = st[i];
+    Str tag = str_slice(l, 0, 1);
+    OWS w2 = if (tag == "U") { ow_warm_fn(g, prs, l, ow_warm_flush(w)) } else { if (tag == "P") { OWS {.sums = w.sums, .pown = w.pown.insert(str_parse_int(str_slice(l, 2, str_len(l))), 1), .ok = w.ok, .cur = w.cur, .f = w.f} } else { OWS {.sums = w.sums, .pown = w.pown, .ok = w.ok, .cur = w.cur, .f = ow_fs_de([l], 0, w.f)} } };
+    return ow_warm_de_n(g, prs, st, i, w2);
+}
+
+OWS ow_warm_de_n(Kg g, List(OPre) prs, List(Str) st, Int i, OWS w) { return ow_warm_de(g, prs, st, i + 1, w); }
+
+OWS ow_warm_flush(OWS w) {
+    if (w.cur < 0) { return w; }
+    return OWS {.sums = w.sums.insert(w.cur, w.f), .pown = w.pown, .ok = w.ok, .cur = -1, .f = ow_nofs_e()};
+}
+
+// "U i name": function i of this run must be the same function.
+OWS ow_warm_fn(Kg g, List(OPre) prs, Str l, OWS w) {
+    List(Str) p = str_split(l, " ");
+    Int i = if (p.len() == 3) { str_parse_int(p[1]) } else { -1 };
+    Bool ok = i >= 0 && i < prs.len() && g.ns[prs[i].fnode].text == p[2];
+    return OWS {.sums = w.sums, .pown = w.pown, .ok = ok, .cur = if (ok) { i } else { -1 }, .f = ow_nofs_e()};
+}
+
+Map(Int, Int) ow_pown_warm(Map(Int, Int) init, List(Int) ks, Map(Int, Int) prev, Int n0, Int i) {
+    if (i >= ks.len()) { return init; }
+    Int k = ks[i];
+    Bool drop = k / 1024 < n0 && !prev.contains(k);
+    return ow_pown_warm_n(if (drop) { init.remove(k) } else { init }, ks, prev, n0, i);
+}
+
+Map(Int, Int) ow_pown_warm_n(Map(Int, Int) init, List(Int) ks, Map(Int, Int) prev, Int n0, Int i) { return ow_pown_warm(init, ks, prev, n0, i + 1); }
+
+// The first run's pieces merged into the program-wide summaries, as the
+// sweeps merged them there.
+OS ow_merge_all(Kg g, List(OPre) prs, Map(Int, OFS) sums, List(Int) ks, Int i, OS s) {
+    if (i >= ks.len()) { return s; }
+    Int pi = ks[i];
+    Int fi = prs[pi].t.fidx.get(g.ns[prs[pi].fnode].text) else { -1 };
+    return ow_merge_all_n(g, prs, sums, ks, i, ow_merge_piece(s, fi, sums.get(pi) else { ow_nofs() }, true));
+}
+
+OS ow_merge_all_n(Kg g, List(OPre) prs, Map(Int, OFS) sums, List(Int) ks, Int i, OS s) { return ow_merge_all(g, prs, sums, ks, i + 1, s); }
+
+// Functions with no first-run piece: the clones.
+Map(Int, Int) ow_clone_idx(List(OPre) prs, Map(Int, OFS) sums, Int i, Map(Int, Int) acc) {
+    if (i >= prs.len()) { return acc; }
+    return ow_clone_idx_n(prs, sums, i, if (sums.contains(i)) { acc } else { acc.insert(i, 1) });
+}
+
+Map(Int, Int) ow_clone_idx_n(List(OPre) prs, Map(Int, OFS) sums, Int i, Map(Int, Int) acc) { return ow_clone_idx(prs, sums, i + 1, acc); }
+
+// The callers of each cloned function: their calls may now be routed.
+Map(Int, Int) ow_mark_names(Map(Str, List(Int)) callers, List(Str) names, Int i, Map(Int, Int) acc) {
+    if (i >= names.len()) { return acc; }
+    return ow_mark_names_n(callers, names, i, ow_mark(acc, callers.get(names[i]) else { [] }, 0));
+}
+
+Map(Int, Int) ow_mark_names_n(Map(Str, List(Int)) callers, List(Str) names, Int i, Map(Int, Int) acc) { return ow_mark_names(callers, names, i + 1, acc); }
+
+// The strict report with owned instances, as lowered (names: the cloned
+// functions; fs0 and st: the first run's, from own_mixed_w).
+pub Str own_report_w(Kg g, Int unit, Funcs fs, Funcs fs0, List(Str) names, List(Str) st) {
+    OWR w0 = ow_run_2(g, unit, fs, fs0, names, st);
     OWR w = OWR {.s = w0.s, .rs = ow_all(g, fs, w0.s, w0.prs, 0, ListBuf()), .fns = w0.fns, .work = w0.work, .log = w0.log, .prs = w0.prs, .sums = w0.sums};
     Str hdr = "own-clones " + str_join(names, " ") + "\n";
     return str_sb_finish(ow_rep_routes(w.rs, 0, ow_rep_fresh(w.rs, w.s, 0, ow_rep_bad(w.rs, 0, ow_rep_fns(w.rs, 0, str_sb_append(str_sb_new(), hdr))))));

@@ -10307,9 +10307,10 @@ Int main() {
         Kg og = lgi;
         Int omode = str_parse_int(pick_opt(argc, "--own-mode", "3"));
         // Mode 5: the strict verdicts with owned instances, as lowered.
-        List(Str) omx5 = if (omode == 5) { own_mixed(og, lkp.id, fs) } else { [] };
+        List(Str) omw5 = if (omode == 5) { own_mixed_w(og, lkp.id, fs) } else { [] };
+        List(Str) omx5 = if (omw5.len() > 0 && omw5[0] != "") { str_split(omw5[0], " ") } else { [] };
         Kg og5 = own_add_clones(og, lkp.id, omx5);
-        Str rep = if (omode == 5) { own_report_i(og5, lkp.id, if (omx5.len() > 0) { lw_sigs(og5, lkp.id) } else { fs }, omx5) } else { own_report_m(og, lkp.id, fs, omode) };
+        Str rep = if (omode == 5) { own_report_w(og5, lkp.id, if (omx5.len() > 0) { lw_sigs(og5, lkp.id) } else { fs }, fs, omx5, omw5) } else { own_report_m(og, lkp.id, fs, omode) };
         Bool ow = filesystem.write_all(own_path, rep);
     }
     // main's declared authority, for the provenance record's `grant`.
@@ -10343,13 +10344,16 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     Bool own_on = pick_opt(argc, "--ownership", "off") == "on" && !resid_rtmod();
     // First the functions worth an owned instance (f__o), which are
     // cloned; then the verdicts, with calls routed to the instances.
+    // The first run's state comes out with the names: the second run
+    // starts from it (own_rebuild_lines_w).
     Int _om_in = if (own_on) { resid_bulk_push() } else { 0 };
-    List(Str) omx = if (own_on) { resid_list_str_persist_copy(own_mixed(lgi, lkp.id, fs)) } else { [] };
+    List(Str) omw = if (own_on) { resid_list_str_persist_copy(own_mixed_w(lgi, lkp.id, fs)) } else { [] };
     Int _om_out = if (own_on) { resid_bulk_pop() } else { 0 };
+    List(Str) omx = if (omw.len() > 0 && omw[0] != "") { str_split(omw[0], " ") } else { [] };
     Kg lgo = own_add_clones(lgi, lkp.id, omx);
     Funcs fso = if (omx.len() > 0) { lw_sigs(lgo, lkp.id) } else { fs };
     Int _ow_in = if (own_on) { resid_bulk_push() } else { 0 };
-    List(Str) owl = if (own_on) { resid_list_str_persist_copy(own_rebuild_lines_i(lgo, lkp.id, fso, omx)) } else { [] };
+    List(Str) owl = if (own_on) { resid_list_str_persist_copy(own_rebuild_lines_w(lgo, lkp.id, fso, fs, omx, omw)) } else { [] };
     Int _ow_out = if (own_on) { resid_bulk_pop() } else { 0 };
     Map(Int, Map(Int, Str)) owt = if (own_on) { own_parse_lines(owl, 0, lw_noown()) } else { lw_noown() };
     PG res = lw_program(lgo, lkp.id, fso, g0, gdbg, gdf, !pick_flag(argc, "--no-facts"), owt);
