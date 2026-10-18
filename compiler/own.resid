@@ -2358,7 +2358,7 @@ Map(Str, Str) ow_inst_map_n(List(Str) ns, Int i, Map(Str, Str) acc) { return ow_
 pub List(Str) own_mixed_w(Kg g, Int unit, Funcs fs) {
     OWR w = ow_run_s(g, unit, fs, true, ow_noss(), true);
     OS z = ow_asm_at(w.sums, w.sums.keys(), 0, w.s, ow_noim(), ow_noim());
-    Map(Int, Int) top = ow_top_fns(g, unit, 0, ow_noim());
+    Map(Str, Int) top = ow_top_fns(g, unit, 0, ow_nosm());
     List(Str) names = ow_mixed_names(fs, g, top, z.fresh.keys(), z.pown, 0, ow_nosm(), ListBuf());
     ListBuf(Str) b0 = ListBuf();
     ListBuf(Str) b1 = ow_ser_sums(g, w.prs, w.sums, 0, b0.push(str_join(names, " ")));
@@ -2373,32 +2373,45 @@ ListBuf(Str) ow_ser_sums(Kg g, List(OPre) prs, Map(Int, OFS) sums, Int i, ListBu
 
 ListBuf(Str) ow_ser_sums_n(Kg g, List(OPre) prs, Map(Int, OFS) sums, Int i, ListBuf(Str) acc) { return ow_ser_sums(g, prs, sums, i + 1, acc); }
 
-Map(Int, Int) ow_top_fns(Kg g, Int unit, Int i, Map(Int, Int) acc) {
+Map(Str, Int) ow_top_fns(Kg g, Int unit, Int i, Map(Str, Int) acc) {
     if (i >= g.ns[unit].nk) { return acc; }
     Int d = kg_kid(g, unit, i);
-    return ow_top_fns_n(g, unit, i, if (g.ns[d].kind == "fn" && g.ns[d].nk > 0) { acc.insert(d, 1) } else { acc });
+    Bool f = g.ns[d].kind == "fn" && g.ns[d].nk > 0 && !acc.contains(g.ns[d].text);
+    return ow_top_fns_n(g, unit, i, if (f) { acc.insert(g.ns[d].text, d) } else { acc });
 }
 
-Map(Int, Int) ow_top_fns_n(Kg g, Int unit, Int i, Map(Int, Int) acc) { return ow_top_fns(g, unit, i + 1, acc); }
+Map(Str, Int) ow_top_fns_n(Kg g, Int unit, Int i, Map(Str, Int) acc) { return ow_top_fns(g, unit, i + 1, acc); }
 
 // good keys (carried in fresh by ow_asm_at) that are also bad (in pown).
-List(Str) ow_mixed_names(Funcs fs, Kg g, Map(Int, Int) top, List(Int) good, Map(Int, Int) bad, Int i, Map(Str, Int) seen, ListBuf(Str) acc) {
+// top: the unit's top-level functions by name. A function whose body is
+// larger than ow_clone_cap() nodes is not cloned (code size: a clone is
+// lowered and compiled in full; the original stays correct).
+List(Str) ow_mixed_names(Funcs fs, Kg g, Map(Str, Int) top, List(Int) good, Map(Int, Int) bad, Int i, Map(Str, Int) seen, ListBuf(Str) acc) {
     if (i >= good.len()) { return acc.finish(); }
     Int fi = good[i] / 1024;
     Str nm = if (fi >= 0 && fi < fs.names.len()) { fs.names[fi] } else { "" };
-    Bool ok = bad.contains(good[i]) && nm != "" && !seen.contains(nm) && !str_has_suffix(nm, "__o") && ow_is_top(g, top, top.keys(), nm, 0);
+    Int fnode = top.get(nm) else { -1 };
+    Bool ok = bad.contains(good[i]) && nm != "" && !seen.contains(nm) && !str_has_suffix(nm, "__o") && fnode >= 0 && ow_size(g, fnode, 0) <= ow_clone_cap();
     return ow_mixed_names_n(fs, g, top, good, bad, i, if (ok) { seen.insert(nm, 1) } else { seen }, if (ok) { acc.push(nm) } else { acc });
 }
 
-List(Str) ow_mixed_names_n(Funcs fs, Kg g, Map(Int, Int) top, List(Int) good, Map(Int, Int) bad, Int i, Map(Str, Int) seen, ListBuf(Str) acc) { return ow_mixed_names(fs, g, top, good, bad, i + 1, seen, acc); }
+List(Str) ow_mixed_names_n(Funcs fs, Kg g, Map(Str, Int) top, List(Int) good, Map(Int, Int) bad, Int i, Map(Str, Int) seen, ListBuf(Str) acc) { return ow_mixed_names(fs, g, top, good, bad, i + 1, seen, acc); }
 
-Bool ow_is_top(Kg g, Map(Int, Int) top, List(Int) ks, Str nm, Int i) {
-    if (i >= ks.len()) { return false; }
-    if (g.ns[ks[i]].text == nm) { return true; }
-    return ow_is_top_n(g, top, ks, nm, i);
+Int ow_clone_cap() { return 200; }
+
+// Nodes under id (shared subtrees counted each time, as lowering visits
+// them), counting stops past the cap.
+Int ow_size(Kg g, Int id, Int n) {
+    if (n > ow_clone_cap()) { return n; }
+    return ow_size_kids(g, id, 0, n + 1);
 }
 
-Bool ow_is_top_n(Kg g, Map(Int, Int) top, List(Int) ks, Str nm, Int i) { return ow_is_top(g, top, ks, nm, i + 1); }
+Int ow_size_kids(Kg g, Int id, Int i, Int n) {
+    if (i >= g.ns[id].nk || n > ow_clone_cap()) { return n; }
+    return ow_size_kids_n(g, id, i, ow_size(g, kg_kid(g, id, i), n));
+}
+
+Int ow_size_kids_n(Kg g, Int id, Int i, Int n) { return ow_size_kids(g, id, i + 1, n); }
 
 // Each named function cloned as `name__o` (a fn node sharing its kids),
 // appended to the unit's declarations.
