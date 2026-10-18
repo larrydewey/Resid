@@ -7,10 +7,12 @@
 #      expected output, as it does with the default;
 #   2. AWFY: the harness built with --ownership on must verify every
 #      benchmark (it aborts on a wrong result);
-#   3. self-compile: a compiler built with --ownership on must compile the
+#   3. cases/: each regression program must print the same with
+#      ownership off and on;
+#   4. self-compile: a compiler built with --ownership on must compile the
 #      compiler to the same IR as the plain compiler does.
 #
-# -q skips step 3 (two self-compiles, about two minutes).
+# -q skips step 4 (two self-compiles, about two minutes).
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -59,7 +61,18 @@ else
     bad "awfy harness build"
 fi
 
-# 3. The compiler itself.
+# 3. Regression programs (cases/): ownership off and on must print the same.
+for c in "$ROOT"/tests/own/cases/*.resid; do
+    n="$(basename "$c" .resid)"
+    if (cd "$ROOT" && "$COMPILER" "$c" -o "$TMP/c_off_$n" > /dev/null 2>&1 && "$COMPILER" "$c" -o "$TMP/c_on_$n" --ownership on > /dev/null 2>&1) \
+        && [ "$("$TMP/c_off_$n")" = "$("$TMP/c_on_$n")" ]; then
+        ok "case $n"
+    else
+        bad "case $n"
+    fi
+done
+
+# 4. The compiler itself.
 if [ "$QUICK" = 0 ]; then
     if (cd "$ROOT" && "$COMPILER" "$ROOT/compiler/driver.resid" -o "$TMP/c_on" --runtime-internals --ownership on > "$TMP/c1.log" 2>&1) \
         && (cd "$ROOT" && "$TMP/c_on" "$ROOT/compiler/driver.resid" -o "$TMP/c_on2" --runtime-internals > "$TMP/c2.log" 2>&1) \

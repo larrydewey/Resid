@@ -1488,21 +1488,15 @@ List(OFn) ow_all(Kg g, Funcs fs, OS s, List(OPre) fns, Int i, ListBuf(OFn) acc) 
 
 List(OFn) ow_all_n(Kg g, Funcs fs, OS s, List(OPre) fns, Int i, ListBuf(OFn) acc) { return ow_all(g, fs, s, fns, i + 1, acc); }
 
-Map(Int, Int) ow_need_fn(OFn o, List(Int) ps, Int i, Map(Int, Int) acc) {
+// A parameter needs ownership when a write event's memory reaches it:
+// through the parameter itself or through a local taken out of it.
+Map(Int, Int) ow_need_fn(OFn o, List(Int) ps, OWA wa, Int i, Map(Int, Int) acc) {
     if (i >= ps.len()) { return acc; }
-    Bool w = ow_has_ev_b(o.f.ev, ps[i], 0);
-    return ow_need_fn_n(o, ps, i, if (w) { acc.insert(ow_fk(o.x, o.x.fname, i), 1) } else { acc });
+    Bool w = wa.need.contains(ps[i]);
+    return ow_need_fn_n(o, ps, wa, i, if (w) { acc.insert(ow_fk(o.x, o.x.fname, i), 1) } else { acc });
 }
 
-Map(Int, Int) ow_need_fn_n(OFn o, List(Int) ps, Int i, Map(Int, Int) acc) { return ow_need_fn(o, ps, i + 1, acc); }
-
-Bool ow_has_ev_b(List(OEv) ev, Int b, Int i) {
-    if (i >= ev.len()) { return false; }
-    if (ev[i].b == b) { return true; }
-    return ow_has_ev_b_n(ev, b, i);
-}
-
-Bool ow_has_ev_b_n(List(OEv) ev, Int b, Int i) { return ow_has_ev_b(ev, b, i + 1); }
+Map(Int, Int) ow_need_fn_n(OFn o, List(Int) ps, OWA wa, Int i, Map(Int, Int) acc) { return ow_need_fn(o, ps, wa, i + 1, acc); }
 
 // The call sites refused (bad) and allowed (good), each event judged once.
 type OBG = { Map(Int, Int) bad; Map(Int, Int) good; };
@@ -1711,11 +1705,12 @@ OFS ow_fsum(OFn o, OS s, Bool own) {
     Kg g = o.x.g;
     List(Int) ps = ow_param_ids(g, o.x.fnode, 0, ListBuf());
     ORT t = ORT {.ok = o.f.rok, .ents = o.f.rents};
-    Map(Int, Int) need = ow_need_fn(o, ps, 0, ow_noim());
+    OWA wa = ow_wr_all(o, s, ow_pix(ps, 0, ow_noim()), 0, OWA {.need = ow_noim(), .ws = ow_nois()});
+    Map(Int, Int) need = ow_need_fn(o, ps, wa, 0, ow_noim());
     Map(Int, Str) keeps = ow_keeps_ps(ow_fk(o.x, o.x.fname, 0), t.ents, ps, 0, ow_nois());
     Bool fok = t.ok && ow_ents_apart(t.ents, ps, 0);
     Map(Int, Str) rd = ow_reads_ps(o, s, ps, 0, ow_nois());
-    Map(Int, Str) wr = ow_writes_ps(o, s, ps, 0, ow_nois());
+    Map(Int, Str) wr = ow_writes_ps(o, ps, wa, 0, ow_nois());
     OBG bg = ow_badgood(o, 0, OBG {.bad = ow_noim(), .good = ow_noim()});
     Str sig = ow_fsig(need, keeps, fok, rd, wr, bg.bad, bg.good);
     return OFS {.need = need, .keeps = keeps, .fok = fok, .reads = rd, .writes = wr, .bad = bg.bad, .good = bg.good, .sig = sig, .rb = if (o.x.t.rb) { ow_rb_of(o) } else { [] }};
@@ -2113,7 +2108,7 @@ Map(Int, Str) ow_rdm(OFn o, OS s, Int id, Map(Int, Int) pix, Map(Int, Str) acc) 
     Kg g = o.x.g;
     OP pp = ow_path(o.x, o.r, id);
     if (pp.b >= 0) {
-        Map(Int, Str) a1 = if (!pix.contains(pp.b)) { acc } else { acc.insert(pp.b, if (pp.path == "") { "*" } else { ow_rd_add(acc.get(pp.b) else { "," }, str_slice(pp.path, 1, ow_name_end(pp.path, 1))) }) };
+        Map(Int, Str) a1 = if (!pix.contains(pp.b)) { acc } else { acc.insert(pp.b, if (pp.path == "") { "*" } else { ow_rd_add(acc.get(pp.b) else { "," }, ow_first_step(pp.path)) }) };
         return ow_rdm_list(o, s, pp.idx, 0, pix, a1);
     }
     if (g.ns[id].kc == 4 && ow_fi(o.x, g.ns[id].text) >= 0) { return ow_rdm_args(o, s, id, 0, pix, acc); }
@@ -2145,6 +2140,10 @@ Map(Int, Str) ow_rdm_args(OFn o, OS s, Int id, Int i, Map(Int, Int) pix, Map(Int
 
 Map(Int, Str) ow_rdm_args_n(OFn o, OS s, Int id, Int i, Map(Int, Int) pix, Map(Int, Str) acc) { return ow_rdm_args(o, s, id, i + 1, pix, acc); }
 
+// A path's first step as a reads/writes entry: the field's name, or "["
+// for an element step (anything inside the list's elements).
+Str ow_first_step(Str p) { return if (str_has_prefix(p, "[")) { "[" } else { str_slice(p, 1, ow_name_end(p, 1)) }; }
+
 Str ow_rd_add(Str acc, Str f) { return if (acc == "*" || str_contains(acc, "," + f + ",")) { acc } else { acc + f + "," }; }
 
 Str ow_rd_merge(Str a, Str b) {
@@ -2160,27 +2159,49 @@ Str ow_rd_merge_at(Str a, List(Str) fs, Int i) {
 Str ow_rd_merge_at_n(Str a, List(Str) fs, Int i) { return ow_rd_merge_at(a, fs, i + 1); }
 
 // ─── What each parameter is written at ─────────────────────────────
-// writes["f#i"]: ",^,a," where ^ is the parameter's own object (rebuilt,
-// or a list's slots replaced) and a a first field under which anything
-// may be written; "*" for everything. A callee's writes decide which
+// writes["f#i"]: ",^,a,[," where ^ is the parameter's own object (rebuilt,
+// or a list's slots replaced), a a first field under which anything may
+// be written, and [ anything inside the list's elements; "*" for
+// everything. A callee's writes decide which
 // aliases of an argument it can disturb.
 
-Map(Int, Str) ow_writes_ps(OFn o, OS s, List(Int) ps, Int i, Map(Int, Str) acc) {
+Map(Int, Str) ow_writes_ps(OFn o, List(Int) ps, OWA wa, Int i, Map(Int, Str) acc) {
     if (i >= ps.len()) { return acc; }
-    Str w = ow_wr_evs(o, s, ps[i], 0, ",");
-    return ow_writes_ps_n(o, s, ps, i, if (w == ",") { acc } else { acc.insert(ow_fk(o.x, o.x.fname, i), w) });
+    Str w = wa.ws.get(ps[i]) else { "," };
+    return ow_writes_ps_n(o, ps, wa, i, if (w == ",") { acc } else { acc.insert(ow_fk(o.x, o.x.fname, i), w) });
 }
 
-Map(Int, Str) ow_writes_ps_n(OFn o, OS s, List(Int) ps, Int i, Map(Int, Str) acc) { return ow_writes_ps(o, s, ps, i + 1, acc); }
+Map(Int, Str) ow_writes_ps_n(OFn o, List(Int) ps, OWA wa, Int i, Map(Int, Str) acc) { return ow_writes_ps(o, ps, wa, i + 1, acc); }
 
-Str ow_wr_evs(OFn o, OS s, Int p, Int i, Str acc) {
-    if (i >= o.f.ev.len() || acc == "*") { return acc; }
+// Every write event charged to each parameter its written memory reaches
+// (pix: parameter binder -> index): need, and the writes entries. A
+// location at the parameter itself is "^" (an argument: the callee's
+// writes), one below it its first step.
+type OWA = { Map(Int, Int) need; Map(Int, Str) ws; };
+
+OWA ow_wr_all(OFn o, OS s, Map(Int, Int) pix, Int i, OWA acc) {
+    if (i >= o.f.ev.len()) { return acc; }
     OEv e = o.f.ev[i];
-    Str a1 = if (e.b != p) { acc } else { if (e.path == "") { if (e.kind == "arg") { ow_rd_merge(acc, s.writes.get(ow_fk(o.x, e.cal, e.arg)) else { "," }) } else { ow_rd_add(acc, "^") } } else { ow_rd_add(acc, str_slice(e.path, 1, ow_name_end(e.path, 1))) } };
-    return ow_wr_evs_n(o, s, p, i, a1);
+    OWA a1 = if (e.b < 0) { acc } else { ow_wr_locs(o, s, e, pix, ow_mem(o.f, e.b, e.path), 0, acc) };
+    return ow_wr_all_n(o, s, pix, i, a1);
 }
 
-Str ow_wr_evs_n(OFn o, OS s, Int p, Int i, Str acc) { return ow_wr_evs(o, s, p, i + 1, acc); }
+OWA ow_wr_all_n(OFn o, OS s, Map(Int, Int) pix, Int i, OWA acc) { return ow_wr_all(o, s, pix, i + 1, acc); }
+
+OWA ow_wr_locs(OFn o, OS s, OEv e, Map(Int, Int) pix, List(Str) ls, Int j, OWA acc) {
+    if (j >= ls.len()) { return acc; }
+    Str l = ls[j];
+    Int re = ow_root_end(l, 0);
+    Int r = ow_loc_root(l);
+    Bool hit = pix.contains(r);
+    Str rest = str_slice(l, re, str_len(l));
+    Str cur = acc.ws.get(r) else { "," };
+    Str w = if (!hit || cur == "*") { cur } else { if (rest == "") { if (e.kind == "arg") { ow_rd_merge(cur, s.writes.get(ow_fk(o.x, e.cal, e.arg)) else { "," }) } else { ow_rd_add(cur, "^") } } else { ow_rd_add(cur, ow_first_step(rest)) } };
+    OWA a1 = if (hit) { OWA {.need = acc.need.insert(r, 1), .ws = acc.ws.insert(r, w)} } else { acc };
+    return ow_wr_locs_n(o, s, e, pix, ls, j, a1);
+}
+
+OWA ow_wr_locs_n(OFn o, OS s, OEv e, Map(Int, Int) pix, List(Str) ls, Int j, OWA acc) { return ow_wr_locs(o, s, e, pix, ls, j + 1, acc); }
 
 // Whether a callee writing `ws` through location wm disturbs alias l.
 Bool ow_disturbs(Str l, Str wm, Str ws) {
@@ -2193,7 +2214,10 @@ Bool ow_disturbs(Str l, Str wm, Str ws) {
     Int rw = ow_root_end(wm, 0);
     Int rl0 = ow_root_end(l, 0);
     Str d = ow_drop_steps(str_slice(l, rl0, str_len(l)), 0, ow_nsteps(str_slice(wm, rw, str_len(wm)), 0, 0));
-    if (str_has_prefix(d, "[")) { return false; }
+    // An alias inside the list's elements: disturbed when the callee
+    // writes anything inside an element (a record it reaches is shared
+    // with every copy read out of the list).
+    if (str_has_prefix(d, "[")) { return str_contains(ws, ",[,"); }
     return str_contains(ws, "," + str_slice(d, 1, ow_name_end(d, 1)) + ",");
 }
 

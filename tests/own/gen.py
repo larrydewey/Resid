@@ -36,6 +36,8 @@ def lit(t, depth=0):
         return "[" + ", ".join(lit("Int") for _ in range(R.randint(1, 3))) + "]"
     if t == "List(Pa)":
         return "[" + ", ".join(lit("Pa", depth + 1) for _ in range(R.randint(1, 3))) + "]"
+    if t == "List(Pc)":
+        return "[" + ", ".join(lit("Pc", depth + 1) for _ in range(R.randint(1, 3))) + "]"
     return t + " {" + ", ".join(f".{f} = {lit(ft, depth + 1)}" for f, ft in fields(t)) + "}"
 
 
@@ -47,6 +49,8 @@ def checksum(t, e):
         return f"lsum({e}, 0, 0)"
     if t == "List(Pa)":
         return f"lpa({e}, 0, 0)"
+    if t == "List(Pc)":
+        return f"lpc({e}, 0, 0)"
     return " + ".join(f"({checksum(ft, e + '.' + f)}) * {i + 2}" for i, (f, ft) in enumerate(fields(t)))
 
 
@@ -58,6 +62,10 @@ Int lsum(List(Int) xs, Int i, Int acc) {
 Int lpa(List(Pa) xs, Int i, Int acc) {
     if (i >= xs.len()) { return acc; }
     return lpa(xs, i + 1, acc * 5 + xs[i].x * 7 + xs[i].y);
+}
+Int lpc(List(Pc) xs, Int i, Int acc) {
+    if (i >= xs.len()) { return acc; }
+    return lpc(xs, i + 1, acc * 5 + xs[i].a.x * 7 + xs[i].a.y * 3 + xs[i].n);
 }
 Pa pa_bump(Pa p) { return Pa {.x = p.x + 1, .y = p.y}; }
 Pa pa_keep(Pa p) { return p; }
@@ -98,6 +106,23 @@ Pc pc_mix(Pc c, Pa a) {
     Pa b = pa_both(c.a, a);
     return Pc {.a = b, .n = c.n + b.x};
 }
+Pc lc_get(List(Pc) cs, Int i) { return cs[i % cs.len()]; }
+Pc lc_first_bump(List(Pc) cs) {
+    if (cs.len() == 0) { return Pc {.a = Pa {.x = 0, .y = 0}, .n = 0}; }
+    Pc q = pc_bump(cs[0]);
+    return q;
+}
+List(Pc) lc_set(List(Pc) cs, Int i, Pc c) { return cs.with(i % cs.len(), c); }
+Pa lc_in(List(Pc) cs, Int i) {
+    Pc c = cs[i % cs.len()];
+    return pa_bump(c.a);
+}
+Pc lc_deep(List(Pc) cs, Int i) {
+    if (cs.len() == 0) { return Pc {.a = Pa {.x = 0, .y = 0}, .n = 0}; }
+    Pc c = cs[i % cs.len()];
+    Pa b = pa_bump(c.a);
+    return Pc {.a = b, .n = c.n};
+}
 Pa pa_cond(Pa p, Pa q) { return if (p.x > q.x) { pa_bump(p) } else { Pa {.x = q.x, .y = p.y} }; }
 """
 
@@ -131,6 +156,14 @@ OPS = [
     ("Pa", ["Pa", "Pa"], "if ({0}.x > {i}) {{ pa_bump({0}) }} else {{ {1} }}"),
     ("Pc", ["Pc"], "Pc {{.a = pa_bump({0}.a), .n = {0}.n + {i}}}"),
     ("Opt", ["Pa"], "Some({0})"),
+    ("List(Pc)", ["Pc", "Pc"], "[{0}, {1}]"),
+    ("Pc", ["List(Pc)"], "lc_get({0}, {i})"),
+    ("Pc", ["List(Pc)"], "lc_first_bump({0})"),
+    ("List(Pc)", ["List(Pc)", "Pc"], "lc_set({0}, {i}, {1})"),
+    ("Pa", ["List(Pc)"], "lc_in({0}, {i})"),
+    ("Pc", ["List(Pc)"], "lc_deep({0}, {i})"),
+    ("Pc", ["List(Pc)"], "{0}[{i} % {0}.len()]"),
+    ("Pa", ["List(Pc)"], "{0}[{i} % {0}.len()].a"),
 ]
 
 
@@ -140,7 +173,7 @@ def main():
     out.append("Int unwrap(Option(Pa) o) { return match o { Some(p) => p.x * 11 + p.y, None => 0 }; }")
     out.append("Int main() {")
     binds = []  # (name, type)
-    for t in REC:
+    for t in REC + ["List(Pc)"]:
         for _ in range(2):
             n = f"v{len(binds)}"
             out.append(f"    {t} {n} = {lit(t)};")
@@ -162,7 +195,7 @@ def main():
         # Sometimes read an earlier value right away (keeps it live).
         if R.random() < 0.3:
             old, ot = R.choice(binds)
-            if ot in TYPES:
+            if ot in TYPES or ot == "List(Pc)":
                 out.append(f"    println(f\"r{step} {{{checksum(ot, old)}}}\");")
     # Print everything, in a random order.
     order = binds[:]

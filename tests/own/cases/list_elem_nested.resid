@@ -1,0 +1,26 @@
+type In = { Int a; Int b; };
+type Pt = { In i; Int c; };
+
+In rb(In v) { return In {.a = v.a + 100, .b = v.b}; }
+
+Pt g(Pt p) {
+    if (p.c < 0) { return p; }
+    In w = rb(p.i);
+    return Pt {.i = w, .c = p.c};
+}
+
+Pt f(List(Pt) xs) {
+    if (xs.len() == 0) { return Pt {.i = In {.a = 0, .b = 0}, .c = 0}; }
+    Pt q = g(xs[0]);
+    return q;
+}
+
+@requires(args)
+Int main() {
+    Int n = args.count();
+    List(Pt) xs = [Pt {.i = In {.a = n, .b = n}, .c = n}, Pt {.i = In {.a = n, .b = n}, .c = n}];
+    Pt r = xs[0];
+    Pt y = f(xs);
+    println(f"{r.i.a} {y.i.a}");
+    return 0;
+}
