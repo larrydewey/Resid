@@ -449,10 +449,8 @@ List(Str) ow_sub_ents(List(Str) es, Str q, Int i, ListBuf(Str) acc) {
     Str p = ow_ent_p(es[i]);
     Str l = ow_ent_l(es[i]);
     // Relative paths compared under a dummy root.
-    Int rl = ow_rel("0" + p, "0" + q);
-    Int n = ow_nsteps(p, 0, 0);
-    Int nq = ow_nsteps(q, 0, 0);
-    ListBuf(Str) a2 = if (rl >= 2 || rl == 0) { acc.push(ow_ent(ow_drop_steps(p, 0, nq), l)) } else { if (rl == 1) { acc.push(ow_ent("", ow_trunc_loc(l + ow_drop_steps(q, 0, n)))) } else { acc } };
+    Int rl = ow_rel_at(p, 0, q, 0);
+    ListBuf(Str) a2 = if (rl >= 2 || rl == 0) { acc.push(ow_ent(ow_drop_steps(p, 0, ow_nsteps(q, 0, 0)), l)) } else { if (rl == 1) { acc.push(ow_ent("", ow_trunc_loc(l + ow_drop_steps(q, 0, ow_nsteps(p, 0, 0))))) } else { acc } };
     return ow_sub_ents_n(es, q, i, a2);
 }
 
@@ -474,9 +472,11 @@ Str ow_drop_steps(Str s, Int i, Int k) {
 
 Str ow_drop_steps_n(Str s, Int i, Int k) { return ow_drop_steps(s, i, k - 1); }
 
-// Entries placed under a field or element step of a new value.
+// Entries placed under a field or element step of a new value. Not
+// deduplicated: every use goes through ow_ov, whose ow_norm keeps the same
+// first copies.
 List(Str) ow_under(List(Str) es, Str step, Int i, ListBuf(Str) acc) {
-    if (i >= es.len()) { return ow_dedup(acc.finish(), 0, ow_nosm(), ListBuf()); }
+    if (i >= es.len()) { return acc.finish(); }
     return ow_under_n(es, step, i, acc.push(ow_ent(ow_trunc(step + ow_ent_p(es[i]), 0, 3), ow_trunc_loc(ow_ent_l(es[i])))));
 }
 
@@ -493,8 +493,20 @@ Str ow_trunc_n(Str p, Int i, Int k) { return ow_trunc(p, i, k - 1); }
 
 Str ow_trunc_loc(Str l) {
     Int r = ow_root_end(l, 0);
+    if (ow_skip_steps(l, r, 3) >= str_len(l)) { return l; }
     return str_slice(l, 0, r) + ow_trunc(str_slice(l, r, str_len(l)), 0, 3);
 }
+
+// The position after k more steps from i (or the end).
+Int ow_skip_steps(Str s, Int i, Int k) {
+    if (k <= 0 || i >= str_len(s)) { return i; }
+    return ow_skip_steps_n(s, ow_step_end(s, i), k);
+}
+
+Int ow_skip_steps_n(Str s, Int i, Int k) { return ow_skip_steps(s, i, k - 1); }
+
+// Short lists by scanning, longer ones through a map: same result.
+List(Str) ow_dedup0(List(Str) es) { return if (es.len() <= 12) { ow_dedup_small(es, 0, ListBuf()) } else { ow_dedup(es, 0, ow_nosm(), ListBuf()) }; }
 
 List(Str) ow_dedup(List(Str) es, Int i, Map(Str, Int) seen, ListBuf(Str) acc) {
     if (i >= es.len()) { return acc.finish(); }
@@ -503,6 +515,24 @@ List(Str) ow_dedup(List(Str) es, Int i, Map(Str, Int) seen, ListBuf(Str) acc) {
 }
 
 List(Str) ow_dedup_n(List(Str) es, Int i, Map(Str, Int) seen, ListBuf(Str) acc) { return ow_dedup(es, i + 1, seen, acc); }
+
+// A short list deduplicated by scanning: the first copy of each entry stays,
+// in order, as ow_dedup keeps it, without building a map.
+List(Str) ow_dedup_small(List(Str) es, Int i, ListBuf(Str) acc) {
+    if (i >= es.len()) { return acc.finish(); }
+    Bool dup = ow_seen_before(es, es[i], 0, i);
+    return ow_dedup_small_n(es, i, if (dup) { acc } else { acc.push(es[i]) });
+}
+
+List(Str) ow_dedup_small_n(List(Str) es, Int i, ListBuf(Str) acc) { return ow_dedup_small(es, i + 1, acc); }
+
+Bool ow_seen_before(List(Str) es, Str e, Int j, Int i) {
+    if (j >= i) { return false; }
+    if (es[j] == e) { return true; }
+    return ow_seen_before_n(es, e, j, i);
+}
+
+Bool ow_seen_before_n(List(Str) es, Str e, Int j, Int i) { return ow_seen_before(es, e, j + 1, i); }
 
 List(Str) ow_under_n(List(Str) es, Str step, Int i, ListBuf(Str) acc) { return ow_under(es, step, i + 1, acc); }
 
@@ -560,9 +590,9 @@ OV ow_ov(List(Str) es, Bool owned, OF f) { return OV {.es = ow_norm(es), .owned 
 // it overlaps everything the finer entries did).
 List(Str) ow_norm(List(Str) es) {
     if (es.len() <= 1) { return es; }
-    List(Str) d = ow_dedup(es, 0, ow_nosm(), ListBuf());
+    List(Str) d = ow_dedup0(es);
     if (d.len() <= 16) { return d; }
-    return ow_dedup(ow_coarse(d, 0, ListBuf()), 0, ow_nosm(), ListBuf());
+    return ow_dedup0(ow_coarse(d, 0, ListBuf()));
 }
 
 List(Str) ow_coarse(List(Str) es, Int i, ListBuf(Str) acc) {
@@ -801,8 +831,10 @@ OV ow_args(OX x, ORS r, OS s, Int id, Int i, Str cal, Bool user, OV acc) {
     OP p = ow_path(x, r, e);
     Int fk = ow_fk(x, cal, i);
     Bool w = user && p.b >= 0 && ow_trk(x, p.ty) && (s.need.contains(fk) || s.writes.contains(fk));
-    OV v0 = ow_val(x, r, s, e, acc.f);
     Bool tp = user && p.b >= 0 && ow_trk(x, p.ty);
+    // A tracked path is judged below as this call's argument: ow_val's own
+    // judgment of it would be discarded, so only its index operands run.
+    OV v0 = if (tp) { OV {.es = [], .owned = false, .f = ow_vals_f(x, r, s, p.idx, 0, acc.f)} } else { ow_val(x, r, s, e, acc.f) };
     OEv ae = OEv {.node = e, .kind = "move", .b = p.b, .path = p.path, .cal = cal, .arg = i, .call = id};
     Bool mv = tp && ow_rule_e(x, v0.f, ae) == "";
     OV v = if (tp) { ow_ov(if (mv) { ow_moved_ents(x, v0.f, p.b, p.path) } else { ow_path_ents(v0.f, p.b, p.path) }, v0.f.own.contains(p.b), v0.f) } else { v0 };
@@ -1470,23 +1502,21 @@ Bool ow_has_ev_b(List(OEv) ev, Int b, Int i) {
 
 Bool ow_has_ev_b_n(List(OEv) ev, Int b, Int i) { return ow_has_ev_b(ev, b, i + 1); }
 
-Map(Int, Int) ow_bad_fn(OFn o, Int i, Map(Int, Int) acc) {
+// The call sites refused (bad) and allowed (good), each event judged once.
+type OBG = { Map(Int, Int) bad; Map(Int, Int) good; };
+
+OBG ow_badgood(OFn o, Int i, OBG acc) {
     if (i >= o.f.ev.len()) { return acc; }
     OEv e = o.f.ev[i];
-    Bool bad = (e.kind == "arg" || e.kind == "argbad") && ow_judge(o.x, o.r, o.f, o.l, e) != "";
-    return ow_bad_fn_n(o, i, if (bad) { acc.insert(ow_fk(o.x, e.cal, e.arg), 1) } else { acc });
+    Bool site = e.kind == "arg" || e.kind == "argbad" || e.kind == "argfresh";
+    Bool ok = site && ow_judge(o.x, o.r, o.f, o.l, e) == "";
+    Int k = ow_fk(o.x, e.cal, e.arg);
+    Bool bad = site && e.kind != "argfresh" && !ok;
+    Bool good = site && e.kind != "argbad" && ok;
+    return ow_badgood_n(o, i, OBG {.bad = if (bad) { acc.bad.insert(k, 1) } else { acc.bad }, .good = if (good) { acc.good.insert(k, 1) } else { acc.good }});
 }
 
-Map(Int, Int) ow_bad_fn_n(OFn o, Int i, Map(Int, Int) acc) { return ow_bad_fn(o, i + 1, acc); }
-
-Map(Int, Int) ow_good_fn(OFn o, Int i, Map(Int, Int) acc) {
-    if (i >= o.f.ev.len()) { return acc; }
-    OEv e = o.f.ev[i];
-    Bool good = (e.kind == "arg" || e.kind == "argfresh") && ow_judge(o.x, o.r, o.f, o.l, e) == "";
-    return ow_good_fn_n(o, i, if (good) { acc.insert(ow_fk(o.x, e.cal, e.arg), 1) } else { acc });
-}
-
-Map(Int, Int) ow_good_fn_n(OFn o, Int i, Map(Int, Int) acc) { return ow_good_fn(o, i + 1, acc); }
+OBG ow_badgood_n(OFn o, Int i, OBG acc) { return ow_badgood(o, i + 1, acc); }
 
 // fresh: kept while every `return e` of the function is owned and points
 // into nothing but the function's parameters; keeps: the parameters a
@@ -1512,7 +1542,7 @@ Bool ow_shared_part(List(Str) es, Str p, Str l, Int i) {
     if (i >= es.len()) { return false; }
     // A part nested in p (or p in it) holding a location nested the same
     // way describes one containment in more detail, not sharing.
-    Bool other = ow_rel("0" + ow_ent_p(es[i]), "0" + p) < 0 && ow_overlap(ow_ent_l(es[i]), l);
+    Bool other = ow_rel_at(ow_ent_p(es[i]), 0, p, 0) < 0 && ow_overlap(ow_ent_l(es[i]), l);
     if (other) { return true; }
     return ow_shared_part_n(es, p, l, i);
 }
@@ -1528,14 +1558,17 @@ Bool ow_ents_in(List(Str) es, List(Int) ps, Int i) {
 
 Bool ow_ents_in_n(List(Str) es, List(Int) ps, Int i) { return ow_ents_in(es, ps, i + 1); }
 
-Bool ow_loc_in(Str l, List(Int) ps, Int i) {
+// A location at or under a bare root overlaps it exactly when the roots
+// are the same text.
+Bool ow_loc_in(Str l, List(Int) ps, Int i) { return ow_root_in(str_slice(l, 0, ow_root_end(l, 0)), ps, i); }
+
+Bool ow_root_in(Str rt, List(Int) ps, Int i) {
     if (i >= ps.len()) { return false; }
-    Str r = f"{ps[i]}";
-    if (ow_overlap(r, l) && str_len(l) >= str_len(r)) { return true; }
-    return ow_loc_in_n(l, ps, i);
+    if (rt == f"{ps[i]}") { return true; }
+    return ow_root_in_n(rt, ps, i);
 }
 
-Bool ow_loc_in_n(Str l, List(Int) ps, Int i) { return ow_loc_in(l, ps, i + 1); }
+Bool ow_root_in_n(Str rt, List(Int) ps, Int i) { return ow_root_in(rt, ps, i + 1); }
 
 Map(Int, Str) ow_keeps_ps(Int fk0, List(Str) es, List(Int) ps, Int i, Map(Int, Str) acc) {
     if (i >= ps.len()) { return acc; }
@@ -1680,10 +1713,9 @@ OFS ow_fsum(OFn o, OS s, Bool own) {
     Bool fok = t.ok && ow_ents_apart(t.ents, ps, 0);
     Map(Int, Str) rd = ow_reads_ps(o, s, ps, 0, ow_nois());
     Map(Int, Str) wr = ow_writes_ps(o, s, ps, 0, ow_nois());
-    Map(Int, Int) bad = ow_bad_fn(o, 0, ow_noim());
-    Map(Int, Int) good = ow_good_fn(o, 0, ow_noim());
-    Str sig = ow_fsig(need, keeps, fok, rd, wr, bad, good);
-    return OFS {.need = need, .keeps = keeps, .fok = fok, .reads = rd, .writes = wr, .bad = bad, .good = good, .sig = sig};
+    OBG bg = ow_badgood(o, 0, OBG {.bad = ow_noim(), .good = ow_noim()});
+    Str sig = ow_fsig(need, keeps, fok, rd, wr, bg.bad, bg.good);
+    return OFS {.need = need, .keeps = keeps, .fok = fok, .reads = rd, .writes = wr, .bad = bg.bad, .good = bg.good, .sig = sig};
 }
 
 // One function's piece computed in an arena of its own: everything but
@@ -1763,7 +1795,14 @@ OFS ow_fjoin(OFS a, OFS b) {
 }
 
 Str ow_fsig(Map(Int, Int) need, Map(Int, Str) keeps, Bool fok, Map(Int, Str) rd, Map(Int, Str) wr, Map(Int, Int) bad, Map(Int, Int) good) {
-    return ow_ikeys(need.keys(), 0, "") + ";" + ow_imsig(keeps, keeps.keys(), 0, "") + ";" + (if (fok) { "f" } else { "-" }) + ";" + ow_imsig(rd, rd.keys(), 0, "") + ";" + ow_imsig(wr, wr.keys(), 0, "") + ";" + ow_ikeys(bad.keys(), 0, "") + ";" + ow_ikeys(good.keys(), 0, "");
+    return ow_ikeys(need.keys(), 0, "") + ";" + ow_imsig(keeps, keeps.keys(), 0, "") + ";" + (if (fok) { "f" } else { "-" }) + ";" + ow_imsig(rd, rd.keys(), 0, "") + ";" + ow_imsig(wr, wr.keys(), 0, "") + "\x1f" + ow_ikeys(bad.keys(), 0, "") + ";" + ow_ikeys(good.keys(), 0, "");
+}
+
+// The part of a signature a caller reads (before \x1f: bad and good are
+// this function's call-site facts, read only by ow_assemble_pown).
+Str ow_csig(Str sig) {
+    Int k = str_index_of(sig, "\x1f", 0);
+    return if (k < 0) { sig } else { str_slice(sig, 0, k) };
 }
 
 Map(Str, Str) ow_join_ss(Map(Str, Str) m, Map(Str, Str) from, List(Str) ks, Int i) {
@@ -1785,8 +1824,8 @@ Str ow_msig_n(Map(Str, Str) m, List(Str) ks, Int i, Str acc) { return ow_msig(m,
 
 // ─── Sweeps in callee-first order ──────────────────────────────────
 // Each function's new piece is merged into the summaries at once, so a
-// caller later in the same sweep already sees it; a sweep repeats only
-// for callers that came before a callee that changed (recursion).
+// caller later in the same sweep already sees it; a recursive component
+// repeats until it settles, before its callers run.
 
 // log: what fell, in order (the report shows it).
 type OGS = { OS s; Map(Int, OFS) sums; Map(Int, Int) dirty; Int work; Str log; };
@@ -1837,27 +1876,95 @@ OOR ow_order_all(List(OPre) prs, Map(Str, Int) idx, Int i, OOR st) {
 
 OOR ow_order_all_n(List(OPre) prs, Map(Str, Int) idx, Int i, OOR st) { return ow_order_all(prs, idx, i + 1, st); }
 
-OGS ow_sweep(Kg g, Funcs fs, List(OPre) prs, Map(Str, List(Int)) callers, List(Int) order, Int j, Bool own, OGS st) {
-    if (j >= order.len()) { return st; }
-    Int i = order[j];
-    if (!st.dirty.contains(i)) { return ow_sweep(g, fs, prs, callers, order, j + 1, own, st); }
+// The sweep by strongly connected components, callees first: a component
+// repeats (up to 64 rounds) while one of its members is dirty, before any
+// caller outside it runs, so no caller sees a cycle's unsettled summaries.
+// flat holds the members, component k at [ends[k - 1], ends[k]). One
+// self-tail loop, as ow_sweep: the state is copied out once.
+OGS ow_sweep_scc(Kg g, Funcs fs, List(OPre) prs, Map(Str, List(Int)) callers, List(Int) flat, List(Int) ends, Int k, Int j, Int r, Bool own, OGS st) {
+    if (k >= ends.len()) { return st; }
+    Int a = if (k == 0) { 0 } else { ends[k - 1] };
+    if (j >= ends[k]) {
+        Bool again = r < 64 && ow_any_dirty(flat, a, ends[k], st.dirty);
+        return ow_sweep_scc(g, fs, prs, callers, flat, ends, if (again) { k } else { k + 1 }, if (again) { a } else { ends[k] }, if (again) { r + 1 } else { 0 }, own, st);
+    }
+    Int i = flat[j];
+    if (!st.dirty.contains(i)) { return ow_sweep_scc(g, fs, prs, callers, flat, ends, k, j + 1, r, own, st); }
     OFS old = st.sums.get(i) else { ow_nofs() };
     OFS p0 = if (prs[i].has) { ow_fsum_arena(g, fs, st.s, prs[i], own) } else { OFS {.need = ow_noim(), .keeps = ow_nois(), .fok = true, .reads = ow_nois(), .writes = ow_nois(), .bad = ow_noim(), .good = ow_noim(), .sig = ""} };
     OFS p = if (old.sig == "#none") { p0 } else { ow_fjoin(old, p0) };
     Str name = g.ns[prs[i].fnode].text;
     Int fi = prs[i].t.fidx.get(name) else { -1 };
     OS s2 = ow_merge_piece(st.s, fi, p, own);
-    Bool ch = old.sig != p.sig || st.s.fresh.contains(fi) != s2.fresh.contains(fi);
+    Bool ch = ow_csig(old.sig) != ow_csig(p.sig) || st.s.fresh.contains(fi) != s2.fresh.contains(fi);
     Map(Int, Int) d0 = st.dirty.remove(i);
     Map(Int, Int) d2 = if (ch) { ow_mark(d0, callers.get(name) else { [] }, 0) } else { d0 };
     OGS st2 = OGS {.s = s2, .sums = st.sums.insert(i, p), .dirty = d2, .work = st.work + 1, .log = st.log};
-    // A self-tail loop on purpose: its loop region frees each function's
-    // scratch (snapshots, alias sets) as the sweep goes; the state it
-    // carries is copied out once per sweep.
-    return ow_sweep(g, fs, prs, callers, order, j + 1, own, st2);
+    return ow_sweep_scc(g, fs, prs, callers, flat, ends, k, j + 1, r, own, st2);
 }
 
-OGS ow_sweep_n(Kg g, Funcs fs, List(OPre) prs, Map(Str, List(Int)) callers, List(Int) order, Int j, Bool own, OGS st) { return ow_sweep(g, fs, prs, callers, order, j + 1, own, st); }
+Bool ow_any_dirty(List(Int) flat, Int j, Int e, Map(Int, Int) dirty) {
+    if (j >= e) { return false; }
+    if (dirty.contains(flat[j])) { return true; }
+    return ow_any_dirty_n(flat, j, e, dirty);
+}
+
+Bool ow_any_dirty_n(List(Int) flat, Int j, Int e, Map(Int, Int) dirty) { return ow_any_dirty(flat, j + 1, e, dirty); }
+
+// Components by Kosaraju's second pass: over callers (the reversed call
+// graph) from the latest-finishing function down, so components come
+// callers first; sorted by (reversed component, postorder position).
+type OSC = { List(Int) flat; List(Int) ends; };
+
+OSC ow_sccs(Kg g, List(OPre) prs, Map(Str, List(Int)) callers, List(Int) order) {
+    OCM cm = ow_comp_all(g, prs, callers, order, order.len() - 1, OCM {.comp = ow_noim(), .n = 0});
+    List(Int) keys = sort(ow_scc_keys(order, cm, 0, ListBuf()));
+    return ow_scc_split(order, keys, 0, -1, ListBuf(), ListBuf());
+}
+
+type OCM = { Map(Int, Int) comp; Int n; };
+
+OCM ow_comp_all(Kg g, List(OPre) prs, Map(Str, List(Int)) callers, List(Int) order, Int k, OCM st) {
+    if (k < 0) { return st; }
+    Int i = order[k];
+    OCM s1 = if (st.comp.contains(i)) { st } else { ow_comp_dfs(g, prs, callers, i, st.n, OCM {.comp = st.comp, .n = st.n + 1}) };
+    return ow_comp_all_n(g, prs, callers, order, k, s1);
+}
+
+OCM ow_comp_all_n(Kg g, List(OPre) prs, Map(Str, List(Int)) callers, List(Int) order, Int k, OCM st) { return ow_comp_all(g, prs, callers, order, k - 1, st); }
+
+OCM ow_comp_dfs(Kg g, List(OPre) prs, Map(Str, List(Int)) callers, Int i, Int c, OCM st) {
+    if (st.comp.contains(i)) { return st; }
+    List(Int) cs = callers.get(g.ns[prs[i].fnode].text) else { [] };
+    return ow_comp_kids(g, prs, callers, cs, 0, c, OCM {.comp = st.comp.insert(i, c), .n = st.n});
+}
+
+OCM ow_comp_kids(Kg g, List(OPre) prs, Map(Str, List(Int)) callers, List(Int) cs, Int j, Int c, OCM st) {
+    if (j >= cs.len()) { return st; }
+    return ow_comp_kids_n(g, prs, callers, cs, j, c, ow_comp_dfs(g, prs, callers, cs[j], c, st));
+}
+
+OCM ow_comp_kids_n(Kg g, List(OPre) prs, Map(Str, List(Int)) callers, List(Int) cs, Int j, Int c, OCM st) { return ow_comp_kids(g, prs, callers, cs, j + 1, c, st); }
+
+// (n - 1 - component) * 2^20 + postorder position: callee components first.
+List(Int) ow_scc_keys(List(Int) order, OCM cm, Int k, ListBuf(Int) acc) {
+    if (k >= order.len()) { return acc.finish(); }
+    Int c = cm.comp.get(order[k]) else { 0 };
+    return ow_scc_keys_n(order, cm, k, acc.push((cm.n - 1 - c) * 1048576 + k));
+}
+
+List(Int) ow_scc_keys_n(List(Int) order, OCM cm, Int k, ListBuf(Int) acc) { return ow_scc_keys(order, cm, k + 1, acc); }
+
+// keys hold positions in order: flat gets their functions, ends the
+// component boundaries.
+OSC ow_scc_split(List(Int) order, List(Int) keys, Int j, Int cur, ListBuf(Int) flat, ListBuf(Int) ends) {
+    if (j >= keys.len()) { return OSC {.flat = flat.finish(), .ends = (if (j > 0) { ends.push(j) } else { ends }).finish()}; }
+    Int c = keys[j] / 1048576;
+    ListBuf(Int) e2 = if (j > 0 && c != cur) { ends.push(j) } else { ends };
+    return ow_scc_split_n(order, keys, j, c, flat.push(order[keys[j] % 1048576]), e2);
+}
+
+OSC ow_scc_split_n(List(Int) order, List(Int) keys, Int j, Int cur, ListBuf(Int) flat, ListBuf(Int) ends) { return ow_scc_split(order, keys, j + 1, cur, flat, ends); }
 
 OS ow_merge_piece(OS s, Int fi, OFS p, Bool own) {
     return OS {.need = ow_imerge(s.need, p.need.keys(), 0), .pown = s.pown, .fresh = if (own && !p.fok) { s.fresh.remove(fi) } else { s.fresh }, .keeps = ow_kput(s.keeps, p.keeps, p.keeps.keys(), 0), .reads = ow_iput_all(s.reads, p.reads, p.reads.keys(), 0), .writes = ow_iput_all(s.writes, p.writes, p.writes.keys(), 0)};
@@ -1865,18 +1972,18 @@ OS ow_merge_piece(OS s, Int fi, OFS p, Bool own) {
 
 // Sweeps until no function is dirty; with ownership on, then pown falls
 // by the call sites and the functions whose entries fell sweep again.
-OGS ow_sweeps(Kg g, Funcs fs, List(OPre) prs, Map(Str, List(Int)) callers, Map(Str, Int) idx, List(Int) order, Bool own, OGS st, Int n) {
-    OGS s1 = ow_sweep(g, fs, prs, callers, order, 0, own, st);
-    if (s1.dirty.keys().len() > 0 && n < 64) { return ow_sweeps_n(g, fs, prs, callers, idx, order, own, s1, n); }
+OGS ow_sweeps(Kg g, Funcs fs, List(OPre) prs, Map(Str, List(Int)) callers, Map(Str, Int) idx, OSC sc, Bool own, OGS st, Int n) {
+    OGS s1 = ow_sweep_scc(g, fs, prs, callers, sc.flat, sc.ends, 0, 0, 0, own, st);
+    if (s1.dirty.keys().len() > 0 && n < 64) { return ow_sweeps_n(g, fs, prs, callers, idx, sc, own, s1, n); }
     if (!own) { return s1; }
     OS s2 = ow_assemble_pown(s1.s, s1.sums, prs.len() > 0 && prs[0].t.strict);
     Map(Int, Int) d = ow_dirty_pown(ow_f2p(g, prs, 0, ow_noim()), s1.s.pown, s1.s.pown.keys(), s2.pown, 0, ow_noim());
     Str lg = s1.log;
     if (d.keys().len() == 0 || n >= 64) { return OGS {.s = s2, .sums = s1.sums, .dirty = d, .work = s1.work, .log = lg}; }
-    return ow_sweeps_n(g, fs, prs, callers, idx, order, own, OGS {.s = s2, .sums = s1.sums, .dirty = d, .work = s1.work, .log = lg}, n);
+    return ow_sweeps_n(g, fs, prs, callers, idx, sc, own, OGS {.s = s2, .sums = s1.sums, .dirty = d, .work = s1.work, .log = lg}, n);
 }
 
-OGS ow_sweeps_n(Kg g, Funcs fs, List(OPre) prs, Map(Str, List(Int)) callers, Map(Str, Int) idx, List(Int) order, Bool own, OGS st, Int n) { return ow_sweeps(g, fs, prs, callers, idx, order, own, st, n + 1); }
+OGS ow_sweeps_n(Kg g, Funcs fs, List(OPre) prs, Map(Str, List(Int)) callers, Map(Str, Int) idx, OSC sc, Bool own, OGS st, Int n) { return ow_sweeps(g, fs, prs, callers, idx, sc, own, st, n + 1); }
 
 OS ow_assemble_pown(OS s, Map(Int, OFS) sums, Bool strict0) {
     OS z = ow_asm_at(sums, sums.keys(), 0, s, ow_noim(), ow_noim());
@@ -2292,7 +2399,7 @@ OWR ow_run_s(Kg g, Int unit, Funcs fs, Bool strict, Map(Str, Str) inst) {
     // pown falls only after the sweeps settle the summaries, so no call
     // site is judged against unsettled field summaries.
     Map(Int, OFS) none = {};
-    OGS gb = ow_sweeps(g, fs, prs, callers, idx, order, true, OGS {.s = s0, .sums = none, .dirty = alld, .work = 0, .log = ""}, 0);
+    OGS gb = ow_sweeps(g, fs, prs, callers, idx, ow_sccs(g, prs, callers, order), true, OGS {.s = s0, .sums = none, .dirty = alld, .work = 0, .log = ""}, 0);
     List(OFn) nors = [];
     return OWR {.s = gb.s, .rs = nors, .fns = fns.len(), .work = gb.work, .log = gb.log, .prs = prs, .sums = gb.sums};
 }

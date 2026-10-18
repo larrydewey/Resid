@@ -1062,6 +1062,34 @@ lowering without a second source of truth:
   is exceeded on Richards, since field-diff stores and inlining come on
   top of the deleted tests.
 
+**Phase 2 compile time (2026-10-18).** With ownership on, the analysis
+runs twice on the self-compile: once to find the functions worth an
+owned instance, once on the graph with the clones. Measured by
+instruction samples, it was 10.5% of the compiler's own work (about 7.6 s
+of CPU) before these fixes:
+- A summary's signature held the function's own call-site facts (`bad`,
+  `good`). Callers are now dirtied only by the part they read (`ow_csig`).
+- The sweeps run by strongly connected component, callees first. A
+  recursive component iterates to its fixpoint before its callers run, so
+  no caller is re-analysed against a cycle's unsettled summaries.
+- The pieces are output-identical: short lists are deduplicated by scan;
+  `ow_under` does not deduplicate, since every result goes through
+  `ow_ov`; tracked path arguments are judged once, not twice; bad and good
+  call sites share one judgment; no dummy-root strings are built.
+- The runtime: in secret mode a freed arena chunk is wiped over its used
+  part only, not all 4 MB.
+
+The sweeps' order changes one route in the compiler (`lb_at` instead of
+`lb_at__o`). The joins carry earlier rounds, so the fixpoint is
+order-dependent, but it stays sound. AWFY is unchanged. The analysis
+takes 35% fewer instructions (110 G to 71 G), and the compiler process 8%
+fewer. It is still well above the 0.5 s gate:
+`str_char_at`/slices and string-keyed maps are about two thirds of it.
+The remaining plan:
+- Integer paths and entries: interned steps, and keys built at
+  preparation.
+- One analysis run instead of two.
+
 **Phase 3: home regions (about 1.5 weeks).**
 - Deliverable: §6.2 home facts in the inference and checker; the spine
   movers `resid.own.spine.T`; push-time moves of carried owned values with

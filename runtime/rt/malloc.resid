@@ -288,9 +288,21 @@ pub Int c_free(Int p) {
 }
 
 Int big_free(Int b, Int h) {
+    _ = if (secret_mode()) { resid_raw_fill(b + 16, 0, h - 16) } else { 0 };
+    return big_keep(b, h);
+}
+
+// A block whose owner already wiped every byte it wrote (an arena chunk:
+// its used part), freed without a second fill.
+pub Int c_free_wiped(Int p) {
+    if (p == 0) { return 0; }
+    Int h = ld64(p - 16);
+    return if (h < 64) { c_free(p) } else { big_keep(p - 16, h) };
+}
+
+Int big_keep(Int b, Int h) {
     Int t = heap_tls();
     if (ld64(t + 408) >= 256 || ld64(t + 416) + h > 67108864) { return heap_unmap(b, h); }
-    _ = if (secret_mode()) { resid_raw_fill(b + 16, 0, h - 16) } else { 0 };
     _ = st64(b + 8, ld64(t + 400));
     _ = st64(t + 400, b);
     _ = st64(t + 408, ld64(t + 408) + 1);

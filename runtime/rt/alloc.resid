@@ -38,7 +38,10 @@ Int arena_new(Int prev) {
 Int free_chunks(Int c) {
     if (c == 0) { return 0; }
     Int next = ld64(c + 16);
-    _ = c_free(c);
+    // Secret mode wipes the header and the used part only (bump_in hands
+    // out nothing past it), not the whole chunk.
+    _ = if (secret_mode()) { resid_raw_fill(c, 0, 24 + ld64(c + 8)) } else { 0 };
+    _ = c_free_wiped(c);
     return free_chunks(next);
 }
 
