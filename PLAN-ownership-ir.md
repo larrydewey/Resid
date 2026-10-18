@@ -1065,8 +1065,8 @@ lowering without a second source of truth:
 **Phase 2 compile time (2026-10-18).** With ownership on, the analysis
 runs twice on the self-compile: once to find the functions worth an
 owned instance, once on the graph with the clones. Measured by
-instruction samples, it was 10.5% of the compiler's own work (about 7.6 s
-of CPU) before these fixes:
+instruction samples, it was 23% of the compiler's own instructions (about
+7.6 s of CPU) before these fixes:
 - A summary's signature held the function's own call-site facts (`bad`,
   `good`). Callers are now dirtied only by the part they read (`ow_csig`).
 - The sweeps run by strongly connected component, callees first. A
@@ -1082,7 +1082,7 @@ of CPU) before these fixes:
 The sweeps' order changes one route in the compiler (`lb_at` instead of
 `lb_at__o`). The joins carry earlier rounds, so the fixpoint is
 order-dependent, but it stays sound. AWFY is unchanged. The analysis
-takes 35% fewer instructions (110 G to 71 G), and the compiler process 8%
+takes 34% fewer instructions (122 G to 81 G), and the compiler process 8%
 fewer. It is still well above the 0.5 s gate:
 `str_char_at`/slices and string-keyed maps are about two thirds of it.
 The second run now starts from the first run's final state
@@ -1097,14 +1097,20 @@ the cold run's joins from transient rounds, and routes 491 calls to
 owned instances in the compiler instead of 448. AWFY is unchanged, and
 the differential fuzz passes 3000/3000.
 
-In total the analysis does about 60% fewer instructions than at the
-start of this work (110 G to 44 G).
+In total the analysis then did 57% fewer instructions than at the start
+of this work (122 G to 53 G). The earlier figures had missed the final
+`ow_rb_lines` pass, which was inlined into the driver's main.
 
-The remaining plan:
-- Carry each function's rebuild lines in its piece, which drops the final
-  re-analysis pass (`ow_rb_lines`).
-- Integer paths and entries: interned steps, and keys built at
-  preparation.
+Each piece now also carries its function's rebuild and route lines,
+taken from its last analysis (`ow_rb_of`, `ow_rb_sums`). Any change to a
+function's inputs dirties it again, so that analysis already saw the
+final summaries, and the final pass that re-ran every function is gone.
+The output is byte-identical on the compiler and on AWFY. The analysis is
+now 64% below the start (122 G to 44 G), and the compiler process 15%
+below.
+
+Next: integer paths and entries, with interned steps and keys built at
+preparation.
 
 **Phase 3: home regions (about 1.5 weeks).**
 - Deliverable: §6.2 home facts in the inference and checker; the spine

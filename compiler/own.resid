@@ -18,7 +18,9 @@
 // strict: verdicts for lowering (every call site must pass an owned value;
 // a later scalar read conflicts, since lowering does not hoist it).
 // inst: a function with an owned instance -> that instance (f__o).
-type OT = { Map(Str, Int) sts; Map(Str, Str) fty; Map(Str, Int) fidx; Bool strict; Map(Str, Str) inst; };
+// rb: each piece carries its function's rebuild and route lines (the
+// run whose lines lowering takes).
+type OT = { Map(Str, Int) sts; Map(Str, Str) fty; Map(Str, Int) fidx; Bool strict; Map(Str, Str) inst; Bool rb; };
 type OX = { Kg g; Funcs fs; Int fnode; Str fname; Map(Int, Map(Int, Map(Str, Int))) after; Map(Int, Int) inl; Map(Int, Str) reads; Map(Int, Str) writes; OT t; Map(Int, Int) hzb; };
 
 // Resolution: use node -> binder, binder -> type.
@@ -84,7 +86,7 @@ Bool ow_tracked(Funcs fs, Str t) {
 OT ow_types(Funcs fs, Int i, OT acc) {
     if (i >= fs.stn.len()) { return acc; }
     Str t = fs.stn[i];
-    OT a2 = OT {.sts = acc.sts.insert(t, 1), .fty = ow_types_fields(fs, t, str_split(fs.stf[i], ","), 0, acc.fty), .fidx = acc.fidx, .strict = acc.strict, .inst = acc.inst};
+    OT a2 = OT {.sts = acc.sts.insert(t, 1), .fty = ow_types_fields(fs, t, str_split(fs.stf[i], ","), 0, acc.fty), .fidx = acc.fidx, .strict = acc.strict, .inst = acc.inst, .rb = acc.rb};
     return ow_types_n(fs, i, a2);
 }
 
@@ -1702,7 +1704,8 @@ Map(Int, Int) ow_init_params_n(Kg g, Funcs fs, Int f, Int fk0, List(Int) ps, Int
 // callees changed (or whose pown entry did), and the program-wide maps are
 // reassembled from the per-function pieces.
 
-type OFS = { Map(Int, Int) need; Map(Int, Str) keeps; Bool fok; Map(Int, Str) reads; Map(Int, Str) writes; Map(Int, Int) bad; Map(Int, Int) good; Str sig; };
+// rb: the rebuild and route lines of the analysis this piece is from.
+type OFS = { Map(Int, Int) need; Map(Int, Str) keeps; Bool fok; Map(Int, Str) reads; Map(Int, Str) writes; Map(Int, Int) bad; Map(Int, Int) good; Str sig; List(Str) rb; };
 
 OFS ow_fsum(OFn o, OS s, Bool own) {
     Kg g = o.x.g;
@@ -1715,7 +1718,7 @@ OFS ow_fsum(OFn o, OS s, Bool own) {
     Map(Int, Str) wr = ow_writes_ps(o, s, ps, 0, ow_nois());
     OBG bg = ow_badgood(o, 0, OBG {.bad = ow_noim(), .good = ow_noim()});
     Str sig = ow_fsig(need, keeps, fok, rd, wr, bg.bad, bg.good);
-    return OFS {.need = need, .keeps = keeps, .fok = fok, .reads = rd, .writes = wr, .bad = bg.bad, .good = bg.good, .sig = sig};
+    return OFS {.need = need, .keeps = keeps, .fok = fok, .reads = rd, .writes = wr, .bad = bg.bad, .good = bg.good, .sig = sig, .rb = if (o.x.t.rb) { ow_rb_of(o) } else { [] }};
 }
 
 // One function's piece computed in an arena of its own: everything but
@@ -1731,7 +1734,7 @@ OFS ow_fsum_arena(Kg g, Funcs fs, OS s, OPre pr, Bool own) {
 OFS ow_nofs_e() {
     Map(Int, Int) e = {};
     Map(Int, Str) e2 = {};
-    return OFS {.need = e, .keeps = e2, .fok = true, .reads = e2, .writes = e2, .bad = e, .good = e, .sig = ""};
+    return OFS {.need = e, .keeps = e2, .fok = true, .reads = e2, .writes = e2, .bad = e, .good = e, .sig = "", .rb = []};
 }
 
 // "N k", "K k v", "R k v", "W k v", "B k", "G k", "F 0|1", "S sig".
@@ -1743,8 +1746,16 @@ List(Str) ow_fs_ser(OFS f) {
     ListBuf(Str) b4 = ow_ser_s(b3, "W", f.writes, f.writes.keys(), 0);
     ListBuf(Str) b5 = ow_ser_i(b4, "B", f.bad.keys(), 0);
     ListBuf(Str) b6 = ow_ser_i(b5, "G", f.good.keys(), 0);
-    return b6.push(if (f.fok) { "F 1" } else { "F 0" }).push("S " + f.sig).finish();
+    ListBuf(Str) b7 = ow_ser_l(b6, f.rb, 0);
+    return b7.push(if (f.fok) { "F 1" } else { "F 0" }).push("S " + f.sig).finish();
 }
+
+ListBuf(Str) ow_ser_l(ListBuf(Str) b, List(Str) ls, Int i) {
+    if (i >= ls.len()) { return b; }
+    return ow_ser_l_n(b.push("L " + ls[i]), ls, i);
+}
+
+ListBuf(Str) ow_ser_l_n(ListBuf(Str) b, List(Str) ls, Int i) { return ow_ser_l(b, ls, i + 1); }
 
 ListBuf(Str) ow_ser_i(ListBuf(Str) b, Str tag, List(Int) ks, Int i) {
     if (i >= ks.len()) { return b; }
@@ -1768,14 +1779,15 @@ OFS ow_fs_de(List(Str) t, Int i, OFS f) {
     Int sp = str_index_of(rest, " ", 0);
     Int k = str_parse_int(if (sp >= 0) { str_slice(rest, 0, sp) } else { rest });
     Str v = if (sp >= 0) { str_slice(rest, sp + 1, str_len(rest)) } else { "" };
-    OFS f2 = if (tag == "N") { OFS {.need = f.need.insert(k, 1), .keeps = f.keeps, .fok = f.fok, .reads = f.reads, .writes = f.writes, .bad = f.bad, .good = f.good, .sig = f.sig} }
-        else { if (tag == "K") { OFS {.need = f.need, .keeps = f.keeps.insert(k, v), .fok = f.fok, .reads = f.reads, .writes = f.writes, .bad = f.bad, .good = f.good, .sig = f.sig} }
-        else { if (tag == "R") { OFS {.need = f.need, .keeps = f.keeps, .fok = f.fok, .reads = f.reads.insert(k, v), .writes = f.writes, .bad = f.bad, .good = f.good, .sig = f.sig} }
-        else { if (tag == "W") { OFS {.need = f.need, .keeps = f.keeps, .fok = f.fok, .reads = f.reads, .writes = f.writes.insert(k, v), .bad = f.bad, .good = f.good, .sig = f.sig} }
-        else { if (tag == "B") { OFS {.need = f.need, .keeps = f.keeps, .fok = f.fok, .reads = f.reads, .writes = f.writes, .bad = f.bad.insert(k, 1), .good = f.good, .sig = f.sig} }
-        else { if (tag == "G") { OFS {.need = f.need, .keeps = f.keeps, .fok = f.fok, .reads = f.reads, .writes = f.writes, .bad = f.bad, .good = f.good.insert(k, 1), .sig = f.sig} }
-        else { if (tag == "F") { OFS {.need = f.need, .keeps = f.keeps, .fok = rest == "1", .reads = f.reads, .writes = f.writes, .bad = f.bad, .good = f.good, .sig = f.sig} }
-        else { OFS {.need = f.need, .keeps = f.keeps, .fok = f.fok, .reads = f.reads, .writes = f.writes, .bad = f.bad, .good = f.good, .sig = rest} } } } } } } };
+    OFS f2 = if (tag == "N") { OFS {.need = f.need.insert(k, 1), .keeps = f.keeps, .fok = f.fok, .reads = f.reads, .writes = f.writes, .bad = f.bad, .good = f.good, .sig = f.sig, .rb = f.rb} }
+        else { if (tag == "K") { OFS {.need = f.need, .keeps = f.keeps.insert(k, v), .fok = f.fok, .reads = f.reads, .writes = f.writes, .bad = f.bad, .good = f.good, .sig = f.sig, .rb = f.rb} }
+        else { if (tag == "R") { OFS {.need = f.need, .keeps = f.keeps, .fok = f.fok, .reads = f.reads.insert(k, v), .writes = f.writes, .bad = f.bad, .good = f.good, .sig = f.sig, .rb = f.rb} }
+        else { if (tag == "W") { OFS {.need = f.need, .keeps = f.keeps, .fok = f.fok, .reads = f.reads, .writes = f.writes.insert(k, v), .bad = f.bad, .good = f.good, .sig = f.sig, .rb = f.rb} }
+        else { if (tag == "B") { OFS {.need = f.need, .keeps = f.keeps, .fok = f.fok, .reads = f.reads, .writes = f.writes, .bad = f.bad.insert(k, 1), .good = f.good, .sig = f.sig, .rb = f.rb} }
+        else { if (tag == "G") { OFS {.need = f.need, .keeps = f.keeps, .fok = f.fok, .reads = f.reads, .writes = f.writes, .bad = f.bad, .good = f.good.insert(k, 1), .sig = f.sig, .rb = f.rb} }
+        else { if (tag == "L") { OFS {.need = f.need, .keeps = f.keeps, .fok = f.fok, .reads = f.reads, .writes = f.writes, .bad = f.bad, .good = f.good, .sig = f.sig, .rb = f.rb.concat([rest])} }
+        else { if (tag == "F") { OFS {.need = f.need, .keeps = f.keeps, .fok = rest == "1", .reads = f.reads, .writes = f.writes, .bad = f.bad, .good = f.good, .sig = f.sig, .rb = f.rb} }
+        else { OFS {.need = f.need, .keeps = f.keeps, .fok = f.fok, .reads = f.reads, .writes = f.writes, .bad = f.bad, .good = f.good, .sig = rest, .rb = f.rb} } } } } } } } };
     return ow_fs_de_n(t, i, f2);
 }
 
@@ -1791,7 +1803,7 @@ OFS ow_fjoin(OFS a, OFS b) {
     Map(Int, Int) bad = ow_imerge(a.bad, b.bad.keys(), 0);
     Bool fok = a.fok && b.fok;
     Str sig = ow_fsig(need, keeps, fok, rd, wr, bad, b.good);
-    return OFS {.need = need, .keeps = keeps, .fok = fok, .reads = rd, .writes = wr, .bad = bad, .good = b.good, .sig = sig};
+    return OFS {.need = need, .keeps = keeps, .fok = fok, .reads = rd, .writes = wr, .bad = bad, .good = b.good, .sig = sig, .rb = b.rb};
 }
 
 Str ow_fsig(Map(Int, Int) need, Map(Int, Str) keeps, Bool fok, Map(Int, Str) rd, Map(Int, Str) wr, Map(Int, Int) bad, Map(Int, Int) good) {
@@ -1833,7 +1845,7 @@ type OGS = { OS s; Map(Int, OFS) sums; Map(Int, Int) dirty; Int work; Str log; }
 OFS ow_nofs() {
     Map(Int, Int) e = {};
     Map(Int, Str) e2 = {};
-    return OFS {.need = e, .keeps = e2, .fok = true, .reads = e2, .writes = e2, .bad = e, .good = e, .sig = "#none"};
+    return OFS {.need = e, .keeps = e2, .fok = true, .reads = e2, .writes = e2, .bad = e, .good = e, .sig = "#none", .rb = []};
 }
 
 List(OFS) ow_nofs_list(Int n, Int i, ListBuf(OFS) acc) {
@@ -1891,7 +1903,7 @@ OGS ow_sweep_scc(Kg g, Funcs fs, List(OPre) prs, Map(Str, List(Int)) callers, Li
     Int i = flat[j];
     if (!st.dirty.contains(i)) { return ow_sweep_scc(g, fs, prs, callers, flat, ends, k, j + 1, r, own, st); }
     OFS old = st.sums.get(i) else { ow_nofs() };
-    OFS p0 = if (prs[i].has) { ow_fsum_arena(g, fs, st.s, prs[i], own) } else { OFS {.need = ow_noim(), .keeps = ow_nois(), .fok = true, .reads = ow_nois(), .writes = ow_nois(), .bad = ow_noim(), .good = ow_noim(), .sig = ""} };
+    OFS p0 = if (prs[i].has) { ow_fsum_arena(g, fs, st.s, prs[i], own) } else { OFS {.need = ow_noim(), .keeps = ow_nois(), .fok = true, .reads = ow_nois(), .writes = ow_nois(), .bad = ow_noim(), .good = ow_noim(), .sig = "", .rb = []} };
     OFS p = if (old.sig == "#none") { p0 } else { ow_fjoin(old, p0) };
     Str name = g.ns[prs[i].fnode].text;
     Int fi = prs[i].t.fidx.get(name) else { -1 };
@@ -2217,7 +2229,7 @@ pub List(Str) own_rebuild_lines(Kg g, Int unit, Funcs fs) { return own_rebuild_l
 
 // With owned instances: `names` the functions own_add_clones cloned.
 pub List(Str) own_rebuild_lines_i(Kg g, Int unit, Funcs fs, List(Str) names) {
-    OWR w = ow_run_s(g, unit, fs, true, ow_inst_map(names, 0, ow_noss()));
+    OWR w = ow_run_s(g, unit, fs, true, ow_inst_map(names, 0, ow_noss()), false);
     return ow_rb_lines(g, fs, w.s, w.prs, 0, ListBuf());
 }
 
@@ -2236,7 +2248,7 @@ Map(Str, Str) ow_inst_map_n(List(Str) ns, Int i, Map(Str, Str) acc) { return ow_
 // function "U i name" and its piece's lines (ow_fs_ser), then "P k" for
 // each owned parameter. Text, so it crosses the analysis's arena.
 pub List(Str) own_mixed_w(Kg g, Int unit, Funcs fs) {
-    OWR w = ow_run_s(g, unit, fs, true, ow_noss());
+    OWR w = ow_run_s(g, unit, fs, true, ow_noss(), true);
     OS z = ow_asm_at(w.sums, w.sums.keys(), 0, w.s, ow_noim(), ow_noim());
     Map(Int, Int) top = ow_top_fns(g, unit, 0, ow_noim());
     List(Str) names = ow_mixed_names(fs, g, top, z.fresh.keys(), z.pown, 0, ow_nosm(), ListBuf());
@@ -2322,6 +2334,23 @@ List(Str) ow_rb_lines(Kg g, Funcs fs, OS s, List(OPre) prs, Int i, ListBuf(Str) 
 
 List(Str) ow_rb_lines_n(Kg g, Funcs fs, OS s, List(OPre) prs, Int i, ListBuf(Str) acc) { return ow_rb_lines(g, fs, s, prs, i + 1, acc); }
 
+// One analysis's rebuild and route lines, as ow_rb_one writes them.
+List(Str) ow_rb_of(OFn o) {
+    Map(Int, Str) m = ow_rebuild_evs(o, 0, ow_nois());
+    ListBuf(Str) b = ow_tab_fn(o.x.fnode, m, m.keys(), 0, ListBuf());
+    return ow_tab_fn(0 - 1 - o.x.fnode, o.f.route, o.f.route.keys(), 0, b).finish();
+}
+
+// The lines of the settled run: each function's last analysis saw the
+// final summaries it reads (any change to them dirtied it again).
+List(Str) ow_rb_sums(Map(Int, OFS) sums, List(OPre) prs, Int i, ListBuf(Str) acc) {
+    if (i >= prs.len()) { return acc.finish(); }
+    List(Str) ls = if (prs[i].has) { (sums.get(i) else { ow_nofs() }).rb } else { [] };
+    return ow_rb_sums_n(sums, prs, i, ow_push_all(acc, ls, 0));
+}
+
+List(Str) ow_rb_sums_n(Map(Int, OFS) sums, List(OPre) prs, Int i, ListBuf(Str) acc) { return ow_rb_sums(sums, prs, i + 1, acc); }
+
 List(Str) ow_rb_one(Kg g, Funcs fs, OS s, OPre pr) {
     Int _a = resid_bulk_push();
     OFn o = ow_fn(g, fs, s, pr);
@@ -2390,16 +2419,17 @@ Map(Int, Str) ow_rebuild_evs_n(OFn o, Int i, Map(Int, Str) acc) { return ow_rebu
 type OWR = { OS s; List(OFn) rs; Int fns; Int work; Str log; List(OPre) prs; Map(Int, OFS) sums; };
 
 OWR ow_run(Kg g, Int unit, Funcs fs, Bool strict) {
-    OWR w = ow_run_s(g, unit, fs, strict, ow_noss());
+    OWR w = ow_run_s(g, unit, fs, strict, ow_noss(), false);
     return OWR {.s = w.s, .rs = ow_all(g, fs, w.s, w.prs, 0, ListBuf()), .fns = w.fns, .work = w.work, .log = w.log, .prs = w.prs, .sums = w.sums};
 }
 
 // The fixed point only (no final per-function states).
-OWR ow_run_s(Kg g, Int unit, Funcs fs, Bool strict, Map(Str, Str) inst) {
+// rb: the pieces carry their rebuild lines (ow_rb_sums).
+OWR ow_run_s(Kg g, Int unit, Funcs fs, Bool strict, Map(Str, Str) inst, Bool rb) {
     List(Int) fns = ow_fns(g, unit, 0, ListBuf());
     Map(Str, Int) st0 = {};
     Map(Str, Str) ft0 = {};
-    OT ot = ow_types(fs, 0, OT {.sts = st0, .fty = ft0, .fidx = ow_fidx(fs, 0, ow_nosm()), .strict = strict, .inst = inst});
+    OT ot = ow_types(fs, 0, OT {.sts = st0, .fty = ft0, .fidx = ow_fidx(fs, 0, ow_nosm()), .strict = strict, .inst = inst, .rb = rb});
     List(OPre) prs = ow_preps(g, fs, ot, fns, 0, ListBuf());
     // Functions some call site of which the analysis cannot judge: named
     // as a value, or called inside a lambda or spawn body.
@@ -2427,13 +2457,13 @@ OWR ow_run_s(Kg g, Int unit, Funcs fs, Bool strict, Map(Str, Str) inst) {
 // function's index moved.
 pub List(Str) own_rebuild_lines_w(Kg g, Int unit, Funcs fs, Funcs fs0, List(Str) names, List(Str) st) {
     OWR w = ow_run_2(g, unit, fs, fs0, names, st);
-    return ow_rb_lines(g, fs, w.s, w.prs, 0, ListBuf());
+    return ow_rb_sums(w.sums, w.prs, 0, ListBuf());
 }
 
 OWR ow_run_2(Kg g, Int unit, Funcs fs, Funcs fs0, List(Str) names, List(Str) st) {
     Map(Str, Str) inst = ow_inst_map(names, 0, ow_noss());
     Bool same = ow_prefix_same(fs.names, fs0.names, 0);
-    return if (same) { ow_run_warm(g, unit, fs, inst, fs0.names.len(), names, st) } else { ow_run_s(g, unit, fs, true, inst) };
+    return if (same) { ow_run_warm(g, unit, fs, inst, fs0.names.len(), names, st) } else { ow_run_s(g, unit, fs, true, inst, true) };
 }
 
 Bool ow_prefix_same(List(Str) a, List(Str) b, Int i) {
@@ -2448,7 +2478,7 @@ OWR ow_run_warm(Kg g, Int unit, Funcs fs, Map(Str, Str) inst, Int n0, List(Str) 
     List(Int) fns = ow_fns(g, unit, 0, ListBuf());
     Map(Str, Int) st0 = {};
     Map(Str, Str) ft0 = {};
-    OT ot = ow_types(fs, 0, OT {.sts = st0, .fty = ft0, .fidx = ow_fidx(fs, 0, ow_nosm()), .strict = true, .inst = inst});
+    OT ot = ow_types(fs, 0, OT {.sts = st0, .fty = ft0, .fidx = ow_fidx(fs, 0, ow_nosm()), .strict = true, .inst = inst, .rb = true});
     List(OPre) prs = ow_preps(g, fs, ot, fns, 0, ListBuf());
     Map(Str, Int) blind = ow_blind_all(g, ot, prs, 0, ow_nosm());
     OS si = ow_init(g, fs, ot, blind, fns, 0, OS {.need = ow_noim(), .pown = ow_noim(), .fresh = ow_noim(), .keeps = ow_nois(), .reads = ow_nois(), .writes = ow_nois()});
@@ -2458,7 +2488,7 @@ OWR ow_run_warm(Kg g, Int unit, Funcs fs, Map(Str, Str) inst, Int n0, List(Str) 
     OOR oo = ow_order_all(prs, idx, 0, OOR {.seen = ow_noim(), .fin = ow_noim(), .k = 0});
     List(Int) order = ow_order_list(oo.fin, 0, oo.k, ListBuf());
     OWS ws = ow_warm_de(g, prs, st, 1, OWS {.sums = ow_nosums(), .pown = ow_noim(), .ok = true, .cur = -1, .f = ow_nofs_e()});
-    if (!ws.ok) { return ow_run_s(g, unit, fs, true, inst); }
+    if (!ws.ok) { return ow_run_s(g, unit, fs, true, inst, true); }
     // Original parameters keep the first run's verdict; a clone's start
     // owned, as in a cold run.
     Map(Int, Int) pown = ow_pown_warm(si.pown, si.pown.keys(), ws.pown, n0, 0);
