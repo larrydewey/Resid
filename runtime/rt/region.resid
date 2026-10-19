@@ -224,12 +224,12 @@ Int rec_find(Int d, Int id) {
 // through its fast path, another by its own bump.
 pub Int alloc_in(Int r, Int n0) {
     if (ag_scope_depth() > 0 && r == cur_region()) { return scope_alloc(n0); }
-    Int n = (n0 + 7) & (0 - 8);
+    // Multiples of 16, as scope_alloc: every region bump stays 16-aligned.
+    Int n = (n0 + 15) & (0 - 16);
     _ = st64(r + 48, ld64(r + 48) + n);
     Int p = ld64(r + 16);
-    Int pad = if ((n & 8) != 0) { 0 } else { p & 8 };
-    if (p != 0 && ld64(r + 24) - p >= n + pad) { return st64(r + 16, p + pad + n) * 0 + p + pad; }
-    return region_grow(r, (n + 15) & (0 - 16));
+    if (p != 0 && n >= 0 && ld64(r + 24) - p >= n) { return st64(r + 16, p + n) * 0 + p; }
+    return region_grow(r, n);
 }
 
 // A new page (or run) for region r, holding the n bytes asked for.

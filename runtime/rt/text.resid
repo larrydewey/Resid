@@ -383,14 +383,19 @@ Int idx_victim(Int k, Int best) {
 Int idx_slot_slow(Int s) {
     _ = idx_ready();
     if (sl_s(idx_small()) == s) { return idx_small(); }
-    if (str_short(s, 0)) { return idx_build(s, idx_small()) * 0 + idx_small(); }
+    // An indexed string is found before any scan of it.
+    Int hit = idx_find(s, 0);
     Int st = idx_state();
     Int clock = ld64(st) + 1;
+    if (hit != 0) {
+        Int mru0 = ld64(st + 16);
+        _ = st64(st, clock) + (if (mru0 != 0) { st64(mru0 + 24, clock) } else { 0 });
+        return st64(hit + 24, clock) * 0 + hit;
+    }
+    if (str_short(s, 0)) { return idx_build(s, idx_small()) * 0 + idx_small(); }
     _ = st64(st, clock);
     Int mru = ld64(st + 16);
     _ = if (mru != 0) { st64(mru + 24, clock) } else { 0 };
-    Int hit = idx_find(s, 0);
-    if (hit != 0) { return st64(hit + 24, clock) * 0 + hit; }
     Int v = idx_victim(1, idx_slots());
     Int f = idx_region() + (v - idx_slots()) / 40 * 8;
     Int rg = region_kind(s);
@@ -568,12 +573,28 @@ Int idx_forget_at(Int s, Int k) {
     return idx_forget_at(s, k + 1);
 }
 
+// An all-ASCII string of fewer than 64 bytes is counted where it is:
+// indexing it would evict a long string's entry from the cache (a parser
+// taking the length of each short name, then reading on through its long
+// input, rescanned the input after every name).
 @export("str_len", "i64(ptr)")
 pub Int rt_str_len(Int s) {
     Int st = idx_state();
     if (s == ld64(st + 24)) { return ld64(st + 32); }
     if (s == ld64(st + 40)) { return ld64(st + 48); }
+    Int n = short_cps(s, 0, 0);
+    if (n >= 0) { return n; }
     return sl_len(idx_slot(s));
+}
+
+// The length of s when it is all ASCII and shorter than 64 bytes, else -1
+// (any other byte goes to the index, whose count decides invalid UTF-8).
+Int short_cps(Int s, Int k, Int n) {
+    if (k >= 64) { return 0 - 1; }
+    Int c = ld8(s + k);
+    if (c == 0) { return n; }
+    if (c >= 128) { return 0 - 1; }
+    return short_cps(s, k + 1, n + 1);
 }
 
 @noinline

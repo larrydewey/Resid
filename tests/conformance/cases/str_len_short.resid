@@ -1,0 +1,32 @@
+// str_len counts a string shorter than 64 bytes directly (codepoints, not
+// bytes) and indexes longer ones; both answers agree with slicing, and
+// taking short lengths between reads of a long string changes nothing.
+
+Str rep(Str s, Int n, Str acc) { return if (n <= 0) { acc } else { rep(s, n - 1, acc + s) }; }
+
+Int walk(Str long, Int i, Int acc) {
+    if (i >= str_len(long)) { return acc; }
+    Str c = str_slice(long, i, i + 1);
+    Str name = if (i % 3 == 0) { "k" + c } else { "é" + c };
+    return walk(long, i + 1, acc + str_len(name) * 7 + str_len(c));
+}
+
+Int main() {
+    Str e0 = "";
+    Str e1 = "a";
+    Str e2 = "é";
+    Str e3 = "日本";
+    Str e4 = "😀x";
+    println(f"{str_len(e0)} {str_len(e1)} {str_len(e2)} {str_len(e3)} {str_len(e4)}");
+    Str s63 = rep(rt "a", 63, "");
+    Str s64 = rep(rt "a", 64, "");
+    Str s65 = rep(rt "a", 65, "");
+    println(f"{str_len(s63)} {str_len(s64)} {str_len(s65)}");
+    Str u = rep(rt "é", 31, "") + "a";
+    Str u2 = rep(rt "é", 32, "");
+    Str u3 = rep(rt "é", 33, "");
+    println(f"{str_len(u)} {str_len(u2)} {str_len(u3)} {str_slice(u3, 32, 33)}");
+    Str long = rep(rt "abc", 200, "");
+    println(f"{walk(long, 0, 0)} {str_len(long)}");
+    return 0;
+}

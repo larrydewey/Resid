@@ -1,0 +1,35 @@
+// Lists of inline records keep their element count in the header: every
+// way of making one (literal, builder, concat, slice, with, a map value)
+// reports len() and checks an index the same.
+
+type Pt = { Int a; Int b; };
+
+List(Pt) build(Int i, Int n, ListBuf(Pt) acc) {
+    if (i >= n) { return acc.finish(); }
+    return build(i + 1, n, acc.push(Pt {.a = i, .b = i * 2}));
+}
+
+Int sum(List(Pt) xs, Int i, Int acc) {
+    if (i >= xs.len()) { return acc; }
+    return sum(xs, i + 1, acc + xs[i].a + xs[i].b);
+}
+
+Int main() {
+    List(Pt) lit = [Pt {.a = 1, .b = 2}, Pt {.a = 3, .b = 4}];
+    List(Pt) b = build(0, 300, ListBuf());
+    List(Pt) c = lit.concat(b);
+    List(Pt) e = [];
+    List(Pt) c2 = e.concat(lit);
+    List(Pt) s = c[1..5];
+    List(Pt) w = c.with(2, Pt {.a = 100, .b = 200});
+    List(Pt) f = w.with(0, Pt {.a = 9, .b = 9});
+    List(Pt) g = s.concat([Pt {.a = 7, .b = 7}, Pt {.a = 7, .b = 7}, Pt {.a = 7, .b = 7}, Pt {.a = 7, .b = 7}]);
+    Map(Int, List(Pt)) m = {};
+    Map(Int, List(Pt)) m2 = m.insert(1, lit).insert(2, b[0..3]);
+    List(Pt) mv = m2.get(2) else { e };
+    println(f"{lit.len()} {b.len()} {c.len()} {c2.len()} {s.len()} {w.len()} {f.len()} {g.len()} {mv.len()}");
+    println(f"{sum(lit, 0, 0)} {sum(b, 0, 0)} {sum(c, 0, 0)} {sum(s, 0, 0)} {sum(f, 0, 0)} {sum(g, 0, 0)} {sum(mv, 0, 0)}");
+    println(f"{c[301].a} {g[7].b} {mv[2].a}");
+    println(f"{g[8].a}");
+    return 0;
+}

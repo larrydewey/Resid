@@ -966,7 +966,7 @@ List(Str) hdr_map_typed() {
 // Runtime declarations added after the long hdr_core lists; both mains
 // append these.
 List(Str) hdr_extra() {
-    return ["declare ptr @resid_list_set_w(ptr, i8, i64, i64)", "declare ptr @resid_list_push_k(ptr, ptr, i64)", "declare ptr @resid_listbuf_new_k(i64)", "declare ptr @resid_list_rawify(ptr, i64)", "declare ptr @resid_list_const_i64r(ptr, i64, ptr)", "declare ptr @resid_list_const_boolr(ptr, i64, ptr)", "declare ptr @resid_range_list_r(i64, i64)", "declare ptr @resid_range_list_incl_r(i64, i64)", "declare ptr @resid_list_rec_at(ptr, i64, i64)", "declare ptr @resid_list_inline(ptr, i64)", "declare ptr @resid_list_rec_borrow(ptr, i64, i64, ptr)", "declare ptr @resid_list_set_rec_wb(ptr, i64, ptr, i64)", "declare ptr @resid_list_push_rec(ptr, ptr, i64)", "declare ptr @resid_list_slice_rec(ptr, i64, i64, i64)", "declare ptr @resid_listbuf_push_rec(ptr, ptr, i64)", "declare ptr @resid_list_set_rec(ptr, i8, i64, ptr, i64)", "declare void @resid_ol_check(i64, i64)", "declare ptr @resid_rec_reuse_ny(ptr, i64, i8)", "declare void @resid_ol_put(ptr, ptr, i64)", "declare ptr @resid_decp_from_str(ptr, i64)", "declare ptr @resid_decp_from_i64(i64, i64)", "declare ptr @resid_decp_round(ptr, i64)", "declare ptr @resid_decp_add(ptr, ptr, i64)", "declare ptr @resid_decp_sub(ptr, ptr, i64)", "declare ptr @resid_decp_mul(ptr, ptr, i64)", "declare ptr @resid_decp_div(ptr, ptr, i64)", "declare ptr @resid_decp_neg(ptr)", "declare i64 @resid_decp_cmp(ptr, ptr)", "declare ptr @resid_decp_to_str(ptr, i8)", "declare i64 @resid_decp_to_i64(ptr)", "declare double @resid_decp_to_f64(ptr)", "declare void @resid_handle_release(ptr)", "declare ptr @resid_spawn(ptr, ptr)", "declare ptr @resid_spawn_start(ptr, ptr)", "declare ptr @resid_spawn_wait(ptr)", "declare ptr @resid_ok_box(ptr)", "declare ptr @resid_sacc_from(ptr)", "declare ptr @resid_sacc_append(ptr, ptr)", "declare ptr @resid_sacc_append_int(ptr, i64)", "declare ptr @resid_gmalloc(i64)", "declare void @resid_gfree(ptr)", "declare i64 @resid_bulk_push()", "declare i64 @resid_bulk_pop()", "declare i64 @resid_mem_mark()", "declare i64 @resid_mem_since_mark()", "declare i64 @resid_stack_left()", "declare i64 @str_index_of(ptr, ptr, i64)", "declare ptr @str_sha256(ptr)", "declare i8 @resid_fs_write_hex(ptr, ptr)", "declare i8 @resid_fs_append_hex(ptr, ptr)", "declare ptr @resid_decp_persist(ptr)", "declare i64 @resid_scope_push()", "declare void @resid_scope_pop(i64)", "declare i1 @resid_sb_print(ptr, i8)", "declare i8 @resid_print_bytes(ptr)", "declare ptr @resid_box_alloc(i64, i64, ptr)", "declare ptr @resid_sb2_push(ptr, ptr, ptr)", "declare ptr @resid_sb2_push_cp(ptr, ptr, i64)", "declare ptr @resid_sb2_finish(ptr, ptr)", "declare ptr @resid_sb2_lim()", "declare i1 @resid_sb2_print(ptr, ptr, i8)", "declare void @resid_sb2_discard(ptr, ptr)", "declare ptr @resid_fsb_push(ptr, i64, ptr)", "declare ptr @resid_fsb_push_cp(ptr, i64, i64)", "declare ptr @resid_fbb_push(ptr, i64, i64)", "declare void @resid_fb_overflow(i64, i64)", "declare ptr @resid_bytes_show(ptr, i64)", "declare ptr @resid_map_format_t(ptr, i8, i8, ptr, ptr)", "declare ptr @resid_set_format_t(ptr, i8, ptr)", "declare ptr @resid_list_show_t(ptr, i8)", "declare ptr @resid_fmt_radix(ptr, i64)", "declare ptr @resid_fmt_group(ptr)", "declare ptr @resid_fmt_case(ptr, i64)", "declare ptr @resid_fmt_sign(ptr, i64)", "declare ptr @resid_fmt_pad(ptr, i64)", "declare ptr @resid_fmt_style(double, i64)", "declare void @resid_fb_underfill(i64, i64)", "declare i64 @resid_str_ascii_len(ptr)", "declare i64 @resid_char_at_n(ptr, i64, i64)", "declare double @llvm.sqrt.f64(double)", "declare i64 @resid_disp_connect()", "declare ptr @resid_disp_pair()", "declare i8 @resid_disp_send(i64, ptr, i64)", "declare ptr @resid_disp_recv(i64, i64)", "declare ptr @resid_disp_poll(ptr, ptr, i64)", "declare i64 @resid_disp_recv_fd()", "declare i8 @resid_disp_close(i64)", "declare i64 @resid_disp_shm_new(i64)", "declare i64 @resid_disp_shm_fd(i64)", "declare i8 @resid_disp_shm_put(i64, i64, ptr, i64)", "declare i8 @resid_disp_shm_free(i64)", "declare i64 @resid_disp_connect_wayland()", "declare i64 @resid_disp_connect_x11()", "declare ptr @resid_disp_fd_read(i64, i64)", "declare ptr @resid_disp_x11_auth()", "declare ptr @resid_dbg_dump(i64, i64)", "declare ptr @resid_list_fill_w(ptr, i8, i64, i64, i64)", "declare ptr @resid_list_fill(ptr, i8, i64, i64, ptr)", "declare ptr @resid_list_grow_w(ptr, i64, i64, i64)", "declare ptr @resid_list_grow(ptr, i64, ptr, i64)", "declare i8 @resid_disp_shm_put32(i64, i64, ptr, i64, i64)"];
+    return ["declare ptr @resid_list_set_w(ptr, i8, i64, i64)", "declare ptr @resid_list_push_k(ptr, ptr, i64)", "declare ptr @resid_listbuf_new_k(i64)", "declare ptr @resid_list_rawify(ptr, i64)", "declare ptr @resid_list_const_i64r(ptr, i64, ptr)", "declare ptr @resid_list_const_boolr(ptr, i64, ptr)", "declare ptr @resid_range_list_r(i64, i64)", "declare ptr @resid_range_list_incl_r(i64, i64)", "declare ptr @resid_list_rec_at(ptr, i64, i64)", "declare i64 @resid_list_elems(ptr, i64)", "declare ptr @resid_list_inline(ptr, i64)", "declare ptr @resid_list_rec_borrow(ptr, i64, i64, ptr)", "declare ptr @resid_list_set_rec_wb(ptr, i64, ptr, i64)", "declare ptr @resid_list_push_rec(ptr, ptr, i64)", "declare ptr @resid_list_slice_rec(ptr, i64, i64, i64)", "declare ptr @resid_listbuf_push_rec(ptr, ptr, i64)", "declare ptr @resid_list_set_rec(ptr, i8, i64, ptr, i64)", "declare void @resid_ol_check(i64, i64)", "declare ptr @resid_rec_reuse_ny(ptr, i64, i8)", "declare void @resid_ol_put(ptr, ptr, i64)", "declare ptr @resid_decp_from_str(ptr, i64)", "declare ptr @resid_decp_from_i64(i64, i64)", "declare ptr @resid_decp_round(ptr, i64)", "declare ptr @resid_decp_add(ptr, ptr, i64)", "declare ptr @resid_decp_sub(ptr, ptr, i64)", "declare ptr @resid_decp_mul(ptr, ptr, i64)", "declare ptr @resid_decp_div(ptr, ptr, i64)", "declare ptr @resid_decp_neg(ptr)", "declare i64 @resid_decp_cmp(ptr, ptr)", "declare ptr @resid_decp_to_str(ptr, i8)", "declare i64 @resid_decp_to_i64(ptr)", "declare double @resid_decp_to_f64(ptr)", "declare void @resid_handle_release(ptr)", "declare ptr @resid_spawn(ptr, ptr)", "declare ptr @resid_spawn_start(ptr, ptr)", "declare ptr @resid_spawn_wait(ptr)", "declare ptr @resid_ok_box(ptr)", "declare ptr @resid_sacc_from(ptr)", "declare ptr @resid_sacc_append(ptr, ptr)", "declare ptr @resid_sacc_append_int(ptr, i64)", "declare ptr @resid_gmalloc(i64)", "declare void @resid_gfree(ptr)", "declare i64 @resid_bulk_push()", "declare i64 @resid_bulk_pop()", "declare i64 @resid_mem_mark()", "declare i64 @resid_mem_since_mark()", "declare i64 @resid_stack_left()", "declare i64 @str_index_of(ptr, ptr, i64)", "declare ptr @str_sha256(ptr)", "declare i8 @resid_fs_write_hex(ptr, ptr)", "declare i8 @resid_fs_append_hex(ptr, ptr)", "declare ptr @resid_decp_persist(ptr)", "declare i64 @resid_scope_push()", "declare void @resid_scope_pop(i64)", "declare i1 @resid_sb_print(ptr, i8)", "declare i8 @resid_print_bytes(ptr)", "declare ptr @resid_box_alloc(i64, i64, ptr)", "declare ptr @resid_sb2_push(ptr, ptr, ptr)", "declare ptr @resid_sb2_push_cp(ptr, ptr, i64)", "declare ptr @resid_sb2_finish(ptr, ptr)", "declare ptr @resid_sb2_lim()", "declare i1 @resid_sb2_print(ptr, ptr, i8)", "declare void @resid_sb2_discard(ptr, ptr)", "declare ptr @resid_fsb_push(ptr, i64, ptr)", "declare ptr @resid_fsb_push_cp(ptr, i64, i64)", "declare ptr @resid_fbb_push(ptr, i64, i64)", "declare void @resid_fb_overflow(i64, i64)", "declare ptr @resid_bytes_show(ptr, i64)", "declare ptr @resid_map_format_t(ptr, i8, i8, ptr, ptr)", "declare ptr @resid_set_format_t(ptr, i8, ptr)", "declare ptr @resid_list_show_t(ptr, i8)", "declare ptr @resid_fmt_radix(ptr, i64)", "declare ptr @resid_fmt_group(ptr)", "declare ptr @resid_fmt_case(ptr, i64)", "declare ptr @resid_fmt_sign(ptr, i64)", "declare ptr @resid_fmt_pad(ptr, i64)", "declare ptr @resid_fmt_style(double, i64)", "declare void @resid_fb_underfill(i64, i64)", "declare i64 @resid_str_ascii_len(ptr)", "declare i64 @resid_char_at_n(ptr, i64, i64)", "declare double @llvm.sqrt.f64(double)", "declare i64 @resid_disp_connect()", "declare ptr @resid_disp_pair()", "declare i8 @resid_disp_send(i64, ptr, i64)", "declare ptr @resid_disp_recv(i64, i64)", "declare ptr @resid_disp_poll(ptr, ptr, i64)", "declare i64 @resid_disp_recv_fd()", "declare i8 @resid_disp_close(i64)", "declare i64 @resid_disp_shm_new(i64)", "declare i64 @resid_disp_shm_fd(i64)", "declare i8 @resid_disp_shm_put(i64, i64, ptr, i64)", "declare i8 @resid_disp_shm_free(i64)", "declare i64 @resid_disp_connect_wayland()", "declare i64 @resid_disp_connect_x11()", "declare ptr @resid_disp_fd_read(i64, i64)", "declare ptr @resid_disp_x11_auth()", "declare ptr @resid_dbg_dump(i64, i64)", "declare ptr @resid_list_fill_w(ptr, i8, i64, i64, i64)", "declare ptr @resid_list_fill(ptr, i8, i64, i64, ptr)", "declare ptr @resid_list_grow_w(ptr, i64, i64, i64)", "declare ptr @resid_list_grow(ptr, i64, ptr, i64)", "declare i8 @resid_disp_shm_put32(i64, i64, ptr, i64, i64)"];
 }
 
 Bool is_dec_cg(Str t) {
@@ -8975,6 +8975,74 @@ Str probe_lines(List(Str) ls, Int i, StrBuf acc) {
     return probe_lines(ls, i + 1, if (i + 1 < ls.len()) { a1.push("\n") } else { a1 });
 }
 
+// ─── Small program functions with few callers are inlined ───────────
+// A program function called from at most three sites, of at most
+// inl_max_lines() lines, not recursive (itself or with one other
+// function) and never a musttail callee, is marked alwaysinline: LLVM's
+// threshold keeps such bodies out of line, and every avoided call saves
+// its frame (Towers -15%, Richards -11% instructions, measured 2026-10-19).
+// calls: call sites per callee; bad: excluded; lines: body size; edges:
+// "caller>callee" pairs; outs: each function's callees.
+type INL = { Map(Str, Int) calls; Map(Str, Int) bad; Map(Str, Int) lines; Map(Str, Int) edges; Map(Str, List(Str)) outs; };
+
+Int inl_max_lines() { return 400; }
+
+Str inline_small(Str doc) {
+    List(Str) ls = str_split(doc, "\n");
+    Map(Str, Int) e = {};
+    Map(Str, List(Str)) o = {};
+    INL s = inl_scan(ls, 0, "", INL {.calls = e, .bad = e, .lines = e, .edges = e, .outs = o});
+    return inl_mark(ls, 0, s, StrBuf());
+}
+
+Str inl_callee(Str l, Int at) {
+    Int c = str_index_of(l, "(", at);
+    return if (c < 0) { "" } else { str_slice(l, at + 1, c) };
+}
+
+INL inl_scan(List(Str) ls, Int i, Str cur, INL s) {
+    if (i >= ls.len()) { return s; }
+    Str l = ls[i];
+    if (str_starts_with(l, "define ")) {
+        Int d = str_index_of(l, " @__m_", 0);
+        return inl_scan(ls, i + 1, if (d < 0) { "" } else { inl_callee(l, d + 1) }, s);
+    }
+    INL s1 = if (cur == "") { s } else { INL {.calls = s.calls, .bad = s.bad, .lines = s.lines.insert(cur, (s.lines.get(cur) else { 0 }) + 1), .edges = s.edges, .outs = s.outs} };
+    Int c = str_index_of(l, "call ", 0);
+    Int at = if (c < 0) { 0 - 1 } else { str_index_of(l, " @__m_", c) };
+    if (at < 0) { return inl_scan(ls, i + 1, cur, s1); }
+    Str f = inl_callee(l, at + 1);
+    if (f == "") { return inl_scan(ls, i + 1, cur, s1); }
+    Bool bad = f == cur || str_contains(l, "musttail call ");
+    Map(Str, Int) b2 = if (bad) { s1.bad.insert(f, 1) } else { s1.bad };
+    Bool fresh = cur != "" && !s1.edges.contains(cur + ">" + f);
+    Map(Str, Int) e2 = if (fresh) { s1.edges.insert(cur + ">" + f, 1) } else { s1.edges };
+    List(Str) none = [];
+    Map(Str, List(Str)) o2 = if (fresh) { s1.outs.insert(cur, (s1.outs.get(cur) else { none }).concat([f])) } else { s1.outs };
+    return inl_scan(ls, i + 1, cur, INL {.calls = s1.calls.insert(f, (s1.calls.get(f) else { 0 }) + 1), .bad = b2, .lines = s1.lines, .edges = e2, .outs = o2});
+}
+
+// f calls a function (of gs, f's callees) that calls f back.
+Bool inl_cycle(INL s, Str f, List(Str) gs, Int i) {
+    if (i >= gs.len()) { return false; }
+    if (s.edges.contains(gs[i] + ">" + f)) { return true; }
+    return inl_cycle(s, f, gs, i + 1);
+}
+
+Str inl_mark(List(Str) ls, Int i, INL s, StrBuf acc) {
+    if (i >= ls.len()) { return acc.finish(); }
+    Str l = ls[i];
+    Int d = if (str_starts_with(l, "define ")) { str_index_of(l, " @__m_", 0) } else { 0 - 1 };
+    Str f = if (d < 0) { "" } else { inl_callee(l, d + 1) };
+    Int n = if (f == "") { 0 } else { s.calls.get(f) else { 0 } };
+    Bool ok0 = n >= 1 && n <= 3 && !s.bad.contains(f) && (s.lines.get(f) else { 0 }) <= inl_max_lines() && !str_contains(l, " naked ") && !str_contains(l, "alwaysinline");
+    List(Str) none = [];
+    Bool ok = ok0 && !inl_cycle(s, f, s.outs.get(f) else { none }, 0);
+    Int p = if (ok) { str_index_of(l, ") ", d) } else { 0 - 1 };
+    StrBuf a1 = if (p >= 0) { acc.push(str_slice(l, 0, p + 1)).push(" alwaysinline").push(str_slice(l, p + 1, str_len(l))) } else { acc.push(l) };
+    return inl_mark(ls, i + 1, s, if (i + 1 < ls.len()) { a1.push("\n") } else { a1 });
+}
+
 // The debug-info unit: compile unit !1, flags !2 !3, subroutine type !4,
 // and a DIFile !10+k per source.
 List(Str) dbg_unit_ir(List(Str) paths) {
@@ -10379,7 +10447,8 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     // reads it: main turns it on first.
     List(Str) all = if (rtmod) { all5 } else { tr_hook_main(all5) };
     List(Str) nkeep = resid_list_str_persist_copy([str_join(nb.links, " "), str_join(nb.prov, ";"), str_join(nb.asm, "\n")]);
-    Str doc  =  probe_stack(str_join(if (rtmod) { rt_clean(all.concat(rt_asm_defs())) } else { all }, "\n") + "\n");
+    Str doc0  =  str_join(if (rtmod) { rt_clean(all.concat(rt_asm_defs())) } else { all }, "\n") + "\n";
+    Str doc  =  probe_stack(if (rtmod) { doc0 } else { inline_small(doc0) });
     // Debug builds record each runtime check for the artifact's facts.
     List(Str) chk = resid_list_str_persist_copy([if (gdbg) { ga_check_lines(all, 0, StrBuf()) } else { "" }]);
     Str ll0  =  out + ".ll";

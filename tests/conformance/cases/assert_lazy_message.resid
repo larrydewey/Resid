@@ -1,0 +1,25 @@
+// An assert whose message is built from literals, names, fields and `+`
+// builds it only when the assert fails (on the failing branch). A passing
+// assert prints nothing; a failing one aborts with the whole message.
+
+type Ps = { Str cur; Int at; };
+
+Ps expect(Ps p, Str ch) {
+    rt_assert(p.cur == ch, "Expected '" + ch + "' at " + p.cur);
+    return Ps {.cur = ch + ch, .at = p.at + 1};
+}
+
+Int count(Ps p, Int n, Int acc) {
+    if (n <= 0) { return acc; }
+    Ps q = expect(p, p.cur);
+    return count(Ps {.cur = p.cur, .at = q.at}, n - 1, acc + q.at);
+}
+
+Int main() {
+    println(f"{count(Ps {.cur = rt "x", .at = 0}, 1000, 0)}");
+    Ps p = expect(Ps {.cur = rt "a", .at = 0}, "a");
+    println(p.cur);
+    Ps bad = expect(p, rt "b");
+    println(bad.cur);
+    return 0;
+}

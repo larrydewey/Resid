@@ -20,6 +20,7 @@ TYPES = {
     "Pb": [("x", "Int"), ("xs", "List(Int)")],
     "Pc": [("a", "Pa"), ("n", "Int")],
     "Pd": [("ps", "List(Pa)"), ("k", "Int")],
+    "Pe": [("ls", "List(List(Int))"), ("k", "Int")],
 }
 REC = list(TYPES)
 
@@ -38,6 +39,8 @@ def lit(t, depth=0):
         return "[" + ", ".join(lit("Pa", depth + 1) for _ in range(R.randint(1, 3))) + "]"
     if t == "List(Pc)":
         return "[" + ", ".join(lit("Pc", depth + 1) for _ in range(R.randint(1, 3))) + "]"
+    if t == "List(List(Int))":
+        return "[" + ", ".join(lit("List(Int)") for _ in range(R.randint(1, 3))) + "]"
     return t + " {" + ", ".join(f".{f} = {lit(ft, depth + 1)}" for f, ft in fields(t)) + "}"
 
 
@@ -51,6 +54,8 @@ def checksum(t, e):
         return f"lpa({e}, 0, 0)"
     if t == "List(Pc)":
         return f"lpc({e}, 0, 0)"
+    if t == "List(List(Int))":
+        return f"lll({e}, 0, 0)"
     return " + ".join(f"({checksum(ft, e + '.' + f)}) * {i + 2}" for i, (f, ft) in enumerate(fields(t)))
 
 
@@ -62,6 +67,55 @@ Int lsum(List(Int) xs, Int i, Int acc) {
 Int lpa(List(Pa) xs, Int i, Int acc) {
     if (i >= xs.len()) { return acc; }
     return lpa(xs, i + 1, acc * 5 + xs[i].x * 7 + xs[i].y);
+}
+Int lll(List(List(Int)) xs, Int i, Int acc) {
+    if (i >= xs.len()) { return acc; }
+    return lll(xs, i + 1, acc * 3 + lsum(xs[i], 0, 0));
+}
+// Lists written through the records and slots that hold them.
+Pb pb_seti(Pb b, Int i, Int v) {
+    if (b.xs.len() == 0) { return b; }
+    return Pb {.x = b.x, .xs = b.xs.with(i % b.xs.len(), v)};
+}
+Int pb_alias(Pb b, Int i) {
+    List(Int) c = b.xs;
+    Pb b2 = pb_push(pb_seti(b, i, 42), i);
+    return lsum(c, 0, 0) * 7 + lsum(b2.xs, 0, 0);
+}
+List(Int) set_add(List(Int) s, Int x) { return if (s.contains(x)) { s } else { s.concat([x]) }; }
+Pe pe_add(Pe e, Int i, Int v) {
+    if (e.ls.len() == 0) { return e; }
+    Int j = i % e.ls.len();
+    return Pe {.ls = e.ls.with(j, set_add(e.ls[j], v)), .k = e.k + 1};
+}
+Pe pe_loop(Pe e, Int n) {
+    if (n <= 0) { return e; }
+    return pe_loop(pe_add(e, n, n * 5), n - 1);
+}
+Pe pe_dup(Pe e) {
+    if (e.ls.len() < 2) { return e; }
+    return Pe {.ls = e.ls.with(0, e.ls[1]), .k = e.k};
+}
+Int pe_alias(Pe e, Int i) {
+    List(List(Int)) keep = e.ls;
+    Pe e2 = pe_add(pe_add(e, i, 9), i + 1, 8);
+    return lll(keep, 0, 0) * 5 + lll(e2.ls, 0, 0);
+}
+Pe pe_fill(Int n, Int k) {
+    List(Int) one = [k];
+    return Pe {.ls = pe_fill_loop(n, one, ListBuf()), .k = k};
+}
+List(List(Int)) pe_fill_loop(Int n, List(Int) v, ListBuf(List(Int)) acc) {
+    if (n <= 0) { return acc.finish(); }
+    return pe_fill_loop(n - 1, v, acc.push(v));
+}
+Pe pe_big(Pe e, Int n) {
+    if (e.ls.len() == 0) { return e; }
+    return pe_loop(Pe {.ls = e.ls.with(0, lrange(0, 300, ListBuf())), .k = e.k}, n);
+}
+List(Int) lrange(Int i, Int n, ListBuf(Int) acc) {
+    if (i >= n) { return acc.finish(); }
+    return lrange(i + 1, n, acc.push(i));
 }
 Int lpc(List(Pc) xs, Int i, Int acc) {
     if (i >= xs.len()) { return acc; }
@@ -188,6 +242,17 @@ OPS = [
     ("Pa", ["List(Pc)"], "lc_in({0}, {i})"),
     ("Pc", ["List(Pc)"], "lc_deep({0}, {i})"),
     ("Pc", ["List(Pc)"], "{0}[{i} % {0}.len()]"),
+    ("Pb", ["Pb"], "pb_seti({0}, {i}, {i} + 3)"),
+    ("Int", ["Pb"], "pb_alias({0}, {i})"),
+    ("Pe", ["Pe"], "pe_add({0}, {i}, {i} * 2)"),
+    ("Pe", ["Pe"], "pe_loop({0}, 4 + {i})"),
+    ("Pe", ["Pe"], "pe_dup({0})"),
+    ("Int", ["Pe"], "pe_alias({0}, {i})"),
+    ("Pe", [], "pe_fill(3, {i})"),
+    ("Pe", ["Pe"], "pe_big({0}, 5 + {i})"),
+    ("List(Int)", ["Pe"], "{0}.ls[{i} % {0}.ls.len()]"),
+    ("List(List(Int))", ["Pe"], "{0}.ls"),
+    ("Pe", ["List(List(Int))"], "Pe {{.ls = {0}, .k = {i}}}"),
     ("Pa", ["List(Pc)"], "{0}[{i} % {0}.len()].a"),
 ]
 
@@ -198,7 +263,7 @@ def main():
     out.append("Int unwrap(Option(Pa) o) { return match o { Some(p) => p.x * 11 + p.y, None => 0 }; }")
     out.append("Int main() {")
     binds = []  # (name, type)
-    for t in REC + ["List(Pc)"]:
+    for t in REC + ["List(Pc)", "List(List(Int))"]:
         for _ in range(2):
             n = f"v{len(binds)}"
             out.append(f"    {t} {n} = {lit(t)};")
@@ -214,13 +279,17 @@ def main():
         if rt == "Opt":
             out.append(f"    Option(Pa) {n} = {e};")
             binds.append((n, "Opt"))
+        elif rt == "Int":
+            out.append(f"    Int w{step} = {e};")
+            out.append(f"    println(f\"i{step} {{w{step}}}\");")
+            continue
         else:
             out.append(f"    {rt} {n} = {e};")
             binds.append((n, rt))
         # Sometimes read an earlier value right away (keeps it live).
         if R.random() < 0.3:
             old, ot = R.choice(binds)
-            if ot in TYPES or ot == "List(Pc)":
+            if ot in TYPES or ot == "List(Pc)" or ot == "List(List(Int))":
                 out.append(f"    println(f\"r{step} {{{checksum(ot, old)}}}\");")
     # Print everything, in a random order.
     order = binds[:]

@@ -1197,6 +1197,7 @@ Int fresh_list(Int base, Int elem) {
     _ = st64(f, 1);
     Int nv = list_hdr();
     _ = st64(nv, 1) + st32(nv + 8, 0 - 1) + st64(nv + 16, f) + st64(nv + 24, ltype(base));
+    _ = sync_elems(nv);
     return nv;
 }
 
@@ -1963,7 +1964,7 @@ pub Int rt_list_set_w(Int l, Int owned, Int i, Int w) {
 @export("resid_list_set_rec", "ptr(ptr,i8,i64,ptr,i64)")
 @inline
 pub Int rt_list_set_rec(Int l, Int owned, Int i, Int r, Int w) {
-    if (owned != 0 && ltransient(l) && ult(i, lcount(l) / w)) {
+    if (owned != 0 && ltransient(l) && ult(i, lelems(l))) {
         Int d = lroot(l) + 32 + i * w * 8;
         return (if (d != r) { mcopy(d, r, (w - 1) * 8) } else { 0 }) * 0 + l;
     }
@@ -1977,13 +1978,13 @@ pub Int rt_list_set_rec(Int l, Int owned, Int i, Int r, Int w) {
 @export("resid_list_rec_slot", "ptr(ptr,i8,i64,i64)")
 @inline
 pub Int rt_list_rec_slot(Int l, Int owned, Int i, Int w) {
-    if (owned != 0 && ltransient(l) && ult(i, lcount(l) / w)) { return l; }
+    if (owned != 0 && ltransient(l) && ult(i, lelems(l))) { return l; }
     return list_rec_slot_slow(l, owned, i, w);
 }
 
 @noinline
 Int list_rec_slot_slow(Int l, Int owned, Int i, Int w) {
-    Int n = lcount(l) / w;
+    Int n = lelems(l);
     if (!ult(i, n)) { return rt_index_abort(i, n, 0); }
     Bool keep = owned != 0 && !no_thaw(l);
     Int t = if (keep && ltransient(l)) { l } else { with_fresh(l, 0) };
@@ -2017,7 +2018,7 @@ pub Int rt_ol_put(Int d, Int r, Int n) { return if (d != r) { mcopy(d, r, n) } e
 
 @noinline
 Int list_set_rec_slow(Int l, Int owned, Int i, Int r, Int w) {
-    Int n = lcount(l) / w;
+    Int n = lelems(l);
     if (!ult(i, n)) { return rt_index_abort(i, n, 0); }
     // A record list is always flat: a shared one is copied whole.
     Bool keep = owned != 0 && !no_thaw(l);
@@ -2086,7 +2087,7 @@ Int list_grow(Int l, Int n, Int w, Int k) {
     Int f = lroot(t);
     _ = words_fill(f + 24 + c * 8, n, w);
     _ = st64(f, c + n) + st64(f + 16, c + n) + st64(t, c + n);
-    return if (c == 0 && k != 0) { st64(t + 24, k) * 0 + t } else { t };
+    return sync_elems(if (c == 0 && k != 0) { st64(t + 24, k) * 0 + t } else { t });
 }
 
 // n words at p, all w: the first stored, then doubled by copies of at
@@ -2169,9 +2170,9 @@ pub Int rt_list_with_fb(Int l, Int owned, Int i, Int v, Int ek) {
 // that result stays marked. A fresh list (a builder's, a literal) thaws.
 Int fresh_max() { return 256; }
 
-Bool no_thaw(Int l) { return !ltransient(l) && lcount(l) > fresh_max() && ld32(l + 12) == 1; }
+Bool no_thaw(Int l) { return !ltransient(l) && lcount(l) > fresh_max() && (ld32(l + 12) & 2147483648) != 0; }
 
-Int mark_frozen(Int l) { return st32(l + 12, 1) * 0 + l; }
+Int mark_frozen(Int l) { return st32(l + 12, ld32(l + 12) | 2147483648) * 0 + l; }
 
 @noinline
 Int list_with_f_slow(Int l, Int owned, Int i, Int v, Int ek) {
@@ -2215,7 +2216,7 @@ pub Int rt_list_concat_own(Int a, Int owned, Int b0) {
     Int f = if (n + m <= ld64(f0 + 8)) { f0 } else { with_grow(t, f0, n, n + m) };
     _ = if (lraw(t)) { cat_raw(f, b, n, m) } else { cat_fill(f, b, n, 0, m) };
     _ = st64(f, n + m) + st64(f + 16, n + m);
-    return st64(t, n + m) * 0 + t;
+    return sync_elems(st64(t, n + m) * 0 + t);
 }
 
 // Raw slots are values: no barrier.
@@ -2252,7 +2253,7 @@ pub Int rt_list_concat_own_f(Int a, Int owned, Int b, Int ek) {
     Int f = if (n + m <= ld64(f0 + 8)) { f0 } else { with_grow(t, f0, n, n + m) };
     _ = cat_fill_f(f, b, n, 0, m, ek);
     _ = st64(f, n + m) + st64(f + 16, n + m);
-    return st64(t, n + m) * 0 + t;
+    return sync_elems(st64(t, n + m) * 0 + t);
 }
 
 // rt_list_concat_own_f for a list of header records: b keeps its records,
@@ -2269,7 +2270,7 @@ pub Int rt_list_concat_own_fh(Int a, Int owned, Int b, Int ek) {
     Int f = if (n + m <= ld64(f0 + 8)) { f0 } else { with_grow(t, f0, n, n + m) };
     _ = cat_fill_f(f, rt_list_share_f(b), n, 0, m, ek);
     _ = st64(f, n + m) + st64(f + 16, n + m);
-    return st64(t, n + m) * 0 + t;
+    return sync_elems(st64(t, n + m) * 0 + t);
 }
 
 Int cat_fill_f(Int f, Int b, Int n, Int j, Int m, Int ek) {
@@ -2288,6 +2289,6 @@ Int cat_fill(Int f, Int b, Int n, Int j, Int m) {
 @export("resid_list_freeze", "ptr(ptr)")
 @inline
 pub Int rt_list_freeze(Int l) {
-    _ = if (l != 0 && ltransient(l)) { st32(l + 8, 0 - 1) + st32(l + 12, 1) } else { 0 };
+    _ = if (l != 0 && ltransient(l)) { st32(l + 8, 0 - 1) + st32(l + 12, ld32(l + 12) | 2147483648) } else { 0 };
     return l;
 }

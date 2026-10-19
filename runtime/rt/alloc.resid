@@ -231,21 +231,24 @@ Int pop_regions(Int i, Int d, Int n) {
 }
 
 // The innermost region's bump: the fast path, inlined at each call.
-// Blocks whose size is an odd multiple of 8 sit on an 8-byte boundary;
-// every other block is 16-byte aligned, as malloc gives.
+// Every block is a multiple of 16 bytes on a 16-byte boundary, as malloc
+// gives (an odd-word block wastes one word; the pad arithmetic it saved
+// was three instructions on every allocation). Every bump of a region
+// (alloc_in too) keeps it 16-aligned. A size that wraps when rounded is
+// negative and takes the slow path, which refuses it.
 pub Int scope_alloc(Int size0) {
-    Int size = (size0 + 7) & (0 - 8);
+    Int size = (size0 + 15) & (0 - 16);
     Int p = ag(6);
-    Int pad = if ((size & 8) != 0) { 0 } else { p & 8 };
-    if (p != 0 && ag(7) - p >= size + pad) {
-        _ = as_(6, p + pad + size);
-        return p + pad;
+    if (p != 0 && size >= 0 && ag(7) - p >= size) {
+        _ = as_(6, p + size);
+        return p;
     }
-    return scope_alloc_slow((size + 15) & (0 - 16));
+    return scope_alloc_slow(size);
 }
 
 @cold
 Int scope_alloc_slow(Int size) {
+    if (size < 0) { return rt_abort_msg(resid_raw_addr("allocation size out of range")); }
     Int r = ag(10);
     _ = rec_save(r);
     Int p = region_grow(r, size);

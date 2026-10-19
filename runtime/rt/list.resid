@@ -80,6 +80,21 @@ pub Int rec_words(Int t) { return if (ult(t - 16, 64)) { t - 16 } else { 0 }; }
 // element is rewritten in place (resid_list_rec_borrow).
 pub Int rec_hdr(Int w) { return rec_tag() | ((w - 1) * 16) | 1; }
 
+// An inline-record list also keeps its element count, in bits 0..30 of the
+// header's word at 12 (bit 31 is the frozen mark, no_thaw), so an index is
+// checked and `len()` read without dividing the word count. Every writer
+// of a count that may be an inline list's calls sync_elems after it (the
+// type word must already be set).
+pub Int lelems(Int l) { return ld32(l + 12) & 2147483647; }
+pub Int sync_elems(Int l) {
+    Int w = rec_words(ltype(l));
+    if (w == 0) { return l; }
+    return st32(l + 12, (ld32(l + 12) & 2147483648) | (lcount(l) / w)) * 0 + l;
+}
+@export("resid_list_elems", "i64(ptr,i64)")
+@inline
+pub Int rt_list_elems(Int l, Int w) { return lelems(l); }
+
 // The type of a list made from a and b: an empty list's kind may be
 // unknown (`[]` without a type), so the other one's is taken.
 pub Int lty2(Int a, Int b) { return if (lcount(a) == 0 && !raw_kind(ltype(a))) { ltype(b) } else { ltype(a) }; }
@@ -169,7 +184,7 @@ pub Int set_list(Int l, Int count, Int shift, Int root, Int ty) {
     _ = st64(l, count);
     _ = st32(l + 8, shift);
     _ = st64(l + 16, root);
-    return st64(l + 24, ty) * 0 + l;
+    return sync_elems(st64(l + 24, ty) * 0 + l);
 }
 
 @export("resid_rt_list_hdr", "ptr()")
@@ -418,7 +433,7 @@ pub Int rt_list_concat(Int a, Int b0) {
     Int m = lcount(b);
     if (m == 0) { return a; }
     Int out = if (m == 1) { pvec_push(a, list_at(b, 0)) } else { cat_slots(a, b, m) };
-    return if (lcount(a) == 0) { st64(out + 24, lty2(a, b)) * 0 + out } else { out };
+    return if (lcount(a) == 0) { sync_elems(st64(out + 24, lty2(a, b)) * 0 + out) } else { out };
 }
 
 Int cat_slots(Int a, Int b, Int m) {
@@ -436,7 +451,7 @@ pub Int rt_list_push(Int a, Int elem) { return pvec_push(a, elem); }
 @export("resid_list_push_k", "ptr(ptr,ptr,i64)")
 pub Int rt_list_push_k(Int a, Int elem, Int k) {
     Int out = pvec_push(a, elem);
-    return if (lcount(a) == 0) { st64(out + 24, k) * 0 + out } else { out };
+    return if (lcount(a) == 0) { sync_elems(st64(out + 24, k) * 0 + out) } else { out };
 }
 
 // Element i of a list of inline records of w words: a pointer to its
@@ -446,9 +461,8 @@ pub Int rt_list_push_k(Int a, Int elem, Int k) {
 @export("resid_list_rec_at", "ptr(ptr,i64,i64)")
 @inline
 pub Int rt_list_rec_at(Int l, Int i, Int w) {
-    Int n = lcount(l) / w;
-    if (ult(i, n)) { return lroot(l) + 32 + i * w * 8; }
-    return rt_index_abort(i, n, 0);
+    if (ult(i, lelems(l))) { return lroot(l) + 32 + i * w * 8; }
+    return rt_index_abort(i, lelems(l), 0);
 }
 
 // A borrowed element (lo_borrows: written back at the same index before
@@ -470,14 +484,14 @@ pub Int rt_list_push_rec(Int a, Int r, Int w) {
     Int one = resid_raw_tls("rec_one", 512);
     _ = rec_put(one, r, w);
     Int out = pvec_append_into(0, a, one, w);
-    return if (lcount(a) == 0) { st64(out + 24, 16 + w) * 0 + out } else { out };
+    return if (lcount(a) == 0) { sync_elems(st64(out + 24, 16 + w) * 0 + out) } else { out };
 }
 
 // xs[lo..hi] of inline records: clamped in elements, copied in words.
 @export("resid_list_slice_rec", "ptr(ptr,i64,i64,i64)")
 pub Int rt_list_slice_rec(Int l, Int lo0, Int hi0, Int s) {
     Int lo = max(lo0, 0);
-    Int hi = min(hi0, lcount(l) / s);
+    Int hi = min(hi0, lelems(l));
     if (hi <= lo) { return set_list(list_hdr(), 0, 0, 0, ltype(l)); }
     return rt_list_new((hi - lo) * s, lroot(l) + 24 + lo * s * 8, ltype(l));
 }
@@ -531,7 +545,7 @@ Int lb_grow(Int l, Int f, Int n) {
 pub Int rt_listbuf_finish(Int l, Int ty) {
     _ = st64(l + 24, ty);
     _ = if (lroot(l) == 0) { st32(l + 8, 0) } else { 0 };
-    return l;
+    return sync_elems(l);
 }
 
 // ─── Slices, ranges, assertions ────────────────────────────────────────

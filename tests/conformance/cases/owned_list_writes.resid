@@ -1,0 +1,107 @@
+// Owned list writes the ownership analysis proves in place (owned flag 2):
+// a list held by a record field or by a list slot is thawed where it is
+// when it has one holder, and copied when another value still holds it.
+// Every case prints what value semantics say.
+
+type Pb = { Int x; List(Int) xs; };
+type Pe = { List(List(Int)) ls; Int k; };
+
+Str fl(List(Int) xs) { return fl_from(xs, 0, ""); }
+Str fl_from(List(Int) xs, Int i, Str acc) {
+    if (i >= xs.len()) { return acc; }
+    return fl_from(xs, i + 1, acc + f"{xs[i]} ");
+}
+Str fe(Pe e) { return fe_from(e.ls, 0, "") + f"k{e.k}"; }
+Str fe_from(List(List(Int)) ls, Int i, Str acc) {
+    if (i >= ls.len()) { return acc; }
+    return fe_from(ls, i + 1, acc + "[" + fl(ls[i]) + "] ");
+}
+
+List(Int) set_add(List(Int) s, Int x) { return if (s.contains(x)) { s } else { s.concat([x]) }; }
+
+// A record's list grown through the record, repeatedly.
+Pb pb_push(Pb b, Int v) { return Pb {.x = b.x + 1, .xs = b.xs.concat([v])}; }
+Pb pb_set(Pb b, Int i, Int v) { return Pb {.x = b.x, .xs = b.xs.with(i, v)}; }
+Pb pb_loop(Pb b, Int n) { return if (n <= 0) { b } else { pb_loop(pb_push(b, n), n - 1); }; }
+
+// The Havlak shape: an element list grown and written back at its slot.
+Pe pe_add(Pe e, Int i, Int v) { return Pe {.ls = e.ls.with(i, set_add(e.ls[i], v)), .k = e.k + 1}; }
+Pe pe_loop(Pe e, Int n) { return if (n <= 0) { e } else { pe_loop(pe_add(e, n % e.ls.len(), n), n - 1); }; }
+Pe pe_loop2(Pe e, Int n) { return if (n <= 0) { e } else { pe_loop2(pe_add(e, n % e.ls.len(), 1000 + n), n - 1); }; }
+
+List(List(Int)) fill(Int n, List(Int) v, ListBuf(List(Int)) acc) {
+    if (n <= 0) { return acc.finish(); }
+    return fill(n - 1, v, acc.push(v));
+}
+List(Int) range(Int i, Int n, ListBuf(Int) acc) {
+    if (i >= n) { return acc.finish(); }
+    return range(i + 1, n, acc.push(i));
+}
+
+// A field alias kept live sees the old list.
+Str alias_kept(Pb b) {
+    List(Int) c = b.xs;
+    Pb b2 = pb_push(pb_push(b, 7), 8);
+    return fl(c) + "| " + fl(b2.xs) + f"x{b2.x}";
+}
+
+// One list in two fields: a write through one leaves the other.
+Str two_fields(List(Int) d) {
+    Pb p = Pb {.x = 1, .xs = d};
+    Pb q = Pb {.x = 2, .xs = d};
+    Pb p2 = pb_set(p, 0, 99);
+    return fl(p2.xs) + "| " + fl(q.xs) + "| " + fl(d);
+}
+
+// One record in two slots: the record copied, the list with it.
+Str two_slots(Pb p) {
+    List(Pb) xs = [p, p];
+    Pb t = xs[0];
+    List(Pb) ys = xs.with(0, pb_push(t, 5));
+    return fl(ys[0].xs) + "| " + fl(ys[1].xs) + "| " + fl(xs[1].xs);
+}
+
+// Every slot filled with the same list: growing one must not grow the rest.
+Str same_fill(Int n) {
+    List(Int) none = [];
+    Pe e = Pe {.ls = fill(n, none, ListBuf()), .k = 0};
+    Pe e2 = pe_add(pe_add(pe_add(e, 1, 10), 1, 11), 2, 20);
+    return fe(e2);
+}
+
+// A copy of the outer list taken before the writes keeps the old elements.
+Str outer_copy(Pe e) {
+    List(List(Int)) keep = e.ls;
+    Pe e2 = pe_loop(e, 6);
+    return fe_from(keep, 0, "") + "| " + fe(e2);
+}
+
+// A slice of the outer list, then writes through the record.
+Str sliced(Pe e) {
+    List(List(Int)) s = e.ls[0..2];
+    Pe e2 = pe_add(pe_add(e, 0, 41), 1, 42);
+    return fe_from(s, 0, "") + "| " + fe(e2);
+}
+
+// Long lists (past the runtime's small-copy size) through every shape.
+Str big() {
+    Pb b = Pb {.x = 0, .xs = range(0, 300, ListBuf())};
+    Pb b2 = pb_loop(b, 5);
+    List(Int) c = b2.xs;
+    Pb b3 = pb_set(pb_set(b2, 0, -1), 299, -2);
+    Pe e = Pe {.ls = fill(3, range(0, 300, ListBuf()), ListBuf()), .k = 0};
+    Pe e2 = pe_loop2(e, 9);
+    return f"{b2.xs.len()} {b2.xs[300]} {b2.xs[304]} | {c[0]} {c[299]} | {b3.xs[0]} {b3.xs[299]} {b3.xs[1]} | {e2.ls[0].len()} {e2.ls[1].len()} {e2.ls[2].len()} {e2.ls[0][300]} {e2.ls[1][301]} k{e2.k}";
+}
+
+Int main() {
+    println(fl(pb_loop(Pb {.x = 0, .xs = [1, 2]}, 4).xs));
+    println(alias_kept(Pb {.x = 0, .xs = [1, 2, 3]}));
+    println(two_fields([4, 5, 6]));
+    println(two_slots(Pb {.x = 9, .xs = [1]}));
+    println(same_fill(4));
+    println(outer_copy(Pe {.ls = [[1], [2], [3]], .k = 0}));
+    println(sliced(Pe {.ls = [[1], [2], [3]], .k = 5}));
+    println(big());
+    return 0;
+}
