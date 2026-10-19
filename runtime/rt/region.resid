@@ -239,6 +239,8 @@ pub Int region_grow(Int r, Int n) {
     _ = st64(pg, ld64(r + 8)) + st64(pg + 8, k);
     _ = st64(r + 8, pg) + st64(r + 32, ld64(r + 32) + (1 << k));
     _ = st64(r + 16, pg + 16 + n) + st64(r + 24, pg + (1 << k) * rg_page());
+    Int d = ag_scope_depth();
+    _ = if (d > 0 && r == rec_at(d - 1)) { due_sync(d) } else { 0 };
     return pg + 16;
 }
 
@@ -309,17 +311,37 @@ pub Int mv_done(Int v) {
 // pushed at entry. The handle is the depth L takes: pushed iff depth > l.
 
 @export("resid_loop_enter", "i64()")
+@inline
 pub Int rt_loop_enter() {
     Int d = ag_scope_depth();
-    if (d == 0 || lazy_full(rec_at(d - 1))) { return rt_scope_push(); }
+    if (d == 0 || ld64(due_word()) != 0) { return loop_push(); }
     return d;
 }
 
+@noinline
+Int loop_push() { return rt_scope_push(); }
+
 Bool lazy_full(Int r) { return ld64(r + 32) > 2 * ld64(r + 40) + 2; }
+
+// Whether the innermost region is full by lazy_full's rule, kept in step
+// where its counts or the depth change: scope push and pop, a compaction,
+// region_grow, rt_sc_depth_set. Uses of an older region or the heap
+// (region_use, heap_use, rt_outer_alloc) leave the innermost region alone
+// and restore the depth. At a back edge the region a loop's due test reads
+// is the innermost one (the caller's before L is taken, L after), so the
+// test reads this word first.
+pub Int due_word() { return resid_raw_tls("rg_due", 8); }
+pub Int due_sync(Int d) { return st64(due_word(), if (d > 0 && lazy_full(rec_at(d - 1))) { 1 } else { 0 }); }
 
 @export("resid_loop_due", "i1(i64)")
 @inline
 pub Bool rt_loop_due(Int l) {
+    if (ld64(due_word()) == 0) { return false; }
+    return loop_due_full(l);
+}
+
+@noinline
+Bool loop_due_full(Int l) {
     if (ag_scope_depth() == l) { return lazy_full(rec_at(l - 1)) && lazy_push(); }
     Int r = rec_at(l);
     return ld64(r + 32) > 2 * ld64(r + 40) + 2;
@@ -331,6 +353,12 @@ pub Bool rt_loop_due(Int l) {
 @export("resid_loop_due2", "i64(i64)")
 @inline
 pub Int rt_loop_due2(Int l) {
+    if (ld64(due_word()) == 0) { return 0; }
+    return loop_due2_full(l);
+}
+
+@noinline
+Int loop_due2_full(Int l) {
     if (ag_scope_depth() == l) { return if (lazy_full(rec_at(l - 1)) && !lazy_push()) { 2 } else { 0 }; }
     Int r = rec_at(l);
     return if (ld64(r + 32) > 2 * ld64(r + 40) + 2) { 1 } else { 0 };
@@ -376,7 +404,7 @@ pub Int rt_loop_move(Int l, Int step) {
     _ = pages_free(ld64(r + 8), 0, rec_bump(r));
     _ = mcopy(r, nr, 64);
     _ = st64(r + 40, ld64(nr + 32)) + st64(r + 48, 0);
-    _ = rec_load(r) + yid_sync();   // r carries a new id
+    _ = rec_load(r) + yid_sync() + due_sync(ag_scope_depth());   // r carries a new id
     return str_index_scope_popped() * 0;
 }
 

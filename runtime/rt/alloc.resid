@@ -203,7 +203,7 @@ pub Int rt_scope_push() {
     _ = if (d == ag(9)) { marks_grow() } else { 0 };
     _ = if (d > 0) { rec_save(rec_at(d - 1)) } else { 0 };
     _ = rec_init(rec_at(d), new_region_id());
-    _ = as_(10, rec_at(d)) + as_(4, d + 1) + yid_sync();
+    _ = as_(10, rec_at(d)) + as_(4, d + 1) + yid_sync() + st64(due_word(), 0);
     return top_clear() * 0 + d;
 }
 
@@ -220,7 +220,7 @@ Int scope_pop_slow(Int d) {
     Int freed = pop_regions(ag(4) - 1, d, 0);
     _ = as_(4, d);
     _ = if (d > 0) { as_(10, rec_at(d - 1)) + rec_load(rec_at(d - 1)) } else { as_(10, 0) + top_clear() };
-    _ = yid_sync();
+    _ = yid_sync() + due_sync(d);
     // A pointer-keyed string cache entry may name freed region memory.
     return if (freed > 0) { str_index_scope_popped() } else { 0 };
 }
@@ -367,7 +367,7 @@ pub Int rt_mem_since_mark() { return ag(2) - ag(3); }
 pub Int rt_sc_depth_x() { return ag(4); }
 
 @export("resid_rt_sc_depth_set", "void(i64)")
-pub Int rt_sc_depth_set_x(Int d) { return as_(4, d) + yid_sync(); }
+pub Int rt_sc_depth_set_x(Int d) { return as_(4, d) + yid_sync() + due_sync(d); }
 
 // Made in the innermost scope region.
 pub Bool young(Int p) {
