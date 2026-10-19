@@ -1449,13 +1449,15 @@ type OFn = { OX x; ORS r; OF f; OL l; };
 // has: the function binds or returns a tracked value (else nothing to do).
 // hzb: binders whose scalar fields lowering loads at the binding (lw_hz).
 // kix: each index expression's key id (ow_keys), interned program-wide.
-type OPre = { Int fnode; ORS r; OL l; Map(Int, Int) inl; List(Str) calls; OT t; Bool has; Map(Int, Int) hzb; Map(Int, Int) kix; };
+// ktx: the key texts before interning (ow_intern sets kix from them).
+type OPre = { Int fnode; ORS r; OL l; Map(Int, Int) inl; List(Str) calls; OT t; Bool has; Map(Int, Int) hzb; Map(Int, Int) kix; Map(Int, Str) ktx; };
 
-// Key texts interned so far (n of them), and this function's key ids.
+// Key texts interned so far (n of them).
 type OKC = { Map(Str, Int) keys; Int n; Map(Int, Int) kix; };
-type OPK = { OPre p; OKC k; };
 
-OPK ow_prep(Kg g, Funcs fs, OT ot, Int fnode, OKC kc) {
+// One function's preparation; its keys stay text (ktx) until ow_intern,
+// so functions can be prepared in any order or in parallel.
+OPre ow_prep(Kg g, Funcs fs, OT ot, Int fnode) {
     Map(Int, Map(Int, Map(Str, Int))) af0 = {};
     Int body = kg_kid(g, fnode, g.ns[fnode].nk - 1);
     Map(Int, Int) inl = ow_inloop(g, body, false, ow_noim());
@@ -1463,31 +1465,50 @@ OPK ow_prep(Kg g, Funcs fs, OT ot, Int fnode, OKC kc) {
     Map(Int, Int) d0 = {};
     Map(Int, Str) t0 = {};
     ORS r = or_params(x0, 0, ow_nosm(), ORS {.def = d0, .bty = t0});
-    OKC k2 = ow_keys(x0, r, body, OKC {.keys = kc.keys, .n = kc.n, .kix = ow_noim()});
+    Map(Int, Str) ktx = ow_keys(x0, r, body, ow_nois());
     // Liveness is recomputed per evaluation (ow_fn), inside its arena.
-    OPre pr = OPre {.fnode = fnode, .r = r, .l = OL {.live = ow_nols(), .after = af0}, .inl = inl, .calls = ow_calls(g, fs, ot.inst, body, ListBuf()).finish(), .t = ot, .has = ow_trk(x0, ow_base(fs, g.ns[kg_kid(g, fnode, 0)].text)) || ow_any_trk(x0, r.bty, r.bty.keys(), 0), .hzb = if (ot.strict) { ow_hzb(g, x0, r, su_dupmap(g, fnode), r.bty.keys(), 0, ow_noim()) } else { ow_noim() }, .kix = k2.kix};
-    return OPK {.p = pr, .k = k2};
+    return OPre {.fnode = fnode, .r = r, .l = OL {.live = ow_nols(), .after = af0}, .inl = inl, .calls = ow_calls(g, fs, ot.inst, body, ListBuf()).finish(), .t = ot, .has = ow_trk(x0, ow_base(fs, g.ns[kg_kid(g, fnode, 0)].text)) || ow_any_trk(x0, r.bty, r.bty.keys(), 0), .hzb = if (ot.strict) { ow_hzb(g, x0, r, su_dupmap(g, fnode), r.bty.keys(), 0, ow_noim()) } else { ow_noim() }, .kix = ow_noim(), .ktx = ktx};
 }
 
-// The key of every index expression (an index's, a with's): its text
-// (ow_idx_key) interned into an id shared by every function, since the
-// residual graph shares subtrees and summaries cross calls.
-OKC ow_keys(OX x, ORS r, Int id, OKC acc) {
+// The key text of every index expression (an index's, a with's)
+// (ow_idx_key). ow_intern numbers them program-wide, since the residual
+// graph shares subtrees and summaries cross calls.
+Map(Int, Str) ow_keys(OX x, ORS r, Int id, Map(Int, Str) acc) {
     Str k = x.g.ns[id].kind;
     Bool ix = (k == "index" && x.g.ns[id].nk == 2) || (k == "mcall" && x.g.ns[id].text == "with" && x.g.ns[id].nk == 3);
     Int e = if (ix) { kg_kid(x.g, id, 1) } else { -1 };
-    Str t = if (ix) { ow_idx_key(x, r, e) } else { "" };
-    Int old = if (t != "") { acc.keys.get(t) else { -1 } } else { -1 };
-    OKC a1 = if (t == "") { acc } else { if (old >= 0) { OKC {.keys = acc.keys, .n = acc.n, .kix = acc.kix.insert(e, old)} } else { OKC {.keys = acc.keys.insert(t, acc.n), .n = acc.n + 1, .kix = acc.kix.insert(e, acc.n)} } };
-    return ow_keys_kids(x, r, id, 0, a1);
+    Str t = if (ix && !acc.contains(e)) { ow_idx_key(x, r, e) } else { "" };
+    return ow_keys_kids(x, r, id, 0, if (t != "") { acc.insert(e, t) } else { acc });
 }
 
-OKC ow_keys_kids(OX x, ORS r, Int id, Int i, OKC acc) {
+Map(Int, Str) ow_keys_kids(OX x, ORS r, Int id, Int i, Map(Int, Str) acc) {
     if (i >= x.g.ns[id].nk) { return acc; }
     return ow_keys_kids_n(x, r, id, i, ow_keys(x, r, kg_kid(x.g, id, i), acc));
 }
 
-OKC ow_keys_kids_n(OX x, ORS r, Int id, Int i, OKC acc) { return ow_keys_kids(x, r, id, i + 1, acc); }
+Map(Int, Str) ow_keys_kids_n(OX x, ORS r, Int id, Int i, Map(Int, Str) acc) { return ow_keys_kids(x, r, id, i + 1, acc); }
+
+// Every function's key texts numbered, in function then node order.
+List(OPre) ow_intern(List(OPre) prs, Int i, OKC kc, ListBuf(OPre) acc) {
+    if (i >= prs.len()) { return acc.finish(); }
+    OPre p = prs[i];
+    OKC k2 = ow_intern_one(p.ktx, p.ktx.keys(), 0, OKC {.keys = kc.keys, .n = kc.n, .kix = ow_noim()});
+    OPre p2 = OPre {.fnode = p.fnode, .r = p.r, .l = p.l, .inl = p.inl, .calls = p.calls, .t = p.t, .has = p.has, .hzb = p.hzb, .kix = k2.kix, .ktx = p.ktx};
+    return ow_intern_n(prs, i, k2, acc.push(p2));
+}
+
+List(OPre) ow_intern_n(List(OPre) prs, Int i, OKC kc, ListBuf(OPre) acc) { return ow_intern(prs, i + 1, kc, acc); }
+
+OKC ow_intern_one(Map(Int, Str) ktx, List(Int) es, Int j, OKC acc) {
+    if (j >= es.len()) { return acc; }
+    Int e = es[j];
+    Str t = ktx.get(e) else { "" };
+    Int old = acc.keys.get(t) else { -1 };
+    OKC a1 = if (old >= 0) { OKC {.keys = acc.keys, .n = acc.n, .kix = acc.kix.insert(e, old)} } else { OKC {.keys = acc.keys.insert(t, acc.n), .n = acc.n + 1, .kix = acc.kix.insert(e, acc.n)} };
+    return ow_intern_one_n(ktx, es, j, a1);
+}
+
+OKC ow_intern_one_n(Map(Int, Str) ktx, List(Int) es, Int j, OKC acc) { return ow_intern_one(ktx, es, j + 1, acc); }
 
 // The binders lw_hz_params/lw_hz_binds load: parameters and statement
 // binders of a record type, named once in the function.
@@ -1528,13 +1549,40 @@ ListBuf(Str) ow_calls_kids(Kg g, Funcs fs, Map(Str, Str) inst, Int id, Int i, Li
 ListBuf(Str) ow_calls_kids_n(Kg g, Funcs fs, Map(Str, Str) inst, Int id, Int i, ListBuf(Str) acc) { return ow_calls_kids(g, fs, inst, id, i + 1, acc);
 }
 
-List(OPre) ow_preps(Kg g, Funcs fs, OT ot, List(Int) fns, Int i, OKC kc, ListBuf(OPre) acc) {
-    if (i >= fns.len()) { return acc.finish(); }
-    OPK pk = ow_prep(g, fs, ot, fns[i], kc);
-    return ow_preps_n(g, fs, ot, fns, i, pk.k, acc.push(pk.p));
+// The functions [i, e) prepared.
+List(OPre) ow_preps(Kg g, Funcs fs, OT ot, List(Int) fns, Int i, Int e, ListBuf(OPre) acc) {
+    if (i >= e) { return acc.finish(); }
+    return ow_preps_n(g, fs, ot, fns, i, e, acc.push(ow_prep(g, fs, ot, fns[i])));
 }
 
-List(OPre) ow_preps_n(Kg g, Funcs fs, OT ot, List(Int) fns, Int i, OKC kc, ListBuf(OPre) acc) { return ow_preps(g, fs, ot, fns, i + 1, kc, acc); }
+List(OPre) ow_preps_n(Kg g, Funcs fs, OT ot, List(Int) fns, Int i, Int e, ListBuf(OPre) acc) { return ow_preps(g, fs, ot, fns, i + 1, e, acc); }
+
+// All functions prepared by eight regions, each a contiguous range, then
+// their keys interned in order: the same result as preparing in turn.
+List(OPre) ow_preps_all(Kg g, Funcs fs, OT ot, List(Int) fns) {
+    Int n = fns.len();
+    if (n < 64) { return ow_intern(ow_preps(g, fs, ot, fns, 0, n, ListBuf()), 0, ow_nokc(), ListBuf()); }
+    Int q = (n + 7) / 8;
+    Result(List(OPre), RegionError) r0 = spawn () { return ow_preps(g, fs, ot, fns, 0, imin_o(q, n), ListBuf()); };
+    Result(List(OPre), RegionError) r1 = spawn () { return ow_preps(g, fs, ot, fns, imin_o(q, n), imin_o(2 * q, n), ListBuf()); };
+    Result(List(OPre), RegionError) r2 = spawn () { return ow_preps(g, fs, ot, fns, imin_o(2 * q, n), imin_o(3 * q, n), ListBuf()); };
+    Result(List(OPre), RegionError) r3 = spawn () { return ow_preps(g, fs, ot, fns, imin_o(3 * q, n), imin_o(4 * q, n), ListBuf()); };
+    Result(List(OPre), RegionError) r4 = spawn () { return ow_preps(g, fs, ot, fns, imin_o(4 * q, n), imin_o(5 * q, n), ListBuf()); };
+    Result(List(OPre), RegionError) r5 = spawn () { return ow_preps(g, fs, ot, fns, imin_o(5 * q, n), imin_o(6 * q, n), ListBuf()); };
+    Result(List(OPre), RegionError) r6 = spawn () { return ow_preps(g, fs, ot, fns, imin_o(6 * q, n), imin_o(7 * q, n), ListBuf()); };
+    Result(List(OPre), RegionError) r7 = spawn () { return ow_preps(g, fs, ot, fns, imin_o(7 * q, n), n, ListBuf()); };
+    List(OPre) l0 = r0 else { ow_preps(g, fs, ot, fns, 0, imin_o(q, n), ListBuf()) };
+    List(OPre) l1 = r1 else { ow_preps(g, fs, ot, fns, imin_o(q, n), imin_o(2 * q, n), ListBuf()) };
+    List(OPre) l2 = r2 else { ow_preps(g, fs, ot, fns, imin_o(2 * q, n), imin_o(3 * q, n), ListBuf()) };
+    List(OPre) l3 = r3 else { ow_preps(g, fs, ot, fns, imin_o(3 * q, n), imin_o(4 * q, n), ListBuf()) };
+    List(OPre) l4 = r4 else { ow_preps(g, fs, ot, fns, imin_o(4 * q, n), imin_o(5 * q, n), ListBuf()) };
+    List(OPre) l5 = r5 else { ow_preps(g, fs, ot, fns, imin_o(5 * q, n), imin_o(6 * q, n), ListBuf()) };
+    List(OPre) l6 = r6 else { ow_preps(g, fs, ot, fns, imin_o(6 * q, n), imin_o(7 * q, n), ListBuf()) };
+    List(OPre) l7 = r7 else { ow_preps(g, fs, ot, fns, imin_o(7 * q, n), n, ListBuf()) };
+    return ow_intern(l0.concat(l1).concat(l2).concat(l3).concat(l4).concat(l5).concat(l6).concat(l7), 0, ow_nokc(), ListBuf());
+}
+
+Int imin_o(Int a, Int b) { return if (a < b) { a } else { b }; }
 
 OKC ow_nokc() {
     Map(Str, Int) k = {};
@@ -2990,7 +3038,7 @@ OWR ow_run_s(Kg g, Int unit, Funcs fs, Bool strict, Map(Str, Str) inst, Bool rb)
     Map(Str, Str) ft0 = {};
     OT ot1 = ow_types(fs, 0, OT {.sts = st0, .fty = ft0, .fidx = ow_fidx(fs, 0, ow_nosm()), .strict = strict, .inst = inst, .rb = rb, .fid = ow_nosm(), .fnames = []});
     OT ot = ow_with_fids(ot1, fs);
-    List(OPre) prs = ow_preps(g, fs, ot, fns, 0, ow_nokc(), ListBuf());
+    List(OPre) prs = ow_preps_all(g, fs, ot, fns);
     // Functions some call site of which the analysis cannot judge: named
     // as a value, or called inside a lambda or spawn body.
     Map(Str, Int) blind = ow_blind_all(g, ot, prs, 0, ow_nosm());
@@ -3040,7 +3088,7 @@ OWR ow_run_warm(Kg g, Int unit, Funcs fs, Map(Str, Str) inst, Int n0, List(Str) 
     Map(Str, Str) ft0 = {};
     OT ot1 = ow_types(fs, 0, OT {.sts = st0, .fty = ft0, .fidx = ow_fidx(fs, 0, ow_nosm()), .strict = true, .inst = inst, .rb = true, .fid = ow_nosm(), .fnames = []});
     OT ot = ow_with_fids(ot1, fs);
-    List(OPre) prs = ow_preps(g, fs, ot, fns, 0, ow_nokc(), ListBuf());
+    List(OPre) prs = ow_preps_all(g, fs, ot, fns);
     Map(Str, Int) blind = ow_blind_all(g, ot, prs, 0, ow_nosm());
     OS si = ow_init(g, fs, ot, blind, fns, 0, OS {.need = ow_noim(), .pown = ow_noim(), .fresh = ow_noim(), .keeps = ow_nois(), .reads = ow_nois(), .writes = ow_nois()});
     Map(Str, List(Int)) cl0 = {};
