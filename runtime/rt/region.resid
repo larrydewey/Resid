@@ -139,8 +139,11 @@ Int run_take(Int k) {
     _ = rg_unlock();
     if (p == 0 && !fresh) { return rt_abort("region address space exhausted"); }
     _ = mem_take((1 << k) * rg_page());
-    _ = if (fresh && secret_mode()) { resid_raw_syscall(149, base + at * rg_page(), (1 << k) * rg_page(), 0, 0, 0, 0) } else { 0 };
-    return if (p != 0) { p } else { base + at * rg_page() }; }
+    Int q = if (p != 0) { p } else { base + at * rg_page() };
+    // Secret mode locks every run it hands out (a reused one was unlocked
+    // when given back), on fault: mlock would make the whole run resident.
+    _ = if (secret_mode()) { resid_raw_syscall(325, q, (1 << k) * rg_page(), 1, 0, 0, 0) } else { 0 };   // mlock2 MLOCK_ONFAULT
+    return q; }
 
 // `bump` is the bump pointer of the region the page belonged to: on the
 // page that holds it, nothing above it was ever allocated.
@@ -156,9 +159,11 @@ Int pages_give(Int p, Int k, Int bump) {
     _ = if (cache && secret_mode()) { resid_raw_fill(p, 0, used) } else { 0 };
     if (cache) { return st64(p, ld64(c)) + st64(c, p) + st64(c + 8, ld64(c + 8) + 1); }
     // Secret mode locks its runs (run_take), and MADV_DONTNEED leaves a
-    // locked page as it is: zeroed here instead, up to the bump.
+    // locked page as it is: zeroed up to the bump, then unlocked, so the
+    // memory goes back to the kernel and a swap-out in between holds nothing.
     Int size = (1 << k) * rg_page();
     _ = if (secret_mode()) { resid_raw_fill(p, 0, if (bump > p && bump <= p + size) { bump - p } else { size }) } else { 0 };
+    _ = if (secret_mode()) { resid_raw_syscall(150, p, size, 0, 0, 0, 0) } else { 0 };   // munlock
     _ = resid_raw_syscall(28, p, size, 4, 0, 0, 0);   // MADV_DONTNEED
     _ = rg_dump(p, k, false);
     _ = mem_give((1 << k) * rg_page());
