@@ -5609,7 +5609,7 @@ List(Str) ol_emit(List(Str) ls, Int h, Int b, List(OL) vs, ORF r) {
     ListBuf(Str) o2 = ol_slow(ls, b, o1);
     ListBuf(Str) o3 = ol_push(["tco.head.ol:"].concat(fast_phis), 0, -1, o2);
     Map(Str, Int) fam = ol_fams(vs, 0, ".ol", {"%none": -1});
-    return ol_fast(ls, b, ds, fam, rk, r, "", o3).finish();
+    return ol_direct(ol_fast(ls, b, ds, fam, rk, r, "", o3).finish(), 0);
 }
 
 ListBuf(Str) ol_push(List(Str) xs, Int i, Int e, ListBuf(Str) acc) {
@@ -5853,6 +5853,146 @@ List(Str) ol_args(Str rhs) {
     Int a = str_index_of(rhs, "(", 0);
     if (a < 0 || !str_ends_with(rhs, ")")) { return []; }
     return str_split(str_slice(rhs, a + 1, str_len(rhs) - 1), ", ");
+}
+
+// ─── Record writes built in the element ────────────────────────────────
+// A record literal built in a frame slot and then copied into an owned
+// list's element (resid_ol_put) is built in the element itself: the copy
+// read the slot's fresh field stores back in wider loads, which store
+// forwarding cannot serve (NBody stalled there). The element's address
+// and bounds check move before the literal's first field store, so this
+// holds only when nothing in between can see the element or fail: no
+// call but a memory-free LLVM intrinsic, no load or store but through a
+// frame slot, and the slot's address used for nothing else.
+List(Str) ol_direct(List(Str) ls, Int i) {
+    if (i >= ls.len()) { return ls; }
+    if (!str_starts_with(ls[i], "call void @resid_ol_put(ptr ")) { return ol_direct(ls, i + 1); }
+    List(Str) r = ol_direct_one(ls, i);
+    return ol_direct(r, if (r.len() < ls.len()) { i } else { i + 1 });
+}
+
+// Whether line l names register r (not as the prefix of a longer name).
+Bool ol_tok(Str l, Str r, Int from) {
+    Int k = str_index_of(l, r, from);
+    if (k < 0) { return false; }
+    Int e = k + str_len(r);
+    if (e >= str_len(l)) { return true; }
+    Int c = str_char_at(l, e);
+    Bool id = (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 46 || c == 95;
+    return if (id) { ol_tok(l, r, k + 1) } else { true };
+}
+
+// The line index defining register r, or -1.
+Int ol_def(List(Str) ls, Str r, Int i) {
+    if (i >= ls.len()) { return -1; }
+    if (str_starts_with(ls[i], r + " = ")) { return i; }
+    return ol_def(ls, r, i + 1);
+}
+
+// The register a load or store goes through ("" if l is neither).
+Str ol_mem_ptr(Str l) {
+    Int k = str_index_of(l, ", ptr ", 0);
+    Bool mem = str_contains(l, " = load ") || str_starts_with(l, "store ");
+    if (!mem || k < 0) { return ""; }
+    Str rest = str_slice(l, k + 6, str_len(l));
+    Int c = str_index_of(rest, ",", 0);
+    return if (c < 0) { rest } else { str_slice(rest, 0, c) };
+}
+
+// Whether register p is a frame slot or an offset into one.
+Bool ol_frame(List(Str) ls, Str p) {
+    Int d = ol_def(ls, p, 0);
+    if (d < 0) { return false; }
+    Str l = ls[d];
+    if (str_starts_with(l, p + " = alloca ")) { return true; }
+    Str g = p + " = getelementptr i8, ptr ";
+    if (!str_starts_with(l, g)) { return false; }
+    Str rest = str_slice(l, str_len(g), str_len(l));
+    Int c = str_index_of(rest, ",", 0);
+    return c > 0 && ol_frame(ls, str_slice(rest, 0, c));
+}
+
+List(Str) ol_direct_one(List(Str) ls, Int p) {
+    List(Str) a = ol_args(ls[p]);
+    if (a.len() != 3 || p < 3) { return ls; }
+    Str d = str_slice(a[0], 4, str_len(a[0]));
+    Str s = str_slice(a[1], 4, str_len(a[1]));
+    // The literal: s is its frame slot past the header word.
+    Int sd = ol_def(ls, s, 0);
+    if (sd < 0 || sd >= p || !str_starts_with(ls[sd], s + " = getelementptr i8, ptr ") || !str_ends_with(ls[sd], ", i64 8") || !ol_frame(ls, s)) { return ls; }
+    // The element's address (ol_elem), after its bounds check if any.
+    if (!str_starts_with(ls[p - 1], d + " = getelementptr i8, ptr ") || !str_contains(ls[p - 2], " = getelementptr i64, ptr ") || !str_contains(ls[p - 3], " = mul i64 ")) { return ls; }
+    Bool chk = p >= 5 && str_starts_with(ls[p - 4], "call void @resid_ol_check(") && str_contains(ls[p - 5], " = sdiv i64 ");
+    Int c0 = if (chk) { p - 5 } else { p - 3 };
+    Str ml = ls[p - 3];
+    Int mi = str_index_of(ml, " = mul i64 ", 0) + 11;
+    Str ix = str_slice(ml, mi, str_index_of(ml, ",", mi));
+    // The first use of the literal's slot.
+    Int f0 = ol_first_use(ls, s, sd + 1, c0);
+    if (f0 < 0) { return ls; }
+    Int xd = ol_def(ls, ix, 0);
+    if (str_starts_with(ix, "%") && (xd < 0 || xd >= f0)) { return ls; }
+    Str ql = ls[p - 2];
+    Int qi = str_index_of(ql, ", ptr ", 0) + 6;
+    Str base = str_slice(ql, qi, str_index_of(ql, ",", qi));
+    Int bd = ol_def(ls, base, 0);
+    if (bd < 0 || bd >= f0) { return ls; }
+    if (!ol_span_ok(ls, s, f0, c0) || ol_used_outside(ls, s, sd, f0, c0, p, 0)) { return ls; }
+    List(Str) moved = ls[c0..p];
+    List(Str) span = ol_retarget(ls, s, d, f0, c0, ListBuf()).finish();
+    return ls[0..f0].concat(moved).concat(span).concat(ls[p + 1..ls.len()]);
+}
+
+Int ol_first_use(List(Str) ls, Str s, Int i, Int e) {
+    if (i >= e) { return -1; }
+    if (ol_tok(ls[i], s, 0)) { return i; }
+    return ol_first_use(ls, s, i + 1, e);
+}
+
+// Lines f0..e-1: each a field address of s, or free of calls and of memory
+// but through frame slots.
+Bool ol_span_ok(List(Str) ls, Str s, Int i, Int e) {
+    if (i >= e) { return true; }
+    Str l = ls[i];
+    Bool fld = str_contains(l, " = getelementptr i8, ptr " + s + ", i64 ");
+    // One block: the moved check must not run on a path that never put.
+    if (str_ends_with(l, ":") || str_starts_with(l, "br ") || str_starts_with(l, "switch ") || str_starts_with(l, "ret ")) { return false; }
+    Bool call = str_contains(l, "call ");
+    Bool pure = call && str_contains(l, "@llvm.") && !str_contains(l, "@llvm.mem");
+    if (call && !pure) { return false; }
+    Str mp = ol_mem_ptr(l);
+    if (!fld && mp != "" && !ol_frame(ls, mp)) { return false; }
+    // s itself only as the base of a field address.
+    if (!fld && ol_tok(l, s, 0)) { return false; }
+    return ol_span_ok(ls, s, i + 1, e);
+}
+
+// Whether s, or a field address of it, is used outside lines sd..e-1 and
+// the put (line p).
+Bool ol_used_outside(List(Str) ls, Str s, Int sd, Int f0, Int e, Int p, Int i) {
+    if (i >= ls.len()) { return false; }
+    Bool inside = (i >= sd && i < e) || i == p;
+    if (!inside && ol_tok(ls[i], s, 0)) { return true; }
+    // A field address: every use inside the span.
+    Str l = ls[i];
+    Str g = " = getelementptr i8, ptr " + s + ", i64 ";
+    Int k = str_index_of(l, g, 0);
+    if (inside && k > 0 && ol_used_beyond(ls, str_slice(l, 0, k), f0, e, 0)) { return true; }
+    return ol_used_outside(ls, s, sd, f0, e, p, i + 1);
+}
+
+Bool ol_used_beyond(List(Str) ls, Str r, Int f0, Int e, Int i) {
+    if (i >= ls.len()) { return false; }
+    if ((i < f0 || i >= e) && ol_tok(ls[i], r, 0)) { return true; }
+    return ol_used_beyond(ls, r, f0, e, i + 1);
+}
+
+// The span with the literal's field addresses taken from element d.
+ListBuf(Str) ol_retarget(List(Str) ls, Str s, Str d, Int i, Int e, ListBuf(Str) acc) {
+    if (i >= e) { return acc; }
+    Str g = " = getelementptr i8, ptr " + s + ", i64 ";
+    Str l = ls[i];
+    return ol_retarget(ls, s, d, i + 1, e, acc.push(if (str_contains(l, g)) { str_replace(l, g, " = getelementptr i8, ptr " + d + ", i64 ") } else { l }));
 }
 
 // ─── Range facts in the copy ───────────────────────────────────────────
