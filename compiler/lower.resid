@@ -5259,7 +5259,7 @@ PG lw_fn_body(LW w0, Int d, PG g) {
     List(Str) fn_lines_r = if (region) { lr_region(fn_lines0, evs, rev, cmv) } else { fn_lines0 };
     // A loop updating an owned list in place gets an unchecked copy (W3).
     List(Str) fn_lines = if (tco_ok && !resid_rtmod() && !w.dbg) { ol_apply(fn_lines0, fn_lines_r, tyl) } else { fn_lines_r };
-    List(Str) own0 = fn_lines.concat(["}"]);
+    List(Str) own0 = (if (!resid_rtmod() && !w.dbg) { ls_slot(fn_lines, 0) } else { fn_lines }).concat(["}"]);
     LDG dg0 = if (w.dbg) { lw_dbg_fn(w, d, name, own0, g.pos, tyl) } else { LDG {.lines = own0, .meta = nil_list(), .next = g.pos} };
     List(Str) wrap = if (split) { pp1.lines.concat(["%sb.r = call " + ll_ty(rbase) + " @" + bname + "(" + pd + ")", "call void @resid_cap_leave()", "ret " + ll_ty(rbase) + " %sb.r", "}"]) } else { nil_list() };
     LDG dg = LDG {.lines = dg0.lines.concat(wrap), .meta = dg0.meta, .next = dg0.next};
@@ -5915,6 +5915,135 @@ List(Str) ol_args(Str rhs) {
     Int a = str_index_of(rhs, "(", 0);
     if (a < 0 || !str_ends_with(rhs, ")")) { return []; }
     return str_split(str_slice(rhs, a + 1, str_len(rhs) - 1), ", ");
+}
+
+// ─── Record writes into list elements ──────────────────────────────────
+// `l.with(i, R {..})` with R a frame literal (resid_list_set_rec copying
+// its slot in) writes the element in place instead: resid_list_rec_slot
+// makes the list writable as resid_list_set_rec would, and only the
+// fields that change are stored. Copying the literal in read its fresh
+// stores back in wider loads, which stalls store forwarding (CD's tree
+// rotations, Richards' packet links). A field is left as it is when its
+// value was copied from element i of the same list (resid_list_rec_at,
+// then a frame copy) and nothing in between could write a list: no call
+// but list reads, checks and memory-free intrinsics.
+List(Str) ls_slot(List(Str) ls, Int i) {
+    if (i >= ls.len()) { return ls; }
+    if (!str_contains(ls[i], " = call ptr @resid_list_set_rec(ptr ")) { return ls_slot(ls, i + 1); }
+    List(Str) r = ls_slot_one(ls, i);
+    return ls_slot(r, i + 1 + r.len() - ls.len());
+}
+
+List(Str) ls_slot_one(List(Str) ls, Int i) {
+    Str l = ls[i];
+    Int eq = str_index_of(l, " = call ", 0);
+    Str x = str_slice(l, 0, eq);
+    List(Str) a = ol_args(l);
+    if (a.len() != 5 || !vl_is_int_lit(str_slice(a[4], 4, str_len(a[4])))) { return ls; }
+    Str lst = str_slice(a[0], 4, str_len(a[0]));
+    Str ix = str_slice(a[2], 4, str_len(a[2]));
+    Str r = str_slice(a[3], 4, str_len(a[3]));
+    Int w = str_parse_int(str_slice(a[4], 4, str_len(a[4])));
+    Int rd = ol_def(ls, r, 0);
+    if (rd < 0 || rd >= i || !str_ends_with(ls[rd], ", i64 8") || !ol_frame(ls, r)) { return ls; }
+    // The literal's field stores, all of them, in this block.
+    List(Str) st = ls_fields(ls, r, i - 1, rd, w - 1, []);
+    if (st.len() != w - 1) { return ls; }
+    List(Str) head = [x + " = call ptr @resid_list_rec_slot(ptr " + lst + ", " + a[1] + ", i64 " + ix + f", i64 {w})",
+        x + ".sr = getelementptr i8, ptr " + x + ", i64 16", x + ".sp = load ptr, ptr " + x + ".sr",
+        x + ".so = mul i64 " + ix + f", {w * 8}", x + ".so2 = add i64 " + x + ".so, 32",
+        x + ".ss = getelementptr i8, ptr " + x + ".sp, i64 " + x + ".so2"];
+    List(Str) body = ls_stores(ls, x, lst, ix, w, st, 0, i, ListBuf()).finish();
+    return ls[0..i].concat(head).concat(body).concat(ls[i + 1..ls.len()]);
+}
+
+// For field k (0..n-1) of literal r: "type|value", from its latest store
+// between line i (down) and r's definition; [] if one is missing, is not a
+// plain store, or the block starts in between.
+List(Str) ls_fields(List(Str) ls, Str r, Int i, Int rd, Int n, List(Str) acc) {
+    if (acc.len() >= n) { return acc; }
+    Int k = acc.len();
+    Str v = ls_field_store(ls, r + f".f{k}", i, rd);
+    if (v == "") { return []; }
+    return ls_fields(ls, r, i, rd, n, acc.concat([v]));
+}
+
+Str ls_field_store(List(Str) ls, Str p, Int i, Int rd) {
+    if (i <= rd) { return ""; }
+    Str l = ls[i];
+    if (str_ends_with(l, ":")) { return ""; }
+    Str suf = ", ptr " + p + ", align 8";
+    if (str_starts_with(l, "store ") && str_ends_with(l, suf)) {
+        Str tv = str_slice(l, 6, str_len(l) - str_len(suf));
+        Int sp = str_index_of(tv, " ", 0);
+        return if (sp < 0) { "" } else { str_slice(tv, 0, sp) + "|" + str_slice(tv, sp + 1, str_len(tv)) };
+    }
+    return ls_field_store(ls, p, i - 1, rd);
+}
+
+// Whether lines rd..i are one block with no call that could write a list.
+Bool ls_quiet(List(Str) ls, Int i, Int rd) {
+    if (i < rd) { return true; }
+    Str l = ls[i];
+    if (str_ends_with(l, ":") || str_starts_with(l, "br ") || str_starts_with(l, "switch ")) { return false; }
+    Bool call = str_contains(l, "call ");
+    Bool ok = !call || ls_reads_only(l, ls);
+    return ok && ls_quiet(ls, i - 1, rd);
+}
+
+Bool ls_reads_only(Str l, List(Str) ls) {
+    if (str_contains(l, "@llvm.memmove.p0.p0.i64(ptr ")) {
+        Int k = str_index_of(l, "(ptr ", 0) + 5;
+        return ol_frame(ls, lw_sd_first(str_slice(l, k, str_len(l))));
+    }
+    if (str_contains(l, "@llvm.") && !str_contains(l, "@llvm.mem")) { return true; }
+    return lo_has_str(["@resid_list_rec_at(", "@resid_list_len(", "@resid_list_get(", "@resid_list_get_nc(", "@resid_list_get_sh(", "@resid_overflow_check(", "@resid_assert(", "@resid_ol_check("], ls_callee(l), 0);
+}
+
+// "@name(" of a call line.
+Str ls_callee(Str l) {
+    Int k = str_index_of(l, "@", 0);
+    Int p = if (k < 0) { -1 } else { str_index_of(l, "(", k) };
+    return if (p < 0) { "" } else { str_slice(l, k, p + 1) };
+}
+
+// The stores of the fields that change, into element ix of the list.
+ListBuf(Str) ls_stores(List(Str) ls, Str x, Str lst, Str ix, Int w, List(Str) st, Int k, Int at, ListBuf(Str) acc) {
+    if (k >= st.len()) { return acc; }
+    List(Str) tv = str_split(st[k], "|");
+    Bool same = ls_same(ls, tv[1], lst, ix, w, k * 8, at);
+    Str p = x + f".s{k}";
+    ListBuf(Str) a2 = if (same) { acc } else { acc.push(p + " = getelementptr i8, ptr " + x + f".ss, i64 {k * 8}").push("store " + tv[0] + " " + tv[1] + ", ptr " + p + ", align 8") };
+    return ls_stores(ls, x, lst, ix, w, st, k + 1, at, a2);
+}
+
+// Whether v is a load of field `off` of a frame copy of element ix of list
+// lst, made in the block of the write (line at) with nothing in between
+// that could write a list.
+Bool ls_same(List(Str) ls, Str v, Str lst, Str ix, Int w, Int off, Int at) {
+    Int vd = ol_def(ls, v, 0);
+    if (vd < 0 || !str_contains(ls[vd], " = load ")) { return false; }
+    Str vl = ls[vd];
+    Str pp = lw_sd_first(str_slice(vl, str_index_of(vl, ", ptr ", 0) + 6, str_len(vl)));
+    Int pd = ol_def(ls, pp, 0);
+    if (pd < 0) { return false; }
+    Str g = ls[pd];
+    Str gp = pp + " = getelementptr i8, ptr ";
+    if (!str_starts_with(g, gp) || !str_ends_with(g, f", i64 {off}")) { return false; }
+    Str c = lw_sd_first(str_slice(g, str_len(gp), str_len(g)));
+    // c's frame copy from the element.
+    Str mv = "call void @llvm.memmove.p0.p0.i64(ptr " + c + ", ptr ";
+    Int md = ls_find_prefix(ls, mv, 0);
+    if (md < 0 || md >= at || !ls_quiet(ls, at - 1, md + 1)) { return false; }
+    Str src = lw_sd_first(str_slice(ls[md], str_len(mv), str_len(ls[md])));
+    Int sd = ol_def(ls, src, 0);
+    return sd >= 0 && ls[sd] == src + " = call ptr @resid_list_rec_at(ptr " + lst + ", i64 " + ix + f", i64 {w})";
+}
+
+Int ls_find_prefix(List(Str) ls, Str p, Int i) {
+    if (i >= ls.len()) { return -1; }
+    if (str_starts_with(ls[i], p)) { return i; }
+    return ls_find_prefix(ls, p, i + 1);
 }
 
 // ─── Record writes built in the element ────────────────────────────────
