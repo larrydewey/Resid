@@ -1974,17 +1974,18 @@ OOR ow_order_all_n(List(OPre) prs, Map(Str, Int) idx, Int i, OOR st) { return ow
 // The sweep by strongly connected components, callees first: a component
 // repeats (up to 64 rounds) while one of its members is dirty, before any
 // caller outside it runs, so no caller sees a cycle's unsettled summaries.
-// flat holds the members, component k at [ends[k - 1], ends[k]). One
-// self-tail loop, as ow_sweep: the state is copied out once.
-OGS ow_sweep_scc(Kg g, Funcs fs, List(OPre) prs, Map(Str, List(Int)) callers, List(Int) flat, List(Int) ends, Int k, Int j, Int r, Bool own, OGS st) {
-    if (k >= ends.len()) { return st; }
+// flat holds the members, component k at [ends[k - 1], ends[k]); the
+// components [k, kend) are swept. One self-tail loop: the state is copied
+// out once.
+OGS ow_sweep_scc(Kg g, Funcs fs, List(OPre) prs, Map(Str, List(Int)) callers, List(Int) flat, List(Int) ends, Int kend, Int k, Int j, Int r, Bool own, OGS st) {
+    if (k >= ends.len() || k >= kend) { return st; }
     Int a = if (k == 0) { 0 } else { ends[k - 1] };
     if (j >= ends[k]) {
         Bool again = r < 64 && ow_any_dirty(flat, a, ends[k], st.dirty);
-        return ow_sweep_scc(g, fs, prs, callers, flat, ends, if (again) { k } else { k + 1 }, if (again) { a } else { ends[k] }, if (again) { r + 1 } else { 0 }, own, st);
+        return ow_sweep_scc(g, fs, prs, callers, flat, ends, kend, if (again) { k } else { k + 1 }, if (again) { a } else { ends[k] }, if (again) { r + 1 } else { 0 }, own, st);
     }
     Int i = flat[j];
-    if (!st.dirty.contains(i)) { return ow_sweep_scc(g, fs, prs, callers, flat, ends, k, j + 1, r, own, st); }
+    if (!st.dirty.contains(i)) { return ow_sweep_scc(g, fs, prs, callers, flat, ends, kend, k, j + 1, r, own, st); }
     OFS old = st.sums.get(i) else { ow_nofs() };
     OFS p0 = if (prs[i].has) { ow_fsum_arena(g, fs, st.s, prs[i], own) } else { OFS {.need = ow_noim(), .keeps = ow_nois(), .fok = true, .reads = ow_nois(), .writes = ow_nois(), .bad = ow_noim(), .good = ow_noim(), .sig = "", .rb = []} };
     OFS p = if (old.sig == "#none") { p0 } else { ow_fjoin(old, p0) };
@@ -1995,8 +1996,185 @@ OGS ow_sweep_scc(Kg g, Funcs fs, List(OPre) prs, Map(Str, List(Int)) callers, Li
     Map(Int, Int) d0 = st.dirty.remove(i);
     Map(Int, Int) d2 = if (ch) { ow_mark(d0, callers.get(name) else { [] }, 0) } else { d0 };
     OGS st2 = OGS {.s = s2, .sums = st.sums.insert(i, p), .dirty = d2, .work = st.work + 1, .log = st.log};
-    return ow_sweep_scc(g, fs, prs, callers, flat, ends, k, j + 1, r, own, st2);
+    return ow_sweep_scc(g, fs, prs, callers, flat, ends, kend, k, j + 1, r, own, st2);
 }
+
+// spawn's error type. The compiler's own source names `type RegionError `
+// in text (with_builtin_types), so it is not appended to it.
+type RegionError = { Str message; };
+
+// The sweep level by level. A level's components call only lower levels,
+// so they are independent: with enough work they are swept by up to eight
+// regions against the same state, and their pieces are merged in order
+// (the result is the sequential sweep's). A caller outside a component is
+// dirtied when the component's summary changed.
+OGS ow_sweep_par(Kg g, Funcs fs, List(OPre) prs, Map(Str, List(Int)) callers, OSC sc, Bool own, OGS st, Int l) {
+    if (l >= sc.lv.len()) { return st; }
+    List(Int) cs = ow_dirty_comps(sc, sc.lv[l], st.dirty, 0, ListBuf());
+    Int nd = ow_dirty_count(sc, cs, st.dirty, 0, 0);
+    OGS st2 = if (cs.len() >= 2 && nd >= 16) { ow_par_level(g, fs, prs, callers, sc, cs, own, st) } else { ow_seq_comps(g, fs, prs, callers, sc, cs, 0, own, st) };
+    return ow_sweep_par(g, fs, prs, callers, sc, own, st2, l + 1);
+}
+
+List(Int) ow_dirty_comps(OSC sc, List(Int) ks, Map(Int, Int) dirty, Int i, ListBuf(Int) acc) {
+    if (i >= ks.len()) { return acc.finish(); }
+    Int k = ks[i];
+    Bool d = ow_any_dirty(sc.flat, if (k == 0) { 0 } else { sc.ends[k - 1] }, sc.ends[k], dirty);
+    return ow_dirty_comps_n(sc, ks, dirty, i, if (d) { acc.push(k) } else { acc });
+}
+
+List(Int) ow_dirty_comps_n(OSC sc, List(Int) ks, Map(Int, Int) dirty, Int i, ListBuf(Int) acc) { return ow_dirty_comps(sc, ks, dirty, i + 1, acc); }
+
+Int ow_dirty_count(OSC sc, List(Int) cs, Map(Int, Int) dirty, Int i, Int n) {
+    if (i >= cs.len() || n >= 16) { return n; }
+    Int k = cs[i];
+    return ow_dirty_count_n(sc, cs, dirty, i, n + ow_ndirty(sc.flat, if (k == 0) { 0 } else { sc.ends[k - 1] }, sc.ends[k], dirty, 0));
+}
+
+Int ow_dirty_count_n(OSC sc, List(Int) cs, Map(Int, Int) dirty, Int i, Int n) { return ow_dirty_count(sc, cs, dirty, i + 1, n); }
+
+Int ow_ndirty(List(Int) flat, Int j, Int e, Map(Int, Int) dirty, Int n) {
+    if (j >= e) { return n; }
+    return ow_ndirty_n(flat, j, e, dirty, if (dirty.contains(flat[j])) { n + 1 } else { n });
+}
+
+Int ow_ndirty_n(List(Int) flat, Int j, Int e, Map(Int, Int) dirty, Int n) { return ow_ndirty(flat, j + 1, e, dirty, n); }
+
+OGS ow_seq_comps(Kg g, Funcs fs, List(OPre) prs, Map(Str, List(Int)) callers, OSC sc, List(Int) cs, Int i, Bool own, OGS st) {
+    if (i >= cs.len()) { return st; }
+    Int k = cs[i];
+    OGS s1 = ow_sweep_scc(g, fs, prs, callers, sc.flat, sc.ends, k + 1, k, if (k == 0) { 0 } else { sc.ends[k - 1] }, 0, own, st);
+    return ow_seq_comps_n(g, fs, prs, callers, sc, cs, i, own, s1);
+}
+
+OGS ow_seq_comps_n(Kg g, Funcs fs, List(OPre) prs, Map(Str, List(Int)) callers, OSC sc, List(Int) cs, Int i, Bool own, OGS st) { return ow_seq_comps(g, fs, prs, callers, sc, cs, i + 1, own, st); }
+
+// Every eighth component from i.
+List(Int) ow_chunk(List(Int) cs, Int i, ListBuf(Int) acc) {
+    if (i >= cs.len()) { return acc.finish(); }
+    return ow_chunk(cs, i + 8, acc.push(cs[i]));
+}
+
+OGS ow_par_level(Kg g, Funcs fs, List(OPre) prs, Map(Str, List(Int)) callers, OSC sc, List(Int) cs, Bool own, OGS st) {
+    List(Int) c0 = ow_chunk(cs, 0, ListBuf());
+    List(Int) c1 = ow_chunk(cs, 1, ListBuf());
+    List(Int) c2 = ow_chunk(cs, 2, ListBuf());
+    List(Int) c3 = ow_chunk(cs, 3, ListBuf());
+    List(Int) c4 = ow_chunk(cs, 4, ListBuf());
+    List(Int) c5 = ow_chunk(cs, 5, ListBuf());
+    List(Int) c6 = ow_chunk(cs, 6, ListBuf());
+    List(Int) c7 = ow_chunk(cs, 7, ListBuf());
+    Result(List(Str), RegionError) r0 = spawn () { return ow_par_chunk(g, fs, prs, callers, sc, c0, own, st); };
+    Result(List(Str), RegionError) r1 = spawn () { return ow_par_chunk(g, fs, prs, callers, sc, c1, own, st); };
+    Result(List(Str), RegionError) r2 = spawn () { return ow_par_chunk(g, fs, prs, callers, sc, c2, own, st); };
+    Result(List(Str), RegionError) r3 = spawn () { return ow_par_chunk(g, fs, prs, callers, sc, c3, own, st); };
+    Result(List(Str), RegionError) r4 = spawn () { return ow_par_chunk(g, fs, prs, callers, sc, c4, own, st); };
+    Result(List(Str), RegionError) r5 = spawn () { return ow_par_chunk(g, fs, prs, callers, sc, c5, own, st); };
+    Result(List(Str), RegionError) r6 = spawn () { return ow_par_chunk(g, fs, prs, callers, sc, c6, own, st); };
+    Result(List(Str), RegionError) r7 = spawn () { return ow_par_chunk(g, fs, prs, callers, sc, c7, own, st); };
+    // A failed region (a compiler bug) is redone here, where it fails the
+    // compile the usual way.
+    List(Str) l0 = r0 else { ow_par_chunk(g, fs, prs, callers, sc, c0, own, st) };
+    List(Str) l1 = r1 else { ow_par_chunk(g, fs, prs, callers, sc, c1, own, st) };
+    List(Str) l2 = r2 else { ow_par_chunk(g, fs, prs, callers, sc, c2, own, st) };
+    List(Str) l3 = r3 else { ow_par_chunk(g, fs, prs, callers, sc, c3, own, st) };
+    List(Str) l4 = r4 else { ow_par_chunk(g, fs, prs, callers, sc, c4, own, st) };
+    List(Str) l5 = r5 else { ow_par_chunk(g, fs, prs, callers, sc, c5, own, st) };
+    List(Str) l6 = r6 else { ow_par_chunk(g, fs, prs, callers, sc, c6, own, st) };
+    List(Str) l7 = r7 else { ow_par_chunk(g, fs, prs, callers, sc, c7, own, st) };
+    OGS m0 = ow_par_merge(g, prs, callers, sc, l0, own, st);
+    OGS m1 = ow_par_merge(g, prs, callers, sc, l1, own, m0);
+    OGS m2 = ow_par_merge(g, prs, callers, sc, l2, own, m1);
+    OGS m3 = ow_par_merge(g, prs, callers, sc, l3, own, m2);
+    OGS m4 = ow_par_merge(g, prs, callers, sc, l4, own, m3);
+    OGS m5 = ow_par_merge(g, prs, callers, sc, l5, own, m4);
+    OGS m6 = ow_par_merge(g, prs, callers, sc, l6, own, m5);
+    return ow_par_merge(g, prs, callers, sc, l7, own, m6);
+}
+
+// One region's components swept to their fixpoints: line 0 the work and
+// the members still dirty (the 64-round cap), then each member's piece as
+// own_mixed_w writes them ("U i name" and its lines).
+List(Str) ow_par_chunk(Kg g, Funcs fs, List(OPre) prs, Map(Str, List(Int)) callers, OSC sc, List(Int) cs, Bool own, OGS st) {
+    OGS s1 = ow_seq_comps(g, fs, prs, callers, sc, cs, 0, own, st);
+    ListBuf(Str) b0 = ListBuf();
+    return ow_par_out(g, prs, sc, cs, 0, s1, b0.push(f"{s1.work - st.work}" + ow_still_dirty(sc, cs, s1.dirty, 0, ""))).finish();
+}
+
+Str ow_still_dirty(OSC sc, List(Int) cs, Map(Int, Int) dirty, Int i, Str acc) {
+    if (i >= cs.len()) { return acc; }
+    Int k = cs[i];
+    return ow_still_dirty_n(sc, cs, dirty, i, ow_still_m(sc.flat, if (k == 0) { 0 } else { sc.ends[k - 1] }, sc.ends[k], dirty, acc));
+}
+
+Str ow_still_dirty_n(OSC sc, List(Int) cs, Map(Int, Int) dirty, Int i, Str acc) { return ow_still_dirty(sc, cs, dirty, i + 1, acc); }
+
+Str ow_still_m(List(Int) flat, Int j, Int e, Map(Int, Int) dirty, Str acc) {
+    if (j >= e) { return acc; }
+    return ow_still_m_n(flat, j, e, dirty, if (dirty.contains(flat[j])) { acc + f" {flat[j]}" } else { acc });
+}
+
+Str ow_still_m_n(List(Int) flat, Int j, Int e, Map(Int, Int) dirty, Str acc) { return ow_still_m(flat, j + 1, e, dirty, acc); }
+
+ListBuf(Str) ow_par_out(Kg g, List(OPre) prs, OSC sc, List(Int) cs, Int i, OGS st, ListBuf(Str) acc) {
+    if (i >= cs.len()) { return acc; }
+    Int k = cs[i];
+    return ow_par_out_n(g, prs, sc, cs, i, st, ow_par_out_m(g, prs, sc.flat, if (k == 0) { 0 } else { sc.ends[k - 1] }, sc.ends[k], st, acc));
+}
+
+ListBuf(Str) ow_par_out_n(Kg g, List(OPre) prs, OSC sc, List(Int) cs, Int i, OGS st, ListBuf(Str) acc) { return ow_par_out(g, prs, sc, cs, i + 1, st, acc); }
+
+ListBuf(Str) ow_par_out_m(Kg g, List(OPre) prs, List(Int) flat, Int j, Int e, OGS st, ListBuf(Str) acc) {
+    if (j >= e) { return acc; }
+    Int i = flat[j];
+    ListBuf(Str) a1 = if (st.sums.contains(i)) { ow_push_all(acc.push(f"U {i} " + g.ns[prs[i].fnode].text), ow_fs_ser(st.sums.get(i) else { ow_nofs() }), 0) } else { acc };
+    return ow_par_out_m_n(g, prs, flat, j, e, st, a1);
+}
+
+ListBuf(Str) ow_par_out_m_n(Kg g, List(OPre) prs, List(Int) flat, Int j, Int e, OGS st, ListBuf(Str) acc) { return ow_par_out_m(g, prs, flat, j + 1, e, st, acc); }
+
+// A region's pieces merged as the sweep merges them; callers outside the
+// piece's component are dirtied by a changed summary.
+OGS ow_par_merge(Kg g, List(OPre) prs, Map(Str, List(Int)) callers, OSC sc, List(Str) ls, Bool own, OGS st) {
+    if (ls.len() == 0) { return st; }
+    OWS ws = ow_warm_de(g, prs, ls, 1, OWS {.sums = ow_nosums(), .pown = ow_noim(), .ok = true, .cur = -1, .f = ow_nofs_e()});
+    List(Str) h = str_split(ls[0], " ");
+    OGS s1 = ow_par_apply(g, prs, callers, sc, ws.sums, ws.sums.keys(), 0, own, OGS {.s = st.s, .sums = st.sums, .dirty = st.dirty, .work = st.work + str_parse_int(h[0]), .log = st.log});
+    return OGS {.s = s1.s, .sums = s1.sums, .dirty = ow_redirty(h, 1, s1.dirty), .work = s1.work, .log = s1.log};
+}
+
+Map(Int, Int) ow_redirty(List(Str) h, Int i, Map(Int, Int) d) {
+    if (i >= h.len()) { return d; }
+    return ow_redirty_n(h, i, if (h[i] == "") { d } else { d.insert(str_parse_int(h[i]), 1) });
+}
+
+Map(Int, Int) ow_redirty_n(List(Str) h, Int i, Map(Int, Int) d) { return ow_redirty(h, i + 1, d); }
+
+OGS ow_par_apply(Kg g, List(OPre) prs, Map(Str, List(Int)) callers, OSC sc, Map(Int, OFS) ws, List(Int) ks, Int j, Bool own, OGS st) {
+    if (j >= ks.len()) { return st; }
+    Int i = ks[j];
+    OFS p = ws.get(i) else { ow_nofs() };
+    OFS old = st.sums.get(i) else { ow_nofs() };
+    Str name = g.ns[prs[i].fnode].text;
+    Int fi = prs[i].t.fidx.get(name) else { -1 };
+    OS s2 = ow_merge_piece(st.s, fi, p, own);
+    Bool ch = ow_csig(old.sig) != ow_csig(p.sig) || st.s.fresh.contains(fi) != s2.fresh.contains(fi);
+    Int c = sc.comp.get(i) else { -1 };
+    Map(Int, Int) d0 = st.dirty.remove(i);
+    Map(Int, Int) d2 = if (ch) { ow_mark_out(d0, callers.get(name) else { [] }, sc.comp, c, 0) } else { d0 };
+    return ow_par_apply_n(g, prs, callers, sc, ws, ks, j, own, OGS {.s = s2, .sums = st.sums.insert(i, p), .dirty = d2, .work = st.work, .log = st.log});
+}
+
+OGS ow_par_apply_n(Kg g, List(OPre) prs, Map(Str, List(Int)) callers, OSC sc, Map(Int, OFS) ws, List(Int) ks, Int j, Bool own, OGS st) { return ow_par_apply(g, prs, callers, sc, ws, ks, j + 1, own, st); }
+
+// Callers marked dirty, except members of component c (settled).
+Map(Int, Int) ow_mark_out(Map(Int, Int) m, List(Int) xs, Map(Int, Int) comp, Int c, Int i) {
+    if (i >= xs.len()) { return m; }
+    Bool same = (comp.get(xs[i]) else { -1 }) == c;
+    return ow_mark_out_n(if (same) { m } else { m.insert(xs[i], 1) }, xs, comp, c, i);
+}
+
+Map(Int, Int) ow_mark_out_n(Map(Int, Int) m, List(Int) xs, Map(Int, Int) comp, Int c, Int i) { return ow_mark_out(m, xs, comp, c, i + 1); }
 
 Bool ow_any_dirty(List(Int) flat, Int j, Int e, Map(Int, Int) dirty) {
     if (j >= e) { return false; }
@@ -2009,12 +2187,19 @@ Bool ow_any_dirty_n(List(Int) flat, Int j, Int e, Map(Int, Int) dirty) { return 
 // Components by Kosaraju's second pass: over callers (the reversed call
 // graph) from the latest-finishing function down, so components come
 // callers first; sorted by (reversed component, postorder position).
-type OSC = { List(Int) flat; List(Int) ends; };
+// comp: function -> its component; lv: the components by level (a
+// component's callees all lie in lower levels).
+type OSC = { List(Int) flat; List(Int) ends; Map(Int, Int) comp; List(List(Int)) lv; };
 
 OSC ow_sccs(Kg g, List(OPre) prs, Map(Str, List(Int)) callers, List(Int) order) {
     OCM cm = ow_comp_all(g, prs, callers, order, order.len() - 1, OCM {.comp = ow_noim(), .n = 0});
     List(Int) keys = sort(ow_scc_keys(order, cm, 0, ListBuf()));
-    return ow_scc_split(order, keys, 0, -1, ListBuf(), ListBuf());
+    OSC sc = ow_scc_split(order, keys, 0, -1, ListBuf(), ListBuf());
+    Map(Int, Int) comp = ow_comp_of(sc, 0, 0, ow_noim());
+    Map(Str, Int) idx = ow_index(g, prs, 0, ow_nosm());
+    Map(Int, Int) lm = ow_levels(prs, idx, sc, comp, 0, ow_noim());
+    List(Int) lvl = ow_lvl_list(lm, 0, sc.ends.len(), ListBuf());
+    return OSC {.flat = sc.flat, .ends = sc.ends, .comp = comp, .lv = ow_by_level(lvl, ow_max_lv(lvl, 0, 0), 0, ListBuf())};
 }
 
 type OCM = { Map(Int, Int) comp; Int n; };
@@ -2053,13 +2238,78 @@ List(Int) ow_scc_keys_n(List(Int) order, OCM cm, Int k, ListBuf(Int) acc) { retu
 // keys hold positions in order: flat gets their functions, ends the
 // component boundaries.
 OSC ow_scc_split(List(Int) order, List(Int) keys, Int j, Int cur, ListBuf(Int) flat, ListBuf(Int) ends) {
-    if (j >= keys.len()) { return OSC {.flat = flat.finish(), .ends = (if (j > 0) { ends.push(j) } else { ends }).finish()}; }
+    if (j >= keys.len()) { return OSC {.flat = flat.finish(), .ends = (if (j > 0) { ends.push(j) } else { ends }).finish(), .comp = ow_noim(), .lv = []}; }
     Int c = keys[j] / 1048576;
     ListBuf(Int) e2 = if (j > 0 && c != cur) { ends.push(j) } else { ends };
     return ow_scc_split_n(order, keys, j, c, flat.push(order[keys[j] % 1048576]), e2);
 }
 
 OSC ow_scc_split_n(List(Int) order, List(Int) keys, Int j, Int cur, ListBuf(Int) flat, ListBuf(Int) ends) { return ow_scc_split(order, keys, j + 1, cur, flat, ends); }
+
+Map(Int, Int) ow_comp_of(OSC sc, Int k, Int j, Map(Int, Int) acc) {
+    if (j >= sc.flat.len()) { return acc; }
+    Int k2 = if (j >= sc.ends[k]) { k + 1 } else { k };
+    return ow_comp_of_n(sc, k2, j, acc.insert(sc.flat[j], k2));
+}
+
+Map(Int, Int) ow_comp_of_n(OSC sc, Int k, Int j, Map(Int, Int) acc) { return ow_comp_of(sc, k, j + 1, acc); }
+
+// Each component's level: one above its highest callee component, in
+// callee-first order so callees come first.
+Map(Int, Int) ow_levels(List(OPre) prs, Map(Str, Int) idx, OSC sc, Map(Int, Int) comp, Int k, Map(Int, Int) acc) {
+    if (k >= sc.ends.len()) { return acc; }
+    Int a = if (k == 0) { 0 } else { sc.ends[k - 1] };
+    Int l = ow_lv_members(prs, idx, sc, comp, acc, k, a, sc.ends[k], 0);
+    return ow_levels_n(prs, idx, sc, comp, k, acc.insert(k, l));
+}
+
+Map(Int, Int) ow_levels_n(List(OPre) prs, Map(Str, Int) idx, OSC sc, Map(Int, Int) comp, Int k, Map(Int, Int) acc) { return ow_levels(prs, idx, sc, comp, k + 1, acc); }
+
+Int ow_lv_members(List(OPre) prs, Map(Str, Int) idx, OSC sc, Map(Int, Int) comp, Map(Int, Int) done, Int k, Int j, Int e, Int m) {
+    if (j >= e) { return m; }
+    return ow_lv_members_n(prs, idx, sc, comp, done, k, j, e, ow_lv_calls(prs[sc.flat[j]].calls, idx, comp, done, k, 0, m));
+}
+
+Int ow_lv_members_n(List(OPre) prs, Map(Str, Int) idx, OSC sc, Map(Int, Int) comp, Map(Int, Int) done, Int k, Int j, Int e, Int m) { return ow_lv_members(prs, idx, sc, comp, done, k, j + 1, e, m); }
+
+Int ow_lv_calls(List(Str) cs, Map(Str, Int) idx, Map(Int, Int) comp, Map(Int, Int) done, Int k, Int i, Int m) {
+    if (i >= cs.len()) { return m; }
+    Int pi = idx.get(cs[i]) else { -1 };
+    Int c = if (pi >= 0) { comp.get(pi) else { -1 } } else { -1 };
+    Int m2 = if (c >= 0 && c != k) { imax(m, (done.get(c) else { 0 }) + 1) } else { m };
+    return ow_lv_calls_n(cs, idx, comp, done, k, i, m2);
+}
+
+Int ow_lv_calls_n(List(Str) cs, Map(Str, Int) idx, Map(Int, Int) comp, Map(Int, Int) done, Int k, Int i, Int m) { return ow_lv_calls(cs, idx, comp, done, k, i + 1, m); }
+
+List(Int) ow_lvl_list(Map(Int, Int) lm, Int k, Int n, ListBuf(Int) acc) {
+    if (k >= n) { return acc.finish(); }
+    return ow_lvl_list_n(lm, k, n, acc.push(lm.get(k) else { 0 }));
+}
+
+List(Int) ow_lvl_list_n(Map(Int, Int) lm, Int k, Int n, ListBuf(Int) acc) { return ow_lvl_list(lm, k + 1, n, acc); }
+
+Int ow_max_lv(List(Int) l, Int i, Int m) {
+    if (i >= l.len()) { return m; }
+    return ow_max_lv_n(l, i, imax(m, l[i]));
+}
+
+Int ow_max_lv_n(List(Int) l, Int i, Int m) { return ow_max_lv(l, i + 1, m); }
+
+// The components of each level 0..top, each list in component order.
+List(List(Int)) ow_by_level(List(Int) lvl, Int top, Int l, ListBuf(List(Int)) acc) {
+    if (l > top) { return acc.finish(); }
+    return ow_by_level_n(lvl, top, l, acc.push(ow_at_level(lvl, l, 0, ListBuf())));
+}
+
+List(List(Int)) ow_by_level_n(List(Int) lvl, Int top, Int l, ListBuf(List(Int)) acc) { return ow_by_level(lvl, top, l + 1, acc); }
+
+List(Int) ow_at_level(List(Int) lvl, Int l, Int k, ListBuf(Int) acc) {
+    if (k >= lvl.len()) { return acc.finish(); }
+    return ow_at_level_n(lvl, l, k, if (lvl[k] == l) { acc.push(k) } else { acc });
+}
+
+List(Int) ow_at_level_n(List(Int) lvl, Int l, Int k, ListBuf(Int) acc) { return ow_at_level(lvl, l, k + 1, acc); }
 
 OS ow_merge_piece(OS s, Int fi, OFS p, Bool own) {
     return OS {.need = ow_imerge(s.need, p.need.keys(), 0), .pown = s.pown, .fresh = if (own && !p.fok) { s.fresh.remove(fi) } else { s.fresh }, .keeps = ow_kput(s.keeps, p.keeps, p.keeps.keys(), 0), .reads = ow_iput_all(s.reads, p.reads, p.reads.keys(), 0), .writes = ow_iput_all(s.writes, p.writes, p.writes.keys(), 0)};
@@ -2068,7 +2318,7 @@ OS ow_merge_piece(OS s, Int fi, OFS p, Bool own) {
 // Sweeps until no function is dirty; with ownership on, then pown falls
 // by the call sites and the functions whose entries fell sweep again.
 OGS ow_sweeps(Kg g, Funcs fs, List(OPre) prs, Map(Str, List(Int)) callers, Map(Str, Int) idx, OSC sc, Bool own, OGS st, Int n) {
-    OGS s1 = ow_sweep_scc(g, fs, prs, callers, sc.flat, sc.ends, 0, 0, 0, own, st);
+    OGS s1 = ow_sweep_par(g, fs, prs, callers, sc, own, st, 0);
     if (s1.dirty.keys().len() > 0 && n < 64) { return ow_sweeps_n(g, fs, prs, callers, idx, sc, own, s1, n); }
     if (!own) { return s1; }
     OS s2 = ow_assemble_pown(s1.s, s1.sums, prs.len() > 0 && prs[0].t.strict);

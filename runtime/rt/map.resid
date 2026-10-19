@@ -66,12 +66,15 @@ Int map_obj(Int n) {
 // An in-place update of m allocates where m lives: its region (made
 // current by region_use), or, outside every region, the heap or the bulk
 // arena it was made in. map_leave puts back what map_enter changed.
+// A map made in a bulk arena deeper than this thread's chain (a region's
+// parent made it, in an arena only the parent has) is updated where this
+// thread allocates now.
 Int map_enter(Int m) {
     Int prev = ld64(map_heap_w());
     Int d = ld8(m + 46);
     Bool reg = in_region(m);
     _ = if (reg) { region_use(m) } else { region_same() };
-    _ = st64(map_heap_w(), if (reg) { 0 } else { if (d > 0) { d + 2 } else { 1 } });
+    _ = st64(map_heap_w(), if (reg) { 0 } else { if (d > 0 && d <= bulk_depth()) { d + 2 } else { if (d > 0) { 0 } else { 1 } } });
     return prev;
 }
 
