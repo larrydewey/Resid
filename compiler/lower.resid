@@ -262,7 +262,11 @@ GT lw_struct(LW w, Int id, List(Str) env, GT c) {
     // shared, so it is marked so unless the literal starts a chain.
     Str src0 = w.lor.get(id) else { "" };
     Bool orb = str_starts_with(src0, "\x01");
-    Str src = if (orb) { str_slice(src0, 1, str_len(src0)) } else { src0 };
+    Str src1 = if (orb) { str_slice(src0, 1, str_len(src0)) } else { src0 };
+    // "\x01\x02": the source's record is in the innermost region (own.resid's
+    // OF.cur), so no young test guards the in-place stores.
+    Bool ocur = orb && str_starts_with(src1, "\x02");
+    Str src = if (ocur) { str_slice(src1, 1, str_len(src1)) } else { src1 };
     Str srcreg = if (src == "") { "" } else { cg_env_val(env_lookup(env, src)) };
     if (srcreg != "") {
         LSF fv = lw_finits(w, id, 0, fields, "", env, LSF {.g = c, .st = []});
@@ -284,10 +288,10 @@ GT lw_struct(LW w, Int id, List(Str) env, GT c) {
         LSQ q = lw_same_ptrs(srcreg, reg, fv.st, 0, LSQ {.lines = [], .val = "", .n = 0});
         Str sqv = if (q.n == 0 && q.val == "") { "1" } else { q.val };
         Str rcall = if (q.n > lw_eq_max()) { "@resid_rec_reuse(ptr " + srcreg + ", i64 " + size + ")" } else { "@resid_rec_reuse_eq(ptr " + srcreg + ", i64 " + size + ", i8 " + sqv + ")" };
-        List(Str) ql = if (q.n > lw_eq_max()) { [] } else { q.lines };
+        List(Str) ql = if (q.n > lw_eq_max() || ocur) { [] } else { q.lines };
         // Statically unique: only the region test stays (none when every
         // pointer field gets back what it holds).
-        Str sv = if (q.n > lw_eq_max()) { "0" } else { sqv };
+        Str sv = if (ocur) { "1" } else { if (q.n > lw_eq_max()) { "0" } else { sqv } };
         Str take = if (!stat) { reg + " = call ptr " + rcall } else { if (sv == "1") { reg + " = getelementptr i8, ptr " + srcreg + ", i64 0" } else { reg + " = call ptr @resid_rec_reuse_ny(ptr " + srcreg + ", i64 " + size + ", i8 " + sv + ")" } };
         List(Str) ls = lw_fstores(reg, fv.st, 0, fv.g.lines.concat(ql).concat([take])).concat(lw_orb_share(w, id, sname, orb, reg));
         return GT {.pos = 0, .val = reg, .ty = sname, .cnt = 0, .err = "", .glines = fv.g.glines, .lines = ls, .tmp = t1, .lbl = fv.g.lbl, .tail = false};
@@ -5181,8 +5185,16 @@ PG lw_fn_body(LW w0, Int d, PG g) {
     // A loop whose iterations carry nothing they allocate frees each
     // iteration's allocations when the next one starts (lr_region).
     Str rev = lr_ret_evac(w.fs, rbase);
-    Bool region = tco_ok && lw_find_line(fn_lines0, "tco.head:", 1) >= 0 && lr_region_ok(w, d, fn_lines0, tyl, rev);
-    List(Str) fn_lines_r = if (region) { lr_region(fn_lines0, lr_evac_tys(w.fs, tyl, 0, []), rev) } else { fn_lines0 };
+    // Owned records the analysis takes as cur (own.resid's own_cur_key):
+    // "k|size|hdr" each; a region loop moves them into its region when it
+    // takes one, and cannot be one if a mover is missing.
+    List(Str) cmv = lr_cur_moves(w, w.own.get(0 - 2199023255552 - d) else { lw_noro() }, tyl);
+    List(Str) evs = lr_evac_tys(w.fs, tyl, 0, []);
+    // A cur record moved into L may be what an exit returns: every exit
+    // must then move its result out (rev), as a returned parameter is no
+    // longer an older value.
+    Bool region = tco_ok && lw_find_line(fn_lines0, "tco.head:", 1) >= 0 && lr_region_ok(w, d, fn_lines0, tyl, rev) && lr_cur_movable(cmv, evs, 0) && (cmv.len() == 0 || rev != "" || ll_ty(rbase) != "ptr");
+    List(Str) fn_lines_r = if (region) { lr_region(fn_lines0, evs, rev, cmv) } else { fn_lines0 };
     // A loop updating an owned list in place gets an unchecked copy (W3).
     List(Str) fn_lines = if (tco_ok && !resid_rtmod() && !w.dbg) { ol_apply(fn_lines0, fn_lines_r, tyl) } else { fn_lines_r };
     List(Str) own0 = fn_lines.concat(["}"]);
@@ -6390,7 +6402,7 @@ List(Str) lr_evac_tys(Funcs fs, List(Str) tyl, Int i, List(Str) acc) {
 }
 
 // A returned value's move, or "" (a scalar, or a type with none).
-Str lr_ret_evac(Funcs fs, Str rty) {
+pub Str lr_ret_evac(Funcs fs, Str rty) {
     Str t = ct_base_of(fs.ctn, fs.ctb, strip_owned_cg(rty));
     if (ll_ty(t) != "ptr") { return ""; }
     if (t == "Str") { return "@resid_mv_str(ptr %V, ptr %C)"; }
@@ -6400,7 +6412,7 @@ Str lr_ret_evac(Funcs fs, Str rty) {
 
 // How a value of type t leaves a region: "-" nothing to do (no pointer),
 // a call template on %V, or "" when it cannot.
-Str lr_move(Funcs fs, Str t, List(Str) seen) {
+pub Str lr_move(Funcs fs, Str t, List(Str) seen) {
     // A fixed-capacity value is in a frame (a loop parameter's own slot):
     // nothing to move unless it holds pointers.
     if (lw_fx_size(t) > 0) { return if (lr_fx_flat(t)) { "-" } else { "" }; }
@@ -6483,12 +6495,50 @@ List(Str) lr_rec_fields(Funcs fs, Str fields, Int i, Int k, List(Str) acc) {
 // L pushed on entry; a back edge compacts it when it is due, moving every
 // carried value; each ret moves its result to the caller's region and
 // pops L.
-List(Str) lr_region(List(Str) ls, List(Str) evs, Str rev) {
+List(Str) lr_region(List(Str) ls, List(Str) evs, Str rev, List(Str) cmv) {
     Int h = lw_find_line(ls, "tco.head:", 1);
     Int b = lw_after_phis(ls, h + 1);
     // Per back-edge label, its moves: "label|param|value|call".
     List(Str) mv = lr_moves(ls, h + 1, b, evs, []);
-    return lr_region_at(ls, 0, h, b, mv, rev, ListBuf());
+    return lr_region_at(ls, 0, h, b, mv, rev, cmv, ListBuf());
+}
+
+// The cur parameters of a record type: "k|size|hdr".
+List(Str) lr_cur_moves(LW w, Map(Int, Str) cp, List(Str) tyl) {
+    if (cp.keys().len() == 0) { return []; }
+    return lr_cur_moves_at(w, cp.keys(), tyl, 0, []);
+}
+
+List(Str) lr_cur_moves_at(LW w, List(Int) ks, List(Str) tyl, Int i, List(Str) acc) {
+    if (i >= ks.len()) { return acc; }
+    Int k = ks[i];
+    Str t = if (k < tyl.len()) { strip_owned_cg(ct_base_of(w.fs.ctn, w.fs.ctb, tyl[k])) } else { "" };
+    Int si = if (t == "") { -1 } else { struct_index(w.fs, t) };
+    Str one = if (si >= 0) { f"{k}|{struct_nfields(w.fs.stf[si]) * 8}|" + (if (w.lo.hdr.contains(t)) { "1" } else { "0" }) } else { "" };
+    return lr_cur_moves_at(w, ks, tyl, i + 1, if (one != "") { acc.concat([one]) } else { acc });
+}
+
+// Every cur record parameter has a mover (its compaction move).
+Bool lr_cur_movable(List(Str) cmv, List(Str) evs, Int i) {
+    if (i >= cmv.len()) { return true; }
+    Int k = str_parse_int(str_split(cmv[i], "|")[0]);
+    if (k >= evs.len() || evs[k] == "") { return false; }
+    return lr_cur_movable(cmv, evs, i + 1);
+}
+
+// The cur record parameter k's moved value on edge `src` ("" if k is none).
+Str lr_cur_of(List(Str) cmv, Int k, Int i) {
+    if (i >= cmv.len()) { return ""; }
+    List(Str) q = str_split(cmv[i], "|");
+    if (str_parse_int(q[0]) == k) { return cmv[i]; }
+    return lr_cur_of(cmv, k, i + 1);
+}
+
+// The entry's moves: each cur record parameter into L when L was taken.
+ListBuf(Str) lr_cur_entry(List(Str) cmv, Int i, ListBuf(Str) acc) {
+    if (i >= cmv.len()) { return acc; }
+    List(Str) q = str_split(cmv[i], "|");
+    return lr_cur_entry(cmv, i + 1, acc.push(f"%p{q[0]}.pm = call ptr @resid_loop_own_move(i64 %lml, ptr %p{q[0]}.in, i64 {q[1]}, i8 {q[2]})"));
 }
 
 List(Str) lr_moves(List(Str) ls, Int i, Int b, List(Str) tyl, List(Str) acc) {
@@ -6570,6 +6620,45 @@ ListBuf(Str) lr_back(List(Str) mv, Str lab, ListBuf(Str) acc) {
     return lr_joins(mv, lab, 0, a2);
 }
 
+// A back edge with cur records: a compaction as in lr_back, or, when L was
+// only now taken (a lazy push), each cur record moved into L.
+ListBuf(Str) lr_back_cur(List(Str) mv, List(Str) cmv, Str lab, ListBuf(Str) acc) {
+    Str due = "%lr.due." + lab;
+    ListBuf(Str) a0 = acc.push(due + " = call i64 @resid_loop_due2(i64 %lml)").push("switch i64 " + due + ", label %" + lab + ".k [ i64 1, label %" + lab + ".c i64 2, label %" + lab + ".p ]").push(lab + ".c:");
+    ListBuf(Str) a1 = lr_move_lines(mv, lab, 0, a0.push("%lr.cx." + lab + " = call ptr @resid_loop_move(i64 %lml, i64 1)"));
+    ListBuf(Str) a2 = a1.push("call ptr @resid_loop_move(i64 %lml, i64 2)").push("br label %" + lab + ".k").push(lab + ".p:");
+    ListBuf(Str) a3 = lr_cur_back(mv, cmv, lab, 0, a2).push("br label %" + lab + ".k").push(lab + ".k:");
+    return lr_joins_cur(mv, cmv, lab, 0, a3);
+}
+
+// On the lazy-push path, each cur record parameter's value moved into L.
+ListBuf(Str) lr_cur_back(List(Str) mv, List(Str) cmv, Str lab, Int i, ListBuf(Str) acc) {
+    if (i >= mv.len()) { return acc; }
+    List(Str) q = str_split(mv[i], "|");
+    Str c = if (q[0] == lab) { lr_cur_of(cmv, str_parse_int(str_slice(q[1], 2, str_len(q[1]))), 0) } else { "" };
+    List(Str) cq = str_split(c, "|");
+    return lr_cur_back(mv, cmv, lab, i + 1, if (c == "") { acc } else { acc.push(q[1] + ".pp." + lab + f" = call ptr @resid_loop_own_move(i64 %lml, ptr " + q[2] + ", i64 " + cq[1] + ", i8 " + cq[2] + ")") });
+}
+
+// lr_joins with the lazy-push edge.
+ListBuf(Str) lr_joins_cur(List(Str) mv, List(Str) cmv, Str lab, Int i, ListBuf(Str) acc) {
+    if (i >= mv.len()) { return acc; }
+    List(Str) q = str_split(mv[i], "|");
+    Bool cur = lr_cur_of(cmv, str_parse_int(str_slice(q[1], 2, str_len(q[1]))), 0) != "";
+    Str pv = if (cur) { q[1] + ".pp." + lab } else { q[2] };
+    Str j = lr_moved(q[1], lab) + " = phi ptr [ " + q[1] + ".e." + lab + ", %" + lab + ".c ], [ " + pv + ", %" + lab + ".p ], [ " + q[2] + ", %" + lab + " ]";
+    return lr_joins_cur(mv, cmv, lab, i + 1, if (q[0] == lab) { acc.push(j) } else { acc });
+}
+
+// A head phi whose entry value is a cur record: the moved one.
+Str lr_phi_cur(Str l, List(Str) cmv) {
+    if (cmv.len() == 0 || !str_contains(l, " = phi ptr ")) { return l; }
+    Str reg = str_slice(l, 0, str_find_char(l, 32, 0));
+    Int k = str_parse_int(str_slice(reg, 2, str_len(reg)));
+    if (lr_cur_of(cmv, k, 0) == "") { return l; }
+    return str_replace(l, "[ " + reg + ".in, %entry ]", "[ " + reg + ".pm, %entry ]");
+}
+
 // An exit: a returned pointer moves out of L into the caller's region,
 // and L is popped. A null context: the loop never took L (lazy), so
 // nothing moves or pops.
@@ -6584,19 +6673,19 @@ ListBuf(Str) lr_exit(Str l, Int i, Str rev, ListBuf(Str) acc) {
     return a2.push("call ptr @resid_loop_exit(i64 %lml, i64 2)").push("ret ptr " + rv);
 }
 
-List(Str) lr_region_at(List(Str) ls, Int i, Int h, Int b, List(Str) mv, Str rev, ListBuf(Str) acc) {
+List(Str) lr_region_at(List(Str) ls, Int i, Int h, Int b, List(Str) mv, Str rev, List(Str) cmv, ListBuf(Str) acc) {
     if (i >= ls.len()) { return acc.finish(); }
     Str l = ls[i];
     // L is pushed once, in the entry block.
-    ListBuf(Str) a0 = if (i == h - 1) { acc.push("%lml = call i64 @resid_loop_enter()") } else { acc };
+    ListBuf(Str) a0 = if (i == h - 1) { lr_cur_entry(cmv, 0, acc.push("%lml = call i64 @resid_loop_enter()")) } else { acc };
     Bool phi = i > h && i < b;
     Bool back = i > b && l == "br label %tco.head";
     Bool ret = i > b && str_starts_with(l, "ret ");
     // A back edge's block starts with its label; its moves go after it.
     Str lab = if (back && i > 0 && str_ends_with(ls[i - 1], ":")) { str_slice(ls[i - 1], 0, str_len(ls[i - 1]) - 1) } else { "" };
-    if (ret) { return lr_region_at(ls, i + 1, h, b, mv, rev, lr_exit(l, i, rev, a0)); }
-    ListBuf(Str) a1 = if (back) { lr_back(mv, lab, a0) } else { a0 };
-    return lr_region_at(ls, i + 1, h, b, mv, rev, a1.push(if (phi) { lr_phi(l, mv) } else { l }));
+    if (ret) { return lr_region_at(ls, i + 1, h, b, mv, rev, cmv, lr_exit(l, i, rev, a0)); }
+    ListBuf(Str) a1 = if (back) { if (cmv.len() > 0) { lr_back_cur(mv, cmv, lab, a0) } else { lr_back(mv, lab, a0) } } else { a0 };
+    return lr_region_at(ls, i + 1, h, b, mv, rev, cmv, a1.push(if (phi) { lr_phi_cur(lr_phi(l, mv), cmv) } else { l }));
 }
 
 // ─── Debug info ─────────────────────────────────────────────────────
@@ -6858,7 +6947,7 @@ List(Str) lo_mfs(LOP lop, Str ty) {
     return str_split(s, ",");
 }
 
-Int lo_unparen(Kg g, Int id) {
+pub Int lo_unparen(Kg g, Int id) {
     Str k = g.ns[id].kind;
     if (k == "paren" || k == "rt") { return lo_unparen(g, kg_kid(g, id, 0)); }
     return id;
@@ -9550,9 +9639,12 @@ Map(Int, Str) lw_noro() {
 // more than once are left out: lor and suv are keyed by name).
 Map(Int, Str) lw_own_ro(Map(Int, Str) ow, List(Int) ks, Int i, Map(Str, Int) dup, Map(Int, Str) acc) {
     if (i >= ks.len()) { return acc; }
-    Str nm = ow.get(ks[i]) else { "" };
+    Str nm0 = ow.get(ks[i]) else { "" };
+    // "\x02" first: the source's record is in the innermost region.
+    Bool cur = str_starts_with(nm0, "\x02");
+    Str nm = if (cur) { str_slice(nm0, 1, str_len(nm0)) } else { nm0 };
     Bool ok = nm != "" && !dup.contains(nm);
-    return lw_own_ro_n(ow, ks, i, dup, if (ok) { acc.insert(ks[i], "\x01" + nm) } else { acc });
+    return lw_own_ro_n(ow, ks, i, dup, if (ok) { acc.insert(ks[i], "\x01" + (if (cur) { "\x02" } else { "" }) + nm) } else { acc });
 }
 
 Map(Int, Str) lw_own_ro_n(Map(Int, Str) ow, List(Int) ks, Int i, Map(Str, Int) dup, Map(Int, Str) acc) { return lw_own_ro(ow, ks, i + 1, dup, acc); }

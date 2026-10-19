@@ -123,6 +123,27 @@ Pc lc_deep(List(Pc) cs, Int i) {
     Pa b = pa_bump(c.a);
     return Pc {.a = b, .n = c.n};
 }
+// Long loops that allocate every iteration: their regions grow, compact
+// and are taken lazily, with the carried records rebuilt in place.
+Pa pa_spin(Pa p, Int n) {
+    if (n <= 0) { return p; }
+    List(Int) junk = [n, n + 1, n + 2];
+    return pa_spin(Pa {.x = p.x + junk[1] % 3, .y = p.y}, n - 1);
+}
+Pc pc_spin(Pc c, Int n) {
+    if (n <= 0) { return c; }
+    Pa b = pa_bump(c.a);
+    List(Int) junk = [b.x, n];
+    return pc_spin(Pc {.a = b, .n = c.n + junk[1] % 2}, n - 1);
+}
+Pb pb_spin(Pb b, Int n) {
+    if (n <= 0) { return b; }
+    return pb_spin(Pb {.x = b.x + 1, .xs = b.xs.with(0, n % 7)}, n - 1);
+}
+Pc pc_nest(Pc c, Int n) {
+    if (n <= 0) { return c; }
+    return pc_nest(pc_spin(c, 300), n - 1);
+}
 Pa pa_cond(Pa p, Pa q) { return if (p.x > q.x) { pa_bump(p) } else { Pa {.x = q.x, .y = p.y} }; }
 """
 
@@ -156,6 +177,10 @@ OPS = [
     ("Pa", ["Pa", "Pa"], "if ({0}.x > {i}) {{ pa_bump({0}) }} else {{ {1} }}"),
     ("Pc", ["Pc"], "Pc {{.a = pa_bump({0}.a), .n = {0}.n + {i}}}"),
     ("Opt", ["Pa"], "Some({0})"),
+    ("Pa", ["Pa"], "pa_spin({0}, 3000 + {i} * 1000)"),
+    ("Pc", ["Pc"], "pc_spin({0}, 2000 + {i} * 500)"),
+    ("Pb", ["Pb"], "pb_spin({0}, 1500 + {i} * 700)"),
+    ("Pc", ["Pc"], "pc_nest({0}, 5 + {i})"),
     ("List(Pc)", ["Pc", "Pc"], "[{0}, {1}]"),
     ("Pc", ["List(Pc)"], "lc_get({0}, {i})"),
     ("Pc", ["List(Pc)"], "lc_first_bump({0})"),

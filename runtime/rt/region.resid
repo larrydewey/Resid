@@ -320,6 +320,36 @@ pub Bool rt_loop_due(Int l) {
     return ld64(r + 32) > 2 * ld64(r + 40) + 2;
 }
 
+// rt_loop_due, telling a lazy push apart: 0 nothing, 1 a compaction is
+// due, 2 L was just taken (the loop's cur owned records still lie in the
+// outer region: resid_loop_own_move brings them in).
+@export("resid_loop_due2", "i64(i64)")
+@inline
+pub Int rt_loop_due2(Int l) {
+    if (ag_scope_depth() == l) { return if (lazy_full(rec_at(l - 1)) && !lazy_push()) { 2 } else { 0 }; }
+    Int r = rec_at(l);
+    return if (ld64(r + 32) > 2 * ld64(r + 40) + 2) { 1 } else { 0 };
+}
+
+// A carried owned record the loop writes in place without a young test
+// (own.resid's curp): once L is taken, its record is copied into L (the
+// copy's fields may still point into the outer region, which is older).
+// Nothing else holds it, so the old record is garbage of the outer region.
+@export("resid_loop_own_move", "ptr(i64,ptr,i64,i8)")
+@inline
+pub Int rt_loop_own_move(Int l, Int p, Int size, Int hdr) {
+    if (p == 0 || ag_scope_depth() == l) { return p; }
+    return own_copy_here(p, size, hdr);
+}
+
+@noinline
+Int own_copy_here(Int p, Int size, Int hdr) {
+    Int w = if (hdr != 0) { 8 } else { 0 };
+    Int h = rt_gmalloc(size + w);
+    _ = mcopy(h, p - w, size + w);
+    return h + w;
+}
+
 // L taken at a back edge: nothing to move yet.
 @noinline
 Bool lazy_push() { return rt_scope_push() < 0; }
