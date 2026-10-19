@@ -5129,9 +5129,12 @@ PG lw_fn_body(LW w0, Int d, PG g) {
     // reuses its source's record statically, as an SU source does.
     Map(Int, Str) ow = w1.own.get(d) else { lw_noro() };
     Map(Int, Str) ro = lw_own_ro(ow, ow.keys(), 0, sdup, lf.ro);
-    // With ownership on, every parameter and statement binder of a record
-    // type, named once, has its scalar fields loaded where it is bound.
-    Map(Str, Int) hz = if (w1.own.keys().len() > 0) { lw_hz_params(w1, d, 1, n - 1, sdup, lw_hz_binds(sg, fs, lw_kid(w1, d, n - 1), sdup, su_novars())) } else { su_novars() };
+    // With ownership on, a parameter or statement binder of a record type,
+    // named once, has its scalar fields loaded where it is bound when an
+    // allowed write or move could reach it (own.resid's ow_hz_evs).
+    Map(Int, Str) hzw = w1.own.get(0 - 1099511627776 - d) else { lw_noro() };   // own_hz_key(d)
+    Map(Str, Int) hz0 = if (hzw.keys().len() > 0) { lw_hz_params(w1, d, 1, n - 1, sdup, lw_hz_binds(sg, fs, lw_kid(w1, d, n - 1), sdup, su_novars())) } else { su_novars() };
+    Map(Str, Int) hz = lw_hz_keep(hz0, hzw);
     LW w = LW {.g = sg, .fs = w1.fs, .base = w1.base, .rg = w1.rg, .dbg = w1.dbg, .df = w1.df, .rf = w1.rf, .facts = w1.facts, .lo = w1.lo, .lof = lf.fl, .lor = ro, .want = "", .suv = suv, .own = w1.own, .hz = hz, .ocall = w1.own.get(0 - 1 - d) else { lw_noro() }};
     List(Str) dl2 = [defline, "entry:"];
     Int fi = fn_index(fs, name);
@@ -9475,6 +9478,18 @@ Map(Str, Int) lw_hz_binds_kids(Kg g, Funcs fs, Int id, Int i, Map(Str, Int) dup,
 }
 
 Map(Str, Int) lw_hz_binds_kids_n(Kg g, Funcs fs, Int id, Int i, Map(Str, Int) dup, Map(Str, Int) acc) { return lw_hz_binds_kids(g, fs, id, i + 1, dup, acc); }
+
+Map(Str, Int) lw_hz_keep(Map(Str, Int) hz, Map(Int, Str) want) {
+    if (hz.keys().len() == 0) { return hz; }
+    return lw_hz_keep_at(hz, want.values(), 0, su_novars());
+}
+
+Map(Str, Int) lw_hz_keep_at(Map(Str, Int) hz, List(Str) ns, Int i, Map(Str, Int) acc) {
+    if (i >= ns.len()) { return acc; }
+    return lw_hz_keep_at_n(hz, ns, i, if (hz.contains(ns[i])) { acc.insert(ns[i], 1) } else { acc });
+}
+
+Map(Str, Int) lw_hz_keep_at_n(Map(Str, Int) hz, List(Str) ns, Int i, Map(Str, Int) acc) { return lw_hz_keep_at(hz, ns, i + 1, acc); }
 
 ST lw_hz_load_params(LW w, Int d, Int i, Int n, ST g) {
     if (i >= n) { return g; }

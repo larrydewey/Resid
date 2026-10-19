@@ -38,7 +38,9 @@ type OEv = { Int node; Str kind; Int b; Int path; Str cal; Int arg; Int call; };
 // rev: root binder -> the binders whose alias entries name a location of
 // it, so a write's judge visits only the live binders that can reach it.
 // route: call node -> the owned instance (f__o) it goes to.
-type OF = { Map(Int, List(OE)) al; Map(Int, Int) own; List(OEv) ev; Map(Int, Str) why; Bool rok; List(OE) rents; Map(Int, Map(Int, Int)) rev; Map(Int, Str) route; };
+// hz: binders whose hoisted scalar reads an allowed move or temporary
+// argument relied on (lowering hoists only those, with the events').
+type OF = { Map(Int, List(OE)) al; Map(Int, Int) own; List(OEv) ev; Map(Int, Str) why; Bool rok; List(OE) rents; Map(Int, Map(Int, Int)) rev; Map(Int, Str) route; Map(Int, Int) hz; };
 
 // Backward pass: the live uses after each event node, by binder: binder ->
 // its live use keys ("path", "path@tag"). Snapshots keep the live map
@@ -630,12 +632,12 @@ List(OE) ow_coarse(List(OE) es, Int i, ListBuf(OE) acc) {
 
 List(OE) ow_coarse_n(List(OE) es, Int i, ListBuf(OE) acc) { return ow_coarse(es, i + 1, acc); }
 
-OF ow_ev_add(OF f, OEv e) { return OF {.al = f.al, .own = f.own, .ev = f.ev.concat([e]), .why = f.why, .rok = f.rok, .rents = f.rents, .rev = f.rev, .route = f.route}; }
+OF ow_ev_add(OF f, OEv e) { return OF {.al = f.al, .own = f.own, .ev = f.ev.concat([e]), .why = f.why, .rok = f.rok, .rents = f.rents, .rev = f.rev, .route = f.route, .hz = f.hz}; }
 
-OF ow_ret_add(OV v) { return OF {.al = v.f.al, .own = v.f.own, .ev = v.f.ev, .why = v.f.why, .rok = v.f.rok && v.owned, .rents = ow_norm(v.f.rents.concat(v.es)), .rev = v.f.rev, .route = v.f.route}; }
+OF ow_ret_add(OV v) { return OF {.al = v.f.al, .own = v.f.own, .ev = v.f.ev, .why = v.f.why, .rok = v.f.rok && v.owned, .rents = ow_norm(v.f.rents.concat(v.es)), .rev = v.f.rev, .route = v.f.route, .hz = v.f.hz}; }
 
 OF ow_set_al(OF f, Int b, List(OE) es, Bool owned, Str why) {
-    return OF {.al = f.al.insert(b, es), .own = if (owned) { f.own.insert(b, 1) } else { f.own }, .ev = f.ev, .why = if (owned) { f.why } else { f.why.insert(b, why) }, .rok = f.rok, .rents = f.rents, .rev = ow_rev_add(f.rev, es, b, 0), .route = f.route};
+    return OF {.al = f.al.insert(b, es), .own = if (owned) { f.own.insert(b, 1) } else { f.own }, .ev = f.ev, .why = if (owned) { f.why } else { f.why.insert(b, why) }, .rok = f.rok, .rents = f.rents, .rev = ow_rev_add(f.rev, es, b, 0), .route = f.route, .hz = f.hz};
 }
 
 Map(Int, Map(Int, Int)) ow_rev_add(Map(Int, Map(Int, Int)) rv, List(OE) es, Int b, Int i) {
@@ -660,7 +662,8 @@ OV ow_val(OX x, ORS r, OS s, Int id, OF f) {
         // Owned whenever its root is: a write through it is judged at the
         // write, against every alias still live (the self entry stays
         // unless the value was moved).
-        return ow_ov(es, f1.own.contains(p.b), f1);
+        OF f2 = if (mv) { ow_hz_note(x, f1, x.after.get(id) else { ow_nols() }, ow_cands(f1, ow_mem(f1, p.b, p.path), 0, ow_noim().insert(p.b, 1))) } else { f1 };
+        return ow_ov(es, f1.own.contains(p.b), f2);
     }
     if (k == "lit" || k == "fstr") { return ow_ov([], true, ow_vals_f(x, r, s, ow_kid_list(x.g, id, 0, ListBuf()), 0, f)); }
     if (k == "struct") { return ow_struct(x, r, s, id, 0, ow_ov([], true, f)); }
@@ -835,7 +838,7 @@ OV ow_call(OX x, ORS r, OS s, Int id, OF f) {
     Bool rt = oi != "" && ow_call_ok(x, a0.f, id, 0);
     Str cal = if (rt) { oi } else { cal0 };
     OV a1 = if (rt) { ow_args(x, r, s, id, 0, cal, user, ow_ov([], true, f)) } else { a0 };
-    OV a = if (rt) { ow_ov(a1.es, a1.owned, OF {.al = a1.f.al, .own = a1.f.own, .ev = a1.f.ev, .why = a1.f.why, .rok = a1.f.rok, .rents = a1.f.rents, .rev = a1.f.rev, .route = a1.f.route.insert(id, oi)}) } else { a0 };
+    OV a = if (rt) { ow_ov(a1.es, a1.owned, OF {.al = a1.f.al, .own = a1.f.own, .ev = a1.f.ev, .why = a1.f.why, .rok = a1.f.rok, .rents = a1.f.rents, .rev = a1.f.rev, .route = a1.f.route.insert(id, oi), .hz = a1.f.hz}) } else { a0 };
     Bool fr = user && s.fresh.contains(ow_fi(x, cal));
     Bool tr = ow_trk(x, ow_ret_tyx(x, cal));
     // A builtin or a constructor (`Some(f)`) may hold any argument.
@@ -867,7 +870,8 @@ OV ow_args(OX x, ORS r, OS s, Int id, Int i, Str cal, Bool user, OV acc) {
     OV v0 = if (tp) { OV {.es = [], .owned = false, .f = ow_vals_f(x, r, s, p.idx, 0, acc.f)} } else { ow_val(x, r, s, e, acc.f) };
     OEv ae = OEv {.node = e, .kind = "move", .b = p.b, .path = p.path, .cal = cal, .arg = i, .call = id};
     Bool mv = tp && ow_rule_e(x, v0.f, ae) == "";
-    OV v = if (tp) { ow_ov(if (mv) { ow_moved_ents(x, v0.f, p.b, p.path) } else { ow_path_ents(v0.f, p.b, p.path) }, v0.f.own.contains(p.b), v0.f) } else { v0 };
+    OF fm = if (mv) { ow_hz_note(x, v0.f, x.after.get(e) else { ow_nols() }, ow_cands(v0.f, ow_mem(v0.f, p.b, p.path), 0, ow_noim().insert(p.b, 1))) } else { v0.f };
+    OV v = if (tp) { ow_ov(if (mv) { ow_moved_ents(x, v0.f, p.b, p.path) } else { ow_path_ents(v0.f, p.b, p.path) }, v0.f.own.contains(p.b), fm) } else { v0 };
     // A fresh temporary handed to a writer: nothing else holds its top
     // object; its children may be aliased, so only a callee that writes
     // the top object alone (or a value with no aliases) qualifies.
@@ -878,7 +882,8 @@ OV ow_args(OX x, ORS r, OS s, Int id, Int i, Str cal, Bool user, OV acc) {
     // Its pieces may alias locations of this function (a moved-in
     // parameter's fields): fine unless something live still reaches them.
     Bool fresh_ok = wr && p.b < 0 && v.owned && ow_trk(x, ow_arg_ty(x, cal, i)) && (v.es.len() == 0 || ws == ",^," || ow_rule_tmp(x, v.f, e, ow_ent_ls(v.es, 0, ListBuf()), ws, id) == "");
-    OF f1 = if (fresh_ok) { ow_ev_add(v.f, OEv {.node = e, .kind = "argfresh", .b = -1, .path = 0, .cal = cal, .arg = i, .call = id}) } else { v.f };
+    OF ft = if (fresh_ok && v.es.len() > 0) { ow_hz_note(x, v.f, x.after.get(e) else { x.after.get(id) else { ow_nols() } }, ow_cands(v.f, ow_ent_ls(v.es, 0, ListBuf()), 0, ow_noim())) } else { v.f };
+    OF f1 = if (fresh_ok) { ow_ev_add(ft, OEv {.node = e, .kind = "argfresh", .b = -1, .path = 0, .cal = cal, .arg = i, .call = id}) } else { ft };
     // Any other argument at a writing parameter (an untyped binder, a
     // shared temporary, ...) is a call site that refuses ownership.
     Bool bad = wr && !w && !fresh_ok;
@@ -1221,6 +1226,44 @@ OL ow_lv_caps_kids_n(OX x, ORS r, Int id, Int i, OL l) { return ow_lv_caps_kids(
 // "" when the write at e is static and in place, else the reason.
 Str ow_judge(OX x, ORS r, OF f, OL l, OEv e) { return if (e.kind == "argfresh") { "" } else { if (e.kind == "argbad") { "unproved-argument" } else { ow_rule_e(x, f, e) } }; }
 
+// An allowed judgment's reliance on hoisting: the candidates (ow_cands)
+// lowering loads at their binding (hzb) with a scalar read (#s) live
+// after the node. Those keys may have been skipped as hoisted, so lowering
+// must hoist them; no other binder's hoisting matters.
+OF ow_hz_note(OX x, OF f, Map(Int, Map(Str, Int)) after, Map(Int, Int) cands) {
+    Map(Int, Int) h = ow_hz_rel(x, after, cands.keys(), 0, f.hz);
+    return OF {.al = f.al, .own = f.own, .ev = f.ev, .why = f.why, .rok = f.rok, .rents = f.rents, .rev = f.rev, .route = f.route, .hz = h};
+}
+
+Map(Int, Int) ow_hz_rel(OX x, Map(Int, Map(Str, Int)) after, List(Int) cs, Int i, Map(Int, Int) acc) {
+    if (i >= cs.len()) { return acc; }
+    Int b = cs[i];
+    Map(Str, Int) ks = after.get(b) else { ow_nosm() };
+    Bool rel = x.hzb.contains(b) && !acc.contains(b);
+    return ow_hz_rel_n(x, after, cs, i, if (rel) { acc.insert(b, 1) } else { acc });
+}
+
+Map(Int, Int) ow_hz_rel_n(OX x, Map(Int, Map(Str, Int)) after, List(Int) cs, Int i, Map(Int, Int) acc) { return ow_hz_rel(x, after, cs, i + 1, acc); }
+
+Bool ow_any_hs(List(Str) ks, Int i) {
+    if (i >= ks.len()) { return false; }
+    if (str_contains(ks[i], "#s")) { return true; }
+    return ow_any_hs_n(ks, i);
+}
+
+Bool ow_any_hs_n(List(Str) ks, Int i) { return ow_any_hs(ks, i + 1); }
+
+// The hoisting every allowed event and the forward pass relied on.
+Map(Int, Int) ow_hz_evs(OFn o, Int i, Map(Int, Int) acc) {
+    if (i >= o.f.ev.len()) { return acc; }
+    OEv e = o.f.ev[i];
+    Bool w = e.b >= 0 && (e.kind == "arg" || e.kind == "rebuild" || e.kind == "with") && ow_judge(o.x, o.r, o.f, o.l, e) == "";
+    Map(Int, Int) a1 = if (w) { ow_hz_rel(o.x, o.x.after.get(e.node) else { ow_nols() }, ow_cands(o.f, ow_mem(o.f, e.b, e.path), 0, ow_noim().insert(e.b, 1)).keys(), 0, acc) } else { acc };
+    return ow_hz_evs_n(o, i, a1);
+}
+
+Map(Int, Int) ow_hz_evs_n(OFn o, Int i, Map(Int, Int) acc) { return ow_hz_evs(o, i + 1, acc); }
+
 // The write rule at node for root b, path q, as a move (deep): "" when
 // allowed.
 Str ow_rule(OX x, OF f, Int node, Int b, Int q) {
@@ -1540,7 +1583,7 @@ OFn ow_fn(Kg g, Funcs fs, OS s, OPre pr) {
     List(OEv) e0 = [];
     Map(Int, Str) w0 = {};
     Map(Int, Map(Int, Int)) rv0 = {};
-    OF f0 = ow_params_own(x, s, ow_param_ids(g, fnode, 0, ListBuf()), 0, OF {.al = a0, .own = ow_noim(), .ev = e0, .why = w0, .rok = true, .rents = [], .rev = rv0, .route = ow_nois()});
+    OF f0 = ow_params_own(x, s, ow_param_ids(g, fnode, 0, ListBuf()), 0, OF {.al = a0, .own = ow_noim(), .ev = e0, .why = w0, .rok = true, .rents = [], .rev = rv0, .route = ow_nois(), .hz = ow_noim()});
     OF f = ow_stmt(x, r, s, body, f0);
     return OFn {.x = x, .r = r, .f = f, .l = l};
 }
@@ -2010,11 +2053,105 @@ type RegionError = { Str message; };
 // dirtied when the component's summary changed.
 OGS ow_sweep_par(Kg g, Funcs fs, List(OPre) prs, Map(Str, List(Int)) callers, OSC sc, Bool own, OGS st, Int l) {
     if (l >= sc.lv.len()) { return st; }
-    List(Int) cs = ow_dirty_comps(sc, sc.lv[l], st.dirty, 0, ListBuf());
-    Int nd = ow_dirty_count(sc, cs, st.dirty, 0, 0);
-    OGS st2 = if (cs.len() >= 2 && nd >= 16) { ow_par_level(g, fs, prs, callers, sc, cs, own, st) } else { ow_seq_comps(g, fs, prs, callers, sc, cs, 0, own, st) };
+    List(Int) cs0 = ow_dirty_comps(sc, sc.lv[l], st.dirty, 0, ListBuf());
+    // A large component first, in parallel rounds of its own.
+    OGS stb = ow_big_comps(g, fs, prs, callers, sc, cs0, 0, own, st);
+    List(Int) cs = ow_small_comps(sc, cs0, 0, ListBuf());
+    Int nd = ow_dirty_count(sc, cs, stb.dirty, 0, 0);
+    OGS st2 = if (cs.len() >= 2 && nd >= 16) { ow_par_level(g, fs, prs, callers, sc, cs, own, stb) } else { ow_seq_comps(g, fs, prs, callers, sc, cs, 0, own, stb) };
     return ow_sweep_par(g, fs, prs, callers, sc, own, st2, l + 1);
 }
+
+Int ow_comp_size(OSC sc, Int k) { return sc.ends[k] - (if (k == 0) { 0 } else { sc.ends[k - 1] }); }
+
+List(Int) ow_small_comps(OSC sc, List(Int) cs, Int i, ListBuf(Int) acc) {
+    if (i >= cs.len()) { return acc.finish(); }
+    return ow_small_comps_n(sc, cs, i, if (ow_comp_size(sc, cs[i]) < 48) { acc.push(cs[i]) } else { acc });
+}
+
+List(Int) ow_small_comps_n(OSC sc, List(Int) cs, Int i, ListBuf(Int) acc) { return ow_small_comps(sc, cs, i + 1, acc); }
+
+OGS ow_big_comps(Kg g, Funcs fs, List(OPre) prs, Map(Str, List(Int)) callers, OSC sc, List(Int) cs, Int i, Bool own, OGS st) {
+    if (i >= cs.len()) { return st; }
+    OGS s1 = if (ow_comp_size(sc, cs[i]) >= 48) { ow_big_comp(g, fs, prs, callers, sc, cs[i], 0, own, st) } else { st };
+    return ow_big_comps_n(g, fs, prs, callers, sc, cs, i, own, s1);
+}
+
+OGS ow_big_comps_n(Kg g, Funcs fs, List(OPre) prs, Map(Str, List(Int)) callers, OSC sc, List(Int) cs, Int i, Bool own, OGS st) { return ow_big_comps(g, fs, prs, callers, sc, cs, i + 1, own, st); }
+
+// One large component: its dirty members split over eight regions, each
+// analysed once against the same state; their pieces merged (joined with
+// the earlier ones, as in a sequential sweep) dirty every caller of a
+// changed function, members too. Rounds repeat until few members are
+// dirty, and a sequential sweep finishes the component. The summaries only
+// grow, so this reaches a fixpoint of the same rules, though not
+// necessarily the sequential sweep's.
+OGS ow_big_comp(Kg g, Funcs fs, List(OPre) prs, Map(Str, List(Int)) callers, OSC sc, Int k, Int r, Bool own, OGS st) {
+    Int a = if (k == 0) { 0 } else { sc.ends[k - 1] };
+    List(Int) d = ow_dirty_members(sc.flat, a, sc.ends[k], st.dirty, ListBuf());
+    if (d.len() == 0) { return st; }
+    if (d.len() < 16 || r >= 64) { return ow_sweep_scc(g, fs, prs, callers, sc.flat, sc.ends, k + 1, k, a, 0, own, st); }
+    List(Int) c0 = ow_chunk(d, 0, ListBuf());
+    List(Int) c1 = ow_chunk(d, 1, ListBuf());
+    List(Int) c2 = ow_chunk(d, 2, ListBuf());
+    List(Int) c3 = ow_chunk(d, 3, ListBuf());
+    List(Int) c4 = ow_chunk(d, 4, ListBuf());
+    List(Int) c5 = ow_chunk(d, 5, ListBuf());
+    List(Int) c6 = ow_chunk(d, 6, ListBuf());
+    List(Int) c7 = ow_chunk(d, 7, ListBuf());
+    Result(List(Str), RegionError) r0 = spawn () { return ow_list_chunk(g, fs, prs, callers, c0, own, st); };
+    Result(List(Str), RegionError) r1 = spawn () { return ow_list_chunk(g, fs, prs, callers, c1, own, st); };
+    Result(List(Str), RegionError) r2 = spawn () { return ow_list_chunk(g, fs, prs, callers, c2, own, st); };
+    Result(List(Str), RegionError) r3 = spawn () { return ow_list_chunk(g, fs, prs, callers, c3, own, st); };
+    Result(List(Str), RegionError) r4 = spawn () { return ow_list_chunk(g, fs, prs, callers, c4, own, st); };
+    Result(List(Str), RegionError) r5 = spawn () { return ow_list_chunk(g, fs, prs, callers, c5, own, st); };
+    Result(List(Str), RegionError) r6 = spawn () { return ow_list_chunk(g, fs, prs, callers, c6, own, st); };
+    Result(List(Str), RegionError) r7 = spawn () { return ow_list_chunk(g, fs, prs, callers, c7, own, st); };
+    List(Str) l0 = r0 else { ow_list_chunk(g, fs, prs, callers, c0, own, st) };
+    List(Str) l1 = r1 else { ow_list_chunk(g, fs, prs, callers, c1, own, st) };
+    List(Str) l2 = r2 else { ow_list_chunk(g, fs, prs, callers, c2, own, st) };
+    List(Str) l3 = r3 else { ow_list_chunk(g, fs, prs, callers, c3, own, st) };
+    List(Str) l4 = r4 else { ow_list_chunk(g, fs, prs, callers, c4, own, st) };
+    List(Str) l5 = r5 else { ow_list_chunk(g, fs, prs, callers, c5, own, st) };
+    List(Str) l6 = r6 else { ow_list_chunk(g, fs, prs, callers, c6, own, st) };
+    List(Str) l7 = r7 else { ow_list_chunk(g, fs, prs, callers, c7, own, st) };
+    OGS m0 = ow_par_merge_x(g, prs, callers, sc, l0, own, false, st);
+    OGS m1 = ow_par_merge_x(g, prs, callers, sc, l1, own, false, m0);
+    OGS m2 = ow_par_merge_x(g, prs, callers, sc, l2, own, false, m1);
+    OGS m3 = ow_par_merge_x(g, prs, callers, sc, l3, own, false, m2);
+    OGS m4 = ow_par_merge_x(g, prs, callers, sc, l4, own, false, m3);
+    OGS m5 = ow_par_merge_x(g, prs, callers, sc, l5, own, false, m4);
+    OGS m6 = ow_par_merge_x(g, prs, callers, sc, l6, own, false, m5);
+    OGS m7 = ow_par_merge_x(g, prs, callers, sc, l7, own, false, m6);
+    return ow_big_comp(g, fs, prs, callers, sc, k, r + 1, own, m7);
+}
+
+List(Int) ow_dirty_members(List(Int) flat, Int j, Int e, Map(Int, Int) dirty, ListBuf(Int) acc) {
+    if (j >= e) { return acc.finish(); }
+    return ow_dirty_members_n(flat, j, e, dirty, if (dirty.contains(flat[j])) { acc.push(flat[j]) } else { acc });
+}
+
+List(Int) ow_dirty_members_n(List(Int) flat, Int j, Int e, Map(Int, Int) dirty, ListBuf(Int) acc) { return ow_dirty_members(flat, j + 1, e, dirty, acc); }
+
+// Each listed function analysed once against st (its piece joined with
+// its previous one): line 0 the work, then each piece ("U i name" and its
+// lines). Dirtying is the merge's.
+List(Str) ow_list_chunk(Kg g, Funcs fs, List(OPre) prs, Map(Str, List(Int)) callers, List(Int) xs, Bool own, OGS st) {
+    ListBuf(Str) b0 = ListBuf();
+    return ow_list_pass(g, fs, prs, xs, 0, own, st, b0.push(f"{xs.len()}")).finish();
+}
+
+ListBuf(Str) ow_list_pass(Kg g, Funcs fs, List(OPre) prs, List(Int) xs, Int j, Bool own, OGS st, ListBuf(Str) acc) {
+    if (j >= xs.len()) { return acc; }
+    Int i = xs[j];
+    OFS old = st.sums.get(i) else { ow_nofs() };
+    OFS p0 = if (prs[i].has) { ow_fsum_arena(g, fs, st.s, prs[i], own) } else { OFS {.need = ow_noim(), .keeps = ow_nois(), .fok = true, .reads = ow_nois(), .writes = ow_nois(), .bad = ow_noim(), .good = ow_noim(), .sig = "", .rb = []} };
+    OFS p = if (old.sig == "#none") { p0 } else { ow_fjoin(old, p0) };
+    ListBuf(Str) a1 = ow_push_all(acc.push(f"U {i} " + g.ns[prs[i].fnode].text), ow_fs_ser(p), 0);
+    return ow_list_pass_n(g, fs, prs, xs, j, own, st, a1);
+}
+
+ListBuf(Str) ow_list_pass_n(Kg g, Funcs fs, List(OPre) prs, List(Int) xs, Int j, Bool own, OGS st, ListBuf(Str) acc) { return ow_list_pass(g, fs, prs, xs, j + 1, own, st, acc); }
 
 List(Int) ow_dirty_comps(OSC sc, List(Int) ks, Map(Int, Int) dirty, Int i, ListBuf(Int) acc) {
     if (i >= ks.len()) { return acc.finish(); }
@@ -2049,6 +2186,42 @@ OGS ow_seq_comps(Kg g, Funcs fs, List(OPre) prs, Map(Str, List(Int)) callers, OS
 
 OGS ow_seq_comps_n(Kg g, Funcs fs, List(OPre) prs, Map(Str, List(Int)) callers, OSC sc, List(Int) cs, Int i, Bool own, OGS st) { return ow_seq_comps(g, fs, prs, callers, sc, cs, i + 1, own, st); }
 
+// (2^20 - weight) * 2^20 + component: sorted ascending, heaviest first.
+List(Int) ow_weights(OSC sc, List(Int) cs, Map(Int, Int) dirty, Int i, ListBuf(Int) acc) {
+    if (i >= cs.len()) { return acc.finish(); }
+    Int k = cs[i];
+    Int w = ow_ndirty(sc.flat, if (k == 0) { 0 } else { sc.ends[k - 1] }, sc.ends[k], dirty, 0);
+    return ow_weights_n(sc, cs, dirty, i, acc.push((1048576 - (if (w > 1048575) { 1048575 } else { w })) * 1048576 + k));
+}
+
+List(Int) ow_weights_n(OSC sc, List(Int) cs, Map(Int, Int) dirty, Int i, ListBuf(Int) acc) { return ow_weights(sc, cs, dirty, i + 1, acc); }
+
+// Each component to the region with the least work so far.
+Map(Int, Int) ow_lpt(List(Int) ks, Int i, List(Int) load, Map(Int, Int) acc) {
+    if (i >= ks.len()) { return acc; }
+    Int k = ks[i] % 1048576;
+    Int w = 1048576 - ks[i] / 1048576;
+    Int r = ow_argmin(load, 1, 0);
+    return ow_lpt_n(ks, i, load.with(r, load[r] + w), acc.insert(k, r));
+}
+
+Map(Int, Int) ow_lpt_n(List(Int) ks, Int i, List(Int) load, Map(Int, Int) acc) { return ow_lpt(ks, i + 1, load, acc); }
+
+Int ow_argmin(List(Int) xs, Int i, Int best) {
+    if (i >= xs.len()) { return best; }
+    return ow_argmin_n(xs, i, if (xs[i] < xs[best]) { i } else { best });
+}
+
+Int ow_argmin_n(List(Int) xs, Int i, Int best) { return ow_argmin(xs, i + 1, best); }
+
+// The components assigned to region r, in component order.
+List(Int) ow_assigned(List(Int) cs, Map(Int, Int) asg, Int r, Int i, ListBuf(Int) acc) {
+    if (i >= cs.len()) { return acc.finish(); }
+    return ow_assigned_n(cs, asg, r, i, if ((asg.get(cs[i]) else { 0 }) == r) { acc.push(cs[i]) } else { acc });
+}
+
+List(Int) ow_assigned_n(List(Int) cs, Map(Int, Int) asg, Int r, Int i, ListBuf(Int) acc) { return ow_assigned(cs, asg, r, i + 1, acc); }
+
 // Every eighth component from i.
 List(Int) ow_chunk(List(Int) cs, Int i, ListBuf(Int) acc) {
     if (i >= cs.len()) { return acc.finish(); }
@@ -2056,14 +2229,16 @@ List(Int) ow_chunk(List(Int) cs, Int i, ListBuf(Int) acc) {
 }
 
 OGS ow_par_level(Kg g, Funcs fs, List(OPre) prs, Map(Str, List(Int)) callers, OSC sc, List(Int) cs, Bool own, OGS st) {
-    List(Int) c0 = ow_chunk(cs, 0, ListBuf());
-    List(Int) c1 = ow_chunk(cs, 1, ListBuf());
-    List(Int) c2 = ow_chunk(cs, 2, ListBuf());
-    List(Int) c3 = ow_chunk(cs, 3, ListBuf());
-    List(Int) c4 = ow_chunk(cs, 4, ListBuf());
-    List(Int) c5 = ow_chunk(cs, 5, ListBuf());
-    List(Int) c6 = ow_chunk(cs, 6, ListBuf());
-    List(Int) c7 = ow_chunk(cs, 7, ListBuf());
+    // Largest first, each to the least loaded region (by dirty members).
+    Map(Int, Int) asg = ow_lpt(sort(ow_weights(sc, cs, st.dirty, 0, ListBuf())), 0, [0, 0, 0, 0, 0, 0, 0, 0], ow_noim());
+    List(Int) c0 = ow_assigned(cs, asg, 0, 0, ListBuf());
+    List(Int) c1 = ow_assigned(cs, asg, 1, 0, ListBuf());
+    List(Int) c2 = ow_assigned(cs, asg, 2, 0, ListBuf());
+    List(Int) c3 = ow_assigned(cs, asg, 3, 0, ListBuf());
+    List(Int) c4 = ow_assigned(cs, asg, 4, 0, ListBuf());
+    List(Int) c5 = ow_assigned(cs, asg, 5, 0, ListBuf());
+    List(Int) c6 = ow_assigned(cs, asg, 6, 0, ListBuf());
+    List(Int) c7 = ow_assigned(cs, asg, 7, 0, ListBuf());
     Result(List(Str), RegionError) r0 = spawn () { return ow_par_chunk(g, fs, prs, callers, sc, c0, own, st); };
     Result(List(Str), RegionError) r1 = spawn () { return ow_par_chunk(g, fs, prs, callers, sc, c1, own, st); };
     Result(List(Str), RegionError) r2 = spawn () { return ow_par_chunk(g, fs, prs, callers, sc, c2, own, st); };
@@ -2135,11 +2310,15 @@ ListBuf(Str) ow_par_out_m_n(Kg g, List(OPre) prs, List(Int) flat, Int j, Int e, 
 
 // A region's pieces merged as the sweep merges them; callers outside the
 // piece's component are dirtied by a changed summary.
-OGS ow_par_merge(Kg g, List(OPre) prs, Map(Str, List(Int)) callers, OSC sc, List(Str) ls, Bool own, OGS st) {
+OGS ow_par_merge(Kg g, List(OPre) prs, Map(Str, List(Int)) callers, OSC sc, List(Str) ls, Bool own, OGS st) { return ow_par_merge_x(g, prs, callers, sc, ls, own, true, st); }
+
+// excl: the component of each piece is settled (callers in it are not
+// dirtied).
+OGS ow_par_merge_x(Kg g, List(OPre) prs, Map(Str, List(Int)) callers, OSC sc, List(Str) ls, Bool own, Bool excl, OGS st) {
     if (ls.len() == 0) { return st; }
     OWS ws = ow_warm_de(g, prs, ls, 1, OWS {.sums = ow_nosums(), .pown = ow_noim(), .ok = true, .cur = -1, .f = ow_nofs_e()});
     List(Str) h = str_split(ls[0], " ");
-    OGS s1 = ow_par_apply(g, prs, callers, sc, ws.sums, ws.sums.keys(), 0, own, OGS {.s = st.s, .sums = st.sums, .dirty = st.dirty, .work = st.work + str_parse_int(h[0]), .log = st.log});
+    OGS s1 = ow_par_apply(g, prs, callers, sc, ws.sums, ws.sums.keys(), 0, own, excl, OGS {.s = st.s, .sums = st.sums, .dirty = st.dirty, .work = st.work + str_parse_int(h[0]), .log = st.log});
     return OGS {.s = s1.s, .sums = s1.sums, .dirty = ow_redirty(h, 1, s1.dirty), .work = s1.work, .log = s1.log};
 }
 
@@ -2150,7 +2329,7 @@ Map(Int, Int) ow_redirty(List(Str) h, Int i, Map(Int, Int) d) {
 
 Map(Int, Int) ow_redirty_n(List(Str) h, Int i, Map(Int, Int) d) { return ow_redirty(h, i + 1, d); }
 
-OGS ow_par_apply(Kg g, List(OPre) prs, Map(Str, List(Int)) callers, OSC sc, Map(Int, OFS) ws, List(Int) ks, Int j, Bool own, OGS st) {
+OGS ow_par_apply(Kg g, List(OPre) prs, Map(Str, List(Int)) callers, OSC sc, Map(Int, OFS) ws, List(Int) ks, Int j, Bool own, Bool excl, OGS st) {
     if (j >= ks.len()) { return st; }
     Int i = ks[j];
     OFS p = ws.get(i) else { ow_nofs() };
@@ -2159,13 +2338,13 @@ OGS ow_par_apply(Kg g, List(OPre) prs, Map(Str, List(Int)) callers, OSC sc, Map(
     Int fi = prs[i].t.fidx.get(name) else { -1 };
     OS s2 = ow_merge_piece(st.s, fi, p, own);
     Bool ch = ow_csig(old.sig) != ow_csig(p.sig) || st.s.fresh.contains(fi) != s2.fresh.contains(fi);
-    Int c = sc.comp.get(i) else { -1 };
+    Int c = if (excl) { sc.comp.get(i) else { -1 } } else { -2 };
     Map(Int, Int) d0 = st.dirty.remove(i);
     Map(Int, Int) d2 = if (ch) { ow_mark_out(d0, callers.get(name) else { [] }, sc.comp, c, 0) } else { d0 };
-    return ow_par_apply_n(g, prs, callers, sc, ws, ks, j, own, OGS {.s = s2, .sums = st.sums.insert(i, p), .dirty = d2, .work = st.work, .log = st.log});
+    return ow_par_apply_n(g, prs, callers, sc, ws, ks, j, own, excl, OGS {.s = s2, .sums = st.sums.insert(i, p), .dirty = d2, .work = st.work, .log = st.log});
 }
 
-OGS ow_par_apply_n(Kg g, List(OPre) prs, Map(Str, List(Int)) callers, OSC sc, Map(Int, OFS) ws, List(Int) ks, Int j, Bool own, OGS st) { return ow_par_apply(g, prs, callers, sc, ws, ks, j + 1, own, st); }
+OGS ow_par_apply_n(Kg g, List(OPre) prs, Map(Str, List(Int)) callers, OSC sc, Map(Int, OFS) ws, List(Int) ks, Int j, Bool own, Bool excl, OGS st) { return ow_par_apply(g, prs, callers, sc, ws, ks, j + 1, own, excl, st); }
 
 // Callers marked dirty, except members of component c (settled).
 Map(Int, Int) ow_mark_out(Map(Int, Int) m, List(Int) xs, Map(Int, Int) comp, Int c, Int i) {
@@ -2709,8 +2888,20 @@ List(Str) ow_rb_lines_n(Kg g, Funcs fs, OS s, List(OPre) prs, Int i, ListBuf(Str
 List(Str) ow_rb_of(OFn o) {
     Map(Int, Str) m = ow_rebuild_evs(o, 0, ow_nois());
     ListBuf(Str) b = ow_tab_fn(o.x.fnode, m, m.keys(), 0, ListBuf());
-    return ow_tab_fn(0 - 1 - o.x.fnode, o.f.route, o.f.route.keys(), 0, b).finish();
+    ListBuf(Str) b2 = ow_tab_fn(0 - 1 - o.x.fnode, o.f.route, o.f.route.keys(), 0, b);
+    // Binders to hoist ride under the key own_hz_key(fnode), by name.
+    Map(Int, Int) hz = ow_hz_evs(o, 0, o.f.hz);
+    return ow_hz_lines(o, own_hz_key(o.x.fnode), hz.keys(), 0, b2).finish();
 }
+
+pub Int own_hz_key(Int fnode) { return 0 - 1099511627776 - fnode; }
+
+ListBuf(Str) ow_hz_lines(OFn o, Int key, List(Int) bs, Int i, ListBuf(Str) acc) {
+    if (i >= bs.len()) { return acc; }
+    return ow_hz_lines_n(o, key, bs, i, acc.push(f"{key} {bs[i]} " + ow_bname(o.x, bs[i])));
+}
+
+ListBuf(Str) ow_hz_lines_n(OFn o, Int key, List(Int) bs, Int i, ListBuf(Str) acc) { return ow_hz_lines(o, key, bs, i + 1, acc); }
 
 // The lines of the settled run: each function's last analysis saw the
 // final summaries it reads (any change to them dirtied it again).
@@ -2724,11 +2915,8 @@ List(Str) ow_rb_sums_n(Map(Int, OFS) sums, List(OPre) prs, Int i, ListBuf(Str) a
 
 List(Str) ow_rb_one(Kg g, Funcs fs, OS s, OPre pr) {
     Int _a = resid_bulk_push();
-    OFn o = ow_fn(g, fs, s, pr);
-    Map(Int, Str) m = ow_rebuild_evs(o, 0, ow_nois());
-    // Routed calls ride under the key -1 - fnode.
-    ListBuf(Str) b = ow_tab_fn(pr.fnode, m, m.keys(), 0, ListBuf());
-    List(Str) t = resid_list_str_persist_copy(ow_tab_fn(0 - 1 - pr.fnode, o.f.route, o.f.route.keys(), 0, b).finish());
+    // Routed calls ride under the key -1 - fnode, hoisting under own_hz_key.
+    List(Str) t = resid_list_str_persist_copy(ow_rb_of(ow_fn(g, fs, s, pr)));
     Int _b = resid_bulk_pop();
     return t;
 }
