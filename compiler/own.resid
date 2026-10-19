@@ -2957,7 +2957,7 @@ Bool ow_disturbs_one_n(OLc l, List(OLc) wms, Str ws, Int i) { return ow_disturbs
 
 pub Str own_report(Kg g, Int unit, Funcs fs) { return own_report_m(g, unit, fs, 3); }
 
-// mode 4: the strict verdicts (what --ownership lowers), as a full report.
+// mode 4: the strict verdicts (what lowering uses), as a full report.
 pub Str own_report_m(Kg g, Int unit, Funcs fs, Int mode) { return if (mode == 4) { ow_report(g, unit, fs, 3, true) } else { ow_report(g, unit, fs, mode, false) }; }
 
 // own_rebuilds as text, one "fnode literal name" line each, for the
@@ -3161,7 +3161,7 @@ pub Map(Int, Map(Int, Str)) own_parse_lines(List(Str) ls, Int i, Map(Int, Map(In
 
 Map(Int, Map(Int, Str)) own_parse_lines_n(List(Str) ls, Int i, Map(Int, Map(Int, Str)) acc) { return own_parse_lines(ls, i + 1, acc); }
 
-// What lowering takes (--ownership): per function, the struct literals
+// What lowering takes: per function, the struct literals
 // rebuilt in place and the name of the binder each rebuilds.
 pub Map(Int, Map(Int, Str)) own_rebuilds(Kg g, Int unit, Funcs fs) {
     return own_parse_lines(own_rebuild_lines(g, unit, fs), 0, lw_noown());

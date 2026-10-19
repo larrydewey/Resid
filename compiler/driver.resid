@@ -10337,11 +10337,11 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     Bool gdbg = profile == "debug";
     GAF gdf = if (gdbg) { ga_fileinfo(rsrc, rr.map, path) } else { ga_fileinfo("", "", path) };
     PG g0 = PG {.pos = if (gdbg) { 1000 } else { 0 }, .err = "", .glines = [], .hlines = [], .lines = header, .tmp = 0, .lbl = 0};
-    // --ownership on: the ownership analysis decides in-place record
-    // rebuilds (PLAN-ownership-ir.md, phase 2); off by default.
+    // The ownership analysis decides in-place record rebuilds
+    // (PLAN-ownership-ir.md); `--no-ownership` turns it off.
     // The analysis runs in an arena of its own; only its verdicts, as
     // text, outlive it.
-    Bool own_on = pick_opt(argc, "--ownership", "off") == "on" && !resid_rtmod();
+    Bool own_on = !pick_flag(argc, "--no-ownership") && !resid_rtmod();
     // First the functions worth an owned instance (f__o), which are
     // cloned; then the verdicts, with calls routed to the instances.
     // The first run's state comes out with the names: the second run
