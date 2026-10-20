@@ -9795,6 +9795,21 @@ List(Str) rtg_dedupe(List(Str) ls, Int i, List(Str) seen, ListBuf(Str) acc) {
     return rtg_dedupe(ls, i + 1, if (g) { seen.concat([key]) } else { seen }, acc.push(out));
 }
 
+// Owned instances to a fixed point: a clone passes its owned parameters
+// on, so its callees may be worth an instance too (k rounds at most).
+List(Str) own_names_more(Kg lgi, Int unit, Funcs fs, List(Str) omw, List(Str) names, Int k) {
+    if (k <= 0 || names.len() == 0) { return names; }
+    // The round's cloned graph lives in the arena too: only names leave.
+    Int _a = resid_bulk_push();
+    Kg g1 = own_add_clones(lgi, unit, names);
+    List(Str) more = resid_list_str_persist_copy(own_mixed_more(g1, unit, lw_sigs(g1, unit), fs, names, omw));
+    Int _b = resid_bulk_pop();
+    if (more.len() == 0) { return names; }
+    return own_names_more_n(lgi, unit, fs, omw, names.concat(more), k - 1);
+}
+
+List(Str) own_names_more_n(Kg lgi, Int unit, Funcs fs, List(Str) omw, List(Str) names, Int k) { return own_names_more(lgi, unit, fs, omw, names, k); }
+
 @requires(args)
 Str pick_opt(Int i, Str flag, Str acc) {
     if (i <= 1) { return acc; }
@@ -10355,8 +10370,13 @@ Int main() {
     if (sec_known_check(lkp0, rsrc, rr.map)) { return 1; }
     // Keys must be unpredictable (compiler/ekey.resid, E0270): warnings
     // while the rule is rolled out (PLAN-labels.md §4.6).
-    EKR ekr = if (rtmod) { EKR {.warnings = "", .n = 0} } else { ek_run(lkp0.g, lkp0.id, rsrc, rr.map, environment.get("RESID_EKEY_DEBUG")) };
-    if (ekr.n > 0) { print(ekr.warnings); }
+    // In an arena of its own: only the warnings' text leaves it.
+    Int _ek_in = resid_bulk_push();
+    EKR ekr0 = if (rtmod) { EKR {.warnings = "", .n = 0} } else { ek_run(lkp0.g, lkp0.id, rsrc, rr.map, environment.get("RESID_EKEY_DEBUG")) };
+    Int ekn = ekr0.n;
+    List(Str) ekw = resid_list_str_persist_copy([ekr0.warnings]);
+    Int _ek_out = resid_bulk_pop();
+    if (ekn > 0) { print(ekw[0]); }
     // A program that handles secrets runs its allocator in secret mode
     // (spec §48): zero on free, heap left out of core dumps.
     Bool secmode = sec_graph_has(lkp0.g, 0);
@@ -10376,7 +10396,7 @@ Int main() {
         Int omode = str_parse_int(pick_opt(argc, "--own-mode", "3"));
         // Mode 5: the strict verdicts with owned instances, as lowered.
         List(Str) omw5 = if (omode == 5) { own_mixed_w(og, lkp.id, fs) } else { [] };
-        List(Str) omx5 = if (omw5.len() > 0 && omw5[0] != "") { str_split(omw5[0], " ") } else { [] };
+        List(Str) omx5 = own_names_more(og, lkp.id, fs, omw5, if (omw5.len() > 0 && omw5[0] != "") { str_split(omw5[0], " ") } else { [] }, 8);
         Kg og5 = own_add_clones(og, lkp.id, omx5);
         Str rep = if (omode == 5) { own_report_w(og5, lkp.id, if (omx5.len() > 0) { lw_sigs(og5, lkp.id) } else { fs }, fs, omx5, omw5) } else { own_report_m(og, lkp.id, fs, omode) };
         Bool ow = filesystem.write_all(own_path, rep);
@@ -10417,7 +10437,8 @@ List(Str) hdr_core = ["declare i1 @print(ptr)", "declare i1 @println(ptr)", "dec
     Int _om_in = if (own_on) { resid_bulk_push() } else { 0 };
     List(Str) omw = if (own_on) { resid_list_str_persist_copy(own_mixed_w(lgi, lkp.id, fs)) } else { [] };
     Int _om_out = if (own_on) { resid_bulk_pop() } else { 0 };
-    List(Str) omx = if (omw.len() > 0 && omw[0] != "") { str_split(omw[0], " ") } else { [] };
+    List(Str) omx1 = if (omw.len() > 0 && omw[0] != "") { str_split(omw[0], " ") } else { [] };
+    List(Str) omx = if (own_on) { own_names_more(lgi, lkp.id, fs, omw, omx1, 8) } else { omx1 };
     Kg lgo = own_add_clones(lgi, lkp.id, omx);
     Funcs fso = if (omx.len() > 0) { lw_sigs(lgo, lkp.id) } else { fs };
     Int _ow_in = if (own_on) { resid_bulk_push() } else { 0 };

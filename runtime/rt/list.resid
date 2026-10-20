@@ -62,6 +62,9 @@ pub Int lshift(Int l) {
     return if (s == 0 - 2) { 0 - 1 } else { s };
 }
 pub Bool ltransient(Int l) { return sx32(ld32(l + 8)) == 0 - 2; }
+// Flat (transient -2 or frozen -1): the shift is never otherwise negative,
+// so the hot test is one compare.
+pub Bool lflat(Int l) { return sx32(ld32(l + 8)) < 0; }
 pub Int lroot(Int l) { return ld64(l + 16); }
 pub Int ltype(Int l) { return ld64(l + 24); }
 
@@ -213,15 +216,20 @@ Int pvec_get(Int node, Int level, Int i) {
 }
 
 pub Int list_at(Int l, Int i) {
-    if (lshift(l) == 0 - 1) { return ld64(lroot(l) + 24 + i * 8); }
-    return pvec_get(lroot(l), lshift(l), i);
+    Int s = sx32(ld32(l + 8));
+    if (s < 0) { return ld64(lroot(l) + 24 + i * 8); }
+    return pvec_get(lroot(l), s, i);
 }
 
 // A copy of node (may be 0) with slot set to val, grown to cover it.
 pub Int node_with(Int node, Int slot, Int val) {
     Int old = if (node != 0) { ld64(node) } else { 0 };
-    Int out = node_new(max(slot + 1, old));
+    Int cap = max(slot + 1, old);
+    // Only the slots past the copied ones are zeroed.
+    Int out = ralloc(8 + cap * 8);
+    _ = st64(out, cap);
     _ = if (old > 0) { mcopy(out + 8, node + 8, old * 8) } else { 0 };
+    _ = if (cap > old) { resid_raw_fill(out + 8 + old * 8, 0, (cap - old) * 8) } else { 0 };
     return st64(out + 8 + slot * 8, val) * 0 + out;
 }
 
@@ -247,7 +255,7 @@ pub Int pvec_append_into(Int into, Int v, Int elems, Int m) {
 }
 
 Int append_core(Int into, Int v, Int elems, Int m) {
-    if (lshift(v) == 0 - 1 || lroot(v) == 0) {
+    if (lflat(v) || lroot(v) == 0) {
         Int f = lroot(v);
         Int n = lcount(v);
         // The shared tip takes the elements in place. Slots past its last
@@ -349,6 +357,7 @@ pub Int rt_list_len(Int l) { return lcount(l); }
 
 // Bounds-checked element read (an index out of range aborts, spec §24).
 @export("resid_list_get", "ptr(ptr,i64)")
+@inline
 pub Int rt_list_get(Int l, Int i) {
     if (!ult(i, lcount(l))) { return rt_index_abort(i, lcount(l), 0); }
     return list_at(l, i);
@@ -356,6 +365,7 @@ pub Int rt_list_get(Int l, Int i) {
 
 // An element the compiler proved in bounds.
 @export("resid_list_get_nc", "ptr(ptr,i64)")
+@inline
 pub Int rt_list_get_nc(Int l, Int i) { return list_at(l, i); }
 
 // A header record read from a list has a second referrer from here: its
@@ -394,11 +404,11 @@ Int share_elems(Int l, Int i, Int n) {
 // (count 0 when it is a trie), then an element is a compare and a load.
 @export("resid_list_vdata", "ptr(ptr)")
 @inline
-pub Int rt_list_vdata(Int l) { return if (lshift(l) == 0 - 1) { lroot(l) + 24 } else { 0 }; }
+pub Int rt_list_vdata(Int l) { return if (lflat(l)) { lroot(l) + 24 } else { 0 }; }
 
 @export("resid_list_vlen", "i64(ptr)")
 @inline
-pub Int rt_list_vlen(Int l) { return if (lshift(l) == 0 - 1) { lcount(l) } else { 0 }; }
+pub Int rt_list_vlen(Int l) { return if (lflat(l)) { lcount(l) } else { 0 }; }
 
 @export("resid_list_get_v", "ptr(ptr,i64,ptr,i64)")
 @inline
@@ -416,7 +426,7 @@ pub Int rt_list_to_array(Int l) {
     Int n = lcount(l);
     if (n == 0) { return 0; }
     Int out = xmalloc(n * 8);
-    _ = if (lshift(l) == 0 - 1) { mcopy(out, lroot(l) + 24, n * 8) } else { array_from_trie(l, out, 0, n) };
+    _ = if (lflat(l)) { mcopy(out, lroot(l) + 24, n * 8) } else { array_from_trie(l, out, 0, n) };
     return out;
 }
 
@@ -437,7 +447,7 @@ pub Int rt_list_concat(Int a, Int b0) {
 }
 
 Int cat_slots(Int a, Int b, Int m) {
-    if (lshift(b) == 0 - 1) { return pvec_append_into(0, a, lroot(b) + 24, m); }
+    if (lflat(b)) { return pvec_append_into(0, a, lroot(b) + 24, m); }
     Int flat = rt_list_to_array(b);
     Int out = pvec_append_into(0, a, flat, m);
     return c_free(flat) * 0 + out;
@@ -556,7 +566,7 @@ pub Int rt_list_slice(Int l, Int lo0, Int hi0) {
     Int lo = max(lo0, 0);
     Int hi = min(hi0, lcount(l));
     Int n = if (hi > lo) { hi - lo } else { 0 };   // hi - lo may wrap for hi near Int.min
-    if (n > 0 && lshift(l) == 0 - 1) { return rt_list_new(n, lroot(l) + 24 + lo * 8, ltype(l)); }
+    if (n > 0 && lflat(l)) { return rt_list_new(n, lroot(l) + 24 + lo * 8, ltype(l)); }
     Int flat = xmalloc(max(n, 1) * 8);
     _ = slice_fill(l, flat, lo, 0, n);
     Int out = rt_list_new(n, flat, ltype(l));
@@ -692,7 +702,7 @@ Int free_kids(Int node, Int shift, Int i, Int n, Bool raw) {
 @export("resid_list_free", "void(ptr)")
 pub Int rt_list_free(Int l) {
     if (l == 0) { return 0; }
-    _ = if (lroot(l) != 0 && lshift(l) != 0 - 1) { free_node(lroot(l), lshift(l), lraw(l)) } else { 0 };
+    _ = if (lroot(l) != 0 && !lflat(l)) { free_node(lroot(l), lshift(l), lraw(l)) } else { 0 };
     return c_free(l);
 }
 

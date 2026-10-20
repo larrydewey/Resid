@@ -1650,7 +1650,7 @@ Int list_move(Int l, Int ek0, Int ctx) {
     Int root = lroot(l);
     Int n = lcount(l);
     Bool adopt = root != 0 && ltransient(l) && ld64(resid_raw_tls("rg_compact", 8)) != 0 && !mv_src(ctx, root);
-    Int nroot = if (adopt) { flat_copy(root, n, ek, ctx) } else { if (lshift(l) == 0 - 1 && root != 0) { flat_move(root, n, ek, ctx) } else { if (root != 0) { pvec_move(root, lshift(l), ek, ctx) } else { root } } };
+    Int nroot = if (adopt) { flat_copy(root, n, ek, ctx) } else { if (lflat(l) && root != 0) { flat_move(root, n, ek, ctx) } else { if (root != 0) { pvec_move(root, lshift(l), ek, ctx) } else { root } } };
     if (nroot == root && !mv_src(ctx, l)) { return l; }
     Int out = mv_alloc(ctx, 32);
     _ = mcopy(out, l, 32);
@@ -1867,7 +1867,7 @@ pub Int alloc_near(Int obj, Int n) {
 Int with_fresh(Int l, Int extra) {
     Int n = lcount(l);
     Int f = flat_new(n + extra);
-    _ = if (n > 0 && lshift(l) == 0 - 1) { mcopy(f + 24, lroot(l) + 24, n * 8) } else { with_fill(l, f, 0, n) };
+    _ = if (n > 0 && lflat(l)) { mcopy(f + 24, lroot(l) + 24, n * 8) } else { with_fill(l, f, 0, n) };
     _ = st64(f, n) + st64(f + 16, n);
     return set_list(list_hdr(), n, 0 - 2, f, ltype(l));
 }
@@ -1887,13 +1887,13 @@ Int with_fill(Int l, Int f, Int i, Int n) {
 // copied whole, a larger one becomes a trie and copies one path.
 Int with_shared(Int l, Int i, Int v) {
     Int n = lcount(l);
-    if (lshift(l) == 0 - 1 && n <= 64) {
+    if (lflat(l) && n <= 64) {
         Int f = flat_new(n);
         _ = mcopy(f + 24, lroot(l) + 24, n * 8);
         _ = st64(f, n) + st64(f + 24 + i * 8, v);
         return set_list(list_hdr(), n, 0 - 1, f, ltype(l));
     }
-    Int t = if (lshift(l) == 0 - 1) { trie_from_items(lroot(l) + 24, n, ltype(l)) } else { l };
+    Int t = if (lflat(l)) { trie_from_items(lroot(l) + 24, n, ltype(l)) } else { l };
     Int sh = lshift(t);
     Int leaf = node_with(leaf_of(lroot(t), sh, i), i & 31, v);
     Int root = if (sh == 0) { leaf } else { set_leaf(lroot(t), sh, i >> 5, leaf) };
@@ -2221,7 +2221,7 @@ pub Int rt_list_concat_own(Int a, Int owned, Int b0) {
 
 // Raw slots are values: no barrier.
 Int cat_raw(Int f, Int b, Int n, Int m) {
-    if (lshift(b) == 0 - 1) { return mcopy(f + 24 + n * 8, lroot(b) + 24, m * 8); }
+    if (lflat(b)) { return mcopy(f + 24 + n * 8, lroot(b) + 24, m * 8); }
     return cat_raw_t(f, b, n, 0, m);
 }
 

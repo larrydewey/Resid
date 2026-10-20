@@ -2994,6 +2994,16 @@ pub List(Str) own_mixed_w(Kg g, Int unit, Funcs fs) {
     return ow_ser_i(ow_ser_i(b1, "P", w.s.pown.keys(), 0), "Y", w.s.curp.keys(), 0).finish();
 }
 
+// The functions worth an owned instance once `names` are cloned: a clone
+// passes its owned parameters on, so its callees may be mixed in turn.
+// Run warm from the first run's state (st, fs0), as own_rebuild_lines_w.
+pub List(Str) own_mixed_more(Kg g, Int unit, Funcs fs, Funcs fs0, List(Str) names, List(Str) st) {
+    OWR w = ow_run_2(g, unit, fs, fs0, names, st);
+    OS z = ow_asm_at(w.sums, w.sums.keys(), 0, w.s, ow_noim(), ow_noim());
+    Map(Str, Int) top = ow_top_fns(g, unit, 0, ow_nosm());
+    return ow_mixed_names(fs, g, top, z.fresh.keys(), z.pown, 0, ow_union(ow_nosm(), names, 0), ListBuf());
+}
+
 ListBuf(Str) ow_ser_sums(Kg g, List(OPre) prs, Map(Int, OFS) sums, Int i, ListBuf(Str) acc) {
     if (i >= prs.len()) { return acc; }
     ListBuf(Str) a1 = if (sums.contains(i)) { ow_push_all(acc.push(f"U {i} " + g.ns[prs[i].fnode].text), ow_fs_ser(sums.get(i) else { ow_nofs() }), 0) } else { acc };

@@ -1152,7 +1152,7 @@ Int dsec_clear() {
 Int dsec_wipe(Int t, Int k, Int n) {
     if (k >= n) { return 0; }
     Int l = ld64(t + 8 + k * 8);
-    _ = if (l != 0 && lshift(l) == 0 - 1 && lroot(l) != 0) { resid_raw_fill(lroot(l) + 24, 0, lcount(l) * 8) } else { 0 };
+    _ = if (l != 0 && lflat(l) && lroot(l) != 0) { resid_raw_fill(lroot(l) + 24, 0, lcount(l) * 8) } else { 0 };
     return dsec_wipe(t, k + 1, n);
 }
 

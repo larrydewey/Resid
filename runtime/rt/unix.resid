@@ -552,7 +552,7 @@ pub Int rt_disp_shm_put32(Int h, Int off, Int l, Int first, Int n) {
     if (off + n * 4 > ld64(h + 16)) { return 0; }
     if (n == 0) { return 1; }
     Int dst = ld64(h + 24) + off;
-    _ = if (lshift(l) == 0 - 1 && lraw(l)) { put32_slots(dst, lroot(l) + 24 + first * 8, 0, n) } else { put32_list(dst, l, first, 0, n) };
+    _ = if (lflat(l) && lraw(l)) { put32_slots(dst, lroot(l) + 24 + first * 8, 0, n) } else { put32_list(dst, l, first, 0, n) };
     return 1;
 }
 
