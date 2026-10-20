@@ -508,3 +508,38 @@ because no `execute__o` instance is made although every report line says
 in place; Richards' worker step copies `w.data` and barrier-moves the new
 `Pkt` (~12%); Havlak's nested-list writes and table zeroing; Queens' row
 reads (about 12 instructions each, the `List(Bool)` protocol).
+
+## 8. Follow-up round (2026-10-20, b7410f59)
+
+Instructions against bfab1ec2: DeltaBlue -12.6%, Permute -8.7%, Sieve
+-4.5%, Queens -2.0%, Richards -1.2%, Havlak -0.4%, the rest within 0.1%.
+
+- Owned instances to a fixed point (`own_mixed_more`, at most 8 rounds):
+  the open DeltaBlue item. `execute` got no instance because its only
+  owned caller is itself an instance (`run_plan__o`); one selection pass
+  could not see it. Six rounds settle the harness.
+- Flat-list test as one sign compare (`lflat`); `resid_list_get`/`_nc`
+  always inlined (any change to `list_at` otherwise tipped LLVM out of
+  inlining them: Permute +37%). `node_with` zeroes only uncopied slots.
+- Self-compile peak 3.56 GB -> 2.64 GB: `ek_run` (E0270) kept a ~2.5 GB
+  working set in the codegen arena; it has its own bulk arena now.
+
+Tried and dropped (no gain, or a loss):
+- Exact-object write tokens plus a held-list rule in `own.resid`, so a
+  callee rewriting `d.vs` slots does not disturb a list held from an
+  element: fixed `rp_loop`, no measurable gain while `recalculate`'s
+  `set_var(d, i, var_with(d.vs[i], ..))` still copies (patch kept out of
+  tree).
+- `finish()` returning a transient list: Havlak +45%.
+- TBAA tags separating list headers from slots: no change; the second
+  write of a swap re-reads the header because the first write's result is
+  a phi of the fast path and the slow path's new list, not an aliasing
+  question.
+- Hole rule through alias entries (Richards `pkt(w, ..)`): no change;
+  `worker_fn`'s `s2` is not owned in the first place (`data` is `w.data`).
+
+What remains is the list-in-record ownership problem (L2) in three
+shapes: an element rebuilt through a helper and written back at its own
+index (DeltaBlue `recalculate`, Richards `pkt`), a list field modified
+through a borrowed element (Richards `w.data`), and frozen trie lists
+written in Havlak (`node_with`, about 30% of Havlak at ReBench size).
