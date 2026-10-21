@@ -1,0 +1,81 @@
+// A record held twice inside one value must not be rewritten in place
+// through one of its holders when the value is handed on as owned.
+type Var = { Int value; List(Int) cons; Int det; };
+type Two = { Var a; Var b; Int n; };
+type Db = { List(Var) vs; Int m; };
+
+Var bumpv(Var v, Int x) { return Var {.value = x, .cons = v.cons, .det = v.det}; }
+
+Two seta(Two t, Int x) { return Two {.a = bumpv(t.a, x), .b = t.b, .n = t.n}; }
+Two run(Two t, Int k) { if (k <= 0) { return t; } return run(seta(t, k + 100), k - 1); }
+
+Db setv(Db d, Int i, Int x) {
+    Var v = d.vs[i];
+    return Db {.vs = d.vs.with(i, bumpv(v, x)), .m = d.m};
+}
+Db runl(Db d, Int k) { if (k <= 0) { return d; } return runl(setv(d, 0, k + 100), k - 1); }
+
+Var mkv(Int x) {
+    List(Int) c = [x];
+    return Var {.value = x, .cons = c, .det = 0};
+}
+
+// two fields
+Two mk_struct(Int x, Int k) {
+    Var r = mkv(x);
+    return run(Two {.a = r, .b = r, .n = 0}, k);
+}
+
+// a list literal
+Db mk_lit(Int x, Int k) {
+    Var r = mkv(x);
+    List(Var) vs = [r, r];
+    return runl(Db {.vs = vs, .m = 0}, k);
+}
+
+// two concats
+Db mk_concat(Int x, Int k) {
+    Var r = mkv(x);
+    List(Var) none = [];
+    return runl(Db {.vs = none.concat([r]).concat([r]), .m = 0}, k);
+}
+
+// two withs
+Db mk_with(Int x, Int k) {
+    Var r = mkv(x);
+    Var q = mkv(0);
+    List(Var) vs = [q, q, q];
+    return runl(Db {.vs = vs.with(0, r).with(2, r), .m = 0}, k);
+}
+
+// a builder
+Db mk_buf(Int x, Int k) {
+    Var r = mkv(x);
+    ListBuf(Var) b = ListBuf();
+    return runl(Db {.vs = b.push(r).push(r).finish(), .m = 0}, k);
+}
+
+// an element read out and stored again
+Db mk_copy(Int x, Int k) {
+    Var r = mkv(x);
+    Var q = mkv(0);
+    List(Var) vs = [r, q];
+    Var e = vs[0];
+    return runl(Db {.vs = vs.with(1, e), .m = 0}, k);
+}
+
+Int main() {
+    Two t = mk_struct(rt 10, rt 3);
+    println(f"struct {t.a.value} {t.b.value}");
+    Db a = mk_lit(rt 10, rt 3);
+    println(f"lit {a.vs[0].value} {a.vs[1].value}");
+    Db b = mk_concat(rt 10, rt 3);
+    println(f"concat {b.vs[0].value} {b.vs[1].value}");
+    Db c = mk_with(rt 10, rt 3);
+    println(f"with {c.vs[0].value} {c.vs[2].value}");
+    Db d = mk_buf(rt 10, rt 3);
+    println(f"buf {d.vs[0].value} {d.vs[1].value}");
+    Db e = mk_copy(rt 10, rt 3);
+    println(f"copy {e.vs[0].value} {e.vs[1].value}");
+    return 0;
+}

@@ -623,6 +623,126 @@ OV ow_ov(List(OE) es, Bool owned, OF f) { return OV {.es = ow_norm(es), .owned =
 
 OV ow_ovc(List(OE) es, Bool owned, Bool cur, OF f) { return OV {.es = ow_norm(es), .owned = owned, .f = f, .cur = cur}; }
 
+// A value that holds one object twice carries this entry: no binder has
+// root -3, so it aliases nothing, but it rides along wherever the value
+// goes (ow_under, ow_sub_ents), and a value carrying it is never owned. A
+// callee taking such a value as owned would rewrite the object through
+// one holder under the other: the locations model a list's slots as one,
+// so a second store of an object is otherwise invisible.
+OE ow_twice() { return OE {.p = 0, .r = 0 - 3, .l = 0}; }
+
+Bool ow_has_twice(List(OE) es, Int i) {
+    if (i >= es.len()) { return false; }
+    if (es[i].r == 0 - 3) { return true; }
+    return ow_has_twice_n(es, i);
+}
+
+Bool ow_has_twice_n(List(OE) es, Int i) { return ow_has_twice(es, i + 1); }
+
+// v's entries with the stored path's own location added (moved values
+// drop it): a later store of the same object must see it held.
+List(OE) ow_with_ident(OX x, ORS r, Int e0, OV v) {
+    Int e = if (x.g.ns[e0].kind == "finit") { kg_kid(x.g, e0, x.g.ns[e0].nk - 1) } else { e0 };
+    OP p = ow_path(x, r, e);
+    if (p.b < 0 || !ow_trk(x, p.ty)) { return v.es; }
+    return v.es.concat([ow_ent(0, ow_loc(p.b, p.path))]);
+}
+
+// What a stored value is and holds, as locations: a path's own location
+// (moved or not: the object is that one) and every location its value
+// reaches (an object inside it held elsewhere in the container is held
+// twice too).
+List(OLc) ow_ident(OX x, ORS r, Int e0, OV v) {
+    Int e = if (x.g.ns[e0].kind == "finit") { kg_kid(x.g, e0, x.g.ns[e0].nk - 1) } else { e0 };
+    OP p = ow_path(x, r, e);
+    List(OLc) all = ow_ent_ls(ow_no_twice(v.es, 0, ListBuf()), 0, ListBuf());
+    if (p.b < 0 || !ow_trk(x, p.ty)) { return all; }
+    return [ow_loc(p.b, p.path)].concat(ow_mem(v.f, p.b, p.path)).concat(all);
+}
+
+// Storing a value whose identity (ids) overlaps a location the container
+// already holds (held), except the slot `skip` the store overwrites (a
+// location with one concrete key; -1 for none): the container then holds
+// that object twice.
+Bool ow_dup(List(OLc) ids, List(OLc) held, OLc skip, Int i) {
+    if (i >= ids.len()) { return false; }
+    if (ow_dup_one(ids[i], held, skip, 0)) { return true; }
+    return ow_dup_n(ids, held, skip, i);
+}
+
+Bool ow_dup_n(List(OLc) ids, List(OLc) held, OLc skip, Int i) { return ow_dup(ids, held, skip, i + 1); }
+
+Bool ow_dup_one(OLc l, List(OLc) held, OLc skip, Int i) {
+    if (i >= held.len()) { return false; }
+    // At or under the overwritten slot (same concrete key): the store
+    // replaces the old element, and what it held goes with it.
+    Bool same_slot = skip.r >= 0 && l.r == skip.r && ow_pprefix(l.l, skip.l) && ow_slot_exact(l.l, ow_pn(skip.l));
+    if (!same_slot && ow_overlap(l, held[i])) { return true; }
+    return ow_dup_one_n(l, held, skip, i);
+}
+
+Bool ow_dup_one_n(OLc l, List(OLc) held, OLc skip, Int i) { return ow_dup_one(l, held, skip, i + 1); }
+
+List(OE) ow_no_twice(List(OE) es, Int i, ListBuf(OE) acc) {
+    if (i >= es.len()) { return acc.finish(); }
+    return ow_no_twice_n(es, i, if (es[i].r == 0 - 3) { acc } else { acc.push(es[i]) });
+}
+
+List(OE) ow_no_twice_n(List(OE) es, Int i, ListBuf(OE) acc) { return ow_no_twice(es, i + 1, acc); }
+
+// A record type a container holds by pointer: one not stored inline in
+// lists (a record of scalars is copied into each slot). Only such an
+// object, held twice, can be rewritten statically under its other holder:
+// a list written in place is checked at run time (transient), and a record
+// of scalars in a list is a copy.
+Bool ow_boxed_rec(OX x, Str t) { return t != "" && struct_index(x.fs, t) >= 0 && lst_rec(x.fs, t) == 0; }
+
+// An expression's type where cheaply known: a path's, a literal's, a
+// user call's result; else "".
+Str ow_expr_ty(OX x, ORS r, Int e) {
+    OP p = ow_path(x, r, e);
+    if (p.b >= 0) { return p.ty; }
+    Str k = x.g.ns[e].kind;
+    if (k == "struct") { return ow_base(x.fs, x.g.ns[e].text); }
+    if (k == "call") { return ow_ret_tyx(x, x.g.ns[e].text); }
+    return "";
+}
+
+// With no receiver type (a chain's receiver is no path): the stored
+// element's type from the stored argument itself, "" when unknown.
+Str ow_stored_ety(OX x, ORS r, Int id, Str m) {
+    Int n = x.g.ns[id].nk;
+    if (n < 2) { return ""; }
+    Int e = lo_unparen_ow(x, kg_kid(x.g, id, n - 1));
+    if (m != "concat") { return ow_expr_ty(x, r, e); }
+    if (x.g.ns[e].kind == "list") { return if (x.g.ns[e].nk > 0) { ow_expr_ty(x, r, kg_kid(x.g, e, 0)) } else { "" }; }
+    Str t = ow_expr_ty(x, r, e);
+    return if (ow_is_list(t)) { ow_elem_ty(x.fs, t) } else { "" };
+}
+
+Int lo_unparen_ow(OX x, Int e) { return if (x.g.ns[e].kind == "paren" && x.g.ns[e].nk > 0) { lo_unparen_ow(x, kg_kid(x.g, e, 0)) } else { e }; }
+
+// The type of what a write method stores, from its receiver's type t:
+// concat stores a list of t's elements (its argument is of type t), the
+// others an element.
+Str ow_store_ty(OX x, Str m, Str t) {
+    if (m == "concat") { return t; }
+    if (ow_is_list(t)) { return ow_elem_ty(x.fs, t); }
+    if (str_has_prefix(t, "ListBuf(")) { return ow_base(x.fs, elem_type(t)); }
+    return "";
+}
+
+// The slot step of l (at index n - 1) names one slot: a key, not the
+// any-slot step a fold or an unknown index leaves.
+Bool ow_slot_exact(Int l, Int n) { return n >= 1 && ow_pn(l) >= n && ow_pst(l, n - 1) != ow_any(); }
+
+OV ow_mark_twice(OV acc, Bool dup) {
+    if (!dup) { return acc; }
+    return OV {.es = ow_norm(acc.es.concat([ow_twice()])), .owned = false, .f = acc.f, .cur = acc.cur};
+}
+
+OLc ow_noloc() { return OLc {.r = 0 - 1, .l = 0}; }
+
 // Duplicate-free, and past 16 entries coarsened: each entry becomes the
 // whole value pointing into its location's first step (an ancestor, so
 // it overlaps everything the finer entries did).
@@ -793,12 +913,14 @@ OV ow_struct(OX x, ORS r, OS s, Int id, Int i, OV acc) {
         // A literal is allocated here (or rebuilds src's record in place:
         // cur when src is).
         Bool c = src < 0 || f2.cur.contains(src);
-        return ow_ovc(acc.es, true, c, f2);
+        return ow_ovc(acc.es, acc.owned, c, f2);
     }
     Int fi = kg_kid(x.g, id, i);
     Int e = kg_kid(x.g, fi, x.g.ns[fi].nk - 1);
     OV v = ow_val(x, r, s, e, acc.f);
-    return ow_struct_n(x, r, s, id, i, ow_ov(acc.es.concat(ow_under(v.es, ow_fid(x.t, x.g.ns[fi].text), 0, ListBuf())), true, v.f));
+    Bool rec = ow_boxed_rec(x, x.t.fty.get(ow_base(x.fs, x.g.ns[id].text) + "." + x.g.ns[fi].text) else { "" });
+    Bool dup = ow_has_twice(v.es, 0) || (rec && ow_dup(ow_ident(x, r, e, v), ow_ent_ls(acc.es, 0, ListBuf()), ow_noloc(), 0));
+    return ow_struct_n(x, r, s, id, i, ow_mark_twice(ow_ov(acc.es.concat(ow_under(ow_with_ident(x, r, e, v), ow_fid(x.t, x.g.ns[fi].text), 0, ListBuf())), acc.owned, v.f), dup));
 }
 
 OV ow_struct_n(OX x, ORS r, OS s, Int id, Int i, OV acc) { return ow_struct(x, r, s, id, i + 1, acc); }
@@ -832,8 +954,12 @@ Bool ow_root_is(OX x, ORS r, Int b, Str t) { return (r.bty.get(b) else { "" }) =
 
 OV ow_list(OX x, ORS r, OS s, Int id, Int i, OV acc) {
     if (i >= x.g.ns[id].nk) { return acc; }
-    OV v = ow_val(x, r, s, kg_kid(x.g, id, i), acc.f);
-    return ow_list_n(x, r, s, id, i, ow_ov(acc.es.concat(ow_under(v.es, ow_any(), 0, ListBuf())), true, v.f));
+    Int e = kg_kid(x.g, id, i);
+    OV v = ow_val(x, r, s, e, acc.f);
+    // A list of inline records stores copies of their words.
+    Bool rec = ow_boxed_rec(x, ow_expr_ty(x, r, e));
+    Bool dup = ow_has_twice(v.es, 0) || (rec && ow_dup(ow_ident(x, r, e, v), ow_ent_ls(acc.es, 0, ListBuf()), ow_noloc(), 0));
+    return ow_list_n(x, r, s, id, i, ow_mark_twice(ow_ov(acc.es.concat(ow_under(ow_with_ident(x, r, e, v), ow_any(), 0, ListBuf())), acc.owned, v.f), dup));
 }
 
 OV ow_list_n(OX x, ORS r, OS s, Int id, Int i, OV acc) { return ow_list(x, r, s, id, i + 1, acc); }
@@ -944,12 +1070,45 @@ OV ow_mcall(OX x, ORS r, OS s, Int id, OF f) {
     OP p = ow_path(x, r, rc);
     OV rv = ow_val(x, r, s, rc, f);
     OV av = ow_branches(x, r, s, id, 1, ow_ov([], true, rv.f));
+    // A write method storing an object the receiver already holds (or one
+    // of the stored values already holds twice) makes a value holding it
+    // twice; `with` overwriting the slot the object came from does not.
+    Str sty = ow_store_ty(x, m, ow_base(x.fs, p.ty));
+    Str ety = if (sty != "") { if (m == "concat") { ow_elem_ty(x.fs, sty) } else { sty } } else { ow_stored_ety(x, r, id, m) };
+    Bool rec = ow_boxed_rec(x, ety);
+    Bool dup = ow_write_method(m) && rec && ow_store_dup(x, r, s, id, p, rv, av);
     Bool w = ow_write_method(m) && p.b >= 0 && ow_trk(x, p.ty);
     OF f2 = if (w) { ow_ev_add(av.f, OEv {.node = id, .kind = "with", .b = p.b, .path = p.path, .cal = m, .arg = 0, .call = id}) } else { av.f };
     // A builder's finish hands over a new list it alone held.
-    if (m == "finish" && str_has_prefix(ow_base(x.fs, ow_path_ty(x, r, rc)), "ListBuf(")) { return ow_ov(ow_under(rv.es, ow_any(), 0, ListBuf()), true, f2); }
-    if (!ow_write_method(m)) { return ow_ov([], false, f2); }
-    return ow_ov(rv.es.concat(ow_under(av.es, ow_any(), 0, ListBuf())), rv.owned, f2);
+    if (m == "finish" && str_has_prefix(ow_base(x.fs, ow_path_ty(x, r, rc)), "ListBuf(")) { return ow_ov(ow_under(rv.es, ow_any(), 0, ListBuf()), !ow_has_twice(rv.es, 0), f2); }
+    // finish of a builder chain (a receiver that is no path): its entries.
+    if (m == "finish") { return ow_ov(ow_under(rv.es, ow_any(), 0, ListBuf()), false, f2); }
+    // Any other reading method: no entries, but a receiver holding an
+    // object twice passes that on (a slice may hold both).
+    if (!ow_write_method(m)) { return ow_ov(if (ow_has_twice(rv.es, 0)) { [ow_twice()] } else { [] }, false, f2); }
+    // The stored path's own location stays among the entries, moved or not.
+    List(OE) aid = if (x.g.ns[id].nk >= 2 && m != "remove" && m != "del") { ow_with_ident(x, r, kg_kid(x.g, id, x.g.ns[id].nk - 1), av) } else { av.es };
+    return ow_mark_twice(ow_ov(rv.es.concat(ow_under(aid, ow_any(), 0, ListBuf())), rv.owned, f2), dup || ow_has_twice(rv.es, 0) || ow_has_twice(av.es, 0));
+}
+
+// The stored value of write method call id (its last argument) against
+// what the receiver holds: its own location and its entries. A `with`
+// skips the slot it overwrites when its index has a concrete key.
+Bool ow_store_dup(OX x, ORS r, OS s, Int id, OP p, OV rv, OV av) {
+    Int n = x.g.ns[id].nk;
+    Str m = x.g.ns[id].text;
+    if (n < 2 || m == "remove" || m == "del") { return false; }
+    Int e = kg_kid(x.g, id, n - 1);
+    OP vp = ow_path(x, r, e);
+    // Every location the stored value reaches (concat: its elements and
+    // all under them), and a path's own location.
+    List(OLc) all = ow_ent_ls(ow_no_twice(av.es, 0, ListBuf()), 0, ListBuf());
+    List(OLc) ids = if (vp.b >= 0 && ow_trk(x, vp.ty)) { [ow_loc(vp.b, vp.path)].concat(ow_mem(av.f, vp.b, vp.path)).concat(all) } else { all };
+    List(OLc) held0 = ow_ent_ls(rv.es, 0, ListBuf());
+    List(OLc) held = if (p.b >= 0) { [ow_loc(p.b, p.path)].concat(held0) } else { held0 };
+    Int wk = if (m == "with" && p.b >= 0) { ow_with_key(x, r, id) } else { 0 - 1 };
+    OLc skip = if (wk >= 0) { ow_loc(p.b, ow_papp(p.path, ow_kstep(wk, false))) } else { ow_noloc() };
+    return ow_dup(ids, held, skip, 0);
 }
 
 OV ow_bexpr(OX x, ORS r, OS s, Int id, OF f) {

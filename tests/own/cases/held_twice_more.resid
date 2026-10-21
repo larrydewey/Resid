@@ -1,0 +1,108 @@
+// A record held twice inside one value (two fields, two list slots, a
+// builder, a map, nested, returned by a helper): a callee taking the
+// value as owned must not rewrite it under the other holder.
+type Var = { Int value; List(Int) cons; Int det; };
+type Inner = { Var r; Int k; };
+type Outer = { Inner x; Var y; Int n; };
+type Db = { List(Var) vs; Var extra; Int m; };
+type Two = { Var a; Var b; Int n; };
+
+Var bumpv(Var v, Int x) { return Var {.value = x, .cons = v.cons, .det = v.det}; }
+Var mkv(Int x) {
+    List(Int) c = [x];
+    return Var {.value = x, .cons = c, .det = 0};
+}
+
+// nested: x.r and y are one record
+Outer seto(Outer o, Int x) { return Outer {.x = Inner {.r = bumpv(o.x.r, x), .k = o.x.k}, .y = o.y, .n = o.n}; }
+Outer runo(Outer o, Int k) { if (k <= 0) { return o; } return runo(seto(o, k + 100), k - 1); }
+Outer mk_nested(Int x, Int k) {
+    Var r = mkv(x);
+    return runo(Outer {.x = Inner {.r = r, .k = 0}, .y = r, .n = 0}, k);
+}
+
+// a list slot and a field
+Db setd(Db d, Int x) {
+    Var v = d.vs[0];
+    return Db {.vs = d.vs.with(0, bumpv(v, x)), .extra = d.extra, .m = d.m};
+}
+Db rund(Db d, Int k) { if (k <= 0) { return d; } return rund(setd(d, k + 100), k - 1); }
+Db mk_slot_field(Int x, Int k) {
+    Var r = mkv(x);
+    List(Var) vs = [r];
+    return rund(Db {.vs = vs, .extra = r, .m = 0}, k);
+}
+
+// built by a helper that returns the sharing value
+Two seta(Two t, Int x) { return Two {.a = bumpv(t.a, x), .b = t.b, .n = t.n}; }
+Two run2(Two t, Int k) { if (k <= 0) { return t; } return run2(seta(t, k + 100), k - 1); }
+Two pair(Var r) { return Two {.a = r, .b = r, .n = 0}; }
+Two mk_helper(Int x, Int k) { return run2(pair(mkv(x)), k); }
+
+// the same record as two arguments
+Two both(Var a, Var b, Int x) { return Two {.a = bumpv(a, x), .b = b, .n = 0}; }
+Two mk_args(Int x) {
+    Var r = mkv(x);
+    return both(r, r, 101);
+}
+
+// a builder pushing one list element twice
+Db setv(Db d, Int i, Int x) {
+    Var v = d.vs[i];
+    return Db {.vs = d.vs.with(i, bumpv(v, x)), .extra = d.extra, .m = d.m};
+}
+Db runl(Db d, Int k) { if (k <= 0) { return d; } return runl(setv(d, 0, k + 100), k - 1); }
+Db mk_buf_elem(Int x, Int k) {
+    List(Var) src = [mkv(x)];
+    ListBuf(Var) b = ListBuf();
+    List(Var) vs = b.push(src[0]).push(src[0]).finish();
+    return runl(Db {.vs = vs, .extra = mkv(0), .m = 0}, k);
+}
+
+// a map holding one record under two keys
+Map(Int, Var) setm(Map(Int, Var) m, Int x) {
+    Var v = m.get(1) else { mkv(0) };
+    return m.insert(1, bumpv(v, x));
+}
+Map(Int, Var) runm(Map(Int, Var) m, Int k) { if (k <= 0) { return m; } return runm(setm(m, k + 100), k - 1); }
+Map(Int, Var) mk_map(Int x, Int k) {
+    Var r = mkv(x);
+    Map(Int, Var) m = {};
+    return runm(m.insert(1, r).insert(2, r), k);
+}
+
+// deep: a.x.r is b, the inner literal written inline or bound first
+type Deep = { Var a; Inner b; Int n; };
+Deep setdp(Deep t, Int x) { return Deep {.a = bumpv(t.a, x), .b = t.b, .n = t.n}; }
+Deep rundp(Deep t, Int k) { if (k <= 0) { return t; } return rundp(setdp(t, k + 100), k - 1); }
+Deep mk_deep(Int x, Int k) {
+    Var r = mkv(x);
+    return rundp(Deep {.a = r, .b = Inner {.r = r, .k = 0}, .n = 0}, k);
+}
+Deep mk_deep_bound(Int x, Int k) {
+    Var r = mkv(x);
+    Inner w = Inner {.r = r, .k = 0};
+    return rundp(Deep {.a = r, .b = w, .n = 0}, k);
+}
+
+Int main() {
+    Outer o = mk_nested(rt 10, rt 3);
+    println(f"nested {o.x.r.value} {o.y.value}");
+    Db d = mk_slot_field(rt 10, rt 3);
+    println(f"slotfield {d.vs[0].value} {d.extra.value}");
+    Two h = mk_helper(rt 10, rt 3);
+    println(f"helper {h.a.value} {h.b.value}");
+    Two a = mk_args(rt 10);
+    println(f"args {a.a.value} {a.b.value}");
+    Db e = mk_buf_elem(rt 10, rt 3);
+    println(f"bufelem {e.vs[0].value} {e.vs[1].value}");
+    Map(Int, Var) m = mk_map(rt 10, rt 3);
+    Var m1 = m.get(1) else { mkv(0) };
+    Var m2 = m.get(2) else { mkv(0) };
+    println(f"map {m1.value} {m2.value}");
+    Deep dp = mk_deep(rt 10, rt 3);
+    println(f"deep {dp.a.value} {dp.b.r.value}");
+    Deep db = mk_deep_bound(rt 10, rt 3);
+    println(f"deepbound {db.a.value} {db.b.r.value}");
+    return 0;
+}

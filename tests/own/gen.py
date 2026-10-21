@@ -21,6 +21,7 @@ TYPES = {
     "Pc": [("a", "Pa"), ("n", "Int")],
     "Pd": [("ps", "List(Pa)"), ("k", "Int")],
     "Pe": [("ls", "List(List(Int))"), ("k", "Int")],
+    "Pf": [("cs", "List(Pc)"), ("u", "Pc"), ("k", "Int")],
 }
 REC = list(TYPES)
 
@@ -47,7 +48,7 @@ def lit(t, depth=0):
 def checksum(t, e):
     """An Int expression summarising every scalar reachable from e."""
     if t == "Int":
-        return e
+        return f"({e}) % 1000003"
     if t == "List(Int)":
         return f"lsum({e}, 0, 0)"
     if t == "List(Pa)":
@@ -56,21 +57,21 @@ def checksum(t, e):
         return f"lpc({e}, 0, 0)"
     if t == "List(List(Int))":
         return f"lll({e}, 0, 0)"
-    return " + ".join(f"({checksum(ft, e + '.' + f)}) * {i + 2}" for i, (f, ft) in enumerate(fields(t)))
+    return " + ".join(f"({checksum(ft, e + '.' + f)}) % 1000003 * {i + 2}" for i, (f, ft) in enumerate(fields(t)))
 
 
 HELPERS = """
 Int lsum(List(Int) xs, Int i, Int acc) {
     if (i >= xs.len()) { return acc; }
-    return lsum(xs, i + 1, acc * 3 + xs[i]);
+    return lsum(xs, i + 1, (acc * 3 + xs[i] % 1000003) % 1000003);
 }
 Int lpa(List(Pa) xs, Int i, Int acc) {
     if (i >= xs.len()) { return acc; }
-    return lpa(xs, i + 1, acc * 5 + xs[i].x * 7 + xs[i].y);
+    return lpa(xs, i + 1, (acc * 5 + xs[i].x % 1000003 * 7 + xs[i].y % 1000003) % 1000003);
 }
 Int lll(List(List(Int)) xs, Int i, Int acc) {
     if (i >= xs.len()) { return acc; }
-    return lll(xs, i + 1, acc * 3 + lsum(xs[i], 0, 0));
+    return lll(xs, i + 1, (acc * 3 + lsum(xs[i], 0, 0)) % 1000003);
 }
 // Lists written through the records and slots that hold them.
 Pb pb_seti(Pb b, Int i, Int v) {
@@ -119,7 +120,7 @@ List(Int) lrange(Int i, Int n, ListBuf(Int) acc) {
 }
 Int lpc(List(Pc) xs, Int i, Int acc) {
     if (i >= xs.len()) { return acc; }
-    return lpc(xs, i + 1, acc * 5 + xs[i].a.x * 7 + xs[i].a.y * 3 + xs[i].n);
+    return lpc(xs, i + 1, (acc * 5 + xs[i].a.x % 1000003 * 7 + xs[i].a.y % 1000003 * 3 + xs[i].n % 1000003) % 1000003);
 }
 Pa pa_bump(Pa p) { return Pa {.x = p.x + 1, .y = p.y}; }
 Pa pa_keep(Pa p) { return p; }
@@ -199,6 +200,46 @@ Pc pc_nest(Pc c, Int n) {
     return pc_nest(pc_spin(c, 300), n - 1);
 }
 Pa pa_cond(Pa p, Pa q) { return if (p.x > q.x) { pa_bump(p) } else { Pa {.x = q.x, .y = p.y} }; }
+// A record held twice inside one value (two slots, a slot and a field):
+// rewriting it through one holder must not show through the other.
+Pc pc_with(Pc c, Int v) { return Pc {.a = c.a, .n = v}; }
+Pf pf_set(Pf f, Int i, Int v) {
+    if (f.cs.len() == 0) { return f; }
+    Int j = i % f.cs.len();
+    Pc c = f.cs[j];
+    return Pf {.cs = f.cs.with(j, pc_with(c, c.n + v)), .u = f.u, .k = f.k};
+}
+Pf pf_loop(Pf f, Int i, Int n) {
+    if (n <= 0) { return f; }
+    return pf_loop(pf_set(f, i, n), i + 1, n - 1);
+}
+Pf pf_setu(Pf f, Int v) { return Pf {.cs = f.cs, .u = pc_with(f.u, f.u.n + v), .k = f.k}; }
+Pf pf_twice(Pc c, Int k) { return Pf {.cs = [c, c], .u = c, .k = k}; }
+Pf pf_cat(Pc c, Pc d, Int k) {
+    List(Pc) none = [];
+    return Pf {.cs = none.concat([c]).concat([d]).concat([c]), .u = d, .k = k};
+}
+Pf pf_buf(Pc c, Int k) {
+    ListBuf(Pc) b = ListBuf();
+    return Pf {.cs = b.push(c).push(c).finish(), .u = c, .k = k};
+}
+// The same shapes built and consumed inside one call: the value is owned
+// from the start, so the writes may run in place.
+Int pf_sum(Pf f) { return lpc(f.cs, 0, 0) * 3 + f.u.n % 1000003 * 7 + f.u.a.x % 1000003 + f.k % 1000003; }
+Pc pc_new(Int i) { return Pc {.a = Pa {.x = i, .y = i + 1}, .n = i * 2}; }
+Int pf_fresh_twice(Int i) { return pf_sum(pf_loop(pf_twice(pc_new(i), i), i, 3)); }
+Int pf_fresh_cat(Int i) { return pf_sum(pf_loop(pf_cat(pc_new(i), pc_new(i + 1), i), i, 4)); }
+Int pf_fresh_buf(Int i) { return pf_sum(pf_setu(pf_loop(pf_buf(pc_new(i), i), i, 3), i)); }
+Int pf_fresh_copy(Int i) {
+    Pc a = pc_new(i);
+    Pc b = pc_new(i + 5);
+    List(Pc) cs = [a, b];
+    return pf_sum(pf_loop(pf_copy(Pf {.cs = cs, .u = pc_new(0), .k = i}, i), i, 3));
+}
+Pf pf_copy(Pf f, Int i) {
+    if (f.cs.len() < 2) { return f; }
+    return Pf {.cs = f.cs.with((i + 1) % f.cs.len(), f.cs[i % f.cs.len()]), .u = f.cs[i % f.cs.len()], .k = f.k};
+}
 """
 
 # Operations: (result type, template over earlier bindings of given types).
@@ -254,6 +295,20 @@ OPS = [
     ("List(List(Int))", ["Pe"], "{0}.ls"),
     ("Pe", ["List(List(Int))"], "Pe {{.ls = {0}, .k = {i}}}"),
     ("Pa", ["List(Pc)"], "{0}[{i} % {0}.len()].a"),
+    ("Int", [], "pf_fresh_twice(rt {i})"),
+    ("Int", [], "pf_fresh_cat(rt {i})"),
+    ("Int", [], "pf_fresh_buf(rt {i})"),
+    ("Int", [], "pf_fresh_copy(rt {i})"),
+    ("Pf", ["Pc"], "pf_twice({0}, {i})"),
+    ("Pf", ["Pc", "Pc"], "pf_cat({0}, {1}, {i})"),
+    ("Pf", ["Pc"], "pf_buf({0}, {i})"),
+    ("Pf", ["Pf"], "pf_copy({0}, {i})"),
+    ("Pf", ["Pf"], "pf_loop({0}, {i}, 3)"),
+    ("Pf", ["Pf"], "pf_set({0}, {i}, 9)"),
+    ("Pf", ["Pf"], "pf_setu({0}, {i})"),
+    ("Pf", ["List(Pc)", "Pc"], "Pf {{.cs = {0}, .u = {1}, .k = {i}}}"),
+    ("Pc", ["Pf"], "{0}.u"),
+    ("List(Pc)", ["Pf"], "{0}.cs"),
 ]
 
 
