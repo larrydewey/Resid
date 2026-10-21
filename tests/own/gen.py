@@ -236,6 +236,14 @@ Int pf_fresh_copy(Int i) {
     List(Pc) cs = [a, b];
     return pf_sum(pf_loop(pf_copy(Pf {.cs = cs, .u = pc_new(0), .k = i}, i), i, 3));
 }
+// A record of the caller's value, stored into a fresh one and rewritten
+// there: the caller's copy must not change.
+Int pf_share(Pf f, Int i) {
+    if (f.cs.len() == 0) { return 0; }
+    Pc c = f.cs[0];
+    List(Pc) cs = [c];
+    return pf_sum(pf_loop(Pf {.cs = cs, .u = pc_new(i), .k = i}, i, 3));
+}
 Pf pf_copy(Pf f, Int i) {
     if (f.cs.len() < 2) { return f; }
     return Pf {.cs = f.cs.with((i + 1) % f.cs.len(), f.cs[i % f.cs.len()]), .u = f.cs[i % f.cs.len()], .k = f.k};
@@ -299,6 +307,7 @@ OPS = [
     ("Int", [], "pf_fresh_cat(rt {i})"),
     ("Int", [], "pf_fresh_buf(rt {i})"),
     ("Int", [], "pf_fresh_copy(rt {i})"),
+    ("Int", ["Pf"], "pf_share({0}, rt {i})"),
     ("Pf", ["Pc"], "pf_twice({0}, {i})"),
     ("Pf", ["Pc", "Pc"], "pf_cat({0}, {1}, {i})"),
     ("Pf", ["Pc"], "pf_buf({0}, {i})"),

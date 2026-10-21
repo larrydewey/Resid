@@ -660,6 +660,46 @@ List(OLc) ow_ident(OX x, ORS r, Int e0, OV v) {
     return [ow_loc(p.b, p.path)].concat(ow_mem(v.f, p.b, p.path)).concat(all);
 }
 
+// A boxed record stored into a container must be given to it: a path
+// moved (its root owned, nothing else live holding it), or a value that
+// is owned (a fresh literal or call result). Otherwise someone else (a
+// non-owned parameter, a shared result) still holds the record, and a
+// callee taking the container as owned would rewrite it under them.
+// skip: the slot a `with` overwrites; a value reaching only locations at
+// or under it (a write-back of that slot's element) is given.
+Bool ow_given_rec(OX x, ORS r, Int e0, OV v, OLc skip) {
+    Int e = if (x.g.ns[e0].kind == "finit") { kg_kid(x.g, e0, x.g.ns[e0].nk - 1) } else { e0 };
+    OP p = ow_path(x, r, e);
+    Bool moved = if (p.b >= 0) { ow_rule(x, v.f, e, p.b, p.path) == "" } else { v.owned };
+    if (moved) { return true; }
+    if (skip.r < 0) { return false; }
+    // Judged by the locations outside this function's locals (a local's
+    // own location stands for what its alias entries name): at least one,
+    // and all at or under the slot.
+    List(OLc) ids = ow_nonlocal(x, ow_ident(x, r, e, v), skip.r, 0, ListBuf());
+    return ids.len() > 0 && ow_all_under(ids, skip, 0);
+}
+
+// ls without the locations rooted at a local other than the receiver
+// root rr.
+List(OLc) ow_nonlocal(OX x, List(OLc) ls, Int rr, Int i, ListBuf(OLc) acc) {
+    if (i >= ls.len()) { return acc.finish(); }
+    Bool keep = ls[i].r >= 0 && (ls[i].r == rr || x.g.ns[ls[i].r].kind == "param");
+    return ow_nonlocal_n(x, ls, rr, i, if (keep) { acc.push(ls[i]) } else { acc });
+}
+
+List(OLc) ow_nonlocal_n(OX x, List(OLc) ls, Int rr, Int i, ListBuf(OLc) acc) { return ow_nonlocal(x, ls, rr, i + 1, acc); }
+
+Bool ow_all_under(List(OLc) ls, OLc skip, Int i) {
+    if (i >= ls.len()) { return true; }
+    OLc l = ls[i];
+    Bool under = l.r == skip.r && ow_pprefix(l.l, skip.l) && ow_slot_exact(l.l, ow_pn(skip.l));
+    if (!under) { return false; }
+    return ow_all_under_n(ls, skip, i);
+}
+
+Bool ow_all_under_n(List(OLc) ls, OLc skip, Int i) { return ow_all_under(ls, skip, i + 1); }
+
 // Storing a value whose identity (ids) overlaps a location the container
 // already holds (held), except the slot `skip` the store overwrites (a
 // location with one concrete key; -1 for none): the container then holds
@@ -903,6 +943,15 @@ OV ow_branches(OX x, ORS r, OS s, Int id, Int i, OV acc) {
 
 OV ow_branches_n(OX x, ORS r, OS s, Int id, Int i, OV acc) { return ow_branches(x, r, s, id, i + 1, acc); }
 
+// ow_branches over kids i..n-1.
+OV ow_branches_lim(OX x, ORS r, OS s, Int id, Int i, Int n, OV acc) {
+    if (i >= n) { return acc; }
+    OV v = ow_val(x, r, s, kg_kid(x.g, id, i), acc.f);
+    return ow_branches_lim_n(x, r, s, id, i, n, ow_ovc(acc.es.concat(v.es), acc.owned && v.owned, acc.cur && v.cur, v.f));
+}
+
+OV ow_branches_lim_n(OX x, ORS r, OS s, Int id, Int i, Int n, OV acc) { return ow_branches_lim(x, r, s, id, i + 1, n, acc); }
+
 // A struct literal: fields under ".f". A field read from a binder of the
 // literal's own type, dead after the literal, makes it a rebuild of that
 // binder (decided in the backward pass; recorded here as a candidate).
@@ -919,7 +968,7 @@ OV ow_struct(OX x, ORS r, OS s, Int id, Int i, OV acc) {
     Int e = kg_kid(x.g, fi, x.g.ns[fi].nk - 1);
     OV v = ow_val(x, r, s, e, acc.f);
     Bool rec = ow_boxed_rec(x, x.t.fty.get(ow_base(x.fs, x.g.ns[id].text) + "." + x.g.ns[fi].text) else { "" });
-    Bool dup = ow_has_twice(v.es, 0) || (rec && ow_dup(ow_ident(x, r, e, v), ow_ent_ls(acc.es, 0, ListBuf()), ow_noloc(), 0));
+    Bool dup = ow_has_twice(v.es, 0) || (rec && (!ow_given_rec(x, r, e, v, ow_noloc()) || ow_dup(ow_ident(x, r, e, v), ow_ent_ls(acc.es, 0, ListBuf()), ow_noloc(), 0)));
     return ow_struct_n(x, r, s, id, i, ow_mark_twice(ow_ov(acc.es.concat(ow_under(ow_with_ident(x, r, e, v), ow_fid(x.t, x.g.ns[fi].text), 0, ListBuf())), acc.owned, v.f), dup));
 }
 
@@ -958,7 +1007,7 @@ OV ow_list(OX x, ORS r, OS s, Int id, Int i, OV acc) {
     OV v = ow_val(x, r, s, e, acc.f);
     // A list of inline records stores copies of their words.
     Bool rec = ow_boxed_rec(x, ow_expr_ty(x, r, e));
-    Bool dup = ow_has_twice(v.es, 0) || (rec && ow_dup(ow_ident(x, r, e, v), ow_ent_ls(acc.es, 0, ListBuf()), ow_noloc(), 0));
+    Bool dup = ow_has_twice(v.es, 0) || (rec && (!ow_given_rec(x, r, e, v, ow_noloc()) || ow_dup(ow_ident(x, r, e, v), ow_ent_ls(acc.es, 0, ListBuf()), ow_noloc(), 0)));
     return ow_list_n(x, r, s, id, i, ow_mark_twice(ow_ov(acc.es.concat(ow_under(ow_with_ident(x, r, e, v), ow_any(), 0, ListBuf())), acc.owned, v.f), dup));
 }
 
@@ -1023,7 +1072,10 @@ OV ow_args(OX x, ORS r, OS s, Int id, Int i, Str cal, Bool user, OV acc) {
     // parameter's fields): fine unless something live still reaches them.
     Bool fresh_ok = wr && p.b < 0 && v.owned && ow_trk(x, ow_arg_ty(x, cal, i)) && (v.es.len() == 0 || ws == ",^," || ow_rule_tmp(x, v.f, e, ow_ent_ls(v.es, 0, ListBuf()), ws, id) == "");
     OF ft = if (fresh_ok && v.es.len() > 0) { ow_hz_note(x, v.f, x.after.get(e) else { x.after.get(id) else { ow_nols() } }, ow_cands(v.f, ow_ent_ls(v.es, 0, ListBuf()), 0, ow_noim())) } else { v.f };
-    OF f1 = if (fresh_ok) { ow_ev_add(ft, OEv {.node = e, .kind = "argfresh", .b = -1, .path = 0, .cal = cal, .arg = i, .call = id}) } else { ft };
+    OF f1a = if (fresh_ok) { ow_ev_add(ft, OEv {.node = e, .kind = "argfresh", .b = -1, .path = 0, .cal = cal, .arg = i, .call = id}) } else { ft };
+    // The callee writes the temporary: a part of it that lies in one of
+    // this function's parameters is written too (ow_wr_locs charges it).
+    OF f1 = if (fresh_ok) { ow_parts_of_params(x, f1a, v.es, e, cal, i, id, 0) } else { f1a };
     // Any other argument at a writing parameter (an untyped binder, a
     // shared temporary, ...) is a call site that refuses ownership.
     Bool bad = wr && !w && !fresh_ok;
@@ -1043,6 +1095,18 @@ OV ow_args(OX x, ORS r, OS s, Int id, Int i, Str cal, Bool user, OV acc) {
     Bool given = if (tp) { mv } else { v.owned };
     return ow_args_n(x, r, s, id, i, cal, user, ow_ov(acc.es.concat(kes), acc.owned && (!kept || given), f2c));
 }
+
+// One "argpart" event per entry of a fresh argument's value that lies in a
+// parameter: no verdict, only the parameter's writes (ow_wr_locs).
+OF ow_parts_of_params(OX x, OF f, List(OE) es, Int e, Str cal, Int arg, Int call, Int i) {
+    if (i >= es.len()) { return f; }
+    OE en = es[i];
+    Bool par = en.r >= 0 && x.g.ns[en.r].kind == "param";
+    OF f1 = if (par) { ow_ev_add(f, OEv {.node = e, .kind = "argpart", .b = en.r, .path = en.l, .cal = cal, .arg = arg, .call = call}) } else { f };
+    return ow_parts_of_params_n(x, f1, es, e, cal, arg, call, i);
+}
+
+OF ow_parts_of_params_n(OX x, OF f, List(OE) es, Int e, Str cal, Int arg, Int call, Int i) { return ow_parts_of_params(x, f, es, e, cal, arg, call, i + 1); }
 
 OV ow_args_n(OX x, ORS r, OS s, Int id, Int i, Str cal, Bool user, OV acc) { return ow_args(x, r, s, id, i + 1, cal, user, acc); }
 
@@ -1069,14 +1133,20 @@ OV ow_mcall(OX x, ORS r, OS s, Int id, OF f) {
     Int rc = kg_kid(x.g, id, 0);
     OP p = ow_path(x, r, rc);
     OV rv = ow_val(x, r, s, rc, f);
-    OV av = ow_branches(x, r, s, id, 1, ow_ov([], true, rv.f));
+    // A write method's stored value (its last argument) is evaluated on its
+    // own, so its ownership is known (ow_store_dup).
+    Int nk = x.g.ns[id].nk;
+    Bool sv = ow_write_method(m) && nk >= 2;
+    OV av0 = ow_branches_lim(x, r, s, id, 1, if (sv) { nk - 1 } else { nk }, ow_ov([], true, rv.f));
+    OV lv = if (sv) { ow_val(x, r, s, kg_kid(x.g, id, nk - 1), av0.f) } else { av0 };
+    OV av = if (sv) { ow_ovc(av0.es.concat(lv.es), av0.owned && lv.owned, av0.cur && lv.cur, lv.f) } else { av0 };
     // A write method storing an object the receiver already holds (or one
     // of the stored values already holds twice) makes a value holding it
     // twice; `with` overwriting the slot the object came from does not.
     Str sty = ow_store_ty(x, m, ow_base(x.fs, p.ty));
     Str ety = if (sty != "") { if (m == "concat") { ow_elem_ty(x.fs, sty) } else { sty } } else { ow_stored_ety(x, r, id, m) };
     Bool rec = ow_boxed_rec(x, ety);
-    Bool dup = ow_write_method(m) && rec && ow_store_dup(x, r, s, id, p, rv, av);
+    Bool dup = ow_write_method(m) && rec && ow_store_dup(x, r, s, id, p, rv, av, lv);
     Bool w = ow_write_method(m) && p.b >= 0 && ow_trk(x, p.ty);
     OF f2 = if (w) { ow_ev_add(av.f, OEv {.node = id, .kind = "with", .b = p.b, .path = p.path, .cal = m, .arg = 0, .call = id}) } else { av.f };
     // A builder's finish hands over a new list it alone held.
@@ -1094,7 +1164,7 @@ OV ow_mcall(OX x, ORS r, OS s, Int id, OF f) {
 // The stored value of write method call id (its last argument) against
 // what the receiver holds: its own location and its entries. A `with`
 // skips the slot it overwrites when its index has a concrete key.
-Bool ow_store_dup(OX x, ORS r, OS s, Int id, OP p, OV rv, OV av) {
+Bool ow_store_dup(OX x, ORS r, OS s, Int id, OP p, OV rv, OV av, OV lv) {
     Int n = x.g.ns[id].nk;
     Str m = x.g.ns[id].text;
     if (n < 2 || m == "remove" || m == "del") { return false; }
@@ -1108,7 +1178,9 @@ Bool ow_store_dup(OX x, ORS r, OS s, Int id, OP p, OV rv, OV av) {
     List(OLc) held = if (p.b >= 0) { [ow_loc(p.b, p.path)].concat(held0) } else { held0 };
     Int wk = if (m == "with" && p.b >= 0) { ow_with_key(x, r, id) } else { 0 - 1 };
     OLc skip = if (wk >= 0) { ow_loc(p.b, ow_papp(p.path, ow_kstep(wk, false))) } else { ow_noloc() };
-    return ow_dup(ids, held, skip, 0);
+    // The stored value alone (not a list concat copies elements from).
+    Bool given = m == "concat" || ow_given_rec(x, r, e, lv, skip);
+    return !given || ow_dup(ids, held, skip, 0);
 }
 
 OV ow_bexpr(OX x, ORS r, OS s, Int id, OF f) {
@@ -3070,7 +3142,10 @@ OWA ow_wr_locs(OFn o, OS s, OEv e, Map(Int, Int) pix, List(OLc) ls, Int j, OWA a
     Bool hit = pix.contains(r);
     Int rest = ls[j].l;
     Str cur = acc.ws.get(r) else { "," };
-    Str w = if (!hit || cur == "*") { cur } else { if (rest == 0) { if (e.kind == "arg") { ow_rd_merge(cur, s.writes.get(ow_fk(o.x, e.cal, e.arg)) else { "," }) } else { ow_rd_add(cur, "^") } } else { ow_rd_add(cur, ow_first_step(rest)) } };
+    // argpart: the callee may write anything in the part (its writes are
+    // relative to the temporary, not to the parameter).
+    Bool part = e.kind == "argpart";
+    Str w = if (!hit || cur == "*") { cur } else { if (rest == 0) { if (part) { "*" } else { if (e.kind == "arg") { ow_rd_merge(cur, s.writes.get(ow_fk(o.x, e.cal, e.arg)) else { "," }) } else { ow_rd_add(cur, "^") } } } else { ow_rd_add(cur, ow_first_step(rest)) } };
     OWA a1 = if (hit) { OWA {.need = acc.need.insert(r, 1), .ws = acc.ws.insert(r, w)} } else { acc };
     return ow_wr_locs_n(o, s, e, pix, ls, j, a1);
 }

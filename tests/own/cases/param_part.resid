@@ -1,0 +1,30 @@
+// A record of the caller's (a parameter's part) stored into a fresh value
+// handed on as owned must not be rewritten in place under the caller.
+type Var = { Int value; List(Int) cons; Int det; };
+type Db = { List(Var) vs; Int m; };
+Var bumpv(Var v, Int x) { return Var {.value = x, .cons = v.cons, .det = v.det}; }
+Var mkv(Int x) {
+    List(Int) c = [x];
+    return Var {.value = x, .cons = c, .det = 0};
+}
+Db setv(Db d, Int i, Int x) {
+    Var v = d.vs[i];
+    return Db {.vs = d.vs.with(i, bumpv(v, x)), .m = d.m};
+}
+Db runl(Db d, Int k) { if (k <= 0) { return d; } return runl(setv(d, 0, k + 100), k - 1); }
+// d shares d0's list (and so its records); d0 is the caller's
+Db share(Db d0, Int k) { return runl(Db {.vs = d0.vs, .m = 0}, k); }
+Db share_field(Db d0, Int k) {
+    Var r = d0.vs[0];
+    List(Var) vs = [r];
+    return runl(Db {.vs = vs, .m = 0}, k);
+}
+Int main() {
+    List(Var) vs = [mkv(rt 10), mkv(rt 20)];
+    Db d0 = Db {.vs = vs, .m = 0};
+    Db d1 = share(d0, rt 3);
+    println(f"share {d1.vs[0].value} d0={d0.vs[0].value}");
+    Db d2 = share_field(d0, rt 3);
+    println(f"field {d2.vs[0].value} d0={d0.vs[0].value}");
+    return 0;
+}
