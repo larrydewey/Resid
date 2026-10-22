@@ -4618,9 +4618,11 @@ GT lw_with_index(LW w, Int id, List(Str) env, GT c) {
 }
 
 // The `resid.rec.evac.T` of a record element type that has one (named as
-// lr_rec_fns emits them), else "".
+// lr_rec_fns emits them), resid_mv_list for a list of words, else "".
 Str lw_with_mover(Funcs fs, Str ety) {
     Str t = ct_base_of(fs.ctn, fs.ctb, strip_owned_cg(ety));
+    // A list of words moves as a map value of kind 5 does.
+    if (lr_list_word(t)) { return "resid_mv_list"; }
     Int si = struct_index(fs, t);
     if (si < 0 || fs.stn[si] != t || !lr_rec_ok(fs, t, [])) { return ""; }
     return lr_rec_fn(t);

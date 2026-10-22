@@ -1,0 +1,55 @@
+// Lists of lists written in place: element lists built in a younger
+// region (inside loops, under allocation pressure) must outlive it, and
+// an element shared with another holder must not change through either.
+type Tab = { List(List(Int)) rows; List(List(Str)) names; Int n; };
+
+List(List(Int)) fill_rows(Int n, Int i, ListBuf(List(Int)) acc) {
+    if (i >= n) { return acc.finish(); }
+    List(Int) none = [];
+    return fill_rows(n, i + 1, acc.push(none));
+}
+List(List(Str)) fill_names(Int n, Int i, ListBuf(List(Str)) acc) {
+    if (i >= n) { return acc.finish(); }
+    List(Str) none = [];
+    return fill_names(n, i + 1, acc.push(none));
+}
+// Each step makes garbage and a new element list, then writes it back.
+Tab step(Tab t, Int k) {
+    Int w = k % t.rows.len();
+    List(Int) junk = [k, k + 1, k + 2, k + 3];
+    List(Int) row = t.rows[w].concat([k, junk[2] % 5]);
+    Str s = f"n{k}";
+    return Tab {.rows = t.rows.with(w, row), .names = t.names.with(w, t.names[w].concat([s])), .n = t.n + junk[0] % 3};
+}
+Tab run(Tab t, Int k, Int n) {
+    if (k >= n) { return t; }
+    return run(step(t, k), k + 1, n);
+}
+Int rsum(List(List(Int)) rs, Int i, Int acc) {
+    if (i >= rs.len()) { return acc; }
+    return rsum(rs, i + 1, (acc * 7 + rs[i].len() * 13 + (if (rs[i].len() > 0) { rs[i][rs[i].len() - 1] } else { 0 })) % 1000003);
+}
+Int nsum(List(List(Str)) ns, Int i, Int acc) {
+    if (i >= ns.len()) { return acc; }
+    return nsum(ns, i + 1, (acc * 5 + ns[i].len() + (if (ns[i].len() > 0) { str_len(ns[i][0]) } else { 0 })) % 1000003);
+}
+// Rounds of runs, each in a loop of its own (a region per round).
+Tab rounds(Tab t, Int r) {
+    if (r <= 0) { return t; }
+    return rounds(run(t, r * 1000, r * 1000 + 700), r - 1);
+}
+// One element shared with an outside holder before in-place writes.
+Int shared(Int n) {
+    Tab t = Tab {.rows = fill_rows(n, 0, ListBuf()), .names = fill_names(n, 0, ListBuf()), .n = 0};
+    Tab t1 = run(t, 0, 50);
+    List(Int) keep = t1.rows[3];
+    Tab t2 = run(t1, 50, 400);
+    return keep.len() * 1000 + rsum(t2.rows, 0, 0) % 1000;
+}
+Int main() {
+    Tab t = Tab {.rows = fill_rows(rt 300, 0, ListBuf()), .names = fill_names(rt 300, 0, ListBuf()), .n = 0};
+    Tab r = rounds(t, rt 6);
+    println(f"rows {rsum(r.rows, 0, 0)} names {nsum(r.names, 0, 0)} n {r.n}");
+    println(f"shared {shared(rt 300)}");
+    return 0;
+}
