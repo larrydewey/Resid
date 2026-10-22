@@ -589,3 +589,17 @@ Doing it in the analysis needs alias entries that say whether their path
 is exact (so a parameter's own rewrite can be narrowed safely) and a
 hole for a field the callee keeps without reading, judged against the
 result binder's later uses.
+
+Soundness concern found while trying the Richards design (not a known
+miscompile): `ow_sub_ents` extends an entry's location by the rest of
+the read path even when the entry is coarse (its path folded to three
+steps, or merged), which invents locations: CD's `next.t`, DeltaBlue's
+`d.cs.cs`, and in a five-deep record `held` listed as pointing into
+`lf.lf` instead of `lf.xs`, so the write of `lf.xs` was judged in place
+with `held` live. Every attempt to turn this into wrong output was
+caught at run time (a frozen list copies on write), but the static
+verdict is wrong. An exactness bit on entries (extend only exact ones)
+fixes it and makes the `^` narrowing sound (CD correct), at +20%
+DeltaBlue instructions: some of DeltaBlue's chains rest on the invented
+locations. Next: the exactness bit, then recover DeltaBlue's precision
+from exact sources (patch: scratch own.flagC.resid of this round).
