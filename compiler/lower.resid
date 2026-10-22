@@ -1469,6 +1469,17 @@ GT lw_mcall(LW w, Int id, List(Str) env, GT c) {
         if (oarg.err != "") { return oarg; }
         Int ot = oarg.tmp + 1;
         Str oreg = f"%t{ot}";
+        // `xs.concat([x])` on raw slots: the word is pushed, no list built.
+        Int opk = if (crec) { 0 } else { lst_raw(elem_type(strip_owned_cg(base.ty))) };
+        Int onl = oarg.lines.len();
+        Str oone = oarg.val + " = call ptr @resid_list_new(i64 1, ptr ";
+        Bool osingle = opk > 0 && onl > 0 && str_starts_with(oarg.lines[onl - 1], oone);
+        if (osingle) {
+            Str orest = str_slice(oarg.lines[onl - 1], str_len(oone), str_len(oarg.lines[onl - 1]));
+            Str osla = str_slice(orest, 0, str_find(orest, ", ptr "));
+            List(Str) ol = oarg.lines[0..onl - 1].concat([oreg + "e = load ptr, ptr " + osla, oreg + " = call ptr @resid_list_push_own(ptr " + base.val + ", ptr " + oreg + f"e, i64 {opk})"]);
+            return lw_step(oarg, oreg, base.ty, ol, ot);
+        }
         return lw_step(oarg, oreg, base.ty, oarg.lines.concat([oreg + " = call ptr @resid_list_concat_own(ptr " + base.val + ", i8 1, ptr " + oarg.val + ")"]), ot);
     }
     // A list of records appends in place too, moving younger records by
@@ -5364,7 +5375,7 @@ Bool lr_call_allocs(LW w, Str f, Str l) {
     if (f == "resid_list_freeze") { return false; }
     // Appending a scalar to a list builds what the loop carries on (moved
     // out at the back edge anyway), not garbage.
-    if (f == "resid_list_push" || f == "resid_list_push_k" || f == "resid_box_i64" || f == "resid_box_f64" || f == "resid_box_bool") { return false; }
+    if (f == "resid_list_push" || f == "resid_list_push_k" || f == "resid_list_push_own" || f == "resid_box_i64" || f == "resid_box_f64" || f == "resid_box_bool") { return false; }
     return !lo_has_str(["llvm.sqrt.f64", "resid_char_at_n", "resid_overflow_check", "resid_div_check", "resid_conv_check", "str_char_at", "str_len", "resid_str_eq", "resid_list_len", "resid_list_elems", "resid_list_get", "resid_list_get_nc", "resid_list_get_sh", "resid_list_get_own", "resid_list_share_f", "resid_list_get_v", "resid_list_vdata", "resid_list_vlen", "resid_list_rec_at", "resid_map_find", "resid_map_has", "resid_map_len", "resid_set_len", "resid_map_freeze", "resid_rec_share", "resid_scope_push", "resid_scope_pop", "str_starts_with", "str_ends_with", "str_contains", "str_index_of", "resid_index_abort", "resid_abort", "abs_i64", "min_i64", "max_i64", "clamp_i64", "print", "println", "eprintln"], f, 0);
 }
 

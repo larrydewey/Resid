@@ -2219,6 +2219,35 @@ pub Int rt_list_concat_own(Int a, Int owned, Int b0) {
     return sync_elems(st64(t, n + m) * 0 + t);
 }
 
+// rt_list_concat_own of a one-element literal on raw slots of kind k
+// (`xs.concat([x])`): the word goes into the transient buffer directly,
+// no list built.
+@export("resid_list_push_own", "ptr(ptr,ptr,i64)")
+@inline
+pub Int rt_list_push_own(Int a, Int w, Int k) {
+    if (ltransient(a)) {
+        Int f = lroot(a);
+        Int n = lcount(a);
+        if (n > 0 && n < ld64(f + 8)) {
+            _ = st64(f + 24 + n * 8, w) + st64(f, n + 1) + st64(f + 16, n + 1);
+            return sync_elems(st64(a, n + 1) * 0 + a);
+        }
+    }
+    return list_push_own_slow(a, w, k);
+}
+
+@noinline
+Int list_push_own_slow(Int a, Int w, Int k) {
+    if (no_thaw(a)) { return mark_frozen(rt_list_push_k(a, w, k)); }
+    Int n = lcount(a);
+    Int t = if (ltransient(a)) { a } else { with_fresh(a, max(1, n)) };
+    _ = if (n == 0 && !raw_kind(ltype(a))) { st64(t + 24, k) } else { 0 };
+    Int f0 = lroot(t);
+    Int f = if (n + 1 <= ld64(f0 + 8)) { f0 } else { with_grow(t, f0, n, n + 1) };
+    _ = st64(f + 24 + n * 8, w) + st64(f, n + 1) + st64(f + 16, n + 1);
+    return sync_elems(st64(t, n + 1) * 0 + t);
+}
+
 // Raw slots are values: no barrier.
 Int cat_raw(Int f, Int b, Int n, Int m) {
     if (lflat(b)) { return mcopy(f + 24 + n * 8, lroot(b) + 24, m * 8); }

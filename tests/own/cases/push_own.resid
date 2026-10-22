@@ -1,0 +1,57 @@
+// Owned one-element appends on raw slots: empty lists, growth past the
+// buffer, frozen and shared receivers, and Bool and Float elements.
+type Acc = { List(Int) xs; List(Bool) bs; List(Float) fs; Int n; };
+
+Acc add(Acc a, Int k) {
+    return Acc {.xs = a.xs.concat([k * 3]), .bs = a.bs.concat([k % 3 == 0]), .fs = a.fs.concat([1.5 * k]), .n = a.n + 1};
+}
+Acc run(Acc a, Int k, Int n) {
+    if (k >= n) { return a; }
+    List(Int) junk = [k, k + 1];
+    return run(add(a, k + junk[1] % 2), k + 1, n);
+}
+Int sum(List(Int) xs, Int i, Int acc) {
+    if (i >= xs.len()) { return acc; }
+    return sum(xs, i + 1, (acc * 7 + xs[i]) % 1000003);
+}
+Int tb(List(Bool) bs, Int i, Int acc) {
+    if (i >= bs.len()) { return acc; }
+    return tb(bs, i + 1, acc * 2 % 1000003 + (if (bs[i]) { 1 } else { 0 }));
+}
+Float tf(List(Float) fs, Int i, Float acc) {
+    if (i >= fs.len()) { return acc; }
+    return tf(fs, i + 1, acc + fs[i]);
+}
+List(Int) grow(List(Int) xs, Int k) {
+    if (k <= 0) { return xs; }
+    return grow(xs.concat([k]), k - 1);
+}
+// A slot write too: lists are tracked only in a program that has one.
+List(Int) bump0(List(Int) xs) { return if (xs.len() > 0) { xs.with(0, xs[0] + 1) } else { xs }; }
+List(Int) set_add(List(Int) s, Int x) { return if (s.contains(x)) { s } else { s.concat([x]) }; }
+List(Int) adds(List(Int) s, Int k) {
+    if (k <= 0) { return s; }
+    return adds(set_add(bump0(s), k % 37), k - 1);
+}
+Int main() {
+    List(Int) e = [];
+    List(Bool) eb = [];
+    List(Float) ef = [];
+    Acc a = run(Acc {.xs = e, .bs = eb, .fs = ef, .n = 0}, rt 0, rt 1000);
+    println(f"acc {sum(a.xs, 0, 0)} {tb(a.bs, 0, 0)} {tf(a.fs, 0, 0.0)} {a.n} {a.xs.len()}");
+    // A literal receiver, then a copy kept while the other grows.
+    List(Int) base = grow([rt 1, 2, 3], rt 300);
+    List(Int) keep = base;
+    List(Int) more = grow(base, rt 50);
+    println(f"grow {sum(base, 0, 0)} {keep.len()} {more.len()} {sum(more, 0, 0)}");
+    // Two holders of one owned result.
+    Acc b = run(a, rt 1000, rt 1100);
+    Acc c = run(a, rt 2000, rt 2010);
+    println(f"fork {sum(a.xs, 0, 0)} {sum(b.xs, 0, 0)} {sum(c.xs, 0, 0)} {a.xs.len()} {b.xs.len()} {c.xs.len()}");
+    List(Int) s0 = [];
+    List(Int) s1 = adds(s0, rt 500);
+    List(Int) s2 = set_add(s1, 999);
+    List(Int) s3 = set_add(s1, 998);
+    println(f"set {sum(s1, 0, 0)} {sum(s2, 0, 0)} {sum(s3, 0, 0)} {s1.len()} {s2.len()} {s3.len()}");
+    return 0;
+}
