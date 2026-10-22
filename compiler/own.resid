@@ -23,7 +23,7 @@
 // fid/fnames: field name <-> step id (ow_fid; ids from 2).
 type OT = { Map(Str, Int) sts; Map(Str, Str) fty; Map(Str, Int) fidx; Bool strict; Map(Str, Str) inst; Bool rb; Map(Str, Int) fid; List(Str) fnames; };
 // kix: index expression -> its key id (ow_keys).
-type OX = { Kg g; Funcs fs; Int fnode; Str fname; Map(Int, Map(Int, Map(Str, Int))) after; Map(Int, Int) inl; Map(Int, Str) reads; Map(Int, Str) writes; OT t; Map(Int, Int) hzb; Map(Int, Int) kix; };
+type OX = { Kg g; Funcs fs; Int fnode; Str fname; Map(Int, Map(Int, Map(Str, Int))) after; Map(Int, Int) inl; Map(Int, Str) reads; Map(Int, Str) writes; Map(Int, Str) keeps; OT t; Map(Int, Int) hzb; Map(Int, Int) kix; };
 
 // Resolution: use node -> binder, binder -> type.
 type ORS = { Map(Int, Int) def; Map(Int, Str) bty; };
@@ -1324,12 +1324,13 @@ OL ow_lv(OX x, ORS r, Map(Int, Int) evn, Int id, OL l) {
 }
 
 // A use's live key: "b|path", "#s" for a scalar read through fields only
-// (it can be hoisted above a write, as lo_snap does).
+// (it can be hoisted above a write, as lo_snap does), "#u" for an
+// untracked value read through an index.
 // Hoistable reads are never a conflict (ow_judge_live skips them), so
 // they are not kept live at all: "".
 Str ow_use_key(OX x, OP p) {
     Bool hs = !ow_trk(x, p.ty) && !ow_has_idx(p.path, 0);
-    return if (!hs) { f"{p.b}|{p.path}" } else { if (x.t.strict) { f"{p.b}|{p.path}#s" } else { "" } };
+    return if (!hs) { if (ow_trk(x, p.ty)) { f"{p.b}|{p.path}" } else { f"{p.b}|{p.path}#u" } } else { if (x.t.strict) { f"{p.b}|{p.path}#s" } else { "" } };
 }
 
 Bool ow_has_idx(Int p, Int i) {
@@ -1572,7 +1573,8 @@ Str ow_judge_cands(OX x, OF f, OEv e, Map(Int, Map(Str, Int)) after, Map(Int, Ma
 Str ow_judge_cands_n(OX x, OF f, OEv e, Map(Int, Map(Str, Int)) after, Map(Int, Map(Str, Int)) ca, List(OLc) wmem, List(Int) cs, Int i) { return ow_judge_cands(x, f, e, after, ca, wmem, cs, i + 1); }
 
 // The live keys of binder b after the write; ca: b's keys after the call.
-// A key is "path", "path#s" (a scalar read through fields), "#r" (the
+// A key is "path", "path#s" (a scalar read through fields), "path#u" (an
+// untracked value read through an index), "#r" (the
 // root record), each maybe tagged "@f#j" (held for callee f's parameter
 // j) and "%call.j" (pending), the path an Int in decimal.
 Str ow_judge_live(OX x, OF f, OEv e, Int b, List(Str) after, Map(Str, Int) ca, List(OLc) wmem, Int i) {
@@ -1585,7 +1587,8 @@ Str ow_judge_live(OX x, OF f, OEv e, Int b, List(Str) after, Map(Str, Int) ca, L
     Str q0 = if (at >= 0) { str_slice(rest, 0, at) } else { rest };
     Bool rr = q0 == "#r";
     Bool hs = str_has_suffix(q0, "#s");
-    Int q = if (rr) { 0 } else { str_parse_int(if (hs) { str_slice(q0, 0, str_len(q0) - 2) } else { q0 }) };
+    Bool hu = str_has_suffix(q0, "#u");
+    Int q = if (rr) { 0 } else { str_parse_int(if (hs || hu) { str_slice(q0, 0, str_len(q0) - 2) } else { q0 }) };
     Bool self = b == e.b;
     // A scalar read through fields is hoisted above the write; a pending
     // holder of the root whose callee never reads the written field (a
@@ -1596,7 +1599,15 @@ Str ow_judge_live(OX x, OF f, OEv e, Int b, List(Str) after, Map(Str, Int) ca, L
     // Strict: only a one-field read of a binder lowering loads at its
     // binding (lw_hz) is hoisted.
     Bool hoisted = hs && (!x.t.strict || (x.hzb.contains(b) && ow_pn(q) == 1 && !ow_is_idx(ow_pst(q, 0))));
-    Bool skip = hoisted || (self && tag != "" && ow_hole(x, tag, q, e.path)) || (same && ow_hole(x, f"{ow_fk(x, e.cal, e.arg)}", e.path, q));
+    // A scalar read in a later operand of the same call or with yields a
+    // value that holds nothing, and it runs before the callee.
+    Bool opnd = (hs || hu) && at < 0 && e.call >= 0 && (e.kind == "arg" || e.kind == "move" || e.kind == "with") && !ca.contains(rest);
+    // A use as another callee's argument (not pending), finished in a
+    // later operand of this call: the result keeps nothing of it.
+    Int tfk = if (tag != "" && tag != "-" && pc < 0) { str_parse_int(tag) } else { -1 };
+    Int efi = ow_fi(x, e.cal);
+    Bool ended = tfk >= 0 && efi >= 0 && tfk / 1024 != efi && e.call >= 0 && (e.kind == "arg" || e.kind == "move" || e.kind == "with") && !ca.contains(rest) && !x.keeps.contains(tfk);
+    Bool skip = hoisted || opnd || ended || (self && tag != "" && ow_hole(x, tag, q, e.path)) || (same && ow_hole(x, f"{ow_fk(x, e.cal, e.arg)}", e.path, q));
     Int efk = ow_fk(x, e.cal, e.arg);
     Str ws = if (e.kind == "arg") { x.writes.get(efk) else { if (efk >= 0) { "," } else { "*" } } } else { "*" };
     // Another binder handed (pending or as an argument) to a callee that
@@ -1713,7 +1724,7 @@ OPre ow_prep(Kg g, Funcs fs, OT ot, Int fnode) {
     Map(Int, Map(Int, Map(Str, Int))) af0 = {};
     Int body = kg_kid(g, fnode, g.ns[fnode].nk - 1);
     Map(Int, Int) inl = ow_inloop(g, body, false, ow_noim());
-    OX x0 = OX {.g = g, .fs = fs, .fnode = fnode, .fname = g.ns[fnode].text, .after = af0, .inl = inl, .reads = ow_nois(), .writes = ow_nois(), .t = ot, .hzb = ow_noim(), .kix = ow_noim()};
+    OX x0 = OX {.g = g, .fs = fs, .fnode = fnode, .fname = g.ns[fnode].text, .after = af0, .inl = inl, .reads = ow_nois(), .writes = ow_nois(), .keeps = ow_nois(), .t = ot, .hzb = ow_noim(), .kix = ow_noim()};
     Map(Int, Int) d0 = {};
     Map(Int, Str) t0 = {};
     ORS r = or_params(x0, 0, ow_nosm(), ORS {.def = d0, .bty = t0});
@@ -1876,9 +1887,9 @@ OFn ow_fn(Kg g, Funcs fs, OS s, OPre pr) {
     ORS r = pr.r;
     Int body = kg_kid(g, fnode, g.ns[fnode].nk - 1);
     Map(Int, Map(Int, Map(Str, Int))) af0 = {};
-    OX xl = OX {.g = g, .fs = fs, .fnode = fnode, .fname = g.ns[fnode].text, .after = af0, .inl = pr.inl, .reads = s.reads, .writes = s.writes, .t = pr.t, .hzb = pr.hzb, .kix = pr.kix};
+    OX xl = OX {.g = g, .fs = fs, .fnode = fnode, .fname = g.ns[fnode].text, .after = af0, .inl = pr.inl, .reads = s.reads, .writes = s.writes, .keeps = s.keeps, .t = pr.t, .hzb = pr.hzb, .kix = pr.kix};
     OL l = ow_lv(xl, r, ow_noim(), body, OL {.live = ow_nols(), .after = af0});
-    OX x = OX {.g = g, .fs = fs, .fnode = fnode, .fname = g.ns[fnode].text, .after = l.after, .inl = pr.inl, .reads = s.reads, .writes = s.writes, .t = pr.t, .hzb = pr.hzb, .kix = pr.kix};
+    OX x = OX {.g = g, .fs = fs, .fnode = fnode, .fname = g.ns[fnode].text, .after = l.after, .inl = pr.inl, .reads = s.reads, .writes = s.writes, .keeps = s.keeps, .t = pr.t, .hzb = pr.hzb, .kix = pr.kix};
     Map(Int, List(OE)) a0 = {};
     List(OEv) e0 = [];
     Map(Int, Str) w0 = {};

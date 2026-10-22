@@ -1,0 +1,80 @@
+// A later operand of the same call that reads from or hands on a value
+// the callee rewrites must see it before the rewrite, and must not keep
+// anything the callee rewrites.
+type Var = { Int value; List(Int) cons; Int det; };
+type Db = { List(Var) vs; List(Int) xs; Int m; };
+
+Var mkv(Int x) {
+    List(Int) c = [x, x + 1];
+    return Var {.value = x, .cons = c, .det = 0};
+}
+Db mk(Int n) {
+    List(Var) vs = [mkv(n), mkv(n + 10), mkv(n + 20)];
+    List(Int) xs = [n, n + 1, n + 2];
+    return Db {.vs = vs, .xs = xs, .m = n};
+}
+
+Var bump(Var v, Int x) { return Var {.value = x, .cons = v.cons.with(0, x), .det = v.det}; }
+Db setv(Db d, Int i, Int x) {
+    Var v = d.vs[i];
+    return Db {.vs = d.vs.with(i, bump(v, x)), .xs = d.xs.with(i, x), .m = d.m};
+}
+// Writes d, then reads the kept list.
+Int setv_sum(Db d, Int i, List(Int) keep) {
+    Db d2 = setv(d, i, 99);
+    return d2.vs[i].value + keep[0] * 1000;
+}
+Int sum_d(Db d) { return d.vs[0].value + d.vs[1].value + d.vs[2].value + d.xs[0] + d.xs[1]; }
+
+// The callee keeps a part of its argument: the use has not ended.
+List(Int) cons_of(Db d, Int i) { return d.vs[i].cons; }
+// The callee keeps nothing.
+Int count(Db d, Int i) { return d.vs[i].cons.len() + d.vs[i].value; }
+// Keeps through a list literal of records.
+List(Var) pick(Db d, Int i) { return [d.vs[i]]; }
+Int setv_vs(Db d, Int i, List(Var) keep) {
+    Db d2 = setv(d, i, 77);
+    return d2.vs[i].value + keep[0].value * 1000 + keep[0].cons[0] * 100000;
+}
+
+Int t_scalar(Int n) {
+    Db d = mk(n);
+    Db d2 = setv(d, 0, d.vs[0].value + d.xs[0]);
+    return sum_d(d2);
+}
+Int t_kept(Int n) {
+    Db d = mk(n);
+    return setv_sum(d, 0, cons_of(d, 0));
+}
+Int t_count(Int n) {
+    Db d = mk(n);
+    Db d2 = setv(d, 1, count(d, 1));
+    return sum_d(d2);
+}
+Int t_pick(Int n) {
+    Db d = mk(n);
+    return setv_vs(d, 0, pick(d, 0));
+}
+// The same callee twice in one call: the inner one runs first.
+Db twice(Db a, Db b) { return Db {.vs = a.vs.with(0, b.vs[1]), .xs = a.xs, .m = a.m + b.m}; }
+Int t_twice(Int n) {
+    Db d = mk(n);
+    Db r = twice(d, twice(d, d));
+    return sum_d(r) + r.m;
+}
+// A loop carrying d with a scalar read of it in a later operand.
+Db run(Db d, Int k) {
+    if (k <= 0) { return d; }
+    return run(setv(d, k % 3, d.vs[(k + 1) % 3].value + count(d, k % 3)), k - 1);
+}
+
+Int main() {
+    println(f"scalar {t_scalar(rt 1)}");
+    println(f"kept {t_kept(rt 1)}");
+    println(f"count {t_count(rt 1)}");
+    println(f"pick {t_pick(rt 1)}");
+    println(f"twice {t_twice(rt 1)}");
+    Db r = run(mk(rt 2), rt 7);
+    println(f"run {sum_d(r)} {r.vs[0].cons[0]} {r.vs[1].cons[0]}");
+    return 0;
+}

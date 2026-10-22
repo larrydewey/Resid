@@ -284,6 +284,27 @@ Int pf_fresh_ifread(Int i) {
     List(Pc) cs = [a, b];
     return pf_sum(pf_ifread(pf_ifread(Pf {.cs = cs, .u = pc_new(1), .k = i}, i), i + 1));
 }
+// Later operands of the call that rewrites f: a scalar read of f and a
+// helper that keeps nothing end before it; helpers that keep a part of f
+// (its list, or an element in a new list) must still see the old value.
+Int pf_cnt(Pf f, Int i) { return if (f.cs.len() == 0) { 0 } else { f.cs[i % f.cs.len()].n % 5 + f.cs.len() }; }
+Pf pf_oploop(Pf f, Int i, Int n) {
+    if (n <= 0 || f.cs.len() == 0) { return f; }
+    return pf_oploop(pf_set(f, i, f.cs[(i + 1) % f.cs.len()].n % 11 + pf_cnt(f, i)), i + 1, n - 1);
+}
+List(Pc) pf_csof(Pf f) { return f.cs; }
+List(Pc) pf_one(Pf f, Int i) { return if (f.cs.len() == 0) { [f.u] } else { [f.cs[i % f.cs.len()]] }; }
+Int pf_after(Pf f, Int i, List(Pc) keep) {
+    Pf g = pf_set(f, i, 13);
+    return pf_sum(g) + (if (keep.len() == 0) { 0 } else { pc_sum(keep[i % keep.len()]) });
+}
+Int pf_fresh_op(Int i) {
+    List(Pc) cs = [pc_new(i), pc_new(i + 4)];
+    Pf f = pf_oploop(Pf {.cs = cs, .u = pc_new(2), .k = i}, i, 4);
+    Pf g = Pf {.cs = [pc_new(i + 1), pc_new(i + 7)], .u = pc_new(3), .k = i};
+    Pf h = Pf {.cs = [pc_new(i + 2), pc_new(i + 8)], .u = pc_new(4), .k = i};
+    return pf_sum(f) + pf_after(g, i, pf_csof(g)) + pf_after(h, i, pf_one(h, i));
+}
 Pf pf_copy(Pf f, Int i) {
     if (f.cs.len() < 2) { return f; }
     return Pf {.cs = f.cs.with((i + 1) % f.cs.len(), f.cs[i % f.cs.len()]), .u = f.cs[i % f.cs.len()], .k = f.k};
@@ -350,6 +371,10 @@ OPS = [
     ("Int", ["Pf"], "pf_share({0}, rt {i})"),
     ("Int", [], "pf_fresh_keep(rt {i})"),
     ("Int", [], "pf_fresh_ifread(rt {i})"),
+    ("Int", [], "pf_fresh_op(rt {i})"),
+    ("Pf", ["Pf"], "pf_oploop({0}, {i}, 3)"),
+    ("Int", ["Pf"], "pf_after({0}, {i}, pf_csof({0}))"),
+    ("Int", ["Pf"], "pf_after({0}, {i}, pf_one({0}, {i}))"),
     ("Pf", ["Pf"], "pf_keepcall({0}, {i})"),
     ("Pf", ["Pc"], "pf_twice({0}, {i})"),
     ("Pf", ["Pc", "Pc"], "pf_cat({0}, {1}, {i})"),
