@@ -543,3 +543,49 @@ shapes: an element rebuilt through a helper and written back at its own
 index (DeltaBlue `recalculate`, Richards `pkt`), a list field modified
 through a borrowed element (Richards `w.data`), and frozen trie lists
 written in Havlak (`node_with`, about 30% of Havlak at ReBench size).
+
+## 9. Second follow-up round (2026-10-21/22, ecd0447e..23aaf438)
+
+Instructions against ecd0447e: Havlak -39.6%, DeltaBlue -22.1%, CD
+-1.9%, the rest within 0.1%.
+
+- Soundness first. Three ownership miscompilations and one in the
+  linear reuse were found and fixed, each with a regression case:
+  liveness snapshots dropped in an `if` with no else (93dcff75); a
+  record with a fixed-capacity field rebuilt in place while a read of
+  that field, a pointer into the record, was held (6f7df1e2, wrong even
+  with --no-ownership). The fuzzer now builds every program a third
+  way, --no-ownership --no-reuse, which copies every update, and checks
+  both other builds against it (892cf959); gen.py covers fixed-capacity
+  fields and lists of them.
+- A use that ends in a later operand of the call that writes a value
+  no longer blocks the write: an untracked value read out of it, or the
+  value handed to another callee that keeps nothing of it (bc1ad939).
+  DeltaBlue -10.4%, Havlak -2.5%, recovering what the liveness fix cost.
+- Lists of lists update in place when owned (19689276): a list of words
+  moves into an older buffer's region by resid_mv_list, so `with` and
+  owned `concat` on List(List(Int)) take the owned paths. Havlak -16.5%:
+  this was the frozen-trie item of §8 (process_edges' h.bp/h.nbp writes
+  were all unowned, 425k slow writes per run).
+- Owned one-element appends push the word directly (c3bfb9f1,
+  resid_list_push_own): Havlak -23.0%, DeltaBlue -12.9%, CD -1.8%; a
+  thaw makes room for four (23aaf438): Havlak -3.6%.
+
+Measured and not built:
+
+| Item | Result |
+|------|--------|
+| DeltaBlue `set_var(d, i, var_with(d.vs[i], ..))` in place (hand-inlined ceiling) | -1.5%; the shallow write token and per-slot read summary it needs are not worth it |
+| Inlining struct-returning helpers at binds | +0.3%, then +10.7% DeltaBlue: bound results lose ownership |
+| `^` (a parameter's own object rewritten) disturbing only inline elements | unsound: `ow_sub_ents` extends a coarse entry's location by the read path (CD's `next.t`); never extending costs DeltaBlue +17.5% |
+| No list freeze on call results | Havlak +0.7%, others -0.4..-2.7% |
+
+Open: Richards (about 12%). worker_fn rewrites `w.data`, a list inside
+`s.pk[work]`, passes `s` through `set_ab` (which keeps `s.pk` in its
+result) and then writes the packet back at the same index; handler_fn
+does the same for two packets. Reordering worker_fn by hand (write-back
+before set_ab) gives -11.6% even with the w.data write still copied.
+Doing it in the analysis needs alias entries that say whether their path
+is exact (so a parameter's own rewrite can be narrowed safely) and a
+hole for a field the callee keeps without reading, judged against the
+result binder's later uses.
