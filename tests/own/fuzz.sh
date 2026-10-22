@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Ownership differential fuzzing: tests/own/fuzz.sh [-c COMPILER] FROM TO
-# Each seed's program (tests/own/gen.py) is built with --no-ownership and
-# with the default (ownership on); the outputs must agree. Prints each
+# Each seed's program (tests/own/gen.py) is built three ways: with
+# --no-ownership --no-reuse (every update copies: the reference), with
+# --no-ownership (the linear reuse alone) and with the default (ownership
+# on); all three outputs must agree. Prints each
 # disagreeing seed and a summary.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -25,11 +27,16 @@ one() {
     local s="$1" d="$TMP/$1"
     mkdir -p "$d"
     python3 -I "$ROOT/tests/own/gen.py" "$s" > "$d/p.resid"
-    if ! "$COMPILER" "$d/p.resid" -o "$d/off" --no-ownership > "$d/off.log" 2>&1; then echo "SKIP $s (does not compile)"; return; fi
+    if ! "$COMPILER" "$d/p.resid" -o "$d/ref" --no-ownership --no-reuse > "$d/ref.log" 2>&1; then echo "SKIP $s (does not compile)"; return; fi
+    if ! "$COMPILER" "$d/p.resid" -o "$d/off" --no-ownership > "$d/off.log" 2>&1; then echo "FAIL $s (reuse build fails)"; return; fi
     if ! "$COMPILER" "$d/p.resid" -o "$d/on" > "$d/on.log" 2>&1; then echo "FAIL $s (ownership build fails)"; return; fi
+    "$d/ref" > "$d/ref.out" 2>&1
     "$d/off" > "$d/off.out" 2>&1
     "$d/on" > "$d/on.out" 2>&1
-    if cmp -s "$d/off.out" "$d/on.out"; then echo "PASS $s"; else echo "FAIL $s"; cp "$d/p.resid" "/tmp/own-fuzz-fail-$s.resid" 2>/dev/null; fi
+    local bad=""
+    cmp -s "$d/ref.out" "$d/off.out" || bad="$bad reuse"
+    cmp -s "$d/ref.out" "$d/on.out" || bad="$bad ownership"
+    if [ -z "$bad" ]; then echo "PASS $s"; else echo "FAIL $s ($bad )"; cp "$d/p.resid" "/tmp/own-fuzz-fail-$s.resid" 2>/dev/null; fi
 }
 export -f one
 export ROOT COMPILER TMP

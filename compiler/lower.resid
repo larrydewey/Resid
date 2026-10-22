@@ -8016,11 +8016,12 @@ LOP lo_fix(Kg g, List(Int) ds, Funcs fs, LOP lop, Int n) {
     return lo_fix(g, ds, fs, r.p, n + 1);
 }
 
-pub LOP lo_program(Kg g, Int unit, Funcs fs) {
+// reuse false: no record or list is tracked (Map/Set stay linear).
+pub LOP lo_program(Kg g, Int unit, Funcs fs, Bool reuse) {
     // Lists are tracked only in a program that replaces list elements.
-    Bool lists = lo_uses_with(g, 0);
+    Bool lists = reuse && lo_uses_with(g, 0);
     Map(Str, List(Str)) nofu = {};
-    LOP p0 = LOP {.lin = lo_nomap(), .mut = lo_nomap(), .ret = lo_nomap(), .sm = lo_structs(fs, 0, lo_nomap(), lists), .hdr = lo_nomap(), .lists = lists, .carry = lo_nomap(), .fu = nofu, .ft = lo_ftypes(fs, 0, lo_nomap()), .lm = lo_nolm(), .ne = lo_nomap(), .su = su_none()};
+    LOP p0 = LOP {.lin = lo_nomap(), .mut = lo_nomap(), .ret = lo_nomap(), .sm = if (reuse) { lo_structs(fs, 0, lo_nomap(), lists) } else { lo_nomap() }, .hdr = lo_nomap(), .lists = lists, .carry = lo_nomap(), .fu = nofu, .ft = lo_ftypes(fs, 0, lo_nomap()), .lm = lo_nolm(), .ne = lo_nomap(), .su = su_none()};
     List(Int) ds = lo_fns(g, unit, 0, p0, fs, ListBuf()).finish();
     LOP pi = lo_init(g, ds, 0, fs, p0);
     LOP pc = LOP {.lin = pi.lin, .mut = pi.mut, .ret = pi.ret, .sm = pi.sm, .hdr = pi.hdr, .lists = pi.lists, .carry = cf_fix(g, ds, fs, cf_zero(g, ds, 0, lo_nomap()), 0, pi), .fu = fu_all(g, ds, 0, nofu), .ft = pi.ft, .lm = pi.lm, .ne = pi.ne, .su = pi.su};
@@ -10007,8 +10008,8 @@ Map(Int, Str) lw_own_ro_n(Map(Int, Str) ow, List(Int) ks, Int i, Map(Str, Int) d
 
 // Lower the reducer's residual graph, already through lw_inlined; own:
 // the ownership verdicts (empty with --no-ownership).
-pub PG lw_program(Kg g, Int unit, Funcs fs, PG g0, Bool dbg, GAF df, Bool facts, Map(Int, Map(Int, Str)) own) {
-    LOP lo0 = lo_program(g, unit, fs);
+pub PG lw_program(Kg g, Int unit, Funcs fs, PG g0, Bool dbg, GAF df, Bool facts, Map(Int, Map(Int, Str)) own, Bool reuse) {
+    LOP lo0 = lo_program(g, unit, fs, reuse);
     // Copies of functions with more SU parameters (W2, stage 1b).
     SPX sx = su_clones(g, unit, fs, lo0, lo0.su.spec.keys(), 0, SPX {.g = g, .fs = fs, .lo = lo0, .ids = []});
     LOP lo = sx.lo;

@@ -22,6 +22,7 @@ TYPES = {
     "Pd": [("ps", "List(Pa)"), ("k", "Int")],
     "Pe": [("ls", "List(List(Int))"), ("k", "Int")],
     "Pf": [("cs", "List(Pc)"), ("u", "Pc"), ("k", "Int")],
+    "Px": [("arr", "List(Int, 4)"), ("nm", "Str(8)"), ("xs", "List(Int)"), ("n", "Int")],
 }
 REC = list(TYPES)
 
@@ -42,6 +43,10 @@ def lit(t, depth=0):
         return "[" + ", ".join(lit("Pc", depth + 1) for _ in range(R.randint(1, 3))) + "]"
     if t == "List(List(Int))":
         return "[" + ", ".join(lit("List(Int)") for _ in range(R.randint(1, 3))) + "]"
+    if t == "List(Int, 4)":
+        return "[" + ", ".join(lit("Int") for _ in range(4)) + "]"
+    if t == "Str(8)":
+        return R.choice(['"a"', '"bc"', '"xyz"', '"hello"'])
     return t + " {" + ", ".join(f".{f} = {lit(ft, depth + 1)}" for f, ft in fields(t)) + "}"
 
 
@@ -57,6 +62,10 @@ def checksum(t, e):
         return f"lpc({e}, 0, 0)"
     if t == "List(List(Int))":
         return f"lll({e}, 0, 0)"
+    if t == "List(Int, 4)":
+        return f"lfx({e})"
+    if t == "Str(8)":
+        return f"str_len({e})"
     return " + ".join(f"({checksum(ft, e + '.' + f)}) % 1000003 * {i + 2}" for i, (f, ft) in enumerate(fields(t)))
 
 
@@ -68,6 +77,41 @@ Int lsum(List(Int) xs, Int i, Int acc) {
 Int lpa(List(Pa) xs, Int i, Int acc) {
     if (i >= xs.len()) { return acc; }
     return lpa(xs, i + 1, (acc * 5 + xs[i].x % 1000003 * 7 + xs[i].y % 1000003) % 1000003);
+}
+// Fixed-capacity values are stored inline in the record that holds them
+// and read as pointers into it: rebuilding the record in place would
+// change a value read out of it earlier.
+Int lfx(List(Int, 4) a) { return (a[0] % 1000003 * 3 + a[1] % 1000003 * 5 + a[2] % 1000003 * 7 + a[3] % 1000003) % 1000003; }
+Px px_set(Px p, Int v) { return Px {.arr = [v, p.arr[1], p.arr[2] + 1, v], .nm = "q", .xs = if (p.xs.len() > 0) { p.xs.with(0, v) } else { [v] }, .n = p.n + 1}; }
+Px px_loop(Px p, Int k) {
+    if (k <= 0) { return p; }
+    return px_loop(px_set(p, p.arr[k % 4] % 97 + k), k - 1);
+}
+Int px_sum(Px p) { return (lfx(p.arr) * 3 + str_len(p.nm) * 5 + lsum(p.xs, 0, 0) + p.n % 1000003) % 1000003; }
+Int px_both(Px p, List(Int, 4) a, Str(8) s) { return px_sum(px_set(p, 9)) + lfx(a) * 11 + str_len(s) * 13; }
+Px px_new(Int i) { return Px {.arr = [i, i + 1, i + 2, i + 3], .nm = "abcd", .xs = [i, i], .n = i}; }
+Int px_fresh_after(Int i) {
+    Px r = px_new(i);
+    Px r2 = px_set(r, 5);
+    return px_sum(r2) + lfx(r.arr) * 7 + str_len(r.nm);
+}
+Int px_fresh_bound(Int i) {
+    Px r = px_new(i);
+    List(Int, 4) a = r.arr;
+    Str(8) s = r.nm;
+    Px r2 = px_loop(r, 3);
+    return px_sum(r2) + lfx(a) * 7 + str_len(s);
+}
+Int px_fresh_arg(Int i) {
+    Px r = px_new(i);
+    return px_both(r, r.arr, r.nm);
+}
+List(List(Int, 2)) lf_set(List(List(Int, 2)) xs, List(Int, 2) v) { return xs.with(0, [v[0] + 5, v[1]]).with(1, v); }
+Int lf_fresh(Int i) {
+    List(List(Int, 2)) xs = [[i, i + 1], [i + 2, i]];
+    List(Int, 2) a = xs[0];
+    List(List(Int, 2)) ys = lf_set(lf_set(xs, xs[1]), a);
+    return ys[0][0] * 3 + ys[1][1] * 5 + a[0] * 7 + xs[0][1];
 }
 Int lll(List(List(Int)) xs, Int i, Int acc) {
     if (i >= xs.len()) { return acc; }
@@ -385,6 +429,15 @@ OPS = [
     ("Pf", ["Pf"], "pf_setu({0}, {i})"),
     ("Pf", ["List(Pc)", "Pc"], "Pf {{.cs = {0}, .u = {1}, .k = {i}}}"),
     ("Pc", ["Pf"], "{0}.u"),
+    ("Px", ["Px"], "px_set({0}, {i})"),
+    ("Px", ["Px"], "px_loop({0}, 3)"),
+    ("Int", ["Px"], "px_both({0}, {0}.arr, {0}.nm)"),
+    ("List(Int, 4)", ["Px"], "{0}.arr"),
+    ("Px", ["List(Int, 4)", "Px"], "Px {{.arr = {0}, .nm = {1}.nm, .xs = {1}.xs, .n = {i}}}"),
+    ("Int", [], "px_fresh_after(rt {i})"),
+    ("Int", [], "px_fresh_bound(rt {i})"),
+    ("Int", [], "px_fresh_arg(rt {i})"),
+    ("Int", [], "lf_fresh(rt {i})"),
     ("List(Pc)", ["Pf"], "{0}.cs"),
 ]
 
