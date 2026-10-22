@@ -1307,7 +1307,9 @@ OL ow_lv(OX x, ORS r, Map(Int, Int) evn, Int id, OL l) {
     if (k == "if") {
         Int c = kg_kid(x.g, id, 0);
         OL lt = ow_lv(x, r, evn, kg_kid(x.g, id, 1), l0);
-        OL le = if (x.g.ns[id].nk < 3) { l0 } else { ow_lv(x, r, evn, kg_kid(x.g, id, 2), OL {.live = l0.live, .after = lt.after}) };
+        // With no else, the path past the if keeps l0's live set; the
+        // snapshots taken in the then branch (lt.after) must stay.
+        OL le = if (x.g.ns[id].nk < 3) { OL {.live = l0.live, .after = lt.after} } else { ow_lv(x, r, evn, kg_kid(x.g, id, 2), OL {.live = l0.live, .after = lt.after}) };
         return ow_lv(x, r, evn, if (x.g.ns[c].kind == "pat") { kg_kid(x.g, c, 0) } else { c }, ow_merge(OL {.live = lt.live, .after = le.after}, le));
     }
     if (k == "for" || k == "while") {

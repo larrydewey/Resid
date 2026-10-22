@@ -244,6 +244,46 @@ Int pf_share(Pf f, Int i) {
     List(Pc) cs = [c];
     return pf_sum(pf_loop(Pf {.cs = cs, .u = pc_new(i), .k = i}, i, 3));
 }
+// A callee that keeps the list it is handed and drops the new element:
+// an element rebuilt in place before the call would show through.
+Pf pf_keep(Pf f, Int j, Pc c) { return Pf {.cs = f.cs, .u = f.u, .k = f.k + c.n % 7}; }
+Pf pf_keepcall(Pf f, Int i) {
+    if (f.cs.len() == 0) { return f; }
+    Int j = i % f.cs.len();
+    Pc c = f.cs[j];
+    Pf r = pf_keep(f, j, pc_with(c, c.n + 5));
+    return r;
+}
+Pf pf_keeploop(Pf f, Int i, Int n) {
+    if (n <= 0) { return f; }
+    return pf_keeploop(pf_set(pf_keepcall(f, i), i + 1, n), i + 2, n - 1);
+}
+Int pf_fresh_keep(Int i) {
+    Pc a = pc_new(i);
+    Pc b = pc_new(i + 3);
+    List(Pc) cs = [a, b];
+    return pf_sum(pf_keeploop(Pf {.cs = cs, .u = pc_new(1), .k = i}, i, 4));
+}
+// Inside an if with no else, the old element is read after the call that
+// rebuilds it: the rebuild must not run in place.
+Int pc_sum(Pc c) { return c.n * 3 + c.a.x; }
+Pf pf_ifread(Pf f, Int i) {
+    if (f.cs.len() > 0) {
+        Int j = i % f.cs.len();
+        Pf g = Pf {.cs = f.cs.with(j, pc_new(i)), .u = f.u, .k = f.k};
+        Pc c = g.cs[j];
+        Pf h = pf_keep2(g, j, pc_with(c, c.n + 9));
+        return Pf {.cs = h.cs, .u = h.u, .k = h.k + pc_sum(c)};
+    }
+    return f;
+}
+Pf pf_keep2(Pf f, Int j, Pc c) { return Pf {.cs = f.cs.with(j, c), .u = f.u, .k = f.k}; }
+Int pf_fresh_ifread(Int i) {
+    Pc a = pc_new(i);
+    Pc b = pc_new(i + 2);
+    List(Pc) cs = [a, b];
+    return pf_sum(pf_ifread(pf_ifread(Pf {.cs = cs, .u = pc_new(1), .k = i}, i), i + 1));
+}
 Pf pf_copy(Pf f, Int i) {
     if (f.cs.len() < 2) { return f; }
     return Pf {.cs = f.cs.with((i + 1) % f.cs.len(), f.cs[i % f.cs.len()]), .u = f.cs[i % f.cs.len()], .k = f.k};
@@ -308,6 +348,9 @@ OPS = [
     ("Int", [], "pf_fresh_buf(rt {i})"),
     ("Int", [], "pf_fresh_copy(rt {i})"),
     ("Int", ["Pf"], "pf_share({0}, rt {i})"),
+    ("Int", [], "pf_fresh_keep(rt {i})"),
+    ("Int", [], "pf_fresh_ifread(rt {i})"),
+    ("Pf", ["Pf"], "pf_keepcall({0}, {i})"),
     ("Pf", ["Pc"], "pf_twice({0}, {i})"),
     ("Pf", ["Pc", "Pc"], "pf_cat({0}, {1}, {i})"),
     ("Pf", ["Pc"], "pf_buf({0}, {i})"),

@@ -1,0 +1,46 @@
+// Inside an if with no else, a record read after the write that could
+// rebuild it in place keeps the write from doing so (liveness in the
+// then branch).
+type Var = { Int value; List(Int) cons; Int det; Int mark; Int walk; Bool stay; };
+type Db = { List(Var) vs; Int mark; Int r; };
+
+Var var_with(Var v, Int value, Int walk) {
+    return Var {.value = value, .cons = v.cons, .det = v.det, .mark = v.mark, .walk = walk, .stay = v.stay};
+}
+Db set_var(Db d, Int i, Var v) { return Db {.vs = d.vs.with(i, v), .mark = d.mark, .r = d.r}; }
+
+// o's old value is read after the write that may rebuild it in place
+Int vsum(Var v) { return v.value * 3 + v.walk; }
+Db f(Db d, Int i, Int w) {
+    if (w >= 0) {
+        Db dd = set_var(d, i, mkv(w * 10));
+        Var o = dd.vs[i];
+        Db d1 = set_var(dd, i, var_with(o, o.value + 100, w));
+        return Db {.vs = d1.vs, .mark = d1.mark + vsum(o), .r = d1.r};
+    }
+    return d;
+}
+Db loop(Db d, Int k) {
+    if (k <= 0) { return d; }
+    return loop(f(d, k % 3, k), k - 1);
+}
+Var mkv(Int x) {
+    List(Int) c = [x];
+    return Var {.value = x, .cons = c, .det = 0, .mark = 0, .walk = 0, .stay = true};
+}
+Db fresh(Int k) {
+    List(Var) none = [];
+    return Db {.vs = none.concat([mkv(k)]).concat([mkv(k + 1)]).concat([mkv(k + 2)]), .mark = 0, .r = 0};
+}
+// owned call sites, so set_var and var_with get instances
+Db own1(Int k) {
+    Db d = fresh(k);
+    Db d2 = set_var(d, 0, var_with(mkv(k), k, k));
+    return d2;
+}
+Int main() {
+    Db e = loop(fresh(rt 20), rt 6);
+    Db g = own1(rt 3);
+    println(f"{e.mark} {e.vs[0].value} {e.vs[1].value} {e.vs[2].value} {g.mark}");
+    return 0;
+}
