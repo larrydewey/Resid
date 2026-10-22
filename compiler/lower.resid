@@ -7910,6 +7910,7 @@ Str lo_rl_kids(Kg g, Int id, Int i, Str acc) {
 // holding a struct that has such fields: `Placed.b` of type `Board`).
 Map(Str, Str) lo_structs(Funcs fs, Int i, Map(Str, Str) acc, Bool lists) {
     if (i >= fs.stn.len()) { return acc; }
+    if (rec_has_fixed(fs, fs.stn[i])) { return lo_structs(fs, i + 1, acc, lists); }
     return lo_structs(fs, i + 1, acc.insert(fs.stn[i], lo_struct_mfs_n(fs, fs.stf[i], 0, "", lists, [fs.stn[i]])), lists);
 }
 

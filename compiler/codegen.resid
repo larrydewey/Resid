@@ -3776,6 +3776,25 @@ Bool lst_rec_fields(Funcs fs, Str fields, Int i) {
     return lst_rec_fields(fs, fields, end + 1);
 }
 
+// Whether struct ty has a fixed-capacity field: a read of one is a pointer
+// into the record, so the record is never rebuilt in place.
+Bool rec_has_fixed(Funcs fs, Str ty) {
+    Int si = struct_index(fs, strip_owned_cg(ty));
+    return si >= 0 && rec_fixed_at(fs, fs.stf[si], 0);
+}
+
+Bool rec_fixed_at(Funcs fs, Str fields, Int i) {
+    Int fl = str_len(fields);
+    if (i >= fl) { return false; }
+    Int ce = _find_comma_at_depth_cg(fields, i, 0, 0);
+    Int end = if (ce >= 0) { ce } else { fl };
+    Str ent = str_slice(fields, i, end);
+    Int co = str_find_char(ent, 58, 0);
+    Str ty = if (co < 0) { "" } else { ct_base_of(fs.ctn, fs.ctb, str_trim(str_slice(ent, co + 1, str_len(ent)))) };
+    if (is_fixed_type(ty)) { return true; }
+    return rec_fixed_at(fs, fields, end + 1);
+}
+
 // lst_tyword with inline records.
 Str lst_tyword_fs(Funcs fs, Str ety, Str tsym) {
     Int rw = lst_rec(fs, ety);

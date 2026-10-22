@@ -978,7 +978,9 @@ OV ow_struct_n(OX x, ORS r, OS s, Int id, Int i, OV acc) { return ow_struct(x, r
 // mentioned anywhere inside it (its fields are read before the literal
 // stores, I3), else -1.
 Int ow_rebuild_src(OX x, ORS r, Int id, Int i) {
-    return ow_ref_of_ty(x, r, id, ow_base(x.fs, x.g.ns[id].text));
+    Str t = ow_base(x.fs, x.g.ns[id].text);
+    if (rec_has_fixed(x.fs, t)) { return -1; }
+    return ow_ref_of_ty(x, r, id, t);
 }
 
 Int ow_ref_of_ty(OX x, ORS r, Int id, Str t) {
