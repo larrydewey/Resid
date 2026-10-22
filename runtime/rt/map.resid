@@ -2240,7 +2240,7 @@ pub Int rt_list_push_own(Int a, Int w, Int k) {
 Int list_push_own_slow(Int a, Int w, Int k) {
     if (no_thaw(a)) { return mark_frozen(rt_list_push_k(a, w, k)); }
     Int n = lcount(a);
-    Int t = if (ltransient(a)) { a } else { with_fresh(a, max(1, n)) };
+    Int t = if (ltransient(a)) { a } else { with_fresh(a, max(4, n)) };
     _ = if (n == 0 && !raw_kind(ltype(a))) { st64(t + 24, k) } else { 0 };
     Int f0 = lroot(t);
     Int f = if (n + 1 <= ld64(f0 + 8)) { f0 } else { with_grow(t, f0, n, n + 1) };

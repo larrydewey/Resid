@@ -45102,14 +45102,14 @@ br i1 %t19610, label %L6745, label %L6746
 L6745:
 br label %L6747
 L6746:
-%t19611 = icmp sgt i64 1, %t19609
+%t19611 = icmp sgt i64 4, %t19609
 br i1 %t19611, label %L6748, label %L6749
 L6748:
 br label %L6750
 L6749:
 br label %L6750
 L6750:
-%t19612 = phi i64 [ 1, %L6748 ], [ %t19609, %L6749 ]
+%t19612 = phi i64 [ 4, %L6748 ], [ %t19609, %L6749 ]
 %t19613 = call i64 @__mruntime_rt_map_resid__with_fresh(i64 %p0, i64 %t19612)
 br label %L6747
 L6747:
