@@ -578,6 +578,8 @@ List(ClaimValue) none_values() {
 /// is an ECC NIST P-256 key ([] otherwise).
 pub type TpmCertified = { List(UInt(8)) public_area; List(Int) name; Int attributes; List(Int) auth_policy; List(Int) point; };
 
+/// The parts of a TPMS_ATTEST certification the verifier checks: its
+/// qualifying data (`extra`) and the name of the certified object.
 type TcCert = { List(Int) extra; List(Int) name; };
 
 Result(TcCert, VerifyError) tcc_parse(List(Int) a) {

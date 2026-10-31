@@ -104,10 +104,10 @@ pub Option(BnInt) cg_dec(PaillierSec sec, PaillierPub pk, List(UInt(64)) c) {
 
 // ─── Opening a ciphertext (identifiable abort) ──────────────────
 
+//@ serial
 /// What an abort reveals about a ciphertext c: the plaintext, the hidden
 /// nonce R = rho^N = c (1 + N)^-plain mod N^2, and a proof of knowledge of
 /// rho (Taurus's abortNth).
-//@ serial
 pub type CgOpen = { BnInt plain; List(UInt(64)) hidden; NthProof proof; };
 
 /// Opens c with the secret key; `rnd` is the stream the proof's nonce comes from.
@@ -189,51 +189,52 @@ pub CgMta cg_mta(PaillierPub sender, PaillierPub receiver, List(UInt(64)) recv_c
 
 // ─── Messages ───────────────────────────────────────────────────
 
+//@ serial
 /// The presigning round-1 broadcast: K = Enc(k), G = Enc(gamma), the ElGamal commitment (zl, zm) to k, and the presignature-id commitment.
-//@ serial
 pub type PsB2R = { List(UInt(64)) k; List(UInt(64)) g; CvPt zl; CvPt zm; List(Int) commit; };
+//@ serial
 /// The presigning round-2 broadcast: the Delta and Chi MtA D ciphertexts.
-//@ serial
 pub type PsB3R = { List(List(UInt(64))) delta_d; List(List(UInt(64))) chi_d; };   // per other party, in ascending id order
+//@ serial
 /// The presigning round-2 message to one party: the F ciphertexts of both MtAs with their aff-p and aff-g proofs.
-//@ serial
 pub type PsM3R = { List(UInt(64)) delta_f; AffpProof delta_proof; List(UInt(64)) chi_f; AffgProof chi_proof; };
+//@ serial
 /// The presigning round-3 broadcast: the Delta share and the ElGamal commitment (chi_l, chi_m) to the Chi share.
-//@ serial
 pub type PsB4R = { List(UInt(64)) delta_share; CvPt chi_l; CvPt chi_m; };
+//@ serial
 /// The presigning round-5 broadcast: the Delta share point k Gamma with its elog proof.
-//@ serial
 pub type PsB6R = { CvPt big_delta; ElogProof proof; };
-/// The presigning round-6 broadcast: the S share chi R with its elog proof, the decommitment and the presignature id.
 //@ serial
+/// The presigning round-6 broadcast: the S share chi R with its elog proof, the decommitment and the presignature id.
 pub type PsB7R = { CvPt s; ElogProof proof; List(Int) decommit; List(Int) presig_id; };
 
+//@ serial
 /// The abort-1 broadcast (a failed Delta check): the sender's Gamma share, an
 /// opening of its K, and an opening of each D addressed to it (per other party, ascending id order).
-//@ serial
 pub type PsA1R = { List(UInt(64)) gamma; CgOpen k; List(CgOpen) d; };
 
-/// The abort-2 broadcast (a failed S check): the sender's ElGamal-nonce image\n/// with a proof, an opening of its K, and an opening of each Chi D addressed to it.
 //@ serial
+/// The abort-2 broadcast (a failed S check): the sender's ElGamal-nonce image
+/// with a proof, an opening of its K, and an opening of each Chi D addressed to it.
 pub type PsA2R = { CvPt yhat; LogProof yproof; CgOpen k; List(CgOpen) chi; };
 
+//@ serial
 /// A key-generation broadcast: rid, chain key, VSS commitments, Schnorr commitment, ElGamal key, Paillier modulus `n`,
 /// Pedersen `s` and `t`, and the decommitment.
-//@ serial
 pub type KgB3R = {
     List(Int) rid; List(Int) chain_key; List(CvPt) vss; CvPt sch_commit; CvPt elgamal;
     List(UInt(64)) n; List(UInt(64)) s; List(UInt(64)) t; List(Int) decommit;
 };
+//@ serial
 /// A key-generation broadcast: the Paillier-Blum modulus proof and the Pedersen parameter proof.
-//@ serial
 pub type KgB4R = { ModProof md; PrmProof prm; };
-/// A key-generation message to one party: its secret share and a factor proof for our Paillier modulus.
 //@ serial
+/// A key-generation message to one party: its secret share and a factor proof for our Paillier modulus.
 pub type KgM4R = { List(UInt(64)) share; FacProof fac; };
 
+//@ serial
 /// The body of a protocol message, one variant per message kind.
 /// `Kg*` are key generation, `Ps*` presigning, `PsA*` the abort broadcasts, `SgB` a signature share.
-//@ serial
 pub type CgBody =
     KgB2(List(Int))
   | KgB3(KgB3R)
@@ -253,8 +254,8 @@ pub type CgBody =
   | PsA2(PsA2R)
   | SgB(List(UInt(64)));
 
-/// A message: `to` is the recipient's id, 0 for a broadcast.
 //@ serial
+/// A message: `to` is the recipient's id, 0 for a broadcast.
 pub type CgMsg = { Int from; Int to; CgBody body; };
 
 /// A broadcast message with body `b` from `from`.
@@ -1317,6 +1318,8 @@ Bool a2_ds_ok(Ps6 s, CgCtx c, Int j, PsA2R m, List(Int) js_others, Int i) {
     return a2_ds_ok(s, c, j, m, js_others, i + 1);
 }
 
+/// The checked abort-2 broadcasts of `ids` from index `i` on, keyed by id and added to `acc`; self's is `mine`.
+/// Err blames the first party whose broadcast is missing or fails verification.
 pub Result(Map(Int, PsA2R), CgFail) a2_all(Ps6 s, PsAb2 mine, List(CgMsg) in, List(Int) ids, Int i, Map(Int, PsA2R) acc) {
     if (i >= ids.len()) { return Ok(acc); }
     CgCtx c = s.prev.prev.prev.prev.prev.ctx;
@@ -1325,6 +1328,7 @@ pub Result(Map(Int, PsA2R), CgFail) a2_all(Ps6 s, PsAb2 mine, List(CgMsg) in, Li
     return a2_all(s, mine, in, ids, i + 1, acc.insert(ids[i], m));
 }
 
+/// An empty abort-2 broadcast (identity points, zero plaintext, no openings), the stand-in for an absent one.
 pub PsA2R a2_none() {
     return PsA2R {.yhat = cv_inf(), .yproof = LogProof {.a = cv_inf(), .b = cv_inf(), .c = cv_inf(), .z1 = [], .z2 = []}, .k = CgOpen {.plain = zi_zero(), .hidden = [], .proof = NthProof {.a = [], .z = []}}, .chi = []};
 }
@@ -1335,6 +1339,7 @@ BnInt a2_plain(PsA2R m, Int pos) { return if (pos < 0 || pos >= m.chi.len()) { z
 /// l != j of alpha_jl - alpha_lj.
 pub type A2Sums = { BnInt k; BnInt a; };
 
+/// The abort-2 sums for party `j` over the signers from index `i` on, added to `acc`.
 pub A2Sums a2_sums(CgCtx c, Map(Int, PsA2R) ms, Int j, Int i, A2Sums acc) {
     if (i >= c.ids.len()) { return acc; }
     Int l = c.ids[i];

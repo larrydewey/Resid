@@ -1336,13 +1336,21 @@ Int tpm_be_n(List(UInt(8)) b, Int at, Int n, Int acc) { return if (n <= 0) { acc
 // wrong authValues count toward the TPM's lockout, which is what limits PIN
 // guesses.
 
+/// The command code TPM_CC_Create.
 pub Int tpm_cc_create() { return 339; }             // 0x00000153
+/// The command code TPM_CC_Load.
 pub Int tpm_cc_load() { return 343; }               // 0x00000157
+/// The command code TPM_CC_EvictControl.
 pub Int tpm_cc_evict_control() { return 288; }      // 0x00000120
+/// The command code TPM_CC_PolicyPassword.
 pub Int tpm_cc_policy_password() { return 396; }    // 0x0000018C
+/// The command code TPM_CC_PolicyAuthValue.
 pub Int tpm_cc_policy_auth_value() { return 363; }  // 0x0000016B
+/// The command code TPM_CC_Sign.
 pub Int tpm_cc_sign() { return 349; }               // 0x0000015D
+/// The command code TPM_CC_Certify.
 pub Int tpm_cc_certify() { return 328; }            // 0x00000148
+/// The command code TPM_CC_HMAC.
 pub Int tpm_cc_hmac() { return 341; }               // 0x00000155
 
 /// The policy digest of a policy session after PolicyAuthValue (or
@@ -1401,6 +1409,8 @@ pub Result(List(UInt(8)), TpmError) tpm2_create_cmd(Int parent, List(UInt(8)) te
 /// What TPM2_Create made: the wrapped private area and the public area.
 type TpmBlob = { List(UInt(8)) private_area; List(UInt(8)) public_area; };
 
+/// The private and public areas from a TPM2_Create response, each at most
+/// 1024 bytes; an error response or a truncated area is Err.
 pub Result(TpmBlob, TpmError) tpm2_create_resp(List(UInt(8)) r) {
     TwAt p = tpm_resp_params(r, 0, true)?;
     TwBytes pr = tw_take_2b(p, 1024, "outPrivate")?;
@@ -1470,6 +1480,8 @@ pub Result(List(UInt(8)), TpmError) tpm2_certify_cmd(Int object, Int signer, Lis
 /// lib/verify/tpm.resid's tpm_verify_certify takes them.
 type TpmCertifyOut = { List(UInt(8)) attest; List(UInt(8)) sig; };
 
+/// The certifyInfo and the whole TPMT_SIGNATURE from a TPM2_Certify
+/// response; trailing bytes or an error response are Err.
 pub Result(TpmCertifyOut, TpmError) tpm2_certify_resp(List(UInt(8)) r) {
     TwAt p = tpm_resp_params_n(r, 0, 2)?;
     TwBytes ci = tw_take_2b(p, 1024, "certifyInfo")?;
@@ -1537,6 +1549,9 @@ pub Result(List(UInt(8)), TpmError) tpm_sign_policy_via(Result(List(List(UInt(8)
 /// `object` (admin role, `auth`) over `extra`; the AK is flushed.
 type TpmCertified2 = { List(UInt(8)) ak_public; List(UInt(8)) attest; List(UInt(8)) sig; };
 
+/// The certification of `object` (admin role, `auth`) over `extra` by the
+/// TCG-template AK: CreatePrimary in the endorsement hierarchy, Certify,
+/// the AK flushed; returns the AK's public area with the attest and sig.
 pub Result(TpmCertified2, TpmError) tpm_certify_via(Result(List(List(UInt(8))), TpmError) closure(List(List(UInt(8))), List(Int)) chain, Int object, List(UInt(8)) auth, List(UInt(8)) extra) {
     List(UInt(8)) c0 = tpm2_create_primary_cmd(tpm_rh_endorsement(), tpm_ak_template())?;
     List(UInt(8)) c1 = tpm2_certify_cmd(object, 0, auth, extra)?;

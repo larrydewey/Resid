@@ -27,8 +27,8 @@ import "cggmp.resid";
 import "cggmp_curve.resid";
 import "cggmp_hash.resid";
 
-/// One tweak MtA message from the designated party to signer `to`.
 //@ serial
+/// One tweak MtA message from the designated party to signer `to`.
 pub type BlTwMsg = { Int from; Int to; List(UInt(64)) t; List(UInt(64)) d; List(UInt(64)) f; AffpProof proof; };
 
 /// A signer's view of the blind tweak: the designated party, and tau for that party only (empty for every other).

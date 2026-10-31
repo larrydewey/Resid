@@ -2,7 +2,7 @@
 import "cggmp.resid";
 import "./serial.resid";
 
-// ── CgOpen (line 99)
+// ── CgOpen (line 111)
 /// The serialized field names of `CgOpen`, in declaration order.
 pub List(Str) derive_cg_open_names() { return ["plain", "hidden", "proof"]; }
 /// Encodes a `CgOpen` through the encoder `s`.
@@ -46,7 +46,7 @@ Result(Parsed(CgOpen, F), SerialError) derive_cg_open_done(F s, Option(BnInt) f_
 }
 Decode(CgOpen, F) = derive_cg_open_decode;
 
-// ── PsB2R (line 182)
+// ── PsB2R (line 194)
 /// The serialized field names of `PsB2R`, in declaration order.
 pub List(Str) derive_ps_b2_r_names() { return ["k", "g", "zl", "zm", "commit"]; }
 /// Encodes a `PsB2R` through the encoder `s`.
@@ -96,7 +96,7 @@ Result(Parsed(PsB2R, F), SerialError) derive_ps_b2_r_done(F s, Option(List(UInt(
 }
 Decode(PsB2R, F) = derive_ps_b2_r_decode;
 
-// ── PsB3R (line 185)
+// ── PsB3R (line 197)
 /// The serialized field names of `PsB3R`, in declaration order.
 pub List(Str) derive_ps_b3_r_names() { return ["delta_d", "chi_d"]; }
 /// Encodes a `PsB3R` through the encoder `s`.
@@ -137,7 +137,7 @@ Result(Parsed(PsB3R, F), SerialError) derive_ps_b3_r_done(F s, Option(List(List(
 }
 Decode(PsB3R, F) = derive_ps_b3_r_decode;
 
-// ── PsM3R (line 188)
+// ── PsM3R (line 200)
 /// The serialized field names of `PsM3R`, in declaration order.
 pub List(Str) derive_ps_m3_r_names() { return ["delta_f", "delta_proof", "chi_f", "chi_proof"]; }
 /// Encodes a `PsM3R` through the encoder `s`.
@@ -184,7 +184,7 @@ Result(Parsed(PsM3R, F), SerialError) derive_ps_m3_r_done(F s, Option(List(UInt(
 }
 Decode(PsM3R, F) = derive_ps_m3_r_decode;
 
-// ── PsB4R (line 191)
+// ── PsB4R (line 203)
 /// The serialized field names of `PsB4R`, in declaration order.
 pub List(Str) derive_ps_b4_r_names() { return ["delta_share", "chi_l", "chi_m"]; }
 /// Encodes a `PsB4R` through the encoder `s`.
@@ -228,7 +228,7 @@ Result(Parsed(PsB4R, F), SerialError) derive_ps_b4_r_done(F s, Option(List(UInt(
 }
 Decode(PsB4R, F) = derive_ps_b4_r_decode;
 
-// ── PsB6R (line 194)
+// ── PsB6R (line 206)
 /// The serialized field names of `PsB6R`, in declaration order.
 pub List(Str) derive_ps_b6_r_names() { return ["big_delta", "proof"]; }
 /// Encodes a `PsB6R` through the encoder `s`.
@@ -269,7 +269,7 @@ Result(Parsed(PsB6R, F), SerialError) derive_ps_b6_r_done(F s, Option(CvPt) f_bi
 }
 Decode(PsB6R, F) = derive_ps_b6_r_decode;
 
-// ── PsB7R (line 197)
+// ── PsB7R (line 209)
 /// The serialized field names of `PsB7R`, in declaration order.
 pub List(Str) derive_ps_b7_r_names() { return ["s", "proof", "decommit", "presig_id"]; }
 /// Encodes a `PsB7R` through the encoder `s`.
@@ -316,7 +316,7 @@ Result(Parsed(PsB7R, F), SerialError) derive_ps_b7_r_done(F s, Option(CvPt) f_s,
 }
 Decode(PsB7R, F) = derive_ps_b7_r_decode;
 
-// ── PsA1R (line 202)
+// ── PsA1R (line 214)
 /// The serialized field names of `PsA1R`, in declaration order.
 pub List(Str) derive_ps_a1_r_names() { return ["gamma", "k", "d"]; }
 /// Encodes a `PsA1R` through the encoder `s`.
@@ -360,7 +360,7 @@ Result(Parsed(PsA1R, F), SerialError) derive_ps_a1_r_done(F s, Option(List(UInt(
 }
 Decode(PsA1R, F) = derive_ps_a1_r_decode;
 
-// ── PsA2R (line 206)
+// ── PsA2R (line 219)
 /// The serialized field names of `PsA2R`, in declaration order.
 pub List(Str) derive_ps_a2_r_names() { return ["yhat", "yproof", "k", "chi"]; }
 /// Encodes a `PsA2R` through the encoder `s`.
@@ -407,7 +407,7 @@ Result(Parsed(PsA2R, F), SerialError) derive_ps_a2_r_done(F s, Option(CvPt) f_yh
 }
 Decode(PsA2R, F) = derive_ps_a2_r_decode;
 
-// ── KgB3R (line 211)
+// ── KgB3R (line 224)
 /// The serialized field names of `KgB3R`, in declaration order.
 pub List(Str) derive_kg_b3_r_names() { return ["rid", "chain_key", "vss", "sch_commit", "elgamal", "n", "s", "t", "decommit"]; }
 /// Encodes a `KgB3R` through the encoder `s`.
@@ -469,7 +469,7 @@ Result(Parsed(KgB3R, F), SerialError) derive_kg_b3_r_done(F s, Option(List(Int))
 }
 Decode(KgB3R, F) = derive_kg_b3_r_decode;
 
-// ── KgB4R (line 217)
+// ── KgB4R (line 230)
 /// The serialized field names of `KgB4R`, in declaration order.
 pub List(Str) derive_kg_b4_r_names() { return ["md", "prm"]; }
 /// Encodes a `KgB4R` through the encoder `s`.
@@ -510,7 +510,7 @@ Result(Parsed(KgB4R, F), SerialError) derive_kg_b4_r_done(F s, Option(ModProof) 
 }
 Decode(KgB4R, F) = derive_kg_b4_r_decode;
 
-// ── KgM4R (line 220)
+// ── KgM4R (line 233)
 /// The serialized field names of `KgM4R`, in declaration order.
 pub List(Str) derive_kg_m4_r_names() { return ["share", "fac"]; }
 /// Encodes a `KgM4R` through the encoder `s`.
@@ -551,7 +551,7 @@ Result(Parsed(KgM4R, F), SerialError) derive_kg_m4_r_done(F s, Option(List(UInt(
 }
 Decode(KgM4R, F) = derive_kg_m4_r_decode;
 
-// ── CgBody (line 225)
+// ── CgBody (line 238)
 /// The serialized variant names of `CgBody`, in declaration order.
 pub List(Str) derive_cg_body_variants() { return ["KgB2", "KgB3", "KgB4", "KgM4", "KgB5", "PsB2", "PsM2", "PsB3", "PsM3", "PsB4", "PsB5", "PsM5", "PsB6", "PsB7", "PsA1", "PsA2", "SgB"]; }
 /// Encodes a `CgBody` through the encoder `s`.
@@ -604,7 +604,7 @@ pub Result(Parsed(CgBody, F), SerialError) derive_cg_body_decode(F s) {
 }
 Decode(CgBody, F) = derive_cg_body_decode;
 
-// ── CgMsg (line 246)
+// ── CgMsg (line 259)
 /// The serialized field names of `CgMsg`, in declaration order.
 pub List(Str) derive_cg_msg_names() { return ["from", "to", "body"]; }
 /// Encodes a `CgMsg` through the encoder `s`.
@@ -648,7 +648,7 @@ Result(Parsed(CgMsg, F), SerialError) derive_cg_msg_done(F s, Option(Int) f_from
 }
 Decode(CgMsg, F) = derive_cg_msg_decode;
 
-// ── CgPublicCfg (line 999)
+// ── CgPublicCfg (line 1018)
 /// The serialized field names of `CgPublicCfg`, in declaration order.
 pub List(Str) derive_cg_public_cfg_names() { return ["id", "ecdsa", "elgamal", "n", "ped"]; }
 /// Encodes a `CgPublicCfg` through the encoder `s`.
@@ -698,7 +698,7 @@ Result(Parsed(CgPublicCfg, F), SerialError) derive_cg_public_cfg_done(F s, Optio
 }
 Decode(CgPublicCfg, F) = derive_cg_public_cfg_decode;
 
-// ── CgConfig (line 1005)
+// ── CgConfig (line 1024)
 /// The serialized field names of `CgConfig`, in declaration order.
 pub List(Str) derive_cg_config_names() { return ["id", "threshold", "ecdsa", "elgamal", "p", "q", "rid", "chain_key", "public"]; }
 /// Encodes a `CgConfig` through the encoder `s`.

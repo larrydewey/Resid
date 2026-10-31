@@ -91,6 +91,8 @@ List(List(UInt(64))) kg_coeffs(KgCtx c, Int i, ListBuf(List(UInt(64))) acc) {
     return kg_coeffs(c, i + 1, acc.push(v));
 }
 
+/// The two 1024-bit safe primes of this party's Paillier key: the ones
+/// the context carries, else drawn from its seed; [] when a draw fails.
 pub List(List(UInt(64))) kg_primes(KgCtx c) {
     if (c.primes.len() == 2) { return c.primes; }
     Option(List(UInt(64))) p = bn_safe_prime_stream(cg_rng(c.seed, "kg/p", 128 * 600), 1024);

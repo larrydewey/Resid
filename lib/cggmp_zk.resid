@@ -60,8 +60,8 @@ pub Option(ZkDraw) zk_draw_below(List(Int) rnd, Int pos, List(UInt(64)) n) {
 // e_i; z_i = a_i + e_i lam mod phi; the verifier checks
 // t^{z_i} = A_i s^{e_i} (mod N).
 
-/// Holds a Pedersen parameters proof: the 80 commitments A_i (`as`) and responses z_i (`zs`).
 //@ serial
+/// Holds a Pedersen parameters proof: the 80 commitments A_i (`as`) and responses z_i (`zs`).
 pub type PrmProof = { List(List(UInt(64))) as; List(List(UInt(64))) zs; };
 
 Transcript prm_transcript(Transcript tr, Pedersen ped, List(List(UInt(64))) as, Int i) {
@@ -143,12 +143,12 @@ PrmProof prm_finish(List(UInt(64)) lam, List(UInt(64)) phi, Pedersen ped, Transc
 // where y' = (-1)^a w^b y is a quadratic residue mod p and mod q. The
 // verifier checks z^N = y and x^4 = y' (mod N).
 
-/// Holds one answer of the modulus proof: the flags `a`, `b`, the fourth root `x` and the N-th root `z`.
 //@ serial
+/// Holds one answer of the modulus proof: the flags `a`, `b`, the fourth root `x` and the N-th root `z`.
 pub type ModResponse = { Bool a; Bool b; List(UInt(64)) x; List(UInt(64)) z; };
 
-/// Holds a Paillier-Blum modulus proof: the non-residue `w` and 80 responses.
 //@ serial
+/// Holds a Paillier-Blum modulus proof: the non-residue `w` and 80 responses.
 pub type ModProof = { List(UInt(64)) w; List(ModResponse) responses; };
 
 // The 80 challenges y_i: sample_modn from the stream after N and w.

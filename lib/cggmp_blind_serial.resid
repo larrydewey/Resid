@@ -2,7 +2,7 @@
 import "cggmp_blind.resid";
 import "./serial.resid";
 
-// ── BlTwMsg (line 31)
+// ── BlTwMsg (line 32)
 /// The serialized field names of `BlTwMsg`, in declaration order.
 pub List(Str) derive_bl_tw_msg_names() { return ["from", "to", "t", "d", "f", "proof"]; }
 /// Encodes a `BlTwMsg` through the encoder `s`.
