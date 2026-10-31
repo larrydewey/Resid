@@ -1,0 +1,54 @@
+// Sums that can reach no record, list or map (Pile) are shared freely: the
+// piles record is still rebuilt in place, and the moves come out right.
+type Pile = Disk(Int, Pile) | Empty;
+type Piles = { Pile a; Pile b; Pile c; Int moves; };
+
+Pile pile_of(Piles p, Int i) {
+    return if (i == 0) { p.a } else { if (i == 1) { p.b } else { p.c } };
+}
+
+Piles with_pile(Piles p, Int i, Pile v) {
+    if (i == 0) { return Piles {.a = v, .b = p.b, .c = p.c, .moves = p.moves}; }
+    if (i == 1) { return Piles {.a = p.a, .b = v, .c = p.c, .moves = p.moves}; }
+    return Piles {.a = p.a, .b = p.b, .c = v, .moves = p.moves};
+}
+
+Piles push_disk(Piles p, Int size, Int pile) {
+    Pile top = pile_of(p, pile);
+    Bool bad = match top { Disk(s, _) => size >= s, Empty => false };
+    rt_assert(!bad, "Cannot put a big disk on a smaller one");
+    return with_pile(p, pile, Disk(size, top));
+}
+
+Piles move_top(Piles p, Int from, Int to) {
+    Pile top = pile_of(p, from);
+    rt_assert(match top { Disk(_, _) => true, Empty => false },
+              "Attempting to remove a disk from an empty pile");
+    Piles moved = match top {
+        Disk(s, rest) => push_disk(with_pile(p, from, rest), s, to),
+        Empty => p
+    };
+    return Piles {.a = moved.a, .b = moved.b, .c = moved.c, .moves = moved.moves + 1};
+}
+
+Piles move_disks(Piles p, Int disks, Int from, Int to) {
+    if (disks == 1) { return move_top(p, from, to); }
+    Int other = (3 - from) - to;
+    return move_disks(move_top(move_disks(p, disks - 1, from, other), from, to), disks - 1, other, to);
+}
+
+Piles build_tower(Piles p, Int pile, Int i) {
+    if (i < 0) { return p; }
+    return build_tower(push_disk(p, i, pile), pile, i - 1);
+}
+
+@requires(args)
+Int main() {
+    Int disks = 12 + args.count();
+    Piles p0 = Piles {.a = Empty, .b = Empty, .c = Empty, .moves = 0};
+    Piles p1 = build_tower(p0, 0, disks);
+    Piles done = move_disks(p1, disks, 0, 1);
+    Int left = match (done.a) { Disk(_, _) => 1, Empty => 0 };
+    println(f"{done.moves} {left}");
+    return 0;
+}

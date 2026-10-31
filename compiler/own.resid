@@ -186,7 +186,46 @@ Bool ow_trk(OX x, Str t) {
 // A value that may hold a tracked object without being one itself (a sum,
 // an Option, a closure): never written in place, but what it holds stays
 // aliased, so a copy or a pending use of it still blocks a write.
-Bool ow_hold(OX x, Str t) { return t != "" && !ow_trk(x, t) && !ow_scalar_ty(t); }
+Bool ow_hold(OX x, Str t) { return t != "" && !ow_trk(x, t) && !ow_scalar_ty(t) && ow_may_hold(x, t, []); }
+
+// Whether a value of type t can reach an object written in place (a
+// record, a list, a map). Only scalars and sums whose payloads are such
+// types, recursively, cannot: sharing one is never observable. Anything
+// else (a generic payload, a closure, an unknown type) may.
+Bool ow_may_hold(OX x, Str t, List(Str) seen) {
+    if (ow_scalar_ty(t) || seen.contains(t)) { return false; }
+    if (t == "" || ow_trk(x, t) || seen.len() > 16) { return true; }
+    Bool wrap = str_starts_with(t, "Option(") || str_starts_with(t, "Secret(");
+    if (wrap && str_ends_with(t, ")")) { return ow_may_hold(x, str_slice(t, str_index_of(t, "(", 0) + 1, str_len(t) - 1), seen.concat([t])); }
+    Int si = sumtype_index_cg(x.fs, t);
+    // A name two modules declare resolves to the first: trust neither.
+    if (si < 0 || sumv_params_cg(x.fs.suv[si]) != "" || ow_count_of(x.fs.sun, x.fs.sun[si], 0, 0) > 1) { return true; }
+    return ow_may_hold_vs(x, sumv_types_cg(x.fs.suv[si]), 0, seen.concat([t]));
+}
+
+Int ow_count_of(List(Str) xs, Str v, Int i, Int n) {
+    if (i >= xs.len()) { return n; }
+    return ow_count_of(xs, v, i + 1, if (xs[i] == v) { n + 1 } else { n });
+}
+
+Bool ow_may_hold_vs(OX x, List(Str) vs, Int i, List(Str) seen) {
+    if (i >= vs.len()) { return false; }
+    if (ow_may_hold_ps(x, str_split(vs[i], ","), 0, seen)) { return true; }
+    return ow_may_hold_vs_n(x, vs, i, seen);
+}
+
+Bool ow_may_hold_vs_n(OX x, List(Str) vs, Int i, List(Str) seen) { return ow_may_hold_vs(x, vs, i + 1, seen); }
+
+// A payload's positions (a comma inside a type argument splits it into
+// pieces that are not types, which count as may-hold).
+Bool ow_may_hold_ps(OX x, List(Str) ps, Int i, List(Str) seen) {
+    if (i >= ps.len()) { return false; }
+    Str t = str_trim(ps[i]);
+    if (t != "" && ow_may_hold(x, ow_base(x.fs, t), seen)) { return true; }
+    return ow_may_hold_ps_n(x, ps, i, seen);
+}
+
+Bool ow_may_hold_ps_n(OX x, List(Str) ps, Int i, List(Str) seen) { return ow_may_hold_ps(x, ps, i + 1, seen); }
 
 Bool ow_scalar_ty(Str t) {
     if (t == "Int" || t == "UInt" || t == "Bool" || t == "Str" || t == "Float" || t == "Bytes" || t == "Void") { return true; }
