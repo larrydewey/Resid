@@ -302,25 +302,42 @@ Int handle_fd(Int h) {
     return ld64(h + 16);
 }
 
-// The whole file from the start, read through the handle.
+// The handle's fd, swapped atomically for `mark` (-1 closed, -2 held by a
+// read); -1 once closed. A slot held by a read is waited for, sleeping.
+Int handle_take(Int h, Int mark) {
+    Int fd = handle_fd(h);
+    if (fd == 0 - 2) {
+        Int ts = resid_raw_tls("handle_ts", 16);
+        _ = st64(ts, 0) + st64(ts + 8, 1000000);
+        _ = resid_raw_syscall(35, ts, 0, 0, 0, 0, 0);   // nanosleep 1 ms
+        return handle_take(h, mark);
+    }
+    if (fd < 0) { return 0 - 1; }
+    if (resid_raw_cas(h + 16, fd, mark)) { return fd; }
+    return handle_take(h, mark);
+}
+
+// The whole file from the start, read through the handle. The fd is held
+// for the read, so a close in another thread waits instead of freeing it.
 @export("resid_fs_read_handle", "ptr(ptr)")
 pub Int rt_fs_read_handle(Int h) {
-    Int fd = handle_fd(h);
+    Int fd = handle_take(h, 0 - 2);
     if (fd < 0) { return xempty(); }
     Int sz = sc(8, fd, 0, 2);
-    if (sz < 0 || sc(8, fd, 0, 0) < 0) { return xempty(); }
+    if (sz < 0 || sc(8, fd, 0, 0) < 0) { return st64(h + 16, fd) * 0 + xempty(); }
     Int p = xmalloc(sz + 1);
     Int n = read_n(fd, p, 0, sz);
     _ = st8(p + n, 0);
+    _ = st64(h + 16, fd);
     return arena_adopt(p, n);
 }
 
 // Never freed: a closed handle keeps fd -1, so reuse cannot reach freed memory or a reused fd.
+// Only the thread whose swap took the fd closes it.
 @export("resid_fs_close", "i8(ptr)")
 pub Int rt_fs_close(Int h) {
-    Int fd = handle_fd(h);
+    Int fd = handle_take(h, 0 - 1);
     if (fd < 0) { return 0; }
-    _ = st64(h + 16, 0 - 1);
     return if (sys_close(fd) == 0) { 1 } else { 0 };
 }
 
@@ -752,13 +769,37 @@ Bool st_stopped(Int st) { return (st & 255) == 127; }
 
 Int dbg_status(Int st) { return if (st_exited(st)) { (st >> 8) & 255 } else { 128 + (st & 127) }; }
 
+// A known thread with a status (stored at stp), polled every 1 ms; -1 once
+// none is left.
+Int dbg_next(Int stp) {
+    if (ld64(dbg() + 8) <= 0) { return 0 - 1; }
+    Int t = dbg_scan(stp, 0);
+    if (t > 0) { return t; }
+    Int ts = resid_raw_tls("dbg_nap", 16);
+    _ = st64(ts, 0) + st64(ts + 8, 1000000);
+    _ = resid_raw_syscall(35, ts, 0, 0, 0, 0, 0);   // nanosleep
+    return dbg_next(stp);
+}
+
+// wait4(tid, WNOHANG | __WALL) on each known thread from i; 0 if none has a
+// status. A thread that is no child any more (ECHILD) is dropped.
+Int dbg_scan(Int stp, Int i) {
+    if (i >= ld64(dbg() + 8)) { return 0; }
+    Int t = ld64(dbg() + 32 + i * 8);
+    Int r = sc4(61, t, stp, 1073741825, 0);
+    if (r == t) { return t; }
+    if (r == 0 - 10) { return dbg_remove(t) * 0 + dbg_scan(stp, i); }
+    return dbg_scan(stp, i + 1);
+}
+
 // The next stop: the thread (a trap when resid_dbg_signal() is 0), or -1
-// once the program has ended.
+// once the program has ended. Only the debuggee's known threads are waited
+// on, never wait4(-1): other children are not the debugger's to reap.
 @export("resid_dbg_wait", "i64()")
 pub Int rt_dbg_wait() {
     Int stp = resid_raw_tls("dbg_status", 8);
     _ = st64(stp, 0);
-    Int t = sc4(61, 0 - 1, stp, 1073741824, 0);
+    Int t = dbg_next(stp);
     if (t < 0) { return 0 - 1; }
     Int st = ld32(stp);
     if (st_exited(st) || st_signaled(st)) {

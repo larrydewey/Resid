@@ -1,0 +1,9 @@
+// A grow past what a list can hold aborts instead of overflowing its allocation.
+@requires(args)
+Int main() {
+    List(Int) xs = [];
+    Int n = 2305843009213693951 + args.count() * 0;
+    List(Int) ys = xs.grow(n, 7);
+    println(f"{ys.len()}");
+    return 0;
+}

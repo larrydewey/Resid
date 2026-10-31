@@ -221,8 +221,10 @@ pub Int utf8_decode(Int p, Int len) {
     return ((b0 & 7) << 18) | ((ld8(p + 1) & 63) << 12) | ((ld8(p + 2) & 63) << 6) | (ld8(p + 3) & 63);
 }
 
-// UTF-8 of cp into buf (>= 4 bytes); returns the byte count.
+// UTF-8 of cp into buf (>= 4 bytes); returns the byte count. A negative,
+// surrogate or out-of-range cp encodes as U+FFFD.
 pub Int utf8_encode(Int cp, Int buf) {
+    if (cp < 0 || (cp >= 55296 && cp <= 57343) || cp > 1114111) { return utf8_encode(65533, buf); }
     if (cp < 128) { return st8(buf, cp) + 1; }
     if (cp < 2048) {
         _ = st8(buf, 192 | (cp >> 6));

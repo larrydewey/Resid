@@ -64,6 +64,10 @@ def checksum(t, e):
         return f"lll({e}, 0, 0)"
     if t == "List(Int, 4)":
         return f"lfx({e})"
+    if t == "Ph":
+        return f"ph_sum({e})"
+    if t == "OptC":
+        return f"opt_ck({e})"
     if t == "Str(8)":
         return f"str_len({e})"
     return " + ".join(f"({checksum(ft, e + '.' + f)}) % 1000003 * {i + 2}" for i, (f, ft) in enumerate(fields(t)))
@@ -353,6 +357,61 @@ Pf pf_copy(Pf f, Int i) {
     if (f.cs.len() < 2) { return f; }
     return Pf {.cs = f.cs.with((i + 1) % f.cs.len(), f.cs[i % f.cs.len()]), .u = f.cs[i % f.cs.len()], .k = f.k};
 }
+// A record held by a value that is not a record (a sum, an Option, a map,
+// a field or index of a call result), then rebuilt from its own fields.
+type Ph = PHold(Pc, Int) | PNone;
+Int pc_ck(Pc c) { return (c.a.x % 1000003 * 7 + c.a.y % 1000003 * 3 + c.n % 1000003) % 1000003; }
+Int ph_sum(Ph o) { return match (o) { PHold(c, n) => (pc_ck(c) * 3 + n % 1000003) % 1000003, _ => 5 }; }
+Int opt_ck(Option(Pc) o) { return match (o) { Some(c) => pc_ck(c), None => 7 }; }
+Pc ph_get(Ph o, Pc d) { return match (o) { PHold(c, n) => c, _ => d }; }
+Pc optc_or(Option(Pc) o, Pc d) { return match (o) { Some(c) => c, None => d }; }
+Int ph_two(Ph a, Ph b) { return (ph_sum(a) * 5 + ph_sum(b)) % 1000003; }
+Pf ph_mk(Pc c) { return Pf {.cs = [pc_new(1)], .u = c, .k = 0}; }
+List(Pf) ph_mkl(Pf b) { return [b]; }
+Int ph_fresh_list(Int i) {
+    Pc r = pc_new(i);
+    List(Ph) xs = [PHold(r, 1), PHold(Pc {.a = Pa {.x = r.a.x + 1, .y = r.a.y + 1}, .n = r.n + 1}, 2)];
+    return (ph_sum(xs[0]) * 3 + ph_sum(xs[1])) % 1000003;
+}
+Int ph_fresh_copy(Int i) {
+    Pc r = pc_new(i);
+    Ph v = PHold(r, 1);
+    Ph w = v;
+    Pc s = Pc {.a = Pa {.x = r.a.x + 1, .y = r.a.y + 1}, .n = r.n + 1};
+    return (ph_sum(w) * 3 + pc_ck(s)) % 1000003;
+}
+Int ph_fresh_arg(Int i) {
+    Pc r = pc_new(i);
+    Ph v = PHold(r, 1);
+    return ph_two(v, PHold(Pc {.a = Pa {.x = r.a.x + 1, .y = r.a.y + 1}, .n = r.n + 1}, 2));
+}
+Int ph_fresh_opt(Int i) {
+    Pc r = pc_new(i);
+    List(Option(Pc)) xs = [Some(r), Some(Pc {.a = Pa {.x = r.a.x + 1, .y = r.a.y + 1}, .n = r.n + 1})];
+    return (opt_ck(xs[0]) * 3 + opt_ck(xs[1])) % 1000003;
+}
+Map(Int, Ph) ph_mkmap(Int i) {
+    Pc r = pc_new(i);
+    return {1: PHold(r, 1), 2: PHold(Pc {.a = Pa {.x = r.a.x + 1, .y = r.a.y + 1}, .n = r.n + 1}, 2)};
+}
+Int ph_fresh_map(Int i) {
+    Map(Int, Ph) m = ph_mkmap(i);
+    Ph a = m.get(1) else { PNone };
+    Ph b = m.get(2) else { PNone };
+    return (ph_sum(a) * 3 + ph_sum(b)) % 1000003;
+}
+Int ph_fresh_field(Int i) {
+    Pc r = pc_new(i);
+    Pc q = ph_mk(r).u;
+    Pc s = Pc {.a = Pa {.x = r.a.x + 1, .y = r.a.y + 1}, .n = r.n + 1};
+    return (pc_ck(q) * 3 + pc_ck(s)) % 1000003;
+}
+Int ph_fresh_index(Int i) {
+    Pf b = ph_mk(pc_new(i));
+    Pf q = ph_mkl(b)[0];
+    Pf t = Pf {.cs = b.cs, .u = Pc {.a = Pa {.x = b.u.a.x + 1, .y = b.u.a.y}, .n = b.u.n + 1}, .k = b.k + 1};
+    return (pf_sum(q) % 1000003 * 3 + pf_sum(t) % 1000003) % 1000003;
+}
 """
 
 # Operations: (result type, template over earlier bindings of given types).
@@ -439,6 +498,22 @@ OPS = [
     ("Int", [], "px_fresh_arg(rt {i})"),
     ("Int", [], "lf_fresh(rt {i})"),
     ("List(Pc)", ["Pf"], "{0}.cs"),
+    ("Int", [], "ph_fresh_list(rt {i})"),
+    ("Int", [], "ph_fresh_copy(rt {i})"),
+    ("Int", [], "ph_fresh_arg(rt {i})"),
+    ("Int", [], "ph_fresh_opt(rt {i})"),
+    ("Int", [], "ph_fresh_map(rt {i})"),
+    ("Int", [], "ph_fresh_field(rt {i})"),
+    ("Int", [], "ph_fresh_index(rt {i})"),
+    ("Ph", ["Pc"], "PHold({0}, {i})"),
+    ("Ph", ["Ph"], "{0}"),
+    ("Pc", ["Ph", "Pc"], "ph_get({0}, {1})"),
+    ("OptC", ["Pc"], "Some({0})"),
+    ("Pc", ["OptC", "Pc"], "optc_or({0}, {1})"),
+    ("Pc", ["Pc"], "Pc {{.a = Pa {{.x = {0}.a.x + {i}, .y = {0}.a.y + 1}}, .n = {0}.n + 1}}"),
+    ("Int", ["Ph", "Pc"], "ph_two({0}, PHold(Pc {{.a = Pa {{.x = {1}.a.x + 1, .y = {1}.a.y}}, .n = {1}.n + 1}}, 2))"),
+    ("Pc", ["Pc"], "ph_mk({0}).u"),
+    ("Pf", ["Pf"], "ph_mkl({0})[0]"),
 ]
 
 
@@ -464,6 +539,9 @@ def main():
         if rt == "Opt":
             out.append(f"    Option(Pa) {n} = {e};")
             binds.append((n, "Opt"))
+        elif rt == "OptC":
+            out.append(f"    Option(Pc) {n} = {e};")
+            binds.append((n, "OptC"))
         elif rt == "Int":
             out.append(f"    Int w{step} = {e};")
             out.append(f"    println(f\"i{step} {{w{step}}}\");")
@@ -474,7 +552,7 @@ def main():
         # Sometimes read an earlier value right away (keeps it live).
         if R.random() < 0.3:
             old, ot = R.choice(binds)
-            if ot in TYPES or ot == "List(Pc)" or ot == "List(List(Int))":
+            if ot in TYPES or ot in ("List(Pc)", "List(List(Int))", "Ph", "OptC"):
                 out.append(f"    println(f\"r{step} {{{checksum(ot, old)}}}\");")
     # Print everything, in a random order.
     order = binds[:]

@@ -234,6 +234,8 @@ pub Int alloc_in(Int r, Int n0) {
 
 // A new page (or run) for region r, holding the n bytes asked for.
 pub Int region_grow(Int r, Int n) {
+    // Bounded as malloc's big_max (2^46), so n + 16 cannot wrap.
+    if (n < 0 || n > 70368744177664) { return rt_abort("allocation size out of range"); }
     Int k = order_of(n + 16);
     Int pg = pages_take(k, ld64(r));
     _ = st64(pg, ld64(r + 8)) + st64(pg + 8, k);

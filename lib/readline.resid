@@ -21,7 +21,9 @@
 // the word before, Alt-D the word after; Ctrl-T transposes; Ctrl-L clears
 // the screen; Up/Down, Ctrl-P/N walk the history; Tab completes; Ctrl-C
 // gives Interrupted. The prompt should be plain text: its width is its
-// code point count, as is each character's.
+// code point count, as is each character's. Control characters (C0, DEL,
+// C1) in the prompt, completions and history entries are shown as `?`;
+// typed ones are ignored.
 
 /// Past input lines, oldest first, bounded to the newest `max`.
 /// Build one with `history_new` and grow it with `history_add`.
@@ -65,11 +67,12 @@ pub ReadResult readline(Str prompt, History h) {
 /// Like `readline`, with Tab completing the whole line through `complete`.
 /// One candidate replaces the line; several extend it to their common
 /// prefix or, when that adds nothing, are listed below it; none rings the
-/// bell. Without a terminal, the line is read unedited.
+/// bell. Control characters in candidates become `?`. Without a terminal,
+/// the line is read unedited.
 @requires(terminal)
 pub ReadResult readline_with(Str prompt, History h, List(Str) closure(Str) complete) {
     if (!resid_term_is_tty(0) || !resid_term_raw()) { return rl_plain(prompt); }
-    Ed e = Ed {.prompt = prompt, .buf = "", .pos = 0, .hist = h.items, .hi = h.items.len(), .draft = ""};
+    Ed e = Ed {.prompt = rl_safe(prompt), .buf = "", .pos = 0, .hist = h.items, .hi = h.items.len(), .draft = ""};
     ReadResult r = rl_loop(e, complete);
     Bool restored = resid_term_restore();
     return r;
@@ -82,12 +85,29 @@ List(Str) rl_no_completions(Str s) {
 
 // Without a terminal: the prompt, then one unedited line.
 ReadResult rl_plain(Str prompt) {
-    Bool shown = print(prompt);
+    Bool shown = print(rl_safe(prompt));
     Str l = resid_read_line();
     if (l == "") { return Eof; }
     Str a = if (str_ends_with(l, "\n")) { str_slice(l, 0, str_len(l) - 1) } else { l };
     Str b = if (str_ends_with(a, "\r")) { str_slice(a, 0, str_len(a) - 1) } else { a };
     return Line(b);
+}
+
+// C0, DEL and C1 code points, which a terminal would act on.
+Bool rl_ctl(Int c) { return c < 32 || c == 127 || (c >= 128 && c < 160); }
+
+// `s` with every control code point replaced by `?`.
+Str rl_safe(Str s) { return rl_safe_at(s, 0, str_len(s), StrBuf()).finish(); }
+
+StrBuf rl_safe_at(Str s, Int i, Int n, StrBuf b) {
+    if (i >= n) { return b; }
+    Int c = str_char_at(s, i);
+    return rl_safe_at(s, i + 1, n, b.push_char(if (rl_ctl(c)) { 63 } else { c }));
+}
+
+List(Str) rl_safe_all(List(Str) xs, Int i, List(Str) acc) {
+    if (i >= xs.len()) { return acc; }
+    return rl_safe_all(xs, i + 1, acc.concat([rl_safe(xs[i])]));
 }
 
 // ─── Keys ──────────────────────────────────────────────────────────────
@@ -212,7 +232,7 @@ Str rl_render(Ed e) {
     Int end = min(str_len(e.buf), start + avail);
     Int col = pl + e.pos - start;
     Str to_col = if (col > 0) { esc() + f"[{col}C" } else { "" };
-    return str_from_code(13) + e.prompt + str_slice(e.buf, start, end) + esc() + "[0K" + str_from_code(13) + to_col;
+    return str_from_code(13) + e.prompt + rl_safe(str_slice(e.buf, start, end)) + esc() + "[0K" + str_from_code(13) + to_col;
 }
 
 @requires(terminal(readonly))
@@ -272,7 +292,7 @@ Ed rl_edit(Ed e, Int k) {
     }
     if (k == k_up() || k == 16) { return rl_hist(e, e.hi - 1); }
     if (k == k_down() || k == 14) { return rl_hist(e, e.hi + 1); }
-    if (k < 32 || k == 127) { return e; }
+    if (rl_ctl(k)) { return e; }
     return ed_set(e, before + str_from_code(k) + after, e.pos + 1);
 }
 
@@ -324,7 +344,9 @@ Ed rl_hist(Ed e, Int i) {
 
 // ─── Completion ────────────────────────────────────────────────────────
 
-Ed rl_complete(Ed e, List(Str) cands) {
+Ed rl_complete(Ed e, List(Str) raw) {
+    List(Str) none = [];
+    List(Str) cands = rl_safe_all(raw, 0, none);
     Int m = cands.len();
     if (m == 0) {
         Bool bell = print(str_from_code(7));

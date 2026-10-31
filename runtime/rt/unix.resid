@@ -18,8 +18,10 @@
 //     not this family's job.
 //
 //   - A mapping is a handle, never a pointer. The program gets an opaque
-//     Int, the descriptor to pass to the server, and `shm_put` to copy
-//     bytes in; it never gets an address it could walk.
+//     Int (an index into a fixed table, with a generation that a free
+//     bumps), the descriptor to pass to the server, and `shm_put` to copy
+//     bytes in; it never gets an address it could walk, and a forged or
+//     stale handle is refused without being dereferenced.
 
 // ─── Descriptors received with the bytes ─────────────────────────────
 // A window server sends descriptors beside its messages (a keymap, a shm
@@ -30,9 +32,26 @@
 Int disp_fds() { return resid_raw_global("rt_disp_fds", 256); }
 Int fdq_cap() { return 30; }
 
+// One lock for the ring and the rx marks: threads share both.
+Int fdq_lockw() { return resid_raw_global("rt_disp_fdq_lock", 8); }
+
+Int fdq_lock() {
+    if (resid_raw_cas(fdq_lockw(), 0, 1)) { return 0; }
+    _ = resid_raw_syscall(24, 0, 0, 0, 0, 0, 0);   // sched_yield
+    return fdq_lock();
+}
+
+Int fdq_unlock() { return st64(fdq_lockw(), 0); }
+
+Int fdq_push(Int fd) {
+    _ = fdq_lock();
+    Int r = fdq_push_l(fd);
+    return fdq_unlock() * 0 + r;
+}
+
 // Store the descriptor and raise the count, or `fdq_pop` sees an empty
 // ring and answers -1 for a descriptor the kernel really did pass.
-Int fdq_push(Int fd) {
+Int fdq_push_l(Int fd) {
     Int q = disp_fds();
     if (ld64(q + 8) >= fdq_cap()) { _ = fdq_take_all(q); }
     Int n = ld64(q + 8);
@@ -43,8 +62,14 @@ Int fdq_push(Int fd) {
     return n + 1;
 }
 
-// The oldest queued descriptor, or -1 when none is waiting.
 Int fdq_pop() {
+    _ = fdq_lock();
+    Int r = fdq_pop_l();
+    return fdq_unlock() * 0 + r;
+}
+
+// The oldest queued descriptor, or -1 when none is waiting.
+Int fdq_pop_l() {
     Int q = disp_fds();
     Int head = ld64(q);
     Int n = ld64(q + 8);
@@ -67,8 +92,13 @@ Bool rx_has(Int fd) { return fd >= 0 && fd < rx_cap() && ld8(rx_fds() + fd) == 1
 
 // Close and forget everything queued: a message the caller never read
 // must not leak its descriptors. The count is returned for the tests.
-Int fdq_drop() { return fdq_take_all(disp_fds()); }
+Int fdq_drop() {
+    _ = fdq_lock();
+    Int r = fdq_take_all(disp_fds());
+    return fdq_unlock() * 0 + r;
+}
 
+// Called with the fdq lock held.
 Int fdq_take_all(Int q) {
     Int n = ld64(q + 8);
     _ = fdq_close_at(q, 0, n);
@@ -90,11 +120,16 @@ Int fdq_close_at(Int q, Int i, Int n) {
 
 // Is this fd a connected socket? The same test the TCP builtins make, and
 // it holds for a Unix one too (S_IFSOCK), which is what lets a display
-// fd be polled with resid_tcp_poll.
+// fd be polled with resid_tcp_poll. Its domain must be AF_UNIX too, so a
+// TCP socket the program holds is not a display.
 Bool disp_sock_ok(Int fd) {
     if (fd < 0) { return false; }
     Int b = resid_raw_tls("disp_sock_stat", 144);
-    return resid_raw_syscall(5, fd, b, 0, 0, 0, 0) == 0 && (ld32(b + st_mode_at()) & 61440) == 49152;
+    if (resid_raw_syscall(5, fd, b, 0, 0, 0, 0) != 0 || (ld32(b + st_mode_at()) & 61440) != 49152) { return false; }
+    Int dom = resid_raw_tls("disp_sock_dom", 8);
+    Int lenp = resid_raw_tls("disp_sock_dom_len", 4);
+    _ = st32(dom, 0) + st32(lenp, 4);
+    return resid_raw_syscall(55, fd, 1, 39, dom, lenp, 0) == 0 && ld32(dom) == 1;   // SOL_SOCKET, SO_DOMAIN
 }
 
 Int sa_buf() { return resid_raw_tls("disp_sa", 112); }
@@ -266,23 +301,32 @@ Int disp_msg_head(Int base, Int iov_len, Bool ctl) {
 
 Int disp_set_ctl_fd(Int fd) { return st32(msg_buf() + 88, fd); }
 
-// All of `data`, with the descriptor in pass_fd (or none when it is
-// negative) sent beside it. False on any error, and a partial send counts
-// as a failure: a caller that wanted the descriptor has it only when the
-// message went whole.
+// All of `data`, with the descriptor in pass_fd (or none when it is -1)
+// sent beside it. False on any error, and a partial send counts as a
+// failure: a caller that wanted the descriptor has it only when the
+// message went whole. The only descriptor that may go is a live shm
+// mapping's; anything else is refused and nothing is sent.
 @export("resid_disp_send", "i8(i64,ptr,i64)")
 pub Int rt_disp_send(Int fd, Int l, Int pass_fd) {
-    if (!disp_sock_ok(fd)) { return 0; }
+    if (!disp_sock_ok(fd) || pass_fd < 0 - 1) { return 0; }
     Int n = c_list_len(l);
     if (n < 0 || n > 1048576) { return 0; }
-    if (n <= 0) { return 1; }
+    Bool ctl = pass_fd >= 0;
+    // A duplicate taken under the shm lock: a concurrent free cannot hand
+    // the number to another file before it is sent.
+    Int pfd = if (ctl) { shm_dup_fd(pass_fd) } else { 0 - 1 };
+    if (ctl && pfd < 0) { return 0; }
+    if (n <= 0) {
+        _ = if (ctl) { sys_close(pfd) } else { 0 };
+        return 1;
+    }
     Int buf = xmalloc(n);
     _ = disp_bytes_of(l, buf, 0, n);
-    Bool ctl = pass_fd >= 0;
     Int m = disp_msg_head(buf, n, ctl);
-    if (ctl) { _ = disp_set_ctl_fd(pass_fd); }
+    if (ctl) { _ = disp_set_ctl_fd(pfd); }
     Int w = resid_raw_syscall(46, fd, m, 0, 0, 0, 0);
     _ = c_free(buf);
+    _ = if (ctl) { sys_close(pfd) } else { 0 };
     return if (w == n) { 1 } else { 0 };
 }
 
@@ -357,7 +401,24 @@ pub Int rt_disp_poll(Int fl, Int wl, Int ms) { return rt_tcp_poll(fl, wl, ms); }
 pub Int rt_disp_recv_fd() { return fdq_pop(); }
 
 @export("resid_disp_close", "i8(i64)")
-pub Int rt_disp_close(Int fd) { return if (fd >= 0 && disp_sock_ok(fd)) { if (sys_close(fd) == 0) { 1 } else { 0 } } else { 0 }; }
+pub Int rt_disp_close(Int fd) {
+    if (fd < 0 || !disp_sock_ok(fd)) { return 0; }
+    // The number may be reused by the next open: it was never received.
+    _ = fdq_lock();
+    _ = rx_mark(fd, 0);
+    _ = fdq_unlock();
+    return if (sys_close(fd) == 0) { 1 } else { 0 };
+}
+
+// Was `fd` handed out by `resid_disp_recv_fd`? Its mark is cleared in the
+// same step, so two readers cannot both claim it.
+Bool rx_claim(Int fd) {
+    _ = fdq_lock();
+    Bool ok = rx_has(fd);
+    _ = if (ok) { rx_mark(fd, 0) } else { 0 };
+    _ = fdq_unlock();
+    return ok;
+}
 
 // The contents of a descriptor the window server sent (a Wayland keymap),
 // from its start, at most `max` bytes (capped at 16 MB), and the
@@ -366,8 +427,7 @@ pub Int rt_disp_close(Int fd) { return if (fd >= 0 && disp_sock_ok(fd)) { if (sy
 // `max` 0 only closes it.
 @export("resid_disp_fd_read", "ptr(i64,i64)")
 pub Int rt_disp_fd_read(Int fd, Int max0) {
-    if (!rx_has(fd)) { return xempty(); }
-    _ = rx_mark(fd, 0);
+    if (!rx_claim(fd)) { return xempty(); }
     Int max = clamp(max0, 0, 16777216);
     if (max <= 0) { return xempty() + sys_close(fd) * 0; }
     Int buf = xmalloc(max);
@@ -409,8 +469,9 @@ pub Int rt_disp_x11_auth() {
     if (dpy == 0 || ld8(dpy) == 0) { return xempty(); }
     Int path = xauth_path();
     if (path == 0) { return xempty(); }
-    Int fd = sys_open(path, o_rdonly(), 0);
+    Int fd = sys_open(path, o_rdonly() | 2048, 0);   // O_NONBLOCK: opening a FIFO does not wait
     if (fd < 0) { return xempty(); }
+    if (!xauth_file_ok(fd)) { return xempty() + sys_close(fd) * 0; }
     Int cap = 65536;
     Int buf = xmalloc(cap);
     Int n = pread_all(fd, buf, 0, cap);
@@ -421,6 +482,14 @@ pub Int rt_disp_x11_auth() {
     Int out = if (at >= 0) { disp_bytes_list(buf + at + 2, xa_u16(buf + at)) } else { xempty() };
     _ = c_free(buf);
     return out;
+}
+
+// Is the opened authority file a regular file of at most 1 MB? A FIFO or
+// a device named by XAUTHORITY is not read.
+Bool xauth_file_ok(Int fd) {
+    Int b = resid_raw_tls("disp_xa_stat", 144);
+    if (resid_raw_syscall(5, fd, b, 0, 0, 0, 0) != 0) { return false; }
+    return (ld32(b + st_mode_at()) & 61440) == 32768 && ld64(b + 48) <= 1048576;   // S_IFREG, st_size
 }
 
 // XAUTHORITY, else $HOME/.Xauthority, else 0.
@@ -498,13 +567,57 @@ Int xauth_find(Int buf, Int n, Int at, Int host, Int num) {
 // ─── Shared memory ────────────────────────────────────────────────────
 // A memfd, sized, mapped MAP_SHARED: the descriptor goes to the window
 // server (a Wayland shm pool, an X11 MIT-SHM segment), the bytes go in
-// through `shm_put`. The handle is all the state the program holds.
+// through `shm_put`. The handle is an index into a fixed table of 64
+// slots, {generation, fd, bytes, address}: generation * 64 + slot + 1.
+// A free bumps the slot's generation, so a stale handle no longer matches;
+// a handle is only ever compared, never dereferenced. The table's lock is
+// held across each lookup and the copy or unmap that follows it.
 
-Int shm_magic() { return 1296386893; }                     // "shm1"
-Bool shm_ok(Int h) { return h != 0 && ld32(h) == shm_magic(); }
+Int shm_tab() { return resid_raw_global("rt_disp_shm", 2048); }
+Int shm_lockw() { return resid_raw_global("rt_disp_shm_lock", 8); }
 
-// A shared mapping of `bytes` (at most 256 MB), or 0. Nothing else maps
-// memory for a program: the address stays inside this handle.
+Int shm_lock() {
+    if (resid_raw_cas(shm_lockw(), 0, 1)) { return 0; }
+    _ = resid_raw_syscall(24, 0, 0, 0, 0, 0, 0);   // sched_yield
+    return shm_lock();
+}
+
+Int shm_unlock() { return st64(shm_lockw(), 0); }
+
+// The live slot `h` names, or 0. Called with the lock held.
+Int shm_find(Int h) {
+    if (h <= 0) { return 0; }
+    Int s = (h - 1) & 63;
+    Int g = (h - 1) >> 6;
+    Int e = shm_tab() + s * 32;
+    return if (g != 0 && ld64(e) == g && ld64(e + 24) != 0) { e } else { 0 };
+}
+
+// The first unused slot from `i`, or -1. Called with the lock held.
+Int shm_free_slot(Int i) {
+    if (i >= 64) { return 0 - 1; }
+    return if (ld64(shm_tab() + i * 32 + 24) == 0) { i } else { shm_free_slot(i + 1) };
+}
+
+// Is `fd` a live mapping's descriptor? Called with the lock held.
+Bool shm_has_fd(Int fd, Int i) {
+    if (i >= 64) { return false; }
+    Int e = shm_tab() + i * 32;
+    if (ld64(e + 24) != 0 && ld64(e + 8) == fd) { return true; }
+    return shm_has_fd(fd, i + 1);
+}
+
+// A close-on-exec duplicate of a live mapping's descriptor, or -1.
+Int shm_dup_fd(Int fd) {
+    _ = shm_lock();
+    Int d = if (shm_has_fd(fd, 0)) { resid_raw_syscall(72, fd, 1030, 0, 0, 0, 0) } else { 0 - 1 };   // F_DUPFD_CLOEXEC
+    _ = shm_unlock();
+    return if (d >= 0) { d } else { 0 - 1 };
+}
+
+// A shared mapping of `bytes` (at most 256 MB), or 0, also when all 64
+// slots are taken. Nothing else maps memory for a program: the address
+// stays inside the table.
 @export("resid_disp_shm_new", "i64(i64)")
 pub Int rt_disp_shm_new(Int bytes) {
     if (bytes <= 0 || bytes > 268435456) { return 0; }
@@ -513,30 +626,47 @@ pub Int rt_disp_shm_new(Int bytes) {
     if (resid_raw_syscall(77, fd, bytes, 0, 0, 0, 0) != 0) { return sys_close(fd) * 0; }   // ftruncate
     Int a = resid_raw_syscall(9, 0, bytes, 3, 1, fd, 0);                              // mmap, PROT_READ|WRITE, MAP_SHARED
     if (a < 0) { return sys_close(fd) * 0; }
-    Int h = xmalloc(32);
-    _ = st32(h, shm_magic());
-    _ = st64(h + 8, fd) + st64(h + 16, bytes) + st64(h + 24, a);
-    return h;
+    _ = shm_lock();
+    Int s = shm_free_slot(0);
+    if (s < 0) {
+        _ = shm_unlock();
+        _ = resid_raw_syscall(11, a, bytes, 0, 0, 0, 0);   // munmap
+        return sys_close(fd) * 0;
+    }
+    Int e = shm_tab() + s * 32;
+    Int g = if (ld64(e) == 0) { 1 } else { ld64(e) };
+    _ = st64(e, g) + st64(e + 8, fd) + st64(e + 16, bytes) + st64(e + 24, a);
+    _ = shm_unlock();
+    return g * 64 + s + 1;
 }
 
 // The descriptor to pass to the window server, or -1.
 @export("resid_disp_shm_fd", "i64(i64)")
-pub Int rt_disp_shm_fd(Int h) { return if (shm_ok(h)) { ld64(h + 8) } else { 0 - 1 }; }
+pub Int rt_disp_shm_fd(Int h) {
+    _ = shm_lock();
+    Int e = shm_find(h);
+    Int fd = if (e != 0) { ld64(e + 8) } else { 0 - 1 };
+    _ = shm_unlock();
+    return fd;
+}
 
 // `len` bytes of `px` at `off` inside the mapping. False when the handle
 // is not one of ours, or the range runs past its end: a frame is written
 // into the mapping, never outside it.
 @export("resid_disp_shm_put", "i8(i64,i64,ptr,i64)")
 pub Int rt_disp_shm_put(Int h, Int off, Int l, Int len0) {
-    if (!shm_ok(h) || off < 0) { return 0; }
+    if (h <= 0 || off < 0) { return 0; }
     Int len = clamp(len0, 0, c_list_len(l));
-    if (off + len > ld64(h + 16)) { return 0; }
-    if (len <= 0) { return 1; }
-    Int buf = xmalloc(len);
-    _ = disp_bytes_of(l, buf, 0, len);
-    _ = mcopy(ld64(h + 24) + off, buf, len);
-    _ = c_free(buf);
-    return 1;
+    Int buf = if (len > 0) { xmalloc(len) } else { 0 };
+    _ = if (len > 0) { disp_bytes_of(l, buf, 0, len) } else { 0 };
+    _ = shm_lock();
+    Int e = shm_find(h);
+    Int size = if (e != 0) { ld64(e + 16) } else { 0 };
+    Bool ok = e != 0 && off <= size && len <= size - off;
+    _ = if (ok && len > 0) { mcopy(ld64(e + 24) + off, buf, len) } else { 0 };
+    _ = shm_unlock();
+    _ = if (len > 0) { c_free(buf) } else { 0 };
+    return if (ok) { 1 } else { 0 };
 }
 
 // `n` pixels of `px`, from element `first` on, at byte `off` inside the
@@ -547,13 +677,20 @@ pub Int rt_disp_shm_put(Int h, Int off, Int l, Int len0) {
 // list, or the bytes would run past the mapping's end.
 @export("resid_disp_shm_put32", "i8(i64,i64,ptr,i64,i64)")
 pub Int rt_disp_shm_put32(Int h, Int off, Int l, Int first, Int n) {
-    if (!shm_ok(h) || off < 0 || first < 0 || n < 0) { return 0; }
-    if (first + n > c_list_len(l)) { return 0; }
-    if (off + n * 4 > ld64(h + 16)) { return 0; }
-    if (n == 0) { return 1; }
-    Int dst = ld64(h + 24) + off;
-    _ = if (lflat(l) && lraw(l)) { put32_slots(dst, lroot(l) + 24 + first * 8, 0, n) } else { put32_list(dst, l, first, 0, n) };
-    return 1;
+    if (h <= 0 || off < 0 || first < 0 || n < 0) { return 0; }
+    Int ln = c_list_len(l);
+    if (first > ln || n > ln - first) { return 0; }
+    _ = shm_lock();
+    Int e = shm_find(h);
+    Int size = if (e != 0) { ld64(e + 16) } else { 0 };
+    Bool ok = e != 0 && off <= size && n <= (size - off) / 4;
+    _ = if (ok && n > 0) { put32_into(ld64(e + 24) + off, l, first, n) } else { 0 };
+    _ = shm_unlock();
+    return if (ok) { 1 } else { 0 };
+}
+
+Int put32_into(Int dst, Int l, Int first, Int n) {
+    return if (lflat(l) && lraw(l)) { put32_slots(dst, lroot(l) + 24 + first * 8, 0, n) } else { put32_list(dst, l, first, 0, n) };
 }
 
 Int put32_slots(Int dst, Int src, Int i, Int n) {
@@ -572,11 +709,14 @@ Int put32_list(Int dst, Int l, Int first, Int i, Int n) {
 // refused, not undefined.
 @export("resid_disp_shm_free", "i8(i64)")
 pub Int rt_disp_shm_free(Int h) {
-    if (!shm_ok(h)) { return 0; }
-    _ = resid_raw_syscall(11, ld64(h + 24), ld64(h + 16), 0, 0, 0, 0);   // munmap
-    Int fd = ld64(h + 8);
-    _ = st32(h, 0);
-    _ = sys_close(fd);
+    _ = shm_lock();
+    Int e = shm_find(h);
+    if (e == 0) { return shm_unlock() * 0; }
+    _ = resid_raw_syscall(11, ld64(e + 24), ld64(e + 16), 0, 0, 0, 0);   // munmap
+    _ = sys_close(ld64(e + 8));
+    _ = st64(e + 24, 0) + st64(e + 8, 0) + st64(e + 16, 0);
+    _ = st64(e, ld64(e) + 1);
+    _ = shm_unlock();
     return 1;
 }
 

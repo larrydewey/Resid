@@ -6736,7 +6736,22 @@ Bool lr_same_in(List(Str) parts, Int k, Str reg) {
     return lr_same_in(parts, k + 1, reg);
 }
 
-Bool lr_word_ty(Str t) { return lin_kk(t) == 1 || lin_vk(t) != 0 || t == "Str"; }
+Bool lr_word_ty(Str t) { return lin_kk(t) == 1 || lin_vk(t) != 0 || t == "Str" || lr_sized_int(t); }
+
+// UInt(N), Int(N) for N up to 32 and their Secret(...) copies: list
+// elements are immediate tagged words, and a move reads only the tag bits
+// (elem_move), so a secret value never steers it (tests/ct). Wider ones are
+// boxed (a move would follow the box), and secret ones wider than 32 bits
+// may not be list elements anyway (E0258). Lists of them could not be
+// carried by a loop region before, so a loop over secret bytes or words
+// (Argon2's memory) kept every iteration's garbage.
+Bool lr_sized_int(Str t0) {
+    Str t = if (str_starts_with(t0, "Secret(") && str_ends_with(t0, ")")) { str_slice(t0, 7, str_len(t0) - 1) } else { t0 };
+    Int open = if (str_starts_with(t, "UInt(")) { 5 } else { if (str_starts_with(t, "Int(")) { 4 } else { 0 } };
+    if (open == 0 || !str_ends_with(t, ")")) { return false; }
+    Int n = str_parse_int(str_slice(t, open, str_len(t) - 1));
+    return n > 0 && n <= 32;
+}
 
 Bool lr_list_word(Str t) { return str_has_prefix(t, "List(") && lr_word_ty(str_slice(t, 5, str_len(t) - 1)); }
 

@@ -27,3 +27,12 @@ close true
 close again false
 shm too big true
 no room 0
+forged -1 -1 -1 false
+put32 wrap false
+put32 off wrap false
+put wrap false
+send stdin false
+send mapping true
+mapping arrived true
+free true stale -1 send freed false
+tcp refused true

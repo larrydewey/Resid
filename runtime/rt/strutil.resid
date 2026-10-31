@@ -37,12 +37,13 @@ pub Int rt_str_ends_with(Int s, Int suf) {
 // `times` copies of s (none for times <= 0).
 @export("str_repeat", "ptr(ptr,i64)")
 pub Int rt_str_repeat(Int s, Int times0) {
-    Int times = if (times0 < 0) { 0 } else { times0 };
+    if (times0 <= 0) { return cstr_from(s, 0, 1); }
     Int ls = c_strlen(s);
-    if (ls > 0 && times > 9223372036854775806 / ls) { return cstr_from(s, 0, 1); }
-    Int p = c_malloc(ls * times + 1);
-    if (p == 0) { return cstr_from(s, 0, 1); }
-    Int e = repeat_at(p, s, ls, times);
+    if (ls == 0) { return cstr_from(s, 0, 1); }
+    if (times0 > 9223372036854775806 / ls) { return rt_abort("allocation size out of range"); }
+    Int p = c_malloc(ls * times0 + 1);
+    if (p == 0) { return rt_abort("out of memory"); }
+    Int e = repeat_at(p, s, ls, times0);
     _ = st8(e, 0);
     return p;
 }

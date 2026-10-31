@@ -254,14 +254,24 @@ pub F @X@_ffrom(F a) {
     return @X@_fmul(a, one);
 }
 
-// a^e for a public exponent e, MSB first from bit i: which steps multiply
-// depends on e only.
+// A public exponent as 32-bit words, least significant first: its bits are
+// then read with Int operations, never a shift of a wide value whose
+// stack bytes a secret may have used before.
+List(Int) @X@_ewords(UInt(@W@) e, Int j, Int n, ListBuf(Int) acc) {
+    if (j >= n) { return acc.finish(); }
+    Int w = wrapping_i64((e >> (UInt(@W@)) (j * 32)) & (UInt(@W@)) 4294967295);
+    return @X@_ewords(e, j + 1, n, acc.push(w));
+}
+
+List(Int) @X@_ebits(UInt(@W@) e) { return @X@_ewords(e, 0, @KM1@ / 32 + 1, ListBuf()); }
+
+// a^e for a public exponent e (as @X@_ebits), MSB first from bit i: which
+// steps multiply depends on e only.
 @needs(@BW@(F, B))
-F @X@_fpow(F a, UInt(@W@) e, Int i, F acc) {
+F @X@_fpow(F a, List(Int) e, Int i, F acc) {
     if (i < 0) { return acc; }
     F s = @X@_fsq(acc);
-    UInt(@W@) sh = (UInt(@W@)) i;
-    F r = if (((e >> sh) & 1) == 1) { @X@_fmul(s, a) } else { s };
+    F r = if (((e[i / 32] >> (i % 32)) & 1) == 1) { @X@_fmul(s, a) } else { s };
     return @X@_fpow(a, e, i - 1, r);
 }
 
@@ -269,14 +279,14 @@ F @X@_fpow(F a, UInt(@W@) e, Int i, F acc) {
 @needs(@BW@(F, B))
 pub F @X@_finv(F a) {
     F one = @X@w_lift(@X@_one());
-    return @X@_fpow(a, @X@_pm2(), @KM1@, one);
+    return @X@_fpow(a, @X@_ebits(@X@_pm2()), @KM1@, one);
 }
 
 /// A square root of a when one exists (check by squaring).
 @needs(@BW@(F, B))
 pub F @X@_fsqrt(F a) {
     F one = @X@w_lift(@X@_one());
-    return @X@_fpow(a, @X@_psq(), @KM1@, one);
+    return @X@_fpow(a, @X@_ebits(@X@_psq()), @KM1@, one);
 }
 
 // ─── Scalars (mod n), Montgomery form ────────────────────────────────
@@ -301,11 +311,10 @@ pub F @X@_sfrom(F a) {
 }
 
 @needs(@BW@(F, B))
-F @X@_spow(F a, UInt(@W@) e, Int i, F acc) {
+F @X@_spow(F a, List(Int) e, Int i, F acc) {
     if (i < 0) { return acc; }
     F s = @X@_smul(acc, acc);
-    UInt(@W@) sh = (UInt(@W@)) i;
-    F r = if (((e >> sh) & 1) == 1) { @X@_smul(s, a) } else { s };
+    F r = if (((e[i / 32] >> (i % 32)) & 1) == 1) { @X@_smul(s, a) } else { s };
     return @X@_spow(a, e, i - 1, r);
 }
 
@@ -314,7 +323,7 @@ F @X@_spow(F a, UInt(@W@) e, Int i, F acc) {
 @needs(@BW@(F, B))
 pub F @X@_sinv(F a) {
     F one = @X@w_lift(1);
-    return @X@_spow(a, @X@_nm2(), @KM1@, @X@_sto(one));
+    return @X@_spow(a, @X@_ebits(@X@_nm2()), @KM1@, @X@_sto(one));
 }
 
 /// A value below 2^@K@ reduced mod n (2^@K@ < 2n).

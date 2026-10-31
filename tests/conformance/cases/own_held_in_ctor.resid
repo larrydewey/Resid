@@ -1,0 +1,55 @@
+// A record held by a value still being built in the same expression (a
+// constructor payload, Some(r), a struct field, an earlier operand) is never
+// rebuilt in place by a later operand that reads it.
+type Rect = { Int x; Int y; Int w; Int h; };
+type Op = Fill(Rect, Int) | Nop;
+type Two = { Rect a; Rect b; };
+type TwoOp = { Op a; Op b; };
+type Box = { Rect r; Int tag; };
+type Wrap = { Op o; Int tag; };
+
+Rect shrink(Rect r) { return Rect { .x = r.x + 1, .y = r.y + 1, .w = r.w - 2, .h = r.h - 2 }; }
+List(Op) viaList(Rect r) { return [Fill(r, 1), Fill(Rect { .x = r.x + 1, .y = r.y + 1, .w = r.w - 2, .h = r.h - 2 }, 2)]; }
+List(Rect) recList(Rect r) { return [r, Rect { .x = r.x + 1, .y = r.y + 1, .w = r.w - 2, .h = r.h - 2 }]; }
+Two viaStruct(Rect r) { return Two { .a = r, .b = Rect { .x = r.x + 1, .y = r.y + 1, .w = r.w - 2, .h = r.h - 2 } }; }
+TwoOp viaStructOp(Rect r) { return TwoOp { .a = Fill(r, 1), .b = Fill(Rect { .x = r.x + 1, .y = r.y + 1, .w = r.w - 2, .h = r.h - 2 }, 2) }; }
+List(Op) mk2(Op a, Op b) { return [a, b]; }
+List(Op) viaCall(Rect r) { return mk2(Fill(r, 1), Fill(Rect { .x = r.x + 1, .y = r.y + 1, .w = r.w - 2, .h = r.h - 2 }, 2)); }
+List(Op) viaHelper(Rect r) { return [Fill(r, 1), Fill(shrink(r), 2)]; }
+List(Op) viaConcat(Rect r) { return [Fill(r, 1)].concat([Fill(Rect { .x = r.x + 1, .y = r.y + 1, .w = r.w - 2, .h = r.h - 2 }, 2)]); }
+List(Op) bound(Rect r) {
+    Op a = Fill(r, 1);
+    Rect s = Rect { .x = r.x + 1, .y = r.y + 1, .w = r.w - 2, .h = r.h - 2 };
+    return [a, Fill(s, 2)];
+}
+List(Option(Rect)) viaSome(Rect r) { return [Some(r), Some(Rect { .x = r.x + 1, .y = r.y + 1, .w = r.w - 2, .h = r.h - 2 })]; }
+List(Box) viaBox(Rect r) { return [Box { .r = r, .tag = 1 }, Box { .r = Rect { .x = r.x + 1, .y = r.y + 1, .w = r.w - 2, .h = r.h - 2 }, .tag = 2 }]; }
+List(Wrap) viaWrap(Rect r) { return [Wrap { .o = Fill(r, 1), .tag = 1 }, Wrap { .o = Fill(Rect { .x = r.x + 1, .y = r.y + 1, .w = r.w - 2, .h = r.h - 2 }, 2), .tag = 2 }]; }
+
+Str rs(Rect r) { return f"{r.x},{r.y},{r.w},{r.h}"; }
+Str os(Op o) { return match (o) { Fill(r, c) => rs(r), _ => "nop" }; }
+
+@requires(args)
+Int main() {
+    Int k = args.count() - 1;
+    List(Op) a = viaList(Rect { .x = 10 + k, .y = 10, .w = 12, .h = 16 });
+    println(f"list-sum   {os(a[0])}");
+    List(Rect) b = recList(Rect { .x = 10 + k, .y = 10, .w = 12, .h = 16 });
+    println(f"list-rec   {rs(b[0])}");
+    Two c = viaStruct(Rect { .x = 10 + k, .y = 10, .w = 12, .h = 16 });
+    println(f"struct     {rs(c.a)}");
+    TwoOp d = viaStructOp(Rect { .x = 10 + k, .y = 10, .w = 12, .h = 16 });
+    println(f"struct-sum {os(d.a)}");
+    List(Op) e = viaCall(Rect { .x = 10 + k, .y = 10, .w = 12, .h = 16 });
+    println(f"call       {os(e[0])}");
+    List(Op) g = viaHelper(Rect { .x = 10 + k, .y = 10, .w = 12, .h = 16 });
+    println(f"helper     {os(g[0])}");
+    List(Op) h = viaConcat(Rect { .x = 10 + k, .y = 10, .w = 12, .h = 16 });
+    println(f"concat     {os(h[0])}");
+    println(f"bound   {os(bound(Rect { .x = 10 + k, .y = 10, .w = 12, .h = 16 })[0])}");
+    List(Option(Rect)) sb = viaSome(Rect { .x = 10 + k, .y = 10, .w = 12, .h = 16 });
+    println(f"some    {match (sb[0]) { Some(r) => rs(r), None => "none" }}");
+    println(f"box     {rs(viaBox(Rect { .x = 10 + k, .y = 10, .w = 12, .h = 16 })[0].r)}");
+    println(f"wrap    {os(viaWrap(Rect { .x = 10 + k, .y = 10, .w = 12, .h = 16 })[0].o)}");
+    return 0;
+}

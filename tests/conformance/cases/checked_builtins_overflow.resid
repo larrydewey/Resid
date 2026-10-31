@@ -1,0 +1,7 @@
+// checked_add aborts on overflow, like the + operator.
+@requires(args)
+Int main() {
+    Int imax = 9223372036854775807 + args.count() * 0;
+    println(f"{checked_add(imax, 1 + args.count() * 0)}");
+    return 0;
+}

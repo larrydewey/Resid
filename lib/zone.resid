@@ -103,7 +103,7 @@ pub Int tz_i32(List(Int) b, Int i) {
 
 /// The big-endian signed 64-bit value at `i`, limited to the range a real
 /// transition time occupies.
-/// |t| up to 2^47 seconds is some 4400 years either side of the epoch,
+/// |t| up to 2^47 seconds is some 4.46 million years either side of the epoch,
 /// which no tzdata comes near; a larger value, or a read past the end,
 /// gives -1, which keeps every intermediate in range instead of wrapping.
 pub Int tz_i64(List(Int) b, Int i) {
@@ -119,6 +119,14 @@ Bool neg = hi >= 2147483648;
     Int mag = if (neg) { total + 1 } else { total };
     if (mag > 140737488355328) { return -1; }
     return if (neg) { 0 - mag } else { mag };
+}
+
+// A query time limited to the |t| <= 2^47 range of `tz_i64` (some 4.46
+// million years), so rule and offset arithmetic on it cannot overflow.
+Int tz_clamp_seconds(Int t) {
+    if (t > 140737488355328) { return 140737488355328; }
+    if (t < 0 - 140737488355328) { return 0 - 140737488355328; }
+    return t;
 }
 
 // -- The TZif header ----------------------------------------------------
@@ -637,9 +645,10 @@ Int posix_n_seconds(PosixRule r, Int y) {
 /// end rule; when the start comes later in the year than the end (the
 /// southern hemisphere) it runs over the new year instead. Without a
 /// daylight name it is always standard.
-pub Offset posix_offset_at(PosixTz p, Int utc) {
+pub Offset posix_offset_at(PosixTz p, Int utc_in) {
     Offset std_off = Offset {.seconds = p.std_off, .isdst = false, .abbrev = p.std};
     if (!p.has_dst) { return std_off; }
+    Int utc = tz_clamp_seconds(utc_in);
     Int y = cal_civil_from_days(cal_floor_div(utc + p.std_off, 86400)).year;
     Int start = posix_rule_seconds(p.start_rule, y) - p.std_off;
     Int end = posix_rule_seconds(p.end_rule, y) - p.dst_off;
@@ -795,7 +804,8 @@ Int zone_default_scan(List(ZoneType) types, Int i, Int at) {
 
 /// The offset the clocks read in `z` at UTC second `utc`.
 /// It is zero with an empty abbreviation when no type applies.
-pub Offset zone_offset_at(Zone z, Int utc) {
+pub Offset zone_offset_at(Zone z, Int utc_in) {
+    Int utc = tz_clamp_seconds(utc_in);
     ZoneBlock b = zone_pick_block(z, utc);
     if (zone_footer_applies(z, b, utc)) { return posix_footer_offset(z.footer_rule, utc); }
     Int idx = zone_find_transition(b.transitions, utc);
@@ -877,7 +887,7 @@ pub LocalPick zone_local_pick(Zone z, Int local_seconds) {
 
 List(Int) zone_local_valid(Zone z, List(Int) ofs, Int local_seconds, Int i, List(Int) acc) {
     if (i >= ofs.len()) { return acc; }
-    Int u = local_seconds - ofs[i];
+    Int u = tz_clamp_seconds(local_seconds) - ofs[i];
     Bool ok = zone_offset_seconds(z, u) == ofs[i];
     List(Int) a2 = if (ok) { acc.concat([u]) } else { acc };
     return zone_local_valid(z, ofs, local_seconds, i + 1, a2);
@@ -886,15 +896,17 @@ List(Int) zone_local_valid(Zone z, List(Int) ofs, Int local_seconds, Int i, List
 /// The wall-clock reading at the instant `i`, as a civil date and time in
 /// `z`.
 pub DateTime zone_to_local(Zone z, Instant i) {
-    Offset o = zone_offset_at(z, i.seconds);
-    return instant_to_utc(floor_to_instant(i.seconds + o.seconds, i.nanoseconds));
+    Int t = tz_clamp_seconds(i.seconds);
+    Offset o = zone_offset_at(z, t);
+    return instant_to_utc(floor_to_instant(t + o.seconds, i.nanoseconds));
 }
 
 /// The wall-clock reading in `z` at UTC second `utc` plus `nanosecond`, as
 /// a civil date and time.
 pub DateTime zone_to_civil(Zone z, Int utc, Int nanosecond) {
-    Offset o = zone_offset_at(z, utc);
-    return instant_to_utc(floor_to_instant(utc + o.seconds, nanosecond));
+    Int t = tz_clamp_seconds(utc);
+    Offset o = zone_offset_at(z, t);
+    return instant_to_utc(floor_to_instant(t + o.seconds, nanosecond));
 }
 
 /// The UTC instant a wall-clock reading names, taking the earlier instant

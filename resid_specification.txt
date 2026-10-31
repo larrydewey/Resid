@@ -468,7 +468,9 @@ and unreduced programs fail identically (§36).
 
 Wrapping and saturating variants (wrapping_add,
 saturating_mul, …) are supplied by the standard library
-for every width.
+for every width. checked_* variants abort on overflow as
+the operators do; saturating_* variants clamp to the
+type's bounds and never trap.
 
 
 --------------------------------------------------
@@ -874,7 +876,8 @@ two's complement bounds, while Ord's `a.least(b)` is the
 lesser of two values and is reached by name.
 
 Lists: xs.contains(v) (integer, Float or Str elements),
-xs.reverse(), xs.sum() (List(Int) or List(Float)). A
+xs.reverse(), xs.sum() (List(Int) or List(Float); an
+integer sum aborts on overflow, as + does). A
 function of the same name taking the list as its first
 parameter takes precedence.
 
@@ -1169,7 +1172,8 @@ has the type of xs. The range is checked: unless
 0 <= from <= xs.len() and 0 <= n <= xs.len() - from, a fill
 aborts as an out-of-range xs[i] does (resid_index_abort),
 naming `from` when it lies outside 0..xs.len(), else
-`from + n`; a negative n aborts a grow, naming n. Inside a
+`from + n`; a negative n aborts a grow, naming n, and so
+does a size past what can be allocated. Inside a
 spawn region the abort is the region's Err (§19). A fill or
 grow of 0 elements is xs.
 
@@ -1309,7 +1313,8 @@ Exposing a port to other machines (resid_tcp_listen_at, a
 bind to any address but loopback) is the one network
 write, so it needs the full grant. A server's workers can
 then run under network(readonly) while only the code that
-binds the public listener holds network.
+binds the public listener holds network. The TCP verbs act
+only on IPv4 and IPv6 sockets.
 
 display has no modes: connecting to a window server, opening
 a window, drawing into it and reading from it all act on
@@ -1320,6 +1325,14 @@ display alone; a program that waits on display and TCP
 descriptors together needs both families. Nothing outside
 this machine's own session is reachable through it: a DISPLAY
 naming another host is refused.
+
+The display verbs act only on Unix-domain sockets. A shared
+mapping is an opaque handle (a table index and a
+generation): a stale or forged handle is refused, and a descriptor sent on the
+connection must be a live shared mapping's. The X
+authority cookie is read under display alone: the file
+must be a regular file of at most 1 MB, and only the
+cookie is returned.
 
 Writing to stdout/stderr, reading stdin and OS randomness
 are not capabilities.
@@ -2029,7 +2042,8 @@ dN (any N >= 1), isize, usize (checked), and
 wrapping_i8…wrapping_i512, wrapping_u8…wrapping_u512.
 
 Checked arithmetic (default) + wrapping_* + saturating_*
-for every width.
+for every width (checked_* aborts on overflow;
+saturating_* clamps, never traps).
 
 Core behaviors: Eq, Ord, Hash (generic over the numeric
 family), Show, Serialize, Bounded and Allocator, declared
@@ -2927,7 +2941,9 @@ Operations:
                          the expected type, as for []
   b.push(s)              StrBuf: appends a Str; returns the
                          builder
-  b.push_char(c)         StrBuf: appends the codepoint c (Int)
+  b.push_char(c)         StrBuf: appends the codepoint c (Int);
+                         a negative, surrogate or > 0x10FFFF
+                         c appends U+FFFD
   b.push(x)              ListBuf(T): appends x (T, with the
                          usual literal adoption and widening)
   b.finish()             StrBuf -> Str, ListBuf(T) -> List(T)
@@ -3196,10 +3212,13 @@ the program's own executable, started again with an empty
 environment and no descriptor but the call's socket.
 Before any native instruction runs, that process disables
 the time-stamp counter, unmaps the vDSO clock pages, and
-installs a seccomp filter: it may read and write its
-socket, map memory that is not executable, and exit.
-Anything else (a file, a socket, a clock, a process, a
-signal, executable memory) kills it. Its CPU time is
+installs a seccomp filter: it may write to its socket
+(descriptor 3) and exit (exit, exit_group), nothing more;
+the request is read before the filter, and the host
+allocates nothing after it. Anything else (a read, a
+memory mapping, a file, another descriptor, a clock, a
+process, a signal) kills it, as does a call through
+another architecture's numbers. Its CPU time is
 limited to 60 seconds.
 
 The caller sends the arguments, reads the result, and

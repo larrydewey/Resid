@@ -2082,6 +2082,8 @@ pub Int rt_list_grow(Int l, Int n, Int v, Int k) { return list_grow(l, n, v, k);
 Int list_grow(Int l, Int n, Int w, Int k) {
     Int c = lcount(l);
     if (n < 0) { return rt_index_abort(n, c, 0); }
+    // c + n stays within flat_new's largest capacity.
+    if (n > 1152921504606846972 - c) { return rt_index_abort(n, c, 0); }
     if (n == 0) { return l; }
     Int t = with_fresh(l, n);
     Int f = lroot(t);

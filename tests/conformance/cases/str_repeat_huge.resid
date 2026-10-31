@@ -1,0 +1,8 @@
+// str_repeat aborts when the size overflows, never returns "".
+@requires(args)
+Int main() {
+    Int k = args.count() + 4611686018427387902;
+    Str s = str_repeat("ab", k);
+    println(f"len={str_len(s)}");
+    return 0;
+}

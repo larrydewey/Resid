@@ -108,11 +108,14 @@ Str hs_dec_at(List(Int) b, Int i, Int e, StrBuf acc) {
     if (i >= e) { return acc.finish(); }
     Int c = b[i];
     if (c < 128) { return hs_dec_at(b, i + 1, e, acc.push_char(c)); }
-    Int k = if (c >= 240 && c < 248) { 3 } else { if (c >= 224) { 2 } else { if (c >= 192) { 1 } else { -1 } } };
+    Int k = if (c >= 240 && c < 248) { 3 } else { if (c >= 224 && c < 240) { 2 } else { if (c >= 194 && c < 224) { 1 } else { -1 } } };
     if (k < 0 || i + k >= e) { return hs_dec_at(b, i + 1, e, acc.push_char(65533)); }
     Int lead = if (k == 3) { c & 7 } else { if (k == 2) { c & 15 } else { c & 31 } };
     Int cp = hs_dec_cont(b, i + 1, k, lead);
-    if (cp < 0) { return hs_dec_at(b, i + 1, e, acc.push_char(65533)); }
+    // Overlong forms, surrogates and values past U+10FFFF are malformed.
+    Int least = if (k == 3) { 65536 } else { if (k == 2) { 2048 } else { 128 } };
+    Bool bad = cp < least || cp > 1114111 || (cp >= 55296 && cp <= 57343);
+    if (bad) { return hs_dec_at(b, i + 1, e, acc.push_char(65533)); }
     return hs_dec_at(b, i + 1 + k, e, acc.push_char(cp));
 }
 
@@ -269,8 +272,28 @@ Bool hs_all_digits(Str s, Int i) {
     return hs_all_digits(s, i + 1);
 }
 
+// No byte in [i, e) is a control other than HT, LF and CR, or DEL, and
+// LF and CR appear only as a CRLF pair.
+Bool hs_ctl_free(List(Int) b, Int i, Int e) {
+    if (i >= e) { return true; }
+    Int c = b[i];
+    if ((c < 32 && c != 9 && c != 10 && c != 13) || c == 127) { return false; }
+    if (c == 10) {
+        if (i == 0) { return false; }
+        if (b[i - 1] != 13) { return false; }
+    }
+    if (c == 13) {
+        if (i + 1 >= e) { return false; }
+        if (b[i + 1] != 10) { return false; }
+    }
+    return hs_ctl_free(b, i + 1, e);
+}
+
 // Parse the head (bytes [0, end) of `b`). The body is not read here.
+// A control byte is refused before the head becomes text, where a NUL
+// would end it early.
 HttpRequest hs_parse_head(List(Int) b, Int end) {
+    if (!hs_ctl_free(b, 0, end)) { return hs_reject(400); }
     Str head = hs_ascii(b, 0, end, StrBuf());
     List(Str) lines = str_split(head, "\r\n");
     List(Str) words = str_split(lines[0], " ");
@@ -296,7 +319,8 @@ HttpRequest hs_parse_head(List(Int) b, Int end) {
 }
 
 // How the body is delimited: -1 none, -2 chunked, -3 rejected (400),
-// -4 unsupported coding (501), else the Content-Length.
+// -4 unsupported coding (501), -5 a length too large to read (413), else
+// the Content-Length.
 Int hs_body_kind(HttpRequest r) {
     Bool has_te = r.headers.contains("transfer-encoding");
     Bool has_cl = r.headers.contains("content-length");
@@ -312,8 +336,9 @@ Int hs_body_kind(HttpRequest r) {
     Str cl = r.headers.get("content-length") else { "" };
     List(Str) cls = str_split(cl, ",");
     Str first = str_trim(cls[0]);
-    if (!hs_all_digits(first, 0) || str_len(first) > 15) { return -3; }
+    if (!hs_all_digits(first, 0)) { return -3; }
     if (!hs_cl_agree(cls, 1, first)) { return -3; }
+    if (str_len(first) > 15) { return -5; }
     return str_parse_int(first);
 }
 
@@ -340,11 +365,12 @@ HsReq(T) hs_read_body(HttpRequest r, HsBuf(T) b, HttpLimits lim) {
     Int kind = hs_body_kind(r);
     if (kind == -3) { return hs_fail(400, b); }
     if (kind == -4) { return hs_fail(501, b); }
+    if (kind == -5) { return hs_fail(413, b); }
     if (kind == -1) {
         HsReq(T) out = HsReq { .req = r, .rest = b };
         return out;
     }
-    if (kind == -2) { return hs_read_chunked(r, b, lim, []); }
+    if (kind == -2) { return hs_read_chunked(r, b, 0, lim, [], 0, 0); }
     if (kind > lim.body_max) { return hs_fail(413, b); }
     HsBuf(T) full = hs_fill(b, kind, lim.body_max + 16384);
     if (full.data.len() < kind) { return hs_fail(400, full); }
@@ -354,37 +380,49 @@ HsReq(T) hs_read_body(HttpRequest r, HsBuf(T) b, HttpLimits lim) {
     return out;
 }
 
+// Most chunks one body may arrive in; past it the body is refused (413).
+Int hs_chunks_max() { return 4096; }
+
 // Chunked coding: size-line, data, CRLF, ... , "0", trailers, CRLF.
+// `at` is where the next size line starts in `b0.data`: the buffer is
+// read by index, not sliced per chunk. `total` bytes in `count` chunks so far.
 @requires(network(readonly))
 @needs(Wire(T))
-HsReq(T) hs_read_chunked(HttpRequest r, HsBuf(T) b0, HttpLimits lim, List(Int) acc) {
-    HsHead(T) ln = hs_read_line(b0, 1024);
+HsReq(T) hs_read_chunked(HttpRequest r, HsBuf(T) b0, Int at, HttpLimits lim, List(Int) acc, Int total, Int count) {
+    HsHead(T) ln = hs_read_line_at(b0, at, at, 1024);
     if (ln.end < 0) { return hs_fail(400, ln.buf); }
     HsBuf(T) b = ln.buf;
-    Str line = hs_ascii(b.data, 0, ln.end, StrBuf());
+    Str line = hs_ascii(b.data, at, ln.end, StrBuf());
     Int semi = str_index_of(line, ";", 0);
     Str hexs = str_trim(if (semi >= 0) { str_slice(line, 0, semi) } else { line });
     Int size = hs_hex(hexs, 0, 0);
     if (size < 0) { return hs_fail(400, b); }
-    HsBuf(T) after = HsBuf { .conn = b.conn, .data = b.data[(ln.end + 2)..], .eof = b.eof };
-    if (size == 0) { return hs_chunk_trailers(r, after, acc); }
-    if (acc.len() + size > lim.body_max) { return hs_fail(413, after); }
-    HsBuf(T) full = hs_fill(after, size + 2, lim.body_max + 16384);
-    if (full.data.len() < size + 2) { return hs_fail(400, full); }
-    if (full.data[size] != 13 || full.data[size + 1] != 10) { return hs_fail(400, full); }
-    HsBuf(T) next = HsBuf { .conn = full.conn, .data = full.data[(size + 2)..], .eof = full.eof };
-    return hs_read_chunked(r, next, lim, acc.concat(full.data[0..size]));
+    Int data_at = ln.end + 2;
+    if (size == 0) {
+        HsBuf(T) after = HsBuf { .conn = b.conn, .data = b.data[data_at..], .eof = b.eof };
+        return hs_chunk_trailers(r, after, acc, 0);
+    }
+    if (total + size > lim.body_max) { return hs_fail(413, b); }
+    if (count >= hs_chunks_max()) { return hs_fail(413, b); }
+    HsBuf(T) full = hs_fill(b, data_at + size + 2, data_at + lim.body_max + 16384);
+    if (full.data.len() < data_at + size + 2) { return hs_fail(400, full); }
+    if (full.data[data_at + size] != 13 || full.data[data_at + size + 1] != 10) { return hs_fail(400, full); }
+    return hs_read_chunked(r, full, data_at + size + 2, lim, acc.concat(full.data[data_at..(data_at + size)]), total + size, count + 1);
 }
 
-// Trailer fields up to the blank line are read and dropped.
+// Trailer fields up to the blank line are read and dropped; past 64
+// lines the request is refused, as in the event loop's framer.
 @requires(network(readonly))
 @needs(Wire(T))
-HsReq(T) hs_chunk_trailers(HttpRequest r, HsBuf(T) b0, List(Int) acc) {
+HsReq(T) hs_chunk_trailers(HttpRequest r, HsBuf(T) b0, List(Int) acc, Int lines) {
     HsHead(T) ln = hs_read_line(b0, 8192);
     if (ln.end < 0) { return hs_fail(400, ln.buf); }
     HsBuf(T) lb = ln.buf;
     HsBuf(T) rest = HsBuf { .conn = lb.conn, .data = lb.data[(ln.end + 2)..], .eof = lb.eof };
-    if (ln.end > 0) { return hs_chunk_trailers(r, rest, acc); }
+    if (ln.end > 0) {
+        if (lines >= 64) { return hs_fail(400, rest); }
+        return hs_chunk_trailers(r, rest, acc, lines + 1);
+    }
     HttpRequest r2 = HttpRequest { .method = r.method, .target = r.target, .path = r.path, .query = r.query, .version = r.version, .headers = r.headers, .body = acc, .keep_alive = r.keep_alive, .ok = true, .status = 0 };
     HsReq(T) out = HsReq { .req = r2, .rest = rest };
     return out;
@@ -412,6 +450,32 @@ HsHead(T) hs_read_line(HsBuf(T) b, Int max) {
         return h;
     }
     return hs_read_line(hs_fill(b, b.data.len() + 1, max + 16384), max);
+}
+
+// As `hs_read_line` for a line starting at `start`, resuming the search at
+// `from`; the index returned is into the whole buffer.
+@requires(network(readonly))
+@needs(Wire(T))
+HsHead(T) hs_read_line_at(HsBuf(T) b, Int start, Int from, Int max) {
+    Int at = hs_find(b.data, [13, 10], from);
+    if (at >= 0) {
+        Int end = if (at - start > max) { -2 } else { at };
+        HsHead(T) h = HsHead { .buf = b, .end = end };
+        return h;
+    }
+    Bool too_big = b.data.len() - start > max;
+    if (too_big) {
+        Int e = -2;
+        HsHead(T) h = HsHead { .buf = b, .end = e };
+        return h;
+    }
+    if (b.eof) {
+        Int e = -1;
+        HsHead(T) h = HsHead { .buf = b, .end = e };
+        return h;
+    }
+    Int next_from = if (b.data.len() - 1 > start) { b.data.len() - 1 } else { start };
+    return hs_read_line_at(hs_fill(b, b.data.len() + 1, start + max + 16384), start, next_from, max);
 }
 
 // Hex digits to a value; -1 on a non-digit or an empty string.
@@ -590,8 +654,9 @@ Int hs_serve_at(T conn, HttpReply closure(HttpRequest) handler, HttpLimits lim, 
 /// How far a connection's input bytes have been checked for a whole request.
 /// `head_end` is the head's CRLFCRLF once found; `end` where the request
 /// ends when its length is known; `cpos` and `cstate` the chunk scanner
-/// (0 size line, 1 chunk data, 2 trailer); `ready` once the request is
-/// whole or one the parser will refuse.
+/// (0 size line, 1 chunk data, 2 trailer), `lines` the chunks seen and
+/// then the trailer lines; `ready` once the request is whole or one the
+/// parser will refuse.
 type HsFrame = { Int scan; Int head_end; Int end; Int cpos; Int cstate; Int total; Int lines; Bool ready; };
 
 HsFrame hs_frame_new() {
@@ -666,8 +731,9 @@ HsFrame hs_chunks(List(Int) b, HsFrame f, HttpLimits lim) {
     Int semi = str_index_of(line, ";", 0);
     Int size = hs_hex(str_trim(if (semi >= 0) { str_slice(line, 0, semi) } else { line }), 0, 0);
     if (size < 0 || f.total + size > lim.body_max) { return hs_frame_ready(f); }
-    if (size == 0) { return hs_chunks(b, hs_frame_chunk(f, at + 2, 2, f.total, f.lines), lim); }
-    return hs_chunks(b, hs_frame_chunk(f, at + 2 + size + 2, 1, f.total + size, f.lines), lim);
+    if (size == 0) { return hs_chunks(b, hs_frame_chunk(f, at + 2, 2, f.total, 0), lim); }
+    if (f.lines >= hs_chunks_max()) { return hs_frame_ready(f); }
+    return hs_chunks(b, hs_frame_chunk(f, at + 2 + size + 2, 1, f.total + size, f.lines + 1), lim);
 }
 
 /// The in-memory transport that lets the socket parser read a framed request.
@@ -1060,7 +1126,8 @@ pub Str http_header(HttpRequest r, Str name) {
 pub Str http_body_text(HttpRequest r) { return http_text(r.body, 0, r.body.len()); }
 
 /// `s` percent-decoded and read as UTF-8; `+` becomes a space when `form`.
-/// A `%` not followed by two hex digits is kept as is.
+/// A `%` not followed by two hex digits is kept as is. Decoded bytes are
+/// read as `http_text` reads them, and `%00` becomes U+FFFD, never a NUL.
 pub Str http_url_decode(Str s, Bool form) { return hs_dec_url(s, 0, str_len(s), form, ListBuf()); }
 
 Str hs_dec_url(Str s, Int i, Int n, Bool form, ListBuf(Int) acc) {
@@ -1072,7 +1139,8 @@ Str hs_dec_url(Str s, Int i, Int n, Bool form, ListBuf(Int) acc) {
     if (c == 43 && form) { return hs_dec_url(s, i + 1, n, form, acc.push(32)); }
     if (c == 37 && i + 2 < n) {
         Int v = hs_hex(str_slice(s, i + 1, i + 3), 0, 0);
-        if (v >= 0) { return hs_dec_url(s, i + 3, n, form, acc.push(v)); }
+        if (v == 0) { return hs_dec_url(s, i + 3, n, form, hs_enc_cp(acc, 65533)); }
+        if (v > 0) { return hs_dec_url(s, i + 3, n, form, acc.push(v)); }
     }
     return hs_dec_url(s, i + 1, n, form, hs_enc_cp(acc, c));
 }

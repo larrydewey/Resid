@@ -1,0 +1,74 @@
+// A value that holds a record without being one (a sum, an Option, a map,
+// a field or index of a call result) keeps it aliased: a copy of it, or an
+// earlier operand holding it, blocks rebuilding that record in place.
+type Rect = { Int x; Int y; Int w; Int h; };
+type Op = Fill(Rect, Int) | Nop;
+type Box = { Rect r; Int tag; };
+Str rs(Rect r) { return f"{r.x},{r.y},{r.w},{r.h}"; }
+Str os(Op o) { return match (o) { Fill(r, c) => rs(r), _ => "nop" }; }
+
+@requires(args)
+Int case_a() {
+    Int k = args.count() - 1;
+    Rect r = Rect { .x = 10 + k, .y = 10, .w = 12, .h = 16 };
+    Op v = Fill(r, 1);
+    Op w = v;
+    Rect s = Rect { .x = r.x + 1, .y = r.y + 1, .w = r.w - 2, .h = r.h - 2 };
+    println(f"A w {os(w)} s {rs(s)}");
+    return 0;
+}
+
+Str show2(Op a, Op b) { return f"{os(a)}|{os(b)}"; }
+@requires(args)
+Int case_b() {
+    Int k = args.count() - 1;
+    Rect r = Rect { .x = 10 + k, .y = 10, .w = 12, .h = 16 };
+    Op v = Fill(r, 1);
+    println("B " + show2(v, Fill(Rect { .x = r.x + 1, .y = r.y + 1, .w = r.w - 2, .h = r.h - 2 }, 2)));
+    return 0;
+}
+
+List(Box) mkl(Box b) { return [b]; }
+@requires(args)
+Int case_c() {
+    Int k = args.count() - 1;
+    Box bx = Box { .r = Rect { .x = 10 + k, .y = 10, .w = 12, .h = 16 }, .tag = 1 };
+    Box q = mkl(bx)[0];
+    Box t = Box { .r = bx.r, .tag = 2 };
+    println(f"C q {q.tag} t {t.tag}");
+    return 0;
+}
+
+Box mk(Rect x) { return Box { .r = x, .tag = 0 }; }
+@requires(args)
+Int case_d() {
+    Int k = args.count() - 1;
+    Rect r = Rect { .x = 10 + k, .y = 10, .w = 12, .h = 16 };
+    Rect q = mk(r).r;
+    Rect t = Rect { .x = r.x + 1, .y = r.y + 1, .w = r.w - 2, .h = r.h - 2 };
+    println(f"D q {rs(q)} t {rs(t)}");
+    return 0;
+}
+
+@requires(args)
+Map(Int, Op) mk2e() {
+    Rect r = Rect { .x = 10 + args.count() - 1, .y = 10, .w = 12, .h = 16 };
+    return {1: Fill(r, 1), 2: Fill(Rect { .x = r.x + 1, .y = r.y + 1, .w = r.w - 2, .h = r.h - 2 }, 2)};
+}
+@requires(args)
+Int case_e() {
+    Map(Int, Op) m = mk2e();
+    Op o = m.get(1) else { Nop };
+    println(f"E {os(o)}");
+    return 0;
+}
+
+@requires(args)
+Int main() {
+    _ = case_a();
+    _ = case_b();
+    _ = case_c();
+    _ = case_d();
+    _ = case_e();
+    return 0;
+}

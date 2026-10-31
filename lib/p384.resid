@@ -196,14 +196,24 @@ pub F p384_ffrom(F a) {
     return p384_fmul(a, one);
 }
 
-// a^e for a public exponent e, MSB first from bit i: which steps multiply
-// depends on e only.
+// A public exponent as 32-bit words, least significant first: its bits are
+// then read with Int operations, never a shift of a wide value whose
+// stack bytes a secret may have used before.
+List(Int) p384_ewords(UInt(832) e, Int j, Int n, ListBuf(Int) acc) {
+    if (j >= n) { return acc.finish(); }
+    Int w = wrapping_i64((e >> (UInt(832)) (j * 32)) & (UInt(832)) 4294967295);
+    return p384_ewords(e, j + 1, n, acc.push(w));
+}
+
+List(Int) p384_ebits(UInt(832) e) { return p384_ewords(e, 0, 383 / 32 + 1, ListBuf()); }
+
+// a^e for a public exponent e (as p384_ebits), MSB first from bit i: which
+// steps multiply depends on e only.
 @needs(P384Word(F, B))
-F p384_fpow(F a, UInt(832) e, Int i, F acc) {
+F p384_fpow(F a, List(Int) e, Int i, F acc) {
     if (i < 0) { return acc; }
     F s = p384_fsq(acc);
-    UInt(832) sh = (UInt(832)) i;
-    F r = if (((e >> sh) & 1) == 1) { p384_fmul(s, a) } else { s };
+    F r = if (((e[i / 32] >> (i % 32)) & 1) == 1) { p384_fmul(s, a) } else { s };
     return p384_fpow(a, e, i - 1, r);
 }
 
@@ -211,14 +221,14 @@ F p384_fpow(F a, UInt(832) e, Int i, F acc) {
 @needs(P384Word(F, B))
 pub F p384_finv(F a) {
     F one = p384w_lift(p384_one());
-    return p384_fpow(a, p384_pm2(), 383, one);
+    return p384_fpow(a, p384_ebits(p384_pm2()), 383, one);
 }
 
 /// A square root of a when one exists (check by squaring).
 @needs(P384Word(F, B))
 pub F p384_fsqrt(F a) {
     F one = p384w_lift(p384_one());
-    return p384_fpow(a, p384_psq(), 383, one);
+    return p384_fpow(a, p384_ebits(p384_psq()), 383, one);
 }
 
 // ─── Scalars (mod n), Montgomery form ────────────────────────────────
@@ -243,11 +253,10 @@ pub F p384_sfrom(F a) {
 }
 
 @needs(P384Word(F, B))
-F p384_spow(F a, UInt(832) e, Int i, F acc) {
+F p384_spow(F a, List(Int) e, Int i, F acc) {
     if (i < 0) { return acc; }
     F s = p384_smul(acc, acc);
-    UInt(832) sh = (UInt(832)) i;
-    F r = if (((e >> sh) & 1) == 1) { p384_smul(s, a) } else { s };
+    F r = if (((e[i / 32] >> (i % 32)) & 1) == 1) { p384_smul(s, a) } else { s };
     return p384_spow(a, e, i - 1, r);
 }
 
@@ -256,7 +265,7 @@ F p384_spow(F a, UInt(832) e, Int i, F acc) {
 @needs(P384Word(F, B))
 pub F p384_sinv(F a) {
     F one = p384w_lift(1);
-    return p384_spow(a, p384_nm2(), 383, p384_sto(one));
+    return p384_spow(a, p384_ebits(p384_nm2()), 383, p384_sto(one));
 }
 
 /// A value below 2^384 reduced mod n (2^384 < 2n).

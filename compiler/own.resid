@@ -183,6 +183,16 @@ Bool ow_trk(OX x, Str t) {
     return x.t.sts.contains(t) || ow_is_list(t) || lin_is_mapset(t);
 }
 
+// A value that may hold a tracked object without being one itself (a sum,
+// an Option, a closure): never written in place, but what it holds stays
+// aliased, so a copy or a pending use of it still blocks a write.
+Bool ow_hold(OX x, Str t) { return t != "" && !ow_trk(x, t) && !ow_scalar_ty(t); }
+
+Bool ow_scalar_ty(Str t) {
+    if (t == "Int" || t == "UInt" || t == "Bool" || t == "Str" || t == "Float" || t == "Bytes" || t == "Void") { return true; }
+    return str_starts_with(t, "Int(") || str_starts_with(t, "UInt(") || str_starts_with(t, "Float(") || str_starts_with(t, "Dec(") || str_starts_with(t, "Str(") || str_starts_with(t, "Bytes(");
+}
+
 Str ow_field_ty(Funcs fs, Str t, Str f) {
     Int si = struct_index(fs, t);
     if (si < 0) { return ""; }
@@ -825,6 +835,7 @@ OV ow_val(OX x, ORS r, OS s, Int id, OF f) {
     OP p = ow_path(x, r, id);
     if (p.b >= 0) {
         OF f1 = ow_vals_f(x, r, s, p.idx, 0, f);
+        if (ow_hold(x, p.ty)) { return ow_ov(ow_path_ents(f1, p.b, p.path), false, f1); }
         if (!ow_trk(x, p.ty)) { return ow_ov([], false, f1); }
         // Moved (owned, nothing overlapping live after): the value is the
         // object itself, and only what it points into stays aliased.
@@ -854,7 +865,10 @@ OV ow_val(OX x, ORS r, OS s, Int id, OF f) {
     if (k == "bexpr" || k == "block") { return ow_bexpr(x, r, s, id, f); }
     if (k == "paren") { return ow_val(x, r, s, kg_kid(x.g, id, 0), f); }
     if (k == "lambda" || k == "spawn") { return ow_ov(ow_caps(x, r, id, f, ListBuf()), false, f); }
-    return ow_ov([], false, ow_vals_f(x, r, s, ow_kid_list(x.g, id, 0, ListBuf()), 0, f));
+    // Anything else (a field or index of a non-path, an operator) may hand
+    // back an object its operands hold: it keeps their entries, unowned.
+    OV u = ow_branches(x, r, s, id, 0, ow_ovc([], true, true, f));
+    return ow_ov(ow_norm(u.es), false, u.f);
 }
 
 // Match arms: each arm's payload binders alias the scrutinee's payload
@@ -1280,7 +1294,7 @@ OL ow_lv(OX x, ORS r, Map(Int, Int) evn, Int id, OL l) {
     // record is used (#r), though its scalar reads may be hoisted.
     Int rsrc = if (k == "struct") { ow_rebuild_src(x, r, id, 0) } else { -1 };
     OL lrb = if (rsrc >= 0) { ow_live_add(l0, f"{rsrc}|#r") } else { l0 };
-    if ((k == "call" || k == "mcall" || k == "struct" || k == "list") && x.g.ns[id].nk > 1) {
+    if ((k == "call" || k == "mcall" || k == "struct" || k == "list" || k == "map" || k == "set") && x.g.ns[id].nk > 1) {
         List(Int) ks = ow_kid_list(x.g, id, 0, ListBuf());
         return ow_lv_args(x, r, evn, id, ks, ks.len() - 1, lrb);
     }
@@ -1360,7 +1374,7 @@ OL ow_lv_ops(OX x, ORS r, Map(Int, Int) evn, Int id, List(Int) ks, List(Str) pks
     if (i < 0) { return l; }
     Str tk = ow_arg_key(x, r, id, ks[i], i);
     OL l2 = if (i == 0 && ow_with_key(x, r, id) >= 0) { ow_with_recv(x, r, evn, id, l) } else { if (tk != "") { ow_arg_use(x, r, evn, ks[i], tk, l) } else { ow_lv(x, r, evn, ks[i], l) } };
-    OL l3 = if (i >= 1 && pks[i - 1] != "") { OL {.live = ow_live_del(l2.live, pks[i - 1]), .after = l2.after} } else { l2 };
+    OL l3 = if (i >= 1 && pks[i - 1] != "") { OL {.live = ow_pend_del(l2.live, str_split(pks[i - 1], "\n"), 0), .after = l2.after} } else { l2 };
     return ow_lv_ops_n(x, r, evn, id, ks, pks, i, l3);
 }
 
@@ -1375,15 +1389,34 @@ List(Str) ow_pend_keys_n(OX x, ORS r, Int id, List(Int) ks, Int j, ListBuf(Str) 
 
 OL ow_pend_add(List(Str) pks, Int j, Int n, OL l) {
     if (j >= n) { return l; }
-    return ow_pend_add_n(pks, j, n, if (pks[j] == "") { l } else { ow_live_add(l, pks[j]) });
+    return ow_pend_add_n(pks, j, n, if (pks[j] == "") { l } else { ow_pend_add_ks(str_split(pks[j], "\n"), 0, l) });
 }
+
+// An operand's pending keys are joined by newlines (one per tracked path
+// it holds).
+OL ow_pend_add_ks(List(Str) ks, Int i, OL l) {
+    if (i >= ks.len()) { return l; }
+    return ow_pend_add_ks_n(ks, i, ow_live_add(l, ks[i]));
+}
+
+OL ow_pend_add_ks_n(List(Str) ks, Int i, OL l) { return ow_pend_add_ks(ks, i + 1, l); }
+
+Map(Int, Map(Str, Int)) ow_pend_del(Map(Int, Map(Str, Int)) live, List(Str) ks, Int i) {
+    if (i >= ks.len()) { return live; }
+    return ow_pend_del_n(ow_live_del(live, ks[i]), ks, i);
+}
+
+Map(Int, Map(Str, Int)) ow_pend_del_n(Map(Int, Map(Str, Int)) live, List(Str) ks, Int i) { return ow_pend_del(live, ks, i + 1); }
 
 OL ow_pend_add_n(List(Str) pks, Int j, Int n, OL l) { return ow_pend_add(pks, j + 1, n, l); }
 
 Str ow_pend_key(OX x, ORS r, Int id, Int kid, Int j) {
     Int e = if (x.g.ns[kid].kind == "finit") { kg_kid(x.g, kid, x.g.ns[kid].nk - 1) } else { kid };
     OP p = ow_path(x, r, e);
-    if (p.b < 0 || !ow_trk(x, p.ty)) { return ""; }
+    // An operand that is not a path may still hold one (`Some(r)`,
+    // `Fill(r, c)`, a literal field): each tracked path in it is pending.
+    if (p.b < 0) { return str_join(ow_pend_deep(x, r, e, f"%{id}.{j}", ListBuf()).finish(), "\n"); }
+    if (!ow_trk(x, p.ty) && !ow_hold(x, p.ty)) { return ""; }
     Str cal = x.g.ns[id].text;
     Bool user = x.g.ns[id].kind == "call" && ow_fi(x, cal) >= 0;
     Int wk = if (j == 0) { ow_with_key(x, r, id) } else { -1 };
@@ -1392,6 +1425,21 @@ Str ow_pend_key(OX x, ORS r, Int id, Int kid, Int j) {
     // never removes an equal key of another call.
     return f"{p.b}|{path}@" + (if (user) { f"{ow_fk(x, cal, j)}" } else { "-" }) + f"%{id}.{j}";
 }
+
+// The tracked paths inside a non-path operand, as pending keys tagged
+// "@-" (any write conflicts) and made unique by the operand and node.
+ListBuf(Str) ow_pend_deep(OX x, ORS r, Int id, Str tag, ListBuf(Str) acc) {
+    OP p = ow_path(x, r, id);
+    if (p.b >= 0) { return if (ow_trk(x, p.ty) || ow_hold(x, p.ty)) { acc.push(f"{p.b}|{p.path}@-{tag}.{id}") } else { acc }; }
+    return ow_pend_deep_kids(x, r, id, 0, tag, acc);
+}
+
+ListBuf(Str) ow_pend_deep_kids(OX x, ORS r, Int id, Int i, Str tag, ListBuf(Str) acc) {
+    if (i >= x.g.ns[id].nk) { return acc; }
+    return ow_pend_deep_kids_n(x, r, id, i, tag, ow_pend_deep(x, r, kg_kid(x.g, id, i), tag, acc));
+}
+
+ListBuf(Str) ow_pend_deep_kids_n(OX x, ORS r, Int id, Int i, Str tag, ListBuf(Str) acc) { return ow_pend_deep_kids(x, r, id, i + 1, tag, acc); }
 
 // A tracked path passed to a user function: its use is tagged with the
 // callee and position, so a write to a field the callee never reads (a

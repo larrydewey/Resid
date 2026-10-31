@@ -1,0 +1,8 @@
+// saturating_mul(-1, Int.min) saturates; it never divides Int.min by -1.
+@requires(args)
+Int main() {
+    Int low = 0 - 9223372036854775807 - 1 + args.count() * 0;
+    Int m1 = 0 - 1 + args.count() * 0;
+    println(f"{saturating_mul(m1, low)}");
+    return 0;
+}

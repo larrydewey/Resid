@@ -208,7 +208,8 @@ Int no_delay(Int fd) {
 }
 
 // I/O deadlines per descriptor (resid_tcp_deadline): absolute
-// monotonic ns, 0 for none. Descriptors past the table get none.
+// monotonic ns, 0 for none. Accept refuses a connection past the table,
+// so every served connection can have one.
 Int dl_table() { return resid_raw_global("rt_tcp_deadline", 524288); }
 Bool dl_has_slot(Int fd) { return fd >= 0 && fd < 65536; }
 Int dl_get(Int fd) { return if (dl_has_slot(fd)) { ld64(dl_table() + fd * 8) } else { 0 }; }
@@ -233,9 +234,9 @@ Bool dl_arm(Int fd) {
 // check (SOCK_STREAM, connected); a listener must be accepted first, so
 // accept checks the listen state instead.
 Bool listener_ok(Int fd) {
-    if (fd < 0) { return false; }
+    if (fd < 0 || fd > 2147483647) { return false; }
     Int b = resid_raw_tls("sock_stat", 144);
-    return resid_raw_syscall(5, fd, b, 0, 0, 0, 0) == 0 && (ld32(b + st_mode_at()) & 61440) == 49152;
+    return resid_raw_syscall(5, fd, b, 0, 0, 0, 0) == 0 && (ld32(b + st_mode_at()) & 61440) == 49152 && inet_sock(fd);
 }
 
 // 127.0.0.1, the address `resid_tcp_listen` binds. The value is
@@ -317,6 +318,8 @@ pub Int rt_tcp_accept(Int fd) {
     // EAGAIN: an event loop made the listener non-blocking; wait for it.
     if (c == 0 - 11) { return poll_one(fd, 1, 0 - 1) * 0 + rt_tcp_accept(fd); }
     if (c < 0) { return 0 - 1; }
+    // Past the deadline table: dropped, and the next connection is taken.
+    if (!dl_has_slot(c)) { return sys_close(c) * 0 + rt_tcp_accept(fd); }
     _ = base_timeouts(c);
     _ = no_delay(c);
     _ = dl_set(c, 0);
@@ -337,6 +340,8 @@ pub Int rt_tcp_accept_now(Int fd) {
     Int c = resid_raw_syscall(43, fd, sa, alen, 0, 0, 0);
     if (c == 0 - 11 || c == 0 - 4 || c == 0 - 103) { return 0 - 2; }   // EAGAIN, EINTR, ECONNABORTED
     if (c < 0) { return 0 - 1; }
+    // Past the deadline table: dropped, and reported as none waiting.
+    if (!dl_has_slot(c)) { return sys_close(c) * 0 - 2; }
     _ = base_timeouts(c);
     _ = no_delay(c);
     _ = dl_set(c, 0);
@@ -390,7 +395,8 @@ Int poll_fill(Int fl, Int wl, Int pf, Int i, Int n) {
     Int fd = slot_int(fl, c_list_get(fl, i));
     Int w = if (i < c_list_len(wl)) { slot_int(wl, c_list_get(wl, i)) } else { 1 };
     Int ev = (if ((w & 1) != 0) { 1 } else { 0 }) | (if ((w & 2) != 0) { 4 } else { 0 });  // POLLIN, POLLOUT
-    _ = st32(pf + i * 8, fd);
+    // An fd past int range is stored as -1, which poll skips.
+    _ = st32(pf + i * 8, if (fd >= 0 && fd <= 2147483647) { fd } else { 0 - 1 });
     _ = st32(pf + i * 8 + 4, ev);
     return poll_fill(fl, wl, pf, i + 1, n);
 }
@@ -613,9 +619,19 @@ Bool send_all(Int fd, Int p, Int n) {
 
 // A TCP fd is a plain Int: only a socket is used, so a network grant cannot touch files or stdio.
 Bool sock_ok(Int fd) {
-    if (fd < 0) { return false; }
+    if (fd < 0 || fd > 2147483647) { return false; }
     Int b = resid_raw_tls("sock_stat", 144);
-    return resid_raw_syscall(5, fd, b, 0, 0, 0, 0) == 0 && (ld32(b + st_mode_at()) & 61440) == 49152;
+    return resid_raw_syscall(5, fd, b, 0, 0, 0, 0) == 0 && (ld32(b + st_mode_at()) & 61440) == 49152 && inet_sock(fd);
+}
+
+// An AF_INET or AF_INET6 socket: a network grant cannot reach a display (AF_UNIX) socket.
+Bool inet_sock(Int fd) {
+    Int dom = resid_raw_tls("sock_dom", 8);
+    Int lenp = resid_raw_tls("sock_dom_len", 4);
+    _ = st32(dom, 0) + st32(lenp, 4);
+    if (resid_raw_syscall(55, fd, 1, 39, dom, lenp, 0) != 0) { return false; }   // SOL_SOCKET, SO_DOMAIN
+    Int d = ld32(dom);
+    return d == 2 || d == 10;
 }
 
 @export("resid_tcp_send", "i8(i64,ptr)")

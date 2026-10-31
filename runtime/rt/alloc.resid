@@ -60,6 +60,8 @@ pub Int rt_arena_pop() {
 
 // A 16-byte-aligned block from arena a.
 Int arena_bump(Int a, Int size0) {
+    // Bounded as malloc's big_max (2^46), so the rounding cannot wrap.
+    if (size0 < 0 || size0 > 70368744177664) { return rt_abort("allocation size out of range"); }
     Int size = (size0 + 15) & (0 - 16);
     Int cur = ld64(a + 8);
     if (cur == 0 || ld64(cur + 8) + size > ld64(cur)) {
@@ -235,7 +237,8 @@ Int pop_regions(Int i, Int d, Int n) {
 // gives (an odd-word block wastes one word; the pad arithmetic it saved
 // was three instructions on every allocation). Every bump of a region
 // (alloc_in too) keeps it 16-aligned. A size that wraps when rounded is
-// negative and takes the slow path, which refuses it.
+// negative and takes the slow path; it and region_grow refuse any size
+// outside [0, 2^46] (malloc's big_max) before adding to it.
 pub Int scope_alloc(Int size0) {
     Int size = (size0 + 15) & (0 - 16);
     Int p = ag(6);
@@ -248,7 +251,7 @@ pub Int scope_alloc(Int size0) {
 
 @cold
 Int scope_alloc_slow(Int size) {
-    if (size < 0) { return rt_abort_msg(resid_raw_addr("allocation size out of range")); }
+    if (size < 0 || size > 70368744177664) { return rt_abort_msg(resid_raw_addr("allocation size out of range")); }
     Int r = ag(10);
     _ = rec_save(r);
     Int p = region_grow(r, size);

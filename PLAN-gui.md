@@ -185,13 +185,13 @@ from vendored protocol XML, `WlConn` object ids and a fake compositor.
 
 ### 4.1 Canvas
 
-`Canvas(W, H)` is a linear builder over `W*H` premultiplied ARGB32 pixels
+`Canvas(W, H)` is a linear builder over `W*H` straight-alpha ARGB32 pixels
 (little-endian BGRA in memory, matching `WL_SHM_FORMAT_ARGB8888`). Ops:
 
 - `fill_rect(c, Rect, Color)`, `fill_rrect(c, Rect, radius, Color)`
 - `blend_mask(c, x, y, Mask, Color)`: an alpha mask (glyph, AA path)
   composited with a color
-- `blit(c, x, y, Image)`: premultiplied source-over
+- `blit(c, x, y, Image)`: straight-alpha source-over
 - `fill_path(c, Path, Color, FillRule)`: anti-aliased by scanline
   coverage (accumulation-buffer rasterizer, as in font-rs), handling lines
   and quadratic and cubic Béziers by flattening
@@ -231,8 +231,7 @@ One entry point per job, each one self-contained (no state survives):
 
 ```resid
 @link("font")
-Bytes(4194304) font_atlas(Bytes(16777216) font, Int font_len,
-                          Str(4096) chars, Int px_size) {}
+Bytes(1048576) font_atlas(Bytes(16777216) font, Int len, Int px) {}
 ```
 
 The result packs an alpha atlas (2048×2048 max) with a metrics table
@@ -251,8 +250,9 @@ assumptions), and `STBI_MALLOC` over a static arena. Entry point:
 Bytes(16777216) image_decode(Bytes(16777216) data, Int len) {}
 ```
 
-The result is `[u32 w][u32 h][premultiplied BGRA…]`. Images larger than
-the result (about 2048×2048) are refused in v1 with a clear error.
+The result is `[magic][status][u32 w][u32 h][straight-alpha BGRA…]`.
+Images over 4096 pixels a side, or whose pixels overflow the 16 MB result,
+are refused with a status.
 
 ### 5.3 Fallback without native modules
 

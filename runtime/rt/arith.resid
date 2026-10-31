@@ -73,9 +73,11 @@ pub Int rt_saturating_sub(Int a, Int b) {
 
 @export("saturating_mul", "i64(i64,i64)")
 pub Int rt_saturating_mul(Int a, Int b) {
+    if (a == 0 || b == 0) { return 0; }
+    // min * -1 is tested first: r / a would trap on it.
+    if ((a == 0 - 1 && b == imin()) || (b == 0 - 1 && a == imin())) { return imax(); }
     Int r = a * b;
-    Bool over = (a != 0 && (r / a != b || (a == 0 - 1 && b == imin()))) || (b == 0 - 1 && a == imin());
-    if (!over) { return r; }
+    if (r / a == b) { return r; }
     return if ((a > 0) == (b > 0)) { imax() } else { imin() };
 }
 
@@ -96,28 +98,53 @@ pub Int rt_saturating_umul(Int a, Int b) {
 }
 
 @export("checked_add", "i64(i64,i64)")
-pub Int rt_checked_add(Int a, Int b) { return a + b; }
+pub Int rt_checked_add(Int a, Int b) {
+    if ((b > 0 && a > imax() - b) || (b < 0 && a < imin() - b)) { return rt_overflow_check(1); }
+    return a + b;
+}
 
 @export("checked_sub", "i64(i64,i64)")
-pub Int rt_checked_sub(Int a, Int b) { return a - b; }
+pub Int rt_checked_sub(Int a, Int b) {
+    if ((b < 0 && a > imax() + b) || (b > 0 && a < imin() + b)) { return rt_overflow_check(1); }
+    return a - b;
+}
 
 @export("checked_mul", "i64(i64,i64)")
-pub Int rt_checked_mul(Int a, Int b) { return a * b; }
+pub Int rt_checked_mul(Int a, Int b) {
+    if (a == 0 || b == 0) { return 0; }
+    if ((a == 0 - 1 && b == imin()) || (b == 0 - 1 && a == imin())) { return rt_overflow_check(1); }
+    Int r = a * b;
+    if (r / a != b) { return rt_overflow_check(1); }
+    return r;
+}
 
 @export("checked_div", "i64(i64,i64)")
 pub Int rt_checked_div(Int a, Int b) {
     if (b == 0) { return rt_abort("checked_div: division by zero"); }
+    if (a == imin() && b == 0 - 1) { return rt_overflow_check(1); }
     return a / b;
 }
 
 @export("checked_uadd", "i64(i64,i64)")
-pub Int rt_checked_uadd(Int a, Int b) { return a + b; }
+pub Int rt_checked_uadd(Int a, Int b) {
+    Int r = a + b;
+    if (rt_ult(r, a)) { return rt_overflow_check(1); }
+    return r;
+}
 
 @export("checked_usub", "i64(i64,i64)")
-pub Int rt_checked_usub(Int a, Int b) { return a - b; }
+pub Int rt_checked_usub(Int a, Int b) {
+    if (rt_ult(a, b)) { return rt_overflow_check(1); }
+    return a - b;
+}
 
 @export("checked_umul", "i64(i64,i64)")
-pub Int rt_checked_umul(Int a, Int b) { return a * b; }
+pub Int rt_checked_umul(Int a, Int b) {
+    if (a == 0 || b == 0) { return 0; }
+    Int r = a * b;
+    if (rt_udiv(r, a) != b) { return rt_overflow_check(1); }
+    return r;
+}
 
 @export("checked_udiv", "i64(i64,i64)")
 pub Int rt_checked_udiv(Int a, Int b) {

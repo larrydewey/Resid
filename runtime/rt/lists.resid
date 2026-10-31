@@ -49,7 +49,7 @@ pub Int rt_list_sum(Int l) { return sum_words(l, 0, c_list_len(l), 0); }
 
 Int sum_words(Int l, Int i, Int n, Int acc) {
     if (i >= n) { return acc; }
-    return sum_words(l, i + 1, n, acc + slot_int(l, c_list_get(l, i)));
+    return sum_words(l, i + 1, n, rt_checked_add(acc, slot_int(l, c_list_get(l, i))));
 }
 
 @export("list_sumf", "double(ptr)")

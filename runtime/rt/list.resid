@@ -204,6 +204,8 @@ Int node_new(Int cap) {
 
 @export("resid_rt_flatbuf_new", "ptr(i64)")
 pub Int flat_new(Int cap) {
+    // The largest cap whose 24 + cap * 8 bytes does not wrap.
+    if (cap < 0 || cap > 1152921504606846972) { return rt_abort("list too large to allocate"); }
     Int f = ralloc(24 + cap * 8);
     _ = st64(f, 0);
     _ = st64(f + 8, cap);

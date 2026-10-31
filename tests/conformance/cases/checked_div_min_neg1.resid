@@ -1,0 +1,7 @@
+// checked_div(Int.min, -1) aborts with the overflow message, never a CPU trap.
+@requires(args)
+Int main() {
+    Int low = 0 - 9223372036854775807 - 1 + args.count() * 0;
+    println(f"{checked_div(low, 0 - args.count())}");
+    return 0;
+}

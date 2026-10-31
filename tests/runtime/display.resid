@@ -3,7 +3,7 @@
 // and the same descriptors pollable with resid_tcp_poll.
 //
 // The pair is local and anonymous, so this needs no window server.
-@requires(display)
+@requires(display, network)
 Int main() {
     List(Int) p = resid_disp_pair();
     println(f"pair {p.len()}");
@@ -66,5 +66,34 @@ Int main() {
     println(f"close again {resid_disp_close(a)}");
     println(f"shm too big {resid_disp_shm_new(268435457) == 0}");
     println(f"no room {resid_disp_recv(a, 0 - 1).len()}");
+
+    // A handle is a table index, never an address: forged, stale and
+    // wild values are refused without being read.
+    Int g = resid_disp_shm_new(4096);
+    println(f"forged {resid_disp_shm_fd(g + 64)} {resid_disp_shm_fd(4096)} {resid_disp_shm_fd(0 - 4096)} {resid_disp_shm_put(1, 0, [1], 1)}");
+    // Bounds that would wrap are refused, not wrapped.
+    List(UInt(32)) w = [(UInt(32))1, (UInt(32))2, (UInt(32))3, (UInt(32))4];
+    println(f"put32 wrap {resid_disp_shm_put32(g, 0, w, 4611686018427387903, 4611686018427387905)}");
+    println(f"put32 off wrap {resid_disp_shm_put32(g, 9223372036854775804, w, 0, 1)}");
+    println(f"put wrap {resid_disp_shm_put(g, 9223372036854775807, [1], 1)}");
+    // Only a live mapping's descriptor goes to the peer.
+    List(Int) q = resid_disp_pair();
+    println(f"send stdin {resid_disp_send(q[0], [1], 0)}");
+    println(f"send mapping {resid_disp_send(q[0], [1], resid_disp_shm_fd(g))}");
+    _ = resid_disp_recv(q[1], 16);
+    Int mfd = resid_disp_recv_fd();
+    println(f"mapping arrived {mfd >= 0}");
+    _ = resid_disp_fd_read(mfd, 0);
+    Int gfd = resid_disp_shm_fd(g);
+    println(f"free {resid_disp_shm_free(g)} stale {resid_disp_shm_fd(g)} send freed {resid_disp_send(q[0], [1], gfd)}");
+    println(f"tcp refused {tcp_refused()}");
     return 0;
+}
+
+// A TCP socket is not a display connection: the display verbs refuse it.
+@requires(display, network)
+Bool tcp_refused() {
+    Int l = resid_tcp_listen(0);
+    Int c = resid_tcp_connect("127.0.0.1", resid_tcp_bound_port(l));
+    return l >= 0 && c >= 0 && !resid_disp_send(c, [1], 0 - 1) && resid_disp_recv(c, 16).len() == 0 && !resid_disp_close(c);
 }

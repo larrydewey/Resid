@@ -1,0 +1,8 @@
+// xs.sum() aborts on overflow instead of wrapping.
+@requires(args)
+Int main() {
+    Int imax = 9223372036854775807 + args.count() * 0;
+    List(Int) xs = [imax, 1];
+    println(f"{xs.sum()}");
+    return 0;
+}
