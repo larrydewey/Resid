@@ -142,7 +142,7 @@ Int run_take(Int k) {
     Int q = if (p != 0) { p } else { base + at * rg_page() };
     // Secret mode locks every run it hands out (a reused one was unlocked
     // when given back), on fault: mlock would make the whole run resident.
-    _ = if (secret_mode()) { resid_raw_syscall(325, q, (1 << k) * rg_page(), 1, 0, 0, 0) } else { 0 };   // mlock2 MLOCK_ONFAULT
+    _ = if (secret_mode()) { sec_lock(q, (1 << k) * rg_page()) } else { 0 };
     return q; }
 
 // `bump` is the bump pointer of the region the page belonged to: on the

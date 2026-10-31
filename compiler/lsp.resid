@@ -33,9 +33,19 @@ Int ls_buf_max() { return 67108863; }
 Int ls_setup() {
     _ = resid_raw_store64(ls_fds(), ls_sys(32, 1, 0, 0));        // dup(1)
     _ = resid_raw_store64(ls_fds() + 8, ls_sys(32, 2, 0, 0));    // dup(2)
-    Int mfd = ls_sys(319, resid_raw_addr("resid-lsp"), 0, 0);    // memfd_create
+    Int mfd = ls_capture_fd();
     _ = resid_raw_store64(ls_fds() + 16, mfd);
     return ls_sys(292, mfd, 1, 0);                                // fd 1 -> capture
+}
+
+// A seekable file to capture a program's output: a memfd, else an
+// unnamed /tmp file, else /dev/null, so fd 1 never stays the LSP stream.
+Int ls_capture_fd() {
+    Int mfd = ls_sys(319, resid_raw_addr("resid-lsp"), 0, 0);    // memfd_create
+    if (mfd >= 0) { return mfd; }
+    Int tfd = resid_raw_syscall(257, 0 - 100, resid_raw_addr("/tmp"), 4784130, 384, 0, 0);   // openat O_TMPFILE|O_RDWR|O_CLOEXEC, 0600
+    if (tfd >= 0) { return tfd; }
+    return resid_raw_syscall(257, 0 - 100, resid_raw_addr("/dev/null"), 524290, 0, 0, 0);   // O_RDWR|O_CLOEXEC
 }
 
 // Read exactly n bytes of fd into buf; the count read.

@@ -46,9 +46,22 @@ pub Int sys_mmap(Int n) {
     Int p = resid_raw_syscall(9, 0, n, 3, 34, 0 - 1, 0);   // RW, PRIVATE|ANON
     if (p < 0 && p > 0 - 4096) { return 0; }
     _ = if (secret_mode()) { resid_raw_syscall(28, p, n, 16, 0, 0, 0) } else { 0 };   // MADV_DONTDUMP
-    _ = if (secret_mode()) { resid_raw_syscall(325, p, n, 1, 0, 0, 0) } else { 0 };   // mlock2 MLOCK_ONFAULT
+    _ = if (secret_mode()) { sec_lock(p, n) } else { 0 };
     return p;
 }
+
+// Secret mode locks its pages on fault as far as RLIMIT_MEMLOCK allows;
+// a refused lock leaves them swappable and is counted.
+pub Int sec_lock(Int p, Int n) {
+    Int r = resid_raw_syscall(325, p, n, 1, 0, 0, 0);   // mlock2 MLOCK_ONFAULT
+    return if (r < 0) { resid_raw_fetch_add(sec_unlocked(), 1) * 0 + r } else { r };
+}
+
+Int sec_unlocked() { return resid_raw_global("rt_secret_unlocked", 8); }
+
+// How many secret-mode locks were refused.
+@export("resid_secret_unlocked", "i64()")
+pub Int rt_secret_unlocked() { return ld64(sec_unlocked()); }
 
 // ─── Secret mode (spec §48) ────────────────────────────────────────────
 // A program that handles Secret(T) values switches this on before main
@@ -352,9 +365,15 @@ pub Int c_realloc(Int p, Int n) {
         _ = mem_take(sz - h);
         _ = resid_raw_fetch_add(unmap_epoch(), 1);
         Int q = resid_raw_syscall(25, p - 16, h, sz, 1, 0, 0);   // mremap MAYMOVE
-        if (q < 0 && q > 0 - 4096) { return 0; }
+        if (q < 0 && q > 0 - 4096) { return mem_give(sz - h) + realloc_copy(p, n); }
         return st64(q, sz) * 0 + q + 16;
     }
+    return realloc_copy(p, n);
+}
+
+// A block that cannot grow where it is (small, or a mapping mremap
+// refused): copied into a new one.
+Int realloc_copy(Int p, Int n) {
     Int q = c_malloc(n);
     if (q == 0) { return 0; }
     _ = mcopy(q, p, block_room(p));

@@ -16,6 +16,7 @@ pub Int xmalloc(Int n) {
     return p;
 }
 
+@export("resid_xrealloc", "ptr(ptr,i64)")
 pub Int xrealloc(Int p, Int n) {
     if (n < 0) { return rt_abort("allocation size out of range"); }
     Int q = c_realloc(p, if (n > 0) { n } else { 1 });
