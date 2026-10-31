@@ -140,6 +140,24 @@ Int ct_case_dev_tpm_nv_resp_secret() {
     return 0;
 }
 
+// ─── TPM HMAC of a secret ───────────────────────────────────────────
+
+// An HMAC response (53 bytes): header, parameterSize, outHMAC (size 32 and
+// the digest, bytes 16 to 48: secret), and the password session's reply.
+List(Int) hmac_resp() {
+    return unhex(rt "80020000003500000000000000200011223344556677889900aabbccddeeff00112233445566778899aabbccddeeff000000010000", 0, ListBuf());
+}
+
+@requires(declassify)
+Int ct_case_dev_tpm_hmac_resp_secret() {
+    List(Secret(UInt(8))) r = secret_bytes(mark_range(hmac_resp(), 16, 48, 0, ListBuf()));
+    println(match (tpm2_hmac_resp_secret(r)) {
+        Ok(b) => f"dev-tpm-hmac-resp-secret {opened(b)}",
+        Err(e) => "dev-tpm-hmac-resp-secret " + tpm_error_text(e),
+    });
+    return 0;
+}
+
 // The whole read over a transport: NV_ReadPublic (public) for an index
 // read by the owner, then NV_Read's response as secret bytes.
 @requires(declassify)
@@ -162,6 +180,7 @@ Int main() {
     if (c == "dev-bound") { return ct_case_dev_bound(); }
     if (c == "dev-tr-out") { return ct_case_dev_tr_out(); }
     if (c == "dev-tpm-nv-resp-secret") { return ct_case_dev_tpm_nv_resp_secret(); }
+    if (c == "dev-tpm-hmac-resp-secret") { return ct_case_dev_tpm_hmac_resp_secret(); }
     if (c == "dev-tpm-nv-read-secret") { return ct_case_dev_tpm_nv_read_secret(); }
     println("unknown case " + c);
     return 2;

@@ -7,6 +7,7 @@ import "bignum.resid";
 
 /// A signed big integer: a sign `neg` and a natural-number magnitude `mag`.
 /// Zero is never negative.
+//@ serial
 pub type BnInt = { Bool neg; List(UInt(64)) mag; };
 
 /// The integer with sign `neg` and magnitude `mag` (zero is made positive).

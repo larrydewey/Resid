@@ -1323,3 +1323,226 @@ pub Result(List(List(UInt(8))), TpmError) tpm_der_split(List(UInt(8)) b, Int at,
 }
 
 Int tpm_be_n(List(UInt(8)) b, Int at, Int n, Int acc) { return if (n <= 0) { acc } else { tpm_be_n(b, at + 1, n - 1, (acc << 8) | (Int) b[at]) }; }
+
+// -- Keys an application holds in the TPM -------------------------------------
+// TPM2_Create, Load, EvictControl, PolicyPassword, Sign, Certify and HMAC
+// (TCG TPM 2.0 Part 3), for an application's own keys under a persistent
+// storage key: a signing key gated by a policy on its authValue, an HMAC key
+// whose output is a secret only the TPM and its authValue release, and the
+// certification of a key by the TCG-template AK. Authorization is by
+// password (TPM_RS_PW) or by a policy session satisfied with PolicyPassword,
+// whose policy digest is PolicyAuthValue's (Part 3, 23.18): the authValue
+// travels in the clear on the TPM's bus either way. Objects are not noDA:
+// wrong authValues count toward the TPM's lockout, which is what limits PIN
+// guesses.
+
+pub Int tpm_cc_create() { return 339; }             // 0x00000153
+pub Int tpm_cc_load() { return 343; }               // 0x00000157
+pub Int tpm_cc_evict_control() { return 288; }      // 0x00000120
+pub Int tpm_cc_policy_password() { return 396; }    // 0x0000018C
+pub Int tpm_cc_policy_auth_value() { return 363; }  // 0x0000016B
+pub Int tpm_cc_sign() { return 349; }               // 0x0000015D
+pub Int tpm_cc_certify() { return 328; }            // 0x00000148
+pub Int tpm_cc_hmac() { return 341; }               // 0x00000155
+
+/// The policy digest of a policy session after PolicyAuthValue (or
+/// PolicyPassword) alone: SHA-256(0^32 || TPM_CC_PolicyAuthValue).
+pub List(UInt(8)) tpm_policy_auth_value_digest() {
+    return tk_u8s([143, 205, 33, 105, 171, 146, 105, 78, 12, 99, 63, 26, 183, 114, 132, 43, 130, 65, 187, 194, 2, 136, 152, 31, 199, 172, 30, 221, 193, 253, 219, 14]);
+}
+
+List(UInt(8)) tk_u8s(List(Int) b) { return tk_u8s_at(b, 0, ListBuf()); }
+List(UInt(8)) tk_u8s_at(List(Int) b, Int i, ListBuf(UInt(8)) acc) {
+    if (i >= b.len()) { return acc.finish(); }
+    return tk_u8s_at(b, i + 1, acc.push((UInt(8))(b[i] & 255)));
+}
+
+/// A storage key: ECC NIST P-256, restricted decrypt, AES-128-CFB,
+/// fixedTPM | fixedParent | sensitiveDataOrigin | userWithAuth | noDA |
+/// restricted | decrypt (0x00030472).
+pub List(UInt(8)) tpm_srk_template() {
+    return tw_be(35, 2).concat(tw_be(11, 2)).concat(tw_be(197746, 4)).concat(tw_be(0, 2))
+        .concat(tw_be(6, 2)).concat(tw_be(128, 2)).concat(tw_be(67, 2))
+        .concat(tw_be(16, 2)).concat(tw_be(3, 2)).concat(tw_be(16, 2)).concat(tw_be(0, 2)).concat(tw_be(0, 2));
+}
+
+/// A signing key usable only through `policy`: ECC NIST P-256, no scheme
+/// (ECDSA chosen at TPM2_Sign), fixedTPM | fixedParent |
+/// sensitiveDataOrigin | sign (0x00040032), userWithAuth and adminWithPolicy
+/// clear, dictionary-attack protected.
+pub List(UInt(8)) tpm_policy_signing_template(List(UInt(8)) policy) {
+    return tw_be(35, 2).concat(tw_be(11, 2)).concat(tw_be(262194, 4)).concat(tw_2b(policy))
+        .concat(tw_be(16, 2)).concat(tw_be(16, 2)).concat(tw_be(3, 2)).concat(tw_be(16, 2)).concat(tw_be(0, 2)).concat(tw_be(0, 2));
+}
+
+/// An HMAC-SHA-256 key the TPM generates, authorized by its authValue:
+/// KEYEDHASH, fixedTPM | fixedParent | sensitiveDataOrigin | userWithAuth |
+/// sign (0x00040072), dictionary-attack protected.
+pub List(UInt(8)) tpm_hmac_key_template() {
+    return tw_be(8, 2).concat(tw_be(11, 2)).concat(tw_be(262258, 4)).concat(tw_be(0, 2))
+        .concat(tw_be(5, 2)).concat(tw_be(11, 2)).concat(tw_be(0, 2));
+}
+
+// TPMS_AUTH_COMMAND for the password session with `auth`; continueSession.
+List(UInt(8)) tw_pw_with(List(UInt(8)) auth) {
+    return tw_be(tpm_rs_pw(), 4).concat(tw_be(0, 2)).concat([(UInt(8))1]).concat(tw_2b(auth));
+}
+
+/// TPM2_Create (Part 3, Table 19) under `parent` (password, empty): an
+/// object from `template` whose userAuth is `auth`, no sensitive data (the
+/// TPM generates the key), no outside info or creation PCRs.
+pub Result(List(UInt(8)), TpmError) tpm2_create_cmd(Int parent, List(UInt(8)) template, List(UInt(8)) auth) {
+    if (!tw_u32_ok(parent) || template.len() > 1024 || auth.len() > 32) { return Err(TpmArg("a parent, a template of at most 1024 bytes and an authValue of at most 32")); }
+    List(UInt(8)) sens = tw_2b(auth).concat(tw_be(0, 2));
+    List(UInt(8)) params = tw_2b(sens).concat(tw_2b(template)).concat(tw_be(0, 2)).concat(tw_be(0, 4));
+    return Ok(tw_command(tpm_cc_create(), [parent], tw_pw_auth(), params));
+}
+
+/// What TPM2_Create made: the wrapped private area and the public area.
+type TpmBlob = { List(UInt(8)) private_area; List(UInt(8)) public_area; };
+
+pub Result(TpmBlob, TpmError) tpm2_create_resp(List(UInt(8)) r) {
+    TwAt p = tpm_resp_params(r, 0, true)?;
+    TwBytes pr = tw_take_2b(p, 1024, "outPrivate")?;
+    TwBytes pu = tw_take_2b(pr.next, 1024, "outPublic")?;
+    return Ok(TpmBlob {.private_area = pr.v, .public_area = pu.v});
+}
+
+/// TPM2_Load (Part 3, Table 21) of a blob under `parent` (password, empty).
+pub Result(List(UInt(8)), TpmError) tpm2_load_cmd(Int parent, TpmBlob b) {
+    if (!tw_u32_ok(parent)) { return Err(TpmArg("a handle is u32")); }
+    return Ok(tw_command(tpm_cc_load(), [parent], tw_pw_auth(), tw_2b(b.private_area).concat(tw_2b(b.public_area))));
+}
+
+/// TPM2_EvictControl (Part 3, Table 207) by the owner (password, empty):
+/// makes transient `object` persistent at `persistent`, or removes the
+/// persistent object when `object` is `persistent`.
+pub Result(List(UInt(8)), TpmError) tpm2_evict_control_cmd(Int object, Int persistent) {
+    if (!tw_u32_ok(object) || persistent < 2164260864 || persistent > 2181038079) { return Err(TpmArg("a persistent handle in 0x81000000..0x81FFFFFF")); }
+    return Ok(tw_command(tpm_cc_evict_control(), [tpm_rh_owner(), object], tw_pw_auth(), tw_be(persistent, 4)));
+}
+
+/// TPM2_PolicyPassword (Part 3, Table 141) on `session`.
+pub Result(List(UInt(8)), TpmError) tpm2_policy_password_cmd(Int session) {
+    if (!tw_u32_ok(session)) { return Err(TpmArg("a handle is u32")); }
+    return Ok(tw_command(tpm_cc_policy_password(), [session], [], []));
+}
+
+/// TPM2_Sign (Part 3, Table 104): ECDSA SHA-256 over `digest` by `key`,
+/// authorized by the policy session `session` (PolicyPassword) with `auth`
+/// as its hmac; the session ends with the command. A null hash-check ticket
+/// (the key is not restricted).
+pub Result(List(UInt(8)), TpmError) tpm2_sign_policy_cmd(Int key, Int session, List(UInt(8)) auth, List(UInt(8)) digest) {
+    if (!tw_u32_ok(key) || !tw_u32_ok(session) || digest.len() != 32 || auth.len() > 32) { return Err(TpmArg("handles, a 32-byte digest and an authValue of at most 32")); }
+    List(UInt(8)) area = tw_be(session, 4).concat(tw_be(0, 2)).concat([(UInt(8))0]).concat(tw_2b(auth));
+    List(UInt(8)) params = tw_2b(digest).concat(tw_be(tpm_alg_ecdsa(), 2)).concat(tw_be(tpm_alg_sha256(), 2))
+        .concat(tw_be(32804, 2)).concat(tw_be(tpm_rh_null(), 4)).concat(tw_be(0, 2));
+    return Ok(tw_command(tpm_cc_sign(), [key], area, params));
+}
+
+/// The offset of a Sign command's policy-session handle: after one handle
+/// and the authorization area's size (18).
+pub Int tpm_off_sign_session() { return 18; }
+
+/// An ECDSA signature from a TPM2_Sign response: r and s, each 32 bytes.
+pub Result(List(UInt(8)), TpmError) tpm2_sign_resp(List(UInt(8)) r) {
+    TwAt p = tpm_resp_params(r, 0, true)?;
+    TwNum alg = tw_num(p, 2, "sigAlg")?;
+    TwNum h = tw_num(alg.next, 2, "signature hash")?;
+    if (alg.v != tpm_alg_ecdsa() || h.v != tpm_alg_sha256()) { return Err(TpmBad("not an ECDSA SHA-256 signature")); }
+    TwBytes sr = tw_take_2b(h.next, 32, "r")?;
+    TwBytes ss = tw_take_2b(sr.next, 32, "s")?;
+    _ = tw_done(ss.next, "Sign")?;
+    return Ok(tw_pad32(sr.v).concat(tw_pad32(ss.v)));
+}
+
+List(UInt(8)) tw_pad32(List(UInt(8)) b) { return if (b.len() >= 32) { b } else { tw_pad32([(UInt(8))0].concat(b)) }; }
+
+/// TPM2_Certify (Part 3, Table 88): `object` (admin role: password `auth`)
+/// certified by `signer` (password, empty) over `extra`, the signer's own
+/// scheme.
+pub Result(List(UInt(8)), TpmError) tpm2_certify_cmd(Int object, Int signer, List(UInt(8)) auth, List(UInt(8)) extra) {
+    if (!tw_u32_ok(object) || !tw_u32_ok(signer) || extra.len() > 64 || auth.len() > 32) { return Err(TpmArg("handles, extraData of at most 64 bytes and an authValue of at most 32")); }
+    return Ok(tw_command(tpm_cc_certify(), [object, signer], tw_pw_with(auth).concat(tw_pw_auth()), tw_2b(extra).concat(tw_be(tpm_alg_null(), 2))));
+}
+
+/// TPM2_Certify's response: the TPMS_ATTEST and its TPMT_SIGNATURE, as
+/// lib/verify/tpm.resid's tpm_verify_certify takes them.
+type TpmCertifyOut = { List(UInt(8)) attest; List(UInt(8)) sig; };
+
+pub Result(TpmCertifyOut, TpmError) tpm2_certify_resp(List(UInt(8)) r) {
+    TwAt p = tpm_resp_params_n(r, 0, 2)?;
+    TwBytes ci = tw_take_2b(p, 1024, "certifyInfo")?;
+    TwAt s0 = ci.next;
+    TwNum alg = tw_num(s0, 2, "sigAlg")?;
+    TwNum h = tw_num(alg.next, 2, "signature hash")?;
+    TwBytes sr = tw_take_2b(h.next, 128, "r")?;
+    TwBytes ss = tw_take_2b(sr.next, 128, "s")?;
+    _ = tw_done(ss.next, "Certify")?;
+    return Ok(TpmCertifyOut {.attest = ci.v, .sig = r[s0.at..ss.next.at]});
+}
+
+/// TPM2_HMAC (Part 3, Table 63) of `data` by `key`, password `auth`.
+pub Result(List(UInt(8)), TpmError) tpm2_hmac_cmd(Int key, List(UInt(8)) auth, List(UInt(8)) data) {
+    if (!tw_u32_ok(key) || data.len() > 1024 || auth.len() > 32) { return Err(TpmArg("a handle, data of at most 1024 bytes and an authValue of at most 32")); }
+    return Ok(tw_command(tpm_cc_hmac(), [key], tw_pw_with(auth), tw_2b(data).concat(tw_be(tpm_alg_sha256(), 2))));
+}
+
+/// The 32-byte output of a TPM2_HMAC response, as secret bytes: the
+/// response is parsed for its length fields only, which are public.
+pub Result(List(Secret(UInt(8))), TpmError) tpm2_hmac_resp_secret(List(Secret(UInt(8))) r) {
+    // Header 10, parameterSize 4, outHMAC size 2 then 32 bytes, then the
+    // auth response (nonce 2, attributes 1, hmac 2): 53 bytes in all.
+    if (r.len() != 53) { return Err(TpmBad(f"an HMAC response of {r.len()} bytes, expected 53 (or an error)")); }
+    return Ok(r[16..48]);
+}
+
+// Sequences over a chain (one open file: transient handles and sessions
+// live from one command to the next through the links).
+
+/// The storage key at `persistent`: CreatePrimary under the owner from
+/// tpm_srk_template, made persistent, the transient copy flushed.
+pub Result(Bool, TpmError) tpm_srk_setup_via(Result(List(List(UInt(8))), TpmError) closure(List(List(UInt(8))), List(Int)) chain, Int persistent) {
+    List(UInt(8)) c0 = tpm2_create_primary_cmd(tpm_rh_owner(), tpm_srk_template())?;
+    List(UInt(8)) c1 = tpm2_evict_control_cmd(0, persistent)?;
+    List(UInt(8)) f = tpm2_flush_context_cmd(0)?;
+    List(List(UInt(8))) rs = chain([c0, c1, f], [0, 10, 1, 14, 0, 10, 2, 10])?;
+    _ = tpm2_create_primary_resp(rs[0])?;
+    return tpm_resp_ok(rs[1], true);
+}
+
+/// A blob loaded under `parent` and made persistent at `persistent`.
+pub Result(Bool, TpmError) tpm_persist_via(Result(List(List(UInt(8))), TpmError) closure(List(List(UInt(8))), List(Int)) chain, Int parent, TpmBlob b, Int persistent) {
+    List(UInt(8)) c0 = tpm2_load_cmd(parent, b)?;
+    List(UInt(8)) c1 = tpm2_evict_control_cmd(0, persistent)?;
+    List(UInt(8)) f = tpm2_flush_context_cmd(0)?;
+    List(List(UInt(8))) rs = chain([c0, c1, f], [0, 10, 1, 14, 0, 10, 2, 10])?;
+    _ = tpm_resp_params(rs[0], 1, true)?;
+    return tpm_resp_ok(rs[1], true);
+}
+
+/// An ECDSA signature r || s over `digest` by the policy-gated key `key`:
+/// a policy session (caller nonce `nonce`), PolicyPassword, Sign with
+/// `auth`.
+pub Result(List(UInt(8)), TpmError) tpm_sign_policy_via(Result(List(List(UInt(8))), TpmError) closure(List(List(UInt(8))), List(Int)) chain, Int key, List(UInt(8)) auth, List(UInt(8)) digest, List(UInt(8)) nonce) {
+    List(UInt(8)) c0 = tpm2_start_auth_session_cmd(nonce)?;
+    List(UInt(8)) c1 = tpm2_policy_password_cmd(0)?;
+    List(UInt(8)) c2 = tpm2_sign_policy_cmd(key, 0, auth, digest)?;
+    List(List(UInt(8))) rs = chain([c0, c1, c2], [0, 10, 1, 10, 0, 10, 2, tpm_off_sign_session()])?;
+    _ = tpm_resp_ok(rs[1], false)?;
+    return tpm2_sign_resp(rs[2]);
+}
+
+/// The TCG-template AK (tpm_ak_template) and its certification of
+/// `object` (admin role, `auth`) over `extra`; the AK is flushed.
+type TpmCertified2 = { List(UInt(8)) ak_public; List(UInt(8)) attest; List(UInt(8)) sig; };
+
+pub Result(TpmCertified2, TpmError) tpm_certify_via(Result(List(List(UInt(8))), TpmError) closure(List(List(UInt(8))), List(Int)) chain, Int object, List(UInt(8)) auth, List(UInt(8)) extra) {
+    List(UInt(8)) c0 = tpm2_create_primary_cmd(tpm_rh_endorsement(), tpm_ak_template())?;
+    List(UInt(8)) c1 = tpm2_certify_cmd(object, 0, auth, extra)?;
+    List(UInt(8)) f = tpm2_flush_context_cmd(0)?;
+    List(List(UInt(8))) rs = chain([c0, c1, f], [0, 10, 1, 14, 0, 10, 2, 10])?;
+    TpmCreated ak = tpm2_create_primary_resp(rs[0])?;
+    TpmCertifyOut c = tpm2_certify_resp(rs[1])?;
+    return Ok(TpmCertified2 {.ak_public = ak.public_area, .attest = c.attest, .sig = c.sig});
+}

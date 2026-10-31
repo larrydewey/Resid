@@ -262,3 +262,59 @@ pub Result(TpmQuote, TpmError) tpm_quote_ak(List(UInt(8)) nonce, List(PcrSel) se
 pub Result(List(UInt(8)), TpmError) tpm_azure_hcl_report() {
     return tpm_nv_read_all(tpm_rh_owner(), tpm_nv_azure_hcl_report());
 }
+
+// -- Application keys (lib/dev/tpm_wire.resid's key commands) ------------------
+// The authValue is a secret of the caller (Symbolon's pin_stretch); it goes
+// to the TPM in the command, so these wrappers declassify it there, and
+// only there.
+
+@requires(declassify)
+List(UInt(8)) tpm_auth_bytes(List(Secret(UInt(8))) auth) { return declassify(secret_join(auth), "authValue to the TPM"); }
+
+/// Makes the storage key persistent at `persistent`.
+@requires(device)
+pub Result(Bool, TpmError) tpm_srk_setup(Int persistent) {
+    return tpm_srk_setup_via(lambda(cs, ls) { tpm_chain(cs, ls) }, persistent);
+}
+
+/// Creates an object under `parent` from `template` with authValue `auth`.
+@requires(device, declassify)
+pub Result(TpmBlob, TpmError) tpm_create(Int parent, List(UInt(8)) template, List(Secret(UInt(8))) auth) {
+    List(UInt(8)) c = tpm2_create_cmd(parent, template, tpm_auth_bytes(auth))?;
+    return tpm2_create_resp(tpm_send(c)?);
+}
+
+/// Loads `b` under `parent` and makes it persistent at `persistent`.
+@requires(device)
+pub Result(Bool, TpmError) tpm_persist(Int parent, TpmBlob b, Int persistent) {
+    return tpm_persist_via(lambda(cs, ls) { tpm_chain(cs, ls) }, parent, b, persistent);
+}
+
+/// Removes the persistent object at `persistent`.
+@requires(device)
+pub Result(Bool, TpmError) tpm_evict(Int persistent) {
+    List(UInt(8)) c = tpm2_evict_control_cmd(persistent, persistent)?;
+    return tpm_resp_ok(tpm_send(c)?, true);
+}
+
+/// ECDSA r || s over `digest` by the policy-gated key at `key`.
+@requires(device, declassify)
+pub Result(List(UInt(8)), TpmError) tpm_sign_policy(Int key, List(Secret(UInt(8))) auth, List(UInt(8)) digest) {
+    List(UInt(8)) nonce = tpm_get_random(16)?;
+    return tpm_sign_policy_via(lambda(cs, ls) { tpm_chain(cs, ls) }, key, tpm_auth_bytes(auth), digest, nonce);
+}
+
+/// The AK's public area and its TPM2_Certify of the key at `object`.
+@requires(device, declassify)
+pub Result(TpmCertified2, TpmError) tpm_certify(Int object, List(Secret(UInt(8))) auth, List(UInt(8)) extra) {
+    return tpm_certify_via(lambda(cs, ls) { tpm_chain(cs, ls) }, object, tpm_auth_bytes(auth), extra);
+}
+
+/// HMAC-SHA-256 of `data` by the key at `key` (authValue `auth`): 32
+/// secret bytes, released only by the TPM and only for the right authValue.
+@requires(device, declassify)
+pub Result(List(Secret(UInt(8))), TpmError) tpm_hmac(Int key, List(Secret(UInt(8))) auth, List(UInt(8)) data) {
+    List(UInt(8)) c = tpm2_hmac_cmd(key, tpm_auth_bytes(auth), data)?;
+    List(Secret(UInt(8))) r = tpm_send_secret(c)?;
+    return tpm2_hmac_resp_secret(r);
+}

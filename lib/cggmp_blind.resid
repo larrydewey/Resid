@@ -1,0 +1,231 @@
+// cggmp_blind.resid — a hidden additive tweak that no other signer can see.
+//
+// cggmp_tweak.resid moves the designated party's public share by tau*G, so
+// every other signer learns tau*G and with it the tweaked key X + tau*G. For
+// Symbolon's cosigner that is a linking handle on every credential (SPEC
+// 12.2). Here the tweak never appears as a group element:
+//
+// - Every share stays untweaked; the key shares, their public commitments
+//   and the aff-g proofs of the Chi MtA are those of ordinary CGGMP21.
+// - In round 2 the designated party d broadcasts T = Enc_d(tau) and runs one
+//   more MtA with each other signer j on K_j: D'_j = tau K_j + Enc_j(y_j),
+//   with an aff-p proof against T (a Paillier commitment, no point). j adds
+//   alpha'_j = Dec_j(D'_j) to its Chi share; d adds tau k_d + sum beta'_j to
+//   its own. The Chi shares then add up to k (x + tau).
+// - The S points of round 6 add up to X + tau*G, so they go to d only, and
+//   only d checks their sum. Signature shares go to d only (cggmp_delivery).
+// - Abort 2 (S shares not adding up) is detected only by d; the others send
+//   their openings to d only, since d's own opening would let them solve for
+//   tau*G. d names the culprit; the others never blame d.
+//
+// This is Symbolon's construction on top of CGGMP21, not part of the paper;
+// it needs its own review (Symbolon SPEC 27, C-01). The transcript of the
+// tweak proof is the prover's transcript with a "BLIND" item, so it cannot
+// be replayed as the Delta MtA's aff-p proof.
+
+import "cggmp.resid";
+import "cggmp_curve.resid";
+import "cggmp_hash.resid";
+
+/// One tweak MtA message from the designated party to signer `to`.
+//@ serial
+pub type BlTwMsg = { Int from; Int to; List(UInt(64)) t; List(UInt(64)) d; List(UInt(64)) f; AffpProof proof; };
+
+/// A signer's view of the blind tweak: the designated party, and tau for that party only (empty for every other).
+pub type BlRole = { Int designated; List(UInt(64)) tau; };
+
+/// Round-2 state: the ordinary state, d's beta' per other signer and the messages to send.
+pub type BlR2 = { Ps2 s; BlRole role; Map(Int, BnInt) tbeta; List(BlTwMsg) out; };
+
+/// The context for a blind-tweak session. The designated party's public key
+/// is X + tau*G; every other party keeps X and never learns tau*G.
+pub Option(CgCtx) bl_ctx(CgConfig cfg, List(Int) ids, BlRole role, List(Int) session_id, List(Int) digest, List(Int) seed) {
+    if (cg_index(ids, role.designated, 0) < 0) { return None; }
+    Bool mine = cfg.id == role.designated;
+    if (mine && (role.tau.len() == 0 || !cg_nonzero(bn_to_be(sc_of_zi(sc_to_zi(role.tau)), 32), 0))) { return None; }
+    if (!mine && role.tau.len() != 0) { return None; }
+    Option(CgCtx) oc = cg_ctx(cfg, ids, session_id, digest, seed);
+    return match oc {
+        None => None,
+        Some(c) => if (mine) { Some(bl_with_key(c, cv_add(c.pubkey, cv_mul_base(role.tau)))) } else { Some(c) }
+    };
+}
+
+CgCtx bl_with_key(CgCtx c, CvPt k) {
+    return CgCtx {.self = c.self, .ids = c.ids, .pubs = c.pubs, .x = c.x, .elg = c.elg, .psec = c.psec, .pubkey = k, .base = c.base, .seed = c.seed, .digest = c.digest};
+}
+
+Transcript bl_tr(CgCtx c, Int prover) { return tr_item(cg_tr_for(c, prover), "BLIND", bytes_of("symbolon tweak mta")); }
+
+// ─── Round 2: the tweak MtAs ────────────────────────────────────
+
+/// After ps_r2: the designated party runs the tweak MtA with every other signer; the others do nothing here.
+pub BlR2 bl_r2(Ps2 s, BlRole role) {
+    CgCtx c = s.prev.ctx;
+    if (c.self != role.designated) { return BlR2 {.s = s, .role = role, .tbeta = {}, .out = []}; }
+    CgPub me = cg_pub_of(c, c.self);
+    List(UInt(64)) tn = cg_unit(c.seed, "bl/tn", me.pail.n);
+    List(UInt(64)) t = pa_enc(me.pail, sc_to_zi(role.tau), tn);
+    List(Int) others = cg_others(c.ids, c.self, 0, ListBuf());
+    return bl_mtas(s, role, t, tn, others, 0, BlR2 {.s = s, .role = role, .tbeta = {}, .out = []});
+}
+
+BlR2 bl_mtas(Ps2 s, BlRole role, List(UInt(64)) t, List(UInt(64)) tn, List(Int) others, Int i, BlR2 acc) {
+    if (i >= others.len()) { return acc; }
+    CgCtx c = s.prev.ctx;
+    Int j = others[i];
+    CgPub me = cg_pub_of(c, c.self);
+    CgPub pj = cg_pub_of(c, j);
+    List(UInt(64)) kj = (s.peers[j] else { P2Peer {.k = [], .g = [], .zl = cv_inf(), .zm = cv_inf(), .commit = []} }).k;
+    CgMta m = cg_mta(me.pail, pj.pail, kj, sc_to_zi(role.tau), c.seed, f"bl/mta-t/{j}");
+    AffpPublic pub = AffpPublic {.kv = kj, .dv = m.d, .fp = m.f, .xp = t, .prover = me.pail, .verifier = pj.pail, .aux = pj.ped};
+    AffpSecret sec = AffpSecret {.x = sc_to_zi(role.tau), .y = m.y, .s = m.s, .rx = tn, .r = m.r};
+    Option(AffpProof) closure(List(Int)) pf_p = lambda(r) { affp_prove(pub, sec, bl_tr(c, c.self), r) };
+    Option(AffpProof) pf = cg_retry(pf_p, c.seed, f"bl/affp/{j}", 4 * 4300, 0);
+    return match pf {
+        None => bl_mtas(s, role, t, tn, others, i + 1, acc),
+        Some(p) => bl_mtas(s, role, t, tn, others, i + 1, BlR2 {.s = acc.s, .role = role, .tbeta = acc.tbeta.insert(j, m.beta),
+            .out = acc.out.concat([BlTwMsg {.from = c.self, .to = j, .t = t, .d = m.d, .f = m.f, .proof = p}])})
+    };
+}
+
+// ─── Round 3: fold the tweak into the Chi share ─────────────────
+
+Option(BlTwMsg) bl_find(List(BlTwMsg) in, Int from, Int to, Int i) {
+    if (i >= in.len()) { return None; }
+    if (in[i].from == from && in[i].to == to) { return Some(in[i]); }
+    return bl_find(in, from, to, i + 1);
+}
+
+/// Round 3 with the tweak: ps_r3, then each signer adds its share of k tau to its Chi share and commits to the sum.
+/// A missing or invalid tweak message names the designated party.
+pub Result(Ps3, CgFail) bl_r3(BlR2 b, List(CgMsg) in, List(BlTwMsg) bin) {
+    Ps3 s3 = ps_r3(b.s, in)?;
+    CgCtx c = b.s.prev.ctx;
+    Int d = b.role.designated;
+    BnInt extra = if (c.self == d) { bl_own_extra(b, c) } else { bl_peer_extra(b, c, bin)? };
+    List(UInt(64)) chi = sc_of_zi(zi_add(sc_to_zi(s3.chi_share), extra));
+    CvPt chi_m = cv_add(cv_mul_base(chi), cv_mul(s3.chi_nonce, cg_pub_of(c, c.self).elgamal));
+    return Ok(Ps3 {.prev = s3.prev, .peers = s3.peers, .delta_share = s3.delta_share, .chi_share = chi,
+                   .delta_alpha = s3.delta_alpha, .chi_alpha = s3.chi_alpha, .chi_nonce = s3.chi_nonce, .chi_l = s3.chi_l, .chi_m = chi_m,
+                   .out = [cg_bc(c.self, PsB4(PsB4R {.delta_share = s3.delta_share, .chi_l = s3.chi_l, .chi_m = chi_m}))]});
+}
+
+// tau k_d + sum over j of beta'_j.
+BnInt bl_own_extra(BlR2 b, CgCtx c) {
+    List(Int) others = cg_others(c.ids, c.self, 0, ListBuf());
+    return bl_sum_beta(b.tbeta, others, 0, zi_mul(sc_to_zi(b.role.tau), sc_to_zi(b.s.prev.kshare)));
+}
+
+BnInt bl_sum_beta(Map(Int, BnInt) m, List(Int) ids, Int i, BnInt acc) {
+    if (i >= ids.len()) { return acc; }
+    return bl_sum_beta(m, ids, i + 1, zi_add(acc, m[ids[i]] else { zi_zero() }));
+}
+
+Result(BnInt, CgFail) bl_peer_extra(BlR2 b, CgCtx c, List(BlTwMsg) bin) {
+    Int d = b.role.designated;
+    Option(BlTwMsg) om = bl_find(bin, d, c.self, 0);
+    return match om {
+        None => Err(cg_fail("missing tweak MtA message", [d])),
+        Some(m) => bl_peer_check(b, c, m)
+    };
+}
+
+Result(BnInt, CgFail) bl_peer_check(BlR2 b, CgCtx c, BlTwMsg m) {
+    Int d = b.role.designated;
+    CgPub me = cg_pub_of(c, c.self);
+    CgPub pd = cg_pub_of(c, d);
+    if (!pa_ct_ok(pd.pail, m.t) || !pa_ct_ok(me.pail, m.d) || !pa_ct_ok(pd.pail, m.f)) { return Err(cg_fail("invalid tweak MtA ciphertext", [d])); }
+    AffpPublic pub = AffpPublic {.kv = b.s.prev.k_ct, .dv = m.d, .fp = m.f, .xp = m.t, .prover = pd.pail, .verifier = me.pail, .aux = me.ped};
+    if (!affp_verify(pub, m.proof, bl_tr(c, d))) { return Err(cg_fail("aff-p proof for the tweak MtA failed", [d])); }
+    Option(BnInt) a = cg_dec(c.psec, me.pail, m.d);
+    return match a { None => Err(cg_fail("failed to decrypt the tweak MtA share", [d])), Some(x) => Ok(x) };
+}
+
+// ─── Round 6: S points to the designated party only ─────────────
+
+/// After ps_r6: the S broadcast becomes a message to the designated party; the designated party sends none.
+pub Ps6 bl_r6(Ps6 s, BlRole role) {
+    CgCtx c = s.prev.prev.prev.prev.prev.ctx;
+    List(CgMsg) out = if (c.self == role.designated) { [] } else { bl_redirect(s.out, role.designated, 0, ListBuf()) };
+    return Ps6 {.prev = s.prev, .big_deltas = s.big_deltas, .delta = s.delta, .delta_inv = s.delta_inv, .r = s.r, .s_pt = s.s_pt, .rbar = s.rbar, .out = out};
+}
+
+List(CgMsg) bl_redirect(List(CgMsg) ms, Int to, Int i, ListBuf(CgMsg) acc) {
+    if (i >= ms.len()) { return acc.finish(); }
+    return bl_redirect(ms, to, i + 1, acc.push(cg_to(ms[i].from, to, ms[i].body)));
+}
+
+// Messages addressed to `self` turned into broadcasts, for the stdlib
+// rounds that read broadcasts.
+List(CgMsg) bl_as_bc(List(CgMsg) ms, Int self, Int i, ListBuf(CgMsg) acc) {
+    if (i >= ms.len()) { return acc.finish(); }
+    CgMsg m = ms[i];
+    return bl_as_bc(ms, self, i + 1, if (m.to == self) { acc.push(cg_bc(m.from, m.body)) } else { acc });
+}
+
+// ─── Round 7 ────────────────────────────────────────────────────
+
+/// The designated party's round 7: the S points sent to it must add up to X + tau*G.
+pub Result(PsDone, CgFail) bl_r7_designated(Ps6 s, List(CgMsg) in) {
+    CgCtx c = s.prev.prev.prev.prev.prev.ctx;
+    PsDone done = ps_r7(s, bl_as_bc(in, c.self, 0, ListBuf()))?;
+    return Ok(PsDone {.presig = done.presig, .out = []});
+}
+
+List(CvPt) bl_rbars(List(Int) ids, Map(Int, CvPt) rb, Int i, ListBuf(CvPt) acc) {
+    if (i >= ids.len()) { return acc.finish(); }
+    return bl_rbars(ids, rb, i + 1, acc.push(rb[ids[i]] else { cv_inf() }));
+}
+
+/// Every other party's round 7: no S check (it cannot know X + tau*G); its signature share goes to the designated party only.
+pub PsDone bl_r7_peer(Ps6 s, BlRole role) {
+    Ps1 s1 = s.prev.prev.prev.prev.prev;
+    Ps3 s3 = s.prev.prev.prev;
+    CgCtx c = s1.ctx;
+    CgPresig pre = CgPresig {.id = [], .r = s.r, .ids = c.ids, .rbar = bl_rbars(c.ids, s.rbar, 0, ListBuf()), .s = [], .kshare = s1.kshare, .chi = s3.chi_share};
+    List(CgMsg) out = if (c.digest.len() > 0) { [cg_to(c.self, role.designated, SgB(cg_sigma(pre, c.digest)))] } else { [] };
+    return PsDone {.presig = pre, .out = out};
+}
+
+/// The designated party assembles the signature from the shares sent to it and checks it under X + tau*G.
+pub Result(CgSig, CgFail) bl_finish(CgCtx c, CgPresig pre, List(CgMsg) in, BlRole role) {
+    if (c.self != role.designated) { return Err(cg_fail("only the designated party assembles the signature", [c.self])); }
+    return sg_finish(c, pre, bl_as_bc(in, c.self, 0, ListBuf()));
+}
+
+// ─── Abort 2, blind ─────────────────────────────────────────────
+
+/// A party's abort-2 openings in blind mode: sent to the designated party only; the designated party sends none.
+pub Result(PsAb2, CgFail) bl_abort2(Ps6 s, BlRole role) {
+    PsAb2 a = ps_abort2(s)?;
+    CgCtx c = s.prev.prev.prev.prev.prev.ctx;
+    List(CgMsg) out = if (c.self == role.designated) { [] } else { bl_redirect(a.out, role.designated, 0, ListBuf()) };
+    return Ok(PsAb2 {.prev = a.prev, .mine = a.mine, .out = out});
+}
+
+/// The designated party's abort-2 blame. Party j's Chi commitment must be
+/// what its openings give plus alpha'_j G, where alpha'_j = tau k_j - beta'_j
+/// is computed by the designated party from j's opened k_j.
+pub CgFail bl_abort2_blame(PsAb2 a, List(CgMsg) in, BlR2 b) {
+    Ps6 s = a.prev;
+    CgCtx c = s.prev.prev.prev.prev.prev.ctx;
+    if (c.self != b.role.designated) { return cg_fail("only the designated party can blame in blind mode", [c.self]); }
+    List(Int) others = cg_others(c.ids, c.self, 0, ListBuf());
+    return match a2_all(s, a, bl_as_bc(in, c.self, 0, ListBuf()), c.ids, 0, {}) {
+        Err(e) => e,
+        Ok(ms) => cg_fail("the S shares do not add up to the public key", bl_culprits(s, b, ms, others, 0, ListBuf()))
+    };
+}
+
+List(Int) bl_culprits(Ps6 s, BlR2 b, Map(Int, PsA2R) ms, List(Int) others, Int i, ListBuf(Int) acc) {
+    if (i >= others.len()) { return acc.finish(); }
+    CgCtx c = s.prev.prev.prev.prev.prev.ctx;
+    Int j = others[i];
+    PsA2R mj = ms[j] else { a2_none() };
+    A2Sums sm = a2_sums(c, ms, j, 0, A2Sums {.k = zi_zero(), .a = zi_zero()});
+    BnInt tw = zi_sub(zi_mul(sc_to_zi(b.role.tau), mj.k.plain), b.tbeta[j] else { zi_zero() });
+    CvPt m = cv_add(cv_add(mj.yhat, cv_mul(sc_of_zi(sm.k), cg_pub_of(c, j).ecdsa)), cv_mul_base(sc_of_zi(zi_add(sm.a, tw))));
+    PsB4R b4 = s.prev.prev.b4[j] else { PsB4R {.delta_share = [], .chi_l = cv_inf(), .chi_m = cv_inf()} };
+    return bl_culprits(s, b, ms, others, i + 1, if (cv_eq(m, b4.chi_m)) { acc } else { acc.push(j) });
+}

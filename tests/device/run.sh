@@ -209,6 +209,29 @@ if [ "$#" -eq 0 ] || [[ " $* " == *" tpm_simulator "* ]]; then
         if [ -z "$why" ]; then echo "PASS tpm_simulator"; pass=$((pass + 1)); else echo "FAIL tpm_simulator: $why"; fail=$((fail + 1)); fi
     fi
 fi
+if [ "$#" -eq 0 ] || [[ " $* " == *" tpm_keys_simulator "* ]]; then
+    SIMBIN="${RESID_TPM_SIMULATOR:-}"
+    if [ -z "$SIMBIN" ] || [ ! -x "$SIMBIN" ]; then
+        echo "SKIP tpm_keys_simulator (set RESID_TPM_SIMULATOR; tests/device/tpm-sim/build.sh builds it)"
+        skip=$((skip + 1))
+    else
+        P="$WORK/tpmkeys"; mkdir -p "$P"
+        cp "$ROOT/tests/device/tpm-sim/tpm_keys_sim.resid" "$P/"
+        (cd "$P" && timeout 600 "$COMPILER" tpm_keys_sim.resid -o bin --verify-lib-dev --profile debug) > "$P/c.log" 2>&1; rc=$?
+        PORT=$((20000 + RANDOM % 20000))
+        (cd "$P" && exec "$SIMBIN" -port "$PORT" -rm > "$P/sim.log" 2>&1) &
+        SIMPID=$!
+        for _ in $(seq 50); do (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null && break; sleep 0.1; done
+        why=""
+        if [ "$rc" -ne 0 ]; then why="compile failed: $(grep -m1 -i error "$P/c.log")"
+        else
+            (cd "$P" && timeout 120 ./bin "$PORT" > out 2>&1) || why="binary exited $?"
+            cmp -s "$P/out" "$ROOT/tests/device/tpm-sim/tpm_keys_sim.out" || why="${why:+$why; }stdout differs from tpm_keys_sim.out"
+        fi
+        kill "$SIMPID" 2>/dev/null; wait "$SIMPID" 2>/dev/null
+        if [ -z "$why" ]; then echo "PASS tpm_keys_simulator"; pass=$((pass + 1)); else echo "FAIL tpm_keys_simulator: $why"; fail=$((fail + 1)); fi
+    fi
+fi
 echo "---"
 echo "$pass passed, $fail failed$([ "$skip" -gt 0 ] && echo ", $skip skipped")"
 [ "$fail" -eq 0 ]

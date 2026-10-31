@@ -2,7 +2,653 @@
 import "cggmp.resid";
 import "./serial.resid";
 
-// ── CgPublicCfg (line 985)
+// ── CgOpen (line 99)
+/// The serialized field names of `CgOpen`, in declaration order.
+pub List(Str) derive_cg_open_names() { return ["plain", "hidden", "proof"]; }
+/// Encodes a `CgOpen` through the encoder `s`.
+@needs(Encoder(F))
+pub Result(F, SerialError) derive_cg_open_encode(CgOpen v, F s) {
+    Int n = 3;
+    F s0 = write_struct_begin(s, "CgOpen", n)?;
+    F s1 = write_named(s0, "plain", v.plain)?;
+    F s2 = write_named(s1, "hidden", v.hidden)?;
+    F s3 = write_named(s2, "proof", v.proof)?;
+    return write_struct_end(s3);
+}
+Encode(CgOpen, F) = derive_cg_open_encode;
+/// Decodes a `CgOpen` from the decoder `s`, with the input left over.
+@needs(Decoder(F))
+pub Result(Parsed(CgOpen, F), SerialError) derive_cg_open_decode(F s) {
+    F s0 = read_struct_begin(s, "CgOpen", derive_cg_open_names())?;
+    return derive_cg_open_fields(s0, None, None, None);
+}
+@needs(Decoder(F))
+Result(Parsed(CgOpen, F), SerialError) derive_cg_open_fields(F s, Option(BnInt) f_plain, Option(List(UInt(64))) f_hidden, Option(NthProof) f_proof) {
+    Parsed(FieldKey, F) k = read_field(s, derive_cg_open_names())?;
+    FieldKey key = k.value;
+    return match key {
+        KnownField(i) => derive_cg_open_field(k.rest, i, f_plain, f_hidden, f_proof),
+        UnknownField(name) => derive_cg_open_fields(skip_unknown(k.rest, name, derive_cg_open_names(), false)?, f_plain, f_hidden, f_proof),
+        EndOfFields => derive_cg_open_done(k.rest, f_plain, f_hidden, f_proof)
+    };
+}
+@needs(Decoder(F))
+Result(Parsed(CgOpen, F), SerialError) derive_cg_open_field(F s, Int i, Option(BnInt) f_plain, Option(List(UInt(64))) f_hidden, Option(NthProof) f_proof) {
+    if (i == 0) { Parsed(Option(BnInt), F) p = read_slot(s, f_plain, "plain")?; return derive_cg_open_fields(p.rest, p.value, f_hidden, f_proof); }
+    if (i == 1) { Parsed(Option(List(UInt(64))), F) p = read_slot(s, f_hidden, "hidden")?; return derive_cg_open_fields(p.rest, f_plain, p.value, f_proof); }
+    Parsed(Option(NthProof), F) p = read_slot(s, f_proof, "proof")?; return derive_cg_open_fields(p.rest, f_plain, f_hidden, p.value);
+}
+Result(Parsed(CgOpen, F), SerialError) derive_cg_open_done(F s, Option(BnInt) f_plain, Option(List(UInt(64))) f_hidden, Option(NthProof) f_proof) {
+    BnInt d_plain = require(f_plain, "plain")?;
+    List(UInt(64)) d_hidden = require(f_hidden, "hidden")?;
+    NthProof d_proof = require(f_proof, "proof")?;
+    return parsed(CgOpen {.plain = d_plain, .hidden = d_hidden, .proof = d_proof}, s);
+}
+Decode(CgOpen, F) = derive_cg_open_decode;
+
+// ── PsB2R (line 182)
+/// The serialized field names of `PsB2R`, in declaration order.
+pub List(Str) derive_ps_b2_r_names() { return ["k", "g", "zl", "zm", "commit"]; }
+/// Encodes a `PsB2R` through the encoder `s`.
+@needs(Encoder(F))
+pub Result(F, SerialError) derive_ps_b2_r_encode(PsB2R v, F s) {
+    Int n = 5;
+    F s0 = write_struct_begin(s, "PsB2R", n)?;
+    F s1 = write_named(s0, "k", v.k)?;
+    F s2 = write_named(s1, "g", v.g)?;
+    F s3 = write_named(s2, "zl", v.zl)?;
+    F s4 = write_named(s3, "zm", v.zm)?;
+    F s5 = write_named(s4, "commit", v.commit)?;
+    return write_struct_end(s5);
+}
+Encode(PsB2R, F) = derive_ps_b2_r_encode;
+/// Decodes a `PsB2R` from the decoder `s`, with the input left over.
+@needs(Decoder(F))
+pub Result(Parsed(PsB2R, F), SerialError) derive_ps_b2_r_decode(F s) {
+    F s0 = read_struct_begin(s, "PsB2R", derive_ps_b2_r_names())?;
+    return derive_ps_b2_r_fields(s0, None, None, None, None, None);
+}
+@needs(Decoder(F))
+Result(Parsed(PsB2R, F), SerialError) derive_ps_b2_r_fields(F s, Option(List(UInt(64))) f_k, Option(List(UInt(64))) f_g, Option(CvPt) f_zl, Option(CvPt) f_zm, Option(List(Int)) f_commit) {
+    Parsed(FieldKey, F) k = read_field(s, derive_ps_b2_r_names())?;
+    FieldKey key = k.value;
+    return match key {
+        KnownField(i) => derive_ps_b2_r_field(k.rest, i, f_k, f_g, f_zl, f_zm, f_commit),
+        UnknownField(name) => derive_ps_b2_r_fields(skip_unknown(k.rest, name, derive_ps_b2_r_names(), false)?, f_k, f_g, f_zl, f_zm, f_commit),
+        EndOfFields => derive_ps_b2_r_done(k.rest, f_k, f_g, f_zl, f_zm, f_commit)
+    };
+}
+@needs(Decoder(F))
+Result(Parsed(PsB2R, F), SerialError) derive_ps_b2_r_field(F s, Int i, Option(List(UInt(64))) f_k, Option(List(UInt(64))) f_g, Option(CvPt) f_zl, Option(CvPt) f_zm, Option(List(Int)) f_commit) {
+    if (i == 0) { Parsed(Option(List(UInt(64))), F) p = read_slot(s, f_k, "k")?; return derive_ps_b2_r_fields(p.rest, p.value, f_g, f_zl, f_zm, f_commit); }
+    if (i == 1) { Parsed(Option(List(UInt(64))), F) p = read_slot(s, f_g, "g")?; return derive_ps_b2_r_fields(p.rest, f_k, p.value, f_zl, f_zm, f_commit); }
+    if (i == 2) { Parsed(Option(CvPt), F) p = read_slot(s, f_zl, "zl")?; return derive_ps_b2_r_fields(p.rest, f_k, f_g, p.value, f_zm, f_commit); }
+    if (i == 3) { Parsed(Option(CvPt), F) p = read_slot(s, f_zm, "zm")?; return derive_ps_b2_r_fields(p.rest, f_k, f_g, f_zl, p.value, f_commit); }
+    Parsed(Option(List(Int)), F) p = read_slot(s, f_commit, "commit")?; return derive_ps_b2_r_fields(p.rest, f_k, f_g, f_zl, f_zm, p.value);
+}
+Result(Parsed(PsB2R, F), SerialError) derive_ps_b2_r_done(F s, Option(List(UInt(64))) f_k, Option(List(UInt(64))) f_g, Option(CvPt) f_zl, Option(CvPt) f_zm, Option(List(Int)) f_commit) {
+    List(UInt(64)) d_k = require(f_k, "k")?;
+    List(UInt(64)) d_g = require(f_g, "g")?;
+    CvPt d_zl = require(f_zl, "zl")?;
+    CvPt d_zm = require(f_zm, "zm")?;
+    List(Int) d_commit = require(f_commit, "commit")?;
+    return parsed(PsB2R {.k = d_k, .g = d_g, .zl = d_zl, .zm = d_zm, .commit = d_commit}, s);
+}
+Decode(PsB2R, F) = derive_ps_b2_r_decode;
+
+// ── PsB3R (line 185)
+/// The serialized field names of `PsB3R`, in declaration order.
+pub List(Str) derive_ps_b3_r_names() { return ["delta_d", "chi_d"]; }
+/// Encodes a `PsB3R` through the encoder `s`.
+@needs(Encoder(F))
+pub Result(F, SerialError) derive_ps_b3_r_encode(PsB3R v, F s) {
+    Int n = 2;
+    F s0 = write_struct_begin(s, "PsB3R", n)?;
+    F s1 = write_named(s0, "delta_d", v.delta_d)?;
+    F s2 = write_named(s1, "chi_d", v.chi_d)?;
+    return write_struct_end(s2);
+}
+Encode(PsB3R, F) = derive_ps_b3_r_encode;
+/// Decodes a `PsB3R` from the decoder `s`, with the input left over.
+@needs(Decoder(F))
+pub Result(Parsed(PsB3R, F), SerialError) derive_ps_b3_r_decode(F s) {
+    F s0 = read_struct_begin(s, "PsB3R", derive_ps_b3_r_names())?;
+    return derive_ps_b3_r_fields(s0, None, None);
+}
+@needs(Decoder(F))
+Result(Parsed(PsB3R, F), SerialError) derive_ps_b3_r_fields(F s, Option(List(List(UInt(64)))) f_delta_d, Option(List(List(UInt(64)))) f_chi_d) {
+    Parsed(FieldKey, F) k = read_field(s, derive_ps_b3_r_names())?;
+    FieldKey key = k.value;
+    return match key {
+        KnownField(i) => derive_ps_b3_r_field(k.rest, i, f_delta_d, f_chi_d),
+        UnknownField(name) => derive_ps_b3_r_fields(skip_unknown(k.rest, name, derive_ps_b3_r_names(), false)?, f_delta_d, f_chi_d),
+        EndOfFields => derive_ps_b3_r_done(k.rest, f_delta_d, f_chi_d)
+    };
+}
+@needs(Decoder(F))
+Result(Parsed(PsB3R, F), SerialError) derive_ps_b3_r_field(F s, Int i, Option(List(List(UInt(64)))) f_delta_d, Option(List(List(UInt(64)))) f_chi_d) {
+    if (i == 0) { Parsed(Option(List(List(UInt(64)))), F) p = read_slot(s, f_delta_d, "delta_d")?; return derive_ps_b3_r_fields(p.rest, p.value, f_chi_d); }
+    Parsed(Option(List(List(UInt(64)))), F) p = read_slot(s, f_chi_d, "chi_d")?; return derive_ps_b3_r_fields(p.rest, f_delta_d, p.value);
+}
+Result(Parsed(PsB3R, F), SerialError) derive_ps_b3_r_done(F s, Option(List(List(UInt(64)))) f_delta_d, Option(List(List(UInt(64)))) f_chi_d) {
+    List(List(UInt(64))) d_delta_d = require(f_delta_d, "delta_d")?;
+    List(List(UInt(64))) d_chi_d = require(f_chi_d, "chi_d")?;
+    return parsed(PsB3R {.delta_d = d_delta_d, .chi_d = d_chi_d}, s);
+}
+Decode(PsB3R, F) = derive_ps_b3_r_decode;
+
+// ── PsM3R (line 188)
+/// The serialized field names of `PsM3R`, in declaration order.
+pub List(Str) derive_ps_m3_r_names() { return ["delta_f", "delta_proof", "chi_f", "chi_proof"]; }
+/// Encodes a `PsM3R` through the encoder `s`.
+@needs(Encoder(F))
+pub Result(F, SerialError) derive_ps_m3_r_encode(PsM3R v, F s) {
+    Int n = 4;
+    F s0 = write_struct_begin(s, "PsM3R", n)?;
+    F s1 = write_named(s0, "delta_f", v.delta_f)?;
+    F s2 = write_named(s1, "delta_proof", v.delta_proof)?;
+    F s3 = write_named(s2, "chi_f", v.chi_f)?;
+    F s4 = write_named(s3, "chi_proof", v.chi_proof)?;
+    return write_struct_end(s4);
+}
+Encode(PsM3R, F) = derive_ps_m3_r_encode;
+/// Decodes a `PsM3R` from the decoder `s`, with the input left over.
+@needs(Decoder(F))
+pub Result(Parsed(PsM3R, F), SerialError) derive_ps_m3_r_decode(F s) {
+    F s0 = read_struct_begin(s, "PsM3R", derive_ps_m3_r_names())?;
+    return derive_ps_m3_r_fields(s0, None, None, None, None);
+}
+@needs(Decoder(F))
+Result(Parsed(PsM3R, F), SerialError) derive_ps_m3_r_fields(F s, Option(List(UInt(64))) f_delta_f, Option(AffpProof) f_delta_proof, Option(List(UInt(64))) f_chi_f, Option(AffgProof) f_chi_proof) {
+    Parsed(FieldKey, F) k = read_field(s, derive_ps_m3_r_names())?;
+    FieldKey key = k.value;
+    return match key {
+        KnownField(i) => derive_ps_m3_r_field(k.rest, i, f_delta_f, f_delta_proof, f_chi_f, f_chi_proof),
+        UnknownField(name) => derive_ps_m3_r_fields(skip_unknown(k.rest, name, derive_ps_m3_r_names(), false)?, f_delta_f, f_delta_proof, f_chi_f, f_chi_proof),
+        EndOfFields => derive_ps_m3_r_done(k.rest, f_delta_f, f_delta_proof, f_chi_f, f_chi_proof)
+    };
+}
+@needs(Decoder(F))
+Result(Parsed(PsM3R, F), SerialError) derive_ps_m3_r_field(F s, Int i, Option(List(UInt(64))) f_delta_f, Option(AffpProof) f_delta_proof, Option(List(UInt(64))) f_chi_f, Option(AffgProof) f_chi_proof) {
+    if (i == 0) { Parsed(Option(List(UInt(64))), F) p = read_slot(s, f_delta_f, "delta_f")?; return derive_ps_m3_r_fields(p.rest, p.value, f_delta_proof, f_chi_f, f_chi_proof); }
+    if (i == 1) { Parsed(Option(AffpProof), F) p = read_slot(s, f_delta_proof, "delta_proof")?; return derive_ps_m3_r_fields(p.rest, f_delta_f, p.value, f_chi_f, f_chi_proof); }
+    if (i == 2) { Parsed(Option(List(UInt(64))), F) p = read_slot(s, f_chi_f, "chi_f")?; return derive_ps_m3_r_fields(p.rest, f_delta_f, f_delta_proof, p.value, f_chi_proof); }
+    Parsed(Option(AffgProof), F) p = read_slot(s, f_chi_proof, "chi_proof")?; return derive_ps_m3_r_fields(p.rest, f_delta_f, f_delta_proof, f_chi_f, p.value);
+}
+Result(Parsed(PsM3R, F), SerialError) derive_ps_m3_r_done(F s, Option(List(UInt(64))) f_delta_f, Option(AffpProof) f_delta_proof, Option(List(UInt(64))) f_chi_f, Option(AffgProof) f_chi_proof) {
+    List(UInt(64)) d_delta_f = require(f_delta_f, "delta_f")?;
+    AffpProof d_delta_proof = require(f_delta_proof, "delta_proof")?;
+    List(UInt(64)) d_chi_f = require(f_chi_f, "chi_f")?;
+    AffgProof d_chi_proof = require(f_chi_proof, "chi_proof")?;
+    return parsed(PsM3R {.delta_f = d_delta_f, .delta_proof = d_delta_proof, .chi_f = d_chi_f, .chi_proof = d_chi_proof}, s);
+}
+Decode(PsM3R, F) = derive_ps_m3_r_decode;
+
+// ── PsB4R (line 191)
+/// The serialized field names of `PsB4R`, in declaration order.
+pub List(Str) derive_ps_b4_r_names() { return ["delta_share", "chi_l", "chi_m"]; }
+/// Encodes a `PsB4R` through the encoder `s`.
+@needs(Encoder(F))
+pub Result(F, SerialError) derive_ps_b4_r_encode(PsB4R v, F s) {
+    Int n = 3;
+    F s0 = write_struct_begin(s, "PsB4R", n)?;
+    F s1 = write_named(s0, "delta_share", v.delta_share)?;
+    F s2 = write_named(s1, "chi_l", v.chi_l)?;
+    F s3 = write_named(s2, "chi_m", v.chi_m)?;
+    return write_struct_end(s3);
+}
+Encode(PsB4R, F) = derive_ps_b4_r_encode;
+/// Decodes a `PsB4R` from the decoder `s`, with the input left over.
+@needs(Decoder(F))
+pub Result(Parsed(PsB4R, F), SerialError) derive_ps_b4_r_decode(F s) {
+    F s0 = read_struct_begin(s, "PsB4R", derive_ps_b4_r_names())?;
+    return derive_ps_b4_r_fields(s0, None, None, None);
+}
+@needs(Decoder(F))
+Result(Parsed(PsB4R, F), SerialError) derive_ps_b4_r_fields(F s, Option(List(UInt(64))) f_delta_share, Option(CvPt) f_chi_l, Option(CvPt) f_chi_m) {
+    Parsed(FieldKey, F) k = read_field(s, derive_ps_b4_r_names())?;
+    FieldKey key = k.value;
+    return match key {
+        KnownField(i) => derive_ps_b4_r_field(k.rest, i, f_delta_share, f_chi_l, f_chi_m),
+        UnknownField(name) => derive_ps_b4_r_fields(skip_unknown(k.rest, name, derive_ps_b4_r_names(), false)?, f_delta_share, f_chi_l, f_chi_m),
+        EndOfFields => derive_ps_b4_r_done(k.rest, f_delta_share, f_chi_l, f_chi_m)
+    };
+}
+@needs(Decoder(F))
+Result(Parsed(PsB4R, F), SerialError) derive_ps_b4_r_field(F s, Int i, Option(List(UInt(64))) f_delta_share, Option(CvPt) f_chi_l, Option(CvPt) f_chi_m) {
+    if (i == 0) { Parsed(Option(List(UInt(64))), F) p = read_slot(s, f_delta_share, "delta_share")?; return derive_ps_b4_r_fields(p.rest, p.value, f_chi_l, f_chi_m); }
+    if (i == 1) { Parsed(Option(CvPt), F) p = read_slot(s, f_chi_l, "chi_l")?; return derive_ps_b4_r_fields(p.rest, f_delta_share, p.value, f_chi_m); }
+    Parsed(Option(CvPt), F) p = read_slot(s, f_chi_m, "chi_m")?; return derive_ps_b4_r_fields(p.rest, f_delta_share, f_chi_l, p.value);
+}
+Result(Parsed(PsB4R, F), SerialError) derive_ps_b4_r_done(F s, Option(List(UInt(64))) f_delta_share, Option(CvPt) f_chi_l, Option(CvPt) f_chi_m) {
+    List(UInt(64)) d_delta_share = require(f_delta_share, "delta_share")?;
+    CvPt d_chi_l = require(f_chi_l, "chi_l")?;
+    CvPt d_chi_m = require(f_chi_m, "chi_m")?;
+    return parsed(PsB4R {.delta_share = d_delta_share, .chi_l = d_chi_l, .chi_m = d_chi_m}, s);
+}
+Decode(PsB4R, F) = derive_ps_b4_r_decode;
+
+// ── PsB6R (line 194)
+/// The serialized field names of `PsB6R`, in declaration order.
+pub List(Str) derive_ps_b6_r_names() { return ["big_delta", "proof"]; }
+/// Encodes a `PsB6R` through the encoder `s`.
+@needs(Encoder(F))
+pub Result(F, SerialError) derive_ps_b6_r_encode(PsB6R v, F s) {
+    Int n = 2;
+    F s0 = write_struct_begin(s, "PsB6R", n)?;
+    F s1 = write_named(s0, "big_delta", v.big_delta)?;
+    F s2 = write_named(s1, "proof", v.proof)?;
+    return write_struct_end(s2);
+}
+Encode(PsB6R, F) = derive_ps_b6_r_encode;
+/// Decodes a `PsB6R` from the decoder `s`, with the input left over.
+@needs(Decoder(F))
+pub Result(Parsed(PsB6R, F), SerialError) derive_ps_b6_r_decode(F s) {
+    F s0 = read_struct_begin(s, "PsB6R", derive_ps_b6_r_names())?;
+    return derive_ps_b6_r_fields(s0, None, None);
+}
+@needs(Decoder(F))
+Result(Parsed(PsB6R, F), SerialError) derive_ps_b6_r_fields(F s, Option(CvPt) f_big_delta, Option(ElogProof) f_proof) {
+    Parsed(FieldKey, F) k = read_field(s, derive_ps_b6_r_names())?;
+    FieldKey key = k.value;
+    return match key {
+        KnownField(i) => derive_ps_b6_r_field(k.rest, i, f_big_delta, f_proof),
+        UnknownField(name) => derive_ps_b6_r_fields(skip_unknown(k.rest, name, derive_ps_b6_r_names(), false)?, f_big_delta, f_proof),
+        EndOfFields => derive_ps_b6_r_done(k.rest, f_big_delta, f_proof)
+    };
+}
+@needs(Decoder(F))
+Result(Parsed(PsB6R, F), SerialError) derive_ps_b6_r_field(F s, Int i, Option(CvPt) f_big_delta, Option(ElogProof) f_proof) {
+    if (i == 0) { Parsed(Option(CvPt), F) p = read_slot(s, f_big_delta, "big_delta")?; return derive_ps_b6_r_fields(p.rest, p.value, f_proof); }
+    Parsed(Option(ElogProof), F) p = read_slot(s, f_proof, "proof")?; return derive_ps_b6_r_fields(p.rest, f_big_delta, p.value);
+}
+Result(Parsed(PsB6R, F), SerialError) derive_ps_b6_r_done(F s, Option(CvPt) f_big_delta, Option(ElogProof) f_proof) {
+    CvPt d_big_delta = require(f_big_delta, "big_delta")?;
+    ElogProof d_proof = require(f_proof, "proof")?;
+    return parsed(PsB6R {.big_delta = d_big_delta, .proof = d_proof}, s);
+}
+Decode(PsB6R, F) = derive_ps_b6_r_decode;
+
+// ── PsB7R (line 197)
+/// The serialized field names of `PsB7R`, in declaration order.
+pub List(Str) derive_ps_b7_r_names() { return ["s", "proof", "decommit", "presig_id"]; }
+/// Encodes a `PsB7R` through the encoder `s`.
+@needs(Encoder(F))
+pub Result(F, SerialError) derive_ps_b7_r_encode(PsB7R v, F s) {
+    Int n = 4;
+    F s0 = write_struct_begin(s, "PsB7R", n)?;
+    F s1 = write_named(s0, "s", v.s)?;
+    F s2 = write_named(s1, "proof", v.proof)?;
+    F s3 = write_named(s2, "decommit", v.decommit)?;
+    F s4 = write_named(s3, "presig_id", v.presig_id)?;
+    return write_struct_end(s4);
+}
+Encode(PsB7R, F) = derive_ps_b7_r_encode;
+/// Decodes a `PsB7R` from the decoder `s`, with the input left over.
+@needs(Decoder(F))
+pub Result(Parsed(PsB7R, F), SerialError) derive_ps_b7_r_decode(F s) {
+    F s0 = read_struct_begin(s, "PsB7R", derive_ps_b7_r_names())?;
+    return derive_ps_b7_r_fields(s0, None, None, None, None);
+}
+@needs(Decoder(F))
+Result(Parsed(PsB7R, F), SerialError) derive_ps_b7_r_fields(F s, Option(CvPt) f_s, Option(ElogProof) f_proof, Option(List(Int)) f_decommit, Option(List(Int)) f_presig_id) {
+    Parsed(FieldKey, F) k = read_field(s, derive_ps_b7_r_names())?;
+    FieldKey key = k.value;
+    return match key {
+        KnownField(i) => derive_ps_b7_r_field(k.rest, i, f_s, f_proof, f_decommit, f_presig_id),
+        UnknownField(name) => derive_ps_b7_r_fields(skip_unknown(k.rest, name, derive_ps_b7_r_names(), false)?, f_s, f_proof, f_decommit, f_presig_id),
+        EndOfFields => derive_ps_b7_r_done(k.rest, f_s, f_proof, f_decommit, f_presig_id)
+    };
+}
+@needs(Decoder(F))
+Result(Parsed(PsB7R, F), SerialError) derive_ps_b7_r_field(F s, Int i, Option(CvPt) f_s, Option(ElogProof) f_proof, Option(List(Int)) f_decommit, Option(List(Int)) f_presig_id) {
+    if (i == 0) { Parsed(Option(CvPt), F) p = read_slot(s, f_s, "s")?; return derive_ps_b7_r_fields(p.rest, p.value, f_proof, f_decommit, f_presig_id); }
+    if (i == 1) { Parsed(Option(ElogProof), F) p = read_slot(s, f_proof, "proof")?; return derive_ps_b7_r_fields(p.rest, f_s, p.value, f_decommit, f_presig_id); }
+    if (i == 2) { Parsed(Option(List(Int)), F) p = read_slot(s, f_decommit, "decommit")?; return derive_ps_b7_r_fields(p.rest, f_s, f_proof, p.value, f_presig_id); }
+    Parsed(Option(List(Int)), F) p = read_slot(s, f_presig_id, "presig_id")?; return derive_ps_b7_r_fields(p.rest, f_s, f_proof, f_decommit, p.value);
+}
+Result(Parsed(PsB7R, F), SerialError) derive_ps_b7_r_done(F s, Option(CvPt) f_s, Option(ElogProof) f_proof, Option(List(Int)) f_decommit, Option(List(Int)) f_presig_id) {
+    CvPt d_s = require(f_s, "s")?;
+    ElogProof d_proof = require(f_proof, "proof")?;
+    List(Int) d_decommit = require(f_decommit, "decommit")?;
+    List(Int) d_presig_id = require(f_presig_id, "presig_id")?;
+    return parsed(PsB7R {.s = d_s, .proof = d_proof, .decommit = d_decommit, .presig_id = d_presig_id}, s);
+}
+Decode(PsB7R, F) = derive_ps_b7_r_decode;
+
+// ── PsA1R (line 202)
+/// The serialized field names of `PsA1R`, in declaration order.
+pub List(Str) derive_ps_a1_r_names() { return ["gamma", "k", "d"]; }
+/// Encodes a `PsA1R` through the encoder `s`.
+@needs(Encoder(F))
+pub Result(F, SerialError) derive_ps_a1_r_encode(PsA1R v, F s) {
+    Int n = 3;
+    F s0 = write_struct_begin(s, "PsA1R", n)?;
+    F s1 = write_named(s0, "gamma", v.gamma)?;
+    F s2 = write_named(s1, "k", v.k)?;
+    F s3 = write_named(s2, "d", v.d)?;
+    return write_struct_end(s3);
+}
+Encode(PsA1R, F) = derive_ps_a1_r_encode;
+/// Decodes a `PsA1R` from the decoder `s`, with the input left over.
+@needs(Decoder(F))
+pub Result(Parsed(PsA1R, F), SerialError) derive_ps_a1_r_decode(F s) {
+    F s0 = read_struct_begin(s, "PsA1R", derive_ps_a1_r_names())?;
+    return derive_ps_a1_r_fields(s0, None, None, None);
+}
+@needs(Decoder(F))
+Result(Parsed(PsA1R, F), SerialError) derive_ps_a1_r_fields(F s, Option(List(UInt(64))) f_gamma, Option(CgOpen) f_k, Option(List(CgOpen)) f_d) {
+    Parsed(FieldKey, F) k = read_field(s, derive_ps_a1_r_names())?;
+    FieldKey key = k.value;
+    return match key {
+        KnownField(i) => derive_ps_a1_r_field(k.rest, i, f_gamma, f_k, f_d),
+        UnknownField(name) => derive_ps_a1_r_fields(skip_unknown(k.rest, name, derive_ps_a1_r_names(), false)?, f_gamma, f_k, f_d),
+        EndOfFields => derive_ps_a1_r_done(k.rest, f_gamma, f_k, f_d)
+    };
+}
+@needs(Decoder(F))
+Result(Parsed(PsA1R, F), SerialError) derive_ps_a1_r_field(F s, Int i, Option(List(UInt(64))) f_gamma, Option(CgOpen) f_k, Option(List(CgOpen)) f_d) {
+    if (i == 0) { Parsed(Option(List(UInt(64))), F) p = read_slot(s, f_gamma, "gamma")?; return derive_ps_a1_r_fields(p.rest, p.value, f_k, f_d); }
+    if (i == 1) { Parsed(Option(CgOpen), F) p = read_slot(s, f_k, "k")?; return derive_ps_a1_r_fields(p.rest, f_gamma, p.value, f_d); }
+    Parsed(Option(List(CgOpen)), F) p = read_slot(s, f_d, "d")?; return derive_ps_a1_r_fields(p.rest, f_gamma, f_k, p.value);
+}
+Result(Parsed(PsA1R, F), SerialError) derive_ps_a1_r_done(F s, Option(List(UInt(64))) f_gamma, Option(CgOpen) f_k, Option(List(CgOpen)) f_d) {
+    List(UInt(64)) d_gamma = require(f_gamma, "gamma")?;
+    CgOpen d_k = require(f_k, "k")?;
+    List(CgOpen) d_d = require(f_d, "d")?;
+    return parsed(PsA1R {.gamma = d_gamma, .k = d_k, .d = d_d}, s);
+}
+Decode(PsA1R, F) = derive_ps_a1_r_decode;
+
+// ── PsA2R (line 206)
+/// The serialized field names of `PsA2R`, in declaration order.
+pub List(Str) derive_ps_a2_r_names() { return ["yhat", "yproof", "k", "chi"]; }
+/// Encodes a `PsA2R` through the encoder `s`.
+@needs(Encoder(F))
+pub Result(F, SerialError) derive_ps_a2_r_encode(PsA2R v, F s) {
+    Int n = 4;
+    F s0 = write_struct_begin(s, "PsA2R", n)?;
+    F s1 = write_named(s0, "yhat", v.yhat)?;
+    F s2 = write_named(s1, "yproof", v.yproof)?;
+    F s3 = write_named(s2, "k", v.k)?;
+    F s4 = write_named(s3, "chi", v.chi)?;
+    return write_struct_end(s4);
+}
+Encode(PsA2R, F) = derive_ps_a2_r_encode;
+/// Decodes a `PsA2R` from the decoder `s`, with the input left over.
+@needs(Decoder(F))
+pub Result(Parsed(PsA2R, F), SerialError) derive_ps_a2_r_decode(F s) {
+    F s0 = read_struct_begin(s, "PsA2R", derive_ps_a2_r_names())?;
+    return derive_ps_a2_r_fields(s0, None, None, None, None);
+}
+@needs(Decoder(F))
+Result(Parsed(PsA2R, F), SerialError) derive_ps_a2_r_fields(F s, Option(CvPt) f_yhat, Option(LogProof) f_yproof, Option(CgOpen) f_k, Option(List(CgOpen)) f_chi) {
+    Parsed(FieldKey, F) k = read_field(s, derive_ps_a2_r_names())?;
+    FieldKey key = k.value;
+    return match key {
+        KnownField(i) => derive_ps_a2_r_field(k.rest, i, f_yhat, f_yproof, f_k, f_chi),
+        UnknownField(name) => derive_ps_a2_r_fields(skip_unknown(k.rest, name, derive_ps_a2_r_names(), false)?, f_yhat, f_yproof, f_k, f_chi),
+        EndOfFields => derive_ps_a2_r_done(k.rest, f_yhat, f_yproof, f_k, f_chi)
+    };
+}
+@needs(Decoder(F))
+Result(Parsed(PsA2R, F), SerialError) derive_ps_a2_r_field(F s, Int i, Option(CvPt) f_yhat, Option(LogProof) f_yproof, Option(CgOpen) f_k, Option(List(CgOpen)) f_chi) {
+    if (i == 0) { Parsed(Option(CvPt), F) p = read_slot(s, f_yhat, "yhat")?; return derive_ps_a2_r_fields(p.rest, p.value, f_yproof, f_k, f_chi); }
+    if (i == 1) { Parsed(Option(LogProof), F) p = read_slot(s, f_yproof, "yproof")?; return derive_ps_a2_r_fields(p.rest, f_yhat, p.value, f_k, f_chi); }
+    if (i == 2) { Parsed(Option(CgOpen), F) p = read_slot(s, f_k, "k")?; return derive_ps_a2_r_fields(p.rest, f_yhat, f_yproof, p.value, f_chi); }
+    Parsed(Option(List(CgOpen)), F) p = read_slot(s, f_chi, "chi")?; return derive_ps_a2_r_fields(p.rest, f_yhat, f_yproof, f_k, p.value);
+}
+Result(Parsed(PsA2R, F), SerialError) derive_ps_a2_r_done(F s, Option(CvPt) f_yhat, Option(LogProof) f_yproof, Option(CgOpen) f_k, Option(List(CgOpen)) f_chi) {
+    CvPt d_yhat = require(f_yhat, "yhat")?;
+    LogProof d_yproof = require(f_yproof, "yproof")?;
+    CgOpen d_k = require(f_k, "k")?;
+    List(CgOpen) d_chi = require(f_chi, "chi")?;
+    return parsed(PsA2R {.yhat = d_yhat, .yproof = d_yproof, .k = d_k, .chi = d_chi}, s);
+}
+Decode(PsA2R, F) = derive_ps_a2_r_decode;
+
+// ── KgB3R (line 211)
+/// The serialized field names of `KgB3R`, in declaration order.
+pub List(Str) derive_kg_b3_r_names() { return ["rid", "chain_key", "vss", "sch_commit", "elgamal", "n", "s", "t", "decommit"]; }
+/// Encodes a `KgB3R` through the encoder `s`.
+@needs(Encoder(F))
+pub Result(F, SerialError) derive_kg_b3_r_encode(KgB3R v, F s) {
+    Int n = 9;
+    F s0 = write_struct_begin(s, "KgB3R", n)?;
+    F s1 = write_named(s0, "rid", v.rid)?;
+    F s2 = write_named(s1, "chain_key", v.chain_key)?;
+    F s3 = write_named(s2, "vss", v.vss)?;
+    F s4 = write_named(s3, "sch_commit", v.sch_commit)?;
+    F s5 = write_named(s4, "elgamal", v.elgamal)?;
+    F s6 = write_named(s5, "n", v.n)?;
+    F s7 = write_named(s6, "s", v.s)?;
+    F s8 = write_named(s7, "t", v.t)?;
+    F s9 = write_named(s8, "decommit", v.decommit)?;
+    return write_struct_end(s9);
+}
+Encode(KgB3R, F) = derive_kg_b3_r_encode;
+/// Decodes a `KgB3R` from the decoder `s`, with the input left over.
+@needs(Decoder(F))
+pub Result(Parsed(KgB3R, F), SerialError) derive_kg_b3_r_decode(F s) {
+    F s0 = read_struct_begin(s, "KgB3R", derive_kg_b3_r_names())?;
+    return derive_kg_b3_r_fields(s0, None, None, None, None, None, None, None, None, None);
+}
+@needs(Decoder(F))
+Result(Parsed(KgB3R, F), SerialError) derive_kg_b3_r_fields(F s, Option(List(Int)) f_rid, Option(List(Int)) f_chain_key, Option(List(CvPt)) f_vss, Option(CvPt) f_sch_commit, Option(CvPt) f_elgamal, Option(List(UInt(64))) f_n, Option(List(UInt(64))) f_s, Option(List(UInt(64))) f_t, Option(List(Int)) f_decommit) {
+    Parsed(FieldKey, F) k = read_field(s, derive_kg_b3_r_names())?;
+    FieldKey key = k.value;
+    return match key {
+        KnownField(i) => derive_kg_b3_r_field(k.rest, i, f_rid, f_chain_key, f_vss, f_sch_commit, f_elgamal, f_n, f_s, f_t, f_decommit),
+        UnknownField(name) => derive_kg_b3_r_fields(skip_unknown(k.rest, name, derive_kg_b3_r_names(), false)?, f_rid, f_chain_key, f_vss, f_sch_commit, f_elgamal, f_n, f_s, f_t, f_decommit),
+        EndOfFields => derive_kg_b3_r_done(k.rest, f_rid, f_chain_key, f_vss, f_sch_commit, f_elgamal, f_n, f_s, f_t, f_decommit)
+    };
+}
+@needs(Decoder(F))
+Result(Parsed(KgB3R, F), SerialError) derive_kg_b3_r_field(F s, Int i, Option(List(Int)) f_rid, Option(List(Int)) f_chain_key, Option(List(CvPt)) f_vss, Option(CvPt) f_sch_commit, Option(CvPt) f_elgamal, Option(List(UInt(64))) f_n, Option(List(UInt(64))) f_s, Option(List(UInt(64))) f_t, Option(List(Int)) f_decommit) {
+    if (i == 0) { Parsed(Option(List(Int)), F) p = read_slot(s, f_rid, "rid")?; return derive_kg_b3_r_fields(p.rest, p.value, f_chain_key, f_vss, f_sch_commit, f_elgamal, f_n, f_s, f_t, f_decommit); }
+    if (i == 1) { Parsed(Option(List(Int)), F) p = read_slot(s, f_chain_key, "chain_key")?; return derive_kg_b3_r_fields(p.rest, f_rid, p.value, f_vss, f_sch_commit, f_elgamal, f_n, f_s, f_t, f_decommit); }
+    if (i == 2) { Parsed(Option(List(CvPt)), F) p = read_slot(s, f_vss, "vss")?; return derive_kg_b3_r_fields(p.rest, f_rid, f_chain_key, p.value, f_sch_commit, f_elgamal, f_n, f_s, f_t, f_decommit); }
+    if (i == 3) { Parsed(Option(CvPt), F) p = read_slot(s, f_sch_commit, "sch_commit")?; return derive_kg_b3_r_fields(p.rest, f_rid, f_chain_key, f_vss, p.value, f_elgamal, f_n, f_s, f_t, f_decommit); }
+    if (i == 4) { Parsed(Option(CvPt), F) p = read_slot(s, f_elgamal, "elgamal")?; return derive_kg_b3_r_fields(p.rest, f_rid, f_chain_key, f_vss, f_sch_commit, p.value, f_n, f_s, f_t, f_decommit); }
+    if (i == 5) { Parsed(Option(List(UInt(64))), F) p = read_slot(s, f_n, "n")?; return derive_kg_b3_r_fields(p.rest, f_rid, f_chain_key, f_vss, f_sch_commit, f_elgamal, p.value, f_s, f_t, f_decommit); }
+    if (i == 6) { Parsed(Option(List(UInt(64))), F) p = read_slot(s, f_s, "s")?; return derive_kg_b3_r_fields(p.rest, f_rid, f_chain_key, f_vss, f_sch_commit, f_elgamal, f_n, p.value, f_t, f_decommit); }
+    if (i == 7) { Parsed(Option(List(UInt(64))), F) p = read_slot(s, f_t, "t")?; return derive_kg_b3_r_fields(p.rest, f_rid, f_chain_key, f_vss, f_sch_commit, f_elgamal, f_n, f_s, p.value, f_decommit); }
+    Parsed(Option(List(Int)), F) p = read_slot(s, f_decommit, "decommit")?; return derive_kg_b3_r_fields(p.rest, f_rid, f_chain_key, f_vss, f_sch_commit, f_elgamal, f_n, f_s, f_t, p.value);
+}
+Result(Parsed(KgB3R, F), SerialError) derive_kg_b3_r_done(F s, Option(List(Int)) f_rid, Option(List(Int)) f_chain_key, Option(List(CvPt)) f_vss, Option(CvPt) f_sch_commit, Option(CvPt) f_elgamal, Option(List(UInt(64))) f_n, Option(List(UInt(64))) f_s, Option(List(UInt(64))) f_t, Option(List(Int)) f_decommit) {
+    List(Int) d_rid = require(f_rid, "rid")?;
+    List(Int) d_chain_key = require(f_chain_key, "chain_key")?;
+    List(CvPt) d_vss = require(f_vss, "vss")?;
+    CvPt d_sch_commit = require(f_sch_commit, "sch_commit")?;
+    CvPt d_elgamal = require(f_elgamal, "elgamal")?;
+    List(UInt(64)) d_n = require(f_n, "n")?;
+    List(UInt(64)) d_s = require(f_s, "s")?;
+    List(UInt(64)) d_t = require(f_t, "t")?;
+    List(Int) d_decommit = require(f_decommit, "decommit")?;
+    return parsed(KgB3R {.rid = d_rid, .chain_key = d_chain_key, .vss = d_vss, .sch_commit = d_sch_commit, .elgamal = d_elgamal, .n = d_n, .s = d_s, .t = d_t, .decommit = d_decommit}, s);
+}
+Decode(KgB3R, F) = derive_kg_b3_r_decode;
+
+// ── KgB4R (line 217)
+/// The serialized field names of `KgB4R`, in declaration order.
+pub List(Str) derive_kg_b4_r_names() { return ["md", "prm"]; }
+/// Encodes a `KgB4R` through the encoder `s`.
+@needs(Encoder(F))
+pub Result(F, SerialError) derive_kg_b4_r_encode(KgB4R v, F s) {
+    Int n = 2;
+    F s0 = write_struct_begin(s, "KgB4R", n)?;
+    F s1 = write_named(s0, "md", v.md)?;
+    F s2 = write_named(s1, "prm", v.prm)?;
+    return write_struct_end(s2);
+}
+Encode(KgB4R, F) = derive_kg_b4_r_encode;
+/// Decodes a `KgB4R` from the decoder `s`, with the input left over.
+@needs(Decoder(F))
+pub Result(Parsed(KgB4R, F), SerialError) derive_kg_b4_r_decode(F s) {
+    F s0 = read_struct_begin(s, "KgB4R", derive_kg_b4_r_names())?;
+    return derive_kg_b4_r_fields(s0, None, None);
+}
+@needs(Decoder(F))
+Result(Parsed(KgB4R, F), SerialError) derive_kg_b4_r_fields(F s, Option(ModProof) f_md, Option(PrmProof) f_prm) {
+    Parsed(FieldKey, F) k = read_field(s, derive_kg_b4_r_names())?;
+    FieldKey key = k.value;
+    return match key {
+        KnownField(i) => derive_kg_b4_r_field(k.rest, i, f_md, f_prm),
+        UnknownField(name) => derive_kg_b4_r_fields(skip_unknown(k.rest, name, derive_kg_b4_r_names(), false)?, f_md, f_prm),
+        EndOfFields => derive_kg_b4_r_done(k.rest, f_md, f_prm)
+    };
+}
+@needs(Decoder(F))
+Result(Parsed(KgB4R, F), SerialError) derive_kg_b4_r_field(F s, Int i, Option(ModProof) f_md, Option(PrmProof) f_prm) {
+    if (i == 0) { Parsed(Option(ModProof), F) p = read_slot(s, f_md, "md")?; return derive_kg_b4_r_fields(p.rest, p.value, f_prm); }
+    Parsed(Option(PrmProof), F) p = read_slot(s, f_prm, "prm")?; return derive_kg_b4_r_fields(p.rest, f_md, p.value);
+}
+Result(Parsed(KgB4R, F), SerialError) derive_kg_b4_r_done(F s, Option(ModProof) f_md, Option(PrmProof) f_prm) {
+    ModProof d_md = require(f_md, "md")?;
+    PrmProof d_prm = require(f_prm, "prm")?;
+    return parsed(KgB4R {.md = d_md, .prm = d_prm}, s);
+}
+Decode(KgB4R, F) = derive_kg_b4_r_decode;
+
+// ── KgM4R (line 220)
+/// The serialized field names of `KgM4R`, in declaration order.
+pub List(Str) derive_kg_m4_r_names() { return ["share", "fac"]; }
+/// Encodes a `KgM4R` through the encoder `s`.
+@needs(Encoder(F))
+pub Result(F, SerialError) derive_kg_m4_r_encode(KgM4R v, F s) {
+    Int n = 2;
+    F s0 = write_struct_begin(s, "KgM4R", n)?;
+    F s1 = write_named(s0, "share", v.share)?;
+    F s2 = write_named(s1, "fac", v.fac)?;
+    return write_struct_end(s2);
+}
+Encode(KgM4R, F) = derive_kg_m4_r_encode;
+/// Decodes a `KgM4R` from the decoder `s`, with the input left over.
+@needs(Decoder(F))
+pub Result(Parsed(KgM4R, F), SerialError) derive_kg_m4_r_decode(F s) {
+    F s0 = read_struct_begin(s, "KgM4R", derive_kg_m4_r_names())?;
+    return derive_kg_m4_r_fields(s0, None, None);
+}
+@needs(Decoder(F))
+Result(Parsed(KgM4R, F), SerialError) derive_kg_m4_r_fields(F s, Option(List(UInt(64))) f_share, Option(FacProof) f_fac) {
+    Parsed(FieldKey, F) k = read_field(s, derive_kg_m4_r_names())?;
+    FieldKey key = k.value;
+    return match key {
+        KnownField(i) => derive_kg_m4_r_field(k.rest, i, f_share, f_fac),
+        UnknownField(name) => derive_kg_m4_r_fields(skip_unknown(k.rest, name, derive_kg_m4_r_names(), false)?, f_share, f_fac),
+        EndOfFields => derive_kg_m4_r_done(k.rest, f_share, f_fac)
+    };
+}
+@needs(Decoder(F))
+Result(Parsed(KgM4R, F), SerialError) derive_kg_m4_r_field(F s, Int i, Option(List(UInt(64))) f_share, Option(FacProof) f_fac) {
+    if (i == 0) { Parsed(Option(List(UInt(64))), F) p = read_slot(s, f_share, "share")?; return derive_kg_m4_r_fields(p.rest, p.value, f_fac); }
+    Parsed(Option(FacProof), F) p = read_slot(s, f_fac, "fac")?; return derive_kg_m4_r_fields(p.rest, f_share, p.value);
+}
+Result(Parsed(KgM4R, F), SerialError) derive_kg_m4_r_done(F s, Option(List(UInt(64))) f_share, Option(FacProof) f_fac) {
+    List(UInt(64)) d_share = require(f_share, "share")?;
+    FacProof d_fac = require(f_fac, "fac")?;
+    return parsed(KgM4R {.share = d_share, .fac = d_fac}, s);
+}
+Decode(KgM4R, F) = derive_kg_m4_r_decode;
+
+// ── CgBody (line 225)
+/// The serialized variant names of `CgBody`, in declaration order.
+pub List(Str) derive_cg_body_variants() { return ["KgB2", "KgB3", "KgB4", "KgM4", "KgB5", "PsB2", "PsM2", "PsB3", "PsM3", "PsB4", "PsB5", "PsM5", "PsB6", "PsB7", "PsA1", "PsA2", "SgB"]; }
+/// Encodes a `CgBody` through the encoder `s`.
+@needs(Encoder(F))
+pub Result(F, SerialError) derive_cg_body_encode(CgBody v, F s) {
+    return match v {
+        KgB2(x) => write_newtype_variant(s, "CgBody", 0, "KgB2", x),
+        KgB3(x) => write_newtype_variant(s, "CgBody", 1, "KgB3", x),
+        KgB4(x) => write_newtype_variant(s, "CgBody", 2, "KgB4", x),
+        KgM4(x) => write_newtype_variant(s, "CgBody", 3, "KgM4", x),
+        KgB5(x) => write_newtype_variant(s, "CgBody", 4, "KgB5", x),
+        PsB2(x) => write_newtype_variant(s, "CgBody", 5, "PsB2", x),
+        PsM2(x) => write_newtype_variant(s, "CgBody", 6, "PsM2", x),
+        PsB3(x) => write_newtype_variant(s, "CgBody", 7, "PsB3", x),
+        PsM3(x) => write_newtype_variant(s, "CgBody", 8, "PsM3", x),
+        PsB4(x) => write_newtype_variant(s, "CgBody", 9, "PsB4", x),
+        PsB5(x) => write_newtype_variant(s, "CgBody", 10, "PsB5", x),
+        PsM5(x) => write_newtype_variant(s, "CgBody", 11, "PsM5", x),
+        PsB6(x) => write_newtype_variant(s, "CgBody", 12, "PsB6", x),
+        PsB7(x) => write_newtype_variant(s, "CgBody", 13, "PsB7", x),
+        PsA1(x) => write_newtype_variant(s, "CgBody", 14, "PsA1", x),
+        PsA2(x) => write_newtype_variant(s, "CgBody", 15, "PsA2", x),
+        SgB(x) => write_newtype_variant(s, "CgBody", 16, "SgB", x)
+    };
+}
+Encode(CgBody, F) = derive_cg_body_encode;
+/// Decodes a `CgBody` from the decoder `s`, with the input left over.
+@needs(Decoder(F))
+pub Result(Parsed(CgBody, F), SerialError) derive_cg_body_decode(F s) {
+    Parsed(Int, F) t = read_variant(s, "CgBody", derive_cg_body_variants())?;
+    Int i = t.value;
+    if (i == 0) { Parsed(List(Int), F) p0 = read_newtype_payload(t.rest, "KgB2")?; CgBody u0 = KgB2(p0.value); return parsed(u0, p0.rest); }
+    if (i == 1) { Parsed(KgB3R, F) p1 = read_newtype_payload(t.rest, "KgB3")?; CgBody u1 = KgB3(p1.value); return parsed(u1, p1.rest); }
+    if (i == 2) { Parsed(KgB4R, F) p2 = read_newtype_payload(t.rest, "KgB4")?; CgBody u2 = KgB4(p2.value); return parsed(u2, p2.rest); }
+    if (i == 3) { Parsed(KgM4R, F) p3 = read_newtype_payload(t.rest, "KgM4")?; CgBody u3 = KgM4(p3.value); return parsed(u3, p3.rest); }
+    if (i == 4) { Parsed(List(UInt(64)), F) p4 = read_newtype_payload(t.rest, "KgB5")?; CgBody u4 = KgB5(p4.value); return parsed(u4, p4.rest); }
+    if (i == 5) { Parsed(PsB2R, F) p5 = read_newtype_payload(t.rest, "PsB2")?; CgBody u5 = PsB2(p5.value); return parsed(u5, p5.rest); }
+    if (i == 6) { Parsed(EncelgProof, F) p6 = read_newtype_payload(t.rest, "PsM2")?; CgBody u6 = PsM2(p6.value); return parsed(u6, p6.rest); }
+    if (i == 7) { Parsed(PsB3R, F) p7 = read_newtype_payload(t.rest, "PsB3")?; CgBody u7 = PsB3(p7.value); return parsed(u7, p7.rest); }
+    if (i == 8) { Parsed(PsM3R, F) p8 = read_newtype_payload(t.rest, "PsM3")?; CgBody u8 = PsM3(p8.value); return parsed(u8, p8.rest); }
+    if (i == 9) { Parsed(PsB4R, F) p9 = read_newtype_payload(t.rest, "PsB4")?; CgBody u9 = PsB4(p9.value); return parsed(u9, p9.rest); }
+    if (i == 10) { Parsed(CvPt, F) p10 = read_newtype_payload(t.rest, "PsB5")?; CgBody u10 = PsB5(p10.value); return parsed(u10, p10.rest); }
+    if (i == 11) { Parsed(LogstarProof, F) p11 = read_newtype_payload(t.rest, "PsM5")?; CgBody u11 = PsM5(p11.value); return parsed(u11, p11.rest); }
+    if (i == 12) { Parsed(PsB6R, F) p12 = read_newtype_payload(t.rest, "PsB6")?; CgBody u12 = PsB6(p12.value); return parsed(u12, p12.rest); }
+    if (i == 13) { Parsed(PsB7R, F) p13 = read_newtype_payload(t.rest, "PsB7")?; CgBody u13 = PsB7(p13.value); return parsed(u13, p13.rest); }
+    if (i == 14) { Parsed(PsA1R, F) p14 = read_newtype_payload(t.rest, "PsA1")?; CgBody u14 = PsA1(p14.value); return parsed(u14, p14.rest); }
+    if (i == 15) { Parsed(PsA2R, F) p15 = read_newtype_payload(t.rest, "PsA2")?; CgBody u15 = PsA2(p15.value); return parsed(u15, p15.rest); }
+    if (i == 16) { Parsed(List(UInt(64)), F) p16 = read_newtype_payload(t.rest, "SgB")?; CgBody u16 = SgB(p16.value); return parsed(u16, p16.rest); }
+    return Err(custom_error(f"variant index {i} out of range"));
+}
+Decode(CgBody, F) = derive_cg_body_decode;
+
+// ── CgMsg (line 246)
+/// The serialized field names of `CgMsg`, in declaration order.
+pub List(Str) derive_cg_msg_names() { return ["from", "to", "body"]; }
+/// Encodes a `CgMsg` through the encoder `s`.
+@needs(Encoder(F))
+pub Result(F, SerialError) derive_cg_msg_encode(CgMsg v, F s) {
+    Int n = 3;
+    F s0 = write_struct_begin(s, "CgMsg", n)?;
+    F s1 = write_named(s0, "from", v.from)?;
+    F s2 = write_named(s1, "to", v.to)?;
+    F s3 = write_named(s2, "body", v.body)?;
+    return write_struct_end(s3);
+}
+Encode(CgMsg, F) = derive_cg_msg_encode;
+/// Decodes a `CgMsg` from the decoder `s`, with the input left over.
+@needs(Decoder(F))
+pub Result(Parsed(CgMsg, F), SerialError) derive_cg_msg_decode(F s) {
+    F s0 = read_struct_begin(s, "CgMsg", derive_cg_msg_names())?;
+    return derive_cg_msg_fields(s0, None, None, None);
+}
+@needs(Decoder(F))
+Result(Parsed(CgMsg, F), SerialError) derive_cg_msg_fields(F s, Option(Int) f_from, Option(Int) f_to, Option(CgBody) f_body) {
+    Parsed(FieldKey, F) k = read_field(s, derive_cg_msg_names())?;
+    FieldKey key = k.value;
+    return match key {
+        KnownField(i) => derive_cg_msg_field(k.rest, i, f_from, f_to, f_body),
+        UnknownField(name) => derive_cg_msg_fields(skip_unknown(k.rest, name, derive_cg_msg_names(), false)?, f_from, f_to, f_body),
+        EndOfFields => derive_cg_msg_done(k.rest, f_from, f_to, f_body)
+    };
+}
+@needs(Decoder(F))
+Result(Parsed(CgMsg, F), SerialError) derive_cg_msg_field(F s, Int i, Option(Int) f_from, Option(Int) f_to, Option(CgBody) f_body) {
+    if (i == 0) { Parsed(Option(Int), F) p = read_slot(s, f_from, "from")?; return derive_cg_msg_fields(p.rest, p.value, f_to, f_body); }
+    if (i == 1) { Parsed(Option(Int), F) p = read_slot(s, f_to, "to")?; return derive_cg_msg_fields(p.rest, f_from, p.value, f_body); }
+    Parsed(Option(CgBody), F) p = read_slot(s, f_body, "body")?; return derive_cg_msg_fields(p.rest, f_from, f_to, p.value);
+}
+Result(Parsed(CgMsg, F), SerialError) derive_cg_msg_done(F s, Option(Int) f_from, Option(Int) f_to, Option(CgBody) f_body) {
+    Int d_from = require(f_from, "from")?;
+    Int d_to = require(f_to, "to")?;
+    CgBody d_body = require(f_body, "body")?;
+    return parsed(CgMsg {.from = d_from, .to = d_to, .body = d_body}, s);
+}
+Decode(CgMsg, F) = derive_cg_msg_decode;
+
+// ── CgPublicCfg (line 999)
 /// The serialized field names of `CgPublicCfg`, in declaration order.
 pub List(Str) derive_cg_public_cfg_names() { return ["id", "ecdsa", "elgamal", "n", "ped"]; }
 /// Encodes a `CgPublicCfg` through the encoder `s`.
@@ -52,7 +698,7 @@ Result(Parsed(CgPublicCfg, F), SerialError) derive_cg_public_cfg_done(F s, Optio
 }
 Decode(CgPublicCfg, F) = derive_cg_public_cfg_decode;
 
-// ── CgConfig (line 991)
+// ── CgConfig (line 1005)
 /// The serialized field names of `CgConfig`, in declaration order.
 pub List(Str) derive_cg_config_names() { return ["id", "threshold", "ecdsa", "elgamal", "p", "q", "rid", "chain_key", "public"]; }
 /// Encodes a `CgConfig` through the encoder `s`.

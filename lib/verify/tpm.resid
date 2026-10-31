@@ -566,3 +566,55 @@ List(ClaimValue) none_values() {
     List(ClaimValue) none = [];
     return none;
 }
+
+// ─── Certified keys (TPM2_Certify) ──────────────────────────────────
+// TCG TPM 2.0 Part 2 §10.12: a TPMS_ATTEST of type TPM_ST_ATTEST_CERTIFY
+// (0x8017) whose attested TPMS_CERTIFY_INFO names the certified object. The
+// object's name is computed here from its public area (nameAlg SHA-256),
+// never taken from the attester, and must be the one certified.
+
+/// A key a TPM certified under an attestation key: its public area, its
+/// computed name, its attributes and authPolicy, and its SEC1 point when it
+/// is an ECC NIST P-256 key ([] otherwise).
+pub type TpmCertified = { List(UInt(8)) public_area; List(Int) name; Int attributes; List(Int) auth_policy; List(Int) point; };
+
+type TcCert = { List(Int) extra; List(Int) name; };
+
+Result(TcCert, VerifyError) tcc_parse(List(Int) a) {
+    if (a.len() < 6) { return Err(BadLayout("TPMS_ATTEST: short")); }
+    if (tc_be(a, 0, 4) != 4283712327) { return Err(BadLayout("TPMS_ATTEST: not TPM_GENERATED")); }
+    if (tc_be(a, 4, 2) != 32791) { return Err(BadLayout("TPMS_ATTEST: not a certification (0x8017)")); }
+    TcB signer = tc_2b(a, 6, 68)?;
+    TcB extra = tc_2b(a, signer.next, 64)?;
+    Int after_clock = extra.next + 17 + 8;
+    if (after_clock > a.len()) { return Err(BadLayout("TPMS_ATTEST: short")); }
+    TcB name = tc_2b(a, after_clock, 68)?;
+    TcB qname = tc_2b(a, name.next, 68)?;
+    if (qname.next != a.len()) { return Err(BadLayout("TPMS_ATTEST: trailing bytes")); }
+    return Ok(TcCert {.extra = extra.v, .name = name.v});
+}
+
+/// Checks TPM2_Certify evidence: `attest`, of type CERTIFY, signed (`sig`,
+/// a TPMT_SIGNATURE) by the AK `ak` (ECDSA P-256 or RSASSA, SHA-256), with
+/// extraData exactly `extra`, certifying the object whose public area is
+/// `public_area` (name algorithm SHA-256). The AK must already be trusted:
+/// pinned, or from tpm_verify_ak.
+pub Result(TpmCertified, VerifyError) tpm_verify_certify(List(UInt(8)) attest, List(UInt(8)) sig, PubKey ak, List(UInt(8)) public_area, List(Int) extra) {
+    _ = tq_signed_by(attest, sig, ak, true, true)?;
+    TcCert c = tcc_parse(chal_ints(attest))?;
+    if (!ci_eq_bytes(c.extra, extra) || c.extra.len() != extra.len()) { return Err(NotFresh("TPM2_Certify: extraData is not the expected value")); }
+    TpmPubKey k = match (tpm_public_parse(public_area)) { Ok(x) => Ok(x), Err(e) => Err(BadLayout("certified public area: " + tpm_error_text(e))) }?;
+    if (k.name_alg != 11) { return Err(Refused("tpm_verify_certify", "the certified key's name algorithm is not SHA-256")); }
+    List(Int) name = [0, 11].concat(sha256_bytes(chal_ints(public_area)));
+    if (!ci_eq_bytes(name, c.name) || name.len() != c.name.len()) { return Err(Refused("tpm_verify_certify", "the certified name is not this key's")); }
+    List(Int) point = if (k.type_alg == 35 && k.curve == 3) { [4].concat(tq_fixed(chal_ints(k.ecc_x), 32)).concat(tq_fixed(chal_ints(k.ecc_y), 32)) } else { [] };
+    return Ok(TpmCertified {.public_area = public_area, .name = name, .attributes = k.attributes, .auth_policy = chal_ints(k.auth_policy), .point = point});
+}
+
+/// The signing key of an AK's public area, checked as tpm_verify_ak checks
+/// it (a restricted signing key fixed to its TPM; ECDSA P-256 or RSASSA
+/// 2048, SHA-256). For an AK already trusted (a TpmAk's public_area).
+pub Result(PubKey, VerifyError) tpm_ak_pubkey(List(UInt(8)) ak_public) {
+    TkAk a = tk_ak(ak_public)?;
+    return Ok(a.key);
+}

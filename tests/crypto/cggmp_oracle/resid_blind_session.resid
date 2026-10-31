@@ -1,0 +1,329 @@
+// Runs a whole blind-tweak CGGMP21 presign-and-sign session (lib/cggmp_blind)
+// of several parties in one process and prints, as JSON for blind.py, the
+// signature, the designated party's key, and every curve point and message
+// kind each other party received.
+//
+//   resid_blind_session <config> <signers> <designated> <tau hex> <digest hex> <seed hex> [fault]
+//
+// fault: "none"; "chi:<id>" (party id adds 1 to its Chi share after round 3,
+// so the S points do not add up and the designated party runs abort 2);
+// "proof" (the designated party's tweak aff-p proofs are corrupted).
+import "../../../lib/cggmp_blind.resid";
+import "../../../lib/cose.resid";
+import "../../../lib/crypto.resid";
+
+Str h(List(UInt(64)) x) { return hex_encode(bn_to_be(x, 32)); }
+
+@requires(filesystem(readonly))
+Str kv(Str path, Str key) { return kv_find(str_split(filesystem.read_all(path), "\n"), key, 0); }
+
+Str kv_find(List(Str) lines, Str key, Int i) {
+    if (i >= lines.len()) { return ""; }
+    List(Str) parts = str_split(str_trim(lines[i]), " ");
+    if (parts.len() == 2 && parts[0] == key) { return parts[1]; }
+    return kv_find(lines, key, i + 1);
+}
+
+@requires(filesystem(readonly))
+List(UInt(64)) nat(Str path, Str key) { return bn_from_be(cose_hex_decode(kv(path, key))); }
+
+@requires(filesystem(readonly))
+CvPt pt(Str path, Str key) { return match cv_dec(cose_hex_decode(kv(path, key))) { Some(p) => p, None => cv_inf() }; }
+
+@requires(filesystem(readonly))
+CgPublicCfg pub_of(Str path, Int i) {
+    return CgPublicCfg {
+        .id = i, .ecdsa = pt(path, f"XP{i}"), .elgamal = pt(path, f"EP{i}"), .n = bn_mul(nat(path, f"P{i}"), nat(path, f"Q{i}")),
+        .ped = Pedersen {.n = nat(path, f"NH{i}"), .s = nat(path, f"S{i}"), .t = nat(path, f"T{i}")} };
+}
+
+@requires(filesystem(readonly))
+List(CgPublicCfg) pubs(Str path, Int n, Int i, ListBuf(CgPublicCfg) acc) {
+    if (i > n) { return acc.finish(); }
+    return pubs(path, n, i + 1, acc.push(pub_of(path, i)));
+}
+
+@requires(filesystem(readonly))
+CgConfig cfg_of(Str path, Int i, Int t, List(CgPublicCfg) ps) {
+    return CgConfig {
+        .id = i, .threshold = t, .ecdsa = nat(path, f"X{i}"), .elgamal = nat(path, f"E{i}"),
+        .p = nat(path, f"P{i}"), .q = nat(path, f"Q{i}"), .rid = [], .chain_key = [], .public = ps };
+}
+
+List(Int) parse_ids(List(Str) parts, Int i, ListBuf(Int) acc) {
+    if (i >= parts.len()) { return acc.finish(); }
+    return parse_ids(parts, i + 1, acc.push(str_parse_int(parts[i])));
+}
+
+BlRole role_for(Int id, Int d, List(UInt(64)) tau) {
+    return BlRole {.designated = d, .tau = if (id == d) { tau } else { [] }};
+}
+
+@requires(filesystem(readonly))
+Option(List(CgCtx)) ctxs(Str path, List(CgPublicCfg) ps, Int t, List(Int) ids, Int d, List(UInt(64)) tau, List(Int) digest, List(Int) seed, Int i, ListBuf(CgCtx) acc) {
+    if (i >= ids.len()) { return Some(acc.finish()); }
+    CgConfig cfg = cfg_of(path, ids[i], t, ps);
+    return match bl_ctx(cfg, ids, role_for(ids[i], d, tau), bytes_of("blind-session-1"), digest, cg_rng(seed, f"party/{ids[i]}", 32)) {
+        None => drop_ctxs(acc),
+        Some(c) => ctxs(path, ps, t, ids, d, tau, digest, seed, i + 1, acc.push(c))
+    };
+}
+
+Option(List(CgCtx)) drop_ctxs(ListBuf(CgCtx) acc) { _ = acc.finish(); return None; }
+
+// ─── What each non-designated party sees ────────────────────────
+
+Str ptx(CvPt p) { return if (p.inf) { "" } else { hex_encode(cv_enc(p)) }; }
+
+List(Str) body_points(CgBody b) {
+    return match b {
+        PsB2(x) => [ptx(x.zl), ptx(x.zm)],
+        PsM3(x) => [ptx(x.chi_proof.bx)],
+        PsB4(x) => [ptx(x.chi_l), ptx(x.chi_m)],
+        PsB5(x) => [ptx(x)],
+        PsB6(x) => [ptx(x.big_delta), ptx(x.proof.a), ptx(x.proof.n), ptx(x.proof.b)],
+        PsB7(x) => [ptx(x.s), ptx(x.proof.a), ptx(x.proof.n), ptx(x.proof.b)],
+        _ => []
+    };
+}
+
+Str body_kind(CgBody b) {
+    return match b { PsB7(_) => "S", SgB(_) => "sigma", PsA2(_) => "abort2", _ => "" };
+}
+
+Bool for_party(CgMsg m, Int self) { return m.from != self && (m.to == 0 || m.to == self); }
+
+Str seen_json(List(CgMsg) ms, Int self, Int i, Str acc) {
+    if (i >= ms.len()) { return acc; }
+    if (!for_party(ms[i], self)) { return seen_json(ms, self, i + 1, acc); }
+    Str k = body_kind(ms[i].body);
+    Str a1 = if (str_len(k) > 0) { acc + "\"kind:" + k + "\"," } else { acc };
+    return seen_json(ms, self, i + 1, pts_json(body_points(ms[i].body), 0, a1));
+}
+
+Str pts_json(List(Str) ps, Int i, Str acc) {
+    if (i >= ps.len()) { return acc; }
+    return pts_json(ps, i + 1, if (str_len(ps[i]) > 0) { acc + "\"" + ps[i] + "\"," } else { acc });
+}
+
+// ─── Rounds ─────────────────────────────────────────────────────
+
+List(CgMsg) flat(List(List(CgMsg)) outs, Int i, ListBuf(CgMsg) acc) {
+    if (i >= outs.len()) { return acc.finish(); }
+    return flat(outs, i + 1, cat(acc, outs[i], 0));
+}
+
+ListBuf(CgMsg) cat(ListBuf(CgMsg) acc, List(CgMsg) xs, Int i) {
+    if (i >= xs.len()) { return acc; }
+    return cat(acc.push(xs[i]), xs, i + 1);
+}
+
+List(BlTwMsg) flat_tw(List(BlR2) bs, Int i, ListBuf(BlTwMsg) acc) {
+    if (i >= bs.len()) { return acc.finish(); }
+    return flat_tw(bs, i + 1, cat_tw(acc, bs[i].out, 0));
+}
+
+ListBuf(BlTwMsg) cat_tw(ListBuf(BlTwMsg) acc, List(BlTwMsg) xs, Int i) {
+    if (i >= xs.len()) { return acc; }
+    return cat_tw(acc.push(xs[i]), xs, i + 1);
+}
+
+List(BlTwMsg) corrupt_tw(List(BlTwMsg) xs, Int i, ListBuf(BlTwMsg) acc) {
+    if (i >= xs.len()) { return acc.finish(); }
+    BlTwMsg m = xs[i];
+    AffpProof p = m.proof;
+    AffpProof q = AffpProof {.a = p.a, .bx = p.bx, .by = p.by, .e = p.e, .s = p.s, .f = p.f, .t = p.t, .z1 = zi_add(p.z1, zi_from_nat([1])), .z2 = p.z2, .z3 = p.z3, .z4 = p.z4, .w = p.w, .wx = p.wx, .wy = p.wy};
+    return corrupt_tw(xs, i + 1, acc.push(BlTwMsg {.from = m.from, .to = m.to, .t = m.t, .d = m.d, .f = m.f, .proof = q}));
+}
+
+List(Ps1) r1(List(CgCtx) cs, Int i, ListBuf(Ps1) acc) {
+    if (i >= cs.len()) { return acc.finish(); }
+    return r1(cs, i + 1, acc.push(ps_start(cs[i])));
+}
+List(List(CgMsg)) o1(List(Ps1) ss, Int i, ListBuf(List(CgMsg)) acc) { if (i >= ss.len()) { return acc.finish(); } return o1(ss, i + 1, acc.push(ss[i].out)); }
+
+Result(List(BlR2), CgFail) r2(List(Ps1) ss, List(CgMsg) in, Int d, List(UInt(64)) tau, Int i, ListBuf(BlR2) acc) {
+    if (i >= ss.len()) { return Ok(acc.finish()); }
+    Ps2 s = ps_r2(ss[i], in)?;
+    return r2(ss, in, d, tau, i + 1, acc.push(bl_r2(s, role_for(ss[i].ctx.self, d, tau))));
+}
+List(List(CgMsg)) o2(List(BlR2) ss, Int i, ListBuf(List(CgMsg)) acc) { if (i >= ss.len()) { return acc.finish(); } return o2(ss, i + 1, acc.push(ss[i].s.out)); }
+
+Result(List(Ps3), CgFail) r3(List(BlR2) ss, List(CgMsg) in, List(BlTwMsg) tw, Int fault_chi, Int i, ListBuf(Ps3) acc) {
+    if (i >= ss.len()) { return Ok(acc.finish()); }
+    Ps3 s0 = bl_r3(ss[i], in, tw)?;
+    Ps3 s = if (ss[i].s.prev.ctx.self == fault_chi) { bump_chi(s0, ss[i].s.prev.ctx) } else { s0 };
+    return r3(ss, in, tw, fault_chi, i + 1, acc.push(s));
+}
+
+// A cheating party: its Chi share is off by one, its commitment consistent with the bad share.
+Ps3 bump_chi(Ps3 s, CgCtx c) {
+    List(UInt(64)) chi = sc_nat_add(s.chi_share, [1]);
+    CvPt chi_m = cv_add(cv_mul_base(chi), cv_mul(s.chi_nonce, cg_pub_of(c, c.self).elgamal));
+    return Ps3 {.prev = s.prev, .peers = s.peers, .delta_share = s.delta_share, .chi_share = chi,
+                .delta_alpha = s.delta_alpha, .chi_alpha = s.chi_alpha, .chi_nonce = s.chi_nonce, .chi_l = s.chi_l, .chi_m = chi_m,
+                .out = [cg_bc(c.self, PsB4(PsB4R {.delta_share = s.delta_share, .chi_l = s.chi_l, .chi_m = chi_m}))]};
+}
+List(List(CgMsg)) o3(List(Ps3) ss, Int i, ListBuf(List(CgMsg)) acc) { if (i >= ss.len()) { return acc.finish(); } return o3(ss, i + 1, acc.push(ss[i].out)); }
+
+Result(List(Ps4), CgFail) r4(List(Ps3) ss, List(CgMsg) in, Int i, ListBuf(Ps4) acc) {
+    if (i >= ss.len()) { return Ok(acc.finish()); }
+    Ps4 s = ps_r4(ss[i], in)?;
+    return r4(ss, in, i + 1, acc.push(s));
+}
+List(List(CgMsg)) o4(List(Ps4) ss, Int i, ListBuf(List(CgMsg)) acc) { if (i >= ss.len()) { return acc.finish(); } return o4(ss, i + 1, acc.push(ss[i].out)); }
+
+Result(List(Ps5), CgFail) r5(List(Ps4) ss, List(CgMsg) in, Int i, ListBuf(Ps5) acc) {
+    if (i >= ss.len()) { return Ok(acc.finish()); }
+    Ps5 s = ps_r5(ss[i], in)?;
+    return r5(ss, in, i + 1, acc.push(s));
+}
+List(List(CgMsg)) o5(List(Ps5) ss, Int i, ListBuf(List(CgMsg)) acc) { if (i >= ss.len()) { return acc.finish(); } return o5(ss, i + 1, acc.push(ss[i].out)); }
+
+Result(List(Ps6), CgFail) r6(List(Ps5) ss, List(CgMsg) in, Int d, Int i, ListBuf(Ps6) acc) {
+    if (i >= ss.len()) { return Ok(acc.finish()); }
+    Ps6 s = ps_r6(ss[i], in)?;
+    return r6(ss, in, d, i + 1, acc.push(bl_r6(s, BlRole {.designated = d, .tau = []})));
+}
+List(List(CgMsg)) o6(List(Ps6) ss, Int i, ListBuf(List(CgMsg)) acc) { if (i >= ss.len()) { return acc.finish(); } return o6(ss, i + 1, acc.push(ss[i].out)); }
+
+Int pos_of(List(Int) ids, Int id, Int i) { if (i >= ids.len()) { return -1; } if (ids[i] == id) { return i; } return pos_of(ids, id, i + 1); }
+
+List(List(CgMsg)) o7(List(Ps6) ss, Int d, Int i, ListBuf(List(CgMsg)) acc) {
+    if (i >= ss.len()) { return acc.finish(); }
+    CgCtx c = ss[i].prev.prev.prev.prev.prev.ctx;
+    List(CgMsg) out = if (c.self == d) { [] } else { bl_r7_peer(ss[i], BlRole {.designated = d, .tau = []}).out };
+    return o7(ss, d, i + 1, acc.push(out));
+}
+
+List(List(CgMsg)) oab(List(Ps6) ss, Int d, Int i, ListBuf(List(CgMsg)) acc) {
+    if (i >= ss.len()) { return acc.finish(); }
+    List(CgMsg) out = match bl_abort2(ss[i], BlRole {.designated = d, .tau = []}) { Ok(a) => a.out, Err(_) => [] };
+    return oab(ss, d, i + 1, acc.push(out));
+}
+
+Str seen_all(List(Int) ids, Int d, List(CgMsg) all, Int i, Str acc) {
+    if (i >= ids.len()) { return acc; }
+    if (ids[i] == d) { return seen_all(ids, d, all, i + 1, acc); }
+    Str body = seen_json(all, ids[i], 0, "");
+    Str item = "\"" + f"{ids[i]}" + "\":[" + str_trim_end_comma(body) + "]";
+    return seen_all(ids, d, all, i + 1, acc + (if (str_len(acc) > 0) { "," } else { "" }) + item);
+}
+
+Str str_trim_end_comma(Str s) { return if (str_len(s) > 0) { str_slice(s, 0, str_len(s) - 1) } else { s }; }
+
+Int fail(CgFail e) {
+    println("{\"error\":\"" + e.why + "\",\"culprits\":[" + join_ints(e.culprits, 0, "") + "]}");
+    return 1;
+}
+
+Str join_ints(List(Int) xs, Int i, Str acc) {
+    if (i >= xs.len()) { return acc; }
+    return join_ints(xs, i + 1, acc + (if (i > 0) { "," } else { "" }) + f"{xs[i]}");
+}
+
+Int session(List(CgCtx) cs, List(Int) ids, Int d, List(UInt(64)) tau, Str fault) {
+    Int fault_chi = if (str_starts_with(fault, "chi:")) { str_parse_int(str_slice(fault, 4, str_len(fault))) } else { -1 };
+    List(Ps1) s1 = r1(cs, 0, ListBuf());
+    List(CgMsg) m1 = flat(o1(s1, 0, ListBuf()), 0, ListBuf());
+    return match r2(s1, m1, d, tau, 0, ListBuf()) {
+        Err(e) => fail(e),
+        Ok(s2) => after2(cs, ids, d, s2, m1, fault, fault_chi)
+    };
+}
+
+Int after2(List(CgCtx) cs, List(Int) ids, Int d, List(BlR2) s2, List(CgMsg) m1, Str fault, Int fault_chi) {
+    List(CgMsg) m2 = flat(o2(s2, 0, ListBuf()), 0, ListBuf());
+    List(BlTwMsg) tw0 = flat_tw(s2, 0, ListBuf());
+    List(BlTwMsg) tw = if (fault == "proof") { corrupt_tw(tw0, 0, ListBuf()) } else { tw0 };
+    return match r3(s2, m2, tw, fault_chi, 0, ListBuf()) {
+        Err(e) => fail(e),
+        Ok(s3) => after3(cs, ids, d, s2, m1.concat(m2), s3)
+    };
+}
+
+Int after3(List(CgCtx) cs, List(Int) ids, Int d, List(BlR2) s2, List(CgMsg) seen0, List(Ps3) s3) {
+    List(CgMsg) m3 = flat(o3(s3, 0, ListBuf()), 0, ListBuf());
+    return match r4(s3, m3, 0, ListBuf()) {
+        Err(e) => fail(e),
+        Ok(s4) => after4(cs, ids, d, s2, seen0.concat(m3), s4)
+    };
+}
+
+Int after4(List(CgCtx) cs, List(Int) ids, Int d, List(BlR2) s2, List(CgMsg) seen0, List(Ps4) s4) {
+    List(CgMsg) m4 = flat(o4(s4, 0, ListBuf()), 0, ListBuf());
+    return match r5(s4, m4, 0, ListBuf()) {
+        Err(e) => fail(e),
+        Ok(s5) => after5(cs, ids, d, s2, seen0.concat(m4), s5)
+    };
+}
+
+Int after5(List(CgCtx) cs, List(Int) ids, Int d, List(BlR2) s2, List(CgMsg) seen0, List(Ps5) s5) {
+    List(CgMsg) m5 = flat(o5(s5, 0, ListBuf()), 0, ListBuf());
+    return match r6(s5, m5, d, 0, ListBuf()) {
+        Err(e) => fail(e),
+        Ok(s6) => after6(cs, ids, d, s2, seen0.concat(m5), s6)
+    };
+}
+
+Int after6(List(CgCtx) cs, List(Int) ids, Int d, List(BlR2) s2, List(CgMsg) seen0, List(Ps6) s6) {
+    List(CgMsg) m6 = flat(o6(s6, 0, ListBuf()), 0, ListBuf());
+    Int di = pos_of(ids, d, 0);
+    return match bl_r7_designated(s6[di], m6) {
+        Err(e) => blind_abort(cs, ids, d, s2, seen0.concat(m6), s6, e),
+        Ok(done) => sign(cs, ids, d, seen0.concat(m6), s6, done)
+    };
+}
+
+Int blind_abort(List(CgCtx) cs, List(Int) ids, Int d, List(BlR2) s2, List(CgMsg) seen0, List(Ps6) s6, CgFail first) {
+    Int di = pos_of(ids, d, 0);
+    List(CgMsg) ma = flat(oab(s6, d, 0, ListBuf()), 0, ListBuf());
+    return match bl_abort2(s6[di], s2[di].role) {
+        Err(e) => fail(e),
+        Ok(mine) => report_abort(ids, d, seen0.concat(ma), bl_abort2_blame(mine, ma, s2[di]))
+    };
+}
+
+Int report_abort(List(Int) ids, Int d, List(CgMsg) all, CgFail e) {
+    println("{\"error\":\"" + e.why + "\",\"culprits\":[" + join_ints(e.culprits, 0, "") + "],\"seen\":{" + seen_all(ids, d, all, 0, "") + "}}");
+    return 1;
+}
+
+Int sign(List(CgCtx) cs, List(Int) ids, Int d, List(CgMsg) seen0, List(Ps6) s6, PsDone done) {
+    List(CgMsg) m7 = flat(o7(s6, d, 0, ListBuf()), 0, ListBuf());
+    Int di = pos_of(ids, d, 0);
+    CgCtx dc = cs[di];
+    return match bl_finish(dc, done.presig, m7, BlRole {.designated = d, .tau = []}) {
+        Err(e) => fail(e),
+        Ok(sig) => print_result(ids, d, dc, cs, seen0.concat(m7), sig)
+    };
+}
+
+Str peer_keys(List(CgCtx) cs, Int d, Int i, Str acc) {
+    if (i >= cs.len()) { return acc; }
+    if (cs[i].self == d) { return peer_keys(cs, d, i + 1, acc); }
+    return peer_keys(cs, d, i + 1, acc + (if (str_len(acc) > 0) { "," } else { "" }) + "\"" + hex_encode(cv_enc(cs[i].pubkey)) + "\"");
+}
+
+Int print_result(List(Int) ids, Int d, CgCtx dc, List(CgCtx) cs, List(CgMsg) all, CgSig sig) {
+    println("{\"pubkey\":\"" + hex_encode(cv_enc(dc.pubkey)) + "\",\"r\":\"" + h(cg_r(sig.r)) + "\",\"s\":\"" + h(sig.s) + "\",\"peer_keys\":[" + peer_keys(cs, d, 0, "") + "],\"seen\":{" + seen_all(ids, d, all, 0, "") + "}}");
+    return 0;
+}
+
+@requires(args, filesystem(readonly))
+Int main() {
+    Str path = args.get(1);
+    List(Int) ids = parse_ids(str_split(args.get(2), ","), 0, ListBuf());
+    Int d = str_parse_int(args.get(3));
+    List(UInt(64)) tau = bn_from_be(cose_hex_decode(args.get(4)));
+    List(Int) digest = cose_hex_decode(args.get(5));
+    List(Int) seed = cose_hex_decode(args.get(6));
+    Str fault = if (args.count() > 7) { args.get(7) } else { "none" };
+    Int n = str_parse_int(kv(path, "N"));
+    Int t = str_parse_int(kv(path, "T"));
+    List(CgPublicCfg) ps = pubs(path, n, 1, ListBuf());
+    return match ctxs(path, ps, t, ids, d, tau, digest, seed, 0, ListBuf()) {
+        None => fail(cg_fail("bad session", [])),
+        Some(cs) => session(cs, ids, d, tau, fault)
+    };
+}

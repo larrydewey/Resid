@@ -91,7 +91,7 @@ List(List(UInt(64))) kg_coeffs(KgCtx c, Int i, ListBuf(List(UInt(64))) acc) {
     return kg_coeffs(c, i + 1, acc.push(v));
 }
 
-List(List(UInt(64))) kg_primes(KgCtx c) {
+pub List(List(UInt(64))) kg_primes(KgCtx c) {
     if (c.primes.len() == 2) { return c.primes; }
     Option(List(UInt(64))) p = bn_safe_prime_stream(cg_rng(c.seed, "kg/p", 128 * 600), 1024);
     Option(List(UInt(64))) q = bn_safe_prime_stream(cg_rng(c.seed, "kg/q", 128 * 600), 1024);
@@ -226,8 +226,10 @@ pub Result(Kg3, CgFail) kg_r3(Kg2 s, List(CgMsg) in) {
     List(Int) chain = if (c.prev.len() > 0) { c.prev[0].chain_key } else { kg_xor_all(c.ids, peers, true, s1.chain, c.self, 0, cg_zero32()) };
     Transcript base3 = tr_item(s1.base, "RID", rid);
     Transcript tr = kg_tr(base3, c.self);
-    Option(ModProof) md = mod_prove(s1.p, s1.q, tr, cg_rng(c.seed, "kg/mod", 256 * 96));
-    Option(PrmProof) prm = prm_prove(s1.ped_lam, s1.psec.phi, s1.ped, tr, cg_rng(c.seed, "kg/prm", 256 * 400));
+    Option(ModProof) closure(List(Int)) md_p = lambda(r) { mod_prove(s1.p, s1.q, tr, r) };
+    Option(ModProof) md = cg_retry(md_p, c.seed, "kg/mod", 256 * 96, 0);
+    Option(PrmProof) closure(List(Int)) prm_p = lambda(r) { prm_prove(s1.ped_lam, s1.psec.phi, s1.ped, tr, r) };
+    Option(PrmProof) prm = cg_retry(prm_p, c.seed, "kg/prm", 256 * 400, 0);
     return match md {
         None => Err(cg_fail("randomness exhausted (mod)", [])),
         Some(m) => match prm {
@@ -248,7 +250,8 @@ List(CgMsg) kg3_msgs(Kg1 s1, Map(Int, Kg3Peer) peers, List(Int) others, Transcri
     Kg3Peer pj = peers[j] else { Kg3Peer {.b = KgB3R {.rid = [], .chain_key = [], .vss = [], .sch_commit = cv_inf(), .elgamal = cv_inf(), .n = [], .s = [], .t = [], .decommit = []}, .pail = s1.ppub, .ped = s1.ped} };
     List(UInt(64)) share = kg_eval(s1.coeffs, j);
     List(UInt(64)) ct = pa_enc(pj.pail, sc_to_zi(share), cg_unit(c.seed, f"kg/shnonce/{j}", pj.pail.n));
-    Option(FacProof) fac = fac_prove(s1.p, s1.q, pj.ped, kg_tr(base3, c.self), cg_rng(c.seed, f"kg/fac/{j}", 4 * 4300));
+    Option(FacProof) closure(List(Int)) fac_p = lambda(r) { fac_prove(s1.p, s1.q, pj.ped, kg_tr(base3, c.self), r) };
+    Option(FacProof) fac = cg_retry(fac_p, c.seed, f"kg/fac/{j}", 4 * 4300, 0);
     return match fac {
         None => kg3_msgs(s1, peers, others, base3, i + 1, acc),
         Some(f) => kg3_msgs(s1, peers, others, base3, i + 1, acc.push(cg_to(c.self, j, KgM4(KgM4R {.share = ct, .fac = f}))))

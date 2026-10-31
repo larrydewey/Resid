@@ -61,6 +61,7 @@ pub Option(ZkDraw) zk_draw_below(List(Int) rnd, Int pos, List(UInt(64)) n) {
 // t^{z_i} = A_i s^{e_i} (mod N).
 
 /// Holds a Pedersen parameters proof: the 80 commitments A_i (`as`) and responses z_i (`zs`).
+//@ serial
 pub type PrmProof = { List(List(UInt(64))) as; List(List(UInt(64))) zs; };
 
 Transcript prm_transcript(Transcript tr, Pedersen ped, List(List(UInt(64))) as, Int i) {
@@ -143,9 +144,11 @@ PrmProof prm_finish(List(UInt(64)) lam, List(UInt(64)) phi, Pedersen ped, Transc
 // verifier checks z^N = y and x^4 = y' (mod N).
 
 /// Holds one answer of the modulus proof: the flags `a`, `b`, the fourth root `x` and the N-th root `z`.
+//@ serial
 pub type ModResponse = { Bool a; Bool b; List(UInt(64)) x; List(UInt(64)) z; };
 
 /// Holds a Paillier-Blum modulus proof: the non-residue `w` and 80 responses.
+//@ serial
 pub type ModProof = { List(UInt(64)) w; List(ModResponse) responses; };
 
 // The 80 challenges y_i: sample_modn from the stream after N and w.

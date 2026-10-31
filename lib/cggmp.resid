@@ -53,6 +53,18 @@ pub List(UInt(64)) cg_unit(List(Int) seed, Str label, List(UInt(64)) n) {
 
 // ─── Ids and per-signer lists ───────────────────────────────────
 
+/// A prover that draws from a fixed random stream can run out of it
+/// (rejection sampling); then it returns None. This runs `prove` on the
+/// stream for `label`, and on None again on fresh streams for
+/// label + "/retry{k}", up to 8 tries in all. Before 2026-10-30 the callers
+/// left the message out instead, so the receiver blamed an honest sender
+/// for a missing proof.
+pub Option(T) cg_retry(Option(T) closure(List(Int)) prove, List(Int) seed, Str label, Int n, Int k) {
+    if (k >= 8) { return None; }
+    Option(T) r = prove(cg_rng(seed, if (k == 0) { label } else { label + f"/retry{k}" }, n));
+    return match r { Some(x) => Some(x), None => cg_retry(prove, seed, label, n, k + 1) };
+}
+
 /// The position of `id` in `ids`, searching from index `i`, or -1 when absent.
 pub Int cg_index(List(Int) ids, Int id, Int i) {
     if (i >= ids.len()) { return -1; }
@@ -95,6 +107,7 @@ pub Option(BnInt) cg_dec(PaillierSec sec, PaillierPub pk, List(UInt(64)) c) {
 /// What an abort reveals about a ciphertext c: the plaintext, the hidden
 /// nonce R = rho^N = c (1 + N)^-plain mod N^2, and a proof of knowledge of
 /// rho (Taurus's abortNth).
+//@ serial
 pub type CgOpen = { BnInt plain; List(UInt(64)) hidden; NthProof proof; };
 
 /// Opens c with the secret key; `rnd` is the stream the proof's nonce comes from.
@@ -177,38 +190,50 @@ pub CgMta cg_mta(PaillierPub sender, PaillierPub receiver, List(UInt(64)) recv_c
 // ─── Messages ───────────────────────────────────────────────────
 
 /// The presigning round-1 broadcast: K = Enc(k), G = Enc(gamma), the ElGamal commitment (zl, zm) to k, and the presignature-id commitment.
+//@ serial
 pub type PsB2R = { List(UInt(64)) k; List(UInt(64)) g; CvPt zl; CvPt zm; List(Int) commit; };
 /// The presigning round-2 broadcast: the Delta and Chi MtA D ciphertexts.
+//@ serial
 pub type PsB3R = { List(List(UInt(64))) delta_d; List(List(UInt(64))) chi_d; };   // per other party, in ascending id order
 /// The presigning round-2 message to one party: the F ciphertexts of both MtAs with their aff-p and aff-g proofs.
+//@ serial
 pub type PsM3R = { List(UInt(64)) delta_f; AffpProof delta_proof; List(UInt(64)) chi_f; AffgProof chi_proof; };
 /// The presigning round-3 broadcast: the Delta share and the ElGamal commitment (chi_l, chi_m) to the Chi share.
+//@ serial
 pub type PsB4R = { List(UInt(64)) delta_share; CvPt chi_l; CvPt chi_m; };
 /// The presigning round-5 broadcast: the Delta share point k Gamma with its elog proof.
+//@ serial
 pub type PsB6R = { CvPt big_delta; ElogProof proof; };
 /// The presigning round-6 broadcast: the S share chi R with its elog proof, the decommitment and the presignature id.
+//@ serial
 pub type PsB7R = { CvPt s; ElogProof proof; List(Int) decommit; List(Int) presig_id; };
 
 /// The abort-1 broadcast (a failed Delta check): the sender's Gamma share, an
 /// opening of its K, and an opening of each D addressed to it (per other party, ascending id order).
+//@ serial
 pub type PsA1R = { List(UInt(64)) gamma; CgOpen k; List(CgOpen) d; };
 
 /// The abort-2 broadcast (a failed S check): the sender's ElGamal-nonce image\n/// with a proof, an opening of its K, and an opening of each Chi D addressed to it.
+//@ serial
 pub type PsA2R = { CvPt yhat; LogProof yproof; CgOpen k; List(CgOpen) chi; };
 
 /// A key-generation broadcast: rid, chain key, VSS commitments, Schnorr commitment, ElGamal key, Paillier modulus `n`,
 /// Pedersen `s` and `t`, and the decommitment.
+//@ serial
 pub type KgB3R = {
     List(Int) rid; List(Int) chain_key; List(CvPt) vss; CvPt sch_commit; CvPt elgamal;
     List(UInt(64)) n; List(UInt(64)) s; List(UInt(64)) t; List(Int) decommit;
 };
 /// A key-generation broadcast: the Paillier-Blum modulus proof and the Pedersen parameter proof.
+//@ serial
 pub type KgB4R = { ModProof md; PrmProof prm; };
 /// A key-generation message to one party: its secret share and a factor proof for our Paillier modulus.
+//@ serial
 pub type KgM4R = { List(UInt(64)) share; FacProof fac; };
 
 /// The body of a protocol message, one variant per message kind.
 /// `Kg*` are key generation, `Ps*` presigning, `PsA*` the abort broadcasts, `SgB` a signature share.
+//@ serial
 pub type CgBody =
     KgB2(List(Int))
   | KgB3(KgB3R)
@@ -229,6 +254,7 @@ pub type CgBody =
   | SgB(List(UInt(64)));
 
 /// A message: `to` is the recipient's id, 0 for a broadcast.
+//@ serial
 pub type CgMsg = { Int from; Int to; CgBody body; };
 
 /// A broadcast message with body `b` from `from`.
@@ -454,7 +480,8 @@ List(CgMsg) ps1_msgs(CgCtx c, List(UInt(64)) kct, List(UInt(64)) gct, CvPt zl, C
     Int j = others[i];
     CgPub me = cg_pub_of(c, c.self);
     EncelgPublic pub = EncelgPublic {.c = kct, .a = me.elgamal, .b = zl, .x = zm, .prover = me.pail, .aux = cg_pub_of(c, j).ped};
-    Option(EncelgProof) pf = encelg_prove(pub, sc_to_zi(kshare), kn, en, cg_tr_for(c, c.self), cg_rng(c.seed, f"ps/encelg/{j}", 4 * 2400));
+    Option(EncelgProof) closure(List(Int)) pf_p = lambda(r) { encelg_prove(pub, sc_to_zi(kshare), kn, en, cg_tr_for(c, c.self), r) };
+    Option(EncelgProof) pf = cg_retry(pf_p, c.seed, f"ps/encelg/{j}", 4 * 2400, 0);
     CgMsg m = match pf {
         Some(p) => cg_to(c.self, j, PsM2(p)),
         None => cg_bc(c.self, SgB([]))
@@ -552,8 +579,10 @@ Ps2Acc ps2_mta(Ps1 s, Map(Int, P2Peer) peers, List(Int) others, Int i, Ps2Acc ac
     AffgPublic xpub = AffgPublic {.kv = kj, .dv = xm.d, .fp = xm.f, .xp = me.ecdsa, .prover = me.pail, .verifier = pj.pail, .aux = pj.ped};
     AffgSecret xsec = AffgSecret {.x = sc_to_zi(c.x), .y = xm.y, .s = xm.s, .r = xm.r};
     Transcript tr = cg_tr_for(c, c.self);
-    Option(AffpProof) dp = affp_prove(dpub, dsec, tr, cg_rng(c.seed, f"ps/affp/{j}", 4 * 4300));
-    Option(AffgProof) xp = affg_prove(xpub, xsec, tr, cg_rng(c.seed, f"ps/affg/{j}", 4 * 4300));
+    Option(AffpProof) closure(List(Int)) dp_p = lambda(r) { affp_prove(dpub, dsec, tr, r) };
+    Option(AffpProof) dp = cg_retry(dp_p, c.seed, f"ps/affp/{j}", 4 * 4300, 0);
+    Option(AffgProof) closure(List(Int)) xp_p = lambda(r) { affg_prove(xpub, xsec, tr, r) };
+    Option(AffgProof) xp = cg_retry(xp_p, c.seed, f"ps/affg/{j}", 4 * 4300, 0);
     return match dp {
         None => acc,
         Some(dpf) => match xp {
@@ -727,7 +756,8 @@ List(CgMsg) ps4_proofs(Ps3 s, CvPt big_gamma, List(Int) others, Int i, ListBuf(C
     Int j = others[i];
     CgPub me = cg_pub_of(c, c.self);
     LogstarPublic pub = LogstarPublic {.c = s1.g_ct, .x = big_gamma, .g = cv_g(), .prover = me.pail, .aux = cg_pub_of(c, j).ped};
-    Option(LogstarProof) pf = logstar_prove(pub, sc_to_zi(s1.gamma), s1.g_nonce, cg_tr_for(c, c.self), cg_rng(c.seed, f"ps/logstar/{j}", 4 * 1500));
+    Option(LogstarProof) closure(List(Int)) pf_p = lambda(r) { logstar_prove(pub, sc_to_zi(s1.gamma), s1.g_nonce, cg_tr_for(c, c.self), r) };
+    Option(LogstarProof) pf = cg_retry(pf_p, c.seed, f"ps/logstar/{j}", 4 * 1500, 0);
     return match pf {
         None => ps4_proofs(s, big_gamma, others, i + 1, acc),
         Some(p) => ps4_proofs(s, big_gamma, others, i + 1, acc.push(cg_to(c.self, j, PsM5(p))))
@@ -785,7 +815,8 @@ pub Result(Ps5, CgFail) ps_r5(Ps4 s, List(CgMsg) in) {
     CvPt big_delta = cv_mul(s1.kshare, gamma);
     CgPub me = cg_pub_of(c, c.self);
     ElogPublic pub = ElogPublic {.el = s1.zl, .em = s1.zm, .x = me.elgamal, .base = gamma, .y = big_delta};
-    Option(ElogProof) pf = elog_prove(pub, s1.kshare, s1.elg_nonce, cg_tr_for(c, c.self), cg_rng(c.seed, "ps/elog-k", 256));
+    Option(ElogProof) closure(List(Int)) pf_p = lambda(r) { elog_prove(pub, s1.kshare, s1.elg_nonce, cg_tr_for(c, c.self), r) };
+    Option(ElogProof) pf = cg_retry(pf_p, c.seed, "ps/elog-k", 256, 0);
     return match pf {
         None => Err(cg_fail("randomness exhausted", [])),
         Some(p) => Ok(Ps5 {.prev = s, .big_gammas = gs, .gamma = gamma, .big_delta = big_delta,
@@ -845,7 +876,8 @@ pub Result(Ps6, CgFail) ps_r6(Ps5 s, List(CgMsg) in) {
     CvPt sp = cv_mul(s3.chi_share, r);
     CgPub me = cg_pub_of(c, c.self);
     ElogPublic pub = ElogPublic {.el = s3.chi_l, .em = s3.chi_m, .x = me.elgamal, .base = r, .y = sp};
-    Option(ElogProof) pf = elog_prove(pub, s3.chi_share, s3.chi_nonce, cg_tr_for(c, c.self), cg_rng(c.seed, "ps/elog-chi", 256));
+    Option(ElogProof) closure(List(Int)) pf_p = lambda(r) { elog_prove(pub, s3.chi_share, s3.chi_nonce, cg_tr_for(c, c.self), r) };
+    Option(ElogProof) pf = cg_retry(pf_p, c.seed, "ps/elog-chi", 256, 0);
     return match pf {
         None => Err(cg_fail("randomness exhausted", [])),
         Some(p) => Ok(Ps6 {.prev = s, .big_deltas = bd, .delta = delta, .delta_inv = dinv, .r = r, .s_pt = sp,
@@ -1285,7 +1317,7 @@ Bool a2_ds_ok(Ps6 s, CgCtx c, Int j, PsA2R m, List(Int) js_others, Int i) {
     return a2_ds_ok(s, c, j, m, js_others, i + 1);
 }
 
-Result(Map(Int, PsA2R), CgFail) a2_all(Ps6 s, PsAb2 mine, List(CgMsg) in, List(Int) ids, Int i, Map(Int, PsA2R) acc) {
+pub Result(Map(Int, PsA2R), CgFail) a2_all(Ps6 s, PsAb2 mine, List(CgMsg) in, List(Int) ids, Int i, Map(Int, PsA2R) acc) {
     if (i >= ids.len()) { return Ok(acc); }
     CgCtx c = s.prev.prev.prev.prev.prev.ctx;
     if (ids[i] == c.self) { return a2_all(s, mine, in, ids, i + 1, acc.insert(ids[i], mine.mine)); }
@@ -1293,7 +1325,7 @@ Result(Map(Int, PsA2R), CgFail) a2_all(Ps6 s, PsAb2 mine, List(CgMsg) in, List(I
     return a2_all(s, mine, in, ids, i + 1, acc.insert(ids[i], m));
 }
 
-PsA2R a2_none() {
+pub PsA2R a2_none() {
     return PsA2R {.yhat = cv_inf(), .yproof = LogProof {.a = cv_inf(), .b = cv_inf(), .c = cv_inf(), .z1 = [], .z2 = []}, .k = CgOpen {.plain = zi_zero(), .hidden = [], .proof = NthProof {.a = [], .z = []}}, .chi = []};
 }
 
@@ -1303,7 +1335,7 @@ BnInt a2_plain(PsA2R m, Int pos) { return if (pos < 0 || pos >= m.chi.len()) { z
 /// l != j of alpha_jl - alpha_lj.
 pub type A2Sums = { BnInt k; BnInt a; };
 
-A2Sums a2_sums(CgCtx c, Map(Int, PsA2R) ms, Int j, Int i, A2Sums acc) {
+pub A2Sums a2_sums(CgCtx c, Map(Int, PsA2R) ms, Int j, Int i, A2Sums acc) {
     if (i >= c.ids.len()) { return acc; }
     Int l = c.ids[i];
     PsA2R ml = ms[l] else { a2_none() };

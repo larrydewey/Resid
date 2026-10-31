@@ -24,6 +24,11 @@ lib/dev/device_write.resid device_engine_configfs_report_w device I/O: the writi
 lib/dev/device_write.resid device_engine_sequence_w device I/O: the writing engine; as device_engine_sequence
 lib/dev/sev_guest_key.resid snp_get_derived_key device I/O: the SNP_GET_DERIVED_KEY ioctl; its response's secret handling is sg_key_body, which dev-sg-key-body runs
 lib/dev/tpm.resid tpm_nv_read_secret device I/O: NV_Read on /dev/tpmrm0; its logic is tpm_nv_read_secret_via, which dev-tpm-nv-read-secret runs
+lib/dev/tpm.resid tpm_auth_bytes device I/O: the authValue goes to the TPM in the command (TPM 2.0 password sessions carry it in the clear on the local bus); it declassifies and computes nothing
+lib/dev/tpm.resid tpm_create device I/O: Create on /dev/tpmrm0 with the authValue from tpm_auth_bytes; the command and response codecs are public
+lib/dev/tpm.resid tpm_sign_policy device I/O: PolicyAuthValue and Sign on /dev/tpmrm0; the authValue goes through tpm_auth_bytes, the signature is public
+lib/dev/tpm.resid tpm_certify device I/O: Certify on /dev/tpmrm0; the authValue goes through tpm_auth_bytes, the attestation is public
+lib/dev/tpm.resid tpm_hmac device I/O: HMAC on /dev/tpmrm0; its secret output is parsed by tpm2_hmac_resp_secret, which dev-tpm-hmac-resp-secret runs
 lib/tls.resid channel_exporter_ok a length test: the exporter's length is public
 lib/tlswire.resid tlsserver_exporter a constructor over a live connection's keys; their derivation (tls_keys_exporter) runs in tls-server-secret
 lib/tlsclient.resid tlsclient_exporter a constructor over a live connection's keys; their derivation (tls_keys_exporter) runs in tls-server-secret

@@ -1,0 +1,16 @@
+storage key persistent
+signing key created: public area 118 bytes
+signing key persistent
+sign with the PIN: 64 bytes, verifies true
+lockout counter 0
+sign with a wrong PIN: refused
+lockout counter 1
+HMAC key persistent
+HMAC with the PIN: 32 secret bytes
+HMAC repeatable true, depends on the data true
+HMAC with a wrong PIN: refused
+lockout counter 2
+certify: verified, point is the key's true, policy is PolicyAuthValue's true, attributes 0x40032
+certify with a wrong PIN: refused
+signing key evicted
+sign after eviction: refused

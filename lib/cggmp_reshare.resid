@@ -270,8 +270,10 @@ pub type RshAnn = { Int id; PaillierPub pail; Pedersen ped; ModProof modp; PrmPr
 /// Returns None when either proof fails to generate.
 pub Option(RshAnn) rsh_announce(Int id, PaillierSec sec, Pedersen ped, List(UInt(64)) ped_lam, Transcript tr, List(Int) rnd) {
     PaillierPub pail = paillier_pub(bn_mul(sec.p, sec.q));
-    ModProof md = mod_prove(sec.p, sec.q, tr, cg_rng(rnd, "rsh/mod", 256 * 96))?;
-    PrmProof pr = prm_prove(ped_lam, sec.phi, ped, tr, cg_rng(rnd, "rsh/prm", 256 * 400))?;
+    Option(ModProof) closure(List(Int)) md_p = lambda(r) { mod_prove(sec.p, sec.q, tr, r) };
+    ModProof md = cg_retry(md_p, rnd, "rsh/mod", 256 * 96, 0)?;
+    Option(PrmProof) closure(List(Int)) pr_p = lambda(r) { prm_prove(ped_lam, sec.phi, ped, tr, r) };
+    PrmProof pr = cg_retry(pr_p, rnd, "rsh/prm", 256 * 400, 0)?;
     return Some(RshAnn {.id = id, .pail = pail, .ped = ped, .modp = md, .prm = pr});
 }
 

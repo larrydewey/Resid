@@ -45,3 +45,132 @@ Result(Parsed(Pedersen, F), SerialError) derive_pedersen_done(F s, Option(List(U
     return parsed(Pedersen {.n = d_n, .s = d_s, .t = d_t}, s);
 }
 Decode(Pedersen, F) = derive_pedersen_decode;
+
+// ── PrmProof (line 65)
+/// The serialized field names of `PrmProof`, in declaration order.
+pub List(Str) derive_prm_proof_names() { return ["as", "zs"]; }
+/// Encodes a `PrmProof` through the encoder `s`.
+@needs(Encoder(F))
+pub Result(F, SerialError) derive_prm_proof_encode(PrmProof v, F s) {
+    Int n = 2;
+    F s0 = write_struct_begin(s, "PrmProof", n)?;
+    F s1 = write_named(s0, "as", v.as)?;
+    F s2 = write_named(s1, "zs", v.zs)?;
+    return write_struct_end(s2);
+}
+Encode(PrmProof, F) = derive_prm_proof_encode;
+/// Decodes a `PrmProof` from the decoder `s`, with the input left over.
+@needs(Decoder(F))
+pub Result(Parsed(PrmProof, F), SerialError) derive_prm_proof_decode(F s) {
+    F s0 = read_struct_begin(s, "PrmProof", derive_prm_proof_names())?;
+    return derive_prm_proof_fields(s0, None, None);
+}
+@needs(Decoder(F))
+Result(Parsed(PrmProof, F), SerialError) derive_prm_proof_fields(F s, Option(List(List(UInt(64)))) f_as, Option(List(List(UInt(64)))) f_zs) {
+    Parsed(FieldKey, F) k = read_field(s, derive_prm_proof_names())?;
+    FieldKey key = k.value;
+    return match key {
+        KnownField(i) => derive_prm_proof_field(k.rest, i, f_as, f_zs),
+        UnknownField(name) => derive_prm_proof_fields(skip_unknown(k.rest, name, derive_prm_proof_names(), false)?, f_as, f_zs),
+        EndOfFields => derive_prm_proof_done(k.rest, f_as, f_zs)
+    };
+}
+@needs(Decoder(F))
+Result(Parsed(PrmProof, F), SerialError) derive_prm_proof_field(F s, Int i, Option(List(List(UInt(64)))) f_as, Option(List(List(UInt(64)))) f_zs) {
+    if (i == 0) { Parsed(Option(List(List(UInt(64)))), F) p = read_slot(s, f_as, "as")?; return derive_prm_proof_fields(p.rest, p.value, f_zs); }
+    Parsed(Option(List(List(UInt(64)))), F) p = read_slot(s, f_zs, "zs")?; return derive_prm_proof_fields(p.rest, f_as, p.value);
+}
+Result(Parsed(PrmProof, F), SerialError) derive_prm_proof_done(F s, Option(List(List(UInt(64)))) f_as, Option(List(List(UInt(64)))) f_zs) {
+    List(List(UInt(64))) d_as = require(f_as, "as")?;
+    List(List(UInt(64))) d_zs = require(f_zs, "zs")?;
+    return parsed(PrmProof {.as = d_as, .zs = d_zs}, s);
+}
+Decode(PrmProof, F) = derive_prm_proof_decode;
+
+// ── ModResponse (line 148)
+/// The serialized field names of `ModResponse`, in declaration order.
+pub List(Str) derive_mod_response_names() { return ["a", "b", "x", "z"]; }
+/// Encodes a `ModResponse` through the encoder `s`.
+@needs(Encoder(F))
+pub Result(F, SerialError) derive_mod_response_encode(ModResponse v, F s) {
+    Int n = 4;
+    F s0 = write_struct_begin(s, "ModResponse", n)?;
+    F s1 = write_named(s0, "a", v.a)?;
+    F s2 = write_named(s1, "b", v.b)?;
+    F s3 = write_named(s2, "x", v.x)?;
+    F s4 = write_named(s3, "z", v.z)?;
+    return write_struct_end(s4);
+}
+Encode(ModResponse, F) = derive_mod_response_encode;
+/// Decodes a `ModResponse` from the decoder `s`, with the input left over.
+@needs(Decoder(F))
+pub Result(Parsed(ModResponse, F), SerialError) derive_mod_response_decode(F s) {
+    F s0 = read_struct_begin(s, "ModResponse", derive_mod_response_names())?;
+    return derive_mod_response_fields(s0, None, None, None, None);
+}
+@needs(Decoder(F))
+Result(Parsed(ModResponse, F), SerialError) derive_mod_response_fields(F s, Option(Bool) f_a, Option(Bool) f_b, Option(List(UInt(64))) f_x, Option(List(UInt(64))) f_z) {
+    Parsed(FieldKey, F) k = read_field(s, derive_mod_response_names())?;
+    FieldKey key = k.value;
+    return match key {
+        KnownField(i) => derive_mod_response_field(k.rest, i, f_a, f_b, f_x, f_z),
+        UnknownField(name) => derive_mod_response_fields(skip_unknown(k.rest, name, derive_mod_response_names(), false)?, f_a, f_b, f_x, f_z),
+        EndOfFields => derive_mod_response_done(k.rest, f_a, f_b, f_x, f_z)
+    };
+}
+@needs(Decoder(F))
+Result(Parsed(ModResponse, F), SerialError) derive_mod_response_field(F s, Int i, Option(Bool) f_a, Option(Bool) f_b, Option(List(UInt(64))) f_x, Option(List(UInt(64))) f_z) {
+    if (i == 0) { Parsed(Option(Bool), F) p = read_slot(s, f_a, "a")?; return derive_mod_response_fields(p.rest, p.value, f_b, f_x, f_z); }
+    if (i == 1) { Parsed(Option(Bool), F) p = read_slot(s, f_b, "b")?; return derive_mod_response_fields(p.rest, f_a, p.value, f_x, f_z); }
+    if (i == 2) { Parsed(Option(List(UInt(64))), F) p = read_slot(s, f_x, "x")?; return derive_mod_response_fields(p.rest, f_a, f_b, p.value, f_z); }
+    Parsed(Option(List(UInt(64))), F) p = read_slot(s, f_z, "z")?; return derive_mod_response_fields(p.rest, f_a, f_b, f_x, p.value);
+}
+Result(Parsed(ModResponse, F), SerialError) derive_mod_response_done(F s, Option(Bool) f_a, Option(Bool) f_b, Option(List(UInt(64))) f_x, Option(List(UInt(64))) f_z) {
+    Bool d_a = require(f_a, "a")?;
+    Bool d_b = require(f_b, "b")?;
+    List(UInt(64)) d_x = require(f_x, "x")?;
+    List(UInt(64)) d_z = require(f_z, "z")?;
+    return parsed(ModResponse {.a = d_a, .b = d_b, .x = d_x, .z = d_z}, s);
+}
+Decode(ModResponse, F) = derive_mod_response_decode;
+
+// ── ModProof (line 152)
+/// The serialized field names of `ModProof`, in declaration order.
+pub List(Str) derive_mod_proof_names() { return ["w", "responses"]; }
+/// Encodes a `ModProof` through the encoder `s`.
+@needs(Encoder(F))
+pub Result(F, SerialError) derive_mod_proof_encode(ModProof v, F s) {
+    Int n = 2;
+    F s0 = write_struct_begin(s, "ModProof", n)?;
+    F s1 = write_named(s0, "w", v.w)?;
+    F s2 = write_named(s1, "responses", v.responses)?;
+    return write_struct_end(s2);
+}
+Encode(ModProof, F) = derive_mod_proof_encode;
+/// Decodes a `ModProof` from the decoder `s`, with the input left over.
+@needs(Decoder(F))
+pub Result(Parsed(ModProof, F), SerialError) derive_mod_proof_decode(F s) {
+    F s0 = read_struct_begin(s, "ModProof", derive_mod_proof_names())?;
+    return derive_mod_proof_fields(s0, None, None);
+}
+@needs(Decoder(F))
+Result(Parsed(ModProof, F), SerialError) derive_mod_proof_fields(F s, Option(List(UInt(64))) f_w, Option(List(ModResponse)) f_responses) {
+    Parsed(FieldKey, F) k = read_field(s, derive_mod_proof_names())?;
+    FieldKey key = k.value;
+    return match key {
+        KnownField(i) => derive_mod_proof_field(k.rest, i, f_w, f_responses),
+        UnknownField(name) => derive_mod_proof_fields(skip_unknown(k.rest, name, derive_mod_proof_names(), false)?, f_w, f_responses),
+        EndOfFields => derive_mod_proof_done(k.rest, f_w, f_responses)
+    };
+}
+@needs(Decoder(F))
+Result(Parsed(ModProof, F), SerialError) derive_mod_proof_field(F s, Int i, Option(List(UInt(64))) f_w, Option(List(ModResponse)) f_responses) {
+    if (i == 0) { Parsed(Option(List(UInt(64))), F) p = read_slot(s, f_w, "w")?; return derive_mod_proof_fields(p.rest, p.value, f_responses); }
+    Parsed(Option(List(ModResponse)), F) p = read_slot(s, f_responses, "responses")?; return derive_mod_proof_fields(p.rest, f_w, p.value);
+}
+Result(Parsed(ModProof, F), SerialError) derive_mod_proof_done(F s, Option(List(UInt(64))) f_w, Option(List(ModResponse)) f_responses) {
+    List(UInt(64)) d_w = require(f_w, "w")?;
+    List(ModResponse) d_responses = require(f_responses, "responses")?;
+    return parsed(ModProof {.w = d_w, .responses = d_responses}, s);
+}
+Decode(ModProof, F) = derive_mod_proof_decode;

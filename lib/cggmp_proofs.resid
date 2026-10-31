@@ -27,6 +27,7 @@ Option(List(BnInt)) zp_drop(ListBuf(BnInt) acc) {
 // are each below 2^(l+epsilon) sqrt(N) (so neither is small).
 
 /// A no-small-factors proof: commitments P, Q, A, B, T, sigma and responses z1, z2, w1, w2, v.
+//@ serial
 pub type FacProof = {
     List(UInt(64)) p; List(UInt(64)) q; List(UInt(64)) a; List(UInt(64)) b; List(UInt(64)) t;
     BnInt sigma; BnInt z1; BnInt z2; BnInt w1; BnInt w2; BnInt v;
@@ -91,6 +92,7 @@ FacProof fac_prove_with(List(UInt(64)) p, List(UInt(64)) q, Pedersen aux, Transc
 // K = Enc_N(k; rho) with k in +-2^l: the prover knows such k and rho.
 
 /// An enc proof: commitments S, A (a ciphertext), C and responses z1, z2, z3.
+//@ serial
 pub type EncProof = {
     List(UInt(64)) s; List(UInt(64)) a; List(UInt(64)) c;   // commitments S, A (a ciphertext), C
     BnInt z1; List(UInt(64)) z2; BnInt z3;
@@ -211,6 +213,7 @@ pub type AffgPublic = {
 };
 
 /// An aff-g proof: commitments A, Bx, By, E, S, F, T and responses z1-z4, w, wy.
+//@ serial
 pub type AffgProof = {
     List(UInt(64)) a; CvPt bx; List(UInt(64)) by;
     List(UInt(64)) e; List(UInt(64)) s; List(UInt(64)) f; List(UInt(64)) t;
@@ -296,6 +299,7 @@ pub type AffpPublic = {
 };
 
 /// An aff-p proof: commitments A, Bx, By, E, S, F, T and responses z1-z4, w, wx, wy.
+//@ serial
 pub type AffpProof = {
     List(UInt(64)) a; List(UInt(64)) bx; List(UInt(64)) by;
     List(UInt(64)) e; List(UInt(64)) s; List(UInt(64)) f; List(UInt(64)) t;
@@ -371,6 +375,7 @@ AffpProof affp_with(AffpPublic p, AffpSecret sec, Transcript tr, List(BnInt) d, 
 pub type LogstarPublic = { List(UInt(64)) c; CvPt x; CvPt g; PaillierPub prover; Pedersen aux; };
 
 /// A log* proof: commitments S, A, Y, D and responses z1, z2, z3.
+//@ serial
 pub type LogstarProof = {
     List(UInt(64)) s; List(UInt(64)) a; CvPt y; List(UInt(64)) d;
     BnInt z1; List(UInt(64)) z2; BnInt z3;
@@ -427,6 +432,7 @@ LogstarProof logstar_with(LogstarPublic p, BnInt x, List(UInt(64)) rho, Transcri
 pub type EncelgPublic = { List(UInt(64)) c; CvPt a; CvPt b; CvPt x; PaillierPub prover; Pedersen aux; };
 
 /// An enc-elg proof: commitments S, D, Y, Z, T and responses z1, w, z2, z3.
+//@ serial
 pub type EncelgProof = {
     List(UInt(64)) s; List(UInt(64)) d; CvPt y; CvPt z; List(UInt(64)) t;
     BnInt z1; List(UInt(64)) w; List(UInt(64)) z2; BnInt z3;
@@ -496,6 +502,7 @@ EncelgProof encelg_with(EncelgPublic p, BnInt x, List(UInt(64)) rho, List(UInt(6
 pub type ElogPublic = { CvPt el; CvPt em; CvPt x; CvPt base; CvPt y; };
 
 /// An elog proof: commitment points A, N, B and scalar responses z, u.
+//@ serial
 pub type ElogProof = { CvPt a; CvPt n; CvPt b; List(UInt(64)) z; List(UInt(64)) u; };
 
 List(UInt(64)) elog_challenge(Transcript tr, ElogPublic p, CvPt a, CvPt n, CvPt b) {
@@ -537,6 +544,7 @@ ElogProof elog_with(ElogPublic p, List(UInt(64)) y, List(UInt(64)) lam, Transcri
 pub type LogPublic = { CvPt h; CvPt x; CvPt y; };
 
 /// An equal-discrete-log proof: commitments A, B, C and scalar responses z1, z2.
+//@ serial
 pub type LogProof = { CvPt a; CvPt b; CvPt c; List(UInt(64)) z1; List(UInt(64)) z2; };
 
 List(UInt(64)) log_challenge(Transcript tr, LogPublic p, CvPt a, CvPt b, CvPt c) {
@@ -577,6 +585,7 @@ LogProof log_with(LogPublic p, List(UInt(64)) a, List(UInt(64)) b, Transcript tr
 // For X = x G' (G' a base point): commitment C = a G', response z = e x + a.
 
 /// A Schnorr proof: the commitment point `c` and the scalar response `z`.
+//@ serial
 pub type SchProof = { CvPt c; List(UInt(64)) z; };
 
 List(UInt(64)) sch_challenge(Transcript tr, CvPt c, CvPt x, CvPt g) {
@@ -614,6 +623,7 @@ pub Option(SchProof) sch_prove(CvPt x_pub, CvPt g, List(UInt(64)) x, Transcript 
 // show that the revealed plaintext is the right one (R = c (1 + N)^-m).
 
 /// An N-th root proof: the commitment `a` = Enc(0; alpha) and the response `z`.
+//@ serial
 pub type NthProof = { List(UInt(64)) a; List(UInt(64)) z; };
 
 BnInt nth_challenge(Transcript tr, PaillierPub pk, List(UInt(64)) r, List(UInt(64)) a) {
