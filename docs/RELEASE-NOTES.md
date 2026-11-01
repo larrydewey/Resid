@@ -1,3 +1,149 @@
+# Resid v0.5.1
+
+From v0.5.0. A security release: two red-team passes over every claim in
+`SECURITY.md`, each finding fixed with a test, plus two runtime and
+library fixes.
+
+## Security
+
+High:
+- **TLS chain**: name constraints, pathLenConstraint, unknown critical
+  extensions and the leaf's serverAuth EKU are enforced; a wildcard
+  matches only `*.`.
+- **Native artifacts**: references to another module's `native.<m>.*`
+  symbols, text after a body's closing brace, and prologue/prefix data are
+  refused.
+- **Ed25519**: small-order public keys and R are refused (a fixed forgery
+  verified for every message).
+- **CoRIM**: a register-map reference must name every evidence register,
+  so a PCR0-only reference no longer covers a whole TPM/Nitro quote.
+- **Capabilities**: an f-string's user `Show` impl is charged to the
+  caller; a manifest dependency declared unbounded first no longer drops a
+  later ceiling.
+- **Package index freshness**: the signed index carries `@serial` and
+  `@expires` (30 days). `resid-manifest` refuses an index without them, an
+  expired one, or one whose serial is below the highest seen for that key
+  and registry. `resid-pkg index refresh` re-signs with a new expiry.
+- **Package cache**: a dependency is re-extracted from the verified
+  archive on every resolve, and a cache file the archive does not hold is
+  refused.
+- **Runtime internals (E0220)**: a path escaping through `../` into
+  another tree's `compiler/` or `runtime/rt/` no longer counts as
+  internal, and `--runtime-internals` refuses an entry with `../`.
+- **Known secrets (E0250)**: found without the reducer (`--no-reduce`,
+  `--reduce-budget 0`) and through wrapper functions; `@fixed_secrets`
+  opts a test out, accepted only under `tests/` or in a `*_test.resid`
+  file.
+
+Medium:
+- **HTTP**: bare LF in chunk-size and trailer lines, Transfer-Encoding on
+  HTTP/1.0 are refused.
+- **Provenance verify**: write effects under a read-only grant are caught.
+- **Packages**: a sealed archive names dependencies only by version; an
+  upload cannot replace an archive whose hash file is missing.
+- **Sandbox and spawn lists** get `@requires`' spelling checks (E0213).
+- **Crypto**: Ed25519 seed length, HPKE IKM length, no SHA-1 message hash
+  in ECDSA/PSS, RSA exponent at most 32 bits, `ecdsa_low_s` on s >= n.
+  HPKE `hpke_at_seq` refuses a sequence below the context's and seal/open
+  stop at the maximum sequence; AES-GCM refuses plaintext past 2^36 - 32
+  bytes.
+- **Codegen**: -0.0 folds to -0.0; a user function named like a libc/libm
+  function gets `no-builtin-<name>`; `List.contains` on a `UInt(64)` list
+  under `--no-reduce` is fixed.
+
+## Fixes
+
+- **Runtime**: `realloc` copies when `mremap` refuses to grow a big block
+  (it returned 0 and the caller aborted); a secret-mode `mlock2` refusal is
+  counted (`resid_secret_unlocked`) and locking is documented as best
+  effort; the LSP's output capture falls back when `memfd_create` fails.
+- **bignum**: the Miller-Rabin witness test calls `bn_modexp` directly
+  instead of building a Montgomery context per candidate (about 80 MB kept
+  alive per 1024-bit prime).
+
+## Bootstrap
+
+`build/boot/seed.ll`, `stage2.bin` and `rt.ll` are reseeded; `./boot.sh`
+reaches its fixed point. Suites: conformance 642, graph 1038, crypto
+13822, tls 158, pkg 123, attest 95, provenance 76, reduce 29, runtime 26,
+lsp 20, http 3.
+
+# Resid v0.5.0
+
+From v0.4.0. Static ownership is on by default, AWFY runs faster across
+the board, the GUI runtime landed, and a red-team pass hardened the
+runtime, the standard library and the ownership analysis.
+
+## Highlights
+
+- **Static ownership inference** (`PLAN-ownership-ir.md`, `compiler/own.resid`).
+  The graph IR infers which records, lists and maps a function owns and
+  rebuilds them in place: owned instances routed per call site, hoisted
+  field reads, lists of lists and one-element appends updated in place.
+  There is no user-visible ownership syntax. It is on by default;
+  `--no-ownership` turns it off. A differential fuzzer (`tests/own/`)
+  checks it against a copy-everything reference, and the soundness bugs
+  it found are fixed (write attribution through callees, a record held
+  twice, liveness in an `if` with no `else`, fixed-capacity fields).
+- **AWFY performance** (`PLAN-awfy-lead.md`, `PLAN-awfy-close.md`): typed
+  flat storage (raw scalar list slots, plain records inline in lists, raw
+  payloads in declared sums), loop versioning with range facts, element
+  counts for inline-record lists, local-exec TLS, small-function inlining
+  and in-place list-record writes. Against f57dca3c the last batch alone
+  took Json -31%, Towers -26% and Richards -20% instructions.
+- **GUI runtime**: display builtins for `../resid-gui` (Wayland and X11)
+  under the `display` family: Unix sockets, descriptor passing, shared
+  memory through a handle table, X11 cookies, a spawn stack for large
+  values.
+- **Cryptography**: secret Paillier to 2048-bit N, CGGMP re-share, tweak,
+  blind tweak and delivery, TPM application keys.
+
+## Security hardening
+
+A red-team pass over the GUI path and everything it reaches:
+
+- **Display transport** (`runtime/rt/unix.resid`): shared-memory handles
+  are generation-tagged table indices, never addresses, so forged, stale
+  and wild handles are refused; every bound check is overflow-free; the
+  display verbs accept only Unix sockets and send only a live mapping's
+  descriptor; the X11 cookie file must be a regular file of at most 1 MB.
+- **Network** (`runtime/rt/net.resid`): the TCP verbs accept only
+  AF_INET/AF_INET6 sockets; descriptors past the deadline table are
+  handled instead of indexed.
+- **Runtime arithmetic and sizes**: `checked_*` abort on overflow,
+  `saturating_mul` handles -1 and the minimum, list sums are checked,
+  list/map growth, `str_repeat`, region and allocator sizes are capped,
+  and invalid code points encode as U+FFFD.
+- **Concurrency**: stdin, raw-mode and handle locks no longer spin
+  across blocking reads.
+- **Constant time**: the NIST P-curve exponentiations take the public
+  exponent as 32-bit words, since clang turned a wide-shift bit test into
+  a branch over reused secret stack bytes (`tests/ct` caught it).
+- **HTTP server** (`lib/httpserv.resid`): control characters and bare
+  CR/LF in the request line and headers are 400, chunk count and trailers
+  are capped, percent-decoding is strict, and an oversized
+  Content-Length is 413.
+- **readline** strips control sequences from prompts and candidates;
+  **zone** offsets are clamped.
+- **Ownership**: values held inside constructors and holder types keep
+  their aliases (a miscompile that let an in-place update reach a second
+  holder); sums that reach no record, list or map are exempt, which keeps
+  AWFY Towers at its earlier cost.
+
+`SECURITY.md` records each of these.
+
+## Docs
+
+Every standard-library declaration the doc checker found bare is
+documented; `//@ serial` markers sit above their `///` blocks.
+
+## Bootstrap
+
+`build/boot/seed.ll`, `stage2.bin`, `rt.ll` and `rt-aarch64.ll` are
+reseeded; `./boot.sh` reaches its fixed point. Suites: conformance 627,
+graph 1023, crypto 13843, ct 80, tls 145, pkg 109, attest 95,
+provenance 76, own 25 and the rest green.
+
 # Resid v0.4.0
 
 From v0.3.0. The standard library is documented in the source, and its API
