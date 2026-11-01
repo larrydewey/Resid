@@ -507,9 +507,14 @@ pub List(B) aes_gcmg_seal_with(Bool hw, Bool clmul, List(B) key, List(Int) iv, L
     return ag_seal_g(ag_gcm(aesg_keys_with(rk, hw), clmul, iv), plaintext, aad);
 }
 
-// Seal under prepared GCM state (key schedule, H and J0).
+// SP 800-38D's plaintext limit, 2^36 - 32 bytes: past it the 32-bit counter wraps.
+Int ag_max_len() { return 68719476704; }
+
+// Seal under prepared GCM state (key schedule, H and J0); empty past ag_max_len.
 @needs(Word(W, B), Block128(X, W, B))
 List(B) ag_seal_g(GcmG(X, W) g, List(B) plaintext, List(Int) aad) {
+    List(B) none = [];
+    if (plaintext.len() > ag_max_len()) { return none; }
     ListBuf(B) ob = ListBuf();
     List(B) ct = aesg_ctr(g.k, g.j0head, w_addk(g.j0c, 1), plaintext, 0, ob).finish();
     X z = x_lift((UInt(128)) 0);
@@ -541,6 +546,7 @@ pub Option(List(B)) aes_gcmg_decrypt_with(Bool hw, Bool clmul, List(B) key, List
 // Open under prepared GCM state; clen is the ciphertext length (>= 0).
 @needs(Word(W, B), Block128(X, W, B), CtSame(B))
 Option(List(B)) ag_open_g(GcmG(X, W) g, List(Int) ct_and_tag, Int clen, List(Int) aad) {
+    if (clen > ag_max_len()) { return None; }
     X z = x_lift((UInt(128)) 0);
     X y = aesg_ghash_pub(g.clmul, g.h, aesg_ghash_pub(g.clmul, g.h, z, aad, 0, aad.len()), ct_and_tag, 0, clen);
     ListBuf(B) tb = ListBuf();

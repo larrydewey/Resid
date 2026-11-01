@@ -4366,9 +4366,23 @@ Bool gk_fmt_internal(Str n) {
 
 // The files that may use internals: the compiler's own sources and the
 // runtime (runtime/rt/), never the standard library or a program.
-Bool gk_internal_file(Str p) {
+// Under the entry's own tree (gk_internal_root), never through "..".
+Bool gk_internal_file(Str p, Str root) {
     if (str_starts_with(p, "lib/") || str_contains(p, "/lib/")) { return false; }
-    return str_contains(p, "runtime/rt/") || str_starts_with(p, "compiler/") || str_contains(p, "/compiler/");
+    if (str_starts_with(p, "../") || str_contains(p, "/../")) { return false; }
+    return str_starts_with(p, root + "runtime/rt/") || str_starts_with(p, root + "compiler/");
+}
+
+// The prefix of the entry file (the source map's first entry; merged line 1
+// may already be an import's) before its
+// compiler/driver.resid or first runtime/rt/; "\x01" (matches nothing) otherwise.
+Str gk_internal_root(Str smap) {
+    Str l0 = str_split(smap, "\n")[0];
+    List(Str) f = str_split(l0, " ");
+    Str e = if (f.len() < 3) { "" } else { str_slice(l0, str_len(f[0]) + str_len(f[1]) + 2, str_len(l0)) };
+    if (str_ends_with(e, "compiler/driver.resid")) { return str_slice(e, 0, str_len(e) - 21); }
+    Int at = str_find(e, "runtime/rt/");
+    return if (at >= 0) { str_slice(e, 0, at) } else { "\x01" };
 }
 
 // The source file node `id` came from (the import source map); nls: the
@@ -4402,7 +4416,7 @@ Str gk_internal_use(GK k, Int id) {
 Bool gk_internals_at(GK k, Int id, List(Int) nls, Str smap, Int prel, Bool acc) {
     if (id >= k.g.ns.len()) { return acc; }
     Str u = gk_internal_use(k, id);
-    Bool ok = u == "" || (resid_internals() && gk_internal_file(gk_src_path(k, id, nls, smap)));
+    Bool ok = u == "" || (resid_internals() && gk_internal_file(gk_src_path(k, id, nls, smap), gk_internal_root(smap)));
     Bool bad = if (ok) { false } else {
         eprintln("error[E0220]: " + u + " is a runtime internal of the compiler, not part of the language (spec §5); only the compiler's own sources and runtime/rt/, built with --runtime-internals, may use it (never the standard library)")
     };
@@ -4422,7 +4436,7 @@ Bool gk_internals_at(GK k, Int id, List(Int) nls, Str smap, Int prel, Bool acc) 
 Bool gk_reserved_name(GK k, Int id, List(Int) nls, Str smap, Int prel) {
     KN n = k.g.ns[id];
     if (n.kind != "fn" || !str_starts_with(n.text, "resid_") || n.sp >= prel) { return false; }
-    if (resid_internals() && gk_internal_file(gk_src_path(k, id, nls, smap))) { return false; }
+    if (resid_internals() && gk_internal_file(gk_src_path(k, id, nls, smap), gk_internal_root(smap))) { return false; }
     return eprintln("error[E0265]: `" + n.text + "`: function names starting with `resid_` are reserved for the runtime (spec §5); rename it");
 }
 
@@ -5530,42 +5544,116 @@ pub Bool sec_known_check(KP p, Str src, Str smap) {
     Map(Str, Int) fns = sec_fn_nodes(p.g, 0, {});
     Map(Str, Int) pure = sec_pure_fix(p.g, fns, fns.keys(), fns);
     Int bad = sec_known_at(p.g, 0, ok, pure, fns);
-    if (bad < 0) { return false; }
-    gk_diag("E0250", "secret(...) of a value the compiler knows: the value is in the binary for everyone who has it. Read the secret at run time, or pass it straight to declassify(...) to state that it is public", p.g, bad, src, smap);
+    if (bad >= 0) {
+        gk_diag("E0250", "secret(...) of a value the compiler knows: the value is in the binary for everyone who has it. Read the secret at run time, or pass it straight to declassify(...) to state that it is public", p.g, bad, src, smap);
+        return true;
+    }
+    Map(Str, Int) w = sec_wrap_fix(p.g, fns, fns.keys(), ok, pure, {});
+    if (w.len() == 0) { return false; }
+    Int use = sec_wrap_use(p.g, 0, ok, pure, fns, w, gk_newlines(src, 0, ListBuf()), smap);
+    if (use == 0 - 1) { return false; }
+    if (use < 0) {
+        gk_diag("E0250", "@fixed_secrets is for fixed test keys: it is accepted only in a file under tests/ or named *_test.resid", p.g, 0 - 2 - use, src, smap);
+        return true;
+    }
+    gk_diag("E0250", "`" + p.g.ns[use].text + "(...)` passes known arguments to secret(...): the value is in the binary for everyone who has it. Read the secret at run time, wrap the call in declassify(...) to state that it is public, or, for a fixed test key, mark the test function @fixed_secrets", p.g, use, src, smap);
     return true;
 }
 
-// secret(...) calls written directly inside declassify(...).
+// secret(...) calls, and calls that may make one, written directly inside
+// declassify(...).
 Map(Int, Int) sec_declassified(Kg g, Int i, Map(Str, Int) user, Map(Int, Int) acc) {
     if (i >= g.ns.len()) { return acc; }
     KN n = g.ns[i];
     Bool d = n.kind == "call" && n.text == "declassify" && !user.contains("declassify") && n.nk >= 1;
     Int c = if (d) { kg_kid(g, i, 0) } else { 0 - 1 };
-    Bool inner = c >= 0 && g.ns[c].kind == "call" && g.ns[c].text == "secret";
+    Bool inner = c >= 0 && g.ns[c].kind == "call";
     return sec_declassified(g, i + 1, user, if (inner) { acc.insert(c, 1) } else { acc });
 }
 
 Int sec_known_at(Kg g, Int i, Map(Int, Int) ok, Map(Str, Int) pure, Map(Str, Int) fns) {
     if (i >= g.ns.len()) { return 0 - 1; }
     KN n = g.ns[i];
-    Bool hit = n.kind == "call" && n.text == "secret" && n.nk == 1 && !ok.contains(i) && sec_known_tree(g, kg_kid(g, i, 0), 0, pure, fns);
+    Bool hit = n.kind == "call" && n.text == "secret" && n.nk == 1 && !ok.contains(i) && sec_known_tree(g, kg_kid(g, i, 0), 0, {}, pure, fns);
     return if (hit) { i } else { sec_known_at(g, i + 1, ok, pure, fns) };
 }
 
 // Built only from literals and calls that read nothing at run time: a
 // user function in `pure`, or a builtin outside the runtime's own.
-Bool sec_known_tree(Kg g, Int id, Int depth, Map(Str, Int) pure, Map(Str, Int) fns) {
+// A reference to one of `ps` (the enclosing function's parameters, when
+// asking whether it passes them on) counts as known too.
+Bool sec_known_tree(Kg g, Int id, Int depth, Map(Str, Int) ps, Map(Str, Int) pure, Map(Str, Int) fns) {
     if (depth > 64) { return false; }
     Str k = g.ns[id].kind;
+    if (k == "ref" && ps.contains(g.ns[id].text)) { return true; }
     Bool shape = k == "lit" || k == "list" || k == "struct" || k == "finit" || k == "paren" || k == "un" || k == "bin" || k == "cast" || k == "ty" || k == "map" || k == "entry" || k == "set" || k == "named" || k == "emptyb";
     Bool call = k == "call" && sec_pure_call(g.ns[id].text, pure, fns);
     if (!shape && !call) { return false; }
-    return sec_known_kids(g, id, 0, depth, pure, fns);
+    return sec_known_kids(g, id, 0, depth, ps, pure, fns);
 }
 
-Bool sec_known_kids(Kg g, Int id, Int i, Int depth, Map(Str, Int) pure, Map(Str, Int) fns) {
+Bool sec_known_kids(Kg g, Int id, Int i, Int depth, Map(Str, Int) ps, Map(Str, Int) pure, Map(Str, Int) fns) {
     if (i >= g.ns[id].nk) { return true; }
-    return sec_known_tree(g, kg_kid(g, id, i), depth + 1, pure, fns) && sec_known_kids(g, id, i + 1, depth, pure, fns);
+    return sec_known_tree(g, kg_kid(g, id, i), depth + 1, ps, pure, fns) && sec_known_kids(g, id, i + 1, depth, ps, pure, fns);
+}
+
+// The parameter names of function node f.
+Map(Str, Int) sec_params(Kg g, Int f, Int i, Map(Str, Int) acc) {
+    if (i >= g.ns[f].nk) { return acc; }
+    Int c = kg_kid(g, f, i);
+    return sec_params(g, f, i + 1, if (g.ns[c].kind == "param") { acc.insert(g.ns[c].text, 1) } else { acc });
+}
+
+// The functions that pass their parameters, through pure steps, to
+// secret(...) or to another such function: a call of one on known
+// arguments makes a known secret (`mk(0x5E...)`). A least fixed point.
+Map(Str, Int) sec_wrap_fix(Kg g, Map(Str, Int) fns, List(Str) names, Map(Int, Int) ok, Map(Str, Int) pure, Map(Str, Int) w) {
+    Map(Str, Int) next = sec_wrap_pass(g, fns, names, 0, ok, pure, w);
+    return if (next.len() == w.len()) { w } else { sec_wrap_fix(g, fns, names, ok, pure, next) };
+}
+
+Map(Str, Int) sec_wrap_pass(Kg g, Map(Str, Int) fns, List(Str) names, Int i, Map(Int, Int) ok, Map(Str, Int) pure, Map(Str, Int) w) {
+    if (i >= names.len()) { return w; }
+    Str nm = names[i];
+    Int f = fns.get(nm) else { 0 };
+    Bool add = !w.contains(nm) && sec_wrap_hit(g, f, 0, sec_params(g, f, 0, {}), ok, pure, fns, w) >= 0;
+    return sec_wrap_pass(g, fns, names, i + 1, ok, pure, if (add) { w.insert(nm, 1) } else { w });
+}
+
+// The first secret(...) or call of a function of `w` under id whose
+// arguments are known up to `ps`; -1 when none.
+Int sec_wrap_hit(Kg g, Int id, Int depth, Map(Str, Int) ps, Map(Int, Int) ok, Map(Str, Int) pure, Map(Str, Int) fns, Map(Str, Int) w) {
+    if (depth > 4096) { return 0 - 1; }
+    KN n = g.ns[id];
+    Bool sec = n.kind == "call" && n.text == "secret" && n.nk == 1;
+    Bool wr = n.kind == "call" && w.contains(n.text) && n.nk >= 1;
+    if ((sec || wr) && !ok.contains(id) && sec_known_kids(g, id, 0, 0, ps, pure, fns)) { return id; }
+    return sec_wrap_kids(g, id, 0, depth, ps, ok, pure, fns, w);
+}
+
+Int sec_wrap_kids(Kg g, Int id, Int i, Int depth, Map(Str, Int) ps, Map(Int, Int) ok, Map(Str, Int) pure, Map(Str, Int) fns, Map(Str, Int) w) {
+    if (i >= g.ns[id].nk) { return 0 - 1; }
+    Int r = sec_wrap_hit(g, kg_kid(g, id, i), depth + 1, ps, ok, pure, fns, w);
+    return if (r >= 0) { r } else { sec_wrap_kids(g, id, i + 1, depth, ps, ok, pure, fns, w) };
+}
+
+// A call of a function of `w` on known arguments in a function or test
+// block; -1 when none. `test` blocks, and functions marked @fixed_secrets
+// in a test file, may hold fixed test keys; the mark elsewhere is refused
+// (-2 - node).
+Int sec_wrap_use(Kg g, Int i, Map(Int, Int) ok, Map(Str, Int) pure, Map(Str, Int) fns, Map(Str, Int) w, List(Int) nls, Str smap) {
+    if (i >= g.ns.len()) { return 0 - 1; }
+    KN n = g.ns[i];
+    Bool top = n.kind == "fn" && (fns.get(n.text) else { 0 - 1 }) == i;
+    Bool fixed = top && str_contains(n.aux, "@fixed_secrets");
+    if (fixed && !sec_test_file(diag_where(smap, gk_line_of(nls, n.sp, 0, nls.len()) + 1).path)) { return 0 - 2 - i; }
+    Int r = if (top && !fixed) { sec_wrap_hit(g, i, 0, {}, ok, pure, fns, w) } else { 0 - 1 };
+    return if (r >= 0) { r } else { sec_wrap_use(g, i + 1, ok, pure, fns, w, nls, smap) };
+}
+
+// Under a tests/ directory, or named *_test.resid.
+Bool sec_test_file(Str p) {
+    return str_starts_with(p, "tests/") || str_contains(p, "/tests/") || str_ends_with(p, "_test.resid");
 }
 
 // A call whose result, on known arguments, is known: a function of

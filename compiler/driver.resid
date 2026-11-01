@@ -10162,7 +10162,7 @@ Int main() {
     Bool rtmod  =  pick_flag(argc, "--runtime-module");
     Bool rtm  =  resid_rtmod_set(rtmod);
     Bool rflag  =  pick_flag(argc, "--runtime-internals") || rtmod;
-    Bool rentry  =  str_ends_with(arg1, "compiler/driver.resid") || str_contains(arg1, "runtime/rt/");
+    Bool rentry  =  (str_ends_with(arg1, "compiler/driver.resid") || str_contains(arg1, "runtime/rt/")) && !str_contains(arg1, "../");
     if (rflag && !rentry) {
         println("error: --runtime-internals is only for building the compiler (compiler/driver.resid) or the runtime (runtime/rt/)");
         return 1;

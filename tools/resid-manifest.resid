@@ -897,10 +897,6 @@ Int extract_entries_acc(Str out_dir, List(ArchiveEntry) entries, Int i, Int coun
     if (i >= entries.len()) { return count; }
     return extract_entries_acc(out_dir, entries, i + 1, count + write_archive_entry(out_dir, entries[i]));
 }
-@requires(filesystem)
-Int extract_archive_bytes(List(Int) archive, Str out_dir) {
-    return extract_entries_acc(out_dir, read_entries(archive), 0, 0);
-}
 
 // ─── package trust (spec §28.2, §28.3) ─────────────────────────────
 // A registry archive is trusted when the registry's signed index lists
@@ -996,9 +992,43 @@ CacheResult resolve_dep_dir_version(Str name, Str version, Registry reg, Str roo
     Str terr = version_trust(name, version, got, reg, tp);
     if (terr != "") { return CacheResult {.ok = false, .err = terr, .cache_dir = "", .sha256 = ""}; }
     // Content-addressed: a cache directory only ever holds this archive.
+    // Each use rewrites its files, so a cut-short or edited extraction is
+    // repaired, and a file the archive lacks is refused.
     Str cache_dir = root_pkg_dir + "/target/resid/deps/" + name + "-" + version + "-" + str_slice(got, 0, 16);
-    Int _e = if (filesystem.is_dir(cache_dir)) { 0 } else { extract_archive_bytes(archive, cache_dir) };
+    List(ArchiveEntry) es = read_entries(archive);
+    Int _e = extract_entries_acc(cache_dir, es, 0, 0);
+    Str stray = cache_stray(cache_files(cache_dir, ""), es, 0);
+    if (stray != "") {
+        Str err = "dependency '" + id + "': cache directory " + cache_dir + " holds '" + stray + "', which its archive does not; delete the directory to extract it again";
+        return CacheResult {.ok = false, .err = err, .cache_dir = "", .sha256 = ""};
+    }
     return CacheResult {.ok = true, .err = "", .cache_dir = cache_dir, .sha256 = got};
+}
+
+// Every file under dir, as paths relative to it (rel is dir's own).
+@requires(filesystem(readonly))
+List(Str) cache_files(Str dir, Str rel) {
+    return cache_files_at(dir, rel, sort(filesystem.list_dir(dir)), 0, []);
+}
+@requires(filesystem(readonly))
+List(Str) cache_files_at(Str dir, Str rel, List(Str) ns, Int i, List(Str) acc) {
+    if (i >= ns.len()) { return acc; }
+    Str r = if (rel == "") { ns[i] } else { rel + "/" + ns[i] };
+    Str a = dir + "/" + ns[i];
+    List(Str) more = if (filesystem.is_dir(a)) { cache_files(a, r) } else { [r] };
+    return cache_files_at(dir, rel, ns, i + 1, acc.concat(more));
+}
+
+// The first of fs that is no entry of es; "" when all are.
+Str cache_stray(List(Str) fs, List(ArchiveEntry) es, Int i) {
+    if (i >= fs.len()) { return ""; }
+    if (!entry_named(es, fs[i], 0)) { return fs[i]; }
+    return cache_stray(fs, es, i + 1);
+}
+Bool entry_named(List(ArchiveEntry) es, Str rel, Int i) {
+    if (i >= es.len()) { return false; }
+    if (es[i].rel == rel) { return true; }
+    return entry_named(es, rel, i + 1);
 }
 
 // ─── resid.lock read/write during version-dependency resolution ────
@@ -1066,7 +1096,45 @@ IndexLoadResult index_load_err(Str err) {
     List(LockEntry) empty = [];
     return IndexLoadResult {.ok = false, .err = err, .entries = empty};
 }
-@requires(filesystem(readonly), network, clock(readonly), declassify)
+// The signed `@serial N` and `@expires T` lines (resid-pkg's idx_meta).
+type IdxMeta = { Int serial; Int expires; };
+IdxMeta idx_meta(Str text) { return idx_meta_at(str_split(text, "\n"), 0, IdxMeta {.serial = 0, .expires = 0}); }
+IdxMeta idx_meta_at(List(Str) ls, Int i, IdxMeta m) {
+    if (i >= ls.len()) { return m; }
+    List(Str) p = split_ws(str_trim(ls[i]));
+    Bool two = p.len() == 2 && str_is_int(p[1]);
+    IdxMeta m2 = if (two && p[0] == "@serial") { IdxMeta {.serial = str_parse_int(p[1]), .expires = m.expires} } else if (two && p[0] == "@expires") { IdxMeta {.serial = m.serial, .expires = str_parse_int(p[1])} } else { m };
+    return idx_meta_at(ls, i + 1, m2);
+}
+
+// Where this package keeps the highest index serial seen from a registry
+// under a key.
+Str idx_mark_path(Registry reg, Str pubkey_hex) {
+    Str rh = str_slice(hex_encode(sha256_bytes(bytes_of(registry_label(reg)))), 0, 16);
+    return reg.home + "/target/resid/index-serial-" + str_slice(pubkey_hex, 0, min(16, str_len(pubkey_hex))) + "-" + rh;
+}
+
+// Refuses an index without a serial, an expired one (a frozen mirror) and
+// one older than the last seen (a replay that could re-list a withdrawn
+// version); records a newer serial.
+@requires(filesystem, clock(readonly))
+Str index_fresh_err(Registry reg, Str pubkey_hex, Str text) {
+    IdxMeta m = idx_meta(text);
+    if (m.serial <= 0 || m.expires <= 0) { return "registry index has no @serial/@expires lines - refusing it (the publisher re-signs it with resid-pkg index refresh)"; }
+    Int now = clock.now_sec();
+    if (m.expires <= now) { return f"registry index expired at {m.expires} (now {now}) - refusing a stale or frozen index"; }
+    Str mp = idx_mark_path(reg, pubkey_hex);
+    Str mt = if (filesystem.exists(mp)) { str_trim(filesystem.read_all(mp)) } else { "0" };
+    Int mark = if (str_is_int(mt)) { str_parse_int(mt) } else { 0 };
+    if (m.serial < mark) { return f"registry index serial {m.serial} is older than {mark}, already seen - refusing a rolled-back index"; }
+    if (m.serial > mark) {
+        filesystem.create_dir(reg.home + "/target/resid");
+        filesystem.write_all(mp, f"{m.serial}\n");
+    }
+    return "";
+}
+
+@requires(filesystem, network, clock(readonly), declassify)
 IndexLoadResult load_verify_index(Registry reg, Str pubkey_hex) {
     Fetch idx = fetch_index_artifact(reg, "idx");
     if (!idx.ok) {
@@ -1083,6 +1151,8 @@ IndexLoadResult load_verify_index(Registry reg, Str pubkey_hex) {
     if (!ok) {
         return index_load_err("registry index signature INVALID - refusing to trust this registry");
     }
+    Str ferr = index_fresh_err(reg, pubkey_hex, text);
+    if (ferr != "") { return index_load_err(ferr); }
     return IndexLoadResult {.ok = true, .err = "", .entries = parse_index_entries(text)};
 }
 

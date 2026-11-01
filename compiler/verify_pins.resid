@@ -5,8 +5,8 @@
 
 pub List(Str) vp_pins() {
     return [
-        "aesgcm.resid=f25cd95aa7f8a9c5471cafdfd25ed7341610c47985f6ce63fd50de1c21b43c85",
-        "aesgcmg.resid=9105acdda7e867f4d09f7b8e0a39e051ad1e203cd58124acf79b223b51a1a85d",
+        "aesgcm.resid=acee5126f96a7dd9cb0fd622ab991161167b1a2d776d2deff80eb6b3fd53b830",
+        "aesgcmg.resid=131fd6b4fb33eb99b8603be8d0a5d2cbb89f4d900974aad0843b2487904102a8",
         "calendar.resid=7f7ec06dc16c6f85b60da8d74d3044801a660756601aaf6f8881ff622ddc4f4e",
         "cbor.resid=4b0cf443234cd16cdcae0d54794fcb014d33428beed594ce7544de5232d5ecd7",
         "cbor_floats.resid=db678bc011ba575cdfe387cd8b27ef9631273879b3a32a2e263352cd41f3d9a8",
@@ -37,8 +37,8 @@ pub List(Str) vp_pins() {
         "ed25519g.resid=8ae95346497db137724d5c653f8d7a7f75eb36cf7698d0b5924f0e20a35ac594",
         "evidence.resid=b5dc02ebf94fa1ce2c874086265daaa17a93eeffb95c18a521fce9262537e1a0",
         "hash.resid=5938001e6720badb6d9f0ba9ee4e9c11a600304f0f0a5f3da10c69bd5c094c00",
-        "hpke.resid=1319297c0714e7bd6c7b23bf1e3df7e7d8d82eaef5d89629ed6d20b57419a814",
-        "hpkeg.resid=f57cca88f522f292cbd1d8650e03b2cc15f4366a108927fe12e9baa2fb77132b",
+        "hpke.resid=75bf94c99fece16b0c88fb1ce058297e26602e215ad78b0c552d66c6c0f1ae3f",
+        "hpkeg.resid=e71f66696fadb861d82f81321929a2d5ac5f3022c59861dc444c61b834e4fc12",
         "httpserv.resid=9ec1effe742b4974113daaceb308ffa018e09cbfd04b550715a06264b25955c5",
         "instant.resid=944399de6366960917e13d52d872bdb96dfc5519da70f87e8a31646a2e1281ae",
         "p256.resid=c267060d412621ea77ce350545233ea74e15cd3cc57e558b524b1b68320078ee",

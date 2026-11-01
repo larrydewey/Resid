@@ -148,7 +148,7 @@ pub List(Int) be_bytes(UInt(128) v, Int i, ListBuf(Int) acc) {
 
 /// The AES-GCM encryption of `plaintext` with `aad` under a 16-, 24- or
 /// 32-byte key and an IV of at least one byte: ciphertext || 16-byte tag,
-/// or empty for a bad key or IV.
+/// or empty for a bad key or IV or a plaintext over 2^36 - 32 bytes.
 pub List(Int) aes_gcm_seal(List(Int) key, List(Int) iv, List(Int) plaintext, List(Int) aad) {
     return aes_gcmg_seal(key, iv, plaintext, aad);
 }

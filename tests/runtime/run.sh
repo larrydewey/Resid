@@ -36,6 +36,19 @@ if grep -q "E0220.*resid_raw_load64" "$W/ul.log"; then
 else
     fail=$((fail + 1)); echo "FAIL a lib/ file used an internal"
 fi
+# Nor may a file the entry reaches outside its own runtime/rt/ or compiler/
+# tree: through "..", or under another directory of those names.
+mkdir -p "$W/ri/a/runtime/rt" "$W/ri/b/compiler" "$W/ri/b/runtime/rt"
+printf 'pub Int sneaky(Int x) { return resid_raw_load64(x); }\n' > "$W/ri/b/compiler/z.resid"
+cp "$W/ri/b/compiler/z.resid" "$W/ri/b/runtime/rt/z.resid"
+printf 'import "../../../b/compiler/z.resid";\nInt main() { return sneaky(0); }\n' > "$W/ri/a/runtime/rt/x.resid"
+printf 'import "../../../b/runtime/rt/z.resid";\nInt main() { return sneaky(0); }\n' > "$W/ri/a/runtime/rt/y.resid"
+ri_ok=1
+for e in x y; do
+    (cd "$ROOT" && "$COMPILER" "$W/ri/a/runtime/rt/$e.resid" -o "$W/ri/$e" --runtime-internals) > "$W/ri_$e.log" 2>&1
+    grep -q "E0220.*resid_raw_load64" "$W/ri_$e.log" || ri_ok=0
+done
+if [ "$ri_ok" = 1 ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL a file outside the entry's tree used an internal"; fi
 # The standard library and the tools never name a compiler internal.
 if grep -nE 'resid_raw_|resid_(arena|bulk)_(push|pop)|resid_list_str_persist_copy|resid_dec_persist|resid_internals|resid_rtmod|@export\(|@import\(' "$ROOT"/lib/*.resid "$ROOT"/tools/*.resid > "$W/lint.out"; then
     fail=$((fail + 1)); echo "FAIL internals outside the compiler: $(head -1 "$W/lint.out")"

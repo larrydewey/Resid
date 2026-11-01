@@ -98,11 +98,10 @@ pub HpkeCtx hpke_setup_receiver(HpkeSuite s, List(Int) enc, List(Int) skR, List(
 /// Returns the AEAD nonce for message number `seq` (base nonce xor `seq`).
 pub List(Int) hpke_nonce(HpkeCtx c, Int seq) { return hpkeg_nonce(ctx_g(c), seq); }
 
-/// Returns the context with its sequence number set to `seq` (to resume,
-/// or in tests).
-pub HpkeCtx hpke_at_seq(HpkeCtx c, Int seq) {
-    return HpkeCtx {.ok = c.ok, .suite = c.suite, .key = c.key, .base_nonce = c.base_nonce, .exporter = c.exporter, .seq = seq};
-}
+/// Returns the context with its sequence number moved forward to `seq` (to
+/// resume, or in tests); a failed context (`ok` false) for a `seq` behind
+/// the current one.
+pub HpkeCtx hpke_at_seq(HpkeCtx c, Int seq) { return ctx_of(hpkeg_at_seq(ctx_g(c), seq)); }
 
 /// The result of a seal: the context for the next message and the
 /// ciphertext.

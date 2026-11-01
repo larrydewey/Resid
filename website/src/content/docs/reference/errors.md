@@ -35,7 +35,7 @@ network]`.
 | `E0235` | no artifact for a native module, or it does not define the bound function |
 | `E0236` | a native artifact defines the function with other C types, or not visibly |
 | `E0237` | a native artifact is refused (it reaches outside itself, runs at load time, …), or a malformed `-native` |
-| `E0250` | `secret(...)` of a value the compiler knows after reduction (it would be in the binary); pass it straight to `declassify` to state that it is public |
+| `E0250` | `secret(...)` of a value the compiler knows (it would be in the binary), directly or through a function's parameters; pass it straight to `declassify` to state that it is public, or mark a test function `@fixed_secrets` (test files only) |
 | `E0251` | `declassify` without a non-empty string-literal reason ([secret values](/Resid/reference/secrets/)) |
 | `E0253` | `Secret(T)` wrapping a type whose shape is control or identity: `Option`, `Result`, a sum type, `Map`, `Set`, a handle, a function, or another secret; a secret `Bytes` or `Bytes(N)` (its length and conversions scan the bytes; use `List(Secret(UInt(8)))`); or a secret as a `Map` key or `Set` element in any written type |
 | `E0254` | checked `+`, `-` or `*` on a secret (its overflow abort is a branch on the value); use `wrapping_add` / `wrapping_sub` / `wrapping_mul` |

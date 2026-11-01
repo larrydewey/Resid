@@ -1109,11 +1109,13 @@ GT lw_list_method(LW w, Int id, GT base, Str m, List(Str) env) {
         if (rep == "float") { return lw_rt1(base, "double", "@list_sumf(ptr " + base.val + ")", et); }
         return lw_rt1(base, "i64", "@list_sum(ptr " + base.val + ")", et);
     }
-    GT a = lw_marg(w, id, 0, env, base);
-    if (a.err != "") { return a; }
-    if (rep == "str") { return lw_rtb(a, "@list_contains_str(ptr " + base.val + ", ptr " + a.val + ")"); }
-    if (rep == "float") { return lw_rtb(a, "@list_contains_float(ptr " + base.val + ", double " + a.val + ")"); }
-    GT a64 = widen_val(a, "Int(64)");
+    GT a0 = lw_marg(w, id, 0, env, base);
+    if (a0.err != "") { return a0; }
+    if (rep == "str") { return lw_rtb(a0, "@list_contains_str(ptr " + base.val + ", ptr " + a0.val + ")"); }
+    if (rep == "float") { return lw_rtb(a0, "@list_contains_float(ptr " + base.val + ", double " + a0.val + ")"); }
+    // At the element type first: a UInt(64) literal past Int's range is a slot word.
+    GT a = lw_adopt(a0, et);
+    GT a64 = if (num_norm_cg(a.ty) == "UInt(64)") { a } else { widen_val(a, "Int(64)") };
     return lw_rtb(a64, "@list_contains_int(ptr " + base.val + ", i64 " + a64.val + ")");
 }
 

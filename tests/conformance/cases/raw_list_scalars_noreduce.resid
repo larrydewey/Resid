@@ -1,0 +1,36 @@
+// Scalar lists keep raw slots (typed storage): every width and the
+// extremes of each round-trip, including Int values past 2^54 that
+// used to need a box.
+Int main() {
+    List(Int) big = [9223372036854775807, -9223372036854775807 - 1, 18014398509481984, -18014398509481985];
+    println(f"{big[0]} {big[1]} {big[2]} {big[3]}");
+    List(UInt(64)) u = [18446744073709551615, 9223372036854775808];
+    println(f"{u[0]} {u[1]}");
+    List(Int(16)) s16 = [i16(-32768), i16(32767), i16(-1)];
+    println(f"{s16[0]} {s16[1]} {s16[2]}");
+    List(UInt(8)) b = [0, 128, 255];
+    println(f"{b[0]} {b[1]} {b[2]}");
+    List(Float) fs = [0.0, -0.0, 1.5, -2.25, 123456789012.5];
+    println(f"{fs[0]} {fs[1]} {fs[2]} {fs[3]} {fs[4]}");
+    Float(32) q = 0.25;
+    Float(32) nq = 0.0 - q;
+    List(Float(32)) f32 = [1.5, nq];
+    println(f"{f32[0]} {f32[1]}");
+    List(Bool) bs = [true, false, true];
+    println(f"{bs[0]} {bs[1]} {bs[2]} {bs}");
+    println(f"{big} {fs} {b}");
+    // Persistence: a with on a shared list leaves the original alone.
+    List(Int) a = [1, 2, 3];
+    List(Int) a2 = a.with(0, 9223372036854775807);
+    println(f"{a} {a2}");
+    List(Float) g = [1.0, 2.0];
+    List(Float) g2 = g.with(1, 0.5);
+    println(f"{g} {g2}");
+    List(Bool) h = [false];
+    List(Bool) h2 = h.with(0, true);
+    println(f"{h} {h2}");
+    println(f"{big.contains(18014398509481984)} {fs.contains(1.5)} {fs.contains(9.0)} {fs.contains(-0.0)} {u.contains(18446744073709551615)}");
+    println(f"{[1, 2, 3].sum()} {[1.5, 2.5].sum()}");
+    println(f"{sort([3, -9223372036854775807, 2])} {sort([2.5, -1.0, 0.5])}");
+    return 0;
+}

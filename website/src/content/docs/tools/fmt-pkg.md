@@ -159,7 +159,8 @@ searched.
 | `resid-pkg index list <registry>` | print the index |
 | `resid-pkg index add <registry> <name> <version> <sha256-hex> <keyfile>` | vouch for an entry, re-signing the index |
 | `resid-pkg index remove <registry> <name> <version> <keyfile>` | withdraw an entry, re-signing the index |
-| `resid-pkg index verify <registry> <pubkey-hex>` | check the index signature, as a consumer will |
+| `resid-pkg index refresh <registry> <keyfile>` | re-sign the same entries under the next serial and a fresh expiry |
+| `resid-pkg index verify <registry> <pubkey-hex>` | check the index signature and expiry, as a consumer will |
 
 `serve` is the publish side of the same artifact layout a `[registry] url`
 reads, and it is deliberately small: loopback only, `GET` and `HEAD`
@@ -228,6 +229,13 @@ is one instance away.
 under that name and version, and both `index add` and `index remove`
 require the key that signs the registry's index, because the signature
 covers the whole file and there is no per-row signature to keep in step.
+
+Every write also bumps the index's signed `@serial` line and sets
+`@expires` 30 days on. A consumer refuses an index without them, an expired
+one, and one with a lower serial than it has already seen from that
+registry (kept under `target/resid/`), so a mirror cannot replay an older
+index to bring back a withdrawn version. A registry with nothing new to
+publish runs `index refresh` before its index expires.
 
 A dependency is accepted only when its hash is listed by a trusted
 registry's signed index or its signature verifies under a pinned or

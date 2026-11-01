@@ -352,7 +352,7 @@ Int extract_archive(Str archive_path, Str out_dir) {
 // ─── CLI ────────────────────────────────────────────────────────────
 
 Str usage_text() {
-    return "usage: resid-pkg keygen <secret.hex> <pub.hex> | pack <dir> <out> | sign <out> <keyfile> | sign-dir <dir> <keyfile> | checksig <out> <pubkey-hex> | extract <out> <dir> | publish <dir> <registry> [keyfile] | serve <registry> [--port N] [--port-file F] [--requests N] [--cert F --key F] [--upload KEYRING --index-key F] | upload <dir> <registry-url> <keyfile> [--ca F] | index list <registry> | index add <registry> <name> <version> <sha256-hex> <keyfile> | index remove <registry> <name> <version> <keyfile> | index verify <registry> <pubkey-hex>";
+    return "usage: resid-pkg keygen <secret.hex> <pub.hex> | pack <dir> <out> | sign <out> <keyfile> | sign-dir <dir> <keyfile> | checksig <out> <pubkey-hex> | extract <out> <dir> | publish <dir> <registry> [keyfile] | serve <registry> [--port N] [--port-file F] [--requests N] [--cert F --key F] [--upload KEYRING --index-key F] | upload <dir> <registry-url> <keyfile> [--ca F] | index list <registry> | index add <registry> <name> <version> <sha256-hex> <keyfile> | index remove <registry> <name> <version> <keyfile> | index refresh <registry> <keyfile> | index verify <registry> <pubkey-hex>";
 }
 
 // The publisher's signing seed, read from its key file: secret from here
@@ -581,9 +581,25 @@ List(Str) idx_lines_acc(List(IdxEntry) entries, Int i, List(Str) acc) {
     IdxEntry e = entries[i];
     return idx_lines_acc(entries, i + 1, acc.concat([e.name + " " + e.version + " " + e.sha256]));
 }
-Str index_text(List(IdxEntry) entries) {
+// The signed `@serial N` (one more on every write) and `@expires T` (Unix
+// seconds) lines: a consumer refuses an older serial than it has seen and
+// an expired index, so a mirror cannot replay or freeze one.
+type IdxMeta = { Int serial; Int expires; };
+IdxMeta idx_meta(Str text) { return idx_meta_at(str_split(text, "\n"), 0, IdxMeta {.serial = 0, .expires = 0}); }
+IdxMeta idx_meta_at(List(Str) ls, Int i, IdxMeta m) {
+    if (i >= ls.len()) { return m; }
+    List(Str) p = split_ws(str_trim(ls[i]));
+    Bool two = p.len() == 2 && str_is_int(p[1]);
+    IdxMeta m2 = if (two && p[0] == "@serial") { IdxMeta {.serial = str_parse_int(p[1]), .expires = m.expires} } else if (two && p[0] == "@expires") { IdxMeta {.serial = m.serial, .expires = str_parse_int(p[1])} } else { m };
+    return idx_meta_at(ls, i + 1, m2);
+}
+
+// How long a signed index stays valid: 30 days (`index refresh` re-signs it).
+Int idx_ttl() { return 30 * 86400; }
+
+Str index_text(List(IdxEntry) entries, IdxMeta m) {
     List(Str) lines = idx_lines_acc(sort_idx_entries(entries), 0, []);
-    Str header = "# resid registry index\n";
+    Str header = "# resid registry index\n" + f"@serial {m.serial}\n@expires {m.expires}\n";
     if (lines.len() == 0) { return header; }
     return header + str_join(lines, "\n") + "\n";
 }
@@ -610,7 +626,7 @@ List(IdxEntry) load_existing_index(Str idx_path) {
 
 // Load the existing index (if any), replace this package's entry,
 // write the new index + a fresh signature over its hash.
-@requires(filesystem, declassify)
+@requires(filesystem, clock(readonly), declassify)
 Int maintain_index(Str reg, Str name, Str version, Str hash_hex, List(Secret(UInt(8))) seed) {
     DirStore d = index_maintain(DirStore {.root = reg}, name, version, hash_hex, seed);
     return 0;
@@ -618,18 +634,28 @@ Int maintain_index(Str reg, Str name, Str version, Str hash_hex, List(Secret(UIn
 
 // Replace this package's index entry and re-sign the whole index.
 @needs(RegStore(T))
-@requires(filesystem, declassify)
+@requires(filesystem, clock(readonly), declassify)
 T index_maintain(T st, Str name, Str version, Str hash_hex, List(Secret(UInt(8))) seed) {
     List(Int) old = store_get(st, "pkg/index.resid-idx");
     List(IdxEntry) existing = parse_index_text(bytes_to_ascii(old, 0, old.len(), ""));
     List(IdxEntry) updated = idx_remove_acc(existing, name, version, 0, []).concat([IdxEntry {.name = name, .version = version, .sha256 = hash_hex}]);
-    Str new_text = index_text(updated);
+    return index_put(st, updated, seed);
+}
+
+// Write entries as the next index (serial one past the stored one, a fresh
+// expiry) and a signature over its text.
+@needs(RegStore(T))
+@requires(filesystem, clock(readonly), declassify)
+T index_put(T st, List(IdxEntry) entries, List(Secret(UInt(8))) seed) {
+    List(Int) old = store_get(st, "pkg/index.resid-idx");
+    IdxMeta om = idx_meta(bytes_to_ascii(old, 0, old.len(), ""));
+    Str new_text = index_text(entries, IdxMeta {.serial = om.serial + 1, .expires = clock.now_sec() + idx_ttl()});
     T s1 = store_put(st, "pkg/index.resid-idx", bytes_of(new_text));
     List(Int) sig = pkg_sign(seed, hex_encode(sha256_bytes(bytes_of(new_text))));
     return store_put(s1, "pkg/index.resid-sig", bytes_of(hex_encode(sig)));
 }
 
-@requires(filesystem, provision, declassify)
+@requires(filesystem, provision, clock(readonly), declassify)
 Int cmd_publish(Str dir, Str reg, Str keyfile) {
     Str manifest_text = filesystem.read_all(dir + "/resid.toml");
     Str name = manifest_field(manifest_text, "name");
@@ -771,7 +797,7 @@ HttpReply registry_reply(Str root, HttpRequest r) {
 }
 
 // The same, with uploads: PUT goes to registry_upload.
-@requires(filesystem, declassify)
+@requires(filesystem, clock(readonly), declassify)
 HttpReply registry_reply_up(Str root, UploadCfg u, HttpRequest r) {
     if (r.method == "PUT") { return registry_upload(DirStore {.root = root}, u, r).reply; }
     if (r.method != "GET" && r.method != "HEAD") {
@@ -823,17 +849,17 @@ HttpLimits upload_limits() {
     return HttpLimits {.head_max = l.head_max, .body_max = 67108864, .requests_max = l.requests_max, .request_ms = 300000, .reply_ms = l.reply_ms, .open_max = l.open_max};
 }
 
-@requires(network(readonly), filesystem, declassify)
+@requires(network(readonly), filesystem, clock(readonly), declassify)
 Int serve_worker_up(Int lfd, Str root, Int conns, UploadCfg u) {
-    Result(Int, RegionError) r = spawn (network(readonly), filesystem, declassify) {
+    Result(Int, RegionError) r = spawn (network(readonly), filesystem, clock(readonly), declassify) {
         return http_accept_loop(lfd, lambda(q) { registry_reply_up(root, u, q) }, upload_limits(), conns);
     };
     return r else { -1 };
 }
 
-@requires(network(readonly), filesystem, declassify)
+@requires(network(readonly), filesystem, clock(readonly), declassify)
 Int serve_worker_up_tls(Int lfd, Str root, Int conns, TlsCfg conf, UploadCfg u) {
-    Result(Int, RegionError) r = spawn (network(readonly), filesystem, declassify) {
+    Result(Int, RegionError) r = spawn (network(readonly), filesystem, clock(readonly), declassify) {
         return tls_accept_loop(lfd, conf, lambda(q) { registry_reply_up(root, u, q) }, upload_limits(), conns);
     };
     return r else { -1 };
@@ -890,7 +916,7 @@ ServeOpts parse_serve_opts(Int i, Int argc, ServeOpts o) {
     return serve_up(serve_opts(o.port, o.port_file, o.requests, o.cert, o.key, false), o.upload, o.index_key);
 }
 
-@requires(args, filesystem, network, declassify, provision)
+@requires(args, filesystem, network, clock(readonly), declassify, provision)
 Int cmd_serve(Str root, ServeOpts o) {
     Int port = o.port;
     Str port_file = o.port_file;
@@ -992,7 +1018,7 @@ type Uploaded(T) = { T store; HttpReply reply; };
 Uploaded(T) uploaded(T st, Int code, Str msg) { return Uploaded {.store = st, .reply = upload_text(code, msg)}; }
 
 @needs(RegStore(T))
-@requires(filesystem, declassify)
+@requires(filesystem, clock(readonly), declassify)
 Uploaded(T) registry_upload(T st, UploadCfg u, HttpRequest r) {
     Str base0 = if (str_starts_with(r.path, "/pkg/")) { str_slice(r.path, 5, str_len(r.path)) } else { "" };
     Bool shaped = str_ends_with(base0, ".resid-pkg") && !str_contains(base0, "/") && !path_is_unsafe(r.path);
@@ -1120,13 +1146,9 @@ Str index_sig_path_of(Str reg) {
 }
 
 // Write `entries` and a fresh signature over it.
-@requires(filesystem, declassify)
+@requires(filesystem, clock(readonly), declassify)
 Int write_signed_index(Str reg, List(IdxEntry) entries, List(Secret(UInt(8))) seed) {
-    Str new_text = index_text(entries);
-    filesystem.write_all(index_path_of(reg), new_text);
-    Str text_hash_hex = hex_encode(sha256_bytes(bytes_of(new_text)));
-    List(Int) sig = pkg_sign(seed, text_hash_hex);
-    filesystem.write_bytes(index_sig_path_of(reg), bytes_of(hex_encode(sig)));
+    DirStore d = index_put(DirStore {.root = reg}, entries, seed);
     return 0;
 }
 
@@ -1153,7 +1175,7 @@ Int idx_cmd_list(Str reg) {
 // The hash is the one the consumer will recompute, so it is not taken on
 // trust: when the archive is already published, this reads it and refuses
 // a hash that does not match.
-@requires(filesystem, provision, declassify)
+@requires(filesystem, provision, clock(readonly), declassify)
 Int idx_cmd_add(Str reg, Str name, Str version, Str hash_hex, Str keyfile) {
     Bool have_key = keyfile != "" && filesystem.exists(keyfile);
     if (have_key) {
@@ -1181,7 +1203,7 @@ Int idx_cmd_add(Str reg, Str name, Str version, Str hash_hex, Str keyfile) {
 }
 
 // remove <reg> <name> <version> <keyfile>
-@requires(filesystem, provision, declassify)
+@requires(filesystem, provision, clock(readonly), declassify)
 Int idx_cmd_remove(Str reg, Str name, Str version, Str keyfile) {
     if (keyfile == "" || !filesystem.exists(keyfile)) {
         eprintln("resid-pkg index remove: needs the signing key that signs this registry's index");
@@ -1200,11 +1222,27 @@ Int idx_cmd_remove(Str reg, Str name, Str version, Str keyfile) {
     return 0;
 }
 
+// refresh <reg> <keyfile>: the same entries under the next serial and a
+// fresh expiry, for a registry with nothing new to publish.
+@requires(filesystem, clock(readonly), provision, declassify)
+Int idx_cmd_refresh(Str reg, Str keyfile) {
+    if (keyfile == "" || !filesystem.exists(keyfile)) {
+        eprintln("resid-pkg index refresh: needs the signing key that signs this registry's index");
+        return 1;
+    }
+    List(IdxEntry) existing = load_existing_index(index_path_of(reg));
+    Str keyhex = str_trim(filesystem.read_all(keyfile));
+    Int _w = write_signed_index(reg, existing, pkg_seed(keyhex));
+    IdxMeta m = idx_meta(filesystem.read_all(index_path_of(reg)));
+    println(f"index: re-signed, serial {m.serial}, expires {m.expires}");
+    return 0;
+}
+
 // verify <reg> <pubkey-hex>
 //
 // The same check resid-manifest.resid makes when `[registry] pubkey` is
 // set, so a publisher can confirm before shipping that a consumer will.
-@requires(filesystem(readonly))
+@requires(filesystem(readonly), clock(readonly))
 Int idx_cmd_verify(Str reg, Str pubkey_hex) {
     Str idx_path = index_path_of(reg);
     Str sig_path = index_sig_path_of(reg);
@@ -1224,7 +1262,12 @@ Int idx_cmd_verify(Str reg, Str pubkey_hex) {
         eprintln("resid-pkg index verify: FAIL - the index signature does not verify under that key");
         return 1;
     }
-    println("index: OK - " + f"{load_existing_index(idx_path).len()}" + " entries, signature verifies");
+    IdxMeta m = idx_meta(text);
+    if (m.serial <= 0 || m.expires <= clock.now_sec()) {
+        eprintln(f"resid-pkg index verify: FAIL - the index has no serial or has expired (serial {m.serial}, expires {m.expires}); re-sign it with index refresh");
+        return 1;
+    }
+    println("index: OK - " + f"{load_existing_index(idx_path).len()}" + f" entries, signature verifies, serial {m.serial}, expires {m.expires}");
     return 0;
 }
 
@@ -1273,7 +1316,7 @@ Int main() {
     if (sub == "index") {
         // argv: <prog> index <sub> ...
         if (argc < 4) {
-            eprintln("usage: resid-pkg index list <registry> | index add <registry> <name> <version> <sha256-hex> <keyfile> | index remove <registry> <name> <version> <keyfile> | index verify <registry> <pubkey-hex>");
+            eprintln("usage: resid-pkg index list <registry> | index add <registry> <name> <version> <sha256-hex> <keyfile> | index remove <registry> <name> <version> <keyfile> | index refresh <registry> <keyfile> | index verify <registry> <pubkey-hex>");
             return 2;
         }
         Str isub = args.get(2);
@@ -1295,7 +1338,11 @@ Int main() {
             if (argc < 5) { eprintln("usage: resid-pkg index verify <registry> <pubkey-hex>"); return 2; }
             return idx_cmd_verify(args.get(3), args.get(4));
         }
-        eprintln("resid-pkg index: expected list, add, remove or verify");
+        if (isub == "refresh") {
+            if (argc < 5) { eprintln("usage: resid-pkg index refresh <registry> <keyfile>"); return 2; }
+            return idx_cmd_refresh(args.get(3), args.get(4));
+        }
+        eprintln("resid-pkg index: expected list, add, remove, refresh or verify");
         return 2;
     }
     if (sub == "serve") {

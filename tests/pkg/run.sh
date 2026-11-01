@@ -149,6 +149,50 @@ mkdir -p "$W/sealapp/src"
 printf '[package]\nname = "sealapp"\nversion = "0.1.0"\n\n[registry]\npath = "../sealreg"\n\n[dependencies.sealmid]\nversion = "1.0.0"\npubkey = "%s"\n' "$PUB" > "$W/sealapp/resid.toml"
 expect_fail sealapp "may name a dependency only by version"
 
+# Index freshness: every write bumps a signed @serial and sets @expires. A
+# consumer keeps the highest serial it has seen, so a mirror replaying an
+# older signed index (re-listing a withdrawn version) is refused, and so is
+# an expired or serial-less one. signidx re-signs crafted text with the key.
+signidx() {  # registry text
+    printf '%s' "$2" > "$W/craft.resid-pkg"
+    "$PKG" sign "$W/craft" "$W/pub.sec" > /dev/null
+    printf '%s' "$2" > "$1/pkg/index.resid-idx"; cp "$W/craft.resid-sig" "$1/pkg/index.resid-sig"
+}
+fapp() {  # name: an app on greet 1.0.0 from ../freg under the index key
+    app "$1" "pubkey = \"$PUB\""
+    sed -i 's|path = "../reg"|path = "../freg"|' "$W/$1/resid.toml"
+}
+"$PKG" publish "$W/greet" "$W/freg" "$W/pub.sec" > /dev/null
+grep -q '^@serial 1$' "$W/freg/pkg/index.resid-idx" && grep -q '^@expires [0-9]' "$W/freg/pkg/index.resid-idx" && ok || bad "publish wrote no @serial/@expires"
+cp "$W/freg/pkg/index.resid-idx" "$W/idx.old"; cp "$W/freg/pkg/index.resid-sig" "$W/sig.old"
+fapp fresh
+expect_ok fresh
+"$PKG" index refresh "$W/freg" "$W/pub.sec" > /dev/null && grep -q '^@serial 2$' "$W/freg/pkg/index.resid-idx" && ok || bad "index refresh did not bump the serial"
+expect_ok fresh
+cp "$W/idx.old" "$W/freg/pkg/index.resid-idx"; cp "$W/sig.old" "$W/freg/pkg/index.resid-sig"
+expect_fail fresh "refusing a rolled-back index"
+GREETSHA="$(sed -n 's/^greet 1\.0\.0 //p' "$W/idx.old")"
+signidx "$W/freg" "$(printf '# resid registry index\n@serial 9\n@expires 1\ngreet 1.0.0 %s\n' "$GREETSHA")"
+expect_fail fresh "registry index expired"
+"$PKG" index verify "$W/freg" "$PUB" > /dev/null 2>&1; [ $? -ne 0 ] && ok || bad "index verify accepted an expired index"
+signidx "$W/freg" "$(printf '# resid registry index\ngreet 1.0.0 %s\n' "$GREETSHA")"
+fapp noserial
+expect_fail noserial "has no @serial/@expires"
+"$PKG" index refresh "$W/freg" "$W/pub.sec" > /dev/null
+fapp fresh2
+expect_ok fresh2
+
+# The extracted cache is checked on reuse: an edited file is rewritten from
+# the archive and a file the archive lacks is refused.
+CDIR="$(ls -d "$W"/fresh2/target/resid/deps/greet-1.0.0-* 2>/dev/null | head -1)"
+if [ -n "$CDIR" ]; then
+    printf 'pub Str greet() { return "evil"; }\n' > "$CDIR/src/main.resid"
+    expect_ok fresh2
+    grep -q '"hi"' "$CDIR/src/main.resid" && ok || bad "an edited cache file was not restored from the archive"
+    printf 'x\n' > "$CDIR/src/planted.resid"
+    expect_fail fresh2 "which its archive does not"
+else bad "no extracted cache directory under fresh2/target/resid/deps"; fi
+
 # ── index: the publisher's side ──────────────────────────────────────
 # publish maintains the index as a side effect; these are the operations
 # that are not publishing, and each write re-signs the whole index.

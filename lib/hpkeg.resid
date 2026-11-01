@@ -408,10 +408,16 @@ pub List(B) hpkeg_nonce(HpkeCtxG(B) c, Int seq) {
     return hg_xor_seq(c.base_nonce, seq, 0, acc).finish();
 }
 
-/// The context with its sequence number set (to resume, or in tests).
+/// The context with its sequence number moved forward to seq (to resume,
+/// or in tests); a failed context for a seq behind the current one, since
+/// going back would reuse a sender's nonce or re-open a replay.
 pub HpkeCtxG(B) hpkeg_at_seq(HpkeCtxG(B) c, Int seq) {
-    return HpkeCtxG {.ok = c.ok, .suite = c.suite, .key = c.key, .base_nonce = c.base_nonce, .exporter = c.exporter, .seq = seq};
+    Bool ok = c.ok && seq >= c.seq;
+    return HpkeCtxG {.ok = ok, .suite = c.suite, .key = c.key, .base_nonce = c.base_nonce, .exporter = c.exporter, .seq = seq};
 }
+
+// The last sequence number Int holds: no message after it (§5.2 MessageLimitReached).
+Int hg_seq_max() { return 9223372036854775807; }
 
 /// The result of a seal: the context for the next message and the
 /// ciphertext.
@@ -424,7 +430,7 @@ pub type HpkeSealedG(B) = { HpkeCtxG(B) ctx; List(B) ct; };
 @needs(Word(W, B), Block128(X, W, B), Wide512(P, B))
 pub HpkeSealedG(B) hpkeg_seal(HpkeCtxG(B) c, List(Int) aad, List(B) pt) {
     List(B) none = [];
-    if (!c.ok || c.suite.aead == 65535) { return HpkeSealedG {.ctx = c, .ct = none}; }
+    if (!c.ok || c.suite.aead == 65535 || c.seq >= hg_seq_max()) { return HpkeSealedG {.ctx = c, .ct = none}; }
     List(B) nonce = hpkeg_nonce(c, c.seq);
     List(B) ct = if (c.suite.aead == 3) { chacha20poly1305g_seal_nb(c.key, nonce, pt, aad) } else { aes_gcmg_seal_ivb(c.key, nonce, pt, aad) };
     return HpkeSealedG {.ctx = hpkeg_at_seq(c, c.seq + 1), .ct = ct};
@@ -440,7 +446,7 @@ pub type HpkeOpenedG(B) = { HpkeCtxG(B) ctx; Bool ok; List(B) pt; };
 @needs(Word(W, B), Block128(X, W, B), Wide512(P, B), CtSame(B))
 pub HpkeOpenedG(B) hpkeg_open(HpkeCtxG(B) c, List(Int) aad, List(Int) ct) {
     List(B) none = [];
-    if (!c.ok || c.suite.aead == 65535) { return HpkeOpenedG {.ctx = c, .ok = false, .pt = none}; }
+    if (!c.ok || c.suite.aead == 65535 || c.seq >= hg_seq_max()) { return HpkeOpenedG {.ctx = c, .ok = false, .pt = none}; }
     List(B) nonce = hpkeg_nonce(c, c.seq);
     Option(List(B)) pt = if (c.suite.aead == 3) { chacha20poly1305g_decrypt_nb(c.key, nonce, ct, aad) } else { aes_gcmg_decrypt_ivb(c.key, nonce, ct, aad) };
     return match pt {

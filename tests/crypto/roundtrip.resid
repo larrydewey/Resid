@@ -30,7 +30,15 @@ Int hpke_case(Int kdf, Int aead) {
     HpkeSender snd = hpke_setup_sender(s, r.pk, bytes_of("ctx"));
     HpkeCtx rcv = hpke_setup_receiver(s, snd.enc, r.sk, bytes_of("ctx"));
     Bool exp = ct_equal(hpke_export(snd.ctx, bytes_of("x"), 48), hpke_export(rcv, bytes_of("x"), 48));
-    Bool ok = r.ok && !short.ok && m.ok && m.enc.len() == 97 && is_some_eq(good, dek) && is_none(wrong_key) && is_none(wrong_info) && is_none(wrong_aad) && exp;
+    // A receiver moved back past an opened message refuses to open it again;
+    // the last sequence number opens nothing.
+    HpkeSealed s0 = hpke_seal(snd.ctx, [], bytes_of("m0"));
+    HpkeOpened o0 = hpke_open(rcv, [], s0.ct);
+    HpkeOpened again = hpke_open(hpke_at_seq(o0.ctx, 0), [], s0.ct);
+    Bool fwd = hpke_at_seq(rcv, 5).ok && hpke_at_seq(rcv, 5).seq == 5;
+    Bool last = hpke_seal(hpke_at_seq(snd.ctx, 9223372036854775807), [], bytes_of("m")).ct.len() == 0;
+    Bool seq = o0.ok && !again.ok && fwd && last;
+    Bool ok = r.ok && !short.ok && m.ok && m.enc.len() == 97 && is_some_eq(good, dek) && is_none(wrong_key) && is_none(wrong_info) && is_none(wrong_aad) && exp && seq;
     return check(f"hpke p384 kdf={kdf} aead={aead}", ok);
 }
 

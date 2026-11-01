@@ -29,7 +29,10 @@ Int main() {
 - A secret whose value the compiler knows after reduction is refused
   (`E0250`): it would be in the binary for everyone who has it. Read
   secrets at run time. `declassify(secret(41), "why")` is accepted, since it
-  states that the value is public.
+  states that the value is public. A function that passes its parameters
+  to `secret(...)` counts too: `mk(41)` is refused when `mk` returns
+  `secret(v)`. Fixed keys in tests go in a `test` block, or in a function
+  marked `@fixed_secrets` in a file under `tests/` or named `*_test.resid`.
 - `declassify(s, "reason")` returns the `T`. It needs
   `@requires(declassify)`, carried to every caller like any capability
   (`E0219`); the family has no modes. The reason is a non-empty string
