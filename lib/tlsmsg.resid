@@ -339,6 +339,12 @@ pub List(List(Int)) tm_cert_list(List(Int) body) {
 // certificate of length zero, it is a phantom, and it is exactly the kind
 // of thing that must not reach signature verification. A truncated or
 // padded tail ends the walk instead.
+//
+// In TLS 1.3 each CertificateEntry is the certificate and then its own
+// extensions (RFC 8446 §4.4.2: a u16 length and that many bytes, as an
+// OCSP response a server staples); the next entry starts after them.
+// Reading the extensions' length as the next certificate's lost every
+// certificate after the leaf, so no chain needing an intermediate built.
 List(List(Int)) tm_cert_list_acc(List(Int) body, Int p, Int end, List(List(Int)) acc) {
     if (p + 2 > end) { return acc; }
     Int clen = tm_u24_at(body, p);
@@ -346,7 +352,11 @@ List(List(Int)) tm_cert_list_acc(List(Int) body, Int p, Int end, List(List(Int))
     Int start = p + 3;
     if (start + clen - 1 > end) { return acc; }
     List(Int) der = slice_seed(body, start, clen, []);
-    return tm_cert_list_acc(body, start + clen, end, acc.concat([der]));
+    Int ext_at = start + clen;
+    if (ext_at + 1 > end) { return acc.concat([der]); }
+    Int elen = body[ext_at] * 256 + body[ext_at + 1];
+    if (ext_at + 1 + elen > end) { return acc.concat([der]); }
+    return tm_cert_list_acc(body, ext_at + 2 + elen, end, acc.concat([der]));
 }
 
 /// Whether a CertificateVerify body names an ECDSA scheme.
