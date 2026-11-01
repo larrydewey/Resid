@@ -88,6 +88,9 @@ Int run_one(List(Str) g, List(Str) t) {
     if (kind == "pss") {
         RsaPub key = rsa_pub(unhex(g[5]), unhex(g[6]));
         Bool ok = rsa_pss_verify(hash_named(g[2]), hash_named(g[3]), str_parse_int(g[4]), key, unhex(t[3]), unhex(t[4]));
+        // SHA-1 as the message hash is refused by policy (lib/hash.resid):
+        // a vector there is skipped, and accepting it is a failure.
+        if (g[2] == "sha1") { return if (ok) { 0 - 2 } else { 0 - 1 }; }
         return if (ok) { 1 } else { 0 };
     }
     if (kind == "gcm") {

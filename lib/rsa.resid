@@ -187,6 +187,9 @@ pub RsaPub rsa_pub(List(Int) n_be, List(Int) e_be) {
     if (bits < rsa_min_bits() || bits > rsa_max_bits()) { return rsa_pub_bad(); }
     if ((nb[nb.len() - 1] & 1) == 0 || (eb[eb.len() - 1] & 1) == 0) { return rsa_pub_bad(); }
     if (eb.len() == 1 && eb[0] < 3) { return rsa_pub_bad(); }
+    // A public exponent past 32 bits costs a verifier a modular
+    // multiplication per bit for nothing: refused, as Go does.
+    if (eb.len() > 4) { return rsa_pub_bad(); }
     Int s = (nb.len() + 7) / 8;
     List(UInt(64)) n = rsa_from_be(nb, s);
     if (eb.len() == nb.len() && rsa_cmp(rsa_from_be(eb, s), n) >= 0) { return rsa_pub_bad(); }
@@ -279,6 +282,7 @@ pub List(Int) rsa_pkcs1_em(HashAlg h, List(Int) digest, Int k) {
 /// Encode-and-compare: the only accepted EM is the one this side builds,
 /// so no parser of the recovered block can be fooled.
 pub Bool rsa_pkcs1_verify_digest(HashAlg h, RsaPub key, List(Int) digest, List(Int) sig) {
+    if (digest.len() != hash_len(h)) { return false; }
     List(Int) em = rsa_public_op(key, sig);
     List(Int) want = rsa_pkcs1_em(h, digest, key.k);
     if (em.len() == 0 || want.len() == 0) { return false; }
@@ -331,6 +335,8 @@ Int rsa_first_nz(List(Int) b, Int i) {
 /// bytes; -1 accepts any salt length (the "auto" of RFC 8017 §9.1.2
 /// implementations: the 01 separator finds it).
 pub Bool rsa_pss_verify_digest(HashAlg h, HashAlg mgf, Int slen, RsaPub key, List(Int) mhash, List(Int) sig) {
+    // SHA-1 is allowed for MGF1 only, never as the message hash.
+    if (match h { Sha1 => true, _ => false }) { return false; }
     List(Int) m = rsa_public_op(key, sig);
     if (m.len() == 0) { return false; }
     Int embits = key.bits - 1;

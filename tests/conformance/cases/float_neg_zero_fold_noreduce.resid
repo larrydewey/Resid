@@ -1,0 +1,7 @@
+// Negating 0.0 gives -0.0 whether the reducer folds it or the CPU does.
+Float nz() { return -0.0; }
+Int main() {
+    Float a = -0.0;
+    println(f"{a} {nz()} {1.0 / nz()}");
+    return 0;
+}

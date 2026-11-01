@@ -1054,6 +1054,19 @@ Bool cr_regs_ok(List(CorimRegister) r, List(CorimRegister) e, Int i) {
     return cr_reg_in(r[i], e, 0) && cr_regs_ok(r, e, i + 1);
 }
 
+// Whether each matched evidence claim holding registers has every one of
+// them named by the reference measurement that matched it.
+Bool cr_regs_cover(List(CorimClaim) cs, List(CorimMeas) ms, List(Int) hit, Int k) {
+    if (k >= hit.len() || k >= ms.len()) { return true; }
+    CorimMval e = cs[hit[k]].m.mval;
+    CorimMval r = ms[k].mval;
+    Bool ok = (e.present & 16384) == 0 || ((r.present & 16384) != 0 && cr_names_all(e.registers, r.registers, 0));
+    return ok && cr_regs_cover(cs, ms, hit, k + 1);
+}
+
+Bool cr_names_all(List(CorimRegister) e, List(CorimRegister) r, Int i) { return i >= e.len() || (cr_name_in(e[i].name, r, 0) && cr_names_all(e, r, i + 1)); }
+Bool cr_name_in(Str n, List(CorimRegister) r, Int j) { return j < r.len() && (r[j].name == n || cr_name_in(n, r, j + 1)); }
+
 Bool cr_reg_in(CorimRegister r, List(CorimRegister) e, Int j) { return j < e.len() && ((e[j].name == r.name && cr_digests_ok(r.digests, e[j].digests)) || cr_reg_in(r, e, j + 1)); }
 
 /// Do two keys name the same public key? By the key itself where both
@@ -1129,7 +1142,11 @@ pub CorimAcs corim_appraise(List(CorimClaim) evidence, CorimRefs r) {
 // one evidence claim corroborates the claims it matched.
 CorimAcs cr_refs_apply(CorimAcs a, List(CorimTriple) ts, Int i) {
     if (i >= ts.len()) { return a; }
-    List(Int) hit = cr_triple_hits(a.claims, ts[i], 0, [], true);
+    List(Int) hit0 = cr_triple_hits(a.claims, ts[i], 0, [], true);
+    // A register map is corroborated only by a reference naming every
+    // register the evidence holds: unlisted registers would otherwise ride
+    // on the ones listed, and the policy may then name none.
+    List(Int) hit = if (hit0.len() > 0 && cr_regs_cover(a.claims, ts[i].meas, hit0, 0)) { hit0 } else { [] };
     if (hit.len() == 0) { return cr_refs_apply(a, ts, i + 1); }
     return cr_refs_apply(CorimAcs {.claims = cr_mark(a.claims, hit, 0, []), .applied = a.applied + 1}, ts, i + 1);
 }

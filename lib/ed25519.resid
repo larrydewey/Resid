@@ -170,6 +170,12 @@ DecPt dec_pt(List(Int) bs) {
     return DecPt {.ok = fe_sub(y2, x2) == fe_add(1, fe_mul(fe_d(), fe_mul(x2, y2))), .x = x, .y = y};
 }
 
+// Whether [8]p is the identity: p lies in the order-8 torsion subgroup.
+Bool eg_small_order(EgPt(Int(512)) p) {
+    EgPt(Int(512)) p8 = eg_dbl(eg_dbl(eg_dbl(p)));
+    return ept_eq(ept_n(p8), ept_id());
+}
+
 /// The 64-byte little-endian digest `dig` reduced mod L.
 pub Int(256) mod_l(List(Int) dig) { return wrapping_i256(eg_digest_mod_l(dig)); }
 
@@ -189,6 +195,10 @@ pub Bool verify_sig_bytes(List(Int) mb, List(Int) sig, List(Int) pubk) {
     if (!ad.ok || !rd.ok) { return false; }
     EgPt(Int(512)) a = eg_pt(fe_w(ad.x), fe_w(ad.y));
     EgPt(Int(512)) r = eg_pt(fe_w(rd.x), fe_w(rd.y));
+    // A key or R of small order makes [h]A or R carry no binding to the key:
+    // the identity key verifies `enc(B) || 0` for every message. Refused,
+    // as libsodium does.
+    if (eg_small_order(a) || eg_small_order(r)) { return false; }
     Int(512) hv = eg_digest_mod_l(sha512_bytes(rb.concat(pubk).concat(mb)));
     EgPt(Int(512)) o = eg_id();
     // [S]B == R + [h]A

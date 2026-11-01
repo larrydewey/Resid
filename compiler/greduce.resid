@@ -411,7 +411,8 @@ SV sem_un(Str op, Str v, Str ty) {
     if (op == "+") { return sv_of(v, ty); }
     if (op == "!") { return if (ty == "Bool") { sv_of(if (v == "true") { "false" } else { "true" }, "Bool") } else { sv_no() }; }
     // Negating a Float flips its sign bit, which the pattern carries.
-    if (op == "-" && rd_is_f64(ty)) { return sv_of(rd_f64_bits(0.0 - rd_f64(v)), "Float"); }
+    // Negation flips the sign, -0.0 included: 0.0 - x would give +0.0.
+    if (op == "-" && rd_is_f64(ty)) { return sv_of(rd_f64_bits((0.0 - 1.0) * rd_f64(v)), "Float"); }
     if (!rd_is_int_ty(ty) || (op != "-" && op != "~")) { return sv_no(); }
     if (!rd_small(v) || rd_iw(ty) > 64) {
         Int(2048) wv = rd_w(v);

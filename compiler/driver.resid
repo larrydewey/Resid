@@ -8982,16 +8982,37 @@ List(Int) prov_file_hash(Str p) {
 }
 
 // Every function probes its stack page by page: a frame past the guard page faults, never lands in a mapping below.
-Str probe_stack(Str doc) { return probe_lines(str_split(doc, "\n"), 0, StrBuf()); }
+// A program function named like a C library function (`Float sqrt(Float)`)
+// would be folded by LLVM as that function: each one the module defines
+// is named in a "no-builtin-<name>" attribute on every function.
+Str probe_stack(Str doc) {
+    List(Str) ls = str_split(doc, "\n");
+    Str nb = no_builtin_attrs(ls, 0, StrBuf());
+    return probe_lines(ls, 0, " \"probe-stack\"=\"inline-asm\"" + nb, StrBuf());
+}
 
-Str probe_lines(List(Str) ls, Int i, StrBuf acc) {
+Bool libc_name(Str n) {
+    List(Str) names = ["sqrt", "sqrtf", "floor", "floorf", "ceil", "ceilf", "trunc", "truncf", "round", "roundf", "rint", "nearbyint", "fabs", "fabsf", "fmod", "fmodf", "fmin", "fmax", "copysign", "pow", "powf", "exp", "exp2", "expf", "log", "log2", "log10", "logf", "sin", "sinf", "cos", "cosf", "tan", "tanf", "sinh", "cosh", "tanh", "asin", "acos", "atan", "atan2", "cbrt", "hypot", "ldexp", "frexp", "modf", "lround", "llround", "abs", "labs", "llabs", "atoi", "atol", "atof", "strlen", "strnlen", "strcmp", "strncmp", "strchr", "strrchr", "strstr", "strcpy", "strncpy", "strcat", "strdup", "memchr", "memcmp", "bcmp", "toupper", "tolower", "isdigit", "isascii", "ffs", "puts", "putchar", "printf", "fputs", "fwrite", "exit", "abort", "calloc", "realloc"];
+    return names.contains(n);
+}
+
+Str no_builtin_attrs(List(Str) ls, Int i, StrBuf acc) {
+    if (i >= ls.len()) { return acc.finish(); }
+    Str l = ls[i];
+    Int at = if (str_starts_with(l, "define ")) { str_index_of(l, " @", 0) } else { 0 - 1 };
+    Int lp = if (at < 0) { 0 - 1 } else { str_index_of(l, "(", at) };
+    Str nm = if (lp < 0) { "" } else { str_slice(l, at + 2, lp) };
+    return no_builtin_attrs(ls, i + 1, if (nm != "" && libc_name(nm)) { acc.push(" \"no-builtin-" + nm + "\"") } else { acc });
+}
+
+Str probe_lines(List(Str) ls, Int i, Str attrs, StrBuf acc) {
     if (i >= ls.len()) { return acc.finish(); }
     Str l = ls[i];
     Bool def = str_starts_with(l, "define ") && str_ends_with(l, " {") && !str_contains(l, " naked ") && !str_contains(l, "probe-stack");
     Int dk = str_index_of(l, " !dbg ", 0);
     Int at = if (dk >= 0) { dk } else { str_len(l) - 2 };
-    StrBuf a1 = if (def) { acc.push(str_slice(l, 0, at)).push(" \"probe-stack\"=\"inline-asm\"").push(str_slice(l, at, str_len(l))) } else { acc.push(l) };
-    return probe_lines(ls, i + 1, if (i + 1 < ls.len()) { a1.push("\n") } else { a1 });
+    StrBuf a1 = if (def) { acc.push(str_slice(l, 0, at)).push(attrs).push(str_slice(l, at, str_len(l))) } else { acc.push(l) };
+    return probe_lines(ls, i + 1, attrs, if (i + 1 < ls.len()) { a1.push("\n") } else { a1 });
 }
 
 // ─── Small program functions with few callers are inlined ───────────
@@ -9679,7 +9700,21 @@ Str vf_graph_caps(List(Int) g, Int pos, Int left, List(Str) fams, List(Str) gran
     if (left <= 0 || pos >= g.len()) { return ""; }
     Str bad = vf_first_outside(cbe_map_texts_in(g, pos, "capabilities"), 0, fams);
     if (bad != "") { return "the graph uses capability `" + bad + "`, outside the recorded grant [" + list_join(grant, 0, ", ", "") + "]"; }
+    Str w = vf_first_ro_write(cbe_map_texts_in(g, pos, "effects"), 0, grant);
+    if (w != "") { return "the graph writes with `" + w + "`, but the recorded grant [" + list_join(grant, 0, ", ", "") + "] is read-only for it"; }
     return vf_graph_caps(g, cbe_skip(g, pos), left - 1, fams, grant);
+}
+
+// The first effect `family.verb` that writes while the grant holds that
+// family only read-only, or "".
+Str vf_first_ro_write(List(Str) effs, Int i, List(Str) grant) {
+    if (i >= effs.len()) { return ""; }
+    Str e = effs[i];
+    Int dot = str_find_char(e, 46, 0);
+    Str fam = if (dot < 0) { "" } else { str_slice(e, 0, dot) };
+    Str verb = if (dot < 0) { "" } else { str_slice(e, dot + 1, str_len(e)) };
+    if (fam != "" && is_write_verb(fam, verb) && !grant.contains(fam)) { return e; }
+    return vf_first_ro_write(effs, i + 1, grant);
 }
 
 Str vf_first_outside(List(Str) caps, Int i, List(Str) fams) {

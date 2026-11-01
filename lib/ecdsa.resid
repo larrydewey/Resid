@@ -273,12 +273,14 @@ pub Bool ecdsa_verify_digest(Curve c, List(Int) pubkey, List(Int) digest, EcSig 
 
 /// Whether DER signature `der` by `pubkey` is valid over `msg` hashed with `h`.
 pub Bool ecdsa_verify(Curve c, HashAlg h, List(Int) pubkey, List(Int) msg, List(Int) der) {
+    if (match h { Sha1 => true, _ => false }) { return false; }
     return ecdsa_verify_digest(c, pubkey, hash_bytes(h, msg), ecdsa_sig_der(der));
 }
 
 /// Whether r || s signature `raw` by `pubkey` is valid over `msg` hashed
 /// with `h`.
 pub Bool ecdsa_verify_raw(Curve c, HashAlg h, List(Int) pubkey, List(Int) msg, List(Int) raw) {
+    if (match h { Sha1 => true, _ => false }) { return false; }
     return ecdsa_verify_digest(c, pubkey, hash_bytes(h, msg), ecdsa_sig_raw(c, raw));
 }
 
@@ -393,13 +395,16 @@ pub EcSig ecdsa_low_s(Curve c, EcSig sig) {
 
 List(Int) ec_low256(UInt(576) s) {
     UInt(576) n = p256_n();
+    if (s >= n) { return p256_to_be(s); }
     return p256_to_be(if (s > n >> 1) { n - s } else { s });
 }
 List(Int) ec_low384(UInt(832) s) {
     UInt(832) n = p384_n();
+    if (s >= n) { return p384_to_be(s); }
     return p384_to_be(if (s > n >> 1) { n - s } else { s });
 }
 List(Int) ec_low521(UInt(1088) s) {
     UInt(1088) n = p521_n();
+    if (s >= n) { return p521_to_be(s); }
     return p521_to_be(if (s > n >> 1) { n - s } else { s });
 }

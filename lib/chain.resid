@@ -107,7 +107,7 @@ pub Bool ci_eq_range(List(Int) a, Int ai, List(Int) b, Int bi, Int count) {
 pub Bool dns_match(List(Int) host, List(Int) pat) {
     Int plen = pat.len();
     Int star = pat[0];
-    if (star == 42 && plen > 2) {
+    if (star == 42 && plen > 2 && pat[1] == 46) {
         Int hlen = host.len();
         Int suflen = plen - 2;
         if (hlen < suflen + 2) { return false; }
@@ -314,6 +314,210 @@ pub Bool chain_verify_parsed(Cert c, Cert i, Instant now) {
     if (!cert_is_ca(i)) { return false; }
     if (!cert_key_usage(i, 5)) { return false; }
     return sig_verify(c.signed.alg, i.key, c.signed.tbs, c.signed.sig);
+}
+
+// ─── Path constraints (RFC 5280 §4.2.1.9, §4.2.1.10, §4.2) ───────────
+//
+// What a CA may say about the certificates beneath it: how many CAs may
+// follow it (pathLenConstraint), which names they may certify (name
+// constraints), and extensions marked critical, which a verifier that does
+// not process them must refuse. The TLS walk applies all three.
+
+/// basicConstraints pathLenConstraint: -1 when absent, 0 when malformed
+/// (the most a malformed one can be trusted to allow).
+pub Int cert_path_len(Cert c) {
+    Der bc = cert_ext_inner(c, "2.5.29.19");
+    if (!bc.ok || bc.tag != 48 || bc.len == 0) { return 0 - 1; }
+    Der first = der_child(c.der, bc);
+    if (der_is_last(first, bc)) { return 0 - 1; }
+    Der pl = der_sibling(c.der, first, bc);
+    if (!pl.ok || pl.tag != 2 || !der_is_last(pl, bc)) { return 0; }
+    Int n = der_small_uint(c.der, pl);
+    return if (n < 0) { 0 } else { n };
+}
+
+// The extensions the TLS walk processes; any other one marked critical
+// refuses the certificate.
+Bool tls_crit_known(Str o) {
+    return o == "2.5.29.19" || o == "2.5.29.15" || o == "2.5.29.37" || o == "2.5.29.17" || o == "2.5.29.30";
+}
+
+/// Whether every critical extension of `c` is one the TLS walk processes.
+pub Bool cert_crit_ok(Cert c) {
+    if (!c.exts.ok) { return true; }
+    Der seq = der_child(c.der, c.exts);
+    return cert_crit_scan(c.der, der_child(c.der, seq), seq);
+}
+
+Bool cert_crit_scan(List(Int) b, Der e, Der seq) {
+    if (!e.ok) { return false; }
+    Der id = der_child(b, e);
+    Der v1 = der_sibling(b, id, e);
+    Bool crit = v1.ok && v1.tag == 1 && b[v1.start] == 255;
+    if (crit && !tls_crit_known(der_oid(b, id))) { return false; }
+    if (der_is_last(e, seq)) { return true; }
+    return cert_crit_scan(b, der_sibling(b, e, seq), seq);
+}
+
+/// One side of a NameConstraints extension: its dNSName bases and its
+/// iPAddress bases (address then mask, 8 or 32 bytes). ok = false when it
+/// holds a name form this walk does not check, or is malformed.
+type NcSet = { Bool ok; List(List(Int)) dns; List(List(Int)) ip; };
+
+/// A certificate's name constraints. A certificate without them has both
+/// sides empty, which constrains nothing.
+type NameCons = { Bool ok; NcSet permit; NcSet exclude; };
+
+NcSet nc_empty() { return NcSet {.ok = true, .dns = [], .ip = []}; }
+NcSet nc_bad() { return NcSet {.ok = false, .dns = [], .ip = []}; }
+
+// One GeneralSubtree: a base and no minimum or maximum (RFC 5280 says
+// both MUST be absent). directoryName, rfc822Name, URI and the rest are
+// refused rather than ignored, so a constraint is never dropped.
+NcSet nc_add(List(Int) b, Der base, NcSet acc) {
+    if (base.tag == 130) { return NcSet {.ok = true, .dns = acc.dns.concat([der_value(b, base)]), .ip = acc.ip}; }
+    if (base.tag == 135 && (base.len == 8 || base.len == 32)) { return NcSet {.ok = true, .dns = acc.dns, .ip = acc.ip.concat([der_value(b, base)])}; }
+    return nc_bad();
+}
+
+NcSet nc_scan(List(Int) b, Der e, Der parent, NcSet acc) {
+    if (!e.ok || e.tag != 48) { return nc_bad(); }
+    Der base = der_child(b, e);
+    if (!base.ok || !der_is_last(base, e)) { return nc_bad(); }
+    NcSet acc2 = nc_add(b, base, acc);
+    if (!acc2.ok || der_is_last(e, parent)) { return acc2; }
+    return nc_scan(b, der_sibling(b, e, parent), parent, acc2);
+}
+
+NcSet nc_side(List(Int) b, Der side) {
+    Der first = der_child(b, side);
+    if (!first.ok) { return nc_bad(); }
+    return nc_scan(b, first, side, nc_empty());
+}
+
+/// The name constraints (2.5.29.30) of `c`: [0] permitted, then [1]
+/// excluded, at least one present.
+pub NameCons cert_name_cons(Cert c) {
+    NameCons bad = NameCons {.ok = false, .permit = nc_bad(), .exclude = nc_bad()};
+    if (!cert_ext(c, "2.5.29.30").ok) { return NameCons {.ok = true, .permit = nc_empty(), .exclude = nc_empty()}; }
+    Der nc = cert_ext_inner(c, "2.5.29.30");
+    if (!nc.ok || nc.tag != 48 || nc.len == 0) { return bad; }
+    Der first = der_child(c.der, nc);
+    if (!first.ok) { return bad; }
+    if (first.tag == 161) {
+        if (!der_is_last(first, nc)) { return bad; }
+        NcSet x = nc_side(c.der, first);
+        return NameCons {.ok = x.ok, .permit = nc_empty(), .exclude = x};
+    }
+    if (first.tag != 160) { return bad; }
+    NcSet p = nc_side(c.der, first);
+    if (der_is_last(first, nc)) { return NameCons {.ok = p.ok, .permit = p, .exclude = nc_empty()}; }
+    Der second = der_sibling(c.der, first, nc);
+    if (!second.ok || second.tag != 161 || !der_is_last(second, nc)) { return bad; }
+    NcSet x = nc_side(c.der, second);
+    return NameCons {.ok = p.ok && x.ok, .permit = p, .exclude = x};
+}
+
+// Whether `a` ends with `suf`, ignoring ASCII case.
+Bool ci_ends_with(List(Int) a, List(Int) suf) {
+    Int n = suf.len();
+    if (a.len() < n) { return false; }
+    return ci_eq_range(a, a.len() - n, suf, 0, n);
+}
+
+/// Whether DNS name `n` lies in the subtree `base`: `base` itself or any
+/// name below it; a base with a leading `.` only names below it. An empty
+/// base is every name. A wildcard SAN is checked as written: its `*` label
+/// matches no base label, so `*.a.test` is within `a.test` but not within
+/// `x.a.test`.
+pub Bool dns_within(List(Int) n, List(Int) base) {
+    if (base.len() == 0) { return true; }
+    if (base[0] == 46) { return n.len() > base.len() && ci_ends_with(n, base); }
+    if (n.len() == base.len()) { return ci_eq_bytes(n, base); }
+    return n.len() > base.len() && n[n.len() - base.len() - 1] == 46 && ci_ends_with(n, base);
+}
+
+Bool dns_in_any(List(Int) n, List(List(Int)) bases, Int i) {
+    if (i >= bases.len()) { return false; }
+    if (dns_within(n, bases[i])) { return true; }
+    return dns_in_any(n, bases, i + 1);
+}
+
+/// Whether address `a` (4 or 16 bytes) lies in `base` (address then mask).
+pub Bool ip_within(List(Int) a, List(Int) base) {
+    Int n = a.len();
+    if (base.len() != 2 * n || n == 0) { return false; }
+    return ip_within_at(a, base, 0);
+}
+
+Bool ip_within_at(List(Int) a, List(Int) base, Int i) {
+    Int n = a.len();
+    if (i >= n) { return true; }
+    Int m = base[n + i];
+    if ((a[i] & m) != (base[i] & m)) { return false; }
+    return ip_within_at(a, base, i + 1);
+}
+
+Bool ip_in_any(List(Int) a, List(List(Int)) bases, Int i) {
+    if (i >= bases.len()) { return false; }
+    if (ip_within(a, bases[i])) { return true; }
+    return ip_in_any(a, bases, i + 1);
+}
+
+// RFC 5280 §4.2.1.10: a name of a form with permitted subtrees must be in
+// one; a name in an excluded subtree is refused.
+Bool nc_dns_ok(NameCons k, List(Int) n) {
+    if (k.permit.dns.len() > 0 && !dns_in_any(n, k.permit.dns, 0)) { return false; }
+    return !dns_in_any(n, k.exclude.dns, 0);
+}
+
+Bool nc_ip_ok(NameCons k, List(Int) a) {
+    if (k.permit.ip.len() > 0 && !ip_in_any(a, k.permit.ip, 0)) { return false; }
+    return !ip_in_any(a, k.exclude.ip, 0);
+}
+
+Bool nc_all_dns(NameCons k, List(List(Int)) ns, Int i) {
+    if (i >= ns.len()) { return true; }
+    if (!nc_dns_ok(k, ns[i])) { return false; }
+    return nc_all_dns(k, ns, i + 1);
+}
+
+Bool nc_all_ip(NameCons k, List(List(Int)) ns, Int i) {
+    if (i >= ns.len()) { return true; }
+    if (!nc_ip_ok(k, ns[i])) { return false; }
+    return nc_all_ip(k, ns, i + 1);
+}
+
+/// Whether the name constraints `k` admit the leaf: every dNSName and
+/// iPAddress it names, and the host it was matched against (a wildcard
+/// entry stands for that host too).
+pub Bool nc_admits(NameCons k, Cert leaf, List(Int) host) {
+    if (!k.ok) { return false; }
+    if (!nc_all_dns(k, cert_san(leaf, 130), 0) || !nc_all_ip(k, cert_san(leaf, 135), 0)) { return false; }
+    List(Int) ip = ip_addr_bytes(host);
+    return if (ip.len() > 0) { nc_ip_ok(k, ip) } else { nc_dns_ok(k, host) };
+}
+
+/// The leaf and host a TLS chain is walked for.
+type TlsPath = { Cert leaf; List(Int) host; };
+
+/// Whether `issuer`, with `below` CA certificates between it and the leaf,
+/// allows the path: its pathLenConstraint covers them, its name
+/// constraints admit the leaf, and it has no critical extension the walk
+/// ignores. Self-issued intermediates count toward `below`, which is
+/// stricter than RFC 5280.
+pub Bool issuer_path_ok(List(Int) issuer, TlsPath p, Int below) {
+    return match x509_parse(issuer) {
+        Ok(i) => cert_crit_ok(i) && (cert_path_len(i) < 0 || below <= cert_path_len(i)) && nc_admits(cert_name_cons(i), p.leaf, p.host),
+        Err(e) => false,
+    };
+}
+
+/// Whether a leaf may authenticate a TLS server: an extendedKeyUsage, when
+/// present, names serverAuth or anyExtendedKeyUsage.
+pub Bool cert_server_auth(Cert c) {
+    if (!cert_ext(c, "2.5.29.37").ok) { return true; }
+    return cert_eku_has(c, "1.3.6.1.5.5.7.3.1") || cert_eku_has(c, "2.5.29.37.0");
 }
 
 
@@ -790,20 +994,20 @@ Int trust_max_depth() {
     return 8;
 }
 
-Bool any_root_verifies(TrustStore st, List(Int) cert, Instant now, Int i) {
+Bool any_root_verifies(TrustStore st, List(Int) cert, Instant now, TlsPath p, Int below, Int i) {
     if (i >= st.roots.len()) { return false; }
-    if (issuer_accepts(st, cert, st.roots[i], now)) { return true; }
-    return any_root_verifies(st, cert, now, i + 1);
+    if (issuer_accepts(st, cert, st.roots[i], now) && issuer_path_ok(st.roots[i], p, below)) { return true; }
+    return any_root_verifies(st, cert, now, p, below, i + 1);
 }
 
 /// Result of searching a certificate pool for an accepting issuer: whether
 /// one was found, and its index in the pool.
 type IssuerHit = { Bool found; Int idx; };
 
-IssuerHit find_issuer_hit(TrustStore st, List(List(Int)) pool, List(Int) cert, Instant now, Int i) {
+IssuerHit find_issuer_hit(TrustStore st, List(List(Int)) pool, List(Int) cert, Instant now, TlsPath p, Int below, Int i) {
     if (i >= pool.len()) { return IssuerHit { .found = false, .idx = 0 }; }
-    if (issuer_accepts(st, cert, pool[i], now)) { return IssuerHit { .found = true, .idx = i }; }
-    return find_issuer_hit(st, pool, cert, now, i + 1);
+    if (issuer_accepts(st, cert, pool[i], now) && issuer_path_ok(pool[i], p, below)) { return IssuerHit { .found = true, .idx = i }; }
+    return find_issuer_hit(st, pool, cert, now, p, below, i + 1);
 }
 
 List(List(Int)) pool_without(List(List(Int)) pool, Int idx, Int i, List(List(Int)) acc) {
@@ -815,15 +1019,16 @@ List(List(Int)) pool_without(List(List(Int)) pool, Int idx, Int i, List(List(Int
 
 // Leaf upwards: pinned directly, or issued by something in the store, or
 // issued by one of the intermediates the server sent -- recursively, since
-// a chain is however deep the server says it is.
-Bool chain_to_store(List(Int) cert, List(List(Int)) pool, TrustStore st, Instant now, Int depth) {
+// a chain is however deep the server says it is. `below` counts the CA
+// certificates already walked, for the next issuer's pathLenConstraint.
+Bool chain_to_store(List(Int) cert, List(List(Int)) pool, TrustStore st, Instant now, Int depth, TlsPath p, Int below) {
     if (trust_store_has(st, cert, 0)) { return true; }
-    if (any_root_verifies(st, cert, now, 0)) { return true; }
+    if (any_root_verifies(st, cert, now, p, below, 0)) { return true; }
     if (depth <= 0) { return false; }
-    IssuerHit hit = find_issuer_hit(st, pool, cert, now, 0);
+    IssuerHit hit = find_issuer_hit(st, pool, cert, now, p, below, 0);
     if (!hit.found) { return false; }
     List(List(Int)) rest = pool_without(pool, hit.idx, 0, []);
-    return chain_to_store(pool[hit.idx], rest, st, now, depth - 1);
+    return chain_to_store(pool[hit.idx], rest, st, now, depth - 1, p, below + 1);
 }
 
 // ─── TLS client-side server-certificate check ────────────────────────
@@ -837,7 +1042,10 @@ pub Bool tls_server_trusted(List(Int) leaf, List(List(Int)) inters, List(Int) ho
     if (st.roots.len() == 0) { return false; }
     if (!x509_valid_now(leaf, now)) { return false; }
     if (!san_has_match(leaf, host)) { return false; }
-    return chain_to_store(leaf, inters, st, now, trust_max_depth());
+    return match x509_parse(leaf) {
+        Ok(c) => cert_crit_ok(c) && cert_server_auth(c) && chain_to_store(leaf, inters, st, now, trust_max_depth(), TlsPath {.leaf = c, .host = host}, 0),
+        Err(e) => false,
+    };
 }
 
 /// `acc` followed by the codepoints of `s` from index `i` on, one element

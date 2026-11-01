@@ -1,0 +1,9 @@
+// A user function named like a C math function is the one called: LLVM
+// must not fold it as libm's (no-builtin-<name>), reduced or not.
+Float sqrt(Float x) { return 42.0; }
+Float floor(Float x) { return 7.0; }
+Float rt_val(Float x) { return x; }
+Int main() {
+    println(f"{sqrt(4.0)} {sqrt(rt_val(4.0))} {floor(2.5)} {floor(rt_val(2.5))}");
+    return 0;
+}

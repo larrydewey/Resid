@@ -14,7 +14,8 @@
 // Logging is off (`on` false) for a plain check.
 // bm: method calls `x.m(..)` resolved to a built-in method, never a user
 // function m (always kept, for the authority edges).
-type TL = { Bool on; List(Int) keys; List(Str) tys; List(Int) mem; List(Int) bm; };
+// sh: "id|fn" for each user Show function an f-string node `id` calls.
+type TL = { Bool on; List(Int) keys; List(Str) tys; List(Int) mem; List(Int) bm; List(Str) sh; };
 // Checker state: graph, def edges, signatures, binder id -> type, the log,
 // struct declaration ids by name, and fn declaration ids by signature index.
 // `only`: "" checks every declaration; ",a,b," (a later instantiation
@@ -36,7 +37,7 @@ type GKS = { GK k; Str err; Int at; };
 
 TL tl_add(TL t, Int id, Str ty) {
     if (!t.on) { return t; }
-    return TL {.on = true, .keys = t.keys.concat([id * 4294967296 + t.tys.len()]), .tys = t.tys.concat([ty]), .mem = t.mem, .bm = t.bm};
+    return TL {.on = true, .keys = t.keys.concat([id * 4294967296 + t.tys.len()]), .tys = t.tys.concat([ty]), .mem = t.mem, .bm = t.bm, .sh = t.sh};
 }
 
 // Each variant name's first sum (find_variant's answer), indexed once.
@@ -100,14 +101,14 @@ Str gm_uses_of(Str aux) {
 GK gk_mem(GK k, Int use, Int def) {
     if (def < 0 || !k.tl.on) { return k; }
     TL t = k.tl;
-    return gk_tl(k, TL {.on = true, .keys = t.keys, .tys = t.tys, .mem = t.mem.concat([use * 4294967296 + def + 2]), .bm = t.bm});
+    return gk_tl(k, TL {.on = true, .keys = t.keys, .tys = t.tys, .mem = t.mem.concat([use * 4294967296 + def + 2]), .bm = t.bm, .sh = t.sh});
 }
 
 // Method call `id` resolved to a built-in method.
 GKT gk_bm(GKT t, Int id) {
     if (t.err != "") { return t; }
     TL l = t.k.tl;
-    return GKT {.ty = t.ty, .err = "", .at = t.at, .k = gk_tl(t.k, TL {.on = l.on, .keys = l.keys, .tys = l.tys, .mem = l.mem, .bm = l.bm.concat([id])})};
+    return GKT {.ty = t.ty, .err = "", .at = t.at, .k = gk_tl(t.k, TL {.on = l.on, .keys = l.keys, .tys = l.tys, .mem = l.mem, .bm = l.bm.concat([id]), .sh = l.sh})};
 }
 
 GKT gt(GK k, Str ty, Int at) {
@@ -1335,7 +1336,31 @@ GKT gk_fstr(GK k, Int id, Int i) {
     }
     Str nd = gm_need_vars(h.k, "Show", str_split(gm_tvars(h.ty), ","), 0);
     if (nd != "") { return gterr(h.k, "E0226: showing a " + h.ty + " needs " + nd + ": add @needs(" + nd + ") to the function", c); }
-    return gk_fstr(gm_show_insts(h.k, h.ty, 0), id, if (fs >= 0) { i + 2 } else { i + 1 });
+    GK ks = gm_show_insts(h.k, h.ty, 0);
+    List(Str) fns = gk_show_fns(ks, h.ty, 0, []);
+    TL l = ks.tl;
+    GK ks2 = if (fns.len() == 0) { ks } else { gk_tl(ks, TL {.on = l.on, .keys = l.keys, .tys = l.tys, .mem = l.mem, .bm = l.bm, .sh = l.sh.concat(gk_show_tag(fns, f"{id}|", 0, []))}) };
+    return gk_fstr(ks2, id, if (fs >= 0) { i + 2 } else { i + 1 });
+}
+
+// The user Show functions showing a `t` may call: its own instance's and
+// those of the types it holds.
+List(Str) gk_show_fns(GK k, Str t, Int depth, List(Str) acc) {
+    if (depth > 6 || t == "" || gm_has_var(t)) { return acc; }
+    Int bi = ck_b_index(k.fs, "Show", t);
+    Str f = if (bi < 0) { "" } else { gm_bfn_for(k.fs, bi, "show") };
+    List(Str) acc2 = if (f == "" || acc.contains(f)) { acc } else { acc.concat([f]) };
+    return gk_show_comp(k, gm_components(k, t), 0, depth + 1, acc2);
+}
+
+List(Str) gk_show_comp(GK k, List(Str) ts, Int i, Int depth, List(Str) acc) {
+    if (i >= ts.len()) { return acc; }
+    return gk_show_comp(k, ts, i + 1, depth, gk_show_fns(k, ts[i], depth, acc));
+}
+
+List(Str) gk_show_tag(List(Str) fs, Str pre, Int i, List(Str) acc) {
+    if (i >= fs.len()) { return acc; }
+    return gk_show_tag(fs, pre, i + 1, acc.concat([pre + fs[i]]));
 }
 
 // The spec node after the hole at `i`, or -1 when there is none.
@@ -3666,8 +3691,9 @@ GKS gk_decls(GK k, Int id, Int i, Str src, Str smap) {
     if (skip) { return gk_decls(k, id, i + 1, src, smap); }
     if (kind == "sandbox") {
         PRes caps = cap_list_at(k.g.ns[d].aux + ")", 0, true, "");
-        if (caps.err != "") {
-            eprintln("error[E0213]: " + caps.err);
+        Str cerr = if (caps.err != "") { caps.err } else { gk_caps_err(caps.ty) };
+        if (cerr != "") {
+            eprintln("error[E0213]: " + cerr);
             return gs_err(k, "reported", d);
         }
         GKS r = gk_decls(k, d, 0, src, smap);
@@ -4017,6 +4043,13 @@ Str gk_requires_err(Str prefix) {
     if (lp < 0) { return ""; }
     PRes r = cap_list_at(prefix, lp + 1, true, "");
     if (r.err != "") { return r.err; }
+    return gk_caps_err(r.ty);
+}
+
+// A parsed capability list (@requires, sandbox or spawn) giving a mode to
+// a mode-less family, or naming an unknown one: the reason, or "".
+Str gk_caps_err(Str ty) {
+    PRes r = PRes {.ty = ty, .err = "", .pos = 0};
     Str nm = gk_native_moded(str_split(r.ty, ","), 0);
     if (nm != "") { return "`" + nm + "` has no modes: a native module is reached in full or not at all (spec §47)"; }
     if (gk_display_moded(str_split(r.ty, ","), 0)) { return "`display` has no modes: a program reaches the window server in full or not at all (spec §20)"; }
@@ -4466,11 +4499,20 @@ GKF gk_sort_implicit(GK k, Int id, Int i, GKF f) {
     return gk_sort_implicit(k, id, i + 1, if (user) { gf_add(f, "c", gm_bfn_for(k.fs, i, "compare")) } else { f });
 }
 
+// The user Show functions an f-string's holes call (recorded per node by
+// gk_fstr) are authority edges of the f-string.
+GKF gk_show_implicit(GK k, Int id, Int i, GKF f) {
+    if (i >= k.tl.sh.len() || k.g.ns[id].kind != "fstr") { return f; }
+    Str e = k.tl.sh[i];
+    Str pre = f"{id}|";
+    return gk_show_implicit(k, id, i + 1, if (str_starts_with(e, pre)) { gf_add(f, "c", str_slice(e, str_len(pre), str_len(e))) } else { f });
+}
+
 GKF gk_facts(GK k, Int id, GKF f) {
     GKF fu = if (gk_user_call(k, id) || gk_user_ref(k, id)) { gf_add(f, "c", k.g.ns[id].text) } else { f };
     Str bimpl = gk_sort_impl(k, id);
     GKF f0a = if (bimpl == "") { fu } else { gf_add(fu, "c", bimpl) };
-    GKF f0 = gk_sort_implicit(k, id, 0, f0a);
+    GKF f0 = gk_show_implicit(k, id, 0, gk_sort_implicit(k, id, 0, f0a));
     Str bfam = gk_call_family(k, id);
     GKF f1a = if (bfam == "") { f0 } else { gf_add(f0, "p", bfam) };
     GKF f1 = if (bfam != "" && gk_builtin_write(k.g.ns[id].text)) { gf_add(f1a, "w", bfam + "." + k.g.ns[id].text) } else { f1a };
@@ -4576,6 +4618,8 @@ Str gk_spawn_scan(GK k, Int id, Bool bounded, Str parent, Bool insp) {
     if (g.ns[id].kind == "spawn") {
         PRes caps = cap_list_at(g.ns[id].aux + ")", 0, true, "");
         if (caps.err != "") { return ""; }
+        Str cerr = gk_caps_err(caps.ty);
+        if (cerr != "") { return "error[E0213]: spawn: " + cerr; }
         if (bounded) {
             Str over = if (caps.ty == "") { "" } else { spawn_cap_exceeds_at(str_split(caps.ty, ","), parent, 0) };
             if (over != "") { return "error[E0214]: spawn declares capability `" + cap_spell(over) + "` which exceeds the parent's capability ceiling [" + fmt_caps(parent) + "] (child ≤ parent)"; }
@@ -4845,7 +4889,7 @@ Bool gk_authority(GK k, List(Int) fnode, GKFs facts) {
 
 Int gk_finish(GK k0, List(Int) fnode, Str src, Str smap, Str smap0) {
     TL l = k0.tl;
-    GK k = gk_tl(k0, TL {.on = l.on, .keys = l.keys, .tys = l.tys, .mem = l.mem, .bm = sort(l.bm)});
+    GK k = gk_tl(k0, TL {.on = l.on, .keys = l.keys, .tys = l.tys, .mem = l.mem, .bm = sort(l.bm), .sh = l.sh});
     Sigs fs = k.fs;
     List(Str) e = [];
     List(GKF) ef = [];
@@ -5058,7 +5102,7 @@ pub GKR gk_analyze_m(Kg g, Int unit, Str src, Str smap0, Bool log, Bool fin, Str
     List(Str) es = [];
     // A program with secrets logs every expression's type, so E0258 is
     // checked on inferred types and generic copies too (sec_wide_scan).
-    TL tl = TL {.on = log || sec_graph_has(g, 0), .keys = e, .tys = es, .mem = e, .bm = e};
+    TL tl = TL {.on = log || sec_graph_has(g, 0), .keys = e, .tys = es, .mem = e, .bm = e, .sh = es};
     Map(Str, Int) m0 = {};
     if (!lite && gm_unknown_types(g, 0, gm_known_types(sg, m0), src, smap, false)) { return GKR {.status = 1, .ty = es, .def = e, .rs = rs, .fs = sg.fs, .log = es}; }
     List(Int) nls = if (nls0.len() > 0) { nls0 } else { gk_newlines(src, 0, ListBuf()) };
@@ -5481,7 +5525,11 @@ pub Bool sec_known_check(KP p, Str src, Str smap) {
     Map(Str, Int) user = sec_user_fns(p.g, 0, none);
     if (user.contains("secret")) { return false; }
     Map(Int, Int) ok = sec_declassified(p.g, 0, user, {});
-    Int bad = sec_known_at(p.g, 0, ok);
+    // Known does not wait on the reducer: a call of a function that reads
+    // nothing at run time, on known arguments, is known at any budget.
+    Map(Str, Int) fns = sec_fn_nodes(p.g, 0, {});
+    Map(Str, Int) pure = sec_pure_fix(p.g, fns, fns.keys(), fns);
+    Int bad = sec_known_at(p.g, 0, ok, pure, fns);
     if (bad < 0) { return false; }
     gk_diag("E0250", "secret(...) of a value the compiler knows: the value is in the binary for everyone who has it. Read the secret at run time, or pass it straight to declassify(...) to state that it is public", p.g, bad, src, smap);
     return true;
@@ -5497,25 +5545,76 @@ Map(Int, Int) sec_declassified(Kg g, Int i, Map(Str, Int) user, Map(Int, Int) ac
     return sec_declassified(g, i + 1, user, if (inner) { acc.insert(c, 1) } else { acc });
 }
 
-Int sec_known_at(Kg g, Int i, Map(Int, Int) ok) {
+Int sec_known_at(Kg g, Int i, Map(Int, Int) ok, Map(Str, Int) pure, Map(Str, Int) fns) {
     if (i >= g.ns.len()) { return 0 - 1; }
     KN n = g.ns[i];
-    Bool hit = n.kind == "call" && n.text == "secret" && n.nk == 1 && !ok.contains(i) && sec_known_tree(g, kg_kid(g, i, 0), 0);
-    return if (hit) { i } else { sec_known_at(g, i + 1, ok) };
+    Bool hit = n.kind == "call" && n.text == "secret" && n.nk == 1 && !ok.contains(i) && sec_known_tree(g, kg_kid(g, i, 0), 0, pure, fns);
+    return if (hit) { i } else { sec_known_at(g, i + 1, ok, pure, fns) };
 }
 
-// Built only from literals: nothing read at run time feeds it.
-Bool sec_known_tree(Kg g, Int id, Int depth) {
+// Built only from literals and calls that read nothing at run time: a
+// user function in `pure`, or a builtin outside the runtime's own.
+Bool sec_known_tree(Kg g, Int id, Int depth, Map(Str, Int) pure, Map(Str, Int) fns) {
     if (depth > 64) { return false; }
     Str k = g.ns[id].kind;
     Bool shape = k == "lit" || k == "list" || k == "struct" || k == "finit" || k == "paren" || k == "un" || k == "bin" || k == "cast" || k == "ty" || k == "map" || k == "entry" || k == "set" || k == "named" || k == "emptyb";
-    if (!shape) { return false; }
-    return sec_known_kids(g, id, 0, depth);
+    Bool call = k == "call" && sec_pure_call(g.ns[id].text, pure, fns);
+    if (!shape && !call) { return false; }
+    return sec_known_kids(g, id, 0, depth, pure, fns);
 }
 
-Bool sec_known_kids(Kg g, Int id, Int i, Int depth) {
+Bool sec_known_kids(Kg g, Int id, Int i, Int depth, Map(Str, Int) pure, Map(Str, Int) fns) {
     if (i >= g.ns[id].nk) { return true; }
-    return sec_known_tree(g, kg_kid(g, id, i), depth + 1) && sec_known_kids(g, id, i + 1, depth);
+    return sec_known_tree(g, kg_kid(g, id, i), depth + 1, pure, fns) && sec_known_kids(g, id, i + 1, depth, pure, fns);
+}
+
+// A call whose result, on known arguments, is known: a function of
+// `pure`, or a builtin or constructor (not a function of `fns`) outside the
+// runtime's own, the secret wrappers and randomness.
+Bool sec_pure_call(Str n, Map(Str, Int) pure, Map(Str, Int) fns) {
+    if (fns.contains(n)) { return pure.contains(n); }
+    return n != "secret" && n != "declassify" && n != "classify" && n != "assumed" && n != "provisioned_key" && !str_starts_with(n, "resid_") && !str_contains(n, "random");
+}
+
+// Every top-level function node, by name.
+Map(Str, Int) sec_fn_nodes(Kg g, Int i, Map(Str, Int) acc) {
+    if (i >= g.ns.len()) { return acc; }
+    Bool f = g.ns[i].kind == "fn";
+    return sec_fn_nodes(g, i + 1, if (f) { acc.insert(g.ns[i].text, i) } else { acc });
+}
+
+// The functions that read nothing at run time, as a greatest fixed point:
+// drop each whose body uses a provider, a runtime builtin, a closure or a
+// spawn, or calls a function already dropped, until none is.
+Map(Str, Int) sec_pure_fix(Kg g, Map(Str, Int) fns, List(Str) names, Map(Str, Int) cand) {
+    Map(Str, Int) next = sec_pure_pass(g, fns, names, 0, cand, cand);
+    return if (next.len() == cand.len()) { cand } else { sec_pure_fix(g, fns, names, next) };
+}
+
+Map(Str, Int) sec_pure_pass(Kg g, Map(Str, Int) fns, List(Str) names, Int i, Map(Str, Int) cand, Map(Str, Int) acc) {
+    if (i >= names.len()) { return acc; }
+    Str nm = names[i];
+    Bool keep = !acc.contains(nm) || sec_body_pure(g, fns.get(nm) else { 0 }, cand, fns, 0);
+    return sec_pure_pass(g, fns, names, i + 1, cand, if (keep) { acc } else { acc.remove(nm) });
+}
+
+Bool sec_body_pure(Kg g, Int id, Map(Str, Int) cand, Map(Str, Int) fns, Int depth) {
+    if (depth > 4096) { return false; }
+    KN n = g.ns[id];
+    Str k = n.kind;
+    if (k == "lambda" || k == "callv" || k == "spawn") { return false; }
+    if (k == "mcall" && n.nk >= 1) {
+        KN r = g.ns[kg_kid(g, id, 0)];
+        if (r.kind == "ref" && is_prov_family(r.text)) { return false; }
+        if (fns.contains(n.text) && !cand.contains(n.text)) { return false; }
+    }
+    if (k == "call" && !sec_pure_call(n.text, cand, fns)) { return false; }
+    return sec_body_kids(g, id, 0, cand, fns, depth);
+}
+
+Bool sec_body_kids(Kg g, Int id, Int i, Map(Str, Int) cand, Map(Str, Int) fns, Int depth) {
+    if (i >= g.ns[id].nk) { return true; }
+    return sec_body_pure(g, kg_kid(g, id, i), cand, fns, depth + 1) && sec_body_kids(g, id, i + 1, cand, fns, depth);
 }
 
 // E0253 in a written type: a secret as a Map key or a Set element, where it

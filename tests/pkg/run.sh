@@ -140,6 +140,15 @@ app subst ""
 printf 'pubkey = "%s"\n' "$PUB" >> "$W/subst/resid.toml"
 expect_fail subst "archive holds package 'greet-6.6.6'"
 
+# A registry package names its dependencies by version: a `path` inside a
+# verified archive would reach unverified source next to the cache.
+mkpkg "$W/sealmid" sealmid 1.0.0 'pub Int mid() { return 1; }'
+printf '\n[dependencies.sib]\npath = "../../../../../sib"\n' >> "$W/sealmid/resid.toml"
+mkdir -p "$W/sealreg"; "$PKG" publish "$W/sealmid" "$W/sealreg" "$W/pub.sec" > /dev/null
+mkdir -p "$W/sealapp/src"
+printf '[package]\nname = "sealapp"\nversion = "0.1.0"\n\n[registry]\npath = "../sealreg"\n\n[dependencies.sealmid]\nversion = "1.0.0"\npubkey = "%s"\n' "$PUB" > "$W/sealapp/resid.toml"
+expect_fail sealapp "may name a dependency only by version"
+
 # ── index: the publisher's side ──────────────────────────────────────
 # publish maintains the index as a side effect; these are the operations
 # that are not publishing, and each write re-signs the whole index.
@@ -440,6 +449,13 @@ printf 'import "mid";\nimport "reader";\n@requires(filesystem(readonly))\nInt ma
 if [ $? -ne 0 ] && grep -q "E0212" "$W/tr2.out"; then ok; else bad "a second, narrower ceiling was ignored: $(grep -m1 -i error "$W/tr2.out")"; fi
 (cd "$ROOT" && "$MAN" depmap "$W/tr/resid.toml" "$W/tr.depmap") > /dev/null 2>&1
 if grep -q '^reader::.*::$' "$W/tr.depmap" && [ "$(grep -c '^reader::' "$W/tr.depmap")" = 1 ]; then ok; else bad "depmap meet: $(cat "$W/tr.depmap")"; fi
+# A declaration without a ceiling, reached first, drops no other's.
+mkpkg "$W/mid2" mid2 1.0.0 $'import "reader";\npub Int mid2_n() { return 1; }'
+printf '\n[dependencies.reader]\npath = "../reader"\n' >> "$W/mid2/resid.toml"
+mkdir -p "$W/tru/src"
+printf '[package]\nname = "tru"\nversion = "0.1.0"\n\n[capabilities]\ngrant = ["filesystem"]\n\n[dependencies.mid2]\npath = "../mid2"\n\n[dependencies.reader]\npath = "../reader"\ncapabilities = ["filesystem(readonly)"]\n' > "$W/tru/resid.toml"
+(cd "$ROOT" && "$MAN" depmap "$W/tru/resid.toml" "$W/tru.depmap") > /dev/null 2>&1
+if grep -q '^reader::.*::filesystem(readonly)$' "$W/tru.depmap"; then ok; else bad "unbounded declaration first dropped the ceiling: $(cat "$W/tru.depmap")"; fi
 
 # Every declaration's pinned key is checked, not only the first one reached.
 sed -i 's/capabilities = \[\]$/capabilities = []\npubkey = "'"$OTHER"'"/' "$W/tr/resid.toml"

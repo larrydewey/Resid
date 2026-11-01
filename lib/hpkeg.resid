@@ -184,7 +184,9 @@ HpkeKeyPairG(B) hg_kp_bad() {
 /// public: the curve publishes its range verdict.
 @needs(Word(W, B), Word64(D, B), Wide512(P, B), X25519Pub(B), P256Word(E, B), P384Word(G, B))
 pub HpkeKeyPairG(B) hpkeg_derive_keypair(Int kem, List(B) ikm) {
-    if (!hpke_kem_ok(kem)) {
+    // RFC 9180 §7.1.3: ikm SHOULD carry at least Nsk bytes of entropy; an
+    // empty or short one gives a key anyone can derive.
+    if (!hpke_kem_ok(kem) || ikm.len() < hpke_kem_nsk(kem)) {
         HpkeKeyPairG(B) bad = hg_kp_bad();
         return bad;
     }

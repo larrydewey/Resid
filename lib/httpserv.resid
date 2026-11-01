@@ -325,6 +325,9 @@ Int hs_body_kind(HttpRequest r) {
     Bool has_te = r.headers.contains("transfer-encoding");
     Bool has_cl = r.headers.contains("content-length");
     if (has_te && has_cl) { return -3; }
+    // HTTP/1.0 has no Transfer-Encoding (RFC 9112 §6.1): a front end that
+    // ignores it there would frame the body differently.
+    if (has_te && r.version != "HTTP/1.1") { return -3; }
     if (has_te) {
         Str te = str_to_lower(r.headers.get("transfer-encoding") else { "" });
         List(Str) codings = str_split(te, ",");
@@ -392,6 +395,10 @@ HsReq(T) hs_read_chunked(HttpRequest r, HsBuf(T) b0, Int at, HttpLimits lim, Lis
     HsHead(T) ln = hs_read_line_at(b0, at, at, 1024);
     if (ln.end < 0) { return hs_fail(400, ln.buf); }
     HsBuf(T) b = ln.buf;
+    // A bare CR or LF or a control in a size line or a trailer is refused,
+    // as in the head: a peer ending lines at a bare LF would frame them
+    // differently.
+    if (!hs_ctl_free(b.data, at, ln.end)) { return hs_fail(400, b); }
     Str line = hs_ascii(b.data, at, ln.end, StrBuf());
     Int semi = str_index_of(line, ";", 0);
     Str hexs = str_trim(if (semi >= 0) { str_slice(line, 0, semi) } else { line });
@@ -418,6 +425,7 @@ HsReq(T) hs_chunk_trailers(HttpRequest r, HsBuf(T) b0, List(Int) acc, Int lines)
     HsHead(T) ln = hs_read_line(b0, 8192);
     if (ln.end < 0) { return hs_fail(400, ln.buf); }
     HsBuf(T) lb = ln.buf;
+    if (!hs_ctl_free(lb.data, 0, ln.end)) { return hs_fail(400, lb); }
     HsBuf(T) rest = HsBuf { .conn = lb.conn, .data = lb.data[(ln.end + 2)..], .eof = lb.eof };
     if (ln.end > 0) {
         if (lines >= 64) { return hs_fail(400, rest); }

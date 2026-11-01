@@ -131,7 +131,7 @@ pub NArt nt_ingest(Str m, Str text) {
     if (a.err != "") { return a; }
     StrBuf sb = nt_rewrite(ls, 0, m, a.defs, StrBuf());
     Str out = sb.finish();
-    Str err = nt_refs_err(out);
+    Str err = nt_refs_err(out, m, a.defs);
     // AArch64: the module's own code gets return signing, landing pads and
     // the guarded control stack, between page-aligned marks (nt_harden).
     Str hard = if (err == "" && tgt_a64()) { nt_harden(out, m) } else { out };
@@ -147,7 +147,16 @@ NArt nt_scan(List(Str) ls, Int i, Bool body, NArt a) {
     // Inline asm runs only in the host, after its filter: allowed, and
     // recorded (nt_asm_summary) for the provenance record.
     NArt ab = if (body && nt_inline_asm(l)) { NArt {.err = "", .text = "", .defs = a.defs, .dlines = a.dlines, .asm = a.asm.concat([nt_asm_text(l)])} } else { a };
-    if (body) { return nt_scan(ls, i + 1, str_trim(l) != "}", ab); }
+    if (body) {
+        // A body ends at a line that is `}` alone; anything after the brace,
+        // or a top-level form inside a body, would escape the checks below.
+        Str bt = str_trim(l);
+        if (str_starts_with(bt, "}") && bt != "}") { return nt_fail(a, i, "text after a function's closing brace"); }
+        if (str_starts_with(bt, "define ") || str_starts_with(bt, "declare ") || str_starts_with(bt, "@") || str_starts_with(bt, "module ") || str_starts_with(bt, "attributes ")) { return nt_fail(a, i, "a top-level form inside a function body"); }
+        Str bbad = nt_bad_word(bt);
+        if (bbad != "") { return nt_fail(a, i, "`" + bbad + "` is not allowed in a native module"); }
+        return nt_scan(ls, i + 1, bt != "}", ab);
+    }
     Str t = str_trim(l);
     if (t == "" || str_starts_with(t, ";") || str_starts_with(t, "source_filename") || str_starts_with(t, "target datalayout") || str_starts_with(t, "attributes #") || str_starts_with(t, "!") || str_starts_with(t, "%")) {
         return nt_scan(ls, i + 1, false, a);
@@ -250,6 +259,9 @@ Str nt_bad_word(Str t) {
     if (str_contains(t, " ifunc ")) { return "ifunc"; }
     if (str_contains(t, "thread_local")) { return "thread_local"; }
     if (str_contains(t, " personality ")) { return "personality"; }
+    // Raw bytes at a function's entry, outside the recorded inline asm.
+    if (str_contains(t, " prologue ")) { return "prologue"; }
+    if (str_contains(t, " prefix ")) { return "prefix"; }
     return "";
 }
 
@@ -381,27 +393,33 @@ StrBuf nt_line(Str l, Int i, Int n, Int from, Str m, List(Str) defs, StrBuf sb) 
 
 Int nt_id_end(Str l, Int i, Int n) { return if (i < n && nt_idc(str_char_at(l, i))) { nt_id_end(l, i + 1, n) } else { i }; }
 
-// After renaming, every global reference must be the artifact's own, an
+// After renaming, every global reference must be the artifact's own (one
+// of `defs`, as `native.<m>.<name>`: never another module's), an
 // intrinsic or an allowed external; a quoted name or a comdat is refused.
-Str nt_refs_err(Str text) {
+Str nt_refs_err(Str text, Str m, List(Str) defs) {
     List(Str) ls = str_split(text, "\n");
-    return nt_refs_lines(ls, 0);
+    return nt_refs_lines(ls, 0, nt_own_names(defs, m, 0, []));
 }
 
-Str nt_refs_lines(List(Str) ls, Int i) {
+List(Str) nt_own_names(List(Str) defs, Str m, Int i, List(Str) acc) {
+    if (i >= defs.len()) { return acc; }
+    return nt_own_names(defs, m, i + 1, acc.concat(["native." + m + "." + defs[i]]));
+}
+
+Str nt_refs_lines(List(Str) ls, Int i, List(Str) own) {
     if (i >= ls.len()) { return ""; }
-    Str e = nt_refs(ls[i], 0, str_len(ls[i]), false);
+    Str e = nt_refs(ls[i], 0, str_len(ls[i]), false, own);
     if (e != "") { return f"line {i + 1}: " + e; }
-    return nt_refs_lines(ls, i + 1);
+    return nt_refs_lines(ls, i + 1, own);
 }
 
-Str nt_refs(Str l, Int i, Int n, Bool prev_id) {
+Str nt_refs(Str l, Int i, Int n, Bool prev_id, List(Str) own) {
     if (i >= n) { return ""; }
     Int c = str_char_at(l, i);
     if (c == 59) { return ""; }
     if (c == 34) {
         Int q = str_find_char(l, 34, i + 1);
-        return if (q < 0) { "" } else { nt_refs(l, q + 1, n, false) };
+        return if (q < 0) { "" } else { nt_refs(l, q + 1, n, false, own) };
     }
     if (c == 36 && !prev_id) { return "a comdat (`$`) is not allowed in a native module"; }
     if (c == 64 && i + 1 < n) {
@@ -410,11 +428,11 @@ Str nt_refs(Str l, Int i, Int n, Bool prev_id) {
         if (nt_idc(c1)) {
             Int e = nt_id_end(l, i + 1, n);
             Str nm = str_slice(l, i + 1, e);
-            if (!str_starts_with(nm, "native.") && !nt_extern_ok(nm)) { return "the artifact references `@" + nm + "`, which it does not define: a native module may reach only its own symbols, LLVM intrinsics and memcpy/memmove/memset"; }
-            return nt_refs(l, e, n, true);
+            if (!own.contains(nm) && !nt_extern_ok(nm)) { return "the artifact references `@" + nm + "`, which it does not define: a native module may reach only its own symbols, LLVM intrinsics and memcpy/memmove/memset"; }
+            return nt_refs(l, e, n, true, own);
         }
     }
-    return nt_refs(l, i + 1, n, nt_idc(c));
+    return nt_refs(l, i + 1, n, nt_idc(c), own);
 }
 
 // ─── Matching the @link functions ───────────────────────────────────

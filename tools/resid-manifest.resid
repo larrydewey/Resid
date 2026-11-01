@@ -1103,7 +1103,7 @@ DepResolveResult dep_error(DepResolveResult acc, Str err) {
 }
 
 @requires(filesystem, network, clock(readonly), declassify)
-DepResolveResult collect_dep_path(Str name, Str dep_dir0, List(Str) caps, Bool has_caps, Str devs, Str pinned_key, Registry reg, TrustPolicy tp, DepResolveResult acc, Int depth) {
+DepResolveResult collect_dep_path(Str name, Str dep_dir0, List(Str) caps, Bool has_caps, Str devs, Str pinned_key, Registry reg, TrustPolicy tp, DepResolveResult acc, Int depth, Bool sealed) {
     // One directory reached along two relative paths is one dependency.
     Str dep_dir = path_fold(dep_dir0);
     if (!acc.ok) { return acc; }
@@ -1132,7 +1132,7 @@ DepResolveResult collect_dep_path(Str name, Str dep_dir0, List(Str) caps, Bool h
         return dep_error(acc, "package '" + dm.name + "' provided by both '" + prev_pkg_dir + "' and '" + dep_dir + "' - conflicting dependency versions are not supported");
     }
     DepResolveResult acc2 = DepResolveResult {.ok = true, .err = "", .deps = acc.deps, .seen = acc.seen.concat([SeenEntry {.name = dm.name, .dir = dep_dir}])};
-    DepResolveResult acc3 = collect_sub_deps_at(dm.dependencies, 0, dep_dir, dm.name, caps, devs, reg, tp, acc2, depth + 1);
+    DepResolveResult acc3 = collect_sub_deps_at(dm.dependencies, 0, dep_dir, dm.name, caps, devs, reg, tp, acc2, depth + 1, sealed);
     if (!acc3.ok) { return acc3; }
     ResolvedDep rd = ResolvedDep {.name = dm.name, .dir = dep_dir, .root = root, .capabilities = caps, .has_caps = has_caps, .pinned_key = pinned_key, .devices = devs};
     return DepResolveResult {.ok = true, .err = "", .deps = acc3.deps.concat([rd]), .seen = acc3.seen};
@@ -1167,11 +1167,13 @@ DepResolveResult collect_dep_version(Str name, Str version, Registry reg, Str ro
     }
     Int _w = write_lock_entry(lock_path, LockEntry {.name = name, .version = version, .sha256 = cr.sha256});
     // Its key was checked against the registry signature above.
-    return collect_dep_path(name, cr.cache_dir, caps, has_caps, devs, "", reg, tp, acc, depth);
+    return collect_dep_path(name, cr.cache_dir, caps, has_caps, devs, "", reg, tp, acc, depth, true);
 }
 
+// `sealed`: the parent came out of a verified registry archive, so a `path`
+// it names would reach outside what was verified.
 @requires(filesystem, network, clock(readonly), declassify)
-DepResolveResult collect_sub_deps_at(List(Dependency) subs, Int i, Str parent_dir, Str parent, List(Str) parent_caps, Str parent_devs, Registry reg, TrustPolicy tp, DepResolveResult acc, Int depth) {
+DepResolveResult collect_sub_deps_at(List(Dependency) subs, Int i, Str parent_dir, Str parent, List(Str) parent_caps, Str parent_devs, Registry reg, TrustPolicy tp, DepResolveResult acc, Int depth, Bool sealed) {
     if (!acc.ok) { return acc; }
     if (i >= subs.len()) { return acc; }
     Dependency sub = subs[i];
@@ -1190,15 +1192,16 @@ DepResolveResult collect_sub_deps_at(List(Dependency) subs, Int i, Str parent_di
     // With both, `path` is the working copy when it is there (development)
     // and `version` comes from the registry when it is not (a published
     // package, extracted where its sibling checkouts are not).
-    Bool use_path = sub.path != "" && (sub.version == "" || filesystem.is_dir(parent_dir + "/" + sub.path));
+    if (sealed && sub.path != "" && sub.version == "") { return dep_error(acc, "dependency '" + sub.name + "' (required by '" + parent + "'): a registry package may name a dependency only by version, not by path"); }
+    Bool use_path = !sealed && sub.path != "" && (sub.version == "" || filesystem.is_dir(parent_dir + "/" + sub.path));
     DepResolveResult acc2 = if (use_path) {
-        collect_dep_path(sub.name, parent_dir + "/" + sub.path, sub.capabilities, sub.has_caps, sdevs, sub.pubkey, reg, tp, acc, depth)
+        collect_dep_path(sub.name, parent_dir + "/" + sub.path, sub.capabilities, sub.has_caps, sdevs, sub.pubkey, reg, tp, acc, depth, false)
     } else if (sub.version != "") {
         collect_dep_version(sub.name, sub.version, reg, if (reg.home != "") { reg.home } else { parent_dir }, sub.capabilities, sub.has_caps, sdevs, sub.pubkey, tp, acc, depth)
     } else {
         dep_error(acc, "dependency '" + sub.name + "': needs either 'path' or 'version'")
     };
-    return collect_sub_deps_at(subs, i + 1, parent_dir, parent, parent_caps, parent_devs, reg, tp, acc2, depth);
+    return collect_sub_deps_at(subs, i + 1, parent_dir, parent, parent_caps, parent_devs, reg, tp, acc2, depth, sealed);
 }
 
 // A manifest names its registry one of two ways — a directory or a URL —
@@ -1234,7 +1237,7 @@ DepResolveResult resolve_all_deps(Manifest m, Str pkg_dir) {
     if (m.registry_pubkey == "") {
         DepResolveResult start = DepResolveResult {.ok = true, .err = "", .deps = empty_deps, .seen = empty_seen};
         TrustPolicy tp0 = TrustPolicy {.pinned_key = "", .idx_required = false, .idx_entries = no_idx, .keyring = keyring, .allow_unsigned = m.allow_unsigned, .require_signatures = m.require_signatures};
-        return collect_sub_deps_at(m.dependencies, 0, pkg_dir, "", m.grant, "\x01", reg, tp0, start, 0);
+        return collect_sub_deps_at(m.dependencies, 0, pkg_dir, "", m.grant, "\x01", reg, tp0, start, 0, false);
     }
     IndexLoadResult idx = load_verify_index(reg, m.registry_pubkey);
     if (!idx.ok) {
@@ -1242,23 +1245,31 @@ DepResolveResult resolve_all_deps(Manifest m, Str pkg_dir) {
     }
     DepResolveResult start = DepResolveResult {.ok = true, .err = "", .deps = empty_deps, .seen = empty_seen};
     TrustPolicy tp1 = TrustPolicy {.pinned_key = "", .idx_required = true, .idx_entries = idx.entries, .keyring = keyring, .allow_unsigned = m.allow_unsigned, .require_signatures = m.require_signatures};
-    return collect_sub_deps_at(m.dependencies, 0, pkg_dir, "", m.grant, "\x01", reg, tp1, start, 0);
+    return collect_sub_deps_at(m.dependencies, 0, pkg_dir, "", m.grant, "\x01", reg, tp1, start, 0, false);
 }
 
 // One record per dependency, from the records of every declaration of it:
-// the resolved one (root set) with the meet of all their ceilings.
+// the resolved one (root set) with the meet of the ceilings they give. A
+// declaration without a ceiling adds no bound, and does not drop the
+// others' whichever one was reached first.
 List(ResolvedDep) merge_deps(List(ResolvedDep) ds, Int i, List(ResolvedDep) acc) {
     if (i >= ds.len()) { return acc; }
     ResolvedDep d = ds[i];
     if (d.root == "") { return merge_deps(ds, i + 1, acc); }
-    ResolvedDep m = ResolvedDep {.name = d.name, .dir = d.dir, .root = d.root, .capabilities = meet_all(ds, d.name, 0, d.capabilities), .has_caps = d.has_caps, .pinned_key = d.pinned_key, .devices = meet_devices_all(ds, d.name, 0, d.devices)};
+    ResolvedDep m = ResolvedDep {.name = d.name, .dir = d.dir, .root = d.root, .capabilities = meet_all(ds, d.name, 0, false, []), .has_caps = any_caps(ds, d.name, 0), .pinned_key = d.pinned_key, .devices = meet_devices_all(ds, d.name, 0, d.devices)};
     return merge_deps(ds, i + 1, acc.concat([m]));
 }
 
-List(Str) meet_all(List(ResolvedDep) ds, Str name, Int i, List(Str) caps) {
+List(Str) meet_all(List(ResolvedDep) ds, Str name, Int i, Bool started, List(Str) caps) {
     if (i >= ds.len()) { return caps; }
-    List(Str) c2 = if (ds[i].name == name) { meet_caps(caps, ds[i].capabilities, 0, []) } else { caps };
-    return meet_all(ds, name, i + 1, c2);
+    Bool hit = ds[i].name == name && ds[i].has_caps;
+    List(Str) c2 = if (!hit) { caps } else if (started) { meet_caps(caps, ds[i].capabilities, 0, []) } else { ds[i].capabilities };
+    return meet_all(ds, name, i + 1, started || hit, c2);
+}
+
+Bool any_caps(List(ResolvedDep) ds, Str name, Int i) {
+    if (i >= ds.len()) { return false; }
+    return (ds[i].name == name && ds[i].has_caps) || any_caps(ds, name, i + 1);
 }
 
 // The narrowest device bound any declaration gives (spec §49): each entry

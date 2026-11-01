@@ -1014,6 +1014,8 @@ Uploaded(T) registry_upload(T st, UploadCfg u, HttpRequest r) {
     Str have = str_trim(bytes_to_ascii(had, 0, had.len(), ""));
     if (have == hash_hex) { return uploaded(st, 200, "already published: " + name + " " + version + " sha256 " + hash_hex); }
     if (have != "") { return uploaded(st, 409, name + " " + version + " is already published with sha256 " + have + "; publish a new version"); }
+    // An archive without its sidecar is still a published version.
+    if (store_has(st, "pkg/" + base + ".resid-pkg")) { return uploaded(st, 409, name + " " + version + " is already published; publish a new version"); }
     T s1 = store_put(st, "pkg/" + base + ".resid-pkg", r.body);
     T s2 = store_put(s1, sha_path, bytes_of(hash_hex + "\n"));
     T s3 = store_put(s2, "pkg/" + base + ".resid-sig", bytes_of(hex_encode(sig)));

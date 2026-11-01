@@ -17,7 +17,9 @@ Bool is_some_eq(Option(List(Int)) o, List(Int) want) { return match o { Some(x) 
 
 Int hpke_case(Int kdf, Int aead) {
     HpkeSuite s = hpke_suite(17, kdf, aead);
-    HpkeKeyPair r = hpke_derive_keypair(17, bytes_of(f"recipient {kdf} {aead}"));
+    HpkeKeyPair r = hpke_derive_keypair(17, bytes_of(str_repeat(f"recipient {kdf} {aead} ", 4)));
+    // Input keying material shorter than Nsk (48) gives no key.
+    HpkeKeyPair short = hpke_derive_keypair(17, bytes_of(f"recipient {kdf} {aead}"));
     HpkeKeyPair other = hpke_generate_keypair(17);
     List(Int) dek = random_bytes(32);
     HpkeMessage m = hpke_seal_to(s, r.pk, bytes_of("weights v1"), bytes_of("aad"), dek);
@@ -28,7 +30,7 @@ Int hpke_case(Int kdf, Int aead) {
     HpkeSender snd = hpke_setup_sender(s, r.pk, bytes_of("ctx"));
     HpkeCtx rcv = hpke_setup_receiver(s, snd.enc, r.sk, bytes_of("ctx"));
     Bool exp = ct_equal(hpke_export(snd.ctx, bytes_of("x"), 48), hpke_export(rcv, bytes_of("x"), 48));
-    Bool ok = r.ok && m.ok && m.enc.len() == 97 && is_some_eq(good, dek) && is_none(wrong_key) && is_none(wrong_info) && is_none(wrong_aad) && exp;
+    Bool ok = r.ok && !short.ok && m.ok && m.enc.len() == 97 && is_some_eq(good, dek) && is_none(wrong_key) && is_none(wrong_info) && is_none(wrong_aad) && exp;
     return check(f"hpke p384 kdf={kdf} aead={aead}", ok);
 }
 
@@ -42,7 +44,7 @@ Int main() {
     Int f0 = hpke_all(1, 1, 0);
     // A peer key off the curve or of the wrong curve sets up nothing.
     HpkeSuite s = hpke_suite(17, 2, 2);
-    HpkeKeyPair r256 = hpke_derive_keypair(16, bytes_of("p256"));
+    HpkeKeyPair r256 = hpke_derive_keypair(16, bytes_of(str_repeat("p256", 8)));
     Int f1 = check("hpke refuses a P-256 key under the P-384 KEM", !hpke_setup_sender(s, r256.pk, []).ctx.ok);
     Int f2 = check("hpke refuses an unknown suite", !hpke_setup_sender(hpke_suite(18, 1, 1), r256.pk, []).ctx.ok);
     // ECDH both ways, fresh keys.

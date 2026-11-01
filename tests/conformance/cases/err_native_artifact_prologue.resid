@@ -1,0 +1,4 @@
+// A hostile artifact is refused before it is linked (E0237).
+@link("bad") Int bad_fn() {}
+@requires(native_bad)
+Int main() { println(f"{bad_fn()}"); return 0; }

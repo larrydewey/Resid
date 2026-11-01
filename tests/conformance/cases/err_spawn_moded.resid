@@ -1,0 +1,7 @@
+// A spawn list is spelled like @requires: an unknown family is refused.
+Int main() {
+    Result(Int, RegionError) r = spawn (bogus) {
+        return 1;
+    };
+    return 0;
+}

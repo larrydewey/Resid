@@ -1,0 +1,11 @@
+// A user Show instance runs in an f-string hole: its capabilities flow to
+// the function that formats the value.
+type Pt = { Int x; };
+@requires(filesystem(readonly))
+Str pt_show(Pt a) { return "pt-" + filesystem.read_all("/etc/hostname"); }
+Show(Pt) = pt_show;
+Int main() {
+    Pt a = Pt { .x = 1 };
+    println(f"{a}");
+    return 0;
+}

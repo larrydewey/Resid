@@ -98,6 +98,26 @@ probe "$W/pinstore" "$F/expired.der" localhost; want pinned-expired-leaf false
 # Expiry.
 probe "$F/root.pem" "$F/expired.der" localhost "$W/inters"; want expired-leaf false
 
+# ── path constraints (RFC 5280 §4.2.1.9, §4.2.1.10, §4.2.1.12) ───────
+# fixtures/pathcons comes from tests/tls/gen_pathcons.py. A root's name
+# constraints bind every leaf under it; pathLenConstraint bounds the CAs
+# below; a leaf with an EKU must name serverAuth; an unknown critical
+# extension refuses the certificate; `*` is a wildcard only as `*.`.
+PC="$F/pathcons"
+probe "$PC/root_nc.pem" "$PC/nc_evil.der" evil.test; want nc-outside-permitted false
+probe "$PC/root_nc.pem" "$PC/nc_ok.der" api.example.test; want nc-inside-permitted true
+probe "$PC/root_nc.pem" "$PC/nc_excluded.der" x.bad.example.test; want nc-excluded false
+probe "$PC/root_nc.pem" "$PC/nc_wild.der" a.example.test; want nc-wildcard-host-permitted true
+probe "$PC/root_nc.pem" "$PC/nc_wild.der" bad.example.test; want nc-wildcard-host-excluded false
+probe "$PC/root_nc.pem" "$PC/nc_extra_san.der" api.example.test; want nc-other-san-outside false
+probe "$PC/root.pem" "$PC/eku_client.der" api.example.test; want eku-client-only false
+probe "$PC/root.pem" "$PC/eku_server.der" api.example.test; want eku-server true
+probe "$PC/root.pem" "$PC/crit_unknown.der" api.example.test; want critical-unknown-ext false
+probe "$PC/root.pem" "$PC/noncrit_unknown.der" api.example.test; want noncritical-unknown-ext true
+probe "$PC/root.pem" "$PC/wild_partial.der" a.oo.example.test; want partial-wildcard false
+probe "$PC/root.pem" "$PC/pl0_leaf.der" api.example.test "$PC/inters_pl0"; want pathlen-0-exceeded false
+probe "$PC/root.pem" "$PC/pl1_leaf.der" api.example.test "$PC/inters_pl1"; want pathlen-1-ok true
+
 # ── Certificate message framing (tm_cert_list) ──────────────────────
 # A server's chain arrives as one message; the intermediates in it are
 # what the trust store walks. Getting the walk wrong here is not cosmetic:

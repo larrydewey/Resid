@@ -277,6 +277,7 @@ P eg_scalar(List(B) h) {
 @needs(Wide512(P, B), Word64(W, B), Publish(B))
 @one_way(seed)
 pub List(Int) ed25519g_pub(List(B) seed) {
+    assert(seed.len() == 32, "ed25519: a seed is 32 bytes");
     List(B) h = sha512g(seed);
     return w_publish(eg_encode(eg_base_mul(eg_scalar(h))));
 }
@@ -289,6 +290,7 @@ pub List(Int) ed25519g_pub(List(B) seed) {
 @needs(Wide512(P, B), Word64(W, B), Publish(B))
 @key(seed)
 pub List(Int) ed25519g_sign(List(B) seed, List(Int) msg) {
+    assert(seed.len() == 32, "ed25519: a seed is 32 bytes");
     List(B) h = sha512g(seed);
     P a = eg_scalar(h);
     List(Int) pk = w_publish(eg_encode(eg_base_mul(a)));
