@@ -8,6 +8,7 @@
 #
 # lib/<file> <function> <reason>
 lib/tlsclient.resid tls_client_connect socket I/O: the client handshake on a live connection; its secret steps (x25519g_*, tlsg_*, tls_keys_*) are cases
+lib/tlsclient.resid tls_client_on socket I/O: tls_client_connect's handshake on a socket already connected; its secret steps (x25519g_*, ecdhg, tlsg_*, tls_keys_*) are cases
 lib/tlsserver.resid tls_server_handshake socket I/O around ts_server_start, ts_read_prot and ts_server_finish, which tls-server-secret runs
 lib/tlswire.resid tls_accept_loop socket I/O: the accept loop that runs tls_server_handshake per connection
 lib/tlswire.resid tls_stream_loop socket I/O: the record loop over tls_keys_protect and tls_keys_open, which tls-record-seal-secret and tls-server-secret run
@@ -28,6 +29,7 @@ lib/dev/tpm.resid tpm_auth_bytes device I/O: the authValue goes to the TPM in th
 lib/dev/tpm.resid tpm_create device I/O: Create on /dev/tpmrm0 with the authValue from tpm_auth_bytes; the command and response codecs are public
 lib/dev/tpm.resid tpm_sign_policy device I/O: PolicyAuthValue and Sign on /dev/tpmrm0; the authValue goes through tpm_auth_bytes, the signature is public
 lib/dev/tpm.resid tpm_certify device I/O: Certify on /dev/tpmrm0; the authValue goes through tpm_auth_bytes, the attestation is public
+lib/dev/tpm.resid tpm_change_auth device I/O: ObjectChangeAuth on /dev/tpmrm0 with both authValues from tpm_auth_bytes; the command and response codecs are public
 lib/dev/tpm.resid tpm_hmac device I/O: HMAC on /dev/tpmrm0; its secret output is parsed by tpm2_hmac_resp_secret, which dev-tpm-hmac-resp-secret runs
 lib/tls.resid channel_exporter_ok a length test: the exporter's length is public
 lib/tlswire.resid tlsserver_exporter a constructor over a live connection's keys; their derivation (tls_keys_exporter) runs in tls-server-secret

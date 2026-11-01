@@ -1500,6 +1500,22 @@ pub Result(List(UInt(8)), TpmError) tpm2_hmac_cmd(Int key, List(UInt(8)) auth, L
     return Ok(tw_command(tpm_cc_hmac(), [key], tw_pw_with(auth), tw_2b(data).concat(tw_be(tpm_alg_sha256(), 2))));
 }
 
+/// TPM2_ObjectChangeAuth (Part 3, Table 54; command code 0x00000150) of
+/// the loaded object `object` under `parent`, its ADMIN role authorized by
+/// its current authValue `auth` in a password session (the object's
+/// adminWithPolicy must be clear): the same key with authValue `new_auth`.
+pub Result(List(UInt(8)), TpmError) tpm2_object_change_auth_cmd(Int object, Int parent, List(UInt(8)) auth, List(UInt(8)) new_auth) {
+    if (!tw_u32_ok(object) || !tw_u32_ok(parent) || auth.len() > 64 || new_auth.len() > 64) { return Err(TpmArg("handles are u32, authValues at most 64 bytes")); }
+    return Ok(tw_command(336, [object, parent], tw_pw_with(auth), tw_2b(new_auth)));
+}
+
+/// The new private area of a TPM2_ObjectChangeAuth response.
+pub Result(List(UInt(8)), TpmError) tpm2_object_change_auth_resp(List(UInt(8)) r) {
+    TwAt p = tpm_resp_params(r, 0, true)?;
+    TwBytes pr = tw_take_2b(p, 1024, "outPrivate")?;
+    return Ok(pr.v);
+}
+
 /// The 32-byte output of a TPM2_HMAC response, as secret bytes: the
 /// response is parsed for its length fields only, which are public.
 pub Result(List(Secret(UInt(8))), TpmError) tpm2_hmac_resp_secret(List(Secret(UInt(8))) r) {

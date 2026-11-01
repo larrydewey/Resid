@@ -214,8 +214,13 @@ pub List(Int) sh_scan(List(Int) sh, Int pos, Int stop) {
 /// Offers TLS_AES_128_GCM_SHA256 only, with `share32` as the x25519 share,
 /// `sni` as server_name (out-of-range lengths become "localhost") and
 /// `alpn` as the offered protocols (no extension when empty).
-pub List(Int) tlsmsg_client_hello(Str sni, List(Str) alpn, List(Int) random32, List(Int) share32) {
-    List(Int) exts = tls_client_exts(sni, alpn, share32);
+pub List(Int) tlsmsg_client_hello(Str sni, List(Str) alpn, List(Int) random32, List(Int) share32) { return tlsmsg_client_hello_shares(sni, alpn, random32, share32, []); }
+
+/// As tlsmsg_client_hello, with a second key share `share65`, an
+/// uncompressed secp256r1 point (none when empty), for servers that offer
+/// only that group (PostgreSQL 17 among them).
+pub List(Int) tlsmsg_client_hello_shares(Str sni, List(Str) alpn, List(Int) random32, List(Int) share32, List(Int) share65) {
+    List(Int) exts = tls_client_exts(sni, alpn, share32, share65);
     List(Int) sid = [0];
     List(Int) body = [3, 3].concat(random32).concat(sid).concat(ts_u16(2)).concat(ts_u16(ts_suite_aes128gcm())).concat([1, 0]).concat(ts_u16(exts.len()));
     return ts_message(1, body.concat(exts));
@@ -232,17 +237,19 @@ pub List(Int) tlsmsg_client_hello(Str sni, List(Str) alpn, List(Int) random32, L
 //   renegotiation_info    a middlebox may insist (RFC 8446 §D.4)
 //   supported_groups      x25519, which is the only group below signs
 //   session_ticket        empty: this client resumes nothing
-//   key_share             the x25519 share, the one thing that must be here
+//   key_share             the x25519 share, the one thing that must be here, and a
+//                         secp256r1 share when the caller gives one
 //   alpn                  the protocols this client offers, or nothing
 //   supported_versions    TLS 1.3, or the server answers TLS 1.2 at most
 //   signature_algorithms  what a server may sign with
 //   psk_key_exchange_modes  psk_dhe_ke, so a resumption would be possible
-List(Int) tls_client_exts(Str sni, List(Str) alpn, List(Int) share32) {
+List(Int) tls_client_exts(Str sni, List(Str) alpn, List(Int) share32, List(Int) share65) {
     List(Int) e = tls_ext_server_name(sni);
     List(Int) e2 = ts_ext_bytes(e, 21, [1, 0]);
     List(Int) e3 = ts_ext_bytes(e2, 10, ts_u16(8).concat(ts_u16(29)).concat(ts_u16(23)).concat(ts_u16(24)).concat(ts_u16(25)));
     List(Int) e4 = ts_ext_bytes(e3, 35, [0]);
-    List(Int) share = ts_u16(36).concat(ts_u16(29)).concat(ts_u16(32)).concat(share32);
+    List(Int) p256 = if (share65.len() == 65) { ts_u16(23).concat(ts_u16(65)).concat(share65) } else { [] };
+    List(Int) share = ts_u16(36 + p256.len()).concat(ts_u16(29)).concat(ts_u16(32)).concat(share32).concat(p256);
     List(Int) e5 = ts_ext_bytes(e4, 51, share);
     // ALPN is what this client offers, in preference order, and it cannot
     // be a constant: an offer that never reaches the wire leaves the server

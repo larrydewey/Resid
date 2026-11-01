@@ -32,6 +32,7 @@ import "random.resid";
 import "wire.resid";
 import "tls.resid";
 import "tlsmsg.resid";
+import "ecdsa.resid";
 import "x25519g.resid";
 import "chain.resid";
 import "clock.resid";
@@ -98,15 +99,26 @@ Bool tc_send_plain(Int fd, List(Int) msg) {
 pub TlsDial tls_client_connect(Str host, Int port, TlsClientCfg cfg) {
     Int fd = resid_tcp_connect(host, port);
     if (fd < 0) { return tls_dial_err("cannot connect to " + host + ":" + f"{port}"); }
+    return tls_client_on(fd, cfg);
+}
+
+/// A TLS 1.3 handshake on `fd`, a socket already connected (after a
+/// protocol's own upgrade request, such as PostgreSQL's SSLRequest or
+/// STARTTLS). On any failure the socket is closed and `err` says why.
+@requires(network(readonly), clock(readonly), declassify)
+pub TlsDial tls_client_on(Int fd, TlsClientCfg cfg) {
     _ = resid_tcp_deadline(fd, cfg.deadline_ms);
-    // Secret from the moment it is drawn; the share is published.
+    // Secret from the moment it is drawn; the share is published. A
+    // secp256r1 share too (a scalar below the order: its top byte below
+    // 0xff), for servers that offer no x25519.
     List(Secret(UInt(8))) priv = random_secret(32);
-    List(Int) ch = tlsmsg_client_hello(cfg.name, cfg.alpn, random_bytes(32), x25519g_public(priv));
+    List(Secret(UInt(8))) priv_p = [classify((UInt(8))(random_bytes(1)[0] % 255))].concat(random_secret(31));
+    List(Int) ch = tlsmsg_client_hello_shares(cfg.name, cfg.alpn, random_bytes(32), x25519g_public(priv), ec_public_keyg(P256, priv_p));
     if (!tc_send_plain(fd, ch)) {
         _ = resid_tcp_close(fd);
         return tls_dial_err("cannot send the client hello");
     }
-    TcDone d = tls_client_finish(ch, priv, cfg, clock_now(), ts_in(fd));
+    TcDone d = tls_client_finish_shares(ch, priv, priv_p, cfg, clock_now(), ts_in(fd));
     if (d.err != "") {
         _ = resid_tcp_close(fd);
         return tls_dial_err(d.err);
@@ -135,19 +147,30 @@ TcDone tc_fail(TsIn in, Str err) {
 /// Nothing here writes, so a TsIn with no socket runs a whole handshake.
 @requires(network(readonly), declassify)
 pub TcDone tls_client_finish(List(Int) ch, List(Secret(UInt(8))) priv, TlsClientCfg cfg, Instant now, TsIn in0) {
+    List(Secret(UInt(8))) none = [];
+    return tls_client_finish_shares(ch, priv, none, cfg, now, in0);
+}
+
+/// As tls_client_finish, when `ch` also carried a secp256r1 share whose
+/// private key is `priv_p` (empty: none): the server's choice decides
+/// which key makes the shared secret.
+@requires(network(readonly), declassify)
+pub TcDone tls_client_finish_shares(List(Int) ch, List(Secret(UInt(8))) priv, List(Secret(UInt(8))) priv_p, TlsClientCfg cfg, Instant now, TsIn in0) {
     TsRec sh_rec = ts_read_record(in0);
     if (!sh_rec.ok || sh_rec.ctype != 22) { return tc_fail(sh_rec.in, "the server did not answer with a handshake"); }
     List(Int) sh = sh_rec.body;
     if (sh.len() < 43 || sh[0] != 2) { return tc_fail(sh_rec.in, "the server hello is not one"); }
     List(Int) server_share = tc_server_share(sh);
+    List(Int) server_p256 = if (priv_p.len() == 32) { tc_server_share_p256(sh) } else { [] };
     Bool tls13 = tc_says_tls13(sh);
     Bool suite_ok = tc_offers(sh, ts_suite_aes128gcm());
-    if (!tls13 || !suite_ok || server_share.len() != 32) {
+    if (!tls13 || !suite_ok || (server_share.len() != 32 && server_p256.len() != 65)) {
         return tc_fail(sh_rec.in, "the server does not speak TLS 1.3 with " + ts_suite_name());
     }
     // An all-zero shared secret (a low-order share) is refused (RFC 8446
-    // §7.4.2); whether it was is one public bit.
-    List(Secret(UInt(8))) shared = x25519g_shared(priv, server_share);
+    // §7.4.2); whether it was is one public bit. A secp256r1 point off the
+    // curve gives no secret either.
+    List(Secret(UInt(8))) shared = if (server_share.len() == 32) { x25519g_shared(priv, server_share) } else { ecdhg(P256, priv_p, server_p256) };
     if (shared.len() == 0) { return tc_fail(sh_rec.in, "the server's key share is not usable"); }
     List(Int) tr1 = ch.concat(sh);
     List(Int) th1 = tc_hash(tr1);
@@ -386,6 +409,18 @@ pub List(Int) tc_server_share(List(Int) sh) {
     // where the client's is a vector behind a length of its own. Reading
     // one as the other finds nothing.
     return tc_share_scan(sh, e, x.end, none);
+}
+
+/// The server's secp256r1 key share (an uncompressed point), or empty.
+pub List(Int) tc_server_share_p256(List(Int) sh) {
+    List(Int) none = [];
+    ShExts x = tc_sh_exts(sh);
+    if (!x.ok) { return none; }
+    Int e = tc_find_ext(sh, x.first, x.end, 51);
+    if (e < 0 || e + 4 > x.end) { return none; }
+    Int group = sh[e] * 256 + sh[e + 1];
+    Int klen = sh[e + 2] * 256 + sh[e + 3];
+    return if (group == 23 && klen == 65 && e + 4 + 65 <= x.end && sh[e + 4] == 4) { slice_seed(sh, e + 4, 65, []) } else { none };
 }
 
 List(Int) tc_share_scan(List(Int) b, Int at, Int end, List(Int) acc) {

@@ -310,6 +310,16 @@ pub Result(TpmCertified2, TpmError) tpm_certify(Int object, List(Secret(UInt(8))
     return tpm_certify_via(lambda(cs, ls) { tpm_chain(cs, ls) }, object, tpm_auth_bytes(auth), extra);
 }
 
+/// The key at `object` (a child of `parent`) with authValue `new_auth`
+/// instead of `auth`: TPM2_ObjectChangeAuth's new private area, for
+/// tpm_persist with the key's public area. The key at `object` keeps the
+/// old authValue until it is evicted.
+@requires(device, declassify)
+pub Result(List(UInt(8)), TpmError) tpm_change_auth(Int object, Int parent, List(Secret(UInt(8))) auth, List(Secret(UInt(8))) new_auth) {
+    List(UInt(8)) c = tpm2_object_change_auth_cmd(object, parent, tpm_auth_bytes(auth), tpm_auth_bytes(new_auth))?;
+    return tpm2_object_change_auth_resp(tpm_send(c)?);
+}
+
 /// HMAC-SHA-256 of `data` by the key at `key` (authValue `auth`): 32
 /// secret bytes, released only by the TPM and only for the right authValue.
 @requires(device, declassify)
