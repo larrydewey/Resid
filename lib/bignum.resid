@@ -446,12 +446,16 @@ List(UInt(64)) bn_modexp_plain(List(UInt(64)) base, List(UInt(64)) exp, List(UIn
 /// Whether n passes Miller-Rabin for every witness in `witnesses` (each in
 /// [2, n-2]). Composite n passes one random witness with probability at most
 /// 1/4, so 40 random witnesses give 2^-80. n must be odd and above 3.
+///
+/// The exponentiation is bn_modexp's native path (no lists): the safe-prime
+/// search tests thousands of candidates, and a Montgomery context built per
+/// candidate left its garbage alive for the whole search (about 80 MB per
+/// 1024-bit prime, a gigabyte over a key generation).
 pub Bool bn_miller_rabin(List(UInt(64)) n, List(List(UInt(64))) witnesses) {
-    BnMont c = bn_mont_new(n);
     List(UInt(64)) nm1 = bn_sub(n, [1]);
     Int s = bn_trailing_zeros(nm1, 0);
     List(UInt(64)) d = bn_shr(nm1, s);
-    return bn_mr_each(c, nm1, d, s, witnesses, 0);
+    return bn_mr_each(n, nm1, d, s, witnesses, 0);
 }
 
 Int bn_trailing_zeros(List(UInt(64)) x, Int i) {
@@ -459,24 +463,24 @@ Int bn_trailing_zeros(List(UInt(64)) x, Int i) {
     return bn_trailing_zeros(x, i + 1);
 }
 
-Bool bn_mr_each(BnMont c, List(UInt(64)) nm1, List(UInt(64)) d, Int s, List(List(UInt(64))) ws, Int i) {
+Bool bn_mr_each(List(UInt(64)) n, List(UInt(64)) nm1, List(UInt(64)) d, Int s, List(List(UInt(64))) ws, Int i) {
     if (i >= ws.len()) { return true; }
-    if (!bn_mr_witness(c, nm1, d, s, ws[i])) { return false; }
-    return bn_mr_each(c, nm1, d, s, ws, i + 1);
+    if (!bn_mr_witness(n, nm1, d, s, ws[i])) { return false; }
+    return bn_mr_each(n, nm1, d, s, ws, i + 1);
 }
 
-Bool bn_mr_witness(BnMont c, List(UInt(64)) nm1, List(UInt(64)) d, Int s, List(UInt(64)) a) {
-    List(UInt(64)) x = bn_modexp_mont(c, bn_mod(a, c.n), d);
+Bool bn_mr_witness(List(UInt(64)) n, List(UInt(64)) nm1, List(UInt(64)) d, Int s, List(UInt(64)) a) {
+    List(UInt(64)) x = bn_modexp(a, d, n);
     if (bn_cmp(x, [1]) == 0 || bn_cmp(x, nm1) == 0) { return true; }
-    return bn_mr_square(c, nm1, x, s - 1);
+    return bn_mr_square(n, nm1, x, s - 1);
 }
 
-Bool bn_mr_square(BnMont c, List(UInt(64)) nm1, List(UInt(64)) x, Int left) {
+Bool bn_mr_square(List(UInt(64)) n, List(UInt(64)) nm1, List(UInt(64)) x, Int left) {
     if (left <= 0) { return false; }
-    List(UInt(64)) y = bn_modmul(x, x, c.n);
+    List(UInt(64)) y = bn_modmul(x, x, n);
     if (bn_cmp(y, nm1) == 0) { return true; }
     if (bn_cmp(y, [1]) == 0) { return false; }
-    return bn_mr_square(c, nm1, y, left - 1);
+    return bn_mr_square(n, nm1, y, left - 1);
 }
 
 // ─── Safe primes ────────────────────────────────────────────────
