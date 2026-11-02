@@ -1,0 +1,186 @@
+// bcrypt_pbkdf.resid — Blowfish (Schneier 1993) and bcrypt_pbkdf, the key
+// derivation OpenSSH uses for passphrase-protected private keys
+// (PROTOCOL.key; OpenBSD bcrypt_pbkdf.c), and AES-CTR for their sealed
+// section. Checked against Python's bcrypt.kdf and `cryptography`
+// (tests/crypto/bcrypt_pbkdf_ref_test.resid, tools/gen_bcrypt_ref.py).
+//
+// Not constant time: Blowfish indexes its S-boxes by key-dependent words,
+// by design, as every bcrypt implementation does. These functions take and
+// return public byte types; a caller decides when to run them on a
+// passphrase (OpenSSH key import: once, on the user's own machine).
+//
+// The state is one flat List(Int) of 1042 32-bit words: P[0..17], then
+// S0..S3 at 18 + 256 i. The key schedule writes it in place pairwise, in
+// that order, which is the reference's order (P, then each S-box).
+
+import "blowfish_init.resid";
+import "crypto.resid";
+import "aesgcm.resid";
+
+Int m32() { return 4294967295; }
+
+Int bf_f(List(Int) s, Int x) {
+    Int a = s[18 + ((x >> 24) & 255)];
+    Int b = s[274 + ((x >> 16) & 255)];
+    Int c = s[530 + ((x >> 8) & 255)];
+    Int d = s[786 + (x & 255)];
+    return ((((a + b) & m32()) ^ c) + d) & m32();
+}
+
+// Sixteen rounds on (l, r); packed as l * 2^32 + r in a UInt(64).
+UInt(64) bf_rounds(List(Int) s, Int l, Int r, Int i) {
+    if (i > 16) { return ((UInt(64))(r ^ s[17]) << 32) | (UInt(64))l; }
+    Int r2 = r ^ bf_f(s, l) ^ s[i];
+    return bf_rounds(s, r2, l, i + 1);
+}
+
+/// One Blowfish block encryption of (l, r) under state `s`, as
+/// (l' << 32) | r'.
+pub UInt(64) bf_encipher(List(Int) s, Int l, Int r) { return bf_rounds(s, l ^ s[0], r, 1); }
+
+Int hi32(UInt(64) v) { return (Int)(v >> 32); }
+Int lo32(UInt(64) v) { return (Int)(v & (UInt(64))4294967295); }
+
+// The big-endian word at byte offset j (cyclic) of a 64-byte block.
+Int w64(List(Int) b, Int j) {
+    Int n = b.len();
+    return (b[j % n] << 24) | (b[(j + 1) % n] << 16) | (b[(j + 2) % n] << 8) | b[(j + 3) % n];
+}
+
+List(Int) xor_p(List(Int) s, List(Int) key, Int i) {
+    if (i >= 18) { return s; }
+    return xor_p(s.with(i, s[i] ^ w64(key, 4 * i)), key, i + 1);
+}
+
+// The pairs of the whole state rewritten from a running encipherment;
+// with data, each pair first takes the next two data words.
+List(Int) fill_state(List(Int) s, List(Int) data, Bool with_data, Int i, Int l, Int r, Int j) {
+    if (i >= 1042) { return s; }
+    Int l1 = if (with_data) { l ^ w64(data, j) } else { l };
+    Int r1 = if (with_data) { r ^ w64(data, j + 4) } else { r };
+    UInt(64) e = bf_encipher(s, l1, r1);
+    Int nl = hi32(e);
+    Int nr = lo32(e);
+    return fill_state(s.with(i, nl).with(i + 1, nr), data, with_data, i + 2, nl, nr, (j + 8) % data.len());
+}
+
+/// Blowfish_expandstate: the key into P, then the whole state from the data.
+pub List(Int) bf_expand(List(Int) s, List(Int) data, List(Int) key) {
+    return fill_state(xor_p(s, key, 0), data, true, 0, 0, 0, 0);
+}
+
+/// Blowfish_expand0state: as bf_expand with no data (the "expensive" step).
+pub List(Int) bf_expand0(List(Int) s, List(Int) key) {
+    return fill_state(xor_p(s, key, 0), key, false, 0, 0, 0, 0);
+}
+
+List(Int) bf_expensive(List(Int) s, List(Int) pass, List(Int) salt, Int i) {
+    if (i >= 64) { return s; }
+    return bf_expensive(bf_expand0(bf_expand0(s, salt), pass), pass, salt, i + 1);
+}
+
+// "OxychromaticBlowfishSwatDynamite" as eight big-endian words.
+List(Int) bf_magic() { return [1333295459, 1752330093, 1635019107, 1114402679, 1718186856, 1400332660, 1148808801, 1835627621]; }
+
+List(Int) enc_blocks(List(Int) s, List(Int) c, Int i) {
+    if (i >= 8) { return c; }
+    UInt(64) e = bf_encipher(s, c[i], c[i + 1]);
+    return enc_blocks(s, c.with(i, hi32(e)).with(i + 1, lo32(e)), i + 2);
+}
+
+List(Int) enc64(List(Int) s, List(Int) c, Int n) {
+    if (n >= 64) { return c; }
+    return enc64(s, enc_blocks(s, c, 0), n + 1);
+}
+
+List(Int) le_bytes(List(Int) c, Int i, ListBuf(Int) acc) {
+    if (i >= c.len()) { return acc.finish(); }
+    Int w = c[i];
+    return le_bytes(c, i + 1, acc.push(w & 255).push((w >> 8) & 255).push((w >> 16) & 255).push((w >> 24) & 255));
+}
+
+/// bcrypt_hash of OpenBSD's bcrypt_pbkdf: 32 bytes from two 64-byte inputs.
+pub List(Int) bcrypt_hash(List(Int) sha2pass, List(Int) sha2salt) {
+    List(Int) s = bf_expensive(bf_expand(blowfish_init(), sha2salt, sha2pass), sha2pass, sha2salt, 0);
+    return le_bytes(enc64(s, bf_magic(), 0), 0, ListBuf());
+}
+
+List(Int) be32(Int n) { return [(n >> 24) & 255, (n >> 16) & 255, (n >> 8) & 255, n & 255]; }
+
+List(Int) xor_bytes(List(Int) a, List(Int) b, Int i, ListBuf(Int) acc) {
+    if (i >= a.len()) { return acc.finish(); }
+    return xor_bytes(a, b, i + 1, acc.push(a[i] ^ b[i]));
+}
+
+// One output block: the first hash and rounds - 1 more, XORed.
+List(Int) pbkdf_block(List(Int) sha2pass, List(Int) tmp, List(Int) out, Int left) {
+    if (left <= 0) { return out; }
+    List(Int) t2 = bcrypt_hash(sha2pass, sha512_bytes(tmp));
+    return pbkdf_block(sha2pass, t2, xor_bytes(out, t2, 0, ListBuf()), left - 1);
+}
+
+// Spreads block `count` over the key: byte i goes to i * stride + count - 1.
+List(Int) place(List(Int) key, List(Int) out, Int stride, Int count, Int amt, Int i) {
+    if (i >= amt) { return key; }
+    Int dest = i * stride + count - 1;
+    if (dest >= key.len()) { return key; }
+    return place(key.with(dest, out[i]), out, stride, count, amt, i + 1);
+}
+
+List(Int) pbkdf_loop(List(Int) sha2pass, List(Int) salt, Int rounds, List(Int) key, Int stride, Int amt0, Int left, Int count) {
+    if (left <= 0) { return key; }
+    List(Int) first = bcrypt_hash(sha2pass, sha512_bytes(salt.concat(be32(count))));
+    List(Int) out = pbkdf_block(sha2pass, first, first, rounds - 1);
+    Int amt = if (amt0 < left) { amt0 } else { left };
+    List(Int) k2 = place(key, out, stride, count, amt, 0);
+    Int done = placed(key.len(), stride, count, amt, 0);
+    return pbkdf_loop(sha2pass, salt, rounds, k2, stride, amt, left - done, count + 1);
+}
+
+Int placed(Int keylen, Int stride, Int count, Int amt, Int i) {
+    if (i >= amt || i * stride + count - 1 >= keylen) { return i; }
+    return placed(keylen, stride, count, amt, i + 1);
+}
+
+/// bcrypt_pbkdf(pass, salt, rounds) -> `keylen` bytes, as OpenBSD's
+/// bcrypt_pbkdf.c; empty for an empty password or salt, rounds < 1, or a
+/// key outside 1..1024 bytes.
+pub List(Int) bcrypt_pbkdf(List(Int) pass, List(Int) salt, Int rounds, Int keylen) {
+    if (pass.len() == 0 || salt.len() == 0 || rounds < 1 || keylen < 1 || keylen > 1024) { return []; }
+    Int stride = (keylen + 31) / 32;
+    Int amt = (keylen + stride - 1) / stride;
+    return pbkdf_loop(sha512_bytes(pass), salt, rounds, zeros(keylen, ListBuf()), stride, amt, keylen, 1);
+}
+
+List(Int) zeros(Int n, ListBuf(Int) acc) {
+    if (n <= 0) { return acc.finish(); }
+    return zeros(n - 1, acc.push(0));
+}
+
+// ─── AES-CTR (the aes256-ctr cipher of OpenSSH keys) ─────────────
+
+List(Int) ctr_inc(List(Int) c, Int i) {
+    if (i < 0) { return c; }
+    Int v = (c[i] + 1) & 255;
+    List(Int) c2 = c.with(i, v);
+    return if (v == 0) { ctr_inc(c2, i - 1) } else { c2 };
+}
+
+List(Int) ctr_at(List(Int) rk, List(Int) ctr, List(Int) data, Int i, ListBuf(Int) acc) {
+    if (i >= data.len()) { return acc.finish(); }
+    List(Int) ks = aes_encrypt_block(rk, ctr);
+    Int n = if (data.len() - i < 16) { data.len() - i } else { 16 };
+    return ctr_at(rk, ctr_inc(ctr, 15), data, i + n, push_xor(acc, data, ks, i, 0, n));
+}
+
+ListBuf(Int) push_xor(ListBuf(Int) acc, List(Int) d, List(Int) ks, Int off, Int k, Int n) {
+    if (k >= n) { return acc; }
+    return push_xor(acc.push(d[off + k] ^ ks[k]), d, ks, off, k + 1, n);
+}
+
+/// AES-CTR with a 16-byte initial counter (big-endian increment); the
+/// same call encrypts and decrypts. Empty for a bad key or counter size.
+pub List(Int) aes_ctr(List(Int) key, List(Int) iv, List(Int) data) {
+    if ((key.len() != 16 && key.len() != 24 && key.len() != 32) || iv.len() != 16) { return []; }
+    return ctr_at(aes_key_expand(key), iv, data, 0, ListBuf());
+}

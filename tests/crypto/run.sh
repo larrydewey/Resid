@@ -153,5 +153,14 @@ fz tpm "$SD/tpm-public.bin" "$N" 76
 fz corim "$SD/corim-payload.bin" "$N" 77
 fz corim "$SD/corim-keys-payload.bin" "$N" 78
 
+# bcrypt_pbkdf and AES-CTR (lib/bcrypt_pbkdf.resid) against Python's bcrypt
+# and cryptography, and a passphrase-protected ssh-keygen key
+# (tools/gen_bcrypt_ref.py).
+if (cd "$ROOT" && "$COMPILER" test tests/crypto/bcrypt_pbkdf_test.resid) > "$W/bcrypt.log" 2>&1 && grep -q "Failures: 0 " "$W/bcrypt.log"; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL bcrypt_pbkdf: $(grep -m3 -E 'error|expected|actual' "$W/bcrypt.log" | tr '\n' ' ')"
+fi
+
 echo "crypto: $pass passed, $fail failed ($files vector files)"
 [ "$fail" -eq 0 ]
