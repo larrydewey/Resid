@@ -162,5 +162,14 @@ else
     fail=$((fail + 1)); echo "FAIL bcrypt_pbkdf: $(grep -m3 -E 'error|expected|actual' "$W/bcrypt.log" | tr '\n' ' ')"
 fi
 
+# CTAP2 and CBOR values (lib/ctap2.resid, lib/cborv.resid) against
+# python-fido2 and an authenticator written from the specification
+# (tools/gen_ctap2_ref.py).
+if (cd "$ROOT" && "$COMPILER" test tests/crypto/ctap2_test.resid) > "$W/ctap2.log" 2>&1 && grep -q "Failures: 0 " "$W/ctap2.log"; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL ctap2: $(grep -m3 -E 'error|expected|actual' "$W/ctap2.log" | tr '\n' ' ')"
+fi
+
 echo "crypto: $pass passed, $fail failed ($files vector files)"
 [ "$fail" -eq 0 ]

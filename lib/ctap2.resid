@@ -1,0 +1,327 @@
+// ctap2.resid — a FIDO2 client (CTAP 2.1) as pure functions over bytes:
+// authenticatorGetInfo, clientPIN getKeyAgreement, makeCredential and
+// getAssertion with the hmac-secret extension (a 32-byte secret a security
+// key derives from a credential and a salt, released on a touch), PIN/UV
+// auth protocol 2, and CTAPHID framing (the USB HID transport's 64-byte
+// reports). Every random value is an argument, so the encodings are
+// checkable byte for byte; the transport is the caller's (lib/dev/fido.resid
+// for a USB key, a socket in tests).
+//
+// Checked against python-fido2 (Yubico's encoder and PinProtocolV2) and an
+// authenticator written from the specification on `cryptography`
+// (tests/crypto/ctap2_test.resid, tools/gen_ctap2_ref.py).
+//
+// The protocol-2 shared secret, the salts and the hmac-secret output are
+// handled here at public byte types (the ECDH and AES code is constant
+// time either way); a caller that keeps the output as key material wraps
+// it in Secret at once.
+
+import "cborv.resid";
+import "cbor_head.resid";
+import "crypto.resid";
+import "hash.resid";
+import "ecdsa.resid";
+import "aesgcm.resid";
+
+// ─── Commands and status ──────────────────────────────────────────
+
+pub Int ctap_make_credential() { return 1; }
+pub Int ctap_get_assertion() { return 2; }
+pub Int ctap_get_info() { return 4; }
+pub Int ctap_client_pin() { return 6; }
+
+/// What a status byte means, for messages.
+pub Str ctap_status_text(Int s) {
+    if (s == 0) { return "success"; }
+    if (s == 39) { return "the key refused (operation denied)"; }
+    if (s == 46) { return "the key does not hold this credential"; }
+    if (s == 47) { return "no touch within the time allowed"; }
+    if (s == 49) { return "the key's PIN is required"; }
+    if (s == 54) { return "the key needs its PIN set up first"; }
+    if (s == 38) { return "the key has no room for another credential"; }
+    if (s == 43) { return "the key does not support this"; }
+    return f"the key answered with error {s}";
+}
+
+// ─── PIN/UV auth protocol 2 (CTAP 2.1 §6.5.7) ─────────────────────
+
+pub type Pp2 = { List(Int) hmac_key; List(Int) aes_key; List(Int) platform_pub; };
+
+List(Int) zeros32() { return [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]; }
+
+List(Int) ascii(Str s) { return cb_str_bytes(s); }
+
+/// The shared secret with the authenticator's key-agreement point (04 || x
+/// || y): ECDH with the platform's ephemeral scalar, then HKDF-SHA-256 with
+/// 32 zero bytes of salt into the HMAC key and the AES key. Empty keys when
+/// the point is not on P-256.
+pub Pp2 pp2_shared(List(Int) platform_sk, List(Int) auth_point) {
+    List(Int) z = ecdh(P256, platform_sk, auth_point);
+    List(Int) pub = ec_public_key(P256, platform_sk);
+    if (z.len() != 32) { return Pp2 {.hmac_key = [], .aes_key = [], .platform_pub = pub}; }
+    return Pp2 {.hmac_key = hkdf_with(Sha256, zeros32(), z, ascii("CTAP2 HMAC key"), 32),
+                .aes_key = hkdf_with(Sha256, zeros32(), z, ascii("CTAP2 AES key"), 32), .platform_pub = pub};
+}
+
+List(Int) xor16(List(Int) a, List(Int) b, Int i, ListBuf(Int) acc) {
+    if (i >= 16) { return acc.finish(); }
+    return xor16(a, b, i + 1, acc.push(a[i] ^ b[i]));
+}
+
+List(Int) cbc_enc(List(Int) rk, List(Int) prev, List(Int) pt, Int i, List(Int) acc) {
+    if (i >= pt.len()) { return acc; }
+    List(Int) c = aes_encrypt_block(rk, xor16(pt[i..i + 16], prev, 0, ListBuf()));
+    return cbc_enc(rk, c, pt, i + 16, acc.concat(c));
+}
+
+List(Int) cbc_dec(List(Int) rk, List(Int) prev, List(Int) ct, Int i, List(Int) acc) {
+    if (i >= ct.len()) { return acc; }
+    List(Int) c = ct[i..i + 16];
+    return cbc_dec(rk, c, ct, i + 16, acc.concat(xor16(aes_decrypt_block(rk, c), prev, 0, ListBuf())));
+}
+
+/// encrypt(key, demPlaintext): iv || AES-256-CBC(pt), no padding; empty
+/// unless the plaintext is whole blocks and the IV 16 bytes.
+pub List(Int) pp2_encrypt(Pp2 k, List(Int) iv, List(Int) pt) {
+    if (iv.len() != 16 || pt.len() % 16 != 0 || k.aes_key.len() != 32) { return []; }
+    return iv.concat(cbc_enc(aes_key_expand(k.aes_key), iv, pt, 0, []));
+}
+
+/// decrypt(key, ct): empty for a malformed input.
+pub List(Int) pp2_decrypt(Pp2 k, List(Int) ct) {
+    if (ct.len() < 32 || ct.len() % 16 != 0 || k.aes_key.len() != 32) { return []; }
+    return cbc_dec(aes_key_expand(k.aes_key), ct[0..16], ct, 16, []);
+}
+
+/// authenticate(key, message): HMAC-SHA-256, all 32 bytes.
+pub List(Int) pp2_authenticate(Pp2 k, List(Int) msg) { return hmac_bytes(Sha256, k.hmac_key, msg); }
+
+/// A P-256 point as the COSE key CTAP sends: kty EC2, alg
+/// ECDH-ES+HKDF-256 (-25), crv P-256, x, y.
+pub Cv cose_ecdh_key(List(Int) point) {
+    return CvMap([cv_ik(1, CvInt(2)), cv_ik(3, CvInt(-25)), cv_ik(-1, CvInt(1)), cv_ik(-2, CvBytes(point[1..33])), cv_ik(-3, CvBytes(point[33..65]))]);
+}
+
+/// 04 || x || y from a COSE EC2 P-256 key; empty otherwise.
+pub List(Int) cose_point(Cv k) {
+    List(Int) x = cv_bytes(cv_get(k, -2));
+    List(Int) y = cv_bytes(cv_get(k, -3));
+    if (cv_int(cv_get(k, 1), 0) != 2 || cv_int(cv_get(k, -1), 0) != 1 || x.len() != 32 || y.len() != 32) { return []; }
+    return [4].concat(x).concat(y);
+}
+
+// ─── Requests ─────────────────────────────────────────────────────
+
+pub List(Int) req_get_info() { return [ctap_get_info()]; }
+
+/// clientPIN getKeyAgreement under protocol 2.
+pub List(Int) req_key_agreement() { return [ctap_client_pin()].concat(cv_encode(CvMap([cv_ik(1, CvInt(2)), cv_ik(2, CvInt(2))]))); }
+
+/// makeCredential for an ES256, non-resident credential with hmac-secret.
+pub List(Int) req_make_credential(List(Int) client_data_hash, Str rp, List(Int) user_id, Str user) {
+    Cv m = CvMap([
+        cv_ik(1, CvBytes(client_data_hash)),
+        cv_ik(2, CvMap([cv_tk("id", CvText(rp)), cv_tk("name", CvText(rp))])),
+        cv_ik(3, CvMap([cv_tk("id", CvBytes(user_id)), cv_tk("name", CvText(user)), cv_tk("displayName", CvText(user))])),
+        cv_ik(4, CvArr([CvMap([cv_tk("alg", CvInt(-7)), cv_tk("type", CvText("public-key"))])])),
+        cv_ik(6, CvMap([cv_tk("hmac-secret", CvBool(true))])),
+        cv_ik(7, CvMap([cv_tk("rk", CvBool(false))]))
+    ]);
+    return [ctap_make_credential()].concat(cv_encode(m));
+}
+
+/// getAssertion for one credential with an hmac-secret salt (32 bytes),
+/// encrypted and authenticated under the protocol-2 shared secret, the
+/// encryption using `iv`; asks for user presence.
+pub List(Int) req_hmac_assertion(List(Int) client_data_hash, Str rp, List(Int) cred_id, Pp2 k, List(Int) salt, List(Int) iv) {
+    List(Int) salt_enc = pp2_encrypt(k, iv, salt);
+    Cv ext = CvMap([cv_tk("hmac-secret", CvMap([cv_ik(1, cose_ecdh_key(k.platform_pub)), cv_ik(2, CvBytes(salt_enc)),
+                                                  cv_ik(3, CvBytes(pp2_authenticate(k, salt_enc))), cv_ik(4, CvInt(2))]))]);
+    Cv m = CvMap([
+        cv_ik(1, CvText(rp)),
+        cv_ik(2, CvBytes(client_data_hash)),
+        cv_ik(3, CvArr([CvMap([cv_tk("id", CvBytes(cred_id)), cv_tk("type", CvText("public-key"))])])),
+        cv_ik(4, ext),
+        cv_ik(5, CvMap([cv_tk("up", CvBool(true))]))
+    ]);
+    return [ctap_get_assertion()].concat(cv_encode(m));
+}
+
+// ─── Responses ────────────────────────────────────────────────────
+
+/// The status byte and the CBOR body of a response; status -1 when empty
+/// or the body is not CBOR.
+pub type Resp = { Int status; Cv body; };
+
+pub Resp resp_of(List(Int) r) {
+    if (r.len() == 0) { return Resp {.status = -1, .body = CvNull}; }
+    if (r[0] != 0 || r.len() == 1) { return Resp {.status = r[0], .body = CvNull}; }
+    Option(Cv) b = cv_decode(r[1..r.len()]);
+    return match b { None => Resp {.status = -1, .body = CvNull}, Some(x) => Resp {.status = 0, .body = x} };
+}
+
+pub type Info = { List(Str) versions; Bool hmac_secret; List(Int) aaguid; Bool client_pin; Bool protocol2; };
+
+Bool has_text(List(Cv) xs, Str s, Int i) {
+    if (i >= xs.len()) { return false; }
+    Cv x = xs[i];
+    if (match x { CvText(t) => t == s, _ => false }) { return true; }
+    return has_text(xs, s, i + 1);
+}
+Bool has_int(List(Cv) xs, Int n, Int i) {
+    if (i >= xs.len()) { return false; }
+    Cv x = xs[i];
+    if (match x { CvInt(v) => v == n, _ => false }) { return true; }
+    return has_int(xs, n, i + 1);
+}
+List(Str) texts(List(Cv) xs, Int i, List(Str) acc) {
+    if (i >= xs.len()) { return acc; }
+    Cv x = xs[i];
+    return texts(xs, i + 1, match x { CvText(t) => acc.concat([t]), _ => acc });
+}
+
+pub Info info_of(Cv b) {
+    return Info {.versions = texts(cv_list(cv_get(b, 1)), 0, []), .hmac_secret = has_text(cv_list(cv_get(b, 2)), "hmac-secret", 0),
+                 .aaguid = cv_bytes(cv_get(b, 3)), .client_pin = cv_bool(cv_get_t(cv_or(cv_get(b, 4)), "clientPin"), false),
+                 .protocol2 = has_int(cv_list(cv_get(b, 6)), 2, 0)};
+}
+Cv cv_or(Option(Cv) v) { return v else { CvNull }; }
+
+/// The authenticator's key-agreement point from a getKeyAgreement reply.
+pub List(Int) key_agreement_of(Cv b) { return cose_point(cv_or(cv_get(b, 1))); }
+
+// authData (WebAuthn §6.1): rpIdHash, flags, signCount, then the attested
+// credential (makeCredential) and the extensions (flag ED).
+pub type AuthData = { Bool ok; List(Int) rp_hash; Int flags; List(Int) cred_id; List(Int) cred_point; Cv ext; };
+
+AuthData ad_bad() { return AuthData {.ok = false, .rp_hash = [], .flags = 0, .cred_id = [], .cred_point = [], .ext = CvNull}; }
+
+pub AuthData auth_data_of(List(Int) a) {
+    if (a.len() < 37) { return ad_bad(); }
+    Int flags = a[32];
+    Bool at = (flags & 64) != 0;
+    Bool ed = (flags & 128) != 0;
+    Int p = 37;
+    if (at && a.len() < p + 18) { return ad_bad(); }
+    Int cl = if (at) { (a[p + 16] << 8) | a[p + 17] } else { 0 };
+    Int ks = p + 18 + cl;
+    if (at && ks > a.len()) { return ad_bad(); }
+    CvAt key = if (at) { cv_decode_prefix(a, ks) } else { CvAt {.ok = true, .v = CvNull, .next = 37} };
+    if (!key.ok) { return ad_bad(); }
+    CvAt ex = if (ed) { cv_decode_prefix(a, key.next) } else { CvAt {.ok = true, .v = CvNull, .next = key.next} };
+    if (!ex.ok || ex.next != a.len()) { return ad_bad(); }
+    List(Int) pt = if (at) { cose_es256_point(key.v) } else { [] };
+    if (at && pt.len() != 65) { return ad_bad(); }
+    return AuthData {.ok = true, .rp_hash = a[0..32], .flags = flags, .cred_id = if (at) { a[p + 18..ks] } else { [] }, .cred_point = pt, .ext = ex.v};
+}
+
+// A COSE ES256 public key (alg -7, crv P-256).
+List(Int) cose_es256_point(Cv k) {
+    if (cv_int(cv_get(k, 3), 0) != -7) { return []; }
+    return cose_point(k);
+}
+
+/// A new credential: its id and public key, checked: the relying party's
+/// hash, user presence, an attested ES256 key, hmac-secret granted.
+pub type Made = { Bool ok; Str why; List(Int) cred_id; List(Int) cred_point; };
+
+pub Made made_of(Resp r, Str rp) {
+    if (r.status != 0) { return Made {.ok = false, .why = ctap_status_text(r.status), .cred_id = [], .cred_point = []}; }
+    AuthData a = auth_data_of(cv_bytes(cv_get(r.body, 2)));
+    if (!a.ok || (a.flags & 64) == 0) { return Made {.ok = false, .why = "the key's answer is malformed", .cred_id = [], .cred_point = []}; }
+    if (hex_encode(a.rp_hash) != hex_encode(sha256_bytes(ascii(rp)))) { return Made {.ok = false, .why = "the key answered for another relying party", .cred_id = [], .cred_point = []}; }
+    if ((a.flags & 1) == 0) { return Made {.ok = false, .why = "the key was not touched", .cred_id = [], .cred_point = []}; }
+    if (!cv_bool(cv_get_t(a.ext, "hmac-secret"), false)) { return Made {.ok = false, .why = "the key did not grant hmac-secret", .cred_id = [], .cred_point = []}; }
+    return Made {.ok = true, .why = "", .cred_id = a.cred_id, .cred_point = a.cred_point};
+}
+
+/// The hmac-secret output of a getAssertion reply, after checking the
+/// assertion's signature with the credential's key over authData ||
+/// clientDataHash, the relying party, user presence and the credential;
+/// empty with the reason otherwise.
+pub type Got = { Bool ok; Str why; List(Int) output; };
+
+pub Got hmac_output_of(Resp r, Str rp, List(Int) cred_id, List(Int) cred_point, List(Int) client_data_hash, Pp2 k) {
+    if (r.status != 0) { return Got {.ok = false, .why = ctap_status_text(r.status), .output = []}; }
+    List(Int) ad = cv_bytes(cv_get(r.body, 2));
+    List(Int) sig = cv_bytes(cv_get(r.body, 3));
+    Cv cred = cv_or(cv_get(r.body, 1));
+    List(Int) got_id = cv_bytes(cv_get_t(cred, "id"));
+    AuthData a = auth_data_of(ad);
+    if (!a.ok) { return Got {.ok = false, .why = "the key's answer is malformed", .output = []}; }
+    if (got_id.len() > 0 && hex_encode(got_id) != hex_encode(cred_id)) { return Got {.ok = false, .why = "the key answered with another credential", .output = []}; }
+    if (hex_encode(a.rp_hash) != hex_encode(sha256_bytes(ascii(rp)))) { return Got {.ok = false, .why = "the key answered for another relying party", .output = []}; }
+    if ((a.flags & 1) == 0) { return Got {.ok = false, .why = "the key was not touched", .output = []}; }
+    if (!ecdsa_verify(P256, Sha256, cred_point, ad.concat(client_data_hash), sig)) { return Got {.ok = false, .why = "the key's signature does not verify", .output = []}; }
+    List(Int) enc = cv_bytes(cv_get_t(a.ext, "hmac-secret"));
+    List(Int) out = pp2_decrypt(k, enc);
+    if (out.len() != 32) { return Got {.ok = false, .why = "the key gave no hmac-secret output", .output = []}; }
+    return Got {.ok = true, .why = "", .output = out};
+}
+
+// ─── CTAPHID (CTAP 2.1 §11.2) ─────────────────────────────────────
+
+pub Int hid_init() { return 134; }        // 0x86
+pub Int hid_cbor() { return 144; }        // 0x90
+pub Int hid_keepalive() { return 187; }   // 0xbb
+pub Int hid_error() { return 191; }       // 0xbf
+pub Int hid_broadcast() { return 4294967295; }
+
+List(Int) cid_bytes(Int cid) { return [(cid >> 24) & 255, (cid >> 16) & 255, (cid >> 8) & 255, cid & 255]; }
+
+List(Int) pad64(List(Int) b) {
+    if (b.len() >= 64) { return b; }
+    return pad64(b.concat([0]));
+}
+
+List(List(Int)) cont_frames(Int cid, List(Int) p, Int at, Int seq, List(List(Int)) acc) {
+    if (at >= p.len()) { return acc; }
+    Int n = if (p.len() - at < 59) { p.len() - at } else { 59 };
+    return cont_frames(cid, p, at + n, seq + 1, acc.concat([pad64(cid_bytes(cid).concat([seq]).concat(p[at..at + n]))]));
+}
+
+/// The 64-byte reports of one message: an initialization packet (command
+/// with bit 7 set, 16-bit length, 57 bytes), then continuation packets
+/// (sequence 0..127, 59 bytes each). Empty for a message over 7609 bytes.
+pub List(List(Int)) hid_frames(Int cid, Int cmd, List(Int) payload) {
+    Int n = payload.len();
+    if (n > 7609) { return []; }
+    Int first = if (n < 57) { n } else { 57 };
+    List(Int) init = pad64(cid_bytes(cid).concat([cmd, (n >> 8) & 255, n & 255]).concat(payload[0..first]));
+    return cont_frames(cid, payload, first, 0, [init]);
+}
+
+/// A reassembled message: the command and payload; cmd -1 while more
+/// reports are needed, -2 for a malformed sequence.
+pub type HidMsg = { Int cmd; List(Int) payload; };
+
+Int cid_of(List(Int) r) { return (r[0] << 24) | (r[1] << 16) | (r[2] << 8) | r[3]; }
+
+/// The message for channel `cid` from the reports read so far: reports of
+/// other channels and keep-alives are skipped.
+pub HidMsg hid_collect(List(List(Int)) reports, Int cid) { return hid_scan(reports, cid, 0, -1, 0, [], 0); }
+
+HidMsg hid_scan(List(List(Int)) rs, Int cid, Int i, Int cmd, Int len, List(Int) acc, Int seq) {
+    if (cmd >= 0 && acc.len() >= len) { return HidMsg {.cmd = cmd, .payload = acc[0..len]}; }
+    if (i >= rs.len()) { return HidMsg {.cmd = -1, .payload = []}; }
+    List(Int) r = rs[i];
+    if (r.len() != 64 || cid_of(r) != cid) { return hid_scan(rs, cid, i + 1, cmd, len, acc, seq); }
+    Int b = r[4];
+    if (b >= 128) {
+        if (b == hid_keepalive()) { return hid_scan(rs, cid, i + 1, cmd, len, acc, seq); }
+        if (cmd >= 0) { return HidMsg {.cmd = -2, .payload = []}; }
+        Int n = (r[5] << 8) | r[6];
+        Int take = if (n < 57) { n } else { 57 };
+        return hid_scan(rs, cid, i + 1, b, n, r[7..7 + take], 0);
+    }
+    if (cmd < 0 || b != seq) { return HidMsg {.cmd = -2, .payload = []}; }
+    Int need = len - acc.len();
+    Int take = if (need < 59) { need } else { 59 };
+    return hid_scan(rs, cid, i + 1, cmd, len, acc.concat(r[5..5 + take]), seq + 1);
+}
+
+/// The INIT reply for `nonce`: the new channel id, or -1.
+pub Int hid_init_cid(HidMsg m, List(Int) nonce) {
+    if (m.cmd != hid_init() || m.payload.len() < 17 || hex_encode(m.payload[0..8]) != hex_encode(nonce)) { return -1; }
+    return cid_of(m.payload[8..12]);
+}

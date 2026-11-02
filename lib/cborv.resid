@@ -1,0 +1,169 @@
+// cborv.resid — CBOR values (RFC 8949) as a tree, for protocols whose
+// messages are small maps of mixed keys and values: CTAP2 (lib/ctap2.resid),
+// COSE keys. Definite lengths only, no tags, no floats, integers within
+// 64-bit signed range: what CTAP2's canonical CBOR uses (CTAP 2.1 §8). The
+// decoder is total (a malformed or unsupported input gives None) and keeps
+// nesting under 16 levels; the encoder writes shortest heads, and map keys
+// in the order given (callers give CTAP2's canonical order).
+
+import "cbor_head.resid";
+
+pub type Cv = CvInt(Int) | CvBytes(List(Int)) | CvText(Str) | CvArr(List(Cv)) | CvMap(List(CvPair)) | CvBool(Bool) | CvNull;
+pub type CvPair = { Cv key; Cv value; };
+
+// ─── Encoding ─────────────────────────────────────────────────────
+
+List(Int) cv_head(Int major, Int arg) { return cb_head(major, (UInt(64))arg); }
+
+/// The encoding of `v`.
+pub List(Int) cv_encode(Cv v) {
+    return match v {
+        CvInt(n) => if (n >= 0) { cv_head(0, n) } else { cv_head(1, -1 - n) },
+        CvBytes(b) => cv_head(2, b.len()).concat(b),
+        CvText(s) => cv_text(s),
+        CvArr(xs) => cv_head(4, xs.len()).concat(cv_items(xs, 0, ListBuf()).finish()),
+        CvMap(ps) => cv_head(5, ps.len()).concat(cv_pairs(ps, 0, ListBuf()).finish()),
+        CvBool(b) => if (b) { [245] } else { [244] },
+        CvNull => [246]
+    };
+}
+
+List(Int) cv_text(Str s) {
+    List(Int) b = cb_str_bytes(s);
+    return cv_head(3, b.len()).concat(b);
+}
+
+ListBuf(Int) cv_push(ListBuf(Int) acc, List(Int) b, Int i) {
+    if (i >= b.len()) { return acc; }
+    return cv_push(acc.push(b[i]), b, i + 1);
+}
+ListBuf(Int) cv_items(List(Cv) xs, Int i, ListBuf(Int) acc) {
+    if (i >= xs.len()) { return acc; }
+    return cv_items(xs, i + 1, cv_push(acc, cv_encode(xs[i]), 0));
+}
+ListBuf(Int) cv_pairs(List(CvPair) ps, Int i, ListBuf(Int) acc) {
+    if (i >= ps.len()) { return acc; }
+    return cv_pairs(ps, i + 1, cv_push(cv_push(acc, cv_encode(ps[i].key), 0), cv_encode(ps[i].value), 0));
+}
+
+/// A pair with an integer key; with a text key.
+pub CvPair cv_ik(Int k, Cv v) { return CvPair {.key = CvInt(k), .value = v}; }
+pub CvPair cv_tk(Str k, Cv v) { return CvPair {.key = CvText(k), .value = v}; }
+
+// ─── Decoding ─────────────────────────────────────────────────────
+
+pub type CvAt = { Bool ok; Cv v; Int next; };
+
+CvAt cv_bad() { return CvAt {.ok = false, .v = CvNull, .next = -1}; }
+
+// The argument of the head at `i`: its value and the position after it;
+// value -1 when malformed or beyond 2^62.
+pub type CvArg = { Int v; Int next; };
+
+CvArg cv_arg(List(Int) b, Int i) {
+    if (i >= b.len()) { return CvArg {.v = -1, .next = -1}; }
+    Int ai = b[i] & 31;
+    if (ai < 24) { return CvArg {.v = ai, .next = i + 1}; }
+    Int n = if (ai == 24) { 1 } else { if (ai == 25) { 2 } else { if (ai == 26) { 4 } else { if (ai == 27) { 8 } else { 0 } } } };
+    if (n == 0 || i + 1 + n > b.len()) { return CvArg {.v = -1, .next = -1}; }
+    if (n == 8 && b[i + 1] >= 64) { return CvArg {.v = -1, .next = -1}; }
+    return CvArg {.v = cv_be(b, i + 1, n, 0), .next = i + 1 + n};
+}
+
+Int cv_be(List(Int) b, Int i, Int n, Int acc) {
+    if (n == 0) { return acc; }
+    return cv_be(b, i + 1, n - 1, (acc << 8) | b[i]);
+}
+
+CvAt cv_at(List(Int) b, Int i, Int depth) {
+    if (depth > 16 || i < 0 || i >= b.len()) { return cv_bad(); }
+    Int mt = b[i] >> 5;
+    if (mt == 7) {
+        Int x = b[i];
+        if (x == 244 || x == 245) { return CvAt {.ok = true, .v = CvBool(x == 245), .next = i + 1}; }
+        if (x == 246) { return CvAt {.ok = true, .v = CvNull, .next = i + 1}; }
+        return cv_bad();
+    }
+    if (mt == 6) { return cv_bad(); }
+    CvArg a = cv_arg(b, i);
+    if (a.v < 0) { return cv_bad(); }
+    if (mt == 0) { return CvAt {.ok = true, .v = CvInt(a.v), .next = a.next}; }
+    if (mt == 1) { return CvAt {.ok = true, .v = CvInt(-1 - a.v), .next = a.next}; }
+    if (mt == 2 || mt == 3) {
+        if (a.next + a.v > b.len()) { return cv_bad(); }
+        List(Int) s = b[a.next..a.next + a.v];
+        if (mt == 2) { return CvAt {.ok = true, .v = CvBytes(s), .next = a.next + a.v}; }
+        Result(Str, SerialError) t = cb_str_at(b, a.next, a.next + a.v, "text");
+        return match t { Err(_) => cv_bad(), Ok(x) => CvAt {.ok = true, .v = CvText(x), .next = a.next + a.v} };
+    }
+    if (a.v > b.len()) { return cv_bad(); }
+    if (mt == 4) { return cv_arr(b, a.next, a.v, depth, []); }
+    return cv_map(b, a.next, a.v, depth, []);
+}
+
+CvAt cv_arr(List(Int) b, Int i, Int left, Int depth, List(Cv) acc) {
+    if (left == 0) { return CvAt {.ok = true, .v = CvArr(acc), .next = i}; }
+    CvAt x = cv_at(b, i, depth + 1);
+    if (!x.ok) { return cv_bad(); }
+    return cv_arr(b, x.next, left - 1, depth, acc.concat([x.v]));
+}
+
+CvAt cv_map(List(Int) b, Int i, Int left, Int depth, List(CvPair) acc) {
+    if (left == 0) { return CvAt {.ok = true, .v = CvMap(acc), .next = i}; }
+    CvAt k = cv_at(b, i, depth + 1);
+    if (!k.ok) { return cv_bad(); }
+    CvAt v = cv_at(b, k.next, depth + 1);
+    if (!v.ok) { return cv_bad(); }
+    return cv_map(b, v.next, left - 1, depth, acc.concat([CvPair {.key = k.v, .value = v.v}]));
+}
+
+/// The value encoded by all of `b`, or None.
+pub Option(Cv) cv_decode(List(Int) b) {
+    CvAt x = cv_at(b, 0, 0);
+    return if (x.ok && x.next == b.len()) { Some(x.v) } else { None };
+}
+
+/// The first value at the start of `b` and where it ends (for authData,
+/// whose COSE key is followed by more bytes).
+pub CvAt cv_decode_prefix(List(Int) b, Int i) { return cv_at(b, i, 0); }
+
+// ─── Access ───────────────────────────────────────────────────────
+
+Bool cv_key_is(Cv k, Cv want) {
+    return match k {
+        CvInt(a) => match want { CvInt(b) => a == b, _ => false },
+        CvText(a) => match want { CvText(b) => a == b, _ => false },
+        _ => false
+    };
+}
+
+Option(Cv) cv_find(List(CvPair) ps, Cv k, Int i) {
+    if (i >= ps.len()) { return None; }
+    if (cv_key_is(ps[i].key, k)) { return Some(ps[i].value); }
+    return cv_find(ps, k, i + 1);
+}
+
+/// The value under integer key `k` of a map; under text key `k`.
+pub Option(Cv) cv_get(Cv m, Int k) { return match m { CvMap(ps) => cv_find(ps, CvInt(k), 0), _ => None }; }
+pub Option(Cv) cv_get_t(Cv m, Str k) { return match m { CvMap(ps) => cv_find(ps, CvText(k), 0), _ => None }; }
+
+pub List(Int) cv_bytes(Option(Cv) v) {
+    Cv x = v else { CvNull };
+    return match x { CvBytes(b) => b, _ => [] };
+}
+pub Int cv_int(Option(Cv) v, Int dflt) {
+    Cv x = v else { CvNull };
+    return match x { CvInt(n) => n, _ => dflt };
+}
+pub Str cv_str(Option(Cv) v) {
+    Cv x = v else { CvNull };
+    return match x { CvText(s) => s, _ => "" };
+}
+pub Bool cv_bool(Option(Cv) v, Bool dflt) {
+    Cv x = v else { CvNull };
+    return match x { CvBool(b) => b, _ => dflt };
+}
+pub List(Cv) cv_list(Option(Cv) v) {
+    Cv x = v else { CvNull };
+    return match x { CvArr(xs) => xs, _ => [] };
+}
