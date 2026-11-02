@@ -3043,6 +3043,36 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (builtin_args(argtys, "Int,Int")) { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_tcp_deadline expects (Int, Int), got (" + argtys + ")"};
     }
+    // Unix-domain sockets (runtime/rt/net.resid): same-user only, 0600 in a
+    // 0700 directory; listening is a network write.
+    if (name == "resid_unix_listen" || name == "resid_unix_connect") {
+        if (argtys == "Str") { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (Str), got (" + argtys + ")"};
+    }
+    if (name == "resid_unix_accept" || name == "resid_unix_accept_now") {
+        if (argtys == "Int") { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (Int), got (" + argtys + ")"};
+    }
+    if (name == "resid_unix_close") {
+        if (argtys == "Int") { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (Int), got (" + argtys + ")"};
+    }
+    if (name == "resid_unix_peer") {
+        if (argtys == "Int") { return ERes {.pos = pos, .ty = "List(Int)", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (Int), got (" + argtys + ")"};
+    }
+    if (name == "resid_unix_send") {
+        if (builtin_args(argtys, "Int,List(Int)")) { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (Int, List(Int)), got (" + argtys + ")"};
+    }
+    if (name == "resid_unix_recv_some") {
+        if (builtin_args(argtys, "Int,Int")) { return ERes {.pos = pos, .ty = "List(Int)", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (Int, Int), got (" + argtys + ")"};
+    }
+    if (name == "resid_unix_deadline") {
+        if (builtin_args(argtys, "Int,Int")) { return ERes {.pos = pos, .ty = "Bool", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (Int, Int), got (" + argtys + ")"};
+    }
     if (name == "resid_tcp_bound_port") {
         if (argtys == "Int") { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_tcp_bound_port expects (Int), got (" + argtys + ")"};

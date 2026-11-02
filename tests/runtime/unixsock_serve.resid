@@ -1,0 +1,16 @@
+// Listens at UX_PATH, takes one connection, echoes what it sends back with
+// its peer uid prepended, and closes: the other side is python3 in run.sh.
+@requires(network, environment)
+Int main() {
+    Int l = resid_unix_listen(environment.get("UX_PATH"));
+    if (l < 0) { return 1; }
+    println("ready");
+    Int c = resid_unix_accept(l);
+    List(Int) got = resid_unix_recv_some(c, 64);
+    List(Int) peer = resid_unix_peer(c);
+    _ = resid_unix_send(c, got);
+    println(f"peer uid {peer[1]}");
+    _ = resid_unix_close(c);
+    _ = resid_unix_close(l);
+    return 0;
+}

@@ -1,0 +1,68 @@
+// Unix-domain sockets (runtime/rt/net.resid, resid_unix_*): a same-user
+// round trip, peer credentials, deadlines, EOF, the directory and file
+// rules, and refusal of descriptors these functions did not make. Run by
+// run.sh with UX_DIR (a fresh directory, mode 0700) and UX_LOOSE (0755).
+
+@requires(environment)
+Str env(Str k) { return environment.get(k); }
+
+Str b(Bool x) { return if (x) { "true" } else { "false" }; }
+
+@requires(network, environment, filesystem)
+Int main() {
+    Str d = env("UX_DIR");
+    Str p = d + "/agent.sock";
+    Int l = resid_unix_listen(p);
+    println(f"listen {l >= 0}");
+    println(f"socket file {b(filesystem.exists(p))}");
+    Int c = resid_unix_connect(p);
+    Int s = resid_unix_accept_now(l);
+    println(f"connect {c >= 0} accept {s >= 0}");
+    println(f"nothing more waiting {resid_unix_accept_now(l)}");
+    println(f"send {b(resid_unix_send(c, [1, 2, 3, 0, 255, 256 + 7]))}");
+    List(Int) got = resid_unix_recv_some(s, 64);
+    println(f"received {got}");
+    List(Int) ps = resid_unix_peer(s);
+    List(Int) pc = resid_unix_peer(c);
+    println(f"peer fields {ps.len()} same pid {ps[0] == pc[0]} same uid {ps[1] == pc[1]}");
+    // A second listener finds this one alive (its probe connects and goes:
+    // the listener then sees a connection that ends at once).
+    println(f"second listener on a live socket {resid_unix_listen(p)}");
+    Int probe = resid_unix_accept_now(l);
+    println(f"the probe's connection ends at once {resid_unix_recv_some(probe, 8).len()}");
+    _ = resid_unix_close(probe);
+    println(f"deadline {b(resid_unix_deadline(s, 150))}");
+    List(Int) none = resid_unix_recv_some(s, 64);
+    println(f"nothing before the deadline {none.len()}");
+    println(f"close client {b(resid_unix_close(c))}");
+    _ = resid_unix_deadline(s, 0);
+    List(Int) eof = resid_unix_recv_some(s, 64);
+    println(f"EOF {eof.len()}");
+    println(f"send to a closed peer {b(resid_unix_send(s, [1]))}");
+    println(f"close server side {b(resid_unix_close(s))}");
+    println(f"close listener {b(resid_unix_close(l))}");
+    println(f"socket file after close {b(filesystem.exists(p))}");
+    // Descriptors these functions did not make.
+    Int t = resid_tcp_listen(0);
+    println(f"stdin send {b(resid_unix_send(0, [65]))} stdout recv {resid_unix_recv_some(1, 4).len()} close stdin {b(resid_unix_close(0))}");
+    println(f"tcp listener accept {resid_unix_accept_now(t)} peer {resid_unix_peer(t).len()} close {b(resid_unix_close(t))}");
+    println(f"already closed {b(resid_unix_close(c))}");
+    // Paths and places.
+    Int rel = resid_unix_listen("agent.sock");
+    Int dot = resid_unix_listen(d + "/../x.sock");
+    Int long = resid_unix_listen("/" + str_repeat("a", 120));
+    println(f"relative {rel} dot {dot} long {long}");
+    Int loose = resid_unix_listen(env("UX_LOOSE") + "/agent.sock");
+    println(f"loose directory {loose}");
+    Int plain = resid_unix_listen(d + "/plain");
+    println(f"a plain file in the way {plain}");
+    Int st = resid_unix_listen(d + "/stale.sock");
+    println(f"a stale socket is replaced {st >= 0}");
+    _ = resid_unix_close(st);
+    Int nd = resid_unix_listen(d + "/made/agent.sock");
+    println(f"a missing directory is made {nd >= 0}");
+    _ = resid_unix_close(nd);
+    Int nob = resid_unix_connect(d + "/nobody.sock");
+    println(f"connect where nobody listens {nob}");
+    return 0;
+}

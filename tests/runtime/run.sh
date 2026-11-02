@@ -86,6 +86,35 @@ else
     fail=$((fail + 1)); echo "FAIL display transport: $(grep -m1 -i error "$W/display.log") $(diff "$W/display.out" display.out 2>/dev/null | head -3 | tr '
 ' ' ')"
 fi
+# Unix-domain sockets (resid_unix_*): the behaviour one process can see
+# (unixsock.resid), then a server against python3: its socket is 0600 in a
+# 0700 directory, a foreign client is served and its uid read, and the file
+# is gone after close. Listening needs a `network` write.
+mkdir -m 700 "$W/ux"; mkdir -m 755 "$W/uxloose"; touch "$W/ux/plain"
+python3 -I -c "import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])" "$W/ux/stale.sock"
+if (cd "$ROOT" && "$COMPILER" tests/runtime/unixsock.resid -o "$W/unixsock") > "$W/unixsock.log" 2>&1 \
+    && UX_DIR="$W/ux" UX_LOOSE="$W/uxloose" timeout 30 "$W/unixsock" > "$W/unixsock.out" 2>&1 && cmp -s "$W/unixsock.out" unixsock.out; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL unix sockets: $(grep -m1 -i error "$W/unixsock.log") $(diff "$W/unixsock.out" unixsock.out 2>/dev/null | head -3 | tr '\n' ' ')"
+fi
+ux_ok=0
+if (cd "$ROOT" && "$COMPILER" tests/runtime/unixsock_serve.resid -o "$W/uxserve") > "$W/uxserve.log" 2>&1; then
+    mkfifo "$W/uxready"
+    UX_PATH="$W/ux/s/serve.sock" timeout 20 "$W/uxserve" > "$W/uxready" 2>&1 &
+    uxpid=$!
+    read -r line < "$W/uxready" || true
+    exec 7< "$W/uxready"
+    if [ "$line" = ready ] && [ "$(stat -c %a "$W/ux/s")" = 700 ] && [ "$(stat -c %a "$W/ux/s/serve.sock")" = 600 ] \
+        && [ "$(python3 -I -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); s.sendall(b"hi\x00\xff"); print(s.recv(16).hex())' "$W/ux/s/serve.sock")" = 686900ff ]; then
+        wait "$uxpid" && read -r line2 <&7 && [ "$line2" = "peer uid $(id -u)" ] && [ ! -e "$W/ux/s/serve.sock" ] && ux_ok=1
+    fi
+    exec 7<&-
+fi
+printf '@requires(network(readonly))\nInt main() { return resid_unix_listen("/tmp/x/y.sock"); }\n' > "$W/uxro.resid"
+(cd "$ROOT" && "$COMPILER" "$W/uxro.resid" -o "$W/uxro") > "$W/uxro.log" 2>&1
+grep -q "E0219" "$W/uxro.log" || ux_ok=0
+if [ "$ux_ok" = 1 ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL unix socket server: $(grep -m1 -i error "$W/uxserve.log" "$W/uxro.log")"; fi
 # With no display named in the environment, connecting is refused rather
 # than guessed at.
 printf '@requires(display)

@@ -138,7 +138,7 @@ Int lb_builtin(Str n) {
         return if (op == "arch" || op == "nr" || op == "bits_f64" || op == "bits_f128" || op == "f128_bits" || op == "popcount") { 1 } else { 2 };
     }
     if (str_starts_with(n, "resid_cpu_has_")) { return 3; }
-    if (str_starts_with(n, "resid_tcp_") || str_starts_with(n, "resid_term_") || str_starts_with(n, "resid_dbg_") || str_starts_with(n, "resid_disp_") || str_starts_with(n, "resid_clock_") || str_starts_with(n, "resid_device_")) { return 2; }
+    if (str_starts_with(n, "resid_tcp_") || str_starts_with(n, "resid_unix_") || str_starts_with(n, "resid_term_") || str_starts_with(n, "resid_dbg_") || str_starts_with(n, "resid_disp_") || str_starts_with(n, "resid_clock_") || str_starts_with(n, "resid_device_")) { return 2; }
     if (str_starts_with(n, "resid_chal_")) { return 2; }
     if (n == "resid_tr_read") { return 2; }
     if (n == "resid_tr_note") { return 1; }
@@ -163,7 +163,7 @@ Int lb_builtin(Str n) {
 
 // The effect a source builtin names, for explanations.
 Str lb_builtin_what(Str n) {
-    if (str_starts_with(n, "resid_tcp_")) { return "network: " + n; }
+    if (str_starts_with(n, "resid_tcp_") || str_starts_with(n, "resid_unix_")) { return "network: " + n; }
     if (str_starts_with(n, "resid_term_")) { return "terminal: " + n; }
     if (str_starts_with(n, "resid_dbg_")) { return "process (ptrace): " + n; }
     if (str_starts_with(n, "resid_disp_")) { return "display: " + n; }

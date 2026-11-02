@@ -4336,7 +4336,7 @@ Str gk_builtin_family(Str n) {
     if (n == "provisioned_key") { return "provision"; }
     if (n == "assumed") { return "assume"; }
     if (str_starts_with(n, "resid_disp_")) { return "display"; }
-    if (str_starts_with(n, "resid_tcp_")) { return "network"; }
+    if (str_starts_with(n, "resid_tcp_") || str_starts_with(n, "resid_unix_")) { return "network"; }
     if (str_starts_with(n, "resid_dbg_")) { return "process"; }
     if (str_starts_with(n, "resid_term_")) { return "terminal"; }
     if (str_starts_with(n, "resid_clock_")) { return "clock"; }
@@ -4347,7 +4347,7 @@ Str gk_builtin_family(Str n) {
 // Builtins that change state a read-only grant does not cover.
 // Writes under a moded family: raw mode, sleeping, and binding a listener
 // to an address other than loopback (exposing a port is a write).
-Bool gk_builtin_write(Str n) { return n == "resid_term_raw" || n == "resid_term_restore" || n == "resid_clock_sleep_ns" || n == "resid_tcp_listen_at" || n == "resid_device_call_w"; }
+Bool gk_builtin_write(Str n) { return n == "resid_term_raw" || n == "resid_term_restore" || n == "resid_clock_sleep_ns" || n == "resid_tcp_listen_at" || n == "resid_unix_listen" || n == "resid_device_call_w"; }
 
 // Runtime internals that free or move memory the program may still see
 // (spec §5: storage is never exposed). Only the compiler's own source may

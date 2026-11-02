@@ -28,7 +28,7 @@ pub List(Str) vp_pins() {
         "dev/device_write.resid=93a7e27bac0966b6b59c2cb2f41294c0956d9319ff31656c2961e978751863ad",
         "dev/sev_guest.resid=3e6353b34826a5a9e5d7e5074e62ad16bc0fce1ad09e81fa5f52d1180cd3f546",
         "dev/sev_guest_key.resid=127d5b0fbe9351d2d7f51f24e2ebfa54193875f6f9d2404a655f0ba6a7243848",
-        "dev/tpm_wire.resid=73e1ef652c44981aab38c5002f8ce4e04db9429b39c129fffc0787695c647485",
+        "dev/tpm_wire.resid=9f5069f689150b4a6fe465541a3ff1d18d3d5b7622e94b0d663cad9915435f84",
         "dev/uapi_sev_guest.resid=60fbc62d2269ac427f8a9d8c80c909c51d9494df30a5a37a571f8e8b5f726e27",
         "dev/uapi_sev_guest_key.resid=b3f2614a966011c057c5bb25f66b829146fe141fc9f4f9b811c909ff7436a93b",
         "duration.resid=11cf43bf261cd32c6a35912376eef44713c48cf0ad189f6a0ff36019ea2902e3",
@@ -53,9 +53,9 @@ pub List(Str) vp_pins() {
         "sha512g.resid=f44198981d6f4b5a894a69750b306f3c1515c546f78a639830e19f1fcbdc4b90",
         "spdm_msg.resid=86f45ab9ad1a36950dbcf4d712d8771b55a99052e8814e4149bd992e2647777f",
         "tls.resid=148dfc5b72cbea4a57f8205de6ad44f1ce133e3a2b99f60122c3286f6e13743a",
-        "tlsclient.resid=b855016dedd6a691308974f9bfd417788cecbbc2dac348258e6b98724c8c9998",
+        "tlsclient.resid=b0963a23867aa2a3fa0fa07404392133176ac006e2a945a076c3437f745848b4",
         "tlskey.resid=429cf9cecf8ae1adfd5ba0fa3d3e446d9ecc773b06715b2a43c205a7a9c7ea73",
-        "tlsmsg.resid=1f91b6a8e54645416f99200480c0bc0cbc77a132e1ed1331ae7108b7e8046809",
+        "tlsmsg.resid=54d8d12eaf1208e9b78c59800fce5d7f74b4e80b3c0400980f956379968600c4",
         "tlsserver.resid=cf8bbbf2cf2ff172685d0589da7f446414c21b56b463b9c4badbdee727d81082",
         "tlswire.resid=06b3b808b59f59696ceb786e4c3ab5087007c3aafe1ab2a62afca1a2e7f126c7",
         "tpm_credential.resid=8a388f7cd618a631d0f6f25ff1e6be658222654a44dfaf3239cd43e05f488c48",
@@ -87,7 +87,7 @@ pub List(Str) vp_pins() {
         "x25519.resid=4ae393aa47d5ed7ff504188b888a4c1effa47922798f37042da2a35c12971897",
         "x25519g.resid=88fd0109a34a8f6d458caba2bed3d62fdd18375f56921b800ef5bf07a6e1a966",
         "x509.resid=177eb4693b09157251d43cc7af6ce83eba8448cd41cec362b27726f1711e4fb7",
-        "rt.ll=6aa9a3bc10791320466650c613e40033d4c8755497fba5cc4b72b75c1f72cc28",
-        "rt-aarch64.ll=1dd0a9596502c16e1154c870a08a37ad607b2024b086f0541dc1ecd502d7993e"
+        "rt.ll=1606bbcd9f4aac1927d109f101b6b19c5730a7ac9780ad5f2bb851d4488058b7",
+        "rt-aarch64.ll=1564bca909a4cfd37355ebea197f79f35ac19b2e47d6d2cf4ae0952225bcefcb"
     ];
 }

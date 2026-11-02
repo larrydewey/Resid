@@ -1,0 +1,26 @@
+listen true
+socket file true
+connect true accept true
+nothing more waiting -2
+send true
+received [1, 2, 3, 0, 255, 7]
+peer fields 3 same pid true same uid true
+second listener on a live socket -2
+the probe's connection ends at once 0
+deadline true
+nothing before the deadline 0
+close client true
+EOF 0
+send to a closed peer false
+close server side true
+close listener true
+socket file after close false
+stdin send false stdout recv 0 close stdin false
+tcp listener accept -1 peer 0 close false
+already closed false
+relative -1 dot -1 long -1
+loose directory -3
+a plain file in the way -3
+a stale socket is replaced true
+a missing directory is made true
+connect where nobody listens -1
