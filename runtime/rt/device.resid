@@ -80,7 +80,9 @@ Int de_timeout() { return 12; }
 // service and can take seconds). No descriptor can raise it; a test
 // harness can only lower it (resid_device_test_parent).
 Int dv_deadline_ms(Int kind) {
-    Int base = if (kind == 4) { 120000 } else { 30000 };
+    // A FIDO key's exchange waits for a touch: 60 s (the host gives up
+    // after the descriptor's timeout, at most 50 s).
+    Int base = if (kind == 4) { 120000 } else { if (kind == 7) { 60000 } else { 30000 } };
     Int t = ld64(dv_test_w());
     return if (t > 0 && t < base) { t } else { base };
 }
@@ -276,7 +278,7 @@ Int pq_parse_r(Int d, Int r, Int n) {
     Int path = pq_alloc(d, pl + 1);
     _ = mcopy(path, pp, pl);
     _ = dset(d, 4, path) + dset(d, 5, pl);
-    Bool ok = if (kind == 1) { pq_ioctl(d, r) } else if (kind == 2) { pq_transact(d, r) } else if (kind == 3) { pq_attr(d, r) } else if (kind == 4) { pq_report(d, r) } else if (kind == 5) { pq_seq(d, r) } else if (kind == 6) { pq_tchain(d, r) } else { false };
+    Bool ok = if (kind == 1) { pq_ioctl(d, r) } else if (kind == 2) { pq_transact(d, r) } else if (kind == 3) { pq_attr(d, r) } else if (kind == 4) { pq_report(d, r) } else if (kind == 5) { pq_seq(d, r) } else if (kind == 6) { pq_tchain(d, r) } else if (kind == 7) { pq_ctaphid(d, r) } else { false };
     if (!ok || rd_bad(r)) { return 3; }
     if ((kind == 1 || kind == 5) && !pq_args(d, r)) { return 4; }
     if (rd_bad(r) || ld64(r + 16) != n) { return 5; }
@@ -401,6 +403,18 @@ Bool pq_transact(Int d, Int r) {
     Int cl = rd_u(r, 4);
     Int cp = rd_take(r, cl);
     _ = dset(d, 10, mc) + dset(d, 11, mr) + dset(d, 12, sec) + dset(d, 13, cp) + dset(d, 14, cl);
+    return !rd_bad(r);
+}
+
+// A CTAPHID exchange (kind 7): max_message, timeout_ms, the command byte
+// and the message (u32 length, bytes).
+Bool pq_ctaphid(Int d, Int r) {
+    Int mx = rd_u(r, 4);
+    Int to = rd_u(r, 4);
+    Int cmd = rd_u(r, 1);
+    Int ml = rd_u(r, 4);
+    Int mp = rd_take(r, ml);
+    _ = dset(d, 10, mx) + dset(d, 11, to) + dset(d, 12, cmd) + dset(d, 13, mp) + dset(d, 14, ml);
     return !rd_bad(r);
 }
 
@@ -532,6 +546,15 @@ Int pq_check(Int d) {
     if (kind == 2 && (!pq_max_ok(dget(d, 10)) || !pq_max_ok(dget(d, 11)) || dget(d, 12) > 1 || dget(d, 14) > dget(d, 10))) { return 14; }
     // A Transact writes its command to the device: never under a read.
     if (kind == 2 && wr != 1) { return 19; }
+    // A CTAPHID exchange: a write, on the FIDO HID nodes only (the host
+    // picks the node by its report descriptor), a CTAPHID command (bit 7
+    // set), a message that fits the protocol's 7609 bytes, 1 to 50 s.
+    if (kind == 7) {
+        if (wr != 1) { return 19; }
+        if (dget(d, 5) != 11 || c_strncmp(dget(d, 4), resid_raw_addr("/dev/hidraw"), 11) != 0) { return 25; }
+        if (dget(d, 10) < 1 || dget(d, 10) > 7609 || dget(d, 14) > dget(d, 10) || dget(d, 12) < 128 || dget(d, 12) > 255) { return 26; }
+        if (dget(d, 11) < 1 || dget(d, 11) > 50000) { return 27; }
+    }
     if (kind == 6) {
         Int te = pq_tchain_err(d);
         if (te != 0) { return te; }
@@ -866,6 +889,7 @@ Int pq_slots(Int d) {
     Int ins = pq_alloc(d, nmax * 24 + 8);
     _ = dset(d, 25, outs) + dset(d, 27, ins);
     if (kind == 2) { _ = dset(d, 24, pq_slot(outs, 0, 0, dget(d, 11), dget(d, 12))); }
+    if (kind == 7) { _ = dset(d, 24, pq_slot(outs, 0, 0, dget(d, 10) + 1, 0)); }
     if (kind == 3) { _ = dset(d, 24, pq_slot(outs, 0, 0, dget(d, 10), 0)); }
     if (kind == 6) { _ = dset(d, 24, pq_tslots(outs, 0, dget(d, 35), dget(d, 11))); }
     if (kind == 4) {
@@ -1250,6 +1274,7 @@ Int dh_main(Int argv, Int envp, Int mode, Int root) {
     Int kind = dget(d, 0);
     if (kind == 2) { return dh_transact(h, d); }
     if (kind == 6) { return dh_tchain(h, d); }
+    if (kind == 7) { return dh_ctaphid(h, d); }
     if (kind == 3) { return dh_attr(h, d); }
     if (kind == 4) {
         // The entry's name: 16 random bytes from the parent, which removes
@@ -1933,6 +1958,166 @@ Int dh_read_all(Int fd, Int p, Int i, Int n) {
     if (r < 0) { return r; }
     if (r == 0) { return i; }
     return dh_read_all(fd, p, i + r, n);
+}
+
+// ─── CTAPHID ────────────────────────────────────────────────────────
+// One message exchange with the first FIDO security key (CTAP 2.1 §11.2).
+// The node is the first /dev/hidrawN (N < 64) whose report descriptor, read
+// from sysfs, opens with the FIDO usage page (06 d0 f1) and the CTAPHID
+// usage (09 01): the host writes to no other HID device (a keyboard, a
+// mouse). Before the filter: the node is opened, a nonce drawn. Under the
+// filter: write and read on that descriptor and ppoll. The host allocates a
+// channel (INIT with the nonce), sends the message in 64-byte reports,
+// and reads reports of that channel until the answer is whole, skipping
+// keep-alives (a key waiting for a touch sends one every 100 ms), for at
+// most the descriptor's timeout. The output is the answer's command byte,
+// then its payload. A CTAPHID ERROR is Unknown with 1000 + its code; no
+// key is Absent; no answer in time is Unknown 110.
+
+// "/sys/class/hidraw/hidrawN/device/report_descriptor" or "/dev/hidrawN"
+// in `b` (64 bytes).
+Int ch_path(Int b, Bool sys, Int n) {
+    Int pre = if (sys) { resid_raw_addr("/sys/class/hidraw/hidraw") } else { resid_raw_addr("/dev/hidraw") };
+    Int pl = c_strlen(pre);
+    _ = mcopy(b, pre, pl);
+    Int dl = if (n >= 10) { 2 } else { 1 };
+    _ = if (n >= 10) { st8(b + pl, 48 + n / 10) + st8(b + pl + 1, 48 + n % 10) } else { st8(b + pl, 48 + n) };
+    Int at = pl + dl;
+    Int suf = resid_raw_addr("/device/report_descriptor");
+    Int sl = if (sys) { c_strlen(suf) } else { 0 };
+    _ = if (sys) { mcopy(b + at, suf, sl) } else { 0 };
+    return st8(b + at + sl, 0);
+}
+
+// Is hidraw n a FIDO key? Its report descriptor's first items.
+Bool ch_is_fido(Int n) {
+    Int path = xmalloc(64);
+    _ = ch_path(path, true, n);
+    Int fd = dh_open2(0 - 100, path, 0, 2);
+    if (fd < 0) { return false; }
+    Int b = xmalloc(16);
+    Int r = if (dh_is_attr(fd)) { dh_read_all(fd, b, 0, 5) } else { 0 };
+    _ = sys_close(fd);
+    return r == 5 && ld8(b) == 6 && ld8(b + 1) == 208 && ld8(b + 2) == 241 && ld8(b + 3) == 9 && ld8(b + 4) == 1;
+}
+
+Int ch_find(Int n) {
+    if (n >= 64) { return 0 - 1; }
+    if (ch_is_fido(n)) { return n; }
+    return ch_find(n + 1);
+}
+
+// A report: report ID 0, then 64 bytes: the channel, then `hdr` bytes
+// (command and length, or sequence) and up to `room` message bytes.
+Int ch_send(Int fd, Int rep, Int cid, Int b0, Int b1, Int b2, Int nh, Int msg, Int at, Int n) {
+    _ = resid_raw_fill(rep, 0, 65);
+    _ = st8(rep + 1, (cid >> 24) & 255) + st8(rep + 2, (cid >> 16) & 255) + st8(rep + 3, (cid >> 8) & 255) + st8(rep + 4, cid & 255);
+    _ = st8(rep + 5, b0) + (if (nh == 3) { st8(rep + 6, b1) + st8(rep + 7, b2) } else { 0 });
+    _ = mcopy(rep + 5 + nh, msg + at, n);
+    return dh_write_all(fd, rep, 0, 65);
+}
+
+// The message's reports after the first: sequence 0, 1, ... 59 bytes each.
+Int ch_send_cont(Int fd, Int rep, Int cid, Int msg, Int at, Int len, Int seq) {
+    if (at >= len) { return 0; }
+    Int n = min(59, len - at);
+    Int w = ch_send(fd, rep, cid, seq, 0, 0, 1, msg, at, n);
+    if (w < 0) { return w; }
+    return ch_send_cont(fd, rep, cid, msg, at + n, len, seq + 1);
+}
+
+// One report into `in` (64 bytes) within 100 ms: its length, 0 on none.
+Int ch_read(Int fd, Int pfd, Int ts, Int in) {
+    _ = st32(pfd, fd) + st32(pfd + 4, 1) + st64(ts, 0) + st64(ts + 8, 100000000);
+    Int pr = sc4(resid_raw_nr(271), pfd, 1, ts, 0);   // ppoll
+    if (pr <= 0) { return if (pr < 0 && pr != 0 - 4) { pr } else { 0 }; }
+    return sc(0, fd, in, 64);
+}
+
+Int ch_cid(Int in) { return (ld8(in) << 24) | (ld8(in + 1) << 16) | (ld8(in + 2) << 8) | ld8(in + 3); }
+
+// Reads until the INIT reply for the nonce: the new channel, or < 0.
+Int ch_init(Int fd, Int pfd, Int ts, Int in, Int nonce, Int left) {
+    if (left <= 0) { return 0 - 110; }
+    Int r = ch_read(fd, pfd, ts, in);
+    if (r < 0) { return r; }
+    Bool ours = r >= 19 && ch_cid(in) == 4294967295 && ld8(in + 4) == 134 && c_memcmp(in + 7, nonce, 8) == 0;
+    if (ours) { return (ld8(in + 15) << 24) | (ld8(in + 16) << 16) | (ld8(in + 17) << 8) | ld8(in + 18); }
+    return ch_init(fd, pfd, ts, in, nonce, left - 1);
+}
+
+// Reads the answer on `cid` into out[1..]: its length, or < 0 (-110 no
+// answer in time, -(1000 + e) a CTAPHID error, -71 a bad sequence).
+// st: [cmd, total, got, next sequence].
+Int ch_recv(Int fd, Int pfd, Int ts, Int in, Int cid, Int out, Int mx, Int st, Int left) {
+    if (ld64(st) > 0 && ld64(st + 16) >= ld64(st + 8)) { return ld64(st + 8); }
+    if (left <= 0) { return 0 - 110; }
+    Int r = ch_read(fd, pfd, ts, in);
+    if (r < 0) { return r; }
+    if (r < 7 || ch_cid(in) != cid) { return ch_recv(fd, pfd, ts, in, cid, out, mx, st, left - 1); }
+    Int b = ld8(in + 4);
+    if (b == 187) { return ch_recv(fd, pfd, ts, in, cid, out, mx, st, left - 1); }   // KEEPALIVE
+    if (b == 191) { return 0 - (1000 + ld8(in + 7)); }                                // ERROR
+    if (b >= 128) {
+        if (ld64(st) > 0) { return 0 - 71; }
+        Int total = (ld8(in + 5) << 8) | ld8(in + 6);
+        if (total > mx) { return 0 - 75; }
+        Int n = min(57, total);
+        _ = mcopy(out + 1, in + 7, n) + st8(out, b);
+        _ = st64(st, b) + st64(st + 8, total) + st64(st + 16, n) + st64(st + 24, 0);
+        return ch_recv(fd, pfd, ts, in, cid, out, mx, st, left);
+    }
+    if (ld64(st) == 0 || b != ld64(st + 24)) { return 0 - 71; }
+    Int got = ld64(st + 16);
+    Int n = min(59, ld64(st + 8) - got);
+    _ = mcopy(out + 1 + got, in + 5, n);
+    _ = st64(st + 16, got + n) + st64(st + 24, b + 1);
+    return ch_recv(fd, pfd, ts, in, cid, out, mx, st, left);
+}
+
+Int dh_ctaphid(Int h, Int d) {
+    Int n = ch_find(0);
+    if (n < 0) { return dh_fail(h, 1, 0); }
+    Int path = xmalloc(64);
+    _ = ch_path(path, false, n);
+    Int fd = dh_open_dev(path, 2);   // O_RDWR
+    if (fd < 0) { return dh_fail_errno(h, fd, false); }
+    if (!dh_is_chr(fd)) { return dh_fail(h, 6, 0); }
+    _ = dset(h, 7, fd);
+    Int mx = dget(d, 10);
+    Int ml = dget(d, 14);
+    if (!dh_regions(h, 4)) { return native_child_exit(125); }
+    Int msg = dh_region(h, max(ml, 1), 0);
+    Int out = dh_region(h, mx + 1, 0);
+    Int io = dh_region(h, 256, 0);
+    if (msg == 0 || out == 0 || io == 0 || !dh_bufs(h, d)) { return native_child_exit(125); }
+    _ = mcopy(msg, dget(d, 13), ml);
+    Int nonce = io + 192;
+    if (resid_raw_syscall(318, nonce, 8, 0, 0, 0, 0) != 8) { return native_child_exit(125); }   // getrandom
+    Int rep = io;           // 65 bytes out
+    Int in = io + 72;       // 64 bytes in
+    Int pfd = io + 144;     // struct pollfd
+    Int ts = io + 160;      // struct timespec
+    Int st = io + 208;      // reassembly state (4 words: up to io + 240)
+    _ = dh_rule(h, resid_raw_nr(1), 1, fd, 0) + dh_rule(h, resid_raw_nr(0), 1, fd, 0) + dh_rule(h, resid_raw_nr(271), 0, 0, 0);
+    if (!dh_lock(h)) { return native_child_exit(126); }
+    Int left = dget(d, 11) / 100 + 10;
+    Int w0 = ch_send(fd, rep, 4294967295, 134, 0, 8, 3, nonce, 0, 8);
+    if (w0 < 0) { return dh_fail_errno(h, w0, false); }
+    Int cid = ch_init(fd, pfd, ts, in, nonce, 50);
+    if (cid < 0) { return if (cid == 0 - 110) { dh_fail(h, 3, 110) } else { dh_fail_errno(h, cid, false) }; }
+    Int w1 = ch_send(fd, rep, cid, dget(d, 12), (ml >> 8) & 255, ml & 255, 3, msg, 0, min(57, ml));
+    Int w2 = if (w1 < 0) { w1 } else { ch_send_cont(fd, rep, cid, msg, min(57, ml), ml, 0) };
+    if (w2 < 0) { return dh_fail_errno(h, w2, false); }
+    _ = resid_raw_fill(st, 0, 32);
+    Int got = ch_recv(fd, pfd, ts, in, cid, out, mx, st, left);
+    _ = dh_after_op(h);
+    if (got == 0 - 110) { return dh_fail(h, 3, 110); }
+    if (got <= 0 - 1000) { return dh_fail(h, 3, 0 - got); }
+    if (got < 0) { return dh_fail(h, 3, 0 - got); }
+    if (!dh_canaries(h, 0)) { return dh_fail(h, 8, 0); }
+    _ = gput(h, 0, 1) + gput(h, 1, 4) + gout(h, out, got + 1, 0);
+    return dh_reply(h);
 }
 
 // ─── ReadAttr ───────────────────────────────────────────────────────

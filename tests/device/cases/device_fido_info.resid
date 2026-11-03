@@ -1,0 +1,20 @@
+// A FIDO security key over USB HID (lib/dev/fido.resid): authenticatorGetInfo
+// through the device host, no touch needed. Runs only with a FIDO key
+// plugged in (NAME.needs-fido).
+import "dev/fido.resid";
+import "ctap2.resid";
+import "cborv.resid";
+
+@requires(device)
+Int main() {
+    Result(List(Int), Str) r = fido_ctap2(req_get_info());
+    Int code = match (r) { Ok(b) => resp_of(b).status, Err(e) => 0 - 1 };
+    println(f"status {code}");
+    Info i = match (r) { Ok(b) => info_of(resp_of(b).body), Err(e) => info_of(CvNull) };
+    Bool v21 = i.versions.contains("FIDO_2_1");
+    println(f"FIDO_2_1 {v21} hmac-secret {i.hmac_secret} protocol 2 {i.protocol2} aaguid {i.aaguid.len()} bytes");
+    Result(List(Int), Str) bad = fido_ctap2([99]);
+    Int bs = match (bad) { Ok(b) => resp_of(b).status, Err(e) => 0 - 1 };
+    println(f"an unknown command: status {bs}");
+    return 0;
+}

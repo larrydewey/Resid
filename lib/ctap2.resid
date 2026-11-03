@@ -33,7 +33,7 @@ pub Int ctap_client_pin() { return 6; }
 /// What a status byte means, for messages.
 pub Str ctap_status_text(Int s) {
     if (s == 0) { return "success"; }
-    if (s == 39) { return "the key refused (operation denied)"; }
+    if (s == 39) { return "the key was not touched in time, or refused (operation denied)"; }
     if (s == 46) { return "the key does not hold this credential"; }
     if (s == 47) { return "no touch within the time allowed"; }
     if (s == 49) { return "the key's PIN is required"; }

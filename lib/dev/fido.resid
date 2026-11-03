@@ -1,0 +1,45 @@
+// --- lib/dev/fido.resid - a FIDO security key over USB HID (capability `device`)
+// One CTAP2 exchange with the first FIDO key plugged in (a YubiKey or any
+// CTAP 2.1 key): lib/ctap2.resid builds the message and reads the answer.
+// The device host writes only to a hidraw node whose report descriptor
+// declares the FIDO usage page (runtime/rt/device.resid, dh_ctaphid), and
+// waits up to 45 s, so a key can wait for a touch.
+
+import "device.resid";
+import "device_write.resid";
+
+CtapHid fido_hid() {
+    return CtapHid {.name = "fido.ctaphid", .path = "/dev/hidraw", .max_message = 7609, .timeout_ms = 45000, .write = true, .stability = Uapi};
+}
+
+List(UInt(8)) fido_u8s(List(Int) b, Int i, ListBuf(UInt(8)) acc) {
+    if (i >= b.len()) { return acc.finish(); }
+    return fido_u8s(b, i + 1, acc.push((UInt(8))(b[i] & 255)));
+}
+
+List(Int) fido_ints(List(UInt(8)) b, Int i, ListBuf(Int) acc) {
+    if (i >= b.len()) { return acc.finish(); }
+    return fido_ints(b, i + 1, acc.push((Int)b[i]));
+}
+
+/// The key's answer to the CTAP2 command `cmd` (a CTAP2 command byte and
+/// its CBOR, as lib/ctap2.resid's req_* make them): the status byte and
+/// the CBOR. Err with a message when no key answers or the transport fails.
+@requires(device)
+pub Result(List(Int), Str) fido_ctap2(List(Int) cmd) {
+    // CTAPHID_CBOR (0x90) carries a CTAP2 command.
+    Result(List(DevOut), DeviceError) r = device.ctaphid(fido_hid(), fido_u8s([144].concat(cmd), 0, ListBuf()));
+    return match r {
+        Err(e) => Err(device_error_text(e)),
+        Ok(outs) => fido_answer(outs)
+    };
+}
+
+Result(List(Int), Str) fido_answer(List(DevOut) outs) {
+    if (outs.len() != 1) { return Err("fido.ctaphid: no answer"); }
+    DevOut o = outs[0];
+    List(UInt(8)) none = [];
+    List(UInt(8)) b = match (o) { OutBytes(x) => x, OutNum(v) => none, OutSecret(z) => none };
+    if (b.len() < 2 || (Int)b[0] != 144) { return Err("fido.ctaphid: the key's answer is not a CTAP2 reply"); }
+    return Ok(fido_ints(b[1..b.len()], 0, ListBuf()));
+}

@@ -1,0 +1,8 @@
+// A CtapHid sends a message to the key: its path is /dev/hidraw, the host picking the FIDO node (E0263).
+import "dev/fx_e0263_ctaphid_path.resid";
+
+@requires(device)
+Int main() {
+    Result(List(DevOut), DeviceError) r = device.ctaphid(fx_hid(), [144, 4]);
+    return 0;
+}

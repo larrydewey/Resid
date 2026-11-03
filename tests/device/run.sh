@@ -16,6 +16,7 @@
 #   NAME.fail     compilation must fail
 #   NAME.compile  lines that must each appear in the compiler's output
 #   NAME.out      expected stdout of the built binary
+#   NAME.needs-fido  a FIDO security key must be plugged in, else skipped
 #   NAME.needs    device paths the case runs against, one per line: when one
 #                 is missing (or not readable and writable) here, the case
 #                 is skipped
@@ -71,6 +72,15 @@ for f in "$CASES"/*.resid; do
             { [ -r "$dev" ] && [ -w "$dev" ]; } || missing="$dev"
         done < "$CASES/$n.needs"
         if [ -n "$missing" ]; then echo "SKIP $n (no usable $missing here)"; skip=$((skip + 1)); continue; fi
+    fi
+    # NAME.needs-fido: a FIDO security key plugged in (a hidraw node whose
+    # report descriptor opens with the FIDO usage page, 06 d0 f1).
+    if [ -f "$CASES/$n.needs-fido" ]; then
+        fido=0
+        for rd in /sys/class/hidraw/hidraw*/device/report_descriptor; do
+            [ "$(od -An -tx1 -N3 "$rd" 2>/dev/null | tr -d ' ')" = 06d0f1 ] && fido=1
+        done
+        if [ "$fido" -eq 0 ]; then echo "SKIP $n (no FIDO key plugged in)"; skip=$((skip + 1)); continue; fi
     fi
     d="$WORK/$n"; mkdir -p "$d"; cp "$f" "$d/$n.resid"
     why=""

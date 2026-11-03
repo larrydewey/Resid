@@ -70,3 +70,16 @@ pub Result(List(DevOut), DeviceError) device_engine_sequence_w(Sequence op, List
     Int _tr = dv_tr_req(op.name, fl.handle, r.req);
     return dv_bound(op.name, fl, dv_tr_out(op.name, fl.handle, dv_answer(op.name, r, resid_device_call_w(r.req))));
 }
+
+/// One CTAPHID exchange with the first FIDO security key through a writing
+/// CtapHid descriptor `op`: `msg` is the command byte then the payload.
+/// Returns the answer (command byte, payload), or Err; needs the full
+/// `device` grant.
+@descriptor(engine_ctaphid_w)
+@requires(device)
+pub Result(List(DevOut), DeviceError) device_engine_ctaphid_w(CtapHid op, List(UInt(8)) msg) {
+    DvReq r = dv_prep_ctaphid(op, msg);
+    if (r.err != "") { return Err(BadInput(op.name, r.err)); }
+    Int _tr = dv_tr_req(op.name, 0 - 1, r.req);
+    return dv_tr_out(op.name, 0 - 1, dv_answer(op.name, r, resid_device_call_w(r.req)));
+}

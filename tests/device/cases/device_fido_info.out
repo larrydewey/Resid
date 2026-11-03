@@ -1,0 +1,3 @@
+status 0
+FIDO_2_1 true hmac-secret true protocol 2 true aaguid 16 bytes
+an unknown command: status 1

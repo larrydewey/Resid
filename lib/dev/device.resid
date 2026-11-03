@@ -126,6 +126,17 @@ type IoctlOp = { Str name; Str path; List(Request) requests; Int size; List(Fiel
 @descriptor(transact)
 type Transact = { Str name; Str path; Int max_command; Int max_response; Bool secret; Bool write; Stability stability; };
 
+/// A FIDO security key over USB HID: one CTAPHID message exchange (CTAP
+/// 2.1 §11.2). `path` is "/dev/hidraw": the host takes the first node whose
+/// report descriptor, read from sysfs, declares the FIDO usage page, and
+/// writes to no other HID device. The message is the CTAPHID command byte
+/// then its payload, at most `max_message` bytes (CTAPHID allows 7609); the
+/// host waits up to `timeout_ms` (at most 50 s) for the answer, a key
+/// waiting for a touch sending keep-alives meanwhile. Sending the message
+/// writes to the device, so `write` is true (E0263).
+@descriptor(ctaphid)
+type CtapHid = { Str name; Str path; Int max_message; Int timeout_ms; Bool write; Stability stability; };
+
 /// A read-only attribute file (sysfs), at most `max` bytes.
 @descriptor(read_attr)
 type ReadAttr = { Str name; Str path; Int max; Stability stability; };
@@ -311,6 +322,17 @@ pub DvReq dv_prep_transact(Transact op, List(UInt(8)) cmd) {
     if (cmd.len() > op.max_command) { return dv_bad(f"command of {cmd.len()} bytes, at most {op.max_command}"); }
     ListBuf(Int) b = dv_u(dv_u(dv_head(ListBuf(), 2, op.write, op.name, op.path), op.max_command, 4), op.max_response, 4);
     return DvReq {.err = "", .req = dv_bytes(dv_u(b, dv_bool(op.secret), 1), cmd).finish(), .outs = [DvSlot {.num = false, .max = op.max_response, .secret = op.secret}]};
+}
+
+/// The serialized request for one CTAPHID exchange: `msg` is the command
+/// byte (bit 7 set) then the payload. One output: the answer's command
+/// byte then its payload.
+pub DvReq dv_prep_ctaphid(CtapHid op, List(UInt(8)) msg) {
+    if (msg.len() < 1 || msg.len() - 1 > op.max_message) { return dv_bad(f"a message of {msg.len()} bytes: a command byte and at most {op.max_message} more"); }
+    Int cmd = (Int)msg[0];
+    if (cmd < 128) { return dv_bad("a CTAPHID command has bit 7 set"); }
+    ListBuf(Int) b = dv_u(dv_u(dv_head(ListBuf(), 7, op.write, op.name, op.path), op.max_message, 4), op.timeout_ms, 4);
+    return DvReq {.err = "", .req = dv_bytes(dv_u(b, cmd, 1), msg[1..msg.len()]).finish(), .outs = [DvSlot {.num = false, .max = op.max_message + 1, .secret = false}]};
 }
 
 /// The serialized request for a chain of Transact commands on one open file.
@@ -571,6 +593,17 @@ pub Result(List(DevOut), DeviceError) device_engine_transact(Transact op, List(U
     return dv_tr_out(op.name, 0 - 1, dv_answer(op.name, r, resid_device_call(r.req)));
 }
 
+/// A CTAPHID exchange under a read grant: refused by the host (a
+/// CtapHid is a write); the write engine is device_write.resid's.
+@descriptor(engine_ctaphid)
+@requires(device(readonly))
+pub Result(List(DevOut), DeviceError) device_engine_ctaphid(CtapHid op, List(UInt(8)) msg) {
+    DvReq r = dv_prep_ctaphid(op, msg);
+    if (r.err != "") { return Err(BadInput(op.name, r.err)); }
+    Int _tr = dv_tr_req(op.name, 0 - 1, r.req);
+    return dv_tr_out(op.name, 0 - 1, dv_answer(op.name, r, resid_device_call(r.req)));
+}
+
 /// Reads an attribute file in the isolated device host (the compiler's
 /// target for `device.read_attr`).
 @descriptor(engine_read_attr)
@@ -723,7 +756,8 @@ Bool dv_fits(Int v, Int width) {
 // -- Serialization ----------------------------------------------------------
 // Little endian throughout. The request is
 //   "RDV" 1, kind (1 ioctl, 2 transact, 3 read_attr, 4 configfs_report,
-//   5 sequence, 6 transact chain), write, name, path (u16 length, bytes), then the kind's own
+//   5 sequence, 6 transact chain, 7 ctaphid: u32 max_message, u32
+//   timeout_ms, u8 command, u32 length + payload), write, name, path (u16 length, bytes), then the kind's own
 //   part and the inputs (u8 count; tag 0 + 8-byte integer, or tag 1 + u32
 //   length + bytes). An ioctl's part: u8 request count, each u8 arch + u32
 //   number; u32 size; u8 field count, each field a tag and its words --

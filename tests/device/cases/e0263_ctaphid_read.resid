@@ -1,0 +1,8 @@
+// A CtapHid sends a message to the key: it is a write (E0263).
+import "dev/fx_e0263_ctaphid_read.resid";
+
+@requires(device)
+Int main() {
+    Result(List(DevOut), DeviceError) r = device.ctaphid(fx_hid(), [144, 4]);
+    return 0;
+}

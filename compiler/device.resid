@@ -325,6 +325,10 @@ DvD dv_parse(Kg g, Int a, Str verb) {
     DvD b1 = if (name == "\x01") { dv_err(base, "`name` is not a string literal") } else if (path == "\x01") { dv_err(base, "`path` is not a string literal") } else if (write == "") { dv_err(base, "`write` is not a Bool literal") } else if (stab == "") { dv_err(base, "`stability` is not Uapi, AbiTesting or OutOfTree") } else { base };
     if (verb == "ioctl") { return dv_parse_ioctl(g, st, b1); }
     if (verb == "sequence") { return dv_parse_seq(g, st, b1); }
+    if (verb == "ctaphid") {
+        // A CTAPHID exchange: its maximum message and its timeout (kept in size).
+        return DvD {.kind = b1.kind, .name = b1.name, .path = b1.path, .ra = [], .rn = [], .size = dv_ifld(g, st, "timeout_ms"), .fk = [], .fo = [], .fl = [], .fd = [], .fa = [], .fm = [], .fs = [], .fp = [], .write = b1.write, .vo = 0, .vw = 0, .vv = 0, .stab = b1.stab, .maxs = [dv_ifld(g, st, "max_message")], .provs = [], .steps = [], .links = [], .err = b1.err};
+    }
     List(Int) mx = if (verb == "transact" || verb == "transact_chain") { [dv_ifld(g, st, "max_command"), dv_ifld(g, st, "max_response")] } else if (verb == "read_attr" || verb == "read_pci_attr") { [dv_ifld(g, st, "max")] } else { [dv_ifld(g, st, "max_inblob"), dv_ifld(g, st, "max_outblob"), dv_ifld(g, st, "max_auxblob"), dv_ifld(g, st, "max_manifestblob")] };
     List(Str) provs = if (verb == "configfs_report") { dv_strs(g, dv_items(g, dv_fld(g, st, "providers", 0)), 0, ListBuf()) } else { [] };
     return DvD {.kind = b1.kind, .name = b1.name, .path = b1.path, .ra = [], .rn = [], .size = 0, .fk = [], .fo = [], .fl = [], .fd = [], .fa = [], .fm = [], .fs = [], .fp = [], .write = b1.write, .vo = 0, .vw = 0, .vv = 0, .stab = b1.stab, .maxs = mx, .provs = provs, .steps = [], .links = [], .err = b1.err};
@@ -467,6 +471,16 @@ Str dv_check(DvD d, Bool a64) {
         if (!str_starts_with(d.path, "/sys/kernel/config/")) { return "E0263: a ConfigfsReport's path is under /sys/kernel/config/, got " + d.path; }
         if (d.provs.len() == 0) { return "E0263: a ConfigfsReport names the providers it accepts (`providers`)"; }
         if (d.provs.contains("\x01") || d.provs.contains("")) { return "E0263: every provider is a non-empty string literal"; }
+    }
+    // A CTAPHID exchange (a FIDO key over USB HID): a write, on the hidraw
+    // nodes (the host takes the first whose report descriptor is FIDO's),
+    // a message within the protocol's 7609 bytes, 1 to 50 s.
+    if (d.kind == "ctaphid") {
+        if (d.write != "true") { return "E0263: a CtapHid sends a message to the key, so it is a write: `write = true`"; }
+        if (d.path != "/dev/hidraw") { return "E0263: a CtapHid's path is \"/dev/hidraw\" (the host picks the FIDO node), got " + d.path; }
+        if (d.maxs.len() != 1 || d.maxs[0] < 1 || d.maxs[0] > 7609) { return "E0263: a CtapHid's max_message is 1 to 7609 bytes (CTAPHID's limit)"; }
+        if (d.size < 1 || d.size > 50000) { return "E0263: a CtapHid's timeout_ms is 1 to 50000"; }
+        return "";
     }
     // A Transact writes its command to the device, whatever it reads back.
     if ((d.kind == "transact" || d.kind == "transact_chain") && d.write != "true") { return "E0263: a Transact writes its command to the device, so it is a write: `write = true` (device(readonly) never covers one)"; }

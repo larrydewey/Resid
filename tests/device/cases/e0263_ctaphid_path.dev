@@ -1,0 +1,5 @@
+// Fixture for e0263_ctaphid_path: a CtapHid naming one node, and a keyboard's (installed as lib/dev/fx_e0263_ctaphid_path.resid).
+import "device.resid";
+import "device_write.resid";
+
+pub CtapHid fx_hid() { return CtapHid {.name = "fx.hid", .path = "/dev/hidraw1", .max_message = 1024, .timeout_ms = 1000, .write = true, .stability = Uapi}; }

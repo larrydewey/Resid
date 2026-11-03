@@ -1,0 +1,5 @@
+// Fixture for e0263_ctaphid_read: a CtapHid marked as a read (installed as lib/dev/fx_e0263_ctaphid_read.resid).
+import "device.resid";
+import "device_write.resid";
+
+pub CtapHid fx_hid() { return CtapHid {.name = "fx.hid", .path = "/dev/hidraw", .max_message = 1024, .timeout_ms = 1000, .write = false, .stability = Uapi}; }
