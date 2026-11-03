@@ -162,6 +162,14 @@ else
     fail=$((fail + 1)); echo "FAIL bcrypt_pbkdf: $(grep -m3 -E 'error|expected|actual' "$W/bcrypt.log" | tr '\n' ' ')"
 fi
 
+# RSA signing on secret keys (lib/rsasign.resid) against cryptography,
+# faulty CRT halves refused (tools/gen_rsasign_ref.py).
+if (cd "$ROOT" && RESID_MEM_LIMIT=12000 "$COMPILER" test tests/crypto/rsasign_test.resid) > "$W/rsasign.log" 2>&1 && grep -q "Failures: 0 " "$W/rsasign.log"; then
+    pass=$((pass + 1))
+else
+    fail=$((fail + 1)); echo "FAIL rsasign: $(grep -m3 -E 'error|expected|actual' "$W/rsasign.log" | tr '\n' ' ')"
+fi
+
 # CTAP2 and CBOR values (lib/ctap2.resid, lib/cborv.resid) against
 # python-fido2 and an authenticator written from the specification
 # (tools/gen_ctap2_ref.py).
