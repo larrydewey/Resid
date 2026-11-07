@@ -1,0 +1,167 @@
+// X.509 certificates made, not only read (RFC 5280): an ECDSA P-256
+// certificate signed with ecdsa-with-SHA256, for a small private
+// certificate authority such as a home server's, and the SEC1 private key
+// (RFC 5915) its TLS server loads (tlskey.resid). Extensions: basic
+// constraints and key usage (both critical), extended key usage
+// serverAuth for a leaf, and subject alternative names (IP addresses and
+// DNS names).
+//
+//   CertSpec s = CertSpec {.cn = "Home", .serial = random_bytes(16), ...};
+//   List(Int) der = x509g_cert(s, subject_pub, "Home CA", ca_priv);
+//   Str pem = x509g_pem("CERTIFICATE", der);
+//
+// Times are Unix seconds, written as UTCTime through 2049 and
+// GeneralizedTime from 2050 (RFC 5280 4.1.2.5).
+
+import "crypto.resid";
+import "ecdsa.resid";
+import "calendar.resid";
+import "certverify.resid";
+
+pub type CertSpec = {
+    Str cn;                        // subject common name
+    List(Int) serial;              // positive, at most 20 octets
+    Int not_before; Int not_after; // Unix seconds
+    Bool ca;                       // a CA certificate (keyCertSign), else a TLS server leaf
+    List(List(Int)) ips;           // subjectAltName IP addresses (4 or 16 octets)
+    List(Str) dns;                 // subjectAltName DNS names
+};
+
+// ─── DER pieces ─────────────────────────────────────────────────
+
+List(Int) g_seq(List(Int) content) { return der_el(48, content); }
+
+List(Int) g_cat(List(List(Int)) xs, Int i, ListBuf(Int) acc) {
+    if (i >= xs.len()) { return acc.finish(); }
+    return g_cat(xs, i + 1, g_push(acc, xs[i], 0));
+}
+
+ListBuf(Int) g_push(ListBuf(Int) acc, List(Int) b, Int i) {
+    if (i >= b.len()) { return acc; }
+    return g_push(acc.push(b[i]), b, i + 1);
+}
+
+List(Int) cat(List(List(Int)) xs) { return g_cat(xs, 0, ListBuf()); }
+
+// A positive INTEGER from big-endian octets: leading zeros dropped, one
+// zero put back when the first octet has its high bit set.
+List(Int) g_uint(List(Int) be) {
+    List(Int) b = g_strip(be, 0);
+    List(Int) v = if (b.len() == 0) { [0] } else { if (b[0] >= 128) { [0].concat(b) } else { b } };
+    return der_el(2, v);
+}
+
+List(Int) g_strip(List(Int) b, Int i) {
+    if (i < b.len() && b[i] == 0) { return g_strip(b, i + 1); }
+    return g_from(b, i, ListBuf());
+}
+
+List(Int) g_from(List(Int) b, Int i, ListBuf(Int) acc) {
+    if (i >= b.len()) { return acc.finish(); }
+    return g_from(b, i + 1, acc.push(b[i]));
+}
+
+List(Int) g_bits(List(Int) b) { return der_el(3, [0].concat(b)); }
+List(Int) g_octets(List(Int) b) { return der_el(4, b); }
+List(Int) g_utf8(Str s) { return der_el(12, bytes_of(s)); }
+List(Int) g_explicit(Int n, List(Int) content) { return der_el(160 + n, content); }
+
+// OIDs, pre-encoded.
+List(Int) oid_ec_public_key() { return [6, 7, 42, 134, 72, 206, 61, 2, 1]; }        // 1.2.840.10045.2.1
+List(Int) oid_prime256v1() { return [6, 8, 42, 134, 72, 206, 61, 3, 1, 7]; }       // 1.2.840.10045.3.1.7
+List(Int) oid_ecdsa_sha256() { return [6, 8, 42, 134, 72, 206, 61, 4, 3, 2]; }     // 1.2.840.10045.4.3.2
+List(Int) oid_cn() { return [6, 3, 85, 4, 3]; }                                    // 2.5.4.3
+List(Int) oid_basic_constraints() { return [6, 3, 85, 29, 19]; }                   // 2.5.29.19
+List(Int) oid_key_usage() { return [6, 3, 85, 29, 15]; }                           // 2.5.29.15
+List(Int) oid_ext_key_usage() { return [6, 3, 85, 29, 37]; }                       // 2.5.29.37
+List(Int) oid_san() { return [6, 3, 85, 29, 17]; }                                 // 2.5.29.17
+List(Int) oid_server_auth() { return [6, 8, 43, 6, 1, 5, 5, 7, 3, 1]; }            // 1.3.6.1.5.5.7.3.1
+
+// ─── Time ───────────────────────────────────────────────────────
+
+Str two(Int n) { return if (n < 10) { "0" + f"{n}" } else { f"{n}" }; }
+
+// UTCTime (YYMMDDHHMMSSZ) through 2049, GeneralizedTime from 2050.
+pub List(Int) x509g_time(Int t) {
+    Int days = if (t >= 0) { t / 86400 } else { (t - 86399) / 86400 };
+    Int secs = t - days * 86400;
+    Date d = cal_civil_from_days(days);
+    Str hms = two(secs / 3600) + two((secs / 60) % 60) + two(secs % 60) + "Z";
+    Str md = two(d.month) + two(d.day);
+    return if (d.year < 2050) { der_el(23, bytes_of(two(d.year % 100) + md + hms)) } else { der_el(24, bytes_of(f"{d.year}" + md + hms)) };
+}
+
+// ─── The certificate ────────────────────────────────────────────
+
+List(Int) name_of(Str cn) { return g_seq(der_el(49, g_seq(cat([oid_cn(), g_utf8(cn)])))); }
+
+pub List(Int) x509g_spki(List(Int) pub65) {
+    return g_seq(cat([g_seq(cat([oid_ec_public_key(), oid_prime256v1()])), g_bits(pub65)]));
+}
+
+List(Int) ext(List(Int) oid, Bool critical, List(Int) value) {
+    return g_seq(cat([oid, if (critical) { [1, 1, 255] } else { [] }, g_octets(value)]));
+}
+
+List(Int) san_names(List(List(Int)) ips, List(Str) dns, Int i, Int j, ListBuf(Int) acc) {
+    if (i < ips.len()) { return san_names(ips, dns, i + 1, j, g_push(acc, der_el(135, ips[i]), 0)); }   // [7] iPAddress
+    if (j < dns.len()) { return san_names(ips, dns, i, j + 1, g_push(acc, der_el(130, bytes_of(dns[j])), 0)); }   // [2] dNSName
+    return acc.finish();
+}
+
+List(Int) extensions(CertSpec s) {
+    List(Int) bc = ext(oid_basic_constraints(), true, g_seq(if (s.ca) { [1, 1, 255] } else { [] }));
+    // keyCertSign and cRLSign for a CA; digitalSignature for a leaf.
+    List(Int) ku = ext(oid_key_usage(), true, if (s.ca) { [3, 2, 1, 6] } else { [3, 2, 7, 128] });
+    List(Int) eku = if (s.ca) { [] } else { ext(oid_ext_key_usage(), false, g_seq(oid_server_auth())) };
+    Bool any_san = s.ips.len() + s.dns.len() > 0;
+    List(Int) san = if (any_san) { ext(oid_san(), false, g_seq(san_names(s.ips, s.dns, 0, 0, ListBuf()))) } else { [] };
+    return g_explicit(3, g_seq(cat([bc, ku, eku, san])));
+}
+
+/// The to-be-signed part of `s`'s certificate for `subject_pub` (the
+/// uncompressed point), issued by `issuer_cn`.
+pub List(Int) x509g_tbs(CertSpec s, List(Int) subject_pub, Str issuer_cn) {
+    return g_seq(cat([
+        g_explicit(0, der_el(2, [2])),
+        g_uint(s.serial),
+        g_seq(oid_ecdsa_sha256()),
+        name_of(issuer_cn),
+        g_seq(cat([x509g_time(s.not_before), x509g_time(s.not_after)])),
+        name_of(s.cn),
+        x509g_spki(subject_pub),
+        extensions(s)
+    ]));
+}
+
+/// The certificate (DER) for `subject_pub`, signed by the issuer's P-256
+/// private key; empty if the key cannot sign.
+@needs(P256Word(E, B), P384Word(G, B), Word(W, B), Word64(D, B))
+@key(issuer_priv)
+pub List(Int) x509g_cert(CertSpec s, List(Int) subject_pub, Str issuer_cn, List(B) issuer_priv) {
+    List(Int) tbs = x509g_tbs(s, subject_pub, issuer_cn);
+    List(Int) sig = ecdsag_sign(P256, Sha256, issuer_priv, tbs);
+    if (sig.len() == 0) { return []; }
+    return g_seq(cat([tbs, g_seq(oid_ecdsa_sha256()), g_bits(sig)]));
+}
+
+/// A P-256 private key as SEC1 ECPrivateKey (RFC 5915): version 1, the
+/// key, the curve and the public point. The key is written out by design
+/// (a server's key file).
+pub List(Int) x509g_sec1_key(List(Int) priv32, List(Int) pub65) {
+    return g_seq(cat([der_el(2, [1]), g_octets(priv32), g_explicit(0, oid_prime256v1()), g_explicit(1, g_bits(pub65))]));
+}
+
+// ─── PEM ────────────────────────────────────────────────────────
+
+/// `der` armored as PEM under `label`, base64 in lines of 64.
+pub Str x509g_pem(Str label, List(Int) der) {
+    return "-----BEGIN " + label + "-----\n" + pem_lines(base64_encode(der), 0, StrBuf()) + "-----END " + label + "-----\n";
+}
+
+Str pem_lines(Str b, Int i, StrBuf acc) {
+    Int n = str_len(b);
+    if (i >= n) { return acc.finish(); }
+    Int e = if (i + 64 < n) { i + 64 } else { n };
+    return pem_lines(b, e, acc.push(str_slice(b, i, e)).push("\n"));
+}
