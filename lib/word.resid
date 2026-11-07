@@ -263,6 +263,9 @@ behavior Block128(X, W, B) {
     X x_aes_round(X s, X k);     // aesni_enc_round
     X x_aes_last(X s, X k);      // aesni_enc_last_round
     X x_clmul(X a, X b);         // gf128_mul_hw
+    X x_be16(List(B) d, Int p);  // bytes p..p+16 of d, big-endian (resid_bytes_be16)
+    ListBuf(B) x_xor16(ListBuf(B) o, List(B) d, Int p, X ks);    // d[p..p+16] ^ ks pushed (resid_bytes_xor16)
+    ListBuf(B) x_xor16_pub(ListBuf(B) o, List(Int) d, Int p, X ks);  // the same from public bytes
 }
 
 UInt(128) xi_xor(UInt(128) a, UInt(128) b) { return a ^ b; }
@@ -280,8 +283,10 @@ UInt(128) xi_bit(UInt(128) x, Int i) { return wrapping_usub((UInt(128)) 0, wrapp
 UInt(128) xi_aes_round(UInt(128) s, UInt(128) k) { return aesni_enc_round(s, k); }
 UInt(128) xi_aes_last(UInt(128) s, UInt(128) k) { return aesni_enc_last_round(s, k); }
 UInt(128) xi_clmul(UInt(128) a, UInt(128) b) { return gf128_mul_hw(a, b); }
+UInt(128) xi_be16(List(Int) d, Int p) { return resid_bytes_be16(d, p); }
+ListBuf(Int) xi_xor16(ListBuf(Int) o, List(Int) d, Int p, UInt(128) ks) { return resid_bytes_xor16(o, d, p, ks); }
 
-Block128(UInt(128), Int, Int) = { .x_xor = xi_xor, .x_and = xi_and, .x_or = xi_or, .x_shl = xi_shl, .x_shr = xi_shr, .x_lift = xi_lift, .x_from_word = xi_from_word, .x_word = xi_word, .x_from_byte = xi_from_byte, .x_byte = xi_byte, .x_bit = xi_bit, .x_aes_round = xi_aes_round, .x_aes_last = xi_aes_last, .x_clmul = xi_clmul };
+Block128(UInt(128), Int, Int) = { .x_xor = xi_xor, .x_and = xi_and, .x_or = xi_or, .x_shl = xi_shl, .x_shr = xi_shr, .x_lift = xi_lift, .x_from_word = xi_from_word, .x_word = xi_word, .x_from_byte = xi_from_byte, .x_byte = xi_byte, .x_bit = xi_bit, .x_be16 = xi_be16, .x_xor16 = xi_xor16, .x_xor16_pub = xi_xor16, .x_aes_round = xi_aes_round, .x_aes_last = xi_aes_last, .x_clmul = xi_clmul };
 
 Secret(UInt(128)) xs_xor(Secret(UInt(128)) a, Secret(UInt(128)) b) { return a ^ b; }
 Secret(UInt(128)) xs_and(Secret(UInt(128)) a, Secret(UInt(128)) b) { return a & b; }
@@ -297,5 +302,8 @@ Secret(UInt(128)) xs_bit(Secret(UInt(128)) x, Int i) { return wrapping_usub((UIn
 Secret(UInt(128)) xs_aes_round(Secret(UInt(128)) s, Secret(UInt(128)) k) { return aesni_enc_round(s, k); }
 Secret(UInt(128)) xs_aes_last(Secret(UInt(128)) s, Secret(UInt(128)) k) { return aesni_enc_last_round(s, k); }
 Secret(UInt(128)) xs_clmul(Secret(UInt(128)) a, Secret(UInt(128)) b) { return gf128_mul_hw(a, b); }
+Secret(UInt(128)) xs_be16(List(Secret(UInt(8))) d, Int p) { return resid_bytes_be16(d, p); }
+ListBuf(Secret(UInt(8))) xs_xor16(ListBuf(Secret(UInt(8))) o, List(Secret(UInt(8))) d, Int p, Secret(UInt(128)) ks) { return resid_bytes_xor16(o, d, p, ks); }
+ListBuf(Secret(UInt(8))) xs_xor16_pub(ListBuf(Secret(UInt(8))) o, List(Int) d, Int p, Secret(UInt(128)) ks) { return resid_bytes_xor16(o, d, p, ks); }
 
-Block128(Secret(UInt(128)), Secret(UInt(32)), Secret(UInt(8))) = { .x_xor = xs_xor, .x_and = xs_and, .x_or = xs_or, .x_shl = xs_shl, .x_shr = xs_shr, .x_lift = xs_lift, .x_from_word = xs_from_word, .x_word = xs_word, .x_from_byte = xs_from_byte, .x_byte = xs_byte, .x_bit = xs_bit, .x_aes_round = xs_aes_round, .x_aes_last = xs_aes_last, .x_clmul = xs_clmul };
+Block128(Secret(UInt(128)), Secret(UInt(32)), Secret(UInt(8))) = { .x_xor = xs_xor, .x_and = xs_and, .x_or = xs_or, .x_shl = xs_shl, .x_shr = xs_shr, .x_lift = xs_lift, .x_from_word = xs_from_word, .x_word = xs_word, .x_from_byte = xs_from_byte, .x_byte = xs_byte, .x_bit = xs_bit, .x_be16 = xs_be16, .x_xor16 = xs_xor16, .x_xor16_pub = xs_xor16_pub, .x_aes_round = xs_aes_round, .x_aes_last = xs_aes_last, .x_clmul = xs_clmul };

@@ -5,13 +5,13 @@ import "../../lib/shamir.resid";
 import "../../lib/cose.resid";
 import "../../lib/crypto.resid";
 
-Str hs(UInt(576) x) { return hex_encode(sc_to_be(x)); }
+Str hs(UInt(320) x) { return hex_encode(sc_to_be(x)); }
 Str hp(P256Aff p) { return hex_encode(pt_enc(p)); }
-UInt(576) sc(Str hex) { return p256_from_be(cose_hex_decode(hex)); }
+UInt(320) sc(Str hex) { return p256_from_be(cose_hex_decode(hex)); }
 P256Aff pt(Str hex) { return pt_dec(cose_hex_decode(hex)); }
 
 UInt(256) sc256(Str hex) { return (UInt(256)) p256_from_be(cose_hex_decode(hex)); }
-Str h256(UInt(256) x) { return hex_encode(sc_to_be((UInt(576)) x)); }
+Str h256(UInt(256) x) { return hex_encode(sc_to_be((UInt(320)) x)); }
 
 test "shamir 1-of-1" {
     List(UInt(256)) c = [sc256("ee357c29ac9b4f07711a8c715c2ca6b145e3b07ee7b187bda716d8321817fc07")];

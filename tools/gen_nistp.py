@@ -8,7 +8,9 @@ rerun (python3 tools/gen_nistp.py); never edit the generated files.
 
 Design (see the header written into each file):
   - field and scalar elements are native UInt(W) integers in Montgomery
-    form, with R = 2^K and W wide enough that t + q*m never overflows;
+    form, with R = 2^K and W just wide enough for an element and the guard
+    bits of a subtraction; the Montgomery product alone (the PxxxWord verb
+    pxxxw_mont) works in a wider WW, where t + q*m never overflows;
   - the curve code is written once, generic over a per-curve behavior
     (P256Word(F, B), P384Word(F, B)) with a public instance (UInt(W), Int)
     and a secret one (Secret(UInt(W)), Secret(UInt(8))), so the compiler
@@ -28,7 +30,7 @@ import re
 
 CURVES = {
     "p256": dict(
-        K=256, W=576, T="P256Pt", A="P256Aff", S="P256Sig", BW="P256Word", XY="P256Xy",
+        K=256, T="P256Pt", A="P256Aff", S="P256Sig", BW="P256Word", XY="P256Xy",
         p=2**256 - 2**224 + 2**192 + 2**96 - 1,
         n=0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551,
         b=0x5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b,
@@ -37,7 +39,7 @@ CURVES = {
         name="NIST P-256 (secp256r1)",
     ),
     "p521": dict(
-        K=521, W=1088, T="P521Pt", A="P521Aff", S="P521Sig", BW="P521Word", XY="P521Xy",
+        K=521, T="P521Pt", A="P521Aff", S="P521Sig", BW="P521Word", XY="P521Xy",
         p=2**521 - 1,
         n=0x01fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffa51868783bf2f966b7fcc0148f709a5d03bb5c9b8899c47aebb6fb71e91386409,
         b=0x0051953eb9618e1c9a1f929a21a0b68540eea2da725b99b315f3b8b489918ef109e156193951ec7e937b1652c0bd3bb1bf073573df883d2c34f1ef451fd46b503f00,
@@ -46,7 +48,7 @@ CURVES = {
         name="NIST P-521 (secp521r1)",
     ),
     "p384": dict(
-        K=384, W=832, T="P384Pt", A="P384Aff", S="P384Sig", BW="P384Word", XY="P384Xy",
+        K=384, T="P384Pt", A="P384Aff", S="P384Sig", BW="P384Word", XY="P384Xy",
         p=2**384 - 2**128 - 2**96 + 2**32 - 1,
         n=0xffffffffffffffffffffffffffffffffffffffffffffffffc7634d81f4372ddf581a0db248b0a77aecec196accc52973,
         b=0xb3312fa7e23ee7e4988e056be3f82d19181d9c6efe8141120314088f5013875ac656398d8a2ed19d2a85c8edd3ec2aef,
@@ -72,8 +74,10 @@ TEMPLATE = r'''// lib/@X@.resid — @NAME@: ECDSA (verify, sign with an RFC 6979
 // result. The public copy is the same code; verification and point
 // decoding use only it.
 //
-// Field and scalar elements are in Montgomery form (R = 2^@K@). @W@ bits
-// leave room for t + q*m, so nothing wraps. Selects are masks (through
+// Field and scalar elements are in Montgomery form (R = 2^@K@), held in
+// @W@ bits: an element below 2^@K@ and the guard bits of a subtraction.
+// The Montgomery product alone works in @WW@ bits, room for t + q*m, and
+// hands back @W@ (@X@w_mont), so nothing wraps. Selects are masks (through
 // ct_hide), reductions subtract with a borrow bit, the scalar ladder runs
 // all @K@ steps, and arithmetic wraps, so no overflow check branches on a
 // value either. What becomes public goes through @X@w_open: a signature,
@@ -134,7 +138,7 @@ UInt(@W@) @X@_zero() { return 0; }
 behavior @BW@(F, B) {
     F @X@w_add(F a, F b);
     F @X@w_sub(F a, F b);
-    F @X@w_mul(F a, F b);
+    F @X@w_mont(F a, F b, UInt(@W@) m, UInt(@W@) minv);   // a * b / 2^@K@ mod m, below 2m (a, b < m)
     F @X@w_and(F a, F b);
     F @X@w_or(F a, F b);
     F @X@w_xor(F a, F b);
@@ -149,7 +153,16 @@ behavior @BW@(F, B) {
 
 UInt(@W@) @X@i_add(UInt(@W@) a, UInt(@W@) b) { return wrapping_uadd(a, b); }
 UInt(@W@) @X@i_sub(UInt(@W@) a, UInt(@W@) b) { return wrapping_usub(a, b); }
-UInt(@W@) @X@i_mul(UInt(@W@) a, UInt(@W@) b) { return wrapping_umul(a, b); }
+// The Montgomery product without its final subtraction: t = a * b and
+// q = t * minv mod 2^@K@ in @WW@ bits, factors cut to @KC@ bits first (the
+// optimizer then multiplies only the limbs that can be set), and
+// (t + q * m) / 2^@K@ back in @W@ bits.
+UInt(@W@) @X@i_mont(UInt(@W@) a, UInt(@W@) b, UInt(@W@) m, UInt(@W@) minv) {
+    UInt(@WW@) rm = @RMASK@;
+    UInt(@WW@) t = @MUL_A_B@;
+    UInt(@WW@) q = @MUL_TM_MI@ & rm;
+    return wrapping_u@W@(wrapping_uadd(t, @MUL_Q_M@) >> (UInt(@WW@)) @K@);
+}
 UInt(@W@) @X@i_and(UInt(@W@) a, UInt(@W@) b) { return a & b; }
 UInt(@W@) @X@i_or(UInt(@W@) a, UInt(@W@) b) { return a | b; }
 UInt(@W@) @X@i_xor(UInt(@W@) a, UInt(@W@) b) { return a ^ b; }
@@ -168,11 +181,16 @@ Int @X@i_byte(UInt(@W@) x, Int sh) { return wrapping_i64((x >> (UInt(@W@)) sh) &
 // from here on.
 UInt(@W@) @X@i_open(UInt(@W@) x) { return ct_public(x); }
 
-@BW@(UInt(@W@), Int) = { .@X@w_add = @X@i_add, .@X@w_sub = @X@i_sub, .@X@w_mul = @X@i_mul, .@X@w_and = @X@i_and, .@X@w_or = @X@i_or, .@X@w_xor = @X@i_xor, .@X@w_shr = @X@i_shr, .@X@w_shl = @X@i_shl, .@X@w_mask = @X@i_mask, .@X@w_lift = @X@i_lift, .@X@w_from_byte = @X@i_from_byte, .@X@w_byte = @X@i_byte, .@X@w_open = @X@i_open };
+@BW@(UInt(@W@), Int) = { .@X@w_add = @X@i_add, .@X@w_sub = @X@i_sub, .@X@w_mont = @X@i_mont, .@X@w_and = @X@i_and, .@X@w_or = @X@i_or, .@X@w_xor = @X@i_xor, .@X@w_shr = @X@i_shr, .@X@w_shl = @X@i_shl, .@X@w_mask = @X@i_mask, .@X@w_lift = @X@i_lift, .@X@w_from_byte = @X@i_from_byte, .@X@w_byte = @X@i_byte, .@X@w_open = @X@i_open };
 
 Secret(UInt(@W@)) @X@s_add(Secret(UInt(@W@)) a, Secret(UInt(@W@)) b) { return wrapping_uadd(a, b); }
 Secret(UInt(@W@)) @X@s_sub(Secret(UInt(@W@)) a, Secret(UInt(@W@)) b) { return wrapping_usub(a, b); }
-Secret(UInt(@W@)) @X@s_mul(Secret(UInt(@W@)) a, Secret(UInt(@W@)) b) { return wrapping_umul(a, b); }
+Secret(UInt(@W@)) @X@s_mont(Secret(UInt(@W@)) a, Secret(UInt(@W@)) b, UInt(@W@) m, UInt(@W@) minv) {
+    UInt(@WW@) rm = @RMASK@;
+    Secret(UInt(@WW@)) t = @MUL_A_B@;
+    Secret(UInt(@WW@)) q = @MUL_TM_MI@ & rm;
+    return wrapping_u@W@(wrapping_uadd(t, @MUL_Q_M@) >> (UInt(@WW@)) @K@);
+}
 Secret(UInt(@W@)) @X@s_and(Secret(UInt(@W@)) a, Secret(UInt(@W@)) b) { return a & b; }
 Secret(UInt(@W@)) @X@s_or(Secret(UInt(@W@)) a, Secret(UInt(@W@)) b) { return a | b; }
 Secret(UInt(@W@)) @X@s_xor(Secret(UInt(@W@)) a, Secret(UInt(@W@)) b) { return a ^ b; }
@@ -188,7 +206,7 @@ Secret(UInt(8)) @X@s_byte(Secret(UInt(@W@)) x, Int sh) { return wrapping_u8(x >>
 @requires(declassify)
 UInt(@W@) @X@s_open(Secret(UInt(@W@)) x) { return ct_public(declassify(x, "@NAME@ signature, public key or validity verdict")); }
 
-@BW@(Secret(UInt(@W@)), Secret(UInt(8))) = { .@X@w_add = @X@s_add, .@X@w_sub = @X@s_sub, .@X@w_mul = @X@s_mul, .@X@w_and = @X@s_and, .@X@w_or = @X@s_or, .@X@w_xor = @X@s_xor, .@X@w_shr = @X@s_shr, .@X@w_shl = @X@s_shl, .@X@w_mask = @X@s_mask, .@X@w_lift = @X@s_lift, .@X@w_from_byte = @X@s_from_byte, .@X@w_byte = @X@s_byte, .@X@w_open = @X@s_open };
+@BW@(Secret(UInt(@W@)), Secret(UInt(8))) = { .@X@w_add = @X@s_add, .@X@w_sub = @X@s_sub, .@X@w_mont = @X@s_mont, .@X@w_and = @X@s_and, .@X@w_or = @X@s_or, .@X@w_xor = @X@s_xor, .@X@w_shr = @X@s_shr, .@X@w_shl = @X@s_shl, .@X@w_mask = @X@s_mask, .@X@w_lift = @X@s_lift, .@X@w_from_byte = @X@s_from_byte, .@X@w_byte = @X@s_byte, .@X@w_open = @X@s_open };
 
 // ─── Branch-free helpers ─────────────────────────────────────────────
 
@@ -215,14 +233,7 @@ F @X@_csub(F u, UInt(@W@) m) {
 
 // a * b / R mod m (Montgomery), a, b < m.
 @needs(@BW@(F, B))
-F @X@_mont(F a, F b, UInt(@W@) m, UInt(@W@) minv) {
-    F rm = @X@w_lift(@X@_rmask());
-    F mi = @X@w_lift(minv);
-    F mm = @X@w_lift(m);
-    F t = @X@w_mul(a, b);
-    F q = @X@w_and(@X@w_mul(@X@w_and(t, rm), mi), rm);
-    return @X@_csub(@X@w_shr(@X@w_add(t, @X@w_mul(q, mm)), @K@), m);
-}
+F @X@_mont(F a, F b, UInt(@W@) m, UInt(@W@) minv) { return @X@_csub(@X@w_mont(a, b, m, minv), m); }
 
 // ─── Field (mod p), Montgomery form ──────────────────────────────────
 
@@ -584,7 +595,11 @@ pub type @S@ = { Bool ok; UInt(@W@) r; UInt(@W@) s; };
 /// step 5; n has exactly @K@ bits).
 pub UInt(@W@) @X@_bits2int(List(Int) digest) {
     List(Int) lead = if (digest.len() > @KB@) { digest[0..@KB@] } else { digest };
-    return @X@_reduce_n(@X@_from_be(lead));
+    // @KB@ bytes hold more than @K@ bits when @K@ is not a whole number of
+    // bytes: the leftmost @K@ are the integer.
+    UInt(@W@) v = @X@_from_be(lead);
+    Int extra = lead.len() * 8 - @K@;
+    return @X@_reduce_n(if (extra > 0) { v >> (UInt(@W@)) extra } else { v });
 }
 
 /// Verify (r, s) over a message digest under the public point q. Every
@@ -706,17 +721,25 @@ def mod_inv(a, m):
 
 
 def render(x, c):
-    K, W = c["K"], c["W"]
+    K = c["K"]
     p, n = c["p"], c["n"]
     R = 2 ** K
     assert p % 4 == 3 and n.bit_length() == K
     KB = (K + 7) // 8
-    # t + q*m < 2^(2K+1) and the guard bit K+8 must fit below the top bit.
-    assert 2 * K + 2 < W and W % 64 == 0
+    # Two widths: W holds an element (below 2^K, plus the guard bits of a
+    # subtraction at bit K + 8); WW the Montgomery sum t + q*m (2K + 1 bits)
+    # and the 2KC-bit products of factors cut to KC bits.
+    W = ((K + 9 + 63) // 64) * 64
+    KC = ((K + 63) // 64) * 64
+    WW = max(((2 * K + 2 + 63) // 64) * 64, 2 * KC)
+    assert W % 64 == 0 and K + 8 < W - 1 and KB * 8 <= W
+    def mul(x, y):
+        return f"(UInt({WW})) wrapping_umul((UInt({2 * KC})) wrapping_u{KC}({x}), (UInt({2 * KC})) wrapping_u{KC}({y}))"
     vals = {
         "@X@": x, "@T@": c["T"], "@A@": c["A"], "@S@": c["S"], "@NAME@": c["name"],
         "@BW@": c["BW"], "@XY@": c["XY"],
-        "@W@": str(W), "@K@": str(K), "@KB@": str(KB), "@KM1@": str(K - 1),
+        "@W@": str(W), "@K@": str(K), "@KB@": str(KB), "@KM1@": str(K - 1), "@WW@": str(WW), "@KC@": str(KC),
+        "@MUL_A_B@": mul("a", "b"), "@MUL_TM_MI@": mul("t & rm", "minv"), "@MUL_Q_M@": mul("q", "m"),
         "@K8@": str(K + 8), "@WM1@": str(W - 1),
         "@P@": str(p), "@N@": str(n), "@GX@": str(c["gx"]), "@GY@": str(c["gy"]),
         "@PINV@": str((-mod_inv(p, R)) % R), "@NINV@": str((-mod_inv(n, R)) % R),

@@ -5,8 +5,8 @@ import "p256.resid";
 Int main() {
     List(Int) zero = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     List(Int) ones = [255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255];
-    UInt(576) a = p256_from_be(rt zero);
-    UInt(576) b = p256_from_be(rt ones);
+    UInt(320) a = p256_from_be(rt zero);
+    UInt(320) b = p256_from_be(rt ones);
     if (a < b && !p256_scalar_ok(b) && !p256_scalar_ok(a)) { println("ZERO-MAX OK"); } else { println("ZERO-MAX BAD"); }
     return 0;
 }

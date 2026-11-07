@@ -152,6 +152,37 @@ pub List(W) aesg_key_expand(List(B) key) {
     return ag_ke(ag_key_words(key, 0, nk, none), nk, nk, 4 * (nk + 7));
 }
 
+// ag_ke with SubWord on AES-NI: the word in all four columns through
+// AESENCLAST with a zero key (ShiftRows moves nothing between equal
+// columns, so column 0 is SubWord of the word), in constant time.
+@needs(Word(W, B), Block128(X, W, B))
+List(W) ag_ke_hw(List(W) w, Int nk, Int i, Int total) {
+    if (i >= total) { return w; }
+    W prev = w[i - 1];
+    Bool rot = i % nk == 0;
+    Bool sub = nk > 6 && i % nk == 4;
+    W t = if (rot) { w_xork(ag_subw_hw(w_rotr(prev, 8)), aesg_rcon(i / nk)) } else { if (sub) { ag_subw_hw(prev) } else { prev } };
+    return ag_ke_hw(w.concat([w_xor(w[i - nk], t)]), nk, i + 1, total);
+}
+
+@needs(Word(W, B), Block128(X, W, B))
+W ag_subw_hw(W v) {
+    X x = x_from_word(v);
+    X b = x_or(x_or(x, x_shl(x, 32)), x_or(x_shl(x, 64), x_shl(x, 96)));
+    X z = x_lift((UInt(128)) 0);
+    return x_word(x_aes_last(b, z), 0);
+}
+
+/// aesg_key_expand on AES-NI (SubWord by AESENCLAST); the same schedule.
+@needs(Word(W, B), Block128(X, W, B))
+pub List(W) aesg_key_expand_hw(List(B) key) {
+    Int n = key.len();
+    List(W) none = [];
+    if (n != 16 && n != 24 && n != 32) { return none; }
+    Int nk = n / 4;
+    return ag_ke_hw(ag_key_words(key, 0, nk, none), nk, nk, 4 * (nk + 7));
+}
+
 /// The number of rounds for a schedule of `words` words (10, 12 or 14).
 pub Int aesg_rounds(Int words) { return words / 4 - 1; }
 
@@ -255,6 +286,13 @@ pub AesKeyG(X, W) aesg_keys(List(W) rk) { return aesg_keys_with(rk, resid_cpu_ha
 @needs(Word(W, B), Block128(X, W, B))
 pub X aesg_block(AesKeyG(X, W) k, X b) {
     if (!k.hw) { return aesg_encrypt_sw(k.rk, b); }
+    return aesg_block_hw(k, b);
+}
+
+/// One block on AES-NI / AESE (the key's `hw` holds): nothing that
+/// allocates, so a loop of blocks needs no scope around each one.
+@needs(Word(W, B), Block128(X, W, B))
+pub X aesg_block_hw(AesKeyG(X, W) k, X b) {
     X s1 = x_aes_round(x_xor(b, k.k0), k.k1);
     X s2 = x_aes_round(s1, k.k2);
     X s3 = x_aes_round(s2, k.k3);
@@ -319,18 +357,12 @@ W ag_be_word(List(B) b, Int o) {
 }
 
 @needs(Word(W, B), Block128(X, W, B))
-X ag_be16(List(B) b, Int o) {
-    return x_or(x_or(x_shl(x_from_word(ag_be_word(b, o)), 96), x_shl(x_from_word(ag_be_word(b, o + 4)), 64)), x_or(x_shl(x_from_word(ag_be_word(b, o + 8)), 32), x_from_word(ag_be_word(b, o + 12))));
-}
+X ag_be16(List(B) b, Int o) { return x_be16(b, o); }
 
 Int ag_be_word_pub(List(Int) b, Int o) { return ((b[o] & 255) << 24) | ((b[o + 1] & 255) << 16) | ((b[o + 2] & 255) << 8) | (b[o + 3] & 255); }
 
 /// Public bytes `o`..`o`+15 of `b`, big-endian packed.
-pub UInt(128) aesg_be16_pub(List(Int) b, Int o) {
-    UInt(64) hi = wrapping_u64((ag_be_word_pub(b, o) << 32) | ag_be_word_pub(b, o + 4));
-    UInt(64) lo = wrapping_u64((ag_be_word_pub(b, o + 8) << 32) | ag_be_word_pub(b, o + 12));
-    return ((UInt(128)) hi << (UInt(128)) 64) | (UInt(128)) lo;
-}
+pub UInt(128) aesg_be16_pub(List(Int) b, Int o) { return resid_bytes_be16(b, o); }
 
 // ── GHASH ───────────────────────────────────────────────────────────
 
@@ -356,6 +388,7 @@ pub X aesg_gf128(Bool clmul, X x, X y) { return if (clmul) { x_clmul(x, y) } els
 // GHASH over bytes [off, off + n) of data, zero padded to whole blocks.
 @needs(Word(W, B), Block128(X, W, B))
 X ag_ghash(Bool clmul, X h, X y, List(B) data, Int off, Int n) {
+    if (clmul && n >= 16) { return ag_ghash(clmul, h, x_clmul(x_xor(y, x_be16(data, off)), h), data, off + 16, n - 16); }
     if (n <= 0) { return y; }
     Int take = if (n < 16) { n } else { 16 };
     X z = x_lift((UInt(128)) 0);
@@ -368,6 +401,10 @@ X ag_ghash(Bool clmul, X h, X y, List(B) data, Int off, Int n) {
 /// For the associated data and a received ciphertext.
 @needs(Word(W, B), Block128(X, W, B))
 pub X aesg_ghash_pub(Bool clmul, X h, X y, List(Int) data, Int off, Int n) {
+    if (clmul && n >= 16) {
+        X blk = x_lift(resid_bytes_be16(data, off));
+        return aesg_ghash_pub(clmul, h, x_clmul(x_xor(y, blk), h), data, off + 16, n - 16);
+    }
     if (n <= 0) { return y; }
     Int take = if (n < 16) { n } else { 16 };
     X blk = x_lift(if (take == 16) { aesg_be16_pub(data, off) } else { aesg_be_pack_pub(data, off, take, 0, (UInt(128)) 0) });
@@ -419,6 +456,7 @@ pub UInt(128) aesg_le_pack_pub(List(Int) b, Int i, UInt(128) v) {
 /// CTR keystream XOR over data[pos..], counting from c.
 @needs(Word(W, B), Block128(X, W, B))
 pub ListBuf(B) aesg_ctr(AesKeyG(X, W) k, X head, W c, List(B) data, Int pos, ListBuf(B) out) {
+    if (k.hw) { return ag_ctr_hw(k, head, c, data, pos, out); }
     if (pos >= data.len()) { return out; }
     X ks = aesg_block(k, ag_ctr_block(head, c));
     Int left = data.len() - pos;
@@ -426,30 +464,21 @@ pub ListBuf(B) aesg_ctr(AesKeyG(X, W) k, X head, W c, List(B) data, Int pos, Lis
     return aesg_ctr(k, head, w_addk(c, 1), data, pos + take, if (take == 16) { ag_ctr16(ks, data, pos, out) } else { ag_ctr_bytes(ks, data, pos, 0, take, out) });
 }
 
-// A whole keystream block applied, written out rather than looped.
+// aesg_ctr on AES-NI: whole blocks sixteen bytes at a time, then the tail.
 @needs(Word(W, B), Block128(X, W, B))
-ListBuf(B) ag_ctr16(X ks, List(B) d, Int p, ListBuf(B) out) {
-    W k0 = x_word(ks, 0);
-    W k1 = x_word(ks, 32);
-    W k2 = x_word(ks, 64);
-    W k3 = x_word(ks, 96);
-    return out.push(b_xor(d[p], w_byte(k0, 0))).push(b_xor(d[p + 1], w_byte(k0, 8))).push(b_xor(d[p + 2], w_byte(k0, 16))).push(b_xor(d[p + 3], w_byte(k0, 24)))
-        .push(b_xor(d[p + 4], w_byte(k1, 0))).push(b_xor(d[p + 5], w_byte(k1, 8))).push(b_xor(d[p + 6], w_byte(k1, 16))).push(b_xor(d[p + 7], w_byte(k1, 24)))
-        .push(b_xor(d[p + 8], w_byte(k2, 0))).push(b_xor(d[p + 9], w_byte(k2, 8))).push(b_xor(d[p + 10], w_byte(k2, 16))).push(b_xor(d[p + 11], w_byte(k2, 24)))
-        .push(b_xor(d[p + 12], w_byte(k3, 0))).push(b_xor(d[p + 13], w_byte(k3, 8))).push(b_xor(d[p + 14], w_byte(k3, 16))).push(b_xor(d[p + 15], w_byte(k3, 24)));
+ListBuf(B) ag_ctr_hw(AesKeyG(X, W) k, X head, W c, List(B) data, Int pos, ListBuf(B) out) {
+    if (pos >= data.len()) { return out; }
+    X ks = aesg_block_hw(k, ag_ctr_block(head, c));
+    if (data.len() - pos < 16) { return ag_ctr_bytes(ks, data, pos, 0, data.len() - pos, out); }
+    return ag_ctr_hw(k, head, w_addk(c, 1), data, pos + 16, x_xor16(out, data, pos, ks));
 }
 
+// A whole keystream block applied, written out rather than looped.
 @needs(Word(W, B), Block128(X, W, B))
-ListBuf(B) ag_ctr16_pub(X ks, List(Int) d, Int p, ListBuf(B) out) {
-    W k0 = x_word(ks, 0);
-    W k1 = x_word(ks, 32);
-    W k2 = x_word(ks, 64);
-    W k3 = x_word(ks, 96);
-    return out.push(b_xork(w_byte(k0, 0), d[p])).push(b_xork(w_byte(k0, 8), d[p + 1])).push(b_xork(w_byte(k0, 16), d[p + 2])).push(b_xork(w_byte(k0, 24), d[p + 3]))
-        .push(b_xork(w_byte(k1, 0), d[p + 4])).push(b_xork(w_byte(k1, 8), d[p + 5])).push(b_xork(w_byte(k1, 16), d[p + 6])).push(b_xork(w_byte(k1, 24), d[p + 7]))
-        .push(b_xork(w_byte(k2, 0), d[p + 8])).push(b_xork(w_byte(k2, 8), d[p + 9])).push(b_xork(w_byte(k2, 16), d[p + 10])).push(b_xork(w_byte(k2, 24), d[p + 11]))
-        .push(b_xork(w_byte(k3, 0), d[p + 12])).push(b_xork(w_byte(k3, 8), d[p + 13])).push(b_xork(w_byte(k3, 16), d[p + 14])).push(b_xork(w_byte(k3, 24), d[p + 15]));
-}
+ListBuf(B) ag_ctr16(X ks, List(B) d, Int p, ListBuf(B) out) { return x_xor16(out, d, p, ks); }
+
+@needs(Word(W, B), Block128(X, W, B))
+ListBuf(B) ag_ctr16_pub(X ks, List(Int) d, Int p, ListBuf(B) out) { return x_xor16_pub(out, d, p, ks); }
 
 @needs(Word(W, B), Block128(X, W, B))
 ListBuf(B) ag_ctr_bytes(X ks, List(B) data, Int pos, Int i, Int take, ListBuf(B) out) {
@@ -457,9 +486,19 @@ ListBuf(B) ag_ctr_bytes(X ks, List(B) data, Int pos, Int i, Int take, ListBuf(B)
     return ag_ctr_bytes(ks, data, pos, i + 1, take, out.push(b_xor(data[pos + i], x_byte(ks, 8 * i))));
 }
 
+// ag_ctr_pub on AES-NI.
+@needs(Word(W, B), Block128(X, W, B))
+ListBuf(B) ag_ctr_pub_hw(AesKeyG(X, W) k, X head, W c, List(Int) data, Int pos, Int end, ListBuf(B) out) {
+    if (pos >= end) { return out; }
+    X ks = aesg_block_hw(k, ag_ctr_block(head, c));
+    if (end - pos < 16) { return ag_ctr_pub_bytes(ks, data, pos, 0, end - pos, out); }
+    return ag_ctr_pub_hw(k, head, w_addk(c, 1), data, pos + 16, end, x_xor16_pub(out, data, pos, ks));
+}
+
 // The same over public input (a received ciphertext): the output is B.
 @needs(Word(W, B), Block128(X, W, B))
 ListBuf(B) ag_ctr_pub(AesKeyG(X, W) k, X head, W c, List(Int) data, Int pos, Int end, ListBuf(B) out) {
+    if (k.hw) { return ag_ctr_pub_hw(k, head, c, data, pos, end, out); }
     if (pos >= end) { return out; }
     X ks = aesg_block(k, ag_ctr_block(head, c));
     Int left = end - pos;
@@ -501,7 +540,7 @@ List(B) ag_tag_bytes(X s, X e, Int i, ListBuf(B) acc) {
 @key(key)
 @nonce(iv)
 pub List(B) aes_gcmg_seal_with(Bool hw, Bool clmul, List(B) key, List(Int) iv, List(B) plaintext, List(Int) aad) {
-    List(W) rk = aesg_key_expand(key);
+    List(W) rk = if (hw) { aesg_key_expand_hw(key) } else { aesg_key_expand(key) };
     List(B) none = [];
     if (rk.len() == 0 || iv.len() == 0) { return none; }
     return ag_seal_g(ag_gcm(aesg_keys_with(rk, hw), clmul, iv), plaintext, aad);
@@ -537,7 +576,7 @@ pub List(B) aes_gcmg_seal(List(B) key, List(Int) iv, List(B) plaintext, List(Int
 /// secret types the plaintext stays secret.
 @needs(Word(W, B), Block128(X, W, B), CtSame(B))
 pub Option(List(B)) aes_gcmg_decrypt_with(Bool hw, Bool clmul, List(B) key, List(Int) iv, List(Int) ct_and_tag, List(Int) aad) {
-    List(W) rk = aesg_key_expand(key);
+    List(W) rk = if (hw) { aesg_key_expand_hw(key) } else { aesg_key_expand(key) };
     Int clen = ct_and_tag.len() - 16;
     if (rk.len() == 0 || iv.len() == 0 || clen < 0) { return None; }
     return ag_open_g(ag_gcm(aesg_keys_with(rk, hw), clmul, iv), ct_and_tag, clen, aad);
@@ -591,7 +630,7 @@ GcmG(X, W) ag_gcm_ivb(AesKeyG(X, W) k, Bool clmul, List(B) iv) {
 @key(key)
 @nonce(iv)
 pub List(B) aes_gcmg_seal_ivb_with(Bool hw, Bool clmul, List(B) key, List(B) iv, List(B) plaintext, List(Int) aad) {
-    List(W) rk = aesg_key_expand(key);
+    List(W) rk = if (hw) { aesg_key_expand_hw(key) } else { aesg_key_expand(key) };
     List(B) none = [];
     if (rk.len() == 0 || iv.len() != 12) { return none; }
     return ag_seal_g(ag_gcm_ivb(aesg_keys_with(rk, hw), clmul, iv), plaintext, aad);
@@ -610,7 +649,7 @@ pub List(B) aes_gcmg_seal_ivb(List(B) key, List(B) iv, List(B) plaintext, List(I
 /// for an IV that is not 12 bytes. The verdict is public (CtSame(B)).
 @needs(Word(W, B), Block128(X, W, B), CtSame(B))
 pub Option(List(B)) aes_gcmg_decrypt_ivb_with(Bool hw, Bool clmul, List(B) key, List(B) iv, List(Int) ct_and_tag, List(Int) aad) {
-    List(W) rk = aesg_key_expand(key);
+    List(W) rk = if (hw) { aesg_key_expand_hw(key) } else { aesg_key_expand(key) };
     Int clen = ct_and_tag.len() - 16;
     if (rk.len() == 0 || iv.len() != 12 || clen < 0) { return None; }
     return ag_open_g(ag_gcm_ivb(aesg_keys_with(rk, hw), clmul, iv), ct_and_tag, clen, aad);

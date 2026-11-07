@@ -109,31 +109,30 @@ UInt(64) rsa_lo(UInt(128) v) { return (UInt(64)) (v & ((UInt(128)) 1844674407370
 UInt(64) rsa_hi(UInt(128) v) { return (UInt(64)) (v >> ((UInt(128)) 64)); }
 
 // One CIOS row: (t + ai*b + m*n) / 2^64, m chosen so the low limb is 0.
-// t has s + 1 limbs; so does the result.
+// t has s + 1 limbs; so does the result, written over t in place: limb j
+// of the sum lands at j - 1, after t[j] was read.
 List(UInt(64)) rsa_row(List(UInt(64)) t, UInt(64) ai, List(UInt(64)) b, List(UInt(64)) n, UInt(64) ninv) {
     UInt(64) lo0 = wrapping_uadd(t[0], wrapping_umul(ai, b[0]));
     UInt(64) m = wrapping_umul(lo0, ninv);
-    return rsa_row_at(t, ai, b, n, m, 0, (UInt(64)) 0, (UInt(64)) 0, ListBuf());
+    return rsa_row_at(t, ai, b, n, m, 0, (UInt(64)) 0, (UInt(64)) 0);
 }
 
-List(UInt(64)) rsa_row_at(List(UInt(64)) t, UInt(64) ai, List(UInt(64)) b, List(UInt(64)) n, UInt(64) m, Int j, UInt(64) c1, UInt(64) c2, ListBuf(UInt(64)) acc) {
+List(UInt(64)) rsa_row_at(List(UInt(64)) t, UInt(64) ai, List(UInt(64)) b, List(UInt(64)) n, UInt(64) m, Int j, UInt(64) c1, UInt(64) c2) {
     Int s = n.len();
     if (j >= s) {
         UInt(128) top = rsa_w(t[s]) + rsa_w(c1) + rsa_w(c2);
-        return acc.push(rsa_lo(top)).push(rsa_hi(top)).finish();
+        return t.with(s - 1, rsa_lo(top)).with(s, rsa_hi(top));
     }
     UInt(128) x = rsa_w(t[j]) + rsa_w(ai) * rsa_w(b[j]) + rsa_w(c1);
     UInt(128) y = rsa_w(rsa_lo(x)) + rsa_w(m) * rsa_w(n[j]) + rsa_w(c2);
-    // limb j of the sum is zero at j = 0 by the choice of m: drop it.
-    ListBuf(UInt(64)) next = if (j == 0) { acc } else { acc.push(rsa_lo(y)) };
-    return rsa_row_at(t, ai, b, n, m, j + 1, rsa_hi(x), rsa_hi(y), next);
+    // limb j of the sum is zero at j = 0 by the choice of m: dropped.
+    List(UInt(64)) t2 = if (j == 0) { t } else { t.with(j - 1, rsa_lo(y)) };
+    return rsa_row_at(t2, ai, b, n, m, j + 1, rsa_hi(x), rsa_hi(y));
 }
 
 List(UInt(64)) rsa_mont_rows(List(UInt(64)) a, List(UInt(64)) b, List(UInt(64)) n, UInt(64) ninv, Int i, List(UInt(64)) t) {
     if (i >= n.len()) { return t; }
-    List(UInt(64)) r = rsa_row(t, a[i], b, n, ninv);
-    // The row leaves s + 1 limbs plus a top that is always zero.
-    return rsa_mont_rows(a, b, n, ninv, i + 1, r[0..n.len() + 1]);
+    return rsa_mont_rows(a, b, n, ninv, i + 1, rsa_row(t, a[i], b, n, ninv));
 }
 
 /// Montgomery product: `a` * `b` / R mod `n`, for `a`, `b` < `n`.

@@ -1,7 +1,7 @@
 // p256ops.resid — P-256 scalar and group operations on public values, for
 // protocols (threshold signing, zero-knowledge proofs) that compute with
 // scalars mod n and points. Scalars are plain integers in [0, n) as
-// UInt(576); points are P256Aff, where ok = false is the point at infinity.
+// UInt(320); points are P256Aff, where ok = false is the point at infinity.
 //
 // These wrap lib/p256.resid, so they inherit its checked arithmetic. They
 // are for public values. The secret-typed copies of the same arithmetic are
@@ -11,44 +11,53 @@ import "p256.resid";
 import "bignum.resid";
 
 /// The group order n.
-pub UInt(576) sc_n() { return p256_n(); }
+pub UInt(320) sc_n() { return p256_n(); }
 
-/// (a + b) mod n, for a, b < n.
-pub UInt(576) sc_add(UInt(576) a, UInt(576) b) { return p256_sfrom(p256_sadd(p256_sto(a), p256_sto(b))); }
+/// a reduced mod n. The arithmetic below works on values under 2^256 (it
+/// multiplies the low 256 bits only), so every input passes through here.
+pub UInt(320) sc_red(UInt(320) a) { return if (a < p256_n()) { a } else { a % p256_n() }; }
+
+/// (a + b) mod n.
+pub UInt(320) sc_add(UInt(320) a, UInt(320) b) { return p256_sfrom(p256_sadd(p256_sto(sc_red(a)), p256_sto(sc_red(b)))); }
 
 /// -a mod n.
-pub UInt(576) sc_neg(UInt(576) a) { return if (a == 0) { 0 } else { p256_n() - a }; }
+pub UInt(320) sc_neg(UInt(320) a0) {
+    UInt(320) a = sc_red(a0);
+    return if (a == 0) { 0 } else { p256_n() - a };
+}
 
 /// (a - b) mod n.
-pub UInt(576) sc_sub(UInt(576) a, UInt(576) b) { return sc_add(a, sc_neg(b)); }
+pub UInt(320) sc_sub(UInt(320) a, UInt(320) b) { return sc_add(a, sc_neg(b)); }
 
 /// (a * b) mod n.
-pub UInt(576) sc_mul(UInt(576) a, UInt(576) b) { return p256_sfrom(p256_smul(p256_sto(a), p256_sto(b))); }
+pub UInt(320) sc_mul(UInt(320) a, UInt(320) b) { return p256_sfrom(p256_smul(p256_sto(sc_red(a)), p256_sto(sc_red(b)))); }
 
-/// 1/a mod n, for a != 0.
-pub UInt(576) sc_inv(UInt(576) a) { return p256_sfrom(p256_sinv(p256_sto(a))); }
+/// 1/a mod n, for a != 0 mod n.
+pub UInt(320) sc_inv(UInt(320) a) { return p256_sfrom(p256_sinv(p256_sto(sc_red(a)))); }
 
 /// An integer of any length (big-endian bytes) reduced mod n.
-pub UInt(576) sc_from_be(List(Int) b) {
+pub UInt(320) sc_from_be(List(Int) b) {
     List(UInt(64)) r = bn_mod(bn_from_be(b), bn_from_be(p256_to_be(p256_n())));
     return p256_from_be(bn_to_be(r, 32));
 }
 
 /// A scalar as 32 big-endian bytes.
-pub List(Int) sc_to_be(UInt(576) a) { return p256_to_be(a); }
+pub List(Int) sc_to_be(UInt(320) a) { return p256_to_be(a); }
 
-/// k * G; infinity when k = 0.
-pub P256Aff pt_mul_base(UInt(576) k) {
+/// k * G; infinity when k = 0 mod n.
+pub P256Aff pt_mul_base(UInt(320) k0) {
+    UInt(320) k = sc_red(k0);
     if (k == 0) { return p256_bad(); }
     return p256_public(k);
 }
 
-/// k * P; infinity when k = 0 or P is infinity.
-pub P256Aff pt_mul(UInt(576) k, P256Aff p) {
+/// k * P; infinity when k = 0 mod n or P is infinity.
+pub P256Aff pt_mul(UInt(320) k0, P256Aff p) {
+    UInt(320) k = sc_red(k0);
     if (!p.ok || k == 0) { return p256_bad(); }
-    P256Pt(UInt(576)) pp = p256_from_aff(p);
-    P256Pt(UInt(576)) kp = p256_mul(k, pp);
-    P256Xy(UInt(576)) r = p256_affine(kp);
+    P256Pt(UInt(320)) pp = p256_from_aff(p);
+    P256Pt(UInt(320)) kp = p256_mul(k, pp);
+    P256Xy(UInt(320)) r = p256_affine(kp);
     return P256Aff {.x = r.x, .y = r.y, .ok = r.ok};
 }
 
@@ -56,10 +65,10 @@ pub P256Aff pt_mul(UInt(576) k, P256Aff p) {
 pub P256Aff pt_add(P256Aff p, P256Aff q) {
     if (!p.ok) { return q; }
     if (!q.ok) { return p; }
-    P256Pt(UInt(576)) pp = p256_from_aff(p);
-    P256Pt(UInt(576)) qq = p256_from_aff(q);
-    P256Pt(UInt(576)) sum = p256_add(pp, qq);
-    P256Xy(UInt(576)) r = p256_affine(sum);
+    P256Pt(UInt(320)) pp = p256_from_aff(p);
+    P256Pt(UInt(320)) qq = p256_from_aff(q);
+    P256Pt(UInt(320)) sum = p256_add(pp, qq);
+    P256Xy(UInt(320)) r = p256_affine(sum);
     return P256Aff {.x = r.x, .y = r.y, .ok = r.ok};
 }
 
