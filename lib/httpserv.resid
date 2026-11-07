@@ -3,8 +3,8 @@
 // response writer, a path router and an accept loop. The runtime provides
 // only sockets: resid_tcp_listen / resid_tcp_listen_at, resid_tcp_bound_port,
 // resid_tcp_accept_now, resid_tcp_poll, resid_tcp_recv_some,
-// resid_tcp_send_some, resid_tcp_deadline, resid_tcp_shutdown and
-// resid_tcp_close.
+// resid_tcp_send_some / resid_tcp_send_some_at, resid_tcp_deadline,
+// resid_tcp_shutdown and resid_tcp_close.
 //
 // The connection is a transport, not a file descriptor: `Session(S, C)`
 // from lib/wire.resid for the event loop, and `Wire(T)` for the blocking
@@ -942,7 +942,7 @@ HsConn(S, K) hs_ev_read(C conf, HsConn(S, K) c, HttpOut(K) closure(HttpRequest) 
 HsConn(S, K) hs_ev_write(HsConn(S, K) c, HttpOut(K) closure(HttpRequest) handler, HttpLimits lim) {
     Int left = c.outb.len() - c.out_at;
     Int take = if (left > 262144) { 262144 } else { left };
-    Int w = resid_tcp_send_some(c.fd, c.outb[c.out_at..(c.out_at + take)]);
+    Int w = resid_tcp_send_some_at(c.fd, c.outb, c.out_at, take);
     if (w < 0) { return hs_conn_phase(c, 4); }
     Int at = c.out_at + w;
     if (at < c.outb.len()) {
