@@ -1,0 +1,57 @@
+// Tail-call loops carrying sums and closures get loop regions
+// (lr_sum_fns, lw_clo_mover): Option fields, a DAG of a recursive sum
+// built in the loop (each shared box copied once per move), a closure made
+// by a callee each step, and a closure capturing an Option made outside
+// any loop.
+type Conn = { Int fd; List(Int) buf; Option(Int) live; };
+type Tr = Leaf(Int) | Node(Tr, Tr);
+type Live = { Int state; Int closure(Int) next; };
+
+Conn step(Conn c, Int i) {
+    List(Int) junk = [i, i + 1, i + 2].concat([i]);
+    Option(Int) l = if (i % 3 == 0) { None } else { Some(i) };
+    Option(Int) was = c.live;
+    Int odd = match was { Some(x) => x % 2, None => 0 };
+    return Conn { .fd = c.fd + junk.len() + odd, .buf = [junk[0]], .live = l };
+}
+
+Int conns(Conn c, Int n) {
+    if (n == 0) { return c.fd; }
+    return conns(step(c, n), n - 1);
+}
+
+Int leaves(Tr t) {
+    return match t {
+        Leaf(v) => v,
+        Node(a, b) => leaves(a) + leaves(b),
+    };
+}
+
+Int spin(Int i, Int n, Tr t, Int acc) {
+    if (i >= n) { return acc + leaves(t); }
+    Str churn = f"c{i}-{i * 3}-{i * 7}";
+    Tr nt = if (i >= 1000 && i < 1016) { Node(t, t) } else { t };
+    return spin(i + 1, n, nt, acc + churn.len() % 3);
+}
+
+Live make(Int i) {
+    List(Int) xs = [i, i + 1].concat([i * 2]);
+    return Live { .state = i, .next = lambda(k) { k + xs[2] - xs[0] } };
+}
+
+Int lives(Live l, Int n, Int acc) {
+    if (n == 0) { return acc; }
+    return lives(make(n), n - 1, acc + l.next(l.state) % 5);
+}
+
+Int closure(Int) mk(Option(Int) o) {
+    return lambda(k) { match o { Some(x) => x + k, None => k } };
+}
+
+Int main() {
+    println(f"{conns(Conn { .fd = 0, .buf = [], .live = None }, rt 200000)}");
+    println(f"{spin(0, rt 300000, Leaf(1), 0)}");
+    println(f"{lives(make(1), rt 200000, 0)}");
+    println(f"{mk(Some(rt 3))(4)} {mk(None)(4)}");
+    return 0;
+}

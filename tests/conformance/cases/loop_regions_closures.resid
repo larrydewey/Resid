@@ -1,0 +1,30 @@
+// Loops carrying closures get loop regions: a lambda made in the loop body
+// (captures only what its body names, so it does not hold the one before
+// it), a fixed-capacity capture (its bytes move whole), and a captured map
+// of records (no mover yet: its loop keeps the region, and stays correct).
+type Live0 = { List(Int) v; };
+
+Int closure(Int) chain(Int i, Int n, Int closure(Int) f) {
+    if (i >= n) { return f; }
+    Str(8) s = (Str(8)) f"{i % 10}";
+    Int closure(Int) g = lambda(k) { s.len() + k };
+    return chain(i + 1, n, g);
+}
+
+Int closure(Int) with_map(Int i) {
+    List(Int) xs = [i, i + 1].concat([i * 2]);
+    Map(Str, Live0) mm = {"a": Live0 { .v = [i, i] }};
+    return lambda(k) { k + xs[2] - xs[0] + mm.len() };
+}
+
+Int maps(Int closure(Int) f, Int n, Int acc) {
+    if (n == 0) { return acc + f(1); }
+    return maps(with_map(n), n - 1, acc + f(n) % 7);
+}
+
+Int main() {
+    Int closure(Int) h = chain(0, rt 300000, lambda(k) { k });
+    println(f"{h(5)}");
+    println(f"{maps(with_map(1), rt 200000, 0)}");
+    return 0;
+}

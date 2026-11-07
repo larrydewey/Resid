@@ -436,6 +436,23 @@ pub Int rt_tcp_send_some(Int fd, Int l) {
     return if (w >= 0) { w } else { if (w == 0 - 11 || w == 0 - 4) { 0 } else { 0 - 1 } };
 }
 
+// rt_tcp_send_some for l[from..from + n], without the slice: a server's
+// pending reply is sent from where the last send stopped.
+@export("resid_tcp_send_some_at", "i64(i64,ptr,i64,i64)")
+pub Int rt_tcp_send_some_at(Int fd, Int l, Int from, Int n0) {
+    Int len = c_list_len(l);
+    if (!sock_ok(fd)) { return 0 - 1; }
+    if (from < 0 || from > len) { return 0 - 1; }
+    Int n1 = if (n0 > len - from) { len - from } else { n0 };
+    Int n = if (n1 > 1048576) { 1048576 } else { n1 };
+    if (n <= 0) { return 0; }
+    Int buf = xmalloc(n);
+    _ = bytes_range(l, from, buf, n);
+    Int w = resid_raw_syscall(44, fd, buf, n, 16448, 0, 0);   // MSG_DONTWAIT | MSG_NOSIGNAL
+    _ = c_free(buf);
+    return if (w >= 0) { w } else { if (w == 0 - 11 || w == 0 - 4) { 0 } else { 0 - 1 } };
+}
+
 // ─── IPv4 name lookup: a literal, localhost, /etc/hosts, then DNS ──────
 // Addresses are the 4 bytes in network order, read as a u32; -1 when not
 // found.
@@ -618,10 +635,11 @@ Bool send_all(Int fd, Int p, Int n) {
 }
 
 // A TCP fd is a plain Int: only a socket is used, so a network grant cannot touch files or stdio.
+// SO_DOMAIN answers only for a socket (ENOTSOCK otherwise), so it is the
+// whole test: no fstat on every send and receive.
 Bool sock_ok(Int fd) {
     if (fd < 0 || fd > 2147483647) { return false; }
-    Int b = resid_raw_tls("sock_stat", 144);
-    return resid_raw_syscall(5, fd, b, 0, 0, 0, 0) == 0 && (ld32(b + st_mode_at()) & 61440) == 49152 && inet_sock(fd);
+    return inet_sock(fd);
 }
 
 // An AF_INET or AF_INET6 socket: a network grant cannot reach a display (AF_UNIX) socket.
@@ -707,10 +725,29 @@ pub Int rt_tcp_send_bin(Int fd, Int l) {
     return if (ok) { 1 } else { 0 };
 }
 
-pub Int bytes_of(Int l, Int buf, Int i, Int n) {
+pub Int bytes_of(Int l, Int buf, Int i, Int n) { return bytes_range(l, i, buf + i, n - i); }
+
+// Elements from..from + n of l, each truncated to a byte, into buf: a flat
+// list's slots read in place, any other element through the list's
+// accessor.
+pub Int bytes_range(Int l, Int from, Int buf, Int n) {
+    if (n <= 0) { return 0; }
+    Bool inside = from >= 0 && from <= lcount(l) && n <= lcount(l) - from;
+    if (inside && lflat(l) && lroot(l) != 0 && rec_words(ltype(l)) == 0) { return flat_bytes(lroot(l) + 24 + from * 8, lraw(l), buf, 0, n); }
+    return bytes_at(l, from, buf, 0, n);
+}
+
+Int flat_bytes(Int src, Bool raw, Int buf, Int i, Int n) {
     if (i >= n) { return 0; }
-    _ = st8(buf + i, slot_int(l, c_list_get(l, i)) & 255);
-    return bytes_of(l, buf, i + 1, n);
+    Int w = ld64(src + i * 8);
+    _ = st8(buf + i, (if (raw) { w } else { unbox_word(w) }) & 255);
+    return flat_bytes(src, raw, buf, i + 1, n);
+}
+
+Int bytes_at(Int l, Int from, Int buf, Int i, Int n) {
+    if (i >= n) { return 0; }
+    _ = st8(buf + i, slot_int(l, c_list_get(l, from + i)) & 255);
+    return bytes_at(l, from, buf, i + 1, n);
 }
 
 // Exactly n bytes (at most 1 MB) as a List(Int); bytes after EOF or an

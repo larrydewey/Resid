@@ -560,6 +560,77 @@ pub Int rt_listbuf_finish(Int l, Int ty) {
     return sync_elems(l);
 }
 
+// ─── Sixteen bytes at a time (AES-GCM, lib/word.resid's Block128) ─────
+// A byte list is one word per byte; these move a block of 16 with one
+// call. Byte values are truncated to 8 bits; nothing branches on them.
+
+// Byte i of l through the list's accessor (a trie or tagged list).
+Int b16_at(Int l, Int i) { return slot_int(l, c_list_get(l, i)) & 255; }
+
+Int b16_check(Int l, Int p) {
+    if (p < 0 || p > lcount(l) - 16) { return rt_index_abort(p, lcount(l), 0); }
+    return 0;
+}
+
+// A flat list of raw words: its slots are the bytes, read in place.
+Bool b16_raw(Int l) { return lflat(l) && lroot(l) != 0 && ltype(l) == 1; }
+
+// Eight bytes from p, big-endian.
+Int b16_be8(Int l, Int p, Int i, Int acc) {
+    if (i >= 8) { return acc; }
+    return b16_be8(l, p, i + 1, (acc << 8) | b16_at(l, p + i));
+}
+
+Int b16_be8_raw(Int s) {
+    return ((ld64(s) & 255) << 56) | ((ld64(s + 8) & 255) << 48) | ((ld64(s + 16) & 255) << 40) | ((ld64(s + 24) & 255) << 32)
+         | ((ld64(s + 32) & 255) << 24) | ((ld64(s + 40) & 255) << 16) | ((ld64(s + 48) & 255) << 8) | (ld64(s + 56) & 255);
+}
+
+// Bytes p..p + 16 of l as a 128-bit word, big-endian (a GHASH block).
+@export("resid_bytes_be16", "i128(ptr,i64)")
+pub UInt(128) rt_bytes_be16(Int l, Int p) {
+    _ = b16_check(l, p);
+    Bool raw = b16_raw(l);
+    Int s = lroot(l) + 24 + p * 8;
+    UInt(128) hi = (UInt(128)) wrapping_u64(if (raw) { b16_be8_raw(s) } else { b16_be8(l, p, 0, 0) });
+    UInt(128) lo = (UInt(128)) wrapping_u64(if (raw) { b16_be8_raw(s + 64) } else { b16_be8(l, p + 8, 0, 0) });
+    return (hi << (UInt(128)) 64) | lo;
+}
+
+// Builder b with bytes p..p + 16 of l pushed, byte i XORed with bits
+// 8i..8i + 7 of ks (a CTR keystream block): room for all 16 made once,
+// then the slots written.
+@export("resid_bytes_xor16", "ptr(ptr,ptr,i64,i128)")
+pub Int rt_bytes_xor16(Int b, Int l, Int p, UInt(128) ks) {
+    _ = b16_check(l, p);
+    Int n = lcount(b);
+    Int f0 = lroot(b);
+    Int f = if (f0 == 0 || n + 16 > ld64(f0 + 8)) { lb_grow_to(b, f0, n, n + 16) } else { f0 };
+    Int d = f + 24 + n * 8;
+    Int lo = wrapping_i64(ks);
+    Int hi = wrapping_i64(ks >> (UInt(128)) 64);
+    Bool raw = b16_raw(l);
+    Int s = lroot(l) + 24 + p * 8;
+    _ = b16_put(d, s, l, p, raw, lo) + b16_put(d + 64, s + 64, l, p + 8, raw, hi);
+    _ = st64(b, n + 16);
+    return st64(f, n + 16) * 0 + b;
+}
+
+// Eight bytes into d: byte i of the source XORed with byte i of k.
+Int b16_put(Int d, Int s, Int l, Int p, Bool raw, Int k) {
+    if (raw) {
+        return st64(d, (ld64(s) ^ k) & 255) + st64(d + 8, (ld64(s + 8) ^ (k >> 8)) & 255) + st64(d + 16, (ld64(s + 16) ^ (k >> 16)) & 255) + st64(d + 24, (ld64(s + 24) ^ (k >> 24)) & 255)
+             + st64(d + 32, (ld64(s + 32) ^ (k >> 32)) & 255) + st64(d + 40, (ld64(s + 40) ^ (k >> 40)) & 255) + st64(d + 48, (ld64(s + 48) ^ (k >> 48)) & 255) + st64(d + 56, (ld64(s + 56) ^ (k >> 56)) & 255);
+    }
+    return b16_put_at(d, l, p, k, 0);
+}
+
+Int b16_put_at(Int d, Int l, Int p, Int k, Int i) {
+    if (i >= 8) { return 0; }
+    _ = st64(d + i * 8, b16_at(l, p + i) ^ ((k >> (i * 8)) & 255));
+    return b16_put_at(d, l, p, k, i + 1);
+}
+
 // ─── Slices, ranges, assertions ────────────────────────────────────────
 
 // xs[lo..hi], bounds clamped to [0, count], empty when lo >= hi.

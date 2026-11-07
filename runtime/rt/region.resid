@@ -399,11 +399,13 @@ pub Int rt_loop_move(Int l, Int step) {
         _ = rec_save(r);
         _ = rec_init(nr, new_region_id());
         // The carried values move now (list_move adopts transient lists).
-        _ = st64(resid_raw_tls("rg_compact", 8), 1);
+        _ = st64(resid_raw_tls("rg_compact", 8), 1) + fwd_reset();
         return mv_ctx(resid_raw_tls("rg_mv_loop", 24), ld64(r), ld64(r), nr);
     }
-    _ = st64(resid_raw_tls("rg_compact", 8), 0);
-    _ = pages_free(ld64(r + 8), 0, rec_bump(r));
+    _ = st64(resid_raw_tls("rg_compact", 8), 0) + fwd_reset();
+    // A closure that could not move still points into L: L's pages join the
+    // new region instead of being freed.
+    _ = if (mv_failed()) { region_merge(r, nr) } else { pages_free(ld64(r + 8), 0, rec_bump(r)) };
     _ = mcopy(r, nr, 64);
     _ = st64(r + 40, ld64(nr + 32)) + st64(r + 48, 0);
     _ = rec_load(r) + yid_sync() + due_sync(ag_scope_depth());   // r carries a new id
@@ -424,8 +426,9 @@ pub Int rt_loop_exit(Int l, Int step) {
 
 @noinline
 Int loop_exit_slow(Int l, Int step) {
-    if (step == 2) { return rt_scope_pop(l) * 0; }
+    if (step == 2) { return fwd_reset() + (if (mv_failed()) { region_keep(l) } else { 0 }) + rt_scope_pop(l) * 0; }
     Int r = rec_at(l);
+    _ = fwd_reset();
     _ = rec_save(r);
     Int c = resid_raw_tls("rg_mv_loop", 24);
     if (l == 0) { return mv_ctx(c, ld64(r), ld64(r), 0); }
@@ -437,6 +440,28 @@ Int loop_exit_slow(Int l, Int step) {
     // would save them back and free the pages it handed over.
     _ = top_clear();
     return mv_ctx(c, 1, 0, 0);
+}
+
+// A move that met a closure without a mover (resid_mv_clo): read and reset.
+pub Int mv_fail_word() { return resid_raw_tls("rg_mv_fail", 8); }
+pub Bool mv_failed() {
+    Bool f = ld64(mv_fail_word()) != 0;
+    return st64(mv_fail_word(), 0) * 0 == 0 && f;
+}
+
+// An exit whose result kept a pointer into L: L's pages go to the caller's
+// region, or at depth 0 are left to the program (owned by no region, as
+// heap memory is), before L is popped.
+Int region_keep(Int l) {
+    Int r = rec_at(l);
+    _ = if (l > 0) { region_merge(r, rec_at(l - 1)) } else { region_abandon(r) };
+    return top_clear();
+}
+
+Int region_abandon(Int r) {
+    Int top = ld64(r + 8);
+    _ = if (top != 0) { retag(top, 0) } else { 0 };
+    return st64(r + 8, 0) + st64(r + 16, 0) + st64(r + 24, 0) + st64(r + 32, 0);
 }
 
 // Region r's pages become region p's (r is left empty): its values move

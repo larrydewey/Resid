@@ -5423,6 +5423,232 @@ pub Bool sec_graph_has(Kg g, Int i) {
     return if (hit) { true } else { sec_graph_has(g, i + 1) };
 }
 
+// ─── Secret mode for the code that can run ────────────────────────
+// A program runs its allocator in secret mode (spec §48) when code it can
+// run handles a secret. sec_fn_hits names the functions whose own code
+// does: a node that writes Secret( or calls a wrapper (sl_hit), or that
+// names a type whose declaration holds a secret, directly or through
+// another type. The driver then walks the lowered program (sec_ir_live)
+// from its entries -- the user's main, @export and @link functions, and
+// whatever a global's initializer names -- through every symbol a reached
+// function's body names (calls, closures, comparators, movers: lowering's
+// own uses included), and asks whether it reaches one of them, under its
+// own name or as a copy (f__o, f__rs3, ...: f, then `__`). A closure's code
+// is named only by the function that makes it, whose own code holds the
+// lambda. An unused library function, or an instance no reached code
+// names, never runs, and does not turn secret mode on.
+
+pub Map(Str, Int) sec_fn_hits(Kg g) {
+    Int n = g.ns.len();
+    Map(Str, Int) e0 = {};
+    List(Int) ds = sh_tydecls(g, 0, n, ListBuf()).finish();
+    ShT t = sh_types(g, ds, ShT {.found = e0, .r = ShR {.hit = false, .seen = sh_zeros(n, 0, ListBuf()), .mark = 0}});
+    return sh_fns(g, 0, n, t.found, e0, sh_zeros(n, 0, ListBuf()), 1).hits;
+}
+
+// A walk's answer and the stamps it leaves: node i was seen by the walk
+// numbered seen[i] (each walk a new number: a node shared by copies of
+// functions is visited once per walk, never once per path).
+type ShR = { Bool hit; List(Int) seen; Int mark; };
+type ShF = { Map(Str, Int) hits; List(Int) seen; };
+
+List(Int) sh_zeros(Int n, Int i, ListBuf(Int) acc) {
+    if (i >= n) { return acc.finish(); }
+    return sh_zeros(n, i + 1, acc.push(0));
+}
+
+// The entries of a lowered program: main, and every @export / @link
+// function (the runtime or the host calls them by name).
+pub List(Str) sec_entries(Kg g) { return sh_entries(g, 0, ["resid_user_main"]); }
+
+List(Str) sh_entries(Kg g, Int i, List(Str) acc) {
+    if (i >= g.ns.len()) { return acc; }
+    KN nd = g.ns[i];
+    Bool e = nd.kind == "fn" && (str_contains(nd.aux, "@export") || str_contains(nd.aux, "@link"));
+    return sh_entries(g, i + 1, if (e) { acc.concat([nd.text]) } else { acc });
+}
+
+Bool sl_hit(KN n) {
+    Bool lit = n.kind == "lit" || n.kind == "fpart" || n.kind == "fspec";
+    return !lit && (str_contains(n.text, "Secret(") || str_contains(n.aux, "Secret(") || ((n.kind == "call" || n.kind == "mcall") && sec_is_wrapper(n.text)));
+}
+
+Bool sl_tydecl(Str k) { return k == "struct_t" || k == "sum_t" || k == "alias_t" || k == "ctype_t" || k == "cwhere_t"; }
+
+ListBuf(Int) sh_tydecls(Kg g, Int i, Int n, ListBuf(Int) acc) {
+    if (i >= n) { return acc; }
+    return sh_tydecls(g, i + 1, n, if (sl_tydecl(g.ns[i].kind)) { acc.push(i) } else { acc });
+}
+
+// The types holding a secret, by name (before any `(`): a round adds every
+// declaration whose own nodes hit or name one already found, to a fixed
+// point. The stamps go on from round to round.
+ShT sh_types(Kg g, List(Int) ds, ShT t) {
+    ShT m = sh_types_round(g, ds, 0, t);
+    if (m.found.len() == t.found.len()) { return m; }
+    return sh_types(g, ds, m);
+}
+
+type ShT = { Map(Str, Int) found; ShR r; };
+
+ShT sh_types_round(Kg g, List(Int) ds, Int i, ShT acc) {
+    if (i >= ds.len()) { return acc; }
+    Str t = ty_head_cg(g.ns[ds[i]].text);
+    if (acc.found.contains(t)) { return sh_types_round(g, ds, i + 1, acc); }
+    ShR w = sh_sub(g, [ds[i]], 1, acc.found, acc.r.seen, acc.r.mark + 1);
+    return sh_types_round(g, ds, i + 1, ShT {.found = if (w.hit) { acc.found.insert(t, 1) } else { acc.found }, .r = w});
+}
+
+ShF sh_fns(Kg g, Int i, Int n, Map(Str, Int) st, Map(Str, Int) acc, List(Int) seen, Int mark) {
+    if (i >= n) { return ShF {.hits = acc, .seen = seen}; }
+    KN nd = g.ns[i];
+    if (nd.kind != "fn") { return sh_fns(g, i + 1, n, st, acc, seen, mark); }
+    ShR w = sh_sub(g, [i], 1, st, seen, mark);
+    return sh_fns(g, i + 1, n, st, if (w.hit) { acc.insert(nd.text, 1) } else { acc }, w.seen, mark + 1);
+}
+
+// Whether a node below the stack's (a function's or a type's own nodes)
+// hits or names a secret type; each node once per walk (stamp `mark`).
+ShR sh_sub(Kg g, List(Int) stk, Int top, Map(Str, Int) st, List(Int) seen, Int mark) {
+    if (top == 0) { return ShR {.hit = false, .seen = seen, .mark = mark}; }
+    Int id = stk[top - 1];
+    if (seen[id] == mark) { return sh_sub(g, stk, top - 1, st, seen, mark); }
+    KN nd = g.ns[id];
+    if (sl_hit(nd) || sh_names(nd.text, 0, st) || sh_names(nd.aux, 0, st)) { return ShR {.hit = true, .seen = seen, .mark = mark}; }
+    SecWalk s = sh_kids(g, id, 0, SecWalk {.st = stk, .top = top - 1});
+    return sh_sub(g, s.st, s.top, st, seen.with(id, mark), mark);
+}
+
+type SecWalk = { List(Int) st; Int top; };
+
+SecWalk sh_kids(Kg g, Int id, Int k, SecWalk s) {
+    if (k >= g.ns[id].nk) { return s; }
+    Int c = kg_kid(g, id, k);
+    List(Int) st = if (s.top < s.st.len()) { s.st.with(s.top, c) } else { s.st.concat([c]) };
+    return sh_kids(g, id, k + 1, SecWalk {.st = st, .top = s.top + 1});
+}
+
+// Whether a word in `t` (from i) names a type in st.
+Bool sh_names(Str t, Int i, Map(Str, Int) st) {
+    if (st.len() == 0) { return false; }
+    Int n = str_len(t);
+    Int a = sl_upper_at(t, i, n);
+    if (a >= n) { return false; }
+    Int e = sl_word_end(t, a + 1, n);
+    if (st.contains(str_slice(t, a, e))) { return true; }
+    return sh_names(t, e, st);
+}
+
+// The next uppercase letter that starts a word at or after i (n if none).
+Int sl_upper_at(Str t, Int i, Int n) {
+    if (i >= n) { return n; }
+    Int c = str_char_at(t, i);
+    Bool prev_word = i > 0 && sl_word_ch(str_char_at(t, i - 1));
+    if (c >= 65 && c <= 90 && !prev_word) { return i; }
+    return sl_upper_at(t, i + 1, n);
+}
+
+Int sl_word_end(Str t, Int i, Int n) {
+    if (i >= n || !sl_word_ch(str_char_at(t, i))) { return i; }
+    return sl_word_end(t, i + 1, n);
+}
+
+Bool sl_word_ch(Int c) { return (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95; }
+
+// The lowered program's functions: each define's symbol and the symbols
+// its body names; `@` names outside any define are the globals' (roots).
+type IrFns = { Map(Str, Int) at; List(List(Str)) refs; List(Str) roots; };
+
+pub Bool sec_ir_live(List(Str) ir, Map(Str, Int) hits, List(Str) entries) {
+    if (hits.len() == 0) { return false; }
+    Map(Str, Int) e0 = {};
+    IrFns f = ir_fns(ir, 0, "", [], IrFns {.at = e0, .refs = [], .roots = entries});
+    return ir_walk(f, hits, f.roots, f.roots.len(), e0);
+}
+
+IrFns ir_fns(List(Str) ir, Int i, Str cur, List(Str) acc, IrFns f) {
+    if (i >= ir.len()) { return f; }
+    Str el = ir[i];
+    IrL r = ir_lines(if (str_contains(el, "\n")) { str_split(el, "\n") } else { [el] }, 0, cur, acc, f);
+    return ir_fns(ir, i + 1, r.cur, r.acc, r.f);
+}
+
+type IrL = { Str cur; List(Str) acc; IrFns f; };
+
+// A run of lines (one element may hold several, a closure's text); a
+// define in it is closed by its `}`.
+IrL ir_lines(List(Str) ls, Int i, Str cur, List(Str) acc, IrFns f) {
+    if (i >= ls.len()) { return IrL {.cur = cur, .acc = acc, .f = f}; }
+    Str l = ls[i];
+    if (str_starts_with(l, "define ")) { return ir_lines(ls, i + 1, ir_sym(l, str_index_of(l, "@", 0) + 1), [], f); }
+    if (cur != "" && l == "}") {
+        IrFns f2 = IrFns {.at = f.at.insert(cur, f.refs.len()), .refs = f.refs.concat([acc]), .roots = f.roots};
+        return ir_lines(ls, i + 1, "", [], f2);
+    }
+    if (cur != "") { return ir_lines(ls, i + 1, cur, ir_refs(l, 0, acc), f); }
+    // Outside a define: a global's initializer (or a declaration).
+    Bool decl = str_starts_with(l, "declare ");
+    return ir_lines(ls, i + 1, cur, acc, if (decl) { f } else { IrFns {.at = f.at, .refs = f.refs, .roots = ir_refs(l, 0, f.roots)} });
+}
+
+// The symbol starting at i (after `@`): quoted, or a name.
+Str ir_sym(Str l, Int i) {
+    Int n = str_len(l);
+    if (i >= n) { return ""; }
+    if (str_char_at(l, i) == 34) {
+        Int e = str_find_char(l, 34, i + 1);
+        return if (e < 0) { "" } else { str_slice(l, i + 1, e) };
+    }
+    return str_slice(l, i, ir_sym_end(l, i, n));
+}
+
+Int ir_sym_end(Str l, Int i, Int n) {
+    if (i >= n) { return n; }
+    Int c = str_char_at(l, i);
+    Bool ok = sl_word_ch(c) || c == 46 || c == 36 || c == 45;
+    return if (ok) { ir_sym_end(l, i + 1, n) } else { i };
+}
+
+List(Str) ir_refs(Str l, Int from, List(Str) acc) {
+    Int k = str_index_of(l, "@", from);
+    if (k < 0) { return acc; }
+    Str s = ir_sym(l, k + 1);
+    return ir_refs(l, k + 1, if (s != "") { acc.concat([s]) } else { acc });
+}
+
+// Depth first over a stack of symbols (its live part is [0, top)).
+Bool ir_walk(IrFns f, Map(Str, Int) hits, List(Str) st, Int top, Map(Str, Int) seen) {
+    if (top == 0) { return false; }
+    Str s = st[top - 1];
+    if (seen.contains(s)) { return ir_walk(f, hits, st, top - 1, seen); }
+    Int at = f.at.get(s) else { -1 };
+    if (at >= 0 && ir_hit(s, hits)) { return true; }
+    List(Str) rs = if (at >= 0) { f.refs[at] } else { [] };
+    IrSt p = ir_push(rs, 0, IrSt {.st = st, .top = top - 1});
+    return ir_walk(f, hits, p.st, p.top, seen.insert(s, 1));
+}
+
+type IrSt = { List(Str) st; Int top; };
+
+IrSt ir_push(List(Str) rs, Int i, IrSt s) {
+    if (i >= rs.len()) { return s; }
+    List(Str) st = if (s.top < s.st.len()) { s.st.with(s.top, rs[i]) } else { s.st.concat([rs[i]]) };
+    return ir_push(rs, i + 1, IrSt {.st = st, .top = s.top + 1});
+}
+
+// s is a function sec_fn_hits named, or a copy of one (it, then `__`); the
+// user's main is lowered as resid_user_main.
+Bool ir_hit(Str s, Map(Str, Int) hits) {
+    if (hits.contains(s) || (s == "resid_user_main" && hits.contains("main"))) { return true; }
+    return ir_hit_copy(s, hits, str_index_of(s, "__", 1));
+}
+
+Bool ir_hit_copy(Str s, Map(Str, Int) hits, Int k) {
+    if (k < 0) { return false; }
+    if (hits.contains(str_slice(s, 0, k))) { return true; }
+    return ir_hit_copy(s, hits, str_index_of(s, "__", k + 2));
+}
+
 Map(Str, Int) sec_user_fns(Kg g, Int i, Map(Str, Int) acc) {
     if (i >= g.ns.len()) { return acc; }
     Bool f = g.ns[i].kind == "fn" && sec_is_wrapper(g.ns[i].text);

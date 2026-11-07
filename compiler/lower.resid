@@ -4637,7 +4637,7 @@ Str lw_with_mover(Funcs fs, Str ety) {
     // A list of words moves as a map value of kind 5 does.
     if (lr_list_word(t)) { return "resid_mv_list"; }
     Int si = struct_index(fs, t);
-    if (si < 0 || fs.stn[si] != t || !lr_rec_ok(fs, t, [])) { return ""; }
+    if (si < 0 || fs.stn[si] != t || !lr_rec_ok(fs, t, []) || lr_new_kind(fs, t, [])) { return ""; }
     return lr_rec_fn(t);
 }
 
@@ -4812,7 +4812,13 @@ GT lw_lambda(LW w, Int id, Str fnty, List(Str) env, GT c) {
     Int rfx = lw_fx_size(ret);
     Str sig = lw_lam_sig(w, id, 0, np, pl, if (rfx > 0) { "ptr %fx.ret, i64 %env" } else { "i64 %env" });
     List(Str) penv = lw_lam_env(w, id, 0, np, pl, nil_list());
-    LamC cap0 = lam_captured_at(env, 0, LamC {.ids = nil_list(), .tys = nil_list(), .vals = nil_list(), .n = 0});
+    // Only the names its body mentions: a capture keeps its value alive as
+    // long as the closure (each closure capturing the one before it held a
+    // whole chain).
+    Map(Str, Int) w0 = {};
+    Map(Int, Int) v0 = {};
+    Map(Str, Int) used = lw_lam_words(w.g, [lw_kid(w, id, np)], 1, v0, w0);
+    LamC cap0 = lam_captured_at(lw_lam_used(env, used, 0, ListBuf()), 0, LamC {.ids = nil_list(), .tys = nil_list(), .vals = nil_list(), .n = 0});
     Int ncap = cap0.n;
     CapPrel pr0 = cap_prelude(cap0.ids, cap0.tys, ncap, 0, CapPrel {.lines = ["%envbase = inttoptr i64 %env to ptr"], .benv = nil_list(), .idx = 0});
     List(Str) benv = pr0.benv.concat(penv);
@@ -4847,9 +4853,86 @@ GT lw_lambda(LW w, Int id, Str fnty, List(Str) env, GT c) {
     Str arr = f"%t{tf0}";
     Str fpreg = f"%t{tf0 + 1}";
     Str g0 = f"%t{tf0 + 2}";
-    List(Str) cl4 = sc0.g.lines.concat([arr + f" = call ptr @resid_gmalloc(i64 {(ncap + 1) * 8})", fpreg + " = ptrtoint ptr " + clo + " to i64", g0 + " = getelementptr i64, ptr " + arr + ", i64 0", "store i64 " + fpreg + ", ptr " + g0]);
+    // The word before the environment: its mover, for a loop region
+    // (resid_mv_clo), or null when a capture has none.
+    List(Str) cmv = lw_clo_moves(w.fs, cap0.tys, 0, []);
+    Bool movable = !resid_rtmod() && !cmv.contains("");
+    Str mvn = clo + ".mv";
+    Str mv_text = if (movable) { "\n" + str_join(lw_clo_mover(mvn, ncap, cmv), "\n") } else { "" };
+    List(Str) cl4 = sc0.g.lines.concat([arr + f".h = call ptr @resid_gmalloc(i64 {(ncap + 2) * 8})", "store ptr " + (if (movable) { mvn } else { "null" }) + ", ptr " + arr + ".h", arr + " = getelementptr i8, ptr " + arr + ".h, i64 8", fpreg + " = ptrtoint ptr " + clo + " to i64", g0 + " = getelementptr i64, ptr " + arr + ", i64 0", "store i64 " + fpreg + ", ptr " + g0]);
     List(Str) cl5 = clos_store_lines(sc0.vals, cap0.tys, ncap, 0, arr, tf0 + 3, cl4);
-    return GT {.pos = 0, .val = arr, .ty = fnty, .cnt = 0, .err = "", .glines = bodyw.glines.concat([clo_text]).concat(cglines), .lines = cl5, .tmp = tf0 + 3 + ncap * 2, .lbl = c.lbl, .tail = false};
+    return GT {.pos = 0, .val = arr, .ty = fnty, .cnt = 0, .err = "", .glines = bodyw.glines.concat([clo_text + mv_text]).concat(cglines), .lines = cl5, .tmp = tf0 + 3 + ncap * 2, .lbl = c.lbl, .tail = false};
+}
+
+// Each capture's move as its slot holds it: "-" a value, "" none.
+List(Str) lw_clo_moves(Funcs fs, List(Str) tys, Int i, List(Str) acc) {
+    if (i >= tys.len()) { return acc; }
+    Str t = ct_base_of(fs.ctn, fs.ctb, strip_owned_cg(tys[i]));
+    Bool word = cap_is_i64_int(t) || t == "Bool" || t == "Float" || t == "Float(64)";
+    // A fixed value is captured as a copy of its bytes (clos_store_lines):
+    // that block moves whole when nothing in it points.
+    Str fx = if (is_fixed_type(t) && lr_fx_flat(t)) { f"@resid_mv_rec(ptr %V, i64 {fx_n(fixed_bytes(t))}, i8 0, ptr %C)" } else { "" };
+    Str m = if (word) { "-" } else { if (is_fixed_type(t)) { fx } else { if (ll_ty(t) != "ptr") { "" } else { lr_move(fs, t, []) } } };
+    return lw_clo_moves(fs, tys, i + 1, acc.concat([m]));
+}
+
+// A closure environment's mover: the environment copied with its mover
+// word (as a record header), then each capture that points moved.
+List(Str) lw_clo_mover(Str name, Int ncap, List(Str) cmv) {
+    List(Str) head = ["define internal ptr " + name + "(ptr %v, ptr %u) {", "entry:", f"%c = call ptr @resid_mv_rec(ptr %v, i64 {(ncap + 1) * 8}, i8 1, ptr %u)", "%m = icmp ne ptr %c, %v", "br i1 %m, label %fix, label %done", "fix:"];
+    return head.concat(lw_clo_mv_lines(cmv, 0, [])).concat(["br label %done", "done:", "ret ptr %c", "}"]);
+}
+
+List(Str) lw_clo_mv_lines(List(Str) cmv, Int i, List(Str) acc) {
+    if (i >= cmv.len()) { return acc; }
+    Str m = cmv[i];
+    List(Str) one = if (m == "-") { [] } else { [f"%g{i} = getelementptr i8, ptr %c, i64 {(i + 1) * 8}", f"%f{i} = load ptr, ptr %g{i}", f"%e{i} = call ptr " + lr_call(m, f"%f{i}", "%u"), f"store ptr %e{i}, ptr %g{i}"] };
+    return lw_clo_mv_lines(cmv, i + 1, acc.concat(one));
+}
+
+// Every word of every node's text under the stack's nodes (a reference's
+// name, and any name inside a format hole's text); a node shared by
+// reduction's copies is read once.
+Map(Str, Int) lw_lam_words(Kg g, List(Int) st, Int top, Map(Int, Int) seen, Map(Str, Int) acc) {
+    if (top == 0) { return acc; }
+    Int id = st[top - 1];
+    if (seen.contains(id)) { return lw_lam_words(g, st, top - 1, seen, acc); }
+    LamSt p = lw_lam_kids(g, id, 0, LamSt {.st = st, .top = top - 1});
+    return lw_lam_words(g, p.st, p.top, seen.insert(id, 1), lw_lam_toks(g.ns[id].text, 0, acc));
+}
+
+type LamSt = { List(Int) st; Int top; };
+
+LamSt lw_lam_kids(Kg g, Int id, Int k, LamSt s) {
+    if (k >= g.ns[id].nk) { return s; }
+    Int c = kg_kid(g, id, k);
+    List(Int) st = if (s.top < s.st.len()) { s.st.with(s.top, c) } else { s.st.concat([c]) };
+    return lw_lam_kids(g, id, k + 1, LamSt {.st = st, .top = s.top + 1});
+}
+
+Map(Str, Int) lw_lam_toks(Str t, Int i, Map(Str, Int) acc) {
+    Int n = str_len(t);
+    Int a = lw_lam_word_at(t, i, n);
+    if (a >= n) { return acc; }
+    Int e = lw_lam_word_end(t, a, n);
+    return lw_lam_toks(t, e, acc.insert(str_slice(t, a, e), 1));
+}
+
+Bool lw_lam_ch(Int c) { return (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95; }
+
+Int lw_lam_word_at(Str t, Int i, Int n) {
+    if (i >= n || lw_lam_ch(str_char_at(t, i))) { return i; }
+    return lw_lam_word_at(t, i + 1, n);
+}
+
+Int lw_lam_word_end(Str t, Int i, Int n) {
+    if (i >= n || !lw_lam_ch(str_char_at(t, i))) { return i; }
+    return lw_lam_word_end(t, i + 1, n);
+}
+
+List(Str) lw_lam_used(List(Str) env, Map(Str, Int) used, Int i, ListBuf(Str) acc) {
+    if (i >= env.len()) { return acc.finish(); }
+    return lw_lam_used(env, used, i + 1, if (used.contains(cg_env_name(env[i]))) { acc.push(env[i]) } else { acc });
 }
 
 Str lw_lam_sig(LW w, Int id, Int i, Int n, List(Str) pl, Str acc) {
@@ -5334,9 +5417,36 @@ Bool lr_region_ok(LW w, Int d, List(Str) ls, List(Str) tyl, Str rev) {
     if (resid_rtmod()) { return false; }
     // A builder carried by value holds a heap buffer the region must not free.
     if (tyl.contains("StrBuf")) { return false; }
-    if (lg_closure(w.g, lw_kid(w, d, w.g.ns[d].nk - 1))) { return false; }
+    // A spawn's region runs on with what it captured: nothing may move.
+    // A lambda's environment moves with its mover (lw_clo_mover).
+    if (lg_spawns(w.g, lw_kid(w, d, w.g.ns[d].nk - 1))) { return false; }
     Int h = lw_find_line(ls, "tco.head:", 1);
+    // A sum or closure (lr_new_kind) earns a region only where the loop
+    // carries one that changes: a loop that only returns one, or one that
+    // also calls itself outside the tail (a tree recursion, as deep as the
+    // stack), would pay the region on every short call for no garbage.
+    Bool newc = lr_new_changing(w.fs, ls, h + 1, tyl);
+    Bool newr = lr_new_kind(w.fs, lw_text(w, lw_kid(w, d, 0)), []);
+    if ((newr && !newc) || (newc && lr_calls_self(ls, 0, "@" + w.g.ns[d].text + "("))) { return false; }
     return lr_phis_ok(ls, h + 1, lr_evac_tys(w.fs, tyl, 0, [])) && lr_exits_ok(ls, h + 1, rev != "") && lr_allocates(w, ls, h + 1);
+}
+
+// A changing loop parameter (a phi with another value in) of a type that
+// needs a sum or closure move.
+Bool lr_new_changing(Funcs fs, List(Str) ls, Int i, List(Str) tyl) {
+    if (i >= ls.len() || !str_contains(ls[i], " = phi ")) { return false; }
+    Str l = ls[i];
+    Str reg = str_slice(l, 0, str_find_char(l, 32, 0));
+    Int j = str_parse_int(str_slice(reg, 2, str_len(reg)));
+    Bool hit = str_contains(l, " = phi ptr ") && j >= 0 && j < tyl.len() && !lr_same_in(str_split(l, "[ "), 2, reg) && lr_new_kind(fs, tyl[j], []);
+    return hit || lr_new_changing(fs, ls, i + 1, tyl);
+}
+
+// A call of the function itself left in its body (not the tail call).
+Bool lr_calls_self(List(Str) ls, Int i, Str pat) {
+    if (i >= ls.len()) { return false; }
+    if (str_contains(ls[i], pat) && !str_starts_with(ls[i], "define ")) { return true; }
+    return lr_calls_self(ls, i + 1, pat);
 }
 
 // Whether the loop calls anything that may allocate (else a region only
@@ -5378,7 +5488,7 @@ Bool lr_call_allocs(LW w, Str f, Str l) {
     // Appending a scalar to a list builds what the loop carries on (moved
     // out at the back edge anyway), not garbage.
     if (f == "resid_list_push" || f == "resid_list_push_k" || f == "resid_list_push_own" || f == "resid_box_i64" || f == "resid_box_f64" || f == "resid_box_bool") { return false; }
-    return !lo_has_str(["llvm.sqrt.f64", "resid_char_at_n", "resid_overflow_check", "resid_div_check", "resid_conv_check", "str_char_at", "str_len", "resid_str_eq", "resid_list_len", "resid_list_elems", "resid_list_get", "resid_list_get_nc", "resid_list_get_sh", "resid_list_get_own", "resid_list_share_f", "resid_list_get_v", "resid_list_vdata", "resid_list_vlen", "resid_list_rec_at", "resid_map_find", "resid_map_has", "resid_map_len", "resid_set_len", "resid_map_freeze", "resid_rec_share", "resid_scope_push", "resid_scope_pop", "str_starts_with", "str_ends_with", "str_contains", "str_index_of", "resid_index_abort", "resid_abort", "abs_i64", "min_i64", "max_i64", "clamp_i64", "print", "println", "eprintln"], f, 0);
+    return !lo_has_str(["llvm.sqrt.f64", "resid_bytes_be16", "resid_char_at_n", "resid_overflow_check", "resid_div_check", "resid_conv_check", "str_char_at", "str_len", "resid_str_eq", "resid_list_len", "resid_list_elems", "resid_list_get", "resid_list_get_nc", "resid_list_get_sh", "resid_list_get_own", "resid_list_share_f", "resid_list_get_v", "resid_list_vdata", "resid_list_vlen", "resid_list_rec_at", "resid_map_find", "resid_map_has", "resid_map_len", "resid_set_len", "resid_map_freeze", "resid_rec_share", "resid_scope_push", "resid_scope_pop", "str_starts_with", "str_ends_with", "str_contains", "str_index_of", "resid_index_abort", "resid_abort", "abs_i64", "min_i64", "max_i64", "clamp_i64", "print", "println", "eprintln"], f, 0);
 }
 
 // Every exit returns a scalar, a loop parameter (an older value, or a
@@ -6806,6 +6916,8 @@ pub Str lr_move(Funcs fs, Str t, List(Str) seen) {
     Str base = lr_evac_fn(t);
     if (base != "") { return base; }
     if (struct_index(fs, t) >= 0 && lr_rec_ok(fs, t, seen)) { return "@" + lr_rec_fn(t) + "(ptr %V, ptr %C)"; }
+    if (is_fn_type(t)) { return "@resid_mv_clo(ptr %V, ptr %C)"; }
+    if (lr_is_sum(fs, t) && lr_sum_ok(fs, t, seen)) { return "@" + lr_sum_fn(t) + "(ptr %V, ptr %C)"; }
     if (str_has_prefix(t, "List(") && !is_list_fixed(t)) {
         Str et = ct_base_of(fs.ctn, fs.ctb, elem_type(t));
         if (struct_index(fs, et) >= 0 && lr_rec_ok(fs, et, seen)) { return "@resid_mv_list_f(ptr %V, ptr @" + lr_rec_fn(et) + ", ptr %C)"; }
@@ -6821,6 +6933,206 @@ Bool lr_fx_flat(Str t) {
 }
 
 Str lr_rec_fn(Str t) { return "\"resid.rec.evac." + t + "\""; }
+
+
+// ─── Moving sums and closures ───────────────────────────────────────
+// A sum's box is copied (resid_mv_box) and each payload slot moved by its
+// type: a raw slot is a value, a tagged scalar a word (resid_mv_word), a
+// variant inlining a record moves that record's pointer fields. A closure
+// moves through the mover lw_lambda puts before its environment.
+
+Str lr_sum_fn(Str t) { return "\"resid.sum.evac." + t + "\""; }
+
+Bool lr_is_sum(Funcs fs, Str t) {
+    return str_has_prefix(t, "Option(") || str_has_prefix(t, "Result(") || (struct_index(fs, t) < 0 && sumtype_index_cg(fs, t) >= 0);
+}
+
+// The variants as "tag|inline fields|raw kinds|payload types" lines.
+List(Str) lr_sum_vars(Funcs fs, Str t) {
+    List(Str) a = ty_args_cg(t);
+    if (str_has_prefix(t, "Option(")) { return if (a.len() == 1) { ["1|-1||" + a[0]] } else { [] }; }
+    if (str_has_prefix(t, "Result(")) { return if (a.len() == 2) { ["1|-1||" + a[0], "2|-1||" + a[1]] } else { [] }; }
+    Int sx = sumtype_index_cg(fs, t);
+    if (sx < 0) { return []; }
+    return lr_sum_vars_at(fs, t, sx, 0, sumv_names_cg(fs.suv[sx]).len(), []);
+}
+
+List(Str) lr_sum_vars_at(Funcs fs, Str t, Int sx, Int v, Int n, List(Str) acc) {
+    if (v >= n) { return acc; }
+    List(Str) pays = sum_variant_pays_cg(fs, sx, v, t);
+    Str rk = str_join(lr_ints_str(sum_raw_kinds(fs, t, v), 0, []), ",");
+    Str one = f"{v}|{sum_inline_fields(fs, t, v)}|" + rk + "|" + str_join(pays, "\x1f");
+    return lr_sum_vars_at(fs, t, sx, v + 1, n, if (pays.len() == 0) { acc } else { acc.concat([one]) });
+}
+
+List(Str) lr_ints_str(List(Int) xs, Int i, List(Str) acc) {
+    if (i >= xs.len()) { return acc; }
+    return lr_ints_str(xs, i + 1, acc.concat([f"{xs[i]}"]));
+}
+
+// How one tagged payload slot of type p moves: "-" nothing, "" not at all.
+Str lr_slot_move(Funcs fs, Str p0, List(Str) seen) {
+    Str p = ct_base_of(fs.ctn, fs.ctb, strip_owned_cg(p0));
+    if (is_fixed_type(p)) { return ""; }
+    if (p == "Bool") { return "-"; }
+    if (ll_ty(p) != "ptr") { return if (is_wide_box(p)) { "" } else { "@resid_mv_word(ptr %V, ptr %C)" }; }
+    if (p == "Str") { return "@resid_mv_word(ptr %V, ptr %C)"; }
+    return lr_move(fs, p, seen);
+}
+
+Bool lr_sum_ok(Funcs fs, Str t, List(Str) seen) {
+    if (seen.contains(t)) { return true; }
+    List(Str) vs = lr_sum_vars(fs, t);
+    Bool known = str_has_prefix(t, "Option(") || str_has_prefix(t, "Result(") || sumtype_index_cg(fs, t) >= 0;
+    return known && lr_sum_vars_ok(fs, vs, 0, seen.concat([t]));
+}
+
+Bool lr_sum_vars_ok(Funcs fs, List(Str) vs, Int i, List(Str) seen) {
+    if (i >= vs.len()) { return true; }
+    List(Str) q = str_split(vs[i], "|");
+    Bool ok = if (str_parse_int(q[1]) >= 0) { lr_inline_ok(fs, str_split(q[3], "\x1f"), seen) } else { lr_slots_ok(fs, str_split(q[3], "\x1f"), lr_kinds(q[2]), 0, seen) };
+    if (!ok) { return false; }
+    return lr_sum_vars_ok(fs, vs, i + 1, seen);
+}
+
+Bool lr_inline_ok(Funcs fs, List(Str) pays, List(Str) seen) {
+    Str rt0 = ct_base_of(fs.ctn, fs.ctb, pays[0]);
+    Int si = struct_index(fs, rt0);
+    return si >= 0 && lr_fields_ok(fs, fs.stf[si], 0, seen);
+}
+
+List(Int) lr_kinds(Str s) { return if (s == "") { [] } else { lr_kinds_at(str_split(s, ","), 0, []) }; }
+List(Int) lr_kinds_at(List(Str) ps, Int i, List(Int) acc) {
+    if (i >= ps.len()) { return acc; }
+    return lr_kinds_at(ps, i + 1, acc.concat([str_parse_int(ps[i])]));
+}
+
+Bool lr_slots_ok(Funcs fs, List(Str) pays, List(Int) rk, Int i, List(Str) seen) {
+    if (i >= pays.len()) { return true; }
+    Bool raw = i < rk.len() && rk[i] > 0;
+    if (!raw && lr_slot_move(fs, pays[i], seen) == "") { return false; }
+    return lr_slots_ok(fs, pays, rk, i + 1, seen);
+}
+
+// The mover of sum type t: copy the box, then by tag move its slots.
+List(Str) lr_sum_def(Funcs fs, Str t) {
+    List(Str) vs = lr_sum_vars(fs, t);
+    Str sw = str_join(lr_sum_cases(vs, 0, []), " ");
+    List(Str) head = ["define internal ptr @" + lr_sum_fn(t) + "(ptr %v, ptr %u) {", "entry:", "%c = call ptr @resid_mv_box(ptr %v, ptr %u)", "%m = icmp ne ptr %c, %v", "br i1 %m, label %fix, label %done", "fix:", "%tg = load i32, ptr %c", "switch i32 %tg, label %lv [ " + sw + " ]"];
+    // A copy (or a forwarded one) counted one level deeper: leave it.
+    return head.concat(lr_sum_arms(fs, vs, 0, [])).concat(["lv:", "call void @resid_mv_leave()", "br label %done", "done:", "ret ptr %c", "}"]);
+}
+
+List(Str) lr_sum_cases(List(Str) vs, Int i, List(Str) acc) {
+    if (i >= vs.len()) { return acc; }
+    Str tg = str_split(vs[i], "|")[0];
+    return lr_sum_cases(vs, i + 1, acc.concat([f"i32 {tg}, label %v{i}"]));
+}
+
+List(Str) lr_sum_arms(Funcs fs, List(Str) vs, Int i, List(Str) acc) {
+    if (i >= vs.len()) { return acc; }
+    List(Str) q = str_split(vs[i], "|");
+    List(Str) pays = str_split(q[3], "\x1f");
+    Str slots = f"%s{i}";
+    List(Str) base = [f"v{i}:", slots + " = getelementptr i8, ptr %c, i64 16"];
+    List(Str) body = if (str_parse_int(q[1]) >= 0) { lr_inline_moves(fs, pays[0], slots, i) } else { lr_slot_moves(fs, pays, lr_kinds(q[2]), slots, i, 0, []) };
+    return lr_sum_arms(fs, vs, i + 1, acc.concat(base).concat(body).concat(["br label %lv"]));
+}
+
+List(Str) lr_inline_moves(Funcs fs, Str p, Str slots, Int v) {
+    Int si = struct_index(fs, ct_base_of(fs.ctn, fs.ctb, p));
+    List(Str) ls = lr_rec_fields(fs, fs.stf[si], 0, 0, []);
+    return lr_rename_rec(ls, slots, v, 0, []);
+}
+
+// lr_rec_fields' lines, on the slots of arm v instead of %c.
+List(Str) lr_rename_rec(List(Str) ls, Str slots, Int v, Int i, List(Str) acc) {
+    if (i >= ls.len()) { return acc; }
+    Str l = str_replace(str_replace(str_replace(str_replace(ls[i], "ptr %c,", "ptr " + slots + ","), "%g", f"%a{v}g"), "%f", f"%a{v}f"), "%e", f"%a{v}e");
+    return lr_rename_rec(ls, slots, v, i + 1, acc.concat([l]));
+}
+
+List(Str) lr_slot_moves(Funcs fs, List(Str) pays, List(Int) rk, Str slots, Int v, Int i, List(Str) acc) {
+    if (i >= pays.len()) { return acc; }
+    Bool raw = i < rk.len() && rk[i] > 0;
+    Str mv = if (raw) { "-" } else { lr_slot_move(fs, pays[i], []) };
+    Str g = f"%a{v}g{i}";
+    Str f = f"%a{v}f{i}";
+    Str e = f"%a{v}e{i}";
+    List(Str) one = if (mv == "-" || mv == "") { [] } else { [g + " = getelementptr i8, ptr " + slots + f", i64 {i * 8}", f + " = load ptr, ptr " + g, e + " = call ptr " + lr_call(mv, f, "%u"), "store ptr " + e + ", ptr " + g] };
+    return lr_slot_moves(fs, pays, rk, slots, v, i + 1, acc.concat(one));
+}
+
+// The sum movers the program's lines name, each defined once; a mover may
+// name further ones, so to a fixed point.
+List(Str) lr_sum_fns(Funcs fs, List(Str) ls) {
+    Map(Str, Int) e0 = {};
+    Map(Str, Int) done = {};
+    return lr_sum_fns_at(fs, lr_sum_refs(ls, 0, e0).keys(), done, []);
+}
+
+List(Str) lr_sum_fns_at(Funcs fs, List(Str) todo, Map(Str, Int) done, List(Str) acc) {
+    List(Str) fresh = lr_sum_new(todo, done, 0, []);
+    if (fresh.len() == 0) { return acc; }
+    List(Str) defs = lr_sum_defs(fs, fresh, 0, []);
+    Map(Str, Int) e0 = {};
+    return lr_sum_fns_at(fs, lr_sum_refs(defs, 0, e0).keys(), lr_set_add(done, fresh, 0), acc.concat(defs));
+}
+
+List(Str) lr_sum_new(List(Str) todo, Map(Str, Int) done, Int i, List(Str) acc) {
+    if (i >= todo.len()) { return acc; }
+    return lr_sum_new(todo, done, i + 1, if (done.contains(todo[i])) { acc } else { acc.concat([todo[i]]) });
+}
+
+Map(Str, Int) lr_set_add(Map(Str, Int) s, List(Str) xs, Int i) {
+    if (i >= xs.len()) { return s; }
+    return lr_set_add(s.insert(xs[i], 1), xs, i + 1);
+}
+
+List(Str) lr_sum_defs(Funcs fs, List(Str) ts, Int i, List(Str) acc) {
+    if (i >= ts.len()) { return acc; }
+    return lr_sum_defs(fs, ts, i + 1, acc.concat(lr_sum_def(fs, ts[i])));
+}
+
+// Every `@"resid.sum.evac.T"` in the lines: its T.
+Map(Str, Int) lr_sum_refs(List(Str) ls, Int i, Map(Str, Int) acc) {
+    if (i >= ls.len()) { return acc; }
+    Str l = ls[i];
+    Map(Str, Int) a2 = if (str_contains(l, "@\"resid.sum.evac.")) { lr_sum_refs_in(l, 0, acc) } else { acc };
+    return lr_sum_refs(ls, i + 1, a2);
+}
+
+Map(Str, Int) lr_sum_refs_in(Str l, Int from, Map(Str, Int) acc) {
+    Int k = str_index_of(l, "@\"resid.sum.evac.", from);
+    if (k < 0) { return acc; }
+    Int s0 = k + 17;
+    Int e = str_find_char(l, 34, s0);
+    if (e < 0) { return acc; }
+    return lr_sum_refs_in(l, e + 1, acc.insert(str_slice(l, s0, e), 1));
+}
+
+// Whether moving t meets a sum or a closure: loop regions move those, but
+// a write barrier (lw_with_mover) keeps to the record moves it had.
+Bool lr_new_kind(Funcs fs, Str t0, List(Str) seen) {
+    Str t = ct_base_of(fs.ctn, fs.ctb, strip_owned_cg(t0));
+    if (is_fn_type(t) || lr_is_sum(fs, t)) { return true; }
+    if (seen.contains(t)) { return false; }
+    Int si = struct_index(fs, t);
+    if (si >= 0) { return lr_fields_new(fs, fs.stf[si], 0, seen.concat([t])); }
+    if (str_has_prefix(t, "List(")) { return lr_new_kind(fs, elem_type(t), seen.concat([t])); }
+    return false;
+}
+
+Bool lr_fields_new(Funcs fs, Str fields, Int i, List(Str) seen) {
+    Int fl = str_len(fields);
+    if (i >= fl) { return false; }
+    Int ce = _find_comma_at_depth_cg(fields, i, 0, 0);
+    Int end = if (ce >= 0) { ce } else { fl };
+    Str ent = str_slice(fields, i, end);
+    Int co = str_find_char(ent, 58, 0);
+    if (co >= 0 && lr_new_kind(fs, str_trim(str_slice(ent, co + 1, str_len(ent))), seen)) { return true; }
+    return lr_fields_new(fs, fields, end + 1, seen);
+}
 
 // Every field of record t has a move (a type already being checked counts:
 // its function is the one being made).
@@ -7263,6 +7575,17 @@ type LOC = { Bool ok; Bool mut; List(Int) ce; Bool bare; };
 // One item over statements; chain: linear locals it is bound into; fw: a
 // struct item linear field-wise.
 type LOS = { Bool ok; Bool mut; List(Int) ce; List(Int) chain; Bool fw; };
+
+Bool lg_spawns(Kg g, Int id) {
+    if (g.ns[id].kind == "spawn") { return true; }
+    return lg_spawns_kids(g, id, 0);
+}
+
+Bool lg_spawns_kids(Kg g, Int id, Int i) {
+    if (i >= g.ns[id].nk) { return false; }
+    if (lg_spawns(g, kg_kid(g, id, i))) { return true; }
+    return lg_spawns_kids(g, id, i + 1);
+}
 
 Bool lg_closure(Kg g, Int id) {
     Str k = g.ns[id].kind;
@@ -10051,7 +10374,9 @@ pub PG lw_program(Kg g, Int unit, Funcs fs, PG g0, Bool dbg, GAF df, Bool facts,
     // Record moves for loop regions (lr_move): only where none are inside.
     List(Str) rfs = if (r0.err != "" || resid_rtmod()) { [] } else { lr_rec_fns(fs, lo.hdr, 0, []) };
     List(Str) ffs = if (r0.err != "") { [] } else { lo_freeze_fns(fs, lo, 0, []) };
-    PG r = PG {.pos = r0.pos, .err = r0.err, .glines = r0.glines, .hlines = r0.hlines, .lines = r0.lines.concat(rfs).concat(ffs), .tmp = r0.tmp, .lbl = r0.lbl};
+    // Closure movers (lw_lambda) are in the global lines.
+    List(Str) sfs = if (r0.err != "" || resid_rtmod()) { [] } else { lr_sum_fns(fs, r0.lines.concat(rfs).concat(r0.glines)) };
+    PG r = PG {.pos = r0.pos, .err = r0.err, .glines = r0.glines, .hlines = r0.hlines, .lines = r0.lines.concat(rfs).concat(ffs).concat(sfs), .tmp = r0.tmp, .lbl = r0.lbl};
     PG r1 = r;
     if (r1.err != "" || dbg || resid_rtmod()) { return r1; }
     return PG {.pos = r1.pos, .err = r1.err, .glines = r1.glines, .hlines = r1.hlines, .lines = vl_module(ol_module(r1.lines)), .tmp = r1.tmp, .lbl = r1.lbl};

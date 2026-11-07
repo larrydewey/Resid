@@ -2408,6 +2408,10 @@ Str set_elem_type(Str t) {
 }
 
 // `wrapping_i8(x)` .. `wrapping_u512(x)`: keeps the low bits (§6.7), or "".
+Bool bx_byte_ty(Str t) { return t == "Int" || t == "Int(64)" || t == "UInt(8)" || t == "Secret(UInt(8))"; }
+Bool bx_secret(Str t) { return t == "Secret(UInt(8))"; }
+Bool bx_int(Str t) { return t == "Int" || t == "Int(64)"; }
+
 pub Str wrap_conv_type(Str name) {
     Str t = conv_helper_type(str_slice(name, 9, str_len(name)));
     if (is_int_ty(t)) { return t; }
@@ -2508,7 +2512,9 @@ pub Str conv_helper_type(Str name) {
     Str digits = str_slice(name, 1, n);
     if (!str_is_int(digits)) { return ""; }
     Int w = str_parse_int(digits);
-    Bool iw = w == 8 || w == 16 || w == 32 || w == 64 || w == 128 || w == 256 || w == 512;
+    // Integers: the power-of-two widths, and any multiple of 64 bits up to
+    // 16384 (a multi-limb field element, `wrapping_u320`).
+    Bool iw = w == 8 || w == 16 || w == 32 || w == 64 || w == 128 || w == 256 || w == 512 || (w % 64 == 0 && w > 0 && w <= 16384);
     Bool fw = w == 16 || w == 32 || w == 64 || w == 128;
     if (c0 == 105 && iw) { return "Int(" + digits + ")"; }
     if (c0 == 117 && iw) { return "UInt(" + digits + ")"; }
@@ -2942,6 +2948,27 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
         if (argtys == "UInt(128),UInt(128)") { return ERes {.pos = pos, .ty = "UInt(128)", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = name + " expects (UInt(128), UInt(128)), got (" + argtys + ")"};
     }
+    // Sixteen bytes of a byte list at once (lib/word.resid's Block128):
+    // resid_bytes_be16(xs, p) reads them big-endian into a 128-bit word,
+    // resid_bytes_xor16(b, xs, p, ks) pushes them onto b, byte i XORed with bits
+    // 8i.. of ks. A secret byte list or keystream makes the result secret,
+    // so a public builder takes only public bytes and a public keystream.
+    if (name == "resid_bytes_be16") {
+        List(Str) a = str_split(argtys, ",");
+        Str e = if (a.len() == 2 && str_starts_with(a[0], "List(")) { str_slice(a[0], 5, str_len(a[0]) - 1) } else { "" };
+        if (a.len() == 2 && bx_byte_ty(e) && bx_int(a[1])) { return ERes {.pos = pos, .ty = if (bx_secret(e)) { "Secret(UInt(128))" } else { "UInt(128)" }, .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (List(B), Int) with B Int, UInt(8) or Secret(UInt(8)), got (" + argtys + ")"};
+    }
+    if (name == "resid_bytes_xor16") {
+        List(Str) a = str_split(argtys, ",");
+        Bool shape = a.len() == 4 && str_starts_with(a[0], "ListBuf(") && str_starts_with(a[1], "List(");
+        Str o = if (shape) { str_slice(a[0], 8, str_len(a[0]) - 1) } else { "" };
+        Str e = if (shape) { str_slice(a[1], 5, str_len(a[1]) - 1) } else { "" };
+        Bool ks = shape && (a[3] == "UInt(128)" || a[3] == "Secret(UInt(128))");
+        Bool flows = if (bx_secret(o)) { true } else { o == e && a[3] == "UInt(128)" };
+        if (shape && bx_byte_ty(o) && bx_byte_ty(e) && bx_int(a[2]) && ks && flows) { return ERes {.pos = pos, .ty = a[0], .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = name + " expects (ListBuf(B), List(B), Int, UInt(128)) with B Int, UInt(8) or Secret(UInt(8)), a secret byte or keystream only into a ListBuf(Secret(UInt(8))), got (" + argtys + ")"};
+    }
     if (name == "aesni_enc_round" || name == "aesni_enc_last_round") {
         if (argtys == "UInt(128),UInt(128)") { return ERes {.pos = pos, .ty = "UInt(128)", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = name + " expects (UInt(128), UInt(128)), got (" + argtys + ")"};
@@ -3034,6 +3061,10 @@ ERes check_builtin(Str name, Str rawtys, Int argc, Int pos, Str exp, List(Str) p
     if (name == "resid_tcp_send_some") {
         if (builtin_args(argtys, "Int,List(Int)")) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
         return ERes {.pos = pos, .ty = "", .err = "resid_tcp_send_some expects (Int, List(Int)), got (" + argtys + ")"};
+    }
+    if (name == "resid_tcp_send_some_at") {
+        if (builtin_args(argtys, "Int,List(Int),Int,Int")) { return ERes {.pos = pos, .ty = "Int", .err = ""}; }
+        return ERes {.pos = pos, .ty = "", .err = "resid_tcp_send_some_at expects (Int, List(Int), Int, Int), got (" + argtys + ")"};
     }
     if (name == "resid_tcp_accept_now") {
         if (argtys == "Int") { return ERes {.pos = pos, .ty = "Int", .err = ""}; }

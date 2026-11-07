@@ -960,7 +960,7 @@ Str fam_head(Str ty) {
 // precision, 34 for a bare `Dec` or an `m` literal) is static.
 // Typed and linear-accumulator map/set entry points (see lin_* below).
 List(Str) hdr_map_typed() {
-    return ["declare ptr @resid_map_transient(ptr)", "declare ptr @resid_map_freeze(ptr)", "declare ptr @resid_map_put(ptr, i8, i8, i64, i8, i64)", "declare ptr @resid_map_del(ptr, i8, i8, i64)", "declare ptr @resid_set_put(ptr, i8, i8, i64)", "declare i128 @resid_map_find(ptr, i8, i64, i8)", "declare i8 @resid_map_has(ptr, i8, i64)", "declare ptr @resid_rec_new(i64, i8)", "declare ptr @resid_rec_reuse(ptr, i64)", "declare void @resid_rec_share(ptr)", "declare ptr @resid_str_keep(ptr)", "declare ptr @resid_map_evac(ptr, i8, i8)", "declare ptr @resid_list_evac(ptr)", "declare ptr @resid_dec_evac(ptr)", "declare i64 @resid_loop_enter()", "declare ptr @resid_list_rec_slot(ptr, i8, i64, i64)", "declare i1 @resid_loop_due(i64)", "declare i64 @resid_loop_due2(i64)", "declare ptr @resid_loop_own_move(i64, ptr, i64, i8)", "declare ptr @resid_loop_move(i64, i64)", "declare ptr @resid_loop_exit(i64, i64)", "declare ptr @resid_mv_str(ptr, ptr)", "declare ptr @resid_mv_list(ptr, ptr)", "declare ptr @resid_mv_list_f(ptr, ptr, ptr)", "declare ptr @resid_mv_map(ptr, i8, i8, ptr)", "declare ptr @resid_mv_rec(ptr, i64, i8, ptr)", "declare ptr @resid_mv_dec(ptr, ptr)", "declare ptr @resid_map_list_push(ptr, i8, i8, i64, ptr, ptr)", "declare ptr @resid_map_format_k(ptr, i8, i8)"];
+    return ["declare ptr @resid_map_transient(ptr)", "declare ptr @resid_map_freeze(ptr)", "declare ptr @resid_map_put(ptr, i8, i8, i64, i8, i64)", "declare ptr @resid_map_del(ptr, i8, i8, i64)", "declare ptr @resid_set_put(ptr, i8, i8, i64)", "declare i128 @resid_map_find(ptr, i8, i64, i8)", "declare i8 @resid_map_has(ptr, i8, i64)", "declare ptr @resid_rec_new(i64, i8)", "declare ptr @resid_rec_reuse(ptr, i64)", "declare void @resid_rec_share(ptr)", "declare ptr @resid_str_keep(ptr)", "declare ptr @resid_map_evac(ptr, i8, i8)", "declare ptr @resid_list_evac(ptr)", "declare ptr @resid_dec_evac(ptr)", "declare i64 @resid_loop_enter()", "declare ptr @resid_list_rec_slot(ptr, i8, i64, i64)", "declare i1 @resid_loop_due(i64)", "declare i64 @resid_loop_due2(i64)", "declare ptr @resid_loop_own_move(i64, ptr, i64, i8)", "declare ptr @resid_loop_move(i64, i64)", "declare ptr @resid_loop_exit(i64, i64)", "declare ptr @resid_mv_str(ptr, ptr)", "declare ptr @resid_mv_list(ptr, ptr)", "declare ptr @resid_mv_list_f(ptr, ptr, ptr)", "declare ptr @resid_mv_map(ptr, i8, i8, ptr)", "declare ptr @resid_mv_rec(ptr, i64, i8, ptr)", "declare ptr @resid_mv_dec(ptr, ptr)", "declare ptr @resid_mv_box(ptr, ptr)", "declare void @resid_mv_leave()", "declare ptr @resid_mv_word(ptr, ptr)", "declare ptr @resid_mv_clo(ptr, ptr)", "declare ptr @resid_map_list_push(ptr, i8, i8, i64, ptr, ptr)", "declare ptr @resid_map_format_k(ptr, i8, i8)"];
 }
 
 // Runtime declarations added after the long hdr_core lists; both mains
@@ -1478,7 +1478,7 @@ Bool scope_arith_builtin(Str n) {
     // Constant-time helpers and the AES / carry-less multiply instructions
     // compute on scalars in registers; the secret wrappers erase to their
     // argument (spec §48). None of them allocates.
-    if (n == "ct_hide" || n == "ct_select" || n == "aesni_enc_round" || n == "aesni_enc_last_round" || n == "gf128_mul_hw") { return true; }
+    if (n == "ct_hide" || n == "ct_select" || n == "aesni_enc_round" || n == "aesni_enc_last_round" || n == "gf128_mul_hw" || n == "resid_bytes_be16") { return true; }
     if (n == "secret" || n == "declassify" || n == "classify") { return true; }
     if (str_starts_with(n, "checked_") || str_starts_with(n, "wrapping_") || str_starts_with(n, "saturating_")) { return true; }
     Int c0 = str_char_at(n, 0);
@@ -2481,6 +2481,9 @@ Str cg_extern_ret(Str name) {
     if (name == "resid_device_call" || name == "resid_device_call_w") { return "List(Int)"; }
     if (name == "resid_device_secret") { return "List(Secret(UInt(8)))"; }
     if (name == "resid_tcp_send_some") { return "Int"; }
+    if (name == "resid_tcp_send_some_at") { return "Int"; }
+    if (name == "resid_bytes_be16") { return "UInt(128)"; }
+    if (name == "resid_bytes_xor16") { return "ListBuf(Int)"; }
     if (name == "resid_tcp_accept_now") { return "Int"; }
     if (name == "resid_tcp_bound_port") { return "Int"; }
     if (name == "resid_tcp_accept") { return "Int"; }
@@ -3389,7 +3392,9 @@ Str conv_helper_type_cg(Str name) {
     Str digits = str_slice(name, 1, n);
     if (!str_is_int(digits)) { return ""; }
     Int w = str_parse_int(digits);
-    Bool iw = w == 8 || w == 16 || w == 32 || w == 64 || w == 128 || w == 256 || w == 512;
+    // Integers: the power-of-two widths, and any multiple of 64 bits up to
+    // 16384 (a multi-limb field element, `wrapping_u320`).
+    Bool iw = w == 8 || w == 16 || w == 32 || w == 64 || w == 128 || w == 256 || w == 512 || (w % 64 == 0 && w > 0 && w <= 16384);
     Bool fw = w == 16 || w == 32 || w == 64 || w == 128;
     if (c0 == 105 && iw) { return "Int(" + digits + ")"; }
     if (c0 == 117 && iw) { return "UInt(" + digits + ")"; }

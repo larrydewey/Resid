@@ -146,7 +146,7 @@ Int lb_builtin(Str n) {
     if (n == "print" || n == "println" || n == "eprintln" || n == "print_bytes") { return 2; }
     if (n == "resid_test_plan" || n == "resid_test_summary" || n == "resid_test_run_closure" || n == "resid_test_run") { return 2; }
     if (str_starts_with(n, "str_") || str_starts_with(n, "resid_fmt_") || str_starts_with(n, "checked_") || str_starts_with(n, "wrapping_") || str_starts_with(n, "saturating_")) { return 1; }
-    if (str_starts_with(n, "ct_") || str_starts_with(n, "aesni_") || n == "gf128_mul_hw" || n == "sha256_compress_hw" || n == "sha512_compress_hw") { return 1; }
+    if (str_starts_with(n, "ct_") || str_starts_with(n, "aesni_") || n == "gf128_mul_hw" || n == "sha256_compress_hw" || n == "sha512_compress_hw" || n == "resid_bytes_be16" || n == "resid_bytes_xor16") { return 1; }
     if (n == "Some" || n == "Ok" || n == "Err" || n == "None" || n == "abs" || n == "min" || n == "max" || n == "clamp" || n == "sqrt" || n == "classify") { return 1; }
     if (n == "assert" || n == "rt_assert" || n == "known" || n == "rt_known" || n == "expect" || n == "comptime_print" || n == "todo" || n == "unimplemented") { return 1; }
     if (n == "provisioned_key") { return 4; }

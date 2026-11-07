@@ -61,11 +61,14 @@ run time.
 - Implicit: value-preserving widening at bindings, returns and fields
   (same signedness and no narrower, or unsigned into a strictly wider
   signed type). Never narrowing, never signed into unsigned.
-- Explicit and checked: `i8` … `i512`, `u8` … `u512`, `f16` … `f128`,
-  `dN`, `isize`, `usize`, and the cast `(Type)expr`. A value the target
+- Explicit and checked: `i8` … `i512`, `u8` … `u512` (and any multiple
+  of 64 bits up to 16384, such as `u320`), `f16` … `f128`, `dN`, `isize`,
+  `usize`, and the cast `(Type)expr`. A value the target
   cannot represent (too large, negative into unsigned, NaN or out of range
   into an integer) aborts.
-- Bit-level: `wrapping_i8` … `wrapping_u512` keep the low bits.
+- Bit-level: `wrapping_i8` … `wrapping_u512`, and `wrapping_i320`,
+  `wrapping_u576` and the other multiples of 64 bits up to 16384, keep the
+  low bits.
 - `wrapping_add`, `wrapping_mul`, `saturating_add`, … exist for every
   width; `abs`, `min`, `max` and `clamp` take one numeric type.
 

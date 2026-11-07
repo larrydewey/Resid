@@ -1800,6 +1800,126 @@ pub Int rt_mv_rec(Int v, Int size, Int hdr, Int ctx) { return rec_move(v, size, 
 @export("resid_mv_dec", "ptr(ptr,ptr)")
 pub Int rt_mv_dec(Int v, Int ctx) { return dec_move(v, ctx); }
 
+// A sum's box, copied whole; its slots are moved by the compiled
+// resid.sum.evac.T that calls this (and then resid_mv_leave). A constant
+// (a variant without payload) lies in no region. A box reached twice in
+// one move is copied once (mv_fwd), so a shared value is not unfolded; one
+// nested past mv_max_depth() stays, the move marked failed (region.resid
+// keeps the region), rather than run the stack out.
+@export("resid_mv_box", "ptr(ptr,ptr)")
+pub Int rt_mv_box(Int v, Int ctx) {
+    if (v == 0 || ult(v, 4096) || box_imm(v) || box_fimm(v) || !mv_src(ctx, v)) { return v; }
+    Int f = fwd_get(v);
+    // The caller moves a returned copy's slots, then leaves: count it.
+    if (f != 0) { return st64(mv_depth_word(), ld64(mv_depth_word()) + 1) * 0 + f; }
+    if (mv_deeper() == 0) { return v; }
+    Int sz = 16 + (ld32(v + 4) & 65535) * 8;
+    Int c = mv_alloc(ctx, sz);
+    _ = mcopy(c, v, sz);
+    return fwd_put(v, c);
+}
+
+@export("resid_mv_leave", "void()")
+pub Int rt_mv_leave() { return mv_shallower(); }
+
+// A tagged scalar word (an immediate, a scalar box) or a string.
+@export("resid_mv_word", "ptr(ptr,ptr)")
+pub Int rt_mv_word(Int w, Int ctx) { return elem_move(w, ctx); }
+
+// A closure: its environment's mover sits in the word before it (0 when a
+// capture has none, lw_lambda). One without a mover cannot move: the move
+// is marked failed and the region it lies in is kept (region.resid).
+@export("resid_mv_clo", "ptr(ptr,ptr)")
+pub Int rt_mv_clo(Int env, Int ctx) {
+    if (env == 0 || !mv_src(ctx, env)) { return env; }
+    Int f = fwd_get(env);
+    if (f != 0) { return f; }
+    Int m = ld64(env - 8);
+    if (m == 0) { return st64(mv_fail_word(), 1) * 0 + env; }
+    if (mv_deeper() == 0) { return env; }
+    Int c = resid_raw_call2(m, env, ctx);
+    _ = mv_shallower();
+    return fwd_put(env, c);
+}
+
+// The nesting of the box and closure moves under way: past the limit a
+// move fails (the region is kept) instead of overflowing the stack.
+Int mv_max_depth() { return 100000; }
+Int mv_depth_word() { return resid_raw_tls("rg_mv_depth", 8); }
+Int mv_deeper() {
+    Int d = ld64(mv_depth_word());
+    if (d >= mv_max_depth()) { return st64(mv_fail_word(), 1) * 0; }
+    return st64(mv_depth_word(), d + 1) * 0 + 1;
+}
+Int mv_shallower() { return st64(mv_depth_word(), ld64(mv_depth_word()) - 1) * 0; }
+
+// Copies made by the current loop move (old -> new), so each shared box or
+// closure moves once: open addressing on {table, capacity, count, move},
+// entries {old, new, move}. The table stays with the thread; an entry
+// counts only for the move it was made in, so a move starts on an empty
+// table without clearing it (a loop exit moves a few boxes, often).
+Int fwd_word() { return resid_raw_tls("rg_mv_fwd", 32); }
+
+Int fwd_slot(Int t, Int cap, Int gen, Int p, Int i) {
+    Int e = t + i * 24;
+    if (ld64(e + 16) != gen || ld64(e) == p) { return i; }
+    return fwd_slot(t, cap, gen, p, (i + 1) & (cap - 1));
+}
+
+Int fwd_hash(Int p, Int cap) { return ((p >> 4) * 40503) & (cap - 1); }
+
+Int fwd_get(Int p) {
+    Int w = fwd_word();
+    if (ld64(w + 16) == 0) { return 0; }
+    Int t = ld64(w);
+    Int e = t + fwd_slot(t, ld64(w + 8), ld64(w + 24), p, fwd_hash(p, ld64(w + 8))) * 24;
+    return if (ld64(e + 16) == ld64(w + 24) && ld64(e) == p) { ld64(e + 8) } else { 0 };
+}
+
+Int fwd_put(Int p, Int c) {
+    Int w = fwd_word();
+    _ = if (ld64(w) == 0) { fwd_init(w, 64) } else { if (ld64(w + 16) * 2 >= ld64(w + 8)) { fwd_grow(w) } else { 0 } };
+    // Moves are numbered from 1: a zeroed entry belongs to none.
+    _ = if (ld64(w + 24) == 0) { st64(w + 24, 1) } else { 0 };
+    Int t = ld64(w);
+    Int gen = ld64(w + 24);
+    Int e = t + fwd_slot(t, ld64(w + 8), gen, p, fwd_hash(p, ld64(w + 8))) * 24;
+    _ = st64(e, p) + st64(e + 8, c) + st64(e + 16, gen) + st64(w + 16, ld64(w + 16) + 1);
+    return c;
+}
+
+// A fresh table of cap entries; no entry belongs to any move (moves start
+// at 1).
+Int fwd_init(Int w, Int cap) {
+    Int t = xmalloc(cap * 24);
+    _ = resid_raw_fill(t, 0, cap * 24);
+    return st64(w, t) + st64(w + 8, cap) + st64(w + 16, 0);
+}
+
+Int fwd_grow(Int w) {
+    Int old = ld64(w);
+    Int cap = ld64(w + 8);
+    Int gen = ld64(w + 24);
+    _ = fwd_init(w, cap * 2);
+    _ = fwd_rehash(old, cap, gen, 0);
+    return c_free(old);
+}
+
+Int fwd_rehash(Int t, Int cap, Int gen, Int i) {
+    if (i >= cap) { return 0; }
+    Int e = t + i * 24;
+    _ = if (ld64(e + 16) == gen) { fwd_put(ld64(e), ld64(e + 8)) } else { 0 };
+    return fwd_rehash(t, cap, gen, i + 1);
+}
+
+// The next move: its own entries, none yet.
+pub Int fwd_reset() {
+    Int w = fwd_word();
+    _ = st64(mv_depth_word(), 0);
+    if (ld64(w + 16) == 0 && ld64(w + 24) != 0) { return 0; }
+    return st64(w + 16, 0) + st64(w + 24, ld64(w + 24) + 1);
+}
+
 // Out of every region to the heap (code compiled before loop regions).
 @export("resid_str_keep", "ptr(ptr)")
 pub Int rt_str_keep(Int p) { return str_move(p, mv_legacy()); }
